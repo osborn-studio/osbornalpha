@@ -154,3 +154,7 @@ R01/R03/R04/R05 RESOLVED；R02、R06 PARTIAL（分别由 S01、S02 补全）。�
 | S08 | P2 | implemented | §3.7：`src/lib/judgments/time.ts::EXCHANGE_CLOSE` 本地映射，测试断言与 `forward.ts` 一致、覆盖夏令时 |
 
 另：§7.5 记录 `deadline_hit` 已在 `INFO_CODES`、`deferred` 无需数据库变更；§2.1/§2.3 把"待实施"改为已落地（35 概念）、宏观工作台标为不存在。
+
+## 第 7 稿（计划审计第一轮引起的规格修订，2026-11-06）
+
+见 `docs/audits/2026-11-06-judgment-framework-plan/01-codex-plan-round1.md`。规格改动：P1-03（`cutoff_vintage` 在 `settle_by` 前不运行 resolver；override 绑定 `cutoff`）、P1-04/P1-05（隔离接受 / 拒绝改为原子 RPC，§5.6 新增 `reject_quarantined_settlement`）、P1-09（独立抽样用结算证据的实际终点；"上界"改为"扫描窗口"）、P1-10（第九张表 `judgment_calibration_cohort_members`，cohort 由一条语句冻结）、指挥决策：隔离项复核期 `review_deadline = max(settle_by, quarantined_at + 7 天)`（§5.4、§7.2）。由计划审计第二轮一并复核。

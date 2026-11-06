@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 6 稿；Codex 第五轮处方已实施，见 `docs/audits/2026-11-04-judgment-framework/03-disposition.md` 第五轮节）：公共判断表家族（八表 + RPC + 按 `publishable` 的 RLS）、方法注册表与 `formula_hash`、冻结输入的登记与回放、结算队列与三个 resolver、校准与显示门控、读接口与 UI、首批生产者 `macro_regime@v1`（夹具对接宏观接口）与 `recommendation_call@v1`（私有只读适配器）。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 7 稿 = 第 6 稿 + 计划审计第一轮 P1-03/P1-09/P1-10 修订，审计见 `docs/audits/2026-11-06-judgment-framework-plan/01-codex-plan-round1.md`；第 6 稿的 Codex 第五轮处方见 `docs/audits/2026-11-04-judgment-framework/03-disposition.md` 第五轮节）：公共判断表家族（九表 + RPC + 按 `publishable` 的 RLS）、方法注册表与 `formula_hash`、冻结输入的登记与回放、结算队列与三个 resolver、校准与显示门控、读接口与 UI、首批生产者 `macro_regime@v1`（夹具对接宏观接口）与 `recommendation_call@v1`（私有只读适配器）。
 
-**Architecture:** 一个迁移 `20261109150000_judgments.sql` 建八表、触发器、RLS、全部 §5.6 函数；`src/lib/judgments/db.ts` 的 `JudgmentsDb` 契约有 Supabase（rpc）/ 内存 / pg 三实现；`JudgmentInputsDb` 只走 anon 公共读路径与 K 线适配器；登记、回放、结算、校准、显示全是依赖注入的纯核心 + 薄路由；宏观工作台尚不存在，F4 定义 `MacroReadApi` 接口并用夹具实现。
+**Architecture:** 一个迁移 `20261109150000_judgments.sql` 建九表、触发器、RLS、全部 §5.6 函数；`src/lib/judgments/db.ts` 的 `JudgmentsDb` 契约有 Supabase（rpc）/ 内存 / pg 三实现；`JudgmentInputsDb` 只走 anon 公共读路径与 K 线适配器；登记、回放、结算、校准、显示全是依赖注入的纯核心 + 薄路由；宏观工作台尚不存在，F4 定义 `MacroReadApi` 接口并用夹具实现。
 
 **Tech Stack:** Next.js 15 App Router、TypeScript、Supabase（PostgreSQL 17 + PostgREST + Storage）、vitest、`pg`（集成测试）、`tsx` 脚本、`ajv` 8（条件参数 schema）。计划一的 `TableClient`、`startBatch/finishBatch`、`quarantine()`、`recordAttempt` 用于批次 / 隔离 / 新鲜度；计划二的 `FactsDb.readFacts`、`deriveMetrics` 用于事实输入与结算。
 
@@ -36,16 +36,16 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261109150000_judgments.sql   八表 + 触发器 + RLS + 桶 + §5.6 全部函数（Task 2 建表/触发器/RLS；Task 3 函数）
+supabase/migrations/20261109150000_judgments.sql   九表 + 触发器 + RLS + 桶 + §5.6 全部函数（Task 2 建表/触发器/RLS；Task 3 函数）
 supabase/migrations.lock.json                      + 1 条（Task 22）
 src/lib/supabase/database.types.ts                 // F4 块：八个 Row/Insert/Update（Task 2）
 scripts/ci/research-checks.ts                      // F4 块（一行 .concat(…)）：criticalSuites += judgments.integration、judgments-db.integration、settle.integration、calibrate.integration（Task 2、4、14、16）
-src/lib/research/ingest/pa-v1/uuid-v8.ts           uuidV8(hex64)（Task 1；ledger.ts 改调它）
+src/lib/judgments/uuid-v8.ts           uuidV8(hex64)（Task 1；ledger.ts 改调它）
 src/lib/judgments/types.ts                         共享契约（本文件 §共享契约 原样落地；Task 1）
 src/lib/judgments/canonical.ts                     canonicalize/digest/sha256 包装 + inputsHash + jsonClean（Task 1）
 src/lib/judgments/errors.ts                        JudgmentError + JudgmentErrorCode（Task 1）
 src/lib/judgments/contract.ts                      validateSubject / validateClaim / validateHorizon（失败抛、成功返回值）/ isAbstained / judgmentIdOf / producerNonceOf / isRetrospective（Task 1）
-src/lib/judgments/job-keys.ts                      jobKey('produce',id,v) / jobKey('calibrate',id,v,scope) / parseJobKey（Task 1）
+src/lib/judgments/job-keys.ts                      jobKey('produce',id,v) / jobKey('calibrate',id,v,scope) / jobKey('calibrate_round') / parseJobKey（Task 1）
 src/lib/judgments/markets.ts                       factsMarketOf / priceMarketOf / isPriceMarket（Task 1）
 src/lib/judgments/time.ts                          EXCHANGE_CLOSE / closeInstantUtc(date,market) / endOfUtcDay / addDaysIso / addMonthsPeriod / monthEndIso / DEFAULT_GRACE_DAYS / graceDaysOf(params,horizon) / settleAfterDate / settleWindowOf —— 结算窗口算术的唯一实现（Task 1）
 src/lib/judgments/settlement-digest.ts             operationDigest()（Task 1）
@@ -251,13 +251,15 @@ export interface SettlementRow{settlement_id:string;judgment_id:string;seq:numbe
 /** append_settlement payload; the RPC assigns settlement_id/seq/settled_at (spec §5.6). */
 export type SettlementInsert=Pick<SettlementRow,'kind'|'outcome'|'realized'|'evidence'|'resolver'|'resolver_version'|'reason'|'actor'|'code_version'|'batch_id'>;
 export type QueueStatus='pending'|'unavailable'|'inconsistent'|'error';
-export interface QuarantineOverride{reason_code:string;resolution:{kind:'accept_refetched';evidence_hash:string;evidence:Record<string,unknown>}|{kind:'choose_fact';chosen:Record<string,unknown>};evidence_hash:string;resolved_by:string;at:string}
+/** cutoff = the resolution cutoff of the quarantine it accepts (payload.cutoff); a cutoff_vintage override is used only at that same cutoff (plan audit P1-03). */
+export interface QuarantineOverride{reason_code:string;resolution:{kind:'accept_refetched';evidence_hash:string;evidence:Record<string,unknown>}|{kind:'choose_fact';chosen:Record<string,unknown>};evidence_hash:string;resolved_by:string;at:string;cutoff:string}
 export interface QueueRow{judgment_id:string;settle_after:string;settle_by:string;label_policy:LabelPolicy;next_attempt_at:string;attempts:number;last_status:QueueStatus|null;last_detail:Record<string,unknown>;leased_until:string|null;lease_token:string|null;override:QuarantineOverride|null;closed_at:string|null;updated_at:string}
 export interface QueuePatch{last_status:QueueStatus;last_detail:Record<string,unknown>;next_attempt_at:string;attempts_increment:0|1}
 export type CalibrationState='insufficient'|'failed'|'calibrated'|'evaluated'|'self_assessed';
 export type ScopeType='all'|'market'|'subject_type';
 export interface CalibrationScope{scope_type:ScopeType;scope_key:string}
-export interface QueryBounds{window_from:string;window_to:string;registered_at_lte:string;settled_at_lte:string}
+/** frozen_at / n: the freeze_calibration_cohort snapshot of the generation (plan audit P1-10); registered_at_lte = settled_at_lte = frozen_at. */
+export interface QueryBounds{window_from:string;window_to:string;registered_at_lte:string;settled_at_lte:string;frozen_at:string;n:number}
 export interface CalibrationRow{calibration_id:string;methodology_id:string;methodology_version:string;scope_type:ScopeType;scope_key:string;window_from:string;window_to:string;n_registered:number;n_settled:number;n_independent:number;n_void:number;n_retrospective_excluded:number;threshold_n:number;ece_max:number;kind:Kind;state:Exclude<CalibrationState,'self_assessed'>;valid_until:string;validity_revision:number;metrics:Record<string,unknown>;reliability:ReliabilityBin[];isotonic_segments:{x_min:number;x_max:number;p:number}[]|null;cohort_path:string;cohort_sha256:string;query_bounds:QueryBounds;fingerprint:string;algorithm_version:string;code_version:string;computed_at:string;batch_id:string}
 export interface ReliabilityBin{bin_low:number;bin_high:number;n:number;mean_p:number|null;hit_rate:number|null;wilson_low:number|null;wilson_high:number|null}
 /** latest_judgment_cards / judgment_history / calibration_cohort* row (spec §5.6 judgment_envelope). */
@@ -282,9 +284,19 @@ export interface JudgmentsDb{
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
  settlementsOf(judgmentIds:string[]):Promise<SettlementRow[]>;
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
- applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<void>;
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. */
+ applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
+ /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. */
+ rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
+ /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
+ envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
  calibrationCohort(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
  calibrationCohortInternal(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
+ /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). */
+ freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{frozen_at:string;n:number}>;
+ /** The frozen members of a generation, keyset on judgment_id; settlement = the one frozen with it. */
+ cohortMembers(generation:string,after:string|null,limit:number):Promise<Envelope[]>;
+ clearCalibrationGeneration(generation:string):Promise<number>;
  latestCalibration(methodology:string,version:string,scope:CalibrationScope):Promise<{row:CalibrationRow;valid:boolean}|null>;
  calibrationValidity(methodology:string,version:string):Promise<{revision:number}>;
  insertCalibration(row:CalibrationRow,expectedRevision:number):Promise<'inserted'|'duplicate'|'stale_revision'>;
@@ -388,7 +400,7 @@ export interface PrivateJudgmentCard extends JudgmentCard{source:'recommendation
 - `MacroSnapshotSnapshot.margin_pp` 是百分点（规格 §8.1 G28）。
 - **结算窗口算术**（唯一 TS 实现是 `time.ts::settleWindowOf`，`target.ts::settleWindow` 只是它的别名；与 SQL 的 `register_judgment` 重算必须逐字一致，Task 3 对拍，规格 §3.4）：`settle_after` 是一个 UTC 日期 `D` 的 `00:00:00.000Z`，`D` = `session_index`: `base_date + n` 天；`date`: `target.date`；`period`: 该月最后一天 + 1 天（即下月 1 日）；`fiscal_period`: `period_end + 1` 天。`settle_by = settle_after + grace_days` 天（`grace_days` = 方法 `params.grace_days`，整数；方法未给时按 `horizon.unit` 取默认：`trading_sessions` 60、`calendar_days`/`calendar_months` 30、`fiscal_quarters` 120）。
 - **retrospective**（SQL 里算，`registered_at = now()`）：`as_of < (registered_at at time zone 'UTC')::date` **或** `settle_after ≤ registered_at` **或** `retrospective_hint.label_available_at ≤ registered_at`。
-- **数据库角色与客户端**：`supabaseJudgmentsDb({anon, admin})` 接两个客户端——`latestCards / historyOf / calibrationCohort / methodologyStateAt / listMethodologies / latestCalibration / serverTime` 走 `anon`（RLS 生效，发布门控），其余全部走 `admin`（service_role，只经 RPC 写）。`memoryJudgmentsDb()` 在公共读方法上复刻 `publishable` 门控；`pgJudgmentsDb(pool)` 的公共读在事务内 `set local role anon`。
+- **数据库角色与客户端**：`supabaseJudgmentsDb({anon, admin})` 接两个客户端——`latestCards / historyOf / envelopeById / calibrationCohort / methodologyStateAt / listMethodologies / latestCalibration / serverTime` 走 `anon`（RLS 生效，发布门控），其余全部走 `admin`（service_role，只经 RPC 写）。`memoryJudgmentsDb()` 在公共读方法上复刻 `publishable` 门控；`pgJudgmentsDb(pool)` 的公共读在事务内 `set local role anon`。
 - **隔离数据集名**：判断层隔离项的 `dataset` 一律 `'judgments'`，`table_name` = `'judgments'`（登记冲突）或 `'judgment_settlements'`（结算类），`natural_key` = `judgment_id`；批次 `dataset`：`judgments.produce.<methodology_id>`、`judgments.settle`、`judgments.calibrate`；`producer` = `'ts-judgments'`。
 - 校准续跑的崩溃 / 并发测试（规格 §14.2 的 R02、S01、R05 清空重试）属于应用层，在 **Task 16** 用 `pgJudgmentsDb` + 内存 `CohortStore` 写；Task 3 只测 SQL 函数本身。
 
@@ -402,6 +414,7 @@ export interface PrivateJudgmentCard extends JudgmentCard{source:'recommendation
 | §3.7 时刻语义、S08 | 1 |
 | §4 方法注册表、formula_hash、sync | 9 |
 | §5.1–§5.5b 表、触发器、RLS | 2 |
+| §5.5b 校准成员冻结表与 §5.6 冻结 RPC（第 7 稿，计划审计 P1-10） | 2、3、4、16 |
 | §5.6 函数 | 3 |
 | §5.7 JudgmentsDb / JudgmentInputsDb | 4、6、7 |
 | §6.2 登记、§6.4 produce | 10 |
@@ -432,7 +445,7 @@ export interface PrivateJudgmentCard extends JudgmentCard{source:'recommendation
 | 序 | 任务 | 依赖 | 部分 |
 |---|---|---|---|
 | 1 | 核心纯模块（types、canonical、errors、contract、job-keys、markets、time、settlement-digest、uuid-v8） | — | A |
-| 2 | 迁移 I：八表、触发器、RLS、桶、Row 类型、集成测试 | 1 | A |
+| 2 | 迁移 I：九表、触发器、RLS、桶、Row 类型、集成测试 | 1 | A |
 | 3 | 迁移 II：§5.6 全部函数 + 集成测试 | 2 | A |
 | 4 | `JudgmentsDb` 三实现 + 契约 + pg 并发测试 | 3 | A |
 | 5 | `batches.ts` `deferred` 计数器与 `INFO_CODES` | — | A |
@@ -465,10 +478,10 @@ export interface PrivateJudgmentCard extends JudgmentCard{source:'recommendation
 **Files:**
 - Create: `src/lib/judgments/types.ts`（骨架"共享契约"代码块原样）
 - Create: `src/lib/judgments/canonical.ts`、`src/lib/judgments/errors.ts`、`src/lib/judgments/contract.ts`、`src/lib/judgments/job-keys.ts`、`src/lib/judgments/markets.ts`、`src/lib/judgments/time.ts`、`src/lib/judgments/settlement-digest.ts`
-- Create: `src/lib/research/ingest/pa-v1/uuid-v8.ts`
+- Create: `src/lib/judgments/uuid-v8.ts`（F4 自有目录，计划审计 P2-03；不在 `src/lib/research/**` 新建文件）
 - Modify: `src/lib/research/s4/ledger.ts`：import 区加一行 `uuidV8` import、`judgmentId()` 末尾两行 uuid 格式化换成 `return uuidV8(hex);`（`// F4` 围栏）
 - Create: `docs/audits/2026-11-06-judgment-framework/implementation-log.md`
-- Test: `src/lib/judgments/canonical.test.ts`、`src/lib/judgments/contract.test.ts`、`src/lib/judgments/job-keys.test.ts`、`src/lib/judgments/time.test.ts`、`src/lib/judgments/settlement-digest.test.ts`、`src/lib/research/ingest/pa-v1/uuid-v8.test.ts`
+- Test: `src/lib/judgments/canonical.test.ts`、`src/lib/judgments/contract.test.ts`、`src/lib/judgments/job-keys.test.ts`、`src/lib/judgments/time.test.ts`、`src/lib/judgments/settlement-digest.test.ts`、`src/lib/judgments/uuid-v8.test.ts`
 
 **Exports:**
 ```ts
@@ -497,7 +510,8 @@ export function isRetrospective(x:{as_of:string;registered_at:string;settle_afte
 // job-keys.ts
 export function jobKey(kind:'produce',methodologyId:string,version:string):string;
 export function jobKey(kind:'calibrate',methodologyId:string,version:string,scope:CalibrationScope):string;
-export type ParsedJobKey={kind:'produce';methodologyId:string;version:string}|{kind:'calibrate';methodologyId:string;version:string;scope:CalibrationScope};
+export function jobKey(kind:'calibrate_round'):string;      // the calibration cron's persisted round cursor (plan audit P2-02)
+export type ParsedJobKey={kind:'produce';methodologyId:string;version:string}|{kind:'calibrate';methodologyId:string;version:string;scope:CalibrationScope}|{kind:'calibrate_round'};
 export function parseJobKey(key:string):ParsedJobKey;
 // markets.ts
 export function factsMarketOf(p:PriceMarket):FactsMarket|null;
@@ -520,7 +534,7 @@ export function settleWindowOf(target:Target,horizon:Horizon,params:Record<strin
 export const OPERATION_FIELDS:readonly ['judgment_id','kind','outcome','realized','evidence','resolver','resolver_version','reason','actor'];
 export function operationPayload(judgmentId:string,row:SettlementInsert):Record<string,unknown>;
 export function operationDigest(judgmentId:string,row:SettlementInsert):string;
-// research/ingest/pa-v1/uuid-v8.ts
+// uuid-v8.ts
 export function uuidV8(hex64:string):string;
 ```
 
@@ -636,13 +650,15 @@ export interface SettlementRow{settlement_id:string;judgment_id:string;seq:numbe
 /** append_settlement payload; the RPC assigns settlement_id/seq/settled_at (spec §5.6). */
 export type SettlementInsert=Pick<SettlementRow,'kind'|'outcome'|'realized'|'evidence'|'resolver'|'resolver_version'|'reason'|'actor'|'code_version'|'batch_id'>;
 export type QueueStatus='pending'|'unavailable'|'inconsistent'|'error';
-export interface QuarantineOverride{reason_code:string;resolution:{kind:'accept_refetched';evidence_hash:string;evidence:Record<string,unknown>}|{kind:'choose_fact';chosen:Record<string,unknown>};evidence_hash:string;resolved_by:string;at:string}
+/** cutoff = the resolution cutoff of the quarantine it accepts (payload.cutoff); a cutoff_vintage override is used only at that same cutoff (plan audit P1-03). */
+export interface QuarantineOverride{reason_code:string;resolution:{kind:'accept_refetched';evidence_hash:string;evidence:Record<string,unknown>}|{kind:'choose_fact';chosen:Record<string,unknown>};evidence_hash:string;resolved_by:string;at:string;cutoff:string}
 export interface QueueRow{judgment_id:string;settle_after:string;settle_by:string;label_policy:LabelPolicy;next_attempt_at:string;attempts:number;last_status:QueueStatus|null;last_detail:Record<string,unknown>;leased_until:string|null;lease_token:string|null;override:QuarantineOverride|null;closed_at:string|null;updated_at:string}
 export interface QueuePatch{last_status:QueueStatus;last_detail:Record<string,unknown>;next_attempt_at:string;attempts_increment:0|1}
 export type CalibrationState='insufficient'|'failed'|'calibrated'|'evaluated'|'self_assessed';
 export type ScopeType='all'|'market'|'subject_type';
 export interface CalibrationScope{scope_type:ScopeType;scope_key:string}
-export interface QueryBounds{window_from:string;window_to:string;registered_at_lte:string;settled_at_lte:string}
+/** frozen_at / n: the freeze_calibration_cohort snapshot of the generation (plan audit P1-10); registered_at_lte = settled_at_lte = frozen_at. */
+export interface QueryBounds{window_from:string;window_to:string;registered_at_lte:string;settled_at_lte:string;frozen_at:string;n:number}
 export interface CalibrationRow{calibration_id:string;methodology_id:string;methodology_version:string;scope_type:ScopeType;scope_key:string;window_from:string;window_to:string;n_registered:number;n_settled:number;n_independent:number;n_void:number;n_retrospective_excluded:number;threshold_n:number;ece_max:number;kind:Kind;state:Exclude<CalibrationState,'self_assessed'>;valid_until:string;validity_revision:number;metrics:Record<string,unknown>;reliability:ReliabilityBin[];isotonic_segments:{x_min:number;x_max:number;p:number}[]|null;cohort_path:string;cohort_sha256:string;query_bounds:QueryBounds;fingerprint:string;algorithm_version:string;code_version:string;computed_at:string;batch_id:string}
 export interface ReliabilityBin{bin_low:number;bin_high:number;n:number;mean_p:number|null;hit_rate:number|null;wilson_low:number|null;wilson_high:number|null}
 /** latest_judgment_cards / judgment_history / calibration_cohort* row (spec §5.6 judgment_envelope). */
@@ -667,9 +683,19 @@ export interface JudgmentsDb{
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
  settlementsOf(judgmentIds:string[]):Promise<SettlementRow[]>;
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
- applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<void>;
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. */
+ applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
+ /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. */
+ rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
+ /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
+ envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
  calibrationCohort(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
  calibrationCohortInternal(methodology:string,version:string,window:{from:string;to:string},cutoff:string,after:string|null,limit:number):Promise<Envelope[]>;
+ /** Freezes a calibration generation's cohort in one statement (plan audit P1-10). */
+ freezeCalibrationCohort(generation:string,methodology:string,version:string,window:{from:string;to:string}):Promise<{frozen_at:string;n:number}>;
+ /** The frozen members of a generation, keyset on judgment_id; settlement = the one frozen with it. */
+ cohortMembers(generation:string,after:string|null,limit:number):Promise<Envelope[]>;
+ clearCalibrationGeneration(generation:string):Promise<number>;
  latestCalibration(methodology:string,version:string,scope:CalibrationScope):Promise<{row:CalibrationRow;valid:boolean}|null>;
  calibrationValidity(methodology:string,version:string):Promise<{revision:number}>;
  insertCalibration(row:CalibrationRow,expectedRevision:number):Promise<'inserted'|'duplicate'|'stale_revision'>;
@@ -842,7 +868,7 @@ describe('errors',()=>{
 // Active|Abstained discrimination, nonce per producer kind, the three retrospective rules, and the
 // content-addressed id (golden value computed from pa-v1/json.js before this task).
 import {describe,expect,it} from 'vitest';
-import {uuidV8} from '../research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from './uuid-v8';
 import {digest} from './canonical';
 import {isAbstained,isRetrospective,judgmentIdOf,producerNonceOf,validateClaim,validateHorizon,validateSubject} from './contract';
 import {JudgmentError} from './errors';
@@ -979,6 +1005,8 @@ describe('jobKey',()=>{
   expect(jobKey('calibrate','m','v1',{scope_type:'market',scope_key:'sw2021:2021:801010'})).toBe('calibrate:m@v1:market:sw2021%3A2021%3A801010');
   expect(jobKey('calibrate','m','v1',{scope_type:'market',scope_key:'港股'})).toBe('calibrate:m@v1:market:%E6%B8%AF%E8%82%A1');
   expect(jobKey('produce','a@b%c','v1')).toBe('produce:a%40b%25c@v1');
+  expect(jobKey('calibrate_round')).toBe('calibrate_round');                               // P2-02: one global round cursor
+  expect(parseJobKey('calibrate_round')).toEqual({kind:'calibrate_round'});
  });
  it('round-trips through parseJobKey and keeps distinct inputs distinct',()=>{
   const cases:{id:string;version:string;scope?:CalibrationScope}[]=[
@@ -999,7 +1027,7 @@ describe('jobKey',()=>{
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'market',scope_key:''}))).toBe('invalid_parameter');
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'planet' as never,scope_key:'x'}))).toBe('invalid_parameter');
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'market',scope_key:'港'.repeat(60)}))).toBe('invalid_parameter');   // 60 × 9 encoded chars > 512
-  for(const k of ['produce:m','produce:m@v1:all:','calibrate:m@v1','calibrate:m@v1:all','other:m@v1','produce:m@v1%ZZ'])expect({k,c:code(()=>parseJobKey(k))}).toEqual({k,c:'invalid_parameter'});
+  for(const k of ['produce:m','produce:m@v1:all:','calibrate:m@v1','calibrate:m@v1:all','other:m@v1','produce:m@v1%ZZ','calibrate_round:x','calibrate_round@v1'])expect({k,c:code(()=>parseJobKey(k))}).toEqual({k,c:'invalid_parameter'});
  });
 });
 ```
@@ -1127,12 +1155,12 @@ describe('operationDigest',()=>{
 ```
 
 ```ts
-// src/lib/research/ingest/pa-v1/uuid-v8.test.ts
+// src/lib/judgments/uuid-v8.test.ts
 // F4 spec §2.4 item 5: uuidV8 is the four lines formerly inside ledger.ts judgmentId(), unchanged:
 // RFC 9562 v8 layout, version nibble 8, variant from hex[16]. ledger.test.ts stays untouched.
 import {describe,expect,it} from 'vitest';
-import {judgmentId} from '../../s4/ledger';
-import {digest} from './json.js';
+import {judgmentId} from '../research/s4/ledger';
+import {digest} from '../research/ingest/pa-v1/json.js';
 import {uuidV8} from './uuid-v8';
 
 describe('uuidV8',()=>{
@@ -1154,18 +1182,19 @@ describe('uuidV8',()=>{
 
 - [ ] **Step 3: 运行，确认失败**
 
-Run: `npm test -- src/lib/judgments/canonical.test.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.test.ts src/lib/research/ingest/pa-v1/uuid-v8.test.ts`
+Run: `npm test -- src/lib/judgments/canonical.test.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.test.ts src/lib/judgments/uuid-v8.test.ts`
 Expected: FAIL —— 六个文件都报 `Failed to resolve import "./canonical"`（或 `./contract`、`./job-keys`、`./time`、`./markets`、`./settlement-digest`、`./uuid-v8`），没有一个用例运行。
 
 - [ ] **Step 4: 实现 `uuid-v8.ts`、`errors.ts`、`canonical.ts`、`markets.ts`、`time.ts`、`contract.ts`、`job-keys.ts`、`settlement-digest.ts`**
 
 ```ts
-// src/lib/research/ingest/pa-v1/uuid-v8.ts
+// src/lib/judgments/uuid-v8.ts
 // Content-addressed uuid formatting (RFC 9562 v8), extracted verbatim from ledger.ts judgmentId()
 // for the F4 judgment layer (judgment framework spec §2.4 item 5). Version nibble = 8, variant bits
 // from hex[16]; the first 128 bits of the digest are kept except hex[12] (replaced by the version).
 // Behaviour for every 64-hex input is identical to the former inline code; anything else is refused.
-import {fail} from './json.js';
+// Lives in src/lib/judgments (F4-owned, plan audit P2-03); src/lib/research/s4/ledger.ts imports it inside its F4 fence.
+import {fail} from '../research/ingest/pa-v1/json.js';
 
 const HEX64=/^[0-9a-f]{64}$/;
 export function uuidV8(hex64:string):string{
@@ -1350,7 +1379,7 @@ export function settleWindowOf(target:Target,horizon:Horizon,params:Record<strin
 // claim is stored and compared for idempotency_conflict, so stray keys are refused, not dropped).
 // judgmentIdOf addresses exactly the eight §6.1 fields; isRetrospective is the TS twin of the three
 // rules register_judgment evaluates in SQL against registered_at (plan 契约补充).
-import {uuidV8} from '../research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from './uuid-v8';
 import {digest} from './canonical';
 import {JudgmentError} from './errors';
 import {PUBLIC_SUBJECT_TYPES} from './types';
@@ -1507,6 +1536,7 @@ export function isRetrospective(x:{as_of:string;registered_at:string;settle_afte
 // or scope key can never collide with the separators; parseJobKey is the exact inverse.
 //   produce:<id>@<version>
 //   calibrate:<id>@<version>:<scope_type>:<scope_key>     (scope_type all ⇔ scope_key '')
+//   calibrate_round                                        (the calibration cron's round cursor; plan audit P2-02)
 import {JudgmentError} from './errors';
 import type {CalibrationScope,ScopeType} from './types';
 
@@ -1519,8 +1549,11 @@ function enc(s:string,what:string,allowEmpty=false):string{
 }
 export function jobKey(kind:'produce',methodologyId:string,version:string):string;
 export function jobKey(kind:'calibrate',methodologyId:string,version:string,scope:CalibrationScope):string;
-export function jobKey(kind:'produce'|'calibrate',methodologyId:string,version:string,scope?:CalibrationScope):string{
+export function jobKey(kind:'calibrate_round'):string;
+export function jobKey(kind:'produce'|'calibrate'|'calibrate_round',methodologyId?:string,version?:string,scope?:CalibrationScope):string{
  let key:string;
+ if(kind==='calibrate_round')return 'calibrate_round';
+ if(typeof methodologyId!=='string'||typeof version!=='string')return bad('methodology');
  if(kind==='produce')key=`produce:${enc(methodologyId,'methodology_id')}@${enc(version,'version')}`;
  else if(kind==='calibrate'){
   if(!scope||!SCOPES.includes(scope.scope_type))return bad('scope_type');
@@ -1531,9 +1564,10 @@ export function jobKey(kind:'produce'|'calibrate',methodologyId:string,version:s
  return key;
 }
 
-export type ParsedJobKey={kind:'produce';methodologyId:string;version:string}|{kind:'calibrate';methodologyId:string;version:string;scope:CalibrationScope};
+export type ParsedJobKey={kind:'produce';methodologyId:string;version:string}|{kind:'calibrate';methodologyId:string;version:string;scope:CalibrationScope}|{kind:'calibrate_round'};
 const PARSE=/^(produce|calibrate):([^@:]+)@([^@:]+)(?::(all|market|subject_type):([^@:]*))?$/;
 export function parseJobKey(key:string):ParsedJobKey{
+ if(key==='calibrate_round')return {kind:'calibrate_round'};
  const m=PARSE.exec(key);
  if(!m||(m[1]==='produce')!==(m[4]===undefined))return bad('malformed');
  try{
@@ -1564,7 +1598,7 @@ export const operationDigest=(judgmentId:string,row:SettlementInsert):string=>di
 
 - [ ] **Step 5: 运行，确认通过**
 
-Run: `npm test -- src/lib/judgments/canonical.test.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.test.ts src/lib/research/ingest/pa-v1/uuid-v8.test.ts`
+Run: `npm test -- src/lib/judgments/canonical.test.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.test.ts src/lib/judgments/uuid-v8.test.ts`
 Expected: PASS（6 files，全部用例绿）。若 `uuid-v8.test.ts` 的 ledger 用例在本步失败，说明 Step 4 的 `uuidV8` 与旧内联代码不一致——对照 Step 4 代码逐字修正，不要改测试里的金值。
 
 - [ ] **Step 6: `ledger.ts` 改调 `uuidV8()`（行为不变；`ledger.test.ts` 不改）**
@@ -1573,7 +1607,7 @@ Expected: PASS（6 files，全部用例绿）。若 `uuid-v8.test.ts` 的 ledger
 
 ```ts
 // F4 — uuid v8 formatting lives in uuid-v8.ts (judgment framework spec §2.4 item 5)
-import { uuidV8 } from '../ingest/pa-v1/uuid-v8';
+import { uuidV8 } from '../../judgments/uuid-v8';
 // /F4
 ```
 
@@ -1592,7 +1626,7 @@ import { uuidV8 } from '../ingest/pa-v1/uuid-v8';
   // /F4
 ```
 
-Run: `npm test -- src/lib/research/s4/ledger.test.ts src/lib/research/ingest/pa-v1/uuid-v8.test.ts`
+Run: `npm test -- src/lib/research/s4/ledger.test.ts src/lib/judgments/uuid-v8.test.ts`
 Expected: PASS（`ledger.test.ts` 全部原有用例绿；`git diff --stat src/lib/research/s4/ledger.test.ts` 为空）。
 
 - [ ] **Step 7: 建实施记录文件**
@@ -1600,7 +1634,7 @@ Expected: PASS（`ledger.test.ts` 全部原有用例绿；`git diff --stat src/l
 ```markdown
 # F4 判断层框架 · 实施记录
 
-计划：`docs/superpowers/plans/2026-11-06-judgment-framework.md`；规格：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 6 稿）。
+计划：`docs/superpowers/plans/2026-11-06-judgment-framework.md`；规格：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 7 稿）。
 规则：每个任务由 Sonnet 5.5 子代理实现，Opus 5.5 做规格复审与质量复审，Codex CLI（gpt-6-astra，medium，`codex review -c model=gpt-6-astra`）审计并挑战；每个任务完成后在下表追加一行，偏差另起一节写清"规格原文 → 实际做法 → 理由"。
 
 | 任务 | 提交 | 规格复审 | 质量复审 | Codex 审计 | 偏差 / 备注 |
@@ -1613,6 +1647,9 @@ Expected: PASS（`ledger.test.ts` 全部原有用例绿；`git diff --stat src/l
 - `validateClaim` 拒绝未知成员；`score.dims` 覆盖与值一致、`interval.scenarios` 概率和为 1（容差 1e-9）。
 - `jobKey` 的 `scope_type='all'` 要求 `scope_key=''`。
 - 错误码表新增 `methodology_mismatch`、`settle_window_mismatch`、`duplicate_key`、`item_not_open`、`unknown`；集成者按决策 D5 补入后续任务抛出的 `input_unavailable`、`snapshot_unclassified`、`binding_not_referenced`（Task 8/10）与 `override_mismatch`（Task 11）。
+- `uuidV8` 放在 `src/lib/judgments/uuid-v8.ts`（规格 §2.4 第 5 点写的是 `src/lib/research/ingest/pa-v1/uuid-v8.ts`）：那个目录不在 F4 的拥有范围内，新文件也无法加 F4 围栏（计划审计 P2-03）；`ledger.ts` 在自己的 `// F4` 围栏里 import 它，行为不变。
+- `jobKey('calibrate_round')`：校准 cron 的全局轮次游标键（计划审计 P2-02，Task 16）。
+- 共享契约按计划审计第一轮修订：`QuarantineOverride.cutoff`（P1-03）、`QueryBounds.frozen_at / n`（P1-10）、`JudgmentsDb.applyQuarantineOverride` 返回状态、新增 `rejectQuarantinedSettlement`（P1-04/05）、`envelopeById`（P2-01）、`freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration`（P1-10）。
 ```
 
 - [ ] **Step 8: 类型检查与 lint**
@@ -1623,7 +1660,7 @@ Expected: 两者均无错误、无警告。
 - [ ] **Step 9: 暂存**
 
 ```bash
-git add src/lib/judgments/types.ts src/lib/judgments/canonical.ts src/lib/judgments/canonical.test.ts src/lib/judgments/errors.ts src/lib/judgments/contract.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/markets.ts src/lib/judgments/time.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.ts src/lib/judgments/settlement-digest.test.ts src/lib/research/ingest/pa-v1/uuid-v8.ts src/lib/research/ingest/pa-v1/uuid-v8.test.ts src/lib/research/s4/ledger.ts docs/audits/2026-11-06-judgment-framework/implementation-log.md
+git add src/lib/judgments/types.ts src/lib/judgments/canonical.ts src/lib/judgments/canonical.test.ts src/lib/judgments/errors.ts src/lib/judgments/contract.ts src/lib/judgments/contract.test.ts src/lib/judgments/job-keys.ts src/lib/judgments/job-keys.test.ts src/lib/judgments/markets.ts src/lib/judgments/time.ts src/lib/judgments/time.test.ts src/lib/judgments/settlement-digest.ts src/lib/judgments/settlement-digest.test.ts src/lib/judgments/uuid-v8.ts src/lib/judgments/uuid-v8.test.ts src/lib/research/s4/ledger.ts docs/audits/2026-11-06-judgment-framework/implementation-log.md
 ```
 
 - [ ] **Step 10: 提交**
@@ -1637,24 +1674,25 @@ git commit -m "feat(judgments): F4 Task 1 core pure modules (contract, canonical
 
 ---
 
-### Task 2: 迁移 I —— 八表、触发器、RLS、桶、Row 类型、集成测试
+### Task 2: 迁移 I —— 九表、触发器、RLS、桶、Row 类型、集成测试
 
 规格条目：§5.1、§5.1b、§5.2、§5.3、§5.4、§5.5、§5.5b、§5.6（权限与 RLS 部分）、§14.2（表 / 触发器 / RLS 部分）、§15 验收样例 7（直接插入被拒）与 8（直接 `select` 部分）。
 
 **Files:**
 - Create: `supabase/migrations/20261109150000_judgments.sql`（本任务写表、检查、索引、桶、触发器、RLS、授权；Task 3 在同一文件末尾追加函数）
-- Modify: `src/lib/supabase/database.types.ts`：文件头注释后加 `// F4` 围栏（迁移说明行 + `import type`）；`export type Database` 之前加 `// F4` 围栏（八个 Row 类型别名）；`Tables` 内 `fact_sync_scope` 行之后加 `// F4` 围栏（八个表条目）
+- Modify: `src/lib/supabase/database.types.ts`：文件头注释后加 `// F4` 围栏（迁移说明行 + `import type`）；`export type Database` 之前加 `// F4` 围栏（九个 Row 类型别名）；`Tables` 内 `fact_sync_scope` 行之后加 `// F4` 围栏（九个表条目）
 - Create: `src/lib/judgments/judgments.integration.test.ts`
 - Modify: `scripts/ci/research-checks.ts`：`criticalSuites` 末尾加 `// F4` 围栏 `.concat('src/lib/judgments/judgments.integration.test.ts')`
 - **不改** `supabase/migrations.lock.json`（Task 22 锁）
 
 **Exports:**
 ```sql
--- tables (columns exactly spec §5.1–§5.5b)
+-- tables (columns exactly spec §5.1–§5.5b; the ninth is spec 第 7 稿 §5.5b, plan audit P1-10)
 public.judgment_methodologies, public.judgment_methodology_events, public.judgments, public.judgment_settlements,
-public.judgment_settle_queue, public.judgment_calibrations, public.judgment_calibration_validity, public.judgment_job_state
+public.judgment_settle_queue, public.judgment_calibrations, public.judgment_calibration_validity, public.judgment_job_state,
+public.judgment_calibration_cohort_members      -- (generation, judgment_id) pk, settlement_id, ord; service_role select only; written / cleared by RPC only
 -- bucket: storage.buckets id 'judgments-calibration' (private, 50 MB, application/json)
--- trigger functions (no client role executes them):
+-- trigger functions (execute revoked from public, anon, authenticated, service_role — plan audit P3-01):
 public.judgment_methodologies_limited_update() returns trigger     -- 23514 'append_only:judgment_methodologies'
 public.judgments_append_only() returns trigger                     -- 23514 'append_only:<table>'
 public.judgment_settlements_sequence() returns trigger             -- 23514 'settlement_sequence: …'
@@ -1669,6 +1707,7 @@ export type JudgmentTableRow=JudgmentRow; export type JudgmentSettlementTableRow
 export type JudgmentSettleQueueTableRow=QueueRow; export type JudgmentCalibrationTableRow=CalibrationRow;
 export interface JudgmentCalibrationValidityTableRow{methodology_id:string;version:string;revision:number;bumped_at:string;reason:string|null}
 export interface JudgmentJobStateTableRow{job:string;state:Record<string,unknown>;updated_at:string}
+export interface JudgmentCalibrationCohortMemberTableRow{generation:string;judgment_id:string;settlement_id:string|null;ord:number}
 ```
 
 规格偏差（记入实施记录）：
@@ -1677,13 +1716,15 @@ export interface JudgmentJobStateTableRow{job:string;state:Record<string,unknown
 - §5.6 RLS 之外，每张表另加 `"<t> service read"` 策略（`for select to service_role using (true)`）：托管 Supabase 的 `service_role` 本就 `bypassrls`，显式策略让未来换角色时不静默变空（计划二同做法）。
 - §5 "`database.types.ts` 手工补 §5.6 全部 `Functions`"：按骨架约定**不登记** RPC（调用处用 `RpcFn`，Task 4）；Row 类型直接别名共享契约。
 - 每张只追加表另加 `before truncate` 语句级触发器（规格只说 update/delete；`revoke all` 已拿走客户端角色的 TRUNCATE，触发器防的是迁移角色误操作）。
+- 第九张表 `judgment_calibration_cohort_members`（规格第 7 稿 §5.5b，计划审计 P1-10）：校准代际开始时由 `freeze_calibration_cohort` 在**一条语句**（一个 MVCC 快照）里写入全部成员及其当时最新结算，之后只按代际分页读取；不是只追加表（`clear_calibration_generation` 删除整代），所以没有只追加触发器；无 anon / authenticated 授权。
+- 三个触发器函数显式 `revoke execute … from public, anon, authenticated, service_role`（计划审计 P3-01；触发器触发时不检查 EXECUTE，撤销只让客户端无法直接调用）。
 
 - [ ] **Step 1: 写集成测试（真实 PostgreSQL，先失败）**
 
 ```ts
 // src/lib/judgments/judgments.integration.test.ts
 // F4 Tasks 2–3 (spec §5.1–§5.6, §14.2, acceptance examples 7–10): the judgments migration on real
-// PostgreSQL 17. Task 2 (first describe): eight tables, the judgments-calibration bucket, every check
+// PostgreSQL 17. Task 2 (first describe): nine tables, the judgments-calibration bucket, every check
 // and trigger, RLS and grants with the real roles. Task 3 (second describe): every §5.6 function.
 // Data is set up as the migration owner (the harness admin role bypasses RLS and grants); role
 // behaviour is exercised with `set local role` inside a transaction that is always rolled back.
@@ -1699,10 +1740,11 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261109150000_judgments.sql';
-const TABLES=['judgment_methodologies','judgment_methodology_events','judgments','judgment_settlements','judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state'];
+const TABLES=['judgment_methodologies','judgment_methodology_events','judgments','judgment_settlements','judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state','judgment_calibration_cohort_members'];
 const OPEN_READ=['judgment_methodologies','judgment_methodology_events','judgment_calibration_validity'];
 const GATED=['judgments','judgment_settlements','judgment_calibrations'];
-const PRIVATE=['judgment_settle_queue','judgment_job_state'];
+const PRIVATE=['judgment_settle_queue','judgment_job_state','judgment_calibration_cohort_members'];
+const TRIGGER_FNS=['judgment_methodologies_limited_update()','judgments_append_only()','judgment_settlements_sequence()'];
 const ROLES=['anon','authenticated','service_role'];
 const F4_CLAIM_LOCK=20261109;
 const JSONB=new Set(['producer_ref','inputs','claim','condition','horizon','target','realized','evidence','params','params_json','upstream','metrics','reliability','isotonic_segments','query_bounds','state','last_detail','override','retrospective_hint']);
@@ -1750,7 +1792,7 @@ const judgmentCols=(m:string,b:string,active=true):Record<string,unknown>=>({jud
 const settlementCols=(j:string,b:string,seq:number,kind:string,actor='cron'):Record<string,unknown>=>{const settled=kind==='settled';return {settlement_id:randomUUID(),judgment_id:j,seq,kind,outcome:settled?'hit':null,realized:settled?{value:'recovery',unit:null,from:null,to:null,label_policy:'cutoff_vintage'}:null,evidence:{},resolver:'macro_regime_replay',resolver_version:'1.0.0',reason:settled?null:`test:${kind}`,actor,settled_at:new Date().toISOString(),request_key:`rk:${randomUUID()}`,request_digest:H('c'),code_version:'abcdef1',batch_id:b};};
 const queueCols=(j:string)=>({judgment_id:j,settle_after:'2099-01-01T00:00:00.000Z',settle_by:'2099-01-31T00:00:00.000Z',label_policy:'first_observed',next_attempt_at:'2099-01-01T00:00:00.000Z'});
 const eventCols=(m:string,seq:number)=>({event_id:randomUUID(),methodology_id:m,version:'v1',seq,event:'registered',status:'active',publishable:false,formula_hash:H('a'),code_version:'abcdef1',actor:'script',reason:null,occurred_at:new Date().toISOString()});
-const calibrationCols=(m:string,b:string):Record<string,unknown>=>{const id=randomUUID();return {calibration_id:id,methodology_id:m,methodology_version:'v1',scope_type:'all',scope_key:'',window_from:'2023-01-01',window_to:'2026-01-01',n_registered:10,n_settled:8,n_independent:5,n_void:1,n_retrospective_excluded:1,threshold_n:100,ece_max:0.1,kind:'probability',state:'insufficient',valid_until:'2099-01-01T00:00:00.000Z',validity_revision:1,metrics:{},reliability:[],isotonic_segments:null,cohort_path:`judgments-calibration/${id}.json`,cohort_sha256:H('d'),query_bounds:{window_from:'2023-01-01',window_to:'2026-01-01',registered_at_lte:'2026-01-02T00:00:00.000Z',settled_at_lte:'2026-01-02T00:00:00.000Z'},fingerprint:hex64(),algorithm_version:'calib/1',code_version:'abcdef1',computed_at:new Date().toISOString(),batch_id:b};};
+const calibrationCols=(m:string,b:string):Record<string,unknown>=>{const id=randomUUID();return {calibration_id:id,methodology_id:m,methodology_version:'v1',scope_type:'all',scope_key:'',window_from:'2023-01-01',window_to:'2026-01-01',n_registered:10,n_settled:8,n_independent:5,n_void:1,n_retrospective_excluded:1,threshold_n:100,ece_max:0.1,kind:'probability',state:'insufficient',valid_until:'2099-01-01T00:00:00.000Z',validity_revision:1,metrics:{},reliability:[],isotonic_segments:null,cohort_path:`judgments-calibration/${id}.json`,cohort_sha256:H('d'),query_bounds:{window_from:'2023-01-01',window_to:'2026-01-01',registered_at_lte:'2026-01-02T00:00:00.000Z',settled_at_lte:'2026-01-02T00:00:00.000Z',frozen_at:'2026-01-02T00:00:00.000Z',n:10},fingerprint:hex64(),algorithm_version:'calib/1',code_version:'abcdef1',computed_at:new Date().toISOString(),batch_id:b};};
 
 describe.skipIf(!enabled)('F4 judgments migration: tables, checks, triggers, RLS (Task 2)',()=>{
  let admin:Pool;
@@ -1771,7 +1813,7 @@ describe.skipIf(!enabled)('F4 judgments migration: tables, checks, triggers, RLS
  });
  afterAll(async()=>{await admin?.end();});
 
- it('creates eight RLS tables, the private bucket, the spec indexes, select-only grants, and replays',async()=>{
+ it('creates nine RLS tables, the private bucket, the spec indexes, select-only grants, trigger functions no client role can execute, and replays',async()=>{
   const rows=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES]);
   expect(rows.map(r=>r.relname).sort()).toEqual([...TABLES].sort());for(const r of rows)expect(r.relrowsecurity).toBe(true);
   expect(await q(`select id,public,file_size_limit,allowed_mime_types from storage.buckets where id='judgments-calibration'`)).toEqual([{id:'judgments-calibration',public:false,file_size_limit:'52428800',allowed_mime_types:['application/json']}]);
@@ -1785,6 +1827,11 @@ describe.skipIf(!enabled)('F4 judgments migration: tables, checks, triggers, RLS
   for(const role of ['anon','authenticated']){
    for(const t of [...OPEN_READ,...GATED])expect({role,t,ok:await priv(role,t,'SELECT')}).toEqual({role,t,ok:true});
    for(const t of PRIVATE)expect({role,t,ok:await priv(role,t,'SELECT')}).toEqual({role,t,ok:false});
+  }
+  // P3-01: the trigger functions are not callable by any client role (PUBLIC's default EXECUTE is revoked too).
+  for(const f of TRIGGER_FNS){
+   for(const role of ROLES)expect({f,role,ok:await one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,`public.${f}`])}).toEqual({f,role,ok:false});
+   expect({f,public:await one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v`,[`public.${f}`])}).toEqual({f,public:false});
   }
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
  },30000);
@@ -1954,7 +2001,7 @@ describe.skipIf(!enabled)('F4 judgments migration: tables, checks, triggers, RLS
 - [ ] **Step 2: 运行，确认失败**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: FAIL —— 第一个用例 `expected [] to deeply equal [...]`（八张表不存在），其余用例报 `relation "public.judgment_methodologies" does not exist`。
+Expected: FAIL —— 第一个用例 `expected [] to deeply equal [...]`（九张表不存在），其余用例报 `relation "public.judgment_methodologies" does not exist`。
 
 - [ ] **Step 3: 写迁移（表、检查、索引、桶、触发器、RLS、授权）**
 
@@ -1969,7 +2016,7 @@ Expected: FAIL —— 第一个用例 `expected [] to deeply equal [...]`（八�
 -- and the private bucket judgments-calibration.
 -- Read boundary (§5.6, audit N1): anon/authenticated SELECT through RLS; judgments, settlements and
 -- calibrations are visible only while their methodology is publishable (the CURRENT value — licence
--- is not historical state). service_role selects all eight tables and writes NOTHING directly:
+-- is not historical state). service_role selects all nine tables and writes NOTHING directly:
 -- every write goes through the security definer functions at the end of this file (plan Task 3).
 -- Errors: triggers raise 23514 with 'append_only:<table>' or 'settlement_sequence: …'; functions
 -- raise with the error code as the message head (header of the functions section).
@@ -2165,6 +2212,18 @@ create table if not exists public.judgment_job_state (
   updated_at  timestamptz not null default now()
 );
 
+-- ---------------------------------------------------------------- 5.5b frozen calibration cohorts (spec 第 7 稿; plan audit P1-10)
+-- The members of one calibration generation, materialised by freeze_calibration_cohort in ONE insert … select
+-- statement (one MVCC snapshot): every eligible registration with its latest settlement at that snapshot. Read by
+-- calibration_cohort_members (keyset on judgment_id), deleted by clear_calibration_generation. RPC-only writes.
+create table if not exists public.judgment_calibration_cohort_members (
+  generation     uuid not null,
+  judgment_id    uuid not null references public.judgments(judgment_id) on delete restrict,
+  settlement_id  uuid references public.judgment_settlements(settlement_id) on delete restrict,
+  ord            bigint not null check (ord >= 1),
+  primary key (generation, judgment_id)
+);
+
 -- ---------------------------------------------------------------- 8.3 bucket (calibration cohorts)
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('judgments-calibration', 'judgments-calibration', false, 52428800, array['application/json'])
@@ -2239,10 +2298,16 @@ drop trigger if exists judgment_settlements_sequence on public.judgment_settleme
 create trigger judgment_settlements_sequence before insert on public.judgment_settlements
   for each row execute function public.judgment_settlements_sequence();
 
+-- P3-01: no client role executes a trigger function directly (firing a trigger does not check EXECUTE).
+revoke execute on function public.judgment_methodologies_limited_update() from public, anon, authenticated, service_role;
+revoke execute on function public.judgments_append_only() from public, anon, authenticated, service_role;
+revoke execute on function public.judgment_settlements_sequence() from public, anon, authenticated, service_role;
+
 -- ---------------------------------------------------------------- 5.6 table privileges and policies
 do $$ declare t text; begin
   foreach t in array array['judgment_methodologies','judgment_methodology_events','judgments','judgment_settlements',
-                           'judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state'] loop
+                           'judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state',
+                           'judgment_calibration_cohort_members'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
     execute format('grant select on public.%I to service_role', t);
@@ -2278,14 +2343,15 @@ create policy "judgment_calibrations publishable read" on public.judgment_calibr
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
 Expected: PASS（7 tests）。harness 会按序执行全部迁移，所以本步同时证明新迁移在现有迁移之后可执行；第一个用例再整体重放一次。
 
-- [ ] **Step 5: `database.types.ts` 加八个 Row 类型（`// F4` 围栏，三处）**
+- [ ] **Step 5: `database.types.ts` 加九个 Row 类型（`// F4` 围栏，三处）**
 
 在文件头注释 `// + 20261106090000_financial_facts.sql (…)` 行之后、`// Regenerate with:` 行之前插入：
 
 ```ts
 // F4
 // + 20261109150000_judgments.sql (judgment_methodologies, judgment_methodology_events, judgments, judgment_settlements,
-//   judgment_settle_queue, judgment_calibrations, judgment_calibration_validity, judgment_job_state; RPCs not typed here)
+//   judgment_settle_queue, judgment_calibrations, judgment_calibration_validity, judgment_job_state,
+//   judgment_calibration_cohort_members; RPCs not typed here)
 // /F4
 ```
 
@@ -2313,6 +2379,7 @@ export type JudgmentSettleQueueTableRow = QueueRow;
 export type JudgmentCalibrationTableRow = CalibrationRow;
 export interface JudgmentCalibrationValidityTableRow { methodology_id: string; version: string; revision: number; bumped_at: string; reason: string | null }
 export interface JudgmentJobStateTableRow { job: string; state: Record<string, unknown>; updated_at: string }
+export interface JudgmentCalibrationCohortMemberTableRow { generation: string; judgment_id: string; settlement_id: string | null; ord: number }
 // /F4
 
 ```
@@ -2329,6 +2396,7 @@ export interface JudgmentJobStateTableRow { job: string; state: Record<string, u
       judgment_calibrations: { Row: JudgmentCalibrationTableRow; Insert: Partial<JudgmentCalibrationTableRow>; Update: Partial<JudgmentCalibrationTableRow> };
       judgment_calibration_validity: { Row: JudgmentCalibrationValidityTableRow; Insert: Partial<JudgmentCalibrationValidityTableRow>; Update: Partial<JudgmentCalibrationValidityTableRow> };
       judgment_job_state: { Row: JudgmentJobStateTableRow; Insert: Partial<JudgmentJobStateTableRow>; Update: Partial<JudgmentJobStateTableRow> };
+      judgment_calibration_cohort_members: { Row: JudgmentCalibrationCohortMemberTableRow; Insert: Partial<JudgmentCalibrationCohortMemberTableRow>; Update: Partial<JudgmentCalibrationCohortMemberTableRow> };
       // /F4
 ```
 
@@ -2361,7 +2429,7 @@ git add supabase/migrations/20261109150000_judgments.sql src/lib/supabase/databa
 - [ ] **Step 9: 提交**
 
 ```bash
-git commit -m "feat(judgments): F4 Task 2 judgments migration I (eight tables, triggers, RLS by publishable, bucket, row types)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git commit -m "feat(judgments): F4 Task 2 judgments migration I (nine tables, triggers, RLS by publishable, bucket, row types)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2387,21 +2455,27 @@ public.latest_judgment_cards(p_subject_type text, p_subject_key text, p_types te
 public.judgment_history(p_subject_type text, p_subject_key text, p_type text, p_methodology text, p_version text, p_view text, p_cutoff timestamptz, p_before uuid, p_limit integer) returns setof public.judgment_envelope
 public.calibration_cohort(p_methodology text, p_version text, p_window_from date, p_window_to date, p_cutoff timestamptz, p_after uuid, p_limit integer) returns setof public.judgment_envelope
 public.methodology_state_at(p_methodology text, p_version text, p_cutoff timestamptz) returns public.judgment_methodology_events
+public.judgment_envelope_by_id(p_id uuid, p_view text, p_cutoff timestamptz) returns setof public.judgment_envelope   -- 0 or 1 row; RLS-gated (P2-01)
 -- service write (security definer; service_role only)
 public.calibration_cohort_internal(…same as calibration_cohort…) returns setof public.judgment_envelope
+public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb   -- {frozen_at, n} (P1-10)
+public.calibration_cohort_members(p_generation uuid, p_after uuid, p_limit integer) returns setof public.judgment_envelope                 -- the frozen set, keyset on judgment_id (P1-10)
+public.clear_calibration_generation(p_generation uuid) returns integer                                                                   -- rows deleted (P1-10)
 public.sync_methodology(p_row jsonb, p_actor text, p_reason text) returns jsonb            -- {changed boolean, seq integer}
 public.register_judgment(p_row jsonb, p_queue jsonb) returns jsonb                          -- {judgment_id, registered_at, retrospective}
 public.claim_due_judgments(p_limit integer, p_lease_seconds integer) returns setof public.judgment_settle_queue
 public.release_lease(p_judgment_id uuid, p_lease_token uuid, p_patch jsonb) returns void
 public.append_settlement(p_judgment_id uuid, p_lease_token uuid, p_request_key text, p_row jsonb) returns jsonb   -- {seq integer, status text}; p_row carries request_digest
-public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns void
+public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns text   -- 'applied' | 'stale' | 'closed' | 'item_not_open' (P1-04)
+public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb   -- {seq, status}: AppendStatus | 'stale' | 'item_not_open' (P1-05)
 public.insert_calibration(p_row jsonb, p_expected_revision bigint) returns text            -- 'inserted' | 'duplicate' | 'stale_revision'
 public.set_job_state(p_job text, p_expected_updated_at timestamptz, p_state jsonb) returns boolean
 public.repair_stale_batches(p_dataset text, p_older_than interval) returns integer
 -- internal (no client role)
 public.judgments_settle_after_date(jsonb) returns date, public.judgments_grace_days(jsonb, jsonb) returns integer,
 public.judgment_operation_payload(uuid, jsonb) returns jsonb, public.judgment_settlement_payload(public.judgment_settlements) returns jsonb,
-public.judgment_replay_status(public.judgment_settlements, uuid, text, jsonb) returns jsonb
+public.judgment_replay_status(public.judgment_settlements, uuid, text, jsonb) returns jsonb,
+public.judgment_append_settlement_internal(uuid, uuid, text, jsonb) returns jsonb   -- the body of append_settlement, shared with reject_quarantined_settlement
 ```
 
 **`request_digest` 的决定（规格 §5.3 S02 / R06，回答 brief 的问题）：RPC 信任并存储调用方算好的摘要，不在 SQL 里重算哈希；重放时比较"存储摘要 = 传入摘要" **且** "由存储列重建的 jsonb 操作载荷 = 由传入行重建的 jsonb 操作载荷"。** 理由：S02 要求摘要只有一个实现（`settlement-digest.ts::operationDigest`，RFC 8785）；SQL 无法逐字节复现 RFC 8785（`jsonb::text` 按键长排序、带空格、数字规范化不同），在 SQL 里另写一个"近似 canonical"会制造第二个实现、两边漂移。规格原文"RPC 内用 jsonb 规范化重算核对"落实为：用 `jsonb` 的规范化相等（键序、空白、数字写法无关）对**同一组 9 个语义字段**（含 `resolver_version`）重算并核对载荷。于是：载荷相同、摘要相同 → `already_applied`；任一不同（含只差 `resolver_version`、或调用方摘要算错而载荷相同）→ `request_key_conflict`。新操作的摘要格式（64 位小写十六进制）在 RPC 里校验；摘要与载荷是否对应由 TS 唯一实现保证（Task 4 的 `supabaseJudgmentsDb` / `pgJudgmentsDb` 在发送前用 `operationDigest` 计算，调用方无法自带摘要）。
@@ -2415,7 +2489,12 @@ public.judgment_replay_status(public.judgment_settlements, uuid, text, jsonb) re
 - `judgment_history` 的 keyset 顺序为 `as_of desc, registered_at desc, judgment_id desc`（三列同向才能用行比较做 keyset；`latest_judgment_cards` 仍按规格 `judgment_id` 升序作末位）。`judgment_history` 不做合并发行人展开（§12.4 只对 `latest_judgment_cards` 规定）。
 - `repair_stale_batches` 只接受 `^judgments\.[a-z0-9_.]{1,54}$` 的单个数据集（精确匹配）且 `p_older_than ≥ 1 minute`；`errors` 追加 `{code:'stale_running', message}`。
 - `set_job_state` 写 `updated_at = greatest(date_trunc('milliseconds', clock_timestamp()), 旧值 + 1 ms)`：毫秒精度让 ISO 字符串往返后仍能精确比较；严格递增避免同一毫秒内两次更新让陈旧的 `expected_updated_at` 误中（ABA）。
-- `apply_quarantine_override` 幂等：项已 `resolved_accept` 且队列 `override` 与本次完全相同 → 无操作返回；否则 `item_not_open`。审计行写 `research_audit_log(user_id = override.resolved_by, actor='user', action='dq.quarantine_resolve', object_type='dq', object_id = 隔离项 id, detail = p_audit ∪ {judgment_id, override})`（列与 `src/lib/research/store.ts::audit()` 写的形状一致；`user_id` 外键到 `auth.users`，所以 `resolved_by` 必须是真实管理员 id）。
+- **`apply_quarantine_override` 原子化**（计划审计 P1-04）：先锁队列行、再锁隔离项；返回 `text` 而不是抛错：项不存在 / 不属于该判断 / 已裁决 → `'item_not_open'`；队列已 `closed_at` → `'closed'`；队列 `last_status ≠ 'inconsistent'`、`last_detail.evidence_hash ≠ override.evidence_hash`、隔离项 `payload.evidence_hash ≠ override.evidence_hash` 或 `payload.cutoff ≠ override.cutoff` → `'stale'`（这三种都不写任何行）；否则写 `override`、`next_attempt_at = now()`、**清空 `leased_until / lease_token`**（在途 worker 之后的 `release_lease` / `append_settlement` 得到 `lease_lost`，不能覆盖已接受的裁决）、翻转隔离项、写审计 → `'applied'`。队列行不存在仍抛 `unknown_judgment`（P0002），参数不合法仍抛 22023。
+- **`reject_quarantined_settlement`**（计划审计 P1-05，新增服务写 RPC）：一个事务内先按 `request_key` 重放检查（命中 → `already_applied` / `request_key_conflict`，不看隔离项），再锁队列行、锁隔离项、锁内再查一次 `request_key`；项未开 → `item_not_open`；队列已关闭、不是 `inconsistent` 或 `last_detail.evidence_hash ≠ payload.evidence_hash` → `stale`；否则经 `judgment_append_settlement_internal`（与 `append_settlement` 同一段逻辑，admin 行为人、无租约）追加 `void`，把项置 `resolved_reject`，写 `research_audit_log`（`action='dq.quarantine_resolve'`，`detail ∪ {judgment_id, decision:'reject', seq}`），返回 `{seq, status:'applied'}`。`p_row.kind` 必须是 `void`、`actor` 必须是 `admin:<uuid>`。
+- `append_settlement` 的函数体移到内部函数 `judgment_append_settlement_internal`（无客户端授权、非 definer；只被两个 definer 函数调用），`append_settlement` 只转调，行为不变。
+- **校准成员冻结**（计划审计 P1-10，规格第 7 稿 §5.5b/§5.6/§8.3）：`freeze_calibration_cohort` 用**一条** `insert … select` 把窗口内（按 `as_of`）全部非弃权登记连同该语句快照下的最新结算 id 写入 `judgment_calibration_cohort_members`（`ord = row_number() over (order by judgment_id)`），返回 `{frozen_at: statement_timestamp(), n}`；同一 `generation` 已有成员 → `invalid_parameter: generation`（一个代际只冻结一次）。在快照之前开始、之后提交的事务**一致地**不在成员内（不会在游标之后"补进来"）。`calibration_cohort_members` 只读冻结集（keyset `judgment_id > p_after`）；结算取冻结时的 `settlement_id`，之后的结算不改变已冻结代际的内容。`clear_calibration_generation` 删除整代并返回行数。公共 `calibration_cohort` 保持时间戳截止语义，只给校准页用。
+- **`judgment_envelope_by_id`**（计划审计 P2-01，公共读 invoker）：按 id 取一条信封，`latest` / `as_known` 语义同 `judgment_history`（`as_known` 要求 `registered_at ≤ cutoff` 且方法有 `≤ cutoff` 的事件）；RLS 照常生效，未发布 → 空。
+- `apply_quarantine_override` 幂等：项已 `resolved_accept` 且队列 `override` 与本次完全相同 → 无操作返回 `'applied'`；否则 `'item_not_open'`。审计行写 `research_audit_log(user_id = override.resolved_by, actor='user', action='dq.quarantine_resolve', object_type='dq', object_id = 隔离项 id, detail = p_audit ∪ {judgment_id, override})`（列与 `src/lib/research/store.ts::audit()` 写的形状一致；`user_id` 外键到 `auth.users`，所以 `resolved_by` 必须是真实管理员 id）。
 - `register_judgment` 的结算窗口在 UTC 日期上算（`date + grace` 再 `::timestamp at time zone 'UTC'`），不受会话时区影响；`next_attempt_at` 初值 = `settle_after`。
 
 - [ ] **Step 1: 在集成测试文件末尾追加函数用例（先失败）**
@@ -2500,13 +2579,14 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
  });
  afterAll(async()=>{await admin?.end();});
 
- const READS=['judgments_server_time','judgment_envelope_of','latest_judgment_cards','judgment_history','calibration_cohort','methodology_state_at'];
- const WRITES=['calibration_cohort_internal','sync_methodology','register_judgment','claim_due_judgments','release_lease','append_settlement','apply_quarantine_override','insert_calibration','set_job_state','repair_stale_batches'];
- const INTERNAL=['judgments_settle_after_date','judgments_grace_days','judgment_operation_payload','judgment_settlement_payload','judgment_replay_status'];
+ const READS=['judgments_server_time','judgment_envelope_of','latest_judgment_cards','judgment_history','calibration_cohort','methodology_state_at','judgment_envelope_by_id'];
+ const WRITES=['calibration_cohort_internal','sync_methodology','register_judgment','claim_due_judgments','release_lease','append_settlement','apply_quarantine_override','reject_quarantined_settlement','freeze_calibration_cohort','calibration_cohort_members','clear_calibration_generation','insert_calibration','set_job_state','repair_stale_batches'];
+ const INTERNAL=['judgments_settle_after_date','judgments_grace_days','judgment_operation_payload','judgment_settlement_payload','judgment_replay_status','judgment_append_settlement_internal'];
  const SIG:Record<string,string>={judgments_server_time:'()',judgment_envelope_of:'(public.judgments,text,timestamptz)',latest_judgment_cards:'(text,text,text[],text,timestamptz)',judgment_history:'(text,text,text,text,text,text,timestamptz,uuid,integer)',
   calibration_cohort:'(text,text,date,date,timestamptz,uuid,integer)',methodology_state_at:'(text,text,timestamptz)',calibration_cohort_internal:'(text,text,date,date,timestamptz,uuid,integer)',sync_methodology:'(jsonb,text,text)',register_judgment:'(jsonb,jsonb)',
   claim_due_judgments:'(integer,integer)',release_lease:'(uuid,uuid,jsonb)',append_settlement:'(uuid,uuid,text,jsonb)',apply_quarantine_override:'(uuid,jsonb,uuid,jsonb)',insert_calibration:'(jsonb,bigint)',set_job_state:'(text,timestamptz,jsonb)',repair_stale_batches:'(text,interval)',
-  judgments_settle_after_date:'(jsonb)',judgments_grace_days:'(jsonb,jsonb)',judgment_operation_payload:'(uuid,jsonb)',judgment_settlement_payload:'(public.judgment_settlements)',judgment_replay_status:'(public.judgment_settlements,uuid,text,jsonb)'};
+  reject_quarantined_settlement:'(uuid,uuid,text,jsonb,jsonb)',freeze_calibration_cohort:'(uuid,text,text,date,date)',calibration_cohort_members:'(uuid,uuid,integer)',clear_calibration_generation:'(uuid)',judgment_envelope_by_id:'(uuid,text,timestamptz)',
+  judgments_settle_after_date:'(jsonb)',judgments_grace_days:'(jsonb,jsonb)',judgment_operation_payload:'(uuid,jsonb)',judgment_settlement_payload:'(public.judgment_settlements)',judgment_replay_status:'(public.judgment_settlements,uuid,text,jsonb)',judgment_append_settlement_internal:'(uuid,uuid,text,jsonb)'};
 
  it('defines judgment_envelope and every §5.6 function with the declared security, search_path and execute grants; the whole file replays',async()=>{
   expect((await q(`select a.attname from pg_attribute a join pg_type t on t.typrelid=a.attrelid join pg_namespace n on n.oid=t.typnamespace where n.nspname='public' and t.typname='judgment_envelope' and a.attnum>0 order by a.attnum`)).map(r=>r.attname)).toEqual(['judgment','settlement','calibration','calibration_valid','methodology_state']);
@@ -2853,32 +2933,212 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   expect(await fails(set(null,[]))).toMatchObject({code:'22023'});
  });
 
- it('apply_quarantine_override: writes the override, schedules now, flips the item and writes research_audit_log in one transaction; idempotent replay; item_not_open; unknown_judgment',async()=>{
-  const m=await syncNew();const b=await batch();
-  const r=judgmentRow(m,b);await register(r);const j=String(r.row.judgment_id);
-  const resolver=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[resolver,`${resolver}@judgments.test`]);
+ // A judgment whose queue row is 'inconsistent' for evidence hash `hash`, with an open item carrying the same
+ // hash and cutoff (what settle.ts writes). Runs under the claim lock; the row is parked in 2099 afterwards.
+ const quarantined=async(m:string,b:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>{
+  const r=judgmentRow(m,b,{target:DUE});await register(r);const j=String(r.row.judgment_id);
   const item=randomUUID();
-  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,'{}')`,[item,j,b]);
-  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:H('e'),evidence:{bars:[]}},evidence_hash:H('e'),resolved_by:resolver,at:new Date().toISOString()};
-  const apply=(o:unknown,qid=item,jid=j)=>q(`select public.apply_quarantine_override($1,$2::jsonb,$3,$4::jsonb)`,[jid,JSON.stringify(o),qid,JSON.stringify({route:'test'})]);
-  await withClaimLock(async()=>{                                                            // next_attempt_at = now makes the row due: take it back before leaving the lock
+  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,$4::jsonb)`,[item,j,b,JSON.stringify({evidence_hash:hash,cutoff,judgment_id:j})]);
+  const t=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+  await release(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+  return {j,item};
+ };
+ const adminUser=async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@judgments.test`]);return id;};
+ const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
+ type Conn={query:(text:string,values?:unknown[])=>Promise<{rows:any[]}>};
+ const applyQ=(jid:string,o:unknown,qid:string,c:Conn=admin)=>c.query(`select public.apply_quarantine_override($1,$2::jsonb,$3,$4::jsonb) v`,[jid,JSON.stringify(o),qid,JSON.stringify({route:'test'})]).then(r=>r.rows[0].v as string);
+ const voidRow=(b:string,by:string):SettlementInsert=>({kind:'void',outcome:null,realized:null,evidence:{quarantine:true},resolver:'macro_regime_replay',resolver_version:'1.0.0',reason:'quarantine_rejected',actor:`admin:${by}`,code_version:'abcdef1',batch_id:b});
+ const rejectQ=(jid:string,qid:string,key:string,row:SettlementInsert,c:Conn=admin)=>c.query(`select public.reject_quarantined_settlement($1,$2,$3,$4::jsonb,$5::jsonb) v`,[jid,qid,key,JSON.stringify({...row,request_digest:operationDigest(jid,row)}),JSON.stringify({route:'test'})]).then(r=>r.rows[0].v as {seq:number;status:string});
+ const queueOf=async(j:string)=>(await q(`select override,next_attempt_at,leased_until,lease_token,last_status,last_detail,closed_at from public.judgment_settle_queue where judgment_id=$1`,[j]))[0];
+
+ it('apply_quarantine_override: locks queue then item; writes override, schedules now, REVOKES the lease, flips the item, audits — atomically; idempotent; stale / closed / item_not_open write nothing (P1-04)',async()=>{
+  const m=await syncNew();const b=await batch();const by=await adminUser();
+  await withClaimLock(async()=>{
+   const {j,item}=await quarantined(m,b);
+   const override=overrideOf(by);
+   // A worker re-claims the row (lease held) while the admin accepts: the acceptance revokes that lease.
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);
+   const worker=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
    const before=await serverNow();
-   await apply(override);
-   const qr=(await q(`select override,next_attempt_at from public.judgment_settle_queue where judgment_id=$1`,[j]))[0];
+   expect(await applyQ(j,override,item)).toBe('applied');
+   const qr=await queueOf(j);
    expect(qr.override).toEqual(override);expect(qr.next_attempt_at.getTime()).toBeGreaterThanOrEqual(Date.parse(before));
+   expect({l:qr.leased_until,t:qr.lease_token,s:qr.last_status,h:qr.last_detail.evidence_hash}).toEqual({l:null,t:null,s:'inconsistent',h:H('e')});
+   expect(await fails(release(j,worker,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0}))).toMatchObject({code:'55P03',message:'lease_lost'});
+   expect(await fails(appendOp(j,worker,`${b}:${j}:1`,sRow(b)))).toMatchObject({code:'55P03',message:'lease_lost'});
+   expect((await queueOf(j)).last_detail.evidence_hash).toBe(H('e'));                       // the accepted inconsistency survives
+   expect((await q(`select status,resolved_by,detail->'override' o from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({status:'resolved_accept',resolved_by:by,o:override});
+   expect(await q(`select user_id,actor,action,object_type,object_id,detail->>'route' route,detail->>'judgment_id' jid from public.research_audit_log where object_id=$1`,[item])).toEqual([{user_id:by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:item,route:'test',jid:j}]);
+   expect(await applyQ(j,override,item)).toBe('applied');                                   // replay: no-op, no second audit row
+   expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[item])).toHaveLength(1);
+   expect(await applyQ(j,{...override,at:new Date(Date.now()+5).toISOString()},item)).toBe('item_not_open');
    const mine=(await claim()).find(x=>x.judgment_id===j)!;await park(j,String(mine.lease_token));
+   // stale: the queue moved to another inconsistency (new evidence hash) after the item was raised → nothing written
+   const s1=await quarantined(m,b);
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s1.j]);
+   const t1=String((await claim()).find(x=>x.judgment_id===s1.j)!.lease_token);
+   await release(s1.j,t1,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),quarantine_id:s1.item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+   expect(await applyQ(s1.j,overrideOf(by),s1.item)).toBe('stale');
+   expect((await queueOf(s1.j)).override).toBeNull();
+   expect((await q(`select status from public.dq_quarantine where id=$1`,[s1.item]))[0].status).toBe('open');
+   // stale: same inconsistency, but the override names another resolution cutoff than the item's
+   const s2=await quarantined(m,b);
+   expect(await applyQ(s2.j,overrideOf(by,H('e'),'2026-01-01T00:00:00.000Z'),s2.item)).toBe('stale');
+   expect((await queueOf(s2.j)).override).toBeNull();
+   // stale: the queue is no longer inconsistent
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s2.j]);
+   const t2=String((await claim()).find(x=>x.judgment_id===s2.j)!.lease_token);
+   await park(s2.j,t2);
+   expect(await applyQ(s2.j,overrideOf(by),s2.item)).toBe('stale');
+   // closed: the judgment was settled meanwhile
+   const s3=await quarantined(m,b);
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s3.j]);
+   const t3=String((await claim()).find(x=>x.judgment_id===s3.j)!.lease_token);
+   expect(await appendOp(s3.j,t3,`${b}:${s3.j}:1`,sRow(b))).toEqual({seq:1,status:'applied'});
+   expect(await applyQ(s3.j,overrideOf(by),s3.item)).toBe('closed');
+   expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[s3.item])).toHaveLength(0);
+   // item of another judgment → item_not_open (status, not an exception); unknown judgment still raises
+   expect(await applyQ(s2.j,overrideOf(by),item)).toBe('item_not_open');
+   expect(await fails(applyQ(randomUUID(),override,item))).toMatchObject({code:'P0002',message:'unknown_judgment'});
+   for(const bad of [{...override,evidence_hash:'x'},{...override,resolved_by:'nope'},{...override,resolution:'x'},{...override,reason_code:undefined},{...override,cutoff:undefined}])
+    expect(await fails(applyQ(j,bad,item))).toMatchObject({code:'22023'});
   });
-  expect((await q(`select status,resolved_by,detail->'override' o from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({status:'resolved_accept',resolved_by:resolver,o:override});
-  expect(await q(`select user_id,actor,action,object_type,object_id,detail->>'route' route,detail->>'judgment_id' jid from public.research_audit_log where object_id=$1`,[item])).toEqual([{user_id:resolver,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:item,route:'test',jid:j}]);
-  await apply(override);                                                                    // replay: no-op, no second audit row
-  expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[item])).toHaveLength(1);
-  expect(await fails(apply({...override,at:new Date(Date.now()+5).toISOString()}))).toMatchObject({code:'P0001',message:'item_not_open'});
-  const other=randomUUID();
-  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,'{}')`,[other,randomUUID(),b]);
-  expect(await fails(apply(override,other))).toMatchObject({code:'P0001',message:'item_not_open'});      // item of another judgment
-  expect(await fails(apply(override,item,randomUUID()))).toMatchObject({code:'P0002',message:'unknown_judgment'});
-  for(const bad of [{...override,evidence_hash:'x'},{...override,resolved_by:'nope'},{...override,resolution:'x'},{...override,reason_code:undefined}])
-   expect(await fails(apply(bad))).toMatchObject({code:'22023'});
+ });
+
+ it('reject_quarantined_settlement: void + item resolved_reject + audit in one transaction; replay-safe on request_key; stale / item_not_open write nothing (P1-05)',async()=>{
+  const m=await syncNew();const b=await batch();const by=await adminUser();
+  await withClaimLock(async()=>{
+   const {j,item}=await quarantined(m,b);
+   const row=voidRow(b,by);const key=`adm:${randomUUID()}`;
+   expect(await rejectQ(j,item,key,row)).toEqual({seq:1,status:'applied'});
+   expect(await q(`select seq,kind,reason,actor,request_key from public.judgment_settlements where judgment_id=$1`,[j])).toEqual([{seq:1,kind:'void',reason:'quarantine_rejected',actor:`admin:${by}`,request_key:key}]);
+   expect((await q(`select status,resolved_by,(detail->>'rejected_settlement_seq')::int s from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({status:'resolved_reject',resolved_by:by,s:1});
+   expect((await queueOf(j)).closed_at).not.toBeNull();
+   expect(await q(`select detail->>'decision' d,(detail->>'seq')::int s from public.research_audit_log where object_id=$1`,[item])).toEqual([{d:'reject',s:1}]);
+   expect(await rejectQ(j,item,key,row)).toEqual({seq:1,status:'already_applied'});         // lost response retried
+   expect(await rejectQ(j,item,key,{...row,reason:'other'})).toEqual({seq:1,status:'request_key_conflict'});
+   expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[item])).toHaveLength(1);
+   expect(await rejectQ(j,item,`adm:${randomUUID()}`,row)).toEqual({seq:1,status:'item_not_open'});
+   // stale: the queue's inconsistency is not the item's → nothing written
+   const s=await quarantined(m,b,H('e'));
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s.j]);
+   const t=String((await claim()).find(x=>x.judgment_id===s.j)!.lease_token);
+   await release(s.j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+   expect(await rejectQ(s.j,s.item,`adm:${randomUUID()}`,row)).toEqual({seq:0,status:'stale'});
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[s.j])).toHaveLength(0);
+   expect((await q(`select status from public.dq_quarantine where id=$1`,[s.item]))[0].status).toBe('open');
+   for(const bad of [{...row,kind:'settled'},{...row,actor:'cron'}] as SettlementInsert[])
+    expect(await fails(rejectQ(s.j,s.item,`adm:${randomUUID()}`,bad))).toMatchObject({code:'22023'});
+  });
+ });
+
+ it('races on two connections: acceptance vs a worker release, acceptance vs rejection — the queue lock serialises them and the loser writes nothing (P1-04, P1-05)',async()=>{
+  const m=await syncNew();const b=await batch();const by=await adminUser();
+  await withClaimLock(async()=>{
+   // 1. A worker's release (new inconsistency) is in flight when the admin accepts the old one.
+   const a=await quarantined(m,b);
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[a.j]);
+   const t=String((await claim()).find(x=>x.judgment_id===a.j)!.lease_token);
+   const w=await admin.connect();
+   try{
+    await w.query('begin');
+    await w.query(`select public.release_lease($1,$2,$3::jsonb)`,[a.j,t,JSON.stringify({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0})]);
+    const accepting=applyQ(a.j,overrideOf(by),a.item);                                      // blocks on the queue row lock
+    await pause(200);
+    await w.query('commit');
+    expect(await accepting).toBe('stale');
+   }finally{w.release();}
+   expect((await queueOf(a.j)).override).toBeNull();
+   // 2. Rejection and acceptance of the same item at once: exactly one wins; the other reports and writes nothing.
+   const r=await quarantined(m,b);
+   const c=await admin.connect();
+   try{
+    await c.query('begin');
+    expect(await rejectQ(r.j,r.item,`adm:${randomUUID()}`,voidRow(b,by),c)).toMatchObject({status:'applied'});
+    const accepting=applyQ(r.j,overrideOf(by),r.item);
+    await pause(200);
+    await c.query('commit');
+    expect(await accepting).toBe('item_not_open');
+   }finally{c.release();}
+   expect((await queueOf(r.j)).override).toBeNull();
+   expect((await q(`select status from public.dq_quarantine where id=$1`,[r.item]))[0].status).toBe('resolved_reject');
+   // 3. The other order: acceptance first, rejection waits and finds the item resolved.
+   const x=await quarantined(m,b);
+   const e=await admin.connect();
+   try{
+    await e.query('begin');
+    expect(await applyQ(x.j,overrideOf(by),x.item,e)).toBe('applied');
+    const rejecting=rejectQ(x.j,x.item,`adm:${randomUUID()}`,voidRow(b,by));
+    await pause(200);
+    await e.query('commit');
+    expect(await rejecting).toEqual({seq:0,status:'item_not_open'});
+   }finally{e.release();}
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[x.j])).toHaveLength(0);
+   const mine=(await claim()).find(z=>z.judgment_id===x.j)!;await park(x.j,String(mine.lease_token));   // the accepted row is due now
+  });
+ });
+
+ it('freeze_calibration_cohort: one statement freezes members + latest settlements; a transaction open before the freeze and committed after is excluded consistently; members page stably; clear removes the generation (P1-10)',async()=>{
+  const m=await syncNew();const b=await batch();
+  const ids:string[]=[];
+  for(const d of ['2025-03-01','2025-06-01','2025-09-01']){const r=judgmentRow(m,b,{asOf:d});await register(r);ids.push(String(r.row.judgment_id));}
+  // One member that will be settled AFTER the freeze: registered due, taken and parked under the claim lock.
+  const due=judgmentRow(m,b,{asOf:'2025-04-01',target:DUE});const dueId=String(due.row.judgment_id);
+  await withClaimLock(async()=>{await register(due);await park(dueId,String((await claim()).find(x=>x.judgment_id===dueId)!.lease_token));});
+  ids.push(dueId);
+  await register(judgmentRow(m,b,{asOf:'2024-01-01'}));                                    // outside the window
+  await register(judgmentRow(m,b,{asOf:'2025-05-01',abstained:true}));                     // abstained: not a member
+  // A registration whose transaction began BEFORE the freeze and commits AFTER it.
+  const late=judgmentRow(m,b,{asOf:'2025-07-01'});
+  const gen=randomUUID();
+  let frozen={frozen_at:'',n:-1};
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select public.register_judgment($1::jsonb,$2::jsonb)`,[JSON.stringify(late.row),JSON.stringify(late.queue)]);
+   frozen=await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m]);
+   await c.query('commit');
+  }finally{c.release();}
+  expect(frozen.n).toBe(4);expect(Number.isFinite(Date.parse(frozen.frozen_at))).toBe(true);
+  const members=async(g:string,after:string|null,limit:number)=>q(`select (e.judgment).judgment_id id,(e.settlement).settlement_id sid from public.calibration_cohort_members($1,$2,$3) e`,[g,after,limit]);
+  const sorted=[...ids].sort();
+  const p1=await members(gen,null,2);expect(p1.map(r=>r.id)).toEqual(sorted.slice(0,2));
+  // The frozen member is settled between two pages: the generation's pages do not change.
+  await withClaimLock(async()=>{
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[dueId]);
+   const t=String((await claim()).find(x=>x.judgment_id===dueId)!.lease_token);
+   expect(await appendOp(dueId,t,`${b}:${dueId}:1`,sRow(b))).toEqual({seq:1,status:'applied'});
+  });
+  const p2=await members(gen,p1[1].id,2);expect(p2.map(r=>r.id)).toEqual(sorted.slice(2));
+  expect(await members(gen,p2[1].id,2)).toEqual([]);
+  expect([...p1,...p2].every(r=>r.sid===null)).toBe(true);                                 // frozen before the settlement
+  expect([...p1,...p2].map(r=>r.id)).not.toContain(String(late.row.judgment_id));             // committed after the snapshot: consistently out
+  // A later generation sees the late registration and the new settlement (latest at ITS snapshot).
+  const gen2=randomUUID();
+  expect((await one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen2,m])).n).toBe(5);
+  expect((await members(gen2,null,100)).filter(r=>r.sid!==null).map(r=>r.id)).toEqual([dueId]);
+  expect(await q(`select ord from public.judgment_calibration_cohort_members where generation=$1 order by judgment_id`,[gen2])).toEqual([1,2,3,4,5].map(ord=>({ord:String(ord)})));
+  expect(await fails(q(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31')`,[gen,m]))).toMatchObject({code:'22023'});   // once per generation
+  expect(await fails(q(`select public.freeze_calibration_cohort($1,$2,'v1','2025-12-31','2025-01-01')`,[randomUUID(),m]))).toMatchObject({code:'22023'});
+  expect(await fails(q(`select * from public.calibration_cohort_members($1,null,0)`,[gen]))).toMatchObject({code:'22023'});
+  expect(await one(`select public.clear_calibration_generation($1) v`,[gen])).toBe(4);
+  expect(await members(gen,null,100)).toEqual([]);
+  expect(await one(`select public.clear_calibration_generation($1) v`,[gen])).toBe(0);
+  for(const role of ['anon','authenticated'])
+   expect(await fails(asRole(admin,role,c2=>c2.query(`select * from public.calibration_cohort_members($1,null,10)`,[gen2])))).toMatchObject({code:'42501'});
+ });
+
+ it('judgment_envelope_by_id: one envelope under latest / as_known, RLS-gated by publishable, empty for an unknown id (P2-01)',async()=>{
+  const row=methodologyRow();const m=String(row.methodology_id);await sync({...row,publishable:true});const b=await batch();
+  const r=judgmentRow(m,b,{subjectType:'macro_region',subjectKey:'CN'});await register(r);const j=String(r.row.judgment_id);
+  const byId=(c:Conn,id:string,view:string,cutoff:string|null)=>c.query(`select (e.judgment).judgment_id id from public.judgment_envelope_by_id($1,$2,$3::timestamptz) e`,[id,view,cutoff]).then(x=>x.rows.map(y=>y.id));
+  expect(await asRole(admin,'anon',c=>byId(c,j,'latest',null))).toEqual([j]);
+  expect(await asRole(admin,'anon',c=>byId(c,j,'as_known','2000-01-01T00:00:00.000Z'))).toEqual([]);
+  expect(await asRole(admin,'anon',c=>byId(c,j,'as_known',new Date(Date.now()+60_000).toISOString()))).toEqual([j]);
+  expect(await asRole(admin,'anon',c=>byId(c,randomUUID(),'latest',null))).toEqual([]);
+  await sync({...row,publishable:false});
+  expect(await asRole(admin,'anon',c=>byId(c,j,'latest',null))).toEqual([]);
+  expect(await fails(q(`select * from public.judgment_envelope_by_id($1,'as_known',null)`,[j]))).toMatchObject({code:'22023'});
  });
 
  it('repair_stale_batches: only the named judgments.* dataset, only running batches older than the threshold; appends stale_running',async()=>{
@@ -2909,7 +3169,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
 - [ ] **Step 2: 运行，确认失败**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: FAIL —— Task 2 的 7 个用例仍 PASS；Task 3 的 17 个用例失败，首个报 `expected [] to deeply equal [ 'judgment', … ]`（类型不存在），其余报 `function public.sync_methodology(jsonb, text, text) does not exist` 等。
+Expected: FAIL —— Task 2 的 7 个用例仍 PASS；Task 3 的 21 个用例失败，首个报 `expected [] to deeply equal [ 'judgment', … ]`（类型不存在），其余报 `function public.sync_methodology(jsonb, text, text) does not exist` 等。
 
 - [ ] **Step 3: 在迁移文件末尾追加函数段**
 
@@ -3096,6 +3356,23 @@ returns public.judgment_methodology_events language sql stable security invoker 
   order by e.occurred_at desc, e.seq desc limit 1
 $$;
 
+-- §10 / plan audit P2-01: one envelope by judgment id under the judgment_history view semantics; RLS-gated
+-- (invoker), so an unpublishable judgment returns no row. Replaces scanning history pages to find an id.
+create or replace function public.judgment_envelope_by_id(p_id uuid, p_view text, p_cutoff timestamptz)
+returns setof public.judgment_envelope language plpgsql stable security invoker set search_path = '' as $$
+begin
+  if p_view is null or p_view not in ('latest','as_known') or (p_view = 'as_known' and p_cutoff is null) then
+    raise exception 'invalid_parameter: view' using errcode = '22023';
+  end if;
+  return query
+  select e.* from public.judgments j
+  cross join lateral public.judgment_envelope_of(j, p_view, p_cutoff) e
+  where j.judgment_id = p_id
+    and (p_view = 'latest' or (j.registered_at <= p_cutoff and exists (
+      select 1 from public.judgment_methodology_events ev
+      where ev.methodology_id = j.methodology_id and ev.version = j.methodology_version and ev.occurred_at <= p_cutoff)));
+end $$;
+
 -- ---------------------------------------------------------------- service write RPCs
 -- R04: same query and cutoff semantics as calibration_cohort, NOT gated by publishable (the
 -- definer owns the tables, so RLS does not restrict it). Read-only.
@@ -3265,8 +3542,10 @@ end $$;
 -- row → replay check again under the lock → closed queue + automatic actor → already_final → lease
 -- (null token only for admin:<uuid>) → insert (trigger checks seq and transition) → queue update →
 -- validity +1 on withdrawn/reopened. A concurrent insert of the same request_key (23505) re-reads.
-create or replace function public.append_settlement(p_judgment_id uuid, p_lease_token uuid, p_request_key text, p_row jsonb) returns jsonb
-language plpgsql security definer set search_path = '' as $$
+-- Internal (no client role; not a definer): the single append implementation, called by append_settlement and
+-- reject_quarantined_settlement (plan audit P1-05) inside their transactions.
+create or replace function public.judgment_append_settlement_internal(p_judgment_id uuid, p_lease_token uuid, p_request_key text, p_row jsonb) returns jsonb
+language plpgsql set search_path = '' as $$
 declare
   v_digest text := p_row ->> 'request_digest';
   v_kind text := p_row ->> 'kind';
@@ -3330,10 +3609,18 @@ begin
   end if;
   return pg_catalog.jsonb_build_object('seq', v_seq + 1, 'status', 'applied');
 end $$;
+create or replace function public.append_settlement(p_judgment_id uuid, p_lease_token uuid, p_request_key text, p_row jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  select public.judgment_append_settlement_internal(p_judgment_id, p_lease_token, p_request_key, p_row)
+$$;
 
--- §7.6: the quarantine hook's verdict, one transaction: queue.override + next_attempt_at = now(),
--- the dq_quarantine item → resolved_accept, a research_audit_log row. Idempotent for the same override.
-create or replace function public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns void
+-- §7.6 / plan audit P1-04: the quarantine hook's acceptance, one transaction, locks queue row THEN item. It is
+-- usable only for the inconsistency it was raised for: the queue must be open, still 'inconsistent' with
+-- last_detail.evidence_hash = override.evidence_hash, and the item open with the same evidence_hash and cutoff;
+-- otherwise a status is returned and NOTHING is written. Applying sets the override, schedules now and REVOKES
+-- any lease (an in-flight worker then gets lease_lost instead of overwriting last_status / last_detail), flips
+-- the item and writes research_audit_log. Idempotent for the same override ('applied').
+create or replace function public.apply_quarantine_override(p_judgment_id uuid, p_override jsonb, p_quarantine_id uuid, p_audit jsonb) returns text
 language plpgsql security definer set search_path = '' as $$
 declare v_q public.judgment_settle_queue; v_i public.dq_quarantine; v_by uuid;
 begin
@@ -3342,7 +3629,7 @@ begin
      or coalesce(p_override ->> 'reason_code', '') = ''
      or coalesce(p_override ->> 'evidence_hash', '') !~ '^[0-9a-f]{64}$'
      or coalesce(p_override ->> 'resolved_by', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-     or (p_override ->> 'at') is null
+     or (p_override ->> 'at') is null or (p_override ->> 'cutoff') is null
      or p_audit is null or pg_catalog.jsonb_typeof(p_audit) <> 'object' then
     raise exception 'invalid_parameter: override' using errcode = '22023';
   end if;
@@ -3350,14 +3637,20 @@ begin
   select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
   if not found then raise exception 'unknown_judgment' using errcode = 'P0002'; end if;
   select x.* into v_i from public.dq_quarantine x where x.id = p_quarantine_id for update;
-  if not found or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text then
-    raise exception 'item_not_open' using errcode = 'P0001';
-  end if;
+  if not found or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text then return 'item_not_open'; end if;
   if v_i.status <> 'open' then
-    if v_i.status = 'resolved_accept' and v_q.override = p_override then return; end if;
-    raise exception 'item_not_open' using errcode = 'P0001';
+    if v_i.status = 'resolved_accept' and v_q.override = p_override then return 'applied'; end if;
+    return 'item_not_open';
   end if;
-  update public.judgment_settle_queue x set override = p_override, next_attempt_at = pg_catalog.now(), updated_at = pg_catalog.now()
+  if v_q.closed_at is not null then return 'closed'; end if;
+  if v_q.last_status is distinct from 'inconsistent'
+     or (v_q.last_detail ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
+     or (v_i.payload ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
+     or (v_i.payload ->> 'cutoff') is distinct from (p_override ->> 'cutoff') then
+    return 'stale';
+  end if;
+  update public.judgment_settle_queue x
+  set override = p_override, next_attempt_at = pg_catalog.now(), leased_until = null, lease_token = null, updated_at = pg_catalog.now()
   where x.judgment_id = p_judgment_id;
   update public.dq_quarantine x
   set status = 'resolved_accept', resolved_by = v_by, resolved_at = pg_catalog.now(), detail = x.detail || pg_catalog.jsonb_build_object('override', p_override)
@@ -3365,6 +3658,108 @@ begin
   insert into public.research_audit_log (id, user_id, actor, action, object_type, object_id, detail, created_at)
   values (pg_catalog.gen_random_uuid(), v_by, 'user', 'dq.quarantine_resolve', 'dq', p_quarantine_id,
           p_audit || pg_catalog.jsonb_build_object('judgment_id', p_judgment_id::text, 'override', p_override), pg_catalog.now());
+  return 'applied';
+end $$;
+
+-- §7.6 / plan audit P1-05: the quarantine hook's rejection, ONE transaction: replay check on the request key →
+-- lock queue row THEN item → replay check again → validate (item open; queue open, inconsistent, same evidence
+-- hash as the item) → the void through the single append implementation → item resolved_reject → audit row.
+-- A crash can no longer leave a void with an open item, and a concurrent acceptance cannot interleave.
+create or replace function public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_digest text := p_row ->> 'request_digest';
+  v_actor text := p_row ->> 'actor';
+  v_payload jsonb;
+  v_hit public.judgment_settlements;
+  v_q public.judgment_settle_queue;
+  v_i public.dq_quarantine;
+  v_seq integer;
+  v_res jsonb;
+begin
+  if p_row is null or pg_catalog.jsonb_typeof(p_row) <> 'object' or (p_row ->> 'kind') is distinct from 'void'
+     or coalesce(v_actor, '') !~ '^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or coalesce(v_digest, '') !~ '^[0-9a-f]{64}$' or p_request_key is null
+     or p_audit is null or pg_catalog.jsonb_typeof(p_audit) <> 'object' then
+    raise exception 'invalid_parameter: rejection' using errcode = '22023';
+  end if;
+  v_payload := public.judgment_operation_payload(p_judgment_id, p_row);
+  select s.* into v_hit from public.judgment_settlements s where s.request_key = p_request_key;
+  if found then return public.judgment_replay_status(v_hit, p_judgment_id, v_digest, v_payload); end if;
+  select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
+  if not found then raise exception 'unknown_judgment' using errcode = 'P0002'; end if;
+  select x.* into v_i from public.dq_quarantine x where x.id = p_quarantine_id for update;
+  select s.* into v_hit from public.judgment_settlements s where s.request_key = p_request_key;
+  if found then return public.judgment_replay_status(v_hit, p_judgment_id, v_digest, v_payload); end if;
+  select coalesce(max(s.seq), 0) into v_seq from public.judgment_settlements s where s.judgment_id = p_judgment_id;
+  if v_i.id is null or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text or v_i.status <> 'open' then
+    return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'item_not_open');
+  end if;
+  if v_q.closed_at is not null or v_q.last_status is distinct from 'inconsistent'
+     or (v_q.last_detail ->> 'evidence_hash') is distinct from (v_i.payload ->> 'evidence_hash') then
+    return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'stale');
+  end if;
+  v_res := public.judgment_append_settlement_internal(p_judgment_id, null, p_request_key, p_row);
+  if v_res ->> 'status' <> 'applied' then return v_res; end if;
+  update public.dq_quarantine x
+  set status = 'resolved_reject', resolved_by = pg_catalog.substr(v_actor, 7)::uuid, resolved_at = pg_catalog.now(),
+      detail = x.detail || pg_catalog.jsonb_build_object('rejected_settlement_seq', (v_res ->> 'seq')::integer)
+  where x.id = p_quarantine_id;
+  insert into public.research_audit_log (id, user_id, actor, action, object_type, object_id, detail, created_at)
+  values (pg_catalog.gen_random_uuid(), pg_catalog.substr(v_actor, 7)::uuid, 'user', 'dq.quarantine_resolve', 'dq', p_quarantine_id,
+          p_audit || pg_catalog.jsonb_build_object('judgment_id', p_judgment_id::text, 'decision', 'reject', 'seq', (v_res ->> 'seq')::integer), pg_catalog.now());
+  return v_res;
+end $$;
+
+-- §8.3 / plan audit P1-10: freeze one calibration generation's cohort in ONE statement (one MVCC snapshot):
+-- every non-abstained registration with as_of in the window and its latest settlement at that snapshot. A
+-- transaction that began before and commits after the freeze is consistently outside the generation.
+create or replace function public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare n bigint; v_at timestamptz := pg_catalog.statement_timestamp();
+begin
+  if p_generation is null or p_methodology is null or p_version is null or p_window_from is null or p_window_to is null or p_window_from > p_window_to then
+    raise exception 'invalid_parameter: window' using errcode = '22023';
+  end if;
+  if exists (select 1 from public.judgment_calibration_cohort_members c where c.generation = p_generation) then
+    raise exception 'invalid_parameter: generation % is already frozen', p_generation using errcode = '22023';
+  end if;
+  insert into public.judgment_calibration_cohort_members (generation, judgment_id, settlement_id, ord)
+  select p_generation, j.judgment_id,
+         (select s.settlement_id from public.judgment_settlements s where s.judgment_id = j.judgment_id order by s.seq desc limit 1),
+         pg_catalog.row_number() over (order by j.judgment_id)
+  from public.judgments j
+  where j.methodology_id = p_methodology and j.methodology_version = p_version and not j.abstained
+    and j.as_of between p_window_from and p_window_to;
+  get diagnostics n = row_count;
+  return pg_catalog.jsonb_build_object('frozen_at', v_at, 'n', n);
+end $$;
+
+-- The frozen members of a generation as envelopes (settlement = the one frozen with it), keyset by judgment_id.
+create or replace function public.calibration_cohort_members(p_generation uuid, p_after uuid, p_limit integer)
+returns setof public.judgment_envelope language plpgsql stable security definer set search_path = '' as $$
+begin
+  if p_generation is null then raise exception 'invalid_parameter: generation' using errcode = '22023'; end if;
+  if p_limit is null or p_limit < 1 or p_limit > 1000 then raise exception 'invalid_parameter: limit' using errcode = '22023'; end if;
+  return query
+  select j,
+         (select s from public.judgment_settlements s where s.settlement_id = c.settlement_id),
+         null::public.judgment_calibrations, false, null::public.judgment_methodology_events
+  from public.judgment_calibration_cohort_members c
+  join public.judgments j on j.judgment_id = c.judgment_id
+  where c.generation = p_generation and (p_after is null or c.judgment_id > p_after)
+  order by c.judgment_id
+  limit p_limit;
+end $$;
+
+create or replace function public.clear_calibration_generation(p_generation uuid) returns integer
+language plpgsql security definer set search_path = '' as $$
+declare n integer;
+begin
+  if p_generation is null then raise exception 'invalid_parameter: generation' using errcode = '22023'; end if;
+  delete from public.judgment_calibration_cohort_members c where c.generation = p_generation;
+  get diagnostics n = row_count;
+  return n;
 end $$;
 
 -- §5.6 / R05: lock the validity row; the row's revision, the caller's expectation and the locked
@@ -3430,7 +3825,8 @@ do $$ declare f text; begin
     'public.latest_judgment_cards(text, text, text[], text, timestamptz)',
     'public.judgment_history(text, text, text, text, text, text, timestamptz, uuid, integer)',
     'public.calibration_cohort(text, text, date, date, timestamptz, uuid, integer)',
-    'public.methodology_state_at(text, text, timestamptz)'] loop
+    'public.methodology_state_at(text, text, timestamptz)',
+    'public.judgment_envelope_by_id(uuid, text, timestamptz)'] loop
     execute format('revoke execute on function %s from public, anon, authenticated, service_role', f);
     execute format('grant execute on function %s to anon, authenticated, service_role', f);
   end loop;
@@ -3442,6 +3838,10 @@ do $$ declare f text; begin
     'public.release_lease(uuid, uuid, jsonb)',
     'public.append_settlement(uuid, uuid, text, jsonb)',
     'public.apply_quarantine_override(uuid, jsonb, uuid, jsonb)',
+    'public.reject_quarantined_settlement(uuid, uuid, text, jsonb, jsonb)',
+    'public.freeze_calibration_cohort(uuid, text, text, date, date)',
+    'public.calibration_cohort_members(uuid, uuid, integer)',
+    'public.clear_calibration_generation(uuid)',
     'public.insert_calibration(jsonb, bigint)',
     'public.set_job_state(text, timestamptz, jsonb)',
     'public.repair_stale_batches(text, interval)'] loop
@@ -3453,7 +3853,8 @@ do $$ declare f text; begin
     'public.judgments_grace_days(jsonb, jsonb)',
     'public.judgment_operation_payload(uuid, jsonb)',
     'public.judgment_settlement_payload(public.judgment_settlements)',
-    'public.judgment_replay_status(public.judgment_settlements, uuid, text, jsonb)'] loop
+    'public.judgment_replay_status(public.judgment_settlements, uuid, text, jsonb)',
+    'public.judgment_append_settlement_internal(uuid, uuid, text, jsonb)'] loop
     execute format('revoke execute on function %s from public, anon, authenticated, service_role', f);
   end loop;
 end $$;
@@ -3462,7 +3863,7 @@ end $$;
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（24 tests：Task 2 的 7 个 + Task 3 的 17 个）。
+Expected: PASS（28 tests：Task 2 的 7 个 + Task 3 的 21 个）。
 
 - [ ] **Step 5: 迁移彩排**
 
@@ -3652,7 +4053,7 @@ export function calibrationFixture(m:MethodologySync,batchId:string,revision:num
  const id=randomUUID();
  return {calibration_id:id,methodology_id:m.methodology_id,methodology_version:m.version,scope_type:'all',scope_key:'',window_from:'2023-01-01',window_to:'2026-01-01',n_registered:10,n_settled:8,n_independent:5,n_void:1,n_retrospective_excluded:1,
   threshold_n:100,ece_max:0.1,kind:m.kind,state:'insufficient',valid_until:'2099-01-01T00:00:00.000Z',validity_revision:revision,metrics:{brier:null},reliability:[],isotonic_segments:null,
-  cohort_path:`judgments-calibration/${id}.json`,cohort_sha256:H('d'),query_bounds:{window_from:'2023-01-01',window_to:'2026-01-01',registered_at_lte:'2026-01-02T00:00:00.000Z',settled_at_lte:'2026-01-02T00:00:00.000Z'},
+  cohort_path:`judgments-calibration/${id}.json`,cohort_sha256:H('d'),query_bounds:{window_from:'2023-01-01',window_to:'2026-01-01',registered_at_lte:'2026-01-02T00:00:00.000Z',settled_at_lte:'2026-01-02T00:00:00.000Z',frozen_at:'2026-01-02T00:00:00.000Z',n:10},
   fingerprint:digest({calibration_id:id}),algorithm_version:'calib/1',code_version:'abcdef1',computed_at:new Date().toISOString(),batch_id:batchId,...o};
 }
 
@@ -3939,28 +4340,128 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await code(db.repairStaleBatches(ds,30))).toBe('invalid_parameter');
   });
 
-  it('applyQuarantineOverride: override + next_attempt_at now, item resolved_accept, one audit row; idempotent; item_not_open; unknown_judgment; invalid override',async()=>{
+  /** A judgment whose queue is 'inconsistent' for `hash` with an open item of the same hash and cutoff (settle.ts shape). Call inside exclusiveClaims. */
+  const inconsistent=async(m:MethodologySync,b:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>{
+   const j=await registered(m,b,{target:DUE});
+   const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:hash,cutoff,judgment_id:j.id}});
+   const mine=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
+   await db.releaseLease(j.id,mine.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,quarantine_id:itemId},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+   return {j,itemId};
+  };
+  const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z'):QuarantineOverride=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
+  const rejectRow=(b:string,by:string)=>settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
+
+  it('applyQuarantineOverride: atomic acceptance of the CURRENT inconsistency — override, due now, lease revoked, item resolved_accept, one audit row; idempotent; stale / closed / item_not_open write nothing (P1-04)',async()=>{
    const m=await synced();const b=await h.batch();const by=await h.adminUser();
-   const j=await registered(m,b);
-   const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H('e')}});
-   const override:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:H('e'),evidence:{bars:[]}},evidence_hash:H('e'),resolved_by:by,at:new Date().toISOString()};
    await h.exclusiveClaims(async()=>{
+    const {j,itemId}=await inconsistent(m,b);
+    const override=overrideOf(by);
     const before=await db.serverTime();
-    await db.applyQuarantineOverride(j.id,override,itemId,{route:'contract'});
+    expect(await db.applyQuarantineOverride(j.id,override,itemId,{route:'contract'})).toBe('applied');
     const qr=(await db.queueRow(j.id))!;
     expect(qr.override).toEqual(override);expect(Date.parse(qr.next_attempt_at)).toBeGreaterThanOrEqual(Date.parse(before));
+    expect({l:qr.leased_until,t:qr.lease_token,s:qr.last_status}).toEqual({l:null,t:null,s:'inconsistent'});
     const mine=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
-    await db.releaseLease(j.id,mine.lease_token!,PARK);
+    await db.releaseLease(j.id,mine.lease_token!,{...PARK,last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e')}});
+    const [item]=await h.tables.select('dq_quarantine',{id:itemId});
+    expect(item).toMatchObject({status:'resolved_accept',resolved_by:by});expect((item.detail as {override?:unknown}).override).toEqual(override);
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+    expect(await db.applyQuarantineOverride(j.id,override,itemId,{route:'contract'})).toBe('applied');
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+    expect(await db.applyQuarantineOverride(j.id,{...override,at:new Date(Date.now()+5).toISOString()},itemId,{})).toBe('item_not_open');
+    // stale: the override does not match the item / queue it names → nothing written
+    const w=await inconsistent(m,b);
+    expect(await db.applyQuarantineOverride(w.j.id,overrideOf(by,H('e'),'2026-01-01T00:00:00.000Z'),w.itemId,{})).toBe('stale');   // cutoff differs from the item's
+    expect(await db.applyQuarantineOverride(w.j.id,overrideOf(by,H('f')),w.itemId,{})).toBe('stale');                            // another inconsistency
+    expect((await db.queueRow(w.j.id))!.override).toBeNull();
+    expect((await h.tables.select('dq_quarantine',{id:w.itemId}))[0].status).toBe('open');
+    const c=await inconsistent(m,b);
+    expect(await db.appendSettlement(c.j.id,null,`adm:${randomUUID()}`,settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'manual',actor:`admin:${by}`}))).toMatchObject({status:'applied'});
+    expect(await db.applyQuarantineOverride(c.j.id,overrideOf(by),c.itemId,{})).toBe('closed');
+    expect(await db.applyQuarantineOverride(c.j.id,overrideOf(by),itemId,{})).toBe('item_not_open');                             // item of another judgment
    });
-   const [item]=await h.tables.select('dq_quarantine',{id:itemId});
-   expect(item).toMatchObject({status:'resolved_accept',resolved_by:by});expect((item.detail as {override?:unknown}).override).toEqual(override);
-   const audit=await h.tables.select('research_audit_log',{object_id:itemId});
-   expect(audit).toHaveLength(1);expect(audit[0]).toMatchObject({user_id:by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq'});
-   await db.applyQuarantineOverride(j.id,override,itemId,{route:'contract'});
-   expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
-   expect(await code(db.applyQuarantineOverride(j.id,{...override,at:new Date(Date.now()+5).toISOString()},itemId,{}))).toBe('item_not_open');
-   expect(await code(db.applyQuarantineOverride(randomUUID(),override,itemId,{}))).toBe('unknown_judgment');
-   expect(await code(db.applyQuarantineOverride(j.id,{...override,evidence_hash:'x'},itemId,{}))).toBe('invalid_parameter');
+   expect(await code(db.applyQuarantineOverride(randomUUID(),overrideOf(by),randomUUID(),{}))).toBe('unknown_judgment');
+   expect(await code(db.applyQuarantineOverride(randomUUID(),{...overrideOf(by),evidence_hash:'x'},randomUUID(),{}))).toBe('invalid_parameter');
+   expect(await code(db.applyQuarantineOverride(randomUUID(),{...overrideOf(by),cutoff:undefined as unknown as string},randomUUID(),{}))).toBe('invalid_parameter');
+  });
+
+  it('applyQuarantineOverride revokes a held lease: the worker that claimed before the acceptance gets lease_lost on release and append (P1-04)',async()=>{
+   const m=await synced();const b=await h.batch();const by=await h.adminUser();
+   await h.exclusiveClaims(async()=>{
+    const j=await registered(m,b,{target:DUE});
+    const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:j.id}});
+    const first=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
+    // inconsistent, and due again at once (next_attempt_at in the past is clamped to now)
+    await db.releaseLease(j.id,first.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),quarantine_id:itemId},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0});
+    const worker=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
+    expect(await db.applyQuarantineOverride(j.id,overrideOf(by),itemId,{})).toBe('applied');
+    expect((await db.queueRow(j.id))!).toMatchObject({lease_token:null,leased_until:null,last_status:'inconsistent'});
+    expect(await code(db.releaseLease(j.id,worker.lease_token!,PARK))).toBe('lease_lost');
+    expect(await code(db.appendSettlement(j.id,worker.lease_token!,`${b}:${j.id}:1`,settlementFixture(b)))).toBe('lease_lost');
+    expect((await db.queueRow(j.id))!.override).toEqual(expect.objectContaining({evidence_hash:H('e')}));
+    const mine=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;await db.releaseLease(j.id,mine.lease_token!,PARK);
+   });
+  });
+
+  it('rejectQuarantinedSettlement: void + item resolved_reject + audit at once; replay-safe; stale / item_not_open write nothing (P1-05)',async()=>{
+   const m=await synced();const b=await h.batch();const by=await h.adminUser();
+   await h.exclusiveClaims(async()=>{
+    const {j,itemId}=await inconsistent(m,b);
+    const key=`adm:${randomUUID()}`;const row=rejectRow(b,by);
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,row,{route:'contract'})).toEqual({seq:1,status:'applied'});
+    expect((await db.settlementsOf([j.id])).map(s=>[s.kind,s.reason,s.actor])).toEqual([['void','quarantine_rejected',`admin:${by}`]]);
+    expect((await h.tables.select('dq_quarantine',{id:itemId}))[0]).toMatchObject({status:'resolved_reject',resolved_by:by});
+    expect((await db.queueRow(j.id))!.closed_at).not.toBeNull();
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,row,{})).toEqual({seq:1,status:'already_applied'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,key,{...row,reason:'x'},{})).toEqual({seq:1,status:'request_key_conflict'});
+    expect(await db.rejectQuarantinedSettlement(j.id,itemId,`adm:${randomUUID()}`,row,{})).toEqual({seq:1,status:'item_not_open'});
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+    const s=await inconsistent(m,b,H('e'));
+    expect(await db.applyQuarantineOverride(s.j.id,overrideOf(by,H('f')),s.itemId,{})).toBe('stale');   // writes nothing
+    const other=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:s.j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload:{evidence_hash:H('9')}});
+    expect(await db.rejectQuarantinedSettlement(s.j.id,other,`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});   // the queue's inconsistency is not this item's
+    expect(await db.settlementsOf([s.j.id])).toEqual([]);
+    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,{...row,kind:'settled'},{}))).toBe('invalid_parameter');
+    expect(await code(db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,{...row,actor:'cron'},{}))).toBe('invalid_parameter');
+    expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,`adm:${randomUUID()}`,row,{})).toMatchObject({status:'applied'});
+   });
+  });
+
+  it('envelopeById: the history view semantics by id, publishable-gated; null for unknown ids (P2-01)',async()=>{
+   const m=await synced({publishable:true});const hidden=await synced();const b=await h.batch();
+   const j=await registered(m,b);const x=await registered(hidden,b);
+   expect((await db.envelopeById(j.id,{view:'latest'}))?.judgment.judgment_id).toBe(j.id);
+   expect(await db.envelopeById(j.id,{view:'as_known',cutoff:'2000-01-01T00:00:00.000Z'})).toBeNull();
+   expect((await db.envelopeById(j.id,{view:'as_known',cutoff:new Date(Date.now()+60_000).toISOString()}))?.judgment.judgment_id).toBe(j.id);
+   expect(await db.envelopeById(x.id,{view:'latest'})).toBeNull();
+   expect(await db.envelopeById(randomUUID(),{view:'latest'})).toBeNull();
+   expect(await code(db.envelopeById(j.id,{view:'as_known'}))).toBe('invalid_parameter');
+  });
+
+  it('freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration: a frozen set with its settlements, stable across pages and later writes (P1-10)',async()=>{
+   const m=await synced();const b=await h.batch();
+   const ids:string[]=[];
+   for(const as_of of ['2025-03-01','2025-06-01','2025-09-01'])ids.push((await registered(m,b,{as_of})).id);
+   await registered(m,b,{as_of:'2024-01-01'});await registered(m,b,{as_of:'2025-05-01',abstained:true});
+   const w={from:'2025-01-01',to:'2025-12-31'};
+   const gen=randomUUID();
+   const f=await db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w);
+   expect(f.n).toBe(3);expect(Number.isFinite(Date.parse(f.frozen_at))).toBe(true);
+   const later=await registered(m,b,{as_of:'2025-07-01'});                                    // after the freeze
+   const p1=await db.cohortMembers(gen,null,2);
+   expect(ids.slice().sort().slice(0,2)).toEqual(p1.map(e=>e.judgment.judgment_id));
+   const p2=await db.cohortMembers(gen,p1[1].judgment.judgment_id,2);
+   expect(p2.map(e=>e.judgment.judgment_id)).toEqual(ids.slice().sort().slice(2));
+   expect(await db.cohortMembers(gen,p2[0].judgment.judgment_id,2)).toEqual([]);
+   expect([...p1,...p2].map(e=>e.judgment.judgment_id)).not.toContain(later.id);
+   expect([...p1,...p2].every(e=>e.settlement===null&&e.calibration===null&&e.calibration_valid===false)).toBe(true);
+   expect(await code(db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w))).toBe('invalid_parameter');
+   expect(await code(db.freezeCalibrationCohort(randomUUID(),m.methodology_id,'v1',{from:'2025-12-31',to:'2025-01-01'}))).toBe('invalid_parameter');
+   expect(await code(db.cohortMembers(gen,null,1001))).toBe('invalid_parameter');
+   expect(await db.clearCalibrationGeneration(gen)).toBe(3);
+   expect(await db.cohortMembers(gen,null,10)).toEqual([]);
+   expect(await db.clearCalibrationGeneration(gen)).toBe(0);
   });
 
   it('queueRow / queueList: due, backoff, leased and all filters with keyset paging by judgment_id',async()=>{
@@ -3971,7 +4472,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     const tk=(id:string)=>t.find(r=>r.judgment_id===id)!.lease_token!;
     await db.releaseLease(due.id,tk(due.id),{last_status:'pending',last_detail:{},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0});
     const mineOnly=(rows:QueueRow[])=>rows.map(r=>r.judgment_id).filter(id=>[due.id,wait.id,leasedJ.id].includes(id));
-    const list=async(filter:'due'|'backoff'|'leased'|'all')=>{const out:QueueRow[]=[];let after:string|undefined;for(;;){const pg=await db.queueList({filter,limit:500,after});out.push(...pg);if(pg.length<500)return out;after=pg.at(-1)!.judgment_id;}};
+    const list=async(filter:'due'|'backoff'|'leased'|'all')=>{const out:QueueRow[]=[];let after:string|undefined;for(;;){const pg=await db.queueList({filter,limit:500,after});if(pg.length===0)return out;out.push(...pg);after=pg.at(-1)!.judgment_id;}};
     expect(mineOnly(await list('due'))).toEqual([due.id]);
     expect(mineOnly(await list('backoff'))).toEqual([wait.id]);
     expect(mineOnly(await list('leased'))).toEqual([leasedJ.id]);
@@ -4100,7 +4601,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   expect(envelopeFromRpc({judgment:JUDGMENT,settlement:null,calibration:null,calibration_valid:null,methodology_state:NULL_EVENT}).methodology_state).toBeNull();
  });
  it('routes public reads to the anon client with the migration argument names',async()=>{
-  const a=stub({judgments_server_time:TS,latest_judgment_cards:[{judgment:JUDGMENT,settlement:null,calibration:null,calibration_valid:false,methodology_state:EVENT}],judgment_history:[],calibration_cohort:[],methodology_state_at:NULL_EVENT},{judgment_methodologies:[],judgment_calibrations:[]});
+  const a=stub({judgments_server_time:TS,latest_judgment_cards:[{judgment:JUDGMENT,settlement:null,calibration:null,calibration_valid:false,methodology_state:EVENT}],judgment_history:[],calibration_cohort:[],methodology_state_at:NULL_EVENT,judgment_envelope_by_id:[]},{judgment_methodologies:[],judgment_calibrations:[]});
   const s=stub();
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
   expect(await db.serverTime()).toBe('2026-11-06T03:00:00.123Z');
@@ -4109,6 +4610,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   await db.historyOf({type:'macro_region',key:'US'},'macro_regime',{id:'macro_regime',version:'v1'},{view:'latest',limit:50,before:J});
   await db.calibrationCohort('macro_regime','v1',{from:'2023-01-01',to:'2026-01-01'},'2026-11-06T00:00:00.000Z',null,500);
   expect(await db.methodologyStateAt('macro_regime','v1','2026-11-06T00:00:00.000Z')).toBeNull();
+  expect(await db.envelopeById(J,{view:'as_known',cutoff:'2026-11-06T00:00:00.000Z'})).toBeNull();
   await db.listMethodologies('active');
   expect(await db.latestCalibration('macro_regime','v1',{scope_type:'all',scope_key:''})).toBeNull();
   expect(a.calls).toEqual([
@@ -4118,6 +4620,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'judgment_history',args:{p_subject_type:'macro_region',p_subject_key:'US',p_type:'macro_regime',p_methodology:'macro_regime',p_version:'v1',p_view:'latest',p_cutoff:null,p_before:J,p_limit:50}},
    {fn:'calibration_cohort',args:{p_methodology:'macro_regime',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01',p_cutoff:'2026-11-06T00:00:00.000Z',p_after:null,p_limit:500}},
    {fn:'methodology_state_at',args:{p_methodology:'macro_regime',p_version:'v1',p_cutoff:'2026-11-06T00:00:00.000Z'}},
+   {fn:'judgment_envelope_by_id',args:{p_id:J,p_view:'as_known',p_cutoff:'2026-11-06T00:00:00.000Z'}},
   ]);
   expect(a.reads.map(r=>r.table)).toEqual(['judgment_methodologies','judgment_calibrations']);
   expect(a.reads[0].ops).toContain('eq("status","active")');
@@ -4127,7 +4630,8 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const a=stub({judgments_server_time:TS});
   const Q=(id:string,next:string)=>({judgment_id:id,settle_after:TS,settle_by:TS,label_policy:'first_observed',next_attempt_at:next,attempts:0,last_status:null,last_detail:{},leased_until:TS,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',override:null,closed_at:null,updated_at:TS});
   const s=stub({register_judgment:{judgment_id:J,registered_at:TS,retrospective:true},append_settlement:{seq:2,status:'applied'},claim_due_judgments:[Q('b',TS),Q('a',TS),Q('c','2026-01-01T00:00:00+00:00')],release_lease:null,
-   calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:true,repair_stale_batches:2,apply_quarantine_override:null},{judgment_settle_queue:[]});
+   calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:true,repair_stale_batches:2,apply_quarantine_override:'stale',
+   reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7},{judgment_settle_queue:[]});
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
   const m=methodologyFixture();const f=judgmentFixture(m,'0b0e1d8e-0000-4000-8000-000000000001');
   expect(await db.registerJudgment(f.row,f.queue)).toEqual({registered_at:'2026-11-06T03:00:00.123Z',retrospective:true});
@@ -4141,8 +4645,13 @@ describe('supabaseJudgmentsDb wiring',()=>{
   expect(await db.insertCalibration(cal,4)).toBe('stale_revision');
   expect(await db.setJobState('produce:m@v1',null,{x:1})).toBe(true);
   expect(await db.repairStaleBatches('judgments.settle',900)).toBe(2);
-  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:'e'.repeat(64),evidence:{}},evidence_hash:'e'.repeat(64),resolved_by:J,at:TS};
-  await db.applyQuarantineOverride(J,override,'0b0e1d8e-0000-4000-8000-0000000000bb',{route:'x'});
+  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:'e'.repeat(64),evidence:{}},evidence_hash:'e'.repeat(64),resolved_by:J,at:TS,cutoff:TS};
+  expect(await db.applyQuarantineOverride(J,override,'0b0e1d8e-0000-4000-8000-0000000000bb',{route:'x'})).toBe('stale');
+  const voidRow=settlementFixture('0b0e1d8e-0000-4000-8000-000000000001',{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${J}`});
+  expect(await db.rejectQuarantinedSettlement(J,'0b0e1d8e-0000-4000-8000-0000000000bb','adm:key-0002',voidRow,{route:'x'})).toEqual({seq:3,status:'applied'});
+  expect(await db.freezeCalibrationCohort('0b0e1d8e-0000-4000-8000-0000000000cc','m','v1',{from:'2023-01-01',to:'2026-01-01'})).toEqual({frozen_at:'2026-11-06T03:00:00.123Z',n:7});
+  await db.cohortMembers('0b0e1d8e-0000-4000-8000-0000000000cc',J,10);
+  expect(await db.clearCalibrationGeneration('0b0e1d8e-0000-4000-8000-0000000000cc')).toBe(7);
   await db.queueList({filter:'due',limit:10,after:J});
   expect(s.calls).toEqual([
    {fn:'register_judgment',args:{p_row:f.row,p_queue:f.queue}},
@@ -4155,6 +4664,10 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'set_job_state',args:{p_job:'produce:m@v1',p_expected_updated_at:null,p_state:{x:1}}},
    {fn:'repair_stale_batches',args:{p_dataset:'judgments.settle',p_older_than:'900 seconds'}},
    {fn:'apply_quarantine_override',args:{p_judgment_id:J,p_override:override,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_audit:{route:'x'}}},
+   {fn:'reject_quarantined_settlement',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_request_key:'adm:key-0002',p_row:{...voidRow,request_digest:operationDigest(J,voidRow)},p_audit:{route:'x'}}},
+   {fn:'freeze_calibration_cohort',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_methodology:'m',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01'}},
+   {fn:'calibration_cohort_members',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_after:J,p_limit:10}},
+   {fn:'clear_calibration_generation',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc'}},
   ]);
   expect(s.reads.map(r=>r.table)).toEqual(['judgment_settle_queue']);
   expect(s.reads[0].ops).toEqual(expect.arrayContaining(['is("closed_at",null)','lte("next_attempt_at","2026-11-06T03:00:00.123Z")','gt("judgment_id","'+J+'")','limit(10)']));
@@ -4181,7 +4694,8 @@ describe('supabaseJudgmentsDb wiring',()=>{
 // PostgreSQL (public reads under `set local role anon`, the rest under service_role), plus
 // concurrency through two independent pools: appendSettlement on one judgment (applied +
 // already_final; same request_key → applied + already_applied; never 23505), claimDue never hands a
-// row out twice, registerJudgment races on one id, setJobState races on one expectation.
+// row out twice, registerJudgment races on one id, quarantine acceptance vs rejection on one item (P1-04/05),
+// setJobState races on one expectation. The two-connection MVCC cohort freeze test is SQL-level (Task 3).
 // Claims run under F4_CLAIM_LOCK (db-contract.ts) like every other judgments suite.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -4189,6 +4703,7 @@ import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
 import {startBatch} from '../dq/batches';
+import {quarantine} from '../dq/quarantine';
 import {judgmentFixture,judgmentsDbContract,methodologyFixture,settlementFixture,withClaimLock} from './db-contract';
 import type {JudgmentsContractHarness} from './db-contract';
 import {jobKey} from './job-keys';
@@ -4248,6 +4763,29 @@ describe.skipIf(!enabled)('pgJudgmentsDb on real PostgreSQL',()=>{
    const out=await Promise.allSettled([d1.registerJudgment(f.row,f.queue),d2.registerJudgment(f.row,f.queue)]);
    expect(out.filter(o=>o.status==='fulfilled')).toHaveLength(1);
    expect(out.find(o=>o.status==='rejected')).toMatchObject({reason:{code:'duplicate_key'}});
+  });
+  it('applyQuarantineOverride vs rejectQuarantinedSettlement on one item from two pools: exactly one wins, the other writes nothing (P1-04, P1-05)',async()=>{
+   const {d1,d2,m,b}=await setup();
+   const tables=pgTableClient(p1);
+   const by=randomUUID();await p1.query(`insert into auth.users(id,email) values($1,$2)`,[by,`${by}@judgments.test`]);
+   await withClaimLock(p1,async()=>{
+    for(let round=0;round<3;round++){
+     const f=judgmentFixture(m,b,{target:{kind:'date',date:'2026-01-10'}});await d1.registerJudgment(f.row,f.queue);const j=f.row.judgment_id;
+     const H='e'.repeat(64),cutoff='2026-03-02T04:00:00.000Z';
+     const item=await quarantine(tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H,cutoff,judgment_id:j}});
+     const t=(await d1.claimDue(100,600)).find(r=>r.judgment_id===j)!.lease_token!;
+     await d1.releaseLease(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+     const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:H,evidence:{}},evidence_hash:H,resolved_by:by,at:new Date().toISOString(),cutoff};
+     const row=settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
+     const [acc,rej]=await Promise.all([d1.applyQuarantineOverride(j,override,item,{}),d2.rejectQuarantinedSettlement(j,item,`adm:${randomUUID()}`,row,{})]);
+     expect([acc==='applied',rej.status==='applied'].filter(Boolean)).toHaveLength(1);
+     const [it]=await tables.select('dq_quarantine',{id:item});
+     const q=(await d1.queueRow(j))!;
+     if(acc==='applied'){expect(rej.status).toBe('item_not_open');expect(it.status).toBe('resolved_accept');expect(await d1.settlementsOf([j])).toEqual([]);
+      const mine=(await d1.claimDue(100,600)).find(r=>r.judgment_id===j)!;await d1.releaseLease(j,mine.lease_token!,{last_status:'pending',last_detail:{},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});}
+     else{expect(acc).toBe('item_not_open');expect(it.status).toBe('resolved_reject');expect(q.override).toBeNull();expect(q.closed_at).not.toBeNull();}
+    }
+   });
   });
   it('setJobState racing on one expectation: exactly one writer wins',async()=>{
    const {d1,d2}=await setup();
@@ -4377,7 +4915,7 @@ export function calibrationFromTable(r:Row):CalibrationRow{
   window_from:dateOf(r.window_from),window_to:dateOf(r.window_to),n_registered:Number(r.n_registered),n_settled:Number(r.n_settled),n_independent:Number(r.n_independent),n_void:Number(r.n_void),
   n_retrospective_excluded:Number(r.n_retrospective_excluded),threshold_n:Number(r.threshold_n),ece_max:Number(r.ece_max),kind:r.kind as C['kind'],state:r.state as C['state'],
   valid_until:isoTs(r.valid_until),validity_revision:Number(r.validity_revision),metrics:json<C['metrics']>(r.metrics,{}),reliability:json<C['reliability']>(r.reliability,[]),isotonic_segments:jopt<NonNullable<C['isotonic_segments']>>(r.isotonic_segments),
-  cohort_path:String(r.cohort_path),cohort_sha256:String(r.cohort_sha256),query_bounds:json<C['query_bounds']>(r.query_bounds,{window_from:'',window_to:'',registered_at_lte:'',settled_at_lte:''}),fingerprint:String(r.fingerprint),
+  cohort_path:String(r.cohort_path),cohort_sha256:String(r.cohort_sha256),query_bounds:json<C['query_bounds']>(r.query_bounds,{window_from:'',window_to:'',registered_at_lte:'',settled_at_lte:'',frozen_at:'',n:0}),fingerprint:String(r.fingerprint),
   algorithm_version:String(r.algorithm_version),code_version:String(r.code_version),computed_at:isoTs(r.computed_at),batch_id:String(r.batch_id)};
 }
 /** One judgment_envelope row (PostgREST JSON or pg to_jsonb) → Envelope; an all-null composite is null. */
@@ -4415,10 +4953,12 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
  const anon=clients.anon as unknown as NarrowClient;const admin=clients.admin as unknown as NarrowClient;
  const call=async<T>(c:NarrowClient,fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toJudgmentError(error);return data as T;};
  const rows=async(q:PromiseLike<RpcResult>):Promise<Row[]>=>{const {data,error}=await q;if(error)throw toJudgmentError(error);return (data??[]) as Row[];};
- /** Complete-set read: pages by range() in a fixed order until a short page. */
+ /** Complete-set read: pages by range() in a fixed order until an EMPTY page, advancing by the rows actually
+  *  returned — a PostgREST max-rows cap below READ_PAGE yields short pages that are not exhaustion
+  *  (src/lib/db/table-client.ts pagination contract; plan audit P1-02). */
  const pageAll=async(make:()=>Query):Promise<Row[]>=>{
   const out:Row[]=[];
-  for(let from=0;;from+=READ_PAGE){const part=await rows(make().range(from,from+READ_PAGE-1));out.push(...part);if(part.length<READ_PAGE)return out;}
+  for(let from=0;;){const part=await rows(make().range(from,from+READ_PAGE-1));if(part.length===0)return out;out.push(...part);from+=part.length;}
  };
  const envelopes=async(c:NarrowClient,fn:string,args:Record<string,unknown>)=>((await call<Row[]|null>(c,fn,args))??[]).map(envelopeFromRpc);
  const serverTime=async()=>isoTs(await call<string>(anon,'judgments_server_time',{}));
@@ -4462,9 +5002,20 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
    const r=await call<{seq:number;status:AppendStatus}>(admin,'append_settlement',{p_judgment_id:judgmentId,p_lease_token:leaseToken,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row)});
    return {seq:Number(r.seq),status:r.status};
   },
-  async applyQuarantineOverride(judgmentId,override,quarantineId,audit){await call(admin,'apply_quarantine_override',{p_judgment_id:judgmentId,p_override:override,p_quarantine_id:quarantineId,p_audit:audit});},
+  async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await call<'applied'|'stale'|'closed'|'item_not_open'>(admin,'apply_quarantine_override',{p_judgment_id:judgmentId,p_override:override,p_quarantine_id:quarantineId,p_audit:audit});},
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
+   const r=await call<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>(admin,'reject_quarantined_settlement',{p_judgment_id:judgmentId,p_quarantine_id:quarantineId,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row),p_audit:audit});
+   return {seq:Number(r.seq),status:r.status};
+  },
+  async envelopeById(id,o){const [e]=await envelopes(anon,'judgment_envelope_by_id',{p_id:id,p_view:o.view,p_cutoff:o.cutoff??null});return e??null;},
   calibrationCohort:(m,v,w,cutoff,after,limit)=>envelopes(anon,'calibration_cohort',{p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to,p_cutoff:cutoff,p_after:after,p_limit:limit}),
   calibrationCohortInternal:(m,v,w,cutoff,after,limit)=>envelopes(admin,'calibration_cohort_internal',{p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to,p_cutoff:cutoff,p_after:after,p_limit:limit}),
+  async freezeCalibrationCohort(generation,m,v,w){
+   const r=await call<{frozen_at:string;n:number}>(admin,'freeze_calibration_cohort',{p_generation:generation,p_methodology:m,p_version:v,p_window_from:w.from,p_window_to:w.to});
+   return {frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
+  },
+  cohortMembers:(generation,after,limit)=>envelopes(admin,'calibration_cohort_members',{p_generation:generation,p_after:after,p_limit:limit}),
+  async clearCalibrationGeneration(generation){return Number(await call<unknown>(admin,'clear_calibration_generation',{p_generation:generation}));},
   async latestCalibration(m,v,scope){
    const [r]=await rows(anon.from('judgment_calibrations').select('*').eq('methodology_id',m).eq('methodology_version',v).eq('scope_type',scope.scope_type).eq('scope_key',scope.scope_key).order('computed_at',{ascending:false}).order('calibration_id').limit(1));
    if(!r)return null;
@@ -4509,9 +5060,10 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
 // and the next_attempt_at clamp; append_settlement in the R06 order (request_key first, then queue,
 // already_final for cron/script on a closed queue, lease, transition, validity +1 on
 // withdrawn/reopened); insert_calibration's revision check; set_job_state's optimistic lock with a
-// strictly increasing millisecond updated_at; repair_stale_batches and apply_quarantine_override on
-// the shared TableClient — and the RLS publishable gate on the public reads (latestCards,
-// historyOf, calibrationCohort, latestCalibration; listMethodologies and methodologyStateAt are open
+// strictly increasing millisecond updated_at; repair_stale_batches, apply_quarantine_override (statuses, lease
+// revocation) and reject_quarantined_settlement on the shared TableClient; the frozen calibration cohorts
+// (freeze / members / clear) — and the RLS publishable gate on the public reads (latestCards,
+// historyOf, envelopeById, calibrationCohort, latestCalibration; listMethodologies and methodologyStateAt are open
 // like their tables). Replays compare digest + judgment id: the digest is computed from the same
 // nine fields the SQL rebuilds, so digest equality is payload equality here. Operations run one at a
 // time (a promise chain), like row locks; the clock is injectable (setNow).
@@ -4528,7 +5080,7 @@ import type {JudgmentErrorCode} from './errors';
 import {operationDigest} from './settlement-digest';
 import {settleWindowOf} from './time';
 import {PUBLIC_SUBJECT_TYPES} from './types';
-import type {CalibrationRow,CardView,Envelope,JudgmentRow,JudgmentsDb,MethodologyEvent,MethodologyEventKind,MethodologyRow,MethodologyStatus,QueueRow,SettlementRow} from './types';
+import type {AppendStatus,CalibrationRow,CardView,Envelope,JudgmentRow,JudgmentsDb,MethodologyEvent,MethodologyEventKind,MethodologyRow,MethodologyStatus,QueueRow,SettlementInsert,SettlementRow} from './types';
 
 type Validity={methodology_id:string;version:string;revision:number;bumped_at:string;reason:string|null};
 type Job={state:Record<string,unknown>;updated_at:string};
@@ -4580,6 +5132,8 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
  const calibrations:CalibrationRow[]=[];
  const validity=new Map<string,Validity>();
  const jobs=new Map<string,Job>();
+ /** freeze_calibration_cohort's table: generation → members sorted by judgment_id (P1-10). */
+ const members=new Map<string,{judgment_id:string;settlement_id:string|null;ord:number}[]>();
  const issuers=new Map<string,{status:string;merged_into:string|null}>();
  const industries=new Set<string>();
 
@@ -4608,6 +5162,38 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
  const addEvent=(r:Omit<MethodologyRow,'created_at'|'synced_at'>,seq:number,event:MethodologyEventKind,status:MethodologyStatus,pub:boolean,actor:string,reason:string|null,at:string)=>
   events.push({event_id:randomUUID(),methodology_id:r.methodology_id,version:r.version,seq,event,status,publishable:pub,formula_hash:r.formula_hash,code_version:r.code_version,actor,reason,occurred_at:at});
 
+ /** The single append implementation (append_settlement / judgment_append_settlement_internal in SQL); also used by
+  *  rejectQuarantinedSettlement inside its own serialised operation (plan audit P1-05). */
+ const appendCore=async(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>=>{
+  if(!isObj(row)||typeof row.kind!=='string'||typeof row.actor!=='string'||typeof requestKey!=='string')fail('invalid_parameter','settlement');
+  const digest=operationDigest(judgmentId,row);
+  const replay=(hit:SettlementRow)=>({seq:hit.seq,status:hit.judgment_id===judgmentId&&hit.request_digest===digest?'already_applied' as const:'request_key_conflict' as const});
+  const hit=settlements.find(s=>s.request_key===requestKey);
+  if(hit)return replay(hit);
+  const j=judgments.get(judgmentId);
+  if(!j)return fail('unknown_judgment');
+  const q=queue.get(judgmentId);
+  if(!q)return fail('settlement_sequence',`settlement_sequence: judgment ${judgmentId} has no settle queue (abstained)`);
+  const list=historyOfJ(judgmentId);const seq=list.at(-1)?.seq??0;const prev=list.at(-1)?.kind??null;
+  if(q.closed_at!==null&&isAutomaticActor(row.actor))return {seq,status:'already_final'};
+  if(leaseToken===null){if(!ADMIN_ACTOR.test(row.actor))fail('lease_lost');}
+  else if(q.lease_token!==leaseToken)fail('lease_lost');
+  if(!transitionAllowed(prev,row.kind,row.actor))fail('settlement_sequence',`settlement_sequence: ${prev??'none'} -> ${row.kind} by ${row.actor}`);
+  if((row.kind==='settled')!==(row.outcome!==null)||(row.kind==='settled')!==(row.realized!==null))fail('unknown','settlements_outcome_iff_settled');
+  if(row.kind!=='settled'&&row.reason===null)fail('unknown','settlements_reason_unless_settled');
+  if(!SETTLEMENT_ACTOR.test(row.actor))fail('unknown','judgment_settlements_actor_check');
+  if(requestKey.length<8||requestKey.length>128)fail('unknown','judgment_settlements_request_key_check');
+  if(!(await batchExists(row.batch_id)))fail('unknown','judgment_settlements_batch_id_fkey');
+  const at=now();const id=randomUUID();
+  settlements.push(jsonClean({settlement_id:id,judgment_id:judgmentId,seq:seq+1,kind:row.kind,outcome:row.outcome,realized:row.realized,evidence:row.evidence??{},resolver:row.resolver,resolver_version:row.resolver_version,reason:row.reason,actor:row.actor,settled_at:at,request_key:requestKey,request_digest:digest,code_version:row.code_version,batch_id:row.batch_id}) as SettlementRow);
+  if(row.kind==='reopened')Object.assign(q,{closed_at:null,next_attempt_at:at,attempts:0,last_status:null,last_detail:{},leased_until:null,lease_token:null,updated_at:at});
+  else Object.assign(q,{closed_at:at,leased_until:null,lease_token:null,updated_at:at});
+  if(row.kind==='withdrawn'||row.kind==='reopened'){
+   const v=validity.get(mk(j.methodology_id,j.methodology_version));
+   if(v)Object.assign(v,{revision:v.revision+1,bumped_at:at,reason:`${row.kind}:${id}`});
+  }
+  return {seq:seq+1,status:'applied'};
+ };
  const impl:JudgmentsDb={
   async serverTime(){return now();},
   async methodology(id,version){const r=meth.get(mk(id,version));return r?clone(r):null;},
@@ -4703,49 +5289,67 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    return clone([...queue.values()].filter(q=>keep(q)&&(o.after===undefined||q.judgment_id>o.after)).sort((a,b)=>cmp(a.judgment_id,b.judgment_id)).slice(0,o.limit));
   },
   async settlementsOf(ids){const want=new Set(ids);return clone(settlements.filter(s=>want.has(s.judgment_id)).sort(bySettlementOrder));},
-  async appendSettlement(judgmentId,leaseToken,requestKey,row){
-   if(!isObj(row)||typeof row.kind!=='string'||typeof row.actor!=='string'||typeof requestKey!=='string')fail('invalid_parameter','settlement');
-   const digest=operationDigest(judgmentId,row);
-   const replay=(hit:SettlementRow)=>({seq:hit.seq,status:hit.judgment_id===judgmentId&&hit.request_digest===digest?'already_applied' as const:'request_key_conflict' as const});
-   const hit=settlements.find(s=>s.request_key===requestKey);
-   if(hit)return replay(hit);
-   const j=judgments.get(judgmentId);
-   if(!j)return fail('unknown_judgment');
-   const q=queue.get(judgmentId);
-   if(!q)return fail('settlement_sequence',`settlement_sequence: judgment ${judgmentId} has no settle queue (abstained)`);
-   const list=historyOfJ(judgmentId);const seq=list.at(-1)?.seq??0;const prev=list.at(-1)?.kind??null;
-   if(q.closed_at!==null&&isAutomaticActor(row.actor))return {seq,status:'already_final'};
-   if(leaseToken===null){if(!ADMIN_ACTOR.test(row.actor))fail('lease_lost');}
-   else if(q.lease_token!==leaseToken)fail('lease_lost');
-   if(!transitionAllowed(prev,row.kind,row.actor))fail('settlement_sequence',`settlement_sequence: ${prev??'none'} -> ${row.kind} by ${row.actor}`);
-   if((row.kind==='settled')!==(row.outcome!==null)||(row.kind==='settled')!==(row.realized!==null))fail('unknown','settlements_outcome_iff_settled');
-   if(row.kind!=='settled'&&row.reason===null)fail('unknown','settlements_reason_unless_settled');
-   if(!SETTLEMENT_ACTOR.test(row.actor))fail('unknown','judgment_settlements_actor_check');
-   if(requestKey.length<8||requestKey.length>128)fail('unknown','judgment_settlements_request_key_check');
-   if(!(await batchExists(row.batch_id)))fail('unknown','judgment_settlements_batch_id_fkey');
-   const at=now();const id=randomUUID();
-   settlements.push(jsonClean({settlement_id:id,judgment_id:judgmentId,seq:seq+1,kind:row.kind,outcome:row.outcome,realized:row.realized,evidence:row.evidence??{},resolver:row.resolver,resolver_version:row.resolver_version,reason:row.reason,actor:row.actor,settled_at:at,request_key:requestKey,request_digest:digest,code_version:row.code_version,batch_id:row.batch_id}) as SettlementRow);
-   if(row.kind==='reopened')Object.assign(q,{closed_at:null,next_attempt_at:at,attempts:0,last_status:null,last_detail:{},leased_until:null,lease_token:null,updated_at:at});
-   else Object.assign(q,{closed_at:at,leased_until:null,lease_token:null,updated_at:at});
-   if(row.kind==='withdrawn'||row.kind==='reopened'){
-    const v=validity.get(mk(j.methodology_id,j.methodology_version));
-    if(v)Object.assign(v,{revision:v.revision+1,bumped_at:at,reason:`${row.kind}:${id}`});
-   }
-   return {seq:seq+1,status:'applied'};
-  },
+  appendSettlement:(judgmentId,leaseToken,requestKey,row)=>appendCore(judgmentId,leaseToken,requestKey,row),
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){
    const o=override as unknown as Record<string,unknown>;
    if(!isObj(o)||!isObj(o.resolution)||typeof o.reason_code!=='string'||o.reason_code===''||typeof o.evidence_hash!=='string'||!HEX64.test(o.evidence_hash)
-    ||typeof o.resolved_by!=='string'||!UUID.test(o.resolved_by)||typeof o.at!=='string'||!isObj(audit))fail('invalid_parameter','override');
+    ||typeof o.resolved_by!=='string'||!UUID.test(o.resolved_by)||typeof o.at!=='string'||typeof o.cutoff!=='string'||!isObj(audit))fail('invalid_parameter','override');
    const q=queue.get(judgmentId);
    if(!q)return fail('unknown_judgment');
    const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
-   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId)fail('item_not_open');
-   if(item.status!=='open'){if(item.status==='resolved_accept'&&same(q.override,override))return;fail('item_not_open');}
+   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId)return 'item_not_open';
+   if(item.status!=='open')return item.status==='resolved_accept'&&same(q.override,override)?'applied':'item_not_open';
+   if(q.closed_at!==null)return 'closed';
+   const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
+   if(q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==override.evidence_hash||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
    const at=now();
-   Object.assign(q,{override:clone(override),next_attempt_at:at,updated_at:at});
+   Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_accept',resolved_by:override.resolved_by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),override}});
    await tables.insert('research_audit_log',{id:randomUUID(),user_id:override.resolved_by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,override},created_at:at});
+   return 'applied';
+  },
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
+   if(!isObj(row)||row.kind!=='void'||typeof row.actor!=='string'||!/^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.actor)||typeof requestKey!=='string'||!isObj(audit))fail('invalid_parameter','rejection');
+   const digest=operationDigest(judgmentId,row);
+   const hit=settlements.find(s=>s.request_key===requestKey);
+   if(hit)return {seq:hit.seq,status:hit.judgment_id===judgmentId&&hit.request_digest===digest?'already_applied':'request_key_conflict'};
+   const q=queue.get(judgmentId);
+   if(!q)return fail('unknown_judgment');
+   const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
+   const seq=historyOfJ(judgmentId).at(-1)?.seq??0;
+   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return {seq,status:'item_not_open'};
+   const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
+   if(q.closed_at!==null||q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==payload.evidence_hash)return {seq,status:'stale'};
+   const res=await appendCore(judgmentId,null,requestKey,row);
+   if(res.status!=='applied')return res;
+   const at=now();const by=row.actor.slice('admin:'.length);
+   await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_reject',resolved_by:by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),rejected_settlement_seq:res.seq}});
+   await tables.insert('research_audit_log',{id:randomUUID(),user_id:by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,decision:'reject',seq:res.seq},created_at:at});
+   return res;
+  },
+  async envelopeById(id,o){
+   assertView(o.view,o.cutoff);
+   const j=judgments.get(id);
+   if(!j||!publishable(j.methodology_id,j.methodology_version)||(o.view==='as_known'&&!knownAt(j,o.cutoff!)))return null;
+   return envelope(j,o.view,o.cutoff??null);
+  },
+  async freezeCalibrationCohort(generation,m,v,w){
+   if(typeof generation!=='string'||!UUID.test(generation)||!w.from||!w.to||w.from>w.to)fail('invalid_parameter','window');
+   if((members.get(generation)?.length??0)>0)fail('invalid_parameter',`generation ${generation} is already frozen`);
+   const list=[...judgments.values()].filter(j=>j.methodology_id===m&&j.methodology_version===v&&!j.abstained&&j.as_of>=w.from&&j.as_of<=w.to)
+    .sort((a,b)=>cmp(a.judgment_id,b.judgment_id)).map((j,i)=>({judgment_id:j.judgment_id,settlement_id:historyOfJ(j.judgment_id).at(-1)?.settlement_id??null,ord:i+1}));
+   members.set(generation,list);
+   return {frozen_at:now(),n:list.length};
+  },
+  async cohortMembers(generation,after,limit){
+   if(typeof generation!=='string'||!UUID.test(generation))fail('invalid_parameter','generation');
+   assertLimit(limit,COHORT_PAGE_MAX);
+   return (members.get(generation)??[]).filter(x=>after===null||x.judgment_id>after).slice(0,limit)
+    .map(x=>clone({judgment:judgments.get(x.judgment_id)!,settlement:x.settlement_id===null?null:settlements.find(s=>s.settlement_id===x.settlement_id)??null,calibration:null,calibration_valid:false,methodology_state:null}));
+  },
+  async clearCalibrationGeneration(generation){
+   if(typeof generation!=='string'||!UUID.test(generation))fail('invalid_parameter','generation');
+   const n=members.get(generation)?.length??0;members.delete(generation);return n;
   },
   calibrationCohort:cohort(true),
   calibrationCohortInternal:cohort(false),
@@ -4835,7 +5439,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
 // through PostgREST, so the shared contract and the concurrency tests exercise the real schema.
 // Every call runs in its own transaction under the role the production client uses: the public
 // reads `set local role anon` (RLS and grants apply exactly as through the anon key); every other
-// method `set local role service_role` (proving its grants: select on the eight tables, execute on
+// method `set local role service_role` (proving its grants: select on the nine tables, execute on
 // the write RPCs, nothing else). Rows come back as to_jsonb(...) so the db.ts normalisers see the
 // JSON shapes PostgREST returns; set-returning functions are read `with ordinality` to keep their
 // order. Nothing in src/app imports this.
@@ -4898,7 +5502,18 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
    const r=await first(svc(`select public.append_settlement($1::uuid,$2::uuid,$3,$4::jsonb) v`,[judgmentId,leaseToken,requestKey,JSON.stringify(settlementArgs(judgmentId,row))])) as {seq:number;status:AppendStatus};
    return {seq:Number(r.seq),status:r.status};
   },
-  async applyQuarantineOverride(judgmentId,override,quarantineId,audit){await svc(`select public.apply_quarantine_override($1::uuid,$2::jsonb,$3::uuid,$4::jsonb) v`,[judgmentId,JSON.stringify(override),quarantineId,JSON.stringify(audit)]);},
+  async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await first(svc(`select public.apply_quarantine_override($1::uuid,$2::jsonb,$3::uuid,$4::jsonb) v`,[judgmentId,JSON.stringify(override),quarantineId,JSON.stringify(audit)])) as 'applied'|'stale'|'closed'|'item_not_open';},
+  async rejectQuarantinedSettlement(judgmentId,quarantineId,requestKey,row,audit){
+   const r=await first(svc(`select public.reject_quarantined_settlement($1::uuid,$2::uuid,$3,$4::jsonb,$5::jsonb) v`,[judgmentId,quarantineId,requestKey,JSON.stringify(settlementArgs(judgmentId,row)),JSON.stringify(audit)])) as {seq:number;status:AppendStatus|'stale'|'item_not_open'};
+   return {seq:Number(r.seq),status:r.status};
+  },
+  async envelopeById(id,o){const [x]=await pub(srf('judgment_envelope_by_id','$1::uuid,$2,$3::timestamptz'),[id,o.view,o.cutoff??null]);return x?envelopeFromRpc(x as Row):null;},
+  async freezeCalibrationCohort(generation,m,v,w){
+   const r=await first(svc(`select public.freeze_calibration_cohort($1::uuid,$2,$3,$4::date,$5::date) v`,[generation,m,v,w.from,w.to])) as {frozen_at:string;n:number};
+   return {frozen_at:isoTs(r.frozen_at),n:Number(r.n)};
+  },
+  async cohortMembers(generation,after,limit){return (await svc(srf('calibration_cohort_members','$1::uuid,$2::uuid,$3'),[generation,after,limit])).map(x=>envelopeFromRpc(x as Row));},
+  async clearCalibrationGeneration(generation){return Number(await first(svc(`select public.clear_calibration_generation($1::uuid) v`,[generation])));},
   async calibrationCohort(m,v,w,cutoff,after,limit){return (await pub(srf('calibration_cohort','$1,$2,$3::date,$4::date,$5::timestamptz,$6::uuid,$7'),[m,v,w.from,w.to,cutoff,after,limit])).map(x=>envelopeFromRpc(x as Row));},
   async calibrationCohortInternal(m,v,w,cutoff,after,limit){return (await svc(srf('calibration_cohort_internal','$1,$2,$3::date,$4::date,$5::timestamptz,$6::uuid,$7'),[m,v,w.from,w.to,cutoff,after,limit])).map(x=>envelopeFromRpc(x as Row));},
   async latestCalibration(m,v,scope){
@@ -4930,7 +5545,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
 - [ ] **Step 6: 运行单元测试，确认通过**
 
 Run: `npm test -- src/lib/judgments/db.test.ts`
-Expected: PASS（内存契约 13 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
+Expected: PASS（内存契约 17 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
 
 - [ ] **Step 7: pg 集成测试进 `criticalSuites`，运行**
 
@@ -4943,7 +5558,7 @@ Expected: PASS（内存契约 13 个用例 + 内存专属 3 个 + 转移表 1 �
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（pg 契约 13 个 + 并发 4 个；同时跑 Task 2/3 的 24 个，证明领取锁让两个文件并行时互不领走对方的行）。
+Expected: PASS（pg 契约 17 个 + 并发 5 个；同时跑 Task 2/3 的 28 个，证明领取锁让两个文件并行时互不领走对方的行）。
 
 Run: `npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.verifyCriticalSuiteInventory();console.log('inventory ok')})"`
 Expected: `inventory ok`。
@@ -5224,7 +5839,7 @@ import type {MemoryFactsDb} from '@/lib/facts/memory-facts-db';
 import {parseCompanyFacts} from '@/lib/facts/providers/edgar-companyfacts';
 import {snapshotOf} from '@/lib/facts/providers/shared';
 import type {Duration,FactCandidate,FactInsert,FilingCandidate,FormType,ParseResult,Statement} from '@/lib/facts/types';
-import {uuidV8} from '@/lib/research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from '@/lib/judgments/uuid-v8';
 import type {FactsMarket} from '../types';
 
 export const AAPL_ISSUER='00000000-0000-4000-8000-000000320193';
@@ -6688,7 +7303,7 @@ export type RebuildResult={status:'ok'}|{status:'input_snapshot_mismatch';field:
 export async function rebuildAndCompare(input:Input,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions):Promise<RebuildResult>;
 ```
 
-规格偏差：`table_rows` 的 `available_at` 规格 §3.7 写"行的 `updated_at` 或 `valid_from` 日终"；两者都没有的行（`industry_classifications`、目录行）F4 取 `as_of` 日终（不早于、不晚于登记可见边界，不伪造历史时刻），并丢弃 `valid_from > as_of` 的行（未来生效的成员关系不是 `as_of` 时可见的事实）。`financial_metric` 的 `available_at` = lineage 各事实 `available_date` 最大值的 UTC 日终（指标在该时刻才可算）。
+规格偏差（计划审计 P1-08，覆盖原先"无时间戳取 `as_of` 日终"的做法）：`table_rows` 的 `available_at` = 返回行**系统时间戳**的最大值（行有 `updated_at` 用 `updated_at`，否则 `created_at`）；规格 §3.7 列出的 `valid_from` 是**生效日**、不是发布时刻，不再作为可得时刻。任一行缺系统时间戳 → 构造器抛 `input_unavailable`（可得性无法举证；**绝不**用请求的 `as_of` 代替），`buildOrAbstain` 对 `table_rows` 的这一失败弃权（对其他 kind，`input_unavailable` 仍是可重试的暂时失败，不弃权）。已核对 `supabase/migrations/20261105091000_issuers.sql`：`industry_classifications` 与 `issuer_industry_memberships` 都**没有** `created_at / updated_at`，所以这两张表的 `table_rows` 输入在 F4 v1 一律弃权（需要带版本与时间戳的快照存储，由拥有这两张表的计划提供，F4 不建）；`macro_series` 来自 `MacroReadApi.seriesCatalog`，夹具行必须带 `created_at / updated_at`。登记的 lookahead 检查（`available_at ≤ as_of` 日终）因此自然拒绝早于行已知时刻的历史 `as_of`。`valid_from > as_of` 的行仍丢弃（未来生效的成员关系不是 `as_of` 时可见的事实）。`financial_metric` 的 `available_at` = lineage 各事实 `available_date` 最大值的 UTC 日终（指标在该时刻才可算）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -6824,7 +7439,7 @@ describe('price_bar (spec §3.5, §7.4 G27)',()=>{
 const obs=(series_id:string,value:number,available_at:string)=>({observation_id:observationIdOf({series_id,period_end:'2026-09-30',vintage_id:'v1'}),series_id,period_end:'2026-09-30',vintage_id:'v1',value,unit:'pct',available_at});
 const O1=obs('us_ism_pmi',49.1,'2026-10-01T14:00:00.000Z'),O2=obs('us_cpi_yoy',2.9,'2026-10-15T12:30:00.000Z');
 const NORM={recovery:0.4,overheat:0.3,stagflation:0.2,recession:0.1};
-const MACRO:MacroFixture={fixture_version:'macro-fixture/1',observations:[O1,O2],classifications:[],series_catalog:{US:[{id:'us_cpi_yoy',weight:0.25}]},snapshots:[
+const MACRO:MacroFixture={fixture_version:'macro-fixture/1',observations:[O1,O2],classifications:[],series_catalog:{US:[{id:'us_cpi_yoy',weight:0.25,created_at:'2026-09-01T00:00:00.000Z',updated_at:'2026-10-01T08:00:00.000Z'},{id:'us_ism_pmi',weight:0.25,created_at:'2026-09-01T00:00:00.000Z'}]},snapshots:[
  {snapshot_id:'s-ok',region:'US',as_of:'2026-10-16',methodology_version:'v1.0',catalog_version:'cat-1',observation_ids:[O1.observation_id,O2.observation_id],regime:{primary_state:'recovery',secondary_state:'overheat',scores:NORM,norm:NORM,coverage:0.8,margin_pp:10,growth_axis:0.5,inflation_axis:-0.2},created_at:'2026-10-01T00:00:00.000Z',status:'active'},
  {snapshot_id:'s-none',region:'US',as_of:'2026-10-16',methodology_version:'v1.0',catalog_version:'cat-1',observation_ids:[O1.observation_id],regime:null,created_at:'2026-10-16T00:00:00.000Z',status:'active'},
  {snapshot_id:'s-failed',region:'US',as_of:'2026-10-16',methodology_version:'v1.0',catalog_version:'cat-1',observation_ids:[O1.observation_id],regime:null,created_at:'2026-10-16T00:00:00.000Z',status:'failed'}]};
@@ -6848,21 +7463,33 @@ describe('macro_observation / macro_snapshot (spec §3.7, audit F10)',()=>{
 
 describe('table_rows and judgment (spec §3.5, §3.7)',()=>{
  const I='00000000-0000-4000-8000-0000000000e1';
- it('table_rows: future valid_from rows dropped; available_at = latest valid_from end of day, else as_of end of day',async()=>{
+ it('table_rows: available_at = max system timestamp of the rows; rows without one → input_unavailable (abstain), never as_of; future valid_from dropped (P1-08)',async()=>{
   const t=memoryTableClient();
+  // The landed schema (20261105091000_issuers.sql) gives neither table a created_at / updated_at.
   await t.insert('issuer_industry_memberships',{issuer_id:I,scheme:'sw2021',version:'2021',code:'801010',valid_from:'2024-01-01',valid_to:null,source:'test',provenance:{}});
   await t.insert('issuer_industry_memberships',{issuer_id:I,scheme:'sw2021',version:'2021',code:'801020',valid_from:'2027-01-01',valid_to:null,source:'test',provenance:{}});
   await t.insert('industry_classifications',{scheme:'sw2021',version:'2021',code:'801010',level:1,name_zh:'农林牧渔',name_en:null,parent_code:null});
   const db=memoryJudgmentInputsDb({tables:t});
-  const m=await buildInput({kind:'table_rows',ref:{table:'issuer_industry_memberships',natural_key:`${I}:sw2021:2021`}},db,'2026-11-01');
-  if(m.kind!=='table_rows')throw new Error('kind');
-  expect(m.snapshot.rows.map(r=>r.code)).toEqual(['801010']);
-  expect(m.available_at).toBe('2024-01-01T23:59:59.999Z');
-  const c=await buildInput({kind:'table_rows',ref:{table:'industry_classifications',natural_key:'sw2021:2021:801010'}},db,'2026-11-01');
-  expect(c.available_at).toBe('2026-11-01T23:59:59.999Z');expect(c.origin.adapter).toBe('supabase_public');
+  const mem={kind:'table_rows' as const,ref:{table:'issuer_industry_memberships' as const,natural_key:`${I}:sw2021:2021`}};
+  const cls={kind:'table_rows' as const,ref:{table:'industry_classifications' as const,natural_key:'sw2021:2021:801010'}};
+  expect(await code(buildInput(mem,db,'2026-11-01'))).toBe('input_unavailable');            // valid_from is an effective date, not availability
+  expect(await code(buildInput(cls,db,'2026-11-01'))).toBe('input_unavailable');            // no timestamp at all: never as_of end of day
+  expect(await buildOrAbstain(cls,db,'2026-11-01')).toEqual({abstained:true,reason:'input_unavailable',missing:['table_rows:industry_classifications:sw2021:2021:801010']});
   expect(await code(buildInput({kind:'table_rows',ref:{table:'industry_classifications',natural_key:'sw2021:2021:999999'}},db,'2026-11-01'))).toBe('input_not_public');
-  const macro=await buildInput({kind:'table_rows',ref:{table:'macro_series',natural_key:'US'}},memoryJudgmentInputsDb({macro:fixtureMacroReadApi(MACRO)}),'2026-11-01');
-  expect(macro.origin.adapter).toBe('macro_workbench');
+  // macro_series rows carry system timestamps: available_at = max(updated_at ?? created_at) over the rows
+  const mdb=memoryJudgmentInputsDb({macro:fixtureMacroReadApi(MACRO)});
+  const macro=await buildInput({kind:'table_rows',ref:{table:'macro_series',natural_key:'US'}},mdb,'2026-11-01');
+  if(macro.kind!=='table_rows')throw new Error('kind');
+  expect(macro.available_at).toBe('2026-10-01T08:00:00.000Z');expect(macro.origin.adapter).toBe('macro_workbench');
+  // …so a historical as_of before the rows were known cannot use them (registration's lookahead bound is as_of end of day)
+  expect(Date.parse(macro.available_at)>Date.parse('2026-09-15T23:59:59.999Z')).toBe(true);
+  // one row without a system timestamp makes the whole input unevidenced
+  const bare=memoryJudgmentInputsDb({macro:fixtureMacroReadApi({...MACRO,series_catalog:{US:[...MACRO.series_catalog.US!,{id:'us_unrate',weight:0.1}]}})});
+  expect(await code(buildInput({kind:'table_rows',ref:{table:'macro_series',natural_key:'US'}},bare,'2026-11-01'))).toBe('input_unavailable');
+  // a future-effective row is dropped before the timestamp rule applies
+  const t2=memoryTableClient();
+  await t2.insert('issuer_industry_memberships',{issuer_id:I,scheme:'sw2021',version:'2021',code:'801020',valid_from:'2027-01-01',valid_to:null,source:'test',provenance:{}});
+  expect(await code(buildInput(mem,memoryJudgmentInputsDb({tables:t2}),'2026-11-01'))).toBe('input_not_public');
  });
  it('judgment: public, active rows only; available_at = registered_at',async()=>{
   const base={subject_type:'macro_region',subject_key:'US',judgment_type:'macro_regime',methodology_id:'m',methodology_version:'v1',kind:'categorical',producer_kind:'rule',producer_ref:{},producer_nonce:'',as_of:'2026-10-16',registered_at:'2026-10-16T02:00:00.000Z',retrospective:false,inputs:[],inputs_hash:'0'.repeat(64),code_version:'abcdef0',batch_id:'00000000-0000-4000-8000-0000000000e2',created_at:'2026-10-16T02:00:00.000Z',horizon:null,target:null,label_policy:null,settle_after:null,settle_by:null,condition:null} as const;
@@ -6933,9 +7560,11 @@ Expected: FAIL —— `Failed to resolve import "./inputs"`。
 // macro_observation; macro_snapshot — available_at = max of its observations' available_at, never
 // created_at (audit F10); a snapshot without a regime is snapshot_unclassified; price_bar — only
 // verified capability rows (else market_unsupported), close-only bars keep only close (G27);
-// table_rows — rows with valid_from after as_of are dropped, available_at = max(updated_at,
-// valid_from end of day) or as_of end of day when rows carry neither; judgment — public table only,
-// not abstained, available_at = registered_at. legacy_fill / document_span: input_not_allowed.
+// table_rows — rows with valid_from after as_of are dropped; available_at = max over the rows of their SYSTEM
+// timestamp (updated_at, else created_at); a row with neither → input_unavailable (availability cannot be
+// evidenced; never substituted by as_of — plan audit P1-08; buildOrAbstain abstains on it for table_rows);
+// judgment — public table only, not abstained, available_at = registered_at. legacy_fill / document_span:
+// input_not_allowed.
 // Snapshots never contain undefined (canonicalize rejects it): optional values become null.
 import {FORMULA_VERSION,deriveMetrics} from '@/lib/facts/derive';
 import type {KlineSourceName} from '@/lib/data/kline/types';
@@ -7075,9 +7704,13 @@ async function buildTable(raw:{table:PublicTable;natural_key:string},db:Judgment
  const all=await viaMacro(()=>db.tableRows(ref.table,ref.natural_key));
  const rows=all.filter(r=>typeof r.valid_from!=='string'||r.valid_from<=asOf);
  if(rows.length===0)throw notPublic(`${label}: no rows visible at ${asOf}`);
- const stamps=rows.flatMap(r=>[...(typeof r.updated_at==='string'?[iso(r.updated_at)]:[]),...(typeof r.valid_from==='string'?[endOfUtcDay(r.valid_from)]:[])]);
+ // P1-08: availability is the rows' system time (updated_at, else created_at) — valid_from is an effective date,
+ // not a publication time, and the requested as_of is never a substitute.
+ const stampOf=(r:Record<string,unknown>):string|null=>{const v=typeof r.updated_at==='string'?r.updated_at:typeof r.created_at==='string'?r.created_at:null;return v!==null&&Number.isFinite(Date.parse(v))?iso(v):null;};
+ const stamps=rows.map(stampOf);
+ if(stamps.some(s=>s===null))throw new JudgmentError('input_unavailable',`${label}: a row has no system timestamp (updated_at / created_at), so its availability at ${asOf} cannot be evidenced`);
  const snapshot={table:ref.table,natural_key:ref.natural_key,rows};
- return {kind:'table_rows',ref,snapshot,hash:digest(snapshot),available_at:stamps.length>0?isoMax(stamps):endOfUtcDay(asOf),
+ return {kind:'table_rows',ref,snapshot,hash:digest(snapshot),available_at:isoMax(stamps as string[]),
   origin:originFor('table_rows',ref.table==='macro_series'?'macro_workbench':'supabase_public',{table:ref.table,natural_key:ref.natural_key})};
 }
 async function buildJudgment(ref:{judgment_id:string},db:JudgmentInputsDb):Promise<Input>{
@@ -7104,6 +7737,9 @@ export async function buildOrAbstain(req:InputRequest,db:JudgmentInputsDb,asOf:s
  try{return await buildInput(req,db,asOf,opts);}
  catch(e){
   if(e instanceof JudgmentError&&(ABSTAIN_CODES as readonly string[]).includes(e.code))return {abstained:true,reason:e.code,missing:[inputLabel(req)]};
+  // P1-08: a table_rows input whose rows carry no system timestamp is permanently unevidenced → abstain (for the other
+  // kinds input_unavailable is a transient provider failure and stays an error).
+  if(e instanceof JudgmentError&&e.code==='input_unavailable'&&req.kind==='table_rows')return {abstained:true,reason:'input_unavailable',missing:[inputLabel(req)]};
   throw e;
  }
 }
@@ -8164,7 +8800,7 @@ const regime=(primary:Regime,secondary:Regime,norm:Record<Regime,number>):Regime
 const R1=regime('recovery','overheat',{recovery:0.4,overheat:0.3,stagflation:0.2,recession:0.1});
 const R2=regime('overheat','recovery',{recovery:0.3,overheat:0.4,stagflation:0.2,recession:0.1});
 const snap=(snapshot_id:string,observation_ids:string[],regime_:RegimeResult|null,created_at:string)=>({snapshot_id,region:'US' as const,as_of:FIXTURE_ASOF,methodology_version:'v1.0',catalog_version:'cat-1',observation_ids,regime:regime_,created_at,status:'active' as const});
-export const FIXTURE_MACRO:MacroFixture={fixture_version:'macro-fixture/1',observations:[PMI,CPI,CPI2,LATE],classifications:[],series_catalog:{US:[{id:'us_cpi_yoy',weight:0.25},{id:'us_ism_pmi',weight:0.25}]},snapshots:[
+export const FIXTURE_MACRO:MacroFixture={fixture_version:'macro-fixture/1',observations:[PMI,CPI,CPI2,LATE],classifications:[],series_catalog:{US:[{id:'us_cpi_yoy',weight:0.25,created_at:'2026-09-01T00:00:00.000Z'},{id:'us_ism_pmi',weight:0.25,created_at:'2026-09-01T00:00:00.000Z'}]},snapshots:[
  snap('s-a',[PMI.observation_id,CPI.observation_id],R1,'2026-10-16T01:00:00.000Z'),
  snap('s-b',[PMI.observation_id,CPI2.observation_id],R2,'2026-10-16T02:00:00.000Z'),
  snap('s-none',[PMI.observation_id],null,'2026-10-16T03:00:00.000Z'),
@@ -8230,7 +8866,7 @@ import {memoryJudgmentsDb} from './memory-judgments-db';
 import {REGISTRY} from './registry';
 import {nonceOf,normalizedPayload,registerJudgment,samePayload} from './register';
 import type {RegisterDeps,RegisterInput} from './register';
-import type {CategoricalClaim,Input,JudgmentInsert,JudgmentsDb,Methodology,Subject,Target} from './types';
+import type {CategoricalClaim,Condition,Input,JudgmentInsert,JudgmentsDb,Methodology,Subject,Target} from './types';
 import {FIXTURE_ASOF,FIXTURE_RESOLVERS,fixtureInputsDb,fixtureModelMethod,fixtureRegimeMethod} from './testing/fixture-methods';
 import {spyRegister,syncTestMethod,withSubjects} from './testing/db-helpers';
 
@@ -8272,8 +8908,10 @@ describe('registerJudgment: identity, duplicate and conflict (spec §6.1, §6.2)
   const {deps,tables}=await setup();
   const e=await evaluated(fixtureRegimeMethod,'s-a');
   const a=await registerJudgment(ACTOR,req(fixtureRegimeMethod,e),deps);
-  const drifted={...e,outcome:{abstained:false as const,claim:{...e.outcome.claim,selected:'overheat'}},condition:{...e.condition,predicate:{op:'eq' as const,rhs:'overheat' as const}}};
-  const err=await registerJudgment(ACTOR,req(fixtureRegimeMethod,drifted as never),deps).catch(x=>x);
+  const mc=e.condition;if(mc.resolver!=='macro_regime_replay')throw new Error(`fixture condition is ${mc.resolver}, expected macro_regime_replay`);
+  const driftedCondition:Condition={...mc,predicate:{op:'eq',rhs:'overheat'}};
+  const drifted:Awaited<ReturnType<typeof evaluated>>={...e,outcome:{abstained:false,claim:{...e.outcome.claim,selected:'overheat'}},condition:driftedCondition};
+  const err=await registerJudgment(ACTOR,req(fixtureRegimeMethod,drifted),deps).catch(x=>x);
   expect(err).toBeInstanceOf(JudgmentError);expect(err.code).toBe('idempotency_conflict');expect(err.message).toContain(a.judgment_id);
   const q=tables.rows('dq_quarantine');
   expect(q).toHaveLength(1);
@@ -8366,8 +9004,13 @@ describe('registerJudgment: gates (spec §6.2, §13)',()=>{
  it('claim, condition and target checks',async()=>{
   const {deps}=await setup();const e=await evaluated(fixtureRegimeMethod,'s-a');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,outcome:{abstained:false,claim:{} as CategoricalClaim}}),deps))).toBe('invalid_claim');
-  expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,condition:{...e.condition,predicate:{op:'eq',rhs:'recession'}}}),deps))).toBe('invalid_condition');
-  expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,condition:{...e.condition,resolver:'recommendation_hit'} as never}),deps))).toBe('invalid_condition');
+  // Narrow the union before replacing the predicate: spreading a Condition union with a new predicate is not a Condition (TS2322).
+  const mc=e.condition;if(mc.resolver!=='macro_regime_replay')throw new Error(`fixture condition is ${mc.resolver}, expected macro_regime_replay`);
+  const wrongRhs:Condition={...mc,predicate:{op:'eq',rhs:'recession'}};
+  expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,condition:wrongRhs}),deps))).toBe('invalid_condition');
+  // Deliberately ill-typed fixture (macro params under a private resolver): the unsafe boundary is this one explicit cast.
+  const wrongResolver=({...mc,resolver:'recommendation_hit'} as unknown) as Condition;
+  expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,condition:wrongResolver}),deps))).toBe('invalid_condition');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,target:{kind:'period',period:'2027-02'}}),deps))).toBe('invalid_condition');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,e,{condition:null}),deps))).toBe('invalid_condition');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,e),{...deps,resolverOf:()=>null}))).toBe('invalid_condition');
@@ -8823,9 +9466,13 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
 export const priceReturnResolver:Resolver;
 // resolvers/facts.ts
 export const FACT_RESOLVER_VERSION='fact_metric/1';export const FACT_MAX_FETCH_MS=10_000;export const DERIVATION_LOOKBACK_DAYS=400;
-export interface FactCandidate{key:MetricKey&{duration:string;unit:string};value_text:string;role:'current'|'prior';realized_value:number;label_available_at:string;lineage:MetricRow['inputs'];derivation:{formula_version:string;as_of:string;state_rev:number;rows:DerivationRow[]}}
+export interface FactOperand{role:'current'|'prior';key:MetricKey&{duration:string;unit:string};value_text:string;lineage:MetricRow['inputs'];derivation:{formula_version:string;as_of:string;state_rev:number;rows:DerivationRow[]}}   // §3.5 financial_metric snapshot shape (P1-06)
+export interface FactCandidate extends FactOperand{realized_value:number;label_available_at:string;counterpart:FactOperand|null}   // yoy: counterpart = the other operand, fully frozen
 export function derivationRowOf(r:FactRow):DerivationRow;
-export function derivationOf(env:ReadFactsResult,m:MetricRow,asOf:string):FactCandidate['derivation'];
+export function derivationOf(env:ReadFactsResult,m:MetricRow,asOf:string):FactOperand['derivation'];
+export function operandOf(env:ReadFactsResult,m:MetricRow,role:FactOperand['role'],asOf:string):FactOperand;
+export function operandReproduces(op:FactOperand):boolean;              // deriveMetrics over the frozen rows yields this key with this value and lineage
+export function factsAsOfDate(cutoff:string):string;                     // latest UTC date whose end-of-day availability is ≤ cutoff (P1-07)
 export const factMetricResolver:Resolver;
 // resolvers/macro.ts
 export const MACRO_RESOLVER_VERSION='macro_regime_replay/1';export const MACRO_MAX_FETCH_MS=10_000;export const MACRO_MIN_COVERAGE=0.6;
@@ -8856,7 +9503,8 @@ export const verifiedCapability:CapabilityLookup;export const unverifiedCapabili
 - **退市判定只在终点 bar 尚缺时做**（§12.4）：已能结算的判断不因之后的退市而作废；判定条件是 `issuerPrimarySecurity(subject, today)` 返回 `null`（发行人当日已无主证券）。主证券换成另一只票（双重上市）不当退市，因为方法冻结的 `ticker` 可以不是主证券。
 - **`basis_mismatch` 只在终点 bar 已存在时判定**：这样隔离项保存的 `evidence` 就是完整的待结算证据（含 `result`），`accept_refetched` 裁决可以不重抓直接结算（§7.6"以隔离时保存的完整 evidence 结算"）；终点未到时先 `Pending`。
 - **`yoy` 的上年同期**取与派生内核相同的定义：同 `(metric, duration, unit, input_unit, basis, formula_version)` 且 `period_end` 早 350–380 天的唯一一行（规格只写"上年同期同键"）。两侧都多候选 → `Unavailable(ambiguous_both)`（一个隔离项只能裁一侧；到期 `void`）；上年值为 0 → `Unavailable(prior_zero)`；缺上年 → `Unavailable(prior_missing)`。
-- **`ambiguous_fact` 候选是规格 S04 形状的超集**：`{key, value_text, derivation}` 之外还带 `role / realized_value / label_available_at / lineage`，使 `choose_fact` 裁决能"只从被选候选"构造 `Resolved`（不读事实层）。`evidence` 只放 `candidate_digests`，完整候选在 `detail.candidates`（结算把 `detail` 展开进隔离 `payload`，钩子读 `payload.candidates`）。
+- **`ambiguous_fact` 候选是规格 S04 形状的超集**：`{key, value_text, derivation}` 之外还带 `role / realized_value / label_available_at / lineage / counterpart`，使 `choose_fact` 裁决能"只从被选候选"构造 `Resolved`（不读事实层）。**每个算子都按 §3.5 `financial_metric` 快照同形冻结**（计划审计 P1-06）：`FactOperand{role, key, value_text, lineage, derivation{formula_version, as_of, state_rev, rows}}`；`yoy` 候选的 `counterpart` 是另一侧算子的完整冻结证据；普通结算的 `evidence.operands` 同样列出每个用到的算子。`fromOverride` 不信任候选里存的值：对每个算子用 `deriveMetrics` 在冻结行上重派生，必须得到同键、同 `value_text`、同 lineage，再按 `compare` 重算实现值，与候选的 `realized_value` 不等 → `override_mismatch`。
+- **截止可得性**（计划审计 P1-07）：价格 bar 只有 `closeInstantUtc(bar.time, market) ≤ cutoff`（有基准时两个市场都已收盘）才可用；事实按 `endOfUtcDay(available_date) ≤ cutoff` 判可得，`deriveMetricsAsOf` 的截止日期 = `factsAsOfDate(cutoff)`（截止当日未过完 → 前一日），所以"今天才可得"的事实在日终前不可用。`evidence` 只放 `candidate_digests`，完整候选在 `detail.candidates`（结算把 `detail` 展开进隔离 `payload`，钩子读 `payload.candidates`）。
 - **close-only 判定**：登记输入 `price_bar.snapshot.fields_present` 恰为 `['close']`，或 DataGateway 返回的 bar 满足 `open=high=low=close 且 volume=0`（适配器合成形状；`datagateway.ts` 不暴露分支标记，F4 不改它的返回类型）。
 
 - [ ] **Step 1: 写三份合成 K 线夹具（确定性数据，不是行情；单测与离线集成共用）**
@@ -9220,6 +9868,9 @@ export const validateMacroRegimeReplayParams=ajv.compile({type:'object',addition
 // not 'verified' → Unavailable(adjustment_unsupported) (O6); an issuer subject with no primary security while the
 // end bar is still missing → Unavailable(delisted) (§12.4). Evidence bars: 5 before base through end (≥ n + 6 when
 // the provider has them), bars_sha256 = digest(bars); DataGateway close-only bars keep close only (audit G27).
+// Cutoff (plan audit P1-07): a bar exists for this resolution only once its session has closed at the cutoff —
+// closeInstantUtc(bar.time, market) ≤ cutoff (with a benchmark: both markets closed) — so a provider's current,
+// unfinished daily bar can never become a permanent end bar.
 import type {KlineSourceName,SourceKlineBar,SourceKlineSeries} from '@/lib/data/kline/types';
 import {digest} from '../canonical';
 import {JudgmentError} from '../errors';
@@ -9286,9 +9937,11 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   const capMain=opts.capabilityOf(p.source,p.market,p.adjustment);
   const capBench=p.benchmark?opts.capabilityOf(p.source,p.benchmark.market,p.adjustment):null;
   if(capMain?.status!=='verified'||(p.benchmark&&capBench?.status!=='verified'))return unavailable('adjustment_unsupported');
+  // P1-07: only bars whose session has closed at the cutoff are eligible (both markets when there is a benchmark).
+  const closedBy=(date:string)=>closeInstantUtc(date,p.market)<=ctx.cutoff&&(!p.benchmark||closeInstantUtc(date,p.benchmark.market)<=ctx.cutoff);
   const read=async(ticker:string,market:PriceMarket,from:string,to:string):Promise<SourceKlineBar[]|KlineFailure>=>{
    const r=await ctx.inputsDb.kline({ticker,market,adjustment:p.adjustment,source:p.source,from,to,signal:ctx.signal});
-   return isFailure(r)?r:[...r.bars].sort(byTime);
+   return isFailure(r)?r:[...r.bars].filter(b=>closedBy(b.time)).sort(byTime);
   };
   let from=w.from,to=w.to;
   const first=await read(p.ticker,p.market,from,to);
@@ -9363,7 +10016,7 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   const r=ev.result as Partial<PriceResult>|undefined;
   if(!r||typeof r.value!=='number'||!Number.isFinite(r.value)||typeof r.from!=='string'||typeof r.to!=='string'||typeof r.label_available_at!=='string')throw new JudgmentError('override_mismatch','evidence_result');
   return {status:'resolved',value:r.value,unit:'ratio',from:r.from,to:r.to,label_available_at:r.label_available_at,
-   evidence:{...ev,override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at}}};
+   evidence:{...ev,override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at,cutoff:o.cutoff}}};
  }
  return {name:'price_return',version:PRICE_RESOLVER_VERSION,validateParams:validate,labelAvailableAt,maxFetchMs:PRICE_MAX_FETCH_MS,resolve,fromOverride};
 }
@@ -9425,7 +10078,22 @@ describe('price_return resolver',()=>{
   const r=await result;
   expect(r.status).toBe('resolved');
   expect(calls.map(c=>[c.from,c.to])).toEqual([['2025-12-28','2026-01-25'],['2025-12-08','2025-12-27']]);
-  expect((r as {evidence:Ev}).evidence.from).toBe('2025-12-08');
+  if(r.status!=='resolved')throw new Error(JSON.stringify(r));
+  expect((r.evidence as unknown as Ev).from).toBe('2025-12-08');   // explicit unsafe boundary: evidence is Record<string,unknown>
+ });
+ it('a bar is eligible only once its session closed at the cutoff: intraday and midnight cutoffs never take the unfinished end bar (P1-07)',async()=>{
+  // 2026-01-20 is the 5th session after base; the US close that day is 21:00Z (EST).
+  for(const now of ['2026-01-20T00:00:00.000Z','2026-01-20T15:00:00.000Z','2026-01-20T20:59:59.999Z']){
+   const r=await run(judgment(),[ZZA],{now}).result;
+   expect({now,r}).toEqual({now,r:{status:'pending',reason:'awaiting_bars',estimated_at:'2026-01-17T21:00:00.000Z'}});
+  }
+  const closed=await run(judgment(),[ZZA],{now:'2026-01-20T21:00:00.000Z'}).result;
+  expect(closed).toMatchObject({status:'resolved',value:111/106-1,to:'2026-01-20',label_available_at:'2026-01-20T21:00:00.000Z'});
+  if(closed.status!=='resolved')throw new Error(closed.status);
+  expect((closed.evidence as unknown as Ev).bars.at(-1)!.date).toBe('2026-01-20');               // nothing after the cutoff in the evidence
+  // with a benchmark both closes must have passed
+  const bench=judgment({benchmark:{ticker:'ZZB',market:'US'}});
+  expect((await run(bench,[ZZA,ZZB],{now:'2026-01-20T15:00:00.000Z'}).result).status).toBe('pending');
  });
  it('date target: end = first bar on or after target.date (holiday → next session); window to = date + 20 d',async()=>{
   const {calls,result}=run(judgment({targetDate:'2026-01-19'}),[ZZA]);
@@ -9499,7 +10167,7 @@ describe('price_return resolver',()=>{
   const j=judgment({registeredClose:107});
   const inc=await run(j,[ZZA]).result;
   if(inc.status!=='inconsistent')throw new Error(inc.status);
-  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:inc.evidence_hash,evidence:inc.evidence},evidence_hash:inc.evidence_hash,resolved_by:'9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',at:NOW};
+  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:inc.evidence_hash,evidence:inc.evidence},evidence_hash:inc.evidence_hash,resolved_by:'9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',at:NOW,cutoff:NOW};
   const r=resolver.fromOverride(j,override);
   expect(r).toMatchObject({status:'resolved',value:111/106-1,from:'2026-01-12',to:'2026-01-20',label_available_at:'2026-01-20T21:00:00.000Z',evidence:{override:{reason_code:'settlement_basis_mismatch',evidence_hash:inc.evidence_hash}}});
   const codeOf=(f:()=>unknown)=>{try{f();}catch(e){return (e as {code?:string}).code;}return 'no_throw';};
@@ -9530,8 +10198,8 @@ import type {MetricRow} from '@/lib/facts/types';
 import {digest} from '../canonical';
 import {conditionJudgment,factsBackedDerive,stubInputsDb} from '../testing/fixtures';
 import type {FactMetricParams,JudgmentInputsDb,QuarantineOverride,ResolveContext} from '../types';
-import {derivationRowOf,factMetricResolver} from './facts';
-import type {FactCandidate} from './facts';
+import {derivationRowOf,factMetricResolver,factsAsOfDate,operandReproduces} from './facts';
+import type {FactCandidate,FactOperand} from './facts';
 
 interface Seed{period_start:string;period_end:string;value:string;available_date:string}
 /** One published run: a filing per available date, 3M consolidated USD revenue facts (plan 2 write path). */
@@ -9570,14 +10238,39 @@ describe('fact_metric resolver',()=>{
   if(r.status!=='resolved')throw new Error(JSON.stringify(r));
   expect(r).toMatchObject({value:1000,unit:'USD',from:'2025-07-01',to:'2025-09-30',label_available_at:'2025-10-30T23:59:59.999Z'});
   const fact=facts.facts().find(f=>f.period_end==='2025-09-30')!;
-  const env=await facts.readFacts(issuer,'US',{concepts:['revenue'],asOf:'2026-03-02',history:true});
-  expect(r.evidence).toEqual({metric_keys:[{issuer_id:issuer,market:'US',metric:'q_single_revenue',...Q3,duration:'3M',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:FORMULA_VERSION}],
-   fact_ids:[fact.fact_id],filing_ids:[fact.filing_id],available_dates:['2025-10-30'],value_texts:['1000'],mapping_gen:[1],state_rev:env.stateRev,cutoff:NOW,as_of:'2026-03-02',formula_version:FORMULA_VERSION,compare:'value'});
+  const env=await facts.readFacts(issuer,'US',{concepts:['revenue'],asOf:'2026-03-01',history:true});
+  const key={issuer_id:issuer,market:'US',metric:'q_single_revenue',...Q3,duration:'3M',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:FORMULA_VERSION};
+  const {operands,...rest}=r.evidence as Record<string,unknown>&{operands:FactOperand[]};
+  // NOW is 04:00Z on 2026-03-02: that day has not ended, so the derive date is 2026-03-01 (P1-07).
+  expect(rest).toEqual({metric_keys:[key],fact_ids:[fact.fact_id],filing_ids:[fact.filing_id],available_dates:['2025-10-30'],value_texts:['1000'],mapping_gen:[1],state_rev:env.stateRev,cutoff:NOW,as_of:'2026-03-01',formula_version:FORMULA_VERSION,compare:'value'});
+  // P1-06: the operand is frozen in the §3.5 financial_metric snapshot shape and replays from its own rows.
+  expect(operands).toHaveLength(1);
+  expect(operands[0]).toMatchObject({role:'current',key,value_text:'1000',derivation:{formula_version:FORMULA_VERSION,as_of:'2026-03-01',state_rev:env.stateRev}});
+  expect(operands[0].lineage.map(i=>i.fact_id)).toEqual([fact.fact_id]);
+  expect(operands[0].derivation.rows.map(x=>x.period_end)).toEqual(['2024-09-30','2025-09-30']);
+  expect(operandReproduces(operands[0])).toBe(true);
+  expect(operandReproduces({...operands[0],value_text:'1001'})).toBe(false);
+  expect(operandReproduces({...operands[0],derivation:{...operands[0].derivation,rows:operands[0].derivation.rows.filter(x=>x.period_end!=='2025-09-30')}})).toBe(false);
+ });
+ it('cutoff availability is end of the UTC day: a fact available today is not eligible before midnight (P1-07)',async()=>{
+  expect(factsAsOfDate('2025-10-30T12:00:00.000Z')).toBe('2025-10-29');
+  expect(factsAsOfDate('2025-10-30T23:59:59.998Z')).toBe('2025-10-29');
+  expect(factsAsOfDate('2025-10-30T23:59:59.999Z')).toBe('2025-10-30');
+  expect(factsAsOfDate('2025-10-31T00:00:00.000Z')).toBe('2025-10-30');
+  const {params,inputsDb}=await setup();   // Q3 available_date 2025-10-30
+  expect(await factMetricResolver.resolve(ctxOf(params(),inputsDb,'2025-10-30T12:00:00.000Z'))).toEqual({status:'pending',reason:'not_reported'});
+  expect(await factMetricResolver.resolve(ctxOf(params(),inputsDb,'2025-10-30T23:59:59.998Z'))).toEqual({status:'pending',reason:'not_reported'});
+  const atMidnight=await factMetricResolver.resolve(ctxOf(params(),inputsDb,'2025-10-31T00:00:00.000Z'));
+  expect(atMidnight).toMatchObject({status:'resolved',value:1000,label_available_at:'2025-10-30T23:59:59.999Z',evidence:{as_of:'2025-10-30'}});
  });
  it('compare=yoy: (current − prior) / |prior| with prior = same key 350–380 days earlier; label = latest input availability',async()=>{
   const {params,inputsDb}=await setup();
   const r=await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),inputsDb));
   expect(r).toMatchObject({status:'resolved',value:0.25,unit:'ratio',label_available_at:'2025-10-30T23:59:59.999Z',evidence:{value_texts:['1000','800'],available_dates:['2024-10-30','2025-10-30'],compare:'yoy'}});
+  if(r.status!=='resolved')throw new Error(r.status);
+  const ops=(r.evidence as {operands:FactOperand[]}).operands;
+  expect(ops.map(o=>[o.role,o.value_text,o.key.period_end])).toEqual([['current','1000','2025-09-30'],['prior','800','2024-09-30']]);   // BOTH yoy operands frozen (P1-06)
+  expect(ops.every(operandReproduces)).toBe(true);
  });
  it('not visible at the cutoff or not reported yet → Pending(not_reported); a key differing in any field never matches',async()=>{
   const {params,inputsDb}=await setup();
@@ -9611,7 +10304,8 @@ describe('fact_metric resolver',()=>{
   const cands=r.detail.candidates as FactCandidate[];
   expect(cands.map(c=>[c.role,c.value_text,c.realized_value])).toEqual([['current','1000',1000],['current','1001',1001]]);
   for(const c of cands){
-   expect(c.derivation).toMatchObject({formula_version:FORMULA_VERSION,as_of:'2026-03-02'});
+   expect(c.counterpart).toBeNull();                                                      // compare=value: one operand
+   expect(c.derivation).toMatchObject({formula_version:FORMULA_VERSION,as_of:'2026-03-01'});
    expect(c.derivation.rows.map(x=>x.period_end)).toEqual(['2024-09-30','2025-09-30']);   // [period_start − 400 d, period_end], sorted
    expect(Object.keys(c.derivation.rows[0]).sort()).toEqual(['available_date','concept','consolidation','created_at','disclosure_seq','duration','fact_id','filing_id','is_current','is_revision','issuer_id','mapping_gen','market','period_end','period_start','status','unit','value_text']);
    expect(c.label_available_at).toBe('2025-10-30T23:59:59.999Z');
@@ -9624,7 +10318,13 @@ describe('fact_metric resolver',()=>{
   const dupPrior=edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2024-09-30'))!,value:'801'}]);
   const r=await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),dupPrior));
   if(r.status!=='inconsistent')throw new Error(r.status);
-  expect((r.detail.candidates as FactCandidate[]).map(c=>[c.role,c.realized_value])).toEqual([['prior',0.25],['prior',(1000-801)/801]]);
+  const priorCands=r.detail.candidates as FactCandidate[];
+  expect(priorCands.map(c=>[c.role,c.realized_value])).toEqual([['prior',0.25],['prior',(1000-801)/801]]);
+  // P1-06: each prior candidate carries the CURRENT operand fully frozen, so its ratio is replayable on its own.
+  for(const c of priorCands){
+   expect(c.counterpart).toMatchObject({role:'current',value_text:'1000',key:{period_end:'2025-09-30'}});
+   expect(operandReproduces(c.counterpart!)).toBe(true);
+  }
   const both=edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2024-09-30'))!,value:'801'},{...ms.find(m=>isQ(m,'2025-09-30'))!,value:'1001'}]);
   expect(await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),both))).toEqual({status:'unavailable',failure:'ambiguous_both'});
  });
@@ -9633,13 +10333,26 @@ describe('fact_metric resolver',()=>{
   const p=params();
   const r=await factMetricResolver.resolve(ctxOf(p,edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2025-09-30'))!,value:'1001'}])));
   if(r.status!=='inconsistent')throw new Error(r.status);
-  const chosen=(r.detail.candidates as FactCandidate[])[1];
-  const o:QuarantineOverride={reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:chosen as unknown as Record<string,unknown>},evidence_hash:r.evidence_hash,resolved_by:'9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',at:NOW};
-  expect(factMetricResolver.fromOverride(judgmentOf(p),o)).toMatchObject({status:'resolved',value:1001,unit:'USD',label_available_at:'2025-10-30T23:59:59.999Z',
-   evidence:{chosen_digest:digest(chosen),cutoff:'2026-03-02',override:{reason_code:'settlement_ambiguous_fact',evidence_hash:r.evidence_hash}}});
+  const cands=r.detail.candidates as FactCandidate[];
+  const asOverride=(chosen:FactCandidate):QuarantineOverride=>({reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:chosen as unknown as Record<string,unknown>},evidence_hash:r.evidence_hash,resolved_by:'9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',at:NOW,cutoff:NOW});
+  const o=asOverride(cands[0]);
+  expect(factMetricResolver.fromOverride(judgmentOf(p),o)).toMatchObject({status:'resolved',value:1000,unit:'USD',label_available_at:'2025-10-30T23:59:59.999Z',
+   evidence:{chosen_digest:digest(cands[0]),cutoff:'2026-03-01',override:{reason_code:'settlement_ambiguous_fact',evidence_hash:r.evidence_hash}}});
   const codeOf=(f:()=>unknown)=>{try{f();}catch(e){return (e as {code?:string}).code;}return 'no_throw';};
+  // P1-06: the stored value is never trusted. The injected '1001' row is not what deriveMetrics yields from its frozen rows.
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),asOverride(cands[1])))).toBe('override_mismatch');
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),asOverride({...cands[0],realized_value:1001})))).toBe('override_mismatch');
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),asOverride({...cands[0],derivation:{...cands[0].derivation,rows:[]}})))).toBe('override_mismatch');
   expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),{...o,resolution:{kind:'accept_refetched',evidence_hash:'x',evidence:{}}}))).toBe('override_mismatch');
   expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),{...o,resolution:{kind:'choose_fact',chosen:{value_text:'1'}}}))).toBe('override_mismatch');
+  // yoy: a prior candidate settles from its own frozen operand + the frozen current counterpart; tampering the counterpart is caught.
+  const py=params({compare:'yoy'});
+  const ry=await factMetricResolver.resolve(ctxOf(py,edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2024-09-30'))!,value:'801'}])));
+  if(ry.status!=='inconsistent')throw new Error(ry.status);
+  const pc=(ry.detail.candidates as FactCandidate[])[0];
+  expect(factMetricResolver.fromOverride(judgmentOf(py),asOverride(pc))).toMatchObject({status:'resolved',value:0.25,unit:'ratio'});
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(py),asOverride({...pc,counterpart:{...pc.counterpart!,value_text:'1100'}})))).toBe('override_mismatch');
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(py),asOverride({...pc,counterpart:null})))).toBe('override_mismatch');
  });
  it('derivationRowOf keeps exactly the kernel-read fields (drops value, run_id, source_concept, statement, mapping_version, raw_hash)',async()=>{
   const {facts,issuer}=await setup();
@@ -9665,12 +10378,17 @@ describe('fact_metric resolver',()=>{
 // the realised value it would settle, its lineage and the §3.5 derivation envelope (rows of the lineage concepts
 // with period_end in [period_start − 400 d, period_end], every kernel-read field, sorted), so a choose_fact
 // verdict settles from the chosen candidate alone (no reads). label_available_at = end of the UTC day of the
-// latest input available_date.
+// latest input available_date. Every operand used (ordinary settlements, candidates, BOTH yoy sides) is frozen in
+// the §3.5 financial_metric snapshot shape (FactOperand: key, value_text, lineage, derivation rows) and
+// fromOverride re-derives each operand from its frozen rows before trusting a candidate (plan audit P1-06).
+// Cutoff availability (P1-07): facts are available at endOfUtcDay(available_date), so the derive date is the latest
+// UTC date that has fully elapsed by the cutoff (factsAsOfDate).
+import {deriveMetrics} from '@/lib/facts/derive';
 import type {MetricRow,ReadFactsResult} from '@/lib/facts/types';
-import {digest} from '../canonical';
+import {canonicalize,digest} from '../canonical';
 import {JudgmentError} from '../errors';
-import {derivationRowsFor} from '../inputs';
-import {endOfUtcDay} from '../time';
+import {derivationRowsFor,factRowOfDerivation} from '../inputs';
+import {addDaysIso,endOfUtcDay} from '../time';
 import type {DeriveAsOfResult,DerivationRow,FactMetricParams,JudgmentRow,MetricKey,QuarantineOverride,Resolver,ResolverResult,ResolveContext,Target} from '../types';
 import {isRealDate,validateFactMetricParams} from './schemas';
 // The FactRow → DerivationRow projection and the §3.5 envelope selection have ONE implementation, in
@@ -9681,7 +10399,12 @@ export const FACT_RESOLVER_VERSION='fact_metric/1';
 export const FACT_MAX_FETCH_MS=10_000;
 export const DERIVATION_LOOKBACK_DAYS=400;
 const YOY_MIN_DAYS=350,YOY_MAX_DAYS=380,DAY_MS=86_400_000;
-export interface FactCandidate{key:MetricKey&{duration:string;unit:string};value_text:string;role:'current'|'prior';realized_value:number;label_available_at:string;lineage:MetricRow['inputs'];derivation:{formula_version:string;as_of:string;state_rev:number;rows:DerivationRow[]}}
+/** One operand of a fact settlement in the §3.5 financial_metric snapshot shape (P1-06). */
+export interface FactOperand{role:'current'|'prior';key:MetricKey&{duration:string;unit:string};value_text:string;lineage:MetricRow['inputs'];derivation:{formula_version:string;as_of:string;state_rev:number;rows:DerivationRow[]}}
+/** An ambiguous_fact candidate: the ambiguous operand itself + the realised value it would settle + (yoy) the other operand. */
+export interface FactCandidate extends FactOperand{realized_value:number;label_available_at:string;counterpart:FactOperand|null}
+/** Structural key shared by MetricRow and FactOperand['key'] (string-typed so a frozen key compares like a live row). */
+type SeriesKey={issuer_id:string;market:string;metric:string;period_start:string;period_end:string;duration:string;unit:string;input_unit:string;basis:string;formula_version:string};
 
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const uniq=(xs:string[])=>[...new Set(xs)].sort(cmp);
@@ -9690,16 +10413,37 @@ const unavailable=(failure:string):ResolverResult=>({status:'unavailable',failur
 const validate=(p:unknown):p is FactMetricParams=>validateFactMetricParams(p)&&isRealDate(p.period_start)&&isRealDate(p.period_end);
 
 /** The §3.5 derivation envelope of one metric row: lineage concepts, period_end in [period_start − 400 d, period_end], all disclosures. */
-export function derivationOf(env:ReadFactsResult,m:MetricRow,asOf:string):FactCandidate['derivation']{
+export function derivationOf(env:ReadFactsResult,m:MetricRow,asOf:string):FactOperand['derivation']{
  const rows:DerivationRow[]=derivationRowsFor(env.rows,m);   // lineage concepts, period_end in [period_start − DERIVATION_LOOKBACK_DAYS, period_end], sorted
  return {formula_version:m.formula_version,as_of:asOf,state_rev:env.stateRev,rows};
 }
-const keyOf=(m:MetricRow):FactCandidate['key']=>({issuer_id:m.issuer_id,market:m.market,metric:m.metric,period_start:m.period_start,period_end:m.period_end,duration:m.duration,unit:m.unit,input_unit:m.input_unit,basis:m.basis,formula_version:m.formula_version});
-const sameSeries=(m:MetricRow,p:FactMetricParams)=>m.issuer_id===p.issuer_id&&m.market===p.market&&m.metric===p.metric&&m.duration===p.duration&&m.unit===p.unit&&m.input_unit===p.input_unit&&m.basis===p.basis&&m.formula_version===p.formula_version;
-const isCurrent=(m:MetricRow,p:FactMetricParams)=>sameSeries(m,p)&&m.period_start===p.period_start&&m.period_end===p.period_end;
-const isPrior=(m:MetricRow,p:FactMetricParams)=>{if(!sameSeries(m,p))return false;const d=days(m.period_end,p.period_end);return d>=YOY_MIN_DAYS&&d<=YOY_MAX_DAYS;};
-const labelOf=(ms:MetricRow[])=>endOfUtcDay(ms.flatMap(m=>m.inputs.map(i=>i.available_date)).reduce((a,b)=>b>a?b:a,ms[0].period_end));
-const yoy=(c:MetricRow,pr:MetricRow)=>(Number(c.value)-Number(pr.value))/Math.abs(Number(pr.value));
+/** Latest UTC date d with endOfUtcDay(d) ≤ cutoff: a fact available "today" is not eligible before the day ends (P1-07). */
+export function factsAsOfDate(cutoff:string):string{
+ const d=cutoff.slice(0,10);
+ return endOfUtcDay(d)<=cutoff?d:addDaysIso(d,-1);
+}
+const keyOf=(m:MetricRow):FactOperand['key']=>({issuer_id:m.issuer_id,market:m.market,metric:m.metric,period_start:m.period_start,period_end:m.period_end,duration:m.duration,unit:m.unit,input_unit:m.input_unit,basis:m.basis,formula_version:m.formula_version});
+const sameSeries=(m:SeriesKey,p:FactMetricParams)=>m.issuer_id===p.issuer_id&&m.market===p.market&&m.metric===p.metric&&m.duration===p.duration&&m.unit===p.unit&&m.input_unit===p.input_unit&&m.basis===p.basis&&m.formula_version===p.formula_version;
+const isCurrent=(m:SeriesKey,p:FactMetricParams)=>sameSeries(m,p)&&m.period_start===p.period_start&&m.period_end===p.period_end;
+const isPrior=(m:SeriesKey,p:FactMetricParams)=>{if(!sameSeries(m,p))return false;const d=days(m.period_end,p.period_end);return d>=YOY_MIN_DAYS&&d<=YOY_MAX_DAYS;};
+const sameKey=(a:SeriesKey,b:SeriesKey)=>a.issuer_id===b.issuer_id&&a.market===b.market&&a.metric===b.metric&&a.period_start===b.period_start&&a.period_end===b.period_end&&a.duration===b.duration&&a.unit===b.unit&&a.input_unit===b.input_unit&&a.basis===b.basis&&a.formula_version===b.formula_version;
+const labelOfLineage=(ls:MetricRow['inputs'][],floor:string)=>endOfUtcDay(ls.flat().map(i=>i.available_date).reduce((a,b)=>b>a?b:a,floor));
+const labelOf=(ms:MetricRow[])=>labelOfLineage(ms.map(m=>m.inputs),ms[0].period_end);
+const yoyOf=(cur:string,prior:string)=>(Number(cur)-Number(prior))/Math.abs(Number(prior));
+const yoy=(c:MetricRow,pr:MetricRow)=>yoyOf(c.value,pr.value);
+/** The operand of one metric row, frozen in the §3.5 financial_metric snapshot shape. */
+export function operandOf(env:ReadFactsResult,m:MetricRow,role:FactOperand['role'],asOf:string):FactOperand{
+ return {role,key:keyOf(m),value_text:m.value,lineage:m.inputs,derivation:derivationOf(env,m,asOf)};
+}
+/** Independent replay of one operand: deriveMetrics over its frozen rows at its frozen as_of / state_rev must yield a row
+ *  with the same full key, the same value_text and the same lineage (the derive kernel, never the stored value). */
+export function operandReproduces(op:FactOperand):boolean{
+ const d=op.derivation;
+ if(!d||!Array.isArray(d.rows)||typeof d.as_of!=='string'||d.formula_version!==op.key.formula_version)return false;
+ let again:MetricRow[];
+ try{again=deriveMetrics(d.rows.map(factRowOfDerivation),{market:op.key.market,asOf:d.as_of,basedOnRev:d.state_rev});}catch{return false;}
+ return again.some(m=>sameKey(m,op.key)&&m.value===op.value_text&&canonicalize(m.inputs)===canonicalize(op.lineage));
+}
 
 export const factMetricResolver:Resolver={
  name:'fact_metric',version:FACT_RESOLVER_VERSION,maxFetchMs:FACT_MAX_FETCH_MS,
@@ -9709,7 +10453,7 @@ export const factMetricResolver:Resolver={
  async resolve(ctx:ResolveContext):Promise<ResolverResult>{
   const c=ctx.judgment.condition;
   if(!c||c.resolver!=='fact_metric'||!validate(c.params))return unavailable('invalid_condition');
-  const p=c.params,asOf=ctx.cutoff.slice(0,10);
+  const p=c.params,asOf=factsAsOfDate(ctx.cutoff);
   let res:DeriveAsOfResult;
   try{res=await ctx.inputsDb.deriveMetricsAsOf(p.issuer_id,p.market,asOf,p.formula_version);}
   catch(e){
@@ -9723,16 +10467,20 @@ export const factMetricResolver:Resolver={
   const cur=res.metrics.filter(m=>isCurrent(m,p));
   if(cur.length===0)return {status:'pending',reason:'not_reported'};
   const ambiguous=(list:MetricRow[],role:FactCandidate['role'],realized:(m:MetricRow)=>number,counterpart:MetricRow|null):ResolverResult=>{
-   const candidates:FactCandidate[]=list.map(m=>({key:keyOf(m),value_text:m.value,role,realized_value:realized(m),label_available_at:labelOf(counterpart?[m,counterpart]:[m]),lineage:m.inputs,derivation:derivationOf(env,m,asOf)}));
+   const other=counterpart?operandOf(env,counterpart,role==='current'?'prior':'current',asOf):null;
+   const candidates:FactCandidate[]=list.map(m=>({...operandOf(env,m,role,asOf),realized_value:realized(m),label_available_at:labelOf(counterpart?[m,counterpart]:[m]),counterpart:other}));
    const evidence={role,candidate_digests:candidates.map(x=>digest(x)),state_rev:env.stateRev,cutoff:ctx.cutoff,as_of:asOf,formula_version:p.formula_version,compare:p.compare};
    return {status:'inconsistent',reason_code:'settlement_ambiguous_fact',detail:{candidates},evidence,evidence_hash:digest(evidence)};
   };
   const resolved=(used:MetricRow[],value:number):ResolverResult=>{
    const lineage=used.flatMap(m=>m.inputs),ids=new Set(lineage.map(i=>i.fact_id));
    const mappingGen=[...new Set(env.rows.filter(r=>ids.has(r.fact_id)).map(r=>r.mapping_gen))].sort((a,b)=>a-b);
+   // Every operand frozen with its full derivation (P1-06); one that its own frozen rows cannot reproduce is not settled on.
+   const operands=used.map((m,i)=>operandOf(env,m,i===0?'current':'prior',asOf));
+   if(!operands.every(operandReproduces))return unavailable('metric_not_reproducible');
    return {status:'resolved',value,unit:p.compare==='yoy'?'ratio':p.unit,from:p.period_start,to:p.period_end,label_available_at:labelOf(used),
     evidence:{metric_keys:used.map(keyOf),fact_ids:[...ids].sort(cmp),filing_ids:uniq(lineage.map(i=>i.filing_id)),available_dates:uniq(lineage.map(i=>i.available_date)),
-     value_texts:used.map(m=>m.value),mapping_gen:mappingGen,state_rev:env.stateRev,cutoff:ctx.cutoff,as_of:asOf,formula_version:p.formula_version,compare:p.compare}};
+     value_texts:used.map(m=>m.value),mapping_gen:mappingGen,state_rev:env.stateRev,cutoff:ctx.cutoff,as_of:asOf,formula_version:p.formula_version,compare:p.compare,operands}};
   };
   if(p.compare==='value')return cur.length>1?ambiguous(cur,'current',m=>Number(m.value),null):resolved(cur,Number(cur[0].value));
   const prior=res.metrics.filter(m=>isPrior(m,p));
@@ -9748,11 +10496,28 @@ export const factMetricResolver:Resolver={
   if(!c||c.resolver!=='fact_metric'||o.reason_code!=='settlement_ambiguous_fact'||o.resolution.kind!=='choose_fact')
    throw new JudgmentError('override_mismatch',`fact_metric cannot apply ${o.resolution.kind} for ${o.reason_code}`);
   const ch=o.resolution.chosen as Partial<FactCandidate>;
-  if(typeof ch.realized_value!=='number'||!Number.isFinite(ch.realized_value)||typeof ch.label_available_at!=='string'||typeof ch.value_text!=='string'||!ch.derivation||!Array.isArray(ch.derivation.rows))
+  const isOperand=<T extends Partial<FactOperand>>(x:T|null|undefined):x is T&FactOperand=>!!x&&(x.role==='current'||x.role==='prior')&&!!x.key&&typeof x.key==='object'&&typeof x.value_text==='string'&&Array.isArray(x.lineage)&&!!x.derivation&&Array.isArray(x.derivation.rows);
+  if(typeof ch.realized_value!=='number'||!Number.isFinite(ch.realized_value)||typeof ch.label_available_at!=='string'||!isOperand(ch)||(ch.counterpart!==null&&!isOperand(ch.counterpart)))
    throw new JudgmentError('override_mismatch','chosen_shape');
-  return {status:'resolved',value:ch.realized_value,unit:c.params.compare==='yoy'?'ratio':c.params.unit,from:c.params.period_start,to:c.params.period_end,label_available_at:ch.label_available_at,
-   evidence:{chosen:ch,chosen_digest:digest(ch),cutoff:ch.derivation.as_of,formula_version:c.params.formula_version,compare:c.params.compare,
-    override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at}}};
+  const p=c.params;
+  // Recompute, never trust: every operand must be reproduced by deriveMetrics from its own frozen rows (P1-06).
+  const ops:FactOperand[]=[ch,...(ch.counterpart?[ch.counterpart]:[])];
+  if(!ops.every(operandReproduces))throw new JudgmentError('override_mismatch','derivation_does_not_reproduce');
+  const cur=ops.filter(x=>x.role==='current'),pr=ops.filter(x=>x.role==='prior');
+  if(cur.length!==1||!isCurrent(cur[0].key,p))throw new JudgmentError('override_mismatch','current_key');
+  let value:number;
+  if(p.compare==='value'){if(pr.length!==0)throw new JudgmentError('override_mismatch','unexpected_counterpart');value=Number(cur[0].value_text);}
+  else{
+   if(pr.length!==1||!isPrior(pr[0].key,p))throw new JudgmentError('override_mismatch','prior_key');
+   if(Number(pr[0].value_text)===0)throw new JudgmentError('override_mismatch','prior_zero');
+   value=yoyOf(cur[0].value_text,pr[0].value_text);
+  }
+  if(!Number.isFinite(value)||value!==ch.realized_value)throw new JudgmentError('override_mismatch','realized_value');
+  const label=labelOfLineage(ops.map(x=>x.lineage),ch.key.period_end);   // same floor as labelOf([chosen, counterpart])
+  if(label!==ch.label_available_at)throw new JudgmentError('override_mismatch','label_available_at');
+  return {status:'resolved',value,unit:p.compare==='yoy'?'ratio':p.unit,from:p.period_start,to:p.period_end,label_available_at:label,
+   evidence:{chosen:ch,chosen_digest:digest(ch),operands:ops,cutoff:ch.derivation.as_of,formula_version:p.formula_version,compare:p.compare,
+    override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at,cutoff:o.cutoff}}};
  },
 };
 ```
@@ -9811,7 +10576,7 @@ describe('macro_regime_replay resolver',()=>{
  });
  it('has no quarantine verdicts: fromOverride throws override_mismatch',()=>{
   let code:string|undefined;
-  try{resolver.fromOverride(judgment,{reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:{}},evidence_hash:'x',resolved_by:'a',at:CUTOFF});}catch(e){code=(e as {code?:string}).code;}
+  try{resolver.fromOverride(judgment,{reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:{}},evidence_hash:'x',resolved_by:'a',at:CUTOFF,cutoff:CUTOFF});}catch(e){code=(e as {code?:string}).code;}
   expect(code).toBe('override_mismatch');
  });
 });
@@ -9897,7 +10662,7 @@ export function resolverFor(name:string):Resolver{
 - [ ] **Step 13: 运行全部 resolver 测试，确认通过**
 
 Run: `npm test -- src/lib/judgments/resolvers`
-Expected: PASS —— `index.test.ts` 6 项、`price.test.ts` 13 项、`facts.test.ts` 9 项、`macro.test.ts` 6 项全绿。若 `price.test.ts` 的 `labelAvailableAt` 夏令时用例失败，先核对 Task 1 `closeInstantUtc('US','2026-07-06')` 是否返回 `2026-07-06T20:00:00.000Z`（美东夏令时 16:00 = 20:00Z）——这是 Task 1 的契约，不在本任务改。
+Expected: PASS —— `index.test.ts` 6 项、`price.test.ts` 14 项、`facts.test.ts` 10 项、`macro.test.ts` 6 项全绿。若 `price.test.ts` 的 `labelAvailableAt` 夏令时用例失败，先核对 Task 1 `closeInstantUtc('US','2026-07-06')` 是否返回 `2026-07-06T20:00:00.000Z`（美东夏令时 16:00 = 20:00Z）——这是 Task 1 的契约，不在本任务改。
 
 - [ ] **Step 14: 类型检查与 lint**
 
@@ -9950,10 +10715,14 @@ export type SettleAction='settled'|'void'|'deferred'|'quarantined'|'duplicate'|'
 export interface SettleItem{judgment_id:string;action:SettleAction;reason:string|null;seq:number|null}
 export interface SettleReceipt{batchId:string|null;status:BatchStatus|'preview';counts:BatchCounts;errors:BatchError[];idle:boolean;preview:boolean;detail:{repaired:number;batches:number;deadline_hit:boolean;compensation:CompensationReport|null};items:SettleItem[]}
 export type Decision=|{action:'append';row:Pick<SettlementInsert,'kind'|'outcome'|'realized'|'evidence'|'resolver'|'resolver_version'|'reason'>}|{action:'defer';patch:QueuePatch;summary:'pending'|'unavailable';reason:string}|{action:'quarantine';reasonCode:string;payload:Record<string,unknown>;patch:QueuePatch};
-export interface DecideInput{judgment:JudgmentRow;queue:QueueRow;resolver:Pick<Resolver,'name'|'version'>;result:ResolverResult|null;now:string;cutoff:string;viaOverride:boolean}
+export interface DecideInput{judgment:JudgmentRow;queue:QueueRow;resolver:Pick<Resolver,'name'|'version'>;result:ResolverResult|null;now:string;cutoff:string;viaOverride:boolean;overrideDiscarded?:boolean}
+export interface SettlePlan{cutoff:string;early:boolean;viaOverride:boolean;overrideDiscarded:boolean}
+export function planOf(q:QueueRow,now:string):SettlePlan;          // P1-03: cutoff, cutoff_vintage early defer, override usable / discarded
 export function backoff(kind:'pending'|'unavailable'|'inconsistent'|'error',x:{now:string;attempts:number;settleBy:string;estimatedAt?:string|null}):string;
 export function predicateHolds(p:Condition['predicate'],v:number|string|boolean):boolean;
-export const isUnresolvedInconsistency:(q:QueueRow,now:string,viaOverride:boolean)=>boolean;
+export const REVIEW_WINDOW_DAYS=7;
+export function reviewDeadline(q:QueueRow):string;   // max(settle_by, last_detail.quarantined_at + REVIEW_WINDOW_DAYS)
+export const isUnresolvedInconsistency:(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>boolean;
 export function decide(x:DecideInput):Decision;
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
 export interface SettleOutcome{item:SettleItem;counter:keyof BatchCounts|null;summary:{kind:'pending'|'unavailable'|'voided';reason:string}|null;errors:BatchError[]}
@@ -9965,6 +10734,9 @@ export function runSettle(deps:SettleDeps,opts?:SettleOptions):Promise<SettleRec
 ```
 
 规格偏差（记入实施记录）：
+- **`planOf` 与 `cutoff_vintage`**（规格第 7 稿 §7.2，计划审计 P1-03）：`cutoff_vintage` 在 `now < settle_by` 时**不调用 resolver**（也不用 override），直接 `defer` 到 `settle_by`；之后 `cutoff = settle_by`，队列 override 只在 `override.cutoff = settle_by` 时使用，否则丢弃并重新解析一次（重新解析仍不一致且已过 `settle_by` → `void(unresolved_inconsistency)`，不再开新的复核窗口）。override 只匹配它被接受时的那次不一致（`reason_code` 与 `evidence_hash` 都相同，P1-04）。**已知后果（交 owner）**：`cutoff_vintage` 的解析只在 `settle_by` 当时及之后发生，于是它的 `Inconsistent` 在下一次运行（`now > settle_by`）就会 `void(unresolved_inconsistency)`，管理员几乎没有复核窗口；v1 唯一的 `cutoff_vintage` resolver（`macro_regime_replay`）不返回 `Inconsistent`，所以 v1 不受影响；将来把 `cutoff_vintage` 与会返回 `Inconsistent` 的 resolver 组合的方法，需要在规格里另定复核窗口。
+- **截止可得性**（计划审计 P1-07）：`Resolved` 还要求 `label_available_at ≤ cutoff`；否则 `defer(label_after_cutoff)`，按 `pending` 公式退避到标签时刻（`first_observed` 的 `cutoff = now`；`cutoff_vintage` 的 `cutoff = settle_by` 已被"晚于 `settle_by` → `void(no_data:late)`"覆盖）。
+- **隔离项负载刷新**（计划审计 P1-04）：`quarantine()` 复用同键同原因的未结项而不改其负载；结算在 `quarantine()` 之后把该未结项的 `payload` 更新为本次不一致（含 `cutoff`），使裁决看到的证据哈希与队列 `last_detail.evidence_hash` 一致。
 - **退避不越过 `settle_by`**：`pending / unavailable / error` 的 §5.4 公式结果若晚于 `settle_by`（且 `settle_by` 仍在将来），夹紧到 `settle_by`，使 `cutoff_vintage` 的截止重取与 `void(no_data)` 准时发生；`inconsistent` 本来就是 `min(settle_by, now + 7 天)`。任何结果最后再 `max(·, now)`（"不设成过去的时刻"）。`unavailable` 的 `attempts` 取本次之后的值（第一次失败退 1 天）。
 - **resolver 抛错**：队列 `last_status='error'`、`attempts + 1`、按 `unavailable` 公式退避；计 `failed`，`errors` 加非信息码 `resolver_failed`（全部抛错 → 批次 `failed`，连续两次 → `dq_freshness` `error`，验收样例 6）。
 - **`lease_lost` 计入 `deferred`**：该条由别的 worker 持有、会被它处理，计数器需要一个"有去向"的格子（`accounted()` 计 `deferred`），否则全是 `lease_lost` 的运行会被判 `unaccounted`；信息码 `lease_lost` 带 `key`。
@@ -10202,11 +10974,11 @@ import type {CompensationReport} from './compensate';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {priceReturnResolverWith} from './resolvers/price';
-import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,STALE_BATCH_SECONDS,backoff,predicateHolds,runSettle,settleNow} from './settle';
+import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,STALE_BATCH_SECONDS,backoff,planOf,predicateHolds,runSettle,settleNow} from './settle';
 import type {SettleDeps} from './settle';
 import {TEST_CODE_VERSION,fixtureKline,loadKlineFixture,priceJudgment,stubInputsDb,stubResolver,testMethodologyRow,truncateFixture,verifiedCapability,withOverrides} from './testing/fixtures';
 import type {KlineFixture,PriceJudgmentSpec} from './testing/fixtures';
-import type {JudgmentsDb,QuarantineOverride,ResolveContext,Resolver,ResolverResult} from './types';
+import type {JudgmentsDb,QuarantineOverride,QueueRow,ResolveContext,Resolver,ResolverResult} from './types';
 
 const T0='2026-03-02T04:00:00.000Z';
 const BASE='2026-01-12',SETTLE_BY='2026-03-18T00:00:00.000Z',AFTER='2026-03-19T03:00:00.000Z';
@@ -10253,17 +11025,58 @@ describe('settle state machine (spec §7.2)',()=>{
   expect((await h.settlements(id))[0]).toMatchObject({kind:'void',outcome:null,realized:null,reason:'no_data:late',evidence:{label_available_at:'2026-03-18T00:00:00.001Z',settle_by:SETTLE_BY}});
   expect(r.errors).toContainEqual({code:'voided_summary',message:JSON.stringify({'no_data:late':1})});
  });
- it('cutoff_vintage before settle_by → no write, queue pending until settle_by; at/after settle_by → re-resolved with cutoff = settle_by and settled',async()=>{
+ it('cutoff_vintage before settle_by → the resolver is NOT run, queue pending until settle_by; at/after settle_by → resolved with cutoff = settle_by and settled (P1-03)',async()=>{
   const h=await harness();const id=await h.register({labelPolicy:'cutoff_vintage'});
   const resolve=scripted(resolved());
   const r1=await runSettle(h.deps(stubResolver(resolve)));
   expect(r1.counts).toMatchObject({fetched:1,deferred:1,inserted:0});
+  expect(resolve).not.toHaveBeenCalled();
   expect(await h.settlements(id)).toEqual([]);
   expect(await h.queue(id)).toMatchObject({last_status:'pending',next_attempt_at:SETTLE_BY,attempts:0,closed_at:null,last_detail:{reason:'cutoff_vintage',estimated_at:SETTLE_BY}});
   h.db.setNow(AFTER);
   await runSettle(h.deps(stubResolver(resolve)));
-  expect(resolve.mock.calls[1][0]).toMatchObject({cutoff:SETTLE_BY,now:AFTER});
+  expect(resolve).toHaveBeenCalledTimes(1);
+  expect(resolve.mock.calls[0][0]).toMatchObject({cutoff:SETTLE_BY,now:AFTER});
   expect((await h.settlements(id))[0]).toMatchObject({kind:'settled',realized:{label_policy:'cutoff_vintage'},evidence:{cutoff:SETTLE_BY,observed_at:AFTER}});
+ });
+ it('cutoff_vintage + override: never used before settle_by; used at settle_by only when produced at cutoff = settle_by (P1-03)',async()=>{
+  const h=await harness(SETTLE_BY);const id=await h.register({labelPolicy:'cutoff_vintage'});
+  await runSettle(h.deps(stubResolver(scripted(INC))));                                   // resolved at cutoff = settle_by → quarantined
+  const item=h.tables.rows('dq_quarantine')[0];
+  expect(item.payload).toMatchObject({cutoff:SETTLE_BY,evidence_hash:'e'.repeat(64)});
+  const override:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:'e'.repeat(64),evidence:{bars:[1,2,3]}},evidence_hash:'e'.repeat(64),resolved_by:ADMIN,at:SETTLE_BY,cutoff:SETTLE_BY};
+  expect(await h.db.applyQuarantineOverride(id,override,String(item.id),{action:'dq.quarantine_resolve'})).toBe('applied');
+  const resolve=scripted(INC);
+  const fromOverride=vi.fn(()=>resolved({label_available_at:'2026-03-10T00:00:00.000Z',evidence:{bars:[1,2,3],override:{reason_code:'settlement_basis_mismatch'}}}));
+  h.db.setNow(at(SETTLE_BY,-DAY_MS));                                                       // before settle_by (admin "settle now" ignores due-ness): no settlement, no override use
+  expect(await settleNow(h.deps(stubResolver(resolve,{fromOverride})),id,{actor:`admin:${ADMIN}`,requestKey:'adm:p103-early'})).toMatchObject({outcome:'deferred',reason:'cutoff_vintage',seq:null});
+  expect(fromOverride).not.toHaveBeenCalled();expect(resolve).not.toHaveBeenCalled();
+  expect(await h.settlements(id)).toEqual([]);
+  h.db.setNow(SETTLE_BY);
+  const r=await runSettle(h.deps(stubResolver(resolve,{fromOverride})));
+  expect(fromOverride).toHaveBeenCalledTimes(1);expect(resolve).not.toHaveBeenCalled();
+  expect(r.counts.inserted).toBe(1);
+  expect((await h.settlements(id))[0]).toMatchObject({kind:'settled',realized:{label_policy:'cutoff_vintage'},evidence:{cutoff:SETTLE_BY}});
+ });
+ it('planOf: cutoff per policy, early defer, override matched on reason_code + evidence_hash, wrong-cutoff override discarded (P1-03, P1-04)',()=>{
+  const o=(cutoff:string,hash='e'.repeat(64)):QuarantineOverride=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{}},evidence_hash:hash,resolved_by:ADMIN,at:T0,cutoff});
+  const row=(over:Partial<QueueRow>):QueueRow=>({judgment_id:'j',settle_after:'2026-02-16T00:00:00.000Z',settle_by:SETTLE_BY,label_policy:'first_observed',next_attempt_at:T0,attempts:0,last_status:'inconsistent',
+   last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64)},leased_until:null,lease_token:null,override:null,closed_at:null,updated_at:T0,...over});
+  expect(planOf(row({}),T0)).toEqual({cutoff:T0,early:false,viaOverride:false,overrideDiscarded:false});
+  expect(planOf(row({override:o('2026-01-01T00:00:00.000Z')}),T0)).toMatchObject({viaOverride:true});            // first_observed: cutoff not compared
+  expect(planOf(row({override:o(T0,'f'.repeat(64))}),T0)).toMatchObject({viaOverride:false,overrideDiscarded:false}); // another inconsistency
+  expect(planOf(row({override:o(T0),last_status:'pending'}),T0).viaOverride).toBe(false);
+  const v=(over:Partial<QueueRow>)=>row({label_policy:'cutoff_vintage',...over});
+  expect(planOf(v({override:o(SETTLE_BY)}),T0)).toEqual({cutoff:SETTLE_BY,early:true,viaOverride:false,overrideDiscarded:false});
+  expect(planOf(v({override:o(SETTLE_BY)}),AFTER)).toEqual({cutoff:SETTLE_BY,early:false,viaOverride:true,overrideDiscarded:false});
+  expect(planOf(v({override:o(T0)}),AFTER)).toEqual({cutoff:SETTLE_BY,early:false,viaOverride:false,overrideDiscarded:true});
+ });
+ it('Resolved with a label after the observation cutoff (first_observed: now) → not settled, deferred until the label time (P1-07)',async()=>{
+  const h=await harness();const id=await h.register();
+  const r=await runSettle(h.deps(stubResolver(scripted(resolved({label_available_at:at(T0,3*DAY_MS)})))));
+  expect(r.counts).toMatchObject({inserted:0,deferred:1});
+  expect(await h.settlements(id)).toEqual([]);
+  expect(await h.queue(id)).toMatchObject({last_status:'pending',last_detail:{reason:'label_after_cutoff',estimated_at:at(T0,3*DAY_MS)},next_attempt_at:at(T0,DAY_MS*1.5)});
  });
  it('Pending with now ≤ settle_by → backoff max(1 d, (estimate − now)/2), attempts unchanged, deferred + pending_summary',async()=>{
   const h=await harness();const id=await h.register();
@@ -10307,20 +11120,25 @@ describe('settle state machine (spec §7.2)',()=>{
   const items=h.tables.rows('dq_quarantine');
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:r.batchId,
-   payload:{registered_bar:{close:107},refetched_bar:{close:106},source:'eastmoney',evidence:{bars:[1,2,3]},evidence_hash:'e'.repeat(64),judgment_id:id}});
-  expect(await h.queue(id)).toMatchObject({last_status:'inconsistent',next_attempt_at:at(T0,7*DAY_MS),last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),quarantine_id:items[0].id}});
+   payload:{registered_bar:{close:107},refetched_bar:{close:106},source:'eastmoney',evidence:{bars:[1,2,3]},evidence_hash:'e'.repeat(64),judgment_id:id,cutoff:T0}});
+  expect(await h.queue(id)).toMatchObject({last_status:'inconsistent',next_attempt_at:at(T0,7*DAY_MS),last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantine_id:items[0].id}});
   expect(await h.settlements(id)).toEqual([]);
   h.db.setNow(at(T0,7*DAY_MS));
-  await runSettle(h.deps(stubResolver(scripted(INC))));
-  expect(h.tables.rows('dq_quarantine')).toHaveLength(1);
+  const again:ResolverResult={...INC,evidence:{bars:[4,5,6]},evidence_hash:'d'.repeat(64)} as ResolverResult;
+  await runSettle(h.deps(stubResolver(scripted(again))));
+  const after=h.tables.rows('dq_quarantine');
+  expect(after).toHaveLength(1);
+  // P1-04: the reused open item now carries THIS inconsistency, matching the queue
+  expect(after[0].payload).toMatchObject({evidence:{bars:[4,5,6]},evidence_hash:'d'.repeat(64),cutoff:at(T0,7*DAY_MS)});
+  expect(await h.queue(id)).toMatchObject({last_detail:{evidence_hash:'d'.repeat(64)}});
  });
  it('an override matching the queued inconsistency settles through fromOverride without calling resolve',async()=>{
   const h=await harness();const id=await h.register();
   await runSettle(h.deps(stubResolver(scripted(INC))));
   const qid=String(h.tables.rows('dq_quarantine')[0].id);
-  const override:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:'e'.repeat(64),evidence:{bars:[1,2,3]}},evidence_hash:'e'.repeat(64),resolved_by:ADMIN,at:at(T0,DAY_MS)};
+  const override:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:'e'.repeat(64),evidence:{bars:[1,2,3]}},evidence_hash:'e'.repeat(64),resolved_by:ADMIN,at:at(T0,DAY_MS),cutoff:T0};
   h.db.setNow(at(T0,DAY_MS));
-  await h.db.applyQuarantineOverride(id,override,qid,{action:'dq.quarantine_resolve',user_id:ADMIN,object_id:qid});
+  expect(await h.db.applyQuarantineOverride(id,override,qid,{action:'dq.quarantine_resolve',user_id:ADMIN,object_id:qid})).toBe('applied');
   const resolve=scripted(INC);
   const fromOverride=vi.fn(()=>resolved({evidence:{bars:[1,2,3],override:{reason_code:'settlement_basis_mismatch'}}}));
   const r=await runSettle(h.deps(stubResolver(resolve,{fromOverride})));
@@ -10339,6 +11157,18 @@ describe('settle state machine (spec §7.2)',()=>{
   expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'unresolved_inconsistency',evidence:{reason_code:'settlement_basis_mismatch'}});
   expect(r.errors).toContainEqual({code:'voided_summary',message:JSON.stringify({unresolved_inconsistency:1})});
   expect(h.tables.rows('dq_quarantine')[0]).toMatchObject({status:'open'});
+ });
+ it('an inconsistency quarantined at settle_by keeps a 7-day review window before the unresolved void',async()=>{
+  const h=await harness();const id=await h.register();
+  h.db.setNow(AFTER);                                   // first resolution happens past settle_by (e.g. cutoff_vintage)
+  await runSettle(h.deps(stubResolver(scripted(INC))));
+  expect(await h.settlements(id)).toEqual([]);          // quarantined, not voided
+  h.db.setNow(new Date(Date.parse(AFTER)+6*86_400_000).toISOString());
+  await runSettle(h.deps(stubResolver(scripted(INC))));
+  expect(await h.settlements(id)).toEqual([]);          // still inside the review window
+  h.db.setNow(new Date(Date.parse(AFTER)+8*86_400_000).toISOString());
+  await runSettle(h.deps(stubResolver(scripted(resolved()))));
+  expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'unresolved_inconsistency'});
  });
 });
 
@@ -10538,8 +11368,10 @@ Expected: FAIL —— `Failed to resolve import "./settle"`。
 // settleOne applies the §7.2 state machine through the pure decide(): exactly one of settle / void (append_settlement
 // under the lease token, request_key `<batch_id>:<judgment_id>:<expected seq>`), defer (release_lease with the §5.4
 // backoff, clamped to settle_by and never in the past) or quarantine (dq_quarantine item with the full evidence +
-// release as inconsistent). A queued override matching the queued inconsistency settles from resolver.fromOverride
-// (no reads); a still-inconsistent row past settle_by voids as unresolved_inconsistency. Counters (§7.5): fetched
+// release as inconsistent). A queued override matching the queued inconsistency (reason_code + evidence_hash; for
+// cutoff_vintage also override.cutoff = settle_by) settles from resolver.fromOverride (no reads); cutoff_vintage
+// rows never resolve before settle_by (planOf, P1-03); a still-inconsistent row past settle_by voids as
+// unresolved_inconsistency. Counters (§7.5): fetched
 // claimed, inserted settled, versioned void, duplicates already_final, quarantined, failed resolver errors, deferred
 // pending / unavailable / lease_lost. preview=true lists the due queue without claiming and reports the decisions.
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
@@ -10583,7 +11415,26 @@ export type Decision=
  |{action:'append';row:AppendRow}
  |{action:'defer';patch:QueuePatch;summary:'pending'|'unavailable';reason:string}
  |{action:'quarantine';reasonCode:string;payload:Record<string,unknown>;patch:QueuePatch};
-export interface DecideInput{judgment:JudgmentRow;queue:QueueRow;resolver:Pick<Resolver,'name'|'version'>;result:ResolverResult|null;now:string;cutoff:string;viaOverride:boolean}
+export interface DecideInput{judgment:JudgmentRow;queue:QueueRow;resolver:Pick<Resolver,'name'|'version'>;result:ResolverResult|null;now:string;cutoff:string;viaOverride:boolean;overrideDiscarded?:boolean}
+export interface SettlePlan{cutoff:string;early:boolean;viaOverride:boolean;overrideDiscarded:boolean}
+
+/**
+ * Which path settles a queue row now (spec §3.4, §7.2, §7.3; plan audit P1-03 / P1-04).
+ * cutoff_vintage: the resolver never runs before settle_by (`early` → defer to settle_by, override or not); at or
+ * after settle_by the cutoff is settle_by, and an override counts only if it was produced from a quarantine raised
+ * by a resolution at that same cutoff (override.cutoff); any other override is discarded and the row re-resolves.
+ * first_observed: cutoff = now and a matching override is used as before. An override matches only the queued
+ * inconsistency it was accepted for: same reason_code AND same evidence_hash.
+ */
+export function planOf(q:QueueRow,now:string):SettlePlan{
+ const vintage=q.label_policy==='cutoff_vintage';
+ const cutoff=vintage?q.settle_by:now;
+ const early=vintage&&now<q.settle_by;
+ const o=q.override;
+ const matches=o!==null&&q.last_status==='inconsistent'&&q.last_detail.reason_code===o.reason_code&&q.last_detail.evidence_hash===o.evidence_hash;
+ const sameCutoff=!vintage||(o!==null&&o.cutoff===cutoff);
+ return {cutoff,early,viaOverride:!early&&matches&&sameCutoff,overrideDiscarded:!early&&matches&&!sameCutoff};
+}
 
 /** §5.4 backoff. pending: now + max(1 d, (estimate − now) / 2); unavailable / error: now + 1 d × min(attempts, 7);
  * inconsistent: min(settle_by, now + 7 d). pending / unavailable / error are clamped to a future settle_by; the
@@ -10604,19 +11455,37 @@ export function predicateHolds(p:Condition['predicate'],v:number|string|boolean)
  const rhs=p.rhs as number;
  return p.op==='>'?v>rhs:p.op==='>='?v>=rhs:p.op==='<'?v<rhs:v<=rhs;
 }
-export const isUnresolvedInconsistency=(q:QueueRow,now:string,viaOverride:boolean)=>!viaOverride&&q.last_status==='inconsistent'&&now>q.settle_by;
+/** Commander decision (plan audit round 1 follow-up): a quarantined inconsistency always gets an admin review window of
+ *  REVIEW_WINDOW_DAYS after it was quarantined, even when quarantined at or near settle_by (cutoff_vintage resolves only at
+ *  settle_by). The settlement cutoff is unchanged; only the void deadline moves. Spec 7th draft §5.4/§7.2. */
+export const REVIEW_WINDOW_DAYS=7;
+export function reviewDeadline(q:QueueRow):string{
+ const at=typeof q.last_detail.quarantined_at==='string'?Date.parse(q.last_detail.quarantined_at):Number.NaN;
+ const win=Number.isFinite(at)?at+REVIEW_WINDOW_DAYS*DAY_MS:Number.NEGATIVE_INFINITY;
+ return new Date(Math.max(Date.parse(q.settle_by),win)).toISOString();
+}
+/** A row still inconsistent past its review deadline with no usable override voids without a read; a discarded (wrong-cutoff) override re-resolves once instead. */
+export const isUnresolvedInconsistency=(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>!plan.viaOverride&&!plan.overrideDiscarded&&q.last_status==='inconsistent'&&now>reviewDeadline(q);
 
-/** The §7.2 table as a pure function; result=null only for the unresolved-inconsistency row (resolver not called). */
+/** The §7.2 table as a pure function; result=null when the resolver was not called (cutoff_vintage before settle_by, or
+ *  the unresolved-inconsistency row). */
 export function decide(x:DecideInput):Decision{
  const {judgment:j,queue:q,result:r,now}=x,settleBy=q.settle_by;
  const meta={resolver:x.resolver.name,resolver_version:x.resolver.version};
  const voided=(reason:string,evidence:Record<string,unknown>):Decision=>({action:'append',row:{kind:'void',outcome:null,realized:null,evidence:{...evidence,observed_at:now},reason,...meta}});
- if(r===null||isUnresolvedInconsistency(q,now,x.viaOverride))
+ // P1-03: cutoff_vintage never settles (nor even resolves) before settle_by, whether or not an override is queued.
+ if(q.label_policy==='cutoff_vintage'&&now<settleBy)
+  return {action:'defer',summary:'pending',reason:'cutoff_vintage',patch:{last_status:'pending',last_detail:{reason:'cutoff_vintage',estimated_at:settleBy},next_attempt_at:settleBy,attempts_increment:0}};
+ const plan={viaOverride:x.viaOverride,overrideDiscarded:x.overrideDiscarded===true};
+ if(r===null||isUnresolvedInconsistency(q,now,plan))
   return voided('unresolved_inconsistency',{reason_code:q.last_detail.reason_code??null,quarantine_id:q.last_detail.quarantine_id??null,settle_by:settleBy});
  if(r.status==='resolved'){
   if(r.label_available_at>settleBy)return voided('no_data:late',{label_available_at:r.label_available_at,settle_by:settleBy});
-  if(q.label_policy==='cutoff_vintage'&&now<settleBy&&!x.viaOverride)
-   return {action:'defer',summary:'pending',reason:'cutoff_vintage',patch:{last_status:'pending',last_detail:{reason:'cutoff_vintage',estimated_at:settleBy},next_attempt_at:settleBy,attempts_increment:0}};
+  // P1-07: the label must also be available by the observation cutoff (now for first_observed, settle_by for
+  // cutoff_vintage): a resolver that returns a later label has not observed it yet.
+  if(r.label_available_at>x.cutoff)
+   return {action:'defer',summary:'pending',reason:'label_after_cutoff',patch:{last_status:'pending',last_detail:{reason:'label_after_cutoff',estimated_at:r.label_available_at},
+    next_attempt_at:backoff('pending',{now,attempts:q.attempts,settleBy,estimatedAt:r.label_available_at}),attempts_increment:0}};
   if(!j.condition)return voided('invalid_condition',{});
   const realized:Realized={value:r.value,...(r.label===undefined?{}:{label:r.label}),unit:r.unit,from:r.from,to:r.to,label_policy:q.label_policy};
   return {action:'append',row:{kind:'settled',outcome:predicateHolds(j.condition.predicate,r.value)?'hit':'miss',realized,
@@ -10633,8 +11502,12 @@ export function decide(x:DecideInput):Decision{
   return {action:'defer',summary:'unavailable',reason:r.failure,patch:{last_status:'unavailable',last_detail:{failure:r.failure},
    next_attempt_at:backoff('unavailable',{now,attempts:q.attempts+1,settleBy}),attempts_increment:1}};
  }
- return {action:'quarantine',reasonCode:r.reason_code,payload:{...r.detail,evidence:r.evidence,evidence_hash:r.evidence_hash,judgment_id:j.judgment_id},
-  patch:{last_status:'inconsistent',last_detail:{reason_code:r.reason_code,evidence_hash:r.evidence_hash},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy}),attempts_increment:0}};
+ // A re-resolution after a discarded (wrong-cutoff) override that is inconsistent again past settle_by gets no new review window.
+ if(x.overrideDiscarded===true&&now>reviewDeadline(q))
+  return voided('unresolved_inconsistency',{reason_code:r.reason_code,quarantine_id:q.last_detail.quarantine_id??null,settle_by:settleBy,override_discarded:true});
+ // cutoff in the payload and last_detail: an acceptance is bound to the cutoff this evidence was resolved at (P1-03).
+ return {action:'quarantine',reasonCode:r.reason_code,payload:{...r.detail,evidence:r.evidence,evidence_hash:r.evidence_hash,judgment_id:j.judgment_id,cutoff:x.cutoff},
+  patch:{last_status:'inconsistent',last_detail:{reason_code:r.reason_code,evidence_hash:r.evidence_hash,cutoff:x.cutoff,quarantined_at:now},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:new Date(Math.max(Date.parse(settleBy),Date.parse(now)+REVIEW_WINDOW_DAYS*DAY_MS)).toISOString()}),attempts_increment:0}};
 }
 
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
@@ -10672,6 +11545,9 @@ async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,lates
    return {item:item(id,'deferred',d.reason),counter:'deferred',summary:{kind:d.summary,reason:d.reason},errors:[]};
   }
   const quarantineId=await quarantine(tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:id,reasonCode:d.reasonCode,payload:d.payload,batchId:ctx.batchId!});
+  // quarantine() reuses an OPEN item with the same key and reason and keeps its old payload: refresh it to THIS
+  // inconsistency so an acceptance names the evidence the queue now holds (plan audit P1-04).
+  await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{payload:d.payload});
   await db.releaseLease(id,q.lease_token!,{...d.patch,last_detail:{...d.patch.last_detail,quarantine_id:quarantineId}});
   return {item:item(id,'quarantined',d.reasonCode),counter:'quarantined',summary:null,errors:[{code:d.reasonCode,key:id}]};
  }catch(e){
@@ -10685,17 +11561,15 @@ export async function settleOne(ctx:SettleContext,q:QueueRow,j:JudgmentRow|null,
  if(!j||j.abstained||!j.condition)return failed(ctx,q,'judgment_missing',`no active judgment for queue row ${q.judgment_id}`);
  let resolver:Resolver;
  try{resolver=(ctx.deps.resolverFor??defaultResolverFor)(j.condition.resolver);}catch(e){return failed(ctx,q,'resolver_unavailable',messageOf(e));}
- const override=q.override;
- const viaOverride=override!==null&&q.last_status==='inconsistent'&&q.last_detail.reason_code===override.reason_code;
- const cutoff=q.label_policy==='cutoff_vintage'&&ctx.now>=q.settle_by?q.settle_by:ctx.now;
+ const plan=planOf(q,ctx.now);
  let result:ResolverResult|null=null;
- if(!isUnresolvedInconsistency(q,ctx.now,viaOverride)){
+ if(!plan.early&&!isUnresolvedInconsistency(q,ctx.now,plan)){
   try{
-   result=viaOverride&&override?resolver.fromOverride(j,override)
-    :await resolver.resolve({judgment:j,cutoff,now:ctx.now,inputsDb:ctx.deps.inputsDb,signal:ctx.signal});
+   result=plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
+    :await resolver.resolve({judgment:j,cutoff:plan.cutoff,now:ctx.now,inputsDb:ctx.deps.inputsDb,signal:ctx.signal});
   }catch(e){return failed(ctx,q,'resolver_failed',messageOf(e));}
  }
- const d=decide({judgment:j,queue:q,resolver,result,now:ctx.now,cutoff,viaOverride});
+ const d=decide({judgment:j,queue:q,resolver,result,now:ctx.now,cutoff:plan.cutoff,viaOverride:plan.viaOverride,overrideDiscarded:plan.overrideDiscarded});
  if(ctx.preview)return {item:planned(j.judgment_id,d),counter:null,summary:null,errors:[]};
  return apply(ctx,j,q,d,latestSeq);
 }
@@ -10716,13 +11590,11 @@ export async function settleNow(deps:SettleDeps,judgmentId:string,o:{actor:strin
  const now=await deps.db.serverTime();
  if(q.leased_until!==null&&q.leased_until>now)return none('leased','lease_held');
  const resolver=(deps.resolverFor??defaultResolverFor)(j.condition.resolver);
- const override=q.override;
- const viaOverride=override!==null&&q.last_status==='inconsistent'&&q.last_detail.reason_code===override.reason_code;
- const cutoff=q.label_policy==='cutoff_vintage'&&now>=q.settle_by?q.settle_by:now;
- const result=isUnresolvedInconsistency(q,now,viaOverride)?null
-  :viaOverride&&override?resolver.fromOverride(j,override)
-  :await resolver.resolve({judgment:j,cutoff,now,inputsDb:deps.inputsDb,signal:deps.signal??new AbortController().signal});
- const d=decide({judgment:j,queue:q,resolver,result,now,cutoff,viaOverride});
+ const plan=planOf(q,now);
+ const result=plan.early||isUnresolvedInconsistency(q,now,plan)?null
+  :plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
+  :await resolver.resolve({judgment:j,cutoff:plan.cutoff,now,inputsDb:deps.inputsDb,signal:deps.signal??new AbortController().signal});
+ const d=decide({judgment:j,queue:q,resolver,result,now,cutoff:plan.cutoff,viaOverride:plan.viaOverride,overrideDiscarded:plan.overrideDiscarded});
  if(d.action==='defer')return none('deferred',d.reason);
  if(d.action==='quarantine')return none('quarantine_pending',d.reasonCode);
  const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:SETTLE_DATASET,codeVersion:deps.codeVersion,triggeredBy:'manual'});
@@ -10825,7 +11697,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/judgments/settle.test.ts src/lib/judgments/compensate.test.ts`
-Expected: PASS（`settle.test.ts` 25 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at`、不改 `last_status / last_detail`（规格 §5.6）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
+Expected: PASS（`settle.test.ts` 28 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at` 并清空租约、不改 `last_status / last_detail`（规格 §5.6，计划审计 P1-04）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
 
 - [ ] **Step 9: 类型检查与 lint**
 
@@ -11366,7 +12238,7 @@ export function adminJudgmentsDb(admin?:ReturnType<typeof getAdminSupabase>):Jud
 export interface ProductionJudgmentDepsOptions{codeVersion:string;actor:'cron'|'script';triggeredBy:TriggeredBy;signal?:AbortSignal;admin?:ReturnType<typeof getAdminSupabase>}
 export function productionJudgmentDeps(o:ProductionJudgmentDepsOptions):SettleDeps;
 // src/lib/dq/judgments-resolver.ts
-export type JudgmentsResolveOutcome='resolved'|'already_resolved'|'resolution_not_applicable'|'invalid_resolution'|'unknown_judgment'|'code_version_unavailable';
+export type JudgmentsResolveOutcome='resolved'|'already_resolved'|'stale'|'resolution_not_applicable'|'invalid_resolution'|'unknown_judgment'|'code_version_unavailable';
 export interface JudgmentsResolveResult{outcome:JudgmentsResolveOutcome;audited:boolean;judgmentId:string|null;resolution:'accept_refetched'|'choose_fact'|'quarantine_rejected'|'plain'|null;seq:number|null}
 export interface JudgmentsResolveDeps{db:JudgmentsDb;tables:TableClient;codeVersion:string|null;now?:()=>Date}
 export function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,input:{status:'resolved_accept'|'resolved_reject';resolution?:unknown;resolvedBy:string}):Promise<JudgmentsResolveResult>;
@@ -11377,7 +12249,8 @@ export async function GET(request:Request):Promise<NextResponse>;export async fu
 
 规格偏差（记入实施记录）：
 - **`code_version` 缺失**：规格 §13 的 `code_version_missing → rejected` 针对登记批次；结算 cron 沿用 facts-sync 先例在路由层拒绝（503 `code_version_unavailable`，不建批次）。`preview=1` 不写库，以 `'preview'` 作代码版本运行。
-- **隔离钩子的 `reject`** 先看该判断最新结算：已是终态（例如到 `settle_by` 已被 `unresolved_inconsistency` 作废）就不再追加（`void → void` 是非法转移），只翻转隔离项；否则以 `request_key = quarantine-reject:<item id>` 追加 `void(quarantine_rejected)`，在一个 `triggered_by='manual'` 的 `judgments.settle` 批次里（结算行 `batch_id` 外键）。`accept` 由 `apply_quarantine_override` 在同一事务里写 `research_audit_log`，所以路由对 `accept` 不再写审计（`audited=true`）；`reject` 与普通项由路由审计（与 facts 一致）。
+- **隔离钩子的 `reject`** 先看该判断最新结算：已是终态（例如到 `settle_by` 已被 `unresolved_inconsistency` 作废）就不再追加（`void → void` 是非法转移），只翻转隔离项（路由审计）；否则经**一个** RPC `rejectQuarantinedSettlement`（计划审计 P1-05：锁队列 → 锁隔离项 → 校验 → `void(quarantine_rejected)` → 项 `resolved_reject` → 审计，同一事务；`request_key = quarantine-reject:<item id>`，在一个 `triggered_by='manual'` 的 `judgments.settle` 批次里），不再"先追加、再翻转"。`accept` 经 `applyQuarantineOverride`（P1-04：同样锁队列再锁项，只接受队列**当前**那次不一致，并吊销在途租约）。两者都在 RPC 内写 `research_audit_log`，所以路由对它们不再审计（`audited=true`）；RPC 报 `stale`（队列已换成另一次不一致或已关闭）→ 结果 `stale`（409，不写任何行）、`item_not_open` → `already_resolved`。普通项由路由审计（与 facts 一致）。
+- **`override.cutoff`**（计划审计 P1-03）取自隔离项 `payload.cutoff`（结算写入的解析截止）；缺失 → `invalid_resolution`。
 - **离线集成用一个手建的方法行** `synthetic_price_return@v1`（`judgment_type` 借用测试专用的 `synthetic_fact_metric`）经 `syncMethodology` 登记——合成 `fact_metric` 方法（Task 13）只覆盖事实结算，本测试要的是 K 线夹具上的 `price_return` 生命周期；`acceptance 5` 的卡片 `lifecycle='withdrawn'` 由 Task 17/18 断言，这里断言证据序列与 `validity.revision` 两次 `+1`。
 - **共享库隔离**：`test:db` 的库被多个套件共用，集成测试用包装的 `claimDue` 只处理本文件登记的判断，别的套件的到期行原样释放。
 
@@ -11484,12 +12357,12 @@ Expected: PASS（3 项）。
 // F4 Task 14 (spec §7.6): verdicts on dataset 'judgments' items. basis_mismatch accept = accept_refetched with the
 // item's own evidence hash (integrity-checked); ambiguous_fact accept = choose_fact whose digest is one of the
 // candidates; base_bar_missing / benchmark_gap accept → resolution_not_applicable; accept writes the override via
-// one RPC (audited there); reject appends void(quarantine_rejected) as admin:<id> unless the judgment is already
-// final, then flips the item; idempotency_conflict items are a plain resolve; everything is idempotent.
+// one RPC (audited there; stale / closed → stale); reject is ONE rejectQuarantinedSettlement RPC (void + flip +
+// audit) unless the judgment is already final (then a plain flip); idempotency_conflict items are a plain resolve;
+// everything is idempotent.
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {digest} from '../judgments/canonical';
-import {JudgmentError} from '../judgments/errors';
 import {PRICE_RESOLVER_VERSION} from '../judgments/resolvers/price';
 import {priceJudgment} from '../judgments/testing/fixtures';
 import type {JudgmentsDb,SettlementRow} from '../judgments/types';
@@ -11501,12 +12374,13 @@ const {row:J}=priceJudgment({baseDate:'2026-01-12',registeredClose:107,batchId:'
 const EVIDENCE={bars:[{date:'2026-01-12',close:106}],result:{value:111/106-1,from:'2026-01-12',to:'2026-01-20',label_available_at:'2026-01-20T21:00:00.000Z'}};
 const H=digest(EVIDENCE);
 const CANDS=[{key:{metric:'q_single_revenue'},value_text:'1000',realized_value:1000},{key:{metric:'q_single_revenue'},value_text:'1001',realized_value:1001}];
-type Stubbed=JudgmentsDb&{getJudgment:ReturnType<typeof vi.fn>;settlementsOf:ReturnType<typeof vi.fn>;applyQuarantineOverride:ReturnType<typeof vi.fn>;appendSettlement:ReturnType<typeof vi.fn>};
+const CUTOFF='2026-03-02T04:00:00.000Z';
+type Stubbed=JudgmentsDb&{getJudgment:ReturnType<typeof vi.fn>;settlementsOf:ReturnType<typeof vi.fn>;applyQuarantineOverride:ReturnType<typeof vi.fn>;rejectQuarantinedSettlement:ReturnType<typeof vi.fn>;appendSettlement:ReturnType<typeof vi.fn>};
 
 let tables:ReturnType<typeof memoryTableClient>;let db:Stubbed;
 beforeEach(()=>{
  tables=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id']});
- db={getJudgment:vi.fn(async()=>J),settlementsOf:vi.fn(async()=>[]),applyQuarantineOverride:vi.fn(async()=>undefined),appendSettlement:vi.fn(async()=>({seq:1,status:'applied'}))} as unknown as Stubbed;
+ db={getJudgment:vi.fn(async()=>J),settlementsOf:vi.fn(async()=>[]),applyQuarantineOverride:vi.fn(async()=>'applied'),rejectQuarantinedSettlement:vi.fn(async()=>({seq:1,status:'applied'})),appendSettlement:vi.fn(async()=>({seq:1,status:'applied'}))} as unknown as Stubbed;
 });
 async function item(reason:string,payload:Record<string,unknown>,table='judgment_settlements'){
  const row={id:ITEM,dataset:'judgments',table_name:table,natural_key:J.judgment_id,reason_code:reason,status:'open',payload,detail:{},batch_id:'00000000-0000-4000-8000-000000000001',resolved_by:null,resolved_at:null,created_at:'2026-03-02T04:00:00.000Z'};
@@ -11519,28 +12393,38 @@ const stored=async()=>(await tables.select('dq_quarantine',{id:ITEM},{limit:1}))
 
 describe('resolveJudgmentsItem',()=>{
  it('basis_mismatch accept_refetched with the item hash → one override RPC carrying the frozen evidence; audited by the RPC',async()=>{
-  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,registered_bar:{close:107}});
+  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,registered_bar:{close:107},cutoff:CUTOFF});
   const r=await run(row,'resolved_accept',{kind:'accept_refetched',evidence_hash:H});
   expect(r).toEqual({outcome:'resolved',audited:true,judgmentId:J.judgment_id,resolution:'accept_refetched',seq:null});
   expect(db.applyQuarantineOverride).toHaveBeenCalledWith(J.judgment_id,
-   {reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:H,evidence:EVIDENCE},evidence_hash:H,resolved_by:ADMIN,at:NOW.toISOString()},
+   {reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:H,evidence:EVIDENCE},evidence_hash:H,resolved_by:ADMIN,at:NOW.toISOString(),cutoff:CUTOFF},
    ITEM,expect.objectContaining({action:'dq.quarantine_resolve',user_id:ADMIN,object_id:ITEM}));
   expect(db.appendSettlement).not.toHaveBeenCalled();
  });
+ it('accept: an item without a resolution cutoff is refused; the RPC answering stale / closed → stale (409), item_not_open → already_resolved (P1-03, P1-04)',async()=>{
+  const noCutoff=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
+  expect((await run(noCutoff,'resolved_accept',{kind:'accept_refetched',evidence_hash:H})).outcome).toBe('invalid_resolution');
+  expect(db.applyQuarantineOverride).not.toHaveBeenCalled();
+  const row={...noCutoff,payload:{evidence:EVIDENCE,evidence_hash:H,cutoff:CUTOFF}};
+  for(const [rpc,outcome] of [['stale','stale'],['closed','stale'],['item_not_open','already_resolved']] as const){
+   db.applyQuarantineOverride.mockResolvedValueOnce(rpc);
+   expect({rpc,o:(await run(row,'resolved_accept',{kind:'accept_refetched',evidence_hash:H})).outcome}).toEqual({rpc,o:outcome});
+  }
+ });
  it('basis_mismatch: missing / wrong-kind / wrong-hash verdicts and tampered stored evidence → invalid_resolution, nothing written',async()=>{
-  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
+  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,cutoff:CUTOFF});
   for(const res of [undefined,'x',{kind:'choose_fact',chosen:CANDS[0]},{kind:'accept_refetched',evidence_hash:'b'.repeat(64)},{kind:'accept_refetched'}])
    expect({res,o:(await run(row,'resolved_accept',res)).outcome}).toEqual({res,o:'invalid_resolution'});
-  const tampered={...row,payload:{evidence:{...EVIDENCE,bars:[]},evidence_hash:H}};
+  const tampered={...row,payload:{evidence:{...EVIDENCE,bars:[]},evidence_hash:H,cutoff:CUTOFF}};
   expect((await run(tampered,'resolved_accept',{kind:'accept_refetched',evidence_hash:H})).outcome).toBe('invalid_resolution');
   expect(db.applyQuarantineOverride).not.toHaveBeenCalled();
  });
  it('ambiguous_fact choose_fact: the chosen object must be one of the candidates (by digest)',async()=>{
-  const row=await item('settlement_ambiguous_fact',{candidates:CANDS,evidence_hash:'c'.repeat(64)});
+  const row=await item('settlement_ambiguous_fact',{candidates:CANDS,evidence_hash:'c'.repeat(64),cutoff:CUTOFF});
   expect((await run(row,'resolved_accept',{kind:'choose_fact',chosen:{...CANDS[1],value_text:'1002'}})).outcome).toBe('invalid_resolution');
   const r=await run(row,'resolved_accept',{kind:'choose_fact',chosen:CANDS[1]});
   expect(r).toMatchObject({outcome:'resolved',audited:true,resolution:'choose_fact'});
-  expect(db.applyQuarantineOverride.mock.calls[0][1]).toEqual({reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:CANDS[1]},evidence_hash:'c'.repeat(64),resolved_by:ADMIN,at:NOW.toISOString()});
+  expect(db.applyQuarantineOverride.mock.calls[0][1]).toEqual({reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:CANDS[1]},evidence_hash:'c'.repeat(64),resolved_by:ADMIN,at:NOW.toISOString(),cutoff:CUTOFF});
  });
  it('base_bar_missing / benchmark_gap cannot be accepted → resolution_not_applicable',async()=>{
   for(const reason of ['settlement_base_bar_missing','settlement_benchmark_gap']){
@@ -11550,35 +12434,44 @@ describe('resolveJudgmentsItem',()=>{
   }
   expect(db.applyQuarantineOverride).not.toHaveBeenCalled();
  });
- it('reject → void(quarantine_rejected) as admin:<id> under request_key quarantine-reject:<item>, in a manual judgments.settle batch; then the item is flipped',async()=>{
+ it('reject → ONE rejectQuarantinedSettlement RPC (void(quarantine_rejected) as admin:<id>, request_key quarantine-reject:<item>, item flip and audit in one transaction) in a manual judgments.settle batch (P1-05)',async()=>{
   const row=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H});
   const r=await run(row,'resolved_reject');
-  expect(r).toEqual({outcome:'resolved',audited:false,judgmentId:J.judgment_id,resolution:'quarantine_rejected',seq:1});
-  expect(db.appendSettlement).toHaveBeenCalledWith(J.judgment_id,null,`quarantine-reject:${ITEM}`,expect.objectContaining({
+  expect(r).toEqual({outcome:'resolved',audited:true,judgmentId:J.judgment_id,resolution:'quarantine_rejected',seq:1});
+  expect(db.rejectQuarantinedSettlement).toHaveBeenCalledWith(J.judgment_id,ITEM,`quarantine-reject:${ITEM}`,expect.objectContaining({
    kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${ADMIN}`,resolver:'price_return',resolver_version:PRICE_RESOLVER_VERSION,code_version:SHA,
-   evidence:{quarantine_id:ITEM,reason_code:'settlement_benchmark_gap',evidence_hash:H}}));
-  const batchId=db.appendSettlement.mock.calls[0][3].batch_id;
+   evidence:{quarantine_id:ITEM,reason_code:'settlement_benchmark_gap',evidence_hash:H}}),expect.objectContaining({action:'dq.quarantine_resolve',user_id:ADMIN,object_id:ITEM}));
+  expect(db.appendSettlement).not.toHaveBeenCalled();
+  const batchId=db.rejectQuarantinedSettlement.mock.calls[0][3].batch_id;
   expect((await tables.select('ingest_batches',{batch_id:batchId},{limit:1}))[0]).toMatchObject({dataset:'judgments.settle',producer:'ts-judgments',triggered_by:'manual',status:'success',counts:expect.objectContaining({fetched:1,versioned:1})});
-  expect(await stored()).toMatchObject({status:'resolved_reject',resolved_by:ADMIN});
+  expect((await stored()).status).toBe('open');                                              // the RPC flips the item; the hook never does it separately
+ });
+ it('reject: the RPC answering stale → stale (nothing written), item_not_open → already_resolved (P1-05)',async()=>{
+  const row=await item('settlement_benchmark_gap',{missing_dates:['2026-01-14'],evidence_hash:H});
+  db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:0,status:'stale'});
+  expect(await run(row,'resolved_reject')).toMatchObject({outcome:'stale',audited:false,seq:null});
+  db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:0,status:'item_not_open'});
+  expect((await run(row,'resolved_reject')).outcome).toBe('already_resolved');
+  expect((await stored()).status).toBe('open');
  });
  it('reject of an already final judgment appends nothing and only flips the item',async()=>{
   const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
   db.settlementsOf.mockResolvedValue([{seq:1,kind:'void',judgment_id:J.judgment_id} as SettlementRow]);
   expect(await run(row,'resolved_reject')).toMatchObject({outcome:'resolved',resolution:'quarantine_rejected',seq:1});
-  expect(db.appendSettlement).not.toHaveBeenCalled();
+  expect(db.appendSettlement).not.toHaveBeenCalled();expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();
   expect((await stored()).status).toBe('resolved_reject');
  });
  it('reject without a code version → code_version_unavailable, nothing written',async()=>{
   const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
   expect((await run(row,'resolved_reject',undefined,null)).outcome).toBe('code_version_unavailable');
-  expect(db.appendSettlement).not.toHaveBeenCalled();expect((await stored()).status).toBe('open');
+  expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();expect((await stored()).status).toBe('open');
  });
  it('idempotent: a resolved item answers already_resolved without writes; the RPC refusing a non-open item is already_resolved too',async()=>{
   const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
   expect((await run({...row,status:'resolved_reject'},'resolved_reject')).outcome).toBe('already_resolved');
-  db.applyQuarantineOverride.mockRejectedValueOnce(new JudgmentError('item_not_open'));
-  expect((await run(row,'resolved_accept',{kind:'accept_refetched',evidence_hash:H})).outcome).toBe('already_resolved');
-  expect(db.appendSettlement).not.toHaveBeenCalled();
+  db.applyQuarantineOverride.mockResolvedValueOnce('item_not_open');
+  expect((await run({...row,payload:{...row.payload,cutoff:CUTOFF}},'resolved_accept',{kind:'accept_refetched',evidence_hash:H})).outcome).toBe('already_resolved');
+  expect(db.appendSettlement).not.toHaveBeenCalled();expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();
  });
  it('idempotency_conflict (table judgments) is a plain resolve without touching settlements',async()=>{
   const row=await item('idempotency_conflict',{registered:{},attempted:{}},'judgments');
@@ -11608,20 +12501,21 @@ Expected: FAIL —— `Failed to resolve import "./judgments-resolver"`。
 // evidence_hash} equal to the item's frozen evidence hash (re-checked against digest(payload.evidence)); the override
 // carries that complete evidence so the next settle run never refetches. settlement_ambiguous_fact → {kind:'choose_fact',
 // chosen} whose digest is one of payload.candidates. settlement_base_bar_missing / settlement_benchmark_gap → only
-// reject (resolution_not_applicable). Accept = apply_quarantine_override: override + next_attempt_at = now + item flip +
-// research_audit_log in ONE transaction (audited=true: the route must not audit again). Reject of a settlement item
-// appends void(quarantine_rejected) as admin:<id> (request_key quarantine-reject:<item id>, a manual judgments.settle
-// batch) unless the judgment is already final, then flips the item; other judgments reasons (idempotency_conflict on
-// table judgments) are a plain resolveQuarantine. Idempotent: an item that is no longer open → already_resolved.
+// reject (resolution_not_applicable). Accept = apply_quarantine_override: locks queue then item, accepts only the
+// queue's CURRENT inconsistency, revokes any lease, flips the item and writes research_audit_log in ONE transaction
+// (audited=true: the route must not audit again); override.cutoff = payload.cutoff (P1-03). Reject of a settlement
+// item = reject_quarantined_settlement: void(quarantine_rejected) as admin:<id> (request_key quarantine-reject:<item
+// id>, a manual judgments.settle batch) + item flip + audit in ONE transaction (plan audit P1-05), unless the
+// judgment is already final (then a plain flip). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
+// already_resolved. Other judgments reasons (idempotency_conflict on table judgments) are a plain resolveQuarantine.
 import type {Row,TableClient} from '../db/table-client';
 import {digest} from '../judgments/canonical';
-import {JudgmentError} from '../judgments/errors';
 import {resolverFor} from '../judgments/resolvers';
 import type {JudgmentsDb,QuarantineOverride} from '../judgments/types';
 import {emptyCounts,finishBatch,startBatch} from './batches';
 import {resolveQuarantine} from './quarantine';
 
-export type JudgmentsResolveOutcome='resolved'|'already_resolved'|'resolution_not_applicable'|'invalid_resolution'|'unknown_judgment'|'code_version_unavailable';
+export type JudgmentsResolveOutcome='resolved'|'already_resolved'|'stale'|'resolution_not_applicable'|'invalid_resolution'|'unknown_judgment'|'code_version_unavailable';
 export interface JudgmentsResolveResult{outcome:JudgmentsResolveOutcome;audited:boolean;judgmentId:string|null;resolution:'accept_refetched'|'choose_fact'|'quarantine_rejected'|'plain'|null;seq:number|null}
 export interface JudgmentsResolveDeps{db:JudgmentsDb;tables:TableClient;codeVersion:string|null;now?:()=>Date}
 
@@ -11643,59 +12537,63 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
  if(!judgment||!judgment.condition)return result('unknown_judgment');
  const payload=isObj(item.payload)?item.payload:{};
  const evidenceHash=typeof payload.evidence_hash==='string'?payload.evidence_hash:null;
+ const jid=judgment.judgment_id;
+ const audit=(extra:Record<string,unknown>)=>({action:'dq.quarantine_resolve',user_id:input.resolvedBy,object_id:id,
+  detail:{id,status:input.status,outcome:'resolved',reason_code:reason,judgment_id:jid,evidence_hash:evidenceHash,...extra}});
  if(input.status==='resolved_accept'){
   if(REJECT_ONLY.includes(reason))return result('resolution_not_applicable');
   const res=input.resolution;
-  if(!isObj(res))return result('invalid_resolution');
+  const cutoff=typeof payload.cutoff==='string'?payload.cutoff:null;   // the resolution cutoff of this inconsistency (P1-03)
+  if(!isObj(res)||cutoff===null)return result('invalid_resolution');
   const at=(deps.now??(()=>new Date()))().toISOString();
   let override:QuarantineOverride;
   if(reason==='settlement_basis_mismatch'){
    if(res.kind!=='accept_refetched'||typeof res.evidence_hash!=='string'||evidenceHash===null||res.evidence_hash!==evidenceHash||!isObj(payload.evidence)||digest(payload.evidence)!==evidenceHash)return result('invalid_resolution');
-   override={reason_code:reason,resolution:{kind:'accept_refetched',evidence_hash:evidenceHash,evidence:payload.evidence},evidence_hash:evidenceHash,resolved_by:input.resolvedBy,at};
+   override={reason_code:reason,resolution:{kind:'accept_refetched',evidence_hash:evidenceHash,evidence:payload.evidence},evidence_hash:evidenceHash,resolved_by:input.resolvedBy,at,cutoff};
   }else{
    const candidates=Array.isArray(payload.candidates)?payload.candidates:[];
    const chosen=res.chosen;
    if(res.kind!=='choose_fact'||!isObj(chosen)||!candidates.some(c=>digest(c)===digest(chosen)))return result('invalid_resolution');
-   override={reason_code:reason,resolution:{kind:'choose_fact',chosen},evidence_hash:evidenceHash??digest(candidates),resolved_by:input.resolvedBy,at};
+   override={reason_code:reason,resolution:{kind:'choose_fact',chosen},evidence_hash:evidenceHash??digest(candidates),resolved_by:input.resolvedBy,at,cutoff};
   }
-  try{
-   await deps.db.applyQuarantineOverride(judgment.judgment_id,override,id,{action:'dq.quarantine_resolve',user_id:input.resolvedBy,object_id:id,
-    detail:{id,status:input.status,outcome:'resolved',reason_code:reason,resolution:override.resolution.kind,judgment_id:judgment.judgment_id,evidence_hash:override.evidence_hash}});
-  }catch(e){
-   if(e instanceof JudgmentError&&e.code==='item_not_open')return result('already_resolved');
-   throw e;
-  }
+  const status=await deps.db.applyQuarantineOverride(judgment.judgment_id,override,id,audit({resolution:override.resolution.kind,evidence_hash:override.evidence_hash}));
+  if(status==='item_not_open')return result('already_resolved');
+  if(status!=='applied')return result('stale');
   return result('resolved',{audited:true,resolution:override.resolution.kind});
  }
  if(!deps.codeVersion)return result('code_version_unavailable');
  const latest=(await deps.db.settlementsOf([judgment.judgment_id])).reduce<{seq:number;kind:string}|null>((m,s)=>!m||s.seq>m.seq?{seq:s.seq,kind:s.kind}:m,null);
- let seq:number|null=latest?.seq??null;
- if(!latest||!FINAL.has(latest.kind)){
-  const resolver=resolverFor(judgment.condition.resolver);
-  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:deps.codeVersion,triggeredBy:'manual'});
-  const counts={...emptyCounts(),fetched:1};
-  try{
-   const appended=await deps.db.appendSettlement(judgment.judgment_id,null,`quarantine-reject:${id}`,{kind:'void',outcome:null,realized:null,
-    evidence:{quarantine_id:id,reason_code:reason,evidence_hash:evidenceHash},resolver:resolver.name,resolver_version:resolver.version,reason:'quarantine_rejected',
-    actor:`admin:${input.resolvedBy}`,code_version:deps.codeVersion,batch_id:batchId});
-   seq=appended.seq;
-   if(appended.status==='applied')counts.versioned=1;else counts.duplicates=1;
-   await finishBatch(deps.tables,batchId,{counts,errors:appended.status==='request_key_conflict'?[{code:'request_key_conflict',key:judgment.judgment_id}]:[]});
-  }catch(e){
-   counts.failed=1;
-   await finishBatch(deps.tables,batchId,{counts,errors:[{code:'append_failed',key:judgment.judgment_id,message:e instanceof Error?e.message:String(e)}]}).catch(()=>undefined);
-   throw e;
-  }
+ if(latest&&FINAL.has(latest.kind)){
+  const flipped=await resolveQuarantine(deps.tables,id,{status:'resolved_reject',resolvedBy:input.resolvedBy});
+  return result(flipped==='resolved'?'resolved':'already_resolved',{resolution:'quarantine_rejected',seq:latest.seq});
  }
- const flipped=await resolveQuarantine(deps.tables,id,{status:'resolved_reject',resolvedBy:input.resolvedBy});
- return result(flipped==='resolved'?'resolved':'already_resolved',{resolution:'quarantine_rejected',seq});
+ const resolver=resolverFor(judgment.condition.resolver);
+ const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const counts={...emptyCounts(),fetched:1};
+ try{
+  // P1-05: void + item flip + audit in ONE transaction (locks queue then item; replay-safe on the request key).
+  const r=await deps.db.rejectQuarantinedSettlement(judgment.judgment_id,id,`quarantine-reject:${id}`,{kind:'void',outcome:null,realized:null,
+   evidence:{quarantine_id:id,reason_code:reason,evidence_hash:evidenceHash},resolver:resolver.name,resolver_version:resolver.version,reason:'quarantine_rejected',
+   actor:`admin:${input.resolvedBy}`,code_version:deps.codeVersion,batch_id:batchId},audit({resolution:'quarantine_rejected'}));
+  if(r.status==='applied')counts.versioned=1;else counts.duplicates=1;
+  const errors=r.status==='applied'||r.status==='already_applied'?[]:[{code:`quarantine_reject_${r.status}`,key:judgment.judgment_id}];
+  await finishBatch(deps.tables,batchId,{counts,errors});
+  if(r.status==='applied'||r.status==='already_applied')return result('resolved',{audited:true,resolution:'quarantine_rejected',seq:r.seq});
+  if(r.status==='item_not_open')return result('already_resolved');
+  if(r.status==='stale')return result('stale');
+  throw new Error(`reject_quarantined_settlement: ${r.status} for ${judgment.judgment_id}`);
+ }catch(e){
+  counts.failed=1;
+  await finishBatch(deps.tables,batchId,{counts,errors:[{code:'reject_failed',key:judgment.judgment_id,message:e instanceof Error?e.message:String(e)}]}).catch(()=>undefined);
+  throw e;
+ }
 }
 ```
 
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/dq/judgments-resolver.test.ts`
-Expected: PASS（10 项）。
+Expected: PASS（12 项）。
 
 - [ ] **Step 9: 给隔离路由加 judgments 分支的失败测试（`route.test.ts`，围栏内）**
 
@@ -11747,7 +12645,7 @@ describe('POST /api/admin/dq/quarantine/[id] — judgments items (F4, spec §7.6
     expect(mocks.insert).not.toHaveBeenCalled();
   });
 
-  it('a reject is audited by the route with the judgment, verdict and settlement seq', async () => {
+  it('a reject of an already-final judgment (plain flip, audited: false) is audited by the route with the judgment, verdict and settlement seq', async () => {
     f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: false, judgmentId: JUDGMENT, resolution: 'quarantine_rejected', seq: 2 });
     const res = await json({ status: 'resolved_reject' });
     expect(res.status).toBe(200);
@@ -11759,7 +12657,7 @@ describe('POST /api/admin/dq/quarantine/[id] — judgments items (F4, spec §7.6
   });
 
   it('maps hook outcomes to HTTP statuses without auditing failures', async () => {
-    const cases: [string, number][] = [['resolution_not_applicable', 400], ['invalid_resolution', 400], ['unknown_judgment', 404], ['code_version_unavailable', 503], ['already_resolved', 409]];
+    const cases: [string, number][] = [['resolution_not_applicable', 400], ['invalid_resolution', 400], ['unknown_judgment', 404], ['code_version_unavailable', 503], ['already_resolved', 409], ['stale', 409]];
     for (const [outcome, status] of cases) {
       f4.resolveJudgments.mockResolvedValueOnce({ outcome, audited: false, judgmentId: JUDGMENT, resolution: null, seq: null });
       const res = await json({ status: 'resolved_accept', resolution: { kind: 'accept_refetched', evidence_hash: H } });
@@ -11813,6 +12711,8 @@ const HTTP_STATUS: Record<Outcome, number> = {
   // F4 judgments.* items (spec §7.6): verdicts that cannot apply or do not match the item are 400; the settlement
   // reject needs VERCEL_GIT_COMMIT_SHA for its batch (503 without it)
   resolution_not_applicable: 400, invalid_resolution: 400, unknown_judgment: 404, code_version_unavailable: 503,
+  // the queue moved to another inconsistency or closed meanwhile (plan audit P1-04 / P1-05): nothing was written
+  stale: 409,
   // /F4
 };
 ```
@@ -12198,7 +13098,7 @@ describe.skipIf(!enabled)('F4 settlement core on real PostgreSQL',()=>{
   expect(await admin(id,'withdrawn','correction',2)).toEqual({seq:2,status:'already_applied'});   // request_key replay converges
  }));
 
- it('basis mismatch → quarantined on the real dq tables (partial); past settle_by the next pass voids it as unresolved_inconsistency',async()=>withClaimLock(pool,async()=>{
+ it('basis mismatch → quarantined on the real dq tables (partial); after the review window the next pass voids it as unresolved_inconsistency',async()=>withClaimLock(pool,async()=>{
   const id=await register({registeredClose:107});
   const r=await settle();
   expect(r).toMatchObject({status:'partial',counts:{fetched:1,quarantined:1}});
@@ -12206,6 +13106,10 @@ describe.skipIf(!enabled)('F4 settlement core on real PostgreSQL',()=>{
   expect(item).toMatchObject({table_name:'judgment_settlements',reason_code:'settlement_basis_mismatch',status:'open',batch_id:r.batchId});
   expect((item.payload as {evidence_hash:string}).evidence_hash).toMatch(/^[0-9a-f]{64}$/);
   expect(await db.queueRow(id)).toMatchObject({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',quarantine_id:item.id}});
+  await settle();
+  expect(await history(id)).toEqual([]);   // inside the 7-day review window (REVIEW_WINDOW_DAYS): not voided yet
+  // Simulate the review window elapsing (owner connection; the table has no client write grants).
+  await pool.query(`update public.judgment_settle_queue set next_attempt_at=now(), last_detail=last_detail||jsonb_build_object('quarantined_at',to_char((now()-interval '8 days') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) where judgment_id=$1`,[id]);
   await settle();
   expect(await history(id)).toEqual([[1,'void','unresolved_inconsistency']]);
   expect((await tables.select('dq_quarantine',{id:item.id as string},{limit:1}))[0].status).toBe('open');
@@ -12278,6 +13182,7 @@ export interface CalibrationOptions{threshold_n:number;ece_max:number;embargo_da
 export interface Evaluation{state:Exclude<CalibrationState,'self_assessed'>;n_registered:number;n_settled:number;n_independent:number;n_void:number;n_retrospective_excluded:number;metrics:Record<string,unknown>;reliability:ReliabilityBin[];isotonic_segments:IsotonicSegment[]|null;entries:EvaluatedEntry[]}
 export function addDays(iso:string,n:number):string;
 export function windowEndOf(target:Target):string;
+export function settledWindowEndOf(j:JudgmentRow,s:SettlementRow|null):string;
 export function optionsOf(params:Record<string,number|string>):CalibrationOptions&{window_years:number};
 export function entryOf(e:Envelope):CohortEntry|null;
 export function groupOf(e:Pick<CohortEntry,'subject_type'|'subject_key'>):string;
@@ -12303,7 +13208,7 @@ export function envelope(p?:EnvelopeSpec):Envelope;
 
 **度量与门控的精确定义**（实现与 Python 预言机逐条一致；`metrics` 的键集合由测试严格比对）：
 - cohort = 传入的全部条目；`settled` = `lifecycle='settled'`；样本 = `settled ∧ ¬retrospective ∧ y≠null`；`n_total` = 样本数（只报告，不门控）。
-- 独立样本：按 `groupOf = subject_type:subject_key` 分流，流内按 `(as_of, judgment_id)` 升序，取第一条，之后只取 `as_of > 上一条选中的 window_end + embargo_days` 的条目（贪心、确定性）。`window_end` 由 `windowEndOf(target)`：`date` → 该日；`period` → 月末；`fiscal_period` → `period_end`；`session_index` → `base_date + ceil(n×1.52)` 天。
+- 独立样本：按 `groupOf = subject_type:subject_key` 分流，流内按 `(as_of, judgment_id)` 升序，取第一条，之后只取 `as_of > 上一条选中的 window_end + embargo_days` 的条目（贪心、确定性）。`window_end` 由 `settledWindowEndOf(judgment, settlement)`（计划审计 P1-09）：已结算的 `price_return` 判断取结算冻结证据的实际终点 bar 日期 `realized.to`（节假日 / 停牌使 n 个交易日超出任何自然日估计）；其余取 `windowEndOf(target)`：`date` → 该日；`period` → 月末；`fiscal_period` → `period_end`；`session_index` → `base_date + ceil(n×1.52)` 天（只是未结算判断的扫描窗口估计，不是上界；未结算判断不是样本，不参与抽样）。
 - 所有指标只在独立样本上算（按 `(as_of, judgment_id)` 排序后从左到右求和），`correlated` 子对象给全体样本的参考值。
 - probability：`brier = mean((p−y)²)`；`brier_climatology = mean((ȳ−y)²)`；`brier_skill = 1 − brier/climatology`，分母 0 → `null`；10 个等宽箱，箱号 `min(9, floor(p×10))`，每箱 `{bin_low:i/10, bin_high:(i+1)/10, n, mean_p, hit_rate, wilson_low, wilson_high}`（`wilson` 来自 fan-out，95%，结果已 round6；空箱 `mean_p/hit_rate/wilson_*` 为 `null`）；`ece_raw = Σ (n_b/n)|mean_p_b − hit_b|`。时间外留出：训练段 = 前 `floor(7n/10)` 条，其余为留出段；`boundary` = 训练段 `window_end` 最大值（跨主体）；留出段剔除 `as_of ≤ boundary` 的条目（`n_dropped_overlap`）；剔除后不足 `HOLDOUT_MIN=20` → `ece_raw_holdout / brier_holdout / brier_skill_holdout / ece_mapped_holdout` 全为 `null`；否则 `ece_mapped_holdout` = 用 `isotonicFit(训练段)` 经 `applyIsotonic` 映射留出段后的 ECE（只报告）。`isotonic_segments` = 训练段拟合（独立样本为 0 时 `null`）。状态：`n_independent < threshold_n` 或 `ece_raw_holdout = null` → `insufficient`；`ece_raw_holdout ≤ ece_max ∧ brier_skill_holdout > 0` → `calibrated`；否则 `failed`。
 - categorical：`accuracy` = `selected = y` 的比例 + Wilson；`majority_class` = 独立样本实现类别中最多者（并列取字典序最小），`majority_rate` = 其占比；`confusion[selected][realized]`；`margin_bins`：`margin_pp` 非 null 时 `<5` 进 [0,5)、`5 ≤ m < 15` 进 [5,15)、`≥ 15` 进 [15,100]（含 >100）；`n_missing_margin`。状态：样本不足 → `insufficient`；`Wilson 下界 > majority_rate` → `calibrated`；否则 `failed`。`reliability = []`。
@@ -12312,7 +13217,7 @@ export function envelope(p?:EnvelopeSpec):Envelope;
 
 **规格偏差（记入实施记录）：**
 1. 留出段的 `brier_skill_holdout` 用留出段自身的 ȳ 作气候基准（与 §8.1 `brier_climatology` 的"同一样本 ȳ"定义一致）。
-2. `session_index` 的目标窗口终点取 §3.4 的自然日上界 `ceil(n×1.52)`，独立抽样只看判断行自身字段（不依赖结算证据里的实际终点日）。
+2. 已结算 `price_return` 判断的目标窗口终点取结算 `realized.to`（冻结证据里的实际终点 bar 日期）；`ceil(n×1.52)` 只是扫描窗口（非上界），只用于没有实际终点的判断（规格第 7 稿 §8.2；计划审计 P1-09）。
 3. 留出段边界取训练段全部样本 `window_end` 的最大值（跨主体，保守）。
 4. interval 的 `scenarios` 逐情景 probability 评估 v1 不做：v1 没有 interval 方法，情景事件定义归公司规格；`metrics` 不含该键，公司规格登记首个 interval 方法时以新 `ALGORITHM_VERSION` 补。
 5. §14.1 要求期望值"用 `sklearn.calibration.calibration_curve` + 手写 Brier 算出"：本机 `python3 -I -c "import sklearn"` 与 `import numpy` 均 `ModuleNotFoundError`（2026-11-06 实测），所以预言机是纯 Python，手写 Wilson、PAV、分箱并逐个注明对应的 fan-out 函数；没有 sklearn 交叉核对。降级路径：若日后环境有 sklearn，在 `expected.py` 末尾追加一个只打印到 stderr 的 `calibration_curve(y, p, n_bins=10, strategy='uniform')` 对照，不改 JSON。
@@ -12747,7 +13652,7 @@ export function calibrationRow(p:Partial<CalibrationRow>={}):CalibrationRow{
   valid_until:'2026-11-23T04:00:00.000Z',validity_revision:1,
   metrics:{n_total:118,brier:0.18,brier_skill:0.21,ece_raw:0.05,hit_rate:{rate:0.64,low:0.55,high:0.72},temporal_split:{ece_raw_holdout:0.06,brier_skill_holdout:0.12}},
   reliability:[],isotonic_segments:null,cohort_path:`cohorts/${HEX('9')}.json`,cohort_sha256:HEX('9'),
-  query_bounds:{window_from:'2023-11-09',window_to:'2026-11-09',registered_at_lte:'2026-11-09T04:00:00.000Z',settled_at_lte:'2026-11-09T04:00:00.000Z'},
+  query_bounds:{window_from:'2023-11-09',window_to:'2026-11-09',registered_at_lte:'2026-11-09T04:00:00.000Z',settled_at_lte:'2026-11-09T04:00:00.000Z',frozen_at:'2026-11-09T04:00:00.000Z',n:140},
   fingerprint:HEX('8'),algorithm_version:'judgments-calibration/1',code_version:'abcdef1',computed_at:'2026-11-09T04:00:00.000Z',batch_id:BATCH,...p};
 }
 export interface EnvelopeSpec{judgment?:Partial<JudgmentRow>&{n?:number};settlement?:Partial<SettlementRow>|null;calibration?:Partial<CalibrationRow>|null;calibration_valid?:boolean;methodology_state?:Partial<MethodologyEvent>|null}
@@ -12902,6 +13807,26 @@ describe('helpers',()=>{
   const price=envelope({judgment:{condition:{resolver:'price_return',params:{ticker:'600519',market:'A',adjustment:'qfq',source:'eastmoney',base_date:'2026-01-02'},predicate:{op:'>',rhs:0},text:{zh:'涨',en:'up'}}}});
   expect(entryOf(price)!.market).toBe('A');
  });
+ it('settled price windows end at the frozen end bar, not at ceil(n × 1.52): a holiday / suspension stretch keeps overlapping outcomes dependent (P1-09)',()=>{
+  const cond=(base:string)=>({resolver:'price_return' as const,params:{ticker:'600519',market:'A' as const,adjustment:'qfq' as const,source:'eastmoney' as const,base_date:base},predicate:{op:'>' as const,rhs:0},text:{zh:'涨',en:'up'}});
+  const sess=(base:string)=>({kind:'session_index' as const,base_date:base,n:5});
+  const realized=(from:string,to:string)=>({value:0.02,unit:'ratio',from,to,label_policy:'first_observed' as const});
+  // n=5 from 2026-01-30: the scan estimate is 2026-02-07, but the Spring Festival closure puts the 5th session on 2026-02-24.
+  const holiday=envelope({judgment:{n:1,subject_type:'issuer',as_of:'2026-01-30',condition:cond('2026-01-30'),target:sess('2026-01-30')},settlement:{resolver:'price_return',realized:realized('2026-01-30','2026-02-24')}});
+  expect(windowEndOf(sess('2026-01-30'))).toBe('2026-02-07');
+  expect(entryOf(holiday)!.window_end).toBe('2026-02-24');
+  // A suspended stock: 5 sessions span two months.
+  const suspended=envelope({judgment:{n:3,as_of:'2026-03-02',condition:cond('2026-03-02'),target:sess('2026-03-02')},settlement:{resolver:'price_return',realized:realized('2026-03-02','2026-05-06')}});
+  expect(entryOf(suspended)!.window_end).toBe('2026-05-06');
+  // Unsettled / void price judgments and non-price judgments keep the target-derived end.
+  expect(entryOf(envelope({judgment:{n:4,as_of:'2026-01-30',condition:cond('2026-01-30'),target:sess('2026-01-30')}}))!.window_end).toBe('2026-02-07');
+  expect(entryOf(envelope({judgment:{n:5,as_of:'2026-01-30',condition:cond('2026-01-30'),target:sess('2026-01-30')},settlement:{kind:'void',outcome:null,realized:null,reason:'no_data'}}))!.window_end).toBe('2026-02-07');
+  expect(entryOf(envelope({settlement:{outcome:'hit'}}))!.window_end).toBe('2026-01-12');   // fact_metric: realized.to is not a window end
+  // Selection: a same-stock judgment registered 2026-02-10 overlaps the holiday-stretched window → not independent.
+  const next=envelope({judgment:{n:2,as_of:'2026-02-10',condition:cond('2026-02-10'),target:sess('2026-02-10')},settlement:{settlement_id:uuidOf(700002),resolver:'price_return',realized:realized('2026-02-10','2026-02-27')}});
+  const entries=[holiday,next].map(x=>entryOf(x)!);
+  expect([...selectIndependent(entries,0)]).toEqual([uuidOf(1)]);
+ });
 });
 ```
 
@@ -12921,7 +13846,7 @@ Expected: FAIL — `Failed to resolve import "./calibration"`（模块不存在�
 // fixtures/judgments/calibration/expected.py (an independent Python oracle), never from this file.
 import {applyIsotonic,isotonicFit,wilson} from '../research/fanout/calibration';
 import type {IsotonicSegment} from '../research/fanout/calibration';
-import type {CalibrationState,Envelope,Kind,PriceMarket,ReliabilityBin,SettlementRow,Target,Claim,ProbabilityClaim,CategoricalClaim,ScoreClaim,IntervalClaim} from './types';
+import type {CalibrationState,Envelope,JudgmentRow,Kind,PriceMarket,ReliabilityBin,SettlementRow,Target,Claim,ProbabilityClaim,CategoricalClaim,ScoreClaim,IntervalClaim} from './types';
 
 export const ALGORITHM_VERSION='judgments-calibration/1';
 /** Holdout = the last 30% by as_of: train = floor(7n/10) (integer arithmetic, no float rounding). */
@@ -12951,7 +13876,8 @@ export interface Evaluation{
 const DAY=86_400_000;
 export const addDays=(iso:string,n:number):string=>new Date(Date.parse(`${iso}T00:00:00.000Z`)+n*DAY).toISOString().slice(0,10);
 const monthEnd=(period:string):string=>{const [y,m]=period.split('-').map(Number);return new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);};
-/** Last calendar day of the target window [as_of, window_end] (spec §8.2). session_index uses the §3.4 natural-day upper bound ceil(n × 1.52). */
+/** Target-derived last calendar day of the window [as_of, window_end] (spec §8.2). session_index uses the §7.3 scan
+ *  window ceil(n × 1.52) — an estimate, NOT an upper bound (holidays / suspensions can exceed it). */
 export function windowEndOf(target:Target):string{
  switch(target.kind){
   case 'date':return target.date;
@@ -12992,6 +13918,14 @@ function realizedY(kind:Kind,s:SettlementRow):number|string|null{
  if(typeof v==='boolean')return v?1:0;
  return typeof v==='number'&&Number.isFinite(v)?v:null;
 }
+const ISO_DATE=/^\d{4}-\d{2}-\d{2}$/;
+/** The actually settled window end (spec §8.2 第 7 稿; plan audit P1-09): a settled price_return judgment ends at its
+ *  frozen end bar (realized.to, the date the resolver's evidence ends on); every other judgment — and any price
+ *  settlement without a usable realized.to — uses the target-derived windowEndOf. */
+export function settledWindowEndOf(j:JudgmentRow,s:SettlementRow|null):string{
+ const to=s&&s.kind==='settled'&&j.condition?.resolver==='price_return'?s.realized?.to??null:null;
+ return typeof to==='string'&&ISO_DATE.test(to)?to:windowEndOf(j.target!);
+}
 /** Envelope (calibration_cohort row) → cohort entry; abstained rows are not in the cohort (null). */
 export function entryOf(e:Envelope):CohortEntry|null{
  const j=e.judgment;
@@ -13002,7 +13936,7 @@ export function entryOf(e:Envelope):CohortEntry|null{
  return {
   judgment_id:j.judgment_id,subject_type:j.subject_type,subject_key:j.subject_key,
   market:c&&c.resolver==='price_return'?c.params.market:null,
-  as_of:j.as_of,window_end:windowEndOf(j.target),retrospective:j.retrospective,lifecycle,
+  as_of:j.as_of,window_end:settledWindowEndOf(j,s),retrospective:j.retrospective,lifecycle,
   settlement_id:s?.settlement_id??null,forecast:forecastOf(j.kind,j.claim),
   y:lifecycle==='settled'&&s?realizedY(j.kind,s):null,
  };
@@ -13270,6 +14204,8 @@ export function fingerprintOf(x:{methodology_id;methodology_version;scope_type;s
 export function stepUnit(ctx:StepContext,unit:Unit):Promise<StepOutcome>;
 export function runUnit(ctx:StepContext,unit:Unit,outOfBudget:()=>boolean):Promise<{outcome:UnitOutcome;pages:number;calibration_id?:string;infos:BatchError[]}>;
 export function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>;
+export const ROUND_JOB:string;                                   // jobKey('calibrate_round') (P2-02)
+export interface RoundState{round:number;done:string[]}          // unit jobs finished (or failed) in the current round
 export interface UnitPreview{job:string;methodology_id:string;version:string;scope:CalibrationScope;state:'idle'|'paging'|'finalizing'|'invalid';generation:string|null;pages:number;expected_revision:number|null;current_revision:number;stale:boolean}
 export function previewCalibrate(deps:Pick<CalibrateDeps,'db'|'methods'>):Promise<UnitPreview[]>;
 // src/lib/judgments/calibrate-deps.ts
@@ -13279,11 +14215,12 @@ export const dynamic='force-dynamic'; export const maxDuration=300; export funct
 ```
 
 **流程（规格 §8.3 逐条）**：工作单元 = `(方法@版本, scope)`，scope = `all` + 方法 `markets` 中每个价格市场 + 方法 `subject_types` 中每个公共主体类型；按 `REGISTRY` 顺序。单元状态存 `judgment_job_state[jobKey('calibrate',…)]`，空对象 `{}` = 空闲。`stepUnit` 每次重读已提交状态再做一步：
-1. 空闲 → 读 `calibrationValidity().revision` 为 `expected_revision`，`cutoff = serverTime()`，`window = [cutoff 日期 − window_years 年, cutoff 日期]`，`query_bounds = {window_from, window_to, registered_at_lte: cutoff, settled_at_lte: cutoff}` 一次固定（R03），新 `generation`；CAS 写入（失败 → `conflict`）。
-2. 分页 → `calibrationCohortInternal(…, cutoff, after, pageSize)`（service role，R04）；本页（按 scope 过滤后的 `CohortEntry[]`）规范化为字节，上传到**每次上传唯一**的 `partial/<unitPath>/<generation>/<after|start>.<attempt_uuid>.json`（`upsert:false`；已存在 → `cohort_path_collision` 抛错，S01）；**一次** CAS 同时追加 manifest `{start_after, end_after, path, sha256, count}` 并推进 `after`（本页不满 → `done=true`）。CAS 失败 → 只删除本次 attempt 的对象（`page_lost`），下一步重读 `after`。上传后、CAS 前崩溃 → 孤儿对象不在任何 manifest 里，永不被读；重试用新 attempt uuid。空页 → CAS 置 `done`。
-3. 收尾 → 只读 manifest 列出的对象，逐个校验 `sha256`、`generation`、`start_after/end_after` 链与 `count`（任一不符 → 清空单元并以 `cohort_object_invalid` 失败，下次从头）；`evaluateCohort`；cohort 文件 `{algorithm_version, methodology_id, methodology_version, scope_type, scope_key, query_bounds, entries}` 内容寻址写到 `cohorts/<cohort_sha256>.json`；`fingerprint` 按 §5.5；`calibration_id = uuidV8(fingerprint)`；`computed_at = serverTime()`，`valid_until = computed_at + 14 天`；`insertCalibration(row{validity_revision: expected_revision}, expected_revision)`：`inserted | duplicate` → CAS 清空（清空失败 → 信息码 `job_state_conflict`，下次同指纹 `duplicate` 再清，R05）并删除本代际 manifest 对象；`stale_revision` → 清空，本次运行内以新代际重算一次（第二次仍 stale → `deferred` + `stale_revision`，下次运行重来）。
-4. 预算：`deadline − now < 30 s` 就不再做下一步（单元 `paused`，信息码 `deadline_hit`，下次从 `after` 续同一 generation / cutoff / bounds）；未开始的单元同样记 `deadline_hit`。
-5. 批次：`startBatch({producer:'ts-judgments', dataset:'judgments.calibrate'})` 前先 `repairStaleBatches('judgments.calibrate', 900)`；计数：`fetched` = 开始处理的单元数，`inserted` / `duplicates` = 插入 / 重复的单元，`deferred` = paused / conflict / stale 的单元，`failed` = 抛错的单元（错误 `{code, key: job, message}`）；`finally` 里 `finishBatch` + `recordAttempt('judgments.calibrate', {ok: success|partial, cadence:'event'})`。
+1. 空闲 → 读 `calibrationValidity().revision` 为 `expected_revision`，`cutoff = serverTime()`（只用于定窗口），`window = [cutoff 日期 − window_years 年, cutoff 日期]`，新 `generation`；**先** `freezeCalibrationCohort(generation, …, window)`（计划审计 P1-10：一条语句、一个 MVCC 快照冻结全部成员及其当时最新结算），`query_bounds = {window_from, window_to, registered_at_lte: frozen_at, settled_at_lte: frozen_at, frozen_at, n}` 一次固定；再 CAS 写入单元状态（失败 → `clearCalibrationGeneration(generation)` 删掉自己冻结的集合，`conflict`）。冻结后、CAS 前崩溃 → 该代际的成员行无人引用、永不被读（运行手册给出查询与清理语句）。
+2. 分页 → `cohortMembers(generation, after, pageSize)`（service role，R04；读冻结集，keyset `judgment_id`）；本页（按 scope 过滤后的 `CohortEntry[]`）规范化为字节，上传到**每次上传唯一**的 `partial/<unitPath>/<generation>/<after|start>.<attempt_uuid>.json`（`upsert:false`；已存在 → `cohort_path_collision` 抛错，S01）；**一次** CAS 同时追加 manifest `{start_after, end_after, path, sha256, count}` 并推进 `after`。**只有空页才置 `done`**（计划审计 P1-02：短页不是耗尽，PostgREST 的行数上限可以小于 `pageSize`）。CAS 失败 → 只删除本次 attempt 的对象（`page_lost`），下一步重读 `after`。上传后、CAS 前崩溃 → 孤儿对象不在任何 manifest 里，永不被读；重试用新 attempt uuid。
+3. 收尾 → 只读 manifest 列出的对象，逐个校验 `sha256`、`generation`、`start_after/end_after` 链与 `count`（任一不符 → 清空单元并以 `cohort_object_invalid` 失败，下次从头）；`evaluateCohort`；cohort 文件 `{algorithm_version, methodology_id, methodology_version, scope_type, scope_key, query_bounds, entries}` 内容寻址写到 `cohorts/<cohort_sha256>.json`；`fingerprint` 按 §5.5；`calibration_id = uuidV8(fingerprint)`；`computed_at = serverTime()`，`valid_until = computed_at + 14 天`；`insertCalibration(row{validity_revision: expected_revision}, expected_revision)`：`inserted | duplicate` → CAS 清空（清空失败 → 信息码 `job_state_conflict`，下次同指纹 `duplicate` 再清，R05）并删除本代际 manifest 对象；`stale_revision` → 清空，本次运行内以新代际重算一次（第二次仍 stale → `deferred` + `stale_revision`，下次运行重来）。单元状态被清空时同时 `clearCalibrationGeneration(generation)`（成员行随代际删除）。
+4. 轮次（计划审计 P2-02）：`judgment_job_state[jobKey('calibrate_round')] = {round, done: job[]}`。每次运行先处理**有未完成代际**（单元状态非空）的单元，再按注册表顺序处理本轮 `done` 之外的单元；单元结果为 `inserted / duplicate / stale_revision / failed / skipped` 时把它的 job 并入 `done`（乐观锁重试 3 次，失败只记信息码），`paused / conflict` 不并入（下次续跑）。本轮全部单元都在 `done` 里且没有未完成代际 → 开新一轮 `{round+1, done:[]}` 并从注册表头开始。这样一个耗时的前排单元不会在每次运行都重开新代际、饿死后排单元。
+5. 预算：`deadline − now < 30 s` 就不再做下一步（单元 `paused`，信息码 `deadline_hit`，下次从 `after` 续同一 generation / cutoff / bounds）；未开始的单元同样记 `deadline_hit`。
+6. 批次：`startBatch({producer:'ts-judgments', dataset:'judgments.calibrate'})` 前先 `repairStaleBatches('judgments.calibrate', 900)`；计数：`fetched` = 开始处理的单元数，`inserted` / `duplicates` = 插入 / 重复的单元，`deferred` = paused / conflict / stale 的单元，`failed` = 抛错的单元（错误 `{code, key: job, message}`）；`finally` 里 `finishBatch` + `recordAttempt('judgments.calibrate', {ok: success|partial, cadence:'event'})`。
 
 **规格偏差（记入实施记录）：**
 1. `cohort_path` 用内容寻址 `cohorts/<cohort_sha256>.json`（§5.5 写的是 `<calibration_id>.json`）：`calibration_id = uuidV8(fingerprint)` 而 `fingerprint` 含 `cohort_sha256`，按 id 命名会循环依赖；内容寻址使崩溃后的重试写同一对象（`exists`）。
@@ -13294,6 +14231,8 @@ export const dynamic='force-dynamic'; export const maxDuration=300; export funct
 6. `CohortStore` 只有 `put / get / remove`（不列目录）：孤儿对象不会被自动删除；按前缀清理孤儿的脚本列入 Task 22 运行手册的待办（只删不被任何未清空 manifest 与任何 `cohort_path` 引用的对象）。
 7. 新鲜度 cadence 用 `'event'`（`dq_freshness` 没有 weekly；daily 会让周跑每周报 stale）。
 8. 集成测试的结算走正常路径（决策 D6）：在 `withClaimLock`（Task 4，`pg_advisory_lock(20261109)`）内把该判断的队列行设为到期、`claimDue` 领到它（同时领到的别的套件的行持有到结束再原样释放）、以 `actor='cron'` 与领到的 `lease_token` 调 `appendSettlement`；登记也在锁内进行，并立即把不结算的队列行 `next_attempt_at` 推到 `2099-01-01`（测试连接直接 `update`），使其永不被别的套件领取。撤回（`withdrawn`）仍是 admin 动作（`lease=null`、`actor='admin:<uuid>'`），这是它的正常路径。
+9. 成员冻结（规格第 7 稿 §8.3，计划审计 P1-10）：时间戳截止不能冻结 MVCC 下的 cohort（`registered_at = now()` 是事务开始时刻，截止前开始、截止后提交的事务会在游标之后"补进来"），所以 cohort 由 `freeze_calibration_cohort` 一次物化；`calibration_cohort_internal` 仍保留（R04 测试与运维核对用），校准任务不再调用它。冻结成功但单元状态 CAS 之前崩溃的代际成员行无人引用：运行手册给出列出 / 清理它们的 SQL（`generation` 不出现在任何 `calibrate:*` 单元状态里的成员行）。
+10. 轮次游标（计划审计 P2-02）：见流程第 4 点；`RoundState` 存在全局键 `calibrate_round`；失败的单元也计入本轮 `done`（下一轮再试），避免一个持续失败的单元让本轮永远不结束。
 
 - [ ] **Step 1: 写 `cohort-store` 的失败测试**
 
@@ -13435,14 +14374,14 @@ Expected: PASS — 4 tests。
 
 ```ts
 // src/lib/judgments/calibrate.test.ts
-// runCalibrate / stepUnit over a purpose-built fake of the eight JudgmentsDb methods the job calls
-// (cohort keyset paging with the fixed cutoff, validity revision, insert_calibration semantics,
-// optimistic job state) and memoryCohortStore. The SQL side of the same flows is
-// calibrate.integration.test.ts.
+// runCalibrate / stepUnit over a purpose-built fake of the ten JudgmentsDb methods the job calls
+// (cohort freeze = a copy of the visible set at that instant, frozen-member keyset paging, generation clear,
+// validity revision, insert_calibration semantics, optimistic job state incl. the round cursor) and
+// memoryCohortStore. The SQL side of the same flows is calibrate.integration.test.ts.
 import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {CalibrateError,PAGE_SIZE,fingerprintOf,inScope,previewCalibrate,runCalibrate,stepUnit,unitPath,unitsOf,windowOf} from './calibrate';
-import type {CalibrateDeps,StepContext,UnitState} from './calibrate';
+import {CalibrateError,PAGE_SIZE,ROUND_JOB,fingerprintOf,inScope,previewCalibrate,runCalibrate,stepUnit,unitPath,unitsOf,windowOf} from './calibrate';
+import type {CalibrateDeps,RoundState,StepContext,UnitState} from './calibrate';
 import {memoryCohortStore} from './cohort-store';
 import type {CohortStore} from './cohort-store';
 import {sha256} from './canonical';
@@ -13458,16 +14397,26 @@ function fakeDb(rows:MethodologyRow[],envelopes:Envelope[]){
  const calibrations:CalibrationRow[]=[];const fingerprints=new Set<string>();
  const hooks:{onCohort?:(call:number)=>void}={};let cohortCalls=0;
  const tick=()=>new Date(clock+=1000).toISOString();
+ /** generation → the members frozen at freeze time (a later push into `envelopes` never reaches a frozen set: MVCC). */
+ const frozen=new Map<string,Envelope[]>();
  const db={
   async serverTime(){return tick();},
   async methodology(id:string,v:string){return rows.find(r=>r.methodology_id===id&&r.version===v)??null;},
   async calibrationValidity(){return {revision};},
-  async calibrationCohortInternal(id:string,v:string,w:{from:string;to:string},cutoff:string,after:string|null,limit:number){
-   hooks.onCohort?.(++cohortCalls);
-   return envelopes.filter(e=>e.judgment.methodology_id===id&&e.judgment.methodology_version===v&&!e.judgment.abstained&&e.judgment.as_of>=w.from&&e.judgment.as_of<=w.to&&e.judgment.registered_at<=cutoff)
-    .sort((a,b)=>a.judgment.judgment_id<b.judgment.judgment_id?-1:1).filter(e=>after===null||e.judgment.judgment_id>after).slice(0,limit)
-    .map(e=>({...e,settlement:e.settlement&&e.settlement.settled_at<=cutoff?e.settlement:null}));
+  async freezeCalibrationCohort(generation:string,id:string,v:string,w:{from:string;to:string}){
+   if(frozen.has(generation))throw new Error(`generation ${generation} is already frozen`);
+   const at=tick();
+   const set=envelopes.filter(e=>e.judgment.methodology_id===id&&e.judgment.methodology_version===v&&!e.judgment.abstained&&e.judgment.as_of>=w.from&&e.judgment.as_of<=w.to&&e.judgment.registered_at<=at)
+    .sort((a,b)=>a.judgment.judgment_id<b.judgment.judgment_id?-1:1)
+    .map(e=>({...e,settlement:e.settlement&&e.settlement.settled_at<=at?e.settlement:null}));
+   frozen.set(generation,structuredClone(set));
+   return {frozen_at:at,n:set.length};
   },
+  async cohortMembers(generation:string,after:string|null,limit:number){
+   hooks.onCohort?.(++cohortCalls);
+   return structuredClone((frozen.get(generation)??[]).filter(e=>after===null||e.judgment.judgment_id>after).slice(0,limit));
+  },
+  async clearCalibrationGeneration(generation:string){const n=frozen.get(generation)?.length??0;frozen.delete(generation);return n;},
   async insertCalibration(row:CalibrationRow,expected:number){
    if(row.validity_revision!==expected||expected!==revision)return 'stale_revision' as const;
    if(fingerprints.has(row.fingerprint))return 'duplicate' as const;
@@ -13484,8 +14433,9 @@ function fakeDb(rows:MethodologyRow[],envelopes:Envelope[]){
   },
   async repairStaleBatches(){return 0;},
  };
- return {db:db as unknown as JudgmentsDb,jobs,calibrations,hooks,
-  bump(){revision++;},failNextClear(n=1){failClears=n;},crashNextPageCas(n=1){failPageCas=n;},advance(ms:number){clock+=ms;},get now(){return clock;}};
+ return {db:db as unknown as JudgmentsDb,jobs,calibrations,hooks,frozen,
+  bump(){revision++;},failNextClear(n=1){failClears=n;},crashNextPageCas(n=1){failPageCas=n;},advance(ms:number){clock+=ms;},get now(){return clock;},
+  round(){return jobs.get(ROUND_JOB)?.state as unknown as RoundState|undefined;}};
 }
 
 /** subject_types holds no public type, so the method has exactly one unit ('all'). */
@@ -13521,7 +14471,7 @@ describe('units, windows, fingerprints',()=>{
  });
  it('fingerprint changes with validity_revision alone (R05: an out-of-window withdrawal changes the fingerprint, not the cohort)',()=>{
   const x={methodology_id:'m',methodology_version:'v1',scope_type:'all',scope_key:'',window_from:'2023-11-09',window_to:'2026-11-09',threshold_n:100,ece_max:0.1,algorithm_version:'judgments-calibration/1',cohort_sha256:'0'.repeat(64),validity_revision:1,
-   query_bounds:{window_from:'2023-11-09',window_to:'2026-11-09',registered_at_lte:'2026-11-09T04:00:00.000Z',settled_at_lte:'2026-11-09T04:00:00.000Z'}};
+   query_bounds:{window_from:'2023-11-09',window_to:'2026-11-09',registered_at_lte:'2026-11-09T04:00:00.000Z',settled_at_lte:'2026-11-09T04:00:00.000Z',frozen_at:'2026-11-09T04:00:00.000Z',n:0}};
   expect(fingerprintOf(x)).toBe(fingerprintOf({...x}));
   expect(fingerprintOf({...x,validity_revision:2})).not.toBe(fingerprintOf(x));
   expect(fingerprintOf({...x,query_bounds:{...x.query_bounds,settled_at_lte:'2026-11-09T04:00:01.000Z'}})).not.toBe(fingerprintOf(x));
@@ -13541,6 +14491,8 @@ describe('runCalibrate',()=>{
   expect(row).toMatchObject({methodology_id:'synthetic_fact_metric',methodology_version:'v1',scope_type:'all',scope_key:'',n_registered:7,n_settled:7,validity_revision:1,threshold_n:3,ece_max:0.1,kind:'probability',algorithm_version:'judgments-calibration/1',code_version:'abcdef1',batch_id:r.batchId});
   expect(Date.parse(row.valid_until)-Date.parse(row.computed_at)).toBe(14*86_400_000);
   expect(row.query_bounds.registered_at_lte).toBe(row.query_bounds.settled_at_lte);
+  expect(row.query_bounds).toMatchObject({frozen_at:row.query_bounds.registered_at_lte,n:7});
+  expect(f.frozen.size).toBe(0);                                                             // the generation's members are cleared with the unit
   expect(row.cohort_path).toBe(`cohorts/${row.cohort_sha256}.json`);
   const bytes=await store.get(row.cohort_path);
   expect(sha256(bytes!)).toBe(row.cohort_sha256);
@@ -13557,6 +14509,28 @@ describe('runCalibrate',()=>{
   await runCalibrate(deps(f.db,memoryCohortStore()));
   expect(f.calibrations[0]).toMatchObject({n_registered:4,n_settled:3});
  });
+ it('the cohort is the frozen member set: a registration that becomes visible after the freeze (earlier registered_at, later commit) never enters, even behind the cursor (P1-10)',async()=>{
+  const envs=cohort(4);const f=fakeDb([METHOD],envs);const store=memoryCohortStore();
+  const ctx=ctxOf(f.db,store,'abababab');
+  expect((await stepUnit(ctx,unitAll)).kind).toBe('started');
+  expect(stateOf(f)!.query_bounds).toMatchObject({n:4});
+  envs.push(envelope({judgment:{n:0,registered_at:'2026-01-01T00:00:00.000Z'}}));             // uuidOf(0) sorts before every member
+  await runCalibrate(deps(f.db,store));
+  expect(f.calibrations[0]).toMatchObject({n_registered:4});
+ });
+ it('a short page is not exhaustion: paging stops only on an empty page, so a server cap below pageSize never truncates the cohort (P1-02)',async()=>{
+  const f=fakeDb([METHOD],cohort(7));
+  const capped=new Proxy(f.db,{get:(t,p)=>p==='cohortMembers'?async(g:string,a:string|null,limit:number)=>(await t.cohortMembers(g,a,limit)).slice(0,2):(t as unknown as Record<string|symbol,unknown>)[p]}) as JudgmentsDb;
+  const r=await runCalibrate(deps(capped,memoryCohortStore(),{pageSize:3}));
+  expect(r.units[0]).toMatchObject({outcome:'inserted',pages:4});                             // 2 + 2 + 2 + 1, then an empty page
+  expect(f.calibrations[0].n_registered).toBe(7);
+ });
+ it('losing the start race drops the loser\'s frozen generation (P1-10)',async()=>{
+  const f=fakeDb([METHOD],cohort(2));const store=memoryCohortStore();
+  const results=await Promise.all([stepUnit(ctxOf(f.db,store,'aaaaaaaa'),unitAll),stepUnit(ctxOf(f.db,store,'bbbbbbbb'),unitAll)]);
+  expect(results.map(r=>r.kind).sort()).toEqual(['conflict','started']);
+  expect([...f.frozen.keys()]).toEqual([stateOf(f)!.generation]);
+ });
  it('stops paging when the budget is gone and resumes the same generation, cutoff and bounds next run',async()=>{
   const f=fakeDb([METHOD],cohort(9));const store=memoryCohortStore();
   let now=T0;const deadline=new Date(T0+31_500);
@@ -13570,8 +14544,22 @@ describe('runCalibrate',()=>{
   expect(mid.manifest.length).toBe(2);
   const second=await runCalibrate(deps(f.db,store,{deadline:null}));
   expect(second.units[0]).toMatchObject({outcome:'inserted',pages:1});
-  expect(f.calibrations[0].query_bounds.registered_at_lte).toBe(mid.cutoff);
+  expect(f.calibrations[0].query_bounds).toEqual(mid.query_bounds);                          // same generation, same frozen bounds
   expect(f.calibrations[0].n_registered).toBe(9);
+ });
+ it('round cursor: several units whose work spans several invocations each finish once before any unit starts again (P2-02)',async()=>{
+  const m=methodologyRow({markets:['A']});                                                     // units: all, market A, subject_type issuer
+  const f=fakeDb([m],cohort(3));const store=memoryCohortStore();
+  // each cohortMembers call costs 10 s; a run has 25 s above the 30 s reserve → roughly one and a half units per run
+  const run=async()=>{let now=T0;f.hooks.onCohort=()=>{now+=10_000;};return runCalibrate(deps(f.db,store,{methods:[{id:m.methodology_id,version:'v1'}],deadline:new Date(T0+55_000),now:()=>new Date(now)}));};
+  const inserted=(r:Awaited<ReturnType<typeof runCalibrate>>)=>r.units.filter(u=>u.outcome==='inserted').map(u=>u.scope.scope_type);
+  const r1=await run();expect(inserted(r1)).toEqual(['all']);
+  const r2=await run();expect(inserted(r2)).toEqual(['market']);                               // the paused unit first, not a new 'all' generation
+  const r3=await run();expect(inserted(r3)).toEqual(['subject_type']);
+  expect(f.calibrations.map(c=>c.scope_type)).toEqual(['all','market','subject_type']);         // nobody ran twice before everybody ran once
+  expect(f.round()).toEqual({round:1,done:unitsOf(m).map(u=>u.job)});
+  const r4=await run();expect(r4.units[0]).toMatchObject({scope:{scope_type:'all'}});          // round complete → the next round starts at the head
+  expect(f.round()!.round).toBe(2);
  });
  it('a failed clear after insert is retried: the next run sees duplicate and clears (R05)',async()=>{
   const f=fakeDb([METHOD],cohort(4));const store=memoryCohortStore();
@@ -13671,6 +14659,7 @@ describe('stepUnit concurrency',()=>{
   const f=fakeDb([METHOD],cohort(1));const store=memoryCohortStore();
   const results=await Promise.all([stepUnit(ctxOf(f.db,store,'aaaaaaaa'),unitAll),stepUnit(ctxOf(f.db,store,'bbbbbbbb'),unitAll)]);
   expect(results.map(r=>r.kind).sort()).toEqual(['conflict','started']);
+  expect(f.frozen.size).toBe(1);
  });
 });
 
@@ -13703,10 +14692,14 @@ Expected: FAIL — `Failed to resolve import "./calibrate"`。
 // Calibration job (spec §8.3): one work unit = (methodology@version, scope); units run in registry
 // order under the cron budget and resume across runs from judgment_job_state[jobKey('calibrate',…)]
 // = {generation, cutoff, expected_revision, query_bounds, after, done, manifest}. A unit fixes its
-// generation, validity revision, cutoff and query bounds once at start (R03), pages the cohort through
-// the service-role calibration_cohort_internal (R04: unpublished methods calibrate too), uploads each
-// page to a fresh per-attempt object with upsert:false, then appends the manifest entry and advances
-// `after` in ONE optimistic set_job_state (S01, R02). A lost CAS removes only this attempt's object;
+// generation, validity revision and window once at start and FREEZES its cohort in one statement
+// (freeze_calibration_cohort: one MVCC snapshot of the members and their latest settlements; plan audit
+// P1-10; query_bounds records frozen_at and n), pages the frozen set through the service-role
+// calibration_cohort_members (R04: unpublished methods calibrate too) until an EMPTY page (P1-02), uploads
+// each page to a fresh per-attempt object with upsert:false, then appends the manifest entry and advances
+// `after` in ONE optimistic set_job_state (S01, R02). Clearing a unit also clears its generation's members.
+// Units run in a persisted round (judgment_job_state['calibrate_round'], P2-02): unfinished generations first,
+// then units not yet done this round, so an expensive early unit cannot starve the later ones. A lost CAS removes only this attempt's object;
 // a crash between upload and CAS leaves an orphan that no manifest names. Finalisation reads only
 // the manifest's objects (sha256-checked), evaluates (calibration.ts), writes the content-addressed
 // cohort file, and calls insert_calibration: inserted | duplicate → CAS-clear the unit (R05),
@@ -13716,7 +14709,7 @@ import type {TableClient} from '../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
-import {uuidV8} from '../research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from './uuid-v8';
 import {ALGORITHM_VERSION,entryOf,evaluateCohort,optionsOf} from './calibration';
 import type {CohortEntry} from './calibration';
 import {canonicalize,digest,sha256} from './canonical';
@@ -13726,6 +14719,9 @@ import {PUBLIC_SUBJECT_TYPES} from './types';
 import type {CalibrationRow,CalibrationScope,JudgmentsDb,MethodologyRow,QueryBounds} from './types';
 
 export const CALIBRATE_DATASET='judgments.calibrate';
+/** The calibration cron's persisted round cursor (plan audit P2-02). */
+export const ROUND_JOB=jobKey('calibrate_round');
+export interface RoundState{round:number;done:string[]}
 export const PAGE_SIZE=500,RESERVE_MS=30_000,VALID_DAYS=14,STALE_BATCH_SECONDS=900,MAX_STEPS=10_000;
 
 export interface ManifestEntry{start_after:string|null;end_after:string;path:string;sha256:string;count:number}
@@ -13780,8 +14776,15 @@ const str=(v:unknown):v is string=>typeof v==='string'&&v.length>0;
 function isUnitState(s:Record<string,unknown>):s is Record<string,unknown>&UnitState{
  const q=s.query_bounds as Record<string,unknown>|null;
  return str(s.generation)&&str(s.cutoff)&&Number.isSafeInteger(s.expected_revision)&&(s.after===null||str(s.after))&&typeof s.done==='boolean'&&
-  !!q&&typeof q==='object'&&str(q.window_from)&&str(q.window_to)&&str(q.registered_at_lte)&&str(q.settled_at_lte)&&
+  !!q&&typeof q==='object'&&str(q.window_from)&&str(q.window_to)&&str(q.registered_at_lte)&&str(q.settled_at_lte)&&str(q.frozen_at)&&Number.isSafeInteger(q.n)&&
   Array.isArray(s.manifest)&&(s.manifest as unknown[]).every(m=>{const e=m as Record<string,unknown>;return !!e&&(e.start_after===null||str(e.start_after))&&str(e.end_after)&&str(e.path)&&str(e.sha256)&&Number.isSafeInteger(e.count);});
+}
+
+/** Clears a unit's state; when the CAS wins, also drops the generation's frozen members (best effort). */
+async function clearUnit(ctx:StepContext,unit:Unit,updatedAt:string,generation:unknown):Promise<boolean>{
+ const cleared=await ctx.db.setJobState(unit.job,updatedAt,{});
+ if(cleared&&typeof generation==='string')await ctx.db.clearCalibrationGeneration(generation).catch(()=>0);
+ return cleared;
 }
 
 /** One action on one unit: start | page | mark paging done | finalize. Re-reads the committed state every call. */
@@ -13793,17 +14796,24 @@ export async function stepUnit(ctx:StepContext,unit:Unit):Promise<StepOutcome>{
   const {revision}=await ctx.db.calibrationValidity(m.methodology_id,m.version);
   const cutoff=await ctx.db.serverTime();
   const w=windowOf(cutoff,optionsOf(m.params).window_years);
-  const next:UnitState={generation:ctx.uuid(),cutoff,expected_revision:Number(revision),
-   query_bounds:{window_from:w.from,window_to:w.to,registered_at_lte:cutoff,settled_at_lte:cutoff},after:null,done:false,manifest:[]};
-  return await ctx.db.setJobState(unit.job,cur?.updated_at??null,next as unknown as Record<string,unknown>)?{kind:'started',generation:next.generation}:{kind:'conflict'};
+  const generation=ctx.uuid();
+  // P1-10: one statement freezes every member and its latest settlement (one MVCC snapshot); the generation is
+  // recorded only afterwards, and a lost start race drops the loser's frozen set.
+  const frozen=await ctx.db.freezeCalibrationCohort(generation,m.methodology_id,m.version,w);
+  const next:UnitState={generation,cutoff,expected_revision:Number(revision),
+   query_bounds:{window_from:w.from,window_to:w.to,registered_at_lte:frozen.frozen_at,settled_at_lte:frozen.frozen_at,frozen_at:frozen.frozen_at,n:frozen.n},after:null,done:false,manifest:[]};
+  if(await ctx.db.setJobState(unit.job,cur?.updated_at??null,next as unknown as Record<string,unknown>))return {kind:'started',generation};
+  await ctx.db.clearCalibrationGeneration(generation).catch(()=>0);
+  return {kind:'conflict'};
  }
- if(!isUnitState(st))return {kind:'reset',reason:'invalid_state',cleared:await ctx.db.setJobState(unit.job,cur!.updated_at,{})};
+ if(!isUnitState(st))return {kind:'reset',reason:'invalid_state',cleared:await clearUnit(ctx,unit,cur!.updated_at,(st as {generation?:unknown}).generation)};
  return st.done?finalize(ctx,unit,st,cur!.updated_at):page(ctx,unit,st,cur!.updated_at);
 }
 
 async function page(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string):Promise<StepOutcome>{
- const m=unit.methodology,q=st.query_bounds;
- const rows=await ctx.db.calibrationCohortInternal(m.methodology_id,m.version,{from:q.window_from,to:q.window_to},st.cutoff,st.after,ctx.pageSize);
+ // The frozen members of this generation, keyset on judgment_id; ONLY an empty page ends paging (P1-02: a server
+ // row cap below pageSize returns short pages that are not exhaustion).
+ const rows=await ctx.db.cohortMembers(st.generation,st.after,ctx.pageSize);
  if(rows.length===0)return await ctx.db.setJobState(unit.job,updatedAt,{...st,done:true} as unknown as Record<string,unknown>)?{kind:'paging_done'}:{kind:'conflict'};
  const endAfter=rows[rows.length-1].judgment.judgment_id;
  const entries=rows.map(entryOf).filter((e):e is CohortEntry=>e!==null&&inScope(e,unit.scope));
@@ -13811,7 +14821,7 @@ async function page(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string):Pro
  const hash=sha256(bytes);
  const path=`partial/${unitPath(unit)}/${st.generation}/${st.after??'start'}.${ctx.uuid()}.json`;
  if(await ctx.store.put(path,bytes,{upsert:false})!=='stored')throw new CalibrateError('cohort_path_collision',path);
- const next:UnitState={...st,after:endAfter,done:rows.length<ctx.pageSize,manifest:[...st.manifest,{start_after:st.after,end_after:endAfter,path,sha256:hash,count:entries.length}]};
+ const next:UnitState={...st,after:endAfter,done:false,manifest:[...st.manifest,{start_after:st.after,end_after:endAfter,path,sha256:hash,count:entries.length}]};
  if(await ctx.db.setJobState(unit.job,updatedAt,next as unknown as Record<string,unknown>))return {kind:'paged',path,count:entries.length};
  // Another worker advanced the unit: drop only this attempt's object; the next step re-reads `after`.
  await ctx.store.remove(path).catch(()=>{});
@@ -13835,7 +14845,7 @@ async function readManifest(ctx:StepContext,st:UnitState):Promise<CohortEntry[]|
 async function finalize(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string):Promise<StepOutcome>{
  const m=unit.methodology,q=st.query_bounds;
  const entries=await readManifest(ctx,st);
- if(entries===null)return {kind:'reset',reason:'cohort_object_invalid',cleared:await ctx.db.setJobState(unit.job,updatedAt,{})};
+ if(entries===null)return {kind:'reset',reason:'cohort_object_invalid',cleared:await clearUnit(ctx,unit,updatedAt,st.generation)};
  const opts=optionsOf(m.params);
  const ev=evaluateCohort(m.kind,entries,opts);
  const cohortBytes=enc.encode(canonicalize({algorithm_version:ALGORITHM_VERSION,methodology_id:m.methodology_id,methodology_version:m.version,scope_type:unit.scope.scope_type,scope_key:unit.scope.scope_key,query_bounds:q,entries:ev.entries}));
@@ -13854,7 +14864,7 @@ async function finalize(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string)
   algorithm_version:ALGORITHM_VERSION,code_version:ctx.codeVersion,computed_at,batch_id:ctx.batchId,
  };
  const status=await ctx.db.insertCalibration(row,st.expected_revision);
- const cleared=await ctx.db.setJobState(unit.job,updatedAt,{});
+ const cleared=await clearUnit(ctx,unit,updatedAt,st.generation);
  if(status==='stale_revision')return {kind:'stale',cleared};
  if(cleared)for(const e of st.manifest)await ctx.store.remove(e.path).catch(()=>{});   // unreferenced now; the cohort file stays
  return {kind:'finalized',status,calibration_id,cleared};
@@ -13891,6 +14901,49 @@ export async function runUnit(ctx:StepContext,unit:Unit,outOfBudget:()=>boolean)
 const codeOf=(e:unknown)=>e instanceof CalibrateError?e.code:'calibrate_failed';
 const messageOf=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,300);
 
+/** Outcomes that finish a unit for the current round (failed / stale ones retry next round, not in a tight loop). */
+const ROUND_DONE:ReadonlySet<UnitOutcome>=new Set(['inserted','duplicate','stale_revision','failed','skipped']);
+const isRoundState=(s:Record<string,unknown>):s is Record<string,unknown>&RoundState=>Number.isSafeInteger(s.round)&&(s.round as number)>=1&&Array.isArray(s.done)&&(s.done as unknown[]).every(str);
+async function readRound(db:JudgmentsDb):Promise<{state:RoundState;updatedAt:string|null}>{
+ const cur=await db.jobState(ROUND_JOB);
+ const s=cur?.state??{};
+ return {state:isRoundState(s)?{round:s.round,done:[...s.done]}:{round:1,done:[]},updatedAt:cur?.updated_at??null};
+}
+/** Adds `job` to the round's done list (optimistic, 3 tries); false when another run moved the round on or kept winning. */
+async function markRoundDone(db:JudgmentsDb,round:number,job:string):Promise<boolean>{
+ for(let i=0;i<3;i++){
+  const cur=await readRound(db);
+  if(cur.state.round!==round)return false;
+  if(cur.state.done.includes(job))return true;
+  if(await db.setJobState(ROUND_JOB,cur.updatedAt,{round,done:[...cur.state.done,job]}))return true;
+ }
+ return false;
+}
+
+interface Planned{job:string;row:MethodologyRow|null;unit:Unit|null;ref:{id:string;version:string}}
+/**
+ * The run's work list (plan audit P2-02): every unit with an unfinished generation first (registry order), then the
+ * units not yet done in this round. When every unit is done and none is unfinished, the next round opens and the
+ * list restarts at the registry head.
+ */
+async function planRound(db:JudgmentsDb,methods:CalibrateDeps['methods']):Promise<{round:number;list:Planned[]}>{
+ const all:Planned[]=[];
+ for(const ref of methods){
+  const row=await db.methodology(ref.id,ref.version);
+  if(!row){all.push({job:jobKey('calibrate',ref.id,ref.version,{scope_type:'all',scope_key:''}),row:null,unit:null,ref});continue;}
+  for(const unit of unitsOf(row))all.push({job:unit.job,row,unit,ref});
+ }
+ const unfinished=new Set<string>();
+ for(const p of all)if(p.unit&&Object.keys((await db.jobState(p.job))?.state??{}).length>0)unfinished.add(p.job);
+ let {state,updatedAt}=await readRound(db);
+ const open=(s:RoundState)=>all.filter(p=>!unfinished.has(p.job)&&!s.done.includes(p.job));
+ if(unfinished.size===0&&open(state).length===0){
+  const next={round:state.round+1,done:[]};
+  if(await db.setJobState(ROUND_JOB,updatedAt,next))state=next;else({state,updatedAt}=await readRound(db));
+ }
+ return {round:state.round,list:[...all.filter(p=>unfinished.has(p.job)),...open(state)]};
+}
+
 export async function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>{
  const now=deps.now??(()=>new Date());
  const outOfBudget=()=>deps.deadline!==null&&deps.deadline.getTime()-now().getTime()<RESERVE_MS;
@@ -13901,24 +14954,31 @@ export async function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>
  const counts:Required<BatchCounts>={...emptyCounts(),deferred:0};const errors:BatchError[]=[];const units:UnitReceipt[]=[];
  let status:BatchStatus='failed';
  try{
-  for(const ref of deps.methods){
-   const row=await deps.db.methodology(ref.id,ref.version);
-   if(!row){units.push({job:jobKey('calibrate',ref.id,ref.version,{scope_type:'all',scope_key:''}),methodology_id:ref.id,version:ref.version,scope:{scope_type:'all',scope_key:''},outcome:'skipped',pages:0,code:'methodology_unsynced'});continue;}
-   for(const unit of unitsOf(row)){
-    const base={job:unit.job,methodology_id:row.methodology_id,version:row.version,scope:unit.scope};
-    if(outOfBudget()){counts.deferred++;errors.push({code:'deadline_hit',key:unit.job});units.push({...base,outcome:'paused',pages:0});continue;}
-    counts.fetched++;
-    try{
-     const r=await runUnit(ctx,unit,outOfBudget);
-     errors.push(...r.infos);
-     if(r.outcome==='inserted')counts.inserted++;
-     else if(r.outcome==='duplicate')counts.duplicates++;
-     else counts.deferred++;
-     units.push({...base,outcome:r.outcome,pages:r.pages,...(r.calibration_id?{calibration_id:r.calibration_id}:{})});
-    }catch(e){
-     counts.failed++;errors.push({code:codeOf(e),key:unit.job,message:messageOf(e)});units.push({...base,outcome:'failed',pages:0,code:codeOf(e)});
-    }
+  const {round,list}=await planRound(deps.db,deps.methods);
+  const finished=async(job:string,outcome:UnitOutcome)=>{if(ROUND_DONE.has(outcome)&&!(await markRoundDone(deps.db,round,job)))errors.push({code:'job_state_conflict',key:ROUND_JOB});};
+  for(const p of list){
+   if(!p.row||!p.unit){
+    units.push({job:p.job,methodology_id:p.ref.id,version:p.ref.version,scope:{scope_type:'all',scope_key:''},outcome:'skipped',pages:0,code:'methodology_unsynced'});
+    await finished(p.job,'skipped');continue;
    }
+   const unit=p.unit,row=p.row;
+   const base={job:unit.job,methodology_id:row.methodology_id,version:row.version,scope:unit.scope};
+   if(outOfBudget()){counts.deferred++;errors.push({code:'deadline_hit',key:unit.job});units.push({...base,outcome:'paused',pages:0});continue;}
+   counts.fetched++;
+   let outcome:UnitOutcome;
+   try{
+    const r=await runUnit(ctx,unit,outOfBudget);
+    errors.push(...r.infos);
+    if(r.outcome==='inserted')counts.inserted++;
+    else if(r.outcome==='duplicate')counts.duplicates++;
+    else counts.deferred++;
+    outcome=r.outcome;
+    units.push({...base,outcome:r.outcome,pages:r.pages,...(r.calibration_id?{calibration_id:r.calibration_id}:{})});
+   }catch(e){
+    outcome='failed';
+    counts.failed++;errors.push({code:codeOf(e),key:unit.job,message:messageOf(e)});units.push({...base,outcome:'failed',pages:0,code:codeOf(e)});
+   }
+   await finished(unit.job,outcome);
   }
  }finally{
   status=await finishBatch(deps.tables,batchId,{counts,errors});
@@ -13950,7 +15010,7 @@ export async function previewCalibrate(deps:Pick<CalibrateDeps,'db'|'methods'>):
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/judgments/calibrate.test.ts src/lib/judgments/cohort-store.test.ts`
-Expected: PASS — 22 tests（calibrate 18 + cohort-store 4）。若 `runCalibrate` 的"stops paging when the budget is gone"用例报 `status 'failed'`：说明 Task 5 的 `accounted()` 没有计入 `deferred`——回到 Task 5 修，不要改这里。
+Expected: PASS — 26 tests（calibrate 22 + cohort-store 4）。若 `runCalibrate` 的"stops paging when the budget is gone"用例报 `status 'failed'`：说明 Task 5 的 `accounted()` 没有计入 `deferred`——回到 Task 5 修，不要改这里。
 
 - [ ] **Step 9: 写生产装配 `src/lib/judgments/calibrate-deps.ts`**
 
@@ -14170,7 +15230,8 @@ Expected:
 // spec §14.2 calibration resume on real PostgreSQL (pgJudgmentsDb over the F4 migration) with the
 // in-memory CohortStore: R02/S01 (crash between upload and CAS → orphan never consumed, retry under
 // a new attempt id; two concurrent workers → only the CAS winner's page in the manifest), R03
-// (registrations on both sides of the cursor after the cutoff stay out), R04 (an unpublished method
+// (registrations on both sides of the cursor after the cutoff stay out), P1-10 (a registration open across the
+// freeze stays out; members cleared with the unit), R04 (an unpublished method
 // calibrates internally while the anon cohort is empty), R05 (an out-of-window withdrawal changes the
 // fingerprint; duplicate clears the unit; a failed clear is retried), acceptance example 10
 // (withdrawal during a run → stale_revision, the old report reads invalid). Rows are never cleaned
@@ -14180,7 +15241,7 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
-import {uuidV8} from '../research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from './uuid-v8';
 import {addDays} from './calibration';
 import {runCalibrate,stepUnit,unitsOf} from './calibrate';
 import type {StepContext,StepOutcome,Unit,UnitState} from './calibrate';
@@ -14209,8 +15270,8 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
    status:'active',publishable,code_version:'abcdef1'},'script',null);
   return (await db.methodology(id,'v1'))!;
  }
- /** One active probability judgment of `m` on `subject` at `asOf` (producer_nonce '' — ids differ by as_of / subject). */
- async function register(m:MethodologyRow,subject:string,asOf:string):Promise<string>{
+ /** The register_judgment payload of one active probability judgment of `m` on `subject` at `asOf`. */
+ async function rowFor(m:MethodologyRow,subject:string,asOf:string):Promise<{row:JudgmentInsert;queue:{settle_after:string;settle_by:string;label_policy:'first_observed'}}>{
   const factId=randomUUID();
   const snapshot={fact_id:factId,issuer_id:subject,market:'US' as const,concept:'revenue',period_start:'2025-07-01',period_end:'2025-09-30',duration:'3M',value_text:'100',unit:'USD',consolidation:'consolidated',available_date:asOf,filing_id:randomUUID(),mapping_gen:1};
   const inputs:Input[]=[{kind:'financial_fact',ref:{fact_id:factId},snapshot,hash:digest(snapshot),available_at:`${asOf}T00:00:00.000Z`,origin:{publisher:'SEC',adapter:'edgar',locator:'companyfacts'}}];
@@ -14222,10 +15283,15 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
    as_of:asOf,inputs,inputs_hash,abstained:false,abstain_reason:null,claim:{p:0.7,event:{zh:'营收同比增长',en:'Revenue grows'}},
    condition:{resolver:'fact_metric',params:{issuer_id:subject,market:'US',metric:'revenue',period_start:'2025-10-01',period_end:'2025-12-31',duration:'3M',unit:'USD',input_unit:'USD',basis:'reported',formula_version:'metrics/1',compare:'yoy'},predicate:{op:'>',rhs:0},text:{zh:'营收同比 > 0',en:'Revenue YoY > 0'}},
    horizon:{unit:'calendar_days',n:10},target:{kind:'date',date},label_policy:'first_observed',settle_after,settle_by,code_version:'abcdef1',batch_id:await batch(),retrospective_hint:{label_available_at:null}};
+  return {row,queue:{settle_after,settle_by,label_policy:'first_observed'}};
+ }
+ /** One active probability judgment of `m` on `subject` at `asOf` (producer_nonce '' — ids differ by as_of / subject). */
+ async function register(m:MethodologyRow,subject:string,asOf:string):Promise<string>{
+  const {row,queue}=await rowFor(m,subject,asOf);const judgment_id=row.judgment_id;
   // D6 / Task 4 rule: a due row is registered under the claim lock and parked (next_attempt_at far future) before the
   // lock is released, so no other suite's claimDue ever sees it; settle() makes it due again under the lock.
   await withClaimLock(pool,async()=>{
-   await db.registerJudgment(row,{settle_after,settle_by,label_policy:'first_observed'});
+   await db.registerJudgment(row,queue);
    await q(`update public.judgment_settle_queue set next_attempt_at='2099-01-01T00:00:00Z' where judgment_id=$1`,[judgment_id]);
   });
   return judgment_id;
@@ -14367,6 +15433,30 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
   expect((await rowsOf(m))[0]).toMatchObject({n_registered:4,n_settled:2});
  },60000);
 
+ it('P1-10: a registration whose transaction is open across the freeze stays out of the generation on every page; the members are cleared with the unit',async()=>{
+  const m=await method(false);
+  const {subject}=await cohort(m,3,1);
+  const store=memoryCohortStore();const u=allUnit(m);
+  const ctx=await ctxOf(store,'cdcdcdcd');
+  const late=await rowFor(m,subject,addDays(today(),-50));
+  const c=await pool.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select public.register_judgment($1::jsonb,$2::jsonb)`,[JSON.stringify(late.row),JSON.stringify(late.queue)]);
+   await c.query(`update public.judgment_settle_queue set next_attempt_at='2099-01-01T00:00:00Z' where judgment_id=$1`,[late.row.judgment_id]);   // parked before it is ever visible (D6)
+   expect((await stepUnit(ctx,u)).kind).toBe('started');                                     // freezes while that registration is uncommitted
+   await c.query('commit');
+  }finally{c.release();}
+  const st=await stateOf(u) as UnitState;
+  expect(st.query_bounds).toMatchObject({n:3,frozen_at:st.query_bounds.registered_at_lte});
+  expect(await finish(ctx,u)).toMatchObject({kind:'finalized',status:'inserted',cleared:true});
+  expect((await rowsOf(m))[0]).toMatchObject({n_registered:3,n_settled:1});                  // committed after the snapshot: consistently out
+  expect(await q(`select count(*)::int n from public.judgment_calibration_cohort_members where generation=$1`,[st.generation])).toEqual([{n:0}]);
+  // the next generation sees it
+  expect(await finish(ctx,u)).toMatchObject({kind:'finalized',status:'inserted'});
+  expect((await rowsOf(m))[1]).toMatchObject({n_registered:4});
+ },60000);
+
  it('R05: duplicate clears the unit after a failed clear; an out-of-window withdrawal changes the fingerprint, not the cohort',async()=>{
   const m=await method(true);
   const subject=await issuer();
@@ -14432,7 +15522,7 @@ Expected 末行：`src/lib/judgments/calibrate.integration.test.ts`。
 - [ ] **Step 16: 跑集成测试**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts`
-Expected: PASS — 6 tests（R04、R02/S01 崩溃、R02 并发、R03、R05、验收样例 10）。
+Expected: PASS — 7 tests（R04、R02/S01 崩溃、R02 并发、R03、P1-10 跨冻结的未提交登记、R05、验收样例 10）。
 
 再跑全量数据库套件确认清单无漂移：
 Run: `LC_ALL=C npm run test:db`
@@ -14673,7 +15763,8 @@ describe('cardsOf',()=>{
 });
 
 describe('derivedOdds (spec §9.4)',()=>{
- const condition:Condition={resolver:'price_return',params:{ticker:'AAPL',market:'US',adjustment:'qfq',source:'eastmoney',base_date:'2026-01-02'},predicate:{op:'>',rhs:0.1},text:{zh:'12 个月涨超 10%',en:'up >10% in 12 months'}};
+ // Narrow member type (not the Condition union) so a predicate-replaced copy below is still a valid price_return condition (plan audit P1-01).
+ const condition:Extract<Condition,{resolver:'price_return'}>={resolver:'price_return',params:{ticker:'AAPL',market:'US',adjustment:'qfq',source:'eastmoney',base_date:'2026-01-02'},predicate:{op:'>',rhs:0.1},text:{zh:'12 个月涨超 10%',en:'up >10% in 12 months'}};
  const target={kind:'date' as const,date:'2027-01-02'};
  const win=(p=0.6,over:EnvelopeSpec['judgment']={})=>envelope({judgment:{n:1,as_of:'2026-01-02',judgment_type:'thesis_win_rate',claim:{p,event:{zh:'涨超 10%',en:'up >10%'}},condition,target,...over},calibration:CAL});
  const range=(claim:Partial<IntervalClaim>={},over:EnvelopeSpec['judgment']={},cal:EnvelopeSpec['calibration']={kind:'interval',state:'calibrated'})=>envelope({judgment:{n:2,as_of:'2026-01-02',judgment_type:'return_range',kind:'interval',
@@ -14694,7 +15785,8 @@ describe('derivedOdds (spec §9.4)',()=>{
   expect(reasonsOf(win(),range({scenarios:undefined}))).toEqual(['scenarios_missing']);
   expect(reasonsOf(win(),range({scenarios:[{label:'up',p:0.6,value:0.3},{label:'down',p:0.5,value:-0.15}]}))).toEqual(['scenarios_not_normalized']);
   expect(reasonsOf(win(),range({scenarios:[{label:'up',p:0.6,value:-0.1},{label:'down',p:0.4,value:-0.15}]}))).toEqual(['scenario_values_invalid']);
-  expect(reasonsOf(win(),range({scenario_event_hash:digest({...condition,predicate:{op:'>',rhs:0}})}))).toEqual(['event_mismatch']);
+  const otherEvent:Condition={...condition,predicate:{op:'>',rhs:0}};
+  expect(reasonsOf(win(),range({scenario_event_hash:digest(otherEvent)}))).toEqual(['event_mismatch']);
   expect(reasonsOf(win(),range({},{as_of:'2026-01-05'}))).toContain('as_of_mismatch');
   expect(reasonsOf(win(),range({},{subject_key:'55555555-5555-4555-8555-555555555555'}))).toEqual(['subject_mismatch']);
   expect(reasonsOf(win(),range({},{target:{kind:'date',date:'2027-01-03'}}))).toEqual(['target_mismatch']);
@@ -15443,7 +16535,7 @@ export function appendAdminSettlement(x:AdminActionInput):Promise<AdminActionRes
 缓存：公共读成功 `public, max-age=300, s-maxage=600`；空结果（无卡片 / 无方法 / 无校准）与一切错误 `no-store`；admin 一律 `no-store`。`view`：缺省 `latest`；`asOf` 单独出现即 `as_known`；`view=as_known` 无 `asOf`、`view=latest` 带 `asOf`、`asOf` 晚于今天（UTC）都是 400 `invalid_parameter:asOf`；`cutoff = asOf + 'T23:59:59.999Z'`。
 
 **规格偏差（记入实施记录）：**
-1. `GET /api/judgments/[id]` 的信封取自同主体同类型同方法的 `judgment_history`（按 `before` 翻页，最多 20×500 条），使 `as_known` 的截止规则（判断 `registered_at`、结算 `settled_at`、校准 `computed_at` 与当前 revision、方法事件史）全部由 SQL 施加；判断定位与结算全表走 anon 直接查表（RLS 门控），因为契约的 `getJudgment / settlementsOf` 是 service-role 方法、会绕过发布门控。
+1. `GET /api/judgments/[id]` 的信封取自 `JudgmentsDb.envelopeById`（RPC `judgment_envelope_by_id`，anon / invoker，计划审计 P2-01），与 `judgment_history` 同一 `latest / as_known` 语义，使截止规则（判断 `registered_at`、结算 `settled_at`、校准 `computed_at` 与当前 revision、方法事件史）全部由 SQL 施加，且不再翻历史页找 id（深历史或服务端行数上限不会让已发布判断 404）；结算全表走 anon 直接查表（RLS 门控），按 `seq` keyset 分页**直到空页**（不把短页当耗尽），因为契约的 `getJudgment / settlementsOf` 是 service-role 方法、会绕过发布门控。`judgmentLocator` 仍供 history 路由使用。
 2. `recent_settlements` 用 PostgREST 内连接嵌入 `judgments!inner(...)`（anon，RLS 门控），不是契约方法。
 3. admin `settle` 调 Task 12 的 `settleNow`（集成者补充的导出：不领租约，只有追加类决定写库；`deferred` / `quarantine_pending` / `closed` 返回 200 且不写，`leased` / `conflict` 返回 409）与 Task 14 的 `productionJudgmentDeps`。
 4. `next.config.mjs` 不在骨架的共享文件清单里，本任务按同一围栏规则改动。
@@ -15615,12 +16707,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
-const mocks=vi.hoisted(()=>({calls:[] as unknown[][],result:{data:null as unknown,error:null as {message:string}|null},store:null as unknown,dbArgs:[] as unknown[]}));
+type R={data:unknown;error:{message:string}|null};
+const mocks=vi.hoisted(()=>({calls:[] as unknown[][],result:{data:null as unknown,error:null as {message:string}|null},queue:[] as {data:unknown;error:{message:string}|null}[],store:null as unknown,dbArgs:[] as unknown[]}));
+/** Each awaited query takes the next queued result, else `result` (an empty list ends a paging loop). */
+const nextResult=():R=>mocks.queue.length>0?mocks.queue.shift()!:mocks.result;
 function builder(){
  const b:Record<string,unknown>={};
- for(const m of ['select','eq','order','limit'])b[m]=(...a:unknown[])=>{mocks.calls.push([m,...a]);return b;};
- b.maybeSingle=()=>{mocks.calls.push(['maybeSingle']);return Promise.resolve(mocks.result);};
- b.then=(ok:(r:unknown)=>unknown,bad:(e:unknown)=>unknown)=>Promise.resolve(mocks.result).then(ok,bad);
+ for(const m of ['select','eq','gt','order','limit'])b[m]=(...a:unknown[])=>{mocks.calls.push([m,...a]);return b;};
+ b.maybeSingle=()=>{mocks.calls.push(['maybeSingle']);return Promise.resolve(nextResult());};
+ b.then=(ok:(r:unknown)=>unknown,bad:(e:unknown)=>unknown)=>Promise.resolve(nextResult()).then(ok,bad);
  return b;
 }
 vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({tag:'anon',from:(t:string)=>{mocks.calls.push(['from',t]);return builder();}})}));
@@ -15633,7 +16728,7 @@ import {sha256} from './canonical';
 import {publicReads,readCohortSample,readMethodologyDoc} from './public-reads';
 
 describe('publicReads',()=>{
- beforeEach(()=>{mocks.calls=[];mocks.result={data:null,error:null};mocks.dbArgs=[];});
+ beforeEach(()=>{mocks.calls=[];mocks.result={data:null,error:null};mocks.queue=[];mocks.dbArgs=[];});
  it('wires JudgmentsDb with the anon client in both slots',()=>{
   publicReads();
   expect(mocks.dbArgs[0]).toEqual({anon:expect.objectContaining({tag:'anon'}),admin:expect.objectContaining({tag:'anon'})});
@@ -15646,9 +16741,16 @@ describe('publicReads',()=>{
   expect(await publicReads().judgmentLocator('id-2')).toBeNull();
  });
  it('settlements are ordered by seq and normalised to toISOString() timestamps',async()=>{
-  mocks.result={data:[{settlement_id:'s',seq:'1',settled_at:'2026-03-01T03:00:00+00:00',kind:'settled'}],error:null};
+  mocks.queue=[{data:[{settlement_id:'s',seq:'1',settled_at:'2026-03-01T03:00:00+00:00',kind:'settled'}],error:null},{data:[],error:null}];
   expect(await publicReads().settlements('id-1')).toEqual([{settlement_id:'s',seq:1,settled_at:'2026-03-01T03:00:00.000Z',kind:'settled'}]);
   expect(mocks.calls).toContainEqual(['order','seq',{ascending:true}]);
+ });
+ it('settlement history pages by seq until an EMPTY page: a server cap below the page size never truncates it (P2-01)',async()=>{
+  const s=(seq:number)=>({settlement_id:`s${seq}`,seq,settled_at:'2026-03-01T03:00:00+00:00',kind:seq===1?'settled':seq%2===0?'withdrawn':'reopened'});
+  mocks.queue=[{data:[s(1),s(2)],error:null},{data:[s(3)],error:null},{data:[s(4),s(5)],error:null},{data:[],error:null}];   // capped at 2 rows per response
+  expect((await publicReads().settlements('id-1')).map(x=>x.seq)).toEqual([1,2,3,4,5]);
+  expect(mocks.calls.filter(c=>c[0]==='gt')).toEqual([['gt','seq',0],['gt','seq',2],['gt','seq',3],['gt','seq',5]]);
+  expect(mocks.calls).toContainEqual(['limit',500]);
  });
  it('recentSettlements inner-joins judgments of the method and flattens the subject',async()=>{
   mocks.result={data:[{settlement_id:'s',seq:2,settled_at:'2026-03-01T03:00:00+00:00',judgments:{subject_type:'issuer',subject_key:'k',judgment_type:'t',methodology_id:'m',methodology_version:'v1'}}],error:null};
@@ -15713,13 +16815,15 @@ import {supabaseJudgmentsDb} from './db';
 import type {JudgmentType,JudgmentsDb,PublicSubjectType,SettlementRow} from './types';
 
 type Result={data:unknown;error:{message:string}|null};
-interface Query extends PromiseLike<Result>{select(columns:string):Query;eq(column:string,value:unknown):Query;order(column:string,o:{ascending:boolean}):Query;limit(n:number):Query;maybeSingle():PromiseLike<Result>}
+interface Query extends PromiseLike<Result>{select(columns:string):Query;eq(column:string,value:unknown):Query;gt(column:string,value:unknown):Query;order(column:string,o:{ascending:boolean}):Query;limit(n:number):Query;maybeSingle():PromiseLike<Result>}
+/** Settlement history page size; the loop runs until an EMPTY page, so a server row cap below it is harmless (P2-01). */
+export const SETTLEMENT_PAGE=500;
 interface LooseClient{from(table:string):Query}
 
 export interface JudgmentLocator{subject_type:PublicSubjectType;subject_key:string;judgment_type:JudgmentType;methodology_id:string;methodology_version:string}
 export type RecentSettlement=SettlementRow&{subject_type:string;subject_key:string;judgment_type:string};
 export interface PublicReads{
- /** Public-read methods only (latestCards, historyOf, listMethodologies, latestCalibration, methodologyStateAt, calibrationCohort, serverTime). */
+ /** Public-read methods only (latestCards, historyOf, envelopeById, listMethodologies, latestCalibration, methodologyStateAt, calibrationCohort, serverTime). */
  db:JudgmentsDb;
  judgmentLocator(id:string):Promise<JudgmentLocator|null>;
  settlements(id:string):Promise<SettlementRow[]>;
@@ -15746,8 +16850,14 @@ export function publicReads():PublicReads{
    return (data as JudgmentLocator|null)??null;
   },
   async settlements(id){
-   const data=check(await sb.from('judgment_settlements').select('*').eq('judgment_id',id).order('seq',{ascending:true}),'settlements');
-   return ((data as Record<string,unknown>[]|null)??[]).map(settlementFromRow);
+   // keyset on seq until an empty page (a short page is not exhaustion: PostgREST max-rows may be below the limit)
+   const out:SettlementRow[]=[];
+   for(let after=0;;){
+    const data=check(await sb.from('judgment_settlements').select('*').eq('judgment_id',id).gt('seq',after).order('seq',{ascending:true}).limit(SETTLEMENT_PAGE),'settlements');
+    const page=((data as Record<string,unknown>[]|null)??[]).map(settlementFromRow);
+    if(page.length===0)return out;
+    out.push(...page);after=page[page.length-1].seq;
+   }
   },
   async recentSettlements(methodology,version,limit){
    const data=check(await sb.from('judgment_settlements').select('*,judgments!inner(subject_type,subject_key,judgment_type,methodology_id,methodology_version)')
@@ -15778,7 +16888,7 @@ export async function readCohortSample(cohortPath:string,cohortSha256:string):Pr
 ```
 
 Run: `npm test -- src/lib/judgments/public-reads.test.ts`
-Expected: PASS — 8 tests。
+Expected: PASS — 9 tests。
 
 - [ ] **Step 4: 实现 `src/lib/judgments/admin-actions.ts`**（测试在 Step 13 的 withdraw 路由测试里，用真实 `admin-actions` + `memoryTableClient`）
 
@@ -15972,8 +17082,8 @@ Expected: PASS — 8 tests。
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {envelope,methodologyRow,settlementRow,uuidOf} from '@/lib/judgments/testing/envelopes';
 
-const mocks=vi.hoisted(()=>({locator:vi.fn(),historyOf:vi.fn(),listMethodologies:vi.fn(),settlements:vi.fn()}));
-vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:{historyOf:mocks.historyOf,listMethodologies:mocks.listMethodologies},judgmentLocator:mocks.locator,settlements:mocks.settlements})}));
+const mocks=vi.hoisted(()=>({envelopeById:vi.fn(),historyOf:vi.fn(),listMethodologies:vi.fn(),settlements:vi.fn()}));
+vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:{envelopeById:mocks.envelopeById,historyOf:mocks.historyOf,listMethodologies:mocks.listMethodologies},settlements:mocks.settlements})}));
 vi.mock('@/lib/judgments/deps',()=>({resolveCodeVersion:()=>'abc1234'}));
 
 import {GET} from './route';
@@ -15985,33 +17095,30 @@ const get=(id:string,qs='')=>GET(new Request(`https://alpha.example/api/judgment
 describe('GET /api/judgments/[id]',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
-  mocks.locator.mockResolvedValue(LOC);
-  mocks.historyOf.mockResolvedValue([envelope({judgment:{n:9}}),envelope({judgment:{n:7},settlement:{judgment_id:ID}})]);
+  mocks.envelopeById.mockResolvedValue(envelope({judgment:{n:7,subject_key:LOC.subject_key},settlement:{judgment_id:ID}}));
   mocks.listMethodologies.mockResolvedValue([methodologyRow()]);
   mocks.settlements.mockResolvedValue([settlementRow({judgment_id:ID,seq:1,settled_at:'2026-03-01T03:00:00.000Z'}),settlementRow({judgment_id:ID,seq:2,kind:'withdrawn',outcome:null,realized:null,reason:'x',settled_at:'2026-07-01T00:00:00.000Z'})]);
  });
- it('returns card, judgment, settlements and calibration; locates through anon and pages history',async()=>{
+ it('returns card, judgment, settlements and calibration from ONE envelopeById lookup (no history scan; P2-01)',async()=>{
   const res=await get(ID);
   expect(res.status).toBe(200);
   expect(res.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=600');
   const body=await res.json();
   expect(body).toMatchObject({codeVersion:'abc1234',view:'latest',card:{judgment_id:ID,lifecycle:'settled'},judgment:{judgment_id:ID},calibration:null});
   expect(body.settlements).toHaveLength(2);
-  expect(mocks.historyOf).toHaveBeenCalledWith({type:'issuer',key:LOC.subject_key},'synthetic_fact_metric',{id:'synthetic_fact_metric',version:'v1'},{view:'latest',cutoff:undefined,before:undefined,limit:500});
+  expect(mocks.envelopeById).toHaveBeenCalledWith(ID,{view:'latest',cutoff:undefined});
+  expect(mocks.historyOf).not.toHaveBeenCalled();
  });
- it('as_known cuts settlements at the cutoff and asks history for the same view',async()=>{
+ it('as_known cuts settlements at the cutoff and asks envelopeById for the same view',async()=>{
   const body=await (await get(ID,'view=as_known&asOf=2026-06-30')).json();
   expect(body.settlements.map((s:{seq:number})=>s.seq)).toEqual([1]);
-  expect(mocks.historyOf.mock.calls[0][3]).toMatchObject({view:'as_known',cutoff:'2026-06-30T23:59:59.999Z'});
+  expect(mocks.envelopeById).toHaveBeenCalledWith(ID,{view:'as_known',cutoff:'2026-06-30T23:59:59.999Z'});
  });
  it('404 unknown_judgment when anon cannot see it, or it is not known at the view',async()=>{
-  mocks.locator.mockResolvedValueOnce(null);
-  let res=await get(ID);
+  mocks.envelopeById.mockResolvedValueOnce(null);
+  const res=await get(ID);
   expect(res.status).toBe(404);expect((await res.json()).error.code).toBe('unknown_judgment');
   expect(res.headers.get('cache-control')).toBe('no-store');
-  mocks.historyOf.mockResolvedValueOnce([envelope({judgment:{n:9}})]);
-  res=await get(ID,'view=as_known&asOf=2026-01-01');
-  expect(res.status).toBe(404);
  });
  it('400 for a malformed id or parameters',async()=>{
   expect((await get('nope')).status).toBe(400);
@@ -16024,19 +17131,18 @@ describe('GET /api/judgments/[id]',()=>{
 
 ```ts
 // src/app/api/judgments/[id]/route.ts
-// GET /api/judgments/[id] (spec §10): {card, judgment, settlements, calibration}. The judgment is
-// located through anon (RLS: published methods only), its envelope comes from judgment_history of the
-// same subject / type / method under the requested view (so as_known applies the SQL cutoff rules to
-// the judgment, settlement, calibration and method state alike); settlements are the full public
-// list, cut at the same cutoff.
+// GET /api/judgments/[id] (spec §10): {card, judgment, settlements, calibration}. The envelope comes from
+// envelopeById (RPC judgment_envelope_by_id through anon: RLS publishes published methods only; the
+// judgment_history view semantics, so as_known applies the SQL cutoff rules to the judgment, settlement,
+// calibration and method state alike) — no history scan, so a deep history or a small server cap can never
+// 404 a published judgment (plan audit P2-01); settlements are the full public list (paged until empty), cut
+// at the same cutoff.
 import {cardsOf,methodKey} from '@/lib/judgments/display';
 import {publicReads} from '@/lib/judgments/public-reads';
 import {UUID_RE,errorResponse,internalErrorResponse,okResponse,paramErrorResponse,readParams,viewParams} from '@/lib/judgments/route-utils';
-import type {Envelope} from '@/lib/judgments/types';
 
 export const dynamic='force-dynamic';
 const PARAMS=['view','asOf'] as const;
-const PAGE=500,MAX_PAGES=20;
 
 export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const now=new Date();const today=now.toISOString().slice(0,10);
@@ -16046,15 +17152,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  try{v=viewParams(readParams(new URL(req.url),PARAMS),today);}catch(e){return paramErrorResponse(e)??internalErrorResponse(e,'judgments/id');}
  try{
   const r=publicReads();
-  const loc=await r.judgmentLocator(id);
-  if(!loc)return errorResponse('unknown_judgment','no such judgment',404);
-  let found:Envelope|undefined;let before:string|undefined;
-  for(let page=0;page<MAX_PAGES&&!found;page++){
-   const envs=await r.db.historyOf({type:loc.subject_type,key:loc.subject_key},loc.judgment_type,{id:loc.methodology_id,version:loc.methodology_version},{view:v.view,cutoff:v.cutoff,before,limit:PAGE});
-   found=envs.find(e=>e.judgment.judgment_id===id);
-   if(envs.length<PAGE)break;
-   before=envs[envs.length-1].judgment.judgment_id;
-  }
+  const found=await r.db.envelopeById(id,{view:v.view,cutoff:v.cutoff});
   if(!found)return errorResponse('unknown_judgment','no such judgment at this view',404);
   const methods=await r.db.listMethodologies();
   const [card]=cardsOf([found],new Map(methods.map(m=>[methodKey(m),m])),{includeAbstained:true,now:v.cutoff===undefined?now.toISOString():undefined});
@@ -16091,14 +17189,16 @@ describe('GET /api/judgments/[id]/history',()=>{
   mocks.historyOf.mockResolvedValue([envelope({judgment:{n:9}}),envelope({judgment:{n:8}})]);
   mocks.listMethodologies.mockResolvedValue([methodologyRow()]);
  });
- it('defaults to 50, passes before, returns next_before only on a full page',async()=>{
+ it('defaults to 50, passes before; next_before = the last id of any non-empty page, null only on an empty page (a short page is not the end: P1-02)',async()=>{
   const body=await (await get()).json();
   expect(body.cards.map((c:{judgment_id:string})=>c.judgment_id)).toEqual([uuidOf(9),uuidOf(8)]);
-  expect(body.next_before).toBeNull();
+  expect(body.next_before).toBe(uuidOf(8));
   expect(mocks.historyOf.mock.calls[0][3]).toEqual({view:'latest',before:undefined,limit:50});
   const full=await (await get(`limit=2&before=${uuidOf(10)}`)).json();
   expect(full.next_before).toBe(uuidOf(8));
   expect(mocks.historyOf.mock.calls[1][3]).toEqual({view:'latest',before:uuidOf(10),limit:2});
+  mocks.historyOf.mockResolvedValueOnce([]);
+  expect((await (await get(`before=${uuidOf(8)}`)).json()).next_before).toBeNull();
  });
  it('limit 1..500 and a uuid before; 404 for an unknown judgment',async()=>{
   for(const qs of ['limit=0','limit=501','limit=x','before=x','limit=5&limit=6'])expect((await get(qs)).status,qs).toBe(400);
@@ -16134,7 +17234,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
    r.db.historyOf({type:loc.subject_type,key:loc.subject_key},loc.judgment_type,{id:loc.methodology_id,version:loc.methodology_version},{view:'latest',before:q.before,limit:q.limit}),
    r.db.listMethodologies()]);
   const cards=cardsOf(envs,new Map(methods.map(m=>[methodKey(m),m])),{includeAbstained:true,now:now.toISOString()});
-  return okResponse({judgment_id:id,cards,next_before:envs.length===q.limit?envs[envs.length-1].judgment.judgment_id:null},{empty:cards.length===0});
+  return okResponse({judgment_id:id,cards,next_before:envs.length>0?envs[envs.length-1].judgment.judgment_id:null},{empty:cards.length===0});
  }catch(e){return internalErrorResponse(e,'judgments/history');}
 }
 ```
@@ -16734,11 +17834,11 @@ describe('GET /api/admin/judgments/queue',()=>{
   mocks.getJudgment.mockImplementation(async(id:string)=>({judgment_id:id,subject_type:'issuer',subject_key:'k',methodology_id:'m',methodology_version:'v1',target:null}));
   mocks.settlementsOf.mockResolvedValue([{judgment_id:row(1).judgment_id,seq:1,kind:'void',outcome:null,settled_at:'2026-11-01T00:00:00.000Z'},{judgment_id:row(1).judgment_id,seq:2,kind:'reopened',outcome:null,settled_at:'2026-11-02T00:00:00.000Z'}]);
  });
- it('defaults to due / 100, keyset after, next_after on a full page, joined judgment + latest settlement, counts, now; never cached',async()=>{
+ it('defaults to due / 100, keyset after, next_after on any non-empty page (null only when empty; P1-02), joined judgment + latest settlement, counts, now; never cached',async()=>{
   const res=await get();
   expect(res.headers.get('cache-control')).toBe('no-store');
   const body=await res.json();
-  expect(body).toMatchObject({filter:'due',next_after:null,now:'2026-11-06T00:00:00.000Z',counts:{due:2,backoff:2,leased:2}});
+  expect(body).toMatchObject({filter:'due',next_after:row(2).judgment_id,now:'2026-11-06T00:00:00.000Z',counts:{due:2,backoff:2,leased:2}});
   expect(body.rows).toEqual([
    {...row(1),judgment:{subject_type:'issuer',subject_key:'k',methodology_id:'m',methodology_version:'v1',target:null},latest_settlement:{kind:'reopened',outcome:null,settled_at:'2026-11-02T00:00:00.000Z'}},
    {...row(2),judgment:{subject_type:'issuer',subject_key:'k',methodology_id:'m',methodology_version:'v1',target:null},latest_settlement:null}]);
@@ -16746,6 +17846,8 @@ describe('GET /api/admin/judgments/queue',()=>{
   const full=await (await get(`filter=leased&limit=2&after=${row(0).judgment_id}`)).json();
   expect(full.next_after).toBe(row(2).judgment_id);
   expect(mocks.queueList).toHaveBeenCalledWith({filter:'leased',limit:2,after:row(0).judgment_id});
+  mocks.queueList.mockResolvedValueOnce([]);
+  expect((await (await get(`after=${row(2).judgment_id}`)).json()).next_after).toBeNull();
  });
  it('validates parameters and requires an admin',async()=>{
   for(const qs of ['filter=x','limit=501','after=x','filter=due&filter=all'])expect((await get(qs)).status,qs).toBe(400);
@@ -16789,7 +17891,7 @@ export async function GET(request:Request){
    return {...r,judgment:j?{subject_type:j.subject_type,subject_key:j.subject_key,methodology_id:j.methodology_id,methodology_version:j.methodology_version,target:j.target}:null,
     latest_settlement:l?{kind:l.kind,outcome:l.outcome,settled_at:l.settled_at}:null};
   });
-  return privateResponse({filter:q.filter,rows:items,next_after:rows.length===q.limit?rows[rows.length-1].judgment_id:null,counts:{due:due.length,backoff:backoff.length,leased:leased.length},now});
+  return privateResponse({filter:q.filter,rows:items,next_after:rows.length>0?rows[rows.length-1].judgment_id:null,counts:{due:due.length,backoff:backoff.length,leased:leased.length},now});
  }catch(e){return internalErrorResponse(e,'admin/judgments/queue');}
 }
 ```
@@ -17686,7 +18788,7 @@ import {describe,expect,it} from 'vitest';
 import type {Recommendation,RecommendationScore} from '@/lib/supabase/database.types';
 import type {Input} from '@/lib/judgments/types';
 import {digest,sha256} from '@/lib/judgments/canonical';
-import {uuidV8} from '@/lib/research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from '@/lib/judgments/uuid-v8';
 import {originFor} from '@/lib/judgments/origins';
 import {parseReplayFixture} from '@/lib/judgments/replay';
 import {NO_ISSUERS,bandOf,legacyFillInput,loadIssuerIndex,recommendationCardId,selfAssessment,toJudgmentCard,type IssuerLookupClient} from './recommendation';
@@ -17937,7 +19039,7 @@ Expected: `1`（`[0,1/3) low · [1/3,2/3) mid · [2/3,1] high`；`display.ts` �
 import type {Market,Recommendation,RecommendationScore} from '@/lib/supabase/database.types';
 import type {Bilingual,Horizon,Input,PrivateJudgmentCard,ReliabilityBin,Subject,Target} from '@/lib/judgments/types';
 import {digest,sha256} from '@/lib/judgments/canonical';
-import {uuidV8} from '@/lib/research/ingest/pa-v1/uuid-v8';
+import {uuidV8} from '@/lib/judgments/uuid-v8';
 import {closeInstantUtc} from '@/lib/judgments/time';
 import {settleWindow} from '@/lib/judgments/target';
 import {originFor} from '@/lib/judgments/origins';
@@ -18857,7 +19959,7 @@ const bin=(lo:number,n:number,mean:number|null,hit:number|null):ReliabilityBin=>
 function calRow(p:Partial<CalibrationRow>={}):CalibrationRow{
  return {calibration_id:'c',methodology_id:'thesis_win_rate',methodology_version:'v1',scope_type:'all',scope_key:'',window_from:'2023-11-01',window_to:'2026-11-01',n_registered:500,n_settled:486,n_independent:214,n_void:4,n_retrospective_excluded:2,
   threshold_n:100,ece_max:0.1,kind:'probability',state:'calibrated',valid_until:'2026-12-01T00:00:00.000Z',validity_revision:7,metrics:{brier:0.181,brier_skill:0.12,ece_raw:0.05,ece_raw_holdout:0.046,brier_holdout:0.17,brier_skill_holdout:0.1,n_holdout:64},
-  reliability:[],isotonic_segments:null,cohort_path:'p',cohort_sha256:'0'.repeat(64),query_bounds:{window_from:'2023-11-01',window_to:'2026-11-01',registered_at_lte:'x',settled_at_lte:'x'},fingerprint:'f',algorithm_version:'a',code_version:'abcdefg',computed_at:'2026-11-01T04:00:00.000Z',batch_id:'b',...p};
+  reliability:[],isotonic_segments:null,cohort_path:'p',cohort_sha256:'0'.repeat(64),query_bounds:{window_from:'2023-11-01',window_to:'2026-11-01',registered_at_lte:'x',settled_at_lte:'x',frozen_at:'x',n:0},fingerprint:'f',algorithm_version:'a',code_version:'abcdefg',computed_at:'2026-11-01T04:00:00.000Z',batch_id:'b',...p};
 }
 
 describe('percent and band (spec §9.3)',()=>{
@@ -20816,7 +21918,7 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 ````markdown
 # 判断层（F4）运行手册
 
-规格：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 6 稿）。计划：`docs/superpowers/plans/2026-11-06-judgment-framework.md`。迁移：`supabase/migrations/20261109150000_judgments.sql`（八表 + 触发器 + RLS + 桶 + §5.6 函数）。代码：`src/lib/judgments/`、`src/app/api/{judgments,methodologies,admin/judgments,cron/judgments-*}/`、`src/components/judgments/`、`scripts/judgments/`。实施记录：`docs/audits/2026-11-06-judgment-framework/implementation-log.md`。
+规格：`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（第 7 稿）。计划：`docs/superpowers/plans/2026-11-06-judgment-framework.md`。迁移：`supabase/migrations/20261109150000_judgments.sql`（九表 + 触发器 + RLS + 桶 + §5.6 函数）。代码：`src/lib/judgments/`、`src/app/api/{judgments,methodologies,admin/judgments,cron/judgments-*}/`、`src/components/judgments/`、`scripts/judgments/`。实施记录：`docs/audits/2026-11-06-judgment-framework/implementation-log.md`。
 
 ## 1. 表、函数与权限（摘要）
 
@@ -20826,10 +21928,11 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 | `judgment_methodology_events` | 全部行 | 只读；只经 `sync_methodology` 追加 | 方法状态事件史（`as_known` 查询用） |
 | `judgments` | 仅 `publishable` 方法的行 | 只读；只经 `register_judgment` | 只追加；没有状态列 |
 | `judgment_settlements` | 仅 `publishable` 方法的行 | 只读；只经 `append_settlement` | 只追加；`settlement_sequence` 触发器管转移 |
-| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / apply_quarantine_override` | 可变调度状态（不是证据） |
+| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / apply_quarantine_override / reject_quarantined_settlement` | 可变调度状态（不是证据） |
 | `judgment_calibrations` | 仅 `publishable` 方法的行 | 只读；只经 `insert_calibration` | 只追加；`fingerprint` 唯一 |
 | `judgment_calibration_validity` | 全部行 | 只读；`append_settlement`（撤回 / 重开 +1）、`sync_methodology`（首次 = 1） | 校准失效修订号 |
-| `judgment_job_state` | 无 | 只读；只经 `set_job_state`（乐观锁） | 补偿 marker、校准续跑状态 |
+| `judgment_job_state` | 无 | 只读；只经 `set_job_state`（乐观锁） | 补偿 marker、校准续跑状态、校准轮次游标 `calibrate_round` |
+| `judgment_calibration_cohort_members` | 无 | 只读；只经 `freeze_calibration_cohort` 写、`clear_calibration_generation` 删 | 校准代际冻结的成员（一条语句一个快照）；不是只追加表 |
 
 桶 `judgments-calibration`（私有）：`<calibration_id>.json`（cohort 清单）与 `partial/<unit>/<generation>/<start_after>.<attempt_uuid>.json`（续跑分页，`upsert:false`）。公共读 RPC（`security invoker`，anon / authenticated / service_role 可执行）：`judgments_server_time`、`latest_judgment_cards`、`judgment_history`、`calibration_cohort`、`methodology_state_at`。服务写 RPC（`security definer`，只 service_role）：`sync_methodology`、`register_judgment`、`claim_due_judgments`、`release_lease`、`append_settlement`、`apply_quarantine_override`、`insert_calibration`、`set_job_state`、`repair_stale_batches`、`calibration_cohort_internal`（只读但不受发布门控）。RPC 不登记到 `database.types.ts` 的 `Functions`（调用处 `RpcFn` 断言，`src/lib/judgments/db.ts`）。
 
@@ -20897,6 +22000,8 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 - **队列**：`/admin/judgments`（到期 / 退避 / 租约 / 全部）。"立即结算"把一条交给 `POST /api/admin/judgments/[id]/settle`；"撤回…"（`withdrawn`，原因必填）只对已 `settled` 的判断；"重开"只对 `void / withdrawn`。三者都写 `research_audit_log`；证据只追加，旧结算行保留。撤回 / 重开会让该方法的校准行立即失效（`judgment_calibration_validity.revision + 1`）。
 - **隔离项**：`/admin/dq`，数据集 `judgments`；`settlement_basis_mismatch` 只能"接受重抓"（裁决携带隔离时的完整证据），`settlement_ambiguous_fact` 选一个候选，`settlement_base_bar_missing / settlement_benchmark_gap` 只能拒绝（→ `void(quarantine_rejected)`）。到 `settle_by` 仍未处理 → `void(unresolved_inconsistency)`。
 - **悬空批次**：每次 cron 开头 `repair_stale_batches('judgments.settle' | 'judgments.calibrate', '15 minutes')` 自动把残留 `running` 标 `failed`（`errors += stale_running`），不需要手工 SQL。
+- **无人引用的冻结代际**（校准单元冻结成员后、写单元状态前崩溃留下；只占空间，永不被读）：`select m.generation, count(*) from public.judgment_calibration_cohort_members m where not exists (select 1 from public.judgment_job_state s where s.job like 'calibrate:%' and s.state->>'generation' = m.generation::text) group by 1;` 列出，逐个 `select public.clear_calibration_generation('<generation>');` 清理（service_role）。
+- **隔离裁决返回 409 `stale`**：队列在裁决期间已换成另一次不一致或已关闭，什么都没写；刷新 `/admin/dq` 看当前项再裁决。
 - **回放**：`npx tsx scripts/judgments/replay.ts --id <judgment_id> [--reconcile] [--json]`；退出码 2 = `input_hash_mismatch`（存储被改动，输出指出输入定位，宏观观测为 `series_id`）。私有：`--recommendation <id>`（用户会话，只 `inputs_only`）。
 - **校准**：每周一 04:00 UTC；`threshold_n=100`、`ece_max=0.10`、`window_years=3`（owner O2 默认）。宏观每区域每 91 天约 1 条独立样本，按默认阈值在可预见时间内一直"未校准"——这是正确结果（规格 §8.4），不要为此降阈值。
 
@@ -21175,6 +22280,24 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 - 文件结构表与共享文件清单：补全部 testing 助手、adjustment-verify、methodology-sync、licenses.json、calibrate-deps、calibrate.integration、band、public-reads、admin-actions、api-types/view-model、回放夹具脚本、`next.config.mjs` → 骨架
 - 已核对无需改动：`capabilityOf`（非空）、`anonJudgmentInputsDb({anon,macro})`、`MacroUnavailable`、`resolveCodeVersion`、`inputsHashOf`（re-export）、`settlement_sequence` 映射、macro resolver 证据、REGISTRY 消费者、无"后建文件被先建任务修改"
 
+### 计划审计第一轮修复
+
+2026-11-06，按 `docs/audits/2026-11-06-judgment-framework-plan/01-codex-plan-round1.md` 与指挥决策；一行一条：ID → 修复 → 改动的任务。
+- P1-01 测试类型：并集 `Condition` 先按 `resolver` 收窄再换 `predicate`（`fixture_regime` 两处、显示测试 `otherEvent`），故意非法的夹具只经一次显式 `as unknown as Condition`；resolver 结果先 `status==='resolved'` 收窄再取 `evidence`（显式不安全边界）；全计划已 grep 两种模式无残留 → 改 10、11、17
+- P1-02 分页：`supabaseJudgmentsDb.pageAll` 按实际返回行数推进、空页才停；队列测试助手、校准分页（只有空页置 `done`）、公共结算历史（`seq` keyset 至空页）、history / queue 路由的 `next_before / next_after`（非空页即给游标）一律"空页才是终点"；新增服务端行数上限测试（校准 2 行上限、结算历史 2 行上限）→ 改 4、16、18
+- P1-03 cutoff_vintage：`settle.ts::planOf`——`settle_by` 前不运行 resolver（有无 override 都 `defer` 到 `settle_by`），之后 `cutoff = settle_by` 且 override 仅在 `override.cutoff = settle_by` 时使用、否则丢弃重解析；`QuarantineOverride.cutoff`（骨架与 Task 1 types 同步）、隔离 payload / `last_detail` 记 `cutoff`、钩子从 payload 取 `cutoff`；规格第 7 稿 §7.2/§7.6；已知后果（`cutoff_vintage` 的 `Inconsistent` 几无复核窗口，v1 不触发）记入 Task 12 偏差 → 改 1、3、4、11、12、14、规格
+- P1-04 接受原子化：`apply_quarantine_override` 锁队列再锁项，要求队列未关、`inconsistent`、`last_detail.evidence_hash` 与项 `payload.evidence_hash / cutoff` 都等于 override，清空租约，返回 `'applied'|'stale'|'closed'|'item_not_open'`（不写即返回状态）；结算刷新复用项的 payload；`planOf` 的 override 匹配加 `evidence_hash`；契约 `applyQuarantineOverride` 返回状态；三实现 + SQL / 契约 / 两连接竞争测试 → 改 1、3、4、12、14
+- P1-05 拒绝原子化：新 RPC `reject_quarantined_settlement`（request_key 重放 → 锁队列 → 锁项 → 校验 → 经 `judgment_append_settlement_internal` 追加 void → 项 `resolved_reject` → 审计，一个事务）；契约 `rejectQuarantinedSettlement`；三实现（内存抽出 `appendCore`）；钩子改为单次调用（`stale` → 409）；接受 vs 拒绝竞争测试（SQL 两连接 + pg 两连接池）→ 改 1、3、4、14
+- P1-06 事实结算证据：`FactOperand`（§3.5 `financial_metric` 快照同形：key、value_text、lineage、derivation rows）冻结每个算子——普通结算 `evidence.operands`、候选含 `counterpart`（yoy 另一侧）；`operandReproduces` 用 `deriveMetrics` 在冻结行上重派生；`fromOverride` 重算值 / 比率并核对 `realized_value` 与 `label_available_at`，不符 → `override_mismatch` → 改 11
+- P1-07 截止可得性：价格 bar 只在 `closeInstantUtc(bar.time, market) ≤ cutoff`（有基准时两市场）时可用；`decide` 要求 `label_available_at ≤ cutoff`（否则 `defer(label_after_cutoff)`）；事实 `factsAsOfDate(cutoff)`（当日未过完 → 前一日）；盘中 / 午夜测试 → 改 11、12
+- P1-08 table_rows 可得性：`available_at` = 行系统时间戳（`updated_at`，否则 `created_at`）最大值；缺 → `input_unavailable`（`buildOrAbstain` 对 `table_rows` 弃权）；已核对 `industry_classifications / issuer_industry_memberships` 无时间戳列 → 这两表 v1 一律弃权；宏观夹具目录行补 `created_at / updated_at`；规格偏差写在 Task 8 → 改 8、10
+- P1-09 独立抽样窗口：`calibration.ts::settledWindowEndOf`——已结算 `price_return` 用 `realized.to`，其余 `windowEndOf(target)`（`ceil(n×1.52)` 改称扫描窗口）；节假日 / 停牌测试；规格第 7 稿 §7.3「扫描窗口（非上界）」与 §8.2 → 改 15、规格
+- P1-10 冻结 cohort：第九张表 `judgment_calibration_cohort_members` + RPC `freeze_calibration_cohort`（一条语句）/ `calibration_cohort_members` / `clear_calibration_generation`；`QueryBounds.frozen_at / n`；契约 `freezeCalibrationCohort / cohortMembers / clearCalibrationGeneration`（三实现、`database.types.ts`）；`stepUnit` 先冻结再 CAS（输掉 → 清自己的代际），分页读冻结集，清空单元时清代际；SQL 两连接测试（冻结前开始、冻结后提交的登记一致地不在成员内，跨页稳定）与 pg 集成测试；规格第 7 稿 §5.5/§5.5b/§5.6/§8.3；运行手册加孤儿代际清理 → 改 2、3、4、15、16、22、规格
+- P2-01 详情路由：公共 RPC `judgment_envelope_by_id`（invoker、`history` 同视图语义）+ `JudgmentsDb.envelopeById`（三实现）；`GET /api/judgments/[id]` 一次取信封、不再翻历史页；结算历史 keyset 至空页 → 改 1、3、4、18
+- P2-02 校准调度：`jobKey('calibrate_round')`（Task 1 扩展）+ `RoundState{round, done}`；每次运行先续跑未完成代际、再处理本轮未完成单元，结果 inserted / duplicate / stale_revision / failed / skipped 计入本轮，全部完成才开新一轮；多单元跨多次运行测试 → 改 1、16
+- P2-03 uuid 帮助函数：`uuid-v8.ts` 移到 `src/lib/judgments/uuid-v8.ts`（测试同目录），全部 import 改路径，`ledger.ts` 在 F4 围栏内 import 它；文件结构表更新、Task 1 偏差注明与规格 §2.4 路径不同 → 改骨架、1、6、16、20
+- P3-01 触发器函数权限：三个触发器函数 `revoke execute … from public, anon, authenticated, service_role`，Task 2 用例断言每个客户端角色无 EXECUTE 且 PUBLIC 无授权 → 改 2
+
 
 ---
 
@@ -21199,7 +22322,7 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 - `src/lib/judgments/job-keys.ts`：`jobKey('produce',id,version)`、`jobKey('calibrate',id,version,scope)`、`parseJobKey(key):ParsedJobKey`。
 - `src/lib/judgments/markets.ts`：`factsMarketOf(p:PriceMarket):FactsMarket|null`、`priceMarketOf(f:FactsMarket):PriceMarket`、`isPriceMarket(v)`、`isFactsMarket(v)`。
 - `src/lib/judgments/settlement-digest.ts`：`OPERATION_FIELDS`、`operationPayload(judgmentId,row)`、`operationDigest(judgmentId:string,row:SettlementInsert):string`。
-- `src/lib/research/ingest/pa-v1/uuid-v8.ts`：`uuidV8(hex64:string):string`。
+- `src/lib/judgments/uuid-v8.ts`：`uuidV8(hex64:string):string`。
 - `src/lib/judgments/db.ts`（Task 4）：`supabaseJudgmentsDb({anon,admin})`、`type RpcFn`、`toJudgmentError(e)`、`type PgErrorLike`、`isoTs(v)`、行归一 `methodologyFromTable / eventFromTable / judgmentFromTable / settlementFromTable / queueFromTable / calibrationFromTable / envelopeFromRpc`、转移表 `transitionAllowed(prev,next,actor)`、`PUBLIC_INPUT_KIND_SET`、常量 `QUEUE_LIST_MAX=500`、`COHORT_PAGE_MAX=1000`、`HISTORY_LIMIT_MAX=500`、`CLAIM_LIMIT_MAX=100`。
 - `src/lib/judgments/memory-judgments-db.ts`（Task 4）：`memoryJudgmentsDb(opts?:{tables?:TableClient})` 返回 `MemoryJudgmentsDb`（`JudgmentsDb` + `tables`、`setNow(iso|null)`、`addIssuer(id,status?,mergedInto?)`、`addIndustry(scheme,version,code)`、`expireLease(judgmentId)`、`snapshot()`）。
 - `src/lib/judgments/db-contract.ts`（Task 4，非测试文件）：`judgmentsDbContract(label,setup)`、`type JudgmentsContractHarness`、夹具工厂 `methodologyFixture(o?)`、`judgmentFixture(m,batchId,o?)`、`calibrationFixture(m,batchId,revision,o?)`、`settlementFixture(o?)`、常量 `F4_CLAIM_LOCK=20261109`、`withClaimLock(pool,fn)`。**任何调用 `claim_due_judgments` 的集成测试（Task 3、4、14）都必须在 `withClaimLock`（或同键的 `pg_advisory_lock(20261109)`）内登记到期判断并领取**，否则并行运行的测试文件会领走彼此的行；不领取的活跃判断一律用远期 `target`（默认 `2099-01-01`），永不到期。
@@ -21345,7 +22468,7 @@ Part A–D 与本部分并行编写。下面是本部分**依赖**的签名与�
 // src/lib/judgments/canonical.ts
 export function digest(v:unknown):string;                 // sha256(canonicalize(v)) hex
 export function sha256(text:string):string;               // hex of the UTF-8 bytes
-// src/lib/research/ingest/pa-v1/uuid-v8.ts
+// src/lib/judgments/uuid-v8.ts
 export function uuidV8(hex64:string):string;
 // src/lib/judgments/time.ts
 export function addMonthsPeriod(period:string,n:number):string;          // 'YYYY-MM' + n months → 'YYYY-MM'
