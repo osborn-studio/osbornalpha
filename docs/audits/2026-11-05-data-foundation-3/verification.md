@@ -38,3 +38,18 @@
 原始响应（入库于 `docs/audits/2026-11-05-data-foundation-3/raw/`，`.meta.json` 为内容寻址侧车）：
 - `openfigi-isin-5afdb0e5…139a.json`（ISIN 响应，123,091 字节，sha256 `5afdb0e5d0f9ae85a2b4cb13848b5df2bdd7bb119b2ac1d7c932fc8a1993139a`；对应请求 `openfigi-isin-c581a143…80d7.json`）
 - `openfigi-ticker-079188bb…e5b9.json`（TICKER 响应，818 字节，sha256 `079188bbcb12b2230a75a72a9b83cab1a6c5911e80298aba820a16d0516ee5b9`；对应请求 `openfigi-ticker-418b033a…f00b.json`）
+
+## Task 6a · SEC submissions 分页结构（规格 §4.3.3、§14-9；日期 2026-11-06）
+
+命令：`npx tsx scripts/entity-keys/probe-submissions.ts 320193 .claude/scratch/verify/aapl-submissions`（AAPL；UA 用落地 `DEFAULT_USER_AGENT`；2 个请求，均 200，相隔 ≥ 120 ms）。
+
+| 项 | 观察值 | 与 `parseSubmissions`/`parseSubmissionsPage` 一致 | 处置 |
+|---|---|---|---|
+| `filings.files[]` 元素键 | `name`、`filingCount`、`filingFrom`、`filingTo`；AAPL 1 个分页（1,271 条，1994-01-26 至 2015-10-03） | 一致 | 无 |
+| 分页文件名格式 | `CIK0000320193-submissions-001.json` | 匹配 `PAGE_NAME` | 无 |
+| 分页文件顶层形状 | 顶层即列式数组，键与 `recent` 完全相同（`accessionNumber`、`filingDate`、`reportDate`、`acceptanceDateTime`、`act`、`form`、`fileNumber`、`filmNumber`、`items`、`core_type`、`size`、`isXBRL`、`isInlineXBRL`、`isXBRLNumeric`、`primaryDocument`、`primaryDocDescription`） | 一致（与 `zz-page-001.json` 假设同形） | 无 |
+| `byPage` 条数与日期跨度、`complete` | `recent` 1,004 条（2015-10-05 至 2026-11-05）；分页 1,271 条（1994-01-26 至 2015-10-02）；`complete=true` | — | 注意：`recent` 不是固定 40 条，AAPL 为 1,004 条；`filingTo`（2015-10-03）≥ 分页内最晚申报日（2015-10-02），`coverFrom` 过滤按 `filingTo` 正确 |
+| main / 分页 sha256 | main `c323cc184a7963177a2f25621719b861e73ea4562cb637f009e9d4b37548167f`（164,219 字节）；page-001 `c01f4199ed2a19c8ccb302597f996ac4050c13f315258301d1164b924458c502`（206,002 字节） | — | — |
+| 原始元数据 | 侧车 `.meta.json` 只含 `cik/name/http_status/kind/sha256/bytes/content_type`，不含 User-Agent | — | UA 含邮箱，故不入元数据 |
+
+结论：分页形状与假设一致，无需改解析器或夹具。无规格 §15 偏差。
