@@ -3,7 +3,7 @@
 // /api/cron/facts-sync: CRON_SECRET bearer (constant-time), maxDuration 300 with a 240 s deadline handed to
 // the runner (which starts a member only with >= 60 s left), a missing code_version refuses the run. The pair
 // must be given once and be a REGISTERED cycle pair; cn.* pairs are refused unless FACTS_CN_ENABLED=1 (no
-// Tushare token, no verified gold yet; vercel.json schedules lineage 04:00 UTC only; the US iXBRL entry (02:00) is added with its pair in Task 15a).
+// Tushare token, no verified gold yet; vercel.json schedules US iXBRL 02:00 and lineage 04:00 UTC).
 // A duplicate cron delivery is harmless: cursor claims are fenced, a second worker finds nothing claimable.
 // The HTTP receipt carries codes, keys and counts only — never error messages or dry-run results.
 import {timingSafeEqual} from 'node:crypto';

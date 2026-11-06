@@ -1,6 +1,6 @@
 // src/lib/dq/reconcile/pairs.ts
 // Registry of the cycle pairs run by run.ts (spec §5.1; contract C3). Task 14 registers
-// facts.lineage_same_day and us.companyfacts_vs_gold; Task 15 adds us.companyfacts_vs_ixbrl; Task 16 adds
+// facts.lineage_same_day and us.companyfacts_vs_gold; us.companyfacts_vs_ixbrl (Task 15); Task 16 adds
 // cn.tushare_vs_cninfo_pdf_gold. The three non-cycle pairs (sec.filing_date_vs_submissions,
 // sec.filer_category, entities.isin_hkex_vs_gleif) are recorded inline through record.ts and are
 // deliberately absent. inputsHashNow recomputes a reconcile_mismatch item's inputs_hash from CURRENT
@@ -15,11 +15,13 @@ import {lineageSameDayPair} from './pair-lineage';
 import {sha256Hex} from './pair-support';
 import type {RegisteredPair} from './pair-support';
 import {usCompanyfactsVsGoldPair} from './pair-us-gold';
+import {usCompanyfactsVsIxbrlPair} from './pair-us-ixbrl';
 import type {CyclePairId,PairContext} from './types';
 
 export const RECONCILE_PAIRS:Partial<Record<CyclePairId,RegisteredPair>>={
  'facts.lineage_same_day':lineageSameDayPair(),
  'us.companyfacts_vs_gold':usCompanyfactsVsGoldPair(),
+ 'us.companyfacts_vs_ixbrl':usCompanyfactsVsIxbrlPair(),
 };
 
 export async function inputsHashNow(ctx:PairContext,item:Row):Promise<string>{

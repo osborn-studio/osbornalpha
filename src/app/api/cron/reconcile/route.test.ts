@@ -1,12 +1,13 @@
 // src/app/api/cron/reconcile/route.test.ts
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
-const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn()}));
+const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn(),hidden:new Set<string>()}));
 vi.mock('@/lib/dq/reconcile/run',async importOriginal=>({...(await importOriginal<typeof import('@/lib/dq/reconcile/run')>()),runReconcile:mocks.run}));
 vi.mock('@/lib/dq/reconcile/deps',()=>({productionReconcileDeps:mocks.deps,cnPairEnabled:(pair:string)=>!pair.startsWith('cn.')||process.env.FACTS_CN_ENABLED==='1'}));
-vi.mock('@/lib/dq/reconcile/pairs',async importOriginal=>{const o=await importOriginal<typeof import('@/lib/dq/reconcile/pairs')>();return {...o,RECONCILE_PAIRS:{...o.RECONCILE_PAIRS,'cn.tushare_vs_cninfo_pdf_gold':{id:'cn.tushare_vs_cninfo_pdf_gold'}}};});   // a CN pair registered (as Task 16a will) so the gate is reached
+vi.mock('@/lib/dq/reconcile/pairs',async importOriginal=>{const o=await importOriginal<typeof import('@/lib/dq/reconcile/pairs')>();return {...o,RECONCILE_PAIRS:new Proxy({...o.RECONCILE_PAIRS,'cn.tushare_vs_cninfo_pdf_gold':{id:'cn.tushare_vs_cninfo_pdf_gold'}} as Record<string,unknown>,{get:(t,k)=>typeof k==='string'&&mocks.hidden.has(k)?undefined:t[k as string]})};});   // a CN pair registered (as Task 16a will) so the gate is reached
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
 
+import {readFileSync} from 'node:fs';
 import {GET,POST} from './route';
 import {ReconcileError} from '@/lib/dq/reconcile/run';
 
@@ -17,7 +18,7 @@ const receipt={batchId:'b',status:'success',counts:{fetched:2,inserted:2,duplica
 
 describe('reconcile cron',()=>{
  beforeEach(()=>{
-  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';delete process.env.FACTS_CN_ENABLED;
+  vi.clearAllMocks();mocks.hidden.clear();process.env.CRON_SECRET='cron-secret';delete process.env.FACTS_CN_ENABLED;
   mocks.codeVersion.mockReturnValue('abc123');mocks.deps.mockReturnValue({tag:'deps'});mocks.run.mockResolvedValue(receipt);
  });
  afterEach(()=>{
@@ -39,10 +40,16 @@ describe('reconcile cron',()=>{
   }
   expect(mocks.run).not.toHaveBeenCalled();
  });
- it('answers 400 for a cycle pair that is not registered yet (US iXBRL until Task 15a) and does not run it',async()=>{
+ it('answers 400 for a cycle pair that is not registered and does not run it',async()=>{
+  mocks.hidden.add('us.companyfacts_vs_ixbrl');
   const res=await GET(req('pair=us.companyfacts_vs_ixbrl',AUTH));
   expect(res.status).toBe(400);expect((await res.json()).error.code).toBe('invalid_parameter:pair');
   expect(mocks.run).not.toHaveBeenCalled();
+ });
+ it('vercel.json schedules the US iXBRL pair at 02:00 UTC and never a CN pair',()=>{
+  const crons=(JSON.parse(readFileSync('vercel.json','utf8')) as {crons:{path:string;schedule:string}[]}).crons;
+  expect(crons).toContainEqual({path:'/api/cron/reconcile?pair=us.companyfacts_vs_ixbrl',schedule:'0 2 * * *'});
+  expect(crons.some(c=>c.path.includes('pair=cn.'))).toBe(false);
  });
  it('refuses a registered CN pair with exactly 403 cn_disabled unless FACTS_CN_ENABLED=1, then runs it',async()=>{
   for(const v of [undefined,'0','true']){
