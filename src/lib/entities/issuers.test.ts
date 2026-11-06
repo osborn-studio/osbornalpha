@@ -54,9 +54,12 @@ describe('upsertIssuerByIdentifiers',()=>{
  it('treats a 23505 on claim insert as an already-filed claim',async()=>{
   const c=client();
   await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
-  const base=c.insert.bind(c);
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});   // the winner's pending claim
+  const base=c.insert.bind(c),select=c.select.bind(c);let blind=true;
+  c.select=async(t,m,o)=>{if(t==='issuer_identifier_claims'&&blind){blind=false;return [];}return select(t,m,o);};
   c.insert=async(t,row)=>{if(t==='issuer_identifier_claims')throw dupErr(t);return base(t,row);};
   expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});
+  expect(c.rows('issuer_identifier_claims')).toHaveLength(1);
  });
  it('rejects invalid identifiers before touching the database',async()=>{
   const c=memoryTableClient();

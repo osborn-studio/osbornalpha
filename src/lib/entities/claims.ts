@@ -107,7 +107,7 @@ export function validateClaimDetail(op:ClaimOp,idType:ClaimIdType,detail:unknown
    break;
   case 'evidence_only':
    if(idType!=='ticker'||full)return bad('op_id_type');
-   if('suggested_op' in pa&&!SUGGESTED_OPS.includes(String(pa.suggested_op)))return bad('params.suggested_op');
+   if('suggested_op' in pa&&!(typeof pa.suggested_op==='string'&&SUGGESTED_OPS.includes(pa.suggested_op)))return bad('params.suggested_op');
    break;
   default:
    return bad('op');
@@ -145,22 +145,30 @@ export function buildClaimDetail(input:{evidence_kind:EvidenceKind;target:ClaimT
 }
 
 /**
- * Appends `evidence` to the pending claim matching `key` (plan audit round 1, P3): ONE call of the
- * row-locking SQL function append_claim_evidence (migration 20261107090000, Task 1b), which dedupes
- * against the claim's evidence and sources and patches detail.sources only — concurrent filers never
- * lose each other's evidence, target / params / the first evidence are never touched. A claim resolved
- * meanwhile answers 'not_found' and is left alone. Needs client.rpc (callRpc: rpc_unavailable otherwise).
+ * Appends every evidence item of the incoming claim (detail.evidence plus each of detail.sources) to the
+ * pending claim matching `key` through the row-locking SQL function append_claim_evidence (migration
+ * 20261107090000, Task 1b; plan audit round 1, P3): it dedupes against the claim's evidence and sources
+ * and patches detail.sources only, so concurrent filers never lose each other's evidence and target /
+ * params / the first evidence are never touched. 'not_found' = the claim was resolved meanwhile.
+ * Needs client.rpc (callRpc: rpc_unavailable otherwise).
  */
-async function appendEvidence(client:TableClient,key:Row,evidence:ClaimEvidence):Promise<false>{
- await callRpc(client,'append_claim_evidence',{p_issuer:key.issuer_id,p_id_type:key.id_type,p_value:key.value,p_op:key.op,p_target_key:key.target_key,p_evidence:evidence});
- return false;
+async function appendEvidence(client:TableClient,key:Row,detail:ClaimDetail):Promise<'ok'|'not_found'>{
+ for(const evidence of [detail.evidence,...(detail.sources??[])]){
+  const r=await callRpc(client,'append_claim_evidence',{p_issuer:key.issuer_id,p_id_type:key.id_type,p_value:key.value,p_op:key.op,p_target_key:key.target_key,p_evidence:evidence});
+  if(r==='not_found')return 'not_found';
+ }
+ return 'ok';
 }
 
 /**
  * Files a pending claim/1 claim. Validates first (throws invalid_claim:<field> / legacy_claim, no DB
- * access). The same pending (issuer_id, id_type, value, op, target_key) → appends the new evidence to
- * detail.sources and returns false; a concurrent duplicate (23505 on the partial unique index) is
- * treated the same way. Returns whether a new claim row was written.
+ * access). The same pending (issuer_id, id_type, value, op, target_key) → every incoming evidence item
+ * is appended to detail.sources and false is returned; a concurrent duplicate (23505 on the partial
+ * unique index) is treated the same way. If the pending claim was resolved between the lookup and the
+ * append ('not_found'), the whole step is retried once against the current state (a new pending claim
+ * is inserted when none is pending); when that still persists nothing the call throws
+ * claim_not_persisted (retryable) — it never returns false without having persisted the evidence.
+ * Returns whether a new claim row was written.
  */
 export async function fileClaim(client:TableClient,c:ClaimInput):Promise<boolean>{
  const v=validateClaimDetail(c.op,c.id_type,c.detail,c.value);
@@ -170,15 +178,21 @@ export async function fileClaim(client:TableClient,c:ClaimInput):Promise<boolean
  if(!str(c.value))throw new Error('invalid_claim:value');
  const target_key=claimTargetKey(c.op,c.detail.target);
  const key:Row={issuer_id:c.issuer_id,id_type:c.id_type,value:c.value,op:c.op,target_key,status:'pending'};
- if((await client.select('issuer_identifier_claims',key,{limit:1})).length)return appendEvidence(client,key,c.detail.evidence);
- try{
-  await client.insert('issuer_identifier_claims',{
-   id:randomUUID(),issuer_id:c.issuer_id,id_type:c.id_type,value:c.value,source:c.source,confidence:null,status:'pending',
-   op:c.op,target_key,detail:{...c.detail,sources:c.detail.sources??[]},resolved_by:null,resolved_at:null,created_at:new Date().toISOString(),
-  });
-  return true;
- }catch(e){
-  if(isUnique(e))return appendEvidence(client,key,c.detail.evidence);
-  throw e;
+ for(let attempt=0;attempt<2;attempt++){
+  if((await client.select('issuer_identifier_claims',key,{limit:1})).length){
+   if(await appendEvidence(client,key,c.detail)==='ok')return false;
+   continue;
+  }
+  try{
+   await client.insert('issuer_identifier_claims',{
+    id:randomUUID(),issuer_id:c.issuer_id,id_type:c.id_type,value:c.value,source:c.source,confidence:null,status:'pending',
+    op:c.op,target_key,detail:{...c.detail,sources:c.detail.sources??[]},resolved_by:null,resolved_at:null,created_at:new Date().toISOString(),
+   });
+   return true;
+  }catch(e){
+   if(!isUnique(e))throw e;
+   if(await appendEvidence(client,key,c.detail)==='ok')return false;
+  }
  }
+ throw new Error('claim_not_persisted');
 }

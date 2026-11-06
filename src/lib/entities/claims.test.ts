@@ -64,6 +64,7 @@ describe('validateClaimDetail (mirrors identifier_claim_problem in SQL)',()=>{
    [['backdate_window','ticker',d({target:rowT,params:{new_valid_from:'2001-09-01',valid_from_method:'listing_date'}})],'invalid_claim:params'],
    [['backdate_window','ticker',d({target:rowT,params:{new_valid_from:'2001-08-01',valid_from_method:'first_observed'}})],'invalid_claim:params'],
    [['evidence_only','ticker',d({params:{suggested_op:'merge'}})],'invalid_claim:params.suggested_op'],
+   [['evidence_only','ticker',d({params:{suggested_op:['attach_security']}})],'invalid_claim:params.suggested_op'],
    [['evidence_only','lei',d()],'invalid_claim:op_id_type'],
    [['set_identifier','lei',d({provenance_written:{cik:{source:'x'}}})],'invalid_claim:provenance_written:unknown_key'],
    [['set_identifier','lei',d({provenance_written:{lei:{source:'x',user_id:'u'}}})],'invalid_claim:provenance_written:secret_key'],
@@ -141,6 +142,48 @@ describe('fileClaim',()=>{
   expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([e1,e2]);
   const {rpc:_rpc,...noRpc}=c;
   await expect(fileClaim(noRpc,input({detail:d({evidence:{...EV,evidence_sha256:'9'.repeat(64)}})}))).rejects.toThrow('rpc_unavailable:append_claim_evidence');
+ });
+ it('appends every incoming evidence item (evidence and each source) on the existing-row and the insert-race paths',async()=>{
+  const B={...EV,evidence_sha256:'1'.repeat(64)},C={...EV,evidence_sha256:'2'.repeat(64)},D={...EV,evidence_sha256:'3'.repeat(64)},E={...EV,evidence_sha256:'4'.repeat(64)};
+  const c=client();
+  await fileClaim(c,input());
+  expect(await fileClaim(c,input({detail:d({evidence:B,sources:[C]})}))).toBe(false);
+  expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([B,C]);
+  const select=c.select.bind(c);let blind=true;
+  c.select=async(t,m,o)=>{if(t==='issuer_identifier_claims'&&blind){blind=false;return [];}return select(t,m,o);};
+  const insert=c.insert.bind(c);
+  c.insert=async(t,r)=>{if(t==='issuer_identifier_claims')throw new TableError('insert',t,'duplicate key value violates unique constraint "issuer_identifier_claims_pending_unique"','23505');return insert(t,r);};
+  expect(await fileClaim(c,input({detail:d({evidence:D,sources:[E,C]})}))).toBe(false);
+  expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([B,C,D,E]);
+ });
+ it('retries once when the pending claim is resolved between lookup and append (not_found)',async()=>{
+  const c=client();
+  await fileClaim(c,input());
+  const rpc=c.rpc.bind(c);let first=true;
+  c.rpc=async(fn,a)=>{if(first){first=false;await c.update('issuer_identifier_claims',{status:'pending'},{status:'rejected'});}return rpc(fn,a);};
+  const later={...EV,evidence_sha256:'5'.repeat(64)};
+  expect(await fileClaim(c,input({detail:d({evidence:later})}))).toBe(true);     // a new pending claim was inserted
+  const rows=c.rows('issuer_identifier_claims');
+  expect(rows.map(r=>r.status)).toEqual(['rejected','pending']);
+  expect((rows[1].detail as ClaimDetail).evidence).toEqual(later);
+ });
+ it('retries after an insert unique conflict whose winner was resolved meanwhile, and appends to a new winner',async()=>{
+  const c=client();
+  await fileClaim(c,input());
+  const select=c.select.bind(c);let blind=true;
+  c.select=async(t,m,o)=>{if(t==='issuer_identifier_claims'&&blind){blind=false;return [];}return select(t,m,o);};
+  const insert=c.insert.bind(c);let raced=true;
+  c.insert=async(t,r)=>{if(raced){raced=false;throw new TableError('insert',t,'duplicate key value violates unique constraint "issuer_identifier_claims_pending_unique"','23505');}return insert(t,r);};
+  const rpc=c.rpc.bind(c);let first=true;
+  c.rpc=async(fn,a)=>{if(first){first=false;await c.update('issuer_identifier_claims',{status:'pending'},{status:'accepted'});}return rpc(fn,a);};
+  expect(await fileClaim(c,input())).toBe(true);
+  expect(c.rows('issuer_identifier_claims').map(r=>r.status)).toEqual(['accepted','pending']);
+ });
+ it('throws claim_not_persisted instead of returning false when nothing could be persisted',async()=>{
+  const c=client();
+  await fileClaim(c,input());
+  c.rpc=async()=>'not_found';
+  await expect(fileClaim(c,input({detail:d({evidence:{...EV,evidence_sha256:'6'.repeat(64)}})}))).rejects.toThrow('claim_not_persisted');
  });
  it('validates before touching the database',async()=>{
   const c=client();
