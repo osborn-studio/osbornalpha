@@ -293,3 +293,44 @@ describe('runReconcile — hooks and dry run',()=>{
   expect(await h.tables.select(CYCLE_TABLE,{})).toEqual([]);
  });
 });
+
+describe('runReconcile — review P1/P2 (hook CAS, durable freshness)',()=>{
+ it('P1: a restore that commits a newer pending hook while the runner materializes wins — the runner done-write is stale and the hook stays pending',async()=>{
+  const id=randomUUID();let h:ReturnType<typeof harness>;
+  h=harness(stubPair([],()=>[]),{materialize:async()=>{
+   const [cur]=await h.tables.select('dq_quarantine',{id});
+   await h.tables.update('dq_quarantine',{id},{detail:{...(cur.detail as Row),hook:{stage:'materialize',state:'pending',at:'2026-11-05T03:00:00.000Z'}}});   // a restore commits a newer hook
+   return {rows:0,stateRev:0,retried:false};}});
+  await h.tables.insert('dq_quarantine',{id,dataset:'facts.us',table_name:'financial_facts',natural_key:`${PAIR}:k:cas`,reason_code:'reconcile_mismatch',detail:{pair:PAIR,issuer_id:A,market:'US',hook:{stage:'materialize',state:'pending',at:T0}},payload:{},batch_id:randomUUID(),status:'open',resolved_by:null,resolved_at:null,created_at:T0});
+  const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
+  const [row]=await h.tables.select('dq_quarantine',{id});
+  expect((row.detail as {hook:Row}).hook).toMatchObject({state:'pending',at:'2026-11-05T03:00:00.000Z'});
+  expect(r.errors).toContainEqual({code:'skipped_summary',key:`${id}:hook_stale`});
+ });
+ const failingFreshness=(t:TableClient,state:{fail:boolean}):TableClient=>({...t,
+  async upsert(tb,row,key){if(tb==='dq_freshness'&&state.fail)throw new Error('freshness_down');return t.upsert(tb,row,key);}
+  } as TableClient);
+ it('P2: an interruption after the settling update (recordAttempt throws) leaves freshness pending; the next run start records it',async()=>{
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[miss('k1')]));
+  const st={fail:true};
+  const r1=await runReconcile({...h.deps,tables:failingFreshness(h.tables,st)},{pair:PAIR,triggeredBy:'cron'});
+  expect(r1.cycle).toMatchObject({settled:true,status:'complete_with_gaps'});
+  expect(await freshness(h.tables)).toBeUndefined();
+  const [c1]=await h.tables.select(CYCLE_TABLE,{pair:PAIR});
+  expect((c1.detail as {freshness:Row}).freshness).toMatchObject({status:'pending',ok:false});
+  st.fail=false;h.advance(60_000);
+  await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron',issuerIds:[B]});   // processes nothing: only the replay can have written freshness
+  expect(await freshness(h.tables)).toMatchObject({consecutive_errors:1});
+  const [c2]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:c1.cycle_id});
+  expect((c2.detail as {freshness:Row}).freshness).toMatchObject({status:'recorded'});
+ });
+ it('P2: two pending cycles are recorded oldest first, so two consecutive gaps give two errors',async()=>{
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[miss('k1')]));
+  const cyc=(id:string,fin:string,fresh:boolean)=>({pair:PAIR,cycle_id:id,started_at:fin,finished_at:fin,members:[],status:'complete_with_gaps',expected_total:0,compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{freshness:{status:'pending',ok:fresh,detail:{cycle_id:id}}}});
+  await h.tables.insert(CYCLE_TABLE,cyc('b-newer','2026-11-03T00:00:00.000Z',false));
+  await h.tables.insert(CYCLE_TABLE,cyc('a-older','2026-11-01T00:00:00.000Z',false));
+  await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron',issuerIds:[B]});
+  expect(await freshness(h.tables)).toMatchObject({consecutive_errors:2});
+  for(const id of ['a-older','b-newer']){const [c]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:id});expect((c.detail as {freshness:Row}).freshness.status).toBe('recorded');}
+ });
+});
