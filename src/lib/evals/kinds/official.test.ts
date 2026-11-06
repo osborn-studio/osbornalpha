@@ -89,7 +89,6 @@ describe('evaluateOfficial — every §3.3 outcome (spec §5.1)',()=>{
   expect((await one(gcase(),{rows:()=>({rows:[],truncated:true,stateRev:3})})).outcome).toEqual({result:'read_error',reason:'truncated'});
   const thrown=await one(gcase(),{rows:()=>{throw new Error('connection reset');}});
   expect(thrown.outcome).toEqual({result:'read_error',reason:'read_failed'});expect(thrown.detail.message).toBe('connection reset');
-  expect((await one(gcase({source:{...gcase().source,document_id:undefined}}))).outcome).toEqual({result:'read_error',reason:'filing_not_found'});
  });
  it('privileged: resolveProvenance gets {artifacts: verify.artifacts}; a failed resolution is provenance_incomplete(reason)',async()=>{
   const reader=fakeReader({privileged:{}});
@@ -141,5 +140,45 @@ describe('evaluateOfficial — every §3.3 outcome (spec §5.1)',()=>{
  it('cases are evaluated in input order and each report keeps case_id / required',async()=>{
   const rs=await evaluateOfficial([gcase({case_id:'b',required:false}),gcase({case_id:'a'})],fakeReader(),ctx());
   expect(rs.map(r=>[r.case_id,r.required])).toEqual([['b',false],['a',true]]);
+ });
+});
+
+describe('evaluateOfficial — Codex challenge fixes',()=>{
+ const VS={artifacts:false,sources:true};
+ const bytes=new TextEncoder().encode('doc');
+ const missingSrc=()=>({...MISSING,source:{...MISSING.source,sha256:sha256Hex(bytes)}});
+ it('P1: expect missing + empty visible read in a privileged run asks readNonVisible first; hidden → not_visible',async()=>{
+  for(const reason of ['quarantined','superseded_generation'] as const){
+   const r=await one(missingSrc(),{rows:()=>[],privileged:{nonVisible:reason}},{privileged:true,verify:VS,fetchSource:async()=>bytes});
+   expect(r.outcome).toEqual({result:'not_visible',reason});
+  }
+  const ok=await one(missingSrc(),{rows:()=>[],privileged:{nonVisible:null}},{privileged:true,verify:VS,fetchSource:async()=>bytes});
+  expect(ok.outcome).toEqual({result:'expected_absent'});
+ });
+ it('unit spec without a facts unit → unit_mismatch before the expect-missing branch',async()=>{
+  const c=gcase({case_id:'idx',expect:'missing',printed:undefined,canonical:undefined,target:{...(gcase().target as {type:'fact'}),unit:{kind:'index'}} as GoldCase['target']});
+  expect((await one(c,{rows:()=>[]})).outcome).toEqual({result:'unit_mismatch'});
+ });
+ it('document binding without document_id throws the invariant',async()=>{
+  await expect(one(gcase({source:{...gcase().source,document_id:undefined}}))).rejects.toThrow('gold_document_id_missing');
+ });
+ it('a throwing readNonVisible and an invalid decimal are read_error(read_failed) with detail.message',async()=>{
+  const t=await one(gcase(),{rows:()=>[],privileged:{}},{privileged:true});
+  expect(t.outcome).toEqual({result:'missing'});
+  const reader=fakeReader({rows:()=>[],privileged:{}});
+  (reader as unknown as {readNonVisible:()=>Promise<never>}).readNonVisible=async()=>{throw new Error('boom');};
+  const [r]=await evaluateOfficial([gcase()],reader,ctx({privileged:true}));
+  expect(r.outcome).toEqual({result:'read_error',reason:'read_failed'});expect(r.detail.message).toBe('boom');
+  const bad=await one(gcase(),{rows:()=>[readRow({value_text:'abc'})]});
+  expect(bad.outcome).toEqual({result:'read_error',reason:'read_failed'});expect(typeof bad.detail.message).toBe('string');
+ });
+ it('detail keeps row.metric, effective as_of and stateRev for every outcome (failures, anonymous runs)',async()=>{
+  const target:MetricTarget={type:'metric',metric:'gross_margin',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',basis:'us_standard',input_unit:'USD',formula_version:'facts-derive/1.0',unit:{kind:'ratio'}};
+  const m=gcase({case_id:'metric',target,binding:'current',as_of:null,canonical:{value:'0.4'},printed:{text:'40%',unit_label:'percent',scale:'1'}});
+  const metric={metric:'gross_margin',formula_version:'facts-derive/1.0',basis:'us_standard',input_unit:'USD',based_on_rev:3,inputs:[{fact_id:'f-1',concept:'revenue',filing_id:'g-1',available_date:'2024-02-15'}]};
+  const row:ReadRow={value_text:'0.9',unit:'pure',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',consolidation:'consolidated',available_date:'2024-02-15',metric};
+  const r=await one(m,{rows:()=>[row]});
+  expect(r.outcome).toEqual({result:'fail',reason:'value'});
+  expect(r.detail).toMatchObject({metric,effective_as_of:'2026-11-20',state_rev:7});
  });
 });

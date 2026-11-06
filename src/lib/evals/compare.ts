@@ -5,11 +5,11 @@
 // evaluated as |L−R|·10^s_rel ≤ T·max(|L|,|R|,10^S) on the scaled integers. absDiff is the exact |l−r| in
 // canonical decimal form; relDiff = |l−r| / max(|l|,|r|,1) truncated toward zero to 10 decimal places
 // (display only — plan 3 rounds, F6 truncates). Input grammar: -?digits(.digits)?, no exponent, no '+',
-// no whitespace, at most 256 characters; rel must also be non-negative. Anything else → RangeError.
+// no whitespace, at most 512 characters; rel must also be non-negative. Anything else → RangeError.
 import {canonicalDecimal} from '../facts/json-numbers';
 
 const DECIMAL=/^(-?)(\d+)(?:\.(\d+))?$/;
-const MAX_INPUT=256;
+const MAX_INPUT=512;
 const REL_DIGITS=10;
 const pow10=(n:number):bigint=>10n**BigInt(n);
 const abs=(x:bigint):bigint=>x<0n?-x:x;

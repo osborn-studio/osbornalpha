@@ -11,7 +11,7 @@ import {EvalError} from './errors';
 import {evaluateOfficial} from './kinds/official';
 import {buildReport} from './report';
 import {caseRowsTruncated} from './store';
-import {bucketOf,exitCodeOf,goldBlockOf,summarize} from './summary';
+import {exitCodeOf,goldBlockOf,isCorrectnessOutcome,summarize} from './summary';
 import type {CaseReport,EvalEnv,EvalMode,GoldCase,GoldSet,ModuleReader,ReportEnvironment,RunOutcome} from './types';
 
 export interface RunGoldSetOptions{set:GoldSet;mode:EvalMode;reader:ModuleReader;env:EvalEnv;environment:ReportEnvironment;runId?:string;caseIds?:string[];limit?:number;verify?:{artifacts:boolean;sources:boolean};fetchSource?:(url:string)=>Promise<Uint8Array>}
@@ -31,8 +31,6 @@ export function assertRunnable(set:GoldSet,mode:EvalMode,env:EvalEnv):void{
  if(mode==='report'&&env.dirty)throw new EvalError('dirty_tree','report runs need a clean working tree');
 }
 
-
-const CORRECTNESS=new Set(['pass','fail','unit_mismatch','provenance_incomplete','unexplained_diff']);
 /** report.provenance.verified from the checks actually completed (Codex plan round 1 P1-8), never from the requested flags:
  *  sources = requested and EVERY evaluated case (any correctness outcome) has provenance.source_verified === true;
  *  artifacts = requested, privileged, and every evaluated case except expected_absent resolved to raw objects: a fact case via
@@ -46,10 +44,11 @@ export function artifactVerified(c:CaseReport):boolean{
  return typeof c.provenance.object_path==='string';
 }
 export function verifiedOf(cases:CaseReport[],verify:{artifacts:boolean;sources:boolean},privileged:boolean):{artifacts:boolean;sources:boolean}{
- const evaluated=cases.filter(c=>CORRECTNESS.has(bucketOf(c.outcome)));
+ const evaluated=cases.filter(c=>isCorrectnessOutcome(c.outcome));
  if(evaluated.length===0)return {artifacts:false,sources:false};
  const sources=verify.sources&&evaluated.every(c=>c.provenance?.source_verified===true);
- const artifacts=verify.artifacts&&privileged&&evaluated.filter(c=>c.outcome.result!=='expected_absent').every(artifactVerified);
+ const nonAbsent=evaluated.filter(c=>c.outcome.result!=='expected_absent');
+ const artifacts=verify.artifacts&&privileged&&nonAbsent.length>0&&nonAbsent.every(artifactVerified);
  return {artifacts,sources};
 }
 

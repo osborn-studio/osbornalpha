@@ -30,7 +30,9 @@ describe('parseDecimalParts / formatDecimal',()=>{
  });
  it('rejects anything outside -?digits(.digits)?',()=>{
   for(const bad of ['','1e5','+1',' 1','1 ','1.','.5','NaN','0x10','1,000','--1','1.2.3','∞','１'])expect(()=>parseDecimalParts(bad),bad).toThrow(RangeError);
-  expect(()=>parseDecimalParts('1'.repeat(257))).toThrow(RangeError);
+  expect(()=>parseDecimalParts('1'.repeat(513))).toThrow(RangeError);
+  expect(parseDecimalParts('1'.repeat(257)).scale).toBe(0);
+  expect(parseDecimalParts('1'.repeat(512)).scale).toBe(0);
  });
 });
 

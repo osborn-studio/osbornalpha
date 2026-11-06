@@ -188,7 +188,7 @@ describe('review follow-ups: dates, retraction, grammar, history',()=>{
   ['period_start before period_end',s=>{s.cases[0].target.period_start='2023-09-30';},'cases[0].target: period_start_must_precede_period_end'],
   ['retracted.by implementer',s=>{s.cases[0].retracted={at:'2026-11-06',by:'claude-code',reason:'r'};},'cases[0].retracted.by: is_module_implementer:claude-code'],
   ['retracted.by module coverage',s=>{s.cases[0].retracted={at:'2026-11-06',by:'macro-only',reason:'r'};},'cases[0].retracted.by: recorder_not_for_module:macro-only'],
-  ['300-digit text',s=>{s.cases[0].printed.text='9'.repeat(300);},'cases[0].printed.text: unparseable'],
+  ['600-digit text',s=>{s.cases[0].printed.text='9'.repeat(600);},'cases[0].printed.text: unparseable'],
   ['leading zeros',s=>{s.cases[0].printed.text='000123';},'cases[0].printed.text: unparseable'],
   ['leading zero group',s=>{s.cases[0].printed.text='0,123';},'cases[0].printed.text: unparseable'],
   ['history changed_by',s=>{s.version=2;s.history=[{version:2,changed_at:'2026-11-06',changed_by:'stranger',reason:'r',fields:['x']}];},'history[0].changed_by: not_in_recorders:stranger'],

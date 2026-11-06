@@ -34,6 +34,8 @@ export function bucketOf(o:CaseOutcome):Bucket{
   case 'read_error':return 'read_error';
  }
 }
+/** True for the five §3.3 correctness buckets (an outcome that was actually judged against gold). */
+export const isCorrectnessOutcome=(o:CaseOutcome):boolean=>CORRECTNESS.has(bucketOf(o));
 export const isPassOutcome=(o:CaseOutcome):boolean=>bucketOf(o)==='pass';
 const isRetracted=(o:CaseOutcome)=>o.result==='skipped'&&o.reason==='retracted';
 

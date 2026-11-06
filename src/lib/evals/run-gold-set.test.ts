@@ -5,7 +5,7 @@ import type {FakeReader,FakeReaderOptions} from './kinds/official-test-support';
 import {artifactVerified,runGoldSet,selectCases,verifiedOf} from './run-gold-set';
 import {goldBlockOf} from './summary';
 import type {RunGoldSetOptions} from './run-gold-set';
-import type {CaseTarget,FactTarget,GoldCase,ReadRow,ReportEnvironment} from './types';
+import type {CaseReport,CaseTarget,FactTarget,GoldCase,ReadRow,ReportEnvironment} from './types';
 
 const ENVIRONMENT:ReportEnvironment={db_host:null,app_origin:null,db_state_rev:null};
 const FACT=gcase().target as FactTarget;
@@ -41,7 +41,12 @@ describe('runGoldSet — report and gate (spec §3.2, §7.2)',()=>{
  it('P1-8: verified.sources is derived from completed checks, not from the flag',async()=>{
   const noFetch=await run({set:gset(THREE()),verify:{artifacts:false,sources:true}});
   expect(noFetch.report.provenance.verified.sources).toBe(false);   // no fetchSource → every case provenance_incomplete, nothing verified
-  expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'expected_absent'},left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:{ok:true,missing:[],source_verified:true},detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:true,sources:true});
+  expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'expected_absent'},left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:{ok:true,missing:[],source_verified:true},detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:true});
+  const passed=(over:Partial<CaseReport>={}):CaseReport=>({case_id:'p',required:true,outcome:{result:'pass'},left:'1',right:'1',abs_diff:'0',rel_diff:'0',tolerance:'0',provenance:{ok:true,missing:[],source_verified:true,object_path:'edgar/x/y.json'},detail:{},...over});
+  expect(verifiedOf([passed()],{artifacts:true,sources:true},true)).toEqual({artifacts:true,sources:true});
+  expect(verifiedOf([passed(),passed({case_id:'q',outcome:{result:'provenance_incomplete',reason:'source_sha256_mismatch'},provenance:{ok:false,missing:[],source_verified:false}})],{artifacts:true,sources:true},true).sources).toBe(false);
+  expect(artifactVerified(passed({provenance:{ok:true,missing:[],source_verified:true}}))).toBe(false);
+  expect(verifiedOf([passed()],{artifacts:false,sources:false},true)).toEqual({artifacts:false,sources:false});
   expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'fail',reason:'value'},left:'1',right:'2',abs_diff:'1',rel_diff:'0.5',tolerance:'0',provenance:null,detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
   expect(verifiedOf([],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
  });
@@ -135,5 +140,18 @@ describe('runGoldSet — mutation tests (spec §13.1)',()=>{
  });
  it('summary.gold is summary.ts::goldBlockOf: pending cases and cases with any provenance gap',()=>{
   expect(goldBlockOf(gset([gcase({case_id:'a',pending:true}),gcase({case_id:'b',provenance_gaps:['reviewed_by']}),gcase({case_id:'c'})],{format:'legacy_plan2',ready:false}))).toEqual({format:'legacy_plan2',ready:false,pending:1,provenance_gaps:1});
+ });
+});
+
+describe('runGoldSet — robustness (Codex challenge)',()=>{
+ it('a valid 257-digit facts value between two ordinary cases: the run completes with all three reports',async()=>{
+  const big='1'.repeat(257);
+  const o=await run({set:gset(THREE())},fakeReader({rows:rowsBy({net_income_parent:[readRow({value_text:big})]})}));
+  expect(o.report.cases).toHaveLength(3);
+  expect(o.report.cases[1].outcome).toEqual({result:'fail',reason:'value'});
+ });
+ it('a value beyond 512 chars is read_error(read_failed) for that case only',async()=>{
+  const o=await run({set:gset(THREE())},fakeReader({rows:rowsBy({net_income_parent:[readRow({value_text:'1'.repeat(513)})]})}));
+  expect(o.report.cases.map(c=>c.outcome.result)).toEqual(['pass','read_error','pass']);
  });
 });
