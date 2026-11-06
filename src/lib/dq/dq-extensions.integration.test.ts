@@ -652,10 +652,11 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
 
  describe('8c: reconcile cursor and apply_reconcile_result',()=>{
   const newPair=()=>`test.${randomUUID().slice(0,8)}`;   // one pair per test: never meets another suite's running cycle
-  const cycle=async(pair:string,members:{issuer_id:string;market?:string;expected:number}[],status='running')=>{
+  const keysOf=(m:{expected:number;keys?:string[]})=>m.keys??Array.from({length:m.expected},(_,i)=>`k${i+1}`);
+  const cycle=async(pair:string,members:{issuer_id:string;market?:string;expected:number;keys?:string[]}[],status='running')=>{
    const id=`${pair}-${randomUUID().slice(0,8)}`;
    await q(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total) values($1,$2,now(),$3,$4::jsonb,$5,$6)`,
-    [pair,id,status==='running'?null:new Date().toISOString(),JSON.stringify(members.map(m=>({issuer_id:m.issuer_id,market:m.market??'US',expected_keys:m.expected}))),status,members.reduce((n,m)=>n+m.expected,0)]);
+    [pair,id,status==='running'?null:new Date().toISOString(),JSON.stringify(members.map(m=>({issuer_id:m.issuer_id,market:m.market??'US',expected_keys:keysOf(m).map(k=>({naturalKey:k,locator:{}}))}))),status,members.reduce((n,m)=>n+m.expected,0)]);
    for(const m of members)await q(`insert into public.dq_reconcile_cursor(pair,cycle_id,issuer_id,market,expected) values($1,$2,$3,$4,$5)`,[pair,id,m.issuer_id,m.market??'US',m.expected]);
    return id;
   };
@@ -731,7 +732,7 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
 
   it('apply_reconcile_result touches only the member\'s published ok rows; a quarantined left gets latest_result on its open items; review and lineage items change no visibility; invalid results write nothing',async()=>{
    const {iss,b,r0,r}=await published();const {x}=await sibling('5');
-   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:6}]);const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:8,keys:['k0','k1','k1m','k1p','k2','k3','k4','k5']}]);const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
    expect(await fails(apply(fence,res('k0',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result',code:'22023'});   // another issuer's row
    expect(await fails(apply(fence,res('k0',{action:'quarantine_left'})))).toMatchObject({message:'invalid_result'});      // left_fact_id required
    expect(await fails(apply(fence,res('k0',{action:'review_item'})))).toMatchObject({message:'invalid_result'});          // item required
@@ -794,22 +795,53 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   });
 
   it('reconcile_mismatch items only ever name the fence issuer/market rows: payload.fact_ids never spans a lineage (restore_reconciled promotes one issuer)',async()=>{
-   const {iss,r}=await published();const {x}=await sibling('100');
-   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:2}]);
+   const {iss,r}=await published();const {iss:src,x}=await sibling('100');const by=await user();
+   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:3,keys:['kx','km','k1']}]);
    const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
-   // a row of another issuer (even one in the same lineage) is refused for the fence member
+   // a row of an unrelated issuer is refused for the fence member
    expect(await fails(apply(fence,res('kx',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result'});
-   // the same row in the right market of the wrong fence is refused as well
+   // a member merged INTO the fence issuer is still another issuer's row: refused as well
+   await merge(src,iss,by);
+   expect(await fails(apply(fence,res('km',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result'});
+   expect(await status(x)).toBe('ok');
    const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
    const [row]=await q(`select payload,detail from public.dq_quarantine where id=$1`,[a.item_id]);
    expect(row.payload.fact_ids).toEqual([r]);
-   const owners=await q(`select distinct issuer_id,market from public.financial_facts where fact_id=any($1::uuid[])`,[row.payload.fact_ids]);
-   expect(owners).toEqual([{issuer_id:iss,market:'US'}]);
+   expect(await q(`select distinct issuer_id,market from public.financial_facts where fact_id=any($1::uuid[])`,[row.payload.fact_ids])).toEqual([{issuer_id:iss,market:'US'}]);
    expect(row.detail).toMatchObject({issuer_id:iss,market:'US'});
-   // every reconcile_mismatch item of the pair satisfies the invariant
    const bad=await q(`select q.id from public.dq_quarantine q where q.reason_code='reconcile_mismatch' and q.detail->>'pair'=$1
      and exists(select 1 from jsonb_array_elements_text(q.payload->'fact_ids') i join public.financial_facts f on f.fact_id=i::uuid where f.issuer_id<>$2 or f.market<>'US')`,[pair,iss]);
    expect(bad).toEqual([]);
+  });
+
+  it('frozen expected keys: duplicates refused at creation; a key outside the frozen set is invalid_result; complete needs exact coverage (member_incomplete otherwise)',async()=>{
+   const iss=await issuer();const pair=newPair();
+   expect(await fails(openC(admin,pair,`${pair}-d`,[{issuer_id:iss,market:'US',expected_keys:[{naturalKey:'A',locator:{}},{naturalKey:'A',locator:{}}]}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await q(`select 1 from public.dq_reconcile_cycles where pair=$1`,[pair])).toEqual([]);
+   const {iss:i2,r}=await published();const pair2=newPair();
+   const cy=`${pair2}-c`;
+   expect(await openC(admin,pair2,cy,[{issuer_id:i2,market:'US',expected_keys:[{naturalKey:'A',locator:{}},{naturalKey:'B',locator:{}}]}],[])).toMatchObject({created:true});
+   const w=await batch(`reconcile.${pair2}`);const fence=(await claimM(pair2,cy,i2,w))!;
+   await apply(fence,res('A',{passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}));
+   expect(await fails(apply(fence,res('C',{passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect((await resultRows(pair2)).map(x=>x.natural_key)).toEqual(['A']);
+   expect(await fails(complete(fence))).toMatchObject({message:'member_incomplete'});
+   await apply(fence,res('B',{action:'quarantine_left',left_fact_id:r}));
+   expect(await complete(fence)).toEqual({compared_passed:1,compared_failed:1,not_compared:0});
+  });
+
+  it('passed=true only with outcome compared (invalid_result before any write); a non-compared result never sets or overwrites latest_result on an open mismatch',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:4}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
+   expect(await fails(apply(fence,res('k2',{left_fact_id:r,outcome:'right_missing',passed:true,right_value:null,abs_diff:null,rel_diff:null})))).toMatchObject({message:'invalid_result',code:'22023'});
+   expect((await resultRows(pair)).map(x=>x.natural_key)).toEqual(['k1']);
+   const lr=async()=>(await q(`select detail->'latest_result' lr from public.dq_quarantine where id=$1`,[a.item_id]))[0].lr;
+   expect(await lr()).toMatchObject({passed:false});
+   await apply(fence,res('k2',{left_fact_id:r,passed:true,right_value:'100',abs_diff:'0',rel_diff:'0',inputs_hash:'h2'}));
+   expect(await lr()).toMatchObject({passed:true,inputs_hash:'h2'});
+   await apply(fence,res('k3',{left_fact_id:r,outcome:'right_missing',right_value:null,abs_diff:null,rel_diff:null,inputs_hash:'h3'}));
+   expect(await lr()).toMatchObject({passed:true,inputs_hash:'h2'});         // passing evidence not overwritten
   });
 
   // ---- open_reconcile_cycle (section 13, plan audit Q2): atomic creation, per-entry consumption, the lock shared with set_merge
