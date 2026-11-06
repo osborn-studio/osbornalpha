@@ -80,3 +80,13 @@
 - 夹具使用真实 CIK 与 accession（计划未要求改键）。
 - 未纳入：30 家生产样本 v2（需网络与 owner 决策 E；`--live`），E4 以 v2 计量。
 - `ixt-sec:*` 格式出现次数：AAPL 1 / MSFT 0（规格 §14 开放问题 6 的首个数据点）。
+
+## F3-6 A 股黄金集（Task 16，降级，2026-11-06）
+
+- 状态：**E5 未达成（CN 降级）**，不报任何通过率数字（规格 T15）。
+- 情形变化（相对计划文本）：`TUSHARE_TOKEN` 现已可用（存于仓库外 `~/.config/osbornalpha/secrets.env`，未打印、未落盘），且 PR #104 已把真实录制的 Tushare 夹具（600519.SH、000333.SZ、600036.SH、000858.SZ）与计划二 §15 核对记录合入本分支（`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`）。"无 token / 无真实录制"不再是降级原因。
+- 降级仍然成立的唯一阻塞：owner 决策 C（抄录人 R1、复核人 R2 与交付日期）未给出；与抄录同时才能完成的巨潮 PDF（`pdf_sha256`、`cninfo_announcement_id`）和 `disclosure_date` 挂接核实也因此未做。故无 `src/lib/dq/fixtures/gold/cn-annual-v1.json`，不放占位或代理值。
+- 已交付：校验器 `src/lib/dq/reconcile/gold-cn.ts`（Task 16a：精确乘积、`tushare_source_ref` 核对、印刷精度区间、复核/隔离边界）、对账对 `cn.tushare_vs_cninfo_pdf_gold`（读不到黄金文件时以 `invalid_gold_file` 拒绝启动）、`scripts/dq/select-cn-sample.ts`（模板）、`scripts/dq/gold-pdf.ts --upload`、抄录指引 `docs/runbooks/cn-gold-transcription.md`。
+- 有意未做：`gold-cn.integration.test.ts` 未创建、未登记 `criticalSuites`；`vercel.json` 无 CN 对账 cron（`pair=cn.` 计数 0）；路由对 `cn.*` 在 `FACTS_CN_ENABLED!=='1'` 时 403。
+- 脚本冒烟（无 `.env.local`，不连库）：`select-cn-sample.ts --count 0` 与无参 `gold-pdf.ts` 均打印用法、退出码 2；`gold-pdf.ts` 对合成 PDF + 三行（一行匹配、一行缺失、一行 `<pending>`）的黄金文件输出 `found` 与 `missing_locally`，汇总 `distinct_pdfs=2, pending_rows=1, failed=1`，退出码 1。`select-cn-sample.ts` 的真实库运行（需 `fact_sync_scope` 的 CN 行）与 `gold-pdf.ts --upload`（需 `reconcile-raw` 桶）是 owner 动作，未在本环境执行。
+- 解除降级的 owner 步骤：(1) 指定 R1/R2（决策 C）；(2) 运行 `select-cn-sample.ts` 得到模板，按抄录指引抄录、复核、下载并上传 PDF；(3) 抄录完成后，据已有 Tushare 夹具与新录的 `disclosure_date` 响应另开任务创建并登记 `gold-cn.integration.test.ts`（N 家夹具 → CN 同步 → 本对账对 → 每黄金行恰一结果、`passed/expected >= 95%`、非 passed 全部在 `exceptions.json`），通过后再加 CN cron 并设 `FACTS_CN_ENABLED=1`。
