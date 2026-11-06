@@ -650,5 +650,65 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await h.tables.select('dq_reconcile_cursor',{pair,cycle_id:`${pair}-new`})).map(c=>c.issuer_id).sort()).toEqual([t1,t3].sort());
   });
 
+
+  // ---- plan 3, Codex round: strengthened cases (hard-coded expectations, no readFacts oracle)
+  it('plan 3 readFactsLineage includeNonOk: quarantined rows appear only with includeNonOk AND history, never as current, without sequence; staged rows never appear',async()=>{
+   const {iss:t,b,r0,r}=await published();
+   const run=await db.beginRun(t,'US',b,1);const fq=filingInsert(t,{availableDate:'2024-03-01'});await db.stageFilings(run,[fq]);
+   const q=factInsert(t,fq,{value:'300'});await db.stageFacts(run,[q]);
+   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[q.fact_id],run_id:run}});
+   expect(await db.quarantineFacts(run,[q.fact_id],item)).toBe(1);expect(await db.publishRun(run,[fq.filing_id])).toBe(0);   // the only fact is quarantined
+   const run2=await db.beginRun(t,'US',b,1);const fs=filingInsert(t,{availableDate:'2024-04-01'});await db.stageFilings(run2,[fs]);
+   const st=factInsert(t,fs,{value:'400'});await db.stageFacts(run2,[st]);   // left staged
+   const rd=async(o:{history:boolean;includeNonOk:boolean})=>(await db.readFactsLineage([t],'US',{concepts:['revenue'],asOf:'2030-01-01',...o})).rows.map(y=>[y.fact_id,y.disclosure_seq??null,y.is_current,y.is_revision]);
+   expect(await rd({history:false,includeNonOk:false})).toEqual([[r,2,true,true]]);
+   expect(await rd({history:false,includeNonOk:true})).toEqual([[r,2,true,true]]);
+   expect(await rd({history:true,includeNonOk:false})).toEqual([[r0,1,false,false],[r,2,true,true]]);
+   expect(await rd({history:true,includeNonOk:true})).toEqual([[r0,1,false,false],[r,2,true,true],[q.fact_id,null,false,false]]);
+   expect((await db.readFactsLineage([t],'US',{concepts:['revenue'],asOf:'2030-01-01',history:true,includeNonOk:true})).rows.map(y=>y.status)).toEqual(['ok','ok','quarantined']);
+  });
+
+  it('plan 3 replaceMetricsLineage: a stale revision of ONLY the non-target member is stale_computation and the stored metrics stay',async()=>{
+   const {iss:t,r}=await published();const by=await h.user();const s=await h.issuer();await db.setMerge(s,t,by);
+   const row=(v:string):MetricRow=>({issuer_id:t,market:'US',metric:'gross_margin',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',
+    inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,based_on_lineage:[],as_of:'2024-03-01'});
+   const lin=await db.stateRevs(await db.lineageOf(t),'US');
+   expect(await db.replaceMetricsLineage(t,'US',lin,[row('0.5')])).toBe(1);
+   const before=await db.metricsOfIssuer(t,'US','facts-derive/1.0');
+   const skew=lin.map(x=>x.issuer_id===t?x:{...x,state_rev:x.state_rev+1});
+   expect(skew.find(x=>x.issuer_id===t)).toEqual(lin.find(x=>x.issuer_id===t));
+   expect(await code(db.replaceMetricsLineage(t,'US',skew,[row('0.9')]))).toBe('stale_computation:stale_computation');
+   expect(await db.metricsOfIssuer(t,'US','facts-derive/1.0')).toEqual(before);
+  });
+
+  /** An ambiguous_value item for a 2023-07-01..09-30 revenue candidate on the published filing, plus the pieces to dispute its key. */
+  const adoptSetup=async()=>{
+   const {iss:t,b,run,f}=await published();const by=await h.user();const ab=await h.batch();
+   const cand={concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value:'110',unit:'USD',consolidation:'consolidated',filingRef:f.sourceRef,rawHash:'h-110'};
+   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
+    payload:{key:{issuer_id:t,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD'},candidates:[cand],run_id:run}});
+   const rev=(await db.stateRevs([t],'US'))[0].state_rev;
+   const expectRefused=async()=>{
+    expect(await code(db.adoptCandidate(item,0,ab,rev,by))).toBe('conflict_exists:conflict_exists');
+    expect((await h.tables.select('dq_quarantine',{id:item}))[0].status).toBe('open');
+    expect((await db.stateRevs([t],'US'))[0].state_rev).toBe(rev);
+    expect((await db.readFactsLineage([t],'US',{concepts:['revenue'],asOf:'2030-01-01',history:true,includeNonOk:true,from:'2023-09-30',to:'2023-09-30'})).rows).toEqual([]);   // no fact inserted
+   };
+   return {t,b,expectRefused};
+  };
+
+  it('plan 3 adoptCandidate: an open same_day_conflict for the key and date refuses adoption although no ok competitor remains',async()=>{
+   const {t,b,expectRefused}=await adoptSetup();
+   await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'same_day_conflict',batchId:b,
+    payload:{key:{issuer_id:t,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD',available_date:'2024-02-01'},fact_ids:[],values:[]}});
+   await expectRefused();
+  });
+
+  it('plan 3 adoptCandidate: an open lineage_conflict for the key and date refuses adoption although no ok competitor remains',async()=>{
+   const {t,b,expectRefused}=await adoptSetup();
+   await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[],values:[]}});
+   await expectRefused();
+  });
+
  });
 }
