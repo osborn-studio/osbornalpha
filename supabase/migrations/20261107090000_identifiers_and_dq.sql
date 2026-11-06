@@ -795,6 +795,51 @@ end $$;
 revoke execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) to service_role;
 
+-- ---------------------------------------------------------------- guarded evidenced-window write (Task 5a)
+-- set_security_window is the only writer of an evidenced valid_from / valid_to (windows.ts, backfill-windows).
+-- Lock order of set_security_identifier / resolve_identifier_claim: issuer FOR SHARE, then the row FOR UPDATE.
+-- p_side 'from': the row (issuer, ticker, p_valid_from) must still have method first_observed or curated and
+--   p_new_date <= valid_from; ONE UPDATE sets valid_from = p_new_date, valid_from_method = 'listing_date'.
+-- p_side 'to': the row (issuer, ticker, p_valid_from) must still be open and p_new_date > valid_from; ONE UPDATE
+--   sets valid_to, valid_to_method = 'delisting'.
+-- Both merge `provenance || p_provenance` (never a whole-object replacement); p_provenance must be public-safe
+-- (claim_provenance_safe) and hold exactly the key valid_from / valid_to matching p_side.
+-- Outcomes: 'written', 'duplicate' (already evidenced at p_new_date with the key present), 'conflict' (state moved
+-- or date rule violated; nothing written), 'not_found'. Exclusion / unique violations (23P01 / 23505) pass through.
+create or replace function public.set_security_window(p_issuer uuid, p_ticker text, p_valid_from date, p_side text, p_new_date date, p_provenance jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_row public.issuer_securities%rowtype; n int;
+begin
+  if p_side is null or p_side not in ('from', 'to') or p_new_date is null or p_ticker is null or p_valid_from is null
+     or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
+     or (select array_agg(k) from jsonb_object_keys(p_provenance) k) is distinct from array['valid_' || p_side]
+     or not public.claim_provenance_safe(p_provenance) then
+    raise exception 'invalid_window_write' using errcode = '22023';
+  end if;
+  perform 1 from public.issuers where issuer_id = p_issuer for share;
+  if not found then return 'not_found'; end if;
+  select * into v_row from public.issuer_securities s
+  where s.issuer_id = p_issuer and s.ticker = p_ticker and s.valid_from = p_valid_from for update;
+  if not found then return 'not_found'; end if;
+  if p_side = 'from' then
+    if v_row.valid_from_method = 'listing_date' and v_row.valid_from = p_new_date and v_row.provenance ? 'valid_from' then return 'duplicate'; end if;
+    if v_row.valid_from_method not in ('first_observed', 'curated') or p_new_date > v_row.valid_from then return 'conflict'; end if;
+    if v_row.valid_to is not null and p_new_date >= v_row.valid_to then return 'conflict'; end if;
+    update public.issuer_securities set valid_from = p_new_date, valid_from_method = 'listing_date', provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_from_method in ('first_observed', 'curated');
+  else
+    if v_row.valid_to = p_new_date and v_row.valid_to_method = 'delisting' and v_row.provenance ? 'valid_to' then return 'duplicate'; end if;
+    if v_row.valid_to is not null or p_new_date <= v_row.valid_from then return 'conflict'; end if;
+    update public.issuer_securities set valid_to = p_new_date, valid_to_method = 'delisting', provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  end if;
+  get diagnostics n = row_count;
+  if n <> 1 then return 'conflict'; end if;
+  return 'written';
+end $$;
+revoke execute on function public.set_security_window(uuid, text, date, text, date, jsonb) from public, anon, authenticated;
+grant execute on function public.set_security_window(uuid, text, date, text, date, jsonb) to service_role;
+
 -- ---------------------------------------------------------------- guarded issuer identifier write (Task 4b review, P1)
 -- set_issuer_identifier is the only writer of issuers.cninfo_org_id outside resolve_identifier_claim
 -- (cninfo-org-id.ts). It locks the issuer row FOR NO KEY UPDATE (the order and lock level of

@@ -24,3 +24,19 @@ export function coverageE1(input:{scope:readonly Row[];securities:readonly Row[]
  const isin=ratio(isinRows.filter(s=>s.isin!=null).length,isinRows.length);
  return {figi,isin,passes:{figi:meetsThreshold(figi,95),isin:meetsThreshold(isin,90)}};
 }
+
+export interface E2Result{backfillable:Ratio;not_backfillable:number;open_quarantine:number;passes:boolean}
+/**
+ * E2 (spec §1.1): research-queue A/H rows. Backfillable = the earliest row of its ticker in this
+ * database, stocks_universe.list_date non-null, and no open window_evidence_conflict /
+ * ownership_conflict item keyed `${ticker}:${valid_from}`. Target: 100% listing_date.
+ */
+export function coverageE2(input:{rows:readonly Row[];listDates:ReadonlyMap<string,string|null>;queueIssuers:ReadonlySet<string>;openQuarantineKeys:ReadonlySet<string>}):E2Result{
+ const earliest=new Map<string,string>();
+ for(const r of input.rows){const t=String(r.ticker),vf=String(r.valid_from);const e=earliest.get(t);if(e===undefined||vf<e)earliest.set(t,vf);}
+ const key=(r:Row)=>`${r.ticker}:${r.valid_from}`;
+ const ah=input.rows.filter(r=>/\.(SH|SZ|HK)$/.test(String(r.ticker))&&input.queueIssuers.has(String(r.issuer_id)));
+ const back=ah.filter(r=>earliest.get(String(r.ticker))===String(r.valid_from)&&!!input.listDates.get(String(r.ticker))&&!input.openQuarantineKeys.has(key(r)));
+ const backfillable=ratio(back.filter(r=>r.valid_from_method==='listing_date').length,back.length);
+ return {backfillable,not_backfillable:ah.length-back.length,open_quarantine:ah.filter(r=>input.openQuarantineKeys.has(key(r))).length,passes:backfillable.den>0&&backfillable.num===backfillable.den};
+}

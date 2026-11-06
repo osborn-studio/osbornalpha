@@ -1,6 +1,6 @@
 // src/lib/entities/coverage.test.ts
 import {describe,it,expect} from 'vitest';
-import {coverageE1,meetsThreshold,ratio} from './coverage';
+import {coverageE1,coverageE2,meetsThreshold,ratio} from './coverage';
 
 describe('ratio',()=>{
  it('formats a truncated two-decimal percentage with integer arithmetic and null for an empty denominator',()=>{
@@ -27,5 +27,22 @@ describe('coverageE1',()=>{
   expect(coverageE1({scope,securities,issuers})).toEqual({
    figi:{num:1,den:2,pct:'50.00'},isin:{num:1,den:1,pct:'100.00'},passes:{figi:false,isin:true},
   });
+ });
+});
+
+describe('coverageE2',()=>{
+ it('counts research-queue A/H earliest rows with a list_date and no open quarantine; reports the rest separately',()=>{
+  const rows=[
+   {issuer_id:'q',ticker:'600519.SH',valid_from:'2001-08-27',valid_from_method:'listing_date'},
+   {issuer_id:'q',ticker:'000001.SZ',valid_from:'2024-01-01',valid_from_method:'first_observed'},
+   {issuer_id:'q',ticker:'00700.HK',valid_from:'2024-01-01',valid_from_method:'first_observed'},
+   {issuer_id:'q',ticker:'600000.SH',valid_from:'2020-01-01',valid_from_method:'first_observed'},
+   {issuer_id:'old',ticker:'600000.SH',valid_from:'2010-01-01',valid_from_method:'first_observed'},
+   {issuer_id:'q',ticker:'AAPL',valid_from:'2024-01-01',valid_from_method:'first_observed'},
+   {issuer_id:'other',ticker:'601318.SH',valid_from:'2024-01-01',valid_from_method:'first_observed'},
+  ];
+  const listDates=new Map([['600519.SH','2001-08-27'],['000001.SZ','1991-04-03'],['00700.HK','2004-06-16'],['600000.SH','1999-11-10'],['601318.SH','2007-03-01']]);
+  const r=coverageE2({rows,listDates,queueIssuers:new Set(['q']),openQuarantineKeys:new Set(['00700.HK:2024-01-01'])});
+  expect(r).toEqual({backfillable:{num:1,den:2,pct:'50.00'},not_backfillable:2,open_quarantine:1,passes:false});
  });
 });

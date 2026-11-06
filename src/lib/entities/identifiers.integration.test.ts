@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1024,6 +1024,63 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect(await second).toBe('written');
   });
   expect(await secState(t)).toEqual({isin,figi:'BBG000000001',provenance:{exchange:'Nasdaq',...PI}});
+ });
+
+ // Task 5a: evidenced window writes land date + method + one provenance key in one locked UPDATE.
+ const setWin=(a:string,t:string,from:string,side:string,date:string,prov:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.set_security_window($1,$2,$3::date,$4,$5::date,$6::jsonb) v`,[a,t,from,side,date,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const winState=async(t:string)=>(await q(`select to_char(valid_from,'YYYY-MM-DD') valid_from,to_char(valid_to,'YYYY-MM-DD') valid_to,valid_from_method,valid_to_method,provenance from public.issuer_securities where ticker=$1`,[t]))[0];
+ const WF={valid_from:{source:'stocks_universe.list_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{list_date:'2001-08-27'}}};
+ const WT={valid_to:{source:'stocks_universe.delist_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{delist_date:'2026-06-30'}}};
+ it('set_security_window: from/to written, duplicate, state guards conflict, not_found, invalid; provenance merged',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'SSE'})});
+  expect(await setWin(a,t,'2024-03-01','from','2025-01-01',WF)).toBe('conflict');          // listing date after valid_from
+  expect(await setWin(a,t,'2024-03-01','to','2024-03-01',WT)).toBe('conflict');            // delisting on valid_from
+  expect(await setWin(a,t,'2024-03-01','from','2001-08-27',WF)).toBe('written');
+  expect(await setWin(a,t,'2001-08-27','from','2001-08-27',WF)).toBe('duplicate');
+  expect(await setWin(a,t,'2001-08-27','from','2000-01-01',WF)).toBe('conflict');          // already listing_date at another date
+  expect(await setWin(a,t,'2001-08-27','to','2026-06-30',WT)).toBe('written');
+  expect(await setWin(a,t,'2001-08-27','to','2026-06-30',WT)).toBe('duplicate');
+  expect(await setWin(a,t,'2001-08-27','to','2026-07-01',WT)).toBe('conflict');            // already closed
+  expect(await winState(t)).toEqual({valid_from:'2001-08-27',valid_to:'2026-06-30',valid_from_method:'listing_date',valid_to_method:'delisting',provenance:{exchange:'SSE',...WF,...WT}});
+  const c=await ticker();
+  await sec(a,c,'2024-03-01','2025-01-01',{valid_to_method:'unrecorded'});
+  expect(await setWin(a,c,'2024-03-01','from','2025-01-01',WF)).toBe('conflict');          // new from would not precede valid_to
+  await q(`update public.issuer_securities set valid_from_method='ticker_change' where ticker=$1`,[c]);
+  expect(await setWin(a,c,'2024-03-01','from','2020-01-01',WF)).toBe('conflict');          // method not first_observed/curated
+  expect(await setWin(a,await ticker(),'2024-03-01','from','2001-08-27',WF)).toBe('not_found');
+  expect(await setWin(randomUUID(),t,'2001-08-27','to','2026-06-30',WT)).toBe('not_found');
+  for(const bad of [()=>setWin(a,t,'2001-08-27','from','2000-01-01',WT),()=>setWin(a,t,'2001-08-27','from','2000-01-01',{...WF,...WT}),()=>setWin(a,t,'2001-08-27','x','2000-01-01',WF),
+   ()=>setWin(a,t,'2001-08-27','from','2000-01-01',{valid_from:{url:'https://a.example/p?token=1'}}),()=>setWin(a,t,'2001-08-27','from','2000-01-01',{isin:{}})])
+   expect(await fails(bad())).toMatchObject({message:'invalid_window_write',code:'22023'});
+ });
+ it('a window write interleaved with an ISIN identifier write on the same row: ISIN first keeps both provenance keys; window first moves the key so the ISIN write finds no row',async()=>{
+  const setIsin=(a:string,t:string,from:string,isin:string,on:Pool|PoolClient=admin)=>
+   on.query(`select public.set_security_identifier($1,$2,$3::date,'isin',$4,$5::jsonb) v`,[a,t,from,isin,JSON.stringify(PI)]).then(r=>r.rows[0].v as string);
+  for(const isinFirst of [true,false]){
+   const a=await issuer();const t=await ticker();
+   await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'SSE'})});
+   const isin=randomIsin();
+   await inTx(admin,async tx=>{
+    if(isinFirst)expect(await setIsin(a,t,'2024-03-01',isin,tx.c)).toBe('written');
+    else expect(await setWin(a,t,'2024-03-01','from','2001-08-27',WF,tx.c)).toBe('written');
+    const second=isinFirst?setWin(a,t,'2024-03-01','from','2001-08-27',WF):setIsin(a,t,'2024-03-01',isin);
+    await stillBlockedBehind(admin,tx.pid,second);
+    await tx.commit();
+    expect(await second).toBe(isinFirst?'written':'not_found');
+   });
+   expect(await winState(t)).toMatchObject({valid_from:'2001-08-27',valid_from_method:'listing_date',provenance:isinFirst?{exchange:'SSE',...PI,...WF}:{exchange:'SSE',...WF}});
+   expect((await secState(t)).isin).toBe(isinFirst?isin:null);
+  }
+ });
+ it('set_security_window surfaces an overlap as the exclusion violation 23P01',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2010-01-01','2015-01-01',{valid_to_method:'unrecorded'});
+  await sec(a,t,'2015-01-01',null);
+  const err=await fails(setWin(a,t,'2015-01-01','from','2012-01-01',WF));
+  expect(['23P01','23505']).toContain(err.code);
+  expect((await q(`select to_char(valid_from,'YYYY-MM-DD') f from public.issuer_securities where ticker=$1 order by valid_from`,[t])).map(r=>r.f)).toEqual(['2010-01-01','2015-01-01']);
  });
  // Task 4b review P1: the orgId write and its provenance key land in one locked UPDATE.
  const setOrg=(issuerId:string,value:string,prov:unknown,on:Pool|PoolClient=admin,col='cninfo_org_id')=>
