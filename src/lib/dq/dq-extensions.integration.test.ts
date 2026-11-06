@@ -364,4 +364,198 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    await expect(replayMigration(admin,sql())).resolves.toBeUndefined();
   },60000);
  });
+ describe('8b: promotion predicates, adopt_candidate, restore_reconciled, resolve_lineage_conflict',()=>{
+  const item=async(o:{dataset?:string;reason:string;nk?:string;b:string;payload:Record<string,unknown>;detail?:Record<string,unknown>;status?:string;by?:string})=>{
+   const id=randomUUID();
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload,detail) values($1,$2,'financial_facts',$3,$4,$5,$6::jsonb,$7::jsonb)`,
+    [id,o.dataset??'facts.us',o.nk??`ext:${randomUUID()}`,o.reason,o.b,JSON.stringify(o.payload),JSON.stringify(o.detail??{})]);
+   if(o.status&&o.status!=='open')await q(`update public.dq_quarantine set status=$2,resolved_by=$3,resolved_at=now() where id=$1`,[id,o.status,o.by??randomUUID()]);
+   return id;
+  };
+  const park=(id:string)=>q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[id]);
+  const promote=(iss:string,ids:string[])=>one(`select public.promote_quarantined($1,'US',$2::uuid[]) v`,[iss,ids]);
+  const resolveFacts=(id:string,chosen:string[],by:string)=>one(`select public.resolve_facts_quarantine($1,$2::uuid[],$3) v`,[id,chosen,by]);
+  const restore=(id:string,b:string,hash:string|null,by:string)=>one(`select public.restore_reconciled($1,$2,$3,$4) v`,[id,b,hash,by]);
+  const itemRow=async(id:string)=>(await q(`select status,detail,payload from public.dq_quarantine where id=$1`,[id]))[0];
+  const latest=(passed:boolean,hash='h1')=>({latest_result:{passed,reconciliation_id:randomUUID(),at:'2026-11-05T00:00:00Z',inputs_hash:hash}});
+  const cand=(ref:string,value:string,o:Record<string,unknown>={})=>({concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value,unit:'USD',consolidation:'consolidated',filingRef:ref,rawHash:`h-${value}`,...o});
+  const NK=(iss:string,ref:string,gen=1,k='revenue:2023-07-01:2023-09-30:consolidated:USD')=>`${iss}:US:${k}:${ref}:${gen}`;
+  const ambiguous=(o:{iss:string;b:string;run:string;ref:string;candidates?:Record<string,unknown>[];key?:Record<string,unknown>})=>item({reason:'ambiguous_value',b:o.b,nk:NK(o.iss,o.ref),
+   payload:{key:o.key??{issuer_id:o.iss,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD'},candidates:o.candidates??[cand(o.ref,'110'),cand(o.ref,'111')],run_id:o.run}});
+  const adopt=(id:string,index:number,b:string,expected:number,by:string)=>one(`select public.adopt_candidate($1,$2,$3,$4,$5) v`,[id,index,b,expected,by]);
+  const lineageItem=(t:string,b:string,ids:string[],date='2024-02-01')=>item({reason:'lineage_conflict',b,nk:`${t}:revenue:2023-10-01:2023-12-31:consolidated:USD:${date}`,payload:{fact_ids:ids,values:[]}});
+  const resolveLineage=(id:string,keep:string,b:string,by:string)=>one(`select public.resolve_lineage_conflict($1,$2,$3,$4) v`,[id,keep,b,by]);
+
+  it('T6: an open, rejected or not-passing reconcile_mismatch blocks promotion through promote_quarantined and resolve_facts_quarantine; accepted-and-passing does not',async()=>{
+   const {iss,b,r}=await published();const by=await user();
+   await park(r);
+   const m=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:latest(false)});
+   expect(await promote(iss,[r])).toBe(0);                                                            // open
+   await q(`update public.dq_quarantine set status='resolved_reject',resolved_by=$2,resolved_at=now() where id=$1`,[m,by]);
+   expect(await promote(iss,[r])).toBe(0);                                                            // rejected: the left is really wrong
+   const m2=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:latest(false),status:'resolved_accept',by});
+   const other=await item({reason:'identity_bs',b,payload:{key:{},fact_ids:[r]}});
+   expect(await resolveFacts(other,[],by)).toMatchObject({promoted:0,skipped:1});                      // resolve_facts_quarantine honours the predicate too
+   const m3=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:latest(false)});
+   expect(await resolveFacts(m3,[],by)).toMatchObject({promoted:0});                                   // the generic resolver cannot bypass restore_reconciled
+   expect(await status(r)).toBe('quarantined');
+   await q(`update public.dq_quarantine set detail=detail||$2::jsonb where id=any($1::uuid[])`,[[m2,m3],JSON.stringify(latest(true))]);
+   expect(await promote(iss,[r])).toBe(0);                                                            // m is still a reject
+   await q(`update public.dq_quarantine set status='resolved_accept',detail=detail||$2::jsonb where id=$1`,[m,JSON.stringify(latest(true))]);
+   expect(await promote(iss,[r])).toBe(1);
+  });
+
+  it('T6: a resolved lineage_conflict binds promotion to its chosen rows, for payload members and for the rows it quarantined',async()=>{
+   const {iss,b,r0,r}=await published();const by=await user();
+   await park(r);await park(r0);
+   const l=await item({reason:'lineage_conflict',b,payload:{fact_ids:[r]},detail:{chosen_fact_ids:[],quarantined_fact_ids:[r0]},status:'resolved_accept',by});
+   expect(await promote(iss,[r,r0])).toBe(0);
+   await q(`update public.dq_quarantine set detail=jsonb_set(detail,'{chosen_fact_ids}',$2::jsonb) where id=$1`,[l,JSON.stringify([r0])]);
+   expect(await promote(iss,[r,r0])).toBe(1);
+   expect([await status(r0),await status(r)]).toEqual(['ok','quarantined']);
+  });
+
+  it('restore_reconciled (R1): passing with the same hash closes the item first and really promotes; another hash or a failing result is not_passing; another open item makes the row skip',async()=>{
+   const {iss,b,r0,r}=await published();const by=await user();const rb=await batch();
+   await park(r);
+   const m=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r]},detail:{...latest(true,'h1'),issuer_id:iss,market:'US'}});
+   const before=await rev(iss);
+   expect(await fails(restore(m,rb,'h2',by))).toMatchObject({message:'not_passing',code:'P0001'});
+   expect(await fails(restore(m,rb,null,by))).toMatchObject({message:'not_passing'});
+   expect(await fails(restore(m,await batch('facts.us',true),'h1',by))).toMatchObject({message:'batch_mismatch'});
+   expect(await restore(m,rb,'h1',by)).toEqual({promoted:1,skipped:[]});
+   expect(await status(r)).toBe('ok');expect(await rev(iss)).toBe(before+1);
+   const row=await itemRow(m);
+   expect(row.status).toBe('resolved_accept');
+   expect(row.detail).toMatchObject({restored_by_batch:rb,chosen_fact_ids:[r],hook:{stage:'materialize',state:'pending'}});
+   expect(await fails(restore(m,rb,'h1',by))).toMatchObject({message:'item_not_open'});
+   await park(r0);
+   const n=await item({reason:'reconcile_mismatch',b,payload:{fact_ids:[r0]},detail:latest(false,'h1')});
+   expect(await fails(restore(n,rb,'h1',by))).toMatchObject({message:'not_passing'});
+   await item({reason:'identity_bs',b,payload:{key:{},fact_ids:[r0]}});                                 // still referenced elsewhere
+   await q(`update public.dq_quarantine set detail=detail||$2::jsonb where id=$1`,[n,JSON.stringify(latest(true,'h1'))]);
+   expect(await restore(n,rb,'h1',by)).toEqual({promoted:0,skipped:[{fact_id:r0,reason:'ineligible'}]});
+   expect((await itemRow(n)).status).toBe('resolved_accept');expect(await status(r0)).toBe('quarantined');
+   const wrong=await item({reason:'identity_bs',b,payload:{key:{},fact_ids:[]}});
+   expect(await fails(restore(wrong,rb,'h1',by))).toMatchObject({message:'item_not_open'});
+  });
+
+  it('adopt_candidate (T5): maps the persisted camelCase candidate, takes issuer and market from the filing, generation from the anchor run, mapping_version from retained rows; the hook in the same transaction; a management run',async()=>{
+   const {iss,b,run,f,fRef}=await published();const by=await user();const ab=await batch();
+   const id=await ambiguous({iss,b,run,ref:fRef,key:{issuer_id:randomUUID(),market:'CN'}});        // payload key is never trusted
+   const out=await adopt(id,1,ab,1,by);
+   expect(out).toMatchObject({issuer_id:iss,market:'US'});
+   const [fact]=await q(`select issuer_id,market,filing_id,run_id,concept,source_concept,statement,period_start::text ps,period_end::text pe,duration,value_text,unit,consolidation,available_date::text ad,mapping_gen,mapping_version,status,raw_hash from public.financial_facts where fact_id=$1`,[out.fact_id]);
+   expect(fact).toEqual({issuer_id:iss,market:'US',filing_id:f,run_id:out.run_id,concept:'revenue',source_concept:'us-gaap:Revenues',statement:'IS',ps:'2023-07-01',pe:'2023-09-30',duration:'3M',value_text:'111',unit:'USD',consolidation:'consolidated',ad:'2024-02-01',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:'h-111'});
+   expect(await q(`select issuer_id,market,batch_id,mapping_gen,status,manifest,published_at is not null pub from public.fact_sync_runs where run_id=$1`,[out.run_id])).toEqual([{issuer_id:iss,market:'US',batch_id:ab,mapping_gen:1,status:'published',manifest:[],pub:true}]);
+   expect(await q(`select mapping_gen from public.filings where filing_id=$1`,[f])).toEqual([{mapping_gen:1}]);   // a management run activates nothing
+   const row=await itemRow(id);
+   expect(row.status).toBe('resolved_accept');
+   expect(row.detail).toMatchObject({chosen_candidate_index:1,adopted_fact_id:out.fact_id,run_id:out.run_id,issuer_id:iss,market:'US',batch_id:ab,hook:{stage:'materialize',state:'pending'}});
+   expect(await rev(iss)).toBe(2);
+   expect((await factsRead(iss,{concepts:['revenue'],history:false})).rows.map(x=>x.fact_id)).toContain(out.fact_id);
+   expect(await fails(adopt(id,0,ab,2,by))).toMatchObject({message:'item_not_open'});
+  });
+
+  it('adopt_candidate codes: invalid_choice, invalid_candidate, filing_not_found, batch_mismatch, stale_evaluation, generation_moved; the item stays open',async()=>{
+   const {iss,b,run,fRef}=await published();const by=await user();const ab=await batch();
+   const id=await ambiguous({iss,b,run,ref:fRef,candidates:[cand(fRef,'110'),cand(fRef,'111',{rawHash:undefined}),cand(fRef,'112',{periodStart:null}),cand('no-such-accession','113'),cand(fRef,'1e5')]});
+   for(const i of [-1,5])expect(await fails(adopt(id,i,ab,1,by))).toMatchObject({message:'invalid_choice',code:'22023'});
+   for(const i of [1,2,4])expect(await fails(adopt(id,i,ab,1,by))).toMatchObject({message:'invalid_candidate',code:'22023'});
+   expect(await fails(adopt(id,3,ab,1,by))).toMatchObject({message:'filing_not_found',code:'P0001'});
+   expect(await fails(adopt(id,0,await batch('facts.us',true),1,by))).toMatchObject({message:'batch_mismatch'});
+   expect(await fails(adopt(id,0,await batch('facts.cn'),1,by))).toMatchObject({message:'batch_mismatch'});
+   expect(await fails(adopt(id,0,ab,0,by))).toMatchObject({message:'stale_evaluation'});
+   const moved=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,2),payload:{candidates:[cand(fRef,'110')],run_id:run}});
+   expect(await fails(adopt(moved,0,ab,1,by))).toMatchObject({message:'generation_moved'});
+   const noRun=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,1,'revenue:2023-07-01:2023-09-30:consolidated:EUR'),payload:{candidates:[cand(fRef,'110')],run_id:randomUUID()}});
+   expect(await fails(adopt(noRun,0,ab,1,by))).toMatchObject({message:'generation_moved'});
+   const notAmbiguous=await item({reason:'odd_duration',b,payload:{candidates:[cand(fRef,'110')],run_id:run}});
+   expect(await fails(adopt(notAmbiguous,0,ab,1,by))).toMatchObject({message:'invalid_choice'});
+   expect((await itemRow(id)).status).toBe('open');expect(await rev(iss)).toBe(1);
+  });
+
+  it('adopt_candidate: duplicate on the full candidate key in any status; an old-generation row with the same key is no duplicate (T1); replay_required without exactly one retained mapping_version',async()=>{
+   const {iss,b,run,f,fRef}=await published();const by=await user();
+   const k4='revenue:2023-10-01:2023-12-31:consolidated:USD';                                          // the key of r on f, generation 1
+   const four=(value:string)=>cand(fRef,value,{periodStart:'2023-10-01',periodEnd:'2023-12-31'});
+   const dup=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,1,k4),payload:{candidates:[four('105')],run_id:run}});
+   expect(await fails(adopt(dup,0,await batch(),1,by))).toMatchObject({message:'duplicate'});
+   const run2=await begin(iss,b,2);await stage(run2,[{filing_id:f,concept:'net_income',value:'5',mapping_version:'facts-map/2'}]);await publish(run2,[f]);   // f moves to gen 2, r stays as evidence
+   const old=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,2,k4),payload:{candidates:[four('105')],run_id:run2}});
+   const out=await adopt(old,0,await batch(),2,by);
+   expect(await q(`select mapping_gen,mapping_version from public.financial_facts where fact_id=$1`,[out.fact_id])).toEqual([{mapping_gen:2,mapping_version:'facts-map/2'}]);
+   const run3=await begin(iss,b,2);await stage(run3,[{filing_id:f,concept:'total_assets',period_start:null,duration:'INSTANT',value:'9',mapping_version:'facts-map/3'}]);await publish(run3,[f]);
+   const run4=await begin(iss,b,2);await publish(run4,[]);                                              // an anchor run without rows
+   const rr=await item({reason:'ambiguous_value',b,nk:NK(iss,fRef,2),payload:{candidates:[cand(fRef,'110')],run_id:run4}});
+   expect(await fails(adopt(rr,0,await batch(),await rev(iss),by))).toMatchObject({message:'replay_required'});
+  });
+
+  it('adopt_candidate conflict_exists (U3): a visible ok row with another value for (K, date), or an open same_day_conflict / lineage_conflict on it even with no ok competitor left',async()=>{
+   const {iss,b,run,fRef}=await published();const by=await user();
+   const run2=await begin(iss,b,1);const g=await filing(run2);
+   const [y]=await stage(run2,[{filing_id:g.id,period_start:'2023-07-01',period_end:'2023-09-30',value:'109'}]);await publish(run2,[g.id]);
+   const a=await ambiguous({iss,b,run,ref:fRef});
+   expect(await fails(adopt(a,0,await batch(),2,by))).toMatchObject({message:'conflict_exists'});
+   await park(y);
+   const key={issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD',available_date:'2024-02-01'};
+   const sd=await item({reason:'same_day_conflict',b,nk:`${iss}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,payload:{key,fact_ids:[y],values:[]}});
+   expect(await fails(adopt(a,0,await batch(),2,by))).toMatchObject({message:'conflict_exists'});
+   await q(`update public.dq_quarantine set status='resolved_reject',resolved_by=$2,resolved_at=now() where id=$1`,[sd,by]);
+   const ln=await item({reason:'lineage_conflict',b,nk:`${iss}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,payload:{fact_ids:[y]}});
+   expect(await fails(adopt(a,0,await batch(),2,by))).toMatchObject({message:'conflict_exists'});
+   await q(`update public.dq_quarantine set status='resolved_reject',resolved_by=$2,resolved_at=now() where id=$1`,[ln,by]);
+   expect(await adopt(a,0,await batch(),2,by)).toMatchObject({issuer_id:iss});
+  });
+
+  it('resolve_lineage_conflict: locks the whole lineage, re-queries under the lock, leaves exactly one ok value, persists the verdict that promote_quarantined then obeys',async()=>{
+   const {iss:t,b,r}=await published();const {iss:s,b:sb,x}=await sibling('200');const by=await user();
+   const run2=await begin(s,sb);const g=await filing(run2);const [z]=await stage(run2,[{filing_id:g.id,value:'300'}]);await publish(run2,[g.id]);   // not in the payload
+   await merge(s,t,by);
+   expect((await lineageRead([t,s],{concepts:['revenue']})).conflicts[0].fact_ids).toEqual([r,x,z].sort());
+   const id=await lineageItem(t,b,[r,x]);
+   const revs=[await rev(t),await rev(s)];
+   expect(await fails(resolveLineage(id,randomUUID(),await batch(),by))).toMatchObject({message:'invalid_choice'});
+   expect(await resolveLineage(id,r,await batch(),by)).toEqual({quarantined:2});
+   expect([await status(r),await status(x),await status(z)]).toEqual(['ok','quarantined','quarantined']);
+   expect([await rev(t),await rev(s)]).toEqual([revs[0]+1,revs[1]+1]);
+   const row=await itemRow(id);
+   expect(row.status).toBe('resolved_accept');
+   expect(row.detail).toMatchObject({chosen_fact_ids:[r],quarantined_fact_ids:[x,z].sort(),issuer_id:t,market:'US',hook:{stage:'materialize',state:'pending'}});
+   const env=await lineageRead([t,s],{concepts:['revenue'],history:false});
+   expect(env.conflicts).toEqual([]);expect(env.rows.map(y=>y.fact_id)).toEqual([r]);
+   expect(await one(`select public.promote_quarantined($1,'US',$2::uuid[]) v`,[s,[x,z]])).toBe(0);    // the verdict binds
+  });
+
+  it('resolve_lineage_conflict: payload rows outside the lineage → lineage_changed; a kept row that is not ok → unresolved with nothing changed; it waits behind a lock on any member scope',async()=>{
+   const {iss:t,b,r}=await published();const {iss:s,x}=await sibling('200');const {x:outsider}=await sibling('250');const by=await user();
+   await merge(s,t,by);
+   const bad=await lineageItem(t,b,[r,outsider],'2024-02-02');
+   expect(await fails(resolveLineage(bad,r,await batch(),by))).toMatchObject({message:'lineage_changed'});
+   const id=await lineageItem(t,b,[r,x]);
+   await park(r);
+   expect(await fails(resolveLineage(id,r,await batch(),by))).toMatchObject({message:'unresolved'});
+   expect(await status(x)).toBe('ok');expect((await itemRow(id)).status).toBe('open');                 // rolled back
+   await q(`update public.financial_facts set status='ok' where fact_id=$1`,[r]);
+   const ab=await batch();
+   await inTx(admin,async({c,pid,commit})=>{
+    await c.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market='US' for update`,[s]);
+    const p=resolveLineage(id,x,ab,by);p.catch(()=>{});
+    await stillBlockedBehind(admin,pid,p);
+    await commit();
+    expect(await p).toEqual({quarantined:1});
+   });
+   expect([await status(r),await status(x)]).toEqual(['quarantined','ok']);
+   const malformed=await item({reason:'lineage_conflict',b,nk:`${t}:revenue:2024-02-01`,payload:{fact_ids:[r]}});
+   expect(await fails(resolveLineage(malformed,r,ab,by))).toMatchObject({message:'invalid_choice'});
+  });
+
+  it('grants: the three verdict functions are service_role only',async()=>{
+   const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
+   for(const sig of ['public.adopt_candidate(uuid,int,uuid,bigint,uuid)','public.restore_reconciled(uuid,uuid,text,uuid)','public.resolve_lineage_conflict(uuid,uuid,uuid,uuid)']){
+    for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+    expect(await fn('service_role',sig)).toBe(true);
+   }
+  });
+ });
 });
