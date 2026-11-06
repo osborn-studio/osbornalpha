@@ -17,12 +17,12 @@ describe('raw paths',()=>{
   const h=sha('{}');
   expect(sha256Hex(enc('{}'))).toBe(h);
   expect(rawPath('sec-submissions',h,'json')).toBe(`sec-submissions/${h}.json`);
-  expect(rawMetaPath(`cn-gold-pdf/${h}.pdf`)).toBe(`cn-gold-pdf/${h}.meta.json`);
+  expect(rawMetaPath(`cn-gold-pdf/${h}.pdf`)).toBe(`cn-gold-pdf/${h}.pdf.meta.json`);
   expect(RAW_EXT).toEqual({'application/json':'json','text/html':'html','application/pdf':'pdf','text/csv':'csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx','application/zip':'zip'});
   const store=memoryRawStore();
   expect(store.sha256Of(`hkex/${h}.xlsx`)).toBe(h);
   expect(supabaseRawStore({} as never).sha256Of(`gleif/${h}.csv`)).toBe(h);
-  for(const bad of [`hkex/${h}.exe`,`nope/${h}.json`,`hkex/${h.slice(1)}.json`,`hkex/${h}.meta.json`,'../etc/passwd'])expect(()=>store.sha256Of(bad)).toThrow(RawStoreError);
+  for(const bad of [`hkex/${h}.exe`,`nope/${h}.json`,`hkex/${h.slice(1)}.json`,`hkex/${h}.meta.json`,`hkex/${h}.json.meta.json`,'../etc/passwd'])expect(()=>store.sha256Of(bad)).toThrow(RawStoreError);
  });
 });
 
@@ -58,6 +58,51 @@ describe('memoryRawStore',()=>{
   await expect(store.put(item('{}',{meta:{n:Number.NaN}}))).rejects.toThrow('raw_invalid: meta:n');
   await expect(store.put(item('{}'),aborted())).rejects.toThrow('raw_upload_failed: budget_exhausted');
   expect(store.objects.size).toBe(0);
+ });
+});
+
+describe('cross-extension and credential hardening',()=>{
+ const ZIP='application/zip' as const,XLSX='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' as const;
+ it('memory: identical bytes under two content types keep two objects and two sidecars; sidecars are never overwritten',async()=>{
+  const store=memoryRawStore();
+  const a=await store.put({kind:'hkex',bytes:enc('PK'),contentType:ZIP,meta:{note:'first'}});
+  const b=await store.put({kind:'hkex',bytes:enc('PK'),contentType:XLSX,meta:{note:'second'}});
+  expect([a.status,b.status]).toEqual(['stored','stored']);
+  expect(a.path).not.toBe(b.path);
+  expect(JSON.parse(dec(store.objects.get(rawMetaPath(a.path))))).toMatchObject({content_type:ZIP,note:'first'});
+  expect(JSON.parse(dec(store.objects.get(rawMetaPath(b.path))))).toMatchObject({content_type:XLSX,note:'second'});
+  expect((await store.put({kind:'hkex',bytes:enc('PK'),contentType:ZIP,meta:{note:'third'}})).status).toBe('exists');
+  expect(JSON.parse(dec(store.objects.get(rawMetaPath(a.path))))).toMatchObject({note:'first'});
+ });
+ it('supabase: cross-extension puts upload four distinct paths',async()=>{
+  const upload=vi.fn<(path:string,body:unknown,opts:unknown)=>Promise<{error:unknown}>>(async()=>({error:null}));
+  const admin={storage:{from:()=>({upload})}} as never;const s=supabaseRawStore(admin);
+  const a=await s.put({kind:'hkex',bytes:enc('PK'),contentType:ZIP});const b=await s.put({kind:'hkex',bytes:enc('PK'),contentType:XLSX});
+  const paths=upload.mock.calls.map(c=>c[0]);
+  expect(new Set(paths).size).toBe(4);
+  expect(paths).toEqual([a.path,rawMetaPath(a.path),b.path,rawMetaPath(b.path)]);
+  expect(JSON.parse(upload.mock.calls[3][1] as string)).toMatchObject({content_type:XLSX});
+ });
+ it('supabase: an already-aborted budget performs zero uploads; abort between object and sidecar skips the sidecar',async()=>{
+  const upload=vi.fn(async()=>({error:null}));const s=supabaseRawStore({storage:{from:()=>({upload})}} as never);
+  await expect(s.put(item('{}'),aborted())).rejects.toThrow('raw_upload_failed: budget_exhausted');
+  expect(upload).not.toHaveBeenCalled();
+  const c=new AbortController();
+  const up2=vi.fn(async()=>{c.abort();return {error:null};});
+  const s2=supabaseRawStore({storage:{from:()=>({upload:up2})}} as never);
+  await expect(s2.put(item('{}'),{remainingMs:()=>1,signal:c.signal})).rejects.toThrow('budget_exhausted');
+  expect(up2).toHaveBeenCalledTimes(1);
+ });
+ it('rejects credential-like meta keys and URL parameter names (decoded) before any upload',async()=>{
+  const upload=vi.fn(async()=>({error:null}));const s=supabaseRawStore({storage:{from:()=>({upload})}} as never);
+  const mem=memoryRawStore();
+  for(const meta of <Record<string,string>[]>[{api_key:'SECRET'},{Authorization:'Bearer x'},{cookie:'a=b'},{url:'https://example.test/?%61pi_key=SECRET'},{url:'https://example.test/a?x=1&Token=z'},{url:'https://example.test/#access_token=z'}]){
+   await expect(s.put(item('{}',{meta}))).rejects.toThrow(/raw_invalid: meta_credential:/);
+   await expect(mem.put(item('{}',{meta}))).rejects.toThrow(/raw_invalid: meta_credential:/);
+  }
+  expect(upload).not.toHaveBeenCalled();
+  expect(mem.objects.size).toBe(0);
+  await expect(mem.put(item('{}',{meta:{url:'https://example.test/?page=2'}}))).resolves.toMatchObject({status:'stored'});
  });
 });
 

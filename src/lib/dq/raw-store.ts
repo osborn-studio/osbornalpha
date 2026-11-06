@@ -23,7 +23,8 @@ export const RAW_EXT:Record<RawContentType,string>={
  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx','application/zip':'zip',
 };
 export const rawPath=(kind:RawKind,sha256:string,ext:string)=>`${kind}/${sha256}.${ext}`;
-export const rawMetaPath=(path:string)=>path.replace(/\.[a-z]+$/,'.meta.json');
+// Full object filename + .meta.json: the same bytes stored under two content types get distinct sidecars.
+export const rawMetaPath=(path:string)=>`${path}.meta.json`;
 
 export class RawStoreError extends Error{
  constructor(readonly code:'raw_upload_failed'|'raw_invalid',readonly reason?:string){
@@ -34,6 +35,17 @@ export class RawStoreError extends Error{
 
 const PATH=new RegExp(`^(${RAW_KINDS.join('|')})/([0-9a-f]{64})\\.(${Object.values(RAW_EXT).join('|')})$`);
 const CREDENTIAL=/:\/\/[^/\s]*@|[?&#](?:token|key|apikey|api_key|access_token|sig|signature|auth|secret|password)=/i;
+const CREDENTIAL_NAME=/api[-_]?key|token|secret|password|authorization|cookie|^(?:key|sig|signature|auth)$/i;
+/** A string value that parses as a URL is also checked by its decoded query/fragment parameter names and userinfo. */
+function urlHasCredential(v:string):boolean{
+ let u:URL;
+ try{u=new URL(v);}catch{return false;}
+ if(u.username||u.password)return true;
+ for(const name of u.searchParams.keys())if(CREDENTIAL_NAME.test(name))return true;
+ const frag=u.hash.replace(/^#/,'');
+ if(frag.includes('='))for(const name of new URLSearchParams(frag).keys())if(CREDENTIAL_NAME.test(name))return true;
+ return false;
+}
 
 export const sha256Hex=(bytes:Uint8Array):string=>createHash('sha256').update(bytes).digest('hex');
 
@@ -51,7 +63,8 @@ function prepare(item:RawPut):{sha256:string;path:string;meta:string}{
  if(!(item.bytes instanceof Uint8Array))throw new RawStoreError('raw_invalid','bytes');
  for(const [k,v] of Object.entries(item.meta??{})){
   if(typeof v==='number'?!Number.isFinite(v):typeof v!=='string')throw new RawStoreError('raw_invalid',`meta:${k}`);
-  if(typeof v==='string'&&CREDENTIAL.test(v))throw new RawStoreError('raw_invalid',`meta_credential:${k}`);
+  if(CREDENTIAL_NAME.test(k))throw new RawStoreError('raw_invalid',`meta_credential:${k}`);
+  if(typeof v==='string'&&(CREDENTIAL.test(v)||urlHasCredential(v)))throw new RawStoreError('raw_invalid',`meta_credential:${k}`);
  }
  const sha256=sha256Hex(item.bytes);
  // System keys last: caller meta can never overwrite what the sidecar asserts about the bytes.
@@ -75,6 +88,8 @@ function withinBudget<T>(p:Promise<T>,budget?:Budget):Promise<T>{
 export function supabaseRawStore(admin:SupabaseClient):RawStore{
  const bucket=()=>admin.storage.from(RECONCILE_RAW_BUCKET);
  const upload=async(path:string,body:Uint8Array|string,contentType:string,budget?:Budget):Promise<'stored'|'exists'>=>{
+  // checked before the call: an already-aborted budget performs zero uploads
+  if(budget?.signal.aborted)throw new RawStoreError('raw_upload_failed','budget_exhausted');
   const {error}=await withinBudget(bucket().upload(path,body,{contentType,upsert:false}),budget);
   if(!error)return 'stored';
   if(isExists(error as UploadError))return 'exists';
@@ -99,11 +114,11 @@ export function memoryRawStore():RawStore&{objects:Map<string,Uint8Array>}{
   async put(item,budget){
    const {sha256,path,meta}=prepare(item);
    if(budget?.signal.aborted)throw new RawStoreError('raw_upload_failed','budget_exhausted');
-   if(objects.has(path))return {sha256,path,status:'exists'};
-   // a copy: later mutation of the caller's buffer cannot rewrite evidence
-   objects.set(path,new Uint8Array(item.bytes));
-   objects.set(rawMetaPath(path),new TextEncoder().encode(meta));
-   return {sha256,path,status:'stored'};
+   // a copy: later mutation of the caller's buffer cannot rewrite evidence; stored objects and sidecars are immutable
+   const status:RawStored['status']=objects.has(path)?'exists':'stored';
+   if(status==='stored')objects.set(path,new Uint8Array(item.bytes));
+   if(!objects.has(rawMetaPath(path)))objects.set(rawMetaPath(path),new TextEncoder().encode(meta));
+   return {sha256,path,status};
   },
  };
 }
