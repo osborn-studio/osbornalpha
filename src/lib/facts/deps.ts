@@ -13,7 +13,8 @@ import {supabaseFactsDb} from './db';
 import {supabaseSnapshotStore} from './snapshot-store';
 import {supabaseRawStore} from '../dq/raw-store';
 import {fetchSubmissions} from '../entities/identifiers/sec-submissions';
-import {enrichAcceptance} from './providers/sec-acceptance';
+import {DATE_MISMATCH_PAIR,enrichAcceptance} from './providers/sec-acceptance';
+import {recordReconciliation} from '../dq/reconcile/record';
 import {fetchCompanyFacts,parseCompanyFacts} from './providers/edgar-companyfacts';
 import {coverageSummary,fetchTushareStatements,parseTushareStatements} from './providers/tushare-statements';
 import {linkCninfoFiling} from './providers/cninfo-link';
@@ -71,10 +72,10 @@ export function productionSyncDeps(opts:ProductionDepsOptions):SyncDeps{
   parseCn:(snapshots,o)=>parseTushareStatements(snapshots,{sinceYear:o.sinceYear}),
   coverageCn:coverageSummary,   // → coverage_summary in the batch receipt
   linkCn:cninfoLinker(tables,db),
-  // 9b: one submissions fetch per published US issuer, with the files[] pages back to the earliest pending
-  // filing (coverFrom, plan audit R3); raw bytes into reconcile-raw. sec.filing_date_vs_submissions
-  // results are recorded once plan-3 Part D adds recordDateMismatch (record.ts) here.
-  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom})},{issuerId:issuer,cik10},b),
+  // 9b: one submissions fetch per published US issuer, pages back to the earliest pending filing (coverFrom, plan audit R3);
+  // raw bytes into reconcile-raw; date mismatches recorded out of cycle (record.ts).
+  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom}),
+   recordDateMismatch:async r=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:null});}},{issuerId:issuer,cik10},b),
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion,
  };
 }

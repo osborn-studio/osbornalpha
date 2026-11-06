@@ -13,8 +13,8 @@
  * Pending filings older than 3 years are skipped (acceptance_out_of_window); --full-history (with --issuer only) lifts that bound.
  * --report (alone): the E7 measure — edgar filings of in-scope US issuers with accepted_at / all —
  * as one JSON line (target ≥ 0.99; a miss is reported as the real number, never padded).
- * sec.filing_date_vs_submissions results are listed per issuer; they are written once plan-3
- * Part D wires recordDateMismatch (record.ts) into the enrichAcceptance call below.
+ * sec.filing_date_vs_submissions results are listed per issuer; with --apply they are recorded as
+ * sec.filing_date_vs_submissions rows (record.ts).
  * Exit 0 on success, 1 when the batch (or, in a dry run, any issuer) failed, 2 on bad arguments.
  */
 import {selectAll,supabaseTableClient} from '../../src/lib/db/table-client';
@@ -26,7 +26,9 @@ import {memoryRawStore,supabaseRawStore} from '../../src/lib/dq/raw-store';
 import {fetchSubmissions} from '../../src/lib/entities/identifiers/sec-submissions';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {supabaseFactsDb} from '../../src/lib/facts/db';
-import {enrichAcceptance} from '../../src/lib/facts/providers/sec-acceptance';
+import {recordReconciliation} from '../../src/lib/dq/reconcile/record';
+import type {ReconcileResultInput} from '../../src/lib/dq/reconcile/types';
+import {DATE_MISMATCH_PAIR,enrichAcceptance} from '../../src/lib/facts/providers/sec-acceptance';
 import type {AcceptanceDeps} from '../../src/lib/facts/providers/sec-acceptance';
 import {makeBudget,resolveCodeVersion} from '../../src/lib/facts/sync';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
@@ -79,7 +81,8 @@ async function main():Promise<void>{
  const budget=makeBudget(null);
  for(const it of issuers){
   try{
-   const out=await enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b},{coverFrom})},{issuerId:it.issuerId,cik10:it.cik10},budget,{fullHistory});
+   const out=await enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b},{coverFrom}),
+    ...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId});}}:{})},{issuerId:it.issuerId,cik10:it.cik10},budget,{fullHistory});
    for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]+=out.counts[k];
    errors.push(...out.errors);mismatches+=out.mismatches.length;
    if(out.counts.failed>0||out.errors.some(e=>!isInfoError(e)))issuerFailures++;

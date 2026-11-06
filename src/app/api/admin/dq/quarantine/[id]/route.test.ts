@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryTableClient } from '@/lib/db/memory-table-client';
 import { FactsDbError } from '@/lib/facts/types';
 
-const mocks = vi.hoisted(() => ({ requireAdmin: vi.fn(), getAdmin: vi.fn(), resolve: vi.fn(), resolveFacts: vi.fn(), markAudited: vi.fn(), insert: vi.fn(), from: vi.fn(), client: null as unknown }));
+const mocks = vi.hoisted(() => ({ requireAdmin: vi.fn(), getAdmin: vi.fn(), resolve: vi.fn(), resolveFacts: vi.fn(), markAudited: vi.fn(), hashNow: vi.fn(), insert: vi.fn(), from: vi.fn(), client: null as unknown }));
 vi.mock('@/lib/admin/auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/lib/admin/auth')>();
   return { ...original, requireAdminUser: mocks.requireAdmin };
@@ -11,6 +11,7 @@ vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdmin }));
 vi.mock('@/lib/db/table-client', async (importOriginal) => ({ ...await importOriginal<typeof import('@/lib/db/table-client')>(), supabaseTableClient: () => mocks.client }));
 vi.mock('@/lib/dq/quarantine', () => ({ resolveQuarantine: mocks.resolve }));
 vi.mock('@/lib/dq/facts-resolver', () => ({ resolveFactsItem: mocks.resolveFacts, markAudited: mocks.markAudited }));
+vi.mock('@/lib/dq/reconcile/deps', () => ({ restoreInputsHashNow: () => mocks.hashNow }));
 vi.mock('@/lib/facts/db', () => ({ supabaseFactsDb: () => ({ facts: 'db' }) }));
 
 import { POST } from './route';
@@ -123,7 +124,7 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     const res = await json({ status: 'resolved_accept', chosen_fact_ids: [FACT_A] });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: ID, outcome: 'resolved', hook: HOOK, promoted: 1, skipped: 0, chosen_fact_ids: [FACT_A] });
-    expect(mocks.resolveFacts).toHaveBeenCalledWith({ facts: 'db' }, client, expect.objectContaining({ id: ID, dataset: 'facts.us' }), { status: 'resolved_accept', chosenFactIds: [FACT_A], resolvedBy: ADMIN });
+    expect(mocks.resolveFacts).toHaveBeenCalledWith({ facts: 'db' }, client, expect.objectContaining({ id: ID, dataset: 'facts.us' }), expect.objectContaining({ status: 'resolved_accept', chosenFactIds: [FACT_A], resolvedBy: ADMIN }));
     expect(mocks.resolve).not.toHaveBeenCalled();
     expect(mocks.insert.mock.calls[0][0]).toMatchObject({ detail: { id: ID, status: 'resolved_accept', outcome: 'resolved', chosen_fact_ids: [FACT_A], hook: HOOK } });
   });
@@ -240,6 +241,12 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     await facts3('lineage_conflict');
     await json({ status: 'resolved_accept', keep_fact_id: FACT_A });
     expect(mocks.resolveFacts.mock.calls[1][3]).toMatchObject({ keepFactId: FACT_A });
+  });
+  it('injects the restore-side inputs hash into resolveFactsItem (plan 3 Task 14c)', async () => {
+    await facts3('reconcile_mismatch');
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, promoted: 1, restore: { promoted: 1, skipped: [] } });
+    expect((await json({ status: 'resolved_accept' })).status).toBe(200);
+    expect(mocks.resolveFacts.mock.calls.at(-1)?.[3]).toMatchObject({ inputsHashNow: mocks.hashNow });
   });
   it('validates and scopes the new body fields: bad values 400, not applicable 400', async () => {
     await facts3('ambiguous_value');

@@ -7,6 +7,7 @@ import {
 import { supabaseTableClient } from '@/lib/db/table-client';
 import { markAudited, resolveFactsItem, type FactsResolveOutcome } from '@/lib/dq/facts-resolver';
 import { resolveQuarantine, type QuarantineStatus, type ResolveOutcome } from '@/lib/dq/quarantine';
+import { restoreInputsHashNow } from '@/lib/dq/reconcile/deps';
 import { supabaseFactsDb } from '@/lib/facts/db';
 import { FactsDbError } from '@/lib/facts/types';
 import { audit, type ResearchSupabase } from '@/lib/research/store';
@@ -107,6 +108,7 @@ export async function POST(request: Request, { params }: Ctx) {
         const r = await resolveFactsItem(supabaseFactsDb(admin), client, item, {
           status: status as Resolution, chosenFactIds: chosen as string[] | undefined,
           chosenCandidateIndex: index as number | undefined, keepFactId: keep as string | undefined, resolvedBy: user.id,
+          inputsHashNow: restoreInputsHashNow(admin),
         });
         outcome = r.outcome;
         auditAs = r.auditAs;
