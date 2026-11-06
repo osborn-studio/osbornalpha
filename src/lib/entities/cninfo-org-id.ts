@@ -53,12 +53,14 @@ export async function fillCninfoOrgIds(deps:CninfoDeps,targets:readonly CninfoTa
    }
    sha=await keep(look.bytes);
   }catch(e){counts.failed++;errors.push({code:'cninfo_error',key:t.code,message:errorMessage(e)});planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'failed',evidence_sha256:(e as {sha?:string|null}).sha??null});continue;}
+  counts.fetched++;   // a lookup that returned a response
   if(!look.hit){skippedSummary.org_id_not_found=(skippedSummary.org_id_not_found??0)+1;planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'not_found',evidence_sha256:sha});continue;}
   const orgId=look.hit.orgId;
   const plan=(outcome:CninfoPlanned['outcome'])=>planned.push({issuer_id:t.issuer_id,code:t.code,orgId,outcome,evidence_sha256:sha});
   if(!apply){plan('planned');continue;}
   try{
-   const evidence:ClaimEvidence={source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:sha!,locator:`topSearch:keyWord=${t.code}`};
+   if(sha===null)throw new Error('evidence_not_stored');   // a hit without stored evidence is never written
+   const evidence:ClaimEvidence={source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:sha,locator:`topSearch:keyWord=${t.code}`};
    const claim=async(op:'set_identifier'|'correct_identifier',current:string|null)=>{
     const c:ClaimInput={issuer_id:t.issuer_id,id_type:'cninfo_org_id',value:orgId,source:'cninfo_topsearch',op,detail:{
      schema:'claim/1',evidence_kind:'provider_mapping',target:{issuer_id:t.issuer_id},params:op==='set_identifier'?{}:{expected_current:current,new_value:orgId},evidence,sources:[evidence],
@@ -72,14 +74,14 @@ export async function fillCninfoOrgIds(deps:CninfoDeps,targets:readonly CninfoTa
    if(outcome==='duplicate'){counts.duplicates++;plan('duplicate');continue;}
    if(outcome==='conflict'){
     const [now]=await tables.select('issuers',{issuer_id:t.issuer_id},{limit:1});
-    if(typeof now?.cninfo_org_id==='string'&&now.cninfo_org_id!==orgId)await claim('correct_identifier',now.cninfo_org_id);
+    if(now?.cninfo_org_id===orgId){counts.duplicates++;plan('duplicate');continue;}   // filled with the same value meanwhile
+    if(typeof now?.cninfo_org_id==='string')await claim('correct_identifier',now.cninfo_org_id);
     else await claim('set_identifier',null);   // the value is held by another issuer
     continue;
    }
    counts.failed++;errors.push({code:outcome==='not_active'?'issuer_changed':'issuer_missing',key:t.issuer_id,message:outcome});plan('failed');
   }catch(e){counts.failed++;errors.push({code:'cninfo_write_error',key:t.issuer_id,message:errorMessage(e)});plan('failed');}
  }
- counts.fetched=counts.inserted+counts.duplicates+counts.failed;
  const lead:BatchError[]=Object.keys(claims).length?[{code:'claims_summary',message:JSON.stringify(claims)}]:[];
  return {counts,errors:withSkippedSummary([...lead,...errors],skippedSummary),skippedSummary,rejectedSummary:{},claims,planned};
 }

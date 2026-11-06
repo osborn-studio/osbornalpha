@@ -53,7 +53,7 @@ describe('cninfo org id fill',()=>{
   expect(prov.usci).toEqual({source:'test'});
   expect(prov.cninfo_org_id).toMatchObject({source:'cninfo_topsearch',as_of:'2026-11-05'});
   expect([...raw.objects.keys()].some(k=>k.includes(prov.cninfo_org_id.evidence_sha256))).toBe(true);
-  expect(res.counts).toMatchObject({fetched:1,inserted:1,failed:0});
+  expect(res.counts).toMatchObject({fetched:2,inserted:1,failed:0});
   expect(res.skippedSummary).toEqual({org_id_not_found:1});
   expect(res.planned.map(p=>p.outcome)).toEqual(['written','not_found']);
  });
@@ -64,7 +64,7 @@ describe('cninfo org id fill',()=>{
   const claims=c.rows('issuer_identifier_claims');
   expect(claims.map(x=>[x.issuer_id,x.id_type,x.value,x.op,x.source])).toEqual([['e','cninfo_org_id','gssz0000001','set_identifier','cninfo_topsearch']]);
   expect((claims[0].detail as {target:unknown;evidence_kind:string})).toMatchObject({target:{issuer_id:'e'},evidence_kind:'provider_mapping'});
-  expect(res.counts).toMatchObject({failed:1});
+  expect(res.counts).toMatchObject({failed:1,fetched:1});
   expect(res.errors.map(e=>e.code)).toEqual(['claims_summary','cninfo_error']);
  });
  it('dry run (batchId null) looks up but writes nothing and stores nothing',async()=>{

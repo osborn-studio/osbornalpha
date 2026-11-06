@@ -51,6 +51,7 @@ function parseArgs(argv:string[]):Args{
   else if(k==='--issuer'){const id=argv[++i]??bad();if(!UUID.test(id))bad();a.issuers.push(id.toLowerCase());}
   else bad();
  }
+ if(a.gleifDownloadedAt&&!a.stages.has('A'))bad();
  if(a.stages.has('A')&&(!a.gleif||!existsSync(a.gleif)))bad();
  if(a.stages.has('D')&&(!a.hkex||!existsSync(a.hkex)))bad();
  return a;

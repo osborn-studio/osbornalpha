@@ -61,6 +61,7 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
  set_issuer_identifier(rowsOf,a){
   const pv=a.p_provenance,v=a.p_value;
   if(a.p_column!=='cninfo_org_id')throw new TableError('rpc','set_issuer_identifier','invalid_column','22023');
+  // not mirrored: SQL claim_provenance_safe (credential-like key names, URLs, UUIDs); callers pass fixed-shape provenance and the DB suite covers rejection
   if(typeof v!=='string'||v.trim()===''||!isObj(pv))throw new TableError('rpc','set_issuer_identifier','invalid_identifier_write','22023');
   const row=rowsOf('issuers').find(r=>r.issuer_id===a.p_issuer);
   if(!row)return 'not_found';
