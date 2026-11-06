@@ -57,7 +57,8 @@ export async function startLocalDatabase(options: { rehearsalDefaultTableGrants?
   let admin: Pool | undefined;
   let started = false;
   try {
-  execFileSync(join(bin,'initdb'),['-D',join(directory,'data'),'-U','s4_admin','--auth-host=scram-sha-256','--auth-local=trust','--pwfile='+passwordFile],{ stdio:'pipe', timeout: 30_000 });
+  // F3 (document pipeline spec §4.4): UTF8 like hosted Supabase, so length()/substr() count code points; LC_ALL=C alone gives SQL_ASCII.
+  execFileSync(join(bin,'initdb'),['-D',join(directory,'data'),'-U','s4_admin','--auth-host=scram-sha-256','--auth-local=trust','--pwfile='+passwordFile,'--encoding=UTF8','--locale=C'],{ stdio:'pipe', timeout: 30_000 });
   writeFileSync(join(directory,'data','postgresql.auto.conf'),`listen_addresses='127.0.0.1'\nport=${port}\nunix_socket_directories='${directory}'\n`);
   execFileSync(join(bin,'pg_ctl'),['-D',join(directory,'data'),'-l',join(directory,'postgres.log'),'-w','start'],{ stdio:'pipe', timeout: 30_000 });
   const adminUrl = `postgres://s4_admin:${password}@127.0.0.1:${port}/postgres`;
