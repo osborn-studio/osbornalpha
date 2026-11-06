@@ -27,11 +27,12 @@ import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/share
 import {US_GOLD_PATH,usGoldEntries} from '../../src/lib/dq/reconcile/pair-us-gold';
 import {US_SAMPLE_PATH,US_SAMPLE_SCHEMA,buildSampleFiling,validateUsSample} from '../../src/lib/dq/reconcile/us-sample';
 import type {SampleIssuer,UsSample} from '../../src/lib/dq/reconcile/us-sample';
+import {MAX_IXBRL_BYTES} from '../../src/lib/dq/reconcile/ixbrl';
 import {liveSample} from '../../src/lib/dq/reconcile/us-sample-live';
 import type {LiveInput,LiveResult} from '../../src/lib/dq/reconcile/us-sample-live';
 import {rawStoreFor} from '../../src/lib/dq/raw-dir-store';
 
-const USAGE='usage: select-us-sample.ts (--fixtures [--out <path>] [--generated-at <ISO>] | --live --universe <path> --out <path> --raw-dir <dir> [--n 30])';
+const USAGE='usage: select-us-sample.ts (--fixtures [--out <path>] [--generated-at <ISO>] | --live --universe <path> --out <path> [--raw-dir <dir>] [--n 30])';
 const FIXTURE_SINCE_YEAR=2016;
 const FIXTURES=[
  {ticker:'AAPL',cik:'320193',accn:'0000320193-23-000106',companyfacts:'src/lib/facts/fixtures/edgar/CIK0000320193.trimmed.json',doc:'src/lib/dq/fixtures/ixbrl/aapl-20230930.trimmed.htm'},
@@ -55,7 +56,11 @@ async function get(url:string):Promise<Uint8Array>{
  await secPacer.admit({budget:budgetFor(120_000),reserveMs:0});
  const res=await fetch(url,{headers:{'User-Agent':UA},signal:AbortSignal.timeout(60_000)});
  if(!res.ok)throw new Error(`http_${res.status} ${url}`);
- return new Uint8Array(await res.arrayBuffer());
+ const declared=Number(res.headers.get('content-length'));
+ if(Number.isFinite(declared)&&declared>MAX_IXBRL_BYTES){await res.body?.cancel();throw new Error(`too_large ${url}`);}
+ const bytes=new Uint8Array(await res.arrayBuffer());
+ if(bytes.byteLength>MAX_IXBRL_BYTES)throw new Error(`too_large ${url}`);
+ return bytes;
 }
 async function liveFromNetwork(universePath:string,n:number,rawDir:string):Promise<LiveResult>{
  const universe=JSON.parse(readFileSync(universePath,'utf8')) as LiveInput['universe'];
@@ -72,7 +77,7 @@ async function main(){
   else if(x==='--out'&&v){out=v;i++;}
   else if(x==='--universe'&&v){universe=v;i++;}
   else if(x==='--raw-dir'&&v){rawDir=v;i++;}
-  else if(x==='--n'&&v&&/^\d{1,3}$/.test(v)){n=Number(v);i++;}
+  else if(x==='--n'&&v&&/^\d{1,3}$/.test(v)&&Number(v)>=1){n=Number(v);i++;}
   else if(x==='--generated-at'&&v&&!Number.isNaN(Date.parse(v))){generatedAt=v;i++;}
   else{console.error(USAGE);process.exit(2);}
  }

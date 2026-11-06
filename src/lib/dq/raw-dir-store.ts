@@ -1,25 +1,24 @@
 // src/lib/dq/raw-dir-store.ts
 // RawStore backed by a local directory (content-addressed files named by the RawStore path rules, never overwritten)
 // and the script-side store selection shared by record-ixbrl-fixture.ts and select-us-sample.ts. Scripts only.
-import {existsSync,mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
-import {memoryRawStore,supabaseRawStore} from './raw-store';
+import {RawStoreError,memoryRawStore,prepare,rawMetaPath,supabaseRawStore} from './raw-store';
 import type {RawStore} from './raw-store';
 
-/** Content-addressed files in a directory, named by the RawStore rules (memoryRawStore prepares path and sidecar; existing files are kept). */
+/** Content-addressed files in a directory, named by the RawStore rules; written directly (no in-memory copies), existing files are kept. */
 export function dirRawStore(dir:string):RawStore{
- const mem=memoryRawStore();
  return {
-  sha256Of:mem.sha256Of,
+  sha256Of:memoryRawStore().sha256Of,
   async put(item,budget){
-   const r=await mem.put(item,budget);
-   for(const [p,bytes] of mem.objects){
-    const full=join(dir,p);
-    if(existsSync(full))continue;
-    mkdirSync(dirname(full),{recursive:true});
-    writeFileSync(full,bytes,{flag:'wx'});
-   }
-   return r;
+   if(budget?.signal.aborted)throw new RawStoreError('raw_upload_failed','budget_exhausted');
+   const {sha256,path,meta}=prepare(item);
+   const full=join(dir,path);
+   mkdirSync(dirname(full),{recursive:true});
+   let status:'stored'|'exists'='stored';
+   try{writeFileSync(full,item.bytes,{flag:'wx'});}catch(e){if((e as NodeJS.ErrnoException).code==='EEXIST')status='exists';else throw e;}
+   try{writeFileSync(rawMetaPath(full),meta,{flag:'wx'});}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;}
+   return {sha256,path,status};
   },
  };
 }

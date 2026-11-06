@@ -28,6 +28,11 @@ export interface LiveResult{sample:UsSample;unmet:string[];warnings:string[]}
 interface Submissions{category?:string;fiscalYearEnd?:string;exchanges?:string[];filings?:{recent?:Record<string,unknown[]>}}
 interface Recent{accn:string;form:string;filingDate:string;reportDate:string|null;primaryDocument:string;inline:boolean}
 
+/** Exchange names compared case-insensitively: NYSE stays upper case, Nasdaq is 'Nasdaq', others as given. */
+export function normalizeExchange(x:string|null|undefined):string|null{
+ const t=(x??'').trim();if(t==='')return null;
+ const u=t.toUpperCase();return u==='NASDAQ'?'Nasdaq':u==='NYSE'?'NYSE':t;
+}
 const dec=(b:Uint8Array)=>new TextDecoder().decode(b);
 function recentOf(s:Submissions):Recent[]{
  const r=s.filings?.recent??{};const n=(r.accessionNumber??[]).length;const out:Recent[]=[];
@@ -71,23 +76,30 @@ export async function liveSample(deps:LiveDeps,input:LiveInput):Promise<LiveResu
  const json=<T>(b:Uint8Array)=>JSON.parse(dec(b)) as T;
  const tickers=json<Record<string,{cik_str:number;ticker:string}>>(await deps.get('https://www.sec.gov/files/company_tickers.json'));
  const cikOf=new Map(Object.values(tickers).map(t=>[t.ticker.toUpperCase(),String(t.cik_str)]));
- const subs=new Map<string,{bytes:Uint8Array;parsed:Submissions}>();const raw:SampleCandidate[]=[];const warnings:string[]=[];
+ const subs=new Map<string,Submissions>();const raw:SampleCandidate[]=[];const warnings:string[]=[];const universeFailed=new Set<string>();
  for(const c of input.universe.constituents){
   const ticker=c.ticker.toUpperCase().replace(/\./g,'-');const cik=cikOf.get(ticker);
   if(!cik){warnings.push(`no CIK for ${c.ticker}`);continue;}
   if(!subs.has(cik)){
-   try{const bytes=await deps.get(`https://data.sec.gov/submissions/CIK${padCik(cik)}.json`);subs.set(cik,{bytes,parsed:json<Submissions>(bytes)});}
-   catch(e){warnings.push(`${ticker}: ${(e as Error).message}`);continue;}
+   try{subs.set(cik,json<Submissions>(await deps.get(`https://data.sec.gov/submissions/CIK${padCik(cik)}.json`)));}
+   catch(e){
+    const m=(e as Error).message;
+    if(/http_429/.test(m))throw e;   // rate limited: the universe scan cannot be trusted, fail the run
+    warnings.push(`${ticker}: ${m}`);universeFailed.add(`universe_fetch:${ticker}`);continue;
+   }
   }
-  const s=subs.get(cik)!.parsed;
-  raw.push({ticker,cik,exchange:c.exchange==='NASDAQ'?'Nasdaq':c.exchange??s.exchanges?.[0]??null,fiscalYearEnd:s.fiscalYearEnd??null,acceleration:filerClass(s.category)});
+  const s=subs.get(cik)!;
+  raw.push({ticker,cik,exchange:normalizeExchange(c.exchange??s.exchanges?.[0]),fiscalYearEnd:s.fiscalYearEnd??null,acceleration:filerClass(s.category)});
  }
  const dd=dedupeByCik(raw,input.required);
  const {picked,unmet:pickUnmet}=pickSample(dd.candidates,dd.required,input.n);
  const sinceYear=Number(deps.now().slice(0,4))-10;
  const issuers:SampleIssuer[]=[];
  for(const p of picked){
-  const {bytes:subBytes,parsed:s}=subs.get(p.cik)!;
+  // the submissions bytes are fetched again for picked issuers only: these exact bytes are parsed and retained
+  const subUrl=`https://data.sec.gov/submissions/CIK${padCik(p.cik)}.json`;
+  const subBytes=await deps.get(subUrl);
+  const s=json<Submissions>(subBytes);
   const recent=recentOf(s).filter(r=>r.inline);
   const annual=recent.find(r=>r.form==='10-K'||r.form==='20-F');
   if(!annual){warnings.push(`${p.ticker}: no inline 10-K/20-F in filings.recent`);continue;}
@@ -105,7 +117,7 @@ export async function liveSample(deps:LiveDeps,input:LiveInput):Promise<LiveResu
    }catch(e){warnings.push(`${p.ticker} ${r.accn}: ${(e as Error).message}`);continue;}
    // Retain the exact bytes BEFORE the filing enters the manifest; a retention failure aborts the whole run.
    const rcf=await deps.store.put({kind:'sec-companyfacts',bytes:cf.bytes,contentType:'application/json',meta:{source_url:cf.meta.url??'',cik:p.cik}});
-   const rsub=await deps.store.put({kind:'sec-submissions',bytes:subBytes,contentType:'application/json',meta:{source_url:`https://data.sec.gov/submissions/CIK${padCik(p.cik)}.json`,cik:p.cik}});
+   const rsub=await deps.store.put({kind:'sec-submissions',bytes:subBytes,contentType:'application/json',meta:{source_url:subUrl,cik:p.cik}});
    const rdoc=await deps.store.put({kind:'sec-document',bytes:doc,contentType:'text/html',meta:{source_url:url,accession:r.accn}});
    if(rcf.sha256!==built.raw_sha256||rdoc.sha256!==built.doc_sha256)throw new Error(`retention_hash_mismatch:${r.accn}`);
    filings.push({...built,provenance:{companyfacts:{path:rcf.path,sha256:rcf.sha256},submissions:{path:rsub.path,sha256:rsub.sha256},document:{path:rdoc.path,sha256:rdoc.sha256}}});
@@ -114,5 +126,5 @@ export async function liveSample(deps:LiveDeps,input:LiveInput):Promise<LiveResu
  }
  const sample:UsSample={schema:US_SAMPLE_SCHEMA,generated_at:deps.now(),selection:'live/1',issuers};
  const final=finalUnmet(sample,picked,dd.required);
- return {sample,unmet:[...new Set([...pickUnmet,...final])],warnings};
+ return {sample,unmet:[...new Set([...pickUnmet,...final,...universeFailed])],warnings};
 }

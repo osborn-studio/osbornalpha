@@ -56,7 +56,7 @@ function sha256Of(path:string):string{
  return m[2];
 }
 
-function prepare(item:RawPut):{sha256:string;path:string;meta:string}{
+export function prepare(item:RawPut):{sha256:string;path:string;meta:string}{
  if(!RAW_KINDS.includes(item.kind))throw new RawStoreError('raw_invalid',`kind:${String(item.kind).slice(0,40)}`);
  const ext=RAW_EXT[item.contentType];
  if(!ext)throw new RawStoreError('raw_invalid',`content_type:${String(item.contentType).slice(0,80)}`);

@@ -5,7 +5,7 @@ import {describe,expect,it} from 'vitest';
 import {snapshotOf} from '../../facts/providers/shared';
 import {memoryRawStore} from '../raw-store';
 import type {RawStore} from '../raw-store';
-import {dedupeByCik,finalUnmet,liveSample} from './us-sample-live';
+import {dedupeByCik,finalUnmet,liveSample,normalizeExchange} from './us-sample-live';
 import type {LiveDeps} from './us-sample-live';
 import {validateUsSample} from './us-sample';
 import type {SampleCandidate} from './us-sample';
@@ -16,13 +16,14 @@ const AAPL={cik:'320193',accn:'0000320193-23-000106',cf:'src/lib/facts/fixtures/
 const MSFT={cik:'789019',accn:'0000950170-23-035122',cf:'src/lib/facts/fixtures/edgar/CIK0000789019.trimmed.json',doc:'src/lib/dq/fixtures/ixbrl/msft-20230630.trimmed.htm'};
 const submissions=(x:typeof AAPL,primary:string)=>({category:'Large accelerated filer',fiscalYearEnd:'0930',exchanges:['Nasdaq'],filings:{recent:{accessionNumber:[x.accn],form:['10-K'],filingDate:['2023-11-03'],reportDate:['2023-09-30'],primaryDocument:[primary],isInlineXBRL:[1]}}});
 
-function world(opts:{tickers:Record<string,string>;failCompanyfacts?:string[];store?:RawStore}){
+function world(opts:{tickers:Record<string,string>;failCompanyfacts?:string[];failSubmissions?:Record<string,string>;store?:RawStore}){
  const store=opts.store??memoryRawStore();
  const byCik:Record<string,typeof AAPL>={[AAPL.cik]:AAPL,[MSFT.cik]:MSFT};
  const deps:LiveDeps={
   async get(url){
    if(url.endsWith('company_tickers.json'))return enc(Object.fromEntries(Object.entries(opts.tickers).map(([t,c],i)=>[String(i),{cik_str:Number(c),ticker:t}])));
    const sub=/submissions\/CIK0*(\d+)\.json$/.exec(url);
+   if(sub&&opts.failSubmissions?.[sub[1]])throw new Error(opts.failSubmissions[sub[1]]);
    if(sub)return enc(submissions(byCik[sub[1]],byCik[sub[1]]===AAPL?'aapl-20230930.htm':'msft-20230630.htm'));
    const doc=/Archives\/edgar\/data\/(\d+)\//.exec(url);
    if(doc)return file(byCik[doc[1]].doc);
@@ -88,5 +89,18 @@ describe('finalUnmet',()=>{
   const picked=[{...cand('A','1'),exchange:'NYSE'},{...cand('B','2'),exchange:'NYSE'}];
   expect(finalUnmet(sample,picked,['A','B']).filter(u=>!['nyse','nasdaq','fye_not_1231','not_large_accelerated'].includes(u))).toEqual([]);
   expect(finalUnmet(sample,[...picked,cand('C','3')],['A','C'])).toEqual(expect.arrayContaining(['issuers:2/3','required:C']));
+ });
+});
+
+describe('universe scan and helpers',()=>{
+ it('reports a failed universe submissions fetch as unmet and fails the run on HTTP 429',async()=>{
+  const a=world({tickers:{AAPL:AAPL.cik,MSFT:MSFT.cik},failSubmissions:{[MSFT.cik]:'http_503 x'}});
+  const r=await liveSample(a.deps,{universe:{constituents:[{ticker:'AAPL'},{ticker:'MSFT'}]},required:['AAPL'],n:30});
+  expect(r.unmet).toContain('universe_fetch:MSFT');
+  const b=world({tickers:{AAPL:AAPL.cik,MSFT:MSFT.cik},failSubmissions:{[MSFT.cik]:'http_429 x'}});
+  await expect(liveSample(b.deps,{universe:{constituents:[{ticker:'AAPL'},{ticker:'MSFT'}]},required:['AAPL'],n:30})).rejects.toThrow('http_429');
+ });
+ it('normalises exchange case',()=>{
+  expect([normalizeExchange('nasdaq'),normalizeExchange('NASDAQ'),normalizeExchange('nyse'),normalizeExchange('Cboe'),normalizeExchange(' '),normalizeExchange(undefined)]).toEqual(['Nasdaq','Nasdaq','NYSE','Cboe',null,null]);
  });
 });
