@@ -1,0 +1,7 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `next.config.mjs:9` | Gold/sample files are included only in the cron function, but the newly wired quarantine route also reads them to compute restore hashes. The dynamic filesystem reader does not trace these files automatically (confirmed with the installed tracer). In deployed admin functions, valid restores therefore fail with `current_evidence_unavailable`. | Include the manifests in the quarantine route’s tracing configuration and Task 19a’s dashboard route. Verify their generated trace manifests. |
+| 2 | P2 | `scripts/dq/reconcile.ts:37` | The script lacks the cron’s CN enablement guard. Once Task 16a registers the CN pair, `--pair cn.tushare_vs_cninfo_pdf_gold --apply` can write reconciliation results and quarantine facts with `FACTS_CN_ENABLED` unset. The landed facts-sync script explicitly prevents this bypass. | Reject CN `--apply` unless `FACTS_CN_ENABLED=1`, before constructing production dependencies. Test enabled and disabled execution. |
+| 3 | P3 | `src/app/api/cron/reconcile/route.test.ts:41` | The claimed CN-gating test never reaches the gate: the CN pair is unregistered, so validation returns 400. Accepting either 400 or 403 lets the test pass even if the enablement guard is deleted. | Register/mock a CN pair for this test; assert exactly 403 when disabled and runner invocation when enabled. Test unregistered-pair rejection separately. |
+
+Verdict: fix required
