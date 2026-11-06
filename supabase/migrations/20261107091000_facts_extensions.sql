@@ -773,3 +773,274 @@ begin
 end $$;
 revoke execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.resolve_facts_quarantine(uuid, uuid[], uuid) to service_role;
+
+-- ---------------------------------------------------------------- 12. reconcile cursor (spec §3.1, §3.2, §5.5, S4, S5, T2)
+-- fence = {pair, cycle_id, issuer_id, market, batch_id, attempt}. A fenced call locks the cursor row
+-- and requires state = 'claimed', claimed_by = batch_id, attempts = attempt and claim_until > now
+-- (clock_timestamp), else fence_failed with nothing written (P0001: 55P03 would read as lease_lost).
+create or replace function public.reconcile_fence_lock(p_fence jsonb)
+returns public.dq_reconcile_cursor language plpgsql security definer set search_path = public as $$
+declare c public.dq_reconcile_cursor;
+begin
+  if p_fence is null or jsonb_typeof(p_fence) <> 'object'
+     or coalesce(jsonb_typeof(p_fence -> 'pair'), '') <> 'string' or coalesce(jsonb_typeof(p_fence -> 'cycle_id'), '') <> 'string'
+     or coalesce(jsonb_typeof(p_fence -> 'market'), '') <> 'string'
+     or coalesce(p_fence ->> 'issuer_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or coalesce(p_fence ->> 'batch_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or coalesce(jsonb_typeof(p_fence -> 'attempt'), '') <> 'number' or (p_fence ->> 'attempt') !~ '^[0-9]{1,9}$' then
+    raise exception 'fence_failed' using errcode = 'P0001';
+  end if;
+  select * into c from public.dq_reconcile_cursor
+  where pair = p_fence ->> 'pair' and cycle_id = p_fence ->> 'cycle_id' and issuer_id = (p_fence ->> 'issuer_id')::uuid and market = p_fence ->> 'market'
+  for update;
+  if not found or c.state <> 'claimed' or c.claimed_by is distinct from (p_fence ->> 'batch_id')::uuid
+     or c.attempts <> (p_fence ->> 'attempt')::int or c.claim_until is null or c.claim_until <= clock_timestamp() then
+    raise exception 'fence_failed' using errcode = 'P0001';
+  end if;
+  return c;
+end $$;
+revoke execute on function public.reconcile_fence_lock(jsonb) from public, anon, authenticated, service_role;
+
+-- Claimable iff pending, or claimed with an expired lease, or failed with attempts < 3 (failed at
+-- 3 is terminal), and the cycle is running. One atomic update; the post-claim attempts is the fence.
+create or replace function public.claim_reconcile_member(p_pair text, p_cycle_id text, p_issuer uuid, p_market text, p_batch uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_attempt int;
+begin
+  if p_batch is null then raise exception 'invalid_batch' using errcode = '22023'; end if;
+  update public.dq_reconcile_cursor c
+  set state = 'claimed', claimed_by = p_batch, claim_until = clock_timestamp() + interval '10 minutes', attempts = c.attempts + 1, last_error = null
+  where c.pair = p_pair and c.cycle_id = p_cycle_id and c.issuer_id = p_issuer and c.market = p_market
+    and (c.state = 'pending' or (c.state = 'claimed' and c.claim_until < clock_timestamp()) or (c.state = 'failed' and c.attempts < 3))
+    and exists (select 1 from public.dq_reconcile_cycles y where y.pair = c.pair and y.cycle_id = c.cycle_id and y.status = 'running')
+  returning c.attempts into v_attempt;
+  if not found then return null; end if;
+  return jsonb_build_object('pair', p_pair, 'cycle_id', p_cycle_id, 'issuer_id', p_issuer, 'market', p_market, 'batch_id', p_batch, 'attempt', v_attempt);
+end $$;
+revoke execute on function public.claim_reconcile_member(text, text, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.claim_reconcile_member(text, text, uuid, text, uuid) to service_role;
+
+-- Counts derived from the member's accepted result rows of this cycle (compared ∧ passed /
+-- compared ∧ ¬passed / any other outcome); their sum must equal expected, else member_incomplete.
+create or replace function public.complete_reconcile_member(p_fence jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare c public.dq_reconcile_cursor; v_p int; v_f int; v_n int;
+begin
+  c := public.reconcile_fence_lock(p_fence);
+  select count(*) filter (where r.outcome = 'compared' and r.passed), count(*) filter (where r.outcome = 'compared' and not r.passed), count(*) filter (where r.outcome <> 'compared')
+    into v_p, v_f, v_n
+  from public.dq_reconciliations r
+  where r.pair = c.pair and r.cycle_id = c.cycle_id and r.issuer_id = c.issuer_id and r.market = c.market;
+  if v_p + v_f + v_n <> c.expected then raise exception 'member_incomplete' using errcode = 'P0001'; end if;
+  update public.dq_reconcile_cursor
+  set state = 'done', done_at = clock_timestamp(), claim_until = null, compared_passed = v_p, compared_failed = v_f, not_compared = v_n
+  where pair = c.pair and cycle_id = c.cycle_id and issuer_id = c.issuer_id and market = c.market;
+  return jsonb_build_object('compared_passed', v_p, 'compared_failed', v_f, 'not_compared', v_n);
+end $$;
+revoke execute on function public.complete_reconcile_member(jsonb) from public, anon, authenticated;
+grant execute on function public.complete_reconcile_member(jsonb) to service_role;
+
+create or replace function public.fail_reconcile_member(p_fence jsonb, p_error text)
+returns void language plpgsql security definer set search_path = public as $$
+declare c public.dq_reconcile_cursor;
+begin
+  c := public.reconcile_fence_lock(p_fence);
+  update public.dq_reconcile_cursor
+  set state = 'failed', claim_until = null, last_error = left(coalesce(p_error, 'unknown'), 2000)
+  where pair = c.pair and cycle_id = c.cycle_id and issuer_id = c.issuer_id and market = c.market;
+end $$;
+revoke execute on function public.fail_reconcile_member(jsonb, text) from public, anon, authenticated;
+grant execute on function public.fail_reconcile_member(jsonb, text) to service_role;
+
+-- ---------------------------------------------------------------- 13. per-key atomic reconciliation write (spec §3.2 apply_reconcile_result, §5.6, T2, U2)
+-- The only entry for reconciliation-derived writes; one expected key per call, one transaction:
+-- fence check → (pair, cycle_id, natural_key) already accepted → that row is returned (reused,
+-- nothing written) → else, by action:
+--  quarantine_left (left_fact_id of the fence member required; any outcome / passed — 接口对齐记录 #5):
+--   QUARANTINES only when outcome = 'compared' AND passed = false AND the left row is ok and its run
+--   published: under the member's scope lock, open reconcile_mismatch
+--   item (reused by natural key <pair>:<natural_key>:<fact_id>) with payload {key, fact_ids,
+--   left_value, right_value, right_locator} and detail {pair, reconciliation_id, inputs_hash,
+--   latest_result, issuer_id, market, hook pending}; the row → quarantined; state_rev + 1;
+--   materialize = {issuer_id, market}.
+--  any action with a left_fact_id whose row is already quarantined (passed or not, any outcome): the
+--   OPEN reconcile_mismatch items of this pair that reference it get detail.latest_result = {passed,
+--   reconciliation_id, at, inputs_hash} — this is how a passing re-run makes an item restorable.
+--  quarantine_left otherwise (passed, or not compared, left ok): the result row only.
+--  review_item / lineage_item: an open reconcile_review / lineage_conflict item (reused by natural
+--   key) from result.item; no visibility change.
+--  record: the result row only.
+-- The result row carries cycle_id / issuer_id / market / attempt from the fence and detail.item_id.
+create or replace function public.apply_reconcile_result(p_fence jsonb, p_result jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare c public.dq_reconcile_cursor; v_existing public.dq_reconciliations; f public.financial_facts; v_run text;
+        v_rid uuid := gen_random_uuid(); v_item uuid; v_q int := 0; v_mat jsonb; v_action text; v_nk text; v_left uuid;
+        v_dataset text; v_nk_item text; v_latest jsonb; v_now timestamptz := now(); v_reason text;
+        v_lv numeric; v_rv numeric; v_ad numeric; v_rd numeric; v_tol numeric;
+begin
+  c := public.reconcile_fence_lock(p_fence);
+  if p_result is null or jsonb_typeof(p_result) <> 'object'
+     or coalesce(jsonb_typeof(p_result -> 'natural_key'), '') <> 'string'
+     or coalesce(p_result ->> 'kind', '') not in ('numeric','text','date')
+     or coalesce(p_result ->> 'outcome', '') not in ('compared','left_missing','left_unlinked','left_ambiguous','right_missing','unsupported','right_ambiguous','incomplete_gold')
+     or coalesce(jsonb_typeof(p_result -> 'passed'), '') <> 'boolean'
+     or coalesce(p_result ->> 'action', '') not in ('record','quarantine_left','review_item','lineage_item')
+     or coalesce(jsonb_typeof(p_result -> 'left_source'), '') <> 'string' or coalesce(jsonb_typeof(p_result -> 'right_source'), '') <> 'string'
+     or coalesce(jsonb_typeof(p_result -> 'detail'), '') <> 'object' or coalesce(jsonb_typeof(p_result -> 'tolerance'), '') <> 'string' then
+    raise exception 'invalid_result' using errcode = '22023';
+  end if;
+  v_action := p_result ->> 'action'; v_nk := p_result ->> 'natural_key';
+  if length(v_nk) not between 1 and 400 then raise exception 'invalid_result' using errcode = '22023'; end if;
+  begin
+    v_lv := (p_result ->> 'left_value')::numeric; v_rv := (p_result ->> 'right_value')::numeric;
+    v_ad := (p_result ->> 'abs_diff')::numeric; v_rd := (p_result ->> 'rel_diff')::numeric;
+    v_tol := (p_result ->> 'tolerance')::numeric; v_left := (p_result ->> 'left_fact_id')::uuid;
+  exception when others then
+    raise exception 'invalid_result' using errcode = '22023';
+  end;
+  if (v_action = 'quarantine_left' and v_left is null)
+     or (v_action in ('review_item','lineage_item')
+         and (coalesce(jsonb_typeof(p_result -> 'item'), '') <> 'object' or coalesce(jsonb_typeof(p_result -> 'item' -> 'natural_key'), '') <> 'string'
+              or coalesce(jsonb_typeof(p_result -> 'item' -> 'payload'), '') <> 'object' or length(p_result -> 'item' ->> 'natural_key') not between 1 and 512)) then
+    raise exception 'invalid_result' using errcode = '22023';
+  end if;
+  select * into v_existing from public.dq_reconciliations where pair = c.pair and cycle_id = c.cycle_id and natural_key = v_nk;
+  if found then
+    if v_existing.issuer_id is distinct from c.issuer_id or v_existing.market is distinct from c.market then raise exception 'invalid_result' using errcode = '22023'; end if;
+    return jsonb_build_object('reused', true, 'reconciliation_id', v_existing.id, 'item_id', coalesce(v_existing.detail -> 'item_id', 'null'::jsonb), 'quarantined', 0, 'materialize', 'null'::jsonb);
+  end if;
+  v_dataset := case c.market when 'US' then 'facts.us' else 'facts.cn' end;
+  v_latest := jsonb_build_object('passed', p_result -> 'passed', 'reconciliation_id', v_rid, 'at', to_jsonb(v_now), 'inputs_hash', coalesce(p_result -> 'inputs_hash', 'null'::jsonb));
+  if v_left is not null then
+    perform 1 from public.fact_sync_scope where issuer_id = c.issuer_id and market = c.market for update;
+    select * into f from public.financial_facts where fact_id = v_left;
+    if not found or f.issuer_id <> c.issuer_id or f.market <> c.market then raise exception 'invalid_result' using errcode = '22023'; end if;
+    select r.status into v_run from public.fact_sync_runs r where r.run_id = f.run_id;
+  end if;
+  if v_action = 'quarantine_left' and f.status = 'ok' and v_run = 'published'
+     and p_result ->> 'outcome' = 'compared' and (p_result -> 'passed') = 'false'::jsonb then
+    v_nk_item := c.pair || ':' || v_nk || ':' || v_left::text;
+    if length(v_nk_item) > 512 then raise exception 'invalid_result' using errcode = '22023'; end if;
+    select q.id into v_item from public.dq_quarantine q
+    where q.dataset = v_dataset and q.table_name = 'financial_facts' and q.natural_key = v_nk_item and q.reason_code = 'reconcile_mismatch' and q.status = 'open'
+    for update;
+    if v_item is null then
+      v_item := gen_random_uuid();
+      insert into public.dq_quarantine (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status)
+      values (v_item, v_dataset, 'financial_facts', v_nk_item, 'reconcile_mismatch',
+              jsonb_build_object('pair', c.pair, 'reconciliation_id', v_rid, 'inputs_hash', coalesce(p_result -> 'inputs_hash', 'null'::jsonb), 'latest_result', v_latest,
+                                 'issuer_id', c.issuer_id, 'market', c.market, 'hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now))),
+              jsonb_build_object('key', jsonb_build_object('issuer_id', f.issuer_id, 'market', f.market, 'concept', f.concept, 'period_start', f.period_start, 'period_end', f.period_end,
+                                                           'consolidation', f.consolidation, 'unit', f.unit, 'available_date', f.available_date),
+                                 'fact_ids', jsonb_build_array(v_left), 'left_value', coalesce(p_result -> 'left_value', 'null'::jsonb), 'right_value', coalesce(p_result -> 'right_value', 'null'::jsonb),
+                                 'right_locator', coalesce(p_result -> 'detail' -> 'right' -> 'locator', 'null'::jsonb)),
+              c.claimed_by, 'open');
+    else
+      update public.dq_quarantine
+      set detail = detail || jsonb_build_object('reconciliation_id', v_rid, 'latest_result', v_latest, 'hook', jsonb_build_object('stage', 'materialize', 'state', 'pending', 'at', to_jsonb(v_now)))
+      where id = v_item;
+    end if;
+    update public.financial_facts set status = 'quarantined' where fact_id = v_left and status = 'ok';
+    v_q := 1;
+    update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = c.issuer_id and market = c.market;
+    v_mat := jsonb_build_object('issuer_id', c.issuer_id, 'market', c.market);
+  elsif v_left is not null and f.status = 'quarantined' then
+    with upd as (
+      update public.dq_quarantine q set detail = q.detail || jsonb_build_object('latest_result', v_latest)
+      where q.table_name = 'financial_facts' and q.reason_code = 'reconcile_mismatch' and q.status = 'open' and q.detail ->> 'pair' = c.pair
+        and jsonb_typeof(q.payload -> 'fact_ids') = 'array' and q.payload -> 'fact_ids' ? v_left::text
+      returning q.id)
+    select upd.id into v_item from upd order by upd.id limit 1;
+  end if;
+  if v_action in ('review_item','lineage_item') then
+    v_reason := case v_action when 'review_item' then 'reconcile_review' else 'lineage_conflict' end;
+    select q.id into v_item from public.dq_quarantine q
+    where q.dataset = v_dataset and q.table_name = 'financial_facts' and q.natural_key = p_result -> 'item' ->> 'natural_key' and q.reason_code = v_reason and q.status = 'open';
+    if v_item is null then
+      v_item := gen_random_uuid();
+      insert into public.dq_quarantine (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status)
+      values (v_item, v_dataset, 'financial_facts', p_result -> 'item' ->> 'natural_key', v_reason,
+              (case when jsonb_typeof(p_result -> 'item' -> 'detail') = 'object' then p_result -> 'item' -> 'detail' else '{}'::jsonb end)
+                || jsonb_build_object('pair', c.pair, 'reconciliation_id', v_rid, 'issuer_id', c.issuer_id, 'market', c.market),
+              p_result -> 'item' -> 'payload', c.claimed_by, 'open');
+    end if;
+  end if;
+  insert into public.dq_reconciliations (id, dataset, left_source, right_source, natural_key, left_value, right_value, abs_diff, rel_diff, tolerance, passed, batch_id,
+                                         pair, kind, outcome, detail, cycle_id, issuer_id, market, attempt)
+  values (v_rid, 'reconcile.' || c.pair, p_result ->> 'left_source', p_result ->> 'right_source', v_nk, v_lv, v_rv, v_ad, v_rd, v_tol, (p_result ->> 'passed')::boolean, c.claimed_by,
+          c.pair, p_result ->> 'kind', p_result ->> 'outcome',
+          (p_result -> 'detail') || jsonb_build_object('item_id', v_item, 'inputs_hash', coalesce(p_result -> 'inputs_hash', 'null'::jsonb)),
+          c.cycle_id, c.issuer_id, c.market, c.attempts);
+  return jsonb_build_object('reused', false, 'reconciliation_id', v_rid, 'item_id', v_item, 'quarantined', v_q, 'materialize', coalesce(v_mat, 'null'::jsonb));
+end $$;
+revoke execute on function public.apply_reconcile_result(jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.apply_reconcile_result(jsonb, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- 14. atomic cycle creation (spec §3.1, §5.5; plan audit Q2)
+-- The only writer of new dq_reconcile_cycles rows. Under the pair's cycle lock — the advisory lock
+-- set_merge takes right before it registers a pending member (section 8a) — in one transaction:
+--  a running cycle of the pair → returned unchanged (created false, nothing consumed);
+--  else p_members [{issuer_id, market, expected_keys[]}] (distinct (issuer, market), keys resolved by the
+--  runner) and p_pending [{issuer_id, market, source}] (the runner's snapshot; each entry's (issuer,
+--  market) must be a member, i.e. its keys were resolved AFTER the merge was visible) are checked; the
+--  cycle row (expected_total = Σ keys) and one pending cursor per member are inserted; exactly the
+--  p_pending entries leave every cycle row's detail.pending_members (an entry registered after the
+--  snapshot stays and joins the next cycle); the new row's detail records pending_merged_from /
+--  pending_transferred. A writer that bypassed the lock hits the running partial unique index:
+--  unique_violation → the winner is returned (created false). Lock order: advisory lock, then cursor
+--  inserts (KEY SHARE on issuers via the FK), then cycle rows; set_merge takes the same advisory lock
+--  FIRST, before its scope/issuer locks (plan audit R1) — so neither side holds a row the other needs
+--  while waiting for the advisory lock; set_dissolved takes no advisory lock (one-way wait) — no cycle.
+create or replace function public.open_reconcile_cycle(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_row public.dq_reconcile_cycles; r record; v_keep jsonb; v_take jsonb; v_from text[] := '{}'; v_moved jsonb := '[]'::jsonb;
+begin
+  if p_pair is null or p_cycle_id is null or p_started_at is null then raise exception 'invalid_members' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:' || p_pair));
+  select * into v_row from public.dq_reconcile_cycles where pair = p_pair and status = 'running';
+  if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
+  if jsonb_typeof(p_members) is distinct from 'array' or jsonb_typeof(p_pending) is distinct from 'array'
+     or exists (select 1 from jsonb_array_elements(p_members) m
+                where jsonb_typeof(m) <> 'object' or (m ->> 'issuer_id') is null or coalesce(m ->> 'market', '') not in ('US', 'CN')
+                   or jsonb_typeof(m -> 'expected_keys') is distinct from 'array')
+     or (select count(*) from jsonb_array_elements(p_members))
+        <> (select count(distinct (m ->> 'issuer_id', m ->> 'market')) from jsonb_array_elements(p_members) m)
+     or exists (select 1 from jsonb_array_elements(p_pending) p
+                where jsonb_typeof(p) <> 'object' or (p ->> 'source') is null
+                   or not exists (select 1 from jsonb_array_elements(p_members) m
+                                  where m ->> 'issuer_id' = p ->> 'issuer_id' and m ->> 'market' = p ->> 'market'))
+  then raise exception 'invalid_members' using errcode = '22023'; end if;
+  begin
+    insert into public.dq_reconcile_cycles (pair, cycle_id, started_at, finished_at, members, status, expected_total, detail)
+    values (p_pair, p_cycle_id, p_started_at, null, p_members, 'running',
+            (select coalesce(sum(jsonb_array_length(m -> 'expected_keys')), 0) from jsonb_array_elements(p_members) m), '{}'::jsonb);
+  exception when unique_violation then
+    select * into v_row from public.dq_reconcile_cycles where pair = p_pair and status = 'running';
+    if found then return jsonb_build_object('created', false, 'cycle', to_jsonb(v_row), 'transferred', '[]'::jsonb); end if;
+    raise;
+  end;
+  insert into public.dq_reconcile_cursor (pair, cycle_id, issuer_id, market, expected)
+  select p_pair, p_cycle_id, (m ->> 'issuer_id')::uuid, m ->> 'market', jsonb_array_length(m -> 'expected_keys')
+  from jsonb_array_elements(p_members) m;
+  for r in select c.cycle_id, c.detail from public.dq_reconcile_cycles c
+           where c.pair = p_pair and c.cycle_id <> p_cycle_id and jsonb_typeof(c.detail -> 'pending_members') = 'array'
+           order by c.cycle_id for update loop
+    select coalesce(jsonb_agg(e) filter (where not (p_pending @> jsonb_build_array(e))), '[]'::jsonb),
+           coalesce(jsonb_agg(e) filter (where p_pending @> jsonb_build_array(e)), '[]'::jsonb)
+      into v_keep, v_take
+    from jsonb_array_elements(r.detail -> 'pending_members') e;
+    if jsonb_array_length(v_take) > 0 then
+      update public.dq_reconcile_cycles
+      set detail = jsonb_set(r.detail, '{pending_members}', v_keep) || jsonb_build_object('pending_consumed_by', p_cycle_id)
+      where pair = p_pair and cycle_id = r.cycle_id;
+      v_from := v_from || r.cycle_id::text; v_moved := v_moved || v_take;
+    end if;
+  end loop;
+  update public.dq_reconcile_cycles
+  set detail = jsonb_build_object('pending_merged_from', to_jsonb(v_from), 'pending_transferred', v_moved)
+  where pair = p_pair and cycle_id = p_cycle_id
+  returning * into v_row;
+  return jsonb_build_object('created', true, 'cycle', to_jsonb(v_row), 'transferred', v_moved);
+end $$;
+revoke execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) to service_role;

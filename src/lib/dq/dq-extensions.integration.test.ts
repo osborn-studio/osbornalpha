@@ -649,4 +649,290 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    }
   });
  });
+
+ describe('8c: reconcile cursor and apply_reconcile_result',()=>{
+  const newPair=()=>`test.${randomUUID().slice(0,8)}`;   // one pair per test: never meets another suite's running cycle
+  const cycle=async(pair:string,members:{issuer_id:string;market?:string;expected:number}[],status='running')=>{
+   const id=`${pair}-${randomUUID().slice(0,8)}`;
+   await q(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total) values($1,$2,now(),$3,$4::jsonb,$5,$6)`,
+    [pair,id,status==='running'?null:new Date().toISOString(),JSON.stringify(members.map(m=>({issuer_id:m.issuer_id,market:m.market??'US',expected_keys:m.expected}))),status,members.reduce((n,m)=>n+m.expected,0)]);
+   for(const m of members)await q(`insert into public.dq_reconcile_cursor(pair,cycle_id,issuer_id,market,expected) values($1,$2,$3,$4,$5)`,[pair,id,m.issuer_id,m.market??'US',m.expected]);
+   return id;
+  };
+  type FenceJson={pair:string;cycle_id:string;issuer_id:string;market:string;batch_id:string;attempt:number};
+  const claimM=(pair:string,cy:string,iss:string,b:string,market='US')=>one(`select public.claim_reconcile_member($1,$2,$3,$4,$5) v`,[pair,cy,iss,market,b]) as Promise<FenceJson|null>;
+  const apply=(fence:FenceJson,result:Record<string,unknown>)=>one(`select public.apply_reconcile_result($1::jsonb,$2::jsonb) v`,[JSON.stringify(fence),JSON.stringify(result)]);
+  const complete=(fence:FenceJson)=>one(`select public.complete_reconcile_member($1::jsonb) v`,[JSON.stringify(fence)]);
+  const failM=(fence:FenceJson,err:string)=>q(`select public.fail_reconcile_member($1::jsonb,$2)`,[JSON.stringify(fence),err]);
+  const cursor=async(pair:string,cy:string,iss:string)=>(await q(`select state,attempts,claimed_by,last_error,compared_passed,compared_failed,not_compared from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2 and issuer_id=$3`,[pair,cy,iss]))[0];
+  const expire=(pair:string,cy:string,iss:string)=>q(`update public.dq_reconcile_cursor set claim_until=clock_timestamp()-interval '1 second' where pair=$1 and cycle_id=$2 and issuer_id=$3`,[pair,cy,iss]);
+  const res=(nk:string,o:Record<string,unknown>={})=>({natural_key:nk,kind:'numeric',outcome:'compared',passed:false,left_value:'100',right_value:'99',abs_diff:'1',rel_diff:'0.01',tolerance:'0',
+   left_source:'companyfacts',right_source:'ixbrl',detail:{right:{document:'d',sha256:'s',locator:'ix:nonFraction#c1'}},action:'record',inputs_hash:'h1',...o});
+  const resultRows=(pair:string)=>q(`select natural_key,outcome,passed,attempt,issuer_id,market,cycle_id,dataset,batch_id,detail->>'item_id' item_id from public.dq_reconciliations where pair=$1 order by natural_key`,[pair]);
+
+  it('claim (S4): pending → fence attempt 1; held → null; expired → attempt 2; failed with attempts < 3 → claimable; failed at 3 is terminal; a cycle that is not running → null',async()=>{
+   const iss=await issuer();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:0}]);
+   const b1=await batch(`reconcile.${pair}`),b2=await batch(`reconcile.${pair}`);
+   expect(await claimM(pair,cy,iss,b1)).toEqual({pair,cycle_id:cy,issuer_id:iss,market:'US',batch_id:b1,attempt:1});
+   expect(await claimM(pair,cy,iss,b2)).toBeNull();
+   await expire(pair,cy,iss);
+   const f2=(await claimM(pair,cy,iss,b2))!;expect(f2).toMatchObject({batch_id:b2,attempt:2});
+   await failM(f2,'boom');
+   expect(await cursor(pair,cy,iss)).toMatchObject({state:'failed',attempts:2,last_error:'boom'});
+   const f3=(await claimM(pair,cy,iss,b1))!;expect(f3).toMatchObject({attempt:3});
+   await failM(f3,'again');
+   expect(await claimM(pair,cy,iss,b2)).toBeNull();
+   expect(await cursor(pair,cy,iss)).toMatchObject({state:'failed',attempts:3});
+   const other=await issuer();const pair2=newPair();const done=await cycle(pair2,[{issuer_id:other,expected:0}],'complete');
+   expect(await claimM(pair2,done,other,b1)).toBeNull();
+  });
+
+  it('fence: an expired, foreign or stale-attempt fence is fence_failed for apply / complete / fail and writes nothing',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:1}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   for(const f of [{...fence,batch_id:randomUUID()},{...fence,attempt:2},{...fence,cycle_id:'nope'},{...fence,attempt:undefined} as unknown as FenceJson]){
+    expect(await fails(apply(f,res('k1',{action:'quarantine_left',left_fact_id:r})))).toMatchObject({message:'fence_failed',code:'P0001'});
+    expect(await fails(complete(f))).toMatchObject({message:'fence_failed'});
+    expect(await fails(failM(f,'x'))).toMatchObject({message:'fence_failed'});
+   }
+   await expire(pair,cy,iss);
+   expect(await fails(apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r})))).toMatchObject({message:'fence_failed'});
+   expect(await resultRows(pair)).toEqual([]);
+   expect(await status(r)).toBe('ok');
+   expect(await q(`select 1 from public.dq_quarantine where natural_key like $1`,[`${pair}:%`])).toEqual([]);
+   expect(await cursor(pair,cy,iss)).toMatchObject({state:'claimed',attempts:1});
+  });
+
+  it('apply_reconcile_result: result row + mismatch item + quarantine + hook pending in one transaction; the same key again is reused; complete derives the counts (member_incomplete before); drc_done_accounted (S5)',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:3}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   const before=await rev(iss);
+   const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
+   expect(a).toMatchObject({reused:false,quarantined:1,materialize:{issuer_id:iss,market:'US'}});
+   expect(await status(r)).toBe('quarantined');expect(await rev(iss)).toBe(before+1);
+   const [row]=await q(`select dataset,natural_key,reason_code,status,batch_id,payload,detail from public.dq_quarantine where id=$1`,[a.item_id]);
+   expect(row).toMatchObject({dataset:'facts.us',natural_key:`${pair}:k1:${r}`,reason_code:'reconcile_mismatch',status:'open',batch_id:w});
+   expect(row.payload).toMatchObject({fact_ids:[r],left_value:'100',right_value:'99',right_locator:'ix:nonFraction#c1',
+    key:{issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-10-01',period_end:'2023-12-31',consolidation:'consolidated',unit:'USD',available_date:'2024-02-01'}});
+   expect(row.detail).toMatchObject({pair,reconciliation_id:a.reconciliation_id,inputs_hash:'h1',issuer_id:iss,market:'US',latest_result:{passed:false,reconciliation_id:a.reconciliation_id,inputs_hash:'h1'},hook:{stage:'materialize',state:'pending'}});
+   expect(await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}))).toEqual({reused:true,reconciliation_id:a.reconciliation_id,item_id:a.item_id,quarantined:0,materialize:null});
+   expect(await rev(iss)).toBe(before+1);
+   expect(await fails(complete(fence))).toMatchObject({message:'member_incomplete'});
+   await apply(fence,res('k2',{passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}));
+   await apply(fence,res('k3',{outcome:'right_missing',left_value:'5',right_value:null,abs_diff:null,rel_diff:null}));
+   expect(await complete(fence)).toEqual({compared_passed:1,compared_failed:1,not_compared:1});
+   expect(await cursor(pair,cy,iss)).toMatchObject({state:'done',compared_passed:1,compared_failed:1,not_compared:1});
+   expect((await resultRows(pair)).map(x=>[x.natural_key,x.outcome,x.passed,x.attempt,x.issuer_id,x.market,x.cycle_id,x.dataset,x.batch_id])).toEqual(
+    ['k1','k2','k3'].map((k,i)=>[k,i===2?'right_missing':'compared',i===1,1,iss,'US',cy,`reconcile.${pair}`,w]));
+   expect((await resultRows(pair))[0].item_id).toBe(a.item_id);
+   expect(await fails(apply(fence,res('k4')))).toMatchObject({message:'fence_failed'});                   // done: the fence no longer holds
+   await expect(q(`update public.dq_reconcile_cursor set compared_passed=null where pair=$1 and cycle_id=$2`,[pair,cy])).rejects.toMatchObject({code:'23514'});
+  });
+
+  it('apply_reconcile_result touches only the member\'s published ok rows; a quarantined left gets latest_result on its open items; review and lineage items change no visibility; invalid results write nothing',async()=>{
+   const {iss,b,r0,r}=await published();const {x}=await sibling('5');
+   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:6}]);const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   expect(await fails(apply(fence,res('k0',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result',code:'22023'});   // another issuer's row
+   expect(await fails(apply(fence,res('k0',{action:'quarantine_left'})))).toMatchObject({message:'invalid_result'});      // left_fact_id required
+   expect(await fails(apply(fence,res('k0',{action:'review_item'})))).toMatchObject({message:'invalid_result'});          // item required
+   expect(await fails(apply(fence,res('k0',{left_value:'1e5x'})))).toMatchObject({message:'invalid_result'});
+   expect(await resultRows(pair)).toEqual([]);
+   const run2=await begin(iss,b);const g=await filing(run2);const [st]=await stage(run2,[{filing_id:g.id,concept:'net_income',value:'3'}]);
+   expect(await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:st}))).toMatchObject({quarantined:0,item_id:null,materialize:null});   // staged: recorded only
+   expect(await status(st)).toBe('staged');
+   // quarantine_left with passed=true or a non-compared outcome on an ok left row → result row only (接口对齐记录 #5)
+   expect(await apply(fence,res('k1p',{action:'quarantine_left',left_fact_id:r,passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}))).toMatchObject({quarantined:0,item_id:null,materialize:null});
+   expect(await apply(fence,res('k1m',{action:'quarantine_left',left_fact_id:r,outcome:'right_missing',right_value:null,abs_diff:null,rel_diff:null}))).toMatchObject({quarantined:0,item_id:null,materialize:null});
+   expect(await status(r)).toBe('ok');
+   const q1=await apply(fence,res('k2',{action:'quarantine_left',left_fact_id:r0}));
+   const q2=await apply(fence,res('k3',{left_fact_id:r0,passed:true,right_value:'100',abs_diff:'0',rel_diff:'0',inputs_hash:'h9'}));
+   expect(q2).toMatchObject({quarantined:0,item_id:q1.item_id,materialize:null});
+   expect((await q(`select detail->'latest_result' lr from public.dq_quarantine where id=$1`,[q1.item_id]))[0].lr).toMatchObject({passed:true,reconciliation_id:q2.reconciliation_id,inputs_hash:'h9'});
+   const rv=await apply(fence,res('k4',{action:'review_item',item:{natural_key:`${pair}:k4`,payload:{fact_ids:[r],left_value:'100',right_value:'99'}}}));
+   const ln=await apply(fence,res('k5',{action:'lineage_item',item:{natural_key:`${iss}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`,payload:{fact_ids:[r],values:[]}}}));
+   expect(await q(`select reason_code,status,dataset from public.dq_quarantine where id=any($1::uuid[]) order by reason_code`,[[rv.item_id,ln.item_id]])).toEqual([{reason_code:'lineage_conflict',status:'open',dataset:'facts.us'},{reason_code:'reconcile_review',status:'open',dataset:'facts.us'}]);
+   expect(await status(r)).toBe('ok');
+   const kinds=await q(`select natural_key,kind,outcome from public.dq_reconciliations where pair=$1 order by natural_key`,[pair]);
+   expect(kinds.map(k=>k.natural_key)).toEqual(['k1','k1m','k1p','k2','k3','k4','k5']);
+  });
+
+  it('apply_reconcile_result holds the member scope lock: a concurrent publish_sync_run waits for it',async()=>{
+   const {iss,b,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:1}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   const run2=await begin(iss,b);
+   await inTx(admin,async({c,pid,commit})=>{
+    await c.query(`select public.apply_reconcile_result($1::jsonb,$2::jsonb)`,[JSON.stringify(fence),JSON.stringify(res('k1',{action:'quarantine_left',left_fact_id:r}))]);
+    const p=publish(run2,[]);p.catch(()=>{});
+    await stillBlockedBehind(admin,pid,p);
+    await commit();
+    expect(await p).toBe(0);
+   });
+   expect(await rev(iss)).toBe(3);
+  });
+
+  it('T2: keys committed before the lease is lost stay valid; the successor reuses them; the old worker is fenced out; counts are not doubled',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:2}]);
+   const wa=await batch(`reconcile.${pair}`),wb=await batch(`reconcile.${pair}`);
+   const fa=(await claimM(pair,cy,iss,wa))!;
+   const k1=await apply(fa,res('k1',{action:'quarantine_left',left_fact_id:r}));
+   await expire(pair,cy,iss);
+   const fb=(await claimM(pair,cy,iss,wb))!;expect(fb).toMatchObject({attempt:2,batch_id:wb});
+   expect(await fails(apply(fa,res('k2',{passed:true})))).toMatchObject({message:'fence_failed'});
+   expect(await fails(complete(fa))).toMatchObject({message:'fence_failed'});
+   expect(await apply(fb,res('k1',{action:'quarantine_left',left_fact_id:r}))).toMatchObject({reused:true,reconciliation_id:k1.reconciliation_id,item_id:k1.item_id});
+   await apply(fb,res('k2',{passed:true,right_value:'100',abs_diff:'0',rel_diff:'0'}));
+   expect(await complete(fb)).toEqual({compared_passed:1,compared_failed:1,not_compared:0});
+   expect((await resultRows(pair)).map(x=>[x.natural_key,x.attempt])).toEqual([['k1',1],['k2',2]]);
+   expect(await q(`select count(*)::int n from public.dq_quarantine where natural_key=$1`,[`${pair}:k1:${r}`])).toEqual([{n:1}]);
+  });
+
+  it('a crash between apply_reconcile_result and materialisation leaves the item open with hook pending (picked up by --pending-hooks, Task 11)',async()=>{
+   const {iss,r}=await published();const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:1}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));   // committed; the "runner" dies here
+   expect(await q(`select status,detail->'hook'->>'state' hook,detail->>'issuer_id' issuer from public.dq_quarantine where id=$1`,[a.item_id])).toEqual([{status:'open',hook:'pending',issuer:iss}]);
+  });
+
+  it('reconcile_mismatch items only ever name the fence issuer/market rows: payload.fact_ids never spans a lineage (restore_reconciled promotes one issuer)',async()=>{
+   const {iss,r}=await published();const {x}=await sibling('100');
+   const pair=newPair();const cy=await cycle(pair,[{issuer_id:iss,expected:2}]);
+   const w=await batch(`reconcile.${pair}`);const fence=(await claimM(pair,cy,iss,w))!;
+   // a row of another issuer (even one in the same lineage) is refused for the fence member
+   expect(await fails(apply(fence,res('kx',{action:'quarantine_left',left_fact_id:x})))).toMatchObject({message:'invalid_result'});
+   // the same row in the right market of the wrong fence is refused as well
+   const a=await apply(fence,res('k1',{action:'quarantine_left',left_fact_id:r}));
+   const [row]=await q(`select payload,detail from public.dq_quarantine where id=$1`,[a.item_id]);
+   expect(row.payload.fact_ids).toEqual([r]);
+   const owners=await q(`select distinct issuer_id,market from public.financial_facts where fact_id=any($1::uuid[])`,[row.payload.fact_ids]);
+   expect(owners).toEqual([{issuer_id:iss,market:'US'}]);
+   expect(row.detail).toMatchObject({issuer_id:iss,market:'US'});
+   // every reconcile_mismatch item of the pair satisfies the invariant
+   const bad=await q(`select q.id from public.dq_quarantine q where q.reason_code='reconcile_mismatch' and q.detail->>'pair'=$1
+     and exists(select 1 from jsonb_array_elements_text(q.payload->'fact_ids') i join public.financial_facts f on f.fact_id=i::uuid where f.issuer_id<>$2 or f.market<>'US')`,[pair,iss]);
+   expect(bad).toEqual([]);
+  });
+
+  // ---- open_reconcile_cycle (section 13, plan audit Q2): atomic creation, per-entry consumption, the lock shared with set_merge
+  type Opened={created:boolean;cycle:Record<string,any>;transferred:unknown[]};
+  const openC=(c:Pool|PoolClient,pair:string,id:string,members:unknown[],pending:unknown[])=>
+   c.query(`select public.open_reconcile_cycle($1,$2,now(),$3::jsonb,$4::jsonb) v`,[pair,id,JSON.stringify(members),JSON.stringify(pending)]).then(r=>r.rows[0].v as Opened);
+  const LINEAGE='facts.lineage_same_day';
+  const lid=()=>`${LINEAGE}-${randomUUID().slice(0,8)}`;
+  /** inside a rolled-back transaction only: no running lineage cycle from another suite, plus a "latest" row set_merge writes to */
+  const lineageStage=async(c:PoolClient,pending:unknown[])=>{
+   await c.query(`update public.dq_reconcile_cycles set status='complete', finished_at=now() where pair=$1 and status='running'`,[LINEAGE]);
+   const id=`${LINEAGE}-old-${randomUUID().slice(0,8)}`;
+   await c.query(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total,detail) values($1,$2,now()+interval '100 years',now()+interval '100 years','[]','complete',0,$3::jsonb)`,[LINEAGE,id,JSON.stringify({pending_members:pending})]);
+   return id;
+  };
+  const pendingIn=async(c:Pool|PoolClient,pair:string,id:string)=>(await c.query(`select detail from public.dq_reconcile_cycles where pair=$1 and cycle_id=$2`,[pair,id])).rows[0].detail as Record<string,unknown>;
+
+  it('open_reconcile_cycle: cycle row and every cursor in one call; only the listed pending entries are consumed; a running cycle is returned unchanged',async()=>{
+   const t1=await issuer(),t2=await issuer();
+   const e1={issuer_id:t1,market:'US',source:randomUUID()},e2={issuer_id:t2,market:'US',source:randomUUID()};
+   await inRolledBackTx(admin,async c=>{
+    const old=await lineageStage(c,[e1,e2]);
+    const id=lid();
+    const out=await openC(c,LINEAGE,id,[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k1',locator:{}},{naturalKey:'k2',locator:{}}]}],[e1]);
+    expect(out).toMatchObject({created:true,transferred:[e1],cycle:{cycle_id:id,status:'running',expected_total:2,detail:{pending_merged_from:[old],pending_transferred:[e1]}}});
+    expect((await c.query(`select issuer_id,market,expected,state from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2`,[LINEAGE,id])).rows).toEqual([{issuer_id:t1,market:'US',expected:2,state:'pending'}]);
+    expect(await pendingIn(c,LINEAGE,old)).toEqual({pending_members:[e2],pending_consumed_by:id});    // e2 was not listed: it waits for the next cycle
+    const again=await openC(c,LINEAGE,lid(),[{issuer_id:t2,market:'US',expected_keys:[]}],[e2]);
+    expect(again).toMatchObject({created:false,transferred:[],cycle:{cycle_id:id}});
+    expect((await pendingIn(c,LINEAGE,old)).pending_members).toEqual([e2]);                        // nothing consumed by the loser
+   });
+  });
+
+  it('open_reconcile_cycle: a merge registered after the runner snapshot survives creation — neither overwritten nor consumed (stale-snapshot interleaving)',async()=>{
+   const s=await issuer(),t=await issuer(),t0=await issuer(),by=await user();
+   const e0={issuer_id:t0,market:'US',source:randomUUID()};
+   await inRolledBackTx(admin,async c=>{
+    const old=await lineageStage(c,[e0]);
+    const snapshot=[e0];                                                          // the runner read pending_members here
+    await c.query(`select public.set_merge($1,$2,$3)`,[s,t,by]);                  // a merge lands before the function runs
+    const out=await openC(c,LINEAGE,lid(),[{issuer_id:t0,market:'US',expected_keys:[]}],snapshot);
+    expect(out.transferred).toEqual([e0]);
+    expect((out.cycle.members as {issuer_id:string}[]).map(m=>m.issuer_id)).toEqual([t0]);
+    expect((await pendingIn(c,LINEAGE,old)).pending_members).toEqual([{issuer_id:t,market:'CN',source:s},{issuer_id:t,market:'US',source:s}]);
+   });
+  });
+
+  it('open_reconcile_cycle and set_merge serialise on the cycle lock, both ways',async()=>{
+   const s1=await issuer(),t1=await issuer(),s2=await issuer(),t2=await issuer(),by=await user();
+   let waiter:Promise<void>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await c.query(`select public.set_merge($1,$2,$3)`,[s1,t1,by]);                // holds the cycle lock until this transaction ends
+    waiter=inRolledBackTx(admin,async c2=>{await openC(c2,LINEAGE,lid(),[],[]);},1);waiter.catch(()=>{});
+    await stillBlockedBehind(admin,pid,waiter);
+   });                                                                              // rolled back: the merge never happened, the waiter proceeds
+   await expect(waiter).resolves.toBeUndefined();
+   let merger:Promise<unknown>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await openC(c,LINEAGE,lid(),[],[]);                                             // takes the cycle lock (created or not)
+    merger=one(`select public.set_merge($1,$2,$3) v`,[s2,t2,by]);merger.catch(()=>{});
+    await stillBlockedBehind(admin,pid,merger);
+   });                                                                              // rolled back: no cycle was created
+   await expect(merger).resolves.toEqual({repointed:0});
+  });
+
+  it('lock order (plan audit R1): a creator whose cycle contains the merge target and a concurrent set_merge into that target both complete, in either order — no deadlock',async()=>{
+   const s1=await issuer(),t1=await issuer(),s2=await issuer(),t2=await issuer(),by=await user();
+   const lockSql=`select pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'||$1))`;
+   // (a) the creator already holds the cycle lock and has not inserted its cursors yet; the merge arrives now.
+   //     Fixed order: the merge waits on the advisory lock holding NO scope/issuer row; the creator's cursor
+   //     insert for t1 (KEY SHARE on issuers via the FK) does not wait; both finish. Old order: the merge held
+   //     t1 FOR UPDATE while waiting → 40P01 on one side.
+   let merger:Promise<unknown>|undefined;let opened:Opened|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await lineageStage(c,[]);
+    await c.query(lockSql,[LINEAGE]);                                              // what open_reconcile_cycle takes first
+    merger=inRolledBackTx(admin,async c2=>{
+     expect((await c2.query(`select public.set_merge($1,$2,$3) v`,[s1,t1,by])).rows[0].v).toEqual({repointed:0});
+    },1);merger.catch(()=>{});
+    await stillBlockedBehind(admin,pid,merger);
+    expect(await q(`select distinct l.locktype from pg_locks l join pg_stat_activity a on a.pid=l.pid where not l.granted and $1 = any(pg_blocking_pids(a.pid))`,[pid])).toEqual([{locktype:'advisory'}]);   // the merge waits on the advisory lock, not on a row
+    opened=await openC(c,LINEAGE,lid(),[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[]);   // re-entrant advisory lock; cursor insert on t1
+   });                                                                              // rolled back
+   expect(opened).toMatchObject({created:true});
+   await expect(merger).resolves.toBeUndefined();
+   // (b) the merge into t2 runs first and holds every lock; the creator for a cycle containing t2 waits, then finishes.
+   let creator:Promise<void>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    expect((await c.query(`select public.set_merge($1,$2,$3) v`,[s2,t2,by])).rows[0].v).toEqual({repointed:0});
+    creator=inRolledBackTx(admin,async c2=>{
+     await lineageStage(c2,[]);
+     expect(await openC(c2,LINEAGE,lid(),[{issuer_id:t2,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[])).toMatchObject({created:true});
+    },1);creator.catch(()=>{});
+    await stillBlockedBehind(admin,pid,creator);
+   });                                                                              // rolled back: the creator proceeds
+   await expect(creator).resolves.toBeUndefined();
+  });
+
+  it('open_reconcile_cycle: invalid members are refused; a creator that dies before commit leaves pending, cycle and cursors untouched, and the rerun consumes once (crash recovery)',async()=>{
+   const t1=await issuer();const pair=newPair();
+   const e1={issuer_id:t1,market:'US',source:randomUUID()};
+   expect(await fails(openC(admin,pair,`${pair}-x`,[],[e1]))).toMatchObject({message:'invalid_members',code:'22023'});              // a pending entry without its resolved member
+   expect(await fails(openC(admin,pair,`${pair}-x`,[{issuer_id:t1,market:'US',expected_keys:[]},{issuer_id:t1,market:'US',expected_keys:[]}],[]))).toMatchObject({message:'invalid_members'});
+   expect(await fails(openC(admin,pair,`${pair}-x`,[{issuer_id:t1,market:'US'}],[]))).toMatchObject({message:'invalid_members'});   // keys not resolved
+   const old=`${pair}-old`;
+   await q(`insert into public.dq_reconcile_cycles(pair,cycle_id,started_at,finished_at,members,status,expected_total,detail) values($1,$2,now(),now(),'[]','complete',0,$3::jsonb)`,[pair,old,JSON.stringify({pending_members:[e1]})]);
+   await inRolledBackTx(admin,async c=>{await openC(c,pair,`${pair}-dead`,[{issuer_id:t1,market:'US',expected_keys:[]}],[e1]);});   // the creator dies before commit
+   expect(await q(`select cycle_id from public.dq_reconcile_cycles where pair=$1`,[pair])).toEqual([{cycle_id:old}]);
+   expect(await q(`select count(*)::int n from public.dq_reconcile_cursor where pair=$1`,[pair])).toEqual([{n:0}]);
+   expect((await pendingIn(admin,pair,old)).pending_members).toEqual([e1]);
+   expect(await openC(admin,pair,`${pair}-live`,[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[e1])).toMatchObject({created:true,transferred:[e1]});
+   expect((await pendingIn(admin,pair,old)).pending_members).toEqual([]);
+   expect(await q(`select count(*)::int n from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2`,[pair,`${pair}-live`])).toEqual([{n:1}]);
+  });
+
+  it('grants: cursor functions, apply_reconcile_result and open_reconcile_cycle are service_role only; the fence helper is closed to every role; replays',async()=>{
+   const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
+   for(const sig of ['public.claim_reconcile_member(text,text,uuid,text,uuid)','public.complete_reconcile_member(jsonb)','public.fail_reconcile_member(jsonb,text)','public.apply_reconcile_result(jsonb,jsonb)','public.open_reconcile_cycle(text,text,timestamptz,jsonb,jsonb)']){
+    for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+    expect(await fn('service_role',sig)).toBe(true);
+   }
+   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.reconcile_fence_lock(jsonb)')).toBe(false);
+   await expect(replayMigration(admin,sql())).resolves.toBeUndefined();
+  },60000);
+ });
 });

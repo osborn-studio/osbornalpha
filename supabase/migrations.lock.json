@@ -204,6 +204,10 @@
     {
       "file": "20261107090000_identifiers_and_dq.sql",
       "sha256": "6457ecff0c498b03d10665e9f56c811b026d9ef3cabee58b8017c32ff3799ee0"
+    },
+    {
+      "file": "20261107091000_facts_extensions.sql",
+      "sha256": "36372e7cc2db0f6e4de844b3d9298aededac1e907cf67e091c0c8c8d75498598"
     }
   ]
 }

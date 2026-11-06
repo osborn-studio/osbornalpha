@@ -14,6 +14,7 @@
 // + 20261107090000_identifiers_and_dq.sql (issuer_securities window methods; issuer_identifier_claims claim/1 columns;
 //   dq_reconciliations pair/kind/outcome/detail/cycle columns; dq_reconcile_cycles, dq_reconcile_cursor, dq_calendar_passes,
 //   dq_calendar_pass_members, issuer_filer_categories, dq_filing_expectations, issuer_filing_profiles; dq_freshness weekly)
+// + 20261107091000_facts_extensions.sql (filings.accepted_at/acceptance_source, financial_metrics.based_on_lineage; functions only otherwise)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -630,6 +631,8 @@ export interface Filing {
   link_attempts: number;
   mapping_gen: number;
   run_id: string;
+  accepted_at: string | null;
+  acceptance_source: 'sec_submissions' | null;
   created_at: string;
 }
 export interface FinancialFact {
@@ -670,6 +673,7 @@ export interface FinancialMetric {
   formula_version: string;
   inputs: Array<{ fact_id: string; concept: string; filing_id: string; available_date: string }>;
   based_on_rev: number;
+  based_on_lineage: Array<{ issuer_id: string; state_rev: number }>;
   as_of: string;
   computed_at: string;
 }
