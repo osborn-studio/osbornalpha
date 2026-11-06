@@ -98,8 +98,8 @@ export async function fetchSecDocument(url:string,ctx:PairContext):Promise<DocFe
 export function filerClass(text:string|null|undefined):'large_accelerated'|'accelerated'|'non_accelerated'|null{
  if(!text)return null;
  const t=text.toLowerCase();
+ if(/non[\s-]*accelerated/.test(t))return 'non_accelerated';   // first: every "non…accelerated" spelling also contains "accelerated filer"
  if(t.includes('large accelerated'))return 'large_accelerated';
- if(t.includes('non-accelerated')||t.includes('non accelerated'))return 'non_accelerated';
  if(t.includes('accelerated filer'))return 'accelerated';
  return null;
 }

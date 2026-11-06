@@ -207,6 +207,9 @@ describe('us.companyfacts_vs_ixbrl',()=>{
   const res=await pair.evaluate(big,m);
   expect(res[0]).toMatchObject({outcome:'unsupported',detail:{reason:'document_too_large',right:{content_length:60*1024*1024,bytes_read:0}}});
  });
+ it('filerClass: tolerant non-accelerated spellings are not mistaken for accelerated',()=>{
+  for(const t of ['Nonaccelerated Filer','Non- accelerated Filer','Non accelerated Filer','NON - ACCELERATED FILER'])expect(filerClass(t)).toBe('non_accelerated');
+ });
  it('filerClass: case-insensitive, non-accelerated before accelerated, SRC alone is unknown',()=>{
   expect([filerClass('Large Accelerated Filer'),filerClass('Accelerated Filer'),filerClass('Non-accelerated Filer'),filerClass('Non-accelerated filer<br>Smaller reporting company'),filerClass('Smaller reporting company'),filerClass(null)])
    .toEqual(['large_accelerated','accelerated','non_accelerated','non_accelerated',null,null]);

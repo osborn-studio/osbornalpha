@@ -27,6 +27,10 @@ describe('parseFilerCategory (dei:EntityFilerCategory cover text)',()=>{
   ['Accelerated Filer','accelerated',null],
   ['Non-accelerated Filer','non_accelerated',null],
   ['Non-Accelerated Filer','non_accelerated',null],
+  ['Nonaccelerated Filer','non_accelerated',null],
+  ['Non- accelerated Filer','non_accelerated',null],
+  ['Non accelerated Filer','non_accelerated',null],
+  ['NON  -  ACCELERATED FILER','non_accelerated',null],
   ['Smaller Reporting Accelerated Filer','accelerated',true],
   ['Non-accelerated Filer  Smaller Reporting Company','non_accelerated',true],
  ])('%s → %s (SRC %s)',(raw,acceleration,src)=>{expect(parseFilerCategory(raw)).toEqual({acceleration,smaller_reporting:src});});
