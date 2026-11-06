@@ -43,6 +43,20 @@ describe('cninfoLinker',()=>{
   expect(await link(filing({filing_id:'q',form_type:'q1',period_end:'2024-03-31',source_ref:'600519.SH:20240331:1:20240426',available_date:'2024-04-26'}),budget())).toBe('none');   // not corrected → 更正 title excluded
   expect(fetch).toHaveBeenCalledTimes(2);   // issuer context is cached: only the two hisAnnouncement queries
  });
+ it('flags only the dated correction rt1 filing as corrected (000858.SZ shape: Tushare keeps the original rt1 row, adds a corrected rt1 row, rt5 carries the original date)',async()=>{
+  const row=(p:Partial<FilingRow>)=>filing({fiscal_year:2025,fiscal_period:'H1',form_type:'semiannual',period_end:'2025-06-30',...p});
+  const original=row({filing_id:'o',source_ref:'000858.SZ:20250630:1:20250828',available_date:'2025-08-28'});
+  const corrected=row({filing_id:'c',source_ref:'000858.SZ:20250630:1:20260430',available_date:'2026-04-30'});
+  const rt5=row({filing_id:'f',source_ref:'000858.SZ:20250630:5:20250828',available_date:'2025-08-28'});
+  const tables=memoryTableClient({issuers:['issuer_id']});
+  await tables.insert('issuers',{issuer_id:'I',cninfo_org_id:'9900000227',status:'active'});
+  await tables.insert('issuer_securities',{issuer_id:'I',ticker:'000858.SZ',is_primary:true,valid_from:'1998-04-27',valid_to:null});
+  // each query returns BOTH an ordinary and a 更正 announcement: only the `corrected` flag decides which one matches
+  const fetch=vi.fn(async()=>new Response(JSON.stringify({announcements:[{announcementId:'9',announcementTitle:'五粮液：2025年半年度报告',adjunctUrl:'finalpage/2025-08-28/9.PDF'},{announcementId:'8',announcementTitle:'五粮液：关于2025年半年度报告的更正公告',adjunctUrl:'finalpage/2026-04-30/8.PDF'}],hasMore:false}),{status:200}));
+  const link=cninfoLinker(tables,fakeDb([original,corrected,rt5]),{fetch,minIntervalMs:0,today:'2026-11-06'});
+  expect(await link(original,budget())).toMatchObject({document_ref:'9'});   // ordinary report: 更正 title excluded
+  expect(await link(corrected,budget())).toMatchObject({document_ref:'8'});   // dated correction: 更正 title is the match
+ });
  it("answers 'unlinkable' (no attempt consumed) without touching the network when the issuer has no current A-share listing",async()=>{
   const tables=memoryTableClient({issuers:['issuer_id']});
   await tables.insert('issuers',{issuer_id:'U',cninfo_org_id:null,status:'active'});
