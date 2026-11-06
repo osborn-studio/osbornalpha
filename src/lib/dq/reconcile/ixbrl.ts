@@ -63,11 +63,17 @@ export function decodeEntities(s:string):string{
 
 /** Streaming tokens with source offsets [start, end). Throws IxbrlParseError on malformed markup. */
 export function* tokenizeXml(doc:string):Generator<XmlToken>{
- const n=doc.length;let i=doc.charCodeAt(0)===0xfeff?1:0;let depth=0;let rawEnd:string|null=null;let lower:string|null=null;
+ const n=doc.length;let i=doc.charCodeAt(0)===0xfeff?1:0;let depth=0;let rawEnd:string|null=null;
  while(i<n){
   if(rawEnd!==null){
-   lower??=doc.toLowerCase();
-   const e=lower.indexOf(rawEnd,i);if(e<0)fail('unterminated_raw_text');
+   // end tag: '</' + the element name (case-insensitive) + whitespace or '>'; no whole-document lowercasing (length-changing case folds)
+   let e=-1;
+   for(let k=doc.indexOf('</',i);k>=0;k=doc.indexOf('</',k+2)){
+    const nm=doc.slice(k+2,k+2+rawEnd.length);
+    const nx=doc.charCodeAt(k+2+rawEnd.length);
+    if(nm.toLowerCase()===rawEnd&&(nx===62||isWs(nx))){e=k;break;}
+   }
+   if(e<0)fail('unterminated_raw_text');
    if(e>i)yield {t:'text',text:doc.slice(i,e),start:i,end:e};
    rawEnd=null;i=e;continue;
   }
@@ -93,19 +99,21 @@ export function* tokenizeXml(doc:string):Generator<XmlToken>{
    if(doc.startsWith('/>',j)){self=true;j+=2;break;}
    if(doc[j]==='>'){j++;break;}
    const an=nameAt(doc,j)??fail('bad_attribute');j+=an.length;
+   if(attrs.some(([k])=>k===an))fail('bad_attribute');   // duplicate attribute
    while(j<n&&isWs(doc.charCodeAt(j)))j++;
    if(doc[j]!=='=')fail('bad_attribute');
    j++;while(j<n&&isWs(doc.charCodeAt(j)))j++;
    const q=doc[j];if(q!=='"'&&q!=="'")fail('bad_attribute');
    const e=doc.indexOf(q,j+1);if(e<0)fail('unterminated_attribute');
    attrs.push([an,decodeEntities(doc.slice(j+1,e))]);j=e+1;
+   if(j<n&&!isWs(doc.charCodeAt(j))&&doc[j]!=='>'&&doc[j]!=='/')fail('bad_attribute');   // attributes need separating whitespace
    if(attrs.length>MAX_ATTRS)fail('too_many_attributes');
   }
   yield {t:'open',name,attrs,self,start:lt,end:j};
   if(!self){
    depth++;if(depth>MAX_DEPTH)fail('too_deep');
    const local=name.slice(name.indexOf(':')+1).toLowerCase();
-   if(local==='script'||local==='style')rawEnd=`</${name.toLowerCase()}`;
+   if(local==='script'||local==='style')rawEnd=name.toLowerCase();
   }
   i=j;
  }
@@ -232,7 +240,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   if(f.local==='context'){st.ctx={id:attrOf(attrs,'id')??'',scheme:'',ident:'',start:'',end:'',instant:'',forever:false,dimensional:false};return;}
   if(st.ctx!==null){
    if(f.local==='segment'||f.local==='scenario'){st.segDepth=stack.length;return;}
-   if(f.local==='identifier'){st.ctx.scheme=attrOf(attrs,'scheme')??'';st.ctxField='ident';return;}
+   if(f.local==='identifier'){st.ctx.scheme=(attrOf(attrs,'scheme')??'').trim();st.ctxField='ident';return;}
    if(f.local==='startDate'){st.ctxField='start';return;}
    if(f.local==='endDate'){st.ctxField='end';return;}
    if(f.local==='instant'){st.ctxField='instant';return;}
@@ -322,7 +330,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   if(f.tuple)continue;   // reported when opened
   if(attrOf(f.attrs,'continuedAt')!==undefined){out.unsupported.push({reason:'continuation',name});continue;}
   const contextRef=attrOf(f.attrs,'contextRef')??'';
-  const c=contexts.get(contextRef);
+  const c=contextRef===''?undefined:contexts.get(contextRef);
   if(!c){out.unsupported.push({reason:'context',name,contextRef});continue;}
   if(dupCtx.has(contextRef)){out.unsupported.push({reason:'context_duplicate',name,contextRef});continue;}
   if(c.dimensional)continue;
@@ -333,20 +341,23 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   const nil=nsAttr(f.attrs,f.ns,NS.xsi,'nil');
   if(nil==='true'||nil==='1'){out.unsupported.push({reason:'nil',...where});continue;}
   const unitRef=attrOf(f.attrs,'unitRef')??'';
-  const u=dupUnits.has(unitRef)?undefined:units.get(unitRef);const raw=u?unitString(u):null;const unitNorm=raw===null?null:normalizeUnit(raw);
+  const u=unitRef===''||dupUnits.has(unitRef)?undefined:units.get(unitRef);const raw=u?unitString(u):null;const unitNorm=raw===null?null:normalizeUnit(raw);
   if(unitNorm===null){out.unsupported.push({reason:'unit',...where});continue;}
   const scaleRaw=(attrOf(f.attrs,'scale')??'0').trim();
   if(!/^-?\d{1,2}$/.test(scaleRaw)){out.unsupported.push({reason:'scale',...where});continue;}
+  const decimalsRaw=attrOf(f.attrs,'decimals')?.trim();
+  if(decimalsRaw!==undefined&&!/^(INF|-?\d+)$/.test(decimalsRaw)){out.unsupported.push({reason:'decimals',...where});continue;}
   const sign=attrOf(f.attrs,'sign');
   if(sign!==undefined&&sign!=='-'){out.unsupported.push({reason:'sign',...where});continue;}
   const fmt=formatOf(attrOf(f.attrs,'format'),f.ns);
   const digits=fmt===null?null:parseFactText(fmt,f.text);
   if(digits===null){out.unsupported.push({reason:'format',...where});continue;}
+  if(digits.startsWith('-')){out.unsupported.push({reason:'sign',...where});continue;}   // the sign belongs in the sign attribute
   const scale=Number(scaleRaw);
   let value:string;
   try{value=canonicalDecimal(`${digits}e${scale}`);}catch{out.unsupported.push({reason:'decimal_bounds',...where});continue;}
   if(sign==='-'&&value!=='0')value=value.startsWith('-')?value.slice(1):`-${value}`;
-  out.facts.push({name,periodStart:period.start,periodEnd:period.end,unit:unitNorm,value,decimals:attrOf(f.attrs,'decimals')??null,scale,entity:`${c.scheme}#${c.ident.trim()}`,contextRef,unitRef});
+  out.facts.push({name,periodStart:period.start,periodEnd:period.end,unit:unitNorm,value,decimals:decimalsRaw??null,scale,entity:`${c.scheme}#${c.ident.trim()}`,contextRef,unitRef});
  }
  return out;
 }

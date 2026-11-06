@@ -66,7 +66,8 @@ describe('parseInlineXbrl on the AAPL FY2023 10-K fixture',()=>{
 describe('ix:nonFraction text grammar by format (spec §5.2 regexes)',()=>{
  it.each([
   ['',' 1,234.5 ','1234.5'],
-  ['','-12','-12'],
+  ['','-12','sign'],
+  ['sign="-"','-12','sign'],
   ['','1.234,5','format'],
   ['format="ixt:num-dot-decimal"','1,234,567.89','1234567.89'],
   ['format="ixt3:numdotdecimal"','12.5','12.5'],
@@ -199,5 +200,45 @@ describe('plan-review hardening (Codex round)',()=>{
   const d=parseInlineXbrl(doc(nf('','1','us-gaap:Revenues','dup')+nf('','2','us-gaap:Revenues','noid')+nf('','3'),res));
   expect(d.facts.map(f=>f.value)).toEqual(['3']);
   expect(d.unsupported.map(u=>[u.reason,u.contextRef])).toEqual([['context_duplicate','dup'],['entity','noid']]);
+ });
+});
+
+describe('plan-review hardening (quality round)',()=>{
+ it('script end-tag search does not lowercase the document: length-changing case folds before it are harmless; </scriptx does not end it',()=>{
+  const d=one('<p>İİİİ</p><script>var a="</scriptx>";</script >'+nf('','4'));
+  expect(d.facts.map(f=>f.value)).toEqual(['4']);
+  expect(()=>[...tokenizeXml('<script>a</scriptx>')]).toThrow(IxbrlParseError);
+ });
+ it('absent or empty contextRef / unitRef are unsupported(context) / unsupported(unit)',()=>{
+  const d=one('<ix:nonFraction name="us-gaap:Revenues" unitRef="usd">1</ix:nonFraction><ix:nonFraction name="us-gaap:Revenues" contextRef="" unitRef="usd">1</ix:nonFraction><ix:nonFraction name="us-gaap:Revenues" contextRef="d">1</ix:nonFraction><ix:nonFraction name="us-gaap:Revenues" contextRef="d" unitRef="">1</ix:nonFraction>');
+  expect(d.unsupported.map(u=>u.reason)).toEqual(['context','context','unit','unit']);
+ });
+ it('decimals must be INF or an integer',()=>{
+  expect(valueOf(nf('decimals="-6"','1'))).toBe('1');
+  expect(valueOf(nf('decimals="INF"','1'))).toBe('1');
+  expect(valueOf(nf('decimals="2.5"','1'))).toBe('decimals');
+  expect(valueOf(nf('decimals="inf"','1'))).toBe('decimals');
+  expect(valueOf(nf('decimals=""','1'))).toBe('decimals');
+ });
+ it('trims the identifier scheme in the entity',()=>{
+  const res=ctx('d',DUR).replace('scheme="http://www.sec.gov/CIK"','scheme=" http://www.sec.gov/CIK "')+USD;
+  expect(parseInlineXbrl(doc(nf('','1'),res)).facts[0].entity).toBe('http://www.sec.gov/CIK#0000000001');
+ });
+ it.each([
+  ['duplicate attribute','<a x="1" x="2"/>','bad_attribute'],
+  ['no whitespace between attributes','<a x="1"y="2"/>','bad_attribute'],
+  ['too deep','<a>'.repeat(1001),'too_deep'],
+  ['too many attributes',`<a ${Array.from({length:257},(_,k)=>`a${k}="1"`).join(' ')}/>`,'too_many_attributes'],
+  ['unterminated comment','<!-- x','unterminated_comment'],
+  ['unterminated cdata','<![CDATA[x','unterminated_cdata'],
+  ['unterminated pi','<?x','unterminated_pi'],
+  ['unterminated declaration','<!DOCTYPE x','unterminated_declaration'],
+  ['unterminated tag','<a ','unterminated_tag'],
+  ['unterminated attribute','<a x="1','unterminated_attribute'],
+  ['unterminated raw text','<script>x','unterminated_raw_text'],
+  ['bad close tag (empty)','<a></>','bad_close_tag'],
+  ['bad close tag (open)','<a></a','bad_close_tag'],
+ ])('tokenizer: %s → %s',(_n,src,code)=>{
+  try{[...tokenizeXml(src)];throw new Error('no error');}catch(e){expect(e instanceof IxbrlParseError?e.code:String(e)).toBe(code);}
  });
 });
