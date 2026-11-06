@@ -144,6 +144,10 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
   if(typeof r.left_source!=='string'||typeof r.right_source!=='string'||!r.detail||typeof r.detail!=='object'||Array.isArray(r.detail))return false;
   if(typeof r.tolerance!=='string'||!NUMERIC.test(r.tolerance)||[r.left_value,r.right_value,r.abs_diff,r.rel_diff].some(v=>v!==null&&v!==undefined&&!NUMERIC.test(v)))return false;
   if(r.passed&&r.outcome!=='compared')return false;   // a pass is only meaningful for a compared pair of values
+  // dq_reconciliations_numeric_sides / _nonnumeric_sides, checked before any mutation (SQL rolls the transaction back)
+  const nn=(v:unknown)=>v!==null&&v!==undefined;
+  if(r.kind==='numeric'&&r.outcome==='compared'&&(!nn(r.left_value)||!nn(r.right_value)))return false;
+  if(r.kind!=='numeric'&&[r.left_value,r.right_value,r.rel_diff,r.abs_diff].some(nn))return false;
   if(r.left_fact_id!==undefined&&!UUID.test(r.left_fact_id))return false;
   if(r.action==='quarantine_left'&&r.left_fact_id===undefined)return false;
   if((r.action==='review_item'||r.action==='lineage_item')&&(!r.item||typeof r.item.natural_key!=='string'||r.item.natural_key.length<1||r.item.natural_key.length>512||!r.item.payload||typeof r.item.payload!=='object'))return false;

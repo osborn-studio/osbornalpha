@@ -86,6 +86,7 @@ describe('toFactsDbError',()=>{
    expect(toFactsDbError({message:c,code:'P0001'}).code).toBe(c);
   expect(toFactsDbError({message:'topology_write_forbidden: issuers.status/merged_into change only through set_merge/set_dissolved',code:'23514'}).code).toBe('topology_write_forbidden');
   expect(toFactsDbError({message:'duplicate key value violates unique constraint "x"',code:'23505'}).code).toBe('duplicate_key');   // 23505 wins over the head word
+  for(const c of ['use_dedicated_resolver','target_not_active','invalid_members'])expect(toFactsDbError({message:c,code:'22023'}).code).toBe(c);
   expect(toFactsDbError({message:'invalid_based_on',code:'22023'})).toMatchObject({code:'unknown',message:'invalid_based_on'});
  });
 });
@@ -279,6 +280,33 @@ describe('supabaseFactsDb',()=>{
   expect(await db.findFilingBySourceRef('edgar','0000320193-24-000123')).toMatchObject({filing_id:'g',accepted_at:'2024-02-01T21:05:00.000Z',acceptance_source:'sec_submissions'});
   expect(await db.filingsForCalendar('I','US',{fromPeriodEnd:'2024-01-01'})).toEqual([expect.objectContaining({filing_id:'g1',run_status:'published',accepted_at:null,acceptance_source:null})]);
  });
+ it('filingsForCalendar: >1,000 filings over many run-id chunks, filters pushed into the query; every eligible filing keeps its run status and mapping_gen',async()=>{
+  const N=1250;const status=(i:number)=>['published','staged','abandoned'][i%3];
+  const mk=(i:number,over:Record<string,unknown>={})=>({filing_id:`g${String(i).padStart(5,'0')}`,issuer_id:'I',market:'US',run_id:`r${i}`,period_end:`2024-${String(1+i%12).padStart(2,'0')}-28`,available_date:'2024-06-01',mapping_gen:i%4,created_at:'2024-06-01T00:00:00+00:00',accepted_at:null,...over});
+  const all=[...Array.from({length:N},(_,i)=>mk(i)),mk(5000,{issuer_id:'OTHER'}),mk(5001,{market:'CN'}),mk(5002,{period_end:'2023-12-31'})];
+  const runIn:number[]=[];
+  const {db}=stub(()=>({data:null}),(table,ops)=>{
+   const eq=(c:string)=>ops.filter(o=>o[0]==='eq'&&o[1][0]===c).map(o=>o[1][1]);
+   if(table==='filings'){
+    const rows=all.filter(r=>eq('issuer_id').every(v=>r.issuer_id===v)&&eq('market').every(v=>r.market===v)&&ops.filter(o=>o[0]==='gte').every(o=>String(r.period_end)>=String(o[1][1])))
+     .sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:a.filing_id<b.filing_id?-1:1);
+    const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
+    return rows.slice(from,to+1);
+   }
+   if(table==='fact_sync_runs'){
+    const ids=ops.find(o=>o[0]==='in')![1][1] as string[];runIn.push(ids.length);
+    const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];
+    return ids.map(id=>({run_id:id,status:status(Number(id.slice(1)))})).slice(from,to+1);
+   }
+   return [];
+  });
+  const out=await db.filingsForCalendar('I','US',{fromPeriodEnd:'2024-01-01'});
+  expect(out).toHaveLength(N);
+  expect(new Set(out.map(f=>f.filing_id)).size).toBe(N);
+  expect(out.some(f=>f.issuer_id!=='I'||f.market!=='US'||(f.period_end??'')<'2024-01-01')).toBe(false);
+  expect(runIn.length).toBeGreaterThan(1);expect(Math.max(...runIn)).toBeLessThanOrEqual(200);
+  for(const f of out){const i=Number(f.filing_id.slice(1));expect(f.run_status).toBe(status(i));expect(f.mapping_gen).toBe(i%4);expect(f.run_id).toBe(`r${i}`);}
+ });
  it('metrics read compares the full based_on_lineage vector across pages: one rev but two vectors is unstable',async()=>{
   const row=(i:number,lineage:unknown)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:2,based_on_lineage:lineage,as_of:'2024-01-01'});
   const a=[{issuer_id:'iss',state_rev:2}],b=[{issuer_id:'iss',state_rev:2},{issuer_id:'src',state_rev:5}];
@@ -318,5 +346,38 @@ describe('memoryFactsDb plan-3 specifics',()=>{
   await expect(db.setFilingAcceptance(f.filing_id,'2024-02-01T21:05:00Z','other' as 'sec_submissions')).rejects.toMatchObject({message:'invalid_acceptance'});
   expect(await db.setFilingAcceptance(f.filing_id,'2024-02-01T21:05:00Z','sec_submissions')).toBe(true);
   expect((await db.findFilingBySourceRef('edgar',f.sourceRef))!.accepted_at).toBe('2024-02-01T21:05:00.000Z');
+ });
+});
+
+describe('memoryFactsDb applyReconcileResult side constraints',()=>{
+ const setup=async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'k'}]);await db.claimLease(iss,'US',b,60);
+  const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+  const x=factInsert(iss,f);await db.stageFacts(run,[x]);await db.publishRun(run,[f.filing_id]);
+  const pair='facts.lineage_same_day' as const;
+  const keys=['k1','k2','k3'];
+  await db.openReconcileCycle({pair,cycleId:'c1',startedAt:'2026-01-01T00:00:00.000Z',members:[{issuer_id:iss,market:'US',expected_keys:keys.map(naturalKey=>({naturalKey,locator:{}}))}],pending:[]});
+  const fence=(await db.claimReconcileMember(pair,'c1',iss,'US',randomUUID()))!;
+  const res=(over:Record<string,unknown>)=>({natural_key:'k1',kind:'numeric' as const,outcome:'compared' as const,passed:false,left_value:'1',right_value:'2',abs_diff:'1',rel_diff:'0.5',tolerance:'0',left_source:'l',right_source:'r',detail:{},action:'quarantine_left' as const,left_fact_id:x.fact_id,inputs_hash:'h',...over});
+  return {db,fence,res,x};
+ };
+ it('rejects result rows the SQL check constraints refuse, before any mutation',async()=>{
+  const {db,fence,res,x}=await setup();
+  const untouched=async()=>{
+   expect(await db.tables.select('dq_reconciliations',{})).toEqual([]);
+   expect(await db.tables.select('dq_quarantine',{})).toEqual([]);
+   expect(db.facts().find(f=>f.fact_id===x.fact_id)!.status).toBe('ok');
+   expect(db.scope()[0].state_rev).toBe(1);
+  };
+  await expect(db.applyReconcileResult(fence,res({right_value:null}))).rejects.toMatchObject({code:'invalid_result'});
+  await expect(db.applyReconcileResult(fence,res({left_value:null}))).rejects.toMatchObject({code:'invalid_result'});
+  await expect(db.applyReconcileResult(fence,res({kind:'text',left_value:'1',right_value:null,abs_diff:null,rel_diff:null}))).rejects.toMatchObject({code:'invalid_result'});
+  await expect(db.applyReconcileResult(fence,res({kind:'date',left_value:null,right_value:null,abs_diff:'1',rel_diff:null}))).rejects.toMatchObject({code:'invalid_result'});
+  await expect(db.applyReconcileResult(fence,res({kind:'text',left_value:null,right_value:null,abs_diff:null,rel_diff:'0'}))).rejects.toMatchObject({code:'invalid_result'});
+  await untouched();
+  // allowed shapes: a non-compared numeric outcome may carry null sides; a text compare carries only detail
+  expect((await db.applyReconcileResult(fence,res({natural_key:'k2',outcome:'right_missing',left_value:null,right_value:null,abs_diff:null,rel_diff:null,action:'record'}))).reused).toBe(false);
+  expect((await db.applyReconcileResult(fence,res({natural_key:'k3',kind:'text',left_value:null,right_value:null,abs_diff:null,rel_diff:null,passed:true,action:'record'}))).reused).toBe(false);
  });
 });
