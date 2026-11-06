@@ -12,3 +12,4 @@
 - Task 9：页面抽取 extract/{pages-json,tables,pdf,html}（pdf.js 文本层带 CMaps、数值尾表格检测、HTML 分页、pages.json 码点偏移）与 PDF/表格夹具；Codex 审计：待审（2026-11-06）
 - Task 5 复审修复：cninfo 报告标题尾部锚定与通知排除、HKEX 括号类别精确匹配（延遲/寄發通知为 other）、无后缀文件 zh、英文期间正则、40-F/A、merged 一律不入、键集读取遇到被服务器截短的页继续、对账撤销加 scope_confirmed_at 过期保护（SQL/内存/pg 与共享契约）；Codex 审计：待审（2026-11-06）
 - Task 10：引用 citations（cite/verify/view）、抽取调度 extract/run、租约心跳 lease.ts、esbuild 打包的抽取 worker（isolate/worker-job/worker-entry）、门控的 documents-extract cron、extract/record-fixture 脚本与 next.config 追踪；Codex 审计：待审（2026-11-06）
+- Task 6 修复：来源适配器主机白名单/重定向≤3 跳/UA 分流、巨潮与 HKEX 总数完整性（HKEX t1code 仍为 -2：40000 等代码离线无法确认）、EDGAR 列校验与 forms 追加、串行限速、Retry-After、20MB 列表上限；HKEX 英文路径在指挥步骤 b 录制真实 lang=en 页面前仍未核实（测试夹具由中文页派生）；Codex 审计：待审（2026-11-06）

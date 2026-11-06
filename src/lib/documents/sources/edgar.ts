@@ -9,8 +9,8 @@
 // backfill_done and emits coverage_summary. source_ref = '<accession>/<primaryDocument>'; asset =
 // the filing index (required); the XBRL instance is added from the index (optional).
 import {primaryDocumentUrl} from '../../research/ingest/collectors/edgar';
-import {DAY_MS,orderListed,pollSegment} from './shared';
-import type {Budget,Listed,ListedAsset,PoliteHttp,Segment,SourceAdapter} from './shared';
+import {DAY_MS,HOST_POLICY,orderListed,pollSegment,urlRejection} from './shared';
+import type {Budget,Listed,ListedAsset,PoliteHttp,Rejection,Segment,SourceAdapter} from './shared';
 import type {DocScopeRow} from '../types';
 
 export const EDGAR_INTERVAL_MS=120;
@@ -28,12 +28,18 @@ export interface EdgarAdapterOptions{http:PoliteHttp;forms?:readonly string[];fi
 function asColumnar(v:unknown,where:string):Columnar{
  const c=v as Partial<Columnar>|null;
  if(!c||!Array.isArray(c.accessionNumber)||!Array.isArray(c.acceptanceDateTime)||!Array.isArray(c.form)||!Array.isArray(c.primaryDocument))throw new Error(`layout_changed: ${where}`);
+ const n=c.accessionNumber.length;
+ for(const k of ['acceptanceDateTime','form','primaryDocument','primaryDocDescription','filingDate'] as const){
+  const col=c[k];
+  if(col!==undefined&&(!Array.isArray(col)||col.length!==n))throw new Error(`layout_changed: ${where} column ${k} length`);
+ }
  return c as Columnar;
 }
 const archiveDir=(cik:string,accn:string)=>`https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accn.replace(/-/g,'')}/`;
 
 export function edgarAdapter(opts:EdgarAdapterOptions):SourceAdapter{
- const forms=new Set(opts.forms??EDGAR_DOC_FORMS);
+ const forms=new Set<string>([...EDGAR_DOC_FORMS,...(opts.forms??[])]);   // --forms adds to the defaults
+ const rejected:Rejection[]=[];
  const verified=opts.filesVerified??EDGAR_FILES_VERIFIED;
  const submissions=async(cik:string,budget:Budget):Promise<Submissions>=>{
   if(!/^\d{10}$/.test(cik))throw new Error('invalid_fetch_key');
@@ -45,18 +51,24 @@ export function edgarAdapter(opts:EdgarAdapterOptions):SourceAdapter{
   for(let i=0;i<c.accessionNumber.length;i++){
    const form=String(c.form[i]??'');const accn=String(c.accessionNumber[i]??'');const doc=String(c.primaryDocument[i]??'');
    const t=Date.parse(String(c.acceptanceDateTime[i]??''));
-   if(!forms.has(form)||!accn||!doc||!Number.isFinite(t)||t<lo||t>=hi)continue;
+   if(!accn||!Number.isFinite(t))throw new Error(`layout_changed: row ${i} lacks accessionNumber/acceptanceDateTime`);
+   if(!forms.has(form))continue;
+   if(!doc)throw new Error(`layout_changed: row ${i} (${accn}) lacks primaryDocument`);
+   if(t<lo||t>=hi)continue;
    const desc=String(c.primaryDocDescription?.[i]??'')||form;const filed=String(c.filingDate?.[i]??'');
-   out.push({source_ref:`${accn}/${doc}`,source_url:primaryDocumentUrl(cik,accn,doc),title:filed?`${form} ${desc} (${filed})`:`${form} ${desc}`,form_type:form,
+   const url=primaryDocumentUrl(cik,accn,doc);
+   const bad=urlRejection(url,HOST_POLICY.edgar);
+   if(bad!==null){rejected.push({source_ref:`${accn}/${doc}`,url,reason:bad});continue;}
+   out.push({source_ref:`${accn}/${doc}`,source_url:url,title:filed?`${form} ${desc} (${filed})`:`${form} ${desc}`,form_type:form,
     published_at:new Date(t).toISOString(),precision:'instant',assets:[{role:'filing_index',filename:'index.json',url:`${archiveDir(cik,accn)}index.json`,required:true}]});
   }
   return out;
  };
  return {
-  source:'edgar',
+  source:'edgar',rejected,
   coverageGap:verified?null:'edgar_files_unverified',
   segments(scope:DocScopeRow,mode,sinceYear,now){
-   if(mode==='poll')return [pollSegment(scope,now)];
+   if(mode==='poll')return [pollSegment(scope,now,0)];   // EDGAR windows are UTC acceptance instants
    const to=now.toISOString().slice(0,10);
    const recent={id:'recent',from:`${sinceYear}-01-01`,to};
    return verified?[{id:'history',from:recent.from,to},recent]:[recent];
