@@ -136,6 +136,12 @@ describe('writeReportFiles',()=>{
   expect(writeReportFiles(r,root).sha256).toMatch(/^[0-9a-f]{64}$/);
   expect(readdirSync(join(root,'docs/evals/2026-11-06')).sort()).toEqual(readdirSync(join(root,'docs/evals/2026-11-06')).filter(f=>!f.includes('.tmp-')).sort());
  });
+ it('a write failure after the temp file is created leaves no temp or target',()=>{
+  const root=tmp(),r=build(),dir=join(root,'docs/evals/2026-11-06');
+  const enospc=(fd:number)=>{void fd;throw Object.assign(new Error('full'),{code:'ENOSPC'});};
+  expect(codeOf(()=>writeReportFiles(r,root,{write:enospc}))).toBe('report_write_failed');
+  expect(readdirSync(dir)).toEqual([]);
+ });
  it('never overwrites an existing report',()=>{
   const root=tmp(),r=build({mode:'ci'});
   writeReportFiles(r,root);

@@ -9,7 +9,7 @@
 // canonicalJson(report)+'\n' and returns the sha256 of exactly those bytes; it never overwrites.
 // The environment block must carry no credentials (db_host is a bare host[:port], app_origin an origin).
 import {randomBytes} from 'node:crypto';
-import {existsSync,linkSync,mkdirSync,unlinkSync,writeFileSync} from 'node:fs';
+import {closeSync,existsSync,linkSync,mkdirSync,openSync,unlinkSync,writeSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
@@ -110,7 +110,7 @@ export function reportPaths(r:EvalReport,root?:string):{json:string;md:string|nu
  return root===undefined?rel:{json:join(root,rel.json),md:rel.md===null?null:join(root,rel.md)};
 }
 
-export interface WriteOps{link?:(existing:string,target:string)=>void}
+export interface WriteOps{link?:(existing:string,target:string)=>void;write?:(fd:number,data:string|Buffer)=>void}
 
 /** Writes the report (and its .md in report mode); returns repo-relative paths and the sha256 of the JSON bytes written.
  *  Never overwrites: each file is written whole to a temp file, then published with link() (fails with EEXIST);
@@ -119,6 +119,7 @@ export function writeReportFiles(r:EvalReport,root:string=process.cwd(),ops:Writ
  assertEnvironmentClean(r.environment);
  const rel=reportPaths(r);
  const link=ops.link??linkSync;
+ const write=ops.write??((fd:number,d:string|Buffer)=>{writeSync(fd,d);});
  const bytes=Buffer.from(`${canonicalJson(r)}\n`,'utf8');
  const targets:{path:string;data:string|Buffer}[]=[{path:rel.json,data:bytes}];
  if(rel.md!==null)targets.push({path:rel.md,data:renderMarkdown(r)});
@@ -129,8 +130,13 @@ export function writeReportFiles(r:EvalReport,root:string=process.cwd(),ops:Writ
  try{
   for(const t of targets){
    const abs=join(root,t.path),tmp=`${abs}.tmp-${randomBytes(6).toString('hex')}`;
-   try{mkdirSync(dirname(abs),{recursive:true});writeFileSync(tmp,t.data,{flag:'wx'});temps.push(tmp);}
-   catch(e){throw fail(t.path,e);}
+   let fd:number|null=null;
+   try{
+    mkdirSync(dirname(abs),{recursive:true});
+    fd=openSync(tmp,'wx');temps.push(tmp);
+    write(fd,t.data);
+   }catch(e){throw fail(t.path,e);}
+   finally{if(fd!==null){try{closeSync(fd);}catch{/* best effort */}}}
   }
   targets.forEach((t,i)=>{
    const abs=join(root,t.path);
