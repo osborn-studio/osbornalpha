@@ -75,6 +75,7 @@ create table if not exists public.company_watches (
   primary key (user_id, issuer_id)
 );
 create index if not exists company_watches_user_updated_idx on public.company_watches(user_id, updated_at desc);
+create index if not exists company_watches_issuer_idx on public.company_watches(issuer_id);
 
 create table if not exists public.company_event_reads (
   user_id    uuid not null references auth.users(id) on delete cascade,
@@ -85,6 +86,7 @@ create table if not exists public.company_event_reads (
   constraint company_event_reads_watch_fkey foreign key (user_id, issuer_id) references public.company_watches(user_id, issuer_id) on delete cascade
 );
 create index if not exists company_event_reads_user_issuer_idx on public.company_event_reads(user_id, issuer_id);
+create index if not exists company_event_reads_event_idx on public.company_event_reads(event_id);
 
 -- ---------------------------------------------------------------- 4.4 company_digest_state
 create table if not exists public.company_digest_state (
@@ -142,6 +144,8 @@ language plpgsql security definer set search_path = '' as $$
 declare n int;
 begin
   perform pg_advisory_xact_lock(hashtext('company_watches:' || new.user_id::text));
+  new.created_at := now();   -- server time: clients cannot supply their own timestamps
+  new.updated_at := now();
   if exists (select 1 from public.company_watches w where w.user_id = new.user_id and w.issuer_id = new.issuer_id) then
     return new;
   end if;
@@ -221,3 +225,5 @@ drop policy if exists "company_event_reads own insert" on public.company_event_r
 create policy "company_event_reads own insert" on public.company_event_reads for insert to authenticated with check ((select auth.uid()) = user_id);
 drop policy if exists "company_event_reads own delete" on public.company_event_reads;
 create policy "company_event_reads own delete" on public.company_event_reads for delete to authenticated using ((select auth.uid()) = user_id);
+drop policy if exists "company_event_reads service all" on public.company_event_reads;
+create policy "company_event_reads service all" on public.company_event_reads for all to service_role using (true) with check (true);

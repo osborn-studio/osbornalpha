@@ -161,6 +161,15 @@ describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
   const fn=(sig:string)=>fx.q(`select r.rolname, has_function_privilege(r.rolname,$1,'EXECUTE') ok from pg_roles r where r.rolname in ('anon','authenticated','service_role') order by 1`,[sig]);
   for(const sig of ['public.company_watches_limit()','public.company_watches_touch()','public.company_event_reads_check()'])
    expect({sig,rows:await fn(sig)}).toEqual({sig,rows:[{rolname:'anon',ok:false},{rolname:'authenticated',ok:false},{rolname:'service_role',ok:false}]});
+  const own=(t:string)=>[`${t} own select|SELECT|{authenticated}`,`${t} own delete|DELETE|{authenticated}`,`${t} own insert|INSERT|{authenticated}`,`${t} service all|ALL|{service_role}`];
+  const expectedPolicies=[
+   ...['issuer_events','company_digest_state','company_fact_evidence'].map(t=>`${t}|${t} service read|SELECT|{service_role}`),
+   'issuer_coverage|issuer_coverage public read|SELECT|{public}',
+   ...own('company_watches').map(x=>`company_watches|${x}`),'company_watches|company_watches own update|UPDATE|{authenticated}',
+   ...own('company_event_reads').map(x=>`company_event_reads|${x}`),
+  ].sort();
+  const actualPolicies=(await fx.q(`select tablename,policyname,cmd,roles::text r from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).map(r=>`${r.tablename}|${r.policyname}|${r.cmd}|${r.r}`).sort();
+  expect(actualPolicies).toEqual(expectedPolicies);
   const sql=readFileSync(TABLES_MIGRATION,'utf8');
   await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
   await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
@@ -258,13 +267,20 @@ describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
   await fx.q(`select pg_sleep(0.01)`);
   await inTx(admin,{role:'authenticated',userId:a},tx=>tx.c.query(`update public.company_watches set muted=true where user_id=$1 and issuer_id=$2`,[a,iss]));
   expect((await fx.q(`select updated_at::text u from public.company_watches where user_id=$1`,[a]))[0].u).not.toBe(before);
-  const moved=await fails(fx.q(`update public.company_watches set issuer_id=$2 where user_id=$1`,[a,await fx.issuer()]));
-  expect(moved).toMatchObject({message:'immutable_watch_key',code:'23514'});
+  for(const [col,val] of [['issuer_id',await fx.issuer()],['user_id',await fx.user()],['created_at','2000-01-01']] as const){
+   const moved=await fails(fx.q(`update public.company_watches set ${col}=$2 where user_id=$1`,[a,val]));
+   expect({col,moved}).toMatchObject({col,moved:{message:'immutable_watch_key',code:'23514'}});
+  }
+  // timestamps are server time: client-supplied created_at/updated_at are overwritten on insert
+  const stamped=await fx.issuer();
+  await inTx(admin,{role:'authenticated',userId:a},tx=>tx.c.query(`insert into public.company_watches(user_id,issuer_id,created_at,updated_at) values($1,$2,'2000-01-01','2000-01-01')`,[a,stamped]));
+  expect((await fx.q(`select abs(extract(epoch from now()-created_at))<60 c, abs(extract(epoch from now()-updated_at))<60 u from public.company_watches where user_id=$1 and issuer_id=$2`,[a,stamped]))[0]).toEqual({c:true,u:true});
  });
 
  it('watch_limit: 200 per user, enforced under concurrent inserts; an existing key passes to the primary key',async()=>{
   const ids=await fx.issuers(202);const u=await fx.user();
-  expect((await fx.q(`insert into public.company_watches(user_id,issuer_id) select $1, unnest($2::uuid[])`,[u,ids.slice(0,199)])).length).toBe(0);
+  await fx.q(`insert into public.company_watches(user_id,issuer_id) select $1, unnest($2::uuid[])`,[u,ids.slice(0,199)]);
+  expect(await fx.one(`select count(*)::int v from public.company_watches where user_id=$1`,[u])).toBe(199);
   // two sessions race for the 200th slot with different issuers: the second waits on the advisory lock, then sees 200 and is refused
   const t1=await openTx(admin,{role:'authenticated',userId:u});const t2=await openTx(admin,{role:'authenticated',userId:u});
   try{
