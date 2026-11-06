@@ -7,6 +7,7 @@
 import type {TableClient} from '../db/table-client';
 import type {BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts} from '../dq/batches';
+import {DATASETS} from '../dq/datasets';
 import type {QuarantineInput} from '../dq/quarantine';
 import {quarantine} from '../dq/quarantine';
 import {normalizeSecurityTicker} from '../securities/ticker';
@@ -102,7 +103,7 @@ export async function parkConflict(client:TableClient,input:QuarantineInput,coun
 /** Quarantine reason code for an issuer conflict: a match on a retired issuer is kept apart. */
 export const issuerReasonCode=(reason:string|undefined)=>reason==='inactive_issuer'?'inactive_issuer':'issuer_conflict';
 
-export const SEC_DATASET='entities.sec';
+export const SEC_DATASET=DATASETS.entities.sec;
 
 export interface SecApplyOptions{asOf:string;batchId:string;batchProducerMeta:{sourceRows:number;rejected:SecExchangeParse['rejected']}}
 

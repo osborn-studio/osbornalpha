@@ -13,6 +13,7 @@ interface DqResponse {
   freshness: (Row & { status: string; stored_status: string })[];
   quarantine: { rows: Row[]; page: number; pageSize: number; total: number };
   reconciliations: Row[];
+  datasets: string[];
   refreshedAt: string;
 }
 type Resolution = 'resolved_accept' | 'resolved_reject';
@@ -127,12 +128,8 @@ export function AdminDqClient() {
   const sm = data?.summary;
   const q = data?.quarantine;
   const pages = q ? Math.max(1, Math.ceil(q.total / q.pageSize)) : 1;
-  // Options come from what this response already loaded (plus the current selection, so it never
-  // disappears). A full inventory of quarantined datasets needs a distinct query (follow-up).
-  const datasets = Array.from(new Set([
-    ...[...(data?.freshness ?? []), ...(data?.batches ?? []), ...(q?.rows ?? [])].map((r) => String(r.dataset)),
-    ...(dataset ? [dataset] : []),
-  ])).sort();
+  // Options: the server's registry ∪ loaded datasets (spec 3 §6.3), plus the current selection so it never disappears.
+  const datasets = Array.from(new Set([...(data?.datasets ?? []), ...(dataset ? [dataset] : [])])).sort();
   const by = sm?.batchesByStatus ?? {};
   const batchTotal = Object.values(by).reduce((a, b) => a + b, 0);
   const recShown = data?.reconciliations.length ?? 0;

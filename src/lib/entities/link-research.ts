@@ -9,6 +9,7 @@
 import type {TableClient} from '../db/table-client';
 import type {BatchError} from '../dq/batches';
 import {emptyCounts} from '../dq/batches';
+import {DATASETS} from '../dq/datasets';
 import {isValidLei,isValidUsci,normalizeCik} from '../research/entity-keys/identifiers';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {attachSecurity,upsertIssuerByIdentifiers} from './issuers';
@@ -27,7 +28,7 @@ export interface PlannedLink{fetched:number;issuers:PlannedIssuer[];securities:P
 
 /** Neutral public source name: the public rows never name the private research tables. */
 export const CURATED='curated';
-export const RESEARCH_LINK_DATASET='entities.research-link';
+export const RESEARCH_LINK_DATASET=DATASETS.entities.researchLink;
 const CORE:readonly string[]=['A','HK','US'];
 const keyOf=(r:{user_id:string;entity_id:string})=>`${r.user_id}:${r.entity_id}`;
 const str=(v:unknown)=>typeof v==='string'&&v.trim()!==''?v.trim():null;

@@ -1,6 +1,7 @@
 // View-model helpers for the /admin/dq dashboard. loadDqDashboard does the reads over a
 // TableClient (stubbable in tests); the rest is pure shaping and query validation.
 import type {Row,TableClient} from '../db/table-client';
+import {DQ_DATASET_INVENTORY} from './datasets';
 import {freshnessOf} from './freshness';
 
 export interface DqSummaryInput{
@@ -79,7 +80,17 @@ export interface DqDashboard{
  freshness:Awaited<ReturnType<typeof freshnessOf>>;
  quarantine:{rows:Row[];page:number;pageSize:number;total:number};
  reconciliations:Row[];
+ /** Dataset filter options: the registry plus every dataset this response loaded (spec 3 §6.3, E9). */
+ datasets:string[];
  refreshedAt:string;
+}
+
+/** Registry datasets ∪ loaded ones ∪ the current selection, unique and sorted (non-strings and '' are ignored). */
+export function dashboardDatasets(loaded:Iterable<unknown>,selected?:string):string[]{
+ const out=new Set<string>(DQ_DATASET_INVENTORY.map(e=>e.dataset));
+ for(const d of loaded)if(typeof d==='string'&&d!=='')out.add(d);
+ if(selected)out.add(selected);
+ return [...out].sort();
 }
 
 /**
@@ -116,6 +127,7 @@ export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date)
   freshness,
   quarantine:{rows:quarantineRows,page,pageSize,total:quarantineTotal??openQuarantineTotal},
   reconciliations,
+  datasets:dashboardDatasets([...batches,...freshness,...quarantineRows].map(r=>r.dataset),dataset),
   refreshedAt:now.toISOString(),
  };
 }

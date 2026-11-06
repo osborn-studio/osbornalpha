@@ -22,12 +22,13 @@ import type {TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {RESEARCH_LINK_DATASET,applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
+import {applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
+import {DATASETS} from '../../src/lib/dq/datasets';
 import type {EntityKeyRow,EntitySecurityRow} from '../../src/lib/entities/link-research';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const DATASET=RESEARCH_LINK_DATASET;
+const DATASET=DATASETS.entities.researchLink;
 const USAGE='usage: link-research-entities.ts [--user <uuid>] [--apply]   (user defaults to RESEARCH_OWNER_USER_ID)';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

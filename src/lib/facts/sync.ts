@@ -12,6 +12,7 @@ import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches
 import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {RULES_VERSION} from '../dq/rules';
+import {DATASETS} from '../dq/datasets';
 import {FactsDbError} from './types';
 import type {Budget,FactCandidate,FactsDb,FilingInsert,FilingRow,Market,ParseResult,RawSnapshot,ScopeRow,Source} from './types';
 import {FACT_CONCEPTS,MAPPING_GEN,MAPPING_VERSION} from './concepts';
@@ -103,7 +104,7 @@ const safeParseMessage=(raw:string):string=>{
 const dbCode=(e:unknown)=>e instanceof FactsDbError?e.code:null;
 /** lease_lost, or a run another batch already abandoned (its begin_sync_run took the lease over). */
 const isLeaseLoss=(e:unknown)=>{const c=dbCode(e);return c==='lease_lost'||c==='run_abandoned';};
-const datasetOf=(m:Market)=>m==='US'?'facts.us':'facts.cn';
+const datasetOf=DATASETS.facts;
 const sourceOf=(m:Market):Source=>m==='US'?'edgar':'tushare';
 const summary=(key:string,reason:string):BatchError=>({code:'skipped_summary',key,message:JSON.stringify({[reason]:1})});
 const MAX_SKIP_REASONS=20;

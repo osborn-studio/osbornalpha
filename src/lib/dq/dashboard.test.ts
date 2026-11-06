@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
-import {loadDqDashboard,parseDqQuery,summarizeDq,within} from './dashboard';
+import {dashboardDatasets,loadDqDashboard,parseDqQuery,summarizeDq,within} from './dashboard';
+import {DQ_DATASET_NAMES} from './datasets';
 import type {Row,SelectOptions,TableClient} from '../db/table-client';
 
 describe('summarizeDq',()=>{
@@ -18,6 +19,13 @@ describe('summarizeDq',()=>{
    openQuarantineTotal:14,
    failedReconciliationsTotal:3,
   });
+ });
+});
+
+describe('dashboardDatasets',()=>{
+ it('is the registry plus every loaded dataset and the selection, unique and sorted',()=>{
+  expect(dashboardDatasets(['macro.cpi','facts.us',null,'',42],'zz.selected')).toEqual([...new Set([...DQ_DATASET_NAMES,'macro.cpi','zz.selected'])].sort());
+  expect(dashboardDatasets([])).toEqual([...DQ_DATASET_NAMES].sort());
  });
 });
 
@@ -94,6 +102,8 @@ describe('loadDqDashboard',()=>{
   const page=calls.find(c=>c.op==='select'&&c.table==='dq_quarantine');
   expect(page?.match).toEqual({status:'open',dataset:'facts.us'});
   expect(page?.opts).toMatchObject({limit:50,offset:50,orderBy:'created_at',desc:true});
+  expect(out.datasets).toEqual(expect.arrayContaining(['entities.sec','dq.calendar.cn','reconcile.facts.lineage_same_day','facts.us']));
+  expect(out.datasets).toEqual([...out.datasets].sort());
  });
 
  it('without a dataset filter both totals come from the same global count',async()=>{

@@ -20,11 +20,12 @@ import type {TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {SEC_DATASET,applySecLoad,errorMessage,loaderOutcome,planSecLoad} from '../../src/lib/entities/load-sec';
+import {applySecLoad,errorMessage,loaderOutcome,planSecLoad} from '../../src/lib/entities/load-sec';
+import {DATASETS} from '../../src/lib/dq/datasets';
 import {MAX_SEC_FILE_BYTES,parseSecCompanyTickersExchange} from '../../src/lib/research/entity-keys/parsers';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const DATASET=SEC_DATASET;
+const DATASET=DATASETS.entities.sec;
 const USAGE='usage: load-sec-issuers.ts <company_tickers_exchange.json> [--apply] [--as-of YYYY-MM-DD]';
 
 /** A YYYY-MM-DD that names a real calendar day (2026-02-30 is rejected). */
