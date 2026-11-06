@@ -34,3 +34,6 @@
 | 14c 对账 cron、脚本、生产依赖、Step 3b 接线 | c2bd48d, 1b53450, 577486e, 39ab62e | ✅ | Changes requested → 修复（参数解析/CN 门纯函数替代派生进程测试、路由用 cnPairEnabled、记录去重） | review P1 iXBRL cron 先于对登记（移至 15a）；P2 追踪清单缺 admin 路由、脚本缺 CN 门、CN 门测试未触达 → 修复；轮 3 P2 去重比较数值列、并发 → detail 精确串比较，并发重复记为可接受（§15） | 3 |
 | 15a 样本模型 + us.companyfacts_vs_ixbrl 对 | 46a40f3, 9b4a8dc, 67552d2 | ✅（共享 secPacer、vercel 条目在此加回、失败体入桶、doc_url 无查询串） | Approved（Important：标签回退不一致改 review_item 不隔离；429 即停；超大记录大小） | challenge P2 左侧精度由规范值推导、dry-run 写生产桶、字节上限在下载后、缺必选黄金 ticker 未报 → 修复；review P1 样本清单缺失（15b 同 PR 补） | 2 |
 | 15b AAPL/MSFT iXBRL 录制、样本生成器、样本 v1 | e91bd7a, ea16739, 6caa5a4, 5a59b0f | ✅（两侧独立枚举、全部 both 属实） | Approved（minor 6 项：字节上限、目录存储不驻内存、仅保留入选 bytes、universe 失败入 unmet、usage、交易所大小写） | challenge P2 下载失败后样本静默缩水、生成证据未留存、测试不能发现键缺失；review P2 同 CIK 去重 → 修复；轮 3 P2 重取失败中止全跑 → 修复后无问题 | 3 |
+| 15c 离线集成：美股 iXBRL 对与谱系同日对（critical） | 2874999, f4854e1 | ✅（ADMIN 插入为无害偏差） | Approved（minor 3 项已修） | challenge P2 期望键取自 runner 自身、谱系套件与 dq-extensions 锁序相反 → 修复（独立键集+归属断言；lineageStage 先取 pair advisory lock）；复审无问题 | 2 |
+
+- 2026-11-06 合并 origin/main（#104 A 股真实夹具与 §15 验证）：冲突 3 处——criticalSuites 并入 sync-cn；sync.ts 取 main 的 idle 心跳逻辑并保留本分支 inventoryEntry(dataset).cadence；vercel.json 保留 CN facts-sync 与两条 reconcile cron。typecheck/lint/相关单测与 sync-cn/sync-us/facts DB 套件全绿（2329970）。计划二 §15 1/4/5 公告日验证已由 #104 完成，本计划不重做。
