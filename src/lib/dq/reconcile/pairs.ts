@@ -11,6 +11,7 @@
 // gold or sample file bytes, the CURRENT parser version. Any change since the last passing run → a different hash.
 import type {Row} from '../../db/table-client';
 import {computeInputsHash} from './inputs-hash';
+import {cnTushareVsGoldPair} from './pair-cn-gold';
 import {lineageSameDayPair} from './pair-lineage';
 import {sha256Hex} from './pair-support';
 import type {RegisteredPair} from './pair-support';
@@ -22,6 +23,7 @@ export const RECONCILE_PAIRS:Partial<Record<CyclePairId,RegisteredPair>>={
  'facts.lineage_same_day':lineageSameDayPair(),
  'us.companyfacts_vs_gold':usCompanyfactsVsGoldPair(),
  'us.companyfacts_vs_ixbrl':usCompanyfactsVsIxbrlPair(),
+ 'cn.tushare_vs_cninfo_pdf_gold':cnTushareVsGoldPair(),
 };
 
 export async function inputsHashNow(ctx:PairContext,item:Row):Promise<string>{

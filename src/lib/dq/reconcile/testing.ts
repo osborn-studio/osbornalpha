@@ -7,6 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../../db/memory-table-client';
 import type {Duration,FactInsert,FormType,Market,Source,Statement} from '../../facts/types';
 import type {MemoryFactsDb} from '../../facts/memory-facts-db';
+import type {GoldCnRow} from './gold-cn';
 
 export const reconcileTables=()=>memoryTableClient({dq_quarantine:['id'],dq_reconciliations:['id'],dq_reconcile_cycles:['pair','cycle_id'],dq_reconcile_cursor:['pair','cycle_id','issuer_id','market'],ingest_batches:['batch_id'],dq_freshness:['dataset'],issuers:['issuer_id']});
 
@@ -24,3 +25,8 @@ export async function seedPublished(db:MemoryFactsDb,o:{issuer:string;market:Mar
  await db.releaseLease(o.issuer,o.market,batch,'success',new Date(Date.now()+86_400_000).toISOString());
  return {filingId,runId:run,factIds:rows.map(r=>r.fact_id)};
 }
+/** One transcribed A-share gold row with valid defaults (annual report FY<fy>, exact printing, report_type 1). */
+export const goldRow=(ticker:string,fy:number,concept:string,o:Partial<GoldCnRow>={}):GoldCnRow=>({ticker,fiscal_year:fy,concept:concept as GoldCnRow['concept'],
+ printed_value:concept==='eps_basic'?'49.93':'1234567.89',printed_unit_multiplier:1,printed_decimals:2,column:'本期',
+ source:{document:`${ticker} ${fy} 年年度报告`,cninfo_announcement_id:`ann-${ticker}-${fy}`,announcement_date:`${fy+1}-04-03`,pdf_url:'https://static.cninfo.com.cn/finalpage/x.PDF',pdf_sha256:'c'.repeat(64),page:12,table:'主要会计数据和财务指标'},
+ tushare_source_ref:`${ticker}:${fy}1231:1:${fy+1}0403`,recorded_at:'2026-11-05T00:00:00Z',...o});
