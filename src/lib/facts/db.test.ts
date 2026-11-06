@@ -12,7 +12,11 @@ import {memoryFactsDb,numericEquals} from './memory-facts-db';
 
 factsDbContract('memoryFactsDb contract',async()=>{
  const db=memoryFactsDb();
- return {db,tables:db.tables,issuer:async()=>randomUUID(),batch:async()=>randomUUID(),expireLease:async(i,m)=>db.expireLease(i,m)};
+ return {db,tables:db.tables,issuer:async()=>randomUUID(),
+  batch:async()=>{const id=randomUUID();await db.tables.insert('ingest_batches',{batch_id:id,producer:'facts-sync',dataset:'facts.us',status:'running'});return id;},
+  user:async()=>randomUUID(),
+  expireLease:async(i,m)=>db.expireLease(i,m),
+  expireReconcileClaim:async(pair,cycleId,issuer,market)=>{await db.tables.update('dq_reconcile_cursor',{pair,cycle_id:cycleId,issuer_id:issuer,market},{claim_until:'1970-01-01T00:00:00.000Z'});}};
 });
 
 describe('memoryFactsDb specifics',()=>{
