@@ -90,3 +90,10 @@
 - 有意未做：`gold-cn.integration.test.ts` 未创建、未登记 `criticalSuites`；`vercel.json` 无 CN 对账 cron（`pair=cn.` 计数 0）；路由对 `cn.*` 在 `FACTS_CN_ENABLED!=='1'` 时 403。
 - 脚本冒烟（无 `.env.local`，不连库）：`select-cn-sample.ts --count 0` 与无参 `gold-pdf.ts` 均打印用法、退出码 2；`gold-pdf.ts` 对合成 PDF + 三行（一行匹配、一行缺失、一行 `<pending>`）的黄金文件输出 `found` 与 `missing_locally`，汇总 `distinct_pdfs=2, pending_rows=1, failed=1`，退出码 1。`select-cn-sample.ts` 的真实库运行（需 `fact_sync_scope` 的 CN 行）与 `gold-pdf.ts --upload`（需 `reconcile-raw` 桶）是 owner 动作，未在本环境执行。
 - 解除降级的 owner 步骤：(1) 指定 R1/R2（决策 C）；(2) 运行 `select-cn-sample.ts` 得到模板，按抄录指引抄录、复核、下载并上传 PDF；(3) 抄录完成后，据已有 Tushare 夹具与新录的 `disclosure_date` 响应另开任务创建并登记 `gold-cn.integration.test.ts`（N 家夹具 → CN 同步 → 本对账对 → 每黄金行恰一结果、`passed/expected >= 95%`、非 passed 全部在 `exceptions.json`），通过后再加 CN cron 并设 `FACTS_CN_ENABLED=1`。
+
+## SEC 假日与 Rule 0-3（Task 17a，2026-11-06 核对）
+
+- 规则：17 CFR 240.0-3(a)——最后一日为周六、周日或假日时，可在其后第一个营业日申报（https://www.law.cornell.edu/cfr/text/17/240.0-3 ，实施时抓取 200，原文含 "may be filed on the first business day following"）。
+- 联邦假日（5 U.S.C. 6103，按 OPM 公布的观察日）：https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/ ，实施时抓取 200，2026 与 2027 两张表逐日与 `SEC_HOLIDAYS` 一致（2026：01-01、01-19、02-16、05-25、06-19、07-03、09-07、10-12、11-11、11-26、12-25；2027：01-01、01-18、02-15、05-31、06-18、07-05、09-06、10-11、11-11、11-25、12-24）。OPM 2028 表首行 "Friday, December 31 * New Year's Day" 即 2027-12-31（2028 元旦周六的观察日），与 `SEC_HOLIDAYS[2027]` 第 12 项一致。2024、2025 两年未在页面上复核（页面只列当前及后续年份），取自规划时核对。
+- EDGAR 额外关闭日（SEC 公告：到期申报顺延至下一个运营营业日）：2024-12-24、2025-01-09（卡特总统国丧日）、2025-12-24 与 2025-12-26。两个 sec.gov 公告页（`edgar-closed-24-25-december-2024`、`edgar-will-be-closed-december-24-2025-through-december-26-2025`）实施时用描述性 User-Agent（无邮箱）各抓取一次，均返回 HTTP 403（1,924 字节，被 sec.gov 拦截），**未能联网复核**，日期取自规划时核对；未重试。2025-01-09 无单独链接，同样未复核。
+- 维护：`src/lib/dq/calendar.ts::SEC_HOLIDAYS/SEC_CLOSURES` 每年 12 月补次年；临时关闭按 SEC 公告补入 `SEC_CLOSURES`；表外年份的期限行为 `no_rule`（`none.holiday_table_missing/1`），不猜。
