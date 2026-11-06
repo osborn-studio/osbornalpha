@@ -27,6 +27,9 @@ export interface GoldCnFile{schema:typeof GOLD_CN_SCHEMA;tickers:string[];fiscal
 const TICKER=/^\d{6}\.(SH|SZ|BJ)$/,CODE=/^[A-Za-z0-9_-]{1,32}$/,DATE=/^\d{4}-\d{2}-\d{2}$/,SHA=/^[0-9a-f]{64}$/,PRINTED=/^-?\d+(\.\d+)?$/;
 const REF=/^(\d{6}\.(?:SH|SZ|BJ)):(\d{8}):(\d+):(\d{8})$/;
 const str=(v:unknown):v is string=>typeof v==='string'&&v.trim()!=='';
+const TS=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/** A real calendar date: YYYY-MM-DD or YYYYMMDD (round-trips through Date.UTC). */
+const calendar=(v:string):boolean=>{const m=/^(\d{4})-?(\d{2})-?(\d{2})$/.exec(v);if(!m)return false;const [y,mo,d]=[Number(m[1]),Number(m[2]),Number(m[3])];const t=new Date(Date.UTC(y,mo-1,d));return t.getUTCFullYear()===y&&t.getUTCMonth()===mo-1&&t.getUTCDate()===d;};
 const fraction=(v:string)=>{const i=v.indexOf('.');return i<0?0:v.length-i-1;};
 
 export const cnGoldKey=(r:Pick<GoldCnRow,'ticker'|'fiscal_year'|'concept'|'tushare_source_ref'>)=>`${r.ticker}:${r.fiscal_year}:${r.concept}:${r.tushare_source_ref.split(':')[2]??''}`;
@@ -64,7 +67,7 @@ export function validateGoldCn(json:unknown):{ok:true;file:GoldCnFile}|{ok:false
   if(!Number.isInteger(s.page)||(s.page as number)<1)e(`${at}.source.page`);
   if(typeof s.pdf_sha256!=='string'||!SHA.test(s.pdf_sha256))e(`${at}.source.pdf_sha256`);
   if(!str(s.cninfo_announcement_id))e(`${at}.source.cninfo_announcement_id`);
-  if(typeof s.announcement_date!=='string'||!DATE.test(s.announcement_date))e(`${at}.source.announcement_date`);
+  if(typeof s.announcement_date!=='string'||!DATE.test(s.announcement_date)||!calendar(s.announcement_date))e(`${at}.source.announcement_date`);
   if(!str(s.document))e(`${at}.source.document`);
   if(!str(s.table))e(`${at}.source.table`);
   if(typeof s.pdf_url!=='string'||!/^https?:\/\//.test(s.pdf_url))e(`${at}.source.pdf_url`);
@@ -73,9 +76,12 @@ export function validateGoldCn(json:unknown):{ok:true;file:GoldCnFile}|{ok:false
   else{
    if(m[1]!==r.ticker)e(`${at}.tushare_source_ref: ts_code ${m[1]} != ${r.ticker}`);
    if(m[2]!==`${r.fiscal_year}1231`)e(`${at}.tushare_source_ref: end_date ${m[2]} != ${r.fiscal_year}1231`);
+   if(!calendar(m[2]))e(`${at}.tushare_source_ref: end_date not a calendar date`);
+   if(!calendar(m[4]))e(`${at}.tushare_source_ref: ann_date ${m[4]} not a calendar date`);
    if(m[3]!==String(r.report_type??1))e(`${at}.tushare_source_ref: report_type ${m[3]} != ${r.report_type??1}`);
   }
-  if(typeof r.recorded_at!=='string'||Number.isNaN(Date.parse(r.recorded_at)))e(`${at}.recorded_at`);
+  if(r.report_type!==undefined&&(!Number.isInteger(r.report_type)||r.report_type<1))e(`${at}.report_type`);
+  if(typeof r.recorded_at!=='string'||!TS.test(r.recorded_at)||Number.isNaN(Date.parse(r.recorded_at)))e(`${at}.recorded_at`);
  });
  for(const t of tickers)for(const y of years)for(const c of CN_GOLD_CONCEPTS)if(!seen.has(`${t}|${y}|${c}`))e(`missing ${t}|${y}|${c}`);
  return errors.length>0?{ok:false,errors}:{ok:true,file:f as GoldCnFile};

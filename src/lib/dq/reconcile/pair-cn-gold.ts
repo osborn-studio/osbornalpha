@@ -40,19 +40,30 @@ export function cnTushareVsGoldPair():RegisteredPair{
    catch(e){if(e instanceof ReconcileConfigError)return null;throw e;}
   },
   async members(ctx){
-   const {file}=await loadGold(ctx);
-   const out:MemberPlan[]=[];
+   const {file,sha256}=await loadGold(ctx);
+   // one member per RECORDED OWNER (the issuer of the verified filing; a merged source stays the owner), keys of several
+   // tickers of one owner grouped; without a filing the ticker's resolved owner (redirected_from ?? issuer) is used
+   const byOwner=new Map<string,MemberPlan>();
    for(const ticker of [...file.tickers].sort()){
     const r=await resolveIssuer(ctx.tables,{ticker},{today:todayOf(ctx)});
     if(!r)throw new ReconcileConfigError('issuer_unresolved',ticker);
     const rows=file.rows.filter(x=>x.ticker===ticker).sort((a,b)=>a.fiscal_year-b.fiscal_year||a.concept.localeCompare(b.concept));
-    out.push({issuerId:r.issuer_id,market:'CN',expectedKeys:rows.map(x=>({naturalKey:cnGoldKey(x),locator:{ticker,fiscal_year:x.fiscal_year,concept:x.concept,tushare_source_ref:x.tushare_source_ref}}))});
+    for(const x of rows){
+     const filing=await ctx.db.findFilingBySourceRef('tushare',x.tushare_source_ref);
+     const owner=filing?.issuer_id??r.redirected_from??r.issuer_id;
+     const plan=byOwner.get(owner)??{issuerId:owner,market:'CN' as const,expectedKeys:[]};
+     plan.expectedKeys.push({naturalKey:cnGoldKey(x),locator:{ticker,fiscal_year:x.fiscal_year,concept:x.concept,tushare_source_ref:x.tushare_source_ref,owner_issuer_id:owner,gold_sha256:sha256}});
+     byOwner.set(owner,plan);
+    }
    }
-   return out;
+   return [...byOwner.values()];
   },
   async evaluate(ctx,member){
    const {file,sha256:goldSha}=await loadGold(ctx);
    const current=new Map(file.rows.map(r=>[cnGoldKey(r),r]));
+   // the gold bytes seen by members() are the only ones this cycle may compare against
+   const frozen=member.expectedKeys.find(k=>typeof k.locator.gold_sha256==='string')?.locator.gold_sha256;
+   if(frozen!==undefined&&frozen!==goldSha)return member.expectedKeys.map(k=>notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'gold_changed',frozen_sha256:frozen,gold_sha256:goldSha}));
    const open=await openMismatches(ctx.tables,PAIR,'CN');
    const out:ReconcileResultInput[]=[];
    for(const k of member.expectedKeys){
@@ -60,11 +71,14 @@ export function cnTushareVsGoldPair():RegisteredPair{
     if(!row){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'row_removed'}));continue;}
     const filing=await ctx.db.findFilingBySourceRef('tushare',row.tushare_source_ref);
     if(!filing){out.push(notCompared(k.naturalKey,'numeric','left_unlinked',SIDES,{tushare_source_ref:row.tushare_source_ref}));continue;}
+    if(filing.issuer_id!==member.issuerId){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'entry_changed',binding_changed:true,filing_id:filing.filing_id}));continue;}
     const docMismatch=filing.document_ref!==row.source.cninfo_announcement_id;
     const p=cnPeriodOf(row.fiscal_year,row.concept);
     const bound=open.get(k.naturalKey);
-    const rows:FactRow[]=bound?(await ctx.db.factsByIds([bound.factIds[0]])).slice(0,1)
-     :activeRows(await ctx.db.readFilingFacts(filing.filing_id,true),filing).filter(f=>f.concept===row.concept&&f.period_end===p.period_end&&f.period_start===p.period_start&&f.duration===p.duration&&f.unit===p.unit);
+    // an open item pins its fact, but only while that fact still belongs to the verified filing and the member
+    const pinned=bound?(await ctx.db.factsByIds([bound.factIds[0]])).slice(0,1):null;
+    if(pinned!==null&&(pinned.length===0||pinned[0].filing_id!==filing.filing_id||pinned[0].issuer_id!==member.issuerId)){out.push(notCompared(k.naturalKey,'numeric','incomplete_gold',SIDES,{reason:'entry_changed',binding_changed:true,filing_id:filing.filing_id,pinned_fact_ids:bound!.factIds}));continue;}
+    const rows:FactRow[]=pinned??activeRows(await ctx.db.readFilingFacts(filing.filing_id,true),filing).filter(f=>f.concept===row.concept&&f.period_end===p.period_end&&f.period_start===p.period_start&&f.duration===p.duration&&f.unit===p.unit);
     const flag=docMismatch?{document_ref_mismatch:true}:{};
     if(rows.length===0){out.push(notCompared(k.naturalKey,'numeric','left_missing',SIDES,{filing_id:filing.filing_id,...flag}));continue;}
     if(rows.length>1){out.push(notCompared(k.naturalKey,'numeric','left_ambiguous',SIDES,{fact_ids:rows.map(r=>r.fact_id),...flag}));continue;}
