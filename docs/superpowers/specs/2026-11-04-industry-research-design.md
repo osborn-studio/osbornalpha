@@ -1,6 +1,6 @@
 # 行业研究模块设计规格 · 分类成分 + 行业聚合事实 + 行业估值 + 页面
 
-日期：2026-11-06（第 6 稿 = 第 5 稿 + Codex 第五轮增量审计 V1–V12 按处方修正，见 `docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md` 与 `02-disposition.md`；修正点以"（V*n*）"标注）。第 5 稿日期 2026-11-04（审计轨迹 `docs/audits/2026-11-04-industry-research/`：01 Codex 一轮（13 项）、02 Codex 二轮（R1–R13 复核 + N1–N6）、03 处置表（含三、四轮）、05 Codex 三轮（T1–T6 + 复核）、06 Codex 四轮（第 4 稿新引入缺陷 U1–U6 + 终审"not ready"）。第 5 稿按 Codex 四轮处方逐字实施 U1–U6，**未再审**（协调者指示：不再开 Codex 轮次））
+日期：2026-11-06（第 7 稿 = 第 6 稿 + 核对项 1–3 实测结论（`docs/audits/2026-11-06-industry-research/03-tushare-verification.md`，以「（K*n*）」标注）；第 6 稿 = 第 5 稿 + Codex 第五轮增量审计 V1–V12 按处方修正，见 `docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md` 与 `02-disposition.md`；修正点以"（V*n*）"标注）。第 5 稿日期 2026-11-04（审计轨迹 `docs/audits/2026-11-04-industry-research/`：01 Codex 一轮（13 项）、02 Codex 二轮（R1–R13 复核 + N1–N6）、03 处置表（含三、四轮）、05 Codex 三轮（T1–T6 + 复核）、06 Codex 四轮（第 4 稿新引入缺陷 U1–U6 + 终审"not ready"）。第 5 稿按 Codex 四轮处方逐字实施 U1–U6，**未再审**（协调者指示：不再开 Codex 轮次））
 状态：草案，待 owner 评审（§16 七项决策；A（Tushare/申万授权）、E（A 股事实公开宇宙）决定本规格能否进入计划；G 只决定历史重建期的显示方式）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一；§1.2 把分类加载与授权交给本规格；§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二**第 8 稿**：`fact_sync_runs`、`read_facts` 信封 `{state_rev, rows, truncated}`、`fact_state_rev()`、`derive.ts` 版本一致性规则、`reconcile_fact_sync_scope`）；`docs/superpowers/specs/2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md`（规格三：`resolveIssuer(asOf)`、`valid_from_method/valid_to_method`、`tickerAsOf`；其 §1.2 把 **A 股全宇宙发行人装载**归到本规格）；`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（F4 §3.5：`InputRef{kind, ref, snapshot, hash=digest(snapshot), available_at, origin}`，`table_rows` 快照 `{table, natural_key, rows}`，公共表白名单）；`docs/superpowers/specs/2026-11-04-company-research-design.md` §10.5；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（UI 约定）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。逐条对照：
@@ -296,9 +296,9 @@ industry_sync_scope                               -- SIC 调度（同规格二 f
 **来源记录与解析分离。** 适配器只产出 `industry_source_memberships`（不可变、带 `raw_hash`/`locator`）；解析器把当前来源记录映射为 `issuer_industry_memberships`。
 
 **申万（`providers/tushare-sw.ts`）**
-- 两遍（默认 `is_new='Y'` 与 `is_new='N'`）按 31 个 L1 循环、`has_more` 翻页、每页一个快照。**核对项 3**（I-1b 第一步）：两遍并集是否覆盖全部进出、`out_date` 是否为剔除日（窗口 `[in_date, out_date)`）、2021 版生效前的 `in_date` 含义、`parent_code` 命名空间；结论写 runbook 并决定 §4.6 的历史起点。
+- 两遍（默认 `is_new='Y'` 与 `is_new='N'`）按 31 个 L1 循环、`has_more` + `limit/offset` 翻页、每页一个快照；进出覆盖只在 31×2 遍的全集上成立，衔接检查跨 L1 做（K3）。成员接口只给 `index_code` 形式的 `l1/l2/l3_code`；分类表上下级用 `industry_code` 连接（`parent_code` 属 `industry_code` 命名空间，经同批映射为 `index_code` 后写入 `parent_code`，原值存 `attributes.parent_industry_code`）；代码别名表 `SW2021_CODE_ALIASES = {'850412.SI':'850401.SI'}`（特钢Ⅲ：成员接口与分类接口不一致；别名进 `METHOD_CONFIG` 并随方法版本），未在分类表中的 l3 代码隔离 `classification_code_unknown`。`stock_basic` 必须显式取 `list_status` = `L`、`D`、`P` 三遍（默认只返回 L；K-§17.1）。**核对项 3**（I-1b 第一步）：两遍并集是否覆盖全部进出、`out_date` 是否为剔除日（窗口 `[in_date, out_date)`）、2021 版生效前的 `in_date` 含义、`parent_code` 命名空间；结论写 runbook 并决定 §4.6 的历史起点。
 - 来源记录键 `(scheme, version, source, ts_code, l3_code, in_date)`；同键再次出现：全同 → `duplicates`；任何差异（含 `out_date` null→日期、日期更正）→ 新记录 `current`、旧记录 `superseded`（`superseded_by`），非"null→日期"的差异另隔离 `source_membership_changed`（供人工看原因）。新 `current` 记录的 `issuer_id` 为 null（待解析），旧记录的归属行在解析应用时被取代（§4.5）。
-- **解析与应用是一个事务**（`resolveSourceMemberships` 只做计算，写入全部在 `apply_industry_memberships` 内）：对每条 `current` 且 `issuer_id is null` 的记录：规格三落地前 `resolveIssuer(tables, {ticker: ts_code}, {today})`（`src/lib/entities/resolve.ts:81`；`resolution.method='today'`），规格三的 `asOf` 选项落地后 `resolveIssuer(tables, {ticker: ts_code}, {asOf: in_date})`（`method='as_of'`）（V10）；解析到发行人 → 调 `apply_industry_memberships(…, p_rows=三行, p_source_ids=[该记录 id], p_resolution)`，函数在同一事务内写归属行并把来源记录的 `issuer_id/resolution` 置好；函数抛错 → 事务回滚，来源记录 `issuer_id` 仍为 null，`resolution_error` 记录原因（下次运行重试，不跳过；`n_unresolved` 仍计入）。解析不到 → `resolution_error={code:'no_issuer'}`。三行归属：`valid_from=in_date`，`valid_to=out_date`，`available_date=in_date`，`valid_to_available_date=out_date`，`provenance={availability:'effective_date_assumed', source_membership_id, raw_hash, locator}`。
+- **解析与应用是一个事务**（`resolveSourceMemberships` 只做计算，写入全部在 `apply_industry_memberships` 内）：对每条 `current` 且 `issuer_id is null` 的记录：规格三落地前 `resolveIssuer(tables, {ticker: ts_code}, {today})`（`src/lib/entities/resolve.ts:81`；`resolution.method='today'`），规格三的 `asOf` 选项落地后 `resolveIssuer(tables, {ticker: ts_code}, {asOf: in_date})`（`method='as_of'`）（V10）；解析到发行人 → 调 `apply_industry_memberships(…, p_rows=三行, p_source_ids=[该记录 id], p_resolution)`，函数在同一事务内写归属行并把来源记录的 `issuer_id/resolution` 置好；函数抛错 → 事务回滚，来源记录 `issuer_id` 仍为 null，`resolution_error` 记录原因（下次运行重试，不跳过；`n_unresolved` 仍计入）。解析不到 → `resolution_error={code:'no_issuer'}`。三行归属（K3：`out_date` 是**最后一个成员日（含）**，退市不关窗）：`valid_from=in_date`，`valid_to = min(out_date + 1 日, stock_basic.delist_date)`（两者皆空 → null），`available_date=in_date`，`valid_to_available_date = valid_to`；`in_date > delist_date` → 不写归属，隔离 `membership_after_delist`；`provenance={availability:'effective_date_assumed', source_membership_id, raw_hash, locator}`。
 - **纠正路径**：(a) 来源记录被取代（§4.4 第二条）：新记录解析应用时，函数把旧记录对应的 `ok` 归属行置 `superseded`（`superseded_by` 指向新行）后插入新行（§4.5 的取代转换）；(b) 规格三落地后以 `as_of` 重跑解析，发行人不同 → 现有三行 `status='quarantined'`（隔离 `membership_reassigned`），新归属以新 `batch_id` 写入；清单与 run 不回改。
 
 **SIC（`providers/sec-sic.ts`）**：同第 2 稿（范围由 `fact_sync_scope(market='US')` 同步到 `industry_sync_scope`；`valid_from=available_date=观察日`；变化关旧开新；同日二次变化隔离 `same_day_change`；`fiscalYearEnd` 追加到 `issuers.provenance.sec_submissions`）。SIC 不产生来源记录（`source_membership_id` null），`provenance` 直接记 `raw_hash`/`locator`。写入经 `apply_sic_memberships`（§4.3 函数表；V2：归属表对 `service_role` 无直接写）。
@@ -407,7 +407,7 @@ export interface IndustryDb {
 
 期望网格 `expected_grid`：L1 代码（分类表）× 期间（历史起点至 `facts_as_of` 的每个 3/6/9/12 月末；`gross_margin` 只 12-31）× 指标。每格一行：可算 → `ok`；不可算 → `missing` + `missing_reason ∈ {empty_set, zero_denominator, no_members, financial_excluded, unresolved_over_limit}`。显示阈值 `DISPLAY_MIN_COVERAGE=0.8`（`n_with_data/(n_members+n_unresolved)`）与 `DISPLAY_MAX_UNRESOLVED=0.05`；不满足的 `ok` 格页面显示"覆盖不足 x/y"/"未解析 z"，值在接口里仍返回。
 
-`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date > on)`、`in_date <= knownBy` 的**去重 ts_code** 数。
+`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date >= on)`（K3：`out_date` 含当日）、`in_date <= knownBy` 的**去重 ts_code** 数。
 
 ### 5.3 输入清单（manifest）与离线重算
 
@@ -465,7 +465,7 @@ export interface IndustryDb {
   4. 无当前观测 → 直接插入 `ok`。
   5. 每个分支都在同一事务内写回执（`inserted` / `duplicate` / `superseded_previous`）。测试（V7）：A/E1 → 无变化 A/E2 → B/E3 → 重试 E2：B 仍为当前，E2 结果 `duplicates`。
   `raw_hash` 只作证据，不参与身份。估值取 `status='ok'` 的当前观测，并把 `observation_id/observed_at` 冻结进清单；修正后的重算产生新 run 行（可得时刻规则见 §5.3）。测试：A→B→A 三个不同 `fetch_event_id` → 三条观测，当前为第三条；同一 `fetch_event_id` 重试 → `duplicates`；V7 用例见上。
-- **估计对象**：发行人 D 日市值 = 其**唯一**主 A 股 ticker（`issuer_securities.is_primary and share_class='A'`，D 日有效；0 或 >1 个 → 角色 `excluded:ambiguous_primary`）的 `close × total_share`；`total_share` 的口径（是否含 H/B 股股本）是 **核对项 2**（I-3 前置，用一家 A+H 公司对照交易所公布总股本），结论写入 `METHOD_CONFIG.total_share_basis` 并随方法版本。
+- **估计对象**：发行人 D 日市值 = 其**唯一**主 A 股 ticker（`issuer_securities.is_primary and share_class='A'`，D 日有效；0 或 >1 个 → 角色 `excluded:ambiguous_primary`）的 `close × total_share`；`total_share` 的口径（是否含 H/B 股股本）是 **核对项 2**（已完成，K2：`daily_basic.total_share` = 全部股份类别 A+H+B 发行总数，`float_share` = 流通 A 股；招行、平安、工行、张裕与月报逐股一致），`METHOD_CONFIG.total_share_basis='all_classes_incl_h_b'` 并随方法版本。`security_marks` 增列 `free_share numeric`（可空，Tushare `free_share` 万股 × 10000）供 §6.4 将来的申万口径对照（K1）。
 - 期望日期 `expected_dates` 由交易日历生成（Tushare `trade_cal`，字段实施时核对）：全历史每月最后一个交易日 + 最近 2 年每周最后一个交易日；`marks` 任务每次补齐**所有**尚未入库的期望日期（不只是上周五）；空响应 → `skipped_summary(no_rows)` 并在回执标出（不以空响应判定非交易日）。
 - 规则：`identityRule('mcap_vs_tushare', close×total_share, total_mv×10000, 0.001)`（同一来源内算术一致性，不是独立核对）失败 → `quarantined`；`rangeRule('close_range', 0.01, 100000)`。独立核对：§13.4 的交易所公布总股本/收盘价金集。
 - 不存 Tushare `pe/pb/ps`。
@@ -486,7 +486,7 @@ export interface IndustryDb {
 
 ### 6.4 运行、两级门控、发布
 
-- `comparator_basis` 来自 **核对项 1**（`sw_daily` 的 `pe/pb` 是 TTM 还是静态、整体法、负值处理；以申万官网发布说明为准）；`unknown` 时 run 可建但 `pe_*` 全部 `series_qualified=false`（只 `pb` 可能发布，若核对也确认 pb 口径）。**核对未完成，I-3 不进计划。**
+- `comparator_basis` 来自 **核对项 1**（K1 实测：`sw_daily.pe` 是 **TTM**，但按申万算法——A 股自由流通市值加权调和平均、申万季度日历选 TTM、亏损股市值留在分子；按该算法重建 10 格全部在 0.5% 内；§6.3 现行「Σ总市值/ΣTTM」与官方值差约 +17%（银行）、−3.9%～+3.2%（食饮）；`pb` 口径未确认）。因此 **§6.3/§6.4 需修订后 I-3 才能进计划**：owner/规格作者在 (a) 新增按申万算法的对照指标 `pe_ttm_sw`（需 `security_marks.free_share`，本稿已加列）、现有 `pe_ttm` 对照标 `not_applicable`，与 (b) 保留现公式、`pe_*` 对照全部 `not_applicable`（无官方锚点 → 不发布）之间选择（**新 owner 决策 H**）；`pb` 在 PB 核对完成前 `series_qualified=false`。**本稿 I-3 仍不进计划**（表、函数与标记采集照常落地）。
 - 每 run 完整快照（全部 `expected_dates` × 行业 × 指标，每格一行 `ok|missing`，经 `stage_industry_valuations` 暂存，`updated_at` 为 null 直到激活）；`recompute_from = 今天 − 400 天`（周运行）或历史起点（季度全量 / `--recompute-from` 手动）；更早日期从上一活跃 run **承接**（行复制为本 run 的行、清单共享），**承接条件**：上一活跃 run 的 `method_version`、`config_hash`、`formula_version`、`comparator_basis` 与本 run 全部相同，否则本 run 必须从历史起点全量重算（`recompute_from = 历史起点`，承接不允许；运行时自动降级并在回执记 `full_recompute_forced`）。`recompute_from` 只是覆盖元数据，不参与过期判定。
 - **逐日对照**（写 `industry_valuation_pairs`，service_role）`pair_status`：`within`（官方当前观测存在且 `|自算/官方 − 1| ≤ 0.01`）、`outside`（存在但超差 → 隔离 `valuation_mismatch`）、`no_official`、`no_computed`（本格 `missing`）、`invalid_denominator`、`not_applicable`（`market_cap`，以及与 `comparator_basis` 不匹配的 `pe_*`）。承接的日期也在本 run 内**重新对照**（官方观测可能已修正）。
 - **序列资格** `series_qualified(code, metric)`：对本 run 的完整快照（含承接日期）在 `expected_dates` 上计算：`n_pairs = within + outside` ≥ 0.9 × `n_expected`，且 `within / n_pairs ≥ 0.95`，且 `n_pairs ≥ 24`。每个 run 重新计算，不承接。
@@ -695,9 +695,10 @@ type IndustryTableRows = InputRef<'table_rows',
 | **决策 E**：A 股事实范围 = 行业事实宇宙（§4.10，= 规格二决策 A 的"公开宇宙"定义；配额与回填时间另算） | owner | I-1a 前 | 未选 → I-2/I-3 不启用 |
 | **决策 F**：`anon` 与 `authenticated` 是否同等可读 | owner | I-0 前 | 同等 |
 | **决策 G**：历史重建期（`history_class='reconstruction'`，v1 申万全部如此）是"显示 + 徽标"还是"抑制到有公告日证据与 `as_of` 解析为止" | owner | I-2 前 | 显示 + 徽标 |
-| **核对项 1**（I-3 前置）：`sw_daily` `pe/pb` 口径 → `comparator_basis` | owner / 实施者 | I-3 计划前 | 未完成 → I-3 不进计划 |
-| **核对项 2**（I-3 前置）：`daily_basic.total_share` 是否含 H/B 股 → `total_share_basis` | 实施者 | I-3 计划前 | 同上 |
-| **核对项 3**（I-1b 第一步）：`index_member_all` 两遍覆盖、`out_date`、2021 前 `in_date`、`parent_code` 命名空间 → 历史起点与 `history_class` | 实施者 | I-1b | — |
+| **核对项 1**（I-3 前置）：`sw_daily` `pe/pb` 口径 → `comparator_basis` | 实施者 | 2026-11-06 完成（K1）：`ttm`（申万算法）；`pb` 未定 | §6.4 需修订 → 决策 H |
+| **决策 H**：估值对照口径 (a) 申万算法对照指标 `pe_ttm_sw` / (b) 无对照不发布 | owner | I-3 计划前 | 未选 → I-3 不进计划 |
+| **核对项 2**：`daily_basic.total_share` 是否含 H/B 股 → `total_share_basis` | 实施者 | 2026-11-06 完成（K2）：`all_classes_incl_h_b` | — |
+| **核对项 3**：`index_member_all` 两遍覆盖、`out_date`、2021 前 `in_date`、`parent_code` 命名空间 → 历史起点与 `history_class` | 实施者 | 2026-11-06 完成（K3）：31/134/346；`parent_code`=`industry_code`；`out_date` 含当日；退市不关窗；2021-07-30 前为回溯映射；别名 850412→850401 | — |
 | `TUSHARE_TOKEN`；Mac Studio launchd；生产迁移与首轮脚本；黄金集抄录；卖方分析师抽样；Claude Design canvas | owner | 各工作包前 | — |
 
 ---
@@ -720,6 +721,8 @@ type IndustryTableRows = InputRef<'table_rows',
 ## 18. 实施记录与偏差
 
 （计划落地后补记，格式同规格一 §14。）
+
+第 7 稿（2026-11-06）：核对项 1–3 与 §17.1 实测（`03-tushare-verification.md`，真实录制夹具 36 份）——K3 窗口 `valid_to=min(out_date+1, delist_date)`、`membership_after_delist`、`stock_basic` 显式 L/D/P、别名表、`parent_code` 命名空间、`n_unresolved` 的 `out_date >= on`；K2 `total_share_basis`；K1 `comparator_basis=ttm`（申万算法）使 §6.3 公式无法通过对照 → 新 owner 决策 H，I-3 仍不进计划，`security_marks.free_share` 先行加列。§17.1 已答：退市公司 `stock_basic`（需 `list_status='D'`）与 `income` 都可取。
 
 第 6 稿（2026-11-06）相对第 5 稿的变化，均来自 Codex 第五轮增量审计（`docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md`，处置表 `02-disposition.md`）：V1 取消 `industry_publisher`，沿用计划二"迁移角色拥有表与函数 + 撤销 `service_role` 写权限"的模型；V2 run 表写权限撤销、建/失败/覆盖/授权/来源记录/SIC 全部经函数，状态转换与元数据冻结；V3 行业宇宙并入 `desiredCn`（开关 `FACTS_CN_INDUSTRY_UNIVERSE`）；V4 CN 启用依赖；V5 清单保留 `MetricRow.inputs`；V6 每 run 每发行人一个事实信封；V7 观测回执表；V8 剪除路径与冻结触发器兼容；V9 迁移 `20261111090000`/`20261111091000`；V10 调用签名；V11 复用 `issuers_cninfo_idx`；V12 开篇可得时刻规则。另（指挥会话自查）：清单 GC 拆为"列候选 + TS 删桶对象 + 删索引"，因为迁移不能引用 `storage.objects`。
 
