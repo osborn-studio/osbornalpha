@@ -1,0 +1,14 @@
+{
+ "recorded_at": "2026-11-06T12:52:28.163Z",
+ "sha256": "03cb299a761f76f28da5a0446a3bac960a022bfb0decdcb9cf7d287ec3069159",
+ "http_status": 200,
+ "has_more": false,
+ "params": {
+  "ts_code": "000858.SZ",
+  "start_date": "20160101",
+  "report_type": "4",
+  "limit": 2000,
+  "offset": 0
+ },
+ "fields": "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,is_calc,n_cashflow_act,n_cashflow_inv_act,n_cash_flows_fnc_act,c_pay_acq_const_fiolta,c_pay_dist_dpcp_int_exp,n_incr_cash_cash_equ"
+}

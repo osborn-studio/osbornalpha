@@ -14,7 +14,7 @@
  * and an issuer without a derivable fetch key is reported as scope_unresolved (exit 1).
  * --no-db (US only, with --cik) runs the dry run against empty in-memory stores: a network-only
  * smoke that needs no environment at all.
- * CN is gated like the cron route: --market CN --apply needs FACTS_CN_ENABLED=1 (dry run is free).
+ * CN is on by default like the cron route; FACTS_CN_ENABLED=0 is the kill switch (--market CN --apply then exits 2; dry run is free).
  * Scope retirement is guarded in SQL (reconcile_fact_sync_scope p_snapshot_at), so overlapping runs cannot
  * retire an issuer another run just activated; per-issuer leases serialise the actual fetching.
  * Exit 0 on success, 1 when the batch (or any issuer in a dry run) failed, 2 on bad arguments.
@@ -71,7 +71,8 @@ function memoryDeps(codeVersion:string):SyncDeps{
 
 async function main(){
  const args=parseArgs(process.argv.slice(2));
- if(args.market==='CN'&&args.apply&&process.env.FACTS_CN_ENABLED!=='1'){console.error('CN --apply is disabled: set FACTS_CN_ENABLED=1');process.exit(2);}
+ if(args.market==='CN'&&args.apply&&process.env.FACTS_CN_ENABLED==='0'){console.error('CN --apply is disabled: FACTS_CN_ENABLED=0');process.exit(2);}
+ if(args.market==='CN'&&!process.env.TUSHARE_TOKEN){console.error('CN needs TUSHARE_TOKEN (dry run and --apply both fetch from Tushare)');process.exit(2);}
  const codeVersion=resolveCodeVersion({allowGit:true})??(args.apply?null:'dry-run');
  if(!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
  let deps:SyncDeps,issuerIds:string[]|undefined;
