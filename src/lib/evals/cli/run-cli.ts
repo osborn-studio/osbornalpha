@@ -17,6 +17,7 @@ import {exitCodeOf} from '../summary';
 import type {EvalEnv,EvalKind,EvalMode,EvalModule,EvalReport,ExitCode,GoldLock,GoldSet,RunOutcome} from '../types';
 import {evaluatorVersion} from '../version';
 import {buildRunDeps} from './deps';
+import {runReplay} from './run-replay';
 import type {RunDeps} from './deps';
 
 export const USAGE='usage: run.ts --kind <kind> --module <module> [--set <path>] [--pair <id>] --mode ci|report [--write-db [--verify-artifacts] [--verify-sources]] [--out <dir>] [--limit N] [--case <id>]... [--resume <run_id>] [--http]';
@@ -98,7 +99,7 @@ export const runOfficial:KindRunner=async(args,deps)=>{
 };
 /** Runner per kind. Task 11 adds replay_consistency; dual_source, reference_regression, extraction_gold and judgment_calibration stay absent —
  *  kinds/registry.ts (Task 14) is the one enablement table and records why; its test asserts these keys equal the enabled kinds. */
-export const KIND_RUNNERS:Partial<Record<EvalKind,KindRunner>>={official_reconciliation:runOfficial};
+export const KIND_RUNNERS:Partial<Record<EvalKind,KindRunner>>={official_reconciliation:runOfficial,replay_consistency:runReplay};
 
 const message=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,500);
 const refOf=(path:string)=>relative(process.cwd(),path).split('\\').join('/');

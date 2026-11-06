@@ -8,8 +8,14 @@ const lines=yml.split('\n');
 
 describe('ci.yml F6 block',()=>{
  it('has balanced # F6 begin / # F6 end markers',()=>{
-  expect(lines.filter(l=>l.trim()==='# F6 begin').length).toBe(3);
-  expect(lines.filter(l=>l.trim()==='# F6 end').length).toBe(3);
+  expect(lines.filter(l=>l.trim()==='# F6 begin').length).toBe(4);
+  expect(lines.filter(l=>l.trim()==='# F6 end').length).toBe(4);
+ });
+ it('publishes the frozen replay report digest after test:db and fails without one (P1-10, Task 11)',()=>{
+  const i=yml.indexOf('run: npm run test:db');const j=yml.indexOf('F6 frozen replay report digest');
+  expect(i).toBeGreaterThan(0);expect(j).toBeGreaterThan(i);
+  const step=yml.slice(j,yml.indexOf('# F6 end',j));
+  expect(step).toContain('if: always()');expect(step).toContain('sha256sum');expect(step).toContain('"kind":"replay_consistency"');expect(step).toContain('exit 1');
  });
  it('checks out the full history',()=>{
   const at=lines.findIndex(l=>l.includes('uses: actions/checkout@v4'));

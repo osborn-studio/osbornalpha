@@ -17,11 +17,31 @@ import type {FactsDb} from '../facts/types';
 import {factsReader,privilegedFactsReader} from './adapters/facts';
 import {memoryRawStorage} from './adapters/provenance';
 import {LANDED_PARSERS} from './cli/deps';
-import {checkLock,loadGoldSet} from './gold/load';
+import {checkLock,loadGoldSet,loadRecorders} from './gold/load';
 import {SETUP_CODE_VERSION,buildFrozenDb,loadSetup} from './replay/setup';
 import type {FrozenWorld} from './replay/setup';
 import {runGoldSet} from './run-gold-set';
 import type {CaseReport,EvalEnv,GoldCase,GoldLock,GoldSet,ModuleReader,ReportEnvironment} from './types';
+// Task 11 begin (imports)
+import {cpSync as cpReplay,mkdtempSync as mkdtempReplay,readFileSync as readReplayFile,rmSync as rmReplay,writeFileSync as writeReplayFile} from 'node:fs';
+import {tmpdir as replayTmpdir} from 'node:os';
+import {join as joinReplay} from 'node:path';
+import {Pool as ReplayPool} from 'pg';
+import {randomUUID as replayRunId} from 'node:crypto';
+import {projectionHash as projectionHashForReplay} from './canonical-json';
+import {evaluateReplay,replaySetOf,replaySummaryContext} from './kinds/replay';
+import type {SetupCheck} from './kinds/replay';
+import {buildReport as buildReplayReport,writeReportFiles as writeReplayReportFiles} from './report';
+import {projectRequest,resolveFactsSubject} from './projections/facts';
+import {parseReplayFile,recordedCases} from './replay/fixture';
+import type {FrozenReplayCase} from './replay/fixture';
+import {loadLedger} from './replay/ledger';
+import {buildFrozenDb as buildFrozenDbForReplay,groupSealedSetups,loadSetup as loadSetupForReplay} from './replay/setup';
+import type {FrozenSetup as FrozenSetupForReplay} from './replay/setup';
+import {summarize as summarizeReplay} from './summary';
+import type {CaseReport as ReplayCaseReport,ReplayRequest as ReplayRequestForReplay,Subject as ReplaySubject} from './types';
+import {evaluatorVersion as replayEvaluatorVersion} from './version';
+// Task 11 end (imports)
 
 const enabled=!!process.env.S4_TEST_STATE;
 const SETUP='src/lib/evals/fixtures/replay/f6-base.setup.json';
@@ -156,3 +176,91 @@ describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)'
   expect(u.report.summary).toMatchObject({gate:'incomplete',coverage:{missing_required:1,not_visible:0}});expect(u.exitCode).toBe(3);
  },120_000);
 });
+
+// Task 11 begin — replay frozen over the committed cases (spec §5.3.1, §13.3)
+describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11)',()=>{
+ const FROZEN='src/lib/evals/fixtures/replay/facts.frozen.json';
+ const LEDGER='src/lib/evals/fixtures/replay/explanations.json';
+ let replayPool:ReplayPool;
+ beforeAll(()=>{replayPool=new ReplayPool({connectionString:JSON.parse(readReplayFile(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
+ afterAll(async()=>{await replayPool?.end();});
+ const frozenCases=()=>recordedCases(parseReplayFile(JSON.parse(readReplayFile(FROZEN,'utf8')),{allowDrafts:false,file:FROZEN})) as FrozenReplayCase[];
+ const ctxOf=(check:SetupCheck)=>({mode:'frozen' as const,evaluatorCodeVersion:replayEvaluatorVersion().sha,checkSetup:async()=>check});
+
+ it('every committed frozen case replays identical; the real EvalReport is built, and written to reports/evals/ under CI (P1-10)',async()=>{
+  const cases=frozenCases();const ledger=loadLedger(LEDGER,{recorders:loadRecorders().recorders});
+  expect(cases.length).toBeGreaterThanOrEqual(10);
+  const startedAt=new Date().toISOString();
+  // P1-6: every case's setup is recomputed before grouping; nothing may be mismatched in the committed file
+  const {groups,mismatched}=groupSealedSetups(cases);
+  expect(mismatched.map(m=>m.case.case_id)).toEqual([]);
+  const reports:ReplayCaseReport[]=[];
+  for(const group of groups){
+   const setup=group.setup;
+   const built=await buildFrozenDbForReplay(replayPool,setup);
+   if(!built.ok){reports.push(...await evaluateReplay(group.cases,async()=>{throw new Error('setup not built');},ledger,ctxOf({ok:false,mismatch:[built.mismatch]})));continue;}
+   const tables=built.world.tables;
+   const deps={db:built.world.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(tables,s,t)};
+   try{reports.push(...await evaluateReplay(group.cases,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));}
+   finally{await built.world.close();}
+  }
+  expect(reports.filter(r=>r.outcome.result!=='identical').map(r=>({case_id:r.case_id,outcome:r.outcome,changed:r.detail.changed_fields??null}))).toEqual([]);
+  const s=summarizeReplay(reports,replaySummaryContext(false));
+  expect(s.population).toBe(cases.length);
+  expect(s.correctness.pass).toBe(cases.length);
+  expect(s.gate).toBe('pass');
+  // P1-10: the release evidence is this run's real report (mode ci), built with the same builder as run.ts
+  const v=replayEvaluatorVersion();const now=new Date();
+  const report=buildReplayReport({runId:replayRunId(),kind:'replay_consistency',mode:'ci',privileged:false,set:replaySetOf(FROZEN,new Uint8Array(readReplayFile(FROZEN)),'facts'),
+   env:{today:now.toISOString().slice(0,10),now:()=>now,evaluatorCodeVersion:v.sha,dirty:v.dirty},environment:{db_host:null,app_origin:null,db_state_rev:null},
+   startedAt,finishedAt:now.toISOString(),verified:{artifacts:false,sources:false},summary:s,cases:reports});
+  expect(report).toMatchObject({kind:'replay_consistency',mode:'ci',set:{id:'replay/facts.frozen',path:FROZEN},summary:{gate:'pass',population:cases.length}});
+  if(process.env.CI){
+   const files=writeReplayReportFiles(report);
+   expect(files.json).toContain('reports/evals/');expect(files.sha256).toMatch(/^[0-9a-f]{64}$/);
+  }
+ },600000);
+ it('R2-2: build → mutate ZZEVC (10-K/A + same-day conflict) → rebuild the SAME setup: the rebuild is an isolated database in the declared state',async()=>{
+  const setup=loadSetupForReplay('src/lib/evals/fixtures/replay/f6-base.setup.json');
+  const zzevc:ReplayRequestForReplay={issuer:{market:'US',cik:'9990603'},concepts:['revenue'],asOf:'2026-11-19',durations:['12M']};
+  const project=(w:{db:Parameters<typeof projectRequest>[0]['db'];tables:Parameters<typeof resolveFactsSubject>[0]})=>projectRequest({db:w.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(w.tables,s,t)},zzevc,setup.today);
+  const a=await buildFrozenDbForReplay(replayPool,setup);
+  if(!a.ok)throw new Error(a.mismatch);
+  try{
+   const declared=await project(a.world);
+   await a.world.sync('CIK0009990603.amended.json');await a.world.sync('CIK0009990603.conflict.json');
+   const mutated=await project(a.world);
+   expect(projectionHashForReplay(mutated)).not.toBe(projectionHashForReplay(declared));
+   const b=await buildFrozenDbForReplay(replayPool,setup);
+   if(!b.ok)throw new Error(b.mismatch);
+   try{
+    expect(b.world.pool).not.toBeNull();expect(b.world.pool).not.toBe(a.world.pool);
+    expect(await project(b.world)).toEqual(declared);   // the rebuild never sees the first build's mutations
+   }finally{await b.world.close();}
+  }finally{await a.world.close();}
+ },300000);
+
+ it('one flipped fixture byte (temp copy of the tree) → read_error(setup_mismatch), nothing projected',async()=>{
+  const root=mkdtempReplay(joinReplay(replayTmpdir(),'f6-replay-tamper-'));
+  try{
+   cpReplay('src/lib/evals/fixtures',joinReplay(root,'src/lib/evals/fixtures'),{recursive:true});
+   cpReplay('src/lib/facts',joinReplay(root,'src/lib/facts'),{recursive:true});
+   const c=frozenCases()[0];
+   const setup=c.setup as unknown as FrozenSetupForReplay;
+   const target=joinReplay(root,setup.fixture_manifest[0].path);
+   const bytes=readReplayFile(target);
+   const at=bytes.indexOf('"val":')+6;
+   let i=at;while(i<bytes.length&&(bytes[i]<0x30||bytes[i]>0x39))i++;
+   expect(i).toBeLessThan(bytes.length);
+   bytes[i]=bytes[i]===0x39?0x38:bytes[i]+1;   // change one digit of the first value
+   writeReplayFile(target,bytes);
+   const built=await buildFrozenDbForReplay(replayPool,setup,root);
+   expect(built.ok).toBe(false);
+   const check:SetupCheck=built.ok?{ok:true,setupSha256:built.world.setup.setup_sha256}:{ok:false,mismatch:[built.mismatch]};
+   const [r]=await evaluateReplay([c],async()=>{throw new Error('must not project');},[],ctxOf(check));
+   expect(r.outcome).toEqual({result:'read_error',reason:'setup_mismatch'});
+   expect((r.detail.mismatch as string[]).length).toBeGreaterThan(0);
+  }finally{rmReplay(root,{recursive:true,force:true});}
+ },120000);
+});
+// Task 11 end

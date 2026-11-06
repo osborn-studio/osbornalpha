@@ -88,6 +88,24 @@ jobs:
         run: npm run test:db
         env:
           S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      # F6 begin
+      - name: F6 frozen replay report digest (spec §10)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=()
+          for f in reports/evals/*.json; do
+            if grep -q '"kind":"replay_consistency"' "$f" && grep -q '"mode":"ci"' "$f"; then found+=("$f"); fi
+          done
+          echo "### F6 frozen replay report" >> "$GITHUB_STEP_SUMMARY"
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "no frozen replay report under reports/evals/" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          { echo '```'; sha256sum "${found[@]}"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # F6 end
       - name: Fresh and seeded migration rehearsal
         run: npm run test:migrations
         env:

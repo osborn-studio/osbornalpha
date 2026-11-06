@@ -11,3 +11,13 @@
 - Files: src/lib/evals/projections/facts.ts, src/lib/evals/replay/{fixture,ledger}.ts, src/lib/evals/kinds/replay.ts, src/lib/evals/test-support/memory-facts.ts (+ tests).
 - Decisions: projections read history=true; diff notation facts[<concept>/<start>..<end>/<duration>/<unit>/<consolidation>/<available_date>/<source_ref>].<field>, null = empty segment, one-sided row = bare path; unprivileged ledger hit = explained_diff; ledger structural errors = gold_invalid.
 - Not wired here: Task 7 factsReader.project → projectRequest (CCR 2).
+
+## Task 11 — record-replay, frozen fixtures, frozen DB replay, route equivalence
+
+- 12 frozen cases over ZZEVA (CIK 9990601) / ZZEVB (CIK 9990602), recorded by scripts/evals/record-replay.ts against a fresh local database from committed code (da8a299d); a second fresh database reproduced all 12 hashes (`unchanged`). explanations.json = [].
+- evals-facts.integration.test.ts: frozen replay all identical, gate pass (CI=1 also writes reports/evals/<run_id>.json); rebuild of the same setup is an isolated database; one flipped fixture byte -> read_error(setup_mismatch).
+- route-equivalence.test.ts: facts (3 requests) and metrics projections equal between the database path and the public route JSON.
+- cli/run-replay.ts: run.ts --kind replay_consistency (ci = frozen over S4_TEST_STATE, report = live anon / --write-db privileged); factsReader.project wired through withProjector (projectWithRev).
+- ci.yml: F6 frozen replay report digest step after test:db.
+- Deviations from plan text: ledger loads take the injected policy (loadRecorders().recorders); live recording / replay use projectWithRev so state_rev binds the projection; record.test self-approval case uses added_by=approved_by=owner (an implementer approver no longer parses); recorded in a clean detached git worktree because an untracked docs/audits/.../tasks/ directory dirties the main tree.
+- Not done (owner items): facts.live.json and the first live run; lock.json does not list replay files (CCR 5).

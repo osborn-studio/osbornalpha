@@ -16,6 +16,8 @@ describe('buildRunDeps (spec §7.1 table)',()=>{
    expect(ref).not.toBeNull();
    const r=await d.reader.readDocumentBound(ref!,REVENUE,{kind:'edgar_accession',value:'0009990601-23-000106'},'2026-11-20');
    expect(r.rows.map(x=>x.value_text)).toEqual(['383285000000']);
+   const p=await d.reader.project({issuer:{market:'US',cik:'9990601'},concepts:['revenue'],asOf:'2024-06-30',durations:['12M']},'2026-11-20');   // Task 11: projector wired
+   expect(p.module).toBe('facts');expect(p.rows.length).toBeGreaterThan(0);
   }finally{await d.close();}
  },120_000);
  it('ci is never privileged',async()=>{await expect(buildRunDeps('ci',true,{env:{}})).rejects.toThrow('never privileged');});

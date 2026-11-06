@@ -8,6 +8,7 @@
 import {readFileSync} from 'node:fs';
 import {Pool} from 'pg';
 import {supabaseTableClient} from '../../db/table-client';
+import type {TableClient} from '../../db/table-client';
 import {supabaseFactsDb} from '../../facts/db';
 import {parseCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {parseTushareStatements} from '../../facts/providers/tushare-statements';
@@ -19,9 +20,11 @@ import {supabaseRawStorage} from '../adapters/provenance';
 import type {SnapshotParsers} from '../adapters/provenance';
 import {buildFrozenDb,buildFrozenMemory,loadSetup} from '../replay/setup';
 import type {FrozenBuild} from '../replay/setup';
+import {projectWithRev,resolveFactsSubject} from '../projections/facts';
+import type {ProjectionDb} from '../projections/facts';
 import {evalStore} from '../store';
 import type {EvalStore} from '../store';
-import type {EvalMode,ModuleReader,ReportEnvironment} from '../types';
+import type {EvalMode,ModuleReader,Projection,ReplayRequest,ReportEnvironment} from '../types';
 
 export const F6_BASE_SETUP='src/lib/evals/fixtures/replay/f6-base.setup.json';
 export const LANDED_PARSERS:SnapshotParsers={edgar:(s,o)=>parseCompanyFacts(s,{sinceYear:o.sinceYear}),tushare:(s,o)=>parseTushareStatements(s,{sinceYear:o.sinceYear})};
@@ -35,6 +38,10 @@ export async function fetchSourceBytes(url:string,fetchImpl:typeof fetch=fetch,u
  if(!res.ok)throw new Error(`source_http_${res.status}`);
  return new Uint8Array(await res.arrayBuffer());
 }
+/** ModuleReader.project = projections/facts.ts over the reader's own db and tables (Task 11; W4 CCR 2). The projection is read through
+ *  projectWithRev so a live ledger tuple binds the projection's own state_rev; the reader contract returns the bare Projection. */
+export const withProjector=<D extends {db:ProjectionDb;tables:TableClient}>(d:D):D&{projector:(r:ReplayRequest,today:string)=>Promise<Projection>}=>
+ ({...d,projector:async(r,today)=>(await projectWithRev({db:d.db,resolve:(s,t)=>resolveFactsSubject(d.tables,s,t)},r,today)).projection});
 const built=(b:FrozenBuild)=>{if(!b.ok)throw new Error(`setup_mismatch:${b.mismatch}`);return b.world;};
 
 export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRunDepsOptions={}):Promise<RunDeps>{
@@ -49,18 +56,18 @@ export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRu
    const pool=new Pool({connectionString:adminUrl});
    let w:ReturnType<typeof built>;
    try{w=built(await buildFrozenDb(pool,setup,opts.root));}catch(e){await pool.end();throw e;}   // an isolated database (replay/setup.ts, R2-2)
-   return {reader:factsReader({db:w.db,tables:w.tables,stateRev:async()=>null}),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{await w.close();await pool.end();}};
+   return {reader:factsReader(withProjector({db:w.db,tables:w.tables,stateRev:async()=>null})),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{await w.close();await pool.end();}};
   }
   const world=built(await buildFrozenMemory(setup,opts.root));
-  return {reader:factsReader({db:world.db,tables:world.tables,stateRev:async()=>null}),environment:none,store:null,close:async()=>{}};
+  return {reader:factsReader(withProjector({db:world.db,tables:world.tables,stateRev:async()=>null})),environment:none,store:null,close:async()=>{}};
  }
  const environment={...none,db_host:hostOf(env.NEXT_PUBLIC_SUPABASE_URL)};
  if(!privileged){
   const anon=getAnonSupabase();
-  return {reader:factsReader({db:supabaseFactsDb(anon),tables:supabaseTableClient(anon),stateRev:async()=>null}),environment,store:null,fetchSource:url=>fetchSourceBytes(url),close:async()=>{}};
+  return {reader:factsReader(withProjector({db:supabaseFactsDb(anon),tables:supabaseTableClient(anon),stateRev:async()=>null})),environment,store:null,fetchSource:url=>fetchSourceBytes(url),close:async()=>{}};
  }
  const admin=getAdminSupabase();
  const tables=supabaseTableClient(admin);
- return {reader:privilegedFactsReader({db:supabaseFactsDb(admin),tables,stateRev:async()=>null,storage:supabaseRawStorage(admin),parsers:LANDED_PARSERS}),
+ return {reader:privilegedFactsReader(withProjector({db:supabaseFactsDb(admin),tables,stateRev:async()=>null,storage:supabaseRawStorage(admin),parsers:LANDED_PARSERS})),
   environment,store:evalStore(tables),fetchSource:url=>fetchSourceBytes(url),close:async()=>{}};
 }
