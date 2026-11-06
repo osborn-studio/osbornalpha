@@ -4,7 +4,9 @@
 // of real data), revision pair (type 5 vs corrected type 1 of 000858.SZ, asOf on both sides of the correction date,
 // same-day type-1/type-5 pair without a conflict), same-day conflict from a SECOND filing (a type-4 page row with the
 // same K and announcement date, round-1 #16), same-filing re-publication as plain duplicates, the annual filing linked
-// to a cninfo PDF, and the CN gold gate. The cases run in order and SHARE STATE (published rows, quarantine items).
+// to a cninfo PDF, and the CN gold gate. Cases are order-independent: the four pristine issuers are ingested once in
+// beforeAll, and the two mutation cases run on their OWN alias issuers (the same fixtures re-labelled to other ts_codes, since
+// filings.source_ref is global), so they never touch the state the gold / revision / linkage cases read.
 // Deviations from the plan text (the plan was written before real data existed):
 //  - four fixture issuers are ingested (TS_CODES; 600519.SH is the cninfo-linked one, 000858.SZ the revision pair);
 //  - the revision pair is picked from the real shape: the type-1 counterpart must differ in value and be later, and the
@@ -40,12 +42,29 @@ const CNINFO_FIXTURE=new URL('./fixtures/cninfo/600519.SH-2024-annual.json',impo
 const today=()=>new Date().toISOString().slice(0,10);
 const shift=(ymd:string,d:number)=>new Date(Date.parse(`${ymd}T00:00:00Z`)+d*86_400_000).toISOString().slice(0,10);
 const rt=(ref:string)=>ref.split(':')[2];
-interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;duration?:string;value:string;as_of?:string|null;source?:{document?:string;page_or_row?:string;url?:string};recorded_by:string;recorded_at?:string|null}
+interface GoldEntry{issuer:{ticker:string;market:'US'|'CN'};concept:string;period_end:string;unit:string;duration?:string;value:string;as_of?:string|null;source?:{document?:string;page_or_row?:string;url?:string};recorded_by?:string;recorded_at?:string|null}
 interface GoldFile{ready:boolean;required:{US:boolean;CN:boolean};entries:GoldEntry[]}
 const isPending=(e:GoldEntry)=>e.recorded_by==='<pending>'||e.value==='<pending>';
 const blank=(v:unknown)=>typeof v!=='string'||v.trim()===''||v.trim()==='<pending>';
 /** Provenance a human must have written down: document, page/row, url and a recording timestamp. Returns the missing fields. */
-const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(e.recorded_at==null||blank(e.recorded_at)?['recorded_at']:[])];
+const provenanceGaps=(e:GoldEntry):string[]=>[...(['document','page_or_row','url'] as const).filter(k=>blank(e.source?.[k])).map(k=>`source.${k}`),...(blank(e.recorded_by)?['recorded_by']:[]),...(e.recorded_at==null||blank(e.recorded_at)||Number.isNaN(Date.parse(e.recorded_at))?['recorded_at']:[])];
+/** Runtime shape check of one gold entry (the JSON is hand-edited): returns the problems. */
+const shapeProblems=(e:GoldEntry):string[]=>{
+ const p:string[]=[];const s=(v:unknown)=>typeof v==='string'&&v.trim()!=='';
+ if(!e||typeof e!=='object'||typeof e.issuer!=='object'||e.issuer===null)return ['issuer'];
+ if(!s(e.issuer.ticker))p.push('issuer.ticker');
+ if(e.issuer.market!=='US'&&e.issuer.market!=='CN')p.push('issuer.market');
+ if(!s(e.concept)||!conceptById(e.concept))p.push('concept');
+ if(!s(e.period_end)||!/^\d{4}-\d{2}-\d{2}$/.test(e.period_end))p.push('period_end');
+ if(!s(e.unit))p.push('unit');
+ if(!s(e.value))p.push('value');
+ if(e.as_of!=null&&!(typeof e.as_of==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(e.as_of)))p.push('as_of');
+ if(e.recorded_by!==undefined&&typeof e.recorded_by!=='string')p.push('recorded_by');
+ return p;
+};
+const ALIASES={conflict:{from:'600519.SH',code:'600901.SH'},duplicate:{from:'600519.SH',code:'600902.SH'}} as const;
+/** The same recorded pages under another ts_code (rows and request params), so a mutation case owns its issuer, filings and quarantine items. */
+const aliasSnapshots=(pages:RawSnapshot[],from:string,to:string):RawSnapshot[]=>pages.map(s=>snapshotOf(new TextEncoder().encode(new TextDecoder().decode(s.bytes).split(`"${from}"`).join(`"${to}"`)),{...s.meta,params:{...(s.meta.params??{}),ts_code:to}}));
 type Page={data:{fields:string[];items:unknown[][]}|null};
 const pageOf=(s:RawSnapshot)=>scanJsonNumbers(s.bytes) as Page;
 const incomePage=(pages:RawSnapshot[],reportType:string)=>pages.find(s=>s.meta.api==='income'&&(s.meta.params as {report_type:string}).report_type===reportType)!;
@@ -70,25 +89,27 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   const hit=cninfo.pages.find(p=>p.request_body===String(init?.body));
   return new Response(hit?hit.body:'{"announcements":[],"hasMore":false}',{status:hit?hit.http_status:200});
  };
+ let firstRun:Awaited<ReturnType<typeof run>>;   // receipt of the beforeAll ingest of the four pristine issuers
+ const provision=async(code:string,orgId:string|null)=>{
+  await admin.query(`insert into public.stocks_universe(ticker,name,market) values($1,$1,'A') on conflict (ticker) do nothing`,[code]);
+  let id=(await admin.query(`select issuer_id from public.issuer_securities where ticker=$1 order by valid_from limit 1`,[code])).rows[0]?.issuer_id as string|undefined;
+  if(!id){
+   id=randomUUID();
+   await admin.query(`insert into public.issuers(issuer_id,canonical_name_zh,country_code,cninfo_org_id) values($1,$2,'CN',$3)`,[id,code,orgId]);
+   await admin.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,$2,'A',true,'2000-01-01','test') on conflict do nothing`,[id,code]);
+  }else if(orgId)await admin.query(`update public.issuers set cninfo_org_id=$1 where issuer_id=$2 and cninfo_org_id is null`,[orgId,id]);
+  issuers[code]=id;
+ };
+ const ALL_CODES=[...TS_CODES,ALIASES.conflict.code,ALIASES.duplicate.code];
  beforeAll(async()=>{
   if(!existsSync(CNINFO_FIXTURE))throw new Error('cninfo fixture required: src/lib/facts/fixtures/cninfo/600519.SH-2024-annual.json (a critical suite may not skip)');
   cninfo=JSON.parse(readFileSync(CNINFO_FIXTURE,'utf8')) as CninfoFixture;
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});
-  for(const code of TS_CODES){
-   snapshots[code]=loadTushareFixtures(code,TUSHARE_FIXTURE_DIR);
-   const orgId=code===TS_CODE?cninfo.__recorded.org_id:null;
-   await admin.query(`insert into public.stocks_universe(ticker,name,market) values($1,$1,'A') on conflict (ticker) do nothing`,[code]);
-   let id=(await admin.query(`select issuer_id from public.issuer_securities where ticker=$1 order by valid_from limit 1`,[code])).rows[0]?.issuer_id as string|undefined;
-   if(!id){
-    id=randomUUID();
-    await admin.query(`insert into public.issuers(issuer_id,canonical_name_zh,country_code,cninfo_org_id) values($1,$2,'CN',$3)`,[id,code,orgId]);
-    await admin.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,$2,'A',true,'2000-01-01','test') on conflict do nothing`,[id,code]);
-   }else if(orgId)await admin.query(`update public.issuers set cninfo_org_id=$1 where issuer_id=$2 and cninfo_org_id is null`,[orgId,id]);
-   issuers[code]=id;
-  }
+  for(const code of TS_CODES){snapshots[code]=loadTushareFixtures(code,TUSHARE_FIXTURE_DIR);await provision(code,code===TS_CODE?cninfo.__recorded.org_id:null);}
+  for(const {from,code} of Object.values(ALIASES)){snapshots[code]=aliasSnapshots(snapshots[from],from,code);await provision(code,null);}
   db=pgFactsDb(admin);
-  await db.reconcileScope('CN',TS_CODES.map(code=>({issuer_id:issuers[code],reasons:['test'],priority:10,fetch_key:code})));
+  await db.reconcileScope('CN',ALL_CODES.map(code=>({issuer_id:issuers[code],reasons:['test'],priority:10,fetch_key:code})));
   deps={db,tables:pgTableClient(admin),storage:memorySnapshotStore(),
    fetchUs:async()=>{throw new ProviderError('sec_unavailable','not in this suite');},
    fetchCn:async(tsCode:string)=>{const s=snapshots[tsCode];if(!s)throw new ProviderError('tushare_unavailable',tsCode);return s;},
@@ -96,29 +117,42 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
    parseCn:(pages,o)=>parseTushareStatements(pages,{sinceYear:o.sinceYear}),
    coverageCn:coverageSummary,   // wired exactly like deps.ts (round-1 #12)
    now:()=>new Date(),deadline:null,codeVersion:'test'};
- });
+  firstRun=await run(TS_CODES.map(c=>issuers[c]));   // pristine fixtures, once, before any case: every case reads this state regardless of order
+ },300_000);
  // Facts and filings are append-only and test:db builds a fresh database per run: retire the scope rows (priority 0) so no
  // scheduled-path test of another suite picks these issuers up.
  afterAll(async()=>{
-  if(db&&Object.keys(issuers).length>0)await db.reconcileScope('CN',TS_CODES.filter(c=>issuers[c]).map(code=>({issuer_id:issuers[code],reasons:[],priority:0,fetch_key:code}))).catch(()=>{});
+  if(db&&Object.keys(issuers).length>0)await db.reconcileScope('CN',ALL_CODES.filter(c=>issuers[c]).map(code=>({issuer_id:issuers[code],reasons:[],priority:0,fetch_key:code}))).catch(()=>{});
   await admin?.end();
  });
 
- it('publishes ten years of three statements for every fixture issuer; revenue FY rows are 12M CNY facts; real ambiguous_value parks are quarantined by policy',async()=>{
-  const r=await run(Object.values(issuers));
+ it('publishes ten years of three statements for every fixture issuer (every fixture-backed annual period of a revenue / balance-sheet / cash-flow concept); ambiguous_value parks are quarantined per issuer by policy',async()=>{
+  const r=firstRun;
   expect(r.detail).toMatchObject({published:TS_CODES.length,failed:0});
   expect(r.errors.some(e=>e.code==='coverage_summary')).toBe(true);
   expect(['success','partial']).toContain(r.status);
-  // 000333.SZ and 600036.SH carry update_flag 0/1 rows of one filing with different values (17-tushare-verification.md): parked, never guessed.
-  const parks=(await admin.query(`select natural_key from public.dq_quarantine where table_name='financial_facts' and reason_code='ambiguous_value' and status='open' and (natural_key like $1 or natural_key like $2)`,[`${issuers['000333.SZ']}:%`,`${issuers['600036.SH']}:%`])).rows;
-  expect(parks.length).toBeGreaterThan(0);
-  expect(r.counts.quarantined).toBeGreaterThanOrEqual(parks.length);
+  let ambiguousRows=0;
   for(const code of TS_CODES){
-   const rows=(await db.readFacts(issuers[code],'CN',{concepts:['revenue'],asOf:today()})).rows.filter(x=>x.duration==='12M');
-   expect(rows.length,`${code}: ten years of annual revenue`).toBeGreaterThanOrEqual(5);
-   for(const x of rows)expect(x).toMatchObject({unit:'CNY',period_start:`${x.period_end.slice(0,4)}-01-01`,status:'ok'});
+   const parsed=parseTushareStatements(snapshots[code],{sinceYear:new Date().getUTCFullYear()-10});   // the sync default window
+   const parked=new Set(parsed.ambiguous.flatMap(a=>a.candidates.map(c=>`${c.concept}|${c.periodEnd}`)));
+   ambiguousRows+=parsed.ambiguous.reduce((n,a)=>n+a.candidates.length,0);
+   // one representative concept per statement: IS revenue, BS total_assets, CF operating_cash_flow
+   for(const concept of ['revenue','total_assets','operating_cash_flow']){
+    const expected=[...new Set(parsed.candidates.filter(c=>c.concept===concept&&rt(c.filingRef)==='1'&&c.periodEnd.endsWith('-12-31')&&!parked.has(`${c.concept}|${c.periodEnd}`)).map(c=>c.periodEnd))].sort();
+    expect(expected.length,`${code}/${concept}: fixture-backed annual periods`).toBeGreaterThanOrEqual(5);
+    const rows=(await db.readFacts(issuers[code],'CN',{concepts:[concept],asOf:today(),from:'2000-01-01',to:today()})).rows;
+    const have=new Set(rows.filter(x=>x.status==='ok'&&x.unit==='CNY'&&x.duration===(concept==='total_assets'?'INSTANT':'12M')).map(x=>x.period_end));
+    expect(expected.filter(p=>!have.has(p)),`${code}/${concept}: fixture-backed annual periods missing from the published facts`).toEqual([]);
+    for(const x of rows.filter(x=>x.duration==='12M'))expect(x).toMatchObject({period_start:`${x.period_end.slice(0,4)}-01-01`});
+   }
+   // update_flag 0/1 rows of one filing with different values (17-tushare-verification.md): parked per key, never guessed.
+   const parks=(await admin.query(`select count(*)::int as n from public.dq_quarantine where table_name='financial_facts' and reason_code='ambiguous_value' and status='open' and natural_key like $1`,[`${issuers[code]}:%`])).rows[0].n as number;
+   expect(parks,`${code}: ambiguous_value parks`).toBe(parsed.ambiguous.length);
   }
- },300_000);
+  expect((await admin.query(`select 1 from public.dq_quarantine where reason_code='ambiguous_value' and natural_key like $1`,[`${issuers['000333.SZ']}:%`])).rows.length).toBeGreaterThan(0);
+  expect((await admin.query(`select 1 from public.dq_quarantine where reason_code='ambiguous_value' and natural_key like $1`,[`${issuers['600036.SH']}:%`])).rows.length).toBeGreaterThan(0);
+  expect(r.counts.quarantined).toBeGreaterThanOrEqual(ambiguousRows);
+ });
 
  it('a type-5 (pre-correction) row and its corrected type-1 counterpart coexist; asOf before the correction date reads the old value, on the date the corrected one',async()=>{
   const parsed=parseTushareStatements(snapshots[REVISION_TS_CODE],{sinceYear:2000});
@@ -149,9 +183,10 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
  });
 
  it('a SECOND filing (type-4 page row) with the same K on the same announcement date and another value → same_day_conflict: both rows quarantined, the day has no ok value (round-1 #16)',async()=>{
-  const parsed=parseTushareStatements(snapshots[TS_CODE],{sinceYear:2000});
+  const code=ALIASES.conflict.code,id=issuers[code];   // own alias issuer: the real issuers stay pristine
+  const parsed=parseTushareStatements(snapshots[code],{sinceYear:2000});
   const target=parsed.candidates.filter(c=>c.concept==='revenue'&&c.duration==='12M'&&rt(c.filingRef)==='1').sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];
-  const page1=incomePage(snapshots[TS_CODE],'1'),page4=incomePage(snapshots[TS_CODE],'4');
+  const page1=incomePage(snapshots[code],'1'),page4=incomePage(snapshots[code],'4');
   const t1=pageOf(page1),t4=pageOf(page4);
   const fields=t1.data!.fields;const ei=fields.indexOf('end_date'),ri=fields.indexOf('report_type'),fi=fields.indexOf('total_revenue');
   const src=t1.data!.items.find(r=>r[ei]===target.periodEnd.replace(/-/g,''))!;
@@ -161,47 +196,72 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   const row=[...src];row[ri]='4';row[fi]={__num:`${target.value}1`};
   const data4=t4.data??{fields,items:[]};
   expect(data4.fields,'the type-4 page must carry the type-1 columns').toEqual(fields);
-  const mutated=replacePage(snapshots[TS_CODE],page4,{data:{fields,items:[...data4.items,row]}});
-  const original=snapshots[TS_CODE];snapshots[TS_CODE]=mutated;
-  let r;try{r=await run([issuers[TS_CODE]]);}finally{snapshots[TS_CODE]=original;}
+  const original=snapshots[code];
+  const mutated=replacePage(original,page4,{data:{fields,items:[...data4.items,row]}});
+  expect(parseTushareStatements(mutated,{sinceYear:2000}).candidates.filter(c=>c.concept==='revenue'&&c.periodEnd===target.periodEnd&&rt(c.filingRef)==='4').map(c=>c.value)).toContain(`${target.value}1`);   // the mutation reaches the parser
+  const base=await run([id]);
+  expect(base.detail).toMatchObject({published:1,failed:0});
+  snapshots[code]=mutated;
+  let r;try{r=await run([id]);}finally{snapshots[code]=original;}
   expect(r.detail).toMatchObject({published:1,failed:0});
   expect(r.counts.quarantined).toBeGreaterThanOrEqual(1);   // counted per conflict item; the two rows are asserted below
   const avail=parsed.filings.find(f=>f.sourceRef===target.filingRef)!.availableDate;
   const where={concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd};
-  const rows=(await db.readFacts(issuers[TS_CODE],'CN',{...where,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.available_date===avail);
+  const rows=(await db.readFacts(id,'CN',{...where,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.available_date===avail);
   expect(rows.length).toBe(2);expect(rows.every(x=>x.status==='quarantined')).toBe(true);
   expect(new Set(rows.map(x=>x.filing_id)).size).toBe(2);                                             // two filings: the type-1 row and the type-4 restatement
   expect(new Set(rows.map(x=>x.value_text))).toEqual(new Set([target.value,`${target.value}1`]));
-  expect((await db.readFacts(issuers[TS_CODE],'CN',where)).rows.filter(x=>x.duration==='12M'&&x.available_date===avail)).toEqual([]);   // the day has no ok value
-  const items=(await admin.query(`select payload from public.dq_quarantine where reason_code='same_day_conflict' and status='open' and table_name='financial_facts' and natural_key like $1`,[`${issuers[TS_CODE]}:CN:revenue:%:${avail}`])).rows;
+  expect((await db.readFacts(id,'CN',where)).rows.filter(x=>x.duration==='12M'&&x.available_date===avail)).toEqual([]);   // the day has no ok value
+  const items=(await admin.query(`select payload from public.dq_quarantine where reason_code='same_day_conflict' and status='open' and table_name='financial_facts' and natural_key like $1`,[`${id}:CN:revenue:%:${avail}`])).rows;
   expect(items).toHaveLength(1);expect((items[0].payload as {fact_ids:string[]}).fact_ids.sort()).toEqual(rows.map(x=>x.fact_id).sort());
  },300_000);
 
  it('the same page re-published with a changed value inside the SAME filing is a duplicate candidate key: no new row, no conflict',async()=>{
-  const parsed=parseTushareStatements(snapshots[TS_CODE],{sinceYear:2000});
-  const target=parsed.candidates.filter(c=>c.concept==='revenue'&&c.duration==='12M'&&rt(c.filingRef)==='1').sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[1];   // a day the previous test did not dispute
-  const page1=incomePage(snapshots[TS_CODE],'1');const t1=pageOf(page1);
+  const code=ALIASES.duplicate.code,id=issuers[code];   // own alias issuer
+  const parsed=parseTushareStatements(snapshots[code],{sinceYear:2000});
+  const target=parsed.candidates.filter(c=>c.concept==='revenue'&&c.duration==='12M'&&rt(c.filingRef)==='1').sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[1];
+  const page1=incomePage(snapshots[code],'1');const t1=pageOf(page1);
   const fields=t1.data!.fields;const ei=fields.indexOf('end_date'),fi=fields.indexOf('total_revenue');
-  const row=t1.data!.items.find(r=>r[ei]===target.periodEnd.replace(/-/g,''))!;row[fi]={__num:`${target.value}1`};
-  const original=snapshots[TS_CODE];snapshots[TS_CODE]=replacePage(snapshots[TS_CODE],page1,t1);
-  let r;try{r=await run([issuers[TS_CODE]]);}finally{snapshots[TS_CODE]=original;}
-  expect(r.detail).toMatchObject({published:1,failed:0});expect(r.counts).toMatchObject({inserted:0,versioned:0,quarantined:0});expect(r.counts.duplicates).toBeGreaterThan(0);
-  const filingId=(await db.filingsOfIssuer(issuers[TS_CODE],'CN',{})).find(f=>f.source_ref===target.filingRef)!.filing_id;
-  const rows=(await db.readFacts(issuers[TS_CODE],'CN',{concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.filing_id===filingId);
+  const rowsOfDay=t1.data!.items.filter(r=>r[ei]===target.periodEnd.replace(/-/g,''));
+  const changed=`${target.value}1`;
+  rowsOfDay.forEach(r=>{r[fi]={__num:changed};});   // every update_flag variant of that filing, so the changed value is the filing's only value (not an ambiguous_value)
+  const original=snapshots[code];const mutated=replacePage(original,page1,t1);
+  // The mutation must reach the parser under the exact original filing and key, as a single candidate (a duplicate of the stored K), with another value.
+  const m=parseTushareStatements(mutated,{sinceYear:2000});
+  const atKey=m.candidates.filter(c=>c.filingRef===target.filingRef&&c.concept===target.concept&&c.periodStart===target.periodStart&&c.periodEnd===target.periodEnd&&c.unit===target.unit);
+  expect(atKey.map(c=>c.value),'the changed value appears under the original filingRef and key').toEqual([changed]);
+  expect(m.ambiguous.map(a=>a.key).filter(k=>k.startsWith(target.filingRef))).toEqual([]);
+  expect(m.candidates.length).toBe(parsed.candidates.length);
+  const base=await run([id]);
+  expect(base.detail).toMatchObject({published:1,failed:0});
+  const filingId=(await db.filingsOfIssuer(id,'CN',{})).find(f=>f.source_ref===target.filingRef)!.filing_id;
+  const ofFiling=async()=>(await db.readFacts(id,'CN',{concepts:['revenue'],asOf:today(),from:target.periodEnd,to:target.periodEnd,history:true,includeNonOk:true})).rows.filter(x=>x.duration==='12M'&&x.filing_id===filingId);
+  expect((await ofFiling()).map(x=>[x.status,x.value_text])).toEqual([['ok',target.value]]);   // the K is stored with the ORIGINAL value before the replay
+  snapshots[code]=mutated;
+  let r;try{r=await run([id]);}finally{snapshots[code]=original;}
+  expect(r.detail).toMatchObject({published:1,failed:0});
+  expect(r.counts).toMatchObject({inserted:0,versioned:0,quarantined:0,duplicates:base.counts.inserted});   // every candidate, the changed one included, is a duplicate of a stored (filing, K)
+  const rows=await ofFiling();
   expect(rows.map(x=>[x.status,x.value_text])).toEqual([['ok',target.value]]);   // one row for that filing, the stored value untouched
+  expect((await admin.query(`select 1 from public.dq_quarantine where table_name='financial_facts' and natural_key like $1`,[`${id}:%`])).rows).toEqual([]);   // no conflict, no park
  },300_000);
 
- it('the recorded annual filing is linked to one cninfo PDF; other filings carry a counted attempt',async()=>{
+ it('the recorded annual filing is linked to exactly the recorded cninfo full-text PDF; other filings carry a counted attempt',async()=>{
   const filings=await db.filingsOfIssuer(issuers[TS_CODE],'CN',{});
   const annual=filings.find(f=>f.form_type==='annual'&&f.fiscal_year===cninfo.__recorded.fiscal_year&&f.available_date===cninfo.__recorded.available_date);
   expect(annual,'annual filing on the recorded date').toBeDefined();
-  expect(annual).toMatchObject({document_ref:expect.stringMatching(/^\d+$/),document_url:expect.stringMatching(/^https:\/\/static\.cninfo\.com\.cn\//),link_attempts:1});
+  // 1222993920 = 贵州茅台2024年年度报告 (full text) in the recorded page; ...912 is the English edition and ...909 the summary, both excluded by title.
+  expect(annual).toMatchObject({document_ref:'1222993920',document_url:'https://static.cninfo.com.cn/finalpage/2025-04-03/1222993920.PDF',link_attempts:1});
+  const recorded=JSON.parse(cninfo.pages[0].body) as {announcements:{announcementId:string;announcementTitle:string;adjunctUrl:string}[]};
+  expect(recorded.announcements.find(a=>a.announcementTitle==='贵州茅台2024年年度报告')).toMatchObject({announcementId:'1222993920',adjunctUrl:'finalpage/2025-04-03/1222993920.PDF'});
   const other=filings.filter(f=>f.form_type==='q1'&&f.document_ref===null);
   expect(other.length).toBeGreaterThan(0);for(const f of other)expect(f.link_attempts).toBeGreaterThanOrEqual(1);
  });
 
- it('CN gold gate: templates match the recorded Tushare annual filings; recorded entries need provenance and replay; required.CN / ready enforce the matrix (round-1 #19)',async()=>{
+ it('CN gold gate: templates match the recorded Tushare annual filings; recorded entries need full provenance and replay; any pending CN entry warns; required.CN / ready demand complete transcription (round-1 #19)',async()=>{
   const gold=JSON.parse(readFileSync(new URL('./fixtures/gold/plan2.json',import.meta.url),'utf8')) as GoldFile;
+  const bad=gold.entries.map((e,i)=>({i,p:shapeProblems(e)})).filter(x=>x.p.length>0).map(x=>`#${x.i}: ${x.p.join(',')}`);
+  expect(bad,'malformed gold entries').toEqual([]);
   const cn=gold.entries.filter(e=>e.issuer.market==='CN');
   expect(cn.length).toBeGreaterThan(0);
   for(const e of cn)expect((TS_CODES as readonly string[]).includes(e.issuer.ticker),`${e.issuer.ticker}: no recorded Tushare fixture (every asserted issuer is ingested by this suite)`).toBe(true);
@@ -215,19 +275,16 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
     expect(hit,`${label}: no type-1 annual fact on ${e.as_of} in the recorded fixtures`).toBeDefined();
    }
   }
+  const pending=cn.filter(isPending);
   const recorded=cn.filter(e=>!isPending(e));
   const gaps=recorded.map(e=>({e,gaps:provenanceGaps(e)})).filter(x=>x.gaps.length>0).map(x=>`${x.e.issuer.ticker}/${x.e.concept}/${x.e.period_end}: ${x.gaps.join(',')}`);
-  expect(gaps,'recorded CN entries must carry document, page_or_row, url and recorded_at (a human transcribed them from the cninfo PDF)').toEqual([]);
-  if(!gold.ready&&!gold.required.CN){
-   console.warn(`CN GOLD INCOMPLETE (not failing): ${cn.filter(isPending).length}/${cn.length} CN entries still <pending>; no recorded entry for ${TS_CODES.filter(c=>!recorded.some(e=>e.issuer.ticker===c)).join(', ')||'-'}. Owner step (runbook 8.11-5/6): transcribe value + page from the cninfo PDF, then set required.CN.`);
-  }
-  if(gold.required.CN)for(const code of TS_CODES)expect(recorded.some(e=>e.issuer.ticker===code),`gold entry for ${code} is still <pending> — owner step (runbook 8.11-5/6)`).toBe(true);
-  if(gold.ready){
-   expect(cn.filter(isPending).map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending CN entries in a ready gold file').toEqual([]);
-   for(const code of new Set(cn.map(e=>e.issuer.ticker))){   // per-period matrix for each CN issuer (round-2 N2); the 6-issuer total is checked by the US suite over the whole file
-    const periods=new Map<string,Set<string>>();for(const e of cn.filter(e=>e.issuer.ticker===code))(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);
-    expect([...periods.values()].filter(c=>c.size>=6).length,`${code}: at least 2 periods with >= 6 concepts each`).toBeGreaterThanOrEqual(2);
-   }
+  expect(gaps,'recorded CN entries must carry document, page_or_row, url, recorded_by and recorded_at (a human transcribed them from the cninfo PDF)').toEqual([]);
+  // Loud, whatever required.CN says: a half-transcribed CN gold file must never pass silently.
+  if(pending.length>0)console.warn(`CN GOLD INCOMPLETE (${gold.required.CN?'required.CN is true: failing below':'not failing'}): ${pending.length}/${cn.length} CN entries still <pending>; no recorded entry for ${TS_CODES.filter(c=>!recorded.some(e=>e.issuer.ticker===c)).join(', ')||'-'}. Owner step (runbook 8.11-5/6): transcribe value + page from the cninfo PDF.`);
+  const periodMatrix=(code:string)=>{const periods=new Map<string,Set<string>>();for(const e of recorded.filter(e=>e.issuer.ticker===code))(periods.get(e.period_end)??periods.set(e.period_end,new Set()).get(e.period_end)!).add(e.concept);return [...periods.values()].filter(c=>c.size>=6).length;};
+  if(gold.required.CN||gold.ready){   // required.CN means "CN transcription complete": every CN entry recorded, plus the per-issuer matrix
+   expect(pending.map(e=>`${e.issuer.ticker}/${e.concept}/${e.period_end}`),'pending CN entries while required.CN / ready is true').toEqual([]);
+   for(const code of TS_CODES)expect(periodMatrix(code),`${code}: at least 2 periods with >= 6 concepts each (round-2 N2); the 6-issuer total is checked by the US suite over the whole file`).toBeGreaterThanOrEqual(2);
   }
   for(const e of recorded){   // every recorded entry replays against the published facts (ready or not)
    const issuer=issuers[e.issuer.ticker];expect(issuer,`no fixture-backed issuer for ${e.issuer.ticker}`).toBeDefined();
