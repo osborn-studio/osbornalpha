@@ -745,6 +745,8 @@ grant execute on function public.append_claim_evidence(uuid, text, text, text, t
 -- = compare-and-set refused (Task 11 review, Codex P2): when p_expect_hook_at is given and the item's
 -- detail->'hook'->>'at' is distinct from it, a newer pending hook (a restore / adoption / lineage verdict
 -- committed after the caller observed the item) belongs to its own owner and nothing is written.
+-- the 3-argument boolean version (earlier drafts) must go: with it alive, a named 3-argument call would be ambiguous against the defaulted 4-argument one
+drop function if exists public.patch_quarantine_detail(uuid, text, jsonb);
 create or replace function public.patch_quarantine_detail(p_id uuid, p_key text, p_value jsonb, p_expect_hook_at text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 begin

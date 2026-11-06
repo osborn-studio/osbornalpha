@@ -99,4 +99,19 @@ describe('findPendingHooks / runPendingHooks (spec §4.6, U2)',()=>{
   expect(mat).toHaveBeenCalledTimes(1);
   expect(report).toMatchObject({items:1,failed:0,hookWriteFailed:1,skippedStale:0});
  });
+
+ it('review: a targetOf failure on one item is reported as untargeted, never thrown; the other items still run',async()=>{
+  const db=memoryFactsDb();
+  const mk=(k:string,issuer:string)=>quarantine(db.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:k,reasonCode:'reconcile_mismatch',batchId:BATCH,payload:{fact_ids:[]},detail:{issuer_id:issuer,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-05T01:00:00.000Z'}}});
+  const bad=await mk('k:bad',SRC);const good=await mk('k:good',ISSUER);
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const real=db.targetOf.bind(db);
+  (db as {targetOf:typeof db.targetOf}).targetOf=async i=>{if(i===SRC)throw new Error('topology read failed');return real(i);};
+  const mat=vi.fn(async(_d:unknown,i:string)=>({rows:0,stateRev:0,retried:false,target:i,basedOn:[]}));
+  const report=await runPendingHooks({db,tables:db.tables,now:NOW,materialize:mat as never});
+  spy.mockRestore();
+  expect(report).toMatchObject({items:2,failed:0,untargeted:[bad]});
+  expect(mat.mock.calls.map(c=>c[1])).toEqual([ISSUER]);
+  expect(report.targets[0].items).toEqual([good]);
+ });
 });

@@ -716,6 +716,8 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
    expect({fn,role,ok}).toEqual({fn,role,ok:role==='service_role'&&FNS.includes(fn)});
   }
   expect(await q(`select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.proname='replace_filing_expectations'`)).toEqual([{n:1}]);
+  expect(await q(`select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.proname='patch_quarantine_detail'`)).toEqual([{n:1}]);   // the 3-argument draft is dropped: named 3-argument calls resolve to the defaulted 4-argument one
+  expect(await q(`select public.patch_quarantine_detail(p_id => $1, p_key => 'hook', p_value => '{}'::jsonb) v`,[randomUUID()])).toEqual([{v:false}]);
   const a=await issuer();
   const id=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
   const c=await admin.connect();

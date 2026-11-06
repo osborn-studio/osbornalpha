@@ -119,6 +119,8 @@ export async function POST(request: Request, { params }: Ctx) {
           ...(r.chosenCandidateIndex !== undefined ? { chosen_candidate_index: r.chosenCandidateIndex } : {}),
           ...(r.keepFactId !== undefined ? { keep_fact_id: r.keepFactId } : {}),
           ...(r.restore !== undefined ? { restore: r.restore } : {}),
+          // restore_note lives in ONE place, detail.restore_note, on success (no_rows_promoted) and on refusal alike (spec §4.6/§8)
+          ...(r.restoreNote !== undefined ? { detail: { restore_note: r.restoreNote } } : {}),
           ...(r.quarantined !== undefined ? { quarantined: r.quarantined } : {}),
         };
         // refusals carry only {error:<code>, detail?} (no hook/promoted/... nulls); same body shape as the claims route (接口对齐记录 #9)

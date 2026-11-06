@@ -262,10 +262,11 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     expect(unwired.status).toBe(409);
     expect(await unwired.json()).toEqual({ id: ID, outcome: 'conflict', error: 'not_passing', detail: { restore_note: 'reconcile_wiring_missing' } });
     expect(mocks.insert).not.toHaveBeenCalled();
-    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, promoted: 0, restore: { promoted: 0, skipped: [{ fact_id: FACT_A, reason: 'ineligible' }], restore_note: 'no_rows_promoted' } });
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, promoted: 0, restore: { promoted: 0, skipped: [{ fact_id: FACT_A, reason: 'ineligible' }] }, restoreNote: 'no_rows_promoted' });
     const ok = await json({ status: 'resolved_accept' });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toMatchObject({ outcome: 'resolved', restore: { restore_note: 'no_rows_promoted' } });
+    expect(await ok.json()).toMatchObject({ outcome: 'resolved', restore: { promoted: 0 }, detail: { restore_note: 'no_rows_promoted' } });
+    expect((await (await json({ status: 'resolved_accept' })).json())).toBeDefined();
   });
   it('maps SQL codes thrown past the resolver: conflict codes 409, choice codes 400, body {id, outcome, error}; unknown codes stay a 500', async () => {
     await facts3('lineage_conflict');

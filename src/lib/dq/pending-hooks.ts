@@ -49,7 +49,9 @@ export async function runPendingHooks(deps:PendingHookDeps):Promise<PendingHookR
  const {items,untargeted}=await findPendingHooks(deps.tables);
  const groups=new Map<string,{target:string;market:Market;items:PendingHookItem[]}>();
  for(const it of items){
-  const target=await deps.db.targetOf(it.issuer);
+  let target:string;
+  try{target=await deps.db.targetOf(it.issuer);}
+  catch(e){console.error('[pending-hooks] targetOf',e instanceof Error?e.message:String(e));untargeted.push(it.id);continue;}   // reported, never thrown: the other items still run
   const k=`${target}|${it.market}`;const g=groups.get(k)??{target,market:it.market,items:[]};g.items.push(it);groups.set(k,g);
  }
  const report:PendingHookReport={items:items.length,targets:[],failed:0,hookWriteFailed:0,skippedStale:0,untargeted};

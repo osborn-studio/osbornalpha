@@ -12,7 +12,7 @@
 //   plan 3 Task 14c); absent → conflict not_passing + restoreNote 'reconcile_wiring_missing', an
 //   {unavailable} answer → that note ('inputs_unavailable' | 'current_evidence_unavailable', plan audit
 //   P2); nothing written, never promotes. restoreReconciled → materialize
-//   the persisted target; promoted 0 → restore_note 'no_rows_promoted' with the skipped reasons.
+//   the persisted target; promoted 0 → restoreNote 'no_rows_promoted' (the route's detail.restore_note, success and refusal alike) with the skipped reasons in restore.
 //  lineage_conflict + keepFactId → resolveLineageConflict → materialize T (natural key's first
 //   segment); without keepFactId → invalid_choice (keep_fact_id_required): the generic resolver
 //   would promote every member.
@@ -48,9 +48,9 @@ export interface FactsResolveResult{outcome:FactsResolveOutcome;hook?:HookState;
  /** machine code of a refusal (rule id, SQL code) */
  code?:string;
  /** why a reconcile_mismatch restore was refused before reaching SQL (route: detail.restore_note) */
- restoreNote?:'reconcile_wiring_missing'|InputsUnavailable['unavailable'];
+ restoreNote?:'reconcile_wiring_missing'|'no_rows_promoted'|InputsUnavailable['unavailable'];
  adoptedFactId?:string;
- restore?:{promoted:number;skipped:{fact_id:string;reason:string}[];restore_note?:'no_rows_promoted'};
+ restore?:{promoted:number;skipped:{fact_id:string;reason:string}[]};
  quarantined?:number;
  /** the verdict's persisted choices (a retry reports these, never the retrying request's body) */
  chosenCandidateIndex?:number;keepFactId?:string;
@@ -234,7 +234,7 @@ async function restore(db:FactsDb,tables:TableClient,item:Row,input:ResolveFacts
  try{r=await withBatch(tables,String(item.dataset),batchId=>db.restoreReconciled(id,batchId,hash,input.resolvedBy));}
  catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
  const hook=await runHook(db,tables,id,hookTarget(item),now);
- return {outcome:'resolved',hook,promoted:r.promoted,restore:{promoted:r.promoted,skipped:r.skipped,...(r.promoted===0?{restore_note:'no_rows_promoted' as const}:{})}};
+ return {outcome:'resolved',hook,promoted:r.promoted,restore:{promoted:r.promoted,skipped:r.skipped},...(r.promoted===0?{restoreNote:'no_rows_promoted' as const}:{})};
 }
 
 async function lineageVerdict(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsInput,now:()=>Date):Promise<FactsResolveResult>{
@@ -243,8 +243,11 @@ async function lineageVerdict(db:FactsDb,tables:TableClient,item:Row,input:Resol
  let r:{quarantined:number};
  try{r=await withBatch(tables,String(item.dataset),batchId=>db.resolveLineageConflict(id,keep,batchId,input.resolvedBy));}
  catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
- const target=String(item.natural_key).split(':')[0];
- const hook=await runHook(db,tables,id,market?{issuer:target,market}:null,now);
+ // the target is the one the SQL verdict persisted (detail.issuer_id / market), same as every retry; the natural key's first segment is only the fallback
+ let persisted:{issuer:string;market:Market}|null=null;
+ try{const [fresh]=await tables.select(TABLE,{id},{limit:1});persisted=fresh?hookTarget(fresh):null;}catch(e){console.error('[admin/dq] target read',e instanceof Error?e.message:String(e));}
+ const fallback=String(item.natural_key).split(':')[0];
+ const hook=await runHook(db,tables,id,persisted??(market?{issuer:fallback,market}:null),now);
  return {outcome:'resolved',hook,quarantined:r.quarantined,keepFactId:keep,chosenFactIds:[keep]};
 }
 

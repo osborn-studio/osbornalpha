@@ -189,7 +189,7 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
    readFacts:vi.fn(async(_issuer:string,_market:string,_opts:{history?:boolean})=>({stateRev:revs.length>1?revs.shift()!:revs[0],rows:o.readRows??[],truncated:false})),
    adoptCandidate:vi.fn(async(_item:string,_index:number,_batch:string,_rev:number,_by:string)=>({factId:'50000000-0000-4000-8000-000000000005',runId:'60000000-0000-4000-8000-000000000006',issuerId:ISSUER,market:'US' as const})),
    restoreReconciled:vi.fn(async():Promise<{promoted:number;skipped:{fact_id:string;reason:string}[]}>=>({promoted:1,skipped:[]})),
-   resolveLineageConflict:vi.fn(async()=>({quarantined:1})),
+   resolveLineageConflict:vi.fn(async(_item:string,_keep:string,_batch:string,_by:string)=>({quarantined:1})),
    resolveFactsQuarantine:vi.fn(async()=>({promoted:0,skipped:0,chosenFactIds:[]})),
    factsByIds:vi.fn(async()=>[]),
   };
@@ -291,7 +291,9 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   expect(mocks.materialize).toHaveBeenCalledWith(db,ISSUER,'US');
   expect(r).toMatchObject({outcome:'resolved',promoted:1,restore:{promoted:1,skipped:[]},hook:{state:'done'}});
   db.restoreReconciled.mockResolvedValueOnce({promoted:0,skipped:[{fact_id:A,reason:'ineligible'}]});
-  expect((await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:hashOf})).restore).toEqual({promoted:0,skipped:[{fact_id:A,reason:'ineligible'}],restore_note:'no_rows_promoted'});
+  const none=await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:hashOf});
+  expect(none.restore).toEqual({promoted:0,skipped:[{fact_id:A,reason:'ineligible'}]});
+  expect(none.restoreNote).toBe('no_rows_promoted');
   db.restoreReconciled.mockRejectedValueOnce(new FactsDbError('not_passing'));
   expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW,inputsHashNow:hashOf})).toEqual({outcome:'conflict',code:'not_passing'});
  });
@@ -394,5 +396,14 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   const r=await resolveFactsItem(db,tables,racy,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
   expect(r.hook).toMatchObject({state:'failed',message:'hook_superseded'});
   expect(((await tables.select('dq_quarantine',{id:racy.id}))[0].detail as {hook:unknown}).hook).toEqual(NEWER);
+ });
+
+ it('review: the lineage verdict materialises the target the SQL verdict persisted (detail.issuer_id), the same as a retry would',async()=>{
+  const {tables,db,item}=h3();
+  const PERSISTED='70000000-0000-4000-8000-000000000007';
+  const it_=await item('lineage_conflict',{fact_ids:[KEEP,A]},{naturalKey:`${T}:revenue:2023-07-01:2023-09-30:consolidated:USD:2023-11-03`});
+  db.resolveLineageConflict.mockImplementationOnce(async(id:string)=>{const [cur]=await tables.select('dq_quarantine',{id});await tables.update('dq_quarantine',{id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'x',detail:{...(cur.detail as Record<string,unknown>),chosen_fact_ids:[KEEP],issuer_id:PERSISTED,market:'US'}});return {quarantined:1};});
+  await resolveFactsItem(db,tables,it_,{status:'resolved_accept',keepFactId:KEEP,resolvedBy:ADMIN,now:NOW});
+  expect(mocks.materialize).toHaveBeenLastCalledWith(db,PERSISTED,'US');
  });
 });
