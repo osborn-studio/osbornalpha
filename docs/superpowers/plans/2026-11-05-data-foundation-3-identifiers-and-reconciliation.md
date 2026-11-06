@@ -33,7 +33,7 @@
 - 代码风格：沿用 `src/lib/dq`、`src/lib/entities`、`src/lib/facts` 的紧凑风格（单空格缩进、少空行）；每个新文件顶部一段注释写职责与规格条目号。
 - i18n：`messages/{zh,en}/admin.json` 的 `dq` 下新增键，`src/i18n/messages-parity.test.ts`（仓库实际路径）比较键集。
 - UI：`/admin/dq` 的新面板按 owner 规则先有 Claude Design 画布：https://claude.ai/artifact/YM8CqAEWFpz1LZFnkfT3Y1（Task 19b Step 1），组件与 tokens 复用现有，无新颜色。
-- Advisory lock 登记（接口对齐记录 #4）：SQL `claim_calendar_pass` 用 `pg_advisory_xact_lock(hashtext('dq_calendar_pass:'||market))`（规格 U1）；测试串行化锁 `CALENDAR_TEST_LOCK = 724311001`（会话级，`identifiers.integration.test.ts` 与 `calendar.integration.test.ts` 共用）。新增锁键必须登记到这里。
+- Advisory lock 登记（接口对齐记录 #4）：SQL `claim_calendar_pass` 用 `pg_advisory_xact_lock(hashtext('dq_calendar_pass:'||market))`（规格 U1）；测试串行化锁 `CALENDAR_TEST_LOCK = 724311001`（会话级，`identifiers.integration.test.ts` 与 `calendar.integration.test.ts` 共用）。新增锁键必须登记到这里。周期锁 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'||pair))`（`open_reconcile_cycle`、`set_merge`）：**取它的函数必须先取它、再取任何行锁**（计划审计 R1；`set_dissolved` 不取）。
 
 ## 文件结构
 
@@ -54,7 +54,7 @@ src/lib/entities/types.ts            ValidFromMethod / ValidToMethod / ClaimIdTy
 src/lib/entities/provenance.ts       sanitizeProvenance / PROVENANCE_KEYS / ProvenanceError（Task 2b）
 src/lib/entities/securities.ts       attachSecurity 写方法列 + 经 sanitizeProvenance（Task 2b）
 src/lib/entities/claims.ts           fileClaim(claim/1) / validateClaimDetail / claimTargetKey（Task 2b；调用方同步；追加证据经 append_claim_evidence）
-src/lib/db/table-client.ts、memory-table-client.ts、pg-table-client.ts   TableClient.rpc? / callRpc；内存实现模拟迁移一两个补丁函数（Task 2b）
+src/lib/db/table-client.ts、memory-table-client.ts、pg-table-client.ts   TableClient.rpc? / callRpc；内存实现模拟迁移一三个行锁函数（Task 2b；`set_security_identifier` 为计划审计 R2）
 src/lib/entities/identifiers/gleif.ts        parseGleifCsv / subsetForLeis（Task 3a）
 src/lib/entities/identifiers/openfigi.ts     mapIsins / mapTickers / groupFigiResults / EXCH_MAP / EXCH_MAP_VERSION / exchCodeFor（Task 3b）
 src/lib/entities/identifiers/hkex-list.ts    parseHkexList / HKEX_LIST_FILES（Task 3a）
@@ -246,6 +246,7 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
 | `finish_calendar_pass`（1） | `(p_pass_token jsonb) returns text`（终态） | `fence_failed` `pass_incomplete` |
 | `append_claim_evidence`（1） | `(p_issuer uuid, p_id_type text, p_value text, p_op text, p_target_key text, p_evidence jsonb) returns text` → `'appended'\|'duplicate'\|'not_found'`；`for update` 锁住五列键的 pending 行，与 `detail.evidence`/`detail.sources[]` 按 `source + evidence_sha256` 去重，只 `jsonb_set(detail,'{sources}',…)`；TS 包装 `claims.ts::appendEvidence` → `callRpc`（Task 2b；计划审计 P3） | `invalid_evidence`（22023） |
 | `patch_quarantine_detail`（1） | `(p_id uuid, p_key text, p_value jsonb) returns boolean`（项不存在 → false）；`for update` 锁住项后 `detail = detail \|\| jsonb_build_object(p_key, p_value)`，只允许 `p_key ∈ {hook, audit_written}`；TS 包装 `quarantine.ts::patchQuarantineDetail`（Task 11；`facts-resolver.ts::writeHook/markAudited`、`run.ts` 钩子写入都经它；计划审计 P4） | `invalid_detail_key`（22023） |
+| `set_security_identifier`（1） | `(p_issuer uuid, p_ticker text, p_valid_from date, p_column text, p_value text, p_provenance jsonb) returns text` → `'written'\|'duplicate'\|'conflict'\|'not_found'`；`p_column ∈ {isin, figi}`、`p_provenance` 恰含 `p_column` 一个键；`for update` 锁住开放行后**同一条 UPDATE** 写列（仅空列）并 `provenance = provenance \|\| p_provenance`（只合并该键，不整体替换）；同值缺键 → 补键并答 `duplicate`；ISIN 唯一/互斥违反（23505/23P01）原样抛出；TS 入口 `identifiers/apply.ts` → `callRpc`（Task 4a；计划审计 R2） | `invalid_identifier_write`（22023） |
 | 触发器 `issuers_topology_guard`（1） | `before insert or update of status, merged_into on issuers`：update 改变拓扑、或 insert 时 `status<>'active'` / `merged_into is not null`，且 `entities.allow_topology_write` 不为 `on` → 拒绝（接口对齐记录 #7） | `topology_write_forbidden`（23514） |
 | `set_filing_acceptance`（2） | `(p_filing uuid, p_accepted timestamptz, p_source text) returns boolean` | `acceptance_conflict` |
 | `read_filing_facts`（2） | `(p_filing uuid, p_include_non_ok boolean) returns jsonb` → `{rows:[…+run_status]}` | — |
@@ -260,9 +261,9 @@ export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|nu
 | `apply_reconcile_result`（2） | `(p_fence jsonb, p_result jsonb) returns jsonb` → `{reused, reconciliation_id, item_id, quarantined, materialize}`；`quarantine_left` 只要求 `left_fact_id`，隔离条件见 C3 末段 | `fence_failed` `invalid_result` |
 | `complete_reconcile_member`（2） | `(p_fence jsonb) returns jsonb` → 三计数 | `fence_failed` `member_incomplete` |
 | `fail_reconcile_member`（2） | `(p_fence jsonb, p_error text) returns void` | `fence_failed` |
-| `set_merge`（2） | `(p_source uuid, p_target uuid, p_resolved_by uuid) returns jsonb` → `{repointed}`；缺失的 scope 行插入占位 `priority=0, reasons='[]', fetch_key='topology'`（`on conflict do nothing`）；持 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`（与 `open_reconcile_cycle` 同一把锁，计划审计 Q2）后把 `{issuer_id:T, market, source:S}`×2（按整条去重）追加进 `facts.lineage_same_day` 最新一行周期（running 优先）的 `detail.pending_members`，无周期行则不写 | `source_not_active` `invalid_merge` + 计划一触发器原样错误 |
+| `set_merge`（2） | `(p_source uuid, p_target uuid, p_resolved_by uuid) returns jsonb` → `{repointed}`；缺失的 scope 行插入占位 `priority=0, reasons='[]', fetch_key='topology'`（`on conflict do nothing`）；**最先**（在 scope/发行人行锁之前，计划审计 R1）取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`（与 `open_reconcile_cycle` 同一把锁，计划审计 Q2），之后把 `{issuer_id:T, market, source:S}`×2（按整条去重）追加进 `facts.lineage_same_day` 最新一行周期（running 优先）的 `detail.pending_members`，无周期行则不写 | `source_not_active` `invalid_merge` + 计划一触发器原样错误 |
 | `open_reconcile_cycle`（2，Task 8c 第 13 节） | `(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb) returns jsonb` → `{created, cycle, transferred}`；先取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'\|\|p_pair))`；已有 running 周期 → 原样返回（`created:false`，不消费）；否则一个事务内插周期行（`expected_total=Σ`）、每成员一条 pending 游标、从该 pair 各周期行 `detail.pending_members` **只删 `p_pending` 所列条目**（其后登记的条目留给下一周期）；撞 running 部分唯一索引 → 返回赢家；TS 包装 `FactsDb.openReconcileCycle`（三实现，Task 9a；计划审计 Q2） | `invalid_members`（22023） |
-| `set_dissolved`（2） | `(p_issuer uuid, p_resolved_by uuid) returns void` | `has_referrers` `source_not_active` |
+| `set_dissolved`（2） | `(p_issuer uuid, p_resolved_by uuid) returns void`；不取周期 advisory 锁（不登记 pending；与 `open_reconcile_cycle` 只有单向等待，计划审计 R1） | `has_referrers` `source_not_active` |
 | `fact_promote_rows`（2 `create or replace`，保留全部落地谓词与 revoke） | `(uuid, text, uuid[])` 不变 | — |
 
 周期行的建立（含游标与 `pending_members` 移交）只经 `open_reconcile_cycle`（计划审计 Q2：与 `set_merge` 的登记串行化，不再由 `run.ts` 整列改写 `detail`）；结算汇总由 `run.ts` 经 `TableClient` 带 `status='running'` 守卫更新（无业务效果）；结算前断言每个 `done` 游标满足 `drc_done_accounted`（不 coalesce）。
@@ -302,7 +303,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 
 ### 各部分新增导出（骨架未列者由各 Part 在其开头"本部分新增导出"中列明；后续 Part 只能 import 已列名字）
 
-跨 Part 的 SEC submissions 形状以 Task 6a 为准：`fetchSubmissions(cik, deps:{fetch, raw, userAgent?, budget?, …}, opts?:{coverFrom?})` → `SubmissionsSnapshot{cik, fetchedAt, main:StoredDoc, pages:StoredDoc[], parsed:ParsedSubmissions, complete}`，`parsed.filings` = `recent` + 已抓取的 `files[]` 分页（`primaryDocument`/`isInlineXBRL` 可为 null）。Task 12 读 `snap.main.sha256`、`snap.parsed.filings`；Task 17b/18 只经 `filer-categories.ts::submissionsView` 读它（接口对齐记录 #34）。
+跨 Part 的 SEC submissions 形状以 Task 6a 为准：`fetchSubmissions(cik, deps:{fetch, raw, userAgent?, budget?, …}, opts?:{coverFrom?})` → `SubmissionsSnapshot{cik, fetchedAt, main:StoredDoc, pages:StoredDoc[], parsed:ParsedSubmissions, complete}`，`parsed.filings` = `recent` + 已抓取的 `files[]` 分页（`primaryDocument`/`isInlineXBRL` 可为 null）。Task 12 读 `snap.main.sha256`、`snap.pages[].sha256`（按条目 `page` 取证据哈希）、`snap.parsed.filings`，并以 `coverFrom` = 最早待补 `available_date` − 7 天调用（计划审计 R3）；Task 17b/18 只经 `filer-categories.ts::submissionsView` 读它（接口对齐记录 #34）。
 
 ---
 
@@ -391,7 +392,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 31 | 单独重放 `20261106090000` 会在并发套件中途还原计划三函数（C6） | `facts.integration.test.ts` 改为在同一事务内重放 `20261106090000` + `20261107091000`；今后任何重放计划二迁移的测试都必须同样追加 | Task 8a（原稿） |
 | 32 | 对账 `pair` 列不得有枚举 CHECK（C10） | Part A 只有 `length(pair) between 1 and 64`（`dq_reconciliations_pair_check`），无枚举；Part C 用 `test.<8 hex>` 作 pair 的测试可行 | 无改动（核对通过） |
 | 33 | `apply_reconcile_result` 约定（C11） | `reconcile_mismatch` 项 `natural_key=<pair>:<natural_key>:<left_fact_id>`（Part D `mismatchItemKey` 一致）；`dataset='reconcile.'\|\|pair`；结果行 `detail` 合并 `{item_id, inputs_hash}`；项 `batch_id`=围栏批次；`review_item`/`lineage_item` 同键 open 项复用 | Task 8c（原稿）；Task 14a（原稿） |
-| 34 | `SubmissionsSnapshot` 形状（C12、E3） | 以 Task 6a 为准（见骨架"各部分新增导出"段）。Task 12 改读 `snap.main.sha256`、`snap.parsed.filings`（`acceptanceIndex(entries:readonly SubmissionFiling[])`；不在 `recent` 的旧 filing → `acceptance_not_found`）；Task 17b/18 的 `submissionsView` 改为映射 `cik.padStart(10)`、`main.sha256`、`parsed.*`，所有 `fetchSubmissions` 调用补 `fetch` 依赖与 `coverFrom`（日历：`filingsWindowStart(today)`；类别脚本：4 年前 1 月 1 日） | Task 12 测试与实现；Task 17b `submissionsView` 与测试、`scripts/dq/filer-categories.ts`；Task 18b `calendar-deps.ts`、`scripts/dq/calendar-sync.ts` 与测试 |
+| 34 | `SubmissionsSnapshot` 形状（C12、E3） | 以 Task 6a 为准（见骨架"各部分新增导出"段）。Task 12 改读 `snap.main.sha256`、`snap.parsed.filings`（`acceptanceIndex(entries:readonly SubmissionFiling[])`；~~不在 `recent` 的旧 filing → `acceptance_not_found`~~ **计划审计 R3 修订（#68）：以 `coverFrom` 抓取覆盖待补 filing 的历史分页**）；Task 17b/18 的 `submissionsView` 改为映射 `cik.padStart(10)`、`main.sha256`、`parsed.*`，所有 `fetchSubmissions` 调用补 `fetch` 依赖与 `coverFrom`（日历：`filingsWindowStart(today)`；类别脚本：4 年前 1 月 1 日） | Task 12 测试与实现；Task 17b `submissionsView` 与测试、`scripts/dq/filer-categories.ts`；Task 18b `calendar-deps.ts`、`scripts/dq/calendar-sync.ts` 与测试 |
 | 35 | Part C 比规格更严之处（C13） | 采纳：`reconcile_mismatch` 谓词也挡 `resolved_reject`；`lineage_conflict` 成员 = `payload.fact_ids ∪ detail.quarantined_fact_ids`；恢复/谱系裁决要求 running 批次；`set_filing_acceptance` 只接受 `source='edgar'` 且需事务内开关 | Task 8a/8b（原稿）；Task 20 记入规格 §15 |
 | 36 | `CalendarFiling` 的"已发布"判定（C14） | 以 `run_status='published' && mapping_gen>0` 判定已收到 | Task 17a `counts`（原稿已如此） |
 | 37 | `PairContext` 缺批次/dry-run；`ReconcilePair` 缺输入配方（D4、D5） | 新增 `PairRunContext`、`runContextOf`、`RegisteredPair{inputs:{repoFile, parserVersion, goldSchema}}` | Task 14a（原稿） |
@@ -423,6 +424,9 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 63 | 严格 TS 5.9.3 编译阻断（P7–P11） | P7：`ixbrl.ts` 解析器状态收进显式类型对象 `ParseState`（`st.*`）；P8：`apply.test.ts` 的 `SecFixture` 显式类型；P9：17a/18a 日历夹具补 `acceptance_source:null`；P10：`new Response(new Uint8Array(bytes))`、`sampleBytes:Uint8Array`；P11：`lineage.integration.test.ts` 在 `beforeAll` 插入 `ADMIN` 到 `auth.users`（审计外键不放宽） | Task 13b Step 3/5；Task 4a Step 2；Task 17a/18a Step 1；Task 15a/15c Step 1；Task 15c Step 1 |
 | 64 | 建周期可能丢失并发登记的合并成员、或让新目标零键冻结（计划审计 Q2） | `pending_members` 元素改为 `{issuer_id, market, source}`（`PendingMember`，按整条去重）；`set_merge` 登记前取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`；迁移二第 13 节新增 `open_reconcile_cycle(p_pair, p_cycle_id, p_started_at, p_members, p_pending) returns jsonb`（同一把锁；已有 running → 原样返回；否则一个事务插周期行 + 全部游标、只删 `p_pending` 所列条目；`invalid_members`）；`FactsDb.openReconcileCycle(OpenCycleInput):Promise<OpenCycleResult>` 三实现 + `db.ts::openCycleFromJson`；`RegisteredPair.memberFor?(ctx, issuerId, market)`（谱系对实现）。运行器设计：先读 pending 快照，**之后**才解析预期键（`members()`，再对快照中未列出的目标调 `memberFor`），把成员与快照一起交给函数——快照里的合并对解析器已可见，快照之后的登记不被消费、进下一周期；运行器不再整列改写周期行 `detail`，读 pending 时不再看 `pending_consumed_by`（仅审计） | C3/C4/C5；Task 8a `set_merge` 与用例；Task 8c 第 13 节与 4 个用例；Task 9a 类型、三实现、`openCycleFromJson`、存根与内存用例；Task 9b 第 8 个契约用例；Task 13a grep 计数 12；Task 14a `memberFor`；Task 14b 第 1 点、`openCycle`、5 个用例 |
 | 65 | 一个未覆盖的老期间让 US 全部日历行变 `unknown_upstream`（计划审计 Q1） | `calendar-sync.ts::applyUpstreamCoverage(rows, entries)`（导出）逐期判定：`最早 filingDate < period_end` 为已覆盖；未覆盖但有正证据（`received`/`received_late`/`filed_not_ingested`）保持原行；只有未覆盖且无证据的 `pending`/`overdue` 行改为 `unknown_upstream` + `upstream_lookup='unavailable'` + `detail.upstream_incomplete=true` + `detail.upstream_covered_from` | Task 18a 协议、`computeMember`、3 个用例（含 20-F 回归）；顺带把夹具里过期的 `fromPeriodEnd` 期望 `2022-11-23` 改为 P6 后的 `2017-11-23` |
+| 66 | 建周期与合并可能死锁（计划审计 R1） | `fact_set_merge_body` 在参数校验后、`fact_topology_lock` 与发行人 `for update` 之前**最先**取 `pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'))`（原登记前的取锁删除）；规则：取 `dq_reconcile_cycle:*` 锁的函数必须先取它、再取任何行锁（仓库约定 advisory lock 登记）。`open_reconcile_cycle` 本就先取锁再插游标（游标外键对发行人行取 KEY SHARE），注释改正；`set_dissolved` 不取周期锁（只有单向等待），注释写明 | 仓库约定锁登记；C5 `set_merge`/`set_dissolved` 行；Task 8a `fact_set_merge_body`、`fact_set_dissolved_body` 注释；Task 8c 第 13 节注释、新增双连接用例（周期成员含合并目标，两种先后都完成，等待在 advisory 锁上）、Step 5 计数 8c 13 |
+| 67 | 并发写 ISIN/FIGI 会互相抹掉 provenance（计划审计 R2） | 迁移一新函数 `set_security_identifier(p_issuer uuid, p_ticker text, p_valid_from date, p_column text, p_value text, p_provenance jsonb) returns text`（`'written'\|'duplicate'\|'conflict'\|'not_found'`；`for update` 锁开放行，同一 UPDATE 写空列并 `provenance = provenance \|\| p_provenance`；`p_provenance` 恰含 `p_column` 键；`invalid_identifier_write` 22023；ISIN 唯一/互斥违反原样抛出；仅 `service_role`）；内存实现模拟；`apply.ts` 每个列写入只经 `callRpc(tables,'set_security_identifier',…)`，`conflict` 时再读当前值建 `correct_identifier`。核对：`resolve_identifier_claim` 已是按键 `provenance \|\| v_pw`（不改） | C5；Part A 新增导出；Task 1b SQL、授权用例、3 个集成用例（结果语义、并发 ISIN/FIGI、与声明解析两种交错）、计数 35；Task 2b `memory-table-client.ts`、`table-client.test.ts` +1；Task 4a `apply.ts`、`apply.test.ts`（互斥违反用例改 spy `rpc`、新增并发用例）；规格 §15 偏差行 |
+| 68 | 历史 SEC 受理时刻永远抓不到（计划审计 R3） | `AcceptanceDeps.submissions(cik10, b, coverFrom)`；`enrichAcceptance` 以 `acceptanceCoverFrom(pending)`（最早待补 `available_date` − `ACCEPTANCE_COVER_MARGIN_DAYS=7`）调用；生产（Task 12 `deps.ts`、14c Step 3b）与脚本 `enrich-acceptance.ts` 都把它传给 `fetchSubmissions(…,{coverFrom})`；`AcceptanceEntry.page` 逐条保留，`pageSha256(snap,page)` 给日期不一致结果的右侧证据（历史页 → `document=<页名>`、该页 sha256） | Task 12 测试（调用参数、历史分页回归）与实现、`deps.ts`、脚本；Task 14c Step 3b (b)(c)；骨架 Task 6a 形状段；#34 标注 |
 
 ---
 
@@ -441,12 +445,12 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 
 **本部分新增导出**（骨架未列、本部分定义；后续 Part 可直接使用）：
 
-- SQL（迁移一）：内部助手 `claim_text_is_date(text) returns boolean`、`claim_keys_within(jsonb, text[]) returns boolean`、`claim_evidence_ok(jsonb) returns boolean`、`identifier_claim_target_key(text, jsonb) returns text`、`identifier_claim_problem(text, text, text, uuid, jsonb) returns text`（null = 合法，否则字段名）、`dq_calendar_lock_pass(jsonb) returns dq_calendar_passes`（全部 `revoke … from public, anon, authenticated, service_role`）。触发器函数 `issuers_topology_guard()`。服务端函数（仅 `service_role`；计划审计 P3/P4）：`append_claim_evidence(uuid, text, text, text, text, jsonb) returns text`、`patch_quarantine_detail(uuid, text, jsonb) returns boolean`（见 C5）。
+- SQL（迁移一）：内部助手 `claim_text_is_date(text) returns boolean`、`claim_keys_within(jsonb, text[]) returns boolean`、`claim_evidence_ok(jsonb) returns boolean`、`identifier_claim_target_key(text, jsonb) returns text`、`identifier_claim_problem(text, text, text, uuid, jsonb) returns text`（null = 合法，否则字段名）、`dq_calendar_lock_pass(jsonb) returns dq_calendar_passes`（全部 `revoke … from public, anon, authenticated, service_role`）。触发器函数 `issuers_topology_guard()`。服务端函数（仅 `service_role`；计划审计 P3/P4/R2）：`append_claim_evidence(uuid, text, text, text, text, jsonb) returns text`、`patch_quarantine_detail(uuid, text, jsonb) returns boolean`、`set_security_identifier(uuid, text, date, text, text, jsonb) returns text`（见 C5）。
 - SQL 码（C5 之外）：`resolve_identifier_claim` 另抛 `claim_not_found`（P0002，路由应映射 404）；`fail_calendar_member` 另抛 `member_not_claimable`（成员不存在 / 已 `done` / `attempts >= 3`）；`claim_calendar_pass` 另抛 `invalid_market`、`invalid_batch`（22023）。业务码一律 P0001，`invalid_claim`/`invalid_rows` 为 22023，`topology_write_forbidden` 为 23514。
 - SQL 行为补充：`claim_calendar_pass` 允许**当前持租批次续租**（同 `claim_fact_sync_lease`）；`replace_filing_expectations` 与 `fail_calendar_member` 成功时把租约续到 `clock_timestamp() + 10 min`。
 - 约束名（测试与后续 Part 依赖）：`issuer_securities_valid_from_method_check`、`issuer_securities_valid_to_method_check`、`issuer_securities_to_method_iff_to`、`issuer_identifier_claims_{id_type_check,op_check,target_key_check,target_key_required,detail_object,pending_has_no_resolution}`、索引 `issuer_identifier_claims_pending_unique`（5 列）、`dq_reconciliations_{pair_check,kind_check,outcome_check,detail_object,market_check,attempt_check,cycle_cols,numeric_sides,nonnumeric_sides}`、索引 `dq_reconciliations_cycle_key`、`dq_reconciliations_pair_created_idx`、`dq_reconcile_cycles_{members_array,detail_object,finished_iff_terminal}`、索引 `dq_reconcile_cycles_running_uniq`、`dq_reconcile_cursor_cycle_fkey`、`drc_*`、`dq_calendar_passes_open_uniq`、`dcp_finished_iff_terminal`、`dq_calendar_pass_members_pass_fkey`、`dq_filing_expectations_detail_object`、`dfe_*`。
 - `src/lib/supabase/database.types.ts`：`ValidFromMethod`、`ValidToMethod`、`IssuerClaimOp`、`DqReconcileKind`、`DqReconcileOutcome`、`DqReconcileCycle`、`DqReconcileCursor`、`DqCalendarPass`、`DqCalendarPassMember`、`IssuerFilerCategory`、`DqFilingExpectation`、`IssuerFilingProfile`。
-- `src/lib/db/table-client.ts`：`TableClient.rpc?(fn, args): Promise<unknown>`（可选：落地的测试桩不受影响）、`callRpc(client, fn, args)`（无 `rpc` → `throw new Error('rpc_unavailable:<fn>')`）；`memoryTableClient` 模拟 `append_claim_evidence`、`patch_quarantine_detail`（未知函数 → `TableError` 42883）；`pgTableClient.rpc` 用命名参数调用 `public.<fn>`。
+- `src/lib/db/table-client.ts`：`TableClient.rpc?(fn, args): Promise<unknown>`（可选：落地的测试桩不受影响）、`callRpc(client, fn, args)`（无 `rpc` → `throw new Error('rpc_unavailable:<fn>')`）；`memoryTableClient` 模拟 `append_claim_evidence`、`patch_quarantine_detail`、`set_security_identifier`（计划审计 R2；未知函数 → `TableError` 42883）；`pgTableClient.rpc` 用命名参数调用 `public.<fn>`。
 - `src/lib/dq/datasets.ts`：`DQ_DATASET_NAMES: readonly string[]`、`inventoryEntry(dataset: string): DatasetEntry`（未知 → `throw new Error('unknown_dataset:<d>')`；生产者写新鲜度时用它取 cadence）。
 - `src/lib/dq/freshness.ts`：`CADENCES`（改为导出）。
 - `src/lib/dq/dashboard.ts`：`dashboardDatasets(loaded: Iterable<unknown>, selected?: string): string[]`；`DqDashboard.datasets: string[]`。
@@ -1405,7 +1409,7 @@ git commit -m "feat(dq): migration one schema — window methods, claim/1 column
 **Files:**
 - Modify: `supabase/migrations/20261107090000_identifiers_and_dq.sql`（末尾追加；本任务结束时锁定）
 - Modify: `supabase/migrations.lock.json`
-- Modify: `src/lib/entities/identifiers.integration.test.ts`（加一行 import，末尾追加四个 describe；第四个是计划审计 P3/P4 的补丁函数与交错用例）
+- Modify: `src/lib/entities/identifiers.integration.test.ts`（加一行 import，末尾追加四个 describe；第四个是计划审计 P3/P4 的补丁函数与交错用例，以及计划审计 R2 的 `set_security_identifier` 用例）
 - Modify: `src/lib/entities/issuers.integration.test.ts`（拓扑写入与出生即非活跃的插入改经 `topo()` / `newIssuerTopo()`）
 - Modify: `src/lib/entities/issuers-write.integration.test.ts`（同上）
 
@@ -1637,7 +1641,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1881,6 +1885,57 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   expect((await fails(patch('latest_result',{passed:false}))).message).toBe('invalid_detail_key');
   expect(await admin.query(`select public.patch_quarantine_detail($1,'hook','{}'::jsonb) v`,[randomUUID()]).then(r=>r.rows[0].v)).toBe(false);
  });
+
+ // Plan audit round 3, R2: the guarded identifier write and its provenance key land in one locked UPDATE.
+ const setId=(k:{issuer:string;ticker:string},col:string,value:string,prov:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.set_security_identifier($1,$2,'2020-01-01'::date,$3,$4,$5::jsonb) v`,[k.issuer,k.ticker,col,value,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const secState=async(t:string)=>(await q(`select isin,figi,provenance from public.issuer_securities where ticker=$1`,[t]))[0];
+ const PI={isin:{source:'gleif_openfigi',as_of:'2026-11-05',evidence_sha256:'1'.repeat(64)}};
+ const PF={figi:{source:'openfigi',as_of:'2026-11-05',evidence_sha256:'2'.repeat(64)}};
+ it('set_security_identifier: written / duplicate (completing a missing key) / conflict / not_found; exactly one provenance key; other keys kept',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin=randomIsin(),figi=randomFigi();
+  expect(await setId(k,'isin',isin,PI)).toBe('written');
+  expect(await setId(k,'isin',isin,PI)).toBe('duplicate');
+  expect(await setId(k,'isin',randomIsin(),PI)).toBe('conflict');
+  await q(`update public.issuer_securities set figi=$2 where ticker=$1`,[t,figi]);                    // value present, provenance key missing
+  expect(await setId(k,'figi',figi,PF)).toBe('duplicate');
+  expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,...PF}});
+  expect(await setId({issuer:a,ticker:await ticker()},'isin',randomIsin(),PI)).toBe('not_found');
+  for(const bad of [()=>setId(k,'lei',randomLei(),{lei:{}}),()=>setId(k,'isin',randomIsin(),PF),()=>setId(k,'isin',randomIsin(),{...PI,...PF}),()=>setId(k,'figi','',PF)])
+   expect(await fails(bad())).toMatchObject({message:'invalid_identifier_write',code:'22023'});
+ });
+ it('concurrent ISIN and FIGI writes on one row both keep their value and their provenance key: the second waits on the row lock',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin=randomIsin(),figi=randomFigi();
+  await inTx(admin,async tx=>{
+   expect(await setId(k,'isin',isin,PI,tx.c)).toBe('written');
+   const second=setId(k,'figi',figi,PF);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('written');
+  });
+  expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,...PF}});
+ });
+ it('an identifier write interleaved with a claim resolution on the same row keeps both values and both evidence keys, in either order',async()=>{
+  for(const claimFirst of [true,false]){
+   const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+   await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+   const isin=randomIsin(),figi=randomFigi();
+   const id=await newClaim({issuer:a,id_type:'figi',value:figi,op:'set_identifier',target:{issuer_id:a,ticker:t,valid_from:'2020-01-01'}});   // provenance = {figi: EVIDENCE}
+   await inTx(admin,async tx=>{
+    if(claimFirst)expect(await resolve(id,'accepted',null,REVIEWER,tx.c)).toMatchObject({applied:true});
+    else expect(await setId(k,'isin',isin,PI,tx.c)).toBe('written');
+    const second=claimFirst?setId(k,'isin',isin,PI):resolve(id,'accepted');
+    await stillBlockedBehind(admin,tx.pid,second);
+    await tx.commit();
+    expect(await second).toEqual(claimFirst?'written':{op:'set_identifier',applied:true,amended:false});
+   });
+   expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,figi:EVIDENCE}});
+  }
+ });
 });
 ```
 
@@ -1937,7 +1992,7 @@ Expected: `issuers.integration.test.ts:12`、`issuers-write.integration.test.ts:
 - [ ] **Step 3: 跑测试确认失败**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/identifiers.integration.test.ts`
-Expected: FAIL——Task 1a 的 11 个用例仍通过；新用例报 `function public.resolve_identifier_claim(unknown, unknown, unknown, jsonb) does not exist`、`function public.claim_calendar_pass(unknown, unknown) does not exist`、`function public.append_claim_evidence(…) does not exist`、`function public.patch_quarantine_detail(…) does not exist`；守卫用例 `expected rejection`（无触发器时直接 update 成功）。
+Expected: FAIL——Task 1a 的 11 个用例仍通过；新用例报 `function public.resolve_identifier_claim(unknown, unknown, unknown, jsonb) does not exist`、`function public.claim_calendar_pass(unknown, unknown) does not exist`、`function public.append_claim_evidence(…) does not exist`、`function public.patch_quarantine_detail(…) does not exist`、`function public.set_security_identifier(…) does not exist`；守卫用例 `expected rejection`（无触发器时直接 update 成功）。
 
 - [ ] **Step 4: 在迁移文件末尾追加函数半**
 
@@ -2364,6 +2419,44 @@ end $$;
 revoke execute on function public.patch_quarantine_detail(uuid, text, jsonb) from public, anon, authenticated;
 grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to service_role;
 
+-- ---------------------------------------------------------------- guarded identifier write (plan audit round 3, R2)
+-- set_security_identifier is the only writer of issuer_securities.isin/figi outside resolve_identifier_claim
+-- (identifiers/apply.ts, Task 4a). It locks the open row (issuer, ticker, valid_from, valid_to null) and
+-- in ONE UPDATE writes the column (only when empty) and merges the single provenance key with
+-- `provenance || p_provenance` — never a whole-object replacement — so a concurrent write of the other
+-- column, or a claim resolution (which also merges with ||), keeps its key. p_provenance must carry
+-- exactly the key p_column. Outcomes: 'written' (the column was empty), 'duplicate' (the same value is
+-- stored; a missing provenance key is completed in the same UPDATE), 'conflict' (another value is
+-- stored; nothing written — the caller files correct_identifier), 'not_found' (no open row). ISIN
+-- uniqueness / no-overlap violations (23505 / 23P01) pass through unchanged.
+create or replace function public.set_security_identifier(p_issuer uuid, p_ticker text, p_valid_from date, p_column text, p_value text, p_provenance jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_cur text; v_prov jsonb;
+begin
+  if p_column is null or p_column not in ('isin', 'figi') or coalesce(p_value, '') = ''
+     or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
+     or (select array_agg(k) from jsonb_object_keys(p_provenance) k) is distinct from array[p_column] then
+    raise exception 'invalid_identifier_write' using errcode = '22023';
+  end if;
+  select case when p_column = 'isin' then s.isin else s.figi end, s.provenance into v_cur, v_prov
+  from public.issuer_securities s
+  where s.issuer_id = p_issuer and s.ticker = p_ticker and s.valid_from = p_valid_from and s.valid_to is null
+  for update;
+  if not found then return 'not_found'; end if;
+  if v_cur is not null and v_cur <> p_value then return 'conflict'; end if;
+  if v_cur = p_value and coalesce(v_prov ? p_column, false) then return 'duplicate'; end if;
+  if p_column = 'isin' then
+    update public.issuer_securities set isin = p_value, provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  else
+    update public.issuer_securities set figi = p_value, provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  end if;
+  return case when v_cur is null then 'written' else 'duplicate' end;
+end $$;
+revoke execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) to service_role;
+
 -- ---------------------------------------------------------------- topology guard (§3.1, S1)
 -- issuers.status/merged_into change only inside set_merge/set_dissolved (migration two), which switch
 -- the transaction-local setting on and restore it on every exit path. A never-defined setting reads
@@ -2397,7 +2490,7 @@ create trigger issuers_topology_guard before insert or update of status, merged_
 - [ ] **Step 5: 跑测试确认通过；全量回归；迁移演练**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/identifiers.integration.test.ts src/lib/entities/issuers.integration.test.ts src/lib/entities/issuers-write.integration.test.ts src/lib/dq/dq-foundation.integration.test.ts`
-Expected: PASS——`identifiers.integration.test.ts` 11 + 9 + 4 + 5 + 3 = 32 个用例全部通过；另三套件全部通过（拓扑夹具经 `topo()`，计划一触发器的错误原样出现）。
+Expected: PASS——`identifiers.integration.test.ts` 11 + 9 + 4 + 5 + 6 = 35 个用例全部通过（第四个 describe 含计划审计 R2 的 3 个 `set_security_identifier` 用例）；另三套件全部通过（拓扑夹具经 `topo()`，计划一触发器的错误原样出现）。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`
 Expected: PASS（10 分钟以上；`reports/research-db-summary.json` 的 `criticalSuites` 比计划二结束时 +1，`criticalSkipped: 0`）。若 `facts.integration`/`sync-us.integration` 出现计划二交接文档登记过的本地偶发失败，单独重跑该文件确认后继续。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations`
@@ -2925,7 +3018,7 @@ git commit -m "feat(dq): typed dataset registry, weekly cadence, dashboard datas
 - Modify: `src/lib/entities/issuers.test.ts`（`attachSecurity` 整个 describe 替换、import）
 - Modify: `src/lib/entities/load-sec.test.ts:52-55`、`src/lib/entities/link-research.test.ts:58-62`
 - Modify: `src/lib/entities/issuers-write.integration.test.ts`（`fileClaim` 用例、`sec` 助手、声明期望、并发追加用例）
-- Modify: `src/lib/db/table-client.ts`（`TableClient.rpc?`、`callRpc`、`supabaseTableClient.rpc`）、`src/lib/db/memory-table-client.ts`（`rpc`：模拟迁移一的 `append_claim_evidence`、`patch_quarantine_detail`）、`src/lib/db/pg-table-client.ts`（`rpc`）、`src/lib/db/table-client.test.ts`（追加 rpc 用例）——计划审计 P3/P4：声明证据的追加与隔离项 `detail` 的补丁只经 Task 1b 的行锁函数，不再读后整体替换
+- Modify: `src/lib/db/table-client.ts`（`TableClient.rpc?`、`callRpc`、`supabaseTableClient.rpc`）、`src/lib/db/memory-table-client.ts`（`rpc`：模拟迁移一的 `append_claim_evidence`、`patch_quarantine_detail`、`set_security_identifier`（计划审计 R2））、`src/lib/db/pg-table-client.ts`（`rpc`）、`src/lib/db/table-client.test.ts`（追加 rpc 用例）——计划审计 P3/P4：声明证据的追加与隔离项 `detail` 的补丁只经 Task 1b 的行锁函数，不再读后整体替换
 
 调用方清单（`grep -rn 'fileClaim\|attachSecurity' src scripts` 于 2026-11-05）：`fileClaim` ← `securities.ts`（2 处）、`issuers.ts::claimFor`、`issuers-write.integration.test.ts`；`attachSecurity` ← `load-sec.ts:146`、`link-research.ts:166`、`issuers.test.ts`、`issuers-write.integration.test.ts`（`load-sec.test.ts`/`link-research.test.ts` 只 mock）。`scripts/` 下无直接调用。
 
@@ -3375,7 +3468,7 @@ describe('attachSecurity',()=>{
 ```
 `src/lib/db/table-client.test.ts`：import 行 `import {selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';` 改为 `import {callRpc,selectAll,supabaseTableClient,TableError,MAX_PAGE} from './table-client';`，文件末尾追加：
 ```ts
-describe('rpc (plan 3 row-locking jsonb patches; plan audit P3/P4)',()=>{
+describe('rpc (plan 3 row-locking functions; plan audit P3/P4/R2)',()=>{
  const EV={source:'gleif',as_of:'2026-11-05',evidence_sha256:'b'.repeat(64)};
  const later=(c:string)=>({...EV,evidence_sha256:c.repeat(64)});
  it('memoryTableClient emulates append_claim_evidence: dedupe, append to detail.sources only, not_found once resolved',async()=>{
@@ -3398,6 +3491,18 @@ describe('rpc (plan 3 row-locking jsonb patches; plan audit P3/P4)',()=>{
   expect(c.rows('dq_quarantine')[0].detail).toEqual({latest_result:{passed:true},hook:{stage:'done',state:'done',at:'t'},audit_written:true});
   await expect(callRpc(c,'patch_quarantine_detail',{p_id:'q1',p_key:'latest_result',p_value:{}})).rejects.toMatchObject({code:'22023'});
   expect(await callRpc(c,'patch_quarantine_detail',{p_id:'nope',p_key:'hook',p_value:{}})).toBe(false);
+ });
+ it('memoryTableClient emulates set_security_identifier: guarded write, one provenance key merged, concurrent ISIN/FIGI both kept (plan audit R2)',async()=>{
+  const c=memoryTableClient();
+  await c.insert('issuer_securities',{issuer_id:'i',ticker:'AAPL',valid_from:'2020-01-01',valid_to:null,isin:null,figi:null,provenance:{exchange:'Nasdaq'}});
+  const args=(col:string,v:string,pv:unknown)=>({p_issuer:'i',p_ticker:'AAPL',p_valid_from:'2020-01-01',p_column:col,p_value:v,p_provenance:pv});
+  const PI={isin:{source:'g'}},PF={figi:{source:'o'}};
+  expect(await Promise.all([callRpc(c,'set_security_identifier',args('isin','US0378331005',PI)),callRpc(c,'set_security_identifier',args('figi','BBG000B9XRY4',PF))])).toEqual(['written','written']);
+  expect(c.rows('issuer_securities')[0]).toMatchObject({isin:'US0378331005',figi:'BBG000B9XRY4',provenance:{exchange:'Nasdaq',...PI,...PF}});
+  expect(await callRpc(c,'set_security_identifier',args('isin','US0378331005',PI))).toBe('duplicate');
+  expect(await callRpc(c,'set_security_identifier',args('isin','US0000000000',PI))).toBe('conflict');
+  expect(await callRpc(c,'set_security_identifier',{...args('isin','X',PI),p_ticker:'NOPE'})).toBe('not_found');
+  await expect(callRpc(c,'set_security_identifier',args('isin','X',PF))).rejects.toMatchObject({code:'22023'});
  });
  it('callRpc refuses a client without rpc; an unknown function fails like PostgreSQL (42883)',async()=>{
   const c=memoryTableClient();
@@ -3907,9 +4012,9 @@ export async function callRpc(client:TableClient,fn:string,args:Row):Promise<unk
   },
 ```
 
-`src/lib/db/memory-table-client.ts`：文件头注释末尾加一行 `//  - rpc emulates only the plan-3 row-locking jsonb patches (append_claim_evidence, patch_quarantine_detail); one synchronous JS turn stands for the row lock.`；签名改为 `export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{rows(table:string):Row[];rpc(fn:string,args:Row):Promise<unknown>}{`（内存实现必有 `rpc`，测试可直接 `vi.spyOn(tables,'rpc')` 或调用 `tables.rpc`）；`const inRange=…;` 之后加：
+`src/lib/db/memory-table-client.ts`：文件头注释末尾加一行 `//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier); one synchronous JS turn stands for the row lock.`；签名改为 `export function memoryTableClient(keys:Record<string,string[]>={}):TableClient&{rows(table:string):Row[];rpc(fn:string,args:Row):Promise<unknown>}{`（内存实现必有 `rpc`，测试可直接 `vi.spyOn(tables,'rpc')` 或调用 `tables.rpc`）；`const inRange=…;` 之后加：
 ```ts
-// Plan 3 row-locking jsonb patches (migration 20261107090000, Task 1b) with the SQL functions' answers
+// Plan 3 row-locking functions (migration 20261107090000, Task 1b) with the SQL functions' answers
 // and error codes; an unknown function fails like PostgreSQL (42883).
 const isObj=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const sameEvidence=(a:unknown,b:Row)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
@@ -3936,6 +4041,21 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
   row.detail={...(isObj(row.detail)?row.detail:{}),[key]:clone(a.p_value)};
   return true;
  },
+ // plan audit round 3, R2: guarded ISIN/FIGI write + one provenance key merged (never replaced) in one step
+ set_security_identifier(rowsOf,a){
+  const col=a.p_column,v=a.p_value,pv=a.p_provenance;
+  if((col!=='isin'&&col!=='figi')||typeof v!=='string'||v===''||!isObj(pv)||Object.keys(pv).length!==1||!(col in pv))
+   throw new TableError('rpc','set_security_identifier','invalid_identifier_write','22023');
+  const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from&&r.valid_to==null);
+  if(!row)return 'not_found';
+  const prov=isObj(row.provenance)?row.provenance:{};
+  const cur=row[col]==null?null:String(row[col]);
+  if(cur!==null&&cur!==v)return 'conflict';
+  if(cur===v&&col in prov)return 'duplicate';
+  row.provenance={...prov,...clone(pv)};
+  if(cur===null){row[col]=v;return 'written';}
+  return 'duplicate';
+ },
 };
 ```
 返回对象里 `upsert` 方法之后加：
@@ -3959,7 +4079,7 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `npm test -- src/lib/entities src/lib/dq src/lib/facts src/lib/db`
-Expected: PASS——`provenance.test.ts` 3、`claims.test.ts` 11、`table-client.test.ts` 旧用例 + 3、`issuers.test.ts`（`attachSecurity` describe 23 个，upsert 用例不变）、`load-sec.test.ts`、`link-research.test.ts` 全部通过；`src/lib/dq`、`src/lib/facts` 不回归。
+Expected: PASS——`provenance.test.ts` 3、`claims.test.ts` 11、`table-client.test.ts` 旧用例 + 4（含计划审计 R2 的 `set_security_identifier` 模拟）、`issuers.test.ts`（`attachSecurity` describe 23 个，upsert 用例不变）、`load-sec.test.ts`、`link-research.test.ts` 全部通过；`src/lib/dq`、`src/lib/facts` 不回归。
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/entities/issuers-write.integration.test.ts src/lib/entities/issuers.integration.test.ts src/lib/entities/identifiers.integration.test.ts`
 Expected: PASS（`issuers-write` 在真实 schema 上：claim/1 行、5 列 pending 唯一索引、并发追加经 `append_claim_evidence` 不丢证据、`attach_security`/`correct_identifier` 声明、关闭窗口带 `unrecorded` 方法）。
 
@@ -4953,7 +5073,7 @@ describe('planIdentifierWrites · stages C and D',()=>{
 
 ```ts
 // src/lib/entities/identifiers/apply.test.ts
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
 import {TableError,type TableClient} from '../../db/table-client';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {batchStatusFromCounts} from '../../dq/batches';
@@ -5008,9 +5128,9 @@ describe('applyIdentifierPlan',()=>{
  });
  it('an ISIN exclusion violation files a set_identifier claim and quarantines ownership_conflict',async()=>{
   const c=await setup();
-  const failing:TableClient={...c,update:async(t,m,p)=>{
-   if(t==='issuer_securities'&&'isin' in p)throw new TableError('update','issuer_securities','conflicting key value violates exclusion constraint "issuer_securities_isin_no_overlap"','23P01');
-   return c.update(t,m,p);
+  const failing:TableClient={...c,rpc:async(fn,a)=>{
+   if(fn==='set_security_identifier'&&a.p_column==='isin')throw new TableError('rpc','set_security_identifier','conflicting key value violates exclusion constraint "issuer_securities_isin_no_overlap"','23P01');
+   return c.rpc(fn,a);
   }};
   const res=await applyIdentifierPlan(failing,planIdentifierWrites(input({isin:null,figi:null})),opts);
   expect(res.counts).toMatchObject({inserted:1,quarantined:1,failed:0});
@@ -5034,6 +5154,18 @@ describe('applyIdentifierPlan',()=>{
   const again=await applyIdentifierPlan(c,plan,opts);
   expect(again.claimsSummary).toEqual({correct_identifier_appended:1});
   expect(c.rows('issuer_identifier_claims')).toHaveLength(1);
+ });
+ it('concurrent ISIN and FIGI applies on one row keep both values and both provenance keys (plan audit R2)',async()=>{
+  const c=await setup();
+  const p=planIdentifierWrites(input({isin:null,figi:null}));
+  const only=(col:'isin'|'figi')=>({...p,writes:p.writes.filter(w=>w.column===col),claims:[],quarantines:[],recons:[],duplicates:0,skipped:[]});
+  const spy=vi.spyOn(c,'rpc');
+  const [a,b]=await Promise.all([applyIdentifierPlan(c,only('isin'),opts),applyIdentifierPlan(c,only('figi'),opts)]);
+  expect([a.counts.inserted,b.counts.inserted]).toEqual([1,1]);
+  expect(spy.mock.calls.map(x=>x[0])).toEqual(['set_security_identifier','set_security_identifier']);   // no read-merge-replace update
+  const [r]=c.rows('issuer_securities');
+  expect(r).toMatchObject({isin:'US0378331005',figi:'BBG000B9XRY4'});
+  expect(Object.keys(r.provenance as object).sort()).toEqual(['exchange','figi','isin']);
  });
 });
 ```
@@ -5242,12 +5374,15 @@ export function planIdentifierWrites(input:PlanInput):IdentifierPlan{
 // Writes an IdentifierPlan (spec §4.1.2 "写入"): guarded column sets (only an empty column of an open
 // row), provenance-only completions, claim/1 claims, ownership quarantines and the
 // entities.isin_hkex_vs_gleif text reconciliations (written directly until record.ts exists;
-// contract issue 7). Each write reads the row's current provenance and merges its one key, so a
-// failed sibling write never leaves provenance describing a value that is not stored. fetched =
+// contract issue 7). Each column write goes through the migration-one function set_security_identifier
+// (plan audit R2): under the security-row lock it writes the empty column and merges its ONE provenance
+// key with `||` in the same UPDATE, so a concurrent write of the other column or a claim resolution never
+// loses its evidence key, and a failed sibling write never leaves provenance describing a value that is
+// not stored. fetched =
 // rows with a table outcome; claims-only outcomes are reported in claims_summary (informational),
 // a correct_identifier also as identifier_mismatch (degrades the batch to partial).
 import {randomUUID} from 'node:crypto';
-import {TableError,type TableClient} from '../../db/table-client';
+import {TableError,callRpc,type TableClient} from '../../db/table-client';
 import {emptyCounts,type BatchCounts,type BatchError} from '../../dq/batches';
 import {DATASETS} from '../../dq/datasets';
 import {fileClaim,type ClaimInput} from '../claims';
@@ -5257,7 +5392,7 @@ import {ISIN_RECON_PAIR,type IdentifierPlan,type SecurityWrite} from './plan';
 export interface IdentifierApplyResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>;claimsSummary:Record<string,number>}
 
 const violates=(e:unknown)=>e instanceof TableError&&(e.code==='23505'||e.code==='23P01');
-const provOf=(v:unknown)=>(v&&typeof v==='object'&&!Array.isArray(v)?v:{}) as Record<string,unknown>;
+type SetOutcome='written'|'duplicate'|'conflict'|'not_found';
 const claimFor=(w:SecurityWrite,op:'set_identifier'|'correct_identifier',current:string|null):ClaimInput=>({
  issuer_id:w.issuer_id,id_type:w.column,value:w.value,source:w.source,op,detail:{
   schema:'claim/1',evidence_kind:w.evidenceKind,target:{issuer_id:w.issuer_id,ticker:w.ticker,valid_from:w.valid_from},
@@ -5283,17 +5418,17 @@ export async function applyIdentifierPlan(tables:TableClient,plan:IdentifierPlan
   const key={issuer_id:w.issuer_id,ticker:w.ticker,valid_from:w.valid_from};
   const where=`${w.ticker}:${w.valid_from}:${w.column}`;
   try{
-   const [cur]=await tables.select('issuer_securities',key,{limit:1});
-   if(!cur||cur.valid_to!==null){counts.failed++;errors.push({code:'row_changed',key:where,message:'row missing or closed'});continue;}
-   const stored=cur[w.column]==null?null:String(cur[w.column]);
-   const provenance={...provOf(cur.provenance),...w.patch};
-   if(stored!==null&&stored!==w.value){await fileOne(claimFor(w,'correct_identifier',stored));continue;}
-   if(stored===w.value&&w.column in provOf(cur.provenance)){counts.duplicates++;continue;}
-   const n=stored===null
-    ?await tables.update('issuer_securities',{...key,valid_to:null,[w.column]:null},{[w.column]:w.value,provenance})
-    :await tables.update('issuer_securities',{...key,valid_to:null,[w.column]:w.value},{provenance});
-   if(n!==1){counts.failed++;errors.push({code:'row_changed',key:where,message:'guarded update matched no row'});continue;}
-   if(stored===null)counts.inserted++;else counts.duplicates++;
+   const outcome=await callRpc(tables,'set_security_identifier',{p_issuer:w.issuer_id,p_ticker:w.ticker,p_valid_from:w.valid_from,p_column:w.column,p_value:w.value,p_provenance:w.patch}) as SetOutcome;
+   if(outcome==='written'){counts.inserted++;continue;}
+   if(outcome==='duplicate'){counts.duplicates++;continue;}
+   if(outcome==='conflict'){
+    // another value is stored: read it for the claim's expected_current (resolution re-checks it under its own guard)
+    const [cur]=await tables.select('issuer_securities',{...key,valid_to:null},{limit:1});
+    const stored=cur?.[w.column]==null?null:String(cur[w.column]);
+    if(stored===null||stored===w.value){counts.failed++;errors.push({code:'row_changed',key:where,message:'stored value changed after conflict'});continue;}
+    await fileOne(claimFor(w,'correct_identifier',stored));continue;
+   }
+   counts.failed++;errors.push({code:'row_changed',key:where,message:outcome==='not_found'?'row missing or closed':`unexpected outcome ${String(outcome)}`});
   }catch(e){
    if(w.column==='isin'&&violates(e)){
     await fileOne(claimFor(w,'set_identifier',null));
@@ -5347,7 +5482,7 @@ export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','cove
 - [ ] **Step 7: 跑测试确认通过**
 
 Run: `npm test -- src/lib/entities/identifiers/plan.test.ts src/lib/entities/identifiers/apply.test.ts src/lib/dq/batches.test.ts src/lib/facts/rules.test.ts`
-Expected: PASS（plan 9 tests、apply 4 tests，batches/rules 全绿）。
+Expected: PASS（plan 9 tests、apply 5 tests（含计划审计 R2 的并发用例），batches/rules 全绿）。
 
 - [ ] **Step 8: typecheck + lint**
 
@@ -9357,6 +9492,12 @@ revoke execute on function public.fact_topology_lock(uuid[]) from public, anon, 
 -- state_rev + 1; the target joins the next facts.lineage_same_day cycle — entry {issuer_id:T, market,
 -- source:S} appended under the cycle lock open_reconcile_cycle also takes (plan audit Q2), so a cycle
 -- creation never overwrites or half-consumes it; audit row.
+-- Lock order (plan audit R1): the cycle advisory lock is taken FIRST, before the scope rows
+-- (fact_topology_lock) and the issuers rows. open_reconcile_cycle holds the same advisory lock while
+-- its cursor inserts take KEY SHARE on issuers rows (cursor → issuers FK); taking the advisory lock
+-- after the issuer locks would let a merge hold FOR UPDATE on the target while waiting for the
+-- advisory lock that a creator holds while waiting for that row — a deadlock. Global rule: any
+-- function that takes a dq_reconcile_cycle:* advisory lock takes it before any row lock.
 create or replace function public.fact_set_merge_body(p_source uuid, p_target uuid, p_resolved_by uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_set uuid[]; v_now uuid[]; v_refs uuid[]; n int;
@@ -9367,6 +9508,7 @@ begin
   if not exists (select 1 from public.issuers where issuer_id = p_target) then
     raise exception 'merge_target_not_active: issuer % cannot merge into % (status missing)', p_source, p_target using errcode = '23514';
   end if;
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'));   -- FIRST, before any row lock (plan audit R1); serialises with open_reconcile_cycle (plan audit Q2)
   v_set := array(select distinct x from unnest(array[p_source, p_target] || array(select issuer_id from public.issuers where merged_into in (p_source, p_target))) as x order by x);
   perform public.fact_topology_lock(v_set);
   perform 1 from public.issuers where issuer_id = any(v_set) order by issuer_id for update;
@@ -9381,7 +9523,7 @@ begin
   get diagnostics n = row_count;
   if n <> 1 then raise exception 'source_not_active' using errcode = 'P0001'; end if;
   update public.fact_sync_scope set state_rev = state_rev + 1, updated_at = now() where issuer_id = any(v_set);
-  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:facts.lineage_same_day'));   -- serialises with open_reconcile_cycle (plan audit Q2)
+  -- the cycle advisory lock is already held (taken first, above)
   update public.dq_reconcile_cycles c
   set detail = jsonb_set(c.detail, '{pending_members}',
         coalesce(case when jsonb_typeof(c.detail -> 'pending_members') = 'array' then c.detail -> 'pending_members' end, '[]'::jsonb)
@@ -9417,6 +9559,10 @@ grant execute on function public.set_merge(uuid, uuid, uuid) to service_role;
 -- Body of set_dissolved: same lock set (issuer + referrers); referrers → has_referrers (re-point
 -- them with set_merge first); active → dissolved (row_count = 1, else source_not_active); the
 -- plan-1 trigger refuses an issuer with open securities; state_rev + 1; audit row.
+-- Lock order (plan audit R1): set_dissolved registers no pending member and takes NO cycle advisory
+-- lock, so it never waits for anything open_reconcile_cycle holds — a creator inserting a cursor for
+-- this issuer may wait behind its FOR UPDATE (one-way wait, no cycle). If it ever needs the cycle
+-- lock, it must take it first, as set_merge does.
 create or replace function public.fact_set_dissolved_body(p_issuer uuid, p_resolved_by uuid)
 returns void language plpgsql security definer set search_path = public as $$
 declare v_set uuid[]; v_now uuid[]; n int;
@@ -10263,6 +10409,39 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
    await expect(merger).resolves.toEqual({repointed:0});
   });
 
+  it('lock order (plan audit R1): a creator whose cycle contains the merge target and a concurrent set_merge into that target both complete, in either order — no deadlock',async()=>{
+   const s1=await issuer(),t1=await issuer(),s2=await issuer(),t2=await issuer(),by=await user();
+   const lockSql=`select pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'||$1))`;
+   // (a) the creator already holds the cycle lock and has not inserted its cursors yet; the merge arrives now.
+   //     Fixed order: the merge waits on the advisory lock holding NO scope/issuer row; the creator's cursor
+   //     insert for t1 (KEY SHARE on issuers via the FK) does not wait; both finish. Old order: the merge held
+   //     t1 FOR UPDATE while waiting → 40P01 on one side.
+   let merger:Promise<unknown>|undefined;let opened:Opened|undefined;
+   await inTx(admin,async({c,pid})=>{
+    await lineageStage(c,[]);
+    await c.query(lockSql,[LINEAGE]);                                              // what open_reconcile_cycle takes first
+    merger=inRolledBackTx(admin,async c2=>{
+     expect((await c2.query(`select public.set_merge($1,$2,$3) v`,[s1,t1,by])).rows[0].v).toEqual({repointed:0});
+    },1);merger.catch(()=>{});
+    await stillBlockedBehind(admin,pid,merger);
+    expect(await q(`select distinct l.locktype from pg_locks l join pg_stat_activity a on a.pid=l.pid where not l.granted and $1 = any(pg_blocking_pids(a.pid))`,[pid])).toEqual([{locktype:'advisory'}]);   // the merge waits on the advisory lock, not on a row
+    opened=await openC(c,LINEAGE,lid(),[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[]);   // re-entrant advisory lock; cursor insert on t1
+   });                                                                              // rolled back
+   expect(opened).toMatchObject({created:true});
+   await expect(merger).resolves.toBeUndefined();
+   // (b) the merge into t2 runs first and holds every lock; the creator for a cycle containing t2 waits, then finishes.
+   let creator:Promise<void>|undefined;
+   await inTx(admin,async({c,pid})=>{
+    expect((await c.query(`select public.set_merge($1,$2,$3) v`,[s2,t2,by])).rows[0].v).toEqual({repointed:0});
+    creator=inRolledBackTx(admin,async c2=>{
+     await lineageStage(c2,[]);
+     expect(await openC(c2,LINEAGE,lid(),[{issuer_id:t2,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[])).toMatchObject({created:true});
+    },1);creator.catch(()=>{});
+    await stillBlockedBehind(admin,pid,creator);
+   });                                                                              // rolled back: the creator proceeds
+   await expect(creator).resolves.toBeUndefined();
+  });
+
   it('open_reconcile_cycle: invalid members are refused; a creator that dies before commit leaves pending, cycle and cursors untouched, and the rerun consumes once (crash recovery)',async()=>{
    const t1=await issuer();const pair=newPair();
    const e1={issuer_id:t1,market:'US',source:randomUUID()};
@@ -10515,8 +10694,10 @@ grant execute on function public.apply_reconcile_result(jsonb, jsonb) to service
 --  p_pending entries leave every cycle row's detail.pending_members (an entry registered after the
 --  snapshot stays and joins the next cycle); the new row's detail records pending_merged_from /
 --  pending_transferred. A writer that bypassed the lock hits the running partial unique index:
---  unique_violation → the winner is returned (created false). Lock order: advisory lock, then cycle rows
---  (set_merge: topology locks, advisory lock, cycle row) — no cycle.
+--  unique_violation → the winner is returned (created false). Lock order: advisory lock, then cursor
+--  inserts (KEY SHARE on issuers via the FK), then cycle rows; set_merge takes the same advisory lock
+--  FIRST, before its scope/issuer locks (plan audit R1) — so neither side holds a row the other needs
+--  while waiting for the advisory lock; set_dissolved takes no advisory lock (one-way wait) — no cycle.
 create or replace function public.open_reconcile_cycle(p_pair text, p_cycle_id text, p_started_at timestamptz, p_members jsonb, p_pending jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_row public.dq_reconcile_cycles; r record; v_keep jsonb; v_take jsonb; v_from text[] := '{}'; v_moved jsonb := '[]'::jsonb;
@@ -10592,7 +10773,7 @@ grant execute on function public.open_reconcile_cycle(text, text, timestamptz, j
 - [ ] **Step 5: 跑测试确认通过**
 
 `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/dq/dq-extensions.integration.test.ts src/lib/facts/facts.integration.test.ts src/lib/facts/sync-us.integration.test.ts src/lib/entities/identifiers.integration.test.ts`
-Expected: PASS（8a 13 + 8b 10 + 8c 12（含计划审计 Q2 的 4 个 `open_reconcile_cycle` 用例）；迁移一套件不回归）。
+Expected: PASS（8a 13 + 8b 10 + 8c 13（含计划审计 Q2 的 4 个 `open_reconcile_cycle` 用例与计划审计 R1 的锁顺序用例）；迁移一套件不回归）。
 
 - [ ] **Step 6: 锁定迁移**
 
@@ -13352,9 +13533,11 @@ import {acceptanceIndex,enrichAcceptance,parseAcceptanceDateTime} from './sec-ac
 
 const budget:Budget={remainingMs:()=>60_000,signal:new AbortController().signal};
 type Entry=SubmissionFiling;
-const entry=(accessionNumber:string,filingDate:string,acceptanceDateTime:string|null,form='10-Q'):Entry=>({accessionNumber,filingDate,reportDate:'2023-12-31',acceptanceDateTime,form,primaryDocument:'d.htm',isInlineXBRL:true,page:'main'});
+const entry=(accessionNumber:string,filingDate:string,acceptanceDateTime:string|null,form='10-Q',page='recent'):Entry=>({accessionNumber,filingDate,reportDate:'2023-12-31',acceptanceDateTime,form,primaryDocument:'d.htm',isInlineXBRL:true,page});
 // Task 6a shape: SubmissionsSnapshot{cik, fetchedAt, main:StoredDoc, pages, parsed:{…, filings}, complete}
-const snapshot=(recent:Entry[]):SubmissionsSnapshot=>({cik:'320193',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'main',sha256:'a'.repeat(64),path:`sec-submissions/${'a'.repeat(64)}.json`},pages:[],parsed:{filings:recent},complete:true} as unknown as SubmissionsSnapshot);
+const PAGE1='CIK0000320193-submissions-001.json';
+const snapshot=(recent:Entry[],pages:{name:string;sha256:string}[]=[]):SubmissionsSnapshot=>({cik:'320193',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'main',sha256:'a'.repeat(64),path:`sec-submissions/${'a'.repeat(64)}.json`},
+ pages:pages.map(x=>({...x,path:`sec-submissions/${x.sha256}.json`})),parsed:{filings:recent},complete:true} as unknown as SubmissionsSnapshot);
 
 describe('parseAcceptanceDateTime',()=>{
  it('accepts SEC UTC timestamps and refuses everything else (missing stays missing)',()=>{
@@ -13367,7 +13550,7 @@ describe('parseAcceptanceDateTime',()=>{
 describe('acceptanceIndex',()=>{
  it('indexes by accessionNumber; a repeated accession with the same values is kept, a disagreeing one is ambiguous and left out',()=>{
   const {index,ambiguous}=acceptanceIndex([entry('A','2024-02-01','2024-02-01T21:05:00.000Z'),entry('A','2024-02-01','2024-02-01T21:05:00.000Z'),entry('B','2024-03-01','2024-03-01T10:00:00.000Z'),entry('B','2024-03-02','2024-03-01T10:00:00.000Z'),entry('C','2024-04-01',null)]);
-  expect(index.get('A')).toEqual({accessionNumber:'A',filingDate:'2024-02-01',form:'10-Q',acceptedAt:'2024-02-01T21:05:00.000Z'});
+  expect(index.get('A')).toEqual({accessionNumber:'A',filingDate:'2024-02-01',form:'10-Q',acceptedAt:'2024-02-01T21:05:00.000Z',page:'recent'});
   expect(index.has('B')).toBe(false);expect(ambiguous).toEqual(['B']);
   expect(index.get('C')!.acceptedAt).toBeNull();
  });
@@ -13390,7 +13573,7 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   const record=vi.fn(async()=>{});
   const submissions=vi.fn(async()=>snap);
   const out=await enrichAcceptance({db,submissions,recordDateMismatch:record},{issuerId:iss,cik10:'0000320193'},budget);
-  expect(submissions).toHaveBeenCalledWith('0000320193',budget);
+  expect(submissions).toHaveBeenCalledWith('0000320193',budget,'2024-01-25');   // coverFrom = earliest pending available_date − 7 days (plan audit R3)
   expect(out.counts).toMatchObject({fetched:2,inserted:1,duplicates:0,failed:1});
   expect(out.errors).toEqual([{code:'skipped_summary',key:`${iss}:acceptance`,message:JSON.stringify({acceptance_not_found:2})}]);
   expect(record).toHaveBeenCalledTimes(1);
@@ -13402,6 +13585,27 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   // second pass: the accepted filing is no longer pending; the mismatch is reported again
   const again=await enrichAcceptance({db,submissions,recordDateMismatch:record},{issuerId:iss,cik10:'0000320193'},budget);
   expect(again.counts).toMatchObject({fetched:1,inserted:0,failed:1});
+  expect(submissions.mock.calls[1][2]).toBe('2024-04-25');                       // the accepted 2024-02-01 filing no longer widens the window
+ });
+ it('a pending accession listed only in a historical files[] page is fetched through coverFrom and written; a mismatch there cites that page and its hash (plan audit R3)',async()=>{
+  const {db,iss,absent,noTime}=await seeded();
+  const histSha='e'.repeat(64);
+  const withPage=snapshot([entry(noTime.sourceRef,'2024-11-01',null)],[{name:PAGE1,sha256:histSha}]);
+  (withPage.parsed.filings as Entry[]).push(entry(absent.sourceRef,'2024-08-02','2024-08-02T20:30:00.000Z','10-Q',PAGE1));
+  const mainOnly=snapshot([entry(noTime.sourceRef,'2024-11-01',null)]);
+  // the stub answers like fetchSubmissions: the historical page is included only when coverFrom reaches it
+  const submissions=vi.fn(async(_c:string,_b:Budget,coverFrom:string)=>coverFrom<='2024-08-02'?withPage:mainOnly);
+  const out=await enrichAcceptance({db,submissions,recordDateMismatch:async()=>{}},{issuerId:iss,cik10:'0000320193'},budget);
+  expect(submissions.mock.calls[0][2]<='2024-08-02').toBe(true);
+  expect((await db.findFilingBySourceRef('edgar',absent.sourceRef))!.accepted_at).toBe('2024-08-02T20:30:00.000Z');
+  expect(out.counts).toMatchObject({inserted:1});
+  // filingDate disagreeing on the historical page: the result points at PAGE1 and its sha256, not the main document
+  const {db:db2,iss:iss2,absent:absent2}=await seeded();
+  const moved=snapshot([],[{name:PAGE1,sha256:histSha}]);
+  (moved.parsed.filings as Entry[]).push(entry(absent2.sourceRef,'2024-08-01','2024-08-01T20:30:00.000Z','10-Q',PAGE1));
+  const record=vi.fn(async(_r:unknown)=>{});
+  await enrichAcceptance({db:db2,submissions:async()=>moved,recordDateMismatch:record},{issuerId:iss2,cik10:'0000320193'},budget);
+  expect(record.mock.calls[0][0]).toMatchObject({detail:{right:{document:PAGE1,sha256:histSha,locator:`${PAGE1}[accessionNumber=${absent2.sourceRef}]`}}});
  });
  it('without a recorder the mismatches are returned and the receipt says they were not recorded',async()=>{
   const {db,iss,snap}=await seeded();
@@ -13476,8 +13680,10 @@ Expected: FAIL（`Cannot find module './sec-acceptance'`；`enrichAcceptance` �
 // src/lib/facts/providers/sec-acceptance.ts
 // SEC acceptance times (plan 3 spec §4.5; step 9b of the US facts sync; E7). One submissions
 // snapshot (sec-submissions.ts: `parsed.filings` = filings.recent plus any fetched files[] pages; the
-// main document's raw bytes are in the reconcile-raw bucket under main.sha256) is indexed by accessionNumber.
-// Filings older than the main document's `recent` block are not fetched here → acceptance_not_found. Every edgar
+// main document's raw bytes are in the reconcile-raw bucket under main.sha256, each page's under its own
+// sha256) is indexed by accessionNumber. The snapshot is fetched with coverFrom = the earliest pending
+// available_date − 7 days (plan audit R3), so every files[] page that can hold a pending filing is fetched:
+// a filing listed only in a historical page is written, never left acceptance_not_found. Every edgar
 // filing of the issuer whose accepted_at is null:
 //  - in the snapshot with an acceptance time and filingDate = available_date →
 //    set_filing_acceptance(filing, acceptanceDateTime, 'sec_submissions'): true → inserted,
@@ -13497,10 +13703,14 @@ import type {Budget,FactsDb,FilingRow} from '../types';
 
 export const ACCEPTANCE_SOURCE='sec_submissions' as const;
 export const DATE_MISMATCH_PAIR='sec.filing_date_vs_submissions' as const;
-export interface AcceptanceEntry{accessionNumber:string;filingDate:string;form:string;acceptedAt:string|null}
+/** page = the SubmissionFiling page ('recent' = the main document, else the files[] page name), kept per entry for mismatch evidence. */
+export interface AcceptanceEntry{accessionNumber:string;filingDate:string;form:string;acceptedAt:string|null;page:string}
+/** Margin before the earliest pending available_date: a mismatching filingDate may precede it. */
+export const ACCEPTANCE_COVER_MARGIN_DAYS=7;
 export interface AcceptanceDeps{
  db:Pick<FactsDb,'filingsOfIssuer'|'setFilingAcceptance'>;
- submissions:(cik10:string,b:Budget)=>Promise<SubmissionsSnapshot>;
+ /** coverFrom ('YYYY-MM-DD') is passed to fetchSubmissions: every files[] page with filingTo >= coverFrom is fetched (plan audit R3). */
+ submissions:(cik10:string,b:Budget,coverFrom:string)=>Promise<SubmissionsSnapshot>;
  /** records one sec.filing_date_vs_submissions result (record.ts, plan-3 Part D); absent → returned in `mismatches` only */
  recordDateMismatch?:(r:ReconcileResultInput)=>Promise<void>;
 }
@@ -13518,7 +13728,7 @@ export function parseAcceptanceDateTime(v:unknown):string|null{
 export function acceptanceIndex(entries:readonly SubmissionFiling[]):{index:Map<string,AcceptanceEntry>;ambiguous:string[]}{
  const index=new Map<string,AcceptanceEntry>();const bad=new Set<string>();
  for(const e of entries){
-  const x:AcceptanceEntry={accessionNumber:e.accessionNumber,filingDate:e.filingDate,form:e.form,acceptedAt:parseAcceptanceDateTime(e.acceptanceDateTime)};
+  const x:AcceptanceEntry={accessionNumber:e.accessionNumber,filingDate:e.filingDate,form:e.form,acceptedAt:parseAcceptanceDateTime(e.acceptanceDateTime),page:e.page};
   const seen=index.get(x.accessionNumber);
   if(seen&&(seen.filingDate!==x.filingDate||seen.acceptedAt!==x.acceptedAt))bad.add(x.accessionNumber);
   else if(!seen)index.set(x.accessionNumber,x);
@@ -13526,11 +13736,21 @@ export function acceptanceIndex(entries:readonly SubmissionFiling[]):{index:Map<
  for(const a of bad)index.delete(a);
  return {index,ambiguous:[...bad].sort()};
 }
-/** The sec.filing_date_vs_submissions result of one filing (natural key <cik>:<accession>, dates compared as text). */
-export function filingDateMismatch(cik:string,f:FilingRow,e:AcceptanceEntry,snapshotSha256:string|null):ReconcileResultInput{
+/** earliest pending available_date − ACCEPTANCE_COVER_MARGIN_DAYS, as YYYY-MM-DD. */
+export function acceptanceCoverFrom(pending:readonly Pick<FilingRow,'available_date'>[]):string{
+ const min=pending.map(f=>f.available_date).sort()[0];
+ const d=new Date(`${min}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-ACCEPTANCE_COVER_MARGIN_DAYS);
+ return d.toISOString().slice(0,10);
+}
+/** sha256 of the document an entry came from: the main document for 'recent', else that files[] page (null if not fetched). */
+export const pageSha256=(snap:SubmissionsSnapshot,page:string):string|null=>page==='recent'?snap.main.sha256:snap.pages.find(p=>p.name===page)?.sha256??null;
+/** The sec.filing_date_vs_submissions result of one filing (natural key <cik>:<accession>, dates compared as text); the right side cites the entry's own page and hash. */
+export function filingDateMismatch(cik:string,f:FilingRow,e:AcceptanceEntry,pageSha:string|null):ReconcileResultInput{
  return {natural_key:`${cik}:${f.source_ref}`,kind:'date',outcome:'compared',passed:false,left_value:null,right_value:null,abs_diff:null,rel_diff:null,tolerance:'0',
   left_source:'filings.available_date',right_source:'sec_submissions.filingDate',action:'record',
-  detail:{left_text:f.available_date,right_text:e.filingDate,left:{filing_id:f.filing_id,source_ref:f.source_ref},right:{document:'submissions',sha256:snapshotSha256,locator:`filings.recent[accessionNumber=${e.accessionNumber}]`}}};
+  detail:{left_text:f.available_date,right_text:e.filingDate,left:{filing_id:f.filing_id,source_ref:f.source_ref},right:e.page==='recent'
+   ?{document:'submissions',sha256:pageSha,locator:`filings.recent[accessionNumber=${e.accessionNumber}]`}
+   :{document:e.page,sha256:pageSha,locator:`${e.page}[accessionNumber=${e.accessionNumber}]`}}};
 }
 
 export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:string;cik10:string},budget:Budget):Promise<AcceptanceOutcome>{
@@ -13538,7 +13758,7 @@ export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:stri
  const pending=(await deps.db.filingsOfIssuer(issuer.issuerId,'US',{})).filter(f=>f.source==='edgar'&&f.accepted_at===null);
  if(pending.length===0)return out;
  let snap:SubmissionsSnapshot;
- try{snap=await deps.submissions(issuer.cik10,budget);}
+ try{snap=await deps.submissions(issuer.cik10,budget,acceptanceCoverFrom(pending));}
  catch(e){out.errors.push({code:'sec_unavailable',key:issuer.issuerId,message:(e instanceof Error?e.message:String(e)).slice(0,200)});return out;}
  out.snapshotSha256=snap.main.sha256;
  const {index,ambiguous}=acceptanceIndex(snap.parsed.filings);
@@ -13549,7 +13769,7 @@ export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:stri
   if(!e||e.acceptedAt===null){notFound++;continue;}
   out.counts.fetched++;
   if(e.filingDate!==f.available_date){
-   const r=filingDateMismatch(cik,f,e,out.snapshotSha256);out.mismatches.push(r);out.counts.failed++;
+   const r=filingDateMismatch(cik,f,e,pageSha256(snap,e.page));out.mismatches.push(r);out.counts.failed++;
    if(deps.recordDateMismatch){
     try{await deps.recordDateMismatch(r);}
     catch(err){out.errors.push({code:'reconcile_record_failed',key:f.source_ref,message:(err instanceof Error?err.message:String(err)).slice(0,200)});}
@@ -13605,9 +13825,10 @@ import {enrichAcceptance} from './providers/sec-acceptance';
 （属性名与导入的函数同名：箭头函数体里的 `enrichAcceptance(…)` 指向导入的函数。）`productionSyncDeps` 返回对象在 `linkCn` 之后加：
 
 ```ts
-  // 9b: one submissions fetch per published US issuer; raw bytes into reconcile-raw. sec.filing_date_vs_submissions
+  // 9b: one submissions fetch per published US issuer, with the files[] pages back to the earliest pending
+  // filing (coverFrom, plan audit R3); raw bytes into reconcile-raw. sec.filing_date_vs_submissions
   // results are recorded once plan-3 Part D adds recordDateMismatch (record.ts) here.
-  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb})},{issuerId:issuer,cik10},b),
+  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom})},{issuerId:issuer,cik10},b),
 ```
 
 并在文件头注释第 2–3 行的组件清单后补 `, and step 9b (SEC acceptance times through sec-submissions.ts)`。
@@ -13694,7 +13915,7 @@ async function main():Promise<void>{
  const budget=makeBudget(null);
  for(const it of issuers){
   try{
-   const out=await enrichAcceptance({db:writes,submissions:(c,b)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b})},{issuerId:it.issuerId,cik10:it.cik10},budget);
+   const out=await enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b},{coverFrom})},{issuerId:it.issuerId,cik10:it.cik10},budget);
    for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]+=out.counts[k];
    errors.push(...out.errors);mismatches+=out.mismatches.length;
    if(out.counts.failed>0||out.errors.some(e=>e.code!=='skipped_summary'))issuerFailures++;
@@ -13703,7 +13924,7 @@ async function main():Promise<void>{
    issuerFailures++;errors.push({code:'unknown',key:it.issuerId,message:(e instanceof Error?e.message:String(e)).slice(0,200)});
    console.log(JSON.stringify({issuer:it.issuerId,label:it.label,error:e instanceof Error?e.message:String(e)}));
   }
-  await pause(120);   // SEC fair access between issuers (sec-submissions.ts paces its own page requests)
+  await pause(120);   // SEC fair access between issuers (sec-submissions.ts paces its own page requests, incl. the coverFrom pages)
  }
  let status='dry_run';
  if(batchId!==null){
@@ -13719,7 +13940,7 @@ main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.
 
 - [ ] **Step 6: 跑测试确认通过**
 
-`npm test -- src/lib/facts` —— Expected: PASS（`sec-acceptance.test.ts` 6 个、`sync.test.ts` 新 3 个、`deps.test.ts` 不回归）。
+`npm test -- src/lib/facts` —— Expected: PASS（`sec-acceptance.test.ts` 7 个（含计划审计 R3 的历史分页用例）、`sync.test.ts` 新 3 个、`deps.test.ts` 不回归）。
 脚本冒烟（不触网，只验参数）：`npx tsx scripts/facts/enrich-acceptance.ts --bogus; echo "exit=$?"` —— Expected: 打印 usage，`exit=2`。
 
 - [ ] **Step 7: typecheck + lint**
@@ -16555,14 +16776,15 @@ main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.
 (b) `src/lib/facts/deps.ts`：import 加 `import {recordReconciliation} from '../dq/reconcile/record';` 与 `import {DATE_MISMATCH_PAIR} from './providers/sec-acceptance';`（若已从该模块导入 `enrichAcceptance`，合并为一行），把 Task 12 加的 `enrichAcceptance` 属性改为：
 
 ```ts
-  // 9b: one submissions fetch per published US issuer; raw bytes into reconcile-raw; date mismatches recorded out of cycle (record.ts).
-  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb}),
+  // 9b: one submissions fetch per published US issuer, pages back to the earliest pending filing (coverFrom, plan audit R3);
+  // raw bytes into reconcile-raw; date mismatches recorded out of cycle (record.ts).
+  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom}),
    recordDateMismatch:async r=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:null});}},{issuerId:issuer,cik10},b),
 ```
 
 `deps.test.ts` 不需新用例（函数键已含 `enrichAcceptance`）。
 
-(c) `scripts/facts/enrich-acceptance.ts`：import 加 `import {recordReconciliation} from '../../src/lib/dq/reconcile/record';` 与 `DATE_MISMATCH_PAIR`（同 `enrichAcceptance` 的 import 行）；`enrichAcceptance({db:writes,submissions:…})` 的依赖对象加 `...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId});}}:{})`（`import type {ReconcileResultInput} from '../../src/lib/dq/reconcile/types';`；dry run 不写）；文件头注释里"they are written once plan-3 Part D wires recordDateMismatch"一句改为"with --apply they are recorded as sec.filing_date_vs_submissions rows (record.ts)"。
+(c) `scripts/facts/enrich-acceptance.ts`：import 加 `import {recordReconciliation} from '../../src/lib/dq/reconcile/record';` 与 `DATE_MISMATCH_PAIR`（同 `enrichAcceptance` 的 import 行）；`enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(…,{coverFrom})})`（Task 12 的三参数形状保持不变：抓取覆盖待补 filing 的历史分页，计划审计 R3）的依赖对象加 `...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId});}}:{})`（`import type {ReconcileResultInput} from '../../src/lib/dq/reconcile/types';`；dry run 不写）；文件头注释里"they are written once plan-3 Part D wires recordDateMismatch"一句改为"with --apply they are recorded as sec.filing_date_vs_submissions rows (record.ts)"。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -22041,7 +22263,7 @@ Expected: `1`
 |---|---|---|---|---|
 | 2026-11-05 | §6.1 封面类别解析顺序（Large → Accelerated → Non） | 先判 "non-accelerated"，再 "large accelerated"，再 "accelerated filer" | "Non-accelerated Filer" 也含 "accelerated filer"，按正文顺序会误判为加速；结果集与正文意图相同 | `src/lib/dq/filer-categories.ts::parseFilerCategory` |
 | 2026-11-05 | §6.1 "最近 6 个已结束报告期" | 先按适用报告种类过滤、再取最近 6 个已结束的槽：10-K/CN 为以年报月为锚的季度槽；20-F/40-F 只有年报，槽距 12 个月（6 个财年末；无假日表的年份 `no_rule`） | 正文未定义 20-F 的"报告期"；计划审计 P6 要求年报-only 发行人也得到 6 个已结束报告期 | `src/lib/dq/calendar.ts::computeExpectations`、`filingsWindowStart` |
-| 2026-11-05 | §3.1 迁移一函数清单 | 新增 `append_claim_evidence`、`patch_quarantine_detail`（行锁 jsonb 补丁，仅 `service_role`） | Codex 计划审计第一轮 P3/P4：读后整体替换会丢并发证据、回滚较新的 `latest_result` | `supabase/migrations/20261107090000_identifiers_and_dq.sql`、`src/lib/db/table-client.ts::callRpc` |
+| 2026-11-05 | §3.1 迁移一函数清单 | 新增 `append_claim_evidence`、`patch_quarantine_detail`（行锁 jsonb 补丁，仅 `service_role`）；`set_security_identifier`（守卫写 ISIN/FIGI + 同一 UPDATE 内按键合并 provenance，计划审计 R2） | Codex 计划审计第一轮 P3/P4：读后整体替换会丢并发证据、回滚较新的 `latest_result` | `supabase/migrations/20261107090000_identifiers_and_dq.sql`、`src/lib/db/table-client.ts::callRpc` |
 | 2026-11-05 | §3.2 / §5.6 恢复的"当前输入" | 右侧证据按对现取（iXBRL 现抓主文档哈希；黄金对取当前清单该键的证据），取不到 → 409 `not_passing` + `restore_note='current_evidence_unavailable'`，看板 `restorable=false` | 计划审计 P2：不得复用上次运行记录的右侧 sha256 | `src/lib/dq/reconcile/pairs.ts::inputsHashNow`、各 `pair-*.ts::currentRight` |
 | 2026-11-05 | §6.1 52/53 周"最近观测到的同类实际 period_end" | 观测集合 = 已收到的 filing ∪ SEC submissions 同 form 的 `reportDate`；无观测 → 该槽月末作估计 | submissions 是一手来源，能在本库尚无历史时给出估计基准；替换仍只由已收到的 filing 触发 | `estimatePeriodEnd` |
 | 2026-11-05 | §6.1 锚月 | 最近一份已收到年报的实际期末（最近月末的月份）优先于 `fiscalYearEnd` | 正文"仍按 10-K 实际 period_end 推算"的落实；不一致标 `detail.fye_mismatch` | 同上 |
