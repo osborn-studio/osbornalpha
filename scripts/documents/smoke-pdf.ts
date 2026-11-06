@@ -16,8 +16,7 @@
 import {createHash} from 'node:crypto';
 import {readFileSync,statSync} from 'node:fs';
 import {createRequire} from 'node:module';
-import {basename,dirname,join} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {basename,dirname,join,sep} from 'node:path';
 
 const USAGE='usage: smoke-pdf.ts <file.pdf> [--max-pages <n>]';
 const MAX_BYTES=52428800;
@@ -39,9 +38,10 @@ async function main(){
  const importMs=Math.round(performance.now()-ti);
  const t0=performance.now();
  const pkgDir=dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
- const dirUrl=(d:string)=>`${pathToFileURL(join(pkgDir,d)).href}/`;
+ // pdfjs-dist 4.10.38's Node factories read these with fs.readFile: absolute filesystem paths with a trailing separator, never file:// URLs.
+ const dirPath=(d:string)=>`${join(pkgDir,d)}${sep}`;
  // getDocument takes ownership of (and may transfer) the buffer it is given: pass a copy.
- const doc=await pdfjs.getDocument({data:new Uint8Array(raw),isEvalSupported:false,disableFontFace:true,useSystemFonts:false,cMapUrl:dirUrl('cmaps'),cMapPacked:true,standardFontDataUrl:dirUrl('standard_fonts'),verbosity:0}).promise;
+ const doc=await pdfjs.getDocument({data:new Uint8Array(raw),isEvalSupported:false,disableFontFace:true,useSystemFonts:false,cMapUrl:dirPath('cmaps'),cMapPacked:true,standardFontDataUrl:dirPath('standard_fonts'),verbosity:0}).promise;
  const loadMs=Math.round(performance.now()-t0);
  const pages=doc.numPages;
  let textItems=0,pagesWithText=0,pagesRead=0,peak=process.memoryUsage().rss;
