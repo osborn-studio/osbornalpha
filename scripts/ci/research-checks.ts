@@ -13,6 +13,9 @@ export const criticalSuites = [
   'cluster/alignments.integration.test.ts', 'fanout/run.integration.test.ts',
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
 ].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts');
+// INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
+criticalSuites.push('src/lib/industry/industry.integration.test.ts');
+// INDUSTRY:END
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

@@ -200,6 +200,10 @@
     {
       "file": "20261106090000_financial_facts.sql",
       "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
+    },
+    {
+      "file": "20261111090000_industry_research.sql",
+      "sha256": "a561b042c8f4825a39cdc1ece35def1c821074b127ac3e932f5514901d3be9f8"
     }
   ]
 }

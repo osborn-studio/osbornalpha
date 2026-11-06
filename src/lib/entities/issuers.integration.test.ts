@@ -6,6 +6,10 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261105091000_issuers.sql';
+// INDUSTRY:BEGIN — 20261111090000 replaces the two industry tables' public-read policies and service_role writes; a replay of
+// the issuers migration re-creates them, so the replay below re-applies the industry migration in the same transaction.
+const INDUSTRY_MIGRATION='supabase/migrations/20261111090000_industry_research.sql';
+// INDUSTRY:END
 const TABLES=['issuers','issuer_securities','issuer_identifier_claims','industry_classifications','issuer_industry_memberships'];
 const PUBLIC_TABLES=TABLES.filter(t=>t!=='issuer_identifier_claims');
 const hex=(n:number)=>randomBytes(n).toString('hex').toUpperCase();
@@ -53,6 +57,9 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  };
  const usTicker=async()=>{const t=await newTicker('US');if(!t) throw new Error('ZZ test ticker collided');return t;};
  const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${extraCols}) values($1,$2,$3,$4,'test'${extraVals})`,[issuer,ticker,from,to,...params]);
+ // INDUSTRY:BEGIN — membership rows need an ingest batch since 20261111090000
+ const newBatch=async()=>{const id=randomUUID();await admin.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'issuers-test','issuers.test')`,[id]);return id;};
+ // INDUSTRY:END
  const newVersion=async()=>{
   const version='t'+hex(4);
   await admin.query(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('custom',$1,'10',1,'Energy')`,[version]);
@@ -66,26 +73,36 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  afterAll(async()=>{
   if(admin){
    // Child and link FKs are RESTRICT: children first, merged issuers before their targets.
-   await admin.query(`delete from public.issuer_industry_memberships where issuer_id=any($1::uuid[])`,[issuers]);
    await admin.query(`delete from public.issuer_identifier_claims where issuer_id=any($1::uuid[])`,[issuers]);
    await admin.query(`delete from public.issuer_securities where issuer_id=any($1::uuid[])`,[issuers]);
-   await admin.query(`delete from public.issuers where issuer_id=any($1::uuid[]) and merged_into is not null`,[issuers]);
-   await admin.query(`delete from public.issuers where issuer_id=any($1::uuid[])`,[issuers]);
-   await admin.query(`delete from public.industry_classifications where scheme='custom' and version=any($1)`,[classifications]);
+   // INDUSTRY:BEGIN — issuer_industry_memberships is append-only since 20261111090000/20261111091000 (delete refused): issuers and
+   // classification versions that carry membership rows stay behind (test:db uses a fresh database per run).
+   const free=`not exists (select 1 from public.issuer_industry_memberships m where m.issuer_id = i.issuer_id)`;
+   await admin.query(`delete from public.issuers i where issuer_id=any($1::uuid[]) and merged_into is not null and ${free}`,[issuers]);
+   await admin.query(`delete from public.issuers i where issuer_id=any($1::uuid[]) and ${free}`,[issuers]);
+   await admin.query(`delete from public.industry_classifications c where scheme='custom' and version=any($1) and not exists (select 1 from public.issuer_industry_memberships m where m.scheme=c.scheme and m.version=c.version)`,[classifications]);
+   // INDUSTRY:END
    await admin.query(`delete from public.stocks_universe where ticker=any($1)`,[tickers]);
    await admin.end();
   }
  },30000);
 
- it('creates five tables with RLS, public-read policies on four, none on claims, link columns, and replays',async()=>{
+ it('creates five tables with RLS, public-read policies on issuers and securities, licensed-read policies on the industry tables, none on claims, link columns, and replays',async()=>{
   const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
   expect(rows.map((r:{relname:string})=>r.relname).sort()).toEqual([...TABLES].sort());
   for(const r of rows) expect(r.relrowsecurity).toBe(true);
-  const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename`,[TABLES])).rows;
-  expect(policies).toEqual([...PUBLIC_TABLES].sort().map(t=>({tablename:t,policyname:`${t} public read`})));
+  const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename,policyname`,[TABLES])).rows;
+  // INDUSTRY:BEGIN — 20261111090000: licence-gated reads and service_role policies on the two industry tables
+  expect(policies).toEqual([
+   {tablename:'industry_classifications',policyname:'industry_classifications licensed read'},{tablename:'industry_classifications',policyname:'industry_classifications service insert'},
+   {tablename:'industry_classifications',policyname:'industry_classifications service read'},{tablename:'industry_classifications',policyname:'industry_classifications service update'},
+   {tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships licensed read'},{tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships service read'},
+   {tablename:'issuer_securities',policyname:'issuer_securities public read'},{tablename:'issuers',policyname:'issuers public read'}]);
+  // INDUSTRY:END
   const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
   expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+  // INDUSTRY: one transaction; issuers is locked first so a concurrent apply_industry_memberships (issuers row → memberships) waits instead of deadlocking
+  await expect(replayMigration(admin,'lock table public.issuers in access exclusive mode;\n'+readFileSync(MIGRATION,'utf8')+'\n;\n'+readFileSync(INDUSTRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
  },60000);
 
  it('enforces named issuer constraints',async()=>{
@@ -135,9 +152,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
 
   const version=await newVersion();
   await expect(admin.query(`insert into public.industry_classifications(scheme,version,code,level) values('custom',$1,'11',1)`,[version])).rejects.toThrow(/industry_classifications_has_name/);
-  const mem=(code:string)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,valid_from,source) values($1,'custom',$2,$3,'2020-01-01','test')`,[a,version,code]);
+  // INDUSTRY:BEGIN — 20261111090000 adds level, available_date and batch_id (not null) and a (scheme, version, code, level) FK
+  const batch=await newBatch();
+  const mem=(code:string,level=1)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,level,valid_from,available_date,source,batch_id) values($1,'custom',$2,$3,$4,'2020-01-01','2020-01-01','test',$5)`,[a,version,code,level,batch]);
   await mem('10');
-  await expect(mem('99')).rejects.toThrow(/issuer_industry_memberships_scheme_version_code_fkey/);
+  await expect(mem('99',4)).rejects.toThrow(/issuer_industry_memberships_(scheme_version_code|classification_level)_fkey/);   // another level: the per-level exclusion (checked first) cannot fire
+  // INDUSTRY:END
  },30000);
 
  it('rejects overlapping ownership windows and accepts adjacent ones',async()=>{
@@ -217,9 +237,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await expect(cls('21','99')).rejects.toThrow(/industry_classifications_parent_fkey/);
   await cls('1010','10');
   const a=await newIssuer();
-  const mem=(from:string,to:string|null)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,valid_from,valid_to,source) values($1,'custom',$2,'1010',$3,$4,'test')`,[a,version,from,to]);
+  // INDUSTRY:BEGIN — new not-null columns; the all-status exclusion no_overlap is replaced by one_per_level over ok rows (20261111090000)
+  const batch=await newBatch();
+  const mem=(from:string,to:string|null)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,level,valid_from,valid_to,available_date,valid_to_available_date,source,batch_id) values($1,'custom',$2,'1010',2,$3,$4,$3,$4,'test',$5)`,[a,version,from,to,batch]);
   await mem('2020-01-01','2022-01-01');
-  await expect(mem('2021-01-01',null)).rejects.toThrow(/issuer_industry_memberships_no_overlap/);
+  await expect(mem('2021-01-01',null)).rejects.toThrow(/issuer_industry_memberships_one_per_level/);
+  // INDUSTRY:END
   await expect(mem('2023-01-01','2023-01-01')).rejects.toThrow(/issuer_industry_memberships_window/);
   await mem('2022-01-01',null);
  },30000);
@@ -235,10 +258,14 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
     expect({role,priv,allowed}).toEqual({role,priv,allowed:false});
    }
   }
+  // INDUSTRY:BEGIN — 20261111090000: service_role keeps insert/update on classifications and only select on memberships (writes go through functions)
+  const serviceWrites:Record<string,string[]>={issuers:['SELECT','INSERT','UPDATE','DELETE'],issuer_securities:['SELECT','INSERT','UPDATE','DELETE'],issuer_identifier_claims:['SELECT','INSERT','UPDATE','DELETE'],
+   industry_classifications:['SELECT','INSERT','UPDATE'],issuer_industry_memberships:['SELECT']};
   for(const t of TABLES) for(const priv of ['SELECT','INSERT','UPDATE','DELETE']){
    const ok=(await admin.query(`select has_table_privilege('service_role','public.'||$1,$2) ok`,[t,priv])).rows[0].ok;
-   expect({t,priv,ok}).toEqual({t,priv,ok:true});
+   expect({t,priv,ok}).toEqual({t,priv,ok:serviceWrites[t].includes(priv)});
   }
+  // INDUSTRY:END
   const seeded=await newIssuer();
   for(const role of ['anon','authenticated']){
    const c=await admin.connect();

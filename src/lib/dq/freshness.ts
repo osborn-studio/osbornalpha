@@ -6,13 +6,14 @@
 import {selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
 
-export type Cadence='daily'|'monthly'|'quarterly'|'event';
+export type Cadence='daily'|'weekly'|'monthly'|'quarterly'|'event';
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
 const DAY=86_400_000;
-const WINDOW_MS:Record<Cadence,number|null>={daily:1*DAY,monthly:31*DAY,quarterly:92*DAY,event:null};
-// Daily grace of 2d lets a weekday-only feed survive a weekend (Fri ok -> Mon is 3d <= 1d+2d).
-const GRACE_MS:Record<Cadence,number>={daily:2*DAY,monthly:3*DAY,quarterly:3*DAY,event:0};
-const CADENCES:readonly Cadence[]=['daily','monthly','quarterly','event'];
+const WINDOW_MS:Record<Cadence,number|null>={daily:1*DAY,weekly:7*DAY,monthly:31*DAY,quarterly:92*DAY,event:null};
+// Daily grace of 2d lets a weekday-only feed survive a weekend (Fri ok -> Mon is 3d <= 1d+2d); weekly
+// (reconcile cycles, spec 3 §3.1) gets the same 2d so one late cron run does not flip it to stale.
+const GRACE_MS:Record<Cadence,number>={daily:2*DAY,weekly:2*DAY,monthly:3*DAY,quarterly:3*DAY,event:0};
+export const CADENCES:readonly Cadence[]=['daily','weekly','monthly','quarterly','event'];
 
 const validDate=(d:unknown):d is Date=>d instanceof Date&&Number.isFinite(d.getTime());
 
