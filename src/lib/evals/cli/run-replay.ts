@@ -98,6 +98,7 @@ export function replayRunner(factory:ReplayBackendFactory=defaultReplayBackend,e
   let bytes:Uint8Array;
   try{bytes=deps.readFile(path);}catch(e){throw new EvalError('gold_invalid',`${path}: unreadable (${e instanceof Error?e.message:String(e)})`,{file:path});}
   const file=parseReplayFile(JSON.parse(new TextDecoder().decode(bytes)),{allowDrafts:false,file:path});
+  if(file.module!==args.module)throw new EvalError('gold_invalid',`${path} is module ${file.module} but --module ${args.module}`,{file:path,reason:'module_mismatch',module:file.module});
   if(file.mode!==mode)throw new EvalError('gold_invalid',`${path} is a ${file.mode} file; --mode ${args.mode} replays ${mode}`,{file:path});
   const all=recordedCases(file);
   const unknown=args.caseIds.filter(id=>!all.some(c=>c.case_id===id));

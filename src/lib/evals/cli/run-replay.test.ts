@@ -84,6 +84,7 @@ describe('replay_consistency runner (run.ts --kind replay_consistency)',()=>{
   expect(await code(replayRunner(f.factory,{})(args('--mode','report'),cli({version:()=>({sha:'d'.repeat(40),dirty:true})})))).toBe('dirty_tree');
   expect(await code(replayRunner(f.factory,{})(args('--mode','report','--set',replayFileOf('facts','frozen')),cli()))).toBe('gold_invalid');
   expect(await code(replayRunner(f.factory,{})(args('--mode','ci','--case','nope'),cli()))).toBe('gold_invalid');
+  expect(await code(replayRunner(f.factory,{})(parseRunArgs(['--kind','replay_consistency','--module','metrics','--mode','ci','--set',replayFileOf('facts','frozen')]),cli()))).toBe('gold_invalid');   // module_mismatch
   expect(f.opened).toEqual([]);
   expect(await code(replayRunner(defaultReplayBackend,{})(args('--mode','ci'),cli()))).toBe('kind_not_enabled');
  });
