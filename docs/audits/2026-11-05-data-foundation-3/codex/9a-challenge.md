@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/facts/memory-facts-db.ts:145` | Memory reconciliation accepts `kind:'numeric', outcome:'compared', passed:true` with both values `null`. Reproduced: completion reports `compared_passed:1`. Landed PostgreSQL rejects this through `dq_reconciliations_numeric_sides`. Consequently, runner tests can pass while treating missing evidence as a successful comparison, then fail in production. The nonnumeric-side constraint is also absent. | Mirror both SQL side constraints before any mutation. Add shared rejection tests asserting no result, quarantine, or visibility changes. |
+| 2 | P3 | `src/lib/facts/db.test.ts:268` | The test claiming “complete set with run status” returns only one filing and ignores pagination, issuer/market/date filters, and run-ID filters. Removing calendar pagination or those filters would still pass, leaving T9’s amendment-crowding and evidence-binding behavior untested. | Use over 1,000 filings, multiple run-ID chunks, and excluded issuer/date fixtures. Make the stub honor filters and ranges; assert every eligible filing retains its correct run status and mapping generation. |
+
+Verdict: fix required
