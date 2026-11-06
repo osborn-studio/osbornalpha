@@ -110,7 +110,8 @@ export class DocumentsDbError extends Error{constructor(public code:DocumentsDbE
 
 export interface DocumentsDb{
  // writes (rpc, one per §4.8 function of migration one)
- reconcileScope(source:ListedSource,rows:DocScopeInput[]):Promise<number>;
+ /** snapshotAt (F3 review, Task 5): when the sources behind rows were read. A retirement (priority 0 over a stored priority > 0) applies only to a row neither changed nor confirmed active after it; activations and upserts always apply. */
+ reconcileScope(source:ListedSource,rows:DocScopeInput[],snapshotAt?:string):Promise<number>;
  claimSyncLease(issuer:string,source:ListedSource,batch:string,ttlSeconds:number):Promise<boolean>;
  insertDocumentVersion(issuer:string,source:ListedSource,batch:string,doc:DocumentInsert,assets:AssetInsert[]):Promise<InsertVersionResult>;
  insertUploadDocument(owner:string,doc:DocumentInsert):Promise<InsertVersionResult>;

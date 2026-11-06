@@ -26,7 +26,7 @@ describe('classify edgar',()=>{
  const e=(form:string)=>classify('edgar',{form_type:form,title:`${form} filing`,source_ref:'0001321655-26-000041/pltr-20260630.htm'});
  it('maps forms to classes, accession as filing_source_ref, English, no fiscal fields',()=>{
   expect(e('10-K')).toEqual({doc_class:'annual_report',fiscal_year:null,fiscal_period:null,period_end:null,filing_source_ref:'0001321655-26-000041',language:'en'});
-  for(const f of ['20-F','40-F','10-K/A','20-F/A'])expect(e(f).doc_class,f).toBe('annual_report');
+  for(const f of ['20-F','40-F','10-K/A','20-F/A','40-F/A'])expect(e(f).doc_class,f).toBe('annual_report');
   for(const f of ['10-Q','10-Q/A'])expect(e(f).doc_class,f).toBe('quarterly_report');
   for(const f of ['8-K','8-K/A','6-K'])expect(e(f).doc_class,f).toBe('current_report');
   for(const f of ['S-1','424B4','424B2'])expect(e(f).doc_class,f).toBe('registration');
@@ -62,7 +62,7 @@ describe('classify hkexnews',()=>{
   expect(h('財務報表/環境、社會及管治資料 - [年報]','二零二五年年報','2026042100123_e')).toMatchObject({doc_class:'annual_report',language:'en'});
   expect(h('公告及通告 - [中期業績]','截至二零二六年六月三十日止六個月之中期業績公佈','2026081100556_c')).toEqual({doc_class:'results_announcement',fiscal_year:2026,fiscal_period:'H1',period_end:'2026-06-30',filing_source_ref:null,language:'zh'});
   expect(h('月報表','截至2026年8月31日止之股份發行人的證券變動月報表','2026083100559_c')).toEqual({doc_class:'other',fiscal_year:null,fiscal_period:null,period_end:null,filing_source_ref:null,language:'zh'});
-  expect(h('Financial Statements/ESG Information - [Annual Report]','Annual Report 2025','x').language).toBeNull();
+  expect(h('Financial Statements/ESG Information - [Annual Report]','Annual Report 2025','x').language).toBe('zh');   // no suffix: bilingual PDF
   // English title-search headlines (unrecorded layout; spec §15 q2 verification records a fixture)
   expect(h('Financial Statements/ESG Information - [Interim/Half-Year Report]','Interim Report 2026','2026090300864_e')).toMatchObject({doc_class:'interim_report',language:'en'});
   expect(h('Announcements and Notices - [Final Results]','Annual Results Announcement for the year ended 31 December 2025','r_e')).toMatchObject({doc_class:'results_announcement',fiscal_period:'FY',period_end:'2025-12-31'});
@@ -80,3 +80,59 @@ describe('classify hkexnews',()=>{
 });
 
 it('CLASSIFIER_GEN is the shared generation',()=>{expect(CLASSIFIER_GEN).toBe(1);});
+
+describe('classify cninfo anchoring (Task 5 review)',()=>{
+ const c=(title:string)=>classify('cninfo',{form_type:'PDF',title,source_ref:'1'});
+ it('notices ABOUT a report are other',()=>{
+  for(const t of ['关于2025年年度报告的问询函的回复公告','关于召开2025年年度报告业绩说明会的公告','监事会关于2025年年度报告的书面审核意见','2025年年度报告披露提示性公告','关于延期披露2025年年度报告的公告','H股公告-2025年年度报告'])
+   expect(c(t),t).toEqual({doc_class:'other',fiscal_year:null,fiscal_period:null,period_end:null,filing_source_ref:null,language:'zh'});
+ });
+ it('real report titles still count: 中期报告, 全文/正文 and a trailing parenthetical',()=>{
+  expect(c('2026年中期报告')).toMatchObject({doc_class:'interim_report',fiscal_year:2026,fiscal_period:'H1',period_end:'2026-06-30'});
+  expect(c('恒生电子2025年年度报告全文')).toMatchObject({doc_class:'annual_report',fiscal_year:2025});
+  expect(c('恒生电子2025年年度报告正文（修订版）')).toMatchObject({doc_class:'annual_report',fiscal_year:2025});
+  expect(c('恒生电子2026年第三季度报告(更新)')).toMatchObject({doc_class:'quarterly_report',fiscal_period:'Q3'});
+ });
+ it('a report phrase in the middle of a title is not a report',()=>{
+  expect(c('2025年年度报告披露事项').doc_class).toBe('other');
+ });
+});
+
+describe('classify hkexnews tokens, language and English periods (Task 5 review)',()=>{
+ const h=(headline:string,title:string,ref='2026090300863_c')=>classify('hkexnews',{form_type:headline,headline,title,source_ref:ref});
+ it('delay and despatch notices are other, with a headline and with the title fallback',()=>{
+  expect(h('公告及通告 - [延遲發送年報]','延遲寄發年報').doc_class).toBe('other');
+  expect(h('Announcements and Notices - [Delay in Despatch of Annual Report]','Delay in Despatch of Annual Report','a_e').doc_class).toBe('other');
+  expect(h('','延遲寄發二零二五年年報').doc_class).toBe('other');
+  expect(h('','Delay in Despatch of Annual Report 2025','a_e').doc_class).toBe('other');
+  expect(h('[Notice of Board Meeting]','Annual Report').doc_class).toBe('other');
+ });
+ it('bracket tokens match exactly, and the quarterly results tokens are results announcements',()=>{
+  for(const [hd,cls] of [['[年報]','annual_report'],['[Annual Report]','annual_report'],['[中期報告]','interim_report'],['[Interim Report]','interim_report'],['[季度報告]','quarterly_report'],['[Quarterly Report]','quarterly_report'],['[季度業績]','results_announcement'],['[Quarterly Results]','results_announcement']] as const)
+   expect(h(hd,'t').doc_class,hd).toBe(cls);
+  expect(h('[年報補充公告]','t').doc_class).toBe('other');
+  expect(h('財務報表 - [年報] [其他]','t').doc_class).toBe('annual_report');
+ });
+ it('a file without a _c/_e suffix is zh; _e is en; _c is zh',()=>{
+  expect(h('[年報]','年報','2026042100123').language).toBe('zh');
+  expect(h('[Annual Report]','Annual Report','2026042100123_e').language).toBe('en');
+  expect(h('[年報]','年報','2026042100123_c').language).toBe('zh');
+ });
+ it('English period phrases: financial year, 6/six months, 3/three and 9/nine months, period ended',()=>{
+  expect(h('[Annual Report]','Annual Report for the financial year ended 31 March 2026','r_e')).toMatchObject({fiscal_year:2026,fiscal_period:'FY',period_end:'2026-03-31'});
+  expect(h('[Interim Results]','Results for the 6 months ended 30 June 2026','r_e')).toMatchObject({fiscal_period:'H1',period_end:'2026-06-30'});
+  expect(h('[Interim Results]','Results for the six months ended 30 June 2026','r_e')).toMatchObject({fiscal_period:'H1'});
+  expect(h('[Quarterly Results]','Results for the three months ended 31 March 2026','r_e')).toMatchObject({fiscal_period:'Q1',period_end:'2026-03-31'});
+  expect(h('[Quarterly Results]','Results for the 3 months ended 30 June 2026','r_e')).toMatchObject({fiscal_period:null,period_end:'2026-06-30'});
+  expect(h('[Quarterly Results]','Results for the nine months ended 30 September 2026','r_e')).toMatchObject({fiscal_period:'Q3',period_end:'2026-09-30'});
+  expect(h('[Quarterly Results]','Results for the 9 months ended 31 December 2026','r_e')).toMatchObject({fiscal_period:null});
+  expect(h('[Annual Report]','Annual Report for the period ended 31 December 2025','r_e')).toMatchObject({fiscal_period:'FY',period_end:'2025-12-31'});
+  expect(h('[Interim Report]','Interim Report for the period ended 30 June 2026','r_e')).toMatchObject({fiscal_period:'H1'});
+  expect(h('[Annual Report]','Annual Report 2025','r_e')).toMatchObject({fiscal_year:null,period_end:null});
+ });
+ it('Chinese three/nine month periods',()=>{
+  expect(h('[季度業績]','截至二零二六年三月三十一日止三個月之季度業績')).toMatchObject({fiscal_period:'Q1',period_end:'2026-03-31'});
+  expect(h('[季度業績]','截至二零二六年九月三十日止九個月之季度業績')).toMatchObject({fiscal_period:'Q3'});
+ });
+});
+

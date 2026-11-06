@@ -27,7 +27,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
  const json=(v:unknown)=>v===null||v===undefined?null:JSON.stringify(v);
  const one=async(text:string,values:unknown[])=>(await run(text,values)).rows[0] as Record<string,unknown>|undefined;
  return {
-  async reconcileScope(source,input){return Number(await fn('public.reconcile_document_sync_scope($1,$2::jsonb)',[source,json(input)]));},
+  async reconcileScope(source,input,snapshotAt){return Number(await fn('public.reconcile_document_sync_scope($1,$2::jsonb,$3::timestamptz)',[source,json(input),snapshotAt??null]));},
   async claimSyncLease(issuer,source,batch,ttl){return (await fn<boolean>('public.claim_document_sync_lease($1,$2,$3,$4)',[issuer,source,batch,ttl]))===true;},
   insertDocumentVersion:async(issuer,source,batch,doc,assets)=>fn<InsertVersionResult>('public.insert_document_version($1,$2,$3,$4::jsonb,$5::jsonb)',[issuer,source,batch,json(docArg(doc)),json(assetsArg(assets))]),
   insertUploadDocument:async(owner,doc)=>fn<InsertVersionResult>('public.insert_upload_document($1,$2::jsonb)',[owner,json(docArg(doc))]),

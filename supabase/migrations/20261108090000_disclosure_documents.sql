@@ -236,8 +236,10 @@ create table if not exists public.document_sync_scope (
   last_success_at  timestamptz,
   last_status      text check (last_status in ('success','failed')),
   updated_at       timestamptz not null default now(),
+  scope_confirmed_at timestamptz not null default now(),   -- F3 review (Task 5): last time reconcile saw the row active in its sources or changed it (retirement guard)
   primary key (issuer_id, source)
 );
+alter table public.document_sync_scope add column if not exists scope_confirmed_at timestamptz not null default now();
 create index if not exists document_sync_scope_due_idx on public.document_sync_scope(source, next_due_at, priority desc, issuer_id) where priority > 0;
 
 -- ---------------------------------------------------------------- public view (§4.1)
@@ -466,7 +468,12 @@ revoke execute on function public.candidate_citation_ids(jsonb) from public, ano
 -- ---------------------------------------------------------------- 4.8 sync scope functions
 -- Schedule inputs only (reasons/priority/fetch_key); never touches cursors, schedule or lease.
 -- Returns the number of rows inserted or actually changed.
-create or replace function public.reconcile_document_sync_scope(p_source text, p_rows jsonb)
+-- p_snapshot_at (F3 review, Task 5): when the sources behind p_rows were read. A retirement (input priority 0 over a stored
+-- priority > 0) applies only to a row whose scope was neither changed nor confirmed active after it (scope_confirmed_at <= p_snapshot_at):
+-- a newer reconcile's activation or unchanged confirmation survives an older, stale retirement. Upserts and activations always apply;
+-- null p_snapshot_at applies everything.
+drop function if exists public.reconcile_document_sync_scope(text, jsonb);
+create or replace function public.reconcile_document_sync_scope(p_source text, p_rows jsonb, p_snapshot_at timestamptz default null)
 returns int language plpgsql security definer set search_path = public as $$
 declare n int;
 begin
@@ -480,14 +487,19 @@ begin
   select distinct on ((x ->> 'issuer_id')) (x ->> 'issuer_id')::uuid, p_source, coalesce(x -> 'reasons', '[]'::jsonb), coalesce((x ->> 'priority')::int, 0), x ->> 'fetch_key'
   from jsonb_array_elements(p_rows) x
   on conflict (issuer_id, source) do update
-    set reasons = excluded.reasons, priority = excluded.priority, fetch_key = excluded.fetch_key, updated_at = now()
+    set reasons = excluded.reasons, priority = excluded.priority, fetch_key = excluded.fetch_key, updated_at = now(), scope_confirmed_at = now()
     where (document_sync_scope.reasons, document_sync_scope.priority, document_sync_scope.fetch_key)
-          is distinct from (excluded.reasons, excluded.priority, excluded.fetch_key);
+          is distinct from (excluded.reasons, excluded.priority, excluded.fetch_key)
+      and (p_snapshot_at is null or excluded.priority > 0 or document_sync_scope.priority = 0 or document_sync_scope.scope_confirmed_at <= p_snapshot_at);
   get diagnostics n = row_count;
+  -- Unchanged active rows are confirmed too (not counted): a stale run's retirement must not win over them.
+  update public.document_sync_scope s set scope_confirmed_at = now()
+  from jsonb_array_elements(p_rows) x
+  where s.issuer_id = (x ->> 'issuer_id')::uuid and s.source = p_source and coalesce((x ->> 'priority')::int, 0) > 0 and s.priority > 0 and s.scope_confirmed_at < now();
   return n;
 end $$;
-revoke execute on function public.reconcile_document_sync_scope(text, jsonb) from public, anon, authenticated;
-grant execute on function public.reconcile_document_sync_scope(text, jsonb) to service_role;
+revoke execute on function public.reconcile_document_sync_scope(text, jsonb, timestamptz) from public, anon, authenticated;
+grant execute on function public.reconcile_document_sync_scope(text, jsonb, timestamptz) to service_role;
 
 -- Unleased, expired, or held by the same batch → (re)lease and true; otherwise false. No row → false.
 create or replace function public.claim_document_sync_lease(p_issuer uuid, p_source text, p_batch uuid, p_ttl int)

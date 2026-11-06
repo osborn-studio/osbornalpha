@@ -10,3 +10,4 @@
 - Task 7：同步核心 sync.ts（source_ref 检查点游标、条目上限、尝试次数与耗尽隔离、对象先于行、版本化替换、租约与回执、dry-run）；Codex 审计：待审（2026-11-06）
 - Task 8：生产装配 deps.ts、documents-sync cron 路由、sync.ts 脚本与 vercel.json 三条 documents-sync cron（hkexnews/cninfo/edgar）；Codex 审计：待审（2026-11-06）
 - Task 9：页面抽取 extract/{pages-json,tables,pdf,html}（pdf.js 文本层带 CMaps、数值尾表格检测、HTML 分页、pages.json 码点偏移）与 PDF/表格夹具；Codex 审计：待审（2026-11-06）
+- Task 5 复审修复：cninfo 报告标题尾部锚定与通知排除、HKEX 括号类别精确匹配（延遲/寄發通知为 other）、无后缀文件 zh、英文期间正则、40-F/A、merged 一律不入、键集读取遇到被服务器截短的页继续、对账撤销加 scope_confirmed_at 过期保护（SQL/内存/pg 与共享契约）；Codex 审计：待审（2026-11-06）

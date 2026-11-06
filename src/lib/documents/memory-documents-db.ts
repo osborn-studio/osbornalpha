@@ -85,7 +85,7 @@ function checkDocument(d:DocumentRow):void{
 export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
  const documents=new Map<string,DocumentRow>();const assets=new Map<string,AssetRow>();const extractions=new Map<string,ExtractionRow>();
  const pages=new Map<string,PageRow>();const citations=new Map<string,CitationRow>();const candidates=new Map<string,CandidateRow>();
- const publications=new Map<string,PublicationRow>();const approvals=new Map<string,ApprovalRow>();const scope=new Map<string,DocScopeRow>();
+ const publications=new Map<string,PublicationRow>();const approvals=new Map<string,ApprovalRow>();const scope=new Map<string,DocScopeRow>();const confirmedAt=new Map<string,string>();
  let fixedNow:string|null=null;let lastStamp='';
  const now=()=>fixedNow??(opts.now?opts.now():new Date()).toISOString();
  const later=(secs:number)=>new Date(Date.parse(now())+secs*1000).toISOString();
@@ -135,7 +135,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   _raw:{documents,assets,extractions,pages,citations,candidates,publications,approvals,scope},
 
   // ---------------------------------------------------------------- scope
-  async reconcileScope(source,input){
+  async reconcileScope(source,input,snapshotAt){
    listed(source);
    // F3: the whole call is validated before any row is touched (SQL is one statement), duplicates included
    if(new Set(input.map(r=>r.issuer_id)).size!==input.length)throw invalid('duplicate issuer');
@@ -149,12 +149,17 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
     const s=scope.get(sk(r.issuer_id,source));
     if(!s){
      const t=now();
+     confirmedAt.set(sk(r.issuer_id,source),t);
      scope.set(sk(r.issuer_id,source),{issuer_id:r.issuer_id,source,reasons:[...(r.reasons??[])],priority:r.priority??0,fetch_key:r.fetch_key,backfill_cursor:{},backfill_done:false,poll_cursor:{},
       next_due_at:t,lease_until:null,lease_batch_id:null,last_attempt_at:null,last_success_at:null,last_status:null,updated_at:t});
      n++;
     }else if(JSON.stringify(s.reasons)!==JSON.stringify(r.reasons??[])||s.priority!==(r.priority??0)||s.fetch_key!==r.fetch_key){
-     s.reasons=[...(r.reasons??[])];s.priority=r.priority??0;s.fetch_key=r.fetch_key;s.updated_at=now();n++;
-    }
+     // F3 review (Task 5): a retirement that was decided on sources read before the row's last change/confirmation is stale
+     const key=sk(r.issuer_id,source);
+     const stale=snapshotAt!==undefined&&(r.priority??0)===0&&s.priority>0&&Date.parse(confirmedAt.get(key)??s.updated_at)>Date.parse(snapshotAt);
+     if(stale)continue;
+     s.reasons=[...(r.reasons??[])];s.priority=r.priority??0;s.fetch_key=r.fetch_key;s.updated_at=now();confirmedAt.set(key,s.updated_at);n++;
+    }else if((r.priority??0)>0&&s.priority>0)confirmedAt.set(sk(r.issuer_id,source),now());
    }
    return n;
   },

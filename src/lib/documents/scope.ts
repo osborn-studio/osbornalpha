@@ -21,6 +21,12 @@ import type {DocScopeInput,DocumentsDb,ListedSource} from './types';
 
 export const DOC_SCOPE_PRIORITY=10;
 export interface DocScopeDeps{tables:TableClient;db:Pick<DocumentsDb,'reconcileScope'|'scopeRows'|'scopeAll'>}
+/**
+ * Safety margin subtracted from the client clock for the default snapshotAt (same reasoning as
+ * facts/scope.ts::SNAPSHOT_SKEW_MARGIN_MS): skew can only delay a retirement, never retire a newer activation.
+ */
+export const SNAPSHOT_SKEW_MARGIN_MS=5*60_000;
+export interface DocScopeOpts{today?:string;snapshotAt?:string;now?:()=>number}
 export interface DocScopeResult{desired:number;retired:number;skipped:Record<string,number>}
 
 const str=(v:unknown)=>typeof v==='string'&&v.trim().length>0?v.trim():null;
@@ -42,18 +48,25 @@ export function cninfoFetchKey(code:string,orgId:string|null):string{
  return `${code},${org}`;
 }
 
-/** Keyset paging on a non-unique column (same algorithm as facts/scope.ts::keysetAll, which is not exported). */
+/**
+ * Keyset paging on a non-unique column (same algorithm as facts/scope.ts::keysetAll, which is not exported).
+ * A page shorter than requested is NOT the end: a server row cap (PostgREST max_rows) below MAX_PAGE returns
+ * short pages. The read ends when a page adds no new row; a full-size page of only seen rows is a tie group
+ * larger than a page and fails loudly instead of truncating.
+ */
 async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOptions,orderBy:string,keyCols:string[]):Promise<Row[]>{
  const seen=new Set<string>(),out:Row[]=[];
  let cursor:string|null=null;
  for(;;){
   const gte={...range.gte,...(cursor===null?{}:{[orderBy]:cursor})};
   const page=await tables.select(table,match,{...range,gte,orderBy,limit:MAX_PAGE});
-  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);}}
-  if(page.length<MAX_PAGE)return out;
-  const last=String(page[page.length-1][orderBy]);
-  if(last===cursor)throw new Error('scope_tie_group_overflow');
-  cursor=last;
+  let fresh=0;
+  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);fresh++;}}
+  if(fresh===0){
+   if(page.length>=MAX_PAGE)throw new Error('scope_tie_group_overflow');
+   return out;
+  }
+  cursor=String(page[page.length-1][orderBy]);
  }
 }
 const SEC_KEY=['issuer_id','ticker','valid_from'];
@@ -90,8 +103,8 @@ async function desiredEdgar(tables:TableClient,today:string,skipped:Record<strin
  for(const [ticker,reasons] of reasonsByTicker){
   const id=ownerByTicker.get(ticker);
   if(!id){bump(skipped,'unknown_ticker');continue;}
-  const issuer=issuers.get(id);
-  if(!issuer||issuer.status!=='active'){bump(skipped,'issuer_not_active');continue;}
+  const issuer=usable(issuers,id,skipped);   // merged issuers never enter, the same rule as cninfo and hkexnews
+  if(!issuer)continue;
   let key:string;
   try{key=fetchKey('US',{cik:str(issuer.cik)});}catch{bump(skipped,'no_cik');continue;}
   const row=out.get(id)??out.set(id,{issuer_id:id,reasons:[],priority:DOC_SCOPE_PRIORITY,fetch_key:key}).get(id)!;
@@ -139,7 +152,8 @@ async function desiredHk(tables:TableClient,skipped:Record<string,number>):Promi
  return out;
 }
 
-export async function reconcileDocumentScope(deps:DocScopeDeps,source:ListedSource,opts:{today?:string}={}):Promise<DocScopeResult>{
+export async function reconcileDocumentScope(deps:DocScopeDeps,source:ListedSource,opts:DocScopeOpts={}):Promise<DocScopeResult>{
+ const snapshotAt=opts.snapshotAt??new Date((opts.now??Date.now)()-SNAPSHOT_SKEW_MARGIN_MS).toISOString();   // taken BEFORE any source is read
  const today=opts.today??isoToday();
  const skipped:Record<string,number>={};
  const desired=source==='edgar'?await desiredEdgar(deps.tables,today,skipped):source==='cninfo'?await desiredCninfo(deps.tables,today,skipped):await desiredHk(deps.tables,skipped);
@@ -148,8 +162,14 @@ export async function reconcileDocumentScope(deps:DocScopeDeps,source:ListedSour
   .filter(r=>r.priority>0&&!wanted.has(r.issuer_id))
   .map(r=>({issuer_id:r.issuer_id,reasons:[],priority:0,fetch_key:r.fetch_key}));
  const rows=[...desired,...retired].sort((a,b)=>a.issuer_id<b.issuer_id?-1:a.issuer_id>b.issuer_id?1:0);
- if(rows.length>0)await deps.db.reconcileScope(source,rows);
- return {desired:desired.length,retired:retired.length,skipped};
+ if(rows.length>0)await deps.db.reconcileScope(source,rows,snapshotAt);
+ // a retirement the database refused as stale (a newer reconcile activated or confirmed the row) leaves it active
+ let applied=retired.length;
+ if(retired.length>0){
+  const still=(await deps.db.scopeRows(source,retired.map(r=>r.issuer_id))).filter(r=>r.priority>0).length;
+  if(still>0){skipped.stale_retirement=still;applied-=still;}
+ }
+ return {desired:desired.length,retired:applied,skipped};
 }
 
 /**

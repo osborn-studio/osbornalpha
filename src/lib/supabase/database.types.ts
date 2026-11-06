@@ -844,6 +844,7 @@ export interface DocumentSyncScope {
   last_success_at: string | null;
   last_status: 'success' | 'failed' | null;
   updated_at: string;
+  scope_confirmed_at: string; // F3 review (Task 5): retirement guard
 }
 // F3 document pipeline — end
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,

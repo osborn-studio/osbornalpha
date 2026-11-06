@@ -524,6 +524,28 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await db.reconcileScope('hkexnews',[good])).toBe(1);
   });
 
+  it('reconcileScope retirement guard (Task 5 review): A reads, B activates, A retires with the older snapshot - the row stays active',async()=>{
+   const iss=await h.issuer();
+   const active={issuer_id:iss,reasons:['cohort'],priority:10,fetch_key:'00268'};
+   const retire={issuer_id:iss,reasons:[],priority:0,fetch_key:'00268'};
+   const hourAgo=new Date(Date.now()-3_600_000).toISOString(),inAnHour=new Date(Date.now()+3_600_000).toISOString();
+   expect(await db.reconcileScope('hkexnews',[active],inAnHour)).toBe(1);                       // B activates (the row is confirmed now)
+   expect(await db.reconcileScope('hkexnews',[retire],hourAgo)).toBe(0);                        // A's stale retirement: refused
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({priority:10,reasons:['cohort']});
+   expect(await db.reconcileScope('hkexnews',[active],inAnHour)).toBe(0);                       // unchanged confirmation: not counted, but it refreshes the guard
+   expect(await db.reconcileScope('hkexnews',[retire],hourAgo)).toBe(0);
+   expect((await db.scopeRows('hkexnews',[iss]))[0].priority).toBe(10);
+   // an activation or upsert always applies, whatever the snapshot
+   expect(await db.reconcileScope('hkexnews',[{...active,priority:20}],hourAgo)).toBe(1);
+   // a snapshot taken after the last change retires; no snapshot applies everything (legacy callers)
+   expect(await db.reconcileScope('hkexnews',[retire],inAnHour)).toBe(1);
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({priority:0,reasons:[]});
+   expect(await db.reconcileScope('hkexnews',[active])).toBe(1);
+   expect(await db.reconcileScope('hkexnews',[retire])).toBe(1);
+   // retiring a row that is already retired is never stale (nothing to protect)
+   expect(await db.reconcileScope('hkexnews',[{...retire,fetch_key:'00269'}],hourAgo)).toBe(1);
+  });
+
   it('timestamps are instants (F3 review): mixed UTC offsets order and paginate chronologically',async()=>{
    const {iss,b}=await ready();
    const at=(x:string)=>({available_at:x,published_at:x,available_date:'2026-03-20'});
