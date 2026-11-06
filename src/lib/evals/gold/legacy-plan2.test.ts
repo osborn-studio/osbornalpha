@@ -73,6 +73,13 @@ describe('parseLegacyPlan2 on a recorded variant',()=>{
  });
 });
 
+describe('legacy pending by value',()=>{
+ it('value <pending> alone makes the entry pending',()=>{
+  const f=real();f.entries[0]={...f.entries[0],recorded_by:'owner',value:'<pending>'};
+  expect(parseLegacyPlan2(f,meta).cases[0].pending).toBe(true);
+ });
+});
+
 describe('parseLegacyPlan2 throws only for structurally invalid files',()=>{
  const code=(mutate:(f:Record<string,any>)=>void)=>{const f=real();mutate(f);try{parseLegacyPlan2(f,meta);return null;}catch(e){expect(e).toBeInstanceOf(EvalError);return (e as EvalError).detail.errors;}};
  it('accepts pending values and missing sources',()=>{expect(code(f=>{delete f.entries[0].source;f.entries[0].value='<pending>';})).toBeNull();});

@@ -116,7 +116,7 @@ describe('parseGoldSetF6: review_required (§4.6, Codex plan round 1 P2-3)',()=>
  });
  it('true: every case needs a reviewer different from the recorder (30-company counter-example)',()=>{
   expect(errorsOf(s=>{s.review_required=true;})).toEqual([]);
-  expect(errorsOf(s=>{s.review_required=true;(s.cases as J[])[0].reviewed_by=null;(s.cases as J[])[0].reviewed_at=null;})).toEqual([`cases[${String(goodCase().case_id)}].reviewed_by: required_by_review_required`]);
+  expect(errorsOf(s=>{s.review_required=true;(s.cases as J[])[0].reviewed_by=null;(s.cases as J[])[0].reviewed_at=null;})).toEqual(['cases[0].reviewed_by: required_by_review_required']);
  });
  it("set ids under 'facts/plan3' must set review_required true",()=>{
   expect(errorsOf(s=>{s.set_id='facts/plan3-30';})).toEqual(['review_required: must_be_true_for_this_set']);
@@ -153,4 +153,58 @@ describe('canonicalFromPrinted / unitOfSpec',()=>{
   expect(['USD','shares','CNY/share','pure'].map(u=>unitOfSpec(specOfUnit(u)!))).toEqual(['USD','shares','CNY/share','pure']);
   expect(specOfUnit('USD/EUR')).toBeNull();
  });
+});
+
+const metricCase=():J=>({case_id:'AAPL/gross_margin/2022-10-01..2023-09-30',subject:{market:'US',cik:'320193'},
+ target:{type:'metric',metric:'gross_margin',period_start:'2022-10-01',period_end:'2023-09-30',duration:'12M',basis:'us_standard',input_unit:'USD',formula_version:'facts-derive/1.0',unit:{kind:'ratio'}},
+ expect:'present',printed:{text:'44.1%',unit_label:'percent',scale:'1'},canonical:{value:'0.441'},binding:'current',
+ source:{document_type:'10-K',url:'https://www.sec.gov/x',sha256:'b'.repeat(64),available_date:'2023-11-03',locator:{page:1}},
+ provenance_kind:'transcribed',recorded_by:'owner',recorded_at:'2026-11-06',reviewed_by:null,reviewed_at:null,retracted:null,notes:''});
+const metricSet=():J=>({...goodSet(),set_id:'metrics/test',module:'metrics',cases:[metricCase()]});
+function errs(s:J):string[]{try{parseGoldSetF6(s,META,RECORDERS);return [];}catch(e){expect(e).toBeInstanceOf(EvalError);return (e as EvalError).detail.errors as string[];}}
+describe('review follow-ups: metric targets',()=>{
+ it('a valid metric set parses with as_of from available_date',()=>{
+  const set=parseGoldSetF6(metricSet(),META,RECORDERS);
+  expect(set.cases[0]).toMatchObject({binding:'current',as_of:'2023-11-03'});
+ });
+ const rej:[string,(s:J)=>void,string][]=[
+  ['binding must be current',s=>{s.cases[0].binding='document';s.cases[0].source.document_id={kind:'edgar_accession',value:'0000320193-23-000106'};},'cases[0].binding: metric_requires_current_binding'],
+  ['available_date required',s=>{delete s.cases[0].source.available_date;},'cases[0].source.available_date: required_for_current_binding'],
+  ['unknown metric',s=>{s.cases[0].target.metric='nope';},'cases[0].target.metric: not_in_metricNames'],
+  ['CN-only metric for US',s=>{s.cases[0].target.metric='q_single_capex_incl_intangibles';},'cases[0].target.metric: not_in_metricNames'],
+  ['duration',s=>{s.cases[0].target.duration='1Y';},'cases[0].target.duration: invalid'],
+  ['basis',s=>{s.cases[0].target.basis='cn_standard';},'cases[0].target.basis: not_emitted_by_derive'],
+  ['input_unit',s=>{s.cases[0].target.input_unit='xyz';},'cases[0].target.input_unit: not_a_facts_unit'],
+  ['formula_version',s=>{s.cases[0].target.formula_version='facts-derive/0.1';},'cases[0].target.formula_version: not_FORMULA_VERSION'],
+  ['metric under facts',s=>{s.module='facts';},'cases[0].target.type: metric_target_requires_module_metrics'],
+ ];
+ for(const [n,m,e] of rej)it(n,()=>{const s=metricSet();m(s);expect(errs(s)).toContain(e);});
+ it('TTM duration is allowed',()=>{const s=metricSet();s.cases[0].target.metric='roe';s.cases[0].target.duration='TTM';expect(errs(s)).toEqual([]);});
+});
+describe('review follow-ups: dates, retraction, grammar, history',()=>{
+ const rej:[string,(s:J)=>void,string][]=[
+  ['impossible calendar date',s=>{s.cases[0].target.period_end='2023-02-30';},'cases[0].target.period_end: date'],
+  ['impossible available_date',s=>{s.cases[0].source.available_date='2023-13-01';},'cases[0].source.available_date: date'],
+  ['period_start before period_end',s=>{s.cases[0].target.period_start='2023-09-30';},'cases[0].target: period_start_must_precede_period_end'],
+  ['retracted.by implementer',s=>{s.cases[0].retracted={at:'2026-11-06',by:'claude-code',reason:'r'};},'cases[0].retracted.by: is_module_implementer:claude-code'],
+  ['retracted.by module coverage',s=>{s.cases[0].retracted={at:'2026-11-06',by:'macro-only',reason:'r'};},'cases[0].retracted.by: recorder_not_for_module:macro-only'],
+  ['300-digit text',s=>{s.cases[0].printed.text='9'.repeat(300);},'cases[0].printed.text: unparseable'],
+  ['leading zeros',s=>{s.cases[0].printed.text='000123';},'cases[0].printed.text: unparseable'],
+  ['leading zero group',s=>{s.cases[0].printed.text='0,123';},'cases[0].printed.text: unparseable'],
+  ['history changed_by',s=>{s.version=2;s.history=[{version:2,changed_at:'2026-11-06',changed_by:'stranger',reason:'r',fields:['x']}];},'history[0].changed_by: not_in_recorders:stranger'],
+  ['cninfo requires CN',s=>{s.cases[0].source.document_id={kind:'cninfo_announcement',value:'123'};},'cases[0].source.document_id: cninfo_announcement_requires_CN'],
+  ['cninfo digits',s=>{s.cases[0].subject={market:'CN',ticker:'600519.SH'};s.cases[0].source.document_id={kind:'cninfo_announcement',value:'12a'};},'cases[0].source.document_id.value: digits'],
+  ['not a facts document',s=>{s.cases[0].source.document_id={kind:'file_sha256',value:'a'};},'cases[0].source.document_id.kind: not_a_facts_document'],
+  ['synthetic reviewer must be null',s=>{const c=s.cases[0];c.provenance_kind='synthetic';c.recorded_by='synthetic';},'cases[0].reviewed_by: must_be_null_for_synthetic_cases'],
+  ['reviewed_at without reviewer',s=>{s.cases[0].reviewed_by=null;},'cases[0].reviewed_at: forbidden_without_reviewed_by'],
+  ['history above version',s=>{s.version=2;s.history=[{version:2,changed_at:'2026-11-06',changed_by:'owner',reason:'r',fields:['x']},{version:3,changed_at:'2026-11-06',changed_by:'owner',reason:'r',fields:['x']}];},'history[1].version: above_set_version'],
+  ['canonical shape',s=>{s.cases[0].canonical={value:'1',x:1};},'cases[0].canonical: must_be_{value}'],
+ ];
+ for(const [n,m,e] of rej){it(n,()=>{const s=goodSet();m(s);expect(errs(s)).toContain(e);});}
+ it('space before % is rejected; ratio needs scale 1',()=>{
+  expect(canonicalFromPrinted('12.5 %','1',{kind:'ratio'})).toBeNull();
+  const m=metricSet();m.cases[0].printed.scale='1000';m.cases[0].canonical.value='441';m.cases[0].printed.text='0.441';
+  expect(errs(m)).toContain('cases[0].printed.scale: ratio_requires_scale_1');
+ });
+ it('canonicalFromPrinted never throws',()=>{expect(()=>canonicalFromPrinted('9'.repeat(300),'1000000000',{kind:'ratio'})).not.toThrow();});
 });

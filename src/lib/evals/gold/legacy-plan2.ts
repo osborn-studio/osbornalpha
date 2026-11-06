@@ -1,7 +1,7 @@
 // src/lib/evals/gold/legacy-plan2.ts
 // Read-only adapter for plan 2's gold file src/lib/facts/fixtures/gold/plan2.json (spec §0 R5-1, §4.6
 // legacy exception). It adopts the file without copying it: version / ready / required, entry identity
-// and '<pending>' state are kept; nothing is inferred — no document binding, printed value, hash,
+// and '<pending>' state are kept; an absent entry duration defaults to INSTANT for instant concepts, else 12M; nothing is inferred — no document binding, printed value, hash,
 // locator structure or reviewer. Every F6 provenance field an entry lacks is listed in provenance_gaps,
 // so §3.2 rule 1 keeps a legacy set incomplete until it is migrated to the f6 format. It throws
 // EvalError('gold_invalid') only for a structurally invalid file; pending entries and gaps never throw.

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
-import {GOLD_DIR,checkLock,detectGoldFormat,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders,parseLock,parseRecorders,repoPath} from './load';
+import {GOLD_DIR,checkLock,detectGoldFormat,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders,parseGoldBytes,parseLock,parseRecorders,repoPath} from './load';
 
 const PLAN2='src/lib/facts/fixtures/gold/plan2.json';
 const codeOf=(f:()=>unknown)=>{try{f();return null;}catch(e){expect(e).toBeInstanceOf(EvalError);return (e as EvalError).code;}};
@@ -41,6 +41,17 @@ describe('checkLock',()=>{
  });
 });
 
+describe('parseGoldBytes messages and strict shapes',()=>{
+ it('names recorders_required and unknown_format',()=>{
+  expect(()=>parseGoldBytes(new TextEncoder().encode('{"schema_version":1}'),'a.json',null)).toThrow(/recorders_required/);
+  expect(()=>parseGoldBytes(new TextEncoder().encode('{"x":1}'),'a.json',null)).toThrow(/unknown_format/);
+ });
+ it('rejects unknown keys in recorder and lock entries',()=>{
+  expect(codeOf(()=>parseRecorders({version:1,recorders:[{id:'owner',role:'owner',modules:['facts'],added_at:'2026-11-06',approved_by:'owner',extra:1}]}))).toBe('gold_invalid');
+  expect(codeOf(()=>parseLock({files:[{path:'a',sha256:'0'.repeat(64),version:1,format:'f6',extra:1}]}))).toBe('gold_invalid');
+ });
+});
+
 describe('format detection and file errors',()=>{
  it('decides by content',()=>{
   expect(detectGoldFormat({schema_version:1,cases:[]})).toBe('f6');
@@ -66,6 +77,9 @@ describe('format detection and file errors',()=>{
   writeFileSync(join(root,GOLD_DIR,'facts','other.json'),'{"hello":1}');
   expect(codeOf(()=>loadGoldSet(`${GOLD_DIR}/facts/other.json`,root))).toBe('gold_invalid');
   expect(codeOf(()=>loadGoldSet(`${GOLD_DIR}/facts/absent.json`,root))).toBe('gold_invalid');
+  // legacy format is accepted only at plan2.json's own path
+  writeFileSync(join(root,GOLD_DIR,'facts','legacy.json'),'{"entries":[],"ready":true,"version":1,"required":{"US":true,"CN":false}}');
+  expect(()=>loadGoldSet(`${GOLD_DIR}/facts/legacy.json`,root)).toThrow(/unknown_format/);
  });
  it('rejects paths outside the repository',()=>{
   expect(codeOf(()=>repoPath('../x.json',process.cwd()))).toBe('gold_invalid');

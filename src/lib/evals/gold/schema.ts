@@ -7,6 +7,7 @@
 // Synthetic sets (provenance_kind 'synthetic', ci only) use recorded_by 'synthetic' and no reviewer;
 // a set never mixes synthetic and transcribed cases (the runner refuses synthetic sets in report).
 import {conceptById,isConceptId} from '../../facts/concepts';
+import {FORMULA_VERSION,metricNames} from '../../facts/derive';
 import {CURRENCIES} from '../../facts/units';
 import type {Duration} from '../../facts/types';
 import {canonicalDecimal} from '../../facts/json-numbers';
@@ -18,7 +19,13 @@ export const SCALES:readonly Scale[]=['1','1000','1000000','1000000000'];
 export const EVAL_MODULES:readonly EvalModule[]=['facts','metrics','macro','industry','company','foreign_research'];
 const DURATIONS:readonly Duration[]=['3M','6M','9M','12M','INSTANT'];
 const CURRENCY=new Set<string>(CURRENCIES);
-const DATE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const DATE_SHAPE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/** Real calendar date (round-trips through Date UTC), not just the YYYY-MM-DD shape. */
+const DATE={test:(s:string)=>DATE_SHAPE.test(s)&&new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s};
+/** Metric durations the derive layer emits (derive.ts emit(): 3M single quarters, ratio rows keep the source duration, TTM). */
+const METRIC_DURATIONS:readonly string[]=['3M','6M','9M','12M','INSTANT','TTM'];
+/** Bases derive.ts emits (derive.ts:110-111): std = us_standard|cn_standard, plus CN capex_incl_intangibles → cn_incl_intangibles. */
+const METRIC_BASES:Record<'US'|'CN',readonly string[]>={US:['us_standard'],CN:['cn_standard','cn_incl_intangibles']};
 const TIMESTAMP=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2}))?$/;
 const HEX64=/^[0-9a-f]{64}$/;
 const SET_ID=/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_.-]*)+$/;
@@ -55,15 +62,18 @@ export function specOfUnit(unit:string):UnitSpec|null{
  * ratio = 0.125) × scale → canonical decimal. Returns null when the text is not a printed number.
  */
 export function canonicalFromPrinted(text:string,scale:Scale,unit:UnitSpec):string|null{
+ try{return canonicalFromPrintedUnsafe(text,scale,unit);}catch{return null;}
+}
+function canonicalFromPrintedUnsafe(text:string,scale:Scale,unit:UnitSpec):string|null{
  let t=text.trim(),neg=false,percent=false;
  const paren=/^\((.*)\)$/.exec(t);
  if(paren){neg=true;t=paren[1].trim();}
  else if(t.startsWith('-')){neg=true;t=t.slice(1);}
  if(t.endsWith('%')){
   if(unit.kind!=='ratio')return null;
-  percent=true;t=t.slice(0,-1).trimEnd();
+  percent=true;t=t.slice(0,-1);
  }
- if(!/^(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/.test(t))return null;
+ if(!/^([1-9]\d{0,2}(,\d{3})+|0|[1-9]\d*)(\.\d+)?$/.test(t))return null;
  const {unscaled,scale:fracDigits}=parseDecimalParts(t.replace(/,/g,''));
  const value=unscaled*BigInt(scale)*(neg?-1n:1n);
  return formatDecimal(value,fracDigits+(percent?2:0));
@@ -110,11 +120,12 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
  const optional=Array.isArray(raw.optional_cases)&&raw.optional_cases.every(isStr)?raw.optional_cases as string[]:null;
  if(!optional)err('optional_cases','string_array');
  else if(new Set(optional).size!==optional.length)err('optional_cases','duplicate');
- const history=parseHistory(raw.history,raw.version,err);
  const byId=new Map(recorders.recorders.map(r=>[r.id,r]));
+ const history=parseHistory(raw.history,raw.version,err,byId);
  const rawCases=Array.isArray(raw.cases)?raw.cases:null;
  if(!rawCases)err('cases','array');
  const cases:GoldCase[]=[];
+ const caseIdx:number[]=[];
  const ids=new Set<string>();
  const kinds=new Set<string>();
  (rawCases??[]).forEach((c,i)=>{
@@ -123,9 +134,9 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
   if(!parsed)return;
   if(ids.has(parsed.case_id))err(`${at}.case_id`,'duplicate');
   ids.add(parsed.case_id);kinds.add(parsed.provenance_kind);
-  cases.push({...parsed,required:!(optional??[]).includes(parsed.case_id)});
+  cases.push({...parsed,required:!(optional??[]).includes(parsed.case_id)});caseIdx.push(i);
  });
- if(raw.review_required===true)for(const c of cases)if(c.reviewed_by===null||c.reviewed_by===c.recorded_by)err(`cases[${c.case_id}].reviewed_by`,'required_by_review_required');
+ if(raw.review_required===true)for(const [k,c] of cases.entries())if(c.reviewed_by===null||c.reviewed_by===c.recorded_by)err(`cases[${caseIdx[k]}].reviewed_by`,'required_by_review_required');
  for(const id of optional??[])if(!ids.has(id))err('optional_cases',`unknown_case:${id}`);
  if(kinds.size>1)err('cases','mixed_provenance_kind');
  if(errors.length>0)throw fail();
@@ -137,13 +148,14 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
  };
 }
 
-function parseHistory(v:unknown,version:unknown,err:(at:string,code:string)=>void):GoldHistoryEntry[]{
+function parseHistory(v:unknown,version:unknown,err:(at:string,code:string)=>void,byId:Map<string,unknown>):GoldHistoryEntry[]{
  if(!Array.isArray(v)){err('history','array');return [];}
  const out:GoldHistoryEntry[]=[];
  let last=0;
  v.forEach((h,i)=>{
   const at=`history[${i}]`;
   if(!isObj(h)||!isInt(h.version,2)||!isStr(h.changed_at)||!TIMESTAMP.test(h.changed_at)||!isStr(h.changed_by)||!isStr(h.reason)||!Array.isArray(h.fields)||h.fields.length===0||!h.fields.every(isStr)){err(at,'must_be_{version>=2,changed_at,changed_by,reason,fields[]}');return;}
+  if(!byId.has(h.changed_by))err(`${at}.changed_by`,`not_in_recorders:${h.changed_by}`);
   if(h.version<=last)err(`${at}.version`,'not_increasing');
   if(typeof version==='number'&&h.version>version)err(`${at}.version`,'above_set_version');
   last=h.version;
@@ -172,7 +184,7 @@ function parseCase(c:unknown,at:string,x:CaseCtx):ParsedCase|null{
   if(!isStr(subj.cik)&&!isStr(subj.ticker))err(`${at}.subject`,'cik_or_ticker_required');
   if(subj.cik!==undefined&&(typeof subj.cik!=='string'||!/^\d{1,10}$/.test(subj.cik)))err(`${at}.subject.cik`,'digits');
  }
- const target=parseTarget(c.target,`${at}.target`,x);
+ const target=parseTarget(c.target,`${at}.target`,x,subj&&(subj.market==='US'||subj.market==='CN')?subj.market:null);
  // expect / printed / canonical
  if(c.expect!=='present'&&c.expect!=='missing')err(`${at}.expect`,'present_or_missing');
  let printed:GoldCase['printed'],canonical:GoldCase['canonical'];
@@ -185,10 +197,13 @@ function parseCase(c:unknown,at:string,x:CaseCtx):ParsedCase|null{
    err(`${at}.printed`,'must_be_{text,unit_label,scale}');
    if(p&&!SCALES.includes(p.scale as Scale))err(`${at}.printed.scale`,'not_in_whitelist');
   }else printed={text:p.text,unit_label:p.unit_label,scale:p.scale as Scale};
-  const cv=isObj(c.canonical)&&Object.keys(c.canonical).join()==='value'&&typeof c.canonical.value==='string'?c.canonical.value:null;
+  const canonShape=isObj(c.canonical)&&Object.keys(c.canonical).join()==='value';
+  if(!canonShape)err(`${at}.canonical`,'must_be_{value}');
+  const cv=canonShape&&typeof (c.canonical as J).value==='string'?(c.canonical as J).value as string:null;
   let canon:string|null=null;
   if(cv!==null){try{canon=canonicalDecimal(cv);}catch{canon=null;}}
-  if(canon===null)err(`${at}.canonical.value`,'decimal_string_required');
+  if(!canonShape){/* reported above */}
+  else if(canon===null)err(`${at}.canonical.value`,'decimal_string_required');
   else if(canon!==cv)err(`${at}.canonical.value`,`not_canonical:${canon}`);
   else canonical={value:canon};
   if(printed&&canon!==null&&target){
@@ -201,6 +216,7 @@ function parseCase(c:unknown,at:string,x:CaseCtx):ParsedCase|null{
  // binding / source
  if(c.binding!=='document'&&c.binding!=='current')err(`${at}.binding`,'document_or_current');
  const source=parseSource(c.source,`${at}.source`,c,x);
+ if(target?.type==='metric'&&c.binding!=='current')err(`${at}.binding`,'metric_requires_current_binding');
  if(c.binding==='document'&&source&&!source.document_id)err(`${at}.source.document_id`,'required_for_document_binding');
  if(c.binding==='current'&&source&&!source.available_date)err(`${at}.source.available_date`,'required_for_current_binding');
  if(source?.document_id&&subj){
@@ -235,7 +251,7 @@ function parseCase(c:unknown,at:string,x:CaseCtx):ParsedCase|null{
  if(c.retracted!==null&&c.retracted!==undefined){
   const r=isObj(c.retracted)?c.retracted:null;
   if(!r||typeof r.at!=='string'||!TIMESTAMP.test(r.at)||!isStr(r.by)||!isStr(r.reason))err(`${at}.retracted`,'must_be_null_or_{at,by,reason}');
-  else{if(!x.byId.has(r.by))err(`${at}.retracted.by`,`not_in_recorders:${r.by}`);retracted={at:r.at,by:r.by,reason:r.reason};}
+  else{person(r.by,'retracted.by',true);retracted={at:r.at,by:r.by,reason:r.reason};}
  }
  if(c.notes!==undefined&&typeof c.notes!=='string')err(`${at}.notes`,'string');
  if(!caseId||!subj||!target||!source)return null;
@@ -264,7 +280,7 @@ function parseUnit(v:unknown,at:string,err:CaseCtx['err']):UnitSpec|null{
  }
 }
 
-function parseTarget(v:unknown,at:string,x:CaseCtx):CaseTarget|null{
+function parseTarget(v:unknown,at:string,x:CaseCtx,market:'US'|'CN'|null):CaseTarget|null{
  const {err}=x;
  if(!isObj(v)){err(at,'required');return null;}
  const unit=parseUnit(v.unit,`${at}.unit`,err);
@@ -286,6 +302,7 @@ function parseTarget(v:unknown,at:string,x:CaseCtx):CaseTarget|null{
    const want=def.unitKind==='money'?'currency':def.unitKind;
    if(unit&&unit.kind!==want)err(`${at}.unit.kind`,`concept_${def.id}_expects_${want}`);
   }
+  if(typeof v.period_start==='string'&&typeof v.period_end==='string'&&v.period_start>=v.period_end)err(at,'period_start_must_precede_period_end');
   if(!def||!unit||typeof v.period_end!=='string'||!DURATIONS.includes(v.duration as Duration)||!('period_start' in v))return null;
   return {type:'fact',concept:def.id,period_start:v.period_start as string|null,period_end:v.period_end,duration:v.duration as Duration,consolidation:'consolidated',unit};
  }
@@ -293,6 +310,12 @@ function parseTarget(v:unknown,at:string,x:CaseCtx):CaseTarget|null{
   for(const k of Object.keys(v))if(!METRIC_KEYS.has(k))err(`${at}.${k}`,'unknown_key');
   if(x.module!=='metrics')err(`${at}.type`,'metric_target_requires_module_metrics');
   for(const k of ['metric','duration','basis','input_unit','formula_version'])if(!isStr(v[k]))err(`${at}.${k}`,'required');
+  if(isStr(v.metric)&&market&&!metricNames(market).includes(v.metric))err(`${at}.metric`,'not_in_metricNames');
+  if(isStr(v.duration)&&!METRIC_DURATIONS.includes(v.duration))err(`${at}.duration`,'invalid');
+  if(isStr(v.basis)&&market&&!METRIC_BASES[market].includes(v.basis))err(`${at}.basis`,'not_emitted_by_derive');
+  if(isStr(v.input_unit)&&specOfUnit(v.input_unit)===null)err(`${at}.input_unit`,'not_a_facts_unit');
+  if(isStr(v.formula_version)&&v.formula_version!==FORMULA_VERSION)err(`${at}.formula_version`,'not_FORMULA_VERSION');
+  if(typeof v.period_start==='string'&&typeof v.period_end==='string'&&v.period_start>=v.period_end)err(at,'period_start_must_precede_period_end');
   if(typeof v.period_start!=='string'||!DATE.test(v.period_start))err(`${at}.period_start`,'date');
   if(!unit||!isStr(v.metric)||!isStr(v.duration)||!isStr(v.basis)||!isStr(v.input_unit)||!isStr(v.formula_version)||typeof v.period_start!=='string'||typeof v.period_end!=='string')return null;
   return {type:'metric',metric:v.metric,period_start:v.period_start,period_end:v.period_end,duration:v.duration,basis:v.basis,input_unit:v.input_unit,formula_version:v.formula_version,unit};

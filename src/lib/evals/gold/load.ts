@@ -17,7 +17,7 @@ export const LOCK_PATH=`${GOLD_DIR}/lock.json`;
 const HEX64=/^[0-9a-f]{64}$/;
 type J=Record<string,unknown>;
 const isObj=(v:unknown):v is J=>typeof v==='object'&&v!==null&&!Array.isArray(v);
-const invalid=(path:string,code:string,code2?:EvalError['code'])=>new EvalError(code2??'gold_invalid',`${path}: ${code}`,{path,errors:[code]});
+const invalid=(path:string,code:string,errorCode?:EvalError['code'])=>new EvalError(errorCode??'gold_invalid',`${path}: ${code}`,{path,errors:[code]});
 
 /** Repo-relative POSIX path of `path` (absolute or relative to root); throws when it leaves the repo. */
 export function repoPath(path:string,root:string):string{
@@ -25,6 +25,8 @@ export function repoPath(path:string,root:string):string{
  if(rel===''||rel.startsWith('../')||rel==='..'||isAbsolute(rel))throw invalid(path,'outside_repository');
  return rel;
 }
+/** The only file allowed to use the legacy format (plan 2's gold file). */
+export const LEGACY_PLAN2_PATH='src/lib/facts/fixtures/gold/plan2.json';
 export function detectGoldFormat(raw:unknown):GoldFormat|null{
  if(!isObj(raw))return null;
  if('schema_version' in raw)return 'f6';
@@ -37,12 +39,15 @@ function readJson(rel:string,root:string):{bytes:Buffer;raw:unknown}{
  try{return {bytes,raw:JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))};}catch{throw invalid(rel,'invalid_json');}
 }
 /** Parses bytes already in hand (used by loadGoldSet and by gold-diff on git blobs). */
-export function parseGoldBytes(bytes:Uint8Array,path:string,recorders:RecordersFile|null):GoldSet{
- let raw:unknown;
- try{raw=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw invalid(path,'invalid_json');}
+export function parseGoldBytes(bytes:Uint8Array,path:string,recorders:RecordersFile|null,parsed?:unknown):GoldSet{
+ let raw:unknown=parsed;
+ if(parsed===undefined){try{raw=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw invalid(path,'invalid_json');}}
  const meta={path,sha256:sha256Hex(bytes)};
  const format=detectGoldFormat(raw);
- if(format==='legacy_plan2')return parseLegacyPlan2(raw,meta);
+ if(format==='legacy_plan2'){
+  if(path!==LEGACY_PLAN2_PATH)throw invalid(path,'unknown_format');
+  return parseLegacyPlan2(raw,meta);
+ }
  if(format==='f6'){
   if(!recorders)throw invalid(path,'recorders_required');
   return parseGoldSetF6(raw,meta,recorders);
@@ -52,7 +57,7 @@ export function parseGoldBytes(bytes:Uint8Array,path:string,recorders:RecordersF
 export function loadGoldSet(path:string,root:string=process.cwd()):GoldSet{
  const rel=repoPath(path,root);
  const {bytes,raw}=readJson(rel,root);
- return parseGoldBytes(bytes,rel,detectGoldFormat(raw)==='f6'?loadRecorders(root):null);
+ return parseGoldBytes(bytes,rel,detectGoldFormat(raw)==='f6'?loadRecorders(root):null,raw);
 }
 
 export function parseRecorders(raw:unknown,path:string=RECORDERS_PATH):RecordersFile{
@@ -64,6 +69,7 @@ export function parseRecorders(raw:unknown,path:string=RECORDERS_PATH):Recorders
  for(const [i,r] of (Array.isArray(raw.recorders)?raw.recorders:[]).entries()){
   const at=`recorders[${i}]`;
   if(!isObj(r)){errors.push(`${at}: not_an_object`);continue;}
+  for(const k of Object.keys(r))if(!['id','role','modules','added_at','approved_by'].includes(k))errors.push(`${at}.${k}: unknown_key`);
   if(typeof r.id!=='string'||!/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(r.id))errors.push(`${at}.id: invalid`);
   else if(r.id==='synthetic')errors.push(`${at}.id: reserved`);
   else if(ids.has(r.id))errors.push(`${at}.id: duplicate`);
@@ -84,6 +90,7 @@ export function parseLock(raw:unknown,path:string=LOCK_PATH):GoldLock{
  if(!files||Object.keys(raw as J).join()!=='files')throw invalid(path,'must_be_{files:[]}');
  const seen=new Set<string>();
  for(const [i,f] of files.entries()){
+  if(isObj(f)&&Object.keys(f).some(k=>!['path','sha256','version','format'].includes(k))){errors.push(`files[${i}]: unknown_key`);continue;}
   if(!isObj(f)||typeof f.path!=='string'||typeof f.sha256!=='string'||!HEX64.test(f.sha256)||typeof f.version!=='number'||!Number.isSafeInteger(f.version)||f.version<1||(f.format!=='f6'&&f.format!=='legacy_plan2'))errors.push(`files[${i}]: must_be_{path,sha256,version,format}`);
   else if(seen.has(f.path))errors.push(`files[${i}].path: duplicate`);
   else seen.add(f.path);
