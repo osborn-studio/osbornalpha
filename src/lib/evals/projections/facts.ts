@@ -139,7 +139,7 @@ export function projectFactsRouteBody(body:FactsRouteBody):Projection{
 }
 export interface MetricsRouteBody{
  truncated:boolean;formulaVersion:string;
- metrics:{metric:string;periodStart:string;periodEnd:string;duration:string;value:string;unit:string;basis:string;inputs:{fact_id:string;concept:string;quarter?:string;ytd_rule?:string}[]}[];
+ metrics:{metric:string;periodStart:string;periodEnd:string;duration:string;value:string;unit:string;basis:string;inputs:{fact_id:string;concept:string;quarter?:[string,string];ytd_rule?:'same_filing'|'never_revised'}[]}[];
 }
 /** evidence = the facts route in factIds mode for every input fact id (periodEnd + filing sourceRef). */
 export function projectMetricsRouteBody(body:MetricsRouteBody,evidence:FactsRouteBody):Projection{
@@ -150,7 +150,7 @@ export function projectMetricsRouteBody(body:MetricsRouteBody,evidence:FactsRout
   inputs:m.inputs.map((i):ProjectionRow=>{
    const f=facts.get(i.fact_id);const src=f?refs.get(f.filingId):undefined;
    if(!f||src===undefined)throw new ProjectionError('projection_join_missing',`input ${i.fact_id}`);
-   return {concept:i.concept,period_end:f.periodEnd,source_ref:src,...(i.quarter?{quarter:i.quarter}:{}),...(i.ytd_rule?{ytd_rule:i.ytd_rule}:{})};
+   return {concept:i.concept,period_end:f.periodEnd,source_ref:src,...(i.quarter?{quarter:`${i.quarter[0]}~${i.quarter[1]}`}:{}),...(i.ytd_rule?{ytd_rule:i.ytd_rule}:{})};
   })})))};
 }
 

@@ -20,7 +20,7 @@ import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
 import {projectionHash} from './canonical-json';
 import {projectFactsRouteBody,projectMetricsRouteBody,projectRequest} from './projections/facts';
 import type {FactsRouteBody,MetricsRouteBody,ProjectionDeps} from './projections/facts';
-import {ZZEVA_CIK,ZZEVA_ISSUER,seedZzeva} from './test-support/memory-facts';
+import {ZZEVA_CIK,ZZEVA_ISSUER,publishFilings,seedZzeva} from './test-support/memory-facts';
 import type {ReplayRequest} from './types';
 
 const TODAY=new Date().toISOString().slice(0,10);
@@ -64,5 +64,23 @@ describe('replay projection: database path == public route response',()=>{
   const viaRoute=projectMetricsRouteBody(body,evidence);
   expect(viaRoute).toEqual(viaDb);
   expect(viaDb.rows.map(r=>r.metric)).toEqual(['gross_margin','revenue_yoy']);
+ });
+ it('metrics whose inputs carry quarter tuples (q_single, TTM) hash the same on both paths',async()=>{
+  const q=(start:string,end:string,v:string)=>({concept:'revenue',period_start:start,period_end:end,duration:'3M' as const,value:v});
+  await publishFilings(deps.db as ReturnType<typeof memoryFactsDb>,ZZEVA_ISSUER,[
+   {sourceRef:'0009990601-24-000010',formType:'10-Q',availableDate:'2024-05-01',facts:[q('2024-01-01','2024-03-30','90000000000')]},
+   {sourceRef:'0009990601-24-000011',formType:'10-Q',availableDate:'2024-08-01',facts:[q('2024-03-31','2024-06-29','85000000000')]},
+   {sourceRef:'0009990601-24-000012',formType:'10-K',availableDate:'2024-11-02',facts:[q('2024-06-30','2024-09-28','94000000000')]}]);
+  const request:ReplayRequest={issuer,concepts:[],metrics:['q_single_revenue','ttm_revenue'],asOf:'2025-06-30'};
+  const viaDb=await projectRequest(deps,request,TODAY);
+  const body=await call(metricsGET,'/metrics','metrics=q_single_revenue,ttm_revenue&asOf=2025-06-30&limit=1000') as MetricsRouteBody;
+  expect(body.metrics.some(m=>m.inputs.some(i=>Array.isArray(i.quarter)))).toBe(true);   // the real route shape is a [start,end] tuple
+  const ids=[...new Set(body.metrics.flatMap(m=>m.inputs.map(i=>i.fact_id)))];
+  const evidence=await call(factsGET,'',`factIds=${ids.join(',')}`) as FactsRouteBody;
+  const viaRoute=projectMetricsRouteBody(body,evidence);
+  expect(viaDb.rows.map(r=>r.metric)).toContain('ttm_revenue');
+  expect(viaDb.rows.some(r=>(r.inputs as {quarter?:string}[]).some(i=>i.quarter?.includes('~')))).toBe(true);
+  expect(viaRoute).toEqual(viaDb);
+  expect(projectionHash(viaRoute)).toBe(projectionHash(viaDb));
  });
 });
