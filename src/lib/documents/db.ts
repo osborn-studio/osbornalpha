@@ -92,10 +92,11 @@ export function checkIds<T>(ids:T[],max=IDS_MAX):T[]{if(ids.length>max)throw new
 // zone (Z or ±hh[:mm]) is required (zone-less and date-only values are rejected: PostgreSQL would read them in the session zone),
 // seconds 00–59, real calendar dates, years 1000–9999, 1–9 fractional digits rounded half-to-even to microseconds.
 const TS_PARTS=/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)$/;
-export function canonTs(v:string):string|null{
+/** minYear: writers 1000 (default); the row reader 1, since PostgreSQL stores years 0001–9999 (Task 3 recheck N1). */
+export function canonTs(v:string,minYear=1000):string|null{
  const m=TS_PARTS.exec(v.trim());if(!m)return null;
  const [y,mo,d,h,mi,sec]=[m[1],m[2],m[3],m[4],m[5],m[6]??'0'].map(Number);
- if(y<1000||mo<1||mo>12||d<1||d>31||h>23||mi>59||sec>59)return null;
+ if(y<minYear||mo<1||mo>12||d<1||d>31||h>23||mi>59||sec>59)return null;
  let off=0;
  if(m[8]!=='Z'){const o=m[8];const sign=o[0]==='-'?-1:1;const digits=o.slice(1).replace(':','');const oh=Number(digits.slice(0,2)),om=Number(digits.slice(2)||'0');if(oh>15||om>59)return null;off=sign*(oh*60+om);}
  const dt=new Date(0);dt.setUTCFullYear(y,mo-1,d);dt.setUTCHours(h,mi,sec,0);   // setUTCFullYear: Date.UTC would map years 0–99 to 19xx
@@ -105,7 +106,7 @@ export function canonTs(v:string):string|null{
  if(rest){const half='5'+'0'.repeat(rest.length-1);if(rest>half||(rest===half&&BigInt(head)%2n===1n))micros+=1n;}
  let ms=micros/1000n,sub=micros%1000n;
  if(sub<0n){sub+=1000n;ms-=1n;}   // floor division with a non-negative remainder (pre-1970 values)
- const t=Number(ms);const out=new Date(t);if(Number.isNaN(out.getTime())||out.getUTCFullYear()>9999||out.getUTCFullYear()<1000)return null;
+ const t=Number(ms);const out=new Date(t);if(Number.isNaN(out.getTime())||out.getUTCFullYear()>9999||out.getUTCFullYear()<minYear)return null;
  const iso=out.toISOString();
  return sub===0n?iso:`${iso.slice(0,-1)}${String(sub).padStart(3,'0')}Z`;
 }
@@ -122,7 +123,7 @@ export function tsArg(v:unknown,what:string):string{
 }
 const ts=(v:unknown):string=>{
  if(v instanceof Date&&!Number.isNaN(v.getTime()))return v.toISOString();
- const c=canonTs(String(v));
+ const c=canonTs(String(v),1);   // reader: any year PostgreSQL can store, in UTC
  if(c===null)throw new DocumentsDbError('unknown','bad_timestamp');
  return c;
 };

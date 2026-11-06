@@ -187,11 +187,12 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   },
   async releaseSyncLease(issuer,source,batch,outcome,nextDue){
    if(outcome!=='success'&&outcome!=='failed')throw invalid('outcome');
+   const due=normTs(nextDue,'next_due');   // validated before any state changes (Task 3 recheck N2/N3), like tsArg in the SQL adapters
    const s=scope.get(sk(issuer,source));
    if(!s||s.lease_batch_id!==batch)throw leaseLost();
    const t=now();
    s.lease_until=null;s.lease_batch_id=null;s.last_attempt_at=t;if(outcome==='success')s.last_success_at=t;s.last_status=outcome;
-   s.next_due_at=nextDue?normTs(nextDue,'next_due'):t;s.updated_at=t;
+   s.next_due_at=due;s.updated_at=t;
   },
 
   // ---------------------------------------------------------------- documents
@@ -199,6 +200,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    listed(source);
    // SQL order: argument shape (incl. the asset bound and duplicate role/filename), then the lease, then the lookups
    if(!isObj(doc))throw invalid('doc');
+   normTs(doc.published_at,'published_at');normTs(doc.available_at,'available_at');   // like docArg: before the lease and the duplicate path
    if(input.length>ASSETS_MAX)throw invalid('assets');
    const assetKeys=new Set<string>();
    for(const a of input){const k=`${a.role}|${a.filename}`;if(assetKeys.has(k))throw invalid('assets');assetKeys.add(k);}
@@ -222,6 +224,8 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   },
   async insertUploadDocument(owner,doc){
    if(!owner)throw invalid('owner');
+   if(!isObj(doc))throw invalid('doc');
+   normTs(doc.published_at,'published_at');normTs(doc.available_at,'available_at');
    if(doc.permission!=='licensed'&&doc.permission!=='private')throw invalid('permission');
    const ref=`${owner}/${doc.content_sha256}`;
    const dup=versionsOf('upload',ref)[0];

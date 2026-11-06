@@ -234,6 +234,28 @@ describe('canonTs / tsSortKey',()=>{
   const k=['2026-03-20T09:00:00.124Z','2026-03-20T09:00:00.123456Z','2026-03-20T09:00:00.123Z'].map(x=>tsSortKey(x)!);
   expect([...k].sort()).toEqual([k[2],k[1],k[0]]);
  });
+ it('Task 3 recheck N1: the row reader accepts any year PostgreSQL stores (0001–9999, UTC); writers keep 1000–9999',()=>{
+  expect(documentFromRow({...pgDocRow,published_at:'0999-03-20 00:00:00+00'}).published_at).toBe('0999-03-20T00:00:00.000Z');
+  expect(documentFromRow({...pgDocRow,published_at:'0001-01-01 00:00:00+00'}).published_at).toBe('0001-01-01T00:00:00.000Z');
+  expect(documentFromRow({...pgDocRow,published_at:'0999-03-20 08:00:00+08'}).published_at).toBe('0999-03-20T00:00:00.000Z');
+  expect(canonTs('0999-03-20T00:00:00Z')).toBeNull();
+  expect(()=>documentFromRow({...pgDocRow,published_at:'0000-01-01 00:00:00+00'})).toThrow();
+ });
+ it('Task 3 recheck N2/N3: memory validates timestamps at entry, before any state change or duplicate return',async()=>{
+  const db=memoryDocumentsDb();const iss=randomUUID();const b=randomUUID();db.setNow('2026-01-01T00:00:00.000Z');
+  await db.reconcileScope('hkexnews',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'00268'}]);
+  await db.claimSyncLease(iss,'hkexnews',b,600);
+  for(const bad of ['2026-02-31T00:00:00Z','','2026-01-01T00:00:00'])
+   await expect(db.releaseSyncLease(iss,'hkexnews',b,'success',bad)).rejects.toMatchObject({code:'invalid_input'});
+  expect(db.scope()[0]).toMatchObject({lease_batch_id:b,last_status:null,last_success_at:null});   // nothing changed
+  const doc=docInsert();
+  await db.insertDocumentVersion(iss,'hkexnews',b,doc,[]);
+  await expect(db.insertDocumentVersion(iss,'hkexnews',b,{...doc,published_at:'2026-03-20T09:00:00'},[])).rejects.toMatchObject({code:'invalid_input'});   // a duplicate would otherwise return first
+  await expect(db.insertDocumentVersion(iss,'hkexnews',b,{...doc,available_at:'nope'},[])).rejects.toMatchObject({code:'invalid_input'});
+  const owner=randomUUID();const up=docInsert({source:'upload',source_url:null,permission:'private',owner_user_id:owner});
+  await db.insertUploadDocument(owner,up);
+  await expect(db.insertUploadDocument(owner,{...up,published_at:'bad'})).rejects.toMatchObject({code:'invalid_input'});
+ });
  it('the row mapper refuses an unparsable timestamp with a DocumentsDbError, never a RangeError',()=>{
   expect(()=>documentFromRow({...pgDocRow,published_at:'garbage'})).toThrowError(expect.objectContaining({code:'unknown',message:'bad_timestamp'}));
  });
