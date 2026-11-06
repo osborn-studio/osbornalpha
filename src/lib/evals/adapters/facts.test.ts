@@ -3,7 +3,8 @@ import {describe,expect,it} from 'vitest';
 import {FORMULA_VERSION} from '../../facts/derive';
 import type {FilingRow} from '../../facts/types';
 import type {FactTarget,MetricTarget} from '../types';
-import {factsReader,selectFiling} from './facts';
+import {factsReader,privilegedFactsReader,selectFiling} from './facts';
+import {memoryRawStorage} from './provenance';
 import type {FactsReadDb} from './facts';
 import {UNIT_ISSUER,companyFactsDoc,memoryWorld} from './memory-world';
 import type {CfEntry,MemoryWorld} from './memory-world';
@@ -167,5 +168,23 @@ describe('selectFiling (spec §4.2, §0 R5-8)',()=>{
   expect(selectFiling([g({filing_id:'u',document_ref:null})],t2023,cn('D'))).toEqual({error:'filing_not_linked'});
   expect(selectFiling([g({filing_id:'u',document_ref:null,period_end:'2022-12-31'})],t2023,cn('D'))).toEqual({error:'filing_not_found'});
   expect(selectFiling([],t2023,{kind:'official_release',value:'x'})).toEqual({error:'filing_not_found'});
+ });
+});
+
+describe('resolveSubject market check (public path never reads fact_sync_scope)',()=>{
+ const noScope=(w:MemoryWorld):FactsReadDb=>({...w.db,scopeRows:async()=>{throw new Error('permission denied for fact_sync_scope');}} as FactsReadDb);
+ it('the public reader resolves through filings even when scopeRows throws, and still rejects the wrong market',async()=>{
+  const w=await world();
+  const r=readerOf(w,noScope(w));
+  expect(await r.resolveSubject({market:'US',cik:'9990611'},TODAY)).toEqual(REF);
+  expect(await r.resolveSubject({market:'CN',cik:'9990611'},TODAY)).toBeNull();
+ });
+ it('an issuer with a scope row but no filings: public null, privileged resolves',async()=>{
+  const w=await memoryWorld();
+  const deps={db:w.db,tables:w.tables,stateRev:async()=>null};
+  expect(await factsReader(deps).resolveSubject({market:'US',cik:'9990611'},TODAY)).toBeNull();
+  const p=privilegedFactsReader({...deps,storage:memoryRawStorage(w.storage.objects),parsers:{edgar:()=>{throw new Error('unused');},tushare:()=>{throw new Error('unused');}}});
+  expect(await p.resolveSubject({market:'US',cik:'9990611'},TODAY)).toEqual(REF);
+  expect(await p.resolveSubject({market:'CN',cik:'9990611'},TODAY)).toBeNull();
  });
 });

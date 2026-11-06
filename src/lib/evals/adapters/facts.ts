@@ -20,7 +20,7 @@ import type {CaseTarget,DocumentId,FactTarget,Hint,MetricTarget,ModuleReader,Pri
 import {provenanceResolver} from './provenance';
 import type {RawObjectStorage,SnapshotParsers} from './provenance';
 
-export type FactsReadDb=Pick<FactsDb,'readFacts'|'filingsOfIssuer'|'factsByIds'|'metricsOfIssuer'|'scopeRows'>;
+export type FactsReadDb=Pick<FactsDb,'readFacts'|'filingsOfIssuer'|'factsByIds'|'metricsOfIssuer'>;
 /** readNonVisible cannot answer (contract return type has no error arm): the kind maps this to read_error(reason). */
 export class NonVisibleReadError extends Error{constructor(public readonly reason:ReadErrorReason){super(reason);this.name='NonVisibleReadError';}}
 export interface FactsReaderDeps{
@@ -32,7 +32,7 @@ export interface FactsReaderDeps{
  /** projections/facts.ts::projectRequest (Task 10); absent → project() rejects with projector_missing. */
  projector?:(request:ReplayRequest,today:string)=>Promise<Projection>;
 }
-export interface PrivilegedFactsReaderDeps extends FactsReaderDeps{storage:RawObjectStorage;parsers:SnapshotParsers}
+export interface PrivilegedFactsReaderDeps extends FactsReaderDeps{db:FactsReadDb&Pick<FactsDb,'scopeRows'>;storage:RawObjectStorage;parsers:SnapshotParsers}
 
 const RESOLVE_REFUSALS=/^(empty_query|ambiguous_query|ambiguous_owner|invalid_identifier:)/;
 /** Must mirror tushare-statements.ts FORM_BY_MONTH (end-date month → form_type) for the periodic report types. */
@@ -86,7 +86,10 @@ async function selectPaged(tables:TableClient,table:string,match:Row,orderBy:str
  }
 }
 
-export function factsReader(deps:FactsReaderDeps):ModuleReader{
+export function factsReader(deps:FactsReaderDeps):ModuleReader{return buildReader(deps,null);}
+/** inScope: extra market evidence only the privileged reader may use (fact_sync_scope is service_role-only; the public path must never touch it). */
+type InScope=(issuerId:string,market:SubjectRef['market'])=>Promise<boolean>;
+function buildReader(deps:FactsReaderDeps,inScope:InScope|null):ModuleReader{
  const {db}=deps;
  let observed:number|null=null;
  const observe=(rev:number)=>{if(observed===null||rev>observed)observed=rev;};
@@ -116,8 +119,8 @@ export function factsReader(deps:FactsReaderDeps):ModuleReader{
    try{
     const r=await resolveIssuer(deps.tables,q,{today});
     if(!r)return null;
-    // issuers carry no market: the issuer must be in the facts scope of subject.market or already have filings there
-    const inMarket=(await db.scopeRows(subject.market,[r.issuer_id])).length>0||(await db.filingsOfIssuer(r.issuer_id,subject.market,{})).length>0;
+    // issuers carry no market: the issuer must have filings in subject.market (anon-readable); the privileged reader also accepts a scope row
+    const inMarket=(await db.filingsOfIssuer(r.issuer_id,subject.market,{})).length>0||(inScope!==null&&await inScope(r.issuer_id,subject.market));
     return inMarket?{issuerId:r.issuer_id,market:subject.market}:null;
    }catch(e){
     if(e instanceof Error&&RESOLVE_REFUSALS.test(e.message))return null;
@@ -181,7 +184,7 @@ async function factsHints(deps:FactsReaderDeps,reader:ModuleReader,request:Repla
 }
 
 export function privilegedFactsReader(deps:PrivilegedFactsReaderDeps):PrivilegedReader{
- const reader=factsReader(deps);
+ const reader=buildReader(deps,async(id,market)=>(await deps.db.scopeRows(market,[id])).length>0);
  const resolve=provenanceResolver({db:deps.db,tables:deps.tables,storage:deps.storage,parsers:deps.parsers});
  return {...reader,privileged:true,
   readNonVisible:(ref,target,documentId,asOf)=>readNonVisible(deps,ref,target,documentId,asOf),

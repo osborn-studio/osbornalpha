@@ -310,7 +310,7 @@ describe('readNonVisible — superseded only counts ok rows below the active gen
  });
  it('a truncated includeNonOk read is a NonVisibleReadError(truncated), never a silent null',async()=>{
   const w=await world();
-  const truncating:FactsReadDb={...w.db,readFacts:async()=>({stateRev:3,rows:[],truncated:true})};
+  const truncating={...w.db,readFacts:async()=>({stateRev:3,rows:[],truncated:true})};
   const r=privilegedFactsReader({db:truncating,tables:w.overlay,stateRev:async()=>null,storage:memoryRawStorage(w.storage.objects),parsers:PARSERS});
   await expect(r.readNonVisible(REF,netIncome,null,TODAY)).rejects.toMatchObject({name:'NonVisibleReadError',reason:'truncated'});
   expect(new NonVisibleReadError('truncated')).toBeInstanceOf(Error);
