@@ -3,27 +3,47 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
 const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn()}));
 vi.mock('@/lib/documents/sync',async()=>{
+ const actual=await vi.importActual<typeof import('@/lib/documents/sync')>('@/lib/documents/sync');
  class DocumentsSyncError extends Error{constructor(readonly code:string){super(code);}}
- return {runDocumentsSync:mocks.run,DocumentsSyncError,DEADLINE_MS:240_000};
+ return {runDocumentsSync:mocks.run,DocumentsSyncError,DEADLINE_MS:actual.DEADLINE_MS};
 });
 vi.mock('@/lib/documents/deps',()=>({productionDocumentsDeps:mocks.deps,documentsCodeVersion:mocks.codeVersion}));
 
-import {GET,POST} from './route';
+import {GET,POST,maxDuration} from './route';
 
 const AUTH={authorization:'Bearer cron-secret'};
 const req=(qs:string,headers:Record<string,string>={})=>new Request(`https://alpha.example/api/cron/documents-sync?${qs}`,{headers});
-const original=process.env.CRON_SECRET;
+const original=process.env.CRON_SECRET,originalGate=process.env.DOCUMENTS_SYNC_ENABLED;
 const COUNTS={fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0};
 
 describe('documents sync cron',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
-  process.env.CRON_SECRET='cron-secret';
+  process.env.CRON_SECRET='cron-secret';process.env.DOCUMENTS_SYNC_ENABLED='true';
   mocks.codeVersion.mockReturnValue('a'.repeat(40));
   mocks.deps.mockReturnValue({tag:'deps'});
   mocks.run.mockResolvedValue({batchId:'b',status:'success',counts:COUNTS,errors:[],idle:false,issuers:[]});
  });
- afterEach(()=>{if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;});
+ afterEach(()=>{
+  if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;
+  if(originalGate===undefined)delete process.env.DOCUMENTS_SYNC_ENABLED;else process.env.DOCUMENTS_SYNC_ENABLED=originalGate;
+ });
+ it('is disabled unless DOCUMENTS_SYNC_ENABLED is exactly "true": after auth, 200 skipped, no deps, no code-version lookup, no run',async()=>{
+  for(const v of [undefined,'1','TRUE','false','']){
+   if(v===undefined)delete process.env.DOCUMENTS_SYNC_ENABLED;else process.env.DOCUMENTS_SYNC_ENABLED=v;
+   const res=await GET(req('source=edgar',AUTH));
+   expect(res.status,String(v)).toBe(200);expect(res.headers.get('cache-control')).toBe('no-store');expect(await res.json()).toEqual({skipped:'disabled'});
+  }
+  expect((await GET(req('source=edgar',{authorization:'Bearer nope'}))).status).toBe(401);   // auth first
+  expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();expect(mocks.codeVersion).not.toHaveBeenCalled();
+  process.env.DOCUMENTS_SYNC_ENABLED='true';
+  expect((await GET(req('source=edgar',AUTH))).status).toBe(200);expect(mocks.run).toHaveBeenCalledTimes(1);
+ });
+ it('keeps maxDuration 300 and the real 240 s deadline constant',async()=>{
+  expect(maxDuration).toBe(300);
+  const {DEADLINE_MS}=await vi.importActual<typeof import('@/lib/documents/sync')>('@/lib/documents/sync');
+  expect(DEADLINE_MS).toBe(240_000);
+ });
  it('fails closed without CRON_SECRET (503) and rejects a wrong or missing bearer (401) before touching deps',async()=>{
   delete process.env.CRON_SECRET;
   expect((await GET(req('source=hkexnews',AUTH))).status).toBe(503);

@@ -20,7 +20,7 @@
  */
 import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
-import {documentsCodeVersion,productionDocumentsDeps} from '../../src/lib/documents/deps';
+import {documentsCodeVersion,planScheduledIssuers,productionDocumentsDeps} from '../../src/lib/documents/deps';
 import {runDocumentsSync} from '../../src/lib/documents/sync';
 import type {ListedSource} from '../../src/lib/documents/types';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
@@ -72,10 +72,13 @@ async function main(){
    issuerIds.push(r.issuer_id);
   }
  }
+ // Dry-run parity: without --issuer the scheduled path reconciles the scope first; plan that read-only
+ // and list exactly the issuers --apply would process (empty or retired scope included).
+ if(!args.apply&&issuerIds===undefined)issuerIds=await planScheduledIssuers({tables:deps.tables,db:deps.db},args.source,{limit:args.limit,now:deps.now()});
  const receipt=await runDocumentsSync(deps,{source:args.source,limit:args.limit,issuerIds,sinceYear:args.sinceYear,refetch:args.refetch||undefined,dryRun:!args.apply,triggeredBy:'script'});
  console.log(JSON.stringify({mode:args.apply?'apply':'dry-run (no batch written; pass --apply to write)',source:args.source,codeVersion,...receipt},null,1));
  const failed=args.apply?receipt.status!=='success':receipt.issuers.some(i=>i.outcome==='failed');
- process.exit(failed?1:0);
+ process.exitCode=failed?1:0;
 }
 
-main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exit(1);});
+main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exitCode=1;});

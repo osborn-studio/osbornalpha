@@ -5,7 +5,9 @@
 // handed to the core (no new issuer under 90 s: deadline_hit). Without VERCEL_GIT_COMMIT_SHA the run is
 // refused (503 code_version_unavailable, spec §6.1). sinceYear = this year − 10 (spec §1.1). The HTTP
 // receipt carries codes, keys and counts only, never messages. A duplicate cron delivery is harmless:
-// issuers leased by the first run are skipped as 'leased'.
+// issuers leased by the first run are skipped as 'leased'. Owner-safety gate: nothing runs unless
+// DOCUMENTS_SYNC_ENABLED=true (after auth: 200 {skipped:'disabled'}, no deps, no DB, no batch); the owner
+// enables it once the migrations are applied and the first manual `--apply --limit 5` has run.
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {DEADLINE_MS,DocumentsSyncError,runDocumentsSync} from '@/lib/documents/sync';
@@ -34,6 +36,7 @@ async function run(request:Request):Promise<NextResponse>{
  const secret=process.env.CRON_SECRET;
  if(!secret)return err('cron_unavailable','Cron unavailable',503);
  if(!authorized(request.headers.get('authorization'),secret))return err('unauthorized','Unauthorized',401);
+ if(process.env.DOCUMENTS_SYNC_ENABLED!=='true')return NextResponse.json({skipped:'disabled'},{status:200,headers:{'Cache-Control':'no-store'}});
  const url=new URL(request.url);
  for(const name of new Set(url.searchParams.keys()))if(url.searchParams.getAll(name).length>1)return err(`invalid_parameter:${name}`,`${name} may be given once`,400);
  const source=url.searchParams.get('source');
