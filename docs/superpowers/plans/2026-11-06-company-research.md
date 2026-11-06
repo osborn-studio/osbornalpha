@@ -583,7 +583,8 @@ describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
    expect((await tx.c.query(`delete from public.company_watches where user_id=$1`,[a])).rowCount).toBe(0);
    expect((await tx.c.query(`delete from public.company_event_reads where user_id=$1`,[a])).rowCount).toBe(0);
   });
-  expect((await fails(inTx(admin,{role:'authenticated',userId:bU},tx=>tx.c.query(`insert into public.company_watches(user_id,issuer_id) values($1,$2)`,[a,await fx.issuer()])))).message).toMatch(/row-level security/);
+  const otherIssuer=await fx.issuer();
+  expect((await fails(inTx(admin,{role:'authenticated',userId:bU},tx=>tx.c.query(`insert into public.company_watches(user_id,issuer_id) values($1,$2)`,[a,otherIssuer])))).message).toMatch(/row-level security/);
   expect((await fails(inTx(admin,{role:'authenticated',userId:bU},tx=>tx.c.query(`insert into public.company_event_reads(user_id,issuer_id,event_id) values($1,$2,$3)`,[a,iss,e1])))).message).toMatch(/row-level security/);
   expect(await inTx(admin,{role:'authenticated',userId:a},async tx=>(await tx.c.query(`select note from public.company_watches`)).rows)).toEqual([{note:'mine'}]);
   expect(await inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select count(*)::int n from public.company_watches where user_id=$1`,[a])).rows[0].n)).toBe(1);
@@ -4641,7 +4642,7 @@ D. **证据 DTO 与门槛**（§0 #62 #63，所有含财务数值的路由共用
    - 基础与 CN 条件同时缺失时报 `evidence_incomplete`（基础优先）。
  - `applyGate({factIds, facts, filings, records, pdf, market, admin})`（纯）→ `{evidence, eligibility, withheld}`：对去重后的每个 id，没有事实行 → `evidence_incomplete`；`evidence` 字典**只含合格事实**的 DTO；`withheld` 按不同 factId 计数 `{evidenceIncomplete, citationPending}`。
  - `gateFacts({db, pdf}, {issuerId, market, admin, factIds, facts, filings})`（异步，路由用）：`db.evidenceOf(去重升序 ids)`（`CompanyDb.evidenceOf` 内部按 ≤100 分批）；只对 CN 调 `pdf.locate`；无 id 时不调用任何依赖；然后 `applyGate`。
- - 消费者助手：`gateCell(cell, eligibility)`（事实格不合格 → `{kind:'withheld', reason, factId}`；派生格任一输入不合格 → 整格 withheld，原因取最严重者：有 `evidence_incomplete` 即它，否则 `citation_pending`，`factId` 为第一个不合格输入；`null`/withheld 原样）；`gateEventPayload(event, eligibility)`（`period_first_seen.headline` 每项不合格 → `{kind:'withheld',reason,factId}`；`fact_revised` 的 `from/to` 不合格 → 其 `value` 换成 `{kind:'withheld',reason,factId}`，此时 `relChange`（若存在）换成 `{kind:'withheld',reason}`；`filing_published` 原样）；`metricWithheldReason(inputs, eligibility)`（指标行任一输入不合格 → 原因，否则 `null`）；`eventFactIds(event)`（headline 与 from/to 的 factId）。报表格、派生格 inputs、事件 headline/from/to/relChange、指标行各有"不合格 → withheld"用例在本任务；packet、抽屉序列、DCF 叶子三例在 Task 9/14/15 用这些同一助手各写一例。
+ - 消费者助手：`gateCell(cell, eligibility)`（事实格不合格 → `{kind:'withheld', reason, factId}`；派生格任一输入不合格 → 整格 withheld，原因取最严重者：有 `evidence_incomplete` 即它，否则 `citation_pending`，`factId` 为第一个不合格输入；`null`/withheld 原样）；`gateEventPayload(event, eligibility)`（`period_first_seen.headline` 每项不合格 → 该项的 `value` 换成 `{kind:'withheld',reason,factId}`（`factId`/`unit` 保留；与 `from/to` 同形，计划第 1 轮审计 P4）；`fact_revised` 的 `from/to` 不合格 → 其 `value` 换成 `{kind:'withheld',reason,factId}`，此时 `relChange`（若存在）换成 `{kind:'withheld',reason}`；`filing_published` 原样）；`metricWithheldReason(inputs, eligibility)`（指标行任一输入不合格 → 原因，否则 `null`）；`eventFactIds(event)`（headline 与 from/to 的 factId）。报表格、派生格 inputs、事件 headline/from/to/relChange、指标行各有"不合格 → withheld"用例在本任务；packet、抽屉序列、DCF 叶子三例在 Task 9/14/15 用这些同一助手各写一例。
 
 - [ ] **Step 1: 写 `evidence-index.test.ts`（先失败）**
 
@@ -5119,7 +5120,7 @@ describe('consumers: every financial value is withheld when its fact is not elig
  });
  it('event headline, fact_revised from/to and relChange; filing_published untouched',()=>{
   const pfs={kind:'period_first_seen' as const,payload:{headline:{revenue:{factId:'r',value:'1',unit:'USD'},net_income_parent:{factId:'n',value:'2',unit:'USD'}},ambiguousUnits:[]}};
-  expect(gateEventPayload(pfs,E([['r',{ok:true}],['n',no('evidence_incomplete')]]))).toEqual({headline:{revenue:{factId:'r',value:'1',unit:'USD'},net_income_parent:{kind:'withheld',reason:'evidence_incomplete',factId:'n'}},ambiguousUnits:[]});
+  expect(gateEventPayload(pfs,E([['r',{ok:true}],['n',no('evidence_incomplete')]]))).toEqual({headline:{revenue:{factId:'r',value:'1',unit:'USD'},net_income_parent:{factId:'n',value:{kind:'withheld',reason:'evidence_incomplete',factId:'n'},unit:'USD'}},ambiguousUnits:[]});
   const rev={kind:'fact_revised' as const,payload:{concept:'revenue',from:{factId:'a',value:'1',filingId:'g',availableDate:'2024-01-01'},to:{factId:'b',value:'2',filingId:'h',availableDate:'2024-05-01'},relChange:'1'}};
   expect(gateEventPayload(rev,E([['a',{ok:true}],['b',{ok:true}]]))).toEqual(rev.payload);
   expect(gateEventPayload(rev,E([['a',no('citation_pending')],['b',{ok:true}]]))).toEqual({concept:'revenue',from:{factId:'a',value:{kind:'withheld',reason:'citation_pending',factId:'a'},filingId:'g',availableDate:'2024-01-01'},to:rev.payload.to,relChange:{kind:'withheld',reason:'citation_pending'}});
@@ -5241,7 +5242,7 @@ export function eventFactIds(ev:{kind:EventKind;payload:Record<string,unknown>})
 }
 export function gateEventPayload(ev:{kind:EventKind;payload:Record<string,unknown>},elig:Map<string,Eligibility>):Record<string,unknown>{
  if(ev.kind==='period_first_seen'){
-  const headline=Object.fromEntries(Object.entries((ev.payload.headline??{}) as Record<string,Point>).map(([c,h])=>{const r=reasonOf(elig.get(h.factId));return [c,r===null?h:{kind:'withheld',reason:r,factId:h.factId}];}));
+  const headline=Object.fromEntries(Object.entries((ev.payload.headline??{}) as Record<string,Point>).map(([c,h])=>{const r=reasonOf(elig.get(h.factId));return [c,r===null?h:{...h,value:{kind:'withheld',reason:r,factId:h.factId}}];}));
   return {...ev.payload,headline};
  }
  if(ev.kind==='fact_revised'){
@@ -6129,8 +6130,8 @@ const isoDay=(d:Date)=>d.toISOString().slice(0,10);
 const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,200);
 const dbCode=(e:unknown)=>e instanceof CompanyDbError?e.code:null;
 
-export function interleave<T>(inc:T[],sweep:T[],ratio=4):T[]{
- const out:T[]=[];let i=0,j=0;
+export function interleave<A,B>(inc:A[],sweep:B[],ratio=4):(A|B)[]{
+ const out:(A|B)[]=[];let i=0,j=0;
  while(i<inc.length||j<sweep.length){for(let k=0;k<ratio&&i<inc.length;k++)out.push(inc[i++]);if(j<sweep.length)out.push(sweep[j++]);}
  return out;
 }
@@ -7835,6 +7836,8 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   const a=await get(GET,'AAPL','');expect(await a.json()).toMatchObject({stale:true,metrics:[]});expect(a.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');
   fn(mocks.deps.stateRev).mockResolvedValueOnce(3).mockResolvedValue(4);
   expect(await (await get(GET,'AAPL','')).json()).toMatchObject({stale:true,metrics:[]});
+  fn(mocks.deps.stateRev).mockResolvedValueOnce(3).mockResolvedValue(4);fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValueOnce([]);   // empty result while the rev moves is still stale (§0 #67, plan audit P8)
+  {const e=await get(GET,'AAPL','');expect(await e.json()).toMatchObject({stale:true,metrics:[]});expect(e.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');}
   fn(mocks.deps.stateRev).mockResolvedValue(3);fn(mocks.deps.facts.metricsOfIssuer).mockRejectedValue(new FactsDbError('unknown','metrics_unstable'));
   expect(await (await get(GET,'AAPL','')).json()).toMatchObject({stale:true,metrics:[]});
  });
@@ -7896,7 +7899,8 @@ export const metricsHandler:Handler=async(ctx)=>{
   const rev=await deps.stateRev(issuer.issuerId,issuer.market);
   try{rows=await deps.facts.metricsOfIssuer(issuer.issuerId,issuer.market,FORMULA_VERSION);}
   catch(e){if(e instanceof FactsDbError&&e.message==='metrics_unstable'){rows=[];stale=true;}else throw e;}
-  if(!stale&&rows.length>0&&(rows.some(m=>m.based_on_rev!==rev)||await deps.stateRev(issuer.issuerId,issuer.market)!==rev)){rows=[];stale=true;}
+  const after=stale?rev:await deps.stateRev(issuer.issuerId,issuer.market);   // always re-read, even for an empty result (§0 #67)
+  if(stale||after!==rev||rows.some(m=>m.based_on_rev!==rev)){rows=[];stale=true;}
   const at=rows.length>0?await deps.metricsComputedAt(issuer.issuerId,issuer.market,FORMULA_VERSION):new Map();
   computedAt=m=>{const x=at.get(metricKey(m));return x&&x.basedOnRev===m.based_on_rev?x.computedAt:null;};
  }else{
@@ -8199,7 +8203,7 @@ import {productionReadDeps} from '@/lib/company/deps';
 import {UUID_RE,errorResponse,failureResponse,paramErrorResponse,readParams} from '@/lib/facts/public-route';
 
 export const dynamic='force-dynamic';
-export const SIGNED_URL_SECONDS=60;
+const SIGNED_URL_SECONDS=60;
 export async function GET(req:Request){
  let fact:string|undefined;
  try{fact=readParams(new URL(req.url),['fact']).get('fact');}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
@@ -8375,7 +8379,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 // Test-only fixture rows for the DCF seed (US: AAPL FY2023 cut; CN: 600519.SH FY2023 cut on a linked filing).
 // Not a .test.ts file: imported by dcf-seed.test.ts and the /api/dcf route test. Fresh fact ids per call.
 import {FIL_CN_LINKED,cnFact,fact} from './route-test-kit';
-import type {FactRow} from './types';
+import type {FactRow} from '@/lib/facts/types';
 
 export const END='2023-09-30',CN_END='2023-12-31';
 export const inst=(concept:string,value:string,p:Partial<FactRow>={})=>fact({concept,statement:'BS',period_start:null,period_end:END,duration:'INSTANT',value,value_text:value,...p});
@@ -8398,7 +8402,8 @@ vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidenc
 import {seedFromFacts} from './dcf-seed';
 import {END,cnRows,inst,usRows} from './dcf-seed.test-rows';
 import {CN,FIL_CN_LINKED,cnSummary,emptySnapshot,record,summary} from './route-test-kit';
-import type {FactRow,PdfLocator} from './types';
+import type {FactRow} from '@/lib/facts/types';
+import type {PdfLocator} from './types';
 
 const evidenceFor=(rows:FactRow[])=>new Map(rows.map(r=>[r.fact_id,record(r.fact_id)]));
 const pdfFor=(rows:FactRow[])=>new Map<string,PdfLocator>(rows.map(r=>[r.fact_id,{page:1,table:'t',row:'r',column:'c',documentUrl:'https://static.cninfo.com.cn/x.PDF'}]));
@@ -8415,10 +8420,10 @@ describe('seedFromFacts (spec §9.1, §0 #65)',()=>{
   expect(s.seed.sharesDiluted).toBeCloseTo(15550.061,6);
   expect(s.seed.netDebt).toBeCloseTo(75138,6);                        // 9822e6 + 95281e6 − 29965e6
   expect(s.provenance['netDebt']).toMatchObject({source:'fact',basis:'us_standard',metric:'borrowings_total',divisor:'1000000',periodEnd:END});
-  expect(s.provenance['netDebt'].factIds).toHaveLength(3);
+  expect(s.provenance['netDebt']!.factIds).toHaveLength(3);
   expect(s.provenance['sharesDiluted']).toMatchObject({basis:'shares_outstanding',divisor:'1000000'});
   expect(s.provenance['revenueLines[0].baseRevenue']).toMatchObject({divisor:'1000000',factIds:[rows[0].fact_id]});
-  expect(new Set(['revenueLines[0].baseRevenue','sharesDiluted','netDebt'].map(k=>s.provenance[k].divisor)).size).toBe(1);
+  expect(new Set((['revenueLines[0].baseRevenue','sharesDiluted','netDebt'] as const).map(k=>s.provenance[k]!.divisor)).size).toBe(1);
   expect(s.missing).toEqual([]);
   expect(Object.keys(s.evidence).length).toBeGreaterThan(0);
  });
@@ -8452,9 +8457,9 @@ describe('seedFromFacts (spec §9.1, §0 #65)',()=>{
   expect(s.seed.baseRevenue).toBeCloseTo(1476.93605,4);
   expect(s.seed.sharesDiluted).toBeCloseTo(12.561978,6);
   expect(s.seed.netDebt).toBeCloseTo(-693.21263,4);
-  expect(s.provenance['netDebt'].basis).toBe('cn_borrowings_less_monetary_funds_incl_restricted');
-  expect(s.provenance['netDebt'].factIds).toContain(rows.find(r=>r.concept==='monetary_funds')!.fact_id);
-  expect(s.provenance['revenueLines[0].baseRevenue'].factIds).toEqual([rows[0].fact_id]);
+  expect(s.provenance['netDebt']!.basis).toBe('cn_borrowings_less_monetary_funds_incl_restricted');
+  expect(s.provenance['netDebt']!.factIds).toContain(rows.find(r=>r.concept==='monetary_funds')!.fact_id);
+  expect(s.provenance['revenueLines[0].baseRevenue']!.factIds).toEqual([rows[0].fact_id]);
   expect(rows[0].concept).toBe('revenue_operating');
  });
  it('CN without PDF locators (public): no fact seed at all, reason citation_pending',()=>{
@@ -11616,7 +11621,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - CSV 列：`concept,unit,period_key,period_start,period_end,duration,kind,fact_id,filing_id,available_date,value_text,withheld_reason`；`value_text` 原样（不缩放）；文件名 `<ticker>_<statement>_<basis>_<asOf|latest>.csv`。
 - 行头按钮 → 概念说明浮层：`sourceConcepts`（逗号分隔）、`notes`（无则"—"）、响应顶层 `mappingGen`；Esc 关闭并把焦点还给行头按钮。
 - 披露历史抽屉（§5.6）：请求 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（管理员视图走 admin 变体；`unit` 必填），INSTANT 的 `periodStart` 传 `periodEnd`；同一响应的 `otherUnitSeries`（Task 9，已过门槛）在"其他单位的事实"表列出非主单位行（整合决定：不再发第二个去掉 `unit` 的请求）。e2e 钩子：可得日期按钮 `data-testid="drawer-available-date"`、变换链列头 `drawer-transform-chain`、代码版本格 `drawer-code-version`。列：可得日期 · 文件（`formType sourceRef`，链接：edgar→`url`，linked→`documentUrl`，pending 标"（引用待挂接）"不链接）· 值·单位（`value_text` 原样 + unit；置空行显示原因文本）· 修订（`isRevision` → `decimalSub(本值, 前值)` 按当前缩放显示带符号 + `decimalRelChange(前值, 本值)` 显示为 4 位百分比；非修订但 `disclosureSeq>1` → "0 · 同值"；首条 "—"）· 变换链（① 映射 `sourceConcept → concept`（`mappingVersion · gen`）② 单位规则 `unitRule`（null → "原值"）④ 显示缩放 `÷1e8`/不缩放；派生格的 ③ 只在公式抽屉）· 代码版本 `run.codeVersion` 前 7 位。点行选择该行为"证据"区内容（缺省最后一条非置空行）。证据区：rawHash、snapshot（source、sha256、path、api/url、params JSON、"快照首次抓取时间" capturedAt、httpStatus、page）、locator（hashLocator、jsonPointer、field、pdf：page/table/row/column/documentUrl）、sourceDocument 链接、run（runId、codeVersion、toolVersions JSON）、mappingVersion、unitRule、download（非空 → 链接；空 → "null（Tushare 对象不可再分发）"）、回放步骤一句话。底部"复制可复现查询"把请求的绝对 URL 写入剪贴板。
-- 公式抽屉：标题 `metric 名 · 期间`，值（比率百分比 / 货币缩放）；公式文本取 `METRIC_CATALOG[cell.formulaVersion]?.[metric]?.formula`（当前语言为主、另一语言为副行；缺失 → "公式文本缺失（formula_version x 不在目录中）"）；kv：basis、inputUnit、formulaVersion、rule（a → "a（同一披露）"，b → "b（均未修订）"，无 → "—"）、asOf（无 → "—（最新）"）、computedAt（`computedAtKind='live'` → "本次请求实时计算"，否则时间串 + "物化时刻"）、basedOnRev；inputs 表每行（概念名、可得日期、filingId 前 8 位）是按钮，打开该 `factId` 的披露历史（先经 `/api/facts/[ticker]?factIds=<id>` 取自然键，**不显示其 value**）。
+- 公式抽屉：标题 `metric 名 · 期间`，值（比率百分比 / 货币缩放）；公式文本取 `catalogFor(cell.formulaVersion)?.[metric]?.[locale].formula`（Task 7 的目录按 metric 键控，条目形如 `{zh:{formula},en:{formula}}`）（当前语言为主、另一语言为副行；缺失 → "公式文本缺失（formula_version x 不在目录中）"）；kv：basis、inputUnit、formulaVersion、rule（a → "a（同一披露）"，b → "b（均未修订）"，无 → "—"）、asOf（无 → "—（最新）"）、computedAt（`computedAtKind='live'` → "本次请求实时计算"，否则时间串 + "物化时刻"）、basedOnRev；inputs 表每行（概念名、可得日期、filingId 前 8 位）是按钮，打开该 `factId` 的披露历史（先经 `/api/facts/[ticker]?factIds=<id>` 取自然键，**不显示其 value**）。
 - 抽屉外壳：`role="dialog" aria-modal="true"`；打开时焦点到关闭按钮；Tab 在抽屉内循环；Esc / 背景点击关闭；关闭后焦点回到打开它的元素；抽屉可叠放（公式 → 输入历史），关闭只关最上层。`< 640px` 为全屏底部抽屉（顶部抓手条），`≥ 640px` 为右侧抽屉（宽 `min(760px,100vw)`）。
 
 - [ ] **Step 1: `format.ts` 的失败测试**
@@ -12288,7 +12293,7 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
 'use client';
 // Formula drawer for derived cells (plan 2026-11-06 Task 12; spec §5.4, §5.6; canvas Drawer B).
 import { useLocale, useTranslations } from 'next-intl';
-import { METRIC_CATALOG } from '@/lib/company/metric-catalog';
+import { catalogFor } from '@/lib/company/metric-catalog';
 import { DrawerShell } from './DrawerShell';
 import { formatValue, unitKindOfUnit } from './format';
 import type { DrawerTarget } from './DrawerHost';
@@ -12301,7 +12306,7 @@ export function FormulaDrawer({ asOf, target, onClose, onOpenInput }: {
   const tc = useTranslations('company.concepts');
   const locale = useLocale() === 'en' ? 'en' : 'zh';
   const { cell, metric } = target;
-  const entry = METRIC_CATALOG[cell.formulaVersion]?.[metric];
+  const entry = catalogFor(cell.formulaVersion)?.[metric];
   const name = tm.has(metric) ? tm(metric) : metric;
   const value = formatValue(cell.value, cell.unit === 'pure' ? 'ratio' : unitKindOfUnit(cell.unit), target.scaleExp);
   const rows: [string, string][] = [
@@ -12315,7 +12320,7 @@ export function FormulaDrawer({ asOf, target, onClose, onOpenInput }: {
     <DrawerShell label={t('formulaTitle')} kicker={t('formulaTitle')} title={`${name} ${metric} · ${target.periodLabel}`} onClose={onClose}>
       <div className="num text-2xl font-medium">{value}</div>
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
-        {entry ? (<>{entry.formula[locale]}<div className="mt-1.5 text-xs text-[var(--text-dim)]">{entry.formula[locale === 'zh' ? 'en' : 'zh']}</div></>)
+        {entry ? (<>{entry[locale].formula}<div className="mt-1.5 text-xs text-[var(--text-dim)]">{entry[locale === 'zh' ? 'en' : 'zh'].formula}</div></>)
           : <span className="text-[var(--text-dim)]">{t('formulaMissing', { version: cell.formulaVersion })}</span>}
       </div>
       <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1 text-xs">
@@ -13037,7 +13042,7 @@ describe('overview model',()=>{
   expect(f).toMatchObject({chip:'kindFiling',link:{view:'filings',asOf:null},filing:{form:'q3',fiscal:'2025 Q3',factCount:198}});
   const p=eventView(ev({kind:'period_first_seen',payload:{periodStart:'2025-01-01',periodEnd:'2025-09-30',duration:'9M',headline:{revenue:{factId:'a',value:'1',unit:'CNY'},revenue_operating:{factId:'b',value:'27595000000',unit:'CNY'}}}}),'CN');
   expect(p).toMatchObject({chip:'kindPeriod',link:{view:'statements',asOf:'2025-11-06'},period:{periodEnd:'2025-09-30',duration:'9M',headline:{concept:'revenue_operating',ref:{factId:'b',value:'27595000000',unit:'CNY'}}}});
-  const w=eventView(ev({kind:'period_first_seen',payload:{periodStart:'s',periodEnd:'e',duration:'12M',headline:{revenue:{kind:'withheld',reason:'citation_pending',factId:'a'}}}}),'US');
+  const w=eventView(ev({kind:'period_first_seen',payload:{periodStart:'s',periodEnd:'e',duration:'12M',headline:{revenue:{factId:'a',value:{kind:'withheld',reason:'citation_pending',factId:'a'},unit:'USD'}}}}),'US');
   expect(w.period?.headline).toEqual({concept:'revenue',ref:{kind:'withheld',reason:'citation_pending',factId:'a'}});
   const r=eventView(ev({kind:'fact_revised',payload:{concept:'rd_expense',periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M',unit:'CNY',from:{factId:'x',value:'14140000000',filingId:'g1',availableDate:'2025-03-01'},to:{factId:'y',value:'14160000000',filingId:'g2',availableDate:'2025-08-28'},relChange:'0.0014144272'}}),'CN');
   expect(r).toMatchObject({chip:'kindRevised',revised:{concept:'rd_expense',unit:'CNY',from:{factId:'x'},to:{factId:'y'},relChange:'0.0014144272'}});
@@ -13071,6 +13076,8 @@ export interface EventView{
 }
 const rec=(v:unknown)=>(typeof v==='object'&&v!==null?v as Record<string,unknown>:{});
 const s=(v:unknown)=>typeof v==='string'?v:'';
+/** A gated headline entry carries the withheld marker under `.value` (Task 6 gateEventPayload); surface the marker itself. */
+const withheldOrEntry=(x:unknown):ValueRef=>{const v=(x as {value?:unknown}|null)?.value;return (v&&typeof v==='object'&&(v as {kind?:unknown}).kind==='withheld'?v:x) as ValueRef;};
 export function eventView(e:PublicEvent,market:Market):EventView{
  const p=e.payload;const base={eventId:e.eventId,occurredOn:e.occurredOn,updated:!!e.payloadChangedAt};
  if(e.kind==='filing_published')return {...base,chip:'kindFiling',link:{view:'filings',asOf:null},
@@ -13080,7 +13087,7 @@ export function eventView(e:PublicEvent,market:Market):EventView{
   const order=[market==='CN'?'revenue_operating':'revenue',market==='CN'?'revenue':'revenue_operating','net_income_parent','operating_cash_flow'];
   const c=order.find(k=>k in h);
   return {...base,chip:'kindPeriod',link:{view:'statements',asOf:e.occurredOn},
-   period:{periodStart:s(p.periodStart),periodEnd:s(p.periodEnd),duration:s(p.duration),headline:c?{concept:c,ref:h[c] as ValueRef}:null}};
+   period:{periodStart:s(p.periodStart),periodEnd:s(p.periodEnd),duration:s(p.duration),headline:c?{concept:c,ref:withheldOrEntry(h[c])}:null}};
  }
  return {...base,chip:'kindRevised',link:{view:'statements',asOf:e.occurredOn},
   revised:{concept:s(p.concept),periodEnd:s(p.periodEnd),duration:s(p.duration),unit:s(p.unit),from:p.from as ValueRef,to:p.to as ValueRef,relChange:(p.relChange as string|ValueRef|undefined)??null}};
@@ -14260,7 +14267,7 @@ describe('authentication and headers',()=>{
  it('every route answers 401 not_authenticated with private, no-store when signed out',async()=>{
   m.user=null;
   const responses=[
-   await getWatches(new Request(`${ORIGIN}/api/tracking/watches`)),
+   await getWatches(),
    await postWatch(json('POST','/api/tracking/watches',{issuerId:A})),
    await patchWatch(json('PATCH',`/api/tracking/watches/${A}`,{muted:true}),ctx(A)),
    await deleteWatch(json('DELETE',`/api/tracking/watches/${A}`,{}),ctx(A)),
@@ -14282,7 +14289,7 @@ describe('authentication and headers',()=>{
 describe('GET /api/tracking/watches',()=>{
  it('reads events with the service client for the NON-muted watched issuers only and labels 99+',async()=>{
   m.service.eventsOfIssuers.mockResolvedValue({rows:Array.from({length:120},(_,i)=>ev(i+1,A,'2026-11-02T00:00:00Z')),nextCursor:null});
-  const res=await getWatches(new Request(`${ORIGIN}/api/tracking/watches`));
+  const res=await getWatches();
   expect(res.status).toBe(200);expectPrivate(res);
   const body=await res.json();
   expect(m.service.eventsOfIssuers).toHaveBeenCalledWith([A],expect.objectContaining({limit:200}));
@@ -14463,6 +14470,7 @@ export async function jsonObject(request:Request):Promise<Record<string,unknown>
  return b!==null&&typeof b==='object'&&!Array.isArray(b)?b as Record<string,unknown>:null;
 }
 
+import type {SupabaseClient} from '@supabase/supabase-js';
 type ServerSb=Awaited<ReturnType<typeof getServerSupabase>>;
 export interface TrackingSession{userId:string;sb:ServerSb;db:CompanyDb;tables:TableClient}
 /** The signed-in user's session-scoped clients, or null (→ 401). */
@@ -14471,7 +14479,8 @@ export async function trackingSession():Promise<TrackingSession|null>{
  const sb=await getServerSupabase();
  const {data:{user}}=await sb.auth.getUser();
  if(!user)return null;
- return {userId:user.id,sb,db:supabaseCompanyDb(sb),tables:supabaseTableClient(sb)};
+ const client=sb as unknown as SupabaseClient;   // generated Database generic ≠ adapters' SupabaseClient (same boundary cast as Task 9)
+ return {userId:user.id,sb,db:supabaseCompanyDb(client),tables:supabaseTableClient(client)};
 }
 /** issuer_events is service_role only (§0 #64): callers pass ONLY the user's watched issuer ids. */
 export const serviceCompanyDb=():CompanyDb=>supabaseCompanyDb(getAdminSupabase());
@@ -16551,7 +16560,7 @@ Expected: 两个文件被删除并暂存；`grep -rn "fixture-manifest" src scri
       "query": { "issuers": 6, "periods": 2, "concepts": 6 },
       "expected": { "cells": "pending" },
       "source": { "document": "pending", "page_or_row": "pending", "url": "pending", "transcribed_by": "pending", "transcribed_at": null },
-      "notes": "spec §14 replay matrix; may only be claimed as passed once every cell is transcribed (spec §0 #72)"
+      "notes": "spec §14 replay matrix; may only be claimed as passed once every cell is transcribed (spec §0 #72). expected.cells = 72 × {query, concept, periodKey, value, unit, availableDate, disclosureSeq, isRevision}; consumed by e2e test 'gold: 6 issuers × 2 periods × 6 concepts'"
     }
   ]
 }
@@ -16865,6 +16874,23 @@ test('gold: AAPL last 10 filing_published events match the transcribed EDGAR ind
   expect(body.rows.map((r) => ({ accession: r.payload.sourceRef, form: r.payload.formType, filed: r.occurredOn }))).toEqual(expected);
 });
 ```
+
+test('gold: 6 issuers × 2 periods × 6 concepts statement matrix (spec §14, §0 #72)', async ({ page }) => {
+  const gold = readyExpectation('gold-matrix-6x2x6');
+  test.skip(!gold, 'gold-matrix-6x2x6 not transcribed yet (spec §0 #72) — the matrix may not be claimed as passed');
+  type GoldCell = { query: string; concept: string; periodKey: string; value: string; unit: string; availableDate: string; disclosureSeq: number; isRevision: boolean };
+  const cells = (gold!.expected as { cells: GoldCell[] }).cells;
+  expect(cells).toHaveLength(72);
+  for (const c of cells) {
+    const res = await page.request.get(c.query);   // recorded statements URL, e.g. /api/companies/AAPL/statements?statement=IS&basis=annual
+    expect(res.ok(), c.query).toBe(true);
+    const got = cellOf(await res.json() as Grid, c.concept, c.periodKey);
+    expect(got, `${c.query} ${c.concept} ${c.periodKey}`).toMatchObject({ kind: 'fact', value: c.value, unit: c.unit, availableDate: c.availableDate, disclosureSeq: c.disclosureSeq, isRevision: c.isRevision });
+  }
+});
+```
+
+`gold-matrix-6x2x6` 的 `expected.cells` 每项必须是 `{query, concept, periodKey, value, unit, availableDate, disclosureSeq, isRevision}`（人工从一手文件抄录；`query` 为对应的 statements 请求路径）；Step 3 的清单把 `"notes"` 补上这句格式说明。计划第 1 轮审计 P10。
 
 说明：`e2e/*.ts` 不在 vitest 的 include 里；它引入的 `manifest.ts` 是 node-only 模块，Playwright 的 TS 转译可直接加载。第 8 条依赖 Task 17 的 `track-button`/`watch-item`/`unread-count`/`inbox-list`，第 9 条依赖 Task 18 的 `directory-row`/`directory-search`。
 
