@@ -75,7 +75,7 @@ do $$ begin
       add column outcome text not null default 'compared',
       add column detail jsonb not null default '{}',
       add column cycle_id text,
-      add column issuer_id uuid,
+      add column issuer_id uuid references public.issuers(issuer_id) on delete restrict,
       add column market text,
       add column attempt int;
     -- The table had no writer before this migration (production is empty); any row is legacy.

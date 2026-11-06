@@ -13,6 +13,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {SCHEMA_BOOTSTRAP_SQL} from '../../../scripts/s4/local-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261107090000_identifiers_and_dq.sql';
@@ -44,10 +45,7 @@ type PgErr={message:string;code?:string};
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
 
 // The bootstrap scripts/s4/local-db.ts runs before the migrations (roles are cluster-wide and exist).
-const BOOTSTRAP=`create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
- create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
- create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;
- create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`;
+const BOOTSTRAP=SCHEMA_BOOTSTRAP_SQL;
 
 /** A throwaway database in the same cluster, migrated up to (not including) `version`; dropped afterwards. */
 async function withPreMigrationDatabase(adminUrl:string,version:string,body:(db:Pool)=>Promise<void>):Promise<void>{
@@ -366,8 +364,8 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   await bad({deadline_state:'no_rule'},/dfe_due_iff_known/);                                        // no_rule with a due date
   await bad({due_date:null},/dfe_due_iff_known/);                                                   // statutory without one
   await bad({disclosure_state:'received'},/dfe_received_iff/);                                      // received without the filing
-  await bad({upstream_lookup:'unavailable',disclosure_state:'pending',received_filing_id:randomUUID()},/dfe_received_pair/);   // filing without a date
-  await bad({upstream_lookup:'unavailable',disclosure_state:'pending',received_date:'2027-02-01'},/dfe_received_pair/);       // date without a filing
+  await bad({upstream_lookup:'ok',disclosure_state:'pending',received_filing_id:randomUUID()},/dfe_received_pair/);   // filing without a date
+  await bad({upstream_lookup:'ok',disclosure_state:'pending',received_date:'2027-02-01'},/dfe_received_pair/);       // date without a filing
   await bad(filed(),/dfe_received_iff/);                                                            // pending yet carries a filing
   await bad({disclosure_state:'received',received_filing_id:randomUUID()},/dfe_received_iff/);     // missing received_date
   await bad({deadline_state:'no_rule',due_date:null,disclosure_state:'received_late',...filed()},/dfe_late_requires_due/);

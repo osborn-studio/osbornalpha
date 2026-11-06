@@ -18,7 +18,7 @@ const overlaps=(r:Row,w:Window)=>{
 
 export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput):Promise<AttachResult>{
  const sec={...raw,ticker:normalizeTicker(raw.ticker),isin:normalizeIsin(raw.isin),valid_to:isBlank(raw.valid_to)?null:String(raw.valid_to)};
- // The claims check has no 'ticker' id_type, so only an ISIN can be recorded as a claim;
+ // Only an ISIN conflict is recorded as a claim (a ticker conflict is not an identifier claim);
  // otherwise the return value carries the conflict.
  const conflict=async():Promise<AttachResult>=>{
   if(sec.isin)await fileClaim(client,{issuer_id:sec.issuer_id,id_type:'isin',value:sec.isin,source:sec.source});
