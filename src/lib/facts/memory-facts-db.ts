@@ -54,6 +54,8 @@ const ASYNC_METHODS=['claimLease','beginRun','stageFilings','stageFacts','quaran
 export type AsyncMethodsComplete=[Exclude<keyof FactsDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
 export const asyncMethodsComplete:AsyncMethodsComplete=true;   // type error here ⇒ a FactsDb method is missing from ASYNC_METHODS
 const FACT_ROW_REASONS=['same_day_conflict','identity_bs','identity_gp'];
+/** Issuer ids are uuids and SQL compares them as such: every public entry normalises them to lower case (one helper, one place). */
+const lc=<T>(x:T):T=>(typeof x==='string'?x.toLowerCase():x) as T;
 const sk=(issuer:string,market:Market)=>`${issuer}|${market}`;
 type KeyPart=Pick<FactRow,'concept'|'period_start'|'period_end'|'consolidation'|'unit'>;
 const keyOf=(f:KeyPart)=>[f.concept,f.period_start??'',f.period_end,f.consolidation,f.unit].join('|');
@@ -261,7 +263,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
  const raw:MemoryFactsDb={
   tables,
   setNow:iso=>{fixedNow=iso===null?null:new Date(iso).toISOString();},
-  expireLease:(issuer,market)=>{const s=scopeOf(issuer,market);if(s&&s.lease_until!==null)s.lease_until='1970-01-01T00:00:00.000Z';},
+  expireLease:(issuer,market)=>{const s=scopeOf(lc(issuer),market);if(s&&s.lease_until!==null)s.lease_until='1970-01-01T00:00:00.000Z';},
   // Inspection helpers below are test-only and bypass the mutex (they read the maps synchronously).
   runs:()=>clone([...runs.values()]),filings:()=>clone([...filings.values()]),facts:()=>clone([...facts.values()]),metrics:()=>clone(metrics),scope:()=>clone([...scope.values()]),
 
@@ -434,7 +436,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
    rows.sort((a,b)=>cmp(a.metric,b.metric)||cmp(a.period_end,b.period_end)||cmp(a.period_start,b.period_start)||cmp(a.input_unit,b.input_unit)||cmp(a.basis,b.basis));
    return clone(rows);
   },
-  setTopology:entries=>{for(const [id,t] of Object.entries(entries))topo.set(id,{...t});},
+  setTopology:entries=>{for(const [id,t] of Object.entries(entries))topo.set(lc(id),{...t,merged_into:t.merged_into===null?null:lc(t.merged_into)});},
   async targetOf(issuer){return topoOf(issuer).merged_into??issuer;},
   async lineageOf(target){return lineageMembers(target);},
   async stateRevs(issuers,market){return [...new Set(issuers.map(i=>i.toLowerCase()))].sort(cmp).map(i=>({issuer_id:i,state_rev:scopeOf(i,market)?.state_rev??0}));},
@@ -691,9 +693,21 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
  let chain:Promise<unknown>=Promise.resolve();
  const serialize=<A extends unknown[],T>(fn:(...a:A)=>Promise<T>)=>(...a:A):Promise<T>=>{const next=chain.then(()=>fn(...a));chain=next.catch(()=>undefined);return next;};
  const db={...raw} as MemoryFactsDb;
+ // argument normalisers: which positions carry issuer ids (string, string[], fence, scope rows)
+ const at=(...pos:number[])=>(a:unknown[])=>a.map((v,i)=>pos.includes(i)?lc(v):v);
+ const arr=(i:number)=>(a:unknown[])=>a.map((v,j)=>j===i&&Array.isArray(v)?v.map(lc):v);
+ const fenceArg=(a:unknown[])=>a.map((v,j)=>j===0&&v&&typeof v==='object'?{...v,issuer_id:lc((v as {issuer_id:string}).issuer_id)}:v);
+ const NORMALISE:Partial<Record<typeof ASYNC_METHODS[number],(a:unknown[])=>unknown[]>>={
+  claimLease:at(0),beginRun:at(0),releaseLease:at(0),readFacts:at(0),openConflicts:at(0),filingsOfIssuer:at(0),metricsOfIssuer:at(0),targetOf:at(0),lineageOf:at(0),
+  replaceMetrics:at(0),replaceMetricsLineage:at(0),filingsForCalendar:at(0),setDissolved:at(0),setMerge:at(0,1),claimReconcileMember:at(2),
+  stateRevs:arr(0),readFactsLineage:arr(0),scopeRows:arr(1),
+  applyReconcileResult:fenceArg,completeReconcileMember:fenceArg,failReconcileMember:fenceArg,
+  reconcileScope:a=>a.map((v,j)=>j===1&&Array.isArray(v)?v.map(r=>({...r,issuer_id:lc((r as {issuer_id:string}).issuer_id)})):v),
+ };
  for(const k of ASYNC_METHODS){
   const f=raw[k] as unknown as (...a:unknown[])=>Promise<unknown>;
-  (db as unknown as Record<string,unknown>)[k]=serialize(f);
+  const norm=NORMALISE[k];
+  (db as unknown as Record<string,unknown>)[k]=serialize(norm?(...a:unknown[])=>f(...norm(a)):f);
  }
  return db;
 }

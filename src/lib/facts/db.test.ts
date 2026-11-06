@@ -397,3 +397,24 @@ describe('memoryFactsDb applyReconcileResult side constraints',()=>{
   expect((await db.applyReconcileResult(fence,res({natural_key:'k3',kind:'text',left_value:null,right_value:null,abs_diff:null,rel_diff:null,passed:true,action:'record'}))).reused).toBe(false);
  });
 });
+
+describe('memoryFactsDb issuer id case',()=>{
+ it('an uppercase issuer uuid is the same issuer at every boundary: reconcileScope → stage → publish → replaceMetricsLineage → stateRevs → readFactsLineage',async()=>{
+  const db=memoryFactsDb();const UP='A0000000-0000-4000-8000-000000000000',lo=UP.toLowerCase();const b=randomUUID();
+  db.setTopology({[UP]:{status:'active',merged_into:null}});
+  expect(await db.reconcileScope('US',[{issuer_id:UP,reasons:[],priority:1,fetch_key:'k'}])).toBe(1);
+  expect(await db.claimLease(UP,'US',b,60)).toBe(true);
+  const run=await db.beginRun(UP,'US',b,1);const f=filingInsert(lo);await db.stageFilings(run,[f]);
+  await db.stageFacts(run,[factInsert(lo,f)]);await db.publishRun(run,[f.filing_id]);
+  expect(db.scope().map(s=>s.issuer_id)).toEqual([lo]);
+  expect(await db.stateRevs([UP,lo],'US')).toEqual([{issuer_id:lo,state_rev:1}]);
+  const r=await db.readFactsLineage([UP],'US',{concepts:['revenue'],asOf:'2030-01-01'});
+  expect(r.rows).toHaveLength(1);expect(r.stateRevs).toEqual([{issuer_id:lo,state_rev:1}]);
+  const m={issuer_id:UP,market:'US' as const,metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M' as const,value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:1,based_on_lineage:[{issuer_id:UP,state_rev:1}],as_of:'2024-01-01'};
+  expect(await db.replaceMetricsLineage(UP,'US',[{issuer_id:UP,state_rev:1}],[m])).toBe(1);
+  expect(await db.lineageOf(UP)).toEqual([lo]);expect(await db.targetOf(UP)).toBe(lo);
+  expect((await db.metricsOfIssuer(UP,'US','v'))[0].based_on_lineage).toEqual([{issuer_id:lo,state_rev:1}]);
+  expect((await db.scopeRows('US',[UP])).map(s=>s.issuer_id)).toEqual([lo]);
+  expect((await db.filingsOfIssuer(UP,'US',{})).length).toBe(1);
+ });
+});
