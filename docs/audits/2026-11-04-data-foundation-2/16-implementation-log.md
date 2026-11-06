@@ -77,8 +77,12 @@
 
 | 提交 | 内容 | Codex 裁决 |
 |---|---|---|
-| `a0fbca7` | test(facts)：录制真实 Tushare 夹具（600519.SH、000333.SZ、600036.SH、000858.SZ 修订对）与规格 §15 report_type / 分页核对 | 待填 |
-| `a101648` | test(facts)：A 股离线回放（修订对、同日冲突、巨潮挂接、黄金模板） | 待填 |
-| `b6c286c` | fix(facts)：多页 Tushare 流失败即关闭（`multi_page_unverified`）；仅带更正日的 rt1 filing 标为 corrected | 待填 |
-| `f7e0479` | feat(facts)：CN 缺省开启（`FACTS_CN_ENABLED=0` 关闭）并登记 CN cron（`35 */4 * * *`），runbook 与规格 §16 同步 | 待填 |
-| 本分支第五个提交 | fix(facts)：CN 加固：空转不写 freshness、Tushare token 预检、最早 rt1 更正规则、400 ms 节流、多页诊断 | 待填 |
+| `a0fbca7` | test(facts)：录制真实 Tushare 夹具（600519.SH、000333.SZ、600036.SH、000858.SZ 修订对）与规格 §15 report_type / 分页核对 | review：无缺陷（36 页哈希核验）；挑战 5×P2：多页未强制 → `b6c286c`；更正标志误判原 rt1 → `b6c286c`/`fd483a0`；文档先于代码 → 后续提交落地；分页实验不可回放 → 标为未归档探针观察并给复现方法；接口响应 ≠ 一手核实 → 措辞收窄（黄金集抄录才算一手核实） |
+| `a101648` | test(facts)：A 股离线回放（修订对、同日冲突、巨潮挂接、黄金模板） | review：无缺陷；挑战 6×P2（CN 黄金静默不完整、`recorded_by` 未校验、首例覆盖弱、巨潮文档断言宽松、用例顺序依赖、重复用例可空过）→ 全部在 `91e5c66` 修复 |
+| `b6c286c` | fix(facts)：多页 Tushare 流失败即关闭（`multi_page_unverified`）；仅带更正日的 rt1 filing 标为 corrected | review：无缺陷；与 `f7e0479` 合并挑战见下 |
+| `f7e0479` | feat(facts)：CN 缺省开启（`FACTS_CN_ENABLED=0` 关闭）并登记 CN cron（`35 */4 * * *`），runbook 与规格 §16 同步 | review：无缺陷；合并挑战 1×P1（空转记 ok 掩盖持续失败）+4×P2（无 token 预检、多版本更正分类、节流贴 200 次/分上限、多页诊断丢失）+P3 文档 → `fd483a0`、`4ecdaea`；驳回：失败流的部分证据持久化（未发布、可重取）、跨实例共享限流器（范围外，记为后续） |
+| `91e5c66` | test(facts)：加固 CN 回放（用例独立、精确巨潮文档 1222993920、来源与 CN 黄金告警） | review：无缺陷；`--sequence.shuffle` 四个种子通过 |
+| `fd483a0` | fix(facts)：CN 加固：Tushare token 预检（503 `tushare_unconfigured`）、最早 rt1 更正规则、400 ms 节流、多页诊断 `multi_page_unverified:<api>:rt<n>` | review：无缺陷 |
+| `4ecdaea` | fix(facts)：空转仅在无失败中的活跃发行人时记 freshness（修正 `fd483a0` 让健康静默周 3 天后变陈旧的回归） | review：无缺陷；终审挑战：无 P1/P2，1×P3 文档残留旧 rt5 规则 → 本提交修正 |
+
+全量门禁（2026-11-06，`4ecdaea`）：`npm test` 296 files passed / 1 failed（`observability/owned-process-group.test.ts` `kill EPERM`，非 facts、本分支未改动，单独重跑 2/2 通过）；`typecheck`、`lint` 通过；`test:migrations` PASS；`test:db` 321 files / 3073 passed、2 skipped，首轮全绿（含 `sync-cn.integration` 与 `sync-us.integration`）。
