@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn()}));
 vi.mock('@/lib/dq/reconcile/run',async importOriginal=>({...(await importOriginal<typeof import('@/lib/dq/reconcile/run')>()),runReconcile:mocks.run}));
 vi.mock('@/lib/dq/reconcile/deps',()=>({productionReconcileDeps:mocks.deps}));
+vi.mock('@/lib/dq/reconcile/pairs',async importOriginal=>{const o=await importOriginal<typeof import('@/lib/dq/reconcile/pairs')>();return {...o,RECONCILE_PAIRS:{...o.RECONCILE_PAIRS,'cn.tushare_vs_cninfo_pdf_gold':{id:'cn.tushare_vs_cninfo_pdf_gold'}}};});   // a CN pair registered (as Task 16a will) so the gate is reached
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
 
 import {GET,POST} from './route';
@@ -38,10 +39,21 @@ describe('reconcile cron',()=>{
   }
   expect(mocks.run).not.toHaveBeenCalled();
  });
- it('refuses CN pairs unless FACTS_CN_ENABLED=1 (degraded path: no CN cron)',async()=>{
-  const res=await GET(req('pair=cn.tushare_vs_cninfo_pdf_gold',AUTH));
-  expect([400,403]).toContain(res.status);   // 400 until Task 16a registers the CN pair, 403 afterwards
+ it('answers 400 for a cycle pair that is not registered yet (US iXBRL until Task 15a) and does not run it',async()=>{
+  const res=await GET(req('pair=us.companyfacts_vs_ixbrl',AUTH));
+  expect(res.status).toBe(400);expect((await res.json()).error.code).toBe('invalid_parameter:pair');
   expect(mocks.run).not.toHaveBeenCalled();
+ });
+ it('refuses a registered CN pair with exactly 403 cn_disabled unless FACTS_CN_ENABLED=1, then runs it',async()=>{
+  for(const v of [undefined,'0','true']){
+   if(v===undefined)delete process.env.FACTS_CN_ENABLED;else process.env.FACTS_CN_ENABLED=v;
+   const res=await GET(req('pair=cn.tushare_vs_cninfo_pdf_gold',AUTH));
+   expect(res.status,String(v)).toBe(403);expect((await res.json()).error.code).toBe('cn_disabled');
+  }
+  expect(mocks.run).not.toHaveBeenCalled();expect(mocks.deps).not.toHaveBeenCalled();
+  process.env.FACTS_CN_ENABLED='1';
+  expect((await GET(req('pair=cn.tushare_vs_cninfo_pdf_gold',AUTH))).status).toBe(200);
+  expect(mocks.run).toHaveBeenCalledWith({tag:'deps'},{pair:'cn.tushare_vs_cninfo_pdf_gold',triggeredBy:'cron'});
  });
  it('refuses to run without a code version',async()=>{
   mocks.codeVersion.mockReturnValue(null);

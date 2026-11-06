@@ -9,14 +9,14 @@
  * {issuer, market, natural_key, outcome, passed, action} and a summary. With --apply: one runReconcile
  * batch (triggered_by 'script', no deadline; code_version = VERCEL_GIT_COMMIT_SHA or git HEAD, refused when
  * unavailable) and the full receipt as JSON. --issuer restricts which members are processed (tickers are
- * resolved with resolveIssuer as of today). Exit 0 ok, 1 when the batch is not success or a member failed,
- * 2 on bad arguments.
+ * resolved with resolveIssuer as of today). --apply for a cn.* pair is refused (exit 2) unless FACTS_CN_ENABLED=1. Exit 0 ok, 1 when the batch
+ * is not success or a member failed, 2 on bad arguments.
  */
 import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {memoryRawStore} from '../../src/lib/dq/raw-store';
-import {productionReconcileDeps} from '../../src/lib/dq/reconcile/deps';
+import {cnPairEnabled,productionReconcileDeps} from '../../src/lib/dq/reconcile/deps';
 import {RECONCILE_PAIRS} from '../../src/lib/dq/reconcile/pairs';
 import {runReconcile} from '../../src/lib/dq/reconcile/run';
 import {CYCLE_PAIR_IDS} from '../../src/lib/dq/reconcile/types';
@@ -34,7 +34,9 @@ async function main(){
   else if(x==='--apply')apply=true;
   else{console.error(USAGE);process.exit(2);}
  }
- if(!(CYCLE_PAIR_IDS as readonly string[]).includes(pair)||!RECONCILE_PAIRS[pair as CyclePairId]){console.error(`${USAGE}\nregistered: ${Object.keys(RECONCILE_PAIRS).join(', ')}`);process.exit(2);}
+ if(!(CYCLE_PAIR_IDS as readonly string[]).includes(pair)){console.error(USAGE);process.exit(2);}
+ if(apply&&!cnPairEnabled(pair)){console.error('cn_disabled: --apply for cn.* pairs needs FACTS_CN_ENABLED=1');process.exit(2);}   // before any production deps
+ if(!RECONCILE_PAIRS[pair as CyclePairId]){console.error(`${USAGE}\nregistered: ${Object.keys(RECONCILE_PAIRS).join(', ')}`);process.exit(2);}
  const sb=getAdminSupabase();const tables=supabaseTableClient(sb);const today=new Date().toISOString().slice(0,10);
  const issuerIds:string[]=[];
  for(const t of tickers){const r=await resolveIssuer(tables,{ticker:t},{today});if(!r){console.error(`unknown ticker: ${t}`);process.exit(2);}issuerIds.push(r.issuer_id);}

@@ -47,6 +47,9 @@ export function restoreInputsHashNow(admin?:SupabaseClient):InputsHashNow{
  };
 }
 
+/** CN pairs run only with FACTS_CN_ENABLED=1 (no Tushare token / unverified gold: spec T15). Shared by the cron route and the script. */
+export const cnPairEnabled=(pair:string,env:Record<string,string|undefined>=process.env):boolean=>!pair.startsWith('cn.')||env.FACTS_CN_ENABLED==='1';
+
 export interface ProductionReconcileOptions{deadline:Date|null;codeVersion:string;admin?:SupabaseClient}
 export function productionReconcileDeps(opts:ProductionReconcileOptions):ReconcileDeps{
  const sb=opts.admin??getAdminSupabase();

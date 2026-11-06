@@ -31,10 +31,6 @@
       "schedule": "5 */4 * * *"
     },
     {
-      "path": "/api/cron/reconcile?pair=us.companyfacts_vs_ixbrl",
-      "schedule": "0 2 * * *"
-    },
-    {
       "path": "/api/cron/reconcile?pair=facts.lineage_same_day",
       "schedule": "0 4 * * *"
     }

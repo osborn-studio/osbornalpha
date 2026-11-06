@@ -124,7 +124,7 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     const res = await json({ status: 'resolved_accept', chosen_fact_ids: [FACT_A] });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: ID, outcome: 'resolved', hook: HOOK, promoted: 1, skipped: 0, chosen_fact_ids: [FACT_A] });
-    expect(mocks.resolveFacts).toHaveBeenCalledWith({ facts: 'db' }, client, expect.objectContaining({ id: ID, dataset: 'facts.us' }), expect.objectContaining({ status: 'resolved_accept', chosenFactIds: [FACT_A], resolvedBy: ADMIN }));
+    expect(mocks.resolveFacts).toHaveBeenCalledWith({ facts: 'db' }, client, expect.objectContaining({ id: ID, dataset: 'facts.us' }), { status: 'resolved_accept', chosenFactIds: [FACT_A], resolvedBy: ADMIN, inputsHashNow: mocks.hashNow });
     expect(mocks.resolve).not.toHaveBeenCalled();
     expect(mocks.insert.mock.calls[0][0]).toMatchObject({ detail: { id: ID, status: 'resolved_accept', outcome: 'resolved', chosen_fact_ids: [FACT_A], hook: HOOK } });
   });

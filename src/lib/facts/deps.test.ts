@@ -1,10 +1,17 @@
 // src/lib/facts/deps.test.ts
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {memoryRawStore} from '../dq/raw-store';
 import {cninfoLinker,productionSyncDeps,resolveCodeVersion} from './deps';
 import {coverageSummary,parseTushareStatements} from './providers/tushare-statements';
 import {loadTushareFixtures} from './providers/tushare-fixtures';
 import type {Budget,FactsDb,FilingRow} from './types';
+
+// Per-test overrides for the production wiring's Supabase-backed collaborators (null = the real factory).
+const over=vi.hoisted(()=>({facts:null as unknown,tables:null as unknown,raw:null as unknown}));
+vi.mock('./db',async importOriginal=>{const o=await importOriginal<typeof import('./db')>();return {...o,supabaseFactsDb:((sb:never)=>over.facts??o.supabaseFactsDb(sb)) as typeof o.supabaseFactsDb};});
+vi.mock('../db/table-client',async importOriginal=>{const o=await importOriginal<typeof import('../db/table-client')>();return {...o,supabaseTableClient:((sb:never)=>over.tables??o.supabaseTableClient(sb)) as typeof o.supabaseTableClient};});
+vi.mock('../dq/raw-store',async importOriginal=>{const o=await importOriginal<typeof import('../dq/raw-store')>();return {...o,supabaseRawStore:((sb:never)=>over.raw??o.supabaseRawStore(sb)) as typeof o.supabaseRawStore};});
 
 const SHA='c'.repeat(40);
 const original=process.env.VERCEL_GIT_COMMIT_SHA;
@@ -103,3 +110,27 @@ describe('productionSyncDeps',()=>{
  });
 });
 
+
+describe('productionSyncDeps step 9b date-mismatch recording (plan 3 Task 14c)',()=>{
+ afterEach(()=>{over.facts=null;over.tables=null;over.raw=null;vi.unstubAllGlobals();});
+ it('writes a sec.filing_date_vs_submissions row (cycle-less, no batch) when the submissions filingDate differs from available_date',async()=>{
+  const tables=memoryTableClient({});
+  const availableDate=new Date(Date.now()-10*86_400_000).toISOString().slice(0,10);
+  const filing={filing_id:'F1',issuer_id:'I',market:'US',source:'edgar',source_ref:'0000320193-26-000001',available_date:availableDate,accepted_at:null} as unknown as FilingRow;
+  const setAcceptance=vi.fn(async()=>true);
+  over.facts={filingsOfIssuer:async()=>[filing],setFilingAcceptance:setAcceptance};over.tables=tables;over.raw=memoryRawStore();
+  const main={cik:'320193',name:'Apple',tickers:[],exchanges:[],filings:{recent:{accessionNumber:[filing.source_ref],filingDate:['2020-01-02'],form:['10-K'],acceptanceDateTime:['2020-01-02T06:00:00.000Z']},files:[]}};
+  const fetchStub=vi.fn(async()=>new Response(JSON.stringify(main),{status:200,headers:{'content-type':'application/json'}}));
+  vi.stubGlobal('fetch',fetchStub);
+  const deps=productionSyncDeps({deadline:null,codeVersion:SHA,admin:{} as never});
+  const budget:Budget={remainingMs:()=>300_000,signal:new AbortController().signal};
+  const out=await deps.enrichAcceptance!('I','0000320193',budget);
+  expect(fetchStub).toHaveBeenCalledTimes(1);
+  expect(out.mismatches).toHaveLength(1);
+  expect(setAcceptance).not.toHaveBeenCalled();   // a mismatching filing is not stamped
+  const rows=await tables.select('dq_reconciliations',{pair:'sec.filing_date_vs_submissions'});
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({dataset:'reconcile.sec.filing_date_vs_submissions',kind:'date',outcome:'compared',passed:false,batch_id:null,cycle_id:null,issuer_id:null,natural_key:`320193:${filing.source_ref}`});
+  expect(rows[0].detail).toMatchObject({left_text:availableDate,right_text:'2020-01-02'});
+ });
+});
