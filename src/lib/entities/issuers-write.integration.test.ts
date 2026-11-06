@@ -44,6 +44,18 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
   return track(out.issuer_id)!;
  };
  const pendingClaims=async(issuer:string)=>(await admin.query(`select id_type,value from public.issuer_identifier_claims where issuer_id=$1 and status='pending' order by id_type,value`,[issuer])).rows;
+ // Plan 3 migration one guards issuers.status/merged_into (issuers_topology_guard): lifecycle fixtures
+ // switch the transaction-local setting on, as set_merge/set_dissolved do. The plan-1 triggers still run.
+ const topo=async(sql:string,params:unknown[]=[])=>{
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select set_config('entities.allow_topology_write','on',true)`);
+   await c.query(sql,params);
+   await c.query('commit');
+  }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ };
  const sec=(issuer_id:string,ticker:string,valid_from:string,valid_to:string|null=null)=>({issuer_id,ticker,share_class:'common' as const,valid_from,valid_to,source:'test'});
  /** Hides existing ownership rows from the first pre-insert read, so the insert races the DB constraint. */
  const blindFirstRead=(seen:{code?:string|null})=>{
@@ -178,7 +190,7 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
 
  it('rejects an open security on an issuer merged into an active one with issuer_not_active, but keeps closed history',async()=>{
   const a=await newIssuer(),b=await newIssuer();
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
   const t=await usTicker();
   await expect(attachSecurity(db,sec(a,t,'2020-01-01'))).rejects.toThrow(/^issuer_not_active$/);
   expect(await attachSecurity(db,sec(a,t,'2000-01-01','2005-01-01'))).toBe('inserted');
@@ -188,7 +200,7 @@ describe.skipIf(!enabled)('issuer write path on real PostgreSQL',()=>{
  it('returns inactive_issuer for a dissolved hit and claims only the ids it does not hold',async()=>{
   const id=await newIssuer();
   const cik=(await admin.query(`select cik from public.issuers where issuer_id=$1`,[id])).rows[0].cik as string;
-  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[id]);
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[id]);
   const lei=randomLei();
   expect(await upsertIssuerByIdentifiers(db,{cik,lei,canonical_name_en:'Zombie'})).toEqual({issuer_id:null,created:false,conflict:true,reason:'inactive_issuer'});
   expect(await pendingClaims(id)).toEqual([{id_type:'lei',value:lei}]);

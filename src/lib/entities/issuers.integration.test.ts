@@ -41,6 +41,24 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await admin.query(`insert into public.issuers(issuer_id,canonical_name_en${cols}) values($1,'Test Co'${vals})`,[id,...params]);
   return id;
  };
+ // Plan 3 migration one guards issuers.status/merged_into (issuers_topology_guard): lifecycle fixtures
+ // switch the transaction-local setting on, as set_merge/set_dissolved do. The plan-1 triggers still run.
+ const topo=async(sql:string,params:unknown[]=[])=>{
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select set_config('entities.allow_topology_write','on',true)`);
+   await c.query(sql,params);
+   await c.query('commit');
+  }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ };
+ // Inserts born merged/dissolved are guarded too (plan 3 接口对齐记录 #7): same fixture, inside a topo transaction.
+ const newIssuerTopo=async(cols:string,vals:string,params:unknown[]=[])=>{
+  const id=randomUUID();issuers.push(id);
+  await topo(`insert into public.issuers(issuer_id,canonical_name_en${cols}) values($1,'Test Co'${vals})`,[id,...params]);
+  return id;
+ };
  // Tickers enter the cleanup list only after their own insert succeeded. US tickers use a ZZ
  // prefix no seed uses; an A-share code can collide with seed data, so it is inserted with
  // ON CONFLICT DO NOTHING and the caller skips that case (returns null) rather than adopting it.
@@ -95,11 +113,11 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await expect(newIssuer(',cik',',$2',[cik])).rejects.toThrow(/issuers_cik_idx/);
   await expect(newIssuer(',cik',',$2',['0123'])).rejects.toThrow(/issuers_cik_check/);
   await expect(admin.query(`insert into public.issuers(issuer_id) values($1)`,[randomUUID()])).rejects.toThrow(/issuers_has_name/);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=issuer_id where issuer_id=$1`,[a])).rejects.toThrow(/issuers_merged_not_self/);
-  await expect(newIssuer(',status',`,'merged'`)).rejects.toThrow(/issuers_merged_iff_status/);
-  await expect(newIssuer(',merged_into',',$2',[a])).rejects.toThrow(/issuers_merged_iff_status/);
+  await expect(topo(`update public.issuers set status='merged',merged_into=issuer_id where issuer_id=$1`,[a])).rejects.toThrow(/issuers_merged_not_self/);
+  await expect(newIssuerTopo(',status',`,'merged'`)).rejects.toThrow(/issuers_merged_iff_status/);
+  await expect(newIssuerTopo(',merged_into',',$2',[a])).rejects.toThrow(/issuers_merged_iff_status/);
   await expect(newIssuer(',provenance',`,'[]'::jsonb`)).rejects.toThrow(/issuers_provenance_object/);
-  await newIssuer(',status,merged_into',`,'merged',$2`,[a]);
+  await newIssuerTopo(',status,merged_into',`,'merged',$2`,[a]);
  },30000);
 
  it('enforces security ownership windows, identifiers and foreign keys',async()=>{
@@ -175,12 +193,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  it('enforces the merge and ownership lifecycle',async()=>{
   const a=await newIssuer();
   const b=await newIssuer();
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,a])).rejects.toThrow(/merge_target_not_active/);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,a])).rejects.toThrow(/merge_target_not_active/);
   const c=await newIssuer();
-  await expect(newIssuer(',status,merged_into',`,'merged',$2`,[a])).rejects.toThrow(/merge_target_not_active/);
-  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[c]);
-  await expect(newIssuer(',status,merged_into',`,'merged',$2`,[c])).rejects.toThrow(/merge_target_not_active/);
+  await expect(newIssuerTopo(',status,merged_into',`,'merged',$2`,[a])).rejects.toThrow(/merge_target_not_active/);
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[c]);
+  await expect(newIssuerTopo(',status,merged_into',`,'merged',$2`,[c])).rejects.toThrow(/merge_target_not_active/);
   const t=await usTicker();
   await expect(sec(a,t,'2021-01-01',null)).rejects.toThrow(/issuer_not_active/);
   await sec(a,t,'2020-01-01','2021-01-01');
@@ -190,12 +208,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
 
  it('rejects merge chains: an issuer that others merged into cannot itself be merged or dissolved',async()=>{
   const a=await newIssuer(),b=await newIssuer(),c=await newIssuer();
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c])).rejects.toThrow(/merge_target_has_referrers/);
-  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[b])).rejects.toThrow(/merge_target_has_referrers/);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c])).rejects.toThrow(/merge_target_has_referrers/);
+  await expect(topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[b])).rejects.toThrow(/merge_target_has_referrers/);
   // Re-point the referrer first, then the former target can be retired.
-  await admin.query(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,c]);
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c]);
+  await topo(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,c]);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c]);
   const rows=(await admin.query(`select issuer_id,status,merged_into from public.issuers where issuer_id=any($1::uuid[]) order by issuer_id`,[[a,b,c]])).rows;
   expect(rows).toEqual([{issuer_id:a,status:'merged',merged_into:c},{issuer_id:b,status:'merged',merged_into:c},{issuer_id:c,status:'active',merged_into:null}].sort((x,y)=>x.issuer_id.localeCompare(y.issuer_id)));
  },30000);
@@ -204,10 +222,10 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   const a=await newIssuer(),b=await newIssuer();
   const t=await usTicker();
   await sec(a,t,'2020-01-01',null);
-  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
+  await expect(topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
   await admin.query(`update public.issuer_securities set valid_to='2024-01-01',valid_to_method='unrecorded' where issuer_id=$1 and ticker=$2`,[a,t]);
-  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
   expect((await admin.query(`select status from public.issuers where issuer_id=$1`,[a])).rows[0].status).toBe('dissolved');
  },30000);
 

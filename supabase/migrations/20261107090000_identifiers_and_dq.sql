@@ -273,3 +273,492 @@ on conflict (id) do update
 set public = false,
     file_size_limit = excluded.file_size_limit,
     allowed_mime_types = excluded.allowed_mime_types;
+
+-- ================================================================ functions (plan 3 Task 1b)
+-- ---------------------------------------------------------------- claim/1 helpers (internal; §4.2.1)
+-- claims.ts::validateClaimDetail mirrors identifier_claim_problem: keep the two in step.
+create or replace function public.claim_text_is_date(p text) returns boolean
+language plpgsql immutable set search_path = public as $$
+begin
+  if p is null or p !~ '^\d{4}-\d{2}-\d{2}$' then return false; end if;
+  perform p::date;                                   -- rejects 2026-02-30
+  return true;
+exception when others then return false;
+end $$;
+revoke execute on function public.claim_text_is_date(text) from public, anon, authenticated, service_role;
+
+create or replace function public.claim_keys_within(p jsonb, p_allowed text[]) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(bool_and(k = any(p_allowed)), true) from jsonb_object_keys(p) k
+$$;
+revoke execute on function public.claim_keys_within(jsonb, text[]) from public, anon, authenticated, service_role;
+
+create or replace function public.claim_evidence_ok(e jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(e is not null and jsonb_typeof(e) = 'object'
+    and jsonb_typeof(e -> 'source') = 'string' and length(e ->> 'source') between 1 and 64
+    and public.claim_text_is_date(e ->> 'as_of')
+    and coalesce(e ->> 'evidence_sha256', '') ~ '^[0-9a-f]{64}$'
+    and (not (e ? 'locator') or jsonb_typeof(e -> 'locator') = 'string')
+    and (not (e ? 'note') or jsonb_typeof(e -> 'note') = 'string'), false)
+$$;
+revoke execute on function public.claim_evidence_ok(jsonb) from public, anon, authenticated, service_role;
+
+-- target_key = op ':' issuer_id, or op ':' issuer_id '|' ticker '|' valid_from (claims.ts::claimTargetKey).
+create or replace function public.identifier_claim_target_key(p_op text, p_target jsonb) returns text
+language sql immutable set search_path = public as $$
+  select p_op || ':' || case when p_target ? 'ticker'
+    then coalesce(p_target ->> 'issuer_id', '') || '|' || coalesce(p_target ->> 'ticker', '') || '|' || coalesce(p_target ->> 'valid_from', '')
+    else coalesce(p_target ->> 'issuer_id', '') end
+$$;
+revoke execute on function public.identifier_claim_target_key(text, jsonb) from public, anon, authenticated, service_role;
+
+-- null when the (op, id_type, value, detail) is a valid claim/1 for issuer p_issuer, else the field at fault.
+create or replace function public.identifier_claim_problem(p_op text, p_id_type text, p_value text, p_issuer uuid, p_detail jsonb)
+returns text language plpgsql stable set search_path = public as $$
+declare t jsonb; pa jsonb; pw jsonb; s jsonb; full_target boolean; allowed text[];
+begin
+  if p_detail is null or jsonb_typeof(p_detail) <> 'object' or p_detail ->> 'schema' is distinct from 'claim/1' then return 'schema'; end if;
+  if coalesce(p_detail ->> 'evidence_kind', '') not in ('hard_identifier','official_list','name_match','filing_form','provider_mapping') then return 'evidence_kind'; end if;
+  t := p_detail -> 'target'; pa := p_detail -> 'params'; pw := p_detail -> 'provenance_written';
+  if t is null or jsonb_typeof(t) <> 'object' or t ->> 'issuer_id' is distinct from p_issuer::text then return 'target.issuer_id'; end if;
+  if pa is null or jsonb_typeof(pa) <> 'object' then return 'params'; end if;
+  if not public.claim_evidence_ok(p_detail -> 'evidence') then return 'evidence'; end if;
+  if jsonb_typeof(p_detail -> 'sources') is distinct from 'array' then return 'sources'; end if;
+  for s in select x from jsonb_array_elements(p_detail -> 'sources') x loop
+    if not public.claim_evidence_ok(s) then return 'sources'; end if;
+  end loop;
+  if pw is not null and jsonb_typeof(pw) <> 'object' then return 'provenance_written'; end if;
+  full_target := t ? 'ticker' or t ? 'valid_from';
+  if full_target then
+    if jsonb_typeof(t -> 'ticker') is distinct from 'string' or length(t ->> 'ticker') not between 1 and 32
+       or not public.claim_text_is_date(t ->> 'valid_from')
+       or not public.claim_keys_within(t, array['issuer_id','ticker','valid_from']) then return 'target'; end if;
+  elsif not public.claim_keys_within(t, array['issuer_id']) then
+    return 'target';
+  end if;
+  if p_op in ('set_identifier','correct_identifier') then
+    if p_id_type in ('lei','cik','usci','cninfo_org_id') then
+      if full_target then return 'target'; end if;
+    elsif p_id_type in ('isin','figi') then
+      if not full_target then return 'target'; end if;
+    else
+      return 'op_id_type';
+    end if;
+    if p_op = 'set_identifier' then
+      if not public.claim_keys_within(pa, array['candidates','note'])
+         or (pa ? 'candidates' and jsonb_typeof(pa -> 'candidates') <> 'array')
+         or (pa ? 'note' and jsonb_typeof(pa -> 'note') <> 'string') then return 'params'; end if;
+    else
+      if not public.claim_keys_within(pa, array['expected_current','new_value','candidates','note'])
+         or jsonb_typeof(pa -> 'expected_current') is distinct from 'string' or length(pa ->> 'expected_current') not between 1 and 64
+         or jsonb_typeof(pa -> 'new_value') is distinct from 'string' or length(pa ->> 'new_value') not between 1 and 64
+         or pa ->> 'expected_current' = pa ->> 'new_value' then return 'params'; end if;
+      if pa ->> 'new_value' is distinct from p_value then return 'params.new_value'; end if;
+    end if;
+    allowed := array[p_id_type];
+  elsif p_op = 'attach_security' then
+    if p_id_type <> 'ticker' or full_target then return 'op_id_type'; end if;
+    if not public.claim_keys_within(pa, array['share_class','valid_from','valid_from_method','source','isin','note'])
+       or coalesce(pa ->> 'share_class', '') not in ('A','H','ADR','common','preferred','other','unknown')
+       or not public.claim_text_is_date(pa ->> 'valid_from')
+       or coalesce(pa ->> 'valid_from_method', '') not in ('first_observed','listing_date','ticker_change','curated')
+       or jsonb_typeof(pa -> 'source') is distinct from 'string' or length(pa ->> 'source') not between 1 and 64
+       or (pa ? 'isin' and coalesce(jsonb_typeof(pa -> 'isin'), '') not in ('string','null')) then return 'params'; end if;
+    if jsonb_typeof(pa -> 'isin') = 'string' and (pa ->> 'isin') !~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$' then return 'params'; end if;
+    allowed := array['isin','figi','valid_from'];
+  elsif p_op in ('close_security','backdate_window') then
+    if p_id_type <> 'ticker' or not full_target then return 'op_id_type'; end if;
+    if t ->> 'ticker' is distinct from p_value then return 'target.ticker'; end if;
+    if p_op = 'close_security' then
+      if not public.claim_keys_within(pa, array['valid_to','valid_to_method','note'])
+         or not public.claim_text_is_date(pa ->> 'valid_to')
+         or coalesce(pa ->> 'valid_to_method', '') not in ('delisting','ticker_change','sec_file_absent','curated','merge_close','unrecorded') then return 'params'; end if;
+      if (pa ->> 'valid_to')::date <= (t ->> 'valid_from')::date then return 'params'; end if;
+      allowed := array['valid_to'];
+    else
+      if not public.claim_keys_within(pa, array['new_valid_from','valid_from_method','note'])
+         or not public.claim_text_is_date(pa ->> 'new_valid_from')
+         or coalesce(pa ->> 'valid_from_method', '') not in ('listing_date','ticker_change','curated') then return 'params'; end if;
+      if (pa ->> 'new_valid_from')::date >= (t ->> 'valid_from')::date then return 'params'; end if;
+      allowed := array['valid_from'];
+    end if;
+  elsif p_op = 'evidence_only' then
+    if p_id_type <> 'ticker' or full_target then return 'op_id_type'; end if;
+    if pa ? 'suggested_op' and coalesce(pa ->> 'suggested_op', '') not in ('attach_security','close_security','backdate_window') then return 'params.suggested_op'; end if;
+    allowed := array[]::text[];
+  else
+    return 'op';
+  end if;
+  if pw is not null and not public.claim_keys_within(pw, allowed) then return 'provenance_written'; end if;
+  return null;
+end $$;
+revoke execute on function public.identifier_claim_problem(text, text, text, uuid, jsonb) from public, anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------- resolve_identifier_claim (§3.1, §4.2.1, §7.1)
+-- Locks the claim; refuses non-pending (already_resolved), legacy (legacy_claim) and evidence_only
+-- acceptance without an amend (amend_required); validates claim/1 and the stored target_key
+-- (invalid_claim); 'rejected' only flips the status. 'accepted' performs the op's business write in
+-- the same transaction with static SQL under a guard that must hit exactly one row of an active
+-- issuer, merges detail.provenance_written (or, absent, the claim's evidence under the op's key) into
+-- the target row's provenance, then records status/resolved_by/resolved_at. Any failure raises and
+-- rolls back everything, so the claim stays pending.
+create or replace function public.resolve_identifier_claim(p_id uuid, p_status text, p_resolved_by uuid, p_amend jsonb default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  c public.issuer_identifier_claims;
+  v_op text; v_value text; v_detail jsonb; v_amended boolean := false; v_problem text;
+  t jsonb; pa jsonb; v_pw jsonb; v_key text; v_status text; n int;
+begin
+  if p_status is null or p_status not in ('accepted','rejected') or p_resolved_by is null then
+    raise exception 'invalid_claim' using errcode = '22023';
+  end if;
+  select * into c from public.issuer_identifier_claims where id = p_id for update;
+  if not found then raise exception 'claim_not_found' using errcode = 'P0002'; end if;
+  if c.status <> 'pending' then raise exception 'already_resolved' using errcode = 'P0001'; end if;
+  if c.op = 'legacy' then raise exception 'legacy_claim' using errcode = 'P0001'; end if;
+  v_op := c.op; v_value := c.value; v_detail := c.detail;
+  if p_amend is not null then
+    -- Only an evidence_only claim is amended, only on acceptance, only into a ticker op (§4.2.1).
+    if c.op <> 'evidence_only' or p_status <> 'accepted' or jsonb_typeof(p_amend) <> 'object'
+       or coalesce(p_amend ->> 'op', '') not in ('attach_security','close_security','backdate_window')
+       or jsonb_typeof(p_amend -> 'target') is distinct from 'object' or jsonb_typeof(p_amend -> 'params') is distinct from 'object' then
+      raise exception 'invalid_claim' using errcode = '22023';
+    end if;
+    v_op := p_amend ->> 'op';
+    v_detail := c.detail || jsonb_build_object('target', p_amend -> 'target', 'params', p_amend -> 'params',
+      'original_op', c.op, 'original_target', c.detail -> 'target', 'original_params', c.detail -> 'params',
+      'amended_by', p_resolved_by, 'amended_at', clock_timestamp());
+    if (p_amend -> 'target') ? 'ticker' then v_value := p_amend -> 'target' ->> 'ticker'; end if;
+    v_amended := true;
+  elsif c.op = 'evidence_only' and p_status = 'accepted' then
+    raise exception 'amend_required' using errcode = 'P0001';
+  end if;
+  v_problem := public.identifier_claim_problem(v_op, c.id_type, v_value, c.issuer_id, v_detail);
+  if v_problem is not null then raise exception 'invalid_claim' using errcode = '22023', detail = v_problem; end if;
+  if c.target_key is distinct from public.identifier_claim_target_key(c.op, c.detail -> 'target') then
+    raise exception 'invalid_claim' using errcode = '22023', detail = 'target_key';
+  end if;
+
+  if p_status = 'rejected' then
+    update public.issuer_identifier_claims set status = 'rejected', resolved_by = p_resolved_by, resolved_at = clock_timestamp() where id = p_id;
+    return jsonb_build_object('op', c.op, 'applied', false, 'amended', false);
+  end if;
+
+  select status into v_status from public.issuers where issuer_id = c.issuer_id for update;
+  if v_status is distinct from 'active' then raise exception 'issuer_not_active' using errcode = 'P0001'; end if;
+  t := v_detail -> 'target'; pa := v_detail -> 'params';
+  v_key := case when v_op in ('set_identifier','correct_identifier') then c.id_type when v_op = 'close_security' then 'valid_to' else 'valid_from' end;
+  v_pw := coalesce(v_detail -> 'provenance_written', jsonb_build_object(v_key, v_detail -> 'evidence'));
+
+  begin
+    if v_op = 'set_identifier' and c.id_type = 'lei' then
+      update public.issuers set lei = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and lei is null;
+    elsif v_op = 'set_identifier' and c.id_type = 'cik' then
+      update public.issuers set cik = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and cik is null;
+    elsif v_op = 'set_identifier' and c.id_type = 'usci' then
+      update public.issuers set usci = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and usci is null;
+    elsif v_op = 'set_identifier' and c.id_type = 'cninfo_org_id' then
+      update public.issuers set cninfo_org_id = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and cninfo_org_id is null;
+    elsif v_op = 'correct_identifier' and c.id_type = 'lei' then
+      update public.issuers set lei = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and lei = pa ->> 'expected_current';
+    elsif v_op = 'correct_identifier' and c.id_type = 'cik' then
+      update public.issuers set cik = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and cik = pa ->> 'expected_current';
+    elsif v_op = 'correct_identifier' and c.id_type = 'usci' then
+      update public.issuers set usci = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and usci = pa ->> 'expected_current';
+    elsif v_op = 'correct_identifier' and c.id_type = 'cninfo_org_id' then
+      update public.issuers set cninfo_org_id = v_value, provenance = provenance || v_pw, updated_at = now() where issuer_id = c.issuer_id and status = 'active' and cninfo_org_id = pa ->> 'expected_current';
+    elsif v_op = 'set_identifier' and c.id_type = 'isin' then
+      update public.issuer_securities set isin = v_value, provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and isin is null;
+    elsif v_op = 'set_identifier' and c.id_type = 'figi' then
+      update public.issuer_securities set figi = v_value, provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and figi is null;
+    elsif v_op = 'correct_identifier' and c.id_type = 'isin' then
+      update public.issuer_securities set isin = v_value, provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and isin = pa ->> 'expected_current';
+    elsif v_op = 'correct_identifier' and c.id_type = 'figi' then
+      update public.issuer_securities set figi = v_value, provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and figi = pa ->> 'expected_current';
+    elsif v_op = 'attach_security' then
+      insert into public.issuer_securities(issuer_id, ticker, isin, share_class, is_primary, valid_from, valid_to, valid_from_method, valid_to_method, source, provenance)
+      values (c.issuer_id, v_value, nullif(pa ->> 'isin', ''), pa ->> 'share_class', false, (pa ->> 'valid_from')::date, null, pa ->> 'valid_from_method', null, pa ->> 'source', v_pw);
+    elsif v_op = 'close_security' then
+      update public.issuer_securities set valid_to = (pa ->> 'valid_to')::date, valid_to_method = pa ->> 'valid_to_method', provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date and valid_to is null;
+    elsif v_op = 'backdate_window' then
+      update public.issuer_securities set valid_from = (pa ->> 'new_valid_from')::date, valid_from_method = pa ->> 'valid_from_method', provenance = provenance || v_pw
+      where issuer_id = c.issuer_id and ticker = t ->> 'ticker' and valid_from = (t ->> 'valid_from')::date;
+    else
+      raise exception 'invalid_claim' using errcode = '22023';
+    end if;
+    get diagnostics n = row_count;
+  exception
+    when unique_violation or exclusion_violation then
+      -- an issuer identifier held by another issuer; a security key/window/ISIN held by another row
+      if v_op in ('set_identifier','correct_identifier') and c.id_type in ('lei','cik','usci','cninfo_org_id') then
+        raise exception 'value_conflict' using errcode = 'P0001';
+      end if;
+      raise exception 'ownership_conflict' using errcode = 'P0001';
+    when check_violation or foreign_key_violation or invalid_text_representation or not_null_violation then
+      raise exception 'invalid_claim' using errcode = '22023';
+  end;
+  if n <> 1 then
+    if v_op = 'close_security' then raise exception 'already_closed' using errcode = 'P0001'; end if;
+    raise exception 'value_conflict' using errcode = 'P0001';
+  end if;
+  update public.issuer_identifier_claims
+  set status = 'accepted', op = v_op, value = v_value, detail = v_detail,
+      target_key = public.identifier_claim_target_key(v_op, v_detail -> 'target'),
+      resolved_by = p_resolved_by, resolved_at = clock_timestamp()
+  where id = p_id;
+  return jsonb_build_object('op', v_op, 'applied', true, 'amended', v_amended);
+end $$;
+revoke execute on function public.resolve_identifier_claim(uuid, text, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.resolve_identifier_claim(uuid, text, uuid, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- calendar passes (§3.1, §6.2, T3/U1)
+-- The pass token {market, pass_id, batch_id} fences every pass write: the pass row is locked and must
+-- be leased to token.batch_id, unexpired and unfinished, else fence_failed with no write.
+create or replace function public.dq_calendar_lock_pass(p_token jsonb) returns public.dq_calendar_passes
+language plpgsql set search_path = public as $$
+declare p public.dq_calendar_passes;
+begin
+  if p_token is null or jsonb_typeof(p_token) <> 'object'
+     or coalesce(p_token ->> 'market', '') not in ('US','CN')
+     or coalesce(p_token ->> 'pass_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or coalesce(p_token ->> 'batch_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'fence_failed' using errcode = 'P0001';
+  end if;
+  select * into p from public.dq_calendar_passes where market = p_token ->> 'market' and pass_id = (p_token ->> 'pass_id')::uuid for update;
+  if not found or p.claimed_by is distinct from (p_token ->> 'batch_id')::uuid
+     or p.claim_until is null or p.claim_until <= clock_timestamp() or p.finished_at is not null then
+    raise exception 'fence_failed' using errcode = 'P0001';
+  end if;
+  return p;
+end $$;
+revoke execute on function public.dq_calendar_lock_pass(jsonb) from public, anon, authenticated, service_role;
+
+-- U1: creation is serialised per market by a transaction advisory lock. No unfinished pass → create
+-- it, freeze the in-scope active issuers as members, lease it to p_batch. An unfinished pass whose
+-- lease is free, expired, or already p_batch's → (re)lease it to p_batch. Otherwise null.
+create or replace function public.claim_calendar_pass(p_market text, p_batch uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare p public.dq_calendar_passes; v_pass uuid;
+begin
+  if p_market is null or p_market not in ('US','CN') then raise exception 'invalid_market' using errcode = '22023'; end if;
+  if p_batch is null then raise exception 'invalid_batch' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('dq_calendar_pass:' || p_market));
+  select * into p from public.dq_calendar_passes where market = p_market and finished_at is null for update;
+  if not found then
+    v_pass := gen_random_uuid();
+    insert into public.dq_calendar_passes(market, pass_id, started_at, claimed_by, claim_until, status)
+    values (p_market, v_pass, clock_timestamp(), p_batch, clock_timestamp() + interval '10 minutes', 'running');
+    insert into public.dq_calendar_pass_members(market, pass_id, issuer_id)
+    select p_market, v_pass, s.issuer_id
+    from public.fact_sync_scope s join public.issuers i on i.issuer_id = s.issuer_id
+    where s.market = p_market and s.priority > 0 and i.status = 'active';
+    return jsonb_build_object('market', p_market, 'pass_id', v_pass, 'batch_id', p_batch);
+  end if;
+  if p.claimed_by is null or p.claim_until is null or p.claim_until < clock_timestamp() or p.claimed_by = p_batch then
+    update public.dq_calendar_passes set claimed_by = p_batch, claim_until = clock_timestamp() + interval '10 minutes'
+    where market = p.market and pass_id = p.pass_id;
+    return jsonb_build_object('market', p_market, 'pass_id', p.pass_id, 'batch_id', p_batch);
+  end if;
+  return null;
+end $$;
+revoke execute on function public.claim_calendar_pass(text, uuid) from public, anon, authenticated;
+grant execute on function public.claim_calendar_pass(text, uuid) to service_role;
+
+-- The only signature (no 3-arg overload). The member must belong to the pass and be pending, or
+-- failed with attempts < 3; its rows for (issuer, market) are replaced atomically and it becomes done.
+-- Rows carry the ExpectationRow columns (src/lib/dq/calendar.ts); computed_at and batch_id are set here.
+create or replace function public.replace_filing_expectations(p_issuer uuid, p_market text, p_rows jsonb, p_pass_token jsonb)
+returns int language plpgsql security definer set search_path = public as $$
+declare p public.dq_calendar_passes; m public.dq_calendar_pass_members; n int;
+begin
+  p := public.dq_calendar_lock_pass(p_pass_token);
+  if p_market is distinct from p.market then raise exception 'fence_failed' using errcode = 'P0001'; end if;
+  select * into m from public.dq_calendar_pass_members where market = p.market and pass_id = p.pass_id and issuer_id = p_issuer for update;
+  if not found or not (m.state = 'pending' or (m.state = 'failed' and m.attempts < 3)) then
+    raise exception 'member_not_claimable' using errcode = 'P0001';
+  end if;
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array'
+     or exists (select 1 from jsonb_array_elements(p_rows) x
+                where jsonb_typeof(x) <> 'object'
+                   or (x ? 'issuer_id' and x ->> 'issuer_id' is distinct from p_issuer::text)
+                   or (x ? 'market' and x ->> 'market' is distinct from p_market)) then
+    raise exception 'invalid_rows' using errcode = '22023';
+  end if;
+  begin
+    delete from public.dq_filing_expectations where issuer_id = p_issuer and market = p_market;
+    insert into public.dq_filing_expectations(issuer_id, market, report_kind, period_end, period_end_estimated, deadline_state,
+      due_date, due_rule, expected_date, upstream_lookup, upstream_filed_date, disclosure_state, received_filing_id, received_date,
+      profile_as_of, detail, computed_at, batch_id)
+    select p_issuer, p_market, x ->> 'report_kind', (x ->> 'period_end')::date, coalesce((x ->> 'period_end_estimated')::boolean, false),
+      x ->> 'deadline_state', (x ->> 'due_date')::date, x ->> 'due_rule', (x ->> 'expected_date')::date, x ->> 'upstream_lookup',
+      (x ->> 'upstream_filed_date')::date, x ->> 'disclosure_state', (x ->> 'received_filing_id')::uuid, (x ->> 'received_date')::date,
+      (x ->> 'profile_as_of')::date, coalesce(x -> 'detail', '{}'::jsonb), clock_timestamp(), p.claimed_by
+    from jsonb_array_elements(p_rows) x;
+    get diagnostics n = row_count;
+  exception when check_violation or not_null_violation or unique_violation or foreign_key_violation
+              or invalid_text_representation or invalid_datetime_format or datetime_field_overflow or invalid_parameter_value then
+    raise exception 'invalid_rows' using errcode = '22023';
+  end;
+  update public.dq_calendar_pass_members set state = 'done', done_at = clock_timestamp()
+  where market = p.market and pass_id = p.pass_id and issuer_id = p_issuer;
+  update public.dq_calendar_passes set claim_until = clock_timestamp() + interval '10 minutes' where market = p.market and pass_id = p.pass_id;
+  return n;
+end $$;
+revoke execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb) to service_role;
+
+create or replace function public.fail_calendar_member(p_pass_token jsonb, p_issuer uuid, p_error text)
+returns void language plpgsql security definer set search_path = public as $$
+declare p public.dq_calendar_passes; m public.dq_calendar_pass_members;
+begin
+  p := public.dq_calendar_lock_pass(p_pass_token);
+  select * into m from public.dq_calendar_pass_members where market = p.market and pass_id = p.pass_id and issuer_id = p_issuer for update;
+  if not found or not (m.state = 'pending' or (m.state = 'failed' and m.attempts < 3)) then
+    raise exception 'member_not_claimable' using errcode = 'P0001';
+  end if;
+  update public.dq_calendar_pass_members set state = 'failed', attempts = attempts + 1, last_error = left(coalesce(p_error, 'unknown'), 1000)
+  where market = p.market and pass_id = p.pass_id and issuer_id = p_issuer;
+  update public.dq_calendar_passes set claim_until = clock_timestamp() + interval '10 minutes' where market = p.market and pass_id = p.pass_id;
+end $$;
+revoke execute on function public.fail_calendar_member(jsonb, uuid, text) from public, anon, authenticated;
+grant execute on function public.fail_calendar_member(jsonb, uuid, text) to service_role;
+
+-- Settles only from persisted member state: anything still processable → pass_incomplete; else all
+-- done → complete, otherwise complete_with_failures; both terminal states write finished_at.
+create or replace function public.finish_calendar_pass(p_pass_token jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare p public.dq_calendar_passes; v_status text;
+begin
+  p := public.dq_calendar_lock_pass(p_pass_token);
+  if exists (select 1 from public.dq_calendar_pass_members where market = p.market and pass_id = p.pass_id
+             and (state = 'pending' or (state = 'failed' and attempts < 3))) then
+    raise exception 'pass_incomplete' using errcode = 'P0001';
+  end if;
+  v_status := case when exists (select 1 from public.dq_calendar_pass_members where market = p.market and pass_id = p.pass_id and state <> 'done')
+                   then 'complete_with_failures' else 'complete' end;
+  update public.dq_calendar_passes set status = v_status, finished_at = clock_timestamp() where market = p.market and pass_id = p.pass_id;
+  return v_status;
+end $$;
+revoke execute on function public.finish_calendar_pass(jsonb) from public, anon, authenticated;
+grant execute on function public.finish_calendar_pass(jsonb) to service_role;
+
+-- ---------------------------------------------------------------- row-locked jsonb patches (plan audit round 1, P3/P4)
+-- append_claim_evidence is the only writer of a pending claim's detail.sources after filing (claims.ts
+-- fileClaim). It locks the pending row of the five-column key, drops evidence that already is the claim's
+-- evidence or one of its sources (same source + evidence_sha256) and appends the rest with jsonb_set on
+-- detail.sources alone: two concurrent filers both keep their evidence (the old read-then-replace lost
+-- one). 'not_found' = no pending row any more (resolved meanwhile); nothing is written then.
+create or replace function public.append_claim_evidence(p_issuer uuid, p_id_type text, p_value text, p_op text, p_target_key text, p_evidence jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_detail jsonb; v_sources jsonb;
+begin
+  if not public.claim_evidence_ok(p_evidence) then
+    raise exception 'invalid_evidence' using errcode = '22023';
+  end if;
+  select id, detail into v_id, v_detail from public.issuer_identifier_claims
+  where issuer_id = p_issuer and id_type = p_id_type and value = p_value and op = p_op and target_key = p_target_key and status = 'pending'
+  for update;
+  if not found then return 'not_found'; end if;
+  v_sources := case when jsonb_typeof(v_detail -> 'sources') = 'array' then v_detail -> 'sources' else '[]'::jsonb end;
+  if coalesce(v_detail -> 'evidence' ->> 'source' = p_evidence ->> 'source' and v_detail -> 'evidence' ->> 'evidence_sha256' = p_evidence ->> 'evidence_sha256', false)
+     or exists (select 1 from jsonb_array_elements(v_sources) s
+                where s ->> 'source' = p_evidence ->> 'source' and s ->> 'evidence_sha256' = p_evidence ->> 'evidence_sha256') then
+    return 'duplicate';
+  end if;
+  update public.issuer_identifier_claims set detail = jsonb_set(detail, '{sources}', v_sources || jsonb_build_array(p_evidence), true) where id = v_id;
+  return 'appended';
+end $$;
+revoke execute on function public.append_claim_evidence(uuid, text, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.append_claim_evidence(uuid, text, text, text, text, jsonb) to service_role;
+
+-- patch_quarantine_detail is the only TS-side writer of dq_quarantine.detail once an item exists (the
+-- materialize hook state and the audit mark; quarantine.ts::patchQuarantineDetail). It locks the item and
+-- replaces ONLY the named key, so a concurrent apply_reconcile_result / restore_reconciled / adoption that
+-- rewrote latest_result, the chosen ids or the resolution columns is never rolled back to an older read.
+-- Two keys only: 'hook' and 'audit_written'. false = no such item.
+create or replace function public.patch_quarantine_detail(p_id uuid, p_key text, p_value jsonb)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if p_key is null or p_key not in ('hook', 'audit_written') or p_value is null then
+    raise exception 'invalid_detail_key' using errcode = '22023';
+  end if;
+  perform 1 from public.dq_quarantine where id = p_id for update;
+  if not found then return false; end if;
+  update public.dq_quarantine set detail = detail || jsonb_build_object(p_key, p_value) where id = p_id;
+  return true;
+end $$;
+revoke execute on function public.patch_quarantine_detail(uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- guarded identifier write (plan audit round 3, R2)
+-- set_security_identifier is the only writer of issuer_securities.isin/figi outside resolve_identifier_claim
+-- (identifiers/apply.ts, Task 4a). It locks the open row (issuer, ticker, valid_from, valid_to null) and
+-- in ONE UPDATE writes the column (only when empty) and merges the single provenance key with
+-- `provenance || p_provenance` — never a whole-object replacement — so a concurrent write of the other
+-- column, or a claim resolution (which also merges with ||), keeps its key. p_provenance must carry
+-- exactly the key p_column. Outcomes: 'written' (the column was empty), 'duplicate' (the same value is
+-- stored; a missing provenance key is completed in the same UPDATE), 'conflict' (another value is
+-- stored; nothing written — the caller files correct_identifier), 'not_found' (no open row). ISIN
+-- uniqueness / no-overlap violations (23505 / 23P01) pass through unchanged.
+create or replace function public.set_security_identifier(p_issuer uuid, p_ticker text, p_valid_from date, p_column text, p_value text, p_provenance jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_cur text; v_prov jsonb;
+begin
+  if p_column is null or p_column not in ('isin', 'figi') or coalesce(p_value, '') = ''
+     or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
+     or (select array_agg(k) from jsonb_object_keys(p_provenance) k) is distinct from array[p_column] then
+    raise exception 'invalid_identifier_write' using errcode = '22023';
+  end if;
+  select case when p_column = 'isin' then s.isin else s.figi end, s.provenance into v_cur, v_prov
+  from public.issuer_securities s
+  where s.issuer_id = p_issuer and s.ticker = p_ticker and s.valid_from = p_valid_from and s.valid_to is null
+  for update;
+  if not found then return 'not_found'; end if;
+  if v_cur is not null and v_cur <> p_value then return 'conflict'; end if;
+  if v_cur = p_value and coalesce(v_prov ? p_column, false) then return 'duplicate'; end if;
+  if p_column = 'isin' then
+    update public.issuer_securities set isin = p_value, provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  else
+    update public.issuer_securities set figi = p_value, provenance = provenance || p_provenance
+    where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  end if;
+  return case when v_cur is null then 'written' else 'duplicate' end;
+end $$;
+revoke execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- topology guard (§3.1, S1)
+-- issuers.status/merged_into change only inside set_merge/set_dissolved (migration two), which switch
+-- the transaction-local setting on and restore it on every exit path. A never-defined setting reads
+-- NULL and the '' left after such a transaction both differ from 'on' and are refused (IS DISTINCT
+-- FROM). The WHEN clause skips same-value writes. Named so it fires after the plan-1 lifecycle
+-- triggers (BEFORE triggers run in name order), which keep reporting their own errors. A tripwire,
+-- not a privilege boundary: any role can set the GUC. Inserts are guarded too (plan 3 接口对齐记录 #7):
+-- an issuer born with status <> 'active' or merged_into set would add a lineage member without
+-- set_merge's scope locks; plain active inserts pass.
+create or replace function public.issuers_topology_guard() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.status is distinct from 'active' or new.merged_into is not null then
+      if current_setting('entities.allow_topology_write', true) is distinct from 'on' then
+        raise exception 'topology_write_forbidden' using errcode = '23514';
+      end if;
+    end if;
+  elsif old.status is distinct from new.status or old.merged_into is distinct from new.merged_into then
+    if current_setting('entities.allow_topology_write', true) is distinct from 'on' then
+      raise exception 'topology_write_forbidden' using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists issuers_topology_guard on public.issuers;
+create trigger issuers_topology_guard before insert or update of status, merged_into on public.issuers
+  for each row execute function public.issuers_topology_guard();

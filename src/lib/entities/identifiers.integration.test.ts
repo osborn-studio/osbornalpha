@@ -12,6 +12,7 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {Pool} from 'pg';
+import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {SCHEMA_BOOTSTRAP_SQL} from '../../../scripts/s4/local-db';
 
@@ -410,5 +411,526 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   const d='reconcile.test-'+randomUUID().slice(0,8);
   await q(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[d]);
   expect((await fails(q(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'hourly','missing')`,[d+'x']))).message).toMatch(/dq_freshness_expected_cadence_check/);
+ });
+});
+
+// ================================================================ Task 1b: functions and topology guard
+const REVIEWER=randomUUID();
+const EVIDENCE={source:'test',as_of:'2026-11-05',evidence_sha256:SHA,locator:'row:1'};
+const randomLei=()=>hex(9)+'12';                         // matches the issuers.lei format check
+const randomIsin=()=>'ZZ'+hex(5).slice(0,9)+'7';         // matches the issuer_securities.isin format check
+const randomFigi=()=>'BBG'+hex(5).slice(0,9);
+const randomCik=()=>String(1+Math.floor(Math.random()*9))+String(Math.floor(Math.random()*1e9)).padStart(9,'0');
+/** claims.ts::claimTargetKey */
+const targetKey=(op:string,t:Record<string,string>)=>t.ticker!==undefined?`${op}:${t.issuer_id}|${t.ticker}|${t.valid_from}`:`${op}:${t.issuer_id}`;
+async function newClaim(c:{issuer:string;id_type:string;value:string;op:string;target:Record<string,string>;params?:Record<string,unknown>;over?:Record<string,unknown>;target_key?:string}):Promise<string>{
+ const id=randomUUID();
+ const detail={schema:'claim/1',evidence_kind:'hard_identifier',target:c.target,params:c.params??{},evidence:EVIDENCE,sources:[],...c.over};
+ await insertRow('issuer_identifier_claims',{id,issuer_id:c.issuer,id_type:c.id_type,value:c.value,source:'test',status:'pending',op:c.op,target_key:c.target_key??targetKey(c.op,c.target),detail:JSON.stringify(detail)});
+ return id;
+}
+const resolve=async(id:string,status:string,amend:unknown=null,by:string|null=REVIEWER,on:Pool|PoolClient=admin)=>
+ (await on.query(`select public.resolve_identifier_claim($1,$2,$3,$4::jsonb) v`,[id,status,by,amend===null?null:JSON.stringify(amend)])).rows[0].v;
+const claimState=async(id:string)=>(await q(`select status,op,value,resolved_by,(resolved_at is not null) resolved from public.issuer_identifier_claims where id=$1`,[id]))[0];
+/** Topology changes in fixtures switch the transaction-local setting on, as set_merge/set_dissolved do. */
+const topo=async(sql:string,params:unknown[]=[])=>{
+ const c=await admin.connect();
+ try{
+  await c.query('begin');
+  await c.query(`select set_config('entities.allow_topology_write','on',true)`);
+  await c.query(sql,params);
+  await c.query('commit');
+ }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+ finally{c.release();}
+};
+/** Runs body inside one transaction on its own connection (pid known); rolls back only if still open. */
+interface Tx{c:PoolClient;pid:number;commit():Promise<void>}
+async function inTx(pool:Pool,body:(tx:Tx)=>Promise<void>):Promise<void>{
+ const c=await pool.connect();let open=false;let broken:Error|undefined;
+ try{
+  await c.query('begin');open=true;
+  const pid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
+  await body({c,pid,commit:async()=>{await c.query('commit');open=false;}});
+ }finally{
+  if(open)await c.query('rollback').catch(e=>{broken=e as Error;});
+  c.release(broken);
+ }
+}
+/** Deterministic "is blocked": polls (20 ms, <= 3 s) until some backend waits on `pid`, then asserts p is still pending. */
+async function stillBlockedBehind(pool:Pool,pid:number,p:Promise<unknown>):Promise<void>{
+ let settled=false;p.then(()=>{settled=true;},()=>{settled=true;});
+ for(const deadline=Date.now()+3000;;){
+  const n=Number((await pool.query(`select count(*)::int n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))`,[pid])).rows[0].n);
+  if(n>=1)break;
+  if(settled||Date.now()>deadline)throw new Error(`no backend blocked behind pid ${pid} (settled=${settled})`);
+  await new Promise(r=>setTimeout(r,20));
+ }
+ expect(settled).toBe(false);
+}
+
+describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
+ it('set_identifier on an issuer column writes value and provenance under the null guard; conflicts roll back',async()=>{
+  const a=await issuer();const lei=randomLei();
+  const pw={lei:{source:'gleif',as_of:'2026-11-05',evidence_sha256:SHA}};
+  const id=await newClaim({issuer:a,id_type:'lei',value:lei,op:'set_identifier',target:{issuer_id:a},over:{provenance_written:pw}});
+  expect(await resolve(id,'accepted')).toEqual({op:'set_identifier',applied:true,amended:false});
+  expect(await q(`select lei,provenance from public.issuers where issuer_id=$1`,[a])).toEqual([{lei,provenance:pw}]);
+  expect(await claimState(id)).toEqual({status:'accepted',op:'set_identifier',value:lei,resolved_by:REVIEWER,resolved:true});
+  // the column is no longer null: a second set conflicts and nothing changes
+  const again=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
+  expect((await fails(resolve(again,'accepted'))).message).toBe('value_conflict');
+  expect(await claimState(again)).toMatchObject({status:'pending',resolved:false});
+  expect(await q(`select lei from public.issuers where issuer_id=$1`,[a])).toEqual([{lei}]);
+  // another issuer holding the value (unique index) is value_conflict too
+  const b=await issuer();
+  const stolen=await newClaim({issuer:b,id_type:'lei',value:lei,op:'set_identifier',target:{issuer_id:b}});
+  expect((await fails(resolve(stolen,'accepted'))).message).toBe('value_conflict');
+  expect(await q(`select lei from public.issuers where issuer_id=$1`,[b])).toEqual([{lei:null}]);
+  // without provenance_written the claim's evidence becomes the provenance entry
+  const cik=randomCik();
+  await resolve(await newClaim({issuer:b,id_type:'cik',value:cik,op:'set_identifier',target:{issuer_id:b}}),'accepted');
+  expect(await q(`select cik,provenance->'cik' p from public.issuers where issuer_id=$1`,[b])).toEqual([{cik,p:EVIDENCE}]);
+  // correct_identifier needs the current value to still match
+  const lei2=randomLei();
+  const stale=await newClaim({issuer:a,id_type:'lei',value:lei2,op:'correct_identifier',target:{issuer_id:a},params:{expected_current:randomLei(),new_value:lei2}});
+  expect((await fails(resolve(stale,'accepted'))).message).toBe('value_conflict');
+  await resolve(stale,'rejected');                       // the failed claim stays pending; clear it so the same-key correction can be filed
+  const fix=await newClaim({issuer:a,id_type:'lei',value:lei2,op:'correct_identifier',target:{issuer_id:a},params:{expected_current:lei,new_value:lei2}});
+  expect(await resolve(fix,'accepted')).toEqual({op:'correct_identifier',applied:true,amended:false});
+  expect(await q(`select lei from public.issuers where issuer_id=$1`,[a])).toEqual([{lei:lei2}]);
+ });
+
+ it('set/correct_identifier on a security row: ISIN and FIGI under row guards; an ISIN held elsewhere is ownership_conflict',async()=>{
+  const a=await issuer(),b=await issuer();const t=await ticker(),t2=await ticker();
+  await sec(a,t,'2020-01-01',null);
+  const isin=randomIsin();
+  const target={issuer_id:a,ticker:t,valid_from:'2020-01-01'};
+  expect(await resolve(await newClaim({issuer:a,id_type:'isin',value:isin,op:'set_identifier',target}),'accepted')).toEqual({op:'set_identifier',applied:true,amended:false});
+  expect(await q(`select isin,provenance->'isin' p from public.issuer_securities where ticker=$1`,[t])).toEqual([{isin,p:EVIDENCE}]);
+  // the same ISIN on another open row (any issuer) violates the ISIN no-overlap exclusion
+  await sec(b,t2,'2021-01-01',null);
+  const dup=await newClaim({issuer:b,id_type:'isin',value:isin,op:'set_identifier',target:{issuer_id:b,ticker:t2,valid_from:'2021-01-01'}});
+  expect((await fails(resolve(dup,'accepted'))).message).toBe('ownership_conflict');
+  expect(await q(`select isin from public.issuer_securities where ticker=$1`,[t2])).toEqual([{isin:null}]);
+  expect(await claimState(dup)).toMatchObject({status:'pending',resolved:false});
+  // FIGI: set, then correct only while expected_current still matches
+  const [f1,f2,f3]=[randomFigi(),randomFigi(),randomFigi()];
+  await resolve(await newClaim({issuer:a,id_type:'figi',value:f1,op:'set_identifier',target}),'accepted');
+  const stale=await newClaim({issuer:a,id_type:'figi',value:f3,op:'correct_identifier',target,params:{expected_current:f2,new_value:f3}});
+  expect((await fails(resolve(stale,'accepted'))).message).toBe('value_conflict');
+  const fix=await newClaim({issuer:a,id_type:'figi',value:f2,op:'correct_identifier',target,params:{expected_current:f1,new_value:f2}});
+  expect(await resolve(fix,'accepted')).toMatchObject({op:'correct_identifier',applied:true});
+  expect(await q(`select figi from public.issuer_securities where ticker=$1`,[t])).toEqual([{figi:f2}]);
+  // a target row that does not exist matches nothing → value_conflict
+  const ghost=await newClaim({issuer:a,id_type:'figi',value:randomFigi(),op:'set_identifier',target:{issuer_id:a,ticker:t,valid_from:'1999-01-01'}});
+  expect((await fails(resolve(ghost,'accepted'))).message).toBe('value_conflict');
+ });
+
+ it('attach_security inserts the open row with its method and provenance; a held ticker is ownership_conflict',async()=>{
+  const a=await issuer(),b=await issuer();const t=await ticker();
+  const params={share_class:'H',valid_from:'2004-06-16',valid_from_method:'listing_date',source:'gleif_openfigi',isin:randomIsin()};
+  const id=await newClaim({issuer:a,id_type:'ticker',value:t,op:'attach_security',target:{issuer_id:a},params,over:{evidence_kind:'name_match'}});
+  expect(await resolve(id,'accepted')).toEqual({op:'attach_security',applied:true,amended:false});
+  expect(await q(`select issuer_id,share_class,valid_from::text,valid_to,valid_from_method,valid_to_method,source,isin,is_primary,provenance from public.issuer_securities where ticker=$1`,[t])).toEqual([
+   {issuer_id:a,share_class:'H',valid_from:'2004-06-16',valid_to:null,valid_from_method:'listing_date',valid_to_method:null,source:'gleif_openfigi',isin:params.isin,is_primary:false,provenance:{valid_from:EVIDENCE}},
+  ]);
+  const held=await newClaim({issuer:b,id_type:'ticker',value:t,op:'attach_security',target:{issuer_id:b},params:{...params,isin:null,valid_from:'2026-01-01'}});
+  expect((await fails(resolve(held,'accepted'))).message).toBe('ownership_conflict');
+  expect(await claimState(held)).toMatchObject({status:'pending',resolved:false});
+ });
+
+ it('close_security closes an open row once; a second close is already_closed',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2020-01-01',null);
+  const target={issuer_id:a,ticker:t,valid_from:'2020-01-01'};
+  const first=await newClaim({issuer:a,id_type:'ticker',value:t,op:'close_security',target,params:{valid_to:'2026-03-01',valid_to_method:'delisting'},over:{evidence_kind:'filing_form'}});
+  expect(await resolve(first,'accepted')).toEqual({op:'close_security',applied:true,amended:false});
+  expect(await q(`select valid_to::text,valid_to_method,provenance->'valid_to' p from public.issuer_securities where ticker=$1`,[t])).toEqual([{valid_to:'2026-03-01',valid_to_method:'delisting',p:EVIDENCE}]);
+  const again=await newClaim({issuer:a,id_type:'ticker',value:t,op:'close_security',target,params:{valid_to:'2026-04-01',valid_to_method:'curated'}});
+  expect((await fails(resolve(again,'accepted'))).message).toBe('already_closed');
+  expect(await claimState(again)).toMatchObject({status:'pending'});
+ });
+
+ it('backdate_window moves valid_from under the old-value guard; an overlap is ownership_conflict',async()=>{
+  const a=await issuer(),b=await issuer();const t=await ticker();
+  await sec(b,t,'2000-01-01','2005-01-01',{valid_to_method:'curated'});
+  await sec(a,t,'2010-01-01',null);
+  const target={issuer_id:a,ticker:t,valid_from:'2010-01-01'};
+  const ok=await newClaim({issuer:a,id_type:'ticker',value:t,op:'backdate_window',target,params:{new_valid_from:'2006-03-01',valid_from_method:'listing_date'}});
+  expect(await resolve(ok,'accepted')).toEqual({op:'backdate_window',applied:true,amended:false});
+  expect(await q(`select valid_from::text,valid_from_method,provenance->'valid_from' p from public.issuer_securities where issuer_id=$1 and ticker=$2`,[a,t])).toEqual([{valid_from:'2006-03-01',valid_from_method:'listing_date',p:EVIDENCE}]);
+  // the old valid_from is gone → value_conflict
+  const stale=await newClaim({issuer:a,id_type:'ticker',value:t,op:'backdate_window',target,params:{new_valid_from:'2007-01-01',valid_from_method:'curated'}});
+  expect((await fails(resolve(stale,'accepted'))).message).toBe('value_conflict');
+  // moving into b's closed window [2000,2005) → no-overlap exclusion → ownership_conflict, nothing moves
+  const over=await newClaim({issuer:a,id_type:'ticker',value:t,op:'backdate_window',target:{issuer_id:a,ticker:t,valid_from:'2006-03-01'},params:{new_valid_from:'2004-01-01',valid_from_method:'curated'}});
+  expect((await fails(resolve(over,'accepted'))).message).toBe('ownership_conflict');
+  expect(await q(`select valid_from::text from public.issuer_securities where issuer_id=$1 and ticker=$2`,[a,t])).toEqual([{valid_from:'2006-03-01'}]);
+ });
+
+ it('evidence_only needs an amend to be accepted; the amend rewrites the claim and keeps the original',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2020-01-01',null);
+  const params={suggested_op:'close_security',accession:'0001234567-26-000001',form:'25-NSE',filing_date:'2026-02-20',note:'Rule 12d2-2(d): delisting effective 10 days after filing; check the class named in the form'};
+  const evidenceClaim=()=>newClaim({issuer:a,id_type:'ticker',value:t,op:'evidence_only',target:{issuer_id:a},params,over:{evidence_kind:'filing_form'}});
+  const first=await evidenceClaim();
+  expect((await fails(resolve(first,'accepted'))).message).toBe('amend_required');
+  expect(await resolve(first,'rejected')).toEqual({op:'evidence_only',applied:false,amended:false});
+  expect(await claimState(first)).toEqual({status:'rejected',op:'evidence_only',value:t,resolved_by:REVIEWER,resolved:true});
+  const second=await evidenceClaim();
+  const amend={op:'close_security',target:{issuer_id:a,ticker:t,valid_from:'2020-01-01'},params:{valid_to:'2026-03-02',valid_to_method:'delisting'}};
+  expect(await resolve(second,'accepted',amend)).toEqual({op:'close_security',applied:true,amended:true});
+  const row=(await q(`select op,value,target_key,detail from public.issuer_identifier_claims where id=$1`,[second]))[0];
+  expect(row.op).toBe('close_security');
+  expect(row.value).toBe(t);
+  expect(row.target_key).toBe(`close_security:${a}|${t}|2020-01-01`);
+  expect(row.detail).toMatchObject({target:amend.target,params:amend.params,original_op:'evidence_only',original_params:params,original_target:{issuer_id:a},amended_by:REVIEWER});
+  expect(typeof row.detail.amended_at).toBe('string');
+  expect(await q(`select valid_to::text,valid_to_method from public.issuer_securities where ticker=$1`,[t])).toEqual([{valid_to:'2026-03-02',valid_to_method:'delisting'}]);
+  // an amend on another op, to a non-ticker op, or one that fails the claim/1 check is invalid_claim
+  const other=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
+  expect((await fails(resolve(other,'accepted',amend))).message).toBe('invalid_claim');
+  const third=await evidenceClaim();
+  expect((await fails(resolve(third,'accepted',{op:'set_identifier',target:{issuer_id:a},params:{}}))).message).toBe('invalid_claim');
+  expect((await fails(resolve(third,'accepted',{...amend,params:{valid_to:'2019-01-01',valid_to_method:'delisting'}}))).message).toBe('invalid_claim');
+  expect(await claimState(third)).toMatchObject({status:'pending',op:'evidence_only'});
+ });
+
+ it('refuses resolved, legacy, malformed, mismatched, inactive and unknown claims, leaving them pending',async()=>{
+  const a=await issuer(),b=await issuer();
+  const done=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
+  await resolve(done,'rejected');
+  expect((await fails(resolve(done,'accepted'))).message).toBe('already_resolved');
+  const legacy=randomUUID();
+  await q(`insert into public.issuer_identifier_claims(id,issuer_id,id_type,value,source,confidence) values($1,$2,'lei',$3,'test',0.5)`,[legacy,a,randomLei()]);
+  expect((await fails(resolve(legacy,'rejected'))).message).toBe('legacy_claim');
+  const mismatch=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:b},target_key:`set_identifier:${a}`});
+  const pairing=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'attach_security',target:{issuer_id:a},params:{share_class:'A',valid_from:'2020-01-01',valid_from_method:'listing_date',source:'x'}});
+  const foreignProv=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a},over:{provenance_written:{cik:{source:'x'}}}});
+  const wrongKey=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a},target_key:`set_identifier:${b}`});
+  const badDate=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a},over:{evidence:{...EVIDENCE,as_of:'2026-02-30'}}});
+  const extraParam=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a},params:{expected_current:'x'}});
+  for(const id of [mismatch,pairing,foreignProv,wrongKey,badDate,extraParam])expect({id,msg:(await fails(resolve(id,'accepted'))).message}).toEqual({id,msg:'invalid_claim'});
+  expect((await fails(resolve(badDate,'maybe'))).message).toBe('invalid_claim');
+  expect((await fails(resolve(badDate,'accepted',null,null))).message).toBe('invalid_claim');
+  expect((await fails(resolve(randomUUID(),'accepted'))).message).toBe('claim_not_found');
+  for(const id of [mismatch,pairing,foreignProv,wrongKey,badDate,extraParam])expect(await claimState(id)).toMatchObject({status:'pending',resolved:false});
+  // a dissolved issuer cannot take writes, but its claims can still be rejected
+  const gone=await issuer();
+  const late=await newClaim({issuer:gone,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:gone}});
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[gone]);
+  expect((await fails(resolve(late,'accepted'))).message).toBe('issuer_not_active');
+  expect(await resolve(late,'rejected')).toEqual({op:'set_identifier',applied:false,amended:false});
+ });
+
+ it('serialises concurrent resolutions on the claim row: the second waits, then sees already_resolved',async()=>{
+  const a=await issuer();
+  const id=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
+  await inTx(admin,async tx=>{
+   expect(await resolve(id,'accepted',null,REVIEWER,tx.c)).toMatchObject({applied:true});
+   const second=fails(resolve(id,'rejected'));
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect((await second).message).toBe('already_resolved');
+  });
+  expect(await claimState(id)).toMatchObject({status:'accepted'});
+ });
+
+ it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
+  const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)'];
+  const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)'];
+  for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
+   const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
+   expect({fn,role,ok}).toEqual({fn,role,ok:role==='service_role'&&FNS.includes(fn)});
+  }
+  expect(await q(`select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.proname='replace_filing_expectations'`)).toEqual([{n:1}]);
+  const a=await issuer();
+  const id=await newClaim({issuer:a,id_type:'lei',value:randomLei(),op:'set_identifier',target:{issuer_id:a}});
+  const c=await admin.connect();
+  try{
+   await c.query('set role authenticated');
+   await expect(c.query(`select public.resolve_identifier_claim($1,'accepted',$2)`,[id,REVIEWER])).rejects.toThrow(/permission denied/);
+   await c.query('reset role');
+   await c.query('set role service_role');
+   expect(await resolve(id,'rejected',null,REVIEWER,c)).toEqual({op:'set_identifier',applied:false,amended:false});
+  }finally{await c.query('reset role').catch(()=>{});c.release();}
+ });
+});
+
+describe.skipIf(!enabled)('plan 3 migration one: issuers_topology_guard',()=>{
+ it('rejects a direct merge, dissolution or re-point on a brand-new connection where the setting was never defined',async()=>{
+  const a=await issuer(),b=await issuer();
+  const fresh=new Pool({connectionString:adminUrl,max:1});
+  try{
+   const c=await fresh.connect();
+   try{
+    expect((await c.query(`select current_setting('entities.allow_topology_write',true) v`)).rows[0].v).toBeNull();
+    expect(await fails(c.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]))).toMatchObject({message:'topology_write_forbidden',code:'23514'});
+    expect((await fails(c.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]))).message).toBe('topology_write_forbidden');
+    expect((await fails(c.query(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,b]))).message).toBe('topology_write_forbidden');
+   }finally{c.release();}
+  }finally{await fresh.end();}
+  expect(await q(`select status,merged_into from public.issuers where issuer_id=$1`,[a])).toEqual([{status:'active',merged_into:null}]);
+ });
+
+ it("still rejects on a connection whose earlier transaction switched the setting on locally ('' after commit)",async()=>{
+  const a=await issuer(),b=await issuer();
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select set_config('entities.allow_topology_write','on',true)`);
+   await c.query('commit');
+   expect((await c.query(`select current_setting('entities.allow_topology_write',true) v`)).rows[0].v).toBe('');
+   expect((await fails(c.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]))).message).toBe('topology_write_forbidden');
+  }finally{c.release();}
+ });
+
+ it('lets a transaction with the setting on change topology, with the plan-1 lifecycle triggers still enforced',async()=>{
+  const a=await issuer(),b=await issuer(),dead=await issuer();
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[dead]);
+  expect((await fails(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,dead]))).message).toMatch(/merge_target_not_active/);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  expect(await q(`select status,merged_into from public.issuers where issuer_id=$1`,[a])).toEqual([{status:'merged',merged_into:b}]);
+ });
+
+ it('leaves non-topology updates, same-value writes and active inserts alone; an insert born merged/dissolved needs the setting (接口对齐记录 #7)',async()=>{
+  const a=await issuer(),b=await issuer();
+  await q(`update public.issuers set canonical_name_en='ZZ Renamed' where issuer_id=$1`,[a]);
+  await q(`update public.issuers set status='active',merged_into=null where issuer_id=$1`,[a]);   // unchanged values: the guard skips them
+  expect(await q(`select canonical_name_en,status from public.issuers where issuer_id=$1`,[a])).toEqual([{canonical_name_en:'ZZ Renamed',status:'active'}]);
+  await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Born Active')`,[randomUUID()]);   // status active, merged_into null: not guarded
+  expect(await fails(q(`insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) values($1,'ZZ Born Merged','merged',$2)`,[randomUUID(),b]))).toMatchObject({message:'topology_write_forbidden',code:'23514'});
+  expect((await fails(q(`insert into public.issuers(issuer_id,canonical_name_en,status) values($1,'ZZ Born Dissolved','dissolved')`,[randomUUID()]))).message).toBe('topology_write_forbidden');
+  const born=randomUUID();
+  await topo(`insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) values($1,'ZZ Born Merged','merged',$2)`,[born,b]);
+  expect(await q(`select status,merged_into from public.issuers where issuer_id=$1`,[born])).toEqual([{status:'merged',merged_into:b}]);
+ });
+});
+
+describe.skipIf(!enabled)('plan 3 migration one: calendar pass functions',()=>{
+ const CAL='CN';
+ type Token={market:string;pass_id:string;batch_id:string};
+ // next_due_at far in the future: no facts sync in another suite ever picks these scope rows up
+ const scopeRow=(iss:string)=>q(`insert into public.fact_sync_scope(issuer_id,market,reasons,priority,fetch_key,next_due_at) values($1,$2,'["test"]',5,'df3cal','2999-01-01') on conflict (issuer_id,market) do update set priority=5`,[iss,CAL]);
+ const claimPass=async(b:string)=>(await q(`select public.claim_calendar_pass($1,$2) v`,[CAL,b]))[0].v as Token|null;
+ const replace=async(tok:unknown,iss:string,rows:unknown,market=CAL)=>(await q(`select public.replace_filing_expectations($1,$2,$3::jsonb,$4::jsonb) v`,[iss,market,JSON.stringify(rows),JSON.stringify(tok)]))[0].v as number;
+ const failMember=(tok:unknown,iss:string,err='boom')=>q(`select public.fail_calendar_member($1::jsonb,$2,$3)`,[JSON.stringify(tok),iss,err]);
+ const finish=async(tok:unknown)=>(await q(`select public.finish_calendar_pass($1::jsonb) v`,[JSON.stringify(tok)]))[0].v as string;
+ const members=(passId:string)=>q(`select issuer_id,state,attempts,last_error from public.dq_calendar_pass_members where market=$1 and pass_id=$2 order by issuer_id`,[CAL,passId]);
+ const member=async(passId:string,iss:string)=>(await members(passId)).find(m=>m.issuer_id===iss);
+ /** In-scope issuers other suites created are members too: settle them with an empty replacement. */
+ const drain=async(tok:Token,except:string[]=[])=>{for(const m of await members(tok.pass_id))if(m.state==='pending'&&!except.includes(m.issuer_id))await replace(tok,m.issuer_id,[]);};
+ const expRow=(over:Record<string,unknown>={})=>({report_kind:'annual',period_end:'2025-12-31',period_end_estimated:false,deadline_state:'statutory',due_date:'2026-04-30',due_rule:'cn.annual.4m',expected_date:null,upstream_lookup:'ok',upstream_filed_date:null,disclosure_state:'pending',received_filing_id:null,received_date:null,profile_as_of:null,detail:{},...over});
+
+ it('creates one pass per market, freezes the in-scope members and leases it to one worker',async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i1=await issuer(),i2=await issuer();await scopeRow(i1);await scopeRow(i2);
+   const b1=await batch(),b2=await batch();
+   const tok=(await claimPass(b1))!;
+   expect(tok).toEqual({market:CAL,pass_id:expect.any(String),batch_id:b1});
+   for(const i of [i1,i2])expect(await member(tok.pass_id,i)).toMatchObject({state:'pending',attempts:0});
+   expect(await claimPass(b2)).toBeNull();                                  // leased to b1
+   expect((await claimPass(b1))!.pass_id).toBe(tok.pass_id);                // the holder renews its own lease
+   expect(await q(`select (claim_until > clock_timestamp() + interval '9 minutes') fresh from public.dq_calendar_passes where market=$1 and pass_id=$2`,[CAL,tok.pass_id])).toEqual([{fresh:true}]);
+   const i3=await issuer();await scopeRow(i3);
+   expect(await member(tok.pass_id,i3)).toBeUndefined();                    // frozen: scope changes wait for the next pass
+   await drain(tok);
+   expect(await finish(tok)).toBe('complete');
+   const next=(await claimPass(b2))!;
+   expect(next.pass_id).not.toBe(tok.pass_id);
+   for(const i of [i1,i2,i3])expect(await member(next.pass_id,i)).toMatchObject({state:'pending'});
+   await drain(next);await finish(next);
+  });
+ },60000);
+
+ it('lets exactly one of two concurrent claimers create and lease the pass (advisory lock)',async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i=await issuer();await scopeRow(i);
+   const b1=await batch(),b2=await batch();
+   const got=await Promise.all([claimPass(b1),claimPass(b2)]);
+   expect(got.filter(Boolean)).toHaveLength(1);
+   expect(await q(`select count(*)::int n from public.dq_calendar_passes where market=$1 and finished_at is null`,[CAL])).toEqual([{n:1}]);
+   const tok=(got[0]??got[1])!;
+   await drain(tok);await finish(tok);
+  });
+ });
+
+ it("replace_filing_expectations swaps an issuer's rows atomically under the fence and marks the member done once",async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i=await issuer(),j=await issuer();await scopeRow(i);await scopeRow(j);
+   const b=await batch();
+   const tok=(await claimPass(b))!;
+   expect(await replace(tok,i,[expRow(),expRow({report_kind:'semiannual',period_end:'2025-06-30',due_date:'2025-08-31',due_rule:'cn.semiannual.2m'})])).toBe(2);
+   expect(await q(`select report_kind,period_end::text,batch_id from public.dq_filing_expectations where issuer_id=$1 and market=$2 order by period_end`,[i,CAL])).toEqual([
+    {report_kind:'semiannual',period_end:'2025-06-30',batch_id:b},{report_kind:'annual',period_end:'2025-12-31',batch_id:b}]);
+   expect(await member(tok.pass_id,i)).toMatchObject({state:'done',attempts:0});
+   expect((await fails(replace(tok,i,[expRow()]))).message).toBe('member_not_claimable');        // done is final within a pass
+   // invalid rows write nothing and keep the member pending
+   expect((await fails(replace(tok,j,[expRow({deadline_state:'no_rule'})]))).message).toBe('invalid_rows');   // dfe_due_iff_known
+   expect((await fails(replace(tok,j,[{...expRow(),issuer_id:i}]))).message).toBe('invalid_rows');            // a row for another issuer
+   expect((await fails(replace(tok,j,[expRow(),expRow()]))).message).toBe('invalid_rows');                    // duplicate key in one call
+   expect((await fails(replace(tok,j,{}))).message).toBe('invalid_rows');                                     // not an array
+   expect(await q(`select count(*)::int n from public.dq_filing_expectations where issuer_id=$1`,[j])).toEqual([{n:0}]);
+   expect(await member(tok.pass_id,j)).toMatchObject({state:'pending'});
+   // not a member; another market in the call; a token naming another batch; a malformed token
+   expect((await fails(replace(tok,await issuer(),[]))).message).toBe('member_not_claimable');
+   expect((await fails(replace(tok,j,[],'US'))).message).toBe('fence_failed');
+   expect((await fails(replace({...tok,batch_id:randomUUID()},j,[expRow()]))).message).toBe('fence_failed');
+   expect((await fails(replace({market:CAL},j,[expRow()]))).message).toBe('fence_failed');
+   await drain(tok);
+   expect(await finish(tok)).toBe('complete');
+   // the next pass replaces the whole set for the issuer
+   const tok2=(await claimPass(b))!;
+   expect(await replace(tok2,i,[expRow({report_kind:'semiannual',period_end:'2026-06-30',due_date:'2026-08-31',due_rule:'cn.semiannual.2m'})])).toBe(1);
+   expect(await q(`select period_end::text from public.dq_filing_expectations where issuer_id=$1`,[i])).toEqual([{period_end:'2026-06-30'}]);
+   await drain(tok2);await finish(tok2);
+  });
+ },60000);
+
+ it('fail_calendar_member retries up to three attempts; finish_calendar_pass settles only from persisted state',async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i=await issuer(),k=await issuer();await scopeRow(i);await scopeRow(k);
+   const b=await batch();const tok=(await claimPass(b))!;
+   await drain(tok,[i,k]);
+   await failMember(tok,i,'sec_unavailable');
+   expect(await member(tok.pass_id,i)).toMatchObject({state:'failed',attempts:1,last_error:'sec_unavailable'});
+   expect((await fails(finish(tok))).message).toBe('pass_incomplete');      // i may still be retried, k is pending
+   expect(await replace(tok,i,[expRow()])).toBe(1);                          // a retry that succeeds is simply done
+   expect(await member(tok.pass_id,i)).toMatchObject({state:'done',attempts:1});
+   for(let n=0;n<3;n++)await failMember(tok,k,`boom ${n}`);
+   expect(await member(tok.pass_id,k)).toMatchObject({state:'failed',attempts:3,last_error:'boom 2'});
+   expect((await fails(failMember(tok,k))).message).toBe('member_not_claimable');        // terminal
+   expect((await fails(replace(tok,k,[expRow()]))).message).toBe('member_not_claimable');
+   expect((await fails(failMember(tok,i))).message).toBe('member_not_claimable');        // done members cannot fail
+   expect(await finish(tok)).toBe('complete_with_failures');
+   expect(await q(`select status,(finished_at is not null) finished from public.dq_calendar_passes where market=$1 and pass_id=$2`,[CAL,tok.pass_id])).toEqual([{status:'complete_with_failures',finished:true}]);
+   expect((await fails(finish(tok))).message).toBe('fence_failed');                       // a finished pass is closed to every function
+   expect((await fails(replace(tok,i,[]))).message).toBe('fence_failed');
+  });
+ },60000);
+
+ it('an expired worker cannot change the progress of the worker that took the pass over',async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i=await issuer();await scopeRow(i);
+   const b1=await batch(),b2=await batch();
+   const old=(await claimPass(b1))!;
+   await q(`update public.dq_calendar_passes set claim_until=clock_timestamp()-interval '1 second' where market=$1 and pass_id=$2`,[CAL,old.pass_id]);
+   expect((await fails(replace(old,i,[expRow()]))).message).toBe('fence_failed');          // expired even before anyone takes over
+   const cur=(await claimPass(b2))!;
+   expect(cur).toEqual({market:CAL,pass_id:old.pass_id,batch_id:b2});                     // takeover keeps the pass and its frozen members
+   expect((await fails(replace(old,i,[expRow()]))).message).toBe('fence_failed');
+   expect((await fails(failMember(old,i))).message).toBe('fence_failed');
+   expect((await fails(finish(old))).message).toBe('fence_failed');
+   expect(await member(cur.pass_id,i)).toMatchObject({state:'pending',attempts:0});
+   expect(await q(`select count(*)::int n from public.dq_filing_expectations where issuer_id=$1`,[i])).toEqual([{n:0}]);
+   expect(await replace(cur,i,[expRow()])).toBe(1);
+   await drain(cur);
+   expect(await finish(cur)).toBe('complete');
+  });
+ },60000);
+});
+
+// Plan audit round 1, P3/P4: the two row-locking jsonb patches. Each concurrent case holds the row in
+// one transaction and proves the second writer waits on it and then keeps the first writer's keys.
+describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (append_claim_evidence, patch_quarantine_detail)',()=>{
+ const ev=(sha:string)=>({source:'test',as_of:'2026-11-05',evidence_sha256:sha});
+ const append=(k:{issuer:string;value:string},e:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.append_claim_evidence($1,'lei',$2,'set_identifier',$3,$4::jsonb) v`,[k.issuer,k.value,`set_identifier:${k.issuer}`,JSON.stringify(e)]).then(r=>r.rows[0].v as string);
+ const sources=async(id:string)=>(await q(`select detail->'sources' s from public.issuer_identifier_claims where id=$1`,[id]))[0].s;
+ it('append_claim_evidence dedupes against the evidence and the sources, patches only detail.sources and leaves resolved claims alone',async()=>{
+  const a=await issuer();const value=randomLei();const k={issuer:a,value};
+  const id=await newClaim({issuer:a,id_type:'lei',value,op:'set_identifier',target:{issuer_id:a}});
+  expect(await append(k,EVIDENCE)).toBe('duplicate');                                   // the claim's own evidence
+  expect(await append(k,ev('b'.repeat(64)))).toBe('appended');
+  expect(await append(k,ev('b'.repeat(64)))).toBe('duplicate');                        // already a source
+  expect(await sources(id)).toEqual([ev('b'.repeat(64))]);
+  expect((await q(`select detail->'evidence' e,detail->'target' t,detail->'params' p from public.issuer_identifier_claims where id=$1`,[id]))[0]).toEqual({e:EVIDENCE,t:{issuer_id:a},p:{}});
+  expect((await fails(append(k,{source:'test',as_of:'2026-11-05',evidence_sha256:'nope'}))).message).toBe('invalid_evidence');
+  await resolve(id,'rejected');
+  expect(await append(k,ev('c'.repeat(64)))).toBe('not_found');
+  expect(await sources(id)).toEqual([ev('b'.repeat(64))]);
+ });
+ it('two concurrent appenders both keep their evidence: the second waits on the claim row lock',async()=>{
+  const a=await issuer();const value=randomLei();const k={issuer:a,value};
+  const id=await newClaim({issuer:a,id_type:'lei',value,op:'set_identifier',target:{issuer_id:a}});
+  await inTx(admin,async tx=>{
+   expect(await append(k,ev('1'.repeat(64)),tx.c)).toBe('appended');
+   const second=append(k,ev('2'.repeat(64)));
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('appended');
+  });
+  expect(await sources(id)).toEqual([ev('1'.repeat(64)),ev('2'.repeat(64))]);
+ });
+ it('patch_quarantine_detail replaces only its key: a hook write interleaved with a newer latest_result and a resolution keeps both',async()=>{
+  const id=randomUUID();const b=await batch('facts.us','dq-resolver');
+  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload,detail) values($1,'facts.us','financial_facts',$2,'reconcile_mismatch',$3,'{}'::jsonb,$4::jsonb)`,
+   [id,`test:${id}`,b,JSON.stringify({pair:'test',latest_result:{passed:false,reconciliation_id:'r1'},hook:{stage:'materialize',state:'pending'}})]);
+  const patch=(key:string,value:unknown,on:Pool|PoolClient=admin)=>on.query(`select public.patch_quarantine_detail($1,$2,$3::jsonb) v`,[id,key,JSON.stringify(value)]).then(r=>r.rows[0].v as boolean);
+  await inTx(admin,async tx=>{
+   // a newer verdict (apply_reconcile_result / restore_reconciled) holds the item row
+   await tx.c.query(`update public.dq_quarantine set detail=detail||'{"latest_result":{"passed":true,"reconciliation_id":"r2"}}'::jsonb,status='resolved_accept',resolved_by=$2,resolved_at=now() where id=$1`,[id,REVIEWER]);
+   const hook=patch('hook',{stage:'done',state:'done',at:'2026-11-05T00:00:00.000Z'});
+   await stillBlockedBehind(admin,tx.pid,hook);
+   await tx.commit();
+   expect(await hook).toBe(true);
+  });
+  expect(await patch('audit_written',true)).toBe(true);
+  expect((await q(`select status,resolved_by,detail from public.dq_quarantine where id=$1`,[id]))[0]).toEqual({status:'resolved_accept',resolved_by:REVIEWER,
+   detail:{pair:'test',latest_result:{passed:true,reconciliation_id:'r2'},hook:{stage:'done',state:'done',at:'2026-11-05T00:00:00.000Z'},audit_written:true}});
+  expect((await fails(patch('latest_result',{passed:false}))).message).toBe('invalid_detail_key');
+  expect(await admin.query(`select public.patch_quarantine_detail($1,'hook','{}'::jsonb) v`,[randomUUID()]).then(r=>r.rows[0].v)).toBe(false);
+ });
+
+ // Plan audit round 3, R2: the guarded identifier write and its provenance key land in one locked UPDATE.
+ const setId=(k:{issuer:string;ticker:string},col:string,value:string,prov:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.set_security_identifier($1,$2,'2020-01-01'::date,$3,$4,$5::jsonb) v`,[k.issuer,k.ticker,col,value,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const secState=async(t:string)=>(await q(`select isin,figi,provenance from public.issuer_securities where ticker=$1`,[t]))[0];
+ const PI={isin:{source:'gleif_openfigi',as_of:'2026-11-05',evidence_sha256:'1'.repeat(64)}};
+ const PF={figi:{source:'openfigi',as_of:'2026-11-05',evidence_sha256:'2'.repeat(64)}};
+ it('set_security_identifier: written / duplicate (completing a missing key) / conflict / not_found; exactly one provenance key; other keys kept',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin=randomIsin(),figi=randomFigi();
+  expect(await setId(k,'isin',isin,PI)).toBe('written');
+  expect(await setId(k,'isin',isin,PI)).toBe('duplicate');
+  expect(await setId(k,'isin',randomIsin(),PI)).toBe('conflict');
+  await q(`update public.issuer_securities set figi=$2 where ticker=$1`,[t,figi]);                    // value present, provenance key missing
+  expect(await setId(k,'figi',figi,PF)).toBe('duplicate');
+  expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,...PF}});
+  expect(await setId({issuer:a,ticker:await ticker()},'isin',randomIsin(),PI)).toBe('not_found');
+  for(const bad of [()=>setId(k,'lei',randomLei(),{lei:{}}),()=>setId(k,'isin',randomIsin(),PF),()=>setId(k,'isin',randomIsin(),{...PI,...PF}),()=>setId(k,'figi','',PF)])
+   expect(await fails(bad())).toMatchObject({message:'invalid_identifier_write',code:'22023'});
+ });
+ it('concurrent ISIN and FIGI writes on one row both keep their value and their provenance key: the second waits on the row lock',async()=>{
+  const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+  await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin=randomIsin(),figi=randomFigi();
+  await inTx(admin,async tx=>{
+   expect(await setId(k,'isin',isin,PI,tx.c)).toBe('written');
+   const second=setId(k,'figi',figi,PF);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('written');
+  });
+  expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,...PF}});
+ });
+ it('an identifier write interleaved with a claim resolution on the same row keeps both values and both evidence keys, in either order',async()=>{
+  for(const claimFirst of [true,false]){
+   const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};
+   await sec(a,t,'2020-01-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+   const isin=randomIsin(),figi=randomFigi();
+   const id=await newClaim({issuer:a,id_type:'figi',value:figi,op:'set_identifier',target:{issuer_id:a,ticker:t,valid_from:'2020-01-01'}});   // provenance = {figi: EVIDENCE}
+   await inTx(admin,async tx=>{
+    if(claimFirst)expect(await resolve(id,'accepted',null,REVIEWER,tx.c)).toMatchObject({applied:true});
+    else expect(await setId(k,'isin',isin,PI,tx.c)).toBe('written');
+    const second=claimFirst?setId(k,'isin',isin,PI):resolve(id,'accepted');
+    await stillBlockedBehind(admin,tx.pid,second);
+    await tx.commit();
+    expect(await second).toEqual(claimFirst?'written':{op:'set_identifier',applied:true,amended:false});
+   });
+   expect(await secState(t)).toEqual({isin,figi,provenance:{exchange:'Nasdaq',...PI,figi:EVIDENCE}});
+  }
  });
 });
