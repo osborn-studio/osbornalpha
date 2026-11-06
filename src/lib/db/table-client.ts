@@ -35,7 +35,7 @@ export interface TableClient{
  count(table:string,match:Row,opts?:RangeOptions):Promise<number>;
  /**
   * Calls a service-role SQL function and returns its result (plan 3: the row-locking jsonb patches
-  * append_claim_evidence / patch_quarantine_detail of migration 20261107090000). Optional so the landed
+  * append_claim_evidence / patch_quarantine_detail / set_security_identifier of migration 20261107090000). Optional so the landed
   * test stubs stay valid; callers go through callRpc, which fails loudly when it is missing.
   */
  rpc?(fn:string,args:Row):Promise<unknown>;

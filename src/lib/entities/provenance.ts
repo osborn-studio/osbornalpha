@@ -4,6 +4,8 @@
 // whitelisted top-level keys; nested values may carry source names, ids, dates, hashes and the source
 // row values an evidence method copied, never a secret-looking key, URL credentials or a token-like
 // query parameter, or a UUID (user ids are UUIDs; no public provenance value needs one).
+// NOTE: the issuer write path (upsertIssuerByIdentifiers) is NOT yet routed through sanitizeProvenance
+// (ISSUER_PROVENANCE_KEYS is ready for it); that wiring is a runbook 9.x follow-up.
 export const PROVENANCE_KEYS=['isin','figi','valid_from','valid_to','pending_change'] as const;
 export const ISSUER_PROVENANCE_KEYS=['lei','cik','usci','cninfo_org_id','hkex_stock_code_primary','canonical_name_zh','canonical_name_en','country_code'] as const;
 export type ProvenanceErrorCode='not_object'|'unknown_key'|'secret_key'|'url_credentials'|'secret_text'|'uuid_value'|'bad_value'|'too_deep'|'too_long'|'too_large';
@@ -18,6 +20,8 @@ export class ProvenanceError extends Error{
 // These rules include every rule of the SQL guard claim_provenance_safe (migration 20261107090000), which
 // is authoritative: TS must reject everything SQL rejects. TS may be stricter (URL userinfo, auth/session/
 // email keys, 8 KB total): a claim then fails at filing instead of at acceptance.
+// Deliberately strict: bare `auth` and `private` also reject innocent keys such as `author` or `private_company`;
+// a false rejection fails loudly at filing, a missed secret would be public.
 const SECRET_KEY=/(secret|token|passw|api[_-]?key|apikey|auth|authorization|user_?id|cookie|session|credential|private|email)/i;
 const UUID=/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const URL_QUERY=/[a-z][a-z0-9+.-]*:\/\/[^\s]*[?#]|\?[^\s]*=/i;

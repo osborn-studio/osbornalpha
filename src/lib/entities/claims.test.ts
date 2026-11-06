@@ -185,6 +185,12 @@ describe('fileClaim',()=>{
   c.rpc=async()=>'not_found';
   await expect(fileClaim(c,input({detail:d({evidence:{...EV,evidence_sha256:'6'.repeat(64)}})}))).rejects.toThrow('claim_not_persisted');
  });
+ it('stores detail.sources deduped by (source, evidence_sha256), without the primary evidence',async()=>{
+  const B={...EV,evidence_sha256:'1'.repeat(64)};
+  const c=client();
+  expect(await fileClaim(c,input({detail:d({sources:[EV,B,{...B,as_of:'2026-11-06'},B]})}))).toBe(true);
+  expect((c.rows('issuer_identifier_claims')[0].detail as ClaimDetail).sources).toEqual([B]);
+ });
  it('validates before touching the database',async()=>{
   const c=client();
   await expect(fileClaim(c,input({detail:d({target:{issuer_id:'22222222-2222-4222-8222-222222222222'}})}))).rejects.toThrow('invalid_claim:target.issuer_id');

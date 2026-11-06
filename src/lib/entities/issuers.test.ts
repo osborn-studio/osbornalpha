@@ -365,6 +365,7 @@ describe('attachSecurity',()=>{
   c.insert=async(t,row)=>{if(t==='issuer_securities')throw dupErr(t,'23505','duplicate key value violates unique constraint "issuer_securities_isin_idx"');return base(t,row);};
   expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
   expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'attach_security',id_type:'ticker',value:'AAPL',target_key:'attach_security:a'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({params:{isin:'US0378331005',note:'isin_held_by_other_ticker'}});
  });
  it('does the same when the ISIN exclusion (23P01) names issuer_securities_isin_no_overlap',async()=>{
   const c=client();
@@ -372,6 +373,7 @@ describe('attachSecurity',()=>{
   c.insert=async(t,row)=>{if(t==='issuer_securities')throw new TableError('insert','issuer_securities','conflicting key value violates exclusion constraint "issuer_securities_isin_no_overlap"','23P01');return base(t,row);};
   expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
   expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'attach_security',id_type:'ticker',value:'AAPL',target_key:'attach_security:a'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({params:{isin:'US0378331005',note:'isin_held_by_other_ticker'}});
   expect(c.rows('issuer_securities')).toEqual([]);
  });
  it('compares the ISIN against same-issuer overlapping rows with a different valid_from',async()=>{

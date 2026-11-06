@@ -53,11 +53,11 @@ export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput)
     params:current===null?{}:{expected_current:current,new_value:sec.isin},evidence:raw.claimEvidence.evidence})});
  };
  /** Another holder blocks the window: an open incoming window with an ISIN becomes attach_security. */
- const claimAttach=async()=>{
+ const claimAttach=async(note?:string)=>{
   if(!sec.isin||!raw.claimEvidence||sec.valid_to!==null)return;
   await fileClaim(client,{issuer_id:sec.issuer_id,id_type:'ticker',value:sec.ticker,source:sec.source,op:'attach_security',
    detail:buildClaimDetail({evidence_kind:raw.claimEvidence.kind,target:{issuer_id:sec.issuer_id},
-    params:{share_class:sec.share_class,valid_from:sec.valid_from,valid_from_method:methods.valid_from_method,source:sec.source,isin:sec.isin},evidence:raw.claimEvidence.evidence})});
+    params:{share_class:sec.share_class,valid_from:sec.valid_from,valid_from_method:methods.valid_from_method,source:sec.source,isin:sec.isin,...(note?{note}:{})},evidence:raw.claimEvidence.evidence})});
  };
  /** null when nothing on this ticker overlaps the incoming window (safe to insert). */
  const classify=async():Promise<AttachResult|null>=>{
@@ -101,7 +101,7 @@ export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput)
   // The ISIN index (isin, valid_from) and the ISIN no-overlap exclusion span tickers: another
   // ticker already carries this ISIN over an overlapping window. A ticker-only re-read cannot see it.
   if(e instanceof Error&&(e.message.includes('issuer_securities_isin_idx')||(code==='23P01'&&e.message.includes('issuer_securities_isin_no_overlap')))){
-   await claimAttach();
+   await claimAttach('isin_held_by_other_ticker');
    return 'conflict';
   }
   // A concurrent writer took the window (PK, open-owner index or no-overlap exclusion): re-read once.

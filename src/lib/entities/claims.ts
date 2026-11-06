@@ -160,6 +160,12 @@ async function appendEvidence(client:TableClient,key:Row,detail:ClaimDetail):Pro
  return 'ok';
 }
 
+/** detail.sources without repeats by (source, evidence_sha256), and without the primary evidence itself. */
+function dedupeSources(detail:ClaimDetail):ClaimEvidence[]{
+ const seen=new Set([`${detail.evidence.source}\u0000${detail.evidence.evidence_sha256}`]);
+ return (detail.sources??[]).filter(e=>{const k=`${e.source}\u0000${e.evidence_sha256}`;if(seen.has(k))return false;seen.add(k);return true;});
+}
+
 /**
  * Files a pending claim/1 claim. Validates first (throws invalid_claim:<field> / legacy_claim, no DB
  * access). The same pending (issuer_id, id_type, value, op, target_key) → every incoming evidence item
@@ -186,7 +192,7 @@ export async function fileClaim(client:TableClient,c:ClaimInput):Promise<boolean
   try{
    await client.insert('issuer_identifier_claims',{
     id:randomUUID(),issuer_id:c.issuer_id,id_type:c.id_type,value:c.value,source:c.source,confidence:null,status:'pending',
-    op:c.op,target_key,detail:{...c.detail,sources:c.detail.sources??[]},resolved_by:null,resolved_at:null,created_at:new Date().toISOString(),
+    op:c.op,target_key,detail:{...c.detail,sources:dedupeSources(c.detail)},resolved_by:null,resolved_at:null,created_at:new Date().toISOString(),
    });
    return true;
   }catch(e){
