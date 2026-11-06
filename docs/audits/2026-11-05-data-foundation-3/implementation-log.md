@@ -13,3 +13,4 @@
 | 4a 标识符写入规划与应用 | 3f28c93, 65484a9, 867e46a | ✅（偏差：共映射 attach 声明加证据注记） | Approved（minor 7 项已修） | review/challenge P1 跨 ISIN FIGI 歧义仍自动写、P2 既有 FIGI 吞掉候选、HKEX 更正基于错误现值、OpenFIGI 证据去重丢失 → 修复后 review 无问题 | 2 |
 | 4b fill-identifiers 驱动、E1 覆盖、fill-cninfo-org-id 改写 | 2b9f900, 7c85a51, 1784cf7 | ✅（偏差：HKEX 按文件 MIME、makeBudget(null)、RawKind cninfo） | Approved（minor 5 项已修，内存 rpc 不复刻安全检查——注释说明） | challenge P1 cninfo provenance 覆盖丢失 → 新增 SQL `set_issuer_identifier`（迁移一原地改，更新锁）；P2 未命中响应未入桶、mtime 冒充下载日 → 修复；review 无问题 | 2 |
 | 5a 持有区间回填、E2 | 1f679ac, 3181d65, 4e9d1db | ✅（commander 批准偏差：新增 SQL `set_security_window` 于迁移一原地，更新锁；规划只传单键 provenance） | Changes requested → 修复（声明 attach/backdate 加同一 ticker 咨询锁、隔离后仍尝试关闭、内存 rpc not_found） | challenge/review P2 冲突挂旧键、双冲突丢证据、短页截断、缺 .BJ、最早行竞态、新鲜度误判、tie 页静默截断 → 两轮修复后 review 无问题 | 3 |
+| 5b resolveIssuer asOf + resolve 路由 | f044fea, e6bcbe6 | ✅ | Approved（minor 3 项已修；public-route 改用 asOf） | review 与 challenge 均无问题 | 1 |
