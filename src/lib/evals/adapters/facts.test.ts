@@ -39,6 +39,7 @@ describe('factsReader.resolveSubject',()=>{
   expect(await r.resolveSubject({market:'US',cik:'9990699'},TODAY)).toBeNull();
   expect(await r.resolveSubject({market:'US',cik:'not-a-cik'},TODAY)).toBeNull();
   expect(await r.resolveSubject({market:'US'},TODAY)).toBeNull();
+  expect(await r.resolveSubject({market:'CN',cik:'9990611'},TODAY)).toBeNull();
  });
 });
 

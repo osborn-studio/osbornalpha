@@ -20,7 +20,9 @@ import type {CaseTarget,DocumentId,FactTarget,Hint,MetricTarget,ModuleReader,Pri
 import {provenanceResolver} from './provenance';
 import type {RawObjectStorage,SnapshotParsers} from './provenance';
 
-export type FactsReadDb=Pick<FactsDb,'readFacts'|'filingsOfIssuer'|'factsByIds'|'metricsOfIssuer'>;
+export type FactsReadDb=Pick<FactsDb,'readFacts'|'filingsOfIssuer'|'factsByIds'|'metricsOfIssuer'|'scopeRows'>;
+/** readNonVisible cannot answer (contract return type has no error arm): the kind maps this to read_error(reason). */
+export class NonVisibleReadError extends Error{constructor(public readonly reason:ReadErrorReason){super(reason);this.name='NonVisibleReadError';}}
 export interface FactsReaderDeps{
  db:FactsReadDb;
  /** resolveIssuer's client; for the privileged reader also financial_facts, filings, fact_sync_runs, ingest_batches, dq_quarantine. */
@@ -33,6 +35,7 @@ export interface FactsReaderDeps{
 export interface PrivilegedFactsReaderDeps extends FactsReaderDeps{storage:RawObjectStorage;parsers:SnapshotParsers}
 
 const RESOLVE_REFUSALS=/^(empty_query|ambiguous_query|ambiguous_owner|invalid_identifier:)/;
+/** Must mirror tushare-statements.ts FORM_BY_MONTH (end-date month → form_type) for the periodic report types. */
 const CN_PERIODIC:Record<string,string>={'03':'q1','06':'semiannual','09':'q3','12':'annual'};
 const errorResult=(error:ReadErrorReason,stateRev:number|null=null):ReadResult=>({rows:[],truncated:error==='truncated',stateRev,error});
 
@@ -45,6 +48,8 @@ export function selectFiling(filings:FilingRow[],target:CaseTarget,documentId:Do
  if(documentId.kind!=='cninfo_announcement')return {error:'filing_not_found'};
  const all=filings.filter(f=>f.source==='tushare'&&f.document_ref===documentId.value);
  if(all.length===1)return {filing:all[0]};
+ // Deviation (recorded by the commander): several filings linked to this announcement and none (or more than one) matches
+ // the target period / periodic form stays filing_ambiguous rather than filing_not_found, because the announcement does exist.
  if(all.length>1){
   const byPeriod=all.filter(f=>f.period_end===target.period_end);
   const left=byPeriod.length>1?byPeriod.filter(f=>f.form_type===CN_PERIODIC[target.period_end.slice(5,7)]):byPeriod;
@@ -110,7 +115,10 @@ export function factsReader(deps:FactsReaderDeps):ModuleReader{
    if(q===null)return null;
    try{
     const r=await resolveIssuer(deps.tables,q,{today});
-    return r?{issuerId:r.issuer_id,market:subject.market}:null;
+    if(!r)return null;
+    // issuers carry no market: the issuer must be in the facts scope of subject.market or already have filings there
+    const inMarket=(await db.scopeRows(subject.market,[r.issuer_id])).length>0||(await db.filingsOfIssuer(r.issuer_id,subject.market,{})).length>0;
+    return inMarket?{issuerId:r.issuer_id,market:subject.market}:null;
    }catch(e){
     if(e instanceof Error&&RESOLVE_REFUSALS.test(e.message))return null;
     throw e;
@@ -140,12 +148,12 @@ async function readNonVisible(deps:FactsReaderDeps,ref:SubjectRef,target:CaseTar
  if(documentId!==null){const p=selectFiling(filings,target,documentId);if('error' in p)return null;filing=p.filing;}
  const inScope=(f:Pick<FactRow,'filing_id'>)=>filing===null||f.filing_id===filing.filing_id;
  const r=await deps.db.readFacts(ref.issuerId,ref.market,{concepts:[target.concept],asOf,from:target.period_end,to:target.period_end,history:true,includeNonOk:true});
- if(r.truncated)return null;
+ if(r.truncated)throw new NonVisibleReadError('truncated');
  if(r.rows.some(f=>f.status==='quarantined'&&inScope(f)&&factKeyMatches(f,target)))return 'quarantined';
  const active=new Map(filings.map(f=>[f.filing_id,f.mapping_gen]));
  const match=filing===null?{issuer_id:ref.issuerId,market:ref.market,concept:target.concept,period_end:target.period_end}:{filing_id:filing.filing_id,concept:target.concept,period_end:target.period_end};
  const stored=(await selectPaged(deps.tables,'financial_facts',match,'fact_id')).map(factRowFromTable);
- const superseded=stored.some(f=>inScope(f)&&factKeyMatches(f,target)&&f.available_date<=asOf&&active.has(f.filing_id)&&f.mapping_gen!==active.get(f.filing_id));
+ const superseded=stored.some(f=>inScope(f)&&factKeyMatches(f,target)&&f.status==='ok'&&f.available_date<=asOf&&active.has(f.filing_id)&&f.mapping_gen<active.get(f.filing_id)!);
  return superseded?'superseded_generation':null;
 }
 

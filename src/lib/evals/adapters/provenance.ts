@@ -8,12 +8,16 @@
 // locator} are recorded. producer_code_version = fact_sync_runs.run_id → batch_id → ingest_batches.code_version.
 // factsByIds visibility depends on the caller's role (a privileged run sees non-ok rows), so eligibility is checked
 // explicitly (R5-6): status ok, same issuer and market, mapping_gen = the filing's active generation. A metric row is
-// resolved through every input fact. Parsed objects are memoised per path (content-addressed, immutable) and producer
-// versions per run_id; listings, filings and fact rows are read fresh on every call. Any failed step → ok:false + reason.
+// resolved through every input fact. The candidate is selected by (rawHash, concept): a Tushare statement row feeds many
+// concepts with the same row locator and therefore the same rawHash (a summed concept included), so the rawHash alone is
+// ambiguous. After locating, rawHashOf(sha256 of the object, locator) must reproduce the stored raw_hash (the parser's
+// rawHash is not trusted by itself). Parsed objects are memoised per path (content-addressed, immutable) as a small
+// rawHash → candidates index, not as full ParseResults; a rejected load is evicted so the next call retries. Producer
+// versions are memoised per run_id; listings, filings and fact rows are read fresh on every call. Any failed step → ok:false + reason.
 import type {SupabaseClient} from '@supabase/supabase-js';
 import type {TableClient} from '../../db/table-client';
 import {decimalEquals} from '../../facts/json-numbers';
-import {sha256Hex} from '../../facts/providers/shared';
+import {rawHashOf,sha256Hex} from '../../facts/providers/shared';
 import {SNAPSHOT_BUCKET,metaPath} from '../../facts/snapshot-store';
 import type {FactCandidate,FactRow,FactsDb,FilingRow,ParseResult,RawSnapshot,Source} from '../../facts/types';
 import type {ProvenanceCheck,ReadRow,SubjectRef} from '../types';
@@ -63,20 +67,22 @@ export async function producerCodeVersion(tables:TableClient,runId:string):Promi
  return typeof v==='string'&&v.trim()!==''?v:null;
 }
 
-type Parsed=ParseResult|'hash_mismatch'|'unreadable';
+/** rawHash → candidates of one stored object (several concepts share a rawHash for Tushare rows). */
+type Parsed={sha:string;byHash:Map<string,FactCandidate[]>}|'hash_mismatch'|'unreadable';
+const indexOf=(sha:string,r:ParseResult):Parsed=>{const byHash=new Map<string,FactCandidate[]>();for(const c of r.candidates){const l=byHash.get(c.rawHash);if(l)l.push(c);else byHash.set(c.rawHash,[c]);}return {sha,byHash};};
 async function loadAndParse(deps:ProvenanceDeps,source:Source,path:string):Promise<Parsed>{
  const bytes=await deps.storage.get(path);
  if(bytes===null)return 'unreadable';
  const sha=sha256Hex(bytes);
  if(`${sha}.json`!==baseName(path))return 'hash_mismatch';
  try{
-  if(source==='edgar')return deps.parsers.edgar({bytes,sha256:sha,meta:{source:'edgar',fetched_at:'',http_status:200}},{sinceYear:PARSE_SINCE_YEAR});
+  if(source==='edgar')return indexOf(sha,deps.parsers.edgar({bytes,sha256:sha,meta:{source:'edgar',fetched_at:'',http_status:200}},{sinceYear:PARSE_SINCE_YEAR}));
   const metaBytes=await deps.storage.get(metaPath(path));
   if(metaBytes===null)return 'unreadable';
   const meta={...(JSON.parse(new TextDecoder().decode(metaBytes)) as Record<string,unknown>)};
   delete meta.sha256;delete meta.bytes;
   const snapshot:RawSnapshot={bytes,sha256:sha,meta:{...(meta as Partial<RawSnapshot['meta']>),source:'tushare',fetched_at:String(meta.fetched_at??''),http_status:Number(meta.http_status??200)}};
-  return deps.parsers.tushare([snapshot],{sinceYear:PARSE_SINCE_YEAR});
+  return indexOf(sha,deps.parsers.tushare([snapshot],{sinceYear:PARSE_SINCE_YEAR}));
  }catch{return 'unreadable';}
 }
 
@@ -92,14 +98,14 @@ function candidateMismatch(c:FactCandidate,f:FactRow,g:FilingRow):string|null{
 
 interface Resolved{ok:boolean;reason:string|null;source_ref:string|null;raw_hash:string|null;producer_code_version:string|null;object_path:string|null;locator:string|null}
 const failed=(reason:string,over:Partial<Resolved>={}):Resolved=>({ok:false,reason,source_ref:null,raw_hash:null,producer_code_version:null,object_path:null,locator:null,...over});
-interface Expect{source_ref?:string;value_text?:string;raw_hash?:string;run_id?:string;concept?:string}
+interface Expect{source_ref?:string;value_text?:string;raw_hash?:string;run_id?:string;concept?:string;filing_id?:string;mapping_gen?:number;unit?:string;period_start?:string|null;period_end?:string}
 
 export function provenanceResolver(deps:ProvenanceDeps):ProvenanceResolver{
  const parsed=new Map<string,Promise<Parsed>>();
  const producers=new Map<string,Promise<string|null>>();
  const parseObject=(source:Source,path:string):Promise<Parsed>=>{
   let p=parsed.get(path);
-  if(!p){p=loadAndParse(deps,source,path);parsed.set(path,p);}
+  if(!p){const q=loadAndParse(deps,source,path);parsed.set(path,q);q.catch(()=>{if(parsed.get(path)===q)parsed.delete(path);});p=q;}
   return p;
  };
  const producerOf=(runId:string):Promise<string|null>=>{
@@ -107,15 +113,15 @@ export function provenanceResolver(deps:ProvenanceDeps):ProvenanceResolver{
   if(!p){const q=producerCodeVersion(deps.tables,runId);producers.set(runId,q);q.catch(()=>{if(producers.get(runId)===q)producers.delete(runId);});p=q;}
   return p;
  };
- const locate=async(source:Source,issuerId:string,rawHash:string):Promise<{path:string;candidate:FactCandidate}|{reason:string}>=>{
+ const locate=async(source:Source,issuerId:string,rawHash:string,concept:string):Promise<{path:string;sha:string;candidate:FactCandidate}|{reason:string}>=>{
   const paths=(await deps.storage.list(`${source}/${issuerId}/`)).filter(p=>OBJECT_NAME.test(baseName(p))).sort();
   let mismatched=0,unreadable=0;
   for(const path of paths){
    const r=await parseObject(source,path);
    if(r==='hash_mismatch'){mismatched++;continue;}
    if(r==='unreadable'){unreadable++;continue;}
-   const candidate=r.candidates.find(c=>c.rawHash===rawHash);
-   if(candidate)return {path,candidate};
+   const candidate=r.byHash.get(rawHash)?.find(c=>c.concept===concept);
+   if(candidate)return {path,sha:r.sha,candidate};
   }
   return {reason:mismatched>0?'object_hash_mismatch':unreadable>0?'object_unreadable':paths.length===0?'no_raw_objects':'candidate_not_found'};
  };
@@ -127,7 +133,7 @@ export function provenanceResolver(deps:ProvenanceDeps):ProvenanceResolver{
   if(stored.status!=='ok'||stored.issuer_id!==ref.issuerId||stored.market!==ref.market)return failed(notEligible,{raw_hash:stored.raw_hash});
   if(expect.concept!==undefined&&stored.concept!==expect.concept)return failed(notEligible,{raw_hash:stored.raw_hash});
   if(expect.value_text!==undefined&&!decimalEquals(expect.value_text,stored.value_text))return failed('row_mismatch:value',{raw_hash:stored.raw_hash});
-  for(const k of ['raw_hash','run_id'] as const)if(expect[k]!==undefined&&expect[k]!==stored[k])return failed(`row_mismatch:${k}`,{raw_hash:stored.raw_hash});
+  for(const k of ['raw_hash','run_id','filing_id','mapping_gen','unit','period_start','period_end'] as const)if(expect[k]!==undefined&&expect[k]!==stored[k])return failed(`row_mismatch:${k}`,{raw_hash:stored.raw_hash});
   const filing=(await deps.db.filingsOfIssuer(ref.issuerId,ref.market,{})).find(f=>f.filing_id===stored.filing_id);
   if(!filing)return failed('filing_missing',{raw_hash:stored.raw_hash});
   if(stored.mapping_gen!==filing.mapping_gen)return failed(input?'input_not_eligible':'not_active_generation',{raw_hash:stored.raw_hash,source_ref:filing.source_ref});
@@ -136,12 +142,13 @@ export function provenanceResolver(deps:ProvenanceDeps):ProvenanceResolver{
   const known={source_ref:filing.source_ref,raw_hash:stored.raw_hash,producer_code_version:producer};
   if(producer===null)return failed('producer_code_version_missing',known);
   if(!artifacts)return {ok:true,reason:null,...known,object_path:null,locator:null};
-  const hit=await locate(filing.source,ref.issuerId,stored.raw_hash);
+  const hit=await locate(filing.source,ref.issuerId,stored.raw_hash,stored.concept);
   if('reason' in hit)return failed(hit.reason,known);
   const mismatch=candidateMismatch(hit.candidate,stored,filing);
   if(mismatch!==null)return failed(`candidate_mismatch:${mismatch}`,{...known,object_path:hit.path});
   const locator=(hit.candidate as FactCandidate&{locator?:unknown}).locator;
   if(typeof locator!=='string'||locator==='')return failed('locator_missing',{...known,object_path:hit.path});
+  if(rawHashOf(hit.sha,locator)!==stored.raw_hash)return failed('locator_hash_mismatch',{...known,object_path:hit.path});
   return {ok:true,reason:null,...known,object_path:hit.path,locator};
  };
  return async(ref,row,opts)=>{
@@ -149,13 +156,13 @@ export function provenanceResolver(deps:ProvenanceDeps):ProvenanceResolver{
   if(missing.length>0)return {ok:false,missing,reason:'fields_missing'};
   if(row.metric){
    const inputs:InputProvenance[]=[];
-   for(const i of row.metric.inputs)inputs.push({fact_id:i.fact_id,concept:i.concept,...await resolveFact(ref,i.fact_id,{concept:i.concept},opts.artifacts,true)});
+   for(const i of row.metric.inputs)inputs.push({fact_id:i.fact_id,concept:i.concept,...await resolveFact(ref,i.fact_id,{concept:i.concept,filing_id:i.filing_id},opts.artifacts,true)});
    const bad=inputs.find(x=>!x.ok);
    const versions=[...new Set(inputs.map(x=>x.producer_code_version).filter((v):v is string=>v!==null))].sort();
    const reason=bad?(bad.reason==='input_missing'||bad.reason==='input_not_eligible'?bad.reason:`input:${bad.reason}`):null;
    return {ok:!bad,missing:[],...(reason?{reason}:{}),...(versions.length>0?{producer_code_version:versions.join(',')}:{}),input_chains:inputs};
   }
-  const r=await resolveFact(ref,row.fact_id!,{source_ref:row.source_ref,value_text:row.value_text,raw_hash:row.raw_hash,run_id:row.run_id},opts.artifacts,false);
+  const r=await resolveFact(ref,row.fact_id!,{source_ref:row.source_ref,value_text:row.value_text,raw_hash:row.raw_hash,run_id:row.run_id,filing_id:row.filing_id,mapping_gen:row.mapping_gen,unit:row.unit,period_start:row.period_start,period_end:row.period_end},opts.artifacts,false);
   return {ok:r.ok,missing:[],...(r.reason?{reason:r.reason}:{}),...(r.producer_code_version?{producer_code_version:r.producer_code_version}:{}),...(r.object_path?{object_path:r.object_path}:{}),...(r.locator?{locator:r.locator}:{})};
  };
 }

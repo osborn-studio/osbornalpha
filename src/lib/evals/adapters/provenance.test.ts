@@ -2,12 +2,16 @@
 import {describe,expect,it} from 'vitest';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {parseCompanyFacts} from '../../facts/providers/edgar-companyfacts';
-import {sha256Hex} from '../../facts/providers/shared';
+import {rawHashOf,sha256Hex,snapshotOf} from '../../facts/providers/shared';
+import {metaPath} from '../../facts/snapshot-store';
+import {memoryTableClient} from '../../db/memory-table-client';
+import type {FactCandidate,FactRow,FilingRow} from '../../facts/types';
 import {parseTushareStatements} from '../../facts/providers/tushare-statements';
 import type {FactTarget,MetricTarget,ReadRow} from '../types';
 import {FORMULA_VERSION} from '../../facts/derive';
-import {privilegedFactsReader} from './facts';
-import {memoryRawStorage,missingFields,supabaseRawStorage} from './provenance';
+import {NonVisibleReadError,privilegedFactsReader,readRowOfFact} from './facts';
+import type {FactsReadDb} from './facts';
+import {memoryRawStorage,missingFields,provenanceResolver,supabaseRawStorage} from './provenance';
 import type {FactProvenance,SnapshotParsers} from './provenance';
 import {CODE_VERSION,UNIT_ISSUER,companyFactsDoc,memoryWorld} from './memory-world';
 import type {CfEntry,MemoryWorld} from './memory-world';
@@ -183,5 +187,132 @@ describe('raw object storage',()=>{
   expect(await s.get('edgar/x/a.json')).toEqual(new Uint8Array([7,8]));
   expect(await s.get('edgar/x/missing.json')).toBeNull();
   await expect(s.get('edgar/x/boom.json')).rejects.toThrow('storage_download_failed:internal');
+ });
+});
+
+const GP_CONFLICT:CfEntry={tag:'GrossProfit',...FY,val:'401',accn:A3,form:'10-K/A',filed:'2024-02-15'};
+
+describe('resolveProvenance — eligibility (spec §0 R5-6)',()=>{
+ it('a quarantined top-level fact is fact_not_eligible',async()=>{
+  const w=await world();
+  const row=(await priv(w).readDocumentBound(REF,netIncome,accn(A1),TODAY)).rows[0];
+  await w.sync(doc([...BASE,CONFLICT]));
+  expect(await priv(w).resolveProvenance(REF,row,{artifacts:true})).toMatchObject({ok:false,reason:'fact_not_eligible'});
+ });
+ it('a metric with a quarantined input is input_not_eligible',async()=>{
+  const w=await world();
+  const [row]=(await priv(w).readCurrent(REF,margin,TODAY)).rows;
+  await w.sync(doc([...BASE,GP_CONFLICT]));
+  expect(await priv(w).resolveProvenance(REF,row,{artifacts:true})).toMatchObject({ok:false,reason:'input_not_eligible'});
+ });
+ it('a top-level row left behind by a gen-2 sync is not_active_generation',async()=>{
+  const w=await world();const row=await revenueRow(w);
+  expect((await w.sync(doc(BASE),{mappingGen:2})).detail.published).toBe(1);
+  expect(await priv(w).resolveProvenance(REF,row,{artifacts:true})).toMatchObject({ok:false,reason:'not_active_generation'});
+ });
+ it('a market other than the stored fact’s is fact_not_eligible',async()=>{
+  const w=await world();const row=await revenueRow(w);
+  expect(await priv(w).resolveProvenance({...REF,market:'CN'},row,{artifacts:true})).toMatchObject({ok:false,reason:'fact_not_eligible'});
+ });
+});
+
+describe('resolveProvenance — the row must equal the stored fact (spec §0 R5-5)',()=>{
+ it.each([['filing_id','00000000-0000-4000-8000-0000000000f1'],['mapping_gen',7],['unit','EUR'],['period_start','2023-01-02'],['period_end','2023-12-30']] as const)('%s disagreement is a row_mismatch',async(field,bad)=>{
+  const w=await world();const row=await revenueRow(w);
+  expect(await priv(w).resolveProvenance(REF,{...row,[field]:bad},{artifacts:false})).toMatchObject({ok:false,reason:`row_mismatch:${field}`});
+ });
+ it('a metric input whose filing_id disagrees is input:row_mismatch:filing_id',async()=>{
+  const w=await world();
+  const [row]=(await priv(w).readCurrent(REF,margin,TODAY)).rows;
+  const bad={...row,metric:{...row.metric!,inputs:row.metric!.inputs.map(i=>({...i,filing_id:'00000000-0000-4000-8000-0000000000f1'}))}};
+  expect(await priv(w).resolveProvenance(REF,bad,{artifacts:false})).toMatchObject({ok:false,reason:'input:row_mismatch:filing_id'});
+ });
+});
+
+describe('resolveProvenance — the located candidate must agree (spec §0 R5-5)',()=>{
+ type Cand=FactCandidate&{locator?:string};
+ const stubbed=async(mutate:(c:Cand)=>Cand)=>{
+  const w=await world();const row=await revenueRow(w);
+  const parsers:SnapshotParsers={...PARSERS,edgar:(s,o)=>{const r=PARSERS.edgar(s,o);return {...r,candidates:r.candidates.map(c=>c.rawHash===row.raw_hash?mutate(c as Cand):c)};}};
+  const r=privilegedFactsReader({db:w.db,tables:w.overlay,stateRev:async()=>null,storage:memoryRawStorage(w.storage.objects),parsers});
+  return r.resolveProvenance(REF,row,{artifacts:true});
+ };
+ it('same rawHash but another value, unit or filing → candidate_mismatch:value|unit|source_ref',async()=>{
+  expect(await stubbed(c=>({...c,value:'999'}))).toMatchObject({ok:false,reason:'candidate_mismatch:value'});
+  expect(await stubbed(c=>({...c,unit:'EUR'}))).toMatchObject({ok:false,reason:'candidate_mismatch:unit'});
+  expect(await stubbed(c=>({...c,filingRef:A2}))).toMatchObject({ok:false,reason:'candidate_mismatch:source_ref'});
+ });
+ it('a candidate without a locator is locator_missing',async()=>{
+  expect(await stubbed(c=>{const {locator:_l,...rest}=c;return rest as Cand;})).toMatchObject({ok:false,reason:'locator_missing'});
+ });
+ it('a locator that does not rehash to the stored raw_hash is locator_hash_mismatch (the parser’s rawHash alone is not trusted)',async()=>{
+  expect(await stubbed(c=>({...c,locator:`${c.locator}x`}))).toMatchObject({ok:false,reason:'locator_hash_mismatch'});
+ });
+ it('a failed object read is not cached: the next call retries',async()=>{
+  const w=await world();const row=await revenueRow(w);
+  const base=memoryRawStorage(w.storage.objects);let failures=1;
+  const flaky={list:base.list,get:async(p:string)=>{if(failures-->0)throw new Error('storage_download_failed:boom');return base.get(p);}};
+  const r=privilegedFactsReader({db:w.db,tables:w.overlay,stateRev:async()=>null,storage:flaky,parsers:PARSERS});
+  await expect(r.resolveProvenance(REF,row,{artifacts:true})).rejects.toThrow('boom');
+  expect(await r.resolveProvenance(REF,row,{artifacts:true})).toMatchObject({ok:true});
+ });
+});
+
+describe('resolveProvenance — Tushare rows (one statement row feeds many concepts; Codex P1)',()=>{
+ const CN='00000000-0000-4000-8000-000009990622',RUN='00000000-0000-4000-8000-0000000000a1',CN_REF={issuerId:CN,market:'CN' as const};
+ const fields=['ts_code','ann_date','f_ann_date','end_date','report_type','comp_type','end_type','update_flag','total_revenue','revenue','oper_cost','sell_exp','admin_exp'];
+ const text=`{"request_id":"r","code":0,"msg":null,"data":{"fields":${JSON.stringify(fields)},"items":[["600519.SH","20240403","20240403","20231231",1,1,"4",1,1000,900,400,30,12.5]],"has_more":false}}`;
+ const bytes=new TextEncoder().encode(text);
+ const snap=snapshotOf(bytes,{source:'tushare',api:'income',params:{ts_code:'600519.SH',report_type:'1'},page:1});
+ const parsed=parseTushareStatements([snap],{sinceYear:1900});
+ const filing:FilingRow={filing_id:'fil-cn',issuer_id:CN,market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-04-03',source_ref:parsed.filings[0].sourceRef,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:RUN,created_at:'2026-01-01T00:00:00.000Z'};
+ const factOf=(c:FactCandidate):FactRow=>({fact_id:`f-${c.concept}`,issuer_id:CN,market:'CN',filing_id:'fil-cn',run_id:RUN,concept:c.concept,source_concept:c.sourceConcept,statement:c.statement,period_start:c.periodStart,period_end:c.periodEnd,duration:c.duration,value:c.value,value_text:c.value,unit:c.unit,consolidation:'consolidated',available_date:'2024-04-03',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:c.rawHash,created_at:'2026-01-01T00:00:00.000Z'});
+ const facts=parsed.candidates.map(factOf);
+ const path=`tushare/${CN}/${snap.sha256}.json`;
+ const resolver=async()=>{
+  const tables=memoryTableClient({});
+  await tables.insert('fact_sync_runs',{run_id:RUN,batch_id:'b1'});
+  await tables.insert('ingest_batches',{batch_id:'b1',code_version:CODE_VERSION});
+  const storage=memoryRawStorage(new Map<string,string|Uint8Array>([[path,bytes],[metaPath(path),JSON.stringify({...snap.meta,sha256:snap.sha256,bytes:bytes.byteLength})]]));
+  return provenanceResolver({db:{factsByIds:async ids=>facts.filter(f=>ids.includes(f.fact_id)),filingsOfIssuer:async()=>[filing]},tables,storage,parsers:PARSERS});
+ };
+ it('every concept of the shared row resolves to its own candidate, a summed concept included',async()=>{
+  expect(new Set(facts.map(f=>f.raw_hash)).size).toBe(1);
+  const resolve=await resolver();
+  for(const concept of ['revenue','revenue_operating','cost_of_revenue','sga_expense']){
+   const f=facts.find(x=>x.concept===concept)!;
+   const p=await resolve(CN_REF,readRowOfFact(f,filing.source_ref),{artifacts:true});
+   expect(p).toMatchObject({ok:true,missing:[],object_path:path,producer_code_version:CODE_VERSION});
+   expect(p.locator).toMatch(/^income:rt1:p1\[end_date=20231231,ann=20240403,/);
+  }
+  expect(facts.find(x=>x.concept==='sga_expense')!.value_text).toBe('42.5');
+ });
+ it('a stored concept the row does not carry is candidate_not_found',async()=>{
+  const resolve=await resolver();
+  const f={...facts.find(x=>x.concept==='revenue')!,concept:'total_assets'};
+  facts.push({...f,fact_id:'f-ghost'});
+  expect(await resolve(CN_REF,readRowOfFact({...f,fact_id:'f-ghost'},filing.source_ref),{artifacts:true})).toMatchObject({ok:false,reason:'candidate_not_found'});
+  facts.pop();
+ });
+});
+
+describe('readNonVisible — superseded only counts ok rows below the active generation',()=>{
+ it('a staged (then abandoned) gen-2 run is not a superseded generation',async()=>{
+  const w=await world();
+  const batch='00000000-0000-4000-8000-0000000000ee';
+  expect(await w.db.claimLease(UNIT_ISSUER,'US',batch,60)).toBe(true);
+  const run=await w.db.beginRun(UNIT_ISSUER,'US',batch,2);
+  const ni=w.db.facts().find(f=>f.concept==='net_income_parent')!;
+  expect(await w.db.stageFacts(run,[{fact_id:'00000000-0000-4000-8000-0000000000e1',issuer_id:UNIT_ISSUER,market:'US',filing_id:ni.filing_id,concept:ni.concept,source_concept:ni.source_concept,statement:ni.statement,period_start:ni.period_start,period_end:ni.period_end,duration:ni.duration,value:ni.value_text,unit:ni.unit,consolidation:'consolidated',available_date:ni.available_date,mapping_gen:2,mapping_version:ni.mapping_version,raw_hash:ni.raw_hash}])).toBe(1);
+  expect(await priv(w).readNonVisible(REF,netIncome,accn(A1),TODAY)).toBeNull();
+  await w.db.abandonRun(run);
+  expect(await priv(w).readNonVisible(REF,netIncome,accn(A1),TODAY)).toBeNull();
+ });
+ it('a truncated includeNonOk read is a NonVisibleReadError(truncated), never a silent null',async()=>{
+  const w=await world();
+  const truncating:FactsReadDb={...w.db,readFacts:async()=>({stateRev:3,rows:[],truncated:true})};
+  const r=privilegedFactsReader({db:truncating,tables:w.overlay,stateRev:async()=>null,storage:memoryRawStorage(w.storage.objects),parsers:PARSERS});
+  await expect(r.readNonVisible(REF,netIncome,null,TODAY)).rejects.toMatchObject({name:'NonVisibleReadError',reason:'truncated'});
+  expect(new NonVisibleReadError('truncated')).toBeInstanceOf(Error);
  });
 });
