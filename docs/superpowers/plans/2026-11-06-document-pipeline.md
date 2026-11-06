@@ -87,6 +87,7 @@ src/lib/documents/fixtures/gold/hk-facts.json                                   
 src/lib/documents/*.test.ts、**/*.test.ts                        单测
 src/lib/documents/documents.integration.test.ts                 迁移一（critical；Task 1、3）
 src/lib/documents/fresh-db.ts                                   测试用：专用临时库 + 全部迁移 + 重放（P2-2；Task 1，Task 13 复用）
+src/lib/documents/lease.ts                                      租约心跳 withLeaseHeartbeat + guardCalls（第 2 轮 R1-P2-7；Task 10，Task 15/16 复用）
 src/lib/documents/fact-citations.integration.test.ts            迁移二（critical；Task 13）
 src/lib/documents/sync-hk.integration.test.ts                   港股端到端（critical；Task 18）
 src/lib/documents/sync-us.integration.test.ts                   美股文档（critical；Task 18）
@@ -192,7 +193,8 @@ export interface CitationRow{
 export type CitationInsert=Omit<CitationRow,'citation_id'|'visibility'|'created_at'>;
 
 export interface PeriodEvidence{role:'statement_title'|'column_header';citation_id:string}
-export interface FactCitations{value:string;label:string;unit:string;period:PeriodEvidence[]}
+/** unit_currency: the table's amount-unit citation, present when the per-share token names no currency (仙 / cents, R2-P1-1); published with role 'unit' too. */
+export interface FactCitations{value:string;label:string;unit:string;unit_currency?:string;period:PeriodEvidence[]}
 export interface FinancialFactPayload{
  concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';
  value:string;presented:string;unit:string;scale:'1'|'0.01'|'1000'|'1000000';sign_flip:boolean;
@@ -353,6 +355,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `extract/tables.ts`（9） | `detectTables(lines:LayoutLine[]):LayoutTable[]`、`isNumericItem(s)` | 标签单元格 col 0，数值列 1..k；`col_x0[0]` 为标签 x |
 | `extract/html.ts`（9） | `extractHtml(bytes):PageLayout[]` | 每行一个跨整行的 item（x=0） |
 | `extract/pages-json.ts`（9） | `buildPagesJson(input:{content_sha256;code_version;has_text_layer;pages}):{json;bytes;sha256}`、`pageInsertsOf(json):PageInsert[]`、`serializePagesJson`、`parseRecordedFixture(text)`、`RecordedPagesFixture`（含可选 `pages_subset:true`）、`normalizeText`、`assemblePage`、`LinePiece`、`sha256Hex(bytes|string)`、`cpLength(s)`、`cpSlice(s,start,end)` | |
+| `lease.ts`（10） | `HEARTBEAT_MS=120_000`、`withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal)=>Promise<T>,{intervalMs}):Promise<T>`、`guardCalls<T>(target,signal):T` | 长阶段期间定时续租；续租被拒 → 立即 `lease_lost`、signal 中止、受保护客户端之后的调用全部抛 `lease_lost`（第 2 轮 R1-P2-7） |
 | `citations.ts`（10） | `cite(db:Pick<DocumentsDb,'extractionById'|'pagesOf'|'insertCitation'>,input:CiteInput):Promise<string>`、`verify(db,citationId):Promise<{integrity:'ok'|'corrupt';currentExtraction:boolean}|null>`、`citationView(db,citation):Promise<CitationView|null>`、`integrityOf(page,citation)` | `CiteInput={document_id;extraction_id;page_no;char_start;char_end;bbox?;created_by;created_ref}` |
 | `extract/run.ts`（10） | `runDocumentsExtract(deps:ExtractDeps,opts:{limit;documentIds?;dryRun;triggeredBy}):Promise<ExtractReceipt>`、`ExtractDeps={db;tables;store;extractPdf;extractHtml;now;deadline;codeVersion:string|null}` | |
 | `extract/deps.ts`（10） | `productionExtractDeps(opts:{deadline;codeVersion;now?;admin?}):ExtractDeps` | 整合决定 7（C-2） |
@@ -364,7 +367,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `hk-facts/facts-port-contract.ts`（13） | `hkFactsPortContract(label,setup)`、`HkPortHarness`、`hkWorld`、`hkExtraction`、`hkCite`、`hkFilingRow`、`hkStagedRun`、`stateRev`、`sha256`、`code` | 非测试文件 |
 | `hk-facts/exact.ts`（14） | `toScaled(a,b):{a:bigint;b:bigint;scale:number}`、`exactIdentity(left,right,tol:{num:bigint;den:bigint}):{passed;diff:string}`、`sumDecimals(xs):string` | |
 | `hk-facts/generate.ts`（14） | `generateHkCandidates(pages:PagesJson,ctx:GenerateContext):Promise<{candidates:CandidateInsert[];info:BatchError[]}>`、`GenerateContext={document;extraction;cite:(at:{page_no;char_start;char_end;bbox?})=>Promise<string>}`、`naturalKey(payload)`、`canonicalJson(v)`、`HkInfoCode` | 引用先于候选；`citations.period` = 标题行 `statement_title` + 期间短语 `statement_title`（同区间则一条）+ `column_header` |
-| `hk-facts/{locate,period,scale,labels,values}.ts`（14） | `locateStatements`、`titleRegion`、`cpIndex`、`cpSlice`、`matchesIn`；`titlePeriod`、`headerColumns`、`mapColumns`、`numericColumns`、`spanOf`、`columnPeriod`；`detectAmountUnit`、`detectEpsUnit`；`LABEL_RULES`、`matchConcepts`、`labelVariants`、`headingSection`、`normalizeLabel`、`labelCore`；`cellValue`、`applySign` | 双语（同页中英）标题与标签；表头记号按 item x 定位 |
+| `hk-facts/{locate,period,scale,labels,values}.ts`（14） | `locateStatements`、`titleRegion`、`cpIndex`、`cpSlice`、`matchesIn`；`titlePeriod`、`headerColumns`、`mapColumns`、`numericColumns`、`spanOf`、`columnPeriod`；`detectAmountUnit`（`cite` 覆盖首个币种行到倍数行，`evidence` 列出两行，R2-P2-1）、`detectEpsUnit`（`inherited`：仙/cents 借表币种，R2-P1-1）；`LABEL_RULES`、`matchConcepts`、`labelVariants`、`headingSection`、`normalizeLabel`、`labelCore`；`cellValue`、`applySign` | 双语（同页中英）标题与标签；表头记号按 item x 定位 |
 | `hk-facts/checks.ts`（15） | `runHkChecks(candidates:CandidateRow[],ctx:CheckContext):CheckRowResult[]`、`CheckContext={verify:Map<string,CitationCheck|null>;priorFacts:FactRow[];enCandidates:CandidateRow[]}`、`buildCheckContext(deps,doc,extraction,candidates,today)`、`hkCheckFindings`、`HK_CONCEPT_IDS`、`citationIdsOf`、`CHECK_ORDER` | |
 | `hk-facts/test-support.ts`（15） | `hkHarness(o?)`、`candidatesDepsOf(h)`、`seedHkExtraction`、`seedHkCandidates`、`citeSeedFact`、`buildSeedPages`、`FY25`、`ISSUER`、`ADMIN`、`CODE`、`NOW` | 非测试文件；harness 把 `memoryFactsDb.setNow` 的时钟同时传给 `memoryHkFactsPort` |
 | `candidates/run.ts`（15/16/17） | `runDocumentsCandidates(deps:CandidatesDeps,opts:{limit;extractionIds?;dryRun;triggeredBy;phases?:('candidates'|'auto'|'promote')[]}):Promise<CandidatesReceipt>`、`CandidatesDeps={db;tables;store;port:HkFactsPort;now;deadline;codeVersion:string|null}`、`supabaseCandidatesDeps(admin,{deadline,codeVersion,now?})`、`DEFAULT_PHASES`、`CandidatesRunError` | Task 15 实现 candidates/auto；Task 16 接入 promote；Task 17 在 promote 前收尾钩子 |
@@ -2757,7 +2760,8 @@ export interface CitationRow{
 export type CitationInsert=Omit<CitationRow,'citation_id'|'visibility'|'created_at'>;
 
 export interface PeriodEvidence{role:'statement_title'|'column_header';citation_id:string}
-export interface FactCitations{value:string;label:string;unit:string;period:PeriodEvidence[]}
+/** unit_currency: the table's amount-unit citation, present when the per-share token names no currency (仙 / cents, R2-P1-1); published with role 'unit' too. */
+export interface FactCitations{value:string;label:string;unit:string;unit_currency?:string;period:PeriodEvidence[]}
 export interface FinancialFactPayload{
  concept:string;statement:'IS'|'BS'|'CF';period_start:string|null;period_end:string;duration:'6M'|'12M'|'INSTANT';
  value:string;presented:string;unit:string;scale:'1'|'0.01'|'1000'|'1000000';sign_flip:boolean;
@@ -7771,6 +7775,7 @@ describe('extractPdf (pdfjs-dist legacy build)',()=>{
  });
  it('budget exhausted → extract_timeout; garbage bytes reject',async()=>{
   await expect(extractPdf(minimalTwoPagePdf(),{remainingMs:()=>0})).rejects.toBeInstanceOf(ExtractTimeout);
+  await expect(extractPdf(minimalTwoPagePdf(),{remainingMs:()=>60_000,maxPages:1})).rejects.toMatchObject({name:'ExtractTooManyPages',pages:2});   // R1-P2-7 round 2: bounded work
   await expect(extractPdf(new TextEncoder().encode('not a pdf'),open)).rejects.toThrow();
  });
  it('does not detach the caller\'s buffer',async()=>{
@@ -8198,7 +8203,8 @@ declare module 'pdfjs-dist/legacy/build/pdf.worker.mjs';
 // Offsets are code points recorded during concatenation (assemblePage). Coordinates are PDF user
 // space (pt, origin bottom-left, page.view), as pdf.js reports them, rounded to 0.01 pt. hasTextLayer = some page has
 // text; an all-empty document is 'no_text_layer' upstream. The budget is checked before each page
-// (ExtractTimeout → 'extract_timeout').
+// (ExtractTimeout → 'extract_timeout'; every page awaits pdf.js, so timers such as the lease
+// heartbeat run between pages) and budget.maxPages caps the page count (ExtractTooManyPages).
 // CMaps: HKEX / cninfo reports use CID-keyed CJK fonts whose text pdf.js can only map to Unicode with
 // the packed CMaps; without cMapUrl a real 0268.HK interim report extracted 0 Chinese characters
 // (pdftotext had them). getDocument therefore always gets cMapUrl + cMapPacked + standardFontDataUrl:
@@ -8211,8 +8217,10 @@ import {assemblePage,cpLength,normalizeText} from './pages-json';
 import type {LinePiece} from './pages-json';
 import {detectTables} from './tables';
 
-export interface ExtractBudget{remainingMs():number}
+/** maxPages: refuse a document with more pages before reading any (ExtractTooManyPages; R1-P2-7 round 2 bounds the blocking work). */
+export interface ExtractBudget{remainingMs():number;maxPages?:number}
 export class ExtractTimeout extends Error{constructor(){super('extract_timeout');this.name='ExtractTimeout';}}
+export class ExtractTooManyPages extends Error{constructor(readonly pages:number){super('too_many_pages');this.name='ExtractTooManyPages';}}
 /** One text item as pdf.js reports it: string, origin (transform[4], transform[5]), advance width, height. */
 export interface RawItem{str:string;x:number;y:number;w:number;h:number}
 export const SPACE_EM=0.25;
@@ -8278,6 +8286,7 @@ export async function extractPdf(bytes:Uint8Array,budget:ExtractBudget,opts:Extr
  const task=pdfjs.getDocument({data:new Uint8Array(bytes),isEvalSupported:false,disableFontFace:true,useSystemFonts:false,verbosity:0,...(opts.assets??pdfjsAssets())});
  try{
   const doc=await task.promise;
+  if(budget.maxPages!==undefined&&doc.numPages>budget.maxPages)throw new ExtractTooManyPages(doc.numPages);
   const pages:PageLayout[]=[];
   for(let n=1;n<=doc.numPages;n++){
    if(budget.remainingMs()<=0)throw new ExtractTimeout();
@@ -8472,13 +8481,113 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ### Task 10: 引用、抽取调度、extract cron、脚本与录制
 
-**Files:** Create: `src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
+**Files:** Create: `src/lib/documents/lease.ts`（+ `lease.test.ts`，R1-P2-7 第 2 轮）、`src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
 **Spec:** §4.5、§7.3（第一条）、§7.4、§6.3、§10、§11.1、§11.3
 **Depends on:** Task 9；Task 2（`memoryDocumentsDb`、`db.ts` 游标）、Task 3、Task 4（`ObjectStore`、`pagesJsonPath`、`blobPath`）
 
 要点：`claimExtractLease` 返回 false → 本文档不做任何写入（claim 可能刚把它终态化为 `extract_failed`）；`pages.json` 上传失败 → 不调 `failExtract` 也不调 `finishExtract`，租约到期后重试（次数已在 claim 计）；字节哈希与 `content_sha256` 不符 → `failExtract('content_hash_mismatch')`；`application/xml|text/xml|application/xhtml+xml` 走 HTML 抽取，`application/json` → `failExtract('unsupported_mime')`（三次后 `extract_failed`）。cron 路由的门：secret → 鉴权 → 参数 → `DOCUMENTS_EXTRACT_ENABLED==='1'`（否则 403 `extract_disabled`）→ `VERCEL_GIT_COMMIT_SHA`（否则 503）。
 
 - [ ] **Step 1: 写测试助手与失败测试**
+
+`src/lib/documents/lease.ts`（计划审计第 2 轮 R1-P2-7：长阶段**期间**按定时器续租；后续 Task 15/16 复用）：
+
+```ts
+// src/lib/documents/lease.ts
+// Lease heartbeat (codex plan round 2, R1-P2-7 not closed by round 1): renewing only BETWEEN phases
+// lets a phase longer than the 600 s lease (a large PDF, generation and checks of a big statement,
+// one issuer's promotion) be taken over mid-way. withLeaseHeartbeat runs the awaited phase while a
+// timer renews every intervalMs; renew() false (another batch took over, or the row moved on)
+// aborts the phase's AbortSignal and rejects with DocumentsDbError('lease_lost') at once. A renew()
+// that throws is transient: the next beat retries (the SQL lease checks still guard every write).
+// The phase receives the signal; guardCalls(target, signal) wraps a port/db/store/table client so
+// every call after the abort throws lease_lost — the abandoned phase writes nothing more even
+// though JavaScript cannot cancel it. When the phase ends (either way) the timer stops and the
+// signal is aborted, so a leftover background step can never write later.
+import {DocumentsDbError} from './types';
+
+/** Beat interval: well inside the 600 s lease TTL, so two beats may fail before the lease lapses. */
+export const HEARTBEAT_MS=120_000;
+export interface HeartbeatOptions{intervalMs:number}
+const lost=(why:string)=>new DocumentsDbError('lease_lost',`lease_lost: ${why}`);
+
+export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal)=>Promise<T>,opts:HeartbeatOptions):Promise<T>{
+ if(!Number.isInteger(opts.intervalMs)||opts.intervalMs<1)throw new DocumentsDbError('invalid_input','invalid_interval');
+ const ac=new AbortController();
+ let reject:(e:DocumentsDbError)=>void=()=>{};
+ const refused=new Promise<never>((_,r)=>{reject=r;});
+ refused.catch(()=>{});
+ let busy=false;
+ const timer=setInterval(()=>{
+  if(busy||ac.signal.aborted)return;
+  busy=true;
+  renew().then(ok=>{
+   if(!ok&&!ac.signal.aborted){const e=lost('heartbeat renewal refused');ac.abort(e);reject(e);}
+  },()=>{/* transient: retried on the next beat */}).finally(()=>{busy=false;});
+ },opts.intervalMs);
+ const work=fn(ac.signal);
+ work.catch(()=>{});   // after an abort the phase may still settle (usually with lease_lost); nobody awaits it
+ try{return await Promise.race([work,refused]);}
+ finally{clearInterval(timer);if(!ac.signal.aborted)ac.abort(lost('phase finished'));}
+}
+/** `target` with every method call refused (lease_lost) once `signal` is aborted. */
+export function guardCalls<T extends object>(target:T,signal:AbortSignal):T{
+ return new Proxy(target,{get(t,k,r){
+  const v=Reflect.get(t,k,r);
+  if(typeof v!=='function')return v;
+  return (...args:unknown[])=>{if(signal.aborted)throw lost('the lease heartbeat stopped');return (v as (...a:unknown[])=>unknown).apply(t,args);};
+ }});
+}
+```
+
+```ts
+// src/lib/documents/lease.test.ts
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {guardCalls,withLeaseHeartbeat} from './lease';
+
+const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
+ beforeEach(()=>{vi.useFakeTimers();});
+ afterEach(()=>{vi.useRealTimers();});
+ it('renews on a timer while a long phase runs, then stops',async()=>{
+  const renew=vi.fn(async()=>true);
+  const p=withLeaseHeartbeat(renew,async()=>{await sleep(10_000);return 'done';},{intervalMs:1_000});
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await p).toBe('done');
+  expect(renew.mock.calls.length).toBeGreaterThanOrEqual(9);
+  const n=renew.mock.calls.length;await vi.advanceTimersByTimeAsync(5_000);
+  expect(renew).toHaveBeenCalledTimes(n);                                       // the timer stopped with the phase
+ });
+ it('a refused renewal (takeover) rejects with lease_lost at once and aborts the signal; guarded calls then throw',async()=>{
+  let ok=true;const renew=vi.fn(async()=>ok);const write=vi.fn(async()=>'written');
+  let signal:AbortSignal|null=null;let after:unknown=null;
+  const p=withLeaseHeartbeat(renew,async s=>{
+   signal=s;const store=guardCalls({write},s);
+   await sleep(60_000);
+   try{await store.write();}catch(e){after=e;}
+   return 'never';
+  },{intervalMs:1_000});
+  p.catch(()=>{});
+  await vi.advanceTimersByTimeAsync(2_000);
+  ok=false;                                                                      // another batch took the lease
+  await vi.advanceTimersByTimeAsync(1_000);
+  await expect(p).rejects.toMatchObject({name:'DocumentsDbError',code:'lease_lost'});
+  expect(signal!.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(60_000);                                     // the abandoned phase resumes …
+  expect(write).not.toHaveBeenCalled();                                          // … and writes nothing
+  expect(after).toMatchObject({code:'lease_lost'});
+ });
+ it('a renewal that throws is transient (retried); the signal is aborted after a normal finish too',async()=>{
+  let n=0;const renew=vi.fn(async()=>{n++;if(n===1)throw new Error('network');return true;});
+  let signal:AbortSignal|null=null;
+  const p=withLeaseHeartbeat(renew,async s=>{signal=s;await sleep(3_500);return 1;},{intervalMs:1_000});
+  await vi.advanceTimersByTimeAsync(3_500);
+  expect(await p).toBe(1);
+  expect(renew).toHaveBeenCalledTimes(3);
+  expect(signal!.aborted).toBe(true);
+  await expect(withLeaseHeartbeat(renew,async()=>1,{intervalMs:0})).rejects.toMatchObject({code:'invalid_input'});
+ });
+});
+```
 
 `src/lib/documents/test-seed.ts`（测试专用助手，后续 Task 11/12 与 D-Part 复用；`rlsView` 模拟 anon 经 RLS 能看到的读结果，`readDocuments` 先过滤再分页）：
 
@@ -8677,7 +8786,8 @@ describe('publish_citations (contract behaviour the read routes rely on)',()=>{
 ```ts
 // src/lib/documents/extract/run.test.ts
 import {randomUUID} from 'node:crypto';
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
+import {HEARTBEAT_MS} from '../lease';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {memoryDocumentsDb} from '../memory-documents-db';
 import {memoryObjectStore} from '../object-store';
@@ -8772,6 +8882,29 @@ describe('runDocumentsExtract',()=>{
   const d2=await seedPublicDocument(g.db,enc('%PDF-slow-but-alone'),{},g.store);
   const r2=await run({...g.deps,extractPdf:async()=>{g.db.expireExtractLease(d2);return {pages:[layoutPage(1,'x')],hasTextLayer:true};}});
   expect(r2.documents[0]).toMatchObject({documentId:d2,outcome:'extracted'});
+ });
+ it('R1-P2-7 round 2: the lease is renewed on a timer during a long extraction; a takeover stops it with lease_lost and nothing written',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=harness();
+   const doc=await seedPublicDocument(h.db,enc('%PDF-very-long'),{},h.store);
+   let started=false;const renew=h.db.renewExtractLease;let renewals=0;
+   const db={...h.db,renewExtractLease:async(d:string,b:string,t:number)=>{renewals++;return renew(d,b,t);}};
+   const p=run({...h.deps,db,extractPdf:()=>{started=true;return new Promise(()=>{});}});   // pdf.js busy far longer than the lease
+   for(let i=0;i<1000&&!started;i++)await Promise.resolve();
+   expect(started).toBe(true);
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS*3);
+   expect(renewals).toBe(3);
+   expect((await h.db.documentById(doc))!.extract_lease_until).not.toBeNull();
+   h.db.expireExtractLease(doc);
+   const OTHER=randomUUID();expect(await h.db.claimExtractLease(doc,OTHER,600)).toBe(true);   // another batch takes over
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+   const r=await p;
+   expect(r.documents).toEqual([{documentId:doc,outcome:'failed',code:'lease_lost'}]);
+   expect([...h.store.objects().keys()].some(k=>k.startsWith('extractions/'))).toBe(false);
+   expect(h.db.extractions()).toEqual([]);
+   expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_lease_batch_id:OTHER});
+  }finally{vi.useRealTimers();}
  });
  it('extract_timeout, content hash mismatch, missing object and unsupported MIME are coded failures',async()=>{
   const {db,store,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
@@ -9021,8 +9154,10 @@ export async function citationView(db:Pick<DocumentsDb,'pagesOf'|'documentById'>
 //   extractPdf (application/pdf) | extractHtml (text/html, application/xhtml+xml, application/xml,
 //   text/xml); other MIME → failExtract('unsupported_mime'); a throw → failExtract('extract_error'),
 //   the budget → failExtract('extract_timeout');
-//   renewExtractLease before each mutating phase (codex plan round 1 P2-7: an extraction may outlive
-//   the 600 s lease — local scripts have no deadline): false → lease_lost, nothing more is written;
+//   the layout runs under withLeaseHeartbeat (lease.ts; renewExtractLease every HEARTBEAT_MS while
+//   pdf.js works, codex plan round 2) with at most DOC_EXTRACT_MS and MAX_PDF_PAGES (too_many_pages);
+//   renewExtractLease again before each mutating phase (round 1 P2-7): a refused renewal → lease_lost,
+//   nothing more is written;
 //   buildPagesJson → store.put(pagesJsonPath(content_sha256, sha)) — a put failure leaves the lease to
 //   expire (no failExtract, no finishExtract; the claim already counted the attempt);
 //   finishExtract(doc, batch, extraction, pageInsertsOf(json)) (role/status decided in SQL).
@@ -9039,11 +9174,16 @@ import {pagesJsonPath} from '../object-store';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {DocumentRow,DocumentsDb,ObjectStore,PageLayout} from '../types';
 import {buildPagesJson,pageInsertsOf,sha256Hex} from './pages-json';
-import {ExtractTimeout} from './pdf';
+import {HEARTBEAT_MS,withLeaseHeartbeat} from '../lease';
+import {ExtractTimeout,ExtractTooManyPages} from './pdf';
 import type {ExtractBudget} from './pdf';
 
 export const EXTRACT_LEASE_TTL_S=600;
 export const MIN_DOC_MS=90_000;
+/** Per-document extraction budget, well under the 600 s lease (R1-P2-7 round 2); checked before every page. */
+export const DOC_EXTRACT_MS=240_000;
+/** Page cap of one PDF (bounded blocking work): more pages → failExtract('too_many_pages'). */
+export const MAX_PDF_PAGES=1500;
 /** Budget handed to the extractor: the deadline minus this reserve for the pages.json put and finishExtract. */
 export const FINISH_RESERVE_MS=20_000;
 const HTML_MIMES=new Set(['text/html','application/xhtml+xml','application/xml','text/xml']);
@@ -9060,7 +9200,7 @@ export interface DocExtractResult{documentId:string;outcome:DocOutcome;code?:str
 export interface ExtractReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];documents:DocExtractResult[];idle:boolean}
 
 const remaining=(deps:ExtractDeps)=>deps.deadline===null?Number.POSITIVE_INFINITY:deps.deadline.getTime()-deps.now().getTime();
-const errCode=(e:unknown)=>e instanceof DocumentsDbError?e.code:e instanceof ExtractTimeout?'extract_timeout':'extract_error';
+const errCode=(e:unknown)=>e instanceof DocumentsDbError?e.code:e instanceof ExtractTimeout?'extract_timeout':e instanceof ExtractTooManyPages?'too_many_pages':'extract_error';
 
 async function dueDocuments(db:DocumentsDb,opts:ExtractOptions,errors:BatchError[]):Promise<DocumentRow[]>{
  if(!opts.documentIds)return db.storedDue(opts.limit);
@@ -9073,9 +9213,11 @@ async function dueDocuments(db:DocumentsDb,opts:ExtractOptions,errors:BatchError
 }
 
 /** Bytes → layout by MIME; throws ExtractTimeout / any extractor error; 'unsupported_mime' as an Error message. */
-async function layoutOf(deps:ExtractDeps,doc:DocumentRow,bytes:Uint8Array):Promise<{pages:PageLayout[];hasTextLayer:boolean}>{
+async function layoutOf(deps:ExtractDeps,doc:DocumentRow,bytes:Uint8Array,signal?:AbortSignal):Promise<{pages:PageLayout[];hasTextLayer:boolean}>{
  if(doc.mime==='application/pdf'){
-  const budget:ExtractBudget={remainingMs:()=>remaining(deps)-FINISH_RESERVE_MS};
+  // the run deadline less the finish reserve, at most DOC_EXTRACT_MS for this document, 0 once the lease heartbeat stopped
+  const until=deps.now().getTime()+DOC_EXTRACT_MS;
+  const budget:ExtractBudget={remainingMs:()=>signal?.aborted?0:Math.min(remaining(deps)-FINISH_RESERVE_MS,until-deps.now().getTime()),maxPages:MAX_PDF_PAGES};
   return deps.extractPdf(bytes,budget);
  }
  if(HTML_MIMES.has(doc.mime)){const pages=deps.extractHtml(bytes);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
@@ -9124,8 +9266,10 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   catch{await fail(doc,'object_get_failed');continue;}
   if(sha256Hex(bytes)!==doc.content_sha256){await fail(doc,'content_hash_mismatch');continue;}
   let layout:{pages:PageLayout[];hasTextLayer:boolean};
-  try{layout=await layoutOf(deps,doc,bytes);}
+  // R1-P2-7 round 2: the lease is renewed on a timer DURING the extraction; a refused renewal → lease_lost, nothing written
+  try{layout=await withLeaseHeartbeat(()=>db.renewExtractLease(doc.document_id,batchId,EXTRACT_LEASE_TTL_S),signal=>layoutOf(deps,doc,bytes,signal),{intervalMs:HEARTBEAT_MS});}
   catch(e){
+   if(e instanceof DocumentsDbError&&e.code==='lease_lost'){counts.failed++;errors.push({code:'lease_lost',key:doc.document_id});documents.push({documentId:doc.document_id,outcome:'failed',code:'lease_lost'});continue;}
    const code=e instanceof Error&&e.message==='unsupported_mime'?'unsupported_mime':errCode(e);
    await fail(doc,code,code==='extract_error'&&e instanceof Error?e.message:undefined);continue;
   }
@@ -9411,7 +9555,7 @@ node -e "import('./next.config.mjs').then(m=>console.log(Object.keys(m.default.o
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
+git add src/lib/documents/lease.ts src/lib/documents/lease.test.ts src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
 ```
 
 ```bash
@@ -11840,7 +11984,8 @@ revoke execute on function public.insert_fact_citations(uuid, jsonb) from public
 grant execute on function public.insert_fact_citations(uuid, jsonb) to service_role;
 
 -- Internal (R4-3): over run_id = p_run AND status IN ('staged','quarantined') — quarantine does not
--- exempt — every fact needs exactly one value, label and unit citation and at least one period
+-- exempt — every fact needs exactly one value and label citation, at least one unit citation (a
+-- 仙 / cents EPS also cites the table currency, codex plan round 2 R2-P1-1) and at least one period
 -- citation, exactly one staged candidate_publications row of this run pointing at it, a bound filing,
 -- and every citation on the bound document, public, on its current extraction, intact (page
 -- text_hash and code-point substr equal the stored values). First failure → evidence_incomplete
@@ -11854,7 +11999,7 @@ begin
       case
         when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'value') <> 1 then 'value'
         when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'label') <> 1 then 'label'
-        when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') <> 1 then 'unit'
+        when (select count(*) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') < 1 then 'unit'   -- ≥ 1: a 仙 / cents EPS also cites its table currency (R2-P1-1)
         when not exists (select 1 from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'period') then 'period'
         when (select count(*) from public.candidate_publications cp where cp.run_id = p_run and cp.fact_id = f.fact_id and cp.state = 'staged') <> 1 then 'publication'
         when not exists (select 1 from public.filing_documents fd where fd.filing_id = f.filing_id) then 'unbound_filing'
@@ -12275,7 +12420,7 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    const mine=fc.filter(x=>x.fact_id===f.fact_id);
    const n=(role:CitationRole)=>mine.filter(x=>x.role===role).length;
    const b=B.get(f.filing_id);const d=b?D.get(b.document_id):undefined;
-   const reason=n('value')!==1?'value':n('label')!==1?'label':n('unit')!==1?'unit':n('period')<1?'period'
+   const reason=n('value')!==1?'value':n('label')!==1?'label':n('unit')<1?'unit':n('period')<1?'period'
     :pubs.filter(p=>p.run_id===run&&p.fact_id===f.fact_id&&p.state==='staged').length!==1?'publication'
     :!b?'unbound_filing'
     :mine.some(x=>{const c=C.get(x.citation_id);return !c||!d||c.document_id!==d.document_id||d.permission!=='public'||c.extraction_id!==d.current_extraction_id||!intact(c,P);})?'citation'
@@ -12936,13 +13081,18 @@ import {detectAmountUnit,detectEpsUnit} from './scale';
 const u=(text:string,char_start=0,page_no=1)=>({page_no,line:{index:0,y:0,x0:0,x1:0,text,char_start,char_end:char_start+Array.from(text).length} as LayoutLine});
 describe('amount unit (spec §7.5 step 3: currency words removed first, then the longest multiplier)',()=>{
  it('currency and multiplier, cited as the whole line',()=>{
-  expect(detectAmountUnit([u('人民幣千元 人民幣千元',30,3)])).toEqual({ok:true,currency:'CNY',scale:'1000',cite:{page_no:3,char_start:30,char_end:41}});
+  expect(detectAmountUnit([u('人民幣千元 人民幣千元',30,3)])).toEqual({ok:true,currency:'CNY',scale:'1000',cite:{page_no:3,char_start:30,char_end:41},evidence:[{page_no:3,char_start:30,char_end:41}]});
   expect(detectAmountUnit([u('千港元 千港元')])).toMatchObject({ok:true,currency:'HKD',scale:'1000'});
   expect(detectAmountUnit([u("HK$'000 HK$'000")])).toMatchObject({ok:true,currency:'HKD',scale:'1000'});
   expect(detectAmountUnit([u('RMB million')])).toMatchObject({ok:true,currency:'CNY',scale:'1000000'});
   expect(detectAmountUnit([u("US$'000,000")])).toMatchObject({ok:true,currency:'USD',scale:'1000000'});
   expect(detectAmountUnit([u('人民幣百萬元')])).toMatchObject({ok:true,currency:'CNY',scale:'1000000'});
   expect(detectAmountUnit([u('綜合損益表'),u('港幣千元',8)])).toMatchObject({ok:true,currency:'HKD',scale:'1000',cite:{char_start:8}});
+ });
+ it('R2-P2-1: currency and multiplier on separate lines — both are evidence, cited as one range spanning them',()=>{
+  const r=detectAmountUnit([u('二零二五年 二零二四年',0),u('人民幣 人民幣',12),u('附註',20),u('千元 千元',23)]);
+  expect(r).toEqual({ok:true,currency:'CNY',scale:'1000',cite:{page_no:1,char_start:12,char_end:28},evidence:[{page_no:1,char_start:12,char_end:19},{page_no:1,char_start:23,char_end:28}]});
+  expect(detectAmountUnit([u('人民幣 人民幣',0,1),u('千元',0,2)])).toEqual({ok:false,reason:'unit_split_pages'});
  });
  it("'港元' never becomes the multiplier 元; currency without multiplier, several currencies or multipliers are refused",()=>{
   expect(detectAmountUnit([u('港元 港元')])).toEqual({ok:false,reason:'no_multiplier'});
@@ -12955,7 +13105,8 @@ describe('amount unit (spec §7.5 step 3: currency words removed first, then the
 describe('per-share sub-unit (eps never inherits the table multiplier)',()=>{
  const s=(text:string,char_start=0)=>({page_no:2,text,char_start});
  it('港仙 / HK cents → HKD/share 0.01; 仙 / cents take the table currency; 元 forms → 1; the token is cited',()=>{
-  expect(detectEpsUnit([s('基本（港仙）',10)],null)).toEqual({ok:true,unit:'HKD/share',scale:'0.01',cite:{page_no:2,char_start:13,char_end:15}});
+  expect(detectEpsUnit([s('基本（港仙）',10)],null)).toEqual({ok:true,unit:'HKD/share',scale:'0.01',cite:{page_no:2,char_start:13,char_end:15},inherited:false});
+  expect(detectEpsUnit([s('每股盈利（仙）')],'CNY')).toMatchObject({ok:true,unit:'CNY/share',inherited:true});
   expect(detectEpsUnit([s('Basic'),s('Earnings per share (HK cents)')],'CNY')).toMatchObject({ok:true,unit:'HKD/share',scale:'0.01'});
   expect(detectEpsUnit([s('基本'),s('每股盈利（仙）')],'HKD')).toMatchObject({ok:true,unit:'HKD/share',scale:'0.01'});
   expect(detectEpsUnit([s('基本'),s('每股盈利（仙）')],null)).toEqual({ok:false,reason:'eps_currency'});
@@ -13080,7 +13231,9 @@ import {describe,expect,it} from 'vitest';
 import {allowedUnits,unitKindOf} from '../../facts/units';
 import {SYNTHETIC_NAMES,buildPagesJson,syntheticPagesJson} from '../fixtures/hkex/_synthetic/build';
 import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_LABEL_GEN,HK_RULES_VERSION,TABLE_ALGO_VERSION} from '../types';
-import type {CandidateInsert,DocClass,DocumentRow,ExtractionRow,FactCitations,FinancialFactPayload,PagesJson} from '../types';
+import type {CandidateInsert,CandidateRow,DocClass,DocumentRow,ExtractionRow,FactCitations,FinancialFactPayload,PagesJson} from '../types';
+import {citationIdsOf,runHkChecks} from './checks';
+import type {CitationCheck} from './checks';
 import {canonicalJson,generateHkCandidates,naturalKey} from './generate';
 import type {CiteInput} from './generate';
 import {cpSlice} from './locate';
@@ -13209,6 +13362,28 @@ describe('generateHkCandidates (spec §7.5)',()=>{
   expect(r.snippet(cits(op).label)).toBe('Net cash inflow/(outflow) from 經營活動產生╱（所用）淨現金\noperating activities');   // two-line label cited as one range
   expect(pay(r.by.get('net_change_in_cash:2026-01-01:2026-06-30:6M:CNY'))).toMatchObject({value:'-129836000',sign_flip:false});
   expect(pay(r.by.get('cash::2026-06-30:INSTANT:CNY'))).toMatchObject({value:'1563484000',period_derivation:{rule:'title_instant'}});
+ });
+ it('generation → checks (R2-P2-1, R2-P1-1): currency and multiplier on separate lines replay; a 仙 EPS cites its table currency, and a payload changed to USD/share is blocked',async()=>{
+  const json=buildPagesJson('split-unit',[{page_no:1,lines:['綜合損益表','截至二零二五年十二月三十一日止年度',{header:['二零二五年','二零二四年']},{header:['人民幣','人民幣']},{header:['千元','千元']},
+   {label:'收益',values:['1,000','900']},'每股盈利（仙）',{label:'基本',values:['12.34','10.50']}]}]);
+  const r=await run(json);
+  const rev=r.by.get('revenue:2025-01-01:2025-12-31:12M:CNY');
+  expect(pay(rev)).toMatchObject({value:'1000000',scale:'1000'});
+  expect(r.snippet(cits(rev).unit)).toBe('人民幣 人民幣\n千元 千元');                          // one range spanning both evidence lines
+  const eps=r.by.get('eps_basic:2025-01-01:2025-12-31:12M:CNY/share');
+  expect(pay(eps)).toMatchObject({value:'0.1234',unit:'CNY/share',scale:'0.01'});
+  expect(r.snippet(cits(eps).unit)).toBe('仙');
+  expect(r.snippet(cits(eps).unit_currency!)).toBe('人民幣 人民幣\n千元 千元');
+  const rows=r.candidates.map((c,i):CandidateRow=>({...c,candidate_id:`c${i}`,document_id:'00000000-0000-4000-8000-0000000000d1',extraction_id:EXT_ID,checks:[],checks_passed:false,status:'candidate',
+   decision_kind:null,decided_by:null,approval_id:null,decided_at:null,inherited_from:null,batch_id:'b',created_at:'2026-03-20T10:00:00.000Z'}));
+  const verify=new Map<string,CitationCheck|null>(rows.flatMap(c=>citationIdsOf(c.citations as FactCitations)).map(id=>[id,{integrity:'ok',currentExtraction:true,snippet:r.snippet(id)}]));
+  const out=runHkChecks(rows,{verify,priorFacts:[],enCandidates:[]});
+  expect(out.map(x=>[rows.find(c=>c.candidate_id===x.candidate_id)!.natural_key,x.checks.find(c=>c.check==='value_replays')!.passed])).toEqual(rows.map(c=>[c.natural_key,true]));
+  expect(out.every(x=>x.checks_passed)).toBe(true);
+  const forged=rows.filter(c=>c.natural_key.startsWith('eps_basic:2025')).map(c=>({...c,payload:{...(c.payload as FinancialFactPayload),unit:'USD/share'}}));
+  const [blocked]=runHkChecks(forged,{verify,priorFacts:[],enCandidates:[]});
+  expect(blocked.checks_passed).toBe(false);
+  expect(blocked.checks.find(c=>c.check==='value_replays')).toMatchObject({passed:false,detail:{reason:'scale_mismatch',evidence:{unit:'CNY/share'}}});
  });
  it('tax credit labels (P1-3): positive, parenthesised and zero amounts all become −|x|; sign_flip only when the printed sign changes',async()=>{
   const isPage=(page_no:number,tax:[string,string])=>({page_no,lines:['Consolidated Statement of Profit or Loss','For the year ended 31 December 2025',{header:['2025','2024'] as [string,string]},{header:["RMB'000","RMB'000"] as [string,string]},
@@ -13585,15 +13760,19 @@ export function columnPeriod(title:TitlePeriod,ref:ColumnRef,annual:boolean):Col
 // null). Per-share rows never inherit the table multiplier: the row label, then the EPS heading, must
 // carry a sub-unit (港仙 / HK cents → HKD 0.01; RMB cents / 人民幣分 → CNY 0.01; 仙 / cents → the
 // table currency 0.01; 人民幣元 / RMB → CNY 1; 港元 / HK$ → HKD 1). Units are spec-2 units.ts strings:
-// HKD/CNY/USD and <CCY>/share. Amount evidence is the whole unit line; per-share evidence the token.
+// HKD/CNY/USD and <CCY>/share. Amount evidence: the first currency line and the multiplier line,
+// cited as one range spanning both (R2-P2-1); per-share evidence the token, plus — when the token
+// names no currency (仙 / cents) — the table's amount-unit range (R2-P1-1, the caller cites it).
 import type {LayoutLine} from '../types';
 import {matchesIn} from './locate';
 
 export type Currency='HKD'|'CNY'|'USD';
 export type Scale='1'|'0.01'|'1000'|'1000000';
 export interface CiteRange{page_no:number;char_start:number;char_end:number}
-export type AmountUnit={ok:true;currency:Currency;scale:Scale;cite:CiteRange}|{ok:false;reason:string};
-export type EpsUnit={ok:true;unit:string;scale:Scale;cite:CiteRange}|{ok:false;reason:string};
+/** evidence = the first currency line and the multiplier line (one entry when they coincide); cite = the one range from the first to the last evidence line (same page), so a replay of detectAmountUnit over the cited text reads the same currency and multiplier (codex plan round 2 R2-P2-1). */
+export type AmountUnit={ok:true;currency:Currency;scale:Scale;cite:CiteRange;evidence:CiteRange[]}|{ok:false;reason:string};
+/** inherited = the token (仙 / cents) names no currency and the table currency was used: the caller must cite the table's amount-unit evidence as well (R2-P1-1). */
+export type EpsUnit={ok:true;unit:string;scale:Scale;cite:CiteRange;inherited:boolean}|{ok:false;reason:string};
 
 const CURRENCY_RE=/人民幣元|人民币元|港幣|港币|港元|HK\$|人民幣|人民币|\bRMB\b|美元|US\$/gi;
 const currencyOf=(w:string):Currency=>/^(港幣|港币|港元|HK\$)$/i.test(w)?'HKD':/^(美元|US\$)$/i.test(w)?'USD':'CNY';
@@ -13602,9 +13781,9 @@ const multiplierOf=(w:string):Scale=>/000,000|百萬|百万|million/i.test(w)?'1
 const EPS_SUBUNIT_RE=/港仙|\bHK\s?cents?\b|\bRMB\s?cents?\b|人民幣分|人民币分|人民幣元|人民币元|港元|HK\$|\bRMB\b|仙|\bcents?\b/i;
 
 export function detectAmountUnit(lines:{page_no:number;line:LayoutLine}[]):AmountUnit{
- const currencies=new Set<Currency>();const scales=new Map<Scale,{page_no:number;line:LayoutLine}>();
+ const currencies=new Set<Currency>();const scales=new Map<Scale,{page_no:number;line:LayoutLine}>();let currencyLine:{page_no:number;line:LayoutLine}|null=null;
  for(const u of lines){
-  for(const m of u.line.text.matchAll(CURRENCY_RE))currencies.add(currencyOf(m[0]));
+  for(const m of u.line.text.matchAll(CURRENCY_RE)){currencies.add(currencyOf(m[0]));currencyLine??=u;}
   for(const m of u.line.text.replace(CURRENCY_RE,' ').matchAll(MULTIPLIER_RE)){const s=multiplierOf(m[0]);if(!scales.has(s))scales.set(s,u);}
  }
  if(currencies.size>1)return {ok:false,reason:`currencies:${[...currencies].sort().join(',')}`};
@@ -13612,7 +13791,10 @@ export function detectAmountUnit(lines:{page_no:number;line:LayoutLine}[]):Amoun
  if(scales.size>1)return {ok:false,reason:`multipliers:${[...scales.keys()].join(',')}`};
  if(scales.size===0)return {ok:false,reason:'no_multiplier'};
  const [[scale,u]]=[...scales.entries()];
- return {ok:true,currency:[...currencies][0],scale,cite:{page_no:u.page_no,char_start:u.line.char_start,char_end:u.line.char_end}};
+ const used=[currencyLine!,u].filter((x,i,a)=>a.indexOf(x)===i).sort((a,b)=>a.line.char_start-b.line.char_start);
+ if(new Set(used.map(x=>x.page_no)).size>1)return {ok:false,reason:'unit_split_pages'};
+ const evidence=used.map(x=>({page_no:x.page_no,char_start:x.line.char_start,char_end:x.line.char_end}));
+ return {ok:true,currency:[...currencies][0],scale,cite:{page_no:u.page_no,char_start:evidence[0].char_start,char_end:Math.max(...evidence.map(e=>e.char_end))},evidence};
 }
 export function detectEpsUnit(sources:{page_no:number;text:string;char_start:number}[],tableCurrency:Currency|null):EpsUnit{
  for(const s of sources){
@@ -13625,7 +13807,7 @@ export function detectEpsUnit(sources:{page_no:number;text:string;char_start:num
   else if(/^(港元|HK\$)$/i.test(w)){currency='HKD';scale='1';}
   else{currency='CNY';scale='1';}                                     // 人民幣元 / 人民币元 / RMB
   if(currency===null)return {ok:false,reason:'eps_currency'};
-  return {ok:true,unit:`${currency}/share`,scale,cite:{page_no:s.page_no,char_start:s.char_start+m.start,char_end:s.char_start+m.end}};
+  return {ok:true,unit:`${currency}/share`,scale,cite:{page_no:s.page_no,char_start:s.char_start+m.start,char_end:s.char_start+m.end},inherited:/^(仙|cents?)$/i.test(w)};
  }
  return {ok:false,reason:'eps_no_subunit'};
 }
@@ -13784,7 +13966,7 @@ export interface GenerateContext{document:DocumentRow;extraction:ExtractionRow;c
 export type HkInfoCode='locate_ambiguous'|'period_unparsed'|'unit_ambiguous'|'label_ambiguous'|'not_consolidated';
 type Note=(code:HkInfoCode,detail:string)=>void;
 interface Range{page_no:number;char_start:number;char_end:number;bbox:Bbox|null}
-interface Draft{payload:FinancialFactPayload;value:Range;label:Range;unit:Range;titleLine:Range;title:Range;header:Range}
+interface Draft{payload:FinancialFactPayload;value:Range;label:Range;unit:Range;unitCurrency:Range|null;titleLine:Range;title:Range;header:Range}
 interface RowHit{concept:string;page:PageLayout;cells:LayoutCell[];label:Range;labelText:string;columns:Map<number,ColumnRef>;sectionLines:{page_no:number;line:LayoutLine}[]}
 
 const EPS=new Set(['eps_basic','eps_diluted']);
@@ -13864,7 +14046,7 @@ function draftsOf(st:LocatedStatement,annual:boolean,note:Note):Draft[]{
  for(const [concept,rows] of byConcept){
   if(rows.some(r=>signature(r)!==signature(rows[0]))){note('label_ambiguous',`${S}:${concept}`);continue;}
   const r=rows[0];
-  let unit:string,scale:Scale,unitRange:Range;
+  let unit:string,scale:Scale,unitRange:Range;let unitCurrency:Range|null=null;
   if(EPS.has(concept)){
    const text=new Map(st.pages.map(p=>[p.page_no,p.text]));
    const sources=[{page_no:r.label.page_no,text:cpSlice(text.get(r.label.page_no)??'',r.label.char_start,r.label.char_end),char_start:r.label.char_start},
@@ -13872,6 +14054,8 @@ function draftsOf(st:LocatedStatement,annual:boolean,note:Note):Draft[]{
    const eps=detectEpsUnit(sources,amount.ok?amount.currency:null);
    if(!eps.ok){note('unit_ambiguous',`${S}:${concept}:${eps.reason}`);continue;}
    unit=eps.unit;scale=eps.scale;unitRange={...eps.cite,bbox:null};
+   // R2-P1-1: 仙 / cents names no currency — the table's amount-unit evidence is cited as well
+   if(eps.inherited){if(!amount.ok)continue;unitCurrency={...amount.cite,bbox:null};}
   }else{
    if(!amount.ok)continue;
    unit=amount.currency;scale=amount.scale;unitRange={...amount.cite,bbox:null};
@@ -13892,7 +14076,7 @@ function draftsOf(st:LocatedStatement,annual:boolean,note:Note):Draft[]{
    drafts.push({
     payload:{concept,statement:S,period_start:period.period_start,period_end:period.period_end,duration:period.duration,value:signed.value,presented:v.presented,unit,scale,sign_flip:signed.sign_flip,
      period_derivation:{rule:period.rule,title_date:period.title_date,column_text:period.column_text},consolidation:'consolidated'},
-    value:rangeOf(r.page.page_no,cell),label:r.label,unit:unitRange,titleLine:titleLineRange,title:titleRange,
+    value:rangeOf(r.page.page_no,cell),label:r.label,unit:unitRange,unitCurrency,titleLine:titleLineRange,title:titleRange,
     header:{page_no:period.header.page_no,char_start:period.header.start,char_end:period.header.end,bbox:null},
    });
   }
@@ -13919,18 +14103,18 @@ export async function generateHkCandidates(pages:PagesJson,ctx:GenerateContext):
   const k=`${r.page_no}:${r.char_start}:${r.char_end}`;const have=ids.get(k);if(have!==undefined)return have;
   const id=await ctx.cite({page_no:r.page_no,char_start:r.char_start,char_end:r.char_end,bbox:r.bbox});ids.set(k,id);return id;
  };
- const pageNos=[...new Set(kept.flatMap(d=>[d.value,d.label,d.unit,d.titleLine,d.title,d.header].map(r=>r.page_no)))].sort((a,b)=>a-b);
+ const pageNos=[...new Set(kept.flatMap(d=>[d.value,d.label,d.unit,d.titleLine,d.title,d.header,...(d.unitCurrency?[d.unitCurrency]:[])].map(r=>r.page_no)))].sort((a,b)=>a-b);
  const same=(a:Range,b:Range)=>a.page_no===b.page_no&&a.char_start===b.char_start&&a.char_end===b.char_end;
  /** statement_title evidence: the title line, then the period phrase when it is a different range. */
  const titlesOf=(d:Draft)=>same(d.titleLine,d.title)?[d.titleLine]:[d.titleLine,d.title];
  const candidates:CandidateInsert[]=[];
  for(const d of kept){
   const citations:FactCitations={value:await cite(d.value),label:await cite(d.label),unit:await cite(d.unit),
-   period:[]};
+   ...(d.unitCurrency?{unit_currency:await cite(d.unitCurrency)}:{}),period:[]};
   for(const t of titlesOf(d))citations.period.push({role:'statement_title',citation_id:await cite(t)});
   citations.period.push({role:'column_header',citation_id:await cite(d.header)});
   const natural_key=naturalKey(d.payload);
-  const fingerprint=sha256(canonicalJson({natural_key,payload:d.payload,snippets:{value:snippet(d.value),label:snippet(d.label),unit:snippet(d.unit),period:[...titlesOf(d).map(snippet),snippet(d.header)]}}));
+  const fingerprint=sha256(canonicalJson({natural_key,payload:d.payload,snippets:{value:snippet(d.value),label:snippet(d.label),unit:snippet(d.unit),...(d.unitCurrency?{unit_currency:snippet(d.unitCurrency)}:{}),period:[...titlesOf(d).map(snippet),snippet(d.header)]}}));
   candidates.push({kind:'financial_fact',extractor_kind:'rule',extractor_ref:HK_EXTRACTOR_REF,natural_key,citations,payload:d.payload,fingerprint,
    input_snapshot:{content_sha256:ctx.document.content_sha256,pages_json_sha256:ctx.extraction.pages_json_sha256,page_nos:pageNos,extractor_version:ctx.extraction.extractor_version,
     table_algo_version:ctx.extraction.table_algo_version,code_version:ctx.extraction.code_version,hk_label_gen:HK_LABEL_GEN,hk_rules_version:HK_RULES_VERSION}});
@@ -14243,7 +14427,7 @@ const IS25:Base={statement:'IS',period_start:'2025-01-01',period_end:'2025-12-31
 const IS24:Base={statement:'IS',period_start:'2024-01-01',period_end:'2024-12-31',duration:'12M'};
 const BS25:Base={statement:'BS',period_start:null,period_end:'2025-12-31',duration:'INSTANT'};
 const CF25:Base={...IS25,statement:'CF'};
-interface Over{concept:string;value:string;presented?:string;unit?:string;scale?:string|null;rule?:FinancialFactPayload['period_derivation']['rule'];title?:string;roles?:('statement_title'|'column_header')[];snippet?:string;dropUnit?:boolean;label?:string;unitSnippet?:string;signFlip?:boolean}
+interface Over{concept:string;value:string;presented?:string;unit?:string;scale?:string|null;rule?:FinancialFactPayload['period_derivation']['rule'];title?:string;roles?:('statement_title'|'column_header')[];snippet?:string;dropUnit?:boolean;label?:string;unitSnippet?:string;signFlip?:boolean;unitCurrencySnippet?:string}
 let seq=0;
 /** Unit evidence consistent with (unit, scale): what scale.ts reads back as that unit and multiplier. */
 const UNIT_TEXT:Record<string,string>={'CNY|1':'單位：元 幣種：人民幣','CNY|1000':'人民幣千元','CNY|1000000':'人民幣百萬元','HKD|1000':'千港元','CNY/share|0.01':'RMB cents','CNY/share|1':'人民幣元','HKD/share|0.01':'港仙'};
@@ -14257,7 +14441,8 @@ function cand(base:Base,o:Over,verify:Map<string,CitationCheck|null>):CandidateR
  verify.set(id('header'),{integrity:'ok',currentExtraction:true,snippet:base.period_end.slice(0,4)});
  const payload={concept:o.concept,statement:base.statement,period_start:base.period_start,period_end:base.period_end,duration:base.duration,value:o.value,presented,unit,
   scale,sign_flip:o.signFlip??false,period_derivation:{rule:o.rule??(base.duration==='INSTANT'?'title_instant':'title_duration'),title_date:'2025-12-31',column_text:base.period_end.slice(0,4)},consolidation:'consolidated'} as unknown as FinancialFactPayload;
- const citations={value:id('value'),label:id('label'),...(o.dropUnit?{}:{unit:id('unit')}),period:(o.roles??['statement_title','column_header']).map(r=>({role:r,citation_id:r==='statement_title'?id('title'):id('header')}))};
+ if(o.unitCurrencySnippet!==undefined)verify.set(id('ucur'),{integrity:'ok',currentExtraction:true,snippet:o.unitCurrencySnippet});
+ const citations={value:id('value'),label:id('label'),...(o.dropUnit?{}:{unit:id('unit')}),...(o.unitCurrencySnippet!==undefined?{unit_currency:id('ucur')}:{}),period:(o.roles??['statement_title','column_header']).map(r=>({role:r,citation_id:r==='statement_title'?id('title'):id('header')}))};
  return {candidate_id:`cand-${n}`,document_id:EX.document_id,extraction_id:EX.extraction_id,kind:'financial_fact',extractor_kind:'rule',extractor_ref:HK_EXTRACTOR_REF,
   natural_key:`${o.concept}:${base.period_start??''}:${base.period_end}:${base.duration}:${unit}`,citations,payload,fingerprint:'f'.repeat(64),checks:[],checks_passed:false,status:'candidate',
   decision_kind:null,decided_by:null,approval_id:null,decided_at:null,inherited_from:null,
@@ -14366,6 +14551,15 @@ describe('runHkChecks',()=>{
   expect(out.map(r=>check(r,'value_replays').passed)).toEqual([true,false,false,false,true,false,false]);
   expect(out.slice(1).filter((_,i)=>i!==3).map(r=>(check(r,'value_replays').detail as {reason:string}).reason)).toEqual(['scale_mismatch','scale_mismatch','unit_evidence','scale_mismatch','scale_invalid']);
  });
+ it('value_replays (R2-P1-1): a per-share token without a currency takes it from the cited table unit, never from the payload',()=>{
+  const v=new Map<string,CitationCheck|null>();
+  const eps=(unit:string,o:Partial<Over>={})=>cand(IS25,{concept:'eps_basic',value:'0.0155',presented:'1.55',unit,scale:'0.01',unitSnippet:'仙',unitCurrencySnippet:'人民幣千元',...o},v);
+  const out=runHkChecks([eps('CNY/share'),eps('USD/share'),eps('CNY/share',{unitCurrencySnippet:undefined}),eps('HKD/share',{unitSnippet:'cents',unitCurrencySnippet:'千港元'})],ctx(v));
+  expect(out.map(r=>check(r,'value_replays').passed)).toEqual([true,false,false,true]);
+  expect(check(out[1],'value_replays').detail).toMatchObject({reason:'scale_mismatch',recorded:{unit:'USD/share'},evidence:{unit:'CNY/share'}});   // a CNY table changed to USD: blocked
+  expect(check(out[2],'value_replays').detail).toMatchObject({reason:'unit_evidence',evidence:'eps_currency_uncited'});
+  expect(out[1].checks_passed).toBe(false);
+ });
  it('period_known: duration band, instant without start, both evidence roles',()=>{
   const v=new Map<string,CitationCheck|null>();
   const out=runHkChecks([
@@ -14457,7 +14651,7 @@ import type {CandidateRow,CheckResult,CitationRow,DocumentRow,DocumentsDb,Extrac
 import {exactIdentity,sumDecimals} from './exact';
 import type {HkFactsPort} from './facts-port';
 import {detectAmountUnit,detectEpsUnit} from './scale';
-import type {Currency,Scale} from './scale';
+import type {Scale} from './scale';
 import {applySign,cellValue} from './values';
 
 /** The 18 HK concepts of spec §7.5 第 4 条 (all ids of the landed spec-2 FACT_CONCEPTS). */
@@ -14476,7 +14670,7 @@ const citesOf=(c:CandidateRow)=>c.citations as FactCitations;
 /** Every citation id a financial-fact candidate references (value, label, unit, period evidence), deduped. */
 export function citationIdsOf(c:FactCitations):string[]{
  const period=Array.isArray(c.period)?c.period.map(p=>p.citation_id):[];
- return [...new Set([c.value,c.label,c.unit,...period].filter((x):x is string=>typeof x==='string'&&x.length>0))];
+ return [...new Set([c.value,c.label,c.unit,c.unit_currency,...period].filter((x):x is string=>typeof x==='string'&&x.length>0))];
 }
 const digitsOf=(s:string)=>s.replace(/[\s,()\-–—]/g,'');
 const abs=(d:string)=>d.startsWith('-')?d.slice(1):d;
@@ -14504,27 +14698,32 @@ function unitKnown(p:FinancialFactPayload):CheckResult{
  return pass('unit_known',true);
 }
 const SCALES:ReadonlySet<string>=new Set(['1','0.01','1000','1000000']);
-const CURRENCIES:ReadonlySet<string>=new Set(['HKD','CNY','USD']);
 const canonOrNull=(v:unknown):string|null=>{if(typeof v!=='string')return null;try{return canonicalDecimal(v);}catch{return null;}};
-/** What the unit citation says: the amount unit line (currency + multiplier) or the per-share sub-unit token. */
-function unitEvidence(unit:unknown,text:string):{ok:true;unit:string;scale:Scale}|{ok:false;reason:string}{
+const amountOf=(text:string)=>detectAmountUnit([{page_no:0,line:{index:0,y:0,x0:0,x1:0,text,char_start:0,char_end:Array.from(text).length,items:[]}}]);
+/** What the cited unit evidence says — never the payload itself (R2-P1-1): the amount unit range (currency + multiplier, R2-P2-1), or the per-share token; a token without a currency (仙 / cents) takes the currency of the cited table amount unit (unit_currency), and without that citation it is unknown. */
+function unitEvidence(unit:unknown,text:string,currencyText:string|null):{ok:true;unit:string;scale:Scale}|{ok:false;reason:string}{
  if(typeof unit!=='string')return {ok:false,reason:'no_unit'};
  if(/\/share$/.test(unit)){
-  const ccy=unit.replace(/\/share$/,'');
-  const r=detectEpsUnit([{page_no:0,text,char_start:0}],CURRENCIES.has(ccy)?ccy as Currency:null);
+  const own=detectEpsUnit([{page_no:0,text,char_start:0}],null);
+  if(own.ok)return {ok:true,unit:own.unit,scale:own.scale};
+  if(own.reason!=='eps_currency')return {ok:false,reason:own.reason};
+  if(currencyText===null)return {ok:false,reason:'eps_currency_uncited'};
+  const table=amountOf(currencyText);
+  if(!table.ok)return {ok:false,reason:`eps_currency:${table.reason}`};
+  const r=detectEpsUnit([{page_no:0,text,char_start:0}],table.currency);
   return r.ok?{ok:true,unit:r.unit,scale:r.scale}:{ok:false,reason:r.reason};
  }
- const r=detectAmountUnit([{page_no:0,line:{index:0,y:0,x0:0,x1:0,text,char_start:0,char_end:Array.from(text).length,items:[]}}]);
+ const r=amountOf(text);
  return r.ok?{ok:true,unit:r.currency,scale:r.scale}:{ok:false,reason:r.reason};
 }
 /** Replays the cited number through the recorded transformation (P1-2): exact decimal strings only. */
 function valueReplays(c:CandidateRow,p:FinancialFactPayload,ctx:CheckContext):CheckResult{
  const cs=citesOf(c);
  const snip=(id:unknown)=>typeof id==='string'?ctx.verify.get(id)?.snippet??null:null;
- const value=snip(cs.value),label=snip(cs.label),unitText=snip(cs.unit);
- if(value===null||label===null||unitText===null)return fail('value_replays',true,{reason:'evidence_unavailable'});
+ const value=snip(cs.value),label=snip(cs.label),unitText=snip(cs.unit),currencyText=cs.unit_currency===undefined?null:snip(cs.unit_currency);
+ if(value===null||label===null||unitText===null||(cs.unit_currency!==undefined&&currencyText===null))return fail('value_replays',true,{reason:'evidence_unavailable'});
  if(typeof p.scale!=='string'||!SCALES.has(p.scale))return fail('value_replays',true,{reason:'scale_invalid',scale:p.scale??null});
- const ev=unitEvidence(p.unit,unitText);
+ const ev=unitEvidence(p.unit,unitText,currencyText);
  if(!ev.ok)return fail('value_replays',true,{reason:'unit_evidence',evidence:ev.reason,unit_snippet:unitText});
  if(ev.unit!==p.unit||ev.scale!==p.scale)return fail('value_replays',true,{reason:'scale_mismatch',recorded:{unit:p.unit,scale:p.scale},evidence:{unit:ev.unit,scale:ev.scale},unit_snippet:unitText});
  const cell=cellValue(value,p.scale as Scale);
@@ -14683,7 +14882,7 @@ export async function buildCheckContext(deps:CheckDeps,doc:DocumentRow,ex:Extrac
 - [ ] **Step 4: Run the checks test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts`
-Expected: PASS（15 tests）。
+Expected: PASS（16 tests）。
 
 - [ ] **Step 5: Write the failing test（候选运行，内存实现；生成器以 mock 替身，检查与库函数是真实的）**
 
@@ -14696,6 +14895,7 @@ vi.mock('../hk-facts/generate',()=>({generateHkCandidates:mocks.generate}));
 
 import {DocumentsDbError,EXTRACTOR_VERSION,HK_EXTRACTOR_REF,TABLE_ALGO_VERSION} from '../types';
 import type {CandidateInsert,DocumentRow,ExtractionRow,FinancialFactPayload,PagesJson} from '../types';
+import {HEARTBEAT_MS} from '../lease';
 import {CandidatesRunError,runDocumentsCandidates} from './run';
 import type {CandidatesOptions} from './run';
 import {ADMIN,CODE,FY25,candidatesDepsOf,citeSeedFact,hkHarness,naturalKeyOf,seedCandidateInsert,seedHkCandidates,seedHkExtraction,snapshotOf} from '../hk-facts/test-support';
@@ -14825,6 +15025,30 @@ describe('runDocumentsCandidates — leases and budget (P2-7)',()=>{
   expect(h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId)).toEqual([]);
   expect(await h.docs.extractionById(ex.extractionId)).toMatchObject({candidates_status:'pending',candidates_lease_batch_id:OTHER});
  });
+ it('R1-P2-7 round 2: generation that outlives the lease is renewed on a timer; a takeover mid-generation stops it with lease_lost, no candidate written',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=hkHarness();const ex=await pending(h);
+   const OTHER=await h.batch();let started=false;
+   mocks.generate.mockImplementationOnce(async()=>{started=true;await new Promise(r=>setTimeout(r,3*600_000));return {candidates:[],info:[]};});
+   const renew=h.docs.renewCandidatesLease;let renewals=0;
+   const deps=candidatesDepsOf(h);
+   const p=run(h,{},{...deps,db:{...deps.db,renewCandidatesLease:async(e:string,b:string,t:number)=>{renewals++;return renew(e,b,t);}}});
+   for(let i=0;i<2000&&!started;i++)await Promise.resolve();
+   expect(started).toBe(true);
+   const before=renewals;
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS*2);
+   expect(renewals-before).toBe(2);                                             // renewed while generation runs
+   h.docs.expireCandidatesLease(ex.extractionId);
+   expect(await h.docs.claimCandidatesLease(ex.extractionId,OTHER,600)).toBe(true);
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+   const r=await p;
+   expect(r.extractions[0]).toMatchObject({extractionId:ex.extractionId,outcome:'failed',code:'lease_lost',inserted:0});
+   await vi.advanceTimersByTimeAsync(3*600_000);                               // the abandoned generation finishes …
+   expect(h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId)).toEqual([]);   // … and nothing is written
+   expect(await h.docs.extractionById(ex.extractionId)).toMatchObject({candidates_status:'pending',candidates_lease_batch_id:OTHER});
+  }finally{vi.useRealTimers();}
+ });
  it('a takeover during generation stops before the insert; a phase without budget is deadline_hit and retried later',async()=>{
   const h=hkHarness();const ex=await pending(h);
   const OTHER=await h.batch();
@@ -14939,6 +15163,7 @@ import {buildCheckContext,hkCheckFindings,runHkChecks} from '../hk-facts/checks'
 import {supabaseHkFactsPort} from '../hk-facts/facts-port';
 import type {HkFactsPort} from '../hk-facts/facts-port';
 import {generateHkCandidates} from '../hk-facts/generate';
+import {HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
 export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto'];
@@ -14993,6 +15218,22 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
   errors.push({code:'skipped_summary',key:ex.extraction_id,message:JSON.stringify({leased_or_exhausted:1})});
   return;
  }
+ // R1-P2-7 round 2: the whole claimed phase (generation, checks, writes) runs under the lease heartbeat
+ // with guarded clients; a refused renewal → lease_lost at once and the abandoned phase can write nothing
+ // more. Its outcome, counts and errors are merged only when it completes.
+ const local={out:{...out},counts:emptyCounts(),errors:[] as BatchError[]};
+ try{
+  await withLeaseHeartbeat(()=>deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S),
+   signal=>candidatesClaimed({...deps,db:guardCalls(deps.db,signal),store:guardCalls(deps.store,signal),tables:guardCalls(deps.tables,signal),port:guardCalls(deps.port,signal)},batchId,ex,today,local.out,local.counts,local.errors),
+   {intervalMs:HEARTBEAT_MS});
+ }catch(e){
+  if(!(e instanceof DocumentsDbError&&e.code==='lease_lost'))throw e;
+  out.outcome='failed';out.code='lease_lost';counts.failed++;errors.push({code:'lease_lost',key:ex.extraction_id,message:'heartbeat'});
+  return;
+ }
+ Object.assign(out,local.out);for(const k of COUNTERS)counts[k]+=local.counts[k];errors.push(...local.errors);
+}
+async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:ExtractionRow,today:string,out:ExtractionOutcome,counts:BatchCounts,errors:BatchError[]):Promise<void>{
  // P2-7: renew before every mutating phase; a takeover → lease_lost (no finishCandidates, nothing more written)
  const keep=async()=>{if(!await deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S))throw new DocumentsDbError('lease_lost');};
  const budget=()=>{if(remainingMs(deps)<MIN_PHASE_MS)throw new PhaseDeadline();};
@@ -15208,7 +15449,7 @@ main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.
 - [ ] **Step 9: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/documents/hk-facts/checks.test.ts src/lib/documents/candidates/run.test.ts`
-Expected: PASS（checks 15、run 14）。
+Expected: PASS（checks 16、run 15）。
 Run: `npm run typecheck`
 Expected: 0 errors。
 Run: `npm run lint`
@@ -15254,7 +15495,8 @@ Run: `grep -c "export const planHkFactWrites\|export const evaluateHkFactRules\|
 
 ```ts
 // src/lib/documents/hk-facts/promote.test.ts
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
+import {HEARTBEAT_MS} from '../lease';
 import type {Market} from '../../facts/types';
 import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_PUB_GEN,TABLE_ALGO_VERSION} from '../types';
 import type {CitationRole} from '../types';
@@ -15530,6 +15772,30 @@ describe('runHkFactsSync',()=>{
   expect(g.docs.publications()).toEqual([]);
   expect(g.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,last_status:'failed'});
  });
+ it('R1-P2-7 round 2: a long planning step is covered by timer renewals; a takeover during it is lease_lost with nothing staged',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=hkHarness();await confirmedDoc(h);
+   const OTHER=await h.batch();let planning=false;let renewals=0;
+   const port={...h.port,
+    claimLease:async(i:string,b:string,t:number)=>{if(b!==OTHER)renewals++;return h.port.claimLease(i,b,t);},
+    readFacts:async(i:string,opts:Parameters<typeof h.port.readFacts>[1])=>{planning=true;await new Promise(r=>setTimeout(r,3*600_000));return h.port.readFacts(i,opts);}};
+   const p=run(h,{port});
+   for(let i=0;i<5000&&!planning;i++)await Promise.resolve();
+   expect(planning).toBe(true);
+   const before=renewals;
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS*2);
+   expect(renewals-before).toBe(2);
+   h.facts.expireLease(ISSUER,'HK' as unknown as Market);
+   expect(await h.port.claimLease(ISSUER,OTHER,600)).toBe(true);
+   await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+   const o=await p;
+   expect(o).toMatchObject({outcome:'failed',code:'lease_lost'});
+   await vi.advanceTimersByTimeAsync(3*600_000);                               // the abandoned planning resumes …
+   expect(h.facts.filings()).toEqual([]);expect(h.facts.facts()).toEqual([]);expect(h.docs.publications()).toEqual([]);   // … and stages nothing
+   expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:OTHER});
+  }finally{vi.useRealTimers();}
+ });
  it('P2-6: issuers whose only staged work waits on an owner quarantine decision are not due, so a later issuer is not starved by a limit-1 batch',async()=>{
   const B='00000000-0000-4000-8000-0000000000a2';
   const h=hkHarness({issuers:[{issuer_id:ISSUER,code:'00268'},{issuer_id:B,code:'00700'}]});
@@ -15597,8 +15863,9 @@ Expected: FAIL — `Failed to resolve import "./promote"`。
 //     release(success). No materialization (R5-3).
 // Every exit releases the lease (a lost lease stops all writes); after publish nothing can undo
 // the run: a later failure is reported next to outcome 'published' and step 0a repairs it. The HK
-// lease is renewed (same-batch claimLease) before steps 2, 3 and 4 and a takeover is lease_lost with
-// no further write; steps 2 and 4 start only with MIN_PHASE_MS of budget left, else deadline_hit
+// lease is renewed (same-batch claimLease) on a timer during the whole issuer (lease.ts heartbeat,
+// codex plan round 2) and again before steps 2, 3 and 4; a takeover is lease_lost with no further
+// write (guarded clients); steps 2 and 4 start only with MIN_PHASE_MS of budget left, else deadline_hit
 // (run abandoned, lease released) (codex plan round 1 P2-7).
 // raw_hash = value-citation locator hkex:<sha256[0:16]>:<extraction_id>:p<page>:c<start>-<end>.
 import {randomUUID} from 'node:crypto';
@@ -15614,6 +15881,7 @@ import {cpSlice} from '../extract/pages-json';
 import {DocumentsDbError,HK_EXTRACTOR_REF,HK_PUB_GEN} from '../types';
 import type {CandidateRow,CitationRole,CitationRow,DocumentRow,DocumentsDb,FactCitations,FinancialFactPayload,Page,PublicationRow} from '../types';
 import {HK_CONCEPT_IDS} from './checks';
+import {HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
 import {evaluateHkFactRules,planHkFactWrites,toFilingInsert} from './facts-port';
 import type {HkFactsPort,HkFilingInsert} from './facts-port';
 
@@ -15668,6 +15936,22 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
  if(row.status==='merged')return skip('issuer_merged');
  await port.ensureHkScope(issuer,stockCode);
  if(!await port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S))return skip('leased');
+ // R1-P2-7 round 2: the issuer's whole promotion runs under the lease heartbeat (same-batch claimLease
+ // every HEARTBEAT_MS) with guarded clients; a refused renewal → lease_lost at once, no further write
+ try{
+  return await withLeaseHeartbeat(()=>port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S),
+   signal=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen),
+   {intervalMs:HEARTBEAT_MS});
+ }catch(e){
+  if(!isLeaseLoss(e))throw e;
+  return {issuerId:issuer,runId:null,outcome:'failed',code:'lease_lost',counts:{...emptyCounts(),failed:1},errors:[{code:'lease_lost',key:issuer,message:'heartbeat'}],staged:0};
+ }
+}
+
+async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubGen:number):Promise<HkIssuerOutcome>{
+ const {db,port,tables}=deps;
+ const o:HkIssuerOutcome={issuerId:issuer,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],staged:0};
+ const skip=(reason:string)=>{o.outcome='skipped';o.code=reason;o.errors.push({code:'skipped_summary',key:issuer,message:JSON.stringify({[reason]:1})});return o;};
  let leaseHeld=true,released=false,published=false,abandoned=false;let runId:string|null=null;
  const nowIso=()=>deps.now().toISOString();
  const fail=(code:string,message?:string)=>{o.outcome='failed';o.code=code;o.errors.push(message===undefined?{code,key:issuer}:{code,key:issuer,message});o.counts.failed+=Math.max(1,o.counts.fetched-o.counts.quarantined);return o;};
@@ -15785,6 +16069,7 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
    const f=factOf.get(c.candidate_id)!;if(!newIds.has(f))continue;
    const x=c.citations as FactCitations;
    add(f,x.value,'value');add(f,x.label,'label');add(f,x.unit,'unit');
+   if(typeof x.unit_currency==='string')add(f,x.unit_currency,'unit');   // the table currency of a 仙 / cents EPS (R2-P1-1)
    for(const p of x.period)add(f,p.citation_id,'period');
   }
   await renew();
@@ -15856,7 +16141,7 @@ export async function promoteIssuerNow(deps:PromoteDeps&{codeVersion:string|null
 - [ ] **Step 5: Run the promote test, expect PASS**
 
 Run: `npm test -- src/lib/documents/hk-facts/promote.test.ts`
-Expected: PASS（18 tests）。
+Expected: PASS（19 tests）。
 
 - [ ] **Step 6: 接入候选阶段 3（修改 `candidates/run.ts`）**
 
@@ -15957,7 +16242,7 @@ describe('runDocumentsCandidates — promote phase',()=>{
 ```
 
 Run: `npm test -- src/lib/documents/candidates/run.test.ts`
-Expected: PASS（17 tests）。
+Expected: PASS（18 tests）。
 
 - [ ] **Step 8: Write the failing cron route test**
 
@@ -16440,7 +16725,7 @@ import {finalizeHkHooks} from '../hk-facts/resolve';
 ```
 
 Run: `npm test -- src/lib/documents/candidates/run.test.ts`
-Expected: PASS（18 tests）。
+Expected: PASS（19 tests）。
 
 - [ ] **Step 4: Implement the shared admin HTTP helper**
 
@@ -18523,3 +18808,13 @@ git commit -m "docs(documents): F3 runbook, spec §17 deviations, implementation
 | P2-5 | 接受。游标改为 source_ref 检查点 `{segment,last_ref,settled,attempts,seq}`：续跑时 `settled` 跳过、已入库且不晚于 `last_ref` 新位置的跳过、未入库项一律处理；重试次数按 source_ref；`knownSourceRefs` 查整张新列表 | 共享契约 `DocScopeCursor`；Task 7 `sync.ts`（头注、续跑算法、`ItemResult.stored`）、`sync.test.ts`（全部游标断言改形；新用例：检查点项被移出列表时不跳过 B、检查点前插入的 X 仍抓取、失败项前再插入时次数仍记在 r-c、第三次耗尽隔离）；Task 6 `pollSegment` 测试游标；Part B 说明与 runbook §6 SQL |
 | P2-6 | 接受。`hk_promotion_due` 条件 (c) 排除"运行已发布且事实仍隔离"的暂存发布行（等 owner 裁决，0a 步也动不了它）；裁决使事实变 ok 或消失后重新到期。内存实现同步 | Task 13 迁移二 SQL + 头注、内存 `promotionDue`、契约用例（裁决前不到期、裁决后到期）；Task 16 `promote.test.ts` 新用例（limit 1：首个发行人等隔离裁决时第二个发行人被选中；第二批空；裁决后首个发行人回来） |
 | P2-7 | 接受。迁移一新增 `renew_document_extract_lease`、`renew_candidates_lease`（持有者续租、不计尝试；被接管或状态已变 → false）；`DocumentsDb.renewExtractLease`/`renewCandidatesLease` 三实现；抽取在上传 pages.json 与 `finishExtract` 前续租；候选在生成、插入、写检查、隔离前续租，生成与检查前查预算（`MIN_PHASE_MS=20s`，不足 → `deadline_hit`、`finishCandidates(failed)`）；晋升在第 2/3/4 步前以同批次 `claimLease` 续租，第 2、4 步前查预算。被接管 → `lease_lost`、不再写 | Task 1 SQL + 权限列表；共享契约两处；Task 2/3 三实现 + 契约用例；Task 10 `extract/run.ts` + 用例（被接管 → 无 pages.json、无抽取；未被接管 → 续租后完成）；Task 15 `candidates/run.ts` + 2 个用例；Task 16 `promote.ts` + 用例（被接管 → 无 filing/事实/发布行；预算不足 → `deadline_hit`、运行废弃、租约释放）；runbook §4 |
+
+### Codex 计划审计第 2 轮处置
+
+审计：`docs/audits/2026-11-06-document-pipeline/03-codex-plan-round2.md`（第 1 轮已提交为 `535cc2f`；第 1 轮除 P1-2、P2-7 外均判 CLOSED）；处置记录：`docs/audits/2026-11-06-document-pipeline/04-disposition-round2.md`。改后沙箱复跑：`tsc --noEmit` 0 错误；`eslint --max-warnings=0`（F3 全部 121 个 TS 文件 + `batches.ts`/`local-db.ts`）0 输出；F3 单测 44 个文件 346 例通过；本机 PostgreSQL 17 四个 F3 critical 套件 57 例通过。
+
+| ID | 处置 | 改动位置 |
+|---|---|---|
+| R2-P1-1（并关闭 P1-2） | 接受。`detectEpsUnit` 回报 `inherited`；仙/cents 这类不含币种的子单位，生成器另记表的金额单位引用 `FactCitations.unit_currency`（晋升时也以 role `unit` 写入 `fact_citations`）；检查只从已引用证据推币种：先读子单位本身，不含币种时用 `unit_currency` 引用的金额单位，没有该引用 → `eps_currency_uncited`；绝不读 `payload.unit`。迁移二 `assert_run_evidence_complete` 与内存实现：unit 引用"恰 1 条"改为"至少 1 条" | 共享契约 `FactCitations`（两处）；Task 14 `scale.ts`/`generate.ts`（Draft.unitCurrency、引用、指纹、page_nos）+ `scale.test.ts`；Task 15 `checks.ts`（`unitEvidence`、`citationIdsOf`）+ `checks.test.ts`（仙 + 人民幣千元：CNY 通过、改成 USD/share 阻断、缺币种引用阻断、cents + 千港元 通过）；`generate.test.ts` 生成→检查用例（CNY 表 + 仙，payload 改 USD/share → `scale_mismatch` 阻断）；Task 13 迁移二 SQL 与内存 `assertEvidence`；Task 16 `promote.ts` 证据 |
+| R2-P2-1 | 接受。`detectAmountUnit` 返回 `evidence`（首个币种行与倍数行）与覆盖两行的单一引用范围 `cite`；该范围是检测输入（标题区 + 首表表头，页首连续行）的子段，检查对引用文本重放得到同一币种与倍数 | Task 14 `scale.ts` + `scale.test.ts`（分行、跨页 → `unit_split_pages`）；`generate.test.ts` 生成→检查用例（`人民幣` 与 `千元` 分两行，全部候选 `value_replays` 通过、`checks_passed`） |
+| R1-P2-7（第 1 轮未关闭） | 接受。新文件 `lease.ts`：`withLeaseHeartbeat(renew, fn, {intervalMs})` 在被等待的长阶段期间每 `HEARTBEAT_MS=120s` 续租；续租返回 false → 立即以 `lease_lost` 拒绝并中止 AbortSignal；续租抛错视为暂时、下一拍重试；阶段结束（无论成败）停表并中止 signal。`guardCalls` 包装客户端，中止后一切调用抛 `lease_lost`，被放弃的阶段不再写。接入：抽取版面（pdf.js）、候选整段（生成、检查、写入，结果仅在完成时合并）、每个发行人的晋升（`promoteIssuer` 拆出 `promoteClaimed`）。阻塞工作有界：`ExtractBudget.maxPages`（`MAX_PDF_PAGES=1500`，超出 → `too_many_pages`）与每文档预算 `DOC_EXTRACT_MS=240s`（远小于 600 s 租约，逐页检查，页间 await 让心跳运行）；第 1 轮的阶段前续租保留 | Task 10 新文件 `lease.ts` + `lease.test.ts`（假定时器：长阶段中续租；接管 → 立即 `lease_lost`、被放弃的阶段写调用被拒；续租抛错重试）、`extract/run.ts` + 假定时器用例（3 次续租后接管 → `lease_lost`、无 pages.json/抽取）；Task 9 `pdf.ts`（`maxPages`、`ExtractTooManyPages`）+ 测试；Task 15 `candidates/run.ts`（`candidatesClaimed`）+ 假定时器用例（生成中续租、接管 → `lease_lost`、生成结束后仍无候选）；Task 16 `promote.ts` + 假定时器用例（规划中续租、接管 → `lease_lost`、之后不暂存任何东西）；文件结构、契约补充 |
