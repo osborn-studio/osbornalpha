@@ -53,3 +53,17 @@
 | 原始元数据 | 侧车 `.meta.json` 只含 `cik/name/http_status/kind/sha256/bytes/content_type`，不含 User-Agent | — | UA 含邮箱，故不入元数据 |
 
 结论：分页形状与假设一致，无需改解析器或夹具。无规格 §15 偏差。
+
+## Task 7a · HKEX 名称写法抽查（规格 §4.2.2 规则 2；日期 2026-11-06）
+
+输入：`.claude/scratch/verify/ListOfSecurities.xlsx`（sha256 `9f1b9dc5d2869ee6afd9d6d8772878678843d8a8afee0146590b920269dbfe79`，17,080 行），经 `parseHkexList` 读取；A 侧名称取 `names.test.ts` 的 A 侧写法，比较 `normalizeCompanyName` 结果。
+
+| 代码 | HKEX `Name of Securities` | Category | H 侧归一 | A 侧写法归一 | 相等 |
+|---|---|---|---|---|---|
+| 02338 | `WEICHAI POWER` | Equity | `weichaipower` | `weichaipower` | 是 |
+| 01211 | `BYD COMPANY` | Equity | `byd` | `byd` | 是 |
+| 02318 | `PING AN` | Equity | `pingan` | `pinganinsurancegroupcompanyofchina` | 否 |
+| 03968 | `CM BANK` | Equity | `cmbank` | `chinamerchantsbank` | 否 |
+| 00386 | `SINOPEC CORP` | Equity | `sinopec` | `chinapetroleumchemical` | 否 |
+
+结论：HKEX 名单用的是简称（`PING AN`、`CM BANK`、`SINOPEC CORP`），不是测试里假设的 "… CO LTD - H" 全称；5 家中 2 家归一后相等，3 家不等。按计划，不改测试也不扩词表（测试验证的是归一规则本身）；规则 2 的实际命中率会低（只有 HKEX 简称恰好等于发行人名称的公司），不匹配时"不产生声明"，是精度优先的预期结果。规则 1（同 LEI + HKEX ISIN 硬标识符）才是主要的自动挂接路径。

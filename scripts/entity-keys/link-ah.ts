@@ -21,7 +21,7 @@ import {filterGleifLines,subsetForLeis} from '../../src/lib/entities/identifiers
 import {HKEX_LIST_FILES,mergeHkexIsins,parseHkexList,type HkexFileId,type HkexListParse} from '../../src/lib/entities/identifiers/hkex-list';
 import {NAMES_VERSION} from '../../src/lib/entities/identifiers/names';
 import {EXCH_MAP_VERIFIED,EXCH_MAP_VERSION,OPENFIGI_VERSION,groupFigiResults,mapIsins,mapTickers} from '../../src/lib/entities/identifiers/openfigi';
-import {applyAhLinks,figiHitsFromResults,planAhLinks,type AhIssuer,type UniverseListing} from '../../src/lib/entities/link-ah';
+import {applyAhLinks,figiErrorsFromResults,figiHitsFromResults,planAhLinks,selectAhIssuers,type TickerLookup,type UniverseListing} from '../../src/lib/entities/link-ah';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
@@ -46,11 +46,9 @@ async function main(){
  const asOf=new Date().toISOString().slice(0,10);
  const open=await selectAll(tables,'issuer_securities',{valid_to:null},'ticker');
  const openOwner=new Map(open.map(r=>[String(r.ticker),String(r.issuer_id)]));
- const issuers:AhIssuer[]=(await selectAll(tables,'issuers',{status:'active'},'issuer_id')).map(r=>{
-  const id=String(r.issuer_id);const tickers=open.filter(o=>String(o.issuer_id)===id).map(o=>String(o.ticker));
-  return {issuer_id:id,lei:str(r.lei),usci:str(r.usci),names:[str(r.canonical_name_en),str(r.canonical_name_zh)].filter((n):n is string=>n!==null),
-   aTickers:tickers.filter(t=>/^\d{6}\.(SH|SZ)$/.test(t)),hTickers:tickers.filter(t=>/^\d{5}\.HK$/.test(t))};
- }).filter(i=>(i.aTickers.length>0||i.usci!==null)&&i.hTickers.length===0);
+ const issuers=selectAhIssuers((await selectAll(tables,'issuers',{status:'active'},'issuer_id')).map(r=>({
+  issuer_id:String(r.issuer_id),lei:str(r.lei),usci:str(r.usci),names:[str(r.canonical_name_en),str(r.canonical_name_zh)].filter((n):n is string=>n!==null)})),
+  open.map(o=>({issuer_id:String(o.issuer_id),ticker:String(o.ticker)})));
  const universe=new Map<string,UniverseListing>((await selectAll(tables,'stocks_universe',{market:'HK'},'ticker')).map(r=>[String(r.ticker),{list_date:str(r.list_date),source:str(r.source),source_updated_at:str(r.source_updated_at)}]));
  const leis=new Set(issuers.map(i=>i.lei).filter((l):l is string=>l!==null));
  const lines:string[]=[];
@@ -78,9 +76,9 @@ async function main(){
   const deps={fetch,raw,apiKey:process.env.OPENFIGI_API_KEY||null};
   const m=await mapIsins([...new Set([...subset.byLei.values()].flat())].sort(),deps);
   const figiHits=figiHitsFromResults(issuers,subset,m.byKey);
-  // OpenFIGI tickers are hints: HKEX code+ISIN validates; a ticker-level FIGI is the fallback for codes HKEX has no ISIN for
+  // OpenFIGI tickers are hints: only an HKEX ISIN equal to the hit's ISIN attaches automatically; a ticker-level lookup is claim evidence for the rest
   const unvalidated=[...new Set(figiHits.filter(h=>h.figi&&!hkexIsins?.has(h.ticker.slice(0,5))).map(h=>h.ticker))].sort();
-  const tickerFigi=new Map<string,string>();
+  const tickerLookup=new Map<string,TickerLookup>();
   let exhausted=m.exhausted;
   if(unvalidated.length&&!exhausted){
    const t=await mapTickers(unvalidated,deps);
@@ -88,14 +86,14 @@ async function main(){
    for(const [tk,r] of t.byKey){
     if(r.status!=='ok')continue;
     const c=groupFigiResults(r.records).candidates.find(x=>x.market==='HK'&&x.ticker===tk);
-    if(c&&c.groups.length===1)tickerFigi.set(tk,c.groups[0].figi);
+    if(c&&c.groups.length===1)tickerLookup.set(tk,{figi:c.groups[0].figi,level:c.groups[0].level,evidence:r.evidence});
    }
   }
   const listRaw=hkexRaw.get('list_of_securities');
-  const plan=planAhLinks({asOf,issuers,figiHits,universe,openOwner,hkexIsins,tickerFigi,
+  const plan=planAhLinks({asOf,issuers,figiHits,universe,openOwner,hkexIsins,hkexSuperseded:new Set((merged?.dropped??[]).map(d=>d.stockCode)),tickerLookup,figiErrors:figiErrorsFromResults(issuers,subset,m.byKey),
    hkex:listParse?{rows:listParse.rows,file:listParse.file,sha256:listParse.sha256}:null,
    raw:{gleif:{sha256:gleifRaw.sha256,path:gleifRaw.path},...(listRaw?{hkex:listRaw}:{})}});
-  return {plan,exhausted,result:batchId?await applyAhLinks(tables,plan,{batchId,dataset:DATASET}):null};
+  return {plan,exhausted,figiFailures:m.failures.length+m.unprocessed.length,result:batchId?await applyAhLinks(tables,plan,{batchId,dataset:DATASET}):null};
  };
  if(!apply){
   const {plan,exhausted}=await run(memoryRawStore(),null);
@@ -108,8 +106,9 @@ async function main(){
   gleif_subset_sha256:subset.sha256,hkex_file_sha256s:JSON.stringify(Object.fromEntries(hkexParses.map(p=>[p.file,p.sha256]))),openfigi:OPENFIGI_VERSION,exch_map:EXCH_MAP_VERSION,names:NAMES_VERSION,as_of:asOf}});
  let counts=emptyCounts(),errors:BatchError[]=[],status:BatchStatus='failed';
  try{
-  const {result,exhausted}=await run(supabaseRawStore(admin),batchId);
+  const {result,exhausted,figiFailures}=await run(supabaseRawStore(admin),batchId);
   if(result)({counts,errors}=result);
+  if(figiFailures){counts.failed+=figiFailures;errors=[...errors,{code:'openfigi_unprocessed',message:`${figiFailures} OpenFIGI request failures or unprocessed ISINs`}];}
   if(exhausted)errors=[...errors,{code:'quota_exhausted',message:'OpenFIGI limit reached: remaining jobs skipped'}];
  }catch(e){errors=[...errors,{code:'exception',message:errorMessage(e)}];}
  finally{
