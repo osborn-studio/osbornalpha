@@ -199,8 +199,8 @@ export class CompanyDbError extends Error{constructor(public code:'stale_computa
 export interface InboxRow extends EventRow{read:boolean}
 export interface CompanyDb{
  // digest (service_role)
- digestDue(now:Date,limit:number):Promise<DueStream[]>;
- sweepDue(olderThan:Date,now:Date,limit:number):Promise<DueStream[]>;
+ digestDue(now:Date,limit:number,market?:Market):Promise<DueStream[]>;   // market filter applies before the limit (plan audit Q6)
+ sweepDue(olderThan:Date,now:Date,limit:number,market?:Market):Promise<DueStream[]>;
  beginAttempt(issuer:string,market:Market,now:Date):Promise<number>;
  replaceDigest(issuer:string,market:Market,batch:string,attemptId:number,rebuildId:string,basedOnRev:number,sweep:boolean,events:EventInput[],coverage:CoverageInput):Promise<ReplaceResult>;
  markDigestFailed(issuer:string,market:Market,attemptId:number,now:Date):Promise<boolean>;
@@ -234,7 +234,7 @@ export interface CompanyDb{
 | `replace_company_fact_evidence(p_issuer uuid, p_market text, p_rows jsonb) → jsonb {upserted, deleted}` | plpgsql definer | service_role | §0.1 item 2：每行 `fact_id` 必须属于该流；整流替换（不在 p_rows 中的旧行删除） |
 | `company_fact_evidence(p_fact_ids uuid[]) → jsonb` | sql/plpgsql definer stable | anon, authenticated, service_role | §0.1 item 2：≤100；只 ok + published run + 当前代；白名单字段 |
 | `company_read_snapshot(p_issuer uuid, p_market text, p_concepts text[], p_as_of date, p_from date, p_to date, p_history boolean, p_limit int) → jsonb {facts: <read_facts 信封>, filings: [...]}` | sql **invoker** stable | anon, authenticated, service_role | §0.1 item 3 |
-| `company_digest_due(p_now timestamptz, p_limit int) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role | §4.7（`fact_sync_scope` 对 service_role 只读，left join 需一条语句）；`company_sweep_due` 只选 `state_rev > 0` |
+| `company_digest_due(p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role | §4.7（`fact_sync_scope` 对 service_role 只读，left join 需一条语句）；`company_sweep_due` 只选 `state_rev > 0` |
 | `company_list_coverage(p_market text, p_issuer_ids uuid[], p_sort text, p_offset int, p_limit int) → jsonb {rows, total}` | plpgsql **invoker** stable | anon, authenticated, service_role | §8；`listCoverage` 三实现都调它（`sort='name'` 需联 `issuers` 排序后分页） |
 | 内部助手 `company_canonical_json(jsonb) → text`、`company_ev_keys/_text/_date/_int/_uuid/_fact/_filing/_side/_check`、`company_cov_check`、`company_evidence_check` | definer | **不授任何客户端角色** | §4.6 ⑤、事件/覆盖/证据校验 |
 | 触发器函数 `company_watches_limit()`（≥200 → `watch_limit`）、`company_watches_touch()`、`company_event_reads_check()`（Task 1 表迁移） | plpgsql | 触发器 | 决策 F、§4.3 |
@@ -1055,7 +1055,7 @@ git commit -m "feat(company): event, coverage, watch, receipt, digest-state and 
 | `company_fact_evidence(p_fact_ids uuid[]) → jsonb {<fact_id>: EvidenceRecord}` | plpgsql definer stable | anon, authenticated, service_role |
 | `company_read_snapshot(p_issuer uuid, p_market text, p_concepts text[], p_as_of date, p_from date, p_to date, p_history boolean, p_limit int) → jsonb {facts, filings}` | **sql invoker** stable | anon, authenticated, service_role |
 | `company_list_coverage(p_market text, p_issuer_ids uuid[], p_sort text, p_offset int, p_limit int) → jsonb {rows, total}` | plpgsql invoker stable | anon, authenticated, service_role |
-| `company_digest_due(p_now timestamptz, p_limit int) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role |
+| `company_digest_due(p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role |
 | `company_canonical_json(jsonb) → text` 与 `company_ev_*`、`company_cov_check`、`company_evidence_check` 助手 | invoker | 无（只被 definer 函数以 owner 身份调用） |
 
 `replace_company_digest` 一个事务内的固定顺序：
@@ -1261,8 +1261,8 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   {sig:'public.replace_company_digest(uuid,text,uuid,bigint,uuid,bigint,boolean,jsonb,jsonb)',definer:true,roles:['service_role']},
   {sig:'public.mark_company_digest_failed(uuid,text,bigint,timestamptz)',definer:true,roles:['service_role']},
   {sig:'public.replace_company_fact_evidence(uuid,text,jsonb)',definer:true,roles:['service_role']},
-  {sig:'public.company_digest_due(timestamptz,int)',definer:true,roles:['service_role']},
-  {sig:'public.company_sweep_due(timestamptz,timestamptz,int)',definer:true,roles:['service_role']},
+  {sig:'public.company_digest_due(timestamptz,int,text)',definer:true,roles:['service_role']},
+  {sig:'public.company_sweep_due(timestamptz,timestamptz,int,text)',definer:true,roles:['service_role']},
   {sig:'public.company_digest_backlog()',definer:true,roles:['service_role']},
   {sig:'public.company_fact_evidence(uuid[])',definer:true,roles:ALL},
   {sig:'public.company_read_snapshot(uuid,text,text[],date,date,date,boolean,int)',definer:false,roles:ALL},
@@ -1445,6 +1445,9 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await due(iso(0))).toEqual([{issuerId:behind2.iss,market:'US',stateRev:2,digestedRev:0},{issuerId:behind1.iss,market:'US',stateRev:1,digestedRev:0}]);
   expect((await due(iso(2*3600_000))).map(x=>x.issuerId)).toEqual([behind2.iss,...[behind1.iss,backoff.iss].sort()]);
   expect(await fx.one(`select public.company_digest_due(now(),0) v`)).toEqual([]);
+  // market filter applies inside the limit (plan audit Q6): these streams are US, so a CN-only selection excludes them
+  expect(((await fx.one(`select public.company_digest_due(now(),100000,'CN') v`)) as Due[]).filter(x=>mine.has(x.issuerId))).toEqual([]);
+  expect(((await fx.one(`select public.company_digest_due(now(),100000,'US') v`)) as Due[]).filter(x=>mine.has(x.issuerId)).length).toBeGreaterThan(0);
   const sweep=async(older:string,at:string)=>((await fx.one(`select public.company_sweep_due($1::timestamptz,$2::timestamptz,100000) v`,[older,at])) as Due[]).filter(x=>mine.has(x.issuerId)).map(x=>x.issuerId);
   expect(await sweep(iso(0),iso(0))).toEqual([behind1.iss,behind2.iss,current.iss].sort());     // all never swept: issuer order
   const ca2=await begin(current.iss);await replace({iss:current.iss,batch:b,attempt:ca2,rev:1,sweep:true,events:[]});
@@ -2109,7 +2112,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- 4.7 selection (service_role)
-create or replace function public.company_digest_due(p_now timestamptz, p_limit int)
+create or replace function public.company_digest_due(p_now timestamptz, p_limit int, p_market text default null)
 returns jsonb language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_agg(jsonb_build_object('issuerId', x.issuer_id, 'market', x.market, 'stateRev', x.state_rev, 'digestedRev', x.digested_rev)
                             order by x.behind desc, x.issuer_id, x.market), '[]'::jsonb)
@@ -2118,12 +2121,13 @@ returns jsonb language sql stable security definer set search_path = '' as $$
     from public.fact_sync_scope s
     left join public.company_digest_state d on d.issuer_id = s.issuer_id and d.market = s.market
     where s.state_rev > coalesce(d.digested_rev, 0) and coalesce(d.next_attempt_at, 'epoch'::timestamptz) <= p_now
+      and (p_market is null or s.market = p_market)   -- market filter inside the limit (plan audit Q6)
     order by 5 desc, s.issuer_id, s.market
     limit greatest(coalesce(p_limit, 0), 0)
   ) x
 $$;
 
-create or replace function public.company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int)
+create or replace function public.company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int, p_market text default null)
 returns jsonb language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_agg(jsonb_build_object('issuerId', x.issuer_id, 'market', x.market, 'stateRev', x.state_rev, 'digestedRev', x.digested_rev)
                             order by x.swept_at asc nulls first, x.issuer_id, x.market), '[]'::jsonb)
@@ -2134,6 +2138,7 @@ returns jsonb language sql stable security definer set search_path = '' as $$
     where s.state_rev > 0
       and (d.swept_at is null or d.swept_at < p_older_than)
       and coalesce(d.next_attempt_at, 'epoch'::timestamptz) <= p_now
+      and (p_market is null or s.market = p_market)
     order by d.swept_at asc nulls first, s.issuer_id, s.market
     limit greatest(coalesce(p_limit, 0), 0)
   ) x
@@ -2342,7 +2347,7 @@ do $$ declare f text; begin
   foreach f in array array[
     'public.begin_company_digest_attempt(uuid,text,timestamptz)', 'public.replace_company_digest(uuid,text,uuid,bigint,uuid,bigint,boolean,jsonb,jsonb)',
     'public.mark_company_digest_failed(uuid,text,bigint,timestamptz)', 'public.replace_company_fact_evidence(uuid,text,jsonb)',
-    'public.company_digest_due(timestamptz,int)', 'public.company_sweep_due(timestamptz,timestamptz,int)', 'public.company_digest_backlog()'] loop
+    'public.company_digest_due(timestamptz,int,text)', 'public.company_sweep_due(timestamptz,timestamptz,int,text)', 'public.company_digest_backlog()'] loop
     execute format('revoke execute on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;
@@ -2501,8 +2506,8 @@ export class CompanyDbError extends Error{constructor(public code:'stale_computa
 export interface InboxRow extends EventRow{read:boolean}
 export interface CompanyDb{
  // digest (service_role)
- digestDue(now:Date,limit:number):Promise<DueStream[]>;
- sweepDue(olderThan:Date,now:Date,limit:number):Promise<DueStream[]>;
+ digestDue(now:Date,limit:number,market?:Market):Promise<DueStream[]>;   // market filter applies before the limit (plan audit Q6)
+ sweepDue(olderThan:Date,now:Date,limit:number,market?:Market):Promise<DueStream[]>;
  beginAttempt(issuer:string,market:Market,now:Date):Promise<number>;
  replaceDigest(issuer:string,market:Market,batch:string,attemptId:number,rebuildId:string,basedOnRev:number,sweep:boolean,events:EventInput[],coverage:CoverageInput):Promise<ReplaceResult>;
  markDigestFailed(issuer:string,market:Market,attemptId:number,now:Date):Promise<boolean>;
@@ -3189,8 +3194,8 @@ export function supabaseCompanyDb(client:SupabaseClient):CompanyDb{
  const rows=async(q:PromiseLike<RpcResult>,fk?:Code):Promise<Record<string,unknown>[]>=>{const {data,error}=await q;if(error)throw toCompanyDbError(error,fk);return (data??[]) as Record<string,unknown>[];};
  const watch=(userId:string,issuerId:string)=>c.from('company_watches').select('*').eq('user_id',userId).eq('issuer_id',issuerId).limit(1);
  return {
-  async digestDue(now,limit){return dueFromJson(await call('company_digest_due',{p_now:now.toISOString(),p_limit:limit}));},
-  async sweepDue(olderThan,now,limit){return dueFromJson(await call('company_sweep_due',{p_older_than:olderThan.toISOString(),p_now:now.toISOString(),p_limit:limit}));},
+  async digestDue(now,limit,market){return dueFromJson(await call('company_digest_due',{p_now:now.toISOString(),p_limit:limit,p_market:market??null}));},
+  async sweepDue(olderThan,now,limit,market){return dueFromJson(await call('company_sweep_due',{p_older_than:olderThan.toISOString(),p_now:now.toISOString(),p_limit:limit,p_market:market??null}));},
   async beginAttempt(issuer,market,now){return Number(await call('begin_company_digest_attempt',{p_issuer:issuer,p_market:market,p_now:now.toISOString()}));},
   async replaceDigest(issuer,market,batch,attemptId,rebuildId,basedOnRev,sweep,events,coverage){
    return replaceResultFromJson(await call('replace_company_digest',{p_issuer:issuer,p_market:market,p_batch:batch,p_attempt_id:attemptId,p_rebuild_id:rebuildId,p_based_on_rev:basedOnRev,p_sweep:sweep,p_events:events,p_coverage:coverage}));
@@ -3490,16 +3495,16 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
   return st;
  };
  const raw:CompanyDb={
-  async digestDue(at,limit){
+  async digestDue(at,limit,market){
    const t=at.toISOString();
-   const rows=facts.scope().map(s=>({s,dr:states.get(sk(s.issuer_id,s.market))?.digested_rev??0,next:states.get(sk(s.issuer_id,s.market))?.next_attempt_at??EPOCH}))
+   const rows=facts.scope().filter(s=>!market||s.market===market).map(s=>({s,dr:states.get(sk(s.issuer_id,s.market))?.digested_rev??0,next:states.get(sk(s.issuer_id,s.market))?.next_attempt_at??EPOCH}))
     .filter(r=>r.s.state_rev>r.dr&&r.next<=t);
    rows.sort((a,b)=>(b.s.state_rev-b.dr)-(a.s.state_rev-a.dr)||cmp(a.s.issuer_id,b.s.issuer_id)||cmp(a.s.market,b.s.market));
    return rows.slice(0,Math.max(0,limit)).map(r=>({issuerId:r.s.issuer_id,market:r.s.market,stateRev:r.s.state_rev,digestedRev:r.dr}));
   },
-  async sweepDue(olderThan,at,limit){
+  async sweepDue(olderThan,at,limit,market){
    const older=olderThan.toISOString();const t=at.toISOString();
-   const rows=facts.scope().map(s=>({s,st:states.get(sk(s.issuer_id,s.market))}))
+   const rows=facts.scope().filter(s=>!market||s.market===market).map(s=>({s,st:states.get(sk(s.issuer_id,s.market))}))
     .filter(({s,st})=>s.state_rev>0&&(!st?.swept_at||st.swept_at<older)&&(st?.next_attempt_at??EPOCH)<=t);
    rows.sort((a,b)=>{const x=a.st?.swept_at??null,y=b.st?.swept_at??null;return (x===y?0:x===null?-1:y===null?1:cmp(x,y))||cmp(a.s.issuer_id,b.s.issuer_id)||cmp(a.s.market,b.s.market);});
    return rows.slice(0,Math.max(0,limit)).map(({s,st})=>({issuerId:s.issuer_id,market:s.market,stateRev:s.state_rev,digestedRev:st?.digested_rev??0}));
@@ -3889,8 +3894,8 @@ export function pgCompanyDb(pool:Pool):CompanyDb{
  const svc=<T>(body:(c:PoolClient)=>Promise<T>)=>asRole(pool,'service_role',null,body);
  const user=<T>(userId:string,body:(c:PoolClient)=>Promise<T>,fk?:CompanyDbError['code'])=>asRole(pool,'authenticated',userId,body,fk);
  return {
-  async digestDue(now,limit){return dueFromJson(await fn('service_role','public.company_digest_due($1::timestamptz,$2)',[now.toISOString(),limit]));},
-  async sweepDue(olderThan,now,limit){return dueFromJson(await fn('service_role','public.company_sweep_due($1::timestamptz,$2::timestamptz,$3)',[olderThan.toISOString(),now.toISOString(),limit]));},
+  async digestDue(now,limit,market){return dueFromJson(await fn('service_role','public.company_digest_due($1::timestamptz,$2,$3)',[now.toISOString(),limit,market??null]));},
+  async sweepDue(olderThan,now,limit,market){return dueFromJson(await fn('service_role','public.company_sweep_due($1::timestamptz,$2::timestamptz,$3,$4)',[olderThan.toISOString(),now.toISOString(),limit,market??null]));},
   async beginAttempt(issuer,market,now){return Number(await fn('service_role','public.begin_company_digest_attempt($1,$2,$3::timestamptz)',[issuer,market,now.toISOString()]));},
   async replaceDigest(issuer,market,batch,attemptId,rebuildId,basedOnRev,sweep,events,coverage){
    return replaceResultFromJson(await fn('service_role','public.replace_company_digest($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)',[issuer,market,batch,attemptId,rebuildId,basedOnRev,sweep,JSON.stringify(events),JSON.stringify(coverage)]));
@@ -5021,7 +5026,7 @@ describe('toEvidenceDto (§0 #62)',()=>{
   expect(usDto()).toEqual({factId:us.fact_id,rawHash:rawHashOf(SHA,LOC_US),
    snapshot:{source:'edgar',sha256:SHA,path:`edgar/${ISSUER}/${SHA}.json`,api:null,url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json',params:null,capturedAt:'2026-11-05T05:15:53.573Z',httpStatus:200,page:null,download:`/api/companies/snapshot?fact=${us.fact_id}`},
    locator:{hashLocator:LOC_US,jsonPointer:'/facts/us-gaap/Revenues/units/USD/0',field:null,pdf:null},
-   run:{runId:us.run_id,codeVersion:'c'.repeat(40),toolVersions:{mapping_gen:'1'}},mappingVersion:'facts-map/1',unitRule:'unit_money',sourceDocument:{kind:'edgar_index',url:usF.url}} satisfies EvidenceDto);
+   run:{runId:us.run_id,codeVersion:'c'.repeat(40),toolVersions:{mapping_gen:'1'}},mappingVersion:'facts-map/1',unitRule:'unit_money',sourceDocument:{kind:'edgar_index',url:usF.url!}} satisfies EvidenceDto);
  });
  it('Tushare: no download; cninfo_pdf only when linked with a document URL',()=>{
   expect(cnDto().snapshot.download).toBeNull();
@@ -6045,7 +6050,7 @@ describe('runCompanyDigest',()=>{
  });
  it('deadline: no new stream with < 30 s left; the interleaved sweep has already run; deadline_hit is informational',async()=>{
   const h=harness();
-  const old=[await stream(h),await stream(h)];for(const id of old)await disclose(h.facts,id,'2024-02-01','1');
+  const old:string[]=[await stream(h),await stream(h)];for(const id of old)await disclose(h.facts,id,'2024-02-01','1');
   await runCompanyDigest(h.deps,{mode:'incremental',limit:2});   // digested; swept_at stays null for the sweep below
   const fresh:string[]=[];for(let i=0;i<8;i++){const id=await stream(h);await disclose(h.facts,id,'2024-02-01',String(i+2));fresh.push(id);}
   let t=Date.now();const start=t;
@@ -6147,8 +6152,8 @@ export async function selectStreams(deps:Pick<DigestDeps,'db'|'facts'>,opts:Dige
  const limit=opts.limit??DEFAULT_DIGEST_LIMIT;
  const incN=Math.ceil(limit*4/5),swN=Math.floor(limit/5);
  const inMarket=(s:{market:Market})=>!opts.market||s.market===opts.market;
- const inc=(await deps.db.digestDue(now,incN)).filter(inMarket);
- const sw=swN>0?(await deps.db.sweepDue(new Date(now.getTime()-SWEEP_AGE_MS),now,swN)).filter(inMarket):[];
+ const inc=(await deps.db.digestDue(now,incN,opts.market)).filter(inMarket);   // market filtered in SQL before the limit (Q6); local filter kept as a guard
+ const sw=swN>0?(await deps.db.sweepDue(new Date(now.getTime()-SWEEP_AGE_MS),now,swN,opts.market)).filter(inMarket):[];
  const swKeys=new Set(sw.map(keyOf)),incKeys=new Set(inc.map(keyOf));
  return interleave(
   inc.map(s=>({issuerId:s.issuerId,market:s.market,stateRev:s.stateRev,sweep:swKeys.has(keyOf(s)),source:'incremental' as const})),
@@ -7505,14 +7510,14 @@ describe('event payload gate',()=>{
  });
  it('fact_revised: an ineligible side replaces its value AND relChange; eligible payload is unchanged',()=>{
   expect(toPublicEvent(item('fact_revised',revised),new Map([['A',OK],['B',OK]]),undefined).payload).toEqual(revised);
-  const g=toPublicEvent(item('fact_revised',revised),new Map([['A',NO],['B',OK]]),undefined).payload as typeof revised&{from:{value:unknown};relChange:unknown};
+  const g=toPublicEvent(item('fact_revised',revised),new Map<string,Eligibility>([['A',NO],['B',OK]]),undefined).payload as typeof revised&{from:{value:unknown};relChange:unknown};
   expect(g.from).toEqual({factId:'A',value:{kind:'withheld',reason:'evidence_incomplete',factId:'A'},filingId:'F1',availableDate:'2023-11-03'});
   expect(g.to.value).toBe('110');
   expect(g.relChange).toEqual({kind:'withheld',reason:'evidence_incomplete'});
   expect(JSON.stringify(g)).not.toContain('"100"');
  });
  it('period_first_seen: only the ineligible headline value is withheld',()=>{
-  const g=toPublicEvent(item('period_first_seen',first),new Map([['H1',OK],['H2',NO]]),undefined).payload as {headline:Record<string,{value:unknown}>};
+  const g=toPublicEvent(item('period_first_seen',first),new Map<string,Eligibility>([['H1',OK],['H2',NO]]),undefined).payload as {headline:Record<string,{value:unknown}>};
   expect(g.headline.revenue.value).toBe('5');
   expect(g.headline.net_income_parent.value).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:'H2'});
  });
@@ -8676,7 +8681,7 @@ import {describe,expect,it,vi} from 'vitest';
 vi.mock('@/lib/llm/resolve',()=>({resolveUserLlm:async()=>null}));
 vi.mock('@/lib/data/sources/llm',()=>({chatResolved:vi.fn(),extractJson:(s:string)=>JSON.parse(s)}));
 import {assembleAssumptions,layerOf,mergeLayers,factLayer} from './assemble';
-import type {DcfWarning} from './assemble';
+import type {DcfWarning,LlmFill} from './assemble';
 import type {SeedResult} from '@/lib/company/dcf-seed';
 
 const leaf=(value:number,divisor='1000000')=>({source:'fact' as const,value,factIds:['f'],divisor,basis:'b',periodEnd:'2023-09-30',unit:'USD'});
@@ -8687,7 +8692,7 @@ const noShares=():SeedResult=>{const s=fullSeed();delete s.seed.sharesDiluted;de
 
 describe('assembleAssumptions (spec §9.1)',()=>{
  it('merge order defaults < LLM < facts < user by leaf; LLM cagr kept while baseRevenue stays fact',async()=>{
-  const llm=vi.fn(async()=>({revenueLines:[{cagr:0.12}],grossMarginPct:0.9,sgaPct:0.2}));
+  const llm=vi.fn<LlmFill>(async()=>({revenueLines:[{cagr:0.12}],grossMarginPct:0.9,sgaPct:0.2}));
   const r=await assembleAssumptions('AAPL','US',fullSeed(),{wacc:0.09},llm);
   expect(r.status).toBe('ok');
   expect(r.assumptions!.revenueLines).toEqual([{name:'合计',baseRevenue:383285,cagr:0.12}]);
@@ -8705,10 +8710,15 @@ describe('assembleAssumptions (spec §9.1)',()=>{
   expect(codes).toContain('dcf_revenue_line_rejected');expect(codes).toContain('dcf_llm_field_rejected');
  });
  it('equity bridge without a fact and without user confirmation → unavailable, missing listed, LLM never called',async()=>{
-  const llm=vi.fn(async()=>({sharesDiluted:999}));
+  const llm=vi.fn<LlmFill>(async()=>({sharesDiluted:999}));
   const r=await assembleAssumptions('AAPL','US',noShares(),{},llm);
   expect(r).toMatchObject({status:'unavailable',assumptions:null,missing:[{field:'sharesDiluted',reason:'share_basis_unverified'}]});
   expect(llm).not.toHaveBeenCalled();
+ });
+ it('a fact seed fully overridden by the user still warns no-facts (final provenance, plan audit Q7)',async()=>{
+  const r=await assembleAssumptions('AAPL','US',fullSeed(),{revenueLines:[{baseRevenue:1}],grossMarginPct:0.5,sharesDiluted:2,netDebt:3},async()=>null);
+  expect(r.status).toBe('ok');expect(Object.values(r.provenance)).not.toContain('fact');
+  expect(r.warnings.map(w=>w.code)).toContain('dcf_no_facts');
  });
  it('user-confirmed bridge runs; with no fact leaf at all the no-facts warning appears',async()=>{
   const ok=await assembleAssumptions('AAPL','US',noShares(),{sharesDiluted:15000},async()=>null);
@@ -8839,7 +8849,7 @@ export async function assembleAssumptions(ticker:string,market:Market,seed:SeedR
  try{const out=await llm(extractPrompt(ticker,meta,seed));if(out===null)warnings.push({code:'dcf_llm_unconfigured'});else llmLayer=layerOf('llm',out,warnings);}
  catch{warnings.push({code:'dcf_llm_failed'});}
  const merged=mergeLayers({defaults:DEFAULTS,llm:llmLayer,facts,user});
- if(Object.keys(seed.provenance).length===0)warnings.push({code:'dcf_no_facts'});
+ if(!Object.values(merged.provenance).includes('fact'))warnings.push({code:'dcf_no_facts'});   // final provenance, not the seed (plan audit Q7)
  warnings.push({code:'dcf_estimates'});
  return {status:'ok',assumptions:toAssumptions(merged.values,meta),provenance:merged.provenance,missing:[],warnings,meta};
 }
@@ -13046,6 +13056,10 @@ describe('overview model',()=>{
   expect(w.period?.headline).toEqual({concept:'revenue',ref:{kind:'withheld',reason:'citation_pending',factId:'a'}});
   const r=eventView(ev({kind:'fact_revised',payload:{concept:'rd_expense',periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M',unit:'CNY',from:{factId:'x',value:'14140000000',filingId:'g1',availableDate:'2025-03-01'},to:{factId:'y',value:'14160000000',filingId:'g2',availableDate:'2025-08-28'},relChange:'0.0014144272'}}),'CN');
   expect(r).toMatchObject({chip:'kindRevised',revised:{concept:'rd_expense',unit:'CNY',from:{factId:'x'},to:{factId:'y'},relChange:'0.0014144272'}});
+  // gated payload straight from Task 6 gateEventPayload: the marker sits under .value (plan audit Q1)
+  const wr=eventView(ev({kind:'fact_revised',payload:{concept:'revenue',periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M',unit:'CNY',from:{factId:'x',value:{kind:'withheld',reason:'citation_pending',factId:'x'},filingId:'g1',availableDate:'2025-03-01'},to:{factId:'y',value:'5',filingId:'g2',availableDate:'2025-08-28'},relChange:{kind:'withheld',reason:'citation_pending'}}}),'CN');
+  expect(wr.revised?.from).toEqual({kind:'withheld',reason:'citation_pending',factId:'x'});
+  expect(wr.revised?.to).toMatchObject({factId:'y',value:'5'});
   expect(eventView(ev({payloadChangedAt:'2026-01-01T00:00:00Z'}),'CN').updated).toBe(true);
  });
 });
@@ -13090,7 +13104,7 @@ export function eventView(e:PublicEvent,market:Market):EventView{
    period:{periodStart:s(p.periodStart),periodEnd:s(p.periodEnd),duration:s(p.duration),headline:c?{concept:c,ref:withheldOrEntry(h[c])}:null}};
  }
  return {...base,chip:'kindRevised',link:{view:'statements',asOf:e.occurredOn},
-  revised:{concept:s(p.concept),periodEnd:s(p.periodEnd),duration:s(p.duration),unit:s(p.unit),from:p.from as ValueRef,to:p.to as ValueRef,relChange:(p.relChange as string|ValueRef|undefined)??null}};
+  revised:{concept:s(p.concept),periodEnd:s(p.periodEnd),duration:s(p.duration),unit:s(p.unit),from:withheldOrEntry(p.from),to:withheldOrEntry(p.to),relChange:(p.relChange as string|ValueRef|undefined)??null}};
 }
 ```
 
@@ -16873,7 +16887,6 @@ test('gold: AAPL last 10 filing_published events match the transcribed EDGAR ind
   const expected = (gold!.expected as { filings: { accession: string; form: string; filed: string }[] }).filings;
   expect(body.rows.map((r) => ({ accession: r.payload.sourceRef, form: r.payload.formType, filed: r.occurredOn }))).toEqual(expected);
 });
-```
 
 test('gold: 6 issuers × 2 periods × 6 concepts statement matrix (spec §14, §0 #72)', async ({ page }) => {
   const gold = readyExpectation('gold-matrix-6x2x6');
