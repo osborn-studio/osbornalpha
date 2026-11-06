@@ -67,3 +67,16 @@
 | 00386 | `SINOPEC CORP` | Equity | `sinopec` | `chinapetroleumchemical` | 否 |
 
 结论：HKEX 名单用的是简称（`PING AN`、`CM BANK`、`SINOPEC CORP`），不是测试里假设的 "… CO LTD - H" 全称；5 家中 2 家归一后相等，3 家不等。按计划，不改测试也不扩词表（测试验证的是归一规则本身）；规则 2 的实际命中率会低（只有 HKEX 简称恰好等于发行人名称的公司），不匹配时"不产生声明"，是精度优先的预期结果。规则 1（同 LEI + HKEX ISIN 硬标识符）才是主要的自动挂接路径。
+
+## F3-5 iXBRL 夹具（Task 15b，2026-11-06）
+
+| accn | 主文档 URL | source_sha256 | trimmed_sha256 | 事实数 | submissions category | isInlineXBRL |
+|---|---|---|---|---|---|---|
+| 0000320193-23-000106 | https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/aapl-20230930.htm | 0f18e0ee9f9e7ebf89e8d4edae8fbebe33c8c9fb4ac43a9b9e5c777e02991bc6 | df0a11f52de48306524b2ebc7cc9ac6aad296164f1bb51be54541f8f70cfffcc | 115 | Large accelerated filer | true |
+| 0000950170-23-035122 | https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm | df4c8e4eab796f8c6bb3b986f841abf7d598e68feabde71f6834c431c61362b4 | 66703f6d2da3ed835737cb8eef537d078c91fd6c68e2f6ee6990d47b4048e64e | 112 | Large accelerated filer | true |
+
+- 裁剪规则 `ixbrl-trim/1`，解析器 `ixbrl/1`；重录命令见 `scripts/dq/record-ixbrl-fixture.ts` 头注释。原始文档与 submissions 经 `--raw-dir` 留在本机 `.claude/scratch/raw-15b/`（未提交）。
+- 样本 `us-ixbrl-sample-v1.json`（`fixture/1`，sinceYear 2016）：键数 AAPL 72 / MSFT 67（全部 origin=both）；离线一致性例外 0。
+- 夹具使用真实 CIK 与 accession（计划未要求改键）。
+- 未纳入：30 家生产样本 v2（需网络与 owner 决策 E；`--live`），E4 以 v2 计量。
+- `ixt-sec:*` 格式出现次数：AAPL 1 / MSFT 0（规格 §14 开放问题 6 的首个数据点）。
