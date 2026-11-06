@@ -88,6 +88,7 @@ src/lib/documents/*.test.ts、**/*.test.ts                        单测
 src/lib/documents/documents.integration.test.ts                 迁移一（critical；Task 1、3）
 src/lib/documents/fresh-db.ts                                   测试用：专用临时库 + 全部迁移 + 重放（P2-2；Task 1，Task 13 复用）
 src/lib/documents/lease.ts                                      租约心跳 withLeaseHeartbeat + guardCalls（第 2 轮 R1-P2-7；Task 10，Task 15/16 复用）
+scripts/documents/build-extract-worker.ts                       esbuild 打包抽取 worker → build/extract-worker/extract-worker.mjs（gitignored；prebuild；第 4 轮 R4-P2-1；Task 10）
 src/lib/documents/fact-citations.integration.test.ts            迁移二（critical；Task 13）
 src/lib/documents/sync-hk.integration.test.ts                   港股端到端（critical；Task 18）
 src/lib/documents/sync-us.integration.test.ts                   美股文档（critical；Task 18）
@@ -356,8 +357,8 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
 | `extract/tables.ts`（9） | `detectTables(lines:LayoutLine[]):LayoutTable[]`、`isNumericItem(s)` | 标签单元格 col 0，数值列 1..k；`col_x0[0]` 为标签 x |
 | `extract/html.ts`（9） | `extractHtml(bytes):PageLayout[]` | 每行一个跨整行的 item（x=0） |
 | `extract/pages-json.ts`（9） | `buildPagesJson(input:{content_sha256;code_version;has_text_layer;pages}):{json;bytes;sha256}`、`pageInsertsOf(json):PageInsert[]`、`serializePagesJson`、`parseRecordedFixture(text)`、`RecordedPagesFixture`（含可选 `pages_subset:true`）、`normalizeText`、`assemblePage`、`LinePiece`、`sha256Hex(bytes|string)`、`cpLength(s)`、`cpSlice(s,start,end)` | |
-| `lease.ts`（10） | `HEARTBEAT_MS=120_000`、`withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,{intervalMs;drainMs?}):Promise<T>`、`guardCalls<T>(target,signal):T` | 长阶段期间定时续租；续租被拒 → 立即 `lease_lost`、signal 中止、受保护客户端之后的调用全部抛 `lease_lost`（第 2 轮 R1-P2-7）；`quiesce()` 停表并等在途续租（≤ drainMs），阶段自行释放租约前调用、返回结果前总会调用；`renew` 必须只续持有者（第 3 轮 R3-P2-1） |
-| `extract/isolate.ts`、`extract/worker-job.ts`、`extract/worker-entry.mjs`（10） | `extractInWorker(job:ExtractJob,{hardMs;signal?;entry?}):Promise<ExtractResult>`、`workerEntry(root?)`、`ExtractJob={kind:'pdf'\|'html';bytes;maxPages;softMs}`、`runExtractJob(job)` | 阻塞抽取在 worker 线程；硬截止 `terminate()` → `ExtractTimeout`；signal 中止 → `lease_lost`；生产 `extract/deps.ts` 的 `extractPdf`/`extractHtml` 都经它（第 3 轮 R1-P2-7） |
+| `lease.ts`（10） | `HEARTBEAT_MS=120_000`、`FINAL_RESERVE_MS=20_000`、`withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,{intervalMs;drainMs?;remainingMs?;reserveMs?}):Promise<T>`（续租与排空等待都不超过扣除保留后的剩余预算、计时器必清，第 4 轮 R4-P2-2）、`guardCalls<T>(target,signal):T` | 长阶段期间定时续租；续租被拒 → 立即 `lease_lost`、signal 中止、受保护客户端之后的调用全部抛 `lease_lost`（第 2 轮 R1-P2-7）；`quiesce()` 停表并等在途续租（≤ drainMs），阶段自行释放租约前调用、返回结果前总会调用；`renew` 必须只续持有者（第 3 轮 R3-P2-1） |
+| `extract/isolate.ts`、`extract/worker-job.ts`、`extract/worker-entry.ts`、`scripts/documents/build-extract-worker.ts`（10） | `extractInWorker(job:ExtractJob,{hardMs;signal?;entry?}):Promise<ExtractResult>`、`workerEntry(root?)`（= `<cwd>/build/extract-worker/extract-worker.mjs`）、`ExtractJob={kind:'pdf'\|'html';bytes;maxPages;softMs;assets?:PdfJsAssets}`、`runExtractJob(job)`、`buildExtractWorker(outfile?)`、`EXTRACT_WORKER_OUT` | 阻塞抽取在 worker 线程；硬截止 `terminate()` → `ExtractTimeout`；signal 中止 → `lease_lost`；生产 `extract/deps.ts` 的 `extractPdf`/`extractHtml` 都经它（第 3 轮 R1-P2-7） |
 | `citations.ts`（10） | `cite(db:Pick<DocumentsDb,'extractionById'|'pagesOf'|'insertCitation'>,input:CiteInput):Promise<string>`、`verify(db,citationId):Promise<{integrity:'ok'|'corrupt';currentExtraction:boolean}|null>`、`citationView(db,citation):Promise<CitationView|null>`、`integrityOf(page,citation)` | `CiteInput={document_id;extraction_id;page_no;char_start;char_end;bbox?;created_by;created_ref}` |
 | `extract/run.ts`（10） | `runDocumentsExtract(deps:ExtractDeps,opts:{limit;documentIds?;dryRun;triggeredBy}):Promise<ExtractReceipt>`、`ExtractDeps={db;tables;store;extractPdf;extractHtml;now;deadline;codeVersion:string|null}` | |
 | `extract/deps.ts`（10） | `productionExtractDeps(opts:{deadline;codeVersion;now?;admin?}):ExtractDeps` | 整合决定 7（C-2） |
@@ -3009,6 +3010,10 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
   it('advanceCursor never moves backwards without reset (P2-4): stale or missing seq, reopening a finished backfill',async()=>{
    const {iss,b}=await ready();
    const cur=(seq:number,last_ref:string|null='r'):DocScopeCursor=>({segment:'y2026',last_ref,settled:[],attempts:{},seq});
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',cur(3),false);
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',null,false))).toBe('cursor_regression');   // clearing without completing …
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',null,false,true);                                  // … only as an explicit restart (the EDGAR coverage-gap path, recheck N1)
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({backfill_done:false,backfill_cursor:{}});
    await db.advanceCursor(iss,'hkexnews',b,'backfill',cur(5),false);
    expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',cur(5,'older'),false))).toBe('cursor_regression');
    expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',cur(4),false))).toBe('cursor_regression');
@@ -3994,6 +3999,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    const s=scopeLock(issuer,source,batch);
    if(!reset){
     // never backwards (P2-4): a finished backfill takes only a repeated completion; seq strictly increases
+    if(mode==='backfill'&&cursor===null&&done!==true)throw new DocumentsDbError('cursor_regression','cursor_regression: cleared');   // a backfill cursor is cleared only to complete it (migration one review fix)
     if(mode==='backfill'&&s.backfill_done&&!(cursor===null&&done===true))throw new DocumentsDbError('cursor_regression','cursor_regression: backfill_done');
     const old=seqOf(mode==='backfill'?s.backfill_cursor:s.poll_cursor);
     if(cursor!==null&&typeof old==='number'){const next=seqOf(cursor);if(typeof next!=='number'||next<=old)throw new DocumentsDbError('cursor_regression','cursor_regression: seq');}
@@ -6443,7 +6449,7 @@ git commit -m "feat(documents): source adapters (segments, complete ordered list
 - 已知项（`knownSourceRefs`）且 `refetch=false` → `duplicates`，不下载、不计入 `maxPerIssuer`（默认 50）；hkexnews 默认 `refetch=true`。新项达到上限 → 停在该项（`code='item_limit'`、`next_due=now`）。
 - 404 → `skipped_summary(document_missing)` 前进；`too_large` → 隔离 `document_too_large` 前进；MIME 嗅探不在本来源允许集 → 隔离 `unexpected_mime` 前进；抓取/上传/必抓资产失败 → 不前进、`attempts[source_ref]+1`、发行人 failed（`next_due=now+6h`），第三次 → 隔离 `document_fetch_exhausted` 并前进、继续后续项。隔离键：`dataset=documents.<source>`、`table='disclosure_documents'`、`natural_key='<source>:<source_ref>'`。
 - 写入顺序：原件 `store.put(blobPath)` → 资产（EDGAR `index.json` 必抓；`assetsFromIndex` 给出的 XBRL 实例可选，失败/超限 → `skipped_summary(xbrl_skipped)`）→ `insertDocumentVersion`（文档 + 资产一次事务）。替换版本 `available_at = fetched_at`，首版 `= published_at`；`available_date` 按来源时区（US 纽约，CN/HK UTC+8）。
-- 段全部走完：回填 → `advanceCursor(null, done = coverageGap===null)`；有缺口时回执 `coverage_summary`；轮询 → 清游标；`next_due=now+1d`。
+- 段全部走完：回填 → `advanceCursor(null, done = coverageGap===null, reset = coverageGap!==null)`（有缺口时是显式重来，迁移一不允许不带 reset 清空回填游标，recheck N1）；有缺口时回执 `coverage_summary`；轮询 → 清游标；`next_due=now+1d`。
 - `lease_lost`（插入/游标/续租）→ 发行人 failed，之后对该发行人不再调用任何写函数（不释放）。
 - `finishBatch` 状态由 `batchStatusFromCounts` 得出；`recordAttempt('documents.<source>', {ok: idle || 至少一个发行人 success, cadence:'daily'})`。基础设施异常：尽力收尾批次与新鲜度后重抛。
 
@@ -6771,6 +6777,8 @@ describe('runDocumentsSync — EDGAR assets and coverage',()=>{
   expect(s.scopeRow()).toMatchObject({backfill_done:false,backfill_cursor:{},next_due_at:'2026-11-07T02:00:00.000Z'});
   const again=await s.run({refetch:false});
   expect(again.counts).toMatchObject({duplicates:1,inserted:0});
+  expect(again.issuers[0]).toMatchObject({outcome:'success'});                  // the restart is an explicit reset (recheck N1), never cursor_regression
+  expect(s.scopeRow()).toMatchObject({backfill_done:false,backfill_cursor:{}});
  });
  it('rejects a document MIME the source does not allow',async()=>{
   const s=await edgarSetup();
@@ -7114,8 +7122,10 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow):Promise<DocIssuerOutc
   if(gap!==null)out.errors.push({code:'coverage_summary',key:issuer,message:JSON.stringify({gap,segments:segments.map(s=>s.id)})});
   if(!dry){
    await renew();
-   // backfill with a coverage gap restarts its (cheap: known items are duplicates) segments next time and never claims completeness
-   await db.advanceCursor(issuer,source,batchId!,mode,null,mode==='backfill'&&gap===null);
+   // backfill with a coverage gap restarts its (cheap: known items are duplicates) segments next time and never claims
+   // completeness: an explicit reset, since migration one refuses to clear a backfill cursor otherwise (recheck N1)
+   const restart=mode==='backfill'&&gap!==null;
+   await db.advanceCursor(issuer,source,batchId!,mode,null,mode==='backfill'&&gap===null,restart);
   }
   await release('success',NEXT_DUE_DONE_MS);
   return finish(dry?'planned':'success');
@@ -8483,7 +8493,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ### Task 10: 引用、抽取调度、extract cron、脚本与录制
 
-**Files:** Create: `src/lib/documents/lease.ts`（+ `lease.test.ts`，R1-P2-7 第 2 轮）、`src/lib/documents/extract/{worker-job.ts,worker-entry.mjs,isolate.ts,isolate.test.ts}`、`src/lib/documents/fixtures/worker/slow-worker.mjs`（第 3 轮：抽取在 worker 线程）、`src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
+**Files:** Create: `src/lib/documents/lease.ts`（+ `lease.test.ts`，R1-P2-7 第 2 轮）、`src/lib/documents/extract/{worker-job.ts,worker-entry.ts,isolate.ts,isolate.test.ts}`、`src/lib/documents/fixtures/worker/slow-worker.mjs`（第 3 轮：抽取在 worker 线程）、`scripts/documents/build-extract-worker.ts`（第 4 轮：esbuild 打成自包含 worker）、`src/lib/documents/citations.ts`、`src/lib/documents/extract/run.ts`、`src/lib/documents/extract/deps.ts`、`src/lib/documents/test-seed.ts`、`src/app/api/cron/documents-extract/route.ts`、`scripts/documents/extract.ts`、`scripts/documents/record-fixture.ts` / Modify: `next.config.mjs`（`// F3` 块：pdf.js CMaps 与标准字体随路由打包） / Test: `src/lib/documents/citations.test.ts`、`src/lib/documents/extract/run.test.ts`、`src/app/api/cron/documents-extract/route.test.ts`
 **Spec:** §4.5、§7.3（第一条）、§7.4、§6.3、§10、§11.1、§11.3
 **Depends on:** Task 9；Task 2（`memoryDocumentsDb`、`db.ts` 游标）、Task 3、Task 4（`ObjectStore`、`pagesJsonPath`、`blobPath`）
 
@@ -8508,14 +8518,29 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 // is returned the timer is stopped and a renewal still in flight is awaited (bounded by drainMs), so
 // no renewal of ours runs after the caller's next step (codex plan round 3 R3-P2-1); renew() must be
 // holder-only (renew_document_extract_lease, renew_candidates_lease, renew_hk_fact_lease) so that a
-// renewal arriving late can never re-acquire a released lease.
+// renewal arriving late can never re-acquire a released lease. Codex plan round 4 (R4-P2-2): with
+// remainingMs/reserveMs every wait is also bounded by the execution budget left after a reserve
+// for the caller's final writes and release — no beat starts inside the reserve, a renewal request
+// is awaited at most min(intervalMs, budget) (an unanswered one is transient), the drain at most
+// min(drainMs, budget) — and every wait timer is cleared whichever side wins, so a finished phase
+// leaves no timer behind.
 import {DocumentsDbError} from './types';
 
 /** Beat interval: well inside the 600 s lease TTL, so two beats may fail before the lease lapses. */
 export const HEARTBEAT_MS=120_000;
-/** drainMs: how long the end of the phase waits for a renewal still in flight (default intervalMs). */
-export interface HeartbeatOptions{intervalMs:number;drainMs?:number}
+/** Budget kept for the caller's final writes and release (R4-P2-2). */
+export const FINAL_RESERVE_MS=20_000;
+/** drainMs: how long the end of the phase waits for a renewal still in flight (default intervalMs);
+ *  remainingMs: the caller's execution budget left (default unbounded); reserveMs: kept out of every wait. */
+export interface HeartbeatOptions{intervalMs:number;drainMs?:number;remainingMs?:()=>number;reserveMs?:number}
 const lost=(why:string)=>new DocumentsDbError('lease_lost',`lease_lost: ${why}`);
+/** p, or undefined after ms; the timer is cleared either way (R4-P2-2: no leaked timer). */
+async function within<T>(p:Promise<T>,ms:number):Promise<T|undefined>{
+ if(ms<=0)return undefined;
+ let t:ReturnType<typeof setTimeout>|undefined;
+ try{return await Promise.race([p,new Promise<undefined>(r=>{t=setTimeout(()=>r(undefined),ms);})]);}
+ finally{if(t!==undefined)clearTimeout(t);}
+}
 
 /** fn gets the abort signal and quiesce(): stop the beats and settle one in flight — call it right before the phase releases its own lease (R3-P2-1). */
 export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,opts:HeartbeatOptions):Promise<T>{
@@ -8524,12 +8549,14 @@ export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signa
  let reject:(e:DocumentsDbError)=>void=()=>{};
  const refused=new Promise<never>((_,r)=>{reject=r;});
  refused.catch(()=>{});
+ const left=()=>(opts.remainingMs?opts.remainingMs():Number.POSITIVE_INFINITY)-(opts.reserveMs??0);
  let inflight:Promise<void>|null=null;let stopped=false;
  const timer=setInterval(()=>{
-  if(inflight!==null||stopped||ac.signal.aborted)return;
-  inflight=renew().then(ok=>{
-   if(!ok&&!stopped&&!ac.signal.aborted){const e=lost('heartbeat renewal refused');ac.abort(e);reject(e);}
-  },()=>{/* transient: retried on the next beat */}).finally(()=>{inflight=null;});
+  if(inflight!==null||stopped||ac.signal.aborted||left()<=0)return;   // no beat inside the reserve
+  const request=renew();request.catch(()=>{});
+  inflight=within(request,Math.min(opts.intervalMs,left())).then(ok=>{
+   if(ok===false&&!stopped&&!ac.signal.aborted){const e=lost('heartbeat renewal refused');ac.abort(e);reject(e);}
+  },()=>{/* transient: retried on the next beat */}).finally(()=>{inflight=null;});   // unanswered in time: transient too (holder-only renewal)
  },opts.intervalMs);
  // R3-P2-1: stop scheduling, then settle the renewal still in flight (bounded by drainMs) — before a
  // release inside the phase (quiesce) and always before the result is handed back
@@ -8538,7 +8565,7 @@ export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signa
   if(drained===null){
    stopped=true;clearInterval(timer);
    const pending:Promise<void>|null=inflight;
-   drained=pending===null?Promise.resolve():Promise.race([pending,new Promise<void>(r=>setTimeout(r,opts.drainMs??opts.intervalMs))]);
+   drained=pending===null?Promise.resolve():within(pending,Math.min(opts.drainMs??opts.intervalMs,left())).then(()=>undefined);
   }
   return drained;
  };
@@ -8608,6 +8635,34 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
   await vi.advanceTimersByTimeAsync(5_000);
   expect(renew).toHaveBeenCalledTimes(1);
  });
+ it('R4-P2-2: at the deadline edge a stalled renewal is waited for only up to the budget left after the reserve',async()=>{
+  const renew=vi.fn(()=>new Promise<boolean>(()=>{}));                        // never answers
+  let now=0;const deadline=200_000;
+  const p=withLeaseHeartbeat(renew,async()=>{await sleep(150_000);return 'ok';},{intervalMs:120_000,remainingMs:()=>deadline-now,reserveMs:20_000});
+  const tick=async(ms:number)=>{now+=ms;await vi.advanceTimersByTimeAsync(ms);};
+  await tick(120_000);expect(renew).toHaveBeenCalledTimes(1);                 // beat at 120 s: 80 s of budget, 60 s after the reserve
+  await tick(30_000);                                                          // the phase ends at 150 s with the renewal still unanswered
+  let done=false;void p.then(()=>{done=true;});
+  await tick(9_000);expect(done).toBe(false);
+  await tick(1_000);                                                           // budget left after the reserve: 200 − 150 − 20 = 30 s from the beat → ends ≤ 180 s
+  await tick(20_000);
+  expect(await p).toBe('ok');
+  expect(now).toBeLessThanOrEqual(deadline-20_000);                            // the reserve is untouched
+  expect(vi.getTimerCount()).toBe(0);
+ });
+ it('R4-P2-2: no beat starts inside the reserve, and a successful drain leaves no timer behind',async()=>{
+  let now=0;const renew=vi.fn(async()=>{await sleep(10);return true;});
+  const p=withLeaseHeartbeat(renew,async()=>{await sleep(1_005);return 1;},{intervalMs:1_000,drainMs:60_000,remainingMs:()=>10_000-now,reserveMs:0});
+  await vi.advanceTimersByTimeAsync(1_100);now=1_100;
+  expect(await p).toBe(1);
+  expect(renew).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(0);                                          // interval and drain timers both cleared
+  const q=withLeaseHeartbeat(renew,async()=>{await sleep(5_000);return 2;},{intervalMs:1_000,remainingMs:()=>15_000,reserveMs:20_000});
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await q).toBe(2);
+  expect(renew).toHaveBeenCalledTimes(1);                                      // inside the reserve: no beat at all
+  expect(vi.getTimerCount()).toBe(0);
+ });
  it('a renewal that throws is transient (retried); the signal is aborted after a normal finish too',async()=>{
   let n=0;const renew=vi.fn(async()=>{n++;if(n===1)throw new Error('network');return true;});
   let signal:AbortSignal|null=null;
@@ -8621,7 +8676,7 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
 });
 ```
 
-`src/lib/documents/extract/worker-job.ts`、`worker-entry.mjs`、`isolate.ts`（计划审计第 3 轮 R1-P2-7 定稿：阻塞的抽取在 worker 线程里跑；主线程保留心跳并以 `worker.terminate()` 执行硬截止）：
+`src/lib/documents/extract/worker-job.ts`、`worker-entry.ts`、`isolate.ts`、`scripts/documents/build-extract-worker.ts`（计划审计第 3 轮 R1-P2-7 定稿：阻塞的抽取在 worker 线程里跑；主线程保留心跳并以 `worker.terminate()` 执行硬截止；第 4 轮 R4-P2-1：worker 由 esbuild 打成不依赖 node_modules 的单文件 `build/extract-worker/extract-worker.mjs`）。`package.json`（JSON 无注释，提交信息说明 F3）：`devDependencies` 末尾加 `"esbuild": "0.28.1"`（与 tsx 已带入的版本相同，`npm install -D esbuild@0.28.1` 生成锁文件），`scripts` 末尾加 `"prebuild": "tsx scripts/documents/build-extract-worker.ts"`（`next build` 前生成 worker；`build/` 已在 `.gitignore`，产物不提交）：
 
 ```ts
 // src/lib/documents/extract/worker-job.ts
@@ -8632,44 +8687,83 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
 import type {PageLayout} from '../types';
 import {extractHtml} from './html';
 import {extractPdf} from './pdf';
+import type {PdfJsAssets} from './pdf';
 
 export type ExtractJobKind='pdf'|'html';
-/** softMs: the worker's own budget (ExtractTimeout before the main thread's hard deadline). */
-export interface ExtractJob{kind:ExtractJobKind;bytes:Uint8Array;maxPages:number;softMs:number}
+/** softMs: the worker's own budget (ExtractTimeout before the main thread's hard deadline); assets: pdf.js CMaps / standard fonts (the main thread's pdfjsAssets(); the bundled worker resolves nothing itself). */
+export interface ExtractJob{kind:ExtractJobKind;bytes:Uint8Array;maxPages:number;softMs:number;assets?:PdfJsAssets}
 export interface ExtractResult{pages:PageLayout[];hasTextLayer:boolean}
 export async function runExtractJob(job:ExtractJob):Promise<ExtractResult>{
  const until=Date.now()+job.softMs;
- if(job.kind==='pdf')return extractPdf(job.bytes,{remainingMs:()=>until-Date.now(),maxPages:job.maxPages});
+ if(job.kind==='pdf')return extractPdf(job.bytes,{remainingMs:()=>until-Date.now(),maxPages:job.maxPages},job.assets?{assets:job.assets}:{});
  if(job.kind==='html'){const pages=extractHtml(job.bytes);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
  throw new Error('unsupported_job');
 }
 ```
 
-```js
-// src/lib/documents/extract/worker-entry.mjs
-// Worker-thread entry of the extraction (codex plan round 3, R1-P2-7 final). Plain ESM, so Node starts it
-// as is — under vitest, tsx scripts and the traced Vercel function alike (next.config.mjs ships it, the
-// extract/*.ts sources it imports, types.ts and tsx with esbuild through outputFileTracingIncludes). It
-// registers tsx's ESM loader for this thread only, runs the one job in workerData and answers with one
-// message: {ok:true,result} or {ok:false,error:{name,message,pages}}. The main thread (isolate.ts) owns
-// the deadline and terminates this thread; nothing here writes anywhere.
+```ts
+// src/lib/documents/extract/worker-entry.ts
+// Worker-thread entry of the extraction (codex plan round 3, R1-P2-7 final; round 4 R4-P2-1). It is
+// NOT run from source: scripts/documents/build-extract-worker.ts bundles it with esbuild — together
+// with worker-job.ts, extract/*.ts and pdfjs-dist (pdf.mjs and pdf.worker.mjs inlined) — into one
+// self-contained ESM file, build/extract-worker/extract-worker.mjs (gitignored; built by `prebuild`
+// and by the tests that need it). The bundle needs no node_modules at run time; pdf.js's CMaps and
+// standard fonts are read from the directories the job names (job.assets, from pdfjsAssets() on the
+// main thread). It runs the one job in workerData and answers with one message: {ok:true,result} or
+// {ok:false,error:{name,message,pages}}. The main thread (isolate.ts) owns the deadline and
+// terminates this thread; nothing here writes anywhere.
 import {parentPort,workerData} from 'node:worker_threads';
-import {register} from 'tsx/esm/api';
+import {runExtractJob} from './worker-job';
+import type {ExtractJob} from './worker-job';
 
-register();
+const port=parentPort;
+if(port===null)throw new Error('extract worker-entry runs only in a worker thread');
 try{
- const {runExtractJob}=await import('./worker-job.ts');
- parentPort.postMessage({ok:true,result:await runExtractJob(workerData)});
+ port.postMessage({ok:true,result:await runExtractJob(workerData as ExtractJob)});
 }catch(e){
- parentPort.postMessage({ok:false,error:{name:e?.name??'Error',message:String(e?.message??e),pages:e?.pages??null}});
+ const x=e as {name?:unknown;message?:unknown;pages?:unknown};
+ port.postMessage({ok:false,error:{name:typeof x?.name==='string'?x.name:'Error',message:String(x?.message??e),pages:typeof x?.pages==='number'?x.pages:null}});
+}
+```
+
+```ts
+// scripts/documents/build-extract-worker.ts
+// Builds the self-contained extraction worker (codex plan round 4, R4-P2-1): esbuild bundles
+// src/lib/documents/extract/worker-entry.ts with everything it imports — worker-job.ts, extract/*.ts,
+// types.ts and pdfjs-dist's legacy pdf.mjs + pdf.worker.mjs — into one ESM file for Node, so the
+// worker started by extract/isolate.ts loads no TypeScript and no node_modules at run time. Only
+// pdf.js's optional canvas back ends stay external (pdf.js imports them in a try and only warns).
+// Output: build/extract-worker/extract-worker.mjs (build/ is gitignored; never committed). Run by
+// `npm run prebuild` (before next build, locally and on Vercel; next.config.mjs traces the file) and
+// by isolate.test.ts, which builds into a temporary directory.
+//   npx tsx scripts/documents/build-extract-worker.ts [--out <file>]
+import {build} from 'esbuild';
+import {join,resolve} from 'node:path';
+
+export const EXTRACT_WORKER_OUT=join('build','extract-worker','extract-worker.mjs');
+const ENTRY=join('src','lib','documents','extract','worker-entry.ts');
+/** Bundles the worker into `outfile` (relative to the app root = process.cwd()); returns its absolute path. */
+export async function buildExtractWorker(outfile:string=EXTRACT_WORKER_OUT):Promise<string>{
+ const out=resolve(outfile);
+ await build({
+  entryPoints:[resolve(ENTRY)],outfile:out,bundle:true,platform:'node',format:'esm',target:'node20',
+  external:['@napi-rs/canvas','canvas'],legalComments:'none',logLevel:'warning',
+  // CommonJS helpers inside bundled ESM need a require
+  banner:{js:"import {createRequire as __f3CreateRequire} from 'node:module';const require=__f3CreateRequire(import.meta.url);"},
+ });
+ return out;
+}
+if(process.argv[1]?.endsWith('build-extract-worker.ts')){
+ const at=process.argv.indexOf('--out');
+ buildExtractWorker(at>0?process.argv[at+1]:undefined).then(p=>console.log(`extract worker: ${p}`)).catch(e=>{console.error((e as Error).message);process.exitCode=1;});
 }
 ```
 
 ```ts
 // src/lib/documents/extract/isolate.ts
 // Main-thread side of the extraction worker (codex plan round 3, R1-P2-7 final). extractInWorker starts
-// one worker per job (extract/worker-entry.mjs under the app root, located like pdfjsAssets: by
-// process.cwd(); injectable for tests) and settles exactly once: the worker's answer; hardMs elapsed →
+// one worker per job (the bundle build/extract-worker/extract-worker.mjs under the app root, located
+// like pdfjsAssets: by process.cwd(); injectable for tests) and settles exactly once: the worker's answer; hardMs elapsed →
 // worker.terminate() and ExtractTimeout ('extract_timeout') — this also stops a worker stuck inside one
 // page or in a synchronous loop, which a budget checked between pages cannot; the signal aborted (the
 // lease heartbeat stopped) → terminate and DocumentsDbError('lease_lost'); a worker error or an exit
@@ -8682,7 +8776,8 @@ import type {ExtractJob,ExtractResult} from './worker-job';
 
 export interface IsolateOptions{hardMs:number;signal?:AbortSignal;/** test-only: another worker script */entry?:string}
 type Reply={ok:true;result:ExtractResult}|{ok:false;error:{name:string;message:string;pages:number|null}};
-export const workerEntry=(root:string=process.cwd())=>join(root,'src','lib','documents','extract','worker-entry.mjs');
+/** The bundled worker (scripts/documents/build-extract-worker.ts) under the app root, located like pdfjsAssets (process.cwd()). */
+export const workerEntry=(root:string=process.cwd())=>join(root,'build','extract-worker','extract-worker.mjs');
 function errorOf(e:{name:string;message:string;pages:number|null}):Error{
  if(e.name==='ExtractTimeout')return new ExtractTimeout();
  if(e.name==='ExtractTooManyPages')return new ExtractTooManyPages(e.pages??0);
@@ -8712,7 +8807,7 @@ export function extractInWorker(job:ExtractJob,opts:IsolateOptions):Promise<Extr
 
 ```js
 // src/lib/documents/fixtures/worker/slow-worker.mjs
-// Test-only stand-in for worker-entry.mjs (isolate.test.ts; no pdf.js, no network). workerData.mode:
+// Test-only stand-in for the bundled worker (isolate.test.ts; no pdf.js, no network). workerData.mode:
 // 'slow-final-page' — three quick pages, then a final page that never finishes (an awaited 10-minute
 // step); 'block' — a synchronous infinite loop (the worker's event loop never turns); 'fail' — answers
 // with an extractor error; 'ok' — answers with one empty page.
@@ -8734,9 +8829,11 @@ if(workerData.mode==='slow-final-page'){
 
 ```ts
 // src/lib/documents/extract/isolate.test.ts
-import {readFileSync} from 'node:fs';
+import {cpSync,mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {describe,expect,it} from 'vitest';
+import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {buildExtractWorker} from '../../../../scripts/documents/build-extract-worker';
 import {withLeaseHeartbeat} from '../lease';
 import {extractInWorker} from './isolate';
 import {ExtractTimeout} from './pdf';
@@ -8771,13 +8868,30 @@ describe('extractInWorker (codex plan round 3, R1-P2-7 final)',()=>{
   await expect(extractInWorker(job('ok'),{hardMs:5_000,entry:SLOW})).resolves.toMatchObject({pages:[{page_no:1}],hasTextLayer:false});
   await expect(extractInWorker(job('ok'),{hardMs:0,entry:SLOW})).rejects.toBeInstanceOf(ExtractTimeout);
  },20_000);
- it('the real worker entry extracts PDF and HTML off the main thread and keeps the page cap',async()=>{
+});
+
+describe('the bundled extraction worker (codex plan round 4, R4-P2-1)',()=>{
+ // A deployment stand-in: a temporary directory outside the checkout holding ONLY the bundle and the
+ // traced pdf.js assets — no node_modules, no TypeScript sources, nothing to resolve from.
+ let dir='';let entry='';let assets={cMapUrl:'',cMapPacked:true as const,standardFontDataUrl:''};
+ beforeAll(async()=>{
+  dir=mkdtempSync(join(tmpdir(),'f3-extract-worker-'));
+  entry=await buildExtractWorker(join(dir,'extract-worker.mjs'));
+  const pdfjs=join(process.cwd(),'node_modules','pdfjs-dist');
+  cpSync(join(pdfjs,'cmaps'),join(dir,'assets','cmaps'),{recursive:true});
+  cpSync(join(pdfjs,'standard_fonts'),join(dir,'assets','standard_fonts'),{recursive:true});
+  cpSync(join(pdfjs,'legacy','build','pdf.worker.mjs'),join(dir,'assets','pdf.worker.mjs'));
+  assets={cMapUrl:join(dir,'assets','cmaps')+'/',cMapPacked:true,standardFontDataUrl:join(dir,'assets','standard_fonts')+'/'};
+ },120_000);
+ afterAll(()=>{if(dir)rmSync(dir,{recursive:true,force:true});});
+ it('runs from an isolated directory (bundle + assets only) and extracts the PDF and HTML fixtures; the page cap holds',async()=>{
+  expect(readFileSync(entry,'utf8')).not.toMatch(/from\s*["'](?!node:)[^"']*pdfjs-dist/);   // pdf.js is inside the bundle
   const pdf=new Uint8Array(readFileSync('src/lib/documents/fixtures/pdf/minimal-two-pages.pdf'));
-  const r=await extractInWorker({kind:'pdf',bytes:pdf,maxPages:10,softMs:30_000},{hardMs:60_000});
+  const r=await extractInWorker({kind:'pdf',bytes:pdf,maxPages:10,softMs:30_000,assets},{hardMs:60_000,entry});
   expect(r.pages).toHaveLength(2);expect(r.hasTextLayer).toBe(true);
   expect(r.pages[0].text).toContain('Revenue');
-  await expect(extractInWorker({kind:'pdf',bytes:pdf,maxPages:1,softMs:30_000},{hardMs:60_000})).rejects.toMatchObject({name:'ExtractTooManyPages',pages:2});
-  const html=await extractInWorker({kind:'html',bytes:new TextEncoder().encode('<p>one</p><hr/><p>two</p>'),maxPages:10,softMs:30_000},{hardMs:60_000});
+  await expect(extractInWorker({kind:'pdf',bytes:pdf,maxPages:1,softMs:30_000,assets},{hardMs:60_000,entry})).rejects.toMatchObject({name:'ExtractTooManyPages',pages:2});
+  const html=await extractInWorker({kind:'html',bytes:new TextEncoder().encode('<p>one</p><hr/><p>two</p>'),maxPages:10,softMs:30_000},{hardMs:60_000,entry});
   expect(html.pages.map(p=>p.text)).toEqual(['one','two']);
  },120_000);
 });
@@ -9368,7 +9482,7 @@ import {pagesJsonPath} from '../object-store';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {DocumentRow,DocumentsDb,ObjectStore,PageLayout} from '../types';
 import {buildPagesJson,pageInsertsOf,sha256Hex} from './pages-json';
-import {HEARTBEAT_MS,withLeaseHeartbeat} from '../lease';
+import {FINAL_RESERVE_MS,HEARTBEAT_MS,withLeaseHeartbeat} from '../lease';
 import {ExtractTimeout,ExtractTooManyPages} from './pdf';
 import type {ExtractBudget} from './pdf';
 
@@ -9460,7 +9574,8 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   if(sha256Hex(bytes)!==doc.content_sha256){await fail(doc,'content_hash_mismatch');continue;}
   let layout:{pages:PageLayout[];hasTextLayer:boolean};
   // R1-P2-7 round 2: the lease is renewed on a timer DURING the extraction; a refused renewal → lease_lost, nothing written
-  try{layout=await withLeaseHeartbeat(()=>db.renewExtractLease(doc.document_id,batchId,EXTRACT_LEASE_TTL_S),signal=>layoutOf(deps,doc,bytes,signal),{intervalMs:HEARTBEAT_MS});}
+  try{layout=await withLeaseHeartbeat(()=>db.renewExtractLease(doc.document_id,batchId,EXTRACT_LEASE_TTL_S),signal=>layoutOf(deps,doc,bytes,signal),
+   {intervalMs:HEARTBEAT_MS,remainingMs:()=>remaining(deps),reserveMs:FINAL_RESERVE_MS});}
   catch(e){
    if(e instanceof DocumentsDbError&&e.code==='lease_lost'){counts.failed++;errors.push({code:'lease_lost',key:doc.document_id});documents.push({documentId:doc.document_id,outcome:'failed',code:'lease_lost'});continue;}
    const code=e instanceof Error&&e.message==='unsupported_mime'?'unsupported_mime':errCode(e);
@@ -9501,6 +9616,7 @@ import {supabaseTableClient} from '../../db/table-client';
 import {supabaseDocumentsDb} from '../db';
 import {supabaseObjectStore} from '../object-store';
 import {extractInWorker} from './isolate';
+import {pdfjsAssets} from './pdf';
 import type {ExtractBudget} from './pdf';
 import {MAX_PDF_PAGES} from './run';
 import type {ExtractDeps} from './run';
@@ -9511,7 +9627,7 @@ import type {ExtractDeps} from './run';
 export const WORKER_SOFT_MARGIN_MS=5_000;
 const viaWorker=(kind:'pdf'|'html')=>(bytes:Uint8Array,budget:ExtractBudget)=>{
  const hardMs=budget.remainingMs();
- return extractInWorker({kind,bytes,maxPages:budget.maxPages??MAX_PDF_PAGES,softMs:Math.max(hardMs-WORKER_SOFT_MARGIN_MS,1)},{hardMs,...(budget.signal?{signal:budget.signal}:{})});
+ return extractInWorker({kind,bytes,maxPages:budget.maxPages??MAX_PDF_PAGES,softMs:Math.max(hardMs-WORKER_SOFT_MARGIN_MS,1),assets:pdfjsAssets()},{hardMs,...(budget.signal?{signal:budget.signal}:{})});
 };
 export interface ExtractDepsOptions{deadline:Date|null;codeVersion:string|null;now?:()=>Date;/** Reuse an existing admin client (scripts hold one). */admin?:ReturnType<typeof getAdminSupabase>}
 export function productionExtractDeps(opts:ExtractDepsOptions):ExtractDeps{
@@ -9731,9 +9847,9 @@ main().catch(e=>fail(e instanceof Error?e.message:String(e),1));
   // node_modules/pdfjs-dist at runtime (src/lib/documents/extract/pdf.ts::pdfjsAssets); file tracing
   // does not see them, so ship them with the routes that extract. Verified by the Vercel preview smoke
   // in docs/runbooks/document-pipeline.md before DOCUMENTS_EXTRACT_ENABLED is set.
-  // The extraction runs in a worker thread (src/lib/documents/extract/isolate.ts, codex plan round 3):
-  // its plain-ESM entry, the TypeScript sources it imports and tsx (+ esbuild) that loads them are not
-  // reachable by import tracing either.
+  // The extraction runs in a worker thread (src/lib/documents/extract/isolate.ts) started from the
+  // esbuild bundle build/extract-worker/extract-worker.mjs (pdf.js inlined; codex plan round 4), which
+  // import tracing cannot see either; pdf.worker.mjs stays traced as an asset next to the CMaps/fonts.
   outputFileTracingIncludes: {
     '/api/cron/documents-extract': F3_EXTRACT_FILES,
     '/api/cron/documents-candidates': F3_EXTRACT_FILES,
@@ -9747,9 +9863,8 @@ main().catch(e=>fail(e instanceof Error?e.message:String(e),1));
 ```js
 // F3 document pipeline: files the extraction routes read or start at runtime (see outputFileTracingIncludes)
 const F3_EXTRACT_FILES = [
-  './node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*',
-  './src/lib/documents/extract/worker-entry.mjs', './src/lib/documents/extract/*.ts', './src/lib/documents/types.ts',
-  './node_modules/tsx/**/*', './node_modules/esbuild/**/*', './node_modules/@esbuild/**/*', './node_modules/get-tsconfig/**/*', './node_modules/resolve-pkg-maps/**/*',
+  './build/extract-worker/extract-worker.mjs',   // the self-contained worker bundle (npm run prebuild)
+  './node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*', './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
 ];
 // end F3
 ```
@@ -9773,7 +9888,7 @@ node -e "import('./next.config.mjs').then(m=>console.log(Object.keys(m.default.o
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/lib/documents/lease.ts src/lib/documents/lease.test.ts src/lib/documents/extract/worker-job.ts src/lib/documents/extract/worker-entry.mjs src/lib/documents/extract/isolate.ts src/lib/documents/extract/isolate.test.ts src/lib/documents/fixtures/worker/slow-worker.mjs src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
+git add src/lib/documents/lease.ts src/lib/documents/lease.test.ts src/lib/documents/extract/worker-job.ts src/lib/documents/extract/worker-entry.ts scripts/documents/build-extract-worker.ts package.json package-lock.json src/lib/documents/extract/isolate.ts src/lib/documents/extract/isolate.test.ts src/lib/documents/fixtures/worker/slow-worker.mjs src/lib/documents/citations.ts src/lib/documents/citations.test.ts src/lib/documents/extract/run.ts src/lib/documents/extract/run.test.ts src/lib/documents/extract/deps.ts src/lib/documents/test-seed.ts src/app/api/cron/documents-extract/route.ts src/app/api/cron/documents-extract/route.test.ts scripts/documents/extract.ts scripts/documents/record-fixture.ts next.config.mjs docs/audits/2026-11-06-document-pipeline/implementation-log.md
 ```
 
 ```bash
@@ -15467,7 +15582,7 @@ import {buildCheckContext,hkCheckFindings,runHkChecks} from '../hk-facts/checks'
 import {supabaseHkFactsPort} from '../hk-facts/facts-port';
 import type {HkFactsPort} from '../hk-facts/facts-port';
 import {generateHkCandidates} from '../hk-facts/generate';
-import {HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
+import {FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
 export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto'];
@@ -15529,7 +15644,7 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
  try{
   await withLeaseHeartbeat(()=>deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S),
    (signal,quiesce)=>candidatesClaimed({...deps,db:guardCalls(deps.db,signal),store:guardCalls(deps.store,signal),tables:guardCalls(deps.tables,signal),port:guardCalls(deps.port,signal)},batchId,ex,today,local.out,local.counts,local.errors,quiesce),
-   {intervalMs:HEARTBEAT_MS});
+   {intervalMs:HEARTBEAT_MS,remainingMs:()=>remainingMs(deps),reserveMs:FINAL_RESERVE_MS});
  }catch(e){
   if(!(e instanceof DocumentsDbError&&e.code==='lease_lost'))throw e;
   out.outcome='failed';out.code='lease_lost';counts.failed++;errors.push({code:'lease_lost',key:ex.extraction_id,message:'heartbeat'});
@@ -16224,7 +16339,7 @@ import {cpSlice} from '../extract/pages-json';
 import {DocumentsDbError,HK_EXTRACTOR_REF,HK_PUB_GEN} from '../types';
 import type {CandidateRow,CitationRole,CitationRow,DocumentRow,DocumentsDb,FactCitations,FinancialFactPayload,Page,PublicationRow} from '../types';
 import {HK_CONCEPT_IDS} from './checks';
-import {HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
+import {FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
 import {evaluateHkFactRules,planHkFactWrites,toFilingInsert} from './facts-port';
 import type {HkFactsPort,HkFilingInsert} from './facts-port';
 
@@ -16284,7 +16399,7 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
  try{
   return await withLeaseHeartbeat(()=>port.renewLease(issuer,batchId,PROMOTE_LEASE_TTL_S),
    (signal,quiesce)=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen,quiesce),
-   {intervalMs:HEARTBEAT_MS});
+   {intervalMs:HEARTBEAT_MS,remainingMs:()=>remaining(deps),reserveMs:FINAL_RESERVE_MS});
  }catch(e){
   if(!isLeaseLoss(e))throw e;
   return {issuerId:issuer,runId:null,outcome:'failed',code:'lease_lost',counts:{...emptyCounts(),failed:1},errors:[{code:'lease_lost',key:issuer,message:'heartbeat'}],staged:0};
@@ -19172,3 +19287,13 @@ git commit -m "docs(documents): F3 runbook, spec §17 deviations, implementation
 | R3-P1-1 | 接受。借来的表币种引用改用自己的角色 `unit_currency`（迁移二 `fact_citations.role` 检查、`insert_fact_citations` 角色校验、`CitationRole`/`CITATION_ROLES`）；`unit` 恢复"恰 1 条"（SQL 与内存）；`assert_run_evidence_complete` 新增 `unit_evidence`：已发布的 `unit` 必须是候选声明的那条，`unit_currency` 恰为候选声明的那条（只有仙/cents EPS 才声明），否则为零；检查 `unitEvidence` 对金额与显式币种 EPS 上的 `unit_currency` 一律 `unit_currency_unexpected` 阻断 | 共享契约 `CitationRole`/`FactCitations` 注释（两处）；Task 13 迁移二 SQL（表、`insert_fact_citations`、`assert_run_evidence_complete`）、内存 `assertEvidence`、`CITATION_ROLES`、契约用例（金额事实多一条 `unit_currency`、多一条 `unit` → `evidence_incomplete`，pg 与内存）；Task 15 `checks.ts` + `checks.test.ts`（金额 + 美元币种证据、显式 RMB cents + 币种证据均阻断）；`test-support.ts` 种子支持 `cents`（标签带（仙）、`unit` 引用仙、`unit_currency` 引用单位行、scale 0.01）；Task 16 `promote.ts` 以 `unit_currency` 角色写证据 + 端到端用例（仙 EPS 过检查、发布后恰 1 条 `unit` 与 1 条 `unit_currency`，收益无 `unit_currency`） |
 | R3-P2-1 | 接受。落地的规格二 SQL 没有只续持有者的函数（`claim_fact_sync_lease` 会接手无主/过期/已释放的范围），迁移二新增 `renew_hk_fact_lease`：只在本批次持有且未过期时延长；端口 `renewLease` 三实现；晋升的心跳与阶段续租都改用它。`withLeaseHeartbeat` 给阶段传 `quiesce()`：停表并等在途续租（≤ `drainMs`，幂等）；阶段释放租约前调用（晋升 `release`、候选 `finishCandidates` 前），返回结果前总会调用 | Task 13 迁移二 SQL、`F3_RPC`、端口接口（两处）、Supabase/pg/内存实现、契约用例（无主、他批次、已释放都不接手）；Task 10 `lease.ts` + 用例（结果等在途续租落定、之后不再续租）；Task 15 `candidates/run.ts`；Task 16 `promote.ts` + 假定时器用例（心跳续租卡住超过排空上限：晋升照常发布并释放，迟到的续租被只续持有者的函数拒绝，范围保持已释放）；契约补充 |
 | R1-P2-7（定稿） | 接受。阻塞抽取（PDF 与 HTML）在 `node:worker_threads` 里跑：`extract/worker-entry.mjs`（纯 ESM，为本线程注册 tsx 加载器后运行 `worker-job.ts`）、`extract/isolate.ts::extractInWorker`（主线程保留心跳；硬截止 `worker.terminate()` → `extract_timeout`；心跳中止 → 终止并 `lease_lost`）。生产 `extract/deps.ts` 的 `extractPdf`/`extractHtml` 都经 worker（worker 自身软预算比硬截止短 5 s）；`ExtractBudget` 加 `signal`；`extractHtml` 依赖可异步；页数上限保留。`next.config.mjs` 的 F3 块改为共用常量 `F3_EXTRACT_FILES`：pdf.js 资源 + `worker-entry.mjs` + `extract/*.ts` + `types.ts` + tsx/esbuild 运行文件，随三条抽取路由打包；Vercel 上能否起 worker 由 runbook §9 冒烟核对，失败按决策 D 只在本机抽取 | Task 9 `pdf.ts`（`ExtractBudget.signal`）；Task 10 新文件 `worker-job.ts`、`worker-entry.mjs`、`isolate.ts`、`isolate.test.ts`、测试用 `fixtures/worker/slow-worker.mjs`（最后一页卡住、事件循环被同步死循环阻塞：都在硬截止被终止，期间主线程 50 ms 心跳持续跳动；心跳中止 → `lease_lost`；真实入口抽 PDF/HTML 且页数上限生效），`run.ts`（`layoutOf` 统一预算、带 signal），`deps.ts`，`next.config.mjs` F3 块；契约补充 |
+
+### Codex 计划审计第 4 轮处置
+
+审计：`docs/audits/2026-11-06-document-pipeline/07-codex-plan-round4.md`（第 3 轮已提交为 `84f973f`；R3-P1-1、R3-P2-1、R1-P2-7 判 CLOSED）与 Task 1 复核 `task01-codex-recheck.md` 的 N1；处置记录：`docs/audits/2026-11-06-document-pipeline/08-disposition-round4.md`。Task 1 文本未改（由指挥按已落地代码同步）。沙箱改为用工作树里已落地的迁移一与 `documents.integration.test.ts`（含复审修正：清空回填游标须 `p_done`/`p_reset` 等）验证其后各任务。复跑：`tsc --noEmit` 0 错误；`eslint --max-warnings=0`（F3 全部 127 个文件 + `batches.ts`/`local-db.ts`）0 输出；F3 单测 45 个文件 358 例通过；本机 PostgreSQL 17 四个 F3 critical 套件 65 例通过（真实迁移一）。
+
+| ID | 处置 | 改动位置 |
+|---|---|---|
+| R4-P2-1 | 接受（按指挥改设计：取消 worker 里运行时注册 tsx）。新脚本 `scripts/documents/build-extract-worker.ts` 用 esbuild（`devDependencies` 加 `esbuild@0.28.1`，即 tsx 已带入的版本）把 `extract/worker-entry.ts`（由 `.mjs` 改为 TS 入口）连同 extract 代码与 pdfjs-dist（pdf.mjs、pdf.worker.mjs 内联）打成单个自包含 ESM：`build/extract-worker/extract-worker.mjs`（`build/` 已 gitignore，不提交）；`package.json` 加 `prebuild`；`isolate.workerEntry()` 指向该产物；CMaps/标准字体由主线程 `pdfjsAssets()` 经 `job.assets` 传给 worker。`F3_EXTRACT_FILES` 改为：bundle + `pdfjs-dist` 的 `cmaps/`、`standard_fonts/`、`legacy/build/pdf.worker.mjs`（去掉 tsx/esbuild/TS 源） | Task 10：`worker-entry.ts`、`worker-job.ts`（`assets`）、`isolate.ts`、`extract/deps.ts`、新脚本、`package.json`、`next.config.mjs` F3 块、`isolate.test.ts`（测试内构建到系统临时目录，目录里只有 bundle 与上述资源、无 node_modules，抽取 PDF 与 HTML 夹具并验证页数上限）、Files/`git add`、文件结构、契约补充 |
+| R4-P2-2 | 接受。`withLeaseHeartbeat` 新选项 `remainingMs`/`reserveMs`（`FINAL_RESERVE_MS=20s`）：保留区内不再发起心跳；续租请求最多等 min(间隔, 剩余预算−保留)，超时视为暂时（续租只续持有者）；排空最多等 min(drainMs, 剩余预算−保留)；所有等待计时器无论哪边先到都清除。抽取、候选、晋升三处调用都传入各自的剩余预算 | Task 10 `lease.ts` + `lease.test.ts`（截止边缘：续租卡死时结果在保留区之前返回、无残留计时器；保留区内不起心跳；成功排空后 `vi.getTimerCount()===0`）、`extract/run.ts`；Task 15 `candidates/run.ts`；Task 16 `promote.ts`；契约补充 |
+| Recheck N1 | 接受。迁移一（已落地）拒绝不带 `p_done`/`p_reset` 清空回填游标；Task 7 的 EDGAR 覆盖缺口重来改为显式 `reset`（`advanceCursor(…,null,false,true)`），这正是同步设计里的"有意重来"。内存实现同步该规则 | Task 7 `sync.ts`（及行为清单）+ `sync.test.ts`（缺口路径第二轮仍 success、游标为空、不 `cursor_regression`）；Task 2 内存 `advanceCursor`；`db-contract.ts`（不带 reset 清空 → `cursor_regression`，带 reset 重来成功；内存与真实迁移一的 pg 都跑） |
