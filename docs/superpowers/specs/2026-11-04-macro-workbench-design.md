@@ -48,7 +48,7 @@
 |---|---|
 | M6 | 派生观测 `available_at` = 其**全部**输入版本 `available_at` 的最大值；派生在输入写入的同一批次内完成（§4.4） |
 | M7 | 快照清单包含判定与"本期变化"用到的全部观测：每个指标的最新期、上一可比期、3 个月前期（§5.3）；派生行 `transform` 记 `<kind>@<version>` 与参数 |
-| M8 | 同比 = `(cur/prev − 1) × 100`，十进制运算，四舍五入（half-even）到 4 位小数后 canonical；`value` 由 RPC 从 `value_text` 计算，不接受调用方传 `value`；规则检查在 `quality.ts` 内把 `value_text` 转有限数（唯一转换点之一，另一个是 `regime.ts` 输入） |
+| M8 | 同比 = `(cur/prev − 1) × 100`，十进制运算，四舍五入（half-even）到 4 位小数后 canonical；`value` 由 RPC 从 `value_text` 计算，不接受调用方传 `value`；规则检查在 `quality.ts` 内把 `value_text` 转有限数（三个转换点之一，另两个是 `regime.ts` 输入与 `correlation.ts`：相关分析本质上是浮点运算，变化量先按十进制精确算出，每个值只转换一次；计划集成轮补记） |
 | M9 | P1 不写 `dq_reconciliations`（没有第二来源；AKShare 交叉核对走隔离 `adapter_mismatch`）；`recordAttempt({ok: status !== 'failed'})`；每个 dataset 只有一个写者（`macro.fred` 只由 cron 写，`macro.akshare` 只由 ingest finish 写），ingest `start` 在已有未结束且 < 2 小时的 `macro.akshare` 批次时拒绝（409） |
 | M10 | 隔离裁决经 RPC `macro_resolve_conflict(quarantine_id, decision, resolved_by)` 原子完成：接受 → 被隔离行转 `ok`（版本号更高者即最新）、`dq_quarantine` 置 `resolved_accept`、写 `research_audit_log`、`input_revision+1`；拒绝 → 只置 `resolved_reject` + 审计。已发布快照不改，下次发布反映。**迟到交付**：新行的 `available_at` 早于当前最新版本的 `available_at` 且值不同 → 不分配新的最新版本，隔离 `stale_delivery` |
 | M11 | 及时性按"下一期"判断：下一期 = 最新期 + 1 个周期；截止 = 下一期期末 + `releaseLagDays` + 3 天；今天 > 截止 → `late`；`event` 频率或无 `releaseLagDays` → `n/a` |

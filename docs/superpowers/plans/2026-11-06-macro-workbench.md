@@ -28,7 +28,8 @@
 - **客户端**：服务端写 `getAdminSupabase()`（`src/lib/supabase/admin.ts`）；公开读 `getAnonSupabase()`（`src/lib/supabase/anon.ts`）；登录用户 `getServerSupabase()`（`src/lib/supabase/server.ts`，`auth.getUser()` 无用户 → 401）；DQ 用 `TableClient`（`src/lib/db/table-client.ts`，计划一的 `supabaseTableClient`）。新 RPC 不登记进 `Database['public']['Functions']`，按 `src/lib/supabase/admin.ts` 注释的窄类型办法调用。
 - **cron 鉴权**：`authorizedCronRequest(req.headers.get('authorization'), process.env.CRON_SECRET)`（`src/lib/observability/cron-auth.ts`）。**ingest 鉴权**：`MACRO_INGEST_SECRET`，Bearer，`crypto.timingSafeEqual`，未配置即 503 拒绝。
 - **代码版本**：`resolveCodeVersion()`（`src/lib/facts/deps.ts`）。**十进制**：`canonicalDecimal` / `decimalEquals`（`src/lib/facts/json-numbers.ts`）。**DQ**：`startBatch/finishBatch/emptyCounts`（`src/lib/dq/batches.ts`）、`quarantine()`（`src/lib/dq/quarantine.ts`）、`recordAttempt/freshnessOf`（`src/lib/dq/freshness.ts`）、`rangeRule/jumpRule/unitRule`（`src/lib/dq/rules.ts`）——只调用，不修改这些文件。
-- **i18n**：新域 `macro` 注册到 `src/i18n/request.ts` 的 `MESSAGE_DOMAINS`（`// MACRO` 块）；`messages/zh/macro.json` 与 `messages/en/macro.json` 键集合一致（现有 parity 测试会校验）。
+- **i18n**：新域 `macro` 注册到 `src/i18n/request.ts` 的 `MESSAGE_DOMAINS`（`// MACRO` 块）；`messages/zh/macro.json` 与 `messages/en/macro.json` 键集合与占位符一致。现有 `src/i18n/messages-parity.test.ts` 只校验固定域列表、不含 `macro`，所以 Task 16 新增专用测试 `src/components/macro/macro-messages.test.ts`（键集合、占位符、判断层词汇、MACRO 块注册），不改共享测试。
+- **数值转换边界（§0.2 M8）**：`value_text` 只在三处变成浮点数：`quality.ts`（规则检查）、`regime.ts`（判定输入）、`correlation.ts`（相关分析本质上是浮点运算；变化量先按十进制精确算出，每个值只 `Number()` 一次）。`read-api.ts` 的 `MacroObservationRef.value` 是 F4 契约要求的形状（`Number(value_text)`），不参与本模块计算。UI 图表只为画图转数字，打印的数字一律来自 `value_text`。
 - **UI**：遵守 `DESIGN.md` 与 `src/app/globals.css` tokens（无紫色、无渐变文字、无发光、圆角 ≤ 6px、数字 `font-mono tabular-nums`、数据密度 `[data-density="data"]`）；视觉依据为宏观 Claude Design 画布 `https://claude.ai/artifact/StRedLKWSN4EVb26GSg7KH`（判断层关闭的概览、证据抽屉、Today 卡画板在第 2 稿补充；UI 任务开工前读画布）。每张图表有表格视图。
 - **提交**：`git commit` 单独一条命令，同一命令里不能出现 `-n` 记号（含 `grep -n`、`head -n`），用 `git commit -F - <<'EOF' … EOF`；信息末尾 `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`（实施代理用自己的模型名）。不用 `--no-verify`。
 - **测试命令**：`npm test -- <path>`、`npm run typecheck`、`npm run lint`（`--max-warnings=0`）、`npm run test:db`、`npm run test:migrations`；Python：`scripts/macro/.venv/bin/python -m pytest scripts/macro -q`。
@@ -39,50 +40,60 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261114090000_macro_workbench.sql   十表 + 桶 + RPC + RLS + 权限（Task 1）
+supabase/migrations/20261114090000_macro_workbench.sql   十表 + 桶 + RPC + 读辅助函数 + RLS + 权限（Task 1）
 supabase/migrations.lock.json                            追加 1 条（Task 1）
 src/lib/supabase/database.types.ts                       + 七表 Row/Insert/Update（// MACRO；Task 1）
 src/lib/macro/macro.integration.test.ts                  迁移/RPC/RLS/并发发布/配额（critical；Task 1）
+scripts/ci/research-checks.ts      criticalSuites += src/lib/macro/macro.integration.test.ts（// MACRO；Task 1）
 src/lib/macro/types.ts             共享类型（§共享契约 原样落地；Task 2）
 src/lib/macro/judgment-contract.ts F4 契约镜像（§共享契约 原样落地；Task 2）
-src/lib/macro/catalog.ts           MACRO_CATALOG、CATALOG_VERSION、catalogById、indicatorsOf（Task 2）
-src/lib/macro/decimal.ts           canonical / equals / subtract / ratio（十进制字符串运算；Task 2）
-src/lib/macro/db.ts                MacroDb 接口 + MacroDbError + supabaseMacroDb（Task 3）
+src/lib/macro/catalog.ts           MACRO_CATALOG、CATALOG_VERSION、catalogById、indicatorsOf、regimeInputsOf、collectableOf、canonicalJson、sha256HexSync（纯 TS，客户端可用；Task 2）
+src/lib/macro/decimal.ts           canonical / equals / compare / subtract / minus100 / yoyPct（十进制字符串运算；Task 2）
+src/lib/macro/db.ts                MacroDb 接口 + MacroDbError + supabaseMacroDb + 行映射与分包助手（Task 3）
 src/lib/macro/memory-db.ts         memoryMacroDb（与 SQL RPC 语义一致；Task 3）
 src/lib/macro/db-contract.ts       内存与 supabase 共用契约用例（非测试文件；Task 3）
-src/lib/macro/evidence.ts          EvidenceStore 接口 + supabaseEvidenceStore + memoryEvidenceStore + sha256Hex（Task 3）
+src/lib/macro/evidence.ts          EvidenceStore + supabaseEvidenceStore + memoryEvidenceStore + sha256Hex/extFor/evidencePath（Task 3）
+src/lib/macro/periods.ts           月末/季末/周期助手（Task 4）
 src/lib/macro/parsers/fred-csv.ts  parseFredCsv（Task 4）
-src/lib/macro/fixtures/fred/*.csv  真实录制（Task 4）
+src/lib/macro/fixtures/fred/*.csv + manifest.json         真实录制（Task 4）
 scripts/macro/record-fred-fixtures.ts                    （Task 4）
 src/lib/macro/derive.ts            deriveSeries（month_end / yoy_from_index / index_minus_100；Task 5）
-src/lib/macro/quality.ts           MACRO_RULES_VERSION、validatePoint（Task 5）
-src/lib/macro/ingest.ts            ingestEvidence / IngestDeps / IngestReceipt（cron 与 ingest 路由共用；Task 6）
-src/lib/macro/providers/fred.ts    fetchFredCsv（Task 7）
-src/lib/macro/deps.ts              productionMacroDeps（Task 7）
+src/lib/macro/quality.ts           MACRO_RULES_VERSION、validatePoint、KNOWN_UNITS（Task 5）
+src/lib/macro/ingest.ts            ingestEvidence / deriveAndWrite / IngestDeps / IngestReceipt（cron 与 ingest 路由共用；Task 6）
+src/lib/macro/providers/fred.ts    fetchFredCsv、fredCosdFor（Task 7）
+src/lib/macro/deps.ts              MacroDeps、productionMacroDeps（Task 7）
 src/app/api/cron/macro-sync/route.ts                     （Task 7，Task 11 接入发布）
 vercel.json                                              + /api/cron/macro-sync 30 5 * * *（Task 7）
+src/lib/macro/cn-series.ts  scripts/macro/export-cn-series.ts  scripts/macro/cn-series.json   （Task 8）
 scripts/macro/requirements.txt  recorder.py  collect.py  test_collect.py  launchd.plist.template   （Task 8）
-src/lib/macro/fixtures/cn/*        真实录制的 NBS / 中债 / 外汇局响应 + manifest.json（Task 8）
-src/lib/macro/parsers/nbs.ts  parsers/chinabond.ts  parsers/safe.ts  parsers/index.ts（parserFor）（Task 9）
-src/app/api/macro/ingest/route.ts  src/lib/macro/ingest-schema.ts                         （Task 9）
-src/lib/macro/regime.ts            RULES、RULES_VERSION、METHODOLOGY_VERSION、classifyRegime（Task 10）
-src/lib/macro/freshness.ts         releaseTimeliness（Task 11）
-src/lib/macro/snapshots.ts         buildRegimeInput / publishRegion（Task 11）
+src/lib/macro/fixtures/cn/*        真实录制的 NBS / 中债 / 外汇局响应 + manifest.json + claims.json + verification.json（Task 8）
+docs/audits/2026-11-06-macro-workbench/11-cn-source-verification.md   （Task 8）
+.gitignore                                               + # MACRO scripts/macro/.venv/（Task 8）
+src/lib/macro/parsers/{html-table,nbs,chinabond,safe,index}.ts（parserFor、claimPeriodEnd）（Task 9）
+src/app/api/macro/ingest/route.ts  src/lib/macro/ingest-schema.ts                         （Task 9，Task 11 接入发布）
+src/lib/macro/regime.ts            RULES、RULES_VERSION、METHODOLOGY_VERSION、WEIGHTS_V1、classifyRegime（Task 10）
+src/lib/macro/freshness.ts         releaseTimeliness、collectionStatus、datasetOf（Task 11）
+src/lib/macro/snapshots.ts         buildRegimeInput / publishRegion / catalogCounts / catalogItemsOf（Task 11）
+src/lib/macro/testing/seed.ts      测试用种子（seedCatalog、seedPoints、US_FIXTURE；仅测试 import；Task 11）
 src/lib/macro/read-api.ts          macroReadApi(db)（Task 12）
-src/lib/macro/replay.test.ts       证据 → 观测离线重放（Task 12）
-src/lib/macro/views.ts             overviewEnvelope / indicatorRows / changesOf（Task 13）
-src/app/api/macro/{overview,series/[id],snapshots/[id],evidence/[sha256]}/route.ts  src/lib/macro/route-helpers.ts  （Task 13）
-src/lib/macro/events.ts  cycles.ts  src/lib/macro/data/fomc-meetings.json  scripts/macro/record-fomc.ts   （Task 14）
-src/lib/macro/correlation.ts  explain.ts  analysis-spec.ts                               （Task 15）
+src/lib/macro/replay.test.ts       证据 → 观测离线重放（Task 12；Task 13 追加概览追溯用例）
+src/lib/macro/views.ts             overviewEnvelope、IndicatorRow / ChangeItem / Changes / Envelope、COMPACT_KEYS、changeOf（Task 13）
+src/lib/macro/route-helpers.ts     requireSessionUser、参数解析、错误响应、shaOfRetrievals、macroRouteDeps（Task 13）
+src/app/api/macro/{overview,series/[id],snapshots/[id],evidence/[sha256]}/route.ts  src/app/api/macro/routes.test.ts  （Task 13；Task 14 填充 series 路由）
+src/lib/macro/{events,cycles,fomc,series-extras}.ts  src/lib/macro/data/fomc-meetings.json  src/lib/macro/fixtures/fomc/*.html  scripts/macro/record-fomc.ts   （Task 14）
+src/lib/macro/{correlation,explain,analysis-spec}.ts                                     （Task 15）
 src/app/api/macro/analyses/route.ts  analyses/[runId]/route.ts                            （Task 15）
-messages/zh/macro.json  messages/en/macro.json  src/i18n/request.ts(// MACRO)            （Task 16）
-src/components/macro/macro-format.ts  IndicatorTable.tsx  ChangesCard.tsx  CatalogCoverage.tsx  SourceFooter.tsx  SourceDrawer.tsx
+messages/zh/macro.json  messages/en/macro.json  src/i18n/request.ts(// MACRO)  src/components/macro/macro-messages.test.ts   （Task 16）
+src/components/macro/{macro-format,use-macro-t,view-model}.ts  charts/chart-geometry.ts   （Task 16）
+src/components/macro/{IndicatorTable,ChangesCard,CatalogCoverage,SourceFooter,SourceDrawer}.tsx
 src/components/macro/charts/{MacroLineChart,Sparkline,ScatterFit,DataTableToggle}.tsx    （Task 16）
-src/app/(app)/intel/macro/page.tsx  [seriesId]/page.tsx  analyses/[runId]/page.tsx
-src/components/macro/{IndicatorDetail,CorrelationWorkbench,MacroJudgmentSlot,MacroWorkbench}.tsx   （Task 17）
-src/components/today/MacroGlance.tsx(// MACRO)  src/app/(app)/intel/page.tsx(// MACRO)  src/components/macro/MacroSummaryCard.tsx   （Task 17）
-scripts/macro/resolve-quarantine.ts  docs/runbooks/macro-sync.md                          （Task 18）
-scripts/ci/research-checks.ts      criticalSuites += src/lib/macro/macro.integration.test.ts（// MACRO；Task 1）
+src/app/api/macro/series/[id]/versions/route.ts                                         （Task 16）
+src/lib/macro/workbench-options.ts  src/components/macro/{correlation-presets,detail-model,judgment-view,use-macro-overview}.ts   （Task 17）
+src/app/(app)/intel/macro/page.tsx  [seriesId]/page.tsx  analyses/[runId]/page.tsx  pages.test.ts   （Task 17）
+src/components/macro/{MacroWorkbench,IndicatorDetail,CorrelationWorkbench,CorrelationResult,AnalysisRunView,MacroJudgmentSlot,MacroKeyRows,MacroSummaryCard}.tsx   （Task 17）
+src/components/today/MacroGlance.tsx(// MACRO)  src/app/(app)/intel/page.tsx(// MACRO)   （Task 17）
+src/lib/macro/quarantine-cli.ts  scripts/macro/resolve-quarantine.ts  docs/runbooks/macro-sync.md   （Task 18）
+docs/audits/2026-11-06-macro-workbench/10-implementation-log.md   验收证据（Task 18）
 ```
 
 ## 共享契约
@@ -112,7 +123,10 @@ export interface MacroSeriesDef{
  aliasOf?:string;                     // asset view of another series (same observations); no own rows
  revisionPolicy:'revisable'|'immutable';weight:number;changeKind:ChangeKind;releaseLagDays?:number;definitionVersion:number;
 }
-export type Locator={kind:'csv_row';line:number;column:number}|{kind:'json_pointer';pointer:string};
+/** Where a parser found a value inside the evidence bytes. html_cell (Task 9, ChinaBond / SAFE HTML tables): table = 0-based
+ *  index of the <table> start tag in document order (comments stripped), row = 0-based <tr> directly inside it (header = 0),
+ *  cell = 0-based <td>/<th> in that row (parsers/html-table.ts). */
+export type Locator={kind:'csv_row';line:number;column:number}|{kind:'json_pointer';pointer:string}|{kind:'html_cell';table:number;row:number;cell:number};
 /** Exact fetched bytes plus the receipt of this one retrieval (spec §0.2 N2). sha256 = hex of bytes. */
 export interface EvidenceInput{sha256:string;bytes:Uint8Array;adapter:Adapter;fetchUrl:string;fetchHost:string;httpStatus:number;contentType:string;fetchedAt:string;toolVersions:Record<string,string>}
 /** macro_evidence_objects: byte object, deduplicated by sha256. */
@@ -195,6 +209,10 @@ export interface MacroDb{
  putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>):Promise<string>;
  evidenceObject(sha256:string):Promise<import('./types').EvidenceObject|null>;                                   // anon
  retrieval(retrievalId:string):Promise<import('./types').Retrieval|null>;                                        // anon
+ /** Every retrieval of one evidence object, fetched_at ascending (≤ 1000). anon. */
+ retrievalsOf(sha256:string):Promise<import('./types').Retrieval[]>;
+ /** Retrievals by id, input order, unknown ids dropped, deduplicated. anon. */
+ retrievalsByIds(ids:string[]):Promise<import('./types').Retrieval[]>;
  /** RPC macro_record_chunk: idempotent by (batch_id, seq). service */
  recordChunk(batchId:string,seq:number,total:number,counts:import('./types').ChunkCounts):Promise<'new'|'duplicate'>;
  chunksOf(batchId:string):Promise<{seq:number;total:number;counts:import('./types').ChunkCounts}[]>;            // service
@@ -214,11 +232,17 @@ export interface MacroDb{
  activeSnapshot(region:import('./types').Region):Promise<import('./types').SnapshotRecord|null>;                  // anon
  snapshot(snapshotId:string):Promise<import('./types').SnapshotRecord|null>;                                      // anon
  snapshotsSince(marker:{created_at:string;snapshot_id:string}|null,limit:number):Promise<import('./types').SnapshotRecord[]>;   // anon; active+superseded only
+ /** The newest non-failed snapshot of the region created strictly before beforeCreatedAt ("changes since the previous snapshot"). anon. */
+ previousSnapshot(region:import('./types').Region,beforeCreatedAt:string):Promise<import('./types').SnapshotRecord|null>;
  regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;                                       // anon
 }
 ```
 
-`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效）；`memoryMacroDb()` 在内存里实现同样语义（含 `stale_publisher`、隔离行不可读、版本规则）。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 由登录用户客户端在 Task 15 路由里直接 rpc。
+`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效）；`memoryMacroDb()`（无参数，不要求 `ingest_batches` 行）在内存里实现同样语义（含 `stale_publisher`、隔离行不可读、版本规则）。路由与视图的全部数据库读取都经 `MacroDb`（`previousSnapshot`、`retrievalsOf`、`retrievalsByIds` 也在这里），`route-helpers.ts` 不写临时 anon 查询。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 只授 service_role，Task 15 路由经 `requireSessionUser()` 取得已验证的会话用户后，用 admin 客户端 rpc 并传 `p_user_id`；读单个运行走登录用户的 server 客户端（RLS `user_id = auth.uid()`）。
+
+Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated/service_role，RLS 生效）：`macro_latest_observations(p_series_ids text[], p_as_of timestamptz, p_period_end_lte date) returns setof macro_observations`（每序列最新期内最高 ok 版本，至多一行/序列）、`macro_snapshots_since(p_created_at timestamptz, p_snapshot_id uuid, p_limit int) returns setof macro_snapshots`（按 `(created_at, snapshot_id)` 键集分页，`p_limit` 夹在 1..1000）。写目录走 service RPC `macro_upsert_catalog(p_catalog_version, p_rules_version, p_defs jsonb)`：同一版本号已存在且目录 JSON 不同 → `catalog_version_conflict`（一个版本号永远只指一个目录）。
+
+`EvidenceStore`（Task 3，`src/lib/macro/evidence.ts`）：`put(input:EvidenceInput):Promise<{objectPath:string;status:'stored'|'exists'}>`——校验 `sha256(bytes)===input.sha256` 与 URL 主机，上传 `<adapter>/<sha256>.<ext>`（`upsert:false`，409 → `exists`，其他失败抛 `EvidenceError('evidence_upload_failed')`）。`ext` 按响应 Content-Type 取（`text/csv`、`application/csv` → csv，`application/json` → json，`text/html` → html，其余 → txt）；**上传 MIME 由扩展名决定**（csv→`text/csv`、json→`application/json`、html→`text/html`、txt→`text/plain`，正是桶 `allowed_mime_types` 的四项），`EvidenceInput.contentType` 只记录服务器原始头（出处）。
 
 ### 写入规则（SQL `macro_write_observations` 与 `memoryMacroDb.writeObservations` 必须一致；Task 1 / Task 3）
 
@@ -250,13 +274,19 @@ export interface MacroDb{
 ### 跨任务约定
 
 - 观测 id、快照 id、运行 id 都是 uuid（字符串）。日期一律 ISO `YYYY-MM-DD`；时间 ISO UTC。
-- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`adapter_mismatch`、`rule_failed:<ruleId>`。
-- ingest 协议（§0.2 M24）：`POST /api/macro/ingest` body `{action:'start', tool_versions}` → `{batch_id}`（已有未结束且 < 2h 的 `macro.akshare` 批次 → 409）；`{action:'chunk', batch_id, seq, total, evidence[], claims[]}` → 块回执（重复块返回 `duplicate`，不重复计数）；`{action:'finish', batch_id, total}` → 校验全部块到齐、汇总计数、`finishBatch`、`recordAttempt('macro.akshare',{ok: status!=='failed'})`、CN 派生、`publishRegion('CN')`。cron 只发布 US。
+- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`stale_delivery`、`adapter_mismatch`、`rule_failed:<ruleId>`。重复冲突无妨：RPC 每次都报告冲突，`quarantine()` 复用同 `(dataset, table_name, natural_key, reason_code)` 的 open 条目（Task 6 有测试）。`adapter_mismatch` 与 `rule_failed:*` 的值从未写入，没有被隔离的观测行，**只能拒绝**（`macro_resolve_conflict` 对接受回 `not_found`；Task 18 脚本在调用前拒绝接受，runbook §7 写明）。
+- AKShare 交叉核对值（claim）周期不在 TS 解析出的原始点里 → **不隔离**、跳过，块回执加一条批次错误 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`（`skipped_summary` 是 `src/lib/dq/batches.ts` 已有的 INFO 码，不改该文件）。
+- `macro_catalog_versions.rules_version` = `MACRO_RULES_VERSION`（`quality.ts` 的 DQ 规则版本，cron、ingest `start`、测试 seed 一致）；判定规则版本 `RULES_VERSION = 'macro-regime-rules/1.0'` 存在每个快照的 `macro_regime_results.rules_version`。
+- ingest 协议（§0.2 M24）：`POST /api/macro/ingest` body `{action:'start', tool_versions}` → `{batch_id}`（已有未结束且 < 2h 的 `macro.akshare` 批次 → 409）；`{action:'chunk', batch_id, seq, total, evidence[], claims[]}` → 块回执（重复块返回 `duplicate`，不重复计数）；`{action:'finish', batch_id, total}` → 校验全部块到齐、汇总计数、CN 派生、`finishBatch`、`recordAttempt('macro.akshare',{ok: status!=='failed'})`、`publishRegion('CN')`。cron 只发布 US。批次状态为 `failed` 时 cron / ingest 都**不发布**（回执 `publish:{status:'skipped',reason:'batch_failed'}`），上一个 active 快照继续服务。
 - 判定权重属于方法：`regime.ts` 导出 `WEIGHTS_V1: Record<string, number>`；`catalog.ts` 中每个 `role='indicator'` 的 `weight` 必须等于 `WEIGHTS_V1[id] ?? 0`（Task 10 测试）；覆盖率分母 = 该区域 `WEIGHTS_V1` 之和（含 missing/restricted 项）。
 - 同比：`(cur/prev − 1) × 100`，十进制，half-even 四舍五入到 4 位小数后 canonical（`decimal.ts::yoyPct`）；`index_minus_100`、`month_end` 精确。派生行 `transform` = `'<kind>@1'`。
 - 发布及时性（§0.2 M11）：下一期 = 最新期 + 1 个周期，截止 = 下一期期末 + `releaseLagDays` + 3 天，今天 > 截止 → `late`；无观测 → `missing`；`event` 或无 `releaseLagDays` → `n/a`。
 - 快照清单（§0.2 M7）：每个判定指标的最新期、上一可比期、3 个月前期（季度用上一季度）的观测 id 都进 `observation_ids`。
-- 证据对象路径 `<adapter>/<sha256>.<ext>`（`ext` ∈ `csv|json|html|txt` 按 Content-Type）；元数据旁注 `<adapter>/<sha256>.meta.json`；上传 `upsert:false`，409 = exists。
+- 证据对象路径 `<adapter>/<sha256>.<ext>`（`ext` ∈ `csv|json|html|txt` 按 Content-Type，见上文 `EvidenceStore`）；元数据旁注 `<adapter>/<sha256>.meta.json`；上传 `upsert:false`，409 = exists。
+- 定位器（`Locator`）：`csv_row`（FRED）、`json_pointer`（NBS esData）、`html_cell`（中债、外汇局 HTML 表；`parsers/html-table.ts::htmlTables` 定义下标）。迁移的列检查、`macro_write_observations` 与 `memoryMacroDb` 三处都接受这三种，其他一律 `invalid_row`。
+- 政策事件（§6.1）的 `evidence` 列四个输入观测 id：`[upperPrev, upperCur, lowerPrev, lowerCur]`（事件由上下限两天的值推出，少列会误述出处）。
+- 概览形状归 Task 13 `views.ts`（`IndicatorRow`、`ChangeItem`、`Changes`、`Envelope`）；Task 16 `view-model.ts` 只声明它读取的字段，并用编译期断言保证与 `views.ts` 一致。Today / `/intel` 卡的关键指标 = `COMPACT_KEYS`（US `US_DFF`、`US_DGS10`、`US_CPI_YOY`；CN `CN_CPI_YOY`、`CN_PMI_MFG`、`CN_CGB_10Y`）。
+- 会话：所有 `/api/macro/*` 读路由与分析路由都用 `route-helpers.ts::requireSessionUser()`（返回 `{ok:true,user:{id}}` 或 `{ok:false,response}`，401 体 `{error:{code:'unauthenticated'}}`）；ingest 与 cron 用各自的 Bearer 秘钥。
 - `available_at`：原生 = 证据 `fetchedAt`；派生 = 输入 `available_at` 的最大值。`availability_basis` 恒为 `'first_seen'`。
 - 判定只读 `role='indicator'`、`status='active'` 的派生月度 / 原生月度 / 季度序列（日频原生 ID 不进判定；`catalog.ts` 导出 `regimeInputsOf(region)`）。
 - 页面 / API 不在判断层关闭时返回任何判定字段：`MACRO_JUDGMENTS_ENABLED !== '1'` ⇒ `snapshots/[id]` 不含 `regime`/`contributions`。
@@ -265,11 +295,32 @@ export interface MacroDb{
 
 | 规格 | 任务 |
 |---|---|
+| §0.1 M1 官方主机、逐观测出处 | 2（目录 fetchHost / publisher / via）、3（retrieval 回执）、8（主机核实）、9（路由校验主机与路径） |
+| §0.1 M2/M3/M4/M5 目录口径、缺失理由、权利 | 2（目录测试） |
+| §0.1 M7 / §0.2 N2 字节存证、定位、回执 | 1、3（EvidenceStore、putRetrieval）、4/9（csv_row / json_pointer / html_cell 定位）、6（上传失败不写观测） |
+| §0.1 M9 共用批次 / 计数 / 隔离 / 新鲜度；§0.2 M9 单写者、无 reconciliation | 6、7、9（start 409）、11 |
+| §0.1 M10 / §0.2 M10 版本与隔离裁决 | 1（写入与裁决 RPC）、3、6（重复冲突复用 open 条目）、18（只能拒绝的两类） |
+| §0.1 M12/M13/M14 判定解耦、RegimeResult、MacroReadApi | 10、11、12、13（判断层关闭不出判定字段）、17（判定槽位） |
+| §0.1 M15 / §0.2 M15 原生与派生 ID、adjustment、GDP 当季 | 2、5、8 |
+| §0.1 M16 / §0.2 M16 发布 RPC、input_revision | 1、3、11 |
+| §0.1 M17 政策事件、FOMC 日程（事件证据四个输入 id） | 14 |
+| §0.1 M18/M19/M20 / §0.2 M22 分析冻结、口径、门槛、request_id | 1（配额 RPC）、15 |
+| §0.1 M21 Today 去 mock | 17 |
+| §0.1 M22/M23 / §0.2 N1 配额 RPC、路由自鉴权 | 1、13（requireSessionUser）、15、16（versions 路由） |
+| §0.1 M24 / §0.2 M24 ingest 三段、cron 登记、preview 零写入 | 7、9、11 |
+| §0.1 M25 迁移、锁、criticalSuites、桶 | 1 |
+| §0.1 M26 `region=all` 分区信封 | 13 |
+| §0.2 M6 派生 available_at、同批次派生 | 1（RPC 校验）、5、6 |
+| §0.2 M7 快照清单（最新 / 上一可比 / 3 个月前） | 11 |
+| §0.2 M8 十进制、三个转换点（quality / regime / correlation） | 2、5、10、15、16（显示只用 value_text） |
+| §0.2 M11 发布及时性 | 11、13 |
+| §0.2 M14 WEIGHTS_V1 = 目录 weight、目录版本只追加 | 1、2、10 |
+| §0.2 N3 CN 派生在 finish 内、发布前 | 9、11 |
 | §2 权限、配额 | 1、13、15 |
-| §3.2 概览（判断层关闭）、证据抽屉、判定槽位 | 16、17 |
-| §3.3 详情 | 17（依赖 13、14） |
+| §3.2 概览（判断层关闭）、证据抽屉、判定槽位 | 13、16、17 |
+| §3.3 详情（含修订历史 versions 路由） | 14、16、17 |
 | §3.4 关联 | 15、17 |
-| §3.5 Today | 17 |
+| §3.5 Today、§3.6 移动端 | 17 |
 | §4.1 时间与版本 | 1、3、6 |
 | §4.2 目录 | 2（A 项核实：4、8；核实失败改 M 的规则见 8） |
 | §4.3 存储、RPC、桶 | 1、3 |
@@ -278,10 +329,10 @@ export interface MacroDb{
 | §5 判定、RegimeResult、MacroReadApi | 10、11、12 |
 | §6 事件、周期 | 14 |
 | §7 相关分析 | 15 |
-| §8 API | 7、9、13、15 |
-| §10 i18n | 16 |
+| §8 API | 7、9、13、14、15、16 |
+| §10 i18n（专用 parity 测试） | 16 |
 | §11 错误处理 | 6、9、11 |
-| §12 测试 | 每任务；replay 12；db 1 |
+| §12 测试 | 每任务；replay 12、13；db 1 |
 | §13 运维、runbook | 18 |
 | §14 验收 | 18 |
 
@@ -293,26 +344,12302 @@ export interface MacroDb{
 | 2 | Task 2 types / judgment-contract / catalog / decimal | A | — |
 | 3 | Task 3 MacroDb（supabase + memory + 契约）+ EvidenceStore | A | 1、2 |
 | 4 | Task 4 FRED CSV 解析 + 真实夹具录制 | B | 2 |
-| 5 | Task 5 derive + quality | B | 2 |
+| 5 | Task 5 derive + quality | B | 2、4（periods.ts） |
 | 6 | Task 6 ingest 编排 | B | 3、4、5 |
 | 7 | Task 7 FRED 抓取 + deps + cron（preview）+ vercel.json | B | 6 |
 | 8 | Task 8 Python 采集器 + 录制钩子 + CN 真实夹具 | B | 2 |
-| 9 | Task 9 CN 解析器 + ingest 路由 | B | 6、8 |
+| 9 | Task 9 CN 解析器 + ingest 路由 | B | 6、7、8 |
 | 10 | Task 10 regime | C | 2 |
-| 11 | Task 11 freshness + snapshots/publish（接入 cron 与 ingest 完成块） | C | 3、7、9、10 |
-| 12 | Task 12 MacroReadApi + replay 测试 | C | 11 |
-| 13 | Task 13 views + 读 API | C | 11 |
-| 14 | Task 14 events + cycles + FOMC 存证 | D | 3 |
+| 11 | Task 11 freshness + snapshots/publish + testing/seed（接入 cron 与 ingest 完成块） | C | 3、5、7、9、10 |
+| 12 | Task 12 MacroReadApi + replay 测试 | C | 4、5、9、11 |
+| 13 | Task 13 views + route-helpers + 读 API（追加 replay 用例） | C | 11、12 |
+| 14 | Task 14 events + cycles + FOMC 存证 + 填充 series 路由 | D | 3、13 |
 | 15 | Task 15 correlation + analyses API | D | 13、14 |
-| 16 | Task 16 i18n + 格式化 + 基础组件 | D | 13 |
+| 16 | Task 16 i18n + 格式化 + view-model + 基础组件 + versions 路由 | D | 13、14 |
 | 17 | Task 17 页面、详情、关联 UI、判定槽位、Today、/intel 卡 | D | 14、15、16 |
 | 18 | Task 18 隔离裁决脚本、runbook、全量门禁、验收 | D | 全部 |
 
 任何任务不得修改执行顺序上晚于它的任务创建的文件；不得修改迁移（Task 1 之后）与 `types.ts` / `judgment-contract.ts`（Task 2 之后）——需要改就停下报告 NEEDS_CONTEXT。
 
+后面的任务修改前面任务的文件只在以下几处，且都写明了要插入/替换的精确代码：Task 11 替换 cron 路由（Task 7）与 ingest 路由（Task 9）里的 `// TASK 11: publishRegion(region)` 标记并各加一个测试；Task 13 在 `replay.test.ts`（Task 12）末尾追加概览追溯用例；Task 14 替换 series 路由（Task 13）的占位行并改 `routes.test.ts` 的一条断言。
+
 ---
 
-<!-- PART A: Tasks 1–3 -->
-<!-- PART B: Tasks 4–9 -->
-<!-- PART C: Tasks 10–13 -->
-<!-- PART D: Tasks 14–18 -->
+## Part A — 基础（Task 1–3）
+
+### Task 1: Migration, lock, database types, integration suite
+
+**Files:**
+- Create: `supabase/migrations/20261114090000_macro_workbench.sql`
+- Modify: `supabase/migrations.lock.json` (append one entry: JSON, no comment block)
+- Modify: `src/lib/supabase/database.types.ts` (two `// MACRO` blocks: row interfaces before the `// Issuers (supabase/migrations/20261105091000_issuers.sql)` comment; `Tables` entries after the `fact_sync_scope:` entry)
+- Modify: `scripts/ci/research-checks.ts` (`criticalSuites`, `// MACRO` block)
+- Test: `src/lib/macro/macro.integration.test.ts` (critical suite)
+
+Background the implementer needs (verified in the repo):
+- The local harness (`scripts/s4/local-db.ts`) creates the roles `anon`, `authenticated`, and `service_role` (`bypassrls`). It also creates `auth.users(id,email,raw_user_meta_data)`, `auth.uid()` (reads `request.jwt.claim.sub`), `auth.role()`, and `storage.buckets(id,name,public,file_size_limit,allowed_mime_types)`. It runs `alter default privileges … grant all on tables to anon, authenticated, service_role`, so every new table **must** `revoke all` first.
+- `npm run test:db` applies every migration to a fresh database and runs vitest with `S4_TEST_STATE` pointing at a JSON state file whose `adminUrl` is a superuser connection.
+- `ingest_batches(batch_id uuid pk, producer, dataset, status default 'running', …)` and `dq_quarantine(id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id fk, status 'open'|'resolved_accept'|'resolved_reject', resolved_by, resolved_at, created_at)` come from `20261105090000_dq_foundation.sql`. That migration's checks require `resolved_at` to be set iff status ≠ open, and `resolved_by` to be set once resolved.
+- `research_audit_log(id uuid default gen_random_uuid(), user_id uuid not null references auth.users, actor text default 'user', action, object_type, object_id uuid, detail jsonb, created_at)`. The admin DQ route writes action `dq.quarantine_resolve`, and `object_type` = the action prefix (`dq`), as `src/lib/research/store.ts::audit` does.
+- `profiles(id, plan default 'free', role default 'user', plan_expires_at)` (the last column comes from `20260703120000_stripe_billing.sql`). `src/lib/billing/plan.ts::effectivePlan` gives `pro` only when `plan='pro'` and (`plan_expires_at` is null or `> now`).
+
+- [ ] **Step 1: Write the failing integration test**
+
+Create `src/lib/macro/macro.integration.test.ts`:
+
+```ts
+// src/lib/macro/macro.integration.test.ts
+// Macro workbench migration on real PostgreSQL (spec §4.3, §0.2 M10/M16/M22/M24/N1/N2): ten RLS
+// tables, the private macro-raw bucket, per-role grants and policies, every branch of the
+// macro_write_observations rules (insert / duplicate / versioned / unexpected_revision /
+// conflicting_rows / stale_delivery / missing_evidence / missing_input, input_revision bump),
+// publish_macro_snapshot (manifest validation, supersede, stale_publisher on revision and on
+// input_revision, two racing publishers), record_failed_macro_snapshot, macro_resolve_conflict
+// with its audit row, macro_record_chunk idempotency, and the analysis-run quota.
+// Rows are never cleaned up (append-only by design; test:db creates a fresh database per run);
+// every test uses its own series ids. Publish state rows (US/CN) are shared, so publish tests
+// always read the current state right before publishing.
+import {readFileSync} from 'node:fs';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
+import {Pool} from 'pg';
+import type {PoolClient} from 'pg';
+import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+
+const enabled=!!process.env.S4_TEST_STATE;
+const MIGRATION='supabase/migrations/20261114090000_macro_workbench.sql';
+const TABLES=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots','macro_regime_results','macro_publish_state','macro_ingest_chunks','macro_analysis_runs'];
+const PUBLIC_READ=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots','macro_regime_results'];
+const SERVICE_RPCS=[
+ 'public.macro_upsert_catalog(text,text,jsonb)',
+ 'public.macro_put_retrieval(text,text,text,text,bigint,text,text,int,timestamptz,uuid,jsonb)',
+ 'public.macro_write_observations(uuid,text,jsonb)',
+ 'public.publish_macro_snapshot(text,bigint,bigint,date,text,text,uuid[],jsonb,jsonb,jsonb,text,numeric)',
+ 'public.record_failed_macro_snapshot(text,date,text,text,text)',
+ 'public.macro_resolve_conflict(uuid,text,uuid)',
+ 'public.macro_record_chunk(uuid,int,int,jsonb)',
+ 'public.create_macro_analysis_run(uuid,uuid,text,jsonb,jsonb,text,jsonb,text,text,text,text)',
+];
+const READ_RPCS=['public.macro_latest_observations(text[],timestamptz,date)','public.macro_snapshots_since(timestamptz,uuid,int)'];
+
+// Same replay policy as facts.integration.test.ts (not exported there): one transaction, short
+// lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
+const RETRYABLE=new Set(['55P03','40P01']);
+async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
+ for(let attempt=1;;attempt++){
+  const c=await pool.connect();
+  try{
+   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   return;
+  }catch(e){
+   await c.query('rollback').catch(()=>{});
+   const code=(e as {code?:string}).code;
+   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
+   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
+  }finally{c.release();}
+ }
+}
+
+type PgErr={message:string;code?:string};
+const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
+type Conflict={series_id:string;period_end:string;reason:string;value_text:string;current_value_text:string|null};
+type WriteResult={inserted:number;duplicates:number;versioned:number;quarantined:number;conflicts:Conflict[]};
+const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
+const T1='2026-11-01T05:30:00.000Z',T2='2026-11-02T05:30:00.000Z',T3='2026-11-03T05:30:00.000Z';
+
+describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
+ let admin:Pool;
+ const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
+ const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
+ const sid=(p='T')=>`${p}_${randomBytes(5).toString('hex').toUpperCase()}`;
+ const src=(key:string)=>({adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED（圣路易斯联储）',en:'FRED (St. Louis Fed)'},seriesKey:key,rights:'public_domain',attribution:{zh:'来源：BLS，经 FRED',en:'Source: BLS via FRED'}});
+ const def=(id:string,o:Record<string,unknown>={})=>({id,region:'US',role:'indicator',type:'labor_rate',name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:src(id),revisionPolicy:'revisable',weight:0,changeKind:'pp',definitionVersion:1,...o});
+ const catalog=async(defs:Record<string,unknown>[])=>{
+  const v=`macro-catalog/${randomBytes(6).toString('hex')}`;
+  expect(await one(`select public.macro_upsert_catalog($1,'macro-rules/1',$2::jsonb) v`,[v,JSON.stringify(defs)])).toBe(defs.length);
+  return v;
+ };
+ const batch=async(dataset='macro.fred')=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'ts-fred',$2)`,[id,dataset]);return id;};
+ const retrieval=async(b:string,fetchedAt:string,body=randomUUID())=>{
+  const h=sha(body);
+  return await one(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',$3,'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE','fred.stlouisfed.org',200,$4,$5,'{"node":"22"}'::jsonb) v`,[h,`fred_csv/${h}.csv`,Buffer.byteLength(body),fetchedAt,b]) as string;
+ };
+ const write=async(b:string,rows:unknown[])=>(await one(`select public.macro_write_observations($1,'test-code',$2::jsonb) v`,[b,JSON.stringify(rows)])) as WriteResult;
+ const native=(series:string,period:string,value:string,ret:string,at:string,revisable=true)=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable,retrieval_id:ret,locator:{kind:'csv_row',line:2,column:1}});
+ const derived=(series:string,period:string,value:string,from:string[],at:string)=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable:true,derived_from:from,transform:'month_end@1'});
+ const rows=async(series:string,period:string)=>q(`select observation_id,value_text,version,status,available_at from public.macro_observations where series_id=$1 and period_end=$2 order by version`,[series,period]);
+ const state=async(region:'US'|'CN')=>(await q(`select revision::int r,input_revision::int i from public.macro_publish_state where region=$1`,[region]))[0] as {r:number;i:number};
+ const asRole=async<T>(role:string,body:(c:PoolClient)=>Promise<T>,sub?:string):Promise<T>=>{
+  const c=await admin.connect();
+  try{
+   await c.query(`set role ${role}`);
+   if(sub)await c.query(`select set_config('request.jwt.claim.sub',$1,false)`,[sub]);
+   return await body(c);
+  }finally{
+   await c.query('reset role').catch(()=>{});
+   await c.query(`select set_config('request.jwt.claim.sub','',false)`).catch(()=>{});
+   c.release();
+  }
+ };
+ const user=async(plan='free',role='user')=>{
+  const id=randomUUID();
+  await q('insert into auth.users(id,email) values($1,$2)',[id,`${id}@example.test`]);
+  await q(`insert into public.profiles(id,email,plan,role) values($1,$2,$3,$4) on conflict (id) do update set plan=excluded.plan, role=excluded.role`,[id,`${id}@example.test`,plan,role]);
+  return id;
+ };
+ const counts={verified:1,missing:0,restricted:0};
+ const publish=(region:'US'|'CN',rev:number,inputRev:number,catalogVersion:string,ids:string[])=>
+  one(`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],$6::jsonb,null,'[]'::jsonb,'macro-rules/1',0) v`,[region,rev,inputRev,catalogVersion,ids,JSON.stringify(counts)]) as Promise<{snapshot_id:string;revision:number}>;
+ /** A fresh US series with one ok observation (period 2026-09-30, value 4.1, fetched T2); returns ids. */
+ const seeded=async(o:Record<string,unknown>={})=>{
+  const s=sid();const v=await catalog([def(s,o)]);const b=await batch();const r=await retrieval(b,T2);
+  expect((await write(b,[native(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
+  const [row]=await rows(s,'2026-09-30');
+  return {s,v,b,r,id:row.observation_id as string};
+ };
+
+ beforeAll(async()=>{
+  const st=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  admin=new Pool({connectionString:st.adminUrl});
+ });
+ afterAll(async()=>{await admin?.end();});
+
+ it('creates ten RLS tables, the private macro-raw bucket, seeded publish state, select-only grants, service-only RPCs, and replays twice',async()=>{
+  const t=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES]);
+  expect(t.map(r=>r.relname).sort()).toEqual([...TABLES].sort());for(const r of t)expect(r.relrowsecurity).toBe(true);
+  expect(await q(`select id,public,file_size_limit,allowed_mime_types from storage.buckets where id='macro-raw'`)).toEqual([{id:'macro-raw',public:false,file_size_limit:'52428800',allowed_mime_types:['text/csv','application/json','text/html','text/plain']}]);
+  expect((await q(`select region from public.macro_publish_state order by region`)).map(r=>r.region)).toEqual(['CN','US']);
+  const priv=(role:string,tb:string,p:string)=>one(`select has_table_privilege($1,'public.'||$2,$3) v`,[role,tb,p]);
+  for(const role of ['anon','authenticated','service_role'])for(const tb of TABLES)for(const p of ['INSERT','UPDATE','DELETE','TRUNCATE'])expect({role,tb,p,ok:await priv(role,tb,p)}).toEqual({role,tb,p,ok:false});
+  for(const role of ['anon','authenticated','service_role'])for(const tb of PUBLIC_READ)expect({role,tb,ok:await priv(role,tb,'SELECT')}).toEqual({role,tb,ok:true});
+  for(const tb of ['macro_publish_state','macro_ingest_chunks']){for(const role of ['anon','authenticated'])expect({tb,role,ok:await priv(role,tb,'SELECT')}).toEqual({tb,role,ok:false});expect(await priv('service_role',tb,'SELECT')).toBe(true);}
+  expect(await priv('anon','macro_analysis_runs','SELECT')).toBe(false);
+  expect(await priv('authenticated','macro_analysis_runs','SELECT')).toBe(true);
+  expect(await priv('service_role','macro_analysis_runs','SELECT')).toBe(true);
+  const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
+  for(const sig of SERVICE_RPCS){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
+  for(const sig of READ_RPCS)for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:true});
+  const before=await q(`select region,revision::text,input_revision::text from public.macro_publish_state order by region`);
+  const sql=readFileSync(MIGRATION,'utf8');
+  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
+  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
+  expect(await q(`select region,revision::text,input_revision::text from public.macro_publish_state order by region`)).toEqual(before);   // the seed never resets state
+ },60000);
+
+ it('refuses direct writes and service RPCs to anon and authenticated',async()=>{
+  for(const role of ['anon','authenticated']){
+   await asRole(role,async c=>{
+    expect((await fails(c.query(`insert into public.macro_series(id) values('X_DENIED')`))).message).toMatch(/permission denied/);
+    expect((await fails(c.query(`select public.macro_write_observations($1,'x','[]'::jsonb)`,[randomUUID()]))).message).toMatch(/permission denied/);
+    expect((await fails(c.query(`select public.create_macro_analysis_run($1,$2,'change','{}','{}',$3,'{}','x','y','ok',null)`,[randomUUID(),randomUUID(),'a'.repeat(64)]))).message).toMatch(/permission denied/);
+    expect((await fails(c.query(`select * from public.macro_publish_state`))).message).toMatch(/permission denied/);
+    expect((await fails(c.query(`select * from public.macro_ingest_chunks`))).message).toMatch(/permission denied/);
+   });
+  }
+ });
+
+ it('anon reads ok observations only (table and macro_latest_observations), never quarantined rows',async()=>{
+  const {s,b}=await seeded({revisionPolicy:'immutable'});
+  const r=await retrieval(b,T3);
+  const res=await write(b,[native(s,'2026-09-30','4.3',r,T3,false)]);
+  expect(res.quarantined).toBe(1);
+  expect((await rows(s,'2026-09-30')).map(x=>x.status)).toEqual(['ok','quarantined']);
+  await asRole('anon',async c=>{
+   expect((await c.query(`select value_text,status from public.macro_observations where series_id=$1`,[s])).rows).toEqual([{value_text:'4.1',status:'ok'}]);
+   expect((await c.query(`select value_text,version from public.macro_latest_observations($1::text[],null,null)`,[[s]])).rows).toEqual([{value_text:'4.1',version:1}]);
+   expect((await c.query(`select count(*)::int n from public.macro_series where id=$1`,[s])).rows[0].n).toBe(1);
+  });
+ });
+
+ it('write rules: insert, duplicate, versioned (revisable) with input_revision bumped only for touched regions',async()=>{
+  const s=sid();await catalog([def(s)]);const b=await batch();
+  const us0=await state('US');const cn0=await state('CN');
+  const r1=await retrieval(b,T1);
+  expect(await write(b,[native(s,'2026-08-31','4.1',r1,T1)])).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
+  const [v1]=await rows(s,'2026-08-31');
+  expect(v1).toMatchObject({value_text:'4.1',version:1,status:'ok'});expect((v1.available_at as Date).toISOString()).toBe(T1);
+  expect((await state('US')).i).toBe(us0.i+1);expect((await state('CN')).i).toBe(cn0.i);
+  const r2=await retrieval(b,T2);
+  expect(await write(b,[native(s,'2026-08-31','4.1',r2,T2)])).toEqual({inserted:0,duplicates:1,versioned:0,quarantined:0,conflicts:[]});
+  expect((await state('US')).i).toBe(us0.i+1);                                                    // nothing inserted ⇒ no bump
+  const r3=await retrieval(b,T3);
+  expect(await write(b,[native(s,'2026-08-31','4.2',r3,T3)])).toEqual({inserted:0,duplicates:0,versioned:1,quarantined:0,conflicts:[]});
+  expect((await rows(s,'2026-08-31')).map(x=>[x.version,x.value_text,x.status])).toEqual([[1,'4.1','ok'],[2,'4.2','ok']]);
+  expect((await q(`select value_text from public.macro_latest_observations($1::text[],null,null)`,[[s]]))[0].value_text).toBe('4.2');
+  expect((await q(`select value_text from public.macro_latest_observations($1::text[],$2::timestamptz,null)`,[[s],T2]))[0].value_text).toBe('4.1');   // as-of view
+  expect((await state('US')).i).toBe(us0.i+2);
+  const big='12345678901234567890.123456789';
+  const r4=await retrieval(b,T3);await write(b,[native(s,'2026-07-31',big,r4,T3)]);
+  expect((await rows(s,'2026-07-31'))[0].value_text).toBe(big);
+  expect(await one(`select value::text v from public.macro_observations where series_id=$1 and period_end='2026-07-31'`,[s])).toBe(big);   // value computed from value_text, exact
+  const r5=await retrieval(b,T3);                                                                 // html_cell locator (ChinaBond / SAFE tables, Task 9)
+  expect((await write(b,[{...native(s,'2026-06-30','2.04',r5,T3),locator:{kind:'html_cell',table:1,row:3,cell:13}}])).inserted).toBe(1);
+  expect(await one(`select locator v from public.macro_observations where series_id=$1 and period_end='2026-06-30'`,[s])).toEqual({kind:'html_cell',table:1,row:3,cell:13});
+  await expect(write(b,[{...native(s,'2026-05-31','1',r5,T3),locator:{kind:'xlsx_cell',sheet:0}}])).rejects.toThrow(/invalid_row/);
+ });
+
+ it('write rules: unexpected_revision quarantines once per value; conflicting_rows writes nothing',async()=>{
+  const {s,b}=await seeded({revisionPolicy:'immutable'});
+  const us0=await state('US');
+  const r=await retrieval(b,T3);
+  const c1=await write(b,[native(s,'2026-09-30','4.5',r,T3,false)]);
+  expect(c1).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'unexpected_revision',value_text:'4.5',current_value_text:'4.1'}]});
+  expect((await state('US')).i).toBe(us0.i+1);
+  const c2=await write(b,[native(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
+  expect(c2.quarantined).toBe(1);expect(c2.conflicts[0].reason).toBe('unexpected_revision');
+  expect((await rows(s,'2026-09-30')).map(x=>[x.version,x.value_text,x.status])).toEqual([[1,'4.1','ok'],[2,'4.5','quarantined']]);   // no second quarantined row
+  expect((await state('US')).i).toBe(us0.i+1);
+  const r2=await retrieval(b,T3);
+  const c3=await write(b,[native(s,'2026-10-31','5',r2,T3),native(s,'2026-10-31','5.1',r2,T3),native(s,'2026-10-31','5',r2,T3)]);   // a repeated value is one distinct value
+  expect(c3).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:1,conflicts:[
+   {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5',current_value_text:null},
+   {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5.1',current_value_text:null}]});
+  expect(await rows(s,'2026-10-31')).toEqual([]);
+  expect((await state('US')).i).toBe(us0.i+1);
+ });
+
+ it('write rules: stale_delivery, missing_evidence, missing_input, derived rows and input validation',async()=>{
+  const {s,b,id}=await seeded();                                                                  // 4.1 available at T2
+  const st=await write(b,[native(s,'2026-09-30','3.9',await retrieval(b,T1),T1)]);
+  expect(st).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'stale_delivery',value_text:'3.9',current_value_text:'4.1'}]});
+  expect((await rows(s,'2026-09-30')).map(x=>[x.version,x.value_text,x.status])).toEqual([[1,'4.1','ok'],[2,'3.9','quarantined']]);
+  expect((await q(`select value_text from public.macro_latest_observations($1::text[],null,null)`,[[s]]))[0].value_text).toBe('4.1');
+  const me=await write(b,[native(s,'2026-06-30','1',randomUUID(),T1)]);
+  expect(me).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[{series_id:s,period_end:'2026-06-30',reason:'missing_evidence',value_text:'1',current_value_text:null}]});
+  const d=sid('D');await catalog([def(d,{derive:{kind:'month_end',from:s}})]);
+  const quarantinedId=(await rows(s,'2026-09-30'))[1].observation_id as string;
+  for(const from of [[randomUUID()],[quarantinedId]]){
+   const mi=await write(b,[derived(d,'2026-09-30','4.1',from,T2)]);
+   expect(mi).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[{series_id:d,period_end:'2026-09-30',reason:'missing_input',value_text:'4.1',current_value_text:null}]});
+  }
+  expect((await fails(write(b,[derived(d,'2026-09-30','4.1',[id],T3)]))).message).toBe('invalid_available_at');   // derived available_at = max of inputs
+  expect((await write(b,[derived(d,'2026-09-30','4.1',[id],T2)])).inserted).toBe(1);
+  expect((await rows(d,'2026-09-30'))[0]).toMatchObject({value_text:'4.1',status:'ok'});
+  const r=await retrieval(b,T3);
+  expect((await fails(write(b,[native(s,'2026-05-31','1',r,T2)]))).message).toBe('invalid_available_at');       // native available_at = fetched_at
+  expect((await fails(write(b,[native(s,'2026-05-31','1.50',r,T3)]))).message).toBe('invalid_value_text');
+  expect((await fails(write(b,[native(s,'2026-05-31','-0',r,T3)]))).message).toBe('invalid_value_text');
+  expect((await fails(write(b,[native(d,'2026-05-31','1',r,T3)]))).message).toBe('invalid_row');                 // derived series takes no native rows
+  const m=sid('M');await catalog([def(m,{status:'missing',source:null,reason:{zh:'无来源',en:'no source'}})]);
+  expect((await fails(write(b,[native(m,'2026-05-31','1',r,T3)]))).message).toBe('invalid_series');
+  expect((await fails(write(randomUUID(),[]))).message).toBe('invalid_batch');
+  expect((await rows(s,'2026-05-31'))).toEqual([]);                                               // a refused call writes nothing
+ });
+
+ it('evidence: one object per sha256, one retrieval per fetch, host must match the URL, ms-precision fetched_at',async()=>{
+  const b=await batch();const body='observation_date,UNRATE\n2026-09-01,4.1\n';
+  const r1=await retrieval(b,T1,body);const r2=await retrieval(b,T2,body);
+  expect(r1).not.toBe(r2);
+  expect(await one(`select count(*)::int v from public.macro_evidence_objects where sha256=$1`,[sha(body)])).toBe(1);
+  expect(await one(`select count(*)::int v from public.macro_retrievals where sha256=$1`,[sha(body)])).toBe(2);
+  const h=sha('other');
+  expect((await fails(q(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',5,'https://evil.example.com/x','fred.stlouisfed.org',200,$3,$4,'{}'::jsonb)`,[h,`fred_csv/${h}.csv`,T1,b]))).message).toMatch(/macro_retrievals_host/);
+  expect((await fails(q(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',5,'https://fred.stlouisfed.org/x','fred.stlouisfed.org',200,'2026-11-01T05:30:00.000123Z',$3,'{}'::jsonb)`,[h,`fred_csv/${h}.csv`,b]))).message).toBe('invalid_retrieval');
+  expect((await fails(q(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',999,'https://fred.stlouisfed.org/x','fred.stlouisfed.org',200,$3,$4,'{}'::jsonb)`,[sha(body),`fred_csv/${sha(body)}.csv`,T1,b]))).message).toBe('evidence_mismatch');
+  expect((await fails(q(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',5,'https://fred.stlouisfed.org/x','fred.stlouisfed.org',200,$3,$4,'{}'::jsonb)`,[h,`akshare/${h}.csv`,T1,b]))).message).toMatch(/macro_evidence_path/);
+ });
+
+ it('catalog: append-only versions, mirror upsert, a version never names two catalogs',async()=>{
+  const s=sid();const v=await catalog([def(s)]);
+  expect(await one(`select catalog_version v from public.macro_series where id=$1`,[s])).toBe(v);
+  expect(await one(`select public.macro_upsert_catalog($1,'macro-rules/1',$2::jsonb) v`,[v,JSON.stringify([def(s)])])).toBe(1);   // same version, same JSON: idempotent
+  expect((await fails(q(`select public.macro_upsert_catalog($1,'macro-rules/1',$2::jsonb)`,[v,JSON.stringify([def(s,{weight:5})])]))).message).toBe('catalog_version_conflict');
+  expect((await fails(q(`select public.macro_upsert_catalog('v1','macro-rules/1',$1::jsonb)`,[JSON.stringify([def(s)])]))).message).toBe('invalid_catalog_version');
+  expect((await fails(q(`update public.macro_catalog_versions set rules_version='x' where catalog_version=$1`,[v]))).message).toMatch(/append_only:/);
+ });
+
+ it('publish: manifest validation, supersede, stale_publisher on revision and on input_revision, failed snapshots leave active alone',async()=>{
+  const {s,v,b,id}=await seeded();
+  const cn=sid('C');await catalog([def(cn,{region:'CN'})]);const rcn=await retrieval(b,T2);await write(b,[native(cn,'2026-09-30','1',rcn,T2)]);
+  const cnId=(await rows(cn,'2026-09-30'))[0].observation_id as string;
+  const imm=await seeded({revisionPolicy:'immutable'});await write(imm.b,[native(imm.s,'2026-09-30','9',await retrieval(imm.b,T3),T3,false)]);
+  const qId=(await rows(imm.s,'2026-09-30'))[1].observation_id as string;
+  let st=await state('US');
+  for(const bad of [[cnId],[qId],[randomUUID()],[id,id]])expect((await fails(publish('US',st.r,st.i,v,bad))).message).toBe('invalid_manifest');
+  expect((await fails(publish('US',st.r,st.i,'macro-catalog/000000000000',[id]))).message).toBe('invalid_manifest');
+  const p1=await publish('US',st.r,st.i,v,[id]);
+  expect(p1.revision).toBe(st.r+1);
+  expect(await q(`select status,revision::int,observation_ids from public.macro_snapshots where snapshot_id=$1`,[p1.snapshot_id])).toEqual([{status:'active',revision:st.r+1,observation_ids:[id]}]);
+  expect(await q(`select region,regime,contributions,rules_version,uncovered_weight::text from public.macro_regime_results where snapshot_id=$1`,[p1.snapshot_id])).toEqual([{region:'US',regime:null,contributions:[],rules_version:'macro-rules/1',uncovered_weight:'0'}]);
+  expect((await fails(publish('US',st.r,st.i,v,[id]))).message).toBe('stale_publisher');                     // revision moved
+  st=await state('US');
+  await write(b,[native(s,'2026-10-31','4.4',await retrieval(b,T3),T3)]);                                   // input_revision moves
+  expect((await fails(publish('US',st.r,st.i,v,[id]))).message).toBe('stale_publisher');
+  st=await state('US');
+  const p2=await publish('US',st.r,st.i,v,[id]);
+  expect(await q(`select snapshot_id,status from public.macro_snapshots where region='US' and status='active'`)).toEqual([{snapshot_id:p2.snapshot_id,status:'active'}]);
+  expect(await one(`select status v from public.macro_snapshots where snapshot_id=$1`,[p1.snapshot_id])).toBe('superseded');
+  const failed=await one(`select public.record_failed_macro_snapshot('US','2026-11-06','macro-method/1.0',$1,'evidence_upload_failed') v`,[v]) as string;
+  expect(await q(`select status,failure_reason,observation_ids,revision::int from public.macro_snapshots where snapshot_id=$1`,[failed])).toEqual([{status:'failed',failure_reason:'evidence_upload_failed',observation_ids:[],revision:p2.revision}]);
+  expect(await one(`select snapshot_id v from public.macro_snapshots where region='US' and status='active'`)).toBe(p2.snapshot_id);
+  expect((await state('US')).r).toBe(p2.revision);
+  const since=await q(`select snapshot_id from public.macro_snapshots_since(null,null,1000)`);
+  expect(since.map(x=>x.snapshot_id)).toEqual(expect.arrayContaining([p1.snapshot_id,p2.snapshot_id]));
+  expect(since.map(x=>x.snapshot_id)).not.toContain(failed);
+ });
+
+ it('publish: two racing publishers with the same expected state — exactly one wins',async()=>{
+  const {v,id}=await seeded();
+  const st=await state('US');
+  const results=await Promise.allSettled([publish('US',st.r,st.i,v,[id]),publish('US',st.r,st.i,v,[id])]);
+  expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+  const lost=results.find(r=>r.status==='rejected') as PromiseRejectedResult;
+  expect((lost.reason as PgErr).message).toBe('stale_publisher');
+  expect((await state('US')).r).toBe(st.r+1);
+  expect(await one(`select count(*)::int v from public.macro_snapshots where region='US' and status='active'`)).toBe(1);
+ });
+
+ it('resolve_conflict: accept promotes the quarantined row with an audit row and input_revision bump; reject keeps it; already_resolved / not_found / invalid_item',async()=>{
+  const {s,b}=await seeded({revisionPolicy:'immutable'});
+  await write(b,[native(s,'2026-09-30','4.6',await retrieval(b,T3),T3,false)]);
+  const resolver=await user();
+  const item=async(series:string,dataset='macro.fred')=>{const id=randomUUID();await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,$2,'macro_observations',$3,'unexpected_revision',$4)`,[id,dataset,`${series}|2026-09-30`,b]);return id;};
+  const resolve=(id:string,d:string)=>one(`select public.macro_resolve_conflict($1,$2,$3) v`,[id,d,resolver]);
+  const a=await item(s);const st0=await state('US');
+  const out=await resolve(a,'accept');
+  const [v1,v2]=await rows(s,'2026-09-30');
+  expect(out).toEqual({status:'resolved_accept',observation_id:v2.observation_id});
+  expect([v1.status,v2.status,v2.value_text]).toEqual(['ok','ok','4.6']);
+  expect((await q(`select value_text from public.macro_latest_observations($1::text[],null,null)`,[[s]]))[0].value_text).toBe('4.6');   // higher version is latest
+  expect((await state('US')).i).toBe(st0.i+1);
+  expect(await q(`select status,resolved_by from public.dq_quarantine where id=$1`,[a])).toEqual([{status:'resolved_accept',resolved_by:resolver}]);
+  expect(await q(`select user_id,action,object_type,object_id,detail->>'decision' decision from public.research_audit_log where object_id=$1`,[a])).toEqual([{user_id:resolver,action:'dq.quarantine_resolve',object_type:'dq',object_id:a,decision:'accept'}]);
+  expect((await fails(resolve(a,'accept'))).message).toBe('already_resolved');
+  const other=await seeded({revisionPolicy:'immutable'});
+  await write(other.b,[native(other.s,'2026-09-30','7',await retrieval(other.b,T3),T3,false)]);
+  const rj=await item(other.s);const st1=await state('US');
+  expect(await resolve(rj,'reject')).toEqual({status:'resolved_reject',observation_id:null});
+  expect((await rows(other.s,'2026-09-30')).map(x=>x.status)).toEqual(['ok','quarantined']);
+  expect((await state('US')).i).toBe(st1.i);
+  expect(await one(`select count(*)::int v from public.research_audit_log where object_id=$1`,[rj])).toBe(1);
+  expect((await fails(resolve(randomUUID(),'accept'))).message).toBe('not_found');
+  expect((await fails(resolve(await item(other.s,'facts.us'),'accept'))).message).toBe('invalid_item');
+  expect((await fails(resolve(await item(other.s),'maybe'))).message).toBe('invalid_decision');
+ });
+
+ it('record_chunk: idempotent by (batch_id, seq); total mismatch and out-of-range seq refused',async()=>{
+  const b=await batch('macro.akshare');
+  const c={fetched:3,inserted:2,duplicates:1,versioned:0,quarantined:0,failed:0};
+  const rec=(seq:number,total:number,counts:unknown=c)=>one(`select public.macro_record_chunk($1,$2,$3,$4::jsonb) v`,[b,seq,total,JSON.stringify(counts)]);
+  expect(await rec(0,2)).toBe('new');
+  expect(await rec(0,2,{...c,fetched:99})).toBe('duplicate');
+  expect(await one(`select counts->>'fetched' v from public.macro_ingest_chunks where batch_id=$1 and seq=0`,[b])).toBe('3');   // the first receipt stands
+  expect((await fails(rec(1,3))).message).toBe('chunk_total_mismatch');
+  expect((await fails(rec(2,2))).message).toBe('invalid_chunk');
+  expect((await fails(rec(1,2,{fetched:1}))).message).toBe('invalid_chunk');
+  expect(await rec(1,2)).toBe('new');
+  expect(await one(`select count(*)::int v from public.macro_ingest_chunks where batch_id=$1`,[b])).toBe(2);
+ });
+
+ it('analysis runs: free 10/24h then quota_exceeded, idempotent request_id, failed runs free, pro and admin limits, own-rows RLS',async()=>{
+  const run=(u:string,req=randomUUID(),status='ok')=>one(`select public.create_macro_analysis_run($1,$2,'change','{}'::jsonb,'{}'::jsonb,$3,$4::jsonb,'test-code','macro-correlation/1',$5,$6) v`,[u,req,'a'.repeat(64),status==='ok'?'{}':null,status,status==='ok'?null:'boom']) as Promise<string>;
+  const free=await user();const req=randomUUID();
+  const first=await run(free,req);
+  expect(await run(free,req)).toBe(first);                                                          // retry returns the same run
+  for(let i=0;i<9;i++)await run(free);
+  expect(await one(`select count(*)::int v from public.macro_analysis_runs where user_id=$1`,[free])).toBe(10);
+  expect((await fails(run(free))).message).toBe('quota_exceeded');
+  expect(await run(free,req)).toBe(first);                                                          // idempotent even at the limit
+  await run(free,randomUUID(),'failed');                                                            // failures are recorded and never counted
+  const pro=await user('pro');for(let i=0;i<11;i++)await run(pro);
+  const adm=await user('free','admin');for(let i=0;i<12;i++)await run(adm);
+  await asRole('authenticated',async c=>{
+   expect((await c.query(`select count(*)::int n from public.macro_analysis_runs`)).rows[0].n).toBe(11);   // 10 ok + 1 failed, own rows only
+   expect((await c.query(`select count(*)::int n from public.macro_analysis_runs where user_id=$1`,[pro])).rows[0].n).toBe(0);
+  },free);
+  await asRole('anon',async c=>{expect((await fails(c.query(`select * from public.macro_analysis_runs`))).message).toMatch(/permission denied/);});
+ });
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/macro.integration.test.ts`
+(If `.claude/scratch/db-one.ts` is missing, rebuild it from `docs/superpowers/plans/2026-11-04-HANDOFF-data-foundation-2-execution.md` §5.)
+Expected: FAIL (the first test finds no `macro_*` tables; `ENOENT` for the migration file).
+
+- [ ] **Step 3: Write the migration**
+
+Create `supabase/migrations/20261114090000_macro_workbench.sql`:
+
+```sql
+-- supabase/migrations/20261114090000_macro_workbench.sql
+-- Macro workbench (spec §4.3; §0.2 M6, M10, M14, M16, M22, M24, N1, N2). Ten tables:
+--   macro_catalog_versions (append-only catalog JSON per version) and macro_series (mirror of the
+--   code catalog, src/lib/macro/catalog.ts); macro_evidence_objects (byte objects by sha256, bytes in
+--   the private bucket macro-raw) and macro_retrievals (one receipt per fetch, even for repeated
+--   bytes); macro_observations (lossless decimal values with local versions per series+period);
+--   macro_snapshots + macro_regime_results (transactional fact snapshots); macro_publish_state
+--   (per-region revision and input_revision, pre-seeded US/CN); macro_ingest_chunks (ingest
+--   chunk receipts); macro_analysis_runs (frozen, append-only correlation runs).
+-- Write path: NO role has insert/update/delete on these tables, service_role included; every write
+-- goes through the security definer functions below, executable by service_role only. Two
+-- security invoker read functions (macro_latest_observations, macro_snapshots_since) are open to
+-- every client role and stay under RLS.
+-- Lock discipline: macro_write_observations locks the touched regions' macro_publish_state rows
+-- (ordered by region) before writing; publish_macro_snapshot locks its region row; the resolver
+-- locks the dq_quarantine row, then the region row. Each bumps input_revision / revision under the
+-- lock, so a publisher that read stale state fails with stale_publisher.
+-- Errors carry the code as the message: stale_publisher, invalid_manifest, quota_exceeded,
+-- already_resolved, chunk_total_mismatch, evidence_mismatch, catalog_version_conflict (P0001);
+-- not_found (P0002); invalid_* (22023). Triggers refuse with 23514, prefix `append_only:`.
+-- Timestamps written by this migration are truncated to milliseconds so JS ISO strings round-trip.
+-- The hosted `postgres` role is not a superuser: functions keep the migration role as owner,
+-- `set search_path = public`, and qualify every relation. Replayable: guarded creates, create or
+-- replace, drop-then-create policies and triggers, insert … on conflict. Only storage.buckets is
+-- referenced (local harness).
+
+-- ---------------------------------------------------------------- catalog
+create table if not exists public.macro_catalog_versions (
+  catalog_version text primary key check (catalog_version ~ '^macro-catalog/[0-9a-f]{12}$'),
+  catalog         jsonb not null check (jsonb_typeof(catalog) = 'array'),
+  rules_version   text not null check (length(rules_version) between 1 and 64),
+  created_at      timestamptz not null default date_trunc('milliseconds', now())
+);
+
+create table if not exists public.macro_series (
+  id                 text primary key check (id ~ '^[A-Z][A-Z0-9_]{0,63}$'),
+  region             text not null check (region in ('US','CN')),
+  role               text not null check (role in ('indicator','asset','event_source')),
+  type               text check (type is null or type in ('policy_rate','bond_yield','fx','inflation_yoy','pmi','labor_rate','growth_yoy','liquidity_yoy','risk_index','asset_price')),
+  name               jsonb not null check (jsonb_typeof(name) = 'object'),
+  unit               text not null check (length(unit) between 1 and 32),
+  native_frequency   text not null check (native_frequency in ('daily','monthly','quarterly','event')),
+  period             text not null check (period in ('day','month','quarter')),
+  adjustment         text not null check (adjustment in ('sa','nsa','na')),
+  status             text not null check (status in ('active','missing','restricted')),
+  reason             jsonb check (reason is null or jsonb_typeof(reason) = 'object'),
+  source             jsonb check (source is null or jsonb_typeof(source) = 'object'),
+  derive             jsonb check (derive is null or (jsonb_typeof(derive) = 'object' and derive->>'kind' in ('month_end','yoy_from_index','index_minus_100'))),
+  alias_of           text,
+  revision_policy    text not null check (revision_policy in ('revisable','immutable')),
+  weight             numeric not null check (weight >= 0),
+  change_kind        text not null check (change_kind in ('bp','pp','pct','points')),
+  release_lag_days   int check (release_lag_days is null or release_lag_days >= 0),
+  definition_version int not null check (definition_version >= 1),
+  catalog_version    text not null references public.macro_catalog_versions(catalog_version) on delete restrict,
+  updated_at         timestamptz not null default date_trunc('milliseconds', now()),
+  constraint macro_series_source_iff_not_missing check ((status = 'missing') = (source is null)),
+  constraint macro_series_reason_required check (status = 'active' or reason is not null)
+);
+create index if not exists macro_series_region_idx on public.macro_series(region, role);
+
+-- ---------------------------------------------------------------- evidence (§0.2 N2)
+create table if not exists public.macro_evidence_objects (
+  sha256       text primary key check (sha256 ~ '^[0-9a-f]{64}$'),
+  object_path  text not null unique,
+  adapter      text not null check (adapter in ('fred_csv','akshare')),
+  content_type text not null check (length(content_type) between 1 and 128),
+  byte_length  bigint not null check (byte_length >= 0),
+  created_at   timestamptz not null default date_trunc('milliseconds', now()),
+  constraint macro_evidence_path check (object_path ~ ('^' || adapter || '/' || sha256 || '\.(csv|json|html|txt)$'))
+);
+
+create table if not exists public.macro_retrievals (
+  retrieval_id  uuid primary key,
+  sha256        text not null references public.macro_evidence_objects(sha256) on delete restrict,
+  fetch_url     text not null check (fetch_url ~ '^https?://' and length(fetch_url) <= 2048),
+  fetch_host    text not null check (length(fetch_host) between 1 and 255),
+  http_status   int not null check (http_status between 100 and 599),
+  fetched_at    timestamptz not null,
+  batch_id      uuid not null references public.ingest_batches(batch_id) on delete restrict,
+  tool_versions jsonb not null default '{}' check (jsonb_typeof(tool_versions) = 'object'),
+  constraint macro_retrievals_host check (lower(substring(fetch_url from '^https?://([^/:?#]+)')) = fetch_host)
+);
+create index if not exists macro_retrievals_sha_idx on public.macro_retrievals(sha256);
+create index if not exists macro_retrievals_batch_idx on public.macro_retrievals(batch_id);
+
+-- ---------------------------------------------------------------- observations (§4.1, §4.4)
+create table if not exists public.macro_observations (
+  observation_id     uuid primary key,
+  series_id          text not null references public.macro_series(id) on delete restrict,
+  period_end         date not null,
+  value              numeric not null,
+  value_text         text not null check (value_text ~ '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$' and value_text <> '-0'),
+  version            int not null check (version >= 1),
+  available_at       timestamptz not null,
+  availability_basis text not null default 'first_seen' check (availability_basis = 'first_seen'),
+  ingested_at        timestamptz not null default date_trunc('milliseconds', now()),
+  status             text not null check (status in ('ok','quarantined')),
+  retrieval_id       uuid references public.macro_retrievals(retrieval_id) on delete restrict,
+  locator            jsonb check (locator is null or (jsonb_typeof(locator) = 'object' and locator->>'kind' in ('csv_row','json_pointer','html_cell'))),
+  derived_from       uuid[],
+  transform          text check (transform is null or length(transform) between 1 and 128),
+  code_version       text not null check (length(code_version) between 1 and 128),
+  batch_id           uuid not null references public.ingest_batches(batch_id) on delete restrict,
+  constraint macro_observations_value_exact check (value = value_text::numeric),
+  constraint macro_observations_key unique (series_id, period_end, version),
+  constraint macro_observations_provenance check (
+    (retrieval_id is not null and locator is not null and derived_from is null and transform is null)
+    or (retrieval_id is null and locator is null and derived_from is not null and cardinality(derived_from) >= 1 and transform is not null))
+);
+create index if not exists macro_observations_latest_idx on public.macro_observations(series_id, period_end desc, version desc) where status = 'ok';
+create index if not exists macro_observations_batch_idx on public.macro_observations(batch_id);
+
+-- ---------------------------------------------------------------- snapshots (§4.3, §0.2 M16)
+create table if not exists public.macro_snapshots (
+  snapshot_id         uuid primary key,
+  region              text not null check (region in ('US','CN')),
+  as_of               date not null,
+  revision            bigint not null check (revision >= 0),
+  methodology_version text not null check (length(methodology_version) between 1 and 64),
+  catalog_version     text not null check (length(catalog_version) between 1 and 64),
+  observation_ids     uuid[] not null default '{}',
+  catalog_counts      jsonb not null check (jsonb_typeof(catalog_counts) = 'object'),
+  status              text not null check (status in ('active','superseded','failed')),
+  failure_reason      text check (failure_reason is null or length(failure_reason) between 1 and 2000),
+  created_at          timestamptz not null default date_trunc('milliseconds', now()),
+  constraint macro_snapshots_failure_iff check ((status = 'failed') = (failure_reason is not null))
+);
+create unique index if not exists macro_snapshots_one_active on public.macro_snapshots(region) where status = 'active';
+create unique index if not exists macro_snapshots_revision_uniq on public.macro_snapshots(region, revision) where status <> 'failed';
+create index if not exists macro_snapshots_since_idx on public.macro_snapshots(created_at, snapshot_id) where status <> 'failed';
+
+create table if not exists public.macro_regime_results (
+  snapshot_id      uuid primary key references public.macro_snapshots(snapshot_id) on delete restrict,
+  region           text not null check (region in ('US','CN')),
+  regime           jsonb check (regime is null or jsonb_typeof(regime) = 'object'),
+  contributions    jsonb not null default '[]' check (jsonb_typeof(contributions) = 'array'),
+  rules_version    text not null check (length(rules_version) between 1 and 64),
+  uncovered_weight numeric not null check (uncovered_weight >= 0)
+);
+
+create table if not exists public.macro_publish_state (
+  region         text primary key check (region in ('US','CN')),
+  revision       bigint not null default 0 check (revision >= 0),
+  input_revision bigint not null default 0 check (input_revision >= 0),
+  updated_at     timestamptz not null default date_trunc('milliseconds', now())
+);
+insert into public.macro_publish_state(region) values ('US'), ('CN') on conflict (region) do nothing;
+
+-- ---------------------------------------------------------------- ingest chunks (§0.2 M24)
+create table if not exists public.macro_ingest_chunks (
+  batch_id    uuid not null references public.ingest_batches(batch_id) on delete restrict,
+  seq         int not null check (seq >= 0),
+  total       int not null check (total between 1 and 10000),
+  counts      jsonb not null check (jsonb_typeof(counts) = 'object'),
+  received_at timestamptz not null default date_trunc('milliseconds', now()),
+  primary key (batch_id, seq),
+  constraint macro_ingest_chunks_seq_in_range check (seq < total)
+);
+
+-- ---------------------------------------------------------------- analysis runs (§7, §0.2 M22, N1)
+create table if not exists public.macro_analysis_runs (
+  run_id         uuid primary key,
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  request_id     uuid not null,
+  kind           text not null check (kind in ('change','level','rolling','event_window')),
+  spec           jsonb not null check (jsonb_typeof(spec) = 'object'),
+  inputs         jsonb not null,
+  inputs_hash    text not null check (inputs_hash ~ '^[0-9a-f]{64}$'),
+  results        jsonb,
+  code_version   text not null check (length(code_version) between 1 and 128),
+  method_version text not null check (length(method_version) between 1 and 64),
+  status         text not null check (status in ('ok','failed')),
+  error          text check (error is null or length(error) between 1 and 2000),
+  created_at     timestamptz not null default date_trunc('milliseconds', now()),
+  constraint macro_analysis_runs_request_uniq unique (user_id, request_id),
+  constraint macro_analysis_runs_outcome check ((status = 'ok' and results is not null and error is null) or (status = 'failed' and error is not null))
+);
+create index if not exists macro_analysis_runs_user_idx on public.macro_analysis_runs(user_id, created_at desc);
+
+-- ---------------------------------------------------------------- bucket (§4.3; local harness has storage.buckets only)
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('macro-raw', 'macro-raw', false, 52428800, array['text/csv','application/json','text/html','text/plain'])
+on conflict (id) do update
+set public = false,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+-- ---------------------------------------------------------------- triggers (backstops for the function write path)
+-- Observations: never deleted; only status may change, and only quarantined → ok (resolver).
+create or replace function public.macro_observations_lifecycle() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'append_only: macro_observations rows are never deleted' using errcode = '23514';
+  end if;
+  if (to_jsonb(new) - 'status') <> (to_jsonb(old) - 'status') then
+    raise exception 'append_only: macro_observations allows status changes only' using errcode = '23514';
+  end if;
+  if new.status <> old.status and not (old.status = 'quarantined' and new.status = 'ok') then
+    raise exception 'append_only: macro_observations status % -> % is not allowed', old.status, new.status using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists macro_observations_lifecycle on public.macro_observations;
+create trigger macro_observations_lifecycle before update or delete on public.macro_observations
+  for each row execute function public.macro_observations_lifecycle();
+
+-- Snapshots: never deleted; only status active → superseded.
+create or replace function public.macro_snapshots_lifecycle() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'append_only: macro_snapshots rows are never deleted' using errcode = '23514';
+  end if;
+  if (to_jsonb(new) - 'status') <> (to_jsonb(old) - 'status') or not (old.status = 'active' and new.status = 'superseded') then
+    raise exception 'append_only: macro_snapshots allows active -> superseded only' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists macro_snapshots_lifecycle on public.macro_snapshots;
+create trigger macro_snapshots_lifecycle before update or delete on public.macro_snapshots
+  for each row execute function public.macro_snapshots_lifecycle();
+
+-- Strictly append-only tables. macro_analysis_runs refuses updates only (auth.users cascade deletes it).
+create or replace function public.macro_append_only() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  raise exception 'append_only: % rows cannot be %d', tg_table_name, lower(tg_op) using errcode = '23514';
+end $$;
+do $$ declare t text; begin
+  foreach t in array array['macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_regime_results','macro_ingest_chunks'] loop
+    execute format('drop trigger if exists %I on public.%I', t || '_append_only', t);
+    execute format('create trigger %I before update or delete on public.%I for each row execute function public.macro_append_only()', t || '_append_only', t);
+  end loop;
+end $$;
+drop trigger if exists macro_analysis_runs_append_only on public.macro_analysis_runs;
+create trigger macro_analysis_runs_append_only before update on public.macro_analysis_runs
+  for each row execute function public.macro_append_only();
+
+-- ---------------------------------------------------------------- catalog write (§4.2, §0.2 M14)
+-- Appends the catalog version (no-op when it exists with the same JSON; a different JSON under an
+-- existing version is catalog_version_conflict) and upserts every definition into the mirror.
+-- p_defs is the MacroSeriesDef[] array exactly as catalog.ts exports it (camelCase keys).
+create or replace function public.macro_upsert_catalog(p_catalog_version text, p_rules_version text, p_defs jsonb)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_existing jsonb; d jsonb; n int := 0;
+begin
+  if p_catalog_version is null or p_catalog_version !~ '^macro-catalog/[0-9a-f]{12}$' then
+    raise exception 'invalid_catalog_version' using errcode = '22023';
+  end if;
+  if p_defs is null or jsonb_typeof(p_defs) <> 'array' or jsonb_array_length(p_defs) = 0 then
+    raise exception 'invalid_catalog' using errcode = '22023';
+  end if;
+  insert into public.macro_catalog_versions(catalog_version, catalog, rules_version)
+  values (p_catalog_version, p_defs, p_rules_version)
+  on conflict (catalog_version) do nothing;
+  select catalog into v_existing from public.macro_catalog_versions where catalog_version = p_catalog_version;
+  if v_existing <> p_defs then
+    raise exception 'catalog_version_conflict' using errcode = 'P0001';
+  end if;
+  for d in select value from jsonb_array_elements(p_defs) loop
+    if jsonb_typeof(d) <> 'object' then raise exception 'invalid_catalog' using errcode = '22023'; end if;
+    insert into public.macro_series(id, region, role, type, name, unit, native_frequency, period, adjustment, status, reason, source, derive,
+                                    alias_of, revision_policy, weight, change_kind, release_lag_days, definition_version, catalog_version, updated_at)
+    values (d->>'id', d->>'region', d->>'role', d->>'type', d->'name', d->>'unit', d->>'nativeFrequency', d->>'period', d->>'adjustment', d->>'status',
+            nullif(d->'reason', 'null'::jsonb), nullif(d->'source', 'null'::jsonb), nullif(d->'derive', 'null'::jsonb),
+            d->>'aliasOf', d->>'revisionPolicy', (d->>'weight')::numeric, d->>'changeKind', (d->>'releaseLagDays')::int, (d->>'definitionVersion')::int,
+            p_catalog_version, date_trunc('milliseconds', now()))
+    on conflict (id) do update set
+      region = excluded.region, role = excluded.role, type = excluded.type, name = excluded.name, unit = excluded.unit,
+      native_frequency = excluded.native_frequency, period = excluded.period, adjustment = excluded.adjustment, status = excluded.status,
+      reason = excluded.reason, source = excluded.source, derive = excluded.derive, alias_of = excluded.alias_of,
+      revision_policy = excluded.revision_policy, weight = excluded.weight, change_kind = excluded.change_kind,
+      release_lag_days = excluded.release_lag_days, definition_version = excluded.definition_version,
+      catalog_version = excluded.catalog_version, updated_at = excluded.updated_at;
+    n := n + 1;
+  end loop;
+  return n;
+end $$;
+revoke execute on function public.macro_upsert_catalog(text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_upsert_catalog(text, text, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- evidence write (§0.2 N2)
+-- Inserts the byte object if new (by sha256; an existing object must agree on path, adapter, type
+-- and length, else evidence_mismatch) and ALWAYS a new retrieval row. fetched_at must already be
+-- millisecond-precise (observations copy it into available_at and JS round-trips it).
+create or replace function public.macro_put_retrieval(
+  p_sha256 text, p_object_path text, p_adapter text, p_content_type text, p_byte_length bigint,
+  p_fetch_url text, p_fetch_host text, p_http_status int, p_fetched_at timestamptz, p_batch_id uuid, p_tool_versions jsonb)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare o public.macro_evidence_objects; v_id uuid := gen_random_uuid();
+begin
+  if p_fetched_at is null or p_fetched_at <> date_trunc('milliseconds', p_fetched_at) then
+    raise exception 'invalid_retrieval' using errcode = '22023';
+  end if;
+  insert into public.macro_evidence_objects(sha256, object_path, adapter, content_type, byte_length)
+  values (p_sha256, p_object_path, p_adapter, p_content_type, p_byte_length)
+  on conflict (sha256) do nothing;
+  select * into o from public.macro_evidence_objects where sha256 = p_sha256;
+  if (o.object_path, o.adapter, o.content_type, o.byte_length) is distinct from (p_object_path, p_adapter, p_content_type, p_byte_length) then
+    raise exception 'evidence_mismatch' using errcode = 'P0001';
+  end if;
+  insert into public.macro_retrievals(retrieval_id, sha256, fetch_url, fetch_host, http_status, fetched_at, batch_id, tool_versions)
+  values (v_id, p_sha256, p_fetch_url, p_fetch_host, p_http_status, p_fetched_at, p_batch_id, coalesce(p_tool_versions, '{}'::jsonb));
+  return v_id;
+end $$;
+revoke execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- observation write (plan "写入规则"; spec §4.4, §0.2 M6/M8/M10/M16)
+-- p_rows: ObservationWrite[] (src/lib/macro/types.ts). The whole call is one transaction: any
+-- invalid row (shape, value_text not canonical, series unknown/not active/alias, native row on a
+-- derived series or vice versa, available_at not equal to the retrieval's fetched_at / the max of
+-- the inputs' available_at) raises and nothing is written. Per (series_id, period_end) group, in
+-- input order:
+--  1. two different values → conflicting_rows for each distinct value (first-appearance order),
+--     quarantined += 1, nothing written;
+--  2. native row whose retrieval is unknown → missing_evidence; derived row with an input that is
+--     unknown or not ok → missing_input; nothing written, not counted;
+--  3. cur = highest-version ok row: different value delivered with available_at < cur.available_at
+--     → stale_delivery; no cur → inserted (version = max over all statuses + 1); same value →
+--     duplicate; different and revisable → versioned (new ok version); different and immutable →
+--     unexpected_revision. stale_delivery / unexpected_revision insert a quarantined version unless
+--     a quarantined row with the same value already exists, and count quarantined += 1.
+-- Regions whose series received any row get input_revision + 1 at the end.
+create or replace function public.macro_write_observations(p_batch uuid, p_code_version text, p_rows jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  e jsonb; s public.macro_series; g record; cur public.macro_observations; v_has_cur boolean;
+  v_region text; v_touched text[] := '{}'; v_native boolean; v_ret public.macro_retrievals;
+  v_text text; v_new numeric; v_avail timestamptz; v_inputs uuid[]; v_input_ok int; v_input_n int; v_input_max timestamptz;
+  v_max int; v_action text; v_status text; v_t text;
+  n_ins int := 0; n_dup int := 0; n_ver int := 0; n_q int := 0; v_conf jsonb := '[]'::jsonb;
+begin
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
+  if p_code_version is null or length(p_code_version) not between 1 and 128 then raise exception 'invalid_code_version' using errcode = '22023'; end if;
+  if not exists (select 1 from public.ingest_batches where batch_id = p_batch) then raise exception 'invalid_batch' using errcode = '22023'; end if;
+
+  -- validate every row before any write
+  for e in select value from jsonb_array_elements(p_rows) loop
+    if jsonb_typeof(e) <> 'object' or jsonb_typeof(e->'value_text') is distinct from 'string'
+       or e->>'value_text' !~ '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$' or e->>'value_text' = '-0' then
+      raise exception 'invalid_value_text' using errcode = '22023';
+    end if;
+    if jsonb_typeof(e->'series_id') is distinct from 'string' or jsonb_typeof(e->'period_end') is distinct from 'string'
+       or jsonb_typeof(e->'available_at') is distinct from 'string' or jsonb_typeof(e->'revisable') is distinct from 'boolean' then
+      raise exception 'invalid_row' using errcode = '22023';
+    end if;
+    perform (e->>'period_end')::date, (e->>'available_at')::timestamptz;
+    select * into s from public.macro_series where id = e->>'series_id';
+    if not found or s.status <> 'active' or s.alias_of is not null then
+      raise exception 'invalid_series' using errcode = '22023';
+    end if;
+    if e ? 'retrieval_id' then
+      if s.derive is not null or e ? 'derived_from' or e ? 'transform' or jsonb_typeof(e->'locator') is distinct from 'object'
+         or e->'locator'->>'kind' is null or e->'locator'->>'kind' not in ('csv_row','json_pointer','html_cell') then
+        raise exception 'invalid_row' using errcode = '22023';
+      end if;
+      perform (e->>'retrieval_id')::uuid;
+    else
+      if s.derive is null or e ? 'locator' or jsonb_typeof(e->'derived_from') is distinct from 'array' or jsonb_array_length(e->'derived_from') = 0
+         or jsonb_typeof(e->'transform') is distinct from 'string' or e->>'transform' not like (s.derive->>'kind') || '@%' then
+        raise exception 'invalid_row' using errcode = '22023';
+      end if;
+      perform x::uuid from jsonb_array_elements_text(e->'derived_from') as t(x);
+    end if;
+  end loop;
+
+  -- lock the touched regions in a fixed order (deadlock-free with other writers and publishers)
+  for v_region in
+    select distinct ms.region from jsonb_array_elements(p_rows) as x(e) join public.macro_series ms on ms.id = x.e->>'series_id' order by 1
+  loop
+    perform 1 from public.macro_publish_state where region = v_region for update;
+  end loop;
+
+  for g in
+    select x.e->>'series_id' as series_id, (x.e->>'period_end')::date as period_end, array_agg(x.e order by x.ord) as rows
+    from jsonb_array_elements(p_rows) with ordinality as x(e, ord)
+    group by 1, 2
+    order by min(x.ord)
+  loop
+    select * into s from public.macro_series where id = g.series_id;
+    select * into cur from public.macro_observations
+      where series_id = g.series_id and period_end = g.period_end and status = 'ok' order by version desc limit 1;
+    v_has_cur := found;
+
+    -- 1. conflicting values inside this call
+    if (select count(distinct (r->>'value_text')::numeric) from unnest(g.rows) as u(r)) > 1 then
+      for v_t in
+        select z.txt from (
+          select (array_agg(u.r->>'value_text' order by u.o))[1] as txt, min(u.o) as first_o
+          from unnest(g.rows) with ordinality as u(r, o) group by (u.r->>'value_text')::numeric
+        ) z order by z.first_o
+      loop
+        v_conf := v_conf || jsonb_build_array(jsonb_build_object('series_id', g.series_id, 'period_end', g.period_end::text,
+          'reason', 'conflicting_rows', 'value_text', v_t, 'current_value_text', case when v_has_cur then cur.value_text end));
+      end loop;
+      n_q := n_q + 1;
+      continue;
+    end if;
+
+    e := g.rows[1];
+    v_text := e->>'value_text'; v_new := v_text::numeric;
+    v_native := e ? 'retrieval_id';
+
+    -- 2. provenance must exist
+    if v_native then
+      select * into v_ret from public.macro_retrievals where retrieval_id = (e->>'retrieval_id')::uuid;
+      if not found then
+        v_conf := v_conf || jsonb_build_array(jsonb_build_object('series_id', g.series_id, 'period_end', g.period_end::text,
+          'reason', 'missing_evidence', 'value_text', v_text, 'current_value_text', case when v_has_cur then cur.value_text end));
+        continue;
+      end if;
+      if (e->>'available_at')::timestamptz <> v_ret.fetched_at then raise exception 'invalid_available_at' using errcode = '22023'; end if;
+      v_avail := v_ret.fetched_at; v_inputs := null;
+    else
+      select array_agg(distinct x::uuid) into v_inputs from jsonb_array_elements_text(e->'derived_from') as t(x);
+      v_input_n := cardinality(v_inputs);
+      select count(*), max(available_at) into v_input_ok, v_input_max
+        from public.macro_observations where observation_id = any(v_inputs) and status = 'ok';
+      if v_input_ok <> v_input_n then
+        v_conf := v_conf || jsonb_build_array(jsonb_build_object('series_id', g.series_id, 'period_end', g.period_end::text,
+          'reason', 'missing_input', 'value_text', v_text, 'current_value_text', case when v_has_cur then cur.value_text end));
+        continue;
+      end if;
+      if (e->>'available_at')::timestamptz <> v_input_max then raise exception 'invalid_available_at' using errcode = '22023'; end if;
+      v_avail := v_input_max;
+      select array_agg(x::uuid order by o) into v_inputs from jsonb_array_elements_text(e->'derived_from') with ordinality as t(x, o);   -- keep the caller's order
+    end if;
+
+    -- 3. version identity
+    if v_has_cur and cur.value <> v_new and v_avail < cur.available_at then v_action := 'stale_delivery';
+    elsif not v_has_cur then v_action := 'inserted';
+    elsif cur.value = v_new then v_action := 'duplicate';
+    elsif (e->>'revisable')::boolean then v_action := 'versioned';
+    else v_action := 'unexpected_revision';
+    end if;
+
+    if v_action = 'duplicate' then n_dup := n_dup + 1; continue; end if;
+    if v_action in ('inserted','versioned') then v_status := 'ok';
+    elsif exists (select 1 from public.macro_observations where series_id = g.series_id and period_end = g.period_end and status = 'quarantined' and value = v_new) then v_status := null;
+    else v_status := 'quarantined';
+    end if;
+
+    if v_status is not null then
+      select coalesce(max(version), 0) into v_max from public.macro_observations where series_id = g.series_id and period_end = g.period_end;
+      insert into public.macro_observations(observation_id, series_id, period_end, value, value_text, version, available_at, status,
+                                            retrieval_id, locator, derived_from, transform, code_version, batch_id)
+      values (gen_random_uuid(), g.series_id, g.period_end, v_new, v_text, v_max + 1, v_avail, v_status,
+              case when v_native then (e->>'retrieval_id')::uuid end, case when v_native then e->'locator' end,
+              case when v_native then null else v_inputs end, case when v_native then null else e->>'transform' end,
+              p_code_version, p_batch);
+      if not (s.region = any(v_touched)) then v_touched := array_append(v_touched, s.region); end if;
+    end if;
+
+    if v_action = 'inserted' then n_ins := n_ins + 1;
+    elsif v_action = 'versioned' then n_ver := n_ver + 1;
+    else
+      n_q := n_q + 1;
+      v_conf := v_conf || jsonb_build_array(jsonb_build_object('series_id', g.series_id, 'period_end', g.period_end::text,
+        'reason', v_action, 'value_text', v_text, 'current_value_text', cur.value_text));
+    end if;
+  end loop;
+
+  update public.macro_publish_state set input_revision = input_revision + 1, updated_at = date_trunc('milliseconds', now())
+   where region = any(v_touched);
+  return jsonb_build_object('inserted', n_ins, 'duplicates', n_dup, 'versioned', n_ver, 'quarantined', n_q, 'conflicts', v_conf);
+end $$;
+revoke execute on function public.macro_write_observations(uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_write_observations(uuid, text, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- publish (plan "发布规则"; spec §4.3, §0.2 M16)
+create or replace function public.publish_macro_snapshot(
+  p_region text, p_expected_revision bigint, p_expected_input_revision bigint, p_as_of date,
+  p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_catalog_counts jsonb,
+  p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare st public.macro_publish_state; v_id uuid := gen_random_uuid(); v_bad int; v_regime jsonb := nullif(p_regime, 'null'::jsonb);
+begin
+  select * into st from public.macro_publish_state where region = p_region for update;
+  if not found then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  if st.revision <> p_expected_revision or st.input_revision <> p_expected_input_revision then
+    raise exception 'stale_publisher' using errcode = 'P0001';
+  end if;
+  if p_as_of is null or p_methodology_version is null or length(p_methodology_version) not between 1 and 64
+     or p_rules_version is null or length(p_rules_version) not between 1 and 64
+     or not exists (select 1 from public.macro_catalog_versions where catalog_version = p_catalog_version) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  if p_observation_ids is null or array_position(p_observation_ids, null) is not null
+     or cardinality(p_observation_ids) <> (select count(distinct i) from unnest(p_observation_ids) as t(i)) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  select count(*) into v_bad from unnest(p_observation_ids) as t(i)
+   where not exists (select 1 from public.macro_observations o join public.macro_series ms on ms.id = o.series_id
+                      where o.observation_id = t.i and o.status = 'ok' and ms.region = p_region);
+  if v_bad > 0 then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  if p_catalog_counts is null or jsonb_typeof(p_catalog_counts) <> 'object'
+     or not (p_catalog_counts ?& array['verified','missing','restricted'])
+     or (select count(*) from jsonb_object_keys(p_catalog_counts)) <> 3
+     or exists (select 1 from jsonb_each(p_catalog_counts) where jsonb_typeof(value) <> 'number'
+                  or (value #>> '{}')::numeric < 0 or (value #>> '{}')::numeric <> trunc((value #>> '{}')::numeric)) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  if (v_regime is not null and jsonb_typeof(v_regime) <> 'object') or p_contributions is null or jsonb_typeof(p_contributions) <> 'array'
+     or p_uncovered_weight is null or p_uncovered_weight < 0 then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  update public.macro_snapshots set status = 'superseded' where region = p_region and status = 'active';
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, catalog_counts, status)
+  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_catalog_counts, 'active');
+  insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
+  values (v_id, p_region, v_regime, p_contributions, p_rules_version, p_uncovered_weight);
+  update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = p_region;
+  return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1);
+end $$;
+revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], jsonb, jsonb, jsonb, text, numeric) from public, anon, authenticated;
+grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], jsonb, jsonb, jsonb, text, numeric) to service_role;
+
+-- A failed publication attempt: recorded with the current revision, never touches the active row.
+create or replace function public.record_failed_macro_snapshot(p_region text, p_as_of date, p_methodology_version text, p_catalog_version text, p_reason text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid := gen_random_uuid(); v_rev bigint;
+begin
+  select revision into v_rev from public.macro_publish_state where region = p_region;
+  if not found then raise exception 'invalid_region' using errcode = '22023'; end if;
+  if p_reason is null or length(p_reason) not between 1 and 2000 then raise exception 'invalid_reason' using errcode = '22023'; end if;
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, catalog_counts, status, failure_reason)
+  values (v_id, p_region, p_as_of, v_rev, p_methodology_version, p_catalog_version, '{}',
+          '{"verified":0,"missing":0,"restricted":0}'::jsonb, 'failed', p_reason);
+  return v_id;
+end $$;
+revoke execute on function public.record_failed_macro_snapshot(text, date, text, text, text) from public, anon, authenticated;
+grant execute on function public.record_failed_macro_snapshot(text, date, text, text, text) to service_role;
+
+-- ---------------------------------------------------------------- conflict resolution (plan "隔离裁决"; spec §0.2 M10)
+-- accept → the highest-version quarantined row of series|period becomes ok (rows with no stored
+-- quarantined observation — adapter_mismatch, rule_failed:* — can only be rejected: not_found);
+-- the region's input_revision + 1. Either decision closes the dq_quarantine item and writes a
+-- research_audit_log row (action dq.quarantine_resolve, object_type dq), in one transaction.
+create or replace function public.macro_resolve_conflict(p_quarantine_id uuid, p_decision text, p_resolved_by uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare q public.dq_quarantine; v_series text; v_period date; v_region text; o public.macro_observations; v_status text; v_obs uuid;
+begin
+  if p_decision is null or p_decision not in ('accept','reject') then raise exception 'invalid_decision' using errcode = '22023'; end if;
+  if p_resolved_by is null then raise exception 'invalid_resolver' using errcode = '22023'; end if;
+  select * into q from public.dq_quarantine where id = p_quarantine_id for update;
+  if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
+  if q.dataset not like 'macro.%' or q.table_name <> 'macro_observations' or q.natural_key !~ '^[A-Z][A-Z0-9_]{0,63}\|[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
+    raise exception 'invalid_item' using errcode = '22023';
+  end if;
+  if q.status <> 'open' then raise exception 'already_resolved' using errcode = 'P0001'; end if;
+  v_series := split_part(q.natural_key, '|', 1);
+  v_period := split_part(q.natural_key, '|', 2)::date;
+  select region into v_region from public.macro_series where id = v_series;
+  if not found then raise exception 'invalid_item' using errcode = '22023'; end if;
+  if p_decision = 'accept' then
+    perform 1 from public.macro_publish_state where region = v_region for update;
+    select * into o from public.macro_observations
+     where series_id = v_series and period_end = v_period and status = 'quarantined' order by version desc limit 1 for update;
+    if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
+    update public.macro_observations set status = 'ok' where observation_id = o.observation_id;
+    update public.macro_publish_state set input_revision = input_revision + 1, updated_at = date_trunc('milliseconds', now()) where region = v_region;
+    v_obs := o.observation_id; v_status := 'resolved_accept';
+  else
+    v_status := 'resolved_reject';
+  end if;
+  update public.dq_quarantine set status = v_status, resolved_by = p_resolved_by, resolved_at = now() where id = p_quarantine_id;
+  insert into public.research_audit_log(id, user_id, actor, action, object_type, object_id, detail)
+  values (gen_random_uuid(), p_resolved_by, 'user', 'dq.quarantine_resolve', 'dq', p_quarantine_id,
+          jsonb_build_object('id', p_quarantine_id, 'status', v_status, 'decision', p_decision, 'dataset', q.dataset,
+                             'natural_key', q.natural_key, 'reason_code', q.reason_code, 'observation_id', v_obs));
+  return jsonb_build_object('status', v_status, 'observation_id', v_obs);
+end $$;
+revoke execute on function public.macro_resolve_conflict(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.macro_resolve_conflict(uuid, text, uuid) to service_role;
+
+-- ---------------------------------------------------------------- ingest chunk receipt (plan "ingest 分块"; spec §0.2 M24)
+create or replace function public.macro_record_chunk(p_batch_id uuid, p_seq int, p_total int, p_counts jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_total int; n int;
+begin
+  if p_batch_id is null or p_seq is null or p_total is null or p_seq < 0 or p_total < 1 or p_total > 10000 or p_seq >= p_total then
+    raise exception 'invalid_chunk' using errcode = '22023';
+  end if;
+  if p_counts is null or jsonb_typeof(p_counts) <> 'object'
+     or not (p_counts ?& array['fetched','inserted','duplicates','versioned','quarantined','failed'])
+     or (select count(*) from jsonb_object_keys(p_counts)) <> 6
+     or exists (select 1 from jsonb_each(p_counts) where jsonb_typeof(value) <> 'number' or (value #>> '{}')::numeric < 0) then
+    raise exception 'invalid_chunk' using errcode = '22023';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('macro_chunk:' || p_batch_id::text, 0));
+  select total into v_total from public.macro_ingest_chunks where batch_id = p_batch_id limit 1;
+  if found and v_total <> p_total then raise exception 'chunk_total_mismatch' using errcode = 'P0001'; end if;
+  insert into public.macro_ingest_chunks(batch_id, seq, total, counts) values (p_batch_id, p_seq, p_total, p_counts)
+  on conflict (batch_id, seq) do nothing;
+  get diagnostics n = row_count;
+  return case when n = 1 then 'new' else 'duplicate' end;
+end $$;
+revoke execute on function public.macro_record_chunk(uuid, int, int, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_record_chunk(uuid, int, int, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- analysis run + quota (plan "分析运行配额"; spec §2, §0.2 M22, N1)
+-- The caller (route) passes the verified session user. Per-user advisory lock first, then: an
+-- existing (user, request) row is returned as is (never counted twice); an ok run is admitted when
+-- the user's ok runs in the last 24 h are below the plan limit (admin: unlimited; effective pro:
+-- 100; otherwise 10 — effective pro = plan 'pro' and plan_expires_at null or in the future, as
+-- src/lib/billing/plan.ts::effectivePlan); failed runs are recorded without a quota check and never
+-- counted.
+create or replace function public.create_macro_analysis_run(
+  p_user_id uuid, p_request_id uuid, p_kind text, p_spec jsonb, p_inputs jsonb, p_inputs_hash text,
+  p_results jsonb, p_code_version text, p_method_version text, p_status text, p_error text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_plan text; v_role text; v_expires timestamptz; v_limit int; v_used int;
+begin
+  if p_user_id is null or p_request_id is null then raise exception 'invalid_run' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('macro_analysis:' || p_user_id::text, 0));
+  select run_id into v_id from public.macro_analysis_runs where user_id = p_user_id and request_id = p_request_id;
+  if found then return v_id; end if;
+  if p_status = 'ok' then
+    select plan, role, plan_expires_at into v_plan, v_role, v_expires from public.profiles where id = p_user_id;
+    if coalesce(v_role, 'user') <> 'admin' then
+      v_limit := case when v_plan = 'pro' and (v_expires is null or v_expires > now()) then 100 else 10 end;
+      select count(*) into v_used from public.macro_analysis_runs
+       where user_id = p_user_id and status = 'ok' and created_at > now() - interval '24 hours';
+      if v_used >= v_limit then raise exception 'quota_exceeded' using errcode = 'P0001'; end if;
+    end if;
+  end if;
+  v_id := gen_random_uuid();
+  insert into public.macro_analysis_runs(run_id, user_id, request_id, kind, spec, inputs, inputs_hash, results, code_version, method_version, status, error)
+  values (v_id, p_user_id, p_request_id, p_kind, p_spec, p_inputs, p_inputs_hash, nullif(p_results, 'null'::jsonb), p_code_version, p_method_version, p_status, p_error);
+  return v_id;
+end $$;
+revoke execute on function public.create_macro_analysis_run(uuid, uuid, text, jsonb, jsonb, text, jsonb, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.create_macro_analysis_run(uuid, uuid, text, jsonb, jsonb, text, jsonb, text, text, text, text) to service_role;
+
+-- ---------------------------------------------------------------- read helpers (security invoker: RLS applies)
+-- Latest period per series, highest ok version within it; p_as_of keeps rows available by then;
+-- p_period_end_lte caps the period.
+create or replace function public.macro_latest_observations(p_series_ids text[], p_as_of timestamptz default null, p_period_end_lte date default null)
+returns setof public.macro_observations language sql stable security invoker set search_path = public as $$
+  select distinct on (o.series_id) o.*
+  from public.macro_observations o
+  where o.series_id = any(p_series_ids) and o.status = 'ok'
+    and (p_as_of is null or o.available_at <= p_as_of)
+    and (p_period_end_lte is null or o.period_end <= p_period_end_lte)
+  order by o.series_id, o.period_end desc, o.version desc
+$$;
+revoke execute on function public.macro_latest_observations(text[], timestamptz, date) from public;
+grant execute on function public.macro_latest_observations(text[], timestamptz, date) to anon, authenticated, service_role;
+
+-- Active + superseded snapshots after a (created_at, snapshot_id) marker, ascending; limit 1..1000.
+create or replace function public.macro_snapshots_since(p_created_at timestamptz, p_snapshot_id uuid, p_limit int)
+returns setof public.macro_snapshots language sql stable security invoker set search_path = public as $$
+  select s.* from public.macro_snapshots s
+  where s.status in ('active','superseded')
+    and (p_created_at is null or (s.created_at, s.snapshot_id) > (p_created_at, p_snapshot_id))
+  order by s.created_at, s.snapshot_id
+  limit least(greatest(coalesce(p_limit, 100), 1), 1000)
+$$;
+revoke execute on function public.macro_snapshots_since(timestamptz, uuid, int) from public;
+grant execute on function public.macro_snapshots_since(timestamptz, uuid, int) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------- table privileges and policies
+do $$ declare t text; begin
+  foreach t in array array['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations',
+                           'macro_snapshots','macro_regime_results','macro_publish_state','macro_ingest_chunks','macro_analysis_runs'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
+  end loop;
+  foreach t in array array['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_snapshots','macro_regime_results'] loop
+    execute format('grant select on public.%I to anon, authenticated, service_role', t);
+    execute format('drop policy if exists "%s public read" on public.%I', t, t);
+    execute format('create policy "%s public read" on public.%I for select using (true)', t, t);
+  end loop;
+  foreach t in array array['macro_publish_state','macro_ingest_chunks'] loop
+    execute format('grant select on public.%I to service_role', t);
+    execute format('drop policy if exists "%s service read" on public.%I', t, t);
+    execute format('create policy "%s service read" on public.%I for select to service_role using (true)', t, t);
+  end loop;
+end $$;
+grant select on public.macro_observations to anon, authenticated, service_role;
+drop policy if exists "macro_observations public read" on public.macro_observations;
+create policy "macro_observations public read" on public.macro_observations for select to anon, authenticated using (status = 'ok');
+drop policy if exists "macro_observations service read" on public.macro_observations;
+create policy "macro_observations service read" on public.macro_observations for select to service_role using (true);
+grant select on public.macro_analysis_runs to authenticated, service_role;
+drop policy if exists "macro_analysis_runs own read" on public.macro_analysis_runs;
+create policy "macro_analysis_runs own read" on public.macro_analysis_runs for select to authenticated using (user_id = auth.uid());
+drop policy if exists "macro_analysis_runs service read" on public.macro_analysis_runs;
+create policy "macro_analysis_runs service read" on public.macro_analysis_runs for select to service_role using (true);
+```
+
+Implementer checks (resolve these in this task, before locking):
+- `macro_append_only()` builds its message from `lower(tg_op)`, so the text reads `…cannot be updated` / `…cannot be deleted`. The test matches only the prefix `append_only:`, so the exact wording does not matter.
+- If PostgreSQL rejects the `perform x::uuid from jsonb_array_elements_text(...) as t(x)` validation form, use `perform (select array_agg(x::uuid) from jsonb_array_elements_text(e->'derived_from') as t(x));` instead. Either form only has to make a malformed uuid raise before any write.
+
+- [ ] **Step 4: Run the integration test until it passes**
+
+Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/macro.integration.test.ts`
+Expected: PASS (13 tests). While the suite is red, fix only the migration. It is not locked yet, so it may still change.
+
+- [ ] **Step 5: Database types**
+
+In `src/lib/supabase/database.types.ts`, insert this block immediately **before** the line that begins `// Issuers (supabase/migrations/20261105091000_issuers.sql)`:
+
+```ts
+// MACRO
+// 20261114090000_macro_workbench.sql. numeric columns (value, weight, uncovered_weight) arrive as
+// JSON numbers and round in JavaScript — readers use value_text; bigint (revision,
+// input_revision, byte_length) arrives as a JSON number. All writes go through RPCs
+// (src/lib/macro/db.ts); these types serve reads.
+export type MacroRegion = 'US' | 'CN';
+export interface MacroSeriesRow {
+  id: string; region: MacroRegion; role: 'indicator' | 'asset' | 'event_source'; type: string | null;
+  name: { zh: string; en: string }; unit: string; native_frequency: 'daily' | 'monthly' | 'quarterly' | 'event';
+  period: 'day' | 'month' | 'quarter'; adjustment: 'sa' | 'nsa' | 'na'; status: 'active' | 'missing' | 'restricted';
+  reason: { zh: string; en: string } | null; source: Record<string, unknown> | null; derive: { kind: string; from: string } | null;
+  alias_of: string | null; revision_policy: 'revisable' | 'immutable'; weight: number; change_kind: 'bp' | 'pp' | 'pct' | 'points';
+  release_lag_days: number | null; definition_version: number; catalog_version: string; updated_at: string;
+}
+export interface MacroCatalogVersionRow { catalog_version: string; catalog: unknown[]; rules_version: string; created_at: string }
+export interface MacroEvidenceObjectRow { sha256: string; object_path: string; adapter: 'fred_csv' | 'akshare'; content_type: string; byte_length: number; created_at: string }
+export interface MacroRetrievalRow {
+  retrieval_id: string; sha256: string; fetch_url: string; fetch_host: string; http_status: number; fetched_at: string;
+  batch_id: string; tool_versions: Record<string, string>;
+}
+export interface MacroObservationRow {
+  observation_id: string; series_id: string; period_end: string; value: number; value_text: string; version: number;
+  available_at: string; availability_basis: 'first_seen'; ingested_at: string; status: 'ok' | 'quarantined';
+  retrieval_id: string | null; locator: Record<string, unknown> | null; derived_from: string[] | null; transform: string | null;
+  code_version: string; batch_id: string;
+}
+export interface MacroSnapshotTableRow {
+  snapshot_id: string; region: MacroRegion; as_of: string; revision: number; methodology_version: string; catalog_version: string;
+  observation_ids: string[]; catalog_counts: { verified: number; missing: number; restricted: number };
+  status: 'active' | 'superseded' | 'failed'; failure_reason: string | null; created_at: string;
+}
+export interface MacroRegimeResultRow {
+  snapshot_id: string; region: MacroRegion; regime: Record<string, unknown> | null; contributions: unknown[];
+  rules_version: string; uncovered_weight: number;
+}
+export interface MacroPublishStateRow { region: MacroRegion; revision: number; input_revision: number; updated_at: string }
+export interface MacroIngestChunkRow { batch_id: string; seq: number; total: number; counts: Record<string, number>; received_at: string }
+export interface MacroAnalysisRunRow {
+  run_id: string; user_id: string; request_id: string; kind: 'change' | 'level' | 'rolling' | 'event_window';
+  spec: Record<string, unknown>; inputs: unknown; inputs_hash: string; results: unknown | null; code_version: string;
+  method_version: string; status: 'ok' | 'failed'; error: string | null; created_at: string;
+}
+// /MACRO
+
+```
+
+Then, in the `Tables` map, insert immediately **after** the line `      fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };`:
+
+```ts
+      // MACRO
+      macro_series: { Row: MacroSeriesRow; Insert: Partial<MacroSeriesRow>; Update: Partial<MacroSeriesRow> };
+      macro_catalog_versions: { Row: MacroCatalogVersionRow; Insert: Partial<MacroCatalogVersionRow>; Update: Partial<MacroCatalogVersionRow> };
+      macro_evidence_objects: { Row: MacroEvidenceObjectRow; Insert: Partial<MacroEvidenceObjectRow>; Update: Partial<MacroEvidenceObjectRow> };
+      macro_retrievals: { Row: MacroRetrievalRow; Insert: Partial<MacroRetrievalRow>; Update: Partial<MacroRetrievalRow> };
+      macro_observations: { Row: MacroObservationRow; Insert: Partial<MacroObservationRow>; Update: Partial<MacroObservationRow> };
+      macro_snapshots: { Row: MacroSnapshotTableRow; Insert: Partial<MacroSnapshotTableRow>; Update: Partial<MacroSnapshotTableRow> };
+      macro_regime_results: { Row: MacroRegimeResultRow; Insert: Partial<MacroRegimeResultRow>; Update: Partial<MacroRegimeResultRow> };
+      macro_publish_state: { Row: MacroPublishStateRow; Insert: Partial<MacroPublishStateRow>; Update: Partial<MacroPublishStateRow> };
+      macro_ingest_chunks: { Row: MacroIngestChunkRow; Insert: Partial<MacroIngestChunkRow>; Update: Partial<MacroIngestChunkRow> };
+      macro_analysis_runs: { Row: MacroAnalysisRunRow; Insert: Partial<MacroAnalysisRunRow>; Update: Partial<MacroAnalysisRunRow> };
+      // /MACRO
+```
+
+The new RPCs are deliberately **not** added to `Functions`. `src/lib/macro/db.ts` (Task 3) calls them through a narrow structural client, as `src/lib/facts/db.ts` does.
+
+- [ ] **Step 6: Register the critical suite**
+
+In `scripts/ci/research-checks.ts`, the `criticalSuites` expression currently ends with `…, 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts');`. Change that final `);` so the call reads:
+
+```ts
+].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts',
+  // MACRO
+  'src/lib/macro/macro.integration.test.ts',
+  // /MACRO
+);
+```
+
+Re-read the line before editing. If a sibling session has already appended a block, keep theirs and add the `// MACRO` lines after it.
+
+- [ ] **Step 7: Full DB gate, then lock the migration**
+
+Run: `LC_ALL=C npm run test:db && LC_ALL=C npm run test:migrations && npm run typecheck && npm run lint`
+Expected: PASS. `test:db` reports `src/lib/macro/macro.integration.test.ts` among the critical suites with zero skipped.
+
+Only after that, append the lock entry. Once locked, the file may never change.
+
+```bash
+node -e "const fs=require('fs'),c=require('crypto');const f='20261114090000_macro_workbench.sql',p='supabase/migrations.lock.json';const l=JSON.parse(fs.readFileSync(p,'utf8'));if(l.migrations.some(m=>m.file===f))throw new Error('already locked');const h=c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex');l.migrations.push({file:f,sha256:h});fs.writeFileSync(p,JSON.stringify(l,null,2)+'\n');console.log(h)"
+shasum -a 256 supabase/migrations/20261114090000_macro_workbench.sql
+```
+Expected: both commands print the same 64-hex digest. `git diff supabase/migrations.lock.json` shows exactly one added `{file, sha256}` object at the end of `migrations`.
+
+Run: `npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.migrationInventory();m.verifyCriticalSuiteInventory();console.log('ok')})"`
+Expected: `ok`
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add supabase/migrations/20261114090000_macro_workbench.sql supabase/migrations.lock.json src/lib/supabase/database.types.ts scripts/ci/research-checks.ts src/lib/macro/macro.integration.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): workbench migration — ten tables, macro-raw bucket, write/publish/resolve/chunk/quota RPCs, RLS
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+---
+### Task 2: Shared types, F4 contract mirror, catalog, decimal arithmetic
+
+**Files:**
+- Create: `src/lib/macro/types.ts` (verbatim from the plan's shared contract)
+- Create: `src/lib/macro/judgment-contract.ts` (verbatim from the plan's shared contract)
+- Create: `src/lib/macro/catalog.ts`
+- Create: `src/lib/macro/decimal.ts`
+- Test: `src/lib/macro/catalog.test.ts`, `src/lib/macro/decimal.test.ts`
+
+Notes for the implementer:
+- `catalog.ts` is also imported by client components (Tasks 16–17), so it must not import `node:crypto`. `CATALOG_VERSION` therefore uses the small pure-TS SHA-256 in this file. The test checks that SHA-256 against `node:crypto`.
+- The catalog is the source of the judgment weights. Task 10's `WEIGHTS_V1` must equal each `role='indicator'` entry's `weight` (US sums to 100, CN to 125, missing and restricted rows included).
+- `seriesKey` strings for the NBS rows follow the `macro_china_nbs_nation|<kind>|<tree path> > <indicator>` form that `cn-series.ts` (Task 8) parses. The five keys for CPI, PPI, GDP, M2 and exports are the replacements verified end to end on 2026-11-06 (AKShare 1.20.35 against the live NBS tree; every recorded claim equal to the TS-parsed value); PMI, ChinaBond and SAFE keys were correct as first written. Task 8 re-records the fixtures. If a label there no longer resolves, Task 8 stops and reports: `catalog.ts` belongs to Task 2, and a key change also changes `CATALOG_VERSION`.
+- `US_DGS10*` name the Federal Reserve Board (H.15 release) as publisher, relayed by FRED (FRED's own attribution for DGS10). `CN_PMI_MFG.adjustment` is `'sa'` (NBS publishes PMI seasonally adjusted). Both are owner-accepted.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/lib/macro/catalog.test.ts`:
+
+```ts
+// src/lib/macro/catalog.test.ts
+// Catalog invariants (spec §4.2, §0.2 M1–M5, M14, M15) and the content-derived CATALOG_VERSION.
+import {createHash} from 'node:crypto';
+import {describe,expect,it} from 'vitest';
+import {CATALOG_VERSION,MACRO_CATALOG,canonicalJson,catalogById,collectableOf,indicatorsOf,regimeInputsOf,sha256HexSync} from './catalog';
+import {REGIMES} from './judgment-contract';
+
+const BANNED=/yfinance|yahoo|eastmoney|jin10|sina|10jqka|xueqiu/i;
+const AKSHARE_HOSTS=new Set(['data.stats.gov.cn','yield.chinabond.com.cn','www.safe.gov.cn']);
+const weightOf=(region:'US'|'CN')=>MACRO_CATALOG.filter(d=>d.region===region&&d.role==='indicator').reduce((s,d)=>s+d.weight,0);
+
+describe('MACRO_CATALOG invariants',()=>{
+ it('has unique ids of the stored form and bilingual names',()=>{
+  const ids=MACRO_CATALOG.map(d=>d.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for(const d of MACRO_CATALOG){expect(d.id).toMatch(/^[A-Z][A-Z0-9_]{0,63}$/);expect(d.name.zh.length).toBeGreaterThan(0);expect(d.name.en.length).toBeGreaterThan(0);expect(d.definitionVersion).toBeGreaterThanOrEqual(1);}
+ });
+ it('never names a banned host or vendor anywhere',()=>{
+  expect(JSON.stringify(MACRO_CATALOG)).not.toMatch(BANNED);
+ });
+ it('active akshare series fetch only from verified official hosts; FRED series from fred.stlouisfed.org',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status!=='active'||!d.source)continue;
+   if(d.source.adapter==='akshare')expect({id:d.id,host:d.source.fetchHost,ok:AKSHARE_HOSTS.has(d.source.fetchHost)}).toEqual({id:d.id,host:d.source.fetchHost,ok:true});
+   else expect(d.source.fetchHost).toBe('fred.stlouisfed.org');
+  }
+ });
+ it('missing ⇒ source null + reason; restricted ⇒ third_party rights + reason; active ⇒ source and no reason',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status==='missing'){expect(d.source).toBeNull();expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='restricted'){expect(d.source?.rights).toBe('third_party');expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='active'){expect(d.source).not.toBeNull();expect(d.reason).toBeUndefined();expect(d.source!.rights).not.toBe('third_party');}
+  }
+ });
+ it('FRED rows record the original publisher via FRED; NBS-relayed rows record the original agency via NBS',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.source?.adapter==='fred_csv'){expect(d.source.via?.en).toMatch(/FRED/);expect(d.source.publisher.en).not.toMatch(/FRED/);}
+  }
+  expect(catalogById('CN_M2_YOY')!.source).toMatchObject({publisher:{en:"People's Bank of China"},via:{en:'National Bureau of Statistics of China'}});
+  expect(catalogById('CN_EXPORT_YOY')!.source).toMatchObject({publisher:{en:'General Administration of Customs of China'},via:{en:'National Bureau of Statistics of China'}});
+ });
+ it('derived and alias series point at an existing series of the same region; derived series carry their input source',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.derive){const from=catalogById(d.derive.from);expect({id:d.id,from:from?.id,region:from?.region}).toEqual({id:d.id,from:d.derive.from,region:d.region});expect(from!.derive).toBeUndefined();expect(d.source).toEqual(from!.source);expect(d.status).toBe(from!.status);}
+   if(d.aliasOf){const to=catalogById(d.aliasOf);expect(to?.region).toBe(d.region);expect(d.source).toEqual(to!.source);expect(d.derive).toBeUndefined();expect(d.weight).toBe(0);}
+  }
+  expect(catalogById('US_CPI_YOY')!.derive).toEqual({kind:'yoy_from_index',from:'US_CPI_INDEX'});
+  expect(catalogById('CN_CPI_YOY')!.derive).toEqual({kind:'index_minus_100',from:'CN_CPI_INDEX'});
+  expect(catalogById('US_DGS10')!.derive).toEqual({kind:'month_end',from:'US_DGS10_D'});
+  expect(catalogById('US_UST10Y')).toMatchObject({role:'asset',aliasOf:'US_DGS10',changeKind:'bp'});
+  expect(catalogById('CN_CGB10Y')).toMatchObject({role:'asset',aliasOf:'CN_CGB_10Y',changeKind:'bp'});
+ });
+ it('daily and event native ids carry weight 0; assets carry weight 0',()=>{
+  for(const d of MACRO_CATALOG){
+   if(!d.derive&&(d.nativeFrequency==='daily'||d.nativeFrequency==='event')&&d.status==='active')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+   if(!d.derive&&d.nativeFrequency==='daily')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+   if(d.role!=='indicator')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+  }
+ });
+ it('weights per spec §4.2 (US 100, CN 125 including missing/restricted rows)',()=>{
+  const w=(id:string)=>catalogById(id)!.weight;
+  expect([w('US_DFF'),w('US_DGS10'),w('US_DTWEXBGS'),w('US_CPI_YOY'),w('US_UNRATE'),w('US_PPI_FD_YOY'),w('US_ISM_PMI'),w('US_VIX')]).toEqual([25,15,10,15,10,5,15,5]);
+  expect([w('CN_CPI_YOY'),w('CN_PPI_YOY'),w('CN_PMI_MFG'),w('CN_GDP_YOY'),w('CN_M2_YOY'),w('CN_EXPORT_YOY'),w('CN_CGB_10Y'),w('CN_USDCNY_CP'),w('CN_LPR_1Y'),w('CN_MLF_1Y'),w('CN_AFRE_STOCK_YOY')]).toEqual([10,15,15,5,10,10,15,5,10,10,20]);
+  expect(weightOf('US')).toBe(100);expect(weightOf('CN')).toBe(125);
+ });
+ it('adjustment, release lags and statuses per spec §4.2 / §0.2 M15',()=>{
+  for(const id of ['US_CPI_INDEX','US_CPI_YOY','US_UNRATE','US_PPI_FD_INDEX','US_PPI_FD_YOY'])expect(catalogById(id)!.adjustment).toBe('sa');
+  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||(d.derive?.kind==='month_end'))expect({id:d.id,a:d.adjustment}).toEqual({id:d.id,a:'na'});
+  for(const id of ['CN_CPI_INDEX','CN_PPI_INDEX','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY'])expect(catalogById(id)!.adjustment).toBe('nsa');
+  const lag=(id:string)=>catalogById(id)!.releaseLagDays;
+  expect([lag('US_CPI_YOY'),lag('US_UNRATE'),lag('US_PPI_FD_YOY'),lag('CN_CPI_YOY'),lag('CN_PPI_YOY'),lag('CN_PMI_MFG'),lag('CN_GDP_YOY'),lag('CN_M2_YOY'),lag('CN_EXPORT_YOY')]).toEqual([15,7,15,12,12,1,20,15,10]);
+  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||d.nativeFrequency==='event'||d.derive?.kind==='month_end')expect({id:d.id,lag:d.releaseLagDays}).toEqual({id:d.id,lag:undefined});
+  expect(MACRO_CATALOG.filter(d=>d.status==='missing').map(d=>d.id).sort()).toEqual(['CN_AFRE_STOCK_YOY','CN_LPR_1Y','CN_MLF_1Y','US_ISM_PMI']);
+  expect(MACRO_CATALOG.filter(d=>d.status==='restricted').map(d=>d.id).sort()).toEqual(['CN_CSI300','US_DJIA','US_NASDAQCOM','US_SP500','US_VIX','US_VIX_D']);
+  expect(catalogById('CN_USDCNY_CP_D')!.unit).toBe('cny_per_100usd');
+ });
+});
+
+describe('catalog helpers',()=>{
+ it('indicatorsOf lists display indicators (no derive inputs, no event sources); regimeInputsOf keeps active weighted monthly/quarterly ones',()=>{
+  expect(indicatorsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
+  expect(indicatorsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP','CN_LPR_1Y','CN_MLF_1Y','CN_AFRE_STOCK_YOY']);
+  expect(regimeInputsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY']);
+  expect(regimeInputsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP']);
+  for(const r of ['US','CN'] as const)for(const d of regimeInputsOf(r))expect(d.nativeFrequency).not.toBe('daily');
+ });
+ it('collectableOf lists active native (own-evidence) series per adapter',()=>{
+  expect(collectableOf('fred_csv').map(d=>d.source!.seriesKey)).toEqual(['DFF','DFEDTARU','DFEDTARL','DGS10','DTWEXBGS','CPIAUCSL','UNRATE','PPIFIS','DCOILWTICO']);
+  expect(collectableOf('akshare').map(d=>d.id)).toEqual(['CN_CPI_INDEX','CN_PPI_INDEX','CN_PMI_MFG','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y_D','CN_USDCNY_CP_D']);
+  for(const d of [...collectableOf('fred_csv'),...collectableOf('akshare')]){expect(d.derive).toBeUndefined();expect(d.aliasOf).toBeUndefined();}
+ });
+ it('catalogById answers undefined for unknown ids; the catalog is deeply frozen',()=>{
+  expect(catalogById('NOPE')).toBeUndefined();
+  expect(Object.isFrozen(MACRO_CATALOG)).toBe(true);
+  expect(Object.isFrozen(catalogById('US_UNRATE')!.source)).toBe(true);
+  expect(Object.isFrozen(catalogById('US_UNRATE')!.source!.publisher)).toBe(true);
+ });
+});
+
+describe('CATALOG_VERSION',()=>{
+ it('pure-TS SHA-256 equals node:crypto',()=>{
+  for(const s of ['','abc','中文 ✓','a'.repeat(55),'a'.repeat(56),'a'.repeat(64),'b'.repeat(1000)])expect(sha256HexSync(s)).toBe(createHash('sha256').update(s,'utf8').digest('hex'));
+ });
+ it('canonicalJson sorts keys, drops undefined, keeps array order, refuses non-finite numbers',()=>{
+  expect(canonicalJson({b:1,a:[3,{d:undefined,c:'x'}],e:null})).toBe('{"a":[3,{"c":"x"}],"b":1,"e":null}');
+  expect(()=>canonicalJson({a:Number.NaN})).toThrow('canonical_json_unsupported');
+ });
+ it('is macro-catalog/ + 12 hex of the canonical catalog JSON, stable across evaluations',()=>{
+  expect(CATALOG_VERSION).toMatch(/^macro-catalog\/[0-9a-f]{12}$/);
+  expect(CATALOG_VERSION).toBe(`macro-catalog/${createHash('sha256').update(canonicalJson(MACRO_CATALOG)).digest('hex').slice(0,12)}`);
+  expect(canonicalJson(JSON.parse(JSON.stringify(MACRO_CATALOG)))).toBe(canonicalJson(MACRO_CATALOG));   // what macro_upsert_catalog stores hashes the same
+ });
+});
+
+describe('judgment contract mirror',()=>{
+ it('keeps the F4 regime tie-break order',()=>{expect(REGIMES).toEqual(['recovery','overheat','stagflation','recession']);});
+});
+```
+
+Create `src/lib/macro/decimal.test.ts`:
+
+```ts
+// src/lib/macro/decimal.test.ts
+// Exact decimal-string arithmetic (spec §0.2 M8): no float ever touches a value.
+import {describe,expect,it} from 'vitest';
+import {canonical,compare,equals,minus100,subtract,yoyPct} from './decimal';
+
+describe('canonical / equals / compare',()=>{
+ it('reuses the facts canonical form',()=>{
+  expect(canonical('1.2300')).toBe('1.23');expect(canonical('-0.0')).toBe('0');expect(canonical('1e3')).toBe('1000');expect(canonical('007.50')).toBe('7.5');
+  expect(()=>canonical('1,5')).toThrow('invalid_decimal');
+  expect(equals('1.0','1')).toBe(true);expect(equals('1.01','1.1')).toBe(false);
+ });
+ it('orders exactly, including values a double cannot tell apart',()=>{
+  expect(compare('1','1.000')).toBe(0);expect(compare('-2','1')).toBe(-1);expect(compare('0.30000000000000001','0.3')).toBe(1);
+  expect(compare('12345678901234567890.1','12345678901234567890.01')).toBe(1);
+ });
+});
+
+describe('subtract / minus100',()=>{
+ it('is exact',()=>{
+  expect(subtract('0.3','0.1')).toBe('0.2');
+  expect(subtract('3.1','1.05')).toBe('2.05');
+  expect(subtract('1','1.000')).toBe('0');
+  expect(subtract('-1.5','2.25')).toBe('-3.75');
+  expect(subtract('12345678901234567890.5','0.5')).toBe('12345678901234567890');
+  expect(subtract('0.0001','0.001')).toBe('-0.0009');
+ });
+ it('turns a 上年同月=100 index into a pp change',()=>{
+  expect(minus100('102.3')).toBe('2.3');expect(minus100('99.5')).toBe('-0.5');expect(minus100('100.0')).toBe('0');expect(minus100('100.05')).toBe('0.05');
+ });
+});
+
+describe('yoyPct = (cur/prev − 1) × 100, half-even to 4 dp, canonical',()=>{
+ it('computes ordinary changes',()=>{
+  expect(yoyPct('105','100')).toBe('5');
+  expect(yoyPct('100','105')).toBe('-4.7619');
+  expect(yoyPct('4','3')).toBe('33.3333');
+  expect(yoyPct('5','3')).toBe('66.6667');
+  expect(yoyPct('200','100')).toBe('100');
+  expect(yoyPct('50','100')).toBe('-50');
+  expect(yoyPct('101.00','100.0')).toBe('1');                                    // trailing zeros do not leak
+  expect(yoyPct('0.3','0.1')).toBe('200');                                       // a float would give 199.99999999999997
+  expect(yoyPct('-90','-100')).toBe('-10');                                      // negative base: formula, not intuition
+  expect(yoyPct('123456789012345678901234567890','61728394506172839450617283945')).toBe('100');
+ });
+ it('rounds half to even at the 4th decimal, symmetric for negatives, never "-0"',()=>{
+  expect(yoyPct('1.0000015','1')).toBe('0.0002');   // 0.00015 → odd 1 rounds up
+  expect(yoyPct('1.0000025','1')).toBe('0.0002');   // 0.00025 → even 2 stays
+  expect(yoyPct('1.00000251','1')).toBe('0.0003');  // above half
+  expect(yoyPct('1.0000005','1')).toBe('0');        // 0.00005 → even 0 stays
+  expect(yoyPct('0.9999985','1')).toBe('-0.0002');
+  expect(yoyPct('0.9999995','1')).toBe('0');
+  expect(yoyPct('0.99999949','1')).toBe('-0.0001');
+ });
+ it('refuses prev = 0 and invalid input',()=>{
+  expect(()=>yoyPct('1','0')).toThrow('decimal_division_by_zero');
+  expect(()=>yoyPct('1','0.000')).toThrow('decimal_division_by_zero');
+  expect(()=>yoyPct('abc','1')).toThrow('invalid_decimal');
+ });
+});
+```
+
+Check the half-even expectations by hand: `0.99999949` gives −0.000051, which is past the half and rounds away from zero to −0.0001. `0.9999995` gives −0.00005, an exact tie with even quotient 0, so the result is `'0'`.
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/catalog.test.ts src/lib/macro/decimal.test.ts`
+Expected: FAIL (`Cannot find module './catalog'`, `Cannot find module './decimal'`)
+
+- [ ] **Step 3: Implement**
+
+Create `src/lib/macro/types.ts`, **verbatim** from the plan's shared contract (`### src/lib/macro/types.ts`). Copy the code block exactly, including its header comment.
+
+Create `src/lib/macro/judgment-contract.ts`, **verbatim** from the plan's shared contract (`### src/lib/macro/judgment-contract.ts`).
+
+Create `src/lib/macro/decimal.ts`:
+
+```ts
+// src/lib/macro/decimal.ts
+// Exact decimal-string arithmetic for macro values (spec §0.2 M8, plan cross-task conventions).
+// Values travel as canonical decimal text (src/lib/facts/json-numbers.ts::canonicalDecimal); here
+// they become scaled BigInts, never doubles. yoyPct = (cur/prev − 1) × 100 rounded half-even to 4
+// decimals; minus100 (上年同月=100 index → pp) and subtract are exact. Results are canonical.
+import {canonicalDecimal,decimalEquals} from '../facts/json-numbers';
+
+export const canonical=canonicalDecimal;
+export const equals=decimalEquals;
+interface Scaled{n:bigint;scale:number}
+function scaled(raw:string):Scaled{
+ const c=canonicalDecimal(raw);const neg=c.startsWith('-');const body=neg?c.slice(1):c;
+ const dot=body.indexOf('.');const int=dot<0?body:body.slice(0,dot);const frac=dot<0?'':body.slice(dot+1);
+ const n=BigInt(int+frac);
+ return {n:neg?-n:n,scale:frac.length};
+}
+const pow10=(k:number)=>10n**BigInt(k);
+function align(a:Scaled,b:Scaled):[bigint,bigint,number]{const s=Math.max(a.scale,b.scale);return [a.n*pow10(s-a.scale),b.n*pow10(s-b.scale),s];}
+function fromScaled(n:bigint,scale:number):string{
+ const neg=n<0n;let digits=(neg?-n:n).toString();
+ if(scale>0){digits=digits.padStart(scale+1,'0');digits=`${digits.slice(0,-scale)}.${digits.slice(-scale)}`;}
+ return canonicalDecimal(`${neg?'-':''}${digits}`);
+}
+/** num/den rounded half-to-even (den ≠ 0). */
+function divHalfEven(num:bigint,den:bigint):bigint{
+ if(den<0n){num=-num;den=-den;}
+ const q=num/den;const r=num%den;const twice=(r<0n?-r:r)*2n;
+ if(twice<den)return q;
+ const away=num<0n?q-1n:q+1n;
+ if(twice>den)return away;
+ return q%2n===0n?q:away;
+}
+export function compare(a:string,b:string):-1|0|1{const [x,y]=align(scaled(a),scaled(b));return x<y?-1:x>y?1:0;}
+export function subtract(a:string,b:string):string{const [x,y,s]=align(scaled(a),scaled(b));return fromScaled(x-y,s);}
+export const minus100=(x:string):string=>subtract(x,'100');
+export function yoyPct(cur:string,prev:string):string{
+ const [c,p]=align(scaled(cur),scaled(prev));
+ if(p===0n)throw new Error('decimal_division_by_zero');
+ return fromScaled(divHalfEven((c-p)*100n*10000n,p),4);
+}
+```
+
+Create `src/lib/macro/catalog.ts`:
+
+```ts
+// src/lib/macro/catalog.ts
+// The macro series catalog as code (spec §4.2; §0.2 M1–M5, M14, M15). Every row is either an
+// active official source (fetch host, original publisher, relay `via`, series key, rights,
+// attribution) or explicitly missing/restricted with a bilingual reason. Native daily ids are
+// separate from their derived month-end ids; derived rows carry their input's source and status;
+// asset "views" (aliasOf) reuse another series' observations. Weights are the v1.0 judgment
+// weights (Task 10 WEIGHTS_V1 must equal them). CATALOG_VERSION = 'macro-catalog/' + first 12 hex
+// of SHA-256 over the key-sorted canonical JSON; pure TS so client components may import this file.
+import type {Adapter,Bilingual,MacroSeriesDef,Region,Rights,SeriesSource} from './types';
+
+// ---------------------------------------------------------------- publishers
+const FED:Bilingual={zh:'美国联邦储备委员会',en:'Board of Governors of the Federal Reserve System'};
+const BLS:Bilingual={zh:'美国劳工统计局',en:'U.S. Bureau of Labor Statistics'};
+const EIA:Bilingual={zh:'美国能源信息署',en:'U.S. Energy Information Administration'};
+const CBOE:Bilingual={zh:'芝加哥期权交易所',en:'Cboe Global Markets'};
+const SPDJI:Bilingual={zh:'标普道琼斯指数公司',en:'S&P Dow Jones Indices LLC'};
+const NASDAQ:Bilingual={zh:'纳斯达克',en:'Nasdaq, Inc.'};
+const NBS:Bilingual={zh:'国家统计局',en:'National Bureau of Statistics of China'};
+const PBOC:Bilingual={zh:'中国人民银行',en:"People's Bank of China"};
+const GACC:Bilingual={zh:'海关总署',en:'General Administration of Customs of China'};
+const CCDC:Bilingual={zh:'中央国债登记结算有限责任公司',en:'China Central Depository & Clearing Co., Ltd.'};
+const SAFE:Bilingual={zh:'国家外汇管理局',en:'State Administration of Foreign Exchange'};
+const CSI:Bilingual={zh:'中证指数有限公司',en:'China Securities Index Co., Ltd.'};
+const VIA_FRED:Bilingual={zh:'FRED（圣路易斯联储）',en:'FRED (Federal Reserve Bank of St. Louis)'};
+
+const fred=(code:string,publisher:Bilingual,rights:Rights='public_domain'):SeriesSource=>({
+ adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher,via:VIA_FRED,seriesKey:code,rights,
+ attribution:{zh:`来源：${publisher.zh}，经 FRED（圣路易斯联储）`,en:`Source: ${publisher.en}, retrieved from FRED, Federal Reserve Bank of St. Louis`},
+});
+/** NBS national data via AKShare macro_china_nbs_nation; publisher = original agency, via = NBS when it relays. */
+const nbs=(key:string,publisher:Bilingual=NBS):SeriesSource=>({
+ adapter:'akshare',fetchHost:'data.stats.gov.cn',publisher,...(publisher===NBS?{}:{via:NBS}),seriesKey:`macro_china_nbs_nation|${key}`,rights:'official_open',
+ attribution:publisher===NBS?{zh:'来源：国家统计局',en:'Source: National Bureau of Statistics of China'}:{zh:`来源：${publisher.zh}，经国家统计局`,en:`Source: ${publisher.en}, via National Bureau of Statistics of China`},
+});
+const akshare=(fetchHost:string,seriesKey:string,publisher:Bilingual,rights:Rights):SeriesSource=>({
+ adapter:'akshare',fetchHost,publisher,seriesKey,rights,attribution:{zh:`来源：${publisher.zh}`,en:`Source: ${publisher.en}`},
+});
+const R_THIRD_PARTY:Bilingual={zh:'第三方版权数据，再分发权利未经 owner 确认，暂不采集',en:'Third-party copyrighted data; redistribution rights not confirmed by the owner, not collected'};
+
+// ---------------------------------------------------------------- source constants (shared by native, derived and alias rows)
+const S_DFF=fred('DFF',FED),S_DGS10=fred('DGS10',FED),S_DTWEX=fred('DTWEXBGS',FED),S_CPI=fred('CPIAUCSL',BLS),S_PPI=fred('PPIFIS',BLS),
+ S_VIX=fred('VIXCLS',CBOE,'third_party'),S_WTI=fred('DCOILWTICO',EIA);
+// NBS keys verified end to end against AKShare 1.20.35 and the live NBS tree on 2026-11-06 (plan Part B "已核实的上游事实").
+// CPI is split into era leaves: the key names the current (2026-) leaf; cn-series.ts (Task 8) backfills from the sibling
+// (2021-2025) and (2016-2020) leaves. A new era leaf (≈2031) means a new key and a new CATALOG_VERSION (runbook §10).
+const S_CN_CPI=nbs('月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)');
+const S_CN_PPI=nbs('月度数据|价格指数 > 工业生产者出厂价格分类指数 > 工业生产者出厂价格指数(上年同月=100) > 工业生产者出厂价格指数(上年同月=100)');
+const S_CN_GDP=nbs('季度数据|国民经济核算 > 国内生产总值指数 > 国内生产总值指数(上年同期=100)当季值');
+const S_CGB=akshare('yield.chinabond.com.cn','bond_china_yield|中债国债收益率曲线|10年',CCDC,'official_open');
+// SAFE: only the RMBQuery.do HTML is evidence (the bucket takes no XLSX and there is no xlsx locator), so CN_USDCNY_CP_D
+// history starts at the first date in that HTML (2026-01-05 when recorded); older history in SAFE's XLSX is NOT parsed
+// and stays missing (runbook §10). Active rows carry no `reason`, so this note lives here, not in the catalog data.
+const S_USDCNY=akshare('www.safe.gov.cn','currency_boc_safe|美元',SAFE,'official_open');
+
+const CATALOG:MacroSeriesDef[]=[
+ // ---------------------------------------------------------------- US
+ {id:'US_FEDFUNDS_EFF_D',region:'US',role:'indicator',type:'policy_rate',name:{zh:'联邦基金有效利率（日）',en:'Effective federal funds rate (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DFF,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_DFF',region:'US',role:'indicator',type:'policy_rate',name:{zh:'联邦基金有效利率（月末）',en:'Effective federal funds rate (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DFF,derive:{kind:'month_end',from:'US_FEDFUNDS_EFF_D'},revisionPolicy:'immutable',weight:25,changeKind:'bp',definitionVersion:1},
+ {id:'US_FED_TARGET_UPPER_D',region:'US',role:'event_source',type:'policy_rate',name:{zh:'联邦基金目标区间上限',en:'Federal funds target range upper limit'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:fred('DFEDTARU',FED),revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_FED_TARGET_LOWER_D',region:'US',role:'event_source',type:'policy_rate',name:{zh:'联邦基金目标区间下限',en:'Federal funds target range lower limit'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:fred('DFEDTARL',FED),revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_DGS10_D',region:'US',role:'indicator',type:'bond_yield',name:{zh:'美国 10 年期国债收益率（日）',en:'U.S. 10-year Treasury yield (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DGS10,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_DGS10',region:'US',role:'indicator',type:'bond_yield',name:{zh:'美国 10 年期国债收益率（月末）',en:'U.S. 10-year Treasury yield (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DGS10,derive:{kind:'month_end',from:'US_DGS10_D'},revisionPolicy:'immutable',weight:15,changeKind:'bp',definitionVersion:1},
+ {id:'US_DTWEXBGS_D',region:'US',role:'indicator',type:'fx',name:{zh:'美元名义广义指数（日）',en:'Nominal broad U.S. dollar index (daily)'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DTWEX,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_DTWEXBGS',region:'US',role:'indicator',type:'fx',name:{zh:'美元名义广义指数（月末）',en:'Nominal broad U.S. dollar index (month end)'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DTWEX,derive:{kind:'month_end',from:'US_DTWEXBGS_D'},revisionPolicy:'immutable',weight:10,changeKind:'pct',definitionVersion:1},
+ {id:'US_CPI_INDEX',region:'US',role:'indicator',type:null,name:{zh:'美国 CPI 指数（城市全体消费者，季调）',en:'U.S. CPI for all urban consumers (index, SA)'},unit:'index_1982_84_100',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_CPI,revisionPolicy:'revisable',weight:0,changeKind:'pct',releaseLagDays:15,definitionVersion:1},
+ {id:'US_CPI_YOY',region:'US',role:'indicator',type:'inflation_yoy',name:{zh:'美国 CPI 同比',en:'U.S. CPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_CPI,derive:{kind:'yoy_from_index',from:'US_CPI_INDEX'},revisionPolicy:'revisable',weight:15,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'US_UNRATE',region:'US',role:'indicator',type:'labor_rate',name:{zh:'美国失业率',en:'U.S. unemployment rate'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:fred('UNRATE',BLS),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:7,definitionVersion:1},
+ {id:'US_PPI_FD_INDEX',region:'US',role:'indicator',type:null,name:{zh:'美国 PPI 最终需求指数（季调）',en:'U.S. PPI final demand (index, SA)'},unit:'index_2009_11_100',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_PPI,revisionPolicy:'revisable',weight:0,changeKind:'pct',releaseLagDays:15,definitionVersion:1},
+ {id:'US_PPI_FD_YOY',region:'US',role:'indicator',type:'inflation_yoy',name:{zh:'美国 PPI 最终需求同比',en:'U.S. PPI final demand, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_PPI,derive:{kind:'yoy_from_index',from:'US_PPI_FD_INDEX'},revisionPolicy:'revisable',weight:5,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'US_ISM_PMI',region:'US',role:'indicator',type:'pmi',name:{zh:'ISM 制造业 PMI',en:'ISM manufacturing PMI'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'missing',reason:{zh:'FRED 已于 2016 年移除 ISM 数据；没有可采集的原始来源与再分发权利',en:'FRED removed ISM data in 2016; no collectable original source or redistribution rights'},source:null,revisionPolicy:'revisable',weight:15,changeKind:'points',definitionVersion:1},
+ {id:'US_VIX_D',region:'US',role:'indicator',type:'risk_index',name:{zh:'VIX 波动率指数（日）',en:'Cboe Volatility Index (daily)'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:S_VIX,revisionPolicy:'immutable',weight:0,changeKind:'points',definitionVersion:1},
+ {id:'US_VIX',region:'US',role:'indicator',type:'risk_index',name:{zh:'VIX 波动率指数（月末）',en:'Cboe Volatility Index (month end)'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:S_VIX,derive:{kind:'month_end',from:'US_VIX_D'},revisionPolicy:'immutable',weight:5,changeKind:'points',definitionVersion:1},
+ {id:'US_WTI_D',region:'US',role:'asset',type:'asset_price',name:{zh:'WTI 原油现货价格（日）',en:'WTI crude oil spot price (daily)'},unit:'usd_per_bbl',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_WTI,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_WTI',region:'US',role:'asset',type:'asset_price',name:{zh:'WTI 原油现货价格（月末）',en:'WTI crude oil spot price (month end)'},unit:'usd_per_bbl',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_WTI,derive:{kind:'month_end',from:'US_WTI_D'},revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_UST10Y',region:'US',role:'asset',type:'asset_price',name:{zh:'美国 10 年期国债（资产视角）',en:'U.S. 10-year Treasury (asset view)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DGS10,aliasOf:'US_DGS10',revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_SP500',region:'US',role:'asset',type:'asset_price',name:{zh:'标普 500 指数',en:'S&P 500'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('SP500',SPDJI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_NASDAQCOM',region:'US',role:'asset',type:'asset_price',name:{zh:'纳斯达克综合指数',en:'Nasdaq Composite'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('NASDAQCOM',NASDAQ,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_DJIA',region:'US',role:'asset',type:'asset_price',name:{zh:'道琼斯工业平均指数',en:'Dow Jones Industrial Average'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('DJIA',SPDJI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ // ---------------------------------------------------------------- CN
+ {id:'CN_CPI_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'居民消费价格指数（上年同月=100）',en:'CPI (same month last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_CPI,revisionPolicy:'immutable',weight:0,changeKind:'points',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_CPI_YOY',region:'CN',role:'indicator',type:'inflation_yoy',name:{zh:'中国 CPI 同比',en:'China CPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_CPI,derive:{kind:'index_minus_100',from:'CN_CPI_INDEX'},revisionPolicy:'immutable',weight:10,changeKind:'pp',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_PPI_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'工业生产者出厂价格指数（上年同月=100）',en:'PPI (same month last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_PPI,revisionPolicy:'immutable',weight:0,changeKind:'points',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_PPI_YOY',region:'CN',role:'indicator',type:'inflation_yoy',name:{zh:'中国 PPI 同比',en:'China PPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_PPI,derive:{kind:'index_minus_100',from:'CN_PPI_INDEX'},revisionPolicy:'immutable',weight:15,changeKind:'pp',releaseLagDays:12,definitionVersion:1},
+ // NBS publishes PMI already seasonally adjusted (NBS PMI explanatory notes), hence 'sa'.
+ {id:'CN_PMI_MFG',region:'CN',role:'indicator',type:'pmi',name:{zh:'制造业采购经理指数',en:'Manufacturing PMI'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:nbs('月度数据|采购经理指数 > 制造业采购经理指数 > 制造业采购经理指数(%)'),revisionPolicy:'immutable',weight:15,changeKind:'points',releaseLagDays:1,definitionVersion:1},
+ {id:'CN_GDP_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'国内生产总值指数（当季，上年同期=100）',en:'GDP index (quarter, same quarter last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'quarterly',period:'quarter',adjustment:'nsa',status:'active',source:S_CN_GDP,revisionPolicy:'revisable',weight:0,changeKind:'points',releaseLagDays:20,definitionVersion:1},
+ {id:'CN_GDP_YOY',region:'CN',role:'indicator',type:'growth_yoy',name:{zh:'中国 GDP 当季同比',en:'China GDP, quarter year over year'},unit:'pct',nativeFrequency:'quarterly',period:'quarter',adjustment:'nsa',status:'active',source:S_CN_GDP,derive:{kind:'index_minus_100',from:'CN_GDP_INDEX'},revisionPolicy:'revisable',weight:5,changeKind:'pp',releaseLagDays:20,definitionVersion:1},
+ {id:'CN_M2_YOY',region:'CN',role:'indicator',type:'liquidity_yoy',name:{zh:'M2 同比增长',en:'M2, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:nbs('月度数据|金融 > 货币供应量 > 货币和准货币(M2)供应量_同比增长(%)',PBOC),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'CN_EXPORT_YOY',region:'CN',role:'indicator',type:'growth_yoy',name:{zh:'出口额同比（美元计）',en:'Exports, year over year (USD)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:nbs('月度数据|对外经济 > 货物进出口总额 > 出口总值同比增长(%)',GACC),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:10,definitionVersion:1},
+ {id:'CN_CGB_10Y_D',region:'CN',role:'indicator',type:'bond_yield',name:{zh:'中债 10 年期国债收益率（日）',en:'ChinaBond 10-year government bond yield (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_CGB,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'CN_CGB_10Y',region:'CN',role:'indicator',type:'bond_yield',name:{zh:'中债 10 年期国债收益率（月末）',en:'ChinaBond 10-year government bond yield (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_CGB,derive:{kind:'month_end',from:'CN_CGB_10Y_D'},revisionPolicy:'immutable',weight:15,changeKind:'bp',definitionVersion:1},
+ {id:'CN_USDCNY_CP_D',region:'CN',role:'indicator',type:'fx',name:{zh:'人民币汇率中间价 美元（日）',en:'RMB central parity, USD (daily)'},unit:'cny_per_100usd',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_USDCNY,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'CN_USDCNY_CP',region:'CN',role:'indicator',type:'fx',name:{zh:'人民币汇率中间价 美元（月末）',en:'RMB central parity, USD (month end)'},unit:'cny_per_100usd',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_USDCNY,derive:{kind:'month_end',from:'CN_USDCNY_CP_D'},revisionPolicy:'immutable',weight:5,changeKind:'pct',definitionVersion:1},
+ {id:'CN_LPR_1Y',region:'CN',role:'indicator',type:'policy_rate',name:{zh:'1 年期贷款市场报价利率',en:'1-year loan prime rate'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'missing',reason:{zh:'AKShare 仅有东方财富转载，无已核实的官方接口（全国银行间同业拆借中心）',en:'AKShare only offers a third-party relay; no verified official interface (CFETS)'},source:null,revisionPolicy:'immutable',weight:10,changeKind:'bp',definitionVersion:1},
+ {id:'CN_MLF_1Y',region:'CN',role:'indicator',type:'policy_rate',name:{zh:'1 年期中期借贷便利利率',en:'1-year MLF rate'},unit:'pct',nativeFrequency:'event',period:'day',adjustment:'na',status:'missing',reason:{zh:'无已核实的官方接口（中国人民银行）',en:"No verified official interface (People's Bank of China)"},source:null,revisionPolicy:'immutable',weight:10,changeKind:'bp',definitionVersion:1},
+ {id:'CN_AFRE_STOCK_YOY',region:'CN',role:'indicator',type:'liquidity_yoy',name:{zh:'社会融资规模存量同比',en:'Aggregate financing stock, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'missing',reason:{zh:'AKShare 只有商务部转载的增量口径，口径不同，不得替代存量同比',en:'AKShare only has a relayed flow measure; a different definition cannot stand in for the stock growth rate'},source:null,revisionPolicy:'revisable',weight:20,changeKind:'pp',definitionVersion:1},
+ {id:'CN_CGB10Y',region:'CN',role:'asset',type:'asset_price',name:{zh:'中国 10 年期国债（资产视角）',en:'China 10-year government bond (asset view)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_CGB,aliasOf:'CN_CGB_10Y',revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'CN_CSI300',region:'CN',role:'asset',type:'asset_price',name:{zh:'沪深 300 指数',en:'CSI 300 Index'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:{zh:'中证指数公司数据，再分发权利未确认，暂不采集',en:'China Securities Index data; redistribution rights not confirmed, not collected'},source:akshare('www.csindex.com.cn','stock_zh_index_hist_csindex|000300',CSI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+];
+
+function deepFreeze<T>(v:T):T{
+ if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const k of Object.keys(v as object))deepFreeze((v as Record<string,unknown>)[k]);}
+ return v;
+}
+// Shared source constants appear in several rows; freezing them once is fine (they are never mutated).
+export const MACRO_CATALOG:readonly MacroSeriesDef[]=deepFreeze(CATALOG);
+
+// ---------------------------------------------------------------- canonical JSON + SHA-256 (pure TS)
+/** JSON with object keys sorted (UTF-16 code unit order), undefined members dropped, arrays in order. */
+export function canonicalJson(v:unknown):string{
+ if(v===null||typeof v==='boolean'||typeof v==='string')return JSON.stringify(v);
+ if(typeof v==='number'){if(!Number.isFinite(v))throw new Error('canonical_json_unsupported:number');return JSON.stringify(v);}
+ if(Array.isArray(v))return `[${v.map(canonicalJson).join(',')}]`;
+ if(typeof v==='object'){const o=v as Record<string,unknown>;return `{${Object.keys(o).filter(k=>o[k]!==undefined).sort().map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;}
+ throw new Error(`canonical_json_unsupported:${typeof v}`);
+}
+const K=new Uint32Array([
+ 0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+ 0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+ 0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+ 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+]);
+const rotr=(x:number,n:number)=>(x>>>n)|(x<<(32-n));
+/** SHA-256 hex of the UTF-8 bytes of text (FIPS 180-4). Synchronous and dependency-free. */
+export function sha256HexSync(text:string):string{
+ const bytes=new TextEncoder().encode(text);const len=bytes.length;
+ const padded=new Uint8Array((((len+9)+63)>>6)<<6);padded.set(bytes);padded[len]=0x80;
+ const dv=new DataView(padded.buffer);
+ dv.setUint32(padded.length-8,Math.floor(len/0x20000000));dv.setUint32(padded.length-4,(len*8)>>>0);
+ const H=new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+ const W=new Uint32Array(64);
+ for(let off=0;off<padded.length;off+=64){
+  for(let i=0;i<16;i++)W[i]=dv.getUint32(off+i*4);
+  for(let i=16;i<64;i++){const a=W[i-15],b=W[i-2];W[i]=(W[i-16]+(rotr(a,7)^rotr(a,18)^(a>>>3))+W[i-7]+(rotr(b,17)^rotr(b,19)^(b>>>10)))>>>0;}
+  let a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+  for(let i=0;i<64;i++){
+   const t1=(h+(rotr(e,6)^rotr(e,11)^rotr(e,25))+((e&f)^(~e&g))+K[i]+W[i])>>>0;
+   const t2=((rotr(a,2)^rotr(a,13)^rotr(a,22))+((a&b)^(a&c)^(b&c)))>>>0;
+   h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;
+  }
+  H[0]=(H[0]+a)>>>0;H[1]=(H[1]+b)>>>0;H[2]=(H[2]+c)>>>0;H[3]=(H[3]+d)>>>0;H[4]=(H[4]+e)>>>0;H[5]=(H[5]+f)>>>0;H[6]=(H[6]+g)>>>0;H[7]=(H[7]+h)>>>0;
+ }
+ return Array.from(H,x=>x.toString(16).padStart(8,'0')).join('');
+}
+export const CATALOG_VERSION=`macro-catalog/${sha256HexSync(canonicalJson(MACRO_CATALOG)).slice(0,12)}`;
+
+// ---------------------------------------------------------------- helpers
+const BY_ID=new Map(MACRO_CATALOG.map(d=>[d.id,d]));
+const DERIVE_INPUTS=new Set(MACRO_CATALOG.flatMap(d=>d.derive?[d.derive.from]:[]));
+export const catalogById=(id:string):MacroSeriesDef|undefined=>BY_ID.get(id);
+/** Display indicators of a region, catalog order: role indicator, not merely the input of a derived series (missing/restricted included). */
+export const indicatorsOf=(region:Region):MacroSeriesDef[]=>MACRO_CATALOG.filter(d=>d.region===region&&d.role==='indicator'&&!DERIVE_INPUTS.has(d.id));
+/** Judgment inputs (§0.2 M14/M15): active, weighted, monthly or quarterly (derived month-end included; daily natives never). */
+export const regimeInputsOf=(region:Region):MacroSeriesDef[]=>indicatorsOf(region).filter(d=>d.status==='active'&&d.weight>0&&d.nativeFrequency!=='daily'&&d.nativeFrequency!=='event');
+/** Series that own evidence for one adapter: active, not derived, not an alias. */
+export const collectableOf=(adapter:Adapter):MacroSeriesDef[]=>MACRO_CATALOG.filter(d=>d.status==='active'&&!d.derive&&!d.aliasOf&&d.source?.adapter===adapter);
+```
+
+Implementer check: if `tsc` rejects a literal `type:null` in `CATALOG` (`type:SeriesType|null` permits it), nothing should change in `types.ts`. Report it instead.
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/catalog.test.ts src/lib/macro/decimal.test.ts && npm run typecheck && npm run lint`
+Expected: PASS. If the `indicatorsOf`/`collectableOf` order assertions fail, the catalog order is wrong. Fix the catalog, not the test.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/types.ts src/lib/macro/judgment-contract.ts src/lib/macro/catalog.ts src/lib/macro/decimal.ts src/lib/macro/catalog.test.ts src/lib/macro/decimal.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): shared types, F4 contract mirror, code catalog with content version, exact decimal ops
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+---
+### Task 3: MacroDb (Supabase + memory + shared contract) and EvidenceStore
+
+**Files:**
+- Create: `src/lib/macro/db.ts`
+- Create: `src/lib/macro/memory-db.ts`
+- Create: `src/lib/macro/db-contract.ts` (not a test file: it registers `describe`/`it` only when called)
+- Create: `src/lib/macro/evidence.ts`
+- Test: `src/lib/macro/db.test.ts`, `src/lib/macro/evidence.test.ts`
+
+Semantics source: the Task 1 SQL functions. `memoryMacroDb` must return the **same counts, conflicts, error codes and messages** for the same inputs. Error messages are mapped as follows:
+- An SQL exception whose message is a contract code (`stale_publisher`, `invalid_manifest`, `quota_exceeded`, `not_found`, `already_resolved`) becomes `MacroDbError(code)`.
+- Every other SQL exception becomes `MacroDbError('rpc_failed', <message>)`. Examples: `invalid_value_text`, `invalid_row`, `invalid_series`, `invalid_available_at`, `invalid_retrieval`, `evidence_mismatch`, `catalog_version_conflict`, `chunk_total_mismatch`, `invalid_chunk`, `invalid_decision`, `invalid_item`, and constraint-violation texts naming the constraint, such as `macro_retrievals_host`.
+- Memory throws exactly the same `MacroDbError`s. For constraint violations, its message contains the constraint name.
+
+Read paths go through anon, so they are ok-only. `latestObservations` returns rows in **unspecified order**: callers index them by `series_id`. `seriesHistory`'s `maxRows` counts the raw rows fetched, older versions included. More raw rows than that ⇒ `truncated`. `snapshotsSince` clamps `limit` to 1..1000. `previousSnapshot(region, beforeCreatedAt)` (newest non-failed snapshot strictly before, used by Task 13's "changes"), `retrievalsOf(sha256)` and `retrievalsByIds(ids)` (evidence drawer and series route) are plain anon selects on tables anon can already read: no migration change. The memory clock is strictly increasing on the real clock, so two snapshots written in the same millisecond still order.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/lib/macro/db-contract.ts`:
+
+```ts
+// src/lib/macro/db-contract.ts
+// Shared MacroDb contract (plan "写入规则 / 发布规则 / 隔离裁决 / ingest 分块"; spec §4.3, §0.2 M10,
+// M16, M24, N2). The same scenarios run against memoryMacroDb in db.test.ts; the SQL functions are
+// pinned by the same branches in macro.integration.test.ts, so the in-memory rules the unit tests
+// rely on are the SQL rules. Not a test file: it registers describe/it only when called. Every
+// case uses its own series ids; publish state is shared, so cases read it right before publishing.
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
+import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {MacroDbError} from './db';
+import type {MacroDb} from './db';
+import type {MacroSeriesDef,ObservationWrite,PublishInput,Region} from './types';
+
+export interface MacroContractHarness{
+ db:MacroDb;
+ batch():Promise<string>;
+ /** Inserts an open dq_quarantine item (table_name macro_observations). */
+ addQuarantine(i:{dataset:string;naturalKey:string;batchId:string;reasonCode:string}):Promise<string>;
+ quarantineStatus(id:string):Promise<string|null>;
+ /** A user id the resolver may act as (an auth.users row for SQL). */
+ resolver():Promise<string>;
+ close?():Promise<void>;
+}
+export const T1='2026-11-01T05:30:00.000Z',T2='2026-11-02T05:30:00.000Z',T3='2026-11-03T05:30:00.000Z';
+export const sid=(p='T')=>`${p}_${randomBytes(5).toString('hex').toUpperCase()}`;
+export function testDef(id:string,o:Partial<MacroSeriesDef>={}):MacroSeriesDef{
+ return {id,region:'US',role:'indicator',type:'labor_rate',name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',
+  source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED',en:'FRED'},seriesKey:id,rights:'public_domain',attribution:{zh:'来源：BLS，经 FRED',en:'Source: BLS via FRED'}},
+  revisionPolicy:'revisable',weight:0,changeKind:'pp',definitionVersion:1,...o};
+}
+export const nativeRow=(series:string,period:string,value:string,retrieval:string,at:string,revisable=true):ObservationWrite=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable,retrieval_id:retrieval,locator:{kind:'csv_row',line:2,column:1}});
+export const derivedRow=(series:string,period:string,value:string,from:string[],at:string):ObservationWrite=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable:true,derived_from:from,transform:'month_end@1'});
+/** 'code:message' of a MacroDbError rejection, 'resolved' when it did not reject. */
+export const outcome=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof MacroDbError?`${e.code}:${e.message}`:`not_macro_db_error:${String(e)}`);
+const zero={inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]};
+
+export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarness>):void{
+ describe(label,()=>{
+  let h:MacroContractHarness;let db:MacroDb;
+  beforeAll(async()=>{h=await setup();db=h.db;},60000);
+  afterAll(async()=>{await h?.close?.();},30000);
+  const catalog=async(defs:MacroSeriesDef[])=>{const v=`macro-catalog/${randomBytes(6).toString('hex')}`;await db.upsertCatalog(defs,v,'macro-rules/1');return v;};
+  const retrieval=async(b:string,at:string,text=`body-${randomUUID()}`)=>{
+   const bytes=new TextEncoder().encode(text);const sha=createHash('sha256').update(bytes).digest('hex');
+   return db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:bytes.byteLength},
+    {fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:at,batch_id:b,tool_versions:{node:'22'}});
+  };
+  /** A fresh series with one ok observation 2026-09-30 = 4.1 available at T2. */
+  const seeded=async(o:Partial<MacroSeriesDef>={})=>{
+   const s=sid();const v=await catalog([testDef(s,o)]);const b=await h.batch();const r=await retrieval(b,T2);
+   expect((await db.writeObservations(b,'test-code',[nativeRow(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
+   const [row]=await db.versionsOf(s,'2026-09-30');
+   return {s,v,b,r,id:row.observation_id};
+  };
+  const input=(region:Region,st:{revision:number;inputRevision:number},catalogVersion:string,ids:string[]):PublishInput=>({region,expectedRevision:st.revision,expectedInputRevision:st.inputRevision,asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion,observationIds:ids,catalogCounts:{verified:1,missing:0,restricted:0},regime:null,contributions:[],rulesVersion:'macro-rules/1',uncoveredWeight:0});
+
+  it('catalog: idempotent per version, a version never names two catalogs, writes need an active non-alias series',async()=>{
+   const s=sid();const v=await catalog([testDef(s)]);
+   await expect(db.upsertCatalog([testDef(s)],v,'macro-rules/1')).resolves.toBeUndefined();
+   expect(await outcome(db.upsertCatalog([testDef(s,{weight:5})],v,'macro-rules/1'))).toBe('rpc_failed:catalog_version_conflict');
+   expect(await outcome(db.upsertCatalog([testDef(s)],'v1','macro-rules/1'))).toBe('rpc_failed:invalid_catalog_version');
+   const m=sid('M');const a=sid('A');
+   await catalog([testDef(m,{status:'missing',source:null,reason:{zh:'无',en:'none'}}),testDef(a,{role:'asset',aliasOf:s})]);
+   const b=await h.batch();const r=await retrieval(b,T1);
+   expect(await outcome(db.writeObservations(b,'c',[nativeRow(m,'2026-09-30','1',r,T1)]))).toBe('rpc_failed:invalid_series');
+   expect(await outcome(db.writeObservations(b,'c',[nativeRow(a,'2026-09-30','1',r,T1)]))).toBe('rpc_failed:invalid_series');
+   expect(await outcome(db.writeObservations(b,'c',[nativeRow(sid('NOPE'),'2026-09-30','1',r,T1)]))).toBe('rpc_failed:invalid_series');
+  });
+
+  it('evidence: one object per sha256, a retrieval per fetch, provenance checks',async()=>{
+   const b=await h.batch();const text='observation_date,UNRATE\n2026-09-01,4.1\n';
+   const r1=await retrieval(b,T1,text);const r2=await retrieval(b,T2,text);
+   expect(r1).not.toBe(r2);
+   const sha=createHash('sha256').update(text).digest('hex');
+   expect(await db.evidenceObject(sha)).toMatchObject({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:text.length});
+   expect(await db.retrieval(r2)).toEqual({retrieval_id:r2,sha256:sha,fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:T2,batch_id:b,tool_versions:{node:'22'}});
+   expect(await db.evidenceObject('0'.repeat(64))).toBeNull();
+   expect(await db.retrieval(randomUUID())).toBeNull();
+   expect((await db.retrievalsOf(sha)).map(x=>x.retrieval_id)).toEqual([r1,r2]);                 // fetched_at ascending
+   expect(await db.retrievalsOf('0'.repeat(64))).toEqual([]);
+   expect((await db.retrievalsByIds([r2,randomUUID(),r1,r2])).map(x=>[x.retrieval_id,x.sha256])).toEqual([[r2,sha],[r1,sha]]);
+   const obj={sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv' as const,content_type:'text/csv',byte_length:999};
+   const rec={fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:T1,batch_id:b,tool_versions:{}};
+   expect(await outcome(db.putRetrieval(obj,rec))).toBe('rpc_failed:evidence_mismatch');
+   const other=createHash('sha256').update('other').digest('hex');
+   const ok={...obj,sha256:other,object_path:`fred_csv/${other}.csv`,byte_length:5};
+   expect(await outcome(db.putRetrieval(ok,{...rec,fetch_url:'https://evil.example.com/x'}))).toMatch(/^rpc_failed:.*macro_retrievals_host/);
+   expect(await outcome(db.putRetrieval(ok,{...rec,fetched_at:'2026-11-01T05:30:00.000123Z'}))).toBe('rpc_failed:invalid_retrieval');
+   expect(await outcome(db.putRetrieval({...ok,object_path:`akshare/${other}.csv`},rec))).toMatch(/^rpc_failed:.*macro_evidence_path/);
+  });
+
+  it('write: insert, duplicate, versioned; input_revision bumps only for touched regions',async()=>{
+   const s=sid();await catalog([testDef(s)]);const b=await h.batch();
+   const us0=await db.publishState('US');const cn0=await db.publishState('CN');
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.1',await retrieval(b,T1),T1)])).toEqual({...zero,inserted:1});
+   const [v1]=await db.versionsOf(s,'2026-08-31');
+   expect(v1).toMatchObject({series_id:s,period_end:'2026-08-31',value_text:'4.1',version:1,status:'ok',available_at:T1,availability_basis:'first_seen',derived_from:null,transform:null,code_version:'c',batch_id:b,locator:{kind:'csv_row',line:2,column:1}});
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
+   expect((await db.publishState('CN')).inputRevision).toBe(cn0.inputRevision);
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.1',await retrieval(b,T2),T2)])).toEqual({...zero,duplicates:1});
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.2',await retrieval(b,T3),T3)])).toEqual({...zero,versioned:1});
+   expect((await db.versionsOf(s,'2026-08-31')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[2,'4.2']]);
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+2);
+   expect(await db.writeObservations(b,'c',[])).toEqual(zero);
+   const rh=await retrieval(b,T3);                                                                // html_cell locator (Task 9 HTML tables)
+   expect((await db.writeObservations(b,'c',[{...nativeRow(s,'2026-07-31','2.04',rh,T3),locator:{kind:'html_cell',table:1,row:3,cell:13}}])).inserted).toBe(1);
+   expect((await db.versionsOf(s,'2026-07-31'))[0].locator).toEqual({kind:'html_cell',table:1,row:3,cell:13});
+   expect(await outcome(db.writeObservations(b,'c',[{...nativeRow(s,'2026-06-30','1',rh,T3),locator:{kind:'xlsx_cell'} as never}]))).toBe('rpc_failed:invalid_row');
+  });
+
+  it('write: unexpected_revision quarantines once per value; conflicting_rows writes nothing',async()=>{
+   const {s,b}=await seeded({revisionPolicy:'immutable'});
+   const us0=await db.publishState('US');
+   const c1=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
+   expect(c1).toEqual({...zero,quarantined:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'unexpected_revision',value_text:'4.5',current_value_text:'4.1'}]});
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
+   const c2=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
+   expect(c2).toEqual(c1);
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);   // same quarantined value: no new row
+   expect((await db.versionsOf(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);   // quarantined rows are never read
+   expect((await db.latestObservations([s]))[0].value_text).toBe('4.1');
+   const r=await retrieval(b,T3);
+   const c3=await db.writeObservations(b,'c',[nativeRow(s,'2026-10-31','5',r,T3),nativeRow(s,'2026-10-31','5.1',r,T3),nativeRow(s,'2026-10-31','5',r,T3)]);
+   expect(c3).toEqual({...zero,quarantined:1,conflicts:[
+    {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5',current_value_text:null},
+    {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5.1',current_value_text:null}]});
+   expect(await db.versionsOf(s,'2026-10-31')).toEqual([]);
+   expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
+  });
+
+  it('write: stale_delivery, missing_evidence, missing_input, derived rows; an invalid row refuses the whole call',async()=>{
+   const {s,b,id}=await seeded();
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','3.9',await retrieval(b,T1),T1)])).toEqual({...zero,quarantined:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'stale_delivery',value_text:'3.9',current_value_text:'4.1'}]});
+   expect((await db.latestObservations([s]))[0].value_text).toBe('4.1');
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-06-30','1',randomUUID(),T1)])).toEqual({...zero,conflicts:[{series_id:s,period_end:'2026-06-30',reason:'missing_evidence',value_text:'1',current_value_text:null}]});
+   const d=sid('D');await catalog([testDef(d,{derive:{kind:'month_end',from:s}})]);
+   expect(await db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[randomUUID()],T2)])).toEqual({...zero,conflicts:[{series_id:d,period_end:'2026-09-30',reason:'missing_input',value_text:'4.1',current_value_text:null}]});
+   expect(await outcome(db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[id],T3)]))).toBe('rpc_failed:invalid_available_at');
+   expect(await db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[id],T2)])).toEqual({...zero,inserted:1});
+   expect((await db.versionsOf(d,'2026-09-30'))[0]).toMatchObject({value_text:'4.1',retrieval_id:null,locator:null,derived_from:[id],transform:'month_end@1',available_at:T2});
+   const r=await retrieval(b,T3);
+   const good=nativeRow(s,'2026-05-31','1',r,T3);
+   expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(s,'2026-04-30','1',r,T2)]))).toBe('rpc_failed:invalid_available_at');
+   expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(s,'2026-04-30','1.50',r,T3)]))).toBe('rpc_failed:invalid_value_text');
+   expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(s,'2026-04-30','-0',r,T3)]))).toBe('rpc_failed:invalid_value_text');
+   expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(d,'2026-04-30','1',r,T3)]))).toBe('rpc_failed:invalid_row');
+   expect(await outcome(db.writeObservations(b,'c',[good,{...derivedRow(d,'2026-04-30','1',[id],T2),transform:'yoy_from_index@1'}]))).toBe('rpc_failed:invalid_row');
+   expect(await db.versionsOf(s,'2026-05-31')).toEqual([]);                                     // all-or-nothing
+  });
+
+  it('reads: latest (asOf, periodEndLte), history (range, asOf, highest version, truncated), versionsOf, observationsByIds — ok rows only',async()=>{
+   const s=sid();const s2=sid();await catalog([testDef(s),testDef(s2,{revisionPolicy:'immutable'})]);const b=await h.batch();
+   const r1=await retrieval(b,T1);
+   await db.writeObservations(b,'c',['2026-05-31','2026-06-30','2026-07-31','2026-08-31','2026-09-30'].map((p,i)=>nativeRow(s,p,String(i+1),r1,T1)));
+   await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','5.5',await retrieval(b,T3),T3)]);
+   await db.writeObservations(b,'c',[nativeRow(s2,'2026-09-30','9',r1,T1)]);
+   await db.writeObservations(b,'c',[nativeRow(s2,'2026-09-30','8',await retrieval(b,T3),T3,false)]);   // quarantined
+   const latest=await db.latestObservations([s,s2]);
+   expect(latest.map(x=>[x.series_id,x.period_end,x.value_text,x.version]).sort()).toEqual([[s,'2026-09-30','5.5',2],[s2,'2026-09-30','9',1]].sort());
+   expect((await db.latestObservations([s],{asOf:T2}))[0]).toMatchObject({period_end:'2026-09-30',value_text:'5',version:1});
+   expect((await db.latestObservations([s],{periodEndLte:'2026-08-31'}))[0]).toMatchObject({period_end:'2026-08-31',value_text:'4'});
+   expect(await db.latestObservations([s],{asOf:'2026-01-01T00:00:00.000Z'})).toEqual([]);
+   expect(await db.latestObservations([])).toEqual([]);
+   expect((await db.seriesHistory(s,{maxRows:100})).map(x=>[x.period_end,x.value_text])).toEqual([['2026-05-31','1'],['2026-06-30','2'],['2026-07-31','3'],['2026-08-31','4'],['2026-09-30','5.5']]);
+   expect((await db.seriesHistory(s,{maxRows:100,asOf:T2})).map(x=>x.value_text)).toEqual(['1','2','3','4','5']);
+   expect((await db.seriesHistory(s,{maxRows:100,from:'2026-06-30',to:'2026-08-31'})).map(x=>x.period_end)).toEqual(['2026-06-30','2026-07-31','2026-08-31']);
+   expect(await outcome(db.seriesHistory(s,{maxRows:5}))).toMatch(/^truncated:/);              // 6 raw rows (two versions of 2026-09-30)
+   expect((await db.seriesHistory(s,{maxRows:6})).length).toBe(5);
+   expect((await db.versionsOf(s2,'2026-09-30')).map(x=>x.value_text)).toEqual(['9']);
+   const ids=(await db.versionsOf(s,'2026-09-30')).map(x=>x.observation_id);
+   const got=await db.observationsByIds([ids[1],randomUUID(),ids[0],ids[1]]);
+   expect(got.map(x=>x.observation_id)).toEqual([ids[1],ids[0]]);                              // input order, unknown dropped, deduplicated
+  });
+
+  it('publish: manifest validation, supersede, stale_publisher on revision and input_revision, failed snapshots, since-paging, regimeOf',async()=>{
+   const {s,v,b,id}=await seeded();
+   const cn=sid('C');await catalog([testDef(cn,{region:'CN'})]);
+   await db.writeObservations(b,'c',[nativeRow(cn,'2026-09-30','1',await retrieval(b,T2),T2)]);
+   const cnId=(await db.versionsOf(cn,'2026-09-30'))[0].observation_id;
+   let st=await db.publishState('US');
+   for(const bad of [[cnId],[randomUUID()],[id,id]])expect(await outcome(db.publishSnapshot(input('US',st,v,bad)))).toBe('invalid_manifest:invalid_manifest');
+   expect(await outcome(db.publishSnapshot(input('US',st,'macro-catalog/000000000000',[id])))).toBe('invalid_manifest:invalid_manifest');
+   expect(await outcome(db.publishSnapshot({...input('US',st,v,[id]),catalogCounts:{verified:-1,missing:0,restricted:0}}))).toBe('invalid_manifest:invalid_manifest');
+   const p1=await db.publishSnapshot(input('US',st,v,[id]));
+   expect(p1.revision).toBe(st.revision+1);
+   const s1=(await db.snapshot(p1.snapshot_id))!;
+   expect(await db.publishState('US')).toEqual({revision:st.revision+1,inputRevision:st.inputRevision});
+   expect(await db.snapshot(p1.snapshot_id)).toMatchObject({snapshot_id:p1.snapshot_id,region:'US',as_of:'2026-11-06',revision:p1.revision,methodology_version:'macro-method/1.0',catalog_version:v,observation_ids:[id],catalog_counts:{verified:1,missing:0,restricted:0},status:'active',failure_reason:null});
+   expect(await db.regimeOf(p1.snapshot_id)).toEqual({snapshot_id:p1.snapshot_id,region:'US',regime:null,contributions:[],rules_version:'macro-rules/1',uncovered_weight:0});
+   expect(await outcome(db.publishSnapshot(input('US',st,v,[id])))).toBe('stale_publisher:stale_publisher');
+   st=await db.publishState('US');
+   await db.writeObservations(b,'c',[nativeRow(s,'2026-10-31','4.4',await retrieval(b,T3),T3)]);
+   expect(await outcome(db.publishSnapshot(input('US',st,v,[id])))).toBe('stale_publisher:stale_publisher');
+   st=await db.publishState('US');
+   const p2=await db.publishSnapshot(input('US',st,v,[id]));
+   expect((await db.activeSnapshot('US'))?.snapshot_id).toBe(p2.snapshot_id);
+   expect((await db.snapshot(p1.snapshot_id))?.status).toBe('superseded');
+   const s2=(await db.snapshot(p2.snapshot_id))!;
+   expect((await db.previousSnapshot('US',s2.created_at))?.snapshot_id).toBe(p1.snapshot_id);   // superseded counts as previous
+   expect((await db.previousSnapshot('US',s1.created_at))?.snapshot_id).not.toBe(p1.snapshot_id);   // strictly before
+   expect(await db.previousSnapshot('CN','1970-01-01T00:00:00.000Z')).toBeNull();
+   const failed=await db.recordFailedSnapshot({region:'US',asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion:v,reason:'evidence_upload_failed'});
+   expect(await db.snapshot(failed)).toMatchObject({status:'failed',failure_reason:'evidence_upload_failed',observation_ids:[],revision:p2.revision});
+   expect((await db.activeSnapshot('US'))?.snapshot_id).toBe(p2.snapshot_id);
+   expect(await db.publishState('US')).toEqual({revision:p2.revision,inputRevision:st.inputRevision});
+   expect((await db.previousSnapshot('US','2999-01-01T00:00:00.000Z'))?.snapshot_id).toBe(p2.snapshot_id);   // failed snapshots are never "previous"
+   expect(await db.snapshot(randomUUID())).toBeNull();
+   expect(await db.regimeOf(randomUUID())).toBeNull();
+   const all=await db.snapshotsSince(null,1000);
+   expect(all.map(x=>x.snapshot_id)).toEqual(expect.arrayContaining([p1.snapshot_id,p2.snapshot_id]));
+   expect(all.map(x=>x.snapshot_id)).not.toContain(failed);
+   for(let i=1;i<all.length;i++)expect(all[i-1].created_at<all[i].created_at||(all[i-1].created_at===all[i].created_at&&all[i-1].snapshot_id<all[i].snapshot_id)).toBe(true);
+   expect((await db.snapshotsSince({created_at:all[0].created_at,snapshot_id:all[0].snapshot_id},1000)).map(x=>x.snapshot_id)).toEqual(all.slice(1).map(x=>x.snapshot_id));
+   expect(await db.snapshotsSince(null,1)).toHaveLength(1);
+   expect(await db.snapshotsSince(null,0)).toEqual([]);
+  });
+
+  it('resolveConflict: accept promotes with input_revision bump; reject keeps; already_resolved / not_found / invalid_item',async()=>{
+   const {s,b}=await seeded({revisionPolicy:'immutable'});
+   await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.6',await retrieval(b,T3),T3,false)]);
+   const by=await h.resolver();
+   const a=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${s}|2026-09-30`,batchId:b,reasonCode:'unexpected_revision'});
+   const st0=await db.publishState('US');
+   await db.resolveConflict(a,'accept',by);
+   expect(await h.quarantineStatus(a)).toBe('resolved_accept');
+   expect((await db.versionsOf(s,'2026-09-30')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[2,'4.6']]);
+   expect((await db.latestObservations([s]))[0].value_text).toBe('4.6');
+   expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision+1);
+   expect(await outcome(db.resolveConflict(a,'accept',by))).toBe('already_resolved:already_resolved');
+   const o=await seeded({revisionPolicy:'immutable'});
+   await db.writeObservations(o.b,'c',[nativeRow(o.s,'2026-09-30','7',await retrieval(o.b,T3),T3,false)]);
+   const rj=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${o.s}|2026-09-30`,batchId:o.b,reasonCode:'unexpected_revision'});
+   const st1=await db.publishState('US');
+   await db.resolveConflict(rj,'reject',by);
+   expect(await h.quarantineStatus(rj)).toBe('resolved_reject');
+   expect((await db.versionsOf(o.s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
+   expect((await db.publishState('US')).inputRevision).toBe(st1.inputRevision);
+   const none=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${o.s}|2026-08-31`,batchId:o.b,reasonCode:'rule_failed:range'});
+   expect(await outcome(db.resolveConflict(none,'accept',by))).toBe('not_found:not_found');            // nothing stored to accept
+   await db.resolveConflict(none,'reject',by);
+   expect(await outcome(db.resolveConflict(randomUUID(),'accept',by))).toBe('not_found:not_found');
+   const facts=await h.addQuarantine({dataset:'facts.us',naturalKey:`${o.s}|2026-09-30`,batchId:o.b,reasonCode:'x'});
+   expect(await outcome(db.resolveConflict(facts,'accept',by))).toBe('rpc_failed:invalid_item');
+  });
+
+  it('chunks: idempotent by (batch, seq), total mismatch refused, chunksOf in seq order',async()=>{
+   const b=await h.batch();const c={fetched:3,inserted:2,duplicates:1,versioned:0,quarantined:0,failed:0};
+   expect(await db.recordChunk(b,1,2,c)).toBe('new');
+   expect(await db.recordChunk(b,1,2,{...c,fetched:99})).toBe('duplicate');
+   expect(await outcome(db.recordChunk(b,0,3,c))).toBe('rpc_failed:chunk_total_mismatch');
+   expect(await outcome(db.recordChunk(b,2,2,c))).toBe('rpc_failed:invalid_chunk');
+   expect(await db.recordChunk(b,0,2,{...c,fetched:1})).toBe('new');
+   expect(await db.chunksOf(b)).toEqual([{seq:0,total:2,counts:{...c,fetched:1}},{seq:1,total:2,counts:c}]);
+   expect(await db.chunksOf(await h.batch())).toEqual([]);
+  });
+ });
+}
+```
+
+Create `src/lib/macro/db.test.ts`:
+
+```ts
+// src/lib/macro/db.test.ts
+// memoryMacroDb against the shared contract, and supabaseMacroDb wiring over stub clients: RPC
+// names/arguments, writes on admin / reads on anon, error-code mapping, write packing that keeps a
+// (series, period) group in one call, history paging with truncation, id chunking, row
+// normalisation (timestamps to ISO, bigint to number, numeric `value` never surfaced).
+import {randomUUID} from 'node:crypto';
+import type {SupabaseClient} from '@supabase/supabase-js';
+import {describe,expect,it} from 'vitest';
+import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,packWrites,supabaseMacroDb,toMacroDbError} from './db';
+import {macroDbContract,nativeRow} from './db-contract';
+import {memoryMacroDb} from './memory-db';
+import type {ObservationWrite,PublishInput} from './types';
+
+macroDbContract('memoryMacroDb contract',async()=>{
+ const db=memoryMacroDb();
+ return {db,batch:async()=>randomUUID(),resolver:async()=>randomUUID(),
+  addQuarantine:async i=>db.addQuarantineItem({dataset:i.dataset,natural_key:i.naturalKey,batch_id:i.batchId,reason_code:i.reasonCode}),
+  quarantineStatus:async id=>db.quarantineItem(id)?.status??null};
+});
+
+describe('memoryMacroDb specifics',()=>{
+ it('stamps ingested_at / created_at from the injected clock and records an audit row per resolution',async()=>{
+  const db=memoryMacroDb();db.setNow('2026-11-06T05:30:00.000Z');
+  const v='macro-catalog/abcdefabcdef';
+  await db.upsertCatalog([{id:'X_A',region:'US',role:'indicator',type:'labor_rate',name:{zh:'a',en:'a'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'p',en:'p'},seriesKey:'X',rights:'public_domain',attribution:{zh:'a',en:'a'}},revisionPolicy:'immutable',weight:0,changeKind:'pp',definitionVersion:1}],v,'macro-rules/1');
+  const b=randomUUID();const sha='a'.repeat(64);
+  const r=await db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});
+  await db.writeObservations(b,'c',[nativeRow('X_A','2026-09-30','1',r,'2026-11-06T05:00:00.000Z')]);
+  expect((await db.versionsOf('X_A','2026-09-30'))[0].ingested_at).toBe('2026-11-06T05:30:00.000Z');
+  db.setNow('2026-11-06T06:00:00.000Z');
+  await db.writeObservations(b,'c',[nativeRow('X_A','2026-09-30','2',r,'2026-11-06T05:00:00.000Z',false)]);
+  expect(db.allObservations().map(o=>o.status)).toEqual(['ok','quarantined']);
+  const q=db.addQuarantineItem({dataset:'macro.fred',natural_key:'X_A|2026-09-30',batch_id:b,reason_code:'unexpected_revision'});
+  const by=randomUUID();await db.resolveConflict(q,'accept',by);
+  expect(db.quarantineItem(q)).toMatchObject({status:'resolved_accept',resolved_by:by,resolved_at:'2026-11-06T06:00:00.000Z'});
+  expect(db.audit).toEqual([{user_id:by,action:'dq.quarantine_resolve',object_type:'dq',object_id:q,detail:expect.objectContaining({decision:'accept',status:'resolved_accept'})}]);
+  const p=await db.publishSnapshot({region:'US',expectedRevision:0,expectedInputRevision:(await db.publishState('US')).inputRevision,asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:v,observationIds:[],catalogCounts:{verified:0,missing:0,restricted:0},regime:null,contributions:[],rulesVersion:'r',uncoveredWeight:0});
+  expect((await db.snapshot(p.snapshot_id))?.created_at).toBe('2026-11-06T06:00:00.000Z');
+ });
+ it('returns copies: mutating a read row does not change stored state',async()=>{
+  const db=memoryMacroDb();
+  expect(await db.publishState('US')).toEqual({revision:0,inputRevision:0});
+  const st=await db.publishState('US');st.revision=99;
+  expect((await db.publishState('US')).revision).toBe(0);
+ });
+});
+
+// ---------------------------------------------------------------- supabase stubs
+type Res={data:unknown;error:{message:string}|null};
+type Call=[string,unknown[]];
+function stub(o:{rpc?:(fn:string,args:Record<string,unknown>)=>Res;select?:(calls:Call[])=>Res}={}){
+ const rpcCalls:[string,Record<string,unknown>][]=[];const queries:Call[][]=[];
+ const from=(table:string)=>{
+  const calls:Call[]=[['from',[table]]];queries.push(calls);
+  const b:unknown=new Proxy({},{get(_t,prop){
+   if(prop==='then'){const res=o.select?.(calls)??{data:[],error:null};return (ok:(v:Res)=>unknown,ko:(e:unknown)=>unknown)=>Promise.resolve(res).then(ok,ko);}
+   return (...args:unknown[])=>{calls.push([String(prop),args]);return b;};
+  }});
+  return b;
+ };
+ const client={rpc:async(fn:string,args:Record<string,unknown>)=>{rpcCalls.push([fn,args]);return o.rpc?.(fn,args)??{data:null,error:null};},from};
+ return {client:client as unknown as SupabaseClient,rpcCalls,queries};
+}
+const pgObs=(o:Record<string,unknown>={})=>({observation_id:randomUUID(),series_id:'US_UNRATE',period_end:'2026-09-30',value:4.1,value_text:'4.1',version:1,available_at:'2026-11-02T05:30:00+00:00',availability_basis:'first_seen',ingested_at:'2026-11-02T05:30:01.123+00:00',status:'ok',retrieval_id:randomUUID(),locator:{kind:'csv_row',line:2,column:1},derived_from:null,transform:null,code_version:'abc',batch_id:randomUUID(),...o});
+const publishInput:PublishInput={region:'US',expectedRevision:3,expectedInputRevision:7,asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion:'macro-catalog/abcdefabcdef',observationIds:['o1'],catalogCounts:{verified:5,missing:2,restricted:1},regime:null,contributions:[],rulesVersion:'macro-rules/1',uncoveredWeight:20};
+
+describe('supabaseMacroDb wiring',()=>{
+ it('maps every write to its service RPC with exact argument names, on the admin client only',async()=>{
+  const admin=stub({rpc:fn=>({data:fn==='macro_put_retrieval'||fn==='record_failed_macro_snapshot'?'id-1':fn==='macro_record_chunk'?'new':fn==='publish_macro_snapshot'?{snapshot_id:'s1',revision:'4'}:fn==='macro_write_observations'?{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]}:null,error:null})});
+  const anon=stub();
+  const db=supabaseMacroDb({admin:admin.client,anon:anon.client});
+  await db.upsertCatalog([],'macro-catalog/abcdefabcdef','macro-rules/1');
+  expect(await db.putRetrieval({sha256:'a'.repeat(64),object_path:`fred_csv/${'a'.repeat(64)}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:10},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-01T05:30:00.000Z',batch_id:'b1',tool_versions:{node:'22'}})).toBe('id-1');
+  expect(await db.recordChunk('b1',0,2,{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0})).toBe('new');
+  expect(await db.writeObservations('b1','code',[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')])).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
+  expect(await db.publishSnapshot(publishInput)).toEqual({snapshot_id:'s1',revision:4});
+  expect(await db.recordFailedSnapshot({region:'CN',asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:'c',reason:'x'})).toBe('id-1');
+  await db.resolveConflict('q1','accept','u1');
+  expect(admin.rpcCalls).toEqual([
+   ['macro_upsert_catalog',{p_catalog_version:'macro-catalog/abcdefabcdef',p_rules_version:'macro-rules/1',p_defs:[]}],
+   ['macro_put_retrieval',{p_sha256:'a'.repeat(64),p_object_path:`fred_csv/${'a'.repeat(64)}.csv`,p_adapter:'fred_csv',p_content_type:'text/csv',p_byte_length:10,p_fetch_url:'https://fred.stlouisfed.org/x',p_fetch_host:'fred.stlouisfed.org',p_http_status:200,p_fetched_at:'2026-11-01T05:30:00.000Z',p_batch_id:'b1',p_tool_versions:{node:'22'}}],
+   ['macro_record_chunk',{p_batch_id:'b1',p_seq:0,p_total:2,p_counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0}}],
+   ['macro_write_observations',{p_batch:'b1',p_code_version:'code',p_rows:[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')]}],
+   ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20}],
+   ['record_failed_macro_snapshot',{p_region:'CN',p_as_of:'2026-11-06',p_methodology_version:'m',p_catalog_version:'c',p_reason:'x'}],
+   ['macro_resolve_conflict',{p_quarantine_id:'q1',p_decision:'accept',p_resolved_by:'u1'}],
+  ]);
+  expect(anon.rpcCalls).toEqual([]);expect(anon.queries).toEqual([]);
+ });
+ it('reads through anon (RLS): latest and since via invoker RPCs, single rows via select; publish state and chunks via admin',async()=>{
+  const row=pgObs();
+  const admin=stub({select:calls=>({data:calls[0][1][0]==='macro_publish_state'?{revision:'5',input_revision:'9'}:[{seq:0,total:1,counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0}}],error:null})});
+  const anon=stub({rpc:fn=>({data:fn==='macro_latest_observations'?[row]:[],error:null}),select:()=>({data:null,error:null})});
+  const db=supabaseMacroDb({admin:admin.client,anon:anon.client});
+  const [o]=await db.latestObservations(['US_UNRATE'],{asOf:'2026-11-03T00:00:00.000Z'});
+  expect(o).toEqual({observation_id:row.observation_id,series_id:'US_UNRATE',period_end:'2026-09-30',value_text:'4.1',version:1,available_at:'2026-11-02T05:30:00.000Z',availability_basis:'first_seen',ingested_at:'2026-11-02T05:30:01.123Z',status:'ok',retrieval_id:row.retrieval_id,locator:{kind:'csv_row',line:2,column:1},derived_from:null,transform:null,code_version:'abc',batch_id:row.batch_id});
+  expect('value' in o).toBe(false);
+  expect(await db.latestObservations([])).toEqual([]);
+  await db.snapshotsSince({created_at:'2026-11-06T05:30:00.000Z',snapshot_id:'s1'},5000);
+  expect(anon.rpcCalls).toEqual([
+   ['macro_latest_observations',{p_series_ids:['US_UNRATE'],p_as_of:'2026-11-03T00:00:00.000Z',p_period_end_lte:null}],
+   ['macro_snapshots_since',{p_created_at:'2026-11-06T05:30:00.000Z',p_snapshot_id:'s1',p_limit:1000}],
+  ]);
+  expect(await db.activeSnapshot('US')).toBeNull();
+  expect(anon.queries.at(-1)).toEqual([['from',['macro_snapshots']],['select',['*']],['eq',['region','US']],['eq',['status','active']],['maybeSingle',[]]]);
+  expect(await db.previousSnapshot('US','2026-11-06T05:30:00.000Z')).toBeNull();
+  expect(anon.queries.at(-1)).toEqual([['from',['macro_snapshots']],['select',['*']],['eq',['region','US']],['neq',['status','failed']],['lt',['created_at','2026-11-06T05:30:00.000Z']],['order',['created_at',{ascending:false}]],['order',['snapshot_id',{ascending:false}]],['limit',[1]],['maybeSingle',[]]]);
+  expect(await db.publishState('CN')).toEqual({revision:5,inputRevision:9});
+  expect(admin.queries.at(-1)).toEqual([['from',['macro_publish_state']],['select',['revision,input_revision']],['eq',['region','CN']],['maybeSingle',[]]]);
+  expect(await db.chunksOf('b1')).toEqual([{seq:0,total:1,counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0}}]);
+  expect(admin.rpcCalls).toEqual([]);
+ });
+ it('maps Postgres messages to MacroDbError codes',async()=>{
+  for(const [m,code] of [['stale_publisher','stale_publisher'],['invalid_manifest','invalid_manifest'],['quota_exceeded','quota_exceeded'],['already_resolved','already_resolved'],['not_found','not_found'],['invalid_value_text','rpc_failed'],['chunk_total_mismatch','rpc_failed'],['new row for relation "macro_retrievals" violates check constraint "macro_retrievals_host"','rpc_failed']] as const){
+   const e=toMacroDbError({message:m});expect(e).toBeInstanceOf(MacroDbError);expect([e.code,e.message]).toEqual([code,m]);
+  }
+  const admin=stub({rpc:()=>({data:null,error:{message:'stale_publisher'}})});
+  const db=supabaseMacroDb({admin:admin.client,anon:stub().client});
+  await expect(db.publishSnapshot(publishInput)).rejects.toMatchObject({name:'MacroDbError',code:'stale_publisher'});
+  const anonErr=stub({select:()=>({data:null,error:{message:'permission denied for table macro_publish_state'}})});
+  await expect(supabaseMacroDb({admin:anonErr.client,anon:anonErr.client}).publishState('US')).rejects.toMatchObject({code:'rpc_failed'});
+  await expect(supabaseMacroDb({admin:stub({select:()=>({data:null,error:null})}).client,anon:stub().client}).publishState('US')).rejects.toMatchObject({code:'not_found'});
+ });
+ it('packs writes into calls of at most WRITE_CHUNK rows without splitting a (series, period) group, and sums the results',async()=>{
+  const rows:ObservationWrite[]=[];
+  for(let i=0;i<WRITE_CHUNK-1;i++)rows.push(nativeRow('S',`2000-01-${String(1+(i%28)).padStart(2,'0')}`.replace('2000',String(2000+Math.floor(i/28))),'1','r','2026-11-01T05:30:00.000Z'));
+  rows.push(nativeRow('G','2026-09-30','1','r','2026-11-01T05:30:00.000Z'),nativeRow('X','2026-09-30','1','r','2026-11-01T05:30:00.000Z'),nativeRow('G','2026-09-30','2','r','2026-11-01T05:30:00.000Z'));
+  const packs=packWrites(rows);
+  expect(packs.map(p=>p.length)).toEqual([WRITE_CHUNK-1,3]);
+  expect(packs[1].map(r=>[r.series_id,r.value_text])).toEqual([['G','1'],['G','2'],['X','1']]);   // group contiguous, groups in first-appearance order
+  expect(packWrites([])).toEqual([]);
+  const admin=stub({rpc:(_fn,args)=>({data:{inserted:(args.p_rows as unknown[]).length,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:'x',period_end:'2026-09-30',reason:'conflicting_rows',value_text:'1',current_value_text:null}]},error:null})});
+  const res=await supabaseMacroDb({admin:admin.client,anon:stub().client}).writeObservations('b','c',rows);
+  expect(admin.rpcCalls).toHaveLength(2);
+  expect(res.inserted).toBe(rows.length);expect(res.quarantined).toBe(2);expect(res.conflicts).toHaveLength(2);
+  expect(await supabaseMacroDb({admin:stub().client,anon:stub().client}).writeObservations('b','c',[])).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
+ });
+ it('pages history with .range() (≤ READ_PAGE per page), keeps the highest version per period, throws truncated beyond maxRows',async()=>{
+  const all=Array.from({length:1500},(_,i)=>pgObs({period_end:`${String(1900+Math.floor(i/12)).padStart(4,'0')}-${String(1+(i%12)).padStart(2,'0')}-28`,value_text:String(i)}));
+  const anon=stub({select:calls=>{const r=calls.find(c=>c[0]==='range')![1] as [number,number];return {data:all.slice(r[0],r[1]+1),error:null};}});
+  const db=supabaseMacroDb({admin:stub().client,anon:anon.client});
+  const got=await db.seriesHistory('US_UNRATE',{maxRows:2000,from:'1900-01-01',to:'2100-01-01',asOf:'2026-11-06T00:00:00.000Z'});
+  expect(got).toHaveLength(1500);
+  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')![1])).toEqual([[0,READ_PAGE-1],[READ_PAGE,1999]]);
+  expect(anon.queries[0].slice(0,9)).toEqual([['from',['macro_observations']],['select',['*']],['eq',['series_id','US_UNRATE']],['eq',['status','ok']],['gte',['period_end','1900-01-01']],['lte',['period_end','2100-01-01']],['lte',['available_at','2026-11-06T00:00:00.000Z']],['order',['period_end',{ascending:true}]],['order',['version',{ascending:true}]]]);
+  await expect(db.seriesHistory('US_UNRATE',{maxRows:1499})).rejects.toMatchObject({code:'truncated'});
+  const v=[pgObs({period_end:'2026-08-31',version:1,value_text:'1'}),pgObs({period_end:'2026-09-30',version:1,value_text:'2'}),pgObs({period_end:'2026-09-30',version:2,value_text:'3'})].map(r=>({...r,available_at:'2026-11-02T05:30:00.000Z',ingested_at:'2026-11-02T05:30:00.000Z'}));
+  const one=supabaseMacroDb({admin:stub().client,anon:stub({select:()=>({data:v,error:null})}).client});
+  expect((await one.seriesHistory('X',{maxRows:10})).map(x=>x.value_text)).toEqual(['1','3']);
+  expect(highestPerPeriod([])).toEqual([]);
+ });
+ it('chunks observationsByIds by IN_CHUNK and returns input order, ok rows only',async()=>{
+  const ids=Array.from({length:IN_CHUNK*2+50},()=>randomUUID());
+  const anon=stub({select:calls=>{const inIds=calls.find(c=>c[0]==='in')![1][1] as string[];return {data:inIds.filter((_,i)=>i%2===0).map(id=>pgObs({observation_id:id})),error:null};}});
+  const got=await supabaseMacroDb({admin:stub().client,anon:anon.client}).observationsByIds([...ids].reverse());
+  expect(anon.queries.map(q=>(q.find(c=>c[0]==='in')![1][1] as string[]).length)).toEqual([IN_CHUNK,IN_CHUNK,50]);
+  for(const q of anon.queries)expect(q).toContainEqual(['eq',['status','ok']]);
+  const expected=[...ids].reverse().filter(id=>anon.queries.some(q=>{const part=q.find(c=>c[0]==='in')![1][1] as string[];return part.indexOf(id)%2===0;}));
+  expect(got.map(x=>x.observation_id)).toEqual(expected);
+ });
+});
+```
+
+Create `src/lib/macro/evidence.test.ts`:
+
+```ts
+// src/lib/macro/evidence.test.ts
+// EvidenceStore (spec §4.3, §0.2 N2; pattern of src/lib/facts/snapshot-store.ts).
+import {createHash} from 'node:crypto';
+import type {SupabaseClient} from '@supabase/supabase-js';
+import {describe,expect,it,vi} from 'vitest';
+import {EVIDENCE_BUCKET,EvidenceError,evidencePath,extFor,memoryEvidenceStore,metaPathOf,sha256Hex,supabaseEvidenceStore} from './evidence';
+import type {EvidenceInput} from './types';
+
+const input=(text:string,o:Partial<EvidenceInput>={}):EvidenceInput=>{
+ const bytes=new TextEncoder().encode(text);
+ return {sha256:createHash('sha256').update(bytes).digest('hex'),bytes,adapter:'fred_csv',fetchUrl:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01',fetchHost:'fred.stlouisfed.org',httpStatus:200,contentType:'text/csv; charset=utf-8',fetchedAt:'2026-11-06T05:30:00.000Z',toolVersions:{node:'22.11.0'},...o};
+};
+const uploadStub=(results:({error:null}|{error:{message:string;statusCode?:string}})[])=>{
+ const calls:[string,string,unknown,unknown][]=[];let i=0;
+ const client={storage:{from:(bucket:string)=>({upload:vi.fn(async(path:string,body:unknown,opts:unknown)=>{calls.push([bucket,path,body,opts]);return results[i++]??{error:null};})})}};
+ return {client:client as unknown as SupabaseClient,calls};
+};
+
+describe('evidence paths',()=>{
+ it('maps content types to extensions (unknown → txt) and builds <adapter>/<sha256>.<ext> with a .meta.json sidecar',()=>{
+  expect(extFor('text/csv; charset=utf-8')).toBe('csv');expect(extFor('application/csv')).toBe('csv');expect(extFor('application/json;charset=UTF-8')).toBe('json');expect(extFor('application/json')).toBe('json');expect(extFor('TEXT/HTML')).toBe('html');expect(extFor('text/plain')).toBe('txt');expect(extFor('application/octet-stream')).toBe('txt');
+  const sha='a'.repeat(64);
+  expect(evidencePath('akshare',sha,'application/json')).toBe(`akshare/${sha}.json`);
+  expect(metaPathOf(`fred_csv/${sha}.csv`)).toBe(`fred_csv/${sha}.meta.json`);
+  expect(()=>evidencePath('akshare','A'.repeat(64),'text/csv')).toThrow('evidence_invalid');
+  expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  expect(sha256Hex(new TextEncoder().encode('abc'))).toBe(sha256Hex('abc'));
+ });
+});
+
+describe('memoryEvidenceStore',()=>{
+ it('stores once, answers exists on a repeat, keeps a sidecar without secrets, copies the bytes',async()=>{
+  const store=memoryEvidenceStore();const e=input('observation_date,UNRATE\n2026-09-01,4.1\n');
+  expect(await store.put(e)).toEqual({objectPath:`fred_csv/${e.sha256}.csv`,status:'stored'});
+  expect(await store.put(e)).toEqual({objectPath:`fred_csv/${e.sha256}.csv`,status:'exists'});
+  e.bytes[0]=0;                                                                                  // later mutation cannot rewrite evidence
+  expect(new TextDecoder().decode(store.read(`fred_csv/${e.sha256}.csv`) as Uint8Array).startsWith('observation_date')).toBe(true);
+  expect(JSON.parse(store.read(`fred_csv/${e.sha256}.meta.json`) as string)).toEqual({sha256:e.sha256,adapter:'fred_csv',byte_length:e.bytes.byteLength,fetch_url:e.fetchUrl,fetch_host:'fred.stlouisfed.org',http_status:200,content_type:'text/csv; charset=utf-8',fetched_at:'2026-11-06T05:30:00.000Z',tool_versions:{node:'22.11.0'}});
+ });
+ it('refuses bytes that do not match the declared hash, a host that is not the URL host, and an unknown adapter',async()=>{
+  const store=memoryEvidenceStore();
+  await expect(store.put({...input('x'),sha256:'e'.repeat(64)})).rejects.toMatchObject({code:'evidence_hash_mismatch'});
+  await expect(store.put(input('x',{fetchHost:'evil.example.com'}))).rejects.toMatchObject({code:'evidence_invalid'});
+  await expect(store.put(input('x',{adapter:'yfinance' as never}))).rejects.toMatchObject({code:'evidence_invalid'});
+  expect(store.objects.size).toBe(0);
+ });
+});
+
+describe('supabaseEvidenceStore',()=>{
+ it('uploads bytes then the sidecar to macro-raw with upsert:false and the bucket MIME type',async()=>{
+  const {client,calls}=uploadStub([{error:null},{error:null}]);const e=input('a,b\n');
+  expect(await supabaseEvidenceStore(client).put(e)).toEqual({objectPath:`fred_csv/${e.sha256}.csv`,status:'stored'});
+  expect(calls.map(c=>[c[0],c[1],c[3]])).toEqual([[EVIDENCE_BUCKET,`fred_csv/${e.sha256}.csv`,{contentType:'text/csv',upsert:false}],[EVIDENCE_BUCKET,`fred_csv/${e.sha256}.meta.json`,{contentType:'application/json',upsert:false}]]);
+  expect(calls[0][2]).toEqual(e.bytes);
+  expect(EVIDENCE_BUCKET).toBe('macro-raw');
+ });
+ it('treats 409 / already exists as exists (bytes and sidecar), other errors as evidence_upload_failed',async()=>{
+  const e=input('a,b\n');
+  const dup=uploadStub([{error:{message:'The resource already exists',statusCode:'409'}},{error:{message:'Duplicate',statusCode:'409'}}]);
+  expect((await supabaseEvidenceStore(dup.client).put(e)).status).toBe('exists');
+  const bad=uploadStub([{error:{message:'mime type not allowed',statusCode:'415'}}]);
+  await expect(supabaseEvidenceStore(bad.client).put(e)).rejects.toMatchObject({code:'evidence_upload_failed'});
+  const sidecar=uploadStub([{error:null},{error:{message:'boom',statusCode:'500'}}]);
+  await expect(supabaseEvidenceStore(sidecar.client).put(e)).rejects.toMatchObject({code:'evidence_upload_failed'});
+ });
+ it('verifies the hash before any upload',async()=>{
+  const {client,calls}=uploadStub([]);
+  await expect(supabaseEvidenceStore(client).put({...input('a'),sha256:'f'.repeat(64)})).rejects.toBeInstanceOf(EvidenceError);
+  expect(calls).toEqual([]);
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/db.test.ts src/lib/macro/evidence.test.ts`
+Expected: FAIL (`Cannot find module './db'`, `Cannot find module './evidence'`)
+
+- [ ] **Step 3: Implement**
+
+Create `src/lib/macro/db.ts`:
+
+```ts
+// src/lib/macro/db.ts
+// MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2): the only way macro code touches
+// the database. supabaseMacroDb writes through the service-role client's RPCs (no role has table
+// writes) and reads through the anon client, so RLS applies (ok observations only); publish state
+// and chunk receipts are service-only reads. memory-db.ts implements the same semantics and
+// db-contract.ts pins both. Postgres messages that are contract codes (stale_publisher,
+// invalid_manifest, quota_exceeded, not_found, already_resolved) become MacroDbError codes; any
+// other failure is rpc_failed with the original message (invalid_value_text, chunk_total_mismatch,
+// evidence_mismatch, catalog_version_conflict, constraint texts, …). The new RPCs are not in
+// Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
+import type {SupabaseClient} from '@supabase/supabase-js';
+import type {ChunkCounts,EvidenceObject,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
+
+export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
+export interface MacroDb{
+ /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
+ upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
+ /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id. service */
+ putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>):Promise<string>;
+ evidenceObject(sha256:string):Promise<import('./types').EvidenceObject|null>;                                   // anon
+ retrieval(retrievalId:string):Promise<import('./types').Retrieval|null>;                                        // anon
+ /** Every retrieval of one evidence object, fetched_at ascending (≤ 1000). anon. */
+ retrievalsOf(sha256:string):Promise<import('./types').Retrieval[]>;
+ /** Retrievals by id, input order, unknown ids dropped, deduplicated. anon. */
+ retrievalsByIds(ids:string[]):Promise<import('./types').Retrieval[]>;
+ /** RPC macro_record_chunk: idempotent by (batch_id, seq). service */
+ recordChunk(batchId:string,seq:number,total:number,counts:import('./types').ChunkCounts):Promise<'new'|'duplicate'>;
+ chunksOf(batchId:string):Promise<{seq:number;total:number;counts:import('./types').ChunkCounts}[]>;            // service
+ writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[]):Promise<import('./types').WriteResult>;   // service, RPC macro_write_observations
+ /** Latest period per series, highest ok version within it; asOf ⇒ only rows with available_at ≤ asOf. anon. */
+ latestObservations(seriesIds:string[],opts?:{asOf?:string;periodEndLte?:string}):Promise<import('./types').ObservationRow[]>;
+ /** Highest ok version per period, ascending period_end, paged to completion (throws truncated beyond maxRows). anon. */
+ seriesHistory(seriesId:string,opts:{from?:string;to?:string;asOf?:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
+ /** All ok versions of one series (revision history for the drawer). anon. */
+ versionsOf(seriesId:string,periodEnd:string):Promise<import('./types').ObservationRow[]>;
+ observationsByIds(ids:string[]):Promise<import('./types').ObservationRow[]>;                                    // anon; ok only
+ publishState(region:import('./types').Region):Promise<{revision:number;inputRevision:number}>;                   // service
+ /** RPC macro_resolve_conflict (spec §0.2 M10); throws already_resolved / not_found. service */
+ resolveConflict(quarantineId:string,decision:'accept'|'reject',resolvedBy:string):Promise<void>;
+ publishSnapshot(input:import('./types').PublishInput):Promise<{snapshot_id:string;revision:number}>;            // service, RPC publish_macro_snapshot; throws stale_publisher / invalid_manifest
+ recordFailedSnapshot(input:{region:import('./types').Region;asOf:string;methodologyVersion:string;catalogVersion:string;reason:string}):Promise<string>;
+ activeSnapshot(region:import('./types').Region):Promise<import('./types').SnapshotRecord|null>;                  // anon
+ snapshot(snapshotId:string):Promise<import('./types').SnapshotRecord|null>;                                      // anon
+ snapshotsSince(marker:{created_at:string;snapshot_id:string}|null,limit:number):Promise<import('./types').SnapshotRecord[]>;   // anon; active+superseded only
+ /** The newest non-failed snapshot of the region created strictly before beforeCreatedAt ("changes since the previous snapshot"). anon. */
+ previousSnapshot(region:import('./types').Region,beforeCreatedAt:string):Promise<import('./types').SnapshotRecord|null>;
+ regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;                                       // anon
+}
+
+export const READ_PAGE=1000;      // PostgREST max_rows
+export const IN_CHUNK=200;        // ids per .in() filter (URL length)
+export const WRITE_CHUNK=2000;    // rows per macro_write_observations call
+const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','truncated'] as const;
+interface PgErrorLike{message?:string;code?:string}
+export function toMacroDbError(e:PgErrorLike):MacroDbError{
+ const m=String(e?.message??'');
+ const hit=CONTRACT_CODES.find(c=>m===c||m.startsWith(`${c}:`));
+ return new MacroDbError(hit??'rpc_failed',m||'rpc_failed');
+}
+
+// ---------------------------------------------------------------- row normalisation (PostgREST → contract types)
+const iso=(v:unknown):string=>{const t=Date.parse(String(v));if(!Number.isFinite(t))throw new MacroDbError('rpc_failed',`invalid_timestamp:${String(v).slice(0,40)}`);return new Date(t).toISOString();};
+const strOrNull=(v:unknown)=>v===null||v===undefined?null:String(v);
+export function observationFromRow(r:Record<string,unknown>):ObservationRow{
+ return {observation_id:String(r.observation_id),series_id:String(r.series_id),period_end:String(r.period_end),value_text:String(r.value_text),version:Number(r.version),
+  available_at:iso(r.available_at),availability_basis:'first_seen',ingested_at:iso(r.ingested_at),status:r.status as ObservationStatus,
+  retrieval_id:strOrNull(r.retrieval_id),locator:(r.locator??null) as Locator|null,derived_from:Array.isArray(r.derived_from)?r.derived_from.map(String):null,
+  transform:strOrNull(r.transform),code_version:String(r.code_version),batch_id:String(r.batch_id)};
+}
+export function snapshotFromRow(r:Record<string,unknown>):SnapshotRecord{
+ const c=(r.catalog_counts??{}) as Record<string,unknown>;
+ return {snapshot_id:String(r.snapshot_id),region:r.region as Region,as_of:String(r.as_of),revision:Number(r.revision),methodology_version:String(r.methodology_version),
+  catalog_version:String(r.catalog_version),observation_ids:Array.isArray(r.observation_ids)?r.observation_ids.map(String):[],
+  catalog_counts:{verified:Number(c.verified),missing:Number(c.missing),restricted:Number(c.restricted)},status:r.status as SnapshotRecord['status'],
+  failure_reason:strOrNull(r.failure_reason),created_at:iso(r.created_at)};
+}
+export function regimeFromRow(r:Record<string,unknown>):RegimeRecord{
+ return {snapshot_id:String(r.snapshot_id),region:r.region as Region,regime:(r.regime??null) as RegimeRecord['regime'],contributions:(Array.isArray(r.contributions)?r.contributions:[]) as RegimeRecord['contributions'],rules_version:String(r.rules_version),uncovered_weight:Number(r.uncovered_weight)};
+}
+export function evidenceFromRow(r:Record<string,unknown>):EvidenceObject{
+ return {sha256:String(r.sha256),object_path:String(r.object_path),adapter:r.adapter as EvidenceObject['adapter'],content_type:String(r.content_type),byte_length:Number(r.byte_length),created_at:iso(r.created_at)};
+}
+export function retrievalFromRow(r:Record<string,unknown>):Retrieval{
+ return {retrieval_id:String(r.retrieval_id),sha256:String(r.sha256),fetch_url:String(r.fetch_url),fetch_host:String(r.fetch_host),http_status:Number(r.http_status),fetched_at:iso(r.fetched_at),batch_id:String(r.batch_id),tool_versions:(r.tool_versions??{}) as Record<string,string>};
+}
+const countsOf=(v:unknown):ChunkCounts=>{const c=(v??{}) as Record<string,unknown>;return {fetched:Number(c.fetched),inserted:Number(c.inserted),duplicates:Number(c.duplicates),versioned:Number(c.versioned),quarantined:Number(c.quarantined),failed:Number(c.failed)};};
+
+/** Highest version per period_end; input sorted by (period_end, version) ascending. */
+export function highestPerPeriod(rows:ObservationRow[]):ObservationRow[]{
+ const out:ObservationRow[]=[];
+ for(const r of rows){const last=out[out.length-1];if(last&&last.period_end===r.period_end){if(r.version>last.version)out[out.length-1]=r;}else out.push(r);}
+ return out;
+}
+/** Splits rows into calls of ≤ size rows, keeping every (series_id, period_end) group in one call (conflicting_rows is decided per call); groups keep first-appearance order. */
+export function packWrites(rows:ObservationWrite[],size=WRITE_CHUNK):ObservationWrite[][]{
+ const groups=new Map<string,ObservationWrite[]>();
+ for(const r of rows){const k=`${r.series_id}|${r.period_end}`;const g=groups.get(k);if(g)g.push(r);else groups.set(k,[r]);}
+ const out:ObservationWrite[][]=[];let cur:ObservationWrite[]=[];
+ for(const g of groups.values()){
+  if(cur.length>0&&cur.length+g.length>size){out.push(cur);cur=[];}
+  cur.push(...g);
+ }
+ if(cur.length>0)out.push(cur);
+ return out;
+}
+export function mergeResults(parts:WriteResult[]):WriteResult{
+ const out:WriteResult={inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]};
+ for(const p of parts){out.inserted+=Number(p.inserted);out.duplicates+=Number(p.duplicates);out.versioned+=Number(p.versioned);out.quarantined+=Number(p.quarantined);out.conflicts.push(...(p.conflicts??[]));}
+ return out;
+}
+export function publishArgs(i:PublishInput){
+ return {p_region:i.region,p_expected_revision:i.expectedRevision,p_expected_input_revision:i.expectedInputRevision,p_as_of:i.asOf,p_methodology_version:i.methodologyVersion,
+  p_catalog_version:i.catalogVersion,p_observation_ids:i.observationIds,p_catalog_counts:i.catalogCounts,p_regime:i.regime,p_contributions:i.contributions,
+  p_rules_version:i.rulesVersion,p_uncovered_weight:i.uncoveredWeight};
+}
+
+interface Res{data:unknown;error:PgErrorLike|null}
+// The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained
+// Database type lacks the Relationships/Views that supabase-js inference now needs.
+interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<Res>;from:(table:string)=>any}
+type Query=PromiseLike<Res>&{range:(from:number,to:number)=>Query};
+
+export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClient}):MacroDb{
+ const admin=clients.admin as unknown as NarrowClient;const anon=clients.anon as unknown as NarrowClient;
+ const call=async<T>(c:NarrowClient,fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toMacroDbError(error);return data as T;};
+ const rows=async(q:PromiseLike<Res>):Promise<Record<string,unknown>[]>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??[]) as Record<string,unknown>[];};
+ const maybe=async(q:PromiseLike<Res>):Promise<Record<string,unknown>|null>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??null) as Record<string,unknown>|null;};
+ /** `make` builds the filtered AND ordered query afresh per page; pages until a short page or `limit` rows. */
+ const pageAll=async(make:()=>Query,limit:number):Promise<Record<string,unknown>[]>=>{
+  const out:Record<string,unknown>[]=[];
+  for(let from=0;;from+=READ_PAGE){
+   const size=Math.min(READ_PAGE,limit-out.length);
+   if(size<=0)return out;
+   const part=await rows(make().range(from,from+size-1));
+   out.push(...part);
+   if(part.length<size)return out;
+  }
+ };
+ return {
+  async upsertCatalog(defs,catalogVersion,rulesVersion){await call(admin,'macro_upsert_catalog',{p_catalog_version:catalogVersion,p_rules_version:rulesVersion,p_defs:defs});},
+  async putRetrieval(obj,r){
+   return String(await call<string>(admin,'macro_put_retrieval',{p_sha256:obj.sha256,p_object_path:obj.object_path,p_adapter:obj.adapter,p_content_type:obj.content_type,p_byte_length:obj.byte_length,
+    p_fetch_url:r.fetch_url,p_fetch_host:r.fetch_host,p_http_status:r.http_status,p_fetched_at:r.fetched_at,p_batch_id:r.batch_id,p_tool_versions:r.tool_versions}));
+  },
+  async evidenceObject(sha256){const r=await maybe(anon.from('macro_evidence_objects').select('*').eq('sha256',sha256).maybeSingle());return r?evidenceFromRow(r):null;},
+  async retrieval(id){const r=await maybe(anon.from('macro_retrievals').select('*').eq('retrieval_id',id).maybeSingle());return r?retrievalFromRow(r):null;},
+  async retrievalsOf(sha256){
+   return (await rows(anon.from('macro_retrievals').select('*').eq('sha256',sha256).order('fetched_at',{ascending:true}).order('retrieval_id',{ascending:true}).range(0,READ_PAGE-1))).map(retrievalFromRow);
+  },
+  async retrievalsByIds(ids){
+   const uniq=[...new Set(ids)];const found=new Map<string,Retrieval>();
+   for(let i=0;i<uniq.length;i+=IN_CHUNK){
+    for(const r of await rows(anon.from('macro_retrievals').select('*').in('retrieval_id',uniq.slice(i,i+IN_CHUNK))))found.set(String(r.retrieval_id),retrievalFromRow(r));
+   }
+   return uniq.flatMap(id=>{const r=found.get(id);return r?[r]:[];});
+  },
+  async recordChunk(batchId,seq,total,counts){
+   const v=await call<string>(admin,'macro_record_chunk',{p_batch_id:batchId,p_seq:seq,p_total:total,p_counts:counts});
+   if(v!=='new'&&v!=='duplicate')throw new MacroDbError('rpc_failed',`unexpected_chunk_result:${String(v)}`);
+   return v;
+  },
+  async chunksOf(batchId){
+   const got=await pageAll(()=>admin.from('macro_ingest_chunks').select('seq,total,counts').eq('batch_id',batchId).order('seq',{ascending:true}) as Query,Number.MAX_SAFE_INTEGER);
+   return got.map(r=>({seq:Number(r.seq),total:Number(r.total),counts:countsOf(r.counts)}));
+  },
+  async writeObservations(batchId,codeVersion,input){
+   const parts:WriteResult[]=[];
+   for(const part of packWrites(input))parts.push(await call<WriteResult>(admin,'macro_write_observations',{p_batch:batchId,p_code_version:codeVersion,p_rows:part}));
+   return mergeResults(parts);
+  },
+  async latestObservations(ids,opts){
+   if(ids.length===0)return [];
+   return (await rows(anon.rpc('macro_latest_observations',{p_series_ids:ids,p_as_of:opts?.asOf??null,p_period_end_lte:opts?.periodEndLte??null}))).map(observationFromRow);
+  },
+  async seriesHistory(id,o){
+   if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+   const make=()=>{
+    let q=anon.from('macro_observations').select('*').eq('series_id',id).eq('status','ok');
+    if(o.from)q=q.gte('period_end',o.from);
+    if(o.to)q=q.lte('period_end',o.to);
+    if(o.asOf)q=q.lte('available_at',o.asOf);
+    return q.order('period_end',{ascending:true}).order('version',{ascending:true}) as Query;
+   };
+   const got=await pageAll(make,o.maxRows+1);
+   if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
+   return highestPerPeriod(got.map(observationFromRow));
+  },
+  async versionsOf(id,periodEnd){
+   return (await rows(anon.from('macro_observations').select('*').eq('series_id',id).eq('period_end',periodEnd).eq('status','ok').order('version',{ascending:true}))).map(observationFromRow);
+  },
+  async observationsByIds(ids){
+   const uniq=[...new Set(ids)];const found=new Map<string,ObservationRow>();
+   for(let i=0;i<uniq.length;i+=IN_CHUNK){
+    for(const r of await rows(anon.from('macro_observations').select('*').in('observation_id',uniq.slice(i,i+IN_CHUNK)).eq('status','ok')))found.set(String(r.observation_id),observationFromRow(r));
+   }
+   return uniq.flatMap(id=>{const o=found.get(id);return o?[o]:[];});
+  },
+  async publishState(region){
+   const r=await maybe(admin.from('macro_publish_state').select('revision,input_revision').eq('region',region).maybeSingle());
+   if(!r)throw new MacroDbError('not_found',`publish_state:${region}`);
+   return {revision:Number(r.revision),inputRevision:Number(r.input_revision)};
+  },
+  async resolveConflict(quarantineId,decision,resolvedBy){await call(admin,'macro_resolve_conflict',{p_quarantine_id:quarantineId,p_decision:decision,p_resolved_by:resolvedBy});},
+  async publishSnapshot(i){const r=await call<{snapshot_id:string;revision:number|string}>(admin,'publish_macro_snapshot',publishArgs(i));return {snapshot_id:String(r.snapshot_id),revision:Number(r.revision)};},
+  async recordFailedSnapshot(i){return String(await call<string>(admin,'record_failed_macro_snapshot',{p_region:i.region,p_as_of:i.asOf,p_methodology_version:i.methodologyVersion,p_catalog_version:i.catalogVersion,p_reason:i.reason}));},
+  async activeSnapshot(region){const r=await maybe(anon.from('macro_snapshots').select('*').eq('region',region).eq('status','active').maybeSingle());return r?snapshotFromRow(r):null;},
+  async snapshot(id){const r=await maybe(anon.from('macro_snapshots').select('*').eq('snapshot_id',id).maybeSingle());return r?snapshotFromRow(r):null;},
+  async snapshotsSince(marker,limit){
+   if(limit<=0)return [];
+   return (await rows(anon.rpc('macro_snapshots_since',{p_created_at:marker?.created_at??null,p_snapshot_id:marker?.snapshot_id??null,p_limit:Math.min(limit,1000)}))).map(snapshotFromRow);
+  },
+  async previousSnapshot(region,beforeCreatedAt){
+   const r=await maybe(anon.from('macro_snapshots').select('*').eq('region',region).neq('status','failed').lt('created_at',beforeCreatedAt)
+    .order('created_at',{ascending:false}).order('snapshot_id',{ascending:false}).limit(1).maybeSingle());
+   return r?snapshotFromRow(r):null;
+  },
+  async regimeOf(id){const r=await maybe(anon.from('macro_regime_results').select('*').eq('snapshot_id',id).maybeSingle());return r?regimeFromRow(r):null;},
+ };
+}
+```
+
+Create `src/lib/macro/memory-db.ts`:
+
+```ts
+// src/lib/macro/memory-db.ts
+// In-memory MacroDb with the semantics of the Task 1 SQL functions: catalog append + mirror,
+// evidence objects + per-fetch retrievals (host/path/precision checks), the observation write rules
+// (conflicting_rows, missing_evidence, missing_input, stale_delivery, inserted, duplicate,
+// versioned, unexpected_revision, input_revision bump), publish with stale_publisher /
+// invalid_manifest, failed snapshots, conflict resolution with an audit row, chunk receipts, and
+// ok-only reads. Every write validates the whole call first and commits atomically (one SQL call).
+// Reads return copies. For unit tests and the shared contract (db-contract.ts).
+import {randomUUID} from 'node:crypto';
+import {canonicalJson} from './catalog';
+import {MacroDbError,highestPerPeriod} from './db';
+import type {MacroDb} from './db';
+import type {ChunkCounts,EvidenceObject,MacroSeriesDef,ObservationRow,ObservationWrite,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
+
+const VALUE=/^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SERIES_ID=/^[A-Z][A-Z0-9_]{0,63}$/;
+const NATURAL_KEY=/^[A-Z][A-Z0-9_]{0,63}\|\d{4}-\d{2}-\d{2}$/;
+const CHUNK_KEYS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
+const rpc=(m:string)=>new MacroDbError('rpc_failed',m);
+const validDate=(s:unknown):s is string=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(`${s}T00:00:00Z`))&&new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s;
+const msOf=(s:string)=>Date.parse(s);
+const clone=<T>(v:T):T=>structuredClone(v);
+
+export interface QuarantineItem{id:string;dataset:string;table_name:string;natural_key:string;reason_code:string;batch_id:string;status:'open'|'resolved_accept'|'resolved_reject';resolved_by:string|null;resolved_at:string|null}
+export interface AuditRow{user_id:string;action:string;object_type:string;object_id:string;detail:Record<string,unknown>}
+export interface MemoryMacroDb extends MacroDb{
+ setNow(iso:string):void;
+ addQuarantineItem(i:{dataset:string;table_name?:string;natural_key:string;reason_code?:string;batch_id:string}):string;
+ quarantineItem(id:string):QuarantineItem|undefined;
+ readonly audit:readonly AuditRow[];
+ /** Every observation incl. quarantined (tests only; MacroDb reads are ok-only). */
+ allObservations():ObservationRow[];
+}
+
+export function memoryMacroDb():MemoryMacroDb{
+ let fixedNow:string|null=null;let lastMs=0;
+ // Real-clock timestamps are strictly increasing (SQL now() has µs resolution; two writes in one ms must still order),
+ // so previousSnapshot / snapshotsSince see insertion order. setNow pins the clock exactly (tests).
+ const now=()=>{if(fixedNow)return fixedNow;const ms=Math.max(Date.now(),lastMs+1);lastMs=ms;return new Date(ms).toISOString();};
+ const catalogVersions=new Map<string,{json:string;rules:string}>();
+ const series=new Map<string,MacroSeriesDef>();
+ const evidence=new Map<string,EvidenceObject>();
+ const retrievals=new Map<string,Retrieval>();
+ let observations:ObservationRow[]=[];
+ const snapshots:SnapshotRecord[]=[];
+ const regimes=new Map<string,RegimeRecord>();
+ const state:Record<Region,{revision:number;inputRevision:number}>={US:{revision:0,inputRevision:0},CN:{revision:0,inputRevision:0}};
+ const chunks=new Map<string,Map<number,{total:number;counts:ChunkCounts}>>();
+ const items=new Map<string,QuarantineItem>();
+ const audit:AuditRow[]=[];
+
+ const validateRow=(r:ObservationWrite)=>{
+  const x=r as unknown as Record<string,unknown>;
+  if(!r||typeof r!=='object'||typeof x.value_text!=='string'||!VALUE.test(x.value_text)||x.value_text==='-0')throw rpc('invalid_value_text');
+  if(typeof x.series_id!=='string'||typeof x.period_end!=='string'||typeof x.available_at!=='string'||typeof x.revisable!=='boolean')throw rpc('invalid_row');
+  if(!validDate(x.period_end)||!Number.isFinite(msOf(x.available_at)))throw rpc('invalid_row');
+  const s=series.get(x.series_id);
+  if(!s||s.status!=='active'||s.aliasOf)throw rpc('invalid_series');
+  if('retrieval_id' in x){
+   const loc=x.locator as {kind?:unknown}|null|undefined;
+   if(s.derive||'derived_from' in x||'transform' in x||!loc||typeof loc!=='object'||(loc.kind!=='csv_row'&&loc.kind!=='json_pointer'&&loc.kind!=='html_cell'))throw rpc('invalid_row');
+   if(typeof x.retrieval_id!=='string'||!UUID.test(x.retrieval_id))throw rpc('invalid_row');
+  }else{
+   const from=x.derived_from;
+   if(!s.derive||'locator' in x||!Array.isArray(from)||from.length===0||typeof x.transform!=='string'||!x.transform.startsWith(`${s.derive.kind}@`))throw rpc('invalid_row');
+   if(from.some(v=>typeof v!=='string'||!UUID.test(v)))throw rpc('invalid_row');
+  }
+ };
+
+ const db:MemoryMacroDb={
+  setNow(iso){fixedNow=new Date(iso).toISOString();},
+  addQuarantineItem(i){const id=randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
+  quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},
+  get audit(){return clone(audit);},
+  allObservations(){return clone(observations);},
+
+  async upsertCatalog(defs,catalogVersion,rulesVersion){
+   if(typeof catalogVersion!=='string'||!/^macro-catalog\/[0-9a-f]{12}$/.test(catalogVersion))throw rpc('invalid_catalog_version');
+   if(!Array.isArray(defs)||defs.length===0)throw rpc('invalid_catalog');
+   const json=canonicalJson(JSON.parse(JSON.stringify(defs)));
+   const existing=catalogVersions.get(catalogVersion);
+   if(existing&&existing.json!==json)throw rpc('catalog_version_conflict');
+   for(const d of defs)if(!d||typeof d!=='object'||!SERIES_ID.test(d.id))throw rpc('invalid_catalog');
+   if(!existing)catalogVersions.set(catalogVersion,{json,rules:rulesVersion});
+   for(const d of defs)series.set(d.id,clone(d));
+  },
+
+  async putRetrieval(obj,r){
+   const frac=/\.(\d+)/.exec(r.fetched_at??'');
+   if(typeof r.fetched_at!=='string'||!Number.isFinite(msOf(r.fetched_at))||(frac&&/[1-9]/.test(frac[1].slice(3))))throw rpc('invalid_retrieval');
+   if(!/^[0-9a-f]{64}$/.test(obj.sha256))throw rpc('violates check constraint macro_evidence_objects_sha256_check');
+   if(!new RegExp(`^${obj.adapter}/${obj.sha256}\\.(csv|json|html|txt)$`).test(obj.object_path))throw rpc('violates check constraint macro_evidence_path');
+   let host:string|null=null;try{const u=new URL(r.fetch_url);host=/^https?:$/.test(u.protocol)?u.hostname.toLowerCase():null;}catch{host=null;}
+   if(host!==r.fetch_host)throw rpc('violates check constraint macro_retrievals_host');
+   const cur=evidence.get(obj.sha256);
+   if(cur&&(cur.object_path!==obj.object_path||cur.adapter!==obj.adapter||cur.content_type!==obj.content_type||cur.byte_length!==obj.byte_length))throw rpc('evidence_mismatch');
+   if(!cur)evidence.set(obj.sha256,{...obj,created_at:now()});
+   const id=randomUUID();
+   retrievals.set(id,{retrieval_id:id,sha256:obj.sha256,fetch_url:r.fetch_url,fetch_host:r.fetch_host,http_status:r.http_status,fetched_at:new Date(r.fetched_at).toISOString(),batch_id:r.batch_id,tool_versions:clone(r.tool_versions??{})});
+   return id;
+  },
+  async evidenceObject(sha256){const e=evidence.get(sha256);return e?clone(e):null;},
+  async retrieval(id){const r=retrievals.get(id);return r?clone(r):null;},
+  async retrievalsOf(sha256){return [...retrievals.values()].filter(r=>r.sha256===sha256).sort((a,b)=>a.fetched_at<b.fetched_at?-1:a.fetched_at>b.fetched_at?1:a.retrieval_id<b.retrieval_id?-1:1).slice(0,1000).map(clone);},
+  async retrievalsByIds(ids){return [...new Set(ids)].flatMap(id=>{const r=retrievals.get(id);return r?[clone(r)]:[];});},
+
+  async recordChunk(batchId,seq,total,counts){
+   if(!Number.isInteger(seq)||!Number.isInteger(total)||seq<0||total<1||total>10000||seq>=total)throw rpc('invalid_chunk');
+   const c=counts as unknown as Record<string,unknown>;
+   if(!c||typeof c!=='object'||Object.keys(c).length!==6||!CHUNK_KEYS.every(k=>typeof c[k]==='number'&&Number.isFinite(c[k] as number)&&(c[k] as number)>=0))throw rpc('invalid_chunk');
+   const m=chunks.get(batchId)??new Map<number,{total:number;counts:ChunkCounts}>();
+   const first=m.values().next().value;
+   if(first&&first.total!==total)throw rpc('chunk_total_mismatch');
+   if(m.has(seq))return 'duplicate';
+   m.set(seq,{total,counts:clone(counts)});chunks.set(batchId,m);
+   return 'new';
+  },
+  async chunksOf(batchId){return [...(chunks.get(batchId)??new Map()).entries()].sort((a,b)=>a[0]-b[0]).map(([seq,v])=>({seq,total:v.total,counts:clone(v.counts)}));},
+
+  async writeObservations(batchId,codeVersion,rows){
+   if(!Array.isArray(rows))throw rpc('invalid_rows');
+   if(typeof codeVersion!=='string'||codeVersion.length<1||codeVersion.length>128)throw rpc('invalid_code_version');
+   for(const r of rows)validateRow(r);
+   const obs=[...observations];const touched=new Set<Region>();
+   const res:WriteResult={inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]};
+   const groups=new Map<string,ObservationWrite[]>();
+   for(const r of rows){const k=`${r.series_id}|${r.period_end}`;const g=groups.get(k);if(g)g.push(r);else groups.set(k,[r]);}
+   for(const g of groups.values()){
+    const {series_id,period_end}=g[0];const s=series.get(series_id)!;
+    const same=obs.filter(o=>o.series_id===series_id&&o.period_end===period_end);
+    const cur=same.filter(o=>o.status==='ok').sort((a,b)=>b.version-a.version)[0];
+    const conflict=(reason:WriteResult['conflicts'][number]['reason'],value_text:string)=>res.conflicts.push({series_id,period_end,reason,value_text,current_value_text:cur?.value_text??null});
+    const distinct:string[]=[];for(const r of g)if(!distinct.includes(r.value_text))distinct.push(r.value_text);   // canonical text: string equality = numeric equality
+    if(distinct.length>1){for(const v of distinct)conflict('conflicting_rows',v);res.quarantined++;continue;}
+    const e=g[0];let avail:string;
+    if('retrieval_id' in e){
+     const ret=retrievals.get(e.retrieval_id);
+     if(!ret){conflict('missing_evidence',e.value_text);continue;}
+     if(msOf(e.available_at)!==msOf(ret.fetched_at))throw rpc('invalid_available_at');
+     avail=ret.fetched_at;
+    }else{
+     const inputs=[...new Set(e.derived_from)].map(id=>obs.find(o=>o.observation_id===id&&o.status==='ok'));
+     if(inputs.some(i=>!i)){conflict('missing_input',e.value_text);continue;}
+     const max=Math.max(...inputs.map(i=>msOf(i!.available_at)));
+     if(msOf(e.available_at)!==max)throw rpc('invalid_available_at');
+     avail=new Date(max).toISOString();
+    }
+    let action:'inserted'|'duplicate'|'versioned'|'stale_delivery'|'unexpected_revision';
+    if(cur&&cur.value_text!==e.value_text&&msOf(avail)<msOf(cur.available_at))action='stale_delivery';
+    else if(!cur)action='inserted';
+    else if(cur.value_text===e.value_text)action='duplicate';
+    else if(e.revisable)action='versioned';
+    else action='unexpected_revision';
+    if(action==='duplicate'){res.duplicates++;continue;}
+    const status=action==='inserted'||action==='versioned'?'ok':same.some(o=>o.status==='quarantined'&&o.value_text===e.value_text)?null:'quarantined';
+    if(status){
+     const version=same.reduce((m,o)=>Math.max(m,o.version),0)+1;
+     const prov='retrieval_id' in e
+      ?{retrieval_id:e.retrieval_id,locator:clone(e.locator),derived_from:null,transform:null}
+      :{retrieval_id:null,locator:null,derived_from:[...e.derived_from],transform:e.transform};
+     obs.push({observation_id:randomUUID(),series_id,period_end,value_text:e.value_text,version,available_at:avail,availability_basis:'first_seen',ingested_at:now(),status,
+      ...prov,code_version:codeVersion,batch_id:batchId});
+     touched.add(s.region);
+    }
+    if(action==='inserted')res.inserted++;
+    else if(action==='versioned')res.versioned++;
+    else{res.quarantined++;conflict(action,e.value_text);}
+   }
+   observations=obs;
+   for(const r of touched)state[r].inputRevision++;
+   return res;
+  },
+
+  async latestObservations(ids,opts){
+   const want=new Set(ids);const best=new Map<string,ObservationRow>();
+   for(const o of observations){
+    if(!want.has(o.series_id)||o.status!=='ok')continue;
+    if(opts?.asOf&&msOf(o.available_at)>msOf(opts.asOf))continue;
+    if(opts?.periodEndLte&&o.period_end>opts.periodEndLte)continue;
+    const b=best.get(o.series_id);
+    if(!b||o.period_end>b.period_end||(o.period_end===b.period_end&&o.version>b.version))best.set(o.series_id,o);
+   }
+   return [...best.values()].sort((a,b)=>a.series_id<b.series_id?-1:1).map(clone);
+  },
+  async seriesHistory(id,o){
+   if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw rpc('invalid_max_rows');
+   const got=observations.filter(x=>x.series_id===id&&x.status==='ok'&&(!o.from||x.period_end>=o.from)&&(!o.to||x.period_end<=o.to)&&(!o.asOf||msOf(x.available_at)<=msOf(o.asOf)))
+    .sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:a.version-b.version);
+   if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
+   return highestPerPeriod(got).map(clone);
+  },
+  async versionsOf(id,periodEnd){return observations.filter(o=>o.series_id===id&&o.period_end===periodEnd&&o.status==='ok').sort((a,b)=>a.version-b.version).map(clone);},
+  async observationsByIds(ids){return [...new Set(ids)].flatMap(id=>{const o=observations.find(x=>x.observation_id===id&&x.status==='ok');return o?[clone(o)]:[];});},
+  async publishState(region){const s=state[region];if(!s)throw new MacroDbError('not_found',`publish_state:${region}`);return {...s};},
+
+  async resolveConflict(quarantineId,decision,resolvedBy){
+   if(decision!=='accept'&&decision!=='reject')throw rpc('invalid_decision');
+   if(!resolvedBy)throw rpc('invalid_resolver');
+   const q=items.get(quarantineId);
+   if(!q)throw new MacroDbError('not_found');
+   if(!q.dataset.startsWith('macro.')||q.table_name!=='macro_observations'||!NATURAL_KEY.test(q.natural_key))throw rpc('invalid_item');
+   if(q.status!=='open')throw new MacroDbError('already_resolved');
+   const [seriesId,periodEnd]=q.natural_key.split('|');
+   const s=series.get(seriesId);
+   if(!s)throw rpc('invalid_item');
+   let observationId:string|null=null;let status:QuarantineItem['status'];
+   if(decision==='accept'){
+    const target=observations.filter(o=>o.series_id===seriesId&&o.period_end===periodEnd&&o.status==='quarantined').sort((a,b)=>b.version-a.version)[0];
+    if(!target)throw new MacroDbError('not_found');
+    observations=observations.map(o=>o.observation_id===target.observation_id?{...o,status:'ok'}:o);
+    state[s.region].inputRevision++;
+    observationId=target.observation_id;status='resolved_accept';
+   }else status='resolved_reject';
+   items.set(quarantineId,{...q,status,resolved_by:resolvedBy,resolved_at:now()});
+   audit.push({user_id:resolvedBy,action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,
+    detail:{id:quarantineId,status,decision,dataset:q.dataset,natural_key:q.natural_key,reason_code:q.reason_code,observation_id:observationId}});
+  },
+
+  async publishSnapshot(i){
+   const st=state[i.region];
+   if(!st)throw new MacroDbError('invalid_manifest');
+   if(st.revision!==i.expectedRevision||st.inputRevision!==i.expectedInputRevision)throw new MacroDbError('stale_publisher');
+   const bad=()=>new MacroDbError('invalid_manifest');
+   if(!validDate(i.asOf)||!i.methodologyVersion||i.methodologyVersion.length>64||!i.rulesVersion||i.rulesVersion.length>64||!catalogVersions.has(i.catalogVersion))throw bad();
+   if(!Array.isArray(i.observationIds)||new Set(i.observationIds).size!==i.observationIds.length)throw bad();
+   for(const id of i.observationIds){const o=observations.find(x=>x.observation_id===id);if(!o||o.status!=='ok'||series.get(o.series_id)?.region!==i.region)throw bad();}
+   const c=i.catalogCounts as unknown as Record<string,unknown>;
+   if(!c||typeof c!=='object'||Object.keys(c).length!==3||!['verified','missing','restricted'].every(k=>Number.isInteger(c[k])&&(c[k] as number)>=0))throw bad();
+   if((i.regime!==null&&typeof i.regime!=='object')||!Array.isArray(i.contributions)||!(typeof i.uncoveredWeight==='number'&&i.uncoveredWeight>=0))throw bad();
+   for(const s of snapshots)if(s.region===i.region&&s.status==='active')s.status='superseded';
+   const snapshot_id=randomUUID();const revision=i.expectedRevision+1;
+   snapshots.push({snapshot_id,region:i.region,as_of:i.asOf,revision,methodology_version:i.methodologyVersion,catalog_version:i.catalogVersion,observation_ids:[...i.observationIds],
+    catalog_counts:clone(i.catalogCounts),status:'active',failure_reason:null,created_at:now()});
+   regimes.set(snapshot_id,{snapshot_id,region:i.region,regime:clone(i.regime),contributions:clone(i.contributions),rules_version:i.rulesVersion,uncovered_weight:i.uncoveredWeight});
+   st.revision=revision;
+   return {snapshot_id,revision};
+  },
+  async recordFailedSnapshot(i){
+   const st=state[i.region];
+   if(!st)throw rpc('invalid_region');
+   if(typeof i.reason!=='string'||i.reason.length<1||i.reason.length>2000)throw rpc('invalid_reason');
+   const snapshot_id=randomUUID();
+   snapshots.push({snapshot_id,region:i.region,as_of:i.asOf,revision:st.revision,methodology_version:i.methodologyVersion,catalog_version:i.catalogVersion,observation_ids:[],
+    catalog_counts:{verified:0,missing:0,restricted:0},status:'failed',failure_reason:i.reason,created_at:now()});
+   return snapshot_id;
+  },
+  async activeSnapshot(region){const s=snapshots.find(x=>x.region===region&&x.status==='active');return s?clone(s):null;},
+  async snapshot(id){const s=snapshots.find(x=>x.snapshot_id===id);return s?clone(s):null;},
+  async snapshotsSince(marker,limit){
+   if(limit<=0)return [];
+   const after=(s:SnapshotRecord)=>!marker||s.created_at>marker.created_at||(s.created_at===marker.created_at&&s.snapshot_id>marker.snapshot_id);
+   return snapshots.filter(s=>s.status!=='failed'&&after(s))
+    .sort((a,b)=>a.created_at<b.created_at?-1:a.created_at>b.created_at?1:a.snapshot_id<b.snapshot_id?-1:1)
+    .slice(0,Math.min(limit,1000)).map(clone);
+  },
+  async previousSnapshot(region,beforeCreatedAt){
+   const s=snapshots.filter(x=>x.region===region&&x.status!=='failed'&&x.created_at<beforeCreatedAt)
+    .sort((a,b)=>a.created_at<b.created_at?1:a.created_at>b.created_at?-1:a.snapshot_id<b.snapshot_id?1:-1)[0];
+   return s?clone(s):null;
+  },
+  async regimeOf(id){const r=regimes.get(id);return r?clone(r):null;},
+ };
+ return db;
+}
+```
+
+Create `src/lib/macro/evidence.ts`:
+
+```ts
+// src/lib/macro/evidence.ts
+// Raw evidence bytes (spec §4.3, §0.2 N2; pattern of src/lib/facts/snapshot-store.ts). put() stores
+// the exact fetched bytes in the private bucket macro-raw at <adapter>/<sha256>.<ext> and a
+// <adapter>/<sha256>.meta.json sidecar (retrieval receipt; never a secret) with upsert:false, so
+// identical bytes fetched again answer 'exists' and evidence is never rewritten. The declared
+// sha256 must be the bytes' hash and the declared host the URL's host, else the evidence path
+// would lie. Upload failure is evidence_upload_failed: the caller writes no observation from it.
+import {createHash} from 'node:crypto';
+import type {SupabaseClient} from '@supabase/supabase-js';
+import type {Adapter,EvidenceInput} from './types';
+
+export const EVIDENCE_BUCKET='macro-raw';
+export type EvidenceExt='csv'|'json'|'html'|'txt';
+export interface EvidenceStore{put(input:EvidenceInput):Promise<{objectPath:string;status:'stored'|'exists'}>}
+export class EvidenceError extends Error{
+ constructor(readonly code:'evidence_hash_mismatch'|'evidence_invalid'|'evidence_upload_failed',message?:string){super(message===undefined?code:`${code}: ${message}`);this.name='EvidenceError';}
+}
+const ADAPTERS:readonly Adapter[]=['fred_csv','akshare'];
+const PATH=/^(fred_csv|akshare)\/[0-9a-f]{64}\.(csv|json|html|txt)$/;
+// FRED answers Content-Type application/csv (verified 2026-11-06); it is still CSV. The upload MIME comes from the
+// extension (MIME below), never from the server header, so it is always one the bucket allows.
+const EXT:Record<string,EvidenceExt>={'text/csv':'csv','application/csv':'csv','application/json':'json','text/html':'html','text/plain':'txt'};
+const MIME:Record<EvidenceExt,string>={csv:'text/csv',json:'application/json',html:'text/html',txt:'text/plain'};
+
+export const sha256Hex=(bytes:Uint8Array|string):string=>createHash('sha256').update(bytes).digest('hex');
+/** Extension by the response Content-Type (parameters ignored); anything else is stored as txt. */
+export function extFor(contentType:string):EvidenceExt{return EXT[contentType.split(';')[0].trim().toLowerCase()]??'txt';}
+export function evidencePath(adapter:Adapter,sha256:string,contentType:string):string{
+ const p=`${adapter}/${sha256}.${extFor(contentType)}`;
+ if(!PATH.test(p))throw new EvidenceError('evidence_invalid',`path:${p.slice(0,90)}`);
+ return p;
+}
+export const metaPathOf=(objectPath:string):string=>objectPath.replace(/\.(csv|json|html|txt)$/,'.meta.json');
+const mimeOf=(objectPath:string)=>MIME[objectPath.slice(objectPath.lastIndexOf('.')+1) as EvidenceExt];
+
+function check(e:EvidenceInput):string{
+ if(!ADAPTERS.includes(e.adapter))throw new EvidenceError('evidence_invalid',`adapter:${String(e.adapter).slice(0,40)}`);
+ if(sha256Hex(e.bytes)!==e.sha256)throw new EvidenceError('evidence_hash_mismatch');
+ let host:string|null=null;try{const u=new URL(e.fetchUrl);host=/^https?:$/.test(u.protocol)?u.hostname.toLowerCase():null;}catch{host=null;}
+ if(host===null||host!==e.fetchHost)throw new EvidenceError('evidence_invalid',`host:${e.fetchHost}`);
+ return evidencePath(e.adapter,e.sha256,e.contentType);
+}
+const metaOf=(e:EvidenceInput)=>JSON.stringify({sha256:e.sha256,adapter:e.adapter,byte_length:e.bytes.byteLength,fetch_url:e.fetchUrl,fetch_host:e.fetchHost,http_status:e.httpStatus,content_type:e.contentType,fetched_at:e.fetchedAt,tool_versions:e.toolVersions});
+
+interface UploadError{message:string;statusCode?:string|number;status?:number}
+const isExists=(e:UploadError)=>String(e.statusCode??e.status??'')==='409'||/already exists|duplicate/i.test(e.message);
+
+export function supabaseEvidenceStore(admin:SupabaseClient):EvidenceStore{
+ const bucket=()=>admin.storage.from(EVIDENCE_BUCKET);
+ const upload=async(path:string,body:Uint8Array|string,contentType:string):Promise<'stored'|'exists'>=>{
+  const {error}=await bucket().upload(path,body,{contentType,upsert:false});
+  if(!error)return 'stored';
+  if(isExists(error as UploadError))return 'exists';
+  throw new EvidenceError('evidence_upload_failed',(error as UploadError).message);
+ };
+ return {
+  async put(e){
+   const objectPath=check(e);
+   const status=await upload(objectPath,e.bytes,mimeOf(objectPath));
+   await upload(metaPathOf(objectPath),metaOf(e),'application/json');
+   return {objectPath,status};
+  },
+ };
+}
+
+export function memoryEvidenceStore():EvidenceStore&{objects:Map<string,string|Uint8Array>;read(path:string):string|Uint8Array|undefined}{
+ const objects=new Map<string,string|Uint8Array>();
+ return {
+  objects,
+  read(path){const v=objects.get(path);return v instanceof Uint8Array?new Uint8Array(v):v;},
+  async put(e){
+   const objectPath=check(e);
+   if(objects.has(objectPath))return {objectPath,status:'exists'};
+   objects.set(objectPath,new Uint8Array(e.bytes));objects.set(metaPathOf(objectPath),metaOf(e));
+   return {objectPath,status:'stored'};
+  },
+ };
+}
+```
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/db.test.ts src/lib/macro/evidence.test.ts src/lib/macro/catalog.test.ts src/lib/macro/decimal.test.ts && npm run typecheck && npm run lint`
+Expected: PASS.
+
+Then check that memory and SQL agree on the shared branches. Run the Task 1 suite against an empty database: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/macro.integration.test.ts`
+Expected: PASS. Then compare each conflict/count expectation in `db-contract.ts` with its integration-test twin by name: insert/duplicate/versioned, unexpected_revision, conflicting_rows, stale_delivery, missing_evidence, missing_input, publish, resolve, chunks. If they disagree, the SQL is the authority: fix `memory-db.ts`, never the migration (it is locked).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/db.ts src/lib/macro/memory-db.ts src/lib/macro/db-contract.ts src/lib/macro/evidence.ts src/lib/macro/db.test.ts src/lib/macro/evidence.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): MacroDb over Supabase RPC/anon reads, memory twin with shared contract, macro-raw evidence store
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+## Part B — 采集（Task 4–9）
+
+### 已核实的上游事实（2026-11-06 录制；Task 4–9 依据）
+
+- **FRED** `https://fred.stlouisfed.org/graph/fredgraph.csv?id=<CODE>&cosd=<YYYY-MM-DD>`: HTTP 200, `content-type: application/csv`, LF line endings, trailing `\n`, header `observation_date,<CODE>`. **Missing values are now an empty field** (`2025-01-20,` in DGS10; `2025-10-01,` in CPIAUCSL and UNRATE — the 2025 shutdown month), not `.`; the parser treats both `''` and `.` as missing. Monthly series are dated the **first** of the month (`2026-09-01,336.298`) → `period_end` = month end. Values keep trailing zeros (`PPIFIS 2015-01-01,110.100`, `DFEDTARL 0.00`) → canonical `110.1`, `0`. WTI has a negative value (`2020-04-20,-36.98`). With `cosd=2015-01-01`: DFF 4327 lines, DGS10 3090, DTWEXBGS 3087, DCOILWTICO 3089, CPIAUCSL/UNRATE/PPIFIS 142 — all fixtures together ≈ 380 KB.
+- **NBS** (`macro_china_nbs_nation`): data come from `POST https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData` → `application/json;charset=UTF-8`, body `{"data":[{"code":"202610MM","name":"2026年10月","values":[{"i_showname":"制造业采购经理指数 (%) ","_id":"…","value":"49.3","da":"000000000000",…},…]},…],"success":true,"state":20000,"message":"成功"}`. **`value` is a JSON string** (lossless); an unreleased period has `"value":""` (e.g. `202610MM` for CPI/M2/exports on 2026-11-06). Quarter codes are `YYYY0QSS` (`202603SS` = 2026 Q3). Match names after removing all whitespace: `居民消费价格指数(上年同月=100)`, `工业生产者出厂价格指数(上年同月=100)`, `制造业采购经理指数(%)`, `国内生产总值指数(上年同期=100)当季值`, `货币和准货币(M2)供应量_同比增长(%)`, `出口总值同比增长(%)`. AKShare's DataFrame converts every value with `pd.to_numeric` (float64), and renames rows (`货币和准货币(M2)供应量__同比增长(%)`, `出口总值_同比增长(%)`), so Python claims are cross-checks only.
+- **ChinaBond** (`bond_china_yield`): `GET https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery?startDate=…&endDate=…&gjqx=0&qxId=ycqx&locale=cn_ZH` → `text/html;charset=UTF-8`; 2 `<table>`s, data in the 2nd: header `<td>曲线名称</td><td>日期</td><td>3<!-- 月 -->月</td>…<td>10<!-- 年 -->年</td><td>30<!-- 年 -->年</td>`, then rows `<td style="text-align: left">中债国债收益率曲线</td><td>2026-11-05</td>…<td>1.6038</td><td>2.0425</td>` (3 curves per date, newest first, empty `<td></td>` for missing). Window must be < 1 year.
+- **SAFE** (`currency_boc_safe`): three requests — `GET https://www.safe.gov.cn/safe/2020/1218/17833.html` (link page), `GET …/safe/file/file/20260106/<id>.xlsx` (history through ~2026-01-05, 1.2 MB, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`), `POST https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do` (`text/html;charset=UTF-8`, 525 KB, 5 tables, data in `<table class="list" id="InfoTable" …>`: header `<th …>日期</th>` + 25 currency `<th>` (美元 first), rows `<td …>2026-11-05</td><td td width="8%" align="center" >671.56</td>…`, plus one leftover template row whose only cell is `-&nbsp;`). The bucket does not accept XLSX and Part B has no XLSX locator, so **only the HTML is evidence**: CN_USDCNY_CP_D history starts at the first date in that HTML (2026-01-05 today). See notes.
+
+
+---
+
+### Task 4: FRED CSV parser, period helpers, real FRED fixtures
+
+Depends on Task 2 (`types.ts`, `decimal.ts`, `catalog.ts`). No network in tests; the fixture recorder is a one-time networked script.
+
+**Files:**
+- Create: `src/lib/macro/periods.ts` (calendar helpers shared by parsers, derive and later tasks)
+- Create: `src/lib/macro/periods.test.ts`
+- Create: `src/lib/macro/parsers/fred-csv.ts`
+- Create: `scripts/macro/record-fred-fixtures.ts`
+- Create (recorded, committed): `src/lib/macro/fixtures/fred/<CODE>.csv` for every A-status native FRED series, and `src/lib/macro/fixtures/fred/manifest.json`
+- Test: `src/lib/macro/parsers/fred-csv.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// src/lib/macro/periods.test.ts
+import {describe,expect,it} from 'vitest';
+import {isIsoDate,monthEnd,monthKey,periodEndOf,quarterEnd,shiftMonthEnd} from './periods';
+
+describe('periods',()=>{
+ it('validates real calendar dates only',()=>{
+  expect(isIsoDate('2024-02-29')).toBe(true);
+  for(const s of ['2026-02-29','2026-13-01','2026-1-01','2026-01-00','20260101',''])expect(isIsoDate(s),s).toBe(false);
+ });
+ it('computes month and quarter ends, including leap Februaries',()=>{
+  expect(monthEnd(2024,2)).toBe('2024-02-29');expect(monthEnd(2026,2)).toBe('2026-02-28');expect(monthEnd(2026,12)).toBe('2026-12-31');
+  expect(quarterEnd(2026,3)).toBe('2026-09-30');expect(quarterEnd(2026,1)).toBe('2026-03-31');
+  expect(()=>monthEnd(2026,13)).toThrow('invalid_month');expect(()=>quarterEnd(2026,5)).toThrow('invalid_quarter');
+ });
+ it('maps a date to the period end of its period kind',()=>{
+  expect(periodEndOf('2026-09-01','month')).toBe('2026-09-30');
+  expect(periodEndOf('2026-07-01','quarter')).toBe('2026-09-30');
+  expect(periodEndOf('2026-03-16','day')).toBe('2026-03-16');
+  expect(()=>periodEndOf('2026-02-30','day')).toThrow('invalid_date');
+ });
+ it('shifts month ends across years in both directions',()=>{
+  expect(shiftMonthEnd('2026-03-31',-12)).toBe('2025-03-31');
+  expect(shiftMonthEnd('2024-02-29',-12)).toBe('2023-02-28');
+  expect(shiftMonthEnd('2026-01-15',-1)).toBe('2025-12-31');
+  expect(shiftMonthEnd('2026-12-31',1)).toBe('2027-01-31');
+  expect(monthKey('2026-09-30')).toBe('2026-09');
+ });
+});
+```
+
+```ts
+// src/lib/macro/parsers/fred-csv.test.ts
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {describe,expect,it} from 'vitest';
+import {MACRO_CATALOG} from '../catalog';
+import {FredParseError,parseFredCsv} from './fred-csv';
+
+const enc=(s:string)=>new TextEncoder().encode(s);
+const day={seriesId:'US_DGS10_D',code:'DGS10',period:'day' as const};
+
+describe('parseFredCsv (synthetic)',()=>{
+ it('keeps the value text losslessly and locates each value by 1-based line, column 1',()=>{
+  const pts=parseFredCsv(enc('observation_date,DGS10\n2026-10-01,5.24\n2026-10-02,4.00\n2026-10-05,0.10000000000000001\n'),day);
+  expect(pts).toEqual([
+   {seriesId:'US_DGS10_D',periodEnd:'2026-10-01',valueText:'5.24',locator:{kind:'csv_row',line:2,column:1}},
+   {seriesId:'US_DGS10_D',periodEnd:'2026-10-02',valueText:'4',locator:{kind:'csv_row',line:3,column:1}},
+   {seriesId:'US_DGS10_D',periodEnd:'2026-10-05',valueText:'0.10000000000000001',locator:{kind:'csv_row',line:4,column:1}},
+  ]);
+ });
+ it('skips empty and "." values (missing stays missing) without shifting line numbers',()=>{
+  const pts=parseFredCsv(enc('observation_date,DGS10\n2025-01-17,4.61\n2025-01-20,\n2025-01-21,.\n2025-01-22,4.57\n'),day);
+  expect(pts.map(p=>[p.periodEnd,p.valueText,p.locator])).toEqual([
+   ['2025-01-17','4.61',{kind:'csv_row',line:2,column:1}],['2025-01-22','4.57',{kind:'csv_row',line:5,column:1}],
+  ]);
+ });
+ it('maps monthly and quarterly first-of-period dates to period ends and rejects mid-period dates',()=>{
+  const m=parseFredCsv(enc('observation_date,CPIAUCSL\n2024-02-01,310.326\n2026-09-01,336.298\n'),{seriesId:'US_CPI_INDEX',code:'CPIAUCSL',period:'month'});
+  expect(m.map(p=>p.periodEnd)).toEqual(['2024-02-29','2026-09-30']);
+  const q=parseFredCsv(enc('observation_date,GDPC1\n2026-07-01,1\n'),{seriesId:'X',code:'GDPC1',period:'quarter'});
+  expect(q[0].periodEnd).toBe('2026-09-30');
+  expect(()=>parseFredCsv(enc('observation_date,CPIAUCSL\n2026-09-15,1\n'),{seriesId:'X',code:'CPIAUCSL',period:'month'})).toThrow('bad_period_start');
+  expect(()=>parseFredCsv(enc('observation_date,GDPC1\n2026-08-01,1\n'),{seriesId:'X',code:'GDPC1',period:'quarter'})).toThrow('bad_period_start');
+ });
+ it('accepts CRLF, a BOM and no trailing newline',()=>{
+  const pts=parseFredCsv(enc('﻿observation_date,DGS10\r\n2026-10-01,5.24\r\n2026-10-02,5.28'),day);
+  expect(pts.map(p=>p.valueText)).toEqual(['5.24','5.28']);
+  expect(pts[1].locator).toEqual({kind:'csv_row',line:3,column:1});
+ });
+ it('returns every row of a duplicated date so the write RPC can report conflicting_rows',()=>{
+  const pts=parseFredCsv(enc('observation_date,DGS10\n2026-10-01,5.24\n2026-10-01,5.25\n'),day);
+  expect(pts.map(p=>[p.periodEnd,p.valueText,p.locator.kind==='csv_row'?p.locator.line:0])).toEqual([['2026-10-01','5.24',2],['2026-10-01','5.25',3]]);
+ });
+ it('fails closed on any structural surprise',()=>{
+  const bad:[string,string][]=[
+   ['DATE,DGS10\n2026-10-01,1\n','bad_header'],
+   ['observation_date,DGS2\n2026-10-01,1\n','bad_header'],
+   ['observation_date,DGS10\n2026-10-01,1,2\n','bad_row'],
+   ['observation_date,DGS10\n2026-10-01\n','bad_row'],
+   ['observation_date,DGS10\n2026/10/01,1\n','bad_date'],
+   ['observation_date,DGS10\n2026-02-30,1\n','bad_date'],
+   ['observation_date,DGS10\n2026-10-01,1e999\n','bad_value'],
+   ['observation_date,DGS10\n2026-10-01,NaN\n','bad_value'],
+   ['','bad_header'],
+  ];
+  for(const [csv,code] of bad){
+   let err:unknown;try{parseFredCsv(enc(csv),day);}catch(e){err=e;}
+   expect(err,csv).toBeInstanceOf(FredParseError);expect((err as FredParseError).code,csv).toBe(code);
+  }
+  expect(()=>parseFredCsv(new Uint8Array([0x6f,0xff,0xfe]),day)).toThrow('bad_encoding');
+  expect(()=>parseFredCsv(enc('observation_date,x\n'),{...day,code:'x'})).toThrow('bad_code');
+ });
+});
+
+// Real fixtures recorded by scripts/macro/record-fred-fixtures.ts (cosd=2015-01-01). The expected rows below were read
+// from FRED on 2026-11-06 with the same URLs; Step 3 says how to confirm them against the recorded files.
+interface ManifestEntry{code:string;series_id:string;url:string;fetched_at:string;sha256:string;content_type:string;http_status:number}
+const manifest:ManifestEntry[]=JSON.parse(readFileSync(new URL('../fixtures/fred/manifest.json',import.meta.url),'utf8'));
+const fixture=(code:string)=>new Uint8Array(readFileSync(new URL(`../fixtures/fred/${code}.csv`,import.meta.url)));
+const defOf=(code:string)=>{const d=MACRO_CATALOG.find(x=>x.source?.adapter==='fred_csv'&&x.source.seriesKey===code&&!x.derive&&!x.aliasOf);if(!d)throw new Error(`no def for ${code}`);return d;};
+const parse=(code:string)=>{const d=defOf(code);return parseFredCsv(fixture(code),{seriesId:d.id,code,period:d.period});};
+const row=(code:string,periodEnd:string)=>parse(code).find(p=>p.periodEnd===periodEnd);
+
+describe('parseFredCsv (recorded fixtures)',()=>{
+ it('has one fixture per active native FRED series, each matching its manifest hash and URL',()=>{
+  const want=MACRO_CATALOG.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf).map(d=>d.source!.seriesKey).sort();
+  expect(manifest.map(m=>m.code).sort()).toEqual(want);
+  for(const m of manifest){
+   expect(createHash('sha256').update(fixture(m.code)).digest('hex'),m.code).toBe(m.sha256);
+   expect(m.url).toBe(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${m.code}&cosd=2015-01-01`);
+   expect(m.http_status).toBe(200);
+   expect(parse(m.code).length,m.code).toBeGreaterThan(100);
+  }
+ });
+ it('reads exact value texts and lines of known rows',()=>{
+  const cases:[string,string,string,number][]=[
+   ['DFF','2015-01-01','0.06',2],['DFF','2020-03-16','0.25',1903],
+   ['DFEDTARL','2015-01-01','0',2],                                     // raw "0.00"
+   ['DFEDTARU','2020-03-16','0.25',1903],
+   ['DGS10','2015-01-02','2.12',2],['DGS10','2020-03-16','0.73',1358],
+   ['DTWEXBGS','2015-01-02','102.9027',2],
+   ['DCOILWTICO','2020-04-20','-36.98',1383],                           // a negative price is data, not an error
+   ['CPIAUCSL','2020-04-30','256.032',65],['UNRATE','2020-04-30','14.8',65],
+   ['PPIFIS','2015-01-31','110.1',2],['PPIFIS','2020-04-30','116.6',65], // raw "110.100" / "116.600"
+  ];
+  for(const [code,pe,value,line] of cases){
+   const p=row(code,pe);
+   expect(p,`${code} ${pe}`).toBeDefined();
+   expect(p!.valueText,`${code} ${pe}`).toBe(value);
+   expect(p!.locator,`${code} ${pe}`).toEqual({kind:'csv_row',line,column:1});
+  }
+ });
+ it('leaves holiday and shutdown gaps missing',()=>{
+  expect(row('DGS10','2025-01-20')).toBeUndefined();     // MLK day: "2025-01-20,"
+  expect(row('CPIAUCSL','2025-10-31')).toBeUndefined();  // 2025 shutdown: "2025-10-01,"
+  expect(row('UNRATE','2025-10-31')).toBeUndefined();
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/periods.test.ts src/lib/macro/parsers/fred-csv.test.ts`
+Expected: FAIL (`Cannot find module './periods'`, `Cannot find module './fred-csv'`, missing `fixtures/fred/manifest.json`).
+
+- [ ] **Step 3: Implement, then record the fixtures**
+
+```ts
+// src/lib/macro/periods.ts
+// Calendar helpers for period_end (spec §4.2: day = the date, month = last day of the month, quarter =
+// last day of the quarter). Pure UTC date arithmetic on ISO YYYY-MM-DD strings; no Date parsing of
+// local time. Shared by parsers (period_end of a source row), derive (month_end, yoy) and later tasks.
+import type {PeriodKind} from './types';
+
+const ISO=/^(\d{4})-(\d{2})-(\d{2})$/;
+const pad=(n:number,w=2)=>String(n).padStart(w,'0');
+/** True for a real calendar date in YYYY-MM-DD form (rejects 2026-02-30). */
+export function isIsoDate(s:string):boolean{
+ const m=ISO.exec(s);if(!m)return false;
+ const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);
+ return mo>=1&&mo<=12&&d>=1&&d<=daysInMonth(y,mo);
+}
+export function daysInMonth(year:number,month:number):number{return new Date(Date.UTC(year,month,0)).getUTCDate();}
+/** Last day of month (month 1..12). */
+export function monthEnd(year:number,month:number):string{
+ if(!Number.isInteger(year)||!Number.isInteger(month)||month<1||month>12)throw new Error('invalid_month');
+ return `${pad(year,4)}-${pad(month)}-${pad(daysInMonth(year,month))}`;
+}
+/** Last day of quarter (q 1..4). */
+export function quarterEnd(year:number,q:number):string{
+ if(!Number.isInteger(q)||q<1||q>4)throw new Error('invalid_quarter');
+ return monthEnd(year,q*3);
+}
+/** period_end of the period containing `date` for the series' period kind. */
+export function periodEndOf(date:string,period:PeriodKind):string{
+ if(!isIsoDate(date))throw new Error(`invalid_date:${date.slice(0,20)}`);
+ const y=Number(date.slice(0,4)),m=Number(date.slice(5,7));
+ return period==='day'?date:period==='month'?monthEnd(y,m):quarterEnd(y,Math.ceil(m/3));
+}
+/** Month end n months after the month of `date` (n may be negative). */
+export function shiftMonthEnd(date:string,n:number):string{
+ if(!isIsoDate(date)||!Number.isInteger(n))throw new Error('invalid_shift');
+ const total=Number(date.slice(0,4))*12+Number(date.slice(5,7))-1+n;
+ return monthEnd(Math.floor(total/12),(total%12+12)%12+1);
+}
+/** 'YYYY-MM' of an ISO date. */
+export const monthKey=(date:string)=>date.slice(0,7);
+```
+
+```ts
+// src/lib/macro/parsers/fred-csv.ts
+// FRED public CSV → ParsedPoint (spec §4.4 "FRED CSV 解析"). Input is the exact evidence bytes of
+// fredgraph.csv?id=<CODE>: header `observation_date,<CODE>`, then `YYYY-MM-DD,<value>` per line.
+// The value text is kept as text (canonical decimal, never Number()); an empty field or `.` is a
+// missing value and produces no point (missing stays missing). Monthly/quarterly rows are dated the
+// first day of the period and are mapped to the period end. Locator = 1-based file line, column 1
+// (the value column). Duplicate dates are all returned: macro_write_observations reports two
+// different values for one period as `conflicting_rows`. Any structural surprise throws
+// FredParseError, so a changed format can never be half-read.
+import {canonical} from '../decimal';
+import {isIsoDate,periodEndOf} from '../periods';
+import type {ParsedPoint,PeriodKind} from '../types';
+
+export const FRED_PARSER_VERSION='fred-csv/1';
+export class FredParseError extends Error{
+ readonly code:string;
+ constructor(code:string,message?:string){super(message??code);this.name='FredParseError';this.code=code;}
+}
+const CODE=/^[A-Z0-9_]{1,40}$/;
+
+export function parseFredCsv(bytes:Uint8Array,opts:{seriesId:string;code:string;period:PeriodKind}):ParsedPoint[]{
+ if(!CODE.test(opts.code))throw new FredParseError('bad_code');
+ let text:string;
+ try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw new FredParseError('bad_encoding');}
+ if(text.charCodeAt(0)===0xfeff)text=text.slice(1);
+ const lines=text.split('\n');
+ if(lines.length>0&&lines[lines.length-1]==='')lines.pop();   // trailing newline
+ const strip=(l:string)=>l.endsWith('\r')?l.slice(0,-1):l;
+ if(lines.length===0||strip(lines[0])!==`observation_date,${opts.code}`)throw new FredParseError('bad_header',strip(lines[0]??'').slice(0,80));
+ const out:ParsedPoint[]=[];
+ for(let i=1;i<lines.length;i++){
+  const line=strip(lines[i]),lineNo=i+1;
+  const comma=line.indexOf(',');
+  if(comma<0||line.indexOf(',',comma+1)>=0)throw new FredParseError('bad_row',`line ${lineNo}`);
+  const date=line.slice(0,comma),raw=line.slice(comma+1);
+  if(!isIsoDate(date))throw new FredParseError('bad_date',`line ${lineNo}`);
+  if(raw===''||raw==='.')continue;
+  let valueText:string;
+  try{valueText=canonical(raw);}catch{throw new FredParseError('bad_value',`line ${lineNo}`);}
+  if(opts.period!=='day'){
+   const start=opts.period==='month'?date.slice(8)==='01':date.slice(8)==='01'&&['01','04','07','10'].includes(date.slice(5,7));
+   if(!start)throw new FredParseError('bad_period_start',`line ${lineNo}`);
+  }
+  out.push({seriesId:opts.seriesId,periodEnd:periodEndOf(date,opts.period),valueText,locator:{kind:'csv_row',line:lineNo,column:1}});
+ }
+ return out;
+}
+```
+
+Note: `canonical('1e999')` must throw (Task 2's `canonical` reuses `canonicalDecimal`, whose exponent cap is 200) — the `bad_value` test relies on it.
+
+```ts
+// scripts/macro/record-fred-fixtures.ts
+// One-time networked recorder for the FRED parser tests (spec §12 "录制夹具"). For every active native
+// FRED series in the catalog it fetches the public CSV with cosd=2015-01-01 (keeps fixtures small, ~380 KB
+// total), writes the exact response bytes to src/lib/macro/fixtures/fred/<CODE>.csv and a manifest.json
+// with url, fetched_at, http_status, content_type and sha256 of the bytes. No API key. Run:
+//   npx tsx scripts/macro/record-fred-fixtures.ts
+import {createHash} from 'node:crypto';
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {MACRO_CATALOG} from '../../src/lib/macro/catalog';
+
+const DIR=join(process.cwd(),'src/lib/macro/fixtures/fred');
+const COSD='2015-01-01';
+
+async function main(){
+ mkdirSync(DIR,{recursive:true});
+ const defs=MACRO_CATALOG.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf);
+ const manifest:{code:string;series_id:string;url:string;fetched_at:string;sha256:string;content_type:string;http_status:number}[]=[];
+ for(const d of defs){
+  const code=d.source!.seriesKey;
+  const url=`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${code}&cosd=${COSD}`;
+  const res=await fetch(url,{headers:{'user-agent':'OsbornAlpha-macro-fixture-recorder/1'}});
+  const bytes=new Uint8Array(await res.arrayBuffer());
+  if(res.status!==200)throw new Error(`${code}: HTTP ${res.status}`);
+  const head=new TextDecoder().decode(bytes.slice(0,64));
+  if(!head.startsWith(`observation_date,${code}`))throw new Error(`${code}: unexpected header ${JSON.stringify(head.slice(0,40))}`);
+  writeFileSync(join(DIR,`${code}.csv`),bytes);
+  manifest.push({code,series_id:d.id,url,fetched_at:new Date().toISOString(),sha256:createHash('sha256').update(bytes).digest('hex'),content_type:res.headers.get('content-type')??'',http_status:res.status});
+  console.log(`${code}\t${bytes.byteLength} bytes`);
+ }
+ manifest.sort((a,b)=>a.code.localeCompare(b.code));
+ writeFileSync(join(DIR,'manifest.json'),JSON.stringify(manifest,null,1)+'\n');
+}
+main().catch(e=>{console.error(e);process.exit(1);});
+```
+
+Record the fixtures (network; FRED needs no key):
+
+Run: `npx tsx scripts/macro/record-fred-fixtures.ts`
+Expected: one line per code — exactly the catalog's active native `fred_csv` series (`CPIAUCSL DCOILWTICO DFEDTARL DFEDTARU DFF DGS10 DTWEXBGS PPIFIS UNRATE`), ≈ 2.7 KB (monthly) to 70 KB (DFF) each, plus `manifest.json`. If the catalog lists a different set, the manifest test tells you; do not edit the catalog (Task 2's file) — report it.
+
+Confirm the expected rows of the test against the recorded bytes (they were read from FRED on 2026-11-06 with the same URLs; FRED can revise history). This is a separate command from any commit:
+
+Run: `grep -n -E '^(2015-01-0[12]|2020-03-16|2020-04-01|2020-04-20|2025-01-20|2025-10-01),' src/lib/macro/fixtures/fred/*.csv`
+Expected (the `file:line:` prefix is the locator line): `DFF.csv:2:2015-01-01,0.06`, `DFF.csv:1903:2020-03-16,0.25`, `DFEDTARL.csv:2:2015-01-01,0.00`, `DFEDTARU.csv:1903:2020-03-16,0.25`, `DGS10.csv:2:2015-01-02,2.12`, `DGS10.csv:1358:2020-03-16,0.73`, `DGS10.csv:<n>:2025-01-20,` (empty value), `DTWEXBGS.csv:2:2015-01-02,102.9027`, `DCOILWTICO.csv:1383:2020-04-20,-36.98`, `CPIAUCSL.csv:65:2020-04-01,256.032`, `CPIAUCSL.csv:131:2025-10-01,` (empty), `UNRATE.csv:65:2020-04-01,14.8`, `UNRATE.csv:131:2025-10-01,` (empty), `PPIFIS.csv:2:2015-01-01,110.100`, `PPIFIS.csv:65:2020-04-01,116.600`.
+If a recorded line or value differs, change only that tuple in the `cases` table of `fred-csv.test.ts` to the recorded line and the **canonical** form of the recorded value (drop trailing fractional zeros, `0.00`→`0`), and say so in the commit body. Never edit a fixture file by hand; re-record instead.
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/periods.test.ts src/lib/macro/parsers/fred-csv.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/periods.ts src/lib/macro/periods.test.ts src/lib/macro/parsers/fred-csv.ts src/lib/macro/parsers/fred-csv.test.ts scripts/macro/record-fred-fixtures.ts src/lib/macro/fixtures/fred
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): lossless FRED CSV parser with recorded FRED fixtures
+
+parseFredCsv keeps value text (canonical decimal), skips empty/"." values,
+maps first-of-period dates to period ends and locates each value by file
+line. Fixtures recorded from fredgraph.csv with cosd=2015-01-01.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+
+---
+
+### Task 5: Derivation (month_end / yoy_from_index / index_minus_100) and macro quality rules
+
+Depends on Task 2 (`types.ts`, `decimal.ts`, `catalog.ts`) and Task 4 (`periods.ts`). Pure functions, no I/O.
+
+**Files:**
+- Create: `src/lib/macro/derive.ts`
+- Create: `src/lib/macro/quality.ts`
+- Test: `src/lib/macro/derive.test.ts`
+- Test: `src/lib/macro/quality.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// src/lib/macro/derive.test.ts
+import {describe,expect,it} from 'vitest';
+import {deriveSeries} from './derive';
+import type {MacroSeriesDef,ObservationRow} from './types';
+
+const def=(id:string,derive:MacroSeriesDef['derive'],period:MacroSeriesDef['period']='month',revisionPolicy:MacroSeriesDef['revisionPolicy']='revisable'):MacroSeriesDef=>({
+ id,region:'US',role:'indicator',type:'bond_yield',name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period,adjustment:'na',status:'active',
+ source:null,derive,revisionPolicy,weight:0,changeKind:'bp',definitionVersion:1,
+});
+let n=0;
+const obs=(series:string,period_end:string,value_text:string,available_at='2026-11-01T05:30:00.000Z',extra:Partial<ObservationRow>={}):ObservationRow=>({
+ observation_id:`00000000-0000-4000-8000-${String(++n).padStart(12,'0')}`,series_id:series,period_end,value_text,version:1,
+ available_at,availability_basis:'first_seen',ingested_at:available_at,status:'ok',retrieval_id:'r',locator:{kind:'csv_row',line:2,column:1},
+ derived_from:null,transform:null,code_version:'c',batch_id:'b',...extra,
+});
+const NOW=new Date('2026-11-06T05:30:00Z');
+
+describe('deriveSeries month_end',()=>{
+ const me=def('US_DGS10',{kind:'month_end',from:'US_DGS10_D'});
+ it('takes the last valid observation of each completed month that has a later observation',()=>{
+  const a=obs('US_DGS10_D','2026-08-28','4.1'),b=obs('US_DGS10_D','2026-08-31','4.2'),c=obs('US_DGS10_D','2026-09-29','4.3'),d=obs('US_DGS10_D','2026-10-01','4.4');
+  const w=deriveSeries(me,[d,b,a,c],{now:NOW});
+  expect(w).toEqual([
+   {series_id:'US_DGS10',period_end:'2026-08-31',value_text:'4.2',available_at:b.available_at,revisable:true,derived_from:[b.observation_id],transform:'month_end@1'},
+   {series_id:'US_DGS10',period_end:'2026-09-30',value_text:'4.3',available_at:c.available_at,revisable:true,derived_from:[c.observation_id],transform:'month_end@1'},
+  ]);
+ });
+ it('never emits the current month, nor the newest month before a later observation exists',()=>{
+  const w=deriveSeries(me,[obs('US_DGS10_D','2026-10-30','4.4'),obs('US_DGS10_D','2026-11-05','4.5')],{now:NOW});
+  expect(w.map(x=>x.period_end)).toEqual(['2026-10-31']);
+  expect(deriveSeries(me,[obs('US_DGS10_D','2026-10-30','4.4')],{now:NOW})).toEqual([]);   // October has no later observation yet
+  expect(deriveSeries(me,[obs('US_DGS10_D','2026-11-02','4.4'),obs('US_DGS10_D','2026-11-03','4.5')],{now:NOW})).toEqual([]);
+ });
+ it('uses the highest ok version per day, ignores quarantined rows and other series',()=>{
+  const v1=obs('US_DGS10_D','2026-09-30','4.3'),v2=obs('US_DGS10_D','2026-09-30','4.31',undefined,{version:2});
+  const q=obs('US_DGS10_D','2026-09-30','9.99',undefined,{version:3,status:'quarantined'});
+  const w=deriveSeries(me,[v1,v2,q,obs('US_DFF','2026-09-30','5'),obs('US_DGS10_D','2026-10-01','4.4')],{now:NOW});
+  expect(w).toHaveLength(1);expect(w[0].value_text).toBe('4.31');expect(w[0].derived_from).toEqual([v2.observation_id]);
+ });
+ it('leaves a month with no observation missing (no carry-forward)',()=>{
+  const w=deriveSeries(me,[obs('US_DGS10_D','2026-07-31','4'),obs('US_DGS10_D','2026-09-30','4.3'),obs('US_DGS10_D','2026-10-01','4.4')],{now:NOW});
+  expect(w.map(x=>x.period_end)).toEqual(['2026-07-31','2026-09-30']);
+ });
+});
+
+describe('deriveSeries yoy_from_index',()=>{
+ const yoy=def('US_CPI_YOY',{kind:'yoy_from_index',from:'US_CPI_INDEX'});
+ it('computes (cur/prev − 1) × 100 in decimals with available_at = max of both inputs',()=>{
+  const p=obs('US_CPI_INDEX','2025-09-30','324.368','2026-01-01T00:00:00.000Z'),c=obs('US_CPI_INDEX','2026-09-30','336.298','2026-10-15T12:00:00.000Z');
+  const w=deriveSeries(yoy,[c,p],{now:NOW});
+  expect(w).toHaveLength(1);
+  expect(w[0]).toMatchObject({series_id:'US_CPI_YOY',period_end:'2026-09-30',available_at:'2026-10-15T12:00:00.000Z',derived_from:[c.observation_id,p.observation_id],transform:'yoy_from_index@1'});
+  expect(w[0].value_text).toBe('3.6779');           // (336.298/324.368 − 1) × 100 = 3.67792… → half-even 4 dp
+  const later=deriveSeries(yoy,[obs('US_CPI_INDEX','2025-09-30','100','2026-11-05T00:00:00.000Z'),obs('US_CPI_INDEX','2026-09-30','103','2026-10-01T00:00:00.000Z')],{now:NOW});
+  expect(later[0].available_at).toBe('2026-11-05T00:00:00.000Z');   // the older period's value arrived later: max wins
+  expect(later[0].value_text).toBe('3');
+ });
+ it('emits nothing when the same month of the previous year is missing (2025 shutdown month)',()=>{
+  const w=deriveSeries(yoy,[obs('US_CPI_INDEX','2024-10-31','315.664'),obs('US_CPI_INDEX','2026-10-31','337'),obs('US_CPI_INDEX','2024-11-30','316.4'),obs('US_CPI_INDEX','2025-11-30','324.1')],{now:NOW});
+  expect(w.map(x=>x.period_end)).toEqual(['2025-11-30']);
+ });
+ it('handles February of a leap year against a non-leap February',()=>{
+  const w=deriveSeries(yoy,[obs('US_CPI_INDEX','2023-02-28','100'),obs('US_CPI_INDEX','2024-02-29','102.5')],{now:NOW});
+  expect(w.map(x=>[x.period_end,x.value_text])).toEqual([['2024-02-29','2.5']]);
+ });
+ it('works for quarterly inputs (same quarter one year earlier)',()=>{
+  const q=def('X_YOY',{kind:'yoy_from_index',from:'X'},'quarter');
+  const w=deriveSeries(q,[obs('X','2025-09-30','200'),obs('X','2026-06-30','1'),obs('X','2026-09-30','210')],{now:NOW});
+  expect(w.map(x=>[x.period_end,x.value_text])).toEqual([['2026-09-30','5']]);
+ });
+});
+
+describe('deriveSeries index_minus_100',()=>{
+ it('subtracts 100 exactly and keeps one input id',()=>{
+  const m=def('CN_CPI_YOY',{kind:'index_minus_100',from:'CN_CPI_INDEX'},'month','immutable');
+  const a=obs('CN_CPI_INDEX','2026-09-30','100.9'),b=obs('CN_CPI_INDEX','2026-08-31','99.6'),c=obs('CN_CPI_INDEX','2026-07-31','100');
+  const w=deriveSeries(m,[a,b,c],{now:NOW});
+  expect(w.map(x=>[x.period_end,x.value_text,x.derived_from,x.revisable,x.transform])).toEqual([
+   ['2026-07-31','0',[c.observation_id],false,'index_minus_100@1'],['2026-08-31','-0.4',[b.observation_id],false,'index_minus_100@1'],['2026-09-30','0.9',[a.observation_id],false,'index_minus_100@1'],
+  ]);
+ });
+ it('rejects non-derived definitions and invalid clocks',()=>{
+  expect(()=>deriveSeries(def('X',undefined),[],{now:NOW})).toThrow('not_derived');
+  expect(()=>deriveSeries(def('X',{kind:'month_end',from:'Y'}),[],{now:new Date('x')})).toThrow('invalid_now');
+ });
+});
+```
+
+```ts
+// src/lib/macro/quality.test.ts
+import {describe,expect,it} from 'vitest';
+import {MACRO_CATALOG} from './catalog';
+import {KNOWN_UNITS,MACRO_RULES_VERSION,profileOf,validatePoint} from './quality';
+import type {SeriesType} from './types';
+
+const d=(unit:string,type:SeriesType|null)=>({unit,type});
+const ids=(r:ReturnType<typeof validatePoint>)=>r.failed.map(f=>f.ruleId);
+
+describe('validatePoint',()=>{
+ it('passes in-range values and reports the rules version',()=>{
+  const r=validatePoint(d('pct','pmi'),'49.3','50.1');
+  expect(r).toEqual({passed:true,failed:[],version:MACRO_RULES_VERSION});
+  expect(MACRO_RULES_VERSION).toBe('macro-rules/1');
+ });
+ it('applies per-type ranges for pct series',()=>{
+  expect(ids(validatePoint(d('pct','pmi'),'100.1',null))).toEqual(['macro.range']);
+  expect(ids(validatePoint(d('pct','pmi'),'0',null))).toEqual([]);
+  expect(ids(validatePoint(d('pct','policy_rate'),'31',null))).toEqual(['macro.range']);
+  expect(ids(validatePoint(d('pct','bond_yield'),'-0.5',null))).toEqual([]);              // negative yields are real
+  expect(ids(validatePoint(d('pct','inflation_yoy'),'-50.1',null))).toEqual(['macro.range']);
+  expect(ids(validatePoint(d('pct','growth_yoy'),'154.9',null))).toEqual([]);              // CN exports 2021-02
+  expect(ids(validatePoint(d('pct','labor_rate'),'14.8','4.4'))).toEqual([]);              // no jump rule on unemployment
+  expect(ids(validatePoint(d('pct',null),'4',null))).toEqual([]);                           // fed target bound (event source)
+ });
+ it('applies per-unit ranges whatever the type',()=>{
+  expect(ids(validatePoint(d('index_prev_year_100','inflation_yoy'),'100.9',null))).toEqual([]);
+  expect(ids(validatePoint(d('index_prev_year_100','inflation_yoy'),'0.9',null))).toEqual(['macro.range']);   // a yoy rate in an index slot
+  expect(ids(validatePoint(d('cny_per_100usd','fx'),'671.56',null))).toEqual([]);
+  expect(ids(validatePoint(d('cny_per_100usd','fx'),'6.7156',null))).toEqual(['macro.range']);                // per-1-USD quote: wrong unit
+  expect(ids(validatePoint(d('usd_per_bbl','asset_price'),'-36.98','18.27'))).toEqual([]);                  // WTI 2020-04-20
+  expect(ids(validatePoint(d('index','fx'),'121.6656','121.5'))).toEqual([]);
+  expect(ids(validatePoint(d('index','pmi'),'49.3','50.1'))).toEqual([]);                                     // NBS PMI is unit 'index'
+  expect(ids(validatePoint(d('index','pmi'),'101',null))).toEqual(['macro.range']);
+  expect(ids(validatePoint(d('index_1982_84_100',null),'336.298','335.1'))).toEqual([]);                     // US CPI index level
+  expect(ids(validatePoint(d('index_2009_11_100',null),'-1',null))).toEqual(['macro.range']);
+ });
+ it('applies jump limits on levels, not on rates of change',()=>{
+  expect(ids(validatePoint(d('pct','bond_yield'),'4.9','2.1'))).toEqual(['macro.jump']);
+  expect(ids(validatePoint(d('pct','bond_yield'),'0.73','1.0'))).toEqual([]);
+  expect(ids(validatePoint(d('cny_per_100usd','fx'),'760','671.56'))).toEqual(['macro.jump']);
+  expect(ids(validatePoint(d('index','pmi'),'35.7','50'))).toEqual([]);                     // CN PMI 2020-02 is real
+  expect(ids(validatePoint(d('pct','inflation_yoy'),'9.1','0.1'))).toEqual([]);
+  expect(ids(validatePoint(d('pct','bond_yield'),'4.9',null))).toEqual([]);                 // no previous value
+ });
+ it('fails unknown units and non-numeric text',()=>{
+  expect(ids(validatePoint(d('percent','pmi'),'50',null))).toEqual(['macro.unit']);
+  expect(profileOf(d('percent','pmi'))).toBeNull();
+  const r=validatePoint(d('pct','pmi'),'abc',null);
+  expect(ids(r)).toEqual(['macro.range','macro.jump']);
+  for(const f of r.failed)expect(f.detail).toMatchObject({reason:'not_a_number'});
+ });
+ it('has a known unit and a profile for every active native catalog series',()=>{
+  for(const s of MACRO_CATALOG.filter(x=>x.status==='active'&&!x.derive&&!x.aliasOf)){
+   expect(KNOWN_UNITS as readonly string[],s.id).toContain(s.unit);
+   expect(profileOf(s),s.id).not.toBeNull();
+  }
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/derive.test.ts src/lib/macro/quality.test.ts`
+Expected: FAIL (`Cannot find module './derive'`, `Cannot find module './quality'`)
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/lib/macro/derive.ts
+// Derived observations (spec §4.2 rules, §0.2 M6/M7/M8): pure functions from the input series'
+// history (highest ok version per period, ascending) to ObservationWrite rows for macro_write_observations.
+//  - month_end: the last valid observation of a COMPLETED calendar month. A month is complete when it
+//    is before the current UTC month AND the input already has an observation in a later month, so a
+//    late-arriving last trading day cannot first derive from the day before (and then revise). The
+//    current month never produces a value.
+//  - yoy_from_index: (cur/prev − 1) × 100 with prev = same period one year earlier; no prev → no row
+//    (missing stays missing, never interpolated). Decimal arithmetic in decimal.ts::yoyPct.
+//  - index_minus_100: exact decimal "上年同月=100" index − 100.
+// available_at = the max available_at of ALL inputs of the row; derived_from = the input observation
+// ids; transform = '<kind>@1'. Quarterly series are never forward-filled into months.
+import {equals,minus100,yoyPct} from './decimal';
+import {monthEnd,monthKey,shiftMonthEnd} from './periods';
+import type {MacroSeriesDef,ObservationRow,ObservationWrite} from './types';
+
+export const DERIVE_VERSION=1;
+type DerivedWrite=Extract<ObservationWrite,{derived_from:string[]}>;
+const latestOf=(a:string,b:string)=>Date.parse(a)>=Date.parse(b)?a:b;
+
+/** Highest ok version per period_end, ascending by period_end. */
+function normalise(rows:readonly ObservationRow[]):ObservationRow[]{
+ const best=new Map<string,ObservationRow>();
+ for(const r of rows){
+  if(r.status!=='ok')continue;
+  const cur=best.get(r.period_end);
+  if(!cur||r.version>cur.version)best.set(r.period_end,r);
+ }
+ return [...best.values()].sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:0);
+}
+
+export function deriveSeries(def:MacroSeriesDef,inputs:readonly ObservationRow[],opts:{now:Date}):DerivedWrite[]{
+ const rule=def.derive;
+ if(!rule)throw new Error(`not_derived:${def.id}`);
+ if(!(opts.now instanceof Date)||!Number.isFinite(opts.now.getTime()))throw new Error('invalid_now');
+ const rows=normalise(inputs.filter(r=>r.series_id===rule.from));
+ const revisable=def.revisionPolicy==='revisable';
+ const out:DerivedWrite[]=[];
+ const transform=`${rule.kind}@${DERIVE_VERSION}`;
+ if(rule.kind==='month_end'){
+  const current=opts.now.toISOString().slice(0,7);
+  const lastByMonth=new Map<string,ObservationRow>();
+  for(const r of rows)lastByMonth.set(monthKey(r.period_end),r);   // ascending ⇒ the last write per month wins
+  const months=[...lastByMonth.keys()];
+  const newest=months[months.length-1];
+  for(const m of months){
+   if(m>=current||m===newest)continue;   // calendar month not over, or no later observation yet
+   const r=lastByMonth.get(m)!;
+   out.push({series_id:def.id,period_end:monthEnd(Number(m.slice(0,4)),Number(m.slice(5,7))),value_text:r.value_text,available_at:r.available_at,revisable,derived_from:[r.observation_id],transform});
+  }
+  return out;
+ }
+ if(rule.kind==='yoy_from_index'){
+  const byPeriod=new Map(rows.map(r=>[r.period_end,r]));
+  for(const cur of rows){
+   const prev=byPeriod.get(shiftMonthEnd(cur.period_end,-12));
+   if(!prev||equals(prev.value_text,'0'))continue;
+   out.push({series_id:def.id,period_end:cur.period_end,value_text:yoyPct(cur.value_text,prev.value_text),available_at:latestOf(cur.available_at,prev.available_at),revisable,derived_from:[cur.observation_id,prev.observation_id],transform});
+  }
+  return out;
+ }
+ for(const cur of rows)out.push({series_id:def.id,period_end:cur.period_end,value_text:minus100(cur.value_text),available_at:cur.available_at,revisable,derived_from:[cur.observation_id],transform});
+ return out;
+}
+```
+
+```ts
+// src/lib/macro/quality.ts
+// Macro validation thresholds (spec §4.4 "规则校验", §0.2 M8), version macro-rules/1. Wraps the shared
+// dq rules (rangeRule / jumpRule / unitRule; never modified here). This is the ONLY place where an
+// observation's value_text becomes a JS number (the other is regime.ts input): Number() on the
+// canonical decimal text, used only to compare against thresholds — the stored value stays the text.
+// Profile choice: "上年同月=100" indices, CNY per 100 USD and USD/bbl by unit; PMI by type (NBS PMI
+// carries unit 'index'); other index levels (base-period indices) by unit; 'pct' by type.
+// Jump limits exist only where a large relative move signals a unit/scale error rather than a real
+// event (rates, yields, fx fixings, index levels, PMI); yoy rates, unemployment and oil prices have
+// range checks only, so a real crisis value (UNRATE 14.8, WTI −36.98) is never quarantined.
+import {jumpRule,rangeRule,unitRule} from '../dq/rules';
+import type {RuleResult} from '../dq/rules';
+import type {MacroSeriesDef,SeriesType} from './types';
+
+export const MACRO_RULES_VERSION='macro-rules/1';
+export const KNOWN_UNITS=['pct','index','index_1982_84_100','index_2009_11_100','index_prev_year_100','cny_per_100usd','usd_per_bbl'] as const;
+export interface QualityProfile{min:number;max:number;maxRelJump:number|null}
+const BY_UNIT:Record<string,QualityProfile>={
+ index_prev_year_100:{min:50,max:200,maxRelJump:0.3},
+ cny_per_100usd:{min:400,max:1000,maxRelJump:0.1},
+ usd_per_bbl:{min:-100,max:1000,maxRelJump:null},
+};
+const PMI:QualityProfile={min:0,max:100,maxRelJump:0.5};
+const INDEX_LEVEL:QualityProfile={min:0,max:100000,maxRelJump:0.5};
+const INDEX_UNITS=new Set(['index','index_1982_84_100','index_2009_11_100']);
+const PCT_BY_TYPE:Record<SeriesType,QualityProfile>={
+ policy_rate:{min:-5,max:30,maxRelJump:3},
+ bond_yield:{min:-5,max:30,maxRelJump:1},
+ pmi:{min:0,max:100,maxRelJump:0.5},
+ inflation_yoy:{min:-50,max:100,maxRelJump:null},
+ liquidity_yoy:{min:-50,max:100,maxRelJump:null},
+ growth_yoy:{min:-100,max:500,maxRelJump:null},   // CN exports yoy reached +154.9% (2021-02)
+ labor_rate:{min:0,max:100,maxRelJump:null},
+ risk_index:{min:0,max:200,maxRelJump:null},
+ fx:{min:-50,max:100,maxRelJump:null},
+ asset_price:{min:-100,max:1000,maxRelJump:null},
+};
+/** pct with no type (event sources: fed target bounds) is rate-like. */
+const PCT_UNTYPED:QualityProfile={min:-5,max:30,maxRelJump:null};
+
+export function profileOf(def:Pick<MacroSeriesDef,'unit'|'type'>):QualityProfile|null{
+ if(Object.hasOwn(BY_UNIT,def.unit))return BY_UNIT[def.unit];
+ if(def.type==='pmi'&&(def.unit==='index'||def.unit==='pct'))return PMI;
+ if(INDEX_UNITS.has(def.unit))return INDEX_LEVEL;
+ if(def.unit==='pct')return def.type?PCT_BY_TYPE[def.type]:PCT_UNTYPED;
+ return null;
+}
+
+const num=(t:string|null)=>t===null?null:Number(t);
+/** Validates one native point against its series profile. prevValueText = the previous accepted value of the same series (or null). */
+export function validatePoint(def:Pick<MacroSeriesDef,'unit'|'type'>,valueText:string,prevValueText:string|null):{passed:boolean;failed:RuleResult[];version:string}{
+ const results:RuleResult[]=[unitRule('macro.unit',def.unit,KNOWN_UNITS)];
+ const p=profileOf(def);
+ const v=num(valueText);
+ if(p){
+  results.push(rangeRule('macro.range',v,p.min,p.max));
+  if(p.maxRelJump!==null)results.push(jumpRule('macro.jump',v,num(prevValueText),p.maxRelJump));
+ }
+ const failed=results.filter(r=>!r.passed);
+ return {passed:failed.length===0,failed,version:MACRO_RULES_VERSION};
+}
+```
+
+Check before finishing: `yoyPct` (Task 2) must round half-even to 4 dp and return canonical text (`'3.0000'` → `'3'`); the expectations `'3.6779'`, `'3'`, `'2.5'`, `'5'` were computed with Python `Decimal` (prec 50, `ROUND_HALF_EVEN`). `derive.ts` skips a zero previous index itself, so `yoyPct` never sees a zero denominator. `month_end` copies the input's `value_text` unchanged (inputs are already canonical, so the test's `'4.2'` stays `'4.2'`).
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/derive.test.ts src/lib/macro/quality.test.ts && npm run typecheck && npm run lint`
+Expected: PASS. If the last `quality.test.ts` case fails for a catalog unit, the catalog (Task 2) uses a unit string outside `KNOWN_UNITS`: stop and report NEEDS_CONTEXT with the unit (do not edit `catalog.ts`, and do not widen `KNOWN_UNITS` silently).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/derive.ts src/lib/macro/derive.test.ts src/lib/macro/quality.ts src/lib/macro/quality.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): decimal derivations and macro quality thresholds
+
+month_end only for completed months with a later observation; yoy needs
+the same period a year earlier (no interpolation); index_minus_100 exact.
+available_at = max over all inputs. quality.ts is the single Number()
+boundary, wrapping dq rangeRule/jumpRule/unitRule (macro-rules/1).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+
+---
+
+### Task 6: Ingest orchestration (`ingestEvidence`, `deriveAndWrite`)
+
+Depends on Task 3 (`MacroDb`, `memoryMacroDb`, `MacroDbError`, `EvidenceStore`), Task 4 (`parseFredCsv`, used by the tests) and Task 5 (`deriveSeries`, `validatePoint`). Used unchanged by the cron route (Task 7) and the ingest route (Task 9).
+
+**Files:**
+- Create: `src/lib/macro/ingest.ts`
+- Test: `src/lib/macro/ingest.test.ts`
+
+The in-memory `TableClient` already exists: `memoryTableClient` in `src/lib/db/memory-table-client.ts` (used by `src/lib/dq/*.test.ts`); declare `dq_quarantine:['id']` as its key. The evidence store in the test is a local fake (only `put` is used), so the test does not depend on `memoryEvidenceStore`'s extra API.
+
+Semantics fixed here (the routes rely on them):
+- `counts.fetched` = parsed points handed in (native) or derived rows computed (derive). Every point gets exactly one outcome: written (`inserted`/`duplicates`/`versioned`), `quarantined`, or `failed`.
+- Evidence upload or `putRetrieval` failure → all points of that retrieval `failed`, nothing written, error `evidence_upload_failed` / `retrieval_failed` with `key` = the series ids.
+- Rule failure → one `dq_quarantine` row per failed rule (`rule_failed:macro.range|macro.jump|macro.unit`), counted once as `quarantined`; the jump rule compares with the previous **accepted** value of the same series in the same retrieval.
+- Claims: a claim for the same `(series_id, period_end)` that is not decimal-equal → `adapter_mismatch` (detail `{value_text, claim_value_texts}`), not written. A point without a claim is written unchecked; a claim without a point is ignored here (the ingest route reports it as informational).
+- Repeated conflicts are fine: re-delivering an already-quarantined value makes the RPC report the conflict again (and count `quarantined`), and `quarantine()` (`src/lib/dq/quarantine.ts`) **reuses** the open item with the same `(dataset, table_name, natural_key, reason_code)`, so no duplicate queue items appear (tested below). Do not add a second dedup layer.
+- Write conflicts `unexpected_revision`, `conflicting_rows`, `stale_delivery` → `dq_quarantine` with `dataset` (`macro.fred` / `macro.akshare`), `table_name 'macro_observations'`, `natural_key '<series_id>|<period_end>'`, detail `{value_text, current_value_text}`; the RPC's own `quarantined` count is used (not double-counted). `missing_evidence` / `missing_input` → `failed` + error.
+- A thrown `writeObservations` → that call's rows `failed`, error `write_<MacroDbError.code>` or `write_failed`; the function never throws for data problems.
+- Rows go to the RPC in calls of ≈1000 (`chunkWrites`) that never split one `(series_id, period_end)` group.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/lib/macro/ingest.test.ts
+import {createHash} from 'node:crypto';
+import {beforeEach,describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
+import {CATALOG_VERSION,MACRO_CATALOG} from './catalog';
+import {chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
+import type {IngestDeps} from './ingest';
+import {memoryMacroDb} from './memory-db';
+import {parseFredCsv} from './parsers/fred-csv';
+import type {EvidenceInput,ParsedPoint} from './types';
+
+const BATCH='11111111-1111-4111-8111-111111111111';
+const enc=(s:string)=>new TextEncoder().encode(s);
+const sha=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
+function evidence(text:string,opts:{adapter?:'fred_csv'|'akshare';fetchedAt?:string;url?:string}={}):EvidenceInput{
+ const bytes=enc(text),adapter=opts.adapter??'fred_csv';
+ const url=opts.url??(adapter==='fred_csv'?'https://fred.stlouisfed.org/graph/fredgraph.csv?id=X&cosd=2000-01-01':'https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData');
+ return {sha256:sha(bytes),bytes,adapter,fetchUrl:url,fetchHost:new URL(url).host,httpStatus:200,contentType:adapter==='fred_csv'?'application/csv':'application/json;charset=UTF-8',fetchedAt:opts.fetchedAt??'2026-11-06T05:30:00.000Z',toolVersions:{parser:'test/1'}};
+}
+const fred=(code:string,seriesId:string,period:'day'|'month',rows:string,opts:{fetchedAt?:string}={})=>{
+ const text=`observation_date,${code}\n${rows}`;
+ return {evidence:evidence(text,opts),parsed:parseFredCsv(enc(text),{seriesId,code,period})};
+};
+function fakeEvidence(){
+ const failing=new Set<string>();const puts:EvidenceInput[]=[];
+ return {failing,puts,async put(e:EvidenceInput){if(failing.has(e.sha256))throw new Error('upload_failed');puts.push(e);return {objectPath:`${e.adapter}/${e.sha256}.csv`,status:'stored' as const};}};
+}
+
+let db:ReturnType<typeof memoryMacroDb>,tables:ReturnType<typeof memoryTableClient>,ev:ReturnType<typeof fakeEvidence>,deps:IngestDeps;
+beforeEach(async()=>{
+ db=memoryMacroDb();tables=memoryTableClient({dq_quarantine:['id']});ev=fakeEvidence();
+ deps={db,evidence:ev,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z')};
+ await db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,'macro-regime-rules/1.0');
+});
+const history=(id:string)=>db.seriesHistory(id,{maxRows:1000});
+const quarantined=()=>tables.rows('dq_quarantine').map(r=>({dataset:r.dataset,table:r.table_name,key:r.natural_key,reason:r.reason_code,batch:r.batch_id}));
+
+describe('ingestEvidence',()=>{
+ it('stores evidence, writes one retrieval and lossless observations with available_at = fetched_at',async()=>{
+  const r=fred('DGS10','US_DGS10_D','day','2026-10-01,4.10\n2026-10-02,\n2026-10-05,4.123456789012345678\n');
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[r]});
+  expect(rec.counts).toEqual({fetched:2,inserted:2,duplicates:0,versioned:0,quarantined:0,failed:0});
+  expect(rec.errors).toEqual([]);expect(rec.retrievalIds).toHaveLength(1);
+  expect(ev.puts.map(e=>e.sha256)).toEqual([r.evidence.sha256]);
+  const ret=await db.retrieval(rec.retrievalIds[0]);
+  expect(ret).toMatchObject({sha256:r.evidence.sha256,fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:30:00.000Z',batch_id:BATCH});
+  const rows=await history('US_DGS10_D');
+  expect(rows.map(o=>[o.period_end,o.value_text,o.version,o.available_at,o.retrieval_id,o.locator])).toEqual([
+   ['2026-10-01','4.1',1,'2026-11-06T05:30:00.000Z',rec.retrievalIds[0],{kind:'csv_row',line:2,column:1}],
+   ['2026-10-05','4.123456789012345678',1,'2026-11-06T05:30:00.000Z',rec.retrievalIds[0],{kind:'csv_row',line:4,column:1}],
+  ]);
+ });
+ it('counts a re-fetch of identical values as duplicates but still records a new retrieval',async()=>{
+  const r=fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n');
+  const a=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[r]});
+  const b=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.10\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
+  expect(b.counts).toMatchObject({fetched:1,inserted:0,duplicates:1});
+  expect(b.retrievalIds[0]).not.toBe(a.retrievalIds[0]);
+  expect((await history('US_DGS10_D'))[0].available_at).toBe('2026-11-06T05:30:00.000Z');   // first seen stays
+ });
+ it('quarantines rule failures as rule_failed:<ruleId> and never writes them',async()=>{
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-02,45\n2026-10-05,4.2\n')]});
+  expect(rec.counts).toEqual({fetched:3,inserted:2,duplicates:0,versioned:0,quarantined:1,failed:0});
+  expect((await history('US_DGS10_D')).map(o=>o.period_end)).toEqual(['2026-10-01','2026-10-05']);   // 4.2 judged against 4.1, not 45
+  expect(quarantined().sort((a,b)=>a.reason<b.reason?-1:1)).toEqual([
+   {dataset:'macro.fred',table:'macro_observations',key:'US_DGS10_D|2026-10-02',reason:'rule_failed:macro.jump',batch:BATCH},
+   {dataset:'macro.fred',table:'macro_observations',key:'US_DGS10_D|2026-10-02',reason:'rule_failed:macro.range',batch:BATCH},
+  ]);
+ });
+ it('cross-checks claims by decimal equality: equal forms write, a different value is adapter_mismatch',async()=>{
+  const text='{"data":[]}';
+  const pt=(periodEnd:string,valueText:string,i:number):ParsedPoint=>({seriesId:'CN_PMI_MFG',periodEnd,valueText,locator:{kind:'json_pointer',pointer:`/data/${i}/values/0/value`}});
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'akshare',retrievals:[{
+   evidence:evidence(text,{adapter:'akshare'}),
+   parsed:[pt('2026-10-31','49.3',0),pt('2026-09-30','50.1',1),pt('2026-08-31','49.8',2)],
+   claims:[{series_id:'CN_PMI_MFG',period_end:'2026-10-31',value_text:'49.30'},{series_id:'CN_PMI_MFG',period_end:'2026-09-30',value_text:'50.2'}],   // 08-31 has no claim: written unchecked
+  }]});
+  expect(rec.counts).toMatchObject({fetched:3,inserted:2,quarantined:1,failed:0});
+  expect((await history('CN_PMI_MFG')).map(o=>[o.period_end,o.value_text])).toEqual([['2026-08-31','49.8'],['2026-10-31','49.3']]);
+  expect(quarantined()).toEqual([{dataset:'macro.akshare',table:'macro_observations',key:'CN_PMI_MFG|2026-09-30',reason:'adapter_mismatch',batch:BATCH}]);
+  expect(tables.rows('dq_quarantine')[0].detail).toEqual({value_text:'50.1',claim_value_texts:['50.2']});
+ });
+ it('fails every point of a retrieval whose evidence upload fails, and carries on with the next one',async()=>{
+  const bad=fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-02,4.2\n'),good=fred('UNRATE','US_UNRATE','month','2026-09-01,4.2\n');
+  ev.failing.add(bad.evidence.sha256);
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[bad,good]});
+  expect(rec.counts).toEqual({fetched:3,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:2});
+  expect(rec.errors).toEqual([{code:'evidence_upload_failed',key:'US_DGS10_D'}]);
+  expect(rec.retrievalIds).toHaveLength(1);
+  expect(await history('US_DGS10_D')).toEqual([]);
+  expect((await history('US_UNRATE')).map(o=>o.value_text)).toEqual(['4.2']);
+ });
+ it('rejects points of series that are unknown, derived, restricted or of another adapter',async()=>{
+  const p=(seriesId:string):ParsedPoint=>({seriesId,periodEnd:'2026-10-01',valueText:'1',locator:{kind:'csv_row',line:2,column:1}});
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[{evidence:evidence('observation_date,X\n2026-10-01,1\n'),parsed:[p('NOPE'),p('US_DGS10'),p('US_VIX_D'),p('CN_PMI_MFG')]}]});
+  expect(rec.counts).toMatchObject({fetched:4,inserted:0,failed:4});
+  expect(rec.errors.map(e=>e.key).sort()).toEqual(['CN_PMI_MFG','NOPE','US_DGS10','US_VIX_D']);
+  expect(rec.errors.every(e=>e.code==='unknown_series')).toBe(true);
+ });
+ it('versions a revisable series and quarantines an immutable revision while the old value keeps serving',async()=>{
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('UNRATE','US_UNRATE','month','2026-09-01,4.2\n'),fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[
+   fred('UNRATE','US_UNRATE','month','2026-09-01,4.3\n',{fetchedAt:'2026-11-07T05:30:00.000Z'}),
+   fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'}),
+  ]});
+  expect(rec.counts).toMatchObject({fetched:2,versioned:1,quarantined:1,failed:0});
+  expect((await history('US_UNRATE')).map(o=>[o.value_text,o.version])).toEqual([['4.3',2]]);
+  expect((await history('US_DGS10_D')).map(o=>[o.value_text,o.version])).toEqual([['4.1',1]]);
+  expect(quarantined()).toEqual([{dataset:'macro.fred',table:'macro_observations',key:'US_DGS10_D|2026-10-01',reason:'unexpected_revision',batch:BATCH}]);
+  expect(tables.rows('dq_quarantine')[0].detail).toEqual({value_text:'4.15',current_value_text:'4.1'});
+  // Re-delivery of the same conflicting value: the RPC reports the conflict again (no new row), and quarantine()
+  // reuses the OPEN item with the same (dataset, table, natural_key, reason_code) — still exactly one item.
+  const again=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
+  expect(again.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
+  expect(tables.rows('dq_quarantine')).toHaveLength(1);
+  expect(db.allObservations().filter(o=>o.series_id==='US_DGS10_D'&&o.status==='quarantined')).toHaveLength(1);
+ });
+ it('writes neither value of a period that appears twice with different values in one evidence',async()=>{
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-01,4.2\n2026-10-02,4.3\n')]});
+  expect(rec.counts).toMatchObject({fetched:3,inserted:1,quarantined:1});
+  expect((await history('US_DGS10_D')).map(o=>o.period_end)).toEqual(['2026-10-02']);
+  expect(quarantined()).toEqual([{dataset:'macro.fred',table:'macro_observations',key:'US_DGS10_D|2026-10-01',reason:'conflicting_rows',batch:BATCH}]);
+ });
+ it('counts a failed write call as failed rows instead of throwing',async()=>{
+  // Proxy keeps memoryMacroDb's own methods bound whatever its implementation style (object or class).
+  const failing=new Proxy(db,{get:(t,k)=>k==='writeObservations'?async()=>{throw new Error('rpc down');}:typeof Reflect.get(t,k)==='function'?Reflect.get(t,k).bind(t):Reflect.get(t,k)});
+  const broken:IngestDeps={...deps,db:failing};
+  const rec=await ingestEvidence(broken,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-02,4.2\n')]});
+  expect(rec.counts).toMatchObject({fetched:2,inserted:0,failed:2});
+  expect(rec.errors).toEqual([{code:'write_failed',key:'US_DGS10_D'}]);
+ });
+});
+
+describe('chunkWrites',()=>{
+ it('never splits one (series, period) group across calls',()=>{
+  const rows=[{series_id:'A',period_end:'2026-01-01'},{series_id:'A',period_end:'2026-01-02'},{series_id:'A',period_end:'2026-01-02'},{series_id:'B',period_end:'2026-01-01'}];
+  expect(chunkWrites(rows,2).map(c=>c.map(r=>`${r.series_id}${r.period_end.slice(-1)}`))).toEqual([['A1','A2','A2'],['B1']]);
+  expect(chunkWrites(rows,1).map(c=>c.length)).toEqual([1,2,1]);
+  expect(chunkWrites([],10)).toEqual([]);
+ });
+});
+
+describe('deriveAndWrite',()=>{
+ it('orders derived series after their inputs',()=>{
+  const ids=derivedOf('US').map(d=>d.id);
+  expect(ids).toContain('US_DGS10');expect(ids).toContain('US_CPI_YOY');
+  expect(derivedOf('CN').every(d=>d.region==='CN')).toBe(true);
+ });
+ it('writes month_end and yoy rows inside the triggering batch with derived_from and transform',async()=>{
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[
+   fred('DGS10','US_DGS10_D','day','2026-09-29,4.3\n2026-09-30,4.35\n2026-10-01,4.4\n2026-11-02,4.5\n'),
+   fred('CPIAUCSL','US_CPI_INDEX','month','2025-09-01,324.368\n2026-09-01,336.298\n2025-10-01,\n2026-10-01,337.1\n'),
+  ]});
+  const rec=await deriveAndWrite(deps,'US',BATCH);
+  expect(rec.errors).toEqual([]);
+  const dgs=await history('US_DGS10');
+  expect(dgs.map(o=>[o.period_end,o.value_text,o.transform])).toEqual([['2026-09-30','4.35','month_end@1'],['2026-10-31','4.4','month_end@1']]);   // November is the current month
+  const input=(await history('US_DGS10_D')).find(o=>o.period_end==='2026-09-30')!;
+  expect(dgs[0].derived_from).toEqual([input.observation_id]);expect(dgs[0].available_at).toBe(input.available_at);
+  expect(dgs[0].batch_id).toBe(BATCH);expect(dgs[0].retrieval_id).toBeNull();
+  const cpi=await history('US_CPI_YOY');
+  expect(cpi.map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','3.6779']]);   // 2026-10 has no 2025-10 base (shutdown gap)
+  const again=await deriveAndWrite(deps,'US',BATCH);
+  expect(again.counts.inserted).toBe(0);expect(again.counts.duplicates).toBe(again.counts.fetched);
+ });
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `npm test -- src/lib/macro/ingest.test.ts`
+Expected: FAIL (`Cannot find module './ingest'`)
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/lib/macro/ingest.ts
+// Write orchestration shared by /api/cron/macro-sync (FRED) and /api/macro/ingest (AKShare) — spec §4.4,
+// §11, §0.2 M9/M10/N2/N3. Per retrieval: evidence bytes → private bucket (EvidenceStore.put) → one
+// macro_retrievals receipt (MacroDb.putRetrieval) → macro quality rules (failures → dq_quarantine
+// `rule_failed:<ruleId>`, not written) → adapter claim cross-check when claims are given (decimal
+// inequality → `adapter_mismatch`, not written) → macro_write_observations (revisable from the catalog)
+// → write conflicts → dq_quarantine. A failed upload or receipt fails every point of that retrieval
+// (counted `failed`, nothing written: no observation without evidence). deriveAndWrite runs the
+// region's derived series inside the same batch (N3). Counts follow dq/batches BatchCounts semantics.
+// Values stay decimal text end to end; Number() happens only inside quality.ts.
+import {quarantine} from '../dq/quarantine';
+import type {BatchError} from '../dq/batches';
+import type {TableClient} from '../db/table-client';
+import {MACRO_CATALOG,catalogById} from './catalog';
+import {MacroDbError} from './db';
+import type {MacroDb} from './db';
+import {canonical,equals} from './decimal';
+import {deriveSeries} from './derive';
+import {shiftMonthEnd} from './periods';
+import type {EvidenceStore} from './evidence';
+import {validatePoint} from './quality';
+import type {Adapter,ChunkCounts,EvidenceInput,MacroSeriesDef,ObservationRow,ObservationWrite,ParsedPoint,Region,WriteConflictReason,WriteResult} from './types';
+
+export interface IngestDeps{db:MacroDb;evidence:Pick<EvidenceStore,'put'>;tables:TableClient;codeVersion:string;now:()=>Date}
+/** An adapter's own reading of one value (AKShare DataFrame), already mapped to period_end; cross-check only. */
+export interface Claim{series_id:string;period_end:string;value_text:string}
+export interface RetrievalInput{evidence:EvidenceInput;parsed:ParsedPoint[];claims?:Claim[]}
+export interface IngestReceipt{counts:ChunkCounts;errors:BatchError[];retrievalIds:string[]}
+
+export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'>={fred_csv:'macro.fred',akshare:'macro.akshare'};
+export const DATASET_OF_REGION:Record<Region,'macro.fred'|'macro.akshare'>={US:'macro.fred',CN:'macro.akshare'};
+export const WRITE_CHUNK=1000;
+export const DERIVE_MAX_ROWS=20000;
+/** Once a derived series has rows, only this many months of input history are re-derived (yoy needs 12 more). */
+const DERIVE_WINDOW_MONTHS={month_end:14,index_minus_100:14,yoy_from_index:26} as const;
+/** Conflicts that park the row in dq_quarantine; missing_evidence / missing_input are failures instead. */
+const QUARANTINE_REASONS:readonly WriteConflictReason[]=['unexpected_revision','conflicting_rows','stale_delivery'];
+const TABLE='macro_observations';
+
+export const emptyChunkCounts=():ChunkCounts=>({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0});
+export function addCounts(a:ChunkCounts,b:ChunkCounts):ChunkCounts{
+ return {fetched:a.fetched+b.fetched,inserted:a.inserted+b.inserted,duplicates:a.duplicates+b.duplicates,versioned:a.versioned+b.versioned,quarantined:a.quarantined+b.quarantined,failed:a.failed+b.failed};
+}
+const keyOf=(seriesId:string,periodEnd:string)=>`${seriesId}|${periodEnd}`;
+
+/**
+ * Splits rows into calls of about `size` rows without ever separating one (series_id, period_end) group,
+ * so a duplicated period in one evidence is always judged inside one RPC call (conflicting_rows).
+ */
+export function chunkWrites<T extends {series_id:string;period_end:string}>(rows:readonly T[],size=WRITE_CHUNK):T[][]{
+ const sorted=[...rows].sort((a,b)=>a.series_id<b.series_id?-1:a.series_id>b.series_id?1:a.period_end<b.period_end?-1:a.period_end>b.period_end?1:0);
+ const out:T[][]=[];let cur:T[]=[];
+ for(const r of sorted){
+  const last=cur[cur.length-1];
+  if(cur.length>=size&&last&&keyOf(last.series_id,last.period_end)!==keyOf(r.series_id,r.period_end)){out.push(cur);cur=[];}
+  cur.push(r);
+ }
+ if(cur.length)out.push(cur);
+ return out;
+}
+
+interface Ctx{deps:IngestDeps;dataset:string;batchId:string;counts:ChunkCounts;errors:BatchError[]}
+
+/** quarantine() that never aborts the batch: a failed insert into dq_quarantine is a failed row. Returns true when parked. */
+async function park(ctx:Ctx,naturalKey:string,reasonCode:string,detail:Record<string,unknown>,payload:Record<string,unknown>):Promise<boolean>{
+ try{
+  await quarantine(ctx.deps.tables,{dataset:ctx.dataset,table:TABLE,naturalKey,reasonCode,detail,payload,batchId:ctx.batchId});
+  return true;
+ }catch{
+  ctx.errors.push({code:'quarantine_failed',key:naturalKey});
+  return false;
+ }
+}
+
+async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
+ for(const chunk of chunkWrites(rows)){
+  let res:WriteResult;
+  try{res=await ctx.deps.db.writeObservations(ctx.batchId,ctx.deps.codeVersion,chunk);}
+  catch(e){
+   ctx.counts.failed+=chunk.length;
+   ctx.errors.push({code:e instanceof MacroDbError?`write_${e.code}`:'write_failed',key:chunk[0].series_id});
+   continue;
+  }
+  ctx.counts.inserted+=res.inserted;ctx.counts.duplicates+=res.duplicates;ctx.counts.versioned+=res.versioned;ctx.counts.quarantined+=res.quarantined;
+  for(const c of res.conflicts){
+   const key=keyOf(c.series_id,c.period_end);
+   if(QUARANTINE_REASONS.includes(c.reason)){
+    // The RPC already stored the row as quarantined (and counted it); a failed dq_quarantine insert only adds an error.
+    await park(ctx,key,c.reason,{value_text:c.value_text,current_value_text:c.current_value_text},{value_text:c.value_text});
+   }else{
+    ctx.counts.failed+=1;ctx.errors.push({code:c.reason,key});
+   }
+  }
+ }
+}
+
+const collectable=(def:MacroSeriesDef|undefined,adapter:Adapter):def is MacroSeriesDef=>
+ !!def&&def.status==='active'&&!def.derive&&!def.aliasOf&&def.source?.adapter===adapter;
+
+export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapter:Adapter;retrievals:RetrievalInput[]}):Promise<IngestReceipt>{
+ const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,counts:emptyChunkCounts(),errors:[]};
+ const retrievalIds:string[]=[];
+ for(const r of input.retrievals){
+  const e=r.evidence,n=r.parsed.length;
+  const label=[...new Set(r.parsed.map(p=>p.seriesId))].join(',')||e.fetchUrl.slice(0,120);
+  ctx.counts.fetched+=n;
+  if(e.adapter!==input.adapter){ctx.counts.failed+=n;ctx.errors.push({code:'evidence_adapter_mismatch',key:label});continue;}
+  let objectPath:string;
+  try{({objectPath}=await deps.evidence.put(e));}
+  catch{ctx.counts.failed+=n;ctx.errors.push({code:'evidence_upload_failed',key:label});continue;}
+  let retrievalId:string;
+  try{
+   retrievalId=await deps.db.putRetrieval(
+    {sha256:e.sha256,object_path:objectPath,adapter:e.adapter,content_type:e.contentType,byte_length:e.bytes.byteLength},
+    {fetch_url:e.fetchUrl,fetch_host:e.fetchHost,http_status:e.httpStatus,fetched_at:e.fetchedAt,batch_id:input.batchId,tool_versions:e.toolVersions});
+  }catch{ctx.counts.failed+=n;ctx.errors.push({code:'retrieval_failed',key:label});continue;}
+  retrievalIds.push(retrievalId);
+  const claims=new Map<string,string[]>();
+  for(const c of r.claims??[]){const k=keyOf(c.series_id,c.period_end);claims.set(k,[...(claims.get(k)??[]),c.value_text]);}
+  const bySeries=new Map<string,ParsedPoint[]>();
+  for(const p of r.parsed)bySeries.set(p.seriesId,[...(bySeries.get(p.seriesId)??[]),p]);
+  const writes:ObservationWrite[]=[];
+  for(const [seriesId,points] of bySeries){
+   const def=catalogById(seriesId);
+   if(!collectable(def,input.adapter)){ctx.counts.failed+=points.length;ctx.errors.push({code:'unknown_series',key:seriesId});continue;}
+   let prev:string|null=null;
+   for(const p of [...points].sort((a,b)=>a.periodEnd<b.periodEnd?-1:a.periodEnd>b.periodEnd?1:0)){
+    const key=keyOf(seriesId,p.periodEnd);
+    let value:string;
+    try{value=canonical(p.valueText);}catch{ctx.counts.failed+=1;ctx.errors.push({code:'invalid_value',key});continue;}
+    const payload={value_text:value,retrieval_id:retrievalId,locator:p.locator};
+    const q=validatePoint(def,value,prev);
+    if(!q.passed){
+     let parked=false;
+     for(const f of q.failed)parked=(await park(ctx,key,`rule_failed:${f.ruleId}`,{...(f.detail??{}),rules_version:q.version},payload))||parked;
+     if(parked)ctx.counts.quarantined+=1;else ctx.counts.failed+=1;
+     continue;
+    }
+    const claimed=claims.get(key);
+    if(claimed&&claimed.some(c=>{try{return !equals(c,value);}catch{return true;}})){
+     if(await park(ctx,key,'adapter_mismatch',{value_text:value,claim_value_texts:claimed},payload))ctx.counts.quarantined+=1;else ctx.counts.failed+=1;
+     continue;
+    }
+    prev=value;
+    writes.push({series_id:seriesId,period_end:p.periodEnd,value_text:value,available_at:e.fetchedAt,revisable:def.revisionPolicy==='revisable',retrieval_id:retrievalId,locator:p.locator});
+   }
+  }
+  await writeAll(ctx,writes);
+ }
+ return {counts:ctx.counts,errors:ctx.errors,retrievalIds};
+}
+
+/** Derived series of a region whose input is native come first, so a derived input is written before its dependants. */
+export function derivedOf(region:Region):MacroSeriesDef[]{
+ const defs=MACRO_CATALOG.filter(d=>d.region===region&&d.status==='active'&&d.derive);
+ const depth=(d:MacroSeriesDef,seen=0):number=>{const input=d.derive?catalogById(d.derive.from):undefined;return input?.derive&&seen<8?1+depth(input,seen+1):0;};
+ return [...defs].sort((a,b)=>depth(a)-depth(b));
+}
+
+/**
+ * Recomputes every derived series of `region` from the inputs' ok history and writes it in batch `batchId`
+ * (spec §0.2 N3). A derived series without any row is derived over the input's full history; otherwise over
+ * a recent window (DERIVE_WINDOW_MONTHS) — unchanged older rows would only come back as duplicates.
+ */
+export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:string):Promise<IngestReceipt>{
+ const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,counts:emptyChunkCounts(),errors:[]};
+ const now=deps.now();
+ for(const def of derivedOf(region)){
+  const input=catalogById(def.derive!.from);
+  if(!input){ctx.errors.push({code:'missing_derive_input',key:def.id});continue;}
+  let history:ObservationRow[];
+  try{
+   const has=(await deps.db.latestObservations([def.id])).length>0;
+   const from=has?`${shiftMonthEnd(now.toISOString().slice(0,10),-DERIVE_WINDOW_MONTHS[def.derive!.kind]).slice(0,7)}-01`:undefined;
+   history=await deps.db.seriesHistory(input.id,from?{from,maxRows:DERIVE_MAX_ROWS}:{maxRows:DERIVE_MAX_ROWS});
+  }
+  catch(e){ctx.errors.push({code:e instanceof MacroDbError?`history_${e.code}`:'history_failed',key:def.id});continue;}
+  let writes:ObservationWrite[];
+  try{writes=deriveSeries(def,history,{now});}
+  catch{ctx.errors.push({code:'derive_failed',key:def.id});continue;}
+  ctx.counts.fetched+=writes.length;
+  await writeAll(ctx,writes);
+ }
+ return {counts:ctx.counts,errors:ctx.errors,retrievalIds:[]};
+}
+```
+
+Implementer checks (stop and report NEEDS_CONTEXT rather than editing Task 3 files):
+- `EvidenceStore.put` resolves to `{objectPath, status:'stored'|'exists'}` (plan shared contract, Task 3); `ingest.ts` types the dependency as `Pick<EvidenceStore,'put'>`.
+- `memoryMacroDb()` must take no arguments, and `upsertCatalog` must be enough to make the catalog's series writable (the SQL RPC rejects unknown series and native rows for derived series). If the memory DB also requires an `ingest_batches` row for `batch_id`, add a `startBatch` on a shared table client in `beforeEach`.
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/ingest.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/ingest.ts src/lib/macro/ingest.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): ingest orchestration shared by cron and ingest route
+
+Evidence first, one retrieval per fetch, quality rules and adapter claim
+cross-checks before writing, write conflicts parked in dq_quarantine with
+macro.* datasets; upload failures fail the retrieval's points. deriveAndWrite
+recomputes a region's derived series inside the triggering batch.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+---
+
+### Task 7: FRED fetcher, production deps, `/api/cron/macro-sync` (with zero-write preview), `vercel.json`
+
+Depends on Task 6. Task 11 later replaces the marker line `// TASK 11: publishRegion(region)` in this route (it expects the names `deps.db`, `today` and `batchStatus`, which this route uses) and adds `publish` to the receipt; do not publish anything here.
+
+**Files:**
+- Create: `src/lib/macro/providers/fred.ts`
+- Create: `src/lib/macro/deps.ts`
+- Create: `src/app/api/cron/macro-sync/route.ts`
+- Modify: `vercel.json` (append one entry to `crons`; JSON has no comment syntax, so no `// MACRO` markers)
+- Test: `src/lib/macro/providers/fred.test.ts`
+- Test: `src/app/api/cron/macro-sync/route.test.ts`
+
+Design notes:
+- `fetchFredCsv` retries timeouts, network errors, 429 and 5xx three times (1 s, 2 s, 4 s; injectable `sleep`), refuses any other 4xx at once, and refuses a final URL whose host is not `fred.stlouisfed.org`. The evidence carries the **server's** `Content-Type` (FRED says `application/csv`).
+- First run per series backfills from `2000-01-01` (spec §4.4). Once a series has observations, `fredCosdFor` asks for 400 days (daily) or 6 years (monthly; BLS revises seasonal factors 5 years back) so a daily run of ~9 series stays well inside `maxDuration` (a full-history daily run would push ~50 000 rows through the write RPC every day). `deriveAndWrite` (Task 6) likewise re-derives only a recent window once a derived series has rows. Preview always uses `2000-01-01` because it must not read the database either.
+- `?preview=1` never touches `deps.db`, `deps.evidence` or `deps.tables` (the test replaces them with proxies that throw on any property access) and needs no code version.
+- Only `GET`/`POST`/`dynamic`/`maxDuration` are exported from `route.ts` (Next.js rejects other exports from route files), which is why `fredCosdFor` lives in `providers/fred.ts`.
+- `deps.ts` assumes Task 3 exports `supabaseMacroDb({admin,anon})` (skeleton) and `supabaseEvidenceStore(admin:SupabaseClient)`. If `supabaseEvidenceStore` takes other arguments, change only that line and say so in the commit body.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// src/lib/macro/providers/fred.test.ts
+import {createHash} from 'node:crypto';
+import {describe,expect,it,vi} from 'vitest';
+import {FRED_BACKOFF_MS,FredFetchError,fetchFredCsv,fredCosdFor,fredCsvUrl} from './fred';
+
+const CSV='observation_date,DFF\n2026-10-01,4.10\n';
+const ok=(body=CSV,headers:Record<string,string>={'content-type':'application/csv'})=>new Response(body,{status:200,headers});
+const status=(s:number)=>new Response('nope',{status:s});
+const NOW=()=>new Date('2026-11-06T05:30:00.000Z');
+function harness(responses:(()=>Response|Promise<Response>)[]){
+ const calls:{url:string;init:RequestInit|undefined}[]=[];const sleeps:number[]=[];
+ const fetch=vi.fn(async(url:string|URL|Request,init?:RequestInit)=>{calls.push({url:String(url),init});const next=responses.shift();if(!next)throw new Error('no more responses');return next();}) as unknown as typeof globalThis.fetch;
+ return {calls,sleeps,opts:{fetch,now:NOW,sleep:async(ms:number)=>{sleeps.push(ms);}}};
+}
+const codeOf=async(p:Promise<unknown>)=>{try{await p;return 'resolved';}catch(e){return e instanceof FredFetchError?`${e.code}${e.status===null?'':`:${e.status}`}`:String(e);}};
+
+describe('fetchFredCsv',()=>{
+ it('returns the exact bytes as evidence with hash, final URL, host, status, content type and fetched_at',async()=>{
+  const h=harness([()=>ok()]);
+  const e=await fetchFredCsv('DFF',h.opts);
+  expect(h.calls[0].url).toBe('https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFF&cosd=2000-01-01');
+  expect(new TextDecoder().decode(e.bytes)).toBe(CSV);
+  expect(e).toMatchObject({sha256:createHash('sha256').update(CSV).digest('hex'),adapter:'fred_csv',fetchUrl:fredCsvUrl('DFF'),fetchHost:'fred.stlouisfed.org',httpStatus:200,contentType:'application/csv',fetchedAt:'2026-11-06T05:30:00.000Z'});
+  expect(e.toolVersions).toEqual({fetcher:'macro-fred-fetch/1',parser:'fred-csv/1'});
+  expect(h.sleeps).toEqual([]);
+ });
+ it('honours cosd',async()=>{
+  const h=harness([()=>ok()]);
+  await fetchFredCsv('CPIAUCSL',{...h.opts,cosd:'2015-01-01'});
+  expect(h.calls[0].url).toBe('https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL&cosd=2015-01-01');
+ });
+ it('retries 5xx and 429 with 1/2/4 s backoff and succeeds',async()=>{
+  const h=harness([()=>status(503),()=>status(429),()=>status(502),()=>ok()]);
+  await fetchFredCsv('DFF',h.opts);
+  expect(h.calls).toHaveLength(4);expect(h.sleeps).toEqual([...FRED_BACKOFF_MS]);
+ });
+ it('gives up after 3 retries with the last failure',async()=>{
+  const h=harness([()=>status(503),()=>status(503),()=>status(503),()=>status(500)]);
+  expect(await codeOf(fetchFredCsv('DFF',h.opts))).toBe('fetch_http_5xx:500');
+  expect(h.calls).toHaveLength(4);
+ });
+ it('does not retry other 4xx',async()=>{
+  const h=harness([()=>status(404)]);
+  expect(await codeOf(fetchFredCsv('DFF',h.opts))).toBe('fetch_http_4xx:404');
+  expect(h.calls).toHaveLength(1);
+ });
+ it('retries network errors and per-attempt timeouts',async()=>{
+  const h=harness([()=>{throw new TypeError('fetch failed');},()=>ok()]);
+  await fetchFredCsv('DFF',h.opts);expect(h.calls).toHaveLength(2);
+  const fetch=vi.fn((_u:unknown,init?:RequestInit)=>new Promise<Response>((_,reject)=>init?.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError'))))) as unknown as typeof globalThis.fetch;
+  const sleeps:number[]=[];
+  expect(await codeOf(fetchFredCsv('DFF',{fetch,now:NOW,sleep:async(ms)=>{sleeps.push(ms);},timeoutMs:5}))).toBe('fetch_timeout');
+  expect(sleeps).toEqual([...FRED_BACKOFF_MS]);
+ });
+ it('stops at once when the caller aborts',async()=>{
+  const ctl=new AbortController();ctl.abort();
+  const h=harness([()=>ok()]);
+  expect(await codeOf(fetchFredCsv('DFF',{...h.opts,signal:ctl.signal}))).toBe('fetch_aborted');
+  expect(h.calls).toHaveLength(0);
+ });
+ it('refuses a response served from another host and invalid codes',async()=>{
+  const moved=ok();Object.defineProperty(moved,'url',{value:'https://mirror.example.com/DFF.csv'});
+  const h=harness([()=>moved]);
+  expect(await codeOf(fetchFredCsv('DFF',h.opts))).toBe('fetch_wrong_host');
+  expect(h.calls).toHaveLength(1);
+  expect(await codeOf(fetchFredCsv('DFF&id=X',h.opts))).toBe('bad_code');
+ });
+});
+
+describe('fredCosdFor',()=>{
+ it('backfills from 2000-01-01 without data and uses a recent window afterwards',()=>{
+  expect(fredCosdFor('day',false,'2026-11-06')).toBe('2000-01-01');
+  expect(fredCosdFor('day',true,'2026-11-06')).toBe('2025-10-02');
+  expect(fredCosdFor('month',true,'2026-11-06')).toBe('2020-11-01');
+  expect(fredCosdFor('month',true,'2003-05-20')).toBe('2000-01-01');
+  expect(()=>fredCosdFor('day',true,'nope')).toThrow('invalid_today');
+ });
+});
+```
+
+```ts
+// src/app/api/cron/macro-sync/route.test.ts
+import {readFileSync} from 'node:fs';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {memoryTableClient} from '@/lib/db/memory-table-client';
+import {collectableOf} from '@/lib/macro/catalog';
+import type {MacroDeps} from '@/lib/macro/deps';
+import {memoryMacroDb} from '@/lib/macro/memory-db';
+import type {EvidenceInput} from '@/lib/macro/types';
+
+const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
+vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
+vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+
+import {GET,POST} from './route';
+
+const AUTH={authorization:'Bearer cron-secret'};
+const req=(qs='',headers:Record<string,string>=AUTH)=>new Request(`https://alpha.example/api/cron/macro-sync${qs?`?${qs}`:''}`,{headers});
+const original=process.env.CRON_SECRET;
+const FRED=collectableOf('fred_csv');
+const codeOfUrl=(url:string)=>new URL(url).searchParams.get('id')!;
+/** Tiny valid CSV per series: two daily points (Sep 30, Oct 1) or two monthly points a year apart. */
+function csvFor(code:string){
+ const def=FRED.find(d=>d.source!.seriesKey===code)!;
+ return def.period==='day'?`observation_date,${code}\n2026-09-30,4.1\n2026-10-01,4.2\n`:`observation_date,${code}\n2025-09-01,50\n2026-09-01,51\n`;
+}
+/** A deps member that fails the test on any use: preview must not touch it. */
+const trap=(name:string)=>new Proxy({},{get:(_t,k)=>{throw new Error(`preview touched ${name}.${String(k)}`);}});
+function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:EvidenceInput){puts.push(e);return {objectPath:`fred_csv/${e.sha256}.csv`,status:'stored' as const};}};}
+
+let fetchCalls:string[],failCodes:Set<string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
+beforeEach(()=>{
+ vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
+ fetchCalls=[];failCodes=new Set();
+ tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
+ const fetch=(async(input:string|URL|Request)=>{
+  const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
+  return failCodes.has(code)?new Response('down',{status:503}):new Response(csvFor(code),{status:200,headers:{'content-type':'application/csv'}});
+ }) as typeof globalThis.fetch;
+ deps={db:memoryMacroDb(),evidence,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z'),fetch,sleep:async()=>{}};
+ mocks.deps.mockImplementation(()=>deps);
+ mocks.codeVersion.mockReturnValue('a'.repeat(40));
+});
+afterEach(()=>{if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;});
+
+describe('macro-sync cron',()=>{
+ it('fails closed without CRON_SECRET and rejects a wrong bearer before building deps',async()=>{
+  delete process.env.CRON_SECRET;
+  expect((await GET(req())).status).toBe(503);
+  process.env.CRON_SECRET='cron-secret';
+  expect((await GET(req('',{authorization:'Bearer nope'}))).status).toBe(401);
+  expect((await GET(req('',{}))).status).toBe(401);
+  expect(mocks.deps).not.toHaveBeenCalled();
+ });
+ it('validates preview and refuses a real run without a code version',async()=>{
+  for(const qs of ['preview=0','preview=true','preview=1&preview=1'])expect((await GET(req(qs))).status,qs).toBe(400);
+  mocks.codeVersion.mockReturnValue(null);
+  const res=await POST(req());
+  expect(res.status).toBe(503);expect((await res.json()).error.code).toBe('code_version_unavailable');
+  expect(mocks.deps).not.toHaveBeenCalled();
+ });
+ it('preview=1 fetches and parses every FRED series with ZERO database writes and ZERO uploads',async()=>{
+  mocks.codeVersion.mockReturnValue(null);   // preview needs no code version
+  deps={...deps,db:trap('db') as MacroDeps['db'],evidence:trap('evidence') as MacroDeps['evidence'],tables:trap('tables') as MacroDeps['tables']};
+  const res=await GET(req('preview=1'));
+  expect(res.status).toBe(200);
+  const body=await res.json();
+  expect(body.preview).toBe(true);expect(body.ok).toBe(true);
+  expect(fetchCalls.map(codeOfUrl).sort()).toEqual(FRED.map(d=>d.source!.seriesKey).sort());
+  expect(fetchCalls.every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
+  expect(body.counts.fetched).toBe(2*FRED.length);
+  const dgs=body.series.find((s:{series_id:string})=>s.series_id==='US_DGS10_D');
+  expect(dgs).toMatchObject({points:2,first:'2026-09-30',last:'2026-10-01',sample:[{period_end:'2026-09-30',value_text:'4.1'},{period_end:'2026-10-01',value_text:'4.2'}]});
+ });
+ it('runs one macro.fred batch: evidence, observations, US derivation, finishBatch and freshness',async()=>{
+  const res=await GET(req());
+  expect(res.status).toBe(200);
+  const body=await res.json();
+  expect(body).toMatchObject({ok:true,status:'success',date:'2026-11-06'});
+  expect(body.counts.failed).toBe(0);
+  expect(body.counts.inserted).toBeGreaterThanOrEqual(2*FRED.length);   // natives plus derived rows
+  expect(evidence.puts).toHaveLength(FRED.length);
+  const [batch]=tables.rows('ingest_batches');
+  expect(batch).toMatchObject({batch_id:body.batchId,producer:'ts-fred',dataset:'macro.fred',status:'success',triggered_by:'cron',code_version:'a'.repeat(40)});
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.fred',expected_cadence:'daily',consecutive_errors:0})]);
+  expect((await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).map(o=>o.value_text)).toEqual(['4.1','4.2']);
+  const derived=await deps.db.seriesHistory('US_DGS10',{maxRows:10});
+  expect(derived.map(o=>[o.period_end,o.value_text,o.transform,o.batch_id])).toEqual([['2026-09-30','4.1','month_end@1',body.batchId]]);
+  expect((await deps.db.seriesHistory('US_CPI_YOY',{maxRows:10})).map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','2']]);
+ });
+ it('asks for a recent window once a series has data',async()=>{
+  await GET(req());fetchCalls=[];
+  await GET(req());
+  const dff=fetchCalls.find(u=>codeOfUrl(u)==='DFF')!,cpi=fetchCalls.find(u=>codeOfUrl(u)==='CPIAUCSL')!;
+  expect(dff).toContain('cosd=2025-10-02');expect(cpi).toContain('cosd=2020-11-01');
+ });
+ it('a failing series makes the batch partial; the rest is written and freshness stays ok',async()=>{
+  failCodes.add('DFF');
+  const body=await (await GET(req())).json();
+  expect(body.status).toBe('partial');expect(body.ok).toBe(false);
+  expect(body.errors).toContainEqual({code:'fetch_http_5xx',key:'US_FEDFUNDS_EFF_D'});
+  expect(fetchCalls.filter(u=>codeOfUrl(u)==='DFF')).toHaveLength(4);   // 1 try + 3 retries
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:0});
+ });
+ it('all series failing → failed batch, one more consecutive error, no observations',async()=>{
+  for(const d of FRED)failCodes.add(d.source!.seriesKey);
+  const body=await (await GET(req())).json();
+  expect(body.status).toBe('failed');
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
+  expect(await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).toEqual([]);
+ });
+ it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
+  const cfg=JSON.parse(readFileSync(new URL('../../../../../vercel.json',import.meta.url),'utf8')) as {crons:{path:string;schedule:string}[]};
+  expect(cfg.crons).toContainEqual({path:'/api/cron/macro-sync',schedule:'30 5 * * *'});
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/providers/fred.test.ts src/app/api/cron/macro-sync/route.test.ts`
+Expected: FAIL (`Cannot find module './fred'`, `Cannot find module './route'`)
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/lib/macro/providers/fred.ts
+// FRED public CSV fetcher (spec §4.4 step 2, §11 "provider 超时 / 5xx"): GET
+// https://fred.stlouisfed.org/graph/fredgraph.csv?id=<CODE>&cosd=<date> (no API key). Each attempt has its
+// own timeout; timeouts, network errors, 429 and 5xx are retried 3 times with 1 s / 2 s / 4 s backoff;
+// other HTTP statuses fail at once. Returns the exact response bytes as EvidenceInput (sha256 of the bytes,
+// final URL and host, status, server Content-Type, fetched_at). A response from any host other than
+// fred.stlouisfed.org is refused (provenance would lie). Parsing is the caller's job (parsers/fred-csv.ts).
+// fredCosdFor picks the start date: full backfill once, then a recent window.
+import {createHash} from 'node:crypto';
+import {FRED_PARSER_VERSION} from '../parsers/fred-csv';
+import type {EvidenceInput,PeriodKind} from '../types';
+
+export const FRED_HOST='fred.stlouisfed.org';
+export const FRED_COSD='2000-01-01';
+export const FRED_FETCHER_VERSION='macro-fred-fetch/1';
+export const FRED_BACKOFF_MS=[1000,2000,4000] as const;
+const CODE=/^[A-Z0-9_]{1,40}$/;
+const UA='OsbornAlpha-macro-sync/1 (+https://alpha.osborn.studio)';
+export type FredFetchCode='fetch_timeout'|'fetch_network'|'fetch_http_5xx'|'fetch_http_4xx'|'fetch_aborted'|'fetch_wrong_host'|'bad_code';
+export class FredFetchError extends Error{
+ readonly code:FredFetchCode;readonly status:number|null;
+ constructor(code:FredFetchCode,status:number|null=null){super(status===null?code:`${code}:${status}`);this.name='FredFetchError';this.code=code;this.status=status;}
+}
+export interface FredFetchOptions{fetch?:typeof fetch;signal?:AbortSignal;now?:()=>Date;sleep?:(ms:number)=>Promise<void>;timeoutMs?:number;cosd?:string}
+export const fredCsvUrl=(code:string,cosd=FRED_COSD)=>`https://${FRED_HOST}/graph/fredgraph.csv?id=${encodeURIComponent(code)}&cosd=${cosd}`;
+/**
+ * cosd for one run: a series without stored data is backfilled from FRED_COSD (spec §4.4); afterwards a recent
+ * window keeps the daily run small — daily series 400 days, monthly/quarterly 6 years (BLS revises seasonal
+ * factors 5 years back each February). Never earlier than FRED_COSD.
+ */
+export function fredCosdFor(period:PeriodKind,hasData:boolean,today:string):string{
+ if(!hasData)return FRED_COSD;
+ const d=new Date(`${today}T00:00:00Z`);
+ if(!Number.isFinite(d.getTime()))throw new Error('invalid_today');
+ if(period==='day')d.setUTCDate(d.getUTCDate()-400);else{d.setUTCDate(1);d.setUTCFullYear(d.getUTCFullYear()-6);}
+ const iso=d.toISOString().slice(0,10);
+ return iso<FRED_COSD?FRED_COSD:iso;
+}
+const defaultSleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+const retryable=(e:FredFetchError)=>e.code==='fetch_timeout'||e.code==='fetch_network'||e.code==='fetch_http_5xx';
+
+export async function fetchFredCsv(code:string,opts:FredFetchOptions={}):Promise<EvidenceInput>{
+ if(!CODE.test(code))throw new FredFetchError('bad_code');
+ const f=opts.fetch??globalThis.fetch,now=opts.now??(()=>new Date()),sleep=opts.sleep??defaultSleep,timeoutMs=opts.timeoutMs??20_000;
+ const url=fredCsvUrl(code,opts.cosd);
+ for(let attempt=0;;attempt++){
+  if(opts.signal?.aborted)throw new FredFetchError('fetch_aborted');
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),timeoutMs);
+  const onAbort=()=>ctl.abort();
+  opts.signal?.addEventListener('abort',onAbort,{once:true});
+  let failure:FredFetchError;
+  try{
+   const res=await f(url,{signal:ctl.signal,headers:{'user-agent':UA,accept:'text/csv,*/*'},redirect:'follow',cache:'no-store'});
+   if(res.status===200){
+    const bytes=new Uint8Array(await res.arrayBuffer());
+    const finalUrl=res.url||url;
+    const host=new URL(finalUrl).host;
+    if(host!==FRED_HOST)throw new FredFetchError('fetch_wrong_host');
+    return {sha256:createHash('sha256').update(bytes).digest('hex'),bytes,adapter:'fred_csv',fetchUrl:finalUrl,fetchHost:host,httpStatus:200,
+     contentType:res.headers.get('content-type')??'',fetchedAt:now().toISOString(),toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION}};
+   }
+   failure=new FredFetchError(res.status>=500||res.status===429?'fetch_http_5xx':'fetch_http_4xx',res.status);
+  }catch(e){
+   if(e instanceof FredFetchError)throw e;
+   failure=new FredFetchError(opts.signal?.aborted?'fetch_aborted':ctl.signal.aborted?'fetch_timeout':'fetch_network');
+  }finally{
+   clearTimeout(timer);opts.signal?.removeEventListener('abort',onAbort);
+  }
+  if(!retryable(failure)||attempt>=FRED_BACKOFF_MS.length)throw failure;
+  await sleep(FRED_BACKOFF_MS[attempt]);
+ }
+}
+```
+
+```ts
+// src/lib/macro/deps.ts
+// Production wiring for the macro write paths (spec §4.4): MacroDb over Supabase (writes through the
+// service-role client's RPCs, reads through the anon client so RLS applies), the private macro-raw
+// evidence store, the DQ TableClient, the global fetch and the real clock. Used by
+// /api/cron/macro-sync and /api/macro/ingest; tests mock this module and inject memory doubles.
+import {getAdminSupabase} from '../supabase/admin';
+import {getAnonSupabase} from '../supabase/anon';
+import {supabaseTableClient} from '../db/table-client';
+import {supabaseMacroDb} from './db';
+import {supabaseEvidenceStore} from './evidence';
+import type {IngestDeps} from './ingest';
+
+export interface MacroDeps extends IngestDeps{fetch:typeof fetch;sleep:(ms:number)=>Promise<void>}
+
+export function productionMacroDeps(opts:{codeVersion:string}):MacroDeps{
+ const admin=getAdminSupabase();
+ return {
+  db:supabaseMacroDb({admin,anon:getAnonSupabase()}),
+  evidence:supabaseEvidenceStore(admin),
+  tables:supabaseTableClient(admin),
+  codeVersion:opts.codeVersion,
+  now:()=>new Date(),
+  fetch:(input,init)=>globalThis.fetch(input,init),
+  sleep:(ms)=>new Promise<void>(r=>setTimeout(r,ms)),
+ };
+}
+```
+
+```ts
+// src/app/api/cron/macro-sync/route.ts
+// Daily US macro sync (spec §4.4 steps 1–4, §8): CRON_SECRET bearer via authorizedCronRequest; upsert the
+// catalog mirror; one ingest batch (producer 'ts-fred', dataset 'macro.fred') over every active native FRED
+// series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; finishBatch;
+// A series with no stored observation is backfilled from FRED_COSD (2000-01-01, spec §4.4); afterwards the
+// daily run asks for a recent window only (daily series 400 days, monthly 6 years so the BLS 5-year
+// seasonal revisions are seen) to keep the run inside maxDuration.
+// recordAttempt('macro.fred', daily, ok = status !== 'failed'). Only US is published here (CN publishes
+// after ingest finish). ?preview=1 fetches and parses only and returns counts and samples: ZERO database
+// writes, ZERO evidence uploads (it never touches deps.db / deps.evidence / deps.tables). A missing
+// code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
+// keys and counts only, never messages.
+import {NextResponse} from 'next/server';
+import {startBatch,finishBatch} from '@/lib/dq/batches';
+import type {BatchError} from '@/lib/dq/batches';
+import {recordAttempt} from '@/lib/dq/freshness';
+import {resolveCodeVersion} from '@/lib/facts/deps';
+import {authorizedCronRequest} from '@/lib/observability/cron-auth';
+import {CATALOG_VERSION,MACRO_CATALOG,collectableOf} from '@/lib/macro/catalog';
+import {productionMacroDeps} from '@/lib/macro/deps';
+import type {MacroDeps} from '@/lib/macro/deps';
+import {addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
+import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
+import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
+import type {MacroSeriesDef} from '@/lib/macro/types';
+
+export const dynamic='force-dynamic';
+export const maxDuration=300;
+const DEADLINE_MS=240_000,SAMPLE=3;
+const NO_STORE={'Cache-Control':'no-store'};
+const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:NO_STORE});
+const errCode=(e:unknown)=>e instanceof FredFetchError?e.code:e instanceof FredParseError?`parse_${e.code}`:'fetch_failed';
+const publicErrors=(errors:BatchError[])=>errors.map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
+
+async function fetchAndParse(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSignal,cosd:string){
+ const code=def.source!.seriesKey;
+ const evidence=await fetchFredCsv(code,{fetch:deps.fetch,sleep:deps.sleep,now:deps.now,signal,cosd});
+ return {evidence,parsed:parseFredCsv(evidence.bytes,{seriesId:def.id,code,period:def.period})};
+}
+
+/** Fetch + parse only. Must never touch deps.db, deps.evidence or deps.tables. */
+async function preview(deps:MacroDeps,defs:MacroSeriesDef[],signal:AbortSignal){
+ const series=[];let fetched=0;
+ for(const def of defs){
+  try{
+   const {evidence,parsed}=await fetchAndParse(deps,def,signal,FRED_COSD);
+   fetched+=parsed.length;
+   series.push({series_id:def.id,code:def.source!.seriesKey,points:parsed.length,first:parsed[0]?.periodEnd??null,last:parsed[parsed.length-1]?.periodEnd??null,
+    sample:parsed.slice(-SAMPLE).map(p=>({period_end:p.periodEnd,value_text:p.valueText})),sha256:evidence.sha256,bytes:evidence.bytes.byteLength});
+  }catch(e){series.push({series_id:def.id,code:def.source!.seriesKey,error:errCode(e)});}
+ }
+ return NextResponse.json({ok:series.every(s=>!('error' in s)),preview:true,catalogVersion:CATALOG_VERSION,counts:{fetched},series},{status:200,headers:NO_STORE});
+}
+
+async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,signal:AbortSignal){
+ const today=deps.now().toISOString().slice(0,10);
+ await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
+ const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
+  toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
+ let counts=emptyChunkCounts();const errors:BatchError[]=[];
+ try{
+  const stored=new Set((await deps.db.latestObservations(defs.map(d=>d.id))).map(o=>o.series_id));
+  for(const def of defs){
+   let retrieval;
+   try{retrieval=await fetchAndParse(deps,def,signal,fredCosdFor(def.period,stored.has(def.id),today));}
+   catch(e){errors.push({code:errCode(e),key:def.id});continue;}
+   const rec=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]});
+   counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
+  }
+  const derived=await deriveAndWrite(deps,'US',batchId);
+  counts=addCounts(counts,derived.counts);errors.push(...derived.errors);
+ }catch(e){
+  // Unexpected crash: close the batch as failed so it never stays 'running', then rethrow.
+  errors.push({code:'sync_crashed'});
+  await finishBatch(deps.tables,batchId,{counts,errors}).catch(()=>undefined);
+  await recordAttempt(deps.tables,'macro.fred',{ok:false,cadence:'daily'}).catch(()=>undefined);
+  throw e;
+ }
+ const batchStatus=await finishBatch(deps.tables,batchId,{counts,errors});
+ await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed',cadence:'daily'});
+ // TASK 11: publishRegion(region)
+ return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
+}
+
+async function run(request:Request):Promise<NextResponse>{
+ const secret=process.env.CRON_SECRET;
+ if(!secret)return err('cron_unavailable','Cron unavailable',503);
+ if(!authorizedCronRequest(request.headers.get('authorization'),secret))return err('unauthorized','Unauthorized',401);
+ const flags=new URL(request.url).searchParams.getAll('preview');
+ if(flags.length>1||(flags.length===1&&flags[0]!=='1'))return err('invalid_parameter:preview','preview must be 1 or absent',400);
+ const isPreview=flags.length===1;
+ const codeVersion=resolveCodeVersion({allowGit:false});
+ if(!codeVersion&&!isPreview)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
+ const deps=productionMacroDeps({codeVersion:codeVersion??'preview'});
+ const defs=collectableOf('fred_csv');
+ const signal=AbortSignal.timeout(DEADLINE_MS);
+ try{
+  return isPreview?await preview(deps,defs,signal):await sync(deps,defs,codeVersion!,signal);
+ }catch{
+  return err('sync_failed','Macro sync failed',500);   // code only: no message leaves the server
+ }
+}
+
+export async function GET(request:Request){return run(request);}
+export async function POST(request:Request){return run(request);}
+```
+
+`vercel.json`: append this object as the last element of the `crons` array (after the `facts-sync` entry; keep the existing entries and their order, add the comma after the previous `}`):
+
+```json
+    {
+      "path": "/api/cron/macro-sync",
+      "schedule": "30 5 * * *"
+    }
+```
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/providers/fred.test.ts src/app/api/cron/macro-sync/route.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+
+Optional live smoke (network, no database, no secrets in the shell history beyond the local dev secret): `CRON_SECRET=dev npm run dev`, then in another terminal `curl -s -H 'authorization: Bearer dev' 'http://localhost:3000/api/cron/macro-sync?preview=1'` → `{"ok":true,"preview":true,…}` with one entry per FRED series. Skip it if the dev server needs Supabase env vars you do not have (preview builds deps but never calls them).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/providers/fred.ts src/lib/macro/providers/fred.test.ts src/lib/macro/deps.ts src/app/api/cron/macro-sync/route.ts src/app/api/cron/macro-sync/route.test.ts vercel.json
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): FRED fetcher with retries, macro-sync cron with zero-write preview
+
+One macro.fred batch per run: catalog mirror, fetch → evidence → parse →
+ingest per FRED series, US derivation, finishBatch and recordAttempt.
+Backfill from 2000-01-01 once, then a recent window. Scheduled 05:30 UTC.
+Publishing is left to Task 11 at the marked line.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+
+---
+
+### Task 8: Python AKShare collector with response recorder, CN series export, real CN fixtures
+
+Depends on Task 2 (catalog; its NBS `seriesKey` strings are the verified ones listed under "已核实的上游事实"). Python runs only on the Mac; nothing here goes into `package.json` or Vercel. Unit tests are offline; recording fixtures is one networked command.
+
+**Files:**
+- Create: `src/lib/macro/cn-series.ts` (AKShare call specs derived from the catalog's `seriesKey`; shared by the export script and Task 9's parsers)
+- Create: `src/lib/macro/cn-series.test.ts`
+- Create: `scripts/macro/export-cn-series.ts`
+- Create (generated, committed): `scripts/macro/cn-series.json`
+- Create: `scripts/macro/requirements.txt`, `scripts/macro/recorder.py`, `scripts/macro/collect.py`, `scripts/macro/test_collect.py`, `scripts/macro/launchd.plist.template`
+- Create (recorded, committed): `src/lib/macro/fixtures/cn/` (`<SERIES>-NN.json|html`, `manifest.json`, `claims.json`, `verification.json`)
+- Create: `docs/audits/2026-11-06-macro-workbench/11-cn-source-verification.md`
+- Modify: `.gitignore` (append a `# MACRO` comment line and `scripts/macro/.venv/`)
+
+Why a generated JSON rather than a Python copy of the table: the catalog's `seriesKey` already holds every AKShare argument (`function|kind|path > indicator`, `bond_china_yield|curve|tenor`, `currency_boc_safe|currency`), so `cn-series.ts` derives the call specs from it and `export-cn-series.ts` writes them for Python. There is one source of truth, and `cn-series.test.ts` fails whenever the committed JSON drifts from the catalog. Adapter-only parameters (NBS daily window, NBS era leaves for history, ChinaBond windows, the data-response URL path) live in `cn-series.ts` next to the derivation.
+
+Facts the code relies on (verified against AKShare 1.20.35 source and live calls on 2026-11-06):
+- Every AKShare request goes through `akshare/utils/http.py`, which ends in `requests.Session.request` (for `http.get/post/get_buffer/request`, `http.Session`, `request_with_retry`; `requests.request` builds a Session internally) or `curl_cffi.requests.Session.request` (for `http.CurlSession`, `curl_get/curl_post`; the NBS module uses a `CurlSession(impersonate="chrome")`). Wrapping those two methods captures everything.
+- One call fetches several responses; only the data response is evidence: NBS `POST …/stream/esData` (the tree/indicator/page requests are not), ChinaBond `GET /cbweb-pbc-web/pbc/historyQuery`, SAFE `POST /AppStructured/hlw/RMBQuery.do` (the link page and the 1.2 MB XLSX are not).
+- DataFrame values are float64 (`pd.to_numeric`), so claims are `repr(float)`. On the 2026-11-06 recording every claim was decimal-equal to the TS parser's value from the same bytes (CPI 9/9, PPI 12/12, PMI 13/13, GDP 8/8, M2 12/12, exports 12/12, CGB 29/29, SAFE 203/203 located; the other 60 SAFE claims are dates covered only by the XLSX).
+- Fixture size with `--mode daily`: ≈ 1.06 MB (SAFE HTML 525 KB is most of it). One chunk body ≈ 1.45 MB.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// src/lib/macro/cn-series.test.ts
+import {readFileSync} from 'node:fs';
+import {describe,expect,it} from 'vitest';
+import {collectableOf} from './catalog';
+import {cnSeriesDocument,cnSeriesSpecs,cnSpecOf} from './cn-series';
+import type {MacroSeriesDef} from './types';
+
+const def=(id:string,seriesKey:string,fetchHost:string,period:MacroSeriesDef['period']='month'):MacroSeriesDef=>({
+ id,region:'CN',role:'indicator',type:null,name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period,adjustment:'nsa',status:'active',
+ source:{adapter:'akshare',fetchHost,publisher:{zh:'x',en:'x'},seriesKey,rights:'official_open',attribution:{zh:'x',en:'x'}},
+ revisionPolicy:'immutable',weight:0,changeKind:'pp',definitionVersion:1,
+});
+
+describe('cnSpecOf',()=>{
+ it('splits an NBS key into kind, tree path and whitespace-free indicator, with daily and history calls',()=>{
+  const s=cnSpecOf(def('CN_PMI_MFG','macro_china_nbs_nation|月度数据|采购经理指数 > 制造业采购经理指数 > 制造业采购经理指数 (%)','data.stats.gov.cn'));
+  expect(s).toEqual({series_id:'CN_PMI_MFG',fetch_host:'data.stats.gov.cn',period:'month',function:'macro_china_nbs_nation',
+   evidence_path:'/dg/website/publicrelease/web/external/stream/esData',column:'制造业采购经理指数(%)',kind:'月度数据',
+   path:'采购经理指数 > 制造业采购经理指数',daily_period:'LAST13',backfill:[{path:'采购经理指数 > 制造业采购经理指数',period:'2016-'}]});
+  expect(cnSpecOf(def('CN_GDP_INDEX','macro_china_nbs_nation|季度数据|国民经济核算 > 国内生产总值指数 > 国内生产总值指数(上年同期=100)当季值','data.stats.gov.cn','quarter')).daily_period).toBe('LAST8');
+  expect(cnSpecOf(def('CN_CPI_INDEX','macro_china_nbs_nation|月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)','data.stats.gov.cn')).backfill!.map(b=>b.period)).toEqual(['2021-2025','2016-2020']);
+ });
+ it('reads ChinaBond and SAFE keys',()=>{
+  expect(cnSpecOf(def('CN_CGB_10Y_D','bond_china_yield|中债国债收益率曲线|10年','yield.chinabond.com.cn','day'))).toMatchObject({function:'bond_china_yield',curve:'中债国债收益率曲线',column:'10年',evidence_path:'/cbweb-pbc-web/pbc/historyQuery',window_days:45,backfill_from:'2016-01-01'});
+  expect(cnSpecOf(def('CN_USDCNY_CP_D','currency_boc_safe|美元','www.safe.gov.cn','day'))).toMatchObject({function:'currency_boc_safe',column:'美元',evidence_path:'/AppStructured/hlw/RMBQuery.do'});
+ });
+ it('refuses unknown functions, malformed keys and non-akshare series',()=>{
+  expect(()=>cnSpecOf(def('X','stock_zh_index_hist_csindex|000300','www.csindex.com.cn'))).toThrow('unsupported_series_key');
+  expect(()=>cnSpecOf(def('X','macro_china_nbs_nation|月度数据|只有一段','data.stats.gov.cn'))).toThrow('bad_series_key');
+  expect(()=>cnSpecOf({...def('X','a|b','h'),source:null})).toThrow('not_akshare');
+ });
+});
+
+describe('catalog CN specs',()=>{
+ it('covers every active native akshare series on the three verified official hosts',()=>{
+  const specs=cnSeriesSpecs();
+  expect(specs.map(s=>s.series_id)).toEqual(collectableOf('akshare').map(d=>d.id));
+  for(const s of specs)expect(['data.stats.gov.cn','yield.chinabond.com.cn','www.safe.gov.cn'],s.series_id).toContain(s.fetch_host);
+ });
+ it('matches the committed scripts/macro/cn-series.json (re-run scripts/macro/export-cn-series.ts after catalog changes)',()=>{
+  expect(readFileSync(new URL('../../../scripts/macro/cn-series.json',import.meta.url),'utf8')).toBe(cnSeriesDocument());
+ });
+});
+```
+
+```python
+"""scripts/macro/test_collect.py — offline tests for recorder.py and collect.py (no network).
+
+Run: scripts/macro/.venv/bin/python -m pytest scripts/macro -q
+"""
+from __future__ import annotations
+
+import base64
+import datetime as dt
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import curl_cffi.requests as curl
+import pandas as pd
+import pytest
+import requests
+
+import collect
+from recorder import Capture, recording
+
+HERE = Path(__file__).resolve().parent
+
+
+# ---------------------------------------------------------------- recorder
+class FakeCurlResponse:
+    def __init__(self, url: str, body: bytes, status: int = 200, ct: str = "application/json;charset=UTF-8"):
+        self.url, self.content, self.status_code, self.headers = url, body, status, {"content-type": ct}
+
+
+def fake_requests_response(url: str, body: bytes, status: int = 200, ct: str = "text/html;charset=UTF-8") -> requests.Response:
+    r = requests.Response()
+    r.url, r.status_code, r._content = url, status, body
+    r.headers["content-type"] = ct
+    return r
+
+
+@pytest.fixture
+def fake_transport(monkeypatch):
+    """Replaces both HTTP layers with in-memory fakes; the recorder then wraps the fakes."""
+    seen = []
+
+    def fake_requests(self, method, url, *a, **k):
+        seen.append(("requests", method, url))
+        if "boom" in url:
+            raise requests.ConnectionError("boom")
+        return fake_requests_response(url + "?final=1", f"<table><tr><td>{url}</td></tr></table>".encode())
+
+    def fake_curl(self, method, url, *a, **k):
+        seen.append(("curl", method, url))
+        return FakeCurlResponse(url, b'{"data":[],"success":true}')
+
+    monkeypatch.setattr(requests.Session, "request", fake_requests)
+    monkeypatch.setattr(curl.Session, "request", fake_curl)
+    return seen, fake_requests, fake_curl
+
+
+def test_recorder_captures_both_http_layers_without_altering_responses(fake_transport):
+    seen, fake_requests, fake_curl = fake_transport
+    with recording() as caps:
+        r1 = requests.get("https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery")
+        r2 = curl.Session().post("https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData", json={"a": 1})
+    assert r1.text.startswith("<table>") and r1.url.endswith("?final=1")
+    assert r2.content == b'{"data":[],"success":true}'
+    assert [(c.method, c.status) for c in caps] == [("GET", 200), ("POST", 200)]
+    assert caps[0].url == "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery?final=1"   # final URL
+    assert caps[0].content_type == "text/html;charset=UTF-8" and caps[0].body == r1.content
+    assert caps[1].sha256 == hashlib.sha256(b'{"data":[],"success":true}').hexdigest()
+    assert caps[0].fetched_at.endswith("Z") and dt.datetime.fromisoformat(caps[0].fetched_at.replace("Z", "+00:00"))
+    assert requests.Session.request is fake_requests and curl.Session.request is fake_curl   # restored
+
+
+def test_recorder_lets_errors_propagate_and_restores_on_exception(fake_transport):
+    _, fake_requests, fake_curl = fake_transport
+    with pytest.raises(requests.ConnectionError):
+        with recording() as caps:
+            requests.get("https://boom.example/")
+    assert caps == []
+    assert requests.Session.request is fake_requests and curl.Session.request is fake_curl
+
+
+def test_recorder_does_not_capture_outside_the_block(fake_transport):
+    with recording() as caps:
+        pass
+    requests.get("https://www.safe.gov.cn/x")
+    assert caps == []
+
+
+# ---------------------------------------------------------------- specs and calls
+NBS = {"series_id": "CN_PMI_MFG", "function": "macro_china_nbs_nation", "fetch_host": "data.stats.gov.cn", "period": "month",
+       "evidence_path": "/dg/website/publicrelease/web/external/stream/esData", "column": "制造业采购经理指数(%)", "kind": "月度数据",
+       "path": "采购经理指数 > 制造业采购经理指数", "daily_period": "LAST13", "backfill": [{"path": "采购经理指数 > 制造业采购经理指数", "period": "2016-"}]}
+BOND = {"series_id": "CN_CGB_10Y_D", "function": "bond_china_yield", "fetch_host": "yield.chinabond.com.cn", "period": "day",
+        "evidence_path": "/cbweb-pbc-web/pbc/historyQuery", "curve": "中债国债收益率曲线", "column": "10年", "window_days": 45, "backfill_from": "2016-01-01"}
+SAFE = {"series_id": "CN_USDCNY_CP_D", "function": "currency_boc_safe", "fetch_host": "www.safe.gov.cn", "period": "day",
+        "evidence_path": "/AppStructured/hlw/RMBQuery.do", "column": "美元"}
+
+
+def test_committed_spec_file_lists_every_cn_series_once():
+    specs = collect.load_specs()
+    ids = [s["series_id"] for s in specs]
+    assert len(ids) == len(set(ids)) and all(i.startswith("CN_") for i in ids)
+    assert {s["function"] for s in specs} <= {"macro_china_nbs_nation", "bond_china_yield", "currency_boc_safe"}
+    assert {s["fetch_host"] for s in specs} <= {"data.stats.gov.cn", "yield.chinabond.com.cn", "www.safe.gov.cn"}
+
+
+def test_calls_for_daily_and_backfill():
+    today = dt.date(2026, 11, 6)
+    assert collect.calls_for(NBS, "daily", today) == [{"kind": "月度数据", "path": "采购经理指数 > 制造业采购经理指数", "period": "LAST13"}]
+    assert collect.calls_for(NBS, "backfill", today) == [{"kind": "月度数据", "path": "采购经理指数 > 制造业采购经理指数", "period": "2016-"}]
+    assert collect.calls_for(BOND, "daily", today) == [{"start_date": "20260922", "end_date": "20261106"}]
+    windows = collect.calls_for(BOND, "backfill", today)
+    assert windows[0] == {"start_date": "20160101", "end_date": "20161231"} and windows[-1] == {"start_date": "20260101", "end_date": "20261106"}
+    assert len(windows) == 11
+    assert collect.calls_for(SAFE, "daily", today) == [{}]
+
+
+def test_is_evidence_requires_https_host_path_and_200():
+    cap = lambda url, status=200: Capture("POST", url, status, "application/json", b"{}", "2026-11-06T00:00:00.000Z")
+    assert collect.is_evidence(NBS, cap("https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData"))
+    assert not collect.is_evidence(NBS, cap("https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=&code=1"))
+    assert not collect.is_evidence(NBS, cap("https://evil.example/dg/website/publicrelease/web/external/stream/esData"))
+    assert not collect.is_evidence(NBS, cap("http://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData"))
+    assert not collect.is_evidence(NBS, cap("https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData", 500))
+
+
+# ---------------------------------------------------------------- claims
+def test_value_text_is_shortest_round_trip_and_skips_nan():
+    assert collect.value_text(49.3) == "49.3" and collect.value_text(7.2) == "7.2" and collect.value_text(105.0) == "105.0"
+    assert collect.value_text(1.6038) == "1.6038" and collect.value_text(760836431.0) == "760836431.0"
+    assert collect.value_text(float("nan")) is None and collect.value_text(None) is None and collect.value_text("x") is None
+
+
+def test_claims_from_nbs_frame_matches_label_ignoring_spaces_and_underscores():
+    df = pd.DataFrame({"2026年10月": [math.nan, 1.0], "2026年9月": [7.2, 2.0]}, index=["货币和准货币(M2)供应量__同比增长(%)", "货币(M1)供应量__同比增长(%)"])
+    spec = {**NBS, "series_id": "CN_M2_YOY", "column": "货币和准货币(M2)供应量_同比增长(%)"}
+    assert collect.claims_from_frame(spec, df) == [{"series_id": "CN_M2_YOY", "period_label": "2026年9月", "value_text": "7.2"}]
+    with pytest.raises(ValueError):
+        collect.claims_from_frame({**spec, "column": "不存在"}, df)
+
+
+def test_claims_from_bond_frame_keep_only_the_curve():
+    df = pd.DataFrame({"曲线名称": ["中债国债收益率曲线", "中债中短期票据收益率曲线(AAA)"], "日期": [dt.date(2026, 11, 5)] * 2, "10年": [1.6038, 1.9135]})
+    assert collect.claims_from_frame(BOND, df) == [{"series_id": "CN_CGB_10Y_D", "period_label": "2026-11-05", "value_text": "1.6038"}]
+
+
+def test_claims_from_safe_frame_skip_old_history():
+    old = dt.date.today() - dt.timedelta(days=900)
+    df = pd.DataFrame({"日期": [old, dt.date.today()], "美元": [710.0, 671.56]})
+    assert collect.claims_from_frame(SAFE, df) == [{"series_id": "CN_USDCNY_CP_D", "period_label": str(dt.date.today()), "value_text": "671.56"}]
+
+
+# ---------------------------------------------------------------- chunks and bodies
+def _item(sid: str, size: int, n: int):
+    body = bytes([n % 256]) * size
+    return {"series_id": sid, "sha256": hashlib.sha256(body).hexdigest(), "url": "https://data.stats.gov.cn/x", "status": 200,
+            "content_type": "application/json", "fetched_at": "2026-11-06T00:00:00.000Z", "bytes_b64": base64.b64encode(body).decode()}
+
+
+def test_pack_chunks_respects_the_limit_and_keeps_claims_with_their_evidence():
+    items = [_item("CN_A", 40_000, i) for i in range(5)] + [_item("CN_B", 10_000, 9)]
+    claims = {"CN_A": [{"series_id": "CN_A", "period_label": "2026年9月", "value_text": "1"}], "CN_B": [{"series_id": "CN_B", "period_label": "2026-11-05", "value_text": "2"}]}
+    chunks = collect.pack_chunks("b", items, claims, limit=120_000)
+    assert all(len(json.dumps(c, separators=(",", ":")).encode()) <= 120_000 for c in chunks)
+    assert [c["seq"] for c in chunks] == list(range(len(chunks))) and {c["total"] for c in chunks} == {len(chunks)}
+    assert sorted(e["sha256"] for c in chunks for e in c["evidence"]) == sorted(i["sha256"] for i in items)
+    for c in chunks:
+        assert {cl["series_id"] for cl in c["claims"]} == {e["series_id"] for e in c["evidence"]}
+    with pytest.raises(ValueError):
+        collect.pack_chunks("b", [_item("CN_A", 200_000, 1)], {}, limit=120_000)
+
+
+def test_build_bodies_follow_the_three_action_protocol():
+    cap = Capture("POST", "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData", 200, "application/json;charset=UTF-8",
+                  b'{"data":[],"success":true}', "2026-11-06T05:00:00.000Z")
+    results = [{"series_id": "CN_PMI_MFG", "captures": [cap], "evidence": [cap], "claims": [{"series_id": "CN_PMI_MFG", "period_label": "2026年10月", "value_text": "49.3"}], "error": None}]
+    start, chunks, finish = collect.build_bodies(results, "00000000-0000-4000-8000-000000000001", {"akshare": "1.20.35"})
+    assert start == {"action": "start", "tool_versions": {"akshare": "1.20.35"}}
+    assert finish == {"action": "finish", "batch_id": "00000000-0000-4000-8000-000000000001", "total": 1}
+    (c,) = chunks
+    assert set(c) == {"action", "batch_id", "seq", "total", "evidence", "claims"} and c["action"] == "chunk"
+    (e,) = c["evidence"]
+    assert set(e) == {"series_id", "sha256", "url", "status", "content_type", "fetched_at", "bytes_b64"}
+    assert base64.b64decode(e["bytes_b64"]) == cap.body and e["sha256"] == hashlib.sha256(cap.body).hexdigest()
+
+
+def test_send_posts_start_chunks_finish_in_order():
+    cap = Capture("GET", "https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do", 200, "text/html", b"<table></table>", "2026-11-06T05:00:00.000Z")
+    posted = []
+
+    def post(body):
+        posted.append(body["action"])
+        return {"batch_id": "B"} if body["action"] == "start" else {"ok": True}
+    out = collect.send([{"series_id": "CN_USDCNY_CP_D", "captures": [cap], "evidence": [cap], "claims": [], "error": None}], post, {"akshare": "1.20.35"})
+    assert posted == ["start", "chunk", "finish"] and out["batch_id"] == "B" and out["chunks"] == 1
+
+
+def test_collect_series_records_errors_without_raising(monkeypatch):
+    class FakeAk:
+        @staticmethod
+        def currency_boc_safe():
+            raise RuntimeError("site down")
+    r = collect.collect_series(SAFE, "daily", dt.date(2026, 11, 6), FakeAk)
+    assert r["error"].startswith("RuntimeError: site down") and r["evidence"] == []
+
+
+def test_collect_series_keeps_only_evidence_responses(fake_transport):
+    class FakeAk:
+        @staticmethod
+        def currency_boc_safe():
+            requests.get("https://www.safe.gov.cn/safe/2020/1218/17833.html")
+            requests.post("https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do")
+            return pd.DataFrame({"日期": [dt.date.today()], "美元": [671.56]})
+    r = collect.collect_series({**SAFE, "evidence_path": "/AppStructured/hlw/RMBQuery.do"}, "daily", dt.date.today(), FakeAk)
+    # the fake transport appends ?final=1 to the URL but keeps the path, so only the RMBQuery.do response is evidence
+    assert r["error"] is None and [c.url.split("?")[0] for c in r["evidence"]] == ["https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do"]
+    assert len(r["captures"]) == 2 and r["claims"][0]["value_text"] == "671.56"
+
+
+def test_dry_run_writes_bodies_and_sends_nothing(tmp_path, monkeypatch):
+    cap = Capture("POST", "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData", 200, "application/json", b'{"data":[]}', "2026-11-06T05:00:00.000Z")
+    monkeypatch.setattr(collect, "collect_series", lambda spec, mode, today, ak: {"series_id": spec["series_id"], "captures": [cap], "evidence": [cap], "claims": [], "error": None})
+    monkeypatch.setattr(collect, "tool_versions", lambda: {"akshare": "test"})
+    monkeypatch.setattr(collect, "http_poster", lambda *a, **k: pytest.fail("dry run must not post"))
+    monkeypatch.delenv("MACRO_INGEST_URL", raising=False)
+    assert collect.main(["--series", "CN_PMI_MFG", "--dry-run", str(tmp_path)]) == 0
+    assert json.loads((tmp_path / "start.json").read_text())["action"] == "start"
+    chunk = json.loads((tmp_path / "chunk-000.json").read_text())
+    assert chunk["batch_id"] == "DRY-RUN" and chunk["evidence"][0]["series_id"] == "CN_PMI_MFG"
+    assert json.loads((tmp_path / "finish.json").read_text()) == {"action": "finish", "batch_id": "DRY-RUN", "total": 1}
+```
+
+- [ ] **Step 2: Create the venv and confirm the tests fail**
+
+Run: `mount | grep -q AIMATE_WORK || echo "SSD NOT MOUNTED — stop"` (the venv lives in the worktree on the SSD)
+Run: `uv venv -p 3.12 scripts/macro/.venv && VIRTUAL_ENV=scripts/macro/.venv uv pip install pytest==9.2.0`
+Run: `npm test -- src/lib/macro/cn-series.test.ts; scripts/macro/.venv/bin/python -m pytest scripts/macro -q`
+Expected: FAIL (`Cannot find module './cn-series'`; `ModuleNotFoundError: No module named 'collect'`)
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/lib/macro/cn-series.ts
+// AKShare call specifications for the active CN series (spec §4.2, §4.4), derived from the catalog's
+// source.seriesKey so the catalog stays the single source of truth:
+//   macro_china_nbs_nation|<kind>|<tree path> > <indicator>   (indicator = NBS i_showname without whitespace)
+//   bond_china_yield|<curve name>|<tenor column>
+//   currency_boc_safe|<currency column>
+// plus adapter-only parameters (NBS daily window, era leaves for history, ChinaBond windows) and the URL
+// path of the one response per call that carries the data (the evidence the TS parsers read). Exported to
+// scripts/macro/cn-series.json for the Python collector (scripts/macro/export-cn-series.ts); a Task 9 test
+// keeps the committed JSON equal to this module's output.
+import {collectableOf} from './catalog';
+import type {MacroSeriesDef,PeriodKind} from './types';
+
+export type CnFunction='macro_china_nbs_nation'|'bond_china_yield'|'currency_boc_safe';
+export interface CnSeriesSpec{
+ series_id:string;function:CnFunction;fetch_host:string;period:PeriodKind;
+ /** URL path of the data response; other responses of the call (pages, trees, spreadsheets) are not evidence. */
+ evidence_path:string;
+ /** NBS: indicator i_showname (whitespace removed); ChinaBond: tenor column header; SAFE: currency column header. */
+ column:string;
+ kind?:string;path?:string;curve?:string;
+ /** NBS: period argument of the daily call. */
+ daily_period?:string;
+ /** NBS history calls: [{path, period}] (era leaves). */
+ backfill?:{path:string;period:string}[];
+ /** ChinaBond: daily window length and the first day of the yearly history windows. */
+ window_days?:number;backfill_from?:string;
+}
+export const CN_SPEC_VERSION='cn-series/1';
+const NBS_PATH='/dg/website/publicrelease/web/external/stream/esData';
+const CHINABOND_PATH='/cbweb-pbc-web/pbc/historyQuery';
+const SAFE_PATH='/AppStructured/hlw/RMBQuery.do';
+/** NBS splits some tables into era leaves; history comes from the sibling leaves (verified 2026-11-06). */
+const NBS_ERA_HISTORY:Record<string,{path:string;period:string}[]>={
+ CN_CPI_INDEX:[
+  {path:'价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2021-2025)',period:'2021-2025'},
+  {path:'价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2016-2020)',period:'2016-2020'},
+ ],
+};
+const strip=(s:string)=>s.replace(/\s+/g,'');
+
+export function cnSpecOf(def:MacroSeriesDef):CnSeriesSpec{
+ const src=def.source;
+ if(!src||src.adapter!=='akshare')throw new Error(`not_akshare:${def.id}`);
+ const parts=src.seriesKey.split('|');
+ const base={series_id:def.id,fetch_host:src.fetchHost,period:def.period};
+ if(parts[0]==='macro_china_nbs_nation'&&parts.length===3){
+  const segs=parts[2].split('>').map(s=>s.trim()).filter(Boolean);
+  if(segs.length<2)throw new Error(`bad_series_key:${def.id}`);
+  const path=segs.slice(0,-1).join(' > ');
+  const quarterly=def.period==='quarter';
+  return {...base,function:'macro_china_nbs_nation',evidence_path:NBS_PATH,column:strip(segs[segs.length-1]),kind:parts[1],path,
+   daily_period:quarterly?'LAST8':'LAST13',backfill:NBS_ERA_HISTORY[def.id]??[{path,period:'2016-'}]};
+ }
+ if(parts[0]==='bond_china_yield'&&parts.length===3)return {...base,function:'bond_china_yield',evidence_path:CHINABOND_PATH,curve:parts[1],column:parts[2],window_days:45,backfill_from:'2016-01-01'};
+ if(parts[0]==='currency_boc_safe'&&parts.length===2)return {...base,function:'currency_boc_safe',evidence_path:SAFE_PATH,column:parts[1]};
+ throw new Error(`unsupported_series_key:${def.id}`);
+}
+
+/** Specs of every active native akshare series, catalog order. */
+export function cnSeriesSpecs():CnSeriesSpec[]{return collectableOf('akshare').map(cnSpecOf);}
+/** The JSON document the Python collector reads (stable key order, trailing newline). */
+export function cnSeriesDocument():string{return JSON.stringify({version:CN_SPEC_VERSION,series:cnSeriesSpecs()},null,1)+'\n';}
+```
+
+```ts
+// scripts/macro/export-cn-series.ts
+// Writes scripts/macro/cn-series.json (the Python collector's series list) from src/lib/macro/cn-series.ts,
+// i.e. from the catalog. Re-run after any CN catalog change; src/lib/macro/cn-series.test.ts fails while the
+// committed file is stale. Run: npx tsx scripts/macro/export-cn-series.ts
+import {writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {cnSeriesDocument} from '../../src/lib/macro/cn-series';
+
+writeFileSync(join(process.cwd(),'scripts/macro/cn-series.json'),cnSeriesDocument());
+console.log('wrote scripts/macro/cn-series.json');
+```
+
+```text
+# scripts/macro/requirements.txt — China macro collector (Mac / Mac Studio only; never installed on Vercel).
+# Full pin set, frozen from a clean Python 3.12 venv on 2026-11-06 (`uv pip freeze`). akshare is the only
+# direct dependency besides pytest; everything else is pinned so recorded fixtures stay reproducible.
+# Install: uv venv -p 3.12 scripts/macro/.venv && VIRTUAL_ENV=scripts/macro/.venv uv pip install -r scripts/macro/requirements.txt
+akshare==1.20.35
+beautifulsoup4==4.15.0
+certifi==2026.10.23
+cffi==2.1.1
+charset-normalizer==3.5.2
+curl-cffi==0.17.0
+et-xmlfile==2.0.0
+html5lib==1.1
+idna==3.20
+iniconfig==2.3.1
+lxml==6.1.3
+mini-racer==0.14.1
+numpy==2.5.4
+openpyxl==3.1.5
+packaging==26.3
+pandas==3.1.1
+pluggy==1.7.0
+pycparser==3.12
+pygments==2.21.0
+pytest==9.2.0
+python-dateutil==4.0.0
+requests==2.34.2
+six==1.17.0
+soupsieve==4.0.1
+tqdm==4.70.1
+typing-extensions==4.16.0
+tzdata==2026.6
+urllib3==2.8.0
+webencodings==0.6.1
+xlrd==2.0.2
+```
+
+```python
+"""scripts/macro/recorder.py — capture every HTTP response AKShare receives (spec §4.4, §0.2 N2).
+
+AKShare 1.20.35 sends every request through akshare/utils/http.py, which ends in exactly two places:
+``requests.Session.request`` (``http.request/get/post/get_buffer``, ``http.Session``,
+``request_with_retry``; ``requests.request`` itself builds a Session) and
+``curl_cffi.requests.Session.request`` (``http.curl_request/curl_get/curl_post`` and ``http.CurlSession``,
+used by the NBS module; ``curl_cffi.requests.request`` also builds a Session). ``recording()`` wraps both
+methods for the duration of a ``with`` block and restores them afterwards. The wrapper calls the original
+method unchanged and returns its response object untouched, so AKShare's behaviour does not change; it only
+reads ``response.content`` (both libraries cache the body, so later ``.text``/``.json()``/``iter_content``
+still work) and appends a Capture. Failed requests (exceptions) propagate and are not captured.
+"""
+from __future__ import annotations
+
+import contextlib
+import datetime as _dt
+import hashlib
+import threading
+from dataclasses import dataclass, field
+from typing import Iterator, List
+
+import curl_cffi.requests as _curl
+import requests as _requests
+
+__all__ = ["Capture", "recording"]
+
+
+def _utc_now() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class Capture:
+    method: str
+    url: str            # final URL after redirects (response.url)
+    status: int
+    content_type: str
+    body: bytes = field(repr=False)
+    fetched_at: str     # UTC ISO-8601 with milliseconds and Z
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.body).hexdigest()
+
+
+_lock = threading.RLock()  # re-entrant: a nested recording() wraps the wrapper and both lists capture
+
+
+def _wrap(original, sink: List[Capture]):
+    def request(self, method, url, *args, **kwargs):
+        response = original(self, method, url, *args, **kwargs)
+        sink.append(Capture(
+            method=str(method).upper(),
+            url=str(response.url or url),
+            status=int(response.status_code),
+            content_type=str(response.headers.get("content-type", "") or ""),
+            body=bytes(response.content or b""),
+            fetched_at=_utc_now(),
+        ))
+        return response
+    request.__wrapped__ = original  # type: ignore[attr-defined]
+    return request
+
+
+@contextlib.contextmanager
+def recording() -> Iterator[List[Capture]]:
+    """Yields the (growing) list of captures for the block; patches are always removed on exit."""
+    captures: List[Capture] = []
+    with _lock:
+        orig_requests = _requests.Session.request
+        orig_curl = _curl.Session.request
+        _requests.Session.request = _wrap(orig_requests, captures)  # type: ignore[method-assign]
+        _curl.Session.request = _wrap(orig_curl, captures)  # type: ignore[method-assign]
+        try:
+            yield captures
+        finally:
+            _requests.Session.request = orig_requests  # type: ignore[method-assign]
+            _curl.Session.request = orig_curl  # type: ignore[method-assign]
+```
+
+```python
+"""scripts/macro/collect.py — China macro collector (spec §4.4, §0.2 M1/M9/M24, §13).
+
+Runs on the Mac (launchd, scripts/macro/launchd.plist.template), never on Vercel. For every active CN
+series in scripts/macro/cn-series.json (exported from src/lib/macro/catalog.ts by
+scripts/macro/export-cn-series.ts, so the TS catalog stays the single source of truth) it calls the exact
+AKShare function inside recorder.recording(), keeps as evidence only the data response(s) of the call (host =
+the series' official fetch host, URL path = evidence_path, HTTP 200), and builds claims from AKShare's
+DataFrame. The server re-parses the evidence bytes with the TS parsers; numbers from Python are never stored.
+
+Claims: AKShare converts NBS / ChinaBond / SAFE values with pd.to_numeric (float64), so a claim is
+repr(float) — Python's shortest round-trip text, equal to the source decimal whenever the source has at most
+15 significant digits (true for every series here). Claims are cross-checks only (server: decimal equality,
+mismatch → quarantine adapter_mismatch); NaN produces no claim.
+
+Protocol (POST $MACRO_INGEST_URL, Authorization: Bearer $MACRO_INGEST_SECRET, each body <= 3.5 MB):
+  {"action":"start","tool_versions":{...}}                                  -> {"batch_id"}
+  {"action":"chunk","batch_id","seq","total","evidence":[...],"claims":[...]} -> receipt (duplicate-safe)
+  {"action":"finish","batch_id","total"}                                     -> batch receipt
+evidence item: {series_id, sha256, url, status, content_type, fetched_at, bytes_b64}
+claim item:    {series_id, period_label, value_text}
+
+Usage:
+  collect.py [--mode daily|backfill] [--series CN_X ...] [--dry-run DIR] [--record-fixtures DIR]
+--dry-run writes start/chunk/finish bodies to DIR and sends nothing; --record-fixtures saves every
+evidence response, claims.json, manifest.json and verification.json to DIR and sends nothing.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import datetime as _dt
+import json
+import math
+import os
+import platform
+import re
+import sys
+import time
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # recorder.py sits next to this file (also under python -I)
+from recorder import Capture, recording  # noqa: E402
+
+COLLECTOR_VERSION = "macro-collect/1"
+MAX_BODY_BYTES = 3_500_000
+HERE = Path(__file__).resolve().parent
+SPEC_FILE = HERE / "cn-series.json"
+EXT = {"application/json": "json", "text/html": "html", "text/csv": "csv", "text/plain": "txt"}
+
+
+# ---------------------------------------------------------------- spec and calls
+def load_specs(path: Path = SPEC_FILE) -> List[Dict[str, Any]]:
+    doc = json.loads(path.read_text("utf-8"))
+    if doc.get("version") != "cn-series/1" or not isinstance(doc.get("series"), list):
+        raise SystemExit(f"unexpected spec file {path}")
+    return doc["series"]
+
+
+def _yearly_windows(start: _dt.date, end: _dt.date) -> List[Tuple[str, str]]:
+    out, cur = [], start
+    while cur <= end:
+        stop = min(_dt.date(cur.year, 12, 31), end)
+        out.append((cur.strftime("%Y%m%d"), stop.strftime("%Y%m%d")))
+        cur = _dt.date(cur.year + 1, 1, 1)
+    return out
+
+
+def calls_for(spec: Dict[str, Any], mode: str, today: _dt.date) -> List[Dict[str, Any]]:
+    """Keyword arguments of each AKShare call for one series."""
+    fn = spec["function"]
+    if fn == "macro_china_nbs_nation":
+        if mode == "backfill":
+            return [{"kind": spec["kind"], "path": b["path"], "period": b["period"]} for b in spec["backfill"]]
+        return [{"kind": spec["kind"], "path": spec["path"], "period": spec["daily_period"]}]
+    if fn == "bond_china_yield":
+        if mode == "backfill":
+            start = _dt.date.fromisoformat(spec["backfill_from"])
+            return [{"start_date": a, "end_date": b} for a, b in _yearly_windows(start, today)]
+        start = today - _dt.timedelta(days=int(spec["window_days"]))
+        return [{"start_date": start.strftime("%Y%m%d"), "end_date": today.strftime("%Y%m%d")}]
+    if fn == "currency_boc_safe":
+        return [{}]
+    raise SystemExit(f"unsupported function {fn}")
+
+
+def is_evidence(spec: Dict[str, Any], cap: Capture) -> bool:
+    parts = urlsplit(cap.url)
+    return cap.status == 200 and parts.scheme == "https" and parts.hostname == spec["fetch_host"] and parts.path == spec["evidence_path"]
+
+
+# ---------------------------------------------------------------- claims
+def _norm_label(s: str) -> str:
+    return re.sub(r"[\s_]", "", str(s))
+
+
+def value_text(v: Any) -> Optional[str]:
+    """repr of a finite float, else None. Never str() of a formatted number."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return repr(f) if math.isfinite(f) else None
+
+
+def claims_from_frame(spec: Dict[str, Any], df: Any) -> List[Dict[str, str]]:
+    sid, fn, out = spec["series_id"], spec["function"], []
+    if df is None or len(df) == 0:
+        return out
+    if fn == "macro_china_nbs_nation":
+        target = _norm_label(spec["column"])
+        rows = [label for label in df.index if _norm_label(label) == target]
+        if len(rows) != 1:
+            raise ValueError(f"{sid}: indicator row {spec['column']!r} found {len(rows)} times")
+        for col in df.columns:
+            vt = value_text(df.at[rows[0], col])
+            if vt is not None:
+                out.append({"series_id": sid, "period_label": str(col), "value_text": vt})
+        return out
+    if fn == "bond_china_yield":
+        sub = df[df["曲线名称"] == spec["curve"]]
+        for _, row in sub.iterrows():
+            vt = value_text(row[spec["column"]])
+            if vt is not None:
+                out.append({"series_id": sid, "period_label": str(row["日期"]), "value_text": vt})
+        return out
+    if fn == "currency_boc_safe":
+        cutoff = _dt.date.today() - _dt.timedelta(days=400)   # the XLSX history is not evidence: no claims for it
+        for _, row in df.iterrows():
+            d = row["日期"]
+            if d is None or (isinstance(d, float) and math.isnan(d)) or _dt.date.fromisoformat(str(d)) < cutoff:
+                continue
+            vt = value_text(row[spec["column"]])
+            if vt is not None:
+                out.append({"series_id": sid, "period_label": str(d), "value_text": vt})
+        return out
+    raise ValueError(f"unsupported function {fn}")
+
+
+# ---------------------------------------------------------------- evidence and chunks
+def evidence_item(series_id: str, cap: Capture) -> Dict[str, Any]:
+    return {"series_id": series_id, "sha256": cap.sha256, "url": cap.url, "status": cap.status,
+            "content_type": cap.content_type, "fetched_at": cap.fetched_at,
+            "bytes_b64": base64.b64encode(cap.body).decode("ascii")}
+
+
+def _size(obj: Any) -> int:
+    return len(json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+
+
+def pack_chunks(batch_id: str, items: List[Dict[str, Any]], claims: Dict[str, List[Dict[str, str]]],
+                limit: int = MAX_BODY_BYTES) -> List[Dict[str, Any]]:
+    """Greedy packing of evidence items into chunk bodies <= limit bytes. Every chunk that carries evidence of
+    a series also carries that series' claims (the server cross-checks per chunk). Raises if one item cannot fit."""
+    chunks: List[Dict[str, Any]] = []
+    cur: List[Dict[str, Any]] = []
+
+    def body(ev: List[Dict[str, Any]]) -> Dict[str, Any]:
+        sids = sorted({e["series_id"] for e in ev})
+        return {"action": "chunk", "batch_id": batch_id, "seq": 0, "total": 0, "evidence": ev,
+                "claims": [c for s in sids for c in claims.get(s, [])]}
+
+    for it in items:
+        if cur and _size(body(cur + [it])) > limit:
+            chunks.append(body(cur))
+            cur = []
+        if _size(body([it])) > limit:
+            raise ValueError(f"evidence {it['sha256']} of {it['series_id']} exceeds {limit} bytes")
+        cur.append(it)
+    if cur:
+        chunks.append(body(cur))
+    for i, c in enumerate(chunks):
+        c["seq"], c["total"] = i, len(chunks)
+    return chunks
+
+
+def tool_versions() -> Dict[str, str]:
+    import akshare
+    import pandas
+    return {"akshare": akshare.__version__, "pandas": pandas.__version__, "python": platform.python_version(),
+            "collector": COLLECTOR_VERSION}
+
+
+# ---------------------------------------------------------------- collection
+def _numbers_in(body: bytes, content_type: str) -> set:
+    """Decimal values present in the raw bytes (JSON string values / HTML cell texts) for the locate check."""
+    text = body.decode("utf-8", errors="replace")
+    raw = re.findall(r'"value":"(-?\d+(?:\.\d+)?)"', text) if "json" in content_type else re.findall(r">\s*(-?\d+(?:\.\d+)?)\s*(?:&nbsp;?)?\s*<", text)
+    out = set()
+    for r in raw:
+        try:
+            out.add(Decimal(r))
+        except InvalidOperation:
+            pass
+    return out
+
+
+def collect_series(spec: Dict[str, Any], mode: str, today: _dt.date, ak: Any) -> Dict[str, Any]:
+    """Calls AKShare for one series; returns {series_id, captures, evidence, claims, error}."""
+    fn = getattr(ak, spec["function"])
+    caps: List[Capture] = []
+    evidence: List[Capture] = []
+    claims: List[Dict[str, str]] = []
+    try:
+        for kwargs in calls_for(spec, mode, today):
+            with recording() as got:
+                df = fn(**kwargs)
+            caps.extend(got)
+            evidence.extend(c for c in got if is_evidence(spec, c))
+            claims.extend(claims_from_frame(spec, df))
+        if not evidence:
+            raise RuntimeError(f"no evidence response from {spec['fetch_host']}{spec['evidence_path']}")
+        return {"series_id": spec["series_id"], "captures": caps, "evidence": evidence, "claims": claims, "error": None}
+    except Exception as e:  # one failing series never stops the others
+        return {"series_id": spec["series_id"], "captures": caps, "evidence": [], "claims": [], "error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def verification(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for r in results:
+        nums = set()
+        for c in r["evidence"]:
+            nums |= _numbers_in(c.body, c.content_type)
+        located = sum(1 for c in r["claims"] if Decimal(c["value_text"]) in nums)
+        out.append({"series_id": r["series_id"], "error": r["error"], "evidence": [{"url": c.url, "status": c.status, "sha256": c.sha256, "bytes": len(c.body)} for c in r["evidence"]],
+                    "other_responses": [{"url": c.url, "status": c.status, "content_type": c.content_type} for c in r["captures"] if c not in r["evidence"]],
+                    "claims": len(r["claims"]), "claims_located_in_bytes": located})
+    return out
+
+
+def record_fixtures(results: List[Dict[str, Any]], out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest, claims = [], {}
+    for r in results:
+        claims[r["series_id"]] = r["claims"]
+        for i, c in enumerate(r["evidence"]):
+            ext = EXT.get(c.content_type.split(";")[0].strip().lower(), "bin")
+            name = f"{r['series_id']}-{i:02d}.{ext}"
+            (out_dir / name).write_bytes(c.body)
+            manifest.append({"series_id": r["series_id"], "file": name, "url": c.url, "status": c.status, "content_type": c.content_type,
+                             "fetched_at": c.fetched_at, "sha256": c.sha256})
+    (out_dir / "manifest.json").write_text(json.dumps({"tool_versions": tool_versions(), "files": manifest}, ensure_ascii=False, indent=1) + "\n", "utf-8")
+    (out_dir / "claims.json").write_text(json.dumps(claims, ensure_ascii=False, indent=1) + "\n", "utf-8")
+    (out_dir / "verification.json").write_text(json.dumps(verification(results), ensure_ascii=False, indent=1) + "\n", "utf-8")
+
+
+def build_bodies(results: List[Dict[str, Any]], batch_id: str, versions: Dict[str, str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+    items = [evidence_item(r["series_id"], c) for r in results for c in r["evidence"]]
+    claims = {r["series_id"]: r["claims"] for r in results}
+    chunks = pack_chunks(batch_id, items, claims)
+    return {"action": "start", "tool_versions": versions}, chunks, {"action": "finish", "batch_id": batch_id, "total": len(chunks)}
+
+
+Post = Callable[[Dict[str, Any]], Dict[str, Any]]
+
+
+def http_poster(url: str, secret: str, timeout: float = 120.0) -> Post:
+    import requests
+
+    def post(body: Dict[str, Any]) -> Dict[str, Any]:
+        data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        for attempt in range(4):
+            try:
+                res = requests.post(url, data=data, timeout=timeout,
+                                    headers={"authorization": f"Bearer {secret}", "content-type": "application/json"})
+            except requests.RequestException:
+                if attempt == 3:
+                    raise
+                time.sleep(2 ** attempt)
+                continue
+            if res.status_code >= 500 and attempt < 3:
+                time.sleep(2 ** attempt)
+                continue
+            payload = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
+            if res.status_code != 200:
+                raise RuntimeError(f"{body['action']} -> HTTP {res.status_code} {payload.get('error', {}).get('code', '')}")
+            return payload
+        raise RuntimeError("unreachable")
+    return post
+
+
+def send(results: List[Dict[str, Any]], post: Post, versions: Dict[str, str]) -> Dict[str, Any]:
+    start = post({"action": "start", "tool_versions": versions})
+    batch_id = start["batch_id"]
+    _, chunks, finish = build_bodies(results, batch_id, versions)
+    receipts = [post(c) for c in chunks]
+    done = post(finish)
+    return {"batch_id": batch_id, "chunks": len(chunks), "chunk_receipts": receipts, "finish": done}
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--mode", choices=["daily", "backfill"], default="daily")
+    ap.add_argument("--series", nargs="*", help="limit to these series ids")
+    ap.add_argument("--dry-run", type=Path, help="write request bodies to DIR, send nothing")
+    ap.add_argument("--record-fixtures", type=Path, help="save evidence + manifest/claims/verification to DIR, send nothing")
+    ap.add_argument("--spec", type=Path, default=SPEC_FILE)
+    args = ap.parse_args(argv)
+    specs = [s for s in load_specs(args.spec) if not args.series or s["series_id"] in args.series]
+    if args.series and len(specs) != len(set(args.series)):
+        raise SystemExit("unknown --series id")
+    import akshare as ak
+    today = _dt.date.today()
+    results = [collect_series(s, args.mode, today, ak) for s in specs]
+    for r in results:
+        print(f"{r['series_id']}\tevidence={len(r['evidence'])}\tclaims={len(r['claims'])}\t{r['error'] or 'ok'}", file=sys.stderr)
+    versions = tool_versions()
+    if args.record_fixtures:
+        record_fixtures(results, args.record_fixtures)
+    if args.dry_run:
+        args.dry_run.mkdir(parents=True, exist_ok=True)
+        start, chunks, finish = build_bodies(results, "DRY-RUN", versions)
+        (args.dry_run / "start.json").write_text(json.dumps(start, indent=1) + "\n", "utf-8")
+        for c in chunks:
+            (args.dry_run / f"chunk-{c['seq']:03d}.json").write_text(json.dumps(c, separators=(",", ":")) + "\n", "utf-8")
+        (args.dry_run / "finish.json").write_text(json.dumps(finish, indent=1) + "\n", "utf-8")
+    if args.record_fixtures or args.dry_run:
+        return 1 if any(r["error"] for r in results) else 0
+    url, secret = os.environ.get("MACRO_INGEST_URL"), os.environ.get("MACRO_INGEST_SECRET")
+    if not url or not secret:
+        raise SystemExit("MACRO_INGEST_URL and MACRO_INGEST_SECRET are required")
+    summary = send([r for r in results if not r["error"]], http_poster(url, secret), versions)
+    print(json.dumps({"batch_id": summary["batch_id"], "chunks": summary["chunks"], "finish": summary["finish"],
+                      "series_errors": {r["series_id"]: r["error"] for r in results if r["error"]}}, ensure_ascii=False))
+    return 1 if any(r["error"] for r in results) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- scripts/macro/launchd.plist.template — daily China macro collection on the Mac (spec §4.4: 05:00 UTC).
+     Install (docs/runbooks/macro-sync.md): replace {{REPO}} (absolute worktree/checkout path), {{HOUR}}/{{MINUTE}}
+     (05:00 UTC in the Mac's local time, e.g. 13 / 0 in Asia/Shanghai), {{MACRO_INGEST_URL}} (https://…/api/macro/ingest)
+     and {{HOME}}; store the secret in the login keychain once:
+       security add-generic-password -a "$USER" -s osbornalpha-macro-ingest -w '<MACRO_INGEST_SECRET>'
+     then copy to ~/Library/LaunchAgents/studio.osborn.alpha.macro-collect.plist and
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/studio.osborn.alpha.macro-collect.plist
+     The secret is read from the keychain at run time and never written to this file. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>studio.osborn.alpha.macro-collect</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-c</string>
+    <string>export MACRO_INGEST_SECRET="$(security find-generic-password -s osbornalpha-macro-ingest -w)" &amp;&amp; exec "{{REPO}}/scripts/macro/.venv/bin/python" "{{REPO}}/scripts/macro/collect.py" --mode daily</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MACRO_INGEST_URL</key>
+    <string>{{MACRO_INGEST_URL}}</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>{{HOUR}}</integer>
+    <key>Minute</key>
+    <integer>{{MINUTE}}</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/Library/Logs/osbornalpha-macro-collect.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/Library/Logs/osbornalpha-macro-collect.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
+```
+
+`.gitignore`: append at the end of the file (`.gitignore` has no `// MACRO` syntax; the comment line marks the block):
+
+```text
+# MACRO
+scripts/macro/.venv/
+```
+
+Install the pinned environment and generate the series list:
+
+Run: `VIRTUAL_ENV=scripts/macro/.venv uv pip install -r scripts/macro/requirements.txt`
+Run: `npx tsx scripts/macro/export-cn-series.ts`
+Expected: `wrote scripts/macro/cn-series.json`. Open it: 8 series (`CN_CPI_INDEX`, `CN_PPI_INDEX`, `CN_PMI_MFG`, `CN_GDP_INDEX`, `CN_M2_YOY`, `CN_EXPORT_YOY`, `CN_CGB_10Y_D`, `CN_USDCNY_CP_D`). NBS entries must show the verified catalog paths, e.g. `"path": "价格指数 > 工业生产者出厂价格分类指数 > 工业生产者出厂价格指数(上年同月=100)"`, `"column": "工业生产者出厂价格指数(上年同月=100)"`.
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/cn-series.test.ts && scripts/macro/.venv/bin/python -m pytest scripts/macro -q && npm run typecheck && npm run lint`
+Expected: PASS (16 Python tests). `npm run lint` does not lint Python; keep the files PEP 8-clean by eye (the plan does not add a Python linter).
+
+- [ ] **Step 5: Record the real CN fixtures (network, official hosts only)**
+
+Run: `scripts/macro/.venv/bin/python scripts/macro/collect.py --mode daily --record-fixtures src/lib/macro/fixtures/cn`
+Expected (stderr, one line per series): `CN_CPI_INDEX evidence=1 claims=9 ok` … `CN_USDCNY_CP_D evidence=1 claims=263 ok` (counts depend on the date), exit code 0, and in `src/lib/macro/fixtures/cn/`: 8 data files, `manifest.json`, `claims.json`, `verification.json`. Nothing is sent anywhere (`--record-fixtures` never posts).
+
+Open `verification.json`. For every series, `error` must be `null`, `evidence[0].url` must be on the series' official host, and `claims_located_in_bytes` must equal `claims`. The one allowed exception is `CN_USDCNY_CP_D`, where claims for dates before the first date of the RMBQuery.do HTML come from the XLSX and are not located.
+
+**Rule when a series fails.** A series fails if it cannot be fetched from its official host, if it returns no evidence response, or if its values cannot be located in the raw bytes. Do **not** edit `catalog.ts` (Task 2's file). Record the outcome in `11-cn-source-verification.md` and finish the task as **DONE_WITH_CONCERNS**, naming the series and the observed error. The commander then amends the catalog (status `missing` with a bilingual reason, or a corrected `seriesKey`) in a fix commit, then re-runs `export-cn-series.ts` and this step.
+
+Write `docs/audits/2026-11-06-macro-workbench/11-cn-source-verification.md` from `verification.json` and `manifest.json`, in this form (one row per series, real values):
+
+```markdown
+# CN source verification (Task 8)
+
+Recorded: <fetched_at of the first manifest file> · AKShare <tool_versions.akshare> · pandas <…> · Python <…>
+Command: `scripts/macro/.venv/bin/python scripts/macro/collect.py --mode daily --record-fixtures src/lib/macro/fixtures/cn`
+
+| series | AKShare call (from cn-series.json) | evidence URL (host) | bytes | sha256 (12) | claims | located in bytes | outcome |
+|---|---|---|---|---|---|---|---|
+| CN_PMI_MFG | macro_china_nbs_nation(kind='月度数据', path='采购经理指数 > 制造业采购经理指数', period='LAST13') | https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData | 102541 | 1a2b3c4d5e6f | 13 | 13 | verified |
+| … | | | | | | | |
+
+Other responses fetched by the calls (not evidence): <list from verification.json other_responses: URL, status, content type>.
+Notes: CN_USDCNY_CP_D history before <first HTML date> exists only in the SAFE XLSX, which is not evidence (no XLSX locator or bucket MIME); history starts at <first HTML date>.
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add .gitignore src/lib/macro/cn-series.ts src/lib/macro/cn-series.test.ts scripts/macro/export-cn-series.ts scripts/macro/cn-series.json scripts/macro/requirements.txt scripts/macro/recorder.py scripts/macro/collect.py scripts/macro/test_collect.py scripts/macro/launchd.plist.template src/lib/macro/fixtures/cn docs/audits/2026-11-06-macro-workbench/11-cn-source-verification.md
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): AKShare collector with response recorder and real CN fixtures
+
+recorder.py wraps requests/curl_cffi Session.request to capture every
+response's final URL, status, content type, bytes and time; collect.py keeps
+only the official data responses as evidence, builds float-repr claims for
+cross-checking, and speaks the start/chunk/finish ingest protocol (dry-run
+and fixture modes send nothing). Series list exported from the catalog.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+---
+
+### Task 9: CN parsers (NBS / ChinaBond / SAFE), ingest body schema, `/api/macro/ingest` three-action route
+
+Depends on Task 6 (`ingestEvidence`, `deriveAndWrite`), Task 7 (`productionMacroDeps`) and Task 8 (`cn-series.ts`, recorded `src/lib/macro/fixtures/cn/`). Uses the `html_cell` locator (in `types.ts`, Task 2, and accepted by the migration checks, Task 1). Task 11 later replaces the marker `// TASK 11: publishRegion(region)` in the `finish` branch; it expects the names `deps.db`, `today` and `batchStatus`, which this route uses.
+
+**Files:**
+- Create: `src/lib/macro/parsers/html-table.ts` (small table reader shared by the two HTML parsers)
+- Create: `src/lib/macro/parsers/nbs.ts`, `src/lib/macro/parsers/chinabond.ts`, `src/lib/macro/parsers/safe.ts`, `src/lib/macro/parsers/index.ts` (`parserFor`, `claimPeriodEnd`)
+- Create: `src/lib/macro/ingest-schema.ts`
+- Create: `src/app/api/macro/ingest/route.ts`
+- Test: `src/lib/macro/parsers/cn-parsers.test.ts`
+- Test: `src/lib/macro/ingest-schema.test.ts`
+- Test: `src/app/api/macro/ingest/route.test.ts`
+
+Design notes:
+- **Schema: hand-written, not ajv.** `ajv@8.20.0` is in `package.json`, but these three bodies are small and fixed. Explicit checks give stable error codes (`invalid_body:evidence[0].sha256`) with no schema compilation on a cold start. Unknown keys are rejected everywhere.
+- **Evidence acceptance.** Every item's bytes must hash to its `sha256`, or the whole chunk gets a 400 before anything is written. An item is parsed only if its host equals the series' official host, its path equals the spec's `evidence_path`, its status is 200, and its `fetched_at` is at most 5 min in the future and at most 24 h old. `fetched_at` becomes `available_at`, so it must be plausible. A failing item counts one `failed` with an error code. Parser failures count `failed` with `parse_<code>`.
+- **Claims** are mapped with `claimPeriodEnd` (`2026年9月`, `2026年第三季度`, `YYYY-MM-DD`) and handed to `ingestEvidence`, which compares them by decimal equality. Claims that match no parsed point (SAFE dates covered only by the XLSX, or a label that does not map) are **not** quarantined (no raw value exists to hold): they produce one informational batch error `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}` (`skipped_summary` is an existing INFO code in `src/lib/dq/batches.ts`; do not edit that file), which does not degrade the batch. The chunk receipt returns it to the collector with its message.
+- **Idempotency.** A `seq` that is already recorded returns `{status:'duplicate'}` without touching anything. `recordChunk` stores the chunk's counts after processing. Only counts survive to `finish` (`macro_ingest_chunks.counts`); per-chunk error lists go back to the collector in the chunk receipt, and the batch status comes from the summed counts.
+- **One writer per dataset.** `start` refuses with 409 while a `macro.akshare` batch younger than 2 h is running. An older running batch is closed as `failed` with error `abandoned`, and the new batch then starts.
+- **Retrieval tool_versions** = the batch's `tool_versions` (AKShare, pandas, Python, collector, ingest route, catalog, rules) plus `parser` (`nbs-esdata/1` | `chinabond-history/1` | `safe-rmbquery/1`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// src/lib/macro/parsers/cn-parsers.test.ts
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {describe,expect,it} from 'vitest';
+import {collectableOf} from '../catalog';
+import {equals} from '../decimal';
+import {ChinabondParseError,parseChinabondHistory} from './chinabond';
+import {htmlTables} from './html-table';
+import {claimPeriodEnd,parserFor} from './index';
+import {NbsParseError,parseNbsEsData} from './nbs';
+import {parseSafeCentralParity} from './safe';
+
+const enc=(s:string)=>new TextEncoder().encode(s);
+const codeOf=(f:()=>unknown)=>{try{f();return 'ok';}catch(e){return (e as {code?:string}).code??String(e);}};
+
+// ---------------------------------------------------------------- NBS (structure copied from the 2026-11-06 esData response)
+const nbsDoc=(data:unknown,extra:Record<string,unknown>={})=>enc(JSON.stringify({data,success:true,state:20000,message:'成功',...extra}));
+const v=(i_showname:string,value:unknown,extra:Record<string,unknown>={})=>({i_showname,_name:'x',value,da:'000000000000',da_name:'全国',du_name:'%',...extra});
+const pmi={seriesId:'CN_PMI_MFG',indicator:'制造业采购经理指数(%)',period:'month' as const};
+
+describe('parseNbsEsData',()=>{
+ it('selects the indicator by whitespace-free i_showname, keeps string values losslessly and skips unreleased ""',()=>{
+  const pts=parseNbsEsData(nbsDoc([
+   {code:'202611MM',name:'2026年11月',values:[v('制造业采购经理指数 (%) ',''),v('生产指数 (%) ','')]},
+   {code:'202610MM',name:'2026年10月',values:[v('生产指数 (%) ','49.8'),v('制造业采购经理指数 (%) ','49.30')]},
+   {code:'202602MM',name:'2026年2月',values:[v('制造业采购经理指数 (%) ','35.7')]},
+  ]),pmi);
+  expect(pts).toEqual([
+   {seriesId:'CN_PMI_MFG',periodEnd:'2026-10-31',valueText:'49.3',locator:{kind:'json_pointer',pointer:'/data/1/values/1/value'}},
+   {seriesId:'CN_PMI_MFG',periodEnd:'2026-02-28',valueText:'35.7',locator:{kind:'json_pointer',pointer:'/data/2/values/0/value'}},
+  ]);
+ });
+ it('maps quarter codes YYYY0QSS to quarter ends',()=>{
+  const pts=parseNbsEsData(nbsDoc([{code:'202603SS',name:'2026年第三季度',values:[v('国内生产总值指数 (上年同期=100) 当季值','104.5'),v('国内生产总值指数 (上年同期=100) 累计值','104.6')]}]),
+   {seriesId:'CN_GDP_INDEX',indicator:'国内生产总值指数(上年同期=100)当季值',period:'quarter'});
+  expect(pts.map(p=>[p.periodEnd,p.valueText])).toEqual([['2026-09-30','104.5']]);
+ });
+ it('ignores non-national rows and fails closed on surprises',()=>{
+  expect(parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数 (%) ','1',{da:'110000000000'})]}]),pmi)).toEqual([]);
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数 (%) ',49.3)]}]),pmi))).toBe('nbs_value_not_string');
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数(%)','1'),v('制造业采购经理指数 (%) ','2')]}]),pmi))).toBe('nbs_ambiguous');
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202603SS',values:[]}]),pmi))).toBe('nbs_period_code');
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202613MM',values:[]}]),pmi))).toBe('nbs_period_code');
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([],{success:false}),pmi))).toBe('nbs_unsuccessful');
+  expect(codeOf(()=>parseNbsEsData(enc('<html>'),pmi))).toBe('nbs_bad_json');
+  expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数 (%) ','4,9')]}]),pmi))).toBe('nbs_bad_value');
+  expect(new NbsParseError('x').name).toBe('NbsParseError');
+ });
+});
+
+// ---------------------------------------------------------------- ChinaBond (structure copied from the 2026-11-06 historyQuery page)
+const cbHtml=(rows:string)=>enc(`<html><body><table width="100%"><tr><td>曲线名称</td><td><select><option>全部</option></select></td></tr></table>
+<table  border="0" cellspacing="0" cellpadding="0">\r\n<tr>\r\n<td><!-- 曲线名称 -->曲线名称</td>\r\n<td><!-- 日期 -->日期</td>\r\n<td>3<!-- 月 -->月</td><td>6<!-- 月 -->月</td><td>1<!-- 年 -->年</td><td>3<!-- 年 -->年</td><td>5<!-- 年 -->年</td><td>7<!-- 年 -->年</td><td>10<!-- 年 -->年</td><td>30<!-- 年 -->年</td>\r\n</tr>
+${rows}</table></body></html>`);
+const cbRow=(curve:string,date:string,ten:string)=>`<tr>\r\n\t<td style="text-align: left">${curve}</td>\r\n\t<td>${date}</td><td>1.1612</td><td>1.1652</td><td>1.1710</td><td>1.2397</td><td>1.3236</td><td>1.4161</td><td>${ten}</td><td>2.0425</td>\r\n</tr>`;
+const cgb={seriesId:'CN_CGB_10Y_D',curve:'中债国债收益率曲线',column:'10年'};
+
+describe('parseChinabondHistory',()=>{
+ it('reads the tenor column of the requested curve from the data table with html_cell locators',()=>{
+  const pts=parseChinabondHistory(cbHtml(cbRow('中债国债收益率曲线','2026-11-05','1.6038')+cbRow('中债中短期票据收益率曲线(AAA)','2026-11-05','1.9135')+cbRow('中债国债收益率曲线','2026-11-04','1.6100')),cgb);
+  expect(pts).toEqual([
+   {seriesId:'CN_CGB_10Y_D',periodEnd:'2026-11-05',valueText:'1.6038',locator:{kind:'html_cell',table:1,row:1,cell:8}},
+   {seriesId:'CN_CGB_10Y_D',periodEnd:'2026-11-04',valueText:'1.61',locator:{kind:'html_cell',table:1,row:3,cell:8}},
+  ]);
+ });
+ it('skips an empty tenor cell and fails closed on a missing table or a bad date/value',()=>{
+  expect(parseChinabondHistory(cbHtml(cbRow('中债国债收益率曲线','2026-11-05','')),cgb)).toEqual([]);
+  expect(codeOf(()=>parseChinabondHistory(enc('<table><tr><td>x</td></tr></table>'),cgb))).toBe('chinabond_no_table');
+  expect(codeOf(()=>parseChinabondHistory(cbHtml(cbRow('中债国债收益率曲线','2026/11/05','1.6')),cgb))).toBe('chinabond_bad_date');
+  expect(codeOf(()=>parseChinabondHistory(cbHtml(cbRow('中债国债收益率曲线','2026-11-05','n/a')),cgb))).toBe('chinabond_bad_value');
+  expect(new ChinabondParseError('x').code).toBe('x');
+ });
+});
+
+// ---------------------------------------------------------------- SAFE (structure copied from the 2026-11-06 RMBQuery.do page)
+const safeHtml=(rows:string)=>enc(`<!DOCTYPE html ><html><body><table width="98%"><tr><td><table><tr><td>查询</td></tr></table></td></tr></table>
+<table class="list" id="InfoTable" width="100%">\r\n<tr>\r\n<th width="12%" class="table_head" id="comtemplatename" >日期</th>
+<th width="8%" class="table_head">\r\n<!-- <s:property  value="currency"/>&nbsp; -->\r\n美元\r\n</th><th width="8%" class="table_head">\r\n<!-- x -->\r\n欧元\r\n</th></tr>
+<tr>\r\n<td width="8%" align="center"  >\r\n<s:if test="RMBDataList[#stat.index][#stat1.index]==null">-</s:if>\r\n<s:else><s:property />&nbsp;</s:else>\r\n</td>\r\n</tr>
+${rows}</table></body></html>`);
+const safeRow=(date:string,usd:string,eur='751.91')=>`<tr>\r\n<td width="8%" align="center">\r\n${date}\r\n</td>\r\n<td td width="8%" align="center" >\r\n${usd}\r\n</td>\r\n<td td width="8%" align="center" >\r\n${eur}\r\n</td>\r\n</tr>`;
+
+describe('parseSafeCentralParity',()=>{
+ it('reads the USD column of InfoTable in CNY per 100 USD, skipping the template row and "-" cells',()=>{
+  const pts=parseSafeCentralParity(safeHtml(safeRow('2026-11-06','671.68')+safeRow('2026-11-05','671.560')+safeRow('2026-11-04','-')),{seriesId:'CN_USDCNY_CP_D',column:'美元'});
+  expect(pts).toEqual([
+   {seriesId:'CN_USDCNY_CP_D',periodEnd:'2026-11-06',valueText:'671.68',locator:{kind:'html_cell',table:2,row:2,cell:1}},
+   {seriesId:'CN_USDCNY_CP_D',periodEnd:'2026-11-05',valueText:'671.56',locator:{kind:'html_cell',table:2,row:3,cell:1}},
+  ]);
+ });
+ it('fails closed without the table or on a non-decimal value',()=>{
+  expect(codeOf(()=>parseSafeCentralParity(enc('<table><tr><th>x</th></tr></table>'),{seriesId:'X',column:'美元'}))).toBe('safe_no_table');
+  expect(codeOf(()=>parseSafeCentralParity(safeHtml(safeRow('2026-11-06','6.7l')),{seriesId:'X',column:'美元'}))).toBe('safe_bad_value');
+ });
+});
+
+describe('htmlTables',()=>{
+ it('numbers tables by start tag, keeps nested tables apart and decodes cell text',()=>{
+  const t=htmlTables('<table><tr><td>a<!-- c -->b</td><td><table><tr><td>in</td></tr></table></td></tr><tr><th>&nbsp;x &amp; y&#33;</th></tr></table>');
+  expect(t.map(x=>x.index)).toEqual([0,1]);
+  expect(t[1].rows).toEqual([['in']]);
+  expect(t[0].rows[0][0]).toBe('ab');expect(t[0].rows[1]).toEqual(['x & y!']);
+ });
+});
+
+describe('claimPeriodEnd and parserFor',()=>{
+ it('maps AKShare column labels to period ends',()=>{
+  expect(claimPeriodEnd('2026年9月','month')).toBe('2026-09-30');
+  expect(claimPeriodEnd('2024年2月','month')).toBe('2024-02-29');
+  expect(claimPeriodEnd('2026年第三季度','quarter')).toBe('2026-09-30');
+  expect(claimPeriodEnd('2026-11-05','day')).toBe('2026-11-05');
+  for(const [l,p] of [['2026年13月','month'],['2026年第五季度','quarter'],['2026-02-30','day'],['2026年9月','day']] as const)expect(claimPeriodEnd(l,p),l).toBeNull();
+ });
+ it('has a parser for every active native akshare series and none for anything else',()=>{
+  for(const d of collectableOf('akshare'))expect(parserFor(d.id),d.id).not.toBeNull();
+  for(const id of ['CN_CPI_YOY','CN_CGB10Y','CN_LPR_1Y','CN_CSI300','US_DGS10_D','NOPE'])expect(parserFor(id),id).toBeNull();
+ });
+});
+
+// ---------------------------------------------------------------- recorded fixtures (Task 8)
+interface FixtureFile{series_id:string;file:string;url:string;status:number;content_type:string;fetched_at:string;sha256:string}
+const manifest:{files:FixtureFile[]}=JSON.parse(readFileSync(new URL('../fixtures/cn/manifest.json',import.meta.url),'utf8'));
+const claims:Record<string,{series_id:string;period_label:string;value_text:string}[]>=JSON.parse(readFileSync(new URL('../fixtures/cn/claims.json',import.meta.url),'utf8'));
+const bytesOf=(f:FixtureFile)=>new Uint8Array(readFileSync(new URL(`../fixtures/cn/${f.file}`,import.meta.url)));
+const parsedOf=(id:string)=>manifest.files.filter(f=>f.series_id===id).flatMap(f=>parserFor(id)!.parse(bytesOf(f)));
+
+describe('CN parsers on recorded official responses',()=>{
+ it('has evidence for every CN series, hashes match, URLs are on the official host and path',()=>{
+  expect([...new Set(manifest.files.map(f=>f.series_id))].sort()).toEqual(collectableOf('akshare').map(d=>d.id).sort());
+  for(const f of manifest.files){
+   const p=parserFor(f.series_id)!;
+   expect(createHash('sha256').update(bytesOf(f)).digest('hex'),f.file).toBe(f.sha256);
+   const u=new URL(f.url);
+   expect(u.host,f.file).toBe(p.spec.fetch_host);expect(u.pathname,f.file).toBe(p.spec.evidence_path);expect(f.status).toBe(200);
+   expect(p.parse(bytesOf(f)).length,f.file).toBeGreaterThan(0);
+  }
+ });
+ it('agrees with every AKShare claim it can locate (decimal equality); only SAFE XLSX-history claims may be unlocated',()=>{
+  for(const [sid,list] of Object.entries(claims)){
+   const p=parserFor(sid)!;
+   const byPeriod=new Map(parsedOf(sid).map(x=>[x.periodEnd,x.valueText]));
+   let located=0;
+   for(const c of list){
+    const pe=claimPeriodEnd(c.period_label,p.spec.period);
+    expect(pe,`${sid} ${c.period_label}`).not.toBeNull();
+    const got=byPeriod.get(pe!);
+    if(got===undefined){expect(sid,`${sid} ${c.period_label} unlocated`).toBe('CN_USDCNY_CP_D');continue;}
+    expect(equals(got,c.value_text),`${sid} ${pe}: parsed ${got} vs claim ${c.value_text}`).toBe(true);
+    located++;
+   }
+   expect(located,sid).toBeGreaterThan(0);
+  }
+ });
+ it('reads known values exactly (recorded 2026-11-06)',()=>{
+  const known:[string,string,string][]=[
+   ['CN_PMI_MFG','2026-10-31','49.3'],['CN_PMI_MFG','2026-09-30','50.1'],['CN_CPI_INDEX','2026-09-30','100.9'],['CN_PPI_INDEX','2026-09-30','105'],
+   ['CN_GDP_INDEX','2026-09-30','104.5'],['CN_M2_YOY','2026-09-30','7.2'],['CN_EXPORT_YOY','2026-09-30','36.3'],
+   ['CN_CGB_10Y_D','2026-11-05','1.6038'],['CN_USDCNY_CP_D','2026-11-05','671.56'],
+  ];
+  for(const [sid,pe,value] of known)expect(parsedOf(sid).find(p=>p.periodEnd===pe)?.valueText,`${sid} ${pe}`).toBe(value);
+ });
+});
+```
+
+```ts
+// src/lib/macro/ingest-schema.test.ts
+import {describe,expect,it} from 'vitest';
+import {parseIngestBody} from './ingest-schema';
+
+const B='00000000-0000-4000-8000-000000000001';
+const ev={series_id:'CN_PMI_MFG',sha256:'a'.repeat(64),url:'https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData',status:200,content_type:'application/json;charset=UTF-8',fetched_at:'2026-11-06T05:00:00.123Z',bytes_b64:'e30='};
+const cl={series_id:'CN_PMI_MFG',period_label:'2026年10月',value_text:'49.3'};
+const chunk={action:'chunk',batch_id:B,seq:0,total:1,evidence:[ev],claims:[cl]};
+const err=(v:unknown)=>{const r=parseIngestBody(v);return r.ok?'ok':r.error;};
+
+describe('parseIngestBody',()=>{
+ it('accepts the three actions',()=>{
+  expect(parseIngestBody({action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13'}})).toEqual({ok:true,body:{action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13'}}});
+  expect(parseIngestBody(chunk)).toEqual({ok:true,body:chunk});
+  expect(parseIngestBody({...chunk,claims:[]}).ok).toBe(true);
+  expect(parseIngestBody({action:'finish',batch_id:B,total:3})).toEqual({ok:true,body:{action:'finish',batch_id:B,total:3}});
+ });
+ it('rejects unknown actions, unknown or missing keys and wrong types',()=>{
+  expect(err(null)).toBe('invalid_body:root');
+  expect(err({action:'publish'})).toBe('invalid_body:action');
+  expect(err({action:'start',tool_versions:{akshare:'1'},extra:1})).toBe('invalid_body:root.extra');
+  expect(err({action:'start',tool_versions:{}})).toBe('invalid_body:tool_versions');
+  expect(err({action:'start',tool_versions:{'bad key':'1'}})).toBe('invalid_body:tool_versions.bad key');
+  expect(err({action:'finish',batch_id:'not-a-uuid',total:1})).toBe('invalid_body:batch_id');
+  expect(err({action:'finish',batch_id:B,total:0})).toBe('invalid_body:total');
+  expect(err({action:'finish',batch_id:B})).toBe('invalid_body:root.total');
+ });
+ it('validates chunk numbering, sizes and every evidence and claim field',()=>{
+  expect(err({...chunk,seq:1,total:1})).toBe('invalid_body:seq');
+  expect(err({...chunk,seq:1.5})).toBe('invalid_body:seq');
+  expect(err({...chunk,evidence:[]})).toBe('invalid_body:evidence');
+  expect(err({...chunk,evidence:Array(51).fill(ev)})).toBe('invalid_body:evidence');
+  const bad:[Record<string,unknown>,string][]=[
+   [{series_id:'US_DGS10_D'},'series_id'],[{sha256:'A'.repeat(64)},'sha256'],[{url:'http://data.stats.gov.cn/x'},'url'],[{url:'not a url'},'url'],
+   [{status:99},'status'],[{fetched_at:'2026-11-06 05:00:00'},'fetched_at'],[{fetched_at:'2026-13-40T00:00:00Z'},'fetched_at'],
+   [{bytes_b64:'e30'},'bytes_b64'],[{bytes_b64:'e3$='},'bytes_b64'],[{content_type:''},'content_type'],
+  ];
+  for(const [patch,field] of bad)expect(err({...chunk,evidence:[{...ev,...patch}]}),field).toBe(`invalid_body:evidence[0].${field}`);
+  expect(err({...chunk,evidence:[{...ev,extra:1}]})).toBe('invalid_body:evidence[0].extra');
+  expect(err({...chunk,claims:[{...cl,value_text:'49,3'}]})).toBe('invalid_body:claims[0].value_text');
+  expect(err({...chunk,claims:[{...cl,value_text:'NaN'}]})).toBe('invalid_body:claims[0].value_text');
+  expect(err({...chunk,claims:[{...cl,period_label:''}]})).toBe('invalid_body:claims[0].period_label');
+ });
+});
+```
+
+```ts
+// src/app/api/macro/ingest/route.test.ts
+import {readFileSync} from 'node:fs';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {memoryTableClient} from '@/lib/db/memory-table-client';
+import type {MacroDeps} from '@/lib/macro/deps';
+import {memoryMacroDb} from '@/lib/macro/memory-db';
+import type {EvidenceInput} from '@/lib/macro/types';
+
+const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
+vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
+vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+
+import {POST} from './route';
+
+// Real CN evidence recorded in Task 8.
+interface FixtureFile{series_id:string;file:string;url:string;status:number;content_type:string;fetched_at:string;sha256:string}
+const manifest:{files:FixtureFile[]}=JSON.parse(readFileSync(new URL('../../../../lib/macro/fixtures/cn/manifest.json',import.meta.url),'utf8'));
+const claimsBySeries:Record<string,{series_id:string;period_label:string;value_text:string}[]>=JSON.parse(readFileSync(new URL('../../../../lib/macro/fixtures/cn/claims.json',import.meta.url),'utf8'));
+const evidenceOf=(f:FixtureFile)=>({series_id:f.series_id,sha256:f.sha256,url:f.url,status:f.status,content_type:f.content_type,fetched_at:f.fetched_at,
+ bytes_b64:readFileSync(new URL(`../../../../lib/macro/fixtures/cn/${f.file}`,import.meta.url)).toString('base64')});
+const ALL_EVIDENCE=manifest.files.map(evidenceOf);
+const ALL_CLAIMS=Object.values(claimsBySeries).flat();
+const RECORDED=new Date(Math.max(...manifest.files.map(f=>Date.parse(f.fetched_at)))+60_000);
+
+const SECRET='ingest-secret';
+const post=(body:unknown,headers:Record<string,string>={authorization:`Bearer ${SECRET}`})=>POST(new Request('https://alpha.example/api/macro/ingest',{method:'POST',headers:{'content-type':'application/json',...headers},body:typeof body==='string'?body:JSON.stringify(body)}));
+const original=process.env.MACRO_INGEST_SECRET;
+function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:EvidenceInput){puts.push(e);return {objectPath:`akshare/${e.sha256}.bin`,status:'stored' as const};}};}
+
+let deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>,clock:Date;
+beforeEach(()=>{
+ vi.clearAllMocks();process.env.MACRO_INGEST_SECRET=SECRET;clock=RECORDED;
+ tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
+ deps={db:memoryMacroDb(),evidence,tables,codeVersion:'b'.repeat(40),now:()=>clock,fetch:(()=>{throw new Error('no fetch in ingest');}) as unknown as typeof fetch,sleep:async()=>{}};
+ mocks.deps.mockImplementation(()=>deps);mocks.codeVersion.mockReturnValue('b'.repeat(40));
+});
+afterEach(()=>{if(original===undefined)delete process.env.MACRO_INGEST_SECRET;else process.env.MACRO_INGEST_SECRET=original;});
+
+const startBatch=async()=>{const res=await post({action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13',collector:'macro-collect/1'}});expect(res.status).toBe(200);return (await res.json()).batch_id as string;};
+const chunkBody=(batch_id:string,seq=0,total=1,evidence=ALL_EVIDENCE,claims=ALL_CLAIMS)=>({action:'chunk',batch_id,seq,total,evidence,claims});
+const history=(id:string)=>deps.db.seriesHistory(id,{maxRows:5000});
+
+describe('POST /api/macro/ingest — auth and body',()=>{
+ it('is unavailable without MACRO_INGEST_SECRET and rejects a wrong bearer before building deps',async()=>{
+  delete process.env.MACRO_INGEST_SECRET;
+  expect((await post({action:'start',tool_versions:{a:'1'}})).status).toBe(503);
+  process.env.MACRO_INGEST_SECRET=SECRET;
+  expect((await post({action:'start',tool_versions:{a:'1'}},{authorization:'Bearer wrong'})).status).toBe(401);
+  expect((await post({action:'start',tool_versions:{a:'1'}},{})).status).toBe(401);
+  expect(mocks.deps).not.toHaveBeenCalled();
+ });
+ it('rejects bodies over 4 MB, non-JSON and schema violations',async()=>{
+  expect((await post('x'.repeat(4*1024*1024+1))).status).toBe(413);
+  expect((await post('{nope')).status).toBe(400);
+  const res=await post({action:'chunk',batch_id:'x',seq:0,total:1,evidence:[],claims:[]});
+  expect(res.status).toBe(400);expect((await res.json()).error.code).toMatch(/^invalid_body:/);
+  expect(mocks.deps).not.toHaveBeenCalled();
+ });
+});
+
+describe('POST /api/macro/ingest — protocol',()=>{
+ it('start opens one py-akshare batch and refuses a second one for 2 hours',async()=>{
+  const id=await startBatch();
+  expect(tables.rows('ingest_batches')).toEqual([expect.objectContaining({batch_id:id,producer:'py-akshare',dataset:'macro.akshare',status:'running',triggered_by:'script'})]);
+  expect(tables.rows('ingest_batches')[0].tool_versions).toMatchObject({akshare:'1.20.35',ingest:'macro-ingest/1'});
+  const again=await post({action:'start',tool_versions:{akshare:'1.20.35'}});
+  expect(again.status).toBe(409);expect((await again.json()).error).toMatchObject({code:'batch_running',batch_id:id});
+  // startBatch stamps started_at with the real clock; age the stored batch by 3 h relative to the route's clock.
+  await tables.update('ingest_batches',{batch_id:id},{started_at:new Date(clock.getTime()-3*3600_000).toISOString()});
+  const later=await post({action:'start',tool_versions:{akshare:'1.20.35'}});
+  expect(later.status).toBe(200);
+  expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'failed'});   // abandoned
+ });
+ it('a chunk re-parses the evidence bytes in TS, writes every CN series and agrees with all located claims',async()=>{
+  const id=await startBatch();
+  const res=await post(chunkBody(id));
+  expect(res.status).toBe(200);
+  const body=await res.json();
+  expect(body.status).toBe('accepted');
+  expect(body.counts.failed).toBe(0);expect(body.counts.quarantined).toBe(0);
+  expect(body.counts.inserted).toBe(body.counts.fetched);
+  expect(evidence.puts.map(e=>e.sha256).sort()).toEqual(manifest.files.map(f=>f.sha256).sort());
+  expect((await history('CN_PMI_MFG')).find(o=>o.period_end==='2026-10-31')?.value_text).toBe('49.3');
+  const row=(await history('CN_CGB_10Y_D')).find(o=>o.period_end==='2026-11-05')!;
+  expect(row.value_text).toBe('1.6038');expect(row.locator).toMatchObject({kind:'html_cell'});
+  const ret=await deps.db.retrieval(row.retrieval_id!);
+  expect(ret).toMatchObject({fetch_host:'yield.chinabond.com.cn',batch_id:id});
+  expect(ret!.tool_versions).toMatchObject({akshare:'1.20.35',parser:'chinabond-history/1'});
+ });
+ it('a repeated seq is a no-op duplicate',async()=>{
+  const id=await startBatch();
+  await post(chunkBody(id));const puts=evidence.puts.length;
+  const res=await post(chunkBody(id));
+  expect(await res.json()).toEqual({status:'duplicate',batch_id:id,seq:0});
+  expect(evidence.puts.length).toBe(puts);
+  expect(await deps.db.chunksOf(id)).toHaveLength(1);
+ });
+ it('refuses the whole chunk when any evidence hash does not match, before any write',async()=>{
+  const id=await startBatch();
+  const tampered=[{...ALL_EVIDENCE[0],sha256:'0'.repeat(64)},...ALL_EVIDENCE.slice(1)];
+  const res=await post(chunkBody(id,0,1,tampered));
+  expect(res.status).toBe(400);expect((await res.json()).error.code).toBe('sha256_mismatch');
+  expect(evidence.puts).toEqual([]);expect(await deps.db.chunksOf(id)).toEqual([]);
+ });
+ it('quarantines a value whose AKShare claim disagrees (adapter_mismatch) and does not write it',async()=>{
+  const id=await startBatch();
+  const pmiClaims=claimsBySeries.CN_PMI_MFG;
+  const target=pmiClaims[0];
+  const claims=ALL_CLAIMS.map(c=>c===target?{...c,value_text:(Number(c.value_text)+0.1).toFixed(1)}:c);
+  const body=await (await post(chunkBody(id,0,1,ALL_EVIDENCE,claims))).json();
+  expect(body.counts.quarantined).toBe(1);
+  expect(tables.rows('dq_quarantine')).toEqual([expect.objectContaining({dataset:'macro.akshare',table_name:'macro_observations',reason_code:'adapter_mismatch',batch_id:id})]);
+  const key=String(tables.rows('dq_quarantine')[0].natural_key);
+  const [sid,pe]=key.split('|');
+  expect(sid).toBe('CN_PMI_MFG');
+  expect((await history('CN_PMI_MFG')).some(o=>o.period_end===pe)).toBe(false);
+ });
+ it('a claim whose period has no parsed raw value is skipped (never quarantined) and counted once as skipped_summary',async()=>{
+  const id=await startBatch();
+  const extra={...claimsBySeries.CN_PMI_MFG[0],period_label:'1999年1月',value_text:'50.0'};   // no such month in the recorded bytes
+  const body=await (await post(chunkBody(id,0,1,ALL_EVIDENCE,[...ALL_CLAIMS,extra]))).json();
+  expect(body.counts.quarantined).toBe(0);
+  expect(tables.rows('dq_quarantine')).toEqual([]);
+  const info=body.errors.filter((e:{code:string})=>e.code==='skipped_summary');
+  expect(info).toHaveLength(1);
+  expect(info[0]).toMatchObject({key:'unlocated_claims'});
+  expect(info[0].message).toMatch(/^[1-9]\d* claims without a located raw value$/);
+ });
+ it('does not parse evidence from another host or path, nor evidence with an implausible fetched_at',async()=>{
+  const id=await startBatch();
+  const pmi=ALL_EVIDENCE.find(e=>e.series_id==='CN_PMI_MFG')!;
+  const moved={...pmi,url:'https://mirror.example.com/dg/website/publicrelease/web/external/stream/esData'};
+  const tree={...pmi,url:'https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=&code=1'};
+  const future={...pmi,fetched_at:new Date(RECORDED.getTime()+3600_000).toISOString()};
+  const body=await (await post(chunkBody(id,0,1,[moved,tree,future],[]))).json();
+  expect(body.counts).toMatchObject({failed:3,inserted:0});
+  expect(body.errors).toEqual([{code:'evidence_not_allowed',key:'CN_PMI_MFG'},{code:'evidence_not_allowed',key:'CN_PMI_MFG'},{code:'fetched_at_out_of_range',key:'CN_PMI_MFG'}]);
+  expect(evidence.puts).toEqual([]);
+ });
+ it('finish requires every chunk, then sums counts, derives CN, finishes the batch and records freshness',async()=>{
+  const id=await startBatch();
+  const half=Math.ceil(ALL_EVIDENCE.length/2);
+  const first=ALL_EVIDENCE.slice(0,half),second=ALL_EVIDENCE.slice(half);
+  await post(chunkBody(id,0,2,first,ALL_CLAIMS));
+  const early=await post({action:'finish',batch_id:id,total:2});
+  expect(early.status).toBe(409);expect((await early.json()).error).toMatchObject({code:'chunks_incomplete',missing:[1]});
+  await post(chunkBody(id,1,2,second,ALL_CLAIMS));
+  const res=await post({action:'finish',batch_id:id,total:2});
+  expect(res.status).toBe(200);
+  const body=await res.json();
+  expect(body.status).toBe('success');expect(body.counts.failed).toBe(0);
+  expect(tables.rows('ingest_batches')[0]).toMatchObject({batch_id:id,status:'success'});
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',expected_cadence:'daily',consecutive_errors:0})]);
+  expect((await history('CN_CPI_YOY')).find(o=>o.period_end==='2026-09-30')).toMatchObject({value_text:'0.9',transform:'index_minus_100@1',batch_id:id});
+  expect((await history('CN_GDP_YOY')).find(o=>o.period_end==='2026-09-30')?.value_text).toBe('4.5');
+  expect((await history('CN_CGB_10Y')).length).toBeGreaterThan(0);
+  const late=await post(chunkBody(id,0,2,first,[]));
+  expect(late.status).toBe(409);expect((await late.json()).error.code).toBe('batch_not_running');
+ });
+ it('refuses a total that differs from earlier chunks and unknown batches',async()=>{
+  const id=await startBatch();
+  await post(chunkBody(id,0,2,ALL_EVIDENCE.slice(0,1),[]));
+  const res=await post(chunkBody(id,1,3,ALL_EVIDENCE.slice(1,2),[]));
+  expect(res.status).toBe(409);expect((await res.json()).error.code).toBe('chunk_total_mismatch');
+  const unknown=await post({action:'finish',batch_id:'00000000-0000-4000-8000-00000000abcd',total:1});
+  expect(unknown.status).toBe(404);
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `npm test -- src/lib/macro/parsers/cn-parsers.test.ts src/lib/macro/ingest-schema.test.ts src/app/api/macro/ingest/route.test.ts`
+Expected: FAIL (`Cannot find module './chinabond'`, `'./ingest-schema'`, `'./route'`)
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/lib/macro/parsers/html-table.ts
+// Minimal, deterministic HTML table reader for the two official HTML sources (ChinaBond yield history,
+// SAFE central parity). Not a general HTML parser: comments are dropped, then only <table>, <tr>, <td>
+// and <th> tags are tracked, with nesting, so each table's own rows/cells are kept apart from nested
+// tables. Cell text = inner HTML without tags, &nbsp;/&amp;/&lt;/&gt;/&quot;/&#NN; decoded, whitespace
+// collapsed and trimmed. Tables are numbered by start-tag order (0-based), which is the `table` of an
+// html_cell locator; `row` is the index in HtmlTable.rows (header row = 0) and `cell` the index in the row.
+export interface HtmlTable{index:number;rows:string[][]}
+
+const TAG=/<(\/?)(table|tr|td|th)\b[^>]*>/gi;
+function cellText(html:string):string{
+ return html.replace(/<[^>]*>/g,'')
+  .replace(/&nbsp;?/gi,' ').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&quot;/gi,'"').replace(/&#(\d{1,6});/g,(_m,d:string)=>String.fromCodePoint(Number(d)))
+  .replace(/&amp;/gi,'&').replace(/[\s ]+/g,' ').trim();
+}
+
+export function htmlTables(html:string):HtmlTable[]{
+ const text=html.replace(/<!--[\s\S]*?-->/g,'');
+ const out:HtmlTable[]=[];
+ interface Open{table:HtmlTable;row:string[]|null;cellStart:number}
+ const stack:Open[]=[];
+ const closeCell=(o:Open,end:number)=>{if(o.row&&o.cellStart>=0){o.row.push(cellText(text.slice(o.cellStart,end)));o.cellStart=-1;}};
+ const closeRow=(o:Open,end:number)=>{closeCell(o,end);if(o.row){o.table.rows.push(o.row);o.row=null;}};
+ for(const m of text.matchAll(TAG)){
+  const closing=m[1]==='/',tag=m[2].toLowerCase(),at=m.index!,after=at+m[0].length;
+  const top=stack[stack.length-1];
+  if(tag==='table'){
+   if(!closing){const t:HtmlTable={index:out.length,rows:[]};out.push(t);stack.push({table:t,row:null,cellStart:-1});}
+   else if(top){closeRow(top,at);stack.pop();}
+   continue;
+  }
+  if(!top)continue;
+  if(tag==='tr'){if(closing)closeRow(top,at);else{closeRow(top,at);top.row=[];}continue;}
+  // td / th
+  if(closing){closeCell(top,at);continue;}
+  if(!top.row)top.row=[];   // a cell without <tr> opens an implicit row
+  closeCell(top,at);top.cellStart=after;
+ }
+ for(const o of stack.reverse())closeRow(o,text.length);
+ return out;
+}
+```
+
+```ts
+// src/lib/macro/parsers/nbs.ts
+// National Bureau of Statistics data-stream response → ParsedPoint (spec §4.4; evidence = the exact bytes of
+// POST https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData made by AKShare
+// macro_china_nbs_nation). Verified shape (2026-11-06):
+//   {"data":[{"code":"202610MM"|"202603SS","name":"2026年10月","values":[{"i_showname":"制造业采购经理指数 (%) ",
+//     "_id":"…","value":"49.3","da":"000000000000",…},…]},…],"success":true,"state":20000,"message":"成功"}
+// `value` is a JSON string (lossless); "" = not yet released → no point. The series is selected by
+// i_showname with all whitespace removed. Period codes: YYYYMMMM → month end, YYYY0QSS → quarter end.
+// Locator: json_pointer /data/<i>/values/<j>/value. Any deviation (numeric value, two matching indicators
+// in one period, unknown period code, success≠true) throws NbsParseError.
+import {canonical} from '../decimal';
+import {monthEnd,quarterEnd} from '../periods';
+import type {ParsedPoint,PeriodKind} from '../types';
+
+export const NBS_PARSER_VERSION='nbs-esdata/1';
+export class NbsParseError extends Error{
+ readonly code:string;
+ constructor(code:string,message?:string){super(message??code);this.name='NbsParseError';this.code=code;}
+}
+const strip=(s:unknown)=>typeof s==='string'?s.replace(/\s+/g,''):'';
+const NATIONAL='000000000000';
+
+function periodEndOfCode(code:unknown,period:PeriodKind):string{
+ const s=typeof code==='string'?code:'';
+ const m=/^(\d{4})(\d{2})MM$/.exec(s),q=/^(\d{4})0([1-4])SS$/.exec(s);
+ if(period==='month'&&m&&Number(m[2])>=1&&Number(m[2])<=12)return monthEnd(Number(m[1]),Number(m[2]));
+ if(period==='quarter'&&q)return quarterEnd(Number(q[1]),Number(q[2]));
+ throw new NbsParseError('nbs_period_code',s.slice(0,20));
+}
+
+export function parseNbsEsData(bytes:Uint8Array,opts:{seriesId:string;indicator:string;period:PeriodKind}):ParsedPoint[]{
+ let doc:unknown;
+ try{doc=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw new NbsParseError('nbs_bad_json');}
+ const d=doc as {success?:unknown;data?:unknown};
+ if(!d||d.success!==true||!Array.isArray(d.data))throw new NbsParseError('nbs_unsuccessful');
+ const target=strip(opts.indicator);
+ if(!target)throw new NbsParseError('nbs_bad_indicator');
+ const out:ParsedPoint[]=[];
+ d.data.forEach((item:unknown,i:number)=>{
+  const it=item as {code?:unknown;values?:unknown};
+  if(!it||!Array.isArray(it.values))throw new NbsParseError('nbs_bad_item',`data/${i}`);
+  const periodEnd=periodEndOfCode(it.code,opts.period);
+  const hits:number[]=[];
+  it.values.forEach((v:unknown,j:number)=>{
+   const x=v as {i_showname?:unknown;da?:unknown};
+   if(x&&strip(x.i_showname)===target&&(x.da===undefined||x.da===NATIONAL))hits.push(j);
+  });
+  if(hits.length===0)return;
+  if(hits.length>1)throw new NbsParseError('nbs_ambiguous',`data/${i}`);
+  const j=hits[0];
+  const raw=(it.values[j] as {value?:unknown}).value;
+  if(typeof raw!=='string')throw new NbsParseError('nbs_value_not_string',`data/${i}/values/${j}`);
+  const t=raw.trim();
+  if(t==='')return;
+  let valueText:string;
+  try{valueText=canonical(t);}catch{throw new NbsParseError('nbs_bad_value',`data/${i}/values/${j}`);}
+  out.push({seriesId:opts.seriesId,periodEnd,valueText,locator:{kind:'json_pointer',pointer:`/data/${i}/values/${j}/value`}});
+ });
+ return out;
+}
+```
+
+```ts
+// src/lib/macro/parsers/chinabond.ts
+// ChinaBond yield-curve history page → ParsedPoint (spec §4.4; evidence = the exact bytes of GET
+// https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery?startDate=…&endDate=…&gjqx=0&qxId=ycqx&locale=cn_ZH
+// made by AKShare bond_china_yield). Verified structure (2026-11-06): the data table is the one whose
+// header row reads 曲线名称 | 日期 | 3月 | 6月 | 1年 | 3年 | 5年 | 7年 | 10年 | 30年 (header cells carry
+// `3<!-- 月 -->月`-style comments), one <tr> per curve × date, newest first, an empty <td></td> for a
+// missing tenor. Rows of the requested curve (中债国债收益率曲线) give period_end = 日期 and the value of the
+// tenor column as decimal text. Locator: html_cell {table,row,cell}.
+import {canonical} from '../decimal';
+import {isIsoDate} from '../periods';
+import type {ParsedPoint} from '../types';
+import {htmlTables} from './html-table';
+
+export const CHINABOND_PARSER_VERSION='chinabond-history/1';
+export class ChinabondParseError extends Error{
+ readonly code:string;
+ constructor(code:string,message?:string){super(message??code);this.name='ChinabondParseError';this.code=code;}
+}
+
+export function parseChinabondHistory(bytes:Uint8Array,opts:{seriesId:string;curve:string;column:string}):ParsedPoint[]{
+ let html:string;
+ try{html=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw new ChinabondParseError('chinabond_bad_encoding');}
+ const table=htmlTables(html).find(t=>t.rows.length>0&&t.rows[0].includes('曲线名称')&&t.rows[0].includes('日期')&&t.rows[0].includes(opts.column));
+ if(!table)throw new ChinabondParseError('chinabond_no_table');
+ const header=table.rows[0];
+ const ni=header.indexOf('曲线名称'),di=header.indexOf('日期'),ci=header.indexOf(opts.column);
+ const out:ParsedPoint[]=[];
+ for(let r=1;r<table.rows.length;r++){
+  const cells=table.rows[r];
+  if(cells[ni]!==opts.curve)continue;
+  const date=cells[di]??'';
+  if(!isIsoDate(date))throw new ChinabondParseError('chinabond_bad_date',`row ${r}`);
+  const raw=cells[ci]??'';
+  if(raw==='')continue;
+  let valueText:string;
+  try{valueText=canonical(raw);}catch{throw new ChinabondParseError('chinabond_bad_value',`row ${r}`);}
+  out.push({seriesId:opts.seriesId,periodEnd:date,valueText,locator:{kind:'html_cell',table:table.index,row:r,cell:ci}});
+ }
+ return out;
+}
+```
+
+```ts
+// src/lib/macro/parsers/safe.ts
+// SAFE RMB central parity query page → ParsedPoint (spec §4.2 "人民币汇率中间价 美元", unit CNY per 100 USD,
+// never converted; evidence = the exact bytes of POST https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do
+// made by AKShare currency_boc_safe). Verified structure (2026-11-06): <table class="list" id="InfoTable">
+// with a header row of <th> 日期 | 美元 | 欧元 | … (25 currencies; header cells carry template comments),
+// then one <tr> per date (newest first) with <td> cells, plus one leftover template row whose only cell is
+// "-&nbsp;" (skipped: its first cell is not a date). "-" or "" = no value. Locator: html_cell. The XLSX
+// history file the same AKShare call downloads is not evidence here (no XLSX locator; bucket MIME list).
+import {canonical} from '../decimal';
+import {isIsoDate} from '../periods';
+import type {ParsedPoint} from '../types';
+import {htmlTables} from './html-table';
+
+export const SAFE_PARSER_VERSION='safe-rmbquery/1';
+export class SafeParseError extends Error{
+ readonly code:string;
+ constructor(code:string,message?:string){super(message??code);this.name='SafeParseError';this.code=code;}
+}
+
+export function parseSafeCentralParity(bytes:Uint8Array,opts:{seriesId:string;column:string}):ParsedPoint[]{
+ let html:string;
+ try{html=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw new SafeParseError('safe_bad_encoding');}
+ const table=htmlTables(html).find(t=>t.rows.length>0&&t.rows[0][0]==='日期'&&t.rows[0].includes(opts.column));
+ if(!table)throw new SafeParseError('safe_no_table');
+ const ci=table.rows[0].indexOf(opts.column);
+ const out:ParsedPoint[]=[];
+ for(let r=1;r<table.rows.length;r++){
+  const cells=table.rows[r];
+  if(!isIsoDate(cells[0]??''))continue;
+  const raw=cells[ci]??'';
+  if(raw===''||raw==='-')continue;
+  let valueText:string;
+  try{valueText=canonical(raw);}catch{throw new SafeParseError('safe_bad_value',`row ${r}`);}
+  out.push({seriesId:opts.seriesId,periodEnd:cells[0],valueText,locator:{kind:'html_cell',table:table.index,row:r,cell:ci}});
+ }
+ return out;
+}
+```
+
+```ts
+// src/lib/macro/parsers/index.ts
+// Parser registry for CN evidence (spec §4.4: the server never trusts Python numbers — it re-reads the value
+// from the evidence bytes with these TS parsers). parserFor(seriesId) returns the series' call spec, the parser
+// bound to it and the parser version (recorded in the retrieval's tool_versions); null for anything that is not
+// an active native akshare series. claimPeriodEnd maps an AKShare DataFrame column label to period_end.
+import {catalogById} from '../catalog';
+import {cnSpecOf} from '../cn-series';
+import type {CnSeriesSpec} from '../cn-series';
+import {monthEnd,quarterEnd,isIsoDate} from '../periods';
+import type {ParsedPoint,PeriodKind} from '../types';
+import {CHINABOND_PARSER_VERSION,parseChinabondHistory} from './chinabond';
+import {NBS_PARSER_VERSION,parseNbsEsData} from './nbs';
+import {SAFE_PARSER_VERSION,parseSafeCentralParity} from './safe';
+
+export interface CnParser{spec:CnSeriesSpec;version:string;parse:(bytes:Uint8Array)=>ParsedPoint[]}
+
+export function parserFor(seriesId:string):CnParser|null{
+ const def=catalogById(seriesId);
+ if(!def||def.status!=='active'||def.derive||def.aliasOf||def.source?.adapter!=='akshare')return null;
+ const spec=cnSpecOf(def);
+ switch(spec.function){
+  case 'macro_china_nbs_nation':return {spec,version:NBS_PARSER_VERSION,parse:b=>parseNbsEsData(b,{seriesId,indicator:spec.column,period:spec.period})};
+  case 'bond_china_yield':return {spec,version:CHINABOND_PARSER_VERSION,parse:b=>parseChinabondHistory(b,{seriesId,curve:spec.curve!,column:spec.column})};
+  case 'currency_boc_safe':return {spec,version:SAFE_PARSER_VERSION,parse:b=>parseSafeCentralParity(b,{seriesId,column:spec.column})};
+ }
+}
+
+const QUARTERS:Record<string,number>={'一':1,'二':2,'三':3,'四':4};
+/** '2026年9月' (month), '2026年第三季度' (quarter), 'YYYY-MM-DD' (day) → period_end; anything else → null. */
+export function claimPeriodEnd(label:string,period:PeriodKind):string|null{
+ const s=label.replace(/\s+/g,'');
+ if(period==='month'){const m=/^(\d{4})年(\d{1,2})月$/.exec(s);return m&&Number(m[2])>=1&&Number(m[2])<=12?monthEnd(Number(m[1]),Number(m[2])):null;}
+ if(period==='quarter'){const q=/^(\d{4})年第([一二三四])季度$/.exec(s);return q?quarterEnd(Number(q[1]),QUARTERS[q[2]]):null;}
+ return isIsoDate(s)?s:null;
+}
+```
+
+```ts
+// src/lib/macro/ingest-schema.ts
+// Request body validation for POST /api/macro/ingest (spec §4.4, §8, §0.2 M24). Hand-written rather than ajv:
+// the three bodies are small and fixed, and explicit checks give stable error codes ('invalid_body:<path>')
+// without schema compilation at cold start. Unknown keys are rejected everywhere (a renamed field must fail,
+// not be silently ignored). Limits: 4 MB per request (checked by the route on raw bytes), ≤ 50 evidence
+// items and ≤ 20 000 claims per chunk, ≤ 1000 chunks per batch.
+export const MAX_BODY_BYTES=4*1024*1024;
+export const MAX_EVIDENCE=50,MAX_CLAIMS=20_000,MAX_CHUNKS=1000;
+export interface EvidenceItem{series_id:string;sha256:string;url:string;status:number;content_type:string;fetched_at:string;bytes_b64:string}
+export interface ClaimItem{series_id:string;period_label:string;value_text:string}
+export type IngestBody=
+ |{action:'start';tool_versions:Record<string,string>}
+ |{action:'chunk';batch_id:string;seq:number;total:number;evidence:EvidenceItem[];claims:ClaimItem[]}
+ |{action:'finish';batch_id:string;total:number};
+export type SchemaResult={ok:true;body:IngestBody}|{ok:false;error:string};
+
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SERIES=/^CN_[A-Z0-9_]{1,60}$/;
+const SHA=/^[0-9a-f]{64}$/;
+const ISO_UTC=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+const B64=/^[A-Za-z0-9+/]*={0,2}$/;
+const DECIMAL_TEXT=/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+const TOOL_KEY=/^[A-Za-z0-9_.-]{1,40}$/;
+
+class Invalid extends Error{}
+const fail=(path:string):never=>{throw new Invalid(`invalid_body:${path}`);};
+const isObj=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
+function exactKeys(v:unknown,keys:readonly string[],path:string):Record<string,unknown>{
+ if(!isObj(v))return fail(path);
+ for(const k of Object.keys(v))if(!keys.includes(k))fail(`${path}.${k}`);
+ for(const k of keys)if(!(k in v))fail(`${path}.${k}`);
+ return v;
+}
+const str=(v:unknown,path:string,max:number,re?:RegExp)=>typeof v==='string'&&v.length>=1&&v.length<=max&&(!re||re.test(v))?v:fail(path);
+const int=(v:unknown,path:string,min:number,max:number)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=min&&v<=max?v:fail(path);
+
+function evidenceItem(v:unknown,path:string):EvidenceItem{
+ const o=exactKeys(v,['series_id','sha256','url','status','content_type','fetched_at','bytes_b64'],path);
+ const url=str(o.url,`${path}.url`,2048);
+ let ok=false;try{ok=new URL(url).protocol==='https:';}catch{ok=false;}
+ if(!ok)fail(`${path}.url`);
+ const fetched=str(o.fetched_at,`${path}.fetched_at`,40,ISO_UTC);
+ if(!Number.isFinite(Date.parse(fetched)))fail(`${path}.fetched_at`);
+ const b64=typeof o.bytes_b64==='string'&&o.bytes_b64.length<=MAX_BODY_BYTES&&o.bytes_b64.length%4===0&&B64.test(o.bytes_b64)?o.bytes_b64:fail(`${path}.bytes_b64`);
+ return {series_id:str(o.series_id,`${path}.series_id`,64,SERIES),sha256:str(o.sha256,`${path}.sha256`,64,SHA),url,status:int(o.status,`${path}.status`,100,599),
+  content_type:str(o.content_type,`${path}.content_type`,200),fetched_at:fetched,bytes_b64:b64};
+}
+function claimItem(v:unknown,path:string):ClaimItem{
+ const o=exactKeys(v,['series_id','period_label','value_text'],path);
+ return {series_id:str(o.series_id,`${path}.series_id`,64,SERIES),period_label:str(o.period_label,`${path}.period_label`,40),value_text:str(o.value_text,`${path}.value_text`,64,DECIMAL_TEXT)};
+}
+
+export function parseIngestBody(v:unknown):SchemaResult{
+ try{
+  if(!isObj(v))return {ok:false,error:'invalid_body:root'};
+  if(v.action==='start'){
+   const o=exactKeys(v,['action','tool_versions'],'root');
+   const tv=o.tool_versions;
+   if(!isObj(tv))fail('tool_versions');
+   const entries=Object.entries(tv as Record<string,unknown>);
+   if(entries.length<1||entries.length>20)fail('tool_versions');
+   for(const [k,val] of entries){if(!TOOL_KEY.test(k))fail(`tool_versions.${k}`);str(val,`tool_versions.${k}`,100);}
+   return {ok:true,body:{action:'start',tool_versions:Object.fromEntries(entries) as Record<string,string>}};
+  }
+  if(v.action==='chunk'){
+   const o=exactKeys(v,['action','batch_id','seq','total','evidence','claims'],'root');
+   const total=int(o.total,'total',1,MAX_CHUNKS),seq=int(o.seq,'seq',0,MAX_CHUNKS-1);
+   if(seq>=total)fail('seq');
+   if(!Array.isArray(o.evidence)||o.evidence.length<1||o.evidence.length>MAX_EVIDENCE)fail('evidence');
+   if(!Array.isArray(o.claims)||o.claims.length>MAX_CLAIMS)fail('claims');
+   return {ok:true,body:{action:'chunk',batch_id:str(o.batch_id,'batch_id',36,UUID),seq,total,
+    evidence:(o.evidence as unknown[]).map((e,i)=>evidenceItem(e,`evidence[${i}]`)),claims:(o.claims as unknown[]).map((c,i)=>claimItem(c,`claims[${i}]`))}};
+  }
+  if(v.action==='finish'){
+   const o=exactKeys(v,['action','batch_id','total'],'root');
+   return {ok:true,body:{action:'finish',batch_id:str(o.batch_id,'batch_id',36,UUID),total:int(o.total,'total',1,MAX_CHUNKS)}};
+  }
+  return {ok:false,error:'invalid_body:action'};
+ }catch(e){
+  if(e instanceof Invalid)return {ok:false,error:e.message};
+  throw e;
+ }
+}
+```
+
+```ts
+// src/app/api/macro/ingest/route.ts
+// AKShare ingest endpoint (spec §4.4, §8, §11; §0.2 M9/M24/N2/N3). Auth: MACRO_INGEST_SECRET bearer compared
+// in constant time (authorizedCronRequest); unset secret → 503. Body ≤ 4 MB (raw bytes). Three actions:
+//  start  → refuses (409) while a macro.akshare batch younger than 2 h is still running (one writer per
+//           dataset); an older running batch is closed as failed ('abandoned'); upserts the catalog mirror and
+//           starts batch producer 'py-akshare', dataset 'macro.akshare' → {batch_id}.
+//  chunk  → (batch_id, seq) idempotent: a seq already recorded returns 'duplicate' without touching anything.
+//           Every evidence item's bytes must hash to its sha256, else the whole chunk is refused (400) before
+//           any write. Evidence must come from the series' official host and data path with HTTP 200 and a
+//           fetched_at not in the future and at most 24 h old; the TS parser (parsers/index.ts) extracts the
+//           points from the bytes — Python numbers are never stored; claims are mapped to period_end and
+//           compared by decimal equality inside ingestEvidence (mismatch → adapter_mismatch). Claims that
+//           match no parsed point are reported as one informational skipped_summary entry.
+//           The chunk's counts are recorded with recordChunk.
+//  finish → all chunks 0..total−1 present with the same total, else 409; sums chunk counts, derives CN in the
+//           same batch (N3), finishBatch, recordAttempt('macro.akshare', daily, ok = status !== 'failed'), then
+//           the Task 11 publish point. Only this route publishes CN.
+// Responses carry codes, keys and counts only.
+import {createHash} from 'node:crypto';
+import {NextResponse} from 'next/server';
+import {emptyCounts,finishBatch,startBatch} from '@/lib/dq/batches';
+import type {BatchError} from '@/lib/dq/batches';
+import {recordAttempt} from '@/lib/dq/freshness';
+import type {Row} from '@/lib/db/table-client';
+import {resolveCodeVersion} from '@/lib/facts/deps';
+import {authorizedCronRequest} from '@/lib/observability/cron-auth';
+import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
+import {productionMacroDeps} from '@/lib/macro/deps';
+import type {MacroDeps} from '@/lib/macro/deps';
+import {addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import type {Claim,RetrievalInput} from '@/lib/macro/ingest';
+import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
+import type {IngestBody} from '@/lib/macro/ingest-schema';
+import {claimPeriodEnd,parserFor} from '@/lib/macro/parsers';
+import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
+import type {ParsedPoint} from '@/lib/macro/types';
+
+export const dynamic='force-dynamic';
+export const maxDuration=300;
+const INGEST_ROUTE_VERSION='macro-ingest/1';
+const DATASET='macro.akshare',PRODUCER='py-akshare';
+const LEASE_MS=2*3600_000,MAX_FUTURE_MS=5*60_000,MAX_AGE_MS=24*3600_000;
+const NO_STORE={'Cache-Control':'no-store'};
+const json=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:NO_STORE});
+const err=(code:string,message:string,status:number,extra:Record<string,unknown>={})=>json({error:{code,message,...extra}},status);
+/** Codes and keys only (messages may echo upstream text), except the skipped_summary INFO entry whose message is a count. */
+const publicErrors=(errors:BatchError[])=>errors.map(e=>e.code==='skipped_summary'&&e.message?{code:e.code,key:e.key,message:e.message}:e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
+
+async function batchRow(deps:MacroDeps,batchId:string):Promise<Row|NextResponse>{
+ const [b]=await deps.tables.select('ingest_batches',{batch_id:batchId},{limit:1});
+ if(!b||b.dataset!==DATASET||b.producer!==PRODUCER)return err('batch_not_found','Unknown batch',404);
+ if(b.status!=='running')return err('batch_not_running','Batch is finished',409);
+ return b;
+}
+
+async function start(deps:MacroDeps,body:Extract<IngestBody,{action:'start'}>){
+ const now=deps.now().getTime();
+ const running=await deps.tables.select('ingest_batches',{dataset:DATASET,status:'running'},{orderBy:'started_at',desc:true,limit:20});
+ for(const b of running){
+  if(now-Date.parse(String(b.started_at))<LEASE_MS)return err('batch_running','A macro.akshare batch is still running',409,{batch_id:b.batch_id});
+ }
+ for(const b of running)await finishBatch(deps.tables,String(b.batch_id),{counts:emptyCounts(),errors:[{code:'abandoned'}]}).catch(()=>undefined);
+ await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
+ const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:DATASET,codeVersion:deps.codeVersion,triggeredBy:'script',
+  toolVersions:{...body.tool_versions,ingest:INGEST_ROUTE_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
+ return json({batch_id:batchId});
+}
+
+async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
+ const b=await batchRow(deps,body.batch_id);
+ if(b instanceof NextResponse)return b;
+ const existing=await deps.db.chunksOf(body.batch_id);
+ if(existing.some(c=>c.seq===body.seq))return json({status:'duplicate',batch_id:body.batch_id,seq:body.seq});
+ if(existing.some(c=>c.total!==body.total))return err('chunk_total_mismatch','total differs from earlier chunks',409);
+ const decoded=body.evidence.map(e=>({e,bytes:new Uint8Array(Buffer.from(e.bytes_b64,'base64'))}));
+ for(const {e,bytes} of decoded)if(createHash('sha256').update(bytes).digest('hex')!==e.sha256)return err('sha256_mismatch','Evidence bytes do not match sha256',400,{series_id:e.series_id});
+ const batchTools=(b.tool_versions&&typeof b.tool_versions==='object'?b.tool_versions:{}) as Record<string,string>;
+ const now=deps.now().getTime();
+ let counts=emptyChunkCounts();const errors:BatchError[]=[];
+ const retrievals:RetrievalInput[]=[];const located=new Set<string>();
+ for(const {e,bytes} of decoded){
+  const parser=parserFor(e.series_id);
+  if(!parser){counts.failed+=1;errors.push({code:'unknown_series',key:e.series_id});continue;}
+  const url=new URL(e.url),fetched=Date.parse(e.fetched_at);
+  if(url.hostname!==parser.spec.fetch_host||url.pathname!==parser.spec.evidence_path||e.status!==200){counts.failed+=1;errors.push({code:'evidence_not_allowed',key:e.series_id});continue;}
+  if(fetched>now+MAX_FUTURE_MS||now-fetched>MAX_AGE_MS){counts.failed+=1;errors.push({code:'fetched_at_out_of_range',key:e.series_id});continue;}
+  let parsed:ParsedPoint[];
+  try{parsed=parser.parse(bytes);}
+  catch(x){counts.failed+=1;errors.push({code:`parse_${(x as {code?:string}).code??'failed'}`,key:e.series_id});continue;}
+  const claims:Claim[]=[];
+  for(const c of body.claims){
+   if(c.series_id!==e.series_id)continue;
+   const pe=claimPeriodEnd(c.period_label,parser.spec.period);
+   if(pe)claims.push({series_id:c.series_id,period_end:pe,value_text:c.value_text});
+  }
+  for(const p of parsed)located.add(`${p.seriesId}|${p.periodEnd}`);
+  retrievals.push({evidence:{sha256:e.sha256,bytes,adapter:'akshare',fetchUrl:e.url,fetchHost:url.hostname,httpStatus:e.status,contentType:e.content_type,
+   fetchedAt:new Date(fetched).toISOString(),toolVersions:{...batchTools,parser:parser.version}},parsed,claims});
+ }
+ const rec=await ingestEvidence(deps,{batchId:body.batch_id,adapter:'akshare',retrievals});
+ counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
+ const unlocated=body.claims.filter(c=>{
+  const p=parserFor(c.series_id),pe=p?claimPeriodEnd(c.period_label,p.spec.period):null;
+  return !pe||!located.has(`${c.series_id}|${pe}`);
+ }).length;
+ // Owner ruling: an AKShare claim whose period has no TS-parsed raw value is NOT quarantined (there is no raw value to
+ // hold); it is counted once as the existing INFO code skipped_summary, which does not degrade the batch.
+ if(unlocated>0)errors.push({code:'skipped_summary',key:'unlocated_claims',message:`${unlocated} claims without a located raw value`});
+ const state=await deps.db.recordChunk(body.batch_id,body.seq,body.total,counts);
+ return json({status:state==='new'?'accepted':'duplicate',batch_id:body.batch_id,seq:body.seq,counts,errors:publicErrors(errors)});
+}
+
+async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>){
+ const b=await batchRow(deps,body.batch_id);
+ if(b instanceof NextResponse)return b;
+ const chunks=await deps.db.chunksOf(body.batch_id);
+ const seqs=new Set(chunks.map(c=>c.seq));
+ const missing=Array.from({length:body.total},(_,i)=>i).filter(i=>!seqs.has(i));
+ if(missing.length||chunks.length!==body.total||chunks.some(c=>c.total!==body.total))return err('chunks_incomplete','Not every chunk has arrived',409,{missing:missing.slice(0,50)});
+ let counts=chunks.reduce((acc,c)=>addCounts(acc,c.counts),emptyChunkCounts());
+ const derived=await deriveAndWrite(deps,'CN',body.batch_id);
+ counts=addCounts(counts,derived.counts);
+ const errors:BatchError[]=[...derived.errors];
+ const batchStatus=await finishBatch(deps.tables,body.batch_id,{counts,errors});
+ await recordAttempt(deps.tables,DATASET,{ok:batchStatus!=='failed',cadence:'daily'});
+ const today=deps.now().toISOString().slice(0,10);
+ // TASK 11: publishRegion(region)
+ return json({batch_id:body.batch_id,status:batchStatus,date:today,counts,errors:publicErrors(errors)});
+}
+
+export async function POST(request:Request):Promise<NextResponse>{
+ const secret=process.env.MACRO_INGEST_SECRET;
+ if(!secret)return err('ingest_unavailable','Ingest unavailable',503);
+ if(!authorizedCronRequest(request.headers.get('authorization'),secret))return err('unauthorized','Unauthorized',401);
+ const declared=Number(request.headers.get('content-length')??'0');
+ if(Number.isFinite(declared)&&declared>MAX_BODY_BYTES)return err('body_too_large','Body exceeds 4 MB',413);
+ const raw=new Uint8Array(await request.arrayBuffer());
+ if(raw.byteLength>MAX_BODY_BYTES)return err('body_too_large','Body exceeds 4 MB',413);
+ let value:unknown;
+ try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{return err('invalid_json','Body is not JSON',400);}
+ const parsed=parseIngestBody(value);
+ if(!parsed.ok)return err(parsed.error,'Invalid body',400);
+ const codeVersion=resolveCodeVersion({allowGit:false});
+ if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
+ const deps=productionMacroDeps({codeVersion});
+ try{
+  const body=parsed.body;
+  return body.action==='start'?await start(deps,body):body.action==='chunk'?await chunk(deps,body):await finish(deps,body);
+ }catch(e){
+  const code=e instanceof Error&&e.message==='chunk_total_mismatch'?'chunk_total_mismatch':'ingest_failed';
+  return err(code,'Macro ingest failed',code==='chunk_total_mismatch'?409:500);
+ }
+}
+```
+
+The known values in `cn-parsers.test.ts` ("reads known values exactly") were read on 2026-11-06 from the same official responses: PMI 2026-10 `49.3`, 2026-09 `50.1`; CPI (上年同月=100) 2026-09 `100.9`; PPI 2026-09 `105` (raw `"105"`/`105.0` in the DataFrame); GDP 当季 2026-Q3 `104.5`; M2 yoy 2026-09 `7.2`; exports yoy 2026-09 `36.3`; CGB 10Y 2026-11-05 `1.6038`; USD/CNY parity 2026-11-05 `671.56`. If the Task 8 recording was made late enough that a row is outside its window, the test names the missing row. The ChinaBond daily window is 45 days, so this happens after about 2026-12-20; the SAFE HTML starts again after SAFE publishes a new XLSX. In that case, replace that tuple with a row from the recorded file, copy the value from `claims.json` in canonical form, and say so in the commit body. The claim-agreement test already compares every located claim, whatever the date.
+
+The ingest route test reads the same fixtures. Its clock is pinned 1 minute after the latest `fetched_at` in `manifest.json`, so the 24 h `fetched_at` window passes on any later day.
+
+- [ ] **Step 4: Run tests, typecheck, lint**
+
+Run: `npm test -- src/lib/macro/parsers/cn-parsers.test.ts src/lib/macro/ingest-schema.test.ts src/app/api/macro/ingest/route.test.ts src/lib/macro && npm run typecheck && npm run lint`
+Expected: PASS. If `typecheck` reports `html_cell` is not assignable to `Locator`, Task 2's `types.ts` does not match the plan's shared contract. Stop and report NEEDS_CONTEXT; do not edit `types.ts`.
+
+Optional end-to-end dry check (no network writes, no secrets): `scripts/macro/.venv/bin/python scripts/macro/collect.py --mode daily --dry-run .claude/scratch/macro-dry-run`, then post a body from it to a local dev server started with `MACRO_INGEST_SECRET=dev` and the local Supabase harness. Skip this if no local database is running. The route tests cover the protocol.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/macro/parsers/html-table.ts src/lib/macro/parsers/nbs.ts src/lib/macro/parsers/chinabond.ts src/lib/macro/parsers/safe.ts src/lib/macro/parsers/index.ts src/lib/macro/parsers/cn-parsers.test.ts src/lib/macro/ingest-schema.ts src/lib/macro/ingest-schema.test.ts src/app/api/macro/ingest/route.ts src/app/api/macro/ingest/route.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): CN evidence parsers and the start/chunk/finish ingest route
+
+NBS esData (json_pointer), ChinaBond history and SAFE parity (html_cell)
+parsed from recorded official bytes; claims compared by decimal equality.
+The route verifies bearer, size, sha256, official host/path and fetched_at,
+is idempotent per (batch, seq), and finish sums chunks, derives CN and
+records freshness. CN publishing is left to Task 11 at the marked line.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+
+## Part C — 判定、发布与读 API（Task 10–13）
+
+### Task 10: Regime rules and `classifyRegime`
+
+**Files:**
+- Create: `src/lib/macro/regime.ts`
+- Test: `src/lib/macro/regime.test.ts`
+
+Pure module (spec §5.1–§5.3, §0.2 M8/M14). `value_text → Number` happens here only (plus `quality.ts`). Δ and 3-month changes are first computed in decimal (`subtract`, `yoyPct`), then converted: a 4.1 − 3.8 unemployment move is exactly `0.3` and hits the `≥ 0.3pp` rule, where float subtraction gives `0.29999…` and would miss it. Scores, norms, coverage, margin and axes are rounded to 6 decimals (`r6`) so stored JSON is stable across runs.
+
+- [ ] **Step 1: Write the failing test**
+```ts
+// src/lib/macro/regime.test.ts
+import {describe,expect,it} from 'vitest';
+import {MACRO_CATALOG,catalogById,regimeInputsOf} from './catalog';
+import {METHODOLOGY_VERSION,RULES,RULES_VERSION,WEIGHTS_V1,classifyRegime,matchRule,pickStates,regionWeights} from './regime';
+import type {RegimeInput} from './regime';
+import type {SeriesType} from './types';
+
+let n=0;
+const o=(period_end:string,value_text:string)=>({observation_id:`obs-${++n}`,period_end,value_text});
+
+// US fixture — hand-computed (weights from WEIGHTS_V1; denominator Σ US = 25+15+10+15+10+5+15+5 = 100)
+//  US_DFF      25  v=4.33, Δ=0 → policy.2_5to4_5 {rec .3, ov .2, st .1, recess .1} → 7.5 / 5 / 2.5 / 2.5
+//  US_DGS10    15  4.25 − 3.95 = 0.30 ≥ 0.25 → bond.d3m.ge25bp {ov .5, st .3} → ov 7.5, st 4.5
+//  US_DTWEXBGS 10  (126.5/122 − 1)×100 = 3.6885 ≥ 2 → fx.chg3m.ge2 {ov .4, st .3} → ov 4, st 3
+//  US_CPI_YOY  15  2.9 → infl.2to3 {rec .4, ov .3, st .1, recess .1} → 6 / 4.5 / 1.5 / 1.5
+//  US_UNRATE   10  4.1 − 3.8 = 0.3 (decimal; float gives 0.2999…) → labor.d3m.ge0_3 {st .4, recess .5} → st 4, recess 5
+//  US_PPI_FD_YOY 5 3.4 → infl.3to4 {ov .6, st .3} → ov 3, st 1.5
+//  scores: rec 7.5+6 = 13.5; ov 5+7.5+4+4.5+3 = 24; st 2.5+4.5+3+1.5+4+1.5 = 17; recess 2.5+1.5+5 = 9; Σ = 63.5
+//  norm: 13.5/63.5 = 0.212598, 24/63.5 = 0.377953, 17/63.5 = 0.267717, 9/63.5 = 0.141732
+//  primary overheat, secondary stagflation, margin_pp = 100×(24−17)/63.5 = 11.023622
+//  coverage = 80/100 = 0.8; uncovered = 20 (ISM 15 missing + VIX 5 restricted)
+//  growth_axis: only UNRATE → 10×(0+0−.4−.5)/10 = −0.9
+//  inflation_axis: CPI 15×(.3+.1−.4−.1) = −1.5; PPI 5×(.6+.3) = 4.5; (−1.5+4.5)/20 = 0.15
+const US:RegimeInput={region:'US',series:{
+ US_DFF:{latest:o('2026-10-31','4.33'),prev:o('2026-09-30','4.33'),prev3m:o('2026-07-31','4.33')},
+ US_DGS10:{latest:o('2026-10-31','4.25'),prev:o('2026-09-30','4.15'),prev3m:o('2026-07-31','3.95')},
+ US_DTWEXBGS:{latest:o('2026-10-31','126.5'),prev:o('2026-09-30','125'),prev3m:o('2026-07-31','122')},
+ US_CPI_YOY:{latest:o('2026-09-30','2.9'),prev:o('2026-08-31','2.6'),prev3m:o('2026-06-30','2.7')},
+ US_UNRATE:{latest:o('2026-09-30','4.1'),prev:o('2026-08-31','4'),prev3m:o('2026-06-30','3.8')},
+ US_PPI_FD_YOY:{latest:o('2026-09-30','3.4'),prev:o('2026-08-31','3.1')},
+}};
+
+// CN fixture — hand-computed (denominator Σ CN = 10+15+15+5+10+10+15+5+10+10+20 = 125)
+//  CN_CPI_YOY 10  0.3 → infl.lt1 {rec .1, recess .7} → 1 / 7
+//  CN_PPI_YOY 15  −2.3 → infl.lt1 → 1.5 / 10.5
+//  CN_PMI_MFG 15  49.8 → pmi.47to50 {rec .1, st .4, recess .4} → 1.5 / 6 / 6
+//  CN_GDP_YOY  5  v=4.8, Δ = 4.8−5.2 < 0 → no rule matches (4.5 ≤ v and Δ < 0) → uncovered
+//  CN_M2_YOY  10  8.4, Δ = −0.4 → liq.ge8.down {rec .2, ov .4, st .2} → 2 / 4 / 2
+//  CN_EXPORT_YOY 10  8.3, Δ = +5.9 → growth.ge5.up {rec .5, ov .3} → 5 / 3
+//  CN_CGB_10Y 15  1.75 − 2.05 = −0.30 ≤ −0.25 → bond.d3m.le-25bp {rec .2, recess .5} → 3 / 7.5
+//  CN_USDCNY_CP 5  (712.68/718.5 − 1)×100 = −0.8100 → between ±2 → no rule → uncovered
+//  matched = 10+15+15+10+10+15 = 75 → coverage 75/125 = 0.6 (boundary: NOT < 0.6, so classified)
+//  scores: rec 1+1.5+1.5+2+5+3 = 14; ov 4+3 = 7; st 6+2 = 8; recess 7+10.5+6+7.5 = 31; Σ = 60
+//  norm: .233333 / .116667 / .133333 / .516667; primary recession, secondary recovery, margin 100×17/60 = 28.333333
+//  growth_axis: PMI 15×(.1−.4−.4) = −10.5; EXPORT 10×(.5+.3) = 8; (−2.5)/25 = −0.1
+//  inflation_axis: CPI 10×(−.1−.7) = −8; PPI 15×(−.8) = −12; −20/25 = −0.8; uncovered = 125−75 = 50
+const CN:RegimeInput={region:'CN',series:{
+ CN_CPI_YOY:{latest:o('2026-09-30','0.3'),prev:o('2026-08-31','-0.4')},
+ CN_PPI_YOY:{latest:o('2026-09-30','-2.3'),prev:o('2026-08-31','-2.9')},
+ CN_PMI_MFG:{latest:o('2026-10-31','49.8'),prev:o('2026-09-30','49.8')},
+ CN_GDP_YOY:{latest:o('2026-09-30','4.8'),prev:o('2026-06-30','5.2'),prev3m:o('2026-06-30','5.2')},
+ CN_M2_YOY:{latest:o('2026-09-30','8.4'),prev:o('2026-08-31','8.8')},
+ CN_EXPORT_YOY:{latest:o('2026-09-30','8.3'),prev:o('2026-08-31','2.4')},
+ CN_CGB_10Y:{latest:o('2026-10-31','1.75'),prev:o('2026-09-30','1.86'),prev3m:o('2026-07-31','2.05')},
+ CN_USDCNY_CP:{latest:o('2026-10-31','712.68'),prev:o('2026-09-30','711.2'),prev3m:o('2026-07-31','718.5')},
+}};
+
+describe('versions and weights',()=>{
+ it('pins the methodology and rules versions',()=>{
+  expect(METHODOLOGY_VERSION).toBe('v1.0');
+  expect(RULES_VERSION).toBe('macro-regime-rules/1.0');
+ });
+ it('WEIGHTS_V1 equals the catalog weight of every indicator (spec §0.2 M14)',()=>{
+  for(const def of MACRO_CATALOG.filter(d=>d.role==='indicator'))expect([def.id,def.weight]).toEqual([def.id,WEIGHTS_V1[def.id]??0]);
+  for(const id of Object.keys(WEIGHTS_V1)){
+   const def=catalogById(id);
+   expect(def,id).toBeDefined();
+   expect(def!.role).toBe('indicator');
+   expect(def!.type).not.toBeNull();
+  }
+ });
+ it('includes missing/restricted items in the denominator; regime inputs are exactly the weighted active items',()=>{
+  expect(Object.values(regionWeights('US')).reduce((a,b)=>a+b,0)).toBe(100);
+  expect(Object.values(regionWeights('CN')).reduce((a,b)=>a+b,0)).toBe(125);
+  for(const region of ['US','CN'] as const){
+   const active=Object.keys(regionWeights(region)).filter(id=>catalogById(id)!.status==='active').sort();
+   expect(regimeInputsOf(region).map(d=>d.id).sort()).toEqual(active);
+  }
+ });
+});
+
+describe('matchRule boundaries (spec §5.2)',()=>{
+ const cases:[SeriesType,number,number|null,number|null,string|null][]=[
+  ['policy_rate',2.49,null,null,'policy.lt2_5'],['policy_rate',2.5,null,null,'policy.2_5to4_5'],['policy_rate',4.49,null,null,'policy.2_5to4_5'],
+  ['policy_rate',4.5,null,0,'policy.ge4_5.up'],['policy_rate',4.5,null,-0.25,'policy.ge4_5.down'],['policy_rate',4.5,null,null,null],
+  ['bond_yield',4,0.25,null,'bond.d3m.ge25bp'],['bond_yield',4,0.2499,null,'bond.d3m.other'],['bond_yield',4,-0.25,null,'bond.d3m.le-25bp'],
+  ['bond_yield',4,-0.2499,null,'bond.d3m.other'],['bond_yield',4,null,0.5,null],
+  ['fx',100,2,null,'fx.chg3m.ge2'],['fx',100,1.99,null,null],['fx',100,-2,null,'fx.chg3m.le-2'],['fx',100,-1.99,null,null],['fx',7.12,null,null,null],
+  ['inflation_yoy',0.99,null,null,'infl.lt1'],['inflation_yoy',1,null,null,'infl.1to2'],['inflation_yoy',1.99,null,null,'infl.1to2'],
+  ['inflation_yoy',2,null,null,'infl.2to3'],['inflation_yoy',3,null,null,'infl.2to3'],['inflation_yoy',3.01,null,null,'infl.3to4'],
+  ['inflation_yoy',4,null,null,'infl.3to4'],['inflation_yoy',4.01,null,null,'infl.gt4'],
+  ['pmi',55,null,null,'pmi.ge55'],['pmi',54.99,null,null,'pmi.50to55'],['pmi',50,null,null,'pmi.50to55'],['pmi',49.99,null,null,'pmi.47to50'],
+  ['pmi',47,null,null,'pmi.47to50'],['pmi',46.99,null,null,'pmi.lt47'],
+  ['labor_rate',4,0.3,null,'labor.d3m.ge0_3'],['labor_rate',4,0.29,null,null],['labor_rate',4,-0.1,null,'labor.d3m.le-0_1'],['labor_rate',4,-0.09,null,null],['labor_rate',4,null,null,null],
+  ['growth_yoy',5,null,0,'growth.ge5.up'],['growth_yoy',5,null,-0.1,null],['growth_yoy',5,null,null,null],['growth_yoy',4.49,null,null,'growth.lt4_5'],['growth_yoy',4.5,null,1,null],
+  ['liquidity_yoy',8,null,0,'liq.ge8.up'],['liquidity_yoy',8,null,-0.1,'liq.ge8.down'],['liquidity_yoy',8,null,null,null],['liquidity_yoy',7.99,null,null,'liq.lt8'],
+  ['risk_index',14.99,null,null,'risk.lt15'],['risk_index',15,null,null,'risk.15to25'],['risk_index',24.99,null,null,'risk.15to25'],['risk_index',25,null,null,'risk.ge25'],
+  ['asset_price',100,1,1,null],
+ ];
+ it.each(cases)('%s v=%s d3=%s d1=%s → %s',(type,v,d3,d1,expected)=>{
+  expect(matchRule(type,v,d3,d1)?.id??null).toBe(expected);
+ });
+ it('rule ids are unique and every rule has bilingual labels',()=>{
+  const all=Object.values(RULES).flat();
+  expect(new Set(all.map(r=>r.id)).size).toBe(all.length);
+  for(const r of all){expect(r.label.zh.length).toBeGreaterThan(0);expect(r.label.en.length).toBeGreaterThan(0);}
+ });
+});
+
+describe('type isolation',()=>{
+ it('an fx level of 7.12 never matches a policy_rate rule',()=>{
+  expect(RULES.fx.every(r=>!r.id.startsWith('policy.'))).toBe(true);
+  expect(matchRule('fx',7.12,null,null)).toBeNull();
+  expect(matchRule('policy_rate',7.12,null,0)?.id).toBe('policy.ge4_5.up');   // same number, own type only
+  const r=classifyRegime({region:'CN',series:{CN_USDCNY_CP:{latest:o('2026-10-31','7.12')}}});
+  expect(r.contributions).toEqual([]);
+  expect(r.regime).toBeNull();
+ });
+});
+
+describe('classifyRegime',()=>{
+ it('US fixture matches the hand-computed result',()=>{
+  const r=classifyRegime(US);
+  expect(r.regime).toEqual({primary_state:'overheat',secondary_state:'stagflation',
+   scores:{recovery:13.5,overheat:24,stagflation:17,recession:9},
+   norm:{recovery:0.212598,overheat:0.377953,stagflation:0.267717,recession:0.141732},
+   coverage:0.8,margin_pp:11.023622,growth_axis:-0.9,inflation_axis:0.15});
+  expect(r.uncoveredWeight).toBe(20);
+  expect(r.contributions.map(c=>c.rule_id)).toEqual(['policy.2_5to4_5','bond.d3m.ge25bp','fx.chg3m.ge2','infl.2to3','labor.d3m.ge0_3','infl.3to4']);
+  const unrate=r.contributions.find(c=>c.series_id==='US_UNRATE')!;
+  expect(unrate).toEqual({series_id:'US_UNRATE',observation_id:US.series.US_UNRATE.latest.observation_id,rule_id:'labor.d3m.ge0_3',weight:10,
+   support:{stagflation:0.4,recession:0.5},contribution:{recovery:0,overheat:0,stagflation:4,recession:5}});
+ });
+ it('CN fixture matches the hand-computed result (coverage exactly 0.6 is classified)',()=>{
+  const r=classifyRegime(CN);
+  expect(r.regime).toEqual({primary_state:'recession',secondary_state:'recovery',
+   scores:{recovery:14,overheat:7,stagflation:8,recession:31},
+   norm:{recovery:0.233333,overheat:0.116667,stagflation:0.133333,recession:0.516667},
+   coverage:0.6,margin_pp:28.333333,growth_axis:-0.1,inflation_axis:-0.8});
+  expect(r.uncoveredWeight).toBe(50);
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('CN_GDP_YOY');
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('CN_USDCNY_CP');
+ });
+ it('coverage < 0.6 → regime null, contributions and uncovered weight still reported',()=>{
+  const {CN_CGB_10Y:_drop,...rest}=CN.series;
+  const r=classifyRegime({region:'CN',series:rest});   // matched 60/125 = 0.48
+  expect(r.regime).toBeNull();
+  expect(r.contributions).toHaveLength(5);
+  expect(r.uncoveredWeight).toBe(65);
+ });
+ it('a missing comparison period means the rule does not match (no neutral fill)',()=>{
+  const r=classifyRegime({region:'US',series:{...US.series,US_DGS10:{latest:o('2026-10-31','4.25'),prev:o('2026-09-30','4.15')}}});
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('US_DGS10');
+  expect(r.uncoveredWeight).toBe(35);
+  expect(r.regime!.coverage).toBe(0.65);
+ });
+ it('ignores series of the other region and ids outside WEIGHTS_V1',()=>{
+  const r=classifyRegime({region:'US',series:{...US.series,CN_PMI_MFG:{latest:o('2026-10-31','60')},US_DGS10_D:{latest:o('2026-11-03','4.3')}}});
+  expect(r).toEqual(classifyRegime(US));
+ });
+ it('is deterministic',()=>{expect(classifyRegime(CN)).toEqual(classifyRegime(CN));});
+});
+
+describe('pickStates tie order (recovery < overheat < stagflation < recession)',()=>{
+ it('all equal → recovery then overheat',()=>{
+  expect(pickStates({recovery:0.25,overheat:0.25,stagflation:0.25,recession:0.25})).toEqual({primary:'recovery',secondary:'overheat'});
+ });
+ it('tie for first between overheat and stagflation → overheat primary, stagflation secondary',()=>{
+  expect(pickStates({recovery:0,overheat:0.5,stagflation:0.5,recession:0})).toEqual({primary:'overheat',secondary:'stagflation'});
+ });
+ it('only one nonzero → secondary null',()=>{
+  expect(pickStates({recovery:0,overheat:0,stagflation:0,recession:1})).toEqual({primary:'recession',secondary:null});
+ });
+});
+```
+- [ ] **Step 2: Run it and confirm it fails**
+Run: `npm test -- src/lib/macro/regime.test.ts`
+Expected: FAIL (`Cannot find module './regime'`)
+- [ ] **Step 3: Implement**
+```ts
+// src/lib/macro/regime.ts
+// Typed regime rules and the single classification function (spec §5.1–§5.3, §0.2 M8/M14). The
+// value_text → Number conversion happens at this boundary only; Δ / 3M changes are computed in
+// decimal first. Weights are part of the method (frozen within v1.0); the coverage denominator is
+// the region's WEIGHTS_V1 sum, missing/restricted items included. Pure: no I/O.
+import {catalogById} from './catalog';
+import {subtract,yoyPct} from './decimal';
+import {REGIMES} from './judgment-contract';
+import type {Regime,RegimeResult} from './judgment-contract';
+import type {Region,RegimeContribution,SeriesType} from './types';
+
+export const METHODOLOGY_VERSION='v1.0';
+export const RULES_VERSION='macro-regime-rules/1.0';
+/** id → weight for every role=indicator monthly/quarterly regime item (spec §4.2), frozen in v1.0. */
+export const WEIGHTS_V1:Readonly<Record<string,number>>=Object.freeze({
+ US_DFF:25,US_DGS10:15,US_DTWEXBGS:10,US_CPI_YOY:15,US_UNRATE:10,US_PPI_FD_YOY:5,US_ISM_PMI:15,US_VIX:5,
+ CN_CPI_YOY:10,CN_PPI_YOY:15,CN_PMI_MFG:15,CN_GDP_YOY:5,CN_M2_YOY:10,CN_EXPORT_YOY:10,CN_CGB_10Y:15,CN_USDCNY_CP:5,
+ CN_LPR_1Y:10,CN_MLF_1Y:10,CN_AFRE_STOCK_YOY:20,
+});
+export type Support=Partial<Record<Regime,number>>;
+/** v = latest value; d3 = change vs the period 3 months earlier (previous quarter for quarterly;
+ *  for fx a percent change, else a difference in the series unit); d1 = change vs the previous
+ *  period. null = comparison period missing ⇒ any rule needing it does not match. */
+export interface Rule{id:string;when:(v:number,d3:number|null,d1:number|null)=>boolean;support:Support;label:{zh:string;en:string}}
+const rule=(id:string,when:Rule['when'],support:Support,zh:string,en:string):Rule=>({id,when,support,label:{zh,en}});
+const nn=(x:number|null):x is number=>x!==null;
+export const RULES:Readonly<Record<SeriesType,readonly Rule[]>>={
+ policy_rate:[
+  rule('policy.lt2_5',v=>v<2.5,{recovery:0.2,recession:0.7},'政策利率 < 2.5%','policy rate < 2.5%'),
+  rule('policy.2_5to4_5',v=>v>=2.5&&v<4.5,{recovery:0.3,overheat:0.2,stagflation:0.1,recession:0.1},'2.5% ≤ 政策利率 < 4.5%','2.5% ≤ policy rate < 4.5%'),
+  rule('policy.ge4_5.up',(v,_d3,d1)=>v>=4.5&&nn(d1)&&d1>=0,{overheat:0.6,stagflation:0.3},'政策利率 ≥ 4.5% 且未下调','policy rate ≥ 4.5% and not cut'),
+  rule('policy.ge4_5.down',(v,_d3,d1)=>v>=4.5&&nn(d1)&&d1<0,{overheat:0.2,stagflation:0.2,recession:0.4},'政策利率 ≥ 4.5% 且下调','policy rate ≥ 4.5% and cut'),
+ ],
+ bond_yield:[
+  rule('bond.d3m.ge25bp',(_v,d3)=>nn(d3)&&d3>=0.25,{overheat:0.5,stagflation:0.3},'收益率 3 个月上行 ≥ 25bp','yield up ≥ 25bp over 3 months'),
+  rule('bond.d3m.le-25bp',(_v,d3)=>nn(d3)&&d3<=-0.25,{recovery:0.2,recession:0.5},'收益率 3 个月下行 ≥ 25bp','yield down ≥ 25bp over 3 months'),
+  rule('bond.d3m.other',(_v,d3)=>nn(d3)&&d3>-0.25&&d3<0.25,{recovery:0.2,overheat:0.2,stagflation:0.2,recession:0.2},'收益率 3 个月变动在 ±25bp 内','yield 3-month change within ±25bp'),
+ ],
+ fx:[
+  rule('fx.chg3m.ge2',(_v,d3)=>nn(d3)&&d3>=2,{overheat:0.4,stagflation:0.3},'汇率 3 个月变动 ≥ +2%','FX 3-month change ≥ +2%'),
+  rule('fx.chg3m.le-2',(_v,d3)=>nn(d3)&&d3<=-2,{recovery:0.5,recession:0.2},'汇率 3 个月变动 ≤ −2%','FX 3-month change ≤ −2%'),
+ ],
+ inflation_yoy:[
+  rule('infl.lt1',v=>v<1,{recovery:0.1,recession:0.7},'通胀同比 < 1%','inflation < 1% y/y'),
+  rule('infl.1to2',v=>v>=1&&v<2,{recovery:0.5,recession:0.3},'1% ≤ 通胀同比 < 2%','1% ≤ inflation < 2% y/y'),
+  rule('infl.2to3',v=>v>=2&&v<=3,{recovery:0.4,overheat:0.3,stagflation:0.1,recession:0.1},'2% ≤ 通胀同比 ≤ 3%','2% ≤ inflation ≤ 3% y/y'),
+  rule('infl.3to4',v=>v>3&&v<=4,{overheat:0.6,stagflation:0.3},'3% < 通胀同比 ≤ 4%','3% < inflation ≤ 4% y/y'),
+  rule('infl.gt4',v=>v>4,{overheat:0.4,stagflation:0.6},'通胀同比 > 4%','inflation > 4% y/y'),
+ ],
+ pmi:[
+  rule('pmi.ge55',v=>v>=55,{recovery:0.3,overheat:0.6},'PMI ≥ 55','PMI ≥ 55'),
+  rule('pmi.50to55',v=>v>=50&&v<55,{recovery:0.5,overheat:0.3},'50 ≤ PMI < 55','50 ≤ PMI < 55'),
+  rule('pmi.47to50',v=>v>=47&&v<50,{recovery:0.1,stagflation:0.4,recession:0.4},'47 ≤ PMI < 50','47 ≤ PMI < 50'),
+  rule('pmi.lt47',v=>v<47,{stagflation:0.3,recession:0.7},'PMI < 47','PMI < 47'),
+ ],
+ labor_rate:[
+  rule('labor.d3m.ge0_3',(_v,d3)=>nn(d3)&&d3>=0.3,{stagflation:0.4,recession:0.5},'失业率 3 个月上升 ≥ 0.3pp','unemployment up ≥ 0.3pp over 3 months'),
+  rule('labor.d3m.le-0_1',(_v,d3)=>nn(d3)&&d3<=-0.1,{recovery:0.5,overheat:0.4},'失业率 3 个月下降 ≥ 0.1pp','unemployment down ≥ 0.1pp over 3 months'),
+ ],
+ growth_yoy:[
+  rule('growth.ge5.up',(v,_d3,d1)=>v>=5&&nn(d1)&&d1>=0,{recovery:0.5,overheat:0.3},'增长同比 ≥ 5% 且不低于上期','growth ≥ 5% y/y and not below the previous period'),
+  rule('growth.lt4_5',v=>v<4.5,{stagflation:0.3,recession:0.6},'增长同比 < 4.5%','growth < 4.5% y/y'),
+ ],
+ liquidity_yoy:[
+  rule('liq.ge8.up',(v,_d3,d1)=>v>=8&&nn(d1)&&d1>=0,{recovery:0.5,overheat:0.3},'流动性同比 ≥ 8% 且不低于上期','liquidity ≥ 8% y/y and not below the previous period'),
+  rule('liq.ge8.down',(v,_d3,d1)=>v>=8&&nn(d1)&&d1<0,{recovery:0.2,overheat:0.4,stagflation:0.2},'流动性同比 ≥ 8% 且低于上期','liquidity ≥ 8% y/y and below the previous period'),
+  rule('liq.lt8',v=>v<8,{stagflation:0.3,recession:0.5},'流动性同比 < 8%','liquidity < 8% y/y'),
+ ],
+ risk_index:[
+  rule('risk.lt15',v=>v<15,{recovery:0.4,overheat:0.4},'风险指数 < 15','risk index < 15'),
+  rule('risk.15to25',v=>v>=15&&v<25,{recovery:0.3,overheat:0.3,stagflation:0.2,recession:0.2},'15 ≤ 风险指数 < 25','15 ≤ risk index < 25'),
+  rule('risk.ge25',v=>v>=25,{stagflation:0.5,recession:0.5},'风险指数 ≥ 25','risk index ≥ 25'),
+ ],
+ asset_price:[],
+};
+/** First rule of the series' own type whose condition holds (rules within a type are disjoint). */
+export function matchRule(type:SeriesType,v:number,d3:number|null,d1:number|null):Rule|null{
+ return RULES[type].find(r=>r.when(v,d3,d1))??null;
+}
+export interface ObsRef{observation_id:string;period_end:string;value_text:string}
+export interface RegimeSeriesInput{latest:ObsRef;prev?:ObsRef;prev3m?:ObsRef}
+export interface RegimeInput{region:Region;series:Record<string,RegimeSeriesInput>}
+export interface RegimeOutput{regime:RegimeResult|null;contributions:RegimeContribution[];uncoveredWeight:number}
+
+const r6=(x:number)=>Math.round(x*1e6)/1e6;
+const zero=():Record<Regime,number>=>({recovery:0,overheat:0,stagflation:0,recession:0});
+const GROWTH_TYPES:readonly SeriesType[]=['pmi','labor_rate','growth_yoy'];
+/** WEIGHTS_V1 restricted to one region, in WEIGHTS_V1 order. */
+export function regionWeights(region:Region):Record<string,number>{
+ return Object.fromEntries(Object.entries(WEIGHTS_V1).filter(([id])=>catalogById(id)?.region===region));
+}
+function comparisons(type:SeriesType,s:RegimeSeriesInput):{v:number;d3:number|null;d1:number|null}|null{
+ const v=Number(s.latest.value_text);
+ if(!Number.isFinite(v))return null;
+ const d1=s.prev?Number(subtract(s.latest.value_text,s.prev.value_text)):null;
+ let d3:number|null=null;
+ if(s.prev3m){
+  if(type==='fx')d3=Number(s.prev3m.value_text)===0?null:Number(yoyPct(s.latest.value_text,s.prev3m.value_text));
+  else d3=Number(subtract(s.latest.value_text,s.prev3m.value_text));
+ }
+ return {v,d3:d3!==null&&Number.isFinite(d3)?d3:null,d1:d1!==null&&Number.isFinite(d1)?d1:null};
+}
+/** argmax with the fixed tie order of REGIMES; secondary = best other state with norm > 0. */
+export function pickStates(norm:Record<Regime,number>):{primary:Regime;secondary:Regime|null}{
+ let primary:Regime=REGIMES[0];
+ for(const s of REGIMES)if(norm[s]>norm[primary])primary=s;
+ let secondary:Regime|null=null;
+ for(const s of REGIMES){
+  if(s===primary||norm[s]<=0)continue;
+  if(secondary===null||norm[s]>norm[secondary])secondary=s;
+ }
+ return {primary,secondary};
+}
+/** The one classification function: snapshot publishing and MacroReadApi.classifyAsOf both call it. */
+export function classifyRegime(input:RegimeInput):RegimeOutput{
+ const weights=regionWeights(input.region);
+ const denominator=Object.values(weights).reduce((a,b)=>a+b,0);
+ const scores=zero();const contributions:RegimeContribution[]=[];
+ let matched=0;const growth={num:0,w:0},inflation={num:0,w:0};
+ for(const [id,weight] of Object.entries(weights)){
+  const s=input.series[id];const def=catalogById(id);
+  if(!s||!def||!def.type||weight<=0)continue;
+  const c=comparisons(def.type,s);if(!c)continue;
+  const hit=matchRule(def.type,c.v,c.d3,c.d1);if(!hit)continue;
+  matched+=weight;
+  const contribution=zero();
+  for(const r of REGIMES){const x=weight*(hit.support[r]??0);scores[r]+=x;contribution[r]=r6(x);}
+  const sp=(r:Regime)=>hit.support[r]??0;
+  if(GROWTH_TYPES.includes(def.type)){growth.num+=weight*(sp('recovery')+sp('overheat')-sp('stagflation')-sp('recession'));growth.w+=weight;}
+  if(def.type==='inflation_yoy'){inflation.num+=weight*(sp('overheat')+sp('stagflation')-sp('recovery')-sp('recession'));inflation.w+=weight;}
+  contributions.push({series_id:id,observation_id:s.latest.observation_id,rule_id:hit.id,weight,support:{...hit.support},contribution});
+ }
+ const uncoveredWeight=r6(denominator-matched);
+ const total=REGIMES.reduce((a,r)=>a+scores[r],0);
+ const coverage=denominator>0?matched/denominator:0;
+ if(coverage<0.6||total<=0)return {regime:null,contributions,uncoveredWeight};
+ const norm=zero();for(const r of REGIMES)norm[r]=scores[r]/total;
+ const {primary,secondary}=pickStates(norm);
+ const regime:RegimeResult={
+  primary_state:primary,secondary_state:secondary,
+  scores:{recovery:r6(scores.recovery),overheat:r6(scores.overheat),stagflation:r6(scores.stagflation),recession:r6(scores.recession)},
+  norm:{recovery:r6(norm.recovery),overheat:r6(norm.overheat),stagflation:r6(norm.stagflation),recession:r6(norm.recession)},
+  coverage:r6(coverage),
+  margin_pp:r6(100*(norm[primary]-(secondary===null?0:norm[secondary]))),
+  growth_axis:growth.w>0?r6(growth.num/growth.w):null,
+  inflation_axis:inflation.w>0?r6(inflation.num/inflation.w):null,
+ };
+ return {regime,contributions,uncoveredWeight};
+}
+```
+- [ ] **Step 4: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/regime.test.ts && npm run typecheck && npm run lint`
+Expected: PASS. If `WEIGHTS_V1 equals the catalog weight` fails, `catalog.ts` (Task 2) and the spec §4.2 table disagree. Stop and report NEEDS_CONTEXT. Do not edit `catalog.ts` and do not change a weight to make the test pass.
+- [ ] **Step 5: Commit**
+```bash
+git add src/lib/macro/regime.ts src/lib/macro/regime.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): typed regime rules v1.0 and classifyRegime
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 11: Freshness, snapshot building and `publishRegion` (wired into cron and ingest finish)
+
+**Files:**
+- Create: `src/lib/macro/freshness.ts`
+- Create: `src/lib/macro/snapshots.ts`
+- Create: `src/lib/macro/testing/seed.ts` (test-only seeding helper that goes through the public `MacroDb` contract; reused by Tasks 12–13)
+- Modify: `src/app/api/cron/macro-sync/route.ts` (Part B Task 7). Replace the marker `// TASK 11: publishRegion(region)` with the US publish call.
+- Modify: `src/app/api/macro/ingest/route.ts` (Part B Task 9). Replace the marker `// TASK 11: publishRegion(region)` in the `finish` branch with the CN publish call.
+- Modify: `src/app/api/cron/macro-sync/route.test.ts` and `src/app/api/macro/ingest/route.test.ts` (Part B). Add one case to each.
+- Test: `src/lib/macro/freshness.test.ts`, `src/lib/macro/snapshots.test.ts`
+
+Spec: §4.4 steps 4–5, §4.5, §5.3 (manifest, publish regardless of coverage), §11, and §0.2 M7/M11/M16/N3. Rules in this task:
+- **Manifest.** For every weighted active catalog item of the region (= `regimeInputsOf(region)`), the snapshot holds the latest period, the previous existing period and the period exactly 3 months earlier (the previous quarter for quarterly series). This one set covers both the classification and the overview's "change vs previous period".
+- **Retry.** `stale_publisher` is retried once, starting over from a fresh read of the publish state. A second `stale_publisher` gives up with a receipt and records no failure row: another publisher won, and the active snapshot is current. Any other error records a failed snapshot and leaves the active one untouched.
+- **Judgment hook.** Runs only when `MACRO_JUDGMENTS_ENABLED === '1'`. Its failure never fails the publish.
+
+- [ ] **Step 1: Write the failing tests**
+```ts
+// src/lib/macro/freshness.test.ts
+import {describe,expect,it} from 'vitest';
+import {recordAttempt} from '../dq/freshness';
+import {memoryTableClient} from '../db/memory-table-client';
+import {collectionStatus,datasetOf,monthEnd,nextPeriodEnd,releaseTimeliness,shiftMonthEnd} from './freshness';
+
+describe('period arithmetic',()=>{
+ it('month ends, leap years and negative shifts',()=>{
+  expect(monthEnd(2026,2)).toBe('2026-02-28');
+  expect(monthEnd(2024,2)).toBe('2024-02-29');
+  expect(shiftMonthEnd('2026-01-31',1)).toBe('2026-02-28');
+  expect(shiftMonthEnd('2024-01-31',1)).toBe('2024-02-29');
+  expect(shiftMonthEnd('2026-03-31',-3)).toBe('2025-12-31');
+  expect(shiftMonthEnd('2026-10-31',-24)).toBe('2024-10-31');
+  expect(nextPeriodEnd('day','2026-12-31')).toBe('2027-01-01');
+  expect(nextPeriodEnd('month','2026-11-30')).toBe('2026-12-31');
+  expect(nextPeriodEnd('quarter','2026-09-30')).toBe('2026-12-31');
+  expect(()=>shiftMonthEnd('2026-13-01',1)).toThrow(/invalid_date/);
+ });
+});
+
+describe('releaseTimeliness (spec §0.2 M11: next period end + lag + 3 days)',()=>{
+ const monthly={nativeFrequency:'monthly' as const,period:'month' as const,releaseLagDays:15};
+ it('monthly: deadline = 2026-10-31 + 15 + 3 = 2026-11-18',()=>{
+  expect(releaseTimeliness(monthly,'2026-09-30','2026-11-18')).toBe('current');
+  expect(releaseTimeliness(monthly,'2026-09-30','2026-11-19')).toBe('late');
+ });
+ it('quarterly: deadline = 2026-09-30 + 20 + 3 = 2026-10-23',()=>{
+  const q={nativeFrequency:'quarterly' as const,period:'quarter' as const,releaseLagDays:20};
+  expect(releaseTimeliness(q,'2026-06-30','2026-10-23')).toBe('current');
+  expect(releaseTimeliness(q,'2026-06-30','2026-10-24')).toBe('late');
+ });
+ it('daily-derived month-end series use the month period',()=>{
+  const d={nativeFrequency:'daily' as const,period:'month' as const,releaseLagDays:1};
+  expect(releaseTimeliness(d,'2026-09-30','2026-11-04')).toBe('current');   // 2026-10-31 + 4
+  expect(releaseTimeliness(d,'2026-09-30','2026-11-05')).toBe('late');
+ });
+ it('no observation → missing; event or no lag → n/a; re-fetching the same old value never turns it current',()=>{
+  expect(releaseTimeliness(monthly,null,'2026-11-06')).toBe('missing');
+  expect(releaseTimeliness({nativeFrequency:'event',period:'day',releaseLagDays:1},'2026-09-17','2027-01-01')).toBe('n/a');
+  expect(releaseTimeliness({nativeFrequency:'monthly',period:'month'},'2026-01-31','2027-01-01')).toBe('n/a');
+  expect(releaseTimeliness(monthly,'2026-08-31','2026-11-06')).toBe('late');   // period_end decides, not fetch time
+ });
+});
+
+describe('collectionStatus (shared dq_freshness, recomputed at read time)',()=>{
+ it('reports both macro datasets, missing when never recorded, error after 2 consecutive failures',async()=>{
+  const tables=memoryTableClient({dq_freshness:['dataset']});
+  const t0=new Date('2026-11-06T05:30:00Z');
+  await recordAttempt(tables,'macro.fred',{ok:true,cadence:'daily',now:t0});
+  let s=await collectionStatus(tables,new Date('2026-11-06T06:00:00Z'));
+  expect(s).toEqual([
+   {dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-06T05:30:00.000Z',lastAttemptAt:'2026-11-06T05:30:00.000Z'},
+   {dataset:'macro.akshare',status:'missing',lastOkAt:null,lastAttemptAt:null},
+  ]);
+  await recordAttempt(tables,'macro.akshare',{ok:false,cadence:'daily',now:t0});
+  await recordAttempt(tables,'macro.akshare',{ok:false,cadence:'daily',now:new Date('2026-11-07T05:00:00Z')});
+  s=await collectionStatus(tables,new Date('2026-11-07T06:00:00Z'));
+  expect(s.find(x=>x.dataset==='macro.akshare')!.status).toBe('error');
+  s=await collectionStatus(tables,new Date('2026-11-10T06:00:00Z'));
+  expect(s.find(x=>x.dataset==='macro.fred')!.status).toBe('stale');   // reader recomputes; writer never ran again
+ });
+ it('maps regions to their single writer dataset',()=>{
+  expect(datasetOf('US')).toBe('macro.fred');
+  expect(datasetOf('CN')).toBe('macro.akshare');
+ });
+});
+```
+```ts
+// src/lib/macro/snapshots.test.ts
+import {describe,expect,it,vi} from 'vitest';
+import {MacroDbError} from './db';
+import type {MacroDb} from './db';
+import {memoryMacroDb} from './memory-db';
+import {buildRegimeInput,catalogCounts,publishRegion} from './snapshots';
+import {US_FIXTURE,seedCatalog,seedPoints} from './testing/seed';
+
+const TODAY='2026-11-06';
+/** Overrides selected methods while delegating the rest to the real memory DB (works for classes and literals). */
+function wrap(db:MacroDb,over:Partial<MacroDb>):MacroDb{
+ return new Proxy(db,{get(target,key,recv){
+  if(typeof key==='string'&&key in over)return (over as Record<string,unknown>)[key];
+  const v=Reflect.get(target,key,recv);
+  return typeof v==='function'?v.bind(target):v;
+ }});
+}
+async function seeded(){const db=memoryMacroDb();await seedCatalog(db);const seed=await seedPoints(db,US_FIXTURE);return {db,seed};}
+
+describe('buildRegimeInput',()=>{
+ it('selects latest, previous existing period and the period exactly 3 months earlier',async()=>{
+  const {db,seed}=await seeded();
+  const {input,observations}=await buildRegimeInput(db,'US');
+  expect(input.series.US_DGS10).toEqual({
+   latest:{observation_id:seed.ids.get('US_DGS10|2026-10-31'),period_end:'2026-10-31',value_text:'4.25'},
+   prev:{observation_id:seed.ids.get('US_DGS10|2026-09-30'),period_end:'2026-09-30',value_text:'4.15'},
+   prev3m:{observation_id:seed.ids.get('US_DGS10|2026-07-31'),period_end:'2026-07-31',value_text:'3.95'},
+  });
+  expect(input.series.US_PPI_FD_YOY.prev3m).toBeUndefined();   // 2026-06-30 not seeded → absent, never filled
+  const ids=observations.map(o=>o.observation_id);
+  expect(ids).toContain(seed.ids.get('US_DGS10|2026-07-31'));
+  expect(ids).not.toContain(seed.ids.get('US_DGS10|2026-08-31'));   // neither prev nor prev3m
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids).toHaveLength(17);   // 5 series × 3 + PPI × 2
+ });
+ it('periodEndLte and asOf bound the selection',async()=>{
+  const {db}=await seeded();
+  const {input}=await buildRegimeInput(db,'US',{periodEndLte:'2026-08-31'});
+  expect(input.series.US_DGS10.latest.period_end).toBe('2026-08-31');
+  const none=await buildRegimeInput(db,'US',{asOf:'2026-10-01T00:00:00Z'});   // seed fetched 2026-11-01
+  expect(none.observations).toEqual([]);
+ });
+});
+
+describe('publishRegion',()=>{
+ it('publishes the hand-computed US regime (Task 10 arithmetic) with the full manifest',async()=>{
+  const {db,seed}=await seeded();
+  const r=await publishRegion({db,env:{}},'US',TODAY);
+  expect(r).toMatchObject({status:'published',region:'US',revision:1,attempts:1,regime:'classified',hook:'skipped',observation_count:17});
+  if(r.status!=='published')throw new Error('unreachable');
+  const snap=await db.activeSnapshot('US');
+  expect(snap).toMatchObject({snapshot_id:r.snapshot_id,as_of:TODAY,methodology_version:'v1.0',status:'active',catalog_counts:{verified:6,missing:1,restricted:1}});
+  expect(snap!.observation_ids).toContain(seed.ids.get('US_UNRATE|2026-06-30'));
+  const regime=await db.regimeOf(r.snapshot_id);
+  expect(regime).toMatchObject({rules_version:'macro-regime-rules/1.0',uncovered_weight:20,regime:{primary_state:'overheat',secondary_state:'stagflation',margin_pp:11.023622}});
+ });
+ it('publishes regardless of coverage (regime null); counts missing = status missing + active without data',async()=>{
+  const db=memoryMacroDb();await seedCatalog(db);
+  await seedPoints(db,US_FIXTURE.filter(p=>p.series_id==='US_CPI_YOY'));
+  const r=await publishRegion({db,env:{}},'US',TODAY);
+  expect(r).toMatchObject({status:'published',regime:'null'});
+  if(r.status!=='published')throw new Error('unreachable');
+  expect((await db.regimeOf(r.snapshot_id))!.regime).toBeNull();
+  expect(await catalogCounts(db,'US')).toEqual({verified:1,missing:6,restricted:1});   // ISM + 5 active without rows; VIX restricted
+ });
+ it('an empty region still publishes an empty, valid snapshot',async()=>{
+  const db=memoryMacroDb();await seedCatalog(db);
+  const r=await publishRegion({db,env:{}},'CN',TODAY);
+  expect(r).toMatchObject({status:'published',observation_count:0,regime:'null'});
+ });
+ it('stale_publisher (real: input changed between read and publish) → retried once from scratch',async()=>{
+  const {db}=await seeded();
+  let raced=false;
+  const racy=wrap(db,{publishState:async(region)=>{
+   const s=await db.publishState(region);
+   if(!raced){raced=true;await seedPoints(db,[{series_id:'US_CPI_YOY',period_end:'2026-10-31',value_text:'3.1'}],{fetchedAt:'2026-11-02T05:30:00.000Z'});}
+   return s;
+  }});
+  const r=await publishRegion({db:racy,env:{}},'US',TODAY);
+  expect(r).toMatchObject({status:'published',attempts:2});
+  const snap=await db.activeSnapshot('US');
+  const obs=await db.observationsByIds(snap!.observation_ids);
+  expect(obs.some(o=>o.series_id==='US_CPI_YOY'&&o.period_end==='2026-10-31')).toBe(true);   // second attempt saw the new input
+ });
+ it('stale twice → gives up with a receipt, records no failure, active untouched',async()=>{
+  const {db}=await seeded();
+  const recordFailed=vi.fn(db.recordFailedSnapshot.bind(db));
+  const stale=wrap(db,{publishSnapshot:async()=>{throw new MacroDbError('stale_publisher');},recordFailedSnapshot:recordFailed});
+  const r=await publishRegion({db:stale,env:{}},'US',TODAY);
+  expect(r).toEqual({status:'stale',region:'US',attempts:2});
+  expect(recordFailed).not.toHaveBeenCalled();
+  expect(await db.activeSnapshot('US')).toBeNull();
+ });
+ it('other errors → failed snapshot recorded, previous active snapshot keeps serving',async()=>{
+  const {db}=await seeded();
+  const first=await publishRegion({db,env:{}},'US',TODAY);
+  if(first.status!=='published')throw new Error('setup');
+  const broken=wrap(db,{publishSnapshot:async()=>{throw new MacroDbError('invalid_manifest');}});
+  const r=await publishRegion({db:broken,env:{}},'US','2026-11-07');
+  expect(r).toMatchObject({status:'failed',region:'US',reason:'invalid_manifest',attempts:1});
+  if(r.status!=='failed')throw new Error('unreachable');
+  expect(r.failed_snapshot_id).toEqual(expect.any(String));
+  expect((await db.snapshot(r.failed_snapshot_id!))!.status).toBe('failed');
+  expect((await db.activeSnapshot('US'))!.snapshot_id).toBe(first.snapshot_id);
+ });
+ it('judgment hook: flag off → not called; flag on → called with the published snapshot; hook failure never fails the publish',async()=>{
+  const {db}=await seeded();
+  const hook=vi.fn(async()=>{});
+  const off=await publishRegion({db,onPublished:hook,env:{}},'US',TODAY);
+  expect(hook).not.toHaveBeenCalled();
+  expect(off).toMatchObject({status:'published',hook:'skipped'});
+  const on=await publishRegion({db,onPublished:hook,env:{MACRO_JUDGMENTS_ENABLED:'1'}},'US',TODAY);
+  if(on.status!=='published')throw new Error('unreachable');
+  expect(hook).toHaveBeenCalledTimes(1);
+  expect(hook).toHaveBeenCalledWith(expect.objectContaining({snapshot_id:on.snapshot_id,status:'active'}));
+  expect(on.hook).toBe('ok');
+  const bad=await publishRegion({db,onPublished:async()=>{throw new Error('f4 down');},env:{MACRO_JUDGMENTS_ENABLED:'1'}},'US',TODAY);
+  expect(bad).toMatchObject({status:'published',hook:'failed'});
+  expect((await db.activeSnapshot('US'))!.snapshot_id).toBe((bad as {snapshot_id:string}).snapshot_id);
+ });
+});
+```
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/freshness.test.ts src/lib/macro/snapshots.test.ts`
+Expected: FAIL (`Cannot find module './freshness'`, `Cannot find module './snapshots'`)
+- [ ] **Step 3: Implement**
+
+`memoryMacroDb()` (Task 3) takes no arguments and does not require an `ingest_batches` row for `putRetrieval` / `writeObservations`, so the seed needs no batch registration. `macro_catalog_versions.rules_version` records the DQ rules version (`MACRO_RULES_VERSION`, Task 5), as the cron and ingest routes do; the regime rules version is stored per snapshot in `macro_regime_results.rules_version`.
+```ts
+// src/lib/macro/testing/seed.ts
+// Test-only seeding over the public MacroDb contract (no backdoor into memory state). Shared by the
+// snapshots, read-api, views, replay and route tests. Never imported by production code.
+import {CATALOG_VERSION,MACRO_CATALOG} from '../catalog';
+import type {MacroDb} from '../db';
+import {MACRO_RULES_VERSION} from '../quality';
+
+export const SEED_BATCH='00000000-0000-4000-8000-0000000000b1';
+export const SEED_FETCHED_AT='2026-11-01T05:30:00.000Z';
+export interface SeedPoint{series_id:string;period_end:string;value_text:string;available_at?:string;revisable?:boolean}
+export interface Seeded{ids:Map<string,string>;retrievalId:string;sha256:string}
+let seq=0;
+export async function seedCatalog(db:MacroDb):Promise<void>{await db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);}
+export async function seedRetrieval(db:MacroDb,opts:{sha256?:string;fetchedAt?:string}={}):Promise<{retrievalId:string;sha256:string}>{
+ const sha256=opts.sha256??(++seq).toString(16).padStart(64,'0');
+ const retrievalId=await db.putRetrieval(
+  {sha256,object_path:`fred_csv/${sha256}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},
+  {fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=TEST',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:opts.fetchedAt??SEED_FETCHED_AT,batch_id:SEED_BATCH,tool_versions:{seed:'1'}});
+ return {retrievalId,sha256};
+}
+/** Writes native rows under one fresh retrieval; returns `${series_id}|${period_end}` → current observation id. Throws on any conflict. */
+export async function seedPoints(db:MacroDb,points:SeedPoint[],opts:{fetchedAt?:string}={}):Promise<Seeded>{
+ const fetchedAt=opts.fetchedAt??SEED_FETCHED_AT;
+ const {retrievalId,sha256}=await seedRetrieval(db,{fetchedAt});
+ const res=await db.writeObservations(SEED_BATCH,'seed',points.map((p,i)=>({series_id:p.series_id,period_end:p.period_end,value_text:p.value_text,
+  available_at:p.available_at??fetchedAt,revisable:p.revisable??true,retrieval_id:retrievalId,locator:{kind:'csv_row' as const,line:i+2,column:1}})));
+ if(res.conflicts.length)throw new Error(`seed_conflict:${JSON.stringify(res.conflicts)}`);
+ const ids=new Map<string,string>();
+ for(const id of new Set(points.map(p=>p.series_id)))for(const row of await db.seriesHistory(id,{maxRows:1000}))ids.set(`${row.series_id}|${row.period_end}`,row.observation_id);
+ return {ids,retrievalId,sha256};
+}
+/** The Task 10 US fixture as stored rows (values chosen so the published regime equals the hand-computed one). */
+export const US_FIXTURE:SeedPoint[]=[
+ ...[['2026-07-31','4.33'],['2026-08-31','4.33'],['2026-09-30','4.33'],['2026-10-31','4.33']].map(([period_end,value_text])=>({series_id:'US_DFF',period_end,value_text})),
+ ...[['2026-07-31','3.95'],['2026-08-31','4.05'],['2026-09-30','4.15'],['2026-10-31','4.25']].map(([period_end,value_text])=>({series_id:'US_DGS10',period_end,value_text})),
+ ...[['2026-07-31','122'],['2026-08-31','123'],['2026-09-30','125'],['2026-10-31','126.5']].map(([period_end,value_text])=>({series_id:'US_DTWEXBGS',period_end,value_text})),
+ ...[['2026-06-30','2.7'],['2026-07-31','2.7'],['2026-08-31','2.6'],['2026-09-30','2.9']].map(([period_end,value_text])=>({series_id:'US_CPI_YOY',period_end,value_text})),
+ ...[['2026-06-30','3.8'],['2026-07-31','3.9'],['2026-08-31','4'],['2026-09-30','4.1']].map(([period_end,value_text])=>({series_id:'US_UNRATE',period_end,value_text})),
+ ...[['2026-08-31','3.1'],['2026-09-30','3.4']].map(([period_end,value_text])=>({series_id:'US_PPI_FD_YOY',period_end,value_text})),
+];
+```
+```ts
+// src/lib/macro/freshness.ts
+// Two freshness notions kept apart (spec §4.5, §0.2 M11): release timeliness per series (pure;
+// next period end + releaseLagDays + 3 days) and collection status per dataset (shared
+// dq_freshness via freshnessOf, recomputed at read time). Also the period arithmetic other macro
+// modules share (month ends, previous-quarter lookups).
+import {freshnessOf} from '../dq/freshness';
+import type {FreshnessStatus} from '../dq/freshness';
+import type {TableClient} from '../db/table-client';
+import type {MacroSeriesDef,PeriodKind,Region,Timeliness} from './types';
+
+const DAY=86_400_000;
+const GRACE_DAYS=3;
+const ISO_DATE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+function parseDate(d:string):number{
+ if(!ISO_DATE.test(d))throw new Error(`invalid_date:${d}`);
+ const t=Date.parse(`${d}T00:00:00Z`);
+ if(!Number.isFinite(t)||new Date(t).toISOString().slice(0,10)!==d)throw new Error(`invalid_date:${d}`);
+ return t;
+}
+const iso=(t:number)=>new Date(t).toISOString().slice(0,10);
+/** Last day of month `month1` (1–12). */
+export const monthEnd=(year:number,month1:number):string=>iso(Date.UTC(year,month1,0));
+/** Month end `months` calendar months away from the month containing `periodEnd` (negative = earlier). */
+export function shiftMonthEnd(periodEnd:string,months:number):string{
+ parseDate(periodEnd);
+ const idx=Number(periodEnd.slice(0,4))*12+Number(periodEnd.slice(5,7))-1+months;
+ return monthEnd(Math.floor(idx/12),(idx%12)+1);
+}
+export function nextPeriodEnd(period:PeriodKind,periodEnd:string):string{
+ if(period==='day')return iso(parseDate(periodEnd)+DAY);
+ return shiftMonthEnd(periodEnd,period==='month'?1:3);
+}
+/** current | late | missing | n/a. Repeated fetches of an old value never make it current: only period_end counts. */
+export function releaseTimeliness(def:Pick<MacroSeriesDef,'nativeFrequency'|'period'|'releaseLagDays'>,latestPeriodEnd:string|null,today:string):Timeliness{
+ if(def.nativeFrequency==='event'||def.releaseLagDays===undefined)return 'n/a';
+ if(latestPeriodEnd===null)return 'missing';
+ const deadline=parseDate(nextPeriodEnd(def.period,latestPeriodEnd))+(def.releaseLagDays+GRACE_DAYS)*DAY;
+ return parseDate(today)>deadline?'late':'current';
+}
+export const MACRO_DATASETS=['macro.fred','macro.akshare'] as const;
+export type MacroDataset=typeof MACRO_DATASETS[number];
+export const datasetOf=(region:Region):MacroDataset=>region==='US'?'macro.fred':'macro.akshare';
+export interface CollectionStatus{dataset:MacroDataset;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}
+const isoOrNull=(v:unknown):string|null=>{if(v===null||v===undefined)return null;const t=Date.parse(String(v));return Number.isFinite(t)?new Date(t).toISOString():null;};
+/** Both macro datasets, status recomputed at `now`; a dataset never recorded reads as missing. */
+export async function collectionStatus(tables:TableClient,now=new Date()):Promise<CollectionStatus[]>{
+ const rows=await freshnessOf(tables,now);
+ return MACRO_DATASETS.map(dataset=>{
+  const r=rows.find(x=>x.dataset===dataset);
+  return r?{dataset,status:r.status,lastOkAt:isoOrNull(r.last_ok_at),lastAttemptAt:isoOrNull(r.last_attempt_at)}:{dataset,status:'missing' as const,lastOkAt:null,lastAttemptAt:null};
+ });
+}
+```
+```ts
+// src/lib/macro/snapshots.ts
+// Fact-snapshot publishing (spec §4.4 steps 4–5, §5.3, §11; §0.2 M7/M16/N3). A snapshot is the
+// frozen manifest of each weighted active item's latest, previous and 3-months-earlier ok
+// observations; it is published regardless of coverage (regime=null only means "no
+// classification"). Optimistic: (revision, input_revision) is read first; stale_publisher → one
+// retry from scratch, then give up. Other failures record a failed snapshot; active is untouched.
+import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
+import {MacroDbError} from './db';
+import type {MacroDb} from './db';
+import {shiftMonthEnd} from './freshness';
+import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime} from './regime';
+import type {ObsRef,RegimeInput,RegimeSeriesInput} from './regime';
+import type {CatalogCounts,MacroSeriesDef,ObservationRow,Region,SnapshotRecord} from './types';
+
+/** prev = previous existing period within this window; an older gap leaves prev absent. */
+export const HISTORY_MONTHS=24;
+const ref=(r:ObservationRow):ObsRef=>({observation_id:r.observation_id,period_end:r.period_end,value_text:r.value_text});
+export interface BuiltRegimeInput{input:RegimeInput;observations:ObservationRow[]}
+/** Weighted catalog items of a region (active, missing and restricted), in WEIGHTS_V1 order: the overview rows and catalog counts. */
+export function catalogItemsOf(region:Region):MacroSeriesDef[]{
+ return Object.keys(WEIGHTS_V1).map(id=>catalogById(id)).filter((d):d is MacroSeriesDef=>d!==undefined&&d.region===region);
+}
+/** Latest (≤ periodEndLte, available_at ≤ asOf), previous existing period, and the period exactly 3 months
+ *  earlier (= previous quarter for quarterly). Missing comparison periods stay absent. */
+export async function buildRegimeInput(db:MacroDb,region:Region,opts:{asOf?:string;periodEndLte?:string}={}):Promise<BuiltRegimeInput>{
+ const defs=regimeInputsOf(region).filter(d=>d.region===region);
+ const latest=await db.latestObservations(defs.map(d=>d.id),{asOf:opts.asOf,periodEndLte:opts.periodEndLte});
+ const series:Record<string,RegimeSeriesInput>={};
+ const used=new Map<string,ObservationRow>();
+ for(const row of latest){
+  if(!defs.some(d=>d.id===row.series_id))continue;
+  const history=await db.seriesHistory(row.series_id,{from:shiftMonthEnd(row.period_end,-HISTORY_MONTHS),to:row.period_end,asOf:opts.asOf,maxRows:4*HISTORY_MONTHS});
+  const earlier=history.filter(h=>h.period_end<row.period_end);   // ascending by contract
+  const prev=earlier.at(-1);
+  const target3m=shiftMonthEnd(row.period_end,-3);
+  const prev3m=earlier.find(h=>h.period_end===target3m);
+  const s:RegimeSeriesInput={latest:ref(row)};used.set(row.observation_id,row);
+  if(prev){s.prev=ref(prev);used.set(prev.observation_id,prev);}
+  if(prev3m){s.prev3m=ref(prev3m);used.set(prev3m.observation_id,prev3m);}
+  series[row.series_id]=s;
+ }
+ return {input:{region,series},observations:[...used.values()]};
+}
+/** verified = active items with ≥ 1 ok observation; missing = status missing + active without data; restricted. */
+export async function catalogCounts(db:MacroDb,region:Region):Promise<CatalogCounts>{
+ const items=catalogItemsOf(region);
+ const active=items.filter(d=>d.status==='active');
+ const seen=new Set((await db.latestObservations(active.map(d=>d.id))).map(r=>r.series_id));
+ return {
+  verified:active.filter(d=>seen.has(d.id)).length,
+  missing:items.filter(d=>d.status==='missing').length+active.filter(d=>!seen.has(d.id)).length,
+  restricted:items.filter(d=>d.status==='restricted').length,
+ };
+}
+export type OnPublished=(snapshot:SnapshotRecord)=>Promise<void>;
+/** Default judgment hook: F4 wires produce(macro_regime_v1, …) here later (F4 spec §11.1). */
+export const noopOnPublished:OnPublished=async()=>{};
+export interface PublishDeps{db:MacroDb;onPublished?:OnPublished;env?:Record<string,string|undefined>}
+export type PublishReceipt=
+ |{status:'published';region:Region;snapshot_id:string;revision:number;observation_count:number;regime:'classified'|'null';uncovered_weight:number;attempts:number;hook:'skipped'|'ok'|'failed'}
+ |{status:'stale';region:Region;attempts:number}
+ |{status:'failed';region:Region;reason:string;failed_snapshot_id:string|null;attempts:number};
+async function runHook(deps:PublishDeps,env:Record<string,string|undefined>,snapshotId:string):Promise<'skipped'|'ok'|'failed'>{
+ if(env.MACRO_JUDGMENTS_ENABLED!=='1')return 'skipped';
+ try{
+  const snap=await deps.db.snapshot(snapshotId);
+  if(!snap)return 'failed';
+  await (deps.onPublished??noopOnPublished)(snap);
+  return 'ok';
+ }catch(e){console.error('[macro-publish] judgment hook failed',e instanceof Error?e.message:e);return 'failed';}
+}
+/** Never throws: every outcome is a receipt. `today` is the snapshot's as_of (YYYY-MM-DD). */
+export async function publishRegion(deps:PublishDeps,region:Region,today:string):Promise<PublishReceipt>{
+ const env=deps.env??process.env;
+ let attempts=0;
+ try{
+  for(;;){
+   attempts++;
+   try{
+    const state=await deps.db.publishState(region);
+    const built=await buildRegimeInput(deps.db,region);
+    const cls=classifyRegime(built.input);
+    const counts=await catalogCounts(deps.db,region);
+    const res=await deps.db.publishSnapshot({
+     region,expectedRevision:state.revision,expectedInputRevision:state.inputRevision,asOf:today,
+     methodologyVersion:METHODOLOGY_VERSION,catalogVersion:CATALOG_VERSION,observationIds:built.observations.map(o=>o.observation_id),
+     catalogCounts:counts,regime:cls.regime,contributions:cls.contributions,rulesVersion:RULES_VERSION,uncoveredWeight:cls.uncoveredWeight,
+    });
+    const hook=await runHook(deps,env,res.snapshot_id);
+    return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:built.observations.length,
+     regime:cls.regime?'classified':'null',uncovered_weight:cls.uncoveredWeight,attempts,hook};
+   }catch(e){
+    if(e instanceof MacroDbError&&e.code==='stale_publisher'){if(attempts<2)continue;return {status:'stale',region,attempts};}
+    throw e;
+   }
+  }
+ }catch(e){
+  const reason=(e instanceof MacroDbError?e.code:e instanceof Error?e.message:String(e)).slice(0,500);
+  let failed:string|null=null;
+  try{failed=await deps.db.recordFailedSnapshot({region,asOf:today,methodologyVersion:METHODOLOGY_VERSION,catalogVersion:CATALOG_VERSION,reason});}
+  catch(e2){console.error('[macro-publish] recordFailedSnapshot failed',e2 instanceof Error?e2.message:e2);}
+  return {status:'failed',region,reason,failed_snapshot_id:failed,attempts};
+ }
+}
+```
+- [ ] **Step 4: Wire the two integration points**
+
+Open `src/app/api/cron/macro-sync/route.ts`. Find the line `// TASK 11: publishRegion(region)`. It sits after FRED derivation, on the non-preview path. The preview path must never reach it: if it does, stop and report NEEDS_CONTEXT. Replace the marker with the snippet below. In the snippet, `deps.db` is the route's `MacroDb`, `today` is the run's `YYYY-MM-DD`, and `batchStatus` is the `finishBatch` result. If the route uses other names for these three values, use its names, and change nothing else in the route.
+```ts
+ // Task 11 (spec §4.4 step 4–5): publish US only; a failed FRED batch leaves the last active snapshot serving.
+ const publish=batchStatus==='failed'?{status:'skipped' as const,region:'US' as const,reason:'batch_failed'}:await publishRegion({db:deps.db},'US',today);
+```
+Add `import {publishRegion} from '@/lib/macro/snapshots';`. Add `publish` to the JSON receipt the route returns, as a top-level field named `publish`.
+
+Open `src/app/api/macro/ingest/route.ts` and go to the `finish` branch. The marker there sits after `finishBatch`, `recordAttempt` and the CN derivation (§0.2 N3). Replace it the same way, with `'CN'`:
+```ts
+ // Task 11 (spec §0.2 M24/N3): CN publishes only here, after the batch's derivation; a failed batch publishes nothing.
+ const publish=batchStatus==='failed'?{status:'skipped' as const,region:'CN' as const,reason:'batch_failed'}:await publishRegion({db:deps.db},'CN',today);
+```
+Add the same import, and return `publish` in the finish receipt.
+
+The production judgment hook stays the default no-op: no `onPublished` is passed. F4 wires `produce` later by passing `onPublished`. `MACRO_JUDGMENTS_ENABLED` is read inside `publishRegion` from `process.env`.
+
+Next, add one test to each Part B route test file, reusing that file's existing mocks and request helpers. Put this mock at the top of each file, next to the other `vi.mock` calls:
+```ts
+const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string)=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped'})));
+vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
+```
+In the cron test file, add a case that runs a successful non-preview sync and asserts `expect(publishMock).toHaveBeenCalledWith(expect.anything(),'US',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))` and `body.publish.status==='published'`. In the same case, run a `preview=1` sync and assert that `publishMock` was not called. In the ingest test file, add a case for a successful `finish` that asserts the call with `'CN'`. The `chunk` and `start` actions must never call it.
+- [ ] **Step 5: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/freshness.test.ts src/lib/macro/snapshots.test.ts src/app/api/cron/macro-sync src/app/api/macro/ingest && npm run typecheck && npm run lint`
+Expected: PASS
+- [ ] **Step 6: Commit**
+```bash
+git add src/lib/macro/freshness.ts src/lib/macro/freshness.test.ts src/lib/macro/snapshots.ts src/lib/macro/snapshots.test.ts src/lib/macro/testing/seed.ts src/app/api/cron/macro-sync/route.ts src/app/api/cron/macro-sync/route.test.ts src/app/api/macro/ingest/route.ts src/app/api/macro/ingest/route.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): release timeliness, snapshot manifest and publishRegion wired to cron and ingest
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 12: `MacroReadApi` and offline replay
+
+**Files:**
+- Create: `src/lib/macro/read-api.ts`
+- Test: `src/lib/macro/read-api.test.ts`, `src/lib/macro/read-api.types.test.ts`, `src/lib/macro/replay.test.ts`
+
+This task implements the F4 contract (F4 plan shared contract §"macro read interface"; F4 spec §11.1, §12.1; macro spec §5.4) exactly as `src/lib/macro/judgment-contract.ts` mirrors it:
+- `observation`: `vintage_id = String(version)` and `value = Number(value_text)`. This `Number()` is F4's contract shape, not a computation boundary (the three computation boundaries are `quality.ts`, `regime.ts`, `correlation.ts`; see 仓库约定). `unit` comes from the catalog. Only ok rows are returned: `observationsByIds` is ok-only.
+- `snapshot`: carries `regime` from `regimeOf`, which may be null.
+- `snapshotsSince`: strict `(created_at, snapshot_id)` cursor, `1 ≤ limit ≤ 200`, `active` and `superseded` only.
+- `seriesCatalog(region)`: catalog rows with `weight = WEIGHTS_V1`, `definition_version` and `catalog_version`.
+- `classifyAsOf`: rejects any version other than `v1.0` with `Error('methodology_mismatch')`. It calls the same `buildRegimeInput` and `classifyRegime` as publishing, with `periodEndLte` = the last day of `referencePeriod` and `asOf` = `cutoff`.
+- `snapshotAvailableAt(db, snapshot)`: max `available_at` over the snapshot's observations. F4's `macro_snapshot` input uses it.
+
+`replay.test.ts` checks the reproducibility promise (spec §1.1 criterion 2) on the real recorded fixtures. Task 13 adds its overview-trace case to this same file, because `views.ts` does not exist yet.
+
+- [ ] **Step 0: Confirm the Part B APIs replay depends on**
+
+The adapters in `replay.test.ts` are written against the Part B code in this plan: `parseFredCsv(bytes, {seriesId, code, period})` (Task 4), `parserFor(seriesId): {spec, version, parse} | null` (Task 9), `deriveSeries(def, inputs, {now: Date})` (Task 5), the FRED manifest as a JSON **array** of `{code, series_id, url, fetched_at, sha256, content_type, http_status}` with files `<code>.csv` (Task 4 recorder), and the CN manifest as `{tool_versions, files: [{series_id, file, url, status, content_type, fetched_at, sha256}]}` (Task 8 recorder). Open those files and confirm the landed code matches. If a landed signature differs, change only the adapter functions under `// ── Part B adapters`; do not change any assertion.
+
+- [ ] **Step 1: Write the failing tests**
+```ts
+// src/lib/macro/read-api.test.ts
+import {describe,expect,it} from 'vitest';
+import {CATALOG_VERSION,catalogById} from './catalog';
+import {memoryMacroDb} from './memory-db';
+import {macroReadApi,snapshotAvailableAt} from './read-api';
+import {buildRegimeInput,publishRegion} from './snapshots';
+import {classifyRegime,WEIGHTS_V1} from './regime';
+import {US_FIXTURE,seedCatalog,seedPoints} from './testing/seed';
+
+const TODAY='2026-11-06';
+async function setup(){
+ const db=memoryMacroDb();await seedCatalog(db);
+ const seed=await seedPoints(db,US_FIXTURE,{fetchedAt:'2026-10-15T05:30:00.000Z'});
+ return {db,seed,api:macroReadApi(db)};
+}
+
+describe('observation',()=>{
+ it('maps an ok row to MacroObservationRef (vintage_id = version, value = Number(value_text), unit from catalog)',async()=>{
+  const {api,seed}=await setup();
+  const id=seed.ids.get('US_CPI_YOY|2026-09-30')!;
+  expect(await api.observation(id)).toEqual({series_id:'US_CPI_YOY',period_end:'2026-09-30',vintage_id:'1',value:2.9,unit:catalogById('US_CPI_YOY')!.unit,available_at:'2026-10-15T05:30:00.000Z'});
+  expect(await api.observation('00000000-0000-4000-8000-00000000dead')).toBeNull();
+ });
+});
+
+describe('snapshot / snapshotsSince',()=>{
+ it('returns MacroSnapshotRow with the frozen regime; cursor is strict and ordered; limit 1..200',async()=>{
+  const {db,api}=await setup();
+  const a=await publishRegion({db,env:{}},'US',TODAY);
+  const b=await publishRegion({db,env:{}},'US',TODAY);
+  if(a.status!=='published'||b.status!=='published')throw new Error('setup');
+  const row=await api.snapshot(b.snapshot_id);
+  expect(row).toMatchObject({snapshot_id:b.snapshot_id,region:'US',as_of:TODAY,methodology_version:'v1.0',catalog_version:CATALOG_VERSION,status:'active',regime:{primary_state:'overheat'}});
+  expect(Object.keys(row!).sort()).toEqual(['as_of','catalog_version','created_at','methodology_version','observation_ids','regime','region','snapshot_id','status']);
+  expect((await api.snapshot(a.snapshot_id))!.status).toBe('superseded');
+  expect(await api.snapshot('00000000-0000-4000-8000-00000000dead')).toBeNull();
+  const all=await api.snapshotsSince(null,200);
+  expect(all.map(s=>s.snapshot_id)).toEqual([a.snapshot_id,b.snapshot_id]);
+  const after=await api.snapshotsSince({created_at:all[0].created_at,snapshot_id:all[0].snapshot_id},200);
+  expect(after.map(s=>s.snapshot_id)).toEqual([b.snapshot_id]);
+  await expect(api.snapshotsSince(null,0)).rejects.toThrow('invalid_limit');
+  await expect(api.snapshotsSince(null,201)).rejects.toThrow('invalid_limit');
+  await expect(api.snapshotsSince(null,1.5)).rejects.toThrow('invalid_limit');
+ });
+ it('failed snapshots are never listed',async()=>{
+  const {db,api}=await setup();
+  await db.recordFailedSnapshot({region:'US',asOf:TODAY,methodologyVersion:'v1.0',catalogVersion:CATALOG_VERSION,reason:'test'});
+  expect(await api.snapshotsSince(null,200)).toEqual([]);
+ });
+ it('snapshotAvailableAt = max available_at of the manifest observations',async()=>{
+  const {db}=await setup();
+  await seedPoints(db,[{series_id:'US_CPI_YOY',period_end:'2026-10-31',value_text:'3'}],{fetchedAt:'2026-11-02T05:30:00.000Z'});
+  const r=await publishRegion({db,env:{}},'US',TODAY);
+  if(r.status!=='published')throw new Error('setup');
+  expect(await snapshotAvailableAt(db,(await db.snapshot(r.snapshot_id))!)).toBe('2026-11-02T05:30:00.000Z');
+  const empty=memoryMacroDb();await seedCatalog(empty);
+  const e=await publishRegion({db:empty,env:{}},'CN',TODAY);
+  if(e.status!=='published')throw new Error('setup');
+  expect(await snapshotAvailableAt(empty,(await empty.snapshot(e.snapshot_id))!)).toBeNull();
+ });
+});
+
+describe('seriesCatalog',()=>{
+ it('returns every catalog row of the region with weight, definition_version and catalog_version',async()=>{
+  const {api}=await setup();
+  const rows=await api.seriesCatalog('US');
+  expect(rows.length).toBeGreaterThan(0);
+  for(const r of rows){
+   expect(r.region).toBe('US');
+   expect(r.weight).toBe(WEIGHTS_V1[r.series_id as string]??0);
+   expect(r.catalog_version).toBe(CATALOG_VERSION);
+   expect(typeof r.definition_version).toBe('number');
+  }
+  expect(rows.find(r=>r.series_id==='US_ISM_PMI')).toMatchObject({status:'missing',weight:15});
+ });
+});
+
+describe('classifyAsOf',()=>{
+ it('rejects any methodology other than v1.0 and malformed periods/cutoffs',async()=>{
+  const {api}=await setup();
+  await expect(api.classifyAsOf('US','2026-10','2026-11-01T00:00:00Z','v2.0')).rejects.toThrow('methodology_mismatch');
+  await expect(api.classifyAsOf('US','2026-13','2026-11-01T00:00:00Z','v1.0')).rejects.toThrow('invalid_reference_period');
+  await expect(api.classifyAsOf('US','2026-10','yesterday','v1.0')).rejects.toThrow('invalid_cutoff');
+ });
+ it('uses the vintage visible at cutoff (available_at ≤ cutoff, highest version within the period)',async()=>{
+  const {db,api}=await setup();
+  await seedPoints(db,[{series_id:'US_CPI_YOY',period_end:'2026-09-30',value_text:'4.2',revisable:true}],{fetchedAt:'2026-10-20T05:30:00.000Z'});
+  const before=await api.classifyAsOf('US','2026-10','2026-10-18T00:00:00Z','v1.0');
+  const cpiBefore=before.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')!;
+  expect(cpiBefore).toMatchObject({value:2.9,vintage_id:'1'});
+  const after=await api.classifyAsOf('US','2026-10','2026-10-25T00:00:00Z','v1.0');
+  expect(after.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')).toMatchObject({value:4.2,vintage_id:'2'});
+  expect(before.regime!.primary_state).toBe('overheat');
+  expect(after.regime).not.toEqual(before.regime);   // CPI 4.2 hits infl.gt4 instead of infl.2to3
+ });
+ it('caps period_end at the last day of referencePeriod',async()=>{
+  const {api}=await setup();
+  const r=await api.classifyAsOf('US','2026-08','2026-11-01T00:00:00Z','v1.0');
+  expect(Math.max(...r.observation_refs.map(o=>Date.parse(o.period_end)))).toBeLessThanOrEqual(Date.parse('2026-08-31'));
+  expect(r.observation_refs.find(o=>o.series_id==='US_CPI_YOY'&&o.period_end==='2026-08-31')).toMatchObject({value:2.6});
+ });
+ it('calls the same classification as publishing; returns the region weights and rules version',async()=>{
+  const {db,api}=await setup();
+  const r=await api.classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');
+  const direct=classifyRegime((await buildRegimeInput(db,'US',{asOf:'2026-11-05T00:00:00Z',periodEndLte:'2026-10-31'})).input);
+  expect(r.regime).toEqual(direct.regime);
+  const pub=await publishRegion({db,env:{}},'US',TODAY);
+  if(pub.status!=='published')throw new Error('setup');
+  expect(r.regime).toEqual((await db.regimeOf(pub.snapshot_id))!.regime);
+  expect(r.catalog).toEqual({version:CATALOG_VERSION,weights:{US_DFF:25,US_DGS10:15,US_DTWEXBGS:10,US_CPI_YOY:15,US_UNRATE:10,US_PPI_FD_YOY:5,US_ISM_PMI:15,US_VIX:5},rules_version:'macro-regime-rules/1.0'});
+  expect(r.observation_refs).toHaveLength(17);
+ });
+ it('nothing visible at cutoff → regime null, no refs',async()=>{
+  const {api}=await setup();
+  expect(await api.classifyAsOf('US','2026-10','2026-10-01T00:00:00Z','v1.0')).toMatchObject({regime:null,observation_refs:[]});
+ });
+});
+```
+```ts
+// src/lib/macro/read-api.types.test.ts
+// Type-level proof that the implementation satisfies the F4 MacroReadApi contract mirror. When F4
+// lands, swap the import to src/lib/judgments and keep this file (spec §5.4).
+import {describe,expectTypeOf,it} from 'vitest';
+import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow,RegimeResult} from './judgment-contract';
+import {memoryMacroDb} from './memory-db';
+import {macroReadApi} from './read-api';
+
+describe('macroReadApi type contract',()=>{
+ it('is assignable to MacroReadApi with the exact method result types',()=>{
+  const api=macroReadApi(memoryMacroDb());
+  const asContract:MacroReadApi=api;void asContract;
+  expectTypeOf(api.observation).returns.resolves.toEqualTypeOf<MacroObservationRef|null>();
+  expectTypeOf(api.snapshot).returns.resolves.toEqualTypeOf<MacroSnapshotRow|null>();
+  expectTypeOf(api.snapshotsSince).returns.resolves.toEqualTypeOf<MacroSnapshotRow[]>();
+  expectTypeOf(api.seriesCatalog).returns.resolves.toEqualTypeOf<Record<string,unknown>[]>();
+  expectTypeOf(api.classifyAsOf).returns.resolves.toEqualTypeOf<{regime:RegimeResult|null;observation_refs:MacroObservationRef[];catalog:{version:string;weights:Record<string,number>;rules_version:string}}>();
+ });
+});
+```
+```ts
+// src/lib/macro/replay.test.ts
+// Offline replay (spec §1.1 criterion 2, §4.4, §12): recorded evidence bytes → TS parsers → memory
+// DB → derive → publish. Re-parsing the same bytes gives identical value_text and locators, and every
+// observation in the published manifest traces (through derived_from) to a retrieval whose sha256 is
+// listed in the fixture manifest. No network.
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {describe,expect,it} from 'vitest';
+import {MACRO_CATALOG,catalogById} from './catalog';
+import type {MacroDb} from './db';
+import {deriveSeries} from './derive';
+import {evidencePath,sha256Hex} from './evidence';
+import {memoryMacroDb} from './memory-db';
+import {parseFredCsv} from './parsers/fred-csv';
+import {parserFor} from './parsers/index';
+import {publishRegion} from './snapshots';
+import {SEED_BATCH,seedCatalog} from './testing/seed';
+import type {Adapter,ObservationRow,ParsedPoint,Region} from './types';
+
+const TODAY='2026-11-06';
+const DIRS:Record<Region,string>={US:join(__dirname,'fixtures','fred'),CN:join(__dirname,'fixtures','cn')};
+
+// ── Part B adapters (Step 0: written against Tasks 4/5/8/9 of this plan; assertions stay unchanged) ──
+interface FixtureEntry{file:string;sha256:string;adapter:Adapter;fetch_url:string;fetch_host:string;content_type:string;fetched_at:string;series_ids:string[]}
+function readManifest(region:Region,dir:string):FixtureEntry[]{
+ const raw=JSON.parse(readFileSync(join(dir,'manifest.json'),'utf8'));
+ if(region==='US')return (raw as {code:string;series_id:string;url:string;fetched_at:string;sha256:string;content_type:string}[]).map(m=>({
+  file:`${m.code}.csv`,sha256:m.sha256,adapter:'fred_csv',fetch_url:m.url,fetch_host:new URL(m.url).hostname,content_type:m.content_type,fetched_at:m.fetched_at,series_ids:[m.series_id]}));
+ return (raw as {files:{series_id:string;file:string;url:string;content_type:string;fetched_at:string;sha256:string}[]}).files.map(f=>({
+  file:f.file,sha256:f.sha256,adapter:'akshare',fetch_url:f.url,fetch_host:new URL(f.url).hostname,content_type:f.content_type,fetched_at:f.fetched_at,series_ids:[f.series_id]}));
+}
+function parseFixture(seriesId:string,adapter:Adapter,bytes:Uint8Array):ParsedPoint[]{
+ const def=catalogById(seriesId);
+ if(!def?.source)throw new Error(`no source for ${seriesId}`);
+ if(adapter==='fred_csv')return parseFredCsv(bytes,{seriesId,code:def.source.seriesKey,period:def.period});
+ const p=parserFor(seriesId);
+ if(!p)throw new Error(`no parser for ${seriesId}`);
+ return p.parse(bytes);
+}
+async function deriveAll(db:MacroDb,region:Region):Promise<void>{
+ // month_end/index_minus_100/yoy inputs are native, so one pass in catalog order suffices
+ for(const def of MACRO_CATALOG.filter(d=>d.region===region&&d.derive&&d.status==='active')){
+  const inputs=await db.seriesHistory(def.derive!.from,{maxRows:20000});
+  const writes=deriveSeries(def,inputs,{now:new Date(`${TODAY}T06:00:00.000Z`)});
+  if(writes.length===0)continue;
+  const res=await db.writeObservations(SEED_BATCH,'replay',writes);
+  expect(res.conflicts,def.id).toEqual([]);
+ }
+}
+// ── end adapters ──
+
+export interface Replayed{db:MacroDb;entries:FixtureEntry[];dir:string}
+export async function replayRegion(region:Region):Promise<Replayed>{
+ const db=memoryMacroDb();await seedCatalog(db);
+ const dir=DIRS[region];const entries=readManifest(region,dir);
+ for(const e of entries){
+  const bytes=new Uint8Array(readFileSync(join(dir,e.file)));
+  expect(sha256Hex(bytes),e.file).toBe(e.sha256);   // the manifest describes exactly these bytes
+  const retrievalId=await db.putRetrieval(
+   {sha256:e.sha256,object_path:evidencePath(e.adapter,e.sha256,e.content_type),adapter:e.adapter,content_type:e.content_type,byte_length:bytes.length},
+   {fetch_url:e.fetch_url,fetch_host:e.fetch_host,http_status:200,fetched_at:e.fetched_at,batch_id:SEED_BATCH,tool_versions:{replay:'1'}});
+  for(const sid of e.series_ids){
+   const def=catalogById(sid);
+   if(!def||def.status!=='active')continue;   // missing/restricted series are never written
+   const points=parseFixture(sid,e.adapter,bytes);
+   const res=await db.writeObservations(SEED_BATCH,'replay',points.map(p=>({series_id:p.seriesId,period_end:p.periodEnd,value_text:p.valueText,
+    available_at:e.fetched_at,revisable:def.revisionPolicy==='revisable',retrieval_id:retrievalId,locator:p.locator})));
+   expect(res.conflicts,sid).toEqual([]);
+  }
+ }
+ await deriveAll(db,region);
+ const receipt=await publishRegion({db,env:{}},region,TODAY);
+ expect(receipt.status).toBe('published');
+ return {db,entries,dir};
+}
+/** sha256 of every evidence object behind an observation (native: its retrieval; derived: all inputs, recursively). */
+export async function evidenceShasOf(db:MacroDb,row:ObservationRow,depth=0):Promise<string[]>{
+ if(row.retrieval_id){const r=await db.retrieval(row.retrieval_id);return r?[r.sha256]:[];}
+ if(!row.derived_from||depth>=4)return [];
+ const inputs=await db.observationsByIds(row.derived_from);
+ if(inputs.length!==row.derived_from.length)return [];   // an unreadable input breaks the trace
+ return (await Promise.all(inputs.map(i=>evidenceShasOf(db,i,depth+1)))).flat();
+}
+
+describe.each(['US','CN'] as const)('replay %s',(region)=>{
+ it('re-parsing the same bytes yields identical value_text and locators, equal to the stored rows',async()=>{
+  const {db,entries,dir}=await replayRegion(region);
+  let checked=0;
+  for(const e of entries){
+   const bytes=new Uint8Array(readFileSync(join(dir,e.file)));
+   for(const sid of e.series_ids){
+    if(catalogById(sid)?.status!=='active')continue;
+    const a=parseFixture(sid,e.adapter,bytes),b=parseFixture(sid,e.adapter,new Uint8Array(bytes));
+    expect(b).toEqual(a);
+    const stored=await db.seriesHistory(sid,{maxRows:20000});
+    const byPeriod=new Map(a.map(p=>[p.periodEnd,p]));
+    for(const row of stored){
+     const p=byPeriod.get(row.period_end);
+     if(!p)continue;   // the period came from another retrieval of the same series
+     expect({value_text:row.value_text,locator:row.locator}).toEqual({value_text:p.valueText,locator:p.locator});
+     checked++;
+    }
+   }
+  }
+  expect(checked).toBeGreaterThan(0);
+ });
+ it('every manifest observation traces to a retrieval whose sha256 is in the fixture manifest',async()=>{
+  const {db,entries}=await replayRegion(region);
+  const known=new Set(entries.map(e=>e.sha256));
+  const snap=await db.activeSnapshot(region);
+  expect(snap!.observation_ids.length).toBeGreaterThan(0);
+  const rows=await db.observationsByIds(snap!.observation_ids);
+  expect(rows).toHaveLength(snap!.observation_ids.length);
+  for(const row of rows){
+   const shas=await evidenceShasOf(db,row);
+   expect(shas.length,`${row.series_id}|${row.period_end}`).toBeGreaterThan(0);
+   for(const s of shas)expect(known.has(s),`${row.series_id} → ${s}`).toBe(true);
+  }
+ });
+ it('two independent replays publish the same facts',async()=>{
+  const facts=async()=>{const {db}=await replayRegion(region);const s=await db.activeSnapshot(region);
+   return (await db.observationsByIds(s!.observation_ids)).map(r=>`${r.series_id}|${r.period_end}|${r.value_text}|${r.version}`).sort();};
+  expect(await facts()).toEqual(await facts());
+ });
+});
+```
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/read-api.test.ts src/lib/macro/read-api.types.test.ts src/lib/macro/replay.test.ts`
+Expected: FAIL (`Cannot find module './read-api'`). `replay.test.ts` may already pass, since it only uses landed modules plus Task 11. That is acceptable. If it fails, the cause is a real Part B mismatch: fix the adapters as in Step 0, or report NEEDS_CONTEXT.
+- [ ] **Step 3: Implement**
+```ts
+// src/lib/macro/read-api.ts
+// MacroReadApi (F4 plan shared contract; F4 spec §11.1/§12.1; macro spec §5.4) over MacroDb's anon
+// read paths (quarantined rows are never visible). classifyAsOf reuses the publishing pipeline's
+// buildRegimeInput + classifyRegime: there is exactly one classification function.
+import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
+import type {MacroDb} from './db';
+import {monthEnd} from './freshness';
+import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow} from './judgment-contract';
+import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime,regionWeights} from './regime';
+import {buildRegimeInput} from './snapshots';
+import type {ObservationRow,Region,SnapshotRecord} from './types';
+
+export const MAX_SNAPSHOTS_PAGE=200;
+const PERIOD_RE=/^(\d{4})-(0[1-9]|1[0-2])$/;
+const CUTOFF_RE=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+function toRef(r:ObservationRow):MacroObservationRef{
+ return {series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit:catalogById(r.series_id)?.unit??'',available_at:r.available_at};
+}
+async function toRow(db:MacroDb,s:SnapshotRecord):Promise<MacroSnapshotRow>{
+ const regime=(await db.regimeOf(s.snapshot_id))?.regime??null;
+ return {snapshot_id:s.snapshot_id,region:s.region,as_of:s.as_of,methodology_version:s.methodology_version,catalog_version:s.catalog_version,
+  observation_ids:[...s.observation_ids],regime,created_at:s.created_at,status:s.status};
+}
+/** F4 macro_snapshot input available_at: the latest available_at among the snapshot's observations (null when empty). */
+export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecord,'observation_ids'>):Promise<string|null>{
+ if(snapshot.observation_ids.length===0)return null;
+ const rows=await db.observationsByIds(snapshot.observation_ids);
+ let best:string|null=null;
+ for(const r of rows)if(best===null||Date.parse(r.available_at)>Date.parse(best))best=r.available_at;
+ return best;
+}
+export function macroReadApi(db:MacroDb):MacroReadApi{
+ return {
+  async observation(observationId){
+   const [row]=await db.observationsByIds([observationId]);
+   return row&&row.status==='ok'?toRef(row):null;
+  },
+  async snapshot(snapshotId){
+   const s=await db.snapshot(snapshotId);
+   return s?toRow(db,s):null;
+  },
+  async snapshotsSince(marker,limit){
+   if(!Number.isInteger(limit)||limit<1||limit>MAX_SNAPSHOTS_PAGE)throw new Error('invalid_limit');
+   const recs=(await db.snapshotsSince(marker,limit)).filter(s=>s.status==='active'||s.status==='superseded');
+   const out:MacroSnapshotRow[]=[];
+   for(const s of recs)out.push(await toRow(db,s));
+   return out;
+  },
+  async seriesCatalog(region){
+   return MACRO_CATALOG.filter(d=>d.region===region).map(d=>({
+    series_id:d.id,region:d.region,role:d.role,type:d.type,name_zh:d.name.zh,name_en:d.name.en,unit:d.unit,
+    native_frequency:d.nativeFrequency,period:d.period,adjustment:d.adjustment,status:d.status,reason:d.reason??null,
+    weight:WEIGHTS_V1[d.id]??0,change_kind:d.changeKind,revision_policy:d.revisionPolicy,definition_version:d.definitionVersion,
+    derive:d.derive??null,alias_of:d.aliasOf??null,publisher:d.source?.publisher??null,via:d.source?.via??null,
+    fetch_host:d.source?.fetchHost??null,rights:d.source?.rights??null,catalog_version:CATALOG_VERSION,
+   }));
+  },
+  async classifyAsOf(region,referencePeriod,cutoff,macroMethodologyVersion){
+   if(macroMethodologyVersion!==METHODOLOGY_VERSION)throw new Error('methodology_mismatch');
+   const m=PERIOD_RE.exec(referencePeriod);
+   if(!m)throw new Error('invalid_reference_period');
+   if(!CUTOFF_RE.test(cutoff)||!Number.isFinite(Date.parse(cutoff)))throw new Error('invalid_cutoff');
+   const built=await buildRegimeInput(db,region as Region,{asOf:cutoff,periodEndLte:monthEnd(Number(m[1]),Number(m[2]))});
+   const {regime}=classifyRegime(built.input);
+   return {regime,observation_refs:built.observations.map(toRef),catalog:{version:CATALOG_VERSION,weights:regionWeights(region as Region),rules_version:RULES_VERSION}};
+  },
+ };
+}
+```
+- [ ] **Step 4: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/read-api.test.ts src/lib/macro/read-api.types.test.ts src/lib/macro/replay.test.ts && npm run typecheck && npm run lint`
+Expected: PASS. If `expectTypeOf(...).returns.resolves` is not available in the installed vitest, use the equivalent `expectTypeOf<Awaited<ReturnType<typeof api.observation>>>().toEqualTypeOf<…>()` form. Check the version with `npm ls vitest`.
+- [ ] **Step 5: Commit**
+```bash
+git add src/lib/macro/read-api.ts src/lib/macro/read-api.test.ts src/lib/macro/read-api.types.test.ts src/lib/macro/replay.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): MacroReadApi per F4 contract and offline evidence replay test
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 13: Overview views and the read API routes
+
+**Files:**
+- Create: `src/lib/macro/views.ts`
+- Create: `src/lib/macro/route-helpers.ts`
+- Create: `src/app/api/macro/overview/route.ts`
+- Create: `src/app/api/macro/series/[id]/route.ts`
+- Create: `src/app/api/macro/snapshots/[id]/route.ts`
+- Create: `src/app/api/macro/evidence/[sha256]/route.ts`
+- Modify: `src/lib/macro/replay.test.ts` (Task 12). Append one `describe` that traces every overview row to the fixture manifest.
+- Test: `src/lib/macro/views.test.ts`, `src/app/api/macro/routes.test.ts`
+
+Spec: §2 (each route authenticates itself), §3.2 (with the judgment layer off, no regime wording appears), §8 (API contract), §4.5 (two freshness notions shown separately).
+- **Values.** Overview values come only from the active snapshot's frozen manifest. Sparklines read history as known when the snapshot was created (`asOf = created_at`).
+- **Changes.** "Changes" compares the active snapshot with the previous published snapshot of the region:
+  - `new_release`: the latest period_end advanced, or the series was absent before.
+  - `revised`: same period_end, different observation id (a new version).
+  - `late` / `missing`: from release timeliness and catalog status.
+  - With no previous snapshot, nothing is reported as new or revised.
+- **Responses.** Every success carries `Cache-Control: private, max-age=60`. Errors use `no-store` and the body `{error:{code,message}}`.
+- **Series route placeholders.** **`GET /api/macro/series/[id]` returns `cycles: []`, `events: []`, `assetsByCycle: []` as placeholders. Task 14 (`events.ts`, `cycles.ts`) runs after this task and modifies this route to fill them.** Do not import anything from Task 14 here.
+- **Judgment flag.** `GET /api/macro/snapshots/[id]` adds `regime`, `contributions`, `rulesVersion` and `uncoveredWeight` only when `MACRO_JUDGMENTS_ENABLED === '1'`.
+
+Before Step 1, read two existing tests so the new route tests follow the repo's mocking pattern: `src/app/api/securities/resolve/route.test.ts`, which mocks `@/lib/supabase/server` with `auth.getUser`, and `src/app/api/facts/[ticker]/route.test.ts`, which mocks a module with `importOriginal`. Also check that the bucket call in `macroRouteDeps` matches the installed supabase-js. Run `grep -rn "createSignedUrl(" node_modules/@supabase/storage-js/dist/module/packages/StorageFileApi.d.ts`. The expected signature is `createSignedUrl(path: string, expiresIn: number, options?)` returning `{data: {signedUrl} | null, error}`. If it differs, adapt only `signedUrl` in `macroRouteDeps`. Finally, check how `supabaseMacroDb` (Task 3) types its `{admin, anon}` argument and pass the clients accordingly.
+
+- [ ] **Step 1: Write the failing tests**
+```ts
+// src/lib/macro/views.test.ts
+import {describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
+import {recordAttempt} from '../dq/freshness';
+import {catalogById} from './catalog';
+import type {MacroDb} from './db';
+import {releaseTimeliness} from './freshness';
+import {memoryMacroDb} from './memory-db';
+import {publishRegion} from './snapshots';
+import {US_FIXTURE,seedCatalog,seedPoints} from './testing/seed';
+import {changeOf,overviewEnvelope,scaleBy100} from './views';
+import type {ViewDeps} from './views';
+
+const TODAY='2026-11-06';
+const NOW=new Date('2026-11-06T06:00:00Z');
+async function setup(){
+ const db=memoryMacroDb();await seedCatalog(db);
+ const seed=await seedPoints(db,US_FIXTURE);
+ const tables=memoryTableClient({dq_freshness:['dataset']});
+ await recordAttempt(tables,'macro.fred',{ok:true,cadence:'daily',now:new Date('2026-11-06T05:30:00Z')});
+ const deps:ViewDeps={db,tables,now:()=>NOW};
+ return {db,seed,tables,deps};
+}
+async function publish(db:MacroDb){const r=await publishRegion({db,env:{}},'US',TODAY);if(r.status!=='published')throw new Error('publish');return (await db.snapshot(r.snapshot_id))!;}
+
+describe('decimal change helpers',()=>{
+ it('scaleBy100 shifts the decimal point exactly',()=>{
+  expect(scaleBy100('0.1')).toBe('10');
+  expect(scaleBy100('-0.07')).toBe('-7');
+  expect(scaleBy100('0.255')).toBe('25.5');
+  expect(scaleBy100('3')).toBe('300');
+  expect(scaleBy100('0')).toBe('0');
+ });
+ it('changeOf follows the series changeKind',()=>{
+  expect(changeOf('bp','4.25','4.15')).toEqual({kind:'bp',value_text:'10'});
+  expect(changeOf('pp','2.9','2.6')).toEqual({kind:'pp',value_text:'0.3'});
+  expect(changeOf('points','49.8','50.2')).toEqual({kind:'points',value_text:'-0.4'});
+  expect(changeOf('pct','126.5','125')).toEqual({kind:'pct',value_text:'1.2'});
+  expect(changeOf('pct','5','0')).toBeNull();
+ });
+});
+
+describe('overviewEnvelope',()=>{
+ it('builds indicator rows from the active snapshot, with typed changes, provenance and sparkline',async()=>{
+  const {db,seed,deps}=await setup();
+  const snap=await publish(db);
+  const env=await overviewEnvelope(deps,'US',TODAY);
+  expect(env).toMatchObject({snapshotId:snap.snapshot_id,asOf:TODAY,catalogVersion:snap.catalog_version,methodologyVersion:'v1.0',
+   catalogCounts:{verified:6,missing:1,restricted:1}});
+  expect(env.collection).toEqual([{dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-06T05:30:00.000Z',lastAttemptAt:'2026-11-06T05:30:00.000Z'}]);
+  expect(env.indicators.map(r=>r.series_id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
+  const cpi=env.indicators.find(r=>r.series_id==='US_CPI_YOY')!;
+  const def=catalogById('US_CPI_YOY')!;
+  expect(cpi).toMatchObject({value_text:'2.9',unit:def.unit,period_end:'2026-09-30',available_at:'2026-11-01T05:30:00.000Z',availability_basis:'first_seen',
+   status:'A',retrieval_id:seed.retrievalId,publisher:def.source!.publisher,sparkline:['2.7','2.7','2.6','2.9'],
+   timeliness:releaseTimeliness(def,'2026-09-30',TODAY)});
+  expect(cpi.change).toEqual(changeOf(def.changeKind,'2.9','2.6'));
+  const ism=env.indicators.find(r=>r.series_id==='US_ISM_PMI')!;
+  expect(ism).toMatchObject({status:'M',value_text:null,change:null,timeliness:'missing',sparkline:[]});
+  expect(ism.reason).toEqual(catalogById('US_ISM_PMI')!.reason);
+  expect(env.indicators.find(r=>r.series_id==='US_VIX')).toMatchObject({status:'R',timeliness:'n/a',value_text:null});
+ });
+ it('never carries judgment fields',async()=>{
+  const {db,deps}=await setup();
+  await publish(db);
+  const json=JSON.stringify(await overviewEnvelope(deps,'US',TODAY));
+  expect(json).not.toMatch(/"regime"|margin_pp|"norm"|"scores"|primary_state|"coverage"|contribution/);
+ });
+ it('changes vs the previous snapshot: new release, revision, missing; none on the first snapshot',async()=>{
+  const {db,deps}=await setup();
+  await publish(db);
+  let env=await overviewEnvelope(deps,'US',TODAY);
+  expect(env.changes.counts.new_release).toBe(0);
+  expect(env.changes.counts.revised).toBe(0);
+  await seedPoints(db,[{series_id:'US_CPI_YOY',period_end:'2026-10-31',value_text:'3'},{series_id:'US_DGS10',period_end:'2026-10-31',value_text:'4.3',revisable:true}],{fetchedAt:'2026-11-05T05:30:00.000Z'});
+  await publish(db);                                                     // db.previousSnapshot now answers the first snapshot
+  env=await overviewEnvelope(deps,'US',TODAY);
+  expect(env.changes.items).toEqual(expect.arrayContaining([
+   {series_id:'US_CPI_YOY',kind:'new_release',period_end:'2026-10-31'},
+   {series_id:'US_DGS10',kind:'revised',period_end:'2026-10-31'},
+   {series_id:'US_ISM_PMI',kind:'missing',period_end:null},
+  ]));
+  expect(env.changes.items.some(i=>i.series_id==='US_VIX')).toBe(false);   // restricted is not "missing"
+  const lateIds=env.indicators.filter(r=>r.timeliness==='late').map(r=>r.series_id);
+  expect(env.changes.counts).toEqual({new_release:1,revised:1,late:lateIds.length,missing:1});
+  expect(env.indicators.find(r=>r.series_id==='US_DGS10')!.value_text).toBe('4.3');
+ });
+ it('compact keeps three key rows without sparklines or change items, counts unchanged',async()=>{
+  const {db,deps}=await setup();
+  await publish(db);
+  const full=await overviewEnvelope(deps,'US',TODAY);
+  const env=await overviewEnvelope(deps,'US',TODAY,{compact:true});
+  expect(env.indicators.map(r=>r.series_id)).toEqual(['US_DFF','US_DGS10','US_CPI_YOY']);
+  expect(env.indicators.every(r=>r.sparkline.length===0)).toBe(true);
+  expect(env.changes.items).toEqual([]);
+  expect(env.changes.counts).toEqual(full.changes.counts);
+ });
+ it('no published snapshot → catalog rows without values (never zeros), collection status still shown',async()=>{
+  const {deps}=await setup();
+  const env=await overviewEnvelope(deps,'CN',TODAY);
+  expect(env).toMatchObject({snapshotId:null,asOf:null,methodologyVersion:null,catalogCounts:null});
+  expect(env.collection).toEqual([{dataset:'macro.akshare',status:'missing',lastOkAt:null,lastAttemptAt:null}]);
+  expect(env.indicators.length).toBe(11);
+  expect(env.indicators.every(r=>r.value_text===null&&r.change===null)).toBe(true);
+  expect(env.indicators.filter(r=>r.status==='A').every(r=>r.timeliness==='missing')).toBe(true);
+ });
+});
+```
+```ts
+// src/app/api/macro/routes.test.ts
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {memoryTableClient} from '@/lib/db/memory-table-client';
+import {MacroDbError} from '@/lib/macro/db';
+import type {MacroDb} from '@/lib/macro/db';
+import {memoryMacroDb} from '@/lib/macro/memory-db';
+import type {MacroRouteDeps} from '@/lib/macro/route-helpers';
+import {publishRegion} from '@/lib/macro/snapshots';
+import {US_FIXTURE,seedCatalog,seedPoints} from '@/lib/macro/testing/seed';
+
+const authGetUser=vi.hoisted(()=>vi.fn());
+const state=vi.hoisted(()=>({deps:null as unknown}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>({auth:{getUser:authGetUser}}))}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({})}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({})}));
+vi.mock('@/lib/macro/route-helpers',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/macro/route-helpers')>(),macroRouteDeps:()=>state.deps}));
+
+import {GET as overview} from './overview/route';
+import {GET as series} from './series/[id]/route';
+import {GET as snapshot} from './snapshots/[id]/route';
+import {GET as evidence} from './evidence/[sha256]/route';
+
+const BASE='https://alpha.example/api/macro';
+const req=(path:string)=>new Request(`${BASE}${path}`);
+let db:MacroDb,seed:Awaited<ReturnType<typeof seedPoints>>,snapshotId:string;
+function depsFor(db:MacroDb):MacroRouteDeps{
+ return {db,tables:memoryTableClient({dq_freshness:['dataset']}),signedUrl:async(path,expiresIn)=>`https://signed.example/${path}?e=${expiresIn}`};
+}
+
+beforeEach(async()=>{
+ vi.unstubAllEnvs();
+ authGetUser.mockResolvedValue({data:{user:{id:'u-1'}},error:null});
+ db=memoryMacroDb();await seedCatalog(db);
+ seed=await seedPoints(db,US_FIXTURE);
+ const r=await publishRegion({db,env:{}},'US','2026-11-06');
+ if(r.status!=='published')throw new Error('setup');
+ snapshotId=r.snapshot_id;
+ state.deps=depsFor(db);
+});
+
+describe('auth (spec §2: every route checks the session itself)',()=>{
+ it('returns 401 unauthenticated without a user on all four routes',async()=>{
+  authGetUser.mockResolvedValue({data:{user:null},error:null});
+  const responses=[
+   await overview(req('/overview?region=US')),
+   await series(req('/series/US_DGS10'),{params:Promise.resolve({id:'US_DGS10'})}),
+   await snapshot(req(`/snapshots/${snapshotId}`),{params:Promise.resolve({id:snapshotId})}),
+   await evidence(req(`/evidence/${seed.sha256}`),{params:Promise.resolve({sha256:seed.sha256})}),
+  ];
+  for(const res of responses){
+   expect(res.status).toBe(401);
+   expect((await res.json()).error.code).toBe('unauthenticated');
+   expect(res.headers.get('cache-control')).toBe('no-store');
+  }
+ });
+});
+
+describe('GET /api/macro/overview',()=>{
+ it('returns per-region envelopes with the private cache header and no judgment fields',async()=>{
+  const res=await overview(req('/overview?region=all'));
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+  const body=await res.json();
+  expect(Object.keys(body.regions).sort()).toEqual(['CN','US']);
+  expect(body.regions.US.snapshotId).toBe(snapshotId);
+  expect(body.regions.CN.snapshotId).toBeNull();
+  expect(typeof body.catalogVersion).toBe('string');
+  expect(JSON.stringify(body)).not.toMatch(/"regime"|margin_pp|primary_state/);
+ });
+ it('compact=1 and region=US; invalid region / unknown params are 400',async()=>{
+  const body=await (await overview(req('/overview?region=US&compact=1'))).json();
+  expect(Object.keys(body.regions)).toEqual(['US']);
+  expect(body.regions.US.indicators).toHaveLength(3);
+  expect((await overview(req('/overview?region=EU'))).status).toBe(400);
+  expect((await overview(req('/overview?region=US&foo=1'))).status).toBe(400);
+  expect((await overview(req('/overview?compact=yes'))).status).toBe(400);
+ });
+});
+
+describe('GET /api/macro/series/[id]',()=>{
+ const get=(id:string,qs='')=>series(req(`/series/${id}${qs}`),{params:Promise.resolve({id})});
+ it('returns observations with evidence sha256 and locator, and Task 14 placeholders',async()=>{
+  const res=await get('US_DGS10');
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+  const body=await res.json();
+  expect(body.observations.map((o:{value_text:string})=>o.value_text)).toEqual(['3.95','4.05','4.15','4.25']);
+  expect(body.observations[0]).toMatchObject({version:1,availability_basis:'first_seen',retrieval_id:seed.retrievalId,evidence_sha256:seed.sha256,locator:{kind:'csv_row'}});
+  expect(body).toMatchObject({cycles:[],events:[],assetsByCycle:[],transform:'raw',seriesRead:'US_DGS10'});
+  expect(body.def.id).toBe('US_DGS10');
+  expect(body.provenance).toMatchObject({adapter:'fred_csv'});
+ });
+ it('whitelists catalog ids; validates from/to/asOf/transform',async()=>{
+  expect((await get('NOT_A_SERIES')).status).toBe(404);
+  expect((await get('US_DGS10','?from=2026-13-01')).status).toBe(400);
+  expect((await get('US_DGS10','?from=2026-10-01&to=2026-09-01')).status).toBe(400);
+  expect((await get('US_DGS10','?transform=log')).status).toBe(400);
+  expect((await get('US_DGS10','?transform=yoy')).status).toBe(400);   // no yoy derivation declared for DGS10
+  const ranged=await (await get('US_DGS10','?from=2026-09-01&to=2026-09-30')).json();
+  expect(ranged.observations.map((o:{period_end:string})=>o.period_end)).toEqual(['2026-09-30']);
+  const asOf=await (await get('US_DGS10','?asOf=2026-10-01')).json();
+  expect(asOf.observations).toEqual([]);   // seed became available 2026-11-01
+ });
+ it('diff transform gives exact decimal period-over-period differences',async()=>{
+  const body=await (await get('US_DGS10','?transform=diff')).json();
+  expect(body.observations.map((o:{value_text:string})=>o.value_text)).toEqual(['0.1','0.1','0.1']);
+ });
+ it('more than 600 points → 400 too_many_points',async()=>{
+  state.deps={...depsFor(db),db:new Proxy(db,{get(t,k,r){
+   if(k==='seriesHistory')return async()=>{throw new MacroDbError('truncated');};
+   const v=Reflect.get(t,k,r);return typeof v==='function'?v.bind(t):v;}})};
+  const res=await get('US_DGS10');
+  expect(res.status).toBe(400);
+  expect((await res.json()).error.code).toBe('too_many_points');
+ });
+ it('missing and restricted catalog items return their definition and no observations',async()=>{
+  const body=await (await get('US_ISM_PMI')).json();
+  expect(body.def.status).toBe('missing');
+  expect(body.observations).toEqual([]);
+ });
+});
+
+describe('GET /api/macro/snapshots/[id]',()=>{
+ const get=(id:string)=>snapshot(req(`/snapshots/${id}`),{params:Promise.resolve({id})});
+ it('judgment layer off → manifest and counts, no regime or contributions',async()=>{
+  const body=await (await get(snapshotId)).json();
+  expect(body.snapshot).toMatchObject({snapshot_id:snapshotId,status:'active',catalog_counts:{verified:6,missing:1,restricted:1}});
+  expect(body.observations).toHaveLength(17);
+  expect('regime' in body).toBe(false);
+  expect('contributions' in body).toBe(false);
+  expect(JSON.stringify(body)).not.toMatch(/primary_state|rule_id/);
+ });
+ it('judgment layer on → regime and contributions included',async()=>{
+  vi.stubEnv('MACRO_JUDGMENTS_ENABLED','1');
+  const body=await (await get(snapshotId)).json();
+  expect(body.regime).toMatchObject({primary_state:'overheat',secondary_state:'stagflation'});
+  expect(body.contributions).toHaveLength(6);
+  expect(body.rulesVersion).toBe('macro-regime-rules/1.0');
+ });
+ it('400 on a non-uuid, 404 on an unknown id',async()=>{
+  expect((await get('nope')).status).toBe(400);
+  expect((await get('00000000-0000-4000-8000-00000000dead')).status).toBe(404);
+ });
+});
+
+describe('GET /api/macro/evidence/[sha256]',()=>{
+ const get=(sha:string)=>evidence(req(`/evidence/${sha}`),{params:Promise.resolve({sha256:sha})});
+ it('returns metadata, retrievals and a 60-second signed URL',async()=>{
+  const res=await get(seed.sha256);
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+  const body=await res.json();
+  expect(body.evidence).toMatchObject({sha256:seed.sha256,adapter:'fred_csv',content_type:'text/csv'});
+  expect(body.retrievals).toHaveLength(1);
+  expect(body.retrievals[0]).toMatchObject({retrieval_id:seed.retrievalId,fetch_host:'fred.stlouisfed.org'});
+  expect(body.download).toEqual({url:`https://signed.example/fred_csv/${seed.sha256}.csv?e=60`,expiresIn:60});
+ });
+ it('400 on a malformed hash, 404 on an unknown one',async()=>{
+  expect((await get('ABC')).status).toBe(400);
+  expect((await get('f'.repeat(64))).status).toBe(404);
+ });
+});
+```
+Append this block to the end of `src/lib/macro/replay.test.ts`, which already defines `replayRegion` and `evidenceShasOf`. Also add these imports at the top of that file: `import {memoryTableClient} from '../db/memory-table-client';` and `import {overviewEnvelope} from './views';`.
+```ts
+describe.each(['US','CN'] as const)('replay %s → overview',(region)=>{
+ it('every value shown on the overview traces to a fixture retrieval and equals the replayed observation',async()=>{
+  const {db,entries}=await replayRegion(region);
+  const known=new Set(entries.map(e=>e.sha256));
+  const env=await overviewEnvelope({db,tables:memoryTableClient({dq_freshness:['dataset']})},region,TODAY);
+  const shown=env.indicators.filter(r=>r.value_text!==null);
+  expect(shown.length).toBeGreaterThan(0);
+  const snap=await db.activeSnapshot(region);
+  const manifest=await db.observationsByIds(snap!.observation_ids);
+  for(const row of shown){
+   const obs=manifest.find(o=>o.series_id===row.series_id&&o.period_end===row.period_end)!;
+   expect(obs.value_text).toBe(row.value_text);
+   expect(row.retrieval_id).not.toBeNull();
+   const r=await db.retrieval(row.retrieval_id!);
+   expect(known.has(r!.sha256),row.series_id).toBe(true);
+   for(const s of await evidenceShasOf(db,obs))expect(known.has(s)).toBe(true);
+  }
+ });
+});
+```
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/views.test.ts src/app/api/macro/routes.test.ts src/lib/macro/replay.test.ts`
+Expected: FAIL (`Cannot find module './views'`, `Cannot find module './overview/route'`)
+- [ ] **Step 3: Implement**
+```ts
+// src/lib/macro/views.ts
+// Overview read model (spec §3.2, §4.5, §8 Envelope). Facts only: no regime field ever appears
+// here (judgments come from F4 /api/judgments). Values come from the active snapshot's frozen
+// manifest; sparklines read history as known when the snapshot was created (asOf = created_at).
+// "Changes" compare with the previous published snapshot of the region.
+import type {TableClient} from '../db/table-client';
+import {CATALOG_VERSION} from './catalog';
+import type {MacroDb} from './db';
+import {canonical,compare,subtract,yoyPct} from './decimal';
+import {collectionStatus,datasetOf,releaseTimeliness,shiftMonthEnd} from './freshness';
+import type {CollectionStatus} from './freshness';
+import {catalogCounts,catalogItemsOf} from './snapshots';
+import type {Bilingual,CatalogCounts,ChangeKind,MacroSeriesDef,ObservationRow,Region,Timeliness} from './types';
+
+export interface IndicatorRow{
+ series_id:string;name:Bilingual;value_text:string|null;unit:string;change:{kind:ChangeKind;value_text:string}|null;
+ period_end:string|null;available_at:string|null;availability_basis:'first_seen'|null;timeliness:Timeliness;
+ status:'A'|'M'|'R';reason?:Bilingual;publisher:Bilingual|null;via:Bilingual|null;retrieval_id:string|null;sparkline:string[];
+}
+export type ChangeItemKind='new_release'|'revised'|'late'|'missing';
+export interface ChangeItem{series_id:string;kind:ChangeItemKind;period_end:string|null}
+export interface Changes{counts:Record<ChangeItemKind,number>;items:ChangeItem[]}
+export interface Envelope{
+ snapshotId:string|null;asOf:string|null;catalogVersion:string;methodologyVersion:string|null;
+ collection:CollectionStatus[];indicators:IndicatorRow[];changes:Changes;catalogCounts:CatalogCounts|null;
+}
+export interface ViewDeps{db:MacroDb;tables:TableClient;now?:()=>Date}
+export const COMPACT_KEYS:Record<Region,readonly string[]>={US:['US_DFF','US_DGS10','US_CPI_YOY'],CN:['CN_CPI_YOY','CN_PMI_MFG','CN_CGB_10Y']};
+const SPARK_POINTS=24;
+const STATUS_LETTER={active:'A',missing:'M',restricted:'R'} as const;
+
+/** Exact ×100 of a canonical decimal (pct-point difference → bp). */
+export function scaleBy100(text:string):string{
+ const m=/^(-?)(\d+)(?:\.(\d+))?$/.exec(text);
+ if(!m)throw new Error(`invalid_decimal:${text}`);
+ const frac=(m[3]??'').padEnd(2,'0');
+ return canonical(`${m[1]}${m[2]}${frac.slice(0,2)}${frac.length>2?`.${frac.slice(2)}`:''}`);
+}
+/** Change vs the previous comparable period in the series' declared kind; pct against zero → null. */
+export function changeOf(kind:ChangeKind,cur:string,prev:string):{kind:ChangeKind;value_text:string}|null{
+ if(kind==='bp')return {kind,value_text:scaleBy100(subtract(cur,prev))};
+ if(kind==='pct')return compare(prev,'0')===0?null:{kind,value_text:yoyPct(cur,prev)};   // exact zero test: no float here (§0.2 M8)
+ return {kind,value_text:subtract(cur,prev)};
+}
+/** series → [latest, previous] by period_end (a manifest holds one row per period). */
+function latestTwo(rows:ObservationRow[]):Map<string,ObservationRow[]>{
+ const by=new Map<string,ObservationRow[]>();
+ for(const r of rows){const a=by.get(r.series_id)??[];a.push(r);by.set(r.series_id,a);}
+ for(const [k,a] of by)by.set(k,a.sort((x,y)=>x.period_end<y.period_end?1:x.period_end>y.period_end?-1:y.version-x.version).slice(0,2));
+ return by;
+}
+/** The native retrieval behind an observation: itself, or (derived) its first input, recursively. */
+async function retrievalOf(db:MacroDb,row:ObservationRow,depth=0):Promise<string|null>{
+ if(row.retrieval_id)return row.retrieval_id;
+ if(!row.derived_from?.length||depth>=4)return null;
+ const [first]=await db.observationsByIds([row.derived_from[0]]);
+ return first?retrievalOf(db,first,depth+1):null;
+}
+function emptyRow(def:MacroSeriesDef,timeliness:Timeliness):IndicatorRow{
+ return {series_id:def.id,name:def.name,value_text:null,unit:def.unit,change:null,period_end:null,available_at:null,availability_basis:null,timeliness,
+  status:STATUS_LETTER[def.status],...(def.reason?{reason:def.reason}:{}),publisher:def.source?.publisher??null,via:def.source?.via??null,retrieval_id:null,sparkline:[]};
+}
+const timelinessOf=(def:MacroSeriesDef,latest:string|null,today:string):Timeliness=>
+ def.status==='missing'?'missing':def.status==='restricted'?'n/a':releaseTimeliness(def,latest,today);
+
+export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,opts:{compact?:boolean}={}):Promise<Envelope>{
+ const now=deps.now?.()??new Date();
+ const [snap,allCollection]=await Promise.all([deps.db.activeSnapshot(region),collectionStatus(deps.tables,now)]);
+ const collection=allCollection.filter(c=>c.dataset===datasetOf(region));
+ const items=catalogItemsOf(region);
+ const keep=(id:string)=>!opts.compact||COMPACT_KEYS[region].includes(id);
+ const counts:Record<ChangeItemKind,number>={new_release:0,revised:0,late:0,missing:0};
+ const changeItems:ChangeItem[]=[];
+ const note=(series_id:string,kind:ChangeItemKind,period_end:string|null)=>{counts[kind]++;changeItems.push({series_id,kind,period_end});};
+ if(!snap){
+  const rows=items.map(d=>emptyRow(d,timelinessOf(d,null,today)));
+  for(const r of rows)if(r.timeliness==='missing')note(r.series_id,'missing',null);
+  return {snapshotId:null,asOf:null,catalogVersion:CATALOG_VERSION,methodologyVersion:null,collection,
+   indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:null};
+ }
+ const manifest=latestTwo(await deps.db.observationsByIds(snap.observation_ids));
+ const prevSnap=await deps.db.previousSnapshot(region,snap.created_at);
+ const prevLatest=prevSnap?latestTwo(await deps.db.observationsByIds(prevSnap.observation_ids)):null;
+ const rows:IndicatorRow[]=[];
+ for(const def of items){
+  const [latest,prev]=manifest.get(def.id)??[];
+  const timeliness=timelinessOf(def,latest?.period_end??null,today);
+  if(!latest){
+   rows.push(emptyRow(def,timeliness));
+   if(timeliness==='missing')note(def.id,'missing',null);
+   continue;
+  }
+  let sparkline:string[]=[];
+  if(!opts.compact){
+   const hist=await deps.db.seriesHistory(def.id,{from:shiftMonthEnd(latest.period_end,-36),to:latest.period_end,asOf:snap.created_at,maxRows:200});
+   sparkline=hist.slice(-SPARK_POINTS).map(h=>h.value_text);
+  }
+  rows.push({series_id:def.id,name:def.name,value_text:latest.value_text,unit:def.unit,change:prev?changeOf(def.changeKind,latest.value_text,prev.value_text):null,
+   period_end:latest.period_end,available_at:latest.available_at,availability_basis:latest.availability_basis,timeliness,status:STATUS_LETTER[def.status],
+   ...(def.reason?{reason:def.reason}:{}),publisher:def.source?.publisher??null,via:def.source?.via??null,retrieval_id:await retrievalOf(deps.db,latest),sparkline});
+  if(prevLatest){
+   const [p]=prevLatest.get(def.id)??[];
+   if(!p||latest.period_end>p.period_end)note(def.id,'new_release',latest.period_end);
+   else if(latest.period_end===p.period_end&&latest.observation_id!==p.observation_id)note(def.id,'revised',latest.period_end);
+  }
+  if(timeliness==='late')note(def.id,'late',latest.period_end);
+ }
+ return {snapshotId:snap.snapshot_id,asOf:snap.as_of,catalogVersion:snap.catalog_version,methodologyVersion:snap.methodology_version,collection,
+  indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:snap.catalog_counts??await catalogCounts(deps.db,region)};
+}
+```
+```ts
+// src/lib/macro/route-helpers.ts
+// Shared plumbing for the /api/macro/* read routes (spec §2, §8): session gate (middleware does not
+// cover /api/*), uniform {error:{code,message}} responses, strict parameter parsing, and the
+// production dependency factory (route tests replace macroRouteDeps with memory implementations).
+import type {SupabaseClient} from '@supabase/supabase-js';
+import {NextResponse} from 'next/server';
+import {supabaseTableClient} from '@/lib/db/table-client';
+import type {TableClient} from '@/lib/db/table-client';
+import {getAdminSupabase} from '@/lib/supabase/admin';
+import {getAnonSupabase} from '@/lib/supabase/anon';
+import {getServerSupabase} from '@/lib/supabase/server';
+import {supabaseMacroDb} from './db';
+import type {MacroDb} from './db';
+import type {ObservationRow} from './types';
+
+export const SUCCESS_CACHE_CONTROL='private, max-age=60';
+export const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const SHA256_RE=/^[0-9a-f]{64}$/;
+export const SIGNED_URL_SECONDS=60;
+export const okJson=(body:unknown)=>NextResponse.json(body,{status:200,headers:{'Cache-Control':SUCCESS_CACHE_CONTROL}});
+export const errorResponse=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'no-store'}});
+
+/** Session gate shared by every /api/macro route (read routes here, analyses routes in Task 15). */
+export async function requireSessionUser():Promise<{ok:true;user:{id:string}}|{ok:false;response:NextResponse}>{
+ try{
+  const sb=await getServerSupabase();
+  const {data,error}=await sb.auth.getUser();
+  if(!error&&data?.user?.id)return {ok:true,user:{id:data.user.id}};
+ }catch(e){console.error('[macro-auth]',e instanceof Error?e.message:e);}
+ return {ok:false,response:errorResponse('unauthenticated','sign in required',401)};
+}
+
+export class ParamError extends Error{constructor(readonly param:string){super(`invalid_parameter:${param}`);this.name='ParamError';}}
+/** Rejects unknown and repeated parameters. */
+export function readParams(url:URL,allowed:readonly string[]):Map<string,string>{
+ const out=new Map<string,string>();
+ for(const [k,v] of url.searchParams){
+  if(!allowed.includes(k)||out.has(k))throw new ParamError(k);
+  out.set(k,v);
+ }
+ return out;
+}
+const ISO_DATE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const validDate=(v:string)=>ISO_DATE.test(v)&&new Date(`${v}T00:00:00Z`).toISOString().slice(0,10)===v;
+export function dateParam(p:Map<string,string>,name:string):string|undefined{
+ const v=p.get(name);if(v===undefined)return undefined;
+ if(!validDate(v))throw new ParamError(name);
+ return v;
+}
+/** asOf: an ISO date (end of that UTC day) or an ISO timestamp; normalised to an ISO timestamp. */
+export function asOfParam(p:Map<string,string>):string|undefined{
+ const v=p.get('asOf');if(v===undefined)return undefined;
+ if(validDate(v))return `${v}T23:59:59.999Z`;
+ if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/.test(v)||!Number.isFinite(Date.parse(v)))throw new ParamError('asOf');
+ return new Date(v).toISOString();
+}
+export function flagParam(p:Map<string,string>,name:string):boolean{
+ const v=p.get(name);
+ if(v===undefined||v==='0'||v==='false')return false;
+ if(v==='1'||v==='true')return true;
+ throw new ParamError(name);
+}
+export function enumParam<T extends string>(p:Map<string,string>,name:string,allowed:readonly T[],def:T):T{
+ const v=p.get(name);if(v===undefined)return def;
+ if(!(allowed as readonly string[]).includes(v))throw new ParamError(name);
+ return v as T;
+}
+export const paramErrorResponse=(e:unknown)=>e instanceof ParamError?errorResponse(e.message,`invalid ${e.param}`,400):null;
+export function failureResponse(e:unknown,tag:string){
+ console.error(`[${tag}]`,e instanceof Error?e.message:e);
+ return errorResponse('internal','macro read failed',500);
+}
+export const publicObservation=(r:ObservationRow)=>({observation_id:r.observation_id,series_id:r.series_id,period_end:r.period_end,value_text:r.value_text,version:r.version,
+ available_at:r.available_at,availability_basis:r.availability_basis,retrieval_id:r.retrieval_id,locator:r.locator,derived_from:r.derived_from,transform:r.transform});
+
+/** Every database read goes through MacroDb (previousSnapshot, retrievalsOf, retrievalsByIds live there, Task 3); only
+ *  the DQ table client and URL signing are route-specific. */
+export interface MacroRouteDeps{
+ db:MacroDb;tables:TableClient;
+ signedUrl(objectPath:string,expiresIn:number):Promise<string>;
+}
+/** retrieval_id → evidence sha256 for a set of observation rows (one batched MacroDb read). */
+export async function shaOfRetrievals(db:Pick<MacroDb,'retrievalsByIds'>,ids:string[]):Promise<Map<string,string>>{
+ return new Map((await db.retrievalsByIds(ids)).map(r=>[r.retrieval_id,r.sha256]));
+}
+/** Production deps; called only after requireSessionUser succeeded (admin.ts rule): admin reads dq_freshness and signs URLs; facts read via anon (RLS). */
+export function macroRouteDeps():MacroRouteDeps{
+ const anon=getAnonSupabase();const admin=getAdminSupabase();
+ return {
+  db:supabaseMacroDb({admin,anon}),
+  tables:supabaseTableClient(admin as unknown as SupabaseClient),
+  async signedUrl(objectPath,expiresIn){
+   const {data,error}=await admin.storage.from('macro-raw').createSignedUrl(objectPath,expiresIn);
+   if(error||!data?.signedUrl)throw new Error('signed_url_failed');
+   return data.signedUrl;
+  },
+ };
+}
+```
+```ts
+// src/app/api/macro/overview/route.ts
+// GET /api/macro/overview?region=US|CN|all&compact=1 (spec §8): per-region fact envelopes from the
+// active snapshots. Never contains judgment fields (F4 /api/judgments serves those).
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
+import {enumParam,failureResponse,flagParam,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser} from '@/lib/macro/route-helpers';
+import {overviewEnvelope} from '@/lib/macro/views';
+import type {Region} from '@/lib/macro/types';
+
+export const dynamic='force-dynamic';
+const PARAMS=['region','compact'] as const;
+export async function GET(req:Request){
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ let region:Region|'all',compact:boolean;
+ try{
+  const p=readParams(new URL(req.url),PARAMS);
+  region=enumParam(p,'region',['US','CN','all'] as const,'all');
+  compact=flagParam(p,'compact');
+ }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
+ try{
+  const deps=macroRouteDeps();
+  const today=new Date().toISOString().slice(0,10);
+  const regions:Region[]=region==='all'?['US','CN']:[region];
+  const envs=await Promise.all(regions.map(r=>overviewEnvelope(deps,r,today,{compact})));
+  return okJson({catalogVersion:CATALOG_VERSION,regions:Object.fromEntries(regions.map((r,i)=>[r,envs[i]]))});
+ }catch(e){return failureResponse(e,'macro-overview');}
+}
+```
+```ts
+// src/app/api/macro/series/[id]/route.ts
+// GET /api/macro/series/[id]?from&to&asOf&transform (spec §3.3, §8): catalog-whitelisted history,
+// at most 600 points, asOf ⇒ available_at ≤ asOf, transform raw | yoy (declared yoy derivation only)
+// | diff (exact decimal). cycles/events/assetsByCycle are placeholders filled by Task 14.
+import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from '@/lib/macro/catalog';
+import {MacroDbError} from '@/lib/macro/db';
+import {subtract} from '@/lib/macro/decimal';
+import {ParamError,asOfParam,dateParam,enumParam,errorResponse,failureResponse,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser,shaOfRetrievals} from '@/lib/macro/route-helpers';
+import type {MacroSeriesDef,ObservationRow} from '@/lib/macro/types';
+
+export const dynamic='force-dynamic';
+const PARAMS=['from','to','asOf','transform'] as const;
+const TRANSFORMS=['raw','yoy','diff'] as const;
+const MAX_POINTS=600;
+const DAILY_DEFAULT_DAYS=730;
+
+export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ const {id}=await params;
+ const def=catalogById(id);
+ if(!def)return errorResponse('unknown_series','series is not in the catalog',404);
+ let q:{from?:string;to?:string;asOf?:string;transform:typeof TRANSFORMS[number]};
+ try{
+  const p=readParams(new URL(req.url),PARAMS);
+  q={from:dateParam(p,'from'),to:dateParam(p,'to'),asOf:asOfParam(p),transform:enumParam(p,'transform',TRANSFORMS,'raw')};
+  if(q.from&&q.to&&q.from>q.to)throw new ParamError('from');
+ }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
+ let source:MacroSeriesDef=def.aliasOf?(catalogById(def.aliasOf)??def):def;
+ if(q.transform==='yoy'){
+  const y=MACRO_CATALOG.find(d=>d.derive?.kind==='yoy_from_index'&&d.derive.from===source.id);
+  if(!y)return errorResponse('invalid_parameter:transform','series declares no yoy derivation',400);
+  source=y;
+ }
+ const provenance={publisher:source.source?.publisher??null,via:source.source?.via??null,fetch_host:source.source?.fetchHost??null,adapter:source.source?.adapter??null,
+  series_key:source.source?.seriesKey??null,rights:source.source?.rights??null,attribution:source.source?.attribution??null,
+  transform:source.derive?`${source.derive.kind}@1`:null,derived_from_series:source.derive?.from??null};
+ // TASK 14: replace these placeholders with events.ts / cycles.ts output
+ const placeholders={cycles:[] as unknown[],events:[] as unknown[],assetsByCycle:[] as unknown[]};
+ const base={catalogVersion:CATALOG_VERSION,def,seriesRead:source.id,transform:q.transform,provenance,...placeholders};
+ if(source.status!=='active')return okJson({...base,observations:[]});
+ try{
+  const deps=macroRouteDeps();
+  const today=new Date().toISOString().slice(0,10);
+  const from=q.from??(source.period==='day'?new Date(Date.parse(`${q.to??today}T00:00:00Z`)-DAILY_DEFAULT_DAYS*86_400_000).toISOString().slice(0,10):undefined);
+  let rows:ObservationRow[];
+  try{rows=await deps.db.seriesHistory(source.id,{from,to:q.to,asOf:q.asOf,maxRows:MAX_POINTS});}
+  catch(e){if(e instanceof MacroDbError&&e.code==='truncated')return errorResponse('too_many_points',`more than ${MAX_POINTS} points; narrow from/to`,400);throw e;}
+  if(q.transform==='diff')rows=rows.slice(1).map((r,i)=>({...r,value_text:subtract(r.value_text,rows[i].value_text)}));
+  const sha=await shaOfRetrievals(deps.db,[...new Set(rows.map(r=>r.retrieval_id).filter((x):x is string=>x!==null))]);
+  const observations=rows.map(r=>({observation_id:r.observation_id,period_end:r.period_end,value_text:r.value_text,version:r.version,available_at:r.available_at,
+   availability_basis:r.availability_basis,retrieval_id:r.retrieval_id,evidence_sha256:r.retrieval_id?sha.get(r.retrieval_id)??null:null,locator:r.locator,
+   derived_from:r.derived_from,transform:r.transform}));
+  return okJson({...base,observations});
+ }catch(e){return failureResponse(e,'macro-series');}
+}
+```
+Next.js App Router route files may export only route handlers and config. That is why `MAX_POINTS` above is a module-local `const` and is not exported.
+```ts
+// src/app/api/macro/snapshots/[id]/route.ts
+// GET /api/macro/snapshots/[id] (spec §8): full snapshot (manifest + catalog counts). Regime and
+// contributions only when MACRO_JUDGMENTS_ENABLED === '1' (spec §3.2, plan cross-task convention).
+import {UUID_RE,errorResponse,failureResponse,macroRouteDeps,okJson,publicObservation,requireSessionUser} from '@/lib/macro/route-helpers';
+
+export const dynamic='force-dynamic';
+export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ const {id}=await params;
+ if(!UUID_RE.test(id))return errorResponse('invalid_parameter:id','invalid snapshot id',400);
+ try{
+  const {db}=macroRouteDeps();
+  const snap=await db.snapshot(id);
+  if(!snap)return errorResponse('not_found','snapshot not found',404);
+  const observations=(await db.observationsByIds(snap.observation_ids)).map(publicObservation);
+  const body:Record<string,unknown>={catalogVersion:snap.catalog_version,snapshot:snap,observations};
+  if(process.env.MACRO_JUDGMENTS_ENABLED==='1'){
+   const r=await db.regimeOf(id);
+   body.regime=r?.regime??null;body.contributions=r?.contributions??[];body.rulesVersion=r?.rules_version??null;body.uncoveredWeight=r?.uncovered_weight??null;
+  }
+  return okJson(body);
+ }catch(e){return failureResponse(e,'macro-snapshot');}
+}
+```
+```ts
+// src/app/api/macro/evidence/[sha256]/route.ts
+// GET /api/macro/evidence/[sha256] (spec §3.2 drawer, §8): evidence object metadata, every retrieval
+// receipt of those bytes, and a 60-second signed download URL from the private macro-raw bucket.
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
+import {SHA256_RE,SIGNED_URL_SECONDS,errorResponse,failureResponse,macroRouteDeps,okJson,requireSessionUser} from '@/lib/macro/route-helpers';
+
+export const dynamic='force-dynamic';
+export async function GET(_req:Request,{params}:{params:Promise<{sha256:string}>}){
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ const {sha256}=await params;
+ if(!SHA256_RE.test(sha256))return errorResponse('invalid_parameter:sha256','invalid sha256',400);
+ try{
+  const deps=macroRouteDeps();
+  const obj=await deps.db.evidenceObject(sha256);
+  if(!obj)return errorResponse('not_found','evidence not found',404);
+  const [retrievals,url]=await Promise.all([deps.db.retrievalsOf(sha256),deps.signedUrl(obj.object_path,SIGNED_URL_SECONDS)]);
+  return okJson({catalogVersion:CATALOG_VERSION,evidence:obj,retrievals,download:{url,expiresIn:SIGNED_URL_SECONDS}});
+ }catch(e){return failureResponse(e,'macro-evidence');}
+}
+```
+- [ ] **Step 4: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/views.test.ts src/app/api/macro/routes.test.ts src/lib/macro/replay.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+- [ ] **Step 5: Commit**
+```bash
+git add src/lib/macro/views.ts src/lib/macro/views.test.ts src/lib/macro/route-helpers.ts src/app/api/macro/overview/route.ts "src/app/api/macro/series/[id]/route.ts" "src/app/api/macro/snapshots/[id]/route.ts" "src/app/api/macro/evidence/[sha256]/route.ts" src/app/api/macro/routes.test.ts src/lib/macro/replay.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): overview envelope and authenticated read API (overview, series, snapshots, evidence)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+## Part D — 事件、关联、UI 与验收（Task 14–18）
+
+### Task 14: Events, cycles, FOMC calendar evidence, series route extras
+
+**Files:**
+- Create: `src/lib/macro/events.ts`, `src/lib/macro/events.test.ts`
+- Create: `src/lib/macro/cycles.ts`, `src/lib/macro/cycles.test.ts`
+- Create: `src/lib/macro/fomc.ts`, `src/lib/macro/fomc.test.ts`, `src/lib/macro/data/fomc-meetings.json`, `src/lib/macro/fixtures/fomc/<sha256>.html` (written by the script)
+- Create: `scripts/macro/record-fomc.ts`
+- Create: `src/lib/macro/series-extras.ts`, `src/lib/macro/series-extras.test.ts`
+- Modify: `src/app/api/macro/series/[id]/route.ts` (Task 13): fill `cycles`, `events`, `assetsByCycle`, and add `insufficient`, `calendar`, `eventsVersion`, `cyclesVersion`
+- Modify: `src/app/api/macro/routes.test.ts` (Task 13): the series case's placeholder assertion (exact edit below)
+
+Design decisions (fixed here so the tests are deterministic):
+- **Policy events** (spec §6.1): walk the days on which *both* `US_FED_TARGET_UPPER_D` and `US_FED_TARGET_LOWER_D` have an ok observation, in ascending order. Each neighbouring pair whose upper or lower value differs (compared as decimals) produces one event on the later day (`effective_date`). `change_bp` is the upper-bound change × 100, or the lower-bound change when the upper bound did not move.
+- **Policy cycles**: consecutive events with the same sign are merged into one group, and a sign flip starts a new group. If the group's last event is ≥ 12 calendar months before the next group's first event (or before `lastDate`), the directional cycle ends on that last event and a `plateau` cycle runs from it to the day before the next group (or to `lastDate`, `ongoing`). The plateau is `confirmed_at` last event + 12 months. Otherwise the directional cycle runs to the day before the next group, or to `lastDate` (`ongoing`).
+- **Series cycles** (monthly): a month's trailing median uses the 12 calendar months ending at it and exists only if all 12 are present. Direction = sign of median(m) − median(m−1); equal → previous month's direction. A month without a direction ends the contiguous block (this is how gaps break). Runs ≥ 6 months become segments, `confirmed_at` = the 6th month. A run < 6 months is merged into the previous segment of the same block; if there is none, it is `insufficient` (returned separately, not shown as a cycle). Medians are compared exactly as "sum of 6th and 7th smallest" decimal strings.
+- **Asset change over a cycle**: values at the month ends of the cycle's start and end. `pct` = `yoyPct(end, start)` (simple %, exact decimal); `bp` = (end − start) × 100; `pp`/`points` = end − start. A missing endpoint (or a non-positive base for `pct`) → `change_text: null` with a `missing` reason. For ongoing cycles the end is the last complete month end.
+- **FOMC calendar** (no DB, no bucket): `src/lib/macro/data/fomc-meetings.json` holds one entry per year `{year, meetings:[{start,end}], source_url, retrieved_at, sha256}`. The exact page bytes are committed at `src/lib/macro/fixtures/fomc/<sha256>.html`, and the test re-hashes and re-parses them. Notation votes are not meetings and are skipped. The parser was checked against the live page on 2026-11-06 (it found the 2021–2027 panels, the `Apr/May 30-1` / `Jan/Feb 31-1` / `Oct/Nov 31-1` cross-month meetings, `*` SEP markers, and `August 22 (notation vote)` in 2025).
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/lib/macro/events.test.ts`
+```ts
+// Derived US policy events (spec §6.1): effective date, exact bp, all inputs as evidence, determinism.
+import {describe,expect,it} from 'vitest';
+import {EVENTS_VERSION,derivePolicyEvents,toBp} from './events';
+const row=(id:string,d:string,v:string)=>({observation_id:id,period_end:d,value_text:v});
+describe('derivePolicyEvents',()=>{
+ const upper=[row('u1','2024-09-17','5.5'),row('u2','2024-09-18','5'),row('u3','2024-09-19','5'),row('u4','2024-11-08','4.75'),row('u5','2025-01-02','4.75')];
+ const lower=[row('l1','2024-09-17','5.25'),row('l2','2024-09-18','4.75'),row('l3','2024-09-19','4.75'),row('l4','2024-11-08','4.5'),row('l5','2025-01-02','4.5')];
+ it('emits one derived event per change with effective date, bp and all four inputs as evidence',()=>{
+  expect(derivePolicyEvents(upper,lower)).toEqual([
+   {kind:'policy_target_change',region:'US',effective_date:'2024-09-18',upper_from:'5.5',upper_to:'5',lower_from:'5.25',lower_to:'4.75',change_bp:'-50',source:'derived',evidence:['u1','u2','l1','l2'],version:EVENTS_VERSION},
+   {kind:'policy_target_change',region:'US',effective_date:'2024-11-08',upper_from:'5',upper_to:'4.75',lower_from:'4.75',lower_to:'4.5',change_bp:'-25',source:'derived',evidence:['u3','u4','l3','l4'],version:EVENTS_VERSION},
+  ]);
+ });
+ it('is deterministic',()=>{
+  expect(JSON.stringify(derivePolicyEvents(upper,lower))).toBe(JSON.stringify(derivePolicyEvents([...upper],[...lower])));
+ });
+ it('compares neighbouring joint days across calendar gaps, and only days where both bounds exist',()=>{
+  const u=[row('a','2026-09-11','3.75'),row('b','2026-09-17','4')];
+  const l=[row('c','2026-09-11','3.5'),row('d','2026-09-17','3.75')];
+  expect(derivePolicyEvents(u,l).map(e=>[e.effective_date,e.change_bp])).toEqual([['2026-09-17','25']]);
+  expect(derivePolicyEvents(u,[l[1]])).toEqual([]);
+ });
+ it('uses the lower-bound move when only the lower bound changed',()=>{
+  const e=derivePolicyEvents([row('a','2026-01-01','4'),row('b','2026-01-02','4')],[row('c','2026-01-01','3.75'),row('d','2026-01-02','3.5')]);
+  expect(e.map(x=>x.change_bp)).toEqual(['-25']);
+ });
+ it('reads trailing-zero decimals exactly ("4.50" vs "4.5" is no change)',()=>{
+  expect(derivePolicyEvents([row('a','2026-01-01','4.50'),row('b','2026-01-02','4.5')],[row('c','2026-01-01','4.25'),row('d','2026-01-02','4.250')])).toEqual([]);
+ });
+ it('rejects unsorted input',()=>{
+  expect(()=>derivePolicyEvents([upper[1],upper[0]],lower)).toThrow(/events_unsorted/);
+ });
+ it('toBp shifts exactly',()=>{
+  expect(toBp('-0.25')).toBe('-25');expect(toBp('0.125')).toBe('12.5');expect(toBp('0')).toBe('0');
+ });
+});
+```
+
+`src/lib/macro/cycles.test.ts`
+```ts
+// Cycle segmentation (spec §6.2): plateau rule, trailing-median runs, merge/insufficient/gap rules, asset moves.
+// Expected segments for the monthly fixtures were computed independently (Python reference of the same rule):
+//   v[i]=i, 24 months            → up from idx12, confirmed idx17
+//   v[i]=i≤23 else 46−i, 40 mon. → U idx12..31, D idx32..39 (medians idx26..31 are equal → direction continues)
+//   same, 36 months              → the 4-month down run merges into the up segment
+//   v[i]=i with idx20 missing    → U idx12..19, gap, U idx33..39 (two segments)
+//   v[i]=i, 16 months            → 4-month up run with no previous segment → insufficient
+import {describe,expect,it} from 'vitest';
+import {CYCLES_VERSION,addMonths,assetChangeOverCycle,lastCompleteMonthEnd,monthEndAt,policyCycles,seriesCycles} from './cycles';
+import type {PolicyEvent} from './events';
+const ev=(d:string,bp:string):PolicyEvent=>({kind:'policy_target_change',region:'US',effective_date:d,upper_from:'0',upper_to:'0',lower_from:'0',lower_to:'0',change_bp:bp,source:'derived',evidence:['a','b','c','d'],version:'macro-events/1'});
+const BASE=2020*12;   // idx 0 = 2020-01
+const monthly=(vals:(number|null)[])=>vals.flatMap((v,i)=>v===null?[]:[{observation_id:`o${i}`,period_end:monthEndAt(BASE+i),value_text:String(v)}]);
+const P={basis:'policy_events' as const,version:CYCLES_VERSION};
+const S={basis:'trailing_median' as const,version:CYCLES_VERSION,event_count:null};
+
+describe('calendar helpers',()=>{
+ it('clamps month ends and finds the last complete month end',()=>{
+  expect(addMonths('2024-01-31',1)).toBe('2024-02-29');
+  expect(addMonths('2023-07-27',12)).toBe('2024-07-27');
+  expect(lastCompleteMonthEnd('2026-10-30')).toBe('2026-09-30');
+  expect(lastCompleteMonthEnd('2026-10-31')).toBe('2026-10-31');
+  expect(monthEndAt(BASE+13)).toBe('2021-02-28');
+ });
+});
+
+describe('policyCycles',()=>{
+ const hikes=[ev('2022-03-17','25'),ev('2022-05-05','50'),ev('2023-07-27','25')];
+ const cuts=[ev('2024-09-19','-50'),ev('2024-11-08','-25'),ev('2024-12-19','-25')];
+ it('ends a hiking cycle at its last hike and records a plateau when ≥ 12 months pass before the next move',()=>{
+  expect(policyCycles([...hikes,...cuts],'2025-06-30')).toEqual([
+   {...P,direction:'up',start:'2022-03-17',end:'2023-07-27',ongoing:false,confirmed_at:'2022-03-17',event_count:3},
+   {...P,direction:'plateau',start:'2023-07-27',end:'2024-09-18',ongoing:false,confirmed_at:'2024-07-27',event_count:0},
+   {...P,direction:'down',start:'2024-09-19',end:'2025-06-30',ongoing:true,confirmed_at:'2024-09-19',event_count:3},
+  ]);
+ });
+ it('opens an ongoing plateau once 12 months pass after the last move',()=>{
+  expect(policyCycles(cuts,'2026-01-15')).toEqual([
+   {...P,direction:'down',start:'2024-09-19',end:'2024-12-19',ongoing:false,confirmed_at:'2024-09-19',event_count:3},
+   {...P,direction:'plateau',start:'2024-12-19',end:'2026-01-15',ongoing:true,confirmed_at:'2025-12-19',event_count:0},
+  ]);
+ });
+ it('a direction flip within 12 months starts a new cycle the next day',()=>{
+  expect(policyCycles([ev('2018-12-20','25'),ev('2019-08-01','-25')],'2019-10-31')).toEqual([
+   {...P,direction:'up',start:'2018-12-20',end:'2019-07-31',ongoing:false,confirmed_at:'2018-12-20',event_count:1},
+   {...P,direction:'down',start:'2019-08-01',end:'2019-10-31',ongoing:true,confirmed_at:'2019-08-01',event_count:1},
+  ]);
+ });
+ it('no events → no cycles; events after lastDate or unsorted → error',()=>{
+  expect(policyCycles([],'2026-01-01')).toEqual([]);
+  expect(()=>policyCycles(cuts,'2024-10-01')).toThrow(/cycles_last_date_before_event/);
+  expect(()=>policyCycles([cuts[1],cuts[0]],'2026-01-01')).toThrow(/cycles_unsorted_events/);
+ });
+});
+
+describe('seriesCycles',()=>{
+ it('a steady rise is one up segment confirmed at its 6th month',()=>{
+  const r=seriesCycles(monthly(Array.from({length:24},(_,i)=>i)));
+  expect(r).toEqual({cycles:[{...S,direction:'up',start:'2021-01-31',end:'2021-12-31',ongoing:true,confirmed_at:'2021-06-30'}],insufficient:[]});
+ });
+ it('rise then fall: equal medians continue the direction; a ≥ 6-month fall is its own segment',()=>{
+  const r=seriesCycles(monthly(Array.from({length:40},(_,i)=>i<=23?i:46-i)));
+  expect(r.cycles).toEqual([
+   {...S,direction:'up',start:'2021-01-31',end:'2022-08-31',ongoing:false,confirmed_at:'2021-06-30'},
+   {...S,direction:'down',start:'2022-09-30',end:'2023-04-30',ongoing:true,confirmed_at:'2023-02-28'},
+  ]);
+ });
+ it('a run shorter than 6 months merges into the previous segment',()=>{
+  const r=seriesCycles(monthly(Array.from({length:36},(_,i)=>i<=23?i:46-i)));
+  expect(r.cycles).toEqual([{...S,direction:'up',start:'2021-01-31',end:'2022-12-31',ongoing:true,confirmed_at:'2021-06-30'}]);
+ });
+ it('a missing month breaks the count: two separate segments',()=>{
+  const r=seriesCycles(monthly(Array.from({length:40},(_,i)=>i===20?null:i)));
+  expect(r.cycles).toEqual([
+   {...S,direction:'up',start:'2021-01-31',end:'2021-08-31',ongoing:false,confirmed_at:'2021-06-30'},
+   {...S,direction:'up',start:'2022-10-31',end:'2023-04-30',ongoing:true,confirmed_at:'2023-03-31'},
+  ]);
+ });
+ it('a too-short first run is insufficient and not a cycle',()=>{
+  expect(seriesCycles(monthly(Array.from({length:16},(_,i)=>i)))).toEqual({cycles:[],insufficient:[{direction:'up',start:'2021-01-31',end:'2021-04-30'}]});
+ });
+ it('fewer than 12 months → nothing; bad input → error',()=>{
+  expect(seriesCycles(monthly([1,2,3]))).toEqual({cycles:[],insufficient:[]});
+  expect(()=>seriesCycles([{observation_id:'x',period_end:'2024-01-15',value_text:'1'}])).toThrow(/cycles_not_month_end/);
+  expect(()=>seriesCycles([{observation_id:'a',period_end:'2024-02-29',value_text:'1'},{observation_id:'b',period_end:'2024-01-31',value_text:'1'}])).toThrow(/cycles_unsorted/);
+ });
+ it('decides on exact decimals (0.1 vs 0.10000000000000001 are equal as float64, not as decimals)',()=>{
+  // idx 12..17 carry the larger value; only at idx17 do six of the twelve window values differ, so the median rises once
+  const vals=Array.from({length:18},(_,i)=>i<12?'0.1':'0.10000000000000001');
+  const r=seriesCycles(vals.map((v,i)=>({observation_id:`o${i}`,period_end:monthEndAt(BASE+i),value_text:v})));
+  expect(r).toEqual({cycles:[],insufficient:[{direction:'up',start:'2021-06-30',end:'2021-06-30'}]});
+ });
+});
+
+describe('assetChangeOverCycle',()=>{
+ const asset=[{observation_id:'a1',period_end:'2022-03-31',value_text:'100'},{observation_id:'a2',period_end:'2023-07-31',value_text:'90.50'}];
+ const yld=[{observation_id:'y1',period_end:'2022-03-31',value_text:'4.5'},{observation_id:'y2',period_end:'2023-07-31',value_text:'3.75'}];
+ const cycle={start:'2022-03-17',end:'2023-07-27'};
+ it('pct is a simple exact percent between month-end values',()=>{
+  expect(assetChangeOverCycle(asset,cycle,'pct')).toEqual({start_period:'2022-03-31',end_period:'2023-07-31',start_value:'100',end_value:'90.5',change_text:'-9.5',change_kind:'pct',observation_ids:['a1','a2'],missing:null});
+ });
+ it('bp is the exact difference × 100; pp is the plain difference',()=>{
+  expect(assetChangeOverCycle(yld,cycle,'bp').change_text).toBe('-75');
+  expect(assetChangeOverCycle(yld,cycle,'pp').change_text).toBe('-0.75');
+ });
+ it('a missing endpoint stays missing (never 0)',()=>{
+  const r=assetChangeOverCycle(asset,{start:'2022-03-17',end:'2023-09-01'},'pct');
+  expect(r.change_text).toBeNull();expect(r.missing).toBe('end');expect(r.observation_ids).toEqual(['a1']);
+  expect(assetChangeOverCycle([],cycle,'bp').missing).toBe('both');
+ });
+ it('a non-positive base cannot carry a percent change',()=>{
+  expect(assetChangeOverCycle([{observation_id:'z',period_end:'2022-03-31',value_text:'0'},asset[1]],cycle,'pct').missing).toBe('non_positive_base');
+ });
+});
+```
+
+`src/lib/macro/fomc.test.ts`
+```ts
+// FOMC calendar evidence (spec §6.1): every year entry is backed by committed page bytes that re-hash and re-parse.
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {describe,expect,it} from 'vitest';
+import {FOMC_CALENDAR,FOMC_SOURCE_URL,fomcCalendarEvents,parseFomcCalendar} from './fomc';
+const FIX=join(process.cwd(),'src/lib/macro/fixtures/fomc');
+describe('FOMC calendar',()=>{
+ it('every committed year entry is backed by the committed page bytes',()=>{
+  expect(FOMC_CALENDAR.length).toBeGreaterThan(0);
+  for(const y of FOMC_CALENDAR){
+   expect(y.source_url).toBe(FOMC_SOURCE_URL);
+   expect(Number.isFinite(Date.parse(y.retrieved_at))).toBe(true);
+   const bytes=readFileSync(join(FIX,`${y.sha256}.html`));
+   expect(createHash('sha256').update(bytes).digest('hex')).toBe(y.sha256);
+   expect(parseFomcCalendar(bytes.toString('utf8')).find(p=>p.year===y.year)?.meetings).toEqual(y.meetings);
+  }
+ });
+ it('the real page yields the 2024 Apr/May cross-month meeting',()=>{
+  expect(FOMC_CALENDAR.find(y=>y.year===2024)?.meetings).toContainEqual({start:'2024-04-30',end:'2024-05-01'});
+ });
+ it('parses cross-month meetings, strips SEP asterisks and skips notation votes',()=>{
+  const html='<h4><a id="1">2024 FOMC Meetings</a></h4></div> <div class="row fomc-meeting" "> <div class="fomc-meeting__month col-xs-5"><strong>Apr/May</strong></div> <div class="fomc-meeting__date col-xs-4">30-1</div> <div class="fomc-meeting--shaded fomc-meeting__month col"><strong>June</strong></div> <div class="fomc-meeting__date col">11-12*</div> <h4><a id="2">2025 FOMC Meetings</a></h4> <div class="fomc-meeting__month c"><strong>August</strong></div> <div class="fomc-meeting__date c">22 (notation vote)</div>';
+  expect(parseFomcCalendar(html)).toEqual([{year:2024,meetings:[{start:'2024-04-30',end:'2024-05-01'},{start:'2024-06-11',end:'2024-06-12'}]},{year:2025,meetings:[]}]);
+ });
+ it('throws on an unknown date shape or a page without year panels instead of guessing',()=>{
+  expect(()=>parseFomcCalendar('<h4><a id="1">2020 FOMC Meetings</a></h4><div class="fomc-meeting__month x"><strong>March</strong></div> <div class="fomc-meeting__date x">15 (unscheduled)</div>')).toThrow(/fomc_parse:date/);
+  expect(()=>parseFomcCalendar('<html></html>')).toThrow(/fomc_parse:no_year_panels/);
+ });
+ it('calendar events are labelled calendar and carry their evidence hash',()=>{
+  const e=fomcCalendarEvents();
+  expect(e.length).toBeGreaterThan(0);
+  expect(e.every(x=>x.kind==='fomc_meeting'&&x.source==='calendar'&&/^[0-9a-f]{64}$/.test(x.sha256))).toBe(true);
+  expect([...e].sort((a,b)=>a.start.localeCompare(b.start))).toEqual(e);
+ });
+});
+```
+
+`src/lib/macro/series-extras.test.ts`
+```ts
+// Series detail extras (spec §3.3, §6): US policy events + cycles + same-region enabled assets; CN has no events.
+import {describe,expect,it} from 'vitest';
+import {catalogById} from './catalog';
+import {MacroDbError,type MacroDb} from './db';
+import {seriesExtras} from './series-extras';
+import type {ObservationRow} from './types';
+const obs=(id:string,d:string,v:string)=>({observation_id:id,period_end:d,value_text:v}) as unknown as ObservationRow;
+const fake=(data:Record<string,ObservationRow[]>):Pick<MacroDb,'seriesHistory'>=>({seriesHistory:async(id:string)=>data[id]??[]});
+describe('seriesExtras',()=>{
+ it('catalog premises this task relies on',()=>{
+  expect(catalogById('US_FED_TARGET_UPPER_D')?.role).toBe('event_source');
+  expect(catalogById('US_FED_TARGET_LOWER_D')?.role).toBe('event_source');
+  expect(catalogById('US_WTI')).toMatchObject({role:'asset',status:'active',changeKind:'pct',region:'US'});
+  expect(catalogById('US_UST10Y')).toMatchObject({role:'asset',status:'active',changeKind:'bp',aliasOf:'US_DGS10'});
+  expect(catalogById('CN_CGB10Y')).toMatchObject({role:'asset',status:'active',changeKind:'bp',aliasOf:'CN_CGB_10Y'});
+  expect(catalogById('US_DFF')).toMatchObject({type:'policy_rate',period:'month'});
+ });
+ const us={
+  US_FED_TARGET_UPPER_D:[obs('u1','2024-09-17','5.5'),obs('u2','2024-09-18','5'),obs('u3','2026-10-30','5')],
+  US_FED_TARGET_LOWER_D:[obs('l1','2024-09-17','5.25'),obs('l2','2024-09-18','4.75'),obs('l3','2026-10-30','4.75')],
+  US_WTI:[obs('w1','2024-09-30','68.17'),obs('w2','2026-09-30','70')],
+  US_DGS10:[obs('g1','2024-09-30','3.81'),obs('g2','2026-09-30','4.1')],
+ };
+ it('US policy rate: derived events, policy cycles with plateau, asset moves to the last complete month',async()=>{
+  const x=await seriesExtras(fake(us),catalogById('US_DFF')!,{});
+  expect(x.events.map(e=>[e.effective_date,e.change_bp])).toEqual([['2024-09-18','-50']]);
+  expect(x.cycles.map(c=>[c.direction,c.start,c.end,c.ongoing])).toEqual([['down','2024-09-18','2024-09-18',false],['plateau','2024-09-18','2026-10-30',true]]);
+  const plateau=x.assetsByCycle.filter(a=>a.cycle_index===1);
+  expect(plateau.map(a=>[a.asset_id,a.start_period,a.end_period,a.change_text,a.change_kind])).toEqual([
+   ['US_WTI','2024-09-30','2026-09-30','2.6845','pct'],['US_UST10Y','2024-09-30','2026-09-30','29','bp']]);
+  expect(x.calendar.length).toBeGreaterThan(0);
+  expect(x.eventsVersion).toBe('macro-events/1');expect(x.cyclesVersion).toBe('macro-cycles/1');
+ });
+ it('an asset view of the same series is not listed as its own asset',async()=>{
+  const x=await seriesExtras(fake({...us,US_DGS10:Array.from({length:24},(_,i)=>obs(`d${i}`,new Date(Date.UTC(2020,i+1,0)).toISOString().slice(0,10),String(i)))}),catalogById('US_DGS10')!,{});
+  expect(x.assetsByCycle.some(a=>a.asset_id==='US_UST10Y')).toBe(false);
+  expect(x.cycles[0]).toMatchObject({basis:'trailing_median',direction:'up'});
+ });
+ it('CN: no events and no calendar; cycles from the series itself',async()=>{
+  const pmi=Array.from({length:24},(_,i)=>obs(`p${i}`,new Date(Date.UTC(2020,i+1,0)).toISOString().slice(0,10),`${49+Math.floor(i/10)}.${i%10}`));
+  const x=await seriesExtras(fake({CN_PMI_MFG:pmi}),catalogById('CN_PMI_MFG')!,{});
+  expect(x.events).toEqual([]);expect(x.calendar).toEqual([]);
+  expect(x.cycles).toHaveLength(1);
+  expect(x.assetsByCycle.map(a=>[a.asset_id,a.change_text,a.missing])).toEqual([['CN_CGB10Y',null,'both']]);
+ });
+ it('a truncated history is an error, never a partial computation',async()=>{
+  const db:Pick<MacroDb,'seriesHistory'>={seriesHistory:async()=>{throw new MacroDbError('truncated');}};
+  await expect(seriesExtras(db,catalogById('US_DFF')!,{})).rejects.toMatchObject({code:'truncated'});
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/events.test.ts src/lib/macro/cycles.test.ts src/lib/macro/fomc.test.ts src/lib/macro/series-extras.test.ts`
+Expected: FAIL (`Cannot find module './events'`, `./cycles`, `./fomc`, `./series-extras`)
+
+- [ ] **Step 3: Implement events and cycles**
+
+`src/lib/macro/events.ts`
+```ts
+// src/lib/macro/events.ts
+// Read-time derived macro events (spec §6.1, version macro-events/1). Pure: the same observations give the
+// same events. US policy events come from day-to-day changes of the official Fed target-range series
+// (DFEDTARU / DFEDTARL via FRED). They are labelled 'derived' with their effective date and are never called
+// "announcements". The FOMC meeting calendar is a separate 'calendar' kind (fomc.ts). China has no official
+// automatic event source while LPR/MLF are missing (spec §6.1).
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import {subtract} from './decimal';
+import type {ObservationRow} from './types';
+export const EVENTS_VERSION='macro-events/1';
+export const US_TARGET_UPPER_ID='US_FED_TARGET_UPPER_D',US_TARGET_LOWER_ID='US_FED_TARGET_LOWER_D';
+export type EventInput=Pick<ObservationRow,'observation_id'|'period_end'|'value_text'>;
+export interface PolicyEvent{
+ kind:'policy_target_change';region:'US';effective_date:string;upper_from:string;upper_to:string;lower_from:string;lower_to:string;change_bp:string;source:'derived';
+ /** [upper prev, upper cur, lower prev, lower cur]: every input observation the event was derived from. */
+ evidence:[string,string,string,string];version:string;
+}
+/** Exact decimal × 100 (percentage points → basis points). */
+export const toBp=(delta:string):string=>canonicalDecimal(`${canonicalDecimal(delta)}e2`);
+export const decimalSign=(v:string):-1|0|1=>{const c=canonicalDecimal(v);return c==='0'?0:c.startsWith('-')?-1:1;};
+function assertAscending(rows:readonly EventInput[],label:string){
+ for(let i=1;i<rows.length;i++)if(rows[i].period_end<=rows[i-1].period_end)throw new Error(`events_unsorted:${label}:${rows[i].period_end}`);
+}
+export function derivePolicyEvents(upper:readonly EventInput[],lower:readonly EventInput[]):PolicyEvent[]{
+ assertAscending(upper,'upper');assertAscending(lower,'lower');
+ const lowerBy=new Map(lower.map(r=>[r.period_end,r]));
+ const days=upper.filter(u=>lowerBy.has(u.period_end)).map(u=>({u,l:lowerBy.get(u.period_end)!}));
+ const out:PolicyEvent[]=[];
+ for(let i=1;i<days.length;i++){
+  const p=days[i-1],c=days[i];
+  const du=subtract(c.u.value_text,p.u.value_text),dl=subtract(c.l.value_text,p.l.value_text);
+  if(decimalSign(du)===0&&decimalSign(dl)===0)continue;
+  out.push({kind:'policy_target_change',region:'US',effective_date:c.u.period_end,
+   upper_from:canonicalDecimal(p.u.value_text),upper_to:canonicalDecimal(c.u.value_text),lower_from:canonicalDecimal(p.l.value_text),lower_to:canonicalDecimal(c.l.value_text),
+   change_bp:toBp(decimalSign(du)!==0?du:dl),source:'derived',evidence:[p.u.observation_id,c.u.observation_id,p.l.observation_id,c.l.observation_id],version:EVENTS_VERSION});
+ }
+ return out;
+}
+```
+
+`src/lib/macro/cycles.ts`
+```ts
+// src/lib/macro/cycles.ts
+// Read-time cycle segmentation and asset moves over a cycle (spec §6.2, version macro-cycles/1). Pure and
+// deterministic. All value arithmetic is on decimal text (decimal.ts); nothing here converts to float.
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import {subtract,yoyPct} from './decimal';
+import {decimalSign,toBp,type PolicyEvent} from './events';
+import type {ChangeKind,ObservationRow} from './types';
+export const CYCLES_VERSION='macro-cycles/1';
+export const MIN_RUN_MONTHS=6,MEDIAN_WINDOW=12,PLATEAU_MONTHS=12;
+export type CycleDirection='up'|'down'|'plateau';
+export interface Cycle{basis:'policy_events'|'trailing_median';direction:CycleDirection;start:string;end:string;ongoing:boolean;confirmed_at:string;event_count:number|null;version:string}
+export interface InsufficientSegment{direction:'up'|'down';start:string;end:string}
+export type MonthlyInput=Pick<ObservationRow,'observation_id'|'period_end'|'value_text'>;
+export interface AssetCycleChange{start_period:string;end_period:string;start_value:string|null;end_value:string|null;change_text:string|null;change_kind:ChangeKind;observation_ids:string[];missing:'start'|'end'|'both'|'non_positive_base'|null}
+
+const DATE=/^\d{4}-\d{2}-\d{2}$/;
+const monthIndex=(d:string)=>Number(d.slice(0,4))*12+Number(d.slice(5,7))-1;
+const daysIn=(y:number,m0:number)=>new Date(Date.UTC(y,m0+1,0)).getUTCDate();
+const pad=(n:number)=>String(n).padStart(2,'0');
+export function monthEndAt(index:number):string{const y=Math.floor(index/12),m0=index%12;return `${y}-${pad(m0+1)}-${pad(daysIn(y,m0))}`;}
+export const monthEndOf=(d:string):string=>monthEndAt(monthIndex(d));
+export function addMonths(d:string,n:number):string{const idx=monthIndex(d)+n;const y=Math.floor(idx/12),m0=idx%12;return `${y}-${pad(m0+1)}-${pad(Math.min(Number(d.slice(8,10)),daysIn(y,m0)))}`;}
+export function previousDay(d:string):string{return new Date(Date.UTC(Number(d.slice(0,4)),Number(d.slice(5,7))-1,Number(d.slice(8,10)))-86_400_000).toISOString().slice(0,10);}
+/** The last month end on or before d (d itself when it is a month end). */
+export const lastCompleteMonthEnd=(d:string):string=>monthEndOf(d)===d?d:monthEndAt(monthIndex(d)-1);
+
+/** Policy cycles from derived events: same-sign runs merge, a flip opens a new cycle, ≥ 12 quiet months → plateau. */
+export function policyCycles(events:readonly PolicyEvent[],lastDate:string):Cycle[]{
+ if(!DATE.test(lastDate))throw new Error(`cycles_bad_date:${lastDate}`);
+ const evs=events.filter(e=>decimalSign(e.change_bp)!==0);
+ for(let i=1;i<evs.length;i++)if(evs[i].effective_date<=evs[i-1].effective_date)throw new Error('cycles_unsorted_events');
+ if(evs.length&&evs[evs.length-1].effective_date>lastDate)throw new Error('cycles_last_date_before_event');
+ const groups:{dir:'up'|'down';first:string;last:string;count:number}[]=[];
+ for(const e of evs){
+  const dir=decimalSign(e.change_bp)>0?'up':'down';const g=groups[groups.length-1];
+  if(g&&g.dir===dir){g.last=e.effective_date;g.count++;}else groups.push({dir,first:e.effective_date,last:e.effective_date,count:1});
+ }
+ const out:Cycle[]=[];
+ groups.forEach((g,i)=>{
+  const next=groups[i+1]?.first??null;const horizon=next??lastDate;
+  const base={basis:'policy_events' as const,version:CYCLES_VERSION};
+  if(addMonths(g.last,PLATEAU_MONTHS)<=horizon){
+   out.push({...base,direction:g.dir,start:g.first,end:g.last,ongoing:false,confirmed_at:g.first,event_count:g.count});
+   out.push({...base,direction:'plateau',start:g.last,end:next?previousDay(next):lastDate,ongoing:next===null,confirmed_at:addMonths(g.last,PLATEAU_MONTHS),event_count:0});
+  }else out.push({...base,direction:g.dir,start:g.first,end:next?previousDay(next):lastDate,ongoing:next===null,confirmed_at:g.first,event_count:g.count});
+ });
+ return out;
+}
+
+/** Sum of the 6th and 7th smallest of 12 decimals = 2 × median (exact; comparing 2× medians = comparing medians). */
+function doubledMedian(values:string[]):string{
+ const s=[...values].sort((a,b)=>decimalSign(subtract(a,b)));
+ return subtract(s[5],subtract('0',s[6]));
+}
+
+/** Monthly cycles from the trailing 12-month median (spec §6.2). Input: one ok row per month end, ascending. */
+export function seriesCycles(history:readonly MonthlyInput[]):{cycles:Cycle[];insufficient:InsufficientSegment[]}{
+ for(let i=0;i<history.length;i++){
+  const d=history[i].period_end;
+  if(!DATE.test(d)||monthEndOf(d)!==d)throw new Error(`cycles_not_month_end:${d}`);
+  if(i>0&&monthIndex(d)<=monthIndex(history[i-1].period_end))throw new Error(`cycles_unsorted:${d}`);
+ }
+ if(history.length===0)return {cycles:[],insufficient:[]};
+ const byMonth=new Map(history.map(r=>[monthIndex(r.period_end),canonicalDecimal(r.value_text)]));
+ const first=monthIndex(history[0].period_end),last=monthIndex(history[history.length-1].period_end);
+ const med=new Map<number,string>();
+ for(let m=first+MEDIAN_WINDOW-1;m<=last;m++){
+  const w:string[]=[];
+  for(let k=m-MEDIAN_WINDOW+1;k<=m;k++){const v=byMonth.get(k);if(v===undefined)break;w.push(v);}
+  if(w.length===MEDIAN_WINDOW)med.set(m,doubledMedian(w));
+ }
+ const dir=new Map<number,'up'|'down'>();
+ for(let m=first+1;m<=last;m++){
+  const a=med.get(m),b=med.get(m-1);if(a===undefined||b===undefined)continue;
+  const s=decimalSign(subtract(a,b));const d=s>0?'up':s<0?'down':dir.get(m-1);
+  if(d)dir.set(m,d);
+ }
+ // runs of consecutive months with one direction; a month without a direction closes the block (gap rule)
+ const runs:{dir:'up'|'down';from:number;to:number;block:number}[]=[];let block=0;
+ for(let m=first;m<=last;m++){
+  const d=dir.get(m);if(!d){block++;continue;}
+  const r=runs[runs.length-1];
+  if(r&&r.block===block&&r.dir===d&&r.to===m-1)r.to=m;else runs.push({dir:d,from:m,to:m,block});
+ }
+ const segs:{dir:'up'|'down';from:number;to:number;confirmed:number;block:number}[]=[];
+ const short:{dir:'up'|'down';from:number;to:number;block:number}[]=[];
+ for(const r of runs){
+  const prev=segs[segs.length-1];const inBlock=prev&&prev.block===r.block?prev:null;
+  if(r.to-r.from+1>=MIN_RUN_MONTHS){
+   if(inBlock&&inBlock.dir===r.dir)inBlock.to=r.to;      // continues a segment that absorbed a short run
+   else segs.push({dir:r.dir,from:r.from,to:r.to,confirmed:r.from+MIN_RUN_MONTHS-1,block:r.block});
+  }else if(inBlock)inBlock.to=r.to;                       // short run merges into the previous segment
+  else{
+   const s=short[short.length-1];
+   if(s&&s.block===r.block&&s.to===r.from-1)s.to=r.to;else short.push({dir:r.dir,from:r.from,to:r.to,block:r.block});
+  }
+ }
+ return {
+  cycles:segs.map(s=>({basis:'trailing_median' as const,direction:s.dir,start:monthEndAt(s.from),end:monthEndAt(s.to),ongoing:s.to===last,confirmed_at:monthEndAt(s.confirmed),event_count:null,version:CYCLES_VERSION})),
+  insufficient:short.map(s=>({direction:s.dir,start:monthEndAt(s.from),end:monthEndAt(s.to)})),
+ };
+}
+
+/** Asset move between the month ends of a cycle's start and end; missing endpoint → change_text null. */
+export function assetChangeOverCycle(asset:readonly MonthlyInput[],cycle:{start:string;end:string},changeKind:ChangeKind):AssetCycleChange{
+ const startP=monthEndOf(cycle.start),endP=monthEndOf(cycle.end);
+ const by=new Map(asset.map(r=>[r.period_end,r]));
+ const a=by.get(startP)??null,b=by.get(endP)??null;
+ const base={start_period:startP,end_period:endP,start_value:a?canonicalDecimal(a.value_text):null,end_value:b?canonicalDecimal(b.value_text):null,change_kind:changeKind,
+  observation_ids:[a,b].flatMap(r=>r?[r.observation_id]:[])};
+ if(!a||!b)return {...base,change_text:null,missing:!a&&!b?'both':!a?'start':'end'};
+ if(changeKind==='pct'){
+  if(decimalSign(a.value_text)<=0)return {...base,change_text:null,missing:'non_positive_base'};
+  return {...base,change_text:yoyPct(b.value_text,a.value_text),missing:null};
+ }
+ const d=subtract(b.value_text,a.value_text);
+ return {...base,change_text:changeKind==='bp'?toBp(d):canonicalDecimal(d),missing:null};
+}
+```
+
+- [ ] **Step 4: Implement the FOMC parser, recorder and calendar file**
+
+`src/lib/macro/data/fomc-meetings.json` (start empty; Step 5 fills it from the real page)
+```json
+[]
+```
+
+`src/lib/macro/fomc.ts`
+```ts
+// src/lib/macro/fomc.ts
+// FOMC meeting calendar (spec §6.1 'calendar' events, kept separate from derived decisions). Holds the parser for
+// the official federalreserve.gov calendar page and the committed calendar JSON. Each year entry carries the
+// source URL, retrieval time and the SHA-256 of the exact page bytes. Those bytes are committed under
+// src/lib/macro/fixtures/fomc/<sha256>.html (no DB, no bucket) and re-verified by fomc.test.ts.
+import calendar from './data/fomc-meetings.json';
+export const FOMC_SOURCE_URL='https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm';
+export interface FomcMeeting{start:string;end:string}
+export interface FomcYear{year:number;meetings:FomcMeeting[];source_url:string;retrieved_at:string;sha256:string}
+export interface CalendarEvent{kind:'fomc_meeting';region:'US';start:string;end:string;source:'calendar';source_url:string;sha256:string}
+export const FOMC_CALENDAR:readonly FomcYear[]=calendar as unknown as FomcYear[];
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const pad=(n:number)=>String(n).padStart(2,'0');
+function monthOf(label:string):number{
+ const t=label.trim();const i=MONTHS.findIndex(m=>m===t||m.slice(0,3)===t);
+ if(i<0)throw new Error(`fomc_parse:month:${label}`);
+ return i+1;
+}
+/** Every "<year> FOMC Meetings" panel, ascending. Notation votes (one unscheduled day) are not meetings and are skipped;
+ *  any other unknown date shape throws so the recorder fails loudly instead of guessing. */
+export function parseFomcCalendar(html:string):{year:number;meetings:FomcMeeting[]}[]{
+ const heads=[...html.matchAll(/<h4><a id="\d+">(\d{4}) FOMC Meetings<\/a><\/h4>/g)];
+ if(!heads.length)throw new Error('fomc_parse:no_year_panels');
+ return heads.map((h,i)=>{
+  const seg=html.slice(h.index!,i+1<heads.length?heads[i+1].index!:html.length);
+  const year=Number(h[1]);const meetings:FomcMeeting[]=[];
+  for(const m of seg.matchAll(/fomc-meeting__month[^"]*"><strong>([^<]+)<\/strong><\/div>\s*<div class="fomc-meeting__date[^"]*">([^<]+)<\/div>/g)){
+   const date=m[2].trim().replace(/\*$/,'');
+   if(/notation vote/i.test(date))continue;
+   const dm=/^(\d{1,2})-(\d{1,2})$/.exec(date);
+   if(!dm)throw new Error(`fomc_parse:date:${year}:${m[2].trim()}`);
+   const months=m[1].split('/').map(monthOf);
+   meetings.push({start:`${year}-${pad(months[0])}-${pad(Number(dm[1]))}`,end:`${year}-${pad(months[months.length-1])}-${pad(Number(dm[2]))}`});
+  }
+  return {year,meetings};
+ }).sort((a,b)=>a.year-b.year);
+}
+export function fomcCalendarEvents():CalendarEvent[]{
+ return FOMC_CALENDAR.flatMap(y=>y.meetings.map(m=>({kind:'fomc_meeting' as const,region:'US' as const,start:m.start,end:m.end,source:'calendar' as const,source_url:y.source_url,sha256:y.sha256})))
+  .sort((a,b)=>a.start.localeCompare(b.start));
+}
+```
+
+`scripts/macro/record-fomc.ts`
+```ts
+// scripts/macro/record-fomc.ts
+// Records the FOMC calendar (spec §6.1). Fetches the official federalreserve.gov page once, stores the exact bytes
+// under src/lib/macro/fixtures/fomc/<sha256>.html, parses every year panel with parseFomcCalendar and rewrites
+// src/lib/macro/data/fomc-meetings.json. Years on the new page replace their old entries. Years no longer on the
+// page keep their earlier entry and its own committed evidence file.
+// Run: npx tsx scripts/macro/record-fomc.ts [--dry-run]
+import {createHash} from 'node:crypto';
+import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {FOMC_SOURCE_URL,parseFomcCalendar,type FomcYear} from '../../src/lib/macro/fomc';
+const ROOT=process.cwd();
+const FIX=join(ROOT,'src/lib/macro/fixtures/fomc');
+const DATA=join(ROOT,'src/lib/macro/data/fomc-meetings.json');
+async function main(){
+ const dry=process.argv.includes('--dry-run');
+ const res=await fetch(FOMC_SOURCE_URL,{headers:{'user-agent':'OsbornAlpha-macro-recorder/1'},redirect:'follow'});
+ if(res.status!==200)throw new Error(`fomc_fetch:http_${res.status}`);
+ const ct=res.headers.get('content-type')??'';
+ if(!ct.startsWith('text/html'))throw new Error(`fomc_fetch:content_type:${ct}`);
+ const bytes=new Uint8Array(await res.arrayBuffer());
+ const sha=createHash('sha256').update(bytes).digest('hex');
+ const retrievedAt=new Date().toISOString();
+ const parsed=parseFomcCalendar(Buffer.from(bytes).toString('utf8'));
+ const current:FomcYear[]=existsSync(DATA)?JSON.parse(readFileSync(DATA,'utf8')):[];
+ const byYear=new Map(current.map(y=>[y.year,y]));
+ for(const p of parsed)byYear.set(p.year,{year:p.year,meetings:p.meetings,source_url:FOMC_SOURCE_URL,retrieved_at:retrievedAt,sha256:sha});
+ const next=[...byYear.values()].sort((a,b)=>a.year-b.year);
+ console.log(JSON.stringify({sha256:sha,bytes:bytes.length,years:parsed.map(p=>[p.year,p.meetings.length])}));
+ if(dry)return;
+ mkdirSync(FIX,{recursive:true});
+ writeFileSync(join(FIX,`${sha}.html`),bytes);
+ writeFileSync(DATA,JSON.stringify(next,null,1)+'\n');
+}
+main().catch(e=>{console.error(e);process.exit(1);});
+```
+
+- [ ] **Step 5: Record the real FOMC page (network)**
+Run: `npx tsx scripts/macro/record-fomc.ts`
+Expected: one JSON line such as `{"sha256":"<64 hex>","bytes":166350,"years":[[2021,8],[2022,8],[2023,8],[2024,8],[2025,8],[2026,8],[2027,8]]}`. 2025 has 8 meetings, not 9, because the notation vote is skipped. Afterwards `src/lib/macro/fixtures/fomc/<sha256>.html` exists and the JSON has one entry per year. If the fetch fails or the parser throws, stop and report BLOCKED with the error. Do not hand-edit the JSON.
+
+- [ ] **Step 6: Implement the series extras and wire the series route**
+
+`src/lib/macro/series-extras.ts`
+```ts
+// src/lib/macro/series-extras.ts
+// Detail-page extras for GET /api/macro/series/[id] (spec §3.3, §6): derived US policy events, the FOMC calendar,
+// cycle segments and enabled same-region asset moves per cycle. Reads full histories through
+// MacroDb.seriesHistory, which pages to completion and throws `truncated` beyond maxRows; a partial series is never
+// segmented. With asOf, every read is limited to rows available at asOf.
+import {MACRO_CATALOG} from './catalog';
+import {CYCLES_VERSION,assetChangeOverCycle,lastCompleteMonthEnd,policyCycles,seriesCycles,type AssetCycleChange,type Cycle,type InsufficientSegment} from './cycles';
+import type {MacroDb} from './db';
+import {EVENTS_VERSION,US_TARGET_LOWER_ID,US_TARGET_UPPER_ID,derivePolicyEvents,type PolicyEvent} from './events';
+import {fomcCalendarEvents,type CalendarEvent} from './fomc';
+import type {Bilingual,MacroSeriesDef} from './types';
+export const DAILY_MAX_ROWS=20_000,MONTHLY_MAX_ROWS=5_000;
+export interface AssetByCycle extends AssetCycleChange{cycle_index:number;asset_id:string;asset_name:Bilingual}
+export interface SeriesExtras{events:PolicyEvent[];calendar:CalendarEvent[];cycles:Cycle[];insufficient:InsufficientSegment[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
+export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:MacroSeriesDef,opts:{asOf?:string}):Promise<SeriesExtras>{
+ const read=(id:string,maxRows:number)=>db.seriesHistory(id,{asOf:opts.asOf,maxRows});
+ let events:PolicyEvent[]=[];let lastTargetDay:string|null=null;
+ if(def.region==='US'){
+  const [upper,lower]=await Promise.all([read(US_TARGET_UPPER_ID,DAILY_MAX_ROWS),read(US_TARGET_LOWER_ID,DAILY_MAX_ROWS)]);
+  events=derivePolicyEvents(upper,lower);
+  lastTargetDay=upper.length?upper[upper.length-1].period_end:null;
+ }
+ let cycles:Cycle[]=[],insufficient:InsufficientSegment[]=[];
+ if(def.region==='US'&&def.type==='policy_rate'){if(lastTargetDay)cycles=policyCycles(events,lastTargetDay);}
+ else if(def.period==='month'&&def.role!=='event_source'){
+  const r=seriesCycles(await read(def.aliasOf??def.id,MONTHLY_MAX_ROWS));cycles=r.cycles;insufficient=r.insufficient;
+ }
+ const self=def.aliasOf??def.id;
+ const assets=MACRO_CATALOG.filter(a=>a.role==='asset'&&a.status==='active'&&a.region===def.region&&a.id!==def.id&&(a.aliasOf??a.id)!==self);
+ const assetsByCycle:AssetByCycle[]=[];
+ if(cycles.length&&assets.length){
+  const histories=await Promise.all(assets.map(a=>read(a.aliasOf??a.id,MONTHLY_MAX_ROWS)));
+  cycles.forEach((c,ci)=>{
+   const end=c.ongoing?lastCompleteMonthEnd(c.end):c.end;
+   assets.forEach((a,ai)=>assetsByCycle.push({cycle_index:ci,asset_id:a.id,asset_name:a.name,...assetChangeOverCycle(histories[ai],{start:c.start,end},a.changeKind)}));
+  });
+ }
+ return {events,calendar:def.region==='US'?fomcCalendarEvents():[],cycles,insufficient,assetsByCycle,eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
+}
+```
+
+Modify `src/app/api/macro/series/[id]/route.ts` (Task 13) with exactly these three edits; change nothing else.
+
+1. Imports: add
+```ts
+import {CYCLES_VERSION} from '@/lib/macro/cycles';
+import {EVENTS_VERSION} from '@/lib/macro/events';
+import {seriesExtras} from '@/lib/macro/series-extras';
+```
+2. Replace the four lines
+```ts
+ // TASK 14: replace these placeholders with events.ts / cycles.ts output
+ const placeholders={cycles:[] as unknown[],events:[] as unknown[],assetsByCycle:[] as unknown[]};
+ const base={catalogVersion:CATALOG_VERSION,def,seriesRead:source.id,transform:q.transform,provenance,...placeholders};
+ if(source.status!=='active')return okJson({...base,observations:[]});
+```
+with
+```ts
+ // Task 14: detail extras (spec §3.3, §6). Inactive series have no observations, so their extras are empty.
+ const empty={cycles:[],insufficient:[],events:[],calendar:[],assetsByCycle:[],eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
+ const base={catalogVersion:CATALOG_VERSION,def,seriesRead:source.id,transform:q.transform,provenance};
+ if(source.status!=='active')return okJson({...base,...empty,observations:[]});
+```
+3. Replace the last three lines of the `try` block
+```ts
+  return okJson({...base,observations});
+ }catch(e){return failureResponse(e,'macro-series');}
+```
+with
+```ts
+  const extras=await seriesExtras(deps.db,def,{asOf:q.asOf});
+  return okJson({...base,...extras,observations});
+ }catch(e){
+  if(e instanceof MacroDbError&&e.code==='truncated')return errorResponse('input_truncated','series history exceeds the read limit',422);   // never a 200 with partial segments
+  return failureResponse(e,'macro-series');
+ }
+```
+(the observations read keeps its own `too_many_points` 400 inside the try, before `seriesExtras` runs.)
+
+In `src/app/api/macro/routes.test.ts` (Task 13), replace the line
+```ts
+  expect(body).toMatchObject({cycles:[],events:[],assetsByCycle:[],transform:'raw',seriesRead:'US_DGS10'});
+```
+with
+```ts
+  expect(body).toMatchObject({transform:'raw',seriesRead:'US_DGS10',eventsVersion:'macro-events/1',cyclesVersion:'macro-cycles/1'});
+  for(const k of ['cycles','insufficient','events','calendar','assetsByCycle'])expect(Array.isArray(body[k]),k).toBe(true);
+```
+
+- [ ] **Step 7: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/events.test.ts src/lib/macro/cycles.test.ts src/lib/macro/fomc.test.ts src/lib/macro/series-extras.test.ts src/app/api/macro/routes.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+
+- [ ] **Step 8: Commit**
+```bash
+git add src/lib/macro/events.ts src/lib/macro/events.test.ts src/lib/macro/cycles.ts src/lib/macro/cycles.test.ts src/lib/macro/fomc.ts src/lib/macro/fomc.test.ts src/lib/macro/data/fomc-meetings.json src/lib/macro/fixtures/fomc scripts/macro/record-fomc.ts src/lib/macro/series-extras.ts src/lib/macro/series-extras.test.ts 'src/app/api/macro/series/[id]/route.ts' src/app/api/macro/routes.test.ts
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): derived policy events, cycles, FOMC calendar evidence, series extras
+
+Events from Fed target-range changes (macro-events/1), policy and trailing-median
+cycles with plateau/merge/gap rules (macro-cycles/1), asset moves per cycle in
+exact decimals, FOMC calendar JSON backed by committed page bytes, series route
+fills cycles/events/assetsByCycle.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 15: Correlation analysis, explanation, request validation, analyses API
+
+**Files:**
+- Create: `src/lib/macro/correlation.ts`, `src/lib/macro/correlation.test.ts`
+- Create: `src/lib/macro/explain.ts`, `src/lib/macro/explain.test.ts`
+- Create: `src/lib/macro/analysis-spec.ts`, `src/lib/macro/analysis-spec.test.ts`
+- Create: `src/app/api/macro/analyses/route.ts`, `src/app/api/macro/analyses/route.test.ts`
+- Create: `src/app/api/macro/analyses/[runId]/route.ts`, `src/app/api/macro/analyses/[runId]/route.test.ts`
+
+Design decisions:
+- **Request** `{request_id (uuid v1–8, lowercase), kind, indicator_id, asset_id, lag (integer −12…12), window ('5y'|'10y'|'all'), event_n? (3|6|12, event_window only)}`. The schema is checked with ajv, then against the catalog: the indicator must be `role 'indicator'`, `status 'active'`, `period 'month'`; the asset must be `role 'asset'`, `status 'active'`, `period 'month'`. `event_window` requires a US `policy_rate` indicator (its events are the derived US policy events) and `lag 0`.
+- **Alignment** (spec §7): month keys. For lag k, pair indicator month t with asset month t+k (k > 0 = indicator leads). There is no interpolation; only months where both transformed values exist form a pair. **Window** is applied to the pair months: the last 60 / 120 pair months, counted from the latest pair month (independent of wall-clock time).
+- **change** transform: the indicator Δ is in its `changeKind` units (bp = exact Δ×100, pct = exact simple %, pp/points = exact Δ). The asset change is a log return for `pct` (price) assets, the exact bp difference for `bp` (yield) assets, and the plain difference otherwise. Each value becomes a float once. A non-positive price where a log return or percent is needed → `non_positive_price`.
+- **Gates**: change/level need n ≥ 36, otherwise `insufficient_sample`. Zero variance → `zero_variance`. Rolling uses 36-month windows ending at each pair month and outputs only windows with ≥ 30 pairs; no window → `insufficient_sample`. Event window: anchor = the month of the effective date. An event is used only when every asset month in [anchor−N, anchor+N] exists. An event whose window overlaps an already kept event (anchor gap ≤ 2N) is dropped (the earlier one is kept). With fewer than 5 kept events, `stats` is `null` and only the per-event table is returned. Quartiles use linear interpolation (type 7).
+- **Frozen inputs** `{indicator:{series_id, source_series_id, change_kind, observations:[{observation_id, period_end, value_text}] ascending}, asset:{…}, events?:[{effective_date, change_bp, evidence}], cutoff, catalog_version}`. `source_series_id` is the series actually read (`aliasOf`), so observation ids are traceable. `inputs_hash` = SHA-256 of canonical JSON (sorted keys). The run stores `results` = the analysis result plus `explanation` (both deterministic).
+- **Route**: session → validate → read full histories with `asOf = cutoff` (truncated → 422, nothing computed) → freeze → compute. Both `ok` and `failed` (analysis error) runs are written through `create_macro_analysis_run` (service-only; `p_user_id` = verified session user id; idempotent by `request_id`; quota counts only `ok`). `quota_exceeded` → 429. An analysis error returns 400 `{error:{code,…}, runId}`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/lib/macro/correlation.test.ts`
+```ts
+// Correlation (spec §7): closed-form r, lag direction, gates, rolling, event windows, byte-identical recompute.
+// Fixture: indicator x_t = (100 + 25·(t mod 3) + t)/100 percent (changeKind bp), asset a_s = 2·x_{s−1} (a yield, bp).
+//   Δx_bp cycles through −49, 26, 26; the asset repeats 2·Δx one month later, so with lag +1 (indicator leads) r = 1,
+//   slope 2, intercept 0. Lag −1 pairs (−49,26),(26,−49),(26,26)·2 over 15 full periods: r = −1875/3750 = −0.5,
+//   slope −1, intercept 3. Lag 0 (n = 46, one partial period): r = −15/31, slope −30/31, intercept 142/31.
+import {describe,expect,it} from 'vitest';
+import {AnalysisError,pearson,quartiles,runAnalysis,type AnalysisSpec,type EventResult,type FrozenInputs,type PairResult,type RollingResult} from './correlation';
+const BASE=2021*12;
+const me=(i:number)=>new Date(Date.UTC(Math.floor((BASE+i)/12),(BASE+i)%12+1,0)).toISOString().slice(0,10);
+const hund=(n:number)=>{const s=String(n).padStart(3,'0');return `${s.slice(0,-2)}.${s.slice(-2)}`;};   // integer hundredths → decimal text
+function fixture(L:number):FrozenInputs{
+ const xh=Array.from({length:L},(_,t)=>100+25*(t%3)+t);
+ return {
+  indicator:{series_id:'US_DFF',source_series_id:'US_DFF',change_kind:'bp',observations:xh.map((v,t)=>({observation_id:`x${t}`,period_end:me(t),value_text:hund(v)}))},
+  asset:{series_id:'US_UST10Y',source_series_id:'US_DGS10',change_kind:'bp',observations:Array.from({length:L},(_,i)=>i+1).map(s=>({observation_id:`a${s}`,period_end:me(s),value_text:hund(2*xh[s-1])}))},
+  cutoff:'2026-11-06T00:00:00.000Z',catalog_version:'macro-catalog/test',
+ };
+}
+const spec=(o:Partial<AnalysisSpec>={}):AnalysisSpec=>({request_id:'11111111-1111-4111-8111-111111111111',kind:'change',indicator_id:'US_DFF',asset_id:'US_UST10Y',lag:0,window:'all',...o});
+const run=(s:AnalysisSpec,i:FrozenInputs)=>runAnalysis(s,i,'test-sha');
+const code=(f:()=>unknown)=>{try{f();}catch(e){return e instanceof AnalysisError?e.code:String(e);}return 'no error';};
+
+describe('pearson',()=>{
+ it('matches the hand computation on x=[1..5], y=[2,4,5,4,5]',()=>{
+  // mx=3, my=4; dx=[-2,-1,0,1,2], dy=[-2,0,1,0,1]; sxy=6, sxx=10, syy=6 → r=6/√60, slope=0.6, intercept=4−0.6·3=2.2
+  const p=pearson([1,2,3,4,5],[2,4,5,4,5]);
+  expect(p.r).toBeCloseTo(6/Math.sqrt(60),12);expect(p.slope).toBeCloseTo(0.6,12);expect(p.intercept).toBeCloseTo(2.2,12);
+ });
+ it('zero variance is an error',()=>{expect(code(()=>pearson([1,1,1],[1,2,3]))).toBe('zero_variance');});
+});
+
+describe('change / level',()=>{
+ const inp=fixture(48);
+ it('lag +1 (indicator leads): r = 1, slope 2, intercept 0',()=>{
+  const r=run(spec({lag:1}),inp) as PairResult;
+  expect(r.kind).toBe('change');expect(r.n).toBe(47);expect(r.from).toBe('2021-02');expect(r.to).toBe('2024-12');
+  expect(r.r).toBeCloseTo(1,12);expect(r.slope).toBeCloseTo(2,12);expect(r.intercept).toBeCloseTo(0,12);
+  expect(r.pairs[0]).toEqual({t:'2021-02',s:'2021-03',x:26,y:52});
+  expect([r.x_unit,r.y_unit,r.exploratory]).toEqual(['bp','bp',false]);
+ });
+ it('lag −1: r = −0.5 exactly over complete periods',()=>{
+  const r=run(spec({lag:-1}),inp) as PairResult;
+  expect(r.n).toBe(45);expect(r.r).toBeCloseTo(-0.5,12);expect(r.slope).toBeCloseTo(-1,12);expect(r.intercept).toBeCloseTo(3,12);
+ });
+ it('lag 0: r = −15/31',()=>{
+  const r=run(spec({lag:0}),inp) as PairResult;
+  expect(r.n).toBe(46);expect(r.r).toBeCloseTo(-15/31,12);expect(r.slope).toBeCloseTo(-30/31,12);expect(r.intercept).toBeCloseTo(142/31,12);
+ });
+ it('level mode is exploratory and uses raw values',()=>{
+  const r=run(spec({kind:'level',lag:1}),inp) as PairResult;
+  expect(r.kind).toBe('level');expect(r.exploratory).toBe(true);expect(r.x_unit).toBe('level');expect(r.pairs[0]).toEqual({t:'2021-01',s:'2021-02',x:1,y:2});
+ });
+ it('window keeps the last 60 / 120 pair months',()=>{
+  const big=fixture(100);
+  const five=run(spec({lag:1,window:'5y'}),big) as PairResult;
+  expect(five.n).toBe(60);expect(five.from).toBe('2024-05');expect(five.to).toBe('2029-04');
+  expect((run(spec({lag:1,window:'10y'}),big) as PairResult).n).toBe(99);
+ });
+ it('n < 36 → insufficient_sample',()=>{expect(code(()=>run(spec({lag:1}),fixture(30)))).toBe('insufficient_sample');});
+ it('constant asset → zero_variance',()=>{
+  const i=fixture(48);i.asset.observations=i.asset.observations.map(o=>({...o,value_text:'2'}));
+  expect(code(()=>run(spec({lag:1}),i))).toBe('zero_variance');
+ });
+ it('a non-positive price used in a log return → non_positive_price',()=>{
+  const i=fixture(48);i.asset.change_kind='pct';i.asset.observations[10]={...i.asset.observations[10],value_text:'0'};
+  expect(code(()=>run(spec({lag:1}),i))).toBe('non_positive_price');
+ });
+ it('price assets use log returns',()=>{
+  const i=fixture(48);i.asset.change_kind='pct';
+  const r=run(spec({lag:1}),i) as PairResult;
+  expect(r.y_unit).toBe('log_return');expect(r.pairs[0].y).toBeCloseTo(Math.log(2.52/2.00),15);
+ });
+ it('duplicate months in frozen inputs are rejected',()=>{
+  const i=fixture(48);i.indicator.observations.push({...i.indicator.observations[5],observation_id:'dup'});
+  expect(code(()=>run(spec({lag:1}),i))).toBe('invalid_inputs');
+ });
+});
+
+describe('rolling',()=>{
+ it('36-month windows ending at each pair month; windows with < 30 pairs are omitted',()=>{
+  const r=run(spec({kind:'rolling',lag:1}),fixture(48)) as RollingResult;
+  expect(r.points).toHaveLength(18);
+  expect(r.points[0]).toMatchObject({end:'2023-07',n:30});expect(r.points[17]).toMatchObject({end:'2024-12',n:36});
+  expect(r.points.every(p=>Math.abs(p.r-1)<1e-12)).toBe(true);
+  expect([r.window_months,r.min_pairs]).toEqual([36,30]);
+ });
+ it('no window with ≥ 30 pairs → insufficient_sample',()=>{expect(code(()=>run(spec({kind:'rolling',lag:1}),fixture(25)))).toBe('insufficient_sample');});
+});
+
+describe('event_window',()=>{
+ const asset=Array.from({length:72},(_,i)=>({observation_id:`y${i}`,period_end:me(i),value_text:hund(200+i)}));   // +1 bp per month
+ const evAt=(i:number)=>({effective_date:`${me(i).slice(0,7)}-15`,change_bp:'-25',evidence:['a','b','c','d']});
+ const inputs=(anchors:number[]):FrozenInputs=>({...fixture(48),asset:{series_id:'US_UST10Y',source_series_id:'US_DGS10',change_kind:'bp',observations:asset},events:anchors.map(evAt)});
+ const ew=(o:Partial<AnalysisSpec>={})=>spec({kind:'event_window',event_n:6,...o});
+ it('keeps complete, non-overlapping events (earlier wins) and gives distribution stats at ≥ 5',()=>{
+  const r=run(ew(),inputs([10,15,23,36,49,62,70])) as EventResult;
+  expect(r.candidates).toBe(7);expect(r.independent).toBe(5);
+  expect(r.dropped).toEqual([{effective_date:'2022-04-15',reason:'overlap'},{effective_date:'2026-11-15',reason:'incomplete_window'}]);
+  expect(r.events.map(e=>[e.anchor,e.pre,e.post])).toEqual([['2021-11',6,6],['2022-12',6,6],['2024-01',6,6],['2025-02',6,6],['2026-03',6,6]]);
+  expect(r.stats).toEqual({pre:{median:6,q1:6,q3:6},post:{median:6,q1:6,q3:6}});
+  expect(r.y_unit).toBe('bp');
+ });
+ it('fewer than 5 independent events → per-event table only',()=>{
+  const r=run(ew(),inputs([10,23,36,49])) as EventResult;
+  expect(r.independent).toBe(4);expect(r.stats).toBeNull();expect(r.events).toHaveLength(4);
+ });
+ it('no events → no_events',()=>{expect(code(()=>run(ew(),inputs([])))).toBe('no_events');});
+});
+
+describe('quartiles',()=>{
+ it('type-7 interpolation',()=>{
+  expect(quartiles([5,1,3,2,4])).toEqual({median:3,q1:2,q3:4});
+  expect(quartiles([1,2,3,4])).toEqual({median:2.5,q1:1.75,q3:3.25});
+ });
+});
+
+describe('recompute',()=>{
+ it('same frozen inputs → byte-identical results, including after a JSON round trip and storage reordering',()=>{
+  for(const s of [spec({lag:1}),spec({kind:'level',lag:2}),spec({kind:'rolling',lag:1})]){
+   const inp=fixture(60);
+   const a=JSON.stringify(run(s,inp));
+   expect(JSON.stringify(run(s,JSON.parse(JSON.stringify(inp))))).toBe(a);
+   const shuffled={...inp,indicator:{...inp.indicator,observations:[...inp.indicator.observations].reverse()},asset:{...inp.asset,observations:[...inp.asset.observations].reverse()}};
+   expect(JSON.stringify(run(s,shuffled))).toBe(a);
+  }
+ });
+});
+```
+
+`src/lib/macro/explain.test.ts`
+```ts
+// Rule-generated statistical sentence (spec §7): strength words only for change; sign tied to the printed r.
+import {describe,expect,it} from 'vitest';
+import type {EventResult,PairResult,RollingResult} from './correlation';
+import {explainResult,strengthOf} from './explain';
+const names={indicator:{zh:'联邦基金利率',en:'Fed funds rate'},asset:{zh:'10 年美债收益率',en:'UST 10Y yield'}};
+const pair=(o:Partial<PairResult>):PairResult=>({kind:'change',r:-0.31,r2:0.0961,slope:-1,intercept:0,n:119,from:'2016-11',to:'2026-10',lag:0,transform:'change',exploratory:false,x_unit:'bp',y_unit:'bp',pairs:[],method_version:'macro-correlation/1',code_version:'x',...o});
+describe('explain',()=>{
+ it('strength thresholds',()=>{
+  expect(strengthOf(0.29).en).toBe('weak');expect(strengthOf(-0.3).en).toBe('moderate');expect(strengthOf(0.59).en).toBe('moderate');expect(strengthOf(-0.6).en).toBe('strong');
+ });
+ it('change: strength + sign word bound to r, no causal claim',()=>{
+  const e=explainResult(pair({}),names);
+  expect(e.zh).toContain('r = -0.31');expect(e.zh).toContain('弱负相关');expect(e.zh).toContain('不代表因果');
+  expect(e.en).toContain('weak negative correlation');
+  expect(explainResult(pair({r:0.45,r2:0.2025,lag:3}),names).zh).toMatch(/中等正相关.*指标领先 3 个月/);
+  expect(explainResult(pair({r:0.45,r2:0.2025,lag:-2}),names).en).toContain('asset leads by 2 months');
+ });
+ it('near-zero r gets no direction word',()=>{
+  const e=explainResult(pair({r:-0.004,r2:0.000016}),names);
+  expect(e.zh).toContain('近零相关');expect(e.zh).not.toMatch(/[正负]相关/);
+ });
+ it('level: exploratory label and no strength words',()=>{
+  const e=explainResult(pair({kind:'level',transform:'level',exploratory:true,r:0.81,r2:0.6561,x_unit:'level',y_unit:'level'}),names);
+  expect(e.zh).toContain('探索性');expect(e.zh).not.toMatch(/弱|中等|强/);expect(e.en).not.toMatch(/weak|moderate|strong/);
+ });
+ it('rolling and event window',()=>{
+  const roll:RollingResult={kind:'rolling',window_months:36,min_pairs:30,lag:0,points:[{end:'2020-01',r:-0.2,n:36},{end:'2020-02',r:0.4,n:36}],from:'2020-01',to:'2020-02',method_version:'m',code_version:'c'};
+  expect(explainResult(roll,names).zh).toContain('r 介于 -0.20 与 0.40 之间');
+  const ev:EventResult={kind:'event_window',n_months:6,events:[],candidates:3,independent:3,dropped:[],stats:null,y_unit:'bp',method_version:'m',code_version:'c'};
+  expect(explainResult(ev,names).zh).toContain('少于 5 个');
+  expect(explainResult({...ev,independent:6,stats:{pre:{median:1,q1:0,q3:2},post:{median:-12.5,q1:-20,q3:-3}}},names).zh).toContain('中位数 -12.50 bp');
+ });
+});
+```
+
+`src/lib/macro/analysis-spec.test.ts`
+```ts
+// Analysis request validation and input freezing (spec §7, §8, §0.2 M18/M22).
+import {describe,expect,it} from 'vitest';
+import {canonicalJson,freezeInputs,inputsHash,validateAnalysisRequest} from './analysis-spec';
+import {catalogById} from './catalog';
+import type {ObservationRow} from './types';
+const ok={request_id:'0b8f8d3e-4a7c-4b7e-9e55-0f6f1f2a3b4c',kind:'change',indicator_id:'US_DFF',asset_id:'US_UST10Y',lag:0,window:'10y'};
+const fields=(b:unknown)=>{const r=validateAnalysisRequest(b);return r.ok?[]:r.errors.map(e=>`${e.field}:${e.code}`);};
+describe('validateAnalysisRequest',()=>{
+ it('accepts a valid change request and resolves catalog entries',()=>{
+  const r=validateAnalysisRequest(ok);
+  expect(r.ok).toBe(true);
+  if(r.ok){expect(r.indicator.id).toBe('US_DFF');expect(r.asset.id).toBe('US_UST10Y');}
+ });
+ it('schema errors are field-level',()=>{
+  expect(fields({...ok,lag:13})).toContain('lag:maximum');
+  expect(fields({...ok,lag:1.5})).toContain('lag:type');
+  expect(fields({...ok,request_id:'not-a-uuid'})).toContain('request_id:pattern');
+  expect(fields({...ok,window:'3y'})).toContain('window:enum');
+  expect(fields({...ok,extra:1})).toContain('extra:additionalProperties');
+  const missing:Record<string,unknown>={...ok};delete missing.asset_id;expect(fields(missing)).toContain('asset_id:required');
+ });
+ it('catalog rules: role, status, monthly',()=>{
+  expect(fields({...ok,indicator_id:'NOPE'})).toContain('indicator_id:not_indicator');
+  expect(fields({...ok,indicator_id:'US_WTI'})).toContain('indicator_id:not_indicator');
+  expect(fields({...ok,indicator_id:'US_VIX'})).toContain('indicator_id:not_active');
+  expect(fields({...ok,indicator_id:'CN_GDP_YOY'})).toContain('indicator_id:not_monthly');
+  expect(fields({...ok,asset_id:'US_SP500'})).toContain('asset_id:not_active');
+  expect(fields({...ok,asset_id:'US_CPI_YOY'})).toContain('asset_id:not_asset');
+ });
+ it('event window rules',()=>{
+  expect(fields({...ok,kind:'event_window'})).toContain('event_n:required');
+  expect(fields({...ok,kind:'event_window',event_n:6,indicator_id:'CN_PMI_MFG',asset_id:'CN_CGB10Y'})).toContain('indicator_id:event_window_requires_us_policy_rate');
+  expect(fields({...ok,kind:'event_window',event_n:6,lag:2})).toContain('lag:must_be_zero_for_event_window');
+  expect(fields({...ok,event_n:6})).toContain('event_n:only_for_event_window');
+  expect(fields({...ok,kind:'event_window',event_n:6})).toEqual([]);
+ });
+});
+describe('freezeInputs / inputsHash',()=>{
+ const row=(id:string,d:string,v:string)=>({observation_id:id,series_id:'X',period_end:d,value_text:v,version:2,available_at:'2026-01-01T00:00:00Z',status:'ok'} as unknown as ObservationRow);
+ const frozen=()=>freezeInputs({indicator:catalogById('US_DFF')!,asset:catalogById('US_UST10Y')!,
+  indicatorRows:[row('b','2024-02-29','5.33'),row('a','2024-01-31','5.33')],assetRows:[row('c','2024-01-31','3.99')],
+  events:[{kind:'policy_target_change',region:'US',effective_date:'2024-09-18',upper_from:'5.5',upper_to:'5',lower_from:'5.25',lower_to:'4.75',change_bp:'-50',source:'derived',evidence:['1','2','3','4'],version:'macro-events/1'}],
+  cutoff:'2026-11-06T00:00:00.000Z',catalogVersion:'macro-catalog/abc'});
+ it('keeps only id/period/value, sorted, with the series actually read',()=>{
+  expect(frozen()).toEqual({
+   indicator:{series_id:'US_DFF',source_series_id:'US_DFF',change_kind:catalogById('US_DFF')!.changeKind,observations:[{observation_id:'a',period_end:'2024-01-31',value_text:'5.33'},{observation_id:'b',period_end:'2024-02-29',value_text:'5.33'}]},
+   asset:{series_id:'US_UST10Y',source_series_id:'US_DGS10',change_kind:'bp',observations:[{observation_id:'c',period_end:'2024-01-31',value_text:'3.99'}]},
+   events:[{effective_date:'2024-09-18',change_bp:'-50',evidence:['1','2','3','4']}],
+   cutoff:'2026-11-06T00:00:00.000Z',catalog_version:'macro-catalog/abc'});
+ });
+ it('hash is SHA-256 of canonical JSON (key order independent)',()=>{
+  const f=frozen();
+  expect(inputsHash(f)).toMatch(/^[0-9a-f]{64}$/);
+  const reordered=JSON.parse(JSON.stringify({catalog_version:f.catalog_version,cutoff:f.cutoff,events:f.events,asset:f.asset,indicator:f.indicator}));
+  expect(inputsHash(reordered)).toBe(inputsHash(f));
+  expect(canonicalJson({b:1,a:[{d:'x',c:null}]})).toBe('{"a":[{"c":null,"d":"x"}],"b":1}');
+ });
+});
+```
+
+`src/app/api/macro/analyses/route.test.ts`
+```ts
+// POST /api/macro/analyses: session, validation, truncation, quota, frozen inputs, failed runs (spec §7, §8, N1).
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn(),history:vi.fn()}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>({auth:{getUser:m.auth}}))}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:vi.fn(()=>({rpc:m.rpc}))}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:vi.fn(()=>({}))}));
+vi.mock('@/lib/macro/db',async orig=>({...(await orig<typeof import('@/lib/macro/db')>()),supabaseMacroDb:vi.fn(()=>({seriesHistory:m.history}))}));
+import {MacroDbError} from '@/lib/macro/db';
+import {inputsHash} from '@/lib/macro/analysis-spec';
+import {POST} from './route';
+const me=(i:number)=>new Date(Date.UTC(2021,i+1,0)).toISOString().slice(0,10);
+const hund=(n:number)=>{const s=String(n).padStart(3,'0');return `${s.slice(0,-2)}.${s.slice(-2)}`;};
+const rows=(vals:number[],offset=0)=>vals.map((v,i)=>({observation_id:`o${i+offset}`,series_id:'X',period_end:me(i+offset),value_text:hund(v),version:1,available_at:'2026-01-01T00:00:00Z',status:'ok'}));
+const xh=Array.from({length:48},(_,t)=>100+25*(t%3)+t);
+const body={request_id:'0b8f8d3e-4a7c-4b7e-9e55-0f6f1f2a3b4c',kind:'change',indicator_id:'US_DFF',asset_id:'US_UST10Y',lag:1,window:'all'};
+const post=(b:unknown)=>POST(new Request('https://x/api/macro/analyses',{method:'POST',body:JSON.stringify(b)}));
+describe('POST /api/macro/analyses',()=>{
+ beforeEach(()=>{
+  vi.clearAllMocks();
+  m.auth.mockResolvedValue({data:{user:{id:'user-1'}}});
+  m.history.mockImplementation(async(id:string)=>id==='US_DFF'?rows(xh):id==='US_DGS10'?rows(xh.map(v=>2*v),1):[]);
+  m.rpc.mockResolvedValue({data:'9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f',error:null});
+ });
+ it('401 without a session, nothing read or written',async()=>{
+  m.auth.mockResolvedValue({data:{user:null}});
+  expect((await post(body)).status).toBe(401);expect(m.history).not.toHaveBeenCalled();expect(m.rpc).not.toHaveBeenCalled();
+ });
+ it('400 with field errors for an invalid spec',async()=>{
+  const r=await post({...body,lag:40});
+  expect(r.status).toBe(400);expect((await r.json()).error.fields).toContainEqual({field:'lag',code:'maximum'});
+ });
+ it('reads histories at the cutoff, freezes inputs and writes with the session user id',async()=>{
+  const r=await post(body);
+  expect(r.status).toBe(201);expect(await r.json()).toEqual({runId:'9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f'});
+  expect(m.history).toHaveBeenCalledWith('US_DFF',expect.objectContaining({maxRows:5000,asOf:expect.any(String)}));
+  expect(m.history).toHaveBeenCalledWith('US_DGS10',expect.objectContaining({maxRows:5000}));
+  const [fn,args]=m.rpc.mock.calls[0];
+  expect(fn).toBe('create_macro_analysis_run');
+  expect(args).toMatchObject({p_user_id:'user-1',p_request_id:body.request_id,p_kind:'change',p_status:'ok',p_error:null,p_method_version:'macro-correlation/1'});
+  expect(args.p_inputs_hash).toBe(inputsHash(args.p_inputs));
+  expect(args.p_inputs.asset).toMatchObject({series_id:'US_UST10Y',source_series_id:'US_DGS10',change_kind:'bp'});
+  expect(args.p_results.r).toBeCloseTo(1,12);expect(args.p_results.explanation.zh).toContain('强正相关');
+ });
+ it('truncated history → 422 and nothing computed or written',async()=>{
+  m.history.mockRejectedValue(new MacroDbError('truncated'));
+  const r=await post(body);
+  expect(r.status).toBe(422);expect((await r.json()).error.code).toBe('input_truncated');expect(m.rpc).not.toHaveBeenCalled();
+ });
+ it('quota_exceeded from the RPC → 429',async()=>{
+  m.rpc.mockResolvedValue({data:null,error:{message:'quota_exceeded'}});
+  const r=await post(body);
+  expect(r.status).toBe(429);expect((await r.json()).error.code).toBe('quota_exceeded');
+ });
+ it('an analysis error is stored as a failed run (not counted) and returned as 400 with its code',async()=>{
+  m.history.mockImplementation(async(id:string)=>id==='US_DFF'?rows(xh.slice(0,20)):rows(xh.slice(0,20).map(v=>2*v),1));
+  const r=await post(body);
+  expect(r.status).toBe(400);
+  const j=await r.json();expect(j.error.code).toBe('insufficient_sample');expect(j.runId).toBe('9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f');
+  expect(m.rpc.mock.calls[0][1]).toMatchObject({p_status:'failed',p_results:null});
+ });
+});
+```
+
+`src/app/api/macro/analyses/[runId]/route.test.ts`
+```ts
+// GET /api/macro/analyses/[runId]: session + RLS own rows; private, no-store.
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+const m=vi.hoisted(()=>({auth:vi.fn(),maybeSingle:vi.fn(),eq:vi.fn(),from:vi.fn()}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>({auth:{getUser:m.auth},from:m.from}))}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:vi.fn(()=>({}))}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:vi.fn(()=>({}))}));
+import {GET} from './route';
+const ID='9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f';
+const get=(id:string)=>GET(new Request(`https://x/api/macro/analyses/${id}`),{params:Promise.resolve({runId:id})});
+describe('GET /api/macro/analyses/[runId]',()=>{
+ beforeEach(()=>{
+  vi.clearAllMocks();
+  m.auth.mockResolvedValue({data:{user:{id:'user-1'}}});
+  m.eq.mockReturnValue({maybeSingle:m.maybeSingle});
+  m.from.mockReturnValue({select:()=>({eq:m.eq})});
+  m.maybeSingle.mockResolvedValue({data:{run_id:ID,status:'ok'},error:null});
+ });
+ it('400 for a non-uuid id, 401 without session',async()=>{
+  expect((await get('abc')).status).toBe(400);
+  m.auth.mockResolvedValue({data:{user:null}});expect((await get(ID)).status).toBe(401);
+ });
+ it('reads through the user client (RLS) and returns private, no-store',async()=>{
+  const r=await get(ID);
+  expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('private, no-store');
+  expect(m.from).toHaveBeenCalledWith('macro_analysis_runs');expect(m.eq).toHaveBeenCalledWith('run_id',ID);
+  expect(await r.json()).toEqual({run:{run_id:ID,status:'ok'}});
+ });
+ it('someone else’s run is invisible under RLS → 404',async()=>{
+  m.maybeSingle.mockResolvedValue({data:null,error:null});
+  expect((await get(ID)).status).toBe(404);
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/correlation.test.ts src/lib/macro/explain.test.ts src/lib/macro/analysis-spec.test.ts src/app/api/macro/analyses`
+Expected: FAIL (`Cannot find module './correlation'`, `./explain`, `./analysis-spec`, `./route`)
+
+- [ ] **Step 3: Implement correlation and explanation**
+
+`src/lib/macro/correlation.ts`
+```ts
+// src/lib/macro/correlation.ts
+// Indicator × asset statistics (spec §7, version macro-correlation/1). Pure: runAnalysis(spec, frozen inputs,
+// codeVersion) returns the same JSON for the same arguments, which is what makes a stored run re-computable.
+// Changes are computed in exact decimals first (decimal.ts). Each value then becomes a float once, here
+// (the third number-conversion point after quality.ts and regime.ts). Lag k > 0 means the indicator leads:
+// corr(indicator[t], asset[t+k]).
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import {subtract,yoyPct} from './decimal';
+import {toBp} from './events';
+import type {AnalysisKind,ChangeKind} from './types';
+export const CORRELATION_VERSION='macro-correlation/1';
+export const MIN_PAIRS=36,ROLLING_WINDOW=36,ROLLING_MIN_PAIRS=30,MIN_INDEPENDENT_EVENTS=5;
+export const WINDOWS=['5y','10y','all'] as const;
+export type AnalysisWindow=typeof WINDOWS[number];
+export const EVENT_NS=[3,6,12] as const;
+export type EventN=typeof EVENT_NS[number];
+export interface AnalysisSpec{request_id:string;kind:AnalysisKind;indicator_id:string;asset_id:string;lag:number;window:AnalysisWindow;event_n?:EventN}
+export interface FrozenObservation{observation_id:string;period_end:string;value_text:string}
+export interface FrozenSeries{series_id:string;source_series_id:string;change_kind:ChangeKind;observations:FrozenObservation[]}
+export interface FrozenEvent{effective_date:string;change_bp:string;evidence:string[]}
+export interface FrozenInputs{indicator:FrozenSeries;asset:FrozenSeries;events?:FrozenEvent[];cutoff:string;catalog_version:string}
+export type AnalysisErrorCode='insufficient_sample'|'zero_variance'|'non_positive_price'|'no_events'|'invalid_inputs';
+export class AnalysisError extends Error{constructor(readonly code:AnalysisErrorCode,message?:string){super(message??code);this.name='AnalysisError';}}
+export interface Pair{t:string;s:string;x:number;y:number}
+export interface PairResult{kind:'change'|'level';r:number;r2:number;slope:number;intercept:number;n:number;from:string;to:string;lag:number;transform:'change'|'level';exploratory:boolean;x_unit:string;y_unit:string;pairs:Pair[];method_version:string;code_version:string}
+export interface RollingResult{kind:'rolling';window_months:number;min_pairs:number;lag:number;points:{end:string;r:number;n:number}[];from:string;to:string;method_version:string;code_version:string}
+export interface Quartiles{median:number;q1:number;q3:number}
+export interface EventRow{effective_date:string;anchor:string;change_bp:string;pre_from:string;post_to:string;pre:number;post:number}
+export interface EventResult{kind:'event_window';n_months:number;events:EventRow[];candidates:number;independent:number;dropped:{effective_date:string;reason:'incomplete_window'|'overlap'}[];stats:{pre:Quartiles;post:Quartiles}|null;y_unit:string;method_version:string;code_version:string}
+export type AnalysisResult=PairResult|RollingResult|EventResult;
+
+const monthIndex=(d:string)=>Number(d.slice(0,4))*12+Number(d.slice(5,7))-1;
+const monthKey=(i:number)=>`${Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`;
+const sign=(canonical:string)=>canonical==='0'?0:canonical.startsWith('-')?-1:1;
+function byMonth(s:FrozenSeries):Map<number,string>{
+ const out=new Map<number,string>();
+ for(const o of s.observations){
+  const k=monthIndex(o.period_end);
+  if(out.has(k))throw new AnalysisError('invalid_inputs',`duplicate month ${o.period_end} in ${s.series_id}`);
+  out.set(k,canonicalDecimal(o.value_text));
+ }
+ return out;
+}
+/** Indicator change in its changeKind units (exact decimal, then one float conversion). */
+function indicatorDelta(cur:string,prev:string,kind:ChangeKind):number{
+ if(kind==='bp')return Number(toBp(subtract(cur,prev)));
+ if(kind==='pct'){if(sign(prev)<=0)throw new AnalysisError('non_positive_price',`base ${prev}`);return Number(yoyPct(cur,prev));}
+ return Number(subtract(cur,prev));
+}
+/** Asset change: price (pct) → natural log return; yield (bp) → exact bp difference; otherwise plain difference. */
+function assetDelta(cur:string,prev:string,kind:ChangeKind):number{
+ if(kind==='pct'){if(sign(cur)<=0||sign(prev)<=0)throw new AnalysisError('non_positive_price',`${prev} → ${cur}`);return Math.log(Number(cur)/Number(prev));}
+ if(kind==='bp')return Number(toBp(subtract(cur,prev)));
+ return Number(subtract(cur,prev));
+}
+/** Asset move over an event window, in display units: pct → simple % (exact decimal), bp → bp, otherwise difference. */
+function windowMove(to:string,from:string,kind:ChangeKind):number{
+ if(kind==='pct'){if(sign(from)<=0)throw new AnalysisError('non_positive_price',`base ${from}`);return Number(yoyPct(to,from));}
+ if(kind==='bp')return Number(toBp(subtract(to,from)));
+ return Number(subtract(to,from));
+}
+function alignedPairs(inputs:FrozenInputs,lag:number,transform:'change'|'level'):Pair[]{
+ const xi=byMonth(inputs.indicator),ya=byMonth(inputs.asset);
+ const out:Pair[]=[];
+ for(const k of [...xi.keys()].sort((a,b)=>a-b)){
+  const s=k+lag;const yCur=ya.get(s);if(yCur===undefined)continue;
+  if(transform==='level'){out.push({t:monthKey(k),s:monthKey(s),x:Number(xi.get(k)!),y:Number(yCur)});continue;}
+  const xPrev=xi.get(k-1),yPrev=ya.get(s-1);if(xPrev===undefined||yPrev===undefined)continue;
+  out.push({t:monthKey(k),s:monthKey(s),x:indicatorDelta(xi.get(k)!,xPrev,inputs.indicator.change_kind),y:assetDelta(yCur,yPrev,inputs.asset.change_kind)});
+ }
+ return out;
+}
+function windowed(pairs:Pair[],window:AnalysisWindow):Pair[]{
+ if(window==='all'||!pairs.length)return pairs;
+ const months=window==='5y'?60:120;const last=monthIndex(pairs[pairs.length-1].t);
+ return pairs.filter(p=>monthIndex(p.t)>last-months);
+}
+export function pearson(xs:readonly number[],ys:readonly number[]):{r:number;slope:number;intercept:number}{
+ const n=xs.length;if(n<2||ys.length!==n)throw new AnalysisError('insufficient_sample',`n=${n}`);
+ let mx=0,my=0;for(let i=0;i<n;i++){mx+=xs[i];my+=ys[i];}mx/=n;my/=n;
+ let sxx=0,syy=0,sxy=0;for(let i=0;i<n;i++){const dx=xs[i]-mx,dy=ys[i]-my;sxx+=dx*dx;syy+=dy*dy;sxy+=dx*dy;}
+ if(sxx===0||syy===0)throw new AnalysisError('zero_variance');
+ const r=Math.max(-1,Math.min(1,sxy/Math.sqrt(sxx*syy)));const slope=sxy/sxx;
+ return {r,slope,intercept:my-slope*mx};
+}
+export function quartiles(values:readonly number[]):Quartiles{
+ const s=[...values].sort((a,b)=>a-b);
+ const q=(p:number)=>{const h=(s.length-1)*p,lo=Math.floor(h);return lo+1<s.length?s[lo]+(h-lo)*(s[lo+1]-s[lo]):s[lo];};
+ return {median:q(0.5),q1:q(0.25),q3:q(0.75)};
+}
+const yUnit=(kind:ChangeKind,transform:'change'|'level')=>transform==='level'?'level':kind==='pct'?'log_return':kind;
+export function runAnalysis(spec:AnalysisSpec,inputs:FrozenInputs,codeVersion:string):AnalysisResult{
+ const base={method_version:CORRELATION_VERSION,code_version:codeVersion};
+ if(spec.kind==='change'||spec.kind==='level'){
+  const pairs=windowed(alignedPairs(inputs,spec.lag,spec.kind),spec.window);
+  if(pairs.length<MIN_PAIRS)throw new AnalysisError('insufficient_sample',`n=${pairs.length} < ${MIN_PAIRS}`);
+  const {r,slope,intercept}=pearson(pairs.map(p=>p.x),pairs.map(p=>p.y));
+  return {kind:spec.kind,r,r2:r*r,slope,intercept,n:pairs.length,from:pairs[0].t,to:pairs[pairs.length-1].t,lag:spec.lag,transform:spec.kind,exploratory:spec.kind==='level',
+   x_unit:spec.kind==='level'?'level':inputs.indicator.change_kind,y_unit:yUnit(inputs.asset.change_kind,spec.kind),pairs,...base};
+ }
+ if(spec.kind==='rolling'){
+  const pairs=windowed(alignedPairs(inputs,spec.lag,'change'),spec.window);
+  const idx=pairs.map(p=>monthIndex(p.t));
+  const points:RollingResult['points']=[];
+  let start=0;
+  for(let j=0;j<pairs.length;j++){
+   while(idx[start]<=idx[j]-ROLLING_WINDOW)start++;
+   const w=pairs.slice(start,j+1);if(w.length<ROLLING_MIN_PAIRS)continue;
+   try{points.push({end:pairs[j].t,r:pearson(w.map(p=>p.x),w.map(p=>p.y)).r,n:w.length});}
+   catch(e){if(e instanceof AnalysisError&&e.code==='zero_variance')continue;throw e;}
+  }
+  if(!points.length)throw new AnalysisError('insufficient_sample',`no ${ROLLING_WINDOW}-month window with ≥ ${ROLLING_MIN_PAIRS} pairs`);
+  return {kind:'rolling',window_months:ROLLING_WINDOW,min_pairs:ROLLING_MIN_PAIRS,lag:spec.lag,points,from:points[0].end,to:points[points.length-1].end,...base};
+ }
+ // event_window
+ const n=spec.event_n;if(n===undefined)throw new AnalysisError('invalid_inputs','event_n required');
+ const ya=byMonth(inputs.asset);
+ const lastAsset=Math.max(...ya.keys());
+ const months=spec.window==='5y'?60:spec.window==='10y'?120:Infinity;
+ const events=[...(inputs.events??[])].sort((a,b)=>a.effective_date.localeCompare(b.effective_date)).filter(e=>monthIndex(e.effective_date)>lastAsset-months);
+ if(!events.length)throw new AnalysisError('no_events');
+ const kept:EventRow[]=[];const dropped:EventResult['dropped']=[];let lastKept:number|null=null;
+ for(const e of events){
+  const a=monthIndex(e.effective_date);
+  let complete=true;for(let k=a-n;k<=a+n;k++)if(!ya.has(k)){complete=false;break;}
+  if(!complete){dropped.push({effective_date:e.effective_date,reason:'incomplete_window'});continue;}
+  if(lastKept!==null&&a-lastKept<=2*n){dropped.push({effective_date:e.effective_date,reason:'overlap'});continue;}
+  kept.push({effective_date:e.effective_date,anchor:monthKey(a),change_bp:e.change_bp,pre_from:monthKey(a-n),post_to:monthKey(a+n),
+   pre:windowMove(ya.get(a)!,ya.get(a-n)!,inputs.asset.change_kind),post:windowMove(ya.get(a+n)!,ya.get(a)!,inputs.asset.change_kind)});
+  lastKept=a;
+ }
+ return {kind:'event_window',n_months:n,events:kept,candidates:events.length,independent:kept.length,dropped,
+  stats:kept.length>=MIN_INDEPENDENT_EVENTS?{pre:quartiles(kept.map(k=>k.pre)),post:quartiles(kept.map(k=>k.post))}:null,
+  y_unit:inputs.asset.change_kind==='pct'?'pct':inputs.asset.change_kind,...base};
+}
+```
+
+`src/lib/macro/explain.ts`
+```ts
+// src/lib/macro/explain.ts
+// Rule-generated one-sentence statistical fact for a correlation result (spec §7). Strength words appear only for
+// the change transform (|r| < 0.3 weak, < 0.6 moderate, else strong). The sign word comes from the same r that is
+// printed (|r| < 0.005 prints as 0.00 and gets "near-zero", no direction). No mechanism or causal language;
+// numbers are rounded for display only.
+import type {AnalysisResult} from './correlation';
+import type {Bilingual} from './types';
+export function strengthOf(r:number):Bilingual{const a=Math.abs(r);return a<0.3?{zh:'弱',en:'weak'}:a<0.6?{zh:'中等',en:'moderate'}:{zh:'强',en:'strong'};}
+const f2=(v:number)=>v.toFixed(2);
+function lagText(k:number):Bilingual{
+ if(k>0)return {zh:`指标领先 ${k} 个月`,en:`indicator leads by ${k} month${k===1?'':'s'}`};
+ if(k<0)return {zh:`资产领先 ${-k} 个月`,en:`asset leads by ${-k} month${k===-1?'':'s'}`};
+ return {zh:'同期',en:'same month'};
+}
+const unitText=(u:string)=>u==='bp'?' bp':u==='pct'?'%':'';
+export function explainResult(res:AnalysisResult,names:{indicator:Bilingual;asset:Bilingual}):Bilingual{
+ const {indicator:i,asset:a}=names;
+ switch(res.kind){
+  case 'change':{
+   const l=lagText(res.lag);const near=Math.abs(res.r)<0.005;const s=strengthOf(res.r);
+   const zhW=near?'近零相关':`${s.zh}${res.r>0?'正':'负'}相关`,enW=near?'near-zero correlation':`${s.en} ${res.r>0?'positive':'negative'} correlation`;
+   return {zh:`${res.from} 至 ${res.to}，${i.zh}月度变化与${a.zh}月度变化的相关系数 r = ${f2(res.r)}（${zhW}，R² = ${f2(res.r2)}，n = ${res.n}，${l.zh}）。统计关系不代表因果。`,
+    en:`From ${res.from} to ${res.to}, monthly changes in ${i.en} and ${a.en} have r = ${f2(res.r)} (${enW}, R² = ${f2(res.r2)}, n = ${res.n}, ${l.en}). A statistical relationship is not causation.`};
+  }
+  case 'level':{
+   const l=lagText(res.lag);
+   return {zh:`探索性（水平口径）：${res.from} 至 ${res.to}，${i.zh}与${a.zh}水平值的相关系数 r = ${f2(res.r)}（n = ${res.n}，${l.zh}）。趋势序列的水平相关不代表关系。`,
+    en:`Exploratory (levels): from ${res.from} to ${res.to}, the levels of ${i.en} and ${a.en} have r = ${f2(res.r)} (n = ${res.n}, ${l.en}). Level correlation between trending series does not show a relationship.`};
+  }
+  case 'rolling':{
+   const rs=res.points.map(p=>p.r);const lo=f2(Math.min(...rs)),hi=f2(Math.max(...rs));
+   return {zh:`滚动 ${res.window_months} 个月：${res.points.length} 个窗口（${res.from} 至 ${res.to}），r 介于 ${lo} 与 ${hi} 之间。`,
+    en:`Rolling ${res.window_months} months: ${res.points.length} windows (${res.from} to ${res.to}); r ranges from ${lo} to ${hi}.`};
+  }
+  case 'event_window':{
+   if(!res.stats)return {zh:`独立完整事件 ${res.independent} 个，少于 5 个，只给逐事件表（±${res.n_months} 个月）。`,en:`${res.independent} independent complete events, fewer than 5; per-event table only (±${res.n_months} months).`};
+   const u=unitText(res.y_unit),p=res.stats.post;
+   return {zh:`${res.independent} 个独立完整事件（±${res.n_months} 个月）：事件后${a.zh}变化中位数 ${f2(p.median)}${u}（四分位 ${f2(p.q1)}${u} / ${f2(p.q3)}${u}）。`,
+    en:`${res.independent} independent complete events (±${res.n_months} months): median change in ${a.en} after the event ${f2(p.median)}${u} (quartiles ${f2(p.q1)}${u} / ${f2(p.q3)}${u}).`};
+  }
+ }
+}
+```
+
+- [ ] **Step 4: Implement request validation and freezing**
+
+`src/lib/macro/analysis-spec.ts`
+```ts
+// src/lib/macro/analysis-spec.ts
+// Request validation and input freezing for POST /api/macro/analyses (spec §7, §8, §0.2 M18/M22). ajv checks the
+// shape, then the catalog decides which series may be paired. Frozen inputs keep only (observation_id,
+// period_end, value_text), ascending, plus the series actually read. inputs_hash is the SHA-256 of canonical JSON
+// (sorted keys). Server-only (node:crypto).
+import {createHash} from 'node:crypto';
+import Ajv from 'ajv';
+import {catalogById} from './catalog';
+import {EVENT_NS,WINDOWS,type AnalysisSpec,type FrozenInputs} from './correlation';
+import type {PolicyEvent} from './events';
+import type {MacroSeriesDef,ObservationRow} from './types';
+const UUID='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
+const validateShape=new Ajv({strict:true,allErrors:true}).compile({
+ type:'object',additionalProperties:false,required:['request_id','kind','indicator_id','asset_id','lag','window'],
+ properties:{
+  request_id:{type:'string',pattern:UUID},
+  kind:{type:'string',enum:['change','level','rolling','event_window']},
+  indicator_id:{type:'string',minLength:1,maxLength:64},
+  asset_id:{type:'string',minLength:1,maxLength:64},
+  lag:{type:'integer',minimum:-12,maximum:12},
+  window:{type:'string',enum:[...WINDOWS]},
+  event_n:{type:'integer',enum:[...EVENT_NS]},
+ },
+});
+export interface FieldError{field:string;code:string}
+export type ValidatedRequest={ok:true;spec:AnalysisSpec;indicator:MacroSeriesDef;asset:MacroSeriesDef}|{ok:false;errors:FieldError[]};
+export function validateAnalysisRequest(body:unknown):ValidatedRequest{
+ if(!validateShape(body))return {ok:false,errors:(validateShape.errors??[]).map(e=>{
+  const p=e.params as {missingProperty?:string;additionalProperty?:string};
+  return {field:e.instancePath.replace(/^\//,'')||p.missingProperty||p.additionalProperty||'body',code:e.keyword};
+ })};
+ const spec=body as AnalysisSpec;const errors:FieldError[]=[];
+ const ind=catalogById(spec.indicator_id),asset=catalogById(spec.asset_id);
+ if(!ind||ind.role!=='indicator')errors.push({field:'indicator_id',code:'not_indicator'});
+ else if(ind.status!=='active')errors.push({field:'indicator_id',code:'not_active'});
+ else if(ind.period!=='month')errors.push({field:'indicator_id',code:'not_monthly'});
+ if(!asset||asset.role!=='asset')errors.push({field:'asset_id',code:'not_asset'});
+ else if(asset.status!=='active')errors.push({field:'asset_id',code:'not_active'});
+ else if(asset.period!=='month')errors.push({field:'asset_id',code:'not_monthly'});
+ if(spec.kind==='event_window'){
+  if(spec.event_n===undefined)errors.push({field:'event_n',code:'required'});
+  if(ind&&!(ind.region==='US'&&ind.type==='policy_rate'))errors.push({field:'indicator_id',code:'event_window_requires_us_policy_rate'});
+  if(spec.lag!==0)errors.push({field:'lag',code:'must_be_zero_for_event_window'});
+ }else if(spec.event_n!==undefined)errors.push({field:'event_n',code:'only_for_event_window'});
+ if(errors.length||!ind||!asset)return {ok:false,errors};
+ return {ok:true,spec,indicator:ind,asset};
+}
+const frozenObs=(rows:readonly ObservationRow[])=>rows.map(r=>({observation_id:r.observation_id,period_end:r.period_end,value_text:r.value_text})).sort((a,b)=>a.period_end.localeCompare(b.period_end));
+export function freezeInputs(a:{indicator:MacroSeriesDef;asset:MacroSeriesDef;indicatorRows:readonly ObservationRow[];assetRows:readonly ObservationRow[];events?:readonly PolicyEvent[];cutoff:string;catalogVersion:string}):FrozenInputs{
+ const inputs:FrozenInputs={
+  indicator:{series_id:a.indicator.id,source_series_id:a.indicator.aliasOf??a.indicator.id,change_kind:a.indicator.changeKind,observations:frozenObs(a.indicatorRows)},
+  asset:{series_id:a.asset.id,source_series_id:a.asset.aliasOf??a.asset.id,change_kind:a.asset.changeKind,observations:frozenObs(a.assetRows)},
+  cutoff:a.cutoff,catalog_version:a.catalogVersion,
+ };
+ if(a.events)inputs.events=a.events.map(e=>({effective_date:e.effective_date,change_bp:e.change_bp,evidence:[...e.evidence]}));
+ return inputs;
+}
+/** JSON with object keys sorted at every level; arrays keep their order; undefined members are dropped. */
+export function canonicalJson(v:unknown):string{
+ if(v===null||typeof v!=='object')return JSON.stringify(v);
+ if(Array.isArray(v))return `[${v.map(canonicalJson).join(',')}]`;
+ const o=v as Record<string,unknown>;
+ return `{${Object.keys(o).sort().filter(k=>o[k]!==undefined).map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;
+}
+export const inputsHash=(inputs:FrozenInputs):string=>createHash('sha256').update(canonicalJson(inputs)).digest('hex');
+```
+
+- [ ] **Step 5: Implement the routes**
+
+`src/app/api/macro/analyses/route.ts`
+```ts
+// src/app/api/macro/analyses/route.ts
+// POST: create one append-only correlation run (spec §7, §8, §0.2 M18/M22/N1). A session is required. The server
+// reads complete histories at the cutoff (truncated → 422, nothing computed), freezes inputs, computes, and writes
+// through create_macro_analysis_run with the verified session user id. That RPC is service-only, idempotent by
+// request_id, and enforces the per-plan quota counting ok runs only.
+import {NextResponse} from 'next/server';
+import {resolveCodeVersion} from '@/lib/facts/deps';
+import {freezeInputs,inputsHash,validateAnalysisRequest} from '@/lib/macro/analysis-spec';
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
+import {AnalysisError,CORRELATION_VERSION,runAnalysis,type AnalysisResult,type FrozenInputs} from '@/lib/macro/correlation';
+import {MacroDbError,supabaseMacroDb} from '@/lib/macro/db';
+import {US_TARGET_LOWER_ID,US_TARGET_UPPER_ID,derivePolicyEvents,type PolicyEvent} from '@/lib/macro/events';
+import {explainResult} from '@/lib/macro/explain';
+import {requireSessionUser} from '@/lib/macro/route-helpers';
+import {getAdminSupabase} from '@/lib/supabase/admin';
+import {getAnonSupabase} from '@/lib/supabase/anon';
+export const dynamic='force-dynamic';
+const MONTHLY_MAX_ROWS=5_000,DAILY_MAX_ROWS=20_000;
+const HEADERS={'Cache-Control':'private, no-store'};
+const err=(code:string,message:string,status:number,extra:Record<string,unknown>={})=>NextResponse.json({error:{code,message,...(extra.fields?{fields:extra.fields}:{})},...(extra.runId?{runId:extra.runId}:{})},{status,headers:HEADERS});
+/** create_macro_analysis_run is not in Database['public']['Functions'] (skeleton: narrow typing); one cast, here. */
+type RunRpc=(fn:'create_macro_analysis_run',args:Record<string,unknown>)=>PromiseLike<{data:unknown;error:{message:string}|null}>;
+function codeVersion():string{try{return resolveCodeVersion({allowGit:process.env.NODE_ENV!=='production'})??'unversioned';}catch{return 'unversioned';}}
+export async function POST(req:Request){
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;   // 401 {error:{code:'unauthenticated'}}
+ const {user}=auth;
+ let body:unknown;
+ try{body=await req.json();}catch{return err('invalid_parameter','body must be JSON',400,{fields:[{field:'body',code:'json'}]});}
+ const v=validateAnalysisRequest(body);
+ if(!v.ok)return err('invalid_parameter','invalid analysis request',400,{fields:v.errors});
+ const {spec,indicator,asset}=v;
+ const cutoff=new Date().toISOString();
+ let admin:ReturnType<typeof getAdminSupabase>;let inputs:FrozenInputs;
+ try{
+  admin=getAdminSupabase();
+  const db=supabaseMacroDb({admin,anon:getAnonSupabase()});
+  const read=(id:string,maxRows:number)=>db.seriesHistory(id,{asOf:cutoff,maxRows});
+  const [indRows,assetRows]=await Promise.all([read(indicator.aliasOf??indicator.id,MONTHLY_MAX_ROWS),read(asset.aliasOf??asset.id,MONTHLY_MAX_ROWS)]);
+  let events:PolicyEvent[]|undefined;
+  if(spec.kind==='event_window'){
+   const [u,l]=await Promise.all([read(US_TARGET_UPPER_ID,DAILY_MAX_ROWS),read(US_TARGET_LOWER_ID,DAILY_MAX_ROWS)]);
+   events=derivePolicyEvents(u,l);
+  }
+  inputs=freezeInputs({indicator,asset,indicatorRows:indRows,assetRows,events,cutoff,catalogVersion:CATALOG_VERSION});
+ }catch(e){
+  if(e instanceof MacroDbError&&e.code==='truncated')return err('input_truncated','input history exceeds the read limit; nothing computed',422);
+  return err('read_failed','macro inputs could not be read',503);
+ }
+ const cv=codeVersion();
+ let results:(AnalysisResult&{explanation:{zh:string;en:string}})|null=null;let failure:AnalysisError|null=null;
+ try{const r=runAnalysis(spec,inputs,cv);results={...r,explanation:explainResult(r,{indicator:indicator.name,asset:asset.name})};}
+ catch(e){if(e instanceof AnalysisError)failure=e;else throw e;}
+ const {data,error}=await (admin.rpc as unknown as RunRpc).call(admin,'create_macro_analysis_run',{
+  p_user_id:user.id,p_request_id:spec.request_id,p_kind:spec.kind,p_spec:spec,p_inputs:inputs,p_inputs_hash:inputsHash(inputs),
+  p_results:results,p_code_version:cv,p_method_version:CORRELATION_VERSION,p_status:failure?'failed':'ok',p_error:failure?`${failure.code}: ${failure.message}`:null,
+ });
+ if(error)return /quota_exceeded/.test(error.message)?err('quota_exceeded','daily analysis quota reached',429):err('write_failed','analysis run could not be stored',503);
+ const runId=typeof data==='string'?data:(data as {run_id?:string}|null)?.run_id;
+ if(!runId)return err('write_failed','analysis run id missing',503);
+ if(failure)return err(failure.code,failure.message,400,{runId});
+ return NextResponse.json({runId},{status:201,headers:HEADERS});
+}
+```
+
+`src/app/api/macro/analyses/[runId]/route.ts`
+```ts
+// src/app/api/macro/analyses/[runId]/route.ts
+// GET one saved analysis run (spec §8). A session is required. The read goes through the user's server client, so
+// RLS (user_id = auth.uid()) hides other users' runs → 404. Never cached.
+import {NextResponse} from 'next/server';
+import type {SupabaseClient} from '@supabase/supabase-js';
+import {UUID_RE,requireSessionUser} from '@/lib/macro/route-helpers';
+import {getServerSupabase} from '@/lib/supabase/server';
+export const dynamic='force-dynamic';
+const HEADERS={'Cache-Control':'private, no-store'};
+const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:HEADERS});
+export async function GET(_req:Request,{params}:{params:Promise<{runId:string}>}){
+ const {runId}=await params;
+ if(!UUID_RE.test(runId))return err('invalid_parameter:runId','runId must be a uuid',400);
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ const supabase=await getServerSupabase();   // the user's own client: RLS user_id = auth.uid()
+ const {data,error}=await (supabase as unknown as SupabaseClient).from('macro_analysis_runs')
+  .select('run_id,request_id,kind,spec,inputs,inputs_hash,results,code_version,method_version,status,error,created_at').eq('run_id',runId).maybeSingle();
+ if(error)return err('read_failed','analysis run could not be read',503);
+ if(!data)return err('not_found','no such run',404);
+ return NextResponse.json({run:data},{headers:HEADERS});
+}
+```
+
+- [ ] **Step 6: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro/correlation.test.ts src/lib/macro/explain.test.ts src/lib/macro/analysis-spec.test.ts src/app/api/macro/analyses && npm run typecheck && npm run lint`
+Expected: PASS. If `analysis-spec.test.ts` fails on a catalog premise (`US_VIX`, `US_SP500`, `CN_GDP_YOY` status/period), read `src/lib/macro/catalog.ts`: the test encodes spec §4.2 (US_VIX restricted, US_SP500 restricted, CN_GDP_YOY quarterly). Report NEEDS_CONTEXT if the catalog differs; do not weaken the test.
+
+- [ ] **Step 7: Commit**
+```bash
+git add src/lib/macro/correlation.ts src/lib/macro/correlation.test.ts src/lib/macro/explain.ts src/lib/macro/explain.test.ts src/lib/macro/analysis-spec.ts src/lib/macro/analysis-spec.test.ts src/app/api/macro/analyses
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): correlation workbench engine and analyses API
+
+macro-correlation/1: change (default), level (exploratory), rolling 36m and
+event-window modes with lag direction k>0 = indicator leads, n>=36 gate,
+decimal-first changes, frozen inputs + canonical-JSON hash, byte-identical
+recompute. POST/GET /api/macro/analyses via create_macro_analysis_run
+(session user id, request_id idempotency, quota 429).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 16: i18n domain, number formatting, view models, base components and charts
+
+**Files:**
+- Create: `messages/zh/macro.json`, `messages/en/macro.json` (all strings for Tasks 16–17; identical key sets)
+- Modify: `src/i18n/request.ts` (add `'macro'` to `MESSAGE_DOMAINS` inside a `// MACRO` … `// /MACRO` block)
+- Create: `src/components/macro/macro-messages.test.ts`
+- Create: `src/components/macro/macro-format.ts`, `src/components/macro/macro-format.test.ts`
+- Create: `src/components/macro/use-macro-t.ts`
+- Create: `src/components/macro/view-model.ts`, `src/components/macro/view-model.test.ts`
+- Create: `src/components/macro/charts/chart-geometry.ts`, `src/components/macro/charts/chart-geometry.test.ts`
+- Create: `src/components/macro/IndicatorTable.tsx`, `ChangesCard.tsx`, `CatalogCoverage.tsx`, `SourceFooter.tsx`, `SourceDrawer.tsx`
+- Create: `src/components/macro/charts/MacroLineChart.tsx`, `Sparkline.tsx`, `ScatterFit.tsx`, `DataTableToggle.tsx`
+- Create: `src/app/api/macro/series/[id]/versions/route.ts`, `src/app/api/macro/series/[id]/versions/route.test.ts` (owner-accepted extra read route: revision history + retrieval receipt for the evidence drawer)
+
+Facts checked while planning (do not re-derive; re-check only if a step fails):
+- **Component tests:** vitest runs in the `node` environment and includes only `src/**/*.test.ts`. With `tsconfig.json` `"jsx": "preserve"`, a `.test.ts` cannot import a `.tsx` module: a probe on 2026-11-06 failed in vite's transform. The repo's one render test (`src/components/ManualDeliveryControls.test.ts`) imports a `.ts` view built with `createElement`. So this task **tests pure helpers only** (formatting, view models, chart geometry, drawer rows, message parity) and keeps every `.tsx` component a thin renderer over those helpers. The visual check is Task 18's browser drive.
+- **lightweight-charts** is `4.2.3` (root `node_modules`). v4 API: `createChart(el, opts)`, `chart.addLineSeries()`, `chart.addHistogramSeries()`, `series.setMarkers(SeriesMarker<Time>[])` (sorted ascending), `series.priceScale().applyOptions({scaleMargins, visible})`, `Time = UTCTimestamp | BusinessDay | string` (`'YYYY-MM-DD'` accepted), marker shapes `circle|square|arrowUp|arrowDown`, positions `aboveBar|belowBar|inBar`. It is loaded with `await import('lightweight-charts')` inside `useEffect`, as `src/components/KlineChart.tsx` does.
+- **next-intl:** client components use `useTranslations('macro')` / `useLocale()` from `next-intl`; server pages use `getTranslations` from `next-intl/server`. Message files are loaded per domain by `src/i18n/request.ts`. There is no typed `AppConfig`, so keys are plain strings.
+- **Design tokens:** Tailwind colors `bg-bg-elevated`, `bg-bg-card`, `border-border`, `text-text`, `text-text-dim`, `text-text-muted`, `text-accent`, `text-warn`, `text-up`, `text-down`; arbitrary `bg-[var(--accent-wash)]`, `bg-[var(--bg-hover)]`. Rules: radius ≤ 6px (`rounded`, `rounded-md`), numbers `font-mono tabular-nums`, `data-density="data"` (via `Panel`), no purple, no gradients, no glow. Macro indicator moves use neutral arrows only; up/down colours are only for asset moves (Task 17).
+- **Canvas** `https://claude.ai/artifact/StRedLKWSN4EVb26GSg7KH`, draft-2 artboards `OverviewOff`, `SourceDrawer`, `JudgmentSlot`, `TodayGlance2` (read 2026-11-06). Layout: header with region switch and a snapshot/collection pill; tabs 概览 · 指标 · 关联 · 方法与来源; two fact cards (本期变化 with four counters + latest lines; 目录覆盖 with "已核实 N / 目录 M", not-verified list with reasons, a per-source collection table); the indicator table (名称 | 值 | 变化 | 数据期 | 可得时间 | 状态 | 迷你走势), where clicking a value opens the evidence drawer and missing/restricted rows are greyed with the reason in the last column; a source bar with an "打开证据抽屉 ▸" button. The drawer has three sections, 来源 / 证据 / 修订历史, and missing evidence keeps the field names with the value "缺失". The older artboards (seeded runs, editorial events, Nasdaq/TLT/gold) are superseded by the spec and are not followed.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/components/macro/macro-messages.test.ts`
+```ts
+// macro i18n domain (spec §10): zh/en key and placeholder parity, registration, judgment-off vocabulary.
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {describe,expect,it} from 'vitest';
+const load=(l:'zh'|'en')=>JSON.parse(readFileSync(resolve(process.cwd(),'messages',l,'macro.json'),'utf8'));
+function flat(v:unknown,p=''):[string,string][]{
+ if(typeof v==='string')return [[p,v]];
+ if(typeof v!=='object'||v===null||Array.isArray(v))throw new Error(`non-string message at ${p}`);
+ return Object.entries(v).flatMap(([k,c])=>flat(c,p?`${p}.${k}`:k));
+}
+const ph=(s:string)=>[...s.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]).sort();
+describe('macro messages',()=>{
+ it('zh and en have the same keys',()=>{
+  expect(flat(load('zh')).map(([k])=>k).sort()).toEqual(flat(load('en')).map(([k])=>k).sort());
+ });
+ it('placeholders match per key',()=>{
+  const en=new Map(flat(load('en')));
+  for(const [k,v] of flat(load('zh')))expect([k,ph(v)]).toEqual([k,ph(en.get(k)!)]);
+ });
+ it('copy outside the judgment slot never uses judgment vocabulary',()=>{
+  for(const [k,v] of flat(load('zh')).filter(([k])=>!k.startsWith('judgment.')))expect([k,/象限|得分|margin|概率|置信度/.test(v)]).toEqual([k,false]);
+  for(const [k,v] of flat(load('en')).filter(([k])=>!k.startsWith('judgment.')))expect([k,/quadrant|score|margin|probabilit|confidence/i.test(v)]).toEqual([k,false]);
+ });
+ it('is registered in MESSAGE_DOMAINS inside a MACRO block',()=>{
+  expect(readFileSync(resolve(process.cwd(),'src/i18n/request.ts'),'utf8')).toMatch(/\/\/ MACRO[\s\S]*'macro'[\s\S]*\/\/ \/MACRO/);
+ });
+});
+```
+
+`src/components/macro/macro-format.test.ts`
+```ts
+// Display formatting from value_text (spec §3.2): string rounding (no float drift), typed changes, neutral arrows.
+import {describe,expect,it} from 'vitest';
+import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,roundDecimalText,typedChange,unitSuffix} from './macro-format';
+describe('roundDecimalText',()=>{
+ it('rounds half away from zero on the decimal string and pads',()=>{
+  expect(roundDecimalText('2.9381',2)).toBe('2.94');
+  expect(roundDecimalText('4.8',2)).toBe('4.80');
+  expect(roundDecimalText('0.005',2)).toBe('0.01');
+  expect(roundDecimalText('-0.005',2)).toBe('-0.01');
+  expect(roundDecimalText('-0.004',2)).toBe('0.00');
+  expect(roundDecimalText('1.5',0)).toBe('2');
+  expect(roundDecimalText('999.995',2)).toBe('1000.00');
+  expect(roundDecimalText('1.0000000000000000001',2)).toBe('1.00');
+ });
+});
+describe('formatValueText',()=>{
+ it('keeps source precision up to 2 decimals',()=>{
+  expect(formatValueText('2.9381')).toBe('2.94');expect(formatValueText('4.80')).toBe('4.8');expect(formatValueText('50')).toBe('50');expect(formatValueText('710.255')).toBe('710.26');
+ });
+});
+describe('typedChange',()=>{
+ it('bp / pp / pct / points with neutral arrows',()=>{
+  expect(typedChange('4.80','4.78','bp')).toEqual({text:'+2 bp',arrow:'↑',kind:'bp'});
+  expect(typedChange('3.75','3.75','bp')).toEqual({text:'0 bp',arrow:'→',kind:'bp'});
+  expect(typedChange('2.9','2.6','pp')).toEqual({text:'+0.3 pp',arrow:'↑',kind:'pp'});
+  expect(typedChange('4.2','4.3','pp')).toEqual({text:'−0.1 pp',arrow:'↓',kind:'pp'});
+  expect(typedChange('103.4','103','pct')).toEqual({text:'+0.39 pct',arrow:'↑',kind:'pct'});
+  expect(typedChange('121.37','121.06','points')).toEqual({text:'+0.31 points',arrow:'↑',kind:'points'});
+  expect(typedChange('4.125','4','bp')?.text).toBe('+12.5 bp');
+ });
+ it('has no float drift (0.3 − 0.1 is exactly 0.2)',()=>{expect(typedChange('0.3','0.1','pp')?.text).toBe('+0.2 pp');});
+ it('formatChange renders an exact change already computed by the overview (views.ts changeOf)',()=>{
+  expect(formatChange({kind:'bp',value_text:'10'})).toEqual({text:'+10 bp',arrow:'↑',kind:'bp'});
+  expect(formatChange({kind:'pct',value_text:'1.2'})).toEqual({text:'+1.20 pct',arrow:'↑',kind:'pct'});
+  expect(formatChange({kind:'pct',value_text:'-4.7619'})).toEqual({text:'−4.76 pct',arrow:'↓',kind:'pct'});
+  expect(formatChange({kind:'points',value_text:'-0.4'})).toEqual({text:'−0.4 points',arrow:'↓',kind:'points'});
+  expect(formatChange({kind:'pp',value_text:'0'})).toEqual({text:'0 pp',arrow:'→',kind:'pp'});
+ });
+ it('missing input or non-positive pct base → null (rendered as missing, never 0)',()=>{
+  expect(typedChange(null,'1','pp')).toBeNull();expect(typedChange('1',null,'pp')).toBeNull();expect(typedChange('5','0','pct')).toBeNull();
+ });
+});
+describe('period / instant / unit',()=>{
+ it('formats by period kind',()=>{
+  expect(formatPeriod('2026-09-30','month')).toBe('2026-09');expect(formatPeriod('2026-09-30','quarter')).toBe('2026-Q3');expect(formatPeriod('2026-11-03','day')).toBe('2026-11-03');
+ });
+ it('instants are printed in UTC, invalid → missing',()=>{
+  expect(formatInstant('2026-11-03T03:12:08Z')).toBe('2026-11-03 03:12 UTC');expect(formatInstant('nope')).toBe(MISSING);
+ });
+ it('unit suffix only for percent',()=>{expect(unitSuffix('pct')).toBe('%');expect(unitSuffix('index')).toBe('');});
+});
+```
+
+`src/components/macro/view-model.test.ts`
+```ts
+// Overview/series/versions JSON → view models (spec §3.2, §3.5): missing stays missing, counts not percentages,
+// drawer keeps field names with 缺失 values, glance never invents rows.
+import {describe,expect,it} from 'vitest';
+import type {MacroT} from './use-macro-t';
+import {MISSING} from './macro-format';
+import {COMPACT_KEYS} from '@/lib/macro/views';
+import {GLANCE_IDS,changeCounts,changeLines,collectionOf,coverageOf,glanceRows,proofRows,revisionRows,sourceLabels,sourceOf,sourceRows,statusKey,toIndicatorView,type IndicatorRowJson,type OverviewEnvelopeJson,type VersionJson} from './view-model';
+const t:MacroT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
+const src={publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED（圣路易斯联储）',en:'FRED'},fetch_host:'fred.stlouisfed.org',adapter:'fred_csv' as const,rights:'public_domain' as const,attribution:{zh:'来源：BLS via FRED',en:'Source: BLS via FRED'}};
+// Rows in Task 13's IndicatorRow shape (views.ts): flat value fields, status letter, precomputed exact change.
+const row=(o:Partial<IndicatorRowJson>):IndicatorRowJson=>({series_id:'US_UNRATE',name:{zh:'失业率',en:'Unemployment rate'},value_text:'4.2',unit:'pct',change:{kind:'pp',value_text:'-0.1'},
+ period_end:'2026-09-30',available_at:'2026-10-15T12:30:00Z',timeliness:'current',status:'A',retrieval_id:'r1',sparkline:['4.3','4.2'],...o});
+const env=(o:Partial<OverviewEnvelopeJson>={}):OverviewEnvelopeJson=>({snapshotId:'s1',asOf:'2026-11-03',catalogVersion:'macro-catalog/x',methodologyVersion:'v1.0',
+ collection:[{dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-03T05:31:00Z'}],indicators:[row({})],changes:{counts:{new_release:0,revised:0,late:0,missing:0},items:[]},catalogCounts:{verified:6,missing:1,restricted:1},...o});
+describe('toIndicatorView',()=>{
+ it('active row: formatted value, formatted change, period from the catalog, available, catalog source',()=>{
+  const v=toIndicatorView(row({}),'zh');
+  expect(v).toMatchObject({seriesId:'US_UNRATE',name:'失业率',value:'4.2',unit:'%',change:{text:'−0.1 pp',arrow:'↓'},period:'2026-09',available:'2026-10-15 12:30 UTC',muted:false,hasEvidence:true,spark:['4.3','4.2']});
+  expect(v.source).toEqual(sourceOf('US_UNRATE'));
+  expect(v.source?.fetch_host).toBe('fred.stlouisfed.org');
+  expect(toIndicatorView(row({series_id:'CN_GDP_YOY',period_end:'2026-09-30'}),'zh').period).toBe('2026-Q3');
+ });
+ it('missing / restricted rows are muted with reason and no numbers',()=>{
+  const v=toIndicatorView(row({series_id:'US_ISM_PMI',status:'M',reason:{zh:'无可采的原始来源',en:'No source'},value_text:null,change:null,period_end:null,available_at:null,retrieval_id:null,sparkline:[],timeliness:'missing'}),'zh');
+  expect(v).toMatchObject({muted:true,value:MISSING,change:null,period:MISSING,available:MISSING,reason:'无可采的原始来源',hasEvidence:false,source:null});
+  expect(statusKey(v)).toBe('status.missing');
+ });
+ it('status key falls back to timeliness, n/a → na',()=>{
+  expect(statusKey({status:'active',timeliness:'late'})).toBe('timeliness.late');
+  expect(statusKey({status:'active',timeliness:'n/a'})).toBe('timeliness.na');
+ });
+});
+describe('overview pieces',()=>{
+ it('coverage is counts, with reasons for not-verified items; before any snapshot it counts the rows',()=>{
+  const e=env({indicators:[row({}),row({series_id:'US_VIX',name:{zh:'VIX',en:'VIX'},status:'R',reason:{zh:'第三方版权',en:'Third-party'},value_text:null,change:null,period_end:null})]});
+  expect(coverageOf(e,'zh')).toEqual({verified:6,total:8,notVerified:[{seriesId:'US_VIX',name:'VIX',status:'restricted',reason:'第三方版权'}]});
+  expect(coverageOf({...e,catalogCounts:null},'zh')).toMatchObject({verified:1,total:2});
+ });
+ it('change counts come from the envelope; lines show the current published value of the changed row',()=>{
+  const e=env({changes:{counts:{new_release:1,revised:1,late:0,missing:1},items:[{series_id:'US_UNRATE',kind:'revised',period_end:'2026-09-30'},{series_id:'US_CPI_YOY',kind:'new_release',period_end:'2026-10-31'},{series_id:'US_ISM_PMI',kind:'missing',period_end:null}]},
+   indicators:[row({}),row({series_id:'US_CPI_YOY',name:{zh:'美国 CPI 同比',en:'US CPI YoY'},value_text:'3',period_end:'2026-10-31'})]});
+  expect(changeCounts(e)).toEqual({new_release:1,revised:1,late:0,missing:1});
+  const lines=changeLines(e,'zh');
+  expect(lines[0]).toEqual({kind:'revised',seriesId:'US_UNRATE',name:'失业率',value:'4.2%',previous:null,period:'2026-09'});
+  expect(lines[1]).toMatchObject({kind:'new_release',name:'美国 CPI 同比',value:'3%',period:'2026-10'});
+  expect(lines[2]).toMatchObject({kind:'missing',name:'US_ISM_PMI',value:MISSING,period:MISSING});
+ });
+ it('collection: worst status wins, missing lastOk shows —',()=>{
+  const c=collectionOf(env({collection:[{dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-03T05:31:00Z'},{dataset:'macro.akshare',status:'error',lastOkAt:null}]}));
+  expect(c.overall).toBe('error');expect(c.items[1]).toEqual({dataset:'macro.akshare',status:'error',lastOk:MISSING});
+ });
+ it('source labels: publisher via forwarder from the catalog, active rows only, unique',()=>{
+  expect(sourceLabels([row({}),row({series_id:'US_CPI_YOY'}),row({series_id:'US_ISM_PMI',status:'M'})],'en')).toEqual(['U.S. Bureau of Labor Statistics via FRED (Federal Reserve Bank of St. Louis)']);
+ });
+ it('glance ids equal the overview compact keys; glance takes only the key ids present, never placeholders',()=>{
+  expect(GLANCE_IDS).toEqual(COMPACT_KEYS);
+  const g=glanceRows({regions:{US:env({indicators:[row({series_id:'US_DFF'}),row({series_id:'US_DGS10',name:{zh:'10 年美债',en:'UST 10Y'},change:{kind:'bp',value_text:'10'}})]})}},'zh');
+  expect(g).toHaveLength(1);expect(g[0].region).toBe('US');expect(g[0].rows.map(r=>r.seriesId)).toEqual(['US_DFF','US_DGS10']);
+  expect(g[0].rows[1].change?.text).toBe('+10 bp');
+  expect(glanceRows({regions:{}},'zh')).toEqual([]);
+ });
+});
+describe('drawer rows',()=>{
+ const v=(o:Partial<VersionJson>={}):VersionJson=>({observation_id:'o2',series_id:'US_UNRATE',version:2,value_text:'4.2',available_at:'2026-10-03T12:30:00Z',availability_basis:'first_seen',
+  retrieval:{retrieval_id:'r1',fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-10-03T12:30:00Z',tool_versions:{parser:'fred-csv@1',code:'abc'}},
+  evidence:{sha256:'b'.repeat(64),adapter:'fred_csv',content_type:'text/csv',byte_length:12345},locator:{kind:'csv_row',line:933,column:1},transform:null,derived_from:null,inputs:[],...o});
+ it('source rows: publisher, via, rights, attribution',()=>{
+  expect(sourceRows(src,t,'en').map(r=>[r.key,r.value])).toEqual([['publisher','BLS'],['via','FRED'],['rights','drawer.rightsValues.public_domain'],['attribution','Source: BLS via FRED']]);
+  expect(sourceRows(null,t,'en').every(r=>r.missing&&r.value==='drawer.missing')).toBe(true);
+ });
+ it('proof rows for a native observation',()=>{
+  const r=Object.fromEntries(proofRows(v(),t).map(x=>[x.key,x.value]));
+  expect(r).toMatchObject({fetchUrl:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01',host:'fred.stlouisfed.org',fetchedAt:'2026-10-03 12:30 UTC',sha256:'b'.repeat(64),
+   locator:'drawer.csvRow{"line":933,"column":1}',transform:'drawer.none',adapter:'drawer.adapters.fred_csv',toolVersions:'code=abc · parser=fred-csv@1'});
+ });
+ it('missing evidence keeps every field name with the value 缺失',()=>{
+  const rows=proofRows(v({retrieval:null,evidence:null,locator:null}),t);
+  for(const k of ['fetchUrl','host','fetchedAt','sha256','locator','adapter','toolVersions'])expect(rows.find(r=>r.key===k)).toMatchObject({value:'drawer.missing',missing:true});
+ });
+ it('revision rows: newest first; older versions marked superseded',()=>{
+  expect(revisionRows([v({version:1,observation_id:'o1',value_text:'4.3'}),v()],t).map(r=>[r.version,r.value,r.note])).toEqual([['v2','4.2','drawer.current'],['v1','4.3','drawer.superseded{"version":2}']]);
+ });
+});
+```
+
+`src/components/macro/charts/chart-geometry.test.ts`
+```ts
+// Chart geometry helpers (spec §3.3, §3.4): positions only; markers snap to existing points; bands by month.
+import {describe,expect,it} from 'vitest';
+import {bandPoints,scatterGeometry,snapMarkers,sparklinePoints,withAlpha} from './chart-geometry';
+describe('chart geometry',()=>{
+ it('sparkline maps min→bottom, max→top; < 2 points → empty',()=>{
+  expect(sparklinePoints(['1','3','2'],100,20,0)).toBe('0,20 50,0 100,10');
+  expect(sparklinePoints(['5','5'],100,20,0)).toBe('0,10 100,10');
+  expect(sparklinePoints(['5'],100,20)).toBe('');
+ });
+ it('scatter maps the domain to the plot box and draws the fit across it',()=>{
+  const g=scatterGeometry([{x:0,y:0},{x:10,y:20}],{slope:2,intercept:0},120,120,10);
+  expect(g.dots).toEqual([{cx:10,cy:110},{cx:110,cy:10}]);
+  expect(g.line).toEqual({x1:10,y1:110,x2:110,y2:10});
+  expect(g.xDomain).toEqual([0,10]);expect(g.yDomain).toEqual([0,20]);
+ });
+ it('withAlpha handles hex and rgba',()=>{
+  expect(withAlpha('#eab308',0.14)).toBe('rgba(234, 179, 8, 0.14)');
+  expect(withAlpha('rgba(202, 138, 4, 0.12)',0.3)).toBe('rgba(202, 138, 4, 0.3)');
+  expect(withAlpha('red',0.5)).toBe('red');
+ });
+ it('markers snap to the first point on/after their date; later ones are dropped; output is sorted',()=>{
+  const times=['2024-08-31','2024-09-30','2024-10-31'];
+  expect(snapMarkers(times,[{time:'2024-10-15',k:'b'},{time:'2024-09-18',k:'a'},{time:'2024-11-07',k:'c'}])).toEqual([{time:'2024-09-30',k:'a'},{time:'2024-10-31',k:'b'}]);
+ });
+ it('bands cover points by month, inclusive',()=>{
+  expect(bandPoints(['2024-08-31','2024-09-30','2024-10-31','2024-11-30'],[{start:'2024-09-18',end:'2024-10-02',direction:'down'}])).toEqual([{time:'2024-09-30',direction:'down'},{time:'2024-10-31',direction:'down'}]);
+ });
+});
+```
+
+`src/app/api/macro/series/[id]/versions/route.test.ts`
+```ts
+// GET /api/macro/series/[id]/versions: session, catalog whitelist, ISO period, provenance per version (+ derived inputs).
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+const m=vi.hoisted(()=>({auth:vi.fn(),versionsOf:vi.fn(),retrieval:vi.fn(),evidenceObject:vi.fn(),observationsByIds:vi.fn()}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>({auth:{getUser:m.auth}}))}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:vi.fn(()=>({}))}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:vi.fn(()=>({}))}));
+vi.mock('@/lib/macro/db',async orig=>({...(await orig<typeof import('@/lib/macro/db')>()),supabaseMacroDb:vi.fn(()=>({versionsOf:m.versionsOf,retrieval:m.retrieval,evidenceObject:m.evidenceObject,observationsByIds:m.observationsByIds}))}));
+import {GET} from './route';
+const get=(id:string,q:string)=>GET(new Request(`https://x/api/macro/series/${id}/versions?${q}`),{params:Promise.resolve({id})});
+const base={series_id:'US_CPI_YOY',period_end:'2026-09-30',availability_basis:'first_seen',status:'ok',ingested_at:'2026-10-15T12:31:00Z',code_version:'c',batch_id:'b'};
+describe('GET versions',()=>{
+ beforeEach(()=>{
+  vi.clearAllMocks();
+  m.auth.mockResolvedValue({data:{user:{id:'u'}}});
+  m.versionsOf.mockResolvedValue([
+   {...base,observation_id:'d1',version:1,value_text:'2.9',available_at:'2026-10-15T12:30:00Z',retrieval_id:null,locator:null,derived_from:['i1','i0'],transform:'yoy_from_index@1'},
+  ]);
+  m.observationsByIds.mockResolvedValue([{...base,series_id:'US_CPI_INDEX',observation_id:'i1',version:1,value_text:'336.298',available_at:'2026-10-15T12:30:00Z',retrieval_id:'r1',locator:{kind:'csv_row',line:310,column:1},derived_from:null,transform:null}]);
+  m.retrieval.mockResolvedValue({retrieval_id:'r1',sha256:'c'.repeat(64),fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-10-15T12:30:00Z',batch_id:'b',tool_versions:{parser:'fred-csv@1'}});
+  m.evidenceObject.mockResolvedValue({sha256:'c'.repeat(64),object_path:'fred_csv/x.csv',adapter:'fred_csv',content_type:'text/csv',byte_length:9999,created_at:'2026-10-15T12:30:00Z'});
+ });
+ it('401 without session; 404 unknown series; 400 bad period',async()=>{
+  expect((await get('US_CPI_YOY','period_end=2026-09-30')).status).toBe(200);
+  expect((await get('NOPE','period_end=2026-09-30')).status).toBe(404);
+  expect((await get('US_CPI_YOY','period_end=2026-9-30')).status).toBe(400);
+  m.auth.mockResolvedValue({data:{user:null}});expect((await get('US_CPI_YOY','period_end=2026-09-30')).status).toBe(401);
+ });
+ it('derived version lists each input with its own receipt; an unreadable input is marked missing, not dropped',async()=>{
+  const j=await (await get('US_CPI_YOY','period_end=2026-09-30')).json();
+  expect(j.versions).toHaveLength(1);
+  const v=j.versions[0];
+  expect(v).toMatchObject({observation_id:'d1',transform:'yoy_from_index@1',retrieval:null,evidence:null});
+  expect(v.inputs[0]).toMatchObject({observation_id:'i1',retrieval:{fetch_host:'fred.stlouisfed.org'},evidence:{sha256:'c'.repeat(64)},locator:{kind:'csv_row',line:310,column:1}});
+  expect(v.inputs[1]).toEqual({observation_id:'i0',missing:true});
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/components/macro 'src/app/api/macro/series/[id]/versions'`
+Expected: FAIL (`messages/zh/macro.json` missing / `Cannot find module './macro-format'`, `./view-model`, `./chart-geometry`, `./route`)
+
+- [ ] **Step 3: Write the messages and register the domain**
+
+`messages/zh/macro.json`
+```json
+{
+ "page": {"title": "宏观工作台", "subtitle": "只陈述事实：值、变化、数据期、可得时间、来源。判断层默认关闭。", "back": "← 宏观工作台"},
+ "region": {"label": "地区", "US": "美国 US", "CN": "中国 CN"},
+ "tabs": {"label": "工作台分区", "overview": "概览", "indicators": "指标", "correlation": "关联", "methodology": "方法与来源"},
+ "header": {"snapshot": "快照 {date}", "noSnapshot": "尚无已发布快照", "collection": "采集 {status}", "lastOk": "最近成功 {time}"},
+ "collection": {"fresh": "正常", "stale": "过期", "error": "失败", "missing": "无记录"},
+ "status": {"active": "已核实", "missing": "缺失", "restricted": "受限"},
+ "timeliness": {"current": "按期", "late": "迟发", "missing": "缺失", "na": "不适用"},
+ "changes": {"title": "本期变化", "new_release": "新发布", "revised": "修订", "late": "迟发", "missing": "缺失", "latest": "最新变化", "empty": "相对上一快照没有变化", "revisedFrom": "{from} → {to}"},
+ "coverage": {"title": "目录覆盖", "verified": "已核实", "catalog": "目录", "notVerified": "未核实的目录项", "collectionTitle": "采集状态", "dataset": "数据集", "state": "状态", "lastOk": "最近成功", "none": "目录项全部已核实", "methodLink": "目录与方法 →"},
+ "table": {"title": "指标", "hint": "点击数值打开证据抽屉", "name": "名称", "value": "值", "change": "变化", "period": "数据期", "available": "可得时间", "status": "状态", "spark": "近 12 期", "changeKinds": "变化口径：bp 利率 · pp 比率 · pct 指数增速 · points 指数点位", "neutralNote": "升降只用中性箭头和文字，不着红绿。迷你走势的数据表在指标详情页的表格视图。", "sparkLabel": "{name} 近 12 期走势", "empty": "该地区暂无指标", "preview": "预览", "detail": "详情 →"},
+ "units": {"pct": "%", "index": "指数", "index_prev_year_100": "指数（上年同期=100）", "cny_per_100usd": "元/100 美元", "usd_per_bbl": "美元/桶"},
+ "sources": {"title": "来源", "open": "打开证据抽屉 ▸"},
+ "drawer": {"title": "证据", "close": "关闭抽屉", "sourceSection": "来源", "proofSection": "证据", "publisher": "发布机构", "via": "转发方", "noVia": "无（直接取自发布机构）", "fetchUrl": "取数 URL", "host": "主机", "fetchedAt": "取得时间", "sha256": "SHA-256", "locator": "定位", "transform": "变换", "adapter": "适配器", "toolVersions": "工具版本", "rights": "权利", "attribution": "标注", "available": "可得时间", "basis": "依据：本系统首次取得（first_seen）", "revisions": "修订历史", "version": "版本", "value": "值", "note": "说明", "current": "当前", "superseded": "已被 v{version} 取代", "noRevisions": "无修订：本期只有首发版本。", "missing": "缺失", "derivedFrom": "派生自 {count} 个输入观测", "input": "输入 {id}", "inputMissing": "输入观测不可读", "rawLink": "存档原始响应元数据", "loading": "加载证据…", "loadFailed": "证据读取失败；页面数值仍以已发布快照为准。", "csvRow": "CSV 第 {line} 行 · 第 {column} 列", "jsonPointer": "JSON 指针 {pointer}", "htmlCell": "HTML 表 {table} · 行 {row} · 格 {cell}（从 0 起）", "none": "无（原值）", "selectRow": "在指标表中点击一个数值查看它的证据", "rightsValues": {"public_domain": "公有领域", "official_open": "政府公开数据", "third_party": "第三方版权"}, "adapters": {"fred_csv": "FRED 公开 CSV", "akshare": "AKShare"}},
+ "detail": {"current": "当前值", "change": "较上一可比期", "period": "数据期", "available": "可得时间", "basis": "依据：首次取得（first_seen）", "chart": "走势 · 周期色带 · 事件", "windows": {"y3": "3Y", "y5": "5Y", "y10": "10Y", "all": "全部"}, "transforms": {"level": "原值", "diff": "环比差"}, "tableView": "表格视图", "chartView": "图表", "cycles": "周期", "direction": {"up": "上行", "down": "下行", "plateau": "平台期"}, "policyDirection": {"up": "加息", "down": "降息", "plateau": "平台期"}, "ongoing": "进行中", "confirmed": "确认于 {date}", "confirmNote": "满 6 个月才确认方向，存在确认滞后。", "insufficient": "另有 {count} 段不足 6 个月，未作为周期显示。", "events": "事件", "derivedEvent": "由联储目标区间序列变化推导（生效日）", "calendarEvent": "FOMC 会议日程", "eventChange": "{change} bp", "noEvents": "无官方自动事件", "assets": "周期内资产区间变化", "assetsNote": "起止取周期起止所在月月末；价格类用 %，收益率类用 bp；端点缺失显示缺失。", "noAssets": "暂无权利已确认的同地区资产序列", "method": "计算口径", "derive": {"month_end": "月末最后一个有效值（派生自日频序列 {from}）", "yoy_from_index": "同比 = (本期 / 上年同期 − 1) × 100，十进制，四舍五入到 4 位（派生自 {from}）", "index_minus_100": "上年同期=100 指数减 100（派生自 {from}）"}, "native": "原发布值，无派生变换", "alias": "资产视角，复用 {from} 的观测", "changeKind": "变化口径：{kind}", "sourceTitle": "来源、证据与修订", "openDrawer": "查看证据与修订", "notFound": "未知指标", "empty": "暂无观测", "chartLabel": "{name} 历史走势", "columns": {"period": "数据期", "value": "值", "available": "可得时间", "version": "版本", "diff": "环比差"}, "eventColumns": {"date": "日期", "kind": "类型", "detail": "内容"}, "cycleColumns": {"direction": "周期", "start": "开始", "end": "结束", "confirmed": "确认"}, "assetColumns": {"cycle": "周期", "asset": "资产", "from": "起", "to": "止", "change": "变化"}},
+ "correlation": {"title": "关联工作台", "subtitle": "指标 × 资产的统计关系。每次分析冻结输入、只追加、可复算；结论由规则从数字生成。", "indicator": "指标", "asset": "资产", "mode": "模式", "modes": {"change": "变化（默认）", "level": "水平（探索性）", "rolling": "滚动 36 个月", "event_window": "事件窗口"}, "window": "窗口", "windows": {"5y": "近 5 年", "10y": "近 10 年", "all": "全部"}, "lag": "滞后 k（月）", "lagHelp": "k > 0 表示指标领先：corr(指标[t], 资产[t+k])。", "eventN": "事件窗口 ±N 月", "submit": "创建分析", "submitting": "计算中…", "presets": "预填表单", "presetHint": "预填只填写表单，不会自动运行。", "gateNote": "月度对齐，缺失不插值；变化/水平需有效样本 n ≥ 36。",
+  "errors": {"quota_exceeded": "今日分析次数已用完", "insufficient_sample": "有效样本不足", "zero_variance": "序列方差为零，无法计算", "non_positive_price": "价格出现非正值，无法计算收益", "no_events": "窗口内没有可用的政策事件", "invalid_inputs": "冻结输入不合法", "input_truncated": "输入超出读取上限，未计算", "invalid_parameter": "参数不合法：{fields}", "unauthorized": "请先登录", "read_failed": "读取输入失败", "write_failed": "保存分析失败", "unknown": "分析失败：{code}"},
+  "result": {"title": "结果", "r": "r", "r2": "R²", "n": "n", "sample": "样本区间", "transform": "变换", "lag": "滞后", "method": "方法版本", "code": "代码版本", "exploratory": "探索性：趋势序列的水平相关不代表关系。", "pairs": "对齐样本", "t": "指标月", "s": "资产月", "x": "指标值", "y": "资产值", "fit": "拟合 y = {intercept} + {slope}·x", "rolling": "滚动 r", "windowEnd": "窗口末月", "validPairs": "有效对数", "events": "逐事件", "anchor": "锚定月", "eventDate": "生效日", "changeBp": "决策变化（bp）", "pre": "事件前 {n} 月", "post": "事件后 {n} 月", "median": "中位数", "q1": "下四分位", "q3": "上四分位", "independent": "独立完整事件 {count} 个（候选 {candidates} 个）", "dropped": "剔除 {date}：{reason}", "droppedReasons": {"overlap": "窗口重叠", "incomplete_window": "窗口不完整"}, "fewEvents": "独立完整事件少于 5 个，只给逐事件表。", "inputs": "冻结输入", "cutoff": "截止时点", "catalog": "目录版本", "hash": "输入哈希", "observations": "指标 {ind} 条 · 资产 {asset} 条观测", "status": "状态", "failed": "未计算：{code}", "openRun": "打开结果页 →", "loadFailed": "读取失败", "notFound": "没有这条分析或不属于你", "scatterLabel": "散点与拟合线", "rollingLabel": "滚动 r 走势"},
+  "presetNames": {"p1": "联邦基金利率 × 10Y 美债（变化）", "p2": "美国 CPI 同比 × 10Y 美债（变化）", "p3": "美国 CPI 同比 × WTI 原油（变化，资产领先 1 月）", "p4": "广义美元 × WTI 原油（变化）", "p5": "美国失业率 × 10Y 美债（滚动 36 月）", "p6": "联储政策事件 → 10Y 美债（±6 月）", "p7": "中国制造业 PMI × 10Y 国债（变化）", "p8": "中国 CPI 同比 × 10Y 国债（水平，探索性）"}},
+ "judgment": {"title": "判断层（F4）", "expand": "展开查看 F4 判断卡", "collapse": "收起", "loading": "读取判断…", "unavailable": "判断层暂不可用", "unavailableNote": "不回退到宏观自算数字；事实卡与指标表照常显示。", "retry": "重试", "primary": "主判定类别", "lifecycle": "生命周期", "calibration": "校准", "method": "方法", "asOf": "判定时间", "snapshot": "输入快照", "noCards": "暂无判断", "abstained": "弃权：{reason}", "noPercent": "无 percent 字段，不显示百分比", "percent": "{value}%", "basis": "依据 · 逐指标规则命中", "basisUnavailable": "依据暂不可读", "columns": {"series": "指标", "rule": "规则", "weight": "权重", "contribution": "贡献"}, "lifecycles": {"abstained": "弃权", "open": "已发布 · 待结算", "settled": "已结算", "void": "作废", "withdrawn": "已撤回", "pending_fill": "待补全"}},
+ "glance": {"title": "宏观一览", "snapshot": "快照 {date}", "enter": "进入宏观工作台 →", "missing": "缺失", "unavailable": "宏观数据暂不可用", "statusLabel": "状态：{status}"},
+ "summary": {"title": "宏观", "subtitle": "美国 / 中国关键指标与采集状态", "enter": "进入工作台 →", "unavailable": "宏观数据暂不可用"},
+ "methodology": {"availabilityTitle": "可得时间", "availabilityBody": "每条观测的可得时间是本系统第一次在官方来源响应里见到这个值的时间（first_seen）。FRED 公开 CSV 与 AKShare 都不提供历史发布时点，所以首次回填的全部历史，其可得时间都是回填当天；按可得时间回放只对开始采集之后的日期有意义。", "sourcesTitle": "来源与证据", "sourcesBody": "美国序列取自 FRED 公开 CSV，发布机构记原机构（如 BLS via FRED）。中国序列经 AKShare 直连国家统计局、中债、外汇局等官方主机取得；数值只由服务端解析器从存档的原始字节中取出，AKShare 给出的数值只作交叉核对。每个数字都能在证据抽屉看到取数 URL、取得时间、SHA-256 与行号或 JSON 指针。", "missingTitle": "缺失与受限", "missingBody": "缺失项没有可核实的官方来源；受限项是权利未确认的第三方数据，确认前不采集、不入库。两者都显示理由，不补 0、不用替代口径。", "revisionsTitle": "修订", "revisionsBody": "同一数据期出现新值时，可修订序列生成新版本并保留旧版本；不可修订序列或同一证据内的矛盾进入隔离队列，旧值继续服务。", "eventsTitle": "事件与周期", "eventsBody": "美国政策事件由联储目标区间序列的变化推导，记生效日，不称为公告；FOMC 会议日程单独显示。周期分段按规则读时计算，满 6 个月才确认方向。", "versionsTitle": "版本", "catalogVersion": "目录版本 {v}", "methodologyVersion": "方法版本 {v}", "eventsVersion": "事件 {v}", "cyclesVersion": "周期 {v}", "correlationVersion": "关联 {v}", "judgmentsOff": "判断层关闭：页面与接口只陈述事实，不包含任何判定字段。", "catalogTitle": "目录项"},
+ "states": {"loading": "加载中…", "loadFailed": "读取失败：{code}", "empty": "暂无数据", "unauthorized": "请先登录"}
+}
+```
+
+`messages/en/macro.json`
+```json
+{
+ "page": {"title": "Macro workbench", "subtitle": "Facts only: value, change, period, availability, source. The judgment layer is off by default.", "back": "← Macro workbench"},
+ "region": {"label": "Region", "US": "United States", "CN": "China"},
+ "tabs": {"label": "Workbench sections", "overview": "Overview", "indicators": "Indicators", "correlation": "Correlation", "methodology": "Method & sources"},
+ "header": {"snapshot": "Snapshot {date}", "noSnapshot": "No published snapshot yet", "collection": "Collection {status}", "lastOk": "Last success {time}"},
+ "collection": {"fresh": "OK", "stale": "Stale", "error": "Failed", "missing": "No record"},
+ "status": {"active": "Verified", "missing": "Missing", "restricted": "Restricted"},
+ "timeliness": {"current": "On time", "late": "Late", "missing": "Missing", "na": "N/A"},
+ "changes": {"title": "Since last snapshot", "new_release": "New", "revised": "Revised", "late": "Late", "missing": "Missing", "latest": "Latest", "empty": "No changes since the previous snapshot", "revisedFrom": "{from} → {to}"},
+ "coverage": {"title": "Catalog coverage", "verified": "Verified", "catalog": "Catalog", "notVerified": "Not verified", "collectionTitle": "Collection", "dataset": "Dataset", "state": "Status", "lastOk": "Last success", "none": "Every catalog item is verified", "methodLink": "Catalog & method →"},
+ "table": {"title": "Indicators", "hint": "Click a value to open its evidence", "name": "Name", "value": "Value", "change": "Change", "period": "Period", "available": "Available", "status": "Status", "spark": "Last 12", "changeKinds": "Change units: bp rates · pp ratios · pct index growth · points index points", "neutralNote": "Moves use neutral arrows and words, never red/green. The sparkline data table is in the indicator page table view.", "sparkLabel": "{name}, last 12 periods", "empty": "No indicators for this region", "preview": "Preview", "detail": "Details →"},
+ "units": {"pct": "%", "index": "index", "index_prev_year_100": "index (same period last year = 100)", "cny_per_100usd": "CNY per 100 USD", "usd_per_bbl": "USD per barrel"},
+ "sources": {"title": "Sources", "open": "Open evidence ▸"},
+ "drawer": {"title": "Evidence", "close": "Close drawer", "sourceSection": "Source", "proofSection": "Proof", "publisher": "Publisher", "via": "Via", "noVia": "None (taken from the publisher)", "fetchUrl": "Fetch URL", "host": "Host", "fetchedAt": "Fetched", "sha256": "SHA-256", "locator": "Locator", "transform": "Transform", "adapter": "Adapter", "toolVersions": "Tool versions", "rights": "Rights", "attribution": "Attribution", "available": "Available", "basis": "Basis: first seen by this system (first_seen)", "revisions": "Revision history", "version": "Version", "value": "Value", "note": "Note", "current": "Current", "superseded": "Superseded by v{version}", "noRevisions": "No revisions: only the first release exists for this period.", "missing": "Missing", "derivedFrom": "Derived from {count} input observations", "input": "Input {id}", "inputMissing": "Input observation unreadable", "rawLink": "Archived raw response metadata", "loading": "Loading evidence…", "loadFailed": "Evidence could not be read; page values still come from the published snapshot.", "csvRow": "CSV line {line} · column {column}", "jsonPointer": "JSON pointer {pointer}", "htmlCell": "HTML table {table} · row {row} · cell {cell} (0-based)", "none": "None (raw value)", "selectRow": "Click a value in the indicator table to see its evidence", "rightsValues": {"public_domain": "Public domain", "official_open": "Official open data", "third_party": "Third-party copyright"}, "adapters": {"fred_csv": "FRED public CSV", "akshare": "AKShare"}},
+ "detail": {"current": "Current value", "change": "vs previous comparable period", "period": "Period", "available": "Available", "basis": "Basis: first seen (first_seen)", "chart": "History · cycle bands · events", "windows": {"y3": "3Y", "y5": "5Y", "y10": "10Y", "all": "All"}, "transforms": {"level": "Level", "diff": "Period change"}, "tableView": "Table view", "chartView": "Chart", "cycles": "Cycles", "direction": {"up": "Rising", "down": "Falling", "plateau": "Plateau"}, "policyDirection": {"up": "Hiking", "down": "Cutting", "plateau": "Plateau"}, "ongoing": "ongoing", "confirmed": "Confirmed {date}", "confirmNote": "A direction is confirmed only after 6 months, so confirmation lags.", "insufficient": "{count} more run(s) shorter than 6 months are not shown as cycles.", "events": "Events", "derivedEvent": "Derived from changes in the Fed target range series (effective date)", "calendarEvent": "FOMC meeting calendar", "eventChange": "{change} bp", "noEvents": "No official automatic events", "assets": "Asset moves within cycles", "assetsNote": "From the month end of the cycle start to the month end of its end; prices in %, yields in bp; a missing endpoint shows as missing.", "noAssets": "No same-region asset series with confirmed rights", "method": "Method", "derive": {"month_end": "Last valid value of the month (derived from daily series {from})", "yoy_from_index": "YoY = (current / same period last year − 1) × 100, decimal, rounded to 4 places (derived from {from})", "index_minus_100": "Index (same period last year = 100) minus 100 (derived from {from})"}, "native": "Published value, no derived transform", "alias": "Asset view reusing the observations of {from}", "changeKind": "Change unit: {kind}", "sourceTitle": "Source, evidence and revisions", "openDrawer": "View evidence and revisions", "notFound": "Unknown indicator", "empty": "No observations yet", "chartLabel": "{name} history", "columns": {"period": "Period", "value": "Value", "available": "Available", "version": "Version", "diff": "Period change"}, "eventColumns": {"date": "Date", "kind": "Type", "detail": "Detail"}, "cycleColumns": {"direction": "Cycle", "start": "Start", "end": "End", "confirmed": "Confirmed"}, "assetColumns": {"cycle": "Cycle", "asset": "Asset", "from": "From", "to": "To", "change": "Change"}},
+ "correlation": {"title": "Correlation workbench", "subtitle": "Statistical relationships between an indicator and an asset. Every run freezes its inputs, is append-only and can be recomputed; the sentence is generated from the numbers by rule.", "indicator": "Indicator", "asset": "Asset", "mode": "Mode", "modes": {"change": "Changes (default)", "level": "Levels (exploratory)", "rolling": "Rolling 36 months", "event_window": "Event window"}, "window": "Window", "windows": {"5y": "Last 5 years", "10y": "Last 10 years", "all": "All"}, "lag": "Lag k (months)", "lagHelp": "k > 0 means the indicator leads: corr(indicator[t], asset[t+k]).", "eventN": "Event window ±N months", "submit": "Run analysis", "submitting": "Computing…", "presets": "Prefilled forms", "presetHint": "A preset only fills the form; nothing runs automatically.", "gateNote": "Monthly alignment, no interpolation; changes and levels need n ≥ 36 valid pairs.",
+  "errors": {"quota_exceeded": "Daily analysis quota reached", "insufficient_sample": "Not enough valid pairs", "zero_variance": "A series has zero variance", "non_positive_price": "A non-positive price prevents a return calculation", "no_events": "No usable policy events in the window", "invalid_inputs": "Frozen inputs are invalid", "input_truncated": "Inputs exceed the read limit; nothing computed", "invalid_parameter": "Invalid parameters: {fields}", "unauthorized": "Please sign in", "read_failed": "Inputs could not be read", "write_failed": "The analysis could not be saved", "unknown": "Analysis failed: {code}"},
+  "result": {"title": "Result", "r": "r", "r2": "R²", "n": "n", "sample": "Sample", "transform": "Transform", "lag": "Lag", "method": "Method version", "code": "Code version", "exploratory": "Exploratory: level correlation between trending series does not show a relationship.", "pairs": "Aligned pairs", "t": "Indicator month", "s": "Asset month", "x": "Indicator value", "y": "Asset value", "fit": "Fit y = {intercept} + {slope}·x", "rolling": "Rolling r", "windowEnd": "Window end", "validPairs": "Valid pairs", "events": "Per event", "anchor": "Anchor month", "eventDate": "Effective date", "changeBp": "Decision change (bp)", "pre": "{n} months before", "post": "{n} months after", "median": "Median", "q1": "Lower quartile", "q3": "Upper quartile", "independent": "{count} independent complete events ({candidates} candidates)", "dropped": "Dropped {date}: {reason}", "droppedReasons": {"overlap": "overlapping window", "incomplete_window": "incomplete window"}, "fewEvents": "Fewer than 5 independent complete events: per-event table only.", "inputs": "Frozen inputs", "cutoff": "Cutoff", "catalog": "Catalog version", "hash": "Inputs hash", "observations": "{ind} indicator · {asset} asset observations", "status": "Status", "failed": "Not computed: {code}", "openRun": "Open result page →", "loadFailed": "Could not load", "notFound": "No such analysis, or it is not yours", "scatterLabel": "Scatter with fitted line", "rollingLabel": "Rolling r"},
+  "presetNames": {"p1": "Fed funds rate × UST 10Y (changes)", "p2": "US CPI YoY × UST 10Y (changes)", "p3": "US CPI YoY × WTI crude (changes, asset leads 1 month)", "p4": "Broad dollar × WTI crude (changes)", "p5": "US unemployment × UST 10Y (rolling 36m)", "p6": "Fed policy events → UST 10Y (±6 months)", "p7": "China manufacturing PMI × CGB 10Y (changes)", "p8": "China CPI YoY × CGB 10Y (levels, exploratory)"}},
+ "judgment": {"title": "Judgment layer (F4)", "expand": "Show F4 judgment card", "collapse": "Hide", "loading": "Loading judgment…", "unavailable": "Judgment layer unavailable", "unavailableNote": "No fallback to macro-computed numbers; the fact cards and indicator table are unaffected.", "retry": "Retry", "primary": "Primary category", "lifecycle": "Lifecycle", "calibration": "Calibration", "method": "Method", "asOf": "As of", "snapshot": "Input snapshot", "noCards": "No judgment yet", "abstained": "Abstained: {reason}", "noPercent": "No percent field; no percentage shown", "percent": "{value}%", "basis": "Basis · rule hits per indicator", "basisUnavailable": "Basis unavailable", "columns": {"series": "Indicator", "rule": "Rule", "weight": "Weight", "contribution": "Contribution"}, "lifecycles": {"abstained": "Abstained", "open": "Published · awaiting settlement", "settled": "Settled", "void": "Void", "withdrawn": "Withdrawn", "pending_fill": "Pending fill"}},
+ "glance": {"title": "Macro glance", "snapshot": "Snapshot {date}", "enter": "Open macro workbench →", "missing": "Missing", "unavailable": "Macro data unavailable", "statusLabel": "Status: {status}"},
+ "summary": {"title": "Macro", "subtitle": "Key US / China indicators and collection status", "enter": "Open workbench →", "unavailable": "Macro data unavailable"},
+ "methodology": {"availabilityTitle": "Availability", "availabilityBody": "An observation is available from the moment this system first saw the value in an official source response (first_seen). Neither the FRED public CSV nor AKShare provides historical release times, so every value from the first backfill is available as of the backfill day; replay by availability is meaningful only after collection started.", "sourcesTitle": "Sources and evidence", "sourcesBody": "US series come from the FRED public CSV; the publisher is the original agency (e.g. BLS via FRED). China series are fetched through AKShare directly from official hosts (National Bureau of Statistics, ChinaBond, SAFE). Values are taken only by server-side parsers from the archived raw bytes; AKShare values serve only as a cross-check. Every number shows its fetch URL, fetch time, SHA-256 and line or JSON pointer in the evidence drawer.", "missingTitle": "Missing and restricted", "missingBody": "Missing items have no verifiable official source; restricted items are third-party data whose rights are unconfirmed and are neither collected nor stored until confirmed. Both show a reason; no zeros, no substitute definitions.", "revisionsTitle": "Revisions", "revisionsBody": "When a period gets a new value, revisable series add a new version and keep the old one; for non-revisable series, or a contradiction inside one piece of evidence, the item is quarantined and the old value keeps serving.", "eventsTitle": "Events and cycles", "eventsBody": "US policy events are derived from changes in the Fed target range series, dated by effective date and never called announcements; the FOMC meeting calendar is shown separately. Cycles are computed by rule at read time; a direction is confirmed only after 6 months.", "versionsTitle": "Versions", "catalogVersion": "Catalog {v}", "methodologyVersion": "Methodology {v}", "eventsVersion": "Events {v}", "cyclesVersion": "Cycles {v}", "correlationVersion": "Correlation {v}", "judgmentsOff": "Judgment layer off: pages and APIs state facts only and carry no judgment fields.", "catalogTitle": "Catalog items"},
+ "states": {"loading": "Loading…", "loadFailed": "Could not load: {code}", "empty": "No data", "unauthorized": "Please sign in"}
+}
+```
+
+Modify `src/i18n/request.ts`: inside the `MESSAGE_DOMAINS` array, after the `'analyst',` line, add:
+```ts
+  // MACRO
+  // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
+  'macro',
+  // /MACRO
+```
+
+- [ ] **Step 4: Implement formatting, the translation hook, view models and chart geometry**
+
+`src/components/macro/macro-format.ts`
+```ts
+// src/components/macro/macro-format.ts
+// Display formatting for macro numbers (spec §3.2, §10). Works on value_text (decimal strings) with exact string
+// rounding, so a printed number never carries float drift. Arrows are neutral (macro indicators get no red/green).
+// A missing value renders as '—'; the caller adds the 缺失/Missing label.
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import {subtract,yoyPct} from '@/lib/macro/decimal';
+import type {ChangeKind,PeriodKind} from '@/lib/macro/types';
+export const MISSING='—';
+export const MAX_DISPLAY_DECIMALS=2;
+const fractionDigits=(canonical:string)=>{const i=canonical.indexOf('.');return i<0?0:canonical.length-i-1;};
+/** Half away from zero, padded to `places`; exact (BigInt on the digit string). */
+export function roundDecimalText(text:string,places:number):string{
+ const c=canonicalDecimal(text);const neg=c.startsWith('-');
+ const [ip,fp='']=(neg?c.slice(1):c).split('.');
+ const frac=fp.padEnd(places+1,'0');
+ const v=BigInt(ip+frac.slice(0,places))+(Number(frac[places])>=5?1n:0n);
+ const s=v.toString().padStart(places+1,'0');
+ const out=places>0?`${s.slice(0,-places)}.${s.slice(-places)}`:s;
+ return `${neg&&v!==0n?'-':''}${out}`;
+}
+/** Source precision, capped at 2 decimals for display. */
+export const formatValueText=(text:string):string=>{const c=canonicalDecimal(text);return roundDecimalText(c,Math.min(fractionDigits(c),MAX_DISPLAY_DECIMALS));};
+export interface TypedChange{text:string;arrow:'↑'|'↓'|'→';kind:ChangeKind}
+const isPositive=(text:string)=>{const c=canonicalDecimal(text);return c!=='0'&&!c.startsWith('-');};
+/** Formats an exact change text in its kind: bp ≤ 1 decimal, pct 2 decimals, pp / points ≤ 2 decimals. Used directly for
+ *  the overview's precomputed `change` (Task 13 views.ts changeOf) and by typedChange below. */
+export function formatChange(c:{kind:ChangeKind;value_text:string}):TypedChange{
+ const raw=canonicalDecimal(c.value_text);
+ const places=c.kind==='bp'?Math.min(fractionDigits(raw),1):c.kind==='pct'?2:Math.min(fractionDigits(raw),MAX_DISPLAY_DECIMALS);
+ const r=roundDecimalText(raw,places);const neg=r.startsWith('-');const abs=neg?r.slice(1):r;const zero=/^0(\.0+)?$/.test(abs);
+ return {text:`${zero?'':neg?'−':'+'}${abs} ${c.kind}`,arrow:zero?'→':neg?'↓':'↑',kind:c.kind};
+}
+/** Change vs the previous comparable value in the series' change unit (spec §4.2 changeKind), exact. */
+export function typedChange(cur:string|null,prev:string|null,kind:ChangeKind):TypedChange|null{
+ if(cur===null||prev===null)return null;
+ if(kind==='bp')return formatChange({kind,value_text:canonicalDecimal(`${subtract(cur,prev)}e2`)});
+ if(kind==='pct')return isPositive(prev)?formatChange({kind,value_text:yoyPct(cur,prev)}):null;
+ return formatChange({kind,value_text:subtract(cur,prev)});
+}
+export function formatPeriod(periodEnd:string,period:PeriodKind):string{
+ if(period==='month')return periodEnd.slice(0,7);
+ if(period==='quarter')return `${periodEnd.slice(0,4)}-Q${Math.ceil(Number(periodEnd.slice(5,7))/3)}`;
+ return periodEnd;
+}
+/** UTC, minute precision: deterministic across server and browser time zones. */
+export function formatInstant(iso:string):string{
+ const d=new Date(iso);if(!Number.isFinite(d.getTime()))return MISSING;
+ const s=d.toISOString();return `${s.slice(0,10)} ${s.slice(11,16)} UTC`;
+}
+export const unitSuffix=(unit:string):string=>unit==='pct'?'%':'';
+```
+
+`src/components/macro/use-macro-t.ts`
+```ts
+// src/components/macro/use-macro-t.ts
+// Translation hook for the macro domain. Components take a plain `t` so the pure helpers stay testable in
+// node-env vitest (spec §10).
+import {useCallback} from 'react';
+import {useLocale,useTranslations} from 'next-intl';
+export type MacroT=(key:string,values?:Record<string,string|number>)=>string;
+export function useMacroT():{t:MacroT;locale:'zh'|'en'}{
+ const tr=useTranslations('macro');
+ const locale=useLocale()==='en'?'en':'zh';
+ const t=useCallback<MacroT>((key,values)=>tr(key,values),[tr]);
+ return {t,locale};
+}
+```
+
+`src/components/macro/view-model.ts`
+```ts
+// src/components/macro/view-model.ts
+// API JSON → view models for the macro workbench UI (spec §3, §8). This is the only UI file that knows the
+// overview / series / versions JSON field names; components receive plain view objects. Task 13 (views.ts) owns the
+// overview shapes; the *Json interfaces below declare exactly the fields this file reads, and the compile-time checks
+// assert Task 13's IndicatorRow / ChangeItem / Envelope stay assignable to them: a drift fails typecheck instead of
+// rendering blanks. Period kind and full source come from the catalog (catalog.ts is pure TS, safe in client code).
+import {catalogById} from '@/lib/macro/catalog';
+import type {AssetByCycle} from '@/lib/macro/series-extras';
+import type {Cycle,InsufficientSegment} from '@/lib/macro/cycles';
+import type {PolicyEvent} from '@/lib/macro/events';
+import type {CalendarEvent} from '@/lib/macro/fomc';
+import type {ChangeItem,Envelope,IndicatorRow} from '@/lib/macro/views';
+import type {Adapter,Bilingual,CatalogCounts,ChangeKind,Locator,MacroSeriesDef,Rights,SeriesStatus,Timeliness} from '@/lib/macro/types';
+import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,unitSuffix,type TypedChange} from './macro-format';
+import type {MacroT} from './use-macro-t';
+export type Locale='zh'|'en';
+export const pick=(b:Bilingual|null|undefined,locale:Locale):string=>b?b[locale]:'';
+// ---- overview JSON (GET /api/macro/overview; shapes owned by src/lib/macro/views.ts, Task 13) ----
+export interface SourceJson{publisher:Bilingual;via:Bilingual|null;fetch_host:string;adapter:Adapter;rights:Rights;attribution:Bilingual}
+export interface IndicatorRowJson{series_id:string;name:Bilingual;value_text:string|null;unit:string;change:{kind:ChangeKind;value_text:string}|null;
+ period_end:string|null;available_at:string|null;timeliness:Timeliness;status:'A'|'M'|'R';reason?:Bilingual;retrieval_id:string|null;sparkline:string[]}
+export type ChangeKindJson='new_release'|'revised'|'late'|'missing';
+export interface ChangeItemJson{series_id:string;kind:ChangeKindJson;period_end:string|null}
+export type CollectionStatus='fresh'|'stale'|'error'|'missing';
+export interface OverviewEnvelopeJson{snapshotId:string|null;asOf:string|null;catalogVersion:string;methodologyVersion:string|null;
+ collection:{dataset:string;status:CollectionStatus;lastOkAt:string|null}[];indicators:IndicatorRowJson[];
+ changes:{counts:Record<ChangeKindJson,number>;items:ChangeItemJson[]};catalogCounts:CatalogCounts|null}
+export interface OverviewJson{regions:{US?:OverviewEnvelopeJson;CN?:OverviewEnvelopeJson}}
+type Assert<T extends true>=T;
+/** Compile-time contract with src/lib/macro/views.ts (Task 13). */
+export type IndicatorRowContract=Assert<IndicatorRow extends IndicatorRowJson?true:false>;
+export type ChangeItemContract=Assert<ChangeItem extends ChangeItemJson?true:false>;
+export type EnvelopeContract=Assert<Envelope extends OverviewEnvelopeJson?true:false>;
+const STATUS:Record<IndicatorRowJson['status'],SeriesStatus>={A:'active',M:'missing',R:'restricted'};
+/** Drawer source block for a series: the catalog source without the adapter-internal series key. */
+export function sourceOf(seriesId:string):SourceJson|null{
+ const s=catalogById(seriesId)?.source;
+ return s?{publisher:s.publisher,via:s.via??null,fetch_host:s.fetchHost,adapter:s.adapter,rights:s.rights,attribution:s.attribution}:null;
+}
+// ---- series JSON (GET /api/macro/series/[id]) ----
+export interface SeriesObsJson{observation_id:string;period_end:string;value_text:string;version:number;available_at:string;availability_basis:'first_seen';retrieval_id:string|null;evidence_sha256:string|null;locator:Locator|null}
+export interface SeriesJson{def:MacroSeriesDef;observations:SeriesObsJson[];cycles:Cycle[];insufficient:InsufficientSegment[];events:PolicyEvent[];calendar:CalendarEvent[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
+// ---- versions JSON (GET /api/macro/series/[id]/versions) ----
+export interface ProvenanceJson{observation_id:string;series_id:string;version:number;value_text:string;available_at:string;availability_basis:'first_seen';
+ retrieval:{retrieval_id:string;fetch_url:string;fetch_host:string;http_status:number;fetched_at:string;tool_versions:Record<string,string>}|null;
+ evidence:{sha256:string;adapter:Adapter;content_type:string;byte_length:number}|null;locator:Locator|null;transform:string|null;derived_from:string[]|null}
+export type MissingInput={observation_id:string;missing:true};
+export interface VersionJson extends ProvenanceJson{inputs:(ProvenanceJson|MissingInput)[]}
+export interface VersionsJson{series_id:string;read_series_id:string;period_end:string;versions:VersionJson[]}
+
+export interface IndicatorView{seriesId:string;name:string;status:SeriesStatus;reason:string|null;muted:boolean;value:string;valueText:string|null;unit:string;change:TypedChange|null;
+ period:string;periodEnd:string|null;available:string;timeliness:Timeliness;spark:string[];hasEvidence:boolean;source:SourceJson|null}
+export function toIndicatorView(row:IndicatorRowJson,locale:Locale):IndicatorView{
+ const status=STATUS[row.status];const period=catalogById(row.series_id)?.period??'month';const has=row.value_text!==null&&row.period_end!==null;
+ return {seriesId:row.series_id,name:pick(row.name,locale),status,reason:row.reason?pick(row.reason,locale):null,muted:status!=='active'||!has,
+  value:row.value_text!==null?formatValueText(row.value_text):MISSING,valueText:row.value_text,unit:row.value_text!==null?unitSuffix(row.unit):'',
+  change:row.change?formatChange(row.change):null,
+  period:row.period_end?formatPeriod(row.period_end,period):MISSING,periodEnd:row.period_end,available:row.available_at?formatInstant(row.available_at):MISSING,
+  timeliness:row.timeliness,spark:row.sparkline,hasEvidence:has,source:status==='active'?sourceOf(row.series_id):null};
+}
+/** Status pill key: catalog status first (missing / restricted), then publication timeliness. */
+export const statusKey=(v:Pick<IndicatorView,'status'|'timeliness'>):string=>v.status!=='active'?`status.${v.status}`:`timeliness.${v.timeliness==='n/a'?'na':v.timeliness}`;
+export function sourceLabel(s:SourceJson|null,locale:Locale):string|null{if(!s)return null;return s.via?`${pick(s.publisher,locale)} via ${pick(s.via,locale)}`:pick(s.publisher,locale);}
+export function sourceLabels(rows:readonly IndicatorRowJson[],locale:Locale):string[]{
+ return [...new Set(rows.flatMap(r=>{const l=r.status==='A'?sourceLabel(sourceOf(r.series_id),locale):null;return l?[l]:[];}))];
+}
+export interface CoverageView{verified:number;total:number;notVerified:{seriesId:string;name:string;status:SeriesStatus;reason:string}[]}
+/** Counts from the snapshot; before any snapshot (catalogCounts null) they are counted from the catalog rows shown. */
+export function coverageOf(env:OverviewEnvelopeJson,locale:Locale):CoverageView{
+ const c=env.catalogCounts??{verified:env.indicators.filter(r=>r.status==='A').length,missing:env.indicators.filter(r=>r.status==='M').length,restricted:env.indicators.filter(r=>r.status==='R').length};
+ return {verified:c.verified,total:c.verified+c.missing+c.restricted,
+  notVerified:env.indicators.filter(r=>r.status!=='A').map(r=>({seriesId:r.series_id,name:pick(r.name,locale),status:STATUS[r.status],reason:r.reason?pick(r.reason,locale):''}))};
+}
+export const changeCounts=(env:Pick<OverviewEnvelopeJson,'changes'>):Record<ChangeKindJson,number>=>({...env.changes.counts});
+export interface ChangeLine{kind:ChangeKindJson;seriesId:string;name:string;value:string;previous:string|null;period:string}
+/** Change lines name the row and show its current published value (the envelope carries no previous value text). */
+export function changeLines(env:OverviewEnvelopeJson,locale:Locale,limit=6):ChangeLine[]{
+ const by=new Map(env.indicators.map(r=>[r.series_id,r]));
+ return env.changes.items.slice(0,limit).map(c=>{
+  const r=by.get(c.series_id);const u=r?unitSuffix(r.unit):'';const period=catalogById(c.series_id)?.period??'month';
+  const shown=c.kind!=='missing'&&r?.value_text!=null&&r.period_end===c.period_end?r.value_text:null;
+  return {kind:c.kind,seriesId:c.series_id,name:r?pick(r.name,locale):c.series_id,value:shown?formatValueText(shown)+u:MISSING,previous:null,
+   period:c.period_end?formatPeriod(c.period_end,period):MISSING};
+ });
+}
+export interface CollectionView{dataset:string;status:CollectionStatus;lastOk:string}
+const SEVERITY:CollectionStatus[]=['error','stale','missing','fresh'];
+export function collectionOf(env:Pick<OverviewEnvelopeJson,'collection'>):{items:CollectionView[];overall:CollectionStatus}{
+ const items=env.collection.map(c=>({dataset:c.dataset,status:c.status,lastOk:c.lastOkAt?formatInstant(c.lastOkAt):MISSING}));
+ return {items,overall:SEVERITY.find(s=>items.some(i=>i.status===s))??'missing'};
+}
+/** Today / /intel key indicators (spec §3.5) = Task 13's COMPACT_KEYS (asserted in view-model.test.ts). Only rows present
+ *  in the envelope are shown; nothing is invented. */
+export const GLANCE_IDS={US:['US_DFF','US_DGS10','US_CPI_YOY'],CN:['CN_CPI_YOY','CN_PMI_MFG','CN_CGB_10Y']} as const;
+export function glanceRows(o:OverviewJson,locale:Locale):{region:'US'|'CN';asOf:string|null;overall:CollectionStatus;rows:IndicatorView[]}[]{
+ return (['US','CN'] as const).flatMap(region=>{
+  const env=o.regions[region];if(!env)return [];
+  const by=new Map(env.indicators.map(r=>[r.series_id,r]));
+  return [{region,asOf:env.asOf,overall:collectionOf(env).overall,rows:GLANCE_IDS[region].flatMap(id=>{const r=by.get(id);return r?[toIndicatorView(r,locale)]:[];})}];
+ });
+}
+// ---- evidence drawer rows ----
+export interface DrawerRow{key:string;label:string;value:string;mono:boolean;missing:boolean;href?:string}
+const drawerRow=(t:MacroT,key:string,value:string|null|undefined,mono=false,href?:string):DrawerRow=>({key,label:t(`drawer.${key}`),value:value??t('drawer.missing'),mono,missing:value==null,...(href&&value!=null?{href}:{})});
+export function locatorText(l:Locator|null,t:MacroT):string|null{
+ if(!l)return null;
+ if(l.kind==='csv_row')return t('drawer.csvRow',{line:l.line,column:l.column});
+ if(l.kind==='html_cell')return t('drawer.htmlCell',{table:l.table,row:l.row,cell:l.cell});
+ return t('drawer.jsonPointer',{pointer:l.pointer});
+}
+export function sourceRows(s:SourceJson|null,t:MacroT,locale:Locale):DrawerRow[]{
+ return [drawerRow(t,'publisher',s?pick(s.publisher,locale):null),drawerRow(t,'via',s?(s.via?pick(s.via,locale):t('drawer.noVia')):null),
+  drawerRow(t,'rights',s?t(`drawer.rightsValues.${s.rights}`):null),drawerRow(t,'attribution',s?pick(s.attribution,locale):null)];
+}
+/** Proof for one observation. A field that cannot be shown keeps its name and reads 缺失 (canvas SourceDrawer). */
+export function proofRows(p:ProvenanceJson,t:MacroT):DrawerRow[]{
+ const tools=p.retrieval?Object.entries(p.retrieval.tool_versions).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}=${v}`).join(' · '):null;
+ return [
+  drawerRow(t,'fetchUrl',p.retrieval?.fetch_url,true,p.retrieval?.fetch_url),
+  drawerRow(t,'host',p.retrieval?.fetch_host,true),
+  drawerRow(t,'fetchedAt',p.retrieval?formatInstant(p.retrieval.fetched_at):null,true),
+  drawerRow(t,'available',formatInstant(p.available_at),true),
+  drawerRow(t,'sha256',p.evidence?.sha256,true,p.evidence?`/api/macro/evidence/${p.evidence.sha256}`:undefined),
+  drawerRow(t,'locator',locatorText(p.locator,t),true),
+  drawerRow(t,'transform',p.transform??t('drawer.none'),true),
+  drawerRow(t,'adapter',p.evidence?t(`drawer.adapters.${p.evidence.adapter}`):null),
+  drawerRow(t,'toolVersions',tools||null,true),
+ ];
+}
+export interface RevisionRow{version:string;value:string;available:string;note:string;superseded:boolean}
+export function revisionRows(versions:readonly ProvenanceJson[],t:MacroT):RevisionRow[]{
+ const sorted=[...versions].sort((a,b)=>b.version-a.version);const top=sorted[0]?.version;
+ return sorted.map((v,i)=>({version:`v${v.version}`,value:formatValueText(v.value_text),available:formatInstant(v.available_at),note:i===0?t('drawer.current'):t('drawer.superseded',{version:top}),superseded:i>0}));
+}
+export const isMissingInput=(x:ProvenanceJson|MissingInput):x is MissingInput=>'missing' in x;
+```
+
+`src/components/macro/charts/chart-geometry.ts`
+```ts
+// src/components/macro/charts/chart-geometry.ts
+// Pure geometry and data helpers for macro charts (spec §3.3, §3.4). Numbers here only position marks; every
+// printed number comes from value_text through macro-format.ts.
+const r1=(v:number)=>Math.round(v*10)/10;
+export function sparklinePoints(values:readonly string[],w:number,h:number,pad=2):string{
+ const nums=values.map(Number);if(nums.length<2||nums.some(n=>!Number.isFinite(n)))return '';
+ const lo=Math.min(...nums),hi=Math.max(...nums),span=hi-lo;
+ return nums.map((n,i)=>`${r1(pad+(i*(w-2*pad))/(nums.length-1))},${r1(span===0?h/2:pad+((hi-n)*(h-2*pad))/span)}`).join(' ');
+}
+export interface ScatterGeometry{dots:{cx:number;cy:number}[];line:{x1:number;y1:number;x2:number;y2:number};xDomain:[number,number];yDomain:[number,number]}
+export function scatterGeometry(pairs:readonly {x:number;y:number}[],fit:{slope:number;intercept:number},w:number,h:number,pad=28):ScatterGeometry{
+ const xs=pairs.map(p=>p.x),ys=pairs.map(p=>p.y);
+ let x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+ if(x0===x1){x0-=1;x1+=1;}if(y0===y1){y0-=1;y1+=1;}
+ const sx=(x:number)=>r1(pad+((x-x0)/(x1-x0))*(w-2*pad)),sy=(y:number)=>r1(h-pad-((y-y0)/(y1-y0))*(h-2*pad));
+ return {dots:pairs.map(p=>({cx:sx(p.x),cy:sy(p.y)})),line:{x1:sx(x0),y1:sy(fit.intercept+fit.slope*x0),x2:sx(x1),y2:sy(fit.intercept+fit.slope*x1)},xDomain:[x0,x1],yDomain:[y0,y1]};
+}
+export function withAlpha(color:string,alpha:number):string{
+ const hex=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+ if(hex){const h=hex[1].length===3?hex[1].split('').map(c=>c+c).join(''):hex[1];return `rgba(${parseInt(h.slice(0,2),16)}, ${parseInt(h.slice(2,4),16)}, ${parseInt(h.slice(4,6),16)}, ${alpha})`;}
+ const rgb=/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color.trim());
+ return rgb?`rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`:color;
+}
+/** Each marker moves to the first point time on/after its own date (lightweight-charts markers need a bar). */
+export function snapMarkers<T extends {time:string}>(times:readonly string[],markers:readonly T[]):T[]{
+ const out:T[]=[];
+ for(const m of markers){const at=times.find(x=>x>=m.time);if(at)out.push({...m,time:at});}
+ return out.sort((a,b)=>a.time.localeCompare(b.time));
+}
+/** Points whose month lies within a band's start..end months (inclusive); the first matching band wins. */
+export function bandPoints<D extends string>(times:readonly string[],bands:readonly {start:string;end:string;direction:D}[]):{time:string;direction:D}[]{
+ return times.flatMap(time=>{const m=time.slice(0,7);const b=bands.find(x=>m>=x.start.slice(0,7)&&m<=x.end.slice(0,7));return b?[{time,direction:b.direction}]:[];});
+}
+```
+
+- [ ] **Step 5: Implement the versions route**
+
+`src/app/api/macro/series/[id]/versions/route.ts`
+```ts
+// src/app/api/macro/series/[id]/versions/route.ts
+// GET every ok version of one period of one series with its provenance (spec §3.2 evidence drawer, §3.3 revision
+// history). Each version carries its retrieval receipt, evidence object, locator and transform; derived versions also
+// list each input with the same fields. An unreadable input is reported as missing, never dropped. Session required;
+// public reference data (anon RLS reads).
+import {NextResponse} from 'next/server';
+import {catalogById} from '@/lib/macro/catalog';
+import {supabaseMacroDb,type MacroDb} from '@/lib/macro/db';
+import {requireSessionUser} from '@/lib/macro/route-helpers';
+import type {ObservationRow} from '@/lib/macro/types';
+import {getAdminSupabase} from '@/lib/supabase/admin';
+import {getAnonSupabase} from '@/lib/supabase/anon';
+export const dynamic='force-dynamic';
+const DATE=/^\d{4}-\d{2}-\d{2}$/;
+const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'private, no-store'}});
+async function provenance(db:Pick<MacroDb,'retrieval'|'evidenceObject'>,r:ObservationRow){
+ const ret=r.retrieval_id?await db.retrieval(r.retrieval_id):null;
+ const ev=ret?await db.evidenceObject(ret.sha256):null;
+ return {observation_id:r.observation_id,series_id:r.series_id,version:r.version,value_text:r.value_text,available_at:r.available_at,availability_basis:r.availability_basis,
+  retrieval:ret?{retrieval_id:ret.retrieval_id,fetch_url:ret.fetch_url,fetch_host:ret.fetch_host,http_status:ret.http_status,fetched_at:ret.fetched_at,tool_versions:ret.tool_versions}:null,
+  evidence:ev?{sha256:ev.sha256,adapter:ev.adapter,content_type:ev.content_type,byte_length:ev.byte_length}:null,
+  locator:r.locator,transform:r.transform,derived_from:r.derived_from};
+}
+export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
+ const {id}=await params;
+ const def=catalogById(id);
+ if(!def)return err('unknown_series','series is not in the catalog',404);
+ const periodEnd=new URL(req.url).searchParams.get('period_end');
+ if(!periodEnd||!DATE.test(periodEnd))return err('invalid_parameter:period_end','period_end must be YYYY-MM-DD',400);
+ const auth=await requireSessionUser();if(!auth.ok)return auth.response;
+ try{
+  const db=supabaseMacroDb({admin:getAdminSupabase(),anon:getAnonSupabase()});
+  const readId=def.aliasOf??def.id;
+  const rows=(await db.versionsOf(readId,periodEnd)).sort((a,b)=>b.version-a.version);
+  const inputIds=[...new Set(rows.flatMap(r=>r.derived_from??[]))];
+  const inputRows=inputIds.length?await db.observationsByIds(inputIds):[];
+  const inputs=new Map(await Promise.all(inputRows.map(async r=>[r.observation_id,await provenance(db,r)] as const)));
+  const versions=await Promise.all(rows.map(async r=>({...await provenance(db,r),inputs:(r.derived_from??[]).map(i=>inputs.get(i)??{observation_id:i,missing:true as const})})));
+  return NextResponse.json({series_id:def.id,read_series_id:readId,period_end:periodEnd,versions},{headers:{'Cache-Control':'private, max-age=60'}});
+ }catch{return err('read_failed','provenance could not be read',503);}
+}
+```
+
+- [ ] **Step 6: Implement the components (thin renderers over the helpers above)**
+
+`src/components/macro/charts/Sparkline.tsx`
+```tsx
+// Sparkline — inline SVG trend of the last ≤ 12 periods (spec §3.2). Its data table is the indicator page table view.
+import { sparklinePoints } from './chart-geometry';
+
+export function Sparkline({ values, label, width = 96, height = 22 }: { values: readonly string[]; label: string; width?: number; height?: number }) {
+  const points = sparklinePoints(values, width, height);
+  if (!points) return <span className="text-text-dim">—</span>;
+  return (
+    <svg role="img" aria-label={label} width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+      <polyline fill="none" stroke="var(--text-dim)" strokeWidth={1.5} points={points} />
+    </svg>
+  );
+}
+```
+
+`src/components/macro/charts/ScatterFit.tsx`
+```tsx
+// ScatterFit — inline SVG scatter with the fitted line (spec §3.4). Its table view is the aligned-pairs table.
+import { scatterGeometry } from './chart-geometry';
+
+export function ScatterFit({ pairs, slope, intercept, label, xLabel, yLabel, width = 360, height = 240 }: {
+  pairs: readonly { x: number; y: number }[]; slope: number; intercept: number; label: string; xLabel: string; yLabel: string; width?: number; height?: number;
+}) {
+  if (pairs.length === 0) return null;
+  const g = scatterGeometry(pairs, { slope, intercept }, width, height);
+  return (
+    <svg role="img" aria-label={label} viewBox={`0 0 ${width} ${height}`} className="h-auto w-full max-w-[480px]">
+      <rect x={28} y={28} width={width - 56} height={height - 56} fill="none" stroke="var(--border)" />
+      {g.dots.map((d, i) => <circle key={i} cx={d.cx} cy={d.cy} r={2.5} fill="var(--text-dim)" />)}
+      <line x1={g.line.x1} y1={g.line.y1} x2={g.line.x2} y2={g.line.y2} stroke="var(--accent)" strokeWidth={1.5} />
+      <text x={width / 2} y={height - 8} textAnchor="middle" fontSize={10} fill="var(--text-dim)">{xLabel}</text>
+      <text x={10} y={height / 2} textAnchor="middle" fontSize={10} fill="var(--text-dim)" transform={`rotate(-90 10 ${height / 2})`}>{yLabel}</text>
+    </svg>
+  );
+}
+```
+
+`src/components/macro/charts/DataTableToggle.tsx`
+```tsx
+'use client';
+// DataTableToggle — every macro chart has a table view (spec §3.3, §3.4); below 640px charts flagged
+// `narrowTable` open as tables (spec §3.6).
+import { useEffect, useState, type ReactNode } from 'react';
+import type { MacroT } from '../use-macro-t';
+
+export function DataTableToggle({ chart, table, t, narrowTable = false }: { chart: ReactNode; table: ReactNode; t: MacroT; narrowTable?: boolean }) {
+  const [view, setView] = useState<'chart' | 'table'>('chart');
+  useEffect(() => {
+    if (narrowTable && typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches) setView('table');
+  }, [narrowTable]);
+  return (
+    <div>
+      <div role="group" className="mb-2 flex justify-end gap-1 text-[11px]">
+        {(['chart', 'table'] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={view === v}
+            onClick={() => setView(v)}
+            className={`rounded border border-border px-2 py-0.5 ${view === v ? 'bg-[var(--accent-wash)] text-accent' : 'text-text-dim'}`}
+          >
+            {t(v === 'chart' ? 'detail.chartView' : 'detail.tableView')}
+          </button>
+        ))}
+      </div>
+      {view === 'chart' ? chart : table}
+    </div>
+  );
+}
+```
+
+`src/components/macro/charts/MacroLineChart.tsx`
+```tsx
+'use client';
+// MacroLineChart — lightweight-charts 4.2 line with cycle bands (histogram on a hidden scale) and event markers
+// (spec §3.3). Up/hiking bands use --warn at low alpha, down/cutting bands use --accent-wash, plateau a faint grey.
+// Derived events are arrows above the line; calendar entries are circles below it.
+import { useEffect, useRef } from 'react';
+import type { IChartApi, SeriesMarker, Time } from 'lightweight-charts';
+import { bandPoints, snapMarkers, withAlpha } from './chart-geometry';
+
+export interface LinePoint { time: string; value: number }
+export interface ChartBand { start: string; end: string; direction: 'up' | 'down' | 'plateau' }
+export interface ChartMarker { time: string; kind: 'derived' | 'calendar'; text: string }
+
+function cssVariable(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+export function MacroLineChart({ points, bands = [], markers = [], height = 260, ariaLabel }: {
+  points: LinePoint[]; bands?: ChartBand[]; markers?: ChartMarker[]; height?: number; ariaLabel: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let chart: IChartApi | null = null;
+    let observer: ResizeObserver | null = null;
+    let cancelled = false;
+    (async () => {
+      const el = ref.current;
+      if (!el || points.length === 0) return;
+      const lwc = await import('lightweight-charts');
+      if (cancelled || !ref.current) return;
+      el.innerHTML = '';
+      const text = cssVariable('--text', '#fafafa');
+      const dim = cssVariable('--text-dim', '#a1a1aa');
+      const grid = cssVariable('--border', 'rgba(255,255,255,0.06)');
+      const warn = cssVariable('--warn', '#eab308');
+      const wash = cssVariable('--accent-wash', 'rgba(202,138,4,0.12)');
+      const accent = cssVariable('--accent', '#ca8a04');
+      chart = lwc.createChart(el, {
+        width: Math.max(el.clientWidth, 1),
+        height,
+        layout: { background: { color: 'transparent' }, textColor: dim, fontFamily: 'system-ui' },
+        grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+        timeScale: { borderColor: grid },
+        rightPriceScale: { borderColor: grid },
+        crosshair: { mode: lwc.CrosshairMode.Normal },
+      });
+      const times = points.map((p) => p.time);
+      const shaded = bandPoints(times, bands);
+      if (shaded.length > 0) {
+        const band = chart.addHistogramSeries({ priceScaleId: 'bands', lastValueVisible: false, priceLineVisible: false });
+        band.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+        band.setData(shaded.map((b) => ({
+          time: b.time as Time,
+          value: 1,
+          color: b.direction === 'up' ? withAlpha(warn, 0.14) : b.direction === 'down' ? wash : withAlpha(dim, 0.08),
+        })));
+      }
+      const line = chart.addLineSeries({ color: text, lineWidth: 2, priceLineVisible: false });
+      line.setData(points.map((p) => ({ time: p.time as Time, value: p.value })));
+      line.setMarkers(snapMarkers(times, markers).map((m): SeriesMarker<Time> => ({
+        time: m.time as Time,
+        position: m.kind === 'derived' ? 'aboveBar' : 'belowBar',
+        shape: m.kind === 'derived' ? 'arrowDown' : 'circle',
+        color: m.kind === 'derived' ? accent : dim,
+        text: m.text,
+      })));
+      chart.timeScale().fitContent();
+      observer = new ResizeObserver(([entry]) => {
+        const width = Math.floor(entry.contentRect.width);
+        if (width > 0) chart?.applyOptions({ width });
+      });
+      observer.observe(el);
+    })();
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+      chart?.remove();
+    };
+  }, [points, bands, markers, height]);
+  return <div ref={ref} role="img" aria-label={ariaLabel} style={{ height }} className="w-full" />;
+}
+```
+
+`src/components/macro/IndicatorTable.tsx`
+```tsx
+'use client';
+// IndicatorTable — overview / indicators table (spec §3.2, canvas OverviewOff): name | value | change | period |
+// available | status | sparkline. Clicking a value opens the evidence drawer. Missing/restricted rows are greyed with
+// their reason. Moves use neutral arrows only. Below 640px only name / value / change are shown (spec §3.6).
+import Link from 'next/link';
+import { Sparkline } from './charts/Sparkline';
+import type { MacroT } from './use-macro-t';
+import { statusKey, type IndicatorView } from './view-model';
+
+export function IndicatorTable({ rows, t, onOpenEvidence, onPreview, previewId }: {
+  rows: IndicatorView[]; t: MacroT; onOpenEvidence?: (row: IndicatorView) => void; onPreview?: (seriesId: string) => void; previewId?: string | null;
+}) {
+  if (rows.length === 0) return <div className="text-xs text-text-dim">{t('table.empty')}</div>;
+  const th = 'px-2 py-1.5 text-[10px] font-medium uppercase tracking-wider text-text-dim';
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="text-left">
+            <th className={th}>{t('table.name')}</th>
+            <th className={`${th} text-right`}>{t('table.value')}</th>
+            <th className={`${th} text-right`}>{t('table.change')}</th>
+            <th className={`${th} hidden sm:table-cell`}>{t('table.period')}</th>
+            <th className={`${th} hidden md:table-cell`}>{t('table.available')}</th>
+            <th className={`${th} hidden sm:table-cell`}>{t('table.status')}</th>
+            <th className={`${th} hidden md:table-cell`}>{t('table.spark')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.seriesId} className={`border-t border-border ${row.muted ? 'text-text-dim' : ''} ${previewId === row.seriesId ? 'bg-[var(--bg-hover)]' : ''}`}>
+              <td className="px-2 py-1.5">
+                <div className="flex items-center gap-2">
+                  {onPreview && !row.muted ? (
+                    <button type="button" aria-expanded={previewId === row.seriesId} onClick={() => onPreview(row.seriesId)} className="text-left font-medium text-text hover:text-accent">
+                      {row.name}
+                    </button>
+                  ) : (
+                    <span className="font-medium">{row.name}</span>
+                  )}
+                  {!row.muted && (
+                    <Link href={`/intel/macro/${encodeURIComponent(row.seriesId)}`} className="text-[11px] text-text-dim hover:text-accent">
+                      {t('table.detail')}
+                    </Link>
+                  )}
+                </div>
+              </td>
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+                {row.hasEvidence && onOpenEvidence ? (
+                  <button type="button" onClick={() => onOpenEvidence(row)} className="border-b border-dotted border-accent font-mono tabular-nums text-text">
+                    {row.value}{row.unit}
+                  </button>
+                ) : (
+                  <span>{row.value}{row.unit}</span>
+                )}
+              </td>
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-text-dim">
+                {row.change ? `${row.change.arrow} ${row.change.text}` : '—'}
+              </td>
+              <td className="hidden px-2 py-1.5 font-mono tabular-nums sm:table-cell">{row.period}</td>
+              <td className="hidden px-2 py-1.5 font-mono tabular-nums md:table-cell">{row.available}</td>
+              <td className="hidden px-2 py-1.5 sm:table-cell">
+                <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${row.status === 'active' && row.timeliness === 'late' ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn' : 'border-border text-text-dim'}`}>
+                  {t(statusKey(row))}
+                </span>
+              </td>
+              <td className="hidden px-2 py-1.5 md:table-cell">
+                {row.muted ? <span className="text-[11px]">{row.reason ?? '—'}</span> : <Sparkline values={row.spark} label={t('table.sparkLabel', { name: row.name })} />}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+`src/components/macro/ChangesCard.tsx`
+```tsx
+// ChangesCard — 本期变化 (spec §3.2, canvas OverviewOff): four counters plus the latest change lines. Counts only.
+import { Panel } from '@/components/ui';
+import type { MacroT } from './use-macro-t';
+import type { ChangeLine } from './view-model';
+
+const KINDS = ['new_release', 'revised', 'late', 'missing'] as const;
+
+export function ChangesCard({ counts, lines, t }: { counts: Record<(typeof KINDS)[number], number>; lines: ChangeLine[]; t: MacroT }) {
+  return (
+    <Panel title={t('changes.title')}>
+      <div className="grid grid-cols-4 gap-2">
+        {KINDS.map((k) => (
+          <div key={k} className="rounded-md border border-border bg-bg-card p-2">
+            <div className="text-[11px] text-text-dim">{t(`changes.${k}`)}</div>
+            <div className={`font-mono text-xl font-semibold tabular-nums ${k === 'late' && counts[k] > 0 ? 'text-warn' : k === 'missing' ? 'text-text-dim' : ''}`}>{counts[k]}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 text-[10px] uppercase tracking-wider text-text-dim">{t('changes.latest')}</div>
+      {lines.length === 0 ? (
+        <div className="mt-1 text-xs text-text-dim">{t('changes.empty')}</div>
+      ) : (
+        <ul className="mt-1 space-y-1 text-xs">
+          {lines.map((l, i) => (
+            <li key={`${l.seriesId}-${l.kind}-${i}`} className="grid grid-cols-[64px_1fr_auto] items-baseline gap-2">
+              <span className={`rounded border px-1.5 text-[11px] ${l.kind === 'late' ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn' : 'border-border text-text-dim'}`}>{t(`changes.${l.kind}`)}</span>
+              <span className={l.kind === 'missing' ? 'text-text-dim' : ''}>
+                {l.name}{' '}
+                <span className="font-mono tabular-nums">{l.previous ? t('changes.revisedFrom', { from: l.previous, to: l.value }) : l.value}</span>
+              </span>
+              <span className="font-mono tabular-nums text-text-dim">{l.period}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+```
+
+`src/components/macro/CatalogCoverage.tsx`
+```tsx
+// CatalogCoverage — 目录覆盖 (spec §3.2): verified / catalog as counts (never percentages), not-verified items with
+// their reasons, and collection status per dataset (spec §4.5 collection freshness).
+import { Panel } from '@/components/ui';
+import type { MacroT } from './use-macro-t';
+import type { CollectionView, CoverageView } from './view-model';
+
+export function CatalogCoverage({ coverage, collection, t, onMethodology }: { coverage: CoverageView; collection: CollectionView[]; t: MacroT; onMethodology?: () => void }) {
+  return (
+    <Panel title={t('coverage.title')}>
+      <div className="flex items-baseline gap-2">
+        <span className="text-xs text-text-dim">{t('coverage.verified')}</span>
+        <span className="font-mono text-2xl font-semibold tabular-nums">{coverage.verified}</span>
+        <span className="text-xs text-text-dim">/ {t('coverage.catalog')}</span>
+        <span className="font-mono text-2xl font-semibold tabular-nums text-text-dim">{coverage.total}</span>
+        {onMethodology && (
+          <button type="button" onClick={onMethodology} className="ml-auto text-[11px] text-accent">{t('coverage.methodLink')}</button>
+        )}
+      </div>
+      <div className="mt-3 text-[10px] uppercase tracking-wider text-text-dim">{t('coverage.notVerified')}</div>
+      {coverage.notVerified.length === 0 ? (
+        <div className="mt-1 text-xs text-text-dim">{t('coverage.none')}</div>
+      ) : (
+        <ul className="mt-1 space-y-1 text-xs">
+          {coverage.notVerified.map((n) => (
+            <li key={n.seriesId} className="flex gap-2">
+              <span className="min-w-[120px]">{n.name}</span>
+              <span className="text-text-dim">{t(`status.${n.status}`)}{n.reason ? `：${n.reason}` : ''}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-3 text-[10px] uppercase tracking-wider text-text-dim">{t('coverage.collectionTitle')}</div>
+      <table className="mt-1 w-full text-xs">
+        <thead>
+          <tr className="text-left text-[10px] text-text-dim">
+            <th className="py-1 font-medium">{t('coverage.dataset')}</th>
+            <th className="py-1 font-medium">{t('coverage.state')}</th>
+            <th className="py-1 font-medium">{t('coverage.lastOk')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {collection.map((c) => (
+            <tr key={c.dataset} className="border-t border-border">
+              <td className="py-1 font-mono">{c.dataset}</td>
+              <td className={`py-1 ${c.status === 'error' || c.status === 'stale' ? 'text-warn' : c.status === 'missing' ? 'text-text-dim' : ''}`}>{t(`collection.${c.status}`)}</td>
+              <td className="py-1 font-mono tabular-nums text-text-dim">{c.lastOk}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+```
+
+`src/components/macro/SourceFooter.tsx`
+```tsx
+// SourceFooter — 来源条 (spec §3.2): the publishers behind the verified rows and an "open evidence" button.
+import type { MacroT } from './use-macro-t';
+
+export function SourceFooter({ labels, t, onOpen }: { labels: string[]; t: MacroT; onOpen?: () => void }) {
+  return (
+    <footer aria-label={t('sources.title')} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-elevated px-3 py-2 text-[11px] text-text-dim">
+      <span className="uppercase tracking-wider">{t('sources.title')}</span>
+      {labels.map((l) => <span key={l} className="rounded border border-border px-2 py-0.5">{l}</span>)}
+      {onOpen && (
+        <button type="button" onClick={onOpen} className="ml-auto rounded border border-border px-3 py-1 text-xs text-text">{t('sources.open')}</button>
+      )}
+    </footer>
+  );
+}
+```
+
+`src/components/macro/SourceDrawer.tsx`
+```tsx
+'use client';
+// SourceDrawer — 证据抽屉 (spec §3.2, canvas SourceDrawer): source, proof and revision history for one value.
+// Fetches /api/macro/series/[id]/versions. A field that cannot be shown keeps its name and reads 缺失. Derived values
+// show their transform and the proof of each input. Read failure never hides the published value.
+import { useEffect, useState } from 'react';
+import type { MacroT } from './use-macro-t';
+import { isMissingInput, proofRows, revisionRows, sourceRows, type DrawerRow, type Locale, type SourceJson, type VersionsJson } from './view-model';
+
+export interface DrawerTarget { seriesId: string; name: string; periodEnd: string; display: string; source: SourceJson | null }
+
+function Rows({ rows }: { rows: DrawerRow[] }) {
+  return (
+    <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 text-xs">
+      {rows.map((r) => (
+        <div key={r.key} className="contents">
+          <dt className="text-text-dim">{r.label}</dt>
+          <dd className={`break-all ${r.mono ? 'font-mono text-[11px]' : ''} ${r.missing ? 'text-warn' : ''}`}>
+            {r.href ? <a href={r.href} target="_blank" rel="noreferrer" className="text-text underline decoration-dotted">{r.value}</a> : r.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function SourceDrawer({ target, onClose, t, locale }: { target: DrawerTarget | null; onClose: () => void; t: MacroT; locale: Locale }) {
+  const [state, setState] = useState<{ data: VersionsJson | null; error: string | null; loading: boolean }>({ data: null, error: null, loading: false });
+  useEffect(() => {
+    if (!target) return;
+    let cancelled = false;
+    setState({ data: null, error: null, loading: true });
+    fetch(`/api/macro/series/${encodeURIComponent(target.seriesId)}/versions?period_end=${encodeURIComponent(target.periodEnd)}`)
+      .then(async (r) => {
+        const body = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(body?.error?.code ?? `http_${r.status}`);
+        return body as VersionsJson;
+      })
+      .then((data) => { if (!cancelled) setState({ data, error: null, loading: false }); })
+      .catch((e: Error) => { if (!cancelled) setState({ data: null, error: e.message, loading: false }); });
+    return () => { cancelled = true; };
+  }, [target]);
+  useEffect(() => {
+    if (!target) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [target, onClose]);
+  if (!target) return null;
+  const latest = state.data?.versions[0] ?? null;
+  const section = 'border-t border-border px-4 py-3 space-y-2';
+  const cap = 'text-[10px] uppercase tracking-wider text-text-dim';
+  return (
+    <aside role="dialog" aria-label={`${t('drawer.title')} · ${target.name}`} className="fixed inset-y-0 right-0 z-40 w-full max-w-[560px] overflow-y-auto border-l border-border bg-bg-elevated shadow-none">
+      <div className="flex items-start gap-3 px-4 py-3">
+        <div className="min-w-0">
+          <div className={cap}>{t('drawer.title')}</div>
+          <h2 className="text-base font-semibold">{target.name} <span className="font-mono">{target.display}</span></h2>
+          <div className="font-mono text-[11px] text-text-dim">{target.seriesId} · {target.periodEnd}</div>
+        </div>
+        <button type="button" aria-label={t('drawer.close')} onClick={onClose} className="ml-auto h-8 w-8 rounded border border-border text-text-dim">×</button>
+      </div>
+      <div className={section}>
+        <div className={cap}>{t('drawer.sourceSection')}</div>
+        <Rows rows={sourceRows(target.source, t, locale)} />
+      </div>
+      <div className={section}>
+        <div className={cap}>{t('drawer.proofSection')}</div>
+        {state.loading && <div className="text-xs text-text-dim">{t('drawer.loading')}</div>}
+        {state.error && <div className="rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] p-2 text-xs">{t('drawer.loadFailed')}</div>}
+        {latest && (latest.derived_from ? (
+          <>
+            <Rows rows={proofRows(latest, t).filter((r) => r.key === 'transform' || r.key === 'available')} />
+            <div className="text-xs text-text-dim">{t('drawer.derivedFrom', { count: latest.inputs.length })}</div>
+            {latest.inputs.map((input) => (
+              <div key={input.observation_id} className="rounded-md border border-border p-2">
+                <div className="mb-1 font-mono text-[11px] text-text-dim">{t('drawer.input', { id: isMissingInput(input) ? input.observation_id : `${input.series_id} · v${input.version}` })}</div>
+                {isMissingInput(input) ? <div className="text-xs text-warn">{t('drawer.inputMissing')}</div> : <Rows rows={proofRows(input, t)} />}
+              </div>
+            ))}
+          </>
+        ) : <Rows rows={proofRows(latest, t)} />)}
+        <div className="text-[11px] text-text-dim">{t('drawer.basis')}</div>
+      </div>
+      <div className={section}>
+        <div className={cap}>{t('drawer.revisions')}</div>
+        {state.data && (state.data.versions.length <= 1 ? (
+          <div className="rounded-md border border-dashed border-border p-2 text-xs text-text-dim">{t('drawer.noRevisions')}</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] text-text-dim">
+                <th className="py-1 font-medium">{t('drawer.version')}</th>
+                <th className="py-1 text-right font-medium">{t('drawer.value')}</th>
+                <th className="py-1 font-medium">{t('drawer.available')}</th>
+                <th className="py-1 font-medium">{t('drawer.note')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {revisionRows(state.data.versions, t).map((r) => (
+                <tr key={r.version} className={`border-t border-border ${r.superseded ? 'text-text-dim' : ''}`}>
+                  <td className="py-1 font-mono">{r.version}</td>
+                  <td className="py-1 text-right font-mono tabular-nums">{r.value}</td>
+                  <td className="py-1 font-mono tabular-nums">{r.available}</td>
+                  <td className="py-1">{r.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+      </div>
+    </aside>
+  );
+}
+```
+
+- [ ] **Step 7: Run tests, typecheck, lint**
+Run: `npm test -- src/components/macro 'src/app/api/macro/series/[id]/versions' src/i18n && npm run typecheck && npm run lint`
+Expected: PASS. If typecheck fails on `IndicatorRowContract` / `ChangeItemContract` / `EnvelopeContract`, the landed `views.ts` (Task 13) differs from the shape this plan gives it. Stop and report NEEDS_CONTEXT with both shapes. Do not edit `src/lib/macro/views.ts` and do not delete the assertion.
+
+- [ ] **Step 8: Commit**
+```bash
+git add messages/zh/macro.json messages/en/macro.json src/i18n/request.ts src/components/macro 'src/app/api/macro/series/[id]/versions'
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): i18n domain, decimal display formatting, view models, base components
+
+macro messages (zh/en parity test), exact string rounding and typed bp/pp/pct/
+points changes with neutral arrows, overview/series/versions view models with a
+compile-time contract against views.IndicatorRow, indicator table, changes and
+coverage cards (counts only), source footer, evidence drawer (missing fields
+read 缺失), lightweight-charts 4.2 line with cycle bands and markers, SVG
+sparkline/scatter, table toggles, versions provenance route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 17: Workbench pages, indicator detail, correlation UI, judgment slot, Today and /intel cards
+
+**Files:**
+- Create: `src/lib/macro/workbench-options.ts`, `src/lib/macro/workbench-options.test.ts`
+- Create: `src/components/macro/correlation-presets.ts`, `src/components/macro/detail-model.ts`, `src/components/macro/detail-model.test.ts`, `src/components/macro/judgment-view.ts`, `src/components/macro/judgment-view.test.ts`, `src/components/macro/use-macro-overview.ts`
+- Create: `src/components/macro/MacroWorkbench.tsx`, `IndicatorDetail.tsx`, `CorrelationWorkbench.tsx`, `CorrelationResult.tsx`, `AnalysisRunView.tsx`, `MacroJudgmentSlot.tsx`, `MacroKeyRows.tsx`, `MacroSummaryCard.tsx`
+- Create: `src/app/(app)/intel/macro/page.tsx`, `src/app/(app)/intel/macro/[seriesId]/page.tsx`, `src/app/(app)/intel/macro/analyses/[runId]/page.tsx`, `src/app/(app)/intel/macro/pages.test.ts`
+- Modify: `src/components/today/MacroGlance.tsx` (whole file replaced; content inside `// MACRO` … `// /MACRO`; every `MOCK_DATA` row removed)
+- Modify: `src/app/(app)/intel/page.tsx` (`MacroSummaryCard` import and mount, each inside MACRO markers)
+- Check only: `src/components/TabBar.tsx` (line ~73: `pathname.startsWith(t.href)` with the intel `href: '/intel'` already highlights `/intel/macro/*`; the pages test pins this. No edit.)
+
+Design decisions:
+- **Rendering model** follows the existing `(app)` pages. The three route files are thin `force-dynamic` server components (like `briefs/[date]/page.tsx`). Data loads client-side from the macro APIs (like `today/page.tsx` and `intel/page.tsx`). Server components do only what must be server-side: read `process.env.MACRO_JUDGMENTS_ENABLED === '1'`, validate the series id against the catalog, and build the correlation options from `MACRO_CATALOG`. `catalog.ts` is pure TS (Task 2 computes `CATALOG_VERSION` with its own SHA-256, so client code may import it; `view-model.ts` does), but the correlation option list is still built on the server so pages stay thin.
+- **Judgment slot** mounts only when the server passes `judgmentsEnabled`. It is collapsed by default (canvas JudgmentSlot A). On expand it reads `GET /api/judgments?subject_type=macro_region&subject_key=<region>`. A percent appears only when `display.percent` is a number. Any non-2xx (404 included), network error or unparseable body → "判断层暂不可用" with retry; it never falls back to macro numbers. The basis table reads `contributions` from `GET /api/macro/snapshots/<snapshotId>`, which returns them only while the flag is on (Task 13).
+- **Overview preview** (spec §3.2 "行选中 → IndicatorDetail 预览"): the indicator name is a button that toggles a compact `IndicatorDetail` under the table, and "详情 →" links to the full page.
+- **Correlation form**: 8 prefilled presets only fill the form and never run. `request_id` = `crypto.randomUUID()`, reused while the same request is retried after a network failure. It is cleared after a stored run (ok or failed), so the next submit is a new request. The level mode shows the exploratory label. Every chart has a table view, and below 640px the scatter opens as a table.
+- **Today / /intel**: read `GET /api/macro/overview?region=all&compact=1` and show `GLANCE_IDS` rows that are present; missing → 缺失; fetch failure → "宏观数据暂不可用". Nothing is invented and there are no mock rows. Asset up/down colours (`text-up` / `text-down`) appear only in the per-cycle asset table.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/lib/macro/workbench-options.test.ts`
+```ts
+// Correlation options come from the catalog (active, monthly) and every preset is a valid request (spec §3.4).
+import {describe,expect,it} from 'vitest';
+import {PRESETS} from '@/components/macro/correlation-presets';
+import {validateAnalysisRequest} from './analysis-spec';
+import {correlationOptions} from './workbench-options';
+describe('correlation options and presets',()=>{
+ const o=correlationOptions();
+ it('lists only active monthly indicators and assets',()=>{
+  expect(o.indicators.length).toBeGreaterThan(0);expect(o.assets.length).toBeGreaterThan(0);
+  expect(o.indicators.map(x=>x.id)).not.toContain('US_VIX');expect(o.indicators.map(x=>x.id)).not.toContain('CN_GDP_YOY');
+  expect(o.assets.map(x=>x.id)).not.toContain('US_SP500');
+ });
+ it('has 8 presets, each a valid request whose series are offered by the form',()=>{
+  expect(PRESETS).toHaveLength(8);
+  for(const p of PRESETS){
+   const r=validateAnalysisRequest({...p.form,request_id:'0b8f8d3e-4a7c-4b7e-9e55-0f6f1f2a3b4c'});
+   expect([p.id,r.ok?'ok':r.errors]).toEqual([p.id,'ok']);
+   expect(o.indicators.some(x=>x.id===p.form.indicator_id)).toBe(true);
+   expect(o.assets.some(x=>x.id===p.form.asset_id)).toBe(true);
+  }
+  expect(new Set(PRESETS.map(p=>p.form.kind))).toEqual(new Set(['change','level','rolling','event_window']));
+ });
+});
+```
+
+`src/components/macro/detail-model.test.ts`
+```ts
+// Indicator detail helpers (spec §3.3): windows, exact period changes, chart points, markers, asset tones.
+import {describe,expect,it} from 'vitest';
+import {assetChangeView,chartPoints,cycleKey,diffRows,markersOf,sourceJsonOf,windowFrom} from './detail-model';
+const o=(pe:string,v:string)=>({observation_id:pe,period_end:pe,value_text:v,version:1,available_at:'2026-01-01T00:00:00Z'});
+describe('detail model',()=>{
+ it('window start dates (leap day clamps)',()=>{
+  expect(windowFrom('y3','2026-11-06')).toBe('2023-11-06');expect(windowFrom('y5','2024-02-29')).toBe('2019-02-28');expect(windowFrom('all','2026-11-06')).toBeNull();
+ });
+ it('period changes are exact decimals in the series unit; the first row has none',()=>{
+  expect(diffRows([o('2026-08-31','4.78'),o('2026-09-30','4.80'),o('2026-10-31','4.5')],'bp').map(r=>r.diff_text)).toEqual([null,'2','-30']);
+  expect(diffRows([o('2026-08-31','0.1'),o('2026-09-30','0.3')],'pp').map(r=>r.diff_text)).toEqual([null,'0.2']);
+ });
+ it('chart points: levels or changes (first change skipped)',()=>{
+  const obs=[o('2026-08-31','4.78'),o('2026-09-30','4.80')];
+  expect(chartPoints(obs,'level','bp')).toEqual([{time:'2026-08-31',value:4.78},{time:'2026-09-30',value:4.8}]);
+  expect(chartPoints(obs,'diff','bp')).toEqual([{time:'2026-09-30',value:2}]);
+ });
+ it('markers: derived events and FOMC meetings from the first plotted month, sorted',()=>{
+  const ev=[{effective_date:'2024-09-18',change_bp:'-50'},{effective_date:'2019-08-01',change_bp:'-25'}] as Parameters<typeof markersOf>[0];
+  const cal=[{start:'2024-09-17',end:'2024-09-18'}] as Parameters<typeof markersOf>[1];
+  expect(markersOf(ev,cal,'2024-09-30')).toEqual([{time:'2024-09-18',kind:'calendar',text:'FOMC'},{time:'2024-09-18',kind:'derived',text:'-50 bp'}]);
+ });
+ it('cycle label keys distinguish policy cycles',()=>{
+  expect(cycleKey({basis:'policy_events',direction:'up'})).toBe('detail.policyDirection.up');
+  expect(cycleKey({basis:'trailing_median',direction:'down'})).toBe('detail.direction.down');
+ });
+ it('asset moves: signed, unit-suffixed, toned; missing stays missing',()=>{
+  expect(assetChangeView({change_text:'2.6845',change_kind:'pct'})).toEqual({text:'+2.68%',tone:'up'});
+  expect(assetChangeView({change_text:'-75',change_kind:'bp'})).toEqual({text:'−75 bp',tone:'down'});
+  expect(assetChangeView({change_text:'0',change_kind:'pct'})).toEqual({text:'0.00%',tone:'flat'});
+  expect(assetChangeView({change_text:null,change_kind:'bp'})).toEqual({text:'—',tone:'missing'});
+ });
+ it('source json from a catalog def',()=>{
+  expect(sourceJsonOf({source:null})).toBeNull();
+  expect(sourceJsonOf({source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'a',en:'A'},seriesKey:'UNRATE',rights:'public_domain',attribution:{zh:'b',en:'B'}}}))
+   .toEqual({publisher:{zh:'a',en:'A'},via:null,fetch_host:'fred.stlouisfed.org',adapter:'fred_csv',rights:'public_domain',attribution:{zh:'b',en:'B'}});
+ });
+});
+```
+
+`src/components/macro/judgment-view.test.ts`
+```ts
+// F4 judgment response handling (spec §3.2): tolerant card extraction, percent only when numeric, contributions.
+import {describe,expect,it} from 'vitest';
+import {cardsFromResponse,contributionText,contributionsFrom,percentOf} from './judgment-view';
+const card={judgment_id:'j1',lifecycle:'open',calibration:'insufficient_sample',as_of:'2026-11-03T03:20:00Z',methodology:{id:'macro_regime',version:'1.0',title:{zh:'宏观状态',en:'Macro regime'},href:'/methods/macro_regime'},display:{headline:{zh:'复苏',en:'Recovery'},percent:null,value:null}};
+describe('judgment view',()=>{
+ it('accepts an array, {judgments}, {cards} or {judgment}; drops malformed entries',()=>{
+  expect(cardsFromResponse([card])).toHaveLength(1);
+  expect(cardsFromResponse({judgments:[card,{judgment_id:3}]})).toHaveLength(1);
+  expect(cardsFromResponse({cards:[card]})).toHaveLength(1);
+  expect(cardsFromResponse({judgment:card})).toHaveLength(1);
+  expect(cardsFromResponse({error:'x'})).toEqual([]);expect(cardsFromResponse(null)).toEqual([]);
+ });
+ it('percent only when display.percent is a finite number',()=>{
+  expect(percentOf(card)).toBeNull();
+  expect(percentOf({...card,display:{...card.display,percent:62}})).toBe(62);
+  expect(percentOf({...card,display:{...card.display,percent:'62' as unknown as number}})).toBeNull();
+ });
+ it('contributions from the snapshot response',()=>{
+  const c={series_id:'US_CPI_YOY',observation_id:'o',rule_id:'infl.yoy',weight:15,support:{},contribution:{recovery:0,overheat:4.5,stagflation:0,recession:0}};
+  expect(contributionsFrom({contributions:[c,{bad:1}]})).toEqual([c]);
+  expect(contributionsFrom({regime:{contributions:[c]}})).toEqual([c]);
+  expect(contributionsFrom({})).toEqual([]);
+  expect(contributionText(c)).toBe('overheat 4.5');
+ });
+});
+```
+
+`src/app/(app)/intel/macro/pages.test.ts`
+```ts
+// Structural guards for the macro pages (spec §2, §3.2, §3.5): force-dynamic server pages, judgment flag read only
+// server-side, no mock data in Today/macro components, MACRO markers in shared files, TabBar prefix highlight.
+import {readFileSync,readdirSync} from 'node:fs';
+import {join} from 'node:path';
+import {describe,expect,it} from 'vitest';
+const read=(p:string)=>readFileSync(join(process.cwd(),p),'utf8');
+const PAGES=['page.tsx','[seriesId]/page.tsx','analyses/[runId]/page.tsx'];
+describe('macro pages',()=>{
+ for(const p of PAGES)it(`${p} is a force-dynamic server component`,()=>{
+  const src=read(`src/app/(app)/intel/macro/${p}`);
+  expect(src.includes("'use client'")).toBe(false);
+  expect(src).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
+ });
+ it('only the workbench server page reads MACRO_JUDGMENTS_ENABLED',()=>{
+  expect(read('src/app/(app)/intel/macro/page.tsx')).toContain("process.env.MACRO_JUDGMENTS_ENABLED === '1'");
+  const files=(readdirSync(join(process.cwd(),'src/components/macro'),{recursive:true}) as string[]).filter(f=>/\.tsx?$/.test(f));
+  for(const f of files)expect([f,read(`src/components/macro/${f}`).includes('MACRO_JUDGMENTS_ENABLED')]).toEqual([f,false]);
+ });
+ it('Today glance has no mock rows and sits inside MACRO markers',()=>{
+  const g=read('src/components/today/MacroGlance.tsx');
+  expect(g).not.toMatch(/MOCK_DATA|@\/lib\/data\/mock/);
+  expect(g).toMatch(/^\/\/ MACRO/m);expect(g).toMatch(/^\/\/ \/MACRO/m);
+ });
+ it('/intel mounts the macro summary card inside MACRO markers',()=>{
+  const p=read('src/app/(app)/intel/page.tsx');
+  expect(p).toMatch(/\/\/ MACRO\nimport \{ MacroSummaryCard \} from '@\/components\/macro\/MacroSummaryCard';\n\/\/ \/MACRO/);
+  expect(p).toMatch(/\{\/\* MACRO \*\/\}[\s\S]*<MacroSummaryCard \/>[\s\S]*\{\/\* \/MACRO \*\/\}/);
+ });
+ it('TabBar highlights /intel/macro/* through the /intel prefix',()=>{
+  const tb=read('src/components/TabBar.tsx');
+  expect(tb).toContain("href: '/intel'");expect(tb).toContain('pathname.startsWith(t.href)');
+ });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm test -- src/lib/macro/workbench-options.test.ts src/components/macro/detail-model.test.ts src/components/macro/judgment-view.test.ts 'src/app/(app)/intel/macro'`
+Expected: FAIL (`Cannot find module './workbench-options'`, `./detail-model`, `./judgment-view`; the pages test fails with ENOENT)
+
+- [ ] **Step 3: Implement the pure helpers**
+
+`src/lib/macro/workbench-options.ts`
+```ts
+// src/lib/macro/workbench-options.ts
+// Server-side options for the correlation form (spec §3.4): active monthly indicators and assets from the catalog.
+// Built in the server page and passed to the client, so client bundles never import catalog.ts.
+import {MACRO_CATALOG} from './catalog';
+import type {Bilingual,Region} from './types';
+export interface SeriesOption{id:string;region:Region;name:Bilingual}
+export function correlationOptions():{indicators:SeriesOption[];assets:SeriesOption[]}{
+ const usable=MACRO_CATALOG.filter(d=>d.status==='active'&&d.period==='month');
+ const opt=(role:'indicator'|'asset')=>usable.filter(d=>d.role===role).map(d=>({id:d.id,region:d.region,name:d.name}));
+ return {indicators:opt('indicator'),assets:opt('asset')};
+}
+```
+
+`src/components/macro/correlation-presets.ts`
+```ts
+// src/components/macro/correlation-presets.ts
+// The 8 prefilled correlation forms (spec §3.4 "热门分析"). They only fill the form: no stored runs, no automatic
+// recompute. workbench-options.test.ts checks every preset is a valid request.
+import type {AnalysisSpec} from '@/lib/macro/correlation';
+export type PresetForm=Omit<AnalysisSpec,'request_id'>;
+export interface Preset{id:'p1'|'p2'|'p3'|'p4'|'p5'|'p6'|'p7'|'p8';region:'US'|'CN';form:PresetForm}
+export const PRESETS:readonly Preset[]=[
+ {id:'p1',region:'US',form:{kind:'change',indicator_id:'US_DFF',asset_id:'US_UST10Y',lag:0,window:'10y'}},
+ {id:'p2',region:'US',form:{kind:'change',indicator_id:'US_CPI_YOY',asset_id:'US_UST10Y',lag:0,window:'10y'}},
+ {id:'p3',region:'US',form:{kind:'change',indicator_id:'US_CPI_YOY',asset_id:'US_WTI',lag:-1,window:'10y'}},
+ {id:'p4',region:'US',form:{kind:'change',indicator_id:'US_DTWEXBGS',asset_id:'US_WTI',lag:0,window:'10y'}},
+ {id:'p5',region:'US',form:{kind:'rolling',indicator_id:'US_UNRATE',asset_id:'US_UST10Y',lag:0,window:'all'}},
+ {id:'p6',region:'US',form:{kind:'event_window',indicator_id:'US_DFF',asset_id:'US_UST10Y',lag:0,window:'all',event_n:6}},
+ {id:'p7',region:'CN',form:{kind:'change',indicator_id:'CN_PMI_MFG',asset_id:'CN_CGB10Y',lag:0,window:'10y'}},
+ {id:'p8',region:'CN',form:{kind:'level',indicator_id:'CN_CPI_YOY',asset_id:'CN_CGB10Y',lag:0,window:'10y'}},
+];
+```
+
+`src/components/macro/detail-model.ts`
+```ts
+// src/components/macro/detail-model.ts
+// Indicator detail helpers (spec §3.3). Period changes are exact decimals in the series' change unit; numbers become
+// floats only as chart coordinates. Event markers: derived policy events (arrows) and FOMC calendar entries (circles).
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import type {AssetByCycle} from '@/lib/macro/series-extras';
+import type {Cycle} from '@/lib/macro/cycles';
+import {subtract,yoyPct} from '@/lib/macro/decimal';
+import type {PolicyEvent} from '@/lib/macro/events';
+import type {CalendarEvent} from '@/lib/macro/fomc';
+import type {ChangeKind,MacroSeriesDef} from '@/lib/macro/types';
+import type {ChartBand,ChartMarker,LinePoint} from './charts/MacroLineChart';
+import {MISSING,roundDecimalText} from './macro-format';
+import type {SourceJson} from './view-model';
+export type DetailWindow='y3'|'y5'|'y10'|'all';
+export function windowFrom(w:DetailWindow,today:string):string|null{
+ if(w==='all')return null;
+ const years=w==='y3'?3:w==='y5'?5:10;
+ const d=`${Number(today.slice(0,4))-years}${today.slice(4,10)}`;
+ return d.endsWith('-02-29')?`${d.slice(0,8)}28`:d;
+}
+export function diffText(cur:string,prev:string,kind:ChangeKind):string|null{
+ if(kind==='bp')return canonicalDecimal(`${subtract(cur,prev)}e2`);
+ if(kind==='pct'){const p=canonicalDecimal(prev);if(p==='0'||p.startsWith('-'))return null;return yoyPct(cur,prev);}
+ return subtract(cur,prev);
+}
+export interface ObsLike{observation_id:string;period_end:string;value_text:string;version:number;available_at:string}
+export function diffRows<T extends ObsLike>(obs:readonly T[],kind:ChangeKind):(T&{diff_text:string|null})[]{
+ return obs.map((o,i)=>({...o,diff_text:i===0?null:diffText(o.value_text,obs[i-1].value_text,kind)}));
+}
+export function chartPoints(obs:readonly ObsLike[],mode:'level'|'diff',kind:ChangeKind):LinePoint[]{
+ if(mode==='level')return obs.map(o=>({time:o.period_end,value:Number(o.value_text)}));
+ return diffRows(obs,kind).flatMap(o=>o.diff_text===null?[]:[{time:o.period_end,value:Number(o.diff_text)}]);
+}
+export const bandsOf=(cycles:readonly Cycle[]):ChartBand[]=>cycles.map(c=>({start:c.start,end:c.end,direction:c.direction}));
+/** Markers dated on/after the first plotted month, sorted by time. */
+export function markersOf(events:readonly Pick<PolicyEvent,'effective_date'|'change_bp'>[],calendar:readonly Pick<CalendarEvent,'start'|'end'>[],firstPeriod:string):ChartMarker[]{
+ const m0=firstPeriod.slice(0,7);
+ const ev=events.filter(e=>e.effective_date.slice(0,7)>=m0).map(e=>({time:e.effective_date,kind:'derived' as const,text:`${e.change_bp} bp`}));
+ const cal=calendar.filter(c=>c.end.slice(0,7)>=m0).map(c=>({time:c.end,kind:'calendar' as const,text:'FOMC'}));
+ return [...ev,...cal].sort((a,b)=>a.time.localeCompare(b.time)||a.kind.localeCompare(b.kind));
+}
+export const cycleKey=(c:Pick<Cycle,'basis'|'direction'>):string=>c.basis==='policy_events'?`detail.policyDirection.${c.direction}`:`detail.direction.${c.direction}`;
+export function assetChangeView(a:Pick<AssetByCycle,'change_text'|'change_kind'>):{text:string;tone:'up'|'down'|'flat'|'missing'}{
+ if(a.change_text===null)return {text:MISSING,tone:'missing'};
+ const r=roundDecimalText(a.change_text,a.change_kind==='bp'?0:2);
+ const neg=r.startsWith('-');const abs=neg?r.slice(1):r;const zero=/^0(\.0+)?$/.test(abs);
+ const text=`${zero?'':neg?'−':'+'}${abs}${a.change_kind==='pct'?'%':` ${a.change_kind}`}`;
+ return {text,tone:zero?'flat':neg?'down':'up'};
+}
+export function sourceJsonOf(def:Pick<MacroSeriesDef,'source'>):SourceJson|null{
+ const s=def.source;
+ return s?{publisher:s.publisher,via:s.via??null,fetch_host:s.fetchHost,adapter:s.adapter,rights:s.rights,attribution:s.attribution}:null;
+}
+```
+
+`src/components/macro/judgment-view.ts`
+```ts
+// src/components/macro/judgment-view.ts
+// Reading F4 responses for MacroJudgmentSlot (spec §3.2). F4's /api/judgments is not on main yet, so its envelope is
+// read tolerantly; only well-formed JudgmentCardView entries render. A percent is shown only when display.percent is
+// a finite number.
+import type {JudgmentCardView} from '@/lib/macro/judgment-contract';
+import type {RegimeContribution} from '@/lib/macro/types';
+const isObj=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
+function isCard(v:unknown):v is JudgmentCardView{
+ return isObj(v)&&typeof v.judgment_id==='string'&&typeof v.lifecycle==='string'&&typeof v.as_of==='string'&&isObj(v.methodology)&&isObj(v.display)&&isObj(v.display.headline);
+}
+export function cardsFromResponse(json:unknown):JudgmentCardView[]{
+ const list:unknown[]=Array.isArray(json)?json:isObj(json)?(Array.isArray(json.judgments)?json.judgments:Array.isArray(json.cards)?json.cards:isObj(json.judgment)?[json.judgment]:[]):[];
+ return list.filter(isCard);
+}
+export const percentOf=(c:JudgmentCardView):number|null=>typeof c.display.percent==='number'&&Number.isFinite(c.display.percent)?c.display.percent:null;
+export function contributionsFrom(json:unknown):RegimeContribution[]{
+ const candidates=[isObj(json)?json.contributions:undefined,isObj(json)&&isObj(json.regime)?json.regime.contributions:undefined,isObj(json)&&isObj(json.snapshot)?json.snapshot.contributions:undefined];
+ const arr=candidates.find(Array.isArray) as unknown[]|undefined;
+ return (arr??[]).filter((c):c is RegimeContribution=>isObj(c)&&typeof c.series_id==='string'&&typeof c.rule_id==='string'&&typeof c.weight==='number'&&isObj(c.contribution));
+}
+export const contributionText=(c:RegimeContribution):string=>Object.entries(c.contribution).filter(([,v])=>v!==0).map(([k,v])=>`${k} ${v}`).join(' · ')||'0';
+```
+
+`src/components/macro/use-macro-overview.ts`
+```ts
+// src/components/macro/use-macro-overview.ts
+// Client fetch of GET /api/macro/overview (spec §8). Errors surface as a code; there are never placeholder numbers.
+import {useEffect,useState} from 'react';
+import type {OverviewJson} from './view-model';
+export type OverviewState={status:'loading'}|{status:'error';code:string}|{status:'ok';data:OverviewJson};
+export function useMacroOverview(query:string):OverviewState{
+ const [state,setState]=useState<OverviewState>({status:'loading'});
+ useEffect(()=>{
+  let cancelled=false;
+  setState({status:'loading'});
+  fetch(`/api/macro/overview?${query}`)
+   .then(async r=>{const b=await r.json().catch(()=>null);if(!r.ok)throw new Error(b?.error?.code??`http_${r.status}`);return b as OverviewJson;})
+   .then(data=>{if(!cancelled)setState({status:'ok',data});})
+   .catch((e:Error)=>{if(!cancelled)setState({status:'error',code:e.message});});
+  return ()=>{cancelled=true;};
+ },[query]);
+ return state;
+}
+```
+
+- [ ] **Step 4: Implement the components**
+
+`src/components/macro/MacroKeyRows.tsx`
+```tsx
+// MacroKeyRows — key indicator rows shared by the Today glance and the /intel card (spec §3.5, canvas TodayGlance2):
+// status dot · name · period | value | neutral change. Missing reads 缺失.
+import type { MacroT } from './use-macro-t';
+import { statusKey, type glanceRows } from './view-model';
+
+export function MacroKeyRows({ groups, t }: { groups: ReturnType<typeof glanceRows>; t: MacroT }) {
+  return (
+    <div className="space-y-2">
+      {groups.map((g) => (
+        <div key={g.region}>
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-text-dim">
+            <span>{t(`region.${g.region}`)}</span>
+            <span className="font-mono normal-case">
+              {g.asOf ? t('glance.snapshot', { date: g.asOf }) : t('header.noSnapshot')} · {t(`collection.${g.overall}`)}
+            </span>
+          </div>
+          {g.rows.map((r) => {
+            const dot = r.muted ? 'border border-text-dim' : r.timeliness === 'late' ? 'bg-warn' : 'bg-accent';
+            return (
+              <div key={r.seriesId} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-2 py-0.5 text-[11px]">
+                <span className="truncate text-text-dim">
+                  <span aria-hidden="true" className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${dot}`} />
+                  <span className="sr-only">{t('glance.statusLabel', { status: t(statusKey(r)) })}</span>
+                  {r.name} <span className="font-mono">{r.period}</span>
+                </span>
+                <span className="font-mono tabular-nums">{r.muted ? t('glance.missing') : `${r.value}${r.unit}`}</span>
+                <span className="font-mono tabular-nums text-text-dim">{r.change ? `${r.change.arrow} ${r.change.text}` : '—'}</span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+`src/components/macro/MacroSummaryCard.tsx`
+```tsx
+'use client';
+// MacroSummaryCard — /intel 宏观摘要卡 (spec §3.1): US / CN key indicators + collection status + link to the workbench.
+import Link from 'next/link';
+import { Panel } from '@/components/ui';
+import { MacroKeyRows } from './MacroKeyRows';
+import { useMacroOverview } from './use-macro-overview';
+import { useMacroT } from './use-macro-t';
+import { glanceRows } from './view-model';
+
+export function MacroSummaryCard() {
+  const { t, locale } = useMacroT();
+  const state = useMacroOverview('region=all&compact=1');
+  const groups = state.status === 'ok' ? glanceRows(state.data, locale) : [];
+  return (
+    <Panel title={t('summary.title')}>
+      <div className="mb-2 text-[11px] text-text-dim">{t('summary.subtitle')}</div>
+      {state.status === 'loading' && <div className="text-[11px] text-text-dim">{t('states.loading')}</div>}
+      {(state.status === 'error' || (state.status === 'ok' && groups.length === 0)) && <div className="text-[11px] text-text-dim">{t('summary.unavailable')}</div>}
+      {groups.length > 0 && <div className="grid gap-3 sm:grid-cols-2"><MacroKeyRows groups={groups} t={t} /></div>}
+      <Link href="/intel/macro" className="mt-2 inline-block text-[11px] text-accent">{t('summary.enter')}</Link>
+    </Panel>
+  );
+}
+```
+
+`src/components/macro/MacroJudgmentSlot.tsx`
+```tsx
+'use client';
+// MacroJudgmentSlot — F4 judgment card mount (spec §3.2, canvas JudgmentSlot). Rendered only when the server page
+// passes judgmentsEnabled (the judgment flag is read server-side, never here). Collapsed by default. Any F4 failure shows
+// "判断层暂不可用" and never falls back to macro-computed numbers. A percent appears only when display.percent is a number.
+import { useEffect, useState } from 'react';
+import type { JudgmentCardView } from '@/lib/macro/judgment-contract';
+import type { RegimeContribution } from '@/lib/macro/types';
+import { cardsFromResponse, contributionText, contributionsFrom, percentOf } from './judgment-view';
+import { formatInstant } from './macro-format';
+import { useMacroT, type MacroT } from './use-macro-t';
+import { pick, type Locale } from './view-model';
+
+type SlotState = { status: 'idle' } | { status: 'loading' } | { status: 'unavailable' } | { status: 'ok'; cards: JudgmentCardView[] };
+
+function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
+  const [rows, setRows] = useState<RegimeContribution[] | null | 'error'>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/macro/snapshots/${encodeURIComponent(snapshotId)}`)
+      .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((j) => { if (!cancelled) setRows(contributionsFrom(j)); })
+      .catch(() => { if (!cancelled) setRows('error'); });
+    return () => { cancelled = true; };
+  }, [snapshotId]);
+  if (rows === null) return <div className="text-xs text-text-dim">{t('judgment.loading')}</div>;
+  if (rows === 'error' || rows.length === 0) return <div className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</div>;
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-left text-[10px] text-text-dim">
+          <th className="py-1 font-medium">{t('judgment.columns.series')}</th>
+          <th className="py-1 font-medium">{t('judgment.columns.rule')}</th>
+          <th className="py-1 text-right font-medium">{t('judgment.columns.weight')}</th>
+          <th className="py-1 font-medium">{t('judgment.columns.contribution')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((c) => (
+          <tr key={`${c.series_id}-${c.rule_id}`} className="border-t border-border">
+            <td className="py-1 font-mono">{c.series_id}</td>
+            <td className="py-1 font-mono text-text-dim">{c.rule_id}</td>
+            <td className="py-1 text-right font-mono tabular-nums">{c.weight}</td>
+            <td className="py-1 font-mono tabular-nums">{contributionText(c)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function Card({ card, t, locale, snapshotId }: { card: JudgmentCardView; t: MacroT; locale: Locale; snapshotId: string | null }) {
+  const [basisOpen, setBasisOpen] = useState(false);
+  const percent = percentOf(card);
+  return (
+    <article className="rounded-md border border-border bg-bg-elevated">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-[11px] text-text-dim">
+        <span className="rounded border border-border px-2 py-0.5">{t('judgment.lifecycle')}：{t(`judgment.lifecycles.${card.lifecycle}`)}</span>
+        <span className="rounded border border-border px-2 py-0.5">{t('judgment.calibration')}：{card.calibration}</span>
+        <a href={card.methodology.href} className="rounded border border-border px-2 py-0.5 font-mono">{pick(card.methodology.title, locale)} {card.methodology.version}</a>
+      </div>
+      <div className="flex flex-wrap items-baseline gap-3 px-4 pb-3">
+        <span className="text-[11px] text-text-dim">{t('judgment.primary')}</span>
+        <span className="text-xl font-semibold">{pick(card.display.headline, locale)}</span>
+        {percent !== null ? <span className="font-mono tabular-nums">{t('judgment.percent', { value: percent })}</span> : <span className="text-[11px] text-text-dim">{t('judgment.noPercent')}</span>}
+        {card.lifecycle === 'abstained' && card.abstain_reason && <span className="text-xs text-text-dim">{t('judgment.abstained', { reason: card.abstain_reason })}</span>}
+      </div>
+      <div className="flex flex-wrap gap-4 border-t border-border px-4 py-2 text-xs text-text-dim">
+        <span>{t('judgment.asOf')} <span className="font-mono text-text">{formatInstant(card.as_of)}</span></span>
+        {snapshotId && <span>{t('judgment.snapshot')} <span className="font-mono text-text">{snapshotId}</span></span>}
+      </div>
+      {snapshotId && (
+        <div className="border-t border-border px-4 py-2">
+          <button type="button" aria-expanded={basisOpen} onClick={() => setBasisOpen((v) => !v)} className="text-xs text-text">{t('judgment.basis')}</button>
+          {basisOpen && <div className="mt-2"><Basis snapshotId={snapshotId} t={t} /></div>}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN'; snapshotId: string | null }) {
+  const { t, locale } = useMacroT();
+  const [open, setOpen] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  const [state, setState] = useState<SlotState>({ status: 'idle' });
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setState({ status: 'loading' });
+    fetch(`/api/judgments?subject_type=macro_region&subject_key=${region}`)
+      .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((j) => { if (!cancelled) setState({ status: 'ok', cards: cardsFromResponse(j) }); })
+      .catch(() => { if (!cancelled) setState({ status: 'unavailable' }); });
+    return () => { cancelled = true; };
+  }, [open, region, nonce]);
+  return (
+    <section aria-label={t('judgment.title')} className="space-y-2">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-elevated px-3 py-2 text-left text-sm">
+        <span className="text-text">{t('judgment.title')}</span>
+        <span className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-text-dim">{open ? t('judgment.collapse') : t('judgment.expand')}</span>
+      </button>
+      {open && state.status === 'loading' && <div className="text-xs text-text-dim">{t('judgment.loading')}</div>}
+      {open && state.status === 'unavailable' && (
+        <div role="status" className="flex items-start gap-3 rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-bg-elevated px-4 py-3 text-xs">
+          <div className="space-y-1">
+            <div className="text-sm font-semibold">{t('judgment.unavailable')}</div>
+            <div className="text-text-dim">{t('judgment.unavailableNote')}</div>
+          </div>
+          <button type="button" onClick={() => setNonce((n) => n + 1)} className="ml-auto rounded border border-border px-3 py-1">{t('judgment.retry')}</button>
+        </div>
+      )}
+      {open && state.status === 'ok' && (state.cards.length === 0
+        ? <div className="text-xs text-text-dim">{t('judgment.noCards')}</div>
+        : state.cards.map((c) => <Card key={c.judgment_id} card={c} t={t} locale={locale} snapshotId={snapshotId} />))}
+    </section>
+  );
+}
+```
+
+`src/components/macro/CorrelationResult.tsx`
+```tsx
+'use client';
+// CorrelationResult — one stored analysis run (spec §3.4, §7): numbers, the rule-generated sentence, charts with table
+// views (scatter → table below 640px), and the frozen-input receipt (cutoff, catalog version, inputs hash, counts).
+import type { AnalysisResult, AnalysisSpec, EventResult, FrozenInputs, PairResult, RollingResult } from '@/lib/macro/correlation';
+import type { AnalysisKind, Bilingual } from '@/lib/macro/types';
+import { DataTableToggle } from './charts/DataTableToggle';
+import { MacroLineChart } from './charts/MacroLineChart';
+import { ScatterFit } from './charts/ScatterFit';
+import { sparklinePoints } from './charts/chart-geometry';
+import { formatInstant } from './macro-format';
+import { useMacroT, type MacroT } from './use-macro-t';
+import { pick, type Locale } from './view-model';
+
+export interface RunJson {
+  run_id: string; request_id: string; kind: AnalysisKind; spec: AnalysisSpec; inputs: FrozenInputs; inputs_hash: string;
+  results: (AnalysisResult & { explanation: Bilingual }) | null; code_version: string; method_version: string; status: 'ok' | 'failed'; error: string | null; created_at: string;
+}
+const f = (v: number, d = 2) => v.toFixed(d);
+const cell = 'py-1 pr-3';
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return <div><div className="text-[10px] uppercase tracking-wider text-text-dim">{label}</div><div className="font-mono tabular-nums">{value}</div></div>;
+}
+
+function Pairs({ res, t }: { res: PairResult; t: MacroT }) {
+  const x = sparklinePoints(res.pairs.map((p) => String(p.x)), 480, 110, 4);
+  const y = sparklinePoints(res.pairs.map((p) => String(p.y)), 480, 110, 4);
+  return (
+    <DataTableToggle
+      t={t}
+      narrowTable
+      chart={
+        <div className="space-y-3">
+          <svg role="img" aria-label={`${t('correlation.result.x')} / ${t('correlation.result.y')}`} viewBox="0 0 480 110" className="h-auto w-full">
+            {x && <polyline fill="none" stroke="var(--text)" strokeWidth={1.2} points={x} />}
+            {y && <polyline fill="none" stroke="var(--accent)" strokeWidth={1.2} points={y} />}
+          </svg>
+          <div className="flex gap-4 text-[11px] text-text-dim">
+            <span><span className="mr-1 inline-block h-0.5 w-3 bg-[var(--text)] align-middle" />{t('correlation.result.x')}</span>
+            <span><span className="mr-1 inline-block h-0.5 w-3 bg-accent align-middle" />{t('correlation.result.y')}</span>
+          </div>
+          <ScatterFit pairs={res.pairs} slope={res.slope} intercept={res.intercept} label={t('correlation.result.scatterLabel')} xLabel={`${t('correlation.result.x')} (${res.x_unit})`} yLabel={`${t('correlation.result.y')} (${res.y_unit})`} />
+          <div className="font-mono text-[11px] text-text-dim">{t('correlation.result.fit', { intercept: f(res.intercept, 4), slope: f(res.slope, 4) })}</div>
+        </div>
+      }
+      table={
+        <div className="max-h-80 overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('correlation.result.t')}</th><th className={cell}>{t('correlation.result.s')}</th><th className={`${cell} text-right`}>{t('correlation.result.x')}</th><th className={`${cell} text-right`}>{t('correlation.result.y')}</th></tr></thead>
+            <tbody>{res.pairs.map((p) => <tr key={p.t} className="border-t border-border"><td className={`${cell} font-mono`}>{p.t}</td><td className={`${cell} font-mono`}>{p.s}</td><td className={`${cell} text-right font-mono tabular-nums`}>{f(p.x, 4)}</td><td className={`${cell} text-right font-mono tabular-nums`}>{f(p.y, 4)}</td></tr>)}</tbody>
+          </table>
+        </div>
+      }
+    />
+  );
+}
+
+function Rolling({ res, t }: { res: RollingResult; t: MacroT }) {
+  return (
+    <DataTableToggle
+      t={t}
+      chart={<MacroLineChart points={res.points.map((p) => ({ time: `${p.end}-01`, value: p.r }))} ariaLabel={t('correlation.result.rollingLabel')} height={200} />}
+      table={
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('correlation.result.windowEnd')}</th><th className={`${cell} text-right`}>{t('correlation.result.r')}</th><th className={`${cell} text-right`}>{t('correlation.result.validPairs')}</th></tr></thead>
+          <tbody>{res.points.map((p) => <tr key={p.end} className="border-t border-border"><td className={`${cell} font-mono`}>{p.end}</td><td className={`${cell} text-right font-mono tabular-nums`}>{f(p.r)}</td><td className={`${cell} text-right font-mono tabular-nums`}>{p.n}</td></tr>)}</tbody>
+        </table>
+      }
+    />
+  );
+}
+
+function Events({ res, t }: { res: EventResult; t: MacroT }) {
+  const u = res.y_unit === 'pct' ? '%' : ` ${res.y_unit}`;
+  return (
+    <div className="space-y-3">
+      <div className="text-xs">{t('correlation.result.independent', { count: res.independent, candidates: res.candidates })}</div>
+      {res.stats ? (
+        <table className="text-xs">
+          <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell} /><th className={`${cell} text-right`}>{t('correlation.result.median')}</th><th className={`${cell} text-right`}>{t('correlation.result.q1')}</th><th className={`${cell} text-right`}>{t('correlation.result.q3')}</th></tr></thead>
+          <tbody>
+            {(['pre', 'post'] as const).map((k) => (
+              <tr key={k} className="border-t border-border">
+                <td className={cell}>{t(`correlation.result.${k}`, { n: res.n_months })}</td>
+                <td className={`${cell} text-right font-mono tabular-nums`}>{f(res.stats![k].median)}{u}</td>
+                <td className={`${cell} text-right font-mono tabular-nums`}>{f(res.stats![k].q1)}{u}</td>
+                <td className={`${cell} text-right font-mono tabular-nums`}>{f(res.stats![k].q3)}{u}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <div className="text-xs text-text-dim">{t('correlation.result.fewEvents')}</div>}
+      <div className="text-[10px] uppercase tracking-wider text-text-dim">{t('correlation.result.events')}</div>
+      <table className="w-full text-xs">
+        <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('correlation.result.eventDate')}</th><th className={cell}>{t('correlation.result.anchor')}</th><th className={`${cell} text-right`}>{t('correlation.result.changeBp')}</th><th className={`${cell} text-right`}>{t('correlation.result.pre', { n: res.n_months })}</th><th className={`${cell} text-right`}>{t('correlation.result.post', { n: res.n_months })}</th></tr></thead>
+        <tbody>{res.events.map((e) => <tr key={e.effective_date} className="border-t border-border"><td className={`${cell} font-mono`}>{e.effective_date}</td><td className={`${cell} font-mono`}>{e.anchor}</td><td className={`${cell} text-right font-mono tabular-nums`}>{e.change_bp}</td><td className={`${cell} text-right font-mono tabular-nums`}>{f(e.pre)}{u}</td><td className={`${cell} text-right font-mono tabular-nums`}>{f(e.post)}{u}</td></tr>)}</tbody>
+      </table>
+      {res.dropped.length > 0 && <ul className="text-[11px] text-text-dim">{res.dropped.map((d) => <li key={d.effective_date}>{t('correlation.result.dropped', { date: d.effective_date, reason: t(`correlation.result.droppedReasons.${d.reason}`) })}</li>)}</ul>}
+    </div>
+  );
+}
+
+function Body({ res, t, locale }: { res: AnalysisResult & { explanation: Bilingual }; t: MacroT; locale: Locale }) {
+  return (
+    <div className="space-y-3">
+      {(res.kind === 'change' || res.kind === 'level') && (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-density="data">
+            <Stat label={t('correlation.result.r')} value={f(res.r)} />
+            <Stat label={t('correlation.result.r2')} value={f(res.r2)} />
+            <Stat label={t('correlation.result.n')} value={String(res.n)} />
+            <Stat label={t('correlation.result.sample')} value={`${res.from} → ${res.to}`} />
+            <Stat label={t('correlation.result.transform')} value={t(`correlation.modes.${res.kind}`)} />
+            <Stat label={t('correlation.result.lag')} value={String(res.lag)} />
+            <Stat label={t('correlation.result.method')} value={res.method_version} />
+            <Stat label={t('correlation.result.code')} value={res.code_version.slice(0, 12)} />
+          </div>
+          {res.exploratory && <div className="rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] px-3 py-2 text-xs">{t('correlation.result.exploratory')}</div>}
+        </>
+      )}
+      <p className="text-sm">{pick(res.explanation, locale)}</p>
+      {(res.kind === 'change' || res.kind === 'level') && <Pairs res={res} t={t} />}
+      {res.kind === 'rolling' && <Rolling res={res} t={t} />}
+      {res.kind === 'event_window' && <Events res={res} t={t} />}
+    </div>
+  );
+}
+
+export function CorrelationResult({ run }: { run: RunJson }) {
+  const { t, locale } = useMacroT();
+  return (
+    <div className="card-base space-y-3">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h3 className="text-sm font-semibold">{t('correlation.result.title')}</h3>
+        <span className="font-mono text-[11px] text-text-dim">{run.run_id} · {formatInstant(run.created_at)}</span>
+      </div>
+      {run.status === 'failed' || !run.results
+        ? <div className="text-xs text-warn">{t('correlation.result.failed', { code: run.error ?? 'unknown' })}</div>
+        : <Body res={run.results} t={t} locale={locale} />}
+      <div className="border-t border-border pt-2 text-[11px] text-text-dim">
+        <div className="mb-1 uppercase tracking-wider">{t('correlation.result.inputs')}</div>
+        <div className="grid gap-1 font-mono sm:grid-cols-2">
+          <span>{t('correlation.result.cutoff')} {formatInstant(run.inputs.cutoff)}</span>
+          <span>{t('correlation.result.catalog')} {run.inputs.catalog_version}</span>
+          <span className="break-all">{t('correlation.result.hash')} {run.inputs_hash}</span>
+          <span>{t('correlation.result.observations', { ind: run.inputs.indicator.observations.length, asset: run.inputs.asset.observations.length })}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+`src/components/macro/AnalysisRunView.tsx`
+```tsx
+'use client';
+// AnalysisRunView — /intel/macro/analyses/[runId] (spec §3.1): loads the caller's own run (RLS) and renders it.
+import { useEffect, useState } from 'react';
+import { CorrelationResult, type RunJson } from './CorrelationResult';
+import { useMacroT } from './use-macro-t';
+
+export function AnalysisRunView({ runId }: { runId: string }) {
+  const { t } = useMacroT();
+  const [state, setState] = useState<{ run: RunJson | null; error: string | null }>({ run: null, error: null });
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/macro/analyses/${encodeURIComponent(runId)}`)
+      .then(async (r) => { const b = await r.json().catch(() => null); if (!r.ok) throw new Error(b?.error?.code ?? `http_${r.status}`); return b.run as RunJson; })
+      .then((run) => { if (!cancelled) setState({ run, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setState({ run: null, error: e.message }); });
+    return () => { cancelled = true; };
+  }, [runId]);
+  if (state.error === 'not_found') return <div className="card-base text-xs text-text-dim">{t('correlation.result.notFound')}</div>;
+  if (state.error) return <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.error })}</div>;
+  if (!state.run) return <div className="text-xs text-text-dim">{t('states.loading')}</div>;
+  return <CorrelationResult run={state.run} />;
+}
+```
+
+`src/components/macro/CorrelationWorkbench.tsx`
+```tsx
+'use client';
+// CorrelationWorkbench — 关联工作台 form (spec §3.4): indicator × asset × mode × window × lag (or ±N). Presets only fill
+// the form. request_id is generated client-side and reused while a network failure is retried (idempotent run).
+import { useRef, useState, type FormEvent } from 'react';
+import Link from 'next/link';
+import type { SeriesOption } from '@/lib/macro/workbench-options';
+import { PRESETS, type PresetForm } from './correlation-presets';
+import { CorrelationResult, type RunJson } from './CorrelationResult';
+import { useMacroT } from './use-macro-t';
+import { pick } from './view-model';
+
+const KNOWN_ERRORS = new Set(['quota_exceeded', 'insufficient_sample', 'zero_variance', 'non_positive_price', 'no_events', 'invalid_inputs', 'input_truncated', 'unauthorized', 'read_failed', 'write_failed']);
+const field = 'w-full rounded-md border border-border bg-bg-card px-2 py-1.5 text-sm';
+
+export function CorrelationWorkbench({ options, region }: { options: { indicators: SeriesOption[]; assets: SeriesOption[] }; region: 'US' | 'CN' }) {
+  const { t, locale } = useMacroT();
+  const [form, setForm] = useState<PresetForm>((PRESETS.find((p) => p.region === region) ?? PRESETS[0]).form);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [run, setRun] = useState<RunJson | null>(null);
+  const attempt = useRef<{ signature: string; id: string } | null>(null);
+  const set = (patch: Partial<PresetForm>) => { setForm((f) => ({ ...f, ...patch })); setRun(null); setError(null); };
+  const errorText = (code: string) => (KNOWN_ERRORS.has(code) ? t(`correlation.errors.${code}`) : t('correlation.errors.unknown', { code }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true); setError(null); setRun(null);
+    const body: PresetForm = form.kind === 'event_window' ? { ...form, lag: 0, event_n: form.event_n ?? 6 } : { kind: form.kind, indicator_id: form.indicator_id, asset_id: form.asset_id, lag: form.lag, window: form.window };
+    const signature = JSON.stringify(body);
+    if (attempt.current?.signature !== signature) attempt.current = { signature, id: crypto.randomUUID() };
+    try {
+      const r = await fetch('/api/macro/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, request_id: attempt.current.id }) });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        const code: string = j?.error?.code ?? `http_${r.status}`;
+        setError(code === 'invalid_parameter'
+          ? t('correlation.errors.invalid_parameter', { fields: (j?.error?.fields ?? []).map((x: { field: string; code: string }) => `${x.field}:${x.code}`).join(', ') })
+          : errorText(code));
+        if (j?.runId) attempt.current = null;
+        return;
+      }
+      attempt.current = null;
+      const rr = await fetch(`/api/macro/analyses/${j.runId}`);
+      const jj = await rr.json().catch(() => null);
+      if (rr.ok && jj?.run) setRun(jj.run as RunJson); else setError(t('correlation.result.loadFailed'));
+    } catch {
+      setError(t('states.loadFailed', { code: 'network' }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = (o: SeriesOption) => `${o.region} · ${pick(o.name, locale)}`;
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-base font-semibold">{t('correlation.title')}</h2>
+        <p className="text-xs text-text-dim">{t('correlation.subtitle')}</p>
+      </div>
+      <div className="card-base space-y-2">
+        <div className="text-[10px] uppercase tracking-wider text-text-dim">{t('correlation.presets')}</div>
+        <div className="flex flex-wrap gap-1.5">
+          {PRESETS.map((p) => (
+            <button key={p.id} type="button" onClick={() => set(p.form)} className="rounded border border-border px-2 py-1 text-[11px] text-text-dim hover:text-text">
+              {t(`correlation.presetNames.${p.id}`)}
+            </button>
+          ))}
+        </div>
+        <div className="text-[11px] text-text-dim">{t('correlation.presetHint')}</div>
+      </div>
+      <form onSubmit={submit} className="card-base grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.indicator')}</span>
+          <select className={field} value={form.indicator_id} onChange={(e) => set({ indicator_id: e.target.value })}>
+            {options.indicators.map((o) => <option key={o.id} value={o.id}>{label(o)}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.asset')}</span>
+          <select className={field} value={form.asset_id} onChange={(e) => set({ asset_id: e.target.value })}>
+            {options.assets.map((o) => <option key={o.id} value={o.id}>{label(o)}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.mode')}</span>
+          <select className={field} value={form.kind} onChange={(e) => set({ kind: e.target.value as PresetForm['kind'] })}>
+            {(['change', 'level', 'rolling', 'event_window'] as const).map((k) => <option key={k} value={k}>{t(`correlation.modes.${k}`)}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.window')}</span>
+          <select className={field} value={form.window} onChange={(e) => set({ window: e.target.value as PresetForm['window'] })}>
+            {(['5y', '10y', 'all'] as const).map((w) => <option key={w} value={w}>{t(`correlation.windows.${w}`)}</option>)}
+          </select>
+        </label>
+        {form.kind === 'event_window' ? (
+          <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.eventN')}</span>
+            <select className={field} value={form.event_n ?? 6} onChange={(e) => set({ event_n: Number(e.target.value) as 3 | 6 | 12 })}>
+              {([3, 6, 12] as const).map((n) => <option key={n} value={n}>±{n}</option>)}
+            </select>
+          </label>
+        ) : (
+          <label className="space-y-1 text-xs"><span className="text-text-dim">{t('correlation.lag')}</span>
+            <input type="number" min={-12} max={12} step={1} className={`${field} font-mono`} value={form.lag} onChange={(e) => set({ lag: Math.max(-12, Math.min(12, Math.trunc(Number(e.target.value) || 0))) })} />
+            <span className="block text-[11px] text-text-dim">{t('correlation.lagHelp')}</span>
+          </label>
+        )}
+        <div className="flex flex-col justify-end gap-1">
+          <button type="submit" disabled={busy} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-black disabled:opacity-50">
+            {busy ? t('correlation.submitting') : t('correlation.submit')}
+          </button>
+          <span className="text-[11px] text-text-dim">{t('correlation.gateNote')}</span>
+        </div>
+      </form>
+      {error && <div role="alert" className="rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] px-3 py-2 text-xs">{error}</div>}
+      {run && (
+        <>
+          <CorrelationResult run={run} />
+          <Link href={`/intel/macro/analyses/${run.run_id}`} className="text-xs text-accent">{t('correlation.result.openRun')}</Link>
+        </>
+      )}
+    </div>
+  );
+}
+```
+
+`src/components/macro/IndicatorDetail.tsx`
+```tsx
+'use client';
+// IndicatorDetail — 指标详情 (spec §3.3): current value → typed change → period → availability + basis → chart with
+// cycle bands and event markers (with a table view) → cycles and events → asset moves per cycle (up/down colours for
+// assets only) → method → source, evidence and revisions (drawer). `compact` (overview preview) keeps the facts and
+// the chart/table only.
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { DataTableToggle } from './charts/DataTableToggle';
+import { MacroLineChart } from './charts/MacroLineChart';
+import { assetChangeView, bandsOf, chartPoints, cycleKey, diffRows, markersOf, sourceJsonOf, windowFrom, type DetailWindow } from './detail-model';
+import { MISSING, formatInstant, formatPeriod, formatValueText, typedChange, unitSuffix } from './macro-format';
+import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
+import { useMacroT } from './use-macro-t';
+import { pick, type SeriesJson } from './view-model';
+
+const WINDOWS: DetailWindow[] = ['y3', 'y5', 'y10', 'all'];
+const cell = 'py-1 pr-3';
+
+function Fact({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div>
+      <dt className="text-[10px] uppercase tracking-wider text-text-dim">{label}</dt>
+      <dd className="font-mono text-base tabular-nums">{value}</dd>
+      {note && <dd className="text-[11px] text-text-dim">{note}</dd>}
+    </div>
+  );
+}
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="card-base space-y-2"><h3 className="text-sm font-semibold">{title}</h3>{children}</section>;
+}
+
+export function IndicatorDetail({ seriesId, compact = false }: { seriesId: string; compact?: boolean }) {
+  const { t, locale } = useMacroT();
+  const [win, setWin] = useState<DetailWindow>('y5');
+  const [mode, setMode] = useState<'level' | 'diff'>('level');
+  const [state, setState] = useState<{ data: SeriesJson | null; error: string | null }>({ data: null, error: null });
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const from = useMemo(() => windowFrom(win, new Date().toISOString().slice(0, 10)), [win]);
+  useEffect(() => {
+    let cancelled = false;
+    setState({ data: null, error: null });
+    fetch(`/api/macro/series/${encodeURIComponent(seriesId)}${from ? `?from=${from}` : ''}`)
+      .then(async (r) => { const b = await r.json().catch(() => null); if (!r.ok) throw new Error(b?.error?.code ?? `http_${r.status}`); return b as SeriesJson; })
+      .then((data) => { if (!cancelled) setState({ data, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setState({ data: null, error: e.message }); });
+    return () => { cancelled = true; };
+  }, [seriesId, from]);
+  const d = state.data;
+  const rows = useMemo(() => (d ? diffRows(d.observations, d.def.changeKind) : []), [d]);
+  const points = useMemo(() => (d ? chartPoints(d.observations, mode, d.def.changeKind) : []), [d, mode]);
+  const bands = useMemo(() => (d ? bandsOf(d.cycles) : []), [d]);
+  const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end) : []), [d]);
+  if (state.error) return <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.error })}</div>;
+  if (!d) return <div className="text-xs text-text-dim">{t('states.loading')}</div>;
+
+  const def = d.def;
+  const name = pick(def.name, locale);
+  const unit = unitSuffix(def.unit);
+  const cur = d.observations.at(-1) ?? null;
+  const prev = d.observations.at(-2) ?? null;
+  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, def.changeKind) : null;
+  const source = sourceJsonOf(def);
+  const open = (periodEnd: string, valueText: string) => setDrawer({ seriesId: def.id, name, periodEnd, display: `${formatValueText(valueText)}${unit}`, source });
+  const method = def.derive ? t(`detail.derive.${def.derive.kind}`, { from: def.derive.from }) : def.aliasOf ? t('detail.alias', { from: def.aliasOf }) : t('detail.native');
+  const btn = (active: boolean) => `rounded border border-border px-2 py-0.5 text-[11px] ${active ? 'bg-[var(--accent-wash)] text-accent' : 'text-text-dim'}`;
+
+  const obsTable = (
+    <div className="max-h-80 overflow-y-auto">
+      <table className="w-full text-xs">
+        <thead><tr className="text-left text-[10px] text-text-dim">
+          <th className={cell}>{t('detail.columns.period')}</th><th className={`${cell} text-right`}>{t('detail.columns.value')}</th>
+          {mode === 'diff' && <th className={`${cell} text-right`}>{t('detail.columns.diff')}</th>}
+          <th className={cell}>{t('detail.columns.available')}</th><th className={cell}>{t('detail.columns.version')}</th>
+        </tr></thead>
+        <tbody>
+          {[...rows].reverse().map((o) => (
+            <tr key={o.observation_id} className="border-t border-border">
+              <td className={`${cell} font-mono`}>{formatPeriod(o.period_end, def.period)}</td>
+              <td className={`${cell} text-right`}><button type="button" onClick={() => open(o.period_end, o.value_text)} className="border-b border-dotted border-accent font-mono tabular-nums">{formatValueText(o.value_text)}{unit}</button></td>
+              {mode === 'diff' && <td className={`${cell} text-right font-mono tabular-nums`}>{o.diff_text === null ? MISSING : formatValueText(o.diff_text)}</td>}
+              <td className={`${cell} font-mono tabular-nums`}>{formatInstant(o.available_at)}</td>
+              <td className={`${cell} font-mono`}>v{o.version}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="card-base space-y-3">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="text-lg font-semibold">{name}</h2>
+          <span className="font-mono text-[11px] text-text-dim">{def.id}</span>
+          {def.status !== 'active' && <span className="rounded border border-border px-1.5 text-[11px] text-text-dim">{t(`status.${def.status}`)}{def.reason ? `：${pick(def.reason, locale)}` : ''}</span>}
+        </div>
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-density="data">
+          <Fact label={t('detail.current')} value={cur ? `${formatValueText(cur.value_text)}${unit}` : MISSING} />
+          <Fact label={t('detail.change')} value={change ? `${change.arrow} ${change.text}` : MISSING} />
+          <Fact label={t('detail.period')} value={cur ? formatPeriod(cur.period_end, def.period) : MISSING} />
+          <Fact label={t('detail.available')} value={cur ? formatInstant(cur.available_at) : MISSING} note={t('detail.basis')} />
+        </dl>
+      </div>
+
+      <section className="card-base space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold">{t('detail.chart')}</h3>
+          <div className="ml-auto flex gap-1">{WINDOWS.map((w) => <button key={w} type="button" aria-pressed={win === w} onClick={() => setWin(w)} className={btn(win === w)}>{t(`detail.windows.${w}`)}</button>)}</div>
+          <div className="flex gap-1">{(['level', 'diff'] as const).map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} className={btn(mode === m)}>{t(`detail.transforms.${m}`)}</button>)}</div>
+        </div>
+        {points.length === 0
+          ? <div className="text-xs text-text-dim">{t('detail.empty')}</div>
+          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />}
+        {d.cycles.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.confirmNote')}</div>}
+      </section>
+
+      {!compact && (
+        <>
+          <Section title={t('detail.cycles')}>
+            {d.cycles.length === 0 ? <div className="text-xs text-text-dim">{t('states.empty')}</div> : (
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('detail.cycleColumns.direction')}</th><th className={cell}>{t('detail.cycleColumns.start')}</th><th className={cell}>{t('detail.cycleColumns.end')}</th><th className={cell}>{t('detail.cycleColumns.confirmed')}</th></tr></thead>
+                <tbody>{d.cycles.map((c) => (
+                  <tr key={`${c.start}-${c.direction}`} className="border-t border-border">
+                    <td className={cell}>{t(cycleKey(c))}</td><td className={`${cell} font-mono`}>{c.start}</td>
+                    <td className={`${cell} font-mono`}>{c.ongoing ? t('detail.ongoing') : c.end}</td>
+                    <td className={`${cell} font-mono`}>{t('detail.confirmed', { date: c.confirmed_at })}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+            {d.insufficient.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.insufficient', { count: d.insufficient.length })}</div>}
+          </Section>
+
+          <Section title={t('detail.events')}>
+            {d.events.length === 0 && d.calendar.length === 0 ? <div className="text-xs text-text-dim">{t('detail.noEvents')}</div> : (
+              <div className="max-h-72 overflow-y-auto">
+                <div className="mb-1 text-[11px] text-text-dim">{t('detail.derivedEvent')} · {t('detail.calendarEvent')}</div>
+                <table className="w-full text-xs">
+                  <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('detail.eventColumns.date')}</th><th className={cell}>{t('detail.eventColumns.kind')}</th><th className={cell}>{t('detail.eventColumns.detail')}</th></tr></thead>
+                  <tbody>
+                    {[...d.events.map((e) => ({ date: e.effective_date, kind: t('detail.derivedEvent'), detail: `${e.upper_from}→${e.upper_to} / ${e.lower_from}→${e.lower_to} · ${t('detail.eventChange', { change: e.change_bp })}` })),
+                      ...d.calendar.map((c) => ({ date: c.start, kind: t('detail.calendarEvent'), detail: `${c.start} – ${c.end}` }))]
+                      .sort((a, b) => b.date.localeCompare(a.date))
+                      .map((r, i) => <tr key={`${r.date}-${i}`} className="border-t border-border"><td className={`${cell} font-mono`}>{r.date}</td><td className={cell}>{r.kind}</td><td className={`${cell} font-mono`}>{r.detail}</td></tr>)}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+
+          <Section title={t('detail.assets')}>
+            {d.assetsByCycle.length === 0 ? <div className="text-xs text-text-dim">{t('detail.noAssets')}</div> : (
+              <>
+                <table className="w-full text-xs">
+                  <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('detail.assetColumns.cycle')}</th><th className={cell}>{t('detail.assetColumns.asset')}</th><th className={cell}>{t('detail.assetColumns.from')}</th><th className={cell}>{t('detail.assetColumns.to')}</th><th className={`${cell} text-right`}>{t('detail.assetColumns.change')}</th></tr></thead>
+                  <tbody>{d.assetsByCycle.map((a) => {
+                    const c = d.cycles[a.cycle_index]; const v = assetChangeView(a);
+                    return (
+                      <tr key={`${a.cycle_index}-${a.asset_id}`} className="border-t border-border">
+                        <td className={cell}>{c ? `${t(cycleKey(c))} ${c.start}` : a.cycle_index}</td>
+                        <td className={cell}>{pick(a.asset_name, locale)}</td>
+                        <td className={`${cell} font-mono`}>{a.start_period}</td>
+                        <td className={`${cell} font-mono`}>{a.end_period}</td>
+                        <td className={`${cell} text-right font-mono tabular-nums ${v.tone === 'up' ? 'text-up' : v.tone === 'down' ? 'text-down' : 'text-text-dim'}`}>{v.text}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+                <div className="text-[11px] text-text-dim">{t('detail.assetsNote')}</div>
+              </>
+            )}
+          </Section>
+
+          <Section title={t('detail.method')}>
+            <p className="text-xs">{method}</p>
+            <p className="text-xs text-text-dim">{t('detail.changeKind', { kind: def.changeKind })} · {d.eventsVersion} · {d.cyclesVersion}</p>
+          </Section>
+
+          <Section title={t('detail.sourceTitle')}>
+            {cur
+              ? <button type="button" onClick={() => open(cur.period_end, cur.value_text)} className="rounded border border-border px-3 py-1 text-xs">{t('detail.openDrawer')}</button>
+              : <div className="text-xs text-text-dim">{t('detail.empty')}</div>}
+          </Section>
+        </>
+      )}
+      <SourceDrawer target={drawer} onClose={closeDrawer} t={t} locale={locale} />
+    </div>
+  );
+}
+```
+
+`src/components/macro/MacroWorkbench.tsx`
+```tsx
+'use client';
+// MacroWorkbench — /intel/macro (spec §3.1, §3.2, canvas OverviewOff): region switch, tabs 概览 · 指标 · 关联 · 方法与来源.
+// The judgment slot is rendered only when the server page passes judgmentsEnabled. With the layer off, nothing on
+// the page names a regime, score, margin or coverage percentage. Collection failures show the last published
+// snapshot with its collection status; they never show zeros.
+import { useCallback, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { CORRELATION_VERSION } from '@/lib/macro/correlation';
+import { CYCLES_VERSION } from '@/lib/macro/cycles';
+import { EVENTS_VERSION } from '@/lib/macro/events';
+import type { SeriesOption } from '@/lib/macro/workbench-options';
+import { CatalogCoverage } from './CatalogCoverage';
+import { ChangesCard } from './ChangesCard';
+import { CorrelationWorkbench } from './CorrelationWorkbench';
+import { IndicatorDetail } from './IndicatorDetail';
+import { IndicatorTable } from './IndicatorTable';
+import { MacroJudgmentSlot } from './MacroJudgmentSlot';
+import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
+import { SourceFooter } from './SourceFooter';
+import { useMacroOverview } from './use-macro-overview';
+import { useMacroT, type MacroT } from './use-macro-t';
+import { changeCounts, changeLines, collectionOf, coverageOf, sourceLabel, sourceLabels, toIndicatorView, type IndicatorView, type OverviewEnvelopeJson } from './view-model';
+
+export type WorkbenchTab = 'overview' | 'indicators' | 'correlation' | 'methodology';
+const TABS: WorkbenchTab[] = ['overview', 'indicators', 'correlation', 'methodology'];
+
+function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: OverviewEnvelopeJson | null; rows: IndicatorView[]; t: MacroT; judgmentsEnabled: boolean; locale: 'zh' | 'en' }) {
+  const block = (title: string, body: string) => <section className="card-base space-y-1"><h3 className="text-sm font-semibold">{title}</h3><p className="text-xs leading-relaxed text-text-dim">{body}</p></section>;
+  return (
+    <div className="space-y-3">
+      {block(t('methodology.availabilityTitle'), t('methodology.availabilityBody'))}
+      {block(t('methodology.sourcesTitle'), t('methodology.sourcesBody'))}
+      {block(t('methodology.missingTitle'), t('methodology.missingBody'))}
+      {block(t('methodology.revisionsTitle'), t('methodology.revisionsBody'))}
+      {block(t('methodology.eventsTitle'), t('methodology.eventsBody'))}
+      <section className="card-base space-y-1">
+        <h3 className="text-sm font-semibold">{t('methodology.versionsTitle')}</h3>
+        <ul className="font-mono text-[11px] text-text-dim">
+          {env && <li>{t('methodology.catalogVersion', { v: env.catalogVersion })}</li>}
+          {env && <li>{t('methodology.methodologyVersion', { v: env.methodologyVersion ?? '—' })}</li>}
+          <li>{t('methodology.eventsVersion', { v: EVENTS_VERSION })}</li>
+          <li>{t('methodology.cyclesVersion', { v: CYCLES_VERSION })}</li>
+          <li>{t('methodology.correlationVersion', { v: CORRELATION_VERSION })}</li>
+        </ul>
+        {!judgmentsEnabled && <p className="text-[11px] text-text-dim">{t('methodology.judgmentsOff')}</p>}
+      </section>
+      <section className="card-base space-y-1">
+        <h3 className="text-sm font-semibold">{t('methodology.catalogTitle')}</h3>
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-[10px] text-text-dim"><th className="py-1">{t('table.name')}</th><th className="py-1">{t('table.status')}</th><th className="py-1">{t('sources.title')}</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.seriesId} className="border-t border-border">
+              <td className="py-1">{r.name} <span className="font-mono text-[10px] text-text-dim">{r.seriesId}</span></td>
+              <td className="py-1 text-text-dim">{t(`status.${r.status}`)}{r.reason ? `：${r.reason}` : ''}</td>
+              <td className="py-1 text-text-dim">{sourceLabel(r.source, locale) ?? '—'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
+
+export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, options }: {
+  initialRegion: 'US' | 'CN'; initialTab: WorkbenchTab; judgmentsEnabled: boolean; options: { indicators: SeriesOption[]; assets: SeriesOption[] };
+}) {
+  const { t, locale } = useMacroT();
+  const router = useRouter();
+  const [region, setRegion] = useState(initialRegion);
+  const [tab, setTab] = useState(initialTab);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const state = useMacroOverview(`region=${region}`);
+  const env = state.status === 'ok' ? state.data.regions[region] ?? null : null;
+  const rows = useMemo(() => (env ? env.indicators.map((r) => toIndicatorView(r, locale)) : []), [env, locale]);
+  const go = (r: 'US' | 'CN', tb: WorkbenchTab) => {
+    setRegion(r); setTab(tb); setPreview(null); setDrawer(null);
+    router.replace(`/intel/macro?region=${r}&tab=${tb}`, { scroll: false });
+  };
+  const openEvidence = (row: IndicatorView) => {
+    if (row.periodEnd) setDrawer({ seriesId: row.seriesId, name: row.name, periodEnd: row.periodEnd, display: `${row.value}${row.unit}`, source: row.source });
+  };
+  const coll = env ? collectionOf(env) : null;
+  const tabBtn = (active: boolean) => `px-3 py-2 text-sm ${active ? 'border-b-2 border-accent font-semibold text-text' : 'text-text-dim'}`;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <h1 className="text-xl font-bold">{t('page.title')}</h1>
+          <p className="text-[11px] text-text-dim">{t('page.subtitle')}</p>
+        </div>
+        <div role="group" aria-label={t('region.label')} className="ml-auto flex overflow-hidden rounded border border-border">
+          {(['US', 'CN'] as const).map((r) => (
+            <button key={r} type="button" aria-pressed={region === r} onClick={() => go(r, tab)} className={`px-3 py-1 text-xs ${region === r ? 'bg-[var(--accent-wash)] font-semibold text-accent' : 'text-text-dim'}`}>{t(`region.${r}`)}</button>
+          ))}
+        </div>
+        {env && coll && (
+          <span className="inline-flex items-center gap-2 rounded border border-border px-2 py-1 text-[11px] text-text-dim">
+            <span aria-hidden="true" className={`inline-block h-1.5 w-1.5 rounded-full ${coll.overall === 'fresh' ? 'bg-accent' : coll.overall === 'missing' ? 'border border-text-dim' : 'bg-warn'}`} />
+            <span className="font-mono">{env.asOf ? t('header.snapshot', { date: env.asOf }) : t('header.noSnapshot')}</span>
+            <span>· {t('header.collection', { status: t(`collection.${coll.overall}`) })}</span>
+          </span>
+        )}
+      </div>
+
+      <nav aria-label={t('tabs.label')} className="flex gap-1 border-b border-border">
+        {TABS.map((tb) => <button key={tb} type="button" aria-current={tab === tb ? 'page' : undefined} onClick={() => go(region, tb)} className={tabBtn(tab === tb)}>{t(`tabs.${tb}`)}</button>)}
+      </nav>
+
+      {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
+      {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
+
+      {tab === 'overview' && env && (
+        <div className="space-y-3">
+          <div className="grid gap-3 lg:grid-cols-2">
+            <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale)} t={t} />
+            <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
+          </div>
+          {judgmentsEnabled && <MacroJudgmentSlot region={region} snapshotId={env.snapshotId} />}
+          <section className="card-base space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold">{t('table.title')}</h2>
+              <span className="text-[11px] text-text-dim">{t('table.hint')}</span>
+              <span className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-text-dim">{t('table.changeKinds')}</span>
+            </div>
+            <IndicatorTable rows={rows} t={t} onOpenEvidence={openEvidence} onPreview={(id) => setPreview((p) => (p === id ? null : id))} previewId={preview} />
+            <div className="text-[11px] text-text-dim">{t('table.neutralNote')}</div>
+          </section>
+          {preview && <IndicatorDetail key={preview} seriesId={preview} compact />}
+          <SourceFooter labels={sourceLabels(env.indicators, locale)} t={t} onOpen={() => { const first = rows.find((r) => r.hasEvidence); if (first) openEvidence(first); }} />
+        </div>
+      )}
+      {tab === 'indicators' && env && (
+        <section className="card-base"><IndicatorTable rows={rows} t={t} onOpenEvidence={openEvidence} /></section>
+      )}
+      {tab === 'correlation' && <CorrelationWorkbench key={region} options={options} region={region} />}
+      {tab === 'methodology' && <Methodology env={env} rows={rows} t={t} judgmentsEnabled={judgmentsEnabled} locale={locale} />}
+      <SourceDrawer target={drawer} onClose={closeDrawer} t={t} locale={locale} />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 5: Implement the pages**
+
+`src/app/(app)/intel/macro/page.tsx`
+```tsx
+// /intel/macro — macro workbench (spec §3.1, §3.2). Server component: reads the judgment flag server-side and builds
+// correlation options from the catalog; data loads client-side from /api/macro/*.
+import { MacroWorkbench, type WorkbenchTab } from '@/components/macro/MacroWorkbench';
+import { correlationOptions } from '@/lib/macro/workbench-options';
+
+// Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
+export const dynamic = 'force-dynamic';
+const TABS: readonly WorkbenchTab[] = ['overview', 'indicators', 'correlation', 'methodology'];
+
+export default async function MacroPage({ searchParams }: { searchParams: Promise<{ region?: string; tab?: string }> }) {
+  const sp = await searchParams;
+  const region = sp.region === 'CN' ? 'CN' : 'US';
+  const tab = TABS.find((x) => x === sp.tab) ?? 'overview';
+  const judgmentsEnabled = process.env.MACRO_JUDGMENTS_ENABLED === '1';
+  return <MacroWorkbench initialRegion={region} initialTab={tab} judgmentsEnabled={judgmentsEnabled} options={correlationOptions()} />;
+}
+```
+
+`src/app/(app)/intel/macro/[seriesId]/page.tsx`
+```tsx
+// /intel/macro/[seriesId] — indicator detail (spec §3.3). Server component: catalog whitelist; data loads client-side.
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { getTranslations } from 'next-intl/server';
+import { IndicatorDetail } from '@/components/macro/IndicatorDetail';
+import { catalogById } from '@/lib/macro/catalog';
+
+// Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
+export const dynamic = 'force-dynamic';
+
+export default async function MacroSeriesPage({ params }: { params: Promise<{ seriesId: string }> }) {
+  const { seriesId } = await params;
+  const def = catalogById(seriesId);
+  if (!def || def.role === 'event_source') notFound();
+  const t = await getTranslations('macro');
+  return (
+    <div className="space-y-3">
+      <Link href={`/intel/macro?region=${def.region}&tab=indicators`} className="text-sm">{t('page.back')}</Link>
+      <IndicatorDetail seriesId={def.id} />
+    </div>
+  );
+}
+```
+
+`src/app/(app)/intel/macro/analyses/[runId]/page.tsx`
+```tsx
+// /intel/macro/analyses/[runId] — the caller's saved correlation run (spec §3.1). Server shell; RLS read client-side.
+import Link from 'next/link';
+import { getTranslations } from 'next-intl/server';
+import { AnalysisRunView } from '@/components/macro/AnalysisRunView';
+
+// Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
+export const dynamic = 'force-dynamic';
+
+export default async function MacroAnalysisPage({ params }: { params: Promise<{ runId: string }> }) {
+  const { runId } = await params;
+  const t = await getTranslations('macro');
+  return (
+    <div className="space-y-3">
+      <Link href="/intel/macro?tab=correlation" className="text-sm">{t('page.back')}</Link>
+      <AnalysisRunView runId={runId} />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 6: Replace the Today glance and mount the /intel card**
+
+Replace the whole content of `src/components/today/MacroGlance.tsx` with:
+```tsx
+// MACRO
+// Today macro glance (spec §3.5, canvas TodayGlance2): reads the published overview (region=all, compact). No mock
+// rows: SSE/HSI/Nasdaq/DXY have no official source with confirmed rights; US10Y comes from the macro catalog
+// (US_DGS10). Missing values read 缺失; a fetch failure reads unavailable; never zeros.
+'use client';
+
+import Link from 'next/link';
+import { Panel } from '@/components/ui';
+import { MacroKeyRows } from '@/components/macro/MacroKeyRows';
+import { useMacroOverview } from '@/components/macro/use-macro-overview';
+import { useMacroT } from '@/components/macro/use-macro-t';
+import { glanceRows } from '@/components/macro/view-model';
+
+export function MacroGlance() {
+  const { t, locale } = useMacroT();
+  const state = useMacroOverview('region=all&compact=1');
+  const groups = state.status === 'ok' ? glanceRows(state.data, locale) : [];
+  return (
+    <Panel title={t('glance.title')}>
+      {state.status === 'loading' && <div className="text-[11px] text-text-dim">{t('states.loading')}</div>}
+      {(state.status === 'error' || (state.status === 'ok' && groups.length === 0)) && <div className="text-[11px] text-text-dim">{t('glance.unavailable')}</div>}
+      {groups.length > 0 && <MacroKeyRows groups={groups} t={t} />}
+      <Link href="/intel/macro" className="mt-2 inline-block text-[11px] text-accent">{t('glance.enter')}</Link>
+    </Panel>
+  );
+}
+// /MACRO
+```
+
+Modify `src/app/(app)/intel/page.tsx`: after the last existing import line (`import { Disclaimer } from '@/components/Disclaimer';`) add:
+```tsx
+// MACRO
+import { MacroSummaryCard } from '@/components/macro/MacroSummaryCard';
+// /MACRO
+```
+and in `IntelPage`, directly after `<p className="mb-4 text-sm text-text-dim">{t('page.subtitle')}</p>`, add:
+```tsx
+      {/* MACRO */}
+      <div className="mb-4"><MacroSummaryCard /></div>
+      {/* /MACRO */}
+```
+Leave `messages/*/today.json` `macro.*` keys in place (other code may read them; unused keys are harmless) and leave `src/lib/data/mock.ts` unchanged.
+
+- [ ] **Step 7: Run tests, typecheck, lint**
+Run: `npm test -- src/lib/macro src/components/macro 'src/app/(app)' && npm run typecheck && npm run lint`
+Expected: PASS
+
+- [ ] **Step 8: Look at it in the browser (judgment flag off)**
+Run the dev server through the preview tool (`.claude/launch.json` config `stock-monitor`, port 3000) or `npm run dev`. With a session (local Supabase with migrations, or the owner's `.env.local`), open `/intel/macro`, `/intel/macro?region=CN`, `/intel/macro/US_DFF`, `/today`, `/intel`. Check:
+- the page shows no 象限 / 得分 / margin / percentage of coverage, and no judgment slot;
+- missing/restricted rows are greyed with reasons;
+- a value click opens the drawer with every field name present;
+- the detail page has the chart with the table toggle;
+- the Today card has no SSE/HSI/Nasdaq/DXY rows;
+- the console has no errors.
+
+Without a session the APIs answer 401 and the pages must show the "读取失败" states with no numbers. Record what you saw in the task report. Task 18 does the formal evidence capture.
+
+- [ ] **Step 9: Commit**
+```bash
+git add src/lib/macro/workbench-options.ts src/lib/macro/workbench-options.test.ts src/components/macro 'src/app/(app)/intel/macro' src/components/today/MacroGlance.tsx 'src/app/(app)/intel/page.tsx'
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): workbench pages, indicator detail, correlation UI, judgment slot, Today/intel cards
+
+/intel/macro (region switch; overview, indicators, correlation, method tabs),
+indicator detail with cycle bands, events and per-cycle asset moves, correlation
+form with 8 prefilled presets and stored-run view, F4 judgment slot behind
+MACRO_JUDGMENTS_ENABLED (unavailable state, percent only when numeric), /intel
+summary card, Today MacroGlance reads the published overview (mock rows removed).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
+
+### Task 18: Quarantine resolution CLI, runbook, full gates, live checks, acceptance evidence
+
+**Files:**
+- Create: `src/lib/macro/quarantine-cli.ts`, `src/lib/macro/quarantine-cli.test.ts`
+- Create: `scripts/macro/resolve-quarantine.ts`
+- Create: `docs/runbooks/macro-sync.md`
+- Modify: `docs/audits/2026-11-06-macro-workbench/10-implementation-log.md` (append an "Acceptance evidence" section; create the file with a one-line title if it does not exist)
+
+- [ ] **Step 1: Write the failing test**
+
+`src/lib/macro/quarantine-cli.test.ts`
+```ts
+// Quarantine CLI (spec §4.3, §0.2 M10): argument rules, admin check, RPC errors surfaced, listing format.
+import {describe,expect,it,vi} from 'vitest';
+import {MacroDbError} from './db';
+import {formatOpenItems,isRejectOnly,parseQuarantineArgs,runQuarantineCommand,type OpenItem,type QuarantineDeps} from './quarantine-cli';
+const Q='3f0c2a1e-1b2c-4d3e-8f4a-5b6c7d8e9f00',A='7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const item:OpenItem={id:Q,dataset:'macro.fred',natural_key:'US_UNRATE|2026-08-31',reason_code:'unexpected_revision',detail:{current_value_text:'4.3'},payload:{value_text:'4.2'},batch_id:'b',created_at:'2026-11-03T05:31:00Z'};
+const deps=(o:Partial<QuarantineDeps>={}):QuarantineDeps=>({listOpen:vi.fn(async()=>[item]),isAdmin:vi.fn(async()=>true),resolve:vi.fn(async()=>{}),log:vi.fn(),...o});
+describe('parseQuarantineArgs',()=>{
+ it('list by default, --json optional',()=>{
+  expect(parseQuarantineArgs([])).toEqual({kind:'list',json:false});
+  expect(parseQuarantineArgs(['--json'])).toEqual({kind:'list',json:true});
+ });
+ it('resolve needs one decision, a uuid id and --by admin uuid',()=>{
+  expect(parseQuarantineArgs(['--accept',Q,'--by',A])).toEqual({kind:'resolve',decision:'accept',id:Q,by:A});
+  expect(parseQuarantineArgs(['--reject',Q,'--by',A])).toEqual({kind:'resolve',decision:'reject',id:Q,by:A});
+  expect(()=>parseQuarantineArgs(['--accept',Q,'--reject',Q,'--by',A])).toThrow(/one of/);
+  expect(()=>parseQuarantineArgs(['--accept','nope','--by',A])).toThrow(/uuid/);
+  expect(()=>parseQuarantineArgs(['--accept',Q])).toThrow(/--by/);
+  expect(()=>parseQuarantineArgs(['--by',A])).toThrow(/--accept/);
+ });
+});
+describe('runQuarantineCommand',()=>{
+ it('lists open macro items',async()=>{
+  const d=deps();
+  expect(await runQuarantineCommand({kind:'list',json:false},d)).toBe(0);
+  expect(d.log).toHaveBeenCalledWith(formatOpenItems([item]));
+  expect(formatOpenItems([item])).toContain('US_UNRATE|2026-08-31');expect(formatOpenItems([])).toBe('no open macro quarantine items');
+ });
+ it('refuses a non-admin resolver without calling the RPC',async()=>{
+  const d=deps({isAdmin:vi.fn(async()=>false)});
+  expect(await runQuarantineCommand({kind:'resolve',decision:'accept',id:Q,by:A},d)).toBe(2);
+  expect(d.resolve).not.toHaveBeenCalled();
+ });
+ it('calls resolveConflict and reports already_resolved / not_found as refusals',async()=>{
+  const d=deps();
+  expect(await runQuarantineCommand({kind:'resolve',decision:'reject',id:Q,by:A},d)).toBe(0);
+  expect(d.resolve).toHaveBeenCalledWith(Q,'reject',A);
+  const r=deps({resolve:vi.fn(async()=>{throw new MacroDbError('already_resolved');})});
+  expect(await runQuarantineCommand({kind:'resolve',decision:'accept',id:Q,by:A},r)).toBe(3);
+  expect(r.log).toHaveBeenCalledWith('refused: already_resolved');
+ });
+ it('adapter_mismatch / rule_failed items are reject-only: accept is refused before the RPC, reject goes through',async()=>{
+  expect(isRejectOnly('adapter_mismatch')).toBe(true);expect(isRejectOnly('rule_failed:macro.range')).toBe(true);
+  expect(isRejectOnly('unexpected_revision')).toBe(false);expect(isRejectOnly('stale_delivery')).toBe(false);expect(isRejectOnly('conflicting_rows')).toBe(false);
+  const mm:OpenItem={...item,reason_code:'adapter_mismatch'};
+  const d=deps({listOpen:vi.fn(async()=>[mm])});
+  expect(await runQuarantineCommand({kind:'resolve',decision:'accept',id:Q,by:A},d)).toBe(3);
+  expect(d.resolve).not.toHaveBeenCalled();
+  expect(d.log).toHaveBeenCalledWith('refused: reject_only (adapter_mismatch has no stored quarantined row to accept)');
+  expect(await runQuarantineCommand({kind:'resolve',decision:'reject',id:Q,by:A},d)).toBe(0);
+  expect(d.resolve).toHaveBeenCalledWith(Q,'reject',A);
+  expect(formatOpenItems([mm])).toContain('[reject-only]');
+ });
+ it('other errors propagate',async()=>{
+  await expect(runQuarantineCommand({kind:'resolve',decision:'accept',id:Q,by:A},deps({resolve:vi.fn(async()=>{throw new MacroDbError('rpc_failed');})}))).rejects.toMatchObject({code:'rpc_failed'});
+ });
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+Run: `npm test -- src/lib/macro/quarantine-cli.test.ts`
+Expected: FAIL (`Cannot find module './quarantine-cli'`)
+
+- [ ] **Step 3: Implement the CLI core and script**
+
+`src/lib/macro/quarantine-cli.ts`
+```ts
+// src/lib/macro/quarantine-cli.ts
+// Core of scripts/macro/resolve-quarantine.ts (spec §4.3, §0.2 M10). Lists open macro.* quarantine items. Resolves
+// one through MacroDb.resolveConflict (RPC macro_resolve_conflict: one transaction that flips the observation on
+// accept, sets dq_quarantine, writes research_audit_log and bumps input_revision). The resolver must be an admin
+// profile. Published snapshots are never edited; the next publish reflects the decision.
+import {MacroDbError} from './db';
+export type QuarantineCommand={kind:'list';json:boolean}|{kind:'resolve';decision:'accept'|'reject';id:string;by:string};
+export interface OpenItem{id:string;dataset:string;natural_key:string;reason_code:string;detail:Record<string,unknown>;payload:Record<string,unknown>;batch_id:string;created_at:string}
+export interface QuarantineDeps{listOpen():Promise<OpenItem[]>;isAdmin(userId:string):Promise<boolean>;resolve(id:string,decision:'accept'|'reject',by:string):Promise<void>;log(line:string):void}
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** adapter_mismatch and rule_failed:* values were never written (no quarantined observation row exists), so the
+ *  RPC can only answer not_found on accept: these items are reject-only. unexpected_revision, conflicting_rows and
+ *  stale_delivery may be accepted (conflicting_rows also has no stored row; the RPC then answers not_found). */
+export const isRejectOnly=(reasonCode:string):boolean=>reasonCode==='adapter_mismatch'||reasonCode.startsWith('rule_failed:');
+export function parseQuarantineArgs(argv:readonly string[]):QuarantineCommand{
+ const has=(f:string)=>argv.includes(f);
+ const val=(f:string)=>{const i=argv.indexOf(f);return i>=0?argv[i+1]:undefined;};
+ if(has('--accept')&&has('--reject'))throw new Error('choose one of --accept / --reject');
+ if(!has('--accept')&&!has('--reject')){
+  if(has('--by'))throw new Error('--by is only valid with --accept or --reject');
+  return {kind:'list',json:has('--json')};
+ }
+ const decision=has('--accept')?'accept':'reject';
+ const id=val(`--${decision}`);
+ if(!id||!UUID.test(id))throw new Error('quarantine id must be a uuid');
+ const by=val('--by');
+ if(!by||!UUID.test(by))throw new Error('--by <admin user uuid> is required');
+ return {kind:'resolve',decision,id,by};
+}
+export function formatOpenItems(items:readonly OpenItem[]):string{
+ if(!items.length)return 'no open macro quarantine items';
+ return items.map(i=>[i.id,i.dataset,i.natural_key,isRejectOnly(i.reason_code)?`${i.reason_code} [reject-only]`:i.reason_code,i.created_at,`payload=${JSON.stringify(i.payload).slice(0,160)}`,`detail=${JSON.stringify(i.detail).slice(0,160)}`].join('  ')).join('\n');
+}
+export async function runQuarantineCommand(cmd:QuarantineCommand,deps:QuarantineDeps):Promise<number>{
+ if(cmd.kind==='list'){const items=await deps.listOpen();deps.log(cmd.json?JSON.stringify(items,null,1):formatOpenItems(items));return 0;}
+ if(!await deps.isAdmin(cmd.by)){deps.log(`refused: ${cmd.by} is not an admin profile`);return 2;}
+ if(cmd.decision==='accept'){
+  const it=(await deps.listOpen()).find(i=>i.id===cmd.id);
+  if(it&&isRejectOnly(it.reason_code)){deps.log(`refused: reject_only (${it.reason_code} has no stored quarantined row to accept)`);return 3;}
+ }
+ try{await deps.resolve(cmd.id,cmd.decision,cmd.by);}
+ catch(e){if(e instanceof MacroDbError&&(e.code==='already_resolved'||e.code==='not_found')){deps.log(`refused: ${e.code}`);return 3;}throw e;}
+ deps.log(`resolved ${cmd.id}: ${cmd.decision}`);
+ return 0;
+}
+```
+
+`scripts/macro/resolve-quarantine.ts`
+```ts
+// scripts/macro/resolve-quarantine.ts
+// Macro quarantine CLI (spec §4.3, §0.2 M10; runbook docs/runbooks/macro-sync.md §7).
+//   node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts [--json]
+//   node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --accept|--reject <quarantine id> --by <admin user uuid>
+// Service-role client: run only on the owner's machine with SUPABASE_SERVICE_ROLE_KEY set.
+import {supabaseMacroDb} from '../../src/lib/macro/db';
+import {parseQuarantineArgs,runQuarantineCommand,type OpenItem} from '../../src/lib/macro/quarantine-cli';
+import {getAdminSupabase} from '../../src/lib/supabase/admin';
+import {getAnonSupabase} from '../../src/lib/supabase/anon';
+async function main(){
+ const cmd=parseQuarantineArgs(process.argv.slice(2));
+ const admin=getAdminSupabase();
+ const db=supabaseMacroDb({admin,anon:getAnonSupabase()});
+ const code=await runQuarantineCommand(cmd,{
+  listOpen:async()=>{
+   const out:OpenItem[]=[];
+   for(let from=0;;from+=1000){
+    const {data,error}=await admin.from('dq_quarantine').select('id,dataset,natural_key,reason_code,detail,payload,batch_id,created_at')
+     .like('dataset','macro.%').eq('status','open').order('created_at').range(from,from+999);
+    if(error)throw new Error(error.message);
+    out.push(...((data??[]) as unknown as OpenItem[]));
+    if(!data||data.length<1000)break;
+   }
+   return out;
+  },
+  isAdmin:async id=>{
+   const {data,error}=await admin.from('profiles').select('role').eq('id',id).maybeSingle<{role:string|null}>();
+   if(error)throw new Error(error.message);
+   return data?.role==='admin';
+  },
+  resolve:(id,decision,by)=>db.resolveConflict(id,decision,by),
+  log:line=>console.log(line),
+ });
+ process.exit(code);
+}
+main().catch(e=>{console.error(e instanceof Error?e.message:e);process.exit(1);});
+```
+
+- [ ] **Step 4: Write the runbook**
+
+`docs/runbooks/macro-sync.md`
+````markdown
+# 宏观工作台运行手册（macro-sync）
+
+适用：规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 3 稿）、迁移 `supabase/migrations/20261114090000_macro_workbench.sql`。
+数据底座通用部分（DQ 批次、隔离、新鲜度、`/admin/dq`）见 `docs/runbooks/data-foundation.md`。
+
+## 1. 组件
+
+| 组件 | 位置 | 触发 | 写什么 |
+|---|---|---|---|
+| FRED 采集 + 美国发布 | `GET /api/cron/macro-sync`（`src/app/api/cron/macro-sync/route.ts`） | Vercel cron `30 5 * * *`（UTC，`vercel.json`） | 目录镜像、`macro.fred` 批次、证据、观测、派生、US 快照 |
+| AKShare 采集 | `scripts/macro/collect.py`（Mac Studio launchd，05:00 UTC） | launchd | 只抓取与录制原始响应，POST 到 ingest |
+| ingest + 中国发布 | `POST /api/macro/ingest`（start → chunk → finish） | collect.py | `macro.akshare` 批次、证据、观测（数值由 TS 解析器从字节取出）、CN 派生、CN 快照 |
+| 读接口 | `/api/macro/overview`、`series/[id]`、`series/[id]/versions`、`snapshots/[id]`、`evidence/[sha256]`、`analyses` | 页面 | 只读（分析运行经 `create_macro_analysis_run`） |
+| 隔离裁决 | `scripts/macro/resolve-quarantine.ts` | 人工 | `macro_resolve_conflict` RPC |
+| FOMC 日程 | `scripts/macro/record-fomc.ts` → `src/lib/macro/data/fomc-meetings.json` + `src/lib/macro/fixtures/fomc/<sha256>.html` | 人工，每年 1–2 次（联储公布下一年日程后） | 仓库文件，走 PR |
+
+## 2. 环境变量
+
+| 变量 | 在哪里 | 说明 |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_ROLE_KEY` | Vercel | 已有 |
+| `CRON_SECRET` | Vercel | 已有；cron 与手动触发都用 `Authorization: Bearer` |
+| `MACRO_INGEST_SECRET` | Vercel + Mac | 新；ingest 只认它（常量时间比较，未配置 → 503） |
+| `MACRO_INGEST_URL` | Mac | 新；`https://<生产域名>/api/macro/ingest` |
+| `MACRO_JUDGMENTS_ENABLED` | Vercel | 新；默认不设 = 判断层关闭。只有值为 `1` 才挂载判定槽位、才在 `snapshots/[id]` 返回判定字段 |
+
+不需要 `FRED_API_KEY`。生成 ingest 密钥：`openssl rand -hex 32`，同一个值写进 Vercel（`vercel env add MACRO_INGEST_SECRET production`）和 Mac 的 launchd 环境，不进仓库、不进聊天。
+
+## 3. 手动触发与 preview
+
+```bash
+BASE=https://<生产域名>          # 本地：http://localhost:3000
+curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-sync?preview=1" | jq .   # 只抓取+解析，零数据库写入、零存证上传
+curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-sync" | jq .             # 真实运行（采集 + 美国发布）
+```
+
+preview 回执里每个 FRED 序列应有 HTTP 200、解析行数 > 0、将写入的计数与样本；任何写入计数都不应真正落库（Task 7 测试断言）。
+
+## 4. Python 采集器（Mac Studio）
+
+```bash
+cd ~/Developer/CodeX/OsbornAlpha                       # 外置 SSD 上的仓库（mount | grep -q AIMATE_WORK）
+uv venv -p 3.12 scripts/macro/.venv
+VIRTUAL_ENV=scripts/macro/.venv uv pip install -r scripts/macro/requirements.txt   # AKShare 锁 1.20.35
+scripts/macro/.venv/bin/python scripts/macro/collect.py --dry-run                  # 抓取 + 录制，打印将发送的块，不 POST
+scripts/macro/.venv/bin/python -m pytest scripts/macro -q                          # 离线单测
+```
+
+launchd：复制 `scripts/macro/launchd.plist.template` 到 `~/Library/LaunchAgents/com.osbornalpha.macro-collect.plist`，按模板头部注释替换占位（仓库路径、venv python、`MACRO_INGEST_URL`、`MACRO_INGEST_SECRET`、日志路径），然后：
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.osbornalpha.macro-collect.plist
+launchctl kickstart -k gui/$(id -u)/com.osbornalpha.macro-collect     # 立即跑一次
+launchctl print gui/$(id -u)/com.osbornalpha.macro-collect | head -40 # 状态与上次退出码
+```
+
+卸载：`launchctl bootout gui/$(id -u)/com.osbornalpha.macro-collect`。同一时刻只能有一个未结束且 < 2 小时的 `macro.akshare` 批次（ingest `start` 返回 409 即说明上一次还没结束或卡住；卡住的批次 2 小时后自动不再阻塞）。
+
+## 5. 采集状态与发布及时性
+
+- 采集状态：`dq_freshness` 中 `macro.fred`、`macro.akshare`（cadence daily）；连续 2 次失败才是 `error`。`/admin/dq` 与页面头部“采集”标签读同一来源。
+- 发布及时性：逐序列计算（下一期期末 + `releaseLagDays` + 3 天）。重复抓到旧值不会变绿。
+- 采集失败时页面继续显示最后一次已发布快照并标出采集状态，永不显示 0。
+
+## 6. 快照与发布
+
+每次发布在 `publish_macro_snapshot` 里一个事务完成：区域行锁，`revision` 与 `input_revision` 都对得上才写，否则 `stale_publisher`（后到者放弃，旧 active 不动）；新快照 active，旧 active → superseded。失败只写 `record_failed_macro_snapshot`，不动 active。
+
+## 7. 隔离裁决
+
+```bash
+node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts                 # 列出 open 的 macro.* 隔离项
+node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --json
+node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --accept <quarantine id> --by <admin user uuid>
+node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --reject <quarantine id> --by <admin user uuid>
+```
+
+- `--by` 必须是 `profiles.role='admin'` 的用户 id（脚本先检查）。退出码：0 成功；2 非管理员；3 已裁决或不存在。
+- 接受：被隔离的版本转为 `ok`（版本号更高即最新），`input_revision+1`，写 `research_audit_log`；拒绝：只置 `resolved_reject` + 审计。
+- 已发布快照不改；下一次发布（cron 或 ingest finish）反映裁决。需要立即反映时按 §3 手动触发。
+- 原因码：`unexpected_revision`（不可修订序列出新值）、`conflicting_rows`（同一证据内矛盾）、`stale_delivery`（迟到交付）、`adapter_mismatch`（TS 解析值 ≠ AKShare 值）、`rule_failed:<id>`（范围/单位/跳变）。`adapter_mismatch` 与 `rule_failed:*` **只能拒绝**：这两类值从未写入（没有被隔离的观测行），RPC 对接受只会回 `not_found`，脚本在调用前就拒绝接受（列表里标 `[reject-only]`）。处理办法：查上游与解析器，修好后下一次采集会正常写入，再拒绝旧条目。`conflicting_rows` 同样没有存储行，接受会得到 `not_found`；`stale_delivery` 与 `unexpected_revision` 可接受。
+
+## 8. 回滚 active 快照
+
+没有回滚 RPC（所有角色都没有直接写权）。回滚用数据库属主在 SQL 编辑器 / Management API 执行，一个事务：
+
+```sql
+begin;
+select revision from macro_publish_state where region = 'US' for update;              -- 锁住区域，挡住并发发布
+update macro_snapshots set status = 'superseded' where region = 'US' and status = 'active';
+update macro_snapshots set status = 'active' where snapshot_id = '<要恢复的 snapshot_id>' and region = 'US' and status = 'superseded';
+update macro_publish_state set revision = revision + 1, updated_at = now() where region = 'US';   -- 在途发布者得到 stale_publisher
+commit;
+```
+
+执行前确认目标快照存在且属于该区域；执行后 `GET /api/macro/overview?region=US` 的 `snapshotId` 应为目标值。注意：下一次成功发布会按当前输入生成新快照——如果是坏输入导致的问题，先把坏观测隔离 / 拒绝（§7），否则回滚会被覆盖。在 `docs/audits/` 记录原因与时间。
+
+## 9. 启用受限（restricted）序列
+
+前提：owner 书面确认展示与再分发权利（VIXCLS、SP500 / NASDAQCOM / DJIA via FRED、中证 300）。步骤：
+
+1. 在 `docs/audits/` 记录确认人、日期、范围与依据。
+2. 改 `src/lib/macro/catalog.ts` 对应条目：`status` `'restricted'` → `'active'`，删 `reason`，`rights` 改为确认后的值，`attribution` 写权利方要求的标注。`CATALOG_VERSION` 随内容自动变化。
+3. 同步更新 `catalog.test.ts` 中的 A/M/R 期望；判定权重不变（`WEIGHTS_V1` 已含该序列，覆盖率分母固定）。
+4. FRED 序列：本地 `?preview=1` 看到该序列能抓取、解析；AKShare 序列：录制夹具并加解析器测试（Task 8/9 的流程）。
+5. PR → 合并 → 部署；下一次 cron/ingest 先 upsert 目录（新 `catalog_version` 追加进 `macro_catalog_versions`），再回填。
+
+## 10. 中国序列核实记录
+
+每个 CN A 状态序列在实施时以真实录制的夹具核实（`src/lib/macro/fixtures/cn/manifest.json`）；核实失败的项改为 M 并写理由（Task 8 规则）。实施 Task 18 时按 manifest 填写下表，之后每次升级 AKShare 版本重新录制并更新：
+
+| series_id | AKShare 函数与参数 | 实际请求主机 | akshare 版本 | 夹具文件（sha256） | 核实日期 | 结果 |
+|---|---|---|---|---|---|---|
+| CN_CPI_INDEX | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_PPI_INDEX | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_PMI_MFG | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_GDP_INDEX | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_M2_YOY | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_EXPORT_YOY | | data.stats.gov.cn | 1.20.35 | | | |
+| CN_CGB_10Y_D | | yield.chinabond.com.cn | 1.20.35 | | | |
+| CN_USDCNY_CP_D | | www.safe.gov.cn | 1.20.35 | | | |
+
+已知限制（owner 已确认）：
+- **SAFE 历史深度**：`currency_boc_safe` 的 2026 年以前历史在外汇局 XLSX 里；桶不收 XLSX、也没有 xlsx 定位器，所以只有 `RMBQuery.do` 的 HTML 是证据，`CN_USDCNY_CP_D` 的历史从该 HTML 的首个日期开始（录制时为 2026-01-05）。更早的值**不解析、保持缺失**，不得用 AKShare 的 DataFrame 值补。需要更长历史时另立任务：桶允许 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 并新增 `xlsx_cell` 定位器（迁移变更）。
+- **NBS CPI 分期叶子**：`CN_CPI_INDEX` 的 `seriesKey` 指向 `(2026-)` 叶子，历史从 `(2021-2025)`、`(2016-2020)` 兄弟叶子回填（`cn-series.ts`）。NBS 开新一期叶子（约 2031 年）时必须改目录键（`CATALOG_VERSION` 随之改变）。
+- **未定位的 AKShare 交叉核对值**：周期不在 TS 解析出的原始点里的 claim 不进隔离，只在块回执里计一条 INFO `skipped_summary`（`key: unlocated_claims`）。
+
+## 11. FOMC 日程
+
+联储公布下一年日程后：`npx tsx scripts/macro/record-fomc.ts`（先 `--dry-run` 看年份与会议数），提交新增的 `fixtures/fomc/<sha256>.html` 与更新后的 JSON；`npm test -- src/lib/macro/fomc.test.ts` 会重新哈希并解析每个被引用的页面。
+
+## 12. 判断层开关
+
+`MACRO_JUDGMENTS_ENABLED=1` 只在 F4 判断层上线后设置。关闭时页面与 API 不出现象限 / 得分 / margin；开启但 F4 `/api/judgments` 不可用时，槽位显示“判断层暂不可用”，不回退到宏观自算数字。
+````
+
+- [ ] **Step 5: Run the CLI test, typecheck, lint**
+Run: `npm test -- src/lib/macro/quarantine-cli.test.ts && npm run typecheck && npm run lint`
+Expected: PASS
+
+- [ ] **Step 6: Full gates (record the summary line of each command in the implementation log)**
+Run each and expect PASS:
+```bash
+npm test
+```
+```bash
+npm run typecheck
+```
+```bash
+npm run lint
+```
+```bash
+npm run build
+```
+```bash
+LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db
+```
+```bash
+LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations
+```
+```bash
+scripts/macro/.venv/bin/python -m pytest scripts/macro -q
+```
+`npm run build` is included because it is the only gate that catches a client bundle importing server-only code (`analysis-spec.ts` and `evidence.ts` use `node:crypto`; `catalog.ts` is pure TS). Do not export `LC_ALL=C` for `npm test`. If the local full suite shows one of the known unrelated flakes recorded in the memory note "Alpha local DB harness environment", re-run that suite alone and record both results. Do not mark a red gate green.
+
+- [ ] **Step 7: Live checks (network)**
+1. **FRED preview against the real FRED CSV.** Start the dev server with a local secret (`CRON_SECRET=local-preview npm run dev`, or the `stock-monitor` launch config with that env), then:
+   ```bash
+   curl -sS -H "Authorization: Bearer local-preview" "http://localhost:3000/api/cron/macro-sync?preview=1" | tee /tmp/macro-preview.json | jq '.'
+   ```
+   Expected: every `active` FRED series in the catalog listed with HTTP 200 from `fred.stlouisfed.org`, parsed row count > 0, sample `value_text` strings that match the CSV text exactly (spot-check one against `curl -s 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01' | tail -3`), and zero writes. If the route needs Supabase env even in preview, point it at the local test database used by `test:db` or at a non-production project. **Never** run a non-preview sync against production from a laptop.
+2. **AKShare dry run against the real upstream hosts.**
+   ```bash
+   scripts/macro/.venv/bin/python scripts/macro/collect.py --dry-run
+   ```
+   Expected: every recorded response's host is in the catalog whitelist (`data.stats.gov.cn`, `yield.chinabond.com.cn`, `www.safe.gov.cn`); claims are present for each CN A series; no POST is sent. Fill the CN verification table in the runbook (§10) from this run and the fixture manifest.
+
+- [ ] **Step 8: Browser check, judgment layer off (verify-osbornalpha style)**
+Drive the real app. Use either the Browser pane (`preview_start` with launch config `stock-monitor`) or `.cursor/skills/verify-osbornalpha/scripts/launch.sh` (guest mode, port 3107, evidence dir `~/osbornalpha-verify-evidence/verify-<ts>/`). Capture a screenshot and `get_page_text` for each item:
+1. `/intel/macro` (US, then CN): header with region switch and the snapshot/collection pill; 本期变化 counters; 目录覆盖 "已核实 N / 目录 M" with reasons for every missing/restricted item; indicator table; source bar. Run in the page console:
+   `document.body.innerText.match(/象限|得分|margin|recovery|overheat|stagflation|recession|覆盖率/i)` → `null`.
+2. Click a value: the drawer shows 发布机构, 转发方, 取数 URL, 主机, 取得时间, SHA-256, 定位, 变换, 适配器, 工具版本, 权利, 标注 and the revision section. Missing evidence reads 缺失, not blank.
+3. `/intel/macro/US_DFF`: facts, chart with cycle bands and markers, "表格视图" toggle showing `period_end / value / available_at / version`, cycles table, events table, per-cycle asset table.
+4. `/intel/macro?tab=correlation`: click preset p1, then 创建分析. The result shows r / R² / n / sample / method / code, the rule sentence, the scatter with its table view, and the frozen-input receipt. Open the run page link.
+5. `/today`: the 宏观一览 card has no SSE / HSI / Nasdaq / DXY rows; missing reads 缺失.
+6. `/intel`: the 宏观 summary card is shown.
+7. Flag on: restart with `MACRO_JUDGMENTS_ENABLED=1` and open the slot. With F4 not deployed, `/api/judgments` is 404 and the slot reads "判断层暂不可用" with retry. Take a screenshot.
+In guest mode (no Supabase), the macro APIs answer 401/503: items 1–6 must then show the "读取失败" states with no numbers at all (screenshot that too). Items 1–6 with real values need a signed-in session against a database that has run `macro-sync` (local stack or a non-production project). If none is available, record "authed drive not run: no non-production Supabase" and keep the guest evidence.
+
+- [ ] **Step 9: Acceptance evidence (spec §14 items 1–4) — append to `docs/audits/2026-11-06-macro-workbench/10-implementation-log.md`**
+
+| # | Acceptance item | Evidence to record |
+|---|---|---|
+| 1 | Every catalog item is verified (fixture replay matches) or shows missing/restricted with a reason; no yfinance / eastmoney / jin10 sources | `npm test -- src/lib/macro/replay.test.ts src/lib/macro/catalog.test.ts` (Tasks 12, 2) output; `rg "yfinance|eastmoney|jin10|sina" src/lib/macro scripts/macro src/app/api/macro` → no fetch host / adapter / seriesKey hits (catalog `reason` text that explains why an item is missing is allowed; quote any hit); Step 8 item 1 screenshots of the reasons |
+| 2 | Rule-mismatch regression: FX / GDP observations never hit rate or PMI rules | `npm test -- src/lib/macro/regime.test.ts` (Task 10), citing the type-isolation test names |
+| 3 | Offline `macro-sync`: overview still serves the old snapshot, collection ends `error` after two consecutive failures, no zeros | Cite the Task 7 / Task 11 tests that run the cron with failing fetches (active snapshot unchanged, `recordAttempt ok:false`), plus the existing `computeFreshness` test in `src/lib/dq` (2 consecutive errors → `error`). Optional live drill on a **non-production** project: start the dev server with `NODE_OPTIONS="--import /abs/path/offline-fred.mjs"`, where the scratch module wraps `globalThis.fetch` to reject any URL containing `fred.stlouisfed.org`; trigger `macro-sync` twice; then `GET /api/macro/overview?region=US` shows the same `snapshotId`, `collection[macro.fred].status === 'error'`, unchanged non-zero values. If the Task 7/11 tests do not cover the stale-snapshot case, report NEEDS_CONTEXT rather than asserting it |
+| 4 | Judgment layer off: no quadrant / score / margin in pages or APIs; on with F4 unavailable: "暂不可用" | `src/app/(app)/intel/macro/pages.test.ts` (flag read only server-side), `src/components/macro/macro-messages.test.ts` (vocabulary), the Task 13 snapshot-route test (no `regime` / `contributions` when off), Step 8 console regex result, and the item 7 screenshot |
+
+- [ ] **Step 10: Commit**
+```bash
+git add src/lib/macro/quarantine-cli.ts src/lib/macro/quarantine-cli.test.ts scripts/macro/resolve-quarantine.ts docs/runbooks/macro-sync.md docs/audits/2026-11-06-macro-workbench/10-implementation-log.md
+```
+```bash
+git commit -F - <<'EOF'
+feat(macro): quarantine resolution CLI, macro-sync runbook, acceptance evidence
+
+resolve-quarantine lists open macro.* items and resolves one through
+macro_resolve_conflict (admin-only, refusals surfaced). Runbook covers env,
+manual/preview triggers, uv + launchd, quarantine, snapshot rollback, enabling
+restricted series, CN verification record, FOMC refresh. Gate and live-check
+results plus spec §14 acceptance mapping recorded in the implementation log.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF
+```
