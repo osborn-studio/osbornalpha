@@ -1,7 +1,9 @@
 // src/lib/facts/types.ts
-// Shared contract of the facts layer (plan 2 §共享契约, spec §4.8). Every task uses these names
-// verbatim. FactsDb has three implementations: supabaseFactsDb (db.ts, rpc), memoryFactsDb
-// (memory-facts-db.ts, unit tests), pgFactsDb (pg-facts-db.ts, integration tests).
+// Shared contract of the facts layer (plan 2 §共享契约, spec §4.8; plan 3 C4, spec §3.2). Every task
+// uses these names verbatim. FactsDb has three implementations: supabaseFactsDb (db.ts, rpc),
+// memoryFactsDb (memory-facts-db.ts, unit tests), pgFactsDb (pg-facts-db.ts, integration tests).
+// The reconciliation types are imported as types only (no runtime cycle with src/lib/dq).
+import type {ApplyReconcileOutcome,CyclePairId,Fence,MemberCounts,OpenCycleInput,OpenCycleResult,ReconcileResultInput} from '../dq/reconcile/types';
 export type Market='US'|'CN';
 export type Statement='IS'|'BS'|'CF'|'DEI';
 export type Duration='3M'|'6M'|'9M'|'12M'|'INSTANT';
@@ -48,15 +50,29 @@ export interface FilingRow{
  filing_id:string;issuer_id:string;market:Market;source:Source;origin:Origin;form_type:FormType;fiscal_year:number|null;fiscal_period:string|null;
  period_end:string|null;available_date:string;source_ref:string;url:string|null;document_ref:string|null;document_url:string|null;
  link_attempts:number;mapping_gen:number;run_id:string;created_at:string;
+ /** SEC acceptance time (ISO) written once by set_filing_acceptance (plan 3 §4.5) */
+ accepted_at:string|null;acceptance_source:'sec_submissions'|null;
 }
 export interface ScopeRow{issuer_id:string;market:Market;reasons:string[];priority:number;fetch_key:string;next_due_at:string;lease_until:string|null;lease_batch_id:string|null;state_rev:number;last_attempt_at:string|null;last_success_at:string|null;last_batch_id:string|null;last_status:'success'|'failed'|null}
-export interface MetricRow{issuer_id:string;market:Market;metric:string;period_start:string;period_end:string;duration:MetricDuration;value:string;unit:string;input_unit:string;basis:string;formula_version:string;inputs:{fact_id:string;concept:string;filing_id:string;available_date:string;ytd_rule?:'same_filing'|'never_revised';quarter?:[string,string]}[];based_on_rev:number;as_of:string}
+/** One member of a lineage and its fact-state version (plan 3 §4.4). */
+export interface LineageRev{issuer_id:string;state_rev:number}
+export interface MetricRow{issuer_id:string;market:Market;metric:string;period_start:string;period_end:string;duration:MetricDuration;value:string;unit:string;input_unit:string;basis:string;formula_version:string;inputs:{fact_id:string;concept:string;filing_id:string;available_date:string;ytd_rule?:'same_filing'|'never_revised';quarter?:[string,string]}[];based_on_rev:number;
+ /** the complete lineage state the row was derived from (issuer_id ascending); compared as a whole (T8) */
+ based_on_lineage:LineageRev[];as_of:string}
 export interface ConflictItem{id:string;natural_key:string;fact_ids:string[];available_date:string;key:Record<string,string|null>}
+export interface LineageConflict{key:Record<string,string|null>;available_date:string;fact_ids:string[]}
 
 export interface ReadFactsOptions{concepts:string[];asOf:string;from?:string;to?:string;history?:boolean;limit?:number;includeNonOk?:boolean}
 export interface ReadFactsResult{stateRev:number;rows:FactRow[];truncated:boolean}
+export interface ReadFactsLineageResult{stateRevs:LineageRev[];lineage:string[];rows:FactRow[];conflicts:LineageConflict[];truncated:boolean}
+export type FilingFactRow=FactRow&{run_status:RunStatus};
+export type CalendarFiling=FilingRow&{run_status:RunStatus;accepted_at:string|null};
 
-export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'invalid_chosen'|'item_not_open'|'unknown';
+export type FactsDbErrorCode='lease_lost'|'run_pending'|'run_published'|'mapping_gen_regression'|'stale_computation'|'stale_plan'|'run_abandoned'|'read_truncated'|'duplicate_key'|'invalid_chosen'|'item_not_open'|'unknown'
+ |'fence_failed'|'member_incomplete'|'stale_evaluation'|'batch_mismatch'|'invalid_choice'|'invalid_candidate'|'generation_moved'
+ |'duplicate'|'conflict_exists'|'replay_required'|'filing_not_found'|'not_passing'|'lineage_changed'|'scope_missing'|'unresolved'
+ |'acceptance_conflict'|'source_not_active'|'has_referrers'|'topology_write_forbidden'|'invalid_result'
+ |'use_dedicated_resolver'|'target_not_active'|'invalid_members';
 export class FactsDbError extends Error{constructor(public code:FactsDbErrorCode,message?:string){super(message??code);this.name='FactsDbError';}}
 
 export interface FactsDb{
@@ -71,6 +87,7 @@ export interface FactsDb{
  abandonRun(run:string):Promise<void>;
  releaseLease(issuer:string,market:Market,batch:string,outcome:'success'|'failed',nextDue:string):Promise<void>;
  resolveFactsQuarantine(itemId:string,chosen:string[],resolvedBy:string):Promise<{promoted:number;skipped:number;chosenFactIds:string[]}>;
+ /** plan-2 wrapper of replaceMetricsLineage with the one-member vector [{issuer, basedOnRev}] */
  replaceMetrics(issuer:string,market:Market,basedOnRev:number,rows:MetricRow[]):Promise<number>;
  readFacts(issuer:string,market:Market,opts:ReadFactsOptions):Promise<ReadFactsResult>;
  /** Rows for the given ids: deduped, ordered by fact_id; unknown ids are omitted. */
@@ -86,6 +103,32 @@ export interface FactsDb{
  /** Every scope row of the market, priority 0 included, ordered by issuer_id (complete set, paged to exhaustion) */
  scopeAll(market:Market):Promise<ScopeRow[]>;
  metricsOfIssuer(issuer:string,market:Market,formulaVersion:string):Promise<MetricRow[]>;
+ // ---- plan 3 (C4)
+ /** materialisation target T(i) = i.merged_into ?? i (unknown issuer → itself) */
+ targetOf(issuer:string):Promise<string>;
+ /** [target, ...issuers whose merged_into = target, ascending] */
+ lineageOf(target:string):Promise<string[]>;
+ /** one snapshot; issuer_id ascending, deduped; no scope row ⇒ 0 */
+ stateRevs(issuers:string[],market:Market):Promise<LineageRev[]>;
+ readFactsLineage(issuers:string[],market:Market,opts:ReadFactsOptions):Promise<ReadFactsLineageResult>;
+ /** every generation and status of one filing (includeNonOk=false: ok only), with the run status; no binding */
+ readFilingFacts(filingId:string,includeNonOk:boolean):Promise<FilingFactRow[]>;
+ replaceMetricsLineage(issuer:string,market:Market,basedOn:LineageRev[],rows:MetricRow[]):Promise<number>;
+ findFilingBySourceRef(source:Source,sourceRef:string):Promise<FilingRow|null>;
+ /** every filing with period_end >= fromPeriodEnd (complete set, never cut by a row count, T9), ordered by period_end, available_date, filing_id */
+ filingsForCalendar(issuer:string,market:Market,opts:{fromPeriodEnd:string}):Promise<CalendarFiling[]>;
+ setFilingAcceptance(filingId:string,acceptedAt:string,source:'sec_submissions'):Promise<boolean>;
+ adoptCandidate(itemId:string,index:number,batchId:string,expectedRev:number,resolvedBy:string):Promise<{factId:string;runId:string;issuerId:string;market:Market}>;
+ restoreReconciled(itemId:string,batchId:string,inputsHashNow:string,resolvedBy:string):Promise<{promoted:number;skipped:{fact_id:string;reason:string}[]}>;
+ resolveLineageConflict(itemId:string,keepFactId:string,batchId:string,resolvedBy:string):Promise<{quarantined:number}>;
+ claimReconcileMember(pair:CyclePairId,cycleId:string,issuer:string,market:Market,batchId:string):Promise<Fence|null>;
+ applyReconcileResult(fence:Fence,result:ReconcileResultInput):Promise<ApplyReconcileOutcome>;
+ completeReconcileMember(fence:Fence):Promise<MemberCounts>;
+ failReconcileMember(fence:Fence,error:string):Promise<void>;
+ /** atomic cycle creation (open_reconcile_cycle, plan audit Q2): under the pair's cycle lock (shared with set_merge) a running cycle is returned unchanged (created:false); else the cycle row and one pending cursor per member are inserted and ONLY the listed pending entries leave the cycle rows' pending_members */
+ openReconcileCycle(input:OpenCycleInput):Promise<OpenCycleResult>;
+ setMerge(source:string,target:string,resolvedBy:string):Promise<{repointed:number}>;
+ setDissolved(issuer:string,resolvedBy:string):Promise<void>;
 }
 /** stageFilings 的输入行（写入端生成 filing_id） */
 export interface FilingInsert extends FilingCandidate{filing_id:string;issuer_id:string}

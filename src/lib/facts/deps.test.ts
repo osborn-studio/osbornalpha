@@ -24,7 +24,7 @@ describe('resolveCodeVersion',()=>{
 
 describe('cninfoLinker',()=>{
  const budget=():Budget=>({remainingMs:()=>300_000,signal:new AbortController().signal});
- const filing=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:'g',issuer_id:'I',market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2024,fiscal_period:'FY',period_end:'2024-12-31',available_date:'2025-04-03',source_ref:'600519.SH:20241231:1:20250403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2025-04-03T00:00:00Z',...p});
+ const filing=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:'g',issuer_id:'I',market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2024,fiscal_period:'FY',period_end:'2024-12-31',available_date:'2025-04-03',source_ref:'600519.SH:20241231:1:20250403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2025-04-03T00:00:00Z',accepted_at:null,acceptance_source:null,...p});
  const fakeDb=(filings:FilingRow[])=>({filingsOfIssuer:async()=>filings}) as unknown as Pick<FactsDb,'filingsOfIssuer'>;
  async function tablesWithMoutai(){
   const tables=memoryTableClient({issuers:['issuer_id']});

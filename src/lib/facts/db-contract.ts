@@ -185,7 +185,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const run=await db.beginRun(iss,'US',b,1);
    expect((await code(db.stageFilings(run,[filingInsert(iss,{filing_id:f.filing_id})]))).startsWith('duplicate_key')).toBe(true);
    await db.abandonRun(run);
-   const row=(v:string):MetricRow=>({issuer_id:iss,market:'US',metric:'gross_margin',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,as_of:'2024-03-01'});
+   const row=(v:string):MetricRow=>({issuer_id:iss,market:'US',metric:'gross_margin',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,based_on_lineage:[{issuer_id:iss,state_rev:0}],as_of:'2024-03-01'});
    expect(await db.replaceMetrics(iss,'US',1,[row('0.5')])).toBe(1);
    expect((await code(db.replaceMetrics(iss,'US',1,[row('0.6'),row('0.7')]))).startsWith('duplicate_key')).toBe(true);
    expect((await db.metricsOfIssuer(iss,'US','facts-derive/1.0')).map(m=>m.value)).toEqual(['0.5']);
@@ -212,7 +212,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
 
   it('metrics: stale based_on_rev is refused after publish; replacement is per issuer and atomic; metricsOfIssuer filters by formula version',async()=>{
    const {iss,b,r}=await published();
-   const row=(v:string,metric='gross_margin'):MetricRow=>({issuer_id:iss,market:'US',metric,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,as_of:'2024-03-01'});
+   const row=(v:string,metric='gross_margin'):MetricRow=>({issuer_id:iss,market:'US',metric,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:0,based_on_lineage:[{issuer_id:iss,state_rev:0}],as_of:'2024-03-01'});
    expect(await code(db.replaceMetrics(iss,'US',0,[row('0.5')]))).toBe('stale_computation:stale_computation');
    expect(await db.replaceMetrics(iss,'US',1,[row('0.5')])).toBe(1);
    const run=await db.beginRun(iss,'US',b,1);expect(await db.publishRun(run,[])).toBe(0);   // empty run still advances state_rev
@@ -347,7 +347,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await db.filingsOfIssuer(iss,'US',{limit:5})).length).toBe(5);
    expect((await db.filingsOfIssuer(iss,'US',{from:'2020-01-01',to:'2020-01-01'})).length).toBe(1001);
    const rev=(await current(iss)).stateRev;
-   const rows=Array.from({length:1001},(_,i):MetricRow=>({issuer_id:iss,market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:String(i),unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:rev,as_of:'2024-03-01'}));
+   const rows=Array.from({length:1001},(_,i):MetricRow=>({issuer_id:iss,market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:String(i),unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[{fact_id:r,concept:'revenue',filing_id:'f',available_date:'2024-02-01'}],based_on_rev:rev,based_on_lineage:[{issuer_id:iss,state_rev:rev}],as_of:'2024-03-01'}));
    expect(await db.replaceMetrics(iss,'US',rev,rows)).toBe(1001);
    const got=await db.metricsOfIssuer(iss,'US','facts-derive/1.0');
    expect(got.length).toBe(1001);expect(got.at(-1)).toMatchObject({metric:'m1000',value:'1000'});

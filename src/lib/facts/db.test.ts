@@ -82,6 +82,11 @@ describe('toFactsDbError',()=>{
   expect(toFactsDbError({message:'item_not_open',code:'P0001'})).toMatchObject({code:'item_not_open',message:'item_not_open'});
   expect(toFactsDbError({message:undefined,code:undefined}).code).toBe('unknown');
   expect(toFactsDbError({message:'x'})).toBeInstanceOf(FactsDbError);
+  for(const c of ['fence_failed','member_incomplete','stale_evaluation','batch_mismatch','invalid_choice','invalid_candidate','generation_moved','duplicate','conflict_exists','replay_required','filing_not_found','not_passing','lineage_changed','scope_missing','unresolved','acceptance_conflict','source_not_active','has_referrers','invalid_result'])
+   expect(toFactsDbError({message:c,code:'P0001'}).code).toBe(c);
+  expect(toFactsDbError({message:'topology_write_forbidden: issuers.status/merged_into change only through set_merge/set_dissolved',code:'23514'}).code).toBe('topology_write_forbidden');
+  expect(toFactsDbError({message:'duplicate key value violates unique constraint "x"',code:'23505'}).code).toBe('duplicate_key');   // 23505 wins over the head word
+  expect(toFactsDbError({message:'invalid_based_on',code:'22023'})).toMatchObject({code:'unknown',message:'invalid_based_on'});
  });
 });
 
@@ -181,7 +186,7 @@ describe('supabaseFactsDb',()=>{
   expect(calls.at(-1)).toEqual({fn:'release_fact_sync_lease',args:{p_issuer:iss,p_market:'US',p_batch:'b',p_outcome:'success',p_next_due:'2030-01-01T00:00:00.000Z'}});
   await db.resolveFactsQuarantine('item',['a'],'admin');
   expect(calls.at(-1)).toEqual({fn:'resolve_facts_quarantine',args:{p_item:'item',p_chosen:['a'],p_resolved_by:'admin'}});
-  await db.replaceMetrics(iss,'US',3,[{issuer_id:iss,market:'US',metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:3,as_of:'2024-01-01'}]);
+  await db.replaceMetrics(iss,'US',3,[{issuer_id:iss,market:'US',metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:3,based_on_lineage:[{issuer_id:iss,state_rev:3}],as_of:'2024-01-01'}]);
   expect(calls.at(-1)!.args).toEqual({p_issuer:iss,p_market:'US',p_based_on_rev:3,p_rows:[{metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],as_of:'2024-01-01'}]});
  });
  it('stageFilings treats a source_ref missing from the returned map (owned by another issuer) as an error',async()=>{
@@ -206,5 +211,112 @@ describe('supabaseFactsDb',()=>{
   const {db,calls}=stub(()=>({data:1}));
   await db.publishRun('r',['f']);await db.publishRun('r',['f'],4);
   expect(calls.map(c=>c.args)).toEqual([{p_run:'r',p_manifest:['f'],p_expected_rev:null},{p_run:'r',p_manifest:['f'],p_expected_rev:4}]);
+ });
+ it('plan-3 RPCs: names and p_ arguments; envelopes normalised (lineage revs sorted and numeric, value from value_text, ISO timestamps)',async()=>{
+  const I1='11111111-1111-4111-8111-111111111111',I2='22222222-2222-4222-8222-222222222222';
+  const {calls,db}=stub(fn=>{
+   if(fn==='read_facts_lineage')return {data:{state_revs:[{issuer_id:I2,state_rev:'4'},{issuer_id:I1,state_rev:3}],lineage:[I1,I2],truncated:false,row_count:1,rows:[{fact_id:'a',issuer_id:I2,value:7,value_text:'7.0',disclosure_seq:null,is_current:false,is_revision:false}],conflicts:[{key:{concept:'revenue'},available_date:'2024-02-01',fact_ids:['x','y']}]}};
+   if(fn==='read_filing_facts')return {data:{rows:[{fact_id:'f',value:1,value_text:'1.50',run_status:'published',created_at:'2024-01-01 00:00:00+00'}]}};
+   if(fn==='adopt_candidate')return {data:{fact_id:'nf',run_id:'nr',issuer_id:I1,market:'US'}};
+   if(fn==='restore_reconciled')return {data:{promoted:'0',skipped:[{fact_id:'f',reason:'ineligible'}]}};
+   if(fn==='resolve_lineage_conflict')return {data:{quarantined:2}};
+   if(fn==='claim_reconcile_member')return {data:null};
+   if(fn==='apply_reconcile_result')return {data:{reused:false,reconciliation_id:'r1',item_id:null,quarantined:1,materialize:{issuer_id:I1,market:'US'}}};
+   if(fn==='complete_reconcile_member')return {data:{compared_passed:1,compared_failed:'0',not_compared:2}};
+   if(fn==='set_merge')return {data:{repointed:'1'}};
+   if(fn==='open_reconcile_cycle')return {data:{created:true,cycle:{pair:'facts.lineage_same_day',cycle_id:'c'},transferred:[{issuer_id:I1,market:'US',source:I2}]}};
+   if(fn==='set_filing_acceptance')return {data:true};
+   if(fn==='replace_financial_metrics_lineage')return {data:3};
+   return {data:null};
+  });
+  expect(await db.readFactsLineage([I2,I1],'US',{concepts:['revenue'],asOf:'2030-01-01',history:true})).toEqual({stateRevs:[{issuer_id:I1,state_rev:3},{issuer_id:I2,state_rev:4}],lineage:[I1,I2],
+   rows:[{fact_id:'a',issuer_id:I2,value:'7.0',value_text:'7.0',disclosure_seq:undefined,is_current:false,is_revision:false}],conflicts:[{key:{concept:'revenue'},available_date:'2024-02-01',fact_ids:['x','y']}],truncated:false});
+  expect(calls.at(-1)).toEqual({fn:'read_facts_lineage',args:{p_issuers:[I2,I1],p_market:'US',p_concepts:['revenue'],p_as_of:'2030-01-01',p_from:null,p_to:null,p_history:true,p_limit:null,p_include_non_ok:false}});
+  expect(await db.stateRevs([I1,I2],'US')).toEqual([{issuer_id:I1,state_rev:3},{issuer_id:I2,state_rev:4}]);
+  expect(calls.at(-1)!.args).toMatchObject({p_issuers:[I1,I2],p_concepts:[]});              // revs only: one snapshot, no rows
+  expect(await db.stateRevs([],'US')).toEqual([]);
+  expect(await db.readFilingFacts('g',true)).toEqual([{fact_id:'f',value:'1.50',value_text:'1.50',run_status:'published',created_at:'2024-01-01T00:00:00.000Z'}]);
+  expect(calls.at(-1)).toEqual({fn:'read_filing_facts',args:{p_filing:'g',p_include_non_ok:true}});
+  expect(await db.adoptCandidate('it',2,'b',5,'adm')).toEqual({factId:'nf',runId:'nr',issuerId:I1,market:'US'});
+  expect(calls.at(-1)).toEqual({fn:'adopt_candidate',args:{p_item:'it',p_index:2,p_batch:'b',p_expected_rev:5,p_resolved_by:'adm'}});
+  expect(await db.restoreReconciled('it','b','h','adm')).toEqual({promoted:0,skipped:[{fact_id:'f',reason:'ineligible'}]});
+  expect(calls.at(-1)).toEqual({fn:'restore_reconciled',args:{p_item:'it',p_batch:'b',p_inputs_hash_now:'h',p_resolved_by:'adm'}});
+  expect(await db.resolveLineageConflict('it','k','b','adm')).toEqual({quarantined:2});
+  expect(calls.at(-1)).toEqual({fn:'resolve_lineage_conflict',args:{p_item:'it',p_keep:'k',p_batch:'b',p_resolved_by:'adm'}});
+  expect(await db.claimReconcileMember('us.companyfacts_vs_ixbrl','c1',I1,'US','b')).toBeNull();
+  expect(calls.at(-1)).toEqual({fn:'claim_reconcile_member',args:{p_pair:'us.companyfacts_vs_ixbrl',p_cycle_id:'c1',p_issuer:I1,p_market:'US',p_batch:'b'}});
+  const fence={pair:'us.companyfacts_vs_ixbrl' as const,cycle_id:'c1',issuer_id:I1,market:'US' as const,batch_id:'b',attempt:1};
+  const result={natural_key:'k',kind:'numeric' as const,outcome:'compared' as const,passed:false,left_value:'1',right_value:'2',abs_diff:'1',rel_diff:'0.5',tolerance:'0',left_source:'l',right_source:'r',detail:{},action:'quarantine_left' as const,left_fact_id:'f',inputs_hash:'h'};
+  expect(await db.applyReconcileResult(fence,result)).toEqual({reused:false,reconciliationId:'r1',itemId:null,quarantined:1,materialize:{issuerId:I1,market:'US'}});
+  expect(calls.at(-1)).toEqual({fn:'apply_reconcile_result',args:{p_fence:fence,p_result:result}});
+  expect(await db.completeReconcileMember(fence)).toEqual({compared_passed:1,compared_failed:0,not_compared:2});
+  await db.failReconcileMember(fence,'boom');
+  expect(calls.at(-1)).toEqual({fn:'fail_reconcile_member',args:{p_fence:fence,p_error:'boom'}});
+  const open={pair:'facts.lineage_same_day' as const,cycleId:'c',startedAt:'2026-11-05T00:00:00.000Z',members:[{issuer_id:I1,market:'US' as const,expected_keys:[]}],pending:[{issuer_id:I1,market:'US' as const,source:I2}]};
+  expect(await db.openReconcileCycle(open)).toEqual({created:true,cycle:{pair:'facts.lineage_same_day',cycle_id:'c'},transferred:[{issuer_id:I1,market:'US',source:I2}]});
+  expect(calls.at(-1)).toEqual({fn:'open_reconcile_cycle',args:{p_pair:'facts.lineage_same_day',p_cycle_id:'c',p_started_at:'2026-11-05T00:00:00.000Z',p_members:open.members,p_pending:open.pending}});
+  expect(await db.setMerge('s','t','adm')).toEqual({repointed:1});
+  expect(calls.at(-1)).toEqual({fn:'set_merge',args:{p_source:'s',p_target:'t',p_resolved_by:'adm'}});
+  await db.setDissolved('s','adm');
+  expect(calls.at(-1)).toEqual({fn:'set_dissolved',args:{p_issuer:'s',p_resolved_by:'adm'}});
+  expect(await db.setFilingAcceptance('g','2024-02-01T21:05:00.000Z','sec_submissions')).toBe(true);
+  expect(calls.at(-1)).toEqual({fn:'set_filing_acceptance',args:{p_filing:'g',p_accepted:'2024-02-01T21:05:00.000Z',p_source:'sec_submissions'}});
+  const m={issuer_id:I1,market:'US' as const,metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M' as const,value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:3,based_on_lineage:[{issuer_id:I1,state_rev:3}],as_of:'2024-01-01'};
+  expect(await db.replaceMetricsLineage(I1,'US',[{issuer_id:I1,state_rev:3}],[m])).toBe(3);
+  expect(calls.at(-1)).toEqual({fn:'replace_financial_metrics_lineage',args:{p_issuer:I1,p_market:'US',p_based_on:[{issuer_id:I1,state_rev:3}],p_rows:[{metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],as_of:'2024-01-01'}]}});
+ });
+ it('plan-3 table reads: targetOf, lineageOf (target first, referrers ordered), findFilingBySourceRef, filingsForCalendar (complete set with run status, accepted_at ISO)',async()=>{
+  const {db}=stub(()=>({data:null}),(table,ops)=>{
+   if(table==='issuers'&&ops.some(o=>o[0]==='eq'&&o[1][0]==='issuer_id'))return [{merged_into:'T'}];
+   if(table==='issuers')return [{issuer_id:'A'},{issuer_id:'B'}];
+   if(table==='filings'&&ops.some(o=>o[0]==='eq'&&o[1][0]==='source_ref'))return [{filing_id:'g',accepted_at:'2024-02-01T21:05:00+00:00',acceptance_source:'sec_submissions',created_at:'2024-02-01T00:00:00+00:00'}];
+   if(table==='filings')return [{filing_id:'g1',run_id:'r1',period_end:'2024-03-31',accepted_at:null,created_at:'2024-02-01T00:00:00+00:00'}];
+   if(table==='fact_sync_runs')return [{run_id:'r1',status:'published'}];
+   return [];
+  });
+  expect(await db.targetOf('S')).toBe('T');
+  expect(await db.lineageOf('T')).toEqual(['T','A','B']);
+  expect(await db.findFilingBySourceRef('edgar','0000320193-24-000123')).toMatchObject({filing_id:'g',accepted_at:'2024-02-01T21:05:00.000Z',acceptance_source:'sec_submissions'});
+  expect(await db.filingsForCalendar('I','US',{fromPeriodEnd:'2024-01-01'})).toEqual([expect.objectContaining({filing_id:'g1',run_status:'published',accepted_at:null,acceptance_source:null})]);
+ });
+ it('metrics read compares the full based_on_lineage vector across pages: one rev but two vectors is unstable',async()=>{
+  const row=(i:number,lineage:unknown)=>({issuer_id:'iss',market:'US',metric:`m${String(i).padStart(4,'0')}`,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:1,value_text:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:2,based_on_lineage:lineage,as_of:'2024-01-01'});
+  const a=[{issuer_id:'iss',state_rev:2}],b=[{issuer_id:'iss',state_rev:2},{issuer_id:'src',state_rev:5}];
+  const {db}=stub(()=>({data:null}),(_t,ops)=>{const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];return Array.from({length:Math.min(1001,to+1)-from},(_,k)=>row(from+k,from+k<1000?a:b));},()=>1001);
+  await expect(db.metricsOfIssuer('iss','US','v')).rejects.toMatchObject({message:'metrics_unstable'});
+  const ok=stub(()=>({data:null}),(_t,ops)=>{const [from,to]=ops.find(o=>o[0]==='range')![1] as [number,number];return Array.from({length:Math.min(2,to+1)-from},(_,k)=>row(from+k,b));},()=>2);
+  expect((await ok.db.metricsOfIssuer('iss','US','v')).map(m=>m.based_on_lineage)).toEqual([[{issuer_id:'iss',state_rev:2},{issuer_id:'src',state_rev:5}],[{issuer_id:'iss',state_rev:2},{issuer_id:'src',state_rev:5}]]);
+ });
+});
+
+describe('memoryFactsDb plan-3 specifics',()=>{
+ it('topology helper, targetOf, stateRevs order; setMerge registers the target on the latest lineage cycle; the plan-2 wrapper keeps "no scope ⇒ rev 0"',async()=>{
+  const db=memoryFactsDb();const [a,b,c]=['a','b','c'].map(x=>`${x}0000000-0000-4000-8000-000000000000`);
+  db.setTopology({[a]:{status:'merged',merged_into:c},[b]:{status:'merged',merged_into:c}});
+  expect(await db.lineageOf(c)).toEqual([c,a,b]);expect(await db.targetOf(a)).toBe(c);expect(await db.targetOf(c)).toBe(c);expect(await db.targetOf('unknown')).toBe('unknown');
+  expect(await db.stateRevs([c,a,a],'US')).toEqual([{issuer_id:a,state_rev:0},{issuer_id:c,state_rev:0}]);
+  await db.tables.insert('dq_reconcile_cycles',{pair:'facts.lineage_same_day',cycle_id:'old',status:'complete',started_at:'2026-01-01T00:00:00.000Z',detail:{}});
+  await db.tables.insert('dq_reconcile_cycles',{pair:'facts.lineage_same_day',cycle_id:'new',status:'complete',started_at:'2026-02-01T00:00:00.000Z',detail:{pending_members:[{issuer_id:c,market:'US',source:'earlier-source'}]}});
+  const s=`d0000000-0000-4000-8000-000000000000`;
+  expect(await db.setMerge(s,c,'adm')).toEqual({repointed:0});
+  const cycles=await db.tables.select('dq_reconcile_cycles',{pair:'facts.lineage_same_day'});
+  expect(cycles.find(x=>x.cycle_id==='new')!.detail).toEqual({pending_members:[{issuer_id:c,market:'US',source:'earlier-source'},{issuer_id:c,market:'CN',source:s},{issuer_id:c,market:'US',source:s}]});   // one entry per merged source (plan audit Q2)
+  expect(cycles.find(x=>x.cycle_id==='old')!.detail).toEqual({});
+  expect(db.scope().filter(x=>x.issuer_id===s).map(x=>[x.market,x.priority,x.fetch_key,x.state_rev]).sort()).toEqual([['CN',0,'topology',1],['US',0,'topology',1]]);
+  const m={issuer_id:'z',market:'US' as const,metric:'m',period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M' as const,value:'1',unit:'u',input_unit:'USD',basis:'us_standard',formula_version:'v',inputs:[],based_on_rev:0,based_on_lineage:[{issuer_id:'z',state_rev:0}],as_of:'2024-01-01'};
+  await expect(db.replaceMetrics('z','US',0,[m])).rejects.toMatchObject({code:'scope_missing'});
+  await expect(db.replaceMetrics('z','US',1,[m])).rejects.toMatchObject({code:'stale_computation'});
+ });
+ it('filings carry accepted_at/acceptance_source = null until setFilingAcceptance; readFilingFacts lists every generation with the run status',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:'k'}]);await db.claimLease(iss,'US',b,60);
+  const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
+  expect((await db.filingsOfIssuer(iss,'US',{}))[0]).toMatchObject({accepted_at:null,acceptance_source:null});
+  const x=factInsert(iss,f);await db.stageFacts(run,[x]);
+  expect(await db.readFilingFacts(f.filing_id,true)).toEqual([expect.objectContaining({fact_id:x.fact_id,status:'staged',run_status:'staged'})]);
+  expect(await db.readFilingFacts(f.filing_id,false)).toEqual([]);
+  await expect(db.setFilingAcceptance(f.filing_id,'2024-02-01T21:05:00Z','other' as 'sec_submissions')).rejects.toMatchObject({message:'invalid_acceptance'});
+  expect(await db.setFilingAcceptance(f.filing_id,'2024-02-01T21:05:00Z','sec_submissions')).toBe(true);
+  expect((await db.findFilingBySourceRef('edgar',f.sourceRef))!.accepted_at).toBe('2024-02-01T21:05:00.000Z');
  });
 });

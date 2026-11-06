@@ -13,7 +13,7 @@
 // non-positive average equity is missing. as_of is the UTC date for every market.
 // materialize() reads the envelope, refuses truncated reads (read_truncated), and replaces the
 // issuer's metrics under the envelope's state_rev with one retry on stale_computation.
-import type {Duration,FactRow,FactsDb,Market,MetricDuration,MetricRow} from './types';
+import type {Duration,FactRow,FactsDb,LineageRev,Market,MetricDuration,MetricRow} from './types';
 import {FactsDbError} from './types';
 import {canonicalDecimal} from './json-numbers';
 import {classifyDuration} from './classify';
@@ -33,7 +33,7 @@ const FIXED_METRICS=['gross_margin','net_margin','fcf','borrowings_total','reven
 export function metricNames(market:Market):string[]{
  return [...FIXED_METRICS,...Q_SINGLE_CONCEPTS[market].flatMap(c=>[`q_single_${c}`,`ttm_${c}`])];
 }
-export interface DeriveOptions{market:Market;asOf:string;basedOnRev?:number}
+export interface DeriveOptions{market:Market;asOf:string;basedOnRev?:number;/** complete lineage vector the rows derive from; default [{issuer_id, basedOnRev}] */basedOn?:LineageRev[]}
 
 // ---- exact decimal arithmetic (value = n / 10^s) ----
 interface Dec{n:bigint;s:number}
@@ -100,7 +100,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  let rows=allRows.filter(r=>r.consolidation==='consolidated');
  if(rows.length===0)return [];
  // as_of is a UTC calendar date for every market (accepted, spec §8).
- const {market,asOf}=opts;const issuerId=rows[0].issuer_id;const basedOnRev=opts.basedOnRev??0;
+ const {market,asOf}=opts;const issuerId=rows[0].issuer_id;const basedOnRev=opts.basedOnRev??0;const basedOn=opts.basedOn??[{issuer_id:issuerId,state_rev:basedOnRev}];
  const facts=currentFacts(rows);
  const of=(concept:string)=>facts.get(concept)??[];
  const unique=<T>(xs:T[])=>xs.length===1?xs[0]:null;
@@ -113,7 +113,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  const emit=(metric:string,start:string,end:string,duration:MetricDuration,value:Dec,unit:string,inputUnit:string,basis:string,inputs:Input[])=>{
   const seen=new Set<string>();
   out.push({issuer_id:issuerId,market,metric,period_start:start,period_end:end,duration,value:decToString(value),unit,input_unit:inputUnit,basis,formula_version:FORMULA_VERSION,
-   inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,as_of:asOf});
+   inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,based_on_lineage:basedOn.map(x=>({...x})),as_of:asOf});
  };
  const ratio=(metric:string,ref:Cur&{row:{period_start:string}},num:Dec,den:Dec,basis:string,inputs:Cur[])=>{
   const v=div(num,den);if(v)emit(metric,ref.row.period_start,ref.row.period_end,ref.row.duration,v,'pure',ref.row.unit,basis,inputs.map(x=>inputOf(x)));
