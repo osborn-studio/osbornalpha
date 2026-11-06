@@ -4,7 +4,10 @@
 // row of that batch. SEC exchange membership does not establish
 // domicile and the file carries no share class, so country_code is never set and share_class is
 // always 'unknown'.
-import type {TableClient} from '../db/table-client';
+import {callRpc,selectAll,type Row,type TableClient} from '../db/table-client';
+import {fileClaim} from './claims';
+import {sanitizeProvenance} from './provenance';
+import type {ClaimEvidence} from './types';
 import type {BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts} from '../dq/batches';
 import {DATASETS} from '../dq/datasets';
@@ -157,4 +160,141 @@ export async function applySecLoad(client:TableClient,plan:SecLoadPlan,opts:SecA
   }
  }
  return {counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary};
+}
+
+// ---------------------------------------------------------------- ticker-change detection (spec 3 §4.3.4)
+
+/** Previous successful snapshot, read from an entities.sec batch receipt (tool_versions). */
+export interface SnapshotMeta{as_of:string;fetched_at:string|null;rows:number|null;sha256:string|null}
+export type SnapshotCheck='ok'|'stale_snapshot'|'incomplete_snapshot';
+
+export function snapshotMetaOf(batch:Row):SnapshotMeta|null{
+ const tv=(batch.tool_versions&&typeof batch.tool_versions==='object'?batch.tool_versions:{}) as Record<string,unknown>;
+ if(typeof tv.as_of!=='string')return null;
+ const rows=typeof tv.rows==='string'&&/^\d+$/.test(tv.rows)?Number.parseInt(tv.rows,10):null;
+ return {as_of:tv.as_of,fetched_at:typeof tv.fetched_at==='string'?tv.fetched_at:null,rows,sha256:typeof tv.sha256==='string'?tv.sha256:null};
+}
+
+/** as_of and fetched_at must not go backwards; a file below 90% of the previous data rows is refused. */
+export function checkSnapshot(prev:SnapshotMeta|null,cur:{as_of:string;fetched_at:string;rows:number}):SnapshotCheck{
+ if(!prev)return 'ok';
+ if(cur.as_of<prev.as_of)return 'stale_snapshot';
+ if(prev.fetched_at!==null&&Date.parse(cur.fetched_at)<Date.parse(prev.fetched_at))return 'stale_snapshot';
+ if(prev.rows!==null&&cur.rows*10<prev.rows*9)return 'incomplete_snapshot';
+ return 'ok';
+}
+
+/**
+ * Tickers per CIK as the file lists them, in exact (upper-cased) and normalized form, so a stored
+ * ticker matches either way; owners are indexed by the exact form only (normalization strips Wind
+ * suffixes, BRK.A → BRK, which must not make another CIK look like the owner).
+ */
+export function fileTickerIndex(rows:readonly SecExchangeRow[]):{byCik:Map<string,Set<string>>;cikByTicker:Map<string,string>}{
+ const byCik=new Map<string,Set<string>>(),cikByTicker=new Map<string,string>();
+ for(const r of rows){
+  const exact=r.ticker.trim().toUpperCase();
+  const set=byCik.get(r.cik)??new Set<string>();
+  set.add(exact);
+  const n=normalizeSecurityTicker(r.ticker,'US');if(n)set.add(n);
+  byCik.set(r.cik,set);
+  if(!cikByTicker.has(exact))cikByTicker.set(exact,r.cik);
+ }
+ return {byCik,cikByTicker};
+}
+
+export const CLOSE_MIN_DAYS=7;
+const DAY_MS=86_400_000;
+export interface TickerChangeInput{rows:readonly SecExchangeRow[];asOf:string;fetchedAt:string;fileSha256:string;batchId:string}
+export interface TickerChangeDeps{
+ /** submissions tickers[] for a CIK fetched in this run (the second source); null = SEC unavailable */
+ confirm:(cik:string)=>Promise<{tickers:string[];sha256:string}|null>;
+ /** as_of of the latest successful entities.sec batch strictly before `before`, or null */
+ lastSeenAsOf:(before:string)=>Promise<string|null>;
+}
+export interface TickerChangeResult extends ApplyResult{pending:number;cleared:number;closed:number;claims:number}
+interface PendingChange{first_missing_as_of:string;first_missing_sha256:string;first_missing_fetched_at:string;replacement_tickers:string[];sources:string[]}
+
+const patchProvenance=async(client:TableClient,issuer:string,ticker:string,validFrom:string,set:Record<string,unknown>,remove:string[])=>
+ callRpc(client,'patch_security_provenance',{p_issuer:issuer,p_ticker:ticker,p_valid_from:validFrom,p_set:set,p_remove:remove});
+const pendingOf=(v:unknown):PendingChange|null=>{
+ const o=(v&&typeof v==='object'?v:null) as Partial<PendingChange>|null;
+ if(!o||typeof o.first_missing_as_of!=='string'||typeof o.first_missing_sha256!=='string'||typeof o.first_missing_fetched_at!=='string')return null;
+ return {first_missing_as_of:o.first_missing_as_of,first_missing_sha256:o.first_missing_sha256,first_missing_fetched_at:o.first_missing_fetched_at,
+  replacement_tickers:Array.isArray(o.replacement_tickers)?o.replacement_tickers.map(String):[],sources:Array.isArray(o.sources)?o.sources.map(String):[]};
+};
+
+/**
+ * Runs after applySecLoad on the same file. For every open row with source SEC_SOURCE whose ticker
+ * the file no longer lists for the issuer's CIK: first miss → provenance.pending_change; reappearance
+ * → pending_change removed; close only when still missing, ≥ CLOSE_MIN_DAYS since the first miss
+ * (fetched_at), a different file hash, and the CIK's submissions tickers[] no longer list it. The
+ * close is an OBSERVATION bound (valid_to = first_missing_as_of, method sec_file_absent), never a
+ * ticker-change effective date: that only comes from a reviewed claim (evidence_only filed here).
+ */
+export async function detectTickerChanges(client:TableClient,input:TickerChangeInput,deps:TickerChangeDeps):Promise<TickerChangeResult>{
+ const counts=emptyCounts();const errors:BatchError[]=[];const skipped:string[]=[];
+ let pending=0,cleared=0,closed=0,claims=0;
+ const {byCik,cikByTicker}=fileTickerIndex(input.rows);
+ const open=await selectAll(client,'issuer_securities',{valid_to:null,source:SEC_SOURCE},'ticker');
+ const cikCache=new Map<string,string|null>();
+ const cikOf=async(issuerId:string)=>{
+  if(!cikCache.has(issuerId)){const [i]=await client.select('issuers',{issuer_id:issuerId},{limit:1});cikCache.set(issuerId,i&&i.status==='active'&&typeof i.cik==='string'?i.cik:null);}
+  return cikCache.get(issuerId)!;
+ };
+ const confirmCache=new Map<string,{tickers:string[];sha256:string}|null>();
+ const confirmOf=async(cik:string)=>{if(!confirmCache.has(cik))confirmCache.set(cik,await deps.confirm(cik));return confirmCache.get(cik)!;};
+ for(const row of open){
+  const ticker=String(row.ticker),issuerId=String(row.issuer_id),validFrom=String(row.valid_from);
+  const prov=(row.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
+  const pc=pendingOf(prov.pending_change);
+  const changed=()=>{counts.failed++;errors.push({code:'row_changed',key:`${ticker}:${validFrom}`});};
+  try{
+   const cik=await cikOf(issuerId);
+   if(!cik){skipped.push('no_cik');continue;}
+   if(byCik.get(cik)?.has(ticker)){
+    if(prov.pending_change!==undefined){
+     const out=await patchProvenance(client,issuerId,ticker,validFrom,{},['pending_change']);
+     if(out==='written'){counts.versioned++;cleared++;}else if(out==='not_found')changed();
+    }
+    continue;
+   }
+   const other=cikByTicker.get(ticker);
+   if(other!==undefined&&other!==cik){
+    await parkConflict(client,{dataset:SEC_DATASET,table:'issuer_securities',naturalKey:`${ticker}:${validFrom}`,reasonCode:'ownership_conflict',
+     detail:{reason:'ticker_listed_under_other_cik',cik:other,holder_cik:cik},payload:{issuer_id:issuerId,ticker,valid_from:validFrom,cik:other},batchId:input.batchId},
+     counts,errors,{code:'ownership_conflict',key:ticker});
+    continue;
+   }
+   if(!pc){
+    const replacement=open.filter(o=>String(o.issuer_id)===issuerId&&String(o.valid_from)===input.asOf&&String(o.ticker)!==ticker).map(o=>String(o.ticker)).sort();
+    const set=sanitizeProvenance({pending_change:{first_missing_as_of:input.asOf,first_missing_sha256:input.fileSha256,first_missing_fetched_at:input.fetchedAt,replacement_tickers:replacement,sources:[SEC_SOURCE]}});
+    const out=await patchProvenance(client,issuerId,ticker,validFrom,set,[]);
+    if(out==='written'){counts.versioned++;pending++;}else if(out==='not_found')changed();
+    continue;
+   }
+   if(Date.parse(input.fetchedAt)-Date.parse(pc.first_missing_fetched_at)<CLOSE_MIN_DAYS*DAY_MS||input.fileSha256===pc.first_missing_sha256){skipped.push('close_pending');continue;}
+   const conf=await confirmOf(cik);
+   if(!conf){skipped.push('close_unconfirmed');errors.push({code:'sec_unavailable',key:cik,message:'submissions not available: close deferred'});continue;}
+   if(conf.tickers.map(t=>t.trim().toUpperCase()).includes(ticker)){skipped.push('close_unconfirmed');continue;}
+   if(pc.first_missing_as_of<=validFrom){counts.failed++;errors.push({code:'invalid_window',key:`${ticker}:${validFrom}`,message:`first_missing_as_of ${pc.first_missing_as_of} <= valid_from`});continue;}
+   const lastSeen=await deps.lastSeenAsOf(pc.first_missing_as_of);
+   const provenance=sanitizeProvenance({valid_to:{source:SEC_SOURCE,as_of:input.asOf,first_missing_as_of:pc.first_missing_as_of,first_missing_sha256:pc.first_missing_sha256,
+    closing_sha256:input.fileSha256,submissions_sha256:conf.sha256,last_seen_as_of:lastSeen}});
+   // atomic close: set_security_window merges only valid_to, so pending_change stays on the closed row
+   const closeOut=await callRpc(client,'set_security_window',{p_issuer:issuerId,p_ticker:ticker,p_valid_from:validFrom,p_side:'to',p_new_date:pc.first_missing_as_of,p_provenance:provenance,p_to_method:'sec_file_absent'});
+   if(closeOut!=='written'&&closeOut!=='duplicate'){changed();continue;}
+   counts.versioned++;closed++;
+   const evidence:ClaimEvidence={source:SEC_SOURCE,as_of:input.asOf,evidence_sha256:input.fileSha256,locator:`cik:${cik}`};
+   const note=`观测到 ${ticker} 消失、${pc.replacement_tickers.join('/')||'（无新代码）'} 出现；换码生效日需 8-K/公告证据`;
+   if(await fileClaim(client,{issuer_id:issuerId,id_type:'ticker',value:ticker,source:SEC_SOURCE,op:'evidence_only',detail:{
+    schema:'claim/1',evidence_kind:'official_list',target:{issuer_id:issuerId},
+    params:{suggested_op:'backdate_window',old_ticker:ticker,replacement_tickers:pc.replacement_tickers,first_missing_as_of:pc.first_missing_as_of,submissions_sha256:conf.sha256,note},
+    evidence,sources:[evidence],
+   }}))claims++;
+  }catch(e){counts.failed++;errors.push({code:'ticker_change_error',key:ticker,message:errorMessage(e)});}
+ }
+ counts.fetched=counts.inserted+counts.duplicates+counts.versioned+counts.quarantined+counts.failed;
+ const skippedSummary=summarizeSkips(skipped);
+ const lead:BatchError[]=claims?[{code:'claims_summary',message:JSON.stringify({evidence_only:claims})}]:[];
+ return {counts,errors:withSkippedSummary([...lead,...errors],skippedSummary),skippedSummary,rejectedSummary:{},pending,cleared,closed,claims};
 }

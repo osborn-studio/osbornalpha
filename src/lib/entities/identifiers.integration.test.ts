@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb,text)','public.patch_security_provenance(uuid,text,date,jsonb,text[])'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1027,8 +1027,8 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
  });
 
  // Task 5a: evidenced window writes land date + method + one provenance key in one locked UPDATE.
- const setWin=(a:string,t:string,from:string,side:string,date:string,prov:unknown,on:Pool|PoolClient=admin)=>
-  on.query(`select public.set_security_window($1,$2,$3::date,$4,$5::date,$6::jsonb) v`,[a,t,from,side,date,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const setWin=(a:string,t:string,from:string,side:string,date:string,prov:unknown,on:Pool|PoolClient=admin,toMethod?:string)=>
+  on.query(`select public.set_security_window($1,$2,$3::date,$4,$5::date,$6::jsonb${toMethod?',$7':''}) v`,[a,t,from,side,date,JSON.stringify(prov),...(toMethod?[toMethod]:[])]).then(r=>r.rows[0].v as string);
  const winState=async(t:string)=>(await q(`select to_char(valid_from,'YYYY-MM-DD') valid_from,to_char(valid_to,'YYYY-MM-DD') valid_to,valid_from_method,valid_to_method,provenance from public.issuer_securities where ticker=$1`,[t]))[0];
  const WF={valid_from:{source:'stocks_universe.list_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{list_date:'2001-08-27'}}};
  const WT={valid_to:{source:'stocks_universe.delist_date',provider:'tushare_stock_basic',as_of:'2026-11-05',row:{delist_date:'2026-06-30'}}};
@@ -1054,6 +1054,38 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   for(const bad of [()=>setWin(a,t,'2001-08-27','from','2000-01-01',WT),()=>setWin(a,t,'2001-08-27','from','2000-01-01',{...WF,...WT}),()=>setWin(a,t,'2001-08-27','x','2000-01-01',WF),
    ()=>setWin(a,t,'2001-08-27','from','2000-01-01',{valid_from:{url:'https://a.example/p?token=1'}}),()=>setWin(a,t,'2001-08-27','from','2000-01-01',{isin:{}})])
    expect(await fails(bad())).toMatchObject({message:'invalid_window_write',code:'22023'});
+ });
+ const patchProv=(a:string,t:string,from:string,set:unknown,remove:string[],on:Pool|PoolClient=admin)=>
+  on.query(`select public.patch_security_provenance($1,$2,$3::date,$4::jsonb,$5::text[]) v`,[a,t,from,JSON.stringify(set),remove]).then(r=>r.rows[0].v as string);
+ const PC={pending_change:{first_missing_as_of:'2026-11-02',first_missing_sha256:'a'.repeat(64),first_missing_fetched_at:'2026-11-02T06:00:00.000Z',replacement_tickers:['NEW'],sources:['sec_company_tickers_exchange']}};
+ it('patch_security_provenance: written / duplicate / not_found / invalid; set and remove only pending_change; closed rows are not found; sec_file_absent close keeps pending_change',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  expect(await patchProv(a,t,'2024-03-01',PC,[])).toBe('written');
+  expect(await patchProv(a,t,'2024-03-01',PC,[])).toBe('duplicate');
+  expect((await winState(t)).provenance).toEqual({exchange:'Nasdaq',...PC});
+  expect(await setWin(a,t,'2024-03-01','to','2024-11-02',{valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}},admin,'sec_file_absent')).toBe('written');
+  expect(await winState(t)).toMatchObject({valid_to:'2024-11-02',valid_to_method:'sec_file_absent',provenance:{exchange:'Nasdaq',...PC,valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}}});
+  expect(await patchProv(a,t,'2024-03-01',{},['pending_change'])).toBe('not_found');   // closed
+  const u=await ticker();
+  await sec(a,u,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  await patchProv(a,u,'2024-03-01',PC,[]);
+  expect(await patchProv(a,u,'2024-03-01',{},['pending_change'])).toBe('written');
+  expect(await patchProv(a,u,'2024-03-01',{},['pending_change'])).toBe('duplicate');
+  expect((await winState(u)).provenance).toEqual({exchange:'Nasdaq'});
+  expect(await patchProv(a,await ticker(),'2024-03-01',PC,[])).toBe('not_found');
+  expect(await patchProv(randomUUID(),u,'2024-03-01',PC,[])).toBe('not_found');
+  for(const bad of [()=>patchProv(a,u,'2024-03-01',{isin:'x'},[]),()=>patchProv(a,u,'2024-03-01',{},['exchange']),()=>patchProv(a,u,'2024-03-01',{pending_change:{url:'https://a.example/p?token=1'}},[]),
+   ()=>setWin(a,u,'2024-03-01','to','2025-01-01',{valid_to:{source:'x'}},admin,'curated')])
+   expect(await fails(bad())).toMatchObject({message:expect.stringMatching(/invalid_(provenance_patch|window_write)/),code:'22023'});
+ });
+ it('patch_security_provenance interleaved with set_security_identifier (isin) keeps both provenance keys',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const isin='US'+String(Math.floor(Math.random()*1e9)).padStart(9,'0')+'0';
+  await Promise.all([patchProv(a,t,'2024-03-01',PC,[]),admin.query(`select public.set_security_identifier($1,$2,'2024-03-01'::date,'isin',$3,$4::jsonb)`,[a,t,isin,JSON.stringify(PI)])]);
+  const prov=(await winState(t)).provenance as Record<string,unknown>;
+  expect(Object.keys(prov).sort()).toEqual(['exchange',...Object.keys(PI),'pending_change'].sort());
  });
  it('a window write interleaved with an ISIN identifier write on the same row: ISIN first keeps both provenance keys; window first moves the key so the ISIN write finds no row',async()=>{
   const setIsin=(a:string,t:string,from:string,isin:string,on:Pool|PoolClient=admin)=>

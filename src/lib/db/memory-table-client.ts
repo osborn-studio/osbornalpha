@@ -8,7 +8,7 @@
 //  - ordering and range filters (gte/lt) compare numbers numerically and everything else as
 //    strings by UTF-16 code unit, which matches PostgreSQL only under C collation (ISO-8601
 //    timestamps in one fixed format compare correctly; mixed offsets or locales do not).
-//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window); one synchronous JS turn stands for the row lock.
+//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window, patch_security_provenance); one synchronous JS turn stands for the row lock.
 import {TableError,assertMatch,assertUpdateMatch,checkRangeOptions,checkSelectOptions} from './table-client';
 import type {RangeOptions,Row,TableClient} from './table-client';
 
@@ -75,8 +75,8 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
  },
  // Task 5a: guarded evidenced-window write (date + method + one provenance key). Not mirrored: claim_provenance_safe and the no-overlap exclusion (DB suite).
  set_security_window(rowsOf,a){
-  const side=a.p_side,pv=a.p_provenance,nd=a.p_new_date;
-  if((side!=='from'&&side!=='to')||typeof nd!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!(`valid_${side}` in pv))
+  const side=a.p_side,pv=a.p_provenance,nd=a.p_new_date,tm=a.p_to_method===undefined?'delisting':a.p_to_method;
+  if((side!=='from'&&side!=='to')||typeof nd!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!(`valid_${side}` in pv)||(side==='to'&&tm!=='delisting'&&tm!=='sec_file_absent'))
    throw new TableError('rpc','set_security_window','invalid_window_write','22023');
   if(!rowsOf('issuers').some(r=>r.issuer_id===a.p_issuer))return 'not_found';
   const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from);
@@ -88,11 +88,25 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
    if(rowsOf('issuer_securities').some(o=>o!==row&&o.ticker===a.p_ticker&&String(o.valid_from)<String(row.valid_from)))return 'conflict';   // not the ticker's earliest row
    row.valid_from=nd;row.valid_from_method='listing_date';
   }else{
-   if(row.valid_to===nd&&row.valid_to_method==='delisting'&&'valid_to' in prov)return 'duplicate';
+   if(row.valid_to===nd&&row.valid_to_method===tm&&'valid_to' in prov)return 'duplicate';
    if(row.valid_to!=null||nd<=String(row.valid_from))return 'conflict';
-   row.valid_to=nd;row.valid_to_method='delisting';
+   row.valid_to=nd;row.valid_to_method=tm;
   }
   row.provenance={...prov,...clone(pv)};
+  return 'written';
+ },
+ // Task 6b: the only writer of provenance.pending_change; open rows only. claim_provenance_safe is not mirrored (DB suite).
+ patch_security_provenance(rowsOf,a){
+  const set=a.p_set,rm=a.p_remove;
+  if(!isObj(set)||Object.keys(set).some(k=>k!=='pending_change')||!Array.isArray(rm)||rm.some(k=>k!=='pending_change'))
+   throw new TableError('rpc','patch_security_provenance','invalid_provenance_patch','22023');
+  if(!rowsOf('issuers').some(r=>r.issuer_id===a.p_issuer))return 'not_found';
+  const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from&&r.valid_to==null);
+  if(!row)return 'not_found';
+  const prov=isObj(row.provenance)?row.provenance:{};
+  const next:Row={...prov};for(const k of rm)delete next[k];Object.assign(next,clone(set));
+  if(JSON.stringify(Object.entries(next).sort())===JSON.stringify(Object.entries(prov).sort()))return 'duplicate';
+  row.provenance=next;
   return 'written';
  },
  set_security_identifier(rowsOf,a){
