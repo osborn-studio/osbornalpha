@@ -1,7 +1,7 @@
 # 宏观工作台（Macro Workbench）设计规格 · P1 + P2
 
 日期：2026-11-04（第 1 稿）；2026-11-06 第 2 稿（对齐已落地的计划一/二与总纲，处置 Codex 增量审计 M1–M26，见 §0）
-状态：第 2 稿，待 Codex 复核后写计划
+状态：第 3 稿（2026-11-06，Codex 确认轮 `04-codex-spec-confirm.md` 的 partial 与 N1–N3 已处置，见 §0.2），进入计划
 前置研究：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、同目录 `REPORT.md`、`SOURCE_MAP.csv`
 总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5
 已定决策（owner 2026-11-04）：范围 P1 纵向闭环 + P2 关联与事件；中国宏观走 AKShare 采集脚本（只作适配器，记录上游）；美国走 FRED；面向所有登录用户开放。
@@ -42,6 +42,25 @@
 
 数据底座规格 §5.1 第 278 行的 `dataset='macro'` 同步改为 `macro.*`。
 
+### 0.2 第 3 稿处置（Codex 确认轮 `docs/audits/2026-11-06-macro-workbench/04-codex-spec-confirm.md`）
+
+| id | 处置（正文已同步） |
+|---|---|
+| M6 | 派生观测 `available_at` = 其**全部**输入版本 `available_at` 的最大值；派生在输入写入的同一批次内完成（§4.4） |
+| M7 | 快照清单包含判定与"本期变化"用到的全部观测：每个指标的最新期、上一可比期、3 个月前期（§5.3）；派生行 `transform` 记 `<kind>@<version>` 与参数 |
+| M8 | 同比 = `(cur/prev − 1) × 100`，十进制运算，四舍五入（half-even）到 4 位小数后 canonical；`value` 由 RPC 从 `value_text` 计算，不接受调用方传 `value`；规则检查在 `quality.ts` 内把 `value_text` 转有限数（唯一转换点之一，另一个是 `regime.ts` 输入） |
+| M9 | P1 不写 `dq_reconciliations`（没有第二来源；AKShare 交叉核对走隔离 `adapter_mismatch`）；`recordAttempt({ok: status !== 'failed'})`；每个 dataset 只有一个写者（`macro.fred` 只由 cron 写，`macro.akshare` 只由 ingest finish 写），ingest `start` 在已有未结束且 < 2 小时的 `macro.akshare` 批次时拒绝（409） |
+| M10 | 隔离裁决经 RPC `macro_resolve_conflict(quarantine_id, decision, resolved_by)` 原子完成：接受 → 被隔离行转 `ok`（版本号更高者即最新）、`dq_quarantine` 置 `resolved_accept`、写 `research_audit_log`、`input_revision+1`；拒绝 → 只置 `resolved_reject` + 审计。已发布快照不改，下次发布反映。**迟到交付**：新行的 `available_at` 早于当前最新版本的 `available_at` 且值不同 → 不分配新的最新版本，隔离 `stale_delivery` |
+| M11 | 及时性按"下一期"判断：下一期 = 最新期 + 1 个周期；截止 = 下一期期末 + `releaseLagDays` + 3 天；今天 > 截止 → `late`；`event` 频率或无 `releaseLagDays` → `n/a` |
+| M14 | 判定权重属于方法：`regime.ts` 的 `WEIGHTS_V1`（id → 权重）在 `v1.0` 内冻结，覆盖率分母固定；目录的 `weight` 字段必须与之相等（测试）。目录每个版本追加进 `macro_catalog_versions`（只追加），快照引用其 `catalog_version` |
+| M15 | 每个目录项写明 `adjustment`；日频原生 ID 权重 0、不进判定；CN GDP 取"当季"国内生产总值指数（非累计），夹具核实 |
+| M16 | `macro_publish_state` 加 `input_revision`：`macro_write_observations` 与 `macro_resolve_conflict` 在改动某区域序列时 `+1`（行锁）；发布同时校验 `p_expected_revision` 与 `p_expected_input_revision`，不符 → `stale_publisher` |
+| M22 | 分析请求带客户端生成的 `request_id`（uuid）；`unique(user_id, request_id)`；重试返回已有运行，不重复计额 |
+| M24 | ingest 三段协议：`start`（返回 `batch_id`）→ `chunk`（`batch_id, seq, total`，按 `(batch_id, seq)` 幂等，记入 `macro_ingest_chunks`）→ `finish`（校验 0..total−1 全到，汇总计数，`finishBatch`，派生，发布 CN）。cron 只发布 US；CN 只在 `finish` 后发布 |
+| N1 | `create_macro_analysis_run` 只授 service_role；路由用已验证 session 的 user id 作 `p_user_id`，服务端计算结果后写入 |
+| N2 | 证据拆为 `macro_evidence_objects`（按 SHA 去重的字节对象）与 `macro_retrievals`（每次取得一条回执：URL、主机、状态、`fetched_at`、批次、工具版本）；观测引用 `retrieval_id`，`available_at` = 该回执 `fetched_at` |
+| N3 | CN 派生在 ingest `finish` 内、发布前执行；发布清单只含已完成批次的输入与其派生 |
+
 ---
 
 ## 1. 目标与非目标
@@ -73,7 +92,7 @@
 - 页面：所有登录用户（任何 plan）可读；`/intel/macro/*` 在 `(app)` 布局内，受现有 session 门禁。
 - API：`src/middleware.ts` 不拦 `/api/*`，所以每个 `/api/macro/*` 路由自行鉴权：读路由要求登录 session（`createServerClient` 取 user，无则 401）；分析路由同样要求 session 并只读写本人行；`POST /api/macro/ingest` 只认 `MACRO_INGEST_SECRET`（Bearer，常量时间比较，缺省即拒）；`/api/cron/macro-sync` 用 `authorizedCronRequest`（`src/lib/observability/cron-auth.ts`）。
 - 数据库层：`macro_series`、`macro_observations`（`status='ok'`）、`macro_snapshots`、`macro_regime_results` 是公开参考数据，anon + authenticated 只读（F4 的输入构造器走 anon 客户端，F4 规格 §3.5）；`macro_evidence` 元数据 anon 只读（不含字节；字节在私有桶，服务端代取）；隔离行、批次、隔离队列只 service / admin。
-- 分析配额：`create_macro_analysis_run` RPC（security definer）内按 `auth.uid()` 加事务级咨询锁、数过去 24 小时本人运行数，超过 plan 限额（free 10 / pro 100 / admin 不限，从 `profiles` 读 plan 与 role）则拒绝；计算失败的运行不计数（行写为 `failed` 不占额度由 RPC 规则决定：只数 `status='ok'`）。不改 `usage_events` 及其 RPC。
+- 分析配额：`create_macro_analysis_run` RPC（security definer，只授 service_role，路由传已验证的 user id）内按用户加事务级咨询锁、数过去 24 小时本人运行数，超过 plan 限额（free 10 / pro 100 / admin 不限，从 `profiles` 读 plan 与 role）则拒绝；计算失败的运行不计数（行写为 `failed` 不占额度由 RPC 规则决定：只数 `status='ok'`）。不改 `usage_events` 及其 RPC。
 
 ---
 
@@ -232,32 +251,36 @@ interface MacroSeriesDef {
 | 表 | 主要列 | 约束 / RLS |
 |---|---|---|
 | `macro_series` | `id` PK, region, role, type, unit, native_frequency, period, status, source jsonb, weight numeric, change_kind, definition_version, catalog_version, updated_at | anon/authenticated select；写仅经 service |
-| `macro_evidence` | `sha256` PK（hex64）, `object_path`（`macro-raw` 桶内，`<adapter>/<sha256>.<ext>`）, adapter, fetch_url, fetch_host, http_status, content_type, byte_length, fetched_at, batch_id FK `ingest_batches`, tool_versions jsonb | anon select（无字节）；写仅 service |
-| `macro_observations` | `observation_id` uuid PK, series_id FK, period_end date, `value numeric`（无精度限制）, `value_text`（canonical 十进制）, version int ≥ 1, available_at timestamptz, availability_basis, ingested_at, status ('ok'/'quarantined'/'superseded_conflict'), evidence_sha256 FK（原生观测必填）, locator jsonb（`{kind:'csv_row',line,column}` / `{kind:'json_pointer',pointer}`）, derived_from uuid[]（派生观测必填）, transform text, code_version, batch_id FK | UNIQUE(series_id, period_end, version)；anon/authenticated select **where status='ok'**；写仅经 RPC |
+| `macro_evidence_objects` | `sha256` PK（hex64）, `object_path`（`macro-raw` 桶内，`<adapter>/<sha256>.<ext>`）, adapter, content_type, byte_length, created_at | anon select（无字节）；写仅经 RPC |
+| `macro_retrievals` | `retrieval_id` uuid PK, sha256 FK, fetch_url, fetch_host, http_status, fetched_at, batch_id FK `ingest_batches`, tool_versions jsonb | anon select；写仅经 RPC |
+| `macro_catalog_versions` | `catalog_version` PK, catalog jsonb, rules_version, created_at | anon select；只追加 |
+| `macro_ingest_chunks` | (batch_id, seq) PK, total, counts jsonb, received_at | service only |
+| `macro_observations` | `observation_id` uuid PK, series_id FK, period_end date, `value numeric`（无精度限制）, `value_text`（canonical 十进制）, version int ≥ 1, available_at timestamptz, availability_basis, ingested_at, status ('ok'/'quarantined'/'superseded_conflict'), retrieval_id FK `macro_retrievals`（原生观测必填）, locator jsonb（`{kind:'csv_row',line,column}` / `{kind:'json_pointer',pointer}`）, derived_from uuid[]（派生观测必填）, transform text, code_version, batch_id FK | UNIQUE(series_id, period_end, version)；anon/authenticated select **where status='ok'**；写仅经 RPC |
 | `macro_snapshots` | `snapshot_id` uuid PK, region, as_of date, `revision` bigint, methodology_version, catalog_version, observation_ids uuid[], catalog_counts jsonb `{verified, missing, restricted}`, status ('active'/'superseded'/'failed'), failure_reason, created_at | anon/authenticated select；每 region 仅一条 active（partial unique index）；写仅经 RPC |
 | `macro_regime_results` | snapshot_id PK/FK, region, `regime jsonb`（F4 `RegimeResult` 或 null）, contributions jsonb, rules_version, uncovered_weight numeric | anon/authenticated select；写仅经 RPC |
-| `macro_publish_state` | region PK, revision bigint, updated_at | service only |
-| `macro_analysis_runs` | run_id uuid PK, user_id, kind ('change'/'level'/'rolling'/'event_window'), spec jsonb, inputs jsonb（冻结清单，§7）, inputs_hash, results jsonb, code_version, method_version, status ('ok'/'failed'), error, created_at | RLS own-rows select；insert 只经 `create_macro_analysis_run`；无 update/delete |
+| `macro_publish_state` | region PK, revision bigint, input_revision bigint, updated_at | service only |
+| `macro_analysis_runs` | run_id uuid PK, user_id, request_id uuid（unique with user_id）, kind ('change'/'level'/'rolling'/'event_window'), spec jsonb, inputs jsonb（冻结清单，§7）, inputs_hash, results jsonb, code_version, method_version, status ('ok'/'failed'), error, created_at | RLS own-rows select；insert 只经 `create_macro_analysis_run`；无 update/delete |
 
 - 桶：`insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types) values ('macro-raw','macro-raw',false,…,array['text/csv','application/json','text/html','text/plain']) on conflict …`（同计划二，迁移不引用 `storage.objects`）。
 - RPC（全部 `security definer`、`set search_path=public`、只授 service_role，除注明外）：
   - `macro_write_observations(p_batch uuid, p_rows jsonb)`：逐行按 §4.4 规则插入新版本 / 跳过重复 / 标冲突，返回计数；在 RPC 内校验证据存在、派生行的输入存在且 `ok`。
   - `publish_macro_snapshot(p_region text, p_expected_revision bigint, p_as_of date, p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_catalog_counts jsonb, p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric)`：`select … for update` 区域状态行，修订号不符 → `stale_publisher`；校验所有观测存在且 `status='ok'`、属于该区域目录；插入快照与判定结果；旧 active → `superseded`；新行 active；`revision+1`；一个事务。
   - `record_failed_macro_snapshot(...)`：只记失败快照，不动 active。
-  - `create_macro_analysis_run(p_kind, p_spec, p_inputs, p_inputs_hash, p_results, p_code_version, p_method_version, p_status, p_error)`：授 authenticated；`user_id = auth.uid()`；咨询锁 + 24h 计数配额（§2）；返回 run_id 或 `quota_exceeded`。
+  - `create_macro_analysis_run(p_user_id, p_request_id, p_kind, p_spec, p_inputs, p_inputs_hash, p_results, p_code_version, p_method_version, p_status, p_error)`：只授 service_role（路由传已验证 session 的 user id）；同 `(user_id, request_id)` 已存在 → 返回已有 run_id；咨询锁 + 24h 计数配额（§2）；返回 run_id 或 `quota_exceeded`。
+  - `macro_resolve_conflict(p_quarantine_id, p_decision, p_resolved_by)`：§0.2 M10。
 - 隔离：观测冲突不仅标 `status`，同时调共用 `quarantine()` 写 `dq_quarantine`（dataset `macro.<adapter>`，table `macro_observations`，natural_key `series_id|period_end`），使 `/admin/dq` 可见；裁决后的落地动作（接受新值 → 新版本 ok，拒绝 → 保持）由 `scripts/macro/resolve-quarantine.ts` 调 RPC 完成并写 `research_audit_log`。
 
 ### 4.4 采集链路
 
 ```
-Vercel cron 05:30 UTC → GET /api/cron/macro-sync          (CRON_SECRET; ?preview=1 零写入)
+Vercel cron 05:30 UTC → GET /api/cron/macro-sync          (CRON_SECRET; ?preview=1 零写入；只发布 US)
    1. upsert 目录 → macro_series
    2. FRED CSV 适配器（TS）：startBatch(producer 'ts-fred', dataset 'macro.fred')
       每个 A 状态 FRED 序列：GET https://fred.stlouisfed.org/graph/fredgraph.csv?id=<code>&cosd=2000-01-01
       → 原始字节存证（macro-raw/fred_csv/<sha256>.csv + macro_evidence）→ 无损解析 → 规则校验 → macro_write_observations
       → finishBatch；recordAttempt('macro.fred', cadence 'daily')
    3. 派生（月末、同比、减 100）→ macro_write_observations（code_version、transform、derived_from）
-   4. publish(region) 对 US 与 CN 各一次（读各序列最新 ok 版本 → 判定 → publish_macro_snapshot）
+   4. publish('US')（CN 只在 ingest finish 后发布，§0.2 M24/N3）（读各序列最新 ok 版本 → 判定 → publish_macro_snapshot）
    5. 判断层钩子：flag 开启且 F4 生产者可用时调用 F4 produce（失败不影响发布；F4 补偿扫描兜底）
 
 Mac（Studio）launchd 05:00 UTC → scripts/macro/collect.py（uv 虚拟环境，requirements 锁版本）
