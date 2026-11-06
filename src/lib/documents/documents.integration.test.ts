@@ -583,7 +583,16 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
    const row=candRow(y.cits);row.citations.period=bad as never;
    expect({bad,r:await fails(insertCands(y.ext,y.b,[row]))}).toMatchObject({r:{message:'invalid_citation: reference',code:'22023'}});
   }
+  for(const bad of [[{citation_id:y.cits.period,role:'bogus'}],[{citation_id:y.cits.period}],[{citation_id:y.cits.period,role:null}],[{role:'statement_title',citation_id:y.cits.period},{citation_id:y.cits.period,role:'value'}]]){
+   const row=candRow(y.cits);row.citations.period=bad as never;
+   expect({bad,r:await fails(insertCands(y.ext,y.b,[row]))}).toMatchObject({r:{message:'invalid_citation: shape',code:'22023'}});
+  }
   expect(Number(await one(`select count(*) v from public.extraction_candidates where extraction_id=$1`,[y.ext]))).toBe(0);
+  // an extra string-valued key (unit_currency, added by later tasks) with a valid id is accepted and checked like the others
+  const withCur=candRow(y.cits,{natural_key:'cur'});(withCur.citations as Record<string,unknown>).unit_currency=y.cits.unit;
+  expect(await insertCands(y.ext,y.b,[withCur])).toEqual({inserted:1});
+  const badCur=candRow(y.cits,{natural_key:'cur2'});(badCur.citations as Record<string,unknown>).unit_currency=randomUUID();
+  expect(await fails(insertCands(y.ext,y.b,[badCur]))).toMatchObject({message:'invalid_citation: reference'});
   expect(await insertCands(y.ext,y.b,[candRow(y.cits)])).toEqual({inserted:1});
  });
 
@@ -623,8 +632,15 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect(await one(`select extract_attempts v from public.disclosure_documents where document_id=$1`,[s.doc])).toBe(1);   // no attempt counted
   expect(await renewDoc(s.doc,other)).toBe(false);expect(await renewDoc(s.doc,null)).toBe(false);
   expect(await one(`select extract_lease_batch_id v from public.disclosure_documents where document_id=$1`,[s.doc])).toBe(s.b);
-  await finish(s.doc,s.b,extJson(1),[pageJson(1,TEXT)]);                                       // terminal for the lease: status extracted, lease cleared
-  expect(await renewDoc(s.doc,s.b)).toBe(false);
+  // expired but unclaimed: the holder may still renew (intended); once another batch claims it, the old holder cannot
+  await q(`update public.disclosure_documents set extract_lease_until=now()-interval '1 second' where document_id=$1`,[s.doc]);
+  expect(await renewDoc(s.doc,s.b)).toBe(true);
+  await q(`update public.disclosure_documents set extract_lease_until=now()-interval '1 second' where document_id=$1`,[s.doc]);
+  expect(await claimExtract(s.doc,other)).toBe(true);
+  expect(await renewDoc(s.doc,s.b)).toBe(false);expect(await renewDoc(s.doc,other)).toBe(true);
+  expect(await one(`select extract_lease_batch_id v from public.disclosure_documents where document_id=$1`,[s.doc])).toBe(other);
+  await finish(s.doc,other,extJson(1),[pageJson(1,TEXT)]);                                     // terminal for the lease: status extracted, lease cleared
+  expect(await renewDoc(s.doc,other)).toBe(false);
   // candidates lease
   const y=await candidateReady();const other2=await batch();
   const cu=async()=>new Date(await one(`select candidates_lease_until v from public.document_extractions where extraction_id=$1`,[y.ext])).getTime();
@@ -632,8 +648,12 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect(await renewCand(y.ext,y.b,3600)).toBe(true);expect(await cu()).toBeGreaterThan(c1);
   expect(await one(`select candidates_attempts v from public.document_extractions where extraction_id=$1`,[y.ext])).toBe(1);
   expect(await renewCand(y.ext,other2)).toBe(false);expect(await renewCand(y.ext,null)).toBe(false);
-  await q(`select public.finish_candidates($1,$2,'done')`,[y.ext,y.b]);
-  expect(await renewCand(y.ext,y.b)).toBe(false);                                              // released / terminal
+  const expireC=()=>q(`update public.document_extractions set candidates_lease_until=now()-interval '1 second' where extraction_id=$1`,[y.ext]);
+  await expireC();expect(await renewCand(y.ext,y.b)).toBe(true);                               // expired but unclaimed: the holder still renews
+  await expireC();expect(await claimCand(y.ext,other2)).toBe(true);
+  expect(await renewCand(y.ext,y.b)).toBe(false);expect(await renewCand(y.ext,other2)).toBe(true);   // taken over: the old holder is out
+  await q(`select public.finish_candidates($1,$2,'done')`,[y.ext,other2]);
+  expect(await renewCand(y.ext,other2)).toBe(false);expect(await renewCand(y.ext,y.b)).toBe(false);   // released / terminal
   const z=await extracted();                                                                    // pending, never claimed
   expect(await renewCand(z.ext,z.b)).toBe(false);expect(await renewCand(z.ext,null)).toBe(false);
   expect((await q(`select candidates_lease_batch_id,candidates_lease_until,candidates_attempts from public.document_extractions where extraction_id=$1`,[z.ext]))[0]).toEqual({candidates_lease_batch_id:null,candidates_lease_until:null,candidates_attempts:0});

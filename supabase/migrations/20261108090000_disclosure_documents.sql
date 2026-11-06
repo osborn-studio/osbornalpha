@@ -939,7 +939,10 @@ begin
             jsonb_typeof(x -> 'citations' -> 'label') is distinct from 'string'
             or jsonb_typeof(x -> 'citations' -> 'unit') is distinct from 'string'
             or jsonb_typeof(x -> 'citations' -> 'period') is distinct from 'array'
-            or jsonb_array_length(x -> 'citations' -> 'period') = 0))) then
+            or jsonb_array_length(x -> 'citations' -> 'period') = 0
+            -- F3 review fix: every object element of period[] carries a permitted role (non-objects fall through to the reference check)
+            or exists (select 1 from jsonb_array_elements(x -> 'citations' -> 'period') pe
+                       where jsonb_typeof(pe) = 'object' and not coalesce((pe ->> 'role') = any (array['statement_title','column_header']), false))))) then
     raise exception 'invalid_citation: shape' using errcode = '22023';
   end if;
   if exists (
