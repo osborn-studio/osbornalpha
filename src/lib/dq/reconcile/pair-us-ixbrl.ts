@@ -3,7 +3,7 @@
 // manifest (US_SAMPLE_PATH). Per accession, in this order:
 //  1. no local filing (edgar, accn) → every key left_unlinked (the document is not fetched);
 //  2. right document: is_inline_xbrl=false → unsupported(not_inline_xbrl); else GET doc_url with the shared process-wide SEC pacer
-//     (secPacer, 120 ms, User-Agent EDGAR_USER_AGENT/default, 429/5xx retried twice then THROWN = execution failure),
+//     (secPacer, 120 ms, User-Agent EDGAR_USER_AGENT/default, 5xx retried twice then THROWN, 429 THROWN at once as sec_rate_limited = execution failure),
 //     404 → unsupported(document_not_found), > 50 MB → unsupported(document_too_large); accepted bytes go to
 //     reconcile-raw (content-addressed, sha256 = right_sha256) and are parsed; IxbrlParseError →
 //     unsupported(parse_error:<code>); no ix element → unsupported(not_inline_xbrl);
@@ -44,7 +44,7 @@ const PAIR='us.companyfacts_vs_ixbrl' as const;
 const SIDES={left_source:'edgar.companyfacts',right_source:'edgar.ixbrl'};
 const RESERVE_MS=10_000;
 
-export type DocFetch={status:'ok';bytes:Uint8Array}|{status:'not_found'}|{status:'too_large'};
+export type DocFetch={status:'ok';bytes:Uint8Array}|{status:'not_found'}|{status:'too_large';content_length:number|null;bytes_read:number};
 /** Raw-evidence metadata never carries a query string, fragment or credentials: scheme, host and path only. */
 const evidenceUrl=(u:string):string=>{try{const x=new URL(u);return `${x.protocol}//${x.host}${x.pathname}`;}catch{return '';}};
 const FAILURE_BODY_CAP=1024*1024;
@@ -80,15 +80,17 @@ export async function fetchSecDocument(url:string,ctx:PairContext):Promise<DocFe
   if(!(timeout>0))throw new Error('sec_unavailable:budget_exhausted');
   const res=await ctx.fetch(url,{headers:{'User-Agent':ua,Accept:'text/html,application/xhtml+xml'},signal:AbortSignal.any([ctx.budget.signal,AbortSignal.timeout(timeout)])});
   if(res.status===404){await storeFailure(ctx,res,url);return {status:'not_found'};}
-  if(res.status===429||res.status>=500){
+  if(res.status===429){await storeFailure(ctx,res,url);throw new Error('sec_rate_limited');}   // a run failure at once: no retry against a throttling SEC
+  if(res.status>=500){
    await storeFailure(ctx,res,url);
    if(attempt<2){await sleep(1000*2**attempt,ctx.budget.signal);continue;}
    throw new Error(`sec_unavailable:http_${res.status}`);
   }
   if(!res.ok){await storeFailure(ctx,res,url);throw new Error(`sec_unavailable:http_${res.status}`);}
-  if(Number(res.headers.get('content-length')??'0')>MAX_IXBRL_BYTES){await res.body?.cancel().catch(()=>undefined);return {status:'too_large'};}
+  const cl=res.headers.get('content-length'),declared=cl!==null&&/^\d+$/.test(cl)?Number(cl):null;
+  if(declared!==null&&declared>MAX_IXBRL_BYTES){await res.body?.cancel().catch(()=>undefined);return {status:'too_large',content_length:declared,bytes_read:0};}
   const got=await readLimited(res,MAX_IXBRL_BYTES);
-  return got.exceeded?{status:'too_large'}:{status:'ok',bytes:got.bytes};
+  return got.exceeded?{status:'too_large',content_length:declared,bytes_read:got.bytes.byteLength}:{status:'ok',bytes:got.bytes};
  }
 }
 
@@ -109,11 +111,11 @@ async function loadSample(ctx:PairContext):Promise<{sample:UsSample;sha256:strin
  return {sample:v.sample,sha256};
 }
 
-type Right={kind:'ok';sha256:string;path:string;doc:IxbrlDocument;index:Map<string,{values:string[];facts:IxFact[]}>;shaMismatch:boolean}|{kind:'unsupported';reason:string;sha256:string};
+type Right={kind:'ok';sha256:string;path:string;doc:IxbrlDocument;index:Map<string,{values:string[];facts:IxFact[]}>;shaMismatch:boolean}|{kind:'unsupported';reason:string;sha256:string;size?:{content_length:number|null;bytes_read:number}};
 async function rightSide(ctx:PairContext,f:SampleFiling,cik:string):Promise<Right>{
  if(f.is_inline_xbrl===false)return {kind:'unsupported',reason:'not_inline_xbrl',sha256:''};
  const got=await fetchSecDocument(f.doc_url,ctx);
- if(got.status!=='ok')return {kind:'unsupported',reason:got.status==='not_found'?'document_not_found':'document_too_large',sha256:''};
+ if(got.status!=='ok')return {kind:'unsupported',reason:got.status==='not_found'?'document_not_found':'document_too_large',sha256:'',...(got.status==='too_large'?{size:{content_length:got.content_length,bytes_read:got.bytes_read}}:{})};
  const stored=await storeOf(ctx).put({kind:'sec-document',bytes:got.bytes,contentType:'text/html',meta:{url:evidenceUrl(f.doc_url),accn:f.accn,http_status:200}},ctx.budget);
  let doc:IxbrlDocument;
  try{doc=parseInlineXbrl(new TextDecoder('utf-8').decode(got.bytes));}
@@ -123,6 +125,7 @@ async function rightSide(ctx:PairContext,f:SampleFiling,cik:string):Promise<Righ
  return {kind:'ok',sha256:stored.sha256,path:stored.path,doc,index:indexIxFacts(filer),shaMismatch:stored.sha256!==f.doc_sha256};
 }
 
+const withTagNote=<T extends {detail?:Record<string,unknown>}>(item:T,fallback:boolean):T=>fallback?{...item,detail:{...item.detail,tag_mismatch:true}}:item;
 interface KeyLoc{cik:string;accn:string;concept:string;period_start:string|null;period_end:string;unit:string;source_concept:string;origin:string}
 
 export function usCompanyfactsVsIxbrlPair():RegisteredPair{
@@ -175,7 +178,7 @@ export function usCompanyfactsVsIxbrlPair():RegisteredPair{
       left:left?{fact_id:left.fact_id,raw_hash:left.raw_hash,status:left.status,precision:null,precision_note:'not_retained'}:null};
      const backToItem=bound!==undefined&&left!==null;
      const nc=(outcome:Exclude<ReconcileOutcome,'compared'>,detail:Record<string,unknown>)=>notCompared(nk,'numeric',outcome,SIDES,{...base,...detail},{inputs_hash,...(left?{left_fact_id:left.fact_id}:{}),...(backToItem?{action:'quarantine_left' as const,item:mismatchItem(PAIR,nk,left!,null,{document:entry.doc_url,accn},inputs_hash)}:{})});
-     if(right.kind==='unsupported'){results[i]=nc('unsupported',{reason:right.reason,right:{document:entry.doc_url,sha256:rightSha}});continue;}
+     if(right.kind==='unsupported'){results[i]=nc('unsupported',{reason:right.reason,right:{document:entry.doc_url,sha256:rightSha,...(right.size?right.size:{})}});continue;}
      const rightBase={document:entry.doc_url,sha256:rightSha,path:right.path,...(right.shaMismatch?{doc_sha_mismatch:true}:{})};
      if(rows.length===0){results[i]=nc('left_missing',{right:rightBase});continue;}
      if(rows.length>1){results[i]=nc('left_ambiguous',{fact_ids:rows.map(r=>r.fact_id),right:rightBase});continue;}
@@ -194,10 +197,12 @@ export function usCompanyfactsVsIxbrlPair():RegisteredPair{
      if(hit.values.length>1){results[i]=nc('right_ambiguous',{right:{...rightBase,locator,values:hit.values}});continue;}
      const rv=hit.values[0];
      const passed=compareDecimal(l.value,rv)===0;
-     const action=actionFor({bound:bound!==undefined,leftStatus:l.status,compared:true,passed,onFail:'quarantine_left'});
+     // a mismatch found through the plan-2 tag FALLBACK is a human check, never a quarantine; only exact-tag mismatches quarantine ok rows
+     const viaFallback=tag!==l.source_concept;
+     const action=actionFor({bound:bound!==undefined,leftStatus:l.status,compared:true,passed,onFail:viaFallback?'review_item':'quarantine_left'});
      results[i]=comparedNumeric(nk,l.value,rv,{passed,tolerance:'0',sides:SIDES,inputs_hash,left_fact_id:l.fact_id,action,
       detail:{...base,right:{...rightBase,locator,precision:{decimals:first.decimals,scale:first.scale}},scale:first.scale,...(tag!==l.source_concept?{tag_mismatch:true}:{})},
-      ...(action==='record'?{}:{item:mismatchItem(PAIR,nk,l,rv,{...locator,document:entry.doc_url},inputs_hash)})});
+      ...(action==='record'?{}:{item:withTagNote(mismatchItem(PAIR,nk,l,rv,{...locator,document:entry.doc_url},inputs_hash),viaFallback)})});
     }
    }
    return results;

@@ -168,7 +168,7 @@ describe('us.companyfacts_vs_ixbrl',()=>{
   const MB=1024*1024;let pulled=0;
   const stream=(chunks:number)=>new ReadableStream<Uint8Array>({pull(c){if(pulled>=chunks){c.close();return;}pulled++;c.enqueue(new Uint8Array(MB));}});
   const big:PairRunContext={...s.c,fetch:(async()=>new Response(stream(80),{status:200})) as unknown as typeof fetch};
-  expect(await fetchSecDocument(URL1,big)).toEqual({status:'too_large'});
+  expect(await fetchSecDocument(URL1,big)).toMatchObject({status:'too_large',content_length:null});
   expect(pulled).toBeLessThanOrEqual(52);   // cancelled shortly after 50 MB, not drained
   pulled=0;
   const fail:PairRunContext={...s.c,fetch:(async()=>new Response(stream(5),{status:404})) as unknown as typeof fetch};
@@ -184,6 +184,28 @@ describe('us.companyfacts_vs_ixbrl',()=>{
   await fetchSecDocument(withQuery,ok);
   const meta=[...s.raw.objects.entries()].filter(([p])=>p.endsWith('.meta.json')).map(([,b])=>new TextDecoder().decode(b)).join('');
   expect(meta).toContain('zix-20241231.htm');expect(meta).not.toMatch(/token|secret|\?|#frag/);
+ });
+ it('a failed comparison through the tag fallback is a review_item (never a quarantine); an exact-tag mismatch still quarantines',async()=>{
+  const doc=new TextEncoder().encode(new TextDecoder().decode(docOf('5,001')).replace('>1,000<','>1,001<'));
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{[URL1]:doc}});
+  const pair=usCompanyfactsVsIxbrlPair();const [m]=await pair.members(s.c);
+  const res=await pair.evaluate(s.c,m);
+  expect(res[0]).toMatchObject({outcome:'compared',passed:false,action:'review_item',detail:expect.objectContaining({tag_mismatch:true})});
+  expect(res[0].item?.detail).toMatchObject({tag_mismatch:true});
+  expect(res[2]).toMatchObject({passed:false,action:'quarantine_left'});
+ });
+ it('429 is a run failure on the first response (sec_rate_limited), without retry',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{[URL1]:429}});
+  const pair=usCompanyfactsVsIxbrlPair();const [m]=await pair.members(s.c);
+  await expect(pair.evaluate(s.c,m)).rejects.toThrow('sec_rate_limited');
+  expect(s.fetch).toHaveBeenCalledTimes(1);
+ });
+ it('too_large records Content-Length and bytes read in the result detail',async()=>{
+  const s=await setup({sample:sample([filing(ACCN,URL1,KEYS)]),docs:{}});
+  const big:PairRunContext={...s.c,fetch:(async()=>new Response('',{status:200,headers:{'content-length':String(60*1024*1024)}})) as unknown as typeof fetch};
+  const pair=usCompanyfactsVsIxbrlPair();const [m]=await pair.members(big);
+  const res=await pair.evaluate(big,m);
+  expect(res[0]).toMatchObject({outcome:'unsupported',detail:{reason:'document_too_large',right:{content_length:60*1024*1024,bytes_read:0}}});
  });
  it('filerClass: case-insensitive, non-accelerated before accelerated, SRC alone is unknown',()=>{
   expect([filerClass('Large Accelerated Filer'),filerClass('Accelerated Filer'),filerClass('Non-accelerated Filer'),filerClass('Non-accelerated filer<br>Smaller reporting company'),filerClass('Smaller reporting company'),filerClass(null)])
