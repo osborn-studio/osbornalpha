@@ -5,7 +5,7 @@ import type {MemoryFactsDb} from '../../facts/memory-facts-db';
 import {projectionHash} from '../canonical-json';
 import {SRC_A,SRC_B,SRC_C,ZZEVA_CIK,ZZEVA_ISSUER,seedZzeva} from '../test-support/memory-facts';
 import type {Projection,ReplayRequest} from '../types';
-import {ProjectionError,diffProjections,projectFacts,projectRequest,rowIdentity} from './facts';
+import {ProjectionError,diffProjections,projectFacts,projectRequest,projectWithRev,rowIdentity} from './facts';
 import type {ProjectionDb,ProjectionDeps} from './facts';
 
 const TODAY='2026-11-06';
@@ -71,23 +71,47 @@ describe('projectMetrics (via projectRequest)',()=>{
  });
 });
 
+describe('metric input join checks and state rev',()=>{
+ const mreq=req({concepts:[],metrics:['gross_margin']});
+ const tamper=(f:(r:Awaited<ReturnType<MemoryFactsDb['factsByIds']>>[number])=>Record<string,unknown>):ProjectionDb=>({readFacts:db.readFacts,filingsOfIssuer:db.filingsOfIssuer,factsByIds:async ids=>(await db.factsByIds(ids)).map(r=>({...r,...f(r)}))});
+ it('a quarantined input, a mapping_gen mismatch and a foreign issuer are projection_join_missing',async()=>{
+  expect(await reason(projectRequest({...deps,db:tamper(()=>({status:'quarantined'}))},mreq,TODAY))).toBe('projection_join_missing');
+  expect(await reason(projectRequest({...deps,db:tamper(()=>({mapping_gen:999}))},mreq,TODAY))).toBe('projection_join_missing');
+  expect(await reason(projectRequest({...deps,db:tamper(()=>({issuer_id:'22222222-2222-4222-8222-222222222222'}))},mreq,TODAY))).toBe('projection_join_missing');
+  expect(await reason(projectRequest(deps,mreq,TODAY))).toBe('resolved');
+ });
+ it('quarter and ytd_rule survive into metric inputs when the derivation used them',async()=>{
+  const all=await projectRequest(deps,req({concepts:[],metrics:['revenue_ttm','revenue_yoy','gross_margin']}),TODAY);
+  const keys=new Set(all.rows.flatMap(r=>(r.inputs as Record<string,unknown>[]).flatMap(i=>Object.keys(i))));
+  expect([...keys].every(k=>['concept','period_end','source_ref','quarter','ytd_rule'].includes(k))).toBe(true);
+ });
+ it('projectWithRev returns the read stateRev; an unstable rev is read_failed after one retry',async()=>{
+  const ok=await projectWithRev(deps,req(),TODAY);
+  expect(ok.stateRev).toBe((await db.readFacts(ZZEVA_ISSUER,'US',{concepts:['revenue'],asOf:TODAY})).stateRev);
+  let n=0;
+  const moving:ProjectionDb={readFacts:async(i,m,o)=>{const r=await db.readFacts(i,m,o);return {...r,stateRev:r.stateRev+(n++)};},filingsOfIssuer:db.filingsOfIssuer,factsByIds:db.factsByIds};
+  const e=await projectWithRev({...deps,db:moving},req(),TODAY).catch(x=>x);
+  expect(e).toBeInstanceOf(ProjectionError);expect(e.reason).toBe('read_failed');expect(e.message).toBe('unstable_state_rev');
+ });
+});
+
 describe('diffProjections and rowIdentity',()=>{
  const base=async()=>projectFacts(deps,req(),TODAY);
  it('names a changed field with the spec notation; null period_start is the empty segment',async()=>{
   const before=await base();
   const after:Projection={...before,rows:before.rows.map(r=>r.source_ref===SRC_B?{...r,value_text:'391035000002'}:r)};
-  expect(diffProjections(before,after)).toEqual([`facts[revenue/2023-10-01..2024-09-28/12M/USD/2025-01-15/${SRC_B}].value_text`]);
-  expect(rowIdentity('facts',before.rows[0])).toBe(`cash/..2024-09-28/INSTANT/USD/2024-11-01/${SRC_A}`);
+  expect(diffProjections(before,after)).toEqual([`facts[revenue/2023-10-01..2024-09-28/12M/USD/consolidated/2025-01-15/${SRC_B}].value_text`]);
+  expect(rowIdentity('facts',before.rows[0])).toBe(`cash/..2024-09-28/INSTANT/USD/consolidated/2024-11-01/${SRC_A}`);
  });
  it('several fields, an added row and a removed row; module change; row order does not matter',async()=>{
   const before=await base();
   const changed={...before.rows[3],disclosure_seq:2,is_current:true};
   const after:Projection={module:'facts',rows:[...before.rows.slice(0,3),changed,...before.rows.slice(5),{...before.rows[0],source_ref:'0009990601-26-000009'}]};
   expect(diffProjections(before,after)).toEqual([
-   `facts[cash/..2024-09-28/INSTANT/USD/2024-11-01/0009990601-26-000009]`,
-   `facts[revenue/2023-10-01..2024-09-28/12M/USD/2024-11-01/${SRC_A}].disclosure_seq`,
-   `facts[revenue/2023-10-01..2024-09-28/12M/USD/2024-11-01/${SRC_A}].is_current`,
-   `facts[revenue/2023-10-01..2024-09-28/12M/USD/2025-01-15/${SRC_B}]`,
+   `facts[cash/..2024-09-28/INSTANT/USD/consolidated/2024-11-01/0009990601-26-000009]`,
+   `facts[revenue/2023-10-01..2024-09-28/12M/USD/consolidated/2024-11-01/${SRC_A}].disclosure_seq`,
+   `facts[revenue/2023-10-01..2024-09-28/12M/USD/consolidated/2024-11-01/${SRC_A}].is_current`,
+   `facts[revenue/2023-10-01..2024-09-28/12M/USD/consolidated/2025-01-15/${SRC_B}]`,
   ]);
   expect(diffProjections(before,{module:'metrics',rows:before.rows})).toEqual(['module']);
   expect(diffProjections(before,{module:'facts',rows:[...before.rows].reverse()})).toEqual([]);

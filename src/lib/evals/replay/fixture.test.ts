@@ -38,3 +38,17 @@ describe('parseReplayFile',()=>{
   expect(code(()=>parseReplayFile(file([frozenCase({setup:{today:'2026-11-06'}})]),{allowDrafts:false}))).toBe('gold_invalid');   // recorded frozen case needs a sealed setup
  });
 });
+
+describe('replay fixture requests',()=>{
+ const mreq={issuer:{market:'US',cik:'9990601'},concepts:[],metrics:['gross_margin'],asOf:'2025-06-30'};
+ const mcase=(durations:string[])=>{const P2:Projection={module:'metrics',rows:[{metric:'gross_margin'}]};return frozenCase({case_id:'m1',request:{...mreq,durations},expected:{projection_hash:projectionHash(P2),projection:P2}});};
+ it('TTM durations are allowed for metrics requests only, and round-trip',()=>{
+  const f=parseReplayFile(file([mcase(['TTM','12M'])]),{allowDrafts:false});
+  expect(parseReplayFile(JSON.parse(serializeReplayFile(f)),{allowDrafts:false})).toEqual(f);
+  expect(code(()=>parseReplayFile(file([frozenCase({request:{issuer:{market:'US',cik:'9990601'},concepts:['revenue'],durations:['TTM'],asOf:'2025-06-30'}})]),{allowDrafts:false}))).toBe('gold_invalid');
+ });
+ it('invalid calendar dates are gold_invalid, not a RangeError',()=>{
+  for(const d of ['2026-13-01','2026-02-30'])expect(code(()=>parseReplayFile(file([frozenCase({request:{issuer:{market:'US',cik:'9990601'},concepts:['revenue'],asOf:d}})]),{allowDrafts:false}))).toBe('gold_invalid');
+  expect(code(()=>parseReplayFile(file([frozenCase({setup:{setup_sha256:S,today:'2026-13-01'}})]),{allowDrafts:false}))).toBe('gold_invalid');
+ });
+});

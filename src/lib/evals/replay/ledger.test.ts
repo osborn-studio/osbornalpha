@@ -2,7 +2,7 @@
 import {describe,expect,it} from 'vitest';
 import {EvalError} from '../errors';
 import {isSelfApproved,matchLedger,parseLedger} from './ledger';
-import type {LedgerEntry,ObservedDiff} from './ledger';
+import type {LedgerEntry,LedgerPolicy,ObservedDiff} from './ledger';
 
 const H0='a'.repeat(64),H1='b'.repeat(64),S='5'.repeat(64),C1='1'.repeat(40),C2='2'.repeat(40);
 const F=['facts[revenue/2023-10-01..2024-09-28/12M/USD/2025-01-15/0009990601-25-000002].value_text'];
@@ -17,46 +17,60 @@ const liveRaw=(p:Record<string,unknown>={})=>{
 const code=(f:()=>unknown)=>{try{f();return 'ok';}catch(e){return e instanceof EvalError?e.code:`other:${String(e)}`;}};
 const diff=(p:Partial<ObservedDiff>={}):ObservedDiff=>({case_id:'c1',mode:'frozen',before_hash:H0,after_hash:H1,from_code:C1,to_code:C2,from_setup_sha256:S,to_setup_sha256:S,changed_fields:F,...p});
 
+const POLICY:LedgerPolicy={recorders:[{id:'owner',role:'owner',modules:['facts','metrics'],added_at:'2026-11-06',approved_by:'owner'},{id:'macro-only',role:'x',modules:['macro'],added_at:'2026-11-06',approved_by:'owner'}]};
+const parse=(r:unknown)=>parseLedger(r,POLICY);
+
 describe('parseLedger',()=>{
  it('accepts frozen and live entries; [] is valid',()=>{
-  expect(parseLedger([])).toEqual([]);
-  expect(parseLedger([raw(),liveRaw({ledger_id:'L2'})]).map(e=>e.ledger_id)).toEqual(['L1','L2']);
+  expect(parse([])).toEqual([]);
+  expect(parse([raw(),liveRaw({ledger_id:'L2'})]).map(e=>e.ledger_id)).toEqual(['L1','L2']);
  });
  it('structural refusals are gold_invalid',()=>{
   const bad:Record<string,unknown>[]=[raw({approval_ref:''}),raw({approval_ref:undefined}),raw({from_setup_sha256:undefined}),raw({to_setup_sha256:'x'}),raw({from_state_rev:1}),
    liveRaw({to_state_rev:undefined}),liveRaw({from_setup_sha256:S}),raw({before_hash:'abc'}),raw({to_code:'z'.repeat(40)}),raw({reason_code:'because'}),raw({changed_fields:[]}),
    raw({evidence:{pr:12}}),liveRaw({evidence:{}}),raw({added_at:'never'}),raw({mode:'both'})];
-  for(const b of bad){for(const k of Object.keys(b))if(b[k]===undefined)delete b[k];expect(code(()=>parseLedger([b]))).toBe('gold_invalid');}
-  expect(code(()=>parseLedger([raw(),raw()]))).toBe('gold_invalid');   // duplicate ledger_id
-  expect(code(()=>parseLedger({}))).toBe('gold_invalid');
+  for(const b of bad){for(const k of Object.keys(b))if(b[k]===undefined)delete b[k];expect(code(()=>parse([b]))).toBe('gold_invalid');}
+  expect(code(()=>parse([raw(),raw()]))).toBe('gold_invalid');   // duplicate ledger_id
+  expect(code(()=>parse({}))).toBe('gold_invalid');
+ });
+ it('policy: implementer / padded / unknown / non-covering approvers, bad ref, earlier approved_at, extra key are gold_invalid',()=>{
+  const bad=[raw({approved_by:'Claude-Code'}),raw({approved_by:' codex '}),raw({approved_by:'nobody'}),raw({approved_by:'macro-only'}),raw({approval_ref:'https://example.com/pull/1'}),
+   raw({approval_ref:'https://github.com/a/b/pull/1#x'}),raw({approved_at:'2026-11-05T00:00:00Z'}),raw({surprise:1})];
+  for(const b of bad)expect(code(()=>parse([b]))).toBe('gold_invalid');
+  expect(code(()=>parse([raw({approved_by:' Owner ',approval_ref:'https://github.com/a/b/pull/1'})]))).toBe('ok');
+  expect(code(()=>parseLedger([raw({approved_by:'ci-bot'})],{...POLICY,implementers:['ci-bot']}))).toBe('gold_invalid');
+ });
+ it('self-approval compares trimmed lowercase ids',()=>{
+  const [e]=parse([raw({added_by:' OWNER '})]);
+  expect(isSelfApproved(e)).toBe(true);
  });
  it('a self-approved entry parses and is flagged',()=>{
-  const [e]=parseLedger([raw({approved_by:'claude-code'})]);
+  const [e]=parse([raw({added_by:'owner'})]);
   expect(isSelfApproved(e)).toBe(true);
  });
 });
 
 describe('matchLedger',()=>{
- const entries=():LedgerEntry[]=>parseLedger([raw()]);
+ const entries=():LedgerEntry[]=>parse([raw()]);
  it('hit on the exact tuple and an equal changed_fields set (order-insensitive)',()=>{
   expect(matchLedger(entries(),diff())).toEqual({kind:'hit',ledger_ids:['L1']});
-  const two=parseLedger([raw({changed_fields:[...F,'facts[x].disclosure_seq']})]);
+  const two=parse([raw({changed_fields:[...F,'facts[x].disclosure_seq']})]);
   expect(matchLedger(two,diff({changed_fields:['facts[x].disclosure_seq',...F]}))).toEqual({kind:'hit',ledger_ids:['L1']});
  });
  it('partial when the tuple matches but the fields do not (missing or extra)',()=>{
   expect(matchLedger(entries(),diff({changed_fields:[...F,'facts[x].disclosure_seq']}))).toEqual({kind:'partial',ledger_ids:['L1']});
-  const extra=parseLedger([raw({changed_fields:[...F,'facts[x].is_current']})]);
+  const extra=parse([raw({changed_fields:[...F,'facts[x].is_current']})]);
   expect(matchLedger(extra,diff()).kind).toBe('partial');
  });
  it('self_approved when only a self-approved entry matches exactly',()=>{
-  expect(matchLedger(parseLedger([raw({approved_by:'claude-code'})]),diff())).toEqual({kind:'self_approved',ledger_ids:['L1']});
+  expect(matchLedger(parse([raw({added_by:'owner'})]),diff())).toEqual({kind:'self_approved',ledger_ids:['L1']});
  });
  it('none when any tuple member differs (each key), including a changed after_hash',()=>{
   const alt:Partial<ObservedDiff>[]=[{case_id:'c2'},{mode:'live'},{before_hash:H1},{after_hash:'c'.repeat(64)},{from_code:C2},{to_code:C1},{from_setup_sha256:'6'.repeat(64)},{to_setup_sha256:'6'.repeat(64)}];
   for(const a of alt)expect(matchLedger(entries(),diff(a)).kind).toBe('none');
  });
  it('live entries match on from/to_state_rev; a null current rev never matches',()=>{
-  const live=parseLedger([liveRaw()]);
+  const live=parse([liveRaw()]);
   const d=diff({mode:'live',from_setup_sha256:undefined,to_setup_sha256:undefined,from_state_rev:12,to_state_rev:15});
   expect(matchLedger(live,d).kind).toBe('hit');
   expect(matchLedger(live,{...d,to_state_rev:16}).kind).toBe('none');

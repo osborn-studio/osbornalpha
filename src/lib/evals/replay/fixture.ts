@@ -27,8 +27,13 @@ export interface ReplayFile{schema_version:1;module:'facts';mode:ReplayMode;case
 export const isDraft=(c:ReplayCase|DraftReplayCase):c is DraftReplayCase=>c.expected===null;
 const HEX64=/^[0-9a-f]{64}$/,HEX40=/^[0-9a-f]{40}$/,DAY=/^\d{4}-\d{2}-\d{2}$/,CASE_ID=/^[a-z0-9][a-z0-9._:\/-]{0,199}$/;
 const DURATIONS=new Set(['3M','6M','9M','12M','INSTANT']);
+const METRIC_DURATIONS=new Set([...DURATIONS,'TTM']);   // metrics requests may also filter TTM rows
 const isObj=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
-const isDay=(v:unknown):v is string=>typeof v==='string'&&DAY.test(v)&&new Date(`${v}T00:00:00Z`).toISOString().slice(0,10)===v;
+const isDay=(v:unknown):v is string=>{
+ if(typeof v!=='string'||!DAY.test(v))return false;
+ const t=Date.parse(`${v}T00:00:00Z`);
+ return !Number.isNaN(t)&&new Date(t).toISOString().slice(0,10)===v;   // 2026-13-01 / 2026-02-30 → false, never a RangeError
+};
 const isTs=(v:unknown):v is string=>typeof v==='string'&&!Number.isNaN(Date.parse(v));
 const uniqueStrings=(v:unknown):v is string[]=>Array.isArray(v)&&v.every(x=>typeof x==='string')&&new Set(v).size===v.length;
 
@@ -41,11 +46,12 @@ function parseRequest(v:unknown,fail:(f:string)=>never):ReplayRequest{
  if(iss.cik===undefined&&iss.ticker===undefined)return fail('request.issuer');
  if(!uniqueStrings(v.concepts)||!v.concepts.every(isConceptId))return fail('request.concepts');
  if(!isDay(v.asOf))return fail('request.asOf');
- if(v.durations!==undefined&&!(uniqueStrings(v.durations)&&v.durations.every(d=>DURATIONS.has(d))))return fail('request.durations');
  const names=new Set(metricNames(iss.market));
  if(v.metrics!==undefined&&!(uniqueStrings(v.metrics)&&v.metrics.every(m=>names.has(m))))return fail('request.metrics');
  const metrics=(v.metrics as string[]|undefined)??[];
  if(metrics.length>0?v.concepts.length>0:v.concepts.length===0)return fail('request.concepts_xor_metrics');
+ const allowed=metrics.length>0?METRIC_DURATIONS:DURATIONS;
+ if(v.durations!==undefined&&!(uniqueStrings(v.durations)&&v.durations.every(d=>allowed.has(d))))return fail('request.durations');
  return {issuer:{market:iss.market,...(iss.cik!==undefined?{cik:iss.cik as string}:{}),...(iss.ticker!==undefined?{ticker:iss.ticker as string}:{})},concepts:v.concepts,asOf:v.asOf,
   ...(v.durations!==undefined?{durations:v.durations as string[]}:{}),...(v.metrics!==undefined?{metrics}:{})};
 }

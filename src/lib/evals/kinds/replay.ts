@@ -18,7 +18,9 @@ import {matchLedger} from '../replay/ledger';
 import type {LedgerEntry,LedgerMatch,ObservedDiff} from '../replay/ledger';
 import type {CaseOutcome,CaseReport,EvalModule,GoldSet,Hint,Projection,ReplayRequest,SummaryContext,Thresholds} from '../types';
 
-export type ProjectFn=(request:ReplayRequest)=>Promise<Projection>;
+/** A project function may return the bare projection or {projection, stateRev} (projections/facts.ts::projectWithRev);
+ *  a live case then uses that stateRev for the ledger tuple, else ctx.stateRev. */
+export type ProjectFn=(request:ReplayRequest)=>Promise<Projection|{projection:Projection;stateRev:number|null}>;
 export type SetupCheck={ok:true;setupSha256:string}|{ok:false;mismatch:string[]};
 export interface ReplayContext{
  mode:ReplayMode;evaluatorCodeVersion:string;
@@ -63,10 +65,19 @@ async function one(c:ReplayCase,project:ProjectFn,ledger:LedgerEntry[],ctx:Repla
   if(s.setupSha256!==fc.setup.setup_sha256)return report(c,{result:'read_error',reason:'setup_mismatch'},{...detail,mismatch:['setup_sha256']});
   setupSha=s.setupSha256;
  }
- let actual:Projection;
- try{actual=await project(c.request);}
+ let actual:Projection;let projRev:number|null|undefined;
+ try{
+  const res=await project(c.request);
+  if('projection' in res){actual=res.projection;projRev=res.stateRev;}else actual=res;
+ }
  catch(e){return report(c,{result:'read_error',reason:e instanceof ProjectionError?e.reason:'read_failed'},{...detail,message:e instanceof Error?e.message:String(e)});}
  const after=projectionHash(actual);detail.after_hash=after;
+ // live: the state rev is bound to the projection that was read; reported for every outcome, identical included
+ let toRev:number|null=null;
+ if(ctx.mode==='live'){
+  toRev=projRev!==undefined?projRev:ctx.stateRev?await ctx.stateRev(c as LiveReplayCase):null;
+  detail.from_state_rev=(c as LiveReplayCase).recorded.state_rev;detail.to_state_rev=toRev;
+ }
  if(after===before)return report(c,{result:'identical'},detail);
  if(ctx.mode==='frozen'){
   const d=observedDiffOf(c,'frozen',actual,{code:ctx.evaluatorCodeVersion,setupSha256:setupSha});
@@ -76,14 +87,18 @@ async function one(c:ReplayCase,project:ProjectFn,ledger:LedgerEntry[],ctx:Repla
   return report(c,m.kind==='hit'?{result:'explained_diff',ledger_ids:m.ledger_ids}:{result:'unexplained_diff',reason:missReason(m,'diff')},detail);
  }
  const lc=c as LiveReplayCase;
- const toRev=ctx.stateRev?await ctx.stateRev(lc):null;
- detail.from_state_rev=lc.recorded.state_rev;detail.to_state_rev=toRev;
  const d=observedDiffOf(c,'live',actual,{code:ctx.evaluatorCodeVersion,stateRev:toRev});
  detail.changed_fields=d.changed_fields;
  const m=matchLedger(ledger,d);
  detail.ledger=m;
  const hints=ctx.hints?await ctx.hints(c.request,lc.recorded.at):null;
- if(hints!==null&&hints.length>0)return report(c,{result:'data_drift',ledger_ids:m.kind==='hit'?m.ledger_ids:[],hints},detail);
+ if(hints!==null&&hints.length>0){
+  // a ledger miss under privileged hints keeps its reason for the audit trail (summary still counts [] as unexplained)
+  if(m.kind!=='hit')detail.unexplained_reason=missReason(m,'diff');
+  return report(c,{result:'data_drift',ledger_ids:m.kind==='hit'?m.ledger_ids:[],hints},detail);
+ }
+ // RECORDED DEVIATION (spec §18): an unprivileged live run (no hint reader) accepts an exact, independently approved
+ // ledger hit as explained_diff, although it cannot see the hints that would make it data_drift.
  if(m.kind==='hit')return report(c,{result:'explained_diff',ledger_ids:m.ledger_ids},detail);
  return report(c,{result:'unexplained_diff',reason:missReason(m,hints===null?'no_hints':'diff')},detail);
 }

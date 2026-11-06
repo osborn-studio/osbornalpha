@@ -10,6 +10,7 @@
 // to the observed set; the same tuple with other fields is partial → unexplained_diff(partial_ledger).
 import {readFileSync} from 'node:fs';
 import {EvalError} from '../errors';
+import type {EvalModule,Recorder} from '../types';
 import type {ReplayMode} from './fixture';
 
 export const LEDGER_REASONS=['late_filing','quarantine_resolved','mapping_gen_upgrade','formula_version_change','ticker_reassignment','bug_fixed'] as const;
@@ -32,15 +33,26 @@ const isTs=(v:unknown):v is string=>typeof v==='string'&&!Number.isNaN(Date.pars
 const isRev=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
 const hex=(re:RegExp,v:unknown)=>typeof v==='string'&&re.test(v);
 
-export const isSelfApproved=(e:LedgerEntry):boolean=>e.approved_by===e.added_by;
+const norm=(v:string)=>v.trim().toLowerCase();
+export const isSelfApproved=(e:LedgerEntry):boolean=>norm(e.approved_by)===norm(e.added_by);
 
-export function parseLedger(raw:unknown):LedgerEntry[]{
+/** Injected policy (no file reads here; callers pass loadRecorders(root).recorders). The approver must be a
+ *  recorder covering `module` and not one of `implementers` (ids compared trimmed + lowercased). */
+export interface LedgerPolicy{recorders:Recorder[];implementers?:string[];module?:EvalModule}
+export const DEFAULT_IMPLEMENTERS=['claude-code','codex'];
+const REF=/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(#pullrequestreview-\d+)?$/;
+const KEYS=new Set(['ledger_id','case_id','mode','changed_fields','before_hash','after_hash','from_code','to_code','from_state_rev','to_state_rev','from_setup_sha256','to_setup_sha256','reason_code','evidence','added_by','added_at','approved_by','approval_ref','approved_at']);
+
+export function parseLedger(raw:unknown,policy:LedgerPolicy):LedgerEntry[]{
+ const mod=policy.module??'facts';
+ const implementers=new Set((policy.implementers??DEFAULT_IMPLEMENTERS).map(norm));
  if(!Array.isArray(raw))throw new EvalError('gold_invalid','explanations.json: expected an array',{file:'explanations.json'});
  const seen=new Set<string>();
  return raw.map((e,i)=>{
   const id=isObj(e)&&typeof e.ledger_id==='string'?e.ledger_id:null;
   const bad=(field:string):never=>{throw new EvalError('gold_invalid',`explanations.json[${i}]: ${field}`,{file:'explanations.json',index:i,ledger_id:id,field});};
   if(!isObj(e))return bad('entry');
+  for(const k of Object.keys(e))if(!KEYS.has(k))return bad(`unknown_key:${k}`);
   if(!nonEmpty(e.ledger_id))return bad('ledger_id');
   if(seen.has(e.ledger_id))return bad('ledger_id_duplicate');seen.add(e.ledger_id);
   if(!nonEmpty(e.case_id))return bad('case_id');
@@ -65,18 +77,21 @@ export function parseLedger(raw:unknown):LedgerEntry[]{
   if(e.reason_code==='bug_fixed'&&!(typeof ev.pr==='number'&&Number.isSafeInteger(ev.pr)&&ev.pr>0&&nonEmpty(ev.regression_test)))return bad('evidence.bug_fixed');
   if(!nonEmpty(e.added_by))return bad('added_by');
   if(!nonEmpty(e.approved_by))return bad('approved_by');
-  if(!nonEmpty(e.approval_ref))return bad('approval_ref');
+  if(!nonEmpty(e.approval_ref)||!REF.test(e.approval_ref))return bad('approval_ref');
   if(!isTs(e.added_at))return bad('added_at');
-  if(!isTs(e.approved_at))return bad('approved_at');
+  if(!isTs(e.approved_at)||Date.parse(e.approved_at)<Date.parse(e.added_at))return bad('approved_at');
+  const approver=norm(e.approved_by);
+  if(implementers.has(approver))return bad('approved_by_is_implementer');
+  if(!policy.recorders.some(r=>norm(r.id)===approver&&r.modules.includes(mod)))return bad('approved_by_not_recorder');
   return e as unknown as LedgerEntry;
  });
 }
 
-export function loadLedger(path:string):LedgerEntry[]{
+export function loadLedger(path:string,policy:LedgerPolicy):LedgerEntry[]{
  let raw:unknown;
  try{raw=JSON.parse(readFileSync(path,'utf8'));}
  catch(err){throw new EvalError('gold_invalid',`${path}: unreadable (${err instanceof Error?err.message:String(err)})`,{file:path});}
- return parseLedger(raw);
+ return parseLedger(raw,policy);
 }
 
 const sameTuple=(e:LedgerEntry,d:ObservedDiff)=>e.case_id===d.case_id&&e.mode===d.mode&&e.before_hash===d.before_hash&&e.after_hash===d.after_hash&&e.from_code===d.from_code&&e.to_code===d.to_code

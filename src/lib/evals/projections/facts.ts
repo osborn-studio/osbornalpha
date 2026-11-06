@@ -8,7 +8,7 @@
 // ProjectionError(reason) (subject_unresolved, truncated, projection_join_missing) that kinds/replay.ts turns
 // into read_error(reason). projectFactsRouteBody / projectMetricsRouteBody compute the same projection from
 // the public route JSON (route-equivalence test; later the --http smoke). diffProjections names changes as
-// facts[<concept>/<period_start>..<period_end>/<duration>/<unit>/<available_date>/<source_ref>].<field> or
+// facts[<concept>/<period_start>..<period_end>/<duration>/<unit>/<consolidation>/<available_date>/<source_ref>].<field> or
 // metrics[<metric>/<period_start>..<period_end>/<duration>/<basis>/<formula_version>].<field>; null is the
 // empty segment; a one-sided row is the bare facts[<id>] path; a module change is 'module'. All string
 // ordering is code-unit (C collation) order.
@@ -58,9 +58,11 @@ export function factProjectionRow(r:FactRow,sourceRef:string):ProjectionRow{
   available_date:r.available_date,source_ref:sourceRef,disclosure_seq:r.disclosure_seq??null,is_current:r.is_current??null,is_revision:r.is_revision??null};
 }
 
-export async function projectFacts(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>{
+export interface ProjectionWithRev{projection:Projection;stateRev:number|null}
+
+async function factsOnce(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<ProjectionWithRev>{
  const ref=await referenced(deps,request,today);
- if(request.concepts.length===0)return {module:'facts',rows:[]};
+ if(request.concepts.length===0)return {projection:{module:'facts',rows:[]},stateRev:null};
  const env=await deps.db.readFacts(ref.issuerId,ref.market,{concepts:[...request.concepts],asOf:request.asOf,history:true});
  if(env.truncated)throw new ProjectionError('truncated');
  const durations=durationFilter(request);
@@ -70,13 +72,14 @@ export async function projectFacts(deps:ProjectionDeps,request:ReplayRequest,tod
   if(!f)throw new ProjectionError('projection_join_missing',`filing ${r.filing_id} of fact ${r.fact_id}`);
   return factProjectionRow(r,f.source_ref);
  });
- return {module:'facts',rows:sortFactRows(rows)};
+ return {projection:{module:'facts',rows:sortFactRows(rows)},stateRev:env.stateRev};
 }
+export const projectFacts=async(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>=>(await factsOnce(deps,request,today)).projection;
 
-export async function projectMetrics(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>{
+async function metricsOnce(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<ProjectionWithRev>{
  const ref=await referenced(deps,request,today);
  const wanted=new Set(request.metrics??[]);
- if(wanted.size===0)return {module:'metrics',rows:[]};
+ if(wanted.size===0)return {projection:{module:'metrics',rows:[]},stateRev:null};
  const env=await deps.db.readFacts(ref.issuerId,ref.market,{concepts:[...DERIVE_CONCEPTS[ref.market]],asOf:request.asOf,history:true});
  if(env.truncated)throw new ProjectionError('truncated');
  const durations=durationFilter(request);
@@ -88,14 +91,35 @@ export async function projectMetrics(deps:ProjectionDeps,request:ReplayRequest,t
   inputs:m.inputs.map((i):ProjectionRow=>{
    const f=facts.get(i.fact_id);const g=f?filings.get(f.filing_id):undefined;
    if(!f||!g)throw new ProjectionError('projection_join_missing',`input ${i.fact_id} of ${m.metric}`);
-   return {concept:i.concept,period_end:f.period_end,source_ref:g.source_ref};
+   // the joined input must be the same ok fact of the same issuer/market, in a filing of that issuer at the same mapping generation
+   if(f.status!=='ok'||f.issuer_id!==ref.issuerId||f.market!==ref.market||g.issuer_id!==ref.issuerId||g.market!==ref.market||f.mapping_gen!==g.mapping_gen)
+    throw new ProjectionError('projection_join_missing',`input ${i.fact_id} of ${m.metric} fails the join checks`);
+   return {concept:i.concept,period_end:f.period_end,source_ref:g.source_ref,
+    ...(i.quarter?{quarter:`${i.quarter[0]}~${i.quarter[1]}`}:{}),...(i.ytd_rule?{ytd_rule:i.ytd_rule}:{})};
   })}));
- return {module:'metrics',rows:sortMetricRows(rows)};
+ return {projection:{module:'metrics',rows:sortMetricRows(rows)},stateRev:env.stateRev};
 }
+export const projectMetrics=async(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>=>(await metricsOnce(deps,request,today)).projection;
 
 /** A request with metrics is a metrics projection (concepts must then be []); otherwise a facts projection. */
-export const projectRequest=(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>=>
- request.metrics&&request.metrics.length>0?projectMetrics(deps,request,today):projectFacts(deps,request,today);
+export const projectRequest=async(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<Projection>=>(await projectWithRev(deps,request,today)).projection;
+
+/** The projection plus the fact_state_rev it was read at. After building, the rev is probed again; if it moved
+ *  the projection is rebuilt once, and a second disagreement is read_error(read_failed, unstable_state_rev). */
+export async function projectWithRev(deps:ProjectionDeps,request:ReplayRequest,today:string):Promise<ProjectionWithRev>{
+ const once=()=>request.metrics&&request.metrics.length>0?metricsOnce(deps,request,today):factsOnce(deps,request,today);
+ const probe=async():Promise<number|null>=>{
+  const ref=await referenced(deps,request,today);
+  const c=request.concepts[0]??DERIVE_CONCEPTS[ref.market][0];
+  return (await deps.db.readFacts(ref.issuerId,ref.market,{concepts:[c],asOf:request.asOf,history:true,limit:1})).stateRev;
+ };
+ for(let attempt=0;attempt<2;attempt++){
+  const r=await once();
+  if(r.stateRev===null)return r;
+  if(await probe()===r.stateRev)return r;
+ }
+ throw new ProjectionError('read_failed','unstable_state_rev');
+}
 
 /** Public facts route body (concepts or factIds mode); consolidation is not in the public shape and is always 'consolidated' (FactInsert). */
 export interface FactsRouteBody{
@@ -115,7 +139,7 @@ export function projectFactsRouteBody(body:FactsRouteBody):Projection{
 }
 export interface MetricsRouteBody{
  truncated:boolean;formulaVersion:string;
- metrics:{metric:string;periodStart:string;periodEnd:string;duration:string;value:string;unit:string;basis:string;inputs:{fact_id:string;concept:string}[]}[];
+ metrics:{metric:string;periodStart:string;periodEnd:string;duration:string;value:string;unit:string;basis:string;inputs:{fact_id:string;concept:string;quarter?:string;ytd_rule?:string}[]}[];
 }
 /** evidence = the facts route in factIds mode for every input fact id (periodEnd + filing sourceRef). */
 export function projectMetricsRouteBody(body:MetricsRouteBody,evidence:FactsRouteBody):Projection{
@@ -126,14 +150,14 @@ export function projectMetricsRouteBody(body:MetricsRouteBody,evidence:FactsRout
   inputs:m.inputs.map((i):ProjectionRow=>{
    const f=facts.get(i.fact_id);const src=f?refs.get(f.filingId):undefined;
    if(!f||src===undefined)throw new ProjectionError('projection_join_missing',`input ${i.fact_id}`);
-   return {concept:i.concept,period_end:f.periodEnd,source_ref:src};
+   return {concept:i.concept,period_end:f.periodEnd,source_ref:src,...(i.quarter?{quarter:i.quarter}:{}),...(i.ytd_rule?{ytd_rule:i.ytd_rule}:{})};
   })})))};
 }
 
 export function rowIdentity(module:EvalModule,r:ProjectionRow):string{
  return module==='metrics'
   ?`${seg(r.metric)}/${seg(r.period_start)}..${seg(r.period_end)}/${seg(r.duration)}/${seg(r.basis)}/${seg(r.formula_version)}`
-  :`${seg(r.concept)}/${seg(r.period_start)}..${seg(r.period_end)}/${seg(r.duration)}/${seg(r.unit)}/${seg(r.available_date)}/${seg(r.source_ref)}`;
+  :`${seg(r.concept)}/${seg(r.period_start)}..${seg(r.period_end)}/${seg(r.duration)}/${seg(r.unit)}/${seg(r.consolidation)}/${seg(r.available_date)}/${seg(r.source_ref)}`;
 }
 function indexed(p:Projection):Map<string,ProjectionRow>{
  const out=new Map<string,ProjectionRow>();const seen=new Map<string,number>();
