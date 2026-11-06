@@ -106,3 +106,31 @@ describe('applyIdentifierPlan · evidence identity',()=>{
   expect(shas).toEqual(['c'.repeat(64),'e'.repeat(64)]);
  });
 });
+
+describe('applyIdentifierPlan · follow-up claims',()=>{
+ const hkRes={job,status:'ok' as const,records:[rec({ticker:'700',exchCode:'HK',figi:'BBG000TENCT1',compositeFIGI:'BBG000TENCT1'})],evidence:{request_sha256:'b'.repeat(64),response_sha256:'c'.repeat(64),index:0}};
+ const hkPlan=()=>planIdentifierWrites(input({isin:null,figi:null},{stages:new Set(['A','B','D']),universe:new Set(['00700.HK']),
+  openRows:[{issuer_id:I1,ticker:'00700.HK',valid_from:'2026-01-02',isin:null,figi:null,provenance:{}}],
+  isinResults:new Map([['US0378331005',hkRes]]),hkex:new Map([['00700',{isin:'KYG875721634',file:'list_of_securities',sha256:'d'.repeat(64),row:5}]])}));
+ it('drops follow-ups when another ISIN was stored meanwhile (conflict)',async()=>{
+  const c=await setup({ticker:'00700.HK',isin:'KYG000000000'});
+  await applyIdentifierPlan(c,hkPlan(),opts);
+  expect(c.rows('issuer_identifier_claims').map(x=>[x.op,x.value])).toEqual([['correct_identifier','KYG875721634']]);
+ });
+ it('drops follow-ups when the ISIN write violates exclusion',async()=>{
+  const c=await setup({ticker:'00700.HK'});
+  const failing:TableClient={...c,rpc:async(fn,a)=>{
+   if(fn==='set_security_identifier'&&a.p_column==='isin')throw new TableError('rpc','set_security_identifier','exclusion','23P01');
+   return c.rpc(fn,a);
+  }};
+  await applyIdentifierPlan(failing,hkPlan(),opts);
+  expect(c.rows('issuer_identifier_claims').map(x=>[x.op,x.value])).toEqual([['set_identifier','KYG875721634']]);
+ });
+ it('a conflict whose re-read value equals the planned one counts as a duplicate and files the follow-ups',async()=>{
+  const c=await setup({ticker:'00700.HK',isin:'KYG875721634'});
+  const racy:TableClient={...c,rpc:async(fn,a)=>(fn==='set_security_identifier'&&a.p_column==='isin'?'conflict':c.rpc(fn,a))};
+  const res=await applyIdentifierPlan(racy,hkPlan(),opts);
+  expect(res.counts.failed).toBe(0);
+  expect(c.rows('issuer_identifier_claims').map(x=>[x.op,x.value])).toEqual([['correct_identifier','US0378331005']]);
+ });
+});

@@ -5,7 +5,9 @@
 // quarantines and HKEX-vs-GLEIF text reconciliations. A stored value is never overwritten: a
 // different value becomes correct_identifier. Several candidate values for one row/column are
 // ambiguous and only produce claims. HK tickers found for an issuer that holds A shares are left
-// to link-ah (spec §4.2.2 rule 1; contract issue 5).
+// to link-ah (spec §4.2.2 rule 1; contract issue 5). FIGI candidates are aggregated per target
+// security across all results before any decision; HKEX-vs-GLEIF corrections are resolved against
+// the ISIN actually stored (or filed by apply once the HKEX write lands).
 import type {ClaimInput} from '../claims';
 import {sanitizeProvenance} from '../provenance';
 import type {ClaimDetail,ClaimEvidence,ClaimIdType,ClaimOp,EvidenceKind} from '../types';
@@ -57,6 +59,7 @@ export function planIdentifierWrites(input:PlanInput):IdentifierPlan{
  const out:IdentifierPlan={writes:[],claims:[],quarantines:[],recons:[],duplicates:0,skipped:[],figiMissing:[],ahCandidates:[]};
  const runIds=new Set(input.issuers.map(i=>i.issuer_id));
  const runRows=input.openRows.filter(r=>runIds.has(r.issuer_id));
+ const runRowByKey=new Map(runRows.map(r=>[`${r.issuer_id}|${r.ticker}`,r]));
  const openOwner=new Map(input.openRows.map(r=>[r.ticker,r.issuer_id]));
  const holdsA=new Set(input.openRows.filter(r=>/\.(SH|SZ)$/.test(r.ticker)).map(r=>r.issuer_id));
  const proposals=new Map<string,{row:SecRow;col:IdColumn;list:Proposal[]}>();
@@ -72,13 +75,13 @@ export function planIdentifierWrites(input:PlanInput):IdentifierPlan{
    schema:'claim/1',evidence_kind:c.kind,target:c.target,params:c.params,evidence:c.evidence,sources:c.sources??[c.evidence],...(c.written?{provenance_written:c.written}:{}),
   }});
  };
- const figiProposal=(r:Extract<FigiJobResult,{status:'ok'}>,g:FigiGroup):Proposal=>({
+ const openfigiEvidence=(r:OkResult):ClaimEvidence=>({source:'openfigi',as_of:asOf,evidence_sha256:r.evidence.response_sha256,locator:`openfigi:${r.evidence.response_sha256}#${r.evidence.index}`});
+ const figiProposal=(r:OkResult,g:FigiGroup):Proposal=>({
   value:g.figi,source:'openfigi',kind:'provider_mapping',
-  evidence:{source:'openfigi',as_of:asOf,evidence_sha256:r.evidence.response_sha256,locator:`openfigi:${r.evidence.response_sha256}#${r.evidence.index}`},
+  evidence:openfigiEvidence(r),
   prov:{source:'openfigi',as_of:asOf,evidence_sha256:r.evidence.response_sha256,job:jobOf(r.job),level:g.level},
  });
- const openfigiEvidence=(r:OkResult):ClaimEvidence=>({source:'openfigi',as_of:asOf,evidence_sha256:r.evidence.response_sha256,locator:`openfigi:${r.evidence.response_sha256}#${r.evidence.index}`});
- // FIGI candidates are collected per target security across every result (all ISINs, stage C) and decided once,
+  // FIGI candidates are collected per target security across every result (all ISINs, stage C) and decided once,
  // so the order of ISIN iteration never changes the outcome (spec §4.1.2; Codex review P1).
  const addFigi=(row:SecRow,r:OkResult,groups:FigiGroup[])=>{
   const e=figiCands.get(keyOf(row))??{row,groups:new Map()};
@@ -117,7 +120,7 @@ export function planIdentifierWrites(input:PlanInput):IdentifierPlan{
     const evidence:ClaimEvidence={source:'gleif_openfigi',as_of:asOf,evidence_sha256:input.gleif.sha256,locator};
     const isinProposal:Proposal={value:isin,source:'gleif_openfigi',kind:'provider_mapping',evidence,sources:[evidence,openfigiEvidence(r)],prov:{source:'gleif_openfigi',as_of:asOf,evidence_sha256:input.gleif.sha256,locator}};
     for(const c of g.candidates){
-     const own=runRows.find(x=>x.issuer_id===iss.issuer_id&&x.ticker===c.ticker);
+     const own=runRowByKey.get(`${iss.issuer_id}|${c.ticker}`);
      if(own){
       propose(own,'isin',isinProposal);
       addFigi(own,r,c.groups);
@@ -186,11 +189,12 @@ export function planIdentifierWrites(input:PlanInput):IdentifierPlan{
   const current=row[col];
   if(list.length>1){
    out.skipped.push(`ambiguous_${col}`);
+   const candidates=list.map(p=>({[col]:p.value}));
    for(const p of list){
     if(current===p.value)continue;
     const op:Op=current===null?'set_identifier':'correct_identifier';
     claim({issuer_id:row.issuer_id,id_type:col,value:p.value,source:p.source,op,kind:p.kind,target:targetOf(row),
-     params:op==='set_identifier'?{}:{expected_current:current,new_value:p.value},evidence:p.evidence,sources:p.sources,written:sanitizeProvenance({[col]:p.prov})});
+     params:op==='set_identifier'?{candidates}:{expected_current:current,new_value:p.value,candidates},evidence:p.evidence,sources:p.sources,written:sanitizeProvenance({[col]:p.prov})});
    }
    continue;
   }

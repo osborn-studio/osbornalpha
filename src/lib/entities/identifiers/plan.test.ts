@@ -149,4 +149,16 @@ describe('planIdentifierWrites · review fixes',()=>{
   const c=p.claims.find(x=>x.id_type==='isin')!;
   expect(c.detail.sources.map(s=>[s.source,s.evidence_sha256])).toEqual([['gleif_openfigi',GSHA],['openfigi',RSHA]]);
  });
+ it('stored ISIN equal to HKEX while GLEIF differs: the correction is filed now against the stored value',()=>{
+  const res=okR(AAPL_JOB,[rec({ticker:'700',exchCode:'HK',figi:'BBG000TENCT1',compositeFIGI:'BBG000TENCT1'})]);
+  const hkex=new Map([['00700',{isin:'KYG875721634',file:'list_of_securities' as const,sha256:'d'.repeat(64),row:5}]]);
+  const p=planIdentifierWrites(base({stages:new Set(['A','B','D']),openRows:[row({ticker:'00700.HK',isin:'KYG875721634',provenance:{isin:{source:'hkex_list_of_securities'}}})],isinResults:new Map([['US0378331005',res]]),hkex}));
+  expect(p.claims.map(c=>[c.op,c.value,c.detail.params])).toEqual([['correct_identifier','US0378331005',{expected_current:'KYG875721634',new_value:'US0378331005'}]]);
+  expect(p.writes.filter(w=>w.column==='isin')).toEqual([]);
+ });
+ it('ambiguous ISIN claims list the candidates like FIGI claims',()=>{
+  const p=planIdentifierWrites(two(['US0378331005',ISIN_B]));
+  const isin=p.claims.filter(c=>c.id_type==='isin');
+  expect(isin.map(c=>c.detail.params)).toEqual([{candidates:[{isin:'US0378331005'},{isin:ISIN_B}]},{candidates:[{isin:'US0378331005'},{isin:ISIN_B}]}]);
+ });
 });
