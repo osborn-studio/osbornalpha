@@ -25,7 +25,8 @@ export async function* filterGleifLines(lines:AsyncIterable<string>,leis:Readonl
  }
 }
 
-/** Header + candidate lines → validated subset. Throws invalid_schema (landed parser) on a wrong or missing header. */
+/** Header + candidate lines → validated subset. Throws invalid_schema (landed parser) on a wrong or missing header.
+ * A LEI whose every ISIN fails the check digit has no usable ISIN: it is absent from byLei, listed in `missing`, and its bad rows are in `invalidIsins`. */
 export function subsetForLeis(lines:Iterable<string>,leis:ReadonlySet<string>):GleifSubset{
  const {found}=selectIsinsForLeis(lines,new Set(leis));
  const byLei=new Map<string,string[]>();

@@ -19,6 +19,9 @@ const LIST=book([
  [2318,'PING AN','Equity','Equity Securities (Main Board)','500','CNE1000003X6'],
  ['04335','HKGB 2.48 2030','Debt Securities','Government Bonds','50000',''],
  ['ABC','BAD CODE','Equity','',null,null],
+ ['Legend: * = suspended'],
+ ['ACD','Aex - Clearing and Depository N.V.'],
+ ['XYZ','BAD CODE REAL ISIN','Equity','',null,'US88160R1014'],
  ['00005','HSBC HOLDINGS','Equity','','400','GB0005405280'],
 ]);
 
@@ -31,7 +34,8 @@ describe('parseHkexList',()=>{
    ['00700','TENCENT','Equity','KYG875721634'],['02318','PING AN','Equity','CNE1000003X6'],
    ['04335','HKGB 2.48 2030','Debt Securities',null],['00005','HSBC HOLDINGS','Equity',null],
   ]);
-  expect(p.rejected).toEqual([{row:8,reason:'invalid_stock_code'},{row:9,reason:'invalid_isin'}]);
+  expect(p.skipped).toEqual([{row:8,reason:'non_data'},{row:9,reason:'non_data'},{row:10,reason:'non_data'}]);   // empty-ISIN row with a non-numeric code, legend text, a legend table row
+  expect(p.rejected).toEqual([{row:11,reason:'invalid_stock_code'},{row:12,reason:'invalid_isin'}]);
   expect(p.sha256).toMatch(/^[0-9a-f]{64}$/);
  });
  it('accepts any column order and a file without an ISIN column',()=>{
@@ -51,10 +55,11 @@ describe('parseHkexList',()=>{
   expect(parseHkexList(patched,'list_of_securities').rows.map(r=>r.stockCode)).toEqual(['00001','00002','00003']);
  });
  it('reads the HKEX ISIN workbooks ("HK Stock Code" / "ISIN Code" / "Stocks" headers, repeated header rows, preamble)',()=>{
-  const p=parseHkexList(book([['ISINs assigned by Other Numbering Agencies'],[],['Stocks ','ISIN Code','HK Stock Code','Type '],['TENCENT HOLDINGS LIMITED','KYG875721634','00700','ORD SH'],['Stocks','ISIN Code','HK Stock Code','Type'],['AB&B BIO-TECH CO., LTD. JS','CNE1000071P9','02627','ORD SH']]),'isin_other_agencies');
+  const p=parseHkexList(book([['ISINs assigned by Other Numbering Agencies'],[],['Stocks ','ISIN Code','HK Stock Code','Type '],['TENCENT HOLDINGS LIMITED','KYG875721634','00700','ORD SH'],['Stocks','ISIN Code','HK Stock Code','Type'],['AB&B BIO-TECH CO., LTD. JS','CNE1000071P9','02627','ORD SH'],['ASIA-PAC FINANCIAL RTS','Not Available','08555','RTS'],['X','  n/a ','08556','RTS'],['Y','-','08557','RTS'],['Z',null,'08558','RTS']]),'isin_other_agencies');
   expect(p.columns).toEqual({stockCode:2,name:0,category:null,isin:1});
-  expect(p.rows.map(r=>[r.stockCode,r.name,r.isin])).toEqual([['00700','TENCENT HOLDINGS LIMITED','KYG875721634'],['02627','AB&B BIO-TECH CO., LTD. JS','CNE1000071P9']]);
-  expect(p.rejected).toEqual([]);
+  expect(p.rows.map(r=>[r.stockCode,r.name,r.isin])).toEqual([['00700','TENCENT HOLDINGS LIMITED','KYG875721634'],['02627','AB&B BIO-TECH CO., LTD. JS','CNE1000071P9'],['08555','ASIA-PAC FINANCIAL RTS',null],['08556','X',null],['08557','Y',null],['08558','Z',null]]);
+  expect(p.rejected).toEqual([]);   // placeholders mean "no ISIN", not a malformed one
+  expect(p.skipped).toEqual([]);
  });
  it('fails with invalid_schema when no header row names "Stock Code"',()=>{
   expect(()=>parseHkexList(book([['Code','Name'],['00700','TENCENT']]),'list_of_securities')).toThrow('invalid_schema');
@@ -71,6 +76,14 @@ describe('mergeHkexIsins',()=>{
   expect(m.byCode.get('00941')).toMatchObject({isin:'HK0941009539',file:'isin_hkex'});
   expect(m.conflicts).toEqual([{stockCode:'00700',isins:[{file:'list_of_securities',isin:'KYG875721634'},{file:'isin_hkex',isin:'US88160R1014'}]}]);
   expect(HKEX_LIST_FILES.map(f=>f.id)).toEqual(['list_of_securities','isin_hkex','isin_other_agencies']);
+ });
+ it('drops superseded -OLD counters from the merge and lists them, so the live counter keeps the code',()=>{
+  const other=parseHkexList(book([['Stocks','ISIN Code','HK Stock Code'],['BEIJING DEEPZERO TECH CO., LTD.-OLD','CNE1000002H1','02938'],['BEIJING DEEPZERO TECH CO., LTD.','CNE1000003X6','02938'],['OLD ECONOMY LTD','KYG875721634','02939']]),'isin_other_agencies');
+  const m=mergeHkexIsins([other]);
+  expect(m.byCode.get('02938')).toMatchObject({isin:'CNE1000003X6'});
+  expect(m.byCode.get('02939')).toMatchObject({isin:'KYG875721634'});   // only a name ENDING in -OLD is superseded
+  expect(m.dropped).toEqual([{stockCode:'02938',file:'isin_other_agencies',row:2,name:'BEIJING DEEPZERO TECH CO., LTD.-OLD',reason:'superseded_counter'}]);
+  expect(m.conflicts).toEqual([]);
  });
  it('reports hasIsinColumn=false when no file carries ISINs',()=>{
   const m=mergeHkexIsins([parseHkexList(book([['Stock Code','Name of Securities'],['700','TENCENT']]),'list_of_securities')]);

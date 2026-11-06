@@ -21,6 +21,13 @@ describe('subsetForLeis',()=>{
   const b=subsetForLeis([LINES[0],...LINES.slice(1).reverse()],new Set([MSFT,APPLE]));
   expect(b.csv).toBe(a.csv);expect(b.sha256).toBe(a.sha256);
  });
+ it('reports a LEI in missing when every one of its ISINs fails the check digit',()=>{
+  const s=subsetForLeis([GLEIF_HEADER,`${APPLE},US0378331006`,`${APPLE},US5949181046`,`${MSFT},US5949181045`],new Set([APPLE,MSFT]));
+  expect([...s.byLei.keys()]).toEqual([MSFT]);
+  expect(s.missing).toEqual([APPLE]);
+  expect(s.invalidIsins).toEqual([`${APPLE},US0378331006`,`${APPLE},US5949181046`]);
+  expect(s.csv).toBe(`LEI,ISIN\n${MSFT},US5949181045\n`);
+ });
  it('rejects a wrong header with invalid_schema',()=>{
   expect(()=>subsetForLeis(['LEI;ISIN',`${APPLE};US0378331005`],new Set([APPLE]))).toThrow('invalid_schema');
   expect(()=>subsetForLeis([],new Set([APPLE]))).toThrow('invalid_schema');
