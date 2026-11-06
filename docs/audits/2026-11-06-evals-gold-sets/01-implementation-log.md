@@ -27,3 +27,10 @@
 - src/lib/evals/admin.ts (whitelist: run columns, §3.2 summary keys type-checked incl. coverage.evaluated_optional, case text columns + detail.locator/document_id; ≤ 100 case rows; gate_failing_30d = failed+incomplete+error in 30 days, global), GET /api/admin/evals, GET /api/admin/evals/[run_id].
 - Tests: exact key sets, sentinel 918273645.5 planted in summary extras and case detail never in responses or logs, 401/403 before the admin client, 400/404.
 - UI section and drawer: after the Claude Design canvas and plan 3 Task 19 (§0 R5-11).
+
+## Task 14 — dual_source, reference_regression (pure logic), kind registry
+
+- kinds/dual-source.ts: PairSource (read-only, injected), F6 recompares value_text, upstream non-comparison outcomes -> missing/read_error, disposition rule (natural_key + resolved status + chosen_fact_ids), same_feed -> adapter_check, relDiff conformance vectors (plan 3 half-away rounding vs F6 truncation).
+- kinds/reference.ts: strict ReferenceResult, ReadDeps reflection refusal, canary path (cases[] only), rel 0.01, ledger values must equal the compared values, referenceSummaryWriter(...).writeReferenceSummary as the only write path. reduce.ts::reduceForKind is the one fixture-authenticated reduction (Task 12 reuses it).
+- kinds/registry.ts (the one enablement table) + cli/run-cli.ts assertKindEnabled (after the --resume branch, before the runner lookup): dual_source (prerequisite: plan 3 merged) and reference_regression (prerequisite: macro migrations) -> kind_not_enabled, exit 2. Test asserts KIND_RUNNERS keys == enabled kinds.
+- No database tests (critical suites cannot skip; R5-12). kinds/ratio.ts is Task 15's, not built here.

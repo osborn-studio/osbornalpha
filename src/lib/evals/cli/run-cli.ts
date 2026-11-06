@@ -10,6 +10,7 @@ import {isAbsolute,relative,resolve} from 'node:path';
 import {sha256Hex} from '../canonical-json';
 import {EvalError,exitCodeOfError} from '../errors';
 import {checkLock,loadGoldSet} from '../gold/load';
+import {assertKindEnabled} from '../kinds/registry';
 import {writeReportFiles} from '../report';
 import {assertRunnable,runGoldSet} from '../run-gold-set';
 import {persistRun} from '../store';
@@ -138,6 +139,7 @@ export async function runCli(argv:string[],io:CliIo,deps:CliDeps=defaultCliDeps(
  let run:Pick<RunDeps,'store'|'close'>|null=null;
  try{
   if(args.resume!==undefined)return await resumeRun(args.resume,args,io,deps);
+  assertKindEnabled(args.kind);          // kinds/registry.ts is the one enablement table (Task 14)
   const runner=KIND_RUNNERS[args.kind];
   if(!runner)throw new EvalError('kind_not_enabled',`kind ${args.kind} is not enabled in this build`,{kind:args.kind});
   const started=await runner(args,deps);
