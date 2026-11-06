@@ -53,7 +53,13 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
   if(a.p_value===null||a.p_value===undefined)throw new TableError('rpc','patch_quarantine_detail','invalid_detail_key','22023');
   const row=rowsOf('dq_quarantine').find(r=>r.id===a.p_id);
   if(!row)return false;
-  row.detail={...(isObj(row.detail)?row.detail:{}),[key]:clone(a.p_value)};
+  const cur=isObj(row.detail)?row.detail:{};
+  // compare-and-set (Task 11 review, Codex P2): a given p_expect_hook_at must equal detail.hook.at, else nothing is written
+  if(a.p_expect_hook_at!==undefined&&a.p_expect_hook_at!==null){
+   const hook=isObj(cur.hook)?cur.hook:{};
+   if(hook.at===undefined||hook.at===null||String(hook.at)!==String(a.p_expect_hook_at))return 'stale';
+  }
+  row.detail={...cur,[key]:clone(a.p_value)};
   return true;
  },
  // plan audit round 3, R2: guarded ISIN/FIGI write + one provenance key merged (never replaced) in one step

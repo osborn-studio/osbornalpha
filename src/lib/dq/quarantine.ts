@@ -75,8 +75,10 @@ export async function listOpenQuarantine(client:TableClient,dataset?:string,limi
  * Sets ONE key of an item's detail — 'hook' or 'audit_written' — through the row-locking SQL function
  * patch_quarantine_detail (migration 20261107090000; plan audit round 1, P4). Every other detail key
  * (latest_result, chosen ids, …) and the resolution columns stay as the latest committed writer left
- * them. false = no such item. Needs client.rpc (callRpc: rpc_unavailable otherwise).
+ * them. false = no such item. With expectHookAt (compare-and-set, Task 11 review): 'stale' = detail.hook.at is no longer that value (a newer pending hook
+ * was committed), nothing written. Needs client.rpc (callRpc: rpc_unavailable otherwise).
  */
-export async function patchQuarantineDetail(client:TableClient,id:string,key:'hook'|'audit_written',value:unknown):Promise<boolean>{
- return (await callRpc(client,'patch_quarantine_detail',{p_id:id,p_key:key,p_value:value}))===true;
+export async function patchQuarantineDetail(client:TableClient,id:string,key:'hook'|'audit_written',value:unknown,expectHookAt?:string):Promise<boolean|'stale'>{
+ const r=await callRpc(client,'patch_quarantine_detail',{p_id:id,p_key:key,p_value:value,...(expectHookAt!==undefined?{p_expect_hook_at:expectHookAt}:{})});
+ return r==='stale'?'stale':r===true;
 }

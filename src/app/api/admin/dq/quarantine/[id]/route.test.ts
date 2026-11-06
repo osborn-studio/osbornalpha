@@ -231,7 +231,7 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
   it('passes chosen_candidate_index (ambiguous_value) and keep_fact_id (lineage_conflict) through, and audits the index and the adopted fact', async () => {
     mocks.requireAdmin.mockResolvedValue({ id: ADMIN });
     await facts3('ambiguous_value');
-    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, adoptedFactId: FACT_B, chosenFactIds: [FACT_B] });
+    mocks.resolveFacts.mockResolvedValueOnce({ outcome: 'resolved', hook: HOOK, adoptedFactId: FACT_B, chosenCandidateIndex: 1, chosenFactIds: [FACT_B] });
     const res = await json({ status: 'resolved_accept', chosen_candidate_index: 1 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: ID, outcome: 'resolved', hook: HOOK, promoted: null, skipped: null, chosen_fact_ids: [FACT_B], adopted_fact_id: FACT_B, chosen_candidate_index: 1 });
@@ -269,7 +269,7 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
   });
   it('maps SQL codes thrown past the resolver: conflict codes 409, choice codes 400, body {id, outcome, error}; unknown codes stay a 500', async () => {
     await facts3('lineage_conflict');
-    for (const code of ['use_dedicated_resolver', 'target_not_active', 'lineage_changed', 'scope_missing', 'conflict_exists', 'replay_required', 'filing_not_found', 'generation_moved', 'duplicate', 'stale_evaluation', 'batch_mismatch', 'not_passing', 'unresolved'] as const) {
+    for (const code of ['use_dedicated_resolver', 'target_not_active', 'lineage_changed', 'scope_missing', 'conflict_exists', 'replay_required', 'filing_not_found', 'generation_moved', 'duplicate', 'stale_evaluation', 'not_passing', 'unresolved'] as const) {
       mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError(code));
       const res = await json({ status: 'resolved_accept', keep_fact_id: FACT_A });
       expect(res.status).toBe(409);
@@ -283,8 +283,22 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     }
     expect(mocks.insert).not.toHaveBeenCalled();
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError('unknown', 'boom'));
-    expect((await json({ status: 'resolved_accept', keep_fact_id: FACT_A })).status).toBe(500);
+    for (const code of ['unknown', 'batch_mismatch'] as const) {
+      mocks.resolveFacts.mockRejectedValueOnce(new FactsDbError(code, 'boom'));
+      expect((await json({ status: 'resolved_accept', keep_fact_id: FACT_A })).status).toBe(500);
+    }
     spy.mockRestore();
+  });
+  it('review: a recovery retry reports and audits the PERSISTED index / adopted fact / keep, not the retry body', async () => {
+    mocks.requireAdmin.mockResolvedValue({ id: 'retrying-admin' });
+    await facts3('ambiguous_value');
+    mocks.resolveFacts.mockResolvedValueOnce({
+      outcome: 'hook_retried', hook: HOOK, adoptedFactId: FACT_B, chosenCandidateIndex: 0, chosenFactIds: [FACT_B], auditAs: 'resolved',
+      recovered: { resolvedBy: ADMIN, status: 'resolved_accept', chosenFactIds: [FACT_B], recoveredBy: 'retrying-admin', recoveredAt: HOOK.at },
+    });
+    const res = await json({ status: 'resolved_accept', chosen_candidate_index: 7 });
+    expect(await res.json()).toMatchObject({ chosen_candidate_index: 0, adopted_fact_id: FACT_B });
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ user_id: ADMIN, detail: { chosen_candidate_index: 0, adopted_fact_id: FACT_B, recovered_by: 'retrying-admin' } });
+    expect(mocks.insert.mock.calls[0][0].detail.chosen_candidate_index).not.toBe(7);
   });
 });

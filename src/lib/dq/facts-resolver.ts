@@ -52,6 +52,8 @@ export interface FactsResolveResult{outcome:FactsResolveOutcome;hook?:HookState;
  adoptedFactId?:string;
  restore?:{promoted:number;skipped:{fact_id:string;reason:string}[];restore_note?:'no_rows_promoted'};
  quarantined?:number;
+ /** the verdict's persisted choices (a retry reports these, never the retrying request's body) */
+ chosenCandidateIndex?:number;keepFactId?:string;
  /** What the route should audit: undefined = the outcome itself; null = nothing (retry of an already audited item). */
  auditAs?:'resolved'|'hook_retried'|null;
  /** Set when auditAs='resolved' on a retry: the audit row describes the PERSISTED resolution (original resolver, accept, committed ids); the retrying admin is recorded separately. */
@@ -100,18 +102,34 @@ function unfinished(item:Row):boolean{
 }
 
 /** Sets detail.hook alone through patchQuarantineDetail (row lock; plan audit P4): a concurrent verdict or result written meanwhile is kept. Never throws. */
-export async function writeHook(tables:TableClient,id:string,hook:HookState):Promise<HookState>{
+export async function writeHook(tables:TableClient,id:string,hook:HookState,expectAt?:string):Promise<HookState>{
+ return (await writeHookCas(tables,id,hook,expectAt)).hook;
+}
+/**
+ * writeHook with the compare-and-set outcome (Task 11 review, Codex P2). expectAt = the hook.at the caller observed before it
+ * materialised: when the item's hook.at has moved on (a restore / adoption / lineage verdict committed a newer pending hook meanwhile),
+ * nothing is written ('stale': the newer hook belongs to its own owner or the next scan) and the returned hook is a failed
+ * 'hook_superseded' that was NOT persisted.
+ */
+export async function writeHookCas(tables:TableClient,id:string,hook:HookState,expectAt?:string):Promise<{hook:HookState;result:'written'|'stale'|'write_failed'}>{
  try{
-  await patchQuarantineDetail(tables,id,'hook',hook);
-  return hook;
+  const r=await patchQuarantineDetail(tables,id,'hook',hook,expectAt);
+  if(r==='stale')return {hook:{stage:'materialize',state:'failed',at:hook.at,message:'hook_superseded'},result:'stale'};
+  return {hook,result:'written'};
  }catch(e){
   console.error('[admin/dq] hook write',e instanceof Error?e.message:String(e));
-  return hook.state==='done'?{stage:hook.stage,state:'failed',at:hook.at,message:'hook_write_failed'}:hook;
+  return {hook:hook.state==='done'?{stage:hook.stage,state:'failed',at:hook.at,message:'hook_write_failed'}:hook,result:'write_failed'};
  }
 }
 
 async function runHook(db:FactsDb,tables:TableClient,id:string,where:{issuer:string;market:Market}|null,now:()=>Date):Promise<HookState>{
  let hook:HookState;
+ // observe the item's pending hook BEFORE materialising; the done / failed write is fenced on it (writeHookCas)
+ let observed:string|undefined;
+ try{
+  const at=((((await tables.select(TABLE,{id},{limit:1}))[0]?.detail??{}) as {hook?:{at?:unknown}}).hook?.at);
+  if(typeof at==='string')observed=at;
+ }catch(e){console.error('[admin/dq] hook observe',e instanceof Error?e.message:String(e));}
  if(where===null)hook={stage:'materialize',state:'failed',at:now().toISOString(),message:'no_target'};
  else{
   try{await materialize(db,where.issuer,where.market);hook={stage:'done',state:'done',at:now().toISOString()};}
@@ -120,7 +138,7 @@ async function runHook(db:FactsDb,tables:TableClient,id:string,where:{issuer:str
    hook={stage:'materialize',state:'failed',at:now().toISOString(),message:e instanceof FactsDbError?e.code:'materialize_failed'};
   }
  }
- return writeHook(tables,id,hook);
+ return writeHook(tables,id,hook,observed);
 }
 
 /** Marks that the audit row of this resolution was written: detail.audit_written alone, through patchQuarantineDetail (plan audit P4). Best-effort; a missing mark only causes one extra audit row on retry. */
@@ -205,7 +223,7 @@ async function adopt(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsIn
  }catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
  // committed: nothing below may throw
  const hook=await runHook(db,tables,id,{issuer:out.issuerId,market:out.market},now);
- return {outcome:'resolved',hook,adoptedFactId:out.factId,chosenFactIds:[out.factId]};
+ return {outcome:'resolved',hook,adoptedFactId:out.factId,chosenCandidateIndex:index,chosenFactIds:[out.factId]};
 }
 
 async function restore(db:FactsDb,tables:TableClient,item:Row,input:ResolveFactsInput,now:()=>Date):Promise<FactsResolveResult>{
@@ -227,7 +245,7 @@ async function lineageVerdict(db:FactsDb,tables:TableClient,item:Row,input:Resol
  catch(e){const m=mapRefusal(e);if(m)return m;throw e;}
  const target=String(item.natural_key).split(':')[0];
  const hook=await runHook(db,tables,id,market?{issuer:target,market}:null,now);
- return {outcome:'resolved',hook,quarantined:r.quarantined,chosenFactIds:[keep]};
+ return {outcome:'resolved',hook,quarantined:r.quarantined,keepFactId:keep,chosenFactIds:[keep]};
 }
 
 /**
@@ -244,7 +262,14 @@ export async function resolveFactsItem(db:FactsDb,tables:TableClient,item:Row,in
    const ran=await runHook(db,tables,id,where,now);
    const persisted=detailOf(item).chosen_fact_ids;
    const chosenFactIds=Array.isArray(persisted)?persisted.map(String):typeof detailOf(item).adopted_fact_id==='string'?[String(detailOf(item).adopted_fact_id)]:[];
-   const base:FactsResolveResult={outcome:'hook_retried',hook:ran,chosenFactIds,auditAs:audited?(ran.state==='done'?'hook_retried':null):'resolved'};
+   const d=detailOf(item);const reason=String(item.reason_code);
+   // persisted verdict facts (Task 11 review, Codex P2): the response and the recovery audit describe what was committed, not this retry's body
+   const persistedChoice:Partial<FactsResolveResult>={
+    ...(reason==='ambiguous_value'&&typeof d.adopted_fact_id==='string'?{adoptedFactId:d.adopted_fact_id}:{}),
+    ...(reason==='ambiguous_value'&&Number.isInteger(d.chosen_candidate_index)?{chosenCandidateIndex:d.chosen_candidate_index as number}:{}),
+    ...(reason==='lineage_conflict'&&chosenFactIds.length===1?{keepFactId:chosenFactIds[0]}:{}),
+   };
+   const base:FactsResolveResult={outcome:'hook_retried',hook:ran,chosenFactIds,...persistedChoice,auditAs:audited?(ran.state==='done'?'hook_retried':null):'resolved'};
    if(audited)return base;
    return {...base,recovered:{resolvedBy:String(item.resolved_by),status:'resolved_accept',chosenFactIds,recoveredBy:input.resolvedBy,recoveredAt:now().toISOString()}};
   }

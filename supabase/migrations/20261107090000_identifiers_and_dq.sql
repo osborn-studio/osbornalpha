@@ -741,20 +741,27 @@ grant execute on function public.append_claim_evidence(uuid, text, text, text, t
 -- materialize hook state and the audit mark; quarantine.ts::patchQuarantineDetail). It locks the item and
 -- replaces ONLY the named key, so a concurrent apply_reconcile_result / restore_reconciled / adoption that
 -- rewrote latest_result, the chosen ids or the resolution columns is never rolled back to an older read.
--- Two keys only: 'hook' and 'audit_written'. false = no such item.
-create or replace function public.patch_quarantine_detail(p_id uuid, p_key text, p_value jsonb)
-returns boolean language plpgsql security definer set search_path = public as $$
+-- Two keys only: 'hook' and 'audit_written'. Returns jsonb: true = written, false = no such item, 'stale'
+-- = compare-and-set refused (Task 11 review, Codex P2): when p_expect_hook_at is given and the item's
+-- detail->'hook'->>'at' is distinct from it, a newer pending hook (a restore / adoption / lineage verdict
+-- committed after the caller observed the item) belongs to its own owner and nothing is written.
+create or replace function public.patch_quarantine_detail(p_id uuid, p_key text, p_value jsonb, p_expect_hook_at text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
 begin
   if p_key is null or p_key not in ('hook', 'audit_written') or p_value is null then
     raise exception 'invalid_detail_key' using errcode = '22023';
   end if;
   perform 1 from public.dq_quarantine where id = p_id for update;
-  if not found then return false; end if;
+  if not found then return to_jsonb(false); end if;
+  if p_expect_hook_at is not null
+     and (select detail->'hook'->>'at' from public.dq_quarantine where id = p_id) is distinct from p_expect_hook_at then
+    return to_jsonb('stale'::text);
+  end if;
   update public.dq_quarantine set detail = detail || jsonb_build_object(p_key, p_value) where id = p_id;
-  return true;
+  return to_jsonb(true);
 end $$;
-revoke execute on function public.patch_quarantine_detail(uuid, text, jsonb) from public, anon, authenticated;
-grant execute on function public.patch_quarantine_detail(uuid, text, jsonb) to service_role;
+revoke execute on function public.patch_quarantine_detail(uuid, text, jsonb, text) from public, anon, authenticated;
+grant execute on function public.patch_quarantine_detail(uuid, text, jsonb, text) to service_role;
 
 -- ---------------------------------------------------------------- guarded identifier write (plan audit round 3, R2)
 -- set_security_identifier is the only writer of issuer_securities.isin/figi outside resolve_identifier_claim

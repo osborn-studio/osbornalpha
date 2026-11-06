@@ -24,7 +24,7 @@ type Outcome = ResolveOutcome | FactsResolveOutcome | 'run_pending';
 // facts.* items (spec §7.3): run_pending and already_resolved are 409 (retry later / nothing to do),
 // hook_retried is a successful re-run of materialize on an already accepted item; a retry whose
 // materialize fails again answers 502 (the verdict is committed, the derived layer is not refreshed).
-// plan 3 (§4.6): rule_failed / invalid_choice 400; conflict (generation_moved, conflict_exists, duplicate, replay_required, filing_not_found, not_passing, lineage_changed, scope_missing, unresolved, stale_evaluation, target_not_active, use_dedicated_resolver, read_truncated) 409; refusal bodies are {id, outcome, error:<code>, detail?:{restore_note}} (plan 3 接口对齐记录 #9).
+// plan 3 (§4.6): rule_failed / invalid_choice 400; conflict (generation_moved, conflict_exists, duplicate, replay_required, filing_not_found, not_passing, lineage_changed, scope_missing, unresolved, stale_evaluation, target_not_active, use_dedicated_resolver, read_truncated) 409; batch_mismatch is a 500; refusal bodies are {id, outcome, error:<code>, detail?:{restore_note}} (plan 3 接口对齐记录 #9).
 const HTTP_STATUS: Record<Outcome, number> = { resolved: 200, hook_retried: 200, not_found: 404, already_resolved: 409, run_pending: 409, invalid_choice: 400, rule_failed: 400, conflict: 409 };
 const MAX_CANDIDATE_INDEX = 999;
 const AUDITED: readonly Outcome[] = ['resolved', 'hook_retried'];
@@ -32,8 +32,8 @@ const AUDITED: readonly Outcome[] = ['resolved', 'hook_retried'];
 // The SQL function resolve_facts_quarantine is the final authority; its non-coded errors arrive as
 // FactsDbError('unknown', '<message>').
 // Codes of the plan-3 SQL verdict functions that reach the route without passing through the resolver's own refusal mapping
-// (the resolver maps them itself; this is the defence in depth, and the only mapping for batch_mismatch, which the resolver throws).
-const SQL_CONFLICT_CODES: readonly string[] = ['use_dedicated_resolver', 'target_not_active', 'lineage_changed', 'scope_missing', 'conflict_exists', 'replay_required', 'filing_not_found', 'generation_moved', 'duplicate', 'stale_evaluation', 'batch_mismatch', 'not_passing', 'unresolved', 'read_truncated'];
+// (the resolver maps them itself; this is defence in depth). batch_mismatch is deliberately absent: a programming error (spec §4.6/§8) that stays a 500.
+const SQL_CONFLICT_CODES: readonly string[] = ['use_dedicated_resolver', 'target_not_active', 'lineage_changed', 'scope_missing', 'conflict_exists', 'replay_required', 'filing_not_found', 'generation_moved', 'duplicate', 'stale_evaluation', 'not_passing', 'unresolved', 'read_truncated'];
 const SQL_CHOICE_CODES: readonly string[] = ['invalid_choice', 'invalid_candidate'];
 function factsOutcome(e: unknown): { outcome: Outcome; code?: string } | null {
   if (!(e instanceof FactsDbError)) return null;
@@ -115,7 +115,9 @@ export async function POST(request: Request, { params }: Ctx) {
         extra = {
           hook: r.hook ?? null, promoted: r.promoted ?? null, skipped: r.skipped ?? null, chosen_fact_ids: r.chosenFactIds ?? null,
           ...(r.adoptedFactId !== undefined ? { adopted_fact_id: r.adoptedFactId } : {}),
-          ...(index !== undefined ? { chosen_candidate_index: index } : {}),
+          // the PERSISTED choices (a retry's body may differ from what was committed)
+          ...(r.chosenCandidateIndex !== undefined ? { chosen_candidate_index: r.chosenCandidateIndex } : {}),
+          ...(r.keepFactId !== undefined ? { keep_fact_id: r.keepFactId } : {}),
           ...(r.restore !== undefined ? { restore: r.restore } : {}),
           ...(r.quarantined !== undefined ? { quarantined: r.quarantined } : {}),
         };

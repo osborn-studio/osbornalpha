@@ -74,4 +74,29 @@ describe('findPendingHooks / runPendingHooks (spec §4.6, U2)',()=>{
   expect(item.status).toBe('open');expect((item.detail as {hook:unknown}).hook).toEqual({stage:'done',state:'done',at:'2026-11-05T09:00:00.000Z'});
   expect((await db.factsByIds([x.fact_id]))[0].status).toBe('quarantined');
  });
+
+ it('review (Codex P2): a restore committing a newer pending hook while the scan materialises makes the done-write stale — the item stays pending and is counted skippedStale',async()=>{
+  const db=memoryFactsDb();
+  const id=await quarantine(db.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:'k:race',reasonCode:'reconcile_mismatch',batchId:BATCH,payload:{fact_ids:[]},detail:{issuer_id:ISSUER,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-05T01:00:00.000Z'}}});
+  const NEWER={stage:'materialize',state:'pending',at:'2026-11-05T02:00:00.000Z'};
+  const mat=vi.fn(async()=>{
+   const [cur]=await db.tables.select('dq_quarantine',{id});
+   await db.tables.update('dq_quarantine',{id},{detail:{...(cur.detail as Record<string,unknown>),hook:NEWER}});   // the restore's SQL commit
+   return {rows:0,stateRev:0,retried:false,target:ISSUER,basedOn:[]};
+  });
+  const report=await runPendingHooks({db,tables:db.tables,now:NOW,materialize:mat as never});
+  expect(report).toMatchObject({items:1,failed:0,hookWriteFailed:0,skippedStale:1});
+  expect(((await db.tables.select('dq_quarantine',{id}))[0].detail as {hook:unknown}).hook).toEqual(NEWER);
+ });
+ it('review (Codex P2): materialization succeeds but the patch rpc is rejected → hookWriteFailed counted (not silently done)',async()=>{
+  const db=memoryFactsDb();
+  await quarantine(db.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:'k:rpc',reasonCode:'reconcile_mismatch',batchId:BATCH,payload:{fact_ids:[]},detail:{issuer_id:ISSUER,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-05T01:00:00.000Z'}}});
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const rpc=vi.spyOn(db.tables,'rpc').mockRejectedValue(new Error('db gone'));
+  const mat=vi.fn(async()=>({rows:0,stateRev:0,retried:false,target:ISSUER,basedOn:[]}));
+  const report=await runPendingHooks({db,tables:db.tables,now:NOW,materialize:mat as never});
+  rpc.mockRestore();spy.mockRestore();
+  expect(mat).toHaveBeenCalledTimes(1);
+  expect(report).toMatchObject({items:1,failed:0,hookWriteFailed:1,skippedStale:0});
+ });
 });

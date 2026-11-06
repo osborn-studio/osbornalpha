@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb,text)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -958,6 +958,23 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    detail:{pair:'test',latest_result:{passed:true,reconciliation_id:'r2'},hook:{stage:'done',state:'done',at:'2026-11-05T00:00:00.000Z'},audit_written:true}});
   expect((await fails(patch('latest_result',{passed:false}))).message).toBe('invalid_detail_key');
   expect(await admin.query(`select public.patch_quarantine_detail($1,'hook','{}'::jsonb) v`,[randomUUID()]).then(r=>r.rows[0].v)).toBe(false);
+ });
+ it('patch_quarantine_detail compare-and-set (Task 11 review): a hook write expecting a superseded hook.at answers stale and writes nothing; the current at, and no expectation, write',async()=>{
+  const id=randomUUID();const b=await batch('facts.us','dq-resolver');
+  const OLD='2026-11-05T00:00:00+00:00',NEW='2026-11-05T01:00:00+00:00';
+  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload,detail) values($1,'facts.us','financial_facts',$2,'reconcile_mismatch',$3,'{}'::jsonb,$4::jsonb)`,
+   [id,`test:${id}`,b,JSON.stringify({hook:{stage:'materialize',state:'pending',at:OLD}})]);
+  const done=(at:string)=>({stage:'done',state:'done',at});
+  const patch=(value:unknown,expect:string|null)=>admin.query(`select public.patch_quarantine_detail($1,'hook',$2::jsonb,$3) v`,[id,JSON.stringify(value),expect]).then(r=>r.rows[0].v as unknown);
+  const hook=async()=>(await q(`select detail->'hook' h from public.dq_quarantine where id=$1`,[id]))[0].h;
+  // a restore commits a newer pending hook after the scanner observed OLD
+  await q(`update public.dq_quarantine set detail=detail||$2::jsonb where id=$1`,[id,JSON.stringify({hook:{stage:'materialize',state:'pending',at:NEW}})]);
+  expect(await patch(done('x'),OLD)).toBe('stale');
+  expect(await hook()).toEqual({stage:'materialize',state:'pending',at:NEW});
+  expect(await patch(done('y'),NEW)).toBe(true);
+  expect(await hook()).toEqual(done('y'));
+  expect(await patch({stage:'materialize',state:'failed',at:'z'},null)).toBe(true);        // no expectation → unconditional
+  expect(await admin.query(`select public.patch_quarantine_detail($1,'hook','{}'::jsonb,'x') v`,[randomUUID()]).then(r=>r.rows[0].v)).toBe(false);
  });
 
  // Plan audit round 3, R2: the guarded identifier write and its provenance key land in one locked UPDATE.

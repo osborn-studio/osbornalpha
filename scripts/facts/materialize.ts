@@ -10,7 +10,7 @@
  * issuer failed, 2 on bad arguments.
  *
  * --pending-hooks (alone): finish every unfinished materialisation (src/lib/dq/pending-hooks.ts, spec §4.6 U2): one JSON line
- * per target, then a summary; exit 1 when a target failed or an item has no target.
+ * per target, then a summary; exit 1 when a target failed, a hook write was rejected or an item has no target (items superseded by a newer pending hook are only counted as skippedStale).
  */
 import {selectAll,supabaseTableClient} from '../../src/lib/db/table-client';
 import {runPendingHooks} from '../../src/lib/dq/pending-hooks';
@@ -29,8 +29,8 @@ async function main(){
   const sb=getAdminSupabase();
   const r=await runPendingHooks({db:supabaseFactsDb(sb),tables:supabaseTableClient(sb)});
   for(const t of r.targets)console.log(JSON.stringify(t));
-  console.log(JSON.stringify({items:r.items,targets:r.targets.length,failed:r.failed,untargeted:r.untargeted}));
-  process.exit(r.failed>0||r.untargeted.length>0?1:0);
+  console.log(JSON.stringify({items:r.items,targets:r.targets.length,failed:r.failed,hookWriteFailed:r.hookWriteFailed,skippedStale:r.skippedStale,untargeted:r.untargeted}));
+  process.exit(r.failed>0||r.hookWriteFailed>0||r.untargeted.length>0?1:0);
  }
  for(let i=0;i<argv.length;i++){
   const x=argv[i],v=argv[i+1];

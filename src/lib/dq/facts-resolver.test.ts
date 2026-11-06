@@ -211,7 +211,7 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
   expect(batch).toMatchObject({producer:'dq-resolver',dataset:'facts.us',status:'success',triggered_by:'manual'});
   expect(db.adoptCandidate).toHaveBeenCalledWith(it_.id,1,batch.batch_id,4,ADMIN);
   expect(mocks.materialize).toHaveBeenCalledWith(db,ISSUER,'US');
-  expect(r).toEqual({outcome:'resolved',hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'},adoptedFactId:'50000000-0000-4000-8000-000000000005',chosenFactIds:['50000000-0000-4000-8000-000000000005']});
+  expect(r).toEqual({outcome:'resolved',hook:{stage:'done',state:'done',at:'2026-11-04T09:00:00.000Z'},adoptedFactId:'50000000-0000-4000-8000-000000000005',chosenCandidateIndex:1,chosenFactIds:['50000000-0000-4000-8000-000000000005']});
  });
  it('rule_failed: the candidate breaks a statement identity with the ok rows → 400-class outcome, nothing written, no batch',async()=>{
   const {tables,db,item}=h3({readRows:[okRow({concept:'liabilities_and_equity',statement:'BS',period_start:null,duration:'INSTANT',value:'200',value_text:'200'})]});
@@ -373,5 +373,26 @@ describe('resolveFactsItem — plan 3 dispatch (spec §4.6, §5.6, T10)',()=>{
    db.resolveLineageConflict.mockRejectedValueOnce(new FactsDbError(c));
    expect(await resolveFactsItem(db,tables,it_,{status:'resolved_accept',keepFactId:KEEP,resolvedBy:ADMIN,now:NOW})).toEqual({outcome:'conflict',code:c});
   }
+ });
+
+ it('review (Codex P3): a recovery retry reports the PERSISTED candidate index / adopted fact / keep, whatever the retry carries; a superseded hook is not overwritten',async()=>{
+  const {tables,db,item}=h3();
+  const unfinishedItem=async(reason:string,detail:Record<string,unknown>,naturalKey?:string)=>{
+   const it_=await item(reason,{fact_ids:[A]},{naturalKey,detail});
+   await tables.update('dq_quarantine',{id:it_.id},{status:'resolved_accept',resolved_by:ADMIN,resolved_at:'2026-11-04T08:00:00.000Z'});
+   return (await tables.select('dq_quarantine',{id:it_.id},{limit:1}))[0];
+  };
+  const adopted=await unfinishedItem('ambiguous_value',{adopted_fact_id:'f-persisted',chosen_candidate_index:2,issuer_id:ISSUER,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-04T08:00:00.000Z'}});
+  const r1=await resolveFactsItem(db,tables,adopted,{status:'resolved_accept',chosenCandidateIndex:9,resolvedBy:'1a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',now:NOW});
+  expect(r1).toMatchObject({outcome:'hook_retried',adoptedFactId:'f-persisted',chosenCandidateIndex:2,chosenFactIds:['f-persisted']});
+  const lin=await unfinishedItem('lineage_conflict',{chosen_fact_ids:[KEEP],issuer_id:T,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-04T08:00:00.000Z'}});
+  expect(await resolveFactsItem(db,tables,lin,{status:'resolved_accept',keepFactId:'20000000-0000-4000-8000-0000000000dd',resolvedBy:ADMIN,now:NOW})).toMatchObject({outcome:'hook_retried',keepFactId:KEEP});
+  // a newer pending hook committed while the retry materialised: the done-write is stale and the item keeps its pending hook
+  const racy=await unfinishedItem('lineage_conflict',{chosen_fact_ids:[KEEP],issuer_id:T,market:'US',hook:{stage:'materialize',state:'pending',at:'2026-11-04T08:00:00.000Z'}});
+  const NEWER={stage:'materialize',state:'pending',at:'2026-11-04T08:30:00.000Z'};
+  mocks.materialize.mockImplementationOnce(async()=>{const [cur]=await tables.select('dq_quarantine',{id:racy.id});await tables.update('dq_quarantine',{id:racy.id},{detail:{...(cur.detail as Record<string,unknown>),hook:NEWER}});return 1;});
+  const r=await resolveFactsItem(db,tables,racy,{status:'resolved_accept',resolvedBy:ADMIN,now:NOW});
+  expect(r.hook).toMatchObject({state:'failed',message:'hook_superseded'});
+  expect(((await tables.select('dq_quarantine',{id:racy.id}))[0].detail as {hook:unknown}).hook).toEqual(NEWER);
  });
 });
