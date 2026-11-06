@@ -381,6 +381,9 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    const e=(await db.extractionById(ext))!;
    const approval={extractor_ref:base.extractor_ref,extractor_version:e.extractor_version,table_algo_version:e.table_algo_version,code_version:e.code_version,concepts:['revenue'],gold_sha256:sha('gold'),precision:'0.96',recall:'0.970',report_path:'docs/audits/x.json',approved_by:user};
    expect(await code(db.insertApproval({...approval,precision:'0.94'}))).toBe('invalid_input');
+   expect(await code(db.insertApproval({...approval,precision:'0.9499999999999999999'}))).toBe('invalid_input');   // F3 review: exact decimals, never a float compare
+   expect(await code(db.insertApproval({...approval,recall:'1.0000000000000000001'}))).toBe('invalid_input');
+   expect(await code(db.insertApproval({...approval,gold_sha256:sha('g95'),precision:'0.95',recall:'1'}))).toBe('resolved');
    const A=await db.insertApproval(approval);
    const wrongCode=await db.insertApproval({...approval,code_version:'other'});
    expect((await db.approvalsFor(base.extractor_ref,{limit:100})).find(x=>x.approval_id===A)).toMatchObject({precision:'0.96',recall:'0.97',revoked_at:null,concepts:['revenue']});
@@ -391,6 +394,7 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await code(db.decideCandidate(byKey('a'),{kind:'auto',approval_id:wrongCode}))).toBe('not_eligible'); // code_version differs from the extraction row
    const withNull=await db.insertApproval({...approval,gold_sha256:sha('gold-null'),concepts:['revenue',null as unknown as string]});
    expect(await code(db.decideCandidate(byKey('a'),{kind:'auto',approval_id:withNull}))).toBe('not_eligible');   // F3: a NULL element in concepts fails closed
+   expect((await db.approvalsFor(base.extractor_ref,{limit:100})).find(x=>x.approval_id===withNull)!.concepts).toEqual(['revenue',null]);   // a NULL stays null, not the string 'null'
    expect(await db.decideCandidate(byKey('a'),{kind:'auto',approval_id:A})).toEqual({status:'confirmed'});
    expect(await db.decideCandidate(byKey('a'),{kind:'auto',approval_id:A})).toEqual({status:'confirmed'});     // idempotent
    expect(await db.candidateById(byKey('a'))).toMatchObject({decision_kind:'auto',approval_id:A,decided_by:null});
@@ -464,6 +468,74 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await code(db.reclassifyDocument(r2.document_id,{title:'x'} as never,actor))).toBe('invalid_input');
    expect(await code(db.reclassifyDocument(r2.document_id,{doc_class:'nope'} as never,actor))).toBe('invalid_input');
    expect(await code(db.reclassifyDocument(randomUUID(),{classifier_gen:3},actor))).toBe('not_found');
+  });
+
+  it('batch writes are atomic and bounded (F3 review): a failure on the last row writes nothing, the retry succeeds, and more than 5000 rows are refused first',async()=>{
+   const {doc,ext,b}=await extracted();
+   expect(await db.claimCandidatesLease(ext,b,600)).toBe(true);
+   const ok1=await factCandidate(doc,ext,{natural_key:'at1::2025-12-31:12M:HKD',fingerprint:sha('at1')});
+   const ok2=await factCandidate(doc,ext,{natural_key:'at2::2025-12-31:12M:HKD',fingerprint:sha('at2')});
+   const bad={...ok1,natural_key:'at3::2025-12-31:12M:HKD',citations:{...(ok1.citations as object),label:randomUUID()}};   // a well-formed uuid that is no citation of this extraction
+   expect(await code(db.insertCandidates(ext,b,[ok1,ok2,bad]))).toBe('invalid_citation');
+   expect((await drain(p=>db.candidatesOf({extractionId:ext},p),10)).rows).toEqual([]);
+   expect(await db.insertCandidates(ext,b,[ok1,ok2])).toEqual({inserted:2});
+   const rows=(await drain(p=>db.candidatesOf({extractionId:ext},p),10)).rows;
+   const passed=[{check:'citation_verified',blocking:true,passed:true}];
+   const row=(r:{candidate_id:string})=>({candidate_id:r.candidate_id,checks:passed,checks_passed:true});
+   expect(await code(db.writeCandidateChecks(ext,b,[row(rows[0]),row(rows[1]),row({candidate_id:randomUUID()})]))).toBe('not_found');
+   for(const r of await Promise.all(rows.map(x=>db.candidateById(x.candidate_id))))expect(r).toMatchObject({checks:[],checks_passed:false,status:'candidate'});
+   expect(await db.writeCandidateChecks(ext,b,[row(rows[0]),row(rows[1])])).toEqual({written:2,inherited:0});
+   const many=Array.from({length:5001},(_,i)=>({...ok1,natural_key:`m${i}::x`}));
+   expect(await code(db.insertCandidates(ext,b,many))).toBe('invalid_input');
+   expect(await code(db.writeCandidateChecks(ext,b,many.map(()=>row(rows[0]))))).toBe('invalid_input');
+   expect((await drain(p=>db.candidatesOf({extractionId:ext},p),10)).rows).toHaveLength(2);
+  });
+
+  it('a document version carries at most 100 assets; argument shape is checked before the lease (F3 review)',async()=>{
+   const {iss,b}=await ready('edgar');
+   const ref=`0000000000-26-${randomUUID().slice(0,6)}/b.htm`;
+   const doc=()=>docInsert({source:'edgar',market:'US',language:'en',source_ref:ref,mime:'text/html',fiscal_period:null,fiscal_year:null,period_end:null});
+   const mk=(n:number)=>Array.from({length:n},(_,i)=>assetInsert({filename:`a${i}.json`}));
+   expect(await code(db.insertDocumentVersion(iss,'edgar',b,doc(),mk(101)))).toBe('invalid_input');
+   expect((await db.documentVersions('edgar',ref,{limit:10})).rows).toEqual([]);
+   const r=await db.insertDocumentVersion(iss,'edgar',b,doc(),mk(100));
+   expect(r.outcome).toBe('inserted');
+   expect(await db.assetsOf(r.document_id)).toHaveLength(100);
+   // shape (duplicate role/filename) is judged before the lease; a good call without a lease is lease_lost
+   const lonely=await h.issuer();
+   expect(await code(db.insertDocumentVersion(lonely,'edgar',b,doc(),[assetInsert(),assetInsert()]))).toBe('invalid_input');
+   expect(await code(db.insertDocumentVersion(lonely,'edgar',b,doc(),[assetInsert()]))).toBe('lease_lost');
+  });
+
+  it('reconcileScope validates the whole call before changing anything (F3 review): a bad later row leaves the state unchanged',async()=>{
+   const a=await h.issuer();const c=await h.issuer();
+   const good={issuer_id:a,reasons:['x'],priority:5,fetch_key:'00001'};
+   for(const bad of [{issuer_id:c,reasons:[],priority:1,fetch_key:''},{issuer_id:c,reasons:[],priority:1,fetch_key:'k'.repeat(65)},{issuer_id:c,reasons:[],priority:1.5,fetch_key:'k'},
+    {issuer_id:c,reasons:[],priority:-1,fetch_key:'k'},{issuer_id:c,reasons:'x' as unknown as string[],priority:1,fetch_key:'k'},{...good,fetch_key:'dup'}]){
+    expect(await code(db.reconcileScope('hkexnews',[good,bad]))).toBe('invalid_input');
+    expect(await db.scopeRows('hkexnews',[a,c])).toEqual([]);
+   }
+   expect(await db.reconcileScope('hkexnews',[good])).toBe(1);
+  });
+
+  it('timestamps are instants (F3 review): mixed UTC offsets order and paginate chronologically',async()=>{
+   const {iss,b}=await ready();
+   const at=(x:string)=>({available_at:x,published_at:x,available_date:'2026-03-20'});
+   const ins=async(x:string)=>(await db.insertDocumentVersion(iss,'hkexnews',b,docInsert(at(x)),[])).document_id;
+   const a1=await ins('2026-03-20T09:00:00+08:00');   // 01:00Z
+   const a2=await ins('2026-03-20T02:00:00Z');         // 02:00Z
+   const a3=await ins('2026-03-20T10:30:00+09:00');   // 01:30Z
+   const seen=await drain(p=>db.readDocuments(iss,{asOf:'2026-03-21',...p}),1);
+   expect(seen.rows.map(r=>r.document_id)).toEqual([a2,a3,a1]);
+   expect(seen.pages).toBe(3);
+   expect(seen.rows.map(r=>r.available_at)).toEqual(['2026-03-20T02:00:00.000Z','2026-03-20T01:30:00.000Z','2026-03-20T01:00:00.000Z']);
+  });
+
+  it('finishExtract stores a missing line_count as 0, like the SQL coalesce (F3 review)',async()=>{
+   const s=await stored();
+   expect(await db.claimExtractLease(s.doc,s.b,600)).toBe(true);
+   const ext=await db.finishExtract(s.doc,s.b,extractionInsert(1),[pageInsert(1,'x',{line_count:null as unknown as number})]);
+   expect((await db.pagesOf(ext,[1]))[0].line_count).toBe(0);
   });
  });
 }

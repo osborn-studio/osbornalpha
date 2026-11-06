@@ -5,7 +5,7 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
-import {REFS_CHUNK,WRITE_CHUNK,chunk,decodeCursor,documentFromRow,encodeCursor,supabaseDocumentsDb,toDocumentsDbError} from './db';
+import {REFS_CHUNK,WRITE_MAX,approvalFromRow,chunk,decodeCursor,documentFromRow,encodeCursor,supabaseDocumentsDb,toDocumentsDbError} from './db';
 import {docInsert,documentsDbContract,extractionInsert,pageInsert} from './db-contract';
 import {memoryDocumentsDb} from './memory-documents-db';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from './types';
@@ -135,14 +135,16 @@ describe('supabaseDocumentsDb wiring',()=>{
   await expect(db.stageCandidatePublication('c',2,'r','f')).resolves.toBeUndefined();
   await expect(db.finishCandidates('e','b','done')).rejects.toMatchObject({code:'lease_lost'});
  });
- it('chunks candidates, checks and source refs; an empty write still makes one call so the lease is checked',async()=>{
+ it('candidate writes are ONE rpc each (no chunking, F3 review) and refuse more than WRITE_MAX rows before any call; source refs are still chunked; an empty write still makes one call so the lease is checked',async()=>{
   const {db,calls}=stub({insert_candidates:a=>({inserted:(a.p_rows as unknown[]).length}),write_candidate_checks:a=>({written:(a.p_rows as unknown[]).length,inherited:1}),known_source_refs:a=>(a.p_refs as string[]).filter(r=>r.endsWith('7'))});
-  const rows=Array.from({length:WRITE_CHUNK+1},(_,i)=>({kind:'field',natural_key:String(i)}) as never);
-  expect(await db.insertCandidates('e','b',rows)).toEqual({inserted:WRITE_CHUNK+1});
+  const rows=(n:number)=>Array.from({length:n},(_,i)=>({kind:'field',natural_key:String(i)}) as never);
+  expect(await db.insertCandidates('e','b',rows(WRITE_MAX))).toEqual({inserted:WRITE_MAX});
   expect(await db.writeCandidateChecks('e','b',[])).toEqual({written:0,inherited:1});
+  await expect(db.insertCandidates('e','b',rows(WRITE_MAX+1))).rejects.toMatchObject({code:'invalid_input'});
+  await expect(db.writeCandidateChecks('e','b',rows(WRITE_MAX+1))).rejects.toMatchObject({code:'invalid_input'});
   const refs=Array.from({length:REFS_CHUNK+3},(_,i)=>`r${i}`);
   expect([...await db.knownSourceRefs('i','cninfo',refs)].length).toBe(refs.filter(r=>r.endsWith('7')).length);
-  expect(calls.map(c=>[c.fn,(c.args.p_rows??c.args.p_refs) as unknown[]]).map(([f,r])=>[f,(r as unknown[]).length])).toEqual([['insert_candidates',WRITE_CHUNK],['insert_candidates',1],['write_candidate_checks',0],['known_source_refs',REFS_CHUNK],['known_source_refs',3]]);
+  expect(calls.map(c=>[c.fn,(c.args.p_rows??c.args.p_refs) as unknown[]]).map(([f,r])=>[f,(r as unknown[]).length])).toEqual([['insert_candidates',WRITE_MAX],['write_candidate_checks',0],['known_source_refs',REFS_CHUNK],['known_source_refs',3]]);
  });
  it('readDocuments sends the SQL cursor object and returns an opaque next cursor; rows are normalised',async()=>{
   const {db,calls}=stub({read_documents:()=>({rows:[pgDocRow],row_count:1,next_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'d1'}})});
@@ -159,6 +161,30 @@ describe('supabaseDocumentsDb wiring',()=>{
   await expect(db.approvalsFor('r',{limit:1})).rejects.toMatchObject({code:'too_many_approvals'});
   expect(queries[0].ops).toContainEqual(['is',['revoked_at',null]]);expect(queries[0].ops).toContainEqual(['limit',[2]]);
   expect((await db.approvalsFor('r',{limit:5}))[0]).toMatchObject({precision:'0.96',recall:'0.97',approved_at:'2026-01-01T00:00:00.000Z'});
+  const sel=queries[0].ops.find(o=>o[0]==='select')![1][0] as string;   // numeric columns come back as text: no digit lost
+  expect(sel).toContain('precision::text');expect(sel).toContain('recall::text');
+ });
+ it('approvalFromRow keeps every digit of a text numeric and maps a NULL concept to null, not "null"',()=>{
+  const a=approvalFromRow({approval_id:'a',extractor_ref:'r',extractor_version:'v',table_algo_version:'t',code_version:'c',concepts:['revenue',null],gold_sha256:'g',precision:'0.9500000000000000001',recall:'1.000',report_path:'p',approved_by:'u',approved_at:'2026-01-01T00:00:00+00:00',revoked_at:null});
+  expect(a.concepts).toEqual(['revenue',null]);expect(a.precision).toBe('0.9500000000000000001');expect(a.recall).toBe('1');
+ });
+ it('extractionsOf refuses a cursor that is not (timestamp, uuid) before building the filter; scopeAll pages by keyset, not offset',async()=>{
+  const {db,queries}=stub({},{document_extractions:[]});
+  for(const bad of [['2026-01-01T00:00:00Z','x)'],['x),or(1=1','b3c1e9d0-0000-4000-8000-000000000001'],[5,'b3c1e9d0-0000-4000-8000-000000000001']])
+   await expect(db.extractionsOf('d1',{limit:5,cursor:encodeCursor(bad as (string|number)[])})).rejects.toMatchObject({code:'invalid_input'});
+  expect(queries).toHaveLength(0);
+  await db.extractionsOf('d1',{limit:5,cursor:encodeCursor(['2026-01-01T00:00:00.123456+00:00','b3c1e9d0-0000-4000-8000-000000000001'])});
+  expect(queries).toHaveLength(1);
+  const mk=(n:number,from:number)=>Array.from({length:n},(_,i)=>({issuer_id:`i${String(from+i).padStart(5,'0')}`,source:'hkexnews',priority:1,fetch_key:'k',reasons:[],next_due_at:'2026-01-01T00:00:00Z',updated_at:'2026-01-01T00:00:00Z'}));
+  const answers=[mk(1000,0),mk(3,1000)];const ops:[string,unknown[]][][]=[];
+  const client={from:()=>{const q:[string,unknown[]][]=[];ops.push(q);const b:Record<string,unknown>={};
+   for(const op of ['select','eq','gt','order','limit'])b[op]=(...a:unknown[])=>{q.push([op,a]);return b;};
+   b.then=(res:(v:unknown)=>unknown)=>Promise.resolve({data:answers[ops.length-1],error:null}).then(res);return b;}};
+  const all=await supabaseDocumentsDb(client as unknown as SupabaseClient).scopeAll('hkexnews');
+  expect(all).toHaveLength(1003);
+  expect(ops[0].some(o=>o[0]==='gt')).toBe(false);
+  expect(ops[1]).toContainEqual(['gt',['issuer_id','i00999']]);
+  expect(ops.flat().some(o=>o[0]==='range')).toBe(false);
  });
  it('P2-1: limit + 1 look-ahead reads never ask PostgREST for more than its 1,000-row ceiling, so pagination and overflow stay correct',async()=>{
   const versions=Array.from({length:1001},(_,i)=>({...pgDocRow,document_id:`d${i+1}`,source_version:i+1}));

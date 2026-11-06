@@ -16,7 +16,7 @@
 // migration-one function produces (e.g. a publication marked abandoned by migration two).
 import {createHash,randomUUID} from 'node:crypto';
 import {canonicalDecimal} from '../facts/json-numbers';
-import {checkApprovalsLimit,checkIds,checkLimit,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
+import {ASSETS_MAX,checkApprovalsLimit,checkIds,checkLimit,checkWriteRows,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX,TABLE_ALGO_VERSION} from './types';
 import type {
  ApprovalRow,AssetRow,CandidateRow,CitationRow,DocScopeRow,DocumentInsert,DocumentRow,DocumentsDb,ExtractionRow,ListedSource,Page,PageRow,PublicationRow,
@@ -51,6 +51,15 @@ const ck=(candidate:string,gen:number)=>`${candidate}|${gen}`;
 const sha256=(s:string)=>createHash('sha256').update(s,'utf8').digest('hex');
 /** Code points, like PostgreSQL length()/substr() on a UTF8 database. */
 const cps=(s:string)=>Array.from(s);
+/** A timestamp every writer-supplied value is normalised to (canonical UTC ISO), so string order = chronological order like timestamptz in SQL (F3 review). */
+const normTs=(v:unknown,what:string):string=>{const t=typeof v==='string'?Date.parse(v):NaN;if(Number.isNaN(t))throw invalid(what);return new Date(t).toISOString();};
+/** Exact comparison of two non-negative plain decimal strings: <0, 0, >0 (no Number: ea_threshold is numeric in SQL). */
+function cmpDecimal(a:string,b:string):number{
+ const parse=(x:string)=>{const m=/^(\d+)(?:\.(\d*))?$/.exec(x);if(!m)throw invalid('decimal');return {int:m[1],frac:m[2]??''};};
+ const x=parse(a),y=parse(b);const n=Math.max(x.frac.length,y.frac.length);
+ const big=(d:{int:string;frac:string})=>BigInt(d.int+d.frac.padEnd(n,'0'));
+ const bx=big(x),by=big(y);return bx<by?-1:bx>by?1:0;
+}
 const isObj=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 
 /** The column checks of disclosure_documents (§4.1) that a writer could violate. */
@@ -118,7 +127,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
  const gt2=(a:(string|number)[],b:(string|number)[])=>cmp(a[0],b[0])>0||(cmp(a[0],b[0])===0&&cmp(a[1],b[1])>0);
 
  const db:MemoryDocumentsDb={
-  setNow(iso){fixedNow=iso;},
+  setNow(iso){fixedNow=iso===null?null:normTs(iso,'now');},
   expireSyncLease(issuer,source){const s=scope.get(sk(issuer,source));if(s&&s.lease_until)s.lease_until=new Date(Date.parse(now())-1000).toISOString();},
   expireExtractLease(document){const d=documents.get(document);if(d&&d.extract_lease_until)d.extract_lease_until=new Date(Date.parse(now())-1000).toISOString();},
   expireCandidatesLease(extraction){const e=extractions.get(extraction);if(e&&e.candidates_lease_until)e.candidates_lease_until=new Date(Date.parse(now())-1000).toISOString();},
@@ -130,18 +139,23 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   // ---------------------------------------------------------------- scope
   async reconcileScope(source,input){
    listed(source);
-   if(new Set(input.map(r=>r.issuer_id)).size!==input.length)throw invalid('duplicate issuer');   // F3: duplicate issuer ids are a caller error (migration one review fix)
+   // F3: the whole call is validated before any row is touched (SQL is one statement), duplicates included
+   if(new Set(input.map(r=>r.issuer_id)).size!==input.length)throw invalid('duplicate issuer');
+   for(const r of input){
+    if(typeof r.fetch_key!=='string'||r.fetch_key.length<1||r.fetch_key.length>64)throw invalid('fetch_key');
+    if(!Number.isInteger(r.priority??0)||(r.priority??0)<0)throw invalid('priority');
+    if(r.reasons!==undefined&&!Array.isArray(r.reasons))throw invalid('reasons');
+   }
    let n=0;
    for(const r of input){
-    if(!r.fetch_key)throw invalid('fetch_key');
     const s=scope.get(sk(r.issuer_id,source));
     if(!s){
      const t=now();
-     scope.set(sk(r.issuer_id,source),{issuer_id:r.issuer_id,source,reasons:[...r.reasons],priority:r.priority,fetch_key:r.fetch_key,backfill_cursor:{},backfill_done:false,poll_cursor:{},
+     scope.set(sk(r.issuer_id,source),{issuer_id:r.issuer_id,source,reasons:[...(r.reasons??[])],priority:r.priority??0,fetch_key:r.fetch_key,backfill_cursor:{},backfill_done:false,poll_cursor:{},
       next_due_at:t,lease_until:null,lease_batch_id:null,last_attempt_at:null,last_success_at:null,last_status:null,updated_at:t});
      n++;
-    }else if(JSON.stringify(s.reasons)!==JSON.stringify(r.reasons)||s.priority!==r.priority||s.fetch_key!==r.fetch_key){
-     s.reasons=[...r.reasons];s.priority=r.priority;s.fetch_key=r.fetch_key;s.updated_at=now();n++;
+    }else if(JSON.stringify(s.reasons)!==JSON.stringify(r.reasons??[])||s.priority!==(r.priority??0)||s.fetch_key!==r.fetch_key){
+     s.reasons=[...(r.reasons??[])];s.priority=r.priority??0;s.fetch_key=r.fetch_key;s.updated_at=now();n++;
     }
    }
    return n;
@@ -174,13 +188,19 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if(!s||s.lease_batch_id!==batch)throw leaseLost();
    const t=now();
    s.lease_until=null;s.lease_batch_id=null;s.last_attempt_at=t;if(outcome==='success')s.last_success_at=t;s.last_status=outcome;
-   s.next_due_at=nextDue?new Date(nextDue).toISOString():t;s.updated_at=t;
+   s.next_due_at=nextDue?normTs(nextDue,'next_due'):t;s.updated_at=t;
   },
 
   // ---------------------------------------------------------------- documents
   async insertDocumentVersion(issuer,source,batch,doc,input){
    listed(source);
+   // SQL order: argument shape (incl. the asset bound and duplicate role/filename), then the lease, then the lookups
+   if(!isObj(doc))throw invalid('doc');
+   if(input.length>ASSETS_MAX)throw invalid('assets');
+   const assetKeys=new Set<string>();
+   for(const a of input){const k=`${a.role}|${a.filename}`;if(assetKeys.has(k))throw invalid('assets');assetKeys.add(k);}
    scopeLock(issuer,source,batch);
+   if(!doc.source_ref||!doc.content_sha256)throw invalid('source_ref/content_sha256');
    const versions=versionsOf(source,doc.source_ref);
    if(versions.some(v=>v.issuer_id!==issuer))throw invalid('source_ref belongs to another issuer');
    const dup=versions.find(v=>v.content_sha256===doc.content_sha256);
@@ -191,9 +211,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
     extract_lease_until:null,extract_lease_batch_id:null,extract_attempts:0,created_at:stamp()};
    checkDocument(row);
    const rows:AssetRow[]=input.map(a=>({...clone(a),asset_id:randomUUID(),document_id:row.document_id,created_at:row.created_at}));
-   const keys=new Set<string>();
    for(const a of rows){
-    const k=`${a.role}|${a.filename}`;if(keys.has(k))throw invalid('document_assets_role_file_uniq');keys.add(k);
     if(!['filing_index','xbrl_instance','exhibit'].includes(a.role)||!SHA.test(a.content_sha256)||!(a.bytes>0)||!isObj(a.acquisition))throw invalid('asset');
    }
    documents.set(row.document_id,row);for(const a of rows)assets.set(a.asset_id,a);
@@ -244,13 +262,13 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if([...extractions.values()].some(x=>x.document_id===document&&x.extractor_version===extraction.extractor_version&&x.table_algo_version===extraction.table_algo_version))throw new DocumentsDbError('revision_exists');
    const nos=input.map(p=>p.page_no);
    const ok=input.length===extraction.page_count&&new Set(nos).size===nos.length&&(nos.length===0||(Math.min(...nos)===1&&Math.max(...nos)===nos.length))
-    &&input.every(p=>typeof p.text==='string'&&p.char_count===cps(p.text).length&&p.text_hash===sha256(p.text)&&Number.isInteger(p.line_count)&&p.line_count>=0);
+    &&input.every(p=>typeof p.text==='string'&&p.char_count===cps(p.text).length&&p.text_hash===sha256(p.text)&&Number.isInteger(p.line_count??0)&&(p.line_count??0)>=0);
    if(!ok)throw invalid('pages do not match page_count, char_count or text_hash');
    const role=d.source==='hkexnews'&&d.market==='HK'&&(d.doc_class==='annual_report'||d.doc_class==='interim_report')&&extraction.has_text_layer?(d.language==='zh'?'primary':'comparison'):'none';
    const row:ExtractionRow={...clone(extraction),extraction_id:randomUUID(),document_id:document,candidates_role:role,candidates_status:role==='none'?'n/a':'pending',candidates_attempts:0,
     candidates_lease_until:null,candidates_lease_batch_id:null,batch_id:batch,created_at:stamp()};
    extractions.set(row.extraction_id,row);
-   for(const p of input)pages.set(pk(row.extraction_id,p.page_no),{...clone(p),extraction_id:row.extraction_id,has_tables:p.has_tables===true});
+   for(const p of input)pages.set(pk(row.extraction_id,p.page_no),{...clone(p),extraction_id:row.extraction_id,line_count:p.line_count??0,has_tables:p.has_tables===true});
    d.status=extraction.has_text_layer?'extracted':'no_text_layer';d.current_extraction_id=row.extraction_id;d.extract_lease_until=null;d.extract_lease_batch_id=null;
    return row.extraction_id;
   },
@@ -329,6 +347,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
 
   // ---------------------------------------------------------------- candidates
   async insertCandidates(extraction,batch,input){
+   checkWriteRows(input);
    const e=candidatesLock(extraction,batch);
    for(const x of input){
     const cit=x.citations as Record<string,unknown>;
@@ -353,6 +372,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    return {inserted};
   },
   async writeCandidateChecks(extraction,batch,input){
+   checkWriteRows(input);
    candidatesLock(extraction,batch);
    const sorted=[...input].sort((a,b)=>cmp(a.candidate_id,b.candidate_id));
    for(const x of sorted){
@@ -415,8 +435,9 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    else throw new DocumentsDbError('already_staged');
   },
   async insertApproval(row){
-   // precision/recall are ratios, not financial values: Number is fine for the threshold check
-   if(!(Number(row.precision)>=0.95&&Number(row.recall)>=0.95&&Number(row.precision)<=1&&Number(row.recall)<=1))throw invalid('ea_threshold');
+   // exact decimal comparison, like SQL numeric (F3 review): '0.9499999999999999999' fails
+   const inBand=(v:unknown)=>{const t=String(v);return /^\d+(\.\d*)?$/.test(t)&&cmpDecimal(t,'0.95')>=0&&cmpDecimal(t,'1')<=0;};
+   if(!inBand(row.precision)||!inBand(row.recall))throw invalid('ea_threshold');
    if(!row.extractor_ref||!row.approved_by||!SHA.test(row.gold_sha256)||!Array.isArray(row.concepts))throw invalid('approval');
    const id=randomUUID();
    approvals.set(id,{...clone(row),precision:canonicalDecimal(row.precision),recall:canonicalDecimal(row.recall),approval_id:id,approved_at:stamp(),revoked_at:null});
@@ -505,7 +526,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   },
   async scopeDue(source,at,limit){
    checkLimit(limit);
-   const t=new Date(at).toISOString();
+   const t=normTs(at,'now');
    return [...scope.values()].filter(s=>s.source===source&&s.priority>0&&s.next_due_at<=t)
     .sort((x,y)=>cmp(x.next_due_at,y.next_due_at)||y.priority-x.priority||cmp(x.issuer_id,y.issuer_id)).slice(0,limit).map(clone);
   },
@@ -523,6 +544,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
 /** A DocumentInsert with every optional column as null (jsonb_populate_record semantics). */
 function nullDoc(d:DocumentInsert):Omit<DocumentRow,'document_id'|'source_version'|'supersedes_document_id'|'observed_replacement'|'status'|'current_extraction_id'|'extract_lease_until'|'extract_lease_batch_id'|'extract_attempts'|'created_at'>{
  const x=clone(d);
+ x.published_at=normTs(x.published_at,'dates');x.available_at=normTs(x.available_at,'dates');
  return {...x,issuer_id:x.issuer_id??null,form_type:x.form_type??null,language:x.language??null,source_url:x.source_url??null,fiscal_year:x.fiscal_year??null,
   fiscal_period:x.fiscal_period??null,period_end:x.period_end??null,filing_source_ref:x.filing_source_ref??null,owner_user_id:x.owner_user_id??null,license_ref:x.license_ref??null};
 }

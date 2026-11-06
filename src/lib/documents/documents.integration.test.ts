@@ -659,6 +659,16 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect((await q(`select candidates_lease_batch_id,candidates_lease_until,candidates_attempts from public.document_extractions where extraction_id=$1`,[z.ext]))[0]).toEqual({candidates_lease_batch_id:null,candidates_lease_until:null,candidates_attempts:0});
  });
 
+ it('review fix: a document version carries at most 100 assets (invalid_input: assets), and nothing is written above that',async()=>{
+  const {iss,b}=await ready('edgar');
+  const d=docJson({market:'US',language:'en',source_ref:`0000000000-26-${randomUUID().slice(0,6)}/n.htm`,mime:'text/html'});
+  const mk=(n:number)=>Array.from({length:n},(_,i)=>({role:'exhibit',filename:`e${i}.htm`,source_url:'https://sec/e',content_sha256:sha(`e${i}`),bytes:5,mime:'text/html',storage_path:`blobs/${sha(`e${i}`)}.htm`,acquisition:{http_status:200}}));
+  expect(await fails(insertDoc(iss,b,d,mk(101),'edgar'))).toMatchObject({message:'invalid_input: assets',code:'22023'});
+  expect(Number(await one(`select count(*) v from public.disclosure_documents where source_ref=$1`,[d.source_ref]))).toBe(0);
+  const r=await insertDoc(iss,b,d,mk(100),'edgar');expect(r.outcome).toBe('inserted');
+  expect(Number(await one(`select count(*) v from public.document_assets where document_id=$1`,[r.document_id]))).toBe(100);
+ });
+
  it('review fix: reconcile_document_sync_scope rejects duplicate issuer ids; lock modes (approval share locks, no-key-update on documents)',async()=>{
   const iss=await issuer();
   const rows=[{issuer_id:iss,reasons:['a'],priority:1,fetch_key:'1'},{issuer_id:iss,reasons:['b'],priority:2,fetch_key:'2'}];

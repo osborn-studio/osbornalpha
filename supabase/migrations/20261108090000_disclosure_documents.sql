@@ -520,7 +520,8 @@ begin
   if p_source is null or p_source not in ('edgar','cninfo','hkexnews') then raise exception 'invalid_input: source' using errcode = '22023'; end if;
   if p_doc is null or jsonb_typeof(p_doc) <> 'object' then raise exception 'invalid_input: doc' using errcode = '22023'; end if;
   if jsonb_typeof(v_assets) <> 'array'
-     or exists (select 1 from jsonb_array_elements(v_assets) a group by a ->> 'role', a ->> 'filename' having count(*) > 1) then
+     or jsonb_array_length(case when jsonb_typeof(v_assets) = 'array' then v_assets else '[]'::jsonb end) > 100   -- F3 review fix: at most 100 assets per version (assetsOf never truncates)
+     or exists (select 1 from jsonb_array_elements(case when jsonb_typeof(v_assets) = 'array' then v_assets else '[]'::jsonb end) a group by a ->> 'role', a ->> 'filename' having count(*) > 1) then
     raise exception 'invalid_input: assets' using errcode = '22023';
   end if;
   perform public.doc_scope_lock(p_issuer, p_source, p_batch);

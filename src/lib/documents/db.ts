@@ -27,8 +27,23 @@ export const REFS_CHUNK=500;
 export const IDS_MAX=100;
 /** ids per `.in()` filter (URL length). */
 export const IN_CHUNK=100;
-/** rows per insert_candidates / write_candidate_checks call. */
-export const WRITE_CHUNK=500;
+/** Most rows one insert_candidates / write_candidate_checks call takes. Each is ONE rpc (one transaction): larger inputs are refused before any mutation, never split (F3 review). */
+export const WRITE_MAX=5000;
+/** Most assets one document version carries (insert_document_version: invalid_input: assets); assetsOf can therefore never truncate. */
+export const ASSETS_MAX=100;
+/** Rejects an oversized batch write with invalid_input before any call or mutation (all implementations). */
+export function checkWriteRows<T>(rows:readonly T[]):readonly T[]{
+ if(rows.length>WRITE_MAX)throw new DocumentsDbError('invalid_input',`too_many_rows:${rows.length}`);
+ return rows;
+}
+/** Strict shapes of a decoded keyset cursor that is interpolated into a PostgREST .or() filter. */
+const CURSOR_TS=/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)$/;
+const CURSOR_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function timestampUuidCursor(cursor:string):[string,string]{
+ const [at,id]=decodeCursor(cursor);
+ if(typeof at!=='string'||typeof id!=='string'||!CURSOR_TS.test(at)||!CURSOR_UUID.test(id))throw new DocumentsDbError('invalid_input','invalid_cursor');
+ return [at,id];
+}
 const MESSAGE_CODES:readonly DocumentsDbErrorCode[]=['lease_lost','not_eligible','revision_exists','evidence_incomplete','approval_revoked','not_publishable','invalid_citation','decided','already_staged','binding_conflict','invalid_expected_rev','stale_plan','not_hk_item','run_pending','invalid_chosen','item_not_open','too_many_approvals','not_found','invalid_input','cursor_regression'];
 const INPUT_STATES=new Set(['23514','23502','23503','22023','22P02','22007','22008','22003']);
 
@@ -126,7 +141,8 @@ export function publicationFromRow(r:Record<string,unknown>):PublicationRow{
 }
 export function approvalFromRow(r:Record<string,unknown>):ApprovalRow{
  return {approval_id:String(r.approval_id),extractor_ref:String(r.extractor_ref),extractor_version:String(r.extractor_version),table_algo_version:String(r.table_algo_version),
-  code_version:String(r.code_version),concepts:(Array.isArray(r.concepts)?r.concepts:[]).map(String),gold_sha256:String(r.gold_sha256),
+  code_version:String(r.code_version),concepts:(Array.isArray(r.concepts)?r.concepts:[]).map(x=>x===null||x===undefined?null:String(x)) as string[],   // a NULL element stays null, not 'null'
+  gold_sha256:String(r.gold_sha256),
   precision:canonicalDecimal(String(r.precision)),recall:canonicalDecimal(String(r.recall)),report_path:String(r.report_path),approved_by:String(r.approved_by),
   approved_at:ts(r.approved_at),revoked_at:tsOrNull(r.revoked_at)};
 }
@@ -181,6 +197,8 @@ export function sliceRows<R,T>(raw:R[],limit:number,map:(r:R)=>T,key:(r:R)=>(str
  return {rows:kept.map(map),nextCursor:more?encodeCursor(key(kept[kept.length-1])):null};
 }
 
+/** precision / recall are numeric: read them as text so no digit is lost in JSON number parsing. */
+const APPROVAL_SELECT='approval_id,extractor_ref,extractor_version,table_algo_version,code_version,concepts,gold_sha256,precision::text,recall::text,report_path,approved_by,approved_at,revoked_at';
 interface RpcResult{data:unknown;error:PgErrorLike|null}
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts).
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
@@ -208,16 +226,15 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async finishCandidates(extraction,batch,status){await call('finish_candidates',{p_extraction:extraction,p_batch:batch,p_status:status});},
   async requestCandidatesRegen(filter,actor){return Number(await call('request_candidates_regen',{p_filter:regenFilter(filter),p_actor:actor}));},
   async writeCandidateChecks(extraction,batch,input){
-   let written=0,inherited=0;
-   for(const part of input.length?chunk(input,WRITE_CHUNK):[[]]){const r=await call<{written:number;inherited:number}>('write_candidate_checks',{p_extraction:extraction,p_batch:batch,p_rows:part});written+=Number(r.written);inherited+=Number(r.inherited);}
-   return {written,inherited};
+   checkWriteRows(input);   // one rpc = one transaction: no chunking, so a failure on any row writes nothing
+   const r=await call<{written:number;inherited:number}>('write_candidate_checks',{p_extraction:extraction,p_batch:batch,p_rows:input});
+   return {written:Number(r.written),inherited:Number(r.inherited)};
   },
   async insertCitation(row){return String(await call('insert_citation',{p_row:row}));},
   async publishCitations(ids){return Number(await call('publish_citations',{p_ids:ids}));},
   async insertCandidates(extraction,batch,input){
-   let inserted=0;
-   for(const part of input.length?chunk(input,WRITE_CHUNK):[[]])inserted+=Number((await call<{inserted:number}>('insert_candidates',{p_extraction:extraction,p_batch:batch,p_rows:part})).inserted);
-   return {inserted};
+   checkWriteRows(input);
+   return {inserted:Number((await call<{inserted:number}>('insert_candidates',{p_extraction:extraction,p_batch:batch,p_rows:input})).inserted)};
   },
   async decideCandidate(candidate,decision){const r=await call<{status:CandidateStatus}>('decide_candidate',{p_candidate:candidate,p_decision:decision});return {status:r.status};},
   async stageCandidatePublication(candidate,pubGen,run,factId){
@@ -249,8 +266,9 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async assetsOf(documentId){return (await rows(c.from('document_assets').select('*').eq('document_id',documentId).order('role').order('filename').limit(PAGE_LIMIT_MAX))).map(assetFromRow);},
   async extractionsOf(documentId,page){
    const limit=lookaheadLimit(page.limit);
+   const cur=page.cursor?timestampUuidCursor(page.cursor):null;   // validated before anything is built
    let q=c.from('document_extractions').select('*').eq('document_id',documentId);
-   if(page.cursor){const [at,id]=decodeCursor(page.cursor);q=q.or(`created_at.lt."${at}",and(created_at.eq."${at}",extraction_id.lt.${id})`);}
+   if(cur){const [at,id]=cur;q=q.or(`created_at.lt."${at}",and(created_at.eq."${at}",extraction_id.lt.${id})`);}
    return sliceRows(await rows(q.order('created_at',{ascending:false}).order('extraction_id',{ascending:false}).limit(limit+1)),limit,extractionFromRow,r=>[String(r.created_at),String(r.extraction_id)]);
   },
   async extractionById(id){const r=await maybe(c.from('document_extractions').select('*').eq('extraction_id',id).maybeSingle());return r?extractionFromRow(r):null;},
@@ -272,7 +290,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   },
   async approvalsFor(extractorRef,opts){
    const limit=checkApprovalsLimit(opts.limit);
-   const r=await rows(c.from('extraction_approvals').select('*').eq('extractor_ref',extractorRef).is('revoked_at',null).order('approved_at',{ascending:false}).order('approval_id').limit(limit+1));
+   const r=await rows(c.from('extraction_approvals').select(APPROVAL_SELECT).eq('extractor_ref',extractorRef).is('revoked_at',null).order('approved_at',{ascending:false}).order('approval_id').limit(limit+1));
    if(r.length>limit)throw new DocumentsDbError('too_many_approvals',`more than ${limit} approvals for ${extractorRef}`);
    return r.map(approvalFromRow);
   },
@@ -289,10 +307,13 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   },
   async scopeAll(source){
    const out:DocScopeRow[]=[];
-   for(let from=0;;from+=PAGE_LIMIT_MAX){
-    const r=await rows(c.from('document_sync_scope').select('*').eq('source',source).order('issuer_id').range(from,from+PAGE_LIMIT_MAX-1));
+   for(let last:string|null=null;;){   // keyset on issuer_id (the primary key's leading column): stable under concurrent inserts, unlike offset ranges
+    let q=c.from('document_sync_scope').select('*').eq('source',source);
+    if(last!==null)q=q.gt('issuer_id',last);
+    const r=await rows(q.order('issuer_id').limit(PAGE_LIMIT_MAX));
     out.push(...r.map(scopeFromRow));
     if(r.length<PAGE_LIMIT_MAX)return out;
+    last=String(r[r.length-1].issuer_id);
    }
   },
  };
