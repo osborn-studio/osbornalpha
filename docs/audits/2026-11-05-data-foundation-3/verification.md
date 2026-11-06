@@ -19,3 +19,22 @@
 | 被拒 / 跳过行（质量复审后规则） | `ListOfSecurities.xlsx`：0 拒绝、0 跳过。`isinsehk.xls`：0 拒绝、2 跳过（`non_data`）。`isino.xls`：0 拒绝、37 跳过（`non_data`：`National Numbering Agencies` 图例表的缩写-全称条目与 `Note:` 说明）。原先的 3,309 行 `invalid_isin` 全是占位值 `Not Available`（`NLBNPHK1FT88` 等权证 ISIN 校验位正确，不被拒）；占位值（`Not Available`、`N/A`、`-`、空）= 无 ISIN，不计拒绝。`isino.xls` 11,916 行中 8,607 行带 ISIN | 规则：非数字股票代码且无 ISIN 形态的值 → `skipped(non_data)`；非数字代码但带 ISIN 形态的值 → `invalid_stock_code` | `parseHkexList` 增 `skipped`；占位集 `PLACEHOLDER_ISIN` |
 | `-OLD` 并行交易柜台 | 合并后 16 个名称以 `-OLD` 结尾的柜台（如 02934 `CHINA SANDI-OLD`、02936 `SG GROUP H-OLD`、02942 `STAR GROUP-OLD`）被剔除，原因 `superseded_counter`；跨文件 ISIN 冲突仍为 0 | — | `mergeHkexIsins` 返回 `dropped` |
 | 原始文件内容类型 | `ListOfSecurities.xlsx` = zip（`PK`，OOXML）；`isinsehk.xls`、`isino.xls` = OLE（`d0cf11e0`） | 复审发现：原先三份都会按 OOXML MIME/`.xlsx` 入桶 | `HKEX_LIST_FILES[].contentType`（xlsx / `application/vnd.ms-excel`）；`RawContentType` 增 `application/vnd.ms-excel`→`xls`；`reconcile-raw` 桶 `allowed_mime_types` 增该项 |
+
+## Task 3b · OpenFIGI 实测（规格 §4.1.2、§14-2；无 key；日期 2026-11-06）
+
+命令：`npx tsx scripts/entity-keys/probe-openfigi.ts docs/audits/2026-11-05-data-foundation-3/raw`（`POST https://api.openfigi.com/v3/mapping`，无 `X-OPENFIGI-APIKEY`；2 个请求，各 3 个 job，均 200）。
+
+| 证券 | 期望（代码假设） | 实测 exchCode / ticker / securityType / marketSector / compositeFIGI | 分组结果（`grouped`） | 一致 |
+|---|---|---|---|---|
+| AAPL `US0378331005` | US 场所码 ∈ EXCH_MAP，Common Stock，composite `BBG000B9XRY4`，恰 1 组 | 303 条记录；`US`/`UN`/`UW` 等，ticker `AAPL`，Common Stock，Equity，composite `BBG000B9XRY4`（其余为海外场所码，被 `exch_unknown` 跳过） | `US AAPL` 恰 1 组 `BBG000B9XRY4`（composite；exch `UN,US,UW`） | 是 |
+| 贵州茅台 `CNE0000018R8` | `CG`/`CH`，ticker `600519`，类型 ∈ ALLOWED，恰 1 组 `600519.SH` | 3 条记录；`CH` + `CG`，ticker `600519`，Common Stock，Equity，composite `BBG000BC4595` | `CN 600519.SH` 恰 1 组 `BBG000BC4595`（exch `CG,CH`） | 是 |
+| 腾讯 `KYG875721634` | `HK`，ticker `700`，Common Stock，恰 1 组 `00700.HK` | 168 条记录；`HK` ticker `700`（composite `BBG000BJ35F4`）；另有 `HK` ticker `80700`（人民币柜台，composite `BBG01GXJQJR6`）与 `US` ticker `TCTZF`（OTC，composite `BBG000QMWZW4`），均 Common Stock/Equity | 3 个 ticker 各 1 组：`HK 00700.HK`、`HK 80700.HK`、`US TCTZF` | 部分：`00700.HK` 恰 1 组；同 ISIN 还映射出 `80700.HK` 与 `TCTZF` 两个 ticker |
+| TICKER `AAPL/US`、`600519/CG`、`700/HK` | 各恰 1 组，与 ISIN 结果同 FIGI | 一次响应 3 个 job：`US AAPL` composite `BBG000B9XRY4`；`CG 600519` composite `BBG000BC4595`；`HK 700` composite `BBG000BJ35F4` | 各恰 1 组，composite FIGI 与 ISIN 结果相同 | 是 |
+
+全部 `securityType` = `Common Stock`、`marketSector` = `Equity`（含 600519 与 0700，不需要扩 `ALLOWED_SECURITY_TYPES`）；所有 A/H 场所码（`US,UN,UW,CG,CH,HK`）已在 `EXCH_MAP`，无需改映射。`EXCH_MAP_VERSION` 保持 `exch-map/1`。
+
+决策（计划规则 1 与 4）：三家都"目标 ticker 恰 1 组且 FIGI 正确" → `EXCH_MAP_VERIFIED=true`。腾讯 ISIN 还映射出两个附带 ticker（`80700.HK` 人民币柜台、`TCTZF` OTC），不改适配器（不发明场所偏好）；后续任务（4a `plan.ts`、7a `link-ah`）必须按"待挂接证券的 ticker"取对应候选，而不是把 ISIN 的全部 ticker 当作该发行人的证券，也不得因 ISIN 级结果出现多个 ticker 就认定冲突。夹具 `recorded-probe-isin.json` 的断言相应写为 `['00700.HK:1','80700.HK:1','TCTZF:1']`。
+
+原始响应（入库于 `docs/audits/2026-11-05-data-foundation-3/raw/`，`.meta.json` 为内容寻址侧车）：
+- `openfigi-isin-5afdb0e5…139a.json`（ISIN 响应，123,091 字节，sha256 `5afdb0e5d0f9ae85a2b4cb13848b5df2bdd7bb119b2ac1d7c932fc8a1993139a`；对应请求 `openfigi-isin-c581a143…80d7.json`）
+- `openfigi-ticker-079188bb…e5b9.json`（TICKER 响应，818 字节，sha256 `079188bbcb12b2230a75a72a9b83cab1a6c5911e80298aba820a16d0516ee5b9`；对应请求 `openfigi-ticker-418b033a…f00b.json`）

@@ -145,9 +145,9 @@ describe('mapJobs',()=>{
 
 const RECORDED=new URL('../fixtures/openfigi/recorded-probe-isin.json',import.meta.url);
 describe('recorded probe (Task 3b Step 8)',()=>{
- it.skipIf(!existsSync(RECORDED))('maps AAPL, 600519 and 0700 each to exactly one candidate group',()=>{
+ it.skipIf(!existsSync(RECORDED))('maps AAPL, 600519 and 0700 to exactly one group per ticker (Tencent ISIN also lists 80700.HK and the OTC line TCTZF)',()=>{
   const items=JSON.parse(readFileSync(RECORDED,'utf8')) as {data?:FigiRecord[]}[];
   const tickers=items.map(i=>groupFigiResults(i.data??[]).candidates.map(c=>`${c.ticker}:${c.groups.length}`));
-  expect(tickers).toEqual([['AAPL:1'],['600519.SH:1'],['00700.HK:1']]);
+  expect(tickers).toEqual([['AAPL:1'],['600519.SH:1'],['00700.HK:1','80700.HK:1','TCTZF:1']]);
  });
 });

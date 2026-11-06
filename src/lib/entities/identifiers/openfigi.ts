@@ -15,7 +15,7 @@ export const OPENFIGI_URL='https://api.openfigi.com/v3/mapping';
 export const OPENFIGI_VERSION='v3';
 export const EXCH_MAP_VERSION='exch-map/1';
 /** True only after the Task 3b live check (verification.md). fill-identifiers/link-ah --apply refuse while false. */
-export const EXCH_MAP_VERIFIED:boolean=false;
+export const EXCH_MAP_VERIFIED:boolean=true;
 /** openfigi.com/about/exchange-codes. CG→.SH, CS→.SZ, CH (China composite) by code prefix (6/9→.SH, 0/3→.SZ). */
 export const EXCH_MAP:Readonly<Record<string,'US'|'SH'|'SZ'|'CH'|'HK'>>={US:'US',UN:'US',UW:'US',UA:'US',UR:'US',UP:'US',UQ:'US',CG:'SH',CS:'SZ',CH:'CH',HK:'HK'};
 /** Spec §4.1.2 set; extend only with values observed in the live check (contract issue 1). */
