@@ -15,6 +15,7 @@ import type {Row,TableClient} from '../db/table-client';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {isValidIsin,isValidLei,normalizeCik} from '../research/entity-keys/identifiers';
 import type {ValidFromMethod,ValidToMethod} from './types';
+import {VALID_FROM_METHODS,VALID_TO_METHODS} from './securities';
 
 export interface ResolveQuery{ticker?:string;isin?:string;cik?:string;lei?:string}
 export interface ResolvedSecurity{ticker:string;isin:string|null;figi:string|null;share_class:string|null;is_primary:boolean;valid_from:string;valid_to:string|null;valid_from_method:ValidFromMethod|null;valid_to_method:ValidToMethod|null}
@@ -34,17 +35,14 @@ export interface ResolveOptions{
 /** Cache-Control for a resolve evaluated at a past date (spec 3 §4.3.5). */
 export const HISTORICAL_CACHE_CONTROL='public, max-age=600, s-maxage=3600';
 
-const FROM_METHODS:readonly string[]=['first_observed','listing_date','ticker_change','curated'];
-const TO_METHODS:readonly string[]=['delisting','ticker_change','sec_file_absent','curated','merge_close','unrecorded'];
-
 const str=(v:unknown)=>typeof v==='string'?v:null;
 const isCurrent=(r:Row,today:string)=>{const from=str(r.valid_from),to=str(r.valid_to);return from!==null&&from<=today&&(to===null||to>today);};
 /** The one validity predicate (valid_from <= today && (valid_to is null || valid_to > today)); reused by the facts scope (plan 2 Task 14). */
 export const isCurrentSecurity=isCurrent;
 const toSecurity=(r:Row):ResolvedSecurity=>({
  ticker:String(r.ticker),isin:str(r.isin),figi:str(r.figi),share_class:str(r.share_class),is_primary:r.is_primary===true,valid_from:String(r.valid_from),valid_to:str(r.valid_to),
- valid_from_method:typeof r.valid_from_method==='string'&&FROM_METHODS.includes(r.valid_from_method)?r.valid_from_method as ValidFromMethod:null,
- valid_to_method:typeof r.valid_to_method==='string'&&TO_METHODS.includes(r.valid_to_method)?r.valid_to_method as ValidToMethod:null,
+ valid_from_method:typeof r.valid_from_method==='string'&&(VALID_FROM_METHODS as readonly string[]).includes(r.valid_from_method)?r.valid_from_method as ValidFromMethod:null,
+ valid_to_method:typeof r.valid_to_method==='string'&&(VALID_TO_METHODS as readonly string[]).includes(r.valid_to_method)?r.valid_to_method as ValidToMethod:null,
 });
 
 /** A real calendar date in the exact form 'YYYY-MM-DD' (2026-02-30 and ' 2026-11-05' are rejected). */

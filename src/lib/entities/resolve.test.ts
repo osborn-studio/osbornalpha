@@ -109,7 +109,7 @@ describe('resolveIssuer',()=>{
   await expect(resolveIssuer(c,{ticker:'AAPL'},{asOf:'2026-11-05',today:'2026-11-04'})).rejects.toThrow('invalid_as_of');
   for(const asOf of ['2026-02-30','20261105',' 2026-11-05'])await expect(resolveIssuer(c,{ticker:'AAPL'},{asOf})).rejects.toThrow('invalid_as_of');
  });
- it('returns the window methods of each security (null when the row predates the method columns)',async()=>{
+ it('returns the window methods of each security (null when the row carries no method; the in-memory client has no column defaults)',async()=>{
   const c=await seed();
   await c.insert('issuer_securities',{issuer_id:'a',ticker:'AAPL.W',isin:null,figi:null,share_class:'other',is_primary:false,valid_from:'2001-01-01',valid_to:'2002-01-01',valid_from_method:'listing_date',valid_to_method:'sec_file_absent',source:'sec'});
   const out=await resolveIssuer(c,{ticker:'AAPL'},{asOf:TODAY,includeExpired:true});

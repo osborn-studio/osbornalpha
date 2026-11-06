@@ -73,7 +73,7 @@ export function publicMarketOf(ticker:string):Market|null{
  */
 export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string):Promise<PublicIssuer|null>{
  const given=rawTicker.trim().toUpperCase().replace(/\//g,'.');
- const r=await resolveIssuer(tables,{ticker:given},{today});
+ const r=await resolveIssuer(tables,{ticker:given},{asOf:today});
  if(!r)return null;
  const core=inferCoreMarket(given);
  const normalised=core?normalizeSecurityTicker(given,core):null;

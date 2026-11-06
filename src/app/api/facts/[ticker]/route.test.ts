@@ -33,7 +33,7 @@ describe('GET /api/facts/[ticker]',()=>{
   expect(body.filings).toEqual([{filingId:FID,formType:'10-K',periodEnd:'2023-09-30',availableDate:'2023-11-03',sourceRef:'0000320193-23-000106',url:'https://www.sec.gov/x',documentRef:null,documentUrl:null,citation:'edgar'}]);
   expect(res.headers.get('cache-control')).toBe('public, max-age=600, s-maxage=3600');
   expect(mocks.readFacts).toHaveBeenCalledWith(ISSUER,'US',{concepts:['revenue'],asOf:'2024-06-30',from:undefined,to:undefined,history:false,limit:200});
-  expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(),{ticker:'AAPL'},{today:TODAY});
+  expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(),{ticker:'AAPL'},{asOf:TODAY});
  });
  it('CN tickers: market CN, citation linked/pending from document_ref',async()=>{
   mocks.readFacts.mockResolvedValue({stateRev:1,rows:[fact({market:'CN',unit:'CNY'}),fact({fact_id:'d'.repeat(36),filing_id:'e'.repeat(36),market:'CN',unit:'CNY'})],truncated:false});
@@ -78,7 +78,7 @@ describe('GET /api/facts/[ticker]',()=>{
  });
  it('normalises the slash form and rejects a malformed percent escape and ambiguous owners',async()=>{
   await get('BRK/B','concepts=revenue');
-  expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'BRK.B'},{today:TODAY});
+  expect(mocks.resolve).toHaveBeenLastCalledWith(expect.anything(),{ticker:'BRK.B'},{asOf:TODAY});
   const mal=await GET(new Request('https://alpha.example/api/facts/%E0%A4%A?concepts=revenue'),{params:Promise.resolve({ticker:'%E0%A4%A'})});
   expect(mal.status).toBe(400);expect((await mal.json()).error.code).toBe('invalid_parameter:ticker');
   mocks.resolve.mockRejectedValue(new Error('ambiguous_owner'));
