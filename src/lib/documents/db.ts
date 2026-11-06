@@ -88,29 +88,44 @@ export function checkIds<T>(ids:T[],max=IDS_MAX):T[]{if(ids.length>max)throw new
 // ---------------------------------------------------------------- row normalisation (PostgREST json, to_jsonb, or pg text)
 // F3 recheck N1: timestamps keep PostgreSQL's microseconds. Canonical form = UTC ISO with 3 fractional digits, extended to 6
 // only when the sub-millisecond part is non-zero ('.123Z', '.123456Z'); canonical strings are NOT lexicographically ordered
-// across those two widths, so compare with tsSortKey.
-const TS_PARTS=/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/;
-/** String-based timestamptz parser (offsets, 1–9 fractional digits, rounded half up to microseconds); null if not a timestamp. */
+// across those two widths, so compare with tsSortKey. canonTs DEFINES the accepted writer grammar (F3 Task 3 review): an explicit
+// zone (Z or ±hh[:mm]) is required (zone-less and date-only values are rejected: PostgreSQL would read them in the session zone),
+// seconds 00–59, real calendar dates, years 1000–9999, 1–9 fractional digits rounded half-to-even to microseconds.
+const TS_PARTS=/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)$/;
 export function canonTs(v:string):string|null{
  const m=TS_PARTS.exec(v.trim());if(!m)return null;
- const [y,mo,d,h,mi,sec]=[m[1],m[2],m[3],m[4]??'0',m[5]??'0',m[6]??'0'].map(Number);
- if(mo<1||mo>12||d<1||d>31||h>23||mi>59||sec>59)return null;
+ const [y,mo,d,h,mi,sec]=[m[1],m[2],m[3],m[4],m[5],m[6]??'0'].map(Number);
+ if(y<1000||mo<1||mo>12||d<1||d>31||h>23||mi>59||sec>59)return null;
  let off=0;
- if(m[8]&&m[8]!=='Z'){const o=m[8];const sign=o[0]==='-'?-1:1;const digits=o.slice(1).replace(':','');const oh=Number(digits.slice(0,2)),om=Number(digits.slice(2)||'0');if(oh>15||om>59)return null;off=sign*(oh*60+om);}
- const base=Date.UTC(y,mo-1,d,h,mi,sec);const chk=new Date(base);
- if(Number.isNaN(base)||chk.getUTCDate()!==d||chk.getUTCMonth()!==mo-1)return null;   // 31 February and friends
- const frac=(m[7]??'').padEnd(7,'0');
- const micros=BigInt(base-off*60000)*1000n+BigInt(frac.slice(0,6))+(Number(frac[6])>=5?1n:0n);
- const msPart=micros/1000n,sub=Number(micros%1000n);   // BigInt division truncates toward zero; pre-1970 values are not expected
- const iso=new Date(Number(msPart)).toISOString();
- return sub===0?iso:`${iso.slice(0,-1)}${String(sub).padStart(3,'0')}Z`;
+ if(m[8]!=='Z'){const o=m[8];const sign=o[0]==='-'?-1:1;const digits=o.slice(1).replace(':','');const oh=Number(digits.slice(0,2)),om=Number(digits.slice(2)||'0');if(oh>15||om>59)return null;off=sign*(oh*60+om);}
+ const dt=new Date(0);dt.setUTCFullYear(y,mo-1,d);dt.setUTCHours(h,mi,sec,0);   // setUTCFullYear: Date.UTC would map years 0–99 to 19xx
+ if(dt.getUTCDate()!==d||dt.getUTCMonth()!==mo-1)return null;   // 31 February and friends
+ const frac=m[7]??'';const head=frac.slice(0,6).padEnd(6,'0');const rest=frac.slice(6);
+ let micros=BigInt(dt.getTime()-off*60000)*1000n+BigInt(head);
+ if(rest){const half='5'+'0'.repeat(rest.length-1);if(rest>half||(rest===half&&BigInt(head)%2n===1n))micros+=1n;}
+ let ms=micros/1000n,sub=micros%1000n;
+ if(sub<0n){sub+=1000n;ms-=1n;}   // floor division with a non-negative remainder (pre-1970 values)
+ const t=Number(ms);const out=new Date(t);if(Number.isNaN(out.getTime())||out.getUTCFullYear()>9999||out.getUTCFullYear()<1000)return null;
+ const iso=out.toISOString();
+ return sub===0n?iso:`${iso.slice(0,-1)}${String(sub).padStart(3,'0')}Z`;
 }
 /** Fixed-width key (always 6 fractional digits) so string comparison = chronological comparison; null for non-timestamps. */
 export function tsSortKey(v:string):string|null{
  const c=canonTs(v);if(c===null)return null;
  return c.length===24?`${c.slice(0,-1)}000Z`:c;
 }
-const ts=(v:unknown):string=>v instanceof Date?v.toISOString():(canonTs(String(v))??new Date(String(v)).toISOString());
+/** Writer-side check shared by both SQL adapters: canonical timestamp or invalid_input. */
+export function tsArg(v:unknown,what:string):string{
+ const c=typeof v==='string'?canonTs(v):null;
+ if(c===null)throw new DocumentsDbError('invalid_input',`invalid_timestamp:${what}`);
+ return c;
+}
+const ts=(v:unknown):string=>{
+ if(v instanceof Date&&!Number.isNaN(v.getTime()))return v.toISOString();
+ const c=canonTs(String(v));
+ if(c===null)throw new DocumentsDbError('unknown','bad_timestamp');
+ return c;
+};
 const tsOrNull=(v:unknown):string|null=>v===null||v===undefined?null:ts(v);
 const strOrNull=(v:unknown):string|null=>v===null||v===undefined?null:String(v);
 const numOrNull=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
@@ -179,11 +194,24 @@ export function scopeFromRow(r:Record<string,unknown>):DocScopeRow{
 
 // ---------------------------------------------------------------- argument builders (shared by the Supabase and pg adapters)
 /** DocumentInsert → p_doc (the function supplies id, version, supersedes, status, timestamps). */
-export const docArg=(d:DocumentInsert)=>({...d});
+export const docArg=(d:DocumentInsert)=>({...d,published_at:tsArg(d.published_at,'published_at'),available_at:tsArg(d.available_at,'available_at')});   // F3: zone-less / impossible timestamps are refused before SQL, like memory
 export const assetsArg=(a:AssetInsert[])=>a.map(x=>({...x}));
 export const extractionArg=(e:ExtractionInsert)=>({...e});
 export const pagesArg=(p:PageInsert[])=>p.map(x=>({...x}));
-export const approvalArg=(a:Omit<ApprovalRow,'approval_id'|'approved_at'|'revoked_at'>)=>({...a});
+/** Exact comparison of two non-negative plain decimal strings: <0, 0, >0 (no Number: ea_threshold is numeric in SQL). */
+export function cmpDecimal(a:string,b:string):number{
+ const parse=(x:string)=>{const m=/^(\d+)(?:\.(\d*))?$/.exec(x);if(!m)throw new DocumentsDbError('invalid_input','decimal');return {int:m[1],frac:m[2]??''};};
+ const x=parse(a),y=parse(b);const n=Math.max(x.frac.length,y.frac.length);
+ const big=(d:{int:string;frac:string})=>BigInt(d.int+d.frac.padEnd(n,'0'));
+ const bx=big(x),by=big(y);return bx<by?-1:bx>by?1:0;
+}
+/** precision / recall: canonical decimal (exponents accepted, length-bounded like approvalFromRow's reader) inside the ea_threshold band, else invalid_input. */
+export function approvalDecimal(v:unknown,what:string):string{
+ let t:string;try{t=canonicalDecimal(String(v));}catch{throw new DocumentsDbError('invalid_input',`ea_threshold:${what}`);}
+ if(!/^\d+(\.\d+)?$/.test(t)||cmpDecimal(t,'0.95')<0||cmpDecimal(t,'1')>0)throw new DocumentsDbError('invalid_input',`ea_threshold:${what}`);
+ return t;
+}
+export const approvalArg=(a:Omit<ApprovalRow,'approval_id'|'approved_at'|'revoked_at'>)=>({...a,precision:approvalDecimal(a.precision,'precision'),recall:approvalDecimal(a.recall,'recall')});
 export function candidatesWhere(where:{extractionId:string}|{status:CandidateStatus}|{issuerId:string;status?:CandidateStatus}){
  if('extractionId' in where)return {p_extraction:where.extractionId,p_status:null,p_issuer:null};
  if('issuerId' in where)return {p_extraction:null,p_status:where.status??null,p_issuer:where.issuerId};
@@ -235,10 +263,10 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
  return {
   async reconcileScope(source,input){return Number(await call('reconcile_document_sync_scope',{p_source:source,p_rows:input}));},
   async claimSyncLease(issuer,source,batch,ttl){return (await call('claim_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_ttl:ttl}))===true;},
-  insertDocumentVersion:(issuer,source,batch,doc,assets)=>call<InsertVersionResult>('insert_document_version',{p_issuer:issuer,p_source:source,p_batch:batch,p_doc:docArg(doc),p_assets:assetsArg(assets)}),
-  insertUploadDocument:(owner,doc)=>call<InsertVersionResult>('insert_upload_document',{p_owner:owner,p_doc:docArg(doc)}),
+  insertDocumentVersion:async(issuer,source,batch,doc,assets)=>call<InsertVersionResult>('insert_document_version',{p_issuer:issuer,p_source:source,p_batch:batch,p_doc:docArg(doc),p_assets:assetsArg(assets)}),
+  insertUploadDocument:async(owner,doc)=>call<InsertVersionResult>('insert_upload_document',{p_owner:owner,p_doc:docArg(doc)}),
   async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){await call('advance_document_cursor',{p_issuer:issuer,p_source:source,p_batch:batch,p_mode:mode,p_cursor:cursor,p_done:done,p_reset:reset});},
-  async releaseSyncLease(issuer,source,batch,outcome,nextDue){await call('release_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_outcome:outcome,p_next_due:nextDue});},
+  async releaseSyncLease(issuer,source,batch,outcome,nextDue){await call('release_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_outcome:outcome,p_next_due:tsArg(nextDue,'next_due')});},
   async reclassifyDocument(document,patch,actor){await call('reclassify_document',{p_document:document,p_patch:patch,p_actor:actor});},
   async claimExtractLease(document,batch,ttl){return (await call('claim_document_extract_lease',{p_document:document,p_batch:batch,p_ttl:ttl}))===true;},
   async renewExtractLease(document,batch,ttl){return (await call('renew_document_extract_lease',{p_document:document,p_batch:batch,p_ttl:ttl}))===true;},
@@ -321,7 +349,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async storedDue(limit){return ((await call<Record<string,unknown>[]|null>('documents_stored_due',{p_limit:checkLimit(limit)}))??[]).map(documentFromRow);},
   async candidatesDue(limit){return ((await call<Record<string,unknown>[]|null>('extractions_candidates_due',{p_limit:checkLimit(limit)}))??[]).map(extractionFromRow);},
   async scopeDue(source,now,limit){
-   return (await rows(c.from('document_sync_scope').select('*').eq('source',source).gt('priority',0).lte('next_due_at',now)
+   return (await rows(c.from('document_sync_scope').select('*').eq('source',source).gt('priority',0).lte('next_due_at',tsArg(now,'now'))
     .order('next_due_at').order('priority',{ascending:false}).order('issuer_id').limit(checkLimit(limit)))).map(scopeFromRow);
   },
   async scopeRows(source,issuerIds){

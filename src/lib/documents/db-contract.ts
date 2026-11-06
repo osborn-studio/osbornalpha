@@ -6,6 +6,7 @@
 // database; global reads (storedDue, candidatesDue, scopeDue) are asserted with `some`/`find`.
 import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {encodeCursor} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from './types';
 import type {AssetInsert,CandidateInsert,CitationInsert,DocScopeCursor,DocumentInsert,DocumentsDb,ExtractionInsert,ListedSource,Page,PageInsert,PageOpts} from './types';
 
@@ -552,6 +553,41 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
     expect(seen.pages).toBe(Math.ceil(12/limit));
     expect(seen.rows.map(r=>r.available_at)).toEqual(want.map(stamp));
    }
+  });
+
+  it('writer timestamps follow one grammar (Task 3 review): impossible dates and zone-less values are invalid_input everywhere, nothing is stored',async()=>{
+   const {iss,b}=await ready();
+   for(const x of ['2026-02-31T00:00:00Z','2026-03-20T09:00:00','2026-03-20','2026-03-20T09:00:60Z']){
+    const at={available_at:x,published_at:'2026-03-20T09:00:00Z',available_date:'2026-03-20'};
+    expect(await code(db.insertDocumentVersion(iss,'hkexnews',b,docInsert(at),[])),x).toBe('invalid_input');
+    expect(await code(db.insertDocumentVersion(iss,'hkexnews',b,docInsert({...at,available_at:'2026-03-20T09:00:00Z',published_at:x}),[])),x).toBe('invalid_input');
+   }
+   expect(await code(db.scopeDue('hkexnews','2026-03-20',10))).toBe('invalid_input');
+   expect((await db.readDocuments(iss,{asOf:'2026-03-21',limit:10})).rows).toHaveLength(0);
+  });
+
+  it('pre-1970 sub-millisecond timestamps round-trip and sort across the epoch (Task 3 review)',async()=>{
+   const {iss,b}=await ready();
+   const xs=['1970-01-01T00:00:00.000001Z','1969-12-31T23:59:59.999999Z','1969-12-31T15:59:59.5-08:00','1970-01-01T00:00:00Z'];
+   const ids=[];for(const x of xs)ids.push((await db.insertDocumentVersion(iss,'hkexnews',b,docInsert({available_at:x,published_at:x,available_date:'1970-01-01'}),[])).document_id);
+   const seen=await drain(p=>db.readDocuments(iss,{asOf:'1971-01-01',...p}),1);
+   expect(seen.rows.map(r=>r.available_at)).toEqual(['1970-01-01T00:00:00.000001Z','1970-01-01T00:00:00.000Z','1969-12-31T23:59:59.999999Z','1969-12-31T23:59:59.500Z']);
+   expect(seen.rows.map(r=>r.document_id)).toEqual([ids[0],ids[3],ids[1],ids[2]]);
+  });
+
+  it('approval decimals: canonical, length-bounded and readable back; an over-long precision is refused before any write (Task 3 review)',async()=>{
+   const user=await h.user();
+   const ref=`long-${randomUUID()}`;
+   const base={extractor_ref:ref,extractor_version:'v',table_algo_version:'t',code_version:'c',concepts:['revenue'],gold_sha256:sha('gold-long'),precision:'0.97',recall:'0.97',report_path:'r',approved_by:user};
+   expect(await code(db.insertApproval({...base,precision:'0.95'+'0'.repeat(509)}))).toBe('invalid_input');
+   expect(await db.approvalsFor(ref,{limit:10})).toEqual([]);
+   const id=await db.insertApproval({...base,precision:'9.7e-1',recall:'0.9700'});
+   expect(await db.approvalsFor(ref,{limit:10})).toMatchObject([{approval_id:id,precision:'0.97',recall:'0.97'}]);
+  });
+
+  it('extractionsOf refuses a malformed one-element cursor (Task 3 review)',async()=>{
+   const bad=encodeCursor(['2026-03-20T09:00:00.000Z']);
+   expect(await code(db.extractionsOf(randomUUID(),{cursor:bad,limit:5}))).toBe('invalid_input');
   });
 
   it('finishExtract stores a missing line_count as 0, like the SQL coalesce (F3 review)',async()=>{

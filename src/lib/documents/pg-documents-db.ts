@@ -11,7 +11,7 @@
 import type {Pool} from 'pg';
 import {typeParsers} from '../db/pg-table-client';
 import {
- CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,checkWriteRows,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkApprovalsLimit,checkIds,checkLimit,chunk,citationFromRow,
+ CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,approvalArg,assetsArg,checkWriteRows,docArg,timestampUuidCursor,tsArg,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkApprovalsLimit,checkIds,checkLimit,chunk,citationFromRow,
  decodeCursor,documentFromRow,extractionFromRow,lookaheadLimit,pageFromRow,pageOf,publicationFromRow,publicationsWhere,readDocumentsArgs,regenFilter,scopeFromRow,sliceRows,sqlCursor,toDocumentsDbError,
 } from './db';
 import type {Envelope,PgErrorLike} from './db';
@@ -29,10 +29,10 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
  return {
   async reconcileScope(source,input){return Number(await fn('public.reconcile_document_sync_scope($1,$2::jsonb)',[source,json(input)]));},
   async claimSyncLease(issuer,source,batch,ttl){return (await fn<boolean>('public.claim_document_sync_lease($1,$2,$3,$4)',[issuer,source,batch,ttl]))===true;},
-  insertDocumentVersion:(issuer,source,batch,doc,assets)=>fn<InsertVersionResult>('public.insert_document_version($1,$2,$3,$4::jsonb,$5::jsonb)',[issuer,source,batch,json(doc),json(assets)]),
-  insertUploadDocument:(owner,doc)=>fn<InsertVersionResult>('public.insert_upload_document($1,$2::jsonb)',[owner,json(doc)]),
+  insertDocumentVersion:async(issuer,source,batch,doc,assets)=>fn<InsertVersionResult>('public.insert_document_version($1,$2,$3,$4::jsonb,$5::jsonb)',[issuer,source,batch,json(docArg(doc)),json(assetsArg(assets))]),
+  insertUploadDocument:async(owner,doc)=>fn<InsertVersionResult>('public.insert_upload_document($1,$2::jsonb)',[owner,json(docArg(doc))]),
   async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){await fn('public.advance_document_cursor($1,$2,$3,$4,$5::jsonb,$6,$7)',[issuer,source,batch,mode,json(cursor),done,reset]);},
-  async releaseSyncLease(issuer,source,batch,outcome,nextDue){await fn('public.release_document_sync_lease($1,$2,$3,$4,$5::timestamptz)',[issuer,source,batch,outcome,nextDue]);},
+  async releaseSyncLease(issuer,source,batch,outcome,nextDue){await fn('public.release_document_sync_lease($1,$2,$3,$4,$5::timestamptz)',[issuer,source,batch,outcome,tsArg(nextDue,'next_due')]);},
   async reclassifyDocument(document,patch,actor){await fn('public.reclassify_document($1,$2::jsonb,$3)',[document,json(patch),actor]);},
   async claimExtractLease(document,batch,ttl){return (await fn<boolean>('public.claim_document_extract_lease($1,$2,$3)',[document,batch,ttl]))===true;},
   async renewExtractLease(document,batch,ttl){return (await fn<boolean>('public.renew_document_extract_lease($1,$2,$3)',[document,batch,ttl]))===true;},
@@ -60,9 +60,10 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    if(r.outcome==='approval_revoked')throw new DocumentsDbError('approval_revoked');
   },
   async insertApproval(row){
+   const a=approvalArg(row);   // canonical decimals in the band, like memory and Supabase
    const r=await one(`insert into public.extraction_approvals (extractor_ref, extractor_version, table_algo_version, code_version, concepts, gold_sha256, precision, recall, report_path, approved_by)
     values ($1,$2,$3,$4,$5::text[],$6,$7::numeric,$8::numeric,$9,$10) returning approval_id`,
-    [row.extractor_ref,row.extractor_version,row.table_algo_version,row.code_version,row.concepts,row.gold_sha256,row.precision,row.recall,row.report_path,row.approved_by]);
+    [a.extractor_ref,a.extractor_version,a.table_algo_version,a.code_version,a.concepts,a.gold_sha256,a.precision,a.recall,a.report_path,a.approved_by]);
    return String(r!.approval_id);
   },
   async revokeApproval(approvalId){
@@ -86,7 +87,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
   async documentById(id){const r=await one(`select * from public.disclosure_documents where document_id = $1`,[id]);return r?documentFromRow(r):null;},
   async assetsOf(documentId){return (await run(`select * from public.document_assets where document_id = $1 order by role, filename limit $2`,[documentId,PAGE_LIMIT_MAX])).rows.map(assetFromRow);},
   async extractionsOf(documentId,page){
-   const limit=lookaheadLimit(page.limit);const [at,id]=page.cursor?decodeCursor(page.cursor):[null,null];
+   const limit=lookaheadLimit(page.limit);const [at,id]=page.cursor?timestampUuidCursor(page.cursor):[null,null];
    const r=await run(`select * from public.document_extractions where document_id = $1 and ($2::timestamptz is null or (created_at, extraction_id) < ($2::timestamptz, $3::uuid))
     order by created_at desc, extraction_id desc limit $4`,[documentId,at,id,limit+1]);
    return sliceRows(r.rows,limit,extractionFromRow,x=>[String(x.created_at),String(x.extraction_id)]);
@@ -119,7 +120,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
   async storedDue(limit){return ((await fn<Record<string,unknown>[]|null>('public.documents_stored_due($1)',[checkLimit(limit)]))??[]).map(documentFromRow);},
   async candidatesDue(limit){return ((await fn<Record<string,unknown>[]|null>('public.extractions_candidates_due($1)',[checkLimit(limit)]))??[]).map(extractionFromRow);},
   async scopeDue(source,now,limit){
-   return (await run(`select * from public.document_sync_scope where source = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[source,now,checkLimit(limit)])).rows.map(scopeFromRow);
+   return (await run(`select * from public.document_sync_scope where source = $1 and priority > 0 and next_due_at <= $2::timestamptz order by next_due_at, priority desc, issuer_id limit $3`,[source,tsArg(now,'now'),checkLimit(limit)])).rows.map(scopeFromRow);
   },
   async scopeRows(source,issuerIds){
    const out:DocScopeRow[]=[];

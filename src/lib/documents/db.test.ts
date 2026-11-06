@@ -204,19 +204,37 @@ describe('supabaseDocumentsDb wiring',()=>{
  });
 });
 
-// F3 recheck N1: canonTs keeps microseconds, handles offsets and rejects non-timestamps; tsSortKey orders across widths
+// F3 recheck N1 + Task 3 review: canonTs defines the writer grammar; tsSortKey orders across widths and the epoch
 describe('canonTs / tsSortKey',()=>{
  it('keeps up to 6 fractional digits, trimming to 3 when the sub-millisecond part is zero',()=>{
   expect(canonTs('2026-03-20T09:00:00Z')).toBe('2026-03-20T09:00:00.000Z');
   expect(canonTs('2026-03-20 09:00:00.1+00')).toBe('2026-03-20T09:00:00.100Z');
   expect(canonTs('2026-03-20T09:00:00.000001Z')).toBe('2026-03-20T09:00:00.000001Z');
   expect(canonTs('2026-03-20T17:00:00.123456+08:00')).toBe('2026-03-20T09:00:00.123456Z');
-  expect(canonTs('2026-03-20T09:00:00.1234567Z')).toBe('2026-03-20T09:00:00.123457Z');
-  expect(canonTs('2026-02-31T00:00:00Z')).toBeNull();
-  expect(canonTs('not a time')).toBeNull();
+ });
+ it('rounds beyond microseconds half-to-even, carrying across seconds',()=>{
+  expect(canonTs('2026-03-20T09:00:00.1234565Z')).toBe('2026-03-20T09:00:00.123456Z');   // tie, 6 is even
+  expect(canonTs('2026-03-20T09:00:00.1234575Z')).toBe('2026-03-20T09:00:00.123458Z');   // tie, 7 is odd
+  expect(canonTs('2026-03-20T09:00:00.12345651Z')).toBe('2026-03-20T09:00:00.123457Z');
+  expect(canonTs('2026-03-20T09:00:59.9999995Z')).toBe('2026-03-20T09:01:00.000Z');       // tie, 999999 is odd, carries
+ });
+ it('pre-1970 sub-millisecond values floor, never print negative digits',()=>{
+  expect(canonTs('1969-12-31T23:59:59.123456Z')).toBe('1969-12-31T23:59:59.123456Z');
+  expect(canonTs('1969-12-31T15:59:59.999999-08:00')).toBe('1969-12-31T23:59:59.999999Z');
+  expect(canonTs('1969-12-31T23:59:59.999999Z')).toBe('1969-12-31T23:59:59.999999Z');
+  expect(canonTs('1970-01-01T00:00:00.000001Z')).toBe('1970-01-01T00:00:00.000001Z');
+  const k=['1970-01-01T00:00:00.000001Z','1969-12-31T23:59:59.999999Z','1970-01-01T00:00:00Z','1969-12-31T23:59:59.5Z'].map(x=>tsSortKey(x)!);
+  expect([...k].sort()).toEqual([k[3],k[1],k[2],k[0]]);
+ });
+ it('rejects what PostgreSQL would read in the session zone or differently',()=>{
+  for(const bad of ['2026-03-20T09:00:00','2026-03-20','2026-03-20 09:00','2026-02-31T00:00:00Z','2026-03-20T09:00:60Z','2026-13-01T00:00:00Z','0999-01-01T00:00:00Z','10000-01-01T00:00:00Z','not a time',''])expect(canonTs(bad),bad).toBeNull();
+  expect(canonTs('0099-03-20T00:00:00Z')).toBeNull();   // year < 1000 is out of the supported range; Date.UTC would have said 1999
  });
  it('sort keys order .123Z before .123456Z before .124Z',()=>{
   const k=['2026-03-20T09:00:00.124Z','2026-03-20T09:00:00.123456Z','2026-03-20T09:00:00.123Z'].map(x=>tsSortKey(x)!);
   expect([...k].sort()).toEqual([k[2],k[1],k[0]]);
+ });
+ it('the row mapper refuses an unparsable timestamp with a DocumentsDbError, never a RangeError',()=>{
+  expect(()=>documentFromRow({...pgDocRow,published_at:'garbage'})).toThrowError(expect.objectContaining({code:'unknown',message:'bad_timestamp'}));
  });
 });
