@@ -8676,7 +8676,7 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
 });
 ```
 
-`src/lib/documents/extract/worker-job.ts`、`worker-entry.ts`、`isolate.ts`、`scripts/documents/build-extract-worker.ts`（计划审计第 3 轮 R1-P2-7 定稿：阻塞的抽取在 worker 线程里跑；主线程保留心跳并以 `worker.terminate()` 执行硬截止；第 4 轮 R4-P2-1：worker 由 esbuild 打成不依赖 node_modules 的单文件 `build/extract-worker/extract-worker.mjs`）。`package.json`（JSON 无注释，提交信息说明 F3）：`devDependencies` 末尾加 `"esbuild": "0.28.1"`（与 tsx 已带入的版本相同，`npm install -D esbuild@0.28.1` 生成锁文件），`scripts` 末尾加 `"prebuild": "tsx scripts/documents/build-extract-worker.ts"`（`next build` 前生成 worker；`build/` 已在 `.gitignore`，产物不提交）：
+`src/lib/documents/extract/worker-job.ts`、`worker-entry.ts`、`isolate.ts`、`scripts/documents/build-extract-worker.ts`（计划审计第 3 轮 R1-P2-7 定稿：阻塞的抽取在 worker 线程里跑；主线程保留心跳并以 `worker.terminate()` 执行硬截止；第 4 轮 R4-P2-1：worker 由 esbuild 打成不依赖 node_modules 的单文件 `build/extract-worker/extract-worker.mjs`）。`package.json`（JSON 无注释，提交信息说明 F3）：`devDependencies` 末尾加 `"esbuild": "0.28.1"`（与 tsx 已带入的版本相同，`npm install -D esbuild@0.28.1` 生成锁文件），`scripts` 末尾加 `"prebuild": "tsx scripts/documents/build-extract-worker.ts"` 与 `"predev": "tsx scripts/documents/build-extract-worker.ts"`（`next build` / `npm run dev` 前生成 worker，第 5 轮 R5-P2-1 加 `predev`；`build/` 已在 `.gitignore`，产物不提交）：
 
 ```ts
 // src/lib/documents/extract/worker-job.ts
@@ -9094,6 +9094,9 @@ describe('publish_citations (contract behaviour the read routes rely on)',()=>{
 ```ts
 // src/lib/documents/extract/run.test.ts
 import {randomUUID} from 'node:crypto';
+import {existsSync,mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {describe,expect,it,vi} from 'vitest';
 import {HEARTBEAT_MS} from '../lease';
 import {memoryTableClient} from '../../db/memory-table-client';
@@ -9213,6 +9216,22 @@ describe('runDocumentsExtract',()=>{
    expect(h.db.extractions()).toEqual([]);
    expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_lease_batch_id:OTHER});
   }finally{vi.useRealTimers();}
+ });
+ it('R5-P2-1: a missing worker bundle fails the batch as worker_missing before any claim — no attempt consumed, the document stays due',async()=>{
+  const h=harness();
+  const doc=await seedPublicDocument(h.db,enc('%PDF-needs-the-worker'),{},h.store);
+  let claims=0;const claim=h.db.claimExtractLease;
+  const deps={...h.deps,db:{...h.db,claimExtractLease:async(d:string,b:string,t:number)=>{claims++;return claim(d,b,t);}},
+   preflight:()=>existsSync(join(mkdtempSync(join(tmpdir(),'f3-no-bundle-')),'extract-worker.mjs'))?null:'worker_missing'};
+  const r=await run(deps);
+  expect(r).toMatchObject({status:'failed',documents:[],counts:{failed:1,fetched:0}});
+  expect(r.errors).toEqual([expect.objectContaining({code:'worker_missing'})]);
+  expect(claims).toBe(0);
+  expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_attempts:0,extract_lease_batch_id:null});
+  expect(h.calls).toEqual([]);
+  const dry=await run(deps,{dryRun:true});
+  expect(dry).toMatchObject({status:'dry_run',documents:[],errors:[{code:'worker_missing',message:'setup'}]});
+  expect((await run(h.deps)).documents).toEqual([expect.objectContaining({documentId:doc,outcome:'extracted'})]);   // once ready, the same document extracts
  });
  it('extract_timeout, content hash mismatch, missing object and unsupported MIME are coded failures',async()=>{
   const {db,store,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
@@ -9472,7 +9491,8 @@ export async function citationView(db:Pick<DocumentsDb,'pagesOf'|'documentById'>
 // Counts: fetched = documents claimed; inserted = versions written (extracted or no_text_layer, the
 // latter also reported as skipped_summary(no_text_layer)); failed = everything else. Freshness
 // documents.extract (daily): ok when idle or at least one document got a version. A run that applies
-// needs a code version (null → refused). dryRun: no batch, no claim, no writes — reads and extracts
+// needs a code version (null → refused). deps.preflight runs first (R5-P2-1): a setup error such as
+// worker_missing fails the batch with that code before any document is read or claimed. dryRun: no batch, no claim, no writes — reads and extracts
 // the due documents and reports page counts.
 import {emptyCounts,finishBatch,startBatch} from '../../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../../dq/batches';
@@ -9501,6 +9521,9 @@ export interface ExtractDeps{
  extractPdf:(bytes:Uint8Array,budget:ExtractBudget)=>Promise<{pages:PageLayout[];hasTextLayer:boolean}>;
  extractHtml:(bytes:Uint8Array,budget:ExtractBudget)=>PageLayout[]|Promise<PageLayout[]>;   // production: both run in a worker thread (extract/isolate.ts, round 3)
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
+ /** Setup check before any claim (codex plan round 5 R5-P2-1): null = ready, else a setup error code
+  *  ('worker_missing' when the worker bundle is absent). Omitted (tests with injected extractors) = ready. */
+ preflight?:()=>string|null;
 }
 export interface ExtractOptions{limit:number;documentIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy}
 export type DocOutcome='extracted'|'no_text_layer'|'failed'|'skipped'|'planned';
@@ -9535,6 +9558,10 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  const {db,tables,store}=deps;
  if(!Number.isSafeInteger(opts.limit)||opts.limit<1||opts.limit>1000)throw new Error('invalid_limit');
  const counts=emptyCounts();const errors:BatchError[]=[];const documents:DocExtractResult[]=[];
+ // R5-P2-1: a setup failure (e.g. the worker bundle was never built) is reported before any document
+ // is claimed, so no attempt is consumed and no valid document drifts towards extract_failed
+ const setup=deps.preflight?.()??null;
+ if(setup!==null&&opts.dryRun)return {batchId:null,status:'dry_run',counts,errors:[{code:setup,message:'setup'}],documents:[],idle:false};
  if(opts.dryRun){
   const due=await dueDocuments(db,opts,errors);
   for(const doc of due){
@@ -9547,6 +9574,13 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  const codeVersion=deps.codeVersion;
  if(!codeVersion)throw new Error('code_version_unavailable');
  const {batchId}=await startBatch(tables,{producer:'documents-extract',dataset:'documents.extract',toolVersions:{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION},codeVersion,triggeredBy:opts.triggeredBy});
+ if(setup!==null){
+  errors.push({code:setup,message:'setup: nothing claimed (build the extraction worker: npx tsx scripts/documents/build-extract-worker.ts)'});
+  counts.failed=1;
+  const status=await finishBatch(tables,batchId,{counts,errors},deps.now());
+  await recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,setup}});
+  return {batchId,status,counts,errors,documents:[],idle:false};
+ }
  const due=await dueDocuments(db,opts,errors);
  const fail=async(doc:DocumentRow,code:string,message?:string,callFail=true)=>{
   counts.failed++;errors.push({code,key:doc.document_id,...(message?{message}:{})});documents.push({documentId:doc.document_id,outcome:'failed',code});
@@ -9615,7 +9649,8 @@ import {getAdminSupabase} from '../../supabase/admin';
 import {supabaseTableClient} from '../../db/table-client';
 import {supabaseDocumentsDb} from '../db';
 import {supabaseObjectStore} from '../object-store';
-import {extractInWorker} from './isolate';
+import {existsSync} from 'node:fs';
+import {extractInWorker,workerEntry} from './isolate';
 import {pdfjsAssets} from './pdf';
 import type {ExtractBudget} from './pdf';
 import {MAX_PDF_PAGES} from './run';
@@ -9633,6 +9668,7 @@ export interface ExtractDepsOptions{deadline:Date|null;codeVersion:string|null;n
 export function productionExtractDeps(opts:ExtractDepsOptions):ExtractDeps{
  const sb=opts.admin??getAdminSupabase();
  return {db:supabaseDocumentsDb(sb),tables:supabaseTableClient(sb),store:supabaseObjectStore(sb),extractPdf:viaWorker('pdf'),extractHtml:async(bytes,budget)=>(await viaWorker('html')(bytes,budget)).pages,
+  preflight:()=>existsSync(workerEntry())?null:'worker_missing',   // R5-P2-1: checked before any claim
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }
 ```
@@ -9707,12 +9743,16 @@ export async function POST(request:Request){return run(request);}
  * bytes and extracts them in memory — no batch, no lease, no pages.json, no rows; prints page counts.
  * --apply runs runDocumentsExtract (ingest_batches dataset documents.extract, triggered_by script)
  * and needs a code version (VERCEL_GIT_COMMIT_SHA or a git checkout, '-dirty' when the tree has
- * changes). This is the extraction path while DOCUMENTS_EXTRACT_ENABLED is off (spec §12).
+ * changes). This is the extraction path while DOCUMENTS_EXTRACT_ENABLED is off (spec §12). A missing
+ * worker bundle (build/extract-worker/extract-worker.mjs) is built first (codex plan round 5).
  * Exit 0 on success, 1 when the batch (or any document in a dry run) failed, 2 on bad arguments.
  */
+import {existsSync} from 'node:fs';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {productionExtractDeps} from '../../src/lib/documents/extract/deps';
+import {workerEntry} from '../../src/lib/documents/extract/isolate';
 import {runDocumentsExtract} from '../../src/lib/documents/extract/run';
+import {buildExtractWorker} from './build-extract-worker';
 
 const USAGE='usage: extract.ts [--limit n] [--document <uuid>]... [--apply]';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -9737,6 +9777,8 @@ async function main(){
  const args=parseArgs(process.argv.slice(2));
  const codeVersion=resolveCodeVersion({allowGit:true});
  if(args.apply&&!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
+ // R5-P2-1: a fresh checkout has no worker bundle (build/ is gitignored, only prebuild/predev make it): build it first
+ if(!existsSync(workerEntry())){console.error(`building the extraction worker: ${await buildExtractWorker()}`);}
  const receipt=await runDocumentsExtract(productionExtractDeps({deadline:null,codeVersion}),{limit:Math.max(args.limit,args.documentIds.length),documentIds:args.documentIds.length?args.documentIds:undefined,dryRun:!args.apply,triggeredBy:'script'});
  console.log(JSON.stringify({batchId:receipt.batchId,status:receipt.status,counts:receipt.counts,idle:receipt.idle,documents:receipt.documents,errors:receipt.errors},null,1));
  const failed=receipt.status==='dry_run'?receipt.documents.some(d=>d.outcome==='failed'):receipt.status==='failed'||receipt.status==='partial';
@@ -18916,7 +18958,10 @@ node --env-file=.env.local --import tsx scripts/documents/sync.ts --source hkexn
 node --env-file=.env.local --import tsx scripts/documents/sync.ts --source edgar --limit 5 --forms 10-K,10-Q --apply
 node --env-file=.env.local --import tsx scripts/documents/sync.ts --source cninfo --issuer 600519.SH --refetch --apply
 
-# 抽取（--document 可重复）
+# 抽取（--document 可重复）。抽取在 worker 线程里跑，需要打包好的 build/extract-worker/extract-worker.mjs
+# （build/ 不进仓库）：extract.ts 缺它时自动先构建；npm run dev / npm run build 由 predev / prebuild 构建；
+# 手动构建：npx tsx scripts/documents/build-extract-worker.ts。缺 bundle 的 cron/重处理批次以 worker_missing
+# 失败，且不认领任何文档、不消耗尝试次数（计划审计第 5 轮 R5-P2-1）
 node --env-file=.env.local --import tsx scripts/documents/extract.ts --limit 5 --apply
 node --env-file=.env.local --import tsx scripts/documents/extract.ts --document <uuid> --apply
 
@@ -19297,3 +19342,11 @@ git commit -m "docs(documents): F3 runbook, spec §17 deviations, implementation
 | R4-P2-1 | 接受（按指挥改设计：取消 worker 里运行时注册 tsx）。新脚本 `scripts/documents/build-extract-worker.ts` 用 esbuild（`devDependencies` 加 `esbuild@0.28.1`，即 tsx 已带入的版本）把 `extract/worker-entry.ts`（由 `.mjs` 改为 TS 入口）连同 extract 代码与 pdfjs-dist（pdf.mjs、pdf.worker.mjs 内联）打成单个自包含 ESM：`build/extract-worker/extract-worker.mjs`（`build/` 已 gitignore，不提交）；`package.json` 加 `prebuild`；`isolate.workerEntry()` 指向该产物；CMaps/标准字体由主线程 `pdfjsAssets()` 经 `job.assets` 传给 worker。`F3_EXTRACT_FILES` 改为：bundle + `pdfjs-dist` 的 `cmaps/`、`standard_fonts/`、`legacy/build/pdf.worker.mjs`（去掉 tsx/esbuild/TS 源） | Task 10：`worker-entry.ts`、`worker-job.ts`（`assets`）、`isolate.ts`、`extract/deps.ts`、新脚本、`package.json`、`next.config.mjs` F3 块、`isolate.test.ts`（测试内构建到系统临时目录，目录里只有 bundle 与上述资源、无 node_modules，抽取 PDF 与 HTML 夹具并验证页数上限）、Files/`git add`、文件结构、契约补充 |
 | R4-P2-2 | 接受。`withLeaseHeartbeat` 新选项 `remainingMs`/`reserveMs`（`FINAL_RESERVE_MS=20s`）：保留区内不再发起心跳；续租请求最多等 min(间隔, 剩余预算−保留)，超时视为暂时（续租只续持有者）；排空最多等 min(drainMs, 剩余预算−保留)；所有等待计时器无论哪边先到都清除。抽取、候选、晋升三处调用都传入各自的剩余预算 | Task 10 `lease.ts` + `lease.test.ts`（截止边缘：续租卡死时结果在保留区之前返回、无残留计时器；保留区内不起心跳；成功排空后 `vi.getTimerCount()===0`）、`extract/run.ts`；Task 15 `candidates/run.ts`；Task 16 `promote.ts`；契约补充 |
 | Recheck N1 | 接受。迁移一（已落地）拒绝不带 `p_done`/`p_reset` 清空回填游标；Task 7 的 EDGAR 覆盖缺口重来改为显式 `reset`（`advanceCursor(…,null,false,true)`），这正是同步设计里的"有意重来"。内存实现同步该规则 | Task 7 `sync.ts`（及行为清单）+ `sync.test.ts`（缺口路径第二轮仍 success、游标为空、不 `cursor_regression`）；Task 2 内存 `advanceCursor`；`db-contract.ts`（不带 reset 清空 → `cursor_regression`，带 reset 重来成功；内存与真实迁移一的 pg 都跑） |
+
+### Codex 计划审计第 5 轮处置
+
+审计：`docs/audits/2026-11-06-document-pipeline/09-codex-plan-round5.md`（第 4 轮已提交为 `014150e`）；处置记录：`docs/audits/2026-11-06-document-pipeline/10-disposition-round5.md`。Task 1 文本未改。复跑（沙箱，真实迁移一）：`tsc --noEmit` 0 错误；`eslint --max-warnings=0` 0 输出；F3 单测 45 个文件 359 例通过；F3 critical 套件 65 例通过。
+
+| ID | 处置 | 改动位置 |
+|---|---|---|
+| R5-P2-1 | 接受。`ExtractDeps.preflight?()`：生产实现检查 worker bundle（`workerEntry()`）存在，缺失 → `worker_missing`；`runDocumentsExtract` 在读取/认领任何文档之前执行：apply 时批次以 `worker_missing` 失败（`counts.failed=1`、新鲜度失败、不认领、不耗尝试），dry-run 时回执同码且不抽取。`scripts/documents/extract.ts` 缺 bundle 时先调用 `buildExtractWorker()`；`package.json` 加 `predev`（与 `prebuild` 相同）；runbook §2 写明 | Task 10 `extract/run.ts`（`preflight`、头注）、`extract/deps.ts`、`scripts/documents/extract.ts`、`package.json` 说明、`run.test.ts`（缺 bundle → `worker_missing`、0 次认领、`extract_attempts` 仍 0、文档仍 `stored`；dry-run 同码；就绪后同一文档正常抽取）；Task 19 runbook §2 |
