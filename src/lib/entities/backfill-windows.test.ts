@@ -2,7 +2,8 @@
 import {describe,it,expect} from 'vitest';
 import {TableError,type TableClient} from '../db/table-client';
 import {memoryTableClient} from '../db/memory-table-client';
-import {applyWindowBackfill,planWindowBackfill,type UniverseDates,type WindowRow} from './windows';
+import {coverageE2} from './coverage';
+import {applyWindowBackfill,keysetAll,planWindowBackfill,windowsOutcome,type UniverseDates,type WindowRow} from './windows';
 
 const ASOF='2026-11-05',BATCH='33333333-3333-4333-8333-333333333333',DATASET='entities.windows';
 const w=(o:Partial<WindowRow>):WindowRow=>({issuer_id:'i1',ticker:'600519.SH',valid_from:'2024-03-01',valid_to:null,valid_from_method:'first_observed',valid_to_method:null,provenance:{source:'curated'},...o});
@@ -38,7 +39,7 @@ describe('planWindowBackfill',()=>{
   const bad=planWindowBackfill([w({valid_from:'2024-03-01'})],new Map([u('600519.SH',{list_date:null,delist_date:'2024-03-01'})]),ASOF);
   expect(bad.conflicts.map(c=>c.reason)).toEqual(['delist_on_or_before_valid_from']);
  });
- it('a single row gets both changes; the close uses the new valid_from and keeps the listing provenance',()=>{
+ it('a single row gets both changes; the close uses the new valid_from and each change carries only its own single provenance key',()=>{
   const p=planWindowBackfill([w({})],new Map([u('600519.SH',{delist_date:'2026-06-30'})]),ASOF);
   expect(p.changes.map(c=>c.kind)).toEqual(['from','to']);
   const to=p.changes[1] as Extract<typeof p.changes[number],{kind:'to'}>;
@@ -76,5 +77,54 @@ describe('applyWindowBackfill',()=>{
   expect(c.rows('issuer_securities')[0]).toMatchObject({valid_from:'2024-03-01',valid_to:null});
   expect(res.counts).toMatchObject({quarantined:1,failed:1,versioned:0});
   expect(res.errors.map(e=>e.code)).toEqual(['ownership_conflict','blocked_by_from_change']);
+ });
+});
+
+describe('conflicts after a backdate, aggregation, paging, freshness',()=>{
+ const row=(o:Partial<WindowRow>={})=>({...w(o),isin:null,figi:null,share_class:'A',is_primary:true,source:'curated'});
+ it('a conflict on a row whose backdate landed is parked under the CURRENT key with the original snapshot, and E2 counts it',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuer_securities',row({}));
+  const u1=new Map([u('600519.SH',{delist_date:'2000-01-01'})]);
+  const plan=planWindowBackfill([w({})],u1,ASOF);
+  expect(plan.changes.map(x=>x.kind)).toEqual(['from']);
+  const res=await applyWindowBackfill(c,plan,{batchId:BATCH,dataset:DATASET});
+  expect(res.counts).toMatchObject({versioned:1,quarantined:1,failed:0});
+  const q=c.rows('dq_quarantine');
+  expect(q).toHaveLength(1);
+  expect(q[0]).toMatchObject({natural_key:'600519.SH:2001-08-27',reason_code:'window_evidence_conflict',
+   payload:{issuer_id:'i1',ticker:'600519.SH',valid_from:'2024-03-01',valid_from_method:'first_observed',current_valid_from:'2001-08-27'}});
+  const rows=c.rows('issuer_securities');
+  const e2=coverageE2({rows,listDates:new Map([['600519.SH','2001-08-27']]),queueIssuers:new Set(['i1']),openQuarantineKeys:new Set(q.map(x=>String(x.natural_key)))});
+  expect(e2).toMatchObject({open_quarantine:1,passes:false});
+ });
+ it('two conflicts on one row persist as ONE item carrying both reasons and both evidence rows',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  await c.insert('issuer_securities',row({valid_from:'2000-01-01'}));
+  const plan=planWindowBackfill([w({valid_from:'2000-01-01'})],new Map([u('600519.SH',{list_date:'2001-08-27',delist_date:'1999-12-31'})]),ASOF);
+  expect(plan.conflicts.map(x=>x.reason)).toEqual(['list_date_after_first_observed','delist_on_or_before_valid_from']);
+  const res=await applyWindowBackfill(c,plan,{batchId:BATCH,dataset:DATASET});
+  const q=c.rows('dq_quarantine');
+  expect(q).toHaveLength(1);
+  expect(q[0].detail).toEqual({reason:'list_date_after_first_observed',reasons:['list_date_after_first_observed','delist_on_or_before_valid_from'],conflicts:[
+   {reason:'list_date_after_first_observed',list_date:'2001-08-27',valid_from:'2000-01-01',source:'tushare_stock_basic'},
+   {reason:'delist_on_or_before_valid_from',delist_date:'1999-12-31',valid_from:'2000-01-01',source:'tushare_stock_basic'}]});
+  expect(res.counts).toMatchObject({quarantined:1,failed:0});
+ });
+ it('keysetAll continues past a short page when the server caps pages below MAX_PAGE',async()=>{
+  const c=memoryTableClient();
+  const tickers=['A','B','B','C','D','E','F','F','G'];
+  let i=0;for(const t of tickers)await c.insert('t',{ticker:t,issuer_id:`i${i++}`,valid_from:'2020-01-01'});
+  const capped:TableClient={...c,select:(t,m,o)=>c.select(t,m,{...o,limit:Math.min(o?.limit??3,3)})};
+  const got=await keysetAll(capped,'t',{},{},'ticker',['issuer_id','ticker','valid_from']);
+  expect(got).toHaveLength(9);
+  expect(await keysetAll(capped,'empty',{},{},'ticker',['ticker'])).toEqual([]);
+ });
+ it('freshness counts backfilled rows as landed: a partial run with versioned + quarantined only is ok; quarantine only is not',()=>{
+  const base={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
+  expect(windowsOutcome('partial',{...base,versioned:3,quarantined:2})).toEqual({ok:true,exitCode:0});
+  expect(windowsOutcome('partial',{...base,quarantined:2})).toEqual({ok:false,exitCode:0});
+  expect(windowsOutcome('partial',{...base,versioned:3,failed:1})).toMatchObject({ok:false,exitCode:1});
+  expect(windowsOutcome('success',{...base,versioned:3})).toEqual({ok:true,exitCode:0});
  });
 });

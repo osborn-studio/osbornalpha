@@ -799,7 +799,7 @@ grant execute on function public.set_security_identifier(uuid, text, date, text,
 -- set_security_window is the only writer of an evidenced valid_from / valid_to (windows.ts, backfill-windows).
 -- Lock order of set_security_identifier / resolve_identifier_claim: issuer FOR SHARE, then the row FOR UPDATE.
 -- p_side 'from': the row (issuer, ticker, p_valid_from) must still have method first_observed or curated and
---   p_new_date <= valid_from; ONE UPDATE sets valid_from = p_new_date, valid_from_method = 'listing_date'.
+--   p_new_date <= valid_from and no other row of the ticker starting earlier; ONE UPDATE sets valid_from = p_new_date, valid_from_method = 'listing_date'.
 -- p_side 'to': the row (issuer, ticker, p_valid_from) must still be open and p_new_date > valid_from; ONE UPDATE
 --   sets valid_to, valid_to_method = 'delisting'.
 -- Both merge `provenance || p_provenance` (never a whole-object replacement); p_provenance must be public-safe
@@ -824,7 +824,11 @@ begin
   if p_side = 'from' then
     if v_row.valid_from_method = 'listing_date' and v_row.valid_from = p_new_date and v_row.provenance ? 'valid_from' then return 'duplicate'; end if;
     if v_row.valid_from_method not in ('first_observed', 'curated') or p_new_date > v_row.valid_from then return 'conflict'; end if;
-    if v_row.valid_to is not null and p_new_date >= v_row.valid_to then return 'conflict'; end if;
+    -- the listing date belongs to the ticker's EARLIEST holding row: serialise window writers per ticker, then recheck
+    -- that no other row (any issuer) of the ticker starts earlier (an earlier non-overlapping holding appeared since planning).
+    -- Overlaps themselves are refused by the no-overlap exclusion constraint (23P01), not here.
+    perform pg_advisory_xact_lock(hashtext('issuer_securities_ticker:' || p_ticker));
+    if exists (select 1 from public.issuer_securities o where o.ticker = p_ticker and o.valid_from < p_valid_from) then return 'conflict'; end if;
     update public.issuer_securities set valid_from = p_new_date, valid_from_method = 'listing_date', provenance = provenance || p_provenance
     where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_from_method in ('first_observed', 'curated');
   else

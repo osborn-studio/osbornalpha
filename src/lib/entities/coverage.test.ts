@@ -46,3 +46,11 @@ describe('coverageE2',()=>{
   expect(r).toEqual({backfillable:{num:1,den:2,pct:'50.00'},not_backfillable:2,open_quarantine:1,passes:false});
  });
 });
+
+describe('coverageE2 Beijing',()=>{
+ it('counts an unbackfilled .BJ row as backfillable work',()=>{
+  const rows=[{issuer_id:'q',ticker:'430047.BJ',valid_from:'2024-01-01',valid_from_method:'first_observed'}];
+  const r=coverageE2({rows,listDates:new Map([['430047.BJ','2020-07-27']]),queueIssuers:new Set(['q']),openQuarantineKeys:new Set()});
+  expect(r).toEqual({backfillable:{num:0,den:1,pct:'0.00'},not_backfillable:0,open_quarantine:0,passes:false});
+ });
+});

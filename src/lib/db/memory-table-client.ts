@@ -84,7 +84,7 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
   if(side==='from'){
    if(row.valid_from_method==='listing_date'&&row.valid_from===nd&&'valid_from' in prov)return 'duplicate';
    if((row.valid_from_method!=='first_observed'&&row.valid_from_method!=='curated')||nd>String(row.valid_from))return 'conflict';
-   if(row.valid_to!=null&&nd>=String(row.valid_to))return 'conflict';
+   if(rowsOf('issuer_securities').some(o=>o!==row&&o.ticker===a.p_ticker&&String(o.valid_from)<String(row.valid_from)))return 'conflict';   // not the ticker's earliest row
    row.valid_from=nd;row.valid_from_method='listing_date';
   }else{
    if(row.valid_to===nd&&row.valid_to_method==='delisting'&&'valid_to' in prov)return 'duplicate';

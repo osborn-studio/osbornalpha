@@ -11,8 +11,8 @@ import {selectAll,supabaseTableClient,type TableClient} from '../../src/lib/db/t
 import {emptyCounts,finishBatch,startBatch,type BatchError,type BatchStatus} from '../../src/lib/dq/batches';
 import {DATASETS,DQ_DATASET_INVENTORY} from '../../src/lib/dq/datasets';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
-import {SEC_ROW_KEY,WINDOWS_RULES_VERSION,applyWindowBackfill,keysetAll,planWindowBackfill,type UniverseDates,type WindowRow} from '../../src/lib/entities/windows';
+import {errorMessage} from '../../src/lib/entities/load-sec';
+import {SEC_ROW_KEY,WINDOWS_RULES_VERSION,applyWindowBackfill,keysetAll,planWindowBackfill,windowsOutcome,type UniverseDates,type WindowRow} from '../../src/lib/entities/windows';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
 const DATASET=DATASETS.entities.windows;
@@ -54,7 +54,7 @@ async function main(){
   try{status=await finishBatch(tables,batchId,{counts,errors});}
   catch(e){console.error(`finishBatch failed: ${errorMessage(e)}`);status='failed';}
  }
- const outcome=loaderOutcome(status,counts);
+ const outcome=windowsOutcome(status,counts);
  await recordAttempt(tables,DATASET,{ok:outcome.ok,cadence:cadenceOf(DATASET)});
  console.log(JSON.stringify({batchId,status,counts,errors:errors.slice(0,20)},null,1));
  process.exitCode=outcome.exitCode;

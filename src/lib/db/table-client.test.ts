@@ -243,6 +243,27 @@ describe('rpc (plan 3 row-locking functions; plan audit P3/P4/R2)',()=>{
   expect(await callRpc(c,'set_security_identifier',{...args('isin','X',PI),p_ticker:'NOPE'})).toBe('not_found');
   await expect(callRpc(c,'set_security_identifier',args('isin','X',PF))).rejects.toMatchObject({code:'22023'});
  });
+ it('memoryTableClient emulates set_security_window: from/to written, duplicate, conflict (state, earliest row), not_found, invalid_window_write',async()=>{
+  const c=memoryTableClient();
+  await c.insert('issuer_securities',{issuer_id:'i',ticker:'X',valid_from:'2024-03-01',valid_to:null,valid_from_method:'first_observed',valid_to_method:null,provenance:{exchange:'SSE'}});
+  const args=(side:string,from:string,date:string,pv:unknown)=>({p_issuer:'i',p_ticker:'X',p_valid_from:from,p_side:side,p_new_date:date,p_provenance:pv});
+  const WF={valid_from:{source:'u'}},WT={valid_to:{source:'u'}};
+  expect(await callRpc(c,'set_security_window',args('from','2024-03-01','2025-01-01',WF))).toBe('conflict');
+  expect(await callRpc(c,'set_security_window',args('from','2024-03-01','2001-08-27',WF))).toBe('written');
+  expect(await callRpc(c,'set_security_window',args('from','2001-08-27','2001-08-27',WF))).toBe('duplicate');
+  expect(await callRpc(c,'set_security_window',args('from','2001-08-27','2000-01-01',WF))).toBe('conflict');
+  expect(await callRpc(c,'set_security_window',args('to','2001-08-27','2001-08-27',WT))).toBe('conflict');
+  expect(await callRpc(c,'set_security_window',args('to','2001-08-27','2026-06-30',WT))).toBe('written');
+  expect(await callRpc(c,'set_security_window',args('to','2001-08-27','2026-06-30',WT))).toBe('duplicate');
+  expect(await callRpc(c,'set_security_window',args('to','2001-08-27','2026-07-01',WT))).toBe('conflict');
+  expect(c.rows('issuer_securities')[0]).toMatchObject({valid_from:'2001-08-27',valid_to:'2026-06-30',valid_from_method:'listing_date',valid_to_method:'delisting',provenance:{exchange:'SSE',...WF,...WT}});
+  expect(await callRpc(c,'set_security_window',args('from','1999-01-01','1990-01-01',WF))).toBe('not_found');
+  await c.insert('issuer_securities',{issuer_id:'j',ticker:'X',valid_from:'1995-01-01',valid_to:'1996-01-01',valid_from_method:'first_observed',valid_to_method:'unrecorded',provenance:{}});
+  await c.update('issuer_securities',{issuer_id:'i',ticker:'X'},{valid_from_method:'first_observed'});
+  expect(await callRpc(c,'set_security_window',args('from','2001-08-27','1998-01-01',WF))).toBe('conflict');   // an earlier holding exists
+  for(const bad of [args('from','2001-08-27','1998-01-01',WT),args('x','2001-08-27','1998-01-01',WF),args('from','2001-08-27','1998-01-01',{...WF,...WT})])
+   await expect(callRpc(c,'set_security_window',bad)).rejects.toThrow(/invalid_window_write/);
+ });
  it('callRpc refuses a client without rpc; an unknown function fails like PostgreSQL (42883)',async()=>{
   const c=memoryTableClient();
   const {rpc:_rpc,...noRpc}=c;

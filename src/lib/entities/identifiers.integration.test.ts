@@ -1046,7 +1046,7 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   expect(await winState(t)).toEqual({valid_from:'2001-08-27',valid_to:'2026-06-30',valid_from_method:'listing_date',valid_to_method:'delisting',provenance:{exchange:'SSE',...WF,...WT}});
   const c=await ticker();
   await sec(a,c,'2024-03-01','2025-01-01',{valid_to_method:'unrecorded'});
-  expect(await setWin(a,c,'2024-03-01','from','2025-01-01',WF)).toBe('conflict');          // new from would not precede valid_to
+  expect(await setWin(a,c,'2024-03-01','from','2025-01-01',WF)).toBe('conflict');          // listing date after valid_from
   await q(`update public.issuer_securities set valid_from_method='ticker_change' where ticker=$1`,[c]);
   expect(await setWin(a,c,'2024-03-01','from','2020-01-01',WF)).toBe('conflict');          // method not first_observed/curated
   expect(await setWin(a,await ticker(),'2024-03-01','from','2001-08-27',WF)).toBe('not_found');
@@ -1074,12 +1074,27 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect((await secState(t)).isin).toBe(isinFirst?isin:null);
   }
  });
- it('set_security_window surfaces an overlap as the exclusion violation 23P01',async()=>{
+ it('set_security_window from: an earlier non-overlapping holding of the ticker (any issuer) that appeared after planning makes it conflict; the advisory lock serialises window writers',async()=>{
+  const a=await issuer(),b=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null);
+  await sec(b,t,'1990-01-01','1995-01-01',{valid_to_method:'unrecorded'});     // appears between planning and applying
+  expect(await setWin(a,t,'2024-03-01','from','2001-08-27',WF)).toBe('conflict');
+  expect((await q(`select to_char(valid_from,'YYYY-MM-DD') f from public.issuer_securities where issuer_id=$1 and ticker=$2`,[a,t]))[0].f).toBe('2024-03-01');
+  const t2=await ticker();
+  await sec(a,t2,'2024-03-01',null);
+  await inTx(admin,async tx=>{
+   await tx.c.query(`select pg_advisory_xact_lock(hashtext('issuer_securities_ticker:'||$1::text))`,[t2]);
+   const second=setWin(a,t2,'2024-03-01','from','2001-08-27',WF);
+   await stillBlockedBehind(admin,tx.pid,second);
+   await tx.commit();
+   expect(await second).toBe('written');
+  });
+ });
+ it('set_security_window refuses a backdate into an earlier holding of the same ticker (earliest-row guard, before the exclusion constraint)',async()=>{
   const a=await issuer();const t=await ticker();
   await sec(a,t,'2010-01-01','2015-01-01',{valid_to_method:'unrecorded'});
   await sec(a,t,'2015-01-01',null);
-  const err=await fails(setWin(a,t,'2015-01-01','from','2012-01-01',WF));
-  expect(['23P01','23505']).toContain(err.code);
+  expect(await setWin(a,t,'2015-01-01','from','2012-01-01',WF)).toBe('conflict');
   expect((await q(`select to_char(valid_from,'YYYY-MM-DD') f from public.issuer_securities where ticker=$1 order by valid_from`,[t])).map(r=>r.f)).toEqual(['2010-01-01','2015-01-01']);
  });
  // Task 4b review P1: the orgId write and its provenance key land in one locked UPDATE.

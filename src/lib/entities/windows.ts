@@ -8,9 +8,9 @@
 // (quarantined, row unchanged). US tickers carry no list_date and are left as first_observed.
 // applyWindowBackfill writes through the guarded RPC set_security_window; exclusion/unique violations become ownership_conflict.
 import {MAX_PAGE,callRpc,type RangeOptions,type Row,type TableClient} from '../db/table-client';
-import {emptyCounts,type BatchError} from '../dq/batches';
+import {emptyCounts,type BatchCounts,type BatchError,type BatchStatus} from '../dq/batches';
 import {isUnique} from './claims';
-import {errorMessage,parkConflict,withSkippedSummary,type ApplyResult} from './load-sec';
+import {errorMessage,loaderOutcome,parkConflict,withSkippedSummary,type ApplyResult} from './load-sec';
 import {sanitizeProvenance} from './provenance';
 
 export const WINDOWS_RULES_VERSION='windows/1';
@@ -25,8 +25,9 @@ export interface WindowPlan{changes:WindowChange[];conflicts:WindowConflict[];un
 
 /**
  * Pages a table by a NON-unique order column with gte cursors, de-duplicating on keyCols (same
- * approach as the private helper in facts/scope.ts). A single order value with more than MAX_PAGE
- * rows cannot be paged and throws keyset_tie_group_overflow.
+ * approach as the private helper in facts/scope.ts). The server may cap a page below MAX_PAGE, so
+ * a short page is NOT the end: paging continues until a page adds no unseen row. Assumes no single
+ * order value has more rows than the server cap (a ticker has a handful of holding rows).
  */
 export async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOptions,orderBy:string,keyCols:readonly string[]):Promise<Row[]>{
  const seen=new Set<string>(),out:Row[]=[];
@@ -34,11 +35,10 @@ export async function keysetAll(tables:TableClient,table:string,match:Row,range:
  for(;;){
   const gte={...range.gte,...(cursor===null?{}:{[orderBy]:cursor})};
   const page=await tables.select(table,match,{...range,gte,orderBy,limit:MAX_PAGE});
-  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);}}
-  if(page.length<MAX_PAGE)return out;
-  const last=String(page[page.length-1][orderBy]);
-  if(last===cursor)throw new Error('keyset_tie_group_overflow');
-  cursor=last;
+  let added=0;
+  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);added++;}}
+  if(page.length===0||added===0)return out;
+  cursor=String(page[page.length-1][orderBy]);
  }
 }
 
@@ -73,24 +73,36 @@ export function planWindowBackfill(rows:readonly WindowRow[],universe:ReadonlyMa
  return plan;
 }
 
+/** Freshness/exit policy of the window backfill: rows moved by a backfill (versioned) are landed rows, so a partial run that backfilled and only quarantined conflicts is still a good attempt. */
+export function windowsOutcome(status:BatchStatus,counts:BatchCounts):{ok:boolean;exitCode:0|1}{
+ return loaderOutcome(status,{...counts,duplicates:counts.duplicates+counts.versioned});
+}
+
 export async function applyWindowBackfill(tables:TableClient,plan:WindowPlan,opts:{batchId:string;dataset:string}):Promise<ApplyResult>{
  const counts=emptyCounts();const errors:BatchError[]=[];
  counts.duplicates=plan.unchanged;
- const keyOf=(r:WindowRow)=>`${r.ticker}:${r.valid_from}`;
+ const idOf=(r:WindowRow)=>`${r.issuer_id}|${r.ticker}|${r.valid_from}`;
+ // a row's CURRENT valid_from (its natural key), which moves when its backdate lands
+ const current=new Map<string,string>();
+ const fromOf=(r:WindowRow)=>current.get(idOf(r))??r.valid_from;
+ const keyOf=(r:WindowRow)=>`${r.ticker}:${fromOf(r)}`;
+ const snapshot=(r:WindowRow)=>({issuer_id:r.issuer_id,ticker:r.ticker,valid_from:r.valid_from,valid_to:r.valid_to,valid_from_method:r.valid_from_method,current_valid_from:fromOf(r)});
  const park=(r:WindowRow,reason:'ownership_conflict'|'window_evidence_conflict',detail:Record<string,unknown>)=>parkConflict(tables,{
-  dataset:opts.dataset,table:'issuer_securities',naturalKey:keyOf(r),reasonCode:reason,detail,
-  payload:{issuer_id:r.issuer_id,ticker:r.ticker,valid_from:r.valid_from,valid_to:r.valid_to,valid_from_method:r.valid_from_method},batchId:opts.batchId,
+  dataset:opts.dataset,table:'issuer_securities',naturalKey:keyOf(r),reasonCode:reason,detail,payload:snapshot(r),batchId:opts.batchId,
  },counts,errors,{code:reason,key:keyOf(r)});
  const blocked=new Set<string>();
  for(const c of plan.changes){
-  const id=`${c.row.issuer_id}|${keyOf(c.row)}`;
+  const id=idOf(c.row);
   if(c.kind==='to'&&blocked.has(id)){counts.failed++;errors.push({code:'blocked_by_from_change',key:keyOf(c.row)});continue;}
   try{
    const out=await callRpc(tables,'set_security_window',c.kind==='from'
     ?{p_issuer:c.row.issuer_id,p_ticker:c.row.ticker,p_valid_from:c.row.valid_from,p_side:'from',p_new_date:c.newValidFrom,p_provenance:c.provenance}
     :{p_issuer:c.row.issuer_id,p_ticker:c.row.ticker,p_valid_from:c.validFrom,p_side:'to',p_new_date:c.newValidTo,p_provenance:c.provenance});
-   if(out==='written'){counts.versioned++;continue;}
-   if(out==='duplicate'){counts.duplicates++;continue;}
+   if(out==='written'||out==='duplicate'){
+    if(c.kind==='from')current.set(id,c.newValidFrom);
+    if(out==='written')counts.versioned++;else counts.duplicates++;
+    continue;
+   }
    if(c.kind==='from')blocked.add(id);
    counts.failed++;errors.push({code:'row_changed',key:keyOf(c.row),message:`${c.kind}:${String(out)}`});
   }catch(e){
@@ -99,7 +111,10 @@ export async function applyWindowBackfill(tables:TableClient,plan:WindowPlan,opt
    counts.failed++;errors.push({code:'window_write_error',key:keyOf(c.row),message:errorMessage(e)});
   }
  }
- for(const x of plan.conflicts)await park(x.row,'window_evidence_conflict',{reason:x.reason,...x.detail});
+ // one quarantine item per row, carrying every conflict reason and its evidence row
+ const byRow=new Map<string,WindowConflict[]>();
+ for(const x of plan.conflicts){const l=byRow.get(idOf(x.row))??[];l.push(x);byRow.set(idOf(x.row),l);}
+ for(const xs of byRow.values())await park(xs[0].row,'window_evidence_conflict',{reason:xs[0].reason,reasons:xs.map(x=>x.reason),conflicts:xs.map(x=>({reason:x.reason,...x.detail}))});
  counts.fetched=counts.inserted+counts.duplicates+counts.versioned+counts.quarantined+counts.failed;
  const skippedSummary:Record<string,number>={};
  for(const s of plan.skipped)skippedSummary[s]=(skippedSummary[s]??0)+1;

@@ -35,7 +35,7 @@ export function coverageE2(input:{rows:readonly Row[];listDates:ReadonlyMap<stri
  const earliest=new Map<string,string>();
  for(const r of input.rows){const t=String(r.ticker),vf=String(r.valid_from);const e=earliest.get(t);if(e===undefined||vf<e)earliest.set(t,vf);}
  const key=(r:Row)=>`${r.ticker}:${r.valid_from}`;
- const ah=input.rows.filter(r=>/\.(SH|SZ|HK)$/.test(String(r.ticker))&&input.queueIssuers.has(String(r.issuer_id)));
+ const ah=input.rows.filter(r=>/\.(SH|SZ|BJ|HK)$/.test(String(r.ticker))&&input.queueIssuers.has(String(r.issuer_id)));
  const back=ah.filter(r=>earliest.get(String(r.ticker))===String(r.valid_from)&&!!input.listDates.get(String(r.ticker))&&!input.openQuarantineKeys.has(key(r)));
  const backfillable=ratio(back.filter(r=>r.valid_from_method==='listing_date').length,back.length);
  return {backfillable,not_backfillable:ah.length-back.length,open_quarantine:ah.filter(r=>input.openQuarantineKeys.has(key(r))).length,passes:backfillable.den>0&&backfillable.num===backfillable.den};
