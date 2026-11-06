@@ -94,6 +94,9 @@ const isDeadline=(e:unknown,budget:Budget)=>{
  */
 const PARSE_KINDS=new Set(['invalid_json_number','invalid_decimal','reserved_key','entry_shape','raw_hash_invalid','invalid_row_width','invalid_control_field','filing_not_staged','companyfacts shape','snapshot api','snapshot report_type']);
 const PARSE_FIELDS=new Set<string>([...TUSHARE_CONTROL_FIELDS,...EDGAR_NUMBER_SCHEMA.control,...EDGAR_NUMBER_SCHEMA.decimal,...FACT_CONCEPTS.map(c=>c.id)]);
+/** Fixed-token provider reasons that may be persisted with their code (no upstream text can match). */
+const ALLOWED_REASON=/^tushare_unavailable: (multi_page_unverified:(?:income|balancesheet|cashflow):rt[145])$/;
+const allowlistedReason=(e:Error):string|undefined=>ALLOWED_REASON.exec(e.message)?.[1];
 const safeParseMessage=(raw:string):string=>{
  const parts=raw.replace(/^parse_error: /,'').split(':').map(x=>x.trim());
  if(parts[0]==='json')return PARSE_KINDS.has(parts[1]??'')?`json: ${parts[1]}`:'json';
@@ -296,7 +299,7 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   }
   if(publishedRun)return afterPublish(e instanceof SyncError?e.code:dbCode(e)??'unknown',e);
   await cleanup('failed');
-  if(e instanceof SyncError)return fail(e.code,e.code==='parse_error'?safeParseMessage(e.message):undefined);
+  if(e instanceof SyncError)return fail(e.code,e.code==='parse_error'?safeParseMessage(e.message):allowlistedReason(e));
   return fail('unknown',errMsg(e));
  }
 }
@@ -424,9 +427,11 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   }
   errors.push(...summarizeWarnings(warnings));
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
-  const ok=idle||published>=Math.max(1,Math.ceil(attempted/2));
+  const ok=published>=Math.max(1,Math.ceil(attempted/2));
   const detail:SyncDetail={attempted,published,failed,skipped,idle};
-  await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
+  // An idle run (nothing due) is not a producer attempt: dq_freshness stays untouched so an issuer that fails on every
+  // retry cannot look fresh between its attempts (spec §16 deviation: the spec says idle = ok).
+  if(!idle)await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
   return {batchId,status,counts,errors,issuers,idle,detail};
  }catch(e){
   // Infrastructure failure outside an issuer: close the receipt so no running batch dangles, then rethrow.

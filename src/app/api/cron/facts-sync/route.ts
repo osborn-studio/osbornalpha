@@ -46,6 +46,7 @@ async function run(request:Request):Promise<NextResponse>{
  let limit=DEFAULT_LIMIT;
  if(limitRaw!==null){if(!/^\d{1,3}$/.test(limitRaw)||Number(limitRaw)<1||Number(limitRaw)>MAX_LIMIT)return err('invalid_parameter:limit',`limit must be 1..${MAX_LIMIT}`,400);limit=Number(limitRaw);}
  if(market==='CN'&&process.env.FACTS_CN_ENABLED==='0')return err('cn_disabled','CN facts sync is not enabled (FACTS_CN_ENABLED)',403);
+ if(market==='CN'&&!process.env.TUSHARE_TOKEN)return err('tushare_unconfigured','TUSHARE_TOKEN not set',503);   // before deps or a batch: a missing token must not burn a batch per cron
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const started=new Date();

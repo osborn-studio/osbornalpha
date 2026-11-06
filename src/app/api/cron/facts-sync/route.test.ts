@@ -11,16 +11,17 @@ const AUTH={authorization:'Bearer cron-secret'};
 const req=(qs:string,headers:Record<string,string>={})=>new Request(`https://alpha.example/api/cron/facts-sync?${qs}`,{headers});
 const original=process.env.CRON_SECRET;
 const originalCn=process.env.FACTS_CN_ENABLED;
+const originalToken=process.env.TUSHARE_TOKEN;
 
 describe('facts sync cron',()=>{
  beforeEach(()=>{
   vi.clearAllMocks();
-  process.env.CRON_SECRET='cron-secret';delete process.env.FACTS_CN_ENABLED;
+  process.env.CRON_SECRET='cron-secret';delete process.env.FACTS_CN_ENABLED;process.env.TUSHARE_TOKEN='test-token';
   mocks.codeVersion.mockReturnValue('abc123');
   mocks.deps.mockReturnValue({tag:'deps'});
   mocks.run.mockResolvedValue({batchId:'b',status:'success',counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0},errors:[],detail:{attempted:1,published:1,failed:0,skipped:0,idle:false},issuers:[]});
  });
- afterEach(()=>{if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;if(originalCn===undefined)delete process.env.FACTS_CN_ENABLED;else process.env.FACTS_CN_ENABLED=originalCn;});
+ afterEach(()=>{if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;if(originalCn===undefined)delete process.env.FACTS_CN_ENABLED;else process.env.FACTS_CN_ENABLED=originalCn;if(originalToken===undefined)delete process.env.TUSHARE_TOKEN;else process.env.TUSHARE_TOKEN=originalToken;});
  it('fails closed without CRON_SECRET and rejects a wrong bearer before touching deps',async()=>{
   delete process.env.CRON_SECRET;
   expect((await GET(req('market=US',AUTH))).status).toBe(503);
@@ -57,6 +58,13 @@ describe('facts sync cron',()=>{
   const res=await GET(req('market=CN',AUTH));
   expect(res.status).toBe(403);expect((await res.json()).error.code).toBe('cn_disabled');
   expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();
+ });
+ it('market=CN without TUSHARE_TOKEN answers 503 tushare_unconfigured before deps or a batch; US is unaffected',async()=>{
+  delete process.env.TUSHARE_TOKEN;
+  const res=await GET(req('market=CN',AUTH));
+  expect(res.status).toBe(503);expect((await res.json()).error.code).toBe('tushare_unconfigured');
+  expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();
+  expect((await GET(req('market=US',AUTH))).status).toBe(200);
  });
  it('market=CN runs when FACTS_CN_ENABLED is unset (CN is on by default)',async()=>{
   mocks.run.mockResolvedValue({batchId:'b',status:'success',counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0},errors:[],detail:{attempted:1,published:1,failed:0,skipped:0,idle:false},issuers:[]});

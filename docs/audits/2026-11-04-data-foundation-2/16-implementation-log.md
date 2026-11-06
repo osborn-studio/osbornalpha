@@ -80,4 +80,5 @@
 | `a0fbca7` | test(facts)：录制真实 Tushare 夹具（600519.SH、000333.SZ、600036.SH、000858.SZ 修订对）与规格 §15 report_type / 分页核对 | 待填 |
 | `a101648` | test(facts)：A 股离线回放（修订对、同日冲突、巨潮挂接、黄金模板） | 待填 |
 | `b6c286c` | fix(facts)：多页 Tushare 流失败即关闭（`multi_page_unverified`）；仅带更正日的 rt1 filing 标为 corrected | 待填 |
-| 本分支第四个提交 | feat(facts)：CN 缺省开启（`FACTS_CN_ENABLED=0` 关闭）并登记 CN cron（`35 */4 * * *`），runbook 与规格 §16 同步 | 待填 |
+| `f7e0479` | feat(facts)：CN 缺省开启（`FACTS_CN_ENABLED=0` 关闭）并登记 CN cron（`35 */4 * * *`），runbook 与规格 §16 同步 | 待填 |
+| 本分支第五个提交 | fix(facts)：CN 加固：空转不写 freshness、Tushare token 预检、最早 rt1 更正规则、400 ms 节流、多页诊断 | 待填 |

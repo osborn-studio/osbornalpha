@@ -18,7 +18,7 @@
 // Review follow-up: (5) every row's ts_code must equal the snapshot's requested ts_code and all snapshots of one
 // parse must be for the same requested issuer (parse_error ts_code_mismatch). (6) Single page only: real Tushare offset paging is not order-stable on tied rows (same end_date, update_flag
 // 0/1), so a multi-page concatenation can drop or duplicate rows (verified 2026-11-06, 17-tushare-verification.md).
-// A page with has_more=true (even empty or short) fails as tushare_unavailable multi_page_unverified instead of
+// A page with has_more=true (even empty or short) fails as tushare_unavailable multi_page_unverified:<api>:rt<n> instead of
 // requesting the next page; a full page with has_more=false is reported as skipped reason page_full_no_more.
 // (7) A present-but-invalid f_ann_date never
 // falls back to ann_date: the row is parked as missing_available_date with both original strings; ann_date is
@@ -39,7 +39,7 @@ export const TUSHARE_APIS:TushareApi[]=['income','balancesheet','cashflow'];
 export const TUSHARE_REPORT_TYPES=[1,4,5] as const;
 export const COMMON_FIELDS=['ts_code','ann_date','f_ann_date','end_date','report_type','comp_type','end_type','update_flag'];
 export const PAGE_SIZE=2000;
-export const TUSHARE_MIN_INTERVAL_MS=300;
+export const TUSHARE_MIN_INTERVAL_MS=400;   // 150 calls/min: headroom under the 200/min tier limit
 const RESERVE_MS=20_000;
 const CALL_TIMEOUT_MS=30_000;
 const API_OF_STATEMENT:Record<string,TushareApi|undefined>={IS:'income',BS:'balancesheet',CF:'cashflow'};
@@ -88,7 +88,7 @@ export async function fetchTushareStatements(tsCode:string,sinceYear:number,budg
     throw new ProviderError('tushare_unavailable',`request_failed_${typeof code==='number'&&Number.isInteger(code)?code:'x'}`);
    }
    if(raw.code!==0)throw new ProviderError(isTushareQuotaMessage(raw.msg)?'quota_exhausted':'tushare_unavailable',`api_code_${Number.isInteger(raw.code)?raw.code:'x'}`);
-   if(raw.hasMore)throw new ProviderError('tushare_unavailable','multi_page_unverified');
+   if(raw.hasMore)throw new ProviderError('tushare_unavailable',`multi_page_unverified:${api}:rt${rt}`);
    out.push(snapshotOf(raw.bytes,{source:'tushare',api,params:{...params,limit:pageSize,offset},fields,http_status:raw.httpStatus,has_more:raw.hasMore,page}));
   }
  }

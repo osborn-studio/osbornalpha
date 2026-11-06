@@ -32,12 +32,12 @@ async function cnIssuer(tables:TableClient,issuerId:string,today:string):Promise
  const c=chooseCnTicker(current);
  return {ts_code:'ticker' in c?c.ticker:'',cninfo_org_id:typeof issuer?.cninfo_org_id==='string'?issuer.cninfo_org_id:null};
 }
-/** A type-1 filing is "corrected" (spec §6.3: match 更正 titles) when a type-5 filing exists for the same ts_code:end_date AND the type-1 filing's date segment differs from every such type-5 date. Real Tushare keeps the ORIGINAL rt1 row after a correction (same date as the rt5 row) and adds a corrected rt1 row with a later date. */
-const datesOf=(ref:string)=>ref.split(':');
+/** A type-1 filing is "corrected" (spec §6.3: match 更正 titles) iff another type-1 filing exists for the same ts_code:end_date with an EARLIER date segment: the earliest rt1 date is the original publication. Real Tushare keeps the original rt1 row after a correction and adds a later-dated one, so the rt5 rows are not consulted. A malformed date segment is never corrected and never counts as earlier. */
+const DATE8=/^\d{8}$/;
 function correctedRefs(filings:FilingRow[]):(ref:string)=>boolean{
- const originalDates=new Map<string,Set<string>>();
- for(const f of filings){const [code,end,rt,date]=datesOf(f.source_ref);if(rt!=='5')continue;const k=`${code}:${end}`;const set=originalDates.get(k)??new Set<string>();originalDates.set(k,set);set.add(date);}
- return ref=>{const [code,end,rt,date]=datesOf(ref);if(rt!=='1')return false;const dates=originalDates.get(`${code}:${end}`);return dates!==undefined&&!dates.has(date);};
+ const earliest=new Map<string,string>();
+ for(const f of filings){const [code,end,rt,date]=f.source_ref.split(':');if(rt!=='1'||!DATE8.test(date??''))continue;const k=`${code}:${end}`;const cur=earliest.get(k);if(cur===undefined||date<cur)earliest.set(k,date);}
+ return ref=>{const [code,end,rt,date]=ref.split(':');if(rt!=='1'||!DATE8.test(date??''))return false;const first=earliest.get(`${code}:${end}`);return first!==undefined&&date>first;};
 }
 
 export interface LinkerOptions{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;today?:string}

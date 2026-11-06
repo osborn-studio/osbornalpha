@@ -72,6 +72,7 @@ function memoryDeps(codeVersion:string):SyncDeps{
 async function main(){
  const args=parseArgs(process.argv.slice(2));
  if(args.market==='CN'&&args.apply&&process.env.FACTS_CN_ENABLED==='0'){console.error('CN --apply is disabled: FACTS_CN_ENABLED=0');process.exit(2);}
+ if(args.market==='CN'&&!process.env.TUSHARE_TOKEN){console.error('CN needs TUSHARE_TOKEN (dry run and --apply both fetch from Tushare)');process.exit(2);}
  const codeVersion=resolveCodeVersion({allowGit:true})??(args.apply?null:'dry-run');
  if(!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
  let deps:SyncDeps,issuerIds:string[]|undefined;

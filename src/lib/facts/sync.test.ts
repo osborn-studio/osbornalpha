@@ -79,11 +79,12 @@ describe('runFactsSync — lifecycle',()=>{
   expect((await current(db,'2024-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000000',disclosure_seq:1});
   expect((await current(db,'2025-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000001',disclosure_seq:2,is_revision:true});
  });
- it('runs idle when nothing is due: success batch, freshness ok with idle=true',async()=>{
+ it('runs idle when nothing is due: success batch, dq_freshness untouched (an idle run must not look like a fresh attempt)',async()=>{
   const {tables,deps}=harness(FY23,{},[]);
   const r=await run(deps);
   expect(r).toMatchObject({idle:true,status:'success',issuers:[]});
-  expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',detail:{idle:true,attempted:0}});
+  expect(r.detail).toMatchObject({idle:true,attempted:0});
+  expect(tables.rows('dq_freshness')).toHaveLength(0);
  });
  it('publishes an empty run and reports no_rows when the source has nothing',async()=>{
   const {db,deps}=harness(parsed([],[]));
@@ -227,6 +228,15 @@ describe('runFactsSync — failures',()=>{
   expect(r.issuers.map(i=>[i.outcome,i.code])).toEqual([['failed','quota_exhausted']]);
   expect(r.errors).toEqual([{code:'quota_exhausted',key:ISSUER},{code:'skipped_summary',key:ISSUER2,message:'{"quota_exhausted":1}'}]);
   expect(r.status).toBe('failed');
+ });
+ it('keeps the allowlisted multi_page_unverified reason (api and report_type) in the persisted error; other provider messages stay code-only',async()=>{
+  const {deps}=harness(parsed([],[]),{fetchCn:async()=>{throw new SyncError('tushare_unavailable','multi_page_unverified:income:rt1');}},CN_SCOPE);
+  const r=await run(deps,{market:'CN'});
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'tushare_unavailable'});
+  expect(r.errors).toContainEqual({code:'tushare_unavailable',key:ISSUER,message:'multi_page_unverified:income:rt1'});
+  const {deps:d2}=harness(parsed([],[]),{fetchCn:async()=>{throw new SyncError('tushare_unavailable','api_code_2002 SECRET');}},CN_SCOPE);
+  const r2=await run(d2,{market:'CN'});
+  expect(r2.errors).toContainEqual({code:'tushare_unavailable',key:ISSUER});
  });
  it('does not start an issuer with less than 90 s left and reports deadline_hit as information',async()=>{
   const {tables,deps}=harness(FY23,{deadline:new Date(NOW.getTime()+60_000)});

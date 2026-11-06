@@ -8,7 +8,7 @@ import type {Budget} from '../types';
 import {TushareError,type TushareRaw} from '../../data/sources/tushare';
 import {FACT_CONCEPTS,tushareFieldsFor} from '../concepts';
 import {decodeColumns,scanJsonNumbers} from '../json-numbers';
-import {TUSHARE_APIS,TUSHARE_NUMBER_SCHEMA,addDecimals,coverageSummary,fetchTushareStatements,fieldsFor,isTushareQuotaMessage,parseTushareStatements,resetTusharePacing} from './tushare-statements';
+import {TUSHARE_APIS,TUSHARE_MIN_INTERVAL_MS,TUSHARE_NUMBER_SCHEMA,addDecimals,coverageSummary,fetchTushareStatements,fieldsFor,isTushareQuotaMessage,parseTushareStatements,resetTusharePacing} from './tushare-statements';
 import {SYNTHETIC_DIR,commitRecording,loadTushareFixtures,manifestName,writeRecording} from './tushare-fixtures';
 import {snapshotOf} from './shared';
 
@@ -71,6 +71,7 @@ describe('fetchTushareStatements',()=>{
   await expect(fetchTushareStatements('600519.SH',2014,budget(20_100),{call,sleep,now:()=>t})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: budget_exhausted'});
   expect(sleep).not.toHaveBeenCalled();expect(call).toHaveBeenCalledTimes(1);
  });
+ it('paces at 400 ms (150 calls/min, under the 200/min tier limit)',()=>{expect(TUSHARE_MIN_INTERVAL_MS).toBe(400);});
  it('calls 3 apis × report types 1/4/5 with start_date, exactly one request and one snapshot per stream (offset 0, page 1)',async()=>{
   const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,_o:{limit?:number;offset?:number}={})=>{
    if(api==='income'&&params.report_type==='1')return raw([['600519.SH','20231231'],['600519.SH','20230930']],false);
@@ -107,13 +108,13 @@ describe('fetchTushareStatements',()=>{
  });
  it('fails closed with multi_page_unverified when a page says has_more=true (offset paging is not order-stable on tied rows); no second page is requested',async()=>{
   const call=vi.fn(async()=>raw([['600519.SH','20231231'],['600519.SH','20230930']],true));
-  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call,pageSize:2,sleep:async()=>{}})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: multi_page_unverified'});
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call,pageSize:2,sleep:async()=>{}})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: multi_page_unverified:income:rt1'});
   expect(call).toHaveBeenCalledTimes(1);
   const short=vi.fn(async()=>raw([['600519.SH','20231231']],true));
-  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:short,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified'});
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:short,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified:income:rt1'});
   expect(short).toHaveBeenCalledTimes(1);
   const empty=vi.fn(async()=>raw([],true));
-  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:empty,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified'});
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:empty,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified:income:rt1'});
  });
  it('has_more=false stops even on a full page, and the parser reports the suspicious full page',async()=>{
   const full=vi.fn(async()=>raw([['600519.SH','20231231'],['600519.SH','20230930']],false));
