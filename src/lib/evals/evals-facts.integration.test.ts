@@ -89,6 +89,8 @@ describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)'
   const b=await buildFrozenDb(pool,loadSetup(SETUP));
   if(!b.ok)throw new Error(`F6 base setup does not verify: ${b.mismatch}`);
   world=b.world;
+  // the world build never writes dq_freshness (replay/setup.ts withoutFreshness): the isolated database holds none
+  expect((await world.pool!.query('select count(*)::int as n from public.dq_freshness')).rows[0].n).toBe(0);
   synthetic=loadGoldSet(SYNTHETIC);
   env={today:world.today,now:()=>world.now,evaluatorCodeVersion:'f'.repeat(40),dirty:false};
  },300_000);

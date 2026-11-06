@@ -1,5 +1,11 @@
 // src/lib/evals/cli/run-cli.test.ts
+import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,relative} from 'node:path';
 import {describe,expect,it} from 'vitest';
+import {loadGoldSet} from '../gold/load';
+import {loadSetup,sealSetup} from '../replay/setup';
+import {buildRunDeps} from './deps';
 import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
 import {fakeReader,gcase,gset,readRow} from '../kinds/official-test-support';
@@ -7,7 +13,7 @@ import type {FakeReaderOptions} from '../kinds/official-test-support';
 import type {EvalStore} from '../store';
 import type {EvalReport,EvalRunRow,GoldLock,GoldSet} from '../types';
 import type {RunDeps} from './deps';
-import {USAGE,UsageError,parseRunArgs,runCli} from './run-cli';
+import {USAGE,UsageError,parseRunArgs,refOf,runCli} from './run-cli';
 import type {CliDeps,CliIo} from './run-cli';
 
 const SET=gset([gcase()]);
@@ -106,7 +112,7 @@ describe('runCli (spec §7.1, §3.2 exit codes, §6.3 order, §14)',()=>{
   await runCli([...OFFICIAL,'--mode','ci'],first.io,first.deps);
   const report=first.written[0];
   const bytes=new TextEncoder().encode(JSON.stringify(report));
-  const row={run_id:report.run_id,report_ref:'docs/evals/2026-11-20/facts-official_reconciliation-x.json'} as EvalRunRow;
+  const row={run_id:report.run_id,kind:'official_reconciliation',module:'facts',report_ref:'docs/evals/2026-11-20/facts-official_reconciliation-x.json'} as EvalRunRow;
   const store={getRun:async(id:string)=>id===report.run_id?row:null} as unknown as EvalStore;
   const h=harness({store,over:{readFile:p=>{expect(p).toBe(row.report_ref);return bytes;}}});
   expect(await runCli(['--kind','official_reconciliation','--module','facts','--mode','report','--write-db','--resume',report.run_id],h.io,h.deps)).toBe(0);
@@ -116,4 +122,71 @@ describe('runCli (spec §7.1, §3.2 exit codes, §6.3 order, §14)',()=>{
   expect(await runCli(['--kind','official_reconciliation','--module','facts','--mode','report','--write-db','--resume','00000000-0000-4000-8000-000000000000'],unknown.io,unknown.deps)).toBe(2);
   expect(errorOf(unknown)).toBe('resume_mismatch');
  });
+
+ it('a subset run with --write-db writes the report file but never the store: db skipped, exit 3',async()=>{
+  const h=harness();
+  expect(await runCli([...OFFICIAL,'--mode','report','--write-db','--case',gcase().case_id],h.io,h.deps)).toBe(3);
+  expect(h.written).toHaveLength(1);expect(h.persisted).toEqual([]);
+  expect(receipt(h)).toMatchObject({gate:'incomplete',exit_code:3,db:'skipped'});
+ });
+ it('--resume refuses a stored run of another kind or module (resume_mismatch)',async()=>{
+  const first=harness();
+  await runCli([...OFFICIAL,'--mode','ci'],first.io,first.deps);
+  const report=first.written[0];
+  const bytes=new TextEncoder().encode(JSON.stringify(report));
+  for(const other of [{kind:'replay_consistency',module:'facts'},{kind:'official_reconciliation',module:'metrics'}]){
+   const store={getRun:async()=>({run_id:report.run_id,report_ref:'x.json',...other})} as unknown as EvalStore;
+   const h=harness({store,over:{readFile:()=>bytes}});
+   expect(await runCli(['--kind','official_reconciliation','--module','facts','--mode','report','--write-db','--resume',report.run_id],h.io,h.deps)).toBe(2);
+   expect(errorOf(h)).toBe('resume_mismatch');expect(h.persisted).toEqual([]);
+  }
+ });
+});
+
+describe('report_ref under a custom --out root (§6.3)',()=>{
+ it('refOf: repo-relative inside the cwd, absolute outside it',()=>{
+  expect(refOf('docs/evals/x.json',undefined)).toBe('docs/evals/x.json');
+  expect(refOf('docs/evals/x.json',join(process.cwd(),'sub'))).toBe('sub/docs/evals/x.json');
+  expect(refOf('docs/evals/x.json','/tmp/f6-out')).toBe('/tmp/f6-out/docs/evals/x.json');
+ });
+ it('an interrupted store write under --out /tmp/…, then --resume, reads the same file',async()=>{
+  const out='/tmp/f6-out-root';
+  const seen:string[]=[];
+  const first=harness({over:{writeReport:r=>({json:`docs/evals/2026-11-20/x-${r.run_id.slice(0,8)}.json`,md:null,sha256:'b'.repeat(64)}),
+   persist:async(_s,_r,files)=>{seen.push(files.ref);throw new EvalError('store_write_failed','interrupted');}}});
+  expect(await runCli([...OFFICIAL,'--mode','report','--write-db','--out',out],first.io,first.deps)).toBe(1);
+  expect(seen).toHaveLength(1);expect(seen[0].startsWith(`${out}/docs/evals/2026-11-20/`)).toBe(true);
+  const ci=harness();
+  await runCli([...OFFICIAL,'--mode','ci'],ci.io,ci.deps);
+  const report=ci.written[0];const bytes=new TextEncoder().encode(JSON.stringify(report));
+  const row={run_id:report.run_id,kind:'official_reconciliation',module:'facts',report_ref:seen[0]} as EvalRunRow;
+  const store={getRun:async()=>row} as unknown as EvalStore;
+  const h=harness({store,over:{readFile:p=>{expect(p).toBe(seen[0]);return bytes;}}});
+  expect(await runCli(['--kind','official_reconciliation','--module','facts','--mode','report','--write-db','--resume',report.run_id],h.io,h.deps)).toBe(0);
+  expect(h.persisted[0]).toMatchObject({ref:seen[0],opts:{triggeredBy:'script',resume:true}});
+ });
+});
+
+describe('a base setup that does not verify (CLI level)',()=>{
+ const SYN='src/lib/evals/fixtures/gold/facts/synthetic-us.json';
+ const base=loadSetup('src/lib/evals/fixtures/replay/f6-base.setup.json');
+ it.each([
+  ['config_sha256 changed',()=>sealSetup({...base,config_sha256:'0'.repeat(64)})],
+  ['a fixture byte changed (manifest hash no longer matches)',()=>sealSetup({...base,fixture_manifest:base.fixture_manifest.map((f,i)=>i===0?{...f,sha256:'0'.repeat(64)}:f)})],
+  ['setup_sha256 tampered',()=>({...base,today:'2026-11-21'})],
+ ])('%s → every case read_error(setup_mismatch), gate incomplete, exit 3, report written, no store',async(_n,make)=>{
+  const dir=mkdtempSync(join(tmpdir(),'f6-setup-'));
+  try{
+   const file=join(dir,'bad.setup.json');writeFileSync(file,JSON.stringify(make()));
+   const h=harness();
+   const deps:CliDeps={...h.deps,loadSet:p=>loadGoldSet(p),loadLock:()=>JSON.parse(readFileSync('src/lib/evals/fixtures/gold/lock.json','utf8')) as GoldLock,
+    buildDeps:(m,p)=>buildRunDeps(m,p,{env:{},setupPath:relative(process.cwd(),file)})};
+   expect(await runCli(['--kind','official_reconciliation','--module','facts','--set',SYN,'--mode','ci'],h.io,deps)).toBe(3);
+   const r=h.written[0];
+   expect(r.cases).toHaveLength(10);
+   expect(r.cases.every(c=>c.outcome.result==='read_error'&&(c.outcome as {reason:string}).reason==='setup_mismatch')).toBe(true);
+   expect(r.summary).toMatchObject({gate:'incomplete',execution:{read_error:10}});
+   expect(h.persisted).toEqual([]);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+ },60_000);
 });

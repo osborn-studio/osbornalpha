@@ -113,6 +113,23 @@ export function loadSetup(path:string,root=process.cwd()):FrozenSetup{return JSO
 function readBytes(root:string,path:string,field:string):Uint8Array{
  try{return new Uint8Array(readFileSync(join(root,path)));}catch{throw new SetupMismatch(field,`${path} unreadable`);}
 }
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The issuer seed must be {issuers:[{issuer_id uuid, ticker, cik digits, name}]} with unique ids / tickers / ciks; anything else is SetupMismatch('issuer_seed'). */
+function parseSeed(bytes:Uint8Array):IssuerSeedFile{
+ let raw:unknown;
+ try{raw=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new SetupMismatch('issuer_seed','not json');}
+ const issuers=(raw as {issuers?:unknown}|null)?.issuers;
+ if(!Array.isArray(issuers)||issuers.length===0)throw new SetupMismatch('issuer_seed','issuers must be a non-empty array');
+ const seen=new Set<string>();
+ for(const i of issuers){
+  const o=i as Record<string,unknown>|null;
+  const ok=typeof o==='object'&&o!==null&&typeof o.issuer_id==='string'&&UUID.test(o.issuer_id)&&typeof o.ticker==='string'&&o.ticker!==''&&typeof o.cik==='string'&&/^\d{1,10}$/.test(o.cik)&&typeof o.name==='string'&&o.name!=='';
+  if(!ok)throw new SetupMismatch('issuer_seed','malformed issuer entry');
+  const o2=o as unknown as SeedIssuer;
+  for(const k of [`id:${o2.issuer_id}`,`ticker:${o2.ticker}`,`cik:${o2.cik}`]){if(seen.has(k))throw new SetupMismatch('issuer_seed',`duplicate ${k}`);seen.add(k);}
+ }
+ return raw as IssuerSeedFile;
+}
 /** Every check of the setup, before any write; returns the verified seed and fixture bytes by basename. */
 export function verifySetup(setup:FrozenSetup,root=process.cwd()):{seed:IssuerSeedFile;files:Map<string,Uint8Array>}{
  if(setupSha256(setup)!==setup.setup_sha256)throw new SetupMismatch('setup_sha256');
@@ -123,7 +140,7 @@ export function verifySetup(setup:FrozenSetup,root=process.cwd()):{seed:IssuerSe
  if(configSha256(root)!==setup.config_sha256)throw new SetupMismatch('config_sha256');
  const seedBytes=readBytes(root,setup.issuer_seed.path,'issuer_seed');
  if(sha256Hex(seedBytes)!==setup.issuer_seed.sha256)throw new SetupMismatch('issuer_seed',setup.issuer_seed.path);
- const seed=JSON.parse(new TextDecoder().decode(seedBytes)) as IssuerSeedFile;
+ const seed=parseSeed(seedBytes);
  const files=new Map<string,Uint8Array>();
  for(const f of setup.fixture_manifest){
   const bytes=readBytes(root,f.path,'fixture_manifest');
@@ -200,7 +217,8 @@ async function buildWorld(setup:FrozenSetup,root:string,backendAt:(now:Date)=>Ba
 }
 
 /** Bootstrap of a fresh test database — the same statements scripts/s4/local-db.ts runs before the migrations (roles are
- *  cluster-wide and already exist; that helper is not exported). */
+ *  cluster-wide and already exist; that helper is not exported). KEEP IN SYNC with scripts/s4/local-db.ts: when its bootstrap
+ *  (auth / storage stubs) changes, change this string too, or the isolated frozen databases drift from the harness. */
 const BOOTSTRAP_SQL=`create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;

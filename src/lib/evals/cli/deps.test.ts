@@ -22,7 +22,20 @@ describe('buildRunDeps (spec §7.1 table)',()=>{
  },120_000);
  it('ci is never privileged',async()=>{await expect(buildRunDeps('ci',true,{env:{}})).rejects.toThrow('never privileged');});
  it('a setup that does not verify is refused before anything is built',async()=>{
-  await expect(buildRunDeps('ci',false,{env:{},setupPath:'src/lib/evals/fixtures/gold/lock.json'})).rejects.toThrow(/^setup_mismatch:/);
+  const d=await buildRunDeps('ci',false,{env:{},setupPath:'src/lib/evals/fixtures/gold/lock.json'});   // a setup that does not verify: nothing built, every read says setup_mismatch
+  const ref=await d.reader.resolveSubject({market:'US',cik:'9990601'},'2026-11-20');
+  expect(ref).not.toBeNull();
+  expect(await d.reader.readCurrent(ref!,REVENUE,'2026-11-20')).toMatchObject({rows:[],error:'setup_mismatch'});
+  expect(d.store).toBeNull();await d.close();
+ });
+ it('report mode builds its Supabase clients from the injected env: unprivileged needs URL + anon key and has no store; privileged needs the service-role key',async()=>{
+  const env={NEXT_PUBLIC_SUPABASE_URL:'https://abcd.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'anon'};
+  const d=await buildRunDeps('report',false,{env});
+  expect(d.store).toBeNull();expect(d.reader.privileged).toBe(false);expect(d.environment.db_host).toBe('abcd.supabase.co');
+  await expect(buildRunDeps('report',true,{env})).rejects.toThrow('SUPABASE_SERVICE_ROLE_KEY');
+  await expect(buildRunDeps('report',false,{env:{NEXT_PUBLIC_SUPABASE_URL:env.NEXT_PUBLIC_SUPABASE_URL}})).rejects.toThrow('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  const p=await buildRunDeps('report',true,{env:{...env,SUPABASE_SERVICE_ROLE_KEY:'svc'}});
+  expect(p.store).not.toBeNull();expect(p.reader.privileged).toBe(true);
  });
 });
 

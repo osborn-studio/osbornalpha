@@ -1,12 +1,14 @@
 // src/lib/evals/replay/setup.test.ts
-import {readFileSync} from 'node:fs';
+import {cpSync,mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {dirname,join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {MAPPING_GEN} from '../../facts/concepts';
 import {FORMULA_VERSION} from '../../facts/derive';
 import {sameDayConflictKey} from '../../facts/keys';
 import {sha256Hex} from '../canonical-json';
 import {memoryTableClient} from '../../db/memory-table-client';
-import {buildFrozenMemory,configSha256,groupSealedSetups,sealSetup,sealSetupFromPaths,setupSha256,withoutFreshness} from './setup';
+import {CONFIG_FILES,buildFrozenMemory,configSha256,groupSealedSetups,sealSetup,sealSetupFromPaths,setupSha256,withoutFreshness} from './setup';
 import type {FrozenBuild,FrozenSetup,FrozenSetupDraft,FrozenWorld} from './setup';
 
 const EDGAR='src/lib/evals/fixtures/edgar/';
@@ -108,5 +110,21 @@ describe('groupSealedSetups (P1-6)',()=>{
   expect(r.groups.map(g=>g.cases.map(c=>c.case_id))).toEqual([['c1','c3']]);
   expect(r.mismatched.map(m=>[m.case.case_id,m.mismatch])).toEqual([['c2','setup_sha256']]);
   expect(groupSealedSetups([{case_id:'x',setup:null}]).mismatched.map(m=>m.mismatch)).toEqual(['setup']);
+ });
+});
+
+describe('issuer seed shape (SetupMismatch issuer_seed)',()=>{
+ const bad:[string,unknown][]=[['not an object',[]],['no issuers',{issuers:[]}],['missing field',{issuers:[{issuer_id:C_ID,ticker:'X',cik:'1'}]}],
+  ['issuer_id not a uuid',{issuers:[{issuer_id:'nope',ticker:'X',cik:'1',name:'n'}]}],['cik not digits',{issuers:[{issuer_id:C_ID,ticker:'X',cik:'abc',name:'n'}]}],
+  ['duplicate ticker',{issuers:[{issuer_id:C_ID,ticker:'X',cik:'1',name:'n'},{issuer_id:'f6000000-0000-4000-8000-000009990604',ticker:'X',cik:'2',name:'n'}]}]];
+ it.each(bad)('%s',async(_n,seed)=>{
+  const root=mkdtempSync(join(tmpdir(),'f6-seed-'));
+  try{
+   for(const f of CONFIG_FILES){mkdirSync(dirname(join(root,f)),{recursive:true});cpSync(f,join(root,f));}
+   writeFileSync(join(root,'seed.json'),JSON.stringify(seed));
+   const s=sealSetupFromPaths({initial_state:'empty_after_migrations',issuer_seed:{path:'seed.json'},fixture_manifest:[],sync_order:[],today:TODAY,mapping_gen:MAPPING_GEN,formula_version:FORMULA_VERSION,quarantine_resolutions:[]},root);
+   const b=await buildFrozenMemory(s,root);
+   expect(b.ok).toBe(false);if(!b.ok)expect(b.mismatch).toMatch(/^issuer_seed/);
+  }finally{rmSync(root,{recursive:true,force:true});}
  });
 });

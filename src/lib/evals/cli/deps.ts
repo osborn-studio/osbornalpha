@@ -13,13 +13,13 @@ import {supabaseFactsDb} from '../../facts/db';
 import {parseCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {parseTushareStatements} from '../../facts/providers/tushare-statements';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
-import {getAdminSupabase} from '../../supabase/admin';
-import {getAnonSupabase} from '../../supabase/anon';
+import {createClient} from '@supabase/supabase-js';
+import type {Database} from '../../supabase/database.types';
 import {factsReader,privilegedFactsReader} from '../adapters/facts';
 import {supabaseRawStorage} from '../adapters/provenance';
 import type {SnapshotParsers} from '../adapters/provenance';
 import {buildFrozenDb,buildFrozenMemory,loadSetup} from '../replay/setup';
-import type {FrozenBuild} from '../replay/setup';
+import type {FrozenBuild,FrozenWorld} from '../replay/setup';
 import {projectWithRev,resolveFactsSubject} from '../projections/facts';
 import type {ProjectionDb} from '../projections/facts';
 import {evalStore} from '../store';
@@ -42,7 +42,18 @@ export async function fetchSourceBytes(url:string,fetchImpl:typeof fetch=fetch,u
  *  projectWithRev so a live ledger tuple binds the projection's own state_rev; the reader contract returns the bare Projection. */
 export const withProjector=<D extends {db:ProjectionDb;tables:TableClient}>(d:D):D&{projector:(r:ReplayRequest,today:string)=>Promise<Projection>}=>
  ({...d,projector:async(r,today)=>(await projectWithRev({db:d.db,resolve:(s,t)=>resolveFactsSubject(d.tables,s,t)},r,today)).projection});
-const built=(b:FrozenBuild)=>{if(!b.ok)throw new Error(`setup_mismatch:${b.mismatch}`);return b.world;};
+/** The reader of a base setup that does not verify (a flipped fixture byte, a changed concepts/units/rules file, a wrong hash): nothing was built,
+ *  so every read answers setup_mismatch and the run reports read_error(setup_mismatch) per case (gate incomplete, exit 3) instead of aborting. */
+export function setupMismatchReader():ModuleReader{
+ const fail=async()=>({rows:[],truncated:false,stateRev:null,error:'setup_mismatch' as const});
+ return {module:'facts',privileged:false,resolveSubject:async s=>({issuerId:'f6-setup-mismatch',market:s.market}),readDocumentBound:fail,readCurrent:fail,
+  project:async()=>{throw new Error('setup_mismatch');},stateRev:async()=>null};
+}
+const clientsOf=(env:Record<string,string|undefined>,keyName:'NEXT_PUBLIC_SUPABASE_ANON_KEY'|'SUPABASE_SERVICE_ROLE_KEY')=>{
+ const url=env.NEXT_PUBLIC_SUPABASE_URL,key=env[keyName];
+ if(!url||!key)throw new Error(`NEXT_PUBLIC_SUPABASE_URL or ${keyName} not configured`);
+ return createClient<Database>(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+};
 
 export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRunDepsOptions={}):Promise<RunDeps>{
  const env=opts.env??process.env;
@@ -54,19 +65,24 @@ export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRu
   if(statePath){
    const adminUrl=(JSON.parse(readFileSync(statePath,'utf8')) as {adminUrl:string}).adminUrl;
    const pool=new Pool({connectionString:adminUrl});
-   let w:ReturnType<typeof built>;
-   try{w=built(await buildFrozenDb(pool,setup,opts.root));}catch(e){await pool.end();throw e;}   // an isolated database (replay/setup.ts, R2-2)
+   let w:FrozenWorld;
+   let b:FrozenBuild;
+   try{b=await buildFrozenDb(pool,setup,opts.root);}catch(e){await pool.end();throw e;}   // an isolated database (replay/setup.ts, R2-2)
+   if(!b.ok){await pool.end();return {reader:setupMismatchReader(),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{}};}
+   w=b.world;
    return {reader:factsReader(withProjector({db:w.db,tables:w.tables,stateRev:async()=>null})),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{await w.close();await pool.end();}};
   }
-  const world=built(await buildFrozenMemory(setup,opts.root));
+  const mem=await buildFrozenMemory(setup,opts.root);
+  if(!mem.ok)return {reader:setupMismatchReader(),environment:none,store:null,close:async()=>{}};
+  const world=mem.world;
   return {reader:factsReader(withProjector({db:world.db,tables:world.tables,stateRev:async()=>null})),environment:none,store:null,close:async()=>{}};
  }
  const environment={...none,db_host:hostOf(env.NEXT_PUBLIC_SUPABASE_URL)};
  if(!privileged){
-  const anon=getAnonSupabase();
+  const anon=clientsOf(env,'NEXT_PUBLIC_SUPABASE_ANON_KEY');
   return {reader:factsReader(withProjector({db:supabaseFactsDb(anon),tables:supabaseTableClient(anon),stateRev:async()=>null})),environment,store:null,fetchSource:url=>fetchSourceBytes(url),close:async()=>{}};
  }
- const admin=getAdminSupabase();
+ const admin=clientsOf(env,'SUPABASE_SERVICE_ROLE_KEY');
  const tables=supabaseTableClient(admin);
  return {reader:privilegedFactsReader(withProjector({db:supabaseFactsDb(admin),tables,stateRev:async()=>null,storage:supabaseRawStorage(admin),parsers:LANDED_PARSERS})),
   environment,store:evalStore(tables),fetchSource:url=>fetchSourceBytes(url),close:async()=>{}};

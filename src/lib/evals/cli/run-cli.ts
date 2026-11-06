@@ -6,7 +6,7 @@
 // 1 for report / store failures. --resume <run_id> re-enters §6.3 steps 3–4 from the stored row and the report
 // file it names (persistRun checks the sha256). Later tasks add their kinds to KIND_RUNNERS.
 import {readFileSync} from 'node:fs';
-import {relative} from 'node:path';
+import {isAbsolute,relative,resolve} from 'node:path';
 import {sha256Hex} from '../canonical-json';
 import {EvalError,exitCodeOfError} from '../errors';
 import {checkLock,loadGoldSet} from '../gold/load';
@@ -102,17 +102,24 @@ export const runOfficial:KindRunner=async(args,deps)=>{
 export const KIND_RUNNERS:Partial<Record<EvalKind,KindRunner>>={official_reconciliation:runOfficial,replay_consistency:runReplay};
 
 const message=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,500);
-const refOf=(path:string)=>relative(process.cwd(),path).split('\\').join('/');
+/** The stored report_ref / receipt path: writeReportFiles returns paths relative to its root (--out, default the cwd). A path inside the
+ *  repository (cwd) is stored repo-relative; one outside it is stored absolute, so --resume reads the same file from any root. */
+export const refOf=(path:string,root:string|undefined):string=>{
+ const abs=resolve(root??process.cwd(),path);
+ const rel=relative(process.cwd(),abs);
+ return rel===''||rel.startsWith('..')||isAbsolute(rel)?abs.split('\\').join('/'):rel.split('\\').join('/');
+};
 const receipt=(r:EvalReport,files:{json:string;md:string|null;sha256:string},db:'written'|'skipped',exitCode:ExitCode)=>JSON.stringify({
  run_id:r.run_id,kind:r.kind,module:r.module,mode:r.mode,privileged:r.privileged,set:r.set.id,set_version:r.set.version,gate:r.summary.gate,exit_code:exitCode,
  population:r.summary.population,report:files.json,report_md:files.md,report_sha256:files.sha256,db});
 
-async function resumeRun(runId:string,io:CliIo,deps:CliDeps):Promise<ExitCode>{
+async function resumeRun(runId:string,args:RunArgs,io:CliIo,deps:CliDeps):Promise<ExitCode>{
  const run=await deps.buildDeps('report',true);
  try{
   if(!run.store)throw new EvalError('store_write_failed','no store in this mode');
   const row=await run.store.getRun(runId);
   if(!row)throw new EvalError('resume_mismatch',`no dq_eval_runs row ${runId}`,{run_id:runId});
+  if(row.kind!==args.kind||row.module!==args.module)throw new EvalError('resume_mismatch',`run ${runId} is ${row.kind}/${row.module}, not ${args.kind}/${args.module}`,{run_id:runId});
   const bytes=deps.readFile(row.report_ref);
   const report=JSON.parse(new TextDecoder().decode(bytes)) as EvalReport;
   if(report.run_id!==row.run_id)throw new EvalError('resume_mismatch','the report file names another run',{run_id:runId});
@@ -130,19 +137,21 @@ export async function runCli(argv:string[],io:CliIo,deps:CliDeps=defaultCliDeps(
  catch(e){if(e instanceof UsageError){io.stderr(`${e.message}\n${USAGE}`);return 2;}throw e;}
  let run:Pick<RunDeps,'store'|'close'>|null=null;
  try{
-  if(args.resume!==undefined)return await resumeRun(args.resume,io,deps);
+  if(args.resume!==undefined)return await resumeRun(args.resume,args,io,deps);
   const runner=KIND_RUNNERS[args.kind];
   if(!runner)throw new EvalError('kind_not_enabled',`kind ${args.kind} is not enabled in this build`,{kind:args.kind});
   const started=await runner(args,deps);
   run=started.run;
   const {report,exitCode}=started.outcome;
   let files:{json:string;md:string|null;sha256:string};
-  try{files=deps.writeReport(report,args.out);}catch(e){throw new EvalError('report_write_failed',message(e));}
-  if(args.writeDb){
+  try{const w=deps.writeReport(report,args.out);files={json:refOf(w.json,args.out),md:w.md===null?null:refOf(w.md,args.out),sha256:w.sha256};}catch(e){throw new EvalError('report_write_failed',message(e));}
+  // a subset run (--case / --limit) is never persisted: it would put a partial population in dq_eval_runs
+  const persisted=args.writeDb&&!report.summary.execution.subset;
+  if(persisted){
    if(!run.store)throw new EvalError('store_write_failed','no store in this mode');
-   await deps.persist(run.store,report,{ref:refOf(files.json),sha256:files.sha256},{triggeredBy:'script'});
+   await deps.persist(run.store,report,{ref:files.json,sha256:files.sha256},{triggeredBy:'script'});
   }
-  io.stdout(receipt(report,files,args.writeDb?'written':'skipped',exitCode));
+  io.stdout(receipt(report,files,persisted?'written':'skipped',exitCode));
   return exitCode;
  }catch(e){
   if(e instanceof EvalError){io.stderr(JSON.stringify({error:e.code,message:e.message,detail:e.detail}));return exitCodeOfError(e);}
