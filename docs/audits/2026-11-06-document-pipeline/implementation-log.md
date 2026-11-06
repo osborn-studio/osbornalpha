@@ -8,3 +8,4 @@
 - Task 5：classify（doc_class、期间、cnDate）与文档同步范围 scope（edgar/cninfo/hkexnews，未再出现的行置 priority 0）；Codex 审计：待审（2026-11-06）
 - Task 6：来源适配器 sources/{shared,edgar,cninfo,hkexnews}（段、完整有序列表、礼貌限速/退避/字节上限抓取；EDGAR 历史段在 files[] 核对前关闭）；Codex 审计：待审（2026-11-06）
 - Task 7：同步核心 sync.ts（source_ref 检查点游标、条目上限、尝试次数与耗尽隔离、对象先于行、版本化替换、租约与回执、dry-run）；Codex 审计：待审（2026-11-06）
+- Task 8：生产装配 deps.ts、documents-sync cron 路由、sync.ts 脚本与 vercel.json 三条 documents-sync cron（hkexnews/cninfo/edgar）；Codex 审计：待审（2026-11-06）
