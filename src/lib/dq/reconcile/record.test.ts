@@ -12,7 +12,7 @@ describe('recordReconciliation (out-of-cycle rows, spec §5.1)',()=>{
   const id=await recordReconciliation(t,{...text({inputs_hash:'h'}),pair:'sec.filer_category',batch_id:null});
   const [row]=t.rows('dq_reconciliations');
   expect(row).toMatchObject({id,dataset:'reconcile.sec.filer_category',pair:'sec.filer_category',kind:'text',outcome:'compared',passed:true,left_value:null,right_value:null,tolerance:'0',cycle_id:null,issuer_id:null,market:null,attempt:null,batch_id:null});
-  expect(row.detail).toEqual({left_text:'Large accelerated filer',right_text:'Large Accelerated Filer',inputs_hash:'h'});
+  expect(row.detail).toEqual({left_text:'Large accelerated filer',right_text:'Large Accelerated Filer',tolerance_exact:'0',inputs_hash:'h'});
   expect(typeof row.created_at).toBe('string');
  });
  it('accepts a numeric compared row and a date row',async()=>{
@@ -33,6 +33,20 @@ describe('recordReconciliation (out-of-cycle rows, spec §5.1)',()=>{
   await expect(put({kind:'numeric',left_value:'1,0',right_value:'1'})).rejects.toThrow('invalid_decimal_field');
   await expect(put({tolerance:'-1'})).rejects.toThrow('invalid_tolerance');
   await expect(put({},'bogus' as never)).rejects.toThrow('invalid_pair');
+  await expect(put({kind:'bogus' as never})).rejects.toThrow('invalid_kind');
+  await expect(put({outcome:'bogus' as never,passed:false})).rejects.toThrow('invalid_outcome');
+  await expect(put({outcome:'legacy' as never,passed:false})).rejects.toThrow('invalid_outcome');
+  await expect(put({kind:'numeric',left_value:1 as never,right_value:'1'})).rejects.toThrow('invalid_decimal_field');
+  await expect(put({tolerance:0 as never})).rejects.toThrow('invalid_tolerance');
+  await expect(put({kind:'numeric',left_value:'1',right_value:'2',abs_diff:'-1'})).rejects.toThrow('negative_abs_diff');
+  await expect(put({kind:'numeric',left_value:'1',right_value:'2',abs_diff:'1',rel_diff:'-0.5'})).rejects.toThrow('negative_rel_diff');
   expect(t.rows('dq_reconciliations')).toHaveLength(0);
+ });
+ it('writes canonical numeric fields, exact tolerance/abs_diff in detail, and uses the injected clock',async()=>{
+  const t=memoryTableClient({dq_reconciliations:['id']});
+  await recordReconciliation(t,{...text({kind:'numeric',left_value:'1.10',right_value:'1e0',abs_diff:'0.100',rel_diff:'0.0',tolerance:'0.0050'}),pair:'sec.filer_category',batch_id:null},{now:()=>new Date('2026-01-02T03:04:05.000Z')});
+  const [row]=t.rows('dq_reconciliations');
+  expect(row).toMatchObject({left_value:'1.1',right_value:'1',abs_diff:'0.1',rel_diff:'0',tolerance:'0.005',created_at:'2026-01-02T03:04:05.000Z'});
+  expect(row.detail).toMatchObject({tolerance_exact:'0.005',abs_diff_exact:'0.1'});
  });
 });

@@ -37,10 +37,20 @@ describe('decimal (scaled BigInt, spec §5.1)',()=>{
   expect(()=>divDecimal('1','0')).toThrow('division_by_zero');
  });
  it('rel_diff = |l−r| / max(|l|,|r|,1)',()=>{
-  expect(relDiff('100','101')).toBe('0.0099009901');
+  expect(relDiff('100','101')).toBe('0.009900990099');       // scale = 10 + 3 integer digits
   expect(relDiff('0','0.5')).toBe('0.5');          // denominator floor of 1
   expect(relDiff('-5','5')).toBe('2');
   expect(relDiff('383285000000','383285000000')).toBe('0');
+  expect(relDiff('383285000000.005','383285000000')).not.toBe('0');   // 0.005 on 3.8e11 keeps significance
+  expect(compareDecimal(relDiff('383285000000.005','383285000000'),'0')).toBe(1);
+ });
+ it('overflow beyond the 512-character literal cap is a distinct decimal_overflow code',()=>{
+  const big='9'.repeat(512);
+  expect(addDecimal(big,'0')).toBe(big);
+  expect(()=>addDecimal(big,'1')).toThrow('decimal_overflow');
+  expect(()=>subDecimal(`-${'9'.repeat(511)}`,'9'.repeat(511))).toThrow('decimal_overflow');
+  expect(()=>mulDecimal('9'.repeat(300),'9'.repeat(300))).toThrow('decimal_overflow');
+  expect(()=>addDecimal('1,0','1')).toThrow('invalid_decimal');
  });
  it('withinRadius is |value − center| <= radius by cross-multiplication (inclusive)',()=>{
   expect(withinRadius('383285000000.004','383285000000','0.005')).toBe(true);
