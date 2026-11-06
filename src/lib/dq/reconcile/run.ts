@@ -21,13 +21,22 @@
 //     fail_reconcile_member (the third failure is terminal);
 //  4. settlement when every cursor is done or terminally failed: each done cursor must satisfy
 //     drc_done_accounted (never coalesced); complete iff not_compared = 0 and no failed member; freshness
-//     reconcile.<pair> (weekly) is recorded ONLY by the worker whose guarded update settled the cycle.
+//     reconcile.<pair> (weekly) is made durable in the settling update itself (settle_reconcile_cycle writes
+//     detail.freshness={status:'pending',ok,detail}; only that key of detail, so pending_members written by
+//     set_merge are never clobbered) and recorded by record_cycle_freshness, which is idempotent per cycle
+//     (a cycle increments consecutive_errors at most once). Recording is ALWAYS done by replayFreshness:
+//     at run start and again right after a successful settle, oldest finished cycle first, stopping at the
+//     first failure so the order is kept.
+// cursor.attempts counts CLAIMS, not failures: a lease timeout or a lost fence consumes an attempt just like
+// a thrown evaluate does; after MAX_CURSOR_ATTEMPTS (3) claims the member is terminal (exec_failed_members).
+// Everything after startBatch runs inside one try/catch like runFactsSync: an unexpected exception is pushed
+// as {code:'unknown'}, the batch is finished best-effort and the error is rethrown (no batch left running).
 // Batch counts (§5.5): fetched = keys applied; inserted = passed; duplicates = reused; quarantined =
 // mismatches that went to (or back to) an item; failed = non-compared results + mismatches recorded without
 // an item + member failures. A ReconcileConfigError (bad gold/sample file, unresolvable issuer) fails the
 // batch with its code and creates no cycle. Dry run: members + evaluate only, no writes by the runner.
 import {randomUUID} from 'node:crypto';
-import {TableError,selectAll} from '../../db/table-client';
+import {TableError,callRpc,selectAll} from '../../db/table-client';
 import type {Row,TableClient} from '../../db/table-client';
 import {materialize as materializeFacts} from '../../facts/derive';
 import {makeBudget} from '../../facts/sync';
@@ -36,7 +45,6 @@ import type {FactsDb,Market} from '../../facts/types';
 import {emptyCounts,finishBatch,startBatch} from '../batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../batches';
 import {DATASETS} from '../datasets';
-import {recordAttempt} from '../freshness';
 import {writeHookCas} from '../facts-resolver';
 import type {HookState} from '../facts-resolver';
 import type {RawStore} from '../raw-store';
@@ -159,14 +167,22 @@ async function observedHookAt(tables:TableClient,id:string):Promise<string|undef
 }
 async function runHooks(deps:ReconcileDeps,list:HookItem[],errors:BatchError[]):Promise<number>{
  const mat=deps.materialize??((db:FactsDb,issuer:string,market:Market)=>materializeFacts(db,issuer,market));
+ let failed=0;
  const groups=new Map<string,{target:string;market:Market;items:{id:string;at:string|undefined}[]}>();
  for(const x of list){
-  const target=await targetOf(deps.tables,x.issuerId);const k=mkey(target,x.market);
+  let target:string;
+  try{target=await targetOf(deps.tables,x.issuerId);}
+  catch(e){   // an unresolvable target fails only this item's hook; the next run's step 0 retries it
+   const code=e instanceof Error?e.message.slice(0,100):'target_unresolved';
+   errors.push({code:'materialize_error',key:mkey(x.issuerId,x.market),message:`target_unresolved:${code}`});failed++;
+   if(x.itemId)await writeHookCas(deps.tables,x.itemId,{stage:'materialize',state:'failed',at:deps.now().toISOString(),message:'target_unresolved'},typeof x.hookAt==='string'?x.hookAt:await observedHookAt(deps.tables,x.itemId));
+   continue;
+  }
+  const k=mkey(target,x.market);
   const g=groups.get(k)??{target,market:x.market,items:[] as {id:string;at:string|undefined}[]};
   // the hook.at the item carries BEFORE we materialize: the done/failed write is compare-and-set on it (Task 14b review P1)
   if(x.itemId)g.items.push({id:x.itemId,at:typeof x.hookAt==='string'?x.hookAt:await observedHookAt(deps.tables,x.itemId)});groups.set(k,g);
  }
- let failed=0;
  for(const g of groups.values()){
   let hook:Hook;
   try{await mat(deps.db,g.target,g.market);hook={stage:'done',state:'done',at:deps.now().toISOString()};}
@@ -212,7 +228,10 @@ async function processMember(deps:ReconcileDeps,pair:RegisteredPair,ctx:PairRunC
  const key=mkey(fence.issuer_id,fence.market);
  const report=(outcome:MemberOutcome,extra:{counts?:MemberCounts;code?:string}={}):MemberReport=>({issuerId:fence.issuer_id,market:fence.market,outcome,...extra});
  const hooks:HookItem[]=[];
- const flush=async()=>{if(hooks.length>0){await runHooks(deps,hooks.splice(0),errors);}};
+ const flush=async()=>{   // never throws: a hook problem must not keep failReconcileMember from running
+  if(hooks.length===0)return;
+  try{await runHooks(deps,hooks.splice(0),errors);}catch(e){errors.push({code:'materialize_error',key,message:`hook_flush:${e instanceof Error?e.message.slice(0,100):'unknown'}`});}
+ };
  try{
   const accepted=await acceptedKeys(deps.tables,fence);
   const missing:MemberPlan={...plan,expectedKeys:plan.expectedKeys.filter(k=>!accepted.has(k.naturalKey))};
@@ -245,20 +264,16 @@ const freshnessOf=(row:Row):Freshness|null=>{
  const f=((row.detail??{}) as {freshness?:Partial<Freshness>}).freshness;
  return f&&(f.status==='pending'||f.status==='recorded')&&typeof f.ok==='boolean'?{status:f.status,ok:f.ok,detail:(f.detail??{}) as Record<string,unknown>}:null;
 };
-/** recordAttempt for one settled cycle, then flag it recorded (durable, ordered; Task 14b review P2). Never throws: false = still pending. */
+/** record_cycle_freshness for one settled cycle (idempotent per cycle). Never throws: false = still pending. */
 async function recordFreshness(deps:ReconcileDeps,pair:CyclePairId,row:Row,errors:BatchError[]):Promise<boolean>{
- const f=freshnessOf(row);if(!f)return true;
  const cycleId=String(row.cycle_id);
  try{
-  if(f.status==='pending'){
-   await recordAttempt(deps.tables,DATASETS.reconcile(pair),{ok:f.ok,cadence:'weekly',now:row.finished_at?new Date(String(row.finished_at)):deps.now(),detail:f.detail});
-  }
-  const [cur]=await deps.tables.select(CYCLE_TABLE,{pair,cycle_id:cycleId},{limit:1});
-  await deps.tables.update(CYCLE_TABLE,{pair,cycle_id:cycleId},{detail:{...((cur?.detail??{}) as Row),freshness:{...f,status:'recorded'}}});
-  return true;
+  const r=await callRpc(deps.tables,'record_cycle_freshness',{p_pair:pair,p_cycle_id:cycleId,p_dataset:DATASETS.reconcile(pair),p_cadence:'weekly',p_at:row.finished_at?new Date(String(row.finished_at)).toISOString():deps.now().toISOString()});
+  if(r==='recorded'||r==='already'||r==='no_freshness')return true;
+  errors.push({code:'freshness_pending',key:cycleId,message:String(r)});return false;
  }catch(e){errors.push({code:'freshness_pending',key:cycleId,message:e instanceof Error?e.message:String(e)});return false;}
 }
-/** Run start: terminal cycles of this pair whose freshness is still pending, oldest finished first; stops at the first failure to keep the order. */
+/** Terminal cycles of this pair whose freshness is still pending, oldest finished first; stops at the first failure to keep the order. */
 async function replayFreshness(deps:ReconcileDeps,pair:CyclePairId,errors:BatchError[]):Promise<void>{
  const rows=(await selectAll(deps.tables,CYCLE_TABLE,{pair},'cycle_id')).filter(r=>r.status!=='running'&&freshnessOf(r)?.status==='pending')
   .sort((a,b)=>String(a.finished_at)<String(b.finished_at)?-1:String(a.finished_at)>String(b.finished_at)?1:String(a.cycle_id)<String(b.cycle_id)?-1:1);
@@ -276,14 +291,13 @@ async function settle(deps:ReconcileDeps,pair:CyclePairId,cycleId:string,errors:
   passed+=v[0]!;failedCmp+=v[1]!;notCompared+=v[2]!;
  }
  const status:CycleStatus=notCompared===0&&failedMembers===0?'complete':'complete_with_gaps';
- const now=deps.now();
- const [cur]=await deps.tables.select(CYCLE_TABLE,{pair,cycle_id:cycleId},{limit:1});
  const fdetail={cycle_id:cycleId,compared_passed:passed,compared_failed:failedCmp,not_compared:notCompared,exec_failed_members:failedMembers};
- // freshness is written pending IN the settling update, so a crash before recordAttempt is replayed at the next run start (review P2)
- const n=await deps.tables.update(CYCLE_TABLE,{pair,cycle_id:cycleId,status:'running'},{status,finished_at:now.toISOString(),compared_passed:passed,compared_failed:failedCmp,not_compared:notCompared,exec_failed_members:failedMembers,detail:{...((cur?.detail??{}) as Row),freshness:{status:'pending',ok:status==='complete',detail:fdetail}}});
- if(n!==1)return {settled:false,status};
- const [settledRow]=await deps.tables.select(CYCLE_TABLE,{pair,cycle_id:cycleId},{limit:1});
- if(settledRow)await recordFreshness(deps,pair,settledRow,errors);
+ // one locked SQL step: status/counters + detail.freshness (pending) only; it never rewrites other detail keys (pending_members)
+ const ok=await callRpc(deps.tables,'settle_reconcile_cycle',{p_pair:pair,p_cycle_id:cycleId,p_status:status,
+  p_counts:{compared_passed:passed,compared_failed:failedCmp,not_compared:notCompared,exec_failed_members:failedMembers,finished_at:deps.now().toISOString()},
+  p_freshness:{status:'pending',ok:status==='complete',detail:fdetail}});
+ if(ok!==true)return {settled:false,status};
+ await replayFreshness(deps,pair,errors);   // ordered: an older pending cycle is recorded before this one
  return {settled:true,status};
 }
 
@@ -314,29 +328,36 @@ export async function runReconcile(deps:ReconcileDeps,opts:ReconcileOptions):Pro
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
   return {batchId,status,counts,errors,cycle,members,hooks} satisfies ReconcileReceipt;
  };
- const ctx:PairRunContext={...base,batchId,dryRun:false};
- let opened:{row:Row;created:boolean};
- try{opened=await openCycle(deps,pair,ctx);}
- catch(e){if(e instanceof ReconcileConfigError){errors.push({code:e.code,message:e.message});return finish(null);}throw e;}
- const cycleId=String(opened.row.cycle_id);const frozen=frozenOf(opened.row);
- await deps.tables.update('ingest_batches',{batch_id:batchId,status:'running'},{tool_versions:tool(cycleId)});
- await ensureCursors(deps.tables,pair.id,cycleId,frozen);
- const plans=new Map<string,MemberPlan>(frozen.map(m=>[mkey(m.issuer_id,m.market),{issuerId:m.issuer_id,market:m.market,expectedKeys:m.expected_keys}]));
- for(const c of await readCursors(deps.tables,pair.id,cycleId)){
-  const issuerId=String(c.issuer_id),market=c.market as Market,key=mkey(issuerId,market);
-  if(want&&!want.has(issuerId))continue;
-  if(!claimable(c,deps.now()))continue;
-  const plan=plans.get(key);
-  if(!plan){errors.push({code:'member_failed',key,message:'cursor_without_member'});continue;}
-  if(budget.remainingMs()<MIN_MEMBER_MS){errors.push({code:'deadline_hit',key});members.push({issuerId,market,outcome:'not_started'});continue;}
-  const fence=await deps.db.claimReconcileMember(pair.id,cycleId,issuerId,market,batchId);
-  if(!fence){errors.push({code:'skipped_summary',key:`${key}:claimed`});members.push({issuerId,market,outcome:'claimed_elsewhere'});continue;}
-  const r=await processMember(deps,pair,ctx,fence,plan,counts,errors,outcomes);
-  members.push(r);
-  if(r.outcome==='fence_lost')break;
+ try{
+  const ctx:PairRunContext={...base,batchId,dryRun:false};
+  let opened:{row:Row;created:boolean};
+  try{opened=await openCycle(deps,pair,ctx);}
+  catch(e){if(e instanceof ReconcileConfigError){errors.push({code:e.code,message:e.message});return finish(null);}throw e;}
+  const cycleId=String(opened.row.cycle_id);const frozen=frozenOf(opened.row);
+  await deps.tables.update('ingest_batches',{batch_id:batchId,status:'running'},{tool_versions:tool(cycleId)});
+  await ensureCursors(deps.tables,pair.id,cycleId,frozen);
+  const plans=new Map<string,MemberPlan>(frozen.map(m=>[mkey(m.issuer_id,m.market),{issuerId:m.issuer_id,market:m.market,expectedKeys:m.expected_keys}]));
+  for(const c of await readCursors(deps.tables,pair.id,cycleId)){
+   const issuerId=String(c.issuer_id),market=c.market as Market,key=mkey(issuerId,market);
+   if(want&&!want.has(issuerId))continue;
+   if(!claimable(c,deps.now()))continue;
+   const plan=plans.get(key);
+   if(!plan){errors.push({code:'member_failed',key,message:'cursor_without_member'});continue;}
+   if(budget.remainingMs()<MIN_MEMBER_MS){errors.push({code:'deadline_hit',key});members.push({issuerId,market,outcome:'not_started'});continue;}
+   const fence=await deps.db.claimReconcileMember(pair.id,cycleId,issuerId,market,batchId);
+   if(!fence){errors.push({code:'skipped_summary',key:`${key}:claimed`});members.push({issuerId,market,outcome:'claimed_elsewhere'});continue;}
+   const r=await processMember(deps,pair,ctx,fence,plan,counts,errors,outcomes);
+   members.push(r);
+   if(r.outcome==='fence_lost')break;
+  }
+  let settled:{settled:boolean;status:CycleStatus}={settled:false,status:'running'};
+  try{settled=await settle(deps,pair.id,cycleId,errors);}
+  catch(e){if(e instanceof ReconcileError&&e.code==='cursor_unaccounted')errors.push({code:'cursor_unaccounted',key:e.message});else throw e;}
+  return finish({cycleId,status:settled.status,created:opened.created,settled:settled.settled,expectedTotal:Number(opened.row.expected_total)});
+ }catch(e){
+  // infrastructure failure after the batch started: close the receipt so no running batch dangles, then rethrow (like runFactsSync)
+  errors.push({code:'unknown',message:e instanceof Error?e.message:String(e)});
+  try{await finishBatch(deps.tables,batchId,{counts,errors},deps.now());}catch{/* left running; the runbook marks it failed */}
+  throw e;
  }
- let settled:{settled:boolean;status:CycleStatus}={settled:false,status:'running'};
- try{settled=await settle(deps,pair.id,cycleId,errors);}
- catch(e){if(e instanceof ReconcileError&&e.code==='cursor_unaccounted')errors.push({code:'cursor_unaccounted',key:e.message});else throw e;}
- return finish({cycleId,status:settled.status,created:opened.created,settled:settled.settled,expectedTotal:Number(opened.row.expected_total)});
 }

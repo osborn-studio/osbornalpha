@@ -308,7 +308,7 @@ describe('runReconcile — review P1/P2 (hook CAS, durable freshness)',()=>{
   expect(r.errors).toContainEqual({code:'skipped_summary',key:`${id}:hook_stale`});
  });
  const failingFreshness=(t:TableClient,state:{fail:boolean}):TableClient=>({...t,
-  async upsert(tb,row,key){if(tb==='dq_freshness'&&state.fail)throw new Error('freshness_down');return t.upsert(tb,row,key);}
+  async rpc(fn,a){if(fn==='record_cycle_freshness'&&state.fail)throw new Error('freshness_down');return t.rpc!(fn,a);}
   } as TableClient);
  it('P2: an interruption after the settling update (recordAttempt throws) leaves freshness pending; the next run start records it',async()=>{
   const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[miss('k1')]));
@@ -332,5 +332,50 @@ describe('runReconcile — review P1/P2 (hook CAS, durable freshness)',()=>{
   await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron',issuerIds:[B]});
   expect(await freshness(h.tables)).toMatchObject({consecutive_errors:2});
   for(const id of ['a-older','b-newer']){const [c]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:id});expect((c.detail as {freshness:Row}).freshness.status).toBe('recorded');}
+ });
+
+ it('review: a pending_members entry registered while the cycle runs survives settlement (settle touches only detail.freshness)',async()=>{
+  let h:ReturnType<typeof harness>;
+  const entry={issuer_id:B,market:'US',source:'src-b'};
+  h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],async()=>{   // set_merge commits during the member
+   const [c]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,status:'running'});
+   await h.tables.update(CYCLE_TABLE,{pair:PAIR,cycle_id:c.cycle_id},{detail:{...(c.detail as Row),pending_members:[entry]}});
+   return [rec('k1')];}));
+  const r=await runReconcile(h.deps,{pair:PAIR,triggeredBy:'cron'});
+  expect(r.cycle).toMatchObject({settled:true});
+  const [c]=await h.tables.select(CYCLE_TABLE,{pair:PAIR});
+  expect(c.detail).toMatchObject({pending_members:[entry],freshness:{status:'recorded',ok:true}});
+ });
+ it('review: after a successful settle an older pending cycle is recorded first (ordered replay), not the new cycle directly',async()=>{
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[rec('k1')]));
+  await h.tables.insert(CYCLE_TABLE,{pair:PAIR,cycle_id:'older',started_at:'2026-11-01T00:00:00.000Z',finished_at:'2026-11-01T00:00:00.000Z',members:[],status:'complete_with_gaps',expected_total:0,compared_passed:0,compared_failed:0,not_compared:0,exec_failed_members:0,detail:{freshness:{status:'pending',ok:false,detail:{}}}});
+  let calls=0;
+  const flaky:TableClient={...h.tables,async rpc(fn,a){if(fn==='record_cycle_freshness'&&calls++===0)throw new Error('freshness_down');return h.tables.rpc!(fn,a);}};
+  const r=await runReconcile({...h.deps,tables:flaky},{pair:PAIR,triggeredBy:'cron'});   // run-start replay fails once; the post-settle replay must do older then new
+  expect(r.cycle).toMatchObject({settled:true,status:'complete'});
+  expect(await freshness(h.tables)).toMatchObject({consecutive_errors:0,status:'fresh'});   // old failure first, then the success
+  const [o]=await h.tables.select(CYCLE_TABLE,{pair:PAIR,cycle_id:'older'});
+  expect((o.detail as {freshness:Row}).freshness.status).toBe('recorded');
+ });
+ it('review: an exception after startBatch closes the batch with code unknown and is rethrown',async()=>{
+  const h=harness(stubPair([{issuerId:A,market:'US',expectedKeys:keys('k1')}],()=>[rec('k1')]));
+  const broken:TableClient={...h.tables,async update(t,m,p){if(t==='ingest_batches'&&'tool_versions' in p)throw new Error('db_down');return h.tables.update(t,m,p);}};
+  await expect(runReconcile({...h.deps,tables:broken},{pair:PAIR,triggeredBy:'cron'})).rejects.toThrow('db_down');
+  const [b]=await h.tables.select('ingest_batches',{});
+  expect(b.status).not.toBe('running');
+  expect(JSON.stringify(b.errors)).toContain('"unknown"');
+ });
+ it('review: an unresolvable merge target fails only that hook (target_unresolved) and the member still completes',async()=>{
+  const h=harness(stubPair([],()=>[]));
+  const seeded=await seedPublished(h.db,{issuer:A,market:'US',sourceRef:'acc-a',availableDate:'2024-02-01',facts:[{concept:'revenue',value:'100',period_start:'2023-01-01',period_end:'2023-12-31'}]});
+  const [fact]=await h.db.factsByIds(seeded.factIds);
+  const pair=stubPair([{issuerId:A,market:'US',expectedKeys:keys('k2')}],()=>[rec('k2',{passed:false,left_value:'100',right_value:'101',abs_diff:'1',rel_diff:'0.01',action:'quarantine_left',left_fact_id:fact.fact_id,inputs_hash:'h',
+   item:{natural_key:`${PAIR}:k2:${fact.fact_id}`,payload:{key:{issuer_id:A,market:'US',concept:'revenue'},fact_ids:[fact.fact_id],left_value:'100',right_value:'101',right_locator:{}},detail:{pair:PAIR,inputs_hash:'h',issuer_id:A,market:'US'}}})]);
+  const broken:TableClient={...h.tables,async select(t,m,o){if(t==='issuers')throw new Error('issuers_down');return h.tables.select(t,m,o);}};
+  const r=await runReconcile({...h.deps,tables:broken,pairs:{[PAIR]:pair}},{pair:PAIR,triggeredBy:'cron'});
+  expect(r.members[0]).toMatchObject({outcome:'done'});
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'materialize_error',message:expect.stringContaining('target_unresolved')}));
+  const [item]=await h.tables.select('dq_quarantine',{reason_code:'reconcile_mismatch'});
+  expect((item.detail as {hook:{state:string;message:string}}).hook).toMatchObject({state:'failed',message:'target_unresolved'});
  });
 });

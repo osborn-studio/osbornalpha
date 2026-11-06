@@ -1103,3 +1103,88 @@ begin
 end $$;
 revoke execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) from public, anon, authenticated;
 grant execute on function public.open_reconcile_cycle(text, text, timestamptz, jsonb, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- 14. settle_reconcile_cycle, record_cycle_freshness (Task 14b review)
+-- The runner never read-modify-writes a cycle row's detail: pending_members (set_merge, open_reconcile_cycle) and the freshness
+-- marker are separate jsonb keys written only through jsonb_set under the row lock. Lock order = header rule: the pair's cycle
+-- advisory lock first, then (record only) the per-dataset advisory lock, then the cycle row.
+--  settle_reconcile_cycle(pair, cycle, status, counts, freshness): running -> complete|complete_with_gaps with the counters,
+--    finished_at (counts.finished_at, else now()) and detail.freshness = p_freshness ({status:'pending', ok, detail}); no other
+--    detail key is touched. false = the cycle is not running (someone else settled it / unknown).
+--  record_cycle_freshness(pair, cycle, dataset, cadence, at): idempotent per cycle. 'already' when detail.freshness.status is
+--    'recorded'; otherwise it ports src/lib/dq/freshness.ts::recordAttempt + computeFreshness exactly (read-then-upsert of
+--    dq_freshness: consecutive_errors, last_ok_at, last_attempt_at, status, detail, updated_at) and marks the cycle recorded in
+--    the same transaction, so a cycle can increment consecutive_errors at most once. The per-dataset advisory lock stops
+--    concurrent writers losing an increment. 'not_found' | 'not_terminal' | 'no_freshness' otherwise.
+create or replace function public.settle_reconcile_cycle(p_pair text, p_cycle_id text, p_status text, p_counts jsonb, p_freshness jsonb)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_row public.dq_reconcile_cycles; v_n int;
+begin
+  if p_pair is null or p_cycle_id is null or p_status not in ('complete', 'complete_with_gaps')
+     or jsonb_typeof(p_counts) is distinct from 'object' or jsonb_typeof(p_freshness) is distinct from 'object'
+     or jsonb_typeof(p_freshness -> 'ok') is distinct from 'boolean' or (p_freshness ->> 'status') is distinct from 'pending'
+  then raise exception 'invalid_settlement' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:' || p_pair));
+  select * into v_row from public.dq_reconcile_cycles where pair = p_pair and cycle_id = p_cycle_id and status = 'running' for update;
+  if not found then return false; end if;
+  update public.dq_reconcile_cycles
+  set status = p_status,
+      finished_at = coalesce((p_counts ->> 'finished_at')::timestamptz, now()),
+      compared_passed = (p_counts ->> 'compared_passed')::int,
+      compared_failed = (p_counts ->> 'compared_failed')::int,
+      not_compared = (p_counts ->> 'not_compared')::int,
+      exec_failed_members = (p_counts ->> 'exec_failed_members')::int,
+      detail = jsonb_set(detail, '{freshness}', p_freshness)
+  where pair = p_pair and cycle_id = p_cycle_id;
+  get diagnostics v_n = row_count;
+  return v_n = 1;
+end $$;
+revoke execute on function public.settle_reconcile_cycle(text, text, text, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.settle_reconcile_cycle(text, text, text, jsonb, jsonb) to service_role;
+
+create or replace function public.record_cycle_freshness(p_pair text, p_cycle_id text, p_dataset text, p_cadence text, p_at timestamptz)
+returns text language plpgsql security definer set search_path = public as $$
+declare
+  v_row public.dq_reconcile_cycles; v_fresh jsonb; v_ok boolean; v_ex public.dq_freshness;
+  v_prev_ok timestamptz; v_prev_err int; v_err int; v_last_ok timestamptz; v_status text;
+  v_window interval; v_grace interval;
+begin
+  if p_pair is null or p_cycle_id is null or p_at is null or p_dataset is null or length(p_dataset) not between 1 and 64
+     or p_cadence is null or p_cadence not in ('daily', 'weekly', 'monthly', 'quarterly', 'event')
+  then raise exception 'invalid_freshness' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:' || p_pair));
+  perform pg_advisory_xact_lock(hashtext('dq_freshness:' || p_dataset));
+  select * into v_row from public.dq_reconcile_cycles where pair = p_pair and cycle_id = p_cycle_id for update;
+  if not found then return 'not_found'; end if;
+  if v_row.status = 'running' then return 'not_terminal'; end if;
+  v_fresh := v_row.detail -> 'freshness';
+  if jsonb_typeof(v_fresh) is distinct from 'object' or jsonb_typeof(v_fresh -> 'ok') is distinct from 'boolean' then return 'no_freshness'; end if;
+  if v_fresh ->> 'status' = 'recorded' then return 'already'; end if;
+  v_ok := (v_fresh ->> 'ok')::boolean;
+  select * into v_ex from public.dq_freshness where dataset = p_dataset;
+  v_prev_ok := case when found then v_ex.last_ok_at end;
+  v_prev_err := case when found then v_ex.consecutive_errors else 0 end;
+  v_err := case when v_ok then 0 else v_prev_err + 1 end;
+  v_last_ok := case when v_ok then p_at else v_prev_ok end;
+  -- computeFreshness
+  if v_err >= 2 then v_status := 'error';
+  elsif v_last_ok is null then v_status := 'missing';
+  elsif p_cadence = 'event' then v_status := 'fresh';
+  else
+    v_window := case p_cadence when 'daily' then interval '1 day' when 'weekly' then interval '7 days' when 'monthly' then interval '31 days' else interval '92 days' end;
+    v_grace := case p_cadence when 'daily' then interval '2 days' when 'weekly' then interval '2 days' else interval '3 days' end;
+    v_status := case when p_at - v_last_ok <= v_window + v_grace then 'fresh' else 'stale' end;
+  end if;
+  insert into public.dq_freshness (dataset, expected_cadence, last_ok_at, last_attempt_at, consecutive_errors, status, detail, updated_at)
+  values (p_dataset, p_cadence, v_last_ok, p_at, v_err, v_status,
+          case when jsonb_typeof(v_fresh -> 'detail') = 'object' then v_fresh -> 'detail' else '{}'::jsonb end, p_at)
+  on conflict (dataset) do update
+  set expected_cadence = excluded.expected_cadence, last_ok_at = excluded.last_ok_at, last_attempt_at = excluded.last_attempt_at,
+      consecutive_errors = excluded.consecutive_errors, status = excluded.status, detail = excluded.detail, updated_at = excluded.updated_at;
+  update public.dq_reconcile_cycles
+  set detail = jsonb_set(detail, '{freshness,status}', '"recorded"')
+  where pair = p_pair and cycle_id = p_cycle_id;
+  return 'recorded';
+end $$;
+revoke execute on function public.record_cycle_freshness(text, text, text, text, timestamptz) from public, anon, authenticated;
+grant execute on function public.record_cycle_freshness(text, text, text, text, timestamptz) to service_role;

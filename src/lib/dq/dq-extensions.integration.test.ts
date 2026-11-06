@@ -16,6 +16,8 @@ import {pgTableClient} from '../db/pg-table-client';
 import {pgFactsDb} from '../facts/pg-facts-db';
 import {FORMULA_VERSION,materialize} from '../facts/derive';
 import {resolveFactsItem} from './facts-resolver';
+import {computeFreshness} from './freshness';
+import type {Cadence} from './freshness';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261107091000_facts_extensions.sql';
@@ -1022,9 +1024,78 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    expect(await q(`select count(*)::int n from public.dq_reconcile_cursor where pair=$1 and cycle_id=$2`,[pair,`${pair}-live`])).toEqual([{n:1}]);
   });
 
+  // ---- Task 14b review: settle_reconcile_cycle / record_cycle_freshness
+  const COUNTS={compared_passed:1,compared_failed:0,not_compared:0,exec_failed_members:0};
+  const settleC=(pair:string,id:string,ok:boolean,status='complete')=>one(`select public.settle_reconcile_cycle($1,$2,$3,$4::jsonb,$5::jsonb) v`,[pair,id,status,JSON.stringify(COUNTS),JSON.stringify({status:'pending',ok,detail:{cycle_id:id}})]) as Promise<boolean>;
+  const recordF=(pair:string,id:string,dataset:string,cadence:string,at:string)=>one(`select public.record_cycle_freshness($1,$2,$3,$4,$5::timestamptz) v`,[pair,id,dataset,cadence,at]) as Promise<string>;
+  const freshRow=async(dataset:string)=>(await q(`select * from public.dq_freshness where dataset=$1`,[dataset]))[0];
+
+  it('settle_reconcile_cycle: a pending_members entry committed while settlement waits on the cycle lock survives; only detail.freshness is added; a settled cycle answers false',async()=>{
+   const pair=newPair(),i1=await issuer();const id=await cycle(pair,[{issuer_id:i1,expected:1}]);
+   const entry={issuer_id:i1,market:'US',source:randomUUID()};
+   let settling:Promise<boolean>|undefined;
+   await inTx(admin,async({c,pid,commit})=>{
+    await c.query(`select pg_advisory_xact_lock(hashtext('dq_reconcile_cycle:'||$1))`,[pair]);   // what set_merge holds while it registers
+    settling=settleC(pair,id,true);settling.catch(()=>{});
+    await stillBlockedBehind(admin,pid,settling);
+    await c.query(`update public.dq_reconcile_cycles set detail = jsonb_set(detail,'{pending_members}',$3::jsonb) where pair=$1 and cycle_id=$2`,[pair,id,JSON.stringify([entry])]);
+    await commit();
+   });
+   await expect(settling).resolves.toBe(true);
+   const [row]=await q(`select status,finished_at,detail,compared_passed from public.dq_reconcile_cycles where pair=$1 and cycle_id=$2`,[pair,id]);
+   expect(row).toMatchObject({status:'complete',compared_passed:1,detail:{pending_members:[entry],freshness:{status:'pending',ok:true}}});
+   expect(row.finished_at).not.toBeNull();
+   expect(await settleC(pair,id,true)).toBe(false);
+   expect(await fails(one(`select public.settle_reconcile_cycle($1,$2,'running','{}'::jsonb,'{}'::jsonb) v`,[pair,id]))).toMatchObject({message:'invalid_settlement',code:'22023'});
+  });
+
+  it('record_cycle_freshness: idempotent per cycle — the second call answers already and consecutive_errors moved once; running / unknown / unsettled-freshness cycles are refused softly',async()=>{
+   const pair=newPair(),i1=await issuer(),i2=await issuer();const ds=`reconcile.${pair}`;
+   const id=await cycle(pair,[{issuer_id:i1,expected:1}]);
+   expect(await recordF(pair,id,ds,'weekly','2026-11-05T00:00:00Z')).toBe('not_terminal');
+   expect(await recordF(pair,'nope',ds,'weekly','2026-11-05T00:00:00Z')).toBe('not_found');
+   expect(await settleC(pair,id,false,'complete_with_gaps')).toBe(true);
+   expect(await recordF(pair,id,ds,'weekly','2026-11-05T00:00:00Z')).toBe('recorded');
+   expect(await recordF(pair,id,ds,'weekly','2026-11-05T00:00:00Z')).toBe('already');
+   expect(await freshRow(ds)).toMatchObject({consecutive_errors:1,status:'missing',expected_cadence:'weekly',detail:{cycle_id:id}});
+   expect((await q(`select detail from public.dq_reconcile_cycles where pair=$1 and cycle_id=$2`,[pair,id]))[0].detail).toMatchObject({freshness:{status:'recorded',ok:false}});
+   // a terminal cycle without a freshness marker (legacy rows)
+   const legacy=await cycle(pair,[{issuer_id:i2,expected:1}],'complete');
+   expect(await recordF(pair,legacy,ds,'weekly','2026-11-06T00:00:00Z')).toBe('no_freshness');
+   expect(await fails(recordF(pair,id,ds,'hourly','2026-11-05T00:00:00Z'))).toMatchObject({message:'invalid_freshness',code:'22023'});
+   // two failed cycles recorded in order give the second consecutive error → error
+   const id2=await cycle(pair,[{issuer_id:i2,expected:1}]);await settleC(pair,id2,false,'complete_with_gaps');
+   expect(await recordF(pair,id2,ds,'weekly','2026-11-12T00:00:00Z')).toBe('recorded');
+   expect(await freshRow(ds)).toMatchObject({consecutive_errors:2,status:'error'});
+  });
+
+  it('record_cycle_freshness: the SQL status / counters / last_ok_at equal the TS recordAttempt + computeFreshness on a table of cases',async()=>{
+   const day=86_400_000,at=new Date('2026-11-20T00:00:00Z');
+   const cases:{cadence:Cadence;ok:boolean;prior?:{lastOkAgeDays:number|null;errors:number}}[]=[
+    {cadence:'weekly',ok:true},{cadence:'weekly',ok:false},{cadence:'weekly',ok:false,prior:{lastOkAgeDays:null,errors:1}},
+    {cadence:'weekly',ok:false,prior:{lastOkAgeDays:8,errors:0}},{cadence:'weekly',ok:false,prior:{lastOkAgeDays:9,errors:0}},{cadence:'weekly',ok:false,prior:{lastOkAgeDays:10,errors:0}},
+    {cadence:'daily',ok:false,prior:{lastOkAgeDays:3,errors:0}},{cadence:'daily',ok:false,prior:{lastOkAgeDays:4,errors:0}},
+    {cadence:'monthly',ok:false,prior:{lastOkAgeDays:34,errors:0}},{cadence:'monthly',ok:false,prior:{lastOkAgeDays:35,errors:0}},
+    {cadence:'quarterly',ok:false,prior:{lastOkAgeDays:95,errors:0}},{cadence:'quarterly',ok:false,prior:{lastOkAgeDays:96,errors:0}},
+    {cadence:'event',ok:false,prior:{lastOkAgeDays:400,errors:0}},{cadence:'event',ok:false},
+    {cadence:'weekly',ok:true,prior:{lastOkAgeDays:30,errors:5}},
+   ];
+   for(const [n,k] of cases.entries()){
+    const pair=newPair(),i1=await issuer();const ds=`reconcile.${pair}`;const id=await cycle(pair,[{issuer_id:i1,expected:1}]);
+    const prevOk=k.prior&&k.prior.lastOkAgeDays!==null?new Date(at.getTime()-k.prior.lastOkAgeDays*day):null;
+    if(k.prior)await q(`insert into public.dq_freshness(dataset,expected_cadence,last_ok_at,last_attempt_at,consecutive_errors,status) values($1,$2,$3,$3,$4,$5)`,[ds,k.cadence,prevOk,k.prior.errors,prevOk?'fresh':'missing']);
+    await settleC(pair,id,k.ok,k.ok?'complete':'complete_with_gaps');
+    expect(await recordF(pair,id,ds,k.cadence,at.toISOString())).toBe('recorded');
+    const errors=k.ok?0:(k.prior?.errors??0)+1,lastOk=k.ok?at:prevOk;
+    const want=computeFreshness({cadence:k.cadence,lastOkAt:lastOk,consecutiveErrors:errors,now:at});
+    const got=await freshRow(ds);
+    expect({n,status:got.status,errors:got.consecutive_errors,lastOk:got.last_ok_at?new Date(got.last_ok_at).toISOString():null}).toEqual({n,status:want,errors,lastOk:lastOk?lastOk.toISOString():null});
+   }
+  });
+
   it('grants: cursor functions, apply_reconcile_result and open_reconcile_cycle are service_role only; the fence helper is closed to every role; replays',async()=>{
    const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
-   for(const sig of ['public.claim_reconcile_member(text,text,uuid,text,uuid)','public.complete_reconcile_member(jsonb)','public.fail_reconcile_member(jsonb,text)','public.apply_reconcile_result(jsonb,jsonb)','public.open_reconcile_cycle(text,text,timestamptz,jsonb,jsonb)']){
+   for(const sig of ['public.claim_reconcile_member(text,text,uuid,text,uuid)','public.complete_reconcile_member(jsonb)','public.fail_reconcile_member(jsonb,text)','public.apply_reconcile_result(jsonb,jsonb)','public.open_reconcile_cycle(text,text,timestamptz,jsonb,jsonb)','public.settle_reconcile_cycle(text,text,text,jsonb,jsonb)','public.record_cycle_freshness(text,text,text,text,timestamptz)']){
     for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
     expect(await fn('service_role',sig)).toBe(true);
    }

@@ -8,7 +8,9 @@
 //  - ordering and range filters (gte/lt) compare numbers numerically and everything else as
 //    strings by UTF-16 code unit, which matches PostgreSQL only under C collation (ISO-8601
 //    timestamps in one fixed format compare correctly; mixed offsets or locales do not).
-//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window, patch_security_provenance, close_security_absent); one synchronous JS turn stands for the row lock.
+//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window, patch_security_provenance, close_security_absent, settle_reconcile_cycle, record_cycle_freshness); one synchronous JS turn stands for the row lock.
+import {CADENCES,computeFreshness} from '../dq/freshness';
+import type {Cadence} from '../dq/freshness';
 import {TableError,assertMatch,assertUpdateMatch,checkRangeOptions,checkSelectOptions} from './table-client';
 import type {RangeOptions,Row,TableClient} from './table-client';
 
@@ -35,6 +37,35 @@ const isObj=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const sameEvidence=(a:unknown,b:Row)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
 const SHA256=/^[0-9a-f]{64}$/;
 const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
+ // Task 14b review: twins of settle_reconcile_cycle / record_cycle_freshness (migration 20261107091000 section 14); detail is only ever
+ // touched at the freshness key, so a pending_members entry registered meanwhile survives.
+ settle_reconcile_cycle(rowsOf,a){
+  const c=a.p_counts,f=a.p_freshness;
+  if(!isObj(c)||!isObj(f)||typeof f.ok!=='boolean'||f.status!=='pending'||(a.p_status!=='complete'&&a.p_status!=='complete_with_gaps'))throw new TableError('rpc','settle_reconcile_cycle','invalid_settlement','22023');
+  const row=rowsOf('dq_reconcile_cycles').find(r=>r.pair===a.p_pair&&r.cycle_id===a.p_cycle_id&&r.status==='running');
+  if(!row)return false;
+  Object.assign(row,{status:a.p_status,finished_at:typeof c.finished_at==='string'?c.finished_at:new Date().toISOString(),compared_passed:c.compared_passed,compared_failed:c.compared_failed,not_compared:c.not_compared,exec_failed_members:c.exec_failed_members,detail:{...(isObj(row.detail)?row.detail:{}),freshness:clone(f)}});
+  return true;
+ },
+ record_cycle_freshness(rowsOf,a){
+  const cadence=a.p_cadence as Cadence;
+  if(typeof a.p_dataset!=='string'||a.p_dataset.length<1||a.p_dataset.length>64||!CADENCES.includes(cadence)||typeof a.p_at!=='string'||!Number.isFinite(Date.parse(a.p_at)))throw new TableError('rpc','record_cycle_freshness','invalid_freshness','22023');
+  const row=rowsOf('dq_reconcile_cycles').find(r=>r.pair===a.p_pair&&r.cycle_id===a.p_cycle_id);
+  if(!row)return 'not_found';
+  if(row.status==='running')return 'not_terminal';
+  const d=isObj(row.detail)?row.detail:{};const f=d.freshness;
+  if(!isObj(f)||typeof f.ok!=='boolean')return 'no_freshness';
+  if(f.status==='recorded')return 'already';
+  const at=new Date(a.p_at);
+  const rows=rowsOf('dq_freshness');const ex=rows.find(r=>r.dataset===a.p_dataset);
+  const prevOk=ex?.last_ok_at?new Date(String(ex.last_ok_at)):null;
+  const errs=f.ok?0:Number(ex?.consecutive_errors??0)+1;
+  const lastOk=f.ok?at:prevOk;
+  const next={dataset:a.p_dataset,expected_cadence:cadence,last_ok_at:lastOk?lastOk.toISOString():null,last_attempt_at:at.toISOString(),consecutive_errors:errs,status:computeFreshness({cadence,lastOkAt:lastOk,consecutiveErrors:errs,now:at}),detail:isObj(f.detail)?clone(f.detail):{},updated_at:at.toISOString()};
+  if(ex)Object.assign(ex,next);else rows.push(next);
+  row.detail={...d,freshness:{...f,status:'recorded'}};
+  return 'recorded';
+ },
  append_claim_evidence(rowsOf,a){
   const e=a.p_evidence;
   if(!isObj(e)||typeof e.source!=='string'||e.source.length<1||e.source.length>64||typeof e.as_of!=='string'||typeof e.evidence_sha256!=='string'||!SHA256.test(e.evidence_sha256))
