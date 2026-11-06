@@ -1,6 +1,6 @@
 # 数据底座四 · F4 判断层框架 设计规格
 
-日期：2026-11-04（第 5 稿。审计轨迹：`docs/audits/2026-11-04-judgment-framework/` —— 01 Codex 第一轮（8 P1 / 21 P2 / 1 P3）、02 Codex 第二轮（对第 2 稿：4 P1 / 25 P2 / 3 P3）、03 处置表、04 Codex 第三轮（对第 3 稿：3 个新 P1 N1–N3 + 11 个 PARTIAL，判定"not ready"）、05 Codex 第四轮（对第 4 稿，只审新引入缺陷：N1–N3 RESOLVED，新 R01–R06）。第 4 稿修 N1–N3 与全部 PARTIAL；第 5 稿按 05 的处方逐字实施 R01–R06（见 03 第四轮节），未再送审）
+日期：2026-11-06（第 6 稿：Codex 第五轮 `06-codex-round5.md`（增量 + 已落地计划二代码核对）找到 S01–S08，按处方逐字实施，见 03 第五轮节；第 5 稿日期 2026-11-04。审计轨迹：`docs/audits/2026-11-04-judgment-framework/` —— 01 Codex 第一轮（8 P1 / 21 P2 / 1 P3）、02 Codex 第二轮（对第 2 稿：4 P1 / 25 P2 / 3 P3）、03 处置表、04 Codex 第三轮（对第 3 稿：3 个新 P1 N1–N3 + 11 个 PARTIAL，判定"not ready"）、05 Codex 第四轮（对第 4 稿，只审新引入缺陷：N1–N3 RESOLVED，新 R01–R06）。第 4 稿修 N1–N3 与全部 PARTIAL；第 5 稿按 05 的处方逐字实施 R01–R06（见 03 第四轮节），未再送审）
 状态：草案，待 owner 评审（§17 列出 owner 决策）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一，§1 把"判断层：预测登记、结算、校准"划给 F4）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二，**第 8 稿**：`fact_sync_runs` / `filings` / `financial_facts` / `financial_metrics`（主键含 `market`、`based_on_rev`）/ `FactsDb{readFacts, factsByIds, metricsOfIssuer, …}`；本规格以该稿为准，规格二再改动时 §12.2 随之更新）；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（宏观规格：`macro_snapshots` / `macro_regime_results` 与 `methodology_version`）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5 约束 3（owner 2026-11-04 确认）："财务数字是事实；生命周期阶段、胜率、值博率、评级是判断，必须有 `methodology_version`、输入快照、可证伪条件，并被结算与校准（Brier 分数、可靠性曲线）。没有结算机制的'胜率'不得显示为百分比。"本规格逐条落实：每条判断是一条内容寻址、只追加的登记记录；输入快照把**值本身**（不只是哈希）冻结在登记行里，所以回放不依赖供应商重抓；每条判断登记时就固定可证伪条件、目标期与标签政策；结算由 cron 对照后来的事实 / 价格 / 宏观观测写入证据；校准报告决定页面能不能把概率显示成百分比，且"样本够"与"校准通过"是两道门。
@@ -54,7 +54,7 @@
 | 宏观规格的判断期望 | 宏观规格 §4.3、§5.3、§8 | 规则打分型判断，有方法版本与快照（`macro_snapshots.observation_ids`、`coverage`、`margin`、`growth_axis`、`inflation_axis`），"归一化得分不称为概率"，`coverage < 0.6` 不发布；`REPORT.md` §10.1："若后续要提供概率，需定义可检验标签、时间外验证、基准模型、可靠性曲线和 Brier score" | F4 的 `macro_regime@v1` 给它补上可检验标签（§11.1）、结算与校准；宏观表不动 |
 | 数据质量底座（计划一，已落地） | `20261105090000_dq_foundation.sql`；`src/lib/dq/{batches,quarantine,freshness,rules,dashboard}.ts`；`src/lib/db/table-client.ts`（Supabase / memory / pg；**无事务、无 rpc**） | `ingest_batches` 六个固定计数器，`INFO_CODES = ['skipped_summary','relink']`，`batchStatusFromCounts`：`fetched > 0` 且无 accounted → `failed`；非信息码错误 → partial/failed；`dq_quarantine` 每键一条 open；`dq_freshness` daily 宽限 2 天 | 结算 / 校准任务用 `startBatch/finishBatch`、`quarantine()`、`recordAttempt()`；需要在 `INFO_CODES` 里显式加 F4 的信息码，并加 `deferred` 计数器（§7.5） |
 | 发行人与行业分类（计划一，已落地） | `20261105091000_issuers.sql`：`issuers(status, merged_into)`、`issuer_securities`（持有窗口互斥）、`industry_classifications(scheme, version, code)`、`issuer_industry_memberships(valid_from, valid_to)`；anon 可读 | 主体主数据 | `subject_type='issuer'` 用 `issuer_id`；`'industry'` 用 `scheme:version:code` |
-| 披露事实（规格二第 8 稿，待实施） | `financial_facts(fact_id, raw_hash, value_text, available_date, mapping_gen, status)`；`financial_metrics` 主键 `(issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version)`，含 `inputs[{fact_id,…}]`、`based_on_rev`；`FactsDb.readFacts(issuer, market, {concepts, asOf, …}) → {stateRev, rows, truncated}`（rpc `read_facts`）、`factsByIds(ids)`、`metricsOfIssuer(issuer, market, formulaVersion)`；读接口 `GET /api/facts/[ticker]?factIds=`（≤ 100） | 事实层 | 输入引用 `financial_fact` 用 `fact_id`（回放走 `factsByIds`）；`financial_metric` 引用复合键 + 物化行的 `inputs` 事实 id 列表 + `based_on_rev`，冻结投影里带全部底层 `fact_id`（§3.5）；结算 `fact_metric` 用 `readFacts(…, asOf = 截止日)`（§7.3） |
+| 披露事实（规格二第 8 稿，**已落地**：PR #102，迁移 `20261106090000_financial_facts.sql`；偏差见规格二 §16，含概念目录 **35** 个、CN `monetary_funds` 与 `cash` 分开） | `financial_facts(fact_id, raw_hash, value_text, available_date, mapping_gen, status)`；`financial_metrics` 主键 `(issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version)`，含 `inputs[{fact_id,…}]`、`based_on_rev`；`FactsDb.readFacts(issuer, market, {concepts, asOf, …}) → {stateRev, rows, truncated}`（rpc `read_facts`）、`factsByIds(ids)`、`metricsOfIssuer(issuer, market, formulaVersion)`；读接口 `GET /api/facts/[ticker]?factIds=`（≤ 100） | 事实层 | 输入引用 `financial_fact` 用 `fact_id`（回放走 `factsByIds`）；`financial_metric` 只经截止派生构造（不读物化缓存），冻结投影带派生证据行与 lineage（§3.5，S04/S05）；结算 `fact_metric` 用 `readFacts(…, asOf = 截止日)`（§7.3） |
 
 ### 2.2 对方四个页面上的判断型数字（`EXPERT_PLAYBOOK_AND_BRIEF.md` §1.1 / §2.1 / §3.1、`MACRO_STRATEGY_DEEP_DIVE.md` §4.1、`REPORT.md` §3 / §6）
 
@@ -75,8 +75,8 @@
 
 - **价格**：仓库没有持久化日线表（`supabase/migrations` 无 `daily_bars` / `kline` / `price_history`；`quote_alert_window_samples` 是告警抽样函数）。日线抓取：`fetchDatagatewayDailyKline(ticker, market, limit, adjustment, {signal, timeoutMs})`（`datagatewayDailyKlineBody` 以**当前时间**为终点、`max(30, limit × 3)` 天为窗口；`DATAGATEWAY_DAILY_TIMEOUT_MS = 7000`；仅 `isDatagatewayConfigured()` 时）；`fetchEastmoneyKline(ticker, 'D', limit, {adjustment, signal, timeoutMs})`（URL 固定 `end=20500101`，即"最新 `limit` 根"；美股 `tickerToSecid` 失败时按前缀逐个尝试；每次默认 5 s；A 股默认 `qfq`，HK / US 默认 `none`，但 `adjustment` 参数可传 `qfq/hfq`——**东方财富对港美股的复权是否有效未验证**）；`fetchTencentKline` / `fetchSinaIntradayKline`。两个日线适配器都**没有"按历史日期范围取"的参数**：F4 必须给它们加 `endDate` 选项（东方财富 `end=` 参数本就存在；DataGateway body 已有 `startDate/endDate`），否则迟到结算会取不到基准 bar（审计 F17）。
 - **交易日历**：只有 XNYS（`calendar.json`，2026–2028 冻结）。A / HK 无日历；`scoreForward` 用 K 线序号数交易日。
-- **事实**：规格二第 8 稿 `FactsDb`（待实施）。
-- **宏观观测**：宏观规格 `macro_observations(series_id, period_end, value, available_at, vintage_id)`（待实施）。
+- **事实**：规格二第 8 稿 `FactsDb`（已落地，`src/lib/facts/types.ts`）；`Market = 'US'|'CN'`（事实域）。没有 `deriveMetricsAsOf`：可用的是纯函数 `deriveMetrics(rows, {market, asOf, basedOnRev})`（`src/lib/facts/derive.ts`，固定 `FORMULA_VERSION`），F4 在自己目录里组合（§12.2，S03）。
+- **宏观观测**：宏观规格 `macro_observations(series_id, period_end, value, available_at, vintage_id)`（**仓库里尚不存在**：宏观工作台未实施；F4 按 §12.1 接口编程并用夹具实现，§15 F4-5a）。
 - **代码版本**：`ingest_batches.code_version`；部署环境 `VERCEL_GIT_COMMIT_SHA`。
 - **数据源许可**：东方财富 / DataGateway / Tushare 都是**适配器**，原发布方分别是交易所行情（经数据商转发）、SEC / 交易所。F4 在输入与证据里记录 `origin`（原发布方）、`adapter`、`locator`、`transform`；展示许可是 owner 事项（§17），仓库里没有证据能证明。
 
@@ -121,15 +121,17 @@ type Subject =
 
 ```ts
 type Condition =
-  | { resolver: 'price_return';   params: { ticker; market; adjustment: 'qfq'|'hfq'; base_date: string; benchmark?: { ticker; market } };
+  | { resolver: 'price_return';   params: { ticker; market: PriceMarket; adjustment: 'qfq'|'hfq'; base_date: string; benchmark?: { ticker; market: PriceMarket } };
       predicate: { op: '>'|'>='|'<'|'<='|'between'; rhs: number | [number, number] }; text: {zh,en} }
-  | { resolver: 'fact_metric';    params: { issuer_id; market; metric; period_start; period_end; duration; unit; input_unit; basis; formula_version; compare: 'value'|'yoy' };   // 完整 financial_metrics 自然键
+  | { resolver: 'fact_metric';    params: { issuer_id; market: FactsMarket; metric; period_start; period_end; duration; unit; input_unit; basis; formula_version; compare: 'value'|'yoy' };   // 完整 financial_metrics 自然键
       predicate: { op: '>'|'>='|'<'|'<='|'between'; rhs: number | [number, number] }; text }
   | { resolver: 'macro_regime_replay'; params: { region; reference_period: string /* YYYY-MM */; macro_methodology_version: string; catalog_version: string };
       predicate: { op: 'eq'; rhs: 'recovery'|'overheat'|'stagflation'|'recession' }; text }   // §11.1：同一分类函数在截止 vintage 下重算
   | { resolver: 'industry_aggregate'; params: Record<string, string|number>; predicate: …; text }   // 行业规格定义
   | { resolver: 'recommendation_hit'; params: { recommendation_id }; predicate: { op: 'eq'; rhs: true }; text };   // 仅私有适配器；公共表拒绝
 ```
+
+**两个市场域（S06）**：`FactsMarket = 'US' | 'CN'`（规格二事实域，`src/lib/facts/types.ts`）与 `PriceMarket = 'A' | 'HK' | 'US'`（K 线 / 评分域，`database.types.ts::Market` 的子集）是不同类型，条件、输入引用、哈希里各自保留本域的值，不全局改名。换算只在 `src/lib/judgments/markets.ts::factsMarketOf(price)` 一处：`A → CN`、`US → US`、`HK → null`（事实域不支持港股：落地的 `publicMarketOf` 同样拒绝 HK）；`null` → `gather` 弃权 `market_unsupported`。
 
 `categorical` 的 `predicate.op='eq'`、`rhs = claim.selected`，实现值是 resolver 给出的实现类别；`interval` 用 `between [low, high]`；`probability` 的事件由 `predicate` 定义，`hit = predicate(实现值)`。方法模块的 `condition()` 是纯函数；条件登记后不可改。每个 resolver 导出 `validateParams()`（JSON Schema，ajv，仓库已有）与 `labelAvailableAt(params, target)`（标签最早可得时刻的估计，§3.4 前瞻资格用），登记时调用。"资产配对"条件（`r_long − r_short`）**不在 v1 的联合类型里**：它需要独立的 resolver、序列配对读取、币种与回报口径契约，列为未实现能力（§11.1、§18.1）。
 
@@ -145,7 +147,7 @@ type Target  =
 type LabelPolicy = 'first_observed' | 'cutoff_vintage';
 ```
 
-- `target` 在登记时由方法的 `resolveTarget(subject, asOf, horizon, inputsDb)` 固定（方法级解析器；本规格给默认实现）：`session_index` 需要 `base_date` = 登记输入里的 `price_bar.date`；`date` = `as_of + n 天`；`period` = `as_of 所在月 + n`；`fiscal_period`：`anchor_period_end` = `filingsOfIssuer` 已知的最新 `period_end`，以 3 个月为步长外推得到 `as_of` 之后第 n 个季末（`n ≥ 1`，允许多季；冻结 `calendar` 使回放不依赖之后的 filing；已知序列覆盖时 `extrapolated=false`）；无任何 filing → abstain `target_unresolvable`。
+- `target` 在登记时由方法的 `resolveTarget(subject, asOf, horizon, inputsDb)` 固定（方法级解析器；本规格给默认实现）：`session_index` 需要 `base_date` = 登记输入里的 `price_bar.date`；`date` = `as_of + n 天`；`period` = `as_of 所在月 + n`；`fiscal_period`：`anchor_period_end` = `filingsOfIssuer` 中**已发布**（`mapping_gen > 0`，同落地 `isPublished`）且 `available_date ≤ as_of` 的最新 `period_end`（S05），以 3 个月为步长外推得到 `as_of` 之后第 n 个季末（`n ≥ 1`，允许多季；冻结 `calendar` 使回放不依赖之后的 filing；已知序列覆盖时 `extrapolated=false`）；无任何 filing → abstain `target_unresolvable`。
 - `settle_after`（扫描提示，不是期限）= `session_index`: `base_date + n 天`（交易日 ≥ 自然日，这是最早可能到期）；`date`: 该日；`period`: 该月末；`fiscal_period`: `period_end + 1 天`。`settle_by`（超过即 `void(no_data)`）= `settle_after + grace`，`grace` 是**方法参数**（`params.grace_days`），本规格给默认值并说明依据：价格类 60 天（覆盖分析师规格 §5 记录的 60 交易日 ≈ 86–91 自然日的长假偏差再留余量——政策常量，非推导）；`calendar_days / calendar_months` 类 30 天（一个月度发布周期——政策常量）；`fiscal_period` 类 120 天（规格一 §5.2 财报日历：A 股年报截止期末后 120 天，美股 10-K 最长 90 天；取最长）。
 - `label_policy`：`first_observed` = 结算 cron **首次观测到**实现值时结算（实现值是当时的当前值，之后的修订不再改动结算；证据记录观测时刻与 `state_rev / vintage`，这个政策对调度时刻有依赖，文档如实披露）；`cutoff_vintage` = 只在 `settle_by` 当天用当时可见的当前值结算（宏观默认，因修订频繁）。两种政策都要求实现值的可得时刻 `≤ settle_by`，否则 `void(no_data)`。
 - **预测承诺时刻** = `registered_at`。`retrospective = true` 当且仅当以下任一成立：`as_of < registered_at::date`；`target` 对应的最早到期时刻 `≤ registered_at`；resolver 的 `labelAvailableAt(params, target) ≤ registered_at`（标签在登记时已可得）。`retrospective` 的判断照常结算，但**不进前瞻校准**（§8.2）。历史补登记只有在能给出不可变的发布证据（例如当时已发布的宏观快照 `created_at` 与内容哈希）时才可申请"恢复前瞻资格"（§17 O7，v1 不实现）。
@@ -162,7 +164,7 @@ interface InputRef<K, R, S> {
 }
 type Input =
   | InputRef<'financial_fact',   { fact_id },                                                    { fact_id, issuer_id, market, concept, period_start, period_end, duration, value_text, unit, consolidation, available_date, filing_id, mapping_gen }>
-  | InputRef<'financial_metric', { issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version }, { …复合键, value_text, unit, duration, as_of, based_on_rev, input_facts: FactProjection[] }>   // input_facts = 全部底层事实的完整投影（同 financial_fact 的 snapshot 形状），回放不需要再读事实层（审计 G20）
+  | InputRef<'financial_metric', { issuer_id, market, metric, period_start, period_end, input_unit, basis, formula_version }, { …复合键, value_text, unit, duration, as_of, based_on_rev, lineage: MetricRow['inputs'], derivation: { formula_version, as_of, state_rev, rows: DerivationRow[] } }>   // S04：见下方 financial_metric 段
   | InputRef<'macro_observation',{ series_id, period_end, vintage_id },                            { series_id, period_end, value, unit, vintage_id, available_at }>
   | InputRef<'macro_snapshot',   { snapshot_id },                                                 { snapshot_id, region, as_of, methodology_version, observation_ids, primary_state, secondary_state, scores, coverage, margin, growth_axis, inflation_axis }>
   | InputRef<'price_bar',        { ticker, market, date, source: KlineSourceName, adjustment },   { ticker, market, date, source, adjustment, open: number|null, high: number|null, low: number|null, close, volume: number|null, amount?: number|null, fields_present: string[] }>   // DataGateway close-only 分支只有 close：其余字段 null，不合成（审计 G27）
@@ -177,7 +179,7 @@ type Input =
 - **输入只能由固定构造器生成**（审计 G03）：`src/lib/judgments/inputs.ts` 对每种 `kind` 导出 `buildInput(ref, inputsDb)`，它只通过 `JudgmentInputsDb` 的**公共读取路径**（facts / macro / table_rows 用 **anon 客户端**实现，RLS 生效：只看得到 `status='ok'`、公开的行；`judgment` 只查公共表；`price_bar` 走 K 线适配器）取值并生成 `snapshot`、`available_at`、`origin`。`registerJudgment` 对每个输入**重新执行构造器**并要求结果与提交的 `snapshot` 字节一致（`input_snapshot_mismatch`）；构造器取不到（行不存在、被隔离、不公开）→ `input_not_public`。service-role 能读到的隔离行因此进不了公共表。结算证据走同一规则（§7.3 的 `fact_metric / macro_regime_replay` 用 anon 路径取值）。
 - `origin` 不是自由文本：`publisher / adapter / locator 模板 / transform / license_status` 来自冻结表 `src/lib/judgments/origins.ts`（按 `kind × adapter` 键；例如 `price_bar × eastmoney → publisher: '交易所行情（经东方财富转发）', license_status: 'unverified'`），构造器填充，登记校验键存在。`license_status='unverified'` 的输入可以登记，但该方法的 `publishable=false` 直到 owner 确认（§4.1、§17）。
 - 登记校验 `max(inputs.available_at) ≤ as_of 的日终`（§3.7），否则 `lookahead`。
-- `financial_metric` 的冻结投影带 `input_facts`（完整事实投影），回放直接用它们重算派生值（物化行是可替换缓存，不是版本；审计 F03 / G20）；`factsByIds` 只在 `--reconcile` 对账时用。
+- `financial_metric`（S04 / S05）：只经 `deriveMetricsAsOf(issuer, market, as_of, FORMULA_VERSION)` 截止派生构造，**从不读物化缓存** `financial_metrics`（落地的 `financial_metrics` 与 `filings` 是无条件 public read，旧缓存行在 anon 下仍可读，重跑同一构造器发现不了陈旧）。冻结投影：`value_text`（= `MetricRow.value` 的规范十进制）、`lineage`（`MetricRow.inputs` 原样，含 `quarter`、`ytd_rule`）与 `derivation`：`rows` = 该次 `readFacts(history:true)` 信封中 `concept ∈ lineage 涉及的概念` 且 `period_end ∈ [period_start − 400 天, period_end]` 的**全部**行（含历史披露），每行为 `DerivationRow` = `FactRow` 中派生内核读取的全部字段 `{fact_id, issuer_id, market, filing_id, concept, period_start, period_end, duration, value_text, unit, consolidation, available_date, mapping_gen, status, created_at, disclosure_seq, is_current, is_revision}`，按 `(concept, period_start, period_end, unit, disclosure_seq, fact_id)` 排序。行→快照映射丢弃 `value`（与 `value_text` 相同）、`run_id`、`source_concept`、`statement`、`mapping_version`、`raw_hash`；快照→派生映射恢复 `value = value_text`。**构造器自检**：`deriveMetrics(derivation.rows→FactRow, {market, asOf: derivation.as_of, basedOnRev: derivation.state_rev})` 必须恰好产出一条同自然键、`value` 字节一致、`inputs` 一致的行，否则 `gather` 弃权 `metric_not_reproducible`（所以子集过滤若漏了内核需要的行，登记时就暴露，而不是回放时）；回放零外部读取（审计 F03 / G20）。`formula_version ≠ FORMULA_VERSION` → `unsupported_formula_version`。`factsByIds` 只在 `--reconcile` 对账时用。
 
 ### 3.6 生产者与 nonce
 
@@ -186,7 +188,7 @@ type Input =
 ### 3.7 日期与时刻语义
 
 - `as_of` 是**日期**；"可见"⇔ `available_at ≤ as_of 的 23:59:59.999Z（UTC）`。
-- 各输入的 `available_at`：事实 = `available_date` 的 UTC 日终（规格二只到日期精度）；宏观观测 = `macro_observations.available_at`（timestamptz）；宏观快照 = **其 `observation_ids` 的 `available_at` 最大值**（不是快照 `created_at`，审计 F10）；K 线 = 该交易日在交易所时区的收盘时刻换算到 UTC（`EXCHANGE_TZ` 来自 `forward.ts`；收盘时刻 A 15:00、HK 16:00、US 16:00 本地）；`table_rows` = 行的 `updated_at` 或 `valid_from` 日终。
+- 各输入的 `available_at`：事实 = `available_date` 的 UTC 日终（规格二只到日期精度）；宏观观测 = `macro_observations.available_at`（timestamptz）；宏观快照 = **其 `observation_ids` 的 `available_at` 最大值**（不是快照 `created_at`，审计 F10）；K 线 = 该交易日在交易所时区的收盘时刻换算到 UTC（`forward.ts` 的 `EXCHANGE_TZ` 未导出，S08：F4 在 `src/lib/judgments/time.ts` 定义本地映射 `EXCHANGE_CLOSE = {A: {tz:'Asia/Shanghai', close:'15:00'}, HK: {tz:'Asia/Hong_Kong', close:'16:00'}, US: {tz:'America/New_York', close:'16:00'}}`，与 `forward.ts` 的时区一致性由测试断言；美东夏令时切换日有用例；不改 `forward.ts`）；`table_rows` = 行的 `updated_at` 或 `valid_from` 日终。
 - `price_bar.date`、`target.base_date` 是交易所本地日期（`exchangeDate()`）；`target.date`（`calendar_days`）是 UTC 日期；`period_end` 是财务日期。
 - `registered_at` 是数据库 `now()`（§5.6 `judgments_server_time()`），不是进程时钟。
 
@@ -240,7 +242,7 @@ export interface Methodology<C extends Claim> {
 
 ## 5. 数据模型
 
-迁移 `supabase/migrations/20261108090000_judgments.sql`（晚于规格二 `20261106090000`；并行规格撞号时取更晚的分钟位），可重放；补 `migrations.lock.json`；`database.types.ts` 手工补八个 Row 类型（§5.1–§5.5b 八张表）与 §5.6 的全部 `Functions`。
+迁移 `supabase/migrations/20261109150000_judgments.sql`（协调窗口 `20261109HHMMSS_*` 内预留的唯一时间戳，S07；与并行工作树的合并顺序冲突时由后合并者按 `migrationInventory` 的追加规则改名），可重放；补 `migrations.lock.json`；`database.types.ts` 手工补八个 Row 类型（§5.1–§5.5b 八张表）与 §5.6 的全部 `Functions`。
 
 ### 5.1 `judgment_methodologies`（代码镜像）
 
@@ -355,7 +357,7 @@ reason            text
 actor             text not null check (actor ~ '^(cron|script|admin:[0-9a-f-]{36})$')
 settled_at        timestamptz not null
 request_key       text not null check (length(request_key) between 8 and 128)   -- 调用方幂等键（cron: `<batch_id>:<judgment_id>:<seq 预期>`；admin: 请求 uuid）；持久化供重放判定（审计 G10）
-request_digest    text not null check (request_digest ~ '^[0-9a-f]{64}$')          -- digest(canonical 操作载荷：kind/outcome/realized/evidence/resolver/reason/actor)；重放比对用（R06）
+request_digest    text not null check (request_digest ~ '^[0-9a-f]{64}$')          -- digest(canonical 操作载荷)；操作载荷 = `{judgment_id, kind, outcome, realized, evidence, resolver, resolver_version, reason, actor}`（全部语义字段，S02）；排除的运行元数据 = `settlement_id, seq, settled_at, request_key, request_digest, code_version, batch_id`；`src/lib/judgments/settlement-digest.ts::operationDigest()` 是唯一实现，SQL 侧用同一 canonical 形状（RFC 8785）由调用方算好传入、RPC 内用 `jsonb` 规范化重算核对；重放比对用（R06）
 code_version      text not null
 batch_id          uuid not null references ingest_batches(batch_id) on delete restrict
 unique (judgment_id, seq)
@@ -471,7 +473,7 @@ judgment_job_state
 | `register_judgment(row jsonb, queue jsonb) → uuid` | 服务写 | 一个事务：校验方法 `active`、`kind/producer_kind/subject_types/input_kinds` 与方法行一致、形状约束、`settle_after/settle_by` 与 `target`+方法 `grace_days` 重算一致（审计 G21）；`registered_at = now()`；插 `judgments`；活跃判断同时插 `judgment_settle_queue`；23505 原样抛出 |
 | `claim_due_judgments(p_limit, p_lease_seconds) → setof judgment_settle_queue` | 服务写 | 按 §5.4 顺序 `for update skip locked` 领取，写 `leased_until / lease_token` |
 | `release_lease(p_judgment_id, p_lease_token, p_patch jsonb) → void` | 服务写 | token 不匹配 → `lease_lost`；更新 `last_status / last_detail / next_attempt_at / attempts`，清空租约 |
-| `append_settlement(p_judgment_id, p_lease_token, p_request_key text, row jsonb) → (seq integer, status text)` | 服务写 | 一个事务：**先**按 `p_request_key` 查 `judgment_settlements`（R06）：命中且该行的 `judgment_id = p_judgment_id` 且 `request_digest = digest(canonical(row 的操作载荷))` → `('already_applied', 该行 seq)`，**不校验租约**（响应丢失后的重试在租约已被清空后仍能收敛）；命中但 judgment_id 或载荷摘要不同 → `('request_key_conflict', 该行 seq)`；未命中 → 新操作：锁队列行；token 校验（admin 路径传 null 且 `actor` 为 `admin:*`）；队列已 `closed_at` 且请求是自动结算 → `('already_final', seq)`（不是错误）；`seq = coalesce(max,0)+1`；校验转移；插入（含 `request_key`、`request_digest`）；`unique(request_key)` 23505 → 重读该键并按同一比较返回 `already_applied` / `request_key_conflict`；更新队列（`closed_at` / `next_attempt_at` / `attempts` / 清租约）；`withdrawn / reopened` 时 `judgment_calibration_validity.revision + 1`（同事务，审计 N2）；返回 `('applied', seq)` |
+| `append_settlement(p_judgment_id, p_lease_token, p_request_key text, row jsonb) → (seq integer, status text)` | 服务写 | 一个事务：**先**按 `p_request_key` 查 `judgment_settlements`（R06）：命中且该行的 `judgment_id = p_judgment_id` 且 `request_digest = digest(canonical(row 的操作载荷，含 resolver_version，S02))` → `('already_applied', 该行 seq)`，**不校验租约**（响应丢失后的重试在租约已被清空后仍能收敛）；命中但 judgment_id 或载荷摘要不同 → `('request_key_conflict', 该行 seq)`；未命中 → 新操作：锁队列行；token 校验（admin 路径传 null 且 `actor` 为 `admin:*`）；队列已 `closed_at` 且请求是自动结算 → `('already_final', seq)`（不是错误）；`seq = coalesce(max,0)+1`；校验转移；插入（含 `request_key`、`request_digest`）；`unique(request_key)` 23505 → 重读该键并按同一比较返回 `already_applied` / `request_key_conflict`；更新队列（`closed_at` / `next_attempt_at` / `attempts` / 清租约）；`withdrawn / reopened` 时 `judgment_calibration_validity.revision + 1`（同事务，审计 N2）；返回 `('applied', seq)` |
 | `apply_quarantine_override(p_judgment_id, p_override jsonb, p_quarantine_id, p_audit jsonb) → void` | 服务写 | §7.6 钩子：写 `override`，`next_attempt_at = now()`，翻转 `dq_quarantine` 项，写 `research_audit_log`，同一事务 |
 | `insert_calibration(row jsonb, p_expected_revision bigint) → (status text)` | 服务写 | 锁 validity 行；要求 `row.validity_revision = p_expected_revision = 锁住的 validity.revision`，任一不等 → `('stale_revision')`，不写（审计 G19 的并发撤回；R05）；`fingerprint` 已存在 → `('duplicate')`；否则插入 → `('inserted')` |
 | `set_job_state(p_job, p_expected_updated_at, p_state jsonb) → boolean` | 服务写 | 乐观锁更新 `judgment_job_state`；首次 `p_expected_updated_at = null` |
@@ -503,11 +505,12 @@ export interface JudgmentsDb {        // 生产实现 = PostgREST from() + rpc()
   setJobState(job, expectedUpdatedAt, state): Promise<boolean>;   // rpc set_job_state
 }
 export interface JudgmentInputsDb {   // gather / replay / resolver 的只读事实层入口；facts / macro / tableRows 的实现用 anon 客户端（§3.5）
-  facts: Pick<FactsDb, 'readFacts' | 'factsByIds' | 'metricsOfIssuer' | 'filingsOfIssuer'> & { deriveMetricsAsOf(issuer, market, asOf, formulaVersion): Promise<MetricRow[]> };   // 规格二 §4.8 + §12.2
+  facts: Pick<FactsDb, 'readFacts' | 'factsByIds' | 'filingsOfIssuer'>;   // anon supabaseFactsDb；不含 metricsOfIssuer（物化缓存不作判断输入，S05）
+  deriveMetricsAsOf(issuer, market: FactsMarket, asOf, formulaVersion): Promise<{ metrics: MetricRow[]; envelope: { stateRev; rows: FactRow[]; truncated } }>;   // src/lib/judgments/facts-derive.ts（§12.2，S03）
   macro: MacroReadApi;                                           // §12.1
   tableRows(table: PublicTable, naturalKey): Promise<Row[]>;
-  kline(req: { ticker; market; adjustment: 'qfq'|'hfq'; source: KlineSourceName; from: string; to: string; signal: AbortSignal }): Promise<SourceKlineSeries | KlineFailure>;   // 按冻结的 source 与日期范围（含两端）取；§7.4
-  issuerPrimarySecurity(issuer_id, on: string): Promise<{ ticker; market } | null>;   // issuer_securities ⋈ stocks_universe(market)
+  kline(req: { ticker; market: PriceMarket; adjustment: 'qfq'|'hfq'; source: KlineSourceName; from: string; to: string; signal: AbortSignal }): Promise<SourceKlineSeries | KlineFailure>;   // 按冻结的 source 与日期范围（含两端）取；§7.4
+  issuerPrimarySecurity(issuer_id, on: string): Promise<{ ticker; market: PriceMarket } | null>;   // issuer_securities ⋈ stocks_universe(market)
 }
 ```
 
@@ -598,7 +601,7 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 
 ### 7.5 批次计数与信息码
 
-`fetched` = 领取条数；`inserted` = 本次写 `settled`；`versioned` = 本次写 `void`；`duplicates` = 领取后发现已终态（`already_final`）；`quarantined`；`failed` = resolver 抛错；**新增第七个计数器 `deferred`** = `pending / unavailable` 退避的条数。这需要改 `src/lib/dq/batches.ts`：`BatchCounts` 加 `deferred`（默认 0，`emptyCounts()` 同步），`accounted()` 把它计入，`batchStatusFromCounts` 不变地沿用"`fetched > 0` 且无 accounted → failed"（全 deferred 的运行因此是 `success`，审计 G05），`assertCounts` 允许新键；`batches.test.ts` 补用例；规格二等已有生产者不传 `deferred` 时按 0 处理（向后兼容）。信息码 `pending_summary`、`unavailable_summary`、`deadline_hit`、`voided_summary`、`abstained_summary` 显式加入 `INFO_CODES`。新鲜度：批次 `success | partial` → `ok=true`；`failed | rejected` → `ok=false`。
+`fetched` = 领取条数；`inserted` = 本次写 `settled`；`versioned` = 本次写 `void`；`duplicates` = 领取后发现已终态（`already_final`）；`quarantined`；`failed` = resolver 抛错；**新增第七个计数器 `deferred`** = `pending / unavailable` 退避的条数。这需要改 `src/lib/dq/batches.ts`：`BatchCounts` 加 `deferred`（默认 0，`emptyCounts()` 同步），`accounted()` 把它计入，`batchStatusFromCounts` 不变地沿用"`fetched > 0` 且无 accounted → failed"（全 deferred 的运行因此是 `success`，审计 G05），`assertCounts` 允许新键；`batches.test.ts` 补用例；规格二等已有生产者不传 `deferred` 时按 0 处理（向后兼容）。信息码 `pending_summary`、`unavailable_summary`、`voided_summary`、`abstained_summary`、`lease_lost`、`stale_revision`、`job_state_conflict` 显式加入 `INFO_CODES`（`deadline_hit` 计划二已加，复用）。`ingest_batches.counts` 是只校验对象形状的 `jsonb`，`deferred` 不需要数据库变更；读取旧回执时缺 `deferred` 归一为 0。新鲜度：批次 `success | partial` → `ok=true`；`failed | rejected` → `ok=false`。
 
 ### 7.6 隔离与处理钩子
 
@@ -606,7 +609,7 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 |---|---|---|---|
 | `idempotency_conflict` | §6.2 | `judgment_id` | `{registered, attempted}` |
 | `settlement_basis_mismatch` | §7.4 | `judgment_id` | `{registered_bar, refetched_bar, source, evidence（完整 bars）, evidence_hash}` |
-| `settlement_ambiguous_fact` | §7.3 | `judgment_id` | `{candidates: [{ key, value_text, derivation: { formula_version, input_facts: FactProjection[], state_rev, cutoff } }], evidence_hash}`（每个候选是完整的派生行，含全部底层事实投影与可得日期） |
+| `settlement_ambiguous_fact` | §7.3 | `judgment_id` | `{candidates: [{ key, value_text, derivation: { formula_version, as_of: cutoff, state_rev, rows: DerivationRow[] } }], evidence_hash}`（每个候选带 §3.5 同形的完整派生证据，S04） |
 | `settlement_base_bar_missing` | §7.3 | `judgment_id` | `{base_date, series_from, series_to, bars_near_base, evidence_hash}` |
 | `settlement_benchmark_gap` | §7.3 | `judgment_id` | `{missing_dates, evidence_hash}` |
 
@@ -632,7 +635,7 @@ resolver 返回 `Resolved{value, label?, from, to, label_available_at, evidence}
 
 ### 8.3 任务与持久化
 
-`/api/cron/judgments-calibrate`：工作单元 = 一个 `(methodology@version, scope)`；每次运行按注册表顺序逐单元处理，预算规则同 §7.1。单元的续跑状态在 `judgment_job_state[jobKey('calibrate', …)]`：`{ generation: uuid, cutoff, expected_revision, query_bounds, after: judgment_id | null, manifest: Array<{ start_after, end_after, path, sha256 }> }`（审计 G26；R02）。流程：开始时生成 `generation`、读 `validity.revision` 为 `expected_revision`、`cutoff = now()`，并把 `query_bounds = { window_from, window_to, registered_at_lte: cutoff, settled_at_lte: cutoff }` 一次性固定（R03）；cron 用 **service-role 客户端**调 `calibration_cohort_internal(…, cutoff, after)`（R04：未发布的方法照常校准；公共 `calibration_cohort` 只给校准页）逐页取；每页先上传到**唯一的不可变对象** `judgments-calibration/partial/<unit>/<generation>/<start_after>.json`，再用**一次** `set_job_state`（乐观锁）同时追加 manifest 条目 `{start_after, end_after, path, sha256}` 并推进 `after`；CAS 失败（并发 worker 已推进）→ 丢弃本 worker 的对象，从已提交状态重新读 `after`；崩溃在上传后、CAS 前 → 对象成为孤儿（不在 manifest 内，永不被消费，按前缀定期清理），重试从已提交的 `after` 重新取同一页。预算不足就停，下次从 `after` 继续同一 `generation / cutoff / query_bounds`。全部页取完后**只按 manifest 列出的对象**（逐个校验 `sha256`）重组 cohort → 算 §8.1 / §8.2 → 写最终 cohort 清单（§5.5 `cohort_path`，含 `query_bounds`）→ `insert_calibration(row{validity_revision: expected_revision, …}, expected_revision)`：`inserted` **或** `duplicate`（同指纹，即同 cohort、同 revision、同 bounds 的报告已存在）→ CAS 清空该 `generation` 的单元状态（R05：`duplicate` 不再把已完成的截止钉在队列里）；清空失败（CAS 冲突）→ 下次运行发现 manifest 完整且 `insert_calibration` 再次返回 `duplicate` 时重试清空；`stale_revision`（期间有撤回 / 重开）→ 清空单元状态并以新的 `generation / cutoff / bounds` 重算。只有 `scope='all'` 的行决定状态（§9.1）；分层行只展示。报告据 `cohort_sha256 + query_bounds` 可完全重算 `n_registered / n_settled / n_void / n_retrospective_excluded / n_independent` 与全部指标（审计 G19）。**失效**（审计 N2）：显示有效 ⇔ `calibration.validity_revision = validity.revision` **且** `valid_until > now`（`valid_until = computed_at + 14 天`，两个周跑周期）；`append_settlement` 在 `withdrawn / reopened` 时原子 `revision + 1`，所以撤回后旧报告立即失效，无论校准任务何时再跑；校准任务开始后发生的撤回由 `insert_calibration` 的 `stale_revision` 拦截。
+`/api/cron/judgments-calibrate`：工作单元 = 一个 `(methodology@version, scope)`；每次运行按注册表顺序逐单元处理，预算规则同 §7.1。单元的续跑状态在 `judgment_job_state[jobKey('calibrate', …)]`：`{ generation: uuid, cutoff, expected_revision, query_bounds, after: judgment_id | null, manifest: Array<{ start_after, end_after, path, sha256 }> }`（审计 G26；R02）。流程：开始时生成 `generation`、读 `validity.revision` 为 `expected_revision`、`cutoff = now()`，并把 `query_bounds = { window_from, window_to, registered_at_lte: cutoff, settled_at_lte: cutoff }` 一次性固定（R03）；cron 用 **service-role 客户端**调 `calibration_cohort_internal(…, cutoff, after)`（R04：未发布的方法照常校准；公共 `calibration_cohort` 只给校准页）逐页取；每页先上传到**每次上传唯一**的不可变对象 `judgments-calibration/partial/<unit>/<generation>/<start_after>.<attempt_uuid>.json`（`attempt_uuid` 每次上传新生成，上传用 `upsert:false`，同路径已存在 → 视为错误而非覆盖；S01），再用**一次** `set_job_state`（乐观锁）同时追加 manifest 条目 `{start_after, end_after, path, sha256}`（精确路径与哈希）并推进 `after`；CAS 失败（并发 worker 已推进）→ 本 worker 只可删除**自己这次的** `attempt_uuid` 路径，从已提交状态重新读 `after`；崩溃在上传后、CAS 前 → 对象成为孤儿（不在 manifest 内，永不被消费），重试用新的 `attempt_uuid` 重新取同一页，不与孤儿撞名。清理（脚本或单元完成后）只删除**不被任何未清空单元状态的 manifest 与任何 `cohort_path` 引用**的对象。预算不足就停，下次从 `after` 继续同一 `generation / cutoff / query_bounds`。全部页取完后**只按 manifest 列出的对象**（逐个校验 `sha256`）重组 cohort → 算 §8.1 / §8.2 → 写最终 cohort 清单（§5.5 `cohort_path`，含 `query_bounds`）→ `insert_calibration(row{validity_revision: expected_revision, …}, expected_revision)`：`inserted` **或** `duplicate`（同指纹，即同 cohort、同 revision、同 bounds 的报告已存在）→ CAS 清空该 `generation` 的单元状态（R05：`duplicate` 不再把已完成的截止钉在队列里）；清空失败（CAS 冲突）→ 下次运行发现 manifest 完整且 `insert_calibration` 再次返回 `duplicate` 时重试清空；`stale_revision`（期间有撤回 / 重开）→ 清空单元状态并以新的 `generation / cutoff / bounds` 重算。只有 `scope='all'` 的行决定状态（§9.1）；分层行只展示。报告据 `cohort_sha256 + query_bounds` 可完全重算 `n_registered / n_settled / n_void / n_retrospective_excluded / n_independent` 与全部指标（审计 G19）。**失效**（审计 N2）：显示有效 ⇔ `calibration.validity_revision = validity.revision` **且** `valid_until > now`（`valid_until = computed_at + 14 天`，两个周跑周期）；`append_settlement` 在 `withdrawn / reopened` 时原子 `revision + 1`，所以撤回后旧报告立即失效，无论校准任务何时再跑；校准任务开始后发生的撤回由 `insert_calibration` 的 `stale_revision` 拦截。
 
 ### 8.4 显示阈值 `threshold_n` 与 `ece_max`（**运营门槛，不是统计保证**；owner 决策 O2）
 
@@ -779,7 +782,7 @@ interface JudgmentCard {
 
 ### 12.2 披露事实（规格二第 8 稿）
 
-已满足：`readFacts(issuer, market, {concepts, asOf}) → {stateRev, rows, truncated}`（截止读取；F4 消费完整信封，`truncated=true` 时拒绝使用）、`factsByIds(ids)`（回放）、`metricsOfIssuer(issuer, market, formulaVersion)`（仅 `gather` 读当前缓存时用，投影里带全部底层事实投影 `input_facts` 与 `based_on_rev`）、`filingsOfIssuer`（财期序列）。需要：`deriveMetricsAsOf(issuer, market, asOf, formulaVersion)` 库函数（规格二 §9 读接口的 `asOf` 实时 derive 路径已有此能力，需作为库函数暴露；结算与回放只用它，不读缓存）；`financial_metrics` 没有 `status` 列，"该期可见"的判定以底层事实在 `cutoff` 可见为准。anon 可读：`financial_facts(status='ok')` 与 `filings` 为 public read（规格二 §4.7），`fact_sync_scope` 不是——F4 不读它。
+已落地并直接使用：`readFacts(issuer, market, {concepts, asOf, history})` → `{stateRev, rows, truncated}`（截止读取；F4 消费完整信封，`truncated=true` 时拒绝使用）、`factsByIds(ids)`（对账）、`filingsOfIssuer`（财期序列，只用已发布行）。`metricsOfIssuer` **不用**（S05）。`deriveMetricsAsOf` **不要求规格二新增**（S03：F4 不改 `src/lib/facts/*`）：F4 在 `src/lib/judgments/facts-derive.ts` 照落地的 `GET /api/facts/[ticker]/metrics?asOf=` 路径组合——anon `readFacts(issuer, market, {concepts: [...DERIVE_CONCEPTS[market]], asOf, history: true})`，`truncated` → 抛 `read_truncated`，否则 `deriveMetrics(env.rows, {market, asOf, basedOnRev: env.stateRev})`；`formulaVersion ≠ FORMULA_VERSION` → `unsupported_formula_version`；返回 `{metrics, envelope}`，信封供 §3.5 冻结。`financial_metrics` 没有 `status` 列，"该期可见"的判定以底层事实在 `cutoff` 可见为准。anon 可读：`financial_facts(status='ok')` 与 `filings` 为 public read（规格二 §4.7），`fact_sync_scope` 不是——F4 不读它。
 
 ### 12.3 文档管道（F3）与外资研报
 
@@ -925,7 +928,7 @@ interface JudgmentCard {
 1. `macro_regime_asset_pair`（未实现）需要的配对 resolver、回报序列标记、现金 / 债券总回报序列与 `p` 表来源——立项前先回答。
 2. `decisions` 适配器：`decisions` 无只追加触发器，登记前是否先补。
 3. 复权能力验证（§7.4）的结果：哪些 `(source, market, adjustment)` 能 `verified`；全部 `unsupported` 时价格类方法在 v1 没有可用市场（决定 O6）。
-4. 规格二 `deriveMetricsAsOf` 库函数的暴露（§12.2）。
+4. ~~规格二 `deriveMetricsAsOf` 库函数的暴露~~（S03：改为 F4 自己组合，§12.2；已关闭）。
 5. 校准桶 cohort 清单在样本上万时的体积（每条约 200 B，1 万条 ≈ 2 MB，可接受；更大时分片）。
 6. `window_years` 对 `fiscal_quarters` 方法是否够（行业规格给出期限后复核）。
 7. 托管 PostgREST 的 `max_rows`、Vercel 套餐的 `maxDuration=300`、Supabase 对 `security definer` 函数 owner 的处理（`20261018120000_anchor_runner.sql` 的注释记录了非超级用户执行迁移的坑）——F4-0 在预览环境核对。

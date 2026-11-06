@@ -137,3 +137,20 @@ N1 / N2 / N3 全部 RESOLVED。新引入缺陷 6 条，按协调人指示在第 
 > Verdict: not ready — the new job-state constraint blocks recovery, and page persistence can corrupt resumed calibration cohorts.
 
 第 5 稿按上表逐字实施了 R01–R06；按协调人指示不再送 Codex，上述六项状态为"implemented per Codex's prescribed fix (round 4), not re-audited"。
+
+## 第五轮（对第 5 稿，`06-codex-round5.md`，2026-11-06）
+
+R01/R03/R04/R05 RESOLVED；R02、R06 PARTIAL（分别由 S01、S02 补全）。新发现 8 条，第 6 稿逐字按处方实施；确认由计划四的 Codex 计划审计第一轮一并复核（提示词要求列出 S01–S08 状态）：
+
+| ID | P | 处置 | 第 6 稿落点 |
+|---|---|---|---|
+| S01 | P1 | implemented per prescribed fix | §8.3：分页对象路径加 `attempt_uuid`，`upsert:false`；CAS 精确路径+哈希；失败只删自己的路径；清理不删任何被 manifest / `cohort_path` 引用的对象 |
+| S02 | P2 | implemented | §5.3 / §5.6：操作载荷 = `{judgment_id, kind, outcome, realized, evidence, resolver, resolver_version, reason, actor}`，排除项明列；`operationDigest()` 唯一实现 |
+| S03 | P2 | implemented | §2.3、§5.7、§12.2、§18.4：`deriveMetricsAsOf` 在 `src/lib/judgments/facts-derive.ts` 组合 `readFacts(history)` + `deriveMetrics`；不再要求规格二改动 |
+| S04 | P1 | implemented | §3.5：`financial_metric` 冻结 `lineage` + `derivation.rows`（派生内核所需全部字段，含披露历史），映射显式，构造器自检可重现否则弃权 `metric_not_reproducible`；§7.6 候选同形 |
+| S05 | P1 | implemented | §3.5、§5.7、§12.2：判断输入不读物化缓存 `metricsOfIssuer`；`fiscal_period` 锚点只用已发布、`available_date ≤ as_of` 的 filing |
+| S06 | P2 | implemented | §3.3、§5.7：`FactsMarket` / `PriceMarket` 分型；`markets.ts::factsMarketOf`：A→CN、US→US、HK→null |
+| S07 | P2 | implemented | §5：迁移 `20261109150000_judgments.sql` |
+| S08 | P2 | implemented | §3.7：`src/lib/judgments/time.ts::EXCHANGE_CLOSE` 本地映射，测试断言与 `forward.ts` 一致、覆盖夏令时 |
+
+另：§7.5 记录 `deadline_hit` 已在 `INFO_CODES`、`deferred` 无需数据库变更；§2.1/§2.3 把"待实施"改为已落地（35 概念）、宏观工作台标为不存在。
