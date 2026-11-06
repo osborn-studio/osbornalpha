@@ -52,6 +52,13 @@ describe('decimal (scaled BigInt, spec §5.1)',()=>{
   expect(()=>mulDecimal('9'.repeat(300),'9'.repeat(300))).toThrow('decimal_overflow');
   expect(()=>addDecimal('1,0','1')).toThrow('invalid_decimal');
  });
+ it('relDiff stays inside the formatter budget for 501- and 512-digit inputs',()=>{
+  for(const n of [501,512]){const v='9'.repeat(n);expect(relDiff(v,v)).toBe('0');}
+  const a='9'.repeat(500),b=`${'9'.repeat(499)}8`;
+  expect(compareDecimal(relDiff(a,b),'0')).toBe(1);
+  expect(relDiff('-'+'9'.repeat(511),'9'.repeat(511))).toBe('2');
+  expect(relDiff(`0.${'1'.repeat(200)}`,'0')).not.toBe('0');
+ });
  it('withinRadius is |value − center| <= radius by cross-multiplication (inclusive)',()=>{
   expect(withinRadius('383285000000.004','383285000000','0.005')).toBe(true);
   expect(withinRadius('383285000000.005','383285000000','0.005')).toBe(true);

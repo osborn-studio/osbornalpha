@@ -51,11 +51,13 @@ export function divDecimal(a:string,b:string,scale=10):string{
  const r=(q+5n)/10n;
  return formatDecimal({units:(x<0n)!==(y<0n)?-r:r,scale});
 }
+/** The ratio is <= 2, so its text is at most 2 + scale characters; 500 keeps it far inside the 512 literal cap. */
+const REL_SCALE_CAP=500;
 /** |l − r| / max(|l|, |r|, 1) (spec §5.1). Derived/display value. The default scale is 10 plus the digit count of the
  * denominator's integer part, so a 0.005 difference on a 3.8e11 base is not rounded to "0". */
 export function relDiff(l:string,r:string,scale?:number):string{
  const den=maxAbsDecimal(l,r,'1');
- return divDecimal(absDecimal(subDecimal(l,r)),den,scale??10+den.split('.')[0].length);
+ return divDecimal(absDecimal(subDecimal(l,r)),den,scale??Math.min(10+den.split('.')[0].length,REL_SCALE_CAP));
 }
 /** |value − center| <= radius, by aligning scales (no division). */
 export function withinRadius(value:string,center:string,radius:string):boolean{
