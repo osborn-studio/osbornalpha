@@ -9,7 +9,7 @@
 // file; persistRun receives the final report and refuses (before any write) when the flag disagrees.
 import {TableError} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
-import {canonicalJson} from './canonical-json';
+import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
 import {statusOfGate} from './summary';
 import type {ArtifactClass,CaseReport,CaseResultKind,EvalCaseResultRow,EvalKind,EvalReport,EvalRunRow,EvalRunStatus,Summary} from './types';
@@ -64,7 +64,7 @@ export function evalStore(tables:TableClient):EvalStore{
 
 const reasonOf=(c:CaseReport):string|null=>{
  const o=c.outcome as {reason?:unknown};
- return typeof o.reason==='string'&&o.reason.length>0?o.reason.slice(0,64):null;
+ return typeof o.reason==='string'&&o.reason.length>0?Array.from(o.reason).slice(0,64).join(''):null;
 };
 /** Every case row the run would store (untruncated): public official/dual_source runs, non-pass results only, report order. */
 export function caseRowCandidates(report:Pick<EvalReport,'run_id'|'kind'|'artifact_class'|'cases'>):EvalCaseResultRow[]{
@@ -97,12 +97,20 @@ const partial=(report:EvalReport,step:string,e:unknown)=>e instanceof EvalError?
 export async function persistRun(store:EvalStore,report:EvalReport,files:{ref:string;sha256:string},opts:{triggeredBy:'manual'|'script'|'ci';resume?:boolean}):Promise<void>{
  if(report.summary.reconciliations_truncated!==caseRowsTruncated(report))
   throw new EvalError('store_write_failed',`run ${report.run_id}: summary.reconciliations_truncated does not match the case rows`,{run_id:report.run_id});
+ if(sha256Hex(`${canonicalJson(report)}\n`)!==files.sha256){
+  if(opts.resume)throw new EvalError('resume_mismatch',`run ${report.run_id}: files.sha256 is not the sha256 of the report bytes`,{run_id:report.run_id});
+  throw new EvalError('store_write_failed',`run ${report.run_id}: files.sha256 is not the sha256 of the report bytes`,{run_id:report.run_id,reason:'report_sha_mismatch'});
+ }
  if(opts.resume){
-  const existing=await store.getRun(report.run_id);
+  let existing:EvalRunRow|null;
+  try{existing=await store.getRun(report.run_id);}catch(e){throw partial(report,'resume read',e);}
   if(!existing)throw new EvalError('resume_mismatch',`run ${report.run_id} not found`,{run_id:report.run_id});
   if(existing.report_sha256!==files.sha256||existing.report_ref!==files.ref)
    throw new EvalError('resume_mismatch',`run ${report.run_id}: local report does not match dq_eval_runs.report_sha256/report_ref`,{run_id:report.run_id});
-  if(existing.status!=='running')return;
+  if(existing.status!=='running'){
+   if(existing.status===statusOfGate(report.summary.gate)&&canonicalJson(existing.summary)===canonicalJson(report.summary))return;
+   throw new EvalError('store_conflict',`run ${report.run_id} is already ${existing.status} with a different outcome`,{run_id:report.run_id,stored_status:existing.status});
+  }
  }else{
   try{await store.insertRun(runRowOf(report,files,opts.triggeredBy));}
   catch(e){throw new EvalError('store_write_failed',`dq_eval_runs insert failed for ${report.run_id}: ${(e as Error)?.message??String(e)}`,{run_id:report.run_id});}

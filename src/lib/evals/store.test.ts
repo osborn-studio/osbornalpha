@@ -4,6 +4,7 @@
 import {describe,expect,it} from 'vitest';
 import {TableError} from '../db/table-client';
 import {memoryTableClient} from '../db/memory-table-client';
+import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
 import {CASES,CASE_ROW_LIMIT,RUNS,caseRowCandidates,caseRowsOf,caseRowsTruncated,evalStore,persistRun,runRowOf} from './store';
 import type {EvalStore} from './store';
@@ -11,8 +12,7 @@ import type {Database} from '../supabase/database.types';
 import type {CaseReport,EvalReport,Gate,Summary} from './types';
 
 const RUN='11111111-1111-4111-8111-111111111111';
-const SHA='a'.repeat(64);
-const FILES={ref:`reports/evals/${RUN}.json`,sha256:SHA};
+const filesOf=(r:EvalReport)=>({ref:`reports/evals/${RUN}.json`,sha256:sha256Hex(`${canonicalJson(r)}\n`)});
 const keys={[RUNS]:['run_id'],[CASES]:['eval_run_id','case_id']};
 const summaryOf=(gate:Gate,truncated=false):Summary=>({
  population:3,required:3,
@@ -35,6 +35,8 @@ const report=(o:Partial<EvalReport>={}):EvalReport=>({
  environment:{db_host:null,app_origin:null,db_state_rev:3},thresholds:{max_fail:0,min_coverage_optional:'0.95'},
  provenance:{verified:{artifacts:false,sources:false}},summary:summaryOf('incomplete'),cases:CASES3,...o,
 });
+const FILES=filesOf(report());
+const SHA=FILES.sha256;
 /** Records every store call in order; `fail` lets a test make one call throw. */
 function recording(inner:EvalStore,fail:Partial<Record<keyof EvalStore,(arg:unknown)=>Error|null>>={}){
  const calls:string[]=[];
@@ -84,7 +86,7 @@ describe('persistRun (spec §6.3)',()=>{
  it('maps the gate to the terminal status',async()=>{
   for(const [gate,status] of [['pass','passed'],['fail','failed'],['incomplete','incomplete']] as const){
    const {tables,store}=setup();
-   await persistRun(store,report({summary:summaryOf(gate)}),FILES,{triggeredBy:'script'});
+   await persistRun(store,report({summary:summaryOf(gate)}),filesOf(report({summary:summaryOf(gate)})),{triggeredBy:'script'});
    expect(tables.rows(RUNS)[0].status).toBe(status);
   }
  });
@@ -106,7 +108,7 @@ describe('persistRun (spec §6.3)',()=>{
  });
  it('step 3: 23505 with any differing field is store_conflict and leaves the run running',async()=>{
   const base=caseRowsOf(report())[0];
-  for(const diff of [{left_text:'102'},{reason:'ambiguous'},{tolerance:'0.01'},{detail:{locator:{page:29}}},{result:'unit_mismatch'}]){
+  for(const diff of [{right_text:'99'},{abs_diff:'2'},{rel_diff:'0.02'},{left_text:'102'},{reason:'ambiguous'},{tolerance:'0.01'},{detail:{locator:{page:29}}},{result:'unit_mismatch'}]){
    const {tables,store}=setup();
    await tables.insert(RUNS,{...runRowOf(report(),FILES,'ci')});
    await tables.insert(CASES,{...base,...diff});
@@ -136,11 +138,38 @@ describe('persistRun (spec §6.3)',()=>{
  });
  it('refuses a report whose reconciliations_truncated disagrees with its case rows, before any write',async()=>{
   const {tables,store}=setup();
-  expect(await code(persistRun(store,report({summary:summaryOf('incomplete',true)}),FILES,{triggeredBy:'ci'}))).toBe('store_write_failed');
+  expect(await code(persistRun(store,report({summary:summaryOf('incomplete',true)}),filesOf(report({summary:summaryOf('incomplete',true)})),{triggeredBy:'ci'}))).toBe('store_write_failed');
   expect(tables.rows(RUNS)).toEqual([]);
   const many=Array.from({length:101},(_,i)=>kase(`F/${i}`,{result:'missing'},null,'1'));
-  await persistRun(store,report({cases:many,summary:summaryOf('incomplete',true)}),FILES,{triggeredBy:'ci'});
+  const big=report({cases:many,summary:summaryOf('incomplete',true)});
+  await persistRun(store,big,filesOf(big),{triggeredBy:'ci'});
   expect(tables.rows(CASES)).toHaveLength(100);
+ });
+});
+
+describe('persistRun hardening (review)',()=>{
+ it('resume against a non-running row: same terminal status+summary is a no-op; error or different terminal is store_conflict',async()=>{
+  for(const [status,summary,want] of [['incomplete',summaryOf('incomplete'),'resolved'],['error',summaryOf('incomplete'),'store_conflict'],['failed',summaryOf('incomplete'),'store_conflict'],['incomplete',{...summaryOf('incomplete'),population:9},'store_conflict']] as const){
+   const {tables,store}=setup();
+   await tables.insert(RUNS,{...runRowOf(report(),FILES,'ci'),status,summary,finished_at:'2026-11-10T00:01:00.000Z'});
+   expect(await code(persistRun(store,report(),FILES,{triggeredBy:'ci',resume:true}))).toBe(want);
+  }
+ });
+ it('a getRun failure during resume is store_partial with step resume read',async()=>{
+  const {store}=setup();const rec=recording(store,{getRun:()=>new Error('boom')});
+  try{await persistRun(rec.store,report(),FILES,{triggeredBy:'ci',resume:true});expect.unreachable();}
+  catch(e){expect(e).toBeInstanceOf(EvalError);expect((e as EvalError).code).toBe('store_partial');expect((e as EvalError).detail).toMatchObject({run_id:RUN,step:'resume read'});}
+ });
+ it('a files.sha256 that is not the sha of the report bytes is refused before any write',async()=>{
+  const {tables,store}=setup();const bad={...FILES,sha256:'d'.repeat(64)};
+  try{await persistRun(store,report(),bad,{triggeredBy:'ci'});expect.unreachable();}
+  catch(e){expect((e as EvalError).code).toBe('store_write_failed');expect((e as EvalError).detail).toMatchObject({reason:'report_sha_mismatch'});}
+  expect(await code(persistRun(store,report(),bad,{triggeredBy:'ci',resume:true}))).toBe('resume_mismatch');
+  expect(tables.rows(RUNS)).toEqual([]);
+ });
+ it('reasons are cut by code points, not UTF-16 units',()=>{
+  const r=report({cases:[kase('E/emoji',{result:'provenance_incomplete',reason:'😀'.repeat(70)})]});
+  expect(Array.from(caseRowsOf(r)[0].reason!)).toHaveLength(64);
  });
 });
 

@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
+import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
 import {evalStore,persistRun} from './store';
 import type {EvalStore} from './store';
@@ -191,7 +192,7 @@ describe.skipIf(!enabled)('F6 persistRun on real PostgreSQL (interrupt + resume,
  let admin:Pool;let store:EvalStore;
  const runs:string[]=[];
  const newRunId=()=>{const id=randomUUID();runs.push(id);return id;};
- const filesOf=(id:string)=>({ref:`reports/evals/${id}.json`,sha256:'c'.repeat(64)});
+ const filesOf=(id:string)=>({ref:`reports/evals/${id}.json`,sha256:sha256Hex(`${canonicalJson(storeReport(id))}\n`)});
  const state=async(id:string)=>({
   run:(await admin.query(`select status,finished_at is not null finished,summary from public.dq_eval_runs where run_id=$1`,[id])).rows,
   cases:(await admin.query(`select case_id,result,left_text from public.dq_eval_case_results where eval_run_id=$1 order by case_id`,[id])).rows,
@@ -215,7 +216,7 @@ describe.skipIf(!enabled)('F6 persistRun on real PostgreSQL (interrupt + resume,
   const s=await state(id);
   expect(s.run).toEqual([{status:'incomplete',finished:true,summary:SUMMARY}]);
   expect(s.cases).toEqual([{case_id:'B/fail',result:'fail',left_text:'12345678901234567891'},{case_id:'C/missing',result:'missing',left_text:null}]);
-  expect((await store.getRun(id))?.report_sha256).toBe('c'.repeat(64));
+  expect((await store.getRun(id))?.report_sha256).toBe(filesOf(id).sha256);
  });
 
  it('interrupted after step 3 leaves the run running; --resume completes it without duplicating case rows',async()=>{
