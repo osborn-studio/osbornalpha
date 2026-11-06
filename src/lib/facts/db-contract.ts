@@ -380,13 +380,16 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
   };
 
   it('plan 3 topology: setMerge re-points referrers (A→B then B→C), lineageOf/targetOf follow, every affected scope bumps; setDissolved refuses referrers and non-active issuers',async()=>{
-   const a=await h.issuer(),b=await h.issuer(),c=await h.issuer(),by=await h.user();
+   const a=await h.issuer(),b=await h.issuer(),c=await h.issuer(),z=await h.issuer(),by=await h.user();
+   await db.reconcileScope('US',[{issuer_id:z,reasons:['test'],priority:1,fetch_key:'0000000002'}]);   // a bystander with a scope row
+   const zRev=(await db.stateRevs([z],'US'))[0].state_rev;
    expect(await db.setMerge(a,b,by)).toEqual({repointed:0});
    expect(await db.lineageOf(b)).toEqual([b,a]);expect(await db.targetOf(a)).toBe(b);expect(await db.targetOf(b)).toBe(b);
    const before=await db.stateRevs([a,b,c],'US');
    expect(await db.setMerge(b,c,by)).toEqual({repointed:1});
    expect(await db.lineageOf(c)).toEqual([c,...[a,b].sort()]);expect(await db.targetOf(a)).toBe(c);
    expect((await db.stateRevs([a,b,c],'US')).map(r=>r.state_rev)).toEqual(before.map(r=>r.state_rev+1));
+   expect((await db.stateRevs([z],'US'))[0].state_rev).toBe(zRev);   // an unrelated issuer is untouched
    expect(await code(db.setMerge(b,c,by))).toBe('source_not_active:source_not_active');
    expect(await code(db.setDissolved(c,by))).toBe('has_referrers:has_referrers');
    const d=await h.issuer();await db.setDissolved(d,by);
@@ -490,11 +493,17 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await code(db.restoreReconciled(q1.itemId!,w,'h1',by))).toBe('not_passing:not_passing');
    expect(await db.restoreReconciled(q1.itemId!,w,'h2',by)).toEqual({promoted:1,skipped:[]});
    expect(await statusOf(r)).toBe('ok');
-   await h.expireReconcileClaim(pair,c2,iss,'US');
-   expect(await code(db.completeReconcileMember(f2))).toBe('fence_failed:fence_failed');
-   const f3=(await db.claimReconcileMember(pair,c2,iss,'US',w))!;expect(f3.attempt).toBe(2);
-   await db.failReconcileMember(f3,'boom');
-   expect((await db.claimReconcileMember(pair,c2,iss,'US',w))!.attempt).toBe(3);
+  });
+
+  it('plan 3 reconcile claim expiry: an expired claim fences the old holder; the next claim is attempt 2; a failed member can be claimed again as attempt 3',async()=>{
+   const {iss}=await published();const pair=newPair();const w=await h.batch();
+   const c=await cycle(pair,[{issuer_id:iss,keys:['k1']}]);
+   const f1=(await db.claimReconcileMember(pair,c,iss,'US',w))!;expect(f1.attempt).toBe(1);
+   await h.expireReconcileClaim(pair,c,iss,'US');
+   expect(await code(db.completeReconcileMember(f1))).toBe('fence_failed:fence_failed');
+   const f2=(await db.claimReconcileMember(pair,c,iss,'US',w))!;expect(f2.attempt).toBe(2);
+   await db.failReconcileMember(f2,'boom');
+   expect((await db.claimReconcileMember(pair,c,iss,'US',w))!.attempt).toBe(3);
   });
 
   it('plan 3 openReconcileCycle (plan audit Q2): cycle + cursors in one call; only the listed pending entries are consumed; a running cycle is returned unchanged; unresolved pending is refused',async()=>{
@@ -507,7 +516,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await h.tables.select('dq_reconcile_cycles',{pair,cycle_id:`${pair}-old`}))[0].detail).toEqual({pending_members:[e2],pending_consumed_by:`${pair}-new`});
    const again=await db.openReconcileCycle({pair,cycleId:`${pair}-other`,startedAt:at(),members:[{issuer_id:t2,market:'US',expected_keys:[]}],pending:[e2]});
    expect(again).toMatchObject({created:false,transferred:[],cycle:{cycle_id:`${pair}-new`}});
-   expect(await code(db.openReconcileCycle({pair:newPair(),cycleId:'x',startedAt:at(),members:[],pending:[e1]}))).toMatch(/invalid_members/);
+   expect(await code(db.openReconcileCycle({pair:newPair(),cycleId:'x',startedAt:at(),members:[],pending:[e1]}))).toBe('invalid_members:invalid_members');
   });
 
   it('plan 3 resolveLineageConflict: after setMerge the disagreement is a conflict; keeping one row quarantines the others of the lineage and clears it',async()=>{
@@ -567,7 +576,9 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:nk,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
    expect(await code(db.resolveLineageConflict(item,r,ab,by))).toBe('unresolved:unresolved');
    expect(await statusOf(s.x)).toBe('ok');expect((await h.tables.select('dq_quarantine',{id:item}))[0].status).toBe('open');   // the quarantine of the others was rolled back
-   expect(await code(db.resolveLineageConflict(item,s.x,await h.batch().then(async x=>{await h.tables.update('ingest_batches',{batch_id:x},{status:'success',finished_at:new Date(Date.now()+60000).toISOString()});return x;}),by))).toBe('batch_mismatch:batch_mismatch');
+   // a finished (no longer running) batch of the right dataset: batch_mismatch
+   const doneBatch=await h.batch();await h.tables.update('ingest_batches',{batch_id:doneBatch},{status:'success',finished_at:new Date(Date.now()+60000).toISOString()});
+   expect(await code(db.resolveLineageConflict(item,s.x,doneBatch,by))).toBe('batch_mismatch:batch_mismatch');
    // malformed natural key
    const bad=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-10-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
    expect(await code(db.resolveLineageConflict(bad,r,ab,by))).toBe('invalid_choice:invalid_choice');
@@ -593,7 +604,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const {iss,r}=await published();const other=await published();const pair=newPair();
    const c1=await cycle(pair,[{issuer_id:iss,keys:['k1','k2']}]);const w=await h.batch();
    const fence=(await db.claimReconcileMember(pair,c1,iss,'US',w))!;
-   const bad=[res('zz'),res('k1',{outcome:'right_missing',passed:true}),res('k1',{kind:'text',left_value:'a'}),res('k1',{action:'quarantine_left'}),res('k1',{left_fact_id:other.r})];
+   const bad=[res('zz'),res('k1',{outcome:'right_missing',passed:true}),res('k1',{kind:'text',outcome:'unsupported',left_value:'a',right_value:null,abs_diff:null,rel_diff:null}),res('k1',{action:'quarantine_left'}),res('k1',{left_fact_id:other.r})];
    for(const x of bad)expect(await code(db.applyReconcileResult(fence,x))).toBe('invalid_result:invalid_result');
    expect(await h.tables.select('dq_reconciliations',{pair,cycle_id:c1})).toEqual([]);
    expect(await statusOf(r)).toBe('ok');
@@ -637,7 +648,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
     {members:[m(t1,['k']),m(t2,['k'])],pending:[e1]},
     {members:[{...m(t1,['k']),issuer_id:'not-a-uuid'}],pending:[]},
     {members:[m(t1,['k'])],pending:[e2]}]){
-    expect(await code(db.openReconcileCycle({pair,cycleId:`${pair}-bad`,startedAt:at(),...input}))).toMatch(/^invalid_members/);
+    expect(await code(db.openReconcileCycle({pair,cycleId:`${pair}-bad`,startedAt:at(),...input}))).toBe('invalid_members:invalid_members');
    }
    expect(await h.tables.select('dq_reconcile_cycles',{pair,cycle_id:`${pair}-bad`})).toEqual([]);
    expect((await h.tables.select('dq_reconcile_cycles',{pair,cycle_id:`${pair}-a`}))[0].detail).toEqual({pending_members:[e1,e2]});
