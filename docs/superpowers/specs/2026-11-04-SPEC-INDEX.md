@@ -9,7 +9,7 @@
 | 数据底座三（F1b 标识符 + F5 对账与日历新鲜度） | `2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` | 5 | 第四轮 "not ready"；S1–S7 已按 Codex 原方案实现，未复审 | `2026-11-04-data-foundation-3/` | 计划前再做一轮 Codex；依赖计划二落地 |
 | F3 披露文档管道 | `2026-11-04-document-pipeline-design.md` | 5 | 第四轮 "not ready"；R4-1–7 已按原方案实现，未复审 | `2026-11-04-document-pipeline/` | 同上；owner 决策 A–G |
 | F4 判断层框架 | `2026-11-04-judgment-framework-design.md` | 5 | 第四轮 "not ready"；R01–R06 已按原方案实现，未复审 | `2026-11-04-judgment-framework/` | 同上；owner 决策 O1–O7 |
-| F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 5 | 第四轮 "not ready"（仅两条 P2）；已按原方案实现，未复审 | `2026-11-04-evals-gold-sets/` | owner 决策 D1–D8 |
+| F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 6 | 第五轮（增量，对落地代码）"not ready" 12 条全部在第 6 稿实施；计划 `2026-11-06-evals-and-gold-sets.md` | `2026-11-04-evals-gold-sets/` | owner 决策 D1–D8 |
 | 行业研究 | `2026-11-04-industry-research-design.md` | 5 | 第四轮 "not ready"；U1–U6 已按原方案实现，未复审 | `2026-11-04-industry-research/` | 依赖 F2/F4；owner 决策 A–G；Claude Design 画布 |
 | 公司研究与跟踪 | `2026-11-04-company-research-design.md` | 5 | 第四轮 "not ready"；#40/#57–#60 已按原方案实现，未复审 | `2026-11-04-company-research/` | 依赖 F2/F3/F4；§10.1/§10.2 对计划二/三的接口请求待接受；owner 决策 A–K；画布 |
 | 外资研报 | `2026-11-04-foreign-research-design.md` | 4 | 第四轮 "READY WITH P2 FIXES"；三条 P2 已实现 | `2026-11-04-foreign-research/` | 依赖 F3/F4；owner 决策 D1–D7；画布 |
