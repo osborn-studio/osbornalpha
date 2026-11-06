@@ -42,6 +42,7 @@
 10. **回放文件不入 `lock.json`**（W4 CCR 5）：锁只收 `GoldFormat` 黄金集；发布清单对黄金集类证据查锁，对回放/对照报告查夹具文件的提交字节（`manifest_fixture`，Task 12）。`lock.json` 由 Task 2 建、Task 9 追加 `synthetic-us.json`；Task 1 的锁测试用 `toContainEqual`。
 11. **机械核验**（Codex 计划第 1 轮处置之后重跑；从本文件抽取全部代码块与 Edit 到 HEAD 的临时工作树）：`npx tsc --noEmit -p .` 0 错误；`npx vitest run src/lib/evals src/app/api/admin/evals` 45 文件 530 用例通过（2 个 critical 套件无 `S4_TEST_STATE` 时 skipped）；eslint 0 警告；`ci-contract.test.ts` 通过（`record-cli.test.ts` 不含 `S4_TEST_STATE` 字面量，否则 `test:db` 报 inventory drift）；真实 PostgreSQL 17：在无 git 检出的副本里（`VERCEL_GIT_COMMIT_SHA` = HEAD，因 `record-replay.ts` 拒绝脏树）录制 12 个案例成功；`evals-store` + `evals-facts` 两个 critical 套件 22/22 通过（含 frozen 回放全 identical、`CI=1` 时写出 `reports/evals/<run_id>.json`、篡改 → setup_mismatch、P2-1 两个 setup 冲突被拒）；`run.ts --kind replay_consistency --mode ci` gate pass；脏树下 `record-replay.ts` 退出 2（`dirty_tree`）。
 12. **Codex 计划第 1 轮**（`docs/audits/2026-11-06-evals-gold-sets/02-codex-plan-round1.md`）：15 条处置见 `03-disposition-plan.md`（P1-1…P1-10、P2-1…P2-3、P2-5 ACCEPT；P2-4 PARTIAL）；改动落在各任务正文，并在代码注释里标出编号。
+13. **Codex 计划第 2 轮**（`04-codex-plan-round2.md`）：R2-1（离线 CI 身份未查 → 阻断发现，CLI exit 1）、R2-2（每次 frozen 建库在新建并迁移的隔离库里，取代第 1 轮的同 setup 跳过检查）、R2-3（派生 metric 的 artifacts 由输入链验证）全部 ACCEPT，见 `05-disposition-plan-round2.md`；Task 1 已按计划落地（`2409a7b`、评审修正 `42c671e`），本轮不改 Task 1 正文。重跑：tsc 0、eslint 0、`vitest src/lib/evals` + 管理路由 + `ci-contract` 47 文件 567 用例通过；PG17 两个 critical 套件 22/22。
 
 ## 文件结构
 
@@ -5483,7 +5484,7 @@ Create `src/lib/evals/run-gold-set.test.ts`:
 import {describe,expect,it} from 'vitest';
 import {fakeReader,gcase,gset,env,readRow} from './kinds/official-test-support';
 import type {FakeReader,FakeReaderOptions} from './kinds/official-test-support';
-import {runGoldSet,selectCases,verifiedOf} from './run-gold-set';
+import {artifactVerified,runGoldSet,selectCases,verifiedOf} from './run-gold-set';
 import {goldBlockOf} from './summary';
 import type {RunGoldSetOptions} from './run-gold-set';
 import type {CaseTarget,FactTarget,GoldCase,ReadRow,ReportEnvironment} from './types';
@@ -5525,6 +5526,16 @@ describe('runGoldSet — report and gate (spec §3.2, §7.2)',()=>{
   expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'expected_absent'},left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:{ok:true,missing:[],source_verified:true},detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:true,sources:true});
   expect(verifiedOf([{case_id:'a',required:true,outcome:{result:'fail',reason:'value'},left:'1',right:'2',abs_diff:'1',rel_diff:'0.5',tolerance:'0',provenance:null,detail:{}}],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
   expect(verifiedOf([],{artifacts:true,sources:true},true)).toEqual({artifacts:false,sources:false});
+ });
+ it('R2-3: a derived-metric case is artifact-verified iff every input chain is ok with an object_path (no top-level path needed)',()=>{
+  const chain=(p:Record<string,unknown>={})=>({fact_id:'f-1',concept:'revenue',ok:true,reason:null,source_ref:'a',raw_hash:'h',producer_code_version:'c'.repeat(40),object_path:'edgar/x/y.json',locator:'l',...p});
+  const metric=(inputs:unknown):Parameters<typeof artifactVerified>[0]=>({case_id:'m',required:true,outcome:{result:'pass'},left:'0.4',right:'0.4',abs_diff:'0',rel_diff:'0',tolerance:'0',provenance:{ok:true,missing:[],source_verified:true},detail:{inputs}});
+  expect(artifactVerified(metric([chain(),chain({concept:'gross_profit'})]))).toBe(true);
+  expect(verifiedOf([metric([chain()])],{artifacts:true,sources:true},true)).toEqual({artifacts:true,sources:true});
+  expect(artifactVerified(metric([]))).toBe(false);
+  expect(artifactVerified(metric([chain(),chain({object_path:null})]))).toBe(false);
+  expect(artifactVerified(metric([chain({ok:false})]))).toBe(false);
+  expect(artifactVerified({...metric([chain()]),provenance:{ok:false,missing:[],reason:'input:x'}})).toBe(false);
  });
 });
 
@@ -5781,13 +5792,21 @@ export function assertRunnable(set:GoldSet,mode:EvalMode,env:EvalEnv):void{
 const CORRECTNESS=new Set(['pass','fail','unit_mismatch','provenance_incomplete','unexplained_diff']);
 /** report.provenance.verified from the checks actually completed (Codex plan round 1 P1-8), never from the requested flags:
  *  sources = requested and EVERY evaluated case (any correctness outcome) has provenance.source_verified === true;
- *  artifacts = requested, privileged, and every evaluated case except expected_absent resolved to a raw object (provenance.ok
- *  with object_path). No evaluated case → false. */
+ *  artifacts = requested, privileged, and every evaluated case except expected_absent resolved to raw objects: a fact case via
+ *  provenance.ok with object_path; a derived-metric case (detail.inputs = FactProvenance.input_chains, Codex plan round 2
+ *  R2-3) via provenance.ok and a NON-EMPTY input chain list whose every chain is ok with an object_path. No evaluated case → false. */
+export function artifactVerified(c:CaseReport):boolean{
+ if(c.provenance?.ok!==true)return false;
+ const inputs=c.detail.inputs;
+ if(inputs!==undefined)return Array.isArray(inputs)&&inputs.length>0&&inputs.every(i=>typeof i==='object'&&i!==null&&(i as {ok?:unknown}).ok===true
+  &&typeof (i as {object_path?:unknown}).object_path==='string'&&((i as {object_path:string}).object_path).length>0);
+ return typeof c.provenance.object_path==='string';
+}
 export function verifiedOf(cases:CaseReport[],verify:{artifacts:boolean;sources:boolean},privileged:boolean):{artifacts:boolean;sources:boolean}{
  const evaluated=cases.filter(c=>CORRECTNESS.has(bucketOf(c.outcome)));
  if(evaluated.length===0)return {artifacts:false,sources:false};
  const sources=verify.sources&&evaluated.every(c=>c.provenance?.source_verified===true);
- const artifacts=verify.artifacts&&privileged&&evaluated.filter(c=>c.outcome.result!=='expected_absent').every(c=>c.provenance?.ok===true&&typeof c.provenance.object_path==='string');
+ const artifacts=verify.artifacts&&privileged&&evaluated.filter(c=>c.outcome.result!=='expected_absent').every(artifactVerified);
  return {artifacts,sources};
 }
 
@@ -6102,16 +6121,15 @@ Create `src/lib/evals/replay/setup.ts`:
 // stale for every other suite sharing the database, so the world's sync deps get withoutFreshness(tables): writes to
 // dq_freshness are dropped, reads pass through. The world build therefore leaves dq_freshness untouched.
 // sealSetupFromPaths() seals a replay draft that names files by path only (Task 11's facts.frozen.json drafts).
-// Declared initial state is enforced (Codex plan round 1 P2-1): per database (pg connection string) and process a
-// registry records which setup_sha256 built which seed CIKs. A setup whose CIKs another setup already built in this
-// process → {ok:false, mismatch:'state_not_empty:cik_shared'} (different setups must use disjoint CIKs); the first build
-// of a setup in this process refuses a database where any seed issuer already has filings, facts or financial_facts
-// quarantine items → 'state_not_empty'; a rebuild of the same setup in the same process is the duplicate-only sync. A
-// listed quarantine resolution that is already resolved must have chosen exactly members carrying a listed value.
+// Declared initial state is enforced by isolation (Codex plan round 1 P2-1, round 2 R2-2): buildFrozenDb creates a fresh
+// database per build (createIsolatedDatabase: harness bootstrap + every migration), so a rebuild of the same setup can
+// never inherit another build's or a test's mutations; world.close() drops it. A listed quarantine resolution that is
+// already resolved must have chosen exactly members carrying a listed value.
 // groupSealedSetups() recomputes EVERY case's setup before grouping or caching (P1-6).
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {basename,join} from 'node:path';
-import type {Pool} from 'pg';
+import {randomBytes} from 'node:crypto';
+import {Pool} from 'pg';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {pgTableClient} from '../../db/pg-table-client';
 import type {TableClient} from '../../db/table-client';
@@ -6154,6 +6172,8 @@ export interface FrozenWorld{
  today:string;now:Date;setup:FrozenSetup;
  /** One more runFactsSync of a manifest fixture (verified bytes) for its seed issuer. */
  sync(name:string):Promise<SyncReceipt>;
+ /** pg builds: the isolated database's pool (R2-2); memory: null. close() drops the isolated database (memory: no-op). */
+ pool:Pool|null;close():Promise<void>;
 }
 export type FrozenBuild={ok:false;mismatch:string}|{ok:true;issuers:Record<string,string>;world:FrozenWorld};
 
@@ -6226,9 +6246,7 @@ export function verifySetup(setup:FrozenSetup,root=process.cwd()):{seed:IssuerSe
  return {seed,files};
 }
 
-interface Backend{db:FactsDb;tables:TableClient;provision(s:SeedIssuer):Promise<string>;
- /** P2-1: refuse a non-empty initial state (mismatch string) or null; built() records a successful build. */
- guard?(seed:SeedIssuer[]):Promise<string|null>;built?(seed:SeedIssuer[]):void}
+interface Backend{db:FactsDb;tables:TableClient;provision(s:SeedIssuer):Promise<string>}
 
 async function resolveListed(b:Backend,q:QuarantineResolution):Promise<void>{
  const key={table_name:'financial_facts',natural_key:q.natural_key};
@@ -6258,8 +6276,6 @@ async function buildWorld(setup:FrozenSetup,root:string,backendAt:(now:Date)=>Ba
  const {seed,files}=verified;
  const now=new Date(`${setup.today}T12:00:00.000Z`);
  const backend=backendAt(now);
- const refused=backend.guard?await backend.guard(seed.issuers):null;
- if(refused!==null)return {ok:false,mismatch:refused};
  try{
   const issuers:Record<string,string>={};
   for(const s of seed.issuers)issuers[s.ticker]=await backend.provision(s);
@@ -6285,40 +6301,59 @@ async function buildWorld(setup:FrozenSetup,root:string,backendAt:(now:Date)=>Ba
   };
   for(const name of setup.sync_order)await sync(name);
   for(const q of setup.quarantine_resolutions)await resolveListed(backend,q);
-  const world:FrozenWorld={db:backend.db,tables:backend.tables,storage,issuers,seed:seed.issuers,today:setup.today,now,setup,sync};
-  backend.built?.(seed.issuers);
+  const world:FrozenWorld={db:backend.db,tables:backend.tables,storage,issuers,seed:seed.issuers,today:setup.today,now,setup,sync,pool:null,close:async()=>{}};
   return {ok:true,issuers,world};
  }catch(e){if(e instanceof SetupMismatch)return {ok:false,mismatch:e.mismatch};throw e;}
 }
 
-/** P2-1 registry: database key → builds of this process ({setup_sha256, padded seed CIKs}). */
-const BUILT=new Map<string,{setup:string;ciks:Set<string>}[]>();
-const dbKeyOf=(pool:Pool)=>(pool as unknown as {options?:{connectionString?:string;host?:string;port?:number;database?:string}}).options?.connectionString
- ??JSON.stringify((pool as unknown as {options?:Record<string,unknown>}).options??{});
-export function buildFrozenDb(pool:Pool,setup:FrozenSetup,root=process.cwd()):Promise<FrozenBuild>{
- const key=dbKeyOf(pool);
- return buildWorld(setup,root,()=>({db:pgFactsDb(pool),tables:pgTableClient(pool),
-  async guard(seed){
-   const builds=BUILT.get(key)??[];
-   const ciks=new Set(seed.map(s=>padCik(s.cik)));
-   const other=builds.find(b=>b.setup!==setup.setup_sha256&&[...ciks].some(c=>b.ciks.has(c)));
-   if(other)return `state_not_empty:cik_shared with setup ${other.setup.slice(0,12)}`;
-   if(builds.some(b=>b.setup===setup.setup_sha256))return null;           // this process built it: a rebuild is duplicate-only
-   const ids=seed.map(s=>s.issuer_id);
-   const r=await pool.query(`select (select count(*) from public.filings where issuer_id = any($1::uuid[]))
-     + (select count(*) from public.financial_facts where issuer_id = any($1::uuid[]))
-     + (select count(*) from public.dq_quarantine where table_name = 'financial_facts' and split_part(natural_key, ':', 1) = any($2::text[])) as n`,[ids,ids]);
-   return Number(r.rows[0].n)>0?'state_not_empty':null;
-  },
-  built(seed){const list=BUILT.get(key)??[];list.push({setup:setup.setup_sha256,ciks:new Set(seed.map(s=>padCik(s.cik)))});BUILT.set(key,list);},
-  async provision(s){
-   await pool.query(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'US') on conflict (ticker) do nothing`,[s.ticker,s.name]);
-   await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[s.issuer_id,s.name,s.cik]);
-   const id=(await pool.query(`select issuer_id from public.issuers where cik=$1`,[s.cik])).rows[0]?.issuer_id as string|undefined;
-   if(id!==s.issuer_id)throw new SetupMismatch('issuer_seed',`cik ${s.cik} belongs to ${id??'nobody'}`);
-   await pool.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,$2,'common',true,'2000-01-01','f6-seed') on conflict do nothing`,[s.issuer_id,s.ticker]);
-   return s.issuer_id;
-  }}));
+/** Bootstrap of a fresh test database — the same statements scripts/s4/local-db.ts runs before the migrations (roles are
+ *  cluster-wide and already exist; that helper is not exported). */
+const BOOTSTRAP_SQL=`create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
+ create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+ create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;
+ create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`;
+/** Codex plan round 2 R2-2: one isolated database per frozen build. `create database f6_frozen_<setup8>_<rand>` through the
+ *  admin pool, the harness bootstrap, every supabase/migrations/*.sql in order (as scripts/s4/local-db.ts applies them);
+ *  drop() ends the pool and drops the database (with force). */
+export async function createIsolatedDatabase(admin:Pool,setup:FrozenSetup):Promise<{name:string;pool:Pool;drop():Promise<void>}>{
+ const url=(admin as unknown as {options?:{connectionString?:string}}).options?.connectionString;
+ if(!url)throw new Error('buildFrozenDb needs an admin pool created from a connection string');
+ const name=`f6_frozen_${setup.setup_sha256.slice(0,8)}_${randomBytes(4).toString('hex')}`;
+ await admin.query(`create database ${name}`);
+ const u=new URL(url);u.pathname=`/${name}`;
+ const pool=new Pool({connectionString:u.toString()});
+ let dropped=false;
+ const drop=async()=>{if(dropped)return;dropped=true;await pool.end().catch(()=>{});await admin.query(`drop database if exists ${name} with (force)`);};
+ try{
+  await pool.query(BOOTSTRAP_SQL);
+  const dir=join(process.cwd(),'supabase/migrations');
+  for(const file of readdirSync(dir).filter(n=>n.endsWith('.sql')).sort()){
+   try{await pool.query(readFileSync(join(dir,file),'utf8'));}catch(e){throw new Error(`isolated frozen database: migration ${file}: ${(e as Error).message}`);}
+  }
+ }catch(e){await drop();throw e;}
+ return {name,pool,drop};
+}
+/** Every hash is verified before anything is created; then a fresh isolated database (above) holds the build, so a
+ *  rebuild of the same setup never sees state another build or test left behind. world.close() drops it. */
+export async function buildFrozenDb(admin:Pool,setup:FrozenSetup,root=process.cwd()):Promise<FrozenBuild>{
+ try{verifySetup(setup,root);}catch(e){if(e instanceof SetupMismatch)return {ok:false,mismatch:e.mismatch};throw e;}
+ const iso=await createIsolatedDatabase(admin,setup);
+ const pool=iso.pool;
+ let b:FrozenBuild;
+ try{
+  b=await buildWorld(setup,root,()=>({db:pgFactsDb(pool),tables:pgTableClient(pool),
+   async provision(s){
+    await pool.query(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'US') on conflict (ticker) do nothing`,[s.ticker,s.name]);
+    await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,$2,'US',$3) on conflict do nothing`,[s.issuer_id,s.name,s.cik]);
+    const id=(await pool.query(`select issuer_id from public.issuers where cik=$1`,[s.cik])).rows[0]?.issuer_id as string|undefined;
+    if(id!==s.issuer_id)throw new SetupMismatch('issuer_seed',`cik ${s.cik} belongs to ${id??'nobody'}`);
+    await pool.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,$2,'common',true,'2000-01-01','f6-seed') on conflict do nothing`,[s.issuer_id,s.ticker]);
+    return s.issuer_id;
+   }}));
+ }catch(e){await iso.drop();throw e;}
+ if(!b.ok){await iso.drop();return b;}
+ b.world.pool=pool;b.world.close=iso.drop;
+ return b;
 }
 
 export function buildFrozenMemory(setup:FrozenSetup,root=process.cwd()):Promise<FrozenBuild>{
@@ -6643,17 +6678,15 @@ Create `src/lib/evals/cli/deps.ts`:
 ```ts
 // src/lib/evals/cli/deps.ts
 // Reader wiring per run mode (spec §7.1 table). ci: the F6 deterministic world (replay/setup.ts, base setup) over
-// pgFactsDb on the S4_TEST_STATE database's adminUrl when that file is named, else in memory — unprivileged either way,
+// pgFactsDb on an isolated database created through the S4_TEST_STATE database's adminUrl when that file is named, else in memory — unprivileged either way,
 // no store. report: production through the ANON client (read_facts RPC; RLS keeps it on ok rows), unprivileged, no
 // store. report --write-db: production service_role — PrivilegedReader (raw-snapshot provenance over the
 // disclosure-raw bucket, hints) and the dq_eval_* store. ReportEnvironment never carries a credential: db_host is a
 // bare hostname. LANDED_PARSERS is the one place the landed EDGAR / Tushare parsers are bound for provenance.
 import {readFileSync} from 'node:fs';
 import {Pool} from 'pg';
-import {pgTableClient} from '../../db/pg-table-client';
 import {supabaseTableClient} from '../../db/table-client';
 import {supabaseFactsDb} from '../../facts/db';
-import {pgFactsDb} from '../../facts/pg-facts-db';
 import {parseCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {parseTushareStatements} from '../../facts/providers/tushare-statements';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
@@ -6692,8 +6725,9 @@ export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRu
   if(statePath){
    const adminUrl=(JSON.parse(readFileSync(statePath,'utf8')) as {adminUrl:string}).adminUrl;
    const pool=new Pool({connectionString:adminUrl});
-   try{built(await buildFrozenDb(pool,setup,opts.root));}catch(e){await pool.end();throw e;}
-   return {reader:factsReader({db:pgFactsDb(pool),tables:pgTableClient(pool),stateRev:async()=>null}),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:()=>pool.end()};
+   let w:ReturnType<typeof built>;
+   try{w=built(await buildFrozenDb(pool,setup,opts.root));}catch(e){await pool.end();throw e;}   // an isolated database (replay/setup.ts, R2-2)
+   return {reader:factsReader({db:w.db,tables:w.tables,stateRev:async()=>null}),environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{await w.close();await pool.end();}};
   }
   const world=built(await buildFrozenMemory(setup,opts.root));
   return {reader:factsReader({db:world.db,tables:world.tables,stateRev:async()=>null}),environment:none,store:null,close:async()=>{}};
@@ -6938,7 +6972,6 @@ Create `src/lib/evals/evals-facts.integration.test.ts`:
 import {readFileSync} from 'node:fs';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
-import {pgTableClient} from '../db/pg-table-client';
 import {padCik} from '../facts/providers/shared';
 import type {FactsDb} from '../facts/types';
 import {factsReader,privilegedFactsReader} from './adapters/facts';
@@ -6976,8 +7009,9 @@ const dropped=(db:FactsDb,issuer:string,concept:string,periodEnd:string):FactsDb
 
 describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)',()=>{
  let pool:Pool;let world:FrozenWorld;let synthetic:GoldSet;let env:EvalEnv;
- const unprivileged=(db:FactsDb=world.db):ModuleReader=>factsReader({db,tables:pgTableClient(pool),stateRev:async()=>null});
- const privileged=(db:FactsDb=world.db):ModuleReader=>privilegedFactsReader({db,tables:pgTableClient(pool),stateRev:async()=>null,storage:memoryRawStorage(world.storage.objects),parsers:LANDED_PARSERS});
+ // the world lives in its own isolated database (replay/setup.ts, R2-2): readers use the world's tables, never the admin pool
+ const unprivileged=(db:FactsDb=world.db):ModuleReader=>factsReader({db,tables:world.tables,stateRev:async()=>null});
+ const privileged=(db:FactsDb=world.db):ModuleReader=>privilegedFactsReader({db,tables:world.tables,stateRev:async()=>null,storage:memoryRawStorage(world.storage.objects),parsers:LANDED_PARSERS});
  const run=(set:GoldSet,reader:ModuleReader,verify?:{artifacts:boolean;sources:boolean})=>runGoldSet({set,mode:'ci',reader,env,environment:ENVIRONMENT,...(verify?{verify}:{})});
  const byId=(id:string):GoldCase=>{const c=synthetic.cases.find(x=>x.case_id===id);if(!c)throw new Error(`synthetic-us lacks ${id}`);return c;};
  const outcomeOf=(cases:CaseReport[],id:string)=>cases.find(c=>c.case_id===id)?.outcome;
@@ -6998,10 +7032,8 @@ describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)'
   synthetic=loadGoldSet(SYNTHETIC);
   env={today:world.today,now:()=>world.now,evaluatorCodeVersion:'f'.repeat(40),dirty:false};
  },300_000);
- // facts and filings are append-only and test:db builds a fresh database per run; retiring the seed issuers' scope
- // rows keeps any scheduled path of another suite away from them.
  afterAll(async()=>{
-  if(world)await world.db.reconcileScope('US',world.seed.map(s=>({issuer_id:world.issuers[s.ticker],reasons:[],priority:0,fetch_key:padCik(s.cik)}))).catch(()=>{});
+  await world?.close();   // drops the isolated database
   await pool?.end();
  });
 
@@ -8258,7 +8290,7 @@ Expected: PASS（7 个用例）。
  * for this case and mode with before_hash = stored hash and after_hash = new hash.
  * frozen: needs S4_TEST_STATE (a freshly migrated local database — run through .claude/scratch/db-run.ts);
  * the draft setup is sealed with replay/setup.ts::sealSetupFromPaths, the database is built once per setup_sha256
- * with buildFrozenDb, and the projection is read over that database (projections/facts.ts::projectRequest).
+ * with buildFrozenDb (a fresh isolated database per setup, dropped on exit), and the projection is read over that database (projections/facts.ts::projectRequest).
  * live: production over the anon client (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY, e.g.
  * node --env-file=.env.local --import tsx …), recording fact_state_rev after the projection.
  * Refuses a dirty checkout (EvalError dirty_tree, exit 2 — evaluator_code_version must name committed code; Codex plan
@@ -8311,6 +8343,7 @@ function frozenEnv():Env{
  if(!state)throw new UsageError('--mode frozen needs S4_TEST_STATE: run through .claude/scratch/db-run.ts');
  const pool=new Pool({connectionString:JSON.parse(readFileSync(state,'utf8')).adminUrl});
  const built=new Map<string,ProjectionDeps>();
+ const worlds:{close():Promise<void>}[]=[];   // isolated databases (replay/setup.ts, R2-2)
  return {
   async project(c){
    const setup:FrozenSetup=isDraft(c)?sealSetupFromPaths(c.setup as unknown as FrozenSetupPathsDraft):(c as FrozenReplayCase).setup as unknown as FrozenSetup;
@@ -8320,13 +8353,14 @@ function frozenEnv():Env{
    if(!deps){
     const r=await buildFrozenDb(pool,setup);
     if(!r.ok)throw new EvalError('gold_invalid',`case ${c.case_id}: setup_mismatch (${r.mismatch})`,{case_id:c.case_id,mismatch:r.mismatch});
+    worlds.push(r.world);
     const tables=r.world.tables;
     deps={db:r.world.db,resolve:(s,t)=>resolveFactsSubject(tables,s,t)};
     built.set(setup.setup_sha256,deps);
    }
    return {projection:await projectRequest(deps,c.request,setup.today),setup:setup as unknown as SealedSetup};
   },
-  close:()=>pool.end(),
+  close:async()=>{for(const w of worlds)await w.close().catch(()=>{});await pool.end();},
  };
 }
 
@@ -8444,7 +8478,7 @@ Expected: PASS（3 个用例）。若第一次运行时 `scripts/evals/record-re
 []
 ```
 
-`src/lib/evals/fixtures/replay/facts.frozen.json`（12 个草稿；`setup` 是 Task 9 的 `FrozenSetupPathsDraft`（只写路径，`record-replay.ts` 用 `sealSetupFromPaths` 补齐全部哈希）——若 Task 9 落地的草稿类型字段名不同，以 Task 9 的类型为准改写这一对象，其余不变）。**每个草稿的 `setup` 都与 Task 9 的 `f6-base.setup.json` 内容相同**（5 个夹具、`sync_order` 前 3 个、`today` `2026-11-20`；经 `sealSetupFromPaths` 封装的 `setup_sha256` 与基础 setup 相等）：自 P2-1 起 `buildFrozenDb` 在同一库同一进程内拒绝与已建 setup 共用 CIK 的另一个 setup，而 Task 9 的集成测试先用基础 setup 建了同一个库：
+`src/lib/evals/fixtures/replay/facts.frozen.json`（12 个草稿；`setup` 是 Task 9 的 `FrozenSetupPathsDraft`（只写路径，`record-replay.ts` 用 `sealSetupFromPaths` 补齐全部哈希）——若 Task 9 落地的草稿类型字段名不同，以 Task 9 的类型为准改写这一对象，其余不变）。**每个草稿的 `setup` 都与 Task 9 的 `f6-base.setup.json` 内容相同**（5 个夹具、`sync_order` 前 3 个、`today` `2026-11-20`；经 `sealSetupFromPaths` 封装的 `setup_sha256` 与基础 setup 相等）：所有 frozen 案例共用一个 setup，一次建库即可（每次 `buildFrozenDb` 都在新建的隔离库里，Codex 计划第 2 轮 R2-2）：
 
 ```json
 {
@@ -8546,6 +8580,7 @@ import {tmpdir as replayTmpdir} from 'node:os';
 import {join as joinReplay} from 'node:path';
 import {Pool as ReplayPool} from 'pg';
 import {randomUUID as replayRunId} from 'node:crypto';
+import {projectionHash as projectionHashForReplay} from './canonical-json';
 import {evaluateReplay,replaySetOf,replaySummaryContext} from './kinds/replay';
 import type {SetupCheck} from './kinds/replay';
 import {buildReport as buildReplayReport,writeReportFiles as writeReplayReportFiles} from './report';
@@ -8553,7 +8588,7 @@ import {projectRequest,resolveFactsSubject} from './projections/facts';
 import {parseReplayFile,recordedCases} from './replay/fixture';
 import type {FrozenReplayCase} from './replay/fixture';
 import {loadLedger} from './replay/ledger';
-import {buildFrozenDb as buildFrozenDbForReplay,groupSealedSetups,loadSetup as loadSetupForReplay,sealSetup as sealSetupForReplay} from './replay/setup';
+import {buildFrozenDb as buildFrozenDbForReplay,groupSealedSetups,loadSetup as loadSetupForReplay} from './replay/setup';
 import type {FrozenSetup as FrozenSetupForReplay} from './replay/setup';
 import {summarize as summarizeReplay} from './summary';
 import type {CaseReport as ReplayCaseReport,ReplayRequest as ReplayRequestForReplay,Subject as ReplaySubject} from './types';
@@ -8588,7 +8623,8 @@ describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11
    if(!built.ok){reports.push(...await evaluateReplay(group.cases,async()=>{throw new Error('setup not built');},ledger,ctxOf({ok:false,mismatch:[built.mismatch]})));continue;}
    const tables=built.world.tables;
    const deps={db:built.world.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(tables,s,t)};
-   reports.push(...await evaluateReplay(group.cases,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));
+   try{reports.push(...await evaluateReplay(group.cases,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));}
+   finally{await built.world.close();}
   }
   expect(reports.filter(r=>r.outcome.result!=='identical').map(r=>({case_id:r.case_id,outcome:r.outcome,changed:r.detail.changed_fields??null}))).toEqual([]);
   const s=summarizeReplay(reports,replaySummaryContext(false));
@@ -8606,17 +8642,25 @@ describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11
    expect(files.json).toContain('reports/evals/');expect(files.sha256).toMatch(/^[0-9a-f]{64}$/);
   }
  },600000);
- it('P2-1: a second setup sharing the seed CIKs is refused on the same database; a first build on a non-empty database is refused',async()=>{
-  const base=loadSetupForReplay('src/lib/evals/fixtures/replay/f6-base.setup.json');
-  const other=sealSetupForReplay({...base,today:'2026-11-21'});
-  const shared=await buildFrozenDbForReplay(replayPool,other);
-  expect(shared).toMatchObject({ok:false,mismatch:expect.stringMatching(/^state_not_empty:cik_shared/)});
-  const url=new URL(JSON.parse(readReplayFile(process.env.S4_TEST_STATE!,'utf8')).adminUrl as string);
-  url.searchParams.set('application_name','f6-p2-1');   // another registry key = what a fresh process sees
-  const fresh=new ReplayPool({connectionString:url.toString()});
-  try{expect(await buildFrozenDbForReplay(fresh,base)).toEqual({ok:false,mismatch:'state_not_empty'});}
-  finally{await fresh.end();}
- },120000);
+ it('R2-2: build → mutate ZZEVC (10-K/A + same-day conflict) → rebuild the SAME setup: the rebuild is an isolated database in the declared state',async()=>{
+  const setup=loadSetupForReplay('src/lib/evals/fixtures/replay/f6-base.setup.json');
+  const zzevc:ReplayRequestForReplay={issuer:{market:'US',cik:'9990603'},concepts:['revenue'],asOf:'2026-11-19',durations:['12M']};
+  const project=(w:{db:Parameters<typeof projectRequest>[0]['db'];tables:Parameters<typeof resolveFactsSubject>[0]})=>projectRequest({db:w.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(w.tables,s,t)},zzevc,setup.today);
+  const a=await buildFrozenDbForReplay(replayPool,setup);
+  if(!a.ok)throw new Error(a.mismatch);
+  try{
+   const declared=await project(a.world);
+   await a.world.sync('CIK0009990603.amended.json');await a.world.sync('CIK0009990603.conflict.json');
+   const mutated=await project(a.world);
+   expect(projectionHashForReplay(mutated)).not.toBe(projectionHashForReplay(declared));
+   const b=await buildFrozenDbForReplay(replayPool,setup);
+   if(!b.ok)throw new Error(b.mismatch);
+   try{
+    expect(b.world.pool).not.toBeNull();expect(b.world.pool).not.toBe(a.world.pool);
+    expect(await project(b.world)).toEqual(declared);   // the rebuild never sees the first build's mutations
+   }finally{await b.world.close();}
+  }finally{await a.world.close();}
+ },300000);
 
  it('one flipped fixture byte (temp copy of the tree) → read_error(setup_mismatch), nothing projected',async()=>{
   const root=mkdtempReplay(joinReplay(replayTmpdir(),'f6-replay-tamper-'));
@@ -8954,10 +8998,12 @@ export const defaultReplayBackend:ReplayBackendFactory=async(mode,privileged,env
   const adminUrl=(JSON.parse(readFileSync(state,'utf8')) as {adminUrl:string}).adminUrl;
   const pool=new Pool({connectionString:adminUrl});
   const builds=new Map<string,{check:SetupCheck;project:ProjectFn}>();
-  return {environment:{...none,db_host:hostOf(adminUrl)},store:null,close:()=>pool.end(),
+  const worlds:{close():Promise<void>}[]=[];   // each build is an isolated database (replay/setup.ts, R2-2), dropped on close
+  return {environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{for(const w of worlds)await w.close().catch(()=>{});await pool.end();},
    async frozen(setup){
     const hit=builds.get(setup.setup_sha256);if(hit)return hit;
     const b=await buildFrozenDb(pool,setup);
+    if(b.ok)worlds.push(b.world);
     const out:{check:SetupCheck;project:ProjectFn}=b.ok
      ?{check:{ok:true,setupSha256:b.world.setup.setup_sha256},project:r=>projectRequest({db:b.world.db,resolve:(s,t)=>resolveFactsSubject(b.world.tables,s,t)},r,setup.today)}
      :{check:{ok:false,mismatch:[b.mismatch]},project:async()=>{throw new Error('setup not built');}};
@@ -9090,10 +9136,10 @@ const built=(b:FrozenBuild)=>
 ```
 Then wrap the four reader constructions (one Edit each; old line → new line):
 ```ts
-factsReader({db:pgFactsDb(pool),tables:pgTableClient(pool),stateRev:async()=>null})
+factsReader({db:w.db,tables:w.tables,stateRev:async()=>null})
 ```
 ```ts
-factsReader(withProjector({db:pgFactsDb(pool),tables:pgTableClient(pool),stateRev:async()=>null}))
+factsReader(withProjector({db:w.db,tables:w.tables,stateRev:async()=>null}))
 ```
 ```ts
 factsReader({db:world.db,tables:world.tables,stateRev:async()=>null})
@@ -9828,6 +9874,9 @@ Create `src/lib/evals/validate/manifest.test.ts` (reports are built with the rea
 // Spec §10 per-evidence-kind authentication and common rules (and Codex plan round 1 P1-2/P1-3/P1-4/P2-2/P2-3), on
 // in-memory committed files per commit, a stub service-role getRun, stub dq_freshness rows and a stub GitHub run.
 import {createHash} from 'node:crypto';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {projectionHash} from '../canonical-json';
 import {CANARY_SERIES,CANARY_VALUE,REFERENCE_THRESHOLDS,evaluateReference,referenceSummary} from '../kinds/reference';
@@ -9835,6 +9884,15 @@ import type {ReferenceSample} from '../kinds/reference';
 import {summarize,statusOfGate} from '../summary';
 import type {CaseReport,EvalKind,EvalReport,EvalRunRow,EvidenceClass,GoldCase,GoldLock,GoldSet} from '../types';
 import {seededSelection} from './expert';
+import {runValidate} from './cli';
+import {privilegedFactsReader} from '../adapters/facts';
+import {companyFactsDoc,memoryWorld} from '../adapters/memory-world';
+import {memoryRawStorage} from '../adapters/provenance';
+import {LANDED_PARSERS} from '../cli/deps';
+import {FORMULA_VERSION} from '../../facts/derive';
+import {gcase,gset} from '../kinds/official-test-support';
+import {runGoldSet} from '../run-gold-set';
+import {manifestHandler} from './handlers';
 import {validateManifest} from './manifest';
 import type {FreshnessRow,ManifestDeps} from './manifest';
 
@@ -9879,7 +9937,9 @@ interface Fx{
  sets:Record<string,GoldSet>;reports:Record<keyof typeof ID,EvalReport>;rowPatch:Partial<Record<keyof typeof ID,Partial<EvalRunRow>>>;
  manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
  /** files missing at evidence_commit (e.g. present only in a working tree) */
- uncommitted?:Set<string>;origin?:string|null;online?:{conclusion:string|null;head_sha:string}|null;
+ uncommitted?:Set<string>;origin?:string|null;
+ /** the GitHub run --online returns; default: success at RELEASE; 'offline' = no --online */
+ online?:{conclusion:string|null;head_sha:string}|null|'offline';
 }
 function report(run_id:string,kind:EvalKind,o:{mode?:'ci'|'report';privileged?:boolean;evidence?:EvidenceClass;path:string;sha256:string;cases?:CaseReport[]}):EvalReport{
  const cases=o.cases??[passCase('X/revenue'),passCase('X/assets')];
@@ -9923,7 +9983,7 @@ function fx():Fx{
   fresh:{'facts.us':'fresh'},
  };
 }
-async function run(f:Fx):Promise<{codes:string[];notices:string[]}>{
+async function depsOf(f:Fx):Promise<{deps:ManifestDeps;manifest:Record<string,any>}>{
  const files=new Map<string,Uint8Array>();const rows=new Map<string,EvalRunRow>();
  for(const [k,r] of Object.entries(f.reports) as [keyof typeof ID,EvalReport][]){
   const bytes=enc(r);
@@ -9943,13 +10003,17 @@ async function run(f:Fx):Promise<{codes:string[];notices:string[]}>{
   loadSetAt:(_c,p)=>{const s=f.sets[p];if(!s)throw new Error(`no set ${p}`);return s;},
   isAncestor:(a,b)=>a===b||(a===RELEASE&&b===DESCENDANT),
   originRepo:()=>f.origin===undefined?'osborn-studio/osbornalpha':f.origin,
-  ...(f.online!==undefined?{ciRun:async()=>f.online??null}:{}),
+  ...(f.online==='offline'?{}:{ciRun:async()=>{const o=f.online;return o===undefined?{conclusion:'success',head_sha:RELEASE}:o==='offline'?null:o;}}),
   getRun:f.noRuns?undefined:async id=>rows.get(id)??null,
   freshness:f.noFresh?undefined:async d=>f.freshRows?.[d]??(f.fresh[d]?{expected_cadence:'daily',last_ok_at:f.fresh[d]==='fresh'?'2026-11-20T12:00:00Z':'2026-11-10T00:00:00Z',consecutive_errors:0}:null),
   audit:{gitShow:()=>new TextEncoder().encode('spec\n')},
  };
+ return {deps,manifest:m};
+}
+async function run(f:Fx):Promise<{codes:string[];notices:string[]}>{
+ const {deps,manifest}=await depsOf(f);
  const notices:import('./finding').ValidatorFinding[]=[];
- const found=await validateManifest(m,deps,'manifest',{notices});
+ const found=await validateManifest(manifest,deps,'manifest',{notices});
  return {codes:[...new Set(found.map(x=>x.code))].sort(),notices:notices.map(n=>n.code)};
 }
 const codes=async(f:Fx)=>(await run(f)).codes;
@@ -10066,8 +10130,8 @@ describe('validateManifest (spec §10)',()=>{
   const j=fx();j.manifest.evidence.model_audit={dir:'docs/../../outside'};expect(await codes(j)).toContain('manifest_path');
   const k=fx();delete k.manifest.evidence_commit;expect(await codes(k)).toEqual(['manifest_invalid']);
  });
- it('P1-3: the CI run must belong to the origin repository; --online checks success at release_commit, offline only a notice',async()=>{
-  const off=await run(fx());expect(off.codes).toEqual([]);expect(off.notices).toEqual(['manifest_ci_unverified']);
+ it('P1-3 / R2-2: the CI run must belong to the origin repository; --online checks success at release_commit; offline is a blocking finding',async()=>{
+  const o=fx();o.online='offline';const off=await run(o);expect(off.codes).toEqual(['manifest_ci_unverified']);expect(off.notices).toEqual(['manifest_ci_unverified']);
   const f=fx();f.origin='someone/else';expect(await codes(f)).toEqual(['manifest_ci_repo']);
   const g=fx();g.online={conclusion:'success',head_sha:RELEASE};const on=await run(g);expect(on.codes).toEqual([]);expect(on.notices).toEqual([]);
   const h=fx();h.online={conclusion:'failure',head_sha:RELEASE};expect(await codes(h)).toEqual(['manifest_ci_run']);
@@ -10085,6 +10149,41 @@ describe('validateManifest (spec §10)',()=>{
  it('P2-3: official evidence on a review_required set needs a second reviewer on every case',async()=>{
   const f=fx();f.sets[SET_PATH].review_required=true;f.sets[SET_PATH].cases[0].reviewed_by=null;expect(await codes(f)).toEqual(['manifest_review_missing']);
   const g=fx();g.sets[SET_PATH].review_required=true;expect(await codes(g)).toEqual([]);
+ });
+ it('R2-1 at the CLI: offline the --manifest check is ok:false and runValidate exits 1; with --online and a verified run it exits 0',async()=>{
+  const f=fx();
+  const {deps,manifest}=await depsOf(f);
+  const root=mkdtempSync(join(tmpdir(),'f6-manifest-cli-'));
+  try{
+   writeFileSync(join(root,'m.json'),JSON.stringify(manifest));
+   const handlers=[manifestHandler((_root,o)=>o.online?deps:{...deps,ciRun:undefined})];
+   const off=await runValidate(['--manifest','m.json'],{root,handlers});
+   expect(off.exitCode).toBe(1);expect(off.output.checks.manifest.ok).toBe(false);
+   expect((off.output.checks.manifest.findings as {code:string}[]).map(x=>x.code)).toEqual(['manifest_ci_unverified']);
+   const on=await runValidate(['--manifest','m.json','--online'],{root,handlers});
+   expect(on).toMatchObject({exitCode:0,output:{ok:true,checks:{manifest:{ok:true,findings:[]}}}});
+  }finally{rmSync(root,{recursive:true,force:true});}
+ });
+ it('R2-3: adapter → official report → manifest for a derived-metric case: verified artifacts come from the input chains',async()=>{
+  const w=await memoryWorld();
+  const FY={start:'2023-01-01',end:'2023-12-31'},A1='0009990611-24-000001';
+  expect((await w.sync(companyFactsDoc('9990611','ZZ Eval Unit Co',[{tag:'Revenues',...FY,val:'1000',accn:A1,filed:'2024-02-15'},{tag:'CostOfRevenue',...FY,val:'600',accn:A1,filed:'2024-02-15'},{tag:'GrossProfit',...FY,val:'400',accn:A1,filed:'2024-02-15'}]))).detail.published).toBe(1);
+  const reader=privilegedFactsReader({db:w.db,tables:w.overlay,stateRev:async()=>null,storage:memoryRawStorage(w.storage.objects),parsers:LANDED_PARSERS});
+  const bytes=new TextEncoder().encode('the 10-K bytes');
+  const margin=gcase({case_id:'ZZEVU/gross_margin/2023',binding:'current',as_of:'2026-11-20',canonical:{value:'0.4'},printed:{text:'0.4',unit_label:'ratio',scale:'1'},
+   target:{type:'metric',metric:'gross_margin',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',basis:'us_standard',input_unit:'USD',formula_version:FORMULA_VERSION,unit:{kind:'ratio'}},
+   source:{...gcase().source,sha256:sha(bytes)},reviewed_by:'r2',reviewed_at:'2026-11-07T00:00:00Z'});
+  const set=gset([margin],{path:SET_PATH,sha256:'1'.repeat(64)});
+  const o=await runGoldSet({set,mode:'report',reader,env:{today:'2026-11-20',now:()=>new Date('2026-11-20T00:00:00.000Z'),evaluatorCodeVersion:RELEASE,dirty:false},
+   environment:{db_host:'db.example.supabase.co',app_origin:null,db_state_rev:7},runId:ID.official,verify:{artifacts:true,sources:true},fetchSource:async()=>bytes});
+  expect(o.report.cases[0].outcome).toEqual({result:'pass'});
+  expect((o.report.cases[0].detail.inputs as unknown[]).length).toBeGreaterThan(0);
+  expect(o.report.cases[0].provenance?.object_path).toBeUndefined();
+  expect(o.report.provenance.verified).toEqual({artifacts:true,sources:true});
+  const f=fx();f.sets[SET_PATH]=set;f.reports.official=o.report;
+  const {deps,manifest}=await depsOf(f);
+  const official=(await validateManifest(manifest,deps)).filter(x=>x.where.includes('evidence.official_reconciliation'));
+  expect(official).toEqual([]);
  });
 });
 ```
@@ -10111,8 +10210,9 @@ Create `src/lib/evals/validate/manifest.ts`:
 //    is rejected), official additionally provenance.verified {artifacts, sources}.
 //  - replay_frozen: mode 'ci'; the committed copy's sha256 = manifest report_sha256; ci_run_url names a run of THIS repo
 //    (owner/repo = the origin remote); with --online the GitHub API must report conclusion 'success' and head_sha =
-//    release_commit; offline that check is NOT passed — a notice says so; ci_check 'manual' (the digest comparison
-//    against the CI job summary stays a human step, §10).
+//    release_commit; offline the check is not performed, which is a BLOCKING finding manifest_ci_unverified (Codex plan
+//    round 2 R2-1: an unperformed mandatory check never passes); ci_check 'manual' (the digest comparison against the
+//    CI job summary stays a human step, §10).
 //  - reference_regression: mode 'report', privileged FALSE, evidence_class 'comparison'.
 //  - expert_sampling: §8 validator in release mode against the official run's gold set, evaluated_run_id = official run_id.
 //  - model_audit: §9 validator in release mode over the directory at evidence_commit.
@@ -10163,7 +10263,7 @@ export interface ManifestDeps{
  audit?:Omit<AuditDeps,'readFile'|'release'>;
 }
 export interface ManifestOptions{
- /** notices: checks that were NOT performed (e.g. the CI run identity offline); never a pass. */
+ /** notices: diagnostics only (the offline CI identity is ALSO a blocking finding, R2-1). */
  notices?:ValidatorFinding[];
 }
 type Item='official_reconciliation'|'replay_frozen'|'replay_live'|'dual_source'|'reference_regression'|'expert_sampling'|'model_audit';
@@ -10320,7 +10420,10 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
     else if(deps.ciRun){
      const run=await deps.ciRun(ci[1],ci[2],ci[3]);
      if(!run||run.conclusion!=='success'||run.head_sha!==REL)out.push(finding('manifest_ci_run',at(item),`CI run ${ci[3]}: conclusion ${run?.conclusion??'unknown'}, head_sha ${run?.head_sha??'unknown'}; needs success at release_commit`));
-    }else opts.notices?.push(finding('manifest_ci_unverified',at(item),'CI run conclusion and head_sha were not checked (run with --online); this check did not pass'));
+    }else{
+     const f=finding('manifest_ci_unverified',at(item),'CI run conclusion and head_sha were not checked: run validate.ts --manifest <file> --online');
+     out.push(f);opts.notices?.push(f);
+    }
    }
    if(ev.ci_check!=='manual')out.push(finding('manifest_ci_run',at(item),"ci_check must be 'manual' (the digest comparison with the CI job summary is a human step)"));
    if(typeof ev.report_sha256!=='string'){out.push(finding('manifest_invalid',at(item),'report and report_sha256 required'));continue;}
@@ -10371,7 +10474,7 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
 - [ ] **Step 15: Run it — expect pass; typecheck, lint, commit**
 
 Run: `npm test -- src/lib/evals/validate/manifest.test.ts`
-Expected: PASS — `25 passed (25)`. If the first test (`accepts a complete manifest`) fails with `manifest_summary_mismatch`/`manifest_gate`, Task 1's `summarize` does not follow §3.3 for `identical`/`within` — fix Task 1, not this test.
+Expected: PASS — `27 passed (27)`. If the first test (`accepts a complete manifest`) fails with `manifest_summary_mismatch`/`manifest_gate`, Task 1's `summarize` does not follow §3.3 for `identical`/`within` — fix Task 1, not this test.
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0.
@@ -10771,6 +10874,7 @@ import {finding} from './finding';
 import type {ValidatorFinding} from './finding';
 import {validateManifest} from './manifest';
 import type {ManifestDeps,ManifestOptions} from './manifest';
+import type {ValidateHandler} from './cli';
 
 export const LOCK_PATH='src/lib/evals/fixtures/gold/lock.json';
 export type Handler=(args:string[])=>Promise<ValidatorFinding[]>;
@@ -10813,6 +10917,15 @@ export function manifestDeps(root=process.cwd(),tables:TableClient|null=serviceT
   }:undefined,
   audit:{root},
  };
+}
+/** The --manifest [--online] entry of validate/cli.ts HANDLERS (deps injectable for the CLI-level test). ok iff no finding;
+ *  offline the unperformed CI identity check is a finding, so ok:false and exit 1 (R2-1). */
+export function manifestHandler(depsFor:(root:string,o:{online:boolean})=>ManifestDeps=(root,o)=>manifestDeps(root,serviceTables(),o)):ValidateHandler{
+ return {flag:'--manifest',name:'manifest',takesValue:true,modifiers:['--online'],run:async(root,value,mods)=>{
+  const notices:ValidatorFinding[]=[];
+  const findings=await manifestFindings(root,value!,depsFor(root,{online:mods.has('--online')}),{notices});
+  return {ok:findings.length===0,findings,notices};
+ }};
 }
 /** --manifest <file> [--online]: the manifest file itself is read from the working tree (it names the commits). */
 export async function manifestFindings(root:string,file:string,deps:ManifestDeps,opts:ManifestOptions={}):Promise<ValidatorFinding[]>{
@@ -10860,7 +10973,7 @@ import {redactScan,redactTargets} from '../redact';
 new:
 ```ts
 import {redactScan,redactTargets} from '../redact';
-import {f6Handlers,manifestDeps,manifestFindings,serviceTables} from './handlers';
+import {f6Handlers,manifestHandler} from './handlers';
 ```
 
 old (the last entry of `HANDLERS` and the array close):
@@ -10883,12 +10996,8 @@ new:
  // f6Handlers takes the flag's tokens (value first, then modifiers) and returns ValidatorFinding[].
  {flag:'--expert',name:'expert',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--expert']([value!,...mods]))},
  {flag:'--audit',name:'audit',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--audit']([value!,...mods]))},
- // --manifest [--online]: notices list checks that were NOT performed (offline CI identity); they never count as a pass.
- {flag:'--manifest',name:'manifest',takesValue:true,modifiers:['--online'],run:async(root,value,mods)=>{
-  const notices:ValidatorFinding[]=[];
-  const findings=await manifestFindings(root,value!,manifestDeps(root,serviceTables(),{online:mods.has('--online')}),{notices});
-  return {...findingsCheck(findings),notices};
- }},
+ // --manifest [--online]: offline the CI identity check is not performed → finding manifest_ci_unverified, ok:false, exit 1 (R2-1).
+ manifestHandler(),
 ];
 ```
 
@@ -13050,9 +13159,9 @@ Expected: exit 0（README 不含令牌、邮箱、桶路径）。
 8. 回放 frozen 经 `run.ts` 运行需要 `S4_TEST_STATE`（内存世界的投影不保证与录制库字节一致）。
 9. §3.2 规则 1 增：`coverage.evaluated = 0` → `incomplete`（全部 skipped 的总体不能 pass）；`reference_regression` 系统侧无值 → `missing`（覆盖率），只有样本侧无值才 `skipped(unavailable)`，`ReferenceResult` 因此多一个 `missing` 键（§5.4 键集合的偏差）。calibration 的总体只含 eligible 预测（Codex 计划第 1 轮 P1-1、P2-5）。
 10. 黄金集头部新增必填 `review_required`；`facts/plan3*`（30 家）必须为 true，且每案 `reviewed_by ≠ recorded_by`（§4.6，P2-3）。
-11. 发布清单新增 `evidence_commit`（= 或晚于 `release_commit`），证据用 `git show <evidence_commit>:<path>` 读、发布输入在 `release_commit` 读；CI 运行须属 origin 仓库，`--online` 再查 conclusion=success 与 head_sha；新鲜度在 `prepared_at` 用 `computeFreshness` 重算；总体、阈值与 gold 块从已认证夹具经 `reduce.ts::reduceForKind` 重算（P1-2、P1-3、P1-4、P2-2）。
+11. 发布清单新增 `evidence_commit`（= 或晚于 `release_commit`），证据用 `git show <evidence_commit>:<path>` 读、发布输入在 `release_commit` 读；CI 运行须属 origin 仓库，`--online` 再查 conclusion=success 与 head_sha，不带 `--online` 是阻断发现 `manifest_ci_unverified`（第 2 轮 R2-1）；新鲜度在 `prepared_at` 用 `computeFreshness` 重算；总体、阈值与 gold 块从已认证夹具经 `reduce.ts::reduceForKind` 重算（P1-2、P1-3、P1-4、P2-2）。
 12. `evaluator_code_version`：检出内只信 `git rev-parse HEAD` 与 `git status --porcelain --untracked-files=normal`，忽略 `VERCEL_GIT_COMMIT_SHA`；`record-replay.ts` 拒绝脏树（P1-7）。官方对账的 `verified.{artifacts,sources}` 由实际完成的检查推出，缺失期望也校验来源字节（P1-8）。
-13. frozen 建库强制初始状态（同库同进程内不同 setup 不得共用 CIK；首次建库要求种子发行人无 filings/facts/隔离项）、每个案例的 setup 先重算再分组（P2-1、P1-6）；`--supersede` 必须是同一 `ObservedDiff` 的账本命中（P1-5）；审计处置按（轮次, 编号）匹配（P1-9）；CI 的 critical frozen 测试写出真实报告并在 job summary 公布 sha256（P1-10）。
+13. frozen 建库在每次新建并迁移的隔离库里进行（`create database f6_frozen_…` + 迁移，建完即删；第 2 轮 R2-2 取代第 1 轮的 CIK 登记与同 setup 跳过检查）、每个案例的 setup 先重算再分组（P2-1、P1-6）；`--supersede` 必须是同一 `ObservedDiff` 的账本命中（P1-5）；审计处置按（轮次, 编号）匹配（P1-9）；CI 的 critical frozen 测试写出真实报告并在 job summary 公布 sha256（P1-10）。
 
 未完成（owner 事项，§16）：生产特权 `report` 与其 `dq_eval_runs` 行、`facts.live.json` 录制与首次 live 运行、首份发布清单与专家记录、CODEOWNERS（D2）。
 
