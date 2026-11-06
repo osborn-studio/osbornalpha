@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>轨迹图与分歧图</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 1400px; padding: 32px; display: flex; flex-direction: column; gap: 24px">
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="row"><span class="lbl-state">轨迹 · 表格视图 Trajectory table</span><span class="tiny">与详情页同一序列；表格切换后显示</span><div class="seg" style="margin-left: auto"><button>图 Chart</button><button class="on">表 Table</button></div></div>
+    <table class="t">
+      <thead><tr><th>区间<span class="en">From → to</span></th><th>评级<span class="en">Rating</span></th><th class="n">目标价<span class="en">Target CNY</span></th><th class="n">变化<span class="en">Δ</span></th><th>report_id（两端）</th><th>available_at</th><th>公式 / 代码</th></tr></thead>
+      <tbody>
+        <tr><td class="m">2025-03-18 → 2025-08-21</td><td>Buy → Buy</td><td class="n"><button class="src">2,100</button> → <button class="src">2,000</button></td><td class="n m">−4.8%</td><td class="hash">r_8a1… → r_c42…</td><td class="m dim">2025-03-18 · 2025-08-21</td><td class="hash">traj/1 · a71e0c2</td></tr>
+        <tr><td class="m">2025-08-21 → 2026-01-09</td><td>Buy → Neutral</td><td class="n"><button class="src">2,000</button> → <button class="src">1,800</button></td><td class="n m">−10.0%</td><td class="hash">r_c42… → r_0d9…</td><td class="m dim">2025-08-21 · 2026-01-09</td><td class="hash">traj/1 · a71e0c2</td></tr>
+        <tr><td class="m">2026-01-09 → 2026-06-12</td><td>Neutral → Buy</td><td class="n"><button class="src">1,800</button> → <button class="src">1,880</button></td><td class="n m">+4.4%</td><td class="hash">r_0d9… → r_77b…</td><td class="m dim">2026-01-09 · 2026-06-12</td><td class="hash">traj/1 · a71e0c2</td></tr>
+        <tr><td class="m">2026-06-12 → 2026-11-01</td><td>Buy → Buy</td><td class="n"><button class="src">1,880</button> → <button class="src">1,980</button></td><td class="n m">+5.3%</td><td class="hash">r_77b… → r_e10…</td><td class="m dim">2026-06-12 · 2026-11-01</td><td class="hash">traj/1 · a71e0c2</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="row"><span class="lbl-state">分歧 · 图 Spread chart</span><span class="tiny">600519.SH · CNY · 各机构最近一篇 · 12 个月窗口</span><div class="seg" style="margin-left: auto"><button class="on">图 Chart</button><button>表 Table</button></div></div>
+    <svg viewBox="0 0 1340 260" width="100%" role="img" aria-label="三家机构对 600519.SH 的最新目标价与各自报告时价格的点线图；数值见下方表格">
+      <g stroke="rgba(255,255,255,.06)"><line x1="200" y1="20" x2="200" y2="220"></line><line x1="560" y1="20" x2="560" y2="220"></line><line x1="920" y1="20" x2="920" y2="220"></line><line x1="1280" y1="20" x2="1280" y2="220"></line></g>
+      <g fill="#8b8b94" font-size="11" font-family="Geist Mono, monospace"><text x="200" y="240" text-anchor="middle">1,400</text><text x="560" y="240" text-anchor="middle">1,600</text><text x="920" y="240" text-anchor="middle">1,800</text><text x="1280" y="240" text-anchor="middle">2,000</text></g>
+      <g fill="#fafafa" font-size="13" font-family="Geist, sans-serif"><text x="20" y="64">Goldman Sachs</text><text x="20" y="124">UBS</text><text x="20" y="184">HSBC</text></g>
+      <line x1="322" y1="60" x2="1244" y2="60" stroke="#a1a1aa" stroke-width="1.5"></line>
+      <circle cx="322" cy="60" r="5" fill="#141417" stroke="#a1a1aa" stroke-width="2"></circle><circle cx="1244" cy="60" r="7" fill="#ca8a04"></circle>
+      <line x1="384" y1="120" x2="596" y2="120" stroke="#a1a1aa" stroke-width="1.5"></line>
+      <circle cx="384" cy="120" r="5" fill="#141417" stroke="#a1a1aa" stroke-width="2"></circle><circle cx="596" cy="120" r="7" fill="#ca8a04"></circle>
+      <circle cx="299" cy="180" r="5" fill="#141417" stroke="#a1a1aa" stroke-width="2"></circle><text x="320" y="184" fill="#8b8b94" font-size="12" font-family="Geist, sans-serif">目标价不可公开</text>
+    </svg>
+    <div class="row tiny" style="gap: 16px"><span class="row" style="gap: 6px"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="#141417" stroke="#a1a1aa" stroke-width="2"></circle></svg>报告时价格</span><span class="row" style="gap: 6px"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#ca8a04"></circle></svg>目标价</span><span>不画最新价；不同币种不放在同一轴。</span></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="row"><span class="lbl-state">分歧 · 表 Spread table</span></div>
+    <table class="t">
+      <thead><tr><th>机构</th><th>report_id</th><th>日期</th><th>评级</th><th class="n">报告时价格</th><th class="n">目标价</th><th class="n">空间</th></tr></thead>
+      <tbody>
+        <tr><td>Goldman Sachs</td><td class="hash">r_e10…</td><td class="m dim">2026-11-01</td><td><span class="chip sq">买入</span></td><td class="n m">1,468.00</td><td class="n"><button class="src">1,980.00</button></td><td class="n m">+34.9%</td></tr>
+        <tr><td>UBS</td><td class="hash">r_4f3…</td><td class="m dim">2026-09-12</td><td><span class="chip sq">持有</span></td><td class="n m">1,502.10</td><td class="n"><button class="src">1,620.00</button></td><td class="n m">+7.8%</td></tr>
+        <tr><td>HSBC</td><td class="hash">r_91a…</td><td class="m dim">2026-07-03</td><td><span class="chip sq">买入</span></td><td class="n m">1,455.00</td><td class="n wh">—（许可不允许公开）</td><td class="n m fog">—</td></tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

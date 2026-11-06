@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>发布对话框</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa scrim" style="width: 1440px; height: 1000px; padding: 48px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; align-items: start">
+  <div role="dialog" aria-label="发布 有阻断" style="background: #141417; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; box-shadow: 0 24px 64px rgba(0,0,0,.6); display: flex; flex-direction: column">
+    <div style="padding: 20px 24px; border-bottom: 1px solid rgba(255,255,255,.06)"><div class="lbl-state">状态 A · 有阻断</div><h2 class="h2" style="margin-top: 6px">发布这份报告？</h2><div class="cap" style="margin-top: 4px">Goldman Sachs · 600519.SH · 2026-11-01</div></div>
+    <div style="padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+      <div class="ml">阻断 Blockers（2）</div>
+      <div class="errcard" style="font-size: 13px">#15 公开标题含机构名，与原题过近 · <a href="Review.dc.html">去修改</a></div>
+      <div class="errcard" style="font-size: 13px">D1 许可确认未完成：对外开关关闭，只能在预览中查看</div>
+      <div class="ml" style="margin-top: 6px">将公开 Will be public</div>
+      <ul class="cap" style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px"><li>元数据、评级原文与标准化</li><li>目标价（许可 v3 允许）</li><li>独立摘要（AI 标注）</li><li>片段 2 段（≤ 80 字）</li></ul>
+    </div>
+    <div class="row" style="padding: 16px 24px; border-top: 1px solid rgba(255,255,255,.06); justify-content: flex-end"><button class="btn ghost">取消</button><button class="btn pri dis" disabled>发布</button></div>
+  </div>
+  <div role="dialog" aria-label="发布 完成" style="background: #141417; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; box-shadow: 0 24px 64px rgba(0,0,0,.6); display: flex; flex-direction: column">
+    <div style="padding: 20px 24px; border-bottom: 1px solid rgba(255,255,255,.06)"><div class="lbl-state">状态 B · 已发布</div><h2 class="h2" style="margin-top: 6px">已发布</h2></div>
+    <div style="padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+      <dl class="kv" style="grid-template-columns: 130px 1fr">
+        <dt>发布快照</dt><dd class="hash">pub 5d2e…9f01（不可变）</dd>
+        <dt>规则回执</dt><dd class="hash">receipt 0b8… · broker-rules/1</dd>
+        <dt>代码版本</dt><dd class="m">a71e0c2</dd>
+        <dt>F4 登记</dt><dd class="cap">outbox claim.register 已入队</dd>
+      </dl>
+      <div class="callout" style="font-size: 12px">取消发布 / 撤回会让公开路由返回 404；快照保留用于审计。</div>
+    </div>
+    <div class="row" style="padding: 16px 24px; border-top: 1px solid rgba(255,255,255,.06); justify-content: flex-end"><a class="btn" href="Preview.dc.html">查看预览</a><button class="btn pri">完成</button></div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

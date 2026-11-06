@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 总览</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1500px">
+  <header class="top"><div class="wrap" style="display: flex; align-items: center; gap: 16px; height: 56px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><span class="cap">研报管理 Broker research</span></div></header>
+  <div class="wrap" style="display: flex; gap: 24px; flex-wrap: wrap; padding-top: 24px; padding-bottom: 48px">
+    <nav aria-label="管理导航" style="flex: 1 1 200px; max-width: 220px; display: flex; flex-direction: column; gap: 2px">
+      <a class="btn ghost" href="#" style="justify-content: flex-start; color: #ca8a04; background: rgba(202,138,4,.12)">总览 Overview</a>
+      <a class="btn ghost" href="Upload.dc.html" style="justify-content: flex-start">上传 Upload</a>
+      <a class="btn ghost" href="Licences.dc.html" style="justify-content: flex-start">许可 Licences</a>
+      <a class="btn ghost" href="Document.dc.html" style="justify-content: flex-start">文档 Documents</a>
+      <a class="btn ghost" href="Review.dc.html" style="justify-content: flex-start">复核 Review</a>
+      <a class="btn ghost" href="#" style="justify-content: flex-start">机构 Institutions</a>
+      <a class="btn ghost" href="AccessLog.dc.html" style="justify-content: flex-start">访问日志 Access log</a>
+    </nav>
+    <main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+      <h1 class="h1">总览 <span class="en" style="font-size: 16px">Overview</span></h1>
+
+      <section class="card pad" aria-label="对外开关" style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+        <div style="flex: 1 1 280px; display: flex; flex-direction: column; gap: 8px">
+          <div class="row"><span class="h3">对外开关 Public switch</span><span class="chip">关闭 off</span></div>
+          <p class="cap" style="margin: 0">开关在数据库层（broker_research_settings.public_enabled）。关闭时公开视图返回 0 行，公开路由 404；管理员只看预览。</p>
+          <button class="btn pri dis" disabled style="align-self: flex-start">打开对外 Enable public</button>
+          <span class="tiny">三项门禁全部勾选后才可打开。</span>
+        </div>
+        <ul style="flex: 1 1 320px; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px">
+          <li class="step"><span class="no">1</span><div><div class="h3">D1 许可确认</div><div class="cap">owner 尚未确认 · 任何对外功能的前置条件</div></div></li>
+          <li class="step done"><span class="no">✓</span><div><div class="h3">test:storage 回执</div><div class="cap">通过 · <span class="m">2026-11-03 14:20</span> · 本地 Supabase 栈</div></div></li>
+          <li class="step done"><span class="no">✓</span><div><div class="h3">黄金集回执</div><div class="cap">passed · <span class="m">2026-11-02</span></div></div></li>
+        </ul>
+      </section>
+
+      <section style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px" aria-label="计数">
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa"><div class="ml">待解析</div><div class="m" style="font-size: 22px">3</div></a>
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa"><div class="ml">待抽取</div><div class="m" style="font-size: 22px">2</div></a>
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa; border-color: rgba(202,138,4,.4)"><div class="ml">待复核</div><div class="m ac" style="font-size: 22px">7</div></a>
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa"><div class="ml">待发布</div><div class="m" style="font-size: 22px">4</div></a>
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa"><div class="ml">已发布</div><div class="m" style="font-size: 22px">186</div></a>
+        <a class="card pad" href="#" style="text-decoration: none; color: #fafafa"><div class="ml">已撤回</div><div class="m" style="font-size: 22px">2</div></a>
+      </section>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px">
+        <section class="card pad">
+          <div class="h3" style="margin-bottom: 10px">黄金集最新回执 <span class="en">Gold set receipt</span></div>
+          <dl class="kv" style="grid-template-columns: 130px 1fr">
+            <dt>五元组</dt><dd class="m" style="font-size: 12px">n=40 · precision 0.98 · recall 0.96 · exact 0.94 · abstain 0.03</dd>
+            <dt>最差字段</dt><dd class="m" style="font-size: 12px">valuation_params.wacc · 0.88</dd>
+            <dt>passed</dt><dd><span class="chip ac">true</span></dd>
+            <dt>代码 · 规则</dt><dd class="m" style="font-size: 12px">a71e0c2 · broker-rules/1</dd>
+          </dl>
+        </section>
+        <section class="card pad">
+          <div class="h3" style="margin-bottom: 10px">最近批次 <span class="en">Recent batches</span></div>
+          <table class="t dense"><tbody>
+            <tr><td class="m dim">11-03 02:00</td><td class="tiny">cron · summaries</td><td><span class="chip">success</span></td></tr>
+            <tr><td class="m dim">11-02 09:41</td><td class="tiny">extract · doc 8c1…</td><td><span class="chip warn">partial</span></td></tr>
+            <tr><td class="m dim">11-01 21:10</td><td class="tiny">parse · doc 8c1…</td><td><span class="chip">success</span></td></tr>
+          </tbody></table>
+        </section>
+        <section class="card pad">
+          <div class="row" style="margin-bottom: 10px"><span class="h3">open 隔离项</span><span class="chip warn m">3</span><a href="#" style="margin-left: auto; font-size: 12px">/admin/dq →</a></div>
+          <table class="t dense"><tbody>
+            <tr><td class="tiny">span_not_found</td><td class="cap">片段在页文本中未逐字命中 · report r_44c…</td></tr>
+            <tr><td class="tiny">ticker_unresolved</td><td class="cap">“700 HK” 解析不唯一</td></tr>
+            <tr><td class="tiny">currency_mismatch</td><td class="cap">目标价 HKD，报告时价格 CNY</td></tr>
+          </tbody></table>
+        </section>
+        <section class="card pad">
+          <div class="h3" style="margin-bottom: 10px">需要处理 <span class="en">Needs attention</span></div>
+          <div class="row" style="justify-content: space-between; padding: 6px 0"><span class="cap">有更新映射可用的已发布报告</span><a class="chip m" href="#" style="text-decoration: none">5</a></div>
+          <div class="row" style="justify-content: space-between; padding: 6px 0"><span class="cap">outbox 失败事件（claim.register）</span><a class="chip warn m" href="#" style="text-decoration: none">1</a></div>
+          <div class="row" style="justify-content: space-between; padding: 6px 0"><span class="cap">许可实质性修改后待确认</span><a class="chip m" href="Licences.dc.html" style="text-decoration: none">1</a></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

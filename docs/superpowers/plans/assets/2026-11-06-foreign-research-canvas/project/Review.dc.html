@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 复核双栏</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1920px; height: 1500px; display: flex; flex-direction: column">
+  <header class="top"><div style="display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 32px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="AdminOverview.dc.html" class="cap">研报管理</a><span class="tiny">/ 复核 r_e10…</span><div class="row" style="margin-left: auto"><span class="chip">字段 9 / 11 已确认</span><a class="btn pri" href="Publish.dc.html">发布… Publish</a></div></div></header>
+  <div class="row" style="margin: 16px 32px 0; padding: 10px 14px; border: 1px solid rgba(234,179,8,.45); border-radius: 6px; background: rgba(234,179,8,.08); font-size: 13px; flex-wrap: nowrap"><span class="dot warn"></span><span>stale_run：有更新的抽取运行 run 2f1…（11-02 09:41）。当前字段基于 run 9d0…；切换会保留人工确认的字段。</span><button class="btn sm" style="margin-left: auto">切换到最新运行</button></div>
+  <div style="flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 380px; gap: 20px; padding: 16px 32px 32px; min-height: 0">
+    <section class="card" style="padding: 0; display: flex; flex-direction: column; min-height: 0">
+      <div class="row" style="padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.06)"><span class="h3">原文 · 第 1 页</span><span class="tiny">私有 · 仅管理员</span><div class="row" style="margin-left: auto"><button class="btn sm">← 上一页</button><span class="m cap">1 / 18</span><button class="btn sm">下一页 →</button></div></div>
+      <div style="padding: 24px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.8; color: #a1a1aa">
+        <div class="sk" style="height: 14px; width: 60%"></div>
+        <div style="color: #fafafa; font-size: 16px; font-weight: 600">[报告首页文本 · 解析产物 5d9…]</div>
+        <div>[正文段落]……<span style="background: rgba(202,138,4,.28); color: #fafafa; border-bottom: 2px solid #ca8a04; padding: 0 2px">Rating: Buy</span>……<span style="background: rgba(202,138,4,.28); color: #fafafa; border-bottom: 2px solid #ca8a04; padding: 0 2px">12-month price target: CNY 1,980</span>……</div>
+        <div class="sk" style="height: 12px; width: 92%"></div><div class="sk" style="height: 12px; width: 88%"></div><div class="sk" style="height: 12px; width: 95%"></div>
+        <div>[脚注] <span style="background: rgba(202,138,4,.28); color: #fafafa; border-bottom: 2px solid #ca8a04; padding: 0 2px">Priced as of 30 Oct 2026: CNY 1,468.00</span></div>
+        <div style="outline: 1px dashed #ca8a04; outline-offset: 3px; color: #fafafa">[框选中的片段文本，用于“评级依据”]</div>
+        <div class="sk" style="height: 12px; width: 70%"></div>
+      </div>
+      <div class="row" style="margin-top: auto; padding: 10px 16px; border-top: 1px solid rgba(255,255,255,.06)"><span class="tiny">解析覆盖：18 / 18 页有文本 · 表格 6 · OCR 0</span><button class="btn ghost sm" style="margin-left: auto">解析覆盖 override</button></div>
+    </section>
+
+    <section class="card" style="padding: 0; display: flex; flex-direction: column; min-height: 0">
+      <div class="tabs" style="padding: 0 12px"><button class="on">600519.SH</button><button>报告级字段</button><button>片段</button><button>标题</button></div>
+      <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: auto">
+        <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 10px 12px; align-items: center">
+          <span class="cap">评级原文</span><input class="inp" value="Buy" aria-label="评级原文"><span class="chip ac">人工确认 · p.1</span>
+          <span class="cap">标准化</span><span class="chip sq" style="justify-self: start">买入 buy · rating-map/2</span><span class="tiny">自动</span>
+          <span class="cap">目标价</span><div class="row" style="flex-wrap: nowrap"><input class="inp m" value="1980.00" aria-label="目标价"><button class="sel">CNY ▾</button><button class="sel">12M ▾</button></div><span class="chip ac">人工确认 · p.1</span>
+          <span class="cap">报告时价格</span><div class="row" style="flex-wrap: nowrap"><input class="inp m" value="1468.00" aria-label="报告时价格"><button class="sel">CNY ▾</button><input class="inp m" value="2026-10-30" aria-label="价格日期" style="width: 130px"></div><span class="chip">LLM 抽取 · p.1</span>
+          <span class="cap">WACC</span><input class="inp m inp focus" value="8.2%" aria-label="WACC"><span class="chip">LLM 抽取 · p.14</span>
+          <span class="cap">永续增长</span><input class="inp m" value="3.0%" aria-label="永续增长"><span class="chip ac">人工新增 · p.14</span>
+          <span class="cap">EPS 预测</span><div class="row"><span class="chip">absent · 报告明确没有</span><button class="btn ghost sm">撤销 absent</button></div><span class="tiny">不补数</span>
+        </div>
+        <div class="tiny">类型化编辑：数值、币种、期限、日期各自校验（typed/1）；跨度须在页文本中逐字命中（R1），否则不能确认。</div>
+        <hr class="hr">
+        <div class="h3">片段 · 评级依据</div>
+        <div class="callout" style="font-size: 12px">“[框选中的片段文本]” — p.2</div>
+        <div class="row"><span class="tiny">剩余字数</span><div class="bar" style="width: 160px"><i style="width: 62%"></i></div><span class="m tiny">50 / 80</span></div>
+        <hr class="hr">
+        <div class="h3">公开标题 title_public</div>
+        <input class="inp inp bad" value="Goldman: Moutai margin resilience" aria-label="公开标题">
+        <span style="font-size: 12px; color: #fafafa">阻断第 15 条：公开标题含机构名（与原题过近）。请改写。</span>
+      </div>
+    </section>
+
+    <aside class="card pad" aria-label="阻断项" style="display: flex; flex-direction: column; gap: 14px">
+      <div class="h3">阻断项 <span class="en">Blockers</span></div>
+      <div class="ml">复核就绪 Review-ready</div>
+      <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px">
+        <li class="row" style="flex-wrap: nowrap"><span class="dot ok"></span>必填字段齐全（评级、发布日期）</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot ok"></span>全部跨度逐字命中</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot warn"></span>2 个字段仍是 LLM 抽取，未人工确认</li>
+      </ul>
+      <div class="ml">发布就绪 Publish-ready</div>
+      <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px">
+        <li class="row" style="flex-wrap: nowrap"><span class="dot err"></span>#15 公开标题不合格</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot err"></span>D1 许可确认未完成（全局）</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot ok"></span>片段字数 ≤ 许可上限</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot ok"></span>摘要数字全部落在生效字段上</li>
+        <li class="row" style="flex-wrap: nowrap"><span class="dot ok"></span>币种一致</li>
+      </ul>
+      <button class="btn pri dis" disabled>发布 Publish（2 项阻断）</button>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

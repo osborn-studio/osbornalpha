@@ -1,0 +1,37 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-04T19:20:00Z"},
+  "title": "外资研报 Foreign Research",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1440, "h": 1400, "title": "1 列表页 · 正常 List", "expand": "fill"},
+    "Detail.dc.html": {"x": 1520, "y": 0, "w": 1440, "h": 2500, "title": "2 详情页 Report detail", "expand": "fill"},
+    "Institution.dc.html": {"x": 3040, "y": 0, "w": 1440, "h": 1400, "title": "3 机构页 Institution", "expand": "fill"},
+    "ListStates.dc.html": {"x": 4560, "y": 0, "w": 1440, "h": 1500, "title": "1/2/4 列表三态 · 404 · /stock 块"},
+    "Drawer.dc.html": {"x": 0, "y": 2920, "w": 1440, "h": 1200, "title": "2 来源抽屉与标题标注 Source drawer"},
+    "Charts.dc.html": {"x": 1520, "y": 2920, "w": 1440, "h": 1400, "title": "5 轨迹图与分歧图 (SVG + 表格)"},
+    "Bilingual.dc.html": {"x": 3040, "y": 2920, "w": 1920, "h": 1300, "title": "14 中英对照 zh / en"},
+    "AdminOverview.dc.html": {"x": 0, "y": 4740, "w": 1440, "h": 1500, "title": "6 管理员总览（三项门禁）", "expand": "fill"},
+    "Upload.dc.html": {"x": 1520, "y": 4740, "w": 1440, "h": 1150, "title": "7 上传流程 Upload", "expand": "fill"},
+    "Licences.dc.html": {"x": 3040, "y": 4740, "w": 1440, "h": 1350, "title": "8 许可 Licences", "expand": "fill"},
+    "Document.dc.html": {"x": 4560, "y": 4740, "w": 1440, "h": 1400, "title": "9 文档页 Document", "expand": "fill"},
+    "Review.dc.html": {"x": 0, "y": 6660, "w": 1920, "h": 1500, "title": "10 复核双栏 Review"},
+    "Publish.dc.html": {"x": 2000, "y": 6660, "w": 1440, "h": 1000, "title": "11 发布对话框 Publish"},
+    "AccessLog.dc.html": {"x": 3520, "y": 6660, "w": 1440, "h": 1000, "title": "12 访问日志 Access log", "expand": "fill"},
+    "Preview.dc.html": {"x": 5040, "y": 6660, "w": 1440, "h": 1200, "title": "13 预览页 Preview (未对外)", "expand": "fill"},
+    "M-List.dc.html": {"x": 0, "y": 8580, "w": 390, "h": 1300, "title": "移动 · 列表 Mobile list"},
+    "M-Detail.dc.html": {"x": 470, "y": 8580, "w": 390, "h": 2000, "title": "移动 · 详情 Mobile detail"}
+  },
+  "order": ["Main.dc.html", "Detail.dc.html", "Institution.dc.html", "ListStates.dc.html", "Drawer.dc.html", "Charts.dc.html", "Bilingual.dc.html", "AdminOverview.dc.html", "Upload.dc.html", "Licences.dc.html", "Document.dc.html", "Review.dc.html", "Publish.dc.html", "AccessLog.dc.html", "Preview.dc.html", "M-List.dc.html", "M-Detail.dc.html"],
+  "notes": {
+    "t1": {"x": 0, "y": -300, "text": "公开页面 Public — /intel/foreign-research", "kind": "title1", "maxW": 6000},
+    "t2": {"x": 0, "y": 2620, "text": "抽屉、图表与中英对照 Drawer, charts, zh/en", "kind": "title1", "maxW": 4960},
+    "t3": {"x": 0, "y": 4440, "text": "管理员 Admin — /admin/broker-research", "kind": "title1", "maxW": 6000},
+    "t4": {"x": 0, "y": 6360, "text": "复核、发布、日志、预览 Review → publish", "kind": "title1", "maxW": 6480},
+    "t5": {"x": 0, "y": 8280, "text": "移动 Mobile (390)", "kind": "title1", "maxW": 860},
+    "s1": {"x": -620, "y": 0, "w": 520, "size": "m", "fill": "gray", "text": "规格 Spec: docs/superpowers/specs/2026-11-04-foreign-research-design.md §9（第 4 稿）\n\n画布覆盖 §9.6 全部 14 项；框名前的数字 = 清单编号。\n\n约定\n• 所有机构评级、目标价与数值均为版式示意，不是事实，也不代表任何机构的观点。\n• 原文、全文、页面图像只在私有桶；公开页只有元数据、独立摘要与 ≤ N 字片段。\n• 详情页不显示最新价。\n• 机构命中率是判断，只在 F4 结算后出现；样本不足写“样本不足”。\n• 许可确认（D1）前公开路由 404，管理员只看预览。"},
+    "s2": {"x": -620, "y": 860, "w": 520, "size": "m", "fill": "gray", "text": "Token 偏差：三级文字用 #8b8b94 代替 #52525b（对比度）。评级标准化用中性描边徽标，不用红绿。"}
+  },
+  "designSystems": []
+}
