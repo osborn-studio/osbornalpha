@@ -18,6 +18,10 @@ import {pgFactsDb} from './pg-facts-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
+// Plan 3 (20261107091000) redefines fact_promote_rows, filings_limited_update, read_facts and
+// replace_financial_metrics: replaying the plan-2 file alone would expose the plan-2 versions to
+// suites running in parallel, so both files replay in one transaction.
+const EXTENSIONS='supabase/migrations/20261107091000_facts_extensions.sql';
 const TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
 
 // Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
@@ -141,7 +145,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.fact_promote_rows(uuid,text,uuid[])')).toBe(false);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+  await expect(replayMigration(admin,`${readFileSync(MIGRATION,'utf8')}\n${readFileSync(EXTENSIONS,'utf8')}`)).resolves.toBeUndefined();
  },60000);
 
  it('enforces the candidate key (nulls not distinct), both composite foreign keys, the period checks, and keeps 20-digit values exact',async()=>{
