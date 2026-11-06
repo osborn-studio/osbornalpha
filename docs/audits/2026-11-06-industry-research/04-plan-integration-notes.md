@@ -93,3 +93,33 @@ Found by the new `next build` gate (not by Codex): `tushare-industry.ts` and `se
 Verification on a repo copy rebuilt from the plan: tsc 0 industry errors; eslint industry dirs clean; vitest 71 files /
 569 tests pass; test:db industry files 49 pass (7 + 35 + 7); `next build` succeeds (all industry routes/pages compiled;
 the Task 18/19 INDUSTRY blocks in `/intel` and `/stock/[ticker]` were not applied in the copy; E2E not run).
+
+## Round 2 fixes (`docs/audits/2026-11-06-industry-research/08-codex-plan-round2.md`)
+
+- **R2-1 (P1, manifest GC reclaim).** `industry_manifests` gains `object_path` (check: `sha256/<hash>/<uuid>.json.gz`)
+  and `gc_claim uuid`. `put_industry_manifest` assigns a fresh generation path on each new registration (a touch keeps
+  it); `gc_industry_manifest_candidates` returns `[{hash, object_path, claim}]` with a new token;
+  `delete_industry_manifests(jsonb)` deletes only rows whose `gc_claim` still equals the token. Contract:
+  `manifestObjectPath`, `ManifestGcClaim`, `remove({hash,objectPath}[])`, `deleteManifestIndex({hash,claim}[])`.
+  `manifest.ts` reads and writes through the index path (`isManifestObjectPath` replaces `manifestPath`); the replay
+  test resolves paths through the DB. New tests: SQL "stale collector after a reclaim" (Task 2) and the
+  `manifest.test` reclaim → re-upload → stale delete case (the new object survives and `get(hash)` works).
+- **R2-2 (P1, late delisting on a closed window).** New SQL `correct_industry_membership_windows(batch, issuer,
+  scheme, version, source, rows)`. It takes an issuer lock and requires the record to be current and resolved to the
+  issuer. For each level, the old ok row becomes superseded (`superseded_by` points to the new row) and a corrected
+  row is inserted with the same `source_membership_id`. Same window counts as a duplicate. Implemented in all three
+  `IndustryDb` impls, with a contract test. `reconcileDelistings` now corrects instead of quarantining (records
+  `delistCorrected`); it quarantines `membership_delist_conflict` only when the DB rejects. Resolve test: 600090.SH is
+  closed 2017-06-29, then a 2016-12-31 delisting is learned. Result: rows superseded and linked, no member at
+  2017-03-31, still a member at 2016-06-30, and the next run is idempotent.
+- **R2-3 (P2, unfenced SIC writes).** `apply_sic_memberships` gains `p_lease_batch` and `p_sec_submissions`. After
+  the issuer lock it runs `SELECT … FOR UPDATE` on the scope row and requires the lease to match and be unexpired,
+  else `lease_lost`. `sec_submissions` provenance moves into the same transaction (a null code means provenance only
+  and returns `none`). `runMembershipsSic` no longer updates `issuers` directly; on `lease_lost` it neither
+  quarantines nor finishes. New error code `lease_lost`. Tests: SQL lease_lost and expired lease; memory contract;
+  `sic.test` takeover (the old worker's apply is rejected with no rows or provenance written; the new holder inserts).
+- Skeleton contract updated (types.ts is now 178 lines; the Task 3 awk expectation is updated). A7, B1b and B1c are
+  amended. Deviations 61–63 were added and section 18 was regenerated (63 rows).
+- Verification on the rebuilt repo copy: tsc 0 errors; eslint clean on the industry dirs plus scripts; vitest
+  71 files / 573 tests pass (+4); DB tests 51 pass (functions 37, industry 7, sync 7). `next build` was not re-run
+  this round (no page or route code changed).

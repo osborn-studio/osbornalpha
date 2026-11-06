@@ -221,16 +221,18 @@ export interface AggregateManifest{
  members:ManifestMember[];unresolved:ManifestUnresolved[];member_state_revs:{issuer_id:string;state_rev:number}[];
  facts:ManifestFact[];derived:ManifestDerived[];roles:ManifestRole[];cells:ManifestCell[];warnings:string[];
 }
+/** One GC claim: the index row's incarnation object path and the claim token (Codex plan audit round 2 R2-1). */
+export interface ManifestGcClaim{hash:string;objectPath:string;claim:string}
 export interface ManifestStore{
- /** Registers the index row FIRST (refused with manifest_gc_in_progress while GC holds a claim), then uploads the gzip of the canonical JSON at sha256/<hash>.json.gz. Idempotent. */
+ /** Registers the index row FIRST (refused with manifest_gc_in_progress while GC holds a claim), then uploads the gzip of the canonical JSON at the row's object_path (sha256/<hash>/<upload uuid>.json.gz). Idempotent. */
  put(kind:RunKind,canonical:string):Promise<{hash:string;existed:boolean}>;
  get(hash:string):Promise<AggregateManifest>;
- remove(hashes:string[]):Promise<{removed:string[];failed:string[]}>;
+ remove(objects:{hash:string;objectPath:string}[]):Promise<{removed:string[];failed:string[]}>;
 }
 
 export interface FreshnessRow{dataset:string;status:'fresh'|'stale'|'error'|'missing';last_ok_at:string|null}
 
-export type IndustryDbErrorCode='membership_conflict'|'membership_overlap'|'same_day_change'|'incomplete_run'|'obsolete_run'|'dependencies_incomplete'|'dependency_regression'|'pairs_mismatch'|'illegal_transition'|'run_not_building'|'fetch_event_payload_changed'|'manifest_gc_in_progress'|'unknown';
+export type IndustryDbErrorCode='membership_conflict'|'membership_overlap'|'same_day_change'|'incomplete_run'|'obsolete_run'|'dependencies_incomplete'|'dependency_regression'|'pairs_mismatch'|'illegal_transition'|'run_not_building'|'fetch_event_payload_changed'|'manifest_gc_in_progress'|'lease_lost'|'unknown';
 export class IndustryDbError extends Error{constructor(public code:IndustryDbErrorCode,message?:string){super(message??code);this.name='IndustryDbError';}}
 
 export interface IndustryDb{
@@ -245,7 +247,10 @@ export interface IndustryDb{
  recordResolutionError(ids:string[],error:{code:string;at:string;detail?:string}):Promise<number>;
  // memberships (rpc apply_industry_memberships / apply_sic_memberships)
  applyMemberships(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,rows:MembershipTarget[],sourceIds:string[],resolution:Record<string,unknown>):Promise<ApplyMembershipsResult>;
- applySicMembership(batch:string,issuer:string,observed:string,code:string,provenance:Record<string,unknown>):Promise<'inserted'|'duplicate'|'changed'>;
+ /** Rewrites already-closed ok windows of ONE current, resolved record (superseded → corrected row; R2-2). */
+ correctMembershipWindows(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,sourceId:string,rows:MembershipTarget[]):Promise<ApplyMembershipsResult>;
+ /** Lease-fenced (R2-3): lease_lost unless industry_sync_scope(issuer,'sic') is leased to fence.leaseBatch and unexpired; code null = provenance only ('none'). */
+ applySicMembership(batch:string,issuer:string,observed:string,code:string|null,provenance:Record<string,unknown>,fence:{leaseBatch:string;secSubmissions?:Record<string,unknown>|null}):Promise<'inserted'|'duplicate'|'changed'|'none'>;
  /** All rows of the code (any status) whose windows can intersect `on`; callers filter with memberships.ts */
  membershipCandidates(q:{scheme:Scheme;version:SchemeVersion;code:string;level:number;on:string}):Promise<MembershipRow[]>;
  membershipsOfIssuer(issuer:string,q:{scheme?:Scheme;on?:string}):Promise<MembershipRow[]>;
@@ -271,8 +276,9 @@ export interface IndustryDb{
  publishedValuations(run:string,filter:{codes?:string[];from?:string;to?:string}):Promise<ValuationCellRow[]>;
  // manifests index (rpc put_industry_manifest / gc_industry_manifest_candidates / delete_industry_manifests)
  registerManifest(hash:string,kind:RunKind,byteLength:number):Promise<boolean>;
- manifestGcCandidates(limit:number):Promise<string[]>;
- deleteManifestIndex(hashes:string[]):Promise<number>;
+ manifestObjectPath(hash:string):Promise<string|null>;
+ manifestGcCandidates(limit:number):Promise<ManifestGcClaim[]>;
+ deleteManifestIndex(claims:{hash:string;claim:string}[]):Promise<number>;
  pruneRuns(keep:number):Promise<number>;
  // misc
  stateFingerprint(market:'CN'):Promise<{takenAt:string;revs:Map<string,number>}>;
@@ -303,7 +309,7 @@ export type {FactRow};
 - 数据集键：`schemeDatasetKey(scheme,version)='scheme:'+scheme+':'+version`。
 - 错误映射：SQL `raise exception '<code>'`（如 `membership_overlap`）→ `IndustryDbError(code)`；`23P01` → `membership_overlap`；`42501` → `IndustryDbError('unknown','permission_denied')`（测试按 SQLSTATE 断言）。
 - `IndustryDeps.tushare` 返回已用计划二 `decodeColumns` 无损解码前的原始列与行，适配器自己按字段 schema 解码；缺省 `tushareCallRaw` 包装（Task 5）。
-- 契约变更记录（集成）：`ManifestRole` 加 `duration:AggDuration`（同一指标在 12-31 有 12M 与 3M 两格，角色必须分格；清单 `roles` 全序 `(metric, duration, issuer_id)`）。`types.ts` 由 Task 3 Step 1 用 awk 从上面的代码块逐字抽取（172 行），改契约只改这里。
+- 契约变更记录（集成）：`ManifestRole` 加 `duration:AggDuration`（同一指标在 12-31 有 12M 与 3M 两格，角色必须分格；清单 `roles` 全序 `(metric, duration, issuer_id)`）。`types.ts` 由 Task 3 Step 1 用 awk 从上面的代码块逐字抽取（178 行），改契约只改这里。
 - 跨任务的语义与各任务导出的精确签名见下一节《跨任务接口约定》；规格偏差见《已知规格偏差》。
 
 
@@ -323,7 +329,7 @@ export type {FactRow};
 - **A4 归属应用**：`MembershipTarget.provenance.source_membership_id` 写进列 `source_membership_id`（申万三行必须带上）。来源记录须 `current`、方案相同、未解析或已解析到同一发行人，否则 `membership_conflict`。被取代的旧来源记录（沿 `superseded_by` 链）的 `ok` 行按**同一层级**配对取代（`superseded_by` = 新行）。函数失败整体回滚、不写 `resolution_error`；调用方随后 `recordResolutionError(ids,{code,at,detail?})`（只作用于 current 且未解析的记录）。重复应用同一记录 → 全部 `duplicates`，`membership_ids` 返回已存在行。
 - **A5 SIC**：`applySicMembership` 固定版本 `'sec-current'`；需先有 `(sic, sec-current, code)` 节点（Task 9 平铺为 level 1、`parent_code null`），否则 `IndustryDbError('unknown','unknown_sic_code: …')`；新行 `level` 取节点的 level（=1）、`source='sec:submissions'`、`provenance.availability='observed'`；同日或更早再变更 → `same_day_change`。
 - **A6 观测**：`apply_observations` **自己**在同一事务内写 `mark_revised`/`official_revised` 隔离项（dataset `industry.marks`/`industry.official`，`natural_key` = `'<ticker>:<trade_date>'` / `'<scheme>:<version>:<code>:<trade_date>:<metric>'`，每键至多一个 open 项）；Task 13 不再写。观测内容 = `close`、`total_share`、`free_share`（`free_share` 可空，用 `is not distinct from` 比较；`free_share` 的修订也产生新观测；`payload_hash` 含它）。计数：`inserted` = 该键此前无当前 `ok` 观测而插入；`superseded` = 取代当前 `ok` 观测而插入；`duplicates` = 未插入（同内容，或同事件回执已存在）。`status:'quarantined'` 的输入行作为证据存入、永不成为当前观测（`currentMarksOn` 只返回 `ok`）。同一事件同键载荷变化 → `fetch_event_payload_changed`。`security_marks.ticker` 外键到 `stocks_universe`：未知 ticker 让整次调用失败（`unknown`），调用前过滤。每次调用原子；适配器每 500 行一次调用。
-- **A7 清单索引、存储与 GC 认领协议**（Codex 计划审计第 1 轮 #4）：`manifestGcCandidates` 即**认领**：在 `FOR UPDATE SKIP LOCKED` 下取年龄 ≥ 24 h、无任何 run（任意状态）引用、未被认领（或认领超过 1 h、GC 中途死掉）的行，写 `gc_claimed_at = now()`（tombstone）后返回；被认领的哈希 `registerManifest` 抛 `manifest_gc_in_progress`，`stageMetricRows`/估值暂存引用它也抛 `manifest_gc_in_progress`（暂存先对被引用的索引行加 `FOR SHARE`，故并发 GC 认领会跳过它们）；`deleteManifestIndex` 只删已认领且仍未被引用的行。`ManifestStore.put`（Task 11）**先** `registerManifest`（刷新年龄或被拒）**再**上传对象（`upsert:false`，409 视为已存在；对象缺失时重新上传）。`existed = 对象已存在 || 索引已存在`。GC 之后再 put 同一哈希 = 新登记 + 重新上传。
+- **A7 清单索引、存储与 GC 认领协议**（Codex 计划审计第 1 轮 #4）：`manifestGcCandidates` 即**认领**：在 `FOR UPDATE SKIP LOCKED` 下取年龄 ≥ 24 h、无任何 run（任意状态）引用、未被认领（或认领超过 1 h、GC 中途死掉）的行，写 `gc_claimed_at = now()`（tombstone）后返回；被认领的哈希 `registerManifest` 抛 `manifest_gc_in_progress`，`stageMetricRows`/估值暂存引用它也抛 `manifest_gc_in_progress`（暂存先对被引用的索引行加 `FOR SHARE`，故并发 GC 认领会跳过它们）；`deleteManifestIndex` 只删已认领且仍未被引用的行。`ManifestStore.put`（Task 11）**先** `registerManifest`（刷新年龄或被拒）**再**上传对象（`upsert:false`，409 视为已存在；对象缺失时重新上传）。`existed = 对象已存在 || 索引已存在`。GC 之后再 put 同一哈希 = 新登记 + 重新上传。**对象路径按登记代次区分**（Codex 计划审计第 2 轮 R2-1）：每次新登记的索引行写 `object_path = sha256/<hash>/<gen_random_uuid>.json.gz`（触碰既有行不改路径），读写都按 `manifestObjectPath(hash)` 取路径；认领返回 `{hash, objectPath, claim}`（`gc_claim` 令牌），GC 只删它认领到的那个路径，`deleteManifestIndex` 只删 `gc_claim` 仍等于令牌的行 —— 认领过期被重认领、或被删后重新登记，旧收集器既删不到新对象也删不到新行。
 - **A8 剪除**：`pruneRuns(keep)` 是全局的；数据库测试里一律用 `select public.prune_industry_runs(keep,'sw2021',<私有版本>)` 限定范围。
 - **A9 未解析计数**：`unresolvedOf/unresolvedCount(q)` = 来源记录 `status='current'`、`issuer_id is null`、按 `level` 选 `l1_code/l2_code/l3_code` = `q.code`、`in_date <= least(on, knownBy)`、`out_date is null or out_date >= on`（规格第 7 稿 §5.2 K3：`out_date` 是最后一个成员日，含当日），按 `ts_code` 去重计数；只支持 level 1–3。必须与 `memberships.ts::unresolvedAt/countUnresolved`（Task 8）逐条相等。
 - **A10 读**：`membershipCandidates(q)` = 该代码 `valid_from <= on` 的全部行（任意状态）；`membershipsOfIssuer(i,{on})` = 窗口覆盖 `on` 的全部行（任意状态），不给 `on` → 该发行人全部行（任意状态）；调用方用 `memberships.ts` 过滤。`freshness()` 返回 `dq_freshness` 中 `industry.*` 的**存储**状态（不重算）。`stateFingerprint` 的内存实现读注入的 `facts.scopeAll('CN')`。anon 客户端：读方法在 RLS 下对未授权数据集返回空集（不抛错），任何写方法 → `IndustryDbError('unknown','permission_denied')`。`metricRowsOfRun` 与其他列表读取分页取尽（PostgREST `max_rows=1000`）。数值字段是数据库 `numeric::text` 原文，时刻是 ISO 字符串。
@@ -385,8 +391,8 @@ export function pgIndustryDb(pool:Pool):IndustryDb;
 
 - **B1 行业事实宇宙读来源记录的方式**：`industryCnUniverse(tables, today, skipped)`（Task 6）经 service-role `TableClient` 直接 `select` `industry_source_memberships`（迁移一给 `service_role` 该表 `select`），因为生产的 `desiredCn` 只持有 `tables` + `FactsDb`。生产（`supabaseTableClient`）与数据库测试（`pgTableClient`）读到的就是 `IndustryDb` 写入的同一张表；纯内存单测直接把来源行写进 `memoryTableClient`（Task 6 的做法）。`memoryIndustryDb` 的来源记录在其私有状态里，**不**经 `TableClient` 可见——不要把 `memoryIndustryDb` 与 `industryCnUniverse` 组合进同一个单测。
 - **B1a 成分窗口（规格第 7 稿 K3）**：`out_date` 是最后成员日（含），退市不关上游窗口。Task 8 写归属：`valid_to = valid_to_available_date = windowEnd(out_date, delist_date) = min(out_date + 1 日, delist_date)`（皆空 → null）；`delist_date` 来自每次运行一次的 `stock_basic(list_status='D')`；`in_date >= delist_date` → 不写，隔离 `membership_after_delist` + `resolution_error`。`stock_basic` 必须显式取 `L`、`D`、`P`（默认只返回 `L`；Task 5 `load-a-share` 三遍取，D 行只记 `skipped_summary(delisted)`）。分类：`parent_code` 属 `industry_code` 命名空间（原值在 `attributes.parent_industry_code`）；成员代码经 `SW2021_CODE_ALIASES` 映射（原值在 `locator.code_aliases`），树外代码隔离 `classification_code_unknown`。Task 14 直接播种归属时也用 `windowEnd`。
-- **B1b 退市后补关窗**（Codex 计划审计第 1 轮 #3）：`runResolveMemberships` 每次都取 `stock_basic(D)`，并对**已解析**的当前来源记录调用 `reconcileDelistings`：其 `ok` 行仍开着而 K3 窗口现已有终点 → 用同一条记录重新 `applyMemberships`（函数第 3 步把开着的行就地关到 `windowEnd`，保留发行人与 membership_id）；已关闭但终点不同 → 隔离 `membership_delist_conflict`。
-- **B1c SIC 调度租约**（Codex 计划审计第 1 轮 #6/#7）：`industry_sync_scope` 行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领（`claimSicScopeRow`：并发读到同一行的两个 worker 只有一个成功），完成以 `lease_batch_id` 为栅栏（`finishSicScopeRow`：租约被别人接手的 worker 写不进结果，记 `lease_lost`）；`syncSicScope` 只 insert（23505 忽略，从不覆盖已有行与租约），离开 US 事实范围的行 compare-and-swap 置 `next_due_at = RETIRED_DUE`（租约中不动），回到范围时重新激活；`runMembershipsSic` 分页筛选（在范围内、租约空闲）直到凑满 `limit`。
+- **B1b 退市后补关窗**（Codex 计划审计第 1 轮 #3）：`runResolveMemberships` 每次都取 `stock_basic(D)`，并对**已解析**的当前来源记录调用 `reconcileDelistings`：其 `ok` 行仍开着而 K3 窗口现已有终点 → 用同一条记录重新 `applyMemberships`（函数第 3 步把开着的行就地关到 `windowEnd`，保留发行人与 membership_id）；已关闭但终点不同（退市晚于窗口关闭才得知）→ `correctMembershipWindows`（Codex 计划审计第 2 轮 R2-2）：同一事务内旧 `ok` 行置 `superseded`、`superseded_by` 指向按 K3 截短的新行（同 `source_membership_id`，谱系保留），记 `delistCorrected`；数据库拒绝时才隔离 `membership_delist_conflict`。
+- **B1c SIC 调度租约**（Codex 计划审计第 1 轮 #6/#7）：`industry_sync_scope` 行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领（`claimSicScopeRow`：并发读到同一行的两个 worker 只有一个成功），完成以 `lease_batch_id` 为栅栏（`finishSicScopeRow`：租约被别人接手的 worker 写不进结果，记 `lease_lost`）；**数据写入也在事务内验租约**（Codex 计划审计第 2 轮 R2-3）：`apply_sic_memberships(…, p_lease_batch, p_sec_submissions)` 锁发行人后 `FOR UPDATE` 锁住该调度行并要求 `lease_batch_id = p_lease_batch and lease_until > now()`，否则 `lease_lost`；`issuers.provenance.sec_submissions` 也只经这个函数写；`runMembershipsSic` 收到 `lease_lost` 不隔离、不写完成；`syncSicScope` 只 insert（23505 忽略，从不覆盖已有行与租约），离开 US 事实范围的行 compare-and-swap 置 `next_due_at = RETIRED_DUE`（租约中不动），回到范围时重新激活；`runMembershipsSic` 分页筛选（在范围内、租约空闲）直到凑满 `limit`。
 - **B2 `membersAtPure`**（Task 8）只返回 `isMemberAt` 成立的行，每个发行人一行（`valid_from` 最大者），按 `issuer_id` 排序；Task 12 的再去重是防御性的。
 - **B3 作业组成**（Task 16 `jobs.ts` 照此调用；每步各自一个批次与新鲜度数据集）：
 
@@ -499,14 +505,14 @@ export interface AggregateCellResult{cells:ManifestCell[];roles:ManifestRole[];f
 export function computeAggregateCell(input:AggregateCellInput):AggregateCellResult;
 export class InputIndex<F extends PoolFact,D extends PoolDerived>{…}; export function pickInputs(…); export function finalizeCell(spec:CellSpec,nMembers:number,nUnresolved:number,financial:boolean,included:readonly string[][]):ManifestCell;
 // src/lib/industry/manifest.ts           （Task 11）
-export const MANIFEST_SCHEMA='industry-manifest/2'; export const MANIFEST_BUCKET='industry-manifests'; export const manifestPath:(hash:string)=>string;   // 'sha256/<hash>.json.gz'
+export const MANIFEST_SCHEMA='industry-manifest/2'; export const MANIFEST_BUCKET='industry-manifests'; export const isManifestObjectPath:(path:string,hash:string)=>boolean;   // 'sha256/<hash>/<uuid>.json.gz'
 export interface ManifestHeader{scheme;version;code;level;period_end;facts_as_of;knowledge_date;history_class;method_version;config_hash;formula_version;code_version}
 export interface BuildManifestInput{header:ManifestHeader;members:ManifestMember[];unresolved:ManifestUnresolved[];memberStateRevs:{issuer_id:string;state_rev:number}[];result:AggregateCellResult;filings:ReadonlyMap<string,FilingRow>}
 export function buildAggregateManifest(input:BuildManifestInput):AggregateManifest;
 export function encodeManifest(m:AggregateManifest):{canonical:string;hash:string;gzip:Uint8Array}; export const manifestHash:(m:AggregateManifest)=>string;
 export function decodeManifest(gz:Uint8Array,expectedHash?:string):AggregateManifest;
-export function memoryManifestStore(db:Pick<IndustryDb,'registerManifest'>):ManifestStore&{objects:Map<string,Uint8Array>};
-export function supabaseManifestStore(admin:SupabaseClient,db:Pick<IndustryDb,'registerManifest'>):ManifestStore;
+export function memoryManifestStore(db:Pick<IndustryDb,'registerManifest'|'manifestObjectPath'>):ManifestStore&{objects:Map<string,Uint8Array>};
+export function supabaseManifestStore(admin:SupabaseClient,db:Pick<IndustryDb,'registerManifest'|'manifestObjectPath'>):ManifestStore;
 export async function gcManifests(deps:{db:Pick<IndustryDb,'manifestGcCandidates'|'deleteManifestIndex'>;manifests:ManifestStore},limit:number):Promise<{candidates:number;removed:string[];failed:string[];deleted:number}>;
 // src/lib/industry/replay.ts             （Task 11，纯；Task 15 的 /replay mode=original 用它）
 export interface ReplayResult{cells:ManifestCell[];reproduced:boolean;mismatches:string[]}   // mismatches: '<metric>:<duration>:<period_start>'
@@ -610,6 +616,11 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 58. 决定（#6）：SIC 调度行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领，完成以 `lease_batch_id` 为栅栏；新行只 insert、从不覆盖已有行与租约。
 59. 决定（#7）：离开 US 事实范围的 SIC 调度行被退役（`next_due_at='9999-12-31T00:00:00Z'`），回到范围再激活；取到期行时分页过滤到凑满 `limit` 个合格行。
 60. 决定（#8）：E2E 夹具的每个格由真实计算生成的独立清单支撑，原样回放必须 `reproduced="true"`；另有一个故意篡改的格断言 `reproduced="false"`；`fixture-rows.ts::manifestOf` 标明只作版面（使用处都 mock 回放）。
+
+**Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定**
+61. 决定（R2-1）：清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。
+62. 决定（R2-2）：已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。
+63. 决定（R2-3）：`apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。
 
 **本轮不实施（规格自己的门，非偏差，照录）**：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 
@@ -831,7 +842,7 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
    values($1,'sw2021',$2,1,$3,'2025-03-31','2025-03-31','reconstruction','industry-agg/1.0','c','f','test','{"codes":["A1"],"period_ends":["2024-12-31"],"metrics":["member_count"]}',now(),$4,$5,case when $5 in ('active','superseded') then now() end)`,[id,v,generation,b,status]);
   return id;
  };
- const manifest=async()=>{const h=hex(32);await q(`insert into public.industry_manifests(manifest_hash,kind,byte_length) values($1,'aggregate',10)`,[h]);return h;};
+ const manifest=async()=>{const h=hex(32);await q(`insert into public.industry_manifests(manifest_hash,kind,byte_length,object_path) values($1,'aggregate',10,'sha256/'||$1||'/'||gen_random_uuid()||'.json.gz')`,[h]);return h;};
  const metricRow=(runId:string,o:Record<string,unknown>={})=>{
   const r:Record<string,unknown>={run_id:runId,code:'A1',metric:'member_count',period_start:'2024-12-31',period_end:'2024-12-31',duration:'INSTANT',status:'missing',missing_reason:'no_members',unit:'count',n_members:0,n_with_data:0,n_unresolved:0,...o};
   const k=Object.keys(r);return q(`insert into public.industry_metrics(${k.join(',')}) values(${k.map((_,i)=>`$${i+1}`).join(',')})`,k.map(c=>r[c]));
@@ -943,7 +954,8 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
   expect((await fails(q(`insert into public.industry_valuations(run_id,scheme,version,code,trade_date,metric,status,value,facts_as_of,published) values($1,'sw2021',$2,'A1','2024-12-31','pb','ok',1,'2024-12-31',true)`,[vr,v]))).message).toMatch(/industry_valuations_published_requires/);
   expect((await fails(q(`insert into public.industry_valuations(run_id,scheme,version,code,trade_date,metric,status,value,facts_as_of,mcap_coverage) values($1,'sw2021',$2,'A1','2024-12-31','pb','ok',1,'2024-12-31',1.5)`,[vr,v]))).message).toMatch(/industry_valuations_mcap_coverage_check/);
   expect((await fails(q(`insert into public.industry_valuation_pairs(run_id,scheme,version,code,trade_date,metric,pair_status) values($1,'sw2021',$2,'A1','2024-12-31','pb','close')`,[vr,v]))).message).toMatch(/industry_valuation_pairs_pair_status_check/);
-  expect((await fails(q(`insert into public.industry_manifests(manifest_hash,kind,byte_length) values('XYZ','aggregate',1)`))).message).toMatch(/industry_manifests_manifest_hash_check/);
+  expect((await fails(q(`insert into public.industry_manifests(manifest_hash,kind,byte_length,object_path) values('XYZ','aggregate',1,'sha256/XYZ/x.json.gz')`))).message).toMatch(/industry_manifests_manifest_hash_check/);
+  expect((await fails(q(`insert into public.industry_manifests(manifest_hash,kind,byte_length,object_path) values($1,'aggregate',1,$2)`,[hex(32),`sha256/${hex(32)}.json.gz`]))).message).toMatch(/industry_manifests_object_path_check/);
   expect((await fails(q(`insert into public.industry_classifications(scheme,version,code,level,name_en,attributes) values('sic',$1,'0100',1,'x','[]')`,[v]))).message).toMatch(/industry_classifications_attributes_object/);
   await q(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('sic',$1,'0100',1,'Crops')`,[v]);
   expect((await fails(q(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('naics',$1,'11',1,'x')`,[v]))).message).toMatch(/industry_classifications_scheme_check/);
@@ -965,7 +977,7 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
   const b=await batch();const iss=await issuer();
   await asRole('service_role',async c=>{
    for(const t of PROTECTED)expect({t,code:(await fails(c.query(`truncate public.${t}`))).code}).toEqual({t,code:'42501'});
-   expect((await fails(c.query(`insert into public.industry_manifests(manifest_hash,kind,byte_length) values($1,'aggregate',1)`,[hex(32)]))).code).toBe('42501');
+   expect((await fails(c.query(`insert into public.industry_manifests(manifest_hash,kind,byte_length,object_path) values($1,'aggregate',1,'x')`,[hex(32)]))).code).toBe('42501');
    expect((await fails(c.query(`update public.industry_dataset_licenses set status='public' where dataset_key='scheme:sw2021:2021'`))).code).toBe('42501');
    expect((await fails(c.query(`delete from public.industry_classifications where scheme='custom'`))).code).toBe('42501');
    await c.query(`insert into public.industry_sync_scope(issuer_id,job) values($1,'sic')`,[iss]);
@@ -1316,9 +1328,14 @@ create table if not exists public.industry_manifests (
   kind          text not null check (kind in ('aggregate','valuation')),
   byte_length   int not null check (byte_length > 0),
   created_at    timestamptz not null default now(),
-  gc_claimed_at timestamptz            -- GC tombstone (Codex plan audit round 1 #4): set by gc_industry_manifest_candidates
+  -- incarnation storage key (Codex plan audit round 2 R2-1): chosen by put_industry_manifest when the row is created;
+  -- a re-registration after GC is a new row with a new path, so a stale collector can only delete its own incarnation
+  object_path   text not null,
+  gc_claimed_at timestamptz,           -- GC tombstone (round 1 #4): set by gc_industry_manifest_candidates
+  gc_claim      uuid,                  -- claim token; delete_industry_manifests only deletes the row of the matching claim
+  constraint industry_manifests_object_path_check check (object_path = 'sha256/' || manifest_hash || '/' || substr(object_path, 73, 36) || '.json.gz'
+    and substr(object_path, 73, 36) ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 );
-alter table public.industry_manifests add column if not exists gc_claimed_at timestamptz;
 
 -- ---------------------------------------------------------------- industry_metric_runs / industry_metrics (§5.4)
 create table if not exists public.industry_metric_runs (
@@ -1917,7 +1934,9 @@ export interface IndustryManifestIndex {
   kind: 'aggregate' | 'valuation';
   byte_length: number;
   created_at: string;
+  object_path: string;
   gc_claimed_at: string | null;
+  gc_claim: string | null;
 }
 export interface IndustryMetricRun {
   run_id: string;
@@ -2132,13 +2151,13 @@ const hex=(n:number)=>randomBytes(n).toString('hex');
 const FUNCTIONS:Record<string,'read'|'service'|'internal'>={
  'industry_dataset_is_public(text)':'read','industry_metric_run_visible(uuid)':'read','industry_valuation_run_visible(uuid)':'read','industry_freshness()':'read',
  'set_industry_dataset_license(text,text,text,text)':'service','industry_state_fingerprint(text)':'service','upsert_industry_source_memberships(uuid,jsonb)':'service',
- 'record_industry_source_resolution_error(uuid[],jsonb)':'service','apply_industry_memberships(uuid,uuid,text,text,jsonb,uuid[],jsonb)':'service',
- 'apply_sic_memberships(uuid,uuid,text,date,text,jsonb)':'service','begin_industry_fetch_event(text,jsonb,uuid)':'service','retry_industry_fetch_event(uuid)':'service',
+ 'record_industry_source_resolution_error(uuid[],jsonb)':'service','apply_industry_memberships(uuid,uuid,text,text,jsonb,uuid[],jsonb)':'service','correct_industry_membership_windows(uuid,uuid,text,text,uuid,jsonb)':'service',
+ 'apply_sic_memberships(uuid,uuid,text,date,text,jsonb,uuid,jsonb)':'service','begin_industry_fetch_event(text,jsonb,uuid)':'service','retry_industry_fetch_event(uuid)':'service',
  'apply_observations(text,uuid,jsonb)':'service','create_industry_metric_run(jsonb)':'service','create_industry_valuation_run(jsonb)':'service',
  'set_industry_metric_run_coverage(uuid,jsonb)':'service','fail_industry_run(text,uuid,text)':'service','stage_industry_metrics(uuid,jsonb)':'service',
  'stage_industry_run_dependencies(uuid,text,jsonb)':'service','stage_industry_valuations(uuid,jsonb)':'service','stage_industry_valuation_pairs(uuid,jsonb)':'service',
  'publish_industry_valuations(uuid)':'service','activate_industry_metric_run(uuid)':'service','activate_industry_valuation_run(uuid)':'service',
- 'put_industry_manifest(text,text,integer)':'service','gc_industry_manifest_candidates(integer,integer)':'service','delete_industry_manifests(text[],integer)':'service','industry_manifests_lock_for_reference(jsonb)':'internal',
+ 'put_industry_manifest(text,text,integer)':'service','gc_industry_manifest_candidates(integer,integer)':'service','delete_industry_manifests(jsonb,integer)':'service','industry_manifests_lock_for_reference(jsonb)':'internal',
  'prune_industry_runs(integer,text,text)':'service',
  'industry_metric_run_lock(uuid)':'internal','industry_valuation_run_lock(uuid)':'internal','industry_manifest_unreferenced(text)':'internal',
 };
@@ -2191,6 +2210,11 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
  let admin:Pool;
  const q=async(text:string,values:unknown[]=[],c:Pool|PoolClient=admin)=>(await c.query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[],c:Pool|PoolClient=admin)=>(await q(text,values,c))[0]?.v;
+ type GcClaim={hash:string;object_path:string;claim:string};
+ const gcClaims=async(minAge?:number)=>(await one(minAge===undefined?`select public.gc_industry_manifest_candidates(100000) v`:`select public.gc_industry_manifest_candidates(100000,$1) v`,minAge===undefined?[]:[minAge])) as GcClaim[];
+ const gcHashes=async(minAge?:number)=>(await gcClaims(minAge)).map(c=>c.hash);
+ const gcDelete=(claims:{hash:string;claim:string}[])=>one(`select public.delete_industry_manifests($1::jsonb) v`,[JSON.stringify(claims)]);
+ const objectPath=async(h:string)=>(await one(`select object_path v from public.industry_manifests where manifest_hash=$1`,[h])) as string|undefined;
  const issuer=async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_zh) values($1,'行业函数测试')`,[id]);return id;};
  const batch=async()=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'industry-test','industry.test')`,[id]);return id;};
  const ticker=async()=>{const t=`ZZ${hex(4).toUpperCase()}`;await q(`insert into public.stocks_universe(ticker,name,market) values($1,'Industry Test','A')`,[t]);return t;};
@@ -2294,7 +2318,7 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
    expect(await activate(r.run_id,c)).toHaveProperty('activated_at');
    const r2=await createRun(v,b,{},c);await c.query(`select public.fail_industry_run('aggregate',$1,'test')`,[r2.run_id]);
    expect(Array.isArray(await one(`select public.gc_industry_manifest_candidates(10) v`,[],c))).toBe(true);
-   expect(await one(`select public.delete_industry_manifests(array[$1]) v`,[m],c)).toBe(0);
+   expect(await one(`select public.delete_industry_manifests($1::jsonb) v`,[JSON.stringify([{hash:m,claim:randomUUID()}])],c)).toBe(0);
    expect(await one(`select public.prune_industry_runs(5,'sw2021',$1) v`,[v],c)).toBe(0);
    const vr=(await one(`select public.create_industry_valuation_run($1::jsonb) v`,[JSON.stringify({scheme:'sw2021',version:v,level:3,method_version:'industry-val/1.0',config_hash:'c',formula_version:'f',code_version:'x',expected_dates:['2024-12-31'],comparator_basis:'unknown',recompute_from:'2024-01-01',carried_from_run:null,fingerprint_at:'2026-11-06T00:00:00Z',batch_id:b})],c)).run_id;
    const vrows=['A111','B111'].flatMap(code=>['pe_ttm','pe_static','pb','market_cap'].map(metric=>({code,trade_date:'2024-12-31',metric,status:'missing',missing_reason:'no_members',value:null,facts_as_of:'2024-12-31',n_members:0,n_with_data:0,n_unresolved:0,mcap_coverage:null,manifest_hash:null})));
@@ -2302,8 +2326,9 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
    expect(await one(`select public.stage_industry_valuation_pairs($1,$2::jsonb) v`,[vr,JSON.stringify(vrows.map(x=>({code:x.code,trade_date:x.trade_date,metric:x.metric,pair_status:'no_computed'})))],c)).toBe(8);
    expect(await one(`select public.publish_industry_valuations($1) v`,[vr],c)).toEqual({qualified_series:0,published_rows:0});
    expect(await one(`select public.activate_industry_valuation_run($1) v`,[vr],c)).toHaveProperty('activated_at');
-   expect((await one(`select public.apply_sic_memberships($1,$2,'sec-current','2026-01-05',$3,'{}'::jsonb) v`,[b,iss,sicCode],c)).outcome).toBe('inserted');
-   expect((await fails(c.query(`select public.apply_sic_memberships($1,$2,'sec-current','2026-01-06','ZZZZ','{}'::jsonb)`,[b,iss]))).message).toMatch(/^unknown_sic_code/);
+   await c.query(`insert into public.industry_sync_scope(issuer_id,job,lease_until,lease_batch_id) values($1,'sic',now()+interval '1 hour',$2)`,[iss,b]);
+   expect((await one(`select public.apply_sic_memberships($1,$2,'sec-current','2026-01-05',$3,'{}'::jsonb,$1) v`,[b,iss,sicCode],c)).outcome).toBe('inserted');
+   expect((await fails(c.query(`select public.apply_sic_memberships($1,$2,'sec-current','2026-01-06','ZZZZ','{}'::jsonb,$1)`,[b,iss]))).message).toMatch(/^unknown_sic_code/);
   });
  },60000);
 
@@ -2541,28 +2566,59 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
  it('apply_sic_memberships: insert, duplicate, close-and-open, same_day_change',async()=>{
   const b=await batch();const iss=await issuer();const c1=`ZS${hex(2)}`,c2=`ZR${hex(2)}`;
   await q(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('sic','sec-current',$1,1,'Test SIC A'),('sic','sec-current',$2,1,'Test SIC B')`,[c1,c2]);
-  const sic=(d:string,c:string)=>one(`select public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,'{"raw_hash":"h"}'::jsonb)->>'outcome' v`,[b,iss,d,c]);
+  await q(`insert into public.industry_sync_scope(issuer_id,job,lease_until,lease_batch_id) values($1,'sic',now()+interval '1 hour',$2)`,[iss,b]);
+  const sic=(d:string,c:string,lease:string=b)=>one(`select public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,'{"raw_hash":"h"}'::jsonb,$5)->>'outcome' v`,[b,iss,d,c,lease]);
   expect(await sic('2026-01-05',c1)).toBe('inserted');expect(await sic('2026-02-05',c1)).toBe('duplicate');expect(await sic('2026-03-05',c2)).toBe('changed');
   expect((await fails(sic('2026-03-05',c1))).message).toMatch(/^same_day_change/);
   expect((await q(`select code,valid_from::text f,valid_to::text t,provenance->>'availability' a from public.issuer_industry_memberships where issuer_id=$1 order by valid_from`,[iss]))).toEqual([{code:c1,f:'2026-01-05',t:'2026-03-05',a:'observed'},{code:c2,f:'2026-03-05',t:null,a:'observed'}]);
+  // lease fence (Codex round 2 R2-3): another batch's lease, or an expired one, rejects the write in the same transaction
+  const other=randomUUID();
+  expect((await fails(sic('2026-04-05',c1,other))).message).toBe('lease_lost');
+  await q(`update public.industry_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1 and job='sic'`,[iss]);
+  expect((await fails(sic('2026-04-05',c1))).message).toBe('lease_lost');
+  expect((await q(`select count(*)::int n from public.issuer_industry_memberships where issuer_id=$1`,[iss]))[0].n).toBe(2);   // nothing written
+  await q(`update public.industry_sync_scope set lease_until=now()+interval '1 hour' where issuer_id=$1 and job='sic'`,[iss]);
+  expect(await one(`select public.apply_sic_memberships($1,$2,'sec-current','2026-04-06',null,'{}'::jsonb,$1,'{"fiscal_year_end":"0926"}'::jsonb)->>'outcome' v`,[b,iss])).toBe('none');
+  expect(await one(`select provenance->'sec_submissions'->>'fiscal_year_end' v from public.issuers where issuer_id=$1`,[iss])).toBe('0926');
  });
 
- it('manifest index: put touches existing rows, GC honours the grace window and references, delete re-checks',async()=>{
+ it('manifest index: put touches existing rows, GC honours the grace window and references, delete re-checks the claim token',async()=>{
   const free=hex(32);
   expect(await one(`select public.put_industry_manifest($1,'valuation',5) v`,[free])).toBe(true);
+  const p1=(await objectPath(free))!;
+  expect(p1).toMatch(new RegExp(`^sha256/${free}/[0-9a-f-]{36}\\.json\\.gz$`));
   expect(await one(`select public.put_industry_manifest($1,'valuation',5) v`,[free])).toBe(false);
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).not.toContain(free);
+  expect(await objectPath(free)).toBe(p1);                                                            // a touch keeps the incarnation
+  expect(await gcHashes()).not.toContain(free);
   await q(`update public.industry_manifests set created_at=now()-interval '2 days' where manifest_hash=$1`,[free]);
-  expect(await one(`select public.gc_industry_manifest_candidates(100000,3*86400) v`)).not.toContain(free);
-  expect(await one(`select public.delete_industry_manifests(array[$1]) v`,[free])).toBe(0);           // not claimed yet
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).toContain(free);      // selected = claimed (tombstone)
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).not.toContain(free);  // a live claim is not handed out twice
+  expect(await gcHashes(3*86400)).not.toContain(free);
+  expect(await gcDelete([{hash:free,claim:randomUUID()}])).toBe(0);                                  // not claimed yet
+  const [mine]=(await gcClaims()).filter(c=>c.hash===free);                                            // selected = claimed (tombstone)
+  expect(mine.object_path).toBe(p1);
+  expect(await gcHashes()).not.toContain(free);                                                       // a live claim is not handed out twice
   expect((await fails(q(`select public.put_industry_manifest($1,'valuation',5)`,[free]))).message).toBe('manifest_gc_in_progress');
   await q(`update public.industry_manifests set gc_claimed_at=now()-interval '2 hours' where manifest_hash=$1`,[free]);
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).toContain(free);      // a stale claim (GC died) is re-claimable
-  expect(await one(`select public.delete_industry_manifests(array[$1]) v`,[free])).toBe(1);
-  expect(await one(`select public.put_industry_manifest($1,'valuation',5) v`,[free])).toBe(true);   // after GC: a new registration (the store uploads again)
+  const [again]=(await gcClaims()).filter(c=>c.hash===free);                                           // a stale claim (GC died) is re-claimable
+  expect(again.claim).not.toBe(mine.claim);
+  expect(await gcDelete([{hash:free,claim:mine.claim}])).toBe(0);                                    // the stale token finalizes nothing
+  expect(await gcDelete([{hash:free,claim:again.claim}])).toBe(1);
+  expect(await one(`select public.put_industry_manifest($1,'valuation',5) v`,[free])).toBe(true);   // after GC: a new registration…
+  expect(await objectPath(free)).not.toBe(p1);                                                        // …with a new incarnation path
   expect((await fails(q(`select public.gc_industry_manifest_candidates(0)`))).message).toBe('invalid_limit');
+ });
+
+ it('stale collector after a reclaim (Codex round 2 R2-1): its claim token deletes no later incarnation; the new path is distinct',async()=>{
+  const h=hex(32);await q(`select public.put_industry_manifest($1,'aggregate',5)`,[h]);
+  await q(`update public.industry_manifests set created_at=now()-interval '2 days' where manifest_hash=$1`,[h]);
+  const [a]=(await gcClaims()).filter(c=>c.hash===h);                                                 // collector A claims and pauses
+  await q(`update public.industry_manifests set gc_claimed_at=now()-interval '2 hours' where manifest_hash=$1`,[h]);
+  const [b]=(await gcClaims()).filter(c=>c.hash===h);                                                 // B reclaims, deletes the object, finalizes
+  expect(await gcDelete([{hash:h,claim:b.claim}])).toBe(1);
+  expect(await one(`select public.put_industry_manifest($1,'aggregate',5) v`,[h])).toBe(true);      // a writer re-registers (new incarnation)…
+  const fresh=(await objectPath(h))!;
+  expect(fresh).not.toBe(a.object_path);                                                               // …so A's storage delete (a.object_path) cannot hit it
+  expect(await gcDelete([{hash:h,claim:a.claim}])).toBe(0);                                           // and A's finalize is a no-op
+  expect(await objectPath(h)).toBe(fresh);
  });
 
  it('GC race (Codex round 1 #4): candidate claimed → a run reuses the hash → registration and staging are refused; a stage holding the row first makes GC skip it',async()=>{
@@ -2573,11 +2629,12 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   // 1 GC first: claimed → reuse is refused (the TS store then fails the run; the next run re-registers and re-uploads)
   const h1=hex(32);await q(`select public.put_industry_manifest($1,'aggregate',5)`,[h1]);
   await q(`update public.industry_manifests set created_at=now()-interval '2 days' where manifest_hash=$1`,[h1]);
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).toContain(h1);
+  const [c1]=(await gcClaims()).filter(c=>c.hash===h1);
+  expect(c1).toBeDefined();
   const r1=await run();
   expect((await fails(q(`select public.stage_industry_metrics($1,$2::jsonb)`,[r1,row(h1)]))).message).toBe('manifest_gc_in_progress');
   expect((await fails(q(`select public.put_industry_manifest($1,'aggregate',5)`,[h1]))).message).toBe('manifest_gc_in_progress');
-  expect(await one(`select public.delete_industry_manifests(array[$1]) v`,[h1])).toBe(1);
+  expect(await gcDelete([{hash:h1,claim:c1.claim}])).toBe(1);
   // 2 stage first (transaction still open): GC skips the locked row; after commit the hash is referenced → never a candidate
   const h2=hex(32);await q(`select public.put_industry_manifest($1,'aggregate',5)`,[h2]);
   await q(`update public.industry_manifests set created_at=now()-interval '2 days' where manifest_hash=$1`,[h2]);
@@ -2586,10 +2643,10 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   try{
    await c.query('begin');
    await c.query(`select public.stage_industry_metrics($1,$2::jsonb)`,[r2,row(h2)]);
-   expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).not.toContain(h2);   // FOR SHARE held → skipped
+   expect(await gcHashes()).not.toContain(h2);   // FOR SHARE held → skipped
    await c.query('commit');
   }finally{c.release();}
-  expect(await one(`select public.gc_industry_manifest_candidates(100000) v`)).not.toContain(h2);    // referenced
+  expect(await gcHashes()).not.toContain(h2);    // referenced
   expect(await one(`select gc_claimed_at is null v from public.industry_manifests where manifest_hash=$1`,[h2])).toBe(true);
   await q(`select public.fail_industry_run('aggregate',$1,'test')`,[r1]);await q(`select public.fail_industry_run('aggregate',$1,'test')`,[r2]);
  });
@@ -3047,18 +3104,83 @@ end $$;
 revoke execute on function public.apply_industry_memberships(uuid, uuid, text, text, jsonb, uuid[], jsonb) from public, anon, authenticated;
 grant execute on function public.apply_industry_memberships(uuid, uuid, text, text, jsonb, uuid[], jsonb) to service_role;
 
+-- Window correction of ONE current, resolved source record's ok rows (Codex plan audit round 2 R2-2: a delisting
+-- learned after the window was closed must not leave an incorrect ok row eligible). Issuer row lock; the record must be
+-- current and resolved to p_issuer (else membership_conflict); per target (one per level, provenance.source_membership_id
+-- = p_source, same code and valid_from as the stored ok row of that level from this record): same window → duplicate;
+-- otherwise the stored row becomes superseded (superseded_by = the new row) and a new ok row with the corrected
+-- valid_to / valid_to_available_date is inserted — lineage kept (same source_membership_id, history kept). Returns the
+-- ApplyMembershipsResult shape {inserted, closed:0, superseded, duplicates, membership_ids}.
+create or replace function public.correct_industry_membership_windows(p_batch uuid, p_issuer uuid, p_scheme text, p_version text, p_source uuid, p_rows jsonb)
+returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
+declare t jsonb; v_old public.issuer_industry_memberships; v_id uuid; v_to date; v_to_avail date;
+  v_ins int := 0; v_sup int := 0; v_dup int := 0; v_ids uuid[] := '{}'::uuid[];
+begin
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
+  perform 1 from public.issuers where issuer_id = p_issuer for update;
+  if not found then raise exception 'issuer_not_found' using errcode = 'P0002'; end if;
+  if not exists (select 1 from public.industry_source_memberships m
+                 where m.id = p_source and m.status = 'current' and m.scheme = p_scheme and m.issuer_id = p_issuer) then
+    raise exception 'membership_conflict: source record % is not current and resolved to issuer %', p_source, p_issuer using errcode = 'P0001';
+  end if;
+  for t in select e from jsonb_array_elements(p_rows) e loop
+    if (t -> 'provenance' ->> 'source_membership_id') is distinct from p_source::text then
+      raise exception 'membership_conflict: correction targets must carry source record %', p_source using errcode = 'P0001';
+    end if;
+    select * into v_old from public.issuer_industry_memberships
+    where issuer_id = p_issuer and scheme = p_scheme and version = p_version and status = 'ok' and source_membership_id = p_source
+      and level = (t ->> 'level')::int and code = t ->> 'code' and valid_from = (t ->> 'valid_from')::date
+    for update;
+    if not found then
+      raise exception 'membership_conflict: no ok row of source % at level % from %', p_source, t ->> 'level', t ->> 'valid_from' using errcode = 'P0001';
+    end if;
+    v_to := (t ->> 'valid_to')::date; v_to_avail := (t ->> 'valid_to_available_date')::date;
+    if (v_old.valid_to, v_old.valid_to_available_date) is not distinct from (v_to, v_to_avail) then
+      v_dup := v_dup + 1; v_ids := v_ids || v_old.membership_id; continue;
+    end if;
+    v_id := gen_random_uuid();
+    update public.issuer_industry_memberships set status = 'superseded', superseded_by = v_id where membership_id = v_old.membership_id;
+    begin
+      insert into public.issuer_industry_memberships (membership_id, issuer_id, scheme, version, code, level, valid_from, valid_to,
+        available_date, valid_to_available_date, source, provenance, source_membership_id, batch_id, status)
+      values (v_id, p_issuer, p_scheme, p_version, v_old.code, v_old.level, v_old.valid_from, v_to, v_old.available_date, v_to_avail,
+        coalesce(t ->> 'source', v_old.source), coalesce(t -> 'provenance', v_old.provenance), p_source, p_batch, 'ok');
+    exception when exclusion_violation then
+      raise exception 'membership_overlap: % % level % from %', p_issuer, p_scheme, v_old.level, v_old.valid_from using errcode = '23P01';
+    end;
+    v_sup := v_sup + 1; v_ins := v_ins + 1; v_ids := v_ids || v_id;
+  end loop;
+  return jsonb_build_object('inserted', v_ins, 'closed', 0, 'superseded', v_sup, 'duplicates', v_dup, 'membership_ids', to_jsonb(v_ids));
+end $$;
+revoke execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) to service_role;
+
 -- SIC (§4.4): issuer row lock; the open ok sic row of the version: same code → duplicate; another code →
 -- close it at p_observed (valid_to = valid_to_available_date = p_observed) and open the new code from
 -- p_observed (same_day_change when the open row started on p_observed or later); none → insert.
--- level comes from the classification node. Returns {outcome:'inserted'|'duplicate'|'changed', membership_id}.
-create or replace function public.apply_sic_memberships(p_batch uuid, p_issuer uuid, p_version text, p_observed date, p_code text, p_provenance jsonb)
+-- level comes from the classification node. Returns {outcome:'inserted'|'duplicate'|'changed'|'none', membership_id}.
+-- Lease fence (Codex plan audit round 2 R2-3): in the SAME transaction, the caller's SIC scope row must still be
+-- leased to p_lease_batch and unexpired — it is locked FOR UPDATE through commit, so a worker whose lease expired
+-- and was taken over cannot write membership data or provenance (raises lease_lost). p_sec_submissions (when not
+-- null) is merged into issuers.provenance.sec_submissions under the same fence; p_code null = provenance only.
+create or replace function public.apply_sic_memberships(p_batch uuid, p_issuer uuid, p_version text, p_observed date, p_code text, p_provenance jsonb,
+  p_lease_batch uuid, p_sec_submissions jsonb default null)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare cur public.issuer_industry_memberships; v_level int; v_id uuid := gen_random_uuid(); v_outcome text := 'inserted';
 begin
-  if p_observed is null or p_code is null then raise exception 'invalid_rows' using errcode = '22023'; end if;
+  if p_observed is null then raise exception 'invalid_rows' using errcode = '22023'; end if;
   if p_provenance is not null and jsonb_typeof(p_provenance) <> 'object' then raise exception 'invalid_provenance' using errcode = '22023'; end if;
+  if p_sec_submissions is not null and jsonb_typeof(p_sec_submissions) <> 'object' then raise exception 'invalid_provenance' using errcode = '22023'; end if;
   perform 1 from public.issuers where issuer_id = p_issuer for update;
   if not found then raise exception 'issuer_not_found' using errcode = 'P0002'; end if;
+  perform 1 from public.industry_sync_scope
+  where issuer_id = p_issuer and job = 'sic' and lease_batch_id = p_lease_batch and lease_until > now() for update;
+  if not found then raise exception 'lease_lost' using errcode = 'P0001'; end if;
+  if p_sec_submissions is not null then
+    update public.issuers set provenance = coalesce(provenance, '{}'::jsonb) || jsonb_build_object('sec_submissions', p_sec_submissions), updated_at = now()
+    where issuer_id = p_issuer;
+  end if;
+  if p_code is null then return jsonb_build_object('outcome', 'none', 'membership_id', null); end if;
   select level into v_level from public.industry_classifications where scheme = 'sic' and version = p_version and code = p_code;
   if not found then raise exception 'unknown_sic_code: %', p_code using errcode = 'P0001'; end if;
   select * into cur from public.issuer_industry_memberships
@@ -3084,8 +3206,8 @@ begin
   end;
   return jsonb_build_object('outcome', v_outcome, 'membership_id', v_id);
 end $$;
-revoke execute on function public.apply_sic_memberships(uuid, uuid, text, date, text, jsonb) from public, anon, authenticated;
-grant execute on function public.apply_sic_memberships(uuid, uuid, text, date, text, jsonb) to service_role;
+revoke execute on function public.apply_sic_memberships(uuid, uuid, text, date, text, jsonb, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.apply_sic_memberships(uuid, uuid, text, date, text, jsonb, uuid, jsonb) to service_role;
 
 -- ================================================================ observations (§6.1, §6.2, U2/U3/V7)
 create or replace function public.begin_industry_fetch_event(p_job text, p_params jsonb, p_batch uuid)
@@ -3575,7 +3697,8 @@ declare v_new boolean; v_claim timestamptz; v_found boolean;
 begin
   select gc_claimed_at, true into v_claim, v_found from public.industry_manifests where manifest_hash = p_hash for update;
   if v_found and v_claim is not null then raise exception 'manifest_gc_in_progress' using errcode = 'P0001'; end if;
-  insert into public.industry_manifests (manifest_hash, kind, byte_length) values (p_hash, p_kind, p_bytes)
+  insert into public.industry_manifests (manifest_hash, kind, byte_length, object_path)
+  values (p_hash, p_kind, p_bytes, 'sha256/' || p_hash || '/' || gen_random_uuid()::text || '.json.gz')   -- new incarnation (R2-1)
   on conflict (manifest_hash) do update set created_at = now()
   returning (xmax = 0) into v_new;
   return v_new;
@@ -3584,8 +3707,10 @@ revoke execute on function public.put_industry_manifest(text, text, int) from pu
 grant execute on function public.put_industry_manifest(text, text, int) to service_role;
 
 -- GC candidates = CLAIMS: unreferenced, unclaimed (or claim older than 1 h) manifests whose index row is
--- older than p_min_age_seconds (default 24 h), taken FOR UPDATE SKIP LOCKED and marked gc_claimed_at = now().
--- Oldest first. Volatile (it writes).
+-- older than p_min_age_seconds (default 24 h), taken FOR UPDATE SKIP LOCKED and marked gc_claimed_at = now() with a
+-- fresh claim token. Returns [{hash, object_path, claim}] oldest first: the collector deletes exactly that object
+-- path (an incarnation) and finalizes with that token, so a stale collector whose claim was taken over can neither
+-- delete a later incarnation's object nor its index row (Codex plan audit round 2 R2-1). Volatile (it writes).
 create or replace function public.gc_industry_manifest_candidates(p_limit int, p_min_age_seconds int default 86400)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v jsonb;
@@ -3599,29 +3724,33 @@ begin
     order by m.created_at, m.manifest_hash limit p_limit
     for update skip locked
   ), claimed as (
-    update public.industry_manifests m set gc_claimed_at = now() from picked p where m.manifest_hash = p.manifest_hash
-    returning m.manifest_hash, m.created_at
-  ) select coalesce(jsonb_agg(c.manifest_hash order by c.created_at, c.manifest_hash), '[]'::jsonb) into v from claimed c;
+    update public.industry_manifests m set gc_claimed_at = now(), gc_claim = gen_random_uuid() from picked p where m.manifest_hash = p.manifest_hash
+    returning m.manifest_hash, m.created_at, m.object_path, m.gc_claim
+  ) select coalesce(jsonb_agg(jsonb_build_object('hash', c.manifest_hash, 'object_path', c.object_path, 'claim', c.gc_claim)
+                              order by c.created_at, c.manifest_hash), '[]'::jsonb) into v from claimed c;
   return v;
 end $$;
 revoke execute on function public.gc_industry_manifest_candidates(int, int) from public, anon, authenticated;
 grant execute on function public.gc_industry_manifest_candidates(int, int) to service_role;
 
--- Deletes index rows the TS GC already removed from the bucket: only CLAIMED rows, re-checking age and references.
-create or replace function public.delete_industry_manifests(p_hashes text[], p_min_age_seconds int default 86400)
+-- Deletes index rows the TS GC already removed from the bucket: only rows still CLAIMED BY THE GIVEN TOKEN
+-- (p_claims [{hash, claim}]), re-checking age and references.
+create or replace function public.delete_industry_manifests(p_claims jsonb, p_min_age_seconds int default 86400)
 returns int language plpgsql security definer set search_path = pg_catalog, public as $$
 declare n int;
 begin
+  if p_claims is null or jsonb_typeof(p_claims) <> 'array' then raise exception 'invalid_claims' using errcode = '22023'; end if;
   delete from public.industry_manifests m
-  where m.manifest_hash = any(coalesce(p_hashes, '{}'::text[]))
+  using (select x ->> 'hash' as hash, (x ->> 'claim')::uuid as claim from jsonb_array_elements(p_claims) x) c
+  where m.manifest_hash = c.hash and m.gc_claim = c.claim
     and m.gc_claimed_at is not null
     and m.created_at <= now() - make_interval(secs => coalesce(p_min_age_seconds, 86400))
     and public.industry_manifest_unreferenced(m.manifest_hash);
   get diagnostics n = row_count;
   return n;
 end $$;
-revoke execute on function public.delete_industry_manifests(text[], int) from public, anon, authenticated;
-grant execute on function public.delete_industry_manifests(text[], int) to service_role;
+revoke execute on function public.delete_industry_manifests(jsonb, int) from public, anon, authenticated;
+grant execute on function public.delete_industry_manifests(jsonb, int) to service_role;
 
 -- The only delete path of runs and their rows (V8): per (kind, scheme, version, level) the superseded
 -- runs ranked by generation beyond the newest p_keep, not referenced by an F4 judgment (when that table
@@ -3675,7 +3804,7 @@ grant execute on function public.prune_industry_runs(int, text, text) to service
 - [ ] **Step 3: 运行函数与迁移一测试**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/industry/functions.integration.test.ts src/lib/industry/industry.integration.test.ts src/lib/entities/issuers.integration.test.ts`
-Expected: 全部通过（`functions.integration.test.ts` 16 个、`industry.integration.test.ts` 7 个、`issuers.integration.test.ts` 10 个）。Task 1 的测试按触发器允许的顺序写行，迁移二存在时照样通过。
+Expected: 全部通过（`functions.integration.test.ts` 17 个、`industry.integration.test.ts` 7 个、`issuers.integration.test.ts` 10 个）。Task 1 的测试按触发器允许的顺序写行，迁移二存在时照样通过。
 
 - [ ] **Step 4: 全量数据库门禁与迁移演练**
 
@@ -3728,7 +3857,7 @@ Run:
 ```bash
 awk '/^\/\/ src\/lib\/industry\/types.ts$/{f=1} f&&/^```$/{exit} f{print}' docs/superpowers/plans/2026-11-06-industry-research.md > src/lib/industry/types.ts && wc -l src/lib/industry/types.ts && head -1 src/lib/industry/types.ts && tail -1 src/lib/industry/types.ts
 ```
-Expected: `172 src/lib/industry/types.ts`，首行 `// src/lib/industry/types.ts`，末行 `export type {FactRow};`。不得手改该文件（契约变更须先改计划的共享契约节）。
+Expected: `178 src/lib/industry/types.ts`，首行 `// src/lib/industry/types.ts`，末行 `export type {FactRow};`。不得手改该文件（契约变更须先改计划的共享契约节）。
 
 - [ ] **Step 2: 写共享契约用例 `db-contract.ts` 与单测 `db.test.ts`（先失败）**
 
@@ -3928,6 +4057,23 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    }
   });
 
+  it('correctMembershipWindows: an already-closed window is superseded by a corrected version of the same record (Codex round 2 R2-2)',async()=>{
+   const v=await tree();
+   const {b,iss,rec}=await applied(v,{out_date:'2024-01-02'});
+   const before=(await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).filter(m=>m.status==='ok');
+   expect(before.map(m=>m.valid_to)).toEqual(['2024-01-02','2024-01-02','2024-01-02']);
+   const fix=threeRows(rec.id,{valid_to:'2023-06-30',valid_to_available_date:'2023-06-30'});
+   expect(await db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,fix)).toMatchObject({inserted:3,superseded:3,duplicates:0,closed:0});
+   const all=await db.membershipsOfIssuer(iss,{scheme:'sw2021'});
+   const ok=all.filter(m=>m.status==='ok'),old=all.filter(m=>m.status==='superseded');
+   expect(ok.map(m=>[m.level,m.valid_from,m.valid_to,m.valid_to_available_date,m.source_membership_id])).toEqual([[1,'2021-07-30','2023-06-30','2023-06-30',rec.id],[2,'2021-07-30','2023-06-30','2023-06-30',rec.id],[3,'2021-07-30','2023-06-30','2023-06-30',rec.id]]);
+   expect(old.map(m=>[m.membership_id,m.superseded_by])).toEqual(before.map(m=>[m.membership_id,ok.find(o=>o.level===m.level)!.membership_id]));
+   expect((await db.membershipsOfIssuer(iss,{on:'2023-09-30'})).filter(m=>m.status==='ok')).toEqual([]);   // excluded between the corrected and the old end
+   expect(await db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,fix)).toMatchObject({inserted:0,superseded:0,duplicates:3});
+   expect(await code(db.correctMembershipWindows(b,await h.issuer(),'sw2021',v,rec.id,fix))).toBe('membership_conflict');   // not this issuer's record
+   expect(await code(db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,[target('A1',1,{valid_from:'2020-01-01',provenance:{availability:'effective_date_assumed',source_membership_id:rec.id}})]))).toBe('membership_conflict');
+  });
+
   it('applyMemberships is all-or-nothing: a conflicting third row or an overlap leaves no row, the old rows ok and the record unresolved',async()=>{
    const v=await tree();
    const {b,iss}=await applied(v);                                  // A1/A11/A111 from 2021-07-30, open
@@ -3962,14 +4108,21 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    // applySicMembership writes the real 'sec-current' version: codes ZT…/ZU… exist only in this scenario
    const c1=`ZT${hex(2)}`,c2=`ZU${hex(2)}`;
    await db.upsertClassifications(b,[c1,c2].map(c=>({scheme:'sic',version:'sec-current',code:c,level:1,name_zh:null,name_en:`SIC ${c} ${v}`,parent_code:null,attributes:{}})));
-   expect(await db.applySicMembership(b,iss,'2026-01-05',c1,{raw_hash:sha(),locator:{cik:'1'}})).toBe('inserted');
-   expect(await db.applySicMembership(b,iss,'2026-02-05',c1,{raw_hash:sha(),locator:{cik:'1'}})).toBe('duplicate');
-   expect(await db.applySicMembership(b,iss,'2026-03-05',c2,{raw_hash:sha(),locator:{cik:'1'}})).toBe('changed');
+   // the caller holds the SIC scope lease of this issuer (Codex round 2 R2-3: the write itself is fenced)
+   await h.tables.insert('industry_sync_scope',{issuer_id:iss,job:'sic',next_due_at:'2026-01-01T00:00:00.000Z',lease_until:'2999-01-01T00:00:00.000Z',lease_batch_id:b,
+    last_attempt_at:null,last_success_at:null,last_status:null,updated_at:'2026-01-01T00:00:00.000Z'});
+   const fence={leaseBatch:b};
+   expect(await code(db.applySicMembership(b,iss,'2026-01-05',c1,{raw_hash:sha()},{leaseBatch:'00000000-0000-4000-8000-000000000000'}))).toBe('lease_lost');
+   expect(await db.membershipsOfIssuer(iss,{scheme:'sic'})).toEqual([]);
+   expect(await db.applySicMembership(b,iss,'2026-01-05',c1,{raw_hash:sha(),locator:{cik:'1'}},fence)).toBe('inserted');
+   expect(await db.applySicMembership(b,iss,'2026-02-05',c1,{raw_hash:sha(),locator:{cik:'1'}},fence)).toBe('duplicate');
+   expect(await db.applySicMembership(b,iss,'2026-03-05',c2,{raw_hash:sha(),locator:{cik:'1'}},fence)).toBe('changed');
    const rows=await db.membershipsOfIssuer(iss,{scheme:'sic'});
    expect(rows.map(m=>[m.code,m.valid_from,m.valid_to,m.valid_to_available_date,m.available_date,m.source,m.source_membership_id,m.provenance.availability])).toEqual([
     [c1,'2026-01-05','2026-03-05','2026-03-05','2026-01-05','sec:submissions',null,'observed'],[c2,'2026-03-05',null,null,'2026-03-05','sec:submissions',null,'observed']]);
-   expect(await code(db.applySicMembership(b,iss,'2026-03-05',c1,{}))).toBe('same_day_change');
-   expect(await code(db.applySicMembership(b,iss,'2026-04-05',`ZV${hex(3)}`,{}))).toBe('unknown');   // unknown_sic_code
+   expect(await code(db.applySicMembership(b,iss,'2026-03-05',c1,{},fence))).toBe('same_day_change');
+   expect(await code(db.applySicMembership(b,iss,'2026-04-05',`ZV${hex(3)}`,{},fence))).toBe('unknown');   // unknown_sic_code
+   expect(await db.applySicMembership(b,iss,'2026-04-05',null,{},fence)).toBe('none');
   });
 
   it('marks: receipts make a retry of one fetch event a duplicate even after a later change (V7); A→B→A yields three observations; a changed retry payload is refused',async()=>{
@@ -4102,23 +4255,32 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await db.registerManifest(used,'aggregate',10)).toBe(true);
    const r=await db.createMetricRun(newRun(v,b));
    await db.stageMetricRows(r.runId,[cell({metric:'member_count',period_end:'2024-06-30',status:'ok',missing_reason:null,value:'1',manifest_hash:used})]);
-   expect(await db.manifestGcCandidates(100000)).not.toContain(free);                       // younger than the grace window
+   const gcHashes=async()=>(await db.manifestGcCandidates(100000)).map(c=>c.hash);
+   const p1=(await db.manifestObjectPath(free))!;
+   expect(p1).toMatch(new RegExp(`^sha256/${free}/[0-9a-f-]{36}\\.json\\.gz$`));
+   expect(await db.manifestObjectPath(sha())).toBeNull();
+   expect(await gcHashes()).not.toContain(free);                                             // younger than the grace window
    await h.ageManifest(free,2*86400);await h.ageManifest(used,2*86400);
    const cands=await db.manifestGcCandidates(100000);
-   expect(cands).toContain(free);expect(cands).not.toContain(used);
-   expect(await db.deleteManifestIndex([free,used])).toBe(1);
-   expect(await db.manifestGcCandidates(100000)).not.toContain(free);
-   expect(await db.registerManifest(free,'aggregate',10)).toBe(true);                       // gone: registering again creates it
+   expect(cands.map(c=>c.hash)).toContain(free);expect(cands.map(c=>c.hash)).not.toContain(used);
+   const cf=cands.find(c=>c.hash===free)!;
+   expect(cf.objectPath).toBe(p1);
+   expect(await db.deleteManifestIndex([{hash:free,claim:'00000000-0000-4000-8000-000000000000'}])).toBe(0);   // wrong token
+   expect(await db.deleteManifestIndex([{hash:free,claim:cf.claim},{hash:used,claim:cf.claim}])).toBe(1);
+   expect(await gcHashes()).not.toContain(free);
+   expect(await db.registerManifest(free,'aggregate',10)).toBe(true);                       // gone: registering again creates it…
+   expect(await db.manifestObjectPath(free)).not.toBe(p1);                                    // …as a new incarnation
    expect(await code(db.manifestGcCandidates(0))).toBe('unknown');
    // claim/tombstone protocol (Codex round 1 #4): candidate selected → the hash is reused → registration and staging refused
    const raced=sha();expect(await db.registerManifest(raced,'aggregate',10)).toBe(true);
    await h.ageManifest(raced,2*86400);
-   expect(await db.manifestGcCandidates(100000)).toContain(raced);
-   expect(await db.manifestGcCandidates(100000)).not.toContain(raced);
+   const rc=(await db.manifestGcCandidates(100000)).find(c=>c.hash===raced)!;
+   expect(rc).toBeDefined();
+   expect(await gcHashes()).not.toContain(raced);
    expect(await code(db.registerManifest(raced,'aggregate',10))).toBe('manifest_gc_in_progress');
    const r2=await db.createMetricRun(newRun(v,b));
    expect(await code(db.stageMetricRows(r2.runId,[cell({metric:'member_count',period_end:'2024-06-30',status:'ok',missing_reason:null,value:'1',manifest_hash:raced})]))).toBe('manifest_gc_in_progress');
-   expect(await db.deleteManifestIndex([raced])).toBe(1);
+   expect(await db.deleteManifestIndex([{hash:raced,claim:rc.claim}])).toBe(1);
    expect(await db.registerManifest(raced,'aggregate',10)).toBe(true);
    await db.failRun('aggregate',r.runId,'test');await db.failRun('aggregate',r2.runId,'test');
   });
@@ -4269,8 +4431,8 @@ describe('supabaseIndustryDb',()=>{
    :fn==='industry_freshness'?[{dataset:'industry.agg.sw2021',status:'fresh',last_ok_at:'2026-11-06T00:00:00+00:00'}]:true}));
   expect(await db.applyMemberships('b','i','sw2021','2021',threeRows('s'),['s'],{method:'today'})).toEqual({inserted:3,closed:0,superseded:1,duplicates:0,membership_ids:['m1','m2','m3']});
   expect(calls.at(-1)).toEqual({fn:'apply_industry_memberships',args:{p_batch:'b',p_issuer:'i',p_scheme:'sw2021',p_version:'2021',p_rows:threeRows('s'),p_source_ids:['s'],p_resolution:{method:'today'}}});
-  expect(await db.applySicMembership('b','i','2026-01-05','3571',{raw_hash:'h'})).toBe('changed');
-  expect(calls.at(-1)!.args).toEqual({p_batch:'b',p_issuer:'i',p_version:'sec-current',p_observed:'2026-01-05',p_code:'3571',p_provenance:{raw_hash:'h'}});
+  expect(await db.applySicMembership('b','i','2026-01-05','3571',{raw_hash:'h'},{leaseBatch:'b'})).toBe('changed');
+  expect(calls.at(-1)!.args).toEqual({p_batch:'b',p_issuer:'i',p_version:'sec-current',p_observed:'2026-01-05',p_code:'3571',p_provenance:{raw_hash:'h'},p_lease_batch:'b',p_sec_submissions:null});
   const run=newRun('2021','b');
   expect(await db.createMetricRun(run)).toEqual({runId:'r',generation:7});
   expect(calls.at(-1)).toEqual({fn:'create_industry_metric_run',args:{p:{scheme:'sw2021',version:'2021',level:1,facts_as_of:'2025-03-31',knowledge_date:'2025-03-31',history_class:'reconstruction',method_version:'industry-agg/1.0',
@@ -4376,7 +4538,7 @@ import {chunk,chunkIds,isoTs} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestUnresolved,MarkRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
  MembershipRow,MetricCellRow,MetricRunRow,NewMetricRun,ObservationResult,RunDependency,RunKind,SourceMembershipInput,
  SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
@@ -4391,7 +4553,7 @@ export const DEPS_CHUNK=2000;
 export const READ_PAGE=1000;
 /** gc_industry_manifest_candidates / delete_industry_manifests skip index rows younger than this (a building run uploads before it stages). */
 export const MANIFEST_GC_GRACE_SECONDS=86400;
-const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress'];
+const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress','lease_lost'];
 
 /** PostgreSQL / PostgREST error → IndustryDbError (shared by the Supabase and pg adapters). */
 export function toIndustryDbError(e:PgErrorLike|IndustryDbError):IndustryDbError{
@@ -4469,6 +4631,8 @@ export function valuationCellFromTable(r:Record<string,unknown>):ValuationCellRo
 }
 export const dependencyFromTable=(r:Record<string,unknown>):RunDependency=>({cell_key:str(r.cell_key),issuer_id:str(r.issuer_id),state_rev:Number(r.state_rev)});
 export const freshnessFromJson=(x:unknown):FreshnessRow[]=>(Array.isArray(x)?x:[]).map(r=>{const o=obj(r);return {dataset:str(o.dataset),status:o.status as FreshnessRow['status'],last_ok_at:isoOrNull(o.last_ok_at)};});
+/** gc_industry_manifest_candidates jsonb → claims (hash, incarnation object path, claim token; Codex round 2 R2-1). */
+export const gcClaimsFromJson=(x:unknown):ManifestGcClaim[]=>(Array.isArray(x)?x:[]).map(r=>{const o=obj(r);return {hash:str(o.hash),objectPath:str(o.object_path),claim:str(o.claim)};});
 export const unresolvedFromTable=(r:Record<string,unknown>):ManifestUnresolved=>({ts_code:str(r.ts_code),in_date:str(r.in_date),out_date:strOrNull(r.out_date),source_membership_id:str(r.id)});
 /** Distinct ts_code count of unresolved records (spec §5.2 n_unresolved). */
 export const distinctTsCodes=(rows:ManifestUnresolved[]):number=>new Set(rows.map(r=>r.ts_code)).size;
@@ -4582,8 +4746,9 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
   async applyMemberships(batch,issuer,scheme,version,input,sourceIds,resolution){
    return applyResult(await call<unknown>('apply_industry_memberships',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_rows:input,p_source_ids:sourceIds,p_resolution:resolution}));
   },
-  async applySicMembership(batch,issuer,observed,code,provenance){
-   const x=await call<{outcome:'inserted'|'duplicate'|'changed'}>('apply_sic_memberships',{p_batch:batch,p_issuer:issuer,p_version:'sec-current',p_observed:observed,p_code:code,p_provenance:provenance});
+  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return applyResult(await call<unknown>('correct_industry_membership_windows',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_source:sourceId,p_rows:rows}));},
+  async applySicMembership(batch,issuer,observed,code,provenance,fence){
+   const x=await call<{outcome:'inserted'|'duplicate'|'changed'|'none'}>('apply_sic_memberships',{p_batch:batch,p_issuer:issuer,p_version:'sec-current',p_observed:observed,p_code:code,p_provenance:provenance,p_lease_batch:fence.leaseBatch,p_sec_submissions:fence.secSubmissions??null});
    return x.outcome;
   },
   async membershipCandidates(q){
@@ -4654,8 +4819,9 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
    })).map(valuationCellFromTable);
   },
   async registerManifest(hash,kind,byteLength){return (await call<unknown>('put_industry_manifest',{p_hash:hash,p_kind:kind,p_bytes:byteLength}))===true;},
-  async manifestGcCandidates(limit){const x=await call<unknown>('gc_industry_manifest_candidates',{p_limit:limit});return (Array.isArray(x)?x:[]).map(String);},
-  async deleteManifestIndex(hashes){return Number(await call<unknown>('delete_industry_manifests',{p_hashes:hashes}));},
+  async manifestObjectPath(hash){const r=await rows<{object_path:string}>(c.from('industry_manifests').select('object_path').eq('manifest_hash',hash).limit(1));return r[0]?.object_path??null;},
+  async manifestGcCandidates(limit){return gcClaimsFromJson(await call<unknown>('gc_industry_manifest_candidates',{p_limit:limit}));},
+  async deleteManifestIndex(claims){return Number(await call<unknown>('delete_industry_manifests',{p_claims:claims}));},
   async pruneRuns(keep){return Number(await call<unknown>('prune_industry_runs',{p_keep:keep}));},
   async stateFingerprint(market){return fingerprintFromJson(await call<unknown>('industry_state_fingerprint',{p_market:market}));},
   async freshness(){return freshnessFromJson(await call<unknown>('industry_freshness',{}));},
@@ -4694,7 +4860,7 @@ import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,sameClassification
 import {DEFAULT_LICENSES} from './licenses';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,LicenseStatus,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
  MetricCellRow,MetricRunRow,ObservationResult,OfficialInput,RunDependency,RunKind,SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
 
@@ -4714,7 +4880,8 @@ export interface MemoryIndustryDb extends IndustryDb{
 const ASYNC_METHODS=['upsertClassifications','classificationTree','setDatasetLicense','isDatasetPublic','upsertSourceMemberships','currentSourceMemberships','recordResolutionError',
  'applyMemberships','applySicMembership','membershipCandidates','membershipsOfIssuer','beginFetchEvent','retryFetchEvent','applyObservations','currentMarksOn',
  'createMetricRun','setMetricRunCoverage','stageMetricRows','stageRunDependencies','activateMetricRun','failRun','activeMetricRun','metricRun','metricRowsOfRun','runDependencies',
- 'activeValuationRun','publishedValuations','registerManifest','manifestGcCandidates','deleteManifestIndex','pruneRuns','stateFingerprint','freshness','metricRunVisible',
+ 'activeValuationRun','publishedValuations','registerManifest','manifestObjectPath','manifestGcCandidates','deleteManifestIndex','pruneRuns','stateFingerprint','freshness','metricRunVisible',
+ 'correctMembershipWindows',
  'unresolvedCount','unresolvedOf'] as const satisfies readonly (keyof IndustryDb)[];
 /** Compile-time check: ASYNC_METHODS must cover every IndustryDb method. */
 export type AsyncMethodsComplete=[Exclude<keyof IndustryDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
@@ -4759,7 +4926,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   licences:Map<string,LicenseStatus>;classes:Map<string,ClassificationRow>;sources:Map<string,SourceMembershipRow>;memberships:Map<string,MembershipRow>;
   events:Map<string,{job:string;params:Record<string,unknown>;batch_id:string;attempt:number;started_at:string}>;
   receipts:Map<string,{payload_hash:string;outcome:string;observation_id:string|null}>;marks:Map<string,MarkRow>;officials:Map<string,MemoryOfficialRow>;
-  manifests:Map<string,{manifest_hash:string;kind:RunKind;byte_length:number;created_at:string;gc_claimed_at:string|null}>;
+  manifests:Map<string,{manifest_hash:string;kind:RunKind;byte_length:number;created_at:string;object_path:string;gc_claimed_at:string|null;gc_claim:string|null}>;
   runs:Map<string,MetricRunRow>;cells:Map<string,Map<string,MetricCellRow>>;deps:Map<string,Map<string,RunDependency>>;
   vruns:Map<string,ValuationRunRow>;vcells:Map<string,ValuationCellRow[]>;
  }
@@ -4807,6 +4974,21 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    .sort((a,b)=>cmp(a.ts_code,b.ts_code)||cmp(a.in_date,b.in_date)||cmp(a.id,b.id))
    .map(r=>({ts_code:r.ts_code,in_date:r.in_date,out_date:r.out_date,source_membership_id:r.id}));
  };
+
+ const applySicRow=(batch:string,issuer:string,observed:string,code:string,provenance:Record<string,unknown>)=>atomic(s=>{
+    const node=s.classes.get(classKey('sic','sec-current',code));
+    if(!node)unknown(`unknown_sic_code: ${code}`);
+    const cur=okRows(s).filter(m=>m.issuer_id===issuer&&m.scheme==='sic'&&m.version==='sec-current'&&m.valid_to===null).sort((a,b)=>cmp(b.valid_from,a.valid_from))[0];
+    let outcome:'inserted'|'duplicate'|'changed'='inserted';
+    if(cur){
+     if(cur.code===code)return 'duplicate' as const;
+     if(cur.valid_from>=observed)fail('same_day_change',`same_day_change: issuer ${issuer} sic ${cur.code} -> ${code} on ${observed}`);
+     cur.valid_to=observed;cur.valid_to_available_date=observed;outcome='changed';
+    }
+    insertMembership(s,{membership_id:randomUUID(),issuer_id:issuer,scheme:'sic',version:'sec-current',code,level:node!.level,valid_from:observed,valid_to:null,available_date:observed,
+     valid_to_available_date:null,source:'sec:submissions',source_membership_id:null,batch_id:batch,status:'ok',superseded_by:null,provenance:{...clone(provenance),availability:'observed'} as MembershipRow['provenance']});
+    return outcome;
+   });
 
  const raw:MemoryIndustryDb={
   tables,
@@ -4913,20 +5095,34 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    for(const id of sourceIds){const r=s.sources.get(id)!;r.issuer_id=issuer;r.resolution={...clone(resolution??{}),membership_ids:[...ids]};r.resolution_error=null;}
    return {inserted,closed,superseded,duplicates,membership_ids:ids} as ApplyMembershipsResult;
   }),
-  applySicMembership:(batch,issuer,observed,code,provenance)=>atomic(s=>{
-   const node=s.classes.get(classKey('sic','sec-current',code));
-   if(!node)unknown(`unknown_sic_code: ${code}`);
-   const cur=okRows(s).filter(m=>m.issuer_id===issuer&&m.scheme==='sic'&&m.version==='sec-current'&&m.valid_to===null).sort((a,b)=>cmp(b.valid_from,a.valid_from))[0];
-   let outcome:'inserted'|'duplicate'|'changed'='inserted';
-   if(cur){
-    if(cur.code===code)return 'duplicate' as const;
-    if(cur.valid_from>=observed)fail('same_day_change',`same_day_change: issuer ${issuer} sic ${cur.code} -> ${code} on ${observed}`);
-    cur.valid_to=observed;cur.valid_to_available_date=observed;outcome='changed';
+  correctMembershipWindows:(batch,issuer,scheme,version,sourceId,input)=>atomic(s=>{
+   const src=s.sources.get(sourceId);
+   if(!src||src.status!=='current'||src.scheme!==scheme||src.issuer_id!==issuer)fail('membership_conflict',`membership_conflict: source record ${sourceId} is not current and resolved to issuer ${issuer}`);
+   let inserted=0,superseded=0,duplicates=0;const ids:string[]=[];
+   for(const t of input){
+    if((t.provenance as Record<string,unknown>).source_membership_id!==sourceId)fail('membership_conflict','membership_conflict: correction targets must carry the source record');
+    const old=okRows(s).find(m=>m.issuer_id===issuer&&m.scheme===scheme&&m.version===version&&m.source_membership_id===sourceId&&m.level===t.level&&m.code===t.code&&m.valid_from===t.valid_from);
+    if(!old)fail('membership_conflict',`membership_conflict: no ok row of source ${sourceId} at level ${t.level} from ${t.valid_from}`);
+    if(old!.valid_to===t.valid_to&&old!.valid_to_available_date===t.valid_to_available_date){duplicates++;ids.push(old!.membership_id);continue;}
+    const id=randomUUID();
+    old!.status='superseded';old!.superseded_by=id;
+    insertMembership(s,{membership_id:id,issuer_id:issuer,scheme,version,code:old!.code,level:old!.level,valid_from:old!.valid_from,valid_to:t.valid_to,available_date:old!.available_date,
+     valid_to_available_date:t.valid_to_available_date,source:t.source,source_membership_id:sourceId,batch_id:batch,status:'ok',superseded_by:null,provenance:clone(t.provenance)});
+    superseded++;inserted++;ids.push(id);
    }
-   insertMembership(s,{membership_id:randomUUID(),issuer_id:issuer,scheme:'sic',version:'sec-current',code,level:node!.level,valid_from:observed,valid_to:null,available_date:observed,
-    valid_to_available_date:null,source:'sec:submissions',source_membership_id:null,batch_id:batch,status:'ok',superseded_by:null,provenance:{...clone(provenance),availability:'observed'} as MembershipRow['provenance']});
-   return outcome;
+   return {inserted,closed:0,superseded,duplicates,membership_ids:ids} as ApplyMembershipsResult;
   }),
+  // lease fence (Codex round 2 R2-3): the scope row (in `tables`) must still be leased to fence.leaseBatch and unexpired
+  async applySicMembership(batch,issuer,observed,code,provenance,fence){
+   const [lease]=await tables.select('industry_sync_scope',{issuer_id:issuer,job:'sic'},{limit:1});
+   if(!lease||lease.lease_batch_id!==fence.leaseBatch||lease.lease_until==null||Date.parse(String(lease.lease_until))<=Date.parse(now()))fail('lease_lost');
+   const outcome=code===null?'none' as const:await applySicRow(batch,issuer,observed,code,provenance);
+   if(fence.secSubmissions!=null){
+    const [iss]=await tables.select('issuers',{issuer_id:issuer},{limit:1});
+    if(iss){const prov=(iss.provenance&&typeof iss.provenance==='object'?iss.provenance:{}) as Record<string,unknown>;await tables.update('issuers',{issuer_id:issuer},{provenance:{...prov,sec_submissions:clone(fence.secSubmissions)},updated_at:now()});}
+   }
+   return outcome;
+  },
   async membershipCandidates(q){
    return clone([...st.memberships.values()].filter(m=>m.scheme===q.scheme&&m.version===q.version&&m.code===q.code&&m.level===q.level&&m.valid_from<=q.on)
     .sort((a,b)=>cmp(a.issuer_id,b.issuer_id)||cmp(a.valid_from,b.valid_from)||cmp(a.membership_id,b.membership_id)));
@@ -5088,18 +5284,19 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    if(!(byteLength>0))unknown('industry_manifests_byte_length_check');
    const e=st.manifests.get(hash);
    if(e){if(e.gc_claimed_at!==null)fail('manifest_gc_in_progress');e.created_at=now();return false;}
-   st.manifests.set(hash,{manifest_hash:hash,kind,byte_length:byteLength,created_at:now(),gc_claimed_at:null});return true;
+   st.manifests.set(hash,{manifest_hash:hash,kind,byte_length:byteLength,created_at:now(),object_path:`sha256/${hash}/${randomUUID()}.json.gz`,gc_claimed_at:null,gc_claim:null});return true;
   },
+  async manifestObjectPath(hash){return st.manifests.get(hash)?.object_path??null;},
   async manifestGcCandidates(limit){
    if(!Number.isInteger(limit)||limit<1)unknown('invalid_limit');
    const t=now();const staleClaim=(c:string|null)=>c===null||Date.parse(c)<=Date.parse(t)-3_600_000;
    const picked=[...st.manifests.values()].filter(m=>oldEnough(m.created_at)&&staleClaim(m.gc_claimed_at)&&unreferenced(st,m.manifest_hash))
     .sort((a,b)=>cmp(a.created_at,b.created_at)||cmp(a.manifest_hash,b.manifest_hash)).slice(0,limit);
-   for(const m of picked)m.gc_claimed_at=t;   // claim (tombstone): see put_industry_manifest
-   return picked.map(m=>m.manifest_hash);
+   for(const m of picked){m.gc_claimed_at=t;m.gc_claim=randomUUID();}   // claim (tombstone) with a fresh token: see put_industry_manifest
+   return picked.map(m=>({hash:m.manifest_hash,objectPath:m.object_path,claim:m.gc_claim!})) as ManifestGcClaim[];
   },
-  async deleteManifestIndex(hashes){
-   let n=0;for(const h of new Set(hashes)){const m=st.manifests.get(h);if(m&&m.gc_claimed_at!==null&&oldEnough(m.created_at)&&unreferenced(st,h)){st.manifests.delete(h);n++;}}
+  async deleteManifestIndex(claims){
+   let n=0;for(const c of claims){const m=st.manifests.get(c.hash);if(m&&m.gc_claim===c.claim&&m.gc_claimed_at!==null&&oldEnough(m.created_at)&&unreferenced(st,c.hash)){st.manifests.delete(c.hash);n++;}}
    return n;
   },
   async pruneRuns(keep){
@@ -5143,7 +5340,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
 - [ ] **Step 6: 运行单测**
 
 Run: `npm test -- src/lib/industry/db.test.ts src/lib/industry/cadence.test.ts`
-Expected: `db.test.ts` 28 passed（`memoryIndustryDb contract` 17、`licences` 1、`toIndustryDbError` 1、`memoryIndustryDb specifics` 5、`supabaseIndustryDb` 4），`cadence.test.ts` 2 passed。
+Expected: `db.test.ts` 29 passed（`memoryIndustryDb contract` 18、`licences` 1、`toIndustryDbError` 1、`memoryIndustryDb specifics` 5、`supabaseIndustryDb` 4），`cadence.test.ts` 2 passed。
 
 - [ ] **Step 7: 类型与 lint**
 
@@ -5254,7 +5451,7 @@ import {chunkIds} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {ident,typeParsers} from '../db/pg-table-client';
 import {
- DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,dependencyFromTable,distinctTsCodes,fingerprintFromJson,freshnessFromJson,levelColumn,
+ DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,dependencyFromTable,distinctTsCodes,fingerprintFromJson,freshnessFromJson,gcClaimsFromJson,levelColumn,
  markFromTable,membershipFromTable,metricCellFromTable,metricRunFromTable,newRunArgs,observationResult,sameClassification,sourceArgs,sourceFromTable,
  stagedCellArgs,toIndustryDbError,unresolvedFromTable,upsertSourceResult,valuationCellFromTable,valuationRunFromTable,
 } from './db';
@@ -5321,8 +5518,9 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
   async applyMemberships(batch,issuer,scheme,version,input,sourceIds,resolution){
    return applyResult(await fn<unknown>('public.apply_industry_memberships($1,$2,$3,$4,$5::jsonb,$6::uuid[],$7::jsonb)',[batch,issuer,scheme,version,JSON.stringify(input),sourceIds,JSON.stringify(resolution)]));
   },
-  async applySicMembership(batch,issuer,observed,code,provenance){
-   return (await fn<{outcome:'inserted'|'duplicate'|'changed'}>(`public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,$5::jsonb)`,[batch,issuer,observed,code,JSON.stringify(provenance)])).outcome;
+  async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return applyResult(await fn<unknown>('public.correct_industry_membership_windows($1,$2,$3,$4,$5,$6::jsonb)',[batch,issuer,scheme,version,sourceId,JSON.stringify(rows)]));},
+  async applySicMembership(batch,issuer,observed,code,provenance,fence){
+   return (await fn<{outcome:'inserted'|'duplicate'|'changed'|'none'}>(`public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,$5::jsonb,$6,$7::jsonb)`,[batch,issuer,observed,code,JSON.stringify(provenance),fence.leaseBatch,fence.secSubmissions==null?null:JSON.stringify(fence.secSubmissions)])).outcome;
   },
   async membershipCandidates(q){
    return (await run(`select * from ${rel('issuer_industry_memberships')} where scheme = $1 and version = $2 and code = $3 and level = $4 and valid_from <= $5::date order by issuer_id, valid_from, membership_id`,
@@ -5386,8 +5584,9 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
    return (await run(`select * from ${rel('industry_valuations')} where ${where} order by code, metric, trade_date`,values)).rows.map(valuationCellFromTable);
   },
   registerManifest:(hash,kind,byteLength)=>fn<boolean>('public.put_industry_manifest($1,$2,$3)',[hash,kind,byteLength]),
-  async manifestGcCandidates(limit){const x=await fn<unknown>('public.gc_industry_manifest_candidates($1)',[limit]);return (Array.isArray(x)?x:[]).map(String);},
-  async deleteManifestIndex(hashes){return Number(await fn<unknown>('public.delete_industry_manifests($1::text[])',[hashes]));},
+  async manifestObjectPath(hash){return ((await run(`select object_path from ${rel('industry_manifests')} where manifest_hash = $1`,[hash])).rows[0]?.object_path as string|undefined)??null;},
+  async manifestGcCandidates(limit){return gcClaimsFromJson(await fn<unknown>('public.gc_industry_manifest_candidates($1)',[limit]));},
+  async deleteManifestIndex(claims){return Number(await fn<unknown>('public.delete_industry_manifests($1::jsonb)',[JSON.stringify(claims)]));},
   async pruneRuns(keep){return Number(await fn<unknown>('public.prune_industry_runs($1)',[keep]));},
   async stateFingerprint(market){return fingerprintFromJson(await fn<unknown>('public.industry_state_fingerprint($1)',[market]));},
   async freshness(){return freshnessFromJson(await fn<unknown>('public.industry_freshness()',[]));},
@@ -5402,9 +5601,9 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
 - [ ] **Step 3: 运行**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/industry/functions.integration.test.ts src/lib/industry/industry.integration.test.ts`
-Expected: 全部通过：`functions.integration.test.ts` 35 个（Task 2 的 16 + `pgIndustryDb contract` 17 + `pg specifics` 2）、`industry.integration.test.ts` 7 个。
+Expected: 全部通过：`functions.integration.test.ts` 37 个（Task 2 的 17 + `pgIndustryDb contract` 18 + `pg specifics` 2）、`industry.integration.test.ts` 7 个。
 Run: `npm test -- src/lib/industry`
-Expected: `db.test.ts` 28、`cadence.test.ts` 2 通过；两个集成文件在无 `S4_TEST_STATE` 时 skipped。
+Expected: `db.test.ts` 29、`cadence.test.ts` 2 通过；两个集成文件在无 `S4_TEST_STATE` 时 skipped。
 
 - [ ] **Step 4: 全量数据库门禁**
 
@@ -7306,7 +7505,7 @@ describe('runResolveMemberships (real recordings)',()=>{
  it('resolves by ticker as of today, writes three rows per record with K3 windows in one call per issuer, marks unresolved records and counts them',async()=>{
   const {tables,db,deps}=await setup();
   const r=await runResolveMemberships(deps,{triggeredBy:'cron'});
-  expect(r.records).toEqual({applied:12,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:12,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
   expect(r.status).toBe('success');
   expect(r.errors[0]).toEqual({code:'skipped_summary',message:JSON.stringify({no_issuer:217})});
   const zhangyu=await db.membershipsOfIssuer(ISSUER['000869.SZ'],{scheme:'sw2021'});
@@ -7331,7 +7530,7 @@ describe('runResolveMemberships (real recordings)',()=>{
   expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.memberships')).toMatchObject({expected_cadence:'weekly',status:'fresh'});
   // a second run has nothing new to resolve except the retried unresolved records
   const again=await runResolveMemberships(deps,{});
-  expect(again.records).toEqual({applied:0,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistConflicts:0});
+  expect(again.records).toEqual({applied:0,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
  });
  it('correction path (a): an out_date correction supersedes the old record, and resolving the new record supersedes its membership rows',async()=>{
   // synthetic edit of a real response = earlier upstream state: 600090.SH's exit dated 2017-06-20
@@ -7372,6 +7571,36 @@ describe('runResolveMemberships (real recordings)',()=>{
   expect((await runResolveMemberships({...deps,tushare:fixtureTushareCall()},{})).records).toMatchObject({delistClosed:0,delistConflicts:0});
   expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='membership_delist_conflict')).toEqual([]);
  });
+ it('a delisting learned after an exit window closed supersedes it with the K3-bounded window (Codex round 2 R2-2)',async()=>{
+  // run 1 — synthetic edit of a real response: 600090.SH not yet delisted; its 801126.SI window closed by out_date 2017-06-29
+  const listed:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code');return {...r,items:r.items.filter(it=>it[ts]!=='600090.SH')};
+  };
+  const {tables,db,deps}=await setup(listed);
+  await runResolveMemberships(deps,{});
+  const before=(await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'})).filter(m=>m.code==='801126.SI');
+  expect(before.map(m=>[m.status,m.valid_to])).toEqual([['ok','2017-06-29']]);
+  // run 2 — synthetic edit of a real response: the delisting now known, dated before that out_date
+  const earlyDelist:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='600090.SH'?it.map((v,i)=>i===dl?'20161231':v):it)};
+  };
+  const r=await runResolveMemberships({...deps,tushare:earlyDelist},{});
+  expect(r.records).toMatchObject({delistCorrected:1,delistConflicts:0});
+  const all=await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'});
+  const ok=all.filter(m=>m.status==='ok'),old=all.filter(m=>m.status==='superseded');
+  expect(ok.length).toBe(3);expect(ok.every(m=>m.valid_to==='2016-12-31'&&m.valid_to_available_date==='2016-12-31')).toBe(true);
+  expect(old.length).toBe(3);expect(old.every(m=>ok.some(o=>o.membership_id===m.superseded_by&&o.level===m.level&&o.source_membership_id===m.source_membership_id))).toBe(true);
+  // the intervening period end 2017-03-31 no longer counts 600090.SH; 2016-06-30 still does
+  const memberAt=async(on:string)=>(await db.membershipsOfIssuer(ISSUER['600090.SH'],{on})).some(m=>m.status==='ok');
+  expect(await memberAt('2017-03-31')).toBe(false);
+  expect(await memberAt('2016-06-30')).toBe(true);
+  expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='membership_delist_conflict')).toEqual([]);
+  // run 3 — idempotent
+  expect((await runResolveMemberships({...deps,tushare:earlyDelist},{})).records).toMatchObject({delistCorrected:0,delistConflicts:0});
+ });
  it('in_date on or after the delisting date: not applied, quarantined membership_after_delist, resolution_error recorded',async()=>{
   // synthetic edit of a real response: 600090.SH's delist_date moved before its in_date (upstream has 6 such rows, K3)
   const edited:TushareCall=async(api,params,fields)=>{
@@ -7381,7 +7610,7 @@ describe('runResolveMemberships (real recordings)',()=>{
   };
   const {tables,db,deps}=await setup(edited);
   const r=await runResolveMemberships(deps,{});
-  expect(r.records).toEqual({applied:11,unresolved:217,failed:0,afterDelist:1,delistClosed:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:11,unresolved:217,failed:0,afterDelist:1,delistClosed:0,delistCorrected:0,delistConflicts:0});
   expect(await db.membershipsOfIssuer(ISSUER['600090.SH'],{})).toEqual([]);
   expect(tables.rows('dq_quarantine').map(q=>[q.reason_code,q.natural_key])).toEqual([['membership_after_delist','sw2021:2021:600090.SH:1997-06-16']]);
   expect((await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='600090.SH')!.resolution_error).toMatchObject({code:'membership_after_delist'});
@@ -7392,7 +7621,7 @@ describe('runResolveMemberships (real recordings)',()=>{
   const {tables,db,deps}=await setup(fixtureTushareCall(),failing);
   const r=await runResolveMemberships(deps,{});
   expect(r.status).toBe('partial');
-  expect(r.records).toEqual({applied:11,unresolved:217,failed:1,afterDelist:0,delistClosed:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:11,unresolved:217,failed:1,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
   expect(r.counts.quarantined).toBe(1);
   expect(await db.membershipsOfIssuer(ISSUER['600519.SH'],{})).toEqual([]);
   const rec=(await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='600519.SH')!;
@@ -7478,12 +7707,12 @@ export function resolveSourceMemberships(sources:SourceMembershipRow[],resolved:
  return plan;
 }
 
-export interface ApplyResolutionsResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>;records:{applied:number;unresolved:number;failed:number;afterDelist:number;delistClosed:number;delistConflicts:number}}
+export interface ApplyResolutionsResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>;records:{applied:number;unresolved:number;failed:number;afterDelist:number;delistClosed:number;delistCorrected:number;delistConflicts:number}}
 
 /** Applies a plan: one applyMemberships per issuer; records errors on the source rows. Caller owns the batch. */
 export async function applyResolutions(deps:Pick<IndustryDeps,'tables'|'db'|'now'>,batchId:string,plan:ResolutionPlan,opts:{today:string}):Promise<ApplyResolutionsResult>{
  const counts=emptyCounts();const errors:BatchError[]=[];const skips:string[]=[];
- const records={applied:0,unresolved:0,failed:0,afterDelist:0,delistClosed:0,delistConflicts:0};
+ const records={applied:0,unresolved:0,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0};
  const at=()=>deps.now().toISOString();
  const byCode=new Map<string,string[]>();
  for(const u of plan.unresolved)(byCode.get(u.code)??byCode.set(u.code,[]).get(u.code)!).push(u.id);
@@ -7528,7 +7757,9 @@ export async function applyResolutions(deps:Pick<IndustryDeps,'tables'|'db'|'now
  * window now ends (windowEnd(out_date, delist_date) not null), re-apply the SAME record with the bounded targets —
  * apply_industry_memberships step 3 closes open ok rows (valid_to, valid_to_available_date) in one transaction,
  * keeping the stored issuer and membership ids. A stored, already-closed window that differs from the K3 end
- * (out_date after the delisting) is not rewritten: quarantined membership_delist_conflict for review.
+ * (the delisting was learned after the window closed) is superseded through IndustryDb.correctMembershipWindows —
+ * the old rows become superseded (superseded_by → the corrected rows), so no incorrect ok row stays eligible
+ * (Codex plan audit round 2 R2-2); a correction the DB rejects is quarantined membership_delist_conflict.
  */
 export async function reconcileDelistings(deps:Pick<IndustryDeps,'tables'|'db'|'now'>,batchId:string,delist:ReadonlyMap<string,string>,result:ApplyResolutionsResult):Promise<void>{
  if(delist.size===0)return;
@@ -7542,6 +7773,15 @@ export async function reconcileDelistings(deps:Pick<IndustryDeps,'tables'|'db'|'
    const mine=rows.filter(m=>m.source_membership_id===s.id);
    if(end===null||mine.length===0||mine.every(m=>m.valid_to===end&&m.valid_to_available_date===end))continue;
    if(mine.some(m=>m.valid_to!==null&&m.valid_to!==end)){
+    // an already-closed window that ends after the K3 end (delisting learned late; Codex round 2 R2-2): the stored rows
+    // are superseded by a corrected, K3-bounded version of the same record in one transaction (lineage kept)
+    try{
+     const res=await deps.db.correctMembershipWindows(batchId,issuer,'sw2021','2021',s.id,targetsFor(s,delist.get(s.ts_code)!));
+     if(res.superseded>0){result.counts.versioned++;result.records.delistCorrected++;}
+     continue;
+    }catch(e){
+     if(!(e instanceof IndustryDbError))throw e;
+    }
     await quarantine(deps.tables,{dataset:SW_MEMBERSHIPS_DATASET,table:'issuer_industry_memberships',naturalKey:`sw2021:2021:${s.ts_code}:${s.in_date}`,reasonCode:'membership_delist_conflict',
      detail:{stored_valid_to:mine.map(m=>m.valid_to),k3_end:end},payload:{source_id:s.id,issuer_id:issuer},batchId});
     result.counts.quarantined++;result.records.delistConflicts++;result.errors.push({code:'membership_delist_conflict',key:s.ts_code});
@@ -7577,7 +7817,7 @@ export async function runResolveMemberships(deps:IndustryDeps,opts:RunResolveOpt
    const errors=[{code,message:errorMessage(e)}];
    const status=await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors},deps.now());
    await recordAttempt(deps.tables,SW_MEMBERSHIPS_DATASET,{ok:false,cadence:'weekly',now:deps.now()});
-   return {status,batchId,counts:emptyCounts(),errors,records:{applied:0,unresolved:0,failed:0,afterDelist:0,delistClosed:0,delistConflicts:0},exitCode:1};
+   return {status,batchId,counts:emptyCounts(),errors,records:{applied:0,unresolved:0,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0},exitCode:1};
   }
  }
  const resolved=new Map<string,string|null|{error:string}>();
@@ -7597,7 +7837,7 @@ export async function runResolveMemberships(deps:IndustryDeps,opts:RunResolveOpt
 - [ ] **Step 8: Run it and confirm it passes**
 
 Run: `npm test -- src/lib/industry/memberships.test.ts src/lib/industry/resolve-memberships.test.ts`
-Expected: `Tests  19 passed (19)`.
+Expected: `Tests  20 passed (20)`.
 
 If only the correction-path test fails, check the plan skeleton's 跨任务接口约定 (A4 membership application: same-level supersession of the older record's `ok` rows; A10 `membershipsOfIssuer` without `on` returns every status) against the Task 3 `memoryIndustryDb`. If only the `unresolvedCount` assertion fails, check A9 (`unresolvedOf/Count` = `memberships.ts::unresolvedAt/countUnresolved`). Fix the memory implementation to the spec, not the test.
 
@@ -7902,9 +8142,9 @@ async function setup(fetchOverrides:Parameters<typeof fixtureSecFetch>[0]={}){
  await facts.reconcileScope('US',Object.entries(CIK).filter(([id])=>id!==RETIRED).map(([id,cik])=>({issuer_id:id,reasons:['universe:sp500'],priority:10,fetch_key:(cik??'9').padStart(10,'0')})));
  await facts.reconcileScope('US',[{issuer_id:RETIRED,reasons:[],priority:0,fetch_key:'0000000003'}]);
  let now=new Date(DAY1);
- const db:IndustryDb=memoryIndustryDb();
+ const db=memoryIndustryDb({tables});db.setNow(DAY1);   // the lease fence reads the scope row from the same tables
  const deps:IndustryDeps={tables,db,facts,manifests:unusedManifests,now:()=>now,codeVersion:'sha',fetch:fixtureSecFetch({[submissionsUrl('2')]:json({cik:'0000000002',sic:'9999',sicDescription:'Unknown',fiscalYearEnd:'1231'}),...fetchOverrides})};
- return {tables,db,deps,facts,setNow:(iso:string)=>{now=new Date(iso);}};
+ return {tables,db,deps,facts,setNow:(iso:string)=>{now=new Date(iso);db.setNow(iso);}};
 }
 
 describe('planSicClassifications / runClassificationsSic',()=>{
@@ -8013,6 +8253,22 @@ describe('runMembershipsSic',()=>{
   expect(tables.rows('industry_sync_scope').find(x=>x.issuer_id===AAPL)).toMatchObject({lease_batch_id:'batch-a',last_status:null});
   expect(await finishSicScopeRow(tables,AAPL,'batch-a',{last_status:'success'})).toBe(true);
   expect(tables.rows('industry_sync_scope').find(x=>x.issuer_id===AAPL)).toMatchObject({lease_batch_id:null,lease_until:null,last_status:'success'});
+ });
+ it('a lease takeover rejects the old worker\'s data write inside the apply transaction (Codex round 2 R2-3)',async()=>{
+  const {tables,db,deps,setNow}=await setup();
+  await runClassificationsSic(deps);
+  await syncSicScope(deps);
+  const [row]=await tables.select('industry_sync_scope',{issuer_id:AAPL,job:'sic'});
+  expect(await claimSicScopeRow(tables,row,'batch-a',new Date(DAY1))).toBe(true);
+  setNow('2026-11-08T02:20:00.000Z');   // batch-a's 15-minute lease expired; batch-b takes the row over
+  const [taken]=await tables.select('industry_sync_scope',{issuer_id:AAPL,job:'sic'});
+  expect(await claimSicScopeRow(tables,taken,'batch-b',new Date('2026-11-08T02:20:00.000Z'))).toBe(true);
+  const prov={availability:'observed',raw_hash:'h'};
+  await expect(db.applySicMembership('batch-a',AAPL,'2026-11-08','3571',prov,{leaseBatch:'batch-a',secSubmissions:{sic:'3571'}})).rejects.toMatchObject({code:'lease_lost'});
+  expect(await db.membershipsOfIssuer(AAPL,{scheme:'sic'})).toEqual([]);
+  expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toBeUndefined();
+  expect(await db.applySicMembership('batch-b',AAPL,'2026-11-08','3571',prov,{leaseBatch:'batch-b',secSubmissions:{sic:'3571'}})).toBe('inserted');
+  expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toEqual({sic:'3571'});
  });
  it('honours the limit and paces requests',async()=>{
   const {deps}=await setup();
@@ -8181,29 +8437,35 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
     else if(sub.kind==='unavailable'){errors.push({code:'sec_unavailable',key:issuerId,message:`status_${sub.status??'network'}`});retryMs=RETRY_UNAVAILABLE_MS;}
     else{
      const p=sub.parsed;
-     // issuers.provenance.sec_submissions (rewritten only when a value changed)
+     // issuers.provenance.sec_submissions (only when a value changed) — written by applySicMembership inside its
+     // lease-fenced transaction, never directly (Codex plan audit round 2 R2-3)
      const prov=provOf(issuer);const prev=(prov.sec_submissions??{}) as Record<string,unknown>;
-     if(prev.fiscal_year_end!==p.fiscalYearEnd||prev.sic!==p.sicRaw||prev.sic_description!==p.sicDescription)
-      await deps.tables.update('issuers',{issuer_id:issuerId,updated_at:(issuer.updated_at as string|undefined)??null},
-       {provenance:{...prov,sec_submissions:{source:SIC_SOURCE,url:sub.url,observed_at:sub.fetchedAt,raw_hash:sub.rawHash,fiscal_year_end:p.fiscalYearEnd,sic:p.sicRaw,sic_description:p.sicDescription}},updated_at:at.toISOString()});
+     const secSubmissions=prev.fiscal_year_end!==p.fiscalYearEnd||prev.sic!==p.sicRaw||prev.sic_description!==p.sicDescription
+      ?{source:SIC_SOURCE,url:sub.url,observed_at:sub.fetchedAt,raw_hash:sub.rawHash,fiscal_year_end:p.fiscalYearEnd,sic:p.sicRaw,sic_description:p.sicDescription}:null;
+     const fence={leaseBatch:batchId,secSubmissions};
+     if(!p.sic||!known.has(p.sic))await deps.db.applySicMembership(batchId,issuerId,observed,null,{},fence);   // provenance only (throws lease_lost)
      if(!p.sic){skips.push('no_sic');ok=true;}
      else if(!known.has(p.sic)){
       await quarantine(deps.tables,{dataset:SIC_DATASET,table:'issuer_industry_memberships',naturalKey:`sic:${issuerId}:${p.sic}`,reasonCode:'unknown_sic_code',detail:{sic:p.sic,sic_description:p.sicDescription},payload:{issuer_id:issuerId,cik,raw_hash:sub.rawHash,url:sub.url},batchId});
       counts.quarantined++;errors.push({code:'unknown_sic_code',key:issuerId,message:p.sic});
      }else{
       try{
-       const res=await deps.db.applySicMembership(batchId,issuerId,observed,p.sic,{availability:'observed',raw_hash:sub.rawHash,locator:{url:sub.url,field:'sic',cik},sic_description:p.sicDescription});
-       if(res==='inserted')counts.inserted++;else if(res==='duplicate')counts.duplicates++;else counts.versioned++;
+       const res=await deps.db.applySicMembership(batchId,issuerId,observed,p.sic,{availability:'observed',raw_hash:sub.rawHash,locator:{url:sub.url,field:'sic',cik},sic_description:p.sicDescription},fence);
+       if(res==='inserted')counts.inserted++;else if(res==='duplicate')counts.duplicates++;else if(res==='changed')counts.versioned++;
        ok=true;
       }catch(e){
-       if(!(e instanceof IndustryDbError))throw e;
+       if(!(e instanceof IndustryDbError)||e.code==='lease_lost')throw e;
        await quarantine(deps.tables,{dataset:SIC_DATASET,table:'issuer_industry_memberships',naturalKey:`sic:${issuerId}:${observed}`,reasonCode:e.code==='unknown'?'sic_apply_error':e.code,detail:{sic:p.sic,message:errorMessage(e).slice(0,500)},payload:{issuer_id:issuerId,cik,raw_hash:sub.rawHash},batchId});
        counts.quarantined++;errors.push({code:e.code,key:issuerId});
       }
      }
     }
    }
-  }catch(e){counts.failed++;errors.push({code:'sic_error',key:issuerId,message:errorMessage(e)});}
+  }catch(e){
+   // lease_lost: another worker holds the row now — nothing was written by this worker, its outcome stands; no finish
+   if(e instanceof IndustryDbError&&e.code==='lease_lost'){errors.push({code:'lease_lost',key:issuerId});continue;}
+   counts.failed++;errors.push({code:'sic_error',key:issuerId,message:errorMessage(e)});
+  }
   const doneAt=deps.now().toISOString();
   if(!await finishSicScopeRow(deps.tables,issuerId,batchId,{next_due_at:iso(deps.now().getTime()+retryMs),last_attempt_at:doneAt,...(ok?{last_success_at:doneAt}:{}),last_status:ok?'success':'failed',updated_at:doneAt}))
    errors.push({code:'lease_lost',key:issuerId});   // the lease expired and another worker took the row: its outcome stands
@@ -8220,10 +8482,10 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
 - [ ] **Step 9: Run it, then run every Task 5–9 suite**
 
 Run: `npm test -- src/lib/industry/sic.test.ts src/lib/industry/providers/sec-sic.test.ts`
-Expected: `Tests  17 passed (17)`.
+Expected: `Tests  18 passed (18)`.
 
 Run: `npm test -- src/lib/industry src/lib/facts/scope.test.ts`
-Expected: every Task 5–9 file passes: 84 Task 5–9 tests plus 13 landed `scope.test.ts`, plus the Task 3 tests under `src/lib/industry`.
+Expected: every Task 5–9 file passes: 86 Task 5–9 tests plus 13 landed `scope.test.ts`, plus the Task 3 tests under `src/lib/industry`.
 
 - [ ] **Step 10: Typecheck and lint**
 
@@ -9044,7 +9306,7 @@ git commit -m "feat(industry): aggregation method config + hash, exact decimals,
 
 要点：
 - `buildAggregateManifest` 纯：按规格 §5.3 的全序（加上 `roles` 的 `duration`）排序全部数组，因此输入顺序打乱后规范字节与哈希不变；`derived[].inputs` = 计划二 `MetricRow.inputs` 原样（含 `ytd_rule`、`quarter`，V5）；`facts[].source_ref/citation` 只经调用方传入的 `filings`（`FactsDb.filingsOfIssuer` 结果）查得，查不到 → `null` + `warnings: filing_not_found:<filing_id>`。`citation`：EDGAR → `'edgar'`；Tushare 有 `document_ref` → `'linked'`，否则 `'pending'`。
-- `manifest_hash = sha256(未压缩规范 JSON)`；桶 `industry-manifests`，路径 `sha256/<hash>.json.gz`，`upsert:false`，**先** `registerManifest`（`put_industry_manifest`：GC 已认领（tombstone）的哈希在这里被拒 `manifest_gc_in_progress`）、**再上传对象**；409 = 已存在（同哈希即同字节）。GC 协议见骨架《跨任务接口约定》A7（Codex 计划审计第 1 轮 #4）。`get` 解压后复核哈希与规范性。
+- `manifest_hash = sha256(未压缩规范 JSON)`；桶 `industry-manifests`，路径 = 索引行的 `object_path`（`sha256/<hash>/<登记 uuid>.json.gz`，按代次区分，Codex 第 2 轮 R2-1；读写都经 `manifestObjectPath`），`upsert:false`，**先** `registerManifest`（`put_industry_manifest`：GC 已认领（tombstone）的哈希在这里被拒 `manifest_gc_in_progress`）、**再上传对象**；409 = 已存在（同哈希即同字节）。GC 协议见骨架《跨任务接口约定》A7（Codex 计划审计第 1 轮 #4）。`get` 解压后复核哈希与规范性。
 - `gcManifests`：`manifestGcCandidates` → `ManifestStore.remove` → 只对删成功的哈希 `deleteManifestIndex`（迁移不能引用 `storage.objects`，删失败的保留索引行，下次再试）。
 - `replayFromManifest` 纯：只用清单的 `facts/derived/roles`（结构计数来自 `members/unresolved`），经 Task 10 的 `pickInputs`/`finalizeCell` 重算每格并与存储的 `cells` 做规范 JSON 比较；不查库、不读时钟、不读当前 `METHOD_CONFIG`。
 
@@ -9058,7 +9320,7 @@ import type {SupabaseClient} from '@supabase/supabase-js';
 import type {FactRow,FilingRow,MetricRow} from '../facts/types';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import type {AggregateCellResult} from './aggregate';
-import {MANIFEST_BUCKET,buildAggregateManifest,decodeManifest,encodeManifest,gcManifests,manifestPath,memoryManifestStore,supabaseManifestStore} from './manifest';
+import {MANIFEST_BUCKET,buildAggregateManifest,decodeManifest,encodeManifest,gcManifests,isManifestObjectPath,memoryManifestStore,supabaseManifestStore} from './manifest';
 import type {BuildManifestInput} from './manifest';
 import {memoryIndustryDb} from './memory-industry-db';
 import type {IndustryDb} from './types';
@@ -9082,11 +9344,12 @@ const input=():BuildManifestInput=>({
  result:result(),
  filings:new Map([['g0',filing('g0',I1,{source_ref:'600001.SH:20240930:1:20241030',document_ref:'cninfo:123'})],['g1',filing('g1',I1)]]),
 });
-const fakeDb=()=>{const index=new Map<string,{kind:string;bytes:number}>();const calls:string[]=[];
- const db:Pick<IndustryDb,'registerManifest'|'manifestGcCandidates'|'deleteManifestIndex'>={
-  async registerManifest(h,kind,bytes){calls.push(`register:${h.slice(0,8)}`);if(index.has(h))return false;index.set(h,{kind,bytes});return true;},
-  async manifestGcCandidates(limit){calls.push(`candidates:${limit}`);return [...index.keys()].slice(0,limit);},
-  async deleteManifestIndex(hs){calls.push(`delete:${hs.length}`);let n=0;for(const h of hs)if(index.delete(h))n++;return n;},
+const fakeDb=()=>{const index=new Map<string,{kind:string;bytes:number;path:string}>();const calls:string[]=[];let k=0;
+ const db:Pick<IndustryDb,'registerManifest'|'manifestObjectPath'|'manifestGcCandidates'|'deleteManifestIndex'>={
+  async registerManifest(h,kind,bytes){calls.push(`register:${h.slice(0,8)}`);if(index.has(h))return false;index.set(h,{kind,bytes,path:`sha256/${h}/00000000-0000-4000-8000-${String(++k).padStart(12,'0')}.json.gz`});return true;},
+  async manifestObjectPath(h){return index.get(h)?.path??null;},
+  async manifestGcCandidates(limit){calls.push(`candidates:${limit}`);return [...index].slice(0,limit).map(([hash,v])=>({hash,objectPath:v.path,claim:`claim-${hash.slice(0,4)}`}));},
+  async deleteManifestIndex(cs){calls.push(`delete:${cs.length}`);let n=0;for(const c of cs)if(index.delete(c.hash))n++;return n;},
  };return {db,index,calls};};
 
 describe('buildAggregateManifest',()=>{
@@ -9119,7 +9382,8 @@ describe('encode / decode / stores / gc',()=>{
   expect(()=>decodeManifest(e.gzip,'0'.repeat(64))).toThrow('manifest_hash_mismatch');
   expect(()=>decodeManifest(new Uint8Array(gzipSync(Buffer.from(JSON.stringify(m,null,1)))))).toThrow('manifest_not_canonical');
   expect(()=>decodeManifest(new Uint8Array(gzipSync(Buffer.from(canonicalJson({...m,schema:'x'})))))).toThrow('unsupported_manifest');
-  expect(manifestPath(e.hash)).toBe(`sha256/${e.hash}.json.gz`);
+  expect(isManifestObjectPath(`sha256/${e.hash}/00000000-0000-4000-8000-000000000001.json.gz`,e.hash)).toBe(true);
+  expect(isManifestObjectPath(`sha256/${e.hash}.json.gz`,e.hash)).toBe(false);
  });
  it('memory store: put is idempotent and registers the index row; get verifies; non-canonical input is refused',async()=>{
   const {db,index}=fakeDb();
@@ -9127,14 +9391,14 @@ describe('encode / decode / stores / gc',()=>{
   const e=encodeManifest(buildAggregateManifest(input()));
   expect(await store.put('aggregate',e.canonical)).toEqual({hash:e.hash,existed:false});
   expect(await store.put('aggregate',e.canonical)).toEqual({hash:e.hash,existed:true});
-  expect(index.get(e.hash)).toEqual({kind:'aggregate',bytes:store.objects.get(manifestPath(e.hash))!.byteLength});
+  expect(index.get(e.hash)).toMatchObject({kind:'aggregate',bytes:store.objects.get(index.get(e.hash)!.path)!.byteLength});
   expect(await store.get(e.hash)).toEqual(JSON.parse(e.canonical));
   await expect(store.put('aggregate',JSON.stringify(JSON.parse(e.canonical),null,2))).rejects.toThrow('manifest_not_canonical');
   await expect(store.get('f'.repeat(64))).rejects.toThrow('manifest_not_found');
   await expect(store.get('../x')).rejects.toThrow('invalid_manifest_hash');
  });
- it('supabase store: registers FIRST, then uploads gzip at sha256/<hash>.json.gz with upsert:false; 409 = existed; other errors fail',async()=>{
-  const {db,calls}=fakeDb();
+ it('supabase store: registers FIRST, then uploads gzip at the incarnation path with upsert:false; 409 = existed; other errors fail',async()=>{
+  const {db,calls,index}=fakeDb();
   const objects=new Map<string,Uint8Array>();const ops:string[]=[];let failUpload:string|null=null;let failRemove=false;
   const client={storage:{from:(b:string)=>{expect(b).toBe(MANIFEST_BUCKET);return {
    async upload(path:string,body:Uint8Array,o:{contentType:string;upsert:boolean}){ops.push(`upload:${path.slice(0,15)}:${o.contentType}:${o.upsert}`);calls.push('upload');
@@ -9147,15 +9411,17 @@ describe('encode / decode / stores / gc',()=>{
   expect(await store.put('aggregate',e.canonical)).toEqual({hash:e.hash,existed:false});
   expect(calls.slice(0,2)).toEqual([`register:${e.hash.slice(0,8)}`,'upload']);
   expect(ops[0]).toBe('upload:sha256/'+e.hash.slice(0,8)+':application/gzip:false');
+  expect(objects.has(index.get(e.hash)!.path)).toBe(true);
   expect(await store.put('aggregate',e.canonical)).toEqual({hash:e.hash,existed:true});
   expect(await store.get(e.hash)).toEqual(JSON.parse(e.canonical));
   failUpload='quota';
   const other=encodeManifest({...buildAggregateManifest(input()),code:'801780.SI'});
   await expect(store.put('aggregate',other.canonical)).rejects.toThrow('manifest_upload_failed:quota');
+  const obj={hash:e.hash,objectPath:index.get(e.hash)!.path};
   failRemove=true;
-  expect(await store.remove([e.hash])).toEqual({removed:[],failed:[e.hash]});
+  expect(await store.remove([obj])).toEqual({removed:[],failed:[e.hash]});
   failRemove=false;
-  expect(await store.remove([e.hash])).toEqual({removed:[e.hash],failed:[]});
+  expect(await store.remove([obj])).toEqual({removed:[e.hash],failed:[]});
   await expect(store.get(e.hash)).rejects.toThrow('manifest_not_found');
  });
  it('gcManifests: candidates → bucket remove → index delete; failed removals keep their index rows',async()=>{
@@ -9163,13 +9429,14 @@ describe('encode / decode / stores / gc',()=>{
   const store=memoryManifestStore(db);
   const a=encodeManifest(buildAggregateManifest(input())),b=encodeManifest({...buildAggregateManifest(input()),code:'801780.SI'});
   await store.put('aggregate',a.canonical);await store.put('aggregate',b.canonical);
-  const failing={...store,async remove(hs:string[]){const r=await store.remove(hs.filter(h=>h!==b.hash));return {removed:r.removed,failed:hs.filter(h=>h===b.hash)};}};
+  const failing={...store,async remove(os:{hash:string;objectPath:string}[]){const r=await store.remove(os.filter(o=>o.hash!==b.hash));return {removed:r.removed,failed:os.filter(o=>o.hash===b.hash).map(o=>o.hash)};}};
+  const pathA=index.get(a.hash)!.path;
   calls.length=0;
   const r=await gcManifests({db,manifests:failing},10);
   expect(r).toEqual({candidates:2,removed:[a.hash],failed:[b.hash],deleted:1});
   expect(calls).toEqual(['candidates:10','delete:1']);
   expect([...index.keys()]).toEqual([b.hash]);
-  expect(store.objects.has(manifestPath(a.hash))).toBe(false);
+  expect(store.objects.has(pathA)).toBe(false);
   expect(await gcManifests({db,manifests:store},10)).toEqual({candidates:1,removed:[b.hash],failed:[],deleted:1});
   expect(await gcManifests({db,manifests:store},10)).toEqual({candidates:0,removed:[],failed:[],deleted:0});
   await expect(gcManifests({db,manifests:store},0)).rejects.toThrow('invalid_limit');
@@ -9180,12 +9447,32 @@ describe('encode / decode / stores / gc',()=>{
   mdb.setNow('2026-11-01T00:00:00.000Z');
   await store.put('aggregate',e.canonical);
   mdb.setNow('2026-11-03T00:00:00.000Z');
-  expect(await mdb.manifestGcCandidates(10)).toEqual([e.hash]);                                        // selected = claimed
+  const claims=await mdb.manifestGcCandidates(10);
+  expect(claims.map(c=>c.hash)).toEqual([e.hash]);                                                    // selected = claimed
   await expect(store.put('aggregate',e.canonical)).rejects.toMatchObject({code:'manifest_gc_in_progress'});   // refused before any upload
-  expect(await gcManifests({db:{manifestGcCandidates:async()=>[e.hash],deleteManifestIndex:h=>mdb.deleteManifestIndex(h)},manifests:store},10)).toEqual({candidates:1,removed:[e.hash],failed:[],deleted:1});
-  expect(store.objects.has(manifestPath(e.hash))).toBe(false);
+  expect(await gcManifests({db:{manifestGcCandidates:async()=>claims,deleteManifestIndex:c=>mdb.deleteManifestIndex(c)},manifests:store},10)).toEqual({candidates:1,removed:[e.hash],failed:[],deleted:1});
+  expect(store.objects.has(claims[0].objectPath)).toBe(false);
   expect(await store.put('aggregate',e.canonical)).toEqual({hash:e.hash,existed:false});
-  expect(store.objects.has(manifestPath(e.hash))).toBe(true);
+  expect(await store.get(e.hash)).toEqual(JSON.parse(e.canonical));
+ });
+ it('stale collector after a reclaim (Codex round 2 R2-1): reclaim → delete → re-upload → the old collector deletes; the new incarnation survives',async()=>{
+  const mdb=memoryIndustryDb();const store=memoryManifestStore(mdb);
+  const e=encodeManifest(buildAggregateManifest(input()));
+  mdb.setNow('2026-11-01T00:00:00.000Z');
+  await store.put('aggregate',e.canonical);
+  mdb.setNow('2026-11-03T00:00:00.000Z');
+  const a=await mdb.manifestGcCandidates(10);                    // collector A claims, then pauses before its storage delete
+  mdb.setNow('2026-11-03T02:00:00.000Z');
+  const b=await mdb.manifestGcCandidates(10);                    // A's claim is stale (> 1 h): collector B reclaims
+  expect(b.map(c=>c.hash)).toEqual([e.hash]);expect(b[0].claim).not.toBe(a[0].claim);
+  expect(await gcManifests({db:{manifestGcCandidates:async()=>b,deleteManifestIndex:c=>mdb.deleteManifestIndex(c)},manifests:store},10)).toMatchObject({deleted:1});
+  await store.put('aggregate',e.canonical);                     // a writer registers and re-uploads: a NEW incarnation path
+  const fresh=(await mdb.manifestObjectPath(e.hash))!;
+  expect(fresh).not.toBe(a[0].objectPath);
+  // collector A resumes: it can only delete the incarnation it claimed, and its index delete is fenced by its token
+  expect(await gcManifests({db:{manifestGcCandidates:async()=>a,deleteManifestIndex:c=>mdb.deleteManifestIndex(c)},manifests:store},10)).toEqual({candidates:1,removed:[e.hash],failed:[],deleted:0});
+  expect(store.objects.has(fresh)).toBe(true);
+  expect(await store.get(e.hash)).toEqual(JSON.parse(e.canonical));
  });
 });
 ```
@@ -9209,12 +9496,14 @@ Expected: FAIL，`Error: Failed to resolve import "./manifest" from "src/lib/ind
 //   derived (issuer_id, metric, period_start, period_end, duration, unit); roles (metric, duration,
 //   issuer_id); cells (metric, duration, period_start); warnings (unique, sorted).
 // So shuffled inputs give byte-identical canonical JSON and the same hash. manifest_hash =
-// sha256(canonical JSON, uncompressed); the stored object is its gzip at sha256/<hash>.json.gz in the
-// private bucket industry-manifests, uploaded AFTER the index row is registered (put_industry_manifest refuses a
-// hash GC has claimed — claim/tombstone protocol, Codex plan audit round 1 #4), never overwritten (upsert:false;
-// an existing object is the same bytes by construction). get() verifies
-// the hash of the decompressed bytes. gcManifests: candidates → bucket remove → index delete; a hash
-// whose object removal failed keeps its index row (the migration cannot reference storage.objects).
+// sha256(canonical JSON, uncompressed). Storage key = the index row's object_path, an INCARNATION path
+// 'sha256/<hash>/<uuid>.json.gz' chosen by put_industry_manifest when the row is created (Codex plan audit round 2
+// R2-1): every re-registration after GC gets a new path, so a stale collector that claimed an earlier incarnation can
+// only ever delete that earlier object. The object is uploaded AFTER the index row is registered
+// (put_industry_manifest refuses a hash GC has claimed — round 1 #4), never overwritten (upsert:false; an existing
+// object is the same bytes by construction). get() reads the CURRENT object_path from the index and verifies the
+// hash of the decompressed bytes. gcManifests: claims {hash, objectPath, claim} → bucket remove of exactly those paths
+// → index delete fenced by the claim token; a hash whose object removal failed keeps its index row.
 import {gunzipSync,gzipSync} from 'node:zlib';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import type {FactRow,FilingRow,MetricRow} from '../facts/types';
@@ -9225,8 +9514,9 @@ import type {AggregateManifest,HistoryClass,IndustryDb,ManifestCell,ManifestDeri
 
 export const MANIFEST_SCHEMA='industry-manifest/2';
 export const MANIFEST_BUCKET='industry-manifests';
-export const manifestPath=(hash:string)=>`sha256/${hash}.json.gz`;
 const HASH=/^[0-9a-f]{64}$/;
+/** An incarnation path of `hash` as put_industry_manifest creates it. */
+export const isManifestObjectPath=(path:string,hash:string)=>new RegExp(`^sha256/${hash}/[0-9a-f-]{36}\\.json\\.gz$`).test(path);
 
 export interface ManifestHeader{scheme:Scheme;version:SchemeVersion;code:string;level:number;period_end:string;facts_as_of:string;knowledge_date:string;history_class:HistoryClass;method_version:string;config_hash:string;formula_version:string;code_version:string}
 export interface BuildManifestInput{
@@ -9289,27 +9579,34 @@ function checkCanonical(canonical:string):string{
  return sha256Hex(canonical);
 }
 
-type Registry=Pick<IndustryDb,'registerManifest'>;
-/** Bytes kept in memory (unit tests, offline integration); the index row still goes through `db`. */
+type Registry=Pick<IndustryDb,'registerManifest'|'manifestObjectPath'>;
+/** The current incarnation path of a registered hash (throws when the index row is missing). */
+async function currentPath(db:Registry,hash:string):Promise<string>{
+ const path=await db.manifestObjectPath(hash);
+ if(path===null)throw new Error(`manifest_not_found:${hash}`);
+ if(!isManifestObjectPath(path,hash))throw new Error(`invalid_manifest_object_path:${hash}`);
+ return path;
+}
+/** Bytes kept in memory by object path (unit tests, offline integration); the index row still goes through `db`. */
 export function memoryManifestStore(db:Registry):ManifestStore&{objects:Map<string,Uint8Array>}{
  const objects=new Map<string,Uint8Array>();
  return {
   objects,
   async put(kind:RunKind,canonical:string){
    const hash=checkCanonical(canonical);
-   const path=manifestPath(hash);
    const gz=new Uint8Array(gzipSync(Buffer.from(canonical,'utf8')));
-   const created=await db.registerManifest(hash,kind,(objects.get(path)??gz).byteLength);   // FIRST: refused while GC holds a claim
+   const created=await db.registerManifest(hash,kind,gz.byteLength);   // FIRST: refused while GC holds a claim
+   const path=await currentPath(db,hash);                             // this incarnation's key
    const stored=objects.has(path);
    if(!stored)objects.set(path,gz);
    return {hash,existed:stored||!created};
   },
   async get(hash){
    if(!HASH.test(hash))throw new Error('invalid_manifest_hash');
-   const gz=objects.get(manifestPath(hash));if(!gz)throw new Error(`manifest_not_found:${hash}`);
+   const gz=objects.get(await currentPath(db,hash));if(!gz)throw new Error(`manifest_not_found:${hash}`);
    return decodeManifest(gz,hash);
   },
-  async remove(hashes){for(const h of hashes)objects.delete(manifestPath(h));return {removed:[...hashes],failed:[]};},
+  async remove(objs){for(const o of objs)objects.delete(o.objectPath);return {removed:objs.map(o=>o.hash),failed:[]};},
  };
 }
 
@@ -9326,42 +9623,43 @@ export function supabaseManifestStore(admin:SupabaseClient,db:Registry):Manifest
    // before any upload; a successful registration makes the row young, so no GC can claim it before its rows are
    // staged. A failed upload after it leaves an unreferenced young index row that a later GC pass removes.
    const created=await db.registerManifest(hash,kind,gz.byteLength);
-   const {error}=await bucket().upload(manifestPath(hash),gz,{contentType:'application/gzip',upsert:false});
+   const {error}=await bucket().upload(await currentPath(db,hash),gz,{contentType:'application/gzip',upsert:false});
    let stored=false;
    if(error){if(isExists(error as StorageError))stored=true;else throw new Error(`manifest_upload_failed:${(error as StorageError).message}`);}
    return {hash,existed:stored||!created};
   },
   async get(hash){
    if(!HASH.test(hash))throw new Error('invalid_manifest_hash');
-   const {data,error}=await bucket().download(manifestPath(hash));
+   const {data,error}=await bucket().download(await currentPath(db,hash));
    if(error||!data)throw new Error(`manifest_not_found:${hash}`);
    return decodeManifest(new Uint8Array(await data.arrayBuffer()),hash);
   },
-  async remove(hashes){
-   if(hashes.length===0)return {removed:[],failed:[]};
-   const {error}=await bucket().remove(hashes.map(manifestPath));
+  async remove(objs){
+   if(objs.length===0)return {removed:[],failed:[]};
+   const {error}=await bucket().remove(objs.map(o=>o.objectPath));   // exactly the claimed incarnations, never "the hash"
    // Storage remove is idempotent (absent paths are not an error): success means every object is gone.
-   return error?{removed:[],failed:[...hashes]}:{removed:[...hashes],failed:[]};
+   return error?{removed:[],failed:objs.map(o=>o.hash)}:{removed:objs.map(o=>o.hash),failed:[]};
   },
  };
 }
 
 export interface GcResult{candidates:number;removed:string[];failed:string[];deleted:number}
-/** One GC pass: unreferenced hashes (gc_industry_manifest_candidates) → bucket objects → index rows. */
+/** One GC pass: claims (gc_industry_manifest_candidates) → the claimed object paths → index rows fenced by the claim token. */
 export async function gcManifests(deps:{db:Pick<IndustryDb,'manifestGcCandidates'|'deleteManifestIndex'>;manifests:ManifestStore},limit:number):Promise<GcResult>{
  if(!Number.isInteger(limit)||limit<1)throw new Error('invalid_limit');
- const candidates=await deps.db.manifestGcCandidates(limit);
- if(candidates.length===0)return {candidates:0,removed:[],failed:[],deleted:0};
- const {removed,failed}=await deps.manifests.remove(candidates);
- const deleted=removed.length===0?0:await deps.db.deleteManifestIndex(removed);
- return {candidates:candidates.length,removed,failed,deleted};
+ const claims=await deps.db.manifestGcCandidates(limit);
+ if(claims.length===0)return {candidates:0,removed:[],failed:[],deleted:0};
+ const {removed,failed}=await deps.manifests.remove(claims.map(c=>({hash:c.hash,objectPath:c.objectPath})));
+ const done=new Set(removed);
+ const deleted=removed.length===0?0:await deps.db.deleteManifestIndex(claims.filter(c=>done.has(c.hash)).map(c=>({hash:c.hash,claim:c.claim})));
+ return {candidates:claims.length,removed,failed,deleted};
 }
 ```
 
 - [ ] **Step 4: 运行通过**
 
 Run: `npm test -- src/lib/industry/manifest.test.ts`
-Expected: `Tests 6 passed`。
+Expected: `Tests 7 passed`。
 
 - [ ] **Step 5: 写回放的失败测试**
 
@@ -10578,7 +10876,7 @@ import {pgFactsDb} from '../facts/pg-facts-db';
 import type {Duration,FactInsert,FactsDb,FilingInsert} from '../facts/types';
 import {sha256Hex} from './canonical-json';
 import {decCmp,decMul} from './decimal';
-import {decodeManifest,manifestPath,memoryManifestStore} from './manifest';
+import {decodeManifest,memoryManifestStore} from './manifest';
 import {planMarkRows,runMarks} from './marks';
 import type {DailyBasicFetch} from './marks';
 import {pgIndustryDb} from './pg-industry-db';
@@ -10692,11 +10990,13 @@ describe.skipIf(!enabled)('industry offline integration on real PostgreSQL (Task
  it('replays every stored cell from the manifests alone (no database reads): reproduced and equal to the stored values',async()=>{
   const rows=await db.metricRowsOfRun(runs[0].runId!);
   // "drop the database": copy the manifest objects out of the store, then use nothing but those bytes
+  const pathOf=new Map<string,string>();
+  for(const h of new Set(rows.filter(x=>x.status==='ok').map(x=>x.manifest_hash!)))pathOf.set(h,(await db.manifestObjectPath(h))!);   // incarnation keys, read before "dropping" the database
   const offline=new Map([...manifests.objects].map(([p,b])=>[p,new Uint8Array(b)]));
   const byHash=new Map<string,ReturnType<typeof replayFromManifest>>();
   for(const row of rows.filter(x=>x.status==='ok')){
    const h=row.manifest_hash!;
-   if(!byHash.has(h))byHash.set(h,replayFromManifest(decodeManifest(offline.get(manifestPath(h))!,h)));
+   if(!byHash.has(h))byHash.set(h,replayFromManifest(decodeManifest(offline.get(pathOf.get(h)!)!,h)));
    const rep=byHash.get(h)!;
    expect(rep.reproduced).toBe(true);
    expect(rep.cells.find(c=>c.metric===row.metric&&c.duration===row.duration&&c.period_start===row.period_start)?.value_text).toBe(row.value);
@@ -17723,7 +18023,7 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 
 - [ ] **Step 6: 规格 §18 记录**
 
-在 `docs/superpowers/specs/2026-11-04-industry-research-design.md` 的 `## 18. 实施记录与偏差` 一节、现有"第 6 稿（2026-11-06）相对第 5 稿的变化…"段落之后、`---` 之前，追加下面整段（这是本计划**全部** 60 条偏差/决定，与计划骨架《已知规格偏差（实施记录 §18 的来源）》节逐条、同编号一致；Task 1–19 不写 §18，全部在这里一次写入。若实施过程中某条被修订或新增偏差，先改骨架那一节，再同步这里）：
+在 `docs/superpowers/specs/2026-11-04-industry-research-design.md` 的 `## 18. 实施记录与偏差` 一节、现有"第 6 稿（2026-11-06）相对第 5 稿的变化…"段落之后、`---` 之前，追加下面整段（这是本计划**全部** 63 条偏差/决定，与计划骨架《已知规格偏差（实施记录 §18 的来源）》节逐条、同编号一致；Task 1–19 不写 §18，全部在这里一次写入。若实施过程中某条被修订或新增偏差，先改骨架那一节，再同步这里）：
 
 ```markdown
 
@@ -17793,6 +18093,9 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 | 58 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#6） | SIC 调度行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领，完成以 `lease_batch_id` 为栅栏；新行只 insert、从不覆盖已有行与租约。 |
 | 59 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#7） | 离开 US 事实范围的 SIC 调度行被退役（`next_due_at='9999-12-31T00:00:00Z'`），回到范围再激活；取到期行时分页过滤到凑满 `limit` 个合格行。 |
 | 60 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#8） | E2E 夹具的每个格由真实计算生成的独立清单支撑，原样回放必须 `reproduced="true"`；另有一个故意篡改的格断言 `reproduced="false"`；`fixture-rows.ts::manifestOf` 标明只作版面（使用处都 mock 回放）。 |
+| 61 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-1） | 清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。 |
+| 62 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-2） | 已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。 |
+| 63 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-3） | `apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。 |
 
 本轮不实施（规格自己的门）：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 ```
