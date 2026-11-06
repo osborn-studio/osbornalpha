@@ -53,7 +53,7 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  };
  const usTicker=async()=>{const t=await newTicker('US');if(!t) throw new Error('ZZ test ticker collided');return t;};
  // plan 3: a closed window must name how it was closed (issuer_securities_to_method_iff_to)
-const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${to===null?'':',valid_to_method'}${extraCols}) values($1,$2,$3,$4,'test'${to===null?'':",'unrecorded'"}${extraVals})`,[issuer,ticker,from,to,...params]);
+ const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${to===null?'':',valid_to_method'}${extraCols}) values($1,$2,$3,$4,'test'${to===null?'':",'unrecorded'"}${extraVals})`,[issuer,ticker,from,to,...params]);
  const newVersion=async()=>{
   const version='t'+hex(4);
   await admin.query(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('custom',$1,'10',1,'Energy')`,[version]);

@@ -50,6 +50,7 @@ export async function attachSecurity(client:TableClient,raw:IssuerSecurityInput)
   await client.insert('issuer_securities',{
    issuer_id:sec.issuer_id,ticker:sec.ticker,isin:sec.isin,figi:sec.figi??null,share_class:sec.share_class,
    is_primary:sec.is_primary??false,valid_from:sec.valid_from,valid_to:sec.valid_to,
+   valid_from_method:sec.source==='curated'?'curated':'first_observed',
    // interim (plan 3 Task 1a): same rule as the migration backfill; Task 2b makes callers name the method
    valid_to_method:sec.valid_to===null?null:(sec.source==='curated'?'curated':'unrecorded'),
    source:sec.source,provenance:sec.provenance??{},

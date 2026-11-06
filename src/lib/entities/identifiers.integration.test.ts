@@ -222,6 +222,13 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   });
  },240000);
 
+ it('keeps valid_from_method=curated for a curated row written after the migration, across a replay',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2020-01-01',null,{source:'curated',valid_from_method:'curated'});
+  await replayMigration(admin,readFileSync(MIGRATION,'utf8'));
+  expect(await q(`select valid_from_method from public.issuer_securities where issuer_id=$1`,[a])).toEqual([{valid_from_method:'curated'}]);
+ });
+
  it('enforces the window-method checks and to_method_iff_to on issuer_securities',async()=>{
   const a=await issuer();const t=await ticker();
   expect((await fails(sec(a,t,'2020-01-01',null,{valid_from_method:'guessed'}))).message).toMatch(/issuer_securities_valid_from_method_check/);
@@ -359,6 +366,8 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   await bad({deadline_state:'no_rule'},/dfe_due_iff_known/);                                        // no_rule with a due date
   await bad({due_date:null},/dfe_due_iff_known/);                                                   // statutory without one
   await bad({disclosure_state:'received'},/dfe_received_iff/);                                      // received without the filing
+  await bad({upstream_lookup:'unavailable',disclosure_state:'pending',received_filing_id:randomUUID()},/dfe_received_pair/);   // filing without a date
+  await bad({upstream_lookup:'unavailable',disclosure_state:'pending',received_date:'2027-02-01'},/dfe_received_pair/);       // date without a filing
   await bad(filed(),/dfe_received_iff/);                                                            // pending yet carries a filing
   await bad({disclosure_state:'received',received_filing_id:randomUUID()},/dfe_received_iff/);     // missing received_date
   await bad({deadline_state:'no_rule',due_date:null,disclosure_state:'received_late',...filed()},/dfe_late_requires_due/);

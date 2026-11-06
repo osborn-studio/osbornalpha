@@ -229,6 +229,8 @@ create table if not exists public.dq_filing_expectations (
   constraint dfe_overdue_requires_statutory check (disclosure_state <> 'overdue' or deadline_state = 'statutory'),
   constraint dfe_unknown_upstream_iff check ((disclosure_state = 'unknown_upstream') = (upstream_lookup = 'unavailable' and received_filing_id is null))
 );
+-- received_filing_id and received_date travel together, whatever the state (Codex round 1 P2)
+alter table public.dq_filing_expectations drop constraint if exists dfe_received_pair, add constraint dfe_received_pair check ((received_filing_id is null) = (received_date is null));
 create index if not exists dq_filing_expectations_state_idx on public.dq_filing_expectations(market, disclosure_state, due_date);
 
 create table if not exists public.issuer_filing_profiles (
