@@ -200,6 +200,14 @@
     {
       "file": "20261106090000_financial_facts.sql",
       "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
+    },
+    {
+      "file": "20261112090000_company_research.sql",
+      "sha256": "56b91423f3587d888c055943113a1a6fdd52682650f62ecbe0a1c9c8ad7ee870"
+    },
+    {
+      "file": "20261112091000_company_research_functions.sql",
+      "sha256": "51e81dc139eab901203e2b649836d7ca744cfda46485a1b901a7402f9142346c"
     }
   ]
 }

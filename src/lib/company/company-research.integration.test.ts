@@ -9,6 +9,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {canonicalJson,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261112090000_company_research.sql';
@@ -326,5 +327,435 @@ describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
   expect((await fails(read(i3,e3))).code).toBe('23503');                                         // not watched → composite FK
   await inTx(admin,{role:'authenticated',userId:u},tx=>tx.c.query(`delete from public.company_watches where user_id=$1 and issuer_id=$2`,[u,i1]));
   expect(await fx.one(`select count(*)::int v from public.company_event_reads where user_id=$1`,[u])).toBe(0);
+ });
+});
+
+describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
+ let admin:Pool;let fx:ReturnType<typeof fixtures>;
+ beforeAll(async()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  admin=new Pool({connectionString:state.adminUrl,statement_timeout:10000});fx=fixtures(admin);
+ });
+ afterAll(async()=>{await admin?.end();});
+ const TODAY=new Date().toISOString().slice(0,10);
+ const ALL:Role[]=['anon','authenticated','service_role'];
+ interface Ev{kind:string;natural_key:string;occurred_on:string;period_end:string|null;concept:string|null;filing_id:string|null;payload:Record<string,unknown>;meta:Record<string,unknown>}
+ const omit=(o:Record<string,unknown>,k:string)=>Object.fromEntries(Object.entries(o).filter(([x])=>x!==k));
+ const coverage=(o:Record<string,unknown>={})=>({filings_count:1,facts_count:1,concepts_covered:1,earliest_period_end:'2023-12-31',latest_period_end:'2023-12-31',latest_available_date:'2024-02-01',citation_summary:{linked:0,pending:0,edgar:1},scope_last_success_at:null,scope_last_status:null,...o});
+ const code=(p:Promise<unknown>)=>fails(p).then(e=>({message:e.message,code:e.code,detail:e.detail}));
+ const begin=(iss:string,market:Market='US',now=new Date().toISOString())=>fx.one(`select public.begin_company_digest_attempt($1,$2,$3::timestamptz) v`,[iss,market,now]).then(Number);
+ const fail=(iss:string,attempt:number,now:string,market:Market='US')=>fx.one(`select public.mark_company_digest_failed($1,$2,$3,$4::timestamptz) v`,[iss,market,attempt,now]);
+ const replace=(a:{iss:string;market?:Market;batch:string;attempt:number;rebuild?:string;rev:number;sweep?:boolean;events:Ev[];coverage?:Record<string,unknown>},c:Pool|PoolClient=admin)=>
+  c.query(`select public.replace_company_digest($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb) v`,[a.iss,a.market??'US',a.batch,a.attempt,a.rebuild??randomUUID(),a.rev,a.sweep??false,JSON.stringify(a.events),JSON.stringify(a.coverage??coverage())])
+   .then(r=>r.rows[0].v as {upserted:number;changed:number;retired:number;revived:number});
+ const state=(iss:string,market:Market='US')=>fx.q(`select digested_rev::int dr, attempt_seq::int seq, last_attempt_id::int la, last_success_attempt_id::int ls, last_failed_attempt_id::int lf, last_status st, consecutive_failures cf, next_attempt_at::text nx, swept_at::text sw from public.company_digest_state where issuer_id=$1 and market=$2`,[iss,market]).then(r=>r[0]);
+ const events=(iss:string,market:Market='US')=>fx.q(`select event_id,kind,natural_key,payload_hash,first_seen_at::text fs,payload_changed_at::text pc,retired_at::text rt,rebuild_id::text rb from public.issuer_events where issuer_id=$1 and market=$2 order by kind,natural_key`,[iss,market]);
+ /** The filing_published event Task 5 must produce for a filing (payload = the filings row + its visible fact count). */
+ const filingEvent=async(filingId:string):Promise<Ev>=>{
+  const g=(await fx.q(`select filing_id::text id, form_type, fiscal_year, fiscal_period, period_end::text pe, available_date::text ad, source_ref,
+   (select count(*)::int from public.financial_facts f where f.filing_id=g.filing_id and f.status='ok' and f.mapping_gen=g.mapping_gen) n from public.filings g where filing_id=$1`,[filingId]))[0];
+  return {kind:'filing_published',natural_key:g.id,occurred_on:g.ad,period_end:g.pe,concept:null,filing_id:g.id,meta:{},
+   payload:{formType:g.form_type,fiscalYear:g.fiscal_year,fiscalPeriod:g.fiscal_period,periodEnd:g.pe,availableDate:g.ad,sourceRef:g.source_ref,factCount:g.n}};
+ };
+ const factOf=async(id:string)=>(await fx.q(`select fact_id::text id, concept, statement, coalesce(period_start,period_end)::text ps, period_end::text pe, duration, value_text v, unit, filing_id::text fid, available_date::text ad from public.financial_facts where fact_id=$1`,[id]))[0];
+ /** period_first_seen for the period of the given headline facts, first seen in filingId. */
+ const periodEvent=async(filingId:string,headline:string[]):Promise<Ev>=>{
+  const hs=await Promise.all(headline.map(factOf));const h=hs[0];
+  const ad=(await fx.q(`select available_date::text ad from public.filings where filing_id=$1`,[filingId]))[0].ad as string;
+  return {kind:'period_first_seen',natural_key:`${h.ps}:${h.pe}:${h.duration}`,occurred_on:ad,period_end:h.pe,concept:null,filing_id:filingId,meta:{headlineAsOf:TODAY},
+   payload:{periodStart:h.ps,periodEnd:h.pe,duration:h.duration,filingId,conceptCount:hs.length,headline:Object.fromEntries(hs.map(x=>[x.concept,{factId:x.id,value:x.v,unit:x.unit}])),ambiguousUnits:[]}};
+ };
+ const revisedEvent=async(fromId:string,toId:string):Promise<Ev>=>{
+  const f=await factOf(fromId);const t=await factOf(toId);
+  const payload:Record<string,unknown>={concept:t.concept,statement:t.statement,periodStart:t.ps,periodEnd:t.pe,duration:t.duration,consolidation:'consolidated',unit:t.unit,
+   from:{factId:f.id,value:f.v,filingId:f.fid,availableDate:f.ad},to:{factId:t.id,value:t.v,filingId:t.fid,availableDate:t.ad}};
+  if(Number(f.v)!==0)payload.relChange='0.1000000000';
+  return {kind:'fact_revised',natural_key:`${t.concept}:${t.ps}:${t.pe}:consolidated:${t.unit}:${t.ad}`,occurred_on:t.ad,period_end:t.pe,concept:t.concept,filing_id:t.fid,payload,meta:{}};
+ };
+ const FUNCS:{sig:string;definer:boolean;roles:Role[]}[]=[
+  {sig:'public.begin_company_digest_attempt(uuid,text,timestamptz)',definer:true,roles:['service_role']},
+  {sig:'public.replace_company_digest(uuid,text,uuid,bigint,uuid,bigint,boolean,jsonb,jsonb)',definer:true,roles:['service_role']},
+  {sig:'public.mark_company_digest_failed(uuid,text,bigint,timestamptz)',definer:true,roles:['service_role']},
+  {sig:'public.replace_company_fact_evidence(uuid,text,jsonb)',definer:true,roles:['service_role']},
+  {sig:'public.company_digest_due(timestamptz,int,text)',definer:true,roles:['service_role']},
+  {sig:'public.company_sweep_due(timestamptz,timestamptz,int,text)',definer:true,roles:['service_role']},
+  {sig:'public.company_digest_backlog()',definer:true,roles:['service_role']},
+  {sig:'public.company_fact_evidence(uuid[])',definer:true,roles:ALL},
+  {sig:'public.company_read_snapshot(uuid,text,text[],date,date,date,boolean,int)',definer:false,roles:ALL},
+  {sig:'public.company_list_coverage(text,uuid[],text,int,int)',definer:false,roles:ALL},
+  {sig:'public.company_canonical_json(jsonb)',definer:false,roles:[]},
+  {sig:'public.company_ev_check(uuid,text,jsonb,date)',definer:false,roles:[]},
+  {sig:'public.company_cov_check(jsonb)',definer:false,roles:[]},
+  {sig:'public.company_evidence_check(uuid,text,jsonb)',definer:false,roles:[]},
+ ];
+
+ it('function inventory: migration-role owner, security mode, empty search_path, execute grants by real role; both migrations replay',async()=>{
+  const owner=await fx.one(`select proowner::regrole::text v from pg_proc where oid='public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean)'::regprocedure`);
+  for(const f of FUNCS){
+   const p=(await fx.q(`select proowner::regrole::text owner, prosecdef, coalesce(proconfig,'{}'::text[]) cfg from pg_proc where oid=$1::regprocedure`,[f.sig]))[0];
+   expect({sig:f.sig,owner:p.owner,definer:p.prosecdef,path:(p.cfg as string[]).includes('search_path=""')}).toEqual({sig:f.sig,owner,definer:f.definer,path:true});
+   for(const role of ALL)expect({sig:f.sig,role,ok:await fx.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,f.sig])}).toEqual({sig:f.sig,role,ok:f.roles.includes(role)});
+  }
+  const s=await fx.stream([{facts:[{}]}]);
+  const calls=[`select public.begin_company_digest_attempt('${s.iss}','US',now())`,`select public.replace_company_digest('${s.iss}','US',gen_random_uuid(),1,gen_random_uuid(),1,false,'[]','{}')`,
+   `select public.mark_company_digest_failed('${s.iss}','US',1,now())`,`select public.replace_company_fact_evidence('${s.iss}','US','[]')`,`select public.company_digest_due(now(),10)`,`select public.company_digest_backlog()`];
+  for(const role of ['anon','authenticated'] as const)for(const sql of calls)
+   expect({role,sql,msg:(await fails(inTx(admin,{role},tx=>tx.c.query(sql)))).message}).toEqual({role,sql,msg:expect.stringMatching(/permission denied/)});
+  await expect(replayMigration(admin,readFileSync(TABLES_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
+ });
+
+ it('company_canonical_json is byte-identical to canonicalJson; replace stores eventIdOf / payloadHashOf',async()=>{
+  const SAMPLES:unknown[]=[
+   {},[],{b:1,a:[true,false,null],c:{z:'',y:'x'}},
+   {k:'quote " backslash \\ slash / tab \t newline \n cr \r bs \b ff \f'},
+   {k:'\u0001\u001f\u007f é 中文 😀   '},
+   {Z:1,a:2,'é':3,'中':4,'�':5,'😀':6,aa:7,'a\u0001':8},
+   {n:[0,-5,9007199254740991,-9007199254740991]},
+   {nested:{deep:[{x:{y:[1,{z:'w'}]}}]}},
+  ];
+  for(const s of SAMPLES){
+   const r=(await fx.q(`select public.company_canonical_json($1::jsonb) c, encode(sha256(convert_to(public.company_canonical_json($1::jsonb),'UTF8')),'hex') h`,[JSON.stringify(s)]))[0];
+   expect({s,c:r.c,h:r.h}).toEqual({s,c:canonicalJson(s),h:sha256Utf8(canonicalJson(s))});
+  }
+  expect(await code(fx.q(`select public.company_canonical_json('{"x":1.5}'::jsonb)`))).toMatchObject({message:'invalid_event',code:'22023'});
+  expect(await code(fx.q(`select public.company_canonical_json('[9007199254740992]'::jsonb)`))).toMatchObject({message:'invalid_event'});
+  const s=await fx.stream([{facts:[{concept:'revenue',value:'100'},{concept:'net_income_parent',value:'7'}]}]);const b=await fx.batch();
+  const a=await begin(s.iss);
+  const evs=[await filingEvent(s.filingIds[0]),await periodEvent(s.filingIds[0],s.factIds[0])];
+  await replace({iss:s.iss,batch:b,attempt:a,rev:1,events:evs});
+  const rows=await fx.q(`select event_id,payload_hash,kind,natural_key from public.issuer_events where issuer_id=$1 order by kind`,[s.iss]);
+  expect(rows).toEqual(evs.map(e=>({event_id:eventIdOf(s.iss,'US',e.kind,e.natural_key),payload_hash:payloadHashOf(e.payload),kind:e.kind,natural_key:e.natural_key})));
+ });
+
+ it('begin numbers attempts; replace writes events, coverage and state; refuses unknown_stream, stale_computation, stale_attempt, invalid_attempt, invalid_batch',async()=>{
+  const s=await fx.stream([{facts:[{}]}]);const b=await fx.batch();
+  expect(await code(begin(randomUUID()))).toMatchObject({message:'unknown_stream',code:'P0002'});
+  const a1=await begin(s.iss);const a2=await begin(s.iss);expect([a1,a2]).toEqual([1,2]);
+  expect(await state(s.iss)).toMatchObject({seq:2,la:2,ls:null,lf:null,st:null,dr:0});
+  const ev=await filingEvent(s.filingIds[0]);
+  expect(await code(replace({iss:randomUUID(),batch:b,attempt:1,rev:0,events:[]}))).toMatchObject({message:'unknown_stream',code:'P0002'});
+  expect(await code(replace({iss:s.iss,batch:b,attempt:a2,rev:0,events:[ev]}))).toMatchObject({message:'stale_computation',code:'55P03'});
+  expect(await code(replace({iss:s.iss,batch:b,attempt:3,rev:1,events:[ev]}))).toMatchObject({message:'invalid_attempt',code:'22023'});
+  expect(await code(replace({iss:s.iss,batch:await fx.batch('facts-sync','facts.us'),attempt:a2,rev:1,events:[ev]}))).toMatchObject({message:'invalid_batch'});
+  const done=await fx.batch();await fx.q(`update public.ingest_batches set status='success',finished_at=now() where batch_id=$1`,[done]);
+  expect(await code(replace({iss:s.iss,batch:done,attempt:a2,rev:1,events:[ev]}))).toMatchObject({message:'invalid_batch'});
+  const rebuild=randomUUID();
+  expect(await replace({iss:s.iss,batch:b,attempt:a2,rebuild,rev:1,events:[ev],coverage:coverage({facts_count:1})})).toEqual({upserted:1,changed:1,retired:0,revived:0});
+  expect(await state(s.iss)).toMatchObject({dr:1,ls:2,lf:null,st:'success',cf:0,sw:null});
+  expect((await fx.q(`select facts_count,based_on_rev::int r,rebuild_id::text rb,rebuild_batch_id::text bb,citation_summary from public.issuer_coverage where issuer_id=$1`,[s.iss]))[0])
+   .toEqual({facts_count:1,r:1,rb:rebuild,bb:b,citation_summary:{linked:0,pending:0,edgar:1}});
+  expect(await code(replace({iss:s.iss,batch:b,attempt:a1,rev:1,events:[ev]}))).toMatchObject({message:'stale_attempt',code:'P0001'});
+  expect(await replace({iss:s.iss,batch:b,attempt:a2,rev:1,events:[ev]})).toEqual({upserted:1,changed:0,retired:0,revived:0});   // the same attempt may write again
+  const other=await fx.stream([{facts:[{}]}]);
+  expect(await code(replace({iss:other.iss,batch:b,attempt:1,rev:1,events:[]}))).toMatchObject({message:'invalid_attempt'});   // no attempt began
+  await fx.publish(s.iss,'US',s.factsBatch,[{available:'2024-05-01',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M'}]}]);
+  const a3=await begin(s.iss);
+  expect(await code(replace({iss:s.iss,batch:b,attempt:a3,rev:1,events:[ev]}))).toMatchObject({message:'stale_computation'});
+ });
+
+ it('invalid_event: shape, kinds, cross-stream, visibility (quarantined, older generation, future), value_text, lengths, duplicates, filing consistency, relChange, coverage, rebuild reuse',async()=>{
+  const sr=randomUUID();
+  const s=await fx.stream([{sourceRef:sr,facts:[{value:'100.50'}]},{available:'2024-05-01',facts:[{value:'120'}]}]);
+  const other=await fx.stream([{facts:[{}]}]);
+  const b=await fx.batch();const a=await begin(s.iss);
+  const good=await filingEvent(s.filingIds[0]);const rev=await revisedEvent(s.factIds[0][0],s.factIds[1][0]);
+  expect((await replace({iss:s.iss,batch:b,attempt:a,rev:1,events:[good,rev]})).upserted).toBe(2);   // the good set passes
+  const bad=async(events:unknown[],cov?:Record<string,unknown>)=>code(replace({iss:s.iss,batch:b,attempt:a,rev:await fx.rev(s.iss,'US'),events:events as Ev[],coverage:cov}));
+  const cases:[string,unknown[],RegExp][]=[
+   ['extra top-level key',[{...good,extra:1}],/^event: unexpected key/],
+   ['missing top-level key',[omit(good as unknown as Record<string,unknown>,'meta')],/^event: missing key/],
+   ['meta extra key',[{...good,meta:{headlineAsOf:TODAY}}],/^meta: unexpected key/],
+   ['payload extra key',[{...good,payload:{...good.payload,url:'x'}}],/^payload: unexpected key/],
+   ['unknown kind',[{...good,kind:'news'}],/^kind: unknown event kind/],
+   ['cross-stream filing',[await filingEvent(other.filingIds[0])],/^filing_id: filing not in this stream/],
+   ['factCount differs',[{...good,payload:{...good.payload,factCount:9}}],/^payload\.factCount/],
+   ['value is not value_text',[{...rev,payload:{...rev.payload,from:{...(rev.payload.from as Record<string,unknown>),value:'100.5'}}}],/^payload\.from: value differs/],
+   ['string longer than 256',[{...good,payload:{...good.payload,sourceRef:'x'.repeat(257)}}],/^payload\.sourceRef: string/],
+   ['uppercase uuid',[{...good,filing_id:good.filing_id!.toUpperCase()}],/^filing_id: uuid/],
+   ['bad date',[{...good,occurred_on:'2024-2-1'}],/^occurred_on: date/],
+   ['duplicate natural key',[good,good],/^events: duplicate/],
+   ['relChange missing while from is non-zero',[{...rev,payload:omit(rev.payload,'relChange')}],/^payload\.relChange/],
+   ['relChange format',[{...rev,payload:{...rev.payload,relChange:'1e-3'}}],/^payload\.relChange/],
+   ['natural key mismatch',[{...rev,natural_key:rev.natural_key+'x'}],/^fact_revised: natural_key/],
+  ];
+  for(const [name,evs,re] of cases)expect({name,...await bad(evs)}).toEqual({name,message:'invalid_event',code:'22023',detail:expect.stringMatching(re)});
+  const covCases:[string,Record<string,unknown>,RegExp][]=[
+   ['extra key',{...coverage(),x:1},/^coverage: unexpected key/],
+   ['negative count',coverage({facts_count:-1}),/^coverage\.facts_count/],
+   ['citation keys',coverage({citation_summary:{linked:0,pending:0}}),/^coverage\.citation_summary: missing key/],
+   ['status',coverage({scope_last_status:'running'}),/^coverage\.scope_last_status/],
+   ['timestamp',coverage({scope_last_success_at:'not-a-time'}),/^coverage\.scope_last_success_at/],
+  ];
+  for(const [name,cov,re] of covCases)expect({name,...await bad([],cov)}).toEqual({name,message:'invalid_event',code:'22023',detail:expect.stringMatching(re)});
+  const used=(await fx.q(`select rebuild_id::text r from public.issuer_coverage where issuer_id=$1`,[s.iss]))[0].r as string;
+  expect((await code(replace({iss:s.iss,batch:b,attempt:a,rebuild:used,rev:1,events:[]}))).detail).toMatch(/^rebuild_id: already used/);
+  // a quarantined fact is not visible
+  const q=await fx.stream([{facts:[{value:'1'}]},{available:'2024-05-01',facts:[{value:'2'}]}]);const qa=await begin(q.iss);
+  const qrev=await revisedEvent(q.factIds[0][0],q.factIds[1][0]);
+  await fx.q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[q.factIds[1][0]]);
+  expect((await code(replace({iss:q.iss,batch:b,attempt:qa,rev:1,events:[qrev]}))).detail).toMatch(/^payload\.to\.factId: fact not visible/);
+  // an older mapping generation is not visible: filing 0 republished on generation 2
+  await fx.publish(s.iss,'US',s.factsBatch,[{sourceRef:sr,facts:[{value:'100.50'}]}],2);
+  const a2=await begin(s.iss);
+  expect((await code(replace({iss:s.iss,batch:b,attempt:a2,rev:2,events:[rev]}))).detail).toMatch(/^payload\.from\.factId: fact not visible/);
+  // facts and filings available after today are not visible
+  const f=await fx.stream([{facts:[{concept:'revenue',value:'5'}]},{available:'2999-01-01',facts:[{concept:'net_income_parent',value:'6'}]}]);const fa=await begin(f.iss);
+  const pe=await periodEvent(f.filingIds[0],[f.factIds[0][0],f.factIds[1][0]]);
+  expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[pe]}))).detail).toMatch(/^payload\.headline\.net_income_parent\.factId: fact not visible/);
+  expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[await filingEvent(f.filingIds[1])]}))).detail).toMatch(/^occurred_on: after today/);
+  expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[{...pe,payload:{...pe.payload,ambiguousUnits:['revenue']}}]}))).detail).toMatch(/^payload\.(headline|ambiguousUnits)/);
+ });
+
+ it('rebuilds: a late intermediate disclosure changes one edge and adds one; omitted events are tombstoned and revive with first_seen_at kept; meta is not hashed; p_sweep writes swept_at',async()=>{
+  const s=await fx.stream([{available:'2024-01-01',facts:[{value:'90'}]},{available:'2024-03-01',facts:[{value:'110'}]}]);const b=await fx.batch();
+  const [A,C]=[s.factIds[0][0],s.factIds[1][0]];
+  const fA=await filingEvent(s.filingIds[0]);const fC=await filingEvent(s.filingIds[1]);const ac=await revisedEvent(A,C);
+  const a1=await begin(s.iss);
+  expect(await replace({iss:s.iss,batch:b,attempt:a1,rev:1,events:[fA,fC,ac]})).toEqual({upserted:3,changed:3,retired:0,revived:0});
+  const first=await events(s.iss);
+  expect(first.every(e=>e.pc===null&&e.rt===null)).toBe(true);
+  await fx.q(`select pg_sleep(0.02)`);
+  const late=await fx.publish(s.iss,'US',s.factsBatch,[{available:'2024-02-01',facts:[{value:'100'}]}]);const B=late.factIds[0][0];
+  const fB=await filingEvent(late.filingIds[0]);const ab=await revisedEvent(A,B);const bc=await revisedEvent(B,C);
+  expect(bc.natural_key).toBe(ac.natural_key);
+  const a2=await begin(s.iss);
+  expect(await replace({iss:s.iss,batch:b,attempt:a2,rev:2,events:[fA,fB,fC,ab,bc]})).toEqual({upserted:5,changed:3,retired:0,revived:0});   // fB, ab new; the C edge changed
+  const second=await events(s.iss);
+  const edgeC=second.find(e=>e.kind==='fact_revised'&&e.natural_key===ac.natural_key)!;const edgeC0=first.find(e=>e.kind==='fact_revised')!;
+  expect({fs:edgeC.fs===edgeC0.fs,pc:edgeC.pc!==null,hash:edgeC.payload_hash!==edgeC0.payload_hash}).toEqual({fs:true,pc:true,hash:true});
+  expect(second.find(e=>e.natural_key===fA.natural_key)!.pc).toBeNull();
+  const a3=await begin(s.iss);   // same batch, new rebuild id, fC omitted → tombstone
+  expect(await replace({iss:s.iss,batch:b,attempt:a3,rev:2,events:[fA,fB,ab,bc]})).toEqual({upserted:4,changed:0,retired:1,revived:0});
+  expect((await events(s.iss)).find(e=>e.natural_key===fC.natural_key)!.rt).not.toBeNull();
+  const a4=await begin(s.iss);
+  expect(await replace({iss:s.iss,batch:b,attempt:a4,rev:2,sweep:true,events:[fA,fB,fC,ab,bc]})).toEqual({upserted:5,changed:0,retired:0,revived:1});
+  const revived=(await events(s.iss)).find(e=>e.natural_key===fC.natural_key)!;
+  expect({rt:revived.rt,fs:revived.fs,pc:revived.pc}).toEqual({rt:null,fs:first.find(e=>e.natural_key===fC.natural_key)!.fs,pc:null});
+  expect((await state(s.iss)).sw).not.toBeNull();
+  // meta-only change: same payload_hash, payload_changed_at stays null, meta stored
+  const p=await fx.stream([{facts:[{}]}]);const pa=await begin(p.iss);const pe=await periodEvent(p.filingIds[0],p.factIds[0]);
+  await replace({iss:p.iss,batch:b,attempt:pa,rev:1,events:[pe]});
+  const before=(await events(p.iss))[0];const pa2=await begin(p.iss);
+  expect(await replace({iss:p.iss,batch:b,attempt:pa2,rev:1,events:[{...pe,meta:{headlineAsOf:'2024-01-01'}}]})).toEqual({upserted:1,changed:0,retired:0,revived:0});
+  const after=(await events(p.iss))[0];
+  expect({h:after.payload_hash,pc:after.pc}).toEqual({h:before.payload_hash,pc:null});
+  expect((await fx.q(`select meta from public.issuer_events where event_id=$1`,[after.event_id]))[0].meta).toEqual({headlineAsOf:'2024-01-01'});
+ });
+
+ it('company_digest_due / company_sweep_due / company_digest_backlog select and order streams',async()=>{
+  const b=await fx.batch();
+  const behind1=await fx.stream([{facts:[{}]}]);
+  const behind2=await fx.stream([{facts:[{}]}]);await fx.publish(behind2.iss,'US',behind2.factsBatch,[{available:'2024-05-01',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M'}]}]);
+  const current=await fx.stream([{facts:[{}]}]);const ca=await begin(current.iss);await replace({iss:current.iss,batch:b,attempt:ca,rev:1,events:[]});
+  const backoff=await fx.stream([{facts:[{}]}]);const ba=await begin(backoff.iss);
+  const empty=await fx.issuer();await fx.scope(empty,'US');                                   // state_rev 0: never due, never swept
+  const mine=new Set([behind1.iss,behind2.iss,current.iss,backoff.iss,empty]);
+  const now=Date.now();const iso=(ms:number)=>new Date(now+ms).toISOString();
+  const backlog0=Number(await fx.one(`select public.company_digest_backlog() v`));
+  expect(await fail(backoff.iss,ba,iso(0))).toBe(true);
+  expect(Number(await fx.one(`select public.company_digest_backlog() v`))).toBe(backlog0+1);
+  type Due={issuerId:string;market:string;stateRev:number;digestedRev:number};
+  const due=async(at:string,limit=100000)=>((await fx.one(`select public.company_digest_due($1::timestamptz,$2) v`,[at,limit])) as Due[]).filter(x=>mine.has(x.issuerId));
+  expect(await due(iso(0))).toEqual([{issuerId:behind2.iss,market:'US',stateRev:2,digestedRev:0},{issuerId:behind1.iss,market:'US',stateRev:1,digestedRev:0}]);
+  expect((await due(iso(2*3600_000))).map(x=>x.issuerId)).toEqual([behind2.iss,...[behind1.iss,backoff.iss].sort()]);
+  expect(await fx.one(`select public.company_digest_due(now(),0) v`)).toEqual([]);
+  // market filter applies inside the limit (plan audit Q6): these streams are US, so a CN-only selection excludes them
+  expect(((await fx.one(`select public.company_digest_due(now(),100000,'CN') v`)) as Due[]).filter(x=>mine.has(x.issuerId))).toEqual([]);
+  expect(((await fx.one(`select public.company_digest_due(now(),100000,'US') v`)) as Due[]).filter(x=>mine.has(x.issuerId)).length).toBeGreaterThan(0);
+  const sweep=async(older:string,at:string)=>((await fx.one(`select public.company_sweep_due($1::timestamptz,$2::timestamptz,100000) v`,[older,at])) as Due[]).filter(x=>mine.has(x.issuerId)).map(x=>x.issuerId);
+  expect(await sweep(iso(0),iso(0))).toEqual([behind1.iss,behind2.iss,current.iss].sort());     // all never swept: issuer order
+  const ca2=await begin(current.iss);await replace({iss:current.iss,batch:b,attempt:ca2,rev:1,sweep:true,events:[]});
+  expect(await sweep(iso(-3600_000),iso(60_000))).toEqual([behind1.iss,behind2.iss].sort());   // at: a minute ahead (the sweep replace set next_attempt_at = its now())
+  expect(await sweep(iso(3600_000),iso(60_000))).toEqual([...[behind1.iss,behind2.iss].sort(),current.iss]);   // nulls first, then swept_at
+ });
+
+ it('mark_company_digest_failed (§0 #70): duplicate and older reports are ignored; backoff 1h·2^n capped at 24h; both completion orders (e) and (f)',async()=>{
+  const s=await fx.stream([{facts:[{}]}]);const b=await fx.batch();const T='2030-01-01T00:00:00.000Z';
+  const gap=async(iss=s.iss)=>Number((await fx.q(`select extract(epoch from next_attempt_at - $2::timestamptz)::int g from public.company_digest_state where issuer_id=$1`,[iss,T]))[0].g);
+  expect(await code(fail(randomUUID(),1,T))).toMatchObject({message:'unknown_stream'});
+  expect(await code(fail(s.iss,1,T))).toMatchObject({message:'invalid_attempt'});            // no attempt began
+  const a1=await begin(s.iss);
+  expect(await fail(s.iss,a1,T)).toBe(true);expect(await gap()).toBe(3600);
+  expect(await fail(s.iss,a1,T)).toBe(false);                                                // the same failure delivered twice
+  expect(await state(s.iss)).toMatchObject({lf:1,cf:1,st:'failed'});
+  const a2=await begin(s.iss);const a3=await begin(s.iss);
+  expect(await fail(s.iss,a3,T)).toBe(true);expect(await gap()).toBe(7200);
+  expect(await fail(s.iss,a2,T)).toBe(false);                                                // newer failure, then an older one
+  expect(await state(s.iss)).toMatchObject({lf:3,cf:2});
+  await fx.q(`update public.company_digest_state set consecutive_failures=40 where issuer_id=$1`,[s.iss]);
+  const a4=await begin(s.iss);expect(await fail(s.iss,a4,T)).toBe(true);expect(await gap()).toBe(86400);
+  expect(await code(fail(s.iss,99,T))).toMatchObject({message:'invalid_attempt'});
+  // (e) attempts 1 and 2 begin; 2 fails; 1 succeeds → materialisation recorded, failure state kept, swept_at not advanced
+  const e=await fx.stream([{facts:[{}]}]);const e1=await begin(e.iss);const e2=await begin(e.iss);
+  const backlog0=Number(await fx.one(`select public.company_digest_backlog() v`));
+  expect(await fail(e.iss,e2,T)).toBe(true);
+  expect(await replace({iss:e.iss,batch:b,attempt:e1,rev:1,sweep:true,events:[await filingEvent(e.filingIds[0])]})).toMatchObject({upserted:1});
+  expect(await state(e.iss)).toMatchObject({dr:1,ls:1,lf:2,st:'failed',cf:1,sw:null});
+  expect(await gap(e.iss)).toBe(3600);
+  expect(Number(await fx.one(`select public.company_digest_backlog() v`))).toBe(backlog0+1);
+  // (f) attempts 1 and 2 begin; 2 succeeds; 1 reports failure → ignored
+  const f=await fx.stream([{facts:[{}]}]);const f1=await begin(f.iss);const f2=await begin(f.iss);
+  await replace({iss:f.iss,batch:b,attempt:f2,rev:1,events:[]});
+  expect(await fail(f.iss,f1,T)).toBe(false);
+  expect(await state(f.iss)).toMatchObject({ls:2,lf:null,st:'success',cf:0});
+  // a newer success clears (e)'s failure state and advances swept_at
+  const e3=await begin(e.iss);await replace({iss:e.iss,batch:b,attempt:e3,rev:1,sweep:true,events:[await filingEvent(e.filingIds[0])]});
+  const after=await state(e.iss);
+  expect(after).toMatchObject({ls:3,lf:2,st:'success',cf:0});expect(after.sw).not.toBeNull();
+ });
+
+ it('(a) a publish holding the scope row blocks replace, which then fails as stale_computation',async()=>{
+  const s=await fx.stream([{facts:[{}]}]);const b=await fx.batch();const a=await begin(s.iss);const ev=await filingEvent(s.filingIds[0]);
+  const t1=await openTx(admin);
+  try{
+   await t1.c.query(`select state_rev from public.fact_sync_scope where issuer_id=$1 and market='US' for update`,[s.iss]);
+   await t1.c.query(`update public.fact_sync_scope set state_rev=state_rev+1 where issuer_id=$1 and market='US'`,[s.iss]);
+   const p=replace({iss:s.iss,batch:b,attempt:a,rev:1,events:[ev]});
+   await stillBlockedBehind(admin,t1.pid,p);
+   await t1.commit();
+   expect(await code(p)).toMatchObject({message:'stale_computation'});
+  }finally{await t1.rollback().catch(()=>{});}
+  expect(await fx.one(`select count(*)::int v from public.issuer_events where issuer_id=$1`,[s.iss])).toBe(0);
+ });
+
+ it('(b) two digest writers with different event sets serialise on the scope row; the later one wins, no union',async()=>{
+  const s=await fx.stream([{facts:[{}]},{available:'2024-05-01',facts:[{value:'120'}]}]);const b=await fx.batch();
+  const a1=await begin(s.iss);const a2=await begin(s.iss);
+  const X=[await filingEvent(s.filingIds[0]),await filingEvent(s.filingIds[1])];
+  const Y=[await filingEvent(s.filingIds[1]),await revisedEvent(s.factIds[0][0],s.factIds[1][0])];
+  const r2=randomUUID();
+  const t1=await openTx(admin);
+  try{
+   await replace({iss:s.iss,batch:b,attempt:a1,rev:1,events:X,coverage:coverage({filings_count:2})},t1.c);
+   const p=replace({iss:s.iss,batch:b,attempt:a2,rebuild:r2,rev:1,events:Y,coverage:coverage({filings_count:9})});
+   await stillBlockedBehind(admin,t1.pid,p);
+   await t1.commit();
+   expect(await p).toEqual({upserted:2,changed:1,retired:1,revived:0});
+  }finally{await t1.rollback().catch(()=>{});}
+  const active=await fx.q(`select kind,natural_key from public.issuer_events where issuer_id=$1 and retired_at is null order by kind,natural_key`,[s.iss]);
+  expect(active).toEqual(Y.map(e=>({kind:e.kind,natural_key:e.natural_key})).sort((x,y)=>x.kind<y.kind?-1:1));
+  expect((await fx.q(`select filings_count,rebuild_id::text r from public.issuer_coverage where issuer_id=$1`,[s.iss]))[0]).toEqual({filings_count:9,r:r2});
+ });
+
+ it('(c) a fault between the event and coverage writes rolls the whole replace back',async()=>{
+  const s=await fx.stream([{facts:[{}]},{available:'2024-05-01',facts:[{value:'120'}]}]);const b=await fx.batch();
+  const a1=await begin(s.iss);await replace({iss:s.iss,batch:b,attempt:a1,rev:1,events:[await filingEvent(s.filingIds[0])],coverage:coverage({filings_count:1})});
+  const snap=async()=>({ev:await fx.q(`select event_id,retired_at::text r,payload_hash from public.issuer_events where issuer_id=$1 order by event_id`,[s.iss]),
+   cov:await fx.q(`select filings_count,rebuild_id::text r from public.issuer_coverage where issuer_id=$1`,[s.iss]),st:await state(s.iss)});
+  const before=await snap();
+  const a2=await begin(s.iss);const ev=await filingEvent(s.filingIds[1]);
+  const err=await code(inTx(admin,{},async tx=>{
+   await tx.c.query(`select set_config('company.fail_after_events','on',true)`);
+   await replace({iss:s.iss,batch:b,attempt:a2,rev:1,events:[ev],coverage:coverage({filings_count:2})},tx.c);
+  }));
+  expect(err).toMatchObject({message:'company_test_fault'});
+  const after=await snap();
+  expect({...after,st:{...after.st,seq:before.st.seq,la:before.st.la}}).toEqual(before);   // only begin's attempt counter moved
+ });
+
+ it('(d) a receipt written while a replace is uncommitted cannot cover the new event',async()=>{
+  const s=await fx.stream([{facts:[{}]},{available:'2024-05-01',facts:[{value:'120'}]}]);const b=await fx.batch();const u=await fx.user();
+  const a1=await begin(s.iss);const old=await filingEvent(s.filingIds[0]);
+  await replace({iss:s.iss,batch:b,attempt:a1,rev:1,events:[old]});
+  await inTx(admin,{role:'authenticated',userId:u},tx=>tx.c.query(`insert into public.company_watches(user_id,issuer_id) values($1,$2)`,[u,s.iss]));
+  const a2=await begin(s.iss);const fresh=await filingEvent(s.filingIds[1]);
+  const t1=await openTx(admin);
+  try{
+   await replace({iss:s.iss,batch:b,attempt:a2,rev:1,events:[old,fresh]},t1.c);
+   const seen=await inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select event_id from public.issuer_events where issuer_id=$1 and retired_at is null`,[s.iss])).rows.map(r=>String(r.event_id)));
+   expect(seen).toEqual([eventIdOf(s.iss,'US','filing_published',old.natural_key)]);
+   await inTx(admin,{role:'authenticated',userId:u},tx=>tx.c.query(`insert into public.company_event_reads(user_id,issuer_id,event_id) select $1,$2,unnest($3::text[]) on conflict do nothing`,[u,s.iss,seen]));
+   await t1.commit();
+  }finally{await t1.rollback().catch(()=>{});}
+  const unread=await fx.q(`select e.event_id from public.issuer_events e where e.issuer_id=$1 and e.retired_at is null and not exists (select 1 from public.company_event_reads r where r.user_id=$2 and r.event_id=e.event_id)`,[s.iss,u]);
+  expect(unread.map(r=>r.event_id)).toEqual([eventIdOf(s.iss,'US','filing_published',fresh.natural_key)]);
+ });
+
+ it('evidence index: replace verifies each row against its fact and replaces the stream; company_fact_evidence returns the whitelist for visible facts only',async()=>{
+  const sha=hex('snapshot-bytes');const loc=(i:number)=>`us-gaap/Revenues/USD/${i}`;const rh=(i:number)=>hex(`${sha}\n${loc(i)}`);
+  const sr=randomUUID();
+  const s=await fx.stream([{sourceRef:sr,facts:[{concept:'revenue',raw_hash:rh(0)},{concept:'net_income_parent',raw_hash:rh(1)},{concept:'operating_cash_flow',statement:'CF',raw_hash:rh(2)}]}]);
+  const other=await fx.stream([{facts:[{raw_hash:rh(9)}]}]);
+  const [f0,f1,f2]=s.factIds[0];
+  const row=(factId:string,i:number,o:Record<string,unknown>={})=>({fact_id:factId,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`edgar/${s.iss}/${sha}.json`,hash_locator:loc(i),
+   json_pointer:`/facts/us-gaap/Revenues/units/USD/${i}`,field:null,source:'edgar',api:null,url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',params:null,
+   captured_at:'2024-02-02T00:00:00Z',http_status:200,page:null,index_version:'company-evidence/1',...o});
+  const put=(rows:unknown[],iss=s.iss)=>fx.one(`select public.replace_company_fact_evidence($1,'US',$2::jsonb) v`,[iss,JSON.stringify(rows)]);
+  expect(await put([row(f0,0),row(f1,1),row(f2,2)])).toEqual({upserted:3,deleted:0});
+  expect(await put([row(f0,0),row(f1,1)])).toEqual({upserted:2,deleted:1});
+  expect(await code(put([],randomUUID()))).toMatchObject({message:'unknown_stream'});
+  const badRows:[string,unknown[],RegExp][]=[
+   ['raw_hash differs from the fact',[row(f0,1)],/^raw_hash: differs/],
+   ['locator does not hash to raw_hash',[row(f0,0,{hash_locator:'x'})],/^raw_hash: not sha256/],
+   ['path of another issuer',[row(f0,0,{snapshot_path:`edgar/${other.iss}/${sha}.json`})],/^snapshot_path/],
+   ['source differs from the filing',[row(f0,0,{source:'tushare',snapshot_path:`tushare/${s.iss}/${sha}.json`})],/^source/],
+   ['token in params',[row(f0,0,{params:{ts_token:'x'}})],/^params: must not carry a token/],
+   ['extra key',[{...row(f0,0),verified_at:'x'}],/^row: /],
+   ['fact of another stream',[row(other.factIds[0][0],9)],/^fact_id: not a fact of this stream/],
+   ['duplicate fact',[row(f0,0),row(f0,0)],/^rows: duplicate fact_id/],
+   ['http_status',[row(f0,0,{http_status:42})],/^http_status/],
+   ['captured_at',[row(f0,0,{captured_at:'soon'})],/^captured_at/],
+  ];
+  for(const [name,rows,re] of badRows)expect({name,...await code(put(rows))}).toEqual({name,message:'invalid_evidence',code:'22023',detail:expect.stringMatching(re)});
+  const read=(ids:string[],role:Role='anon')=>inTx(admin,{role},async tx=>(await tx.c.query(`select public.company_fact_evidence($1::uuid[]) v`,[ids])).rows[0].v as Record<string,Record<string,unknown>>);
+  const out=await read([f0,f1,f2,randomUUID()]);
+  expect(Object.keys(out).sort()).toEqual([f0,f1].sort());
+  expect(Object.keys(out[f0]).sort()).toEqual(['api','captured_at','code_version','fact_id','field','hash_locator','http_status','index_version','json_pointer','mapping_version','page','params','raw_hash','run_id','snapshot_path','snapshot_sha256','source','tool_versions','url']);
+  expect(out[f0]).toMatchObject({fact_id:f0,raw_hash:rh(0),snapshot_sha256:sha,snapshot_path:`edgar/${s.iss}/${sha}.json`,run_id:s.run,code_version:'test-sha',tool_versions:{node:'test'},mapping_version:'facts-map/1',http_status:200,source:'edgar'});
+  await fx.q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[f1]);
+  expect(Object.keys(await read([f0,f1],'authenticated'))).toEqual([f0]);
+  await fx.publish(s.iss,'US',s.factsBatch,[{sourceRef:sr,facts:[{concept:'revenue',raw_hash:rh(0)}]}],2);   // filing on generation 2 hides the generation-1 fact
+  expect(await read([f0],'service_role')).toEqual({});
+  expect(await code(read(Array.from({length:101},()=>randomUUID())))).toMatchObject({message:'invalid_read',code:'22023'});
+  expect(await read([])).toEqual({});
+ });
+
+ it('company_read_snapshot: read_facts envelope and the stream filings in one statement; ok facts only for every role; counts and citation computed in-statement',async()=>{
+  const s=await fx.stream([{form:'10-K',facts:[{concept:'revenue',value:'100'},{concept:'net_income_parent',value:'9'}]},
+   {available:'2024-05-01',form:'10-Q',fiscalPeriod:'Q1',periodEnd:'2024-03-31',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M',value:'30'}]}]);
+  await fx.q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[s.factIds[0][1]]);
+  const run=String(await fx.one(`select public.begin_sync_run($1,'US',$2,1) v`,[s.iss,s.factsBatch]));   // a staged run: generation-0 filing and a staged fact
+  const m=await fx.one(`select public.stage_filings($1,$2::jsonb) v`,[run,JSON.stringify([{filing_id:randomUUID(),source:'edgar',origin:'sec',form_type:'10-Q',fiscal_year:2024,fiscal_period:'Q2',period_end:'2024-06-30',available_date:'2024-08-01',source_ref:'staged-'+randomUUID(),url:null}])]) as Record<string,string>;
+  await fx.one(`select public.stage_facts($1,$2::jsonb) v`,[run,JSON.stringify([{fact_id:randomUUID(),filing_id:Object.values(m)[0],concept:'revenue',source_concept:'Revenues',statement:'IS',period_start:'2024-04-01',period_end:'2024-06-30',duration:'3M',value:'40',unit:'USD',consolidation:'consolidated',available_date:'2024-08-01',mapping_version:'facts-map/1',raw_hash:'h'}])]);
+  type Snap={facts:{state_rev:number;truncated:boolean;rows:{fact_id:string;status:string}[]};filings:Record<string,unknown>[]};
+  const snap=(role:Role,asOf='2030-01-01')=>inTx(admin,{role},async tx=>(await tx.c.query(`select public.company_read_snapshot($1,'US',null,$2::date,null,null,true,null) v`,[s.iss,asOf])).rows[0].v as Snap);
+  const url='https://www.sec.gov/Archives/edgar/data/1/x.htm';
+  const filing=(i:number,o:Record<string,unknown>)=>({filingId:s.filingIds[i],fiscalYear:2023,sourceRef:expect.any(String),source:'edgar',url,documentUrl:null,citation:'edgar',linkAttempts:0,factCount:1,mappingGen:1,...o});
+  for(const role of ALL){
+   const v=await snap(role);
+   expect({role,rev:v.facts.state_rev,trunc:v.facts.truncated,facts:v.facts.rows.map(r=>r.fact_id).sort(),status:[...new Set(v.facts.rows.map(r=>r.status))]})
+    .toEqual({role,rev:1,trunc:false,facts:[s.factIds[0][0],s.factIds[1][0]].sort(),status:['ok']});
+   expect({role,filings:v.filings}).toEqual({role,filings:[
+    filing(1,{formType:'10-Q',fiscalPeriod:'Q1',periodEnd:'2024-03-31',availableDate:'2024-05-01'}),
+    filing(0,{formType:'10-K',fiscalPeriod:'FY',periodEnd:'2023-12-31',availableDate:'2024-02-01'})]});
+  }
+  const early=await snap('anon','2024-03-01');
+  expect({facts:early.facts.rows.map(r=>r.fact_id),filings:early.filings.map(f=>f.filingId)}).toEqual({facts:[s.factIds[0][0]],filings:[s.filingIds[0]]});
+  const cn=await fx.stream([{facts:[{}]},{available:'2024-08-30',form:'semiannual',fiscalPeriod:'H1',periodEnd:'2024-06-30',facts:[{period_start:'2024-01-01',period_end:'2024-06-30',duration:'6M'}]}],'CN');
+  await fx.q(`update public.filings set document_ref='cninfo:1',document_url='https://static.cninfo.com.cn/x.pdf' where filing_id=$1`,[cn.filingIds[0]]);
+  await fx.q(`update public.filings set document_ref='' where filing_id=$1`,[cn.filingIds[1]]);
+  const c=await inTx(admin,{role:'anon'},async tx=>(await tx.c.query(`select public.company_read_snapshot($1,'CN',array['revenue'],'2030-01-01',null,null,false,null) v`,[cn.iss])).rows[0].v as Snap);
+  expect(c.filings.map(f=>[f.filingId,f.citation,f.documentUrl,f.source])).toEqual([[cn.filingIds[1],'pending',null,'tushare'],[cn.filingIds[0],'linked','https://static.cninfo.com.cn/x.pdf','tushare']]);
+ });
+
+ it('company_list_coverage sorts, filters and pages with a total; refuses a bad sort or page',async()=>{
+  const b=await fx.batch();
+  const ids=[await fx.issuer('ZZ Cov B'),await fx.issuer('ZZ Cov A'),await fx.issuer('ZZ Cov C')];
+  const put=(iss:string,market:Market,lad:string|null,lpe:string|null)=>fx.q(`insert into public.issuer_coverage(issuer_id,market,filings_count,facts_count,concepts_covered,latest_available_date,latest_period_end,citation_summary,based_on_rev,rebuild_id,rebuild_batch_id)
+   values($1,$2,1,1,1,$3,$4,'{"linked":0,"pending":0,"edgar":1}',1,gen_random_uuid(),$5)`,[iss,market,lad,lpe,b]);
+  await put(ids[0],'US','2024-05-01','2024-03-31');await put(ids[1],'US','2024-02-01','2023-12-31');await put(ids[2],'US',null,null);await put(ids[1],'CN','2024-08-30','2024-06-30');
+  type Page={rows:Record<string,unknown>[];total:number};
+  const list=(market:Market|null,sort:string,offset=0,limit=10)=>inTx(admin,{role:'anon'},async tx=>(await tx.c.query(`select public.company_list_coverage($1,$2::uuid[],$3,$4,$5) v`,[market,ids,sort,offset,limit])).rows[0].v as Page);
+  const keys=(p:Page)=>p.rows.map(x=>`${String(x.issuer_id)}:${String(x.market)}`);
+  expect(keys(await list(null,'latest_available_date'))).toEqual([`${ids[1]}:CN`,`${ids[0]}:US`,`${ids[1]}:US`,`${ids[2]}:US`]);
+  expect(keys(await list('US','latest_period_end'))).toEqual([`${ids[0]}:US`,`${ids[1]}:US`,`${ids[2]}:US`]);
+  const byName=await list(null,'name',1,2);
+  expect({rows:keys(byName),total:byName.total}).toEqual({rows:[`${ids[1]}:US`,`${ids[0]}:US`],total:4});
+  expect(Object.keys((await list('US','name')).rows[0]).sort()).toEqual(['based_on_rev','citation_summary','concepts_covered','earliest_period_end','facts_count','filings_count','issuer_id','latest_available_date','latest_period_end','market','rebuild_batch_id','rebuild_id','rebuilt_at','scope_last_status','scope_last_success_at']);
+  expect(await code(list(null,'revenue'))).toMatchObject({message:'invalid_read',code:'22023'});
+  expect(await code(list(null,'name',0,201))).toMatchObject({message:'invalid_read'});
+  expect(await code(list(null,'name',-1,10))).toMatchObject({message:'invalid_read'});
  });
 });
