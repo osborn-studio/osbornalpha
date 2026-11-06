@@ -218,24 +218,23 @@ EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层
 
 ### 8.7 Tushare `report_type` 1/4/5 核对记录（规格 §6.3 / §15 第 1 条）
 
-完整记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`（本表是它的摘要；两处同步更新）。**降级状态**：本机无 `TUSHARE_TOKEN`，未发起任何 Tushare 请求；CN cron 关闭，`FACTS_CN_ENABLED` 不设。
+完整记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`（本表是它的摘要；两处同步更新）。**2026-11-06 用真实 token 核对**；真实夹具 600519.SH、000333.SZ、600036.SH、000858.SZ（修订对）已录制（`--since-year 2016`，每家 9 页，全部单页）。
 
 | 项 | 观察（公司 / 期末 / 原文行） | 结论 |
 |---|---|---|
-| `limit=2000` / `offset` / `has_more` 的真实分页行为 | 未核对（无 token） | `has_more=true` 一律续页（短页也续）、`has_more=false` 即停；`has_more=true` 的空页或 `fields+items` 哈希与上页相同 → `tushare_unavailable: paging_not_advancing`；最多 200 页；满页且 `has_more=false` 计入 `skipped.page_full_no_more`。核对前不得宣称覆盖完整 |
-| type 1 被更正后 `ann_date` / `f_ann_date` 是否变化 | 未核对 | 合成夹具假设更正后 `f_ann_date` = 更正公告日 |
-| type 5 的公告日取哪一列 | 未核对 | 合成夹具假设 = 原始公告日（`f_ann_date ?? ann_date`） |
-| 同一 `end_date` 下 1 与 5 同日并存是否出现 | 未核对 | 出现时按 §5.3：不同 filing → `same_day_conflict`，同 filing → `ambiguous_value` |
-| `update_flag` 语义 | 据 Tushare 文档（未与真实响应比对）：`1` = 最新版本 | 政策：同日、同键、值不同的行保持 `ambiguous_value` 隔离，不按 `update_flag` 自动择一，待真实数据核对后再放宽 |
-| `is_calc=1` 行的处理 | 规格：跳过 | 计入 `skipped.is_calc` |
-| `balancesheet.total_share` 单位 | 据文档：股 | 按"股"存储（`shares`）；未与真实响应比对 |
-| `report_type` 1/4/5 语义、权限 ≥2000 积分、每次一个 `ts_code` | 据文档 | 适配器每个 `ts_code × api × report_type` 单独请求 |
-| `balancesheet.money_cap` 口径 | 目录 `monetary_funds`（货币资金，含受限资金），CN 不映射 `cash` | 未与原文核对金额 |
-| 数值小数/科学计数法、`report_type` 数字或字符串 | 未核对 | 两种形态都接受；所有值列按 `tushareFieldsFor(api)` 无损解码为十进制字符串 |
-| 真实 Tushare 夹具 | 未录制 | `_synthetic/` 仅供单测；黄金断言与 `sync-cn.integration.test.ts` 等待真实夹具 |
-| 巨潮夹具 `600519.SH-2024-annual.json` | 已录制 | `cninfo-link.test.ts` 全部用例运行 |
+| `limit` / `offset` / `has_more` 分页 | 600519.SH income rt1：`has_more` 末页前 true、末页 false；`offset` 生效、越界返回空页；但页间排序在同 `end_date` 的 `update_flag` 0/1 并列行上不稳定（limit=10 逐页取完缺 2 行、重 2 行） | 已核对，**完整性仅限单页**；所有夹具与生产请求均为单页（≤ 77 行 ≪ 2000）。出现第 2 页即属未核对情形 |
+| `start_date` 过滤列 | 返回了 `end_date=19981231`、`ann_date=20010726` 的行 | 按公告日过滤；解析按期末年份另计 `before_since_year` |
+| type 1 被更正后 `ann_date` / `f_ann_date` | 000858.SZ 2025-06-30：原行（`20250828`/`20250828`，52770984383.52）保留；新增 `ann_date=20250828`、`f_ann_date=20260430`、23509972048.65 | 已核对：`ann_date` 不变、`f_ann_date` = 更正日、旧行不删；`available_date = f_ann_date ?? ann_date` 正确 |
+| type 5 的公告日 | 000858.SZ rt5 2025-06-30：`20250828`/`20250828`，52770984383.52 | 已核对：原始公告日 + 原始值 |
+| 1 与 5 同日并存 | 000858.SZ 2025-06-30：rt1 原行与 rt5 同日同值 | 出现；不同 filing、同值 → 不构成同日冲突；同日不同值未观察到 |
+| `update_flag` | 更正前后两行 rt1 都是 `update_flag=1`；000333.SZ 6 处、600036.SH 12 处同 filing 0/1 两行不同值（多为 `total_share`） | 不能用来挑最新；同 filing 同键不同值继续 `ambiguous_value` 隔离 |
+| `is_calc=1` | 规格：跳过 | 计入 `skipped.is_calc` |
+| `total_share` 单位 | 600519.SH 2026-09-30 = `1250081601.0` | 已核对：股 |
+| 控制列 / 数值形态 | 控制列是字符串（`"1"`）；值列普通十进制（含 `.0`），无科学计数法 | 两种形态都接受；无损解码 |
+| `money_cap` 口径 | 目录 `monetary_funds`，CN 不映射 `cash` | 金额待黄金集抄录时对照年报 |
+| 巨潮夹具 `600519.SH-2024-annual.json` | `available_date=2025-04-03` = Tushare FY2024 年报 `f_ann_date` | 已录制，`sync-cn.integration.test.ts` 回放挂接 |
 
-核对后把"未核对/未录制"改为"已核对（日期，夹具 sha256 前 8 位）+ 观察"。
+结论：核对通过（分页完整性限单页）。`sync-cn.integration.test.ts` 进入 `criticalSuites`；`FACTS_CN_ENABLED` 缺省开启（设为 `0` 关闭 CN）；`facts-sync?market=CN` 进入 `vercel.json`。
 
 ### 8.8 运行同步与物化
 
