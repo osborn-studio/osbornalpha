@@ -6,13 +6,17 @@
 import {sha256Hex} from './canonical-json';
 import {DEFAULT_USER_AGENT} from '../research/ingest/collectors/shared';
 
-export interface HashedSource{url:string;sha256:string;bytes:number;status:number}
+export interface HashedSource{url:string;sha256:string;bytes:number;status:number;final_url:string}
 export async function hashSource(url:string,opts:{fetch?:typeof fetch;userAgent?:string}={}):Promise<HashedSource>{
  let parsed:URL;
  try{parsed=new URL(url);}catch{throw new Error('invalid_url');}
  if(parsed.protocol!=='https:')throw new Error('https_required');
  const res=await (opts.fetch??fetch)(parsed.toString(),{headers:{'User-Agent':opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,'Accept':'*/*'},redirect:'follow'});
  if(!res.ok)throw new Error(`http_${res.status}`);
+ const finalUrl=res.url||parsed.toString();
+ let finalParsed:URL;
+ try{finalParsed=new URL(finalUrl);}catch{throw new Error('invalid_url');}
+ if(finalParsed.protocol!=='https:')throw new Error('redirect_not_https');
  const body=new Uint8Array(await res.arrayBuffer());
- return {url:parsed.toString(),sha256:sha256Hex(body),bytes:body.byteLength,status:res.status};
+ return {url:parsed.toString(),sha256:sha256Hex(body),bytes:body.byteLength,status:res.status,final_url:finalParsed.toString()};
 }

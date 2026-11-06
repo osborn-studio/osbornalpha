@@ -40,7 +40,11 @@ jobs:
           NOTE=""
           case "$EVENT_NAME" in
             pull_request)
-              BASE="$(git merge-base "origin/$BASE_REF" HEAD)";;
+              if ! BASE="$(git merge-base "origin/$BASE_REF" HEAD)"; then
+                echo "### F6 validate" >> "$GITHUB_STEP_SUMMARY"
+                echo "gold-diff cannot run: no merge-base with origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi;;
             push)
               if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
                 NOTE="gold-diff skipped: push without a previous commit (event.before is all zeros)"

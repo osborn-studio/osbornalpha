@@ -16,17 +16,19 @@ import {parseLegacyPlan2} from './legacy-plan2';
 import {GOLD_DIR,LOCK_PATH,RECORDERS_PATH,detectGoldFormat} from './load';
 
 export type GoldTree=Map<string,Uint8Array>;
-export type DiffCode='set_deleted'|'case_removed'|'case_renamed'|'version_not_bumped'|'version_decreased'|'head_unparsable'|'recorders_deleted'|'recorders_version_not_bumped'
+export type DiffCode='set_deleted'|'case_removed'|'case_renamed'|'version_not_bumped'|'version_decreased'|'head_unparsable'|'recorders_deleted'|'recorders_version_not_bumped'|'set_unlocked'
  |'set_added'|'recorders_changed'|'module_implementers_changed'|'base_unparsable';
 export interface DiffFinding{code:DiffCode;path:string;case_id?:string;detail?:string}
 export interface GoldDiffResult{violations:DiffFinding[];notices:DiffFinding[]}
 interface SetView{version:number;setLevel:string;implementers:string;cases:Map<string,string>}
 type J=Record<string,unknown>;
 const isObj=(v:unknown):v is J=>typeof v==='object'&&v!==null&&!Array.isArray(v);
-const decode=(b:Uint8Array)=>JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(b)) as unknown;
+const decode=(b:Uint8Array)=>{try{return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(b)) as unknown;}catch{throw new Error('invalid_json');}};
+/** Fixed, parser-message-free reason for an unreadable gold/recorders file. */
+const reasonOf=(e:unknown)=>e instanceof Error&&e.message==='invalid_json'?'invalid_json':'not_a_gold_set';
 const pick=(o:J,keys:readonly string[])=>Object.fromEntries(keys.filter(k=>o[k]!==undefined).map(k=>[k,o[k]]));
-const F6_CASE_FIELDS=['target','expect','printed','canonical','binding','source','retracted'] as const;
-const F6_SET_FIELDS=['tolerance','thresholds','module','artifact_class','module_implementers'] as const;
+const F6_CASE_FIELDS=['subject','target','expect','printed','canonical','binding','source','provenance_kind','retracted'] as const;
+const F6_SET_FIELDS=['set_id','review_required','tolerance','thresholds','module','artifact_class','module_implementers'] as const;
 
 /** Semantic view of a gold file; throws when the bytes are not a recognisable gold set. */
 function viewOf(bytes:Uint8Array,path:string):SetView{
@@ -35,8 +37,8 @@ function viewOf(bytes:Uint8Array,path:string):SetView{
  if(format==='legacy_plan2'){
   const s=parseLegacyPlan2(raw,{path,sha256:''});
   return {version:s.version,implementers:canonicalJson(s.module_implementers),
-   setLevel:canonicalJson({ready:s.ready,tolerance:s.tolerance,thresholds:s.thresholds,module:s.module,artifact_class:s.artifact_class,module_implementers:s.module_implementers}),
-   cases:new Map(s.cases.map(c=>[c.case_id,canonicalJson({target:c.target,expect:c.expect,canonical:c.canonical,binding:c.binding,as_of:c.as_of,source:c.source,required:c.required})]))};
+   setLevel:canonicalJson({set_id:s.set_id,review_required:s.review_required,ready:s.ready,tolerance:s.tolerance,thresholds:s.thresholds,module:s.module,artifact_class:s.artifact_class,module_implementers:s.module_implementers}),
+   cases:new Map(s.cases.map(c=>[c.case_id,canonicalJson({subject:c.subject,target:c.target,expect:c.expect,canonical:c.canonical,binding:c.binding,as_of:c.as_of,source:c.source,document:c.notes,provenance_kind:c.provenance_kind,required:c.required})]))};
  }
  if(format!=='f6'||!isObj(raw))throw new Error('not_a_gold_set');
  const r=raw;
@@ -55,14 +57,18 @@ const sameBytes=(a:Uint8Array,b:Uint8Array)=>a.length===b.length&&a.every((x,i)=
 
 export function goldDiff(base:GoldTree,head:GoldTree):GoldDiffResult{
  const violations:DiffFinding[]=[],notices:DiffFinding[]=[];
- const paths=[...new Set([...base.keys(),...head.keys()])].filter(p=>p!==LOCK_PATH).sort();
+ const paths=[...new Set([...base.keys(),...head.keys()])].filter(p=>p!==LOCK_PATH&&p.endsWith('.json')).sort();
+ // A set removed from lock.json escapes --lock; a set whose file was deleted is already a set_deleted.
+ const lockPaths=(bytes:Uint8Array|undefined)=>{try{const raw=bytes?decode(bytes):null;return isObj(raw)&&Array.isArray(raw.files)?raw.files.flatMap(f=>isObj(f)&&typeof f.path==='string'?[f.path]:[]):null;}catch{return null;}};
+ const baseLock=lockPaths(base.get(LOCK_PATH)),headLock=lockPaths(head.get(LOCK_PATH));
+ if(baseLock&&headLock)for(const p of baseLock)if(!headLock.includes(p)&&!(base.has(p)&&!head.has(p)))violations.push({code:'set_unlocked',path:p});
  for(const path of paths){
   const b=base.get(path),h=head.get(path);
   if(path===RECORDERS_PATH){
    if(b&&!h){violations.push({code:'recorders_deleted',path});continue;}
    if(!h||(b&&sameBytes(b,h)))continue;
    let hv:number;
-   try{hv=versionOf(h);}catch(e){violations.push({code:'head_unparsable',path,detail:(e as Error).message});continue;}
+   try{hv=versionOf(h);}catch(e){violations.push({code:'head_unparsable',path,detail:reasonOf(e)});continue;}
    notices.push({code:'recorders_changed',path});
    if(b){
     let bv:number|null=null;
@@ -74,7 +80,7 @@ export function goldDiff(base:GoldTree,head:GoldTree):GoldDiffResult{
   if(b&&!h){violations.push({code:'set_deleted',path});continue;}
   if(!h)continue;
   let hv:SetView;
-  try{hv=viewOf(h,path);}catch(e){violations.push({code:'head_unparsable',path,detail:(e as Error).message});continue;}
+  try{hv=viewOf(h,path);}catch(e){violations.push({code:'head_unparsable',path,detail:reasonOf(e)});continue;}
   if(!b){notices.push({code:'set_added',path});continue;}
   let bv:SetView;
   try{bv=viewOf(b,path);}catch{notices.push({code:'base_unparsable',path});continue;}
@@ -117,14 +123,14 @@ export function goldDiffPaths(base:string,cwd:string=process.cwd()):string[]{
  return [GOLD_DIR,...[...outside].sort()];
 }
 export function changedGoldFiles(base:string,paths:string[],cwd:string=process.cwd()):string[]{
- return git(cwd,['diff','--name-only','--no-renames',base,'HEAD','--',...paths]).toString('utf8').split('\n').filter(Boolean).sort();
+ return git(cwd,['diff','--name-only','-z','--no-renames',base,'HEAD','--',...paths]).toString('utf8').split('\0').filter(Boolean).sort();
 }
-/** Bytes of each path at `ref`; a path absent at `ref` is absent from the map. */
+/** Bytes of each path at `ref`; a path is absent only when `git ls-tree` does not list it (any other git error propagates). */
 export function gitTreeAt(ref:string,paths:string[],cwd:string=process.cwd()):GoldTree{
  const tree:GoldTree=new Map();
- for(const p of paths){
-  try{tree.set(p,new Uint8Array(git(cwd,['show',`${ref}:${p}`])));}catch{/* absent at ref */}
- }
+ if(paths.length===0)return tree;
+ const listed=new Set(git(cwd,['ls-tree','-r','-z','--name-only',ref,'--',...paths]).toString('utf8').split('\0').filter(Boolean));
+ for(const p of paths)if(listed.has(p))tree.set(p,new Uint8Array(git(cwd,['show',`${ref}:${p}`])));
  return tree;
 }
 /** --gold-diff <base>: diff the committed HEAD against <base>. */

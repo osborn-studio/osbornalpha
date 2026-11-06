@@ -1,10 +1,10 @@
 // src/lib/evals/validate/cli.test.ts
 import {execFileSync} from 'node:child_process';
-import {mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterAll,describe,expect,it} from 'vitest';
-import {GOLD_DIR,LOCK_PATH,RECORDERS_PATH} from '../gold/load';
+import {GOLD_DIR,LEGACY_PLAN2_PATH,LOCK_PATH,RECORDERS_PATH} from '../gold/load';
 import {HANDLERS,findingsCheck,runValidate} from './cli';
 import type {ValidateHandler} from './cli';
 
@@ -61,12 +61,30 @@ describe('runValidate on a temp repository with violations',()=>{
   write('docs/evals/2026-11-06/x.md','postgres://u:p@h/db');
   const {exitCode,output}=await runValidate(['--gold','--lock','--gold-diff',c1,'--redact'],{root});
   expect(exitCode).toBe(1);
-  expect(output.checks.gold.ok).toBe(true);
+  expect(output.checks.gold).toMatchObject({ok:false,errors:[{path:LEGACY_PLAN2_PATH}]});
   expect(output.checks.gold_diff).toMatchObject({ok:false,violations:[{code:'set_deleted',path:`${GOLD_DIR}/facts/bad.json`}]});
   expect(output.checks.redact).toMatchObject({ok:false,findings:[{path:'docs/evals/2026-11-06/x.md',rule:'postgres_url',line:1}]});
   write(`${GOLD_DIR}/facts/bad.json`,'{"schema_version":1}');
   const again=await runValidate(['--gold','--lock'],{root});
   expect(again.output.checks.gold.ok).toBe(false);
   expect(again.output.checks.lock).toMatchObject({ok:false});
+ });
+});
+
+describe('the legacy plan2 set is discovered independently of lock.json',()=>{
+ const root=mkdtempSync(join(tmpdir(),'f6-validate-legacy-'));
+ afterAll(()=>rmSync(root,{recursive:true,force:true}));
+ it('an empty lock fails --lock for plan2.json; a missing file fails --gold',async()=>{
+  mkdirSync(join(root,GOLD_DIR),{recursive:true});
+  writeFileSync(join(root,LOCK_PATH),JSON.stringify({files:[]}));
+  writeFileSync(join(root,RECORDERS_PATH),JSON.stringify({version:1,recorders:[]}));
+  const missing=await runValidate(['--gold','--lock'],{root});
+  expect(missing.exitCode).toBe(1);
+  expect(missing.output.checks.gold).toMatchObject({ok:false,errors:[{path:LEGACY_PLAN2_PATH}]});
+  mkdirSync(join(root,LEGACY_PLAN2_PATH,'..'),{recursive:true});
+  copyFileSync(LEGACY_PLAN2_PATH,join(root,LEGACY_PLAN2_PATH));
+  const unlocked=await runValidate(['--gold','--lock'],{root});
+  expect(unlocked.output.checks.gold).toMatchObject({ok:true});
+  expect(unlocked.output.checks.lock).toMatchObject({ok:false,errors:[{path:LEGACY_PLAN2_PATH,code:'gold_lock_mismatch'}]});
  });
 });

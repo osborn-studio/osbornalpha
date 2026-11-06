@@ -10,7 +10,7 @@ describe('hashSource',()=>{
   const seen:{url:string;ua:string|null}[]=[];
   const fake=(async(url:string,init?:RequestInit)=>{seen.push({url,ua:new Headers(init?.headers).get('user-agent')});return new Response(body,{status:200});}) as unknown as typeof fetch;
   const r=await hashSource('https://www.sec.gov/Archives/x.htm',{fetch:fake,userAgent:DEFAULT_USER_AGENT});
-  expect(r).toEqual({url:'https://www.sec.gov/Archives/x.htm',sha256:createHash('sha256').update(body).digest('hex'),bytes:body.byteLength,status:200});
+  expect(r).toEqual({url:'https://www.sec.gov/Archives/x.htm',sha256:createHash('sha256').update(body).digest('hex'),bytes:body.byteLength,status:200,final_url:'https://www.sec.gov/Archives/x.htm'});
   expect(seen).toEqual([{url:'https://www.sec.gov/Archives/x.htm',ua:DEFAULT_USER_AGENT}]);
  });
  it('rejects non-https URLs and non-2xx responses',async()=>{
@@ -18,5 +18,10 @@ describe('hashSource',()=>{
   await expect(hashSource('http://www.sec.gov/x',{fetch:fake})).rejects.toThrow('https_required');
   await expect(hashSource('not a url',{fetch:fake})).rejects.toThrow('invalid_url');
   await expect(hashSource('https://www.sec.gov/x',{fetch:fake})).rejects.toThrow('http_403');
+ });
+ it('rejects a redirect that ends on a non-https URL and reports final_url otherwise',async()=>{
+  const mk=(finalUrl:string)=>(async()=>{const r=new Response('x',{status:200});Object.defineProperty(r,'url',{value:finalUrl});return r;}) as unknown as typeof fetch;
+  await expect(hashSource('https://www.sec.gov/x',{fetch:mk('http://evil.test/x')})).rejects.toThrow('redirect_not_https');
+  expect((await hashSource('https://www.sec.gov/x',{fetch:mk('https://www.sec.gov/y')})).final_url).toBe('https://www.sec.gov/y');
  });
 });

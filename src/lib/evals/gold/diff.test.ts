@@ -9,7 +9,7 @@ import {afterAll,describe,expect,it} from 'vitest';
 import {EvalError} from '../errors';
 import {changedGoldFiles,goldDiff,goldDiffAgainst,gitTreeAt,resolveCommit} from './diff';
 import type {GoldTree} from './diff';
-import {GOLD_DIR,LOCK_PATH,RECORDERS_PATH} from './load';
+import {GOLD_DIR,LEGACY_PLAN2_PATH,LOCK_PATH,RECORDERS_PATH} from './load';
 
 type J=Record<string,any>;
 const SET=`${GOLD_DIR}/facts/a.json`;
@@ -72,6 +72,36 @@ describe('goldDiff (in-memory trees)',()=>{
   expect(codes(goldDiff(tree({[RECORDERS_PATH]:recorders(1)}),tree({})))).toEqual(['recorders_deleted']);
   expect(goldDiff(tree({[LOCK_PATH]:{files:[]}}),tree({}))).toEqual({violations:[],notices:[]});
  });
+
+ it('adding a case without a version bump is a violation; with a bump it is clean',()=>{
+  const added=set({cases:[kase('A'),kase('B'),kase('C')]});
+  expect(codes(goldDiff(tree({[SET]:set()}),tree({[SET]:added})))).toEqual(['version_not_bumped']);
+  expect(codes(goldDiff(tree({[SET]:set()}),tree({[SET]:{...added,version:2}})))).toEqual([]);
+ });
+ it('subject, provenance_kind, review_required and set_id changes need a bump',()=>{
+  const overs:J[]=[{cases:[{...kase('A'),subject:{market:'US',cik:'2'}},kase('B')]},{cases:[{...kase('A'),provenance_kind:'synthetic'},kase('B')]},{review_required:true},{set_id:'facts/other'}];
+  for(const over of overs){
+   expect(codes(goldDiff(tree({[SET]:set()}),tree({[SET]:set(over)}))),JSON.stringify(over)).toEqual(['version_not_bumped']);
+   expect(codes(goldDiff(tree({[SET]:set()}),tree({[SET]:set({...over,version:2})}))),JSON.stringify(over)).toEqual([]);
+  }
+ });
+ it('legacy: subject and source.document changes need a bump',()=>{
+  const plan2=JSON.parse(readFileSync(LEGACY_PLAN2_PATH,'utf8'));
+  const edit=(f:(e:J)=>J)=>({...plan2,entries:plan2.entries.map((e:J,i:number)=>i===0?f(e):e)});
+  // the case id derives from the ticker, so a subject change also surfaces as a removed case; either way the bump is demanded
+  expect(codes(goldDiff(tree({[LEGACY_PLAN2_PATH]:plan2}),tree({[LEGACY_PLAN2_PATH]:edit(e=>({...e,issuer:{...e.issuer,ticker:'ZZZZ'}}))})))).toContain('version_not_bumped');
+  expect(codes(goldDiff(tree({[LEGACY_PLAN2_PATH]:plan2}),tree({[LEGACY_PLAN2_PATH]:edit(e=>({...e,source:{...e.source,document:'another document'}}))})))).toEqual(['version_not_bumped']);
+ });
+ it('a set removed from lock.json is set_unlocked; a deleted set is reported once as set_deleted',()=>{
+  const lockOf=(...paths:string[])=>({files:paths.map(path=>({path,sha256:'a'.repeat(64),version:1,format:'f6'}))});
+  expect(goldDiff(tree({[LOCK_PATH]:lockOf(SET,LEGACY_PLAN2_PATH)}),tree({[LOCK_PATH]:lockOf(SET)})).violations).toEqual([{code:'set_unlocked',path:LEGACY_PLAN2_PATH}]);
+  expect(codes(goldDiff(tree({[LOCK_PATH]:lockOf(SET),[SET]:set()}),tree({[LOCK_PATH]:lockOf()})))).toEqual(['set_deleted']);
+  expect(goldDiff(tree({[LOCK_PATH]:lockOf(SET)}),tree({[LOCK_PATH]:lockOf(SET,'x/y.json')}))).toEqual({violations:[],notices:[]});
+ });
+ it('head_unparsable carries a fixed detail; non-JSON files are ignored',()=>{
+  expect(goldDiff(tree({[SET]:set()}),tree({[SET]:'{"schema_version":1,'})).violations).toEqual([{code:'head_unparsable',path:SET,detail:'invalid_json'}]);
+  expect(goldDiff(tree({}),tree({[`${GOLD_DIR}/README.md`]:'# notes'}))).toEqual({violations:[],notices:[]});
+ });
  it('legacy_plan2 files are diffed through the adapter (filling a pending value needs a bump)',()=>{
   const plan2=JSON.parse(readFileSync('src/lib/facts/fixtures/gold/plan2.json','utf8'));
   const P='src/lib/facts/fixtures/gold/plan2.json';
@@ -114,5 +144,29 @@ describe('gold diff over a real git repository',()=>{
  it('deleting the set in a further commit is a violation against any earlier base',()=>{
   g('rm','-q',SET);g('commit','-q','-m','c4: delete');
   expect(goldDiffAgainst(c1,root).violations).toEqual([{code:'set_deleted',path:SET}]);
+ });
+});
+
+describe('gold diff with non-ASCII paths and lock removal in git',()=>{
+ const root=mkdtempSync(join(tmpdir(),'f6-gold-diff-nonascii-'));
+ afterAll(()=>rmSync(root,{recursive:true,force:true}));
+ const g=(...args:string[])=>execFileSync('git',['-c','user.name=f6-test','-c','user.email=f6-test@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null',...args],{cwd:root,stdio:['ignore','pipe','pipe']}).toString('utf8').trim();
+ const write=(path:string,v:unknown)=>{mkdirSync(join(root,path,'..'),{recursive:true});writeFileSync(join(root,path),JSON.stringify(v,null,1));};
+ const UNI=`${GOLD_DIR}/facts/\u516c\u53f8-\u00e9.json`;
+ const lock=(...paths:string[])=>({files:paths.map(path=>({path,sha256:'a'.repeat(64),version:1,format:'f6'}))});
+ g('init','-q','-b','main');
+ write(LOCK_PATH,lock(SET,LEGACY_PLAN2_PATH));write(SET,set());write('README.md','x');
+ g('add','-A');g('commit','-q','-m','c1');
+ const c1=g('rev-parse','HEAD');
+ write(UNI,set({set_id:'facts/uni'}));write(LOCK_PATH,lock(SET));
+ g('add','-A');g('commit','-q','-m','c2');
+ it('lists and reads non-ASCII gold paths and flags the lock entry that disappeared',()=>{
+  const r=goldDiffAgainst(c1,root);
+  expect(r.changed).toEqual([LOCK_PATH,UNI].sort());
+  expect(r.notices).toEqual([{code:'set_added',path:UNI}]);
+  expect(r.violations).toEqual([{code:'set_unlocked',path:LEGACY_PLAN2_PATH}]);
+ });
+ it('an unknown ref propagates as an error instead of an empty tree',()=>{
+  expect(()=>gitTreeAt('0'.repeat(40),[SET],root)).toThrow();
  });
 });

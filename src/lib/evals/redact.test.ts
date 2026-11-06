@@ -10,6 +10,9 @@ describe('redactScan: each rule, positive and negative',()=>{
   ['query &key=','https://x.test/a?b=1&key=abc','query_token'],
   ['query sig=','https://x.test/a?sig=abc','query_token'],
   ['prose "key=" without ? or &','the lookup key=value form','' ],
+  ['query &api_key=','https://x.test/a?b=1&api_key=abc','query_token'],
+  ['query ?access_token=','https://x.test/a?access_token=abc','query_token'],
+  ['query ?apikey=','https://x.test/a?apikey=abc','query_token'],
   ['X-Amz-Signature','...&X-Amz-Signature=deadbeef','query_token'],
   ['postgres URL','postgres://u:p@h/db','postgres_url'],
   ['postgresql URL','postgresql://h/db','postgres_url'],
@@ -41,10 +44,19 @@ describe('redactScan: each rule, positive and negative',()=>{
   expect(f).toEqual([{path:'docs/audits/a.md',rule:'postgres_url',line:3}]);
   expect(JSON.stringify(f)).not.toContain('secret');
  });
+ it('JSON string values are decoded before the credential rules apply',()=>{
+  const p='docs/evals/a.json';
+  expect(scan(JSON.stringify({u:'postgres://u:p@h/db'}).replace('//','\\/\\/'),p)).toContain('postgres_url');
+  expect(scan('{"e":"jane@corp.co.uk"}'.replace('@','\\u0040'),p)).toContain('email');
+  expect(scan(JSON.stringify({u:'ok https://x.test/?token=abc'}),p)).toContain('query_token');
+  expect(redactScan([{path:p,text:JSON.stringify({u:'postgres://user:secret@h/db'})}]).map(f=>JSON.stringify(f)).join()).not.toContain('secret');
+  expect(scan(JSON.stringify({u:'PostgreSQL 17'}),p)).toEqual([]);
+ });
  it('flags unparsable JSON',()=>{expect(scan('{','docs/evals/a.json')).toEqual(['invalid_json']);});
 });
 
 describe('repository',()=>{
+ // Note: untracked local files under docs/audits/2026-11-06-evals-gold-sets (e.g. pasted Codex transcripts) are scanned too and can make this fail locally.
  it('the F6-owned paths (fixtures, docs/evals, the F6 audit directory) are clean',()=>{
   const files=redactTargets();
   expect(files.some(f=>f.path.startsWith('docs/audits/2026-11-06-evals-gold-sets/'))).toBe(true);

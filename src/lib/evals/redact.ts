@@ -18,7 +18,7 @@ export interface RedactFinding{path:string;rule:string;line:number|null;field?:s
 const LONG_FIELDS=new Set(['text','note','notes']);
 const EXAMPLE_DOMAIN=/@(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net|invalid)$/i;
 const RULES:readonly {rule:string;re:RegExp;allow?:(m:string)=>boolean}[]=[
- {rule:'query_token',re:/[?&](?:token|key|sig)=/gi},
+ {rule:'query_token',re:/[?&][A-Za-z0-9_.-]*(?:token|key|sig)=/gi},
  {rule:'query_token',re:/X-Amz-Signature/gi},
  {rule:'postgres_url',re:/postgres(?:ql)?:\/\//gi},
  {rule:'jwt',re:/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g},
@@ -29,6 +29,12 @@ const RULES:readonly {rule:string;re:RegExp;allow?:(m:string)=>boolean}[]=[
 ];
 const lineAt=(text:string,index:number)=>{let n=1;for(let i=0;i<index;i++)if(text.charCodeAt(i)===10)n++;return n;};
 
+/** Every credential rule applied to one decoded JSON string value (catches escaped slashes and \\u sequences); line is unknown. */
+function decodedFindings(v:unknown,path:string,out:RedactFinding[]):void{
+ if(typeof v==='string'){for(const {rule,re,allow} of RULES)for(const m of v.matchAll(re))if(!allow?.(m[0]))out.push({path,rule,line:null});}
+ else if(Array.isArray(v))for(const x of v)decodedFindings(x,path,out);
+ else if(v!==null&&typeof v==='object')for(const x of Object.values(v))decodedFindings(x,path,out);
+}
 function longFields(v:unknown,key:string|null,path:string,out:RedactFinding[]):void{
  if(typeof v==='string'){if(key!==null&&LONG_FIELDS.has(key)&&v.length>LONG_FIELD_LIMIT)out.push({path,rule:'long_field',line:null,field:key});}
  else if(Array.isArray(v))for(const x of v)longFields(x,key,path,out);
@@ -46,6 +52,10 @@ export function redactScan(files:readonly {path:string;text:string}[]):RedactFin
    let parsed:unknown;
    try{parsed=JSON.parse(text);}catch{out.push({path,rule:'invalid_json',line:null});continue;}
    longFields(parsed,null,path,out);
+   const seen=new Set(out.filter(f=>f.path===path).map(f=>f.rule));
+   const decoded:RedactFinding[]=[];
+   decodedFindings(parsed,path,decoded);
+   for(const f of decoded)if(!seen.has(f.rule)){seen.add(f.rule);out.push(f);}
   }
  }
  return out.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:(a.line??0)-(b.line??0)||(a.rule<b.rule?-1:a.rule>b.rule?1:0));

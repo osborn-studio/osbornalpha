@@ -25,6 +25,9 @@ describe('ci.yml F6 block',()=>{
   expect(yml).toContain('ARGS+=(--gold-diff "$BASE")');
   expect(yml).toContain('$GITHUB_STEP_SUMMARY');
  });
+ it('a failed merge-base on pull_request writes a summary line and fails',()=>{
+  expect(yml).toContain('gold-diff cannot run: no merge-base with origin/$BASE_REF');
+ });
  it('uploads reports/evals/** with the database summaries',()=>{
   const at=lines.findIndex(l=>l.includes('reports/migration-rehearsal.json'));
   expect(lines.slice(at,at+4).map(l=>l.trim())).toEqual(['reports/migration-rehearsal.json','# F6 begin','reports/evals/**','# F6 end']);

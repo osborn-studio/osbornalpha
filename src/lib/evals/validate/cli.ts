@@ -7,7 +7,7 @@
 // any selected check fails, 2 for usage errors (spec §3.2: 2 = refused before running).
 import {EvalError} from '../errors';
 import {goldDiffAgainst} from '../gold/diff';
-import {checkLock,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders} from '../gold/load';
+import {LEGACY_PLAN2_PATH,checkLock,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders} from '../gold/load';
 import type {GoldLock,ValidatorFinding} from '../types';
 import {redactScan,redactTargets} from '../redact';
 
@@ -19,6 +19,8 @@ export interface ValidateHandler{flag:string;name:string;takesValue:boolean;modi
 export const findingsCheck=(findings:ValidatorFinding[]):CheckResult=>({ok:findings.length===0,findings});
 export interface ValidateOutput{ok:boolean;checks:Record<string,CheckResult>;error?:string;usage?:string}
 
+/** Gold sets to validate: everything listGoldSetPaths finds plus the mandatory legacy plan2.json, whatever lock.json says. */
+const setPaths=(root:string,lock:GoldLock|null)=>[...new Set([...listGoldSetPaths(root,lock),LEGACY_PLAN2_PATH])].sort();
 const errorOf=(e:unknown)=>e instanceof EvalError?{code:e.code,message:e.message,...e.detail}:{message:e instanceof Error?e.message:String(e)};
 
 export const HANDLERS:ValidateHandler[]=[
@@ -28,7 +30,7 @@ export const HANDLERS:ValidateHandler[]=[
   try{lock=loadLock(root);}catch{/* reported by --lock */}
   try{loadRecorders(root);}catch(e){errors.push(errorOf(e));}
   const sets:Record<string,unknown>[]=[];
-  for(const path of listGoldSetPaths(root,lock)){
+  for(const path of setPaths(root,lock)){
    try{const s=loadGoldSet(path,root);sets.push({path,set_id:s.set_id,version:s.version,format:s.format,cases:s.cases.length,ready:s.ready});}
    catch(e){errors.push({path,...errorOf(e)});}
   }
@@ -36,7 +38,7 @@ export const HANDLERS:ValidateHandler[]=[
  }},
  {flag:'--lock',name:'lock',takesValue:false,run(root){
   const lock=loadLock(root);
-  const paths=listGoldSetPaths(root,lock);
+  const paths=setPaths(root,lock);
   const errors:Record<string,unknown>[]=[];
   for(const path of paths){
    try{checkLock(loadGoldSet(path,root),lock);}catch(e){errors.push({path,...errorOf(e)});}
