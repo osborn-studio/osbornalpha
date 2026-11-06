@@ -427,11 +427,13 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   }
   errors.push(...summarizeWarnings(warnings));
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
-  const ok=published>=Math.max(1,Math.ceil(attempted/2));
+  const ok=idle||published>=Math.max(1,Math.ceil(attempted/2));
   const detail:SyncDetail={attempted,published,failed,skipped,idle};
-  // An idle run (nothing due) is not a producer attempt: dq_freshness stays untouched so an issuer that fails on every
-  // retry cannot look fresh between its attempts (spec §16 deviation: the spec says idle = ok).
-  if(!idle)await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
+  // An idle run (nothing due) is a heartbeat ONLY while no active scope row (priority > 0) of this market has
+  // last_status 'failed': a healthy quiet week stays fresh, but an issuer that fails on every retry cannot be
+  // masked by the idle runs between its attempts (spec §16 deviation: the spec says idle = always ok).
+  const failingActive=idle&&(await deps.db.scopeAll(market)).some(s=>s.priority>0&&s.last_status==='failed');
+  if(!failingActive)await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
   return {batchId,status,counts,errors,issuers,idle,detail};
  }catch(e){
   // Infrastructure failure outside an issuer: close the receipt so no running batch dangles, then rethrow.

@@ -79,12 +79,44 @@ describe('runFactsSync — lifecycle',()=>{
   expect((await current(db,'2024-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000000',disclosure_seq:1});
   expect((await current(db,'2025-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000001',disclosure_seq:2,is_revision:true});
  });
- it('runs idle when nothing is due: success batch, dq_freshness untouched (an idle run must not look like a fresh attempt)',async()=>{
+ it('runs idle when nothing is due and nothing is failing: success batch, ok heartbeat with idle=true',async()=>{
   const {tables,deps}=harness(FY23,{},[]);
   const r=await run(deps);
   expect(r).toMatchObject({idle:true,status:'success',issuers:[]});
   expect(r.detail).toMatchObject({idle:true,attempted:0});
-  expect(tables.rows('dq_freshness')).toHaveLength(0);
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',detail:{idle:true,attempted:0}});
+ });
+ describe('idle runs and freshness (healthy quiet weeks stay fresh, a failing active issuer is never masked)',()=>{
+  let clock=NOW;
+  const at=(deps:SyncDeps,ms:number):SyncDeps=>{clock=new Date(NOW.getTime()+ms);return {...deps,now:()=>clock};};
+  it('idle + every active row healthy: an ok attempt is recorded',async()=>{
+   const {tables,deps}=harness();
+   await run(deps);
+   const first=tables.rows('dq_freshness')[0].last_ok_at;
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',consecutive_errors:0,detail:{idle:true}});
+   expect(tables.rows('dq_freshness')[0].last_ok_at).not.toBe(first);
+  });
+  it('idle + one active row whose last status is failed: dq_freshness is left untouched',async()=>{
+   const {tables,deps}=harness(FY23,{fetchUs:async()=>{throw new SyncError('sec_unavailable');}});
+   await run(deps);
+   const before=JSON.parse(JSON.stringify(tables.rows('dq_freshness')[0]));
+   expect(before).toMatchObject({consecutive_errors:1});
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')).toEqual([before]);
+  });
+  it('a retired (priority 0) failed row is ignored: the idle run records ok',async()=>{
+   const scopes=[{issuer_id:ISSUER,fetch_key:'0000320193'}];
+   const {tables,deps}=harness(FY23,{fetchUs:async()=>{throw new SyncError('sec_unavailable');}},scopes);
+   await run(deps);
+   scopes.splice(0);   // the mocked reconcile now leaves the scope alone ...
+   await deps.db.reconcileScope('US',[{issuer_id:ISSUER,reasons:['sp500'],priority:0,fetch_key:'0000320193'}]);   // ... so retire the row directly
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',consecutive_errors:0});
+  });
  });
  it('publishes an empty run and reports no_rows when the source has nothing',async()=>{
   const {db,deps}=harness(parsed([],[]));
