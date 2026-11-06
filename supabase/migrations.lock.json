@@ -204,6 +204,10 @@
     {
       "file": "20261111090000_industry_research.sql",
       "sha256": "a561b042c8f4825a39cdc1ece35def1c821074b127ac3e932f5514901d3be9f8"
+    },
+    {
+      "file": "20261111091000_industry_research_functions.sql",
+      "sha256": "cd3d6e3a101e1257a9334b4e58486538318912e5c70dec7f96bbe759a9e74eba"
     }
   ]
 }
