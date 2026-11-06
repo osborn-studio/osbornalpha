@@ -8,7 +8,8 @@
 // kind_not_enabled in report (no private bucket this phase, §16 D8). writeReportFiles writes
 // canonicalJson(report)+'\n' and returns the sha256 of exactly those bytes; it never overwrites.
 // The environment block must carry no credentials (db_host is a bare host[:port], app_origin an origin).
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {randomBytes} from 'node:crypto';
+import {existsSync,linkSync,mkdirSync,unlinkSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import {EvalError} from './errors';
@@ -23,7 +24,7 @@ const byCaseId=(a:CaseReport,b:CaseReport)=>a.case_id<b.case_id?-1:a.case_id>b.c
 /** Throws EvalError('report_write_failed') when db_host / app_origin could carry a credential. */
 export function assertEnvironmentClean(e:ReportEnvironment):void{
  const bad=(field:string)=>new EvalError('report_write_failed',`environment.${field} must not carry credentials`,{reason:'environment_credentials',field});
- if(e.db_host!==null&&(!HOST.test(e.db_host)||e.db_host.includes('@')))throw bad('db_host');
+ if(e.db_host!==null&&!HOST.test(e.db_host))throw bad('db_host');
  if(e.app_origin!==null){
   let u:URL;
   try{u=new URL(e.app_origin);}catch{throw bad('app_origin');}
@@ -51,7 +52,7 @@ export function buildReport(i:BuildReportInput):EvalReport{
  };
 }
 
-const cell=(v:unknown)=>v===null||v===undefined||v===''?'—':String(v).replace(/\\/g,'\\\\').replace(/\|/g,'\\|').replace(/\r?\n/g,' ');
+const cell=(v:unknown)=>v===null||v===undefined||v===''?'—':String(v).replace(/\\/g,'\\\\').replace(/\|/g,'\\|').replace(/\r\n|\r|\n/g,' ');
 const row=(xs:unknown[])=>`| ${xs.map(cell).join(' | ')} |`;
 function reasonOf(c:CaseReport):string{
  const o=c.outcome as {reason?:string;ledger_ids?:string[]};
@@ -93,6 +94,7 @@ export function renderMarkdown(r:EvalReport):string{
 }
 
 export function reportPaths(r:EvalReport,root?:string):{json:string;md:string|null}{
+ if(!UUID.test(r.run_id))throw new EvalError('report_write_failed','run_id must be a uuid',{reason:'run_id'});
  if(r.artifact_class==='restricted'){
   if(r.mode==='ci')throw new EvalError('restricted_in_ci','restricted sets do not run in ci (spec §4.5)');
   throw new EvalError('kind_not_enabled','restricted reports need the eval-restricted bucket, not created this phase (spec §16 D8)');
@@ -108,17 +110,33 @@ export function reportPaths(r:EvalReport,root?:string):{json:string;md:string|nu
  return root===undefined?rel:{json:join(root,rel.json),md:rel.md===null?null:join(root,rel.md)};
 }
 
-/** Writes the report (and its .md in report mode); returns repo-relative paths and the sha256 of the JSON bytes written. */
-export function writeReportFiles(r:EvalReport,root:string=process.cwd()):{json:string;md:string|null;sha256:string}{
+export interface WriteOps{link?:(existing:string,target:string)=>void}
+
+/** Writes the report (and its .md in report mode); returns repo-relative paths and the sha256 of the JSON bytes written.
+ *  Never overwrites: each file is written whole to a temp file, then published with link() (fails with EEXIST);
+ *  if a later publish fails, files published by this attempt are removed. Pre-existing files are never touched. */
+export function writeReportFiles(r:EvalReport,root:string=process.cwd(),ops:WriteOps={}):{json:string;md:string|null;sha256:string}{
  assertEnvironmentClean(r.environment);
  const rel=reportPaths(r);
+ const link=ops.link??linkSync;
  const bytes=Buffer.from(`${canonicalJson(r)}\n`,'utf8');
- const write=(path:string,data:string|Buffer)=>{
-  const abs=join(root,path);
-  try{mkdirSync(dirname(abs),{recursive:true});writeFileSync(abs,data,{flag:'wx'});}
-  catch(e){throw new EvalError('report_write_failed',`${path}: ${(e as NodeJS.ErrnoException).code??(e as Error).message}`,{path});}
- };
- write(rel.json,bytes);
- if(rel.md!==null)write(rel.md,renderMarkdown(r));
+ const targets:{path:string;data:string|Buffer}[]=[{path:rel.json,data:bytes}];
+ if(rel.md!==null)targets.push({path:rel.md,data:renderMarkdown(r)});
+ const fail=(path:string,e:unknown)=>new EvalError('report_write_failed',`${path}: ${(e as NodeJS.ErrnoException).code??(e as Error).message}`,{path});
+ for(const t of targets)if(existsSync(join(root,t.path)))throw new EvalError('report_write_failed',`${t.path}: EEXIST`,{path:t.path});
+ const temps:string[]=[],published:string[]=[];
+ const cleanup=()=>{for(const f of [...published,...temps]){try{unlinkSync(f);}catch{/* best effort */}}};
+ try{
+  for(const t of targets){
+   const abs=join(root,t.path),tmp=`${abs}.tmp-${randomBytes(6).toString('hex')}`;
+   try{mkdirSync(dirname(abs),{recursive:true});writeFileSync(tmp,t.data,{flag:'wx'});temps.push(tmp);}
+   catch(e){throw fail(t.path,e);}
+  }
+  targets.forEach((t,i)=>{
+   const abs=join(root,t.path);
+   try{link(temps[i],abs);published.push(abs);}catch(e){throw fail(t.path,e);}
+  });
+ }catch(e){cleanup();throw e;}
+ for(const f of temps){try{unlinkSync(f);}catch{/* best effort */}}
  return {json:rel.json,md:rel.md,sha256:sha256Hex(bytes)};
 }

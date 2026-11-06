@@ -1,5 +1,5 @@
 // src/lib/evals/report.test.ts
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {existsSync,linkSync,mkdirSync,mkdtempSync,readdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterAll,describe,expect,it} from 'vitest';
@@ -34,7 +34,16 @@ describe('buildReport',()=>{
    set:{id:'facts/synthetic-us',version:2,sha256:'d'.repeat(64),format:'f6',path:SET.path},evaluator_code_version:SHA,dirty:false,
    environment:ENV,thresholds:SET.thresholds,provenance:{verified:{artifacts:false,sources:false}}});
   expect(r.cases.map(c=>c.case_id)).toEqual(['A|pipe/fail','M/missing','Z/pass']);
+  expect(r).toMatchObject({started_at:'2026-11-06T09:00:00.000Z',finished_at:'2026-11-06T09:00:05.000Z'});
+  expect(build({verified:{artifacts:true,sources:false},privileged:true})).toMatchObject({privileged:true,provenance:{verified:{artifacts:true,sources:false}}});
   expect(r.summary.gate).toBe('incomplete');
+ });
+ it('reportPaths re-validates run_id',()=>{
+  expect(codeOf(()=>reportPaths({...build(),run_id:'../x'}))).toBe('report_write_failed');
+ });
+ it('markdown cells flatten CR, CRLF and LF',()=>{
+  const md=renderMarkdown(build({cases:[rep('a\r\nb\rc\nd',{result:'missing'})]}));
+  expect(md).toContain('| a b c d |');
  });
  it('rejects a non-uuid run id, a non-40-hex code version and thresholds that differ from the set',()=>{
   expect(codeOf(()=>build({runId:'run-1'}))).toBe('report_write_failed');
@@ -110,6 +119,22 @@ describe('writeReportFiles',()=>{
  it('ci writes only the JSON',()=>{
   const root=tmp();
   expect(writeReportFiles(build({mode:'ci'}),root)).toMatchObject({json:`reports/evals/${RUN}.json`,md:null});
+ });
+ it('report mode: a pre-existing .md is refused and no JSON is left behind',()=>{
+  const root=tmp(),r=build(),p=reportPaths(r,root);
+  mkdirSync(join(root,'docs/evals/2026-11-06'),{recursive:true});writeFileSync(p.md!,'keep');
+  expect(codeOf(()=>writeReportFiles(r,root))).toBe('report_write_failed');
+  expect(existsSync(p.json)).toBe(false);expect(readFileSync(p.md!,'utf8')).toBe('keep');
+ });
+ it('a failure on the second publish leaves no orphan, and a retry succeeds',()=>{
+  const root=tmp(),r=build(),p=reportPaths(r,root);
+  let n=0;
+  const flaky=(a:string,b:string)=>{if(++n===2)throw new Error('disk');linkSync(a,b);};
+  expect(codeOf(()=>writeReportFiles(r,root,{link:flaky}))).toBe('report_write_failed');
+  expect(readdirSync(join(root,'docs/evals/2026-11-06'))).toEqual([]);
+  expect(existsSync(p.json)).toBe(false);
+  expect(writeReportFiles(r,root).sha256).toMatch(/^[0-9a-f]{64}$/);
+  expect(readdirSync(join(root,'docs/evals/2026-11-06')).sort()).toEqual(readdirSync(join(root,'docs/evals/2026-11-06')).filter(f=>!f.includes('.tmp-')).sort());
  });
  it('never overwrites an existing report',()=>{
   const root=tmp(),r=build({mode:'ci'});
