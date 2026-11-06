@@ -7,6 +7,7 @@
 // column has one entry per accession). 8-A12B/8-A12G/25/25-NSE become evidence_only claims that
 // never prefill a security or an effective date (the reviewer reads the filing, spec §4.2.1).
 import type {Budget} from '../../facts/types';
+import type {Pacer} from '../../facts/providers/shared';
 import {PacerError,createPacer} from '../../facts/providers/shared';
 import type {RawStore} from '../../dq/raw-store';
 import {normalizeCik} from '../../research/entity-keys/identifiers';
@@ -20,7 +21,7 @@ export const SUBMISSIONS_PARSER_VERSION='sec-submissions/1';
 const PAGE_NAME=/^CIK\d{10}-submissions-\d{3}\.json$/;
 export const submissionsUrl=(cik:string)=>`${SEC_SUBMISSIONS_BASE}CIK${normalizeCik(cik).padStart(10,'0')}.json`;
 
-export interface SubmissionFiling{accessionNumber:string;filingDate:string;reportDate:string|null;acceptanceDateTime:string|null;form:string;primaryDocument:string|null;isInlineXBRL:boolean|null;page:string;index:number}
+export interface SubmissionFiling{accessionNumber:string;filingDate:string;reportDate:string|null;acceptanceDateTime:string|null;form:string;primaryDocument:string|null;isInlineXBRL:boolean|null;page:string}
 export interface SubmissionsPageRef{name:string;filingCount:number|null;filingFrom:string|null;filingTo:string|null}
 export interface FormerName{name:string;from:string|null;to:string|null}
 export interface ParsedSubmissions{cik:string;name:string|null;category:string|null;fiscalYearEnd:string|null;tickers:string[];exchanges:string[];formerNames:FormerName[];filings:SubmissionFiling[];files:SubmissionsPageRef[]}
@@ -60,7 +61,7 @@ function columnar(o:unknown,page:string):SubmissionFiling[]{
   if(typeof a!=='string'||typeof fd[i]!=='string'||typeof form[i]!=='string')throw invalid(`${page}: row ${i}`);
   const x=ix?.[i];
   return {accessionNumber:a,filingDate:fd[i] as string,reportDate:text(rd?.[i]),acceptanceDateTime:text(ad?.[i]),form:form[i] as string,
-   primaryDocument:text(pd?.[i]),isInlineXBRL:x===1||x===true?true:x===0||x===false?false:null,page,index:i};
+   primaryDocument:text(pd?.[i]),isInlineXBRL:x===1||x===true?true:x===0||x===false?false:null,page};
  });
 }
 const parseJson=(json:string,what:string)=>{try{return JSON.parse(json) as unknown;}catch{throw invalid(`${what}: not JSON`);}};
@@ -75,18 +76,21 @@ export function parseSubmissions(json:string):ParsedSubmissions{
  try{cik=normalizeCik(d.cik);}catch{throw invalid('cik');}
  const filings=d.filings as {recent?:unknown;files?:unknown}|undefined;
  if(!filings||typeof filings!=='object')throw invalid('filings');
+ // Absent or malformed tickers / files are NOT empty lists: consumers read [] as "SEC lists none", so they fail instead.
+ const requiredArray=(v:unknown,what:string):unknown[]=>{if(!Array.isArray(v))throw invalid(what);return v;};
+ const requiredStrings=(v:unknown,what:string)=>requiredArray(v,what).map(x=>{if(typeof x!=='string')throw invalid(what);return x;});
  const strings=(v:unknown)=>Array.isArray(v)?v.filter((x):x is string=>typeof x==='string'&&x.trim()!==''):[];
  const fye=text(d.fiscalYearEnd);
  return {
   cik,name:text(d.name),category:text(d.category),
   fiscalYearEnd:fye&&/^(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(fye)?fye:null,
-  tickers:strings(d.tickers).map(t=>t.trim().toUpperCase()),exchanges:strings(d.exchanges),
+  tickers:requiredStrings(d.tickers,'tickers').map(t=>t.trim().toUpperCase()).filter(t=>t!==''),exchanges:strings(d.exchanges),
   formerNames:(Array.isArray(d.formerNames)?d.formerNames:[]).flatMap(f=>{
    const o=(f&&typeof f==='object'?f:{}) as Record<string,unknown>;const n=text(o.name);
    return n?[{name:n,from:text(o.from),to:text(o.to)}]:[];
   }),
   filings:columnar(filings.recent,'recent'),
-  files:(Array.isArray(filings.files)?filings.files:[]).map(f=>{
+  files:requiredArray(filings.files,'filings.files').map(f=>{
    const o=(f&&typeof f==='object'?f:{}) as Record<string,unknown>;const n=text(o.name);
    if(!n||!PAGE_NAME.test(n))throw invalid('files[].name');
    return {name:n,filingCount:typeof o.filingCount==='number'?o.filingCount:null,filingFrom:text(o.filingFrom),filingTo:text(o.filingTo)};
@@ -94,16 +98,19 @@ export function parseSubmissions(json:string):ParsedSubmissions{
  };
 }
 
-export interface FetchSubmissionsDeps{fetch:typeof fetch;raw:RawStore;userAgent?:string;sleep?:(ms:number,signal?:AbortSignal)=>Promise<void>;now?:()=>number;clock?:()=>Date;budget?:Budget}
+export interface FetchSubmissionsDeps{fetch:typeof fetch;raw:RawStore;userAgent?:string;sleep?:(ms:number,signal?:AbortSignal)=>Promise<void>;now?:()=>number;clock?:()=>Date;budget?:Budget;
+ /** Default: one process-wide SEC pacer shared by every client and fetchSubmissions call. Tests inject their own for isolation. */pacer?:Pacer}
 
 const FETCH_TIMEOUT_MS=30_000;
+// Process-wide: SEC's limit is per source address, so all callers share one serialised pacer (>= 120 ms between requests).
+const SEC_PACER:Pacer=createPacer(SEC_MIN_INTERVAL_MS);
 const unlimited=():Budget=>({remainingMs:()=>Number.POSITIVE_INFINITY,signal:new AbortController().signal});
 
 export function submissionsClient(deps:FetchSubmissionsDeps){
  const ua=deps.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
  const clock=deps.clock??(()=>new Date());
  const budget=deps.budget??unlimited();
- const pacer=createPacer(SEC_MIN_INTERVAL_MS);   // one pacer per client: >= 120 ms between its requests
+ const pacer=deps.pacer??SEC_PACER;
  // The User-Agent may contain a contact address: it goes on the request only, never into raw metadata.
  const get=async(url:string,cik:string,name:string):Promise<{bytes:Uint8Array;doc:StoredDoc}>=>{
   try{
@@ -168,7 +175,7 @@ export function submissionsEvidenceClaims(issuerId:string,snap:SubmissionsSnapsh
   const rule=Object.prototype.hasOwnProperty.call(EVIDENCE_FORMS,f.form)?EVIDENCE_FORMS[f.form]:null;
   const sha=rule?shaOf(f.page):null;
   if(!rule||!sha)return [];
-  const evidence:ClaimEvidence={source:'sec_submissions',as_of:asOf,evidence_sha256:sha,locator:`${f.page==='recent'?'filings.recent':f.page}[${f.index}]`,note:rule.note};
+  const evidence:ClaimEvidence={source:'sec_submissions',as_of:asOf,evidence_sha256:sha,locator:`${f.page}#accessionNumber=${f.accessionNumber}`,note:rule.note};
   return [{issuer_id:issuerId,id_type:'ticker' as const,value:f.accessionNumber,source:'sec_submissions',op:'evidence_only' as const,detail:{
    schema:'claim/1' as const,evidence_kind:'filing_form' as const,target:{issuer_id:issuerId},
    params:{suggested_op:rule.suggested_op,accession:f.accessionNumber,form:f.form,filing_date:f.filingDate,note:rule.note},evidence,sources:[evidence],

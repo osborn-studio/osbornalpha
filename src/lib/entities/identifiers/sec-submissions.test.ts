@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {describe,it,expect} from 'vitest';
 import {memoryRawStore} from '../../dq/raw-store';
+import {createPacer} from '../../facts/providers/shared';
 import {sanitizeProvenance} from '../provenance';
 import {
  SEC_MIN_INTERVAL_MS,SecSubmissionsError,fetchSubmissions,filingsByAccession,parseSubmissions,parseSubmissionsPage,
@@ -20,7 +21,7 @@ function harness(map:Record<string,()=>Response>){
  const calls:{url:string;init:RequestInit}[]=[];const sleeps:number[]=[];let t=0;
  const fetch=(async(u:string|URL|Request,init?:RequestInit)=>{const url=String(u);calls.push({url,init:init??{}});const r=map[url];if(!r)throw new TypeError(`fetch failed: ${url}`);return r();}) as typeof globalThis.fetch;
  const raw=memoryRawStore();
- return {calls,sleeps,raw,deps:{fetch,raw,userAgent:'ZZ test ua@example.com',now:()=>t,sleep:async(ms:number)=>{sleeps.push(ms);t+=ms;},clock:()=>new Date('2026-11-05T08:00:00Z')}};
+ return {calls,sleeps,raw,deps:{fetch,raw,pacer:createPacer(SEC_MIN_INTERVAL_MS),userAgent:'ZZ test ua@example.com',now:()=>t,sleep:async(ms:number)=>{sleeps.push(ms);t+=ms;},clock:()=>new Date('2026-11-05T08:00:00Z')}};
 }
 const json=(s:string)=>()=>new Response(s,{status:200,headers:{'content-type':'application/json'}});
 const MAIN_URL='https://data.sec.gov/submissions/CIK0000999001.json';
@@ -38,7 +39,7 @@ describe('parseSubmissions',()=>{
  it('maps empty strings to null, 0/1 to booleans, and lists pages',()=>{
   const p=parseSubmissions(MAIN);
   expect(p.fiscalYearEnd).toBe('0630');
-  expect(p.filings[1]).toEqual({accessionNumber:'0000999001-25-000031',filingDate:'2025-09-12',reportDate:null,acceptanceDateTime:'2025-09-12T09:00:00.000Z',form:'25-NSE',primaryDocument:'xslF25X02/primary_doc.xml',isInlineXBRL:false,page:'recent',index:1});
+  expect(p.filings[1]).toEqual({accessionNumber:'0000999001-25-000031',filingDate:'2025-09-12',reportDate:null,acceptanceDateTime:'2025-09-12T09:00:00.000Z',form:'25-NSE',primaryDocument:'xslF25X02/primary_doc.xml',isInlineXBRL:false,page:'recent'});
   expect(p.files).toEqual([{name:'CIK0000999001-submissions-001.json',filingCount:2,filingFrom:'2001-02-03',filingTo:'2014-12-31'}]);
   expect(parseSubmissionsPage(PAGE,'CIK0000999001-submissions-001.json').map(f=>[f.form,f.page])).toEqual([['10-Q','CIK0000999001-submissions-001.json'],['8-A12B','CIK0000999001-submissions-001.json']]);
  });
@@ -50,6 +51,18 @@ describe('parseSubmissions',()=>{
   expect(submissionsCategory('Non-accelerated filer<br>Smaller reporting company')).toBe('non_accelerated');
   expect(submissionsCategory('Smaller reporting company')).toBe('unknown');
   expect(submissionsCategory('')).toBe('unknown');expect(submissionsCategory(null)).toBe('unknown');
+ });
+ it('separates absent or malformed tickers/files (invalid_schema) from valid empty lists',()=>{
+  const doc=JSON.parse(MAIN);
+  const code=(d:unknown)=>{try{parseSubmissions(JSON.stringify(d));return null;}catch(e){return e instanceof SecSubmissionsError?e.code:'other';}};
+  const {tickers:_t,...noTickers}=doc;void _t;
+  expect(code(noTickers)).toBe('invalid_schema');
+  expect(code({...doc,tickers:'ZZFX'})).toBe('invalid_schema');
+  expect(code({...doc,tickers:[1]})).toBe('invalid_schema');
+  expect(code({...doc,filings:{recent:doc.filings.recent}})).toBe('invalid_schema');
+  expect(code({...doc,filings:{...doc.filings,files:{}}})).toBe('invalid_schema');
+  expect(code({...doc,tickers:[],filings:{...doc.filings,files:[]}})).toBeNull();
+  expect(parseSubmissions(JSON.stringify({...doc,tickers:[],filings:{...doc.filings,files:[]}}))).toMatchObject({tickers:[],files:[]});
  });
  it('rejects malformed documents with invalid_schema',()=>{
   const bad=(s:string)=>{try{parseSubmissions(s);return null;}catch(e){return e instanceof SecSubmissionsError?e.code:'other';}};
@@ -101,6 +114,16 @@ describe('submissionsClient',()=>{
   await expect(fetchSubmissions('999001',{...h.deps,budget})).rejects.toMatchObject({code:'sec_unavailable'});
   expect(h.calls).toEqual([]);expect(h.raw.objects.size).toBe(0);
  });
+ it('spaces successive and concurrent calls through the shared process-wide pacer when none is injected',async()=>{
+  const stamps:number[]=[];
+  const f=(async()=>{stamps.push(Date.now());return new Response(MAIN,{status:200});}) as typeof globalThis.fetch;
+  const deps={fetch:f,raw:memoryRawStore()};
+  await fetchSubmissions('999001',deps);
+  await Promise.all([fetchSubmissions('999001',deps),fetchSubmissions('999001',{...deps,raw:memoryRawStore()})]);
+  await submissionsClient(deps).fetch('999001');
+  expect(stamps).toHaveLength(4);
+  for(let i=1;i<stamps.length;i++)expect(stamps[i]-stamps[i-1]).toBeGreaterThanOrEqual(SEC_MIN_INTERVAL_MS-5);
+ });
  it('maps HTTP errors and network failures to sec_unavailable and a CIK mismatch to invalid_schema',async()=>{
   const code=async(p:Promise<unknown>)=>p.then(()=>null,(e:unknown)=>e instanceof SecSubmissionsError?e.code:'other');
   expect(await code(fetchSubmissions('999001',harness({[MAIN_URL]:()=>new Response('nope',{status:404})}).deps))).toBe('sec_unavailable');
@@ -117,11 +140,11 @@ describe('submissionsEvidenceClaims',()=>{
   expect(claims.map(c=>[c.op,c.id_type,c.value,c.source])).toEqual([['evidence_only','ticker','0000999001-25-000031','sec_submissions'],['evidence_only','ticker','0000999001-01-000001','sec_submissions']]);
   expect(claims[0].detail).toEqual({schema:'claim/1',evidence_kind:'filing_form',target:{issuer_id:ISSUER},
    params:{suggested_op:'close_security',accession:'0000999001-25-000031',form:'25-NSE',filing_date:'2025-09-12',note:'Rule 12d2-2(d) 下退市于申报后 10 日生效，须核对原文所指类别'},
-   evidence:{source:'sec_submissions',as_of:'2026-11-05',evidence_sha256:sha(MAIN),locator:'filings.recent[1]',note:'Rule 12d2-2(d) 下退市于申报后 10 日生效，须核对原文所指类别'},
+   evidence:{source:'sec_submissions',as_of:'2026-11-05',evidence_sha256:sha(MAIN),locator:'recent#accessionNumber=0000999001-25-000031',note:'Rule 12d2-2(d) 下退市于申报后 10 日生效，须核对原文所指类别'},
    sources:[claims[0].detail.evidence]});
   expect(claims[1].detail.params).toMatchObject({suggested_op:'backdate_window',form:'8-A12B'});
   expect(claims[1].detail.evidence.evidence_sha256).toBe(sha(PAGE));
-  expect(claims[1].detail.evidence.locator).toBe('CIK0000999001-submissions-001.json[1]');
+  expect(claims[1].detail.evidence.locator).toBe('CIK0000999001-submissions-001.json#accessionNumber=0000999001-01-000001');
   // locators and evidence must pass the public-provenance guards (no '?', '#', key=/token: text)
   for(const c of claims)expect(()=>sanitizeProvenance({valid_from:c.detail.evidence},['valid_from'])).not.toThrow();
  });

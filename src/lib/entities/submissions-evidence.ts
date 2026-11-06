@@ -32,7 +32,7 @@ export async function applySubmissionsEvidence(tables:TableClient,input:Submissi
   catch(e){counts.failed++;errors.push({code:'claim_error',key:c.value,message:errorMessage(e)});}
  }
  const held=new Set((await tables.select('issuer_securities',{issuer_id:input.issuerId,valid_to:null})).map(r=>String(r.ticker)));
- for(const raw of input.snapshot.parsed.tickers){
+ for(const [at,raw] of input.snapshot.parsed.tickers.entries()){
   const ticker=input.universe.has(raw)?raw:normalizeSecurityTicker(raw,'US');
   if(!ticker||!input.universe.has(ticker)){skip('ticker_not_in_universe');continue;}
   if(held.has(ticker)){counts.duplicates++;continue;}
@@ -41,7 +41,7 @@ export async function applySubmissionsEvidence(tables:TableClient,input:Submissi
    if(res==='inserted')counts.inserted++;
    else if(res==='duplicate')counts.duplicates++;
    else await parkConflict(tables,{dataset:input.dataset,table:'issuer_securities',naturalKey:`${ticker}:${input.asOf}`,reasonCode:'ownership_conflict',
-    detail:{reason:'ticker_owned_by_other_issuer',source:'sec_submissions'},payload:{issuer_id:input.issuerId,ticker,valid_from:input.asOf},batchId:input.batchId},
+    detail:{reason:'ticker_owned_by_other_issuer',source:'sec_submissions',sec_ticker:raw,locator:`tickers[${at}]`,fetched_at:input.snapshot.fetchedAt,evidence_sha256:input.snapshot.main.sha256,raw_path:input.snapshot.main.path},payload:{issuer_id:input.issuerId,ticker,valid_from:input.asOf},batchId:input.batchId},
     counts,errors,{code:'ownership_conflict',key:ticker});
   }catch(e){counts.failed++;errors.push({code:errorMessage(e)==='issuer_not_active'?'issuer_not_active':'security_error',key:ticker,message:errorMessage(e)});}
  }

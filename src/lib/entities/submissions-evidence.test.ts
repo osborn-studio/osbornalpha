@@ -24,6 +24,7 @@ describe('applySubmissionsEvidence',()=>{
   expect(c.rows('security_aliases')).toEqual([expect.objectContaining({alias:'ZZ Fixture Corp',ticker:'ZZF',alias_type:'name',source:'sec_submissions'})]);
   expect(c.rows('issuer_identifier_claims').map(r=>[r.op,r.value])).toEqual([['evidence_only','0000999001-25-000031'],['evidence_only','0000999001-01-000001']]);
   expect(c.rows('issuer_securities').find(r=>r.ticker==='ZZFX')).toMatchObject({issuer_id:ISSUER,valid_from:'2026-11-05',valid_from_method:'first_observed',source:'sec_submissions',share_class:'unknown',is_primary:false});
+  expect(c.rows('issuer_securities').find(r=>r.ticker==='ZZFX')?.provenance).toEqual({valid_from:{source:'sec_submissions',as_of:'2026-11-05',evidence_sha256:expect.stringMatching(/^[0-9a-f]{64}$/)}});
   expect(first.counts).toMatchObject({inserted:2,failed:0});
   expect(first.claims).toEqual({evidence_only:2});
   const again=await applySubmissionsEvidence(c,input);
@@ -35,7 +36,9 @@ describe('applySubmissionsEvidence',()=>{
   const c=client();
   await c.insert('issuer_securities',sec(OTHER,'ZZFX'));
   const res=await applySubmissionsEvidence(c,{issuerId:ISSUER,primaryTicker:null,snapshot:await snapshot(),asOf:'2026-11-05',batchId:BATCH,dataset:DATASET,universe:new Set(['ZZFX'])});
-  expect(c.rows('dq_quarantine')).toEqual([expect.objectContaining({dataset:DATASET,natural_key:'ZZFX:2026-11-05',reason_code:'ownership_conflict'})]);
+  const snap=await snapshot();
+  expect(c.rows('dq_quarantine')).toEqual([expect.objectContaining({dataset:DATASET,natural_key:'ZZFX:2026-11-05',reason_code:'ownership_conflict',
+   detail:expect.objectContaining({sec_ticker:'ZZFX',locator:'tickers[0]',fetched_at:expect.any(String),evidence_sha256:snap.main.sha256,raw_path:snap.main.path})})]);
   expect(c.rows('security_aliases')).toEqual([]);
   expect(res.skippedSummary).toEqual({no_primary_ticker:1});
   const none=await applySubmissionsEvidence(client(),{issuerId:ISSUER,primaryTicker:'ZZF',snapshot:await snapshot(),asOf:'2026-11-05',batchId:BATCH,dataset:DATASET,universe:new Set(['ZZF'])});
