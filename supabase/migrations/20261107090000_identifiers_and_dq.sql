@@ -811,6 +811,8 @@ grant execute on function public.set_security_identifier(uuid, text, date, text,
 -- (claim_provenance_safe) and hold exactly the key valid_from / valid_to matching p_side.
 -- Outcomes: 'written', 'duplicate' (already evidenced at p_new_date with the key present), 'conflict' (state moved
 -- or date rule violated; nothing written), 'not_found'. Exclusion / unique violations (23P01 / 23505) pass through.
+-- one function only: replays and the signature change (p_to_method) must not leave the 6-argument overload behind
+drop function if exists public.set_security_window(uuid, text, date, text, date, jsonb);
 create or replace function public.set_security_window(p_issuer uuid, p_ticker text, p_valid_from date, p_side text, p_new_date date, p_provenance jsonb, p_to_method text default 'delisting')
 returns text language plpgsql security definer set search_path = public as $$
 declare v_row public.issuer_securities%rowtype; n int;
@@ -849,6 +851,41 @@ begin
 end $$;
 revoke execute on function public.set_security_window(uuid, text, date, text, date, jsonb, text) from public, anon, authenticated;
 grant execute on function public.set_security_window(uuid, text, date, text, date, jsonb, text) to service_role;
+
+-- close_security_absent: the only writer of a sec_file_absent close (load-sec detectTickerChanges). The close is
+-- conditional on the pending marker the run observed: the row must be open AND carry pending_change with the same
+-- first_missing_sha256 and first_missing_as_of = p_valid_to, otherwise 'conflict' (a reappearance, or a concurrent
+-- run, removed or replaced the marker). ONE UPDATE sets valid_to, valid_to_method = 'sec_file_absent' and merges the
+-- valid_to provenance key (pending_change stays). Same lock order: issuer FOR SHARE -> row FOR UPDATE.
+-- Outcomes: 'written', 'duplicate' (already closed identically), 'conflict', 'not_found'.
+create or replace function public.close_security_absent(p_issuer uuid, p_ticker text, p_valid_from date, p_valid_to date, p_expected_first_missing_sha256 text, p_provenance jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_row public.issuer_securities%rowtype; n int;
+begin
+  if p_ticker is null or p_valid_from is null or p_valid_to is null or p_expected_first_missing_sha256 is null
+     or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
+     or (select array_agg(k) from jsonb_object_keys(p_provenance) k) is distinct from array['valid_to']
+     or not public.claim_provenance_safe(p_provenance) then
+    raise exception 'invalid_window_write' using errcode = '22023';
+  end if;
+  perform 1 from public.issuers where issuer_id = p_issuer for share;
+  if not found then return 'not_found'; end if;
+  select * into v_row from public.issuer_securities s
+  where s.issuer_id = p_issuer and s.ticker = p_ticker and s.valid_from = p_valid_from for update;
+  if not found then return 'not_found'; end if;
+  if v_row.valid_to = p_valid_to and v_row.valid_to_method = 'sec_file_absent' and v_row.provenance ? 'valid_to'
+     and v_row.provenance->'pending_change'->>'first_missing_sha256' = p_expected_first_missing_sha256 then return 'duplicate'; end if;
+  if v_row.valid_to is not null or p_valid_to <= v_row.valid_from
+     or v_row.provenance->'pending_change'->>'first_missing_sha256' is distinct from p_expected_first_missing_sha256
+     or v_row.provenance->'pending_change'->>'first_missing_as_of' is distinct from p_valid_to::text then return 'conflict'; end if;
+  update public.issuer_securities set valid_to = p_valid_to, valid_to_method = 'sec_file_absent', provenance = provenance || p_provenance
+  where issuer_id = p_issuer and ticker = p_ticker and valid_from = p_valid_from and valid_to is null;
+  get diagnostics n = row_count;
+  if n <> 1 then return 'conflict'; end if;
+  return 'written';
+end $$;
+revoke execute on function public.close_security_absent(uuid, text, date, date, text, jsonb) from public, anon, authenticated;
+grant execute on function public.close_security_absent(uuid, text, date, date, text, jsonb) to service_role;
 
 -- patch_security_provenance: the only writer of provenance.pending_change (load-sec ticker-change detection, Task 6b).
 -- Lock order issuer FOR SHARE -> row FOR UPDATE; open rows only; both p_set and p_remove limited to the key pending_change.

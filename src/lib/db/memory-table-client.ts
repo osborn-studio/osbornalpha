@@ -8,7 +8,7 @@
 //  - ordering and range filters (gte/lt) compare numbers numerically and everything else as
 //    strings by UTF-16 code unit, which matches PostgreSQL only under C collation (ISO-8601
 //    timestamps in one fixed format compare correctly; mixed offsets or locales do not).
-//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window, patch_security_provenance); one synchronous JS turn stands for the row lock.
+//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier, set_security_window, patch_security_provenance, close_security_absent); one synchronous JS turn stands for the row lock.
 import {TableError,assertMatch,assertUpdateMatch,checkRangeOptions,checkSelectOptions} from './table-client';
 import type {RangeOptions,Row,TableClient} from './table-client';
 
@@ -93,6 +93,21 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
    row.valid_to=nd;row.valid_to_method=tm;
   }
   row.provenance={...prov,...clone(pv)};
+  return 'written';
+ },
+ // Review fix: conditional sec_file_absent close (pending marker must match what the run observed).
+ close_security_absent(rowsOf,a){
+  const pv=a.p_provenance;
+  if(typeof a.p_valid_to!=='string'||typeof a.p_expected_first_missing_sha256!=='string'||!isObj(pv)||Object.keys(pv).length!==1||!('valid_to' in pv))
+   throw new TableError('rpc','close_security_absent','invalid_window_write','22023');
+  if(!rowsOf('issuers').some(r=>r.issuer_id===a.p_issuer))return 'not_found';
+  const row=rowsOf('issuer_securities').find(r=>r.issuer_id===a.p_issuer&&r.ticker===a.p_ticker&&r.valid_from===a.p_valid_from);
+  if(!row)return 'not_found';
+  const prov=isObj(row.provenance)?row.provenance:{};
+  const pc=isObj(prov.pending_change)?prov.pending_change:{};
+  if(row.valid_to===a.p_valid_to&&row.valid_to_method==='sec_file_absent'&&'valid_to' in prov&&pc.first_missing_sha256===a.p_expected_first_missing_sha256)return 'duplicate';
+  if(row.valid_to!=null||a.p_valid_to<=String(row.valid_from)||pc.first_missing_sha256!==a.p_expected_first_missing_sha256||pc.first_missing_as_of!==a.p_valid_to)return 'conflict';
+  row.valid_to=a.p_valid_to;row.valid_to_method='sec_file_absent';row.provenance={...prov,...clone(pv)};
   return 'written';
  },
  // Task 6b: the only writer of provenance.pending_change; open rows only. claim_provenance_safe is not mirrored (DB suite).

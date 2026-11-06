@@ -18,10 +18,10 @@ import {readFileSync,statSync} from 'node:fs';
 import {selectAll,supabaseTableClient,type Row,type TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch,type BatchCounts,type BatchError,type BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {supabaseRawStore} from '../../src/lib/dq/raw-store';
+import {RECONCILE_RAW_BUCKET,supabaseRawStore} from '../../src/lib/dq/raw-store';
 import {fetchSubmissions} from '../../src/lib/entities/identifiers/sec-submissions';
-import {SEC_DATASET,applySecLoad,checkSnapshot,detectTickerChanges,errorMessage,loaderOutcome,planSecLoad,snapshotMetaOf,type SnapshotMeta} from '../../src/lib/entities/load-sec';
-import {MAX_SEC_FILE_BYTES,parseSecCompanyTickersExchange} from '../../src/lib/research/entity-keys/parsers';
+import {SEC_DATASET,applySecLoad,checkSnapshot,detectTickerChanges,errorMessage,lastSeenFromSnapshots,loaderOutcome,planSecLoad,snapshotMetaOf,type SnapshotMeta} from '../../src/lib/entities/load-sec';
+import {MAX_SEC_FILE_BYTES,parseSecCompanyTickersExchange,type SecExchangeRow} from '../../src/lib/research/entity-keys/parsers';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
 const DATASET=SEC_DATASET;
@@ -53,7 +53,7 @@ async function loadPlan(client:TableClient,file:string,asOf:string){
  const parsed=parseSecCompanyTickersExchange(bytes.toString('utf8'));
  const universeRows=await selectAll(client,'stocks_universe',{market:'US'},'ticker');
  const universe=new Set(universeRows.map(r=>String(r.ticker)));
- return {parsed,sha256:createHash('sha256').update(bytes).digest('hex'),universeSize:universe.size,plan:planSecLoad(parsed.rows,universe,asOf)};
+ return {parsed,bytes,sha256:createHash('sha256').update(bytes).digest('hex'),universeSize:universe.size,plan:planSecLoad(parsed.rows,universe,asOf)};
 }
 
 /** Successful (success/partial) entities.sec receipts, newest first. */
@@ -79,12 +79,18 @@ async function dryRun(client:TableClient,file:string,asOf:string,fetchedAt:strin
 const add=(a:BatchCounts,b:BatchCounts)=>{for(const k of Object.keys(a) as (keyof BatchCounts)[])a[k]+=b[k];};
 
 async function apply(client:TableClient,file:string,asOf:string,fetchedAt:string):Promise<0|1>{
- const {parsed,sha256,plan}=await loadPlan(client,file,asOf);
+ const {parsed,bytes,sha256,plan}=await loadPlan(client,file,asOf);
  const rows=parsed.rows.length+parsed.rejected.length;
  const prior=await priorSnapshots(client);
  const check=checkSnapshot(prior[0]??null,{as_of:asOf,fetched_at:fetchedAt,rows});
  if(check!=='ok'){console.error(JSON.stringify({refused:check,asOf,fetchedAt,rows,previous:prior[0]}));return 1;}
- const {batchId}=await startBatch(client,{producer:'sec-company-tickers',dataset:DATASET,toolVersions:{file,as_of:asOf,fetched_at:fetchedAt,sha256,rows:String(rows)}});
+ // Archive the exchange file by content hash BEFORE any dependent write; fail closed.
+ const admin=getAdminSupabase();
+ const raw=supabaseRawStore(admin);
+ let rawPath:string;
+ try{rawPath=(await raw.put({kind:'sec-tickers-exchange',bytes,contentType:'application/json',meta:{as_of:asOf,fetched_at:fetchedAt}})).path;}
+ catch(e){console.error(JSON.stringify({refused:'snapshot_archive_failed',message:errorMessage(e)}));return 1;}
+ const {batchId}=await startBatch(client,{producer:'sec-company-tickers',dataset:DATASET,toolVersions:{file,as_of:asOf,fetched_at:fetchedAt,sha256,rows:String(rows),raw_path:rawPath}});
  const counts=emptyCounts();
  let errors:BatchError[]=[];
  let rejected:Record<string,number>={};
@@ -92,10 +98,22 @@ async function apply(client:TableClient,file:string,asOf:string,fetchedAt:string
  try{
   const loaded=await applySecLoad(client,plan,{asOf,batchId,batchProducerMeta:{sourceRows:rows,rejected:parsed.rejected}});
   add(counts,loaded.counts);errors=[...loaded.errors];rejected=loaded.rejectedSummary;
-  const raw=supabaseRawStore(getAdminSupabase());
-  const changes=await detectTickerChanges(client,{rows:parsed.rows,asOf,fetchedAt,fileSha256:sha256,batchId},{
-   confirm:async cik=>{try{const s=await fetchSubmissions(cik,{fetch,raw});return {tickers:s.parsed.tickers,sha256:s.main.sha256};}catch{return null;}},
-   lastSeenAsOf:async before=>prior.map(p=>p.as_of).filter(d=>d<before).sort().at(-1)??null,
+  // Retained snapshots (archived in earlier runs) are re-read to find when a ticker was last really listed.
+  const retained=new Map<string,SecExchangeRow[]|null>();
+  const rowsOf=async(path:string)=>{
+   if(!retained.has(path)){
+    try{const {data,error}=await admin.storage.from(RECONCILE_RAW_BUCKET).download(path);retained.set(path,error||!data?null:parseSecCompanyTickersExchange(await data.text()).rows);}
+    catch{retained.set(path,null);}
+   }
+   return retained.get(path)!;
+  };
+  const changes=await detectTickerChanges(client,{rows:parsed.rows,asOf,fetchedAt,fileSha256:sha256,batchId,snapshotPath:rawPath,rejected:parsed.rejected},{
+   confirm:async cik=>{try{const s=await fetchSubmissions(cik,{fetch,raw});return {tickers:s.parsed.tickers,sha256:s.main.sha256,path:s.main.path};}catch{return null;}},
+   lastSeenAsOf:async(cik,ticker,before)=>{
+    const snaps=[];
+    for(const p of prior)if(p.raw_path&&p.as_of<before)snaps.push({as_of:p.as_of,rows:await rowsOf(p.raw_path)});
+    return lastSeenFromSnapshots(snaps,cik,ticker,before);
+   },
   });
   // detectTickerChanges only updates/quarantines existing rows: it adds no fetched source rows.
   changes.counts.fetched=0;

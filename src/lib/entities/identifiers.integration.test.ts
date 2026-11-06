@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb,text)','public.patch_security_provenance(uuid,text,date,jsonb,text[])'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb,text)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1078,6 +1078,51 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
   for(const bad of [()=>patchProv(a,u,'2024-03-01',{isin:'x'},[]),()=>patchProv(a,u,'2024-03-01',{},['exchange']),()=>patchProv(a,u,'2024-03-01',{pending_change:{url:'https://a.example/p?token=1'}},[]),
    ()=>setWin(a,u,'2024-03-01','to','2025-01-01',{valid_to:{source:'x'}},admin,'curated')])
    expect(await fails(bad())).toMatchObject({message:expect.stringMatching(/invalid_(provenance_patch|window_write)/),code:'22023'});
+ });
+ const closeAbs=(a:string,t:string,from:string,to:string,sha:string,prov:unknown,on:Pool|PoolClient=admin)=>
+  on.query(`select public.close_security_absent($1,$2,$3::date,$4::date,$5,$6::jsonb) v`,[a,t,from,to,sha,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const CV={valid_to:{source:'sec_company_tickers_exchange',as_of:'2026-11-09'}};
+ it('close_security_absent: conditional on the pending marker; reappearance between read and close -> conflict; duplicate; invalid; not_found; pending_change kept',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const sha=PC.pending_change.first_missing_sha256;
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02',sha,CV)).toBe('conflict');        // no marker yet
+  await patchProv(a,t,'2024-03-01',PC,[]);
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-03',sha,CV)).toBe('conflict');        // marker's first_missing_as_of differs
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02','b'.repeat(64),CV)).toBe('conflict');   // another run's marker
+  await patchProv(a,t,'2024-03-01',{},['pending_change']);                              // reappearance clears the marker after the run read it
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02',sha,CV)).toBe('conflict');
+  expect(await winState(t)).toMatchObject({valid_to:null,valid_to_method:null,provenance:{exchange:'Nasdaq'}});
+  await patchProv(a,t,'2024-03-01',PC,[]);
+  expect(await closeAbs(a,t,'2024-03-01','2024-03-01',sha,CV)).toBe('conflict');        // not after valid_from
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02',sha,CV)).toBe('written');
+  expect(await closeAbs(a,t,'2024-03-01','2026-11-02',sha,CV)).toBe('duplicate');
+  expect(await winState(t)).toMatchObject({valid_to:'2026-11-02',valid_to_method:'sec_file_absent',provenance:{exchange:'Nasdaq',...PC,...CV}});
+  expect(await closeAbs(a,await ticker(),'2024-03-01','2026-11-02',sha,CV)).toBe('not_found');
+  expect(await closeAbs(randomUUID(),t,'2024-03-01','2026-11-02',sha,CV)).toBe('not_found');
+  for(const bad of [()=>closeAbs(a,t,'2024-03-01','2026-11-02',sha,{isin:{}}),()=>closeAbs(a,t,'2024-03-01','2026-11-02',sha,{...CV,isin:{}}),()=>closeAbs(a,t,'2024-03-01','2026-11-02',sha,{valid_to:{url:'https://a.example/p?token=1'}})])
+   expect(await fails(bad())).toMatchObject({message:'invalid_window_write',code:'22023'});
+ });
+ it('close_security_absent waits behind a concurrent marker removal (row lock) and then conflicts',async()=>{
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null,{provenance:JSON.stringify({exchange:'Nasdaq'})});
+  const sha=PC.pending_change.first_missing_sha256;
+  await patchProv(a,t,'2024-03-01',PC,[]);
+  await inTx(admin,async tx=>{
+   expect(await patchProv(a,t,'2024-03-01',{},['pending_change'],tx.c)).toBe('written');
+   const closing=closeAbs(a,t,'2024-03-01','2026-11-02',sha,CV);
+   await stillBlockedBehind(admin,tx.pid,closing);
+   await tx.commit();
+   expect(await closing).toBe('conflict');
+  });
+  expect((await winState(t)).valid_to).toBeNull();
+ });
+ it('set_security_window leaves ONE function after the signature change; the 6-argument call (default method) closes with delisting; unknown methods are refused',async()=>{
+  expect(await q(`select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.proname='set_security_window'`)).toEqual([{n:1}]);
+  const a=await issuer();const t=await ticker();
+  await sec(a,t,'2024-03-01',null);
+  expect(await setWin(a,t,'2024-03-01','to','2025-01-01',{valid_to:{source:'x'}})).toBe('written');
+  expect((await winState(t)).valid_to_method).toBe('delisting');
  });
  it('patch_security_provenance interleaved with set_security_identifier (isin) keeps both provenance keys',async()=>{
   const a=await issuer();const t=await ticker();
