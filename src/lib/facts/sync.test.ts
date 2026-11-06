@@ -606,6 +606,15 @@ describe('runFactsSync — step 9b acceptance (plan 3 §4.5)',()=>{
   expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'sec down'});
   expect(r.status).toBe('partial');
  });
+ it('counts.failed>0 from the enrichment yields a non-informational error: batch partial, issuer published, counters kept',async()=>{
+  const failedOutcome={...outcome([]),counts:{fetched:2,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:2}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>failedOutcome});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].acceptance).toMatchObject({fetched:2,failed:2});
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'{"failed":2}'});
+  expect(r.status).toBe('partial');
+ });
  it('is not called for CN',async()=>{
   const enrichAcceptance=vi.fn(async()=>outcome([]));
   const {deps}=harness(parsed([cnFiling()],[cnRevenue()]),{enrichAcceptance},CN_SCOPE);

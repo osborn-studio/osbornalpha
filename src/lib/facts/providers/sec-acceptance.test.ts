@@ -6,6 +6,9 @@ import {filingInsert} from '../db-contract';
 import {memoryFactsDb} from '../memory-facts-db';
 import {FactsDbError} from '../types';
 import type {Budget} from '../types';
+import {memoryRawStore} from '../../dq/raw-store';
+import {createPacer} from './shared';
+import {SEC_MIN_INTERVAL_MS,fetchSubmissions} from '../../entities/identifiers/sec-submissions';
 import {acceptanceIndex,enrichAcceptance,parseAcceptanceDateTime} from './sec-acceptance';
 
 const budget:Budget={remainingMs:()=>60_000,signal:new AbortController().signal};
@@ -109,5 +112,39 @@ describe('enrichAcceptance (spec §4.5)',()=>{
   const none=vi.fn();
   expect((await enrichAcceptance({db,submissions:none},{issuerId:randomUUID(),cik10:'0000000001'},budget)).counts.fetched).toBe(0);
   expect(none).not.toHaveBeenCalled();
+ });
+});
+
+describe('enrichAcceptance review fixes (Task 12 Codex)',()=>{
+ const cik='0000320193';
+ it('a time-less entry with a different filingDate is a mismatch first; with the same date it is acceptance_not_found',async()=>{
+  const db=memoryFactsDb();const iss=randomUUID();const b=randomUUID();
+  await db.reconcileScope('US',[{issuer_id:iss,reasons:[],priority:1,fetch_key:cik}]);await db.claimLease(iss,'US',b,600);
+  const run=await db.beginRun(iss,'US',b,1);
+  const a=filingInsert(iss,{sourceRef:'0000320193-24-000010',availableDate:'2024-02-01'}),c=filingInsert(iss,{sourceRef:'0000320193-24-000011',availableDate:'2024-03-01'});
+  await db.stageFilings(run,[a,c]);await db.publishRun(run,[a.filing_id,c.filing_id]);
+  const snap=snapshot([entry(a.sourceRef,'2024-02-02',null),entry(c.sourceRef,'2024-03-01','bad')]);
+  const out=await enrichAcceptance({db,submissions:async()=>snap},{issuerId:iss,cik10:cik},budget);
+  expect(out.mismatches).toHaveLength(1);expect(out.counts).toMatchObject({fetched:1,failed:1,inserted:0});
+  expect(out.errors[0].message).toContain('"acceptance_not_found":1');
+ });
+ it('stops starting writes when the budget is spent and reports deadline_hit with the remaining count',async()=>{
+  const {db,iss,snap}=await seeded();
+  let n=0;const b:Budget={remainingMs:()=>(n++<1?60_000:0),signal:new AbortController().signal};
+  const out=await enrichAcceptance({db,submissions:async()=>snap,recordDateMismatch:async()=>{}},{issuerId:iss,cik10:cik},b);
+  const hit=out.errors.find(e=>e.code==='deadline_hit');
+  expect(hit).toBeDefined();expect(JSON.parse(hit!.message!).remaining).toBeGreaterThan(0);
+ });
+ it('fetchSubmissions keeps conflicting duplicates from recent/history; enrichAcceptance writes nothing for that accession (acceptance_ambiguous, failed)',async()=>{
+  const {db,iss,ok}=await seeded();
+  const main=JSON.stringify({cik,name:'X',tickers:['X'],exchanges:[],filings:{recent:{accessionNumber:[ok.sourceRef],filingDate:['2024-02-01'],reportDate:[''],acceptanceDateTime:['2024-02-01T21:05:00.000Z'],form:['10-Q'],primaryDocument:['d.htm'],isInlineXBRL:[1]},
+   files:[{name:'CIK0000320193-submissions-001.json',filingCount:1,filingFrom:'2000-01-01',filingTo:'2024-02-01'}]}});
+  const page=JSON.stringify({accessionNumber:[ok.sourceRef],filingDate:['2024-02-01'],reportDate:[''],acceptanceDateTime:['2024-02-01T22:00:00.000Z'],form:['10-Q'],primaryDocument:['d.htm'],isInlineXBRL:[1]});
+  const fetchStub=(async(u:string|URL|Request)=>new Response(String(u).includes('-001')?page:main,{status:200,headers:{'content-type':'application/json'}})) as typeof fetch;
+  const raw=memoryRawStore();
+  const out=await enrichAcceptance({db,submissions:(c,bb,from)=>fetchSubmissions(c,{fetch:fetchStub,raw,pacer:createPacer(SEC_MIN_INTERVAL_MS),sleep:async()=>{},now:()=>0,budget:bb},{coverFrom:from}),recordDateMismatch:async()=>{}},{issuerId:iss,cik10:cik},budget);
+  expect((await db.findFilingBySourceRef('edgar',ok.sourceRef))!.accepted_at).toBeNull();
+  expect(out.errors[0].message).toContain('"acceptance_ambiguous":1');
+  expect(out.counts.failed).toBeGreaterThanOrEqual(1);
  });
 });

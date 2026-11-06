@@ -160,11 +160,13 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
    const wanted=from===null?[]:parsed.files.filter(f=>f.filingTo===null||f.filingTo>=from);
    const pages:StoredDoc[]=[];
    const filings=[...parsed.filings];
-   const seen=new Set(filings.map(f=>f.accessionNumber));
+   // An accession repeated across pages is kept once only when the copies agree; a copy with a different filingDate/acceptanceDateTime is KEPT so consumers can see the conflict (additive: plan 3 Task 12).
+   const sig=(f:SubmissionFiling)=>`${f.accessionNumber}|${f.filingDate}|${f.acceptanceDateTime??''}`;
+   const seen=new Set(filings.map(sig));
    for(const f of wanted){
     const p=await get(`${SEC_SUBMISSIONS_BASE}${f.name}`,c,f.name);
     pages.push(p.doc);
-    for(const x of parseStored(p.doc,()=>parseSubmissionsPage(new TextDecoder().decode(p.bytes),f.name)))if(!seen.has(x.accessionNumber)){seen.add(x.accessionNumber);filings.push(x);}
+    for(const x of parseStored(p.doc,()=>parseSubmissionsPage(new TextDecoder().decode(p.bytes),f.name)))if(!seen.has(sig(x))){seen.add(sig(x));filings.push(x);}
    }
    return {cik:c,fetchedAt,main:main.doc,pages,parsed:{...parsed,filings},complete:wanted.length===parsed.files.length};
   },

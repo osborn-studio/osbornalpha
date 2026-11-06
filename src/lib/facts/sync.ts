@@ -56,7 +56,7 @@ export interface SyncDeps{
 export interface SyncOptions{market:Market;limit:number;issuerIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;sinceYear?:number;mappingGen?:number}
 /** 'planned' is the dry-run outcome of an issuer that fetched, parsed and planned without writing. */
 export type IssuerOutcomeKind='published'|'planned'|'failed'|'skipped';
-export interface IssuerOutcome{issuerId:string;fetchKey:string;runId:string|null;outcome:IssuerOutcomeKind;code?:string;counts:BatchCounts;errors:BatchError[];warnings:Map<string,string[]>;snapshotSha256:string[]}
+export interface IssuerOutcome{issuerId:string;fetchKey:string;runId:string|null;outcome:IssuerOutcomeKind;code?:string;counts:BatchCounts;errors:BatchError[];warnings:Map<string,string[]>;snapshotSha256:string[];/** step 9b enrichment counters (US, when it ran); separate from counts */acceptance?:BatchCounts}
 export interface SyncDetail{attempted:number;published:number;failed:number;skipped:number;idle:boolean}
 /** detail is the same object recorded on dq_freshness (spec §6.1) so cron receipts and the runbook read one shape. */
 export interface SyncReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];issuers:IssuerOutcome[];idle:boolean;detail:SyncDetail}
@@ -289,7 +289,10 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   catch(e){const code=dbCode(e);if(code!=='stale_computation'&&code!=='read_truncated')throw e;return afterPublish(code,e);}   // published stays; retried on the failure schedule
   // 9b (plan 3 §4.5): acceptance times; best-effort after publication — errors are recorded, the outcome stays published
   if(market==='US'&&deps.enrichAcceptance&&!budget.signal.aborted&&budget.remainingMs()>0){
-   try{const a=await deps.enrichAcceptance(issuer,scope.fetch_key,budget);out.errors.push(...a.errors);}
+   try{
+    const a=await deps.enrichAcceptance(issuer,scope.fetch_key,budget);out.errors.push(...a.errors);out.acceptance=a.counts;
+    if(a.counts.failed>0)out.errors.push({code:'acceptance_failed',key:issuer,message:JSON.stringify({failed:a.counts.failed})});   // non-informational: the batch is partial, the issuer stays published
+   }
    catch(e){out.errors.push({code:'acceptance_failed',key:issuer,message:errMsg(e)});}
   }
   await releaseOnce('success');

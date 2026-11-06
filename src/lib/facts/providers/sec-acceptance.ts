@@ -84,10 +84,16 @@ export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:stri
  out.snapshotSha256=snap.main.sha256;
  const {index,ambiguous}=acceptanceIndex(snap.parsed.filings);
  const cik=issuer.cik10.replace(/^0+(?=\d)/,'');
- let notFound=0,unrecorded=0;
- for(const f of pending){
+ const amb=new Set(ambiguous);
+ let notFound=0,unrecorded=0,ambiguousHit=0;
+ for(let i=0;i<pending.length;i++){
+  const f=pending[i];
+  if(budget.signal.aborted||budget.remainingMs()<=0){
+   out.errors.push({code:'deadline_hit',key:`${issuer.issuerId}:acceptance`,message:JSON.stringify({remaining:pending.length-i})});break;
+  }
+  if(amb.has(f.source_ref)){out.counts.fetched++;out.counts.failed++;ambiguousHit++;continue;}   // conflicting copies: never guess
   const e=index.get(f.source_ref);
-  if(!e||e.acceptedAt===null){notFound++;continue;}
+  if(!e){notFound++;continue;}
   out.counts.fetched++;
   if(e.filingDate!==f.available_date){
    const r=filingDateMismatch(cik,f,e,pageSha256(snap,e.page));out.mismatches.push(r);out.counts.failed++;
@@ -97,6 +103,7 @@ export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:stri
    }else unrecorded++;
    continue;
   }
+  if(e.acceptedAt===null){out.counts.fetched--;notFound++;continue;}
   try{if(await deps.db.setFilingAcceptance(f.filing_id,e.acceptedAt,ACCEPTANCE_SOURCE))out.counts.inserted++;else out.counts.duplicates++;}
   catch(err){
    if(!(err instanceof FactsDbError)||err.code!=='acceptance_conflict')throw err;
@@ -105,7 +112,7 @@ export async function enrichAcceptance(deps:AcceptanceDeps,issuer:{issuerId:stri
  }
  const summary:Record<string,number>={};
  if(notFound>0)summary.acceptance_not_found=notFound;
- if(ambiguous.length>0)summary.acceptance_ambiguous=ambiguous.length;
+ if(ambiguousHit>0)summary.acceptance_ambiguous=ambiguousHit;
  if(unrecorded>0)summary.filing_date_mismatch_unrecorded=unrecorded;
  if(Object.keys(summary).length>0)out.errors.push({code:'skipped_summary',key:`${issuer.issuerId}:acceptance`,message:JSON.stringify(summary)});
  return out;

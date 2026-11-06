@@ -1,8 +1,8 @@
 // src/lib/facts/deps.ts
 // Production wiring of SyncDeps (spec §6.1) shared by /api/cron/facts-sync and scripts/facts/*:
 // Supabase FactsDb / TableClient / snapshot store, the two adapters (fetch + parse), the cninfo
-// linker, and step 9b (SEC acceptance times through sec-submissions.ts), which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass
-// (it hands over the FilingRow only). code_version = VERCEL_GIT_COMMIT_SHA (40 hex), else — scripts
+// linker (which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass:
+// it hands over the FilingRow only), and step 9b (SEC acceptance times through sec-submissions.ts). code_version = VERCEL_GIT_COMMIT_SHA (40 hex), else — scripts
 // only — `git rev-parse HEAD` with "-dirty" when the tree has changes (sync.ts::resolveCodeVersion,
 // which this delegates to); null means "refuse to apply".
 import {getAdminSupabase} from '../supabase/admin';
