@@ -8,7 +8,7 @@
 //  - ordering and range filters (gte/lt) compare numbers numerically and everything else as
 //    strings by UTF-16 code unit, which matches PostgreSQL only under C collation (ISO-8601
 //    timestamps in one fixed format compare correctly; mixed offsets or locales do not).
-//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier); one synchronous JS turn stands for the row lock.
+//  - rpc emulates only the plan-3 row-locking functions (append_claim_evidence, patch_quarantine_detail, set_security_identifier, set_issuer_identifier); one synchronous JS turn stands for the row lock.
 import {TableError,assertMatch,assertUpdateMatch,checkRangeOptions,checkSelectOptions} from './table-client';
 import type {RangeOptions,Row,TableClient} from './table-client';
 
@@ -57,6 +57,21 @@ const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
   return true;
  },
  // plan audit round 3, R2: guarded ISIN/FIGI write + one provenance key merged (never replaced) in one step
+ // Task 4b review P1: guarded issuers.cninfo_org_id write + one provenance key merged (never replaced)
+ set_issuer_identifier(rowsOf,a){
+  const pv=a.p_provenance,v=a.p_value;
+  if(a.p_column!=='cninfo_org_id')throw new TableError('rpc','set_issuer_identifier','invalid_column','22023');
+  if(typeof v!=='string'||v.trim()===''||!isObj(pv))throw new TableError('rpc','set_issuer_identifier','invalid_identifier_write','22023');
+  const row=rowsOf('issuers').find(r=>r.issuer_id===a.p_issuer);
+  if(!row)return 'not_found';
+  if(row.status!=='active')return 'not_active';
+  if(row.cninfo_org_id!=null)return row.cninfo_org_id===v?'duplicate':'conflict';
+  if(rowsOf('issuers').some(r=>r!==row&&r.cninfo_org_id===v))return 'conflict';   // issuers_cninfo_idx
+  row.cninfo_org_id=v;
+  row.provenance={...(isObj(row.provenance)?row.provenance:{}),cninfo_org_id:clone(pv)};
+  row.updated_at=new Date().toISOString();
+  return 'written';
+ },
  set_security_identifier(rowsOf,a){
   const col=a.p_column,v=a.p_value,pv=a.p_provenance;
   if((col!=='isin'&&col!=='figi')||typeof v!=='string'||v===''||!isObj(pv)||Object.keys(pv).length!==1||!(col in pv))

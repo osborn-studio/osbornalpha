@@ -795,6 +795,37 @@ end $$;
 revoke execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.set_security_identifier(uuid, text, date, text, text, jsonb) to service_role;
 
+-- ---------------------------------------------------------------- guarded issuer identifier write (Task 4b review, P1)
+-- set_issuer_identifier is the only writer of issuers.cninfo_org_id outside resolve_identifier_claim
+-- (cninfo-org-id.ts). It locks the issuer row FOR NO KEY UPDATE (the order and lock level of
+-- resolve_identifier_claim), requires status 'active' and, in ONE UPDATE, writes the column (only when
+-- empty) and merges provenance with `provenance || {p_column: p_provenance}` — never a whole-object
+-- replacement — so a concurrent write of another provenance key (lei, usci, ...) keeps its key.
+-- Outcomes: 'written', 'duplicate' (same value stored), 'conflict' (another value stored, or the
+-- value is held by another issuer: unique violation), 'not_found', 'not_active'.
+create or replace function public.set_issuer_identifier(p_issuer uuid, p_column text, p_value text, p_provenance jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_cur text; v_status text;
+begin
+  if p_column is distinct from 'cninfo_org_id' then raise exception 'invalid_column' using errcode = '22023'; end if;
+  if coalesce(btrim(p_value), '') = '' or p_provenance is null or jsonb_typeof(p_provenance) <> 'object'
+     or not public.claim_provenance_safe(p_provenance) then
+    raise exception 'invalid_identifier_write' using errcode = '22023';
+  end if;
+  select i.status, i.cninfo_org_id into v_status, v_cur from public.issuers i where i.issuer_id = p_issuer for no key update;
+  if not found then return 'not_found'; end if;
+  if v_status <> 'active' then return 'not_active'; end if;
+  if v_cur is not null then return case when v_cur = p_value then 'duplicate' else 'conflict' end; end if;
+  begin
+    update public.issuers set cninfo_org_id = p_value, provenance = provenance || jsonb_build_object(p_column, p_provenance), updated_at = now()
+    where issuer_id = p_issuer;
+  exception when unique_violation then return 'conflict';
+  end;
+  return 'written';
+end $$;
+revoke execute on function public.set_issuer_identifier(uuid, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.set_issuer_identifier(uuid, text, text, jsonb) to service_role;
+
 -- ---------------------------------------------------------------- topology guard (§3.1, S1)
 -- issuers.status/merged_into change only inside set_merge/set_dissolved (migration two), which switch
 -- the transaction-local setting on and restore it on every exit path. A never-defined setting reads

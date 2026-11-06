@@ -5,19 +5,22 @@
 // becomes a set_identifier claim; a different value appearing concurrently becomes
 // correct_identifier. The exact topSearch response bytes go to reconcile-raw (kind 'cninfo') so
 // the provenance/claim hash is replayable. batchId null = dry run (no bucket, no DB writes).
-import {selectAll,type TableClient} from '../db/table-client';
+import {callRpc,selectAll,type TableClient} from '../db/table-client';
 import {emptyCounts,type BatchError} from '../dq/batches';
 import type {RawStore} from '../dq/raw-store';
-import {fileClaim,isUnique,type ClaimInput} from './claims';
+import {fileClaim,type ClaimInput} from './claims';
 import {errorMessage,withSkippedSummary,type ApplyResult} from './load-sec';
 import type {ClaimEvidence} from './types';
 
 export interface CninfoLookup{hit:{orgId:string;name:string}|null;bytes:Uint8Array}
+/** A failed lookup that still carries whatever bytes were received (HTTP error body, unparsable text): stored as evidence before the failure is recorded. */
+export class CninfoLookupError extends Error{constructor(message:string,readonly bytes:Uint8Array|null){super(message);this.name='CninfoLookupError';}}
 export interface CninfoTarget{issuer_id:string;code:string;ticker:string;provenance:Record<string,unknown>}
 export interface CninfoDeps{tables:TableClient;raw:RawStore;lookup:(code:string)=>Promise<CninfoLookup>;asOf:string;sleep?:(ms:number)=>Promise<void>;intervalMs?:number}
-export interface CninfoPlanned{issuer_id:string;code:string;orgId:string|null;outcome:'written'|'duplicate'|'claimed'|'not_found'|'failed'|'planned'}
+export interface CninfoPlanned{issuer_id:string;code:string;orgId:string|null;outcome:'written'|'duplicate'|'claimed'|'not_found'|'failed'|'planned';evidence_sha256?:string|null}
 
 const obj=(v:unknown)=>(v&&typeof v==='object'&&!Array.isArray(v)?v:{}) as Record<string,unknown>;
+const isJson=(b:Uint8Array)=>{try{JSON.parse(new TextDecoder().decode(b));return true;}catch{return false;}};
 const A_SHARE=/^\d{6}\.(SH|SZ)$/;
 
 export async function cninfoTargets(tables:TableClient):Promise<CninfoTarget[]>{
@@ -38,16 +41,24 @@ export async function fillCninfoOrgIds(deps:CninfoDeps,targets:readonly CninfoTa
  const skippedSummary:Record<string,number>={};const claims:Record<string,number>={};
  for(const [n,t] of targets.entries()){
   if(n>0)await sleep(deps.intervalMs??600);
-  let look:CninfoLookup;
-  try{look=await deps.lookup(t.code);}
-  catch(e){counts.failed++;errors.push({code:'cninfo_error',key:t.code,message:errorMessage(e)});planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'failed'});continue;}
-  if(!look.hit){skippedSummary.org_id_not_found=(skippedSummary.org_id_not_found??0)+1;planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'not_found'});continue;}
-  const orgId=look.hit.orgId;
-  const plan=(outcome:CninfoPlanned['outcome'])=>planned.push({issuer_id:t.issuer_id,code:t.code,orgId,outcome});
-  if(opts.batchId===null){plan('planned');continue;}
+  const apply=opts.batchId!==null;
+  // Every received response is stored (apply mode) before it is interpreted; dry run stores nothing.
+  const keep=async(bytes:Uint8Array|null):Promise<string|null>=>apply&&bytes&&bytes.byteLength>0?(await deps.raw.put({kind:'cninfo',bytes,contentType:isJson(bytes)?'application/json':'text/html',meta:{code:t.code}})).sha256:null;
+  let look:CninfoLookup|null=null,sha:string|null=null;
   try{
-   const stored=await deps.raw.put({kind:'cninfo',bytes:look.bytes,contentType:'application/json',meta:{code:t.code}});
-   const evidence:ClaimEvidence={source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:stored.sha256,locator:`topSearch:keyWord=${t.code}`};
+   try{look=await deps.lookup(t.code);}
+   catch(e){
+    const sha0=e instanceof CninfoLookupError?await keep(e.bytes):null;
+    throw Object.assign(new Error(errorMessage(e)+(sha0?` (response ${sha0})`:'')),{sha:sha0});
+   }
+   sha=await keep(look.bytes);
+  }catch(e){counts.failed++;errors.push({code:'cninfo_error',key:t.code,message:errorMessage(e)});planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'failed',evidence_sha256:(e as {sha?:string|null}).sha??null});continue;}
+  if(!look.hit){skippedSummary.org_id_not_found=(skippedSummary.org_id_not_found??0)+1;planned.push({issuer_id:t.issuer_id,code:t.code,orgId:null,outcome:'not_found',evidence_sha256:sha});continue;}
+  const orgId=look.hit.orgId;
+  const plan=(outcome:CninfoPlanned['outcome'])=>planned.push({issuer_id:t.issuer_id,code:t.code,orgId,outcome,evidence_sha256:sha});
+  if(!apply){plan('planned');continue;}
+  try{
+   const evidence:ClaimEvidence={source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:sha!,locator:`topSearch:keyWord=${t.code}`};
    const claim=async(op:'set_identifier'|'correct_identifier',current:string|null)=>{
     const c:ClaimInput={issuer_id:t.issuer_id,id_type:'cninfo_org_id',value:orgId,source:'cninfo_topsearch',op,detail:{
      schema:'claim/1',evidence_kind:'provider_mapping',target:{issuer_id:t.issuer_id},params:op==='set_identifier'?{}:{expected_current:current,new_value:orgId},evidence,sources:[evidence],
@@ -55,19 +66,17 @@ export async function fillCninfoOrgIds(deps:CninfoDeps,targets:readonly CninfoTa
     const created=await fileClaim(tables,c);
     const k=created?op:`${op}_appended`;claims[k]=(claims[k]??0)+1;plan('claimed');
    };
-   try{
-    const n=await tables.update('issuers',{issuer_id:t.issuer_id,status:'active',cninfo_org_id:null},{
-     cninfo_org_id:orgId,provenance:{...t.provenance,cninfo_org_id:{source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:stored.sha256}},updated_at:new Date().toISOString(),
-    });
-    if(n===1){counts.inserted++;plan('written');continue;}
+   // One locked UPDATE merges the single provenance key (never replaces the object): see set_issuer_identifier.
+   const outcome=await callRpc(tables,'set_issuer_identifier',{p_issuer:t.issuer_id,p_column:'cninfo_org_id',p_value:orgId,p_provenance:{source:'cninfo_topsearch',as_of:deps.asOf,evidence_sha256:sha}}) as string;
+   if(outcome==='written'){counts.inserted++;plan('written');continue;}
+   if(outcome==='duplicate'){counts.duplicates++;plan('duplicate');continue;}
+   if(outcome==='conflict'){
     const [now]=await tables.select('issuers',{issuer_id:t.issuer_id},{limit:1});
-    if(now?.cninfo_org_id===orgId){counts.duplicates++;plan('duplicate');continue;}
-    if(now?.status==='active'&&typeof now.cninfo_org_id==='string'){await claim('correct_identifier',now.cninfo_org_id);continue;}
-    counts.failed++;errors.push({code:'issuer_changed',key:t.issuer_id,message:'issuer no longer active'});plan('failed');
-   }catch(e){
-    if(isUnique(e)){await claim('set_identifier',null);continue;}
-    throw e;
+    if(typeof now?.cninfo_org_id==='string'&&now.cninfo_org_id!==orgId)await claim('correct_identifier',now.cninfo_org_id);
+    else await claim('set_identifier',null);   // the value is held by another issuer
+    continue;
    }
+   counts.failed++;errors.push({code:outcome==='not_active'?'issuer_changed':'issuer_missing',key:t.issuer_id,message:outcome});plan('failed');
   }catch(e){counts.failed++;errors.push({code:'cninfo_write_error',key:t.issuer_id,message:errorMessage(e)});plan('failed');}
  }
  counts.fetched=counts.inserted+counts.duplicates+counts.failed;

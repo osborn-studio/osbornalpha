@@ -30,21 +30,22 @@ import {makeBudget} from '../../src/lib/facts/sync';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
 const DATASET=DATASETS.entities.identifiers;
-const USAGE='usage: fill-identifiers.ts --gleif <lei-isin.csv> --hkex <dir> [--stage A|B|C|D|all] [--issuer <uuid>]... [--apply]';
+const USAGE='usage: fill-identifiers.ts --gleif <lei-isin.csv> --hkex <dir> [--stage A|B|C|D|all] [--gleif-downloaded-at <ISO>] [--issuer <uuid>]... [--apply]';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STAGES:Record<string,Stage[]>={A:['A'],B:['A','B'],C:['C'],D:['D'],all:['A','B','C','D']};
 const str=(v:unknown)=>typeof v==='string'&&v!==''?v:null;
 const obj=(v:unknown)=>(v&&typeof v==='object'&&!Array.isArray(v)?v:{}) as Record<string,unknown>;
 const cadenceOf=(dataset:string)=>{const e=DQ_DATASET_INVENTORY.find(x=>x.dataset===dataset);if(!e)throw new Error(`unregistered_dataset:${dataset}`);return e.cadence;};
 
-interface Args{gleif:string|null;hkex:string|null;stages:Set<Stage>;issuers:string[];apply:boolean}
+interface Args{gleif:string|null;gleifDownloadedAt:string|null;hkex:string|null;stages:Set<Stage>;issuers:string[];apply:boolean}
 function bad():never{console.error(USAGE);process.exit(2);}
 function parseArgs(argv:string[]):Args{
- const a:Args={gleif:null,hkex:null,stages:new Set(STAGES.all),issuers:[],apply:false};
+ const a:Args={gleif:null,gleifDownloadedAt:null,hkex:null,stages:new Set(STAGES.all),issuers:[],apply:false};
  for(let i=0;i<argv.length;i++){
   const k=argv[i];
   if(k==='--apply')a.apply=true;
   else if(k==='--gleif')a.gleif=argv[++i]??bad();
+  else if(k==='--gleif-downloaded-at'){const v=argv[++i]??bad();if(!/^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2}))?$/.test(v)||Number.isNaN(Date.parse(v)))bad();a.gleifDownloadedAt=v;}
   else if(k==='--hkex')a.hkex=argv[++i]??bad();
   else if(k==='--stage'){const s=STAGES[argv[++i]??''];if(!s)bad();a.stages=new Set(s);}
   else if(k==='--issuer'){const id=argv[++i]??bad();if(!UUID.test(id))bad();a.issuers.push(id.toLowerCase());}
@@ -63,7 +64,7 @@ async function fileDigest(path:string):Promise<{sha256:string;bytes:number}>{
 
 interface Inputs{
  issuers:IssuerRow[];openRows:SecRow[];universe:Set<string>;scope:Row[];issuerRows:Row[];
- gleif:{subset:GleifSubset;sha256:string;bytes:number;downloaded:string}|null;
+ gleif:{subset:GleifSubset;sha256:string;bytes:number;downloaded_at:string|null;file_mtime:string}|null;
  hkex:{parses:HkexListParse[];bytes:Map<HkexFileId,Uint8Array>}|null;
 }
 
@@ -82,7 +83,7 @@ async function readInputs(tables:TableClient,args:Args):Promise<Inputs>{
   const lines:string[]=[];
   for await(const l of filterGleifLines(createInterface({input:createReadStream(args.gleif!),crlfDelay:Infinity}),leis))lines.push(l);
   const digest=await fileDigest(args.gleif!);
-  gleif={subset:subsetForLeis(lines,leis),...digest,downloaded:statSync(args.gleif!).mtime.toISOString().slice(0,10)};
+  gleif={subset:subsetForLeis(lines,leis),...digest,downloaded_at:args.gleifDownloadedAt,file_mtime:statSync(args.gleif!).mtime.toISOString()};
  }
  let hkex:Inputs['hkex']=null;
  if(args.stages.has('D')){
@@ -101,7 +102,7 @@ async function readInputs(tables:TableClient,args:Args):Promise<Inputs>{
 /** Stores the evidence, calls OpenFIGI (B, then C for rows still without a FIGI) and plans. */
 async function evidenceAndPlan(inp:Inputs,raw:RawStore,args:Args,asOf:string):Promise<{plan:IdentifierPlan;exhausted:boolean;requests:number}>{
  if(inp.gleif)await raw.put({kind:'gleif',bytes:new TextEncoder().encode(inp.gleif.subset.csv),contentType:'text/csv',
-  meta:{source_sha256:inp.gleif.sha256,source_bytes:inp.gleif.bytes,downloaded:inp.gleif.downloaded,leis:inp.gleif.subset.byLei.size}});
+  meta:{source_sha256:inp.gleif.sha256,source_bytes:inp.gleif.bytes,file_mtime:inp.gleif.file_mtime,...(inp.gleif.downloaded_at?{downloaded_at:inp.gleif.downloaded_at}:{}),leis:inp.gleif.subset.byLei.size}});
  let hkexMap:ReadonlyMap<string,HkexIsin>|null=null;
  if(inp.hkex){
   // each workbook keeps its own content type (two are .xls)

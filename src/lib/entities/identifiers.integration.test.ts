@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1024,6 +1024,49 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect(await second).toBe('written');
   });
   expect(await secState(t)).toEqual({isin,figi:'BBG000000001',provenance:{exchange:'Nasdaq',...PI}});
+ });
+ // Task 4b review P1: the orgId write and its provenance key land in one locked UPDATE.
+ const setOrg=(issuerId:string,value:string,prov:unknown,on:Pool|PoolClient=admin,col='cninfo_org_id')=>
+  on.query(`select public.set_issuer_identifier($1,$2,$3,$4::jsonb) v`,[issuerId,col,value,JSON.stringify(prov)]).then(r=>r.rows[0].v as string);
+ const PO={source:'cninfo_topsearch',as_of:'2026-11-05',evidence_sha256:'3'.repeat(64)};
+ const issuerState=async(id:string)=>(await q(`select cninfo_org_id,provenance from public.issuers where issuer_id=$1`,[id]))[0];
+ it('set_issuer_identifier: written / duplicate / conflict (own value, other issuer holds it) / not_found / not_active / invalid; provenance merged',async()=>{
+  const a=await issuer(),b=await issuer();
+  await q(`update public.issuers set provenance=$2::jsonb where issuer_id=$1`,[a,JSON.stringify({usci:{source:'test'}})]);
+  const org='gssh'+hex(4);
+  expect(await setOrg(a,org,PO)).toBe('written');
+  expect(await setOrg(a,org,PO)).toBe('duplicate');
+  expect(await setOrg(a,'gssh'+hex(4),PO)).toBe('conflict');
+  expect(await issuerState(a)).toEqual({cninfo_org_id:org,provenance:{usci:{source:'test'},cninfo_org_id:PO}});
+  expect(await setOrg(b,org,PO)).toBe('conflict');                       // unique index: another issuer holds it
+  expect((await issuerState(b)).cninfo_org_id).toBeNull();
+  expect(await setOrg(randomUUID(),'gssh'+hex(4),PO)).toBe('not_found');
+  const c=await issuer();
+  await inTx(admin,async tx=>{
+   await tx.c.query(`select set_config('entities.allow_topology_write','on',true)`);
+   await tx.c.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[c]);
+   await tx.commit();
+  });
+  expect(await setOrg(c,'gssh'+hex(4),PO)).toBe('not_active');
+  expect(await fails(setOrg(b,'gssh'+hex(4),PO,admin,'lei'))).toMatchObject({message:'invalid_column',code:'22023'});
+  expect(await fails(setOrg(b,'gssh'+hex(4),{source:'x',url:'https://a.example/p?token=1'}))).toMatchObject({message:'invalid_identifier_write',code:'22023'});
+  expect(await fails(setOrg(b,'  ',PO))).toMatchObject({message:'invalid_identifier_write'});
+ });
+ it('set_issuer_identifier interleaved with a provenance update for lei keeps both provenance keys, in either order',async()=>{
+  for(const orgFirst of [true,false]){
+   const a=await issuer();const org='gssh'+hex(4);
+   await q(`update public.issuers set provenance=$2::jsonb where issuer_id=$1`,[a,JSON.stringify({usci:{source:'test'}})]);
+   const lei={lei:{source:'later'}};
+   await inTx(admin,async tx=>{
+    if(orgFirst)expect(await setOrg(a,org,PO,tx.c)).toBe('written');
+    else await tx.c.query(`update public.issuers set provenance=provenance||$2::jsonb where issuer_id=$1`,[a,JSON.stringify(lei)]);
+    const second=orgFirst?admin.query(`update public.issuers set provenance=provenance||$2::jsonb where issuer_id=$1`,[a,JSON.stringify(lei)]):setOrg(a,org,PO);
+    await stillBlockedBehind(admin,tx.pid,second);
+    await tx.commit();
+    await second;
+   });
+   expect(await issuerState(a)).toEqual({cninfo_org_id:org,provenance:{usci:{source:'test'},cninfo_org_id:PO,...lei}});
+  }
  });
  it('two transactions writing different ISINs to the same empty row: the second returns conflict and the first value stays',async()=>{
   const a=await issuer();const t=await ticker();const k={issuer:a,ticker:t};

@@ -13,7 +13,7 @@ import {emptyCounts,finishBatch,startBatch,type BatchError,type BatchStatus} fro
 import {DATASETS,DQ_DATASET_INVENTORY} from '../../src/lib/dq/datasets';
 import {recordAttempt} from '../../src/lib/dq/freshness';
 import {memoryRawStore,supabaseRawStore} from '../../src/lib/dq/raw-store';
-import {cninfoTargets,fillCninfoOrgIds,type CninfoLookup} from '../../src/lib/entities/cninfo-org-id';
+import {CninfoLookupError,cninfoTargets,fillCninfoOrgIds,type CninfoLookup} from '../../src/lib/entities/cninfo-org-id';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {resolveOrgId} from '../../src/lib/research/ingest/collectors/cninfo';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
@@ -29,7 +29,9 @@ async function lookup(code:string):Promise<CninfoLookup>{
   bytes=new Uint8Array(await res.arrayBuffer());
   return new Response(bytes,{status:res.status,statusText:res.statusText,headers:res.headers});
  }) as typeof fetch;
- const hit=await resolveOrgId(code,{fetch:tap});
+ let hit:Awaited<ReturnType<typeof resolveOrgId>>;
+ try{hit=await resolveOrgId(code,{fetch:tap});}
+ catch(e){throw new CninfoLookupError(errorMessage(e),bytes.byteLength?bytes:null);}   // received bytes are stored before the failure is recorded
  return {hit:hit?{orgId:hit.orgId,name:hit.name}:null,bytes};
 }
 
