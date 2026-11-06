@@ -216,6 +216,10 @@ describe('plan-review hardening (quality round)',()=>{
  it('decimals must be INF or an integer',()=>{
   expect(valueOf(nf('decimals="-6"','1'))).toBe('1');
   expect(valueOf(nf('decimals="INF"','1'))).toBe('1');
+  const dec=(v:string)=>one(nf(`decimals="${v}"`,'1')).facts[0]?.decimals;
+  expect(dec('+2')).toBe('2');
+  expect(dec('+0')).toBe('0');
+  expect(dec('-6')).toBe('-6');
   expect(valueOf(nf('decimals="2.5"','1'))).toBe('decimals');
   expect(valueOf(nf('decimals="inf"','1'))).toBe('decimals');
   expect(valueOf(nf('decimals=""','1'))).toBe('decimals');

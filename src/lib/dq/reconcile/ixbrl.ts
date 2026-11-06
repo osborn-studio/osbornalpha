@@ -346,7 +346,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   const scaleRaw=(attrOf(f.attrs,'scale')??'0').trim();
   if(!/^-?\d{1,2}$/.test(scaleRaw)){out.unsupported.push({reason:'scale',...where});continue;}
   const decimalsRaw=attrOf(f.attrs,'decimals')?.trim();
-  if(decimalsRaw!==undefined&&!/^(INF|-?\d+)$/.test(decimalsRaw)){out.unsupported.push({reason:'decimals',...where});continue;}
+  if(decimalsRaw!==undefined&&!/^(INF|[+-]?\d+)$/.test(decimalsRaw)){out.unsupported.push({reason:'decimals',...where});continue;}
   const sign=attrOf(f.attrs,'sign');
   if(sign!==undefined&&sign!=='-'){out.unsupported.push({reason:'sign',...where});continue;}
   const fmt=formatOf(attrOf(f.attrs,'format'),f.ns);
@@ -357,7 +357,7 @@ export function parseInlineXbrl(doc:string):IxbrlDocument{
   let value:string;
   try{value=canonicalDecimal(`${digits}e${scale}`);}catch{out.unsupported.push({reason:'decimal_bounds',...where});continue;}
   if(sign==='-'&&value!=='0')value=value.startsWith('-')?value.slice(1):`-${value}`;
-  out.facts.push({name,periodStart:period.start,periodEnd:period.end,unit:unitNorm,value,decimals:decimalsRaw??null,scale,entity:`${c.scheme}#${c.ident.trim()}`,contextRef,unitRef});
+  out.facts.push({name,periodStart:period.start,periodEnd:period.end,unit:unitNorm,value,decimals:decimalsRaw===undefined?null:decimalsRaw.replace(/^\+/,''),scale,entity:`${c.scheme}#${c.ident.trim()}`,contextRef,unitRef});
  }
  return out;
 }
