@@ -52,7 +52,8 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   return t;
  };
  const usTicker=async()=>{const t=await newTicker('US');if(!t) throw new Error('ZZ test ticker collided');return t;};
- const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${extraCols}) values($1,$2,$3,$4,'test'${extraVals})`,[issuer,ticker,from,to,...params]);
+ // plan 3: a closed window must name how it was closed (issuer_securities_to_method_iff_to)
+const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${to===null?'':',valid_to_method'}${extraCols}) values($1,$2,$3,$4,'test'${to===null?'':",'unrecorded'"}${extraVals})`,[issuer,ticker,from,to,...params]);
  const newVersion=async()=>{
   const version='t'+hex(4);
   await admin.query(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('custom',$1,'10',1,'Energy')`,[version]);
@@ -130,7 +131,7 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await claim('cik',0.6,'Y');
   const claims=(await admin.query(`select id_type,value,status from public.issuer_identifier_claims where issuer_id=$1 order by id_type,status`,[a])).rows;
   expect(claims).toEqual([{id_type:'cik',value:'Y',status:'accepted'},{id_type:'cik',value:'Y',status:'pending'},{id_type:'cik',value:'Y',status:'rejected'},{id_type:'lei',value:'X',status:'pending'},{id_type:'lei',value:'X',status:'rejected'}]);
-  await expect(claim('ticker',0.5)).rejects.toThrow(/issuer_identifier_claims_id_type_check/);
+  await expect(claim('ric',0.5)).rejects.toThrow(/issuer_identifier_claims_id_type_check/);
   await expect(claim('cik',1.5)).rejects.toThrow(/issuer_identifier_claims_confidence_check/);
 
   const version=await newVersion();
@@ -205,7 +206,7 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await sec(a,t,'2020-01-01',null);
   await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
   await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
-  await admin.query(`update public.issuer_securities set valid_to='2024-01-01' where issuer_id=$1 and ticker=$2`,[a,t]);
+  await admin.query(`update public.issuer_securities set valid_to='2024-01-01',valid_to_method='unrecorded' where issuer_id=$1 and ticker=$2`,[a,t]);
   await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
   expect((await admin.query(`select status from public.issuers where issuer_id=$1`,[a])).rows[0].status).toBe('dissolved');
  },30000);

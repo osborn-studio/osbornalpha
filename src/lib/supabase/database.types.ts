@@ -11,6 +11,9 @@
 // + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
 //   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
 // + 20261106090000_financial_facts.sql (fact_sync_runs, filings, financial_facts, financial_metrics, fact_sync_scope)
+// + 20261107090000_identifiers_and_dq.sql (issuer_securities window methods; issuer_identifier_claims claim/1 columns;
+//   dq_reconciliations pair/kind/outcome/detail/cycle columns; dq_reconcile_cycles, dq_reconcile_cursor, dq_calendar_passes,
+//   dq_calendar_pass_members, issuer_filer_categories, dq_filing_expectations, issuer_filing_profiles; dq_freshness weekly)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -573,12 +576,20 @@ export interface DqReconciliation {
   passed: boolean;
   batch_id: string | null;
   created_at: string;
+  pair: string;
+  kind: DqReconcileKind;
+  outcome: DqReconcileOutcome;
+  detail: Record<string, unknown>;
+  cycle_id: string | null;
+  issuer_id: string | null;
+  market: FactMarket | null;
+  attempt: number | null;
 }
 
 export type DqFreshnessStatus = 'fresh' | 'stale' | 'error' | 'missing';
 export interface DqFreshness {
   dataset: string;
-  expected_cadence: 'daily' | 'monthly' | 'quarterly' | 'event';
+  expected_cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'event';
   last_ok_at: string | null;
   last_attempt_at: string | null;
   consecutive_errors: number;
@@ -709,19 +720,27 @@ export interface IssuerSecurity {
   is_primary: boolean;
   valid_from: string;
   valid_to: string | null;
+  valid_from_method: ValidFromMethod;
+  valid_to_method: ValidToMethod | null;
   source: string;
   provenance: Record<string, unknown>;
 }
 
-export type IssuerIdentifierType = 'lei' | 'cik' | 'usci' | 'isin' | 'figi' | 'cninfo_org_id';
+export type IssuerIdentifierType = 'lei' | 'cik' | 'usci' | 'isin' | 'figi' | 'cninfo_org_id' | 'ticker';
+export type IssuerClaimOp = 'legacy' | 'evidence_only' | 'set_identifier' | 'correct_identifier' | 'attach_security' | 'close_security' | 'backdate_window';
 export interface IssuerIdentifierClaim {
   id: string;
   issuer_id: string;
   id_type: IssuerIdentifierType;
   value: string;
   source: string;
-  confidence: number;
+  confidence: number | null;          // legacy rows only; claim/1 claims carry evidence classes, not confidence
   status: 'accepted' | 'pending' | 'rejected';
+  op: IssuerClaimOp;
+  target_key: string;
+  detail: Record<string, unknown>;    // claim/1 payload (src/lib/entities/types.ts ClaimDetail); {} on legacy rows
+  resolved_by: string | null;
+  resolved_at: string | null;
   created_at: string;
 }
 
@@ -745,6 +764,103 @@ export interface IssuerIndustryMembership {
   valid_to: string | null;
   source: string;
   provenance: Record<string, unknown>;
+}
+
+// 20261107090000_identifiers_and_dq.sql (plan 3 Task 1). All new tables are service-role only.
+export type ValidFromMethod = 'first_observed' | 'listing_date' | 'ticker_change' | 'curated';
+export type ValidToMethod = 'delisting' | 'ticker_change' | 'sec_file_absent' | 'curated' | 'merge_close' | 'unrecorded';
+export type DqReconcileKind = 'numeric' | 'text' | 'date';
+export type DqReconcileOutcome = 'compared' | 'left_missing' | 'left_unlinked' | 'left_ambiguous' | 'right_missing' | 'unsupported' | 'right_ambiguous' | 'incomplete_gold' | 'legacy';
+export interface DqReconcileCycle {
+  pair: string;
+  cycle_id: string;
+  started_at: string;
+  finished_at: string | null;
+  members: { issuer_id: string; market: FactMarket; expected_keys: unknown[] }[];
+  status: 'running' | 'complete' | 'complete_with_gaps';
+  expected_total: number;
+  compared_passed: number;
+  compared_failed: number;
+  not_compared: number;
+  exec_failed_members: number;
+  detail: Record<string, unknown>;
+}
+export interface DqReconcileCursor {
+  pair: string;
+  cycle_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  expected: number;
+  state: 'pending' | 'claimed' | 'done' | 'failed';
+  claimed_by: string | null;
+  claim_until: string | null;
+  attempts: number;
+  last_error: string | null;
+  done_at: string | null;
+  compared_passed: number | null;
+  compared_failed: number | null;
+  not_compared: number | null;
+}
+export interface DqCalendarPass {
+  market: FactMarket;
+  pass_id: string;
+  started_at: string;
+  finished_at: string | null;
+  claimed_by: string | null;
+  claim_until: string | null;
+  status: 'running' | 'complete' | 'complete_with_failures';
+}
+export interface DqCalendarPassMember {
+  market: FactMarket;
+  pass_id: string;
+  issuer_id: string;
+  state: 'pending' | 'done' | 'failed';
+  attempts: number;
+  last_error: string | null;
+  done_at: string | null;
+}
+export interface IssuerFilerCategory {
+  issuer_id: string;
+  fiscal_year: number;
+  acceleration: 'large_accelerated' | 'accelerated' | 'non_accelerated';
+  smaller_reporting: boolean | null;
+  category_raw: string;
+  source: 'ixbrl_dei';
+  accession: string;
+  evidence_sha256: string;
+  as_of: string;
+}
+export interface DqFilingExpectation {
+  issuer_id: string;
+  market: FactMarket;
+  report_kind: '10-K' | '10-Q' | '20-F' | '40-F' | 'annual' | 'semiannual' | 'q1' | 'q3';
+  period_end: string;
+  period_end_estimated: boolean;
+  deadline_state: 'statutory' | 'estimated' | 'no_rule';
+  due_date: string | null;
+  due_rule: string;
+  expected_date: string | null;
+  upstream_lookup: 'ok' | 'unavailable' | 'not_applicable';
+  upstream_filed_date: string | null;
+  disclosure_state: 'pending' | 'overdue' | 'filed_not_ingested' | 'received' | 'received_late' | 'unknown_upstream';
+  received_filing_id: string | null;
+  received_date: string | null;
+  profile_as_of: string | null;
+  detail: Record<string, unknown>;
+  computed_at: string;
+  batch_id: string;
+}
+export interface IssuerFilingProfile {
+  issuer_id: string;
+  market: FactMarket;
+  category_raw_current: string | null;
+  regime: '10-K' | '20-F' | '40-F' | 'cn';
+  fiscal_year_end: string | null;
+  week52_pattern: boolean;
+  source: string;
+  source_sha256: string | null;
+  as_of: string;
+  updated_at: string;
 }
 
 export type Database = {
@@ -797,6 +913,13 @@ export type Database = {
       financial_facts: { Row: FinancialFact; Insert: Partial<FinancialFact>; Update: Partial<FinancialFact> };
       financial_metrics: { Row: FinancialMetric; Insert: Partial<FinancialMetric>; Update: Partial<FinancialMetric> };
       fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };
+      dq_reconcile_cycles: { Row: DqReconcileCycle; Insert: Partial<DqReconcileCycle>; Update: Partial<DqReconcileCycle> };
+      dq_reconcile_cursor: { Row: DqReconcileCursor; Insert: Partial<DqReconcileCursor>; Update: Partial<DqReconcileCursor> };
+      dq_calendar_passes: { Row: DqCalendarPass; Insert: Partial<DqCalendarPass>; Update: Partial<DqCalendarPass> };
+      dq_calendar_pass_members: { Row: DqCalendarPassMember; Insert: Partial<DqCalendarPassMember>; Update: Partial<DqCalendarPassMember> };
+      issuer_filer_categories: { Row: IssuerFilerCategory; Insert: Partial<IssuerFilerCategory>; Update: Partial<IssuerFilerCategory> };
+      dq_filing_expectations: { Row: DqFilingExpectation; Insert: Partial<DqFilingExpectation>; Update: Partial<DqFilingExpectation> };
+      issuer_filing_profiles: { Row: IssuerFilingProfile; Insert: Partial<IssuerFilingProfile>; Update: Partial<IssuerFilingProfile> };
     };
     Functions: {
       quote_alert_window_samples: {

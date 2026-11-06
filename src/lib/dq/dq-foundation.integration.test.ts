@@ -82,7 +82,7 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
 
   await admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','missing')`,[d]);
   const f2=newDs();
-  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
+  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'hourly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status,consecutive_errors) values($1,'daily','error',-1)`,[f2])).rejects.toThrow(/dq_freshness_consecutive_errors_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','fresh')`,[f2])).rejects.toThrow(/dq_freshness_ok_requires_last_ok/);
  });
@@ -111,7 +111,7 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
 
   const reconciled=await insertBatch(d);
   const recId=randomUUID();
-  await admin.query(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,tolerance,passed,batch_id) values($1,$2,'a','b','k',0,true,$3)`,[recId,d,reconciled]);
+  await admin.query(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,left_value,right_value,tolerance,passed,batch_id) values($1,$2,'a','b','k',1,1,0,true,$3)`,[recId,d,reconciled]);
   await admin.query(`delete from public.ingest_batches where batch_id=$1`,[reconciled]);
   const rec=(await admin.query(`select batch_id from public.dq_reconciliations where id=$1`,[recId])).rows[0];
   expect(rec.batch_id).toBeNull();
