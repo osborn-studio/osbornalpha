@@ -103,10 +103,50 @@ describe('planIdentifierWrites · stages C and D',()=>{
   expect(isin).toMatchObject({value:'KYG875721634',source:'hkex_list_of_securities',evidenceKind:'official_list',patch:{isin:{source:'hkex_list_of_securities',as_of:ASOF,evidence_sha256:'d'.repeat(64),locator:'list_of_securities:row:5'}}});
   expect(p.recons).toEqual([{naturalKey:'00700.HK:2026-01-02',passed:false,leftText:'US0378331005',rightText:'KYG875721634',leftSource:'gleif_openfigi',rightSource:'hkex_list_of_securities',
    detail:{left:{evidence_sha256:GSHA,locator:`gleif:${LEI1},US0378331005;openfigi:${RSHA}#0`},right:{document:'list_of_securities',sha256:'d'.repeat(64),locator:'row:5'}}}]);
-  expect(p.claims.map(c=>[c.op,c.value,c.detail.params])).toEqual([['correct_identifier','US0378331005',{expected_current:'KYG875721634',new_value:'US0378331005'}]]);
+  // the correction assumes HKEX's value is stored, so apply files it only once the HKEX write has landed
+  expect(p.claims).toEqual([]);
+  expect(isin.followUps!.map(c=>[c.op,c.value,c.detail.params])).toEqual([['correct_identifier','US0378331005',{expected_current:'KYG875721634',new_value:'US0378331005'}]]);
   const agree=planIdentifierWrites(base({stages:new Set(['A','B','D']),openRows:[HK],gleif:{sha256:GSHA,byLei:new Map([[LEI1,['KYG875721634']]])},
    isinResults:new Map([['KYG875721634',okR({idType:'ID_ISIN',idValue:'KYG875721634'},[rec({ticker:'700',exchCode:'HK',figi:'BBG000TENCT1',compositeFIGI:'BBG000TENCT1'})])]]),hkex}));
   expect(agree.recons.map(r=>r.passed)).toEqual([true]);expect(agree.claims).toEqual([]);
   expect(planIdentifierWrites(base({stages:new Set(['D']),openRows:[HK],hkex:new Map()})).skipped).toEqual(['hkex_no_isin']);
+ });
+});
+
+describe('planIdentifierWrites · review fixes',()=>{
+ const ISIN_B='US5949181045',JOB_B:FigiJob={idType:'ID_ISIN',idValue:ISIN_B};
+ const two=(order:string[])=>base({
+  gleif:{sha256:GSHA,byLei:new Map([[LEI1,order]])},
+  isinResults:new Map([['US0378331005',okR(AAPL_JOB,[rec({figi:'BBG000AAAAA1',compositeFIGI:'BBG000AAAAA1'})],0)],[ISIN_B,okR(JOB_B,[rec({figi:'BBG000BBBBB2',compositeFIGI:'BBG000BBBBB2'})],1)]]),
+ });
+ it('different FIGI groups from different ISINs: no automatic FIGI write, claims carry the complete list (both orders)',()=>{
+  const cands=[{figi:'BBG000AAAAA1',level:'composite'},{figi:'BBG000BBBBB2',level:'composite'}];
+  const outs=[['US0378331005',ISIN_B],[ISIN_B,'US0378331005']].map(o=>planIdentifierWrites(two(o)));
+  for(const p of outs){
+   expect(p.writes.filter(w=>w.column==='figi')).toEqual([]);
+   const f=p.claims.filter(c=>c.id_type==='figi');
+   expect(f.map(c=>[c.op,c.value,c.detail.params])).toEqual([['set_identifier','BBG000AAAAA1',{candidates:cands}],['set_identifier','BBG000BBBBB2',{candidates:cands}]]);
+  }
+  expect(outs[0].claims.filter(c=>c.id_type==='figi')).toEqual(outs[1].claims.filter(c=>c.id_type==='figi'));
+ });
+ it('a stored FIGI matching one of several groups is a duplicate; the alternatives become correct_identifier claims with the full list',()=>{
+  const p=planIdentifierWrites(two(['US0378331005',ISIN_B]));
+  const q=planIdentifierWrites({...two(['US0378331005',ISIN_B]),openRows:[row({figi:'BBG000AAAAA1'})]});
+  expect(q.duplicates).toBe(1);
+  const f=q.claims.filter(c=>c.id_type==='figi');
+  expect(f.map(c=>[c.op,c.value,c.detail.params])).toEqual([['correct_identifier','BBG000BBBBB2',{expected_current:'BBG000AAAAA1',new_value:'BBG000BBBBB2',candidates:[{figi:'BBG000AAAAA1',level:'composite'},{figi:'BBG000BBBBB2',level:'composite'}]}]]);
+  expect(p.claims.filter(c=>c.id_type==='figi')).toHaveLength(2);
+ });
+ it('stored ISIN equal to the GLEIF value while HKEX differs: exactly one correction, expected_current = stored',()=>{
+  const res=okR(AAPL_JOB,[rec({ticker:'700',exchCode:'HK',figi:'BBG000TENCT1',compositeFIGI:'BBG000TENCT1'})]);
+  const hkex=new Map([['00700',{isin:'KYG875721634',file:'list_of_securities' as const,sha256:'d'.repeat(64),row:5}]]);
+  const p=planIdentifierWrites(base({stages:new Set(['A','B','D']),openRows:[row({ticker:'00700.HK',isin:'US0378331005'})],isinResults:new Map([['US0378331005',res]]),hkex}));
+  expect(p.claims.map(c=>[c.op,c.value,c.detail.params])).toEqual([['correct_identifier','KYG875721634',{expected_current:'US0378331005',new_value:'KYG875721634'}]]);
+  expect(p.writes.filter(w=>w.column==='isin')).toEqual([]);
+ });
+ it('ISIN claims carry the OpenFIGI response as its own evidence item so a new response appends',()=>{
+  const p=planIdentifierWrites(base({openRows:[row({isin:'US9999999999'})]}));
+  const c=p.claims.find(x=>x.id_type==='isin')!;
+  expect(c.detail.sources.map(s=>[s.source,s.evidence_sha256])).toEqual([['gleif_openfigi',GSHA],['openfigi',RSHA]]);
  });
 });

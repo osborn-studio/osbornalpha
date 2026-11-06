@@ -24,7 +24,7 @@ type SetOutcome='written'|'duplicate'|'conflict'|'not_found';
 const claimFor=(w:SecurityWrite,op:'set_identifier'|'correct_identifier',current:string|null):ClaimInput=>({
  issuer_id:w.issuer_id,id_type:w.column,value:w.value,source:w.source,op,detail:{
   schema:'claim/1',evidence_kind:w.evidenceKind,target:{issuer_id:w.issuer_id,ticker:w.ticker,valid_from:w.valid_from},
-  params:op==='set_identifier'?{}:{expected_current:current,new_value:w.value},evidence:w.evidence,sources:[w.evidence],provenance_written:w.patch,
+  params:op==='set_identifier'?{}:{expected_current:current,new_value:w.value},evidence:w.evidence,sources:w.sources,provenance_written:w.patch,
  },
 });
 
@@ -47,8 +47,8 @@ export async function applyIdentifierPlan(tables:TableClient,plan:IdentifierPlan
   const where=`${w.ticker}:${w.valid_from}:${w.column}`;
   try{
    const outcome=await callRpc(tables,'set_security_identifier',{p_issuer:w.issuer_id,p_ticker:w.ticker,p_valid_from:w.valid_from,p_column:w.column,p_value:w.value,p_provenance:w.patch}) as SetOutcome;
-   if(outcome==='written'){counts.inserted++;continue;}
-   if(outcome==='duplicate'){counts.duplicates++;continue;}
+   if(outcome==='written'){counts.inserted++;for(const f of w.followUps??[])await fileOne(f);continue;}
+   if(outcome==='duplicate'){counts.duplicates++;for(const f of w.followUps??[])await fileOne(f);continue;}
    if(outcome==='conflict'){
     // another value is stored: read it for the claim's expected_current (resolution re-checks it under its own guard)
     const [cur]=await tables.select('issuer_securities',{...key,valid_to:null},{limit:1});

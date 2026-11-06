@@ -94,3 +94,15 @@ describe('applyIdentifierPlan',()=>{
   expect(Object.keys(r.provenance as object).sort()).toEqual(['exchange','figi','isin']);
  });
 });
+
+describe('applyIdentifierPlan · evidence identity',()=>{
+ it('two filings with the same GLEIF hash and different OpenFIGI hashes keep both OpenFIGI evidence items',async()=>{
+  const c=await setup({isin:'US9999999999'});
+  const withResp=(sha:string)=>input({isin:'US9999999999',figi:null},{isinResults:new Map([['US0378331005',{job,status:'ok' as const,records:[rec()],evidence:{request_sha256:'b'.repeat(64),response_sha256:sha,index:0}}]])});
+  await applyIdentifierPlan(c,planIdentifierWrites(withResp('c'.repeat(64))),opts);
+  await applyIdentifierPlan(c,planIdentifierWrites(withResp('e'.repeat(64))),opts);
+  const [cl]=c.rows('issuer_identifier_claims').filter(x=>x.id_type==='isin');
+  const shas=((cl.detail as {sources:{source:string;evidence_sha256:string}[]}).sources).filter(s=>s.source==='openfigi').map(s=>s.evidence_sha256).sort();
+  expect(shas).toEqual(['c'.repeat(64),'e'.repeat(64)]);
+ });
+});
