@@ -71,7 +71,7 @@ describe('runMembershipsSic',()=>{
   await runClassificationsSic(deps);
   const r=await runMembershipsSic(deps,{sleep:noSleep,triggeredBy:'cron'});
   expect(r.processed).toBe(6);expect(r.added).toBe(6);
-  expect(r.counts).toEqual({fetched:5,inserted:3,duplicates:0,versioned:0,quarantined:1,failed:0});
+  expect(r.counts).toEqual({fetched:4,inserted:3,duplicates:0,versioned:0,quarantined:1,failed:0});
   expect(r.status).toBe('partial');
   expect(r.errors[0]).toEqual({code:'skipped_summary',message:JSON.stringify({no_submissions:1,no_cik:1})});
   expect(r.errors.slice(1).map(e=>e.code)).toEqual(['unknown_sic_code']);
@@ -149,6 +149,55 @@ describe('runMembershipsSic',()=>{
   expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toBeUndefined();
   expect(await db.applySicMembership('batch-b',AAPL,'2026-11-08','3571',prov,{leaseBatch:'batch-b',secSubmissions:{sic:'3571'}})).toBe('inserted');
   expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toEqual({sic:'3571'});
+ });
+ it('skip-only runs (404-only, empty-SIC-only) are a success, not unaccounted',async()=>{
+  for(const kind of ['404','empty'] as const){
+   const {tables,deps}=await setup();
+   const d={...deps,fetch:(async(u:RequestInfo|URL)=>{const m=/CIK(\d{10})\.json$/.exec(String(u));
+    if(!m)return fixtureSecFetch()(u);
+    return kind==='404'?new Response('',{status:404}):new Response(JSON.stringify({cik:m[1],sic:''}),{status:200});}) as typeof fetch};
+   await runClassificationsSic(d);
+   const r=await runMembershipsSic(d,{sleep:noSleep});
+   expect(r.counts.fetched).toBe(0);expect(r.status).toBe('success');expect(r.errors.map(e=>e.code)).toEqual(['skipped_summary']);
+   expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sic.memberships')).toMatchObject({consecutive_errors:0});
+  }
+ });
+ it('pages due rows deterministically: tied timestamps, server cap below the page size',async()=>{
+  const {tables,deps}=await setup();
+  await runClassificationsSic(deps);
+  const capped={...tables,select:async(t:string,m:Record<string,unknown>,o:Record<string,unknown>={})=>tables.select(t,m,{...o,limit:Math.min(Number(o.limit??1000),2)})} as typeof tables;
+  const r=await runMembershipsSic({...deps,tables:capped},{sleep:noSleep});
+  expect(r.processed).toBe(6);
+ });
+ it('a body read failure is sec_unavailable (retried the next day)',async()=>{
+  const {tables,deps}=await setup({[submissionsUrl('320193')]:()=>({status:200,ok:true,arrayBuffer:async()=>{throw new TypeError('terminated');}}) as unknown as Response});
+  await runClassificationsSic(deps);
+  const r=await runMembershipsSic(deps,{sleep:noSleep});
+  expect(r.errors.some(e=>e.code==='sec_unavailable'&&e.key===AAPL)).toBe(true);
+  expect(tables.rows('industry_sync_scope').find(s=>s.issuer_id===AAPL)).toMatchObject({next_due_at:'2026-11-09T02:00:00.000Z'});
+ });
+ it('observed is the day the response arrived: a request crossing UTC midnight opens and closes at the new day',async()=>{
+  const {db,deps,setNow}=await setup();
+  await runClassificationsSic(deps);
+  const mk=(sic:string,tick:()=>void)=>fixtureSecFetch({[submissionsUrl('320193')]:()=>{tick();return new Response(JSON.stringify({cik:'0000320193',sic,fiscalYearEnd:'0926'}),{status:200});}});
+  const only=(f:typeof fetch)=>(async(u:RequestInfo|URL,i?:RequestInit)=>String(u)===submissionsUrl('320193')?f(u,i):new Response('',{status:404})) as typeof fetch;
+  let clock=new Date('2026-11-08T23:59:59.000Z');
+  const run=(sic:string,after:string)=>runMembershipsSic({...deps,now:()=>clock,fetch:only(mk(sic,()=>{clock=new Date(after);}))},{sleep:noSleep});
+  setNow('2026-11-08T23:59:59.000Z');
+  await run('3571','2026-11-09T00:00:01.000Z');
+  expect((await db.membershipsOfIssuer(AAPL,{scheme:'sic'})).map(m=>[m.code,m.valid_from,m.available_date])).toEqual([['3571','2026-11-09','2026-11-09']]);
+  clock=new Date('2026-11-16T23:59:59.000Z');setNow('2026-11-16T23:59:59.000Z');
+  await run('3674','2026-11-17T00:00:01.000Z');
+  expect((await db.membershipsOfIssuer(AAPL,{scheme:'sic'})).map(m=>[m.code,m.valid_from,m.valid_to,m.valid_to_available_date]).sort()).toEqual([['3571','2026-11-09','2026-11-17','2026-11-17'],['3674','2026-11-17',null,null]]);
+ });
+ it('a response for another CIK is quarantined cik_mismatch with no writes',async()=>{
+  const {tables,db,deps}=await setup({[submissionsUrl('320193')]:json({cik:'0000789019',sic:'7372',fiscalYearEnd:'0630'})});
+  await runClassificationsSic(deps);
+  const r=await runMembershipsSic(deps,{sleep:noSleep});
+  expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='cik_mismatch').map(q=>q.natural_key)).toEqual([`sic:${AAPL}:cik_mismatch`]);
+  expect(await db.membershipsOfIssuer(AAPL,{scheme:'sic'})).toEqual([]);
+  expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toBeUndefined();
+  expect(r.errors.some(e=>e.code==='cik_mismatch'&&e.key===AAPL)).toBe(true);
  });
  it('honours the limit and paces requests',async()=>{
   const {deps}=await setup();

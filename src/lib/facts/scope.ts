@@ -52,10 +52,10 @@ const isoToday=()=>new Date().toISOString().slice(0,10);
 
 /**
  * Keyset paging for tables whose key is composite while TableClient orders by ONE column: page on
- * `orderBy` (not unique), and after a full page restart from the last value INCLUSIVE (gte), so every
+ * `orderBy` (not unique), and after every page restart from the last value INCLUSIVE (gte), so every
  * row tied with the boundary value is read again from its first row; `keyCols` de-duplicate. Offset
  * paging would drop or repeat tied rows at a page boundary (a dropped current row retires an issuer).
- * A single tie group of MAX_PAGE rows or more cannot advance and fails loudly.
+ * The read ends on a page with no unseen row (never on a short page: the server may cap below MAX_PAGE); a tie group of MAX_PAGE rows or more cannot advance and fails loudly.
  */
 async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOptions,orderBy:string,keyCols:string[]):Promise<Row[]>{
  const seen=new Set<string>(),out:Row[]=[];
@@ -63,11 +63,15 @@ async function keysetAll(tables:TableClient,table:string,match:Row,range:RangeOp
  for(;;){
   const gte={...range.gte,...(cursor===null?{}:{[orderBy]:cursor})};
   const page=await tables.select(table,match,{...range,gte,orderBy,limit:MAX_PAGE});
-  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);}}
-  if(page.length<MAX_PAGE)return out;
-  const last=String(page[page.length-1][orderBy]);
-  if(last===cursor)throw new Error('scope_tie_group_overflow');
-  cursor=last;
+  let fresh=0;
+  for(const r of page){const k=keyCols.map(c=>String(r[c])).join('\u0000');if(!seen.has(k)){seen.add(k);out.push(r);fresh++;}}
+  // exhausted = a page with nothing new (the inclusive restart re-reads the boundary rows), independent of the
+  // requested page size: a server cap below MAX_PAGE must not end the read early
+  if(page.length===0||fresh===0){
+   if(page.length>=MAX_PAGE)throw new Error('scope_tie_group_overflow');
+   return out;
+  }
+  cursor=String(page[page.length-1][orderBy]);
  }
 }
 const SEC_KEY=['issuer_id','ticker','valid_from'];

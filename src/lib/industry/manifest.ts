@@ -4,7 +4,7 @@
 // revisions and the aggregate result, maps each fact's filing to source_ref/citation through an
 // explicit FactsDb.filingsOfIssuer lookup (FactRow carries neither; not found → null + warning), keeps
 // plan 2 MetricRow.inputs verbatim (V5), and sorts every array by its total order:
-//   members (issuer_id, valid_from); unresolved (ts_code, in_date, source_membership_id);
+//   members (issuer_id, valid_from, source_membership_id, ticker); unresolved (ts_code, in_date, source_membership_id);
 //   member_state_revs (issuer_id); facts (issuer_id, concept, period_start, period_end, unit, fact_id);
 //   derived (issuer_id, metric, period_start, period_end, duration, unit); roles (metric, duration,
 //   issuer_id); cells (metric, duration, period_start); warnings (unique, sorted).
@@ -52,13 +52,15 @@ function factOf(r:FactRow,filings:ReadonlyMap<string,FilingRow>,warnings:string[
 const derivedOf=(m:MetricRow):ManifestDerived=>({issuer_id:m.issuer_id,metric:m.metric,period_start:m.period_start,period_end:m.period_end,duration:m.duration,value:m.value,unit:m.unit,basis:m.basis,formula_version:m.formula_version,inputs:structuredClone(m.inputs)});
 
 export function buildAggregateManifest(input:BuildManifestInput):AggregateManifest{
+ const revIds=new Set<string>();
+ for(const x of input.memberStateRevs){if(revIds.has(x.issuer_id))throw new Error(`duplicate_member_state_rev:${x.issuer_id}`);revIds.add(x.issuer_id);}
  const warnings=[...input.result.warnings];
  const facts=input.result.facts.map(r=>factOf(r,input.filings,warnings));
  const h=input.header;
  return {
   schema:MANIFEST_SCHEMA,kind:'aggregate',scheme:h.scheme,version:h.version,code:h.code,level:h.level,period_end:h.period_end,
   facts_as_of:h.facts_as_of,knowledge_date:h.knowledge_date,history_class:h.history_class,method_version:h.method_version,config_hash:h.config_hash,formula_version:h.formula_version,code_version:h.code_version,
-  members:input.members.map(x=>({...x,locator:x.locator===null?null:structuredClone(x.locator)})).sort(by(x=>x.issuer_id,x=>x.valid_from)),
+  members:input.members.map(x=>({...x,locator:x.locator===null?null:structuredClone(x.locator)})).sort(by(x=>x.issuer_id,x=>x.valid_from,x=>x.source_membership_id??'',x=>x.ticker??'')),
   unresolved:input.unresolved.map(x=>({...x})).sort(by(x=>x.ts_code,x=>x.in_date,x=>x.source_membership_id)),
   member_state_revs:input.memberStateRevs.map(x=>({issuer_id:x.issuer_id,state_rev:x.state_rev})).sort(by(x=>x.issuer_id)),
   facts:facts.sort(by(x=>x.issuer_id,x=>x.concept,x=>x.period_start??'',x=>x.period_end,x=>x.unit,x=>x.fact_id)),

@@ -10,6 +10,8 @@
 import {InputIndex,finalizeCell,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
 import {canonicalJson} from './canonical-json';
+import {MANIFEST_SCHEMA} from './manifest';
+import {cellSpecs} from './method';
 import type {CellSpec} from './method';
 import type {AggregateManifest,ManifestCell} from './types';
 
@@ -17,15 +19,21 @@ export interface ReplayResult{cells:ManifestCell[];reproduced:boolean;mismatches
 const cellId=(c:Pick<ManifestCell,'metric'|'duration'|'period_start'>)=>`${c.metric}:${c.duration}:${c.period_start}`;
 
 export function replayFromManifest(m:AggregateManifest):ReplayResult{
- if(m.schema!=='industry-manifest/2'||m.kind!=='aggregate')throw new Error('unsupported_manifest');
+ if(m.schema!==MANIFEST_SCHEMA||m.kind!=='aggregate')throw new Error('unsupported_manifest');
  const nMembers=new Set(m.members.map(x=>x.issuer_id)).size;
  const nUnresolved=new Set(m.unresolved.map(u=>u.ts_code)).size;
  const facts:PoolFact[]=m.facts.map(f=>({issuer_id:f.issuer_id,concept:f.concept,period_start:f.period_start,period_end:f.period_end,duration:f.duration,unit:f.unit,value:f.value_text}));
  const derived:PoolDerived[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value}));
  const idx=new InputIndex(facts,derived);
  const cells:ManifestCell[]=[];const mismatches:string[]=[];
+ // the grid and the units are method facts, not manifest claims: the stored cells must be exactly cellSpecs(period_end)
+ const expected=new Map(cellSpecs(m.period_end).map(s=>[cellId(s),s]));
+ const storedIds=new Set(m.cells.map(cellId));
+ for(const id of expected.keys())if(!storedIds.has(id))mismatches.push(`missing_cell:${id}`);
  for(const stored of m.cells){
-  const spec:CellSpec={metric:stored.metric,duration:stored.duration,period_start:stored.period_start,period_end:m.period_end,unit:stored.unit as CellSpec['unit']};
+  const known=expected.get(cellId(stored));
+  if(!known)mismatches.push(`unexpected_cell:${cellId(stored)}`);
+  const spec:CellSpec=known??{metric:stored.metric,duration:stored.duration,period_start:stored.period_start,period_end:m.period_end,unit:stored.unit as CellSpec['unit']};
   const roles=m.roles.filter(r=>r.metric===stored.metric&&r.duration===stored.duration);
   const financial=stored.metric==='gross_margin'&&roles.length>0&&roles.every(r=>r.role==='excluded'&&r.reason==='financial_excluded');
   const included:string[][]=[];let broken=false;
@@ -41,7 +49,7 @@ export function replayFromManifest(m:AggregateManifest):ReplayResult{
    ?{metric:stored.metric,duration:stored.duration,period_start:stored.period_start,status:'missing',missing_reason:'manifest_mismatch',n_members:nMembers,n_with_data:0,n_unresolved:nUnresolved,unit:stored.unit}
    :finalizeCell(spec,nMembers,nUnresolved,financial,included);
   cells.push(cell);
-  if(canonicalJson(cell)!==canonicalJson(stored))mismatches.push(cellId(stored));
+  if(canonicalJson(cell)!==canonicalJson(stored)&&!mismatches.includes(`unexpected_cell:${cellId(stored)}`))mismatches.push(cellId(stored));
  }
  return {cells,reproduced:mismatches.length===0,mismatches};
 }

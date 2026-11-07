@@ -74,6 +74,15 @@ describe('replayFromManifest',()=>{
   const t5=structuredClone(manifest);t5.unresolved=[];
   expect(replayFromManifest(t5).mismatches).toHaveLength(11);   // n_unresolved is part of every cell
  });
+ it('asserts the method units and the cell grid: a wrong stored unit or a missing/extra cell is a mismatch',()=>{
+  const {manifest}=build();
+  const t1=structuredClone(manifest);t1.cells.find(c=>c.metric==='revenue_sum'&&c.duration==='12M')!.unit='USD';
+  expect(replayFromManifest(t1)).toMatchObject({reproduced:false,mismatches:['revenue_sum:12M:2024-01-01']});
+  const t2=structuredClone(manifest);t2.cells=t2.cells.filter(c=>c.metric!=='roe');
+  expect(replayFromManifest(t2).mismatches).toEqual(['missing_cell:roe:TTM:2024-01-01']);
+  const t3=structuredClone(manifest);t3.cells.push({...t3.cells[0],metric:'revenue_sum',duration:'6M' as never,period_start:'2024-01-01'});
+  const r3=replayFromManifest(t3);expect(r3.reproduced).toBe(false);expect(r3.mismatches).toEqual(['unexpected_cell:revenue_sum:6M:2024-01-01']);
+ });
  it('treats all-financial_excluded gross margin roles as the financial flag',()=>{
   const {input}=build();
   const fin=computeAggregateCell({code:'801780.SI',period_end:'2024-12-31',financial:true,members:[A,B],nUnresolved:0,issuers:new Map([[A,env(A,rowsOf(A,1))],[B,env(B,rowsOf(B,3))]])});

@@ -4,7 +4,7 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {MAX_PAGE} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
-import {reconcileScope} from '../facts/scope';
+import {keysetAll,reconcileScope} from '../facts/scope';
 import type {FactsDb,Market} from '../facts/types';
 import {closedWindowTicker,industryCnUniverse,industryUniverseEnabled,mergeDesired} from './facts-scope';
 
@@ -118,6 +118,16 @@ describe('keyset reads and historical windows',()=>{
   const skipped:Record<string,number>={};
   const rows=await industryCnUniverse(t,TODAY,skipped);
   expect(rows.some(r=>r.issuer_id===D)).toBe(false);expect(skipped.industry_ticker_reused).toBe(1);
+ });
+});
+
+describe('keysetAll',()=>{
+ it('reads to exhaustion when the server caps pages at 300 (below MAX_PAGE), including tied boundary values',async()=>{
+  const raw=memoryTableClient({t:['a','b']});
+  for(let i=0;i<700;i++)await raw.insert('t',{a:`k${String(Math.floor(i/2)).padStart(4,'0')}`,b:String(i)});   // pairs share the order value
+  const capped300={...raw,select:async(table:string,match:Record<string,unknown>,opts:Parameters<TableClient['select']>[2]={})=>raw.select(table,match,{...opts,limit:Math.min(opts?.limit??MAX_PAGE,300)})} as TableClient;
+  const rows=await keysetAll(capped300,'t',{},{},'a',['a','b']);
+  expect(rows).toHaveLength(700);expect(new Set(rows.map(r=>r.b)).size).toBe(700);
  });
 });
 

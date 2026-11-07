@@ -57,6 +57,24 @@ describe('buildAggregateManifest',()=>{
  });
 });
 
+describe('buildAggregateManifest total orders and inputs',()=>{
+ it('members tie-break on (issuer_id, valid_from, source_membership_id, ticker) regardless of input order',()=>{
+  const base=input();const mk=(sm:string|null,t:string|null)=>({...base.members[0],issuer_id:I1,valid_from:'2021-12-13',source_membership_id:sm,ticker:t});
+  const rows=[mk('s9','B'),mk('s1','Z'),mk('s1','A'),mk(null,'Q')];
+  const a=buildAggregateManifest({...base,members:rows}).members.map(x=>`${x.source_membership_id}:${x.ticker}`);
+  const b=buildAggregateManifest({...base,members:[...rows].reverse()}).members.map(x=>`${x.source_membership_id}:${x.ticker}`);
+  expect(a).toEqual(['null:Q','s1:A','s1:Z','s9:B']);expect(b).toEqual(a);
+ });
+ it('rejects a duplicate issuer_id in member_state_revs',()=>{
+  expect(()=>buildAggregateManifest({...input(),memberStateRevs:[{issuer_id:I1,state_rev:1},{issuer_id:I1,state_rev:2}]})).toThrow(`duplicate_member_state_rev:${I1}`);
+ });
+ it("maps a filing from source 'edgar' to citation 'edgar'",()=>{
+  const base=input();
+  const m=buildAggregateManifest({...base,filings:new Map([['g0',filing('g0',I1,{source:'edgar'})],['g1',filing('g1',I1)]])});
+  expect(m.facts.find(f=>f.fact_id==='f-9m')!.citation).toBe('edgar');
+ });
+});
+
 describe('encode / decode / stores / gc',()=>{
  it('encodes canonical JSON, hashes the uncompressed bytes, and decodes only matching canonical content',()=>{
   const m=buildAggregateManifest(input());
@@ -81,6 +99,8 @@ describe('encode / decode / stores / gc',()=>{
   await expect(store.put('aggregate',JSON.stringify(JSON.parse(e.canonical),null,2))).rejects.toThrow('manifest_not_canonical');
   await expect(store.get('f'.repeat(64))).rejects.toThrow('manifest_not_found');
   await expect(store.get('../x')).rejects.toThrow('invalid_manifest_hash');
+  store.objects.delete(index.get(e.hash)!.path);   // index row present, object gone
+  await expect(store.get(e.hash)).rejects.toThrow('manifest_not_found');
  });
  it('supabase store: registers FIRST, then uploads gzip at the incarnation path with upsert:false; 409 = existed; other errors fail',async()=>{
   const {db,calls,index}=fakeDb();

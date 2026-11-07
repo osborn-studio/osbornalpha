@@ -47,14 +47,29 @@ describe('planMarkRows',()=>{
   // the real rows pass every rule (K2: total_mv = close × total_share exactly)
   expect(planMarkRows(await loadFixture(),new Set([...UNIVERSE,'601398.SH'])).quarantined).toEqual([]);
  });
- it('free_share missing or non-positive is stored as null; upstream from the suffix only; date mismatches and duplicate rows are rejected',async()=>{
+ it('free_share missing or non-positive is stored as null; upstream from the suffix only; a date mismatch is rejected and an identical duplicate row collapses',async()=>{
   const nf=planMarkRows(await loadFixture(r=>r.ts_code==='600519.SH'?{...r,free_share:null}:r.ts_code==='000858.SZ'?{...r,free_share:'0'}:r),new Set(UNIVERSE));
   expect(nf.rows.filter(x=>x.ticker==='600519.SH'||x.ticker==='000858.SZ').map(x=>x.free_share)).toEqual([null,null]);
   expect([upstreamOf('600001.sh'),upstreamOf('000002.SZ'),upstreamOf('830003.BJ'),upstreamOf('00700.HK')]).toEqual(['sse','szse','bse',null]);
   const f=await loadFixture();
-  const p=planMarkRows({...f,rows:[{...f.rows[0],trade_date:'20261029'},f.rows[1],f.rows[1]]},new Set(UNIVERSE));
-  expect(p.rejected).toEqual([{ticker:'000001.SZ',reason:'date_mismatch'},{ticker:'000858.SZ',reason:'duplicate_row'}]);
+  const p=planMarkRows({...f,rows:[{...f.rows[0],trade_date:'20261029'},f.rows[1],{...f.rows[1],row:99}]},new Set(UNIVERSE));
+  expect(p.rejected).toEqual([{ticker:'000001.SZ',reason:'date_mismatch'}]);expect(p.conflicts).toEqual([]);
   expect(p.rows).toHaveLength(1);
+ });
+});
+
+describe('planMarkRows duplicates',()=>{
+ it('conflicting rows for one ticker/date publish nothing and are parked with both locators, in either page order',async()=>{
+  const f=await loadFixture();
+  const a=f.rows.find(r=>r.ts_code==='600519.SH')!;
+  const b={...a,close:'1400',total_mv:decMul('1400',a.total_share!),page:2,row:0,page_sha256:'e'.repeat(64)};
+  for(const rows of [[a,b],[b,a]]){
+   const p=planMarkRows({...f,rows},new Set(UNIVERSE));
+   expect(p.rows).toEqual([]);
+   expect(p.conflicts).toHaveLength(1);
+   expect(p.conflicts[0]).toMatchObject({ticker:'600519.SH',reason:'mark_conflict'});
+   expect((p.conflicts[0].detail.locators as {page:number}[]).map(l=>l.page)).toEqual([a.page,2]);   // sorted by page,row: same both ways
+  }
  });
 });
 
@@ -70,7 +85,7 @@ describe('runMarks',()=>{
   const r1=await runMarks(deps(()=>loadFixture(RULE_CASES)),{tradeDates:[DATE]});
   expect(r1).toMatchObject({status:'done',batchStatus:'partial'});   // the invalid row is a rejection
   expect(r1.dates[0]).toMatchObject({fetched:10,attempts:1,result:{inserted:8,duplicates:0,superseded:0}});
-  expect(r1.counts).toMatchObject({fetched:10,inserted:8,quarantined:2,failed:1});
+  expect(r1.counts).toMatchObject({fetched:9,inserted:8,quarantined:2,failed:1});
   const q=rowsOf(tables,'dq_quarantine');
   expect(q.filter(x=>x.reason_code==='mcap_mismatch').map(x=>x.natural_key)).toEqual([`600036.SH:${DATE}`]);
   expect(q.filter(x=>x.reason_code==='close_range').map(x=>x.natural_key)).toEqual([`000001.SZ:${DATE}`]);
@@ -143,5 +158,46 @@ describe('runMarks',()=>{
   expect(q.dates).toHaveLength(1);expect(q.dates[0].error).toBe('quota_exhausted');expect(q.batchStatus).toBe('failed');
   expect(await runMarks(deps(()=>loadFixture(),{codeVersion:null}),{tradeDates:[DATE]})).toMatchObject({status:'rejected',code:'code_version_missing',batchId:null});
   await expect(runMarks(deps(()=>loadFixture()),{tradeDates:['2026-10-3']})).rejects.toThrow('invalid_date');
+ });
+ it('a conflicting duplicate is quarantined mark_conflict and no observation is written',async()=>{
+  const mk=async()=>{const f=await loadFixture();const a=f.rows.find(r=>r.ts_code==='600519.SH')!;return {...f,rows:[...f.rows,{...a,close:'1400',total_mv:decMul('1400',a.total_share!),page:2,row:0}]};};
+  const r=await runMarks(deps(mk),{tradeDates:[DATE]});
+  expect(rowsOf(tables,'dq_quarantine').filter(x=>x.reason_code==='mark_conflict').map(x=>x.natural_key)).toEqual([`600519.SH:${DATE}`]);
+  expect(await db.currentMarksOn(DATE,['600519.SH'])).toEqual([]);
+  expect(r.dates[0].result).toMatchObject({inserted:8});
+ });
+ it('rule failures of a committed chunk are parked even when a later chunk fails',async()=>{
+  const big=async()=>{const f=await loadFixture(RULE_CASES);
+   const extra:DailyBasicRow[]=[];
+   for(let i=0;i<600;i++){const t=`${String(300000+i)}.SZ`;extra.push({ts_code:t,trade_date:'20261030',close:'10',total_share:'100',free_share:'50',total_mv:'1000',page:3,row:i,page_sha256:'d'.repeat(64)});}
+   return {...f,rows:[...f.rows,...extra]};};
+  for(let i=0;i<600;i++)await tables.insert('stocks_universe',{ticker:`${String(300000+i)}.SZ`,name:'x',market:'A'});
+  let n=0;
+  const flaky={...db,applyObservations:(async(k:'marks',id:string,rows:never[])=>{if(++n>=2)throw new Error('network reset');return db.applyObservations(k,id,rows);}) as IndustryDb['applyObservations']} as IndustryDb;
+  const r=await runMarks(deps(big,{db:flaky}),{tradeDates:[DATE],maxApplyAttempts:1});
+  expect(r.dates[0].error).toBe('apply_failed');
+  const q=rowsOf(tables,'dq_quarantine').filter(x=>x.reason_code==='mcap_mismatch'||x.reason_code==='close_range');
+  expect(q.map(x=>x.natural_key)).toEqual([`000001.SZ:${DATE}`]);   // chunk 1 (committed) holds 000001.SZ; 600036.SH sorts into the failed chunk 2, whose rows were not applied
+ });
+ it('skip-only days are a success; a day with only rejected rows is not a fresh attempt; IndustryDbError is not retried; a failing retry fails only its date',async()=>{
+  const skipOnly=async()=>{const f=await loadFixture();return {...f,rows:f.rows.filter(r=>r.ts_code==='601398.SH')};};
+  const s=await runMarks(deps(skipOnly),{tradeDates:[DATE]});
+  expect(s.batchStatus).toBe('success');expect(s.counts.fetched).toBe(0);
+  const invalid=async()=>{const f=await loadFixture(r=>({...r,close:null}));return f;};
+  const bad=await runMarks(deps(invalid),{tradeDates:[DATE]});
+  expect(bad.batchStatus).toBe('failed');
+  expect(rowsOf(tables,'dq_freshness').find(x=>x.dataset==='industry.marks')).toMatchObject({consecutive_errors:1});
+  let calls=0;
+  const typed={...db,applyObservations:(async()=>{calls++;throw new IndustryDbError('lease_lost');}) as IndustryDb['applyObservations']} as IndustryDb;
+  const t=await runMarks(deps(()=>loadFixture(),{db:typed}),{tradeDates:[DATE]});
+  expect(calls).toBe(1);expect(t.dates[0].error).toBe('lease_lost');
+  let applies=0;
+  const retryFail={...db,
+   applyObservations:(async(k:'marks',id:string,rows:never[])=>{if(++applies===1)throw new Error('reset');return db.applyObservations(k,id,rows);}) as IndustryDb['applyObservations'],
+   retryFetchEvent:(async()=>{throw new Error('db down');}) as IndustryDb['retryFetchEvent'],
+  } as IndustryDb;
+  const perDate=async(d:string)=>({...(await loadFixture(r=>({...r,trade_date:d.replace(/-/g,'')}))),trade_date:d});
+  const r=await runMarks(deps(()=>loadFixture(),{db:retryFail,fetchDailyBasic:perDate}),{tradeDates:[DATE,'2026-10-31']});
+  expect(r.dates).toHaveLength(2);expect(r.dates[0].error).toBe('retry_failed');expect(r.dates[1].result).toMatchObject({inserted:9});
  });
 });

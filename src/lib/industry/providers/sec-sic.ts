@@ -51,7 +51,8 @@ export async function fetchSubmissionsSic(cik:string,opts:{fetch?:typeof fetch;u
  catch{return {kind:'unavailable',url,status:null};}
  if(res.status===404)return {kind:'not_found',url,status:404};
  if(!res.ok)return {kind:'unavailable',url,status:res.status};
- const bytes=new Uint8Array(await res.arrayBuffer());
+ let bytes:Uint8Array;
+ try{bytes=new Uint8Array(await res.arrayBuffer());}catch{return {kind:'unavailable',url,status:null};}   // interrupted body = transport failure
  return {kind:'ok',url,fetchedAt:(opts.now??(()=>new Date()))().toISOString(),rawHash:sha256Hex(bytes),parsed:parseSubmissionsSic(bytes)};
 }
 
@@ -84,7 +85,8 @@ export async function fetchSicCodeTable(opts:{fetch?:typeof fetch;userAgent?:str
  try{res=await (opts.fetch??fetch)(url,{headers:{'User-Agent':opts.userAgent??secUserAgent(),Accept:'text/html'},signal:AbortSignal.timeout(30_000)});}
  catch{return {kind:'unavailable',url,status:null};}
  if(!res.ok)return {kind:'unavailable',url,status:res.status};
- const bytes=new Uint8Array(await res.arrayBuffer());
+ let bytes:Uint8Array;
+ try{bytes=new Uint8Array(await res.arrayBuffer());}catch{return {kind:'unavailable',url,status:null};}
  const {rows,rejected}=parseSicCodeTable(new TextDecoder('utf-8').decode(bytes));
  return {kind:'ok',url,fetchedAt:(opts.now??(()=>new Date()))().toISOString(),rawHash:sha256Hex(bytes),rows,rejected};
 }

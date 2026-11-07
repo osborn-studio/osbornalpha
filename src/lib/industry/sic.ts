@@ -30,7 +30,7 @@ import type {RunResult} from './classifications';
 import type {ClassificationRow,IndustryDeps} from './types';
 import {IndustryDbError} from './types';
 import type {SicCodeRow} from './providers/sec-sic';
-import {fetchSicCodeTable,fetchSubmissionsSic} from './providers/sec-sic';
+import {fetchSicCodeTable,fetchSubmissionsSic,normalizeCik10} from './providers/sec-sic';
 
 export const SIC_LEVEL=1;
 export const SIC_VERSION='sec-current';
@@ -123,10 +123,18 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
  const start=deps.now();
  // eligibility (in scope, lease free) is applied while paging, so ineligible due rows can never fill the window (#7)
  const due:Row[]=[];const seen=new Set<string>();
- for(let offset=0;known.size>0&&due.length<limit;offset+=DUE_PAGE){
-  const page=await deps.tables.select('industry_sync_scope',{job:'sic'},{lt:{next_due_at:iso(start.getTime()+1)},orderBy:'next_due_at',limit:DUE_PAGE,offset});
-  for(const r of page){const id=String(r.issuer_id);if(due.length<limit&&!seen.has(id)&&active.has(id)&&leaseFree(r,start)){seen.add(id);due.push(r);}}
-  if(page.length<DUE_PAGE)break;
+ // deterministic order (next_due_at, issuer_id: the TableClient orders by one column, so rows are sorted per
+ // complete read); the offset advances by the rows actually returned and the read stops only on an empty page
+ // (a server cap below DUE_PAGE must not end it early)
+ if(known.size>0){
+  const all:Row[]=[];
+  for(let offset=0;;){
+   const page=await deps.tables.select('industry_sync_scope',{job:'sic'},{lt:{next_due_at:iso(start.getTime()+1)},orderBy:'issuer_id',limit:DUE_PAGE,offset});
+   if(page.length===0)break;
+   all.push(...page);offset+=page.length;
+  }
+  all.sort((a,b)=>{const x=String(a.next_due_at),y=String(b.next_due_at);return x<y?-1:x>y?1:String(a.issuer_id)<String(b.issuer_id)?-1:1;});
+  for(const r of all){const id=String(r.issuer_id);if(due.length<limit&&!seen.has(id)&&active.has(id)&&leaseFree(r,start)){seen.add(id);due.push(r);}}
  }
  let processed=0;
  for(const s of due){
@@ -134,19 +142,27 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
   if(!await claimSicScopeRow(deps.tables,s,batchId,deps.now()))continue;   // another worker won the row
   if(processed>0)await wait(SEC_MIN_INTERVAL_MS);
   processed++;
-  const at=deps.now();const observed=at.toISOString().slice(0,10);
   let ok=false;let retryMs=NEXT_RUN_MS;
   try{
    const [issuer]=await deps.tables.select('issuers',{issuer_id:issuerId},{limit:1});
    const cik=issuer&&typeof issuer.cik==='string'?issuer.cik:null;
    if(!issuer||!cik){skips.push('no_cik');}
    else{
-    counts.fetched++;
     const sub=await fetchSubmissionsSic(cik,{fetch:deps.fetch,userAgent:opts.userAgent,now:deps.now});
     if(sub.kind==='not_found')skips.push('no_submissions');
-    else if(sub.kind==='unavailable'){errors.push({code:'sec_unavailable',key:issuerId,message:`status_${sub.status??'network'}`});retryMs=RETRY_UNAVAILABLE_MS;}
+    else if(sub.kind==='unavailable'){counts.fetched++;errors.push({code:'sec_unavailable',key:issuerId,message:`status_${sub.status??'network'}`});retryMs=RETRY_UNAVAILABLE_MS;}
     else{
      const p=sub.parsed;
+     // availability is the day the successful response arrived, not the request start (a request may cross UTC midnight)
+     const observed=sub.fetchedAt.slice(0,10);
+     let sameCik=false;
+     try{sameCik=normalizeCik10(p.cik)===normalizeCik10(cik);}catch{sameCik=false;}
+     if(!sameCik){
+      await quarantine(deps.tables,{dataset:SIC_DATASET,table:'issuer_industry_memberships',naturalKey:`sic:${issuerId}:cik_mismatch`,reasonCode:'cik_mismatch',detail:{requested_cik:cik,response_cik:p.cik},payload:{issuer_id:issuerId,raw_hash:sub.rawHash,url:sub.url},batchId});
+      counts.fetched++;counts.quarantined++;errors.push({code:'cik_mismatch',key:issuerId,message:`${cik}!=${p.cik}`});
+     }else{
+     // skip-only responses (empty SIC) have no outcome row: they are not counted as fetched (batch contract: fetched>0 needs an outcome)
+     if(p.sic)counts.fetched++;
      // issuers.provenance.sec_submissions (only when a value changed) — written by applySicMembership inside its
      // lease-fenced transaction, never directly (Codex plan audit round 2 R2-3)
      const prov=provOf(issuer);const prev=(prov.sec_submissions??{}) as Record<string,unknown>;
@@ -169,6 +185,7 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
        counts.quarantined++;errors.push({code:e.code,key:issuerId});
       }
      }
+     }   // sameCik
     }
    }
   }catch(e){
