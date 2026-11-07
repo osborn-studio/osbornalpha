@@ -72,7 +72,10 @@ describe('deriveIssuerEvents',()=>{
   const a=filingSummary({availableDate:'2024-02-01'}),c=filingSummary({availableDate:'2024-09-01'});
   const ra=factRow(a,{value:'1'}),rc=factRow(c,{value:'2'});
   const withC=derive([ra,rc],[a,c]);
-  expect(kinds(derive([ra,{...rc,status:'quarantined'}],[a,c]),'fact_revised')).toEqual([]);
+  const seq=sequenced([ra,rc],[a,c]),q=seq.map(r=>r.fact_id===rc.fact_id?{...r,status:'quarantined' as const}:r);
+  expect(kinds(deriveIssuerEvents({rows:q,filings:withCounts([a,c],seq),cutoff:CUT}),'fact_revised')).toEqual([]);
+  const extra=deriveIssuerEvents({rows:[...seq,{...factRow(c,{value:'9',concept:'net_income_parent'}),status:'quarantined'}],filings:withCounts([a,c],seq),cutoff:CUT});
+  expect(extra).toEqual(withC);
   expect(derive([ra,rc],[a,c])).toEqual(withC);
  });
  it('a filing without facts still publishes with factCount 0',()=>{
@@ -85,6 +88,10 @@ describe('deriveIssuerEvents',()=>{
   expect(kinds(ev,'filing_published').map(e=>e.filing_id)).toEqual([f1.filingId]);
   expect(kinds(ev,'fact_revised')).toEqual([]);
   expect(()=>deriveIssuerEvents({rows:[],filings:[],cutoff:'2026/11/06'})).toThrow(RangeError);
+  expect(()=>deriveIssuerEvents({rows:[],filings:[],cutoff:'2026-02-30'})).toThrow(RangeError);
+  expect(()=>deriveIssuerEvents({rows:[],filings:[],cutoff:'2026-13-01'})).toThrow(RangeError);
+  const g=filingSummary({availableDate:'2024-02-01'});
+  expect(()=>deriveIssuerEvents({rows:[factRow(g),factRow(g,{value:'2'})],filings:[g],cutoff:CUT})).toThrow(/disclosure_seq/);
  });
  it('INSTANT period key uses period_end as start; headline lists a multi-unit concept under ambiguousUnits',()=>{
   const f=filingSummary({availableDate:'2024-02-01'});
@@ -127,15 +134,15 @@ describe('deriveIssuerEvents',()=>{
    const nf=1+Math.floor(r()*6);
    const fs=Array.from({length:nf},()=>filingSummary({availableDate:`2024-0${1+Math.floor(r()*4)}-0${1+Math.floor(r()*3)}`}));
    const rows:FactRow[]=[];
-   for(const f of fs)for(const concept of ['revenue','net_income_parent'])for(const unit of ['USD','EUR']){
+   for(const f of fs)for(const concept of ['revenue','net_income_parent'])for(const unit of ['USD','EUR'])for(const per of [{},{period_start:'2022-01-01',period_end:'2022-12-31'},{period_start:null,period_end:'2023-12-31',duration:'INSTANT' as const}]){
     if(r()<0.4)continue;
-    rows.push(factRow(f,{concept,unit,value:['1','2','2.0','3'][Math.floor(r()*4)]}));
+    rows.push(factRow(f,{concept,unit,...per,value:['0','1','2','2.0','3'][Math.floor(r()*5)]}));
    }
    const seq=sequenced(rows,fs);
    const ev=deriveIssuerEvents({rows:shuffle(seq,r),filings:withCounts(fs,seq),cutoff:CUT});
    // oracle: per key, last row of each day in sequence order, count adjacent value changes
    const byKey=new Map<string,FactRow[]>();
-   for(const x of seq){const k=`${x.concept}|${x.unit}`;byKey.set(k,[...(byKey.get(k)??[]),x]);}
+   for(const x of seq){const k=`${x.concept}|${x.unit}|${x.period_start}|${x.period_end}`;byKey.set(k,[...(byKey.get(k)??[]),x]);}
    let expected=0;
    for(const g of byKey.values()){
     g.sort((p,q)=>p.disclosure_seq!-q.disclosure_seq!);
@@ -144,6 +151,18 @@ describe('deriveIssuerEvents',()=>{
    }
    expect(kinds(ev,'fact_revised').length,`run ${run}`).toBe(expected);
    expect(new Set(ev.map(e=>`${e.kind}|${e.natural_key}`)).size,`unique keys run ${run}`).toBe(ev.length);
+   for(const e of kinds(ev,'fact_revised')){
+    const p=e.payload as {from:{value:string;availableDate:string};to:{value:string;availableDate:string};relChange?:string};
+    expect(p.from.availableDate<p.to.availableDate,`order run ${run}`).toBe(true);
+    expect(decimalEquals(p.from.value,p.to.value)).toBe(false);
+    expect(e.natural_key.split(':').pop()).toBe(e.occurred_on);
+    expect(e.occurred_on).toBe(p.to.availableDate);
+    expect('relChange' in p,`relChange run ${run}`).toBe(!decimalEquals(p.from.value,'0'));
+   }
+   const fAvail=new Map(fs.map(f=>[f.filingId,f.availableDate]));
+   const pfs=kinds(ev,'period_first_seen');
+   for(const e of pfs)expect(e.occurred_on,`pfs run ${run}`).toBe(fAvail.get((e.payload as {filingId:string}).filingId));
+   expect(pfs.length,`pfs count run ${run}`).toBe(new Set(seq.map(x=>`${x.period_start??x.period_end}:${x.period_end}:${x.duration}`)).size);
   }
  });
 });

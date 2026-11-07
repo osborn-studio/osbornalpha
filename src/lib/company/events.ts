@@ -18,8 +18,8 @@ export interface DeriveEventsInput{rows:FactRow[];filings:FilingSummary[];cutoff
 
 const DAY=/^\d{4}-\d{2}-\d{2}$/;
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
-const cmpInstant=(a:string,b:string)=>{const x=Date.parse(a),y=Date.parse(b);return Number.isNaN(x)||Number.isNaN(y)?cmp(a,b):x<y?-1:x>y?1:0;};
-const seqOrder=(a:FactRow,b:FactRow)=>(a.disclosure_seq??Number.MAX_SAFE_INTEGER)-(b.disclosure_seq??Number.MAX_SAFE_INTEGER)||cmp(a.available_date,b.available_date)||cmpInstant(a.created_at,b.created_at)||cmp(a.fact_id,b.fact_id);
+const seqOf=(r:FactRow):number=>{if(r.disclosure_seq===undefined||r.disclosure_seq===null)throw new RangeError(`disclosure_seq missing on ok row ${r.fact_id}`);return r.disclosure_seq;};
+const seqOrder=(a:FactRow,b:FactRow)=>seqOf(a)-seqOf(b);
 const startOf=(r:FactRow)=>r.period_start??r.period_end;
 const naturalK=(r:FactRow)=>[r.concept,startOf(r),r.period_end,r.consolidation,r.unit].join(':');
 const periodKey=(r:FactRow)=>`${startOf(r)}:${r.period_end}:${r.duration}`;
@@ -28,7 +28,7 @@ const point=(r:FactRow)=>({factId:r.fact_id,value:r.value_text,filingId:r.filing
 
 export function deriveIssuerEvents(input:DeriveEventsInput):EventInput[]{
  const {cutoff}=input;
- if(!DAY.test(cutoff)||Number.isNaN(Date.parse(`${cutoff}T00:00:00Z`)))throw new RangeError(`cutoff must be YYYY-MM-DD, got ${cutoff}`);
+ if(!DAY.test(cutoff)||new Date(`${cutoff}T00:00:00Z`).toISOString().slice(0,10)!==cutoff)throw new RangeError(`cutoff must be YYYY-MM-DD, got ${cutoff}`);
  const filings=input.filings.filter(f=>f.mappingGen>0&&f.availableDate<=cutoff);
  const ids=new Set(filings.map(f=>f.filingId));
  const rows=input.rows.filter(r=>r.status==='ok'&&r.available_date<=cutoff&&ids.has(r.filing_id));

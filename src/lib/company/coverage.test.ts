@@ -9,7 +9,8 @@ describe('summarizeCoverage',()=>{
   const f1=filingSummary({availableDate:'2024-02-01',citation:'linked'}),f2=filingSummary({availableDate:'2025-03-01',citation:'pending'}),f3=filingSummary({availableDate:'2025-04-01',citation:'edgar'});
   const gen0=filingSummary({availableDate:'2025-05-01',mappingGen:0});
   const rows=sequenced([factRow(f1,{period_end:'2022-12-31',period_start:'2022-01-01'}),factRow(f2,{concept:'net_income_parent'}),factRow(f2,{value:'7'}),factRow(f3,{status:'quarantined',period_end:'2030-12-31'})],[f1,f2,f3]);
-  const c=summarizeCoverage({rows,filings:withCounts([f1,f2,f3,gen0],rows),scope:{last_success_at:'2026-11-05T10:00:00.000Z',last_status:'success'}});
+  expect(rows).toHaveLength(3);
+  const c=summarizeCoverage({rows:[...rows,{...factRow(f3,{period_end:'2030-12-31'}),status:'quarantined'},{...factRow(f1,{concept:'other_concept',period_end:'1999-12-31'}),status:'quarantined'}],filings:withCounts([f1,f2,f3,gen0],rows),scope:{last_success_at:'2026-11-05T10:00:00.000Z',last_status:'success'}});
   expect(c).toEqual({filings_count:3,facts_count:3,concepts_covered:2,earliest_period_end:'2022-12-31',latest_period_end:'2023-12-31',latest_available_date:'2025-04-01',
    citation_summary:{linked:1,pending:1,edgar:1},scope_last_success_at:'2026-11-05T10:00:00.000Z',scope_last_status:'success'});
  });
