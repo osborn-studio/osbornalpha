@@ -365,5 +365,51 @@
     "12M": "12M",
     "INSTANT": "时点",
     "TTM": "TTM"
+  },
+  "directory": {
+    "breadcrumb": "研究 / 公司覆盖",
+    "title": "公司覆盖",
+    "searchLabel": "名称 / 代码前缀",
+    "searchPlaceholder": "如 贵州、AAP、600519",
+    "market": "市场",
+    "marketAll": "全部",
+    "marketCN": "A 股",
+    "marketUS": "美股",
+    "sort": "排序",
+    "sort_latest_available_date": "最近文件日",
+    "sort_latest_period_end": "最近财期",
+    "sort_name": "名称",
+    "industryHint": "行业筛选在成分加载后出现 · 不显示评级、判断计数或任何按用户字段",
+    "col": {
+      "name": "名称",
+      "ticker": "代码",
+      "stream": "市场流",
+      "latestPeriod": "最近财期",
+      "latestFiling": "最近文件日",
+      "concepts": "概念覆盖",
+      "citations": "引用",
+      "lastSync": "最近同步"
+    },
+    "citations": "linked {linked} · pending {pending} · edgar {edgar}",
+    "conceptsOf": "{covered} / {total}",
+    "lastSync": "{at} · {status}",
+    "status_success": "success",
+    "status_failed": "failed",
+    "never": "—",
+    "footer": "{total} 条 · 每页 {pageSize}",
+    "syncNote": "最近同步写事实（时间与结果），不用状态色表达“好坏”。",
+    "prev": "上一页",
+    "next": "下一页",
+    "empty": "事实库尚无发布事实。",
+    "noMatch": "没有匹配的公司。",
+    "adminDq": "admin /admin/dq →",
+    "error": "目录加载失败（{code}）",
+    "retry": "重试",
+    "freshness": "{dataset} {status} · {at}",
+    "entry": {
+      "title": "公司覆盖",
+      "desc": "事实库覆盖的全部公司与数据状态（无评级）",
+      "open": "打开目录 →"
+    }
   }
 }

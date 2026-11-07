@@ -37,3 +37,9 @@
 - 实施偏差（按指令跟随已提交 DTO / 概览做法）：事件金额不再按披露单位原样分组，而是与概览一致经 `defaultScale` + `formatValue` 缩放，并附 `unitCaption`（缩放 · 币种，如“亿 · CNY”）；`valueView`/`eventSummary` 增加 `locale` 参数，值为 `{kind:'value',text,caption}`。headline/from/to 的 withheld 标记读取 `.value`，`relChange` 可为 withheld 对象。
 - 实施偏差：Step S 的纯逻辑抽到 `mark-scope.ts`（`marketRows`/`unreadIds`/`shouldApply`/`applyMarkResult`）并有测试；公司页与收件箱共用。收件箱在被选发行人被移除后自动回到“全部”。`TrackButton` 保留 Task 11 的失败关闭语义（401→登录提示，其他读失败→不可用）。
 - 未显示"预计披露日"（决策 G 默认）。未做本机目视核对（需登录的本机栈），留给 Task 19 e2e。
+
+## Task 18 覆盖目录
+
+- `GET /api/companies`（公共、anon、无会话、无按用户字段）；`/intel/companies`（需登录，决策 H 默认）；`/intel` 研究页签入口卡；`isTabActive` 段前缀高亮。
+- 偏差（指挥决定）：`q` 白名单字符集；`conceptsTotal` 由响应给出；空状态区分"无事实"与"无匹配"。
+- 实施偏差：新鲜度条的 status 允许 null，经 `freshnessKey` 映射为"未知"（复用 `company.header.freshness` 文案）；“最近同步”只写时间与结果，不用状态色。

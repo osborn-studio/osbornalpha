@@ -75,6 +75,7 @@ function DiscoverTab() {
 
 function ResearchTab() {
   const t = useTranslations('intel');
+  const tc = useTranslations('company.directory');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -119,6 +120,11 @@ function ResearchTab() {
 
   return (
     <div className="space-y-3">
+      <Link href="/intel/companies" className="card-base block hover:bg-bg-elevated" data-testid="intel-companies-card">
+        <div className="text-sm font-semibold">{tc('entry.title')}</div>
+        <div className="mt-0.5 text-xs text-text-dim">{tc('entry.desc')}</div>
+        <div className="mt-1 text-xs text-accent">{tc('entry.open')}</div>
+      </Link>
       <div className="card-base">
         <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input

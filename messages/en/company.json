@@ -365,5 +365,51 @@
     "12M": "12M",
     "INSTANT": "instant",
     "TTM": "TTM"
+  },
+  "directory": {
+    "breadcrumb": "Research / Company coverage",
+    "title": "Company coverage",
+    "searchLabel": "Name or ticker prefix",
+    "searchPlaceholder": "e.g. Kweichow, AAP, 600519",
+    "market": "Market",
+    "marketAll": "All",
+    "marketCN": "A-shares",
+    "marketUS": "US",
+    "sort": "Sort",
+    "sort_latest_available_date": "Latest filing",
+    "sort_latest_period_end": "Latest period",
+    "sort_name": "Name",
+    "industryHint": "Industry filter appears once constituents load · no ratings, judgment counts or per-user fields",
+    "col": {
+      "name": "Name",
+      "ticker": "Ticker",
+      "stream": "Stream",
+      "latestPeriod": "Latest period",
+      "latestFiling": "Latest filing",
+      "concepts": "Concepts",
+      "citations": "Citations",
+      "lastSync": "Last sync"
+    },
+    "citations": "linked {linked} · pending {pending} · edgar {edgar}",
+    "conceptsOf": "{covered} / {total}",
+    "lastSync": "{at} · {status}",
+    "status_success": "success",
+    "status_failed": "failed",
+    "never": "—",
+    "footer": "{total} rows · {pageSize} per page",
+    "syncNote": "Last sync states facts (time and result); no status colours for “good” or “bad”.",
+    "prev": "Previous",
+    "next": "Next",
+    "empty": "No published facts yet.",
+    "noMatch": "No matching companies.",
+    "adminDq": "admin /admin/dq →",
+    "error": "Directory failed to load ({code})",
+    "retry": "Retry",
+    "freshness": "{dataset} {status} · {at}",
+    "entry": {
+      "title": "Company coverage",
+      "desc": "Every company the facts store covers, with data status (no ratings)",
+      "open": "Open directory →"
+    }
   }
 }
