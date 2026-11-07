@@ -495,6 +495,14 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
     .sort((x,y)=>cmpTs(y.available_at,x.available_at)||cmp(y.document_id,x.document_id));
    return page(picked,limit,d=>[d.available_at,d.document_id]);
   },
+  async documentsByFiling(f,asOf){
+   const source=f.source==='tushare'?'cninfo':f.source==='hkex'?'hkexnews':f.source;
+   // The memory adapter has no filing_documents store; HK cannot be resolved without its link.
+   if(source==='hkexnews')return [];
+   const visible=[...documents.values()].filter(d=>d.issuer_id===f.issuerId&&d.source===source&&d.available_date<=asOf);
+   const top=new Map<string,number>();for(const d of visible)top.set(d.source_ref,Math.max(top.get(d.source_ref)??0,d.source_version));
+   return visible.filter(d=>d.filing_source_ref===f.sourceRef&&d.source_version===top.get(d.source_ref)&&d.permission==='public').slice(0,2).map(clone);
+  },
   async documentById(id){const d=documents.get(id);return d?clone(d):null;},
   async documentsByIds(ids){checkIds(ids);return [...new Set(ids)].sort(cmp).map(id=>documents.get(id)).filter((d):d is DocumentRow=>!!d).map(clone);},
   async assetsOf(documentId){return [...assets.values()].filter(a=>a.document_id===documentId).sort((x,y)=>cmp(x.role,y.role)||cmp(x.filename,y.filename)).slice(0,PAGE_LIMIT_MAX).map(clone);},

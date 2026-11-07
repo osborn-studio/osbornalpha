@@ -76,7 +76,7 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
           <div className="px-4 pb-4 text-sm text-[var(--text-dim)]">{t('transcriptsPending')}</div>
         </section>
       )}
-      {source && <SourceDrawerAdapter filingId={source.filingId} originalUrl={source.originalUrl} onClose={() => setSource(null)} />}
+      {source && <SourceDrawerAdapter filingId={source.filingId} originalUrl={source.originalUrl} asOf={asOf} onClose={() => setSource(null)} />}
     </div>
   );
 }

@@ -83,6 +83,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    const a=readDocumentsArgs(issuer,opts);
    return pageOf(await fn<Envelope>('public.read_documents($1,$2::date,$3,$4,$5::date,$6::date,$7::jsonb,$8,$9)',[a.p_issuer,a.p_as_of,a.p_source,a.p_doc_class,a.p_from,a.p_to,json(a.p_cursor),a.p_limit,a.p_all_versions]),documentFromRow,READ_DOC_KEYS);
   },
+  async documentsByFiling(f,asOf){const r=await fn<{rows:Record<string,unknown>[]}>('public.read_documents_by_filing($1,$2,$3,$4,$5::date)',[f.filingId,f.issuerId,f.source,f.sourceRef,asOf]);return r.rows.map(documentFromRow);},
   async documentById(id){const r=await one(`select * from public.disclosure_documents where document_id = $1`,[id]);return r?documentFromRow(r):null;},
   async documentsByIds(ids){
    if(checkIds(ids).length===0)return [];
