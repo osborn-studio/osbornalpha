@@ -361,7 +361,7 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 
 ### 9.2 首轮运行顺序（owner，合并后；cron 与脚本不要同时跑同一数据集）
 
-所有脚本默认 dry-run，`--apply` 才写库；需要 `node --env-file=.env.local --import tsx …`（`tsx` 不读 `.env.local`）。命令行以各脚本的 usage 为准：
+除第 10 步外，下列脚本默认 dry-run，`--apply` 才写库（第 10 步 `materialize.ts --pending-hooks` **没有 dry-run，运行即写**：更新物化指标与钩子状态）；需要 `node --env-file=.env.local --import tsx …`（`tsx` 不读 `.env.local`）。命令行以各脚本的 usage 为准：
 
 1. `scripts/entity-keys/load-sec-issuers.ts <company_tickers_exchange.json> [--as-of YYYY-MM-DD] [--apply --fetched-at <下载时刻 ISO>]`：换码检测、`stale_snapshot`/`incomplete_snapshot` 守卫。
 2. `scripts/entity-keys/fill-identifiers.ts --gleif <lei-isin.csv> --hkex <dir> [--stage A|B|C|D|all] [--gleif-downloaded-at <ISO>] [--issuer <uuid>]... [--apply]`：先 dry-run 看预估报告；OpenFIGI exchCode/securityType 实测核对已完成（`verification.md` Task 3b，无 key），`EXCH_MAP_VERIFIED=true`；之后 `--apply`，再 `scripts/entity-keys/coverage.ts [--segment e1|windows|all] [--out <file.md>]` 得 E1 数字。
@@ -369,10 +369,10 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 4. `scripts/entity-keys/link-ah.ts --gleif <lei-isin.csv> --hkex <dir> [--apply]`；产生的 pending 声明在 `/admin/dq` 声明面板审核（§9.6）。
 5. `scripts/facts/enrich-acceptance.ts [--issuer <ticker>]... [--full-history] [--apply]`，再 `--report` 得 E7（需生产库，见 9.9）。
 6. `scripts/dq/filer-categories.ts [--issuer <uuid>]... [--limit n] [--apply]`（每个范围内美股发行人最近 3 份 10-K 封面 → `issuer_filer_categories`；同时记 `sec.filer_category`）。
-7. `scripts/dq/calendar-sync.ts --market US [--issuer <uuid>]... [--limit n] --apply`，再 `--market CN --apply`（一次跑不完就再跑，同一遍会继续）。
+7. 先预览 `scripts/dq/calendar-sync.ts --market US [--issuer <uuid>]... [--limit n]`（`--issuer` 只用于预览，与 `--apply` 同用会以退出码 2 拒绝），再全市场写入 `scripts/dq/calendar-sync.ts --market US [--limit n] --apply`（处理遍冻结的成员），之后 `--market CN --apply`（一次跑不完就再跑，同一遍会继续）。
 8. `scripts/dq/select-us-sample.ts`（`--fixtures` 或 `--live --universe <path> --out <path>`）生成/核对样本清单（变更走 PR），然后 `scripts/dq/reconcile.ts --pair us.companyfacts_vs_ixbrl [--issuer <ticker>...] --apply`；周期回执 + `docs/audits/2026-11-05-data-foundation-3/ixbrl-run-<date>.md` 得 E4。
 9. `scripts/dq/reconcile.ts --pair facts.lineage_same_day --apply`（无合并时空转）。
-10. `scripts/facts/materialize.ts --pending-hooks`（扫描并补做未完成的物化钩子）。
+10. `scripts/facts/materialize.ts --pending-hooks`（扫描并补做未完成的物化钩子；**立即写库，无 dry-run**）。
 
 ### 9.3 cron 与顺序（`vercel.json`，UTC）
 
@@ -451,5 +451,5 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 ### 9.10 回滚
 
 - 代码：回退提交即可；cron 先从 `vercel.json` 删除对应项并部署，再回退代码。
-- 数据：计划三新表都可整体清空而不影响计划一/二的读路径（`dq_filing_expectations`、`issuer_filing_profiles`、`issuer_filer_categories`、`dq_calendar_*`、`dq_reconcile_*`）；`dq_reconciliations` 只追加，按 `pair` 删除计划三写入的行即可。**不要**删除 `reconcile-raw` 桶中的对象（证据，内容寻址）。
+- 数据：可清空的只有可从一手来源重算的派生表——`dq_filing_expectations`、`issuer_filing_profiles`、`issuer_filer_categories`、`dq_calendar_*`（重跑 filer-categories 与 calendar-sync 即恢复）。**不要**删除对账证据：`dq_reconciliations`、`dq_reconcile_cycles`/成员与游标等 `dq_reconcile_*` 状态、`reconcile-raw` 桶中的对象——原始字节无法单独重建已记录的比较、冻结成员与结论；且未结的 `reconcile_mismatch` 隔离项以 `detail.latest_result.reconciliation_id` 指向这些行，删除后 `inputsHashNow()` 抛 `no_latest_result`，事实将无法恢复。需要停用对账时：从 `vercel.json` 删 reconcile cron 并部署，保留表与函数；若必须处置某个对账对，先在 `/admin/dq` 逐项处理（恢复/拒绝）其未结隔离项，再另写迁移归档，不直接删除。
 - 迁移二的函数改包装（`read_facts`、`replace_financial_metrics`）签名不变，回退代码不需要回退迁移；确需回退迁移时新写迁移恢复计划二的函数体，不改已锁文件。
