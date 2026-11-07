@@ -106,7 +106,8 @@ export type AutoDecision={kind:'auto';approval_id:string};
 export interface CandidatesFilter{source?:ListedSource;issuer_id?:string;document_id?:string}
 
 export type DocumentsDbErrorCode='lease_lost'|'not_eligible'|'revision_exists'|'evidence_incomplete'|'approval_revoked'|'not_publishable'|'invalid_citation'|'decided'|'already_staged'|'binding_conflict'|'invalid_expected_rev'|'stale_plan'|'not_hk_item'|'run_pending'|'invalid_chosen'|'item_not_open'|'too_many_approvals'|'not_found'|'invalid_input'|'cursor_regression'|'unknown';
-export class DocumentsDbError extends Error{constructor(public code:DocumentsDbErrorCode,message?:string){super(message??code);this.name='DocumentsDbError';}}
+/** sqlstate: the PostgreSQL SQLSTATE the error came from, when known (Task 7 recheck N1: callers tell item-local validation from integrity/infrastructure failures by provenance, not by the coarse code). */
+export class DocumentsDbError extends Error{constructor(public code:DocumentsDbErrorCode,message?:string,public sqlstate?:string){super(message??code);this.name='DocumentsDbError';}}
 
 export interface DocumentsDb{
  // writes (rpc, one per §4.8 function of migration one)

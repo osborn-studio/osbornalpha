@@ -1,6 +1,7 @@
 // src/lib/documents/sync.test.ts
 import {createHash} from 'node:crypto';
 import {describe,expect,it} from 'vitest';
+import {resolveQuarantine} from '../dq/quarantine';
 import {memoryTableClient} from '../db/memory-table-client';
 import {docInsert} from './db-contract';
 import {memoryDocumentsDb} from './memory-documents-db';
@@ -496,9 +497,9 @@ describe('runDocumentsSync — Task 7 review fixes',()=>{
  });
  it('another per-item database refusal goes through attempts: the third quarantines and the issuer moves on',async()=>{
   const s=await setup();backfillLists(s);
-  s.deps.db={...s.db,insertDocumentVersion:async(i,src,b,d,a)=>{if(d.source_ref==='2025082500100_c')throw new DocumentsDbError('not_found');return s.db.insertDocumentVersion(i,src,b,d,a);}};
+  s.deps.db={...s.db,insertDocumentVersion:async(i,src,b,d,a)=>{if(d.source_ref==='2025082500100_c')throw new DocumentsDbError('invalid_input','invalid_input: assets');return s.db.insertDocumentVersion(i,src,b,d,a);}};
   const r1=await s.run();
-  expect(r1.issuers[0]).toMatchObject({outcome:'failed',code:'not_found'});
+  expect(r1.issuers[0]).toMatchObject({outcome:'failed',code:'invalid_input'});
   await s.run();
   const r3=await s.run();
   expect(r3.counts).toMatchObject({quarantined:1,inserted:2});
@@ -555,21 +556,78 @@ describe('runDocumentsSync — Task 7 review fixes',()=>{
   expect(applied.counts).toMatchObject({duplicates:1,versioned:0,inserted:0});
   expect(s.db.documents()).toHaveLength(3);expect(s.store.objects().size).toBe(0);
  });
- it('a coverage-gap restart keeps the settled refs, and an item with an open quarantine is not fetched again',async()=>{
+ const edgarGap=async()=>{
   const s=await setup({source:'edgar',gap:'edgar_files_unverified'});
   const l:Listed={source_ref:'0001321655-26-000041/pltr-20260630.htm',source_url:'https://www.sec.gov/Archives/edgar/data/1321655/000132165526000041/pltr-20260630.htm',title:'10-Q',form_type:'10-Q',published_at:'2026-08-03T22:06:38.000Z',precision:'instant'};
   s.a.segs.backfill=[{id:'recent',from:'2025-01-01',to:'2026-11-06'}];s.a.lists={recent:[l]};
   s.f.set(l.source_url,s.f.ok(new TextEncoder().encode('plain'),'text/plain'));
+  return {s,l};
+ };
+ const RESOLVER='00000000-0000-4000-8000-0000000000cc';
+ it('N2: an open quarantine is skipped on every replay without being settled; once resolved the ref is retried (open → sync → resolve → sync)',async()=>{
+  const {s,l}=await edgarGap();
+  await s.run();
+  expect(s.scopeRow().backfill_cursor).toEqual({});                             // a quarantined ref is not a terminal settlement
+  const calls=s.f.calls.length;
+  const again=await s.run();
+  expect(s.f.calls.length).toBe(calls);
+  expect(again.errors).toContainEqual(expect.objectContaining({code:'skipped_summary',key:`${H}:already_quarantined`}));
+  expect(s.scopeRow().backfill_cursor).toEqual({});
+  expect(await resolveQuarantine(s.tables,s.quarantined()[0].id as string,{status:'resolved_accept',resolvedBy:RESOLVER})).toBe('resolved');
+  s.f.set(l.source_url,s.f.ok(new TextEncoder().encode('<html>10-Q</html>'),'text/html'));
+  s.f.set(l.source_url.replace('pltr-20260630.htm','index.json'),'not_found');
+  const r=await s.run();
+  expect(s.f.calls.length).toBeGreaterThan(calls);                              // fetched again
+  expect(r.counts.fetched).toBeGreaterThan(0);
+ });
+ it('N2: resolving right after the quarantine was created (the skip path never ran) also lets the next sync retry it',async()=>{
+  const {s,l}=await edgarGap();
+  await s.run();
+  await resolveQuarantine(s.tables,s.quarantined()[0].id as string,{status:'resolved_reject',resolvedBy:RESOLVER});
+  const calls=s.f.calls.length;
+  await s.run();
+  expect(s.f.calls.length).toBeGreaterThan(calls);
+  expect(s.f.calls.at(-1)).toBe(l.source_url);
+ });
+ it('N2: a 404 stays settled across a coverage-gap restart (only open quarantines are rechecked)',async()=>{
+  const {s,l}=await edgarGap();
+  s.f.set(l.source_url,'not_found');
   await s.run();
   expect(s.scopeRow().backfill_cursor).toMatchObject({segment:null,settled:[l.source_ref]});
   const calls=s.f.calls.length;
   await s.run();
   expect(s.f.calls.length).toBe(calls);
-  await s.db.claimSyncLease(H,'edgar',OPS,600);
-  await s.db.advanceCursor(H,'edgar',OPS,'backfill',null,false,true);          // an operator reset forgets the cursor; the open quarantine still holds
-  await s.db.releaseSyncLease(H,'edgar',OPS,'success',NOW_ISO);
+ });
+ it('N1: integrity / cursor / unlisted database errors are infrastructure — the run rejects, no attempt, no quarantine, no advance',async()=>{
+  for(const err of [new DocumentsDbError('invalid_input','insert or update on table "disclosure_documents" violates foreign key constraint',"23503"),new DocumentsDbError('cursor_regression','cursor_regression: seq'),new DocumentsDbError('invalid_input','invalid_input: unlisted check','23514')]){
+   const s=await setup();backfillLists(s);
+   s.deps.db={...s.db,insertDocumentVersion:async()=>{throw err;}};
+   await expect(s.run()).rejects.toBe(err);
+   expect(s.quarantined()).toEqual([]);
+   expect(s.scopeRow().backfill_cursor).toEqual({});                             // no attempt consumed, nothing settled or advanced
+   expect(s.tables.rows('ingest_batches')[0].status).not.toBe('running');
+  }
+ });
+ it('N3: a non-lease release failure rejects the run: not a success, freshness not refreshed',async()=>{
+  const s=await setup();backfillLists(s);
+  s.deps.db={...s.db,releaseSyncLease:async()=>{throw new DocumentsDbError('unknown','database unavailable');}};
+  await expect(s.run()).rejects.toThrow('database unavailable');
+  expect(s.tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
+ });
+ it('N4: ownership is checked before the hash — a ref held by another issuer is a conflict even when the bytes are identical (apply and dry run)',async()=>{
+  const s=await setup();
+  const ref='2025082500100_c';const it1=item(ref,'2025-08-25');
+  s.a.lists={y2025:[it1],y2026:[]};s.f.set(it1.source_url,s.f.ok(pdfBytes(ref)));
+  await s.db.reconcileScope('hkexnews',[{issuer_id:M,reasons:['cohort'],priority:10,fetch_key:'09999'}]);
+  await s.db.claimSyncLease(M,'hkexnews',OPS,600);
+  await s.db.insertDocumentVersion(M,'hkexnews',OPS,docInsert({source_ref:ref,content_sha256:sha(pdfBytes(ref))}),[]);
+  await s.db.releaseSyncLease(M,'hkexnews',OPS,'success',NOW_ISO);
+  const dry=await s.run({dryRun:true});
+  expect(dry.counts).toMatchObject({duplicates:0,quarantined:1,inserted:0});
   const r=await s.run();
-  expect(s.f.calls.length).toBe(calls);
-  expect(r.errors).toContainEqual(expect.objectContaining({code:'skipped_summary',key:`${H}:already_quarantined`}));
+  expect(r.counts).toMatchObject({duplicates:0,quarantined:1,inserted:0});
+  expect(s.quarantined()).toEqual([expect.objectContaining({reason_code:'document_ref_conflict',natural_key:`hkexnews:${ref}`})]);
+  expect(s.quarantined()[0].payload).toMatchObject({holder_issuer_id:M});
+  expect(s.db.documents().filter(d=>d.issuer_id===H)).toEqual([]);
  });
 });

@@ -70,7 +70,7 @@ const sha256Hex=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const isLeaseLost=(e:unknown)=>e instanceof DocumentsDbError&&e.code==='lease_lost';
 
 interface RunCtx{deps:SyncDeps;source:ListedSource;batchId:string|null;sinceYear:number;refetch:boolean;maxPerIssuer:number;budget:Budget;rejectedSeen:number}
-type ItemResult={advance:true;stored:boolean}|{advance:false;code:string;message:string;deadline?:boolean};
+type ItemResult={advance:true;stored:boolean;settle?:boolean}|{advance:false;code:string;message:string;deadline?:boolean};
 const isRecord=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 class RetryItem extends Error{constructor(readonly code:string,message:string,readonly deadline=false){super(message);}}
 
@@ -92,7 +92,14 @@ async function allVersions(db:DocumentsDb,source:ListedSource,ref:string):Promis
  throw new Error('versions_unbounded');
 }
 /** Quarantine reasons that keep an item out of later passes while the item is open (a coverage-gap restart would otherwise retry them every day). */
-const SKIP_WHILE_OPEN:readonly string[]=['document_fetch_exhausted','document_too_large','unexpected_mime'];
+const SKIP_WHILE_OPEN:readonly string[]=['document_fetch_exhausted','document_too_large','unexpected_mime','document_ref_conflict'];
+/**
+ * Item-local database refusals (Task 7 recheck N1): invalid_input raised by our own validation of the item's payload
+ * (SQL 'invalid_input: <what>' or the TS timestamp check), recognised by message. Everything else — foreign-key and other
+ * constraint violations (SQLSTATE 23503 …), cursor_regression, batch and query failures — is infrastructure.
+ */
+const ITEM_INVALID=/^(?:invalid_input:\s*)?(?:source_ref belongs to another issuer|source_ref\/content_sha256|content_sha256|doc|assets?|market|doc_class|classifier_gen|title|language|bytes|mime|storage_path|acquisition|published_at_precision|dates|published_at|available_at|fiscal_period|permission|dd_[a-z_]+|invalid_timestamp:\S*)(?![A-Za-z0-9])/;
+const isItemLocal=(e:unknown):e is DocumentsDbError=>e instanceof DocumentsDbError&&e.code==='invalid_input'&&e.sqlstate!=='23503'&&ITEM_INVALID.test(e.message);
 const MAX_REFS_IN_SUMMARY=50;
 const MAX_KEPT_SETTLED=1000;
 
@@ -127,7 +134,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
   try{await db.releaseSyncLease(issuer,source,batchId!,outcome,new Date(deps.now().getTime()+delayMs).toISOString());return true;}
   catch(e){
    if(isLeaseLost(e))return false;
-   out.errors.push({code:'cleanup_failed',key:issuer,message:`release: ${errMsg(e)}`});return true;
+   throw e;   // any other release failure is infrastructure (Task 7 recheck N3): reject, never report success
   }
  };
  /** Releases and finishes. Losing the lease at release time makes the issuer failed (T7-03): never counted as succeeded. */
@@ -149,7 +156,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
   segments=deps.adapter.segments(scope,mode,ctx.sinceYear,deps.now());
   stored=(mode==='backfill'?scope.backfill_cursor:scope.poll_cursor) as Partial<DocScopeCursor>;
  }catch(e){
-  if(!dry)await release('failed',NEXT_DUE_FAIL_MS);
+  try{if(!dry)await release('failed',NEXT_DUE_FAIL_MS);}catch{/* the lease expires on its own */}
   throw e;
  }
  let seq=typeof stored.seq==='number'&&Number.isSafeInteger(stored.seq)&&stored.seq>=0?stored.seq:0;
@@ -201,12 +208,15 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
   let got:FetchedBytes|'too_large'|'not_found';
   try{got=await deps.fetchBytes(item.source_url,budget,MAX_DOC_BYTES);}
   catch(e){return failure('fetch_failed',e);}
-  if(got==='not_found'){skip('document_missing',item.source_ref);return {advance:true,stored:false};}
+  if(got==='not_found'){skip('document_missing',item.source_ref);return {advance:true,stored:false,settle:true};}
   if(got==='too_large'){await park('document_too_large',item,{max_bytes:MAX_DOC_BYTES});return {advance:true,stored:false};}
   const mime=sniffMime(got.mime,got.bytes);
   if(mime===null||!ALLOWED_MIMES[source].includes(mime)){await park('unexpected_mime',item,{declared:got.mime,sniffed:mime});return {advance:true,stored:false};}
   const sha=sha256Hex(got.bytes);
   const prior=await allVersions(db,source,item.source_ref);
+  // ownership comes first (Task 7 recheck N4): a ref held by another issuer is a conflict even when the bytes match
+  const foreign=prior.find(v=>v.issuer_id!==issuer);
+  if(foreign){await park('document_ref_conflict',item,{holder_issuer_id:foreign.issuer_id});return {advance:true,stored:false};}
   // a known hash is a duplicate before anything is written: no object put, no asset fetches (T7-05)
   if(prior.some(r=>r.content_sha256===sha)){out.counts.fetched++;out.counts.duplicates++;return {advance:true,stored:true};}
   if(dry){
@@ -287,7 +297,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
     if(settled.has(ref))continue;                                   // processed in this pass without a stored row
     if(isKnown&&i<=reached)continue;                                // stored and already passed in this pass
     if(isKnown&&!ctx.refetch){out.counts.fetched++;out.counts.duplicates++;passed();continue;}
-    if(!isKnown&&await openQuarantine(ref)){skip('already_quarantined',ref);settle(ref);passed();continue;}
+    if(!isKnown&&await openQuarantine(ref)){skip('already_quarantined',ref);passed();continue;}   // rechecked on every replay and never settled: a resolved quarantine is retried (recheck N2)
     if(!isKnown&&newItems>=ctx.maxPerIssuer){stop='limit';break segLoop;}
     if(budget.remainingMs()<MIN_ITEM_MS){stop='deadline';break segLoop;}
     await persist();
@@ -297,20 +307,20 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
     catch(e){
      // lease loss and infrastructure failures (not a DocumentsDbError, or 'unknown') leave the item loop; a deterministic
      // per-item database refusal must not block the issuer's other items
-     if(isLeaseLost(e)||!(e instanceof DocumentsDbError)||e.code==='unknown')throw e;
-     if(e.code==='invalid_input'&&e.message.includes('belongs to another issuer')){
+     if(!isItemLocal(e))throw e;
+     if(e.message.includes('belongs to another issuer')){
       const holder=(await allVersions(db,source,ref)).find(v=>v.issuer_id!==issuer)?.issuer_id??null;
       await park('document_ref_conflict',item,{holder_issuer_id:holder,error:{code:e.code,message:errMsg(e)}});
-      settle(ref);passed();continue;
+      passed();continue;
      }
      r={advance:false,code:e.code,message:errMsg(e)};
     }
-    if(r.advance){if(!r.stored)settle(ref);passed();continue;}
+    if(r.advance){if(r.settle)settle(ref);passed();continue;}
     if(r.deadline){stop='deadline';break segLoop;}   // ran out of budget mid-item: not the item's fault, no attempt counted
     const n=(attempts.get(ref)??0)+1;
     if(n>=MAX_ITEM_ATTEMPTS){
      await park('document_fetch_exhausted',item,{attempts:n,last_error:{code:r.code,message:r.message}});
-     settle(ref);passed();continue;
+     passed();continue;
     }
     attempts.set(ref,n);dirty=true;await persist();
     out.counts.fetched++;out.counts.failed++;out.errors.push({code:r.code,key:`${issuer}:${item.source_ref}`,message:r.message});
@@ -338,11 +348,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
  }catch(e){
   if(isLeaseLost(e)){out.counts.fetched++;out.counts.failed++;out.errors.push({code:'lease_lost',key:issuer});return finish('failed','lease_lost');}
   out.counts.fetched++;out.counts.failed++;
-  if(e instanceof DocumentsDbError&&e.code!=='unknown'){
-   out.errors.push({code:e.code,key:issuer,message:errMsg(e)});
-   return await end('failed',NEXT_DUE_FAIL_MS,e.code);
-  }
-  // Infrastructure failure (database unavailable, unexpected exception): best-effort cleanup, then rethrow so the
+  // Infrastructure failure (anything but lease loss: database unavailable, integrity, cursor or release failures, unexpected exceptions): best-effort cleanup, then rethrow so the
   // run rejects instead of reporting an ordinary issuer failure (T7-04)
   out.errors.push({code:'unknown',key:issuer,message:errMsg(e)});
   try{await release('failed',NEXT_DUE_FAIL_MS);}catch{/* the lease expires on its own */}
