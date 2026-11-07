@@ -1,7 +1,7 @@
 {
  "page": {"title": "Macro workbench", "subtitle": "Facts only: value, change, period, availability, source. The judgment layer is off by default.", "back": "← Macro workbench"},
  "region": {"label": "Region", "US": "United States", "CN": "China"},
- "tabs": {"label": "Workbench sections", "overview": "Overview", "indicators": "Indicators", "correlation": "Correlation", "methodology": "Method & sources"},
+ "tabs": {"label": "Workbench sections", "overview": "Overview", "indicators": "Indicators", "correlation": "Correlation", "methodology": "Method & sources", "transmission": "Transmission", "history": "History", "review": "Review"},
  "header": {"snapshot": "Snapshot {date}", "noSnapshot": "No published snapshot yet", "collection": "Collection {status}", "lastOk": "Last success {time}"},
  "collection": {"fresh": "OK", "stale": "Stale", "error": "Failed", "missing": "No record"},
  "status": {"active": "Verified", "missing": "Missing", "restricted": "Restricted"},
