@@ -9,6 +9,7 @@ import {EvalError} from '../errors';
 import {REGISTRY} from '@/lib/judgments/registry';
 import {calibrationAvailability} from '../kinds/f4-adapter';
 import {KIND_REGISTRY} from '../kinds/registry';
+import {assessGoldAdmission} from '../gold/admission';
 import {goldDiffAgainst} from '../gold/diff';
 import {LEGACY_PLAN2_PATH,checkLock,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders} from '../gold/load';
 import type {GoldLock,ValidatorFinding} from '../types';
@@ -39,6 +40,9 @@ export const HANDLERS:ValidateHandler[]=[
    catch(e){errors.push({path,...errorOf(e)});}
   }
   return {ok:errors.length===0,sets,errors};
+ }},
+ {flag:'--gold-admission',name:'gold_admission',takesValue:true,run(root,value){
+  return assessGoldAdmission(loadGoldSet(value!,root),loadLock(root));
  }},
  {flag:'--lock',name:'lock',takesValue:false,run(root){
   const lock=loadLock(root);

@@ -1,0 +1,1250 @@
+{
+  "scope": "Local exported GET handlers + real builders + installed Next cache adapter; fixture auth/data/storage; in-memory incremental backend. Excludes production, HTTP/TLS, process startup, real auth/database latency and judgments.",
+  "node": "v22.22.1",
+  "concurrency": 8,
+  "warmSamples": 12,
+  "summaries": [
+    {
+      "route": "transmission-US",
+      "scenario": "cold",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 5.638459000000012,
+      "p95_ms": 5.638459000000012
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "requests": 12,
+      "counts": {
+        "auth": 12,
+        "activeSnapshot": 24,
+        "publishState": 24
+      },
+      "p50_ms": 0.27783300000004374,
+      "p95_ms": 0.8951250000000073
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "shared-warm-local-reset",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1
+      },
+      "p50_ms": 0.26116700000000037,
+      "p95_ms": 0.26116700000000037
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "requests": 8,
+      "counts": {
+        "auth": 8,
+        "activeSnapshot": 16,
+        "publishState": 16,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 2.9978959999999972,
+      "p95_ms": 3.1357080000000224
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "other-account-warm",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2
+      },
+      "p50_ms": 0.22487500000005411,
+      "p95_ms": 0.22487500000005411
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "revision-change",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 1.50649999999996,
+      "p95_ms": 1.50649999999996
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 1.1835419999999885,
+      "p95_ms": 1.1835419999999885
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "requests": 12,
+      "counts": {
+        "auth": 12,
+        "activeSnapshot": 24,
+        "publishState": 24
+      },
+      "p50_ms": 0.19306249999999636,
+      "p95_ms": 1.2570420000000126
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "shared-warm-local-reset",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1
+      },
+      "p50_ms": 0.27641700000003766,
+      "p95_ms": 0.27641700000003766
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "requests": 8,
+      "counts": {
+        "auth": 8,
+        "activeSnapshot": 16,
+        "publishState": 16,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 2.8779585000000054,
+      "p95_ms": 3.016499999999951
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "other-account-warm",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2
+      },
+      "p50_ms": 0.1932080000000269,
+      "p95_ms": 0.1932080000000269
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "revision-change",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "latestObservations": 1,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 1.752207999999996,
+      "p95_ms": 1.752207999999996
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "seriesHistory": 8,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 6.565916000000016,
+      "p95_ms": 6.565916000000016
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "requests": 12,
+      "counts": {
+        "auth": 12,
+        "activeSnapshot": 24,
+        "publishState": 24
+      },
+      "p50_ms": 0.3825415000000305,
+      "p95_ms": 0.488125000000025
+    },
+    {
+      "route": "policy-response",
+      "scenario": "shared-warm-local-reset",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1
+      },
+      "p50_ms": 0.6181659999999738,
+      "p95_ms": 0.6181659999999738
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "requests": 8,
+      "counts": {
+        "auth": 8,
+        "activeSnapshot": 16,
+        "publishState": 16,
+        "shared.get": 1,
+        "seriesHistory": 8,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 8.673562500000003,
+      "p95_ms": 9.070791999999983
+    },
+    {
+      "route": "policy-response",
+      "scenario": "other-account-warm",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2
+      },
+      "p50_ms": 0.4361250000000041,
+      "p95_ms": 0.4361250000000041
+    },
+    {
+      "route": "policy-response",
+      "scenario": "revision-change",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "seriesHistory": 8,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 4.7312089999999785,
+      "p95_ms": 4.7312089999999785
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "seriesHistory": 13,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 4.125541999999996,
+      "p95_ms": 4.125541999999996
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "requests": 12,
+      "counts": {
+        "auth": 12,
+        "activeSnapshot": 24,
+        "publishState": 24
+      },
+      "p50_ms": 0.07439599999997881,
+      "p95_ms": 0.14050000000003138
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "shared-warm-local-reset",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1
+      },
+      "p50_ms": 0.13745899999997846,
+      "p95_ms": 0.13745899999997846
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "requests": 8,
+      "counts": {
+        "auth": 8,
+        "activeSnapshot": 16,
+        "publishState": 16,
+        "shared.get": 1,
+        "seriesHistory": 13,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 3.963520999999986,
+      "p95_ms": 4.0173750000000155
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "other-account-warm",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2
+      },
+      "p50_ms": 0.10308300000002646,
+      "p95_ms": 0.10308300000002646
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "revision-change",
+      "requests": 1,
+      "counts": {
+        "auth": 1,
+        "activeSnapshot": 2,
+        "publishState": 2,
+        "shared.get": 1,
+        "seriesHistory": 13,
+        "putManifest": 1,
+        "shared.set": 1
+      },
+      "p50_ms": 3.8891250000000355,
+      "p95_ms": 3.8891250000000355
+    }
+  ],
+  "samples": [
+    {
+      "route": "transmission-US",
+      "scenario": "cold",
+      "ms": 5.638459000000012,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "miss",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.4667500000000473,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.3597080000000119,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.2627499999999827,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.508041999999989,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.28508300000004283,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.25933300000002646,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.27058300000004465,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.8951250000000073,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.3168749999999818,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.20150000000001,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.20375000000001364,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "warm",
+      "ms": 0.16816700000003948,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "shared-warm-local-reset",
+      "ms": 0.26116700000000037,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "miss",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 2.829667000000029,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "miss",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 2.891790999999955,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 2.936290999999983,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 2.9771670000000086,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 3.018624999999986,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 3.0565409999999815,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 3.0960830000000215,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "cold-concurrent",
+      "ms": 3.1357080000000224,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "other-account-warm",
+      "ms": 0.22487500000005411,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "hit",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "revision-change",
+      "ms": 1.50649999999996,
+      "bytes": 20600,
+      "status": 200,
+      "memo": "miss",
+      "hash": "8d2aae85451adfe6c59439e10bba14bb857cbd13c50f4c25f37e09fbb0643ad6"
+    },
+    {
+      "route": "transmission-US",
+      "scenario": "signed-out-after-warm",
+      "ms": 0.11316600000003518,
+      "bytes": 62,
+      "status": 401,
+      "memo": null,
+      "hash": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold",
+      "ms": 1.1835419999999885,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "miss",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.4130829999999719,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 1.2570420000000126,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.21641599999998107,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.1770410000000311,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.20908399999996163,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.2676660000000197,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.21187500000002046,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.1732080000000451,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.1749590000000012,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.1717079999999669,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.15074999999995953,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "warm",
+      "ms": 0.14537500000000136,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "shared-warm-local-reset",
+      "ms": 0.27641700000003766,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "miss",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.7054999999999723,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "miss",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.764041999999961,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.811958000000004,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.858000000000004,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.8979170000000067,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.937583000000018,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 2.9776669999999967,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "cold-concurrent",
+      "ms": 3.016499999999951,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "other-account-warm",
+      "ms": 0.1932080000000269,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "hit",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "revision-change",
+      "ms": 1.752207999999996,
+      "bytes": 20566,
+      "status": 200,
+      "memo": "miss",
+      "hash": "6a27f2df718897d39d571ae3456cc987c3dd37a5716402ce701de515d372a98b"
+    },
+    {
+      "route": "transmission-CN",
+      "scenario": "signed-out-after-warm",
+      "ms": 0.07633399999997437,
+      "bytes": 62,
+      "status": 401,
+      "memo": null,
+      "hash": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold",
+      "ms": 6.565916000000016,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "miss",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.42108400000000756,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.37375000000002956,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.43262499999997317,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.37008300000002237,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.3620409999999765,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.488125000000025,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.434833000000026,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.46775000000002365,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.39133300000003146,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.3692909999999756,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.35704199999997854,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "warm",
+      "ms": 0.349790999999982,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "shared-warm-local-reset",
+      "ms": 0.6181659999999738,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "miss",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.236667000000011,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "miss",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.38820800000002,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.50208299999997,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.618333000000007,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.728791999999999,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.83966700000002,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 8.954499999999996,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "cold-concurrent",
+      "ms": 9.070791999999983,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "other-account-warm",
+      "ms": 0.4361250000000041,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "hit",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "revision-change",
+      "ms": 4.7312089999999785,
+      "bytes": 75783,
+      "status": 200,
+      "memo": "miss",
+      "hash": "75705ac6c71ac73b8d50861b3057e5daf6c5b06720116eb193b6707eaa0d0d11"
+    },
+    {
+      "route": "policy-response",
+      "scenario": "signed-out-after-warm",
+      "ms": 0.08283299999999372,
+      "bytes": 62,
+      "status": 401,
+      "memo": null,
+      "hash": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold",
+      "ms": 4.125541999999996,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "miss",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.1391659999999888,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.09783399999997755,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.08179200000000719,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.072166999999979,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.06987500000002456,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.07054099999999153,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.07045800000003055,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.14050000000003138,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.08741700000001629,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.07662499999997863,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.06791700000002265,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "warm",
+      "ms": 0.06729200000000901,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "shared-warm-local-reset",
+      "ms": 0.13745899999997846,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "miss",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.891750000000002,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "miss",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.9209999999999923,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.937582999999961,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.9564169999999876,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.970624999999984,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 3.9878340000000208,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 4.002542000000005,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "cold-concurrent",
+      "ms": 4.0173750000000155,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "coalesced",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "other-account-warm",
+      "ms": 0.10308300000002646,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "hit",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "revision-change",
+      "ms": 3.8891250000000355,
+      "bytes": 5223,
+      "status": 200,
+      "memo": "miss",
+      "hash": "ef929248521f7168af25b01dc3f2e7f58caac133d294f0de755c87fd2d46fd9d"
+    },
+    {
+      "route": "cycle-table",
+      "scenario": "signed-out-after-warm",
+      "ms": 0.061542000000031294,
+      "bytes": 62,
+      "status": 401,
+      "memo": null,
+      "hash": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4"
+    }
+  ]
+}

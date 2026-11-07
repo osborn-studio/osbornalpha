@@ -378,10 +378,38 @@ describe('settle mechanics',()=>{
   for(const [maxFetchMs,limit] of [[51_000,16],[62_500,12],[249_999,4],[undefined,Math.min(BATCH_SIZE,4*(Math.ceil(250_000/MAX_FETCH_MS)-1))]] as const){
    const h=await harness();await h.register();
    const claim=vi.spyOn(h.db,'claimDue');
-   await runSettle(h.deps(stubResolver(scripted(resolved())),maxFetchMs===undefined?{}:{maxFetchMs}));
+   // The table assumes zero elapsed time, including the 1 ms margin at 249_999.
+   await runSettle(h.deps(stubResolver(scripted(resolved())),{clock:()=>0,...(maxFetchMs===undefined?{}:{maxFetchMs})}));
    expect({maxFetchMs,first:claim.mock.calls[0]}).toEqual({maxFetchMs,first:[limit,LEASE_SECONDS]});
   }
   expect(MAX_FETCH_MS).toBe(60_000);
+ });
+ it.each([
+  {maxFetchMs:249_998,elapsed:1,admitted:true},   // one wave + 30 s is 1 ms below the remaining budget
+  {maxFetchMs:249_998,elapsed:2,admitted:false},  // equality is rejected
+  {maxFetchMs:249_998,elapsed:3,admitted:false},  // 1 ms over budget is rejected
+  {maxFetchMs:249_999,elapsed:1,admitted:false},  // the original T-05 flake's nonzero elapsed case
+ ])('T-05: maxFetchMs=$maxFetchMs at elapsed=$elapsed ms admits a wave=$admitted',async({maxFetchMs,elapsed,admitted})=>{
+  const h=await harness();const id=await h.register();
+  const claim=vi.spyOn(h.db,'claimDue');
+  const resolve=scripted(resolved());
+  // First read is the run's origin; all later reads retain the specified elapsed time.
+  const clock=vi.fn(()=>elapsed).mockReturnValueOnce(0);
+  const r=await runSettle(h.deps(stubResolver(resolve),{clock,maxFetchMs}));
+  expect(r).toMatchObject({status:'success',idle:!admitted,counts:{fetched:admitted?1:0,inserted:admitted?1:0},detail:{batches:admitted?1:0,deadline_hit:!admitted}});
+  if(admitted){
+   expect(claim.mock.calls).toEqual([[4,LEASE_SECONDS],[4,LEASE_SECONDS]]);
+   expect(resolve).toHaveBeenCalledTimes(1);
+   expect((await h.settlements(id))[0]).toMatchObject({kind:'settled'});
+   expect(r.errors).toEqual([]);
+  }else{
+   expect(claim).not.toHaveBeenCalled();
+   expect(resolve).not.toHaveBeenCalled();
+   expect(await h.settlements(id)).toEqual([]);
+   expect(await h.queue(id)).toMatchObject({closed_at:null,lease_token:null});
+   expect(r.items).toEqual([]);
+   expect(r.errors).toEqual([{code:'deadline_hit',message:'claiming stopped after 0 batch(es)'}]);
+  }
  });
  it('hands one AbortSignal (external abort or the 280 s deadline) to every resolver and stops claiming once it fires',async()=>{
   const h=await harness();for(let i=0;i<25;i++)await h.register();
