@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "002770.SZ",
+   "list_status": "D"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "a9b9b28e320dad261cf08b1a09800ea332053a5cb9e18e6baa85ee8201f72ba9",
+ "request_id": "e9ace221-9fe0-48aa-98a0-561d81581ea9",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "002770.SZ",
+    "002770",
+    "科迪退(退)",
+    null,
+    null,
+    "河南科迪乳业股份有限公司",
+    "Henan Kedi Dairy Industry Co., Ltd",
+    "kdt",
+    "主板",
+    "SZSE",
+    "CNY",
+    "D",
+    "20150630",
+    "20220623",
+    "N",
+    "张清海",
+    "民营企业"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

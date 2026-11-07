@@ -13,6 +13,9 @@ import { SCALE_EXP, defaultScale, formatPercent, formatValue, signed, unitCaptio
 import { formTypeLabel } from './filings-model';
 import { eventView, quickItems, type ValueRef } from './overview-model';
 import { periodKeyParts } from './statements-model';
+// INDUSTRY:BEGIN — industry row from the industry research module (canvas Overview 所属行业)
+import { IndustryRow } from '@/components/industries/IndustryRow';
+// INDUSTRY:END
 
 const SCALE_KEYS: Record<ScaleId, string> = { raw: 'scaleRaw', thousand: 'scaleThousand', million: 'scaleMillion', hundred_million: 'scaleHundredMillion' };
 
@@ -166,7 +169,7 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
           );
         })()}
       </div>
-      <div className="flex flex-col gap-5"><SignalsCard /></div>
+      <div className="flex flex-col gap-5">{/* INDUSTRY:BEGIN */}<IndustryRow ticker={ticker} />{/* INDUSTRY:END */}<SignalsCard /></div>
     </div>
   );
 }

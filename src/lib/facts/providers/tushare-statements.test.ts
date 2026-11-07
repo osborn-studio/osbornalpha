@@ -8,7 +8,7 @@ import type {Budget} from '../types';
 import {TushareError,type TushareRaw} from '../../data/sources/tushare';
 import {FACT_CONCEPTS,tushareFieldsFor} from '../concepts';
 import {decodeColumns,scanJsonNumbers} from '../json-numbers';
-import {TUSHARE_APIS,TUSHARE_NUMBER_SCHEMA,addDecimals,coverageSummary,fetchTushareStatements,fieldsFor,isTushareQuotaMessage,parseTushareStatements,resetTusharePacing} from './tushare-statements';
+import {TUSHARE_APIS,TUSHARE_MIN_INTERVAL_MS,TUSHARE_NUMBER_SCHEMA,addDecimals,coverageSummary,fetchTushareStatements,fieldsFor,isTushareQuotaMessage,parseTushareStatements,resetTusharePacing} from './tushare-statements';
 import {SYNTHETIC_DIR,commitRecording,loadTushareFixtures,manifestName,writeRecording} from './tushare-fixtures';
 import {snapshotOf} from './shared';
 
@@ -71,19 +71,19 @@ describe('fetchTushareStatements',()=>{
   await expect(fetchTushareStatements('600519.SH',2014,budget(20_100),{call,sleep,now:()=>t})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: budget_exhausted'});
   expect(sleep).not.toHaveBeenCalled();expect(call).toHaveBeenCalledTimes(1);
  });
- it('calls 3 apis × report types 1/4/5 with start_date, pages by limit/offset until has_more is false or a short page, one snapshot per page',async()=>{
-  // typed like tushareCallRaw: the options argument is optional there, so the mock takes it with a default (round-1 #5)
-  const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,o:{limit?:number;offset?:number}={})=>{
-   if(api==='income'&&params.report_type==='1')return o.offset===0?raw([['600519.SH','20231231'],['600519.SH','20230930']],true):raw([['600519.SH','20230630']],false);
+ it('paces at 400 ms (150 calls/min, under the 200/min tier limit)',()=>{expect(TUSHARE_MIN_INTERVAL_MS).toBe(400);});
+ it('calls 3 apis × report types 1/4/5 with start_date, exactly one request and one snapshot per stream (offset 0, page 1)',async()=>{
+  const call=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,_o:{limit?:number;offset?:number}={})=>{
+   if(api==='income'&&params.report_type==='1')return raw([['600519.SH','20231231'],['600519.SH','20230930']],false);
    return raw([],false);
   });
   const snaps=await fetchTushareStatements('600519.SH',2014,budget(),{call,pageSize:2,sleep:async()=>{}});
-  expect(call).toHaveBeenCalledTimes(10);
-  expect(call.mock.calls.map(c=>`${c[0]}:${(c[1] as {report_type:string}).report_type}`).slice(0,3)).toEqual(['income:1','income:1','income:4']);
+  expect(call).toHaveBeenCalledTimes(9);
+  expect(call.mock.calls.map(c=>`${c[0]}:${(c[1] as {report_type:string}).report_type}`).slice(0,3)).toEqual(['income:1','income:4','income:5']);
   for(const c of call.mock.calls)expect(c[1]).toMatchObject({ts_code:'600519.SH',start_date:'20140101'});
   const income1=snaps.filter(s=>s.meta.api==='income'&&(s.meta.params as {report_type:string}).report_type==='1');
-  expect(income1.map(s=>[s.meta.page,s.meta.has_more,(s.meta.params as {offset:number}).offset])).toEqual([[1,true,0],[2,false,2]]);
-  expect(snaps).toHaveLength(10);
+  expect(income1.map(s=>[s.meta.page,s.meta.has_more,(s.meta.params as {offset:number}).offset])).toEqual([[1,false,0]]);
+  expect(snaps).toHaveLength(9);
   for(const s of snaps){expect(s.meta.source).toBe('tushare');expect(s.sha256).toMatch(/^[0-9a-f]{64}$/);expect(JSON.stringify(s.meta)).not.toContain('token');}
  });
  it('maps quota messages and HTTP 429 to quota_exhausted, other API errors to tushare_unavailable, and stops on budget',async()=>{
@@ -106,25 +106,20 @@ describe('fetchTushareStatements',()=>{
   const e4=await fetchTushareStatements('600519.SH',2014,budget(),{call:async()=>{throw new Error('SECRET-BODY');},sleep:async()=>{}}).then(()=>{throw new Error('expected a rejection');},(x:unknown)=>x as Error);
   expect(e4.message).toBe('tushare_unavailable: request_failed_x');
  });
- it('stops when upstream ignores offset and repeats the same rows (content hash over fields+items, request_id differs)',async()=>{
+ it('fails closed with multi_page_unverified when a page says has_more=true (offset paging is not order-stable on tied rows); no second page is requested',async()=>{
   const call=vi.fn(async()=>raw([['600519.SH','20231231'],['600519.SH','20230930']],true));
-  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call,pageSize:2,sleep:async()=>{}})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: paging_not_advancing'});
-  expect(call).toHaveBeenCalledTimes(2);
-  expect(call.mock.results.length).toBe(2);
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call,pageSize:2,sleep:async()=>{}})).rejects.toMatchObject({code:'tushare_unavailable',message:'tushare_unavailable: multi_page_unverified:income:rt1'});
+  expect(call).toHaveBeenCalledTimes(1);
+  const short=vi.fn(async()=>raw([['600519.SH','20231231']],true));
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:short,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified:income:rt1'});
+  expect(short).toHaveBeenCalledTimes(1);
+  const empty=vi.fn(async()=>raw([],true));
+  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:empty,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: multi_page_unverified:income:rt1'});
  });
- it('has_more=true continues on a short page; an empty page with has_more=true fails; has_more=false stops even on a full page',async()=>{
-  const short=vi.fn(async(api:string,params:Record<string,unknown>,_f:string,o:{limit?:number;offset?:number}={})=>{
-   if(api==='income'&&params.report_type==='1')return o.offset===0?raw([['600519.SH','20231231']],true):raw([['600519.SH','20230930']],false);
-   return raw([],false);
-  });
-  const snaps=await fetchTushareStatements('600519.SH',2014,budget(),{call:short,pageSize:5,sleep:async()=>{}});
-  expect(snaps.filter(x=>x.meta.api==='income'&&(x.meta.params as {report_type:string}).report_type==='1')).toHaveLength(2);
-  const empty=async()=>raw([],true);
-  await expect(fetchTushareStatements('600519.SH',2014,budget(),{call:empty,pageSize:5,sleep:async()=>{}})).rejects.toMatchObject({message:'tushare_unavailable: paging_not_advancing'});
+ it('has_more=false stops even on a full page, and the parser reports the suspicious full page',async()=>{
   const full=vi.fn(async()=>raw([['600519.SH','20231231'],['600519.SH','20230930']],false));
   const one=await fetchTushareStatements('600519.SH',2014,budget(),{call:full,pageSize:2,sleep:async()=>{}});
   expect(full).toHaveBeenCalledTimes(9);expect(one).toHaveLength(9);
-  // ... and the parser reports the suspicious full last page (spec §15: completeness unverified)
   const parsed=parseTushareStatements(one.slice(0,1));
   expect(parsed.skipped).toContainEqual({reason:'page_full_no_more',n:1});
  });

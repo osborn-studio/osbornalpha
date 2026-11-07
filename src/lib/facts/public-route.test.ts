@@ -19,15 +19,15 @@ const TODAY='2026-11-04';
 describe('resolvePublicIssuer (real resolveIssuer)',()=>{
  it('BRK, BRK.A and BRK.B are three distinct US issuers; the slash form maps to the dotted ticker',async()=>{
   const c=await seeded();
-  expect(await resolvePublicIssuer(c,'BRK.A',TODAY)).toEqual({issuerId:id(2),ticker:'BRK.A',market:'US'});
-  expect(await resolvePublicIssuer(c,'brk/b',TODAY)).toEqual({issuerId:id(3),ticker:'BRK.B',market:'US'});
-  expect(await resolvePublicIssuer(c,'BRK',TODAY)).toEqual({issuerId:id(1),ticker:'BRK',market:'US'});
-  expect(await resolvePublicIssuer(c,'AAPL',TODAY)).toEqual({issuerId:id(6),ticker:'AAPL',market:'US'});
+  expect(await resolvePublicIssuer(c,'BRK.A',TODAY)).toMatchObject({issuerId:id(2),ticker:'BRK.A',market:'US'});
+  expect(await resolvePublicIssuer(c,'brk/b',TODAY)).toMatchObject({issuerId:id(3),ticker:'BRK.B',market:'US'});
+  expect(await resolvePublicIssuer(c,'BRK',TODAY)).toMatchObject({issuerId:id(1),ticker:'BRK',market:'US'});
+  expect(await resolvePublicIssuer(c,'AAPL',TODAY)).toMatchObject({issuerId:id(6),ticker:'AAPL',market:'US'});
  });
  it('CN variants resolve to the canonical 600519.SH with market CN',async()=>{
   const c=await seeded();
   for(const t of ['600519','SH600519','600519.SS','600519.SH','sh600519'])
-   expect(await resolvePublicIssuer(c,t,TODAY)).toEqual({issuerId:id(4),ticker:'600519.SH',market:'CN'});
+   expect(await resolvePublicIssuer(c,t,TODAY)).toMatchObject({issuerId:id(4),ticker:'600519.SH',market:'CN'});
  });
  it('a merged issuer\'s old ticker serves the TARGET issuer with the source ticker and its market; an expired source row and a merged HK ticker are rejected',async()=>{
   const c=await seeded();
@@ -37,8 +37,8 @@ describe('resolvePublicIssuer (real resolveIssuer)',()=>{
   await c.insert('issuer_securities',sec(8,'300999.SZ'));
   await c.insert('issuers',{...issuer(9),status:'merged',merged_into:id(6)});
   await c.insert('issuer_securities',sec(9,'01234.HK'));
-  expect(await resolvePublicIssuer(c,'OLDX',TODAY)).toEqual({issuerId:id(6),ticker:'OLDX',market:'US'});
-  expect(await resolvePublicIssuer(c,'300999',TODAY)).toEqual({issuerId:id(4),ticker:'300999.SZ',market:'CN'});
+  expect(await resolvePublicIssuer(c,'OLDX',TODAY)).toMatchObject({issuerId:id(6),ticker:'OLDX',market:'US'});
+  expect(await resolvePublicIssuer(c,'300999',TODAY)).toMatchObject({issuerId:id(4),ticker:'300999.SZ',market:'CN'});
   expect(await resolvePublicIssuer(c,'01234.HK',TODAY)).toBeNull();
  });
  it('HK tickers (even when they resolve) and unknown tickers are rejected',async()=>{
@@ -46,5 +46,13 @@ describe('resolvePublicIssuer (real resolveIssuer)',()=>{
   expect(await resolvePublicIssuer(c,'00700.HK',TODAY)).toBeNull();
   expect(await resolvePublicIssuer(c,'700',TODAY)).toBeNull();
   expect(await resolvePublicIssuer(c,'ZZZZ',TODAY)).toBeNull();
+ });
+ it('tickerAsOf resolves the owner at that date: a closed row is found for a date inside its window, not today; the answer echoes tickerAsOf',async()=>{
+  const c=await seeded();
+  await c.insert('issuers',issuer(7));
+  await c.insert('issuer_securities',{...sec(7,'OLDT'),valid_from:'2010-01-01',valid_to:'2024-01-01'});
+  expect(await resolvePublicIssuer(c,'OLDT',TODAY)).toBeNull();
+  expect(await resolvePublicIssuer(c,'OLDT',TODAY,'2023-06-01')).toMatchObject({issuerId:id(7),ticker:'OLDT',market:'US',tickerAsOf:'2023-06-01'});
+  expect(await resolvePublicIssuer(c,'AAPL',TODAY)).toMatchObject({tickerAsOf:TODAY});
  });
 });

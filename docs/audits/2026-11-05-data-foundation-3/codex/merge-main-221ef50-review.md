@@ -1,0 +1,5 @@
+| # | Severity | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/industry/load-a-share.ts:119,174`; `src/lib/industry/load-a-share.test.ts:151,162` | Both duplicate paths now discard listing evidence previously retained for existing securities. When `stock_basic` supplies a listing date absent from `stocks_universe`, the window backfill cannot use it: that job reads only `stocks_universe`. The revised tests bless this loss. Plan 3 requires guarded window updates and whitelisted provenance, but does not require dropping the evidence. | Persist the listing evidence in a plan-3-compatible staging/claim path and make it available to guarded window reconciliation. Restore evidence-retention assertions for both duplicate paths while continuing to prohibit direct window/provenance updates. |
+
+Verdict: fix required

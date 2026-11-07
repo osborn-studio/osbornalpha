@@ -1,0 +1,7 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/facts/derive.ts:232` | `targetOf(issuer)` runs outside the retry loop. If T merges into U during computation, both attempts write to retired T and fail with `stale_computation`, leaving U unmaterialized. An isolated reproduction confirmed attempted targets `[T,T]`. Existing tests only change revisions. | Resolve the original issuer’s current target inside each attempt. Add a regression that merges T into U before the first replacement and verifies successful retry at U. |
+| 2 | P2 | `src/app/api/facts/[ticker]/metrics/route.ts:47` | Empty results bypass the second lineage/revision read. A concurrent topology or visibility change therefore returns `stale:false` without establishing stability, contrary to T8’s mandatory before/after guard. | Perform the post-read guard even when metrics are empty. Test an empty read with changing membership/revisions; require `stale:true` and `STALE_CACHE_CONTROL`. |
+| 3 | P2 | `src/app/api/facts/[ticker]/metrics/route.ts:53` | The live `asOf` branch discards `env.conflicts`, and the response omits `conflicts` entirely. Consumers cannot distinguish metrics missing because of conflicting evidence from ordinary missing inputs, violating the §4.4/§7 public-read contract. | Return public conflict metadata from the same lineage snapshot; provide coherent conflict metadata for materialized reads too. Test conflicting source facts and their exposed IDs. |
+
+Verdict: fix required

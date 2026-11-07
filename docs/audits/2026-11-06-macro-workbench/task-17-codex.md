@@ -1,0 +1,8 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T17-1 | P2 | src/components/macro/MacroJudgmentSlot.tsx:114 | Every judgment receives the overview’s current snapshot as its “basis,” including older judgments. Contributions can therefore falsely substantiate a judgment computed from different inputs. | Resolve each judgment’s actual input snapshot; show basis unavailable when that association cannot be verified. |
+| T17-2 | P2 | src/components/macro/IndicatorDetail.tsx:42 | Default 5Y requests exceed the landed API’s 600-point limit for daily series. The error return also removes window controls, leaving the detail page unusable. Long monthly “All” histories fail similarly. | Fetch bounded date chunks and merge observations; preserve window controls on errors. |
+| T17-3 | P2 | src/components/macro/CorrelationWorkbench.tsx:42 | After POST succeeds, a failed result GET loses the run ID and retry identity. Resubmitting creates another stored run, consumes quota, and can use newer inputs. | Persist the returned run ID and retry its GET; expose its saved-run link before clearing retry state. |
+| T17-4 | P2 | src/components/macro/judgment-view.ts:9 | Validation accepts `methodology: {}`; rendering then calls `pick(undefined, locale)` and crashes instead of showing judgment unavailable. Invalid envelopes also become misleading “no cards.” | Validate all rendered nested fields and distinguish malformed responses from valid empty lists; route malformed responses to unavailable/retry. |
+
+Verdict: fix P1/P2

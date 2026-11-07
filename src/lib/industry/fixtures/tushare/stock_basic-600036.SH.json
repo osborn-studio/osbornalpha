@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "600036.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "088653fe54bf7fbca5afc8caaf861362e2819921b2e22374149bf2200807a75d",
+ "request_id": "9489cfd0-907f-4df6-ae0e-5a53f393172f",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "600036.SH",
+    "600036",
+    "招商银行",
+    "深圳",
+    "银行",
+    "招商银行股份有限公司",
+    "China Merchants Bank Co., Ltd.",
+    "ZSYH",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20020409",
+    null,
+    "H",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

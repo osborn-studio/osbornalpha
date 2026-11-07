@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>来源抽屉</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1920px; height: 1500px; padding: 32px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; align-items: start">
+
+  <aside class="drawer" aria-label="来源抽屉 聚合数字" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px; display: flex; flex-direction: column">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; gap: 8px; align-items: flex-start">
+      <div style="flex: 1">
+        <div class="lbl-state">A · 聚合数字 · match</div>
+        <div class="h3" style="margin-top: 6px">食品饮料 · 毛利率 · 2024-12-31</div>
+        <div class="m" style="font-size: 26px; font-weight: 500; margin-top: 4px">47.8%</div>
+      </div>
+      <button class="ibtn" aria-label="关闭 Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 18px">
+      <div><div class="ml" style="margin-bottom: 8px">1 · 值与方法 Value &amp; method</div>
+        <dl class="kv" style="grid-template-columns: 110px 1fr">
+          <dt>公式</dt><dd>(Σ revenue_operating − Σ cost_of_revenue) / Σ revenue_operating</dd>
+          <dt>期间</dt><dd class="m">2024-01-01 → 2024-12-31 · 12M</dd>
+          <dt>方法</dt><dd class="m">industry-agg/1.0 · formula f-3</dd>
+          <dt>事实截至</dt><dd class="m">2026-11-03</dd>
+          <dt>格可得时刻</dt><dd class="m">2026-11-01 03:10 UTC <span class="tiny">（= run 创建时刻，不回溯）</span></dd>
+          <dt>历史类别</dt><dd><span class="chip sq">point_in_time</span></dd>
+          <dt>代码版本</dt><dd class="m">3f9c2e1</dd>
+        </dl>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">2 · 覆盖 Coverage</div>
+        <div class="row"><span class="m" style="font-size: 16px">118 / 125</span><span class="cap">= n_with_data / (n_members + n_unresolved)</span></div>
+        <ul class="cap" style="margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px">
+          <li>missing_concept · <span class="m">4</span>（cost_of_revenue 未披露）</li>
+          <li>unit_excluded · <span class="m">2</span></li>
+          <li>unresolved · <span class="m">1</span>（只给计数）</li>
+        </ul>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">3 · 原样回放 Replay as recorded</div>
+        <div class="callout ac" style="display: flex; flex-direction: column; gap: 6px">
+          <div class="row"><span class="chip ac">reproduced = true</span><span class="hash">manifest 9b1e…04fa</span></div>
+          <div class="cap">replayFromManifest() 只用清单重算出 47.80%，与存储值一致。</div>
+        </div>
+        <table class="t dense" style="margin-top: 8px">
+          <thead><tr><th>角色 Role</th><th class="n">发行人数</th><th class="n">Σ 值（亿元）</th></tr></thead>
+          <tbody><tr><td>numerator</td><td class="n m">118</td><td class="n"><button class="src">4,371.2</button></td></tr><tr><td>denominator</td><td class="n m">118</td><td class="n"><button class="src">9,144.6</button></td></tr><tr><td>excluded</td><td class="n m">7</td><td class="n fog m">—</td></tr></tbody>
+        </table>
+        <button class="btn sm" style="margin-top: 8px">按当前证据重算 Recompute on current evidence</button>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">输入（前 5 / 118）Inputs</div>
+        <table class="t dense">
+          <thead><tr><th>发行人</th><th>概念</th><th class="n">值</th><th>可得日</th><th>文件</th></tr></thead>
+          <tbody>
+            <tr><td>贵州茅台</td><td class="tiny">revenue_operating</td><td class="n"><button class="src">1,708.99</button></td><td class="m dim">2025-04-03</td><td><a href="#" style="font-size: 12px">巨潮 PDF</a></td></tr>
+            <tr><td>五粮液</td><td class="tiny">revenue_operating</td><td class="n"><button class="src">891.75</button></td><td class="m dim">2025-04-25</td><td><a href="#" style="font-size: 12px">巨潮 PDF</a></td></tr>
+            <tr><td>海天味业</td><td class="tiny">cost_of_revenue</td><td class="n"><button class="src">165.70</button></td><td class="m dim">2025-03-28</td><td><span class="tiny">pending</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">4 · 成分来源 Membership source</div>
+        <dl class="kv" style="grid-template-columns: 110px 1fr"><dt>方案</dt><dd>申万 2021 → Tushare index_member_all</dd><dt>raw_hash</dt><dd class="hash">sha256:41c0…d2e7</dd><dt>可得日假设</dt><dd>in_date 当日</dd></dl>
+      </div>
+    </div>
+  </aside>
+
+  <aside class="drawer" aria-label="来源抽屉 回放不一致" style="border: 1px solid rgba(225,29,72,.45); border-radius: 8px; display: flex; flex-direction: column">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div class="lbl-state" style="color: #fafafa">B · 聚合数字 · reproduced = false</div>
+      <div class="h3" style="margin-top: 6px">电子 · 营收同比 · 2025-12-31</div>
+      <div class="m" style="font-size: 26px; font-weight: 500; margin-top: 4px">+11.6%</div>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px">
+      <div class="errcard" style="display: flex; flex-direction: column; gap: 8px">
+        <div class="row"><span class="dot err"></span><strong>回放不一致 Replay mismatch</strong></div>
+        <div class="cap">清单重算得 <span class="m">+11.4%</span>，存储值 <span class="m">+11.6%</span>。该格不作为可回放数字：页面仍显示原值并加异常徽标，隔离项 <span class="m">manifest_mismatch</span> 已开。</div>
+        <div class="row"><a class="btn sm" href="#">查看隔离项 /admin/dq</a><button class="btn sm ghost">复制清单哈希</button></div>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">逐角色差异 Per-role diff</div>
+        <table class="t dense">
+          <thead><tr><th>角色</th><th class="n">存储</th><th class="n">重算</th><th class="n">差</th></tr></thead>
+          <tbody>
+            <tr><td>Σ_t</td><td class="n m">29,710.4</td><td class="n m">29,710.4</td><td class="n m fog">0</td></tr>
+            <tr><td>Σ_t−1y</td><td class="n m">26,622.1</td><td class="n m">26,672.9</td><td class="n m">+50.8</td></tr>
+            <tr><td>comparable_set</td><td class="n m">451</td><td class="n m">452</td><td class="n m">+1</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div><div class="ml" style="margin-bottom: 8px">changed：差异行</div>
+        <table class="t dense">
+          <thead><tr><th>发行人</th><th>事实</th><th class="n">清单</th><th class="n">现值</th></tr></thead>
+          <tbody><tr><td>立讯精密</td><td class="tiny">revenue FY2024</td><td class="n m">—</td><td class="n"><button class="src">2,687.95</button></td></tr></tbody>
+        </table>
+        <div class="tiny" style="margin-top: 6px">现值来自更晚的 state_rev；原样回放不吸收新证据。</div>
+      </div>
+    </div>
+  </aside>
+
+  <aside class="drawer" aria-label="来源抽屉 估值数字" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px; display: flex; flex-direction: column">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div class="lbl-state">C · 估值数字</div>
+      <div class="h3" style="margin-top: 6px">食品饮料 · PE · 2026-10-31</div>
+      <div class="m" style="font-size: 26px; font-weight: 500; margin-top: 4px">24.8</div>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px">
+      <dl class="kv" style="grid-template-columns: 120px 1fr">
+        <dt>公式</dt><dd>Σ market_cap / Σ ttm_net_income_parent</dd>
+        <dt>标记日</dt><dd class="m">2026-10-31</dd>
+        <dt>标记观测时刻</dt><dd class="m">observed_at 2026-11-01 01:42</dd>
+        <dt>格可得时刻</dt><dd class="m">updated_at 2026-11-01 03:25</dd>
+        <dt>Σ 市值</dt><dd><button class="src">48,912.6 亿元</button></dd>
+        <dt>市值覆盖</dt><dd class="m">97.1%（121 / 124）</dd>
+        <dt>对照状态</dt><dd><span class="chip">✓ within（只有 within 能发布）</span></dd>
+        <dt>官方对照值</dt><dd><span class="m">24.6</span> <span class="tiny">申万宏源研究所 · 经 Tushare sw_daily · 仅在 official 数据集 public 时显示</span></dd>
+        <dt>相对差</dt><dd class="m">+0.8%（容差 ±3%）</dd>
+        <dt>历史类别</dt><dd><span class="chip sq">point_in_time</span></dd>
+      </dl>
+      <div><div class="ml" style="margin-bottom: 8px">标记输入（前 3 / 121）</div>
+        <table class="t dense"><thead><tr><th>证券</th><th class="n">收盘</th><th class="n">总股本</th><th>上游</th></tr></thead>
+        <tbody><tr><td class="m">600519.SH</td><td class="n"><button class="src">1,468.00</button></td><td class="n m">12.56 亿</td><td class="tiny">sse</td></tr><tr><td class="m">000858.SZ</td><td class="n"><button class="src">121.35</button></td><td class="n m">38.82 亿</td><td class="tiny">szse</td></tr><tr><td class="m">600809.SH</td><td class="n"><button class="src">186.20</button></td><td class="n m">12.20 亿</td><td class="tiny">sse</td></tr></tbody></table>
+      </div>
+      <div class="callout" style="font-size: 12px">官方对照值不可用时：此行显示“官方对照值不可用（数据集未公开）”，不影响自算值的发布判定说明。</div>
+    </div>
+  </aside>
+
+  <aside class="drawer" aria-label="来源抽屉 成分行" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px; display: flex; flex-direction: column">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div class="lbl-state">D · 成分行</div>
+      <div class="h3" style="margin-top: 6px">600519.SH 贵州茅台 ∈ 食品饮料</div>
+      <div class="cap" style="margin-top: 4px">白酒Ⅱ / 白酒Ⅲ · 纳入 <span class="m">2021-07-30</span> · 在册</div>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px">
+      <dl class="kv" style="grid-template-columns: 120px 1fr">
+        <dt>来源记录</dt><dd class="hash">industry_source_memberships · 3e7a…</dd>
+        <dt>上游</dt><dd>申万宏源研究所 → Tushare index_member_all</dd>
+        <dt>observed_at</dt><dd class="m">2026-10-02 02:00</dd>
+        <dt>raw_hash</dt><dd class="hash">sha256:41c0…d2e7</dd>
+        <dt>locator</dt><dd class="hash">/data/items/1182 · l3_code 850111.SI</dd>
+        <dt>可得日</dt><dd class="m">available_date 2021-07-30（in_date 假设）</dd>
+        <dt>发行人解析</dt><dd>resolveIssuer(asOf) · method as_of · <span class="m">2026-10-02</span></dd>
+        <dt>批次</dt><dd class="hash">batch 8c21…</dd>
+      </dl>
+      <div><div class="ml" style="margin-bottom: 8px">归属历史 Membership history</div>
+        <table class="t dense"><thead><tr><th>valid_from</th><th>valid_to</th><th>L3</th><th>状态</th></tr></thead>
+        <tbody><tr><td class="m">2021-07-30</td><td class="m fog">—</td><td class="tiny">白酒Ⅲ</td><td><span class="chip">ok</span></td></tr></tbody></table>
+      </div>
+      <div class="callout" style="font-size: 12px">SIC 成分行：上游为 SEC submissions，locator 为 /sic，可得日 = 首次观察日，并显示 current_only 徽标。</div>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

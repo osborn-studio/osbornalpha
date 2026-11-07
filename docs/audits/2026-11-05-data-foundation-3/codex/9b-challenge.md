@@ -1,0 +1,7 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | src/lib/facts/db-contract.ts:399 | The claimed `includeNonOk` contract uses only published `ok` facts. It cannot detect omitted quarantined evidence, non-OK rows receiving sequence numbers, or non-OK rows leaking into current-only results. Comparing against `readFacts` also shares the underlying implementation rather than providing an independent oracle. | Seed quarantined facts and assert explicit row membership and sequence flags for history/current modes, including `includeNonOk:true` in both. |
+| 2 | P2 | src/lib/facts/db-contract.ts:424 | The test claiming to check **every** lineage revision increments all revisions simultaneously. An implementation checking only the target’s revision passes this assertion, leaving stale metrics after a predecessor’s facts change undetected. | Change only the non-target member’s revision, keep the target revision correct, and assert `stale_computation` plus unchanged stored metrics. |
+| 3 | P2 | src/lib/facts/db-contract.ts:530 | The adoption test claims coverage of `same_day_conflict`, but creates only a `lineage_conflict` item. It also retains an OK competitor throughout, so it does not exercise U3’s explicit requirement that an open dispute block adoption **without any remaining OK competitor**. | Add separate same-day and lineage dispute cases with no eligible OK competitor; assert `conflict_exists`, an open item, and no inserted fact or revision change. |
+
+Verdict: fix required

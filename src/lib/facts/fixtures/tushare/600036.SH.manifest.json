@@ -1,0 +1,78 @@
+{
+ "ts_code": "600036.SH",
+ "recorded_at": "2026-11-06T12:52:22.678Z",
+ "pages": [
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.balancesheet.rt1.p1.json",
+   "api": "balancesheet",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "154a1dd08dbfee90cd17ec8d7faa9b2d9cc5bece44a7ce3fe65419b633420c3f",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.balancesheet.rt4.p1.json",
+   "api": "balancesheet",
+   "report_type": 4,
+   "page": 1,
+   "sha256": "ff69a925c8d8d6434079e4f55bc995feda8494c9040f63d57451c0dc832741e4",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.balancesheet.rt5.p1.json",
+   "api": "balancesheet",
+   "report_type": 5,
+   "page": 1,
+   "sha256": "ccbcc22606e7f8e520faaed465bb2ce5fc85e5cc49108c32ee3931802286edc2",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.cashflow.rt1.p1.json",
+   "api": "cashflow",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "3b66348b90312483afe9dfa53eb9daf1da02c6d22d8a30e976adfa7fb01293a3",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.cashflow.rt4.p1.json",
+   "api": "cashflow",
+   "report_type": 4,
+   "page": 1,
+   "sha256": "496defc83f77ea4951d65b32509b8f1a135d92524bdbd1f9ca862391b899fdef",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.cashflow.rt5.p1.json",
+   "api": "cashflow",
+   "report_type": 5,
+   "page": 1,
+   "sha256": "82d2bb111801bbc1d29f91da7288b5afa580144c39cb744b8d4cabf9d7a08abe",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.income.rt1.p1.json",
+   "api": "income",
+   "report_type": 1,
+   "page": 1,
+   "sha256": "a534149ef670b375c9d1052833e4345f5fea03d1b01af9518d8dd9919b699801",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.income.rt4.p1.json",
+   "api": "income",
+   "report_type": 4,
+   "page": 1,
+   "sha256": "1c14543141f8996eaad7dcd6021710e2468c4b60eb785353f1c4519dd0488d03",
+   "has_more": false
+  },
+  {
+   "file": "600036.SH.gmw4z5a8m3897b1.income.rt5.p1.json",
+   "api": "income",
+   "report_type": 5,
+   "page": 1,
+   "sha256": "8957215a03671a2a3fa86c31c48d88e186e0d54105248ef6be2a03c882003193",
+   "has_more": false
+  }
+ ]
+}

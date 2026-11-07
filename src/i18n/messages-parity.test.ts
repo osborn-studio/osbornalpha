@@ -41,6 +41,26 @@ describe('usage notice translations', () => {
   });
 });
 
+// INDUSTRY:BEGIN
+describe('industries translations', () => {
+  const load = (locale: 'en' | 'zh') => JSON.parse(readFileSync(resolve(process.cwd(), 'messages', locale, 'industries.json'), 'utf8'));
+  const leaves = (value: unknown, prefix = ''): [string, string][] =>
+    typeof value === 'string' ? [[prefix, value]] : Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => leaves(v, prefix ? `${prefix}.${k}` : k));
+
+  it('keeps Chinese and English keys in parity', () => {
+    expect(keys(load('zh')).sort()).toEqual(keys(load('en')).sort());
+  });
+
+  it('keeps every interpolation parameter in parity and every value non-empty', () => {
+    const zh = new Map(leaves(load('zh')));
+    for (const [key, en] of leaves(load('en'))) {
+      expect(en.trim(), key).not.toBe('');
+      expect(zh.get(key)?.trim(), key).not.toBe('');
+      expect(placeholders(zh.get(key) ?? ''), key).toEqual(placeholders(en));
+    }
+  });
+});
+// INDUSTRY:END
 // COMPANY — company research module domains (plan 2026-11-06 Task 11)
 describe('company module translations', () => {
   const read = (locale: 'en' | 'zh', file: 'company' | 'tracking') =>

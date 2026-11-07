@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/dq/reconcile/ixbrl-pair.integration.test.ts:153` | The “every expected key” assertion uses the runner’s own `expectedTotal`, not the manifest. The fixtures contain 139 real keys, but the only independent count assertion is `>40`. A regression dropping passing keys during member enumeration can still satisfy every assertion, silently omitting required comparisons. | Independently derive the complete natural-key set from the injected manifest and assert exact equality with persisted result keys, including issuer ownership. |
+| 2 | P2 | `src/lib/dq/reconcile/lineage.integration.test.ts:86` | The new suite runs the real lineage pair concurrently with `dq-extensions.integration.test.ts`. That suite’s `lineageStage` (line 922) locks running cycle rows **before** acquiring the pair advisory lock; this runner’s settlement acquires those locks in reverse order. Overlap can deadlock and reject `runReconcile`. The initial “no running cycle” check does not provide isolation, and rolling back the competing test does not prevent lock contention. | Serialize both suites’ real-lineage-pair scenarios using a shared, dedicated test lock, or separate databases. Also make `lineageStage` acquire the pair advisory lock before modifying cycle rows. |
+
+Verdict: fix required

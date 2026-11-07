@@ -1,0 +1,537 @@
+{
+ "schema_version": 1,
+ "set_id": "facts/synthetic-us",
+ "version": 1,
+ "module": "facts",
+ "artifact_class": "public",
+ "module_implementers": [
+  "claude-code",
+  "codex"
+ ],
+ "review_required": false,
+ "tolerance": {
+  "rel": "0"
+ },
+ "thresholds": {
+  "max_fail": 0,
+  "min_coverage_optional": "0.95"
+ },
+ "optional_cases": [
+  "ZZEVB/rd_expense/2022-07-01..2023-06-30/consolidated/USD/document"
+ ],
+ "history": [],
+ "cases": [
+  {
+   "case_id": "ZZEVA/revenue/2022-09-25..2023-09-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "revenue",
+    "period_start": "2022-09-25",
+    "period_end": "2023-09-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+     "column": "2022-09-25..2023-09-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "383,285,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "383285000000"
+   }
+  },
+  {
+   "case_id": "ZZEVA/net_income_parent/2022-09-25..2023-09-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "net_income_parent",
+    "period_start": "2022-09-25",
+    "period_end": "2023-09-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:NetIncomeLoss",
+     "column": "2022-09-25..2023-09-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "96,995,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "96995000000"
+   }
+  },
+  {
+   "case_id": "ZZEVA/total_assets/2023-09-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "total_assets",
+    "period_start": null,
+    "period_end": "2023-09-30",
+    "duration": "INSTANT",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:Assets",
+     "column": "2023-09-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "352,583,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "352583000000"
+   }
+  },
+  {
+   "case_id": "ZZEVA/eps_diluted/2022-09-25..2023-09-30/consolidated/USD/share/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "eps_diluted",
+    "period_start": "2022-09-25",
+    "period_end": "2023-09-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "per_share",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:EarningsPerShareDiluted",
+     "column": "2022-09-25..2023-09-30",
+     "unit": "USD/shares"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "6.13",
+    "unit_label": "USD per share",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "6.13"
+   }
+  },
+  {
+   "case_id": "ZZEVA/revenue/2022-09-25..2023-09-30/consolidated/USD/current@2023-11-03",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "revenue",
+    "period_start": "2022-09-25",
+    "period_end": "2023-09-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "current",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+     "column": "2022-09-25..2023-09-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "383,285,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "383285000000"
+   }
+  },
+  {
+   "case_id": "ZZEVA/interest_expense_bank/2022-09-25..2023-09-30/consolidated/USD/missing",
+   "subject": {
+    "market": "US",
+    "cik": "9990601"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "interest_expense_bank",
+    "period_start": "2022-09-25",
+    "period_end": "2023-09-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "missing",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990601-23-000106"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990601/000999060123000106/",
+    "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926",
+    "available_date": "2023-11-03",
+    "locator": {
+     "table": "companyfacts",
+     "row": "(no us-gaap tag maps to interest_expense_bank)",
+     "column": "2022-09-25..2023-09-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing."
+  },
+  {
+   "case_id": "ZZEVB/revenue/2022-07-01..2023-06-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990602"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "revenue",
+    "period_start": "2022-07-01",
+    "period_end": "2023-06-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990602-23-035122"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990602/000999060223035122/",
+    "sha256": "3c38d61d68e385c21eb49aefd14a40ed4d18deadb8613d707b8f19becb5172fa",
+    "available_date": "2023-07-27",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+     "column": "2022-07-01..2023-06-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "211,915,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "211915000000"
+   }
+  },
+  {
+   "case_id": "ZZEVB/net_income_parent/2022-07-01..2023-06-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990602"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "net_income_parent",
+    "period_start": "2022-07-01",
+    "period_end": "2023-06-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990602-23-035122"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990602/000999060223035122/",
+    "sha256": "3c38d61d68e385c21eb49aefd14a40ed4d18deadb8613d707b8f19becb5172fa",
+    "available_date": "2023-07-27",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:NetIncomeLoss",
+     "column": "2022-07-01..2023-06-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "72,361,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "72361000000"
+   }
+  },
+  {
+   "case_id": "ZZEVB/total_assets/2023-06-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990602"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "total_assets",
+    "period_start": null,
+    "period_end": "2023-06-30",
+    "duration": "INSTANT",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990602-23-035122"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990602/000999060223035122/",
+    "sha256": "3c38d61d68e385c21eb49aefd14a40ed4d18deadb8613d707b8f19becb5172fa",
+    "available_date": "2023-07-27",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:Assets",
+     "column": "2023-06-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "411,976,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "411976000000"
+   }
+  },
+  {
+   "case_id": "ZZEVB/rd_expense/2022-07-01..2023-06-30/consolidated/USD/document",
+   "subject": {
+    "market": "US",
+    "cik": "9990602"
+   },
+   "target": {
+    "type": "fact",
+    "concept": "rd_expense",
+    "period_start": "2022-07-01",
+    "period_end": "2023-06-30",
+    "duration": "12M",
+    "consolidation": "consolidated",
+    "unit": {
+     "kind": "currency",
+     "currency": "USD"
+    }
+   },
+   "expect": "present",
+   "binding": "document",
+   "source": {
+    "document_type": "10-K",
+    "document_id": {
+     "kind": "edgar_accession",
+     "value": "0009990602-23-035122"
+    },
+    "url": "https://www.sec.gov/Archives/edgar/data/9990602/000999060223035122/",
+    "sha256": "3c38d61d68e385c21eb49aefd14a40ed4d18deadb8613d707b8f19becb5172fa",
+    "available_date": "2023-07-27",
+    "locator": {
+     "table": "companyfacts",
+     "row": "us-gaap:ResearchAndDevelopmentExpense",
+     "column": "2022-07-01..2023-06-30",
+     "unit": "USD"
+    }
+   },
+   "provenance_kind": "synthetic",
+   "recorded_by": "synthetic",
+   "recorded_at": "2026-11-06T00:00:00Z",
+   "reviewed_by": null,
+   "reviewed_at": null,
+   "retracted": null,
+   "notes": "Synthetic F6 case: value copied by the generator from the F6 fixture, not transcribed from a filing.",
+   "printed": {
+    "text": "27,195,000,000",
+    "unit_label": "USD",
+    "scale": "1"
+   },
+   "canonical": {
+    "value": "27195000000"
+   }
+  }
+ ]
+}
