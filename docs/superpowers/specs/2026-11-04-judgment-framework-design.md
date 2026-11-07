@@ -1007,7 +1007,7 @@ interface JudgmentCard {
 | 2026-11-07 | `npm test -- src/lib/judgments/methodologies/macro-regime.v1.test.ts` | 红 1 failed / 36 passed；修正后 37 passed；macro replay `--check` byte-equal |
 | 2026-11-07 | `npm test -- src/lib/judgments/rpc-inventory.test.ts` | 红 1 suite 未收集（缺 runbook）；完成后 2 passed |
 | 2026-11-07 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run build` | 默认 `npm test` 两次因无关 s4 FileHandle 清理异常 / s4 与 gold 5 秒超时退出 1；单文件重跑 8/8、22/22 通过。`npm test -- --maxWorkers=2` 533 suites / 5904 tests 通过，40 suites / 589 tests 跳过（数据库环境未启用）；typecheck、lint（零警告）、build 通过 |
-| 2026-11-07 | PostgreSQL `test:db` / `test:migrations` | 本任务按指挥要求不运行；commander 用 db-one runner 验证 |
+| 2026-11-07 | PostgreSQL `test:db` / `test:migrations`（合并 origin/main #110–#112 并固定宏观目录版本之后，HEAD `9d3b0d07`） | `test:migrations` PASS（新库 = 升级库）。`test:db`：7140 项中 7128 通过、9 项失败于 7 个套件（`judgments.integration` 的双连接并发用例、`dq-extensions`、`macro/strategy`、`s4/anchor-two-phase`、`s4/anchor-store`、`s6/handoff-cli`、`evals/validate/audit`），全部为本机负载级联：逐个单独重跑均通过（42/53/42/13 与 37/37）；Linux CI 为正式门禁。`npm test` 6508/6509 通过（唯一失败 `evals/replay/setup.test.ts` 负载超时，单独 15/15）；typecheck、lint、build 通过 |
 
 ---
 
