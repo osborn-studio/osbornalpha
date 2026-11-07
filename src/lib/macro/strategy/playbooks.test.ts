@@ -12,7 +12,7 @@ const RULES:RulesView={rulesVersion:'r/1',rows:[
  {rule_id:'inflation_yoy.1',type:'inflation_yoy',condition:{zh:'通胀上升',en:'Inflation rising'},support:{overheat:1,stagflation:1,recovery:0}},
  {rule_id:'bond_yield.1',type:'bond_yield',condition:{zh:'收益率上行',en:'Yields rising'},support:{overheat:0.5}},
 ]};
-const CARD:F4CardLite={judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-11-03',methodology:{id:'macro_regime',version:'v1'},selected:'overheat'};
+const CARD:F4CardLite={judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-11-03',methodology:{id:'macro_regime',version:'v2'},selected:'overheat'};
 const DETAIL:F4JudgmentDetail={judgment_id:'j1',as_of:'2026-11-03',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'snap:US:1'},snapshot:{snapshot_id:'snap:US:1'}}],settlements:[]};
 
 describe('playbookTriggers',()=>{
@@ -39,7 +39,7 @@ describe('selectF4Mark',()=>{
  it('marks the selected playbook when method, lifecycle and snapshot all match',()=>{
   expect(selectF4Mark({card:CARD,detail:DETAIL,snapshotId:'snap:US:1'})).toEqual({
    mark:{regime:'overheat',judgment_id:'j1',snapshot_match:true,as_of:'2026-11-03'},
-   summary:{judgment_id:'j1',selected:'overheat',lifecycle:'open',outcome:null,calibration:'insufficient',methodology:{id:'macro_regime',version:'v1'},as_of:'2026-11-03',href:'/intel/methods/macro_regime/v1'},
+   summary:{judgment_id:'j1',selected:'overheat',lifecycle:'open',outcome:null,calibration:'insufficient',methodology:{id:'macro_regime',version:'v2'},as_of:'2026-11-03',href:'/intel/methods/macro_regime/v2'},
   });
  });
  it('a card on another snapshot is not highlighted (snapshot_match false, regime null)',()=>{
@@ -49,8 +49,8 @@ describe('selectF4Mark',()=>{
   expect(selectF4Mark({card:CARD,detail:DETAIL,snapshotId:null})?.mark.snapshot_match).toBe(false);
  });
  it('other methods, versions or lifecycles show nothing',()=>{
-  expect(selectF4Mark({card:{...CARD,methodology:{id:'macro_regime',version:'v2'}},detail:DETAIL,snapshotId:'snap:US:1'})).toBeNull();
-  expect(selectF4Mark({card:{...CARD,methodology:{id:'other',version:'v1'}},detail:DETAIL,snapshotId:'snap:US:1'})).toBeNull();
+  expect(selectF4Mark({card:{...CARD,methodology:{id:'macro_regime',version:'v1'}},detail:DETAIL,snapshotId:'snap:US:1'})).toBeNull();
+  expect(selectF4Mark({card:{...CARD,methodology:{id:'other',version:'v2'}},detail:DETAIL,snapshotId:'snap:US:1'})).toBeNull();
   for(const lifecycle of ['abstained','void','withdrawn','pending_fill'])expect(selectF4Mark({card:{...CARD,lifecycle},detail:DETAIL,snapshotId:'snap:US:1'})).toBeNull();
   expect(selectF4Mark({card:null,detail:null,snapshotId:'snap:US:1'})).toBeNull();
  });

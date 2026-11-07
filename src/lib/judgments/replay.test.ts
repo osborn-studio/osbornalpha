@@ -1,7 +1,7 @@
 // src/lib/judgments/replay.test.ts
 // spec §6.3 / §14.4 / §15 example 2. Golden loop: every JSON file in fixtures/judgments/replay replays
 // to its `expect` verdict, and tampering one frozen projection → input_hash_mismatch naming the input
-// (kind + key; for a macro observation the key contains its series_id). Tasks 19 (macro_regime@v1) and
+// (kind + key; for a macro observation the key contains its series_id). Tasks 19 (macro_regime@v2) and
 // 20 (private recommendation) only add files. Unit cases on the synthetic fixture: diverged claim / id,
 // inputs_only for model / abstained rows, unknown ids / methods, reconcile never changing the verdict,
 // and that the committed synthetic fixture is what the generator produces today.
