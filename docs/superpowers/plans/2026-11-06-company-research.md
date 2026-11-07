@@ -7858,6 +7858,33 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   const t=await get(GET,'AAPL','asOf=2024-06-30');
   expect(await t.json()).toMatchObject({truncated:true,metrics:[]});expect(t.headers.get('cache-control')).toBe('no-store');
  });
+ it('periods=8|20|40 keeps every metric row of the newest period keys; no row limit then (计划第 3 轮审计 R5)',async()=>{
+  // 3 metrics × 80 fiscal years = 240 rows, landed order: metric, then oldest period first.
+  const many=['gross_margin','net_margin','roe'].flatMap(metric=>Array.from({length:80},(_,i)=>{const y=1945+i;return metricRow({metric,period_start:`${y}-01-01`,period_end:`${y}-12-31`,value:'0.1'});}));
+  fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue(many);
+  const capped=await (await get(GET,'AAPL','')).json();
+  expect(capped.metrics).toHaveLength(200);   // without periods the landed default row limit still applies
+  const body=await (await get(GET,'AAPL','periods=8')).json();
+  expect(body.metrics).toHaveLength(24);
+  expect(new Set(body.metrics.map((m:{metric:string})=>m.metric))).toEqual(new Set(['gross_margin','net_margin','roe']));
+  const ends=[...new Set(body.metrics.map((m:{periodEnd:string})=>m.periodEnd))].sort();
+  expect(ends).toEqual(Array.from({length:8},(_,i)=>`${2017+i}-12-31`));
+  expect(body.truncated).toBe(false);
+  expect((await (await get(GET,'AAPL','periods=40')).json()).metrics).toHaveLength(120);
+  expect((await get(GET,'AAPL','periods=10')).status).toBe(400);
+  expect((await (await get(GET,'AAPL','periods=10')).json()).error.code).toBe('invalid_parameter:periods');
+ });
+ it('inputUnit and basis are top-level on every row, also when the cell is withheld (计划第 3 轮审计 R6)',async()=>{
+  const eur=fact({concept:'operating_cash_flow',source_concept:'NetCashProvidedByUsedInOperatingActivities',statement:'CF',unit:'EUR',value:'5',value_text:'5'});
+  const inputOf=(f:typeof rev)=>({fact_id:f.fact_id,concept:'operating_cash_flow',filing_id:f.filing_id,available_date:f.available_date});
+  const mU=metricRow({metric:'fcf',unit:'USD',input_unit:'USD',value:'99000000000',inputs:[inputOf(rev)]});
+  const mE=metricRow({metric:'fcf',unit:'EUR',input_unit:'EUR',value:'5',inputs:[inputOf(eur)]});
+  fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([mU,mE]);
+  fn(mocks.deps.facts.factsByIds).mockResolvedValue([rev,eur]);
+  mocks.deps.noEvidence.add(eur.fact_id);
+  const body=await (await get(GET,'AAPL','metrics=fcf')).json();
+  expect(body.metrics.map((x:{inputUnit:string;basis:string;periodEnd:string;cell:{kind:string}})=>[x.inputUnit,x.basis,x.periodEnd,x.cell.kind])).toEqual([['USD','us_standard','2023-09-30','derived'],['EUR','us_standard','2023-09-30','withheld']]);
+ });
  it('metric names validated per market; admin twin private no-store',async()=>{
   expect((await get(GET,'AAPL','metrics=ttm_capex_incl_intangibles')).status).toBe(400);
   expect((await get(GET,'AAPL','limit=1001')).status).toBe(400);
@@ -7881,7 +7908,7 @@ Expected: FAIL，`Cannot find module './route'`。
 // on one history snapshot (computedAtKind 'live'). Any ineligible input fact withholds the whole row.
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {DERIVE_CONCEPTS,FORMULA_VERSION,deriveMetrics,metricNames} from '@/lib/facts/derive';
-import {FRESH_METRICS_CACHE_CONTROL,STALE_CACHE_CONTROL,dateParam,intParam,listParam} from '@/lib/facts/public-route';
+import {FRESH_METRICS_CACHE_CONTROL,QueryError,STALE_CACHE_CONTROL,dateParam,intParam,listParam} from '@/lib/facts/public-route';
 import {FactsDbError} from '@/lib/facts/types';
 import type {FactRow,MetricDuration,MetricRow} from '@/lib/facts/types';
 import {metricKey} from '../metrics-computed-at';
@@ -7890,12 +7917,19 @@ import type {Handler} from '../route';
 import {derivedCellOf} from '../statements-grid';
 import type {DerivedCell,EvidenceDto,FilingSummary,WithheldCell,WithheldCounts} from '../types';
 
-export const METRICS_PARAMS=['metrics','from','to','asOf','limit'] as const;
-export interface MetricDto{metric:string;periodStart:string;periodEnd:string;duration:MetricDuration;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
+// 计划第 3 轮审计 R5: company-only `periods` (8|20|40) keeps ALL metric rows of the newest N period keys;
+// the landed row `limit` applies only when `periods` is absent (it would otherwise eat later metric names).
+export const METRICS_PARAMS=['metrics','from','to','asOf','limit','periods'] as const;
+const METRIC_PERIOD_CHOICES=new Set(['8','20','40']);
+// 计划第 3 轮审计 R6: inputUnit / basis are part of a landed metric's identity; top-level so a withheld cell
+// still tells same-period alternatives (USD vs EUR FCF) apart.
+export interface MetricDto{metric:string;periodStart:string;periodEnd:string;duration:MetricDuration;inputUnit:string;basis:string;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
 export interface MetricsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;mappingGen:number;formulaVersion:string;truncated:boolean;stale:boolean;metrics:MetricDto[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export const metricsHandler:Handler=async(ctx)=>{
  const {params:p,issuer,deps,asOf}=ctx;
  const from=dateParam(p,'from'),to=dateParam(p,'to'),limit=intParam(p,'limit',200,1000);
+ const periodsRaw=p.get('periods');
+ if(periodsRaw!==undefined&&!METRIC_PERIOD_CHOICES.has(periodsRaw))throw new QueryError('periods');
  const names=metricNames(issuer.market);
  const wanted=listParam(p,'metrics',new Set(names),names.length);
  let rows:MetricRow[]=[],truncated=false,stale=false,known:FactRow[]=[],filings:FilingSummary[]=[];
@@ -7915,9 +7949,16 @@ export const metricsHandler:Handler=async(ctx)=>{
   const at=ctx.now.toISOString();computedAt=()=>at;
  }
  const set=wanted?new Set(wanted):null;
- rows=rows.filter(m=>(!set||set.has(m.metric))&&(from===undefined||m.period_end>=from)&&(to===undefined||m.period_end<=to)).slice(0,limit);
+ rows=rows.filter(m=>(!set||set.has(m.metric))&&(from===undefined||m.period_end>=from)&&(to===undefined||m.period_end<=to));
+ if(periodsRaw!==undefined){
+  // Same column key and order as the UI (metrics-model.ts): periodEnd desc, then key asc; keep every row of those keys.
+  const keyOf=(m:MetricRow)=>`${m.period_start}:${m.period_end}:${m.duration}`;
+  const cols=new Map<string,string>();for(const m of rows)cols.set(keyOf(m),m.period_end);
+  const keep=new Set([...cols.entries()].sort((a,b)=>b[1].localeCompare(a[1])||a[0].localeCompare(b[0])).slice(0,Number(periodsRaw)).map(([k])=>k));
+  rows=rows.filter(m=>keep.has(keyOf(m)));
+ }else rows=rows.slice(0,limit);
  const g=await buildGated(ctx,rows.flatMap(m=>m.inputs.map(i=>i.fact_id)),known,filings);
- const metrics:MetricDto[]=rows.map(m=>({metric:m.metric,periodStart:m.period_start,periodEnd:m.period_end,duration:m.duration,basedOnRev:m.based_on_rev,computedAt:computedAt(m),computedAtKind:ctx.asOfGiven?'live':'materialized',cell:gateCell(derivedCellOf(m),g) as DerivedCell|WithheldCell}));
+ const metrics:MetricDto[]=rows.map(m=>({metric:m.metric,periodStart:m.period_start,periodEnd:m.period_end,duration:m.duration,inputUnit:m.input_unit,basis:m.basis,basedOnRev:m.based_on_rev,computedAt:computedAt(m),computedAtKind:ctx.asOfGiven?'live':'materialized',cell:gateCell(derivedCellOf(m),g) as DerivedCell|WithheldCell}));
  const body:MetricsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,mappingGen:MAPPING_GEN,formulaVersion:FORMULA_VERSION,truncated,stale,metrics,evidence:g.evidence,withheld:countWithheld(metrics.map(x=>x.cell))};
  const cacheControl=stale?STALE_CACHE_CONTROL:!ctx.asOfGiven&&metrics.length>0?FRESH_METRICS_CACHE_CONTROL:undefined;
  return {body,empty:metrics.length===0||truncated,cacheControl};
@@ -7927,7 +7968,7 @@ export const metricsHandler:Handler=async(ctx)=>{
 路由壳（公共 / admin）照 events 的两个壳写，`tag` 分别为 `companies/metrics`、`admin/companies/metrics`，`params:METRICS_PARAMS,handler:metricsHandler`，文件头注释写 "Metrics proxy (spec §6.1, §0 #67)"。
 
 Run: `npm test -- 'src/app/api/companies/[ticker]/metrics/route.test.ts'`
-Expected: PASS（5 个用例）。
+Expected: PASS（7 个用例；计划第 3 轮审计 R5/R6 各加一例）。
 
 - [ ] **Step 8: 写失败测试（overview）**
 
@@ -8894,7 +8935,9 @@ describe('/api/dcf/[ticker] (spec §9.1, §0 #65)',()=>{
   expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',expect.objectContaining({concepts:[...SEED_CONCEPTS.US],history:true}));
  });
  it('600519.SH with injected PDF locators: bridge leaves are fact (revenue_operating, monetary_funds basis), one divisor 1e8, runs',async()=>{
-  const rows=cnRows();   // fresh ids per call: register exactly the ids the snapshot returnsfn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:4,rows,filings:[linked]}));
+  // fresh ids per call: register exactly the ids the snapshot returns (计划第 3 轮审计 R1: mock 不再被注释吞掉)
+  const rows=cnRows();
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:4,rows,filings:[linked]}));
   for(const r of rows)mocks.deps.pdfFor.add(r.fact_id);
   const res=await post('600519.SH');
   const body=await res.json();
@@ -9342,7 +9385,23 @@ describe('GET /api/companies/[ticker]/packet (spec §6.1, §9.2)',()=>{
   expect(Buffer.byteLength(text,'utf8')).toBeLessThanOrEqual(PACKET_MAX_BYTES);
   const body=JSON.parse(text);
   expect(body.clipped.annual+body.clipped.recent).toBeGreaterThan(0);
-  expect(body.annual.periods.length).toBe(10-body.clipped.annual);
+  // periods are the IS/BS/CF union (计划第 3 轮审计 R4): 12M and INSTANT keys share one period end per fiscal year
+  expect(new Set(body.annual.periods.map((p:{periodEnd:string})=>p.periodEnd)).size).toBe(10-body.clipped.annual);
+ });
+ it('section periods are the union over IS/BS/CF; every emitted values key is declared (计划第 3 轮审计 R4)',async()=>{
+  const is=fact();   // IS revenue 2022-09-25..2023-09-30 12M
+  const bs=fact({concept:'cash',source_concept:'CashAndCashEquivalentsAtCarryingValue',statement:'BS',period_start:null,period_end:'2023-09-30',duration:'INSTANT',value:'29965000000',value_text:'29965000000'});
+  const cf=fact({concept:'operating_cash_flow',source_concept:'NetCashProvidedByUsedInOperatingActivities',statement:'CF',period_start:'2022-07-01',period_end:'2023-06-30',duration:'12M',value:'110543000000',value_text:'110543000000',available_date:'2023-08-01'});
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({rows:[is,bs,cf],filings:[summary()]}));
+  const body=await (await get(GET,'AAPL','annualPeriods=1&recentPeriods=1')).json();
+  type Sec={periods:{key:string}[];IS:{values:Record<string,unknown>}[];BS:{values:Record<string,unknown>}[];CF:{values:Record<string,unknown>}[]};
+  for(const sec of [body.annual,body.recent] as Sec[]){
+   const declared=new Set(sec.periods.map(p=>p.key));
+   for(const st of ['IS','BS','CF'] as const)for(const row of sec[st])for(const k of Object.keys(row.values))expect(declared.has(k)).toBe(true);
+  }
+  expect(body.annual.periods.map((p:{key:string})=>p.key)).toEqual(['2023-09-30:2023-09-30:INSTANT','2022-09-25:2023-09-30:12M','2022-07-01:2023-06-30:12M']);
+  expect(body.annual.BS.find((r:{concept:string})=>r.concept==='cash').values).toEqual({'2023-09-30:2023-09-30:INSTANT':{value:'29965000000',factId:bs.fact_id,availableDate:'2023-11-03'}});
+  expect(Object.keys(body.annual.CF.find((r:{concept:string})=>r.concept==='operating_cash_flow').values)).toEqual(['2022-07-01:2023-06-30:12M']);
  });
  it('parameters: annualPeriods ≤ 10, recentPeriods ≤ 8; truncated → 200 empty no-store; admin twin private',async()=>{
   expect((await get(GET,'AAPL','annualPeriods=11')).status).toBe(400);
@@ -9357,7 +9416,7 @@ describe('GET /api/companies/[ticker]/packet (spec §6.1, §9.2)',()=>{
 });
 ```
 
-（第三个用例的期望 `annual.periods.length === 10 − clipped.annual` 依赖 `bigRows(12)` 有 ≥ 10 个年度期间；若 Task 7 的网格因 `available_date` 规则不足 10 列，把 `bigRows` 的年数调大，不改断言。）
+（第三个用例的期望"不同 `periodEnd` 数 === 10 − clipped.annual"（计划第 3 轮审计 R4：`periods` 改为三表并集，12M 与 INSTANT 同期末各占一列，故按期末计数）依赖 `bigRows(12)` 有 ≥ 10 个年度期间；若 Task 7 的网格因 `available_date` 规则不足 10 列，把 `bigRows` 的年数调大，不改断言。）
 
 Run: `npm test -- 'src/app/api/companies/[ticker]/packet/route.test.ts'`
 Expected: FAIL，`Cannot find module './route'`。
@@ -9404,14 +9463,21 @@ function valueOf(c:Cell):PacketValue|null{
  return null;   // annual/disclosed grids carry fact cells only
 }
 interface Built{sections:Record<'annual'|'recent',Record<StatementKind,{periods:PeriodCol[];rows:{concept:string;unit:string|null;cells:Record<string,Cell>}[]}>>;metrics:MetricRow[]}
+// Same column order as Task 7's grid: period_end desc → period_start desc → 3M<6M<9M<12M<TTM<INSTANT.
+const DUR_ORDER:Record<string,number>={'3M':0,'6M':1,'9M':2,'12M':3,TTM:4,INSTANT:5};
+const cmpStr=(a:string,b:string)=>a<b?-1:a>b?1:0;
+const colOrder=(a:PeriodCol,b:PeriodCol)=>cmpStr(b.periodEnd,a.periodEnd)||cmpStr(b.periodStart,a.periodStart)||(DUR_ORDER[a.duration]??9)-(DUR_ORDER[b.duration]??9);
+// 计划第 3 轮审计 R4: out.periods is the union of every statement's retained (clipped) periods, so every
+// values key is declared — an annual IS 12M key and a BS INSTANT key both appear; clipping stays per statement.
 function sectionOf(b:Built['sections']['annual'],n:number,g:Gated):PacketSection{
  const out=emptySection();
- const keys=new Set<string>();
+ const periodsByKey=new Map<string,PeriodCol>();
  for(const s of STATEMENTS){
-  const periods=b[s].periods.slice(0,n);for(const p of periods)keys.add(p.key);
-  if(periods.length>out.periods.length)out.periods=periods;
+  const periods=b[s].periods.slice(0,n);
+  for(const p of periods)periodsByKey.set(p.key,p);
   out[s]=b[s].rows.map(r=>({concept:r.concept,unit:r.unit,values:Object.fromEntries(periods.flatMap(p=>{const v=valueOf(gateCell(r.cells[p.key]??null,g));return v?[[p.key,v]]:[];}))})).filter(r=>Object.keys(r.values).length>0);
  }
+ out.periods=[...periodsByKey.values()].sort(colOrder);
  return out;
 }
 function metricsOf(ms:MetricRow[],ends:Set<string>,g:Gated):PacketMetric[]{
@@ -9685,7 +9751,7 @@ Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/compa
 4. **Task 9 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`**（admin 同形；整合核对后的实际 DTO）：`FactSeriesDto = {issuerId, ticker, market, asOf: string, mappingGen, stateRev, truncated, history: true, concept, periodStart, periodEnd, unit, otherUnits: string[], series: SeriesEntry[], otherUnitSeries: SeriesEntry[], filings, evidence, withheld}`；`SeriesEntry = SeriesBase & ({kind:'fact', value, rawHash, runId, unitRule, delta, relChange} | {kind:'withheld', reason})`，`SeriesBase = {factId, availableDate, filingId, disclosureSeq: number|null, isCurrent: boolean|null, isRevision: boolean|null, sourceConcept, mappingVersion, mappingGen, unit}`；按 `disclosure_seq` 升序。`unit` **必填**；INSTANT 的 `periodStart` 传 `periodEnd`。`U` 徽标的"其他单位"表直接用同一响应的 `otherUnitSeries`（不发第二个请求）。
 5. **规格二 `GET /api/facts/[ticker]?factIds=<id>`**（已落地）：只用来把派生输入 / 事件引用的 `factId` 解析成 `{concept, periodStart|null, periodEnd, duration, unit}` 以打开抽屉；其 `value` 不显示（§0 #68）。
 6. **Task 10 `GET /api/companies/[ticker]/overview?asOf=`**（admin 同形）：`OverviewDto = {issuer, ticker, market, asOf, coverage: CoverageRow|null, coverageOtherMarket: CoverageRow|null, latestFiling: FilingSummary|null, latest: {periodKey: string|null, facts: Record<'revenue'|'revenue_operating'|'net_income_parent'|'operating_cash_flow', Cell>, derived: Record<'gross_margin'|'revenue_yoy', Cell>, stateRev: number, truncated: boolean} | null, recentEvents: PublicEvent[], eventsComputed: 'materialized'|'live', evidence, withheld}`（`periodKey` 只在 `truncated` 时为 null）。`PublicEvent`（`src/lib/company/event-dto.ts`，客户端 `import type`）`= {eventId, issuerId, market, kind, naturalKey, occurredOn, periodEnd: string|null, concept: string|null, filingId: string|null, payload, meta, firstSeenAt: string|null, payloadChangedAt: string|null, filing: {formType, url, documentUrl, citation}|null}`；payload 中经门槛置空的 headline 单项与 `fact_revised` 的 `from.value`/`to.value` 被替换为 `{kind:'withheld', reason, factId}`，`relChange` 替换为 `{kind:'withheld', reason}`（Task 6 `gateEventPayload`）。
-7. **Task 10 `GET /api/companies/[ticker]/metrics?asOf=`**（admin 同形）：`MetricsDto = {issuerId, ticker, market, asOf: string|null, mappingGen: number, formulaVersion: string, stale: boolean, truncated: boolean, metrics: MetricEntry[], evidence, withheld}`，`MetricEntry = {metric, periodStart, periodEnd, duration, basedOnRev: number, computedAt: string|null, computedAtKind: 'materialized'|'live', cell: DerivedCell | WithheldCell}`（`computedAtKind` 在每行，不在响应顶层）；`stale=true` 时 `metrics=[]`。
+7. **Task 10 `GET /api/companies/[ticker]/metrics?asOf=&periods=`**（admin 同形）：`MetricsDto = {issuerId, ticker, market, asOf: string|null, mappingGen: number, formulaVersion: string, stale: boolean, truncated: boolean, metrics: MetricEntry[], evidence, withheld}`，`MetricEntry = {metric, periodStart, periodEnd, duration, inputUnit: string, basis: string, basedOnRev: number, computedAt: string|null, computedAtKind: 'materialized'|'live', cell: DerivedCell | WithheldCell}`（`computedAtKind` 在每行，不在响应顶层）；`stale=true` 时 `metrics=[]`。计划第 3 轮审计 R5：`periods` ∈ `8|20|40`（仅本组合路由），给出时保留最新 N 个期间键的**全部**指标行、不再套 `limit`（缺省 200 只在无 `periods` 时生效），其他值 400 `invalid_parameter:periods`；指标视图总带 `periods`。计划第 3 轮审计 R6：`inputUnit`/`basis` 在行顶层（取自 `m.input_unit`/`m.basis`，门槛前填入，置空格也保留），同一指标同一期间的不同输入货币/口径是不同的行。
 8. **Task 10 `GET /api/companies/freshness`**：`{datasets: {dataset: 'facts.us'|'facts.cn'|'company.events', status: 'fresh'|'stale'|'error'|'missing', lastOkAt: string|null, lastAttemptAt: string|null}[]}`。
 9. **Task 10 `GET /api/companies/snapshot?fact=`**：只作为 `EvidenceDto.snapshot.download` 的链接目标，客户端不构造它。
 10. **Task 14**（整合核对）：`<DcfStudio ticker={ticker} asOf? onOpenFact? />`（`src/components/DcfStudio.tsx`，Task 14 重写后的签名 `({ticker, asOf?, onOpenFact?})`；股权桥面板与"不挂载即运行"在其内部；Task 13 传 `onOpenFact` 打开 `historyByFact` 抽屉；回放时不挂载）。
@@ -9866,6 +9932,7 @@ Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/compa
     "colCode": "代码版本",
     "sameValue": "0 · 同值",
     "firstDisclosure": "—",
+    "revisionWithheld": "前值已扣留 · 不计差值",
     "tMap": "① 映射 {source} → {concept}（{version} · gen {gen}）",
     "tUnit": "② 单位 {rule}",
     "tUnitNone": "② 单位 原值",
@@ -10218,6 +10285,7 @@ Part D 只在客户端消费下列 JSON；客户端 DTO 类型在 `src/lib/compa
     "colCode": "Code version",
     "sameValue": "0 · same value",
     "firstDisclosure": "—",
+    "revisionWithheld": "previous withheld · no difference",
     "tMap": "① map {source} → {concept} ({version} · gen {gen})",
     "tUnit": "② unit {rule}",
     "tUnitNone": "② unit as reported",
@@ -10664,7 +10732,8 @@ export interface FactSeriesResponse{issuerId:string;ticker:string;market:Market;
 export type {PublicEvent} from './event-dto';
 export interface OverviewResponse{ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;
  latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
-export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
+// inputUnit / basis mirror MetricDto (计划第 3 轮审计 R6): grid rows key on (metric, inputUnit, basis).
+export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;inputUnit:string;basis:string;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
 export interface MetricsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
 export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}[]}
@@ -11630,7 +11699,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - 迷你柱：每行行头旁"迷你柱"开关（`< 640px` 隐藏开关与柱行，CSS `hidden sm:…`），打开后在该行下插入一行内联 SVG，柱色 `var(--accent)` 透明度 .55，置空/缺失格画虚线框；表格仍是主视图；SVG 带 `role="img"` 与 `aria-label`。柱高可用 `Number(value)`（仅作图，不作显示文本）。
 - CSV 列：`concept,unit,period_key,period_start,period_end,duration,kind,fact_id,filing_id,available_date,value_text,withheld_reason`；`value_text` 原样（不缩放）；文件名 `<ticker>_<statement>_<basis>_<asOf|latest>.csv`。
 - 行头按钮 → 概念说明浮层：`sourceConcepts`（逗号分隔）、`notes`（无则"—"）、响应顶层 `mappingGen`；Esc 关闭并把焦点还给行头按钮。
-- 披露历史抽屉（§5.6）：请求 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（管理员视图走 admin 变体；`unit` 必填），INSTANT 的 `periodStart` 传 `periodEnd`；同一响应的 `otherUnitSeries`（Task 9，已过门槛）在"其他单位的事实"表列出非主单位行（整合决定：不再发第二个去掉 `unit` 的请求）。e2e 钩子：可得日期按钮 `data-testid="drawer-available-date"`、变换链列头 `drawer-transform-chain`、代码版本格 `drawer-code-version`。列：可得日期 · 文件（`formType sourceRef`，链接：edgar→`url`，linked→`documentUrl`，pending 标"（引用待挂接）"不链接）· 值·单位（`value_text` 原样 + unit；置空行显示原因文本）· 修订（`isRevision` → `decimalSub(本值, 前值)` 按当前缩放显示带符号 + `decimalRelChange(前值, 本值)` 显示为 4 位百分比；非修订但 `disclosureSeq>1` → "0 · 同值"；首条 "—"）· 变换链（① 映射 `sourceConcept → concept`（`mappingVersion · gen`）② 单位规则 `unitRule`（null → "原值"）④ 显示缩放 `÷1e8`/不缩放；派生格的 ③ 只在公式抽屉）· 代码版本 `run.codeVersion` 前 7 位。点行选择该行为"证据"区内容（缺省最后一条非置空行）。证据区：rawHash、snapshot（source、sha256、path、api/url、params JSON、"快照首次抓取时间" capturedAt、httpStatus、page）、locator（hashLocator、jsonPointer、field、pdf：page/table/row/column/documentUrl）、sourceDocument 链接、run（runId、codeVersion、toolVersions JSON）、mappingVersion、unitRule、download（非空 → 链接；空 → "null（Tushare 对象不可再分发）"）、回放步骤一句话。底部"复制可复现查询"把请求的绝对 URL 写入剪贴板。
+- 披露历史抽屉（§5.6）：请求 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（管理员视图走 admin 变体；`unit` 必填），INSTANT 的 `periodStart` 传 `periodEnd`；同一响应的 `otherUnitSeries`（Task 9，已过门槛）在"其他单位的事实"表列出非主单位行（整合决定：不再发第二个去掉 `unit` 的请求）。e2e 钩子：可得日期按钮 `data-testid="drawer-available-date"`、变换链列头 `drawer-transform-chain`、代码版本格 `drawer-code-version`。列：可得日期 · 文件（`formType sourceRef`，链接：edgar→`url`，linked→`documentUrl`，pending 标"（引用待挂接）"不链接）· 值·单位（`value_text` 原样 + unit；置空行显示原因文本）· 修订（计划第 3 轮审计 R3：差值取服务端 `entry.delta`（Task 9 的 `decimalSub(本值, 前值)`）按当前缩放显示带符号 + `entry.relChange` 显示为 4 位百分比，前端不重算；首条（`i===0`）"—"；之后 `delta===null`（前一条被扣留）→ "前值已扣留 · 不计差值"；本条被扣留 → 同一扣留标注；非修订 → "0 · 同值"）· 变换链（① 映射 `sourceConcept → concept`（`mappingVersion · gen`）② 单位规则 `unitRule`（null → "原值"）④ 显示缩放 `÷1e8`/不缩放；派生格的 ③ 只在公式抽屉）· 代码版本 `run.codeVersion` 前 7 位。点行选择该行为"证据"区内容（缺省最后一条非置空行）。证据区：rawHash、snapshot（source、sha256、path、api/url、params JSON、"快照首次抓取时间" capturedAt、httpStatus、page）、locator（hashLocator、jsonPointer、field、pdf：page/table/row/column/documentUrl）、sourceDocument 链接、run（runId、codeVersion、toolVersions JSON）、mappingVersion、unitRule、download（非空 → 链接；空 → "null（Tushare 对象不可再分发）"）、回放步骤一句话。底部"复制可复现查询"把请求的绝对 URL 写入剪贴板。
 - 公式抽屉：标题 `metric 名 · 期间`，值（比率百分比 / 货币缩放）；公式文本取 `catalogFor(cell.formulaVersion)?.[metric]?.[locale].formula`（Task 7 的目录按 metric 键控，条目形如 `{zh:{formula},en:{formula}}`）（当前语言为主、另一语言为副行；缺失 → "公式文本缺失（formula_version x 不在目录中）"）；kv：basis、inputUnit、formulaVersion、rule（a → "a（同一披露）"，b → "b（均未修订）"，无 → "—"）、asOf（无 → "—（最新）"）、computedAt（`computedAtKind='live'` → "本次请求实时计算"，否则时间串 + "物化时刻"）、basedOnRev；inputs 表每行（概念名、可得日期、filingId 前 8 位）是按钮，打开该 `factId` 的披露历史（先经 `/api/facts/[ticker]?factIds=<id>` 取自然键，**不显示其 value**）。
 - 抽屉外壳：`role="dialog" aria-modal="true"`；打开时焦点到关闭按钮；Tab 在抽屉内循环；Esc / 背景点击关闭；关闭后焦点回到打开它的元素；抽屉可叠放（公式 → 输入历史），关闭只关最上层。`< 640px` 为全屏底部抽屉（顶部抓手条），`≥ 640px` 为右侧抽屉（宽 `min(760px,100vw)`）。
 
@@ -11886,15 +11955,25 @@ const ev=(factId:string,codeVersion:string|null):EvidenceDto=>({factId,rawHash:'
 const resp=(series:SeriesEntry[]):FactSeriesResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:'2026-11-06',mappingGen:1,stateRev:1,truncated:false,history:true,concept:'revenue_operating',periodStart:'2024-01-01',periodEnd:'2024-12-31',unit:'CNY',otherUnits:[],series,otherUnitSeries:[],filings:{},evidence:{f1:ev('f1','3f9c2e1aaaa'),f3:ev('f3','5a10b7dbbbb')},withheld:{evidenceIncomplete:0,citationPending:0}});
 
 describe('drawerRows',()=>{
- it('computes revision differences exactly against the previous visible value and marks same-value re-disclosures',()=>{
-  const rows=drawerRows(resp([e({factId:'f1'}),e({factId:'f2',availableDate:'2025-04-29',disclosureSeq:2}),e({factId:'f3',availableDate:'2025-08-13',disclosureSeq:3,isRevision:true,value:'170912400118.02'})]),8);
-  expect(rows.map(r=>r.revision)).toEqual([{kind:'first'},{kind:'same'},{kind:'diff',abs:'+13.25',rel:'+0.0078%'}]);
+ // 计划第 3 轮审计 R2/R3: the difference is the server's guarded entry.delta / entry.relChange (Task 9), only formatted here.
+ // 170912400118.02 − 170899152276.34 = 13247841.68 → ÷1e8 = 0.1324784168 → '+0.13';
+ // relChange = 13247841.68 / 170899152276.34 = 0.0000775184750… → 10 places '0.0000775185' → 0.0078%.
+ it('formats the server revision difference and marks same-value re-disclosures',()=>{
+  const rows=drawerRows(resp([e({factId:'f1'}),e({factId:'f2',availableDate:'2025-04-29',disclosureSeq:2,delta:'0',relChange:'0'}),e({factId:'f3',availableDate:'2025-08-13',disclosureSeq:3,isRevision:true,value:'170912400118.02',delta:'13247841.68',relChange:'0.0000775185'})]),8);
+  expect(rows.map(r=>r.revision)).toEqual([{kind:'first'},{kind:'same'},{kind:'diff',abs:'+0.13',rel:'+0.0078%'}]);
   expect(rows[0].codeVersion).toBe('3f9c2e1');expect(rows[1].codeVersion).toBeNull();
  });
  it('withheld entries carry no value and break no diff chain',()=>{
   const rows=drawerRows(resp([e({factId:'f1'}),w({factId:'f2',reason:'citation_pending',disclosureSeq:2,isRevision:true})]),8);
   expect(rows[1]).toMatchObject({valueText:null,revision:{kind:'withheld'}});
   expect(defaultSelected(rows)).toBe('f1');
+ });
+ it('eligible → withheld → eligible revised: no numerical delta across the withheld disclosure (计划第 3 轮审计 R3)',()=>{
+  // Task 9 emits delta/relChange null after a withheld predecessor; the drawer must not recompute 120 − 100.
+  const rows=drawerRows(resp([e({factId:'f1',value:'100'}),w({factId:'f2',reason:'evidence_incomplete',disclosureSeq:2,isRevision:true}),e({factId:'f3',value:'120',disclosureSeq:3,isRevision:true,delta:null,relChange:null})]),0);
+  expect(rows.map(r=>r.revision)).toEqual([{kind:'first'},{kind:'withheld'},{kind:'withheld'}]);
+  expect(rows[2].valueText).toBe('120');
+  expect(JSON.stringify(rows[2].revision)).not.toMatch(/20/);
  });
 });
 describe('requests and links',()=>{
@@ -11925,8 +12004,7 @@ Run: `npm test -- src/components/company/drawer-model.test.ts` → Expected: FAI
 ```ts
 // src/components/company/drawer-model.ts
 // Pure model of the disclosure-history drawer (plan 2026-11-06 Task 12; spec §5.6, §0 #62, #68).
-// Revision differences use the exact decimal helpers of Task 7 (decimalSub / decimalRelChange).
-import {decimalRelChange,decimalSub} from '@/lib/company/decimal';
+// Revision differences are the server's exact entry.delta / entry.relChange (Task 9), formatted only (计划第 3 轮审计 R3).
 import {companyApi,type FactKeyRow,type FactSeriesResponse,type SeriesEntry} from '@/lib/company/client';
 import type {EvidenceDto,FilingSummary} from '@/lib/company/types';
 import {formatPercent,formatScaled,signed} from './format';
@@ -11935,19 +12013,18 @@ export interface SeriesKey{concept:string;periodStart:string|null;periodEnd:stri
 export type Revision={kind:'first'}|{kind:'same'}|{kind:'withheld'}|{kind:'diff';abs:string;rel:string|null};
 export interface DrawerRow{entry:SeriesEntry;valueText:string|null;revision:Revision;codeVersion:string|null;evidence:EvidenceDto|null}
 
+// 计划第 3 轮审计 R3: revision differences come from the server's entry.delta / entry.relChange, which
+// Task 9 nulls after a withheld predecessor; the drawer never recomputes across a withheld disclosure.
 export function drawerRows(r:FactSeriesResponse,scaleExp:number):DrawerRow[]{
- let prev:string|null=null;
  return r.series.map((entry,i)=>{
   const evidence=r.evidence[entry.factId]??null;
   const codeVersion=evidence?.run.codeVersion?.slice(0,7)??null;
   if(entry.kind==='withheld')return {entry,valueText:null,revision:{kind:'withheld'},codeVersion,evidence};
   let revision:Revision;
-  if(i===0||prev===null)revision={kind:'first'};
-  else if(entry.isRevision){
-   const rel=decimalRelChange(prev,entry.value);
-   revision={kind:'diff',abs:signed(formatScaled(decimalSub(entry.value,prev),scaleExp)),rel:rel===null?null:signed(formatPercent(rel,4))};
-  }else revision={kind:'same'};
-  prev=entry.value;
+  if(i===0)revision={kind:'first'};
+  else if(entry.delta===null)revision={kind:'withheld'};
+  else if(entry.isRevision)revision={kind:'diff',abs:signed(formatScaled(entry.delta,scaleExp)),rel:entry.relChange===null?null:signed(formatPercent(entry.relChange,4))};
+  else revision={kind:'same'};
   return {entry,valueText:entry.value,revision,codeVersion,evidence};
  });
 }
@@ -11981,7 +12058,7 @@ export function evidenceFields(d:EvidenceDto):[string,string][]{
 }
 ```
 
-Run: `npm test -- src/components/company/drawer-model.test.ts` → Expected: PASS（若 Task 7 的 `decimalRelChange` 对 `+` 号或位数的输出与假设不同，按其实际输出调整 `signed(formatPercent(rel,4))` 一行与本测试期望 `'+0.0078%'` 的来源，期望值不能从实现输出反抄：13.25 亿 / 1708.99 亿 = 0.0000775… → 0.0078%）。
+Run: `npm test -- src/components/company/drawer-model.test.ts` → Expected: PASS（若 Task 7 的 `formatPercent` 对 `+` 号或位数的输出与假设不同，按其实际输出调整 `signed(formatPercent(entry.relChange,4))` 一行与本测试期望 `'+0.0078%'` 的来源，期望值不能从实现输出反抄：0.1324784168 亿 / 1708.9915227634 亿 = 0.000077518… → 0.0078%（计划第 3 轮审计 R2）；差值一律取服务端 `entry.delta`/`entry.relChange`，前一条被扣留时为 null → 显示"已扣留"而非重算（计划第 3 轮审计 R3））。
 
 - [ ] **Step 7: 通用小组件 `Seg.tsx`、`DrawerShell.tsx`、`MiniBars.tsx`**
 
@@ -12232,7 +12309,11 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, otherUnits, scaleExp, on
                         {r.valueText !== null ? `${groupNumber(r.valueText)} ${r.entry.unit}` : <span className="text-[var(--text-dim)]">{r.entry.kind === 'withheld' && r.entry.reason === 'citation_pending' ? t('reasonPending') : t('reasonIncomplete')}</span>}
                       </td>
                       <td className="num pr-2 text-right">
-                        {r.revision.kind === 'diff' ? `${r.revision.abs}${r.revision.rel ? ` · ${r.revision.rel}` : ''}` : r.revision.kind === 'same' ? t('sameValue') : t('firstDisclosure')}
+                        {/* 计划第 3 轮审计 R3: explicit withheld branch, never falls through to firstDisclosure */}
+                        {r.revision.kind === 'diff' ? `${r.revision.abs}${r.revision.rel ? ` · ${r.revision.rel}` : ''}`
+                          : r.revision.kind === 'same' ? t('sameValue')
+                          : r.revision.kind === 'withheld' ? <span className="text-[var(--text-dim)]" data-testid="drawer-revision-withheld">{t('revisionWithheld')}</span>
+                          : t('firstDisclosure')}
                       </td>
                       <td className="pr-2 text-[11px] text-[var(--text-dim)]">
                         {t('tMap', { source: r.entry.sourceConcept, concept: main.data.concept, version: r.entry.mappingVersion, gen: r.entry.mappingGen })}{' '}
@@ -12665,8 +12746,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Modify: `src/app/(app)/stock/[ticker]/CompanyPage.tsx`（最终版 `renderFactView`）
 
 **实施要点：**
-- **指标视图**：数据只来自 `GET /api/companies/[ticker]/metrics?asOf=`（本页从不直接调用规格二 `/metrics`）。行 = `metricNames(market)` 的全部指标（顺序照抄；响应里出现但不在列表中的指标按名字追加），列 = 期间键 `periodStart:periodEnd:duration` 按 `periodEnd` 降序、同 `periodEnd` 按键升序，裁到期数 8/20/40。比率（`unit='pure'`）显示百分比两位小数；货币按缩放；股数原值。置空格同报表（"— 待挂接" / "来源记录不完整"）；无条目的格显示"未产出"，title 固定为"缺输入、单位不一致、分母为 0、期间匹配不唯一或版本不一致（规格二 §8）"——不推断具体原因。顶部芯片：无 `asOf` → "读物化表 · basedOnRev {rev} · formula_version {v}"；有 `asOf` → "回放：实时派生 · formula_version {v}"。`stale=true` → 只显示"指标待重算：物化后事实可见性已变化，稍后自动重算。不显示旧值。"（不是"未产出"、不显示表）；`truncated` → 截断卡。行头与每格点击打开公式抽屉（`computedAt`、`computedAtKind` 来自条目/响应）。
-- **估值模型区**：在指标表下方，灰色分隔线"以下不是事实 · Below is a model, not facts"，标题"估值模型"+芯片"假设含模型/默认/用户估计；不是事实"，内容 `<DcfStudio ticker={ticker} onOpenFact={…} />`（Task 14 已改为不挂载即运行、带股权桥面板；`onOpenFact` 打开该事实的披露历史抽屉）；回放模式下整块替换为"回放模式下不运行估值模型"。e2e 钩子：估值区 `data-testid="valuation-section"`、指标行 `metric-row-<metric>`、文件行 `filing-row`。
+- **指标视图**：数据只来自 `GET /api/companies/[ticker]/metrics?asOf=`（本页从不直接调用规格二 `/metrics`）。行 = `metricNames(market)` 的全部指标（顺序照抄；响应里出现但不在列表中的指标按名字追加；计划第 3 轮审计 R6：同一指标按 `(metric, inputUnit, basis)` 分成多行，不同输入货币/口径不互相覆盖，行头副行显示 `metric · inputUnit · basis`），列 = 期间键 `periodStart:periodEnd:duration` 按 `periodEnd` 降序、同 `periodEnd` 按键升序，裁到期数 8/20/40（计划第 3 轮审计 R5：请求带 `periods`，服务端按最新 N 期间键返回全部指标行）。比率（`unit='pure'`）显示百分比两位小数；货币按缩放；股数原值。置空格同报表（"— 待挂接" / "来源记录不完整"）；无条目的格显示"未产出"，title 固定为"缺输入、单位不一致、分母为 0、期间匹配不唯一或版本不一致（规格二 §8）"——不推断具体原因。顶部芯片：无 `asOf` → "读物化表 · basedOnRev {rev} · formula_version {v}"；有 `asOf` → "回放：实时派生 · formula_version {v}"。`stale=true` → 只显示"指标待重算：物化后事实可见性已变化，稍后自动重算。不显示旧值。"（不是"未产出"、不显示表）；`truncated` → 截断卡。行头与每格点击打开公式抽屉（`computedAt`、`computedAtKind` 来自条目/响应）。
+- **估值模型区**：在指标表下方，灰色分隔线"以下不是事实 · Below is a model, not facts"，标题"估值模型"+芯片"假设含模型/默认/用户估计；不是事实"，内容 `<DcfStudio ticker={ticker} onOpenFact={…} />`（Task 14 已改为不挂载即运行、带股权桥面板；`onOpenFact` 打开该事实的披露历史抽屉）；回放模式下整块替换为"回放模式下不运行估值模型"。e2e 钩子：估值区 `data-testid="valuation-section"`、指标行 `metric-row-<metric>`（同一指标多个输入货币/口径时第一行仍是该名，其余为 `metric-row-<metric>-<n>`，计划第 3 轮审计 R6）、文件行 `filing-row`。
 - **文件视图**：`GET /api/companies/[ticker]/filings?asOf=`（Task 11 的路由，已按 `available_date ≤ asOf` 与 `mapping_gen>0` 过滤）。分组"定期报告"表：可得日期 · 类型（CN：`annual` 年报 / `semiannual` 半年报 / `q1` 一季报 / `q3` 三季报 / `restatement` 更正 / 其他；US 原样 `10-K` 等）· 财期（`fiscalYear fiscalPeriod`）· `period_end` · 来源（`EDGAR` / `Tushare → 巨潮`）· 引用徽标（`edgar` → 链接 `url` "edgar · 索引页 ↗"；`linked` → 链接 `documentUrl` "linked · 巨潮 PDF ↗"；`pending` → 灰色"巨潮公告未挂接"，`linkAttempts ≥ 5` → 警示色"挂接失败，待人工（n 次）"）· 事实数 · 操作："在报表中高亮"（跳到 `?view=statements&highlight=<filingId>`，保留 `asOf`）、"原文 ↗"（只在有可链接 URL 时出现；`NEXT_PUBLIC_COMPANY_F3_DRAWER` 关或 F3 组件未接入 → `target="_blank" rel="noopener noreferrer"` 打开 `documentUrl ?? url`；开且已接入 → 打开 `<SourceDrawerAdapter filingId>`）。表后分组"纪要与其他"：只有"待文档管道（F3）。"。
 - **概览视图**（决策 J：无 K 线、无行情卡、无 PE/PB/ROE/股息率/市值卡）：左列"最新财期速览"卡（`overview.latest`：CN 用 `revenue_operating`、US 用 `revenue`，加 `net_income_parent`、`operating_cash_flow`、派生 `gross_margin`、`revenue_yoy`；每个值是打开抽屉的按钮；期间芯片 `periodStart → periodEnd · duration`；脚注"同一信封 · state_rev {rev}"；同比用中性色与 `+`/`-` 符号，不用涨跌色）+"最近事件"三条（`新文件` → "文件 →" 链接 `?view=filings`；`新财期`、`修订` → "报表 →" 链接 `?view=statements&asOf=<occurredOn>`；数值是打开抽屉的按钮；置空值显示"— 待挂接"/"来源记录不完整"；`payloadChangedAt` 非空加"已更新"标）+"全部 → 跟踪"链接 `?view=tracking`。右列"信号"卡：文案"今日无触发"（现有信号卡不变，不接新数据）。`latest.truncated` → 截断卡；`latest=null` → "尚无可速览的财期。"。
 - **判断视图**（§10.4）：`NEXT_PUBLIC_COMPANY_JUDGMENTS` 缺省关闭 → 空状态"判断层（F4）尚未上线 / 这里只渲染 F4 登记、可结算的判断卡。不显示 recommendations。"（决策 A：不列 `recommendations`）。开启时请求 `GET /api/judgments?subject_type=issuer&subject_key=<issuer_id>&view=latest`，回放时 `&view=as_known&asOf=<asOf>`；响应顶层 `view` 必须等于请求的 view，回放时 `asOf` 必须等于请求值，且回放时任一卡的 `registered_at` 或 `settlement.settled_at` 晚于 `asOf` 日终（`asOf + 'T23:59:59.999Z'`）→ 整个判断区不渲染，显示"回放读取失败：响应 view ≠ as_known 或 asOf 与请求不符，不渲染判断区。"（失败关闭）。百分比只在 `calibration === 'calibrated' && (lifecycle === 'open' || lifecycle === 'settled') && Number.isFinite(display.percent)` 时显示（客户端防御，本页从不自行计算百分比）；否则显示"不显示百分比（{calibration}）"与档位（`band`：低/中/高）。渲染用 F4 的 `src/components/judgments/JudgmentCard`——仓库当前不存在，所以经本地适配器 `judgment-card-adapter.tsx` 的最小渲染器；F4 落地后只改适配器。不定义也不显示星级（决策 K）。
@@ -12681,7 +12762,7 @@ import {describe,it,expect} from 'vitest';
 import {metricsGrid,metricText,basedOnRevOf} from './metrics-model';
 import type {MetricEntry,MetricsResponse} from '@/lib/company/client';
 
-const d=(metric:string,periodStart:string,periodEnd:string,duration:string,value:string,unit='pure'):MetricEntry=>({metric,periodStart,periodEnd,duration,basedOnRev:4182,computedAt:'2026-11-02T04:10:00Z',computedAtKind:'materialized',cell:{kind:'derived',metric,value,unit,inputUnit:'CNY',basis:'cn_standard',formulaVersion:'facts-derive/1.0',inputs:[]}});
+const d=(metric:string,periodStart:string,periodEnd:string,duration:string,value:string,unit='pure',inputUnit='CNY',basis='cn_standard'):MetricEntry=>({metric,periodStart,periodEnd,duration,inputUnit,basis,basedOnRev:4182,computedAt:'2026-11-02T04:10:00Z',computedAtKind:'materialized',cell:{kind:'derived',metric,value,unit,inputUnit,basis,formulaVersion:'facts-derive/1.0',inputs:[]}});
 const resp=(metrics:MetricEntry[],o:Partial<MetricsResponse>={}):MetricsResponse=>({issuerId:'i',ticker:'600519.SH',market:'CN',asOf:null,mappingGen:1,formulaVersion:'facts-derive/1.0',stale:false,truncated:false,metrics,evidence:{},withheld:{evidenceIncomplete:0,citationPending:0},...o});
 
 describe('metricsGrid',()=>{
@@ -12693,6 +12774,15 @@ describe('metricsGrid',()=>{
   expect(g.rows.map(x=>x.metric)).toEqual(['gross_margin','revenue_yoy','zz_extra']);
   expect(g.rows[0].cells['2025-04-01:2025-06-30:3M']).toBeUndefined();
   expect(g.rows[1].cells['2025-01-01:2025-06-30:6M']?.cell.kind).toBe('withheld');
+ });
+ it('same metric and period in two input currencies are two rows, never overwritten; a withheld alternative keeps its identity (计划第 3 轮审计 R6)',()=>{
+  const usd=d('fcf','2024-01-01','2024-12-31','12M','99000000000','USD','USD','us_standard');
+  const eur={...d('fcf','2024-01-01','2024-12-31','12M','0','EUR','EUR','us_standard'),cell:{kind:'withheld' as const,reason:'evidence_incomplete' as const,factId:'e'}};
+  const g=metricsGrid(resp([usd,eur]),['fcf','roe'],8);
+  expect(g.rows.map(r=>[r.metric,r.inputUnit,r.basis,r.alt])).toEqual([['fcf','EUR','us_standard',0],['fcf','USD','us_standard',1],['roe',null,null,0]]);
+  expect(g.rows[0].cells['2024-01-01:2024-12-31:12M']?.cell.kind).toBe('withheld');
+  expect(g.rows[1].cells['2024-01-01:2024-12-31:12M']).toBe(usd);
+  expect(g.rows[1].id).toBe(JSON.stringify(['fcf','USD','us_standard']));
  });
  it('formats ratios as 2-decimal percents and money by scale; reports basedOnRev',()=>{
   expect(metricText(d('gross_margin','a','b','6M','0.918612'),8)).toBe('91.86%');
@@ -12714,18 +12804,30 @@ import type {MetricEntry,MetricsResponse} from '@/lib/company/client';
 import {formatValue,unitKindOfUnit} from './format';
 
 export interface MetricCol{key:string;periodStart:string;periodEnd:string;duration:string}
+/** One grid row = one landed metric identity (metric, inputUnit, basis); `alt` numbers a metric's rows (计划第 3 轮审计 R6). */
+export interface MetricGridRow{id:string;metric:string;inputUnit:string|null;basis:string|null;alt:number;cells:Record<string,MetricEntry>}
 export const metricKey=(e:{periodStart:string;periodEnd:string;duration:string})=>`${e.periodStart}:${e.periodEnd}:${e.duration}`;
-export function metricsGrid(r:MetricsResponse,names:readonly string[],periods:number):{cols:MetricCol[];rows:{metric:string;cells:Record<string,MetricEntry>}[]}{
+const rowIdOf=(e:{metric:string;inputUnit:string;basis:string})=>JSON.stringify([e.metric,e.inputUnit,e.basis]);
+export function metricsGrid(r:MetricsResponse,names:readonly string[],periods:number):{cols:MetricCol[];rows:MetricGridRow[]}{
  const cols=new Map<string,MetricCol>();
  for(const e of r.metrics)cols.set(metricKey(e),{key:metricKey(e),periodStart:e.periodStart,periodEnd:e.periodEnd,duration:e.duration});
  const ordered=[...cols.values()].sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd)||a.key.localeCompare(b.key)).slice(0,periods);
  const keep=new Set(ordered.map(c=>c.key));
  const extras=[...new Set(r.metrics.map(e=>e.metric))].filter(m=>!names.includes(m)).sort();
- const rows=[...names,...extras].map(metric=>{
-  const cells:Record<string,MetricEntry>={};
-  for(const e of r.metrics)if(e.metric===metric&&keep.has(metricKey(e)))cells[metricKey(e)]=e;
-  return {metric,cells};
- });
+ // Group by (metric, inputUnit, basis) — same-period alternatives in different currencies never overwrite each other.
+ const groups=new Map<string,MetricGridRow>();
+ for(const e of r.metrics){
+  const id=rowIdOf(e);
+  const g=groups.get(id)??{id,metric:e.metric,inputUnit:e.inputUnit,basis:e.basis,alt:0,cells:{}};
+  if(keep.has(metricKey(e)))g.cells[metricKey(e)]=e;
+  groups.set(id,g);
+ }
+ const rows:MetricGridRow[]=[];
+ for(const metric of [...names,...extras]){
+  const mine=[...groups.values()].filter(g=>g.metric===metric).sort((a,b)=>(a.inputUnit??'').localeCompare(b.inputUnit??'')||(a.basis??'').localeCompare(b.basis??''));
+  if(mine.length===0)rows.push({id:JSON.stringify([metric,null,null]),metric,inputUnit:null,basis:null,alt:0,cells:{}});
+  else mine.forEach((g,i)=>rows.push({...g,alt:i}));
+ }
  return {cols:ordered,rows};
 }
 export function metricText(e:MetricEntry,scaleExp:number):string|null{
@@ -12756,7 +12858,7 @@ import { useDrawers } from './DrawerHost';
 import { Seg } from './Seg';
 import { Callout, ErrorCard, LoadingGrid, TruncatedCard } from './StateCallout';
 import { SCALES, SCALE_EXP, defaultScale, type ScaleId } from './format';
-import { basedOnRevOf, metricText, metricsGrid, type MetricCol } from './metrics-model';
+import { basedOnRevOf, metricText, metricsGrid, type MetricCol, type MetricGridRow } from './metrics-model';
 
 const PERIODS = [8, 20, 40] as const;
 const SCALE_KEYS: Record<ScaleId, string> = { raw: 'scaleRaw', thousand: 'scaleThousand', million: 'scaleMillion', hundred_million: 'scaleHundredMillion' };
@@ -12773,10 +12875,13 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
   const [periods, setPeriods] = useState<(typeof PERIODS)[number]>(8);
   const locale = useLocale() === 'en' ? 'en' : 'zh';
   const [scale, setScale] = useState<ScaleId>(defaultScale(market === 'CN' ? 'CNY' : 'USD', locale));
-  const { state, retry } = useCompanyFetch<MetricsResponse>(companyApi('metrics', ticker, { asOf }));
+  // 计划第 3 轮审计 R5: the server keeps every metric row of the newest `periods` keys (no silent 200-row cut).
+  const { state, retry } = useCompanyFetch<MetricsResponse>(companyApi('metrics', ticker, { asOf, periods: String(periods) }));
   const exp = SCALE_EXP[scale];
   const name = (m: string) => (tn.has(m) ? tn(m) : m);
   const dur = (d: string) => (td.has(d) ? td(d) : d);
+  // 计划第 3 轮审计 R6: the row label names the surviving input unit and basis.
+  const rowSub = (row: MetricGridRow) => (row.inputUnit === null ? row.metric : `${row.metric} · ${row.inputUnit} · ${row.basis}`);
 
   function open(e: MetricEntry, c: MetricCol, r: MetricsResponse) {
     if (e.cell.kind === 'withheld') { drawers.open({ kind: 'withheld', reason: e.cell.reason, title: `${name(e.metric)} · ${c.periodEnd} ${dur(c.duration)}` }); return; }
@@ -12820,14 +12925,14 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
                   {g.rows.map((row) => {
                     const firstEntry = g.cols.map((c) => row.cells[c.key]).find((e) => e && e.cell.kind === 'derived');
                     return (
-                      <tr key={row.metric} className="border-t border-[var(--border)]" data-testid={`metric-row-${row.metric}`}>
+                      <tr key={row.id} className="border-t border-[var(--border)]" data-testid={row.alt === 0 ? `metric-row-${row.metric}` : `metric-row-${row.metric}-${row.alt}`}>
                         <th scope="row" className="sticky left-0 z-10 bg-[var(--bg-card)] px-3 py-1.5 text-left font-normal">
                           {firstEntry ? (
                             <button type="button" className="text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                               onClick={() => open(firstEntry, g.cols.find((c) => row.cells[c.key] === firstEntry)!, r)}>
-                              {name(row.metric)}<span className="num block text-[11px] text-[var(--text-dim)]">{row.metric}</span>
+                              {name(row.metric)}<span className="num block text-[11px] text-[var(--text-dim)]">{rowSub(row)}</span>
                             </button>
-                          ) : (<>{name(row.metric)}<span className="num block text-[11px] text-[var(--text-dim)]">{row.metric}</span></>)}
+                          ) : (<>{name(row.metric)}<span className="num block text-[11px] text-[var(--text-dim)]">{rowSub(row)}</span></>)}
                         </th>
                         {g.cols.map((c) => {
                           const e = row.cells[c.key];
@@ -14822,6 +14927,7 @@ git commit -m "feat(tracking): watches, read receipts, watchlist import and inbo
 - Create: `src/components/company/tracking/InboxEventRow.tsx`
 - Create: `src/components/company/tracking/EventSummaryText.tsx`
 - Overwrite（Task 11 占位）: `src/components/company/tracking/CompanyTrackingView.tsx`、`src/components/company/tracking/TrackButton.tsx`
+- Create: `src/components/company/tracking/guarded-load.ts`、`src/components/company/tracking/guarded-load.test.ts`（计划第 3 轮审计 R7：请求代次守卫）
 - Create: `src/app/(app)/watchlist/tracking/page.tsx`
 - Modify: `src/app/(app)/watchlist/page.tsx`（页头加"看板 | 跟踪"切换）
 - Modify: `messages/zh/tracking.json`、`messages/en/tracking.json`
@@ -15630,6 +15736,87 @@ export default function TrackingPage() {
 Run: `grep -rl "CompanyTrackingView\|TrackButton" src/app/\(app\)/stock src/components/company`
 Expected: 列出 `CompanyPage.tsx`（或其页头组件）与两个占位文件。若 `CompanyPage` 没有引用二者，在 `view==='tracking'` 分支渲染 `<CompanyTrackingView issuerId={…} ticker={…} market={…} asOf={asOf ?? null} />`，并在页头动作区渲染 `<TrackButton issuerId={…} />`（变量名取 `CompanyPage` 现有 props），在实施日志登记该补线。
 
+**请求代次守卫（计划第 3 轮审计 R7）**：跟踪视图的 `load` 原先无取消/代次检查——先发收件箱请求、切到 `asOf` 回放、回放请求先返回、原收件箱请求后返回，当前事件会覆盖回放结果并挂在回放标签下。守卫抽成纯模块 `guarded-load.ts`（仓库 vitest 只跑 node 环境的 `*.test.ts`，无组件测试设施），先写失败测试：
+
+```ts
+// src/components/company/tracking/guarded-load.test.ts
+// 计划第 3 轮审计 R7: a late response of a superseded scope never writes rows, errors or the loading flag.
+import {describe,expect,it} from 'vitest';
+import {LoadGenerations,guardedLoad,type LoadSink,type PageResult} from './guarded-load';
+
+function deferred<T>(){let resolve!:(v:T)=>void,reject!:(e:unknown)=>void;const promise=new Promise<T>((res,rej)=>{resolve=res;reject=rej;});return {promise,resolve,reject};}
+function recorder(){
+ const log:{rows:string[];cursor:string|null;error:string|null;loading:boolean}={rows:[],cursor:null,error:null,loading:false};
+ const sink:LoadSink<string>={setLoading:(v)=>{log.loading=v;},page:(from,r)=>{log.rows=from?[...log.rows,...r.rows]:r.rows;log.cursor=r.nextCursor;log.error=null;},fail:(c)=>{log.error=c;}};
+ return {log,sink};
+}
+const codeOf=(e:unknown)=>e instanceof Error?e.message:'internal';
+
+describe('guardedLoad (company tracking view)',()=>{
+ it('current-mode response resolving after the replay response never replaces replay rows',async()=>{
+  const gens=new LoadGenerations();const {log,sink}=recorder();
+  const inbox=deferred<PageResult<string>>(),replay=deferred<PageResult<string>>();
+  const a=guardedLoad(gens,null,()=>inbox.promise,sink,codeOf);      // watched, current mode
+  gens.invalidate();log.rows=[];log.cursor=null;                       // scope change: asOf set (component clears rows/cursor)
+  const b=guardedLoad(gens,null,()=>replay.promise,sink,codeOf);     // replay request
+  replay.resolve({rows:['historical-2024-06-30'],nextCursor:null});await b;
+  expect(log).toEqual({rows:['historical-2024-06-30'],cursor:null,error:null,loading:false});
+  inbox.resolve({rows:['current-event'],nextCursor:'c1'});await a;
+  expect(log.rows).toEqual(['historical-2024-06-30']);
+  expect(log.rows).not.toContain('current-event');
+  expect(log.cursor).toBeNull();expect(log.loading).toBe(false);
+ });
+ it('a stale failure writes no error and does not clear the loading flag of the live request',async()=>{
+  const gens=new LoadGenerations();const {log,sink}=recorder();
+  const old=deferred<PageResult<string>>(),live=deferred<PageResult<string>>();
+  const a=guardedLoad(gens,null,()=>old.promise,sink,codeOf);
+  const b=guardedLoad(gens,null,()=>live.promise,sink,codeOf);
+  old.reject(new Error('not_authenticated'));await a;
+  expect(log.error).toBeNull();expect(log.loading).toBe(true);
+  live.resolve({rows:['x'],nextCursor:null});await b;
+  expect(log).toMatchObject({rows:['x'],error:null,loading:false});
+ });
+ it('invalidate (unmount / scope change) drops every in-flight result',async()=>{
+  const gens=new LoadGenerations();const {log,sink}=recorder();
+  const d=deferred<PageResult<string>>();
+  const a=guardedLoad(gens,null,()=>d.promise,sink,codeOf);
+  gens.invalidate();d.resolve({rows:['late'],nextCursor:'c'});await a;
+  expect(log.rows).toEqual([]);expect(log.cursor).toBeNull();
+  const g=gens.peek();expect(gens.isCurrent(g)).toBe(true);gens.invalidate();expect(gens.isCurrent(g)).toBe(false);
+ });
+});
+```
+
+Run: `npm test -- src/components/company/tracking/guarded-load.test.ts` → Expected: FAIL（`Cannot find module './guarded-load'`）。
+
+```ts
+// src/components/company/tracking/guarded-load.ts
+// Request-generation guard for the company tracking view (计划第 3 轮审计 R7). Every load supersedes the
+// earlier ones; a scope change (issuerId/ticker/market/asOf/watching) or unmount invalidates all of them.
+// Only the current generation may write rows, cursor, error or the loading flag.
+export class LoadGenerations{
+ private gen=0;
+ /** Scope change or unmount: every in-flight load becomes stale. */
+ invalidate():number{return ++this.gen;}
+ /** A new load: supersedes every earlier one. */
+ begin():number{return ++this.gen;}
+ /** Capture without superseding (e.g. mark-read writes). */
+ peek():number{return this.gen;}
+ isCurrent(g:number):boolean{return g===this.gen;}
+}
+export interface PageResult<T>{rows:T[];nextCursor:string|null}
+export interface LoadSink<T>{setLoading(v:boolean):void;page(from:string|null,r:PageResult<T>):void;fail(code:string):void}
+export async function guardedLoad<T>(gens:LoadGenerations,from:string|null,fetchPage:(from:string|null)=>Promise<PageResult<T>>,sink:LoadSink<T>,codeOf:(e:unknown)=>string):Promise<void>{
+ const g=gens.begin();
+ sink.setLoading(true);
+ try{const r=await fetchPage(from);if(gens.isCurrent(g))sink.page(from,r);}
+ catch(e){if(gens.isCurrent(g))sink.fail(codeOf(e));}
+ finally{if(gens.isCurrent(g))sink.setLoading(false);}
+}
+```
+
+Run: `npm test -- src/components/company/tracking/guarded-load.test.ts` → Expected: PASS（3 个用例）。
+
 ```tsx
 // src/components/company/tracking/TrackButton.tsx
 // Header action (spec §5.2 "跟踪 ✓"): not watching → POST watch; watching → link to /watchlist/tracking.
@@ -15683,6 +15870,7 @@ import { useToast } from '@/components/Toast';
 import { foldSameIssuerDay } from '@/lib/company/inbox';
 import type { Market } from '@/lib/company/types';
 import { fetchCompanyEvents, fetchInbox, isWatching, markRowsRead, TrackingApiError } from '@/lib/company/tracking-client';
+import { LoadGenerations, guardedLoad } from './guarded-load';
 import { InboxEventRow, type DisplayEvent } from './InboxEventRow';
 import { TrackButton } from './TrackButton';
 
@@ -15695,33 +15883,38 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: { issuer
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [gens] = useState(() => new LoadGenerations());   // 计划第 3 轮审计 R7: request generations
 
   useEffect(() => {
     let live = true;
+    setWatching(null);   // a new issuer must not reuse the previous issuer's watch state
     isWatching(issuerId).then((w) => { if (live) setWatching(w); }).catch(() => { if (live) setWatching(false); });
     return () => { live = false; };
   }, [issuerId]);
 
-  const load = useCallback(async (from: string | null) => {
-    if (watching === null) return;
-    setLoading(true);
-    try {
-      let next: DisplayEvent[]; let nc: string | null;
+  // 计划第 3 轮审计 R7: a scope change invalidates every in-flight load and clears the previous scope's rows;
+  // declared before the load effect so it runs first. Cleanup (unmount / next scope) invalidates as well.
+  useEffect(() => {
+    gens.invalidate();
+    setRows([]); setCursor(null); setError(null); setLoading(false);
+    return () => { gens.invalidate(); };
+  }, [gens, issuerId, ticker, market, asOf, watching]);
+
+  const load = useCallback((from: string | null): Promise<void> => {
+    if (watching === null) return Promise.resolve();
+    return guardedLoad<DisplayEvent>(gens, from, async (c) => {
       if (!replay && watching) {
-        const r = await fetchInbox({ issuerId, cursor: from, limit: 50 });
-        next = r.rows; nc = r.nextCursor;
-      } else {
-        const r = await fetchCompanyEvents(ticker, { asOf, cursor: from, limit: 50 });
-        next = r.rows.filter((e) => e.market === market).map((e) => ({ ...e, read: true }));   // no read state outside the inbox
-        nc = r.nextCursor;
+        const r = await fetchInbox({ issuerId, cursor: c, limit: 50 });
+        return { rows: r.rows, nextCursor: r.nextCursor };
       }
-      setRows((prev) => (from ? [...prev, ...next] : next));
-      setCursor(nc);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof TrackingApiError ? e.code : 'internal');
-    } finally { setLoading(false); }
-  }, [watching, replay, issuerId, ticker, asOf, market]);
+      const r = await fetchCompanyEvents(ticker, { asOf, cursor: c, limit: 50 });
+      return { rows: r.rows.filter((e) => e.market === market).map((e) => ({ ...e, read: true })), nextCursor: r.nextCursor };   // no read state outside the inbox
+    }, {
+      setLoading,
+      page: (f, r) => { setRows((prev) => (f ? [...prev, ...r.rows] : r.rows)); setCursor(r.nextCursor); setError(null); },
+      fail: setError,
+    }, (e) => (e instanceof TrackingApiError ? e.code : 'internal'));
+  }, [gens, watching, replay, issuerId, ticker, asOf, market]);
   useEffect(() => { void load(null); }, [load]);
 
   const groups = useMemo(() => foldSameIssuerDay(rows), [rows]);
@@ -15740,7 +15933,8 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: { issuer
           variant="secondary" size="sm" className="ml-auto" disabled={!canMark}
           title={replay ? t('company.replayNoRead') : undefined}
           onClick={async () => {
-            try { await markRowsRead(rows); setRows((p) => p.map((r) => ({ ...r, read: true }))); }
+            const g = gens.peek();   // 计划第 3 轮审计 R7: no write into a scope that changed meanwhile
+            try { await markRowsRead(rows); if (gens.isCurrent(g)) setRows((p) => p.map((r) => ({ ...r, read: true }))); }
             catch (e) { show(t('errors.generic', { code: e instanceof TrackingApiError ? e.code : 'internal' })); }
           }}
         >
@@ -15787,7 +15981,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: { issuer
 
 - [ ] **Step 11: 类型、lint、单测**
 
-Run: `npm run typecheck && npm run lint && npm test -- src/lib/company src/app/api/tracking src/i18n`
+Run: `npm run typecheck && npm run lint && npm test -- src/lib/company src/app/api/tracking src/i18n src/components/company/tracking`
 Expected: 全部通过。`t.has` 需要 next-intl ≥ 3.18（仓库为 4.x）。
 
 - [ ] **Step 12: 本机目视核对（不算验收，验收在 Task 19 e2e）**
@@ -15823,7 +16017,7 @@ git commit -m "feat(tracking): tracking inbox page and company tracking view" -m
 规格：§8、§6.1（`GET /api/companies` 行）、§11、决策 H（需登录，默认）；画板 `Directory.dc.html`。
 
 **指挥决定（本任务）：**
-- `q` 只允许字母、数字、空格、`.`、`-`（`/^[\p{L}\p{N} .\-]{1,24}$/u`）：PostgREST `or=(…ilike…)` 过滤串里的逗号、括号、引号、`*`、`%`、`_` 都会改变语义，白名单比转义更可靠。名称前缀匹配 `canonical_name_zh/en`（不区分大小写），代码前缀匹配**当前有效**证券的 `ticker`。
+- `q` 只允许字母、数字、空格、`.`、`-`（`/^[\p{L}\p{N} .\-]{1,24}$/u`）：PostgREST `or=(…ilike…)` 过滤串里的逗号、括号、引号、`*`、`%`、`_` 都会改变语义，白名单比转义更可靠。名称前缀匹配 `canonical_name_zh/en`（不区分大小写），代码前缀匹配**当前有效**证券的 `ticker`。计划第 3 轮审计 R8：两条前缀查询不再 `.limit(1000)`，而是稳定排序（`issuer_id`；证券另加 `ticker, valid_from`）后 `.range(offset, offset+999)` 翻页直到空页，全部读完再按当前有效过滤、再与覆盖表求交；任一页出错或候选超过 100 000 行 → `directory_search_failed`（失败关闭，不返回看似完整的部分结果）。
 - 目录页需登录：`/intel/companies` 在 `(app)` 受保护组内，中间件已重定向未登录用户（决策 H 默认）；`GET /api/companies` 本身是公共只读（不读会话、无按用户字段，规格 §6.1），以便共享缓存。
 - 概念覆盖分母用响应字段 `conceptsTotal = FACT_CONCEPTS.length`（客户端不 import 事实层模块）。
 - TabBar：把高亮判定抽成 `isTabActive(href, pathname)`，`/intel/companies`、`/watchlist/tracking` 分别高亮"情报""股票池"；同时收紧为路径段前缀（`/intel` 不再匹配 `/intelligence`）。
@@ -15848,8 +16042,23 @@ git commit -m "feat(tracking): tracking inbox page and company tracking view" -m
 ```ts
 // src/lib/company/directory.test.ts
 import {describe,expect,it} from 'vitest';
-import {DIRECTORY_Q_RE,issuerIdsByPrefix,toDirectoryRows,type PrefixClient} from './directory';
+import {DIRECTORY_Q_RE,issuerIdsByPrefix,toDirectoryRows,type PrefixClient,type PrefixPage} from './directory';
 import type {CoverageRow} from './types';
+
+/** Fake anon client: order() is recorded, range(a,b) slices like PostgREST (server max-rows 1000). 计划第 3 轮审计 R8 */
+function fakePrefix(names:Record<string,unknown>[],tickers:Record<string,unknown>[],fail=false){
+ const log:Record<string,string[]>={issuers:[],issuer_securities:[]};
+ const pageOf=(rows:Record<string,unknown>[],l:string[]):PrefixPage=>{
+  const p:PrefixPage={order:(col)=>{l.push(`order:${col}`);return p;},range:async(a,b)=>{l.push(`range:${a}-${b}`);return fail?{data:null,error:{message:'boom'}}:{data:rows.slice(a,Math.min(b+1,a+1000)),error:null};}};
+  return p;
+ };
+ const sb:PrefixClient={from:(table)=>({select:(cols)=>({
+  or:(f)=>{log[table].push(`select:${cols}`,`or:${f}`);return pageOf(names,log[table]);},
+  ilike:(col,pat)=>{log[table].push(`select:${cols}`,`ilike:${col}:${pat}`);return pageOf(tickers,log[table]);},
+ })})};
+ return {sb,log};
+}
+const uid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',C='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const cov=(issuer_id:string,market:'US'|'CN',p:Partial<CoverageRow>={}):CoverageRow=>({issuer_id,market,filings_count:10,facts_count:500,concepts_covered:30,earliest_period_end:'2015-09-26',latest_period_end:'2025-09-27',latest_available_date:'2025-10-31',citation_summary:{linked:0,pending:0,edgar:10},scope_last_success_at:'2026-11-02T03:00:00Z',scope_last_status:'success',based_on_rev:3,rebuilt_at:'x',rebuild_id:'r',rebuild_batch_id:'b',...p});
@@ -15872,17 +16081,28 @@ describe('directory helpers',()=>{
    scopeLastSuccessAt:'2026-11-02T03:00:00Z',scopeLastStatus:'success'});
   expect(rows[0]).toMatchObject({issuerId:A,market:'US',primaryTicker:'AAPL',tickers:['AAPL']});
  });
- it('issuerIdsByPrefix: names (zh/en, case-insensitive prefix) ∪ current tickers, de-duplicated',async()=>{
-  const calls:string[]=[];
-  const sb:PrefixClient={from:(table)=>({select:(cols)=>({
-   or:(f)=>{calls.push(`${table}:${cols}:or:${f}`);return {limit:async()=>({data:[{issuer_id:A}],error:null})};},
-   ilike:(col,pat)=>{calls.push(`${table}:${cols}:ilike:${col}:${pat}`);return {limit:async()=>({data:[{issuer_id:A,valid_from:'2000-01-01',valid_to:null},{issuer_id:C,valid_from:'1990-01-01',valid_to:'2000-01-01'},{issuer_id:B,valid_from:'2001-01-01',valid_to:null}],error:null})};},
-  })})};
+ it('issuerIdsByPrefix: names (zh/en, case-insensitive prefix) ∪ current tickers, de-duplicated; stable order + range pages',async()=>{
+  const {sb,log}=fakePrefix([{issuer_id:A}],[{issuer_id:A,valid_from:'2000-01-01',valid_to:null},{issuer_id:C,valid_from:'1990-01-01',valid_to:'2000-01-01'},{issuer_id:B,valid_from:'2001-01-01',valid_to:null}]);
   expect((await issuerIdsByPrefix(sb,'aap','2026-11-06')).sort()).toEqual([A,B]);
-  expect(calls).toEqual([
-   'issuers:issuer_id:or:canonical_name_zh.ilike."aap*",canonical_name_en.ilike."aap*"',
-   'issuer_securities:issuer_id,valid_from,valid_to:ilike:ticker:AAP%',
-  ]);
+  expect(log.issuers.slice(0,4)).toEqual(['select:issuer_id','or:canonical_name_zh.ilike."aap*",canonical_name_en.ilike."aap*"','order:issuer_id','range:0-999']);
+  expect(log.issuer_securities.slice(0,6)).toEqual(['select:issuer_id,valid_from,valid_to','ilike:ticker:AAP%','order:issuer_id','order:ticker','order:valid_from','range:0-999']);
+  expect(log.issuer_securities.filter(x=>x.startsWith('range:'))).toEqual(['range:0-999','range:3-1002']);   // read until an empty page
+ });
+ it('pages through every candidate: a current match after 1,500 expired securities and name matches beyond row 1,000 are found (计划第 3 轮审计 R8)',async()=>{
+  const expired=Array.from({length:1500},(_,i)=>({issuer_id:uid(i),valid_from:'1990-01-01',valid_to:'2000-01-01'}));
+  const names=Array.from({length:1200},(_,i)=>({issuer_id:uid(10000+i)}));
+  const {sb,log}=fakePrefix(names,[...expired,{issuer_id:B,valid_from:'2001-01-01',valid_to:null}]);
+  const ids=new Set(await issuerIdsByPrefix(sb,'aap','2026-11-06'));
+  expect(ids.has(B)).toBe(true);
+  expect(ids.has(uid(11199))).toBe(true);
+  expect(expired.some(e=>ids.has(e.issuer_id))).toBe(false);
+  expect(ids.size).toBe(1201);
+  expect(log.issuer_securities.filter(x=>x.startsWith('range:'))).toEqual(['range:0-999','range:1000-1999','range:1501-2500']);
+  expect(log.issuers.filter(x=>x.startsWith('range:'))).toEqual(['range:0-999','range:1000-1999','range:1200-2199']);
+ });
+ it('a failed page fails the whole search (never a silently partial match set)',async()=>{
+  const {sb}=fakePrefix([{issuer_id:A}],[],true);
+  await expect(issuerIdsByPrefix(sb,'aap','2026-11-06')).rejects.toThrow('directory_search_failed');
  });
 });
 ```
@@ -16000,25 +16220,42 @@ export interface DirectoryRow{
 }
 
 type Result={data:unknown[]|null;error:{message:string}|null};
+/** One ordered, ranged PostgREST query (计划第 3 轮审计 R8: .order(...).range(a,b) replaces .limit(CAP)). */
+export interface PrefixPage{order(col:string):PrefixPage;range(from:number,to:number):PromiseLike<Result>}
 /** Minimal structural view of the anon Supabase client (cast at the call site). */
 export interface PrefixClient{from(table:string):{select(cols:string):{
- or(filter:string):{limit(n:number):PromiseLike<Result>};
- ilike(col:string,pattern:string):{limit(n:number):PromiseLike<Result>};
+ or(filter:string):PrefixPage;
+ ilike(col:string,pattern:string):PrefixPage;
 }}}
-const CAP=1000;
+const PAGE=1000;
+const MAX_CANDIDATES=100_000;   // fail closed beyond this, never a silently partial match set
 
-/** Issuer ids whose zh/en name or a CURRENT ticker starts with q (case-insensitive). q must match DIRECTORY_Q_RE. */
+/** Every row of one stably ordered query: range pages until an empty page (robust to a server max-rows below PAGE). */
+async function exhaust<T>(page:(from:number,to:number)=>PromiseLike<Result>):Promise<T[]>{
+ const out:T[]=[];
+ for(let offset=0;;){
+  const r=await page(offset,offset+PAGE-1);
+  if(r.error)throw new Error('directory_search_failed');
+  const data=(r.data??[]) as T[];
+  if(data.length===0)return out;
+  out.push(...data);offset+=data.length;
+  if(out.length>MAX_CANDIDATES)throw new Error('directory_search_failed');
+ }
+}
+
+/** Issuer ids whose zh/en name or a CURRENT ticker starts with q (case-insensitive). q must match DIRECTORY_Q_RE.
+ * 计划第 3 轮审计 R8: both prefix queries are paged to exhaustion BEFORE the current-security filter and the
+ * coverage intersection, so expired securities or early name matches cannot crowd out a valid later match. */
 export async function issuerIdsByPrefix(sb:PrefixClient,q:string,today:string):Promise<string[]>{
  if(!DIRECTORY_Q_RE.test(q))throw new Error('invalid_q');
  const pat=`"${q}*"`;
  const [names,tickers]=await Promise.all([
-  sb.from('issuers').select('issuer_id').or(`canonical_name_zh.ilike.${pat},canonical_name_en.ilike.${pat}`).limit(CAP),
-  sb.from('issuer_securities').select('issuer_id,valid_from,valid_to').ilike('ticker',`${q.toUpperCase()}%`).limit(CAP),
+  exhaust<{issuer_id:string}>((a,b)=>sb.from('issuers').select('issuer_id').or(`canonical_name_zh.ilike.${pat},canonical_name_en.ilike.${pat}`).order('issuer_id').range(a,b)),
+  exhaust<{issuer_id:string;valid_from:string;valid_to:string|null}>((a,b)=>sb.from('issuer_securities').select('issuer_id,valid_from,valid_to').ilike('ticker',`${q.toUpperCase()}%`).order('issuer_id').order('ticker').order('valid_from').range(a,b)),
  ]);
- if(names.error||tickers.error)throw new Error('directory_search_failed');
  const ids=new Set<string>();
- for(const r of (names.data??[]) as {issuer_id:string}[])ids.add(r.issuer_id);
- for(const r of (tickers.data??[]) as {issuer_id:string;valid_from:string;valid_to:string|null}[])if(isCurrentSecurity(r as unknown as Record<string,unknown>,today))ids.add(r.issuer_id);
+ for(const r of names)ids.add(r.issuer_id);
+ for(const r of tickers)if(isCurrentSecurity(r as unknown as Record<string,unknown>,today))ids.add(r.issuer_id);
  return [...ids];
 }
 
@@ -17256,7 +17493,8 @@ git commit -m "test(company): e2e suite, fixture manifest, runbook and spec devi
 | `event-dto.ts`（`PublicEvent`、`gateEventRows`） | 10 | 10 events/overview、11/13 `client.ts`、16 收件箱、17 跟踪视图 | 重写：`PublicEvent` 取 Part E 形状（含 `issuerId`/`market`/`filing`）；`gateEvents`/`gateEventRows`/`toPublicEvent` 按 (issuer, market) 分组走 Task 6 `applyGate` + `gateEventPayload`（payload 门槛唯一实现；`relChange` 置为 `{kind:'withheld',reason}`）；events/overview 处理器改用它；`client.ts` 改为 `import type` 再导出 |
 | `eventsOfIssuer` 排序 | 3 `(occurred_on desc, event_id asc)` | 10 现算模式 | 现算 keyset 改为同序（Part C 原写 `event_id desc`） |
 | `eventsOfIssuers` 排序/游标 | 3 `(first_seen_at desc, event_id desc)`，游标与发行人集合无关 | 16 | 一致，无改动 |
-| 指标代理 DTO | 10 `MetricsDto`（`computedAtKind` 在行上） | 11 `client.ts`、13 `MetricsView` | 客户端类型与测试夹具改为行级 `computedAtKind`、补 `mappingGen` |
+| 指标代理 DTO | 10 `MetricsDto`（`computedAtKind` 在行上；计划第 3 轮审计 R6：行顶层 `inputUnit`/`basis`） | 11 `client.ts`、13 `MetricsView`/`metrics-model` | 客户端类型与测试夹具改为行级 `computedAtKind`、补 `mappingGen`；R6：`MetricEntry` 增 `inputUnit`/`basis`，网格行按 `JSON.stringify([metric,inputUnit,basis])` 分组，行头显示输入单位·口径 |
+| 指标代理 `periods` 参数（计划第 3 轮审计 R5） | 10 `handlers/metrics.ts`（`METRICS_PARAMS` 增 `periods`，8/20/40，给出时按最新 N 期间键保留全部行、不套 `limit`） | 13 `MetricsView`（`companyApi('metrics', ticker, {asOf, periods: String(periods)})`） | 修复"缺省 200 行上限按指标名+最早期间截断，后面的指标显示'未产出'"；Task 10 测试 240 行夹具断言最新 8 期与最后一个指标名都在 |
 | overview DTO | 10 `OverviewDto` | 11 `client.ts`、13 `OverviewView` | 客户端补 `ticker`/`eventsComputed`/`withheld`，`latest.periodKey` 可空并加守卫 |
 | `GET /api/companies/[ticker]/filings` | 10（整合决定：从 Task 11 移入，公共 + admin 两路由，`handlers/filings.ts`，带测试） | 11 页头回放"最近文件"、13 文件视图 | Task 11 删除路由步骤与 `git add`；`companyApi('filings', …, admin)` 走 admin 前缀 |
 | `DcfStudio` props | 14 `({ticker, asOf?, onOpenFact?})` | 13 估值模型区 | 传 `onOpenFact` 打开 `historyByFact` 抽屉 |
