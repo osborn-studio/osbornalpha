@@ -67,6 +67,19 @@ describe('fetchFredCsv',()=>{
  });
 });
 
+describe('fetchFredCsv error codes and content type',()=>{
+ it('429 exhausts as fetch_http_retryable, 5xx stays fetch_http_5xx',async()=>{
+  const h=harness([()=>status(429),()=>status(429),()=>status(429),()=>status(429)]);
+  expect(await codeOf(fetchFredCsv('DFF',h.opts))).toBe('fetch_http_retryable:429');
+  expect(h.calls).toHaveLength(4);
+ });
+ it('defaults a missing Content-Type to text/csv',async()=>{
+  const res=new Response(CSV,{status:200});res.headers.delete('content-type');
+  const h=harness([()=>res]);
+  expect((await fetchFredCsv('DFF',h.opts)).contentType).toBe('text/csv');
+ });
+});
+
 describe('fredCosdFor',()=>{
  it('backfills from 2000-01-01 without data and uses a recent window afterwards',()=>{
   expect(fredCosdFor('day',false,'2026-11-06')).toBe('2000-01-01');

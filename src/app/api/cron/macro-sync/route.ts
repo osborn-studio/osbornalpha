@@ -3,7 +3,8 @@
 // catalog mirror; one ingest batch (producer 'ts-fred', dataset 'macro.fred') over every active native FRED
 // series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; MacroDb.finalizeBatch (第 6 稿 P1-1: the
 // macro-owned finalizer, no tokens — cron batches have no run row; a fatal abort finalizes 'failed' with the actual counts, P2-4);
-// A series with no stored observation is backfilled from FRED_COSD (2000-01-01, spec §4.4); afterwards the
+// A series is fetched in full from FRED_COSD (2000-01-01, spec §4.4) until its persisted eligible data reaches back to
+// FRED_BACKFILL_DONE_BY (a failed oldest chunk therefore keeps the full window next run, T7-2); afterwards the
 // daily run asks for a recent window only (daily series 400 days, monthly 6 years so the BLS 5-year
 // seasonal revisions are seen) to keep the run inside maxDuration.
 // recordAttempt('macro.fred', daily, ok = status !== 'failed' and a usable native row landed). Derivation runs only when this
@@ -26,10 +27,10 @@ import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import type {IngestReceipt} from '@/lib/macro/ingest';
-import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
+import {FRED_BACKFILL_DONE_BY,FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
-import type {MacroSeriesDef} from '@/lib/macro/types';
+import type {EvidenceInput,MacroSeriesDef,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
@@ -39,10 +40,20 @@ const err=(code:string,message:string,status:number)=>NextResponse.json({error:{
 const errCode=(e:unknown)=>e instanceof FredFetchError?e.code:e instanceof FredParseError?`parse_${e.code}`:'fetch_failed';
 const publicErrors=(errors:BatchError[])=>errors.map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
 
+const fetchEvidence=(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSignal,cosd:string)=>
+ fetchFredCsv(def.source!.seriesKey,{fetch:deps.fetch,sleep:deps.sleep,now:deps.now,signal,cosd});
+const parseEvidence=(def:MacroSeriesDef,evidence:EvidenceInput)=>
+ parseFredCsv(evidence.bytes,{seriesId:def.id,code:def.source!.seriesKey,period:def.period});
 async function fetchAndParse(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSignal,cosd:string){
- const code=def.source!.seriesKey;
- const evidence=await fetchFredCsv(code,{fetch:deps.fetch,sleep:deps.sleep,now:deps.now,signal,cosd});
- return {evidence,parsed:parseFredCsv(evidence.bytes,{seriesId:def.id,code,period:def.period})};
+ const evidence=await fetchEvidence(deps,def,signal,cosd);
+ return {evidence,parsed:parseEvidence(def,evidence)};
+}
+
+/** Backfill is complete only when persisted eligible data reaches back to the start of the full window (T7-2). Any read
+ *  failure counts as incomplete: the full window is the safe side. */
+async function backfillComplete(deps:MacroDeps,id:string):Promise<boolean>{
+ try{return (await deps.db.eligibleHistory(id,{from:FRED_COSD,to:FRED_BACKFILL_DONE_BY,maxRows:500})).length>0;}
+ catch{return false;}
 }
 
 /** Fetch + parse only. Must never touch deps.db, deps.evidence or deps.tables. */
@@ -71,19 +82,32 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
   if(phase==='native'){native=addCounts(native,rec.counts);nativeUsable+=rec.usable;}else derivedCounts=addCounts(derivedCounts,rec.counts);
   counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
  };
+ // T7-3: a series that failed to fetch or parse counts once, natively and in the aggregate
+ const failSeries=(code:string,key:string,message?:string)=>{native.failed+=1;counts.failed+=1;errors.push(message===undefined?{code,key}:{code,key,message});};
  const settle=async(phase:'native'|'derived',call:()=>Promise<IngestReceipt>)=>{
   let rec:IngestReceipt;
   try{rec=await call();}catch(e){if(e instanceof IngestAbort&&e.partial)take(e.partial,phase);throw e;}
   take(rec,phase);
  };
  try{
-  // backfill decision on eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
-  const stored=new Set((await deps.db.latestEligible(defs.map(d=>d.id))).map(o=>o.series_id));
+  // backfill decision on persisted eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   for(const def of defs){
-   let retrieval;
-   try{retrieval=await fetchAndParse(deps,def,signal,fredCosdFor(def.period,stored.has(def.id),today));}
-   catch(e){errors.push({code:errCode(e),key:def.id});continue;}
-   await settle('native',()=>ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]}));   // no owner token: cron batches have no run
+   let evidence:EvidenceInput;
+   try{evidence=await fetchEvidence(deps,def,signal,fredCosdFor(def.period,await backfillComplete(deps,def.id),today));}
+   catch(e){failSeries(errCode(e),def.id);continue;}
+   let parsed:ParsedPoint[];
+   try{parsed=parseEvidence(def,evidence);}
+   catch(e){
+    // T7-1: keep the fetched bytes + retrieval for investigation / replay (an empty parse stores evidence and receipt, writes nothing)
+    let retrievalId='unstored';
+    try{
+     const stored=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[{evidence,parsed:[]}]});
+     retrievalId=stored.retrievalIds[0]??'unstored';
+    }catch(x){if(x instanceof IngestAbort)throw x;}
+    failSeries(errCode(e),def.id,`retrieval ${retrievalId}: ${e instanceof Error?e.message:'parse failed'}`);
+    continue;
+   }
+   await settle('native',()=>ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[{evidence,parsed}]}));   // no owner token: cron batches have no run
   }
   if(nativeUsable>0){                                                                               // 第 6 稿 P2-1
    await settle('derived',()=>deriveAndWrite(deps,'US',batchId));
@@ -93,7 +117,14 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
   // counts already hold every completed receipt plus the aborted call's partial (四轮 P2-2). Finalize FAILED explicitly with them — batchStatusFromCounts would say 'partial' once native rows landed, leaving
   // them publication-eligible — so the batch never stays 'running' and its rows never publish; then rethrow.
   errors.push(e instanceof IngestAbort?abortError(e):{code:'sync_crashed'});
-  await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now(),'failed'),null).catch(()=>undefined);
+  // If finalize itself fails, retry once and log. A batch left 'running' is never publication-eligible and is swept by the next
+  // run's ineligible-row semantics (latestEligible/eligibleHistory ignore it; its rows are re-fetched and re-written).
+  const finalInput=batchFinalizeInput({counts,errors},deps.now(),'failed');
+  try{await deps.db.finalizeBatch(batchId,finalInput,null);}
+  catch{
+   console.error('macro-sync: finalizeBatch failed in fatal abort; retrying once',{batchId});
+   await deps.db.finalizeBatch(batchId,finalInput,null).catch(()=>console.error('macro-sync: finalizeBatch retry failed; batch left running',{batchId}));
+  }
   await recordAttempt(deps.tables,'macro.fred',{ok:false,cadence:'daily'}).catch(()=>undefined);
   throw e;
  }

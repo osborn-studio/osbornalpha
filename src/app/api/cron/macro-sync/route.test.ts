@@ -19,8 +19,10 @@ const original=process.env.CRON_SECRET;
 const FRED=collectableOf('fred_csv');
 const codeOfUrl=(url:string)=>new URL(url).searchParams.get('id')!;
 /** Tiny valid CSV per series: two daily points (Sep 30, Oct 1) or two monthly points a year apart. */
+let early=false;   // true: one extra row in Jan 2000 so the persisted history reaches the start of the full backfill window
 function csvFor(code:string){
  const def=FRED.find(d=>d.source!.seriesKey===code)!;
+ if(early)return def.period==='day'?`observation_date,${code}\n2000-01-03,4.0\n2026-09-30,4.1\n2026-10-01,4.2\n`:`observation_date,${code}\n2000-01-01,50\n2025-09-01,50\n2026-09-01,51\n`;
  return def.period==='day'?`observation_date,${code}\n2026-09-30,4.1\n2026-10-01,4.2\n`:`observation_date,${code}\n2025-09-01,50\n2026-09-01,51\n`;
 }
 /** A deps member that fails the test on any use: preview must not touch it. */
@@ -30,7 +32,7 @@ function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:E
 let fetchCalls:string[],failCodes:Set<string>,overrides:Map<string,string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
- fetchCalls=[];failCodes=new Set();overrides=new Map();
+ early=false;fetchCalls=[];failCodes=new Set();overrides=new Map();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
  const fetch=(async(input:string|URL|Request)=>{
   const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
@@ -88,6 +90,7 @@ describe('macro-sync cron',()=>{
   expect((await deps.db.seriesHistory('US_CPI_YOY',{maxRows:10})).map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','2']]);
  });
  it('asks for a recent window once a series has data',async()=>{
+  early=true;
   await GET(req());fetchCalls=[];
   await GET(req());
   const dff=fetchCalls.find(u=>codeOfUrl(u)==='DFF')!,cpi=fetchCalls.find(u=>codeOfUrl(u)==='CPIAUCSL')!;
@@ -98,6 +101,8 @@ describe('macro-sync cron',()=>{
   const body=await (await GET(req())).json();
   expect(body.status).toBe('partial');expect(body.ok).toBe(false);
   expect(body.errors).toContainEqual({code:'fetch_http_5xx',key:'US_FEDFUNDS_EFF_D'});
+  expect(body.counts.failed).toBe(1);expect(body.native_counts.failed).toBe(1);
+  expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'partial',counts:{failed:1}});
   expect(fetchCalls.filter(u=>codeOfUrl(u)==='DFF')).toHaveLength(4);   // 1 try + 3 retries
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:0});
  });
@@ -105,7 +110,9 @@ describe('macro-sync cron',()=>{
   for(const d of FRED)failCodes.add(d.source!.seriesKey);
   const body=await (await GET(req())).json();
   expect(body.status).toBe('failed');
-  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
+  expect(body.counts.failed).toBe(FRED.length);expect(body.native_counts.failed).toBe(FRED.length);
+  expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'failed',counts:{failed:FRED.length}});
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1,last_ok_at:null});
   expect(await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).toEqual([]);
  });
  it('all series failing AFTER a populated run is still failed: no derivation, no duplicate inflation, freshness not refreshed (第 5 稿 P2-2)',async()=>{
@@ -150,6 +157,32 @@ describe('macro-sync cron',()=>{
   expect(batch.counts).toEqual({fetched:4,inserted:2,duplicates:1,versioned:0,quarantined:1,failed:0});      // before: all six were zero
   expect(batch.errors).toContainEqual(expect.objectContaining({code:'quarantine_link_failed'}));
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
+ });
+ it('keeps the full window until the backfill reaches 2000: a series with only recent rows is refetched in full',async()=>{
+  await GET(req());fetchCalls=[];
+  await GET(req());
+  expect(fetchCalls.every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
+ });
+ it('a failed backfill write keeps the full window next run (T7-2)',async()=>{
+  early=true;
+  const mem=deps.db as ReturnType<typeof memoryMacroDb>;
+  const write=mem.writeObservations.bind(mem);let failed=0;
+  mem.writeObservations=async(b,c,rows,t)=>{if(rows.some(r=>r.series_id==='US_FEDFUNDS_EFF_D')&&failed===0){failed++;throw new Error('boom');}return write(b,c,rows,t);};
+  const body=await (await GET(req())).json();
+  expect(body.status).toBe('partial');expect(body.counts.failed).toBe(3);
+  fetchCalls=[];
+  await GET(req());
+  const dff=fetchCalls.find(u=>codeOfUrl(u)==='DFF')!,dgs=fetchCalls.find(u=>codeOfUrl(u)==='DGS10')!;
+  expect(dff).toContain('cosd=2000-01-01');expect(dgs).toContain('cosd=2025-10-02');
+ });
+ it('a parse failure keeps the evidence and retrieval id in the batch error and counts one failed series (T7-1/T7-3)',async()=>{
+  overrides.set('DFF','not,a\nvalid csv');
+  const body=await (await GET(req())).json();
+  const stored=tables.rows('ingest_batches')[0].errors as {code:string;key?:string;message?:string}[];
+  const e=stored.find(x=>x.key==='US_FEDFUNDS_EFF_D')!;
+  expect(e.code.startsWith('parse_')).toBe(true);expect(e.message).toMatch(/^retrieval [0-9a-f-]{36}: /);
+  expect(evidence.puts).toHaveLength(FRED.length);                                                 // the bad bytes were stored too
+  expect(body.counts.failed).toBe(1);expect(body.errors.find((x:{key?:string})=>x.key==='US_FEDFUNDS_EFF_D')).toEqual({code:e.code,key:'US_FEDFUNDS_EFF_D'});
  });
  it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
   const cfg=JSON.parse(readFileSync(new URL('../../../../../vercel.json',import.meta.url),'utf8')) as {crons:{path:string;schedule:string}[]};
