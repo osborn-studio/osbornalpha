@@ -123,7 +123,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
       {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
 
-      {tab === 'overview' && judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} />}
+      {tab === 'overview' && judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
 
       {tab === 'overview' && env && (
         <div className="space-y-3">

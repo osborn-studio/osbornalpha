@@ -94,7 +94,7 @@ function BoundClock({ clock, reason, t, locale }: { clock: ClockView; reason: st
   </>;
 }
 
-export function MacroJudgmentSlot({ region }: { region: 'US' | 'CN' }) {
+export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN'; snapshotId?: string | null }) {
   const { t, locale } = useMacroT();
   const [open, setOpen] = useState(true);
   const [nonce, setNonce] = useState(0);
@@ -120,7 +120,7 @@ export function MacroJudgmentSlot({ region }: { region: 'US' | 'CN' }) {
       .catch(() => { if (!cancelled) setState({ status: 'unavailable' }); });
     return () => { cancelled = true; };
   }, [open, region, nonce]);
-  const clock = clockFrom(state.status === 'ok' ? state.cards : [], region);
+  const clock = clockFrom(state.status === 'ok' ? state.cards : [], region, snapshotId);
   const reason = state.status === 'loading' || state.status === 'idle' ? t('judgment.loading') : state.status === 'unavailable' ? t('judgment.unavailable') : clock.reason ? t(`judgment.clock.reasons.${clock.reason}`) + (clock.card?.abstain_reason ? `: ${clock.card.abstain_reason}` : '') : null;
   return (
     <section aria-label={t('judgment.title')} className="space-y-2">

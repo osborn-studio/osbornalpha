@@ -40,7 +40,7 @@ export const contributionText=(c:RegimeContribution):string=>Object.entries(c.co
 
 export type ClockView={selected:import('@/lib/macro/judgment-contract').Regime|null;card:JudgmentCard|null;reason:string|null};
 /** Only the latest-view public F4 categorical card may select a quadrant. Never parse the headline. */
-export function clockFrom(cards:JudgmentCard[],region:'US'|'CN'):ClockView{
+export function clockFrom(cards:JudgmentCard[],region:'US'|'CN',snapshotId?:string|null):ClockView{
  const matching=cards.filter(c=>c.methodology.id==='macro_regime'&&c.methodology.version==='v2');
  if(matching.length!==1)return {selected:null,card:null,reason:matching.length?'ambiguous':'missing'};
  const card=matching[0];
@@ -52,6 +52,8 @@ export function clockFrom(cards:JudgmentCard[],region:'US'|'CN'):ClockView{
  if(value!=='recovery'&&value!=='overheat'&&value!=='stagflation'&&value!=='recession')return no('invalid');
  // F4 categorical cards never carry a probability percentage.
  if(card.display.percent!==null)return no('invalid');
+ if(!snapshotId)return no('expected_snapshot');
+ if(card.input_snapshot_id!==snapshotId)return no('stale_snapshot');
  return {selected:value,card,reason:null};
 }
 /** Bind the fetched evidence to the requested immutable snapshot, never the overview snapshot. */

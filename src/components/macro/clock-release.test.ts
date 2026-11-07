@@ -22,6 +22,16 @@ describe('clock release limitations', () => {
     expect(html.indexOf(t('judgment.clock.coverage', {value:60}))).toBeLessThan(html.indexOf('grid grid-cols-2'));
     expect(html).not.toContain('<svg');
   });
+  it.each([en, zh])('explains stale and unknown active snapshots without a current highlight', messages => {
+    const t = translator(messages);
+    for (const reason of ['stale_snapshot', 'expected_snapshot']) {
+      const text = t(`judgment.clock.reasons.${reason}`);
+      const html = renderToStaticMarkup(createElement(MacroRegimeClock, {selected:null,reason:text,metadata,metadataLoading:false,t}));
+      expect(html).toContain(text);
+      expect(html).not.toContain(`● ${t('judgment.clock.current')}`);
+      expect(html).not.toContain('ring-accent');
+    }
+  });
   it.each([true,false])('states uncertainty while metadata loading=%s', metadataLoading => {
     const t = translator(en);
     const html = renderToStaticMarkup(createElement(MacroRegimeClock, {selected:'overheat',reason:null,metadata:null,metadataLoading,t}));

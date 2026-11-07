@@ -43,9 +43,20 @@ describe('judgment view',()=>{
 
 describe('live clock selection',()=>{
  const live={...card,calibration:'insufficient',judgment_type:'macro_regime',kind:'categorical',subject:{type:'macro_region',key:'US'},retrospective:false,methodology:{...card.methodology,version:'v2'},display:{...card.display,value:'overheat'},inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'exact-input'}}]};
- const select=(raw:unknown)=>{const p=parseJudgments(raw);return clockFrom(p.ok?p.cards:[], 'US');};
+ const select=(raw:unknown,snapshotId:string|null|undefined='exact-input')=>{const p=parseJudgments(raw);return clockFrom(p.ok?p.cards:[], 'US',snapshotId);};
  it('uses only the F4 selected value, not the headline, and reads the actual input array',()=>{
   expect(select({cards:[live]})).toMatchObject({selected:'overheat',card:{input_snapshot_id:'exact-input'}});
+ });
+ it('selects a current quadrant only when the active overview snapshot matches',()=>{
+  expect(select([live],'exact-input')).toMatchObject({selected:'overheat',reason:null});
+ });
+ it('clears the current quadrant after the active snapshot changes but retains the historical card and exact basis',()=>{
+  expect(select([live],'new-active')).toMatchObject({selected:null,reason:'stale_snapshot',card:{judgment_id:'j1',input_snapshot_id:'exact-input'}});
+  expect(basisFrom({snapshot:{snapshot_id:'exact-input'},contributions:[]},'exact-input')).toEqual([]);
+ });
+ it.each([undefined,null,''])('does not claim current classification with unknown active snapshot %s',snapshotId=>{
+  const parsed=parseJudgments([live]);
+  expect(clockFrom(parsed.ok?parsed.cards:[],'US',snapshotId)).toMatchObject({selected:null,reason:'expected_snapshot',card:{input_snapshot_id:'exact-input'}});
  });
  it.each(['recovery','overheat','stagflation','recession'])('accepts validated %s',value=>{
   expect(select({cards:[{...live,display:{...live.display,value}}]}).selected).toBe(value);
@@ -77,7 +88,7 @@ describe('public F4 release DTOs',()=>{
   const dto={...card,calibration:'insufficient',as_of:'2026-11-07',judgment_type:'macro_regime',kind:'categorical',subject:{type:'macro_region',key:region},retrospective:false,abstain_reason:null,methodology:{...card.methodology,version:'v2',href:'/intel/methods/macro_regime/v2'},display:{headline:{zh:'判定',en:'Call'},value},inputs:[{kind:'macro_observation',ref:{series_id:'CPI'}},{kind:'macro_snapshot',ref:{snapshot_id:'bound'}}]};
   const parsed=parseJudgments({cards:[dto]});
   expect(parsed.ok).toBe(true);
-  expect(clockFrom(parsed.ok?parsed.cards:[],region)).toMatchObject({selected:value,reason:null});
+  expect(clockFrom(parsed.ok?parsed.cards:[],region,'bound')).toMatchObject({selected:value,reason:null});
  });
 });
 
