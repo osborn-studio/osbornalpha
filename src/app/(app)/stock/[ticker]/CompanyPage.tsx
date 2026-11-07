@@ -13,6 +13,8 @@ import type { CompanyPageData } from '@/lib/company/page-data';
 import { CompanyHeader } from '@/components/company/CompanyHeader';
 import { ViewTabs } from '@/components/company/ViewTabs';
 import { ReplayBar, ReplayOpener, ReplayUnsupportedBanner } from '@/components/company/ReplayBar';
+import { DrawerHost } from '@/components/company/DrawerHost';
+import { StatementsView } from '@/components/company/StatementsView';
 import { ErrorCard, FactStateCallout } from '@/components/company/StateCallout';
 import { CompanyTrackingView } from '@/components/company/tracking/CompanyTrackingView';
 import { AiView } from './legacy/AiView';
@@ -67,9 +69,10 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
     return renderFactView();
   }
 
-  // ---- Task 11: placeholder; Task 12 and Task 13 replace this whole function. ----
+  // ---- Task 12: statements wired; Task 13 replaces this whole function again. ----
   function renderFactView() {
     if (view !== 'judgments' && data.factState !== 'ok') return <FactStateCallout state={data.factState as 'no_issuer' | 'no_facts' | 'hk_pending'} isAdmin={isAdmin} />;
+    if (view === 'statements') return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} highlight={highlight} />;
     return <PendingView />;
   }
 
@@ -78,7 +81,9 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       <CompanyHeader data={data} view={view} asOf={asOf} locale={locale} />
       {asOf && <ReplayBar ticker={ticker} view={view} asOf={asOf} extra={extra} />}
       <ViewTabs ticker={ticker} view={view} asOf={asOf} right={asOf ? undefined : <ReplayOpener ticker={ticker} view={view} />} />
-      <div>{renderBody()}</div>
+      <DrawerHost ticker={ticker} asOf={asOf} admin={false}>
+        <div>{renderBody()}</div>
+      </DrawerHost>
       <Disclaimer />
     </div>
   );
