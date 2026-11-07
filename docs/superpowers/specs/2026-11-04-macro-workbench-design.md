@@ -1,7 +1,7 @@
 # 宏观工作台（Macro Workbench）设计规格 · P1 + P2
 
 日期：2026-11-04（第 1 稿）；2026-11-06 第 2 稿（对齐已落地的计划一/二与总纲，处置 Codex 增量审计 M1–M26，见 §0）
-状态：第 3 稿（2026-11-06，Codex 确认轮 `04-codex-spec-confirm.md` 的 partial 与 N1–N3 已处置，见 §0.2），进入计划
+状态：第 4 稿（2026-11-06，计划审计 `06-codex-plan-round1.md` P1-1…P2-4 回写，见 §0.2 末"第 4 稿"表；第 3 稿：Codex 确认轮 `04-codex-spec-confirm.md` 的 partial 与 N1–N3 已处置），进入计划
 前置研究：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、同目录 `REPORT.md`、`SOURCE_MAP.csv`
 总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5
 已定决策（owner 2026-11-04）：范围 P1 纵向闭环 + P2 关联与事件；中国宏观走 AKShare 采集脚本（只作适配器，记录上游）；美国走 FRED；面向所有登录用户开放。
@@ -60,6 +60,27 @@
 | N1 | `create_macro_analysis_run` 只授 service_role；路由用已验证 session 的 user id 作 `p_user_id`，服务端计算结果后写入 |
 | N2 | 证据拆为 `macro_evidence_objects`（按 SHA 去重的字节对象）与 `macro_retrievals`（每次取得一条回执：URL、主机、状态、`fetched_at`、批次、工具版本）；观测引用 `retrieval_id`，`available_at` = 该回执 `fetched_at` |
 | N3 | CN 派生在 ingest `finish` 内、发布前执行；发布清单只含已完成批次的输入与其派生 |
+
+#### 第 4 稿（计划审计回写，`docs/audits/2026-11-06-macro-workbench/06-codex-plan-round1.md`）
+
+规格是 SQL 语义的唯一来源；下表覆盖正文与上表中与之冲突的旧表述，计划 `2026-11-06-macro-workbench.md` 的共享契约逐条落实。
+
+| id | 处置（SQL 语义） |
+|---|---|
+| P1-1 | 计划测试类型错误修正（不改语义）；严格 typecheck 门禁保留 |
+| P1-2 | 测试种子只写原生输入，派生经真实派生路径（`deriveAndWrite`）产生；派生行的出处 = 其祖先原生观测的 retrieval |
+| P1-3 | 发布及时性与数据有无是两个字段：概览行 `presence: present|missing`；无 `releaseLagDays` 的序列无数据时及时性仍为 `n/a` |
+| P1-4 | 新表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加）；写入 RPC 的 conflict 带被隔离行的 `observation_id`，`quarantine()` 之后立即经 `macro_link_quarantine(p_quarantine_id, p_observation_ids)` 绑定（条目须 open、成员须为该 natural_key 的 quarantined/rejected 行）。观测状态加 `rejected`（只允许 `quarantined → ok | rejected`）。`macro_resolve_conflict(p_quarantine_id, p_decision, p_resolved_by, p_observation_id default null)`：accept 必须指定一个当前 `quarantined` 的成员 → `ok`、`input_revision+1`，该条目其余成员 → `rejected`；reject → 全部成员 `rejected`；`adapter_mismatch`、`rule_failed:%` 只能拒绝（SQL 抛 `reject_only`）；rejected 永不复活、永不合格，同值再交付不再插入 |
+| P1-5 | **发布资格** = 观测 `ok` + 批次 `ingest_batches.status in ('success','partial')` + 派生行全部祖先递归合格（`macro_ineligible_ids`）。`publish_macro_snapshot` 在事务内校验清单与历史；发布路径只读 `macro_latest_eligible_observations` / `macro_eligible_history`（service-only）；批次内写入与派生可用本批次行（`p_include_batch`）；写入规则的 `cur` 只取合格或本批次的行，派生输入须合格或同批次（否则 `missing_input`） |
+| P1-6 | 新表 `macro_ingest_runs(batch_id pk, dataset, state open|finishing|finished, finish_progress, …)`，部分唯一索引 `(dataset) where state <> 'finished'` = 单写者租约；`macro_claim_ingest(p_batch_id, p_dataset, p_max_age)`（先弃置超时 run，被占 → busy，调用方把自己的批次记 `rejected` 并回 409）；`macro_ingest_chunks` 加 `state/errors/claim_keys/located_keys`，`macro_claim_chunk` 认领（重复返回存储行，不再处理）、`macro_complete_chunk` 完成；取代 `macro_record_chunk` |
+| P1-7 | 派生每次按输入的完整合格历史重算（分页读取），旧期修订传到该期与同比的 +12 期 |
+| P1-8 / P2-3 | `macro_snapshots.history_ids uuid[]`：每指标截至最新期的最后 24 个合格观测（迷你图），发布时与清单同样校验；概览一次读取 `observation_ids ∪ history_ids`（加上一快照清单），祖先逐级批量解析，无逐指标历史查询；p95 < 300 ms 在验收中实测 |
+| P1-9 | 概览 / 详情行带 `observation_id`，证据抽屉按它选中确切版本 |
+| P1-10 | 分析路由无可验证代码版本 → 503 `code_version_unavailable`，不计算不落库 |
+| P1-11 | 回滚 = service-only `republish_macro_snapshot(p_snapshot_id, p_expected_revision, p_expected_input_revision)`：重校验资格后插入复制旧快照的**新** active 快照（新修订号），历史行不改 |
+| P2-1 | 块错误与 claim/定位键持久化；finish 按整批去重的 `⋃claim_keys − ⋃located_keys` 写一条 `skipped_summary/unlocated_claims`，连同全部块错误交 `finishBatch` |
+| P2-2 | finish 带 `series_outcomes:[{series_id, ok, code?}]`；失败序列计 `failed` 并写错误 `{code, key: series_id}`，进入 `recordAttempt` 的 detail（`failed_series`） |
+| P2-4 | finish 可续：`finish_progress` 记录 `derived`、`batch_finished`、`freshness_recorded`、`published`、`receipt`；重试跳过已完成步骤，已结束返回存储回执；批次已结束但 run 仍在 finishing 时接受 finish |
 
 ---
 
