@@ -15,6 +15,8 @@ import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,Fi
 
 export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
+ /** Finalization receipts for candidate observations; null means the cutoff cannot be proven. service */
+ batchFinishedAt(batchIds:string[]):Promise<Record<string,string|null>>;
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
  upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
  /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
@@ -202,6 +204,15 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
   }
  };
  return {
+  async batchFinishedAt(batchIds){
+   const out:Record<string,string|null>={};
+   for(const id of [...new Set(batchIds)])out[id]=null;
+   for(let i=0;i<batchIds.length;i+=IN_CHUNK){
+    const got=await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',batchIds.slice(i,i+IN_CHUNK)));
+    for(const r of got)out[String(r.batch_id)]=(r.status==='success'||r.status==='partial')&&r.finished_at!=null?iso(r.finished_at):null;
+   }
+   return out;
+  },
   async upsertCatalog(defs,catalogVersion,rulesVersion){await call(admin,'macro_upsert_catalog',{p_catalog_version:catalogVersion,p_rules_version:rulesVersion,p_defs:defs});},
   async putRetrieval(obj,r,ownerToken){
    return String(await call<string>(admin,'macro_put_retrieval',{p_sha256:obj.sha256,p_object_path:obj.object_path,p_adapter:obj.adapter,p_content_type:obj.content_type,p_byte_length:obj.byte_length,

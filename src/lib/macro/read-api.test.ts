@@ -126,7 +126,9 @@ describe('classifyAsOf',()=>{
  });
  it('uses the vintage visible at cutoff (available_at ≤ cutoff, highest version within the period)',async()=>{
   const {db,api}=await setup();
-  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-20T05:30:00.000Z'});   // index revision → yoy v2 (both revisable)
+  db.setBatchStatus('revision','running');
+  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-20T05:30:00.000Z',batchId:'revision'});   // index revision → yoy v2 (both revisable)
+  db.setBatchStatus('revision','success');
   const before=await api.classifyAsOf('US','2026-10','2026-10-18T00:00:00Z','v1.0');
   const cpiBefore=before.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')!;
   expect(cpiBefore).toMatchObject({value:2.9,vintage_id:'1'});
@@ -134,6 +136,13 @@ describe('classifyAsOf',()=>{
   expect(after.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')).toMatchObject({value:4.2,vintage_id:'2'});
   expect(before.regime!.primary_state).toBe('overheat');
   expect(after.regime).not.toEqual(before.regime);   // CPI 4.2 hits infl.gt4 instead of infl.2to3
+ });
+ it('fails closed when a candidate batch finalizes after the cutoff or has no receipt',async()=>{
+  const {db}=await setup();
+  for(const receipt of ['2026-10-20T00:00:00Z',null]){
+   const fake={...db,batchFinishedAt:async(ids:string[])=>Object.fromEntries(ids.map(id=>[id,receipt]))};
+   await expect(macroReadApi(fake,{judgments:true}).classifyAsOf('US','2026-10','2026-10-18T00:00:00Z','v1.0')).rejects.toMatchObject({code:'historical_cutoff_unsupported'});
+  }
  });
  it('caps period_end at the last day of referencePeriod',async()=>{
   const {api}=await setup();

@@ -12,7 +12,7 @@ describe('macro pages',()=>{
   expect(src).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
  });
  it('only the workbench server page reads MACRO_JUDGMENTS_ENABLED',()=>{
-  expect(read('src/app/(app)/intel/macro/page.tsx')).toContain("process.env.MACRO_JUDGMENTS_ENABLED === '1'");
+  expect(read('src/app/(app)/intel/macro/page.tsx')).toContain('macroJudgmentsEnabled()');
   const files=(readdirSync(join(process.cwd(),'src/components/macro'),{recursive:true}) as string[]).filter(f=>/\.tsx?$/.test(f));
   for(const f of files)expect([f,read(`src/components/macro/${f}`).includes('MACRO_JUDGMENTS_ENABLED')]).toEqual([f,false]);
  });

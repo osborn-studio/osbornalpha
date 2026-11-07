@@ -19,6 +19,7 @@ export const F4_TIMEOUT_MS=3000;
 
 type Json=Record<string,unknown>;
 const isObj=(v:unknown):v is Json=>typeof v==='object'&&v!==null&&!Array.isArray(v);
+const nonemptyObj=(v:unknown):v is Json=>isObj(v)&&Object.keys(v).length>0;
 const str=(v:unknown):string|null=>typeof v==='string'?v:null;
 export const asRegime=(v:unknown):Regime|null=>typeof v==='string'&&(REGIMES as readonly string[]).includes(v)?v as Regime:null;
 /** JudgmentCard (F4 spec §9.2) → number-free projection; the categorical value of macro_regime is display.value. */
@@ -39,18 +40,20 @@ export function judgmentDetailOf(body:unknown):F4JudgmentDetail{
  // Required collections are validated, never normalized: a missing / non-array collection or an invalid entry is malformed.
  if(!Array.isArray(j.inputs)||!Array.isArray(body.settlements))throw bad();
  const inputs=j.inputs.map(x=>{
-  if(!isObj(x)||str(x.kind)===null||(x.ref!==undefined&&!isObj(x.ref))||(x.snapshot!==undefined&&!isObj(x.snapshot)))throw bad();
-  return {...x,kind:x.kind as string,ref:isObj(x.ref)?x.ref:{},snapshot:isObj(x.snapshot)?x.snapshot:{}};
+  if(!isObj(x)||str(x.kind)===null||!nonemptyObj(x.ref)||!nonemptyObj(x.snapshot))throw bad();
+  return {...x,kind:x.kind as string,ref:x.ref,snapshot:x.snapshot};
  });
  const settlements=body.settlements.map(s=>{
   const settledAt=isObj(s)?str(s.settled_at):null;
-  if(!isObj(s)||!settledAt||Number.isNaN(Date.parse(settledAt))||str(s.outcome)===null||(s.settlement_id!==undefined&&str(s.settlement_id)===null)||(s.evidence!==undefined&&s.evidence!==null&&!isObj(s.evidence)))throw bad();
-  return {...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:isObj(s.evidence)?s.evidence:null,settled_at:settledAt};
+  if(!isObj(s)||!settledAt||Number.isNaN(Date.parse(settledAt))||str(s.outcome)===null||(s.settlement_id!==undefined&&str(s.settlement_id)===null)||!nonemptyObj(s.evidence))throw bad();
+  return {...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:s.evidence,settled_at:settledAt};
  });
  return {judgment_id:id,as_of:asOf,selected:asRegime(claim.selected)??asRegime(display.value),inputs,settlements};
 }
 export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeoutMs?:number}={}):F4Client{
- const base=(o.baseUrl===undefined?process.env.NEXT_PUBLIC_SITE_URL??null:o.baseUrl)?.replace(/\/+$/,'')||null;
+ const raw=o.baseUrl===undefined?process.env.NEXT_PUBLIC_SITE_URL??null:o.baseUrl;
+ let base:string|null=null;
+ if(raw){try{const u=new URL(raw);if((u.protocol==='https:'||(u.protocol==='http:'&&(u.hostname==='localhost'||u.hostname==='127.0.0.1')))&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash&&raw===u.origin+(raw.endsWith('/')?'/':''))base=u.origin;}catch{/* invalid configuration */}}
  const doFetch=o.fetch??fetch;const timeoutMs=o.timeoutMs??F4_TIMEOUT_MS;
  async function get(path:string,params:Record<string,string>,allowNotFound:boolean):Promise<unknown|null>{
   if(!base)throw new F4Unavailable('f4_unconfigured');

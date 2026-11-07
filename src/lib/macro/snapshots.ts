@@ -10,6 +10,7 @@
 import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
+import {macroJudgmentsEnabled} from './flags';
 import {shiftMonthEnd} from './freshness';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime} from './regime';
 import type {ObsRef,RegimeInput,RegimeSeriesInput} from './regime';
@@ -75,7 +76,7 @@ export type PublishReceipt=
  |{status:'stale';region:Region;attempts:number}
  |{status:'failed';region:Region;reason:string;failed_snapshot_id:string|null;attempts:number};
 async function runHook(deps:PublishDeps,env:Record<string,string|undefined>,snapshotId:string):Promise<'skipped'|'ok'|'failed'>{
- if(env.MACRO_JUDGMENTS_ENABLED!=='1')return 'skipped';
+ if(!macroJudgmentsEnabled(env))return 'skipped';
  try{
   const snap=await deps.db.snapshot(snapshotId);
   if(!snap)return 'failed';

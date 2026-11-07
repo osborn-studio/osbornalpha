@@ -78,6 +78,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  const runs=new Map<string,Run>();
  const publishKeys=new Map<string,string>();                                                           // publish_key → snapshot_id
  const batchStatus=new Map<string,MemoryBatchStatus>();
+ const batchFinished=new Map<string,string>();
  const batchDataset=new Map<string,string>();
  const items=new Map<string,QuarantineItem>();
  const members=new Map<string,Set<string>>();
@@ -164,7 +165,8 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
 
  const db:MemoryMacroDb={
   setNow(iso){fixedNow=new Date(iso).toISOString();},
-  setBatchStatus(batchId,status,dataset){batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);},
+  setBatchStatus(batchId,status,dataset){batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);if(status==='success'||status==='partial')batchFinished.set(batchId,observations.filter(o=>o.batch_id===batchId).reduce((t,o)=>!t||msOf(o.available_at)>msOf(t)?o.available_at:t,''));},
+  async batchFinishedAt(ids){return Object.fromEntries(ids.map(id=>[id,batchFinished.get(id)??null]));},
   addQuarantineItem(i){const id=i.id??randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
   quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},
   get audit(){return clone(audit);},
@@ -294,6 +296,7 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
    const finishedAt=new Date(Math.max(msOf(input.finishedAt),msOf(String(b.started_at)))).toISOString();
    await tables.update('ingest_batches',{batch_id:batchId,status:'running'},{status:input.status,counts:clone(input.counts),errors:clone(input.errors),finished_at:finishedAt});
    batchStatus.set(batchId,input.status);                                                                // eligibility follows the written status
+   batchFinished.set(batchId,finishedAt);
    // review A3: finalization moves eligibility, so every region this batch wrote to gets input_revision + 1
    for(const r of new Set(observations.filter(o=>o.batch_id===batchId).map(o=>series.get(o.series_id)?.region)))if(r)state[r].inputRevision++;
    return {status:input.status,finalized:true};

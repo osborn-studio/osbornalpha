@@ -8,7 +8,7 @@ const card=(id:string,as_of:string,over:Partial<F4CardLite>={}):F4CardLite=>({ju
 const obsInput=(x:FrozenObs)=>({kind:'macro_observation',ref:{series_id:x.series_id,period_end:x.period_end,vintage_id:x.vintage_id},snapshot:{...x,unit:'pct',available_at:'2026-10-01T00:00:00Z'}});
 function detail(id:string,reg:FrozenObs[],settled:FrozenObs[]|null,over:Partial<F4JudgmentDetail['settlements'][number]>={}):F4JudgmentDetail{
  return {judgment_id:id,as_of:'2026-10-15',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'s'},snapshot:{snapshot_id:'s'}},...reg.map(obsInput)],
-  settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'},
+  settlements:[{outcome:'hit',realized:'overheat',evidence:{note:'x'},settled_at:'2026-12-01T00:00:00Z'},
    {settlement_id:'set-2',outcome:'miss',realized:'recession',evidence:settled===null?{note:'x'}:{observation_refs:settled.map(x=>({...x,available_at:'2027-01-01T00:00:00Z'}))},settled_at:'2027-02-01T00:00:00Z',...over} as F4JudgmentDetail['settlements'][number]]};
 }
 
@@ -64,7 +64,7 @@ function fakeF4(pages:F4CardLite[][],details:Record<string,F4JudgmentDetail>,lat
 describe('listDeviationCases (spec §6.4 enumeration)',()=>{
  it('pages until an empty page, using the last as_of as the cursor, and keeps settled misses only',async()=>{
   const f4=fakeF4([[card('j0','2026-10-15'),card('j1','2026-09-15'),card('j2','2026-08-15',{lifecycle:'open'})],[card('j3','2026-07-15')],[]],
-   {j0:detail('j0',[],[]),j1:{...detail('j1',[],[]),settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2027-01-01T00:00:00Z'}]},j3:detail('j3',[o('A','2026-06-30','v1')],[o('A','2026-06-30','v1')])});
+   {j0:detail('j0',[],[]),j1:{...detail('j1',[],[]),settlements:[{outcome:'hit',realized:'overheat',evidence:{note:'x'},settled_at:'2027-01-01T00:00:00Z'}]},j3:detail('j3',[o('A','2026-06-30','v1')],[o('A','2026-06-30','v1')])});
   const r=await listDeviationCases(f4,'CN');
   expect(f4.before).toEqual([null,'2026-08-15','2026-07-15']);
   expect(r.incomplete).toBe(false);
