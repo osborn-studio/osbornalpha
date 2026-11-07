@@ -4,14 +4,14 @@ import { test, expect } from '@playwright/test';
 // via env vars. Read-only — never submits a write action.
 test.skip(!process.env.E2E_EMAIL || !process.env.E2E_PASSWORD, 'no credentials');
 
-test('login flow reaches /today, then key authed pages render', async ({ page }) => {
+test('login flow reaches /macro, then key authed pages render', async ({ page }) => {
   await page.goto('/login');
   await page.locator('input[type="email"]').fill(process.env.E2E_EMAIL!);
   await page.locator('input[type="password"]').fill(process.env.E2E_PASSWORD!);
   await page.getByRole('button', { name: /登录/ }).click();
 
-  await page.waitForURL('**/today');
-  await expect(page.getByRole('heading', { name: '今日' })).toBeVisible();
+  await page.waitForURL('**/macro');
+  await expect(page.getByRole('heading', { name: '宏观工作台' })).toBeVisible();
 
   await page.goto('/watchlist');
   await expect(page.locator('table')).toBeVisible();

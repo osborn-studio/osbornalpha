@@ -19,7 +19,7 @@ const SURFACES:{name:string;files:string[];min:number}[]=[
  {name:'components',files:walk('src/components/macro/strategy').filter(f=>/\.tsx?$/.test(f)&&!isTest(f)),min:15},
  {name:'messages',files:['messages/zh/macroStrategy.json','messages/en/macroStrategy.json'].map(f=>join(ROOT,f)),min:2},
  {name:'routes',files:[...walk('src/app/api/macro/strategy'),...walk('src/app/api/cron/macro-review')].filter(f=>f.endsWith('/route.ts')),min:9},
- {name:'pages',files:['transmission','history','review'].flatMap(d=>walk(`src/app/(app)/intel/macro/${d}`)).filter(f=>f.endsWith('/page.tsx')),min:4},
+ {name:'pages',files:['transmission','history','review'].flatMap(d=>walk(`src/app/(app)/macro/${d}`)).filter(f=>f.endsWith('/page.tsx')),min:4},
 ];
 const escape=(s:string)=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const MATCHERS=FORBIDDEN_TERMS.map(term=>({term,re:/[^\x00-\x7f]/.test(term)?new RegExp(escape(term)):new RegExp(`\\b${escape(term)}\\b`,'i')}));

@@ -1,5 +1,7 @@
 # 宏观工作台运行手册（macro-sync）
 
+路径 2026-11-07 起为 `/macro`（旧路径 `/intel/macro/*` 308 永久重定向）
+
 生产首次上线（合并之后）的逐步操作见 **§13**。适用：规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 4 稿）、迁移 `supabase/migrations/20261114090000_macro_workbench.sql`。
 数据底座通用部分（DQ 批次、隔离、新鲜度、`/admin/dq`）见 `docs/runbooks/data-foundation.md`。
 
@@ -317,8 +319,8 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
 
 ### 13.5 上线后检查
 
-1. 登录一个普通用户，打开 `/intel/macro`：US 与 CN 都有数据，头部有区域切换与“采集 / 快照”状态，**页面上没有任何判断层 UI**（控制台：`document.body.innerText.match(/象限|得分|margin|recovery|overheat|stagflation|recession|覆盖率/i)` 为 `null`）；点击数值，抽屉里有来源 / URL / SHA-256 / 定位 / 适配器等取证字段。未登录访问 `/api/macro/overview` → 401。
-2. `/today` 的“宏观一览”卡片显示美国与中国事实；没有 SSE / HSI / Nasdaq / DXY 行；缺失显示“缺失”，不显示 0。`/intel` 有宏观摘要卡。
+1. 登录一个普通用户，打开 `/macro`：US 与 CN 都有数据，头部有区域切换与“采集 / 快照”状态，**页面上没有任何判断层 UI**（控制台：`document.body.innerText.match(/象限|得分|margin|recovery|overheat|stagflation|recession|覆盖率/i)` 为 `null`）；点击数值，抽屉里有来源 / URL / SHA-256 / 定位 / 适配器等取证字段。未登录访问 `/api/macro/overview` → 401。
+2. `/today` 已移除，`/macro`（宏观工作台）是登录后的落地页，底栏第一个标签为“宏观”；`/intel` 仍有宏观摘要卡。
 3. `/admin/dq`（管理员账号）：最近批次里有 `macro.fred`、`macro.akshare`，新鲜度表里两者都有 `last_ok_at` 且状态 `fresh`；批次计数与 §13.3 / §13.4 的回执一致。
 4. `GET /api/macro/overview?region=all`（带登录 cookie）：`regions.US.snapshotId` 与 `regions.CN.snapshotId` 都非空；`regions.US.collection[]` 与 `regions.CN.collection[]`（各自数据集）的 `status` 为 `fresh`；抽查一个序列，`GET /api/macro/series/US_UNRATE` 的最新 `value_text` 与 FRED CSV 逐字符一致。
 5. 次日 05:30 UTC 之后再看一次 `ingest_batches`（dataset `macro.fred`）：应有新的 `success` 批次，且没有 `quarantine` 打开项（`node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts` → `no open macro quarantine items`，需要服务角色密钥，仅在 owner 的机器上运行）。
@@ -351,7 +353,7 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
    - 真实运行（07:25，手动以 `CRON_SECRET` 触发；批次 `triggered_by` 记为 `cron`）：HTTP 200，批次 `2b060c08-9a6e-48c1-b9c5-de4895d9fd41` **success**，fetched/inserted 43723（原生 42009 + 派生 1714），duplicates/quarantined/failed 0，`errors []`；`publish = published US revision 1`，snapshot `53ad1ad1-2180-4e58-9565-ea3893cd8ab4`，observation_count 18，`uncovered_weight 40`，`hook skipped`。
    - 库侧：`macro_series` 40、US 快照 1 个 active（as_of 2026-11-07）、`macro_publish_state` US 1/54、CN 0/0、`dq_freshness macro.fred` fresh。anon 读 `macro_observations`：`US_UNRATE` 2026-10-31 = `4.1`、2026-09-30 = `4.2`。本机访问 FRED CSV 超时，未能逐字符比对（证据对象 SHA-256 已入 `macro_evidence_objects`）。
    - **文档与代码不一致（记录，不改）**：§2 说 `MACRO_JUDGMENTS_ENABLED=1` 时才"在发布时计算并存储判定"；实际 `snapshots.ts` 总是计算 regime 并写 `macro_regime_results`（现有 1 行），开关只控制钩子与读取。该表只授 service_role，未经开关不会被读出或暴露。
-5. **AKShare / CN**（§13.4）：本会话在本机按文档的降级路径只做了 dry-run：`uv venv -p 3.12` + `requirements.txt`（akshare 1.20.35），`pytest scripts/macro -q` 25 passed；`collect.py --mode backfill --dry-run <临时目录>` 3 分 25 秒，退出码 0，8 个序列全部 ok（CN_CPI_INDEX evidence 3/claims 129、CN_PPI_INDEX 1/129、CN_PMI_MFG 1/130、CN_GDP_INDEX 1/43、CN_M2_YOY 1/129、CN_EXPORT_YOY 1/129、CN_CGB_10Y_D 11/2711、CN_USDCNY_CP_D 1/203），写出 start + 4 块 + finish 请求体，未 POST。CN 快照因此**尚未发布**（`macro_publish_state` CN 0/0），`/intel/macro` 的 CN 区当前无数据。owner 步骤：
+5. **AKShare / CN**（§13.4）：本会话在本机按文档的降级路径只做了 dry-run：`uv venv -p 3.12` + `requirements.txt`（akshare 1.20.35），`pytest scripts/macro -q` 25 passed；`collect.py --mode backfill --dry-run <临时目录>` 3 分 25 秒，退出码 0，8 个序列全部 ok（CN_CPI_INDEX evidence 3/claims 129、CN_PPI_INDEX 1/129、CN_PMI_MFG 1/130、CN_GDP_INDEX 1/43、CN_M2_YOY 1/129、CN_EXPORT_YOY 1/129、CN_CGB_10Y_D 11/2711、CN_USDCNY_CP_D 1/203），写出 start + 4 块 + finish 请求体，未 POST。CN 快照因此**尚未发布**（`macro_publish_state` CN 0/0），`/macro` 的 CN 区当前无数据。owner 步骤：
    ```bash
    openssl rand -hex 32 | tee >(pbcopy) | vercel env add MACRO_INGEST_SECRET production
    # 然后按 data-foundation.md §10.9 第 3 条重新部署（带 --env VERCEL_GIT_COMMIT_SHA）
@@ -361,7 +363,7 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
    scripts/macro/.venv/bin/python scripts/macro/collect.py --mode backfill ; echo "exit=$?" ; unset MACRO_INGEST_SECRET
    # 成功后按 §13.4 安装 launchd 日常任务
    ```
-6. **页面**（§13.5）：`/intel/macro` 未登录 → 307 登录页；本会话没有生产账号会话，也不代为登录，**页面渲染与"无判断层 UI"检查留给 owner**（§13.5 第 1–4 条）。`/api/macro/overview` 未登录 → 401（符合）。
+6. **页面**（§13.5）：`/macro` 未登录 → 307 登录页；本会话没有生产账号会话，也不代为登录，**页面渲染与"无判断层 UI"检查留给 owner**（§13.5 第 1–4 条）。`/api/macro/overview` 未登录 → 401（符合）。
 
 ## 14. 已知限制与设计取舍（实施 Task 18 时核实）
 

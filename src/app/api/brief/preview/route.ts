@@ -123,7 +123,7 @@ export async function GET(req: Request) {
 
   // Quota rules:
   //  - skipLLM=true costs nothing (composition only) → never metered, never
-  //    blocked (BriefGlance on /today uses this).
+  //    blocked (no in-app caller after the Today page removal; kept for API clients).
   //  - BYO-key calls run unmetered (user pays their own bill).
   //  - Anonymous callers get NO platform-key budget: this route is public in
   //    middleware, so 'not authenticated' from checkQuota fails CLOSED (401)

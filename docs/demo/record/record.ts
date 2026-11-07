@@ -102,7 +102,7 @@ class Director {
     await loc.first().waitFor({ state: 'visible', timeout: 30_000 });
     let box = await loc.first().boundingBox();
     // Keep targets clear of the sticky top bar and the fixed bottom tab bar: a click that lands on
-    // the tab bar would navigate away (that is how s08 once ended up on /today).
+    // the tab bar would navigate away (that is how s08 once ended up on /macro).
     if (!box || box.y < 90 || box.y + box.height > H - 110) {
       await loc.first().evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
       await sleep(700);
@@ -157,7 +157,7 @@ async function expandRadar(d: Director, page: Page) {
 
 const SCENES: Record<string, Scene> = {
   async s01_intro(d, page) {
-    await d.goto('/today');
+    await d.goto('/macro');
     await expandRadar(d, page);
     await d.moveTo(W * 0.5, H * 0.45, 1200);
     await d.pause(2500);
@@ -165,7 +165,7 @@ const SCENES: Record<string, Scene> = {
   },
 
   async s02_today(d, page) {
-    await d.goto('/today');
+    await d.goto('/macro');
     await expandRadar(d, page);
     await d.pause(1500);
     await d.hover(page.getByText(/A股/).first(), 1800);                    // market clocks
@@ -179,7 +179,7 @@ const SCENES: Record<string, Scene> = {
   },
 
   async s03_stock(d, page) {
-    await d.goto('/today');
+    await d.goto('/macro');
     await expandRadar(d, page);
     const row = page.locator('a[href="/stock/600519.SH"]').first();
     await row.waitFor({ timeout: 60_000 });
@@ -377,7 +377,7 @@ async function login(ctxFactory: () => Promise<BrowserContext>) {
   await page.locator('input[type="email"]').fill(DEMO_EMAIL);
   await page.locator('input[type="password"]').fill(DEMO_PASSWORD);
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await page.waitForURL('**/today', { timeout: 60_000 });
+  await page.waitForURL('**/macro', { timeout: 60_000 });
   await ctx.storageState({ path: STATE });
   await ctx.close();
 }

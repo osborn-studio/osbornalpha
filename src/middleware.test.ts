@@ -19,4 +19,10 @@ describe('middleware /api/companies',()=>{
   await middleware(req(path));
   expect(mocks.getUser).toHaveBeenCalledTimes(1);
  });
+ it('sends an authenticated login visitor to macro',async()=>{
+  mocks.getUser.mockResolvedValue({data:{user:{id:'user-1'}}});
+  const res=await middleware(req('/login'));
+  expect(res.status).toBe(307);
+  expect(res.headers.get('location')).toMatch(/\/macro$/);
+ });
 });
