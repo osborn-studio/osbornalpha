@@ -9,6 +9,12 @@ import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {pgTableClient} from '../db/pg-table-client';
+import {brokerResearchDbContract} from './db-contract';
+import type {BrokerContractHarness} from './db-contract';
+import {effectiveValue} from './effective';
+import {pgBrokerResearchDb} from './pg-db';
+import type {CorrectedValue,OutboxEvent} from './types';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -1217,4 +1223,35 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   await enable(false);
   expect(await seen(w.rep,inst)).toEqual(NONE);
  },120000);
+});
+
+/** The contract changes global settings, so its harness holds the advisory lock until close(). */
+async function pgHarness(o:{lock?:boolean}={lock:true}):Promise<BrokerContractHarness>{
+ const p=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl,statement_timeout:8000});
+ const unlock=o.lock?await lockSettings(p):undefined;
+ return {
+  db:pgBrokerResearchDb(p),tables:pgTableClient(p),
+  issuer:async()=>(await p.query(`insert into public.issuers(issuer_id,canonical_name_en) values(gen_random_uuid(),'ZZ Broker Contract') returning issuer_id`)).rows[0].issuer_id,
+  stock:async(t,m)=>{await p.query(`insert into public.stocks_universe(ticker,name,market) values($1,$1,$2::market_t) on conflict (ticker) do nothing`,[t,m]);},
+  expireLease:async id=>{await p.query(`update public.broker_report_documents set lease_until=now()-interval '1 second' where document_id=$1 and lease_token is not null`,[id]);},
+  outbox:async()=>(await p.query(`select * from public.broker_outbox order by created_at,event_id`)).rows.map(r=>({...r,created_at:new Date(r.created_at).toISOString(),delivered_at:r.delivered_at?new Date(r.delivered_at).toISOString():null}) as OutboxEvent),
+  batch:async()=>(await p.query(`insert into public.ingest_batches(batch_id,producer,dataset) values(gen_random_uuid(),'broker-research-extract','broker_research') returning batch_id`)).rows[0].batch_id,
+  close:async()=>{await unlock?.();await p.end();},
+ };
+}
+describe.skipIf(!enabled)('A5 pgBrokerResearchDb',()=>{
+ brokerResearchDbContract('pgBrokerResearchDb contract',pgHarness);
+ describe('effective value: TS effectiveValue = SQL broker_field_effective on every corrected shape',()=>{
+  let h:BrokerContractHarness;let p:Pool;
+  beforeAll(async()=>{h=await pgHarness({lock:false});p=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
+  afterAll(async()=>{await h?.close?.();await p?.end();});
+  it('agrees for null, partial, explicit-null and full corrections read back through pgBrokerResearchDb',async()=>{
+   const shapes:(CorrectedValue|null)[]=[null,{value_text:'121'},{value_text:'121',value_num:null},{value_text:'x',value_num:'99.50',value_currency:'USD',value_unit:'price',value_date:'2026-01-02'},{value_text:'y',value_currency:null,value_date:null}];
+   for(const corrected of shapes){
+    const sql=(await p.query(`select public.broker_field_effective($1::jsonb,'120',120.50,'HKD','price','2026-03-04') v`,[corrected===null?null:JSON.stringify(corrected)])).rows[0].v;
+    const ts=effectiveValue({corrected,value_text:'120',value_num:'120.50',value_currency:'HKD',value_unit:'price',value_date:'2026-03-04'});
+    expect({corrected,ts}).toEqual({corrected,ts:sql});
+   }
+  });
+ });
 });

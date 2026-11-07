@@ -668,8 +668,10 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   async getPublication(id){return clone(publications.get(id)??null);},
   async upsertInstitution(row){
    const id=row.institution_id??randomUUID();
-   if([...institutions.values()].some(i=>i.institution_id!==id&&i.name_en.toLowerCase()===row.name_en.toLowerCase()))fail('duplicate_key','research_institutions_name_en_uniq');
-   const had=institutions.get(id);institutions.set(id,{institution_id:id,name_en:row.name_en,name_zh:row.name_zh,aliases:[...row.aliases],kind:row.kind,rating_disclosure_url:row.rating_disclosure_url,created_at:had?.created_at??stamp()});return id;
+   const had=institutions.get(id);
+   const next={...had,...Object.fromEntries(Object.entries(row).filter(([,v])=>v!==undefined)),institution_id:id,created_at:had?.created_at??stamp()} as InstitutionRow;
+   if([...institutions.values()].some(i=>i.institution_id!==id&&i.name_en.toLowerCase()===next.name_en.toLowerCase()))fail('duplicate_key','research_institutions_name_en_uniq');
+   institutions.set(id,{...next,aliases:[...next.aliases]});return id;
   },
   async listInstitutions(){return clone([...institutions.values()].sort((a,b)=>cmp(a.name_en,b.name_en)||cmp(a.institution_id,b.institution_id)));},
   async insertRatingScale(row){
@@ -684,9 +686,10 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   async listRatingScales(inst){return clone([...scales.values()].filter(s=>s.institution_id===inst).sort((a,b)=>cmp(a.raw_label,b.raw_label)||cmp(a.valid_from,b.valid_from)||cmp(a.scale_id,b.scale_id)));},
   async upsertAnalyst(row){
    const id=row.analyst_id??randomUUID();const had=analysts.get(id);
-   if(had&&had.institution_id!==row.institution_id)fail('analyst_immutable');
-   analysts.set(id,{analyst_id:id,institution_id:row.institution_id,display_name:row.display_name,name_variants:[...row.name_variants],public_display:row.public_display,created_at:had?.created_at??stamp()});
-   if(had&&!same([had.public_display,had.display_name,had.name_variants],[row.public_display,row.display_name,row.name_variants])){
+   const next={...had,...Object.fromEntries(Object.entries(row).filter(([,v])=>v!==undefined)),analyst_id:id,created_at:had?.created_at??stamp()} as AnalystRow;
+   if(had&&had.institution_id!==next.institution_id)fail('analyst_immutable');
+   analysts.set(id,{...next,name_variants:[...next.name_variants]});
+   if(had&&!same([had.public_display,had.display_name,had.name_variants],[next.public_display,next.display_name,next.name_variants])){
     for(const rep of new Set(bindings.filter(b=>b.analyst_id===id).map(b=>b.report_id))){const r=reports.get(rep)!;if(r.status!=='withdrawn'&&r.disclosure_ok)setReport(r,{disclosure_ok:false});draftTexts(rep,'analyst_disclosure');}
    }
    return id;
@@ -745,7 +748,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   },
   async publicReports(filter){
    let vis=visible();
-   if(filter.hasSummary)vis=vis.filter(r=>summaryView(r).length>0);
+   if(filter.hasSummary!==undefined)vis=vis.filter(r=>(summaryView(r).length>0)===filter.hasSummary);
    if(filter.issuerId||filter.rating||filter.securityTicker!==undefined||filter.currency!==undefined){const ok=new Set(vis.flatMap(r=>targetView(r)).filter(t=>(!filter.issuerId||t.issuer_id===filter.issuerId)&&(!filter.rating||t.rating_normalized===filter.rating)
     &&(filter.securityTicker===undefined||t.security_ticker===filter.securityTicker)&&(filter.currency===undefined||(t.target_price!=null?(t.target_currency as string|null):t.price_at_report!=null?(t.price_currency as string|null):null)===filter.currency)).map(t=>String(t.report_id)));vis=vis.filter(r=>ok.has(r.report_id));}
    const rows=vis.map(reportView).filter(r=>(!filter.institutionId||r.institution_id===filter.institutionId)&&(!filter.scope||r.scope===filter.scope)&&(!filter.from||String(r.published_date)>=filter.from)&&(!filter.to||String(r.published_date)<=filter.to)

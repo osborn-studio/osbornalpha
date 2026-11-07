@@ -269,7 +269,7 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect(await code(db.materialize(r.rep))).toBe('published_immutable');
    expect(await code(db.publish(r.rep,by))).toBe('report_not_draft');
    await db.updateReportDraft(r.rep,{evidence_ok:true});                                        // allowed (unchanged)
-   const regs=(await h.outbox()).filter(x=>x.kind==='claim.register'&&(x.payload.source as Record<string,unknown>).publication_id===pub);
+   const regs=(await h.outbox()).filter(x=>x.kind==='claim.register'&&(x.payload.source as Record<string,unknown>|undefined)?.publication_id===pub);
    expect(regs).toHaveLength(1);
    expect(regs[0].payload).toMatchObject({claim_key:`broker_target_price:${pub}:${r.tk}`,claim_seq:1,methodology_version:CLAIM_METHODOLOGY_VERSION,subject:{security_ticker:r.tk,market:'HK',currency:'HKD'},claim:{direction:1,target_price:'120',reference_price:'100'},source:{snapshot_hash:p.snapshot_hash}});
    expect(await code(db.unpublish(r.rep,by,' '))).toBe('reason_required');
@@ -313,6 +313,8 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
 
   it('entities: close-only rating scales; an analyst disclosure change flags bound reports and drafts their approved texts',async()=>{
    const inst=await db.upsertInstitution({name_en:`Entity Inst ${randomUUID()}`,name_zh:'机构',aliases:['EI'],kind:null,rating_disclosure_url:null});
+   await db.upsertInstitution({institution_id:inst,aliases:['Entity Institute']} as Parameters<BrokerResearchDb['upsertInstitution']>[0]);
+   expect((await db.listInstitutions()).find(i=>i.institution_id===inst)).toMatchObject({name_en:expect.stringMatching(/^Entity Inst /),name_zh:'机构',aliases:['Entity Institute']});
    expect(await code(db.upsertInstitution({name_en:(await db.listInstitutions()).find(i=>i.institution_id===inst)!.name_en.toUpperCase(),name_zh:null,aliases:[],kind:null,rating_disclosure_url:null}))).toBe('duplicate_key');
    const sc=await db.insertRatingScale({institution_id:inst,raw_label:'Buy',normalized:'buy',source_url:'https://example.test/s',valid_from:'2020-01-01',created_by:by});
    expect(await code(db.insertRatingScale({institution_id:inst,raw_label:'BUY',normalized:'sell',source_url:'https://example.test/s',valid_from:'2020-01-01',created_by:by}))).toBe('duplicate_key');
@@ -479,7 +481,9 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
   it('outbox attempts, purge steps, access log, eval receipts, review queue',async()=>{
    const l=await db.updateLicence((await db.insertLicence(licenceInput())).licence_id,{holder:'Other'});
    const ev=(await h.outbox()).find(e=>e.kind==='licence.changed'&&e.payload.licence_id===l.licence_id)!;
-   expect((await db.takePendingOutbox(10000)).some(e=>e.event_id===ev.event_id)).toBe(true);
+   const pending=(await h.outbox()).filter(e=>e.status==='pending');
+   expect(ev.status).toBe('pending');
+   expect((await db.takePendingOutbox(pending.length)).some(e=>e.event_id===ev.event_id)).toBe(true);
    for(let i=0;i<9;i++)await db.markOutbox(ev.event_id,{delivered:false,error:'boom'});
    expect((await h.outbox()).find(e=>e.event_id===ev.event_id)).toMatchObject({status:'pending',attempts:9});
    await db.markOutbox(ev.event_id,{delivered:false,error:'boom'});
@@ -560,6 +564,10 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
   it('public reads: nothing while public_enabled=false; bundles, detail, history and institutions after; target price hidden when not public',async()=>{
    const r=await ready();await db.publish(r.rep,by);
    const t=await ready({licence:{allows_public_target_price:false}});await db.publish(t.rep,by);
+   const s=await ready();
+   const summary=await db.insertSummary({report_id:s.rep,lang:'en',kind:'independent_summary',run_id:s.ext,input_hash:(await db.getReport(s.rep))!.summary_input_digest!,summary_md:'Public summary',max_verbatim_overlap:1,numeric_grounding:{version:'grounding/1',passed:true,assertions:[],failures:[]},disclosure_check:PASS_CHECK,status:'draft'});
+   await db.setSummaryStatus(summary,{status:'approved',approved_by:by,disclosure_check:PASS_CHECK});
+   await db.publish(s.rep,by);
    await db.setPublicEnabled(false,by);
    expect((await db.publicReports({limit:200})).some(b=>b.report.report_id===r.rep)).toBe(false);
    expect(await db.publicReport(r.rep)).toBeNull();
@@ -579,6 +587,10 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.publicInstitutions()).find(i=>i.institution_id===r.inst)).toMatchObject({report_count:1,last_published_date:'2026-03-05'});
    expect(list[0].report).toMatchObject({rules_version:RULES_VERSION,title_model_id:null});
    expect(await db.publicReports({institutionId:r.inst,hasSummary:true,limit:10})).toEqual([]);   // no approved summary
+   expect((await db.publicReports({hasSummary:true,limit:200})).map(b=>b.report.report_id)).toContain(s.rep);
+   const withoutSummary=(await db.publicReports({hasSummary:false,limit:200})).map(b=>b.report.report_id);
+   expect(withoutSummary).toContain(r.rep);
+   expect(withoutSummary).not.toContain(s.rep);
    expect(await db.publicAnalysts({institutionId:r.inst,limit:10})).toEqual([]);                 // no public analyst bound
    await db.setPublicEnabled(false,by);
   });

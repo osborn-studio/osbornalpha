@@ -99,6 +99,15 @@ describe('supabaseBrokerResearchDb wiring',()=>{
   expect(s.calls).toContainEqual(['from','broker_report_fields','select',FIELD_COLUMNS]);
   expect(s.calls).toContainEqual(['from','broker_report_fields','is','superseded_by_run_id',null]);
  });
+ it('updates only supplied columns on existing institution and analyst rows',async()=>{
+  const s=stub({rows:[{institution_id:'i'},{analyst_id:'a'}]});
+  const db=supabaseBrokerResearchDb({admin:s.client});
+  await db.upsertInstitution({institution_id:'i',aliases:['New']} as Parameters<typeof db.upsertInstitution>[0]);
+  await db.upsertAnalyst({analyst_id:'a',name_variants:['A. N.']} as Parameters<typeof db.upsertAnalyst>[0]);
+  expect(s.calls).toContainEqual(['from','research_institutions','update',{aliases:['New']}]);
+  expect(s.calls).toContainEqual(['from','research_analysts','update',{name_variants:['A. N.']}]);
+  expect(s.calls.some(c=>c[2]==='upsert')).toBe(false);
+ });
 });
 describe('supabase public list under a PostgREST row cap (P-R3-05)',()=>{
  it('reads every public detail child and institution across capped responses',async()=>{
@@ -123,10 +132,10 @@ describe('supabase public list under a PostgREST row cap (P-R3-05)',()=>{
   const db=supabaseBrokerResearchDb({anon:cappedAnon({broker_reports_public_v:reports,broker_report_targets_public_v:targets,broker_report_summaries_public_v:[],broker_report_snippets_public_v:[]},3)});
   const order=(xs:typeof reports)=>[...xs].sort((a,b)=>a.published_date<b.published_date?1:a.published_date>b.published_date?-1:a.report_id<b.report_id?1:-1).map(r=>r.report_id);
   const cases:[{issuerId?:string;rating?:'buy'|'sell';hasSummary?:boolean},typeof reports][]=[
-   [{issuerId:X},reports.filter(r=>has(r,{issuer_id:X}))],[{rating:'buy'},reports.filter(r=>has(r,{rating:'buy'}))],[{hasSummary:true},reports.filter(r=>r.has_summary)],
+   [{issuerId:X},reports.filter(r=>has(r,{issuer_id:X}))],[{rating:'buy'},reports.filter(r=>has(r,{rating:'buy'}))],[{hasSummary:true},reports.filter(r=>r.has_summary)],[{hasSummary:false},reports.filter(r=>!r.has_summary)],
    [{issuerId:X,rating:'buy'},reports.filter(r=>has(r,{issuer_id:X,rating:'buy'}))],
    [{issuerId:X,rating:'sell'},reports.filter(r=>has(r,{issuer_id:X,rating:'sell'}))]];       // the X:sell + Y:buy report matches X+sell, never X+buy via Y (P-R4-02)
-  expect(cases[3][1].some(r=>r.target_facets.length===2)).toBe(false);
+  expect(cases[4][1].some(r=>r.target_facets.length===2)).toBe(false);
   for(const [filter,expected] of cases){
    const seen:string[]=[];let cursor:{publishedDate:string;reportId:string}|undefined;
    for(let guard=0;guard<20;guard++){

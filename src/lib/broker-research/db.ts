@@ -216,16 +216,28 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async unpublish(id,by,reason){await call('broker_report_unpublish',{p_report_id:id,p_by:by,p_reason:reason});},
   async getPublication(id){const r=await maybe(from('broker_report_publications').select('*').eq('publication_id',id));return r?publicationFromRow(r):null;},
   async upsertInstitution(row){
-   const q=row.institution_id?from('research_institutions').upsert(row,{onConflict:'institution_id'}):from('research_institutions').insert(row);
-   return String((await run<R>(q.select('institution_id').single())).institution_id);
+   if(row.institution_id){
+    const patch=dropUndefined(row);delete patch.institution_id;
+    if(Object.keys(patch).length){
+     const updated=await maybe(from('research_institutions').update(patch).eq('institution_id',row.institution_id).select('institution_id'));
+     if(updated)return String(updated.institution_id);
+    }else if(await maybe(from('research_institutions').select('institution_id').eq('institution_id',row.institution_id)))return row.institution_id;
+   }
+   return String((await run<R>(from('research_institutions').insert(row).select('institution_id').single())).institution_id);
   },
   async listInstitutions(){return (await pageAll(()=>from('research_institutions').select('*').order('name_en').order('institution_id'))).map(institutionFromRow);},
   async insertRatingScale(row){return String((await run<R>(from('research_rating_scales').insert(row).select('scale_id').single())).scale_id);},
   async closeRatingScale(id,validTo,by){await required(from('research_rating_scales').update({valid_to:validTo,closed_by:by}).eq('scale_id',id).select('scale_id'),'rating_scale');},
   async listRatingScales(inst){return (await pageAll(()=>from('research_rating_scales').select('*').eq('institution_id',inst).order('raw_label').order('valid_from').order('scale_id'))).map(scaleFromRow);},
   async upsertAnalyst(row){
-   const q=row.analyst_id?from('research_analysts').upsert(row,{onConflict:'analyst_id'}):from('research_analysts').insert(row);
-   return String((await run<R>(q.select('analyst_id').single())).analyst_id);
+   if(row.analyst_id){
+    const patch=dropUndefined(row);delete patch.analyst_id;
+    if(Object.keys(patch).length){
+     const updated=await maybe(from('research_analysts').update(patch).eq('analyst_id',row.analyst_id).select('analyst_id'));
+     if(updated)return String(updated.analyst_id);
+    }else if(await maybe(from('research_analysts').select('analyst_id').eq('analyst_id',row.analyst_id)))return row.analyst_id;
+   }
+   return String((await run<R>(from('research_analysts').insert(row).select('analyst_id').single())).analyst_id);
   },
   async listAnalysts(inst){return (await pageAll(()=>from('research_analysts').select('*').eq('institution_id',inst).order('display_name').order('analyst_id'))).map(analystFromRow);},
   async reviewQueue(opts){
@@ -292,7 +304,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
     // issuer and rating are correlated on the same target: one object with both keys, jsonb @> (P-R4-02; = pg exists, = memory)
     const facet={...(filter.issuerId?{issuer_id:filter.issuerId}:{}),...(filter.rating?{rating:filter.rating}:{}),...(filter.securityTicker!==undefined?{security_ticker:filter.securityTicker}:{}),...(filter.currency!==undefined?{currency:filter.currency}:{})};
     if(Object.keys(facet).length)q=q.contains('target_facets',JSON.stringify([facet]));   // ONE element must hold every key (P-R4-02, P-R5-04)
-    if(filter.hasSummary)q=q.eq('has_summary',true);
+    if(filter.hasSummary!==undefined)q=q.eq('has_summary',filter.hasSummary);
     if(filter.institutionId)q=q.eq('institution_id',filter.institutionId);
     if(filter.scope)q=q.eq('scope',filter.scope);
     if(filter.from)q=q.gte('published_date',filter.from);
