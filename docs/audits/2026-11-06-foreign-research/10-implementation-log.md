@@ -14,3 +14,5 @@
 | A5 | pg adapter + pg contract | Codex gpt-6-sol, 1 round + 2 fixes | DB A5 block 23/23, unit 33/33 | mmx 46 (degenerate) → 2 accepted fixed (A5-disposition.md) |
 | B1 | 2026-11-07 | pending commander commit | 35/35 unit tests PASS (5 files); typecheck/lint PASS; diff check PASS | Plan code implemented with scale input validation in decimal helpers; no existing-code adaptations required; commit SHA deferred to commander, no git mutation |
 | B1 | decimal / behavior / extract schema / locate / typed + 合成夹具 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B1-mmx.md (batch triage pending) |
+| B2 | 2026-11-07 | pending commander commit | 53/53 unit tests PASS (tickers + typed); typecheck/lint PASS | Plan tests and implementation passed without code deviations; added test-file responsibility comment per repository convention; commit deferred to commander, no git mutation |
+| B2 | tickers（parseBrokerTicker + resolveTargets） | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B2-mmx.md (batch triage pending) |
