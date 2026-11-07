@@ -58,6 +58,10 @@ export const applicableCategory=(categories:readonly FilerCategoryRow[],fiscalYe
  * Maintained per year; a year without an entry throws (the row becomes no_rule, never a guessed date).
  */
 export const SEC_HOLIDAYS:Readonly<Record<number,readonly string[]>>={
+ // 2021–2023 per the OPM schedules as published (Juneteenth from 2021; New Year 2022 observed 2021-12-31, Veterans Day 2023 observed Fri 11-10).
+ 2021:['2021-01-01','2021-01-18','2021-02-15','2021-05-31','2021-06-18','2021-07-05','2021-09-06','2021-10-11','2021-11-11','2021-11-25','2021-12-24','2021-12-31'],
+ 2022:['2022-01-17','2022-02-21','2022-05-30','2022-06-20','2022-07-04','2022-09-05','2022-10-10','2022-11-11','2022-11-24','2022-12-26'],
+ 2023:['2023-01-02','2023-01-16','2023-02-20','2023-05-29','2023-06-19','2023-07-04','2023-09-04','2023-10-09','2023-11-10','2023-11-23','2023-12-25'],
  2024:['2024-01-01','2024-01-15','2024-02-19','2024-05-27','2024-06-19','2024-07-04','2024-09-02','2024-10-14','2024-11-11','2024-11-28','2024-12-25'],
  2025:['2025-01-01','2025-01-20','2025-02-17','2025-05-26','2025-06-19','2025-07-04','2025-09-01','2025-10-13','2025-11-11','2025-11-27','2025-12-25'],
  2026:['2026-01-01','2026-01-19','2026-02-16','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-10-12','2026-11-11','2026-11-26','2026-12-25'],
@@ -69,7 +73,7 @@ export const SEC_HOLIDAYS:Readonly<Record<number,readonly string[]>>={
  * 2025-01-09 (national day of mourning), 2025-12-24 and 2025-12-26
  * (sec.gov/newsroom/whats-new/edgar-will-be-closed-december-24-2025-through-december-26-2025).
  */
-export const SEC_CLOSURES:Readonly<Record<number,readonly string[]>>={2024:['2024-12-24'],2025:['2025-01-09','2025-12-24','2025-12-26'],2026:[],2027:[]};
+export const SEC_CLOSURES:Readonly<Record<number,readonly string[]>>={2021:[],2022:[],2023:[],2024:['2024-12-24'],2025:['2025-01-09','2025-12-24','2025-12-26'],2026:[],2027:[]};
 export class HolidayTableMissing extends Error{constructor(public readonly year:number){super(`holiday_table_missing:${year}`);this.name='HolidayTableMissing';}}
 export function isSecBusinessDay(iso:string):boolean{
  const dow=new Date(toMs(iso)).getUTCDay();
@@ -80,8 +84,9 @@ export function isSecBusinessDay(iso:string):boolean{
 }
 /** Rule 0-3: a due date on a weekend, holiday or closure moves to the next SEC business day. */
 export function rollForward(iso:string):string{
- let d=iso;for(let i=0;i<15&&!isSecBusinessDay(d);i++)d=addDays(d,1);
- return d;
+ let d=iso;
+ for(let i=0;i<=15;i++){if(isSecBusinessDay(d))return d;d=addDays(d,1);}
+ throw new Error(`roll_forward_exhausted:${iso}`);
 }
 
 // ---------------------------------------------------------------- deadlines
@@ -126,13 +131,19 @@ const strideOf=(regime:FilingProfile['regime'])=>regime==='20-F'||regime==='40-F
 export function filingsWindowStart(today:string):string{const {y,m}=ym(today);return addDays(monthEnd(y,m-12*SLOT_COUNT-12),-MATCH_DAYS);}
 
 interface Estimate{periodEnd:string;basis:Record<string,unknown>}
-/** 52/53-week estimate for the slot ending in grid month-end `grid`: latest observed actual of the same position + 364 days per year (+7 when the result leaves the anchor month); no observation → the grid month end. */
+/** 52/53-week estimate for the slot ending in grid month-end `grid`: latest observed actual of the same position + 364 days per year, +7 when that lands nearer the anchor month end; no observation → the grid month end. */
 export function estimatePeriodEnd(grid:string,observed:readonly {date:string;source:string}[]):Estimate{
  const month=ym(grid).m;
  const prior=observed.filter(o=>ym(nearestMonthEnd(o.date)).m===month&&nearestMonthEnd(o.date)<grid).sort((a,b)=>b.date.localeCompare(a.date))[0];
  if(!prior)return {periodEnd:grid,basis:{source:'month_end'}};
  let e=prior.date;
- for(let i=0;i<10&&nearestMonthEnd(e)<grid;i++){e=addDays(e,364);if(ym(e).m!==month)e=addDays(e,7);}
+ for(let i=0;i<10&&nearestMonthEnd(e)<grid;i++){
+  const c=addDays(e,364),y=ym(c).y;
+  // anchor month end nearest the candidate (a period ending in the first days of the next month belongs to the previous anchor)
+  const t=[y-1,y,y+1].map(yy=>monthEnd(yy,month)).sort((a,b)=>Math.abs(diffDays(c,a))-Math.abs(diffDays(c,b)))[0];
+  const c7=addDays(c,7);
+  e=Math.abs(diffDays(c7,t))<Math.abs(diffDays(c,t))?c7:c;   // ties keep +364
+ }
  if(nearestMonthEnd(e)!==grid)return {periodEnd:grid,basis:{source:'month_end',fallback_from:prior.date}};
  return {periodEnd:e,basis:{source:prior.source,from:prior.date}};
 }
@@ -145,7 +156,7 @@ export function computeExpectations(input:{profile:FilingProfile;categories:File
  const week52=regime!=='cn'&&profile.week52_pattern;
  const base:Record<string,unknown>={rules_version:CALENDAR_RULES_VERSION};
  // Anchor month: the latest received annual report's actual period end wins over submissions fiscalYearEnd (§6.1).
- let anchor=+fye.slice(0,2);
+ let anchor=ym(nearestMonthEnd(`2000-${fye.slice(0,2)}-${fye.slice(2,4)}`)).m;   // '0203' → January, '0102' → December (D2)
  const latestAnnual=filings.filter(f=>counts(f,ANNUAL[regime])).sort((a,b)=>b.period_end!.localeCompare(a.period_end!))[0];
  if(latestAnnual&&regime!=='cn'){
   const pe=latestAnnual.period_end!;const m=ym(nearestMonthEnd(pe)).m;
@@ -162,7 +173,7 @@ export function computeExpectations(input:{profile:FilingProfile;categories:File
   if(((m-anchor)%stride+stride)%stride===0)slots.push({grid:monthEnd(y,m),month:m});
  }
  const rows:ExpectationRow[]=[];
- const planned:{grid:string;month:number;kind:ReportKind|null;periodEnd:string;estimated:boolean;received:CalendarFiling|null;basis?:Record<string,unknown>}[]=[];
+ const planned:{grid:string;month:number;kind:ReportKind|null;periodEnd:string;estimated:boolean;received:CalendarFiling|null;basis?:Record<string,unknown>;evidenceEnd?:string}[]=[];
  for(const s of slots){
   const kind=kindOf(regime,s.month,anchor);
   if(!kind||!week52){
@@ -175,10 +186,14 @@ export function computeExpectations(input:{profile:FilingProfile;categories:File
   const matches=filings.filter(f=>counts(f,kind)&&Math.abs(diffDays(f.period_end!,est.periodEnd))<=MATCH_DAYS);
   const received=earliest(matches);
   if(received)planned.push({...s,kind,periodEnd:received.period_end!,estimated:false,received,basis:{replaced_estimate:est.periodEnd}});
-  else planned.push({...s,kind,periodEnd:est.periodEnd,estimated:true,received:null,basis:est.basis});
+  else{
+   // upstream evidence is matched before the ended-slot cut: an actual report date before today makes the slot ended (D3)
+   const evidence=usEntries.filter(e=>e.form===kind&&e.reportDate!==null&&Math.abs(diffDays(e.reportDate,est.periodEnd))<=MATCH_DAYS).map(e=>e.reportDate!).sort()[0];
+   planned.push({...s,kind,periodEnd:est.periodEnd,estimated:true,received:null,basis:est.basis,evidenceEnd:evidence});
+  }
  }
  // applicable report kinds first, THEN the PERIODS limit (plan audit P6: a slot without a kind never takes a place)
- const ended=planned.filter(p=>p.kind!==null&&p.periodEnd<today).slice(0,PERIODS);
+ const ended=planned.filter(p=>p.kind!==null&&(p.periodEnd<today||(p.evidenceEnd!==undefined&&p.evidenceEnd<today))).slice(0,PERIODS);
  for(const p of ended){
   if(!p.kind)continue;
   const monthsAhead=((anchor-p.month)%12+12)%12;

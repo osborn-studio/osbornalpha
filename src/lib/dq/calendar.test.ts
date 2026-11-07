@@ -30,12 +30,18 @@ describe('Rule 0-3 roll-forward',()=>{
   if(want.startsWith('2028'))expect(()=>rollForward(d)).toThrow('holiday_table_missing:2028');
   else expect(rollForward(d)).toBe(want);
  });
- it('covers 2024–2027 with 11 federal holidays each (12 in 2027 with the observed New Year 2028) and refuses other years',()=>{
-  expect(Object.keys(SEC_HOLIDAYS)).toEqual(['2024','2025','2026','2027']);
-  expect([2024,2025,2026].map(y=>SEC_HOLIDAYS[y].length)).toEqual([11,11,11]);
+ it('covers 2021–2027 (12 holidays in 2021 and 2027 for the observed New Year of the next year) and refuses other years',()=>{
+  expect(rollForward('2021-06-19')).toBe('2021-06-21');   // Juneteenth 2021 observed Fri 06-18, then the weekend
+  expect(rollForward('2023-01-01')).toBe('2023-01-03');   // Sunday New Year observed Mon 01-02
+  expect(Object.keys(SEC_HOLIDAYS)).toEqual(['2021','2022','2023','2024','2025','2026','2027']);
+  expect([2022,2023,2024,2025,2026].map(y=>SEC_HOLIDAYS[y].length)).toEqual([10,11,11,11,11]);   // 2022: New Year 2022 was observed 2021-12-31
+  expect(SEC_HOLIDAYS[2021]).toHaveLength(12);
   expect(SEC_HOLIDAYS[2027]).toHaveLength(12);
-  for(const y of [2024,2025,2026,2027])for(const d of SEC_HOLIDAYS[y]){expect(d.startsWith(String(y))).toBe(true);expect(isSecBusinessDay(d)).toBe(false);}
-  expect(()=>isSecBusinessDay('2023-12-29')).toThrow('holiday_table_missing:2023');
+  const SAVED=SEC_HOLIDAYS as Record<number,readonly string[]>;
+  SAVED[2030]=Array.from({length:20},(_,i)=>`2030-01-${String(i+1).padStart(2,'0')}`);
+  try{expect(()=>rollForward('2030-01-01')).toThrow();}finally{delete SAVED[2030];}   // D5: never silently stops rolling
+  for(const y of [2021,2022,2023,2024,2025,2026,2027])for(const d of SEC_HOLIDAYS[y]){expect(d.startsWith(String(y))).toBe(true);expect(isSecBusinessDay(d)).toBe(false);}
+  expect(()=>isSecBusinessDay('2020-12-29')).toThrow('holiday_table_missing:2020');
  });
 });
 
@@ -88,12 +94,11 @@ describe('deadline table (10-K regime, FYE 12-31, today 2026-11-05)',()=>{
   expect(at(r,'2025-12-31').detail).toMatchObject({no_category:true,fiscal_year:2025});
   expect(at(r,'2026-09-30').deadline_state).toBe('statutory');
  });
- it('20-F: six ended annual periods (annual-only slots a year apart, plan audit P6), due 4 months later; years without a holiday table are no_rule; no quarterly rows',()=>{
+ it('20-F: six ended annual periods (annual-only slots a year apart, plan audit P6), due 4 months later; due dates roll over the 2021+ holiday tables; no quarterly rows',()=>{
   const r=run({profile:{regime:'20-F'}});
   expect(r.map(x=>[x.report_kind,x.period_end,x.due_date,x.due_rule])).toEqual([
    ['20-F','2025-12-31','2026-04-30','us.20f/1'],['20-F','2024-12-31','2025-04-30','us.20f/1'],['20-F','2023-12-31','2024-04-30','us.20f/1'],
-   ['20-F','2022-12-31',null,'none.holiday_table_missing/1'],['20-F','2021-12-31',null,'none.holiday_table_missing/1'],['20-F','2020-12-31',null,'none.holiday_table_missing/1']]);
-  expect(r[3].detail).toMatchObject({holiday_year:2023});
+   ['20-F','2022-12-31','2023-05-01','us.20f/1'],['20-F','2021-12-31','2022-05-02','us.20f/1'],['20-F','2020-12-31','2021-04-30','us.20f/1']]);
  });
  it('40-F: six ended annual periods, no rule, and can still be received (plan audit P6)',()=>{
   const f=filing('40-F','2025-12-31','2026-03-20');
@@ -173,7 +178,7 @@ describe('52/53-week filers',()=>{
  it('estimates unreceived periods from the latest actual of the same position (+364), marks them estimated, never overdue',()=>{
   const r=run({profile:wk(),filings:history,categories:[cat(2024,'large_accelerated'),cat(2025,'large_accelerated')]});
   expect(r.map(x=>[x.period_end,x.report_kind,x.period_end_estimated])).toEqual([
-   ['2026-09-26','10-K',true],['2026-06-27','10-Q',true],['2026-03-28','10-Q',true],['2025-12-27','10-Q',true],['2025-09-27','10-K',false],['2025-06-28','10-Q',false]]);
+   ['2026-10-03','10-K',true],['2026-06-27','10-Q',true],['2026-03-28','10-Q',true],['2026-01-03','10-Q',true],['2025-09-27','10-K',false],['2025-06-28','10-Q',false]]);
   const est=at(r,'2026-06-27');
   expect(est).toMatchObject({deadline_state:'estimated',due_rule:'us.laf/1/est',due_date:'2026-08-06',disclosure_state:'pending'});
   expect(est.detail).toMatchObject({estimated_due_passed:true,estimate_basis:{source:'filing',from:'2025-06-28'}});
@@ -188,10 +193,32 @@ describe('52/53-week filers',()=>{
   expect(at(run({profile:wk(),filings:[...history,off]}),'2026-06-27').period_end_estimated).toBe(true);
  });
  it('+364 per missing year, +7 when the step leaves the anchor month; no observation → the month end',()=>{
-  expect(estimatePeriodEnd('2023-09-30',[{date:'2022-09-24',source:'filing'}])).toEqual({periodEnd:'2023-09-23',basis:{source:'filing',from:'2022-09-24'}});
-  expect(estimatePeriodEnd('2026-09-30',[{date:'2024-09-28',source:'filing'}]).periodEnd).toBe('2026-09-26');
-  expect(estimatePeriodEnd('2025-01-31',[{date:'2024-02-03',source:'filing'}]).periodEnd).toBe('2025-02-08');
+  const est=(grid:string,d:string)=>estimatePeriodEnd(grid,[{date:d,source:'filing'}]).periodEnd;
+  expect(estimatePeriodEnd('2023-09-30',[{date:'2022-09-24',source:'filing'}])).toEqual({periodEnd:'2023-09-30',basis:{source:'filing',from:'2022-09-24'}});   // 53-week year: +364 = 09-23 is 7 days from 09-30, +371 is 0
+  expect(est('2025-01-31','2024-02-03')).toBe('2025-02-01');   // D1: +364 is 1 day from 01-31, +371 would be 8
+  expect(est('2024-08-31','2023-09-03')).toBe('2024-09-01');   // Costco-style first Sunday after Aug 31
+  expect(est('2025-12-31','2025-01-03')).toBe('2026-01-02');   // Friday nearest Dec 31
+  expect(est('2024-01-31','2023-01-28')).toBe('2024-02-03');   // Saturday nearest Jan 31: +364 = 01-27 (4 days), +371 = 02-03 (3 days)
+  expect(est('2026-09-30','2024-09-28')).toBe('2026-10-03');   // two steps: 2025-09-27, then 09-26 (4) vs 10-03 (3)
   expect(estimatePeriodEnd('2026-03-31',[])).toEqual({periodEnd:'2026-03-31',basis:{source:'month_end'}});
+ });
+ it('D2: a fiscal_year_end near a month boundary anchors on the nearest month end (0203 → January) and matches the submissions report',()=>{
+  const up:CalendarUpstream={lookup:'ok',us:[{form:'10-K',reportDate:'2026-01-31',filingDate:'2026-03-20',accessionNumber:'k1'}]};
+  const r=run({profile:{fiscal_year_end:'0203',week52_pattern:true},upstream:up,today:'2026-11-05',categories:[cat(2024,'large_accelerated'),cat(2025,'large_accelerated')]});
+  expect(at(r,'2026-01-31')).toMatchObject({report_kind:'10-K',disclosure_state:'filed_not_ingested',upstream_filed_date:'2026-03-20'});
+  expect(r.some(x=>x.period_end==='2026-02-28')).toBe(false);
+  const dec=run({profile:{fiscal_year_end:'0102',week52_pattern:true}});
+  expect(dec.filter(x=>x.report_kind==='10-K').every(x=>nearestMonthEnd(x.period_end).slice(5,7)==='12')).toBe(true);expect(dec.some(x=>x.report_kind==='10-K')).toBe(true);   // '0102' anchors on December
+ });
+ it('D3: a slot whose upstream report ended before today is expected even when its estimate is still ahead',()=>{
+  const up:CalendarUpstream={lookup:'ok',us:[{form:'10-K',reportDate:'2025-02-01',filingDate:'2025-02-04',accessionNumber:'k2'}]};
+  const r=run({profile:{fiscal_year_end:'0201',week52_pattern:true},filings:[filing('10-K','2024-02-03','2024-03-20')],upstream:up,today:'2025-02-05',categories:[cat(2023,'large_accelerated'),cat(2024,'large_accelerated')]});
+  expect(r[0]).toMatchObject({report_kind:'10-K',disclosure_state:'filed_not_ingested',upstream_filed_date:'2025-02-04'});
+  expect(r).toHaveLength(6);
+  const late:CalendarUpstream={lookup:'ok',us:[{form:'10-K',reportDate:'2025-02-01',filingDate:'2025-02-04',accessionNumber:'k2'}]};
+  const r2=run({profile:{fiscal_year_end:'0201',week52_pattern:true},filings:[filing('10-K','2024-02-08','2024-03-20')],upstream:late,today:'2025-02-05',categories:[cat(2023,'large_accelerated'),cat(2024,'large_accelerated')]});
+  expect(r2[0]).toMatchObject({period_end:'2025-02-06',period_end_estimated:true,disclosure_state:'filed_not_ingested'});   // estimate 02-06 is after today, actual 02-01 is not
+  expect(r2[0].detail.estimate_basis).toMatchObject({source:'filing',from:'2024-02-08'});
  });
  it('uses SEC submissions reportDate as an estimation basis when no filing is stored',()=>{
   const up:CalendarUpstream={lookup:'ok',us:[{form:'10-Q',reportDate:'2025-06-28',filingDate:'2025-08-01',accessionNumber:'a1'}]};
