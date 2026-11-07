@@ -12,7 +12,7 @@
 // 第 5 稿 P2-2, 第 6 稿 P2-1): otherwise re-derived old history
 // would come back as duplicates and turn an all-failed run into 'partial'; instead the batch gets {code:'no_native_outcomes'}
 // and finishes failed. The receipt reports native_counts and derived_counts separately. Only US is published here (CN publishes
-// after ingest finish). ?preview=1 fetches and parses only and returns counts and samples: ZERO database
+// after ingest finish; Task 11: keyed 'cron:<batch>', skipped for a failed batch or a run without native outcomes). ?preview=1 fetches and parses only and returns counts and samples: ZERO database
 // writes, ZERO evidence uploads (it never touches deps.db / deps.evidence / deps.tables). A missing
 // code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
 // keys and counts only, never messages.
@@ -30,6 +30,7 @@ import type {IngestReceipt} from '@/lib/macro/ingest';
 import {FRED_BACKFILL_DONE_BY,FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
+import {publishRegion} from '@/lib/macro/snapshots';
 import type {EvidenceInput,MacroSeriesDef,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
@@ -131,8 +132,12 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
  const {status:batchStatus}=await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now()),null);   // no run row: no tokens
  const nativeLanded=nativeUsable>0;
  await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed'&&nativeLanded,cadence:'daily'});
- // TASK 11: publishRegion(region)
- return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
+ // Task 11 (spec §4.4 step 4–5; 第 5 稿 P1-4/P2-2): publish US only, keyed by the batch; a failed FRED batch or a run without any
+ // native outcome leaves the last active snapshot serving.
+ const publish=batchStatus==='failed'||!nativeLanded
+  ?{status:'skipped' as const,region:'US' as const,reason:nativeLanded?'batch_failed':'no_native_outcomes'}
+  :await publishRegion({db:deps.db},'US',today,{publishKey:`cron:${batchId}`});
+ return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,publish,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
 }
 
 async function run(request:Request):Promise<NextResponse>{

@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {evidencePath} from '@/lib/macro/evidence';
+import {MacroDbError} from '@/lib/macro/db';
 import {memoryMacroDb} from '@/lib/macro/memory-db';
 import {parserFor} from '@/lib/macro/parsers';
 import type {EvidenceInput} from '@/lib/macro/types';
@@ -11,6 +12,9 @@ import type {EvidenceInput} from '@/lib/macro/types';
 const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
 vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+// Typed loosely (Record) so cases can resolve other receipts (stale / failed) or reject (fenced); 4 params like publishRegion.
+const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string,_today?:string,_opts?:unknown):Promise<Record<string,unknown>>=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped',replayed:false})));
+vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
 
 import {POST} from './route';
 
@@ -406,5 +410,85 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(res.status).toBe(500);
   expect(tables.rows('ingest_batches')).toEqual([expect.objectContaining({status:'failed',errors:[{code:'claim_failed'}]})]);
   log.mockRestore();
+ });
+});
+
+describe('POST /api/macro/ingest — Task 11 publication',()=>{
+ const DATE=expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/);
+ const fenceOf=(id:string,finishToken:unknown)=>({batchId:id,ownerToken:tokens.get(id),finishToken});
+ it('a successful finish publishes CN once with the publish key and the owner + finish fence; start and chunk never publish',async()=>{
+  const id=await startBatch();
+  await post(chunkBody(id));
+  expect(publishMock).not.toHaveBeenCalled();
+  const res=await post(finishBody(id,1,OK));
+  expect(res.status).toBe(200);
+  expect(publishMock).toHaveBeenCalledTimes(1);
+  expect(publishMock).toHaveBeenCalledWith(expect.anything(),'CN',DATE,{publishKey:`ingest:${id}`,fence:fenceOf(id,expect.stringMatching(/^[0-9a-f-]{36}$/))});
+  expect((await res.json()).publish).toMatchObject({status:'published',region:'CN'});
+ });
+ it('resumption after publication: a crash at the receipt step does not publish again and the stored receipt replays (第 4 稿 P2-4)',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  const record=mem.recordFinishStep.bind(mem);let armed=true;
+  mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name==='receipt'){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+  expect((await post(finishBody(id,1,OK))).status).toBe(500);
+  const second=await post(finishBody(id,1,OK));
+  expect(second.status).toBe(200);
+  const body=await second.json();
+  expect(body.publish.status).toBe('published');
+  expect(publishMock).toHaveBeenCalledTimes(1);
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finished'});
+  expect(await (await post(finishBody(id,1,OK))).json()).toEqual(body);
+ });
+ it('a crash right after the publish, before its checkpoint, retries with the identical key and fence (第 5 稿 P1-4)',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  const record=mem.recordFinishStep.bind(mem);let armed=true;
+  mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name==='published'){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+  expect((await post(finishBody(id,1,OK))).status).toBe(500);
+  expect((await post(finishBody(id,1,OK))).status).toBe(200);
+  expect(publishMock).toHaveBeenCalledTimes(2);
+  const [first,second]=publishMock.mock.calls;
+  expect(first[3]).toMatchObject({publishKey:`ingest:${id}`,fence:{batchId:id,ownerToken:tokens.get(id)}});
+  expect((second[3] as {publishKey:string}).publishKey).toBe((first[3] as {publishKey:string}).publishKey);
+  expect((second[3] as {fence:{batchId:string;ownerToken:string}}).fence).toMatchObject({batchId:id,ownerToken:tokens.get(id)});
+ });
+ it('a retryable publication failure keeps the run finishing (503 publish_pending); the retry publishes and records freshness once (第 5 稿 P1-5)',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  publishMock.mockResolvedValueOnce({status:'stale',region:'CN',attempts:2});
+  const first=await post(finishBody(id,1,OK));
+  expect(first.status).toBe(503);expect((await first.json()).error).toMatchObject({code:'publish_pending',publish:'stale'});
+  const run=await mem.ingestRun(id);
+  expect(run).toMatchObject({state:'finishing'});
+  expect(run!.progress.attempts).toHaveLength(1);expect(run!.progress.attempts![0]).toMatchObject({status:'stale'});
+  expect(run!.progress.published).toBeUndefined();
+  const second=await post(finishBody(id,1,OK));
+  expect(second.status).toBe(200);expect((await second.json()).publish.status).toBe('published');
+  expect(publishMock).toHaveBeenCalledTimes(2);
+  expect(tables.rows('dq_freshness')).toHaveLength(1);
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:0});
+ });
+ it('a finish without native outcomes skips publication (terminal, checkpointed) and never calls publishRegion',async()=>{
+  const id=await startBatch();
+  const body=await (await post(finishBody(id,0,OK.map(o=>({series_id:o.series_id,ok:false,code:'collect_timeout'}))))).json();
+  expect(body.publish).toEqual({status:'skipped',region:'CN',reason:'no_native_outcomes'});
+  expect(publishMock).not.toHaveBeenCalled();
+ });
+ it('a fenced publish answers 409 fenced and records no published step',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  publishMock.mockRejectedValueOnce(new MacroDbError('fenced'));
+  const res=await post(finishBody(id,1,OK));
+  expect(res.status).toBe(409);expect((await res.json()).error.code).toBe('fenced');
+  expect((await mem.ingestRun(id))!.progress.published).toBeUndefined();
+ });
+ it('a rejected-only redelivery after a populated run is skipped as no_native_outcomes and never published (第 6 稿 P2-1)',async()=>{
+  const first=await startBatch();await post(chunkBody(first));
+  expect((await post(finishBody(first,1,OK))).status).toBe(200);
+  publishMock.mockClear();
+  const write=mem.writeObservations.bind(mem);
+  mem.writeObservations=async(b,c,rows,t)=>rows.some(r=>'derived_from' in r)?write(b,c,rows,t):{inserted:0,duplicates:rows.length,versioned:0,quarantined:0,
+   conflicts:rows.map(r=>({series_id:r.series_id,period_end:r.period_end,reason:'previously_rejected' as const,value_text:r.value_text,current_value_text:null,observation_id:'00000000-0000-4000-8000-0000000000cd'}))};
+  const id=await startBatch();await post(chunkBody(id));
+  const body=await (await post(finishBody(id,1,OK))).json();
+  expect(body.publish).toEqual({status:'skipped',region:'CN',reason:'no_native_outcomes'});
+  expect(publishMock).not.toHaveBeenCalled();
  });
 });

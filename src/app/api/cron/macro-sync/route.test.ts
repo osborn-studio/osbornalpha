@@ -10,6 +10,9 @@ import type {EvidenceInput} from '@/lib/macro/types';
 const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
 vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+// Typed loosely (Record) so cases can resolve other receipts (stale / failed) or reject (fenced); 4 params like publishRegion.
+const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string,_today?:string,_opts?:unknown):Promise<Record<string,unknown>>=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped',replayed:false})));
+vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
 
 import {GET,POST} from './route';
 
@@ -88,6 +91,22 @@ describe('macro-sync cron',()=>{
   const derived=await deps.db.seriesHistory('US_DGS10',{maxRows:10});
   expect(derived.map(o=>[o.period_end,o.value_text,o.transform,o.batch_id])).toEqual([['2026-09-30','4.1','month_end@1',body.batchId]]);
   expect((await deps.db.seriesHistory('US_CPI_YOY',{maxRows:10})).map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','2']]);
+ });
+ it('publishes US once per real run, keyed by the batch; preview never publishes; an all-failed run after a populated one skips with no_native_outcomes (Task 11, 第 5 稿 P2-2)',async()=>{
+  const res=await GET(req());
+  const body=await res.json();
+  expect(publishMock).toHaveBeenCalledTimes(1);
+  expect(publishMock).toHaveBeenCalledWith(expect.anything(),'US',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),{publishKey:`cron:${body.batchId}`});
+  expect(body.publish.status).toBe('published');
+  publishMock.mockClear();
+  mocks.codeVersion.mockReturnValue(null);
+  expect((await GET(req('preview=1'))).status).toBe(200);
+  expect(publishMock).not.toHaveBeenCalled();
+  mocks.codeVersion.mockReturnValue('a'.repeat(40));
+  for(const d of FRED)failCodes.add(d.source!.seriesKey);
+  const failed=await (await GET(req())).json();
+  expect(failed.publish).toEqual({status:'skipped',region:'US',reason:'no_native_outcomes'});
+  expect(publishMock).not.toHaveBeenCalled();
  });
  it('asks for a recent window once a series has data',async()=>{
   early=true;

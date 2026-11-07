@@ -18,7 +18,7 @@
 //           MacroDb.finalizeBatch (fenced by owner + finish token, 第 6 稿 P1-1) with native chunk + derived counts, failed
 //           series (series_outcomes), every stored error, the batch-wide unlocated-claims summary and no_native_outcomes →
 //           MacroDb.recordFreshness('macro.akshare', daily, ok = status !== 'failed' && usable native rows; the upsert and the
-//           freshness_recorded checkpoint in one fenced transaction) → the Task 11 publish point → stored receipt (run
+//           freshness_recorded checkpoint in one fenced transaction) → the Task 11 publish step (publishRegion CN, keyed + fenced) → stored receipt (run
 //           finished, lease released). A retry skips completed steps; a finished run returns its stored receipt. Only this
 //           route publishes CN.
 // Responses carry codes, keys and counts only.
@@ -39,6 +39,7 @@ import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
 import type {IngestBody,SeriesOutcome} from '@/lib/macro/ingest-schema';
 import {claimPeriodEnd,parserFor} from '@/lib/macro/parsers';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
+import {publishRegion} from '@/lib/macro/snapshots';
 import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceInput,FinishProgress,FinishStep,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
@@ -250,8 +251,25 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
   p=await deps.db.recordFreshness(body.batch_id,{dataset:DATASET,ok,cadence:'daily',now:deps.now().toISOString(),
    detail:{batch_id:body.batch_id,batch_status:batchStatus,failed_series:failedSeries}},fence);
  }
- // TASK 11: publishRegion(region)
- const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derived.counts,errors:publicErrors(errors)};
+ // Task 11 (spec §0.2 M24/N3; 第 4 稿 P2-4; 第 5 稿 P1-3/P1-4/P1-5/P2-2): CN publishes only here, after the batch's derivation,
+ // keyed 'ingest:<batch_id>' and fenced by the owner + finish tokens, so a retry after a crash past the publish replays the same
+ // snapshot. A failed batch or one without native outcomes is an intentional terminal skip. Any other non-published outcome is
+ // retryable: recorded as a publish_attempt, the run stays finishing and the collector retries finish (503 publish_pending).
+ // 'published' is checkpointed only after success (incl. replay) or an intentional skip.
+ let publish=p.published;
+ if(!publish){
+  if(batchStatus==='failed'||!nativeLanded)publish={status:'skipped',region:'CN',reason:nativeLanded?'batch_failed':'no_native_outcomes'};
+  else{
+   const r=await publishRegion({db:deps.db},'CN',today,{publishKey:`ingest:${body.batch_id}`,fence:{batchId:body.batch_id,ownerToken:body.owner_token,finishToken:begun.finishToken}});
+   if(r.status!=='published'){
+    await step('publish_attempt',{at:deps.now().toISOString(),status:r.status,reason:r.status==='failed'?r.reason:null});
+    return err('publish_pending','CN publication did not complete; retry finish with the same owner token',503,{publish:r.status});
+   }
+   publish={...r};
+  }
+  p=await step('published',publish);
+ }
+ const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derived.counts,errors:publicErrors(errors),publish};
  await step('receipt',receipt);
  return json(receipt);
 }
