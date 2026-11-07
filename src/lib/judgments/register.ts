@@ -136,6 +136,7 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
  const dry=!!actor.dryRun;
  const settle=async(existing:JudgmentRow):Promise<RegisterResult>=>{
   if(samePayload(existing,row))return {judgment_id,duplicate:true,abstained:row.abstained,dry_run:dry,row,registered_at:existing.registered_at,retrospective:existing.retrospective,quarantined:false};
+  if(!dry&&deps.signal?.aborted)throw new RegisterDeferred();
   if(!dry)await quarantine(deps.tables,{dataset:'judgments',table:'judgments',naturalKey:judgment_id,reasonCode:'idempotency_conflict',batchId:input.batchId,payload:{registered:normalizedPayload(existing),attempted:normalizedPayload(row)}});
   throw new IdempotencyConflict(`${judgment_id}: same id, different payload`,!dry);
  };

@@ -20,6 +20,7 @@ import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
+import {REGISTRY} from './registry';
 import {AbortedError,raceAbort} from './abort';
 import {COMPENSATION_BUDGET_MS,compensateMacro} from './compensate';
 import type {CompensateDeps,CompensationReport} from './compensate';
@@ -303,15 +304,16 @@ export async function settleNow(deps:SettleDeps,judgmentId:string,o:{actor:strin
  const errors:BatchError[]=[];
  let batchId:string|null=null;
  // T2-04: everything after a successful claim runs under a handler that hands the owned lease back on any failure.
- const ctx0:SettleContext={deps,batchId:null,now:'',signal,preview:false,clock0:clock()};
+ let now:string|undefined;let attempted=false;
  try{
- const now=await deps.db.serverTime();
+ now=await deps.db.serverTime();
  batchId=(await startBatch(deps.tables,{producer:PRODUCER,dataset:SETTLE_DATASET,codeVersion:deps.codeVersion,triggeredBy:'manual'})).batchId;
  const bid:string=batchId;
- const ctx:SettleContext={...ctx0,batchId:bid,now};
+ const ctx:SettleContext={deps,batchId:bid,now,signal,preview:false,clock0:clock()};
  const done=async(r:SettleNowResult):Promise<SettleNowResult>=>{await finishBatch(deps.tables,bid,{counts,errors});return r;};
   const resolver=(deps.resolverFor??defaultResolverFor)(j.condition.resolver);
   const plan=planOf(q,now);
+  attempted=true;
   const result=plan.early||isUnresolvedInconsistency(q,now,plan)?null
    :plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
    :await resolveBounded(resolver,{judgment:j,cutoff:plan.cutoff,now,inputsDb:deps.inputsDb,signal},signal);
@@ -348,13 +350,15 @@ export async function settleNow(deps:SettleDeps,judgmentId:string,o:{actor:strin
    throw e;
   }
  }catch(e){
-  // The lease is still ours on every other failure: hand it back (error attempt, open incident carried), then fail the batch and rethrow.
+  // Hand the lease back on failure. Only an attempted resolution consumes an attempt; setup faults do not.
   if(e instanceof AbortedError){
    await releaseUntouched(deps.db,q).catch(()=>undefined);counts.deferred=1;errors.push({code:'deadline_hit',key:judgmentId});
    if(batchId)return await finishBatch(deps.tables,batchId,{counts,errors}).then(()=>none('deferred','deadline_hit',batchId));
    return none('deferred','deadline_hit');
   }
-  await failed({...ctx0,now:ctx0.now||new Date().toISOString()},q,'settle_now_failed',messageOf(e)).catch(()=>undefined);
+  if(attempted&&now)await failed({deps,batchId,now,signal,preview:false},q,'settle_now_failed',messageOf(e)).catch(()=>undefined);
+  else await setupFailed(deps.db,q,e,now);
+  await releaseUntouched(deps.db,q).catch(()=>undefined);
   if(batchId)await finishBatch(deps.tables,batchId,{counts:{...counts,deferred:0,failed:1},errors:[{code:'settle_now_failed',key:judgmentId,message:messageOf(e)}]}).catch(()=>undefined);
   throw e;
  }
@@ -390,9 +394,19 @@ async function releaseUntouched(db:JudgmentsDb,r:QueueRow):Promise<void>{
  catch(e){if(!isLeaseLost(e))throw e;}
 }
 
-/** T2-02 (documented limit): database waits are NOT bounded by the 280 s deadline — only resolver reads race the signal. A write that lands after
+/** Infrastructure failures are visible in the batch, but do not consume a resolver attempt. */
+async function setupFailed(db:JudgmentsDb,q:QueueRow,e:unknown,knownNow?:string):Promise<SettleOutcome>{
+ const code='settle_setup_failed',message=messageOf(e);
+ const now=knownNow??await db.serverTime().catch(()=>undefined);
+ if(now)await db.releaseLease(q.judgment_id,q.lease_token!,carryIncident(q,{last_status:'error',last_detail:{code,message},
+  next_attempt_at:backoff('error',{now,attempts:q.attempts,settleBy:q.settle_by}),attempts_increment:0},now)).catch(()=>undefined);
+ await releaseUntouched(db,q).catch(()=>undefined);
+ return {item:item(q.judgment_id,'failed',code),counter:'failed',summary:null,errors:[{code,key:q.judgment_id,message}]};
+}
+
+/** T2-02 (documented limit): settlement database waits are NOT bounded by the 280 s deadline; resolver reads and the producer's read phase race the signal. A write that lands after
  *  the deadline is still lease-fenced (append / release / quarantine check the token), so it is correct, merely late. A platform kill leaves a
- *  'running' judgments.settle batch, which repair_stale_batches marks failed at the start of the next run (Task 22 runbook mentions it). */
+ *  'running' settle or registered-method produce batch, which repair_stale_batches marks failed at the start of the next run (Task 22 runbook mentions it). */
 export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<SettleReceipt>{
  const clock=deps.clock??Date.now,t0=clock(),deadlineMs=opts.deadlineMs??DEADLINE_MS,preview=opts.preview===true;
  const ctl=new AbortController();
@@ -418,6 +432,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
    return receipt('preview');
   }
   detail.repaired=await deps.db.repairStaleBatches(SETTLE_DATASET,STALE_BATCH_SECONDS);
+  for(const id of new Set(REGISTRY.map(m=>m.id)))detail.repaired+=await deps.db.repairStaleBatches(`judgments.produce.${id}`,STALE_BATCH_SECONDS);
   const compensate=deps.compensate===undefined?compensateMacro:deps.compensate;
   if(compensate){
    detail.compensation=await compensate({db:deps.db,inputsDb:deps.inputsDb,tables:deps.tables,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy,signal,clock,deadlineAt:t0+COMPENSATION_BUDGET_MS});
@@ -434,11 +449,19 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
    if(signal.aborted||elapsed>=STOP_CLAIM_MS||waves<1){detail.deadline_hit=true;break;}
    const rows=await deps.db.claimDue(Math.min(BATCH_SIZE,waves*CONCURRENCY),LEASE_SECONDS);
    const fresh=rows.filter(r=>!processed.has(r.judgment_id));
-   for(const r of rows)if(processed.has(r.judgment_id))await releaseUntouched(deps.db,r);
-   if(fresh.length===0)break;
-   detail.batches++;counts.fetched+=fresh.length;
-   const now=opts.now??await deps.db.serverTime();
-   await processRows({deps,batchId,now,signal,preview:false,clock0:clock()},fresh,o=>{processed.add(o.item.judgment_id);absorb(o);});
+   counts.fetched+=fresh.length;
+   let now:string|undefined;
+   try{
+    for(const r of rows)if(processed.has(r.judgment_id))await releaseUntouched(deps.db,r);
+    if(fresh.length===0)break;
+    detail.batches++;
+    now=opts.now??await deps.db.serverTime();
+    await processRows({deps,batchId,now,signal,preview:false,clock0:clock()},fresh,o=>{processed.add(o.item.judgment_id);absorb(o);});
+   }catch(e){
+    for(const r of fresh)if(!processed.has(r.judgment_id)){absorb(await setupFailed(deps.db,r,e,now));processed.add(r.judgment_id);}
+    await Promise.all(rows.map(r=>releaseUntouched(deps.db,r).catch(()=>undefined)));
+    throw e;
+   }
   }
   if(detail.deadline_hit)errors.push({code:'deadline_hit',message:`claiming stopped after ${detail.batches} batch(es)`});
   for(const k of ['pending','unavailable','voided'] as const)

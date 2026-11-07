@@ -208,6 +208,7 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
    return {status:r.status,quarantine_id:r.quarantine_id??null};
   },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await call<'applied'|'stale'|'closed'|'item_not_open'>(admin,'apply_quarantine_override',{p_judgment_id:judgmentId,p_override:override,p_quarantine_id:quarantineId,p_audit:audit});},
+  async resolveClosedQuarantine(judgmentId,quarantineId,expected,resolvedBy,audit){return await call<'applied'|'stale'|'item_not_open'>(admin,'resolve_closed_judgment_quarantine',{p_judgment_id:judgmentId,p_quarantine_id:quarantineId,p_expected:expected,p_resolved_by:resolvedBy,p_audit:audit});},
   async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
    const r=await call<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>(admin,'reject_quarantined_settlement',{p_judgment_id:judgmentId,p_quarantine_id:quarantineId,p_expected:expected,p_request_key:requestKey,p_row:settlementArgs(judgmentId,row),p_audit:audit});
    return {seq:Number(r.seq),status:r.status};

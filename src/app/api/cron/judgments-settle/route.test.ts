@@ -5,7 +5,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {JudgmentError} from '@/lib/judgments/errors';
 
 const mocks=vi.hoisted(()=>({run:vi.fn(),deps:vi.fn(),codeVersion:vi.fn()}));
-vi.mock('@/lib/judgments/settle',()=>({runSettle:mocks.run}));
+vi.mock('@/lib/judgments/settle',()=>({runSettle:mocks.run,DEADLINE_MS:280_000}));
 vi.mock('@/lib/judgments/deps',()=>({productionJudgmentDeps:mocks.deps,resolveCodeVersion:mocks.codeVersion}));
 
 import {GET,POST,dynamic,maxDuration} from './route';
@@ -36,13 +36,13 @@ describe('judgments settle cron',()=>{
   expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();
  });
  it('runs with cron actor/trigger and a 280 s deadline; the receipt carries codes, keys and counts only',async()=>{
-  const res=await GET(req());
+  const request=req();const res=await GET(request);
   expect(res.status).toBe(200);expect(res.headers.get('cache-control')).toBe('no-store');
   const body=await res.json();
   expect(body).toMatchObject({ok:true,preview:false,receipt:{batchId:'b',status:'success',counts:{deferred:1},items:[{judgment_id:'j1',action:'settled'}],
    errors:[{code:'pending_summary'},{code:'lease_lost',key:'j2'}],detail:{compensation:{status:'skipped',reason:'macro_unavailable'}}}});
   expect(JSON.stringify(body)).not.toContain('awaiting_bars');expect(JSON.stringify(body)).not.toContain('leaky');
-  expect(mocks.deps).toHaveBeenCalledWith({codeVersion:SHA,actor:'cron',triggeredBy:'cron'});
+  expect(mocks.deps).toHaveBeenCalledWith({codeVersion:SHA,actor:'cron',triggeredBy:'cron',signal:request.signal});
   expect(mocks.run).toHaveBeenCalledWith({tag:'deps'},{preview:false,deadlineMs:280_000});
   expect(mocks.codeVersion).toHaveBeenCalledWith({allowGit:false});
  });
@@ -57,7 +57,7 @@ describe('judgments settle cron',()=>{
   const res=await GET(req('preview=1'));
   expect(res.status).toBe(200);expect(await res.json()).toMatchObject({ok:true,preview:true});
   expect(mocks.run).toHaveBeenCalledWith({tag:'deps'},{preview:true,deadlineMs:280_000});
-  expect(mocks.deps).toHaveBeenCalledWith({codeVersion:'preview',actor:'cron',triggeredBy:'cron'});
+  expect(mocks.deps).toHaveBeenCalledWith({codeVersion:'preview',actor:'cron',triggeredBy:'cron',signal:expect.any(AbortSignal)});
   for(const qs of ['preview=0','preview=true','preview=1&preview=1']){
    const bad=await GET(req(qs));
    expect({qs,status:bad.status}).toEqual({qs,status:400});

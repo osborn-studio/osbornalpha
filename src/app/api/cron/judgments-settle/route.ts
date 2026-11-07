@@ -9,12 +9,11 @@ import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {productionJudgmentDeps,resolveCodeVersion} from '@/lib/judgments/deps';
 import {JudgmentError} from '@/lib/judgments/errors';
-import {runSettle} from '@/lib/judgments/settle';
+import {DEADLINE_MS,runSettle} from '@/lib/judgments/settle';
 import type {SettleReceipt} from '@/lib/judgments/settle';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
-const DEADLINE_MS=280_000;
 const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'no-store'}});
 
 function authorized(auth:string|null,secret:string):boolean{
@@ -42,7 +41,7 @@ async function run(request:Request):Promise<NextResponse>{
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const started=new Date();
  try{
-  const receipt=await runSettle(productionJudgmentDeps({codeVersion,actor:'cron',triggeredBy:'cron'}),{preview,deadlineMs:DEADLINE_MS});
+  const receipt=await runSettle(productionJudgmentDeps({codeVersion,actor:'cron',triggeredBy:'cron',signal:request.signal}),{preview,deadlineMs:DEADLINE_MS});
   return NextResponse.json({ok:receipt.status==='success'||receipt.status==='preview',preview,started_at:started.toISOString(),receipt:publicReceipt(receipt)},{status:200,headers:{'Cache-Control':'no-store'}});
  }catch(e){
   return err(e instanceof JudgmentError?e.code:'settle_failed','Judgment settlement failed',500);   // code only: no message leaves the server

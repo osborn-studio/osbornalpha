@@ -44,6 +44,12 @@ describe('judgments calibrate cron',()=>{
   mocks.codeVersion.mockReturnValue(null);
   expect((await GET(req('',AUTH))).status).toBe(503);
  });
+ it('preview succeeds without a code version and never runs the writing core',async()=>{
+  mocks.codeVersion.mockReturnValue(null);
+  const res=await GET(req('preview=1',AUTH));
+  expect(res.status).toBe(200);expect(await res.json()).toMatchObject({ok:true,preview:true});
+  expect(mocks.run).not.toHaveBeenCalled();expect(mocks.preview).toHaveBeenCalledOnce();
+ });
  it('a thrown core is a code-only 500',async()=>{
   mocks.run.mockRejectedValueOnce(new Error('secret'));
   const res=await GET(req('',AUTH));

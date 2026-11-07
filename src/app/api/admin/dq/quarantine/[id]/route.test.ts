@@ -352,15 +352,18 @@ describe('POST /api/admin/dq/quarantine/[id] — judgments items (F4, spec §7.6
     expect(mocks.insert).not.toHaveBeenCalled();
   });
 
-  it('a reject of an already-final judgment (plain flip, audited: false) is audited by the route with the judgment, verdict and settlement seq', async () => {
-    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: false, judgmentId: JUDGMENT, resolution: 'quarantine_rejected', seq: 2 });
-    const res = await json({ status: 'resolved_reject' });
-    expect(res.status).toBe(200);
+  it('a reject of an already-final judgment is audited atomically by the RPC without a second route audit', async () => {
+    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: true, judgmentId: JUDGMENT, resolution: 'quarantine_rejected', seq: 2 });
+    expect((await json({ status: 'resolved_reject' })).status).toBe(200);
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('a plain non-settlement verdict is audited by the route', async () => {
+    await client.update('dq_quarantine', { id: ID }, { table_name: 'judgments', reason_code: 'idempotency_conflict' });
+    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: false, judgmentId: JUDGMENT, resolution: 'plain', seq: null });
+    expect((await json({ status: 'resolved_reject' })).status).toBe(200);
     expect(mocks.insert).toHaveBeenCalledTimes(1);
-    expect(mocks.insert.mock.calls[0][0]).toMatchObject({
-      user_id: ADMIN, action: 'dq.quarantine_resolve', object_id: ID,
-      detail: { id: ID, status: 'resolved_reject', outcome: 'resolved', judgment_id: JUDGMENT, resolution: 'quarantine_rejected', seq: 2 },
-    });
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ user_id: ADMIN, action: 'dq.quarantine_resolve', object_id: ID });
   });
 
   it('maps hook outcomes to HTTP statuses without auditing failures', async () => {

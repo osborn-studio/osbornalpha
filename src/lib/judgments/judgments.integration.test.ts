@@ -375,6 +375,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
   for(const n of WRITES){for(const role of ['anon','authenticated'])expect({n,role,ok:await fn(role,n)}).toEqual({n,role,ok:false});expect({n,ok:await fn('service_role',n)}).toEqual({n,ok:true});}
   for(const n of INTERNAL)for(const role of ROLES)expect({n,role,ok:await fn(role,n)}).toEqual({n,role,ok:false});
   expect(await fails(asRole(admin,'anon',c=>c.query(`select public.set_job_state('x',null,'{}')`)))).toMatchObject({code:'42501'});
+  for(const role of ['anon','authenticated'])expect(await fails(asRole(admin,role,c=>c.query(`select public.resolve_closed_judgment_quarantine(null,null,'{}',null,'{}')`)))).toMatchObject({code:'42501'});
   expect(await one(`select public.judgments_server_time() = now() v`)).toBe(true);
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
  },30000);

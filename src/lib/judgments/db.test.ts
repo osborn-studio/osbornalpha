@@ -150,7 +150,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const Q=(id:string,next:string)=>({judgment_id:id,settle_after:TS,settle_by:TS,label_policy:'first_observed',next_attempt_at:next,attempts:0,last_status:null,last_detail:{},leased_until:TS,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',override:null,closed_at:null,updated_at:TS});
   const s=stub({register_judgment:{judgment_id:J,registered_at:TS,retrospective:true},append_settlement:{seq:2,status:'applied'},claim_due_judgments:[Q('b',TS),Q('a',TS),Q('c','2026-01-01T00:00:00+00:00')],release_lease:null,
    calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:{ok:true,updated_at:'2026-11-06T03:00:00.123456+00:00'},claim_judgment:{status:'claimed',lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',row:Q('a',TS)},repair_stale_batches:2,apply_quarantine_override:'stale',
-   reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7,
+   resolve_closed_judgment_quarantine:'applied',reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7,
    quarantine_settlement:{status:'quarantined',quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb'}},{judgment_settle_queue:[]});
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
   const m=methodologyFixture();const f=judgmentFixture(m,'0b0e1d8e-0000-4000-8000-000000000001');
@@ -170,6 +170,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   expect(await db.applyQuarantineOverride(J,override,'0b0e1d8e-0000-4000-8000-0000000000bb',{route:'x'})).toBe('stale');
   const voidRow=settlementFixture('0b0e1d8e-0000-4000-8000-000000000001',{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${J}`});
   expect(await db.rejectQuarantinedSettlement(J,'0b0e1d8e-0000-4000-8000-0000000000bb',{evidence_hash:'e'.repeat(64),cutoff:TS},'adm:key-0002',voidRow,{route:'x'})).toEqual({seq:3,status:'applied'});
+  expect(await db.resolveClosedQuarantine(J,'0b0e1d8e-0000-4000-8000-0000000000bb',{evidence_hash:'e'.repeat(64),cutoff:TS},J,{route:'x'})).toBe('applied');
   expect(await db.freezeCalibrationCohort('0b0e1d8e-0000-4000-8000-0000000000cc','m','v1',{from:'2023-01-01',to:'2026-01-01'})).toEqual({status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123Z',n:7});
   await db.cohortMembers('0b0e1d8e-0000-4000-8000-0000000000cc',J,10);
   expect(await db.clearCalibrationGeneration('0b0e1d8e-0000-4000-8000-0000000000cc')).toBe(7);
@@ -189,6 +190,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'repair_stale_batches',args:{p_dataset:'judgments.settle',p_older_than:'900 seconds'}},
    {fn:'apply_quarantine_override',args:{p_judgment_id:J,p_override:override,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_audit:{route:'x'}}},
    {fn:'reject_quarantined_settlement',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_expected:{evidence_hash:'e'.repeat(64),cutoff:TS},p_request_key:'adm:key-0002',p_row:{...voidRow,request_digest:operationDigest(J,voidRow)},p_audit:{route:'x'}}},
+   {fn:'resolve_closed_judgment_quarantine',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_expected:{evidence_hash:'e'.repeat(64),cutoff:TS},p_resolved_by:J,p_audit:{route:'x'}}},
    {fn:'freeze_calibration_cohort',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_methodology:'m',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01'}},
    {fn:'calibration_cohort_members',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc',p_after:J,p_limit:10}},
    {fn:'clear_calibration_generation',args:{p_generation:'0b0e1d8e-0000-4000-8000-0000000000cc'}},
@@ -253,6 +255,12 @@ describe('memoryJudgmentsDb atomicity (E-04)',()=>{
   expect((await tables.select('dq_quarantine',{id:item}))[0].status).toBe('open');
   expect(await db.settlementsOf([j])).toEqual([]);
   down=false;
-  expect(await db.rejectQuarantinedSettlement(j,item,{evidence_hash:H,cutoff:CUT},'adm:key-reject-1',row,{})).toMatchObject({seq:1,status:'applied'});
+  await db.appendSettlement(j,null,'adm:close-for-cleanup',row);
+  const closed=JSON.stringify([db.snapshot(),await tables.select('dq_quarantine',{id:item})]);
+  down=true;
+  await expect(db.resolveClosedQuarantine(j,item,{evidence_hash:H,cutoff:CUT},by,{})).rejects.toThrow('audit down');
+  expect(JSON.stringify([db.snapshot(),await tables.select('dq_quarantine',{id:item})])).toBe(closed);
+  down=false;
+  expect(await db.resolveClosedQuarantine(j,item,{evidence_hash:H,cutoff:CUT},by,{})).toBe('applied');
  });
 });

@@ -10,8 +10,8 @@
 // item = reject_quarantined_settlement: void(quarantine_rejected) as admin:<id> (request_key quarantine-reject:<item
 // id>, a manual judgments.settle batch) + item flip + audit in ONE transaction (plan audit P1-05), bound to the
 // payload's evidence_hash / cutoff read here (Q1-03: a worker refresh in between → stale; an item without them →
-// invalid_resolution), unless the judgment is already final (then a plain flip). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
-// already_resolved. Other judgments reasons (idempotency_conflict on table judgments) are a plain resolveQuarantine.
+// invalid_resolution), unless the judgment is already final (then validated atomic cleanup). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
+// already_resolved. Other judgments reasons (idempotency_conflict on table judgments) are a plain resolveQuarantine, audited by the route.
 import type {Row,TableClient} from '../db/table-client';
 import {digest} from '../judgments/canonical';
 import {resolverFor} from '../judgments/resolvers';
@@ -34,6 +34,7 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
  const result=(outcome:JudgmentsResolveOutcome,extra:Partial<JudgmentsResolveResult>={}):JudgmentsResolveResult=>({outcome,audited:false,judgmentId,resolution:null,seq:null,...extra});
  if(item.status!=='open')return result('already_resolved');
  if(item.table_name!=='judgment_settlements'||!SETTLEMENT_REASONS.includes(reason)){
+  if(input.status==='resolved_accept'&&input.resolution!==undefined)return result('resolution_not_applicable');
   const o=await resolveQuarantine(deps.tables,id,{status:input.status,resolvedBy:input.resolvedBy});
   return result(o==='resolved'?'resolved':'already_resolved',{resolution:'plain'});
  }
@@ -57,8 +58,8 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
   }else{
    const candidates=Array.isArray(payload.candidates)?payload.candidates:[];
    const chosen=res.chosen;
-   if(res.kind!=='choose_fact'||!isObj(chosen)||!candidates.some(c=>digest(c)===digest(chosen)))return result('invalid_resolution');
-   override={reason_code:reason,resolution:{kind:'choose_fact',chosen},evidence_hash:evidenceHash??digest(candidates),resolved_by:input.resolvedBy,at,cutoff};
+   if(evidenceHash===null||res.kind!=='choose_fact'||!isObj(chosen)||!candidates.some(c=>digest(c)===digest(chosen)))return result('invalid_resolution');
+   override={reason_code:reason,resolution:{kind:'choose_fact',chosen},evidence_hash:evidenceHash,resolved_by:input.resolvedBy,at,cutoff};
   }
   const status=await deps.db.applyQuarantineOverride(judgment.judgment_id,override,id,audit({resolution:override.resolution.kind,evidence_hash:override.evidence_hash}));
   if(status==='item_not_open')return result('already_resolved');
@@ -66,31 +67,35 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
   return result('resolved',{audited:true,resolution:override.resolution.kind});
  }
  if(!deps.codeVersion)return result('code_version_unavailable');
+ if(evidenceHash===null||cutoff===null)return result('invalid_resolution');
  const latest=(await deps.db.settlementsOf([judgment.judgment_id])).reduce<{seq:number;kind:string}|null>((m,s)=>!m||s.seq>m.seq?{seq:s.seq,kind:s.kind}:m,null);
  if(latest&&FINAL.has(latest.kind)){
-  const flipped=await resolveQuarantine(deps.tables,id,{status:'resolved_reject',resolvedBy:input.resolvedBy});
-  return result(flipped==='resolved'?'resolved':'already_resolved',{resolution:'quarantine_rejected',seq:latest.seq});
+  const flipped=await deps.db.resolveClosedQuarantine(jid,id,{evidence_hash:evidenceHash,cutoff},input.resolvedBy,audit({resolution:'quarantine_rejected'}));
+  if(flipped!=='applied')return result(flipped==='item_not_open'?'already_resolved':'stale');
+  return result('resolved',{audited:true,resolution:'quarantine_rejected',seq:latest.seq});
  }
  // Q1-03: the rejection is bound to the evidence identity read here; a worker refresh in between makes the RPC answer stale.
- if(evidenceHash===null||cutoff===null)return result('invalid_resolution');
  const resolver=resolverFor(judgment.condition.resolver);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:deps.codeVersion,triggeredBy:'manual'});
  const counts={...emptyCounts(),fetched:1};
+ let errors:{code:string;key:string;message?:string}[]=[];
  try{
   // P1-05: void + item flip + audit in ONE transaction (locks queue then item; replay-safe on the request key).
   const r=await deps.db.rejectQuarantinedSettlement(judgment.judgment_id,id,{evidence_hash:evidenceHash,cutoff},`quarantine-reject:${id}`,{kind:'void',outcome:null,realized:null,
    evidence:{quarantine_id:id,reason_code:reason,evidence_hash:evidenceHash},resolver:resolver.name,resolver_version:resolver.version,reason:'quarantine_rejected',
    actor:`admin:${input.resolvedBy}`,code_version:deps.codeVersion,batch_id:batchId},audit({resolution:'quarantine_rejected'}));
-  if(r.status==='applied')counts.versioned=1;else counts.duplicates=1;
-  const errors=r.status==='applied'||r.status==='already_applied'?[]:[{code:`quarantine_reject_${r.status}`,key:judgment.judgment_id}];
-  await finishBatch(deps.tables,batchId,{counts,errors});
+  if(r.status==='applied')counts.versioned=1;
+  else if(r.status==='already_applied')counts.duplicates=1;
+  else if(r.status==='stale'||r.status==='item_not_open'){counts.fetched=0;errors=[{code:`quarantine_reject_${r.status}`,key:jid}];}
   if(r.status==='applied'||r.status==='already_applied')return result('resolved',{audited:true,resolution:'quarantine_rejected',seq:r.seq});
   if(r.status==='item_not_open')return result('already_resolved');
   if(r.status==='stale')return result('stale');
   throw new Error(`reject_quarantined_settlement: ${r.status} for ${judgment.judgment_id}`);
  }catch(e){
   counts.failed=1;
-  await finishBatch(deps.tables,batchId,{counts,errors:[{code:'reject_failed',key:judgment.judgment_id,message:e instanceof Error?e.message:String(e)}]}).catch(()=>undefined);
+  errors=[{code:'reject_failed',key:jid,message:e instanceof Error?e.message:String(e)}];
   throw e;
+ }finally{
+  await finishBatch(deps.tables,batchId,{counts,errors});
  }
 }

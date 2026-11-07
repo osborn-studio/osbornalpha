@@ -12,6 +12,7 @@
 import type {BatchCounts,BatchError} from '@/lib/dq/batches';
 import {emptyCounts} from '@/lib/dq/batches';
 import type {Abstained,Active,Claim,Condition,Input,Methodology,ProducerRef,Target,WorkItem} from './types';
+import {AbortedError,raceAbort} from './abort';
 import {JudgmentError} from './errors';
 import {ABSTAIN_CODES,buildOrAbstain} from './inputs';
 import {IdempotencyConflict,RegisterDeferred,registerJudgment} from './register';
@@ -63,8 +64,10 @@ export async function produce(m:Methodology,work:readonly ProduceWork[],deps:Pro
   }
   counts.fetched++;
   try{
-   const item:WorkItem={...w0,observedAt:await deps.db.serverTime()};
-   const e=await evaluate(m,item,deps);
+   const item:WorkItem={...w0,observedAt:await raceAbort(deps.db.serverTime(),deps.signal,'produce.serverTime')};
+   // evaluate contains reads and pure computation only; a late result cannot reach registration.
+   const e=await raceAbort(evaluate(m,item,deps),deps.signal,'produce.evaluate');
+   if(deps.signal?.aborted)throw new RegisterDeferred();
    const r=await registerJudgment({actor:deps.actor??'cron',dryRun:deps.dryRun},{...(item.binding?{binding:item.binding}:{}),methodology:m,subject:item.subject,asOf:item.asOf,producerRef:deps.producerRef??{},inputs:e.inputs,outcome:e.outcome,condition:e.condition,target:e.target,codeVersion:deps.codeVersion,batchId:deps.batchId},deps);
    const status:ProduceItemStatus=r.duplicate?'duplicate':r.dry_run?(r.abstained?'planned_abstain':'planned_insert'):'inserted';
    if(r.dry_run){if(!r.duplicate)planned++;}
@@ -72,9 +75,9 @@ export async function produce(m:Methodology,work:readonly ProduceWork[],deps:Pro
    else{counts.inserted++;if(r.abstained&&r.row.abstain_reason!==null)abstained.set(r.row.abstain_reason,(abstained.get(r.row.abstain_reason)??0)+1);}
    items.push({key,as_of:w0.asOf,binding,status,judgment_id:r.judgment_id,abstained:r.abstained,code:null});
   }catch(err){
-   if(err instanceof RegisterDeferred){   // T2-01: aborted before the register RPC — nothing written, counted deferred (info deadline_hit)
+   if(err instanceof RegisterDeferred||err instanceof AbortedError){   // T2-01: aborted before the register RPC — nothing written, counted deferred (info deadline_hit)
     counts.deferred=(counts.deferred??0)+1;
-    errors.push({code:'deadline_hit',key,message:err.message});
+    errors.push({code:'deadline_hit',key,message:new RegisterDeferred().message});
     items.push({key,as_of:w0.asOf,binding,status:'deferred',judgment_id:null,abstained:false,code:'deadline_hit'});
     continue;
    }

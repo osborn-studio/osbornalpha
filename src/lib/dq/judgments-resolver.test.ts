@@ -3,7 +3,7 @@
 // item's own evidence hash (integrity-checked); ambiguous_fact accept = choose_fact whose digest is one of the
 // candidates; base_bar_missing / benchmark_gap accept → resolution_not_applicable; accept writes the override via
 // one RPC (audited there; stale / closed → stale); reject is ONE rejectQuarantinedSettlement RPC (void + flip +
-// audit) unless the judgment is already final (then a plain flip); idempotency_conflict items are a plain resolve;
+// audit) unless the judgment is already final (then validated atomic cleanup); idempotency_conflict items are a plain resolve;
 // everything is idempotent.
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
@@ -22,12 +22,12 @@ const EVIDENCE={bars:[{date:'2026-01-12',close:106}],result:{value:111/106-1,fro
 const H=digest(EVIDENCE);
 const CANDS=[{key:{metric:'q_single_revenue'},value_text:'1000',realized_value:1000},{key:{metric:'q_single_revenue'},value_text:'1001',realized_value:1001}];
 const CUTOFF='2026-03-02T04:00:00.000Z';
-type Stubbed=JudgmentsDb&{getJudgment:ReturnType<typeof vi.fn>;settlementsOf:ReturnType<typeof vi.fn>;applyQuarantineOverride:ReturnType<typeof vi.fn>;rejectQuarantinedSettlement:ReturnType<typeof vi.fn>;appendSettlement:ReturnType<typeof vi.fn>};
+type Stubbed=JudgmentsDb&{getJudgment:ReturnType<typeof vi.fn>;settlementsOf:ReturnType<typeof vi.fn>;applyQuarantineOverride:ReturnType<typeof vi.fn>;resolveClosedQuarantine:ReturnType<typeof vi.fn>;rejectQuarantinedSettlement:ReturnType<typeof vi.fn>;appendSettlement:ReturnType<typeof vi.fn>};
 
 let tables:ReturnType<typeof memoryTableClient>;let db:Stubbed;
 beforeEach(()=>{
  tables=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id']});
- db={getJudgment:vi.fn(async()=>J),settlementsOf:vi.fn(async()=>[]),applyQuarantineOverride:vi.fn(async()=>'applied'),rejectQuarantinedSettlement:vi.fn(async()=>({seq:1,status:'applied'})),appendSettlement:vi.fn(async()=>({seq:1,status:'applied'}))} as unknown as Stubbed;
+ db={resolveClosedQuarantine:vi.fn(async()=>'applied'),getJudgment:vi.fn(async()=>J),settlementsOf:vi.fn(async()=>[]),applyQuarantineOverride:vi.fn(async()=>'applied'),rejectQuarantinedSettlement:vi.fn(async()=>({seq:1,status:'applied'})),appendSettlement:vi.fn(async()=>({seq:1,status:'applied'}))} as unknown as Stubbed;
 });
 async function item(reason:string,payload:Record<string,unknown>,table='judgment_settlements'){
  const row={id:ITEM,dataset:'judgments',table_name:table,natural_key:J.judgment_id,reason_code:reason,status:'open',payload,detail:{},batch_id:'00000000-0000-4000-8000-000000000001',resolved_by:null,resolved_at:null,created_at:'2026-03-02T04:00:00.000Z'};
@@ -104,12 +104,12 @@ describe('resolveJudgmentsItem',()=>{
   expect((await run(row,'resolved_reject')).outcome).toBe('already_resolved');
   expect((await stored()).status).toBe('open');
  });
- it('reject of an already final judgment appends nothing and only flips the item',async()=>{
-  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});
+ it('reject of an already final judgment uses validated atomic cleanup',async()=>{
+  const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,cutoff:CUTOFF});
   db.settlementsOf.mockResolvedValue([{seq:1,kind:'void',judgment_id:J.judgment_id} as SettlementRow]);
   expect(await run(row,'resolved_reject')).toMatchObject({outcome:'resolved',resolution:'quarantine_rejected',seq:1});
   expect(db.appendSettlement).not.toHaveBeenCalled();expect(db.rejectQuarantinedSettlement).not.toHaveBeenCalled();
-  expect((await stored()).status).toBe('resolved_reject');
+  expect(db.resolveClosedQuarantine).toHaveBeenCalledWith(J.judgment_id,ITEM,{evidence_hash:H,cutoff:CUTOFF},ADMIN,expect.any(Object));
  });
  it('hook read → worker refresh → reject: the real RPC sees the refreshed queue and item and answers stale; nothing is written (Q1-03)',async()=>{
   const t=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id'],research_audit_log:['id']});
@@ -147,6 +147,32 @@ describe('resolveJudgmentsItem',()=>{
   expect(await run(row,'resolved_accept')).toEqual({outcome:'resolved',audited:false,judgmentId:J.judgment_id,resolution:'plain',seq:null});
   expect((await stored()).status).toBe('resolved_accept');
   expect(db.getJudgment).not.toHaveBeenCalled();
+ });
+ it('choose_fact without payload evidence_hash is invalid',async()=>{
+  const row=await item('settlement_ambiguous_fact',{candidates:CANDS,cutoff:CUTOFF});
+  expect((await run(row,'resolved_accept',{kind:'choose_fact',chosen:CANDS[0]})).outcome).toBe('invalid_resolution');
+  expect(db.applyQuarantineOverride).not.toHaveBeenCalled();
+ });
+ it('a non-settlement item rejects an accept resolution without touching settlement logic',async()=>{
+  const row=await item('idempotency_conflict',{},'judgments');
+  expect((await run(row,'resolved_accept',{kind:'choose_fact',chosen:CANDS[0]})).outcome).toBe('resolution_not_applicable');
+  expect((await stored()).status).toBe('open');expect(db.getJudgment).not.toHaveBeenCalled();
+ });
+ it.each(['stale','item_not_open'])('reject %s is a successful zero-fetch info-only batch',async status=>{
+  const row=await item('settlement_benchmark_gap',{evidence_hash:H,cutoff:CUTOFF});
+  db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:0,status});
+  await run(row,'resolved_reject');
+  const [batch]=await tables.select('ingest_batches',{});
+  expect(batch).toMatchObject({status:'success',counts:expect.objectContaining({fetched:0,duplicates:0,failed:0})});
+  expect(batch.errors).toEqual([expect.objectContaining({code:`quarantine_reject_${status}`})]);
+ });
+ it.each(['applied','already_applied','stale','item_not_open','request_key_conflict','throw'])('reject %s finishes exactly once',async status=>{
+  const row=await item('settlement_benchmark_gap',{evidence_hash:H,cutoff:CUTOFF});
+  const update=vi.spyOn(tables,'update');
+  if(status==='throw')db.rejectQuarantinedSettlement.mockRejectedValueOnce(new Error('down'));
+  else db.rejectQuarantinedSettlement.mockResolvedValueOnce({seq:1,status});
+  await run(row,'resolved_reject').catch(()=>undefined);
+  expect(update.mock.calls.filter(([table,,patch])=>table==='ingest_batches'&&patch.status!==undefined)).toHaveLength(1);
  });
  it('a settlement item whose judgment does not exist → unknown_judgment',async()=>{
   const row=await item('settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H});

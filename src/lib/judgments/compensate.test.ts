@@ -199,3 +199,19 @@ describe('compensateMacro hardening (T-03, T-04, T-07)',()=>{
   expect(seen!.aborted).toBe(true);expect(r3).toMatchObject({status:'stopped',reason:'deadline'});
  });
 });
+
+describe('T12 r3 cancellation before produce',()=>{
+ it.each(['batch','zero-fetched'] as const)('%s cancellation never advances the failing marker',async phase=>{
+  const s=setup([snap(1)]);const ac=new AbortController();
+  await s.mem.setJobState(KEY,null,{failing:{snapshot_id:sid(1),attempts:2}});
+  const before=await s.mem.jobState(KEY);
+  const tables={...s.tables,insert:async(...args:Parameters<typeof s.tables.insert>)=>{
+   const row=await s.tables.insert(...args);if(phase==='batch')ac.abort();return row;
+  }};
+  s.produce.mockImplementation(async()=>({counts:emptyCounts(),errors:[{code:'deadline_hit'}]}));
+  const r=await compensateMacro(s.deps({tables,signal:ac.signal}));
+  expect(r).toMatchObject({status:'stopped',reason:'deadline',skippedStalled:0});
+  expect(await s.mem.jobState(KEY)).toEqual(before);
+  if(phase==='batch')expect(s.produce).not.toHaveBeenCalled();
+ });
+});

@@ -69,7 +69,7 @@ export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','cove
 // F4 — judgment-layer information codes (judgment framework spec §7.5, §13): settle/calibrate/produce
 // summaries and benign races. A separate tuple because src/lib/facts/rules.test.ts pins INFO_CODES and
 // F4 may not edit src/lib/facts/*; isInfoError treats both tuples alike.
-export const JUDGMENT_INFO_CODES=['pending_summary','unavailable_summary','voided_summary','abstained_summary','lease_lost','stale_revision','job_state_conflict','macro_unavailable'] as const;
+export const JUDGMENT_INFO_CODES=['pending_summary','unavailable_summary','voided_summary','abstained_summary','lease_lost','stale_revision','job_state_conflict','macro_unavailable','quarantine_reject_stale','quarantine_reject_item_not_open'] as const;
 export const ALL_INFO_CODES:readonly string[]=[...INFO_CODES,...JUDGMENT_INFO_CODES];
 export type InfoCode=typeof INFO_CODES[number]|typeof JUDGMENT_INFO_CODES[number];
 export const isInfoError=(e:BatchError)=>ALL_INFO_CODES.includes(e.code);

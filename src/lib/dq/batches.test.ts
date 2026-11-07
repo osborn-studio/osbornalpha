@@ -135,7 +135,7 @@ describe('batches',()=>{
 // F4 — judgment framework spec §7.5: the deferred counter and the judgment information codes
 describe('deferred counter and judgment information codes (F4)',()=>{
  it('lists the judgment information codes and treats them like INFO_CODES; INFO_CODES itself is unchanged',()=>{
-  expect(JUDGMENT_INFO_CODES).toEqual(['pending_summary','unavailable_summary','voided_summary','abstained_summary','lease_lost','stale_revision','job_state_conflict','macro_unavailable']);
+  expect(JUDGMENT_INFO_CODES).toEqual(['pending_summary','unavailable_summary','voided_summary','abstained_summary','lease_lost','stale_revision','job_state_conflict','macro_unavailable','quarantine_reject_stale','quarantine_reject_item_not_open']);
   expect(INFO_CODES).toEqual(['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary']);
   expect(ALL_INFO_CODES).toEqual([...INFO_CODES,...JUDGMENT_INFO_CODES]);
   for(const code of ALL_INFO_CODES)expect({code,info:isInfoError({code})}).toEqual({code,info:true});

@@ -11,6 +11,8 @@
 | T4 JudgmentsDb | b7e421e7 | 待复审 | 待审 | 1 | db.test 28/28；pg 契约+并发与 judgments.integration 同跑 65/65 |
 | T4 fix | 本提交（`fix(judgments): F4 Task 4 review round 1`） | 复审意见已处理 | Codex E-01..E-07 已处理 | 1 | db.test 34/34；两个集成文件同跑 70/70 连跑 5 次，0 死锁；test:migrations PASS；typecheck、lint 干净 |
 | T16 resumable calibration / cohort store / cron | 本提交（`feat(judgments): resumable calibration job and weekly cron`） | 待复审 | Codex gpt-6-astra 实施 | 0 | 首次红测 4 suites missing imports；追加回归 6 failed / 25 passed → 39/39；影响面 441 passed / 82 DB skipped；typecheck、lint、critical inventory PASS；PostgreSQL harness 被 sandbox EPERM 阻止，待指挥 db-one |
+| T12 r3 / T14 r1 review fixes | 待指挥提交（sandbox 禁止 git index.lock） | 待复审 | Codex gpt-6-astra 实施 | T12: 3 / T14: 1 | 红测 15 + 6 失败；影响面 216 passed / 76 DB skipped；PostgreSQL sandbox EPERM，待指挥 db-one |
+| T18 public reads / admin routes | 待指挥提交（audit log staging 被 sandbox/approval policy 阻止） | 待复审 | Codex gpt-6-astra 实施 | 0 | 红测 11 suites missing imports；历史 cutoff 回归 1 failed / 54 passed；边界回归 4 failed / 11 passed；Task 18 61 passed；影响面 488 passed / 83 DB skipped；typecheck、lint PASS；db-one sandbox EPERM |
 
 ## 偏差 · Task 1
 
@@ -197,3 +199,34 @@
 - `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts` 与 `LC_ALL=C npm run test:db`：sandbox 在 tsx IPC socket listen 处 EPERM；改 `node --import tsx` 后仍在 127.0.0.1 listen EPERM。未启动 PostgreSQL / 未运行 SQL 测试；指挥需运行 db-one 的 7 个新用例及全量 test:db。
 
 关注：数据库验证尚未完成。按计划，未引用的 partial 对象 / CAS 前崩溃的 frozen generations 由 Task 22 运行手册清理；本任务不增加存储 listing 或孤儿回收作业。
+
+
+## T12 r3 / T14 r1 — 已审问题修复
+
+- T12：批次建立后重查取消；produce 返回 fetched=0 + deadline_hit 视为 STOP，保留 failing.attempts、skipped 与 marker。produce 的 serverTime 与只读 evaluate（gather / binding buildOrAbstain / resolveTarget）竞争组合 signal；晚返回不会进入登记。register 的普通冲突和 23505 重读冲突共用写前取消检查。
+- T12：runSettle 开头为 REGISTRY 每个 method id 的 judgments.produce.<id> 修复 stale batches。所有领取后初始化位于租约清理边界，未处理行逐一计 failed + settle_setup_failed；基础设施错误不增加 attempts。settleNow 使用数据库时间，数据库时钟不可得时仅释放租约，不使用空时间或本地时钟替代。
+- T14：新增 service-only resolve_closed_judgment_quarantine RPC，锁 queue → item，校验 queue closed、item open 与 payload evidence_hash/cutoff，翻转与审计同事务；同步 types、memory / pg / Supabase、RPC inventory 与权限覆盖。内存 audit 失败回滚；共享契约覆盖 stale、applied、item_not_open 和审计只写一次。
+- T14：reject batch 统一 finally 完成一次；stale / item_not_open 为 fetched=0、duplicates=0 的信息结果。choose_fact 缺 payload.evidence_hash → invalid_resolution；非 judgment_settlements 项原本已绕过结算，保留普通 accept/reject 和路由审计，新增 accept 携 resolution → resolution_not_applicable。cron 传 request.signal，沿用 core 的组合 deadline，并导入 DEADLINE_MS。
+- 迁移改名记录：计划 20261109150000_judgments.sql → 20261115090000_judgments.sql → 当前已提交的 20261116090000_judgments.sql。本轮只原地修改最后一个未锁迁移，未新建旧名文件、未改锁文件。
+- 契约适配：沿用 ProduceWork（observedAt 由 produce 的 db.serverTime 填充）、setJobState 的 {ok, updated_at}、claimDue 的已归一数组、claimOne 手动租约与 settled/quarantined 等现有返回值；保留 last_detail.incident。新信息码仅加 JUDGMENT_INFO_CODES，INFO_CODES 不变。共享文件仅改现有 F4 围栏。未改 Task 16 或并行 Task 18 文件。
+- 实现取舍：produce 将整个只读 evaluate 竞争 signal，涵盖 gather、binding builder 与 resolveTarget，登记写操作不竞争取消；已发出的只读请求可能晚完成，但其结果不再触发写入。结算数据库写等待仍沿用已接受的 T2-02 限制；数据库不可用时释放是尽力执行，租约到期仍是兜底。
+- TDD：T12/cron 首轮 15 failed / 90 passed → 105 passed；T14 首轮 6 failed / 53 passed → 111 affected passed（含 batch 与 admin route）。汇总命令：`npm test -- src/lib/judgments/produce.test.ts src/lib/judgments/compensate.test.ts src/lib/judgments/register.test.ts src/lib/judgments/settle.test.ts src/lib/judgments/db.test.ts src/lib/judgments/judgments-db.integration.test.ts src/lib/judgments/judgments.integration.test.ts src/lib/judgments/settle.integration.test.ts src/lib/dq/judgments-resolver.test.ts src/lib/dq/batches.test.ts 'src/app/api/admin/dq/quarantine/[id]/route.test.ts' src/app/api/cron/judgments-settle/route.test.ts` → 216 passed / 76 DB skipped。
+- `verifyCriticalSuiteInventory()`：PASS。新增 DB 契约位于已有 judgments-db.integration suite，领取在 exclusiveClaims → withClaimLock / F4_CLAIM_LOCK 内；权限测试位于已有 judgments.integration suite；两者均在现有 F4 criticalSuites.push 中。
+- PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts` → IPC listen EPERM；同命令换 `node --import tsx` → 127.0.0.1 listen EPERM。SQL/权限/真实事务未执行，指挥需用 db-one 运行 judgments-db.integration、judgments.integration 与 settle.integration。
+- 最终 `npm run typecheck && npm run lint`：PASS（lint --max-warnings=0）；`git diff --check`：PASS。期间 typecheck 曾遇并行 Task 18 尚未落地模块与参数类型错误，未改他人文件，其落地后重跑已通过。
+- 提交阻塞：已按明确路径执行 `git add`，但主仓库 `.git/worktrees/judgment-framework-50f9e1/index.lock` 不在可写范围，返回 Operation not permitted；随后单独执行指定消息的 `git commit` 返回 no changes added to commit。未绕过 hooks、未提权、未暂存并行工作。无本轮 commit SHA；需指挥暂存本轮 26 个文件后提交。
+
+
+## Task 18 — public reads / admin routes
+
+- 实现 route-utils、public-reads、admin-actions，六个公共 GET、withdraw/reopen/settle POST 与 admin queue GET；公共读用 anon（包括 db 的 admin 槽），admin 先鉴权、同源与 JSON 校验；成功含 codeVersion，错误/空结果/admin no-store。D2 的统一 serializer 递归删除 display.percent=null，保留数值（含 0）；list/detail/history 均测试键缺席。
+- 相对计划的适配：cardsOf 的 now 必填；latest/history 传服务端当前时间，as_known 传 cutoff（不再传 undefined）；detail 用已提交 envelopeById，结算 seq keyset 读至空页。settleNow 已通过 claimOne 领租约，路由不自行领租约；九种 outcome 用穷尽 Record 映射：settled/void/duplicate/deferred/quarantined/quarantine_pending/closed → 200，leased/conflict → 409；抛出的 request_key_conflict 也映射 409。未改结算核心。
+- next.config 已有 outputFileTracingIncludes，故在既有对象内加 F4 围栏，不另建重复属性；使用 /api/methodologies/*/* glob（本地 Next picomatch 验证匹配动态路由），保留所有已有 tracing 条目。
+- 边界增强（红测先行）：JSON 媒体类型精确匹配 application/json（允许 charset），拒绝数组 body；哈希匹配但 JSON 无效/null/非 entries 对象的 cohort 返回 integrity_failed，避免解析异常泄漏为 500；serializer 避免未使用解构变量以通过零警告 lint。额外 route-utils.test.ts 覆盖共享响应路径。
+- 已提交迁移实际为 20261116090000_judgments.sql（不同于计划和任务提示旧名）；本任务不改 SQL、三种 DB 实现、types、INFO_CODES 或并行任务文件。沿用最新校准 metrics 对象，不投影或删减新字段。未新增含 S4_TEST_STATE 的测试，无需修改 criticalSuites。
+- TDD：先仅写计划 11 个测试文件 → 11 suites failed（缺少实现，0 tests collected）；加入 cutoff/outcome 回归后 baseline 实现 → 1 failed / 54 passed；额外 JSON/cohort 边界 → 4 failed / 11 passed；实现后 `npm test -- src/lib/judgments/route-utils.test.ts src/lib/judgments/public-reads.test.ts src/app/api/judgments src/app/api/methodologies src/app/api/admin/judgments` → 12 suites / 61 tests passed。
+- `npm test -- src/lib/judgments src/app/api/judgments src/app/api/methodologies src/app/api/admin/judgments src/app/api/cron/judgments-calibrate` → 48 suites passed / 4 skipped；488 tests passed / 83 DB skipped。
+- `npm run typecheck && npm run lint` → PASS（eslint --max-warnings=0）；`git diff --check` → PASS；导入 next.config 与 picomatch 匹配检查 → PASS。
+- `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts` → sandbox IPC listen EPERM；未启动 PostgreSQL。需指挥运行 db-one 验证真实 DB/RLS。队列 counts 沿计划为最多 500 条的摘要；非精确总量。
+
+- 提交阻塞：Task 18 的 26 个代码/测试/config 文件已通过 `git add` 暂存；仅暂存本任务日志补丁的 `git apply --cached` 被 index.lock EPERM 阻止，`git add -p` 的交互输入又被自动审批以 approval required / AskForApproval=Never 拒绝。未绕过 hook，未运行不含必需日志的 commit。日志同时含并行 T12/T14 未提交内容，需指挥选择性暂存本任务段落后提交。

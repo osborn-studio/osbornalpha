@@ -4,8 +4,9 @@
 // validity revision, insert_calibration semantics, optimistic job state incl. the round cursor) and
 // memoryCohortStore. The SQL side of the same flows is calibrate.integration.test.ts.
 import {describe,expect,it} from 'vitest';
+import type {TableClient} from '../db/table-client';
 import {memoryTableClient} from '../db/memory-table-client';
-import {CalibrateError,PAGE_SIZE,ROUND_JOB,fingerprintOf,inScope,previewCalibrate,runCalibrate,stepUnit,unitPath,unitsOf,windowOf} from './calibrate';
+import {CalibrateError,PAGE_SIZE,ROUND_JOB,fingerprintOf,inScope,previewCalibrate,runCalibrate,runUnit,stepUnit,unitPath,unitsOf,windowOf} from './calibrate';
 import type {CalibrateDeps,RoundState,StepContext,UnitState} from './calibrate';
 import {memoryCohortStore} from './cohort-store';
 import type {CohortStore} from './cohort-store';
@@ -26,7 +27,14 @@ function fakeDb(rows:MethodologyRow[],envelopes:Envelope[]){
  const frozen=new Map<string,Envelope[]>();
  /** generation → its claim marker (the SQL's judgment_job_state['cohort:<generation>'], Q1-05). */
  const markers=new Map<string,{frozen_at:string;n:number}>();
+ const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
+ const select=tables.select.bind(tables);
+ tables.select=async(table,match,opts)=>{
+  const rows=table==='judgment_job_state'?[...jobs].map(([job,v])=>({job,...v})):table==='judgment_calibrations'?calibrations:null;
+  return rows?rows.slice(opts?.offset??0,(opts?.offset??0)+(opts?.limit??1000)):select(table,match,opts);
+ };
  const db={
+  tables,
   async serverTime(){return tick();},
   async methodology(id:string,v:string){return rows.find(r=>r.methodology_id===id&&r.version===v)??null;},
   async calibrationValidity(){return {revision};},
@@ -72,10 +80,10 @@ const METHOD=methodologyRow({subject_types:['security']});
 const cohort=(n:number,extra:Partial<Parameters<typeof envelope>[0]>={})=>Array.from({length:n},(_,i)=>envelope({judgment:{n:i+1},settlement:{settlement_id:uuidOf(700000+i+1),outcome:i%3===0?'miss':'hit'},...extra}));
 function deps(db:JudgmentsDb,store:CohortStore,over:Partial<CalibrateDeps>={}):CalibrateDeps{
  let u=0;
- return {db,tables:memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']}),store,methods:[{id:METHOD.methodology_id,version:'v1'}],
+ return {db,tables:(db as JudgmentsDb&{tables:TableClient}).tables,store,methods:[{id:METHOD.methodology_id,version:'v1'}],
   codeVersion:'abcdef1',deadline:null,uuid:()=>`aaaaaaaa-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`,pageSize:3,...over};
 }
-const ctxOf=(db:JudgmentsDb,store:CohortStore,prefix:string):StepContext=>{let u=0;return {db,store,codeVersion:'abcdef1',batchId:uuidOf(424242),uuid:()=>`${prefix}-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`,pageSize:3};};
+const ctxOf=(db:JudgmentsDb,store:CohortStore,prefix:string):StepContext=>{let u=0;return {db,tables:(db as JudgmentsDb&{tables:TableClient}).tables,store,codeVersion:'abcdef1',batchId:uuidOf(424242),uuid:()=>`${prefix}-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`,pageSize:3};};
 const unitAll=unitsOf(METHOD)[0];
 const stateOf=(f:ReturnType<typeof fakeDb>)=>f.jobs.get(unitAll.job)?.state as unknown as UnitState|undefined;
 
@@ -376,5 +384,57 @@ describe('calibration failure boundaries',()=>{
  });
  it('preserves February 29 when the target year is also a leap year',()=>{
   expect(windowOf('2028-02-29T00:00:00.000Z',4)).toEqual({from:'2024-02-29',to:'2028-02-29'});
+ });
+});
+
+
+describe('T16 review cleanup',()=>{
+ it.each(['stale','invalid_state','cohort_object_invalid'])('removes owned manifest partials after %s, preserving unlisted objects',async reason=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const st=stateOf(f)!,path=st.manifest[0].path;
+  const orphan=path.replace('start.',''+uuidOf(999)+'.');store.objects.set(orphan,new Uint8Array());
+  const finalPath=`cohorts/${'a'.repeat(64)}.json`;store.objects.set(finalPath,new Uint8Array());
+  if(reason==='stale')f.bump();
+  else if(reason==='invalid_state')delete f.jobs.get(unitAll.job)!.state.cutoff;
+  else store.objects.set(path,new Uint8Array());
+  const r=await stepUnit(ctx,unitAll);
+  expect(r).toMatchObject({kind:reason==='stale'?'stale':'reset',cleared:true});
+  expect(store.objects.has(path)).toBe(false);
+  expect(f.frozen.has(st.generation)).toBe(false);
+  expect(store.objects.has(orphan)).toBe(true);expect(store.objects.has(finalPath)).toBe(true);
+ });
+ it.each(['other_unit','cohort_path'])('preserves a partial referenced by %s on reset',async owner=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const st=stateOf(f)!,path=st.manifest[0].path;
+  if(owner==='other_unit')f.jobs.set('calibrate:retired_method@v9:market:US',{state:{generation:uuidOf(88),manifest:[{path}]},updated_at:'old'});
+  else f.calibrations.push({cohort_path:path} as CalibrationRow);
+  delete f.jobs.get(unitAll.job)!.state.cutoff;
+  await stepUnit(ctx,unitAll);
+  expect(store.objects.has(path)).toBe(true);
+ });
+ it.each(['shared','not_uuid','missing'])('invalid state does not clear unowned %s generation and records info',async fault=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const st=stateOf(f)!,generation=st.generation,path=st.manifest[0].path;
+  delete f.jobs.get(unitAll.job)!.state.cutoff;
+  if(fault==='shared')f.jobs.set('calibrate:retired_method@v9:all:',{state:{generation},updated_at:'old'});
+  if(fault==='not_uuid'){
+   f.jobs.get(unitAll.job)!.state.generation='not-a-uuid';f.frozen.set('not-a-uuid',cohort(1));
+  }
+  if(fault==='missing')delete f.jobs.get(unitAll.job)!.state.generation;
+  let steps=0;const r=await runUnit(ctx,unitAll,()=>steps++>0);
+  expect(r.infos).toContainEqual(expect.objectContaining({code:'job_state_conflict',key:unitAll.job,message:expect.stringContaining('generation_cleanup_skipped')}));
+  expect(f.frozen.has(generation)).toBe(true);expect(store.objects.has(path)).toBe(true);
+  if(fault==='not_uuid')expect(f.frozen.has('not-a-uuid')).toBe(true);
+  expect(stateOf(f)).toEqual({});
+ });
+ it('a lost reset CAS keeps the generation and partials',async()=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const st=stateOf(f)!,path=st.manifest[0].path;delete f.jobs.get(unitAll.job)!.state.cutoff;f.failNextClear();
+  expect(await stepUnit(ctx,unitAll)).toMatchObject({kind:'reset',cleared:false});
+  expect(f.frozen.has(st.generation)).toBe(true);expect(store.objects.has(path)).toBe(true);
  });
 });

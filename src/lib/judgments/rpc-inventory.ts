@@ -23,6 +23,7 @@ export const SERVICE_RPCS={
  append_settlement:'(uuid,uuid,text,jsonb)',
  quarantine_settlement:'(uuid,uuid,text,jsonb,jsonb,uuid)',
  apply_quarantine_override:'(uuid,jsonb,uuid,jsonb)',
+ resolve_closed_judgment_quarantine:'(uuid,uuid,jsonb,uuid,jsonb)',
  reject_quarantined_settlement:'(uuid,uuid,jsonb,text,jsonb,jsonb)',
  freeze_calibration_cohort:'(uuid,text,text,date,date)',
  calibration_cohort_members:'(uuid,uuid,integer)',

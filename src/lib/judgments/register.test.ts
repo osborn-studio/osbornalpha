@@ -13,7 +13,7 @@ import {judgmentIdOf} from './contract';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {REGISTRY} from './registry';
-import {nonceOf,normalizedPayload,registerJudgment,samePayload} from './register';
+import {RegisterDeferred,nonceOf,normalizedPayload,registerJudgment,samePayload} from './register';
 import type {RegisterDeps,RegisterInput} from './register';
 import type {CategoricalClaim,Condition,Input,JudgmentInsert,JudgmentsDb,Methodology,Subject,Target} from './types';
 import type {ResolverLookup} from './register';
@@ -265,5 +265,21 @@ describe('property (spec §14.1): rule methods are deterministic and the id igno
     expect(idOf(perm)).toBe(baseId);
    }
   }
+ });
+});
+
+describe('T12 r3 conflict mutation cancellation',()=>{
+ it.each([false,true])('guards conflict quarantine, unique recovery=%s',async recovery=>{
+  const {deps,tables,db}=await setup();const e=await evaluated(fixtureRegimeMethod,'s-a');
+  const original=await registerJudgment(ACTOR,req(fixtureRegimeMethod,e),deps);
+  const ac=new AbortController();let reads=0;
+  const drift={...e,outcome:{abstained:false as const,claim:{...e.outcome.claim,distribution:{recovery:0.5,overheat:0.2,stagflation:0.2,recession:0.1}}}};
+  const d=new Proxy(db,{get:(x,k,r)=>{
+   if(k==='getJudgment')return async()=>{if(recovery&&reads++===0)return null;ac.abort();return db.getJudgment(original.judgment_id);};
+   if(k==='registerJudgment')return async()=>{throw {code:'23505'};};
+   return Reflect.get(x,k,r);
+  }});
+  await expect(registerJudgment(ACTOR,req(fixtureRegimeMethod,drift),{...deps,db:d,signal:ac.signal})).rejects.toBeInstanceOf(RegisterDeferred);
+  expect(tables.rows('dq_quarantine')).toHaveLength(0);
  });
 });

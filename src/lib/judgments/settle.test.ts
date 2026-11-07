@@ -8,6 +8,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {startBatch} from '@/lib/dq/batches';
 import type {CompensationReport} from './compensate';
+import {REGISTRY} from './registry';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {priceReturnResolverWith} from './resolvers/price';
@@ -626,5 +627,31 @@ describe('cutoff_vintage corners (review minor)',()=>{
   expect(dirty.resolve).toHaveBeenCalledTimes(1);expect(dirty.fromOverride).not.toHaveBeenCalled();
   expect(dirty.out.item).toMatchObject({action:'void',reason:'unresolved_inconsistency'});
   expect((await h.settlements(dirty.id))[0]).toMatchObject({kind:'void',evidence:{override_discarded:true,quarantine_id:inc.quarantine_id}});
+ });
+});
+
+describe('T12 r3 post-claim infrastructure failures',()=>{
+ it.each(['serverTime','getJudgment','settlementsOf'] as const)('releases and accounts every claimed row on %s failure',async method=>{
+  const h=await harness();const ids=[await h.register(),await h.register({predicate:{op:'>',rhs:0.2}})];
+  const db=withOverrides<JudgmentsDb>(h.db,{[method]:async()=>{throw new Error('setup down');}});
+  await expect(runSettle(h.deps(stubResolver(scripted(resolved())),{db}))).rejects.toThrow('setup down');
+  for(const id of ids)expect(await h.queue(id)).toMatchObject({lease_token:null,attempts:0});
+  const batch=h.tables.rows('ingest_batches').find(b=>b.dataset==='judgments.settle')!;
+  expect(batch).toMatchObject({counts:{fetched:2,failed:2},status:'failed'});
+  expect(batch.errors).toEqual(expect.arrayContaining(ids.map(key=>expect.objectContaining({key,code:'settle_setup_failed'}))));
+ });
+ it.each([false,true])('manual setup failure does not charge an attempt, clock permanently down=%s',async permanent=>{
+  const h=await harness();const id=await h.register();let calls=0;
+  const db=withOverrides<JudgmentsDb>(h.db,{serverTime:async()=>{if(permanent||calls++===0)throw new Error('clock down');return T0;}});
+  await expect(settleNow(h.deps(stubResolver(scripted(resolved())),{db}),id,{actor:`admin:${ADMIN}`,requestKey:'r3-clock'})).rejects.toThrow('clock down');
+  expect(await h.queue(id)).toMatchObject({lease_token:null,attempts:0});
+ });
+ it('repairs every registered produce dataset before compensation',async()=>{
+  const h=await harness();const seen:string[]=[];
+  const spy=vi.spyOn(await import('./registry'),'REGISTRY','get').mockReturnValue([{id:'repair_a'},{id:'repair_b'}] as unknown as typeof REGISTRY);
+  try{
+   await runSettle(h.deps(stubResolver(scripted(resolved())),{db:withOverrides<JudgmentsDb>(h.db,{repairStaleBatches:async dataset=>{seen.push(dataset);return 0;}})}));
+   expect(seen).toEqual(['judgments.settle','judgments.produce.repair_a','judgments.produce.repair_b']);
+  }finally{spy.mockRestore();}
  });
 });

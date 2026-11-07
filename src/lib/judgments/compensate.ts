@@ -108,13 +108,14 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
    else if(present.length>0)report.existing++;
    else{
     if(!report.batchId)report.batchId=(await startBatch(deps.tables,{producer:'ts-judgments',dataset:`judgments.produce.${mm.id}`,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy})).batchId;
+    if(signal.aborted||clock()>=deadlineAt){report.scanned--;deadline(s.snapshot_id);produceErrors.push({code:'deadline_hit',key:s.snapshot_id});break;}
     let ok=false,aborted=false;
     try{
      // T2-01: awaited, never raced — the in-flight item finishes (or defers cooperatively on `signal`) and the batch counts stay true.
      const r=await run(mm,[{subject:{type:'macro_region',key:s.region},asOf:s.as_of,binding:{snapshot_id:s.snapshot_id}}],{db:deps.db,inputsDb:deps.inputsDb,tables:deps.tables,resolverOf:deps.resolverOf??defaultResolverOf,batchId:report.batchId,codeVersion:deps.codeVersion,signal,actor:'cron'});
      for(const k of [...new Set([...Object.keys(counts),...Object.keys(r.counts)])] as (keyof BatchCounts)[])counts[k]=(counts[k]??0)+(r.counts[k]??0);
      produceErrors.push(...r.errors);
-     aborted=(r.counts.deferred??0)>0;
+     aborted=(r.counts.deferred??0)>0||(r.counts.fetched===0&&r.errors.some(e=>e.code==='deadline_hit'));
      ok=!aborted&&r.counts.failed===0&&r.counts.quarantined===0&&r.counts.inserted+r.counts.duplicates>0;
     }catch(e){
      {counts.failed++;produceErrors.push({code:'produce_failed',key:s.snapshot_id,message:messageOf(e)});}

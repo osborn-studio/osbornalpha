@@ -152,6 +152,8 @@ export interface JudgmentsDb{
   *  the last attempt status, R3-01). override.evidence_hash / override.cutoff are the identity the hook read: both must equal the locked
   *  queue last_detail.incident AND the locked item payload (Q1-03); no open incident → 'stale'. */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
+ /** Final-state cleanup: lock queue then item; require closed queue, open settlement item and matching payload identity. Flip and audit atomically. */
+ resolveClosedQuarantine(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},resolvedBy:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'item_not_open'>;
  /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
   *  evidence_hash / cutoff the hook read; no open incident, or any difference from the locked queue last_detail.incident (R3-01) or the
   *  item payload → 'stale' (Q1-03). The void closes the queue and so ends the incident. */

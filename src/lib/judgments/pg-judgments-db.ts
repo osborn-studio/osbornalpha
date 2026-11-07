@@ -78,6 +78,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
    return {status:r.status,quarantine_id:r.quarantine_id??null};
   },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){return await first(svc(`select public.apply_quarantine_override($1::uuid,$2::jsonb,$3::uuid,$4::jsonb) v`,[judgmentId,JSON.stringify(override),quarantineId,JSON.stringify(audit)])) as 'applied'|'stale'|'closed'|'item_not_open';},
+  async resolveClosedQuarantine(judgmentId,quarantineId,expected,resolvedBy,audit){return await first(svc(`select public.resolve_closed_judgment_quarantine($1::uuid,$2::uuid,$3::jsonb,$4::uuid,$5::jsonb) v`,[judgmentId,quarantineId,JSON.stringify(expected),resolvedBy,JSON.stringify(audit)])) as 'applied'|'stale'|'item_not_open';},
   async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
    const r=await first(svc(`select public.reject_quarantined_settlement($1::uuid,$2::uuid,$3::jsonb,$4,$5::jsonb,$6::jsonb) v`,[judgmentId,quarantineId,JSON.stringify(expected),requestKey,JSON.stringify(settlementArgs(judgmentId,row)),JSON.stringify(audit)])) as {seq:number;status:AppendStatus|'stale'|'item_not_open'};
    return {seq:Number(r.seq),status:r.status};

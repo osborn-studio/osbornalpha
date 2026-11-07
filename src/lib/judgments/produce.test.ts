@@ -137,3 +137,24 @@ describe('produce (spec §6.4)',()=>{
   expect(r.counts).toMatchObject({quarantined:0,failed:1});expect(r.items[0].status).toBe('failed');expect(tables.rows('dq_quarantine')).toHaveLength(0);
  });
 });
+
+describe('T12 r3 bounded producer reads',()=>{
+ it.each(['serverTime','gather','binding'] as const)('aborts a hung %s read without writes, including late completion',async phase=>{
+  const {deps,db,tables}=await setup();const ac=new AbortController();
+  let unblock!:()=>void;const blocked=new Promise<void>(r=>{unblock=r;});
+  let entered!:()=>void;const started=new Promise<void>(r=>{entered=r;});
+  const wait=async()=>{entered();await blocked;};
+  const m:Methodology<CategoricalClaim>={...fixtureRegimeMethod,gather:async(w,d)=>{
+   if(phase==='gather')await wait();
+   return phase==='binding'?{abstained:true,reason:'observation_missing'}:fixtureRegimeMethod.gather(w,d);
+  }};
+  const inputsDb=phase==='binding'?{...deps.inputsDb,macro:{...deps.inputsDb.macro,snapshot:async(id:string)=>{await wait();return deps.inputsDb.macro.snapshot(id);}}}:deps.inputsDb;
+  const d=phase==='serverTime'?new Proxy(db,{get:(x,k,r)=>k==='serverTime'?async()=>{await wait();return db.serverTime();}:Reflect.get(x,k,r)}):db;
+  const running=produce(m,[item('s-a')],{...deps,db:d,inputsDb,signal:ac.signal});
+  await started;ac.abort();
+  const outcome=await Promise.race([running,new Promise<null>(r=>setTimeout(()=>r(null),50))]);
+  unblock();await running;
+  expect(outcome?.counts).toMatchObject({fetched:1,deferred:1,failed:0,inserted:0});
+  expect(await db.judgmentsBySnapshot('s-a')).toEqual([]);expect(tables.rows('dq_quarantine')).toHaveLength(0);
+ });
+});

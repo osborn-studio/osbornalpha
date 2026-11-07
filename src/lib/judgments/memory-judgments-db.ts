@@ -315,6 +315,20 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    return 'applied';
   }),
+  resolveClosedQuarantine:(judgmentId,quarantineId,expected,resolvedBy,audit)=>atomic(async undo=>{
+   if(!isObj(expected)||typeof expected.evidence_hash!=='string'||!HEX64.test(expected.evidence_hash)||typeof expected.cutoff!=='string'||!UUID.test(resolvedBy)||!isObj(audit))fail('invalid_parameter','closed quarantine');
+   const q=queue.get(judgmentId);
+   if(!q)return fail('unknown_judgment');
+   const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
+   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return 'item_not_open';
+   const payload=isObj(item.payload)?item.payload:{};
+   if(q.closed_at===null||item.table_name!=='judgment_settlements'||payload.evidence_hash!==expected.evidence_hash||payload.cutoff!==expected.cutoff)return 'stale';
+   const at=now();
+   await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_reject',resolved_by:resolvedBy,resolved_at:at});
+   undo(async()=>{await tables.update('dq_quarantine',{id:quarantineId},{status:'open',resolved_by:item.resolved_by??null,resolved_at:item.resolved_at??null});});
+   await tables.insert('research_audit_log',{id:randomUUID(),user_id:resolvedBy,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,decision:'reject',closed:true},created_at:at});
+   return 'applied';
+  }),
   rejectQuarantinedSettlement:(judgmentId,quarantineId,expected,requestKey,row,audit)=>atomic(async undo=>{
    if(!isObj(row)||row.kind!=='void'||typeof row.actor!=='string'||!/^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.actor)||typeof requestKey!=='string'||!isObj(audit)
     ||!isObj(expected)||typeof expected.evidence_hash!=='string'||!HEX64.test(expected.evidence_hash)||typeof expected.cutoff!=='string')fail('invalid_parameter','rejection');

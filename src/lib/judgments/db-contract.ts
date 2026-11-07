@@ -438,6 +438,24 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
   const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z'):QuarantineOverride=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
   const rejectRow=(b:string,by:string)=>settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
 
+  it('closed quarantine cleanup validates queue, evidence and item, and audits once',async()=>{
+   const m=await synced(),b=await h.batch(),by=await h.adminUser();
+   await h.exclusiveClaims(async()=>{
+    const {j,itemId}=await inconsistent(m,b);
+    expect(await db.resolveClosedQuarantine(j.id,itemId,EXP,by,{})).toBe('stale');
+    await db.appendSettlement(j.id,null,`close:${randomUUID()}`,rejectRow(b,by));
+    expect(await db.resolveClosedQuarantine(j.id,itemId,{...EXP,evidence_hash:H('f')},by,{})).toBe('stale');
+    expect(await db.resolveClosedQuarantine(j.id,itemId,{...EXP,cutoff:'wrong'},by,{})).toBe('stale');
+    expect((await h.tables.select('dq_quarantine',{id:itemId}))[0].status).toBe('open');
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(0);
+    expect(await db.resolveClosedQuarantine(j.id,itemId,EXP,by,{})).toBe('applied');
+    expect((await h.tables.select('dq_quarantine',{id:itemId}))[0]).toMatchObject({status:'resolved_reject',resolved_by:by});
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+    expect(await db.resolveClosedQuarantine(j.id,itemId,EXP,by,{})).toBe('item_not_open');
+    expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
+   });
+  });
+
   it('applyQuarantineOverride: atomic acceptance of the CURRENT inconsistency — override, due now, lease revoked, item resolved_accept, one audit row; idempotent; stale / closed / item_not_open write nothing (P1-04)',async()=>{
    const m=await synced();const b=await h.batch();const by=await h.adminUser();
    await h.exclusiveClaims(async()=>{

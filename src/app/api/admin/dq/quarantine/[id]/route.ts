@@ -149,7 +149,7 @@ export async function POST(request: Request, { params }: Ctx) {
         if (mapped.code !== undefined) extra = { error: mapped.code };
       }
     // F4 dataset 'judgments' (spec §7.6): src/lib/dq/judgments-resolver.ts. An accept is audited inside the
-    // apply_quarantine_override transaction (audited=true → no second audit row here); a reject is audited below.
+    // settlement RPC transaction (audited=true → no second audit row here); plain verdicts are audited below.
     } else if (item.dataset === 'judgments') {
       const r = await resolveJudgmentsItem(
         { db: adminJudgmentsDb(admin), tables: client, codeVersion: resolveCodeVersion({ allowGit: false }) },

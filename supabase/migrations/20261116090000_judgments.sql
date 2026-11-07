@@ -981,6 +981,34 @@ begin
   return v_res;
 end $$;
 
+-- Final-state cleanup locks queue before item, validates the evidence read by the hook,
+-- and commits the rejection and its audit together without appending a settlement.
+create or replace function public.resolve_closed_judgment_quarantine(p_judgment_id uuid, p_quarantine_id uuid, p_expected jsonb, p_resolved_by uuid, p_audit jsonb) returns text
+language plpgsql security definer set search_path = '' as $$
+declare v_q public.judgment_settle_queue; v_i public.dq_quarantine;
+begin
+  if p_expected is null or pg_catalog.jsonb_typeof(p_expected) <> 'object'
+     or coalesce(p_expected ->> 'evidence_hash', '') !~ '^[0-9a-f]{64}$'
+     or pg_catalog.jsonb_typeof(p_expected -> 'cutoff') is distinct from 'string'
+     or p_resolved_by is null or p_audit is null or pg_catalog.jsonb_typeof(p_audit) <> 'object' then
+    raise exception 'invalid_parameter: closed quarantine' using errcode = '22023';
+  end if;
+  select x.* into v_q from public.judgment_settle_queue x where x.judgment_id=p_judgment_id for update;
+  if not found then raise exception 'unknown_judgment' using errcode = 'P0002'; end if;
+  select x.* into v_i from public.dq_quarantine x where x.id=p_quarantine_id for update;
+  if v_i.id is null or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text or v_i.status <> 'open' then return 'item_not_open'; end if;
+  if v_q.closed_at is null or v_i.table_name <> 'judgment_settlements'
+     or (v_i.payload ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
+     or (v_i.payload ->> 'cutoff') is distinct from (p_expected ->> 'cutoff') then return 'stale'; end if;
+  update public.dq_quarantine set status='resolved_reject',resolved_by=p_resolved_by,resolved_at=pg_catalog.now() where id=p_quarantine_id;
+  insert into public.research_audit_log(id,user_id,actor,action,object_type,object_id,detail,created_at)
+  values(pg_catalog.gen_random_uuid(),p_resolved_by,'user','dq.quarantine_resolve','dq',p_quarantine_id,
+    p_audit || pg_catalog.jsonb_build_object('judgment_id',p_judgment_id::text,'decision','reject','closed',true),pg_catalog.now());
+  return 'applied';
+end $$;
+revoke execute on function public.resolve_closed_judgment_quarantine(uuid,uuid,jsonb,uuid,jsonb) from public, anon, authenticated;
+grant execute on function public.resolve_closed_judgment_quarantine(uuid,uuid,jsonb,uuid,jsonb) to service_role;
+
 -- §8.3 / plan audit P1-10: freeze one calibration generation's cohort in ONE statement (one MVCC snapshot):
 -- every non-abstained registration with as_of in the window and its latest settlement at that snapshot. A
 -- transaction that began before and commits after the freeze is consistently outside the generation.
@@ -1129,6 +1157,7 @@ do $$ declare f text; begin
     'public.append_settlement(uuid, uuid, text, jsonb)',
     'public.quarantine_settlement(uuid, uuid, text, jsonb, jsonb, uuid)',
     'public.apply_quarantine_override(uuid, jsonb, uuid, jsonb)',
+    'public.resolve_closed_judgment_quarantine(uuid, uuid, jsonb, uuid, jsonb)',
     'public.reject_quarantined_settlement(uuid, uuid, jsonb, text, jsonb, jsonb)',
     'public.freeze_calibration_cohort(uuid, text, text, date, date)',
     'public.calibration_cohort_members(uuid, uuid, integer)',
