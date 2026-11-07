@@ -16,6 +16,7 @@
 | T19 review fixes | 本提交（`fix(judgments): T19 review fixes`） | commander 决策 1–5 | 待复审 | 1 | 移除无系统时间戳的目录 table_rows；目录/规则通过代码闭包哈希覆盖，快照 CATALOG_VERSION 必须匹配并冻结；仅 active/superseded 可绑定，failed → snapshot_not_published；compute 严格校验四类有限 scores/norm、非负归一化（1e-9）、互异有效主次类、有限 margin。D1 保留可构造绑定输入。红 20 fail / 16 pass；绿 4 suites 62/62；replay --check byte-equal；sync dry-run core hash 一致；typecheck/lint PASS。适配已提交 active 方法、observedAt/ProduceWork、failed 在 buildInput 已不可构造（故无输入）；合成夹具 catalog 标识更新，非生产分类输出；tsx CLI IPC EPERM，改用 node --import tsx。无 SQL/集成测试修改，不需 PG harness。注意生产 norm 六位舍入可能不满足 commander 要求的 1e-9；已登记版本仍受 formula_hash 漂移门控。 |
 
 | T16 review fixes | 本提交（`fix(judgments): T16 review fixes`） | 待复审 | Codex gpt-6-astra 实施 | 1 | 红测 7 failed / 38 passed；最终 51 passed / 7 DB skipped；typecheck、lint PASS；DB harness sandbox EPERM |
+| T20 recommendation private adapter / analyst UI | 待指挥提交（sandbox 禁止 git index.lock） | 待复审 | Codex gpt-6-astra 实施 | 0 | 首次红测 4 suites missing modules；108 passed / 5 DB skipped；typecheck、lint PASS；db-one sandbox EPERM |
 | T19 macro_regime method / real macro wiring | 本提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 红测；502 passed / 83 DB skipped；typecheck、lint、golden --check PASS；CLI dry-run 缺配置；db-one EPERM |
 | T21 judgment UI / methods / admin | 待提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 首轮 5 failed + 1 suite missing；契约/交互回归 4 failed → 45 passed；typecheck、lint PASS；浏览器 host unavailable |
 
@@ -249,6 +250,21 @@
 - `npm run typecheck && npm run lint` 最终 PASS（lint --max-warnings=0）；首次 typecheck 发现 fake TableClient 行类型不兼容，已通过展开 calibration row 修正。`git diff --check` PASS。
 - PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts` → IPC listen EPERM；换 `node --import tsx` → 127.0.0.1 listen EPERM。需指挥运行 db-one。该 suite 已在 scripts/ci/research-checks.ts 既有 F4 criticalSuites.push，未新增 suite；领取仍在 withClaimLock 内。
 - 并行提交偏差：本轮先写的 calibrate / cron 回归测试及 fake tables 装配被并行提交 8fa3d819 一并收入；本轮不改写该提交历史，剩余修复与追加测试限定所授权路径。
+
+
+## Task 20 — recommendation_call@v1 私有适配器（F4-5b）
+
+- 实现只读 `toJudgmentCard`、`selfAssessment`、批量 `loadIssuerIndex`；book 仅增加 self_assessment，recommendations 每行仅增加 judgment_card，原字段与 POST 不变。信心列三段档位 + 未校准，登记小数 / 状态 / 条件 / 目标在行展开；摘要下方新增不可审计自评与 Wilson 95% 档位表。已阅读 Analyst.dc.html，保留现有页面布局，按规格与计划增加区块。
+- 计划已声明偏差：D7 pending_fill.condition=null；纯适配器多 ctx 参数支持路由批量发行人反查；withdrawn > abstained(no_confidence > no_direction > market_unsupported) > pending_fill > settled > open，pass 沿已提交 callDirection 视为看空；独立抽样按 market:ticker、[as_of, settle_after] 分流并排除 retrospective；display.value 为登记 p、methodology.href='/analyst'。
+- 提示/已提交代码适配：复用 route-utils.serializeBody，仅序列化新增卡片以删除 percent=null，不用 privateResponse（避免新增 codeVersion 改变 analyst 外层形状）；内部 percent 始终 null、calibration 固定 self_assessed。路由测试改验 percent 键缺席。复用已提交 calibration 的 brierParts/ece/reliabilityBins/selectIndependent 与既有 wilson，不复制数学；不调用 public display helpers，因此不需要新增 now 参数。
+- 并行任务隔离：未改 Task 19 registry/deps/macro 文件或其 build-replay-fixture.ts；改用独立 scripts/judgments/build-recommendation-fixture.ts，node --import tsx 生成/检查 recommendation-call.json。回放沿已提交 ReplayFixture 格式与 human inputs_only 行（仅测试夹具类型断言），既有 replay.test 自动覆盖冻结 fill 篡改。现有 analyst 测试均未修改。
+- 当前已提交迁移实际为 20261116090000_judgments.sql；本任务无需 SQL/DB/producer 改动。无新 S4_TEST_STATE 测试，无需改 criticalSuites；未修改任何 facts/entities/macro/industry 文件。共享页面/路由改动均在 F4 围栏，messages 仅追加 analyst 子树，保留原格式。
+- TDD：先写 adapter、book route、recommendations route、analyst-view 四个测试文件，`npm test -- src/lib/judgments/adapters/recommendation.adapter.test.ts src/app/api/analyst/book/route.test.ts src/app/api/analyst/recommendations/route.test.ts src/components/judgments/analyst-view.test.ts` → 4 suites failed / 0 test bodies（缺实现）。实现后加 parity 的运行 → 1 failed / 26 passed（缺回放 JSON）；生成后影响面 `npm test -- src/lib/judgments/adapters/recommendation.adapter.test.ts src/app/api/analyst src/components/judgments/analyst-view.test.ts src/lib/judgments/replay.test.ts src/lib/analyst src/i18n/messages-parity.test.ts` → 108 passed / 5 DB skipped，10 passed suites / 1 skipped。
+- `node --import tsx scripts/judgments/build-recommendation-fixture.ts`、同命令 `--check` → PASS；`npm run typecheck && npm run lint` → PASS（max-warnings=0）；`git diff --check` → PASS。
+- PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/analyst/recommendations-append-only.integration.test.ts` → IPC listen EPERM；换 node --import tsx → 127.0.0.1 listen EPERM。需指挥用 db-one 运行现有 analyst 集成测试。
+- 浏览器核对：未做浏览器核对（无已提供的登录环境）；npm run dev 能启动并已停止。
+- `npm run build`：首次与短暂 dev 启动重叠，编译通过后 page data 报 /_not-found entry invariant；停止 dev 后独立重跑完整 PASS（41 static pages），无客户端 node:crypto 泄漏。
+- 提交阻塞：明确路径 git add 返回主仓库 .git/worktrees/judgment-framework-50f9e1/index.lock Operation not permitted；随后独立 git commit（末尾指定 Codex co-author）返回 no changes added to commit。无 commit SHA；未绕过 hooks，未暂存并行 Task 19 文件。需指挥暂存本任务 17 个路径后提交。
 
 ## Task 19 — macro_regime@v1（F4-5a）
 
