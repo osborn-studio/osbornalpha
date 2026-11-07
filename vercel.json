@@ -63,6 +63,18 @@
       "schedule": "0 6 3 * *"
     },
     {
+      "path": "/api/cron/documents-sync?source=hkexnews",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/documents-sync?source=cninfo",
+      "schedule": "20 16 * * *"
+    },
+    {
+      "path": "/api/cron/documents-sync?source=edgar",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/cron/company-digest",
       "schedule": "20 * * * *"
     }

@@ -1,12 +1,14 @@
 // src/lib/macro/strategy/port.ts
 // StrategyReadPort (spec §4.3): the only way the strategy module reads P1+P2 data. strategyPort() is the production
-// port and returns null until WP-S6 wires P1+P2 (capability matrix §9.1: enabled + null port → 503). memoryStrategyPort
-// serves the unit tests from a StrategyFixture; its derivePolicyEvents / timeliness reproduce P2 events.ts
-// derivePolicyEvents and P1 freshness.ts releaseTimeliness (P1 plan Task 14 / Task 11) for tests only — production calls
-// the P1/P2 functions directly at WP-S6.
+// port (WP-S6: macroDbStrategyPort over P1's supabaseMacroDb, wiring.ts); it is null only when the Supabase environment is
+// not configured (capability matrix §9.1: enabled + null port → 503). memoryStrategyPort serves the unit tests from a
+// StrategyFixture; its derivePolicyEvents / timeliness reproduce P2 events.ts derivePolicyEvents and P1 freshness.ts
+// releaseTimeliness for tests only — production calls the P1/P2 functions directly.
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import type {EventInput,MacroSeriesDef,ObservationRow,PolicyEvent,Region,RulesView,SnapshotRecord,Timeliness} from './contract';
+import {macroRouteDeps} from '../route-helpers';
 import type {StrategyFixture} from './testing/fixture';
+import {macroDbStrategyPort} from './wiring';
 
 export interface StrategyReadPort{
  activeSnapshot(region:Region):Promise<SnapshotRecord|null>;
@@ -26,8 +28,13 @@ export interface StrategyReadPort{
  timeliness(def:MacroSeriesDef,latestPeriodEnd:string|null,today:string):Timeliness;
 }
 
-/** Production port. Returns null until WP-S6 wires P1+P2 (spec §9.1: strategy enabled + null port → 503). */
-export function strategyPort():StrategyReadPort|null{return null;}
+/** Production port over P1's MacroDb (server-only: macroRouteDeps builds the service-role and anon clients, as every P1 route does).
+ *  Null when the Supabase environment is missing, so the capability matrix answers 503 macro_foundation_unavailable (spec §9.1)
+ *  instead of a 500. Callers invoke it after the session gate (middleware does not cover /api/*), or behind CRON_SECRET. */
+export function strategyPort():StrategyReadPort|null{
+ try{return macroDbStrategyPort(macroRouteDeps().db);}
+ catch{return null;}
+}
 
 // ---------------------------------------------------------------- memory port (tests)
 const ms=(t:string)=>{const v=Date.parse(t);if(!Number.isFinite(v))throw new Error(`invalid_timestamp:${t}`);return v;};

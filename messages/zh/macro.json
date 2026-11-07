@@ -1,7 +1,7 @@
 {
  "page": {"title": "宏观工作台", "subtitle": "只陈述事实：值、变化、数据期、可得时间、来源。判断层默认关闭。", "back": "← 宏观工作台"},
  "region": {"label": "地区", "US": "美国 US", "CN": "中国 CN"},
- "tabs": {"label": "工作台分区", "overview": "概览", "indicators": "指标", "correlation": "关联", "methodology": "方法与来源"},
+ "tabs": {"label": "工作台分区", "overview": "概览", "indicators": "指标", "correlation": "关联", "methodology": "方法与来源", "transmission": "传导", "history": "历史", "review": "复盘"},
  "header": {"snapshot": "快照 {date}", "noSnapshot": "尚无已发布快照", "collection": "采集 {status}", "lastOk": "最近成功 {time}"},
  "collection": {"fresh": "正常", "stale": "过期", "error": "失败", "missing": "无记录"},
  "status": {"active": "已核实", "missing": "缺失", "restricted": "受限"},
