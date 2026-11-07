@@ -155,7 +155,7 @@ export function fixtureTushareCall(dirs:string|readonly string[]=INDUSTRY_FIXTUR
 }
 
 /** limit/offset paging until has_more=false; one TusharePage per response. A page identical to the previous one stops with paging_not_advancing. */
-async function fetchPaged<T>(call:TushareCall,api:string,params:Record<string,unknown>,fields:readonly string[],decode:(f:string[],items:unknown[][])=>T[],opts:FetchOptions):Promise<TusharePage<T>[]>{
+export async function fetchPaged<T>(call:TushareCall,api:string,params:Record<string,unknown>,fields:readonly string[],decode:(f:string[],items:unknown[][])=>T[],opts:FetchOptions):Promise<TusharePage<T>[]>{
  const size=opts.pageSize??PAGE_SIZE[api]??2000;const wait=opts.sleep??defaultSleep;const gap=opts.minIntervalMs??TUSHARE_MIN_INTERVAL_MS;const now=opts.now??(()=>new Date());
  const out:TusharePage<T>[]=[];let prev:string|null=null;
  for(let page=1,offset=0;;page++){
