@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P3 | src/lib/macro/strategy/numeric.ts:33 | Accepted decimal strings can underflow during `Number()` conversion. Reproduced with equal positive operands `0.` + 323 zeros + `1`: `pctChange` returns `NaN`, JSON serializes it as `null`, while exact ratio rendering gives `0.0`. Quartiles also accept non-finite values. | Check converted operands and results for finiteness and positive denominator; reject unsupported numeric ranges explicitly. Add underflow/overflow regression cases. |
+| 2 | P3 | src/lib/macro/strategy/manifest.test.ts:105 | Failure-path coverage is incomplete: tests exercise history truncation but not `latestObservations` truncation, propagation of ordinary port errors, or `useSnapshots({loadRows:false})`. These distinguish incomplete evidence from unavailable infrastructure. | Add port-spy tests asserting truncation records `truncated` without inputs, ordinary errors propagate, and `loadRows:false` freezes records without fetching observations. |
+
+pass with P3 notes
