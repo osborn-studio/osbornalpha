@@ -10,6 +10,7 @@
 import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
+import {macroJudgmentsEnabled} from './flags';
 import {shiftMonthEnd} from './freshness';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime} from './regime';
 import type {ObsRef,RegimeInput,RegimeSeriesInput} from './regime';
@@ -31,7 +32,8 @@ export function catalogItemsOf(region:Region):MacroSeriesDef[]{
  *  rows (第 4 稿 P1-5) and returns the frozen sparkline history ids (P1-8). */
 export async function buildRegimeInput(db:MacroDb,region:Region,opts:{asOf?:string;periodEndLte?:string}={}):Promise<BuiltRegimeInput>{
  const defs=regimeInputsOf(region).filter(d=>d.region===region);
- const latest=await db.latestEligible(defs.map(d=>d.id),{asOf:opts.asOf,periodEndLte:opts.periodEndLte});
+ const histories=opts.asOf?await Promise.all(defs.map(d=>db.eligibleHistoryAsOf(d.id,{to:opts.periodEndLte??'9999-12-31',asOf:opts.asOf!,maxRows:10000}))):null;
+ const latest=histories?histories.flatMap(h=>h.length?[h[h.length-1]]:[]):await db.latestEligible(defs.map(d=>d.id),{asOf:opts.asOf,periodEndLte:opts.periodEndLte});
  const series:Record<string,RegimeSeriesInput>={};
  const used=new Map<string,ObservationRow>();
  const historyIds:string[]=[];
@@ -39,7 +41,7 @@ export async function buildRegimeInput(db:MacroDb,region:Region,opts:{asOf?:stri
   const def=defs.find(d=>d.id===row.series_id);
   if(!def)continue;
   const span=def.period==='quarter'?3*SPARK_POINTS:SPARK_POINTS;   // months covering SPARK_POINTS periods
-  const all=await db.eligibleHistory(row.series_id,{from:shiftMonthEnd(row.period_end,-span),to:row.period_end,asOf:opts.asOf,maxRows:4*SPARK_POINTS});
+  const all=histories?histories[defs.indexOf(def)].filter(h=>h.period_end>=shiftMonthEnd(row.period_end,-span)):await db.eligibleHistory(row.series_id,{from:shiftMonthEnd(row.period_end,-span),to:row.period_end,asOf:opts.asOf,maxRows:4*SPARK_POINTS});
   historyIds.push(...all.slice(-SPARK_POINTS).map(h=>h.observation_id));
   const windowStart=shiftMonthEnd(row.period_end,-HISTORY_MONTHS);
   const earlier=all.filter(h=>h.period_end<row.period_end&&h.period_end>=windowStart);   // ascending by contract
@@ -75,7 +77,7 @@ export type PublishReceipt=
  |{status:'stale';region:Region;attempts:number}
  |{status:'failed';region:Region;reason:string;failed_snapshot_id:string|null;attempts:number};
 async function runHook(deps:PublishDeps,env:Record<string,string|undefined>,snapshotId:string):Promise<'skipped'|'ok'|'failed'>{
- if(env.MACRO_JUDGMENTS_ENABLED!=='1')return 'skipped';
+ if(!macroJudgmentsEnabled(env))return 'skipped';
  try{
   const snap=await deps.db.snapshot(snapshotId);
   if(!snap)return 'failed';

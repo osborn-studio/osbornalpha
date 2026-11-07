@@ -52,7 +52,7 @@ node --env-file=.env.local --import tsx scripts/company/digest.ts --full --apply
 
 | 变量 | 作用 | 缺省 |
 |---|---|---|
-| `NEXT_PUBLIC_COMPANY_F3_DRAWER` | F3 源抽屉；关闭时新窗口打开 `url`/`documentUrl` | 关 |
+| `NEXT_PUBLIC_COMPANY_F3_DRAWER` | F3 源抽屉；关闭时新窗口打开 `url`/`documentUrl` | 开（2026-11-07 集成 PR D，PG17 e2e 通过；`0`/`false` 关闭） |
 | `NEXT_PUBLIC_COMPANY_JUDGMENTS` | F4 判断视图；关闭时空状态 | 关 |
 | `CRON_SECRET` | cron Bearer；缺失 503、错误 401 | — |
 | `VERCEL_GIT_COMMIT_SHA` | 批次 `code_version`；cron 缺失 → 503 | — |

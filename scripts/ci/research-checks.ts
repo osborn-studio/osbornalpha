@@ -22,7 +22,7 @@ criticalSuites.push('src/lib/evals/f3-hook.integration.test.ts');
 criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts');
 // INDUSTRY:END
 // MACRO
-criticalSuites.push('src/lib/macro/macro.integration.test.ts');
+criticalSuites.push('src/lib/macro/macro.integration.test.ts', 'src/lib/macro/read-api-asof.integration.test.ts');
 // /MACRO
 // MACRO-P3
 criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
@@ -32,7 +32,7 @@ criticalSuites.push('src/lib/documents/documents.integration.test.ts', 'src/lib/
    'src/lib/documents/sync-hk.integration.test.ts', 'src/lib/documents/sync-us.integration.test.ts');
 // end F3
 // COMPANY
-criticalSuites.push('src/lib/company/company-research.integration.test.ts');
+criticalSuites.push('src/lib/company/company-research.integration.test.ts', 'src/lib/company/documents-bridge.integration.test.ts');
 // /COMPANY
 // F4
 criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');

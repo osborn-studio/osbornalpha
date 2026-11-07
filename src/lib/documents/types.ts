@@ -142,6 +142,7 @@ export interface DocumentsDb{
  documentVersions(source:DocSource,sourceRef:string,page:PageOpts):Promise<Page<DocumentRow>>;
  knownSourceRefs(issuer:string,source:ListedSource,refs:string[]):Promise<Set<string>>;            // refs chunked ≤ 500
  readDocuments(issuer:string,opts:{asOf:string;source?:DocSource;docClass?:DocClass;from?:string;to?:string;allVersions?:boolean}&PageOpts):Promise<Page<DocumentRow>>;
+ documentsByFiling(filing:{filingId:string;issuerId?:string;source?:string;sourceRef?:string},asOf:string):Promise<{filingFound:boolean;rows:DocumentRow[]}>;
  documentById(id:string):Promise<DocumentRow|null>;
  documentsByIds(ids:string[]):Promise<DocumentRow[]>;                                            // ≤ 100 ids, unknown ids omitted (Task 17 review: batched lookup)
  assetsOf(documentId:string):Promise<AssetRow[]>;                                                  // ≤ 100 (unique per role/filename)

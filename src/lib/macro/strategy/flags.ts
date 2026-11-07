@@ -6,12 +6,13 @@
 // judgments_disabled, or 503 judgments_unavailable when F4 cannot be read (decided by the caller at read time).
 import type {JudgmentStatus} from './contract';
 import type {StrategyReadPort} from './port';
+import {macroJudgmentsEnabled} from '../flags';
 
 export type FlagEnv=Readonly<Record<string,string|undefined>>;
 /** MACRO_STRATEGY_ENABLED === '1' (unset = off). */
 export const strategyEnabled=(env:FlagEnv=process.env):boolean=>env.MACRO_STRATEGY_ENABLED==='1';
 /** MACRO_JUDGMENTS_ENABLED === '1' (P1 flag, unset = off). */
-export const judgmentsEnabled=(env:FlagEnv=process.env):boolean=>env.MACRO_JUDGMENTS_ENABLED==='1';
+export const judgmentsEnabled=macroJudgmentsEnabled;
 
 export type GateFailure={ok:false;status:404;code:'strategy_disabled'}|{ok:false;status:503;code:'macro_foundation_unavailable'};
 export type StrategyGate=GateFailure|{ok:true;port:StrategyReadPort;judgments:boolean};

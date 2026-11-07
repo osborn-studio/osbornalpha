@@ -15,6 +15,7 @@
 // _raw exposes the maps for memoryHkFactsPort (Task 13) and for tests that need a state no
 // migration-one function produces (e.g. a publication marked abandoned by migration two).
 import {createHash,randomUUID} from 'node:crypto';
+import {FILING_DOCUMENT_SOURCES} from './by-filing';
 import {ASSETS_MAX,approvalDecimal,canonTs,checkApprovalsLimit,tsSortKey,checkIds,checkLimit,checkWriteRows,decodeCursor,encodeCursor,lookaheadLimit,regenFilter} from './db';
 import {DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX,TABLE_ALGO_VERSION} from './types';
 import type {
@@ -84,7 +85,7 @@ function checkDocument(d:DocumentRow):void{
  if(typeof d.code_version!=='string'||!d.batch_id)throw invalid('code_version/batch_id');
 }
 
-export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
+export function memoryDocumentsDb(opts:{now?:()=>Date;filings?:{filingId:string;issuerId:string;source:keyof typeof FILING_DOCUMENT_SOURCES;sourceRef:string;availableDate:string;mappingGen:number;documentIds?:string[]}[]}={}):MemoryDocumentsDb{
  const documents=new Map<string,DocumentRow>();const assets=new Map<string,AssetRow>();const extractions=new Map<string,ExtractionRow>();
  const pages=new Map<string,PageRow>();const citations=new Map<string,CitationRow>();const candidates=new Map<string,CandidateRow>();
  const publications=new Map<string,PublicationRow>();const approvals=new Map<string,ApprovalRow>();const scope=new Map<string,DocScopeRow>();const confirmedAt=new Map<string,string>();
@@ -494,6 +495,17 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
      &&(!a||gt2([String(a[0]),String(a[1])],[d.available_at,d.document_id],true)))
     .sort((x,y)=>cmpTs(y.available_at,x.available_at)||cmp(y.document_id,x.document_id));
    return page(picked,limit,d=>[d.available_at,d.document_id]);
+  },
+  async documentsByFiling(f,asOf){
+   const filing=opts.filings?.find(g=>g.filingId===f.filingId&&g.mappingGen>0&&g.availableDate<=asOf);
+   if(!filing)return {filingFound:false,rows:[]};
+   const source=FILING_DOCUMENT_SOURCES[filing.source];
+   const bound=[...documents.values()].filter(d=>d.permission==='public'&&d.issuer_id===filing.issuerId&&d.source===source&&d.available_date<=asOf&&
+    (filing.source==='hkex'?filing.documentIds?.includes(d.document_id):d.filing_source_ref===filing.sourceRef));
+   const top=new Map<string,number>();for(const d of bound){const k=`${d.source}|${d.source_ref}`;top.set(k,Math.max(top.get(k)??0,d.source_version));}
+   const rows=bound.filter(d=>d.source_version===top.get(`${d.source}|${d.source_ref}`)&&d.permission==='public')
+    .sort((a,b)=>cmpTs(b.available_at,a.available_at)||cmp(b.document_id,a.document_id)).slice(0,2).map(clone);
+   return {filingFound:true,rows};
   },
   async documentById(id){const d=documents.get(id);return d?clone(d):null;},
   async documentsByIds(ids){checkIds(ids);return [...new Set(ids)].sort(cmp).map(id=>documents.get(id)).filter((d):d is DocumentRow=>!!d).map(clone);},

@@ -269,6 +269,7 @@ describe('macro_regime@v1 (Task 19)',()=>{
 
 it('classification code and rule/catalog dependencies are covered by formula hash',()=>{
  const hashed=new Set([...formulaHashOf(macroRegimeV1).closure,...macroRegimeV1.deps]);
+ expect(macroRegimeV1.deps).toContain('src/lib/macro/flags.ts');
  for(const file of importClosure(process.cwd(),'src/lib/macro/read-api.ts'))expect({file,hashed:hashed.has(file)}).toEqual({file,hashed:true});
 });
 

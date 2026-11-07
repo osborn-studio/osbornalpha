@@ -8,7 +8,7 @@ import {releaseTimeliness} from './freshness';
 import {memoryMacroDb} from './memory-db';
 import type {MemoryMacroDb} from './memory-db';
 import {publishRegion} from './snapshots';
-import {SEED_BATCH,US_FIXTURE,seedCatalog,seedPoints,seedRetrieval,yoyPoints} from './testing/seed';
+import {US_FIXTURE,seedCatalog,seedPoints,seedRetrieval,yoyPoints} from './testing/seed';
 import {changeOf,overviewEnvelope,scaleBy100} from './views';
 import type {ViewDeps} from './views';
 
@@ -122,12 +122,13 @@ describe('overviewEnvelope',()=>{
   const {db,deps}=await setup();
   const s1=await publish(db);
   // a late delivery of an older UNRATE value (fetched before the stored one) is quarantined as stale_delivery …
-  (db as MemoryMacroDb).setBatchStatus(SEED_BATCH,'running');   // the memory twin writes only into a running batch
-  const {retrievalId}=await seedRetrieval(db,{fetchedAt:'2026-10-20T05:30:00.000Z'});
-  const res=await db.writeObservations(SEED_BATCH,'test',[{series_id:'US_UNRATE',period_end:'2026-07-31',value_text:'9.9',available_at:'2026-10-20T05:30:00.000Z',revisable:true,retrieval_id:retrievalId,locator:{kind:'csv_row',line:2,column:1}}]);
-  (db as MemoryMacroDb).setBatchStatus(SEED_BATCH,'success');
+  const lateBatch='00000000-0000-4000-8000-0000000000b2';
+  (db as MemoryMacroDb).setBatchStatus(lateBatch,'running');   // the memory twin writes only into a running batch
+  const {retrievalId}=await seedRetrieval(db,{fetchedAt:'2026-10-20T05:30:00.000Z',batchId:lateBatch});
+  const res=await db.writeObservations(lateBatch,'test',[{series_id:'US_UNRATE',period_end:'2026-07-31',value_text:'9.9',available_at:'2026-10-20T05:30:00.000Z',revisable:true,retrieval_id:retrievalId,locator:{kind:'csv_row',line:2,column:1}}]);
+  (db as MemoryMacroDb).setBatchStatus(lateBatch,'success',undefined,'2026-10-20T05:30:00.000Z');
   expect(res.conflicts.map(c=>c.reason)).toEqual(['stale_delivery']);
-  const q=db.addQuarantineItem({dataset:'macro.fred',natural_key:'US_UNRATE|2026-07-31',reason_code:'stale_delivery',batch_id:SEED_BATCH});
+  const q=db.addQuarantineItem({dataset:'macro.fred',natural_key:'US_UNRATE|2026-07-31',reason_code:'stale_delivery',batch_id:lateBatch});
   const obs=res.conflicts[0].observation_id!;
   await db.linkQuarantine(q,[obs]);
   await db.resolveConflict(q,'accept','00000000-0000-4000-8000-0000000000aa',obs);   // … then accepted: its available_at predates s1
