@@ -256,6 +256,10 @@
     {
       "file": "20261118093000_documents_by_filing.sql",
       "sha256": "b89c8090831c7c58115c61aa940f573ccf7990bf779881164b9438f6bff85698"
+    },
+    {
+      "file": "20261120093000_industry_exact_pair_tolerance.sql",
+      "sha256": "c29ecd95f18990120738909cfcab16534e9bfcdccce64a8d3d25e20225919bfc"
     }
   ]
 }

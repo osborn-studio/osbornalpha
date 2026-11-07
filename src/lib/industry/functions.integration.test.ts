@@ -22,6 +22,7 @@ import {pgIndustryDb} from './pg-industry-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261111091000_industry_research_functions.sql';
+const PAIR_TOLERANCE_MIGRATION='supabase/migrations/20261120093000_industry_exact_pair_tolerance.sql';
 const hex=(n:number)=>randomBytes(n).toString('hex');
 /** Every function of both migrations with its EXECUTE grantees ('internal' = nobody). */
 const FUNCTIONS:Record<string,'read'|'service'|'internal'>={
@@ -150,6 +151,9 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect(triggers).toEqual(['industry_metric_runs.industry_runs_immutable','industry_metrics.industry_metrics_frozen','industry_source_memberships.industry_source_memberships_immutable','industry_valuation_pairs.industry_valuation_pairs_frozen','industry_valuation_runs.industry_runs_immutable','industry_valuations.industry_valuations_frozen','issuer_industry_memberships.issuer_industry_memberships_lifecycle']);
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
   await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+  // Restore/replay the forward correction after replaying the historical function migration.
+  await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
+  await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
   expect(await one(`select has_function_privilege('anon','public.apply_observations(text,uuid,jsonb)','EXECUTE') v`)).toBe(false);
  },60000);
 
@@ -464,6 +468,34 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   const publish=(run:string)=>one(`select public.publish_industry_valuations($1) v`,[run]);
   return {v,b,iss,m,dates,create,missing,okRow,rowsFor,obs,pairsFor,stageRows,stagePairs,stageV,stageDeps,publish};
  };
+
+ it('valuation pairs use exact inclusive 1% boundaries even when division rounds an outside value to the boundary',async()=>{
+  const k=await valuationKit();const run=await k.create();
+  // Synthetic decimal values: PostgreSQL numeric division rounds away the final nonzero digit.
+  const cases=[
+   ['12.12','within'],['12.120000000000000000000000000001','outside'],
+   ['9.9495','within'],['9.949499999999999999999999999999','outside'],
+   ['10.1505','within'],['10.150500000000000000000000000001','outside'],
+   ['10.05','within'],['0','outside'],['-1','outside'],
+  ];
+  const rows=cases.map(([value],i)=>k.okRow('A1',k.dates[i],'pe_ttm',value));
+  await k.stageRows(run,rows);
+  // Forged caller status/value/diff must not override the database's current observations.
+  await k.stagePairs(run,k.pairsFor(rows,'within'));
+  const actual=await q(`select trade_date::text d,pair_status from public.industry_valuation_pairs where run_id=$1 order by trade_date`,[run]);
+  expect(actual).toEqual(cases.map(([,pair_status],i)=>({d:k.dates[i],pair_status})));
+  expect(await one(`select count(*)::int v from public.industry_valuations where run_id=$1 and (published or series_qualified)`,[run])).toBe(0);
+ });
+
+ it('a just-outside pair cannot round a 23/25 series up to the 95% qualification gate',async()=>{
+  const k=await valuationKit();const run=await k.create();
+  const rows=k.rowsFor({pe_ttm:'10.05'}).map(row=>row.code==='A1'&&row.metric==='pe_ttm'&&row.trade_date===k.dates[1]
+   ? {...row,value:'10.150500000000000000000000000001'}:row);
+  // First date is already outside (official 12); second is just above the exact 1% boundary.
+  await k.stageV(run,rows);await k.stageDeps(run);
+  expect(await k.publish(run)).toEqual({qualified_series:0,published_rows:0});
+  expect(await one(`select count(*)::int v from public.industry_valuation_pairs where run_id=$1 and code='A1' and metric='pe_ttm' and pair_status='outside'`,[run])).toBe(2);
+ });
 
  it('valuation runs: staging forces unpublished, pair status is derived from the official observation, publish qualifies series once and freezes, activation re-checks and stamps; pairs_mismatch; prune removes a superseded run with rows, pairs and dependencies (V8)',async()=>{
   const k=await valuationKit();const {v,dates,create,rowsFor,stageV,stageDeps,publish}=k;
