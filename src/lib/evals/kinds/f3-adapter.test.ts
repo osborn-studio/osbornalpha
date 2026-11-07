@@ -47,4 +47,16 @@ describe('F3 extraction adapter',()=>{
   const output=toExtractionOutput(row)!;
   expect(evaluateExtraction({documents:[{document_sha256:sha,page_count:1,bbox_space:'pdf_points_top_left'}],labels:[{label_id:'l',document_sha256:sha,field:'revenue',occurrence:1,value_type:'decimal',value:'123',locator:{page:1,bbox:[10,732,30,742]},recorded_by:'test',reviewed_by:'test'}]},[output]).cases[0].outcome.result).toBe('read_error');
  });
+ it('requires exactly the complete one-based page set even without settled candidates',async()=>{
+  for(const pages of [[{...page,page_no:0}],[{...page,page_no:2}],[{...page,page_no:1.5}],[page,page]]){
+   const row=await adaptF3Document(fake({pagesOf:async()=>pages,candidatesOf:async()=>({rows:[],nextCursor:null})}),'d');
+   expect(row).toMatchObject({status:'read_error',reason:'missing_page'});
+  }
+ });
+ it('rejects absent, invalid or exceeded PDF page width rather than emitting an invalid locator',async()=>{
+  for(const width of [null,0,-1,Number.NaN,Number.POSITIVE_INFINITY,29]){
+   expect(await adaptF3Document(fake({pagesOf:async()=>[{...page,width}]}),'d')).toMatchObject({status:'read_error',reason:'missing_bbox'});
+  }
+  expect(await adaptF3Document(fake({pagesOf:async()=>[{...page,width:30}]}),'d')).toMatchObject({status:'parsed'});
+ });
 });

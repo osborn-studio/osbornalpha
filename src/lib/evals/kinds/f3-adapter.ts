@@ -9,8 +9,8 @@ import type {BBox,ExtractionOutput,PredictedField} from './extraction';
 export type F3Adapted=ExtractionOutput|{document_sha256:string;status:'excluded';reason:'permission'|'superseded'}|{document_sha256:string;status:'read_error';reason:string};
 const error=(sha:string,reason:string):F3Adapted=>({document_sha256:sha,status:'read_error',reason});
 const box=(c:CitationRow,p:PageRow):BBox|null=>{
- const b=c.bbox,h=p.height;
- if(!b||h===null||!Number.isFinite(h)||h<=0||![b.x0,b.y0,b.x1,b.y1].every(Number.isFinite)||b.x0<0||b.y0<0||b.x0>=b.x1||b.y0>=b.y1||b.y1>h)return null;
+ const b=c.bbox,h=p.height,w=p.width;
+ if(!b||h===null||w===null||!Number.isFinite(h)||!Number.isFinite(w)||h<=0||w<=0||![b.x0,b.y0,b.x1,b.y1].every(Number.isFinite)||b.x0<0||b.y0<0||b.x0>=b.x1||b.y0>=b.y1||b.x1>w||b.y1>h)return null;
  // F3 extract/pdf.ts records pdf.js page.view PDF user-space points with a bottom-left origin; F6 gold uses top-left points.
  return [b.x0,h-b.y1,b.x1,h-b.y0];
 };
@@ -37,7 +37,7 @@ export async function adaptF3Document(db:Pick<DocumentsDb,'documentById'|'docume
  const pages:PageRow[]=[];
  for(let n=1;n<=ext.page_count;n+=100)pages.push(...await db.pagesOf(ext.extraction_id,Array.from({length:Math.min(100,ext.page_count-n+1)},(_,i)=>n+i)));
  const byNo=new Map(pages.map(p=>[p.page_no,p]));
- if(byNo.size!==ext.page_count||pages.some(p=>p.extraction_id!==ext.extraction_id||!Number.isFinite(p.height)||p.height===null||p.height<=0))return error(sha,'missing_page');
+ if(pages.length!==ext.page_count||byNo.size!==ext.page_count||pages.some(p=>p.extraction_id!==ext.extraction_id||!Number.isSafeInteger(p.page_no)||p.page_no<1||p.page_no>ext.page_count||!Number.isFinite(p.height)||p.height===null||p.height<=0))return error(sha,'missing_page');
  const candidates:CandidateRow[]=[];let cursor:string|null=null;const seen=new Set<string>();
  for(let n=0;n<1000;n++){
   const batch=await db.candidatesOf({extractionId:ext.extraction_id},{cursor,limit:100});candidates.push(...batch.rows);
