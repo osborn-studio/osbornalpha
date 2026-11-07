@@ -35,9 +35,9 @@ export const suggestedOp=(detail:unknown):AmendForm['op']=>{
 };
 
 /** Quarantine inline interactions (spec §7.2): which control a row shows. */
-export type QuarantineControl={kind:'candidates';options:{index:number;label:string}[]}|{kind:'lineage';options:{factId:string;label:string}[]}|{kind:'restore';enabled:boolean;reason:'passing'|'not_passing'|'no_result'|'inputs_changed'}|{kind:'plain'};
+export type QuarantineControl={kind:'candidates';options:{index:number;label:string}[]}|{kind:'lineage';options:{factId:string;label:string}[]}|{kind:'restore';enabled:boolean;reason:'passing'|'not_passing'|'no_result'|'inputs_changed'|'unchecked'}|{kind:'plain'};
 const str=(v:unknown)=>v===null||v===undefined?'—':String(v);
-export function quarantineControl(row:{reason_code?:unknown;payload?:unknown;detail?:unknown;restorable?:unknown}):QuarantineControl{
+export function quarantineControl(row:{reason_code?:unknown;payload?:unknown;detail?:unknown;restorable?:unknown;restorable_checked?:unknown}):QuarantineControl{
  const payload=(row.payload??{}) as Record<string,unknown>;
  if(row.reason_code==='ambiguous_value'&&Array.isArray(payload.candidates))
   return {kind:'candidates',options:(payload.candidates as Record<string,unknown>[]).map((c,index)=>({index,label:`${str(c.value)} ${str(c.unit)} · ${str(c.sourceConcept)} · ${str(c.filingRef)}`}))};
@@ -49,6 +49,8 @@ export function quarantineControl(row:{reason_code?:unknown;payload?:unknown;det
   const latest=((row.detail??{}) as {latest_result?:{passed?:unknown}}).latest_result;
   if(!latest)return {kind:'restore',enabled:false,reason:'no_result'};
   if(latest.passed!==true)return {kind:'restore',enabled:false,reason:'not_passing'};
+  // restorable_checked:false = over the per-load live-check cap (or no hash wiring): the row was NOT checked, so never claim its inputs changed
+  if(row.restorable_checked===false&&row.restorable!==true)return {kind:'restore',enabled:false,reason:'unchecked'};
   // server-computed (loadDqDashboard): passed AND latest inputs_hash === inputsHashNow(row)
   return row.restorable===true?{kind:'restore',enabled:true,reason:'passing'}:{kind:'restore',enabled:false,reason:'inputs_changed'};
  }

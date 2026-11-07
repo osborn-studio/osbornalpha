@@ -50,4 +50,15 @@ describe('quarantine inline controls',()=>{
   expect(quarantineControl({reason_code:'reconcile_mismatch',detail:{}})).toEqual({kind:'restore',enabled:false,reason:'no_result'});
   expect(quarantineControl({reason_code:'same_day_conflict'})).toEqual({kind:'plain'});
  });
+ it('a row not live-checked (restorable_checked:false, over the per-load cap) shows a distinct unchecked reason, never inputs_changed',()=>{
+  const passing={reason_code:'reconcile_mismatch',restorable:false,detail:{latest_result:{passed:true}}};
+  const unchecked=quarantineControl({...passing,restorable_checked:false});
+  expect(unchecked).toEqual({kind:'restore',enabled:false,reason:'unchecked'});
+  expect(quarantineAcceptBody(unchecked,null)).toBeNull();
+  expect(quarantineControl({...passing,restorable_checked:true})).toEqual({kind:'restore',enabled:false,reason:'inputs_changed'});
+  expect(quarantineControl({...passing,restorable:true,restorable_checked:true})).toEqual({kind:'restore',enabled:true,reason:'passing'});
+  // settled from the stored result alone: the stored reason wins even when the row was not live-checked
+  expect(quarantineControl({reason_code:'reconcile_mismatch',restorable:false,restorable_checked:false,detail:{latest_result:{passed:false}}})).toEqual({kind:'restore',enabled:false,reason:'not_passing'});
+  expect(quarantineControl({reason_code:'reconcile_mismatch',restorable:false,restorable_checked:false,detail:{}})).toEqual({kind:'restore',enabled:false,reason:'no_result'});
+ });
 });
