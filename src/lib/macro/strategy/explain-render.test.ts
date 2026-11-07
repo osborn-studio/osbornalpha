@@ -1,6 +1,10 @@
 // src/lib/macro/strategy/explain-render.test.ts
 import {describe,expect,it} from 'vitest';
-import type {Fact} from './contract';
+import type {Fact,StrategyManifest} from './contract';
+import {buildSnapshotFactsManifest,explanationFacts,flattenReviewFacts} from './facts';
+import {memoryStrategyPort} from './port';
+import {buildReviewManifest,reviewFromManifest} from './review';
+import {daily,FIXTURE_CATALOG,fixture,monthly,obs,snap} from './testing/fixture';
 import {formatSlot,namesFrom,renderExplanation,renderFact,renderFacts,roundDecimal,roundDecimalToInteger,TEMPLATE_IDS} from './explain-render';
 import {FORBIDDEN_TERMS,REGIME_TERMS} from './explain-validate';
 
@@ -89,5 +93,70 @@ describe('renderFacts / renderExplanation',()=>{
   expect(r.hypotheses).toEqual([{text:'h',fact_ids:['tml:US_DGS10','obs:US_CPI_YOY']}]);
   expect(r.counterpoints).toEqual([{text:'c',fact_ids:['obs:US_CPI_YOY']}]);
   expect(()=>renderExplanation(facts,{points:[{fact_ids:['nope'],hypothesis:'h'}],counterpoints:[]},'en',CATALOG)).toThrow('unknown_fact:nope');
+ });
+});
+
+describe('producer ↔ template compatibility (facts.ts / review.ts output renders in both locales)',()=>{
+ const BASE_ROWS=[...monthly('US_CPI_YOY','2026-08',['2.7']),obs('US_UNRATE','2026-08-31','4.2'),...monthly('US_DGS10','2026-08',['4.23']),...monthly('US_DTWEXBGS','2026-08',['121.2'])];
+ const CUR_ROWS=[...monthly('US_CPI_YOY','2026-09',['2.9']),obs('US_UNRATE','2026-08-31','4.3',{version:2,availableAt:'2026-10-02T12:00:00Z'}),...monthly('US_DGS10','2026-09',['4.16']),...monthly('US_DTWEXBGS','2026-09',['120.5'])];
+ const MONTH_ENDS=[...monthly('US_WTI','2026-09',['62','60.5']),obs('US_DGS10','2026-10-31','4.08'),obs('US_DTWEXBGS','2026-10-31','121')];
+ const EVENT_DAYS:[string,string,string][]=[['2025-09-16','4.5','4.25'],['2025-09-17','4.25','4'],['2025-10-29','4','3.75'],['2025-12-10','3.75','3.5'],['2026-10-28','4','3.75']];
+ const EVENTS=[...daily('US_FED_TARGET_UPPER_D',EVENT_DAYS.map(([d,u])=>[d,u])),...daily('US_FED_TARGET_LOWER_D',EVENT_DAYS.map(([d,,l])=>[d,l]))];
+ const BASE_SNAP=snap('US','2026-09-14T06:00:00Z',BASE_ROWS.map(o=>o.observation_id));
+ const CUR_SNAP=snap('US','2026-10-15T06:00:00Z',CUR_ROWS.map(o=>o.observation_id),{counts:{verified:21,missing:4,restricted:5}});
+ const port=(snapshots=[BASE_SNAP,CUR_SNAP])=>memoryStrategyPort(fixture({snapshots,observations:[...BASE_ROWS,...CUR_ROWS,...MONTH_ENDS,...EVENTS]}));
+ const reviewFacts=async(edit:(m:StrategyManifest)=>StrategyManifest=m=>m,p=port()):Promise<Fact[]>=>flattenReviewFacts(reviewFromManifest(edit(await buildReviewManifest(p,'US','2026-10','c'))).facts);
+ const snapshotFactList=async():Promise<Fact[]>=>{
+  const rows=[...monthly('US_CPI_YOY','2026-08',['2.7','2.9']),...monthly('US_DGS10','2026-08',['4.23','4.16']),...monthly('US_DTWEXBGS','2026-08',['121.2','120.5'])];
+  const cn=monthly('CN_CGB_10Y','2026-09',['1.85']);const s=snap('US','2026-10-15T06:00:00Z',rows.map(o=>o.observation_id));
+  const p=memoryStrategyPort(fixture({snapshots:[s,snap('CN','2026-10-10T06:00:00Z',cn.map(o=>o.observation_id))],observations:[...rows,...cn,...EVENTS]}));
+  const m=await buildSnapshotFactsManifest(p,s.snapshot_id,'c');if(!m)throw new Error('no manifest');return explanationFacts(m);
+ };
+ const catalog=FIXTURE_CATALOG.map(d=>({id:d.id,name:d.name}));
+ const renderAll=(facts:Fact[])=>facts.flatMap(f=>(['zh','en'] as const).map(l=>({f,l,text:renderFact(f,l,namesFrom(catalog))})));
+ const BAD=/undefined|\[object|NaN|\{|\}/;
+
+ it('every fact the producers emit renders in zh and en, with the id fallback never used for a catalog series',async()=>{
+  const all=[...await snapshotFactList(),...await reviewFacts()];
+  expect(all.length).toBeGreaterThan(20);
+  for(const {f,l,text} of renderAll(all)){
+   expect(text.length,`${f.fact_id} ${l}`).toBeGreaterThan(0);expect(text,`${f.fact_id} ${l}`).not.toMatch(BAD);
+   const series=f.slots.series;if(typeof series==='string')expect(text.includes(series),`${f.fact_id} ${l} shows the raw id ${series}`).toBe(false);
+  }
+ });
+ it('restricted and missing catalog entries, truncated and not-read baselines, both asset_missing reasons and timeliness_missing render',async()=>{
+  const edited=await reviewFacts(m=>({...m,
+   inputs:m.inputs.map(i=>i.role==='asset_base:US_WTI:month_end'?{...i,value_text:'-5'}:i),
+   timeliness:[...(m.timeliness??[]),{series_id:'US_CPI_YOY',state:'missing'}]}));
+  const by=new Map(edited.map(f=>[f.fact_id,f]));
+  const restricted=edited.find(f=>f.template==='catalog_unavailable'&&f.slots.status==='restricted');
+  expect(restricted,'a restricted catalog_unavailable fact').toBeDefined();
+  expect(renderFact(restricted!,'zh',namesFrom(catalog))).toMatch(/目录状态：受限。$/);expect(renderFact(restricted!,'en',namesFrom(catalog))).toMatch(/catalog status: restricted\.$/);
+  const missing=edited.find(f=>f.template==='catalog_unavailable'&&f.slots.status==='missing');
+  expect(renderFact(missing!,'zh',namesFrom(catalog))).toMatch(/目录状态：缺失。$/);
+  expect(renderFact(by.get('mv:US_WTI')!,'zh',namesFrom(catalog))).toMatch(/无法比较：基期值非正。$/);
+  expect(renderFact(by.get('mv:US_WTI')!,'en',namesFrom(catalog))).toMatch(/not comparable: non-positive base value\.$/);
+  expect(renderFact(by.get('tml:US_CPI_YOY')!,'en',namesFrom(catalog))).toMatch(/had no observation in the snapshot\.$/);
+  // out_of_coverage: a month with no month-end observations
+  const oc=(await reviewFacts(m=>({...m,inputs:m.inputs.filter(i=>i.role!=='asset_end:US_WTI:month_end')}))).find(f=>f.fact_id==='mv:US_WTI')!;
+  expect(oc.template).toBe('asset_missing');expect(renderFact(oc,'en',namesFrom(catalog))).toMatch(/month-end observations incomplete\.$/);
+  // baseline_unavailable: truncated (unresolved baseline id) and not_read (no read recorded)
+  const broken=snap('US','2026-09-14T06:00:00Z',[...BASE_ROWS.map(o=>o.observation_id),'obs:not-in-store']);
+  const trunc=(await reviewFacts(undefined,port([broken,CUR_SNAP]))).find(f=>f.template==='baseline_unavailable')!;
+  expect(renderFact(trunc,'en',namesFrom(catalog))).toMatch(/\(read truncated\)/);expect(renderFact(trunc,'zh',namesFrom(catalog))).toMatch(/读取被截断/);
+  const notRead=(await reviewFacts(m=>({...m,reads:m.reads.filter(r=>!(r.purpose==='review_base'&&r.series_id==='US_CPI_YOY')),inputs:m.inputs.filter(i=>i.role!=='review_base:US_CPI_YOY:latest')}))).find(f=>f.template==='baseline_unavailable'&&f.slots.series==='US_CPI_YOY')!;
+  expect(renderFact(notRead,'en',namesFrom(catalog))).toMatch(/\(not read\)/);expect(renderFact(notRead,'zh',namesFrom(catalog))).toMatch(/未读取/);
+  // events_truncated
+  const cut=await reviewFacts(m=>({...m,events:[],gaps:[{kind:'history_truncated' as const,reason:'US_FED_TARGET_UPPER_D',near:'2026-11-03'}]}));
+  expect(renderFact(cut.find(f=>f.template==='events_truncated')!,'zh',namesFrom(catalog))).toContain('US_FED_TARGET_UPPER_D');
+ });
+ it('together the producer fixtures cover every template id in TEMPLATE_IDS',async()=>{
+  const thin=snap('US','2026-09-14T06:00:00Z',BASE_ROWS.filter(o=>o.series_id!=='US_CPI_YOY').map(o=>o.observation_id));
+  const broken=snap('US','2026-09-14T06:00:00Z',[...BASE_ROWS.map(o=>o.observation_id),'obs:not-in-store']);
+  const all=[...await snapshotFactList(),...await reviewFacts(),...await reviewFacts(undefined,port([thin,CUR_SNAP])),...await reviewFacts(undefined,port([broken,CUR_SNAP])),
+   ...await reviewFacts(x=>({...x,inputs:x.inputs.map(i=>i.role==='asset_base:US_WTI:month_end'?{...i,value_text:'-5'}:i),timeliness:[...(x.timeliness??[]),{series_id:'US_CPI_YOY',state:'missing'}],events:[],gaps:[{kind:'history_truncated' as const,reason:'US_FED_TARGET_UPPER_D',near:'2026-11-03'}]})),
+   ...await reviewFacts(x=>({...x,inputs:x.inputs.filter(i=>i.role!=='asset_end:US_WTI:month_end')}))];
+  expect([...new Set(all.map(f=>f.template))].sort()).toEqual([...TEMPLATE_IDS].sort());
+  for(const {f,l,text} of renderAll(all))expect(text,`${f.fact_id} ${l}`).not.toMatch(BAD);
  });
 });

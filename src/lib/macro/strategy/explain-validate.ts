@@ -49,13 +49,15 @@ export function parseModelContent(content:string):unknown{
  const t=content.trim();const fenced=/^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
  try{return JSON.parse(fenced?fenced[1]:t);}catch{return undefined;}
 }
-/** First match of each rule family in one text (already NFKC-normalised by the caller). */
+/** Every distinct matched fragment of each rule family in one text (already NFKC-normalised by the caller), families in
+ *  the order numeral, forbidden_term, regime_term; within a family, pattern order then position (spec §6.3: all failure items). */
 export function lexicalFailures(text:string):{code:'numeral'|'forbidden_term'|'regime_term';match:string}[]{
  const out:{code:'numeral'|'forbidden_term'|'regime_term';match:string}[]=[];
- const first=(ps:readonly RegExp[])=>{for(const p of ps){const m=p.exec(text);if(m)return m[0];}return null;};
- const n=first(NUMERAL_PATTERNS);if(n!==null)out.push({code:'numeral',match:n});
- const f=first(FORBIDDEN_PATTERNS);if(f!==null)out.push({code:'forbidden_term',match:f});
- const r=first(REGIME_PATTERNS);if(r!==null)out.push({code:'regime_term',match:r});
+ const all=(code:'numeral'|'forbidden_term'|'regime_term',ps:readonly RegExp[])=>{
+  const seen=new Set<string>();
+  for(const p of ps)for(const m of text.matchAll(new RegExp(p.source,p.flags.includes('g')?p.flags:`${p.flags}g`)))if(!seen.has(m[0])){seen.add(m[0]);out.push({code,match:m[0]});}
+ };
+ all('numeral',NUMERAL_PATTERNS);all('forbidden_term',FORBIDDEN_PATTERNS);all('regime_term',REGIME_PATTERNS);
  return out;
 }
 export function validateExplanation(raw:unknown,factIds:ReadonlySet<string>):ValidationResult{

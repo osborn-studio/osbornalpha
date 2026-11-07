@@ -24,6 +24,16 @@ describe('lexical policy — numerals (spec §6.3 step 4, N10)',()=>{
   expect(lexicalFailures('１'.normalize('NFKC'))).toEqual([{code:'numeral',match:'1'}]);
   expect(lexicalFailures('⑤'.normalize('NFKC'))[0]).toMatchObject({code:'numeral',match:'5'});
  });
+ it('collects every distinct matched fragment of each family, not only the first',()=>{
+  expect(lexicalFailures('probability confidence recession stagflation')).toEqual([
+   {code:'forbidden_term',match:'probability'},{code:'forbidden_term',match:'confidence'},
+   {code:'regime_term',match:'stagflation'},{code:'regime_term',match:'recession'}]);
+  expect(lexicalFailures('三个月 and 25bp, 25bp again')).toEqual([
+   {code:'numeral',match:'2'},{code:'numeral',match:'5'},{code:'numeral',match:'bp'},{code:'numeral',match:'三个'}]);
+  const r=validateExplanation(one('probability confidence recession stagflation'),FACTS);
+  expect(r.ok).toBe(false);
+  if(!r.ok)expect(r.failures.map(f=>f.match)).toEqual(['probability','confidence','stagflation','recession']);
+ });
 });
 
 describe('lexical policy — forbidden and regime terms (spec §6.3 steps 5–6)',()=>{
