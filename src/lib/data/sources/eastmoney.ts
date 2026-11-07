@@ -221,7 +221,20 @@ export interface EastmoneyKlineOptions {
   adjustment?: Extract<KlineAdjustment, 'qfq' | 'hfq' | 'none' | 'intraday'>;
   signal?: AbortSignal;
   timeoutMs?: number;
+  // F4
+  /** Last calendar date (YYYY-MM-DD) of the request; Eastmoney returns the latest `limit` bars up to it. Default: open-ended. */
+  endDate?: string;
+  // /F4
 }
+
+// F4
+/** Eastmoney `end=` parameter: endDate as YYYYMMDD, or the open-ended 20500101 the adapter always sent. */
+export function eastmoneyEnd(endDate?: string): string {
+  if (endDate === undefined) return '20500101';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new KlineProviderError('protocol', `Invalid Eastmoney endDate ${endDate}`);
+  return endDate.replace(/-/g, '');
+}
+// /F4
 
 export async function fetchEastmoneyKline(
   ticker: string,
@@ -244,7 +257,9 @@ export async function fetchEastmoneyKline(
     const url =
       `https://push2his.eastmoney.com/api/qt/stock/kline/get?cb=cb` +
       `&secid=${secid}&klt=${klt}&fqt=${fqt}` +
-      `&lmt=${limit}&end=20500101` +
+      // F4: end= follows options.endDate (default unchanged)
+      `&lmt=${limit}&end=${eastmoneyEnd(options.endDate)}` +
+      // /F4
       `&fields1=f1,f2,f3,f4,f5,f6` +
       `&fields2=f51,f52,f53,f54,f55,f56,f57`;
     const json = await fetchJsonp(url, options.timeoutMs ?? 5000, options.signal);

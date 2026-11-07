@@ -12,6 +12,10 @@ import { supabaseFactsDb } from '@/lib/facts/db';
 import { FactsDbError } from '@/lib/facts/types';
 import { audit, type ResearchSupabase } from '@/lib/research/store';
 import { getAdminSupabase } from '@/lib/supabase/admin';
+// F4
+import { resolveJudgmentsItem, type JudgmentsResolveOutcome } from '@/lib/dq/judgments-resolver';
+import { adminJudgmentsDb, resolveCodeVersion } from '@/lib/judgments/deps';
+// /F4
 
 export const dynamic = 'force-dynamic';
 
@@ -21,12 +25,23 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 type Resolution = Exclude<QuarantineStatus, 'open'>;
 const RESOLUTIONS: readonly Resolution[] = ['resolved_accept', 'resolved_reject'];
 const MAX_CHOSEN = 100;
-type Outcome = ResolveOutcome | FactsResolveOutcome | 'run_pending';
+type Outcome = ResolveOutcome | FactsResolveOutcome | 'run_pending'
+  // F4
+  | JudgmentsResolveOutcome
+  // /F4
+  ;
 // facts.* items (spec §7.3): run_pending and already_resolved are 409 (retry later / nothing to do),
 // hook_retried is a successful re-run of materialize on an already accepted item; a retry whose
 // materialize fails again answers 502 (the verdict is committed, the derived layer is not refreshed).
 // plan 3 (§4.6): rule_failed / invalid_choice 400; conflict (generation_moved, conflict_exists, duplicate, replay_required, filing_not_found, not_passing, lineage_changed, scope_missing, unresolved, stale_evaluation, target_not_active, use_dedicated_resolver, read_truncated) 409; batch_mismatch is a 500; refusal bodies are {id, outcome, error:<code>, detail?:{restore_note}} (plan 3 接口对齐记录 #9).
-const HTTP_STATUS: Record<Outcome, number> = { resolved: 200, hook_retried: 200, not_found: 404, already_resolved: 409, run_pending: 409, invalid_choice: 400, rule_failed: 400, conflict: 409 };
+const HTTP_STATUS: Record<Outcome, number> = { resolved: 200, hook_retried: 200, not_found: 404, already_resolved: 409, run_pending: 409, invalid_choice: 400, rule_failed: 400, conflict: 409,
+  // F4 judgments.* items (spec §7.6): verdicts that cannot apply or do not match the item are 400; the settlement
+  // reject needs VERCEL_GIT_COMMIT_SHA for its batch (503 without it)
+  resolution_not_applicable: 400, invalid_resolution: 400, unknown_judgment: 404, code_version_unavailable: 503,
+  // the queue moved to another inconsistency or closed meanwhile (plan audit P1-04 / P1-05): nothing was written
+  stale: 409,
+  // /F4
+};
 const MAX_CANDIDATE_INDEX = 999;
 const AUDITED: readonly Outcome[] = ['resolved', 'hook_retried'];
 
@@ -133,6 +148,18 @@ export async function POST(request: Request, { params }: Ctx) {
         outcome = mapped.outcome;
         if (mapped.code !== undefined) extra = { error: mapped.code };
       }
+    // F4 dataset 'judgments' (spec §7.6): src/lib/dq/judgments-resolver.ts. An accept is audited inside the
+    // settlement RPC transaction (audited=true → no second audit row here); plain verdicts are audited below.
+    } else if (item.dataset === 'judgments') {
+      const r = await resolveJudgmentsItem(
+        { db: adminJudgmentsDb(admin), tables: client, codeVersion: resolveCodeVersion({ allowGit: false }) },
+        item,
+        { status: status as Resolution, resolution: (body as { resolution?: unknown } | null)?.resolution, resolvedBy: user.id },
+      );
+      outcome = r.outcome;
+      if (r.audited) auditAs = null;
+      extra = { judgment_id: r.judgmentId, resolution: r.resolution, seq: r.seq };
+    // /F4
     } else {
       outcome = await resolveQuarantine(client, id, { status: status as Resolution, resolvedBy: user.id });
     }

@@ -7,6 +7,9 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { canonicalize, digest, fail } from '../ingest/pa-v1/json.js';
+// F4 — uuid v8 formatting lives in uuid-v8.ts (judgment framework spec §2.4 item 5)
+import { uuidV8 } from '../../judgments/uuid-v8';
+// /F4
 import { serverTime, transaction, type S4Actor } from './db';
 
 export const JUDGMENT_BACKENDS = ['rule','llm_deepseek','jev','jev_escalated','local_probe','human'] as const;
@@ -52,8 +55,9 @@ export function judgmentId(key: JudgmentKey): string {
   for (const k of ['question_set_version','backend_model','question_id'] as const) if (!text(key[k])) fail('invalid_schema');
   const hex = digest({ snapshot_id: key.snapshot_id, question_set_version: key.question_set_version, backend: key.backend,
     backend_model: key.backend_model, question_id: key.question_id });
-  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0,8)}-${hex.slice(8,12)}-8${hex.slice(13,16)}-${variant}${hex.slice(17,20)}-${hex.slice(20,32)}`;
+  // F4 — extracted verbatim to uuidV8(); behaviour unchanged (ledger.test.ts untouched)
+  return uuidV8(hex);
+  // /F4
 }
 
 
