@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/dq/dashboard-blocks.ts:75` | Every dashboard request downloads **all historical reconciliation rows**, including evidence `detail`, for all seven pairs before counting failures. Weekly cycles continually enlarge this scan; pagination limits individual responses, not total work. The entire dashboard waits for it, making load time and memory grow with retained evidence. Small fixtures do not exercise this behavior. | Compute latest-per-natural-key failure counts in PostgreSQL and return only aggregates, preserving historical evidence. Test repeated cycles and duplicate keys. |
+| 2 | P3 | `src/lib/dq/dashboard-blocks.ts:39` | `unknown_upstream` rows are limited to 100 **by period end**, then sorted by due date afterward. With more than 100 such rows, an earlier-due row can be excluded before the required attention ordering is applied—for example, older `no_rule` rows with null deadlines can crowd out dated rows. | Apply the required due-date ordering, with nulls last and deterministic tie-breakers, before limiting. Add a test exceeding 100 unknown-upstream rows with mixed null and non-null deadlines. |
+
+Verdict: fix required
