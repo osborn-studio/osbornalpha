@@ -50,7 +50,7 @@ describe('templates',()=>{
 describe('validate/cli.ts HANDLERS (Task 12 entries)',()=>{
  it('the three flags are table entries after Task 3\'s four, --release only on --expert/--audit',async()=>{
   const {HANDLERS}=await import('./cli');
-  expect(HANDLERS.map(x=>[x.flag,x.modifiers??[]])).toEqual([['--gold',[]],['--lock',[]],['--gold-diff',[]],['--redact',[]],['--expert',['--release']],['--audit',['--release']],['--manifest',['--online']],['--availability',[]]]);
+  expect(HANDLERS.map(x=>[x.flag,x.modifiers??[]])).toEqual([['--gold',[]],['--gold-admission',[]],['--lock',[]],['--gold-diff',[]],['--redact',[]],['--expert',['--release']],['--audit',['--release']],['--manifest',['--online']],['--availability',[]]]);
  });
  it('runValidate --audit <dir> --release: exit 1 with the finding in checks.audit.findings',async()=>{
   const {runValidate}=await import('./cli');

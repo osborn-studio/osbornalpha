@@ -1,9 +1,10 @@
 /**
  * F6 evidence validators (spec §4.4, §4.5, §7.3).
  *
- *   npx tsx scripts/evals/validate.ts [--gold] [--lock] [--gold-diff <base>] [--redact] [--availability]
+ *   npx tsx scripts/evals/validate.ts [--gold] [--lock] [--gold-diff <base>] [--redact] [--availability] [--gold-admission <file>]
  *
  * --gold       every gold set parses under its format's rules (f6: §4; legacy_plan2: §0 R5-1)
+ * --gold-admission  offline dataset contract preflight: excludes legacy, synthetic, empty and unlocked gold; not a release gate
  * --availability  read-only kind/methodology inventory; diagnostic success is NOT evaluation readiness or a gate pass
  * --lock       every gold set matches lock.json (path, byte sha256, version, format) and vice versa
  * --gold-diff  committed HEAD against <base>: no case removed/renamed, changes carry a version bump
