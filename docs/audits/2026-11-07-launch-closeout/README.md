@@ -1,5 +1,28 @@
 # 美林时钟与宏观缓存发布记录（2026-11-07）
 
+## 后续发布跟踪（#137–#142）
+
+#137–#141 已合并并部署，精确提交为 `dc47ba2eb0768971f7362750bf504a90ceb68026`；[该提交 CI 42383255509](https://github.com/osborn-studio/osbornalpha/actions/runs/42383255509) 已通过。其中 #138 修复过期共享缓存的重复构建，并让认证策略请求绕过浏览器 HTTP 缓存；#137 是 F6 数据有效性与诊断修复，#140 是公司回放不再读实时收件箱，#141 是行业离线对账诊断与 I-3 决策计划。后三者不是对应整个模块完成，也没有启用 F6 禁用评测、实施 I-3 估值流水线或新增许可证／判断方法。
+
+2026-11-07 22:59:58（北京时间）发布检查：Vercel `dpl_8D8nv5DAfZ6KEFz4yy1sBWnbsnq2`，`https://stock-monitor-osicj0o5j-gilosbornhellos-projects.vercel.app`，READY 并绑定 `osbornalpha.com`。宏观策略与判断 flags 保持开启。公开方法／中美判断卡返回 200，响应 codeVersion 为 `dc47ba2e`，v2 公式 hash 未变；匿名 transmission、cycle、policy 及重复 transmission 均为 401、`Cache-Control: no-store`；settle preview 为 200、`errors=[]`。脱敏证据见 [cache-release-evidence.json](cache-release-evidence.json)。
+
+该轮使用公开和匿名 HTTP 检查，**没有完成登录态成功响应 `private, no-store`、退出登录界面、跨实例缓存命中或浏览器冷暖计时验收**。不能用匿名 401 的耗时代替业务接口耗时；之前的 `e0b82b25` US 登录结果也不是 `dc47ba2e` 的新视觉验收。
+
+紧凑 widget 视觉重做另在 [draft PR #142](https://github.com/osborn-studio/osbornalpha/pull/142)。本地测试／构建结果不能替代视觉验收；浏览器复核发现桌面展开表格裁切，修复和重新检查仍在进行。该 widget 不在 `dc47ba2e` 中，不能随缓存发布一起宣布上线。下面 `e0b82b25` 的记录保留为上一阶段的实际生产证据。
+
+### 并行后续工作
+
+以下独立 CLI 会话均明确使用 `gpt-6.1-sol`；mmx 用于独立审计／验证建议。表内是进行中工作分工，不是完成或发布声明。各会话的新发现须经复现、修复测试、PR 和部署验证才能更新状态。
+
+| 会话 | 当前范围 | 不能由此推定 |
+|---|---|---|
+| cache-regression | 过期、并发与缓存失效回归审查 | 生产 p95 或跨实例命中已达标 |
+| macro-integration-audit | 宏观判断／快照／视图集成审查 | 未复验页面已通过 |
+| industry-valuation-next | I-3 下一步与数值／口径缺口 | 已实现估值流水线或取得授权 |
+| f6-evaluation-next | gold 准入与校准证据门审查 | 禁用评测可开启、已有概率方法 |
+| company-readiness-next | 公司证据门、回放及剩余接线 | CN 定位、issuer 方法或人工黄金集已完成 |
+| widget-correction | 修展开表格裁切并复验多尺寸 UI | draft PR 已获视觉接受或已部署 |
+
 ## 当前发布范围
 
 本次目标为 `/macro` 登录态可见的四象限投资时钟，以及重复打开、刷新和策略读取的缓存优化。仅事实指标页面可用不代表美林时钟验收完成。
