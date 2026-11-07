@@ -6,7 +6,7 @@ import {runClassificationsSw} from './classifications';
 import {memoryIndustryDb} from './memory-industry-db';
 import {fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
-import {isNullToDate,planSourceMemberships,runMembershipsSw,sameContent,sourceKey} from './source-memberships';
+import {findSourceOverlaps,isNullToDate,planSourceMemberships,runMembershipsSw,sameContent,sourceKey} from './source-memberships';
 import type {FetchedMember} from './source-memberships';
 import type {IndustryDeps,ManifestStore,SourceMembershipRow} from './types';
 
@@ -53,6 +53,30 @@ describe('planSourceMemberships',()=>{
   expect(plan.inputs.map(i=>[i.ts_code,i.l3_code,i.locator.code_aliases])).toEqual([['600399.SH','850401.SI',{l3_code:'850412.SI'}]]);
   expect(plan.unknownCodes.map(u=>[u.row.ts_code,u.codes])).toEqual([['600183.SH',['859999.SI']]]);
  });
+ it('with a tree every code must sit at its level and form one ancestry (l2.parent = l1, l3.parent = l2)',()=>{
+  const tree=new Map([['801080.SI',{level:1,parent_code:null}],['801083.SI',{level:2,parent_code:'801080.SI'}],['850822.SI',{level:3,parent_code:'801083.SI'}],
+   ['801120.SI',{level:1,parent_code:null}],['801125.SI',{level:2,parent_code:'801120.SI'}]]);
+  const plan=planSourceMemberships([
+   m({}),
+   m({ts_code:'000001.SZ',l1_code:'801120.SI'}),                          // L1 B with L2/L3 of A: ancestry mismatch
+   m({ts_code:'000002.SZ',l1_code:'801083.SI'}),                          // an L2 code in the L1 slot: wrong level
+  ],[],tree);
+  expect(plan.inputs.map(i=>i.ts_code)).toEqual(['600183.SH']);
+  expect(plan.unknownCodes.map(u=>[u.row.ts_code,u.reason,u.codes])).toEqual([['000001.SZ','classification_hierarchy_mismatch',['801120.SI','801083.SI','850822.SI']],['000002.SZ','classification_code_unknown',['801083.SI']]]);
+ });
+ it('plans against ALL current records by natural key: an l1 correction is a change with its old content (not a new key)',()=>{
+  const plan=planSourceMemberships([m({l1_code:'801120.SI',l2_code:'801125.SI'})],[cur({})]);
+  expect(plan.expected).toEqual({newKeys:0,unchanged:0,nullToDate:0,changed:1});
+  expect(plan.changes[0]).toMatchObject({key:'sw2021:2021:tushare:index_member_all:600183.SH:850822.SI:2021-07-30',old:{l1_code:'801080.SI'},next:{l1_code:'801120.SI'}});
+ });
+ it('findSourceOverlaps: windows [in, out+1) under different l3 codes overlap; touching windows and the same l3 do not',()=>{
+  const inp=(l3:string,in_date:string,out_date:string|null)=>planSourceMemberships([m({l3_code:l3,in_date:in_date.replace(/-/g,''),out_date:out_date?out_date.replace(/-/g,''):null})],[]).inputs[0];
+  expect(findSourceOverlaps([inp('A','2020-01-01','2020-05-31'),inp('B','2020-06-01',null)],[])).toEqual([]);           // B starts the day after A's last member day
+  expect(findSourceOverlaps([inp('A','2020-01-01','2020-06-01'),inp('B','2020-06-01',null)],[]).map(o=>[o.a.l3_code,o.b.l3_code])).toEqual([['A','B']]);
+  expect(findSourceOverlaps([inp('A','2020-01-01',null),inp('A','2021-01-01',null)],[])).toEqual([]);
+  const old=cur({l3_code:'OLD',in_date:'2019-01-01',out_date:null,id:'o1'});
+  expect(findSourceOverlaps([inp('A','2020-01-01','2020-05-31')],[old]).map(o=>[o.a.l3_code,o.b.l3_code])).toEqual([['OLD','A']]);   // a current record this fetch does not replace
+ });
  it('helpers: sourceKey, sameContent, isNullToDate',()=>{
   const a={source:'s',ts_code:'t',l3_code:'l',in_date:'2021-01-01',name:'n',l1_code:'a',l2_code:'b',out_date:null as string|null};
   expect(sourceKey(a)).toBe('sw2021:2021:s:t:l:2021-01-01');
@@ -93,7 +117,6 @@ describe('runMembershipsSw (real index_member_all recordings: 801120.SI and 8017
    const r=await fixtureTushareCall()(api,params,fields);
    const f=r.fields;const ts=f.indexOf('ts_code'),out=f.indexOf('out_date'),isNew=f.indexOf('is_new');
    if(api!=='index_member_all')return r;
-   const moved=r.items.find(it=>it[ts]==='600866.SH');
    let items=r.items.map(it=>it[ts]==='600090.SH'?it.map((v,i)=>i===out?'20170620':v):it);
    if(params.is_new==='N')items=items.filter(it=>it[ts]!=='600866.SH');
    if(params.is_new==='Y'&&params.l1_code==='801120.SI'){
@@ -101,7 +124,7 @@ describe('runMembershipsSw (real index_member_all recordings: 801120.SI and 8017
     const src=n.items.find(it=>it[ts]==='600866.SH')!;
     items=[...items,src.map((v,i)=>i===out?null:i===isNew?'Y':v)];
    }
-   return {...r,items:moved&&params.is_new==='N'?items:items};
+   return {...r,items};
   };
   const {tables,db,deps}=await setup(earlier);
   await runMembershipsSw(deps,{apply:true,sleep:noSleep});
@@ -124,7 +147,7 @@ describe('runMembershipsSw (real index_member_all recordings: 801120.SI and 8017
    const r=await fixtureTushareCall()(api,params,fields);
    if(api!=='index_member_all'||params.is_new!=='Y'||params.l1_code!=='801120.SI')return r;
    const f=r.fields;const ts=f.indexOf('ts_code'),l1=f.indexOf('l1_code'),l2=f.indexOf('l2_code'),l3=f.indexOf('l3_code');
-   return {...r,items:r.items.map(it=>it[ts]==='600519.SH'?it.map((v,i)=>i===l1?'801040.SI':i===l2?'801043.SI':i===l3?'850412.SI':v):it[ts]==='000858.SZ'?it.map((v,i)=>i===l3?'859999.SI':v):it)};
+   return {...r,items:r.items.map(it=>it[ts]==='600519.SH'?it.map((v,i)=>i===l1?'801040.SI':i===l2?'801045.SI':i===l3?'850412.SI':v):it[ts]==='000858.SZ'?it.map((v,i)=>i===l3?'859999.SI':v):it)};
   };
   const {tables,db,deps}=await setup(edited);
   const r=await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
@@ -133,6 +156,105 @@ describe('runMembershipsSw (real index_member_all recordings: 801120.SI and 8017
   const moutai=(await db.currentSourceMemberships({})).find(s=>s.ts_code==='600519.SH')!;
   expect(moutai).toMatchObject({l1_code:'801040.SI',l3_code:'850401.SI',locator:{code_aliases:{l3_code:'850412.SI'}}});
   expect(tables.rows('dq_quarantine').map(x=>[x.reason_code,(x.detail as {codes:string[]}).codes])).toEqual([['classification_code_unknown',['859999.SI']]]);
+ });
+ it('ambiguous rows: one quarantine item per row with both variants, a non-info error → batch partial (never success)',async()=>{
+  const dupe:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.is_new!=='Y'||params.l1_code!=='801120.SI')return r;
+   const ts=r.fields.indexOf('ts_code'),out=r.fields.indexOf('out_date');
+   const first=r.items.find(it=>it[ts]==='600519.SH')!;
+   return {...r,items:[...r.items,first.map((v,i)=>i===out?'20240110':v)]};
+  };
+  const {tables,db,deps}=await setup(dupe);
+  const r=await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  expect(r.status).toBe('partial');
+  expect(r.errors.filter(e=>e.code==='source_membership_ambiguous')).toHaveLength(2);
+  expect(r.counts).toMatchObject({fetched:188,inserted:186,quarantined:2});
+  expect(r.counts.inserted+r.counts.duplicates+r.counts.quarantined+r.counts.failed).toBe(r.counts.fetched);
+  const q=tables.rows('dq_quarantine').filter(x=>x.reason_code==='source_membership_ambiguous');
+  expect(q).toHaveLength(2);expect(new Set(q.map(x=>x.natural_key)).size).toBe(2);
+  expect((q[0].payload as {variants:unknown[]}).variants).toHaveLength(2);
+  expect((await db.currentSourceMemberships({})).some(s=>s.ts_code==='600519.SH')).toBe(false);
+  expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.source')).toMatchObject({dataset:'industry.sw2021.source'});
+ });
+ it('cross-L1 duplicates: the same natural key under two L1s with different content is ambiguous (not insert-then-supersede)',async()=>{
+  const twoL1:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.is_new!=='Y'||params.l1_code!=='801780.SI')return r;
+   // the page of ANOTHER L1 lists 600519.SH's record again with a different name
+   const real=await fixtureTushareCall()(api,{l1_code:'801120.SI',is_new:'Y'},fields);
+   const ts=real.fields.indexOf('ts_code'),nm=real.fields.indexOf('name');
+   return {...r,items:[...r.items,real.items.find(it=>it[ts]==='600519.SH')!.map((v,i)=>i===nm?'改名':v)]};
+  };
+  const {db,deps}=await setup(twoL1);
+  const r=await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI','801780.SI']});
+  expect(r.status).toBe('partial');
+  expect(r.errors.map(e=>e.code)).toContain('source_membership_ambiguous');
+  expect((await db.currentSourceMemberships({})).some(s=>s.ts_code==='600519.SH')).toBe(false);
+ });
+ it('an l1 correction of an existing record: the change quarantine carries the natural key, old and new content',async()=>{
+  const {tables,db,deps}=await setup();
+  await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  const moved:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.l1_code!=='801120.SI')return r;
+   const ts=r.fields.indexOf('ts_code'),l1=r.fields.indexOf('l1_code');
+   return {...r,items:r.items.map(it=>it[ts]==='600519.SH'?it.map((v,i)=>i===l1?'801780.SI':v):it)};
+  };
+  const r=await runMembershipsSw({...deps,tushare:moved},{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  const q=tables.rows('dq_quarantine').filter(x=>x.reason_code==='classification_hierarchy_mismatch');
+  expect(r.status).toBe('partial');
+  expect(q).toHaveLength(1);   // 801780.SI is not the ancestor of the L2/L3 codes: held back, the stored record stays
+  expect((await db.currentSourceMemberships({})).find(s=>s.ts_code==='600519.SH')!.l1_code).toBe('801120.SI');
+ });
+ it('overlapping windows across l3 codes are quarantined source_membership_overlap without blocking the writes (batch partial)',async()=>{
+  const overlap:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.is_new!=='Y'||params.l1_code!=='801120.SI')return r;
+   const ts=r.fields.indexOf('ts_code'),l3=r.fields.indexOf('l3_code');
+   const base=r.items.find(it=>it[ts]==='600519.SH')!;
+   const other=r.items.find(it=>it[l3]!==base[l3])!;
+   return {...r,items:[...r.items,base.map((v,i)=>i===l3?other[l3]:i===r.fields.indexOf('l2_code')?other[r.fields.indexOf('l2_code')]:v)]};
+  };
+  const {tables,db,deps}=await setup(overlap);
+  const r=await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  expect(r.status).toBe('partial');
+  expect(r.errors.map(e=>e.code)).toContain('source_membership_overlap');
+  expect(tables.rows('dq_quarantine').filter(x=>x.reason_code==='source_membership_overlap')).toHaveLength(1);
+  expect((await db.currentSourceMemberships({})).filter(s=>s.ts_code==='600519.SH')).toHaveLength(2);   // both written
+ });
+ it('a failing current-records read or quarantine write finishes the batch (failed / partial), never running, and records a failed attempt',async()=>{
+  const {tables,db,deps}=await setup();
+  const readFail={...db,currentSourceMemberships:async()=>{throw new Error('read_down');}} as typeof db;
+  const r1=await runMembershipsSw({...deps,db:readFail},{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  expect(r1.status).toBe('failed');expect(r1.errors.map(e=>e.code)).toContain('db_error');
+  expect(tables.rows('ingest_batches').map(b=>b.status).filter(x=>x==='running')).toEqual([]);
+  expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.source')).toMatchObject({consecutive_errors:1});
+  // quarantine write fails: unknown-code rows are counted failed, the batch is partial/failed, not running
+  const bad:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.is_new!=='Y'||params.l1_code!=='801120.SI')return r;
+   const ts=r.fields.indexOf('ts_code'),l3=r.fields.indexOf('l3_code');
+   return {...r,items:r.items.map(it=>it[ts]==='000858.SZ'?it.map((v,i)=>i===l3?'859999.SI':v):it)};
+  };
+  const failingTables={...tables,insert:async(t:string,row:Record<string,unknown>)=>{if(t==='dq_quarantine')throw new Error('quarantine_down');return tables.insert(t,row);}} as typeof tables;
+  const r2=await runMembershipsSw({...deps,tables:failingTables,tushare:bad},{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  expect(r2.status).toBe('partial');
+  expect(r2.counts).toMatchObject({fetched:187,inserted:186,failed:1,quarantined:0});
+  expect(r2.errors.map(e=>e.code)).toEqual(expect.arrayContaining(['classification_code_unknown','quarantine_error']));
+  expect(tables.rows('ingest_batches').map(b=>b.status)).not.toContain('running');
+  // a change whose quarantine write fails after the successful upsert: counted once (versioned), plus quarantine_error; not failed
+  const renamed:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);
+   if(api!=='index_member_all'||params.l1_code!=='801120.SI')return r;
+   const ts=r.fields.indexOf('ts_code'),nm=r.fields.indexOf('name');
+   return {...r,items:r.items.map(it=>it[ts]==='600519.SH'?it.map((v,i)=>i===nm?'改名':v):it)};
+  };
+  await runMembershipsSw(deps,{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  const r3=await runMembershipsSw({...deps,tables:failingTables,tushare:renamed},{apply:true,sleep:noSleep,l1Codes:['801120.SI']});
+  expect(r3.counts).toMatchObject({versioned:1,failed:0,quarantined:0});
+  expect(r3.errors.map(e=>e.code)).toEqual(expect.arrayContaining(['source_membership_changed','quarantine_error']));
+  expect(r3.status).toBe('partial');
  });
  it('dry run writes nothing and reports expected counts; quota exhaustion stops the job with quota_exhausted',async()=>{
   const {tables,db,deps}=await setup();

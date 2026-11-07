@@ -145,6 +145,61 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await code(db.unresolvedCount({code:l1,level:4,on:'2022-01-01',knownBy:'2022-01-01'}))).toBe('unknown');
   });
 
+  it('delistings (K4): upsertDelistings inserts, keeps unchanged, updates a changed date with new evidence; unresolved records of a ts_code delisted on or before `on` are not counted',async()=>{
+   const b=await h.batch();const b2=await h.batch();const l1=`ZD${hex(3)}`;const ts=`Z${hex(3)}.SZ`,tsLive=`Z${hex(3)}.SH`;
+   const d=(ts_code:string,delist_date:string,raw_hash=sha())=>({ts_code,delist_date,list_status:'D',observed_at:'2026-11-06T00:00:00.000Z',raw_hash});
+   const first=d(ts,'2022-06-30');
+   expect(await db.upsertDelistings(b,[first,first])).toEqual({inserted:1,unchanged:0,changed:[]});                     // repeated input in one call counts once
+   expect(await db.upsertDelistings(b2,[{...first,raw_hash:sha()}])).toEqual({inserted:0,unchanged:1,changed:[]});     // same date: the stored row (and its evidence) stays
+   expect((await db.delistings()).find(r=>r.ts_code===ts)).toEqual({...first,batch_id:b});
+   const moved=d(ts,'2022-09-30');
+   expect(await db.upsertDelistings(b2,[moved])).toEqual({inserted:0,unchanged:0,changed:[{ts_code:ts,old_date:'2022-06-30',new_date:'2022-09-30'}]});
+   expect((await db.delistings()).find(r=>r.ts_code===ts)).toEqual({...moved,batch_id:b2});
+   await db.upsertSourceMemberships(b,[sourceInput({l1_code:l1,ts_code:ts}),sourceInput({l1_code:l1,ts_code:tsLive})]);
+   const q=(on:string)=>db.unresolvedCount({code:l1,level:1,on,knownBy:'2026-01-01'});
+   expect(await q('2022-09-29')).toBe(2);                    // delisted later than `on`
+   expect(await q('2022-09-30')).toBe(1);                    // delist_date <= on: no longer unresolved
+   expect((await db.unresolvedOf({code:l1,level:1,on:'2023-01-01',knownBy:'2026-01-01'})).map(u=>u.ts_code)).toEqual([tsLive]);
+  });
+
+  it('quarantineMembershipLineage: a rejected replacement quarantines the ok rows of its resolved predecessor atomically (Codex batch 3 P1); other records are untouched',async()=>{
+   const v=await tree();
+   const {b,iss,src,rec}=await applied(v);
+   const other=await applied(v);
+   const up=await db.upsertSourceMemberships(b,[{...src,name:'改名'}]);       // a correction: the resolved record is superseded by an unresolved replacement
+   expect(up.superseded).toBe(1);
+   const [repl]=(await db.currentSourceMemberships({l1Code:src.l1_code})).filter(r=>r.id!==rec.id);
+   expect(repl.issuer_id).toBeNull();
+   expect((await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).filter(m=>m.status==='ok')).toHaveLength(3);
+   expect(await code(db.quarantineMembershipLineage(b,'sw2021',v,[rec.id],'no_issuer'))).toBe('membership_conflict');   // not current
+   const res=await db.quarantineMembershipLineage(b,'sw2021',v,[repl.id],'no_issuer');
+   expect(res.quarantined).toBe(3);expect(res.membership_ids).toHaveLength(3);
+   const mine=await db.membershipsOfIssuer(iss,{scheme:'sw2021'});
+   expect(mine.filter(m=>m.status==='ok')).toEqual([]);
+   expect(mine.filter(m=>m.status==='quarantined').map(m=>(m.provenance as Record<string,unknown>).quarantine)).toEqual(Array(3).fill({reason:'no_issuer',batch_id:b,replacement_source_ids:[repl.id]}));
+   expect((await db.membershipsOfIssuer(other.iss,{scheme:'sw2021'})).filter(m=>m.status==='ok')).toHaveLength(3);
+   expect(await db.membershipCandidates({scheme:'sw2021',version:v,code:'A1',level:1,on:'2025-01-01'}).then(r=>r.filter(m=>m.status==='ok').map(m=>m.issuer_id))).toEqual([other.iss]);
+   expect(await db.quarantineMembershipLineage(b,'sw2021',v,[repl.id],'no_issuer')).toEqual({quarantined:0,membership_ids:[]});   // idempotent
+   expect(await code(db.quarantineMembershipLineage(b,'sw2021',v,[randomUUID()],'no_issuer'))).toBe('membership_conflict');
+  });
+
+  it('delisting evidence in provenance: carried on insert, merged when an open ok row is closed in place, and kept on a quarantined correction',async()=>{
+   const v=await tree();const b=await h.batch();const iss=await h.issuer();const src=sourceInput();
+   await db.upsertSourceMemberships(b,[src]);
+   const [rec]=await db.currentSourceMemberships({l1Code:src.l1_code});
+   const ev={delist_date:'2023-03-01',raw_hash:sha(),batch_id:b,observed_at:'2026-11-06T00:00:00.000Z'};
+   const open=threeRows(rec.id);
+   await db.applyMemberships(b,iss,'sw2021',v,open,[rec.id],{method:'today'});
+   expect((await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).map(m=>m.provenance.delisting)).toEqual([undefined,undefined,undefined]);
+   const closing=threeRows(rec.id,{valid_to:'2023-03-01',valid_to_available_date:'2023-03-01'}).map(t=>({...t,provenance:{...t.provenance,delisting:ev}}));
+   expect(await db.applyMemberships(b,iss,'sw2021',v,closing,[rec.id],{method:'today'})).toMatchObject({closed:3,inserted:0});
+   const closed=(await db.membershipsOfIssuer(iss,{scheme:'sw2021'}));
+   expect(closed.map(m=>[m.valid_to,m.provenance.delisting])).toEqual(Array(3).fill(['2023-03-01',ev]));
+   const gone=threeRows(rec.id,{valid_to:'2021-07-30',valid_to_available_date:'2021-07-30'}).map(t=>({...t,provenance:{...t.provenance,delisting:{...ev,delist_date:'2021-07-30'}}}));
+   expect(await db.correctMembershipWindows(b,iss,'sw2021',v,rec.id,gone)).toMatchObject({quarantined:3});
+   expect((await db.membershipsOfIssuer(iss,{scheme:'sw2021'})).map(m=>[m.status,m.provenance.delisting])).toEqual(Array(3).fill(['quarantined',ev]));   // existing evidence is never overwritten
+  });
+
   it('applyMemberships: three rows and the resolution in one call; a replay is all duplicates; an out_date correction supersedes the old rows and keeps them as history',async()=>{
    const v=await tree();
    const {b,iss,src,rec,res}=await applied(v);

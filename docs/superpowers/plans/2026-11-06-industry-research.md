@@ -177,6 +177,12 @@ export interface MembershipTarget{code:string;level:number;valid_from:string;val
 export interface ApplyMembershipsResult{inserted:number;closed:number;superseded:number;duplicates:number;membership_ids:string[]}
 /** correctMembershipWindows: quarantined = ok rows whose corrected window is empty (R3-1). */
 export interface CorrectWindowsResult extends ApplyMembershipsResult{quarantined:number}
+/** industry_security_delistings row (spec 7th draft K4; table in migration 1, service_role select/insert/update) */
+export interface DelistingRow{ts_code:string;delist_date:string;list_status:string;observed_at:string;batch_id:string;raw_hash:string}
+export type DelistingInput=Omit<DelistingRow,'batch_id'>;
+export interface UpsertDelistingsResult{inserted:number;unchanged:number;changed:{ts_code:string;old_date:string;new_date:string}[]}
+/** quarantineMembershipLineage (Codex batch 3 P1): ok rows of the predecessors of rejected replacement records, moved to quarantined. */
+export interface QuarantineLineageResult{quarantined:number;membership_ids:string[]}
 
 /** Point-in-time query (spec §4.6) */
 export interface MembersAtQuery{scheme:Scheme;version:SchemeVersion;code:string;level:number;on:string;knownBy:string}
@@ -251,6 +257,12 @@ export interface IndustryDb{
  applyMemberships(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,rows:MembershipTarget[],sourceIds:string[],resolution:Record<string,unknown>):Promise<ApplyMembershipsResult>;
  /** Rewrites ok windows of ONE current, resolved record (superseded → corrected row; R2-2); an empty corrected window quarantines the row (R3-1). */
  correctMembershipWindows(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,sourceId:string,rows:MembershipTarget[]):Promise<CorrectWindowsResult>;
+ /** Quarantines the ok rows of the predecessors (supersession chain) of current, unresolved replacement records, atomically (rpc quarantine_industry_membership_lineage; replacement records not current/unresolved → membership_conflict). */
+ quarantineMembershipLineage(batch:string,scheme:Scheme,version:SchemeVersion,sourceIds:string[],reason:string):Promise<QuarantineLineageResult>;
+ // delistings (K4): direct table writes (service_role insert/update on industry_security_delistings)
+ /** New ts_code → inserted; same date → unchanged (stored row and evidence kept); other date → updated with the new evidence and listed in `changed` (caller quarantines delist_date_changed). */
+ upsertDelistings(batch:string,rows:DelistingInput[]):Promise<UpsertDelistingsResult>;
+ delistings():Promise<DelistingRow[]>;
  /** Lease-fenced (R2-3): lease_lost unless industry_sync_scope(issuer,'sic') is leased to fence.leaseBatch and unexpired; code null = provenance only ('none'). */
  applySicMembership(batch:string,issuer:string,observed:string,code:string|null,provenance:Record<string,unknown>,fence:{leaseBatch:string;secSubmissions?:Record<string,unknown>|null}):Promise<'inserted'|'duplicate'|'changed'|'none'>;
  /** All rows of the code (any status) whose windows can intersect `on`; callers filter with memberships.ts */
@@ -393,6 +405,7 @@ export function pgIndustryDb(pool:Pool):IndustryDb;
 
 - **B1 行业事实宇宙读来源记录的方式**：`industryCnUniverse(tables, today, skipped)`（Task 6）经 service-role `TableClient` 直接 `select` `industry_source_memberships`（迁移一给 `service_role` 该表 `select`），因为生产的 `desiredCn` 只持有 `tables` + `FactsDb`。生产（`supabaseTableClient`）与数据库测试（`pgTableClient`）读到的就是 `IndustryDb` 写入的同一张表；纯内存单测直接把来源行写进 `memoryTableClient`（Task 6 的做法）。`memoryIndustryDb` 的来源记录在其私有状态里，**不**经 `TableClient` 可见——不要把 `memoryIndustryDb` 与 `industryCnUniverse` 组合进同一个单测。
 - **B1a 成分窗口（规格第 7 稿 K3）**：`out_date` 是最后成员日（含），退市不关上游窗口。Task 8 写归属：`valid_to = valid_to_available_date = windowEnd(out_date, delist_date) = min(out_date + 1 日, delist_date)`（皆空 → null）；`delist_date` 来自每次运行一次的 `stock_basic(list_status='D')`；`in_date >= delist_date` → 不写，隔离 `membership_after_delist` + `resolution_error`。`stock_basic` 必须显式取 `L`、`D`、`P`（默认只返回 `L`；Task 5 `load-a-share` 三遍取，D 行只记 `skipped_summary(delisted)`）。分类：`parent_code` 属 `industry_code` 命名空间（原值在 `attributes.parent_industry_code`）；成员代码经 `SW2021_CODE_ALIASES` 映射（原值在 `locator.code_aliases`），树外代码隔离 `classification_code_unknown`。Task 14 直接播种归属时也用 `windowEnd`。
+- **B1d 退市日期持久化（规格第 7 稿 K4）**：`industry_security_delistings(ts_code pk, delist_date, list_status, observed_at, batch_id, raw_hash)`（迁移 1；service_role 可 select/insert/update）由 `load-a-share` 与 `runResolveMemberships` 的 `stock_basic(D)` 趟经 `delistings.ts`/`upsertDelistings` 写入（首个证据保留，日期变化 → 更新 + `delist_date_changed` 隔离）；`n_unresolved`（TS `unresolvedAt`、内存、pg、supabase 一致）排除 `delist_date <= on` 的 ts_code；无可用 `delist_date` 的 D 行不等于“未退市”：该 ts_code 的记录不应用（`delist_date_missing`）；退市证据进入成员行 `provenance.delisting`（插入、就地关窗、纠正行）。被拒的替换记录（`no_issuer`/`membership_after_delist`/…）使其已解析前任记录的 `ok` 行经 `quarantineMembershipLineage` 原子隔离。
 - **B1b 退市后补关窗**（Codex 计划审计第 1 轮 #3）：`runResolveMemberships` 每次都取 `stock_basic(D)`，并对**已解析**的当前来源记录调用 `reconcileDelistings`：其 `ok` 行仍开着而 K3 窗口现已有终点 → 用同一条记录重新 `applyMemberships`（函数第 3 步把开着的行就地关到 `windowEnd`，保留发行人与 membership_id）；已关闭但终点不同（退市晚于窗口关闭才得知）→ `correctMembershipWindows`（Codex 计划审计第 2 轮 R2-2）：同一事务内旧 `ok` 行置 `superseded`、`superseded_by` 指向按 K3 截短的新行（同 `source_membership_id`，谱系保留），记 `delistCorrected`；数据库拒绝时才隔离 `membership_delist_conflict`。K3 终点 `<=` 窗口起点（退市在窗口开始当日或之前，开着或已关闭都一样；Codex 计划审计第 3 轮 R3-1）→ 同一函数在同一事务内把这些 `ok` 行改为 `quarantined`（provenance 加 `quarantine{reason:'membership_after_delist'}`），聚合不再计入，另记 `dq_quarantine(membership_after_delist)`、`afterDelist`。
 - **B1c SIC 调度租约**（Codex 计划审计第 1 轮 #6/#7）：`industry_sync_scope` 行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领（`claimSicScopeRow`：并发读到同一行的两个 worker 只有一个成功），完成以 `lease_batch_id` 为栅栏（`finishSicScopeRow`：租约被别人接手的 worker 写不进结果，记 `lease_lost`）；**数据写入也在事务内验租约**（Codex 计划审计第 2 轮 R2-3）：`apply_sic_memberships(…, p_lease_batch, p_sec_submissions)` 锁发行人后 `FOR UPDATE` 锁住该调度行并要求 `lease_batch_id = p_lease_batch and lease_until > clock_timestamp()`，否则 `lease_lost`（先锁行、再以 `clock_timestamp()` 而非事务起始的 `now()` 判过期，Codex 计划审计第 3 轮 R3-2：等锁等过租约终点的调用也被拒）；`issuers.provenance.sec_submissions` 也只经这个函数写；`runMembershipsSic` 收到 `lease_lost` 不隔离、不写完成；`syncSicScope` 只 insert（23505 忽略，从不覆盖已有行与租约），离开 US 事实范围的行 compare-and-swap 置 `next_due_at = RETIRED_DUE`（租约中不动），回到范围时重新激活；`runMembershipsSic` 分页筛选（在范围内、租约空闲）直到凑满 `limit`。
 - **B2 `membersAtPure`**（Task 8）只返回 `isMemberAt` 成立的行，每个发行人一行（`valid_from` 最大者），按 `issuer_id` 排序；Task 12 的再去重是防御性的。

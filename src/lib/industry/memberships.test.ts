@@ -78,4 +78,21 @@ describe('unresolvedAt / countUnresolved (spec §5.2 n_unresolved)',()=>{
   expect(countUnresolved(rows,{code:'801120.SI',level:1,on:'2023-10-21',knownBy:'2026-11-09'})).toBe(0);
   expect(unresolvedAt(rows,{code:'801080.SI',level:1,on:'2023-12-31',knownBy:'2026-11-09'}).map(r=>r.ts_code)).toEqual(['688999.SH']);
  });
+ it('K4: a ts_code delisted on or before `on` is not unresolved (recorded delisting 002770.SZ, 2022-06-23; upstream window still open)',()=>{
+  const rec=src({ts_code:'002770.SZ',l1_code:'801120.SI',l2_code:'801124.SI',l3_code:'851241.SI',in_date:'2015-01-19',out_date:null});
+  const delist=new Map([['002770.SZ','2022-06-23']]);
+  const q=(on:string)=>({code:'801120.SI',level:1,on,knownBy:'2026-11-09',delist});
+  expect(countUnresolved([rec],q('2022-06-22'))).toBe(1);
+  expect(countUnresolved([rec],q('2022-06-23'))).toBe(0);
+  expect(countUnresolved([rec],q('2023-12-31'))).toBe(0);
+  expect(countUnresolved([rec],{code:'801120.SI',level:1,on:'2023-12-31',knownBy:'2026-11-09'})).toBe(1);   // without the delisting map nothing is excluded
+ });
+ it('an invalid level throws like the database adapters; the record kept per ts_code is deterministic (ts_code, in_date, id)',()=>{
+  expect(()=>unresolvedAt(rows,{code:'x',level:4,on:'2023-12-31',knownBy:'2026-11-09'})).toThrow('invalid_level:4');
+  expect(()=>unresolvedAt([],{code:'x',level:0,on:'2023-12-31',knownBy:'2026-11-09'})).toThrow('invalid_level:0');
+  const a=src({id:'b-late',in_date:'2022-09-01'}),b=src({id:'a-early',in_date:'2022-08-01'}),c=src({id:'a-early2',in_date:'2022-08-01'});
+  const q={code:'801080.SI',level:1,on:'2023-12-31',knownBy:'2026-11-09'};
+  expect(unresolvedAt([a,c,b],q).map(r=>r.id)).toEqual(['a-early']);
+  expect(unresolvedAt([b,a,c],q).map(r=>r.id)).toEqual(['a-early']);
+ });
 });

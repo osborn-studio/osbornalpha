@@ -53,6 +53,13 @@ export interface ApplyMembershipsResult{inserted:number;closed:number;superseded
 /** correctMembershipWindows: quarantined = ok rows whose corrected window is empty (R3-1). */
 export interface CorrectWindowsResult extends ApplyMembershipsResult{quarantined:number}
 
+/** industry_security_delistings row (spec 7th draft K4): delisting date of a ts_code with the stock_basic page evidence */
+export interface DelistingRow{ts_code:string;delist_date:string;list_status:string;observed_at:string;batch_id:string;raw_hash:string}
+export type DelistingInput=Omit<DelistingRow,'batch_id'>;
+export interface UpsertDelistingsResult{inserted:number;unchanged:number;changed:{ts_code:string;old_date:string;new_date:string}[]}
+/** quarantineMembershipLineage: ok rows of the predecessors of the given replacement records moved to quarantined. */
+export interface QuarantineLineageResult{quarantined:number;membership_ids:string[]}
+
 /** Point-in-time query (spec §4.6) */
 export interface MembersAtQuery{scheme:Scheme;version:SchemeVersion;code:string;level:number;on:string;knownBy:string}
 
@@ -126,6 +133,12 @@ export interface IndustryDb{
  applyMemberships(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,rows:MembershipTarget[],sourceIds:string[],resolution:Record<string,unknown>):Promise<ApplyMembershipsResult>;
  /** Rewrites ok windows of ONE current, resolved record (superseded → corrected row; R2-2); an empty corrected window quarantines the row (R3-1). */
  correctMembershipWindows(batch:string,issuer:string,scheme:Scheme,version:SchemeVersion,sourceId:string,rows:MembershipTarget[]):Promise<CorrectWindowsResult>;
+ /** Quarantines the ok rows of the predecessors (supersession chain) of current, unresolved replacement records, atomically (rpc quarantine_industry_membership_lineage). */
+ quarantineMembershipLineage(batch:string,scheme:Scheme,version:SchemeVersion,sourceIds:string[],reason:string):Promise<QuarantineLineageResult>;
+ // delistings (K4): direct table writes (service_role insert/update)
+ /** New ts_code → inserted; same date → unchanged (row kept); other date → updated (new evidence) and listed in `changed`. */
+ upsertDelistings(batch:string,rows:DelistingInput[]):Promise<UpsertDelistingsResult>;
+ delistings():Promise<DelistingRow[]>;
  /** Lease-fenced (R2-3): lease_lost unless industry_sync_scope(issuer,'sic') is leased to fence.leaseBatch and unexpired; code null = provenance only ('none'). */
  applySicMembership(batch:string,issuer:string,observed:string,code:string|null,provenance:Record<string,unknown>,fence:{leaseBatch:string;secSubmissions?:Record<string,unknown>|null}):Promise<'inserted'|'duplicate'|'changed'|'none'>;
  /** All rows of the code (any status) whose windows can intersect `on`; callers filter with memberships.ts */

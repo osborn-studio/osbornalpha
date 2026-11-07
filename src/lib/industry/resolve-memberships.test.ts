@@ -8,6 +8,7 @@ import {memoryIndustryDb} from './memory-industry-db';
 import {fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
 import {resolveSourceMemberships,runResolveMemberships,targetsFor,windowEnd} from './resolve-memberships';
+import type {ResolvedValue} from './resolve-memberships';
 import {runMembershipsSw} from './source-memberships';
 import type {IndustryDb,IndustryDeps,ManifestStore,SourceMembershipRow} from './types';
 import {IndustryDbError} from './types';
@@ -44,6 +45,18 @@ describe('targetsFor / resolveSourceMemberships (pure)',()=>{
    .toEqual([null,'2017-06-29','2022-06-23','2017-06-29','2022-07-07','2024-02-29']);
   expect(targetsFor(src({ts_code:'002770.SZ',in_date:'2015-01-19',out_date:null}),'2022-06-23')[0]).toMatchObject({valid_to:'2022-06-23',valid_to_available_date:'2022-06-23'});
  });
+ it('targetsFor carries provenance.delisting only where the delisting determines the window end',()=>{
+  const ev={delist_date:'2022-06-23',raw_hash:'dh',batch_id:'b1',observed_at:NOW};
+  const open=targetsFor(src({ts_code:'002770.SZ',in_date:'2015-01-19',out_date:null}),'2022-06-23',ev);
+  expect(open.map(t=>t.provenance.delisting)).toEqual([ev,ev,ev]);
+  expect(targetsFor(src({out_date:'2017-06-28'}),'2022-06-23',ev)[0].provenance.delisting).toBeUndefined();   // the record ends earlier by its own out_date
+  expect(targetsFor(src({out_date:null}),null,ev)[0].provenance.delisting).toBeUndefined();
+ });
+ it('blocked ts_codes (delist_date missing) are never applied; resolver failures are kept apart from no_issuer',()=>{
+  const plan=resolveSourceMemberships([src({id:'a',ts_code:'000001.SZ'}),src({id:'b',ts_code:'000002.SZ'})],new Map<string,ResolvedValue>([['000001.SZ','I1'],['000002.SZ',{error:'resolve_error',detail:'db_down',failure:true}]]),new Map(),{blocked:new Set(['000001.SZ'])});
+  expect(plan.groups).toEqual([]);expect(plan.blocked).toEqual([{id:'a',ts_code:'000001.SZ',in_date:'1997-06-16'}]);
+  expect(plan.unresolved).toEqual([{id:'b',ts_code:'000002.SZ',code:'resolve_error',detail:'db_down',failure:true}]);
+ });
  it('groups records per issuer, keeps unresolved, resolver errors and after-delist records apart, ignores resolved/superseded rows',()=>{
   const plan=resolveSourceMemberships([src({}),src({id:'s2',l3_code:'851233.SI',in_date:'2017-06-29',out_date:null}),src({id:'s3',ts_code:'688999.SH'}),src({id:'s4',ts_code:'600001.SH'}),src({id:'s5',issuer_id:'x'}),src({id:'s6',status:'superseded'}),src({id:'s7',ts_code:'000662.SZ',in_date:'2021-07-30',out_date:null})],
    new Map<string,string|null|{error:string}>([['600090.SH','I7'],['688999.SH',null],['600001.SH',{error:'ambiguous_owner'}],['000662.SZ','I9']]),new Map([['600090.SH','2022-07-07'],['000662.SZ','2021-04-12']]));
@@ -57,7 +70,7 @@ describe('runResolveMemberships (real recordings)',()=>{
  it('resolves by ticker as of today, writes three rows per record with K3 windows in one call per issuer, marks unresolved records and counts them',async()=>{
   const {tables,db,deps}=await setup();
   const r=await runResolveMemberships(deps,{triggeredBy:'cron'});
-  expect(r.records).toEqual({applied:12,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:12,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0,delistMissing:0,predecessorQuarantined:0});
   expect(r.status).toBe('success');
   expect(r.errors[0]).toEqual({code:'skipped_summary',message:JSON.stringify({no_issuer:217})});
   const zhangyu=await db.membershipsOfIssuer(ISSUER['000869.SZ'],{scheme:'sw2021'});
@@ -70,6 +83,11 @@ describe('runResolveMemberships (real recordings)',()=>{
   // delisting closes the open upstream window (K3); a historical record keeps out_date + 1
   expect((await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'})).map(m=>[m.level,m.valid_from,m.valid_to,m.valid_to_available_date])).toEqual([[1,'2015-01-19','2022-06-23','2022-06-23'],[2,'2015-01-19','2022-06-23','2022-06-23'],[3,'2015-01-19','2022-06-23','2022-06-23']]);
   expect((await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'})).map(m=>m.valid_to)).toEqual(['2017-06-29','2017-06-29','2017-06-29']);
+  // K4 evidence: the delisting that determines the window end travels in provenance.delisting; a record ending by its own out_date has none
+  const delRow=(await db.delistings()).find(d=>d.ts_code==='002770.SZ')!;
+  expect((await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'})).map(m=>m.provenance.delisting)).toEqual(Array(3).fill({delist_date:'2022-06-23',raw_hash:delRow.raw_hash,batch_id:delRow.batch_id,observed_at:delRow.observed_at}));
+  expect(delRow.delist_date).toBe('2022-06-23');
+  expect((await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'})).map(m=>m.provenance.delisting)).toEqual([undefined,undefined,undefined]);
   const left=await db.currentSourceMemberships({unresolvedOnly:true});
   expect(left).toHaveLength(217);
   expect(left.every(s=>s.resolution_error?.code==='no_issuer')).toBe(true);
@@ -82,7 +100,7 @@ describe('runResolveMemberships (real recordings)',()=>{
   expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.memberships')).toMatchObject({expected_cadence:'weekly',status:'fresh'});
   // a second run has nothing new to resolve except the retried unresolved records
   const again=await runResolveMemberships(deps,{});
-  expect(again.records).toEqual({applied:0,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
+  expect(again.records).toEqual({applied:0,unresolved:217,failed:0,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0,delistMissing:0,predecessorQuarantined:0});
  });
  it('correction path (a): an out_date correction supersedes the old record, and resolving the new record supersedes its membership rows',async()=>{
   // synthetic edit of a real response = earlier upstream state: 600090.SH's exit dated 2017-06-20
@@ -119,6 +137,8 @@ describe('runResolveMemberships (real recordings)',()=>{
   const after=await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'});
   expect(after.map(m=>[m.membership_id,m.status,m.valid_to,m.valid_to_available_date])).toEqual(before.map(m=>[m.membership_id,'ok','2022-06-23','2022-06-23']));   // same rows, closed in place
   expect((await db.currentSourceMemberships({})).find(s=>s.ts_code==='002770.SZ')!.issuer_id).toBe(ISSUER['002770.SZ']);
+  const delRow=(await db.delistings()).find(d=>d.ts_code==='002770.SZ')!;
+  expect(after.map(m=>m.provenance.delisting)).toEqual(Array(3).fill({delist_date:'2022-06-23',raw_hash:delRow.raw_hash,batch_id:delRow.batch_id,observed_at:delRow.observed_at}));   // merged in on the in-place closure
   // run 3 — nothing left to close
   expect((await runResolveMemberships({...deps,tushare:fixtureTushareCall()},{})).records).toMatchObject({delistClosed:0,delistConflicts:0});
   expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='membership_delist_conflict')).toEqual([]);
@@ -188,10 +208,73 @@ describe('runResolveMemberships (real recordings)',()=>{
   };
   const {tables,db,deps}=await setup(edited);
   const r=await runResolveMemberships(deps,{});
-  expect(r.records).toEqual({applied:11,unresolved:217,failed:0,afterDelist:1,delistClosed:0,delistCorrected:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:11,unresolved:217,failed:0,afterDelist:1,delistClosed:0,delistCorrected:0,delistConflicts:0,delistMissing:0,predecessorQuarantined:0});
   expect(await db.membershipsOfIssuer(ISSUER['600090.SH'],{})).toEqual([]);
   expect(tables.rows('dq_quarantine').map(q=>[q.reason_code,q.natural_key])).toEqual([['membership_after_delist','sw2021:2021:600090.SH:1997-06-16']]);
   expect((await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='600090.SH')!.resolution_error).toMatchObject({code:'membership_after_delist'});
+ });
+ it('a rejected replacement quarantines the already-resolved predecessor rows atomically (Codex batch 3 P1): not members, no double count',async()=>{
+  // run 1 — earlier upstream state (600090.SH exit 2017-06-20) is resolved; run 2 — the corrected record arrives but the delisting predates its in_date
+  const earlier:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='index_member_all')return r;
+   const ts=r.fields.indexOf('ts_code'),out=r.fields.indexOf('out_date');
+   return {...r,items:r.items.map(it=>it[ts]==='600090.SH'?it.map((v,i)=>i===out?'20170620':v):it)};
+  };
+  const {tables,db,deps}=await setup(earlier);
+  await runResolveMemberships(deps,{});
+  expect((await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'})).filter(m=>m.status==='ok')).toHaveLength(3);
+  await runMembershipsSw({...deps,tushare:fixtureTushareCall()},{apply:true,sleep:noSleep});
+  const early:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='600090.SH'?it.map((v,i)=>i===dl?'19970101':v):it)};
+  };
+  const r=await runResolveMemberships({...deps,tushare:early},{});
+  expect(r.records).toMatchObject({afterDelist:1,predecessorQuarantined:3,applied:0});
+  expect(r.counts.quarantined).toBe(1);                         // the rejected replacement; the three predecessor rows are not source-record outcomes
+  const mine=await db.membershipsOfIssuer(ISSUER['600090.SH'],{scheme:'sw2021'});
+  expect(mine.filter(m=>m.status==='ok')).toEqual([]);
+  expect(mine.filter(m=>m.status==='quarantined')).toHaveLength(3);
+  expect(await membersAt(db,{scheme:'sw2021',version:'2021',code:'801120.SI',level:1,on:'2010-01-01',knownBy:TODAY}).then(m=>m.filter(x=>x.issuer_id===ISSUER['600090.SH']))).toEqual([]);
+  expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='membership_predecessor_quarantined')).toHaveLength(3);
+  expect(r.errors.filter(e=>e.code==='membership_predecessor_quarantined')).toHaveLength(3);
+  expect(r.status).toBe('partial');
+  // idempotent: the retry of the still-rejected replacement quarantines nothing more
+  expect((await runResolveMemberships({...deps,tushare:early},{})).records.predecessorQuarantined).toBe(0);
+ });
+ it('a D row without a usable delist_date blocks that ts_code (delist_date_missing, non-info error), it does not mean "no delisting"',async()=>{
+  const nullDate:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='002770.SZ'?it.map((v,i)=>i===dl?null:v):it)};
+  };
+  const {tables,db,deps}=await setup(nullDate);
+  const r=await runResolveMemberships(deps,{});
+  expect(r.status).toBe('partial');
+  expect(r.records).toMatchObject({delistMissing:1,applied:11});
+  expect(r.errors.map(e=>e.code)).toContain('delist_date_missing');
+  expect(await db.membershipsOfIssuer(ISSUER['002770.SZ'],{})).toEqual([]);
+  expect((await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='002770.SZ')!.resolution_error).toMatchObject({code:'delist_date_missing'});
+  expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='delist_date_missing').map(q=>q.natural_key)).toEqual(['sw2021:2021:002770.SZ:2015-01-19']);
+  expect((await db.delistings()).some(d=>d.ts_code==='002770.SZ')).toBe(false);
+ });
+ it('an unexpected resolver exception is a failure (resolve_error with detail, counts.failed, non-info error, freshness not fresh); the batch is finished',async()=>{
+  const {tables,db,deps}=await setup();
+  const broken=new Proxy(tables,{get:(t,p)=>p==='select'?async(table:string,...a:unknown[])=>{if(table==='issuer_securities')throw new Error('securities_down');return (t.select as (...x:unknown[])=>Promise<unknown>)(table,...a);}:(t as unknown as Record<string|symbol,unknown>)[p]}) as typeof tables;
+  const r=await runResolveMemberships({...deps,tables:broken},{});
+  expect(r.counts.failed).toBeGreaterThan(0);expect(r.exitCode).toBe(1);
+  expect(r.errors.some(e=>e.code==='resolve_error'&&e.message==='securities_down')).toBe(true);
+  expect((await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='600519.SH')!.resolution_error).toMatchObject({code:'resolve_error',detail:'securities_down'});
+  expect(tables.rows('ingest_batches').at(-1)!.status).not.toBe('running');
+  expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.memberships')).toMatchObject({consecutive_errors:1});
+ });
+ it('an exception in the body (database read) finishes the batch failed and records a failed attempt',async()=>{
+  const {tables,db,deps}=await setup();
+  const failing:IndustryDb=new Proxy(db,{get:(t,p)=>p==='delistings'?async()=>{throw new Error('db_down');}:(t as unknown as Record<string|symbol,unknown>)[p]});
+  const r=await runResolveMemberships({...deps,db:failing},{});
+  expect(r.status).toBe('failed');expect(r.exitCode).toBe(1);expect(r.errors.map(e=>e.message)).toContain('db_down');
+  expect(tables.rows('ingest_batches').at(-1)!.status).toBe('failed');
+  expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sw2021.memberships')).toMatchObject({consecutive_errors:1});
  });
  it('an apply failure rolls the issuer back: records stay unresolved with resolution_error, the issuer is quarantined, the batch is partial',async()=>{
   const inner=memoryIndustryDb();
@@ -199,7 +282,7 @@ describe('runResolveMemberships (real recordings)',()=>{
   const {tables,db,deps}=await setup(fixtureTushareCall(),failing);
   const r=await runResolveMemberships(deps,{});
   expect(r.status).toBe('partial');
-  expect(r.records).toEqual({applied:11,unresolved:217,failed:1,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0});
+  expect(r.records).toEqual({applied:11,unresolved:217,failed:1,afterDelist:0,delistClosed:0,delistCorrected:0,delistConflicts:0,delistMissing:0,predecessorQuarantined:0});
   expect(r.counts.quarantined).toBe(1);
   expect(await db.membershipsOfIssuer(ISSUER['600519.SH'],{})).toEqual([]);
   const rec=(await db.currentSourceMemberships({unresolvedOnly:true})).find(s=>s.ts_code==='600519.SH')!;

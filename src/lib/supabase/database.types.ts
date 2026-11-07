@@ -976,6 +976,14 @@ export interface IndustrySyncScope {
   last_status: 'success' | 'failed' | null;
   updated_at: string;
 }
+export interface IndustrySecurityDelisting {
+  ts_code: string;
+  delist_date: string;
+  list_status: string;
+  observed_at: string;
+  batch_id: string;
+  raw_hash: string;
+}
 // INDUSTRY:END
 
 export type Database = {
@@ -1043,6 +1051,7 @@ export type Database = {
       industry_valuation_pairs: { Row: IndustryValuationPair; Insert: Partial<IndustryValuationPair>; Update: Partial<IndustryValuationPair> };
       industry_run_dependencies: { Row: IndustryRunDependency; Insert: Partial<IndustryRunDependency>; Update: Partial<IndustryRunDependency> };
       industry_sync_scope: { Row: IndustrySyncScope; Insert: Partial<IndustrySyncScope>; Update: Partial<IndustrySyncScope> };
+      industry_security_delistings: { Row: IndustrySecurityDelisting; Insert: Partial<IndustrySecurityDelisting>; Update: Partial<IndustrySecurityDelisting> };
       // INDUSTRY:END
     };
     Functions: {

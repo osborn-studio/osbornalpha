@@ -16,7 +16,7 @@ import {chunk,chunkIds,isoTs} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,DelistingInput,DelistingRow,QuarantineLineageResult,UpsertDelistingsResult,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
  MembershipRow,MetricCellRow,MetricRunRow,NewMetricRun,ObservationResult,RunDependency,RunKind,SourceMembershipInput,
  SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
@@ -68,6 +68,22 @@ export function sourceFromTable(r:Record<string,unknown>):SourceMembershipRow{
   in_date:str(r.in_date),out_date:strOrNull(r.out_date),observed_at:isoTs(r.observed_at),batch_id:str(r.batch_id),raw_hash:str(r.raw_hash),locator:obj(r.locator),
   status:r.status as SourceMembershipRow['status'],superseded_by:strOrNull(r.superseded_by),issuer_id:strOrNull(r.issuer_id),
   resolution:obj(r.resolution) as SourceMembershipRow['resolution'],resolution_error:(r.resolution_error??null) as SourceMembershipRow['resolution_error']};
+}
+export function delistingFromTable(r:Record<string,unknown>):DelistingRow{
+ return {ts_code:str(r.ts_code),delist_date:str(r.delist_date),list_status:str(r.list_status),observed_at:isoTs(r.observed_at),batch_id:str(r.batch_id),raw_hash:str(r.raw_hash)};
+}
+/** Shared by the adapters: splits incoming delistings into inserts / updates / unchanged against the stored rows. */
+export function planDelistings(existing:ReadonlyMap<string,DelistingRow>,rows:DelistingInput[]):{insert:DelistingInput[];update:DelistingInput[];result:UpsertDelistingsResult}{
+ const insert:DelistingInput[]=[],update:DelistingInput[]=[];const result:UpsertDelistingsResult={inserted:0,unchanged:0,changed:[]};
+ const seen=new Set<string>();
+ for(const r of rows){
+  if(seen.has(r.ts_code))continue;seen.add(r.ts_code);
+  const e=existing.get(r.ts_code);
+  if(!e){insert.push(r);result.inserted++;}
+  else if(e.delist_date===r.delist_date)result.unchanged++;
+  else{update.push(r);result.changed.push({ts_code:r.ts_code,old_date:e.delist_date,new_date:r.delist_date});}
+ }
+ return {insert,update,result};
 }
 export function membershipFromTable(r:Record<string,unknown>):MembershipRow{
  return {membership_id:str(r.membership_id),issuer_id:str(r.issuer_id),scheme:r.scheme as MembershipRow['scheme'],version:r.version as MembershipRow['version'],code:str(r.code),level:Number(r.level),
@@ -139,6 +155,7 @@ export function upsertSourceResult(x:unknown):{inserted:number;superseded:number
  return {inserted:Number(o.inserted??0),superseded:Number(o.superseded??0),duplicates:Number(o.duplicates??0),
   changed:(Array.isArray(o.changed)?o.changed:[]).map(c=>{const y=obj(c);return {old_id:str(y.old_id),new_id:str(y.new_id),nullToDate:y.null_to_date===true};})};
 }
+export function lineageResult(x:unknown):QuarantineLineageResult{const o=obj(x);return {quarantined:Number(o.quarantined??0),membership_ids:(Array.isArray(o.membership_ids)?o.membership_ids:[]).map(String)};}
 export function correctResult(x:unknown):CorrectWindowsResult{return {...applyResult(x),quarantined:Number(obj(x).quarantined??0)};}
 export function applyResult(x:unknown):ApplyMembershipsResult{
  const o=obj(x);
@@ -171,10 +188,14 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
    if(part.length<READ_PAGE)return out;
   }
  };
+ const delistedBy=async(on:string)=>new Set((await pageAll(()=>c.from('industry_security_delistings').select('ts_code').lte('delist_date',on).order('ts_code'))).map(r=>str(r.ts_code)));
  const unresolvedOf=async(q:{code:string;level:number;on:string;knownBy:string})=>{
   const col=levelColumn(q.level);const upTo=q.on<q.knownBy?q.on:q.knownBy;
-  return (await pageAll(()=>c.from('industry_source_memberships').select('id,ts_code,in_date,out_date').eq('status','current').is('issuer_id',null).eq(col,q.code)
+  const rowsOf=(await pageAll(()=>c.from('industry_source_memberships').select('id,ts_code,in_date,out_date').eq('status','current').is('issuer_id',null).eq(col,q.code)
    .lte('in_date',upTo).or(`out_date.is.null,out_date.gte.${q.on}`).order('ts_code').order('in_date').order('id'))).map(unresolvedFromTable);
+  if(rowsOf.length===0)return rowsOf;
+  const gone=await delistedBy(q.on);   // K4: a ts_code delisted on or before `on` is not unresolved
+  return rowsOf.filter(r=>!gone.has(r.ts_code));
  };
  const db:IndustryDb={
   async upsertClassifications(_batch,input){
@@ -226,6 +247,15 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
    return applyResult(await call<unknown>('apply_industry_memberships',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_rows:input,p_source_ids:sourceIds,p_resolution:resolution}));
   },
   async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return correctResult(await call<unknown>('correct_industry_membership_windows',{p_batch:batch,p_issuer:issuer,p_scheme:scheme,p_version:version,p_source:sourceId,p_rows:rows}));},
+  async quarantineMembershipLineage(batch,scheme,version,sourceIds,reason){return lineageResult(await call<unknown>('quarantine_industry_membership_lineage',{p_batch:batch,p_scheme:scheme,p_version:version,p_sources:sourceIds,p_reason:reason}));},
+  async delistings(){return (await pageAll(()=>c.from('industry_security_delistings').select('*').order('ts_code'))).map(delistingFromTable);},
+  async upsertDelistings(batch,input){
+   const {insert,update,result}=planDelistings(new Map((await db.delistings()).map(r=>[r.ts_code,r])),input);
+   const row=(r:DelistingInput)=>({ts_code:r.ts_code,delist_date:r.delist_date,list_status:r.list_status,observed_at:r.observed_at,batch_id:batch,raw_hash:r.raw_hash});
+   for(const part of chunk(insert,STAGE_CHUNK)){if(part.length===0)continue;const {error}=await c.from('industry_security_delistings').insert(part.map(row));if(error)throw toIndustryDbError(error);}
+   for(const r of update){const {error}=await c.from('industry_security_delistings').update(row(r)).eq('ts_code',r.ts_code);if(error)throw toIndustryDbError(error);}
+   return result;
+  },
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
    const x=await call<{outcome:'inserted'|'duplicate'|'changed'|'none'}>('apply_sic_memberships',{p_batch:batch,p_issuer:issuer,p_version:'sec-current',p_observed:observed,p_code:code,p_provenance:provenance,p_lease_batch:fence.leaseBatch,p_sec_submissions:fence.secSubmissions??null});
    return x.outcome;

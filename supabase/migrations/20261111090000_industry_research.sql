@@ -33,7 +33,7 @@ do $$ declare t text; begin
   foreach t in array array['industry_dataset_licenses','industry_classifications','industry_source_memberships','issuer_industry_memberships',
                            'industry_sync_scope','industry_fetch_events','industry_observation_receipts','security_marks','industry_official_valuations',
                            'industry_metric_runs','industry_metrics','industry_valuation_runs','industry_valuations','industry_valuation_pairs',
-                           'industry_manifests','industry_run_dependencies'] loop
+                           'industry_manifests','industry_run_dependencies','industry_security_delistings'] loop
     if to_regclass('public.' || t) is not null then
       execute format('lock table public.%I in access exclusive mode', t);
     end if;
@@ -117,6 +117,20 @@ create unique index if not exists industry_source_memberships_current_key on pub
 create index if not exists industry_source_memberships_l1_idx on public.industry_source_memberships(scheme, version, l1_code, status);
 create index if not exists industry_source_memberships_issuer_idx on public.industry_source_memberships(issuer_id);
 create index if not exists industry_source_memberships_unresolved_idx on public.industry_source_memberships(l1_code, in_date) where status = 'current' and issuer_id is null;
+
+-- ---------------------------------------------------------------- industry_security_delistings (spec 7th draft K4)
+-- Delisting dates of A-share ts_codes (Tushare stock_basic list_status 'D'), one row per ts_code. Written by load-a-share
+-- (and the resolver) through IndustryDb.upsertDelistings (service_role insert/update; a changed date updates the row and is
+-- quarantined delist_date_changed). Used by n_unresolved (a source record whose ts_code is delisted on or before `on` is not
+-- counted) and as the evidence of membership window closure (provenance.delisting).
+create table if not exists public.industry_security_delistings (
+  ts_code     text primary key check (length(ts_code) between 1 and 16),
+  delist_date date not null,
+  list_status text not null check (length(list_status) between 1 and 8),
+  observed_at timestamptz not null,
+  batch_id    uuid not null references public.ingest_batches(batch_id) on delete restrict,
+  raw_hash    text not null check (length(raw_hash) between 1 and 128)
+);
 
 -- ---------------------------------------------------------------- issuer_industry_memberships (altered, §4.3)
 alter table public.issuer_industry_memberships drop constraint if exists issuer_industry_memberships_no_overlap;
@@ -443,7 +457,7 @@ do $$ declare t text; begin
   foreach t in array array['industry_classifications','issuer_industry_memberships','industry_dataset_licenses','industry_source_memberships',
                            'industry_fetch_events','industry_observation_receipts','security_marks','industry_official_valuations',
                            'industry_manifests','industry_metric_runs','industry_metrics','industry_valuation_runs','industry_valuations',
-                           'industry_valuation_pairs','industry_run_dependencies','industry_sync_scope'] loop
+                           'industry_valuation_pairs','industry_run_dependencies','industry_sync_scope','industry_security_delistings'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
     execute format('grant select on public.%I to service_role', t);
@@ -478,6 +492,11 @@ drop policy if exists "industry_classifications service insert" on public.indust
 create policy "industry_classifications service insert" on public.industry_classifications for insert to service_role with check (true);
 drop policy if exists "industry_classifications service update" on public.industry_classifications;
 create policy "industry_classifications service update" on public.industry_classifications for update to service_role using (true) with check (true);
+grant insert, update on public.industry_security_delistings to service_role;
+drop policy if exists "industry_security_delistings service insert" on public.industry_security_delistings;
+create policy "industry_security_delistings service insert" on public.industry_security_delistings for insert to service_role with check (true);
+drop policy if exists "industry_security_delistings service update" on public.industry_security_delistings;
+create policy "industry_security_delistings service update" on public.industry_security_delistings for update to service_role using (true) with check (true);
 grant insert, update, delete on public.industry_sync_scope to service_role;
 drop policy if exists "industry_sync_scope service write" on public.industry_sync_scope;
 create policy "industry_sync_scope service write" on public.industry_sync_scope for all to service_role using (true) with check (true);

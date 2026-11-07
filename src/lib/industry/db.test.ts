@@ -109,6 +109,20 @@ describe('memoryIndustryDb specifics',()=>{
   expect(await db.applyObservations('marks',e2,[mark(t,'2')])).toEqual({inserted:0,duplicates:0,superseded:1});   // no receipt was left: the retry is a normal revision
   expect(await tables.select('dq_quarantine',{reason_code:'mark_revised',status:'open'})).toHaveLength(1);
  });
+ it('a call revising two marks whose SECOND filing fails leaves no open item behind; the retry files exactly one open item per revision (batch 1 Codex review)',async()=>{
+  const base=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});let filings=0,failAt=2;
+  const tables:TableClient={...base,insert:async(t,row)=>{if(t==='dq_quarantine'){filings++;if(filings===failAt)throw new Error('filing_failed');}return base.insert(t,row);}};
+  const db=memoryIndustryDb({tables});const a='ZZTWOA',b='ZZTWOB';
+  const e1=await db.beginFetchEvent('marks',{},'b');await db.applyObservations('marks',e1,[mark(a,'1'),mark(b,'1')]);
+  const e2=await db.beginFetchEvent('marks',{},'b');
+  await expect(db.applyObservations('marks',e2,[mark(a,'2'),mark(b,'2')])).rejects.toThrow('filing_failed');
+  expect(await tables.select('dq_quarantine',{reason_code:'mark_revised',status:'open'})).toEqual([]);          // the first item was compensated
+  expect((await db.currentMarksOn('2001-01-05',[a,b])).map(m=>m.close).sort()).toEqual(['1','1']);
+  failAt=-1;
+  expect(await db.applyObservations('marks',e2,[mark(a,'2'),mark(b,'2')])).toEqual({inserted:0,duplicates:0,superseded:2});
+  const open=await tables.select('dq_quarantine',{reason_code:'mark_revised',status:'open'});
+  expect(open.map(r=>r.natural_key).sort()).toEqual([`${a}:2001-01-05`,`${b}:2001-01-05`]);
+ });
  it('foreign keys are mirrored once the injected tables hold rows: unknown issuer, ticker and batch are refused; empty tables are not authoritative',async()=>{
   const tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});
   const db=memoryIndustryDb({tables});
@@ -222,7 +236,13 @@ describe('supabaseIndustryDb',()=>{
   expect((await db.metricRowsOfRun('r',{metrics:['roe']}))[0]).toMatchObject({value:'0.1234567891',n_members:3,updated_at:'2025-01-01T00:00:00.000Z'});
   expect(pages.at(-1)!.ops).toEqual(expect.arrayContaining([['in',['metric',['roe']]]]));
   expect(await db.unresolvedCount({code:'A1',level:2,on:'2024-12-31',knownBy:'2024-06-30'})).toBe(1);
-  expect(pages.at(-1)!.ops).toEqual(expect.arrayContaining([['eq',['l2_code','A1']],['is',['issuer_id',null]],['lte',['in_date','2024-06-30']],['or',['out_date.is.null,out_date.gte.2024-12-31']]]));
+  expect(pages.filter(p=>p.table==='industry_security_delistings').at(-1)!.ops).toEqual(expect.arrayContaining([['lte',['delist_date','2024-12-31']]]));   // K4: delisted ts_codes are filtered
+  expect(pages.filter(p=>p.table==='industry_source_memberships').at(-1)!.ops).toEqual(expect.arrayContaining([['eq',['l2_code','A1']],['is',['issuer_id',null]],['lte',['in_date','2024-06-30']],['or',['out_date.is.null,out_date.gte.2024-12-31']]]));
+ });
+ it('quarantineMembershipLineage calls the rpc with p_ arguments and normalises its result',async()=>{
+  const {calls,db}=stub(()=>({data:{quarantined:2,membership_ids:['m1','m2']}}));
+  expect(await db.quarantineMembershipLineage('b','sw2021','2021',['s1'],'no_issuer')).toEqual({quarantined:2,membership_ids:['m1','m2']});
+  expect(calls.at(-1)).toEqual({fn:'quarantine_industry_membership_lineage',args:{p_batch:'b',p_scheme:'sw2021',p_version:'2021',p_sources:['s1'],p_reason:'no_issuer'}});
  });
  it('maps PostgREST errors to IndustryDbError codes',async()=>{
   const {db}=stub(fn=>({error:fn==='activate_industry_metric_run'?{message:'dependency_regression',code:'P0001'}:fn==='apply_industry_memberships'?{message:'membership_overlap: x',code:'23P01'}:{message:'permission denied for function x',code:'42501'}}));

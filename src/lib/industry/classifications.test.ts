@@ -2,6 +2,7 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
+import {memorySnapshotStore} from '../facts/snapshot-store';
 import {planClassificationNodes,runClassificationsSw} from './classifications';
 import type {ClassifyInputRow} from './classifications';
 import {memoryIndustryDb} from './memory-industry-db';
@@ -41,9 +42,29 @@ describe('planClassificationNodes',()=>{
   expect(plan.nodes.map(n=>n.code)).toEqual(['801120.SI']);
   expect(plan.unmapped.map(u=>[u.code,u.reason])).toEqual([['801998.SI','root_with_parent'],['801099.SI','parent_not_found'],['851999.SI','parent_unmapped'],['851998.SI','parent_level_mismatch']]);
  });
- it('rejects rows of another src, bad level, no name, or a repeated index_code',()=>{
-  const plan=planClassificationNodes([row({}),row({src:'SW2014',index_code:'801010.SI'}),row({level:'X',index_code:'801011.SI'}),row({industry_name:null,index_code:'801012.SI'}),row({})]);
-  expect(plan.rejected).toEqual(['rejected_src:801010.SI','rejected_row_shape:801011.SI','rejected_name:801012.SI','rejected_repeated:801120.SI']);
+ it('rejects rows of another src, bad level or no name',()=>{
+  const plan=planClassificationNodes([row({}),row({src:'SW2014',index_code:'801010.SI'}),row({level:'X',index_code:'801011.SI'}),row({industry_name:null,index_code:'801012.SI'})]);
+  expect(plan.rejected).toEqual(['rejected_src:801010.SI','rejected_row_shape:801011.SI','rejected_name:801012.SI']);
+ });
+ it('an identical repeat of an index_code dedupes (counted); a conflicting repeat withholds the code, keeps every variant and withholds the descendants',()=>{
+  const same=planClassificationNodes([row({}),row({raw_hash:'h2'})]);
+  expect(same.nodes.map(n=>n.code)).toEqual(['801120.SI']);expect(same.duplicates).toBe(1);expect(same.unmapped).toEqual([]);
+  const plan=planClassificationNodes([
+   row({}),row({industry_name:'食品饮料Ⅰ',raw_hash:'h2',locator:{...loc,row:7}}),
+   row({index_code:'801125.SI',industry_name:'白酒Ⅱ',parent_code:'340000',level:'L2',industry_code:'340500'}),
+  ]);
+  expect(plan.nodes).toEqual([]);
+  expect(plan.unmapped.map(u=>[u.code,u.reason])).toEqual([['801120.SI','conflicting_variants'],['801125.SI','parent_unmapped']]);
+  expect(plan.unmapped[0].variants!.map(v=>[v.name,v.raw_hash,v.locator.row])).toEqual([['食品饮料','h',0],['食品饮料Ⅰ','h2',7]]);
+ });
+ it('a parent industry_code shared by two nodes of the expected level is ambiguous: the child (and its descendants) is withheld, the parents are still written',()=>{
+  const plan=planClassificationNodes([
+   row({index_code:'801001.SI',industry_name:'甲',industry_code:'100'}),row({index_code:'801002.SI',industry_name:'乙',industry_code:'100'}),
+   row({index_code:'801101.SI',industry_name:'子',parent_code:'100',level:'L2',industry_code:'110'}),
+   row({index_code:'851101.SI',industry_name:'孙',parent_code:'110',level:'L3',industry_code:'111'}),
+  ]);
+  expect(plan.nodes.map(n=>n.code)).toEqual(['801001.SI','801002.SI']);
+  expect(plan.unmapped.map(u=>[u.code,u.reason])).toEqual([['801101.SI','parent_ambiguous'],['851101.SI','parent_unmapped']]);
  });
 });
 
@@ -72,6 +93,35 @@ describe('runClassificationsSw (real index_classify recordings)',()=>{
   expect(tables.rows('dq_quarantine').map(q=>[q.dataset,q.table_name,q.natural_key,q.reason_code])).toEqual([['industry.sw2021.classifications','industry_classifications','sw2021:2021:801080.SI','classification_name_conflict']]);
   expect((await db.classificationTree('sw2021','2021')).find(n=>n.code==='801080.SI')!.name_zh).toBe('电子');
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'industry.sw2021.classifications',expected_cadence:'weekly'});
+ });
+ it('conflicting variants are quarantined once (all rows accounted), the batch is partial; with a snapshot store the pages are captured and the quarantine locator carries the snapshot',async()=>{
+  const tables=tablesFor();const db=memoryIndustryDb();const store=memorySnapshotStore();
+  const deps:IndustryDeps={tables,db,facts:memoryFactsDb(),manifests:unusedManifests,now:()=>new Date(NOW),codeVersion:'sha',
+   tushare:async(api,params,fields)=>{
+    const r=await fixtureTushareCall()(api,params,fields);
+    // synthetic: the L1 page lists 801080.SI twice with different names
+    const dup=r.items.find(it=>it[0]==='801080.SI');
+    return dup?{...r,items:[...r.items,dup.map((v,i)=>i===1?'电子Ⅰ':v)]}:r;
+   }};
+  const r=await runClassificationsSw(deps,{sleep:async()=>{},snapshots:{store}});
+  expect(r.status).toBe('partial');
+  expect(r.counts.fetched).toBe(512);expect(r.counts.quarantined).toBeGreaterThan(2);   // both variant rows + the withheld descendants
+  expect(r.counts.inserted+r.counts.duplicates+r.counts.quarantined+r.counts.failed).toBe(512);
+  const q=tables.rows('dq_quarantine').filter(x=>x.reason_code==='classification_variant_conflict');
+  expect(q.map(x=>x.natural_key)).toEqual(['sw2021:2021:801080.SI']);
+  const payload=q[0].payload as {variants:{raw_hash:string;locator:{snapshot?:{sha256:string};request?:unknown}}[]};
+  expect(payload.variants).toHaveLength(2);
+  expect(payload.variants[0].locator.snapshot?.sha256).toBe(payload.variants[0].raw_hash);
+  expect(payload.variants[0].locator.request).toBeDefined();
+  expect(store.objects.size).toBeGreaterThan(0);
+  expect((await db.classificationTree('sw2021','2021')).some(n=>n.code==='801080.SI')).toBe(false);
+ });
+ it('an exception after the batch started (db failure) finishes the batch failed and records a failed attempt',async()=>{
+  const tables=tablesFor();const db=memoryIndustryDb();
+  const deps:IndustryDeps={tables,db:{...db,upsertClassifications:async()=>{throw new Error('db_down');}} as typeof db,facts:memoryFactsDb(),manifests:unusedManifests,now:()=>new Date(NOW),codeVersion:'sha',tushare:fixtureTushareCall()};
+  const r=await runClassificationsSw(deps,{sleep:async()=>{}});
+  expect(r).toMatchObject({status:'failed',exitCode:1,errors:[{message:'db_down'}]});
+  expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'failed'});
  });
  it('a fetch failure finishes the batch failed with the provider code and records a failed attempt',async()=>{
   const tables=tablesFor();

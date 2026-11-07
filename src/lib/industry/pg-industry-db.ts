@@ -11,11 +11,11 @@ import {chunkIds} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
 import {ident,typeParsers} from '../db/pg-table-client';
 import {
- DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,correctResult,dependencyFromTable,distinctTsCodes,fingerprintFromJson,freshnessFromJson,gcClaimsFromJson,levelColumn,
+ DEPS_CHUNK,STAGE_CHUNK,addObservations,applyResult,classificationFromTable,correctResult,delistingFromTable,dependencyFromTable,lineageResult,planDelistings,distinctTsCodes,fingerprintFromJson,freshnessFromJson,gcClaimsFromJson,levelColumn,
  markFromTable,membershipFromTable,metricCellFromTable,metricRunFromTable,newRunArgs,observationResult,sameClassification,sourceArgs,sourceFromTable,
  stagedCellArgs,toIndustryDbError,unresolvedFromTable,upsertSourceResult,valuationCellFromTable,valuationRunFromTable,
 } from './db';
-import type {ClassificationRow,IndustryDb,ObservationResult} from './types';
+import type {ClassificationRow,DelistingInput,IndustryDb,ObservationResult} from './types';
 
 const parts=<T>(rows:T[],size:number):T[][]=>{if(rows.length===0)return [[]];const out:T[][]=[];for(let i=0;i<rows.length;i+=size)out.push(rows.slice(i,i+size));return out;};
 
@@ -28,9 +28,10 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
  const rel=(table:string)=>`${ident('public')}.${ident(table)}`;
  const unresolvedOf=async(q:{code:string;level:number;on:string;knownBy:string})=>{
   const col=ident(levelColumn(q.level));
-  return (await run(`select id, ts_code, in_date, out_date from ${rel('industry_source_memberships')}
-   where status = 'current' and issuer_id is null and ${col} = $1 and in_date <= $2::date and in_date <= $3::date and (out_date is null or out_date >= $2::date)
-   order by ts_code, in_date, id`,[q.code,q.on,q.knownBy])).rows.map(unresolvedFromTable);
+  return (await run(`select s.id, s.ts_code, s.in_date, s.out_date from ${rel('industry_source_memberships')} s
+   where s.status = 'current' and s.issuer_id is null and s.${col} = $1 and s.in_date <= $2::date and s.in_date <= $3::date and (s.out_date is null or s.out_date >= $2::date)
+   and not exists (select 1 from ${rel('industry_security_delistings')} d where d.ts_code = s.ts_code and d.delist_date <= $2::date)
+   order by s.ts_code, s.in_date, s.id`,[q.code,q.on,q.knownBy])).rows.map(unresolvedFromTable);
  };
  const db:IndustryDb={
   async upsertClassifications(_batch,input){
@@ -79,6 +80,15 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
    return applyResult(await fn<unknown>('public.apply_industry_memberships($1,$2,$3,$4,$5::jsonb,$6::uuid[],$7::jsonb)',[batch,issuer,scheme,version,JSON.stringify(input),sourceIds,JSON.stringify(resolution)]));
   },
   async correctMembershipWindows(batch,issuer,scheme,version,sourceId,rows){return correctResult(await fn<unknown>('public.correct_industry_membership_windows($1,$2,$3,$4,$5,$6::jsonb)',[batch,issuer,scheme,version,sourceId,JSON.stringify(rows)]));},
+  async quarantineMembershipLineage(batch,scheme,version,sourceIds,reason){return lineageResult(await fn<unknown>('public.quarantine_industry_membership_lineage($1,$2,$3,$4::uuid[],$5)',[batch,scheme,version,sourceIds,reason]));},
+  async delistings(){return (await run(`select * from ${rel('industry_security_delistings')} order by ts_code`,[])).rows.map(delistingFromTable);},
+  async upsertDelistings(batch,input){
+   const {insert,update,result}=planDelistings(new Map((await db.delistings()).map(r=>[r.ts_code,r])),input);
+   const vals=(r:DelistingInput)=>[r.ts_code,r.delist_date,r.list_status,r.observed_at,batch,r.raw_hash];
+   for(const r of insert)await run(`insert into ${rel('industry_security_delistings')} (ts_code, delist_date, list_status, observed_at, batch_id, raw_hash) values ($1,$2::date,$3,$4::timestamptz,$5,$6)`,vals(r));
+   for(const r of update)await run(`update ${rel('industry_security_delistings')} set delist_date=$2::date, list_status=$3, observed_at=$4::timestamptz, batch_id=$5, raw_hash=$6 where ts_code=$1`,vals(r));
+   return result;
+  },
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
    return (await fn<{outcome:'inserted'|'duplicate'|'changed'|'none'}>(`public.apply_sic_memberships($1,$2,'sec-current',$3::date,$4,$5::jsonb,$6,$7::jsonb)`,[batch,issuer,observed,code,JSON.stringify(provenance),fence.leaseBatch,fence.secSubmissions==null?null:JSON.stringify(fence.secSubmissions)])).outcome;
   },

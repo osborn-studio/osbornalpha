@@ -7,6 +7,7 @@ import {applyAShareLoad,planAShareLoad,runLoadAShare} from './load-a-share';
 import {memoryIndustryDb} from './memory-industry-db';
 import {memorySnapshotStore} from '../facts/snapshot-store';
 import {IndustryProviderError,fixtureTushareCall} from './providers/tushare-industry';
+import type {TushareCall} from './providers/tushare-industry';
 import type {StockBasicRow} from './providers/tushare-industry';
 import type {IndustryDeps,ManifestStore} from './types';
 
@@ -204,6 +205,29 @@ describe('runLoadAShare (real stock_basic recordings: 10 listed, 2 delisted)',()
   const t=tablesFor();const d=depsFor(t);await seedUniverse(d);const store=memorySnapshotStore();
   await runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup,snapshots:{store}});
   expect(store.objects.size).toBe(6);   // L, P, D pages × (bytes + meta)
+ });
+ it('K4: the stock_basic D pass is persisted in industry_security_delistings with page evidence; a dry run writes none; an unchanged rerun keeps the rows; a changed date updates + quarantines delist_date_changed',async()=>{
+  const t=memoryTableClient({issuers:['issuer_id'],issuer_securities:['issuer_id','ticker','valid_from'],issuer_identifier_claims:['id'],ingest_batches:['batch_id'],dq_freshness:['dataset'],dq_quarantine:['id']});
+  const d=depsFor(t);await seedUniverse(d);
+  await runLoadAShare(d,{apply:false,sleep:noSleep});
+  expect(await d.db.delistings()).toEqual([]);
+  const first=await runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup});
+  const rows=await d.db.delistings();
+  expect(rows.map(r=>[r.ts_code,r.list_status])).toEqual([['002770.SZ','D'],['600090.SH','D']]);
+  expect(rows.find(r=>r.ts_code==='002770.SZ')).toMatchObject({delist_date:'2022-06-23',batch_id:first.batchId,raw_hash:expect.stringMatching(/^[0-9a-f]{64}$/)});
+  const again=await runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup});
+  expect((await d.db.delistings()).find(r=>r.ts_code==='002770.SZ')!.batch_id).toBe(first.batchId);   // unchanged date: first evidence kept
+  expect(again.apply!.errors.map(e=>e.code)).not.toContain('delist_date_changed');
+  const moved:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='002770.SZ'?it.map((v,i)=>i===dl?'20220701':v):it)};
+  };
+  const third=await runLoadAShare({...d,tushare:moved},{apply:true,sleep:noSleep,lookupOrgId:realLookup});
+  expect(third.status).toBe('partial');
+  expect(third.apply!.errors).toContainEqual({code:'delist_date_changed',key:'002770.SZ'});
+  expect((await d.db.delistings()).find(r=>r.ts_code==='002770.SZ')).toMatchObject({delist_date:'2022-07-01',batch_id:third.batchId});
+  expect(t.rows('dq_quarantine').map(q=>[q.reason_code,q.natural_key,q.detail])).toEqual([['delist_date_changed','stock_basic:002770.SZ',{old_date:'2022-06-23',new_date:'2022-07-01'}]]);
  });
  it('refuses to apply without a code version',async()=>{
   const d={...depsFor(),codeVersion:null};await seedUniverse(d);

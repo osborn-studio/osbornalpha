@@ -13,7 +13,8 @@
 //     backfills valid_from (spec 3 F3-2 owns that); 'conflict' (another issuer holds the ticker) → fileClaim(…,
 //     source 'tushare:stock_basic') + skipped_summary(claim_pending). The issuer already holds another current
 //     A-share ticker (code change) → not attached, fileClaim + skipped_summary(claim_pending).
-//  4. list_status 'D' → skipped_summary(delisted) only (window closing is spec 3's valid_to_method='delisting').
+//  4. list_status 'D' → skipped_summary(delisted) only (window closing is spec 3's valid_to_method='delisting'); the delist_date
+//     is persisted in industry_security_delistings (delistings.ts: first evidence kept, a changed date updates + quarantines delist_date_changed).
 //  5. receipt producer 'load-a-share', dataset 'issuers.a_stock', recordAttempt cadence daily (cron 30 22 * * *).
 // Fast path: a ts_code whose current security row belongs to an issuer that already has a cninfo_org_id is a
 // duplicate without a network lookup (re-checking orgIds is the job of a full run: opts.recheckOrgIds).
@@ -32,6 +33,8 @@ import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../e
 import {resolveOrgId} from '../research/ingest/collectors/cninfo';
 import type {OrgLookup} from '../research/ingest/collectors/cninfo';
 import type {IndustryDeps} from './types';
+import {persistDelistings,scanDelistings} from './delistings';
+import type {DelistingScan} from './delistings';
 import type {SnapshotCapture,StockBasicRow,TusharePage} from './providers/tushare-industry';
 import {IndustryProviderError,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 
@@ -204,10 +207,11 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
   await finishBatch(deps.tables,batchId!,{counts:{...emptyCounts(),fetched,failed:Math.max(1,candidates)},errors:[{code:e instanceof IndustryProviderError?e.code:'a_share_error',message:errorMessage(e)}]},deps.now());
   await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
  };
- let plan:AShareLoadPlan;
+ let plan:AShareLoadPlan;let scan:DelistingScan={inputs:[],missing:[]};
  try{
   const pages:TusharePage<StockBasicRow>[]=[];
   for(const s of ['L','P','D'] as const)pages.push(...await fetchStockBasic(call,{listStatus:s},{sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined}));
+  scan=scanDelistings(pages);
   plan=planAShareLoad(pages.flatMap(p=>p.rows),await aStockUniverse(deps.tables),today);
  }catch(e){
   if(batchId)await fail(e,0,0);
@@ -215,6 +219,9 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
  }
  const planSummary={candidates:plan.candidates.length,skipped:summarizeSkips(plan.skipped),rejected:summarizeSkips(plan.rejected)};
  if(!batchId)return {status:'dry_run',batchId:null,plan:planSummary,apply:null,exitCode:0};
+ // K4: the delisting dates (stock_basic 'D' pass) are persisted with their page evidence; failures and changed dates become batch errors
+ const delistErrors:BatchError[]=[];
+ await persistDelistings(deps,batchId,A_SHARE_DATASET,scan,delistErrors);
  let result:AShareApplyResult;
  try{
   result=await applyAShareLoad(deps.tables,plan,{batchId,observedAt:now.toISOString(),lookupOrgId:opts.lookupOrgId??(symbol=>resolveOrgId(symbol,{fetch:deps.fetch})),sleep:opts.sleep,maxLookups:opts.maxLookups,recheckOrgIds:opts.recheckOrgIds});
@@ -222,6 +229,7 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
   await fail(e,plan.fetched,plan.candidates.length);
   throw e;
  }
+ result.errors.push(...delistErrors);
  const status=await finishBatch(deps.tables,batchId,{counts:result.counts,errors:result.errors},deps.now());
  const outcome=loaderOutcome(status,result.counts,result.rejectedSummary);
  await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:outcome.ok,cadence:'daily',now:deps.now(),detail:{issuers:result.issuers,lookups:result.lookups}});

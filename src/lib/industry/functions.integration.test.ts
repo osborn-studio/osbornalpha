@@ -27,7 +27,7 @@ const hex=(n:number)=>randomBytes(n).toString('hex');
 const FUNCTIONS:Record<string,'read'|'service'|'internal'>={
  'industry_dataset_is_public(text)':'read','industry_metric_run_visible(uuid)':'read','industry_valuation_run_visible(uuid)':'read','industry_freshness()':'read',
  'set_industry_dataset_license(text,text,text,text)':'service','industry_state_fingerprint(text)':'service','upsert_industry_source_memberships(uuid,jsonb)':'service',
- 'record_industry_source_resolution_error(uuid[],jsonb)':'service','apply_industry_memberships(uuid,uuid,text,text,jsonb,uuid[],jsonb)':'service','correct_industry_membership_windows(uuid,uuid,text,text,uuid,jsonb)':'service',
+ 'record_industry_source_resolution_error(uuid[],jsonb)':'service','apply_industry_memberships(uuid,uuid,text,text,jsonb,uuid[],jsonb)':'service','correct_industry_membership_windows(uuid,uuid,text,text,uuid,jsonb)':'service','quarantine_industry_membership_lineage(uuid,text,text,uuid[],text)':'service',
  'apply_sic_memberships(uuid,uuid,text,date,text,jsonb,uuid,jsonb)':'service','begin_industry_fetch_event(text,jsonb,uuid)':'service','retry_industry_fetch_event(uuid)':'service',
  'apply_observations(text,uuid,jsonb)':'service','create_industry_metric_run(jsonb)':'service','create_industry_valuation_run(jsonb)':'service',
  'set_industry_metric_run_coverage(uuid,jsonb)':'service','fail_industry_run(text,uuid,text)':'service','stage_industry_metrics(uuid,jsonb)':'service',

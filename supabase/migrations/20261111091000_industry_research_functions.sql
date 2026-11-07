@@ -417,7 +417,10 @@ begin
     where e.issuer_id = p_issuer and e.scheme = p_scheme and e.version = p_version and e.code = v_code and e.valid_from = v_from and e.status = 'ok';
     if found then
       if ex.valid_to is null and v_to is not null and ex.level = v_level then
-        update public.issuer_industry_memberships set valid_to = v_to, valid_to_available_date = v_to_avail where membership_id = ex.membership_id;
+        -- the closing evidence (provenance.delisting: delist_date, raw_hash, batch_id, observed_at) is merged in; provenance may only gain keys
+        update public.issuer_industry_memberships set valid_to = v_to, valid_to_available_date = v_to_avail,
+          provenance = case when v_prov ? 'delisting' and not (provenance ? 'delisting') then provenance || jsonb_build_object('delisting', v_prov -> 'delisting') else provenance end
+        where membership_id = ex.membership_id;
         v_closed := v_closed + 1; v_ids := v_ids || ex.membership_id; v_used := v_used || v_id;
       elsif (ex.level, ex.valid_to, ex.available_date, ex.valid_to_available_date, ex.source)
             is not distinct from (v_level, v_to, v_avail, v_to_avail, v_source) then
@@ -489,6 +492,7 @@ begin
     if v_to is not null and v_to <= v_old.valid_from then
       update public.issuer_industry_memberships set status = 'quarantined',
         provenance = provenance || jsonb_build_object('quarantine', jsonb_build_object('reason', 'membership_after_delist', 'valid_to', v_to, 'batch_id', p_batch))
+          || case when (t -> 'provenance') ? 'delisting' and not (provenance ? 'delisting') then jsonb_build_object('delisting', t -> 'provenance' -> 'delisting') else '{}'::jsonb end
       where membership_id = v_old.membership_id;
       v_q := v_q + 1; v_ids := v_ids || v_old.membership_id; continue;
     end if;
@@ -511,6 +515,42 @@ begin
 end $$;
 revoke execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.correct_industry_membership_windows(uuid, uuid, text, text, uuid, jsonb) to service_role;
+
+-- Quarantines the ok rows of the PREDECESSORS of the given current source records (Codex batch 3 P1): when a replacement record
+-- (a current record that supersedes an already-resolved one) is rejected (no issuer, membership_after_delist, …) the
+-- predecessor's rows would otherwise stay ok and eligible. p_sources = the replacement records (current, unresolved: else
+-- membership_conflict); the supersession chain is followed backwards (as apply_industry_memberships step 2); every ok row of the
+-- scheme/version whose source_membership_id is on that chain moves ok -> quarantined in ONE statement (provenance gains
+-- quarantine{reason, batch_id, replacement_source_ids}). Issuer rows of the affected memberships are locked in id order first.
+-- Returns {quarantined, membership_ids}.
+create or replace function public.quarantine_industry_membership_lineage(p_batch uuid, p_scheme text, p_version text, p_sources uuid[], p_reason text)
+returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
+declare v_sources uuid[] := coalesce(p_sources, '{}'::uuid[]); v_old uuid[]; v_ids uuid[];
+begin
+  if p_reason is null or length(p_reason) = 0 then raise exception 'invalid_rows' using errcode = '22023'; end if;
+  perform 1 from public.industry_source_memberships where id = any(v_sources) order by id for update;
+  if exists (select 1 from unnest(v_sources) s(id) left join public.industry_source_memberships m on m.id = s.id
+             where m.id is null or m.status <> 'current' or m.scheme <> p_scheme or m.issuer_id is not null) then
+    raise exception 'membership_conflict: replacement records must be current, of scheme %, and unresolved', p_scheme using errcode = 'P0001';
+  end if;
+  with recursive back(id) as (
+    select m.id from public.industry_source_memberships m where m.superseded_by = any(v_sources)
+    union
+    select m.id from public.industry_source_memberships m join back b on m.superseded_by = b.id
+  ) select coalesce(array_agg(id), '{}'::uuid[]) into v_old from back;
+  perform 1 from public.issuers where issuer_id in (
+    select issuer_id from public.issuer_industry_memberships where source_membership_id = any(v_old) and scheme = p_scheme and version = p_version and status = 'ok')
+  order by issuer_id for update;
+  with q as (
+    update public.issuer_industry_memberships set status = 'quarantined',
+      provenance = provenance || jsonb_build_object('quarantine', jsonb_build_object('reason', p_reason, 'batch_id', p_batch, 'replacement_source_ids', to_jsonb(v_sources)))
+    where source_membership_id = any(v_old) and scheme = p_scheme and version = p_version and status = 'ok'
+    returning membership_id
+  ) select coalesce(array_agg(membership_id order by membership_id), '{}'::uuid[]) into v_ids from q;
+  return jsonb_build_object('quarantined', coalesce(array_length(v_ids, 1), 0), 'membership_ids', to_jsonb(v_ids));
+end $$;
+revoke execute on function public.quarantine_industry_membership_lineage(uuid, text, text, uuid[], text) from public, anon, authenticated;
+grant execute on function public.quarantine_industry_membership_lineage(uuid, text, text, uuid[], text) to service_role;
 
 -- SIC (§4.4): issuer row lock; the open ok sic row of the version: same code → duplicate; another code →
 -- close it at p_observed (valid_to = valid_to_available_date = p_observed) and open the new code from

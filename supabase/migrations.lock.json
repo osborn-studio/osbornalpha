@@ -203,11 +203,11 @@
     },
     {
       "file": "20261111090000_industry_research.sql",
-      "sha256": "a561b042c8f4825a39cdc1ece35def1c821074b127ac3e932f5514901d3be9f8"
+      "sha256": "16cdb2194f7ae4905e877899c8b35c2a10d682925048b60364c31e8e5cecb448"
     },
     {
       "file": "20261111091000_industry_research_functions.sql",
-      "sha256": "2472e5bdb36e098bb646d3652376bd91f9c8bd8eec3af40b277b6c8004aea957"
+      "sha256": "a612fa07d1b596c46b1bebeb4b732e442cdb54654aedd50f5d90bf2ac1e77039"
     }
   ]
 }

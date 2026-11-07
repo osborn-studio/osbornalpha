@@ -22,11 +22,11 @@ import {createHash,randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {Row,TableClient} from '../db/table-client';
 import type {FactsDb} from '../facts/types';
-import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,sameClassification} from './db';
+import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,planDelistings,sameClassification} from './db';
 import {DEFAULT_LICENSES} from './licenses';
 import {IndustryDbError} from './types';
 import type {
- AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
+ AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,DelistingRow,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
  MetricCellRow,MetricRunRow,ObservationResult,OfficialInput,RunDependency,RunKind,SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
 } from './types';
 
@@ -47,7 +47,7 @@ const ASYNC_METHODS=['upsertClassifications','classificationTree','setDatasetLic
  'applyMemberships','applySicMembership','membershipCandidates','membershipsOfIssuer','beginFetchEvent','retryFetchEvent','applyObservations','currentMarksOn',
  'createMetricRun','setMetricRunCoverage','stageMetricRows','stageRunDependencies','activateMetricRun','failRun','activeMetricRun','metricRun','metricRowsOfRun','runDependencies',
  'activeValuationRun','publishedValuations','registerManifest','manifestObjectPath','manifestGcCandidates','deleteManifestIndex','pruneRuns','stateFingerprint','freshness','metricRunVisible',
- 'correctMembershipWindows',
+ 'correctMembershipWindows','quarantineMembershipLineage','upsertDelistings','delistings',
  'unresolvedCount','unresolvedOf'] as const satisfies readonly (keyof IndustryDb)[];
 /** Compile-time check: ASYNC_METHODS must cover every IndustryDb method. */
 export type AsyncMethodsComplete=[Exclude<keyof IndustryDb,typeof ASYNC_METHODS[number]>] extends [never]?true:never;
@@ -94,10 +94,10 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   receipts:Map<string,{payload_hash:string;outcome:string;observation_id:string|null}>;marks:Map<string,MarkRow>;officials:Map<string,MemoryOfficialRow>;
   manifests:Map<string,{manifest_hash:string;kind:RunKind;byte_length:number;created_at:string;object_path:string;gc_claimed_at:string|null;gc_claim:string|null}>;
   runs:Map<string,MetricRunRow>;cells:Map<string,Map<string,MetricCellRow>>;deps:Map<string,Map<string,RunDependency>>;
-  vruns:Map<string,ValuationRunRow>;vcells:Map<string,ValuationCellRow[]>;
+  vruns:Map<string,ValuationRunRow>;vcells:Map<string,ValuationCellRow[]>;delistings:Map<string,DelistingRow>;
  }
  let st:State={licences:new Map(Object.entries(DEFAULT_LICENSES)),classes:new Map(),sources:new Map(),memberships:new Map(),events:new Map(),receipts:new Map(),
-  marks:new Map(),officials:new Map(),manifests:new Map(),runs:new Map(),cells:new Map(),deps:new Map(),vruns:new Map(),vcells:new Map()};
+  marks:new Map(),officials:new Map(),manifests:new Map(),runs:new Map(),cells:new Map(),deps:new Map(),vruns:new Map(),vcells:new Map(),delistings:new Map()};
  let fixedNow:string|null=null;let last='';
  const now=()=>fixedNow??new Date().toISOString();
  /** Strictly increasing instants within one instance (SQL clock_timestamp()). */
@@ -133,16 +133,28 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
  const lockRun=(s:State,run:string)=>{const r=s.runs.get(run);if(!r)unknown('run_not_found');return r!;};
  const unreferenced=(s:State,hash:string)=>![...s.cells.values()].some(m=>[...m.values()].some(c=>c.manifest_hash===hash))&&![...s.vcells.values()].some(rows=>rows.some(c=>c.manifest_hash===hash));
  const oldEnough=(created:string)=>Date.parse(created)<=Date.parse(now())-MANIFEST_GC_GRACE_SECONDS*1000;
+ /** Files the call's quarantine items. TableClient has no delete: when a later filing fails, the items this call already filed are
+  * compensated to resolved_reject (resolved_by 'rollback:industry_call') so no open item references an observation that never
+  * committed; a retry then files one fresh open item per revision (dq_quarantine_open_key_uniq: one open item per key). */
  const quarantineAfter=async(items:{dataset:string;table:string;key:string;reason:string;detail:Record<string,unknown>;batch:string}[])=>{
-  for(const q of items){
-   const open=await tables.select('dq_quarantine',{dataset:q.dataset,table_name:q.table,natural_key:q.key,reason_code:q.reason,status:'open'});
-   if(open.length)continue;
-   await tables.insert('dq_quarantine',{id:randomUUID(),dataset:q.dataset,table_name:q.table,natural_key:q.key,reason_code:q.reason,detail:q.detail,payload:{},batch_id:q.batch,status:'open',resolved_by:null,resolved_at:null,created_at:now()});
+  const filed:string[]=[];
+  try{
+   for(const q of items){
+    const open=await tables.select('dq_quarantine',{dataset:q.dataset,table_name:q.table,natural_key:q.key,reason_code:q.reason,status:'open'});
+    if(open.length)continue;
+    const id=randomUUID();
+    await tables.insert('dq_quarantine',{id,dataset:q.dataset,table_name:q.table,natural_key:q.key,reason_code:q.reason,detail:q.detail,payload:{},batch_id:q.batch,status:'open',resolved_by:null,resolved_at:null,created_at:now()});
+    filed.push(id);
+   }
+  }catch(e){
+   for(const id of filed)await tables.update('dq_quarantine',{id},{status:'resolved_reject',resolved_by:'rollback:industry_call',resolved_at:now()}).catch(()=>0);
+   throw e;
   }
  };
  const unresolvedOf=(q:{code:string;level:number;on:string;knownBy:string}):ManifestUnresolved[]=>{
   const col=levelColumn(q.level);
-  return [...st.sources.values()].filter(r=>r.status==='current'&&r.issuer_id===null&&r[col]===q.code&&r.in_date<=q.on&&r.in_date<=q.knownBy&&(r.out_date===null||r.out_date>=q.on))
+  return [...st.sources.values()].filter(r=>r.status==='current'&&r.issuer_id===null&&r[col]===q.code&&r.in_date<=q.on&&r.in_date<=q.knownBy&&(r.out_date===null||r.out_date>=q.on)
+   &&!((st.delistings.get(r.ts_code)?.delist_date??'9999-12-31')<=q.on))
    .sort((a,b)=>cmp(a.ts_code,b.ts_code)||cmp(a.in_date,b.in_date)||cmp(a.id,b.id))
    .map(r=>({ts_code:r.ts_code,in_date:r.in_date,out_date:r.out_date,source_membership_id:r.id}));
  };
@@ -253,7 +265,9 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
     if(ex){
      if(ex.valid_to===null&&t.valid_to!==null&&ex.level===t.level){
       if(t.valid_to<=ex.valid_from||t.valid_to_available_date===null||t.valid_to_available_date<ex.valid_from)unknown('append_only: issuer_industry_memberships valid_to may only go from null to a date after valid_from');
-      ex.valid_to=t.valid_to;ex.valid_to_available_date=t.valid_to_available_date;closed++;ids.push(ex.membership_id);used.add(t.membership_id);
+      ex.valid_to=t.valid_to;ex.valid_to_available_date=t.valid_to_available_date;
+      if((t.provenance as Record<string,unknown>).delisting!==undefined&&ex.provenance.delisting===undefined)ex.provenance={...ex.provenance,delisting:clone((t.provenance as Record<string,unknown>).delisting)};
+      closed++;ids.push(ex.membership_id);used.add(t.membership_id);
      }else if(ex.level===t.level&&ex.valid_to===t.valid_to&&ex.available_date===t.available_date&&ex.valid_to_available_date===t.valid_to_available_date&&ex.source===t.source){
       duplicates++;ids.push(ex.membership_id);used.add(t.membership_id);
      }else fail('membership_conflict',`membership_conflict: ${issuer} ${scheme} ${t.code} level ${t.level} from ${t.valid_from} differs from the stored row`);
@@ -281,7 +295,8 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
     const old=okRows(s).find(m=>m.issuer_id===issuer&&m.scheme===scheme&&m.version===version&&m.source_membership_id===sourceId&&m.level===t.level&&m.code===t.code&&m.valid_from===t.valid_from);
     if(!old)fail('membership_conflict',`membership_conflict: no ok row of source ${sourceId} at level ${t.level} from ${t.valid_from}`);
     if(t.valid_to!==null&&t.valid_to<=old!.valid_from){   // empty corrected window (R3-1): quarantine, no successor
-     old!.status='quarantined';old!.provenance={...old!.provenance,quarantine:{reason:'membership_after_delist',valid_to:t.valid_to,batch_id:batch}};
+     old!.status='quarantined';old!.provenance={...old!.provenance,quarantine:{reason:'membership_after_delist',valid_to:t.valid_to,batch_id:batch},
+      ...((t.provenance as Record<string,unknown>).delisting!==undefined&&old!.provenance.delisting===undefined?{delisting:clone((t.provenance as Record<string,unknown>).delisting)}:{})};
      quarantined++;ids.push(old!.membership_id);continue;
     }
     if(old!.valid_to===t.valid_to&&old!.valid_to_available_date===t.valid_to_available_date){duplicates++;ids.push(old!.membership_id);continue;}
@@ -293,6 +308,25 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    }
    return {inserted,closed:0,superseded,duplicates,quarantined,membership_ids:ids} as CorrectWindowsResult;
   }),
+  quarantineMembershipLineage:(batch,scheme,version,sourceIds,reason)=>atomic(s=>{
+   if(!reason)unknown('invalid_rows');
+   for(const id of sourceIds){const m=s.sources.get(id);if(!m||m.status!=='current'||m.scheme!==scheme||m.issuer_id!==null)fail('membership_conflict',`membership_conflict: replacement records must be current, of scheme ${scheme}, and unresolved`);}
+   const old=new Set<string>();let frontier=[...sourceIds];
+   while(frontier.length){const next:string[]=[];for(const r of s.sources.values())if(r.superseded_by!==null&&frontier.includes(r.superseded_by)&&!old.has(r.id)){old.add(r.id);next.push(r.id);}frontier=next;}
+   const ids:string[]=[];
+   for(const m of [...s.memberships.values()].sort((a,b)=>cmp(a.membership_id,b.membership_id))){
+    if(m.status!=='ok'||m.scheme!==scheme||m.version!==version||m.source_membership_id===null||!old.has(m.source_membership_id))continue;
+    m.status='quarantined';m.provenance={...m.provenance,quarantine:{reason,batch_id:batch,replacement_source_ids:[...sourceIds]}};ids.push(m.membership_id);
+   }
+   return {quarantined:ids.length,membership_ids:ids};
+  }),
+  upsertDelistings:(batch,input)=>atomic(async s=>{
+   if(!await registered('ingest_batches',{batch_id:batch}))unknown('invalid_batch');
+   const {insert,update,result}=planDelistings(s.delistings,input);
+   for(const r of [...insert,...update])s.delistings.set(r.ts_code,{ts_code:r.ts_code,delist_date:r.delist_date,list_status:r.list_status,observed_at:new Date(r.observed_at).toISOString(),batch_id:batch,raw_hash:r.raw_hash});
+   return result;
+  }),
+  async delistings(){return clone([...st.delistings.values()].sort((a,b)=>cmp(a.ts_code,b.ts_code)));},
   // lease fence (Codex round 2 R2-3): the scope row (in `tables`) must still be leased to fence.leaseBatch and unexpired
   async applySicMembership(batch,issuer,observed,code,provenance,fence){
    if(!observed)unknown('invalid_rows');

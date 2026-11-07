@@ -19,7 +19,7 @@ const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261111090000_industry_research.sql';
 const PROTECTED=['industry_metric_runs','industry_metrics','industry_valuation_runs','industry_valuations','industry_valuation_pairs','industry_run_dependencies','industry_manifests',
  'security_marks','industry_official_valuations','industry_fetch_events','industry_observation_receipts','issuer_industry_memberships','industry_source_memberships'];
-const TABLES=[...PROTECTED,'industry_classifications','industry_dataset_licenses','industry_sync_scope'];
+const TABLES=[...PROTECTED,'industry_classifications','industry_dataset_licenses','industry_sync_scope','industry_security_delistings'];
 const LICENSED=['industry_classifications','issuer_industry_memberships','industry_metric_runs','industry_metrics','industry_valuation_runs','industry_valuations','security_marks'];
 const SERVICE_ONLY=TABLES.filter(t=>!LICENSED.includes(t));
 const hex=(n:number)=>randomBytes(n).toString('hex');
@@ -200,6 +200,7 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
    for(const p of ['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'])expect({role,t,p,ok:await priv(role,t,p)}).toEqual({role,t,p,ok:false});
   }
   expect([await priv('service_role','industry_classifications','INSERT'),await priv('service_role','industry_classifications','UPDATE'),await priv('service_role','industry_classifications','DELETE'),await priv('service_role','industry_classifications','TRUNCATE')]).toEqual([true,true,false,false]);
+  expect([await priv('service_role','industry_security_delistings','SELECT'),await priv('service_role','industry_security_delistings','INSERT'),await priv('service_role','industry_security_delistings','UPDATE'),await priv('service_role','industry_security_delistings','DELETE'),await priv('service_role','industry_security_delistings','TRUNCATE')]).toEqual([true,true,true,false,false]);
   expect([await priv('service_role','industry_dataset_licenses','SELECT'),await priv('service_role','industry_dataset_licenses','UPDATE')]).toEqual([true,false]);
   expect([await priv('service_role','industry_sync_scope','INSERT'),await priv('service_role','industry_sync_scope','UPDATE'),await priv('service_role','industry_sync_scope','DELETE'),await priv('service_role','industry_sync_scope','TRUNCATE')]).toEqual([true,true,true,false]);
   const b=await batch();const iss=await issuer();
