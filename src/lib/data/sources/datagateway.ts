@@ -36,6 +36,13 @@ export interface DatagatewayKlineOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  // F4
+  /** Calendar window of the history request (YYYY-MM-DD). Default: today back max(30, limit × 3) days. */
+  startDate?: string;
+  endDate?: string;
+  /** Called once when the response is the close-only MarketDataItem shape (OHLC synthesised from closes, volume 0). */
+  onCloseOnly?: () => void;
+  // /F4
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -117,16 +124,24 @@ export function datagatewayDailyKlineBody(input: {
   ticker: string;
   market: Market;
   limit: number;
+  // F4
+  startDate?: string;
+  endDate?: string;
+  // /F4
 }): { symbols: string[]; startDate: string; endDate: string; mode: 'strict_sync' } | null {
   const symbol = datagatewayWireSymbol(input.ticker, input.market);
   if (!symbol) return null;
-  const end = new Date();
+  // F4: optional historical window; without startDate/endDate the body is exactly the previous one
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if ((input.startDate !== undefined && !day.test(input.startDate)) || (input.endDate !== undefined && !day.test(input.endDate))) return null;
+  const end = input.endDate !== undefined ? new Date(`${input.endDate}T00:00:00Z`) : new Date();
   const start = new Date(end);
   // The history API accepts calendar dates, so request a generous window to
   // obtain the requested number of trading sessions around holidays.
   start.setUTCDate(start.getUTCDate() - Math.max(30, input.limit * 3));
   const date = (value: Date) => value.toISOString().slice(0, 10);
-  return { symbols: [symbol], startDate: date(start), endDate: date(end), mode: 'strict_sync' };
+  return { symbols: [symbol], startDate: input.startDate ?? date(start), endDate: date(end), mode: 'strict_sync' };
+  // /F4
 }
 
 function valueAsNumber(value: unknown): number | null {
@@ -196,7 +211,13 @@ function normalizeAdjustment(value: unknown, expected: KlineAdjustment): KlineAd
 }
 
 /** Parses and validates the small, provider-specific JSON boundary before shared validation. */
-export function parseDatagatewayDailyKline(payload: unknown, expectedAdjustment: KlineAdjustment): SourceKlineSeries {
+export function parseDatagatewayDailyKline(
+  payload: unknown,
+  expectedAdjustment: KlineAdjustment,
+  // F4
+  hooks: { onCloseOnly?: () => void } = {},
+  // /F4
+): SourceKlineSeries {
   const root = record(payload);
   const rootData = root ? field(root, 'data', 'result', 'results') : undefined;
   const data = record(rootData) ?? root;
@@ -217,6 +238,9 @@ export function parseDatagatewayDailyKline(payload: unknown, expectedAdjustment:
   })) {
     const closes = barsValue.map(parseCloseHistory).filter((bar): bar is SourceKlineBar => !!bar);
     if (closes.length > 0) {
+      // F4
+      hooks.onCloseOnly?.();
+      // /F4
       let previous = closes[0].close;
       barsValue = closes.map((bar) => {
         const open = previous;
@@ -296,7 +320,9 @@ export async function fetchDatagatewayDailyKline(
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DATAGATEWAY_DAILY_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   try {
-    const body = datagatewayDailyKlineBody({ ticker, market, limit });
+    // F4: forward the optional window
+    const body = datagatewayDailyKlineBody({ ticker, market, limit, startDate: options.startDate, endDate: options.endDate });
+    // /F4
     if (!body) return null;
     const response = await (options.fetchImpl ?? fetch)(url, {
       method: 'POST',
@@ -328,7 +354,9 @@ export async function fetchDatagatewayDailyKline(
     } catch {
       throw new KlineProviderError('protocol', 'Datagateway response is invalid JSON');
     }
-    return parseDatagatewayDailyKline(payload, adjustment);
+    // F4: forward the close-only signal
+    return parseDatagatewayDailyKline(payload, adjustment, { onCloseOnly: options.onCloseOnly });
+    // /F4
   } catch (error) {
     if (error instanceof KlineProviderError) throw error;
     const aborted = controller.signal.aborted || options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');

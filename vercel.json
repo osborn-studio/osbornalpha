@@ -77,6 +77,14 @@
     {
       "path": "/api/cron/company-digest",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/judgments-settle",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/judgments-calibrate",
+      "schedule": "0 4 * * 1"
     }
   ]
 }

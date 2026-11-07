@@ -10,7 +10,11 @@ import {CYCLE_PAIR_IDS,RECONCILE_PAIR_IDS} from './reconcile/types';
 // A dataset literal anywhere but the registry means a producer bypassed DATASETS (spec 3 §6.3).
 const LITERAL=/(['"`])(entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|company\.events|reconcile\.[a-z][a-z_.]*)\1/;
 // db-contract.ts is a test-fixture module (shared FactsDb contract cases), not a producer.
-const EXEMPT=new Set(['src/lib/dq/datasets.ts','src/lib/facts/db-contract.ts']);
+const EXEMPT=new Set(['src/lib/dq/datasets.ts','src/lib/facts/db-contract.ts',
+ // F4 — the judgments and macro db-contract modules are shared test-fixture contract cases too ('facts.us' is a negative case)
+ 'src/lib/judgments/db-contract.ts','src/lib/macro/db-contract.ts',
+ // /F4
+]);
 function sources(dir:string):string[]{
  const out:string[]=[];
  for(const name of readdirSync(dir)){
