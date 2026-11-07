@@ -1,6 +1,6 @@
 # 宏观工作台（Macro Workbench）设计规格 · P3 + P4
 
-- 稿次：第 3 稿（2026-11-07；Codex 第一轮 `02-codex-spec-round1.md` 21 条 → 第 2 稿；第二轮 `04-codex-spec-round2.md` 14 条新问题与 14 条部分解决 → 第 3 稿，处置见 §0 与 §0.2；两轮上限已用完，残余风险由计划审计兜底）
+- 稿次：第 4 稿（2026-11-07；Codex 第一轮 `02-codex-spec-round1.md` 21 条 → 第 2 稿；第二轮 `04-codex-spec-round2.md` 14 条新问题与 14 条部分解决 → 第 3 稿，处置见 §0 与 §0.2；两轮上限已用完，残余风险由计划审计兜底。计划审计第一轮 `06-codex-plan-round1.md` 16 条回写 → 第 4 稿，见 §0.2 末"第 4 稿（计划审计回写）"）
 - 上游：宏观工作台 P1 + P2 规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（分支 `claude/macro-workbench-bbde80` 第 4 稿）与计划 `docs/superpowers/plans/2026-11-06-macro-workbench.md`（第 2 稿，"共享契约"与 Task 14 / 15）；F4 判断层规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（分支 `claude/judgment-framework-50f9e1`）。
 - 依据：ChaosAI 拆解 `docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md` §7（传导链、美联储→中国资产）、§8（历史周期表）、§10、§11.6；总纲 `EXPERT_PLAYBOOK_AND_BRIEF.md` §5。
 - 审计目录：`docs/audits/2026-11-07-macro-p3-p4/`。设计稿：§16。
@@ -51,6 +51,29 @@
 | N12 | P1 | P3 / P4 页面不嵌 P1 `MacroJudgmentSlot`（它按最新卡片取数且绑定传入快照）。v1 只显示经校验的"F4 判定"标记与本模块的无数字摘要（类别、生命周期、校准态文字）；完整卡片嵌入需要 P1 渲染器接收"指定卡片 + 匹配快照"，列入 WP-S6 契约 | §5.2、§6.2、§9.2 |
 | N13 | P2 | 偏差分类穷尽：结算有、登记无 → `newly_available`（子类 `later_period` / `backfill` / `new_series`）；只针对 `macro_regime@v1`；记录使用的结算 id | §6.4 |
 | N14 | P2 | 组合路由（传导）恒 200 并带 `judgment_status: 'disabled'\|'unavailable'\|'ok'`；503 只给纯判断路由；顺序：session → 功能开关 → 幂等重放 → 底座 / 主体检查 | §8、§9.1 |
+
+#### 第 4 稿（计划审计回写）
+
+计划 `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md` 的 Codex 审计第一轮（`docs/audits/2026-11-07-macro-p3-p4/06-codex-plan-round1.md`，结论 not ready）16 条全部回写；计划的代码、测试与本规格同步修改。
+
+| # | 级别 | 处置 | 落点 |
+|---|---|---|---|
+| P1-1 | P1 | `macro_claim_explanation` 先对已有运行行 `SELECT … FOR UPDATE` 再读状态；完成登记、终态、结算标记、过期四个 RPC 同样先锁该行。过期认领因此不会把并发提交的 `rejected` / `failed` 改成 `abandoned`，也不会在并发 `accepted` 后写坏投影。集成测试覆盖"终态先提交 / 认领先提交 / 过期函数等锁"三种先后 | §4.4 |
+| P1-2 | P1 | 窗口是闭区间月份 `[m−1, m+N−1]`：基期月 ≤ 最后入选末期月（含共享端点月）→ `overlap`；扫描前显式按生效日排序；相邻月份夹具与期望统计改写（每隔一月一次事件） | §5.3 |
+| P1-3 | P1 | 清单 `params` 存计算参数：传导 `{region}`、矩阵 `{window}`、历史表 `{boundary}`；视图与重放只从 `body.params` 取参数；清单与缓存按 `(kind, params)` 区分，每个参数值一个身份；重放测试断言身份互不相同 | §4.5、§5.1、§5.3、§5.5 |
+| P1-4 | P1 | 事件源仍只记读取状态，但冻结推导与核验每个事件所需的观测：所有事件的证据观测与 2008 衔接三元组（单一目标末条、上 / 下限首条），角色 `events:<series>:evidence`；测试断言每个证据 id 都在清单内、可只凭清单重算事件 | §4.5、§5.4 |
+| P1-5 | P1 | 复盘解读绑定不可变 `result_id`：新增 `StrategyDb.reviewResult(id)`（anon 读 `macro_review_results`），解读主体 id = `result_id`，`GET /explanations` 按它过滤，复盘页传正在显示的 `result_id`；不再用 `<region>:<YYYY-MM>` | §6.3、§8 |
+| P1-6 | P1 | 新 RPC `macro_record_completion(p_explanation_id, p_raw_output, p_finalize_payload)`：提供方返回（或抛错带计量）后、校验 / finish 之前把原始输出与 `finalizeUsageRun` 的完整参数持久化到运行行（`running` 或 `abandoned` 均可）；随后 finish；`finalizeUsageRun` 在 finally 路径里执行，finish 失败也照样执行；`finalize` 成功后才 `macro_mark_finalized`。注入 finish 失败的测试覆盖 | §4.4、§6.3 |
+| P2-7 | P2 | `beginUsageRun` 出错视为结果不明：同一审计键登记 `status='failed'` 的结算载荷，尝试 `finalizeUsageRun(failed)`，成功才标记已结算；用量运行确实不存在（`usage run not found`）时由运维核对后标记 | §6.3、§13 |
+| P2-8 | P2 | 结算载荷 `finalize_payload` 原样保存定价版本、汇率、聚合计量与状态；重试原样回放，不按当前配置重算；恢复脚本重试一切 `finalize_payload` 非空且 `finalized=false` 的行（含 `abandoned` 与 finish 失败仍为 `running` 的行）；`macro_mark_finalized` 只要求已登记载荷 | §4.4、§6.3、§13 |
+| P2-9 | P2 | 解读 POST 的代码版本检查移到幂等重放之后（重放不需要新清单与代码版本）；代码版本缺失的重放测试 | §6.3、§9.1 |
+| P2-10 | P2 | 百分比变化在事实与视图中存精确比值 `'<末>/<基>'`（事实单位 `pct_ratio`），展示时只舍入一次（BigInt，半数远离零）；正负边界（±0.04996%、±0.05%）测试 | §5.6、§6.1、§6.3 |
+| P2-11 | P2 | 事件源读取被截断 → `gaps:[{kind:'history_truncated', reason, near:截止日}]`；历史表显示"政策事件序列读取被截断"而非"没有行动段"；复盘第 4、5 节各一条 `events_truncated` 事实；矩阵整列 `missing` | §5.4、§5.5、§6.2、§11 |
+| P2-12 | P2 | 偏差枚举：满页且页尾两条 `as_of` 相同（排他游标下无法证明完整）→ `incomplete:true`；稳定游标 `(as_of, judgment_id)` 列为给 F4 的开放项 | §6.4 |
+| P2-13 | P2 | 衔接事件 `change_bp` 恒为 `toBp(u − s)`（上限）；上限不变、下限变化 → 0 bp 事件，行动段与矩阵跳过，不臆造方向；对应夹具 | §5.4 |
+| P2-14 | P2 | 新 RPC `macro_expire_explanations(p_user_id)`：把该用户超过 5 分钟的 `running` 行改 `abandoned`（投影 `failed {abandoned}`）；`GET /explanations` 读之前用 admin 客户端调用，页面刷新即可收敛；面板失败态以新 `request_id` 重新生成。迁移 RPC 共八个 | §4.4、§6.3 |
+| P2-15 | P2 | 快照 id 未被 `observationsByIds` 解析（未知或不再是 ok）→ 该区域快照不完整：记录 `snapshot_rows` 读取 `missing`，该区域所有快照取值记 `truncated` 并返回空，绝不把比较期提升为 `latest`、也不回退到 `latestObservations` | §4.3、§4.5 |
+| P2-16 | P2 | 解读清单冻结交给模型的确切事实列表（`body.facts`）；`subjectFacts` / `explanationFacts` 只读它；离线测试只凭已存清单重建模型输入并与实际提示逐字相等 | §4.5、§6.1、§6.3 |
 
 ---
 
@@ -157,7 +180,7 @@ P1 工作台页内 tab 增加三个**链接型** tab："传导"、"历史"、"�
 
 ### 3.6 解读面板 `ExplanationPanel`
 
-状态：未生成（按钮 + 今日剩余次数）→ 生成中 → **已接受**：上区"事实（系统生成）"逐条事实句，每条带清单引用；下区"机制假设（模型生成，未经核实）"逐条假设句，标注其关联的事实编号 → **未通过校验**：失败码列表（不显示模型文本）→ **失败**：模型调用失败，可用新请求重试。固定页眉："绑定 <快照 / 复盘> · 清单 <id> · 模型 <provider/model> · 提示 `macro-explain-prompt/1` · 校验 `macro-explain-validator/1`"。
+状态：未生成（按钮 + 今日剩余次数）→ 生成中 → **已接受**：上区"事实（系统生成）"逐条事实句，每条带清单引用；下区"机制假设（模型生成，未经核实）"逐条假设句，标注其关联的事实编号 → **未通过校验**：失败码列表（不显示模型文本）→ **失败**：模型调用失败或超时放弃，可用新请求重试（生成中超过 5 分钟的请求在刷新时由 `GET /explanations` 收敛为失败，§6.3）。复盘的面板绑定正在显示的复盘结果 `result_id`。固定页眉："绑定 <快照 / 复盘> · 清单 <id> · 模型 <provider/model> · 提示 `macro-explain-prompt/1` · 校验 `macro-explain-validator/1`"。
 
 ### 3.7 移动端
 
@@ -198,7 +221,7 @@ export interface StrategyReadPort{
  activeSnapshot(region:Region):Promise<SnapshotRecord|null>;
  snapshot(snapshotId:string):Promise<SnapshotRecord|null>;
  snapshotUpTo(region:Region,cutoff:string):Promise<SnapshotRecord|null>;   // created_at ≤ cutoff 的最新非 failed 快照；同 created_at 取 snapshot_id 最大
- observationsByIds(ids:string[]):Promise<ObservationRow[]>;                  // ok 行，输入顺序；缺失 id 不返回（调用方视为缺失）
+ observationsByIds(ids:string[]):Promise<ObservationRow[]>;                  // ok 行，输入顺序；缺失 id 不返回（调用方视为缺失：该区域快照不完整，§4.5）
  latestObservations(seriesIds:string[],opts:{asOf:string}):Promise<ObservationRow[]>;
  seriesHistory(seriesId:string,opts:{from?:string;to?:string;asOf:string;maxRows:number}):Promise<ObservationRow[]>;  // 读完或抛 truncated
  catalog():readonly MacroSeriesDef[];
@@ -221,7 +244,7 @@ export interface StrategyReadPort{
 | `macro_review_results` | `result_id` uuid PK, region, month, status ('ok'/'insufficient'), manifest_id, manifest_hash, facts jsonb, method_version, code_version, created_at | UNIQUE(region, month, manifest_hash)；anon/authenticated select；不可变 |
 | `macro_review_current` | (region, month) PK, result_id, generation bigint, cutoff timestamptz, updated_at | anon/authenticated select；写仅经 `macro_publish_review` |
 | `macro_review_attempts` | attempt_id uuid PK, region, month, status ('ok'/'replayed'/'insufficient'/'failed'/'stale'), result_id null, error jsonb, created_at | service only |
-| `macro_explanation_runs` | `explanation_id` uuid PK（RPC 生成）, user_id, request_id uuid, payload_hash, subject_kind, subject_id, locale, manifest_id, state ('running'/'accepted'/'rejected'/'failed'/'abandoned'), claimed_at, finished_at, provider, model, prompt_version, validator_version, raw_output jsonb, validation jsonb, `usage_audit_key`（RPC 生成 `'macro-explain:'||explanation_id`）, `accounting` jsonb, `finalized` boolean default false, `late_output` jsonb（abandoned 之后迟到的完成） | UNIQUE(user_id, request_id)；**service only** |
+| `macro_explanation_runs` | `explanation_id` uuid PK（RPC 生成）, user_id, request_id uuid, payload_hash, subject_kind, subject_id, locale, manifest_id, state ('running'/'accepted'/'rejected'/'failed'/'abandoned'), claimed_at, finished_at, provider, model, prompt_version, validator_version, raw_output jsonb, validation jsonb, `usage_audit_key`（= `explanation_id::text`；计量 RPC 的幂等键类型是 uuid）, `accounting` jsonb, `finalize_payload` jsonb（`finalizeUsageRun` 的完整参数，含 `status`、定价版本、汇率、聚合计量；`macro_record_completion` 写入）, `finalized` boolean default false, `late_output` jsonb（abandoned 之后迟到的完成） | UNIQUE(user_id, request_id)；**service only** |
 | `macro_explanations` | explanation_id PK, user_id, subject_kind, subject_id, locale, manifest_id, state, rendered jsonb（仅 accepted：`{facts:[{fact_id,text}], hypotheses:[{text,fact_ids}]}`）, failure_codes text[]（rejected / failed）, provider, model, prompt_version, validator_version, created_at, finished_at | RLS `user_id = auth.uid()` select 给 authenticated；写仅经 RPC |
 
 RPC（全部 `security definer`、`set search_path = public`，`revoke execute … from public, anon, authenticated` 后只 grant service_role）：
@@ -229,9 +252,14 @@ RPC（全部 `security definer`、`set search_path = public`，`revoke execute �
 - `macro_put_manifest(p_kind, p_body, p_manifest_hash, p_cutoff, p_method_version, p_code_version, p_catalog_version)`：同 `manifest_hash` 存在 → 返回已有 id；否则插入。`manifest_hash = sha256(canonicalJson(body))`，`body` 即 §4.5 的整份清单（含 kind、params、cutoff、全部冻结依赖与版本），服务端计算；集成测试断言同一 body 两次调用返回同一 id、body 任一字段不同则不同 id。
 - `macro_publish_review(p_region, p_month, p_expected_generation, p_cutoff, p_status, p_manifest_id, p_manifest_hash, p_facts, p_method_version, p_code_version)`：对 `(region, month)` 事务级咨询锁 → 按 `(region, month, manifest_hash)` 取或插入结果行 → 读当前指针（不存在视为 `generation=0, cutoff=null, result_id=null`）：① 指针已指向该结果 → `outcome='replayed'`（不前移，无论期望代际）；② `generation <> p_expected_generation` → `outcome='stale'`；③ 当前 `cutoff` 非空且 `p_cutoff < cutoff` → `outcome='stale'`；④ 否则指针指向该结果、`generation+1`（首次发布得 1）、`cutoff = p_cutoff` → `outcome='advanced'`。每次调用都在同一事务内写一条尝试日志（`ok`/`replayed`/`stale`）；`stale` 是返回值，不抛异常。返回 `{result_id, generation, outcome}`。
 - `macro_record_review_attempt(p_region, p_month, p_status, p_error)`：只记失败尝试（计算或清单阶段的异常）。
-- `macro_claim_explanation(p_user_id, p_request_id, p_payload_hash, p_subject_kind, p_subject_id, p_locale, p_manifest_id)`：对 `(user_id, request_id)` 加事务级咨询锁；已存在：`payload_hash` 不同 → 抛 `payload_conflict`；`running` 且 `claimed_at` 早于 5 分钟 → 原子改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回 `{outcome:'existing', …}`；其他 → `{outcome:'existing', explanation_id, usage_audit_key, projection}`；不存在 → 生成 `explanation_id`、`usage_audit_key = 'macro-explain:'||explanation_id`，插入 `running` 运行行与投影，返回 `{outcome:'claimed', explanation_id, usage_audit_key, projection}`。**只有 `claimed` 的调用方可以进入计费与模型调用。**
+- 改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `SELECT … FOR UPDATE` 锁该行再读状态，彼此串行；过期认领不会覆盖并发提交的终态（第 4 稿 P1-1）。
+- `macro_claim_explanation(p_user_id, p_request_id, p_payload_hash, p_subject_kind, p_subject_id, p_locale, p_manifest_id)`：对 `(user_id, request_id)` 加事务级咨询锁并锁定已有运行行；已存在：`payload_hash` 不同 → 抛 `payload_conflict`；`running` 且 `claimed_at` 早于 5 分钟 → 原子改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回 `{outcome:'existing', …}`；其他 → `{outcome:'existing', explanation_id, usage_audit_key, projection}`；不存在 → 生成 `explanation_id`、`usage_audit_key = explanation_id::text`，插入 `running` 运行行与投影，返回 `{outcome:'claimed', explanation_id, usage_audit_key, projection}`。**只有 `claimed` 的调用方可以进入计费与模型调用。**
+- `macro_record_completion(p_explanation_id, p_raw_output, p_finalize_payload)`：提供方返回（或抛错、或 `beginUsageRun` 失败）后、校验与终态之前调用；对 `running` 或 `abandoned` 行写 `raw_output` 与 `finalize_payload`；已登记同值 → 无操作；已登记不同值或其他状态 → `invalid_transition`。使计量在之后任何失败下都可恢复。
 - `macro_finish_explanation(p_explanation_id, p_state, p_provider, p_model, p_prompt_version, p_validator_version, p_raw_output, p_validation, p_rendered, p_failure_codes, p_accounting)`：`running → accepted/rejected/failed` 写运行行与投影；行已处于**同一**终态且 `raw_output` 相同 → 返回现有投影（幂等）；行已处于其他终态 → 抛 `invalid_transition`；行为 `abandoned` → 只写 `late_output` 与 `accounting`（投影保持 `failed`），返回投影。
-- `macro_mark_finalized(p_explanation_id)`：计量结算成功后置 `finalized=true`（幂等）。运维脚本可列出 `state` 为终态且 `finalized=false` 的运行行，凭其 `accounting` 重试 `finalizeUsageRun`，不重跑模型。
+- `macro_mark_finalized(p_explanation_id)`：用 `finalize_payload` 结算成功后置 `finalized=true`（幂等）；要求已登记载荷，状态不限（含 finish 失败仍为 `running` 的行与 `abandoned` 行）。运维脚本列出 `finalize_payload` 非空且 `finalized=false` 的全部运行行，按载荷**原样**重试 `finalizeUsageRun`（不按当前定价 / 汇率重算，不重跑模型），成功后标记。
+- `macro_expire_explanations(p_user_id)`：把该用户 `claimed_at` 早于 5 分钟的 `running` 行改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回条数；`GET /explanations` 读取前调用，使进程死亡后的请求在页面刷新时收敛。
+
+迁移共八个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`。
 
 全部表先 `revoke all … from public, anon, authenticated, service_role` 再按表 grant select；无角色有直接写权限。`supabase/migrations.lock.json` 追加；`database.types.ts` 以 `// MACRO-P3` 块加类型。
 
@@ -241,7 +269,7 @@ RPC（全部 `security definer`、`set search_path = public`，`revoke execute �
 interface ManifestInput{series_id:string;role:string;               // 例如 'node:us_dgs10'、'dim:US_DTWEXBGS:base'
  observation_id:string;period_end:string;value_text:string;version:number;available_at:string;
  source:{kind:'snapshot';snapshot_id:string}|{kind:'history';as_of:string}}
-interface StrategyManifest{kind:ManifestKind;params:Record<string,string|number>;cutoff:string;
+interface StrategyManifest{kind:ManifestKind;params:Record<string,string|number>;cutoff:string;   // params = 计算参数：传导 {region}、矩阵 {window}、历史表 {boundary}、复盘 {region, month}、解读 {subject…}
  snapshots:{US:FrozenSnapshot|null;CN:FrozenSnapshot|null};          // 两区域在 cutoff 时的快照（冻结记录）
  baseline?:{cutoff:string;US:FrozenSnapshot|null;CN:FrozenSnapshot|null};   // 仅复盘
  catalog:FrozenSeriesDef[];                                          // 计算用到的每个目录序列的定义投影（id, region, role, type, name, unit, status, reason, aliasOf, derive, changeKind, releaseLagDays）
@@ -249,17 +277,21 @@ interface StrategyManifest{kind:ManifestKind;params:Record<string,string|number>
  reads:Array<{series_id:string;purpose:string;state:'ok'|'missing'|'truncated'}>;   // 每次读取的结果状态
  inputs:ManifestInput[];events?:StrategyPolicyEvent[];gaps?:EventGap[];
  timeliness?:Array<{series_id:string;state:Timeliness}>;            // 仅复盘，按截止日计算后冻结
+ facts?:Fact[];                                                       // 仅解读（explain_facts）：交给模型的确切事实列表
  catalog_version:string;method_version:string;code_version:string}
 interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:string;catalog_counts:{verified:number;missing:number;restricted:number};observation_ids:string[];history_ids:string[]}
 ```
 
-- **快照内观测的角色**：同一序列在快照 `observation_ids ∪ history_ids` 中可能有多条（最新期、上一可比期、3 个月前）。`period_end` 最大者角色 `latest`，用于节点与"当前值"；`prev`（前一个 `period_end`）与 `prev3m`（3 个月前的 `period_end`，季度序列取前一季度）角色用于变化事实；其余不入清单。
+- **快照内观测的角色**：同一序列在快照 `observation_ids ∪ history_ids` 中可能有多条（最新期、上一可比期、3 个月前）。`period_end` 最大者角色 `latest`，用于节点与"当前值"；`prev`（前一个 `period_end`）与 `prev3m`（3 个月前的 `period_end`，季度序列取前一季度）角色用于变化事实；其余不入清单。快照中任一 id 未被 `observationsByIds` 返回 → 该区域快照**不完整**：记录读取 `{series_id: snapshot_id, purpose: 'snapshot_rows', state: 'missing'}`，该区域所有快照取值记 `truncated` 并返回空；不得把比较期提升为 `latest`，也不回退到 `latestObservations`。
+- **参数**：计算参数（传导的区域、矩阵的窗口 N、历史表的边界）冻结在 `params` 中并参与哈希；每个参数值是独立的清单身份；视图与重放只从 `params` 读取参数。
+- **事件证据**：事件源历史不整体复制，但冻结推导与核验每个事件所需的观测——所有事件的证据观测与 2008 衔接三元组——角色 `events:<series>:evidence`（`source.kind='history'`）。
+- **解读事实**：`explain_facts` 清单把交给模型的确切事实列表冻结在 `facts`；模型输入只凭清单重建。
 - **重放**：`replay(body)` 只读清单本身——目录投影、规则、快照记录、读取状态、及时性结果都在清单里，不访问端口与当前目录；测试断言重放视图与原视图逐字段相等。
 
 - **截止** `cutoff`：传导 / 矩阵 / 历史表 = 两区域 active 快照 `created_at` 的较大者（任一区域无快照则取另一者；都无 → 传导页"尚无发布快照"，矩阵与历史表用请求时刻）；复盘 = 次月 3 日 `00:00:00Z`（§6.2）；解读 = 主体（快照 / 复盘）的清单截止。
 - **取值规则**：一个序列若在其区域在截止时的快照 `observation_ids` 中 → 取那条（`source.kind='snapshot'`）；否则 → `latestObservations([id], {asOf: cutoff})`（`source.kind='history'`）。历史窗口序列一律 `seriesHistory(id, {asOf: cutoff})`。
 - **冻结**：计算前组装清单 → `manifest_hash = sha256(canonicalJson(body))`（唯一身份，§4.4）→ `macro_put_manifest`（幂等）→ 计算只读清单。响应带 `manifest_id`。
-- **缓存**：进程内 LRU 键 = `(kind, params, 两区域快照 id, cutoff, catalog_version, code_version)` → 已存清单 id 与视图；新快照发布或代码 / 目录版本变化 → 键变化。
+- **缓存**：进程内 LRU 键 = `(kind, params, 两区域快照 id, cutoff, catalog_version, code_version)`（params 含计算参数，各参数值互不共享） → 已存清单 id 与视图；新快照发布或代码 / 目录版本变化 → 键变化。
 - **快照解读的清单**：所请求快照固定为其区域的 `snapshots[region]`，`cutoff = 该快照 created_at`；对方区域 = `snapshotUpTo(对方, cutoff)`；其余规则同上。清单落库后才认领解读（§6.3）。
 
 ---
@@ -306,17 +338,20 @@ interface PlaybookDef{regime:Regime;title:Bilingual;mechanism:Bilingual[];
 - **窗口**：N ∈ {1, 3, 6}。事件生效日所在月为 m：基期 = m − 1 月的月末观测，末期 = m + N − 1 月的月末观测（恰好 N 个月末区间，含生效月）。例：2022-03-16 加息，N = 3 → 基期 2022-02 月末，末期 2022-05 月末。
 - **变化**：pct = `(末/基 − 1) × 100`（基值 ≤ 0 → 该事件该维度排除，原因 `non_positive_base`）；bp = `toBp(末 − 基)`（十进制精确）；推导利差维度的端点值 = 同月两条输入的十进制差（任一缺 → 端点缺失），端点记录两条输入观测。
 - **资格（每个维度、每个 N 分别判定）**：基期月到末期月之间的每个月末都有观测（P2 Task 15 的完整窗口要求）→ 合格；否则排除，原因 `incomplete_window`。
-- **独立性**：合格事件按生效日升序**跨方向**统一扫描：选第一个，跳过窗口 `[m−1, m+N−1]`（月）与任一已选事件窗口重叠的后续事件（原因 `overlap`），继续。与 P2 的差异：P2 单资产、单方向事件集；这里一次覆盖加息与降息，避免一段行情同时计入两行。
+- **独立性**：合格事件先显式按生效日升序排序，再**跨方向**统一扫描：选第一个，跳过窗口 `[m−1, m+N−1]`（月，闭区间）与任一已选事件窗口重叠的后续事件（原因 `overlap`）——基期月 ≤ 最后入选事件的末期月即重叠，共享端点月也算重叠——继续。与 P2 的差异：P2 单资产、单方向事件集；这里一次覆盖加息与降息，避免一段行情同时计入两行。
 - **单元格**：按方向分组的入选事件 `n`：`n ≥ 5` → `{median, q1, q3, n}`（type-7 线性插值，全精度计算，展示层四舍五入到 0.1% 或 1bp）；`1 ≤ n < 5` → `{n}` 仅逐事件表；`n = 0` → `insufficient`。每格附 `events[]`（入选与排除，含原因、端点观测 id、值、变化）。
 - **文案**（`policy-response-explain.ts`）："N 次独立加息后 M 个月末，美元广义指数变化的中位数为 x%（四分位 a% 至 b%）"，只陈述数字。
 - **样本区间**：每列表头写实际覆盖区间（首末可用月末）。
+- 窗口 N 冻结在清单 `params.window`，每个 N 一份清单；视图从清单读取 N。
 - 视图 `PolicyResponseView{version, window, manifest_id, cutoff, rows, dims}`。
 
 ### 5.4 政策事件合并 `policy-events.ts`（`macro-strategy-events/1`）
 
 - 2008-12-16 起：`port.derivePolicyEvents(upper, lower)` 原样（P2 函数）。
 - 单一目标期：`US_FED_TARGET_D` 相邻两个有效观测值不同 → 事件；`upper_from = lower_from = 前值`，`upper_to = lower_to = 后值`，`basis:'single_target'`，`evidence = [prev, cur, prev, cur]`（四元组位置语义同 P2：上限前、上限后、下限前、下限后；单一目标时上下限同源）。
-- 衔接：要求三条**精确日期**的观测——单一目标 s（`period_end = 2008-12-15`）、上限 u 与下限 l（`period_end = 2008-12-16`），且 s 是单一目标序列的最后一条、u / l 是上下限序列的第一条 → 事件 `basis:'single_to_range'`，`upper_from = lower_from = s.value`，`upper_to = u.value`，`lower_to = l.value`，`change_bp = toBp(u.value − s.value)`，`evidence = [s, u, s, l]`；值全部来自观测，不写常量。条件不满足 → 不产生事件，返回 `gaps:[{kind:'transition_unverified', reason}]`，行动段在该处断开并在历史表标注"数据缺口"。
+- 衔接：要求三条**精确日期**的观测——单一目标 s（`period_end = 2008-12-15`）、上限 u 与下限 l（`period_end = 2008-12-16`），且 s 是单一目标序列的最后一条、u / l 是上下限序列的第一条 → 事件 `basis:'single_to_range'`，`upper_from = lower_from = s.value`，`upper_to = u.value`，`lower_to = l.value`，`change_bp = toBp(u.value − s.value)`，`evidence = [s, u, s, l]`；值全部来自观测，不写常量。上限不变而下限变化时 `change_bp = 0`，行动段与矩阵跳过该事件，不臆造方向。条件不满足 → 不产生事件，返回 `gaps:[{kind:'transition_unverified', reason}]`，行动段在该处断开并在历史表标注"数据缺口"。
+- 任一事件源读取被截断 → 不产生任何事件，返回 `gaps:[{kind:'history_truncated', reason:<被截断的序列>, near:<截止日>}]`；历史表、复盘与矩阵都显式显示"事件序列读取被截断"，不得表现为"没有事件"。
+- 清单冻结每个事件的证据观测与衔接三元组（§4.5），每个事件可只凭清单重算核验。
 - 输入严格升序（P2 `assertAscending` 语义）；同输入同输出。`StrategyPolicyEvent = PolicyEvent & {basis:'range'|'single_target'|'single_to_range'}`，不改 P2 类型。
 
 ### 5.5 政策行动段 × 资产表 `cycle-table.ts`（`macro-cycle-table/1`，行动段 `macro-policy-episodes/1`）
@@ -330,11 +365,13 @@ interface PlaybookDef{regime:Regime;title:Bilingual;mechanism:Bilingual[];
   - `month_end`：起 = `start` 所在月前一月的月末观测，止 = `end` 所在月的月末观测（月未结束 → 缺失）。
   - **覆盖与间隔**：所选观测与边界日期相差 > 7 个自然日（日边界）或不是所要的那个月（月边界）→ `missing`（`out_of_coverage`）；边界早于序列首个观测或晚于末个观测 → `missing`。起止选中同一条观测 → `missing`（`degenerate`）。
 - **单元格**：`{status, from:{observation_id, period_end, value_text}, to:{…}, change_text, change_kind}`；pct = `(止/起 − 1) × 100`（起 ≤ 0 → `non_positive_base`）；bp = `toBp(止 − 起)`；展示层舍入。
-- 页脚可得性说明同 §3.4。视图 `CycleTableView{version, boundary, manifest_id, cutoff, episodes, columns, cells, gaps}`。
+- 边界冻结在清单 `params.boundary`，每种边界一份清单；视图从清单读取边界。
+- 页脚可得性说明同 §3.4。视图 `CycleTableView{version, boundary, manifest_id, cutoff, episodes, columns, cells, gaps}`；`gaps` 含 `history_truncated` 且无行动段时，页面显示截断说明而不是"没有政策行动段"。
 
 ### 5.6 共用数值规则（`numeric.ts`）
 
 - 十进制字符串运算只用 P1 `decimal.ts`；浮点只在 pct 比值与四分位处各发生一次（`Number(value_text)`），结果保持全精度存入视图的 `*_raw` 字段，展示字段由展示层舍入。
+- 百分比变化的精确形式是比值文本 `'<末>/<基>'`（视图 `change_text`、事实槽位单位 `pct_ratio`）；展示时从比值**只舍入一次**（BigInt，半数远离零，到 0.1%），不存在先舍到若干位小数的中间值（例：100 → 100.04996 显示 `0.0%`，不是 `+0.1%`）。
 - type-7 四分位：排序后 `h = (n−1)p`，`q = x[⌊h⌋] + (h − ⌊h⌋)(x[⌊h⌋+1] − x[⌊h⌋])`。
 
 ---
@@ -353,7 +390,8 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 
 - `snapshotFacts(manifest)`：区域快照指标的当前值（`level`）、与上一可比期变化（`change`，P1 类型化口径，前值也在清单）、最近一次政策事件、推导节点；**不含任何判断**。
 - `reviewFacts(reviewResult)`：复盘 `facts` 逐项转换。
-- 事实只从清单计算；`facts` 与清单 id 一起冻结。
+- 事实只从清单计算；`facts` 与清单 id 一起冻结：解读清单（`explain_facts`）把交给模型的确切事实列表写进 `facts`，解读只读它（§4.5）。
+- 百分比变化事实槽位 = `{value_text:'<末>/<基>', unit:'pct_ratio'}`，渲染时只舍入一次（§5.6）。
 
 ### 6.2 月度复盘 `review.ts`（`macro-review/1`）
 
@@ -366,8 +404,8 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
   1. `releases`：截止快照中 `period_end` 晚于基线快照的序列（旧期 → 新期、值）；
   2. `revisions`：两快照中同一序列同一 `period_end`、截止快照版本更高（旧值 → 新值）；**只覆盖各序列在快照中的最新期**（更早期的修订不在 v1 范围，页面写明）；
   3. `timeliness`：对截止快照的每个目录 active 指标调用 `port.timeliness(def, latest_period_end, today = 截止日期)`，冻结 `late` / `missing`；目录 missing / restricted 项计入"目录缺失 / 受限"，不与"迟发"混淆；
-  4. `policy_events`：生效日落在本月的 §5.4 事件；
-  5. `episode_changes`：截止时相对基线时新开或结束的政策行动段（§5.5 定义）；
+  4. `policy_events`：生效日落在本月的 §5.4 事件；事件源读取被截断时只有一条 `events_truncated` 事实（不是空节）；
+  5. `episode_changes`：截止时相对基线时新开或结束的政策行动段（§5.5 定义）；同上，截断时一条 `events_truncated` 事实；
   6. `asset_moves`：资产与视角序列本月月末相对上月末的变化（口径同 §5.5 月末边界）；
   7. `coverage`：截止快照的目录计数（计数，不是百分比）。
 - 生成：`/api/cron/macro-review`（`vercel.json` `0 6 3 * *`，生成上一个月两区域；`?month=YYYY-MM&region=` 手动；`?preview=1` 零写入；`authorizedCronRequest`）。流程：读当前指针 `generation` → 组装清单 → `macro_put_manifest` → 计算 → `macro_publish_review(expected_generation, cutoff, …)`；异常 → `macro_record_review_attempt('failed')`，指针不动。
@@ -393,19 +431,19 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 **请求流程**（`POST /api/macro/strategy/explanations`，body `{request_id, subject:{kind:'snapshot'|'review', id}, locale}`）：
 处理顺序（§9.1 能力矩阵的前两层先于一切）：
 1. `getServerSupabase().auth.getUser()`（无 → 401）→ `MACRO_STRATEGY_ENABLED`（关 → 404）→ body ajv → `payload_hash = sha256(canonicalJson({subject, locale}))`。
-2. **幂等重放**：服务端用 admin 客户端查 `(user_id, request_id)` 的运行行；存在 → `payload_hash` 不同 → 409 `payload_conflict`，否则经 `macro_claim_explanation` 返回其投影（含超时 `abandoned` 处理）——在底座与主体检查之前。
-3. 底座（端口为 null → 503）与主体检查：快照须为非 failed 快照；复盘须为存在的结果行。构造事实清单（§4.5"快照解读的清单"或复盘结果的清单）→ `macro_put_manifest(kind 'explain_facts')`。
+2. **幂等重放**：服务端用 admin 客户端查 `(user_id, request_id)` 的运行行；存在 → `payload_hash` 不同 → 409 `payload_conflict`，否则经 `macro_claim_explanation` 返回其投影（含超时 `abandoned` 处理）——在代码版本、底座与主体检查之前（重放不需要新清单与代码版本）。
+3. 代码版本（缺失 → 503 `code_version_unavailable`）、底座（端口为 null → 503）与主体检查：快照须为非 failed 快照；复盘主体 id 是不可变的复盘结果 `result_id`（`StrategyDb.reviewResult(id)`，anon 读 `macro_review_results`），须为存在的结果行——不用 `<region>:<YYYY-MM>` 指针键，指针前移后旧解读仍绑定旧结果。构造事实清单（§4.5"快照解读的清单"或复盘结果的清单，`facts` 冻结交给模型的事实列表）→ `macro_put_manifest(kind 'explain_facts')`；模型输入只由已存清单重建。
 4. LLM 与配额（与 `src/app/api/perspectives/[ticker]/route.ts` 一致的顺序）：`resolveUserLlm()`（null → 该路由同样的"未配置模型"响应）→ 非 BYO 时 `checkQuota('perspectives')`：`!quota.allowed` → 429 `quota_exceeded`（`limit === -1` 表示不限；`checkQuota` 抛错按该路由的 fail-open 规则）；BYO 跳过特性配额。
 5. **认领**：`macro_claim_explanation(...)` → `outcome='existing'` → 直接返回投影（并发请求的输家在此停止，不进入计费）；`outcome='claimed'` → 继续，拿到 RPC 生成的 `explanation_id` 与 `usage_audit_key`。
-6. `beginUsageRun(userId, usageAuditKey, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`（失败 → 该路由同样的 `cost_quota` 响应；`macro_finish_explanation('failed', failure_codes=['usage_audit_unavailable'])`）。
-7. `runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call})`（与该路由同一 limiter 的 `runWithBudgetRetry`）；异常 → `meteredUsageFromError` → `macro_finish_explanation('failed', accounting)` → `finalizeUsageRun(..., failed)` → `macro_mark_finalized`。
-8. 解析 + 校验 → `accepted` 或 `rejected`，两种都是**已完成**的模型调用：`macro_finish_explanation(state, raw, validation, rendered|failure_codes, accounting)` → `finalizeUsageRun(..., completed, accounting)`（已发生的提供方成本不退；BYO 与 admin 豁免沿用已有规则）→ `macro_mark_finalized`。结算失败不影响用户响应，运行行留 `finalized=false` 供重试。
+6. `beginUsageRun(userId, usageAuditKey, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`。失败 = **结果不明**（RPC 可能已提交）：同一审计键 `macro_record_completion(null, 失败结算载荷)` → `macro_finish_explanation('failed', failure_codes=['usage_audit_unavailable' 或成本错误码])` → 尝试 `finalizeUsageRun(..., failed)`，成功才 `macro_mark_finalized` → 该路由同样的 `cost_quota` 响应。
+7. `runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call})`（与该路由同一 limiter 的 `runWithBudgetRetry`）。**提供方返回（或抛错）后立即** `macro_record_completion(raw_output, finalize_payload)`：结算载荷 = `finalizeUsageRun` 的完整参数（状态、提供方、模型、聚合计量、成本、定价版本、汇率、`usageEstimated`、`byo`），在此刻计算一次并持久化。异常路径：`meteredUsageFromError` → 登记 `failed` 载荷 → `macro_finish_explanation('failed', accounting)`。
+8. 解析 + 校验 → `accepted` 或 `rejected`，两种都是**已完成**的模型调用：`macro_finish_explanation(state, raw, validation, rendered|failure_codes, accounting)`。随后在 finally 路径里用已登记的载荷原样 `finalizeUsageRun`——finish 或校验抛错也执行（已发生的提供方成本不退；BYO 与 admin 豁免沿用已有规则）——成功后才 `macro_mark_finalized`。结算失败不影响用户响应，运行行保留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试（含 `abandoned` 行）。
 
-读取：`GET /api/macro/strategy/explanations?subject_kind&subject_id` → 本人投影最近 20 条（`private, no-store`）。POST、GET、重放都返回同一投影形状。
+读取：`GET /api/macro/strategy/explanations?subject_kind&subject_id`（复盘的 `subject_id` = `result_id`）→ 先以 admin 客户端调用 `macro_expire_explanations(user_id)`（超过 5 分钟仍 `running` 的本人请求 → `abandoned` / 投影 `failed`），再返回本人投影最近 20 条（`private, no-store`）；页面刷新即可收敛死掉的请求，面板用新 `request_id` 重新生成。POST、GET、重放都返回同一投影形状。
 
 ### 6.4 偏差案例 `deviations.ts`（`macro-deviations/1`，仅判断层开启）
 
-- 枚举：先 `GET /api/judgments?…types=macro_regime` 取最新卡片 id，再 `GET /api/judgments/[id]/history?limit=500&before=…` 分页**直到空页**；单区域累计超过 5000 条 → 返回 `{incomplete:true}` 并在页面显示"案例列表不完整"。只保留 `lifecycle='settled'` 且结算结果为未命中（`settlement.outcome='miss'`）。
+- 枚举：先 `GET /api/judgments?…types=macro_regime` 取最新卡片 id，再 `GET /api/judgments/[id]/history?limit=500&before=…` 分页**直到空页**；单区域累计超过 5000 条 → 返回 `{incomplete:true}` 并在页面显示"案例列表不完整"。游标 `before` = 上一页末条 `as_of`（排他）：满页且页尾两条 `as_of` 相同（同一 `as_of` 的其余卡片可能被跳过，无法证明完整）或游标不前进 → 停止并 `{incomplete:true}`。稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项，提供后改用。只保留 `lifecycle='settled'` 且结算结果为未命中（`settlement.outcome='miss'`）。
 - 每条：`GET /api/judgments/[id]` 取 `{judgment, settlements}`：登记值 = `judgment.inputs` 中 `macro_observation` 输入的冻结投影 `snapshot{series_id, period_end, vintage_id, value}` 与 `macro_snapshot` 输入的冻结投影；结算值 = 最新结算行证据中的重算输入（`observation_refs`）。证据缺这一字段 → 案例 `evidence_incomplete`，不自行重算。
 - 范围：只针对 `macro_regime@v1`（其他方法 / 版本的卡片跳过）。
 - 匹配键 = `(series_id, period_end)`，角色 = 该观测在登记快照中的用途（`latest` / `comparison`，由 `period_end` 与该序列登记时最新期比较得出；结算侧同理）。分类穷尽：
@@ -433,14 +471,14 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 | 方法 路径 | 返回 | 约束 |
 |---|---|---|
 | `GET /api/macro/strategy/transmission?region=US\|CN` | `{transmission, playbooks, judgment_status:'disabled'\|'unavailable'\|'ok', f4?:{mark:{regime, judgment_id, snapshot_match:boolean, as_of}, summary:F4Summary}}` | 登录；恒 200（事实部分可用时）；`f4` 仅 `judgment_status='ok'` |
-| `GET /api/macro/strategy/policy-response?window=1\|3\|6` | `PolicyResponseView` | 登录 |
-| `GET /api/macro/strategy/cycle-table?boundary=event_day\|first_trading_day\|month_end` | `CycleTableView` | 登录 |
+| `GET /api/macro/strategy/policy-response?window=1\|3\|6` | `PolicyResponseView` | 登录；N 冻结在清单 `params` |
+| `GET /api/macro/strategy/cycle-table?boundary=event_day\|first_trading_day\|month_end` | `CycleTableView` | 登录；边界冻结在清单 `params` |
 | `GET /api/macro/strategy/manifests/[id]` | 清单全文 | 登录 |
 | `GET /api/macro/strategy/reviews?region=US\|CN` | `{items:[{region, month, status, generation, result_id, updated_at}]}`（近 36 个月） | 登录 |
 | `GET /api/macro/strategy/reviews/[region]/[month]` | 当前结果 `{result, manifest_id, generation}` | 登录；无指针 → 404 |
 | `GET /api/macro/strategy/deviations?region=` | `{cases, incomplete}` | 登录；判断层关闭 → 404 `judgments_disabled`；F4 不可用 → 503 `judgments_unavailable` |
 | `POST /api/macro/strategy/explanations` | 投影 `{explanation_id, state, rendered?, failure_codes?}` | 登录；ajv；配额；幂等 |
-| `GET /api/macro/strategy/explanations?subject_kind&subject_id` | 本人投影列表 | 登录；`private, no-store` |
+| `GET /api/macro/strategy/explanations?subject_kind&subject_id` | 本人投影列表（复盘 `subject_id` = `result_id`） | 登录；读前过期本人超时请求；`private, no-store` |
 | `GET /api/cron/macro-review?preview=1&month&region` | 回执 | `CRON_SECRET`；`vercel.json` 登记 |
 
 错误统一 `{error:{code,message}}`；读响应带 `version`、`catalogVersion`、`manifest_id`。
@@ -459,7 +497,7 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 | 开启，已接线，判断层开启，F4 不可用 | 正常，判断位置"判断层暂不可用" | 正常 | 正常 | 503 `judgments_unavailable`；页面降级 |
 | 全部可用 | 正常 | 正常 | 正常 | 正常 |
 
-判定顺序（所有路由）：session（401）→ `MACRO_STRATEGY_ENABLED`（404）→ 解读 POST 的幂等重放 → 底座（503）→ 主体 / 参数检查 → 判断层：组合路由（传导、复盘详情）恒 200 并带 `judgment_status`，只有纯判断路由（偏差案例）返回 404 / 503。
+判定顺序（所有路由）：session（401）→ `MACRO_STRATEGY_ENABLED`（404）→ 解读 POST 的幂等重放 → 代码版本（解读 POST 在重放之后检查）→ 底座（503）→ 主体 / 参数检查 → 判断层：组合路由（传导、复盘详情）恒 200 并带 `judgment_status`，只有纯判断路由（偏差案例）返回 404 / 503。
 
 F4 读取经 `f4-client.ts`（服务端 `fetch` 本站 `/api/judgments*`，带超时 3 秒；F4 路由不存在 → 视为不可用）。F4 合并后若提供进程内读函数，改为直接调用（WP-S6）。
 
@@ -501,11 +539,14 @@ docs/runbooks/macro-strategy.md
 | 能力矩阵中的不可用态 | 按 §9.1 |
 | 两区域都无快照 | 传导页"尚无发布快照"；矩阵与历史表以请求时刻为截止照常计算 |
 | 历史读取 `truncated` | 该维度 / 列整列 `missing`（`history_truncated`） |
+| 事件源读取 `truncated` | 无事件；`gaps` 带 `history_truncated`；历史表与复盘显式显示截断，矩阵整列 `missing` |
+| 快照引用的观测 id 无法解析 | 该区域快照不完整：快照取值 `truncated`，不提升比较期、不回退历史读取 |
 | 推导输入期不同 / 缺一 | 节点或端点 `missing`，写明原因 |
 | 衔接事件不可核实 | 不造事件；`gaps` + 历史表"数据缺口" |
 | F4 卡片对应较早快照 | 不标记，显示对应快照日期 |
 | LLM 失败 / 未通过校验 | `failed` / `rejected`；计量按 §6.3 |
-| 解读请求重复 / 载荷冲突 / 超时 | 返回原投影 / 409 / `failed(abandoned)` |
+| 解读请求重复 / 载荷冲突 / 超时 | 返回原投影 / 409 / `failed(abandoned)`（再次认领或 `GET` 时过期） |
+| 解读完成后存储失败 | 原始输出与结算载荷已由 `macro_record_completion` 持久化；`finalizeUsageRun` 仍执行；未结算行按载荷原样重试 |
 | 复盘并发、过期代际、旧截止 | 咨询锁；`stale_generation` / 不前移；尝试日志 |
 | 偏差枚举超上限 | `incomplete:true` |
 
@@ -514,9 +555,9 @@ docs/runbooks/macro-strategy.md
 ## 12. 测试策略
 
 - 纯函数（vitest，`memoryStrategyPort` 夹具）：`manifest`（截止选择、快照 vs 历史来源、哈希稳定、同 created_at 定序）；`transmission`（五种节点态、同期 / 错期推导）；`playbooks`（触发条件 = 规则表投影与排序；三条件标记矩阵）；`policy-events`（单一目标、衔接成功、衔接缺上限 / 下限 / 间隔 > 5 天 → 缺口）；`policy-response`（N=1/3/6 端点、例子 2022-03-16、完整窗口资格、跨方向贪心、排除原因、n<5、QE/QT、受限列、非正基值、type-7、推导端点）；`cycle-table`（行动段 vs P2 周期例子、左删失、进行中、三种边界、7 天间隔、覆盖外、degenerate、别名解析）；`review`（七节、无快照、缺基线、及时性按月末、修订只覆盖最新期）；`explain-render`（模板中英、格式）；`explain-validate`（数字：ASCII / 全角 / 中文数字 / 英文数词 / % / bp / pp；禁用词逐条；象限词；结构；合法文本通过）；`deviations`（四种差异、证据缺字段、分页到空页、上限 incomplete）。
-- `replay.test.ts`：提交的清单夹具 → 传导、矩阵、历史表、复盘视图与期望 JSON 完全一致（读清单，不调端口）。
+- `replay.test.ts`：提交的清单夹具（每个参数值一份，参数取自清单 `params`）→ 传导、矩阵、历史表、复盘视图与期望 JSON 完全一致（读清单，不调端口）；解读：只凭已存 `explain_facts` 清单重建模型输入。
 - 禁用词扫描只覆盖生产文本面：`src/lib/macro/strategy/**/*.ts` 中非 `*.test.ts` 且非 `explain-validate.ts`（策略常量）的文件、`src/components/macro/strategy/**/*.tsx`、`messages/*/macroStrategy.json`、`src/lib/macro/strategy/data/**`、`prompts/**`；校验器的反例夹具留在 `explain-validate.test.ts`，由运行时拒绝测试覆盖。
-- 数据库（`test:db`，`S4_TEST_STATE`，`criticalSuites`）：六表 grants / RLS（anon 读清单与复盘；读不到运行表、尝试表；用户只读自己的投影）；`macro_put_manifest` 幂等；`macro_publish_review`（同身份重放、A→B→A 指针前移语义、过期代际、旧截止不前移、并发）；`macro_claim_explanation`（载荷冲突、超时放弃、重复返回）；`macro_finish_explanation` 状态机。
+- 数据库（`test:db`，`S4_TEST_STATE`，`criticalSuites`）：六表 grants / RLS（anon 读清单与复盘；读不到运行表、尝试表；用户只读自己的投影）；`macro_put_manifest` 幂等；`macro_publish_review`（同身份重放、A→B→A 指针前移语义、过期代际、旧截止不前移、并发）；`macro_claim_explanation`（载荷冲突、超时放弃、重复返回、与终态并发的行锁）；`macro_record_completion`；`macro_finish_explanation` 状态机；`macro_mark_finalized`（需已登记载荷）；`macro_expire_explanations`。
 - 迁移：`npm run test:migrations`；锁文件追加。
 - API：401；参数白名单；能力矩阵五态；判断层关闭响应无判断字段；解读：重放先于主体检查、409、429、假提供者返回含数字文本 → `rejected` 且仍 `finalizeUsageRun(completed)`。
 - 端到端（WP-S6 后）：三个子路由；边界切换；解读拒绝态。
@@ -527,6 +568,7 @@ docs/runbooks/macro-strategy.md
 
 - 矩阵与历史表：输入 ≤ 12 条序列 × ≤ 7000 日点；p95 < 500 ms（清单命中缓存时 < 100 ms）。
 - 复盘 cron 每月一次、每区域一个单元。
+- 解读结算重试：`finalize_payload` 非空且 `finalized=false` 的运行行（任何状态）按载荷原样重试 `finalizeUsageRun`，成功后 `macro_mark_finalized`（runbook §4）。
 - 环境变量：`MACRO_STRATEGY_ENABLED`（新）、`MACRO_JUDGMENTS_ENABLED`、`CRON_SECRET`；无新密钥。
 - 运行手册 `docs/runbooks/macro-strategy.md`：能力矩阵、接线步骤（WP-S6）、复盘重算、解读失败码说明、目录增补流程。
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（第 3 稿；§0 / §0.2 为 Codex 两轮处置）：策略清单与冻结输入、政策事件合并、实时传导流、剧本库（静态假设框架）、政策反应矩阵、政策行动段 × 资产表、月度复盘（不可变结果 + 当前指针）、LLM 解读（系统模板事实句 + 模型无数字假设句 + 确定性校验 + 预先认领的幂等计量）、偏差案例（F4 读接口）、四个页面与能力矩阵。WP-S6（接线 P1+P2 / F4）不在本计划内：P1+P2 与 F4 合并到 main 后另行 rebase 接线。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（第 4 稿；§0 / §0.2 为 Codex 两轮规格处置，§0.2 末"第 4 稿（计划审计回写）"为计划审计 16 条的回写）：策略清单与冻结输入、政策事件合并、实时传导流、剧本库（静态假设框架）、政策反应矩阵、政策行动段 × 资产表、月度复盘（不可变结果 + 当前指针）、LLM 解读（系统模板事实句 + 模型无数字假设句 + 确定性校验 + 预先认领的幂等计量）、偏差案例（F4 读接口）、四个页面与能力矩阵。WP-S6（接线 P1+P2 / F4）不在本计划内：P1+P2 与 F4 合并到 main 后另行 rebase 接线。
 
-**Architecture:** 一个迁移 `20261115090000_macro_strategy.sql` 建六表与六个 `security definer` RPC（不引用 P1 / F4 表）；`src/lib/macro/strategy/**` 只依赖窄端口 `StrategyReadPort`（P1+P2 契约的结构镜像，生产实现在 WP-S6 加入，此前 `strategyPort()` 返回 `null` → 503）与 `StrategyDb`（本模块六表，Supabase + 内存两实现）；所有计算是读"策略清单"的纯函数；LLM 与 F4 读取都经注入的依赖，测试用假实现。
+**Architecture:** 一个迁移 `20261115090000_macro_strategy.sql` 建六表与八个 `security definer` RPC（不引用 P1 / F4 表）；`src/lib/macro/strategy/**` 只依赖窄端口 `StrategyReadPort`（P1+P2 契约的结构镜像，生产实现在 WP-S6 加入，此前 `strategyPort()` 返回 `null` → 503）与 `StrategyDb`（本模块六表，Supabase + 内存两实现）；所有计算是读"策略清单"的纯函数；LLM 与 F4 读取都经注入的依赖，测试用假实现。
 
 **Tech Stack:** Next.js 15 App Router、TypeScript、Supabase（PostgreSQL 17 + PostgREST）、vitest、`pg`（集成测试）、ajv、next-intl、内联 SVG。
 
@@ -40,7 +40,7 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261115090000_macro_strategy.sql      六表 + 六 RPC + 内部投影函数 + RLS + 权限（Task 1）
+supabase/migrations/20261115090000_macro_strategy.sql      六表 + 八 RPC + 内部投影函数 + RLS + 权限（Task 1）
 supabase/migrations.lock.json                               追加 1 条（Task 1）
 src/lib/supabase/database.types.ts                          + 六表 Row（三个 // MACRO-P3 块；Task 1）
 src/lib/macro/strategy/strategy.integration.test.ts         grants/RLS/RPC 状态机（critical；Task 1），+ pg 上的 StrategyDb 契约（Task 3）
@@ -122,24 +122,29 @@ export type InputSource={kind:'snapshot';snapshot_id:string}|{kind:'history';as_
 export interface ManifestInput{series_id:string;role:string;observation_id:string;period_end:string;value_text:string;version:number;available_at:string;source:InputSource}
 export type EventBasis='range'|'single_target'|'single_to_range';
 export type StrategyPolicyEvent=PolicyEvent&{basis:EventBasis};
-export interface EventGap{kind:'transition_unverified';reason:string;near:string}
+/** transition_unverified: the 2008 switch could not be verified (near = 2008-12-16). history_truncated: an event-source read
+ *  was truncated, so there are no events at all (near = the cutoff date); views show it, never an empty history. */
+export interface EventGap{kind:'transition_unverified'|'history_truncated';reason:string;near:string}
 export interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:string;catalog_counts:{verified:number;missing:number;restricted:number};observation_ids:string[];history_ids:string[]}
 /** Catalog projection frozen into a manifest (spec §4.5 N2): replay never reads the live catalog. */
 export type FrozenSeriesDef=Pick<MacroSeriesDef,'id'|'region'|'role'|'type'|'name'|'unit'|'status'|'reason'|'aliasOf'|'derive'|'changeKind'|'releaseLagDays'|'nativeFrequency'|'period'>;
 export interface ManifestRead{series_id:string;purpose:string;state:'ok'|'missing'|'truncated'}
-/** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3). */
+/** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3).
+ *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary}, review
+ *  {region, month}, explain_facts {subject…}); views and replay read them from here. facts (explain_facts only) = the exact
+ *  fact list given to the model, so an explanation's input is rebuilt from its manifest alone. */
 export interface StrategyManifest{
  kind:ManifestKind;params:Record<string,string|number>;cutoff:string;
  snapshots:{US:FrozenSnapshot|null;CN:FrozenSnapshot|null};
  baseline?:{cutoff:string;US:FrozenSnapshot|null;CN:FrozenSnapshot|null};
  catalog:FrozenSeriesDef[];rules?:RulesView;reads:ManifestRead[];
- inputs:ManifestInput[];events?:StrategyPolicyEvent[];gaps?:EventGap[];timeliness?:{series_id:string;state:Timeliness}[];
+ inputs:ManifestInput[];events?:StrategyPolicyEvent[];gaps?:EventGap[];timeliness?:{series_id:string;state:Timeliness}[];facts?:Fact[];
  catalog_version:string;method_version:string;code_version:string;
 }
 export interface StoredManifest{manifest_id:string;manifest_hash:string;body:StrategyManifest;created_at:string}
 /** Role of an observation taken from a snapshot (spec §4.5): 'latest' = max period_end; 'prev' / 'prev3m' = comparison periods.
- *  ManifestInput.role is '<purpose>:<series_id>:<latest|prev|prev3m|base|end|from|to|month_end|history>' — writers use the helpers in manifest.ts
- *  ('history' = a whole daily window, cycle-table columns). */
+ *  ManifestInput.role is '<purpose>:<series_id>:<latest|prev|prev3m|base|end|from|to|month_end|history|evidence>' — writers use the helpers in
+ *  manifest.ts ('history' = a whole daily window, cycle-table columns; 'evidence' = an event-source row an event or the 2008 switch check reads). */
 export type SnapshotRole='latest'|'prev'|'prev3m';
 export type NodeState='observed'|'derived'|'assumption'|'missing'|'restricted'|'not_in_catalog';
 export interface ObsRef{observation_id:string;series_id:string;period_end:string;value_text:string;version:number;available_at:string;source:InputSource}
@@ -249,24 +254,32 @@ export interface StrategyDb{
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
  reviewCurrent(region:Region,month:string):Promise<{result:ReviewResult;generation:number;cutoff:string}|null>;   // anon
  reviewIndex(region:Region,months:number):Promise<{month:string;status:ReviewStatus;generation:number;result_id:string;updated_at:string}[]>;  // anon
+ /** Immutable review result by id (anon): review explanations bind to result_id, never to the moving pointer. */
+ reviewResult(resultId:string):Promise<ReviewResult|null>;
  publishReview(a:{region:Region;month:string;expectedGeneration:number;cutoff:string;status:ReviewStatus;manifestId:string;manifestHash:string;facts:ReviewFacts;methodVersion:string;codeVersion:string}):Promise<{result_id:string;generation:number;outcome:'advanced'|'replayed'|'stale'}>;   // RPC macro_publish_review; absent pointer = generation 0; stale is a return value, never thrown
  recordReviewAttempt(region:Region,month:string,status:'failed',error:Record<string,unknown>):Promise<void>;   // service
  /** Admin-side lookup used for idempotent replay before any other check (spec §6.3 step 2). */
  runOf(userId:string,requestId:string):Promise<{explanation_id:string;payload_hash:string;state:ExplanationState}|null>;
  /** RPC generates explanation_id and usage_audit_key; ONLY outcome 'claimed' may bill or call the model. payload_conflict throws. */
  claimExplanation(a:{userId:string;requestId:string;payloadHash:string;subjectKind:'snapshot'|'review';subjectId:string;locale:'zh'|'en';manifestId:string}):Promise<{outcome:'claimed'|'existing';explanation_id:string;usage_audit_key:string;projection:ExplanationProjection}>;
+ /** RPC macro_record_completion: durable raw output + the exact finalizeUsageRun payload, right after the provider returns
+  *  (or throws, or begin fails) and before validation / finish; running or abandoned rows; same values → no-op. */
+ recordCompletion(a:{explanationId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;
  /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only. */
  finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown}):Promise<ExplanationProjection>;
- markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; idempotent
+ markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; needs a recorded finalize payload; any state; idempotent
+ /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago → abandoned (projection failed). */
+ expireExplanations(userId:string):Promise<number>;
  explanationsOf(client:'session',subjectKind:'snapshot'|'review',subjectId:string,limit:number):Promise<ExplanationProjection[]>;   // user session client (RLS)
 }
 export function supabaseStrategyDb(c:{admin:SupabaseClient;anon:SupabaseClient;session?:SupabaseClient}):StrategyDb;
-export function memoryStrategyDb(opts?:{now?:()=>Date}):StrategyDb&{_userId:(id:string)=>void};   // _userId sets the RLS identity for explanationsOf
+export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean;late_output:unknown};
+export function memoryStrategyDb(opts?:{now?:()=>Date}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null};   // _userId sets the RLS identity for explanationsOf; _run inspects a run row (tests)
 ```
 
 `db.ts` 另有骨架之外的导出（签名本身不变）：`StrategyTransport`、`SelectSpec`、`ReadRole`、`StrategyTable`、`strategyDbOver(transport)`、`supabaseTransport`、`toStrategyDbError`、`projectionFrom`、`MAX_SELECT`——让同一份映射代码在集成测试里跑 node-postgres（`supabaseStrategyDb(c) = strategyDbOver(supabaseTransport(c))`）。哈希来自 `hash.ts`（Task 3）：`canonicalJson`、`sha256Hex`；`manifest.ts`（Task 4）再导出二者并加 `manifestHash(body)`。
 
-RPC 语义见规格 §4.4（第 3 稿，逐字）。`claimExplanation` 遇 `running` 且 `claimed_at` 早于 5 分钟 → RPC 原子改 `abandoned`（投影 `failed`、`failure_codes=['abandoned']`）并返回 `existing`。迁移一共六个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_finish_explanation`、`macro_mark_finalized`。
+RPC 语义见规格 §4.4（第 4 稿，逐字）。`claimExplanation` 先对运行行 `FOR UPDATE` 再读状态；遇 `running` 且 `claimed_at` 早于 5 分钟 → RPC 原子改 `abandoned`（投影 `failed`、`failure_codes=['abandoned']`）并返回 `existing`。迁移一共八个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`。改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `FOR UPDATE` 锁该行。
 
 ### 依赖注入（Task 11 / 12）
 
@@ -284,17 +297,22 @@ export class F4Unavailable extends Error{}
 // F4CardLite / F4JudgmentDetail are declared in f4-types.ts (Task 6, so playbooks.ts can use them before Task 11);
 // f4-client.ts (Task 11) imports and re-exports them, never redeclares. settlement_id is optional: deviations.ts maps it to
 // DeviationCase.settlement_id (null when F4 omits it).
-export interface LlmDeps{   // explain-request.ts；生产实现包装计量链（Task 12），测试用假实现。顺序：resolve → (非 BYO) checkQuota → claim → begin → call → finish → finalize → markFinalized
+export interface LlmDeps{   // explain-request.ts；生产实现包装计量链（Task 12），测试用假实现。顺序：resolve → (非 BYO) checkQuota → claim → begin → call → recordCompletion（原始输出 + finalizePayload，先于校验）→ 校验 → finish → finalize（finally 路径，finish 失败也执行）→ markFinalized（仅 finalize 成功后）；begin 失败 = 结果不明：同一审计键登记 failed 载荷并尝试 finalize
  resolve():Promise<{provider:string;model:string;byo:boolean}|null>;
  checkQuota():Promise<{allowed:boolean;used:number;limit:number}|null>;   // null = checkQuota threw (fail-open per perspectives route); limit -1 = unlimited
  begin(usageAuditKey:string,meta:Record<string,unknown>):Promise<void>;
  call(system:string,user:string):Promise<{content:string;accounting:unknown}>;
- finalize(usageAuditKey:string,status:'completed'|'failed',accounting:unknown[]):Promise<void>;
+ /** The exact finalizeUsageRun payload (status, provider, model, tokens, cost, pricingVersion, usdCnyMicros, usageEstimated,
+  *  byo), computed once at completion and stored on the run row; retries replay it verbatim. */
+ finalizePayload(status:'completed'|'failed',accounting:unknown[]):Record<string,unknown>;
+ /** finalizeUsageRun(userId, usageAuditKey, 'perspectives', payload) with the payload verbatim. */
+ finalize(usageAuditKey:string,payload:Record<string,unknown>):Promise<void>;
 }
 /** Thrown by LlmDeps.call when the provider call failed; accounting = meteredUsageFromError(e) (null when none). */
 export class LlmCallError extends Error{constructor(message:string,readonly accounting:unknown|null=null){super(message);this.name='LlmCallError';}}
 /** handleExplainRequest(d:ExplainDeps,userId,body):Promise<{status,body}> (Task 11); Task 12 passes productionLlmDeps(userId). */
-export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDeps;now:()=>Date;codeVersion:string}
+/** codeVersion null = not configured: 503 code_version_unavailable, checked only after the idempotent replay. */
+export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDeps;now:()=>Date;codeVersion:string|null}
 ```
 
 ### 复盘截止规则（规格 §4.5、§6.2，第 3 稿）
@@ -316,8 +334,8 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 | §4.1 | P1+P2 契约结构镜像 | 2 |
 | §4.2 | 目录增补 `US_FED_TARGET_D`（夹具中；生产在 WP-S6） | 2 |
 | §4.3 | `StrategyReadPort`、`memoryStrategyPort`、`strategyPort()=null` | 2 |
-| §4.4 | 六表、六 RPC、权限与 RLS、N3 身份、N5 指针、N6 认领、N7 完成幂等 | 1、3 |
-| §4.5 | 策略清单：身份 = 整体哈希、N1 角色、N2 冻结目录 / 快照 / 读取状态、取值规则、cutoff 规则（含复盘次月 3 日）、重放只读清单 | 3（`hash.ts`）、4、9 |
+| §4.4 | 六表、八 RPC、权限与 RLS、N3 身份、N5 指针、N6 认领（行锁）、N7 完成幂等、完成登记与结算载荷、过期 | 1、3 |
+| §4.5 | 策略清单：身份 = 整体哈希（params 含计算参数）、N1 角色（未解析快照 id → 区域不完整）、N2 冻结目录 / 快照 / 读取状态 / 事件证据行 / 解读事实、取值规则、cutoff 规则（含复盘次月 3 日）、重放只读清单 | 3（`hash.ts`）、4、5、6–9 |
 | §5.1 | 传导流（六段、节点状态、同期利差、假设边） | 6 |
 | §5.2 | 剧本库（触发 = 规则投影、F4 三条件标记、无数字 `F4Summary`） | 6、12（判断层接入） |
 | §5.3 | 政策反应矩阵（N 月窗口、资格、跨方向贪心、排除原因、n 阈值、利差端点、句子） | 7 |
@@ -350,9 +368,9 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 
 | # | 事项 | 决定 |
 |---|---|---|
-| D1 | 规格 §4.5 的进程内清单 LRU 未实现：每个事实请求重建清单并 `putManifest`（按哈希幂等，结果正确）。§13 的延迟目标（p95 < 500 ms，命中 < 100 ms）在 WP-S6 有真实端口前无法测量 | 推迟到 WP-S6：接线后测延迟，不达标再在 `route-helpers.ts` 加 LRU，键 `(kind, 两区域快照 id, cutoff, catalog_version, code_version)`；runbook 记一行 |
+| D1 | 规格 §4.5 的进程内清单 LRU 未实现：每个事实请求重建清单并 `putManifest`（按哈希幂等，结果正确）。§13 的延迟目标（p95 < 500 ms，命中 < 100 ms）在 WP-S6 有真实端口前无法测量 | 推迟到 WP-S6：接线后测延迟，不达标再在 `route-helpers.ts` 加 LRU，键 `(kind, params, 两区域快照 id, cutoff, catalog_version, code_version)`（清单与缓存都按 `(kind, params)` 区分）；runbook 记一行 |
 | D2 | `resolveCodeVersion({allowGit:false})` 为 null | 写清单的路由（传导、矩阵、历史、解读 POST）与 cron 返回 503 `code_version_unavailable`，不把 `'unknown'` 冻结进清单身份（Vercel 上 `VERCEL_GIT_COMMIT_SHA` 恒有；本地 `next dev` 需手动设） |
-| D3 | 复盘解读的主体 id | `<US\|CN>:<YYYY-MM>`（取当前指针的结果）；解读清单冻结 `result_id` 与 `review_manifest_id`，指针前移后仍可追溯。`StrategyDb` 不加 `reviewResult(id)` |
+| D3 | 复盘解读的主体 id（计划审计 #5 改） | 不可变的 `result_id`（uuid）：`StrategyDb.reviewResult(id)`（anon 读 `macro_review_results`）取结果，解读主体 id = `result_id`，`GET /explanations` 按它过滤，`ReviewView` 传正在显示的 `result.result_id`。不再用 `<region>:<YYYY-MM>`（指针前移后会把旧解读挂到新结果旁） |
 | D4 | 未配置模型 | 503 `llm_not_configured`（perspectives 路由返回 200 `source:'no-key'`，本模块统一错误形状）；另有 422 `no_facts` |
 | D5 | 提示文件经 `readFileSync(new URL('./prompts/…md', import.meta.url))` 读取，vitest 下必然可用，生产打包未经验证 | Task 14 Step 7 的 `npm run build` + `.next/server` 内容检查是硬门槛；失败则改为 `.ts` 字符串常量（测试不变） |
 | D6 | `vercel.json` 只追加；P1 计划也追加 `/api/cron/macro-sync` | rebase 时手工合并 `crons` 数组，两条都保留；`routes.test.ts` 只断言本条存在 |
@@ -362,15 +380,19 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 | D10 | `ManifestInput.role` 标签 | 增加 `history`（整段日频窗口，历史表列）；`contract.ts` 注释已同步（骨架与 Task 2 逐字相同） |
 | D11 | `F4JudgmentDetail.settlements[].settlement_id` | 加为可选字段（`f4-types.ts`、骨架）；`f4-client` 只保留字符串值；`deviations.ts` 直接读，缺 → `null` |
 | D12 | 运行中 / 超时放弃的投影 `prompt_version` / `validator_version` 为 `''`（认领 RPC 不带版本参数，§4.4 签名不变） | 接受；`finish` 后为真实版本 |
-| D13 | 迁移另有一个不可调用的内部函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），不计入"六个 RPC" | 接受；Task 1 测试断言没有任何 API 角色能执行它 |
+| D13 | 迁移另有一个不可调用的内部函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），不计入"八个 RPC" | 接受；Task 1 测试断言没有任何 API 角色能执行它 |
 | D14 | `recordReviewAttempt` 的 `status` 只能是 `'failed'`；`ok` / `replayed` / `stale` 尝试行只由 `macro_publish_review` 写 | 接受 |
 | D15 | CN 复盘也列出联储事件与行动段（联储政策是两区域传导的共同锚） | 接受；若 owner 只要 US，在 `reviewFromManifest` 按 `region==='US'` 过滤第 4、5 节 |
 | D16 | 接口在规格 §8 之外的增补：传导无任何 active 快照 → 404 `no_published_snapshot`；复盘详情加 `names`、`judgment_status`、`f4?`；`GET /explanations` 返回 `{items}` | 接受（§9.1 把复盘详情列为组合路由） |
 | D17 | 复盘判断节用 `selectF4Mark({card, detail, snapshotId:null}).summary`：非 `macro_regime@v1` 或非 open / settled 的卡显示"判断层暂不可用" | 接受 |
 | D18 | 词汇扫描用完整 `FORBIDDEN_TERMS`（含"将会""必然""odds""chance of""will rise"），比仓库约定的五个词更严 | 接受；命中时改写所在任务的数据 / 提示文件 |
-| D19 | F4 读接口细节未与 F4 实现核对：history 游标（`before` = 上一页末条 `as_of`；同一 `as_of` 多条可能跨页漏读，以"游标不前进 → incomplete"兜底）、响应接受 `{cards}` 或 `{items}`、`realized` 的形状、`f4.calibrationState.*` 的四个值 | WP-S6 接线时核对并改 `f4-client.ts` / 文案 |
+| D19 | F4 读接口细节未与 F4 实现核对：history 游标（`before` = 上一页末条 `as_of`，排他；满页且页尾与前一条 `as_of` 相同 → 无法证明完整 → `incomplete:true`；游标不前进 → `incomplete`）、响应接受 `{cards}` 或 `{items}`、`realized` 的形状、`f4.calibrationState.*` 的四个值 | WP-S6 接线时核对并改 `f4-client.ts` / 文案；**开放项**：请 F4 提供稳定游标 `(as_of, judgment_id)`，有了之后 `deviations.ts` 改用它并删去页尾并列兜底 |
 | D20 | 画布对照（§14 WP-S5 退出条件）在 WP-S6 前只能看到"底座未就绪"态 | 数据态的浏览器走查放到 WP-S6 |
 | D21 | `numeric.ts` 用 BigInt 自实现十进制（P1 `decimal.ts` 不在 main） | WP-S6 可换回 P1 实现；`replay` 夹具哈希必须不变 |
+| D22 | 计划审计 #6–#8：解读结算的持久化 | 迁移新增 `finalize_payload` 列与 `macro_record_completion`：提供方返回（或抛错、或 begin 失败）后、校验 / finish 之前，先存原始输出与 `finalizeUsageRun` 的完整参数（含状态、定价版本、汇率、聚合计量）；finish 之后在 finally 路径里用存下的载荷原样 `finalize`，成功才 `markFinalized`（`macro_mark_finalized` 要求已登记载荷，任何状态都可）。恢复：对 `finalize_payload` 非空且 `finalized=false` 的行（含 `abandoned`、含 finish 失败仍为 `running` 的行）原样重试（runbook §4）。`recordCompletion` 自身失败时不阻断 finish / finalize，但该行无法标记已结算，按审计键人工核对 |
+| D23 | 计划审计 #14：进程死亡后的 `running` 投影 | 迁移新增 `macro_expire_explanations(p_user_id)`：`GET /explanations` 读之前用 admin 客户端调用，把该用户超过 5 分钟的 `running` 行改 `abandoned`（投影 `failed`、`['abandoned']`）；面板在 `running` 时提示"超过 5 分钟刷新即标记失败"，失败态用新的 `request_id` 重新生成 |
+| D24 | 计划审计 #10：百分比变化的舍入 | 事实与视图都存精确比值 `'<末>/<基>'`（`numeric.ts::pctRatio`；事实单位 `pct_ratio`），展示时 `roundPctRatio` 只舍入一次（BigInt，远离零）；不再有 4 位小数的中间值 |
+| D25 | 计划审计 #11：事件源读取被截断 | `readPolicyEvents` 返回 `gaps:[{kind:'history_truncated', reason:<序列>, near:<截止日>}]`（`EventGap.kind` 增加该值）；历史表显示"事件序列读取被截断"而不是"没有行动段"；复盘第 4、5 节各放一条 `events_truncated` 事实；矩阵沿用读取状态整列 `missing` |
 
 已闭合（不再是开放项）：Part C 提出的"资产月末值在月末截止时不可得"——规格第 3 稿把复盘截止改为次月 3 日 `00:00:00Z`，Task 4 / 9 / 12 已按新规则实现与测试。
 
@@ -395,9 +417,12 @@ Part A 串行：Task 1 → 2 → 3。Task 1 只落迁移与数据库测试（不
 - Create (untracked, never commit): `.claude/scratch/db-one.ts`（若不存在）
 
 Notes for the implementer:
-- 规格 §4.4（第 3 稿）是唯一依据：六表、六个 `security definer` RPC（`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_finish_explanation`、`macro_mark_finalized`）。另有一个**内部**辅助函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），它对 `public, anon, authenticated, service_role` 全部 revoke，不是 RPC。
+- 规格 §4.4（第 4 稿）是唯一依据：六表、八个 `security definer` RPC（`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`）。另有一个**内部**辅助函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），它对 `public, anon, authenticated, service_role` 全部 revoke，不是 RPC。
 - 迁移不引用 P1 / F4 的表（无外键出模块）；模块内的外键（结果 → 清单、指针 → 结果、运行 / 投影 → 清单）保留。`user_id` 不加 `auth.users` 外键。
 - RPC 用 `raise exception '<code>'` 抛错（SQLSTATE P0001，message 恰为代码）：`not_found`、`payload_conflict`、`invalid_transition`、`invalid_status`。表约束违例是 23514。
+- 改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `select … for update` 锁该行再读状态（计划审计 #1）：过期的认领不会覆盖并发提交的终态。集成测试用"一个连接开事务先执行 A、另一连接执行 B 必须等锁、提交后看 B 的结果"验证两种先后。
+- 结算持久化（计划审计 #6–#8）：`finalize_payload jsonb`（`status ∈ completed/failed` 的对象）由 `macro_record_completion` 在提供方返回后、校验 / 终态之前写入（`running` 或 `abandoned` 行；同值重复 = 无操作；已有不同值或其他状态 → `invalid_transition`）；`macro_mark_finalized` 只要求已登记载荷（任何状态，含 finish 失败仍为 `running` 的行与 `abandoned` 行）；未结算索引按 `finalize_payload is not null and finalized = false`。
+- `macro_expire_explanations(p_user_id)`（计划审计 #14）：把该用户 `claimed_at` 早于 5 分钟的 `running` 行改 `abandoned`、投影 `failed {abandoned}`，返回条数；`GET /explanations` 读之前调用。
 - "超过 5 分钟放弃"用 `now()` 判定；测试通过把 `claimed_at` 往回挪（`update … set claimed_at = claimed_at - make_interval(mins => n)`，测试连接是超级用户）使它可测，RPC 签名不加时钟参数。
 - `macro_publish_review` 里 `stale` 是返回值：函数正常返回、事务提交、尝试日志落一行 `stale`。指针不存在 = 代际 0。判定顺序固定：①指针已指向该结果 → `replayed`（无论期望代际）；②代际不等 → `stale`；③`p_cutoff` 早于当前 `cutoff` → `stale`；④前移。
 - 本地 harness 的 `auth.uid()` 读 `request.jwt.claim.sub`；测试以 `set local role authenticated` + `set_config('request.jwt.claim.sub', …, true)` 模拟登录用户。
@@ -410,12 +435,14 @@ Create `src/lib/macro/strategy/strategy.integration.test.ts`（Task 3 会在文�
 ```ts
 // src/lib/macro/strategy/strategy.integration.test.ts
 // Macro strategy storage on real PostgreSQL (spec §4.4 draft 3, §12; critical suite): the 20261115090000 migration
-// replays; six RLS tables with select-only grants per role; the projection is readable only by its owner; the six
+// replays; six RLS tables with select-only grants per role; the projection is readable only by its owner; the eight
 // RPCs are service-role only; every RPC state-machine branch: macro_put_manifest idempotency, macro_publish_review
 // (absent pointer = generation 0, replayed before stale, A→B→A, stale generation, older cutoff, concurrency, attempt
 // log), macro_record_review_attempt, macro_claim_explanation (claimed / existing / payload_conflict / abandoned after
-// five minutes — made testable by moving claimed_at back), macro_finish_explanation (idempotent, invalid_transition,
-// late_output) and macro_mark_finalized. Rows are never cleaned up: test:db creates a fresh database per run, and
+// five minutes — made testable by moving claimed_at back), the row lock shared by claim / expire and finish (an expiring
+// claim never overwrites a concurrent finish), macro_record_completion (durable raw output + finalize payload),
+// macro_finish_explanation (idempotent, invalid_transition, late_output), macro_mark_finalized (needs a recorded
+// payload, any state) and macro_expire_explanations. Rows are never cleaned up: test:db creates a fresh database per run, and
 // every case uses its own month or random user / request ids.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -429,7 +456,8 @@ const PUBLIC_READ=['macro_strategy_manifests','macro_review_results','macro_revi
 const SERVICE_ONLY=['macro_review_attempts','macro_explanation_runs'];
 const RPCS=['public.macro_put_manifest(text,jsonb,text,timestamptz,text,text,text)','public.macro_publish_review(text,text,bigint,timestamptz,text,uuid,text,jsonb,text,text)',
  'public.macro_record_review_attempt(text,text,text,jsonb)','public.macro_claim_explanation(uuid,uuid,text,text,text,text,uuid)',
- 'public.macro_finish_explanation(uuid,text,text,text,text,text,jsonb,jsonb,jsonb,text[],jsonb)','public.macro_mark_finalized(uuid)'];
+ 'public.macro_record_completion(uuid,jsonb,jsonb)','public.macro_finish_explanation(uuid,text,text,text,text,text,jsonb,jsonb,jsonb,text[],jsonb)',
+ 'public.macro_mark_finalized(uuid)','public.macro_expire_explanations(uuid)'];
 
 // Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
 // short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
@@ -451,6 +479,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
 type PgErr={message:string;code?:string};
 /** Resolves with the rejection (message + SQLSTATE) so tests can assert both. */
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
+const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 const HEX=(c:string)=>c.repeat(64);
 // A month no other case uses: consecutive months from a random year in 3000–4999 (contract cases use 6000+), so a rerun
 // against a reused database does not collide either.
@@ -486,10 +515,27 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  const claim=(a:{user:string;request:string;payload?:string;manifest:string})=>
   one(`select public.macro_claim_explanation($1,$2,$3,'review','subject-1','zh',$4) v`,[a.user,a.request,a.payload??HEX('a'),a.manifest]) as Promise<Claim>;
  const newClaim=async()=>{const a={user:randomUUID(),request:randomUUID(),manifest:await explainManifest()};return {a,c:await claim(a)};};
+ const FINISH_SQL=`select public.macro_finish_explanation($1,$2,'prov','model','macro-explain-prompt/1','macro-explain-validator/1',$3::jsonb,'{"ok":true}'::jsonb,$4::jsonb,$5::text[],$6::jsonb) v`;
+ const finishArgs=(id:string,state:string,raw:unknown,o:{rendered?:unknown;codes?:string[];accounting?:unknown}={})=>
+  [id,state,JSON.stringify(raw),o.rendered===undefined?null:JSON.stringify(o.rendered),o.codes??[],JSON.stringify(o.accounting??{tokens:1})];
  const finish=(id:string,state:string,raw:unknown,o:{rendered?:unknown;codes?:string[];accounting?:unknown}={})=>
-  one(`select public.macro_finish_explanation($1,$2,'prov','model','macro-explain-prompt/1','macro-explain-validator/1',$3::jsonb,'{"ok":true}'::jsonb,$4::jsonb,$5::text[],$6::jsonb) v`,
-   [id,state,JSON.stringify(raw),o.rendered===undefined?null:JSON.stringify(o.rendered),o.codes??[],JSON.stringify(o.accounting??{tokens:1})]) as Promise<Record<string,any>>;
- const run=async(id:string)=>(await q(`select state,finalized,raw_output,accounting,late_output,finished_at from public.macro_explanation_runs where explanation_id=$1`,[id]))[0];
+  one(FINISH_SQL,finishArgs(id,state,raw,o)) as Promise<Record<string,any>>;
+ const PAYLOAD={status:'completed',provider:'prov',model:'model',inputTokens:3,outputTokens:2,costMicrormb:5,pricingVersion:'p1',usdCnyMicros:7100000,usageEstimated:false,byo:false};
+ const record=(id:string,raw:unknown,payload:unknown=PAYLOAD)=>
+  one(`select public.macro_record_completion($1,$2::jsonb,$3::jsonb) v`,[id,JSON.stringify(raw),payload===null?null:JSON.stringify(payload)]);
+ const expire=(user:string)=>one(`select public.macro_expire_explanations($1) v`,[user]) as Promise<number>;
+ const run=async(id:string)=>(await q(`select state,finalized,raw_output,finalize_payload,accounting,late_output,finished_at from public.macro_explanation_runs where explanation_id=$1`,[id]))[0];
+ /** Runs `first` in an open transaction, starts `second` (which must wait on the row lock), commits, then awaits `second`. */
+ const serialized=async<T>(first:{sql:string;values:unknown[]},second:()=>Promise<T>):Promise<T>=>{
+  const c=await admin.connect();
+  try{
+   await c.query('begin');await c.query(first.sql,first.values);
+   const pending=second();await sleep(300);
+   await c.query('commit');
+   return await pending;
+  }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ };
  const age=(id:string,minutes:number)=>q(`update public.macro_explanation_runs set claimed_at=claimed_at-make_interval(mins=>$2) where explanation_id=$1`,[id,minutes]);
  const RENDERED={facts:[{fact_id:'f1',text:'t'}],hypotheses:[{text:'h',fact_ids:['f1']}],counterpoints:[]};
 
@@ -499,7 +545,7 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  });
  afterAll(async()=>{await admin?.end();});
 
- it('creates six RLS tables with select-only grants, service-only RPCs, and replays',async()=>{
+ it('creates six RLS tables with select-only grants, eight service-only RPCs, and replays',async()=>{
   const rows=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES]);
   expect(rows.map(r=>r.relname).sort()).toEqual([...TABLES].sort());for(const r of rows)expect(r.relrowsecurity).toBe(true);
   const priv=(role:string,t:string,p:string)=>one(`select has_table_privilege($1,'public.'||$2,$3) v`,[role,t,p]);
@@ -606,7 +652,7 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  it('macro_claim_explanation: claimed with an RPC-made id and audit key; repeat → existing; other payload → payload_conflict; manifest must be explain_facts',async()=>{
   const {a,c}=await newClaim();
   expect(c.outcome).toBe('claimed');
-  expect(c.usage_audit_key).toBe(`macro-explain:${c.explanation_id}`);
+  expect(c.usage_audit_key).toBe(`${c.explanation_id}`);
   expect(c.projection).toMatchObject({explanation_id:c.explanation_id,subject_kind:'review',subject_id:'subject-1',locale:'zh',manifest_id:a.manifest,state:'running',rendered:null,failure_codes:[],finished_at:null});
   expect(await run(c.explanation_id)).toMatchObject({state:'running',finalized:false,raw_output:null,late_output:null});
   const again=await claim(a);
@@ -662,14 +708,73 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(row).toMatchObject({state:'abandoned',raw_output:null,accounting:{tokens:42},late_output:{state:'accepted',raw_output:{points:['late']},rendered:RENDERED,provider:'prov'}});
  });
 
- it('macro_mark_finalized: running → invalid_transition; final → finalized, idempotent; unknown → not_found',async()=>{
+ it('claim / expire and finish share the run row lock: an expiring claim never overwrites a concurrent finish',async()=>{
+  // finish commits first → the waiting expired claim reads accepted and leaves it alone
+  const x=await newClaim();await age(x.c.explanation_id,6);
+  const got=await serialized({sql:FINISH_SQL,values:finishArgs(x.c.explanation_id,'accepted',{points:[1]},{rendered:RENDERED})},()=>claim(x.a));
+  expect(got).toMatchObject({outcome:'existing',projection:{state:'accepted',rendered:RENDERED}});
+  expect(await run(x.c.explanation_id)).toMatchObject({state:'accepted',late_output:null});
+  // the expiring claim commits first → the waiting finish sees abandoned and writes late_output only
+  const y=await newClaim();await age(y.c.explanation_id,6);
+  const late=await serialized({sql:`select public.macro_claim_explanation($1,$2,$3,'review','subject-1','zh',$4) v`,values:[y.a.user,y.a.request,HEX('a'),y.a.manifest]},
+   ()=>finish(y.c.explanation_id,'accepted',{points:[2]},{rendered:RENDERED}));
+  expect(late).toMatchObject({state:'failed',failure_codes:['abandoned']});
+  expect(await run(y.c.explanation_id)).toMatchObject({state:'abandoned',late_output:{state:'accepted'}});
+  // macro_expire_explanations waits on the same lock
+  const z=await newClaim();await age(z.c.explanation_id,6);
+  expect(await serialized({sql:FINISH_SQL,values:finishArgs(z.c.explanation_id,'rejected','3%',{codes:['numeral']})},()=>expire(z.a.user))).toBe(0);
+  expect(await run(z.c.explanation_id)).toMatchObject({state:'rejected'});
+ },30000);
+
+ it('macro_record_completion: stores raw output + finalize payload on running and abandoned rows; same values → no-op; otherwise invalid_transition',async()=>{
+  const {c}=await newClaim();
+  await record(c.explanation_id,{content:'x'});
+  expect(await run(c.explanation_id)).toMatchObject({state:'running',raw_output:{content:'x'},finalize_payload:PAYLOAD,finalized:false});
+  await record(c.explanation_id,{content:'x'});   // same values: no-op
+  expect(await fails(record(c.explanation_id,{content:'y'}))).toMatchObject({message:'invalid_transition'});
+  expect(await fails(record(c.explanation_id,{content:'x'},{...PAYLOAD,status:'failed'}))).toMatchObject({message:'invalid_transition'});
+  expect(await finish(c.explanation_id,'accepted',{content:'x'},{rendered:RENDERED})).toMatchObject({state:'accepted'});   // finish keeps the recorded raw output
+  const ab=await newClaim();await age(ab.c.explanation_id,6);await claim(ab.a);
+  await record(ab.c.explanation_id,null,{...PAYLOAD,status:'failed'});
+  expect(await run(ab.c.explanation_id)).toMatchObject({state:'abandoned',finalize_payload:{status:'failed'}});
+  const done=await newClaim();await finish(done.c.explanation_id,'failed',null,{codes:['provider_error']});
+  expect(await fails(record(done.c.explanation_id,null))).toMatchObject({message:'invalid_transition'});   // a final row without a recorded payload
+  const n=await newClaim();
+  expect(await fails(record(n.c.explanation_id,null,null))).toMatchObject({message:'invalid_transition'});
+  expect(await fails(record(n.c.explanation_id,null,{status:'pending'}))).toMatchObject({code:'23514'});
+  expect(await fails(record(randomUUID(),null))).toMatchObject({message:'not_found'});
+ });
+
+ it('macro_mark_finalized: needs a recorded finalize payload, then finalizes in any state (running after a failed finish, final, abandoned); idempotent; unknown → not_found',async()=>{
   const {c}=await newClaim();
   expect(await fails(one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]))).toMatchObject({message:'invalid_transition'});
   await finish(c.explanation_id,'failed',null,{codes:['provider_error']});
-  await one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]);
-  await one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]);
-  expect((await run(c.explanation_id)).finalized).toBe(true);
+  expect(await fails(one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]))).toMatchObject({message:'invalid_transition'});   // final, but nothing recorded
+  const r=await newClaim();await record(r.c.explanation_id,{content:'x'});
+  await one(`select public.macro_mark_finalized($1) v`,[r.c.explanation_id]);   // finish never ran: still running, payload settled
+  await one(`select public.macro_mark_finalized($1) v`,[r.c.explanation_id]);
+  expect(await run(r.c.explanation_id)).toMatchObject({state:'running',finalized:true});
+  const ab=await newClaim();await age(ab.c.explanation_id,6);await expire(ab.a.user);await record(ab.c.explanation_id,null,{...PAYLOAD,status:'failed'});
+  await one(`select public.macro_mark_finalized($1) v`,[ab.c.explanation_id]);
+  expect(await run(ab.c.explanation_id)).toMatchObject({state:'abandoned',finalized:true});
   expect(await fails(one(`select public.macro_mark_finalized($1) v`,[randomUUID()]))).toMatchObject({message:'not_found'});
+ });
+
+ it('macro_expire_explanations: only the user\'s running rows claimed more than five minutes ago → abandoned + projection failed {abandoned}',async()=>{
+  const user=randomUUID();
+  const mk=async()=>claim({user,request:randomUUID(),manifest:await explainManifest()});
+  const old=await mk(),young=await mk(),done=await mk();
+  await age(old.explanation_id,6);await age(young.explanation_id,4);await age(done.explanation_id,6);
+  await finish(done.explanation_id,'rejected','3%',{codes:['numeral']});
+  const other=await newClaim();await age(other.c.explanation_id,6);
+  expect(await expire(user)).toBe(1);
+  expect(await run(old.explanation_id)).toMatchObject({state:'abandoned'});
+  expect((await run(old.explanation_id)).finished_at).not.toBeNull();
+  expect(await q(`select state,failure_codes from public.macro_explanations where explanation_id=$1`,[old.explanation_id])).toEqual([{state:'failed',failure_codes:['abandoned']}]);
+  expect(await run(young.explanation_id)).toMatchObject({state:'running'});
+  expect(await run(done.explanation_id)).toMatchObject({state:'rejected'});
+  expect(await run(other.c.explanation_id)).toMatchObject({state:'running'});
+  expect(await expire(user)).toBe(0);
  });
 });
 
@@ -698,7 +803,7 @@ main();
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: FAIL — 14 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
+Expected: FAIL — 17 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
 
 - [ ] **Step 3: Write the migration**
 
@@ -707,18 +812,22 @@ Create `supabase/migrations/20261115090000_macro_strategy.sql`:
 ```sql
 -- supabase/migrations/20261115090000_macro_strategy.sql
 -- Macro workbench P3+P4 storage (spec 2026-11-07-macro-workbench-p3-p4-design.md §4.4, draft 3).
--- Six tables and six security definer RPCs. No reference to P1 / F4 tables (no foreign keys out of
+-- Six tables and eight security definer RPCs. No reference to P1 / F4 tables (no foreign keys out of
 -- this module), so the branch replays on its own before P1+P2 merge. Every write goes through an RPC
 -- granted to service_role only; no role has a direct insert/update/delete privilege.
 --   macro_strategy_manifests  frozen strategy manifests; identity = manifest_hash (sha256 of the canonical body)
 --   macro_review_results      immutable monthly review results, unique (region, month, manifest_hash)
 --   macro_review_current      current pointer per (region, month) with a generation CAS
 --   macro_review_attempts     service-only attempt log (ok / replayed / insufficient / failed / stale)
---   macro_explanation_runs    service-only LLM run rows (raw output, validation, accounting, finalized)
+--   macro_explanation_runs    service-only LLM run rows (raw output, finalize payload, validation, accounting, finalized)
 --   macro_explanations        user-readable projection (RLS user_id = auth.uid())
 -- Errors are raised with the code as the message: not_found, payload_conflict, invalid_transition,
 -- invalid_status (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
--- minutes is turned into abandoned by the next claim of the same (user_id, request_id).
+-- minutes is turned into abandoned by the next claim of the same (user_id, request_id) or by
+-- macro_expire_explanations(user_id) (GET /explanations runs it before reading). Accounting is durable before
+-- anything else can fail: macro_record_completion stores the raw output and the exact finalizeUsageRun payload
+-- right after the provider returns; macro_mark_finalized needs that payload. Every RPC that changes a run row
+-- first locks it (select … for update), so an expiring claim never overwrites a concurrent finish.
 
 -- ---------------------------------------------------------------- tables
 create table if not exists public.macro_strategy_manifests (
@@ -789,13 +898,15 @@ create table if not exists public.macro_explanation_runs (
   validation jsonb null,
   usage_audit_key text not null,
   accounting jsonb null,
+  finalize_payload jsonb null constraint macro_explanation_runs_finalize_payload check (finalize_payload is null or (jsonb_typeof(finalize_payload) = 'object' and finalize_payload->>'status' in ('completed','failed'))),
   finalized boolean not null default false,
   late_output jsonb null,
   constraint macro_explanation_runs_request unique (user_id, request_id),
   constraint macro_explanation_runs_audit_key unique (usage_audit_key),
-  constraint macro_explanation_runs_audit_key_form check (usage_audit_key = 'macro-explain:' || explanation_id::text)
+  constraint macro_explanation_runs_audit_key_form check (usage_audit_key = explanation_id::text)
 );
-create index if not exists macro_explanation_runs_unfinalized on public.macro_explanation_runs (finished_at) where finalized = false and state <> 'running';
+create index if not exists macro_explanation_runs_unfinalized on public.macro_explanation_runs (claimed_at) where finalized = false and finalize_payload is not null;
+create index if not exists macro_explanation_runs_running on public.macro_explanation_runs (user_id, claimed_at) where state = 'running';
 
 create table if not exists public.macro_explanations (
   explanation_id uuid primary key references public.macro_explanation_runs(explanation_id),
@@ -926,9 +1037,10 @@ $$;
 revoke execute on function public.macro_explanation_projection(uuid) from public, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------- RPC 4: macro_claim_explanation
--- Advisory lock on (user_id, request_id). Existing row: different payload_hash → payload_conflict; running
--- and claimed more than five minutes ago → abandoned (projection failed, failure_codes {abandoned}); return
--- outcome existing. New: generate explanation_id and usage_audit_key, insert the running run and projection,
+-- Advisory lock on (user_id, request_id), then the existing run row is locked FOR UPDATE before its state is
+-- read (finish, record_completion and expire lock the same row). Existing row: different payload_hash →
+-- payload_conflict; running and claimed more than five minutes ago → abandoned (projection failed, failure_codes
+-- {abandoned}); return outcome existing. New: generate explanation_id and usage_audit_key, insert the running run and projection,
 -- return outcome claimed. Only a 'claimed' caller may bill or call the model.
 create or replace function public.macro_claim_explanation(p_user_id uuid, p_request_id uuid, p_payload_hash text, p_subject_kind text,
   p_subject_id text, p_locale text, p_manifest_id uuid)
@@ -937,12 +1049,12 @@ declare v_id uuid; v_key text; v_hash text; v_state text; v_claimed timestamptz;
 begin
   perform pg_advisory_xact_lock(hashtextextended('macro_explain:' || p_user_id::text || ':' || p_request_id::text, 0));
   select explanation_id, usage_audit_key, payload_hash, state, claimed_at into v_id, v_key, v_hash, v_state, v_claimed
-  from public.macro_explanation_runs where user_id = p_user_id and request_id = p_request_id;
+  from public.macro_explanation_runs where user_id = p_user_id and request_id = p_request_id for update;
   if found then
     if v_hash <> p_payload_hash then raise exception 'payload_conflict'; end if;
     if v_state = 'running' and v_claimed < now() - interval '5 minutes' then
       update public.macro_explanation_runs set state = 'abandoned', finished_at = now() where explanation_id = v_id;
-      update public.macro_explanations set state = 'failed', failure_codes = array['abandoned'], finished_at = now() where explanation_id = v_id;
+      update public.macro_explanations set state = 'failed', failure_codes = array['abandoned'], finished_at = now() where explanation_id = v_id and state = 'running';
     end if;
     return jsonb_build_object('outcome', 'existing', 'explanation_id', v_id, 'usage_audit_key', v_key, 'projection', public.macro_explanation_projection(v_id));
   end if;
@@ -950,7 +1062,7 @@ begin
     raise exception 'not_found';
   end if;
   v_id := gen_random_uuid();
-  v_key := 'macro-explain:' || v_id::text;
+  v_key := v_id::text;   -- begin_usage_run / finalize_usage_run take p_idempotency_key uuid
   insert into public.macro_explanation_runs (explanation_id, user_id, request_id, payload_hash, subject_kind, subject_id, locale, manifest_id, state, usage_audit_key)
   values (v_id, p_user_id, p_request_id, p_payload_hash, p_subject_kind, p_subject_id, p_locale, p_manifest_id, 'running', v_key);
   insert into public.macro_explanations (explanation_id, user_id, subject_kind, subject_id, locale, manifest_id, state)
@@ -960,11 +1072,35 @@ end $$;
 revoke execute on function public.macro_claim_explanation(uuid, uuid, text, text, text, text, uuid) from public, anon, authenticated;
 grant execute on function public.macro_claim_explanation(uuid, uuid, text, text, text, text, uuid) to service_role;
 
--- ---------------------------------------------------------------- RPC 5: macro_finish_explanation
+-- ---------------------------------------------------------------- RPC 5: macro_record_completion
+-- Called right after the provider returned (or threw, or beginUsageRun failed), before validation and finish: stores
+-- the raw output and the exact finalizeUsageRun payload ({status, provider, model, tokens, cost, pricingVersion,
+-- usdCnyMicros, usageEstimated, byo}) so accounting survives any later failure. Allowed on running and abandoned
+-- rows; a repeat with the same values is a no-op; a different payload or output once one is stored, or any other
+-- state → invalid_transition.
+create or replace function public.macro_record_completion(p_explanation_id uuid, p_raw_output jsonb, p_finalize_payload jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_state text; v_raw jsonb; v_payload jsonb;
+begin
+  if p_finalize_payload is null then raise exception 'invalid_transition'; end if;
+  select state, raw_output, finalize_payload into v_state, v_raw, v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
+  if not found then raise exception 'not_found'; end if;
+  if v_payload is not null then
+    if v_payload is distinct from p_finalize_payload or v_raw is distinct from p_raw_output then raise exception 'invalid_transition'; end if;
+    return;
+  end if;
+  if v_state not in ('running','abandoned') then raise exception 'invalid_transition'; end if;
+  update public.macro_explanation_runs set raw_output = p_raw_output, finalize_payload = p_finalize_payload where explanation_id = p_explanation_id;
+end $$;
+revoke execute on function public.macro_record_completion(uuid, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_record_completion(uuid, jsonb, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- RPC 6: macro_finish_explanation
 -- running → accepted / rejected / failed (run row + projection). Same final state and same raw_output →
 -- idempotent (returns the projection unchanged). Another final state, or the same state with a different
 -- raw_output → invalid_transition. abandoned → only late_output and accounting are written; the
--- projection stays failed.
+-- projection stays failed. A raw_output already stored by macro_record_completion is overwritten by the same
+-- value (the caller passes what it recorded).
 create or replace function public.macro_finish_explanation(p_explanation_id uuid, p_state text, p_provider text, p_model text,
   p_prompt_version text, p_validator_version text, p_raw_output jsonb, p_validation jsonb, p_rendered jsonb, p_failure_codes text[], p_accounting jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -998,25 +1134,49 @@ end $$;
 revoke execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb) from public, anon, authenticated;
 grant execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb) to service_role;
 
--- ---------------------------------------------------------------- RPC 6: macro_mark_finalized
--- After finalizeUsageRun succeeded: finalized = true (idempotent). A running row cannot be finalized.
+-- ---------------------------------------------------------------- RPC 7: macro_mark_finalized
+-- After finalizeUsageRun(finalize_payload) succeeded: finalized = true (idempotent), in any state. A row without a
+-- recorded finalize payload cannot be finalized (nothing was settled from it).
 create or replace function public.macro_mark_finalized(p_explanation_id uuid)
 returns void language plpgsql security definer set search_path = public as $$
-declare v_state text;
+declare v_payload jsonb;
 begin
-  select state into v_state from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
+  select finalize_payload into v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
   if not found then raise exception 'not_found'; end if;
-  if v_state = 'running' then raise exception 'invalid_transition'; end if;
+  if v_payload is null then raise exception 'invalid_transition'; end if;
   update public.macro_explanation_runs set finalized = true where explanation_id = p_explanation_id;
 end $$;
 revoke execute on function public.macro_mark_finalized(uuid) from public, anon, authenticated;
 grant execute on function public.macro_mark_finalized(uuid) to service_role;
+
+-- ---------------------------------------------------------------- RPC 8: macro_expire_explanations
+-- GET /explanations runs this (service role) before reading, so a reload resolves a run whose worker died: every
+-- running row of the user claimed more than five minutes ago → abandoned, projection failed {abandoned}. Rows are
+-- locked in a stable order; returns the number expired.
+create or replace function public.macro_expire_explanations(p_user_id uuid)
+returns integer language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_n integer := 0;
+begin
+  for v_id in select explanation_id from public.macro_explanation_runs
+    where user_id = p_user_id and state = 'running' and claimed_at < now() - interval '5 minutes'
+    order by explanation_id for update
+  loop
+    update public.macro_explanation_runs set state = 'abandoned', finished_at = now() where explanation_id = v_id and state = 'running';
+    if found then
+      update public.macro_explanations set state = 'failed', failure_codes = array['abandoned'], finished_at = now() where explanation_id = v_id and state = 'running';
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  return v_n;
+end $$;
+revoke execute on function public.macro_expire_explanations(uuid) from public, anon, authenticated;
+grant execute on function public.macro_expire_explanations(uuid) to service_role;
 ```
 
 - [ ] **Step 4: Run the integration test until it passes**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  14 passed (14)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
+Expected: PASS — `Tests  17 passed (17)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
 
 - [ ] **Step 5: Database types**
 
@@ -1027,7 +1187,7 @@ In `src/lib/supabase/database.types.ts` make three insertions (do not touch anyt
 ```ts
 // MACRO-P3
 // + 20261115090000_macro_strategy.sql (macro_strategy_manifests, macro_review_results, macro_review_current,
-//   macro_review_attempts, macro_explanation_runs, macro_explanations; the six RPCs are not registered)
+//   macro_review_attempts, macro_explanation_runs, macro_explanations; the eight RPCs are not registered)
 // /MACRO-P3
 ```
 
@@ -1037,7 +1197,7 @@ In `src/lib/supabase/database.types.ts` make three insertions (do not touch anyt
 // MACRO-P3
 // Macro strategy (supabase/migrations/20261115090000_macro_strategy.sql). Manifests and the two review tables are
 // public read; attempts and runs are service-role only; macro_explanations is readable by its owner only (RLS).
-// No role writes directly: the six RPCs (service_role) do, and they are not registered under Functions (narrow
+// No role writes directly: the eight RPCs (service_role) do, and they are not registered under Functions (narrow
 // clients, src/lib/macro/strategy/db.ts). jsonb columns are typed loosely; src/lib/macro/strategy/contract.ts owns
 // their shapes. generation is bigint (a JSON number from PostgREST).
 export type MacroManifestKind = 'transmission' | 'policy_response' | 'cycle_table' | 'review' | 'explain_facts';
@@ -1101,6 +1261,7 @@ export interface MacroExplanationRunRow {
   validation: Record<string, unknown> | null;
   usage_audit_key: string;
   accounting: unknown;
+  finalize_payload: Record<string, unknown> | null;
   finalized: boolean;
   late_output: Record<string, unknown> | null;
 }
@@ -1165,7 +1326,7 @@ Run: `LC_ALL=C npm run test:migrations`
 Expected: PASS (fresh and seeded-upgrade schemas identical; report written to `reports/migration-rehearsal.json`).
 
 Run: `LC_ALL=C npm run test:db`
-Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 14 passed tests (no "Database suite inventory drift").
+Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 17 passed tests (no "Database suite inventory drift").
 
 - [ ] **Step 8: Typecheck and lint**
 
@@ -1180,13 +1341,14 @@ git add supabase/migrations/20261115090000_macro_strategy.sql supabase/migration
 
 ```bash
 git commit -F - <<'EOF'
-feat(macro-strategy): migration with six tables and six RPCs, lock, types, integration suite
+feat(macro-strategy): migration with six tables and eight RPCs, lock, types, integration suite
 
-Spec 2026-11-07 §4.4 (draft 3): manifests idempotent by hash, immutable review
+Spec 2026-11-07 §4.4 (draft 4): manifests idempotent by hash, immutable review
 results with a generation-CAS pointer (absent = 0, replayed before stale), attempt
-log, service-only explanation runs with claim / finish / finalize state machine
-and abandonment after five minutes, RLS-scoped projection. Critical suite
-registered.
+log, service-only explanation runs with claim / record-completion / finish /
+finalize state machine under a row lock, durable finalize payloads, abandonment
+after five minutes (on claim and by user expiry), RLS-scoped projection. Critical
+suite registered.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -1261,24 +1423,29 @@ export type InputSource={kind:'snapshot';snapshot_id:string}|{kind:'history';as_
 export interface ManifestInput{series_id:string;role:string;observation_id:string;period_end:string;value_text:string;version:number;available_at:string;source:InputSource}
 export type EventBasis='range'|'single_target'|'single_to_range';
 export type StrategyPolicyEvent=PolicyEvent&{basis:EventBasis};
-export interface EventGap{kind:'transition_unverified';reason:string;near:string}
+/** transition_unverified: the 2008 switch could not be verified (near = 2008-12-16). history_truncated: an event-source read
+ *  was truncated, so there are no events at all (near = the cutoff date); views show it, never an empty history. */
+export interface EventGap{kind:'transition_unverified'|'history_truncated';reason:string;near:string}
 export interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:string;catalog_counts:{verified:number;missing:number;restricted:number};observation_ids:string[];history_ids:string[]}
 /** Catalog projection frozen into a manifest (spec §4.5 N2): replay never reads the live catalog. */
 export type FrozenSeriesDef=Pick<MacroSeriesDef,'id'|'region'|'role'|'type'|'name'|'unit'|'status'|'reason'|'aliasOf'|'derive'|'changeKind'|'releaseLagDays'|'nativeFrequency'|'period'>;
 export interface ManifestRead{series_id:string;purpose:string;state:'ok'|'missing'|'truncated'}
-/** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3). */
+/** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3).
+ *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary}, review
+ *  {region, month}, explain_facts {subject…}); views and replay read them from here. facts (explain_facts only) = the exact
+ *  fact list given to the model, so an explanation's input is rebuilt from its manifest alone. */
 export interface StrategyManifest{
  kind:ManifestKind;params:Record<string,string|number>;cutoff:string;
  snapshots:{US:FrozenSnapshot|null;CN:FrozenSnapshot|null};
  baseline?:{cutoff:string;US:FrozenSnapshot|null;CN:FrozenSnapshot|null};
  catalog:FrozenSeriesDef[];rules?:RulesView;reads:ManifestRead[];
- inputs:ManifestInput[];events?:StrategyPolicyEvent[];gaps?:EventGap[];timeliness?:{series_id:string;state:Timeliness}[];
+ inputs:ManifestInput[];events?:StrategyPolicyEvent[];gaps?:EventGap[];timeliness?:{series_id:string;state:Timeliness}[];facts?:Fact[];
  catalog_version:string;method_version:string;code_version:string;
 }
 export interface StoredManifest{manifest_id:string;manifest_hash:string;body:StrategyManifest;created_at:string}
 /** Role of an observation taken from a snapshot (spec §4.5): 'latest' = max period_end; 'prev' / 'prev3m' = comparison periods.
- *  ManifestInput.role is '<purpose>:<series_id>:<latest|prev|prev3m|base|end|from|to|month_end|history>' — writers use the helpers in manifest.ts
- *  ('history' = a whole daily window, cycle-table columns). */
+ *  ManifestInput.role is '<purpose>:<series_id>:<latest|prev|prev3m|base|end|from|to|month_end|history|evidence>' — writers use the helpers in
+ *  manifest.ts ('history' = a whole daily window, cycle-table columns; 'evidence' = an event-source row an event or the 2008 switch check reads). */
 export type SnapshotRole='latest'|'prev'|'prev3m';
 export type NodeState='observed'|'derived'|'assumption'|'missing'|'restricted'|'not_in_catalog';
 export interface ObsRef{observation_id:string;series_id:string;period_end:string;value_text:string;version:number;available_at:string;source:InputSource}
@@ -1947,7 +2114,8 @@ Notes for the implementer:
 - 哈希：`manifest_hash = sha256Hex(canonicalJson(body))`，二者由本任务新建的 `src/lib/macro/strategy/hash.ts` 提供（键按 UTF-16 排序、丢弃 undefined、数字须有限，非有限数抛 `canonical_json_unsupported:*`）。Task 4 的 `manifest.ts` import 并再导出这两个函数；模块内其他文件（`db.ts`、`db-contract.ts`、`review.ts`、`explain-request.ts`）一律从 `./hash` 或 `./manifest` 取，不用 `src/lib/evals/canonical-json.ts`（同名但错误信息不同，F6 所有）。
 - 新 RPC 不登记进 `Database['public']['Functions']`：按 `src/lib/facts/db.ts` 的 `NarrowClient` 办法把客户端收窄为 `{rpc, from}`。
 - 时间戳一律规范为 `toISOString()`（PostgREST 给 `+00:00`，pg 给 `Date`）；`generation` 用 `Number()`（pg 的 bigint 是字符串）。投影的 `prompt_version` / `validator_version` 在认领后、完成前为 SQL null，映射为 `''`（契约类型是 `string`）。
-- `memoryStrategyDb` 逐条复刻 SQL 规则（同一份契约用例约束）；`_userId(id)` 设定 `explanationsOf` 的 RLS 身份，未设 → 空列表（等同 `auth.uid()` 为 null）。
+- `memoryStrategyDb` 逐条复刻 SQL 规则（同一份契约用例约束）；`_userId(id)` 设定 `explanationsOf` 的 RLS 身份，未设 → 空列表（等同 `auth.uid()` 为 null）；`_run(id)` 只给测试看运行行（`state`、`raw_output`、`finalize_payload`、`finalized`、`late_output`）。
+- 计划审计回写：`reviewResult(id)`（anon 读 `macro_review_results`，非 uuid → null 不查询）、`recordCompletion`（`macro_record_completion`）、`expireExplanations(userId)`（`macro_expire_explanations`，非 uuid → 0 不调用）；`markFinalized` 需要已登记的结算载荷（任何状态）。
 - 契约用例的月份：内存用 5000 年起、pg 用 6000–7999 年中随机一年起，互不冲突，也不与 Task 1 用例（3000–4999）冲突。
 
 - [ ] **Step 1: Write the shared contract cases and the failing unit tests**
@@ -2013,6 +2181,8 @@ export function testFacts(month:string,cutoff='2026-11-03T00:00:00.000Z'):Review
   releases:[],revisions:[],timeliness:[],policy_events:[],episode_changes:[],asset_moves:[],coverage:[]};
 }
 const RENDERED:RenderedExplanation={facts:[{fact_id:'f1',text:'事实句'}],hypotheses:[{text:'假设句',fact_ids:['f1']}],counterpoints:[]};
+/** A finalizeUsageRun body as llm-deps.ts builds it (stored verbatim on the run row). */
+const PAYLOAD={status:'completed',provider:'test-provider',model:'test-model',inputTokens:3,cacheHitInputTokens:0,cacheMissInputTokens:3,outputTokens:2,costMicrormb:5,pricingVersion:'p1',usdCnyMicros:7_100_000,usageEstimated:false,byo:false};
 /** StrategyDbError code of a rejection, 'resolved' when it did not reject. */
 const code=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof StrategyDbError?e.code:`not_strategy_db_error:${String(e)}`);
 
@@ -2097,7 +2267,7 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
   it('claimExplanation: claimed once with an RPC-made id and audit key; repeat → existing; other payload → payload_conflict; bad manifest → not_found',async()=>{
    const {args,out}=await claim();
    expect(out.outcome).toBe('claimed');
-   expect(out.usage_audit_key).toBe(`macro-explain:${out.explanation_id}`);
+   expect(out.usage_audit_key).toBe(`${out.explanation_id}`);
    expect(out.projection).toMatchObject({explanation_id:out.explanation_id,subject_kind:'review',subject_id:'subject-1',locale:'zh',manifest_id:args.manifestId,state:'running',rendered:null,failure_codes:[],finished_at:null});
    expect(await db.runOf(args.userId,args.requestId)).toEqual({explanation_id:out.explanation_id,payload_hash:args.payloadHash,state:'running'});
    expect(await db.runOf(args.userId,randomUUID())).toBeNull();
@@ -2119,10 +2289,11 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(again).toMatchObject({outcome:'existing',explanation_id:old.out.explanation_id,projection:{state:'failed',failure_codes:['abandoned']}});
    expect(again.projection.finished_at).not.toBeNull();
    expect((await db.runOf(old.args.userId,old.args.requestId))!.state).toBe('abandoned');
-   const late=await finish(old.out.explanation_id,'accepted',{points:[]});                 // late completion: run row only
+   await db.recordCompletion({explanationId:old.out.explanation_id,rawOutput:{points:[]},finalizePayload:PAYLOAD});   // late completion: run row only
+   const late=await finish(old.out.explanation_id,'accepted',{points:[]});
    expect(late).toMatchObject({state:'failed',failure_codes:['abandoned'],rendered:null});
    expect((await db.runOf(old.args.userId,old.args.requestId))!.state).toBe('abandoned');
-   await expect(db.markFinalized(old.out.explanation_id)).resolves.toBeUndefined();
+   await expect(db.markFinalized(old.out.explanation_id)).resolves.toBeUndefined();   // abandoned runs with late accounting are settled too
   });
 
   it('finishExplanation: running → accepted; same state and raw output is idempotent; other raw or state → invalid_transition; unknown → not_found',async()=>{
@@ -2144,13 +2315,45 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect((await db.runOf(f.args.userId,f.args.requestId))!.state).toBe('failed');
   });
 
-  it('markFinalized: running → invalid_transition; final → ok and idempotent; unknown → not_found',async()=>{
+   it('recordCompletion: running or abandoned; same values → no-op; another payload or output, or a final row without one → invalid_transition',async()=>{
+   const {out}=await claim();
+   await expect(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD})).resolves.toBeUndefined();
+   await expect(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD})).resolves.toBeUndefined();
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'y'},finalizePayload:PAYLOAD}))).toBe('invalid_transition');
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:{...PAYLOAD,status:'failed'}}))).toBe('invalid_transition');
+   expect(await finish(out.explanation_id,'accepted',{content:'x'})).toMatchObject({state:'accepted'});
+   const done=await claim();await finish(done.out.explanation_id,'failed',null);
+   expect(await code(db.recordCompletion({explanationId:done.out.explanation_id,rawOutput:null,finalizePayload:PAYLOAD}))).toBe('invalid_transition');
+   expect(await code(db.recordCompletion({explanationId:randomUUID(),rawOutput:null,finalizePayload:PAYLOAD}))).toBe('not_found');
+  });
+
+  it('markFinalized: needs a recorded finalize payload, then any state (running after a failed finish, final); idempotent; unknown → not_found',async()=>{
    const {out}=await claim();
    expect(await code(db.markFinalized(out.explanation_id))).toBe('invalid_transition');
    await finish(out.explanation_id,'failed',null);
-   await expect(db.markFinalized(out.explanation_id)).resolves.toBeUndefined();
-   await expect(db.markFinalized(out.explanation_id)).resolves.toBeUndefined();
+   expect(await code(db.markFinalized(out.explanation_id))).toBe('invalid_transition');   // final, nothing recorded
+   const r=await claim();
+   await db.recordCompletion({explanationId:r.out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD});
+   await expect(db.markFinalized(r.out.explanation_id)).resolves.toBeUndefined();          // still running: finish failed, payload settled
+   await finish(r.out.explanation_id,'accepted',{content:'x'});
+   await expect(db.markFinalized(r.out.explanation_id)).resolves.toBeUndefined();
    expect(await code(db.markFinalized(randomUUID()))).toBe('not_found');
+  });
+
+  it('expireExplanations: only the user\'s running claims older than five minutes → abandoned, projection failed {abandoned}',async()=>{
+   const user=randomUUID();
+   const old=await claim({user});const other=await claim();
+   await h.ageClaim(old.out.explanation_id,6);await h.ageClaim(other.out.explanation_id,6);
+   const young=await claim({user});                                             // claimed after the clock moved: not stale
+   expect(await db.expireExplanations(user)).toBe(1);
+   expect((await db.runOf(user,old.args.requestId))!.state).toBe('abandoned');
+   expect((await db.runOf(user,young.args.requestId))!.state).toBe('running');
+   expect((await db.runOf(other.args.userId,other.args.requestId))!.state).toBe('running');
+   h.asUser(user);
+   const mine=await db.explanationsOf('session','review','subject-1',20);
+   expect(mine.find(p=>p.explanation_id===old.out.explanation_id)).toMatchObject({state:'failed',failure_codes:['abandoned']});
+   expect(await db.expireExplanations(user)).toBe(0);
+   expect(await db.expireExplanations('not-a-uuid')).toBe(0);
   });
 
   it('explanationsOf: the session user sees only their own projections of the subject, limited',async()=>{
@@ -2247,6 +2450,20 @@ describe('supabaseStrategyDb wiring',()=>{
   expect(await db2.explanationsOf('session','review','x',20)).toEqual([]);
   expect(session.calls).toEqual([['select','macro_explanations','*'],['eq','subject_kind','review'],['eq','subject_id','x'],['order','created_at',{ascending:false}],['order','explanation_id',{ascending:false}],['limit',20]]);
  });
+ it('recordCompletion / expireExplanations call their RPCs with the argument names; reviewResult reads one result as anon',async()=>{
+  const rid='22222222-2222-4222-8222-222222222222',uid='33333333-3333-4333-8333-333333333333';
+  const admin=stub(fn=>({data:fn==='macro_expire_explanations'?2:null,error:null}));
+  const anon=stub(()=>({data:null,error:null}),{macro_review_results:[{result_id:rid,region:'CN',month:'2026-09',status:'ok',manifest_id:'m',manifest_hash:'h',facts:{},method_version:'macro-review/1',code_version:'c',created_at:'2026-10-03T00:00:00+00:00'}]});
+  const db=supabaseStrategyDb({admin:admin.client,anon:anon.client});
+  await db.recordCompletion({explanationId:rid,rawOutput:undefined,finalizePayload:{status:'failed',byo:true}});
+  expect(admin.calls[0]).toEqual(['rpc','macro_record_completion',{p_explanation_id:rid,p_raw_output:null,p_finalize_payload:{status:'failed',byo:true}}]);
+  expect(await db.expireExplanations(uid)).toBe(2);
+  expect(admin.calls[1]).toEqual(['rpc','macro_expire_explanations',{p_user_id:uid}]);
+  expect(await db.reviewResult(rid)).toMatchObject({result_id:rid,region:'CN',created_at:'2026-10-03T00:00:00.000Z'});
+  expect(anon.calls).toEqual([['select','macro_review_results','*'],['eq','result_id',rid],['limit',1]]);
+  expect(await db.reviewResult('CN:2026-09')).toBeNull();expect(await db.expireExplanations('x')).toBe(0);
+  expect(admin.calls).toHaveLength(2);expect(anon.calls).toHaveLength(3);
+ });
  it('runOf and manifest short-circuit non-uuid ids without a query',async()=>{
   const admin=stub(()=>({data:null,error:null}));const anon=stub(()=>({data:null,error:null}));
   const db=supabaseStrategyDb({admin:admin.client,anon:anon.client});
@@ -2300,7 +2517,7 @@ Create `src/lib/macro/strategy/db.ts`:
 
 ```ts
 // src/lib/macro/strategy/db.ts
-// StrategyDb (spec §4.4, plan 2026-11-07 Task 3): the only storage access of the strategy module. Writes are the six
+// StrategyDb (spec §4.4, plan 2026-11-07 Task 3): the only storage access of the strategy module. Writes are the eight
 // service-role RPCs of 20261115090000_macro_strategy.sql; reads are table selects under the caller's role (anon for
 // manifests and reviews, admin for run lookups, the user's session for the RLS projection). The SQL raises with the
 // code as the message (not_found, payload_conflict, invalid_transition); toStrategyDbError maps those, everything
@@ -2320,15 +2537,22 @@ export interface StrategyDb{
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
  reviewCurrent(region:Region,month:string):Promise<{result:ReviewResult;generation:number;cutoff:string}|null>;   // anon
  reviewIndex(region:Region,months:number):Promise<{month:string;status:ReviewStatus;generation:number;result_id:string;updated_at:string}[]>;  // anon
+ /** Immutable review result by id (anon): review explanations bind to result_id, never to the moving pointer. */
+ reviewResult(resultId:string):Promise<ReviewResult|null>;
  publishReview(a:{region:Region;month:string;expectedGeneration:number;cutoff:string;status:ReviewStatus;manifestId:string;manifestHash:string;facts:ReviewFacts;methodVersion:string;codeVersion:string}):Promise<{result_id:string;generation:number;outcome:'advanced'|'replayed'|'stale'}>;   // RPC macro_publish_review; absent pointer = generation 0; stale is a return value, never thrown
  recordReviewAttempt(region:Region,month:string,status:'failed',error:Record<string,unknown>):Promise<void>;   // service
  /** Admin-side lookup used for idempotent replay before any other check (spec §6.3 step 2). */
  runOf(userId:string,requestId:string):Promise<{explanation_id:string;payload_hash:string;state:ExplanationState}|null>;
  /** RPC generates explanation_id and usage_audit_key; ONLY outcome 'claimed' may bill or call the model. payload_conflict throws. */
  claimExplanation(a:{userId:string;requestId:string;payloadHash:string;subjectKind:'snapshot'|'review';subjectId:string;locale:'zh'|'en';manifestId:string}):Promise<{outcome:'claimed'|'existing';explanation_id:string;usage_audit_key:string;projection:ExplanationProjection}>;
+ /** RPC macro_record_completion: durable raw output + the exact finalizeUsageRun payload, right after the provider returns
+  *  (or throws, or begin fails) and before validation / finish; running or abandoned rows; same values → no-op. */
+ recordCompletion(a:{explanationId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;
  /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only. */
  finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown}):Promise<ExplanationProjection>;
- markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; idempotent
+ markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; needs a recorded finalize payload; any state; idempotent
+ /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago → abandoned (projection failed). */
+ expireExplanations(userId:string):Promise<number>;
  explanationsOf(client:'session',subjectKind:'snapshot'|'review',subjectId:string,limit:number):Promise<ExplanationProjection[]>;   // user session client (RLS)
 }
 
@@ -2406,6 +2630,11 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
     p_manifest_hash:a.manifestHash,p_facts:a.facts,p_method_version:a.methodVersion,p_code_version:a.codeVersion}) as {result_id:string;generation:number|string;outcome:'advanced'|'replayed'|'stale'};
    return {result_id:String(x.result_id),generation:Number(x.generation),outcome:x.outcome};
   },
+  async reviewResult(resultId){
+   if(!UUID.test(resultId))return null;
+   const [r]=await select('anon',{table:'macro_review_results',eq:{result_id:resultId},order:[],limit:1});
+   return r?resultFrom(r):null;
+  },
   async recordReviewAttempt(region,month,status,error){await rpc('macro_record_review_attempt',{p_region:region,p_month:month,p_status:status,p_error:error});},
   async runOf(userId,requestId){
    if(!UUID.test(userId)||!UUID.test(requestId))return null;
@@ -2416,11 +2645,13 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
    const x=await rpc('macro_claim_explanation',{p_user_id:a.userId,p_request_id:a.requestId,p_payload_hash:a.payloadHash,p_subject_kind:a.subjectKind,p_subject_id:a.subjectId,p_locale:a.locale,p_manifest_id:a.manifestId}) as {outcome:'claimed'|'existing';explanation_id:string;usage_audit_key:string;projection:Record<string,unknown>};
    return {outcome:x.outcome,explanation_id:String(x.explanation_id),usage_audit_key:String(x.usage_audit_key),projection:projectionFrom(x.projection)};
   },
+  async recordCompletion(a){await rpc('macro_record_completion',{p_explanation_id:a.explanationId,p_raw_output:a.rawOutput??null,p_finalize_payload:a.finalizePayload});},
   async finishExplanation(a){
    return projectionFrom(await rpc('macro_finish_explanation',{p_explanation_id:a.explanationId,p_state:a.state,p_provider:a.provider,p_model:a.model,p_prompt_version:a.promptVersion,
     p_validator_version:a.validatorVersion,p_raw_output:a.rawOutput??null,p_validation:a.validation,p_rendered:a.rendered,p_failure_codes:a.failureCodes,p_accounting:a.accounting??null}) as Record<string,unknown>);
   },
   async markFinalized(id){await rpc('macro_mark_finalized',{p_explanation_id:id});},
+  async expireExplanations(userId){if(!UUID.test(userId))return 0;return Number(await rpc('macro_expire_explanations',{p_user_id:userId}));},
   async explanationsOf(_client,subjectKind,subjectId,limit){
    const rows=await select('session',{table:'macro_explanations',eq:{subject_kind:subjectKind,subject_id:subjectId},order:[{column:'created_at',ascending:false},{column:'explanation_id',ascending:false}],limit});
    return rows.map(projectionFrom);
@@ -2432,7 +2663,7 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
 interface PgErrorLike{message?:string;code?:string}
 interface RpcResult{data:unknown;error:PgErrorLike|null}
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained Database type lacks
-// the Relationships/Views that supabase-js inference needs, and the six RPCs are not registered there.
+// the Relationships/Views that supabase-js inference needs, and the eight RPCs are not registered there.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
 export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;session?:SupabaseClient}):StrategyTransport{
  const pick=(role:ReadRole):NarrowClient=>{
@@ -2456,9 +2687,10 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
 export function supabaseStrategyDb(c:{admin:SupabaseClient;anon:SupabaseClient;session?:SupabaseClient}):StrategyDb{return strategyDbOver(supabaseTransport(c));}
 
 // ---------------------------------------------------------------- memory (unit tests; same rules as the SQL)
-interface MemRun{explanation_id:string;user_id:string;request_id:string;payload_hash:string;state:ExplanationState;claimed_at:number;raw_output:unknown;accounting:unknown;finalized:boolean;late_output:unknown;usage_audit_key:string}
+interface MemRun{explanation_id:string;user_id:string;request_id:string;payload_hash:string;state:ExplanationState;claimed_at:number;raw_output:unknown;finalize_payload:Record<string,unknown>|null;accounting:unknown;finalized:boolean;late_output:unknown;usage_audit_key:string}
 const ABANDON_MS=5*60*1000;
-export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(id:string)=>void}{
+export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean;late_output:unknown};
+export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null}{
  const now=opts.now??(()=>new Date());
  const clone=<T>(v:T):T=>v===undefined?v:JSON.parse(JSON.stringify(v)) as T;
  const manifests=new Map<string,StoredManifest>(),byHash=new Map<string,string>();
@@ -2469,8 +2701,14 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
  const projections=new Map<string,ExplanationProjection&{user_id:string}>();
  let sessionUser:string|null=null;
  const projection=(id:string):ExplanationProjection=>{const {user_id:_u,...p}=projections.get(id)!;return clone(p);};
+ const abandon=(r:MemRun)=>{
+  const t=now().toISOString();r.state='abandoned';
+  const p=projections.get(r.explanation_id)!;if(p.state==='running'){p.state='failed';p.failure_codes=['abandoned'];p.finished_at=t;}
+ };
+ const expired=(r:MemRun)=>r.state==='running'&&r.claimed_at<now().getTime()-ABANDON_MS;
  return {
   _userId(id){sessionUser=id;},
+  _run(id){const r=runs.get(id);return r?clone({state:r.state,raw_output:r.raw_output,finalize_payload:r.finalize_payload,finalized:r.finalized,late_output:r.late_output}):null;},
   async putManifest(body){
    const hash=sha256Hex(canonicalJson(body));
    const existing=byHash.get(hash);
@@ -2503,6 +2741,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    attempts.push({region:a.region,month:a.month,status:outcome==='advanced'?'ok':outcome,result_id:resultId,error:null});
    return {result_id:resultId,generation:gen,outcome};
   },
+  async reviewResult(resultId){const r=results.get(resultId);return r?clone(r):null;},
   async recordReviewAttempt(region,month,status,error){
    if(status!=='failed')throw new StrategyDbError('rpc_failed','invalid_status');
    attempts.push({region,month,status,result_id:null,error:clone(error)});
@@ -2516,20 +2755,29 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    if(id){
     const r=runs.get(id)!;
     if(r.payload_hash!==a.payloadHash)throw new StrategyDbError('payload_conflict');
-    if(r.state==='running'&&r.claimed_at<now().getTime()-ABANDON_MS){
-     const t=now().toISOString();r.state='abandoned';
-     const p=projections.get(id)!;p.state='failed';p.failure_codes=['abandoned'];p.finished_at=t;
-    }
+    if(expired(r))abandon(r);
     return {outcome:'existing',explanation_id:id,usage_audit_key:r.usage_audit_key,projection:projection(id)};
    }
    const m=manifests.get(a.manifestId);
    if(!m||m.body.kind!=='explain_facts')throw new StrategyDbError('not_found');
-   const eid=randomUUID();const key=`macro-explain:${eid}`;const t=now();
-   runs.set(eid,{explanation_id:eid,user_id:a.userId,request_id:a.requestId,payload_hash:a.payloadHash,state:'running',claimed_at:t.getTime(),raw_output:null,accounting:null,finalized:false,late_output:null,usage_audit_key:key});
+   const eid=randomUUID();const key=eid;const t=now();
+   runs.set(eid,{explanation_id:eid,user_id:a.userId,request_id:a.requestId,payload_hash:a.payloadHash,state:'running',claimed_at:t.getTime(),raw_output:null,finalize_payload:null,accounting:null,finalized:false,late_output:null,usage_audit_key:key});
    runByRequest.set(`${a.userId}|${a.requestId}`,eid);
    projections.set(eid,{user_id:a.userId,explanation_id:eid,subject_kind:a.subjectKind,subject_id:a.subjectId,locale:a.locale,manifest_id:a.manifestId,state:'running',rendered:null,failure_codes:[],
     provider:null,model:null,prompt_version:'',validator_version:'',created_at:t.toISOString(),finished_at:null});
    return {outcome:'claimed',explanation_id:eid,usage_audit_key:key,projection:projection(eid)};
+  },
+  async recordCompletion(a){
+   const r=runs.get(a.explanationId);
+   if(!r)throw new StrategyDbError('not_found');
+   const raw=clone(a.rawOutput??null);
+   if(r.finalize_payload!==null){
+    if(canonicalJson(r.finalize_payload)!==canonicalJson(a.finalizePayload)||canonicalJson(r.raw_output)!==canonicalJson(raw))throw new StrategyDbError('invalid_transition');
+    return;
+   }
+   if(r.state!=='running'&&r.state!=='abandoned')throw new StrategyDbError('invalid_transition');
+   if(a.finalizePayload.status!=='completed'&&a.finalizePayload.status!=='failed')throw new StrategyDbError('rpc_failed','macro_explanation_runs_finalize_payload');
+   r.raw_output=raw;r.finalize_payload=clone(a.finalizePayload);
   },
   async finishExplanation(a){
    const r=runs.get(a.explanationId);
@@ -2551,8 +2799,13 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
   async markFinalized(id){
    const r=runs.get(id);
    if(!r)throw new StrategyDbError('not_found');
-   if(r.state==='running')throw new StrategyDbError('invalid_transition');
+   if(r.finalize_payload===null)throw new StrategyDbError('invalid_transition');
    r.finalized=true;
+  },
+  async expireExplanations(userId){
+   let n=0;
+   for(const r of runs.values())if(r.user_id===userId&&expired(r)){abandon(r);n++;}
+   return n;
   },
   async explanationsOf(_client,subjectKind,subjectId,limit){
    if(sessionUser===null)return [];
@@ -2567,7 +2820,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
 - [ ] **Step 4: Run the unit tests**
 
 Run: `npm test -- src/lib/macro/strategy/hash.test.ts src/lib/macro/strategy/db.test.ts`
-Expected: PASS — `Tests  20 passed (20)` (hash 3; db 17 = 10 memory contract cases + 5 wiring + 2 memory specifics).
+Expected: PASS — `Tests  23 passed (23)` (hash 3; db 20 = 12 memory contract cases + 6 wiring + 2 memory specifics).
 
 - [ ] **Step 5: Run the same contract on real PostgreSQL**
 
@@ -2599,7 +2852,7 @@ import {strategyDbContract} from './db-contract';
 // strategyDbOver(pgTransport) runs the same mapping code as supabaseStrategyDb; the transport executes each RPC as
 // service_role and each select under the requested role (session = authenticated with request.jwt.claim.sub), so the
 // contract also exercises the grants and the projection RLS.
-const JSONB_ARGS=new Set(['p_body','p_facts','p_error','p_raw_output','p_validation','p_rendered','p_accounting']);
+const JSONB_ARGS=new Set(['p_body','p_facts','p_error','p_raw_output','p_validation','p_rendered','p_accounting','p_finalize_payload']);
 function pgTransport(pool:Pool,sessionUser:()=>string|null):StrategyTransport{
  const inRole=async<T>(role:ReadRole,body:(c:PoolClient)=>Promise<T>):Promise<T>=>{
   const c=await pool.connect();
@@ -2646,10 +2899,10 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  24 passed (24)` (14 migration cases + 10 pg contract cases).
+Expected: PASS — `Tests  29 passed (29)` (17 migration cases + 12 pg contract cases).
 
 Run: `npm test -- src/lib/macro/strategy`
-Expected: PASS for the unit files; `strategy.integration.test.ts` shows 24 skipped (no `S4_TEST_STATE`).
+Expected: PASS for the unit files; `strategy.integration.test.ts` shows 29 skipped (no `S4_TEST_STATE`).
 
 - [ ] **Step 6: Typecheck and lint**
 
@@ -2667,7 +2920,7 @@ git commit -F - <<'EOF'
 feat(macro-strategy): StrategyDb over Supabase and memory with a shared contract
 
 hash.ts holds the canonical JSON and SHA-256 behind every manifest_hash.
-strategyDbOver(transport) maps the six RPCs and the role-scoped reads; the
+strategyDbOver(transport) maps the eight RPCs and the role-scoped reads; the
 Supabase transport narrows the client locally; memoryStrategyDb reproduces the
 SQL rules. db-contract.ts runs the same cases on memory (unit) and on real
 PostgreSQL through a node-postgres transport (critical integration suite).
@@ -2680,14 +2933,15 @@ EOF
 
 ## Part B — P3 计算：数值、清单、事件、传导、剧本、矩阵、行动段（Task 4–8）
 
-> Part B of `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`. Uses the skeleton's SHARED CONTRACT (`contract.ts`), `StrategyReadPort` / `memoryStrategyPort` (`port.ts`) and the fixture API (`testing/fixture.ts`: `fixture`, `FIXTURE_CATALOG`, `FIXTURE_RULES`, `obs`, `monthly`, `daily`, `snap`, `fedTargetFixture`) exactly as declared there; nothing in them is changed. Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` draft 3 (§4.5, §5.1–§5.6).
+> Part B of `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`. Uses the skeleton's SHARED CONTRACT (`contract.ts`), `StrategyReadPort` / `memoryStrategyPort` (`port.ts`) and the fixture API (`testing/fixture.ts`: `fixture`, `FIXTURE_CATALOG`, `FIXTURE_RULES`, `obs`, `monthly`, `daily`, `snap`, `fedTargetFixture`) exactly as declared there; nothing in them is changed. Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` draft 4 (§4.5, §5.1–§5.6; §0.2 "第 4 稿" lists the plan-audit write-back).
 
 Cross-task decisions fixed in Part B (later tasks rely on them):
-- **Input roles.** Every `ManifestInput.role` is built with `inputRole(purpose, seriesId, tag)` from `manifest.ts` = `'<purpose>:<series_id>:<tag>'`. Purposes: `node` (transmission), `dim` (policy response), `col` (cycle table), `events` (event sources, recorded as reads only). Tags: `latest | prev | prev3m` (snapshot roles), `base | end | from | to` (reserved for Part C), `month_end` (a whole monthly window), `history` (a whole daily window; listed in the `ManifestInput.role` comment of `contract.ts`).
-- **One manifest per kind, view parameters outside it.** `transmission` (both regions; the view takes `region`), `policy_response` (the view takes `window` 1/3/6) and `cycle_table` (the view takes `boundary`) manifests all have `params: {}`; the same manifest serves every view parameter. Views take the `StoredManifest` (they need `manifest_id`).
+- **Input roles.** Every `ManifestInput.role` is built with `inputRole(purpose, seriesId, tag)` from `manifest.ts` = `'<purpose>:<series_id>:<tag>'`. Purposes: `node` (transmission), `dim` (policy response), `col` (cycle table), `events` (event sources: reads plus the evidence rows), `snapshot_rows` (a read recording unresolved snapshot ids). Tags: `latest | prev | prev3m` (snapshot roles), `base | end | from | to` (reserved for Part C), `month_end` (a whole monthly window), `history` (a whole daily window), `evidence` (single event-source rows; all listed in the `ManifestInput.role` comment of `contract.ts`).
+- **One manifest per (kind, params); the calculation parameters live in the manifest (plan audit #3).** `transmission` has `params:{region}`, `policy_response` `params:{window}` (1/3/6), `cycle_table` `params:{boundary}`; builders take the parameter and freeze it before hashing, so each value is its own identity, and the views (`buildTransmission(stored)`, `buildPolicyResponse(stored)`, `buildCycleTable(stored)`) read it back from `body.params` (`regionParam` / `windowParam` / `boundaryParam` throw `invalid_manifest_params:<name>` otherwise). Replay derives every argument from the manifest. Views take the `StoredManifest` (they need `manifest_id`).
 - **Builders** live next to their views: `buildTransmissionManifest` (Task 6), `buildPolicyResponseManifest` (Task 7), `buildCycleTableManifest` (Task 8), all on the shared `manifestBuilder` (Task 4). They return the body; the route (Task 12) calls `StrategyDb.putManifest(body)` and passes the returned `StoredManifest` to the view.
-- **Event-source histories are not copied into manifests** (the daily Fed target history is tens of thousands of rows): the manifest freezes the merged `events` (each carrying its evidence observation ids) and `gaps`, and records the three reads with purpose `events`.
-- **Floats.** Only `pctChange` (one `Number()` per operand) and the type-7 quartiles over `change_raw`. Every `change_text` is exact (`pctText` half-even 4 decimals for pct; `toBp` for bp). For bp rows `change_raw = Number(change_text)`.
+- **Event-source histories are not copied whole into manifests** (the daily Fed target history is tens of thousands of rows): the manifest freezes the merged `events` and `gaps`, records the three reads with purpose `events`, and freezes exactly the rows needed to derive and verify every event — each event's evidence observations plus the 2008 transition tuple (last single-target row, first upper and lower rows) — as `events:<series>:evidence` inputs (plan audit #4). A truncated source read gives a `history_truncated` gap (plan audit #11).
+- **Floats.** Only `pctChange` (one `Number()` per operand) and the type-7 quartiles over `change_raw`. Every `change_text` is exact: pct → the ratio text `'<end>/<base>'` (`pctRatio`, rounded once at presentation by `roundPctRatio`; plan audit #10), bp → `toBp`. For bp rows `change_raw = Number(change_text)`.
+- **Snapshot reads (plan audit #15).** `useSnapshots` compares the requested ids with what `observationsByIds` returned; any unresolved id makes that region's snapshot incomplete: a `snapshot_rows` read `missing` is recorded and every `snapshotValue` of the region returns null with read state `truncated` (no promotion of a comparison row to `latest`, no `latestObservations` fallback).
 
 ---
 
@@ -2698,7 +2952,7 @@ Cross-task decisions fixed in Part B (later tasks rely on them):
 - Create: `src/lib/macro/strategy/manifest.ts`, `src/lib/macro/strategy/manifest.test.ts`
 
 Design decisions (spec §4.5, §5.6):
-- `numeric.ts` re-implements the P1 `decimal.ts` BigInt scaling (P1 is not on main): `compare`, `subtract`, `add`, `sign`, `toBp` (same definition as P2 `events.ts::toBp`, a canonical `e2` shift), `pctChange` (float, once), `pctText` (exact, half-even, 4 decimals), `quantile7` / `quartiles` / `median`. Inputs go through `canonicalDecimal` from `src/lib/facts/json-numbers.ts` (throws `invalid_decimal:…`).
+- `numeric.ts` re-implements the P1 `decimal.ts` BigInt scaling (P1 is not on main): `compare`, `subtract`, `add`, `sign`, `toBp` (same definition as P2 `events.ts::toBp`, a canonical `e2` shift), `pctChange` (float, once), `pctRatio` (exact ratio text `'<end>/<base>'`) and `roundPctRatio(ratio, dp)` (one exact half-away-from-zero rounding), `quantile7` / `quartiles` / `median`. Inputs go through `canonicalDecimal` from `src/lib/facts/json-numbers.ts` (throws `invalid_decimal:…`).
 - `manifest.ts`: re-exports `canonicalJson` / `sha256Hex` from `hash.ts` (Task 3; keys sorted by UTF-16 code unit, `undefined` dropped, non-finite numbers rejected — the same function as P1 `catalog.ts`), adds `manifestHash(body)`; calendar helpers; cutoff rules `latestCutoff` / `monthCutoff` (review: the 3rd of the next month 00:00:00Z; baseline = the 3rd of the review month) / `pinSnapshots`; `freezeSnapshot`, `freezeDef`, `snapshotRoles`; readers `inputRole`, `inputsWithRole`, `frozenDef`, `readState`, `toObsRef`; and `manifestBuilder(port, cutoff)`.
 - Snapshot roles (N1): per series in `observation_ids ∪ history_ids`, highest version per `period_end`; max `period_end` = `latest`, the next earlier = `prev`, the row whose `period_end` is the month end 3 months before `latest` = `prev3m` (quarterly: that is the previous quarter end; daily series: none).
 - Value rule: `snapshotValue` takes the row from the series' region snapshot (`source:{kind:'snapshot'}`), else `latestObservations([id],{asOf:cutoff})` (`source:{kind:'history',as_of:cutoff}`), else records `missing`. `history` reads `seriesHistory(id,{asOf:cutoff,maxRows:HISTORY_MAX_ROWS})`; an `Error('truncated')` becomes read state `truncated` and returns `null` (never thrown); any other error propagates. `useSnapshots(s,{loadRows:false})` only freezes the snapshot records (matrix / history manifests). `build()` sorts `catalog` by id, `reads` by `purpose|series_id`, `inputs` by `role|period_end|observation_id`, so the hash does not depend on read order.
@@ -2709,7 +2963,7 @@ Design decisions (spec §4.5, §5.6):
 ```ts
 // numeric.ts (spec §5.6): exact decimal ops on canonical text, one float step for pct, type-7 quartiles.
 import {describe,expect,it} from 'vitest';
-import {add,compare,median,pctChange,pctText,quantile7,quartiles,sign,subtract,toBp} from './numeric';
+import {add,compare,median,pctChange,pctRatio,quantile7,quartiles,roundPctRatio,sign,subtract,toBp} from './numeric';
 describe('exact decimals',()=>{
  it('subtracts and adds exactly with canonical output',()=>{
   expect(subtract('4.10','1.85')).toBe('2.25');
@@ -2732,16 +2986,25 @@ describe('exact decimals',()=>{
  });
 });
 describe('percentage change',()=>{
- it('pctChange is one float step, pctText is exact half-even to 4 decimals',()=>{
+ it('pctChange is one float step; pctRatio keeps the exact ratio and roundPctRatio rounds it once',()=>{
   expect(pctChange('105','100')).toBeCloseTo(5,12);
-  expect(pctText('105','100')).toBe('5');
-  expect(pctText('1','3')).toBe('-66.6667');
-  expect(pctText('100.00005','100')).toBe('0'); // 0.00005 → half-even to 0.0000
-  expect(pctText('100.00015','100')).toBe('0.0002');
+  expect(pctRatio('105.0','100')).toBe('105/100');
+  expect(roundPctRatio(pctRatio('105','100'),1)).toBe('5.0');
+  expect(roundPctRatio(pctRatio('1','3'),4)).toBe('-66.6667');
+  expect(roundPctRatio(pctRatio('62','60.5'),1)).toBe('2.5');   // 2.479… → 2.5
  });
- it('refuses a non-positive base',()=>{
+ it('no double rounding at the display boundary (positive and negative)',()=>{
+  expect(roundPctRatio(pctRatio('100.04996','100'),1)).toBe('0.0');    // true 0.04996 %: a 4-dp pre-round (0.05) would show 0.1
+  expect(roundPctRatio(pctRatio('99.95004','100'),1)).toBe('0.0');     // true −0.04996 %: no sign on a zero result
+  expect(roundPctRatio(pctRatio('100.05','100'),1)).toBe('0.1');       // exactly half → away from zero
+  expect(roundPctRatio(pctRatio('99.95','100'),1)).toBe('-0.1');
+  expect(roundPctRatio(pctRatio('100.14996','100'),1)).toBe('0.1');
+ });
+ it('refuses a non-positive base and malformed ratios',()=>{
   expect(()=>pctChange('1','0')).toThrow('non_positive_base');
-  expect(()=>pctText('1','-2')).toThrow('non_positive_base');
+  expect(()=>pctRatio('1','-2')).toThrow('non_positive_base');
+  expect(()=>roundPctRatio('1/0',1)).toThrow('non_positive_base');
+  expect(()=>roundPctRatio('0.05',1)).toThrow(/invalid_pct_ratio/);
  });
 });
 describe('type-7 quartiles',()=>{
@@ -2764,7 +3027,7 @@ describe('type-7 quartiles',()=>{
 // manifest.ts (spec §4.5 N1–N3): canonical hash, cutoff rules, snapshot roles, value rule, read states, frozen catalog.
 import {describe,expect,it} from 'vitest';
 import type {StrategyManifest} from './contract';
-import {addMonthsDate,addMonthsYm,canonicalJson,dayDiff,inputRole,inputsWithRole,latestCutoff,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthsBetween,pinSnapshots,prevMonth,readState,sha256Hex,snapshotRoles} from './manifest';
+import {addMonthsDate,addMonthsYm,canonicalJson,dayDiff,inputRole,inputsWithRole,latestCutoff,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthsBetween,pinSnapshots,prevMonth,readState,sha256Hex,SNAPSHOT_ROWS_PURPOSE,snapshotRoles} from './manifest';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
 import {fixture,monthly,obs,snap} from './testing/fixture';
 
@@ -2875,6 +3138,27 @@ describe('manifestBuilder',()=>{
   expect(m.inputs.some(i=>i.role.startsWith('events:'))).toBe(false);
   expect(readState(t.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBe('truncated');
  });
+ it('an unresolved snapshot id makes the region incomplete: no promotion of the comparison row, no history fallback',async()=>{
+  // the latest CPI row of the snapshot is gone (quarantined): only the 2026-08 comparison row resolves
+  const gone=fixture({snapshots:[us],observations:[{...cpi[1],status:'quarantined'},cpi[0],unrate]});
+  const b=manifestBuilder(memoryStrategyPort(gone),us.created_at);
+  await b.useSnapshots({US:us,CN:null});
+  expect(await b.snapshotValue('US_CPI_YOY','node',['prev'])).toBeNull();
+  expect(await b.snapshotValue('US_UNRATE','node')).toBeNull();               // same region: incomplete too, no latestObservations fallback
+  const m=b.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(readState(m,'US_CPI_YOY','node')).toBe('truncated');
+  expect(readState(m,us.snapshot_id,SNAPSHOT_ROWS_PURPOSE)).toBe('missing');
+  expect(m.inputs).toEqual([]);                                               // 2026-08 is never reported as 'latest'
+  const ok=manifestBuilder(memoryStrategyPort(f),us.created_at);await ok.useSnapshots({US:us,CN:null});
+  expect(ok.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'}).reads).toEqual([]);   // fully resolved: no snapshot_rows read
+ });
+ it('keep freezes chosen history rows under <purpose>:<series>:<tag> with source history',async()=>{
+  const b=manifestBuilder(memoryStrategyPort(f),'2026-11-03T06:02:00Z');
+  const rows=(await b.history('US_DGS10','events','history',{keepInputs:false}))!;
+  b.keep([rows[1]],'events','evidence');
+  const m=b.build({kind:'cycle_table',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(m.inputs).toEqual([expect.objectContaining({role:inputRole('events','US_DGS10','evidence'),observation_id:rows[1].observation_id,source:{kind:'history',as_of:'2026-11-03T06:02:00Z'}})]);
+ });
  it('is deterministic: same reads in another order give the same hash',async()=>{
   const p=memoryStrategyPort(f);
   const b1=manifestBuilder(p,us.created_at),b2=manifestBuilder(p,us.created_at);
@@ -2900,7 +3184,8 @@ Expected: FAIL — `Failed to resolve import "./numeric"` / `"./manifest"`.
 // Exact decimal arithmetic and descriptive statistics for P3/P4 (spec 2026-11-07 §5.6, §5.3, §5.5). P1 decimal.ts is not on
 // main, so subtract / add / compare / sign / toBp work here on canonicalDecimal text as scaled BigInts (WP-S6 may swap in
 // P1 decimal.ts). Floats appear only where §5.6 allows: pctChange (one Number() per operand, once) and the type-7
-// quartiles over already computed raw changes. pctText is the exact companion of pctChange (half-even, 4 decimals).
+// quartiles over already computed raw changes. pctRatio is the exact companion of pctChange: facts and views keep the
+// exact ratio text '<end>/<base>', and roundPctRatio rounds it once, at presentation (never a pre-rounded value).
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 
 interface Scaled{n:bigint;scale:number}
@@ -2917,15 +3202,6 @@ function fromScaled(n:bigint,scale:number):string{
  if(scale>0){digits=digits.padStart(scale+1,'0');digits=`${digits.slice(0,-scale)}.${digits.slice(-scale)}`;}
  return canonicalDecimal(`${neg?'-':''}${digits}`);
 }
-/** num/den rounded half-to-even (den ≠ 0). */
-function divHalfEven(num:bigint,den:bigint):bigint{
- if(den<0n){num=-num;den=-den;}
- const q=num/den;const r=num%den;const twice=(r<0n?-r:r)*2n;
- if(twice<den)return q;
- const away=num<0n?q-1n:q+1n;
- if(twice>den)return away;
- return q%2n===0n?q:away;
-}
 export const canonical=canonicalDecimal;
 export function compare(a:string,b:string):-1|0|1{const [x,y]=align(scaled(a),scaled(b));return x<y?-1:x>y?1:0;}
 export function subtract(a:string,b:string):string{const [x,y,s]=align(scaled(a),scaled(b));return fromScaled(x-y,s);}
@@ -2938,11 +3214,22 @@ export function pctChange(end:string,base:string):number{
  if(sign(base)<=0)throw new Error('non_positive_base');
  return (Number(canonicalDecimal(end))/Number(canonicalDecimal(base))-1)*100;
 }
-/** Exact text of the same change, half-even to 4 decimals. base ≤ 0 → throws non_positive_base. */
-export function pctText(end:string,base:string):string{
+/** Exact form of the same change: the ratio text '<end>/<base>' (canonical decimals). base ≤ 0 → throws non_positive_base. */
+export function pctRatio(end:string,base:string):string{
  if(sign(base)<=0)throw new Error('non_positive_base');
- const [e,b]=align(scaled(end),scaled(base));
- return fromScaled(divHalfEven((e-b)*100n*10000n,b),4);
+ return `${canonicalDecimal(end)}/${canonicalDecimal(base)}`;
+}
+const RATIO=/^(-?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/;
+/** (end/base − 1) × 100 of a pctRatio text, rounded once, half away from zero, to exactly dp places (BigInt, no float);
+ *  a zero result carries no sign. 100 → 100.04996 at dp 1 is '0.0' (true change 0.04996 %). */
+export function roundPctRatio(ratio:string,dp:number):string{
+ const m=RATIO.exec(ratio);if(!m)throw new Error(`invalid_pct_ratio:${ratio}`);
+ const [e,b]=align(scaled(m[1]),scaled(m[2]));if(b<=0n)throw new Error('non_positive_base');
+ const num=(e-b)*100n*pow10(dp);const abs=num<0n?-num:num;
+ let q=abs/b;if((abs%b)*2n>=b)q+=1n;
+ let digits=q.toString();
+ if(dp>0){digits=digits.padStart(dp+1,'0');digits=`${digits.slice(0,-dp)}.${digits.slice(-dp)}`;}
+ return num<0n&&q!==0n?`-${digits}`:digits;
 }
 /** Type-7 quantile of an ascending, non-empty array: h=(n−1)p, q=x[⌊h⌋]+(h−⌊h⌋)(x[⌊h⌋+1]−x[⌊h⌋]). */
 export function quantile7(sorted:readonly number[],p:number):number{
@@ -2969,7 +3256,10 @@ export const median=(values:readonly number[]):number=>quartiles(values).median;
 //   monthCutoff (review: the 3rd of the next month 00:00:00Z, spec §6.2), pinSnapshots (snapshot explanation: the requested
 //   snapshot fixes the cutoff, the other region = snapshotUpTo(cutoff)).
 // - snapshot roles: per series in observation_ids ∪ history_ids, max period_end = 'latest', the previous period = 'prev',
-//   the period 3 months earlier = 'prev3m' (quarterly: previous quarter); other rows stay out of the manifest.
+//   the period 3 months earlier = 'prev3m' (quarterly: previous quarter); other rows stay out of the manifest. A snapshot
+//   id that observationsByIds does not return (unknown or no longer ok) makes that region's snapshot incomplete (spec §4.3:
+//   a missing referenced id is missing): every snapshot value of the region is then recorded 'truncated' and returns null —
+//   a comparison row is never promoted to 'latest', and the region never falls back to latestObservations.
 // - value rule: a series in its region's snapshot → that row (source snapshot); else latestObservations asOf cutoff
 //   (source history). History windows → seriesHistory asOf cutoff; 'truncated' is recorded as a read state, never thrown.
 // Builders read only through StrategyReadPort; views read only the manifest (replay never touches the port or catalog).
@@ -3046,8 +3336,9 @@ export function snapshotRoles(rows:readonly ObservationRow[],periodOf:(seriesId:
 }
 
 // ---------------------------------------------------------------- input roles and manifest readers
-export type InputTag=SnapshotRole|'base'|'end'|'from'|'to'|'month_end'|'history';
-/** '<purpose>:<series_id>:<tag>' — every writer uses this helper. 'month_end' / 'history' tag whole monthly / daily windows. */
+export type InputTag=SnapshotRole|'base'|'end'|'from'|'to'|'month_end'|'history'|'evidence';
+/** '<purpose>:<series_id>:<tag>' — every writer uses this helper. 'month_end' / 'history' tag whole monthly / daily windows;
+ *  'evidence' tags single event-source rows (policy-events.ts). */
 export const inputRole=(purpose:string,seriesId:string,tag:InputTag):string=>`${purpose}:${seriesId}:${tag}`;
 export const toObsRef=(i:ManifestInput):ObsRef=>({observation_id:i.observation_id,series_id:i.series_id,period_end:i.period_end,value_text:i.value_text,version:i.version,available_at:i.available_at,source:i.source});
 /** Inputs with this exact role, ascending period_end. */
@@ -3061,15 +3352,20 @@ export interface ManifestBuilder{
  readonly port:StrategyReadPort;readonly cutoff:string;
  /** Catalog row by id, frozen into manifest.catalog on first use; null when the live catalog has no such id. */
  def(id:string):FrozenSeriesDef|null;
- /** Freeze the two snapshots; unless loadRows=false, load their observations (one observationsByIds per snapshot) for snapshotValue. */
+ /** Freeze the two snapshots; unless loadRows=false, load their observations (one observationsByIds per snapshot) for snapshotValue.
+  *  Unresolved ids → read {series_id: snapshot_id, purpose: 'snapshot_rows', state: 'missing'} and the region is incomplete. */
  useSnapshots(s:{US:SnapshotRecord|null;CN:SnapshotRecord|null},opts?:{loadRows?:boolean}):Promise<void>;
- /** Latest value of a series (§4.5 value rule) plus the requested comparison roles from the snapshot; records one read. */
+ /** Latest value of a series (§4.5 value rule) plus the requested comparison roles from the snapshot; records one read.
+  *  Region snapshot incomplete → 'truncated', null. */
  snapshotValue(seriesId:string,purpose:string,comparison?:readonly Exclude<SnapshotRole,'latest'>[]):Promise<ObservationRow|null>;
  /** Whole history asOf cutoff (highest version per period). keepInputs=false records only the read state (event sources). null = truncated. */
  history(seriesId:string,purpose:string,tag:'month_end'|'history',opts?:{from?:string;to?:string;keepInputs?:boolean}):Promise<ObservationRow[]|null>;
+ /** Freeze chosen rows of a history read (source history asOf cutoff) under '<purpose>:<series>:<tag>'. */
+ keep(rows:readonly ObservationRow[],purpose:string,tag:InputTag):void;
  build(a:{kind:ManifestKind;params:Record<string,string|number>;methodVersion:string;codeVersion:string;extra?:Pick<StrategyManifest,'baseline'|'rules'|'events'|'gaps'|'timeliness'>}):StrategyManifest;
 }
 const isTruncated=(e:unknown)=>e instanceof Error&&e.message==='truncated';
+export const SNAPSHOT_ROWS_PURPOSE='snapshot_rows';
 export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBuilder{
  const live=new Map(port.catalog().map(d=>[d.id,d]));
  const catalog=new Map<string,FrozenSeriesDef>();
@@ -3077,6 +3373,7 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
  const inputs=new Map<string,ManifestInput>();
  let snapshots:{US:FrozenSnapshot|null;CN:FrozenSnapshot|null}={US:null,CN:null};
  const roles:Record<Region,Map<string,Partial<Record<SnapshotRole,ObservationRow>>>>={US:new Map(),CN:new Map()};
+ const incomplete:Record<Region,boolean>={US:false,CN:false};
  const def=(id:string)=>{const d=live.get(id);if(!d)return null;let f=catalog.get(id);if(!f){f=freezeDef(d);catalog.set(id,f);}return f;};
  const read=(series_id:string,purpose:string,state:ManifestRead['state'])=>{reads.set(`${purpose}|${series_id}`,{series_id,purpose,state});};
  const put=(o:ObservationRow,role:string,source:InputSource)=>{
@@ -3089,13 +3386,19 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
    snapshots={US:s.US?freezeSnapshot(s.US):null,CN:s.CN?freezeSnapshot(s.CN):null};
    if(opts.loadRows===false)return;
    for(const r of ['US','CN'] as const){
-    const rec=s[r];
-    roles[r]=rec?snapshotRoles(await port.observationsByIds([...rec.observation_ids,...rec.history_ids]),periodOf):new Map();
+    const rec=s[r];incomplete[r]=false;
+    if(!rec){roles[r]=new Map();continue;}
+    const ids=[...new Set([...rec.observation_ids,...rec.history_ids])];
+    const rows=await port.observationsByIds(ids);
+    const found=new Set(rows.map(o=>o.observation_id));
+    if(ids.some(id=>!found.has(id))){incomplete[r]=true;read(rec.snapshot_id,SNAPSHOT_ROWS_PURPOSE,'missing');}
+    roles[r]=snapshotRoles(rows,periodOf);
    }
   },
   async snapshotValue(seriesId,purpose,comparison=[]){
    const d=def(seriesId);
    const snapRec=d?snapshots[d.region]:null;
+   if(d&&snapRec&&incomplete[d.region]){read(seriesId,purpose,'truncated');return null;}
    const r=d?roles[d.region].get(seriesId):undefined;
    if(snapRec&&r?.latest){
     const source:InputSource={kind:'snapshot',snapshot_id:snapRec.snapshot_id};
@@ -3120,6 +3423,7 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
    if(opts.keepInputs!==false)for(const o of rows)put(o,inputRole(purpose,seriesId,tag),{kind:'history',as_of:cutoff});
    return rows;
   },
+  keep(rows,purpose,tag){for(const o of rows){def(o.series_id);put(o,inputRole(purpose,o.series_id,tag),{kind:'history',as_of:cutoff});}},
   build(a){
    const byKey=<T>(k:(x:T)=>string)=>(x:T,y:T)=>k(x)<k(y)?-1:k(x)>k(y)?1:0;
    return {
@@ -3137,7 +3441,7 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- src/lib/macro/strategy/numeric.test.ts src/lib/macro/strategy/manifest.test.ts`
-Expected: PASS (8 + 11 tests).
+Expected: PASS (9 + 13 tests).
 
 - [ ] **Step 5: Typecheck and lint**
 
@@ -3153,7 +3457,9 @@ git commit -F - <<'EOF'
 feat(macro-strategy): exact decimals, type-7 quartiles, canonical manifest hash and builder
 
 numeric.ts: BigInt-scaled subtract/add/compare/sign/toBp over canonicalDecimal text,
-pctChange (single float step) with exact pctText, type-7 quartiles (spec §5.6).
+pctChange (single float step) with the exact pctRatio rounded once by
+roundPctRatio, type-7 quartiles (spec §5.6). Unresolved snapshot ids make a
+region incomplete; keep() freezes chosen history rows.
 manifest.ts: canonicalJson + sha256Hex, cutoff rules (latest / month / pinned
 snapshot), snapshot roles latest/prev/prev3m, value rule snapshot-then-history,
 read states ok/missing/truncated, deterministic manifestBuilder (spec §4.5 N1-N3).
@@ -3172,7 +3478,8 @@ Design decisions (spec §5.4, N9):
 - From 2008-12-16 the P2 derivation (`port.derivePolicyEvents`) is used unchanged; each result gets `basis:'range'` and keeps its own `version`.
 - Single-target era: neighbouring `US_FED_TARGET_D` rows with different values (decimal compare) → event on the later date, `upper = lower = single target`, `change_bp = toBp(cur − prev)`, `evidence=[prev,cur,prev,cur]`, `version = VERSIONS.events`, `basis:'single_target'`.
 - The switch is attempted when the single-target input is non-empty or the range input starts on/before 2008-12-16. It needs exactly: last single-target row dated `2008-12-15`, first upper and first lower rows dated `2008-12-16`. Then one `single_to_range` event on 2008-12-16 with `upper_from = lower_from = s`, `upper_to = u`, `lower_to = l`, `change_bp = toBp(u − s)` (the lower move when the upper did not move, mirroring P2), `evidence=[s,u,s,l]`. Otherwise no event and one gap `{kind:'transition_unverified', reason:<all failing checks joined by ';'>, near:'2008-12-16'}`. A range history that starts after 2008-12-16 with no single-target rows needs no switch (the data simply starts later).
-- `readPolicyEvents(builder)` reads the three histories with purpose `events` and `keepInputs:false`; any truncated read → `{events:[],gaps:[]}` (the read state records why; the Task 7 view turns that into missing cells, the Task 8 view has no episodes).
+- `readPolicyEvents(builder)` reads the three histories with purpose `events` and `keepInputs:false`, then freezes (builder `keep`, tag `evidence`) every evidence row of every merged event plus the transition tuple, so each event re-derives and verifies from the manifest alone (plan audit #4); any truncated read → `{events:[],gaps:[{kind:'history_truncated',reason:<truncated series ids>,near:<cutoff date>}]}` (the Task 7 view turns that into missing cells, the Task 8 view and the Task 9 review show the truncation explicitly).
+- The switch event's `change_bp` is always `toBp(u − s)` from the upper bound (spec §5.4; plan audit #13): an unchanged upper with a moved lower is a 0 bp event, which episodes and the matrix skip.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3182,8 +3489,8 @@ Design decisions (spec §5.4, N9):
 import {describe,expect,it} from 'vitest';
 import {VERSIONS} from './contract';
 import type {EventInput,StrategyPolicyEvent} from './contract';
-import {manifestBuilder,readState} from './manifest';
-import {EVENTS_PURPOSE,mergePolicyEvents,readPolicyEvents,US_TARGET_SINGLE_ID} from './policy-events';
+import {inputRole,manifestBuilder,readState} from './manifest';
+import {EVENTS_PURPOSE,mergePolicyEvents,readPolicyEvents,US_TARGET_LOWER_ID,US_TARGET_SINGLE_ID,US_TARGET_UPPER_ID} from './policy-events';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
 import {daily,fedTargetFixture,fixture} from './testing/fixture';
 
@@ -3208,6 +3515,11 @@ describe('mergePolicyEvents',()=>{
   const r=mergePolicyEvents(derive,[row('s','2008-12-15','1.25')],[row('u','2008-12-16','0.5')],[row('l','2008-12-16','0.25')]);
   expect(r.events.map(e=>[e.upper_from,e.upper_to,e.lower_to,e.change_bp])).toEqual([['1.25','0.5','0.25','-75']]);
  });
+ it('switch change_bp always comes from the upper bound: unchanged upper, moved lower → a 0 bp event (no invented direction)',()=>{
+  const r=mergePolicyEvents(derive,[row('s','2008-12-15','1')],[row('u','2008-12-16','1')],[row('l','2008-12-16','0.75')]);
+  expect(r.events.map(e=>[e.basis,e.upper_to,e.lower_to,e.change_bp])).toEqual([['single_to_range','1','0.75','0']]);
+  expect(r.gaps).toEqual([]);
+ });
  it.each([
   ['upper starts a day late',SINGLE,[row('u1','2008-12-17','0.25')],LOWER,'upper_first_not_2008-12-16'],
   ['lower missing',SINGLE,UPPER,[],'lower_missing'],
@@ -3230,23 +3542,37 @@ describe('mergePolicyEvents',()=>{
 });
 
 describe('readPolicyEvents',()=>{
- it('reads the three sources asOf the cutoff as reads only and finds the verified switch in the Fed fixture',async()=>{
+ it('reads the three sources asOf the cutoff and finds the verified switch in the Fed fixture',async()=>{
   const b=manifestBuilder(memoryStrategyPort(fixture({observations:fedTargetFixture()})),'2026-11-03T00:00:00Z');
   const r=await readPolicyEvents(b);
   expect(r.gaps).toEqual([]);
   const sw=r.events.filter(e=>e.basis==='single_to_range');
   expect(sw).toHaveLength(1);expect(sw[0].effective_date).toBe('2008-12-16');
   expect(r.events.every(e=>e.basis==='range'?e.effective_date>'2008-12-16':e.effective_date<='2008-12-16')).toBe(true);
-  const m=b.build({kind:'cycle_table',params:{},methodVersion:'m/1',codeVersion:'test'});
+  const m=b.build({kind:'cycle_table',params:{boundary:'event_day'},methodVersion:'m/1',codeVersion:'test'});
   expect(readState(m,US_TARGET_SINGLE_ID,EVENTS_PURPOSE)).toBe('ok');
-  expect(m.inputs).toEqual([]);
  });
- it('a truncated source gives no events and a truncated read state',async()=>{
+ it('freezes exactly the rows that derive and verify every event, including the transition tuple',async()=>{
+  const b=manifestBuilder(memoryStrategyPort(fixture({observations:fedTargetFixture()})),'2026-11-03T00:00:00Z');
+  const r=await readPolicyEvents(b);
+  const m=b.build({kind:'cycle_table',params:{boundary:'event_day'},methodVersion:'m/1',codeVersion:'test'});
+  const byId=new Map(m.inputs.map(i=>[i.observation_id,i]));
+  for(const e of r.events)for(const id of e.evidence)expect(byId.has(id),`${e.effective_date} evidence ${id}`).toBe(true);
+  for(const e of r.events){   // each event re-derives from its frozen evidence rows alone
+   const [uf,ut,lf,lt]=e.evidence.map(id=>byId.get(id)!.value_text);
+   expect([uf,ut,lf,lt].map(Number)).toEqual([e.upper_from,e.upper_to,e.lower_from,e.lower_to].map(Number));
+  }
+  const tuple=m.inputs.filter(i=>i.period_end==='2008-12-15'||i.period_end==='2008-12-16').map(i=>i.role).sort();
+  expect(tuple).toEqual([inputRole(EVENTS_PURPOSE,US_TARGET_SINGLE_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_LOWER_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_UPPER_ID,'evidence')].sort());
+  expect(m.inputs.every(i=>i.role.endsWith(':evidence')&&i.source.kind==='history')).toBe(true);
+  expect(m.inputs.length).toBe(new Set(r.events.flatMap(e=>[...e.evidence])).size);   // the tuple rows are evidence of the switch event here
+ });
+ it('a truncated source gives no events, a history_truncated gap and a truncated read state',async()=>{
   const obs=daily('US_FED_TARGET_D',[['2008-12-15','1']]);
   const port=override(memoryStrategyPort(fixture({observations:obs})),{seriesHistory:async(id)=>{if(id===US_TARGET_SINGLE_ID)throw new Error('truncated');return [];}});
   const b=manifestBuilder(port,'2026-11-03T00:00:00Z');
-  expect(await readPolicyEvents(b)).toEqual({events:[],gaps:[]});
-  expect(readState(b.build({kind:'cycle_table',params:{},methodVersion:'m/1',codeVersion:'test'}),US_TARGET_SINGLE_ID,EVENTS_PURPOSE)).toBe('truncated');
+  expect(await readPolicyEvents(b)).toEqual({events:[],gaps:[{kind:'history_truncated',reason:US_TARGET_SINGLE_ID,near:'2026-11-03'}]});
+  expect(readState(b.build({kind:'cycle_table',params:{boundary:'event_day'},methodVersion:'m/1',codeVersion:'test'}),US_TARGET_SINGLE_ID,EVENTS_PURPOSE)).toBe('truncated');
  });
 });
 ```
@@ -3267,10 +3593,15 @@ Expected: FAIL — `Failed to resolve import "./policy-events"`.
 //   upper = lower = the single target, evidence [prev, cur, prev, cur], basis 'single_target';
 // - the switch: exactly three dated observations — the single target's last row on 2008-12-15 and the first upper and
 //   lower rows on 2008-12-16 — give one 'single_to_range' event, every value read from those rows (no constants),
-//   evidence [s, u, s, l]. Anything else → no event and an explicit gap {kind:'transition_unverified', near:'2008-12-16'}.
+//   change_bp = toBp(u − s) from the UPPER bound always (spec §5.4; an unchanged upper with a moved lower is a 0 bp event
+//   that episodes and the matrix skip), evidence [s, u, s, l]. Anything else → no event and an explicit gap
+//   {kind:'transition_unverified', near:'2008-12-16'}.
 // Inputs must be strictly ascending (P2 assertAscending). Same inputs → same output. Event-source histories are recorded
-// as reads only (purpose 'events'): the frozen events carry their evidence ids, and the daily target history is too large
-// to copy into every manifest.
+// as reads (purpose 'events') and only the rows needed to derive and verify each event are frozen (role
+// 'events:<series>:evidence'): every evidence id of every event plus the transition tuple (the single target's last row,
+// the first upper and lower rows), so each event re-derives from the manifest alone; the whole daily target history is
+// too large to copy into every manifest. A truncated source read → no events and one gap {kind:'history_truncated',
+// near: cutoff date} that every view shows (never an ordinary empty history).
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {VERSIONS} from './contract';
 import type {EventGap,EventInput,PolicyEvent,StrategyPolicyEvent} from './contract';
@@ -3312,7 +3643,7 @@ export function mergePolicyEvents(derive:Derive,single:readonly EventInput[],upp
    if(sign(du)!==0||sign(dl)!==0){
     const from=canonicalDecimal(s.value_text);
     events.push({kind:'policy_target_change',region:'US',effective_date:TRANSITION_RANGE_DATE,upper_from:from,upper_to:canonicalDecimal(u.value_text),lower_from:from,lower_to:canonicalDecimal(l.value_text),
-     change_bp:toBp(sign(du)!==0?du:dl),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
+     change_bp:toBp(du),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
    }
   }
  }
@@ -3320,21 +3651,29 @@ export function mergePolicyEvents(derive:Derive,single:readonly EventInput[],upp
  events.sort((a,b)=>a.effective_date<b.effective_date?-1:a.effective_date>b.effective_date?1:0);
  return {events,gaps};
 }
-/** Read the three event-source histories asOf the builder cutoff (reads only) and merge. Any truncated read → no events (the read state says why). */
+/** Read the three event-source histories asOf the builder cutoff, merge, and freeze the evidence rows plus the transition
+ *  tuple. Any truncated read → no events and a history_truncated gap (the read state says which source). */
 export async function readPolicyEvents(b:ManifestBuilder):Promise<{events:StrategyPolicyEvent[];gaps:EventGap[]}>{
  const opts={keepInputs:false};
  const single=await b.history(US_TARGET_SINGLE_ID,EVENTS_PURPOSE,'history',opts);
  const upper=await b.history(US_TARGET_UPPER_ID,EVENTS_PURPOSE,'history',opts);
  const lower=await b.history(US_TARGET_LOWER_ID,EVENTS_PURPOSE,'history',opts);
- if(!single||!upper||!lower)return {events:[],gaps:[]};
- return mergePolicyEvents((u,l)=>b.port.derivePolicyEvents(u,l),single,upper,lower);
+ if(!single||!upper||!lower){
+  const truncated=[[US_TARGET_SINGLE_ID,single],[US_TARGET_UPPER_ID,upper],[US_TARGET_LOWER_ID,lower]].filter(([,r])=>r===null).map(([id])=>id);
+  return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:b.cutoff.slice(0,10)}]};
+ }
+ const merged=mergePolicyEvents((u,l)=>b.port.derivePolicyEvents(u,l),single,upper,lower);
+ const needed=new Set(merged.events.flatMap(e=>[...e.evidence]));
+ for(const r of [single[single.length-1],upper[0],lower[0]])if(r)needed.add(r.observation_id);
+ b.keep([...single,...upper,...lower].filter(o=>needed.has(o.observation_id)),EVENTS_PURPOSE,'evidence');
+ return merged;
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- src/lib/macro/strategy/policy-events.test.ts`
-Expected: PASS (10 tests). If `readPolicyEvents … Fed fixture` fails, check that `fedTargetFixture()` (Task 2) has its last `US_FED_TARGET_D` row on 2008-12-15 and its first upper / lower rows on 2008-12-16 as the skeleton states; fix the fixture, not this test.
+Expected: PASS (12 tests). If `readPolicyEvents … Fed fixture` fails, check that `fedTargetFixture()` (Task 2) has its last `US_FED_TARGET_D` row on 2008-12-15 and its first upper / lower rows on 2008-12-16 as the skeleton states; fix the fixture, not this test.
 
 - [ ] **Step 5: Typecheck and lint**
 
@@ -3406,8 +3745,11 @@ function scenario(o:{cgbPeriod?:string}={}){
 describe('buildTransmissionManifest',()=>{
  it('freezes both active snapshots, the later cutoff, node inputs, rules and watch names',async()=>{
   const {us,cn,f}=scenario();
-  const m=(await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test'}))!;
-  expect(m.kind).toBe('transmission');expect(m.params).toEqual({});
+  const m=(await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'US'}))!;
+  expect(m.kind).toBe('transmission');expect(m.params).toEqual({region:'US'});
+  const cnBody=(await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'CN'}))!;
+  expect(manifestHash(cnBody)).not.toBe(manifestHash(m));   // the region is part of the identity
+  expect(buildTransmission(stored(cnBody)).region).toBe('CN');
   expect(m.cutoff).toBe(us.created_at);
   expect(m.snapshots.US?.snapshot_id).toBe(us.snapshot_id);expect(m.snapshots.CN?.snapshot_id).toBe(cn.snapshot_id);
   expect(m.rules).toEqual(f.rules);
@@ -3419,15 +3761,15 @@ describe('buildTransmissionManifest',()=>{
   expect(m.method_version).toBe('macro-transmission/1');
  });
  it('returns null when neither region has a published snapshot',async()=>{
-  expect(await buildTransmissionManifest(memoryStrategyPort(fixture()),{now:NOW,codeVersion:'test'})).toBeNull();
+  expect(await buildTransmissionManifest(memoryStrategyPort(fixture()),{now:NOW,codeVersion:'test',region:'US'})).toBeNull();
  });
 });
 
 describe('buildTransmission',()=>{
  it('renders observed, catalog-missing, restricted, not-in-catalog, no-observation and derived nodes',async()=>{
   const {f}=scenario();
-  const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test'}))!);
-  const v=buildTransmission(s,'US');
+  const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'US'}))!);
+  const v=buildTransmission(s);
   expect(v.version).toBe('macro-transmission/1');expect(v.manifest_id).toBe(s.manifest_id);
   expect(v.stages.map(x=>x.stage)).toEqual(['economy','policy','liquidity','rates','risk','assets']);
   expect(node(v,'us_cpi_yoy')).toMatchObject({state:'observed',value_text:'2.9',period_end:'2026-09-30'});
@@ -3446,7 +3788,7 @@ describe('buildTransmission',()=>{
  });
  it('an asset view reads its aliasOf series; a spread over different periods is missing with both periods named',async()=>{
   const {f}=scenario({cgbPeriod:'2026-09-30'});
-  const v=buildTransmission(stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test'}))!),'CN');
+  const v=buildTransmission(stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'CN'}))!));
   expect(node(v,'cn_cgb10y_asset')).toMatchObject({state:'observed',value_text:'1.85'});
   expect(node(v,'cn_cgb10y_asset').inputs[0].series_id).toBe('CN_CGB_10Y');
   const spread=node(v,'us_cn_10y_spread');
@@ -3457,12 +3799,13 @@ describe('buildTransmission',()=>{
  });
  it('assumption nodes carry their text and no value; unknown series ids are not_in_catalog',async()=>{
   const {f}=scenario();
-  const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test'}))!);
+  const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'US'}))!);
   expect(nodeView(s.body,{kind:'assumption',id:'a',text:{zh:'假设',en:'assumption'}})).toMatchObject({state:'assumption',value_text:null,label:{zh:'假设',en:'assumption'}});
   expect(nodeView(s.body,{kind:'observed',id:'x',seriesId:'NOPE'}).state).toBe('not_in_catalog');
   const custom:Record<Region,StageDef[]>={US:[{stage:'economy',label:{zh:'经济',en:'Economy'},edgeToNext:null,nodes:[{kind:'assumption',id:'a',text:{zh:'假设',en:'assumption'}}]}],CN:[]};
-  expect(buildTransmission(s,'US',custom).stages[0].nodes[0].state).toBe('assumption');
-  expect(()=>buildTransmission({...s,body:{...s.body,kind:'review'}},'US')).toThrow(/manifest_kind_mismatch/);
+  expect(buildTransmission(s,custom).stages[0].nodes[0].state).toBe('assumption');
+  expect(()=>buildTransmission({...s,body:{...s.body,kind:'review'}})).toThrow(/manifest_kind_mismatch/);
+  expect(()=>buildTransmission({...s,body:{...s.body,params:{}}})).toThrow('invalid_manifest_params:region');
  });
  it('every series id in the v1 configs exists in the fixture catalog',()=>{
   const ids=new Set(FIXTURE_CATALOG.map(d=>d.id));
@@ -3646,8 +3989,9 @@ export const PLAYBOOKS_V1:readonly PlaybookDef[]=[
 // src/lib/macro/strategy/transmission.ts
 // Live transmission flow (spec 2026-11-07 §5.1, macro-transmission/1). buildTransmissionManifest freezes the two active
 // snapshots, the latest value of every observed / derived node series (snapshot row first, else latestObservations asOf
-// cutoff), the catalog projection, the P1 rules projection (playbook triggers) and the playbook watch names.
-// buildTransmission is a pure view over the stored manifest: observed → the 'node:<series>:latest' input; catalog
+// cutoff), the catalog projection, the P1 rules projection (playbook triggers), the playbook watch names and the requested
+// region in params ({region}: each region is its own manifest identity). buildTransmission is a pure view over the stored
+// manifest and reads the region from its params: observed → the 'node:<series>:latest' input; catalog
 // missing / restricted → that state with the catalog reason; derived spread → exact a − b when both inputs share a
 // period_end, else 'missing' with the reason; edges are always mechanism assumptions.
 import {VERSIONS} from './contract';
@@ -3674,7 +4018,13 @@ const CATALOG_STATE:Record<'missing'|'restricted',Bilingual>={missing:{zh:'目�
 /** Series actually read for a node series id: an asset view reads its aliasOf target. */
 const readSeries=(d:FrozenSeriesDef)=>d.aliasOf??d.id;
 
-export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;stages?:Record<Region,StageDef[]>;playbooks?:readonly PlaybookDef[]}):Promise<StrategyManifest|null>{
+/** The region frozen in a transmission manifest's params. */
+export function regionParam(m:StrategyManifest):Region{
+ const r=m.params.region;
+ if(r!=='US'&&r!=='CN')throw new Error('invalid_manifest_params:region');
+ return r;
+}
+export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;region:Region;stages?:Record<Region,StageDef[]>;playbooks?:readonly PlaybookDef[]}):Promise<StrategyManifest|null>{
  const stages=o.stages??TRANSMISSION_V1,playbooks=o.playbooks??PLAYBOOKS_V1;
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  if(!snapshots.US&&!snapshots.CN)return null;   // page: "no published snapshot yet"
@@ -3692,7 +4042,7 @@ export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Dat
   else if(n.kind==='derived'){await readNodeSeries(n.a);await readNodeSeries(n.b);}
  }
  for(const p of playbooks)for(const id of p.watch)b.def(id);
- return b.build({kind:'transmission',params:{},methodVersion:VERSIONS.transmission,codeVersion:o.codeVersion,extra:{rules:port.rules()}});
+ return b.build({kind:'transmission',params:{region:o.region},methodVersion:VERSIONS.transmission,codeVersion:o.codeVersion,extra:{rules:port.rules()}});
 }
 
 function latestInput(m:StrategyManifest,seriesId:string){return inputsWithRole(m,inputRole(NODE_PURPOSE,seriesId,'latest'))[0]??null;}
@@ -3731,9 +4081,10 @@ export function nodeView(m:StrategyManifest,n:NodeDef):NodeView{
   case 'not_in_catalog':return {id:n.id,state:'not_in_catalog',label:n.label,value_text:null,unit:null,period_end:null,inputs:[],reason:n.reason};
  }
 }
-export function buildTransmission(stored:StoredManifest,region:Region,stages:Record<Region,StageDef[]>=TRANSMISSION_V1):TransmissionView{
+export function buildTransmission(stored:StoredManifest,stages:Record<Region,StageDef[]>=TRANSMISSION_V1):TransmissionView{
  const m=stored.body;
  if(m.kind!=='transmission')throw new Error(`manifest_kind_mismatch:${m.kind}`);
+ const region=regionParam(m);
  return {version:VERSIONS.transmission,region,manifest_id:stored.manifest_id,cutoff:m.cutoff,
   snapshots:{US:m.snapshots.US?.snapshot_id??null,CN:m.snapshots.CN?.snapshot_id??null},catalog_version:m.catalog_version,
   stages:stages[region].map(st=>({stage:st.stage,label:st.label,nodes:st.nodes.map(n=>nodeView(m,n)),edge:st.edgeToNext?{text:st.edgeToNext.text,kind:'assumption' as const}:null}))};
@@ -3825,7 +4176,7 @@ EOF
 Design decisions (spec §5.3, §5.6):
 - Dimensions are monthly series (P1 month-end derivations) plus the derived `US_DGS10 − CN_CGB_10Y` spread. Column state comes from the frozen catalog: a restricted series → whole column `restricted` (dim `kind:'restricted'`); catalog `missing` → whole column `missing`; an id absent from the catalog, or the config's `not_in_catalog` dim → `not_in_catalog`; a truncated `dim` read → `missing` with reason text containing `history_truncated`; a truncated `events` read → `missing` (event source truncated).
 - Window: event month `m`; base = month end of `m−1`, end = month end of `m+N−1`. Worked example (test): 2022-03-16, N = 3 → `2022-02-28` → `2022-05-31`.
-- Exclusion order per event and dimension: `missing_endpoint` (base or end month end absent) → `incomplete_window` (any month end strictly between them absent) → `non_positive_base` (pct only). Then eligible events in date order across both directions: an event is `overlap` when its base month is before the end month of the last selected event; sharing one month end is not an overlap (the return intervals do not overlap). Ineligible events never block later ones.
+- Exclusion order per event and dimension: `missing_endpoint` (base or end month end absent) → `incomplete_window` (any month end strictly between them absent) → `non_positive_base` (pct only). Then eligible events, explicitly sorted by effective date, across both directions: windows are closed month ranges `[m−1, m+N−1]` (spec §5.3), so an event is `overlap` when its base month is on or before the end month of the last selected event — a shared endpoint month is an overlap (plan audit #2). Ineligible events never block later ones. N is the manifest's `params.window`.
 - Cell per direction: `n ≥ 5` → `stats` with `quartiles()` of the selected `change_raw`; `1..4` → `events_only`; `0` → `insufficient`. Every cell lists all events of its direction (selected and excluded with reason, endpoints with their input observations, exact `change_text`). QE/QT row: `missing` with `目录无联储资产负债表序列` for every data column (whole-column states stay as they are).
 - `coverage` = first and last month end where the dimension has a value (spread: where both inputs exist).
 - Sentences (`policy-response-explain.ts`): one per `stats` cell, numbers only, display rounding `0.1%` / `1 bp`.
@@ -3835,8 +4186,9 @@ Design decisions (spec §5.3, §5.6):
 `src/lib/macro/strategy/policy-response.test.ts`
 ```ts
 // policy-response.ts (spec §5.3): N-month windows (worked example 2022-03-16), eligibility, cross-direction greedy
-// independence, exclusion reasons, n<5, type-7 stats, QE/QT, restricted / not-in-catalog columns, non-positive base,
-// spread endpoints, truncated reads, coverage, sentences, manifest.
+// independence over closed month ranges (a shared endpoint month overlaps), exclusion reasons, n<5, type-7 stats, QE/QT,
+// restricted / not-in-catalog columns, non-positive base, spread endpoints, truncated reads, coverage, sentences, the
+// window N frozen in manifest.params.
 import {describe,expect,it} from 'vitest';
 import type {Cell,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
@@ -3857,46 +4209,54 @@ function manifest(events:StrategyPolicyEvent[],inputs:ManifestInput[],reads:Mani
  const body:StrategyManifest={kind:'policy_response',params:{},cutoff:CUTOFF,snapshots:{US:null,CN:null},catalog:FIXTURE_CATALOG.map(freezeDef),reads,inputs,events,gaps:[],catalog_version:'macro-catalog/test',method_version:'macro-policy-response/1',code_version:'test'};
  return {manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(body),body,created_at:CUTOFF};
 }
+/** The view for window N: N is a manifest parameter, so each N is its own stored manifest (same frozen data, other identity). */
+function view(m:StoredManifest,window:1|3|6){const body={...m.body,params:{window}};return buildPolicyResponse({...m,manifest_hash:manifestHash(body),body});}
 const cell=(v:ReturnType<typeof buildPolicyResponse>,dir:'hike'|'cut'|'qe_qt',dim:string):Cell=>v.rows.find(r=>r.direction===dir)!.cells[dim];
 const eventsOf=(c:Cell)=>'events' in c?c.events:[];
 
 describe('window endpoints',()=>{
  const m=manifest([ev('2022-03-16','25')],series('US_DGS10',run('2022-01',['1.70','1.83','2.32','2.89','2.85','2.98','2.67','3.15'])));
  it('worked example: 2022-03-16, N=3 → base 2022-02 month end, end 2022-05 month end, exact bp',()=>{
-  const r=eventsOf(cell(buildPolicyResponse(m,3),'hike','US_DGS10'))[0];
+  const r=eventsOf(cell(view(m,3),'hike','US_DGS10'))[0];
   expect(r.base?.period_end).toBe('2022-02-28');expect(r.end?.period_end).toBe('2022-05-31');
   expect(r.change_text).toBe('102');expect(r.change_raw).toBe(102);expect(r.selected).toBe(true);expect(r.exclusion).toBeNull();
   expect(r.base?.inputs.map(i=>i.observation_id)).toEqual(['obs:US_DGS10:2022-02-28:v1']);
  });
  it('N=1 → 2022-02 to 2022-03; N=6 → 2022-02 to 2022-08',()=>{
-  const r1=eventsOf(cell(buildPolicyResponse(m,1),'hike','US_DGS10'))[0];
+  const r1=eventsOf(cell(view(m,1),'hike','US_DGS10'))[0];
   expect([r1.base?.period_end,r1.end?.period_end,r1.change_text]).toEqual(['2022-02-28','2022-03-31','49']);
-  const r6=eventsOf(cell(buildPolicyResponse(m,6),'hike','US_DGS10'))[0];
+  const r6=eventsOf(cell(view(m,6),'hike','US_DGS10'))[0];
   expect([r6.base?.period_end,r6.end?.period_end,r6.change_text]).toEqual(['2022-02-28','2022-08-31','132']);
  });
  it('a missing month inside the window → incomplete_window; a missing endpoint → missing_endpoint',()=>{
   const gap=manifest([ev('2022-03-16','25')],series('US_DGS10',run('2022-01',['1.70','1.83','2.32',null,'2.85','2.98'])));
-  expect(eventsOf(cell(buildPolicyResponse(gap,3),'hike','US_DGS10'))[0]).toMatchObject({exclusion:'incomplete_window',selected:false,change_text:null});
-  expect(eventsOf(cell(buildPolicyResponse(gap,1),'hike','US_DGS10'))[0].exclusion).toBeNull();
-  expect(eventsOf(cell(buildPolicyResponse(gap,6),'hike','US_DGS10'))[0]).toMatchObject({exclusion:'missing_endpoint',end:null});
+  expect(eventsOf(cell(view(gap,3),'hike','US_DGS10'))[0]).toMatchObject({exclusion:'incomplete_window',selected:false,change_text:null});
+  expect(eventsOf(cell(view(gap,1),'hike','US_DGS10'))[0].exclusion).toBeNull();
+  expect(eventsOf(cell(view(gap,6),'hike','US_DGS10'))[0]).toMatchObject({exclusion:'missing_endpoint',end:null});
  });
 });
 
 describe('independence across directions',()=>{
  const m=manifest([ev('2022-03-16','25'),ev('2022-04-20','-25'),ev('2022-09-21','75')],series('US_DGS10',run('2022-01',['1','1.1','1.2','1.3','1.4','1.5','1.6','1.7','1.8','1.9','2','2.1'])));
  it('N=3: the cut whose base month precedes the selected hike end month is excluded as overlap',()=>{
-  const v=buildPolicyResponse(m,3);
+  const v=view(m,3);
   expect(eventsOf(cell(v,'cut','US_DGS10'))[0]).toMatchObject({effective_date:'2022-04-20',exclusion:'overlap',selected:false,change_text:'30'});
   expect(eventsOf(cell(v,'hike','US_DGS10')).map(r=>[r.effective_date,r.selected])).toEqual([['2022-03-16',true],['2022-09-21',true]]);
  });
- it('N=1: windows that only share a month end are both selected',()=>{
-  const v=buildPolicyResponse(m,1);
-  expect(eventsOf(cell(v,'cut','US_DGS10'))[0]).toMatchObject({selected:true,exclusion:null});
+ it('N=1: windows are closed month ranges, so sharing an endpoint month is an overlap',()=>{
+  // hike [2022-02, 2022-03], cut [2022-03, 2022-04]: base 2022-03 = last selected end 2022-03 → overlap
+  const v=view(m,1);
+  expect(eventsOf(cell(v,'cut','US_DGS10'))[0]).toMatchObject({selected:false,exclusion:'overlap'});
+  expect(eventsOf(cell(v,'hike','US_DGS10')).map(r=>[r.effective_date,r.selected])).toEqual([['2022-03-16',true],['2022-09-21',true]]);
+ });
+ it('events are scanned in effective-date order whatever the manifest order',()=>{
+  const shuffled=manifest([ev('2022-09-21','75'),ev('2022-04-20','-25'),ev('2022-03-16','25')],m.body.inputs);
+  expect(JSON.stringify(view(shuffled,3).rows)).toBe(JSON.stringify(view(m,3).rows));
  });
  it('an ineligible event does not block a later one',()=>{
-  // the hike's window [2022-02, 2022-05] lacks March → incomplete_window; the cut (base April < May) is still selected
+  // the hike's window [2022-02, 2022-05] lacks March → incomplete_window; the cut is then the first eligible event and is selected
   const g=manifest([ev('2022-03-16','25'),ev('2022-05-18','-25')],series('US_DGS10',run('2022-01',['1','1.1',null,'1.3','1.4','1.5','1.6'])));
-  const v=buildPolicyResponse(g,3);
+  const v=view(g,3);
   expect(eventsOf(cell(v,'hike','US_DGS10'))[0].exclusion).toBe('incomplete_window');
   expect(eventsOf(cell(v,'cut','US_DGS10'))[0]).toMatchObject({selected:true,exclusion:null,change_text:'30'});
  });
@@ -3908,22 +4268,22 @@ describe('cells',()=>{
  let level='1';const pts=run('2020-01',Array(20).fill('')).map(([ym])=>{level=add(level,bumps[ym]??'0');return [ym,level] as [string,string];});
  const hikes=Object.keys(bumps).map(ym=>ev(`${ym}-15`,'25'));
  it('n ≥ 5 → median and type-7 quartiles at full precision',()=>{
-  const c=cell(buildPolicyResponse(manifest(hikes,series('US_DGS10',pts)),1),'hike','US_DGS10');
+  const c=cell(view(manifest(hikes,series('US_DGS10',pts)),1),'hike','US_DGS10');
   expect(c).toMatchObject({status:'stats',n:5,median_raw:30,q1_raw:20,q3_raw:40,unit:'bp'});
  });
  it('1 ≤ n < 5 → events only; n = 0 → insufficient',()=>{
-  const v=buildPolicyResponse(manifest(hikes.slice(0,4),series('US_DGS10',pts)),1);
+  const v=view(manifest(hikes.slice(0,4),series('US_DGS10',pts)),1);
   expect(cell(v,'hike','US_DGS10')).toMatchObject({status:'events_only',n:4});
   expect(cell(v,'cut','US_DGS10')).toMatchObject({status:'insufficient',events:[]});
  });
  it('pct uses (end/base − 1) × 100 once as a float and keeps the exact text; base ≤ 0 is excluded',()=>{
   const m=manifest([ev('2022-03-16','25'),ev('2022-09-21','75')],series('US_WTI',[['2022-02','80'],['2022-03','100'],['2022-08','0'],['2022-09','5']]));
-  const rows=eventsOf(cell(buildPolicyResponse(m,1),'hike','US_WTI'));
-  expect(rows[0].change_text).toBe('25');expect(rows[0].change_raw).toBeCloseTo(25,12);
+  const rows=eventsOf(cell(view(m,1),'hike','US_WTI'));
+  expect(rows[0].change_text).toBe('100/80');expect(rows[0].change_raw).toBeCloseTo(25,12);   // exact ratio; rounded once at display
   expect(rows[1]).toMatchObject({exclusion:'non_positive_base',change_raw:null});
  });
  it('QE/QT row is missing; restricted and not-in-catalog columns are whole-column states',()=>{
-  const v=buildPolicyResponse(manifest([ev('2022-03-16','25')],series('US_DGS10',run('2022-01',['1','1.1','1.2']))),1);
+  const v=view(manifest([ev('2022-03-16','25')],series('US_DGS10',run('2022-01',['1','1.1','1.2']))),1);
   expect(cell(v,'qe_qt','US_DGS10')).toEqual({status:'missing',reason:{zh:'目录无联储资产负债表序列',en:'No Fed balance-sheet series in the catalog'}});
   expect(cell(v,'hike','US_SP500').status).toBe('restricted');expect(cell(v,'qe_qt','CN_CSI300').status).toBe('restricted');
   expect(cell(v,'cut','CN_NORTHBOUND').status).toBe('not_in_catalog');
@@ -3933,7 +4293,7 @@ describe('cells',()=>{
  });
  it('spread endpoints are exact same-month differences carrying both inputs; coverage is the joint range',()=>{
   const m=manifest([ev('2022-03-16','25')],[...series('US_DGS10',run('2022-01',['1.70','1.83','2.32'])),...series('CN_CGB_10Y',run('2022-02',['2.80','2.79','2.83']))]);
-  const v=buildPolicyResponse(m,1);
+  const v=view(m,1);
   const r=eventsOf(cell(v,'hike','US_CN_10Y_SPREAD'))[0];
   expect(r.base).toMatchObject({period_end:'2022-02-28',value_text:'-0.97'});
   expect(r.base?.inputs.map(i=>i.series_id)).toEqual(['US_DGS10','CN_CGB_10Y']);
@@ -3941,7 +4301,7 @@ describe('cells',()=>{
   expect(v.dims.find(d=>d.id==='US_CN_10Y_SPREAD')?.coverage).toEqual({from:'2022-02-28',to:'2022-03-31'});
  });
  it('a truncated history read makes the column missing (history_truncated)',()=>{
-  const v=buildPolicyResponse(manifest([ev('2022-03-16','25')],[],[{series_id:'US_DGS10',purpose:'dim',state:'truncated'}]),1);
+  const v=view(manifest([ev('2022-03-16','25')],[],[{series_id:'US_DGS10',purpose:'dim',state:'truncated'}]),1);
   expect(cell(v,'hike','US_DGS10')).toMatchObject({status:'missing'});
   expect(JSON.stringify(cell(v,'hike','US_DGS10'))).toContain('history_truncated');
  });
@@ -3949,17 +4309,21 @@ describe('cells',()=>{
 
 describe('sentences and manifest',()=>{
  it('one number-only sentence per stats cell',()=>{
-  const bumps=['0.1','0.2','0.3','0.4','0.5'];
-  let level='1';const pts=run('2020-01',Array(10).fill('')).map(([ym],i)=>{if(i>0&&i<=5)level=add(level,bumps[i-1]);return [ym,level] as [string,string];});
-  // hikes in 2020-02..2020-06, N=1: windows share only month ends → all five selected
-  const v=buildPolicyResponse(manifest(['2020-02','2020-03','2020-04','2020-05','2020-06'].map(ym=>ev(`${ym}-10`,'25')),series('US_DGS10',pts)),1);
+  const bumps:Record<string,string>={'2020-02':'0.1','2020-04':'0.2','2020-06':'0.3','2020-08':'0.4','2020-10':'0.5'};
+  let level='1';const pts=run('2020-01',Array(12).fill('')).map(([ym])=>{level=add(level,bumps[ym]??'0');return [ym,level] as [string,string];});
+  // hikes every other month, N=1: windows [01,02], [03,04], … never share a month → all five selected (+10 … +50 bp)
+  const v=view(manifest(Object.keys(bumps).map(ym=>ev(`${ym}-10`,'25')),series('US_DGS10',pts)),1);
   expect(v.sentences).toEqual([{zh:'5 次独立加息后 1 个月末，美国 10 年期国债收益率变化的中位数为 30 bp（四分位 20 bp 至 40 bp）',en:'After 5 independent hikes, the median change in U.S. 10-year Treasury yield over 1 month-end was 30 bp (interquartile 20 bp to 40 bp)'}]);
  });
  it('buildPolicyResponseManifest freezes events and monthly histories; the view is pure over it',async()=>{
   const us=snap('US',CUTOFF,[]);
   const f=fixture({snapshots:[us],observations:[...monthly('US_DGS10','2022-01',['1.70','1.83','2.32','2.89']),
    {...monthly('US_DGS10','2022-05',['9'])[0],available_at:'2026-12-01T00:00:00Z'}]});
-  const body=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test'});
+  const body=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:3});
+  expect(body.params).toEqual({window:3});
+  const n1=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:1});
+  expect(manifestHash(n1)).not.toBe(manifestHash(body));   // N is part of the identity
+  expect(buildPolicyResponse({manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(n1),body:n1,created_at:CUTOFF}).window).toBe(1);
   expect(body.kind).toBe('policy_response');expect(body.cutoff).toBe(CUTOFF);expect(body.snapshots.US?.snapshot_id).toBe(us.snapshot_id);
   expect(body.inputs.filter(i=>i.role==='dim:US_DGS10:month_end').map(i=>i.value_text)).toEqual(['1.70','1.83','2.32','2.89']);
   expect(body.reads.find(r=>r.series_id==='US_WTI')?.state).toBe('missing');
@@ -4035,18 +4399,19 @@ export function responseSentences(v:Pick<PolicyResponseView,'window'|'dims'|'row
 // - change: pct = (end/base − 1) × 100 (base ≤ 0 → non_positive_base); bp = toBp(end − base), exact. A spread endpoint is
 //   the exact difference of the two same-month inputs and carries both input observations.
 // - eligibility per dimension and N: both endpoints present (else missing_endpoint) and every month end in between present
-//   (else incomplete_window). Independence: eligible events in effective-date order ACROSS directions; an event whose window
-//   return interval overlaps an already selected window (its base month is before the selected end month) is excluded as
-//   overlap. Sharing one month end (base = previous end) is not an overlap. P2 differs: one asset, one direction per set.
+//   (else incomplete_window). Independence: eligible events sorted by effective date and scanned ACROSS directions; windows
+//   are CLOSED month ranges [m−1, m+N−1], so an event whose base month is on or before the last selected end month
+//   (base ≤ lastEnd, a shared endpoint month included) is excluded as overlap. P2 differs: one asset, one direction per set.
 // - cell: n ≥ 5 → median and type-7 quartiles (full precision, *_raw); 1 ≤ n < 5 → events only; n = 0 → insufficient.
 //   QE/QT row: missing (no Fed balance-sheet series in the catalog). Restricted / missing catalog rows → whole column state.
-// buildPolicyResponseManifest freezes the events, every dimension's monthly history asOf cutoff and the catalog projection;
-// the window is a view parameter, so one manifest serves N = 1, 3 and 6.
+// buildPolicyResponseManifest freezes the events, every dimension's monthly history asOf cutoff, the catalog projection and
+// the window N in params ({window}); buildPolicyResponse reads N from the manifest, so each N is its own manifest identity.
+// pct change_text is the exact ratio '<end>/<base>' (rounded once at display).
 import {VERSIONS} from './contract';
 import type {Bilingual,Cell,EndpointRef,EventRow,ExclusionReason,ObsRef,PolicyResponseView,ResponseDim,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {RESPONSE_DIMS_V1,type ResponseDimDef} from './data/response-dims-v1';
 import {addMonthsYm,frozenDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthOf,readState,toObsRef} from './manifest';
-import {pctChange,pctText,quartiles,sign,subtract,toBp} from './numeric';
+import {pctChange,pctRatio,quartiles,sign,subtract,toBp} from './numeric';
 import {EVENTS_PURPOSE,readPolicyEvents} from './policy-events';
 import {responseSentences} from './policy-response-explain';
 import type {StrategyReadPort} from './port';
@@ -4061,7 +4426,13 @@ const NOT_IN_CATALOG:Bilingual={zh:'目录中没有该序列',en:'Series not in 
 const CATALOG_STATE:Record<'missing'|'restricted',Bilingual>={missing:{zh:'目录标记为缺失',en:'Marked missing in the catalog'},restricted:{zh:'目录标记为受限',en:'Marked restricted in the catalog'}};
 const dimSeries=(d:ResponseDimDef):string[]=>d.kind==='series'?[d.series!]:d.kind==='spread'?[d.a!,d.b!]:[];
 
-export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;dims?:readonly ResponseDimDef[]}):Promise<StrategyManifest>{
+/** The window N frozen in a policy_response manifest's params. */
+export function windowParam(m:StrategyManifest):1|3|6{
+ const w=m.params.window;
+ if(w!==1&&w!==3&&w!==6)throw new Error('invalid_manifest_params:window');
+ return w;
+}
+export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;window:1|3|6;dims?:readonly ResponseDimDef[]}):Promise<StrategyManifest>{
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
@@ -4072,7 +4443,7 @@ export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:D
   if(!def||def.status!=='active'||done.has(id))continue;
   done.add(id);await b.history(id,DIM_PURPOSE,'month_end');
  }
- return b.build({kind:'policy_response',params:{},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'policy_response',params:{window:o.window},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Point={period_end:string;value_text:string;inputs:ObsRef[]};
@@ -4109,7 +4480,7 @@ function scoreEvent(e:StrategyPolicyEvent,unit:'pct'|'bp',points:Map<string,Poin
  for(let k=1;k<window;k++)if(!points.has(addMonthsYm(baseM,k)))return {row:row('incomplete_window',null,null),dir,baseM,endM};
  if(unit==='pct'){
   if(sign(base.value_text)<=0)return {row:row('non_positive_base',null,null),dir,baseM,endM};
-  return {row:row(null,pctChange(end.value_text,base.value_text),pctText(end.value_text,base.value_text)),dir,baseM,endM};
+  return {row:row(null,pctChange(end.value_text,base.value_text),pctRatio(end.value_text,base.value_text)),dir,baseM,endM};
  }
  const text=toBp(subtract(end.value_text,base.value_text));
  return {row:row(null,Number(text),text),dir,baseM,endM};
@@ -4120,10 +4491,11 @@ function directionCell(unit:'pct'|'bp',rows:EventRow[]):Cell{
  if(sel.length>0)return {status:'events_only',n:sel.length,unit,events:rows};
  return {status:'insufficient',unit,events:rows};
 }
-export function buildPolicyResponse(stored:StoredManifest,window:1|3|6,dims:readonly ResponseDimDef[]=RESPONSE_DIMS_V1):PolicyResponseView{
+export function buildPolicyResponse(stored:StoredManifest,dims:readonly ResponseDimDef[]=RESPONSE_DIMS_V1):PolicyResponseView{
  const m=stored.body;
  if(m.kind!=='policy_response')throw new Error(`manifest_kind_mismatch:${m.kind}`);
- const events=(m.events??[]).filter(e=>sign(e.change_bp)!==0);
+ const window=windowParam(m);
+ const events=(m.events??[]).filter(e=>sign(e.change_bp)!==0).sort((a,b)=>a.effective_date<b.effective_date?-1:a.effective_date>b.effective_date?1:0);
  const viewDims:ResponseDim[]=[];
  const cells:Record<'hike'|'cut'|'qe_qt',Record<string,Cell>>={hike:{},cut:{},qe_qt:{}};
  for(const d of dims){
@@ -4136,7 +4508,7 @@ export function buildPolicyResponse(stored:StoredManifest,window:1|3|6,dims:read
   let lastEnd:string|null=null;
   for(const s of scored){
    if(s.row.exclusion)continue;
-   if(lastEnd!==null&&s.baseM<lastEnd){s.row.exclusion='overlap';continue;}
+   if(lastEnd!==null&&s.baseM<=lastEnd){s.row.exclusion='overlap';continue;}   // closed month ranges: a shared endpoint month overlaps
    s.row.selected=true;lastEnd=s.endM;
   }
   for(const dir of ['hike','cut'] as const)cells[dir][d.id]=directionCell(d.unit,scored.filter(s=>s.dir===dir).map(s=>s.row));
@@ -4150,7 +4522,7 @@ export function buildPolicyResponse(stored:StoredManifest,window:1|3|6,dims:read
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- src/lib/macro/strategy/policy-response.test.ts`
-Expected: PASS (14 tests).
+Expected: PASS (15 tests).
 
 - [ ] **Step 5: Typecheck and lint**
 
@@ -4187,7 +4559,7 @@ Design decisions (spec §5.5, §1.1 criterion 3, §12):
 - Episodes (`macro-policy-episodes/1`): same-direction runs of the manifest events; `start` = first event, `end` = last event (P2 `policyCycles` extends to the day before the flip and adds plateaus — a different definition with a different name). A gap date `g` with `prev.end < g ≤ next.start` splits a run even in the same direction and sets `gap_after` on the earlier episode (also when the gap lies after the last event). `left_censored` = index 0. `ongoing` = last episode and `cutoffDate < addMonthsDate(end, 12)`. `cumulative_bp` = exact sum of `change_bp`; `upper_from` = first event's, `upper_to` = last event's.
 - Columns: fixed v1 list `CYCLE_COLUMNS_V1` (the five resolvable asset / view columns of spec §5.5 and the four restricted index columns). `resolveColumn` follows `aliasOf`, then `derive.from` (month → daily) or the `month_end` row derived from a daily series.
 - Boundaries: `event_day` (last row `< start`, last row `≤ end`), `first_trading_day` (first row `≥ start`, first row `≥ end`), `month_end` (month end of `month(start) − 1`, month end of `month(end)`; `monthEnd(month(end)) > cutoff date` → `month_not_closed`). A boundary date before the first or after the last row, no qualifying row, or a chosen row more than 7 calendar days from its boundary → `out_of_coverage`; one row for both ends → `degenerate`; pct base ≤ 0 → `non_positive_base`; a truncated read → `history_truncated`; restricted → `{status:'restricted'}`. `cells` is keyed by `String(episode.index)`, then column id.
-- Replay: `replay.test.ts` reads ONLY the committed manifests and compares each view (per view parameter) with the committed expected JSON; it also rebuilds each manifest from the in-file scenario through `memoryStrategyPort` and requires the same `manifest_hash` (the committed manifest is the real builder output). Scenario values are synthetic (Fed-shaped dates, formula values); three hand-computed checks (acceptance sample 3, the worked window example, the transmission spread) do not depend on the recorded files. Fixtures are recorded once with `MACRO_REPLAY_RECORD=1` and committed; Part C appends a `review` entry to `CASES` and `IDS`.
+- Replay: `replay.test.ts` reads ONLY the committed manifests — one per parameter value, `<kind>.manifest.json = {<param>: StoredManifest}` — and compares each view, built from the stored manifest alone (region / window / boundary come from `body.params`), with the committed expected JSON; it checks that each manifest's `params` names its value and that the identities are distinct, and rebuilds each manifest from the in-file scenario through `memoryStrategyPort` requiring the same `manifest_hash` (the committed manifests are the real builder output). Scenario values are synthetic (Fed-shaped dates, formula values); three hand-computed checks (acceptance sample 3, the worked window example, the transmission spread) do not depend on the recorded files. Fixtures are recorded once with `MACRO_REPLAY_RECORD=1` and committed; Part C (Task 9) appends its own `review` block at the end of the file.
 
 - [ ] **Step 1: Write the failing cycle-table test**
 
@@ -4196,10 +4568,11 @@ Design decisions (spec §5.5, §1.1 criterion 3, §12):
 // cycle-table.ts (spec §5.5): episodes vs P2 cycles, left-censored / ongoing / gap_after, column resolution, the three
 // boundaries, the 7-day rule, coverage, degenerate, month_not_closed, non-positive base, restricted, truncated, manifest.
 import {describe,expect,it} from 'vitest';
-import type {CycleCell,EventGap,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
+import type {Boundary,CycleCell,EventGap,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {buildCycleTable,buildCycleTableManifest,policyEpisodes,resolveColumn} from './cycle-table';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
 import {subtract,toBp} from './numeric';
+import {mergePolicyEvents} from './policy-events';
 import {memoryStrategyPort} from './port';
 import {FIXTURE_CATALOG,daily,fixture,monthly,snap} from './testing/fixture';
 
@@ -4210,8 +4583,8 @@ const CATALOG=FIXTURE_CATALOG.map(freezeDef);
 const input=(role:string,id:string,d:string,v:string):ManifestInput=>({series_id:id,role,observation_id:`obs:${id}:${d}:v1`,period_end:d,value_text:v,version:1,available_at:`${d}T12:00:00Z`,source:{kind:'history',as_of:'2025-06-30T00:00:00Z'}});
 const dailyIn=(id:string,pts:[string,string][])=>pts.map(([d,v])=>input(`col:${id}:history`,id,d,v));
 const monthIn=(id:string,pts:[string,string][])=>pts.map(([ym,v])=>input(`col:${id}:month_end`,id,monthEnd(ym),v));
-function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[]}):StoredManifest{
- const body:StrategyManifest={kind:'cycle_table',params:{},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
+function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];boundary?:Boundary;cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[]}):StoredManifest{
+ const body:StrategyManifest={kind:'cycle_table',params:{boundary:o.boundary??'event_day'},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
  return {manifest_id:'00000000-0000-4000-8000-000000000003',manifest_hash:manifestHash(body),body,created_at:body.cutoff};
 }
 const at=(v:ReturnType<typeof buildCycleTable>,ep:number,col:string):CycleCell=>v.cells[String(ep)][col];
@@ -4235,6 +4608,12 @@ describe('policyEpisodes',()=>{
   expect(same.map(e=>[e.start,e.end,e.gap_after])).toEqual([['2008-10-29','2008-10-29',true],['2009-01-10','2009-01-10',false]]);
   expect(policyEpisodes([ev('2008-10-29','-50')],[gap],'2009-02-01')[0].gap_after).toBe(true);
  });
+ it('a 0 bp switch event (unchanged upper, moved lower) opens no episode and invents no direction',()=>{
+  const derive=memoryStrategyPort(fixture()).derivePolicyEvents;
+  const r=mergePolicyEvents(derive,[{observation_id:'s',period_end:'2008-12-15',value_text:'1'}],[{observation_id:'u',period_end:'2008-12-16',value_text:'1'}],[{observation_id:'l',period_end:'2008-12-16',value_text:'0.75'}]);
+  expect(r.events.map(e=>e.change_bp)).toEqual(['0']);
+  expect(policyEpisodes([ev('2008-10-29','-50'),...r.events],r.gaps,'2009-02-01').map(e=>[e.direction,e.start,e.end,e.events])).toEqual([['cut','2008-10-29','2008-10-29',1]]);
+ });
 });
 
 describe('resolveColumn',()=>{
@@ -4253,7 +4632,7 @@ describe('boundaries',()=>{
  // daily US 10Y around the 2022-03-17 → 2023-07-27 hike episode; monthly month ends for the month_end boundary
  const d10=dailyIn('US_DGS10_D',[['2022-03-14','2.13'],['2022-03-16','2.18'],['2022-03-17','2.20'],['2022-03-18','2.14'],['2023-07-26','3.87'],['2023-07-27','4.00'],['2023-07-28','3.96'],['2023-08-31','4.09']]);
  const m10=monthIn('US_DGS10',[['2022-02','1.83'],['2022-03','2.32'],['2023-07','3.97']]);
- const v=(b:'event_day'|'first_trading_day'|'month_end',o:Partial<Parameters<typeof manifest>[0]>={})=>buildCycleTable(manifest({events:HIKES,inputs:[...d10,...m10],...o}),b);
+ const v=(b:Boundary,o:Partial<Parameters<typeof manifest>[0]>={})=>buildCycleTable(manifest({events:HIKES,inputs:[...d10,...m10],...o,boundary:b}));
  it('event_day: last row before start → last row on or before end',()=>{
   expect(at(v('event_day'),0,'US_UST10Y')).toMatchObject({status:'ok',from:{period_end:'2022-03-16',value_text:'2.18'},to:{period_end:'2023-07-27',value_text:'4.00'},change_text:'182',change_raw:182,change_kind:'bp'});
  });
@@ -4274,7 +4653,7 @@ describe('boundaries',()=>{
   expect(at(v('first_trading_day',{inputs:short}),0,'US_UST10Y')).toEqual({status:'missing',reason:'out_of_coverage'});   // end after the last row
  });
  it('both ends on one row → degenerate (single-event episode, first_trading_day)',()=>{
-  const one=buildCycleTable(manifest({events:[ev('2022-03-17','25')],inputs:d10}),'first_trading_day');
+  const one=buildCycleTable(manifest({events:[ev('2022-03-17','25')],inputs:d10,boundary:'first_trading_day'}));
   expect(at(one,0,'US_UST10Y')).toEqual({status:'missing',reason:'degenerate'});
  });
  it('an end month not closed at the cutoff → month_not_closed',()=>{
@@ -4284,7 +4663,7 @@ describe('boundaries',()=>{
   const wti=dailyIn('US_WTI_D',[['2022-03-16','-1'],['2023-07-27','80']]);
   expect(at(v('event_day',{inputs:wti}),0,'US_WTI')).toEqual({status:'missing',reason:'non_positive_base'});
   const pos=dailyIn('US_WTI_D',[['2022-03-16','80'],['2023-07-27','100']]);
-  expect(at(v('event_day',{inputs:pos}),0,'US_WTI')).toMatchObject({status:'ok',change_text:'25',change_kind:'pct'});
+  expect(at(v('event_day',{inputs:pos}),0,'US_WTI')).toMatchObject({status:'ok',change_text:'100/80',change_raw:25,change_kind:'pct'});   // exact ratio, rounded only at display
   expect(at(v('event_day'),0,'US_SP500')).toEqual({status:'restricted'});
   expect(at(v('event_day'),0,'CN_CGB10Y')).toEqual({status:'missing',reason:'out_of_coverage'});
   expect(at(v('event_day',{reads:[{series_id:'US_DGS10_D',purpose:'col',state:'truncated'}]}),0,'US_UST10Y')).toEqual({status:'missing',reason:'history_truncated'});
@@ -4295,6 +4674,17 @@ describe('boundaries',()=>{
   expect(t).toMatchObject({version:'macro-cycle-table/1',episodes_version:'macro-policy-episodes/1',boundary:'event_day',gaps:[gap]});
   expect(t.columns.map(c=>c.id)).toEqual(['US_UST10Y','CN_CGB10Y','US_WTI','US_DTWEXBGS','CN_USDCNY_CP','US_SP500','US_NASDAQCOM','US_DJIA','CN_CSI300']);
  });
+ it('the boundary comes from manifest.params; a manifest without a valid boundary is refused',()=>{
+  expect(v('month_end').boundary).toBe('month_end');
+  const bad=manifest({events:HIKES,inputs:d10});bad.body.params={};
+  expect(()=>buildCycleTable(bad)).toThrow('invalid_manifest_params:boundary');
+ });
+ it('a truncated event history is shown as a history_truncated gap, never as an ordinary empty history',()=>{
+  const gap:EventGap={kind:'history_truncated',reason:'US_FED_TARGET_UPPER_D',near:'2025-06-30'};
+  const t=buildCycleTable(manifest({events:[],inputs:d10,gaps:[gap]}));
+  expect(t.episodes).toEqual([]);
+  expect(t.gaps).toEqual([gap]);
+ });
 });
 
 describe('buildCycleTableManifest',()=>{
@@ -4303,8 +4693,11 @@ describe('buildCycleTableManifest',()=>{
   const f=fixture({snapshots:[us],observations:[
    ...daily('US_FED_TARGET_UPPER_D',[['2022-03-16','0.25'],['2022-03-17','0.5']]),...daily('US_FED_TARGET_LOWER_D',[['2022-03-16','0'],['2022-03-17','0.25']]),
    ...daily('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20']]),...monthly('US_DGS10','2022-02',['1.83','2.32'])]});
-  const body=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test'});
+  const body=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'month_end'});
   expect(body.kind).toBe('cycle_table');expect(body.cutoff).toBe(us.created_at);
+  expect(body.params).toEqual({boundary:'month_end'});
+  const other=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'event_day'});
+  expect(manifestHash(other)).not.toBe(manifestHash(body));   // each boundary is its own manifest identity
   expect(body.events?.map(e=>[e.effective_date,e.change_bp,e.basis])).toEqual([['2022-03-17','25','range']]);
   expect(body.inputs.filter(i=>i.role==='col:US_DGS10_D:history')).toHaveLength(2);
   expect(body.inputs.filter(i=>i.role==='col:US_DGS10:month_end')).toHaveLength(2);
@@ -4336,11 +4729,14 @@ Expected: FAIL — `Failed to resolve import "./cycle-table"`.
 // first row on or after start / on or after end; month_end = month end before the start month / of the end month (end
 // month not yet closed at the cutoff → month_not_closed). A chosen row more than 7 calendar days from its boundary, or a
 // boundary outside the series' first..last row → out_of_coverage; both ends on one row → degenerate. pct = (to/from − 1) × 100
-// (from ≤ 0 → non_positive_base), bp = toBp(to − from). Rounding is a display concern.
+// (from ≤ 0 → non_positive_base; change_text = the exact ratio '<to>/<from>'), bp = toBp(to − from). Rounding is a display
+// concern. The boundary is a calculation parameter frozen in manifest.params ({boundary}); buildCycleTable reads it from
+// there, so each boundary has its own manifest identity. A history_truncated gap (event source read truncated) yields no
+// episodes and stays in view.gaps, so the page shows the truncation instead of an empty history.
 import {VERSIONS} from './contract';
 import type {Boundary,CycleCell,CycleColumn,CycleTableView,Episode,EventGap,FrozenSeriesDef,ManifestInput,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {addMonthsDate,addMonthsYm,dayDiff,freezeDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthEnd,monthOf,readState,toObsRef} from './manifest';
-import {add,pctChange,pctText,sign,subtract,toBp} from './numeric';
+import {add,pctChange,pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
 
@@ -4348,6 +4744,13 @@ export const COL_PURPOSE='col';
 export const CYCLE_COLUMNS_V1:readonly string[]=['US_UST10Y','CN_CGB10Y','US_WTI','US_DTWEXBGS','CN_USDCNY_CP','US_SP500','US_NASDAQCOM','US_DJIA','CN_CSI300'];
 export const MAX_BOUNDARY_GAP_DAYS=7;
 export const ONGOING_MONTHS=12;
+export const BOUNDARIES:readonly Boundary[]=['event_day','first_trading_day','month_end'];
+/** The boundary frozen in a cycle_table manifest's params. */
+export function boundaryParam(m:StrategyManifest):Boundary{
+ const b=m.params.boundary;
+ if(typeof b!=='string'||!(BOUNDARIES as readonly string[]).includes(b))throw new Error(`invalid_manifest_params:boundary`);
+ return b as Boundary;
+}
 
 /** Column resolution over a catalog projection: alias → target; month series → its derive.from daily; daily series → the month_end row derived from it. */
 export function resolveColumn(id:string,defs:readonly FrozenSeriesDef[]):CycleColumn{
@@ -4365,7 +4768,7 @@ export function resolveColumn(id:string,defs:readonly FrozenSeriesDef[]):CycleCo
 /** Episodes from ascending events (zero-bp events ignored). cutoffDate = YYYY-MM-DD of the manifest cutoff. */
 export function policyEpisodes(events:readonly StrategyPolicyEvent[],gaps:readonly EventGap[],cutoffDate:string):Episode[]{
  const evs=events.filter(e=>sign(e.change_bp)!==0).sort((a,b)=>a.effective_date<b.effective_date?-1:a.effective_date>b.effective_date?1:0);
- const gapDates=gaps.map(g=>g.near);
+ const gapDates=gaps.filter(g=>g.kind==='transition_unverified').map(g=>g.near);
  const out:Episode[]=[];
  for(const e of evs){
   const dir=sign(e.change_bp)>0?'hike':'cut';
@@ -4383,7 +4786,7 @@ export function policyEpisodes(events:readonly StrategyPolicyEvent[],gaps:readon
  return out;
 }
 
-export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;columns?:readonly string[]}):Promise<StrategyManifest>{
+export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;boundary:Boundary;columns?:readonly string[]}):Promise<StrategyManifest>{
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
@@ -4396,7 +4799,7 @@ export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;
   if(c.daily_series)await b.history(c.daily_series,COL_PURPOSE,'history');
   if(c.monthly_series)await b.history(c.monthly_series,COL_PURPOSE,'month_end');
  }
- return b.build({kind:'cycle_table',params:{},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'cycle_table',params:{boundary:o.boundary},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Missing=Extract<CycleCell,{status:'missing'}>['reason'];
@@ -4414,7 +4817,7 @@ function change(from:ManifestInput,to:ManifestInput,kind:'pct'|'bp'):CycleCell{
  if(from.observation_id===to.observation_id)return miss('degenerate');
  if(kind==='pct'){
   if(sign(from.value_text)<=0)return miss('non_positive_base');
-  return {status:'ok',from:toObsRef(from),to:toObsRef(to),change_raw:pctChange(to.value_text,from.value_text),change_text:pctText(to.value_text,from.value_text),change_kind:'pct'};
+  return {status:'ok',from:toObsRef(from),to:toObsRef(to),change_raw:pctChange(to.value_text,from.value_text),change_text:pctRatio(to.value_text,from.value_text),change_kind:'pct'};
  }
  const text=toBp(subtract(to.value_text,from.value_text));
  return {status:'ok',from:toObsRef(from),to:toObsRef(to),change_raw:Number(text),change_text:text,change_kind:'bp'};
@@ -4440,9 +4843,10 @@ function cellOf(m:StrategyManifest,ep:Episode,c:CycleColumn,boundary:Boundary,cu
  if(typeof to==='string')return miss(to);
  return change(from,to,c.change_kind);
 }
-export function buildCycleTable(stored:StoredManifest,boundary:Boundary,columns:readonly string[]=CYCLE_COLUMNS_V1):CycleTableView{
+export function buildCycleTable(stored:StoredManifest,columns:readonly string[]=CYCLE_COLUMNS_V1):CycleTableView{
  const m=stored.body;
  if(m.kind!=='cycle_table')throw new Error(`manifest_kind_mismatch:${m.kind}`);
+ const boundary=boundaryParam(m);
  const cutoffDate=m.cutoff.slice(0,10);
  const episodes=policyEpisodes(m.events??[],m.gaps??[],cutoffDate);
  const cols=columns.map(id=>resolveColumn(id,m.catalog));
@@ -4455,29 +4859,30 @@ export function buildCycleTable(stored:StoredManifest,boundary:Boundary,columns:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- src/lib/macro/strategy/cycle-table.test.ts`
-Expected: PASS (13 tests).
+Expected: PASS (16 tests).
 
 - [ ] **Step 5: Write the replay test**
 
 `src/lib/macro/strategy/replay.test.ts`
 ```ts
 // Offline replay (spec §1.1 criterion 3, §4.5, §12): committed manifests under fixtures/replay/ are the ONLY input; each
-// view rebuilt from the stored manifest must deep-equal the committed expected JSON. The views never receive a port or the
-// live catalog. A second check rebuilds the manifests from the scenario below through memoryStrategyPort and requires the
-// same manifest_hash, so the committed manifests are what the builders really produce.
+// view rebuilt from the stored manifest must deep-equal the committed expected JSON. The views never receive a port, the
+// live catalog or an outside argument: region / window / boundary come from manifest.params, and every parameter value has
+// its own manifest (its own identity). A second check rebuilds the manifests from the scenario below through
+// memoryStrategyPort and requires the same manifest_hash, so the committed manifests are what the builders really produce.
 // Recording (only when a builder or view intentionally changes): MACRO_REPLAY_RECORD=1 npm test -- src/lib/macro/strategy/replay.test.ts
 import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {beforeAll,describe,expect,it} from 'vitest';
 import type {ObservationRow,StoredManifest,StrategyManifest} from './contract';
-import {buildCycleTable,buildCycleTableManifest} from './cycle-table';
+import {BOUNDARIES,buildCycleTable,buildCycleTableManifest} from './cycle-table';
 import {manifestHash,monthEnd} from './manifest';
 import {subtract,toBp} from './numeric';
 import {buildPlaybooks} from './playbooks';
 import {buildPolicyResponse,buildPolicyResponseManifest} from './policy-response';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
 import {daily,fixture,monthly,obs,snap} from './testing/fixture';
-import {buildTransmission,buildTransmissionManifest} from './transmission';
+import {buildTransmission,buildTransmissionManifest,regionParam} from './transmission';
 
 const DIR=fileURLToPath(new URL('./fixtures/replay/',import.meta.url));
 const NOW=new Date('2025-07-01T00:00:00Z');
@@ -4515,26 +4920,29 @@ function scenario(){
 }
 
 // ---------------------------------------------------------------- cases (Part C appends 'review')
-type Case={id:string;build:(p:StrategyReadPort)=>Promise<StrategyManifest>;params:readonly (string|number)[];view:(s:StoredManifest,p:string|number)=>unknown};
+// One manifest per (kind, params): <kind>.manifest.json holds {<param>: StoredManifest}, <kind>.expected.json {<param>: view}.
+// view(s) takes nothing but the stored manifest.
+type Param=string|number;
+type Case={id:string;key:string;params:readonly Param[];build:(p:StrategyReadPort,param:Param)=>Promise<StrategyManifest>;view:(s:StoredManifest)=>unknown};
 const CASES:Case[]=[
- {id:'transmission',build:async p=>(await buildTransmissionManifest(p,{now:NOW,codeVersion:CODE}))!,params:['US','CN'],
-  view:(s,p)=>({transmission:buildTransmission(s,p as 'US'|'CN'),playbooks:buildPlaybooks(s.body,p as 'US'|'CN')})},
- {id:'policy_response',build:p=>buildPolicyResponseManifest(p,{now:NOW,codeVersion:CODE}),params:[1,3,6],view:(s,p)=>buildPolicyResponse(s,p as 1|3|6)},
- {id:'cycle_table',build:p=>buildCycleTableManifest(p,{now:NOW,codeVersion:CODE}),params:['event_day','first_trading_day','month_end'],
-  view:(s,p)=>buildCycleTable(s,p as 'event_day'|'first_trading_day'|'month_end')},
+ {id:'transmission',key:'region',params:['US','CN'],build:async(p,region)=>(await buildTransmissionManifest(p,{now:NOW,codeVersion:CODE,region:region as 'US'|'CN'}))!,
+  view:s=>({transmission:buildTransmission(s),playbooks:buildPlaybooks(s.body,regionParam(s.body))})},
+ {id:'policy_response',key:'window',params:[1,3,6],build:(p,window)=>buildPolicyResponseManifest(p,{now:NOW,codeVersion:CODE,window:window as 1|3|6}),view:s=>buildPolicyResponse(s)},
+ {id:'cycle_table',key:'boundary',params:BOUNDARIES,build:(p,boundary)=>buildCycleTableManifest(p,{now:NOW,codeVersion:CODE,boundary:boundary as 'event_day'|'first_trading_day'|'month_end'}),view:s=>buildCycleTable(s)},
 ];
-const IDS:Record<string,string>={transmission:'00000000-0000-4000-8000-0000000000a1',policy_response:'00000000-0000-4000-8000-0000000000a2',cycle_table:'00000000-0000-4000-8000-0000000000a3'};
+const ID_BASE:Record<string,number>={transmission:0xa10,policy_response:0xa20,cycle_table:0xa30};
 const file=(id:string,part:'manifest'|'expected')=>`${DIR}${id}.${part}.json`;
-const load=<T>(id:string,part:'manifest'|'expected'):T=>JSON.parse(readFileSync(file(id,part),'utf8')) as T;
-const stored=(id:string,body:StrategyManifest):StoredManifest=>({manifest_id:IDS[id],manifest_hash:manifestHash(body),body,created_at:CREATED});
+const load=<T>(id:string,part:'manifest'|'expected'):Record<string,T>=>JSON.parse(readFileSync(file(id,part),'utf8')) as Record<string,T>;
+const stored=(c:Case,i:number,body:StrategyManifest):StoredManifest=>({manifest_id:`00000000-0000-4000-8000-000000000${(ID_BASE[c.id]+i).toString(16)}`,manifest_hash:manifestHash(body),body,created_at:CREATED});
 
 beforeAll(async()=>{
  if(process.env.MACRO_REPLAY_RECORD!=='1')return;
  const port=memoryStrategyPort(scenario());
  for(const c of CASES){
-  const s=stored(c.id,await c.build(port));
-  writeFileSync(file(c.id,'manifest'),`${JSON.stringify(s)}\n`);
-  writeFileSync(file(c.id,'expected'),`${JSON.stringify(Object.fromEntries(c.params.map(p=>[String(p),c.view(s,p)])))}\n`);
+  const all:Record<string,StoredManifest>={};
+  for(const [i,p] of c.params.entries())all[String(p)]=stored(c,i,await c.build(port,p));
+  writeFileSync(file(c.id,'manifest'),`${JSON.stringify(all)}\n`);
+  writeFileSync(file(c.id,'expected'),`${JSON.stringify(Object.fromEntries(Object.entries(all).map(([p,s])=>[p,c.view(s)])))}\n`);
  }
 });
 
@@ -4542,25 +4950,34 @@ describe.each(CASES)('replay $id',c=>{
  it('the committed fixture files exist',()=>{
   expect(existsSync(file(c.id,'manifest'))).toBe(true);expect(existsSync(file(c.id,'expected'))).toBe(true);
  });
- it('manifest_hash is the hash of the committed body',()=>{
-  const s=load<StoredManifest>(c.id,'manifest');
-  expect(s.manifest_hash).toBe(manifestHash(s.body));
-  expect(s.body.kind).toBe(c.id);
+ it('one manifest per parameter: kind and params frozen in the body, manifest_hash = hash of the body, identities distinct',()=>{
+  const all=load<StoredManifest>(c.id,'manifest');
+  expect(Object.keys(all)).toEqual(c.params.map(String));
+  for(const p of c.params){
+   const s=all[String(p)];
+   expect(s.manifest_hash).toBe(manifestHash(s.body));
+   expect(s.body.kind).toBe(c.id);expect(s.body.params).toEqual({[c.key]:p});
+  }
+  expect(new Set(Object.values(all).map(s=>s.manifest_hash)).size).toBe(c.params.length);
  });
- it('view(stored manifest) deep-equals the committed expected JSON for every parameter',()=>{
-  const s=load<StoredManifest>(c.id,'manifest');const exp=load<Record<string,unknown>>(c.id,'expected');
+ it('view(stored manifest alone) deep-equals the committed expected JSON for every parameter',()=>{
+  const all=load<StoredManifest>(c.id,'manifest');const exp=load<unknown>(c.id,'expected');
   expect(Object.keys(exp)).toEqual(c.params.map(String));
-  for(const p of c.params)expect(JSON.parse(JSON.stringify(c.view(s,p)))).toEqual(exp[String(p)]);
+  for(const p of c.params)expect(JSON.parse(JSON.stringify(c.view(all[String(p)])))).toEqual(exp[String(p)]);
  });
- it('the builder still produces the committed manifest (same hash) from the scenario',async()=>{
-  const body=await c.build(memoryStrategyPort(scenario()));
-  expect(manifestHash(body),'builder output changed: re-record with MACRO_REPLAY_RECORD=1 only if the change is intended').toBe(load<StoredManifest>(c.id,'manifest').manifest_hash);
+ it('the builder still produces the committed manifests (same hashes) from the scenario',async()=>{
+  const all=load<StoredManifest>(c.id,'manifest');
+  for(const p of c.params){
+   const body=await c.build(memoryStrategyPort(scenario()),p);
+   expect(manifestHash(body),`${c.id} ${String(p)}: builder output changed: re-record with MACRO_REPLAY_RECORD=1 only if the change is intended`).toBe(all[String(p)].manifest_hash);
+  }
  });
 });
+const one=(id:string,p:Param):StoredManifest=>load<StoredManifest>(id,'manifest')[String(p)];
 
 describe('replayed numbers match hand computation',()=>{
  it('month_end hike episode 2022-03-17 → 2023-07-27: US 10Y bp = 2023-07 month end − 2022-02 month end, × 100',()=>{
-  const t=buildCycleTable(load<StoredManifest>('cycle_table','manifest'),'month_end');
+  const t=buildCycleTable(one('cycle_table','month_end'));
   const ep=t.episodes.find(e=>e.direction==='hike'&&e.start==='2022-03-17')!;
   expect(ep.end).toBe('2023-07-27');
   const c=t.cells[String(ep.index)]['US_UST10Y'];
@@ -4569,13 +4986,13 @@ describe('replayed numbers match hand computation',()=>{
   expect(c.status==='ok'&&c.change_text).toBe(toBp(subtract(v('2023-07'),v('2022-02'))));
  });
  it('the switch event and the left-censored first episode are replayed; the last episode is ongoing at the cutoff',()=>{
-  const t=buildCycleTable(load<StoredManifest>('cycle_table','manifest'),'event_day');
+  const t=buildCycleTable(one('cycle_table','event_day'));
   expect(t.gaps).toEqual([]);
   expect(t.episodes[0]).toMatchObject({direction:'cut',start:'2008-10-08',end:'2008-12-16',left_censored:true,cumulative_bp:'-175'});
   expect(t.episodes.at(-1)).toMatchObject({direction:'cut',start:'2024-09-19',end:'2024-12-19',ongoing:true});
  });
  it('policy response N=3: the 2022-03-17 hike spans 2022-02 → 2022-05 month ends; the 2022-04 CNY gap excludes it there',()=>{
-  const v=buildPolicyResponse(load<StoredManifest>('policy_response','manifest'),3);
+  const v=buildPolicyResponse(one('policy_response',3));
   const hike=v.rows.find(r=>r.direction==='hike')!;
   const usRow=hike.cells['US_DGS10'];
   const first=('events' in usRow?usRow.events:[]).find(e=>e.effective_date==='2022-03-17')!;
@@ -4585,7 +5002,7 @@ describe('replayed numbers match hand computation',()=>{
   expect(('events' in cny?cny.events:[]).find(e=>e.effective_date==='2022-03-17')?.exclusion).toBe('incomplete_window');
  });
  it('the transmission spread is the exact same-month difference of the two snapshot rows',()=>{
-  const t=buildTransmission(load<StoredManifest>('transmission','manifest'),'US');
+  const t=buildTransmission(one('transmission','US'));
   const spread=t.stages.flatMap(s=>s.nodes).find(n=>n.id==='us_cn_10y_spread')!;
   const i=MONTHS.indexOf('2025-05');
   expect(spread).toMatchObject({state:'derived',period_end:'2025-05-31',value_text:subtract(hundredths(dgs10(i)),hundredths(cgb10(i)))});
@@ -4601,7 +5018,7 @@ Expected: FAIL — `the committed fixture files exist` fails for all three cases
 - [ ] **Step 7: Record the fixtures, then run without recording**
 
 Run: `mkdir -p src/lib/macro/strategy/fixtures/replay && MACRO_REPLAY_RECORD=1 npm test -- src/lib/macro/strategy/replay.test.ts`
-Expected: PASS (16 tests); six files written (compact JSON, about 10–240 KB each, about 0.6 MB in total).
+Expected: PASS (16 tests); six files written (compact JSON; each `<kind>.manifest.json` holds one stored manifest per parameter value — 2 regions, 3 windows, 3 boundaries — about 20–670 KB each, about 1.25 MB in total).
 
 Run: `npm test -- src/lib/macro/strategy/replay.test.ts`
 Expected: PASS (16 tests) without the variable. Then check by eye: in `cycle_table.expected.json`, `event_day.episodes[0]` is the left-censored 2008 cut episode `2008-10-08 → 2008-12-16` with `cumulative_bp:"-175"`, the last episode is the 2024 cut episode with `ongoing:true`, and `gaps` is `[]`.
@@ -4656,11 +5073,13 @@ EOF
 
 规格要点（实施者不读规格时据此理解代码）：
 - 事实 = 模板 id + 槽位；数字只在槽位 `{value_text, unit}` 里，由 Task 10 的 `explain-render.ts` 渲染。`fact_id` 规则：`obs:<series>`（当前值）、`chg:<series>`（与上一可比期变化）、`node:spread_us_cn_10y`（推导利差）、`evt:<生效日>`（政策事件）、`rel:`/`rev:`/`tml:`/`mv:`/`cov:` + 序列 id、`ep:<direction>:<start>:<opened|ended>`。
-- 每份解读都绑定一份 `kind='explain_facts'` 的清单（Task 1 的 `macro_claim_explanation` 只接受这种清单）。快照解读的清单（§4.5）：`pinSnapshots` 固定所请求快照与其区域、`cutoff = 该快照 created_at`、对方区域 = `snapshotUpTo(对方, cutoff)`；经 `manifestBuilder` 冻结各"水平指标"的 `latest`/`prev`、利差两条输入（快照内取最新期，否则 `latestObservations(asOf: cutoff)`，`source.kind='history'`）与全部政策事件（`readPolicyEvents`）。复盘解读的清单 = 已存复盘清单的内容改 `kind='explain_facts'`、`params` 加 `subject_kind/result_id/review_manifest_id`（`reviewFactsManifest`），事实就是复盘结果里存的 `facts`。
+- 每份解读都绑定一份 `kind='explain_facts'` 的清单（Task 1 的 `macro_claim_explanation` 只接受这种清单）。快照解读的清单（§4.5）：`pinSnapshots` 固定所请求快照与其区域、`cutoff = 该快照 created_at`、对方区域 = `snapshotUpTo(对方, cutoff)`；经 `manifestBuilder` 冻结各"水平指标"的 `latest`/`prev`、利差两条输入（快照内取最新期，否则 `latestObservations(asOf: cutoff)`，`source.kind='history'`）与全部政策事件（`readPolicyEvents`）。复盘解读的清单 = 不可变复盘结果（主体 id = `result_id`）的已存清单内容改 `kind='explain_facts'`、`params` 加 `subject_kind/result_id/review_manifest_id`（`reviewFactsManifest`），事实就是该结果里存的 `facts`。两种清单都把交给模型的事实列表冻结在 `body.facts`。
 - "水平指标" = 本区域 `role='indicator'`、`period≠'day'`、且不是目录里任何序列的 `derive.from`（排除原始指数与日频原生序列，如 `US_CPI_INDEX`、`US_DGS10_D`）。
 - 复盘（§6.2）：月末对月末；`cutoff = monthCutoff(month)`（次月 3 日 00:00:00Z）、基线截止 = `monthCutoff(prevMonth(month))`（本月 3 日 00:00:00Z）；截止只决定"何时已知"，比较的数据期仍是本月月末 vs 上月月末；两张快照用 `snapshotUpTo`；两个截止各用一个 `manifestBuilder`，再合并（输入、读取、目录按 Part B 构建器同样的键排序）；资产与视角序列在两截止处以 `history(…,'month_end',{from: 月初, to: 月末})` 取该月月末行（没有 → 读取状态 `missing`）；截至 cutoff 的全部政策事件冻结进清单；及时性按截止日期（`cutoff` 的日期部分，即次月 3 日）计算并冻结（只用快照里的最新期；序列不在快照中 → 以 `null` 调用）；七节只从清单计算（重放不访问端口），快照相关的节只用 `source.kind='snapshot'` 的输入。行动段用 Task 8 的 `policyEpisodes(events, gaps, cutoffDate)` 分别在截止与基线日期上计算。行动段身份 = `(direction, start)`；"新开" = 截止时有、基线时无；"结束" = 基线时 `ongoing`、截止时不再 `ongoing`。修订只覆盖各序列在快照中的最新期。截止快照不存在 → `status='insufficient'`（第 1、2、3、7 节为空，事件 / 行动段 / 资产节照常）；基线快照不存在 → 第 1、2 节为空并 `baseline_missing=true`。
 - 清单角色字符串（全部经 `manifest.ts::inputRole` 生成）：快照解读 `level:<sid>:latest|prev`、`spread:<sid>:latest`；复盘 `review:<sid>:latest`（截止快照）、`review_base:<sid>:latest`（基线快照）、`asset_end:<读取序列>:month_end`、`asset_base:<读取序列>:month_end`（读取序列 = 列的 `aliasOf ?? id`，如 `US_UST10Y` → `US_DGS10`）。
-- 百分比变化一律用 Task 4 `pctText(end, base)`（精确十进制、4 位小数半偶舍入；基值 ≤ 0 → 不产生变化 / `asset_missing(non_positive_base)`），不经浮点。
+- 百分比变化一律用 Task 4 `pctRatio(end, base)`：槽位存精确比值 `{value_text:'<末>/<基>', unit:'pct_ratio'}`，渲染时 `roundPctRatio` 只舍入一次（计划审计 #10）；基值 ≤ 0 → 不产生变化 / `asset_missing(non_positive_base)`；不经浮点。
+- 事件源读取被截断（`gaps` 含 `history_truncated`）→ 第 4 节 `policy_events` 与第 5 节 `episode_changes` 各只有一条 `events_truncated` 事实（`evt:truncated` / `ep:truncated`，槽位 `date`、`sources`），不是空节（计划审计 #11）。
+- 解读清单冻结事实（计划审计 #16）：`buildSnapshotFactsManifest` 与 `reviewFactsManifest` 都把交给模型的事实列表写进 `body.facts`（快照：`snapshotFacts(清单)`；复盘：`flattenReviewFacts(结果.facts)`），`explanationFacts(m)` 只读它。
 
 - [ ] **Step 1: 写 `facts.ts` 的失败测试**
 
@@ -4668,7 +5087,7 @@ EOF
 // src/lib/macro/strategy/facts.test.ts
 import {describe,expect,it} from 'vitest';
 import type {Fact,StrategyManifest} from './contract';
-import {buildSnapshotFactsManifest,flattenReviewFacts,levelIndicators,reviewFactsManifest,snapshotFacts,typedChange} from './facts';
+import {buildSnapshotFactsManifest,explanationFacts,flattenReviewFacts,levelIndicators,reviewFactsManifest,snapshotFacts,typedChange} from './facts';
 import {memoryStrategyPort} from './port';
 import {daily,FIXTURE_CATALOG,fixture,monthly,snap} from './testing/fixture';
 
@@ -4684,12 +5103,12 @@ const build=async(p=setup()):Promise<StrategyManifest>=>{const m=await buildSnap
 const byId=(fs:Fact[])=>new Map(fs.map(f=>[f.fact_id,f]));
 
 describe('typed changes and level indicators (spec §6.1, P1 change kinds)',()=>{
- it('bp / pp / points are exact decimals; pct is the exact percent-change text; non-positive base → null',()=>{
+ it('bp / pp / points are exact decimals; pct is the exact ratio (rounded once at render); non-positive base → null',()=>{
   expect(typedChange('bp','4.23','4.16')).toEqual({value_text:'-7',unit:'bp'});
   expect(typedChange('pp','2.7','2.9')).toEqual({value_text:'0.2',unit:'pp'});
   expect(typedChange('points','49.8','50.1')).toEqual({value_text:'0.3',unit:'points'});
-  expect(typedChange('pct','100','110')).toEqual({value_text:'10',unit:'pct_chg'});
-  expect(typedChange('pct','121.2','120.5')).toEqual({value_text:'-0.5776',unit:'pct_chg'});
+  expect(typedChange('pct','100','110')).toEqual({value_text:'110/100',unit:'pct_ratio'});
+  expect(typedChange('pct','121.2','120.5')).toEqual({value_text:'120.5/121.2',unit:'pct_ratio'});
   expect(typedChange('pct','0','1')).toBeNull();
   expect(typedChange('pct','-1','1')).toBeNull();
  });
@@ -4712,6 +5131,8 @@ describe('buildSnapshotFactsManifest + snapshotFacts (spec §4.5 快照解读的
   expect(m.inputs.find(i=>i.role==='level:US_CPI_YOY:latest')).toMatchObject({period_end:'2026-09-30',value_text:'2.9',source:{kind:'snapshot',snapshot_id:US_SNAP.snapshot_id}});
   expect(m.inputs.find(i=>i.role==='level:US_CPI_YOY:prev')).toMatchObject({period_end:'2026-08-31',value_text:'2.7'});
   expect(m.events?.map(e=>e.effective_date)).toEqual(['2026-09-18']);
+  expect(m.facts).toEqual(snapshotFacts(m));                                   // the model's fact list is frozen in the manifest
+  expect(explanationFacts(m)).toBe(m.facts);
  });
  it('unknown or failed snapshot → null',async()=>{
   expect(await buildSnapshotFactsManifest(setup(),'snap:US:nope','c')).toBeNull();
@@ -4723,7 +5144,7 @@ describe('buildSnapshotFactsManifest + snapshotFacts (spec §4.5 快照解读的
   expect(f.get('obs:US_CPI_YOY')).toMatchObject({kind:'level',template:'level',slots:{series:'US_CPI_YOY',period:'2026-09-30',value:{value_text:'2.9',unit:'pct'}},source_inputs:['level:US_CPI_YOY:latest']});
   expect(f.get('chg:US_CPI_YOY')).toMatchObject({kind:'change',slots:{change:{value_text:'0.2',unit:'pp'},prev_period:'2026-08-31'},source_inputs:['level:US_CPI_YOY:prev','level:US_CPI_YOY:latest']});
   expect(f.get('chg:US_DGS10')?.slots.change).toEqual({value_text:'-7',unit:'bp'});
-  expect(f.get('chg:US_DTWEXBGS')?.slots.change).toEqual({value_text:'-0.5776',unit:'pct_chg'});
+  expect(f.get('chg:US_DTWEXBGS')?.slots.change).toEqual({value_text:'120.5/121.2',unit:'pct_ratio'});
   expect(f.has('obs:US_UNRATE')).toBe(true);expect(f.has('chg:US_UNRATE')).toBe(false);
   expect(f.has('obs:US_ISM_PMI')).toBe(false);
   expect(f.get('node:spread_us_cn_10y')).toMatchObject({kind:'derived',template:'derived_spread',slots:{a:'US_DGS10',b:'CN_CGB_10Y',period:'2026-09-30',value:{value_text:'2.31',unit:'pp_level'}},source_inputs:['spread:US_DGS10:latest','spread:CN_CGB_10Y:latest']});
@@ -4759,7 +5180,16 @@ describe('review explanation manifest and facts',()=>{
   const m=reviewFactsManifest(stored,result,'code-2');
   expect(m).toMatchObject({kind:'explain_facts',params:{region:'US',month:'2026-10',subject_kind:'review',result_id:'r-1',review_manifest_id:'m-1'},method_version:'macro-facts/1',code_version:'code-2',cutoff:body.cutoff});
   expect(m.inputs).toEqual(body.inputs);
+  expect(m.facts).toEqual(flattenReviewFacts(facts));                         // frozen: the explanation needs neither the result nor the pointer
+  expect(explanationFacts(JSON.parse(JSON.stringify(m)))).toEqual(flattenReviewFacts(facts));
   expect(()=>reviewFactsManifest(stored,{...result,manifest_id:'other'},'c')).toThrow('review_manifest_mismatch');
+ });
+ it('explanationFacts reads only body.facts of an explain_facts manifest',async()=>{
+  const m=await build();
+  expect(()=>explanationFacts({...m,facts:undefined})).toThrow('not_explain_facts_manifest:explain_facts');
+  expect(()=>explanationFacts({...m,kind:'review'})).toThrow('not_explain_facts_manifest:review');
+  const altered={...m,inputs:[]};                                             // inputs no longer matter once facts are frozen
+  expect(explanationFacts(altered)).toEqual(m.facts);
  });
 });
 ```
@@ -4778,14 +5208,17 @@ Expected: FAIL，`Failed to resolve import "./facts"`（或 `Cannot find module 
 // 'explain_facts' manifest (the claim RPC requires that kind):
 // - snapshot subject: buildSnapshotFactsManifest pins the requested snapshot (§4.5 "快照解读的清单": its region fixed,
 //   cutoff = its created_at, peer = snapshotUpTo(peer, cutoff)) and freezes level / prev values, the spread inputs and the
-//   policy events through manifestBuilder; snapshotFacts reads only that manifest.
-// - review subject: reviewFactsManifest wraps the stored review manifest (same frozen inputs, kind 'explain_facts',
-//   params naming the result); the facts are the stored ReviewFacts (flattenReviewFacts).
-// No judgment field is read or produced (spec §7.7).
+//   policy events through manifestBuilder; snapshotFacts derives the facts from those inputs alone.
+// - review subject: reviewFactsManifest wraps the stored review manifest of an immutable result (same frozen inputs,
+//   kind 'explain_facts', params naming result_id and the review manifest); the facts are that result's ReviewFacts.
+// Either way the exact fact list given to the model is frozen into body.facts before hashing, and explanationFacts reads
+// only that list: an explanation's model input is rebuilt from its manifest alone. Percent changes are kept as the exact
+// ratio (unit 'pct_ratio', value '<to>/<from>') and rounded once when rendered. No judgment field is read or produced
+// (spec §7.7).
 import type {ChangeKind,Fact,MacroSeriesDef,Region,ReviewFacts,ReviewResult,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {VERSIONS} from './contract';
 import {inputRole,manifestBuilder,pinSnapshots} from './manifest';
-import {pctText,sign,subtract,toBp} from './numeric';
+import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
 
@@ -4798,10 +5231,10 @@ export function levelIndicators<T extends Pick<MacroSeriesDef,'id'|'region'|'rol
  const sources=new Set(catalog.flatMap(d=>d.derive?[d.derive.from]:[]));
  return catalog.filter(d=>d.region===region&&d.role==='indicator'&&d.period!=='day'&&!sources.has(d.id));
 }
-/** P1 typed change of one series: bp → exact toBp(to − from); pp / points → exact difference; pct → exact percent-change
- *  text (4 decimals, half-even) — null when the base is not positive. */
+/** P1 typed change of one series: bp → exact toBp(to − from); pp / points → exact difference; pct → the exact ratio
+ *  '<to>/<from>' (unit 'pct_ratio', rounded once at render) — null when the base is not positive. */
 export function typedChange(kind:ChangeKind,from:string,to:string):{value_text:string;unit:string}|null{
- if(kind==='pct')return sign(from)<=0?null:{value_text:pctText(to,from),unit:'pct_chg'};
+ if(kind==='pct')return sign(from)<=0?null:{value_text:pctRatio(to,from),unit:'pct_ratio'};
  const d=subtract(to,from);
  return kind==='bp'?{value_text:toBp(d),unit:'bp'}:{value_text:d,unit:kind};
 }
@@ -4821,7 +5254,8 @@ export async function buildSnapshotFactsManifest(port:StrategyReadPort,snapshotI
  for(const d of levelIndicators(port.catalog(),region)){b.def(d.id);if(d.status==='active')await b.snapshotValue(d.id,LEVEL_PURPOSE,['prev']);}
  for(const id of [SPREAD.a,SPREAD.b])if(b.def(id)?.status==='active')await b.snapshotValue(id,SPREAD_PURPOSE);
  const {events,gaps}=await readPolicyEvents(b);
- return b.build({kind:'explain_facts',params:{subject_kind:'snapshot',snapshot_id:snapshotId,region},methodVersion:VERSIONS.facts,codeVersion,extra:{events,gaps}});
+ const m=b.build({kind:'explain_facts',params:{subject_kind:'snapshot',snapshot_id:snapshotId,region},methodVersion:VERSIONS.facts,codeVersion,extra:{events,gaps}});
+ return {...m,facts:snapshotFacts(m)};
 }
 /** Facts of a snapshot explanation: current level and typed change per indicator, the spread node, the latest policy event. */
 export function snapshotFacts(m:StrategyManifest):Fact[]{
@@ -4841,11 +5275,17 @@ export function snapshotFacts(m:StrategyManifest):Fact[]{
  const last=events[events.length-1];if(last)out.push(eventFact(last));
  return out;
 }
-/** Review explanation manifest: the stored review manifest's frozen content re-keyed as 'explain_facts' for that result. */
+/** Review explanation manifest: the stored review manifest's frozen content re-keyed as 'explain_facts' for that immutable
+ *  result, with the result's facts frozen in body.facts. */
 export function reviewFactsManifest(review:StoredManifest,result:ReviewResult,codeVersion:string):StrategyManifest{
  if(review.body.kind!=='review'||review.manifest_id!==result.manifest_id)throw new Error('review_manifest_mismatch');
  return {...review.body,kind:'explain_facts',params:{...review.body.params,subject_kind:'review',result_id:result.result_id,review_manifest_id:review.manifest_id},
-  method_version:VERSIONS.facts,code_version:codeVersion};
+  facts:flattenReviewFacts(result.facts),method_version:VERSIONS.facts,code_version:codeVersion};
+}
+/** The exact fact list of an explanation: body.facts of its 'explain_facts' manifest, nothing else. */
+export function explanationFacts(m:StrategyManifest):Fact[]{
+ if(m.kind!=='explain_facts'||!Array.isArray(m.facts))throw new Error(`not_explain_facts_manifest:${m.kind}`);
+ return m.facts;
 }
 /** Review explanation facts: the seven sections in spec §6.2 order. */
 export function flattenReviewFacts(f:ReviewFacts):Fact[]{
@@ -4856,7 +5296,7 @@ export function flattenReviewFacts(f:ReviewFacts):Fact[]{
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/facts.test.ts`
-Expected: PASS，`Tests  10 passed (10)`。
+Expected: PASS，`Tests  11 passed (11)`。
 
 - [ ] **Step 5: 写 `review.ts` 的失败测试**
 
@@ -4944,8 +5384,8 @@ describe('reviewFromManifest — seven sections (spec §6.2)',()=>{
   expect(facts.episode_changes[0].slots).toMatchObject({direction:'cut',start:'2025-09-17',end:'2025-12-10',events:{value_text:'3',unit:'count'},cumulative:{value_text:'-75',unit:'bp'}});
   const mv=byId(facts.asset_moves);
   expect(mv.get('mv:US_UST10Y')).toMatchObject({template:'asset_move',slots:{base_period:'2026-09-30',period:'2026-10-31',change:{value_text:'-8',unit:'bp'}}});
-  expect(mv.get('mv:US_WTI')?.slots.change).toEqual({value_text:'-2.4194',unit:'pct_chg'});
-  expect(mv.get('mv:US_DTWEXBGS')?.slots.change).toEqual({value_text:'0.4149',unit:'pct_chg'});
+  expect(mv.get('mv:US_WTI')?.slots.change).toEqual({value_text:'60.5/62',unit:'pct_ratio'});
+  expect(mv.get('mv:US_DTWEXBGS')?.slots.change).toEqual({value_text:'121/120.5',unit:'pct_ratio'});
   expect(mv.has('mv:US_SP500')).toBe(false);
   expect(byId(facts.coverage).get('cov:counts')?.slots).toEqual({verified:{value_text:'21',unit:'count'},missing:{value_text:'4',unit:'count'},restricted:{value_text:'5',unit:'count'}});
   expect(ids(facts.coverage)).toEqual(expect.arrayContaining(['cov:US_ISM_PMI','cov:US_SP500']));
@@ -4956,6 +5396,14 @@ describe('reviewFromManifest — seven sections (spec §6.2)',()=>{
   expect(facts.snapshot_id).toBeNull();expect(facts.baseline_missing).toBe(true);
   expect(facts.releases).toEqual([]);expect(facts.revisions).toEqual([]);expect(facts.timeliness).toEqual([]);expect(facts.coverage).toEqual([]);
   expect(ids(facts.policy_events)).toEqual(['evt:2026-10-28']);
+ });
+ it('a truncated event history is an explicit events_truncated fact in sections 4 and 5, never an empty section',async()=>{
+  const m=await buildReviewManifest(port(),'US','2026-10','c');
+  const cut={...m,events:[],gaps:[{kind:'history_truncated' as const,reason:'US_FED_TARGET_UPPER_D',near:'2026-11-03'}]};
+  const {facts}=reviewFromManifest(cut);
+  expect(facts.policy_events).toEqual([{fact_id:'evt:truncated',kind:'coverage',template:'events_truncated',slots:{date:'2026-11-03',sources:'US_FED_TARGET_UPPER_D'},source_inputs:[]}]);
+  expect(ids(facts.episode_changes)).toEqual(['ep:truncated']);
+  expect(ids(facts.releases)).toEqual(ids(reviewFromManifest(m).facts.releases));   // other sections unaffected
  });
  it('missing baseline → sections 1 and 2 empty and flagged; the rest as usual',async()=>{
   const {status,facts}=reviewFromManifest(await buildReviewManifest(port([CUR_SNAP]),'US','2026-10','c'));
@@ -5031,14 +5479,16 @@ Expected: FAIL，`Failed to resolve import "./review"`。
 // states computed for the cutoff date. reviewFromManifest is pure and reads only the manifest (replay never touches the
 // port or the live catalog); snapshot sections use only inputs whose source is the snapshot. Episode identity =
 // (direction, start); "opened" = present at the cutoff, absent at the baseline; "ended" = ongoing at the baseline, present and
-// no longer ongoing at the cutoff. runReview drives one (region, month) unit for the cron.
+// no longer ongoing at the cutoff. A history_truncated event gap puts one explicit 'events_truncated' fact into both the
+// policy_events and episode_changes sections (never an ordinary empty section). Percent asset moves keep the exact ratio
+// (unit 'pct_ratio'). runReview drives one (region, month) unit for the cron.
 import type {Episode,Fact,FrozenSeriesDef,ManifestInput,ManifestRead,Region,ReviewFacts,ReviewStatus,SnapshotRecord,StrategyManifest,StrategyPolicyEvent,Timeliness} from './contract';
 import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
 import {eventFact,levelIndicators} from './facts';
 import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth} from './manifest';
-import {pctText,sign,subtract,toBp} from './numeric';
+import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
 
@@ -5118,14 +5568,19 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  }
  const events=[...(m.events??[])].sort((x,y)=>x.effective_date<y.effective_date?-1:x.effective_date>y.effective_date?1:0);
  const gaps=m.gaps??[];
- const policy_events=events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
+ const truncated=gaps.find(g=>g.kind==='history_truncated');
+ const truncatedFact=(section:'evt'|'ep'):Fact=>({fact_id:`${section}:truncated`,kind:'coverage',template:'events_truncated',slots:{date:truncated!.near,sources:truncated!.reason},source_inputs:[]});
+ const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
  const cutDate=m.cutoff.slice(0,10);const baseDate=m.baseline.cutoff.slice(0,10);
- const atCut=policyEpisodes(events,gaps,cutDate);const atBase=new Map(policyEpisodes(events.filter(e=>e.effective_date<=baseDate),gaps,baseDate).map(e=>[episodeKey(e),e]));
  const episode_changes:Fact[]=[];
- for(const e of atCut){
-  const prior=atBase.get(episodeKey(e));
-  if(!prior)episode_changes.push(episodeFact(e,'opened',events));
-  else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events));
+ if(truncated)episode_changes.push(truncatedFact('ep'));
+ else{
+  const atCut=policyEpisodes(events,gaps,cutDate);const atBase=new Map(policyEpisodes(events.filter(e=>e.effective_date<=baseDate),gaps,baseDate).map(e=>[episodeKey(e),e]));
+  for(const e of atCut){
+   const prior=atBase.get(episodeKey(e));
+   if(!prior)episode_changes.push(episodeFact(e,'opened',events));
+   else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events));
+  }
  }
  const asset_moves:Fact[]=[];
  for(const c of assetColumns(m.catalog,region)){
@@ -5136,7 +5591,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
   let change:{value_text:string;unit:string};
   if(c.kind==='bp')change={value_text:toBp(subtract(end.value_text,start.value_text)),unit:'bp'};
   else if(sign(start.value_text)<=0){asset_moves.push(missing('non_positive_base'));continue;}
-  else change={value_text:pctText(end.value_text,start.value_text),unit:'pct_chg'};
+  else change={value_text:pctRatio(end.value_text,start.value_text),unit:'pct_ratio'};
   asset_moves.push({fact_id:`mv:${c.def.id}`,kind:'asset_move',template:'asset_move',
    slots:{series:c.def.id,base_period:start.period_end,period:end.period_end,from:{value_text:start.value_text,unit:c.def.unit},to:{value_text:end.value_text,unit:c.def.unit},change},
    series_id:c.def.id,period_end:end.period_end,source_inputs:[start.role,end.role]});
@@ -5175,7 +5630,7 @@ export async function runReview(d:{port:StrategyReadPort;db:StrategyDb;codeVersi
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/review.test.ts src/lib/macro/strategy/facts.test.ts`
-Expected: PASS，`Tests  23 passed (23)`。
+Expected: PASS，`Tests  25 passed (25)`。
 
 - [ ] **Step 9: 复盘重放用例（§12 `replay.test.ts`）**
 
@@ -5250,8 +5705,8 @@ describe('replay review US 2026-10 (spec §6.2, §12: the view reads the committ
   expect(f.episode_changes[0].slots.cumulative).toEqual({value_text:'-75',unit:'bp'});
   const mv=new Map(f.asset_moves.map(x=>[x.fact_id,x.slots.change]));
   expect(mv.get('mv:US_UST10Y')).toEqual({value_text:toBp(subtract('4.08','4.16')),unit:'bp'});
-  expect(mv.get('mv:US_WTI')).toEqual({value_text:'-2.4194',unit:'pct_chg'});        // (60.5 / 62 − 1) × 100, half-even 4 dp
-  expect(mv.get('mv:US_DTWEXBGS')).toEqual({value_text:'0.4149',unit:'pct_chg'});    // (121 / 120.5 − 1) × 100
+  expect(mv.get('mv:US_WTI')).toEqual({value_text:'60.5/62',unit:'pct_ratio'});        // exact ratio; (60.5 / 62 − 1) × 100 rounded once at display
+  expect(mv.get('mv:US_DTWEXBGS')).toEqual({value_text:'121/120.5',unit:'pct_ratio'});  // (121 / 120.5 − 1) × 100
   expect(f.coverage.map(x=>x.fact_id)).toEqual(['cov:counts','cov:US_ISM_PMI','cov:US_SP500']);
  });
 });
@@ -5263,7 +5718,7 @@ Expected: FAIL — 新块的 4 个用例因 `ENOENT … fixtures/replay/review-u
 录制，再不带开关复跑：
 
 Run: `MACRO_REPLAY_RECORD=1 npm test -- src/lib/macro/strategy/replay.test.ts`
-Expected: PASS（`Tests  20 passed (20)`），写出 `review-us-2026-10.json`（约 18 KB），并按原样重写 Part B 的六个文件。
+Expected: PASS（`Tests  20 passed (20)`），写出 `review-us-2026-10.json`（约 21 KB），并按原样重写 Part B 的六个文件。
 
 Run: `git status --short src/lib/macro/strategy/fixtures/replay`
 Expected: 只有一行 `?? src/lib/macro/strategy/fixtures/replay/review-us-2026-10.json`（Part B 的六个文件内容不变；若它们出现在 `M` 行，说明 Part B 的构建器在本任务之前已改变，停下报告，不要提交它们）。
@@ -5292,7 +5747,8 @@ review manifest re-keyed for its result) and the template facts (level, exact
 typed change, spread node, latest policy event). review.ts freezes a month-end vs
 month-end manifest from two builders (cutoff = the 3rd of the next month) and computes the seven sections purely from
 it: episode identity (direction, start), opened/ended via policyEpisodes, frozen
-timeliness, exact pctText asset moves, runReview for the cron. Adds the review
+timeliness, exact-ratio asset moves, explicit truncation facts, frozen
+explanation facts, runReview for the cron. Adds the review
 replay case and its recorded fixture.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
@@ -5312,7 +5768,7 @@ EOF
 - Create: `src/lib/macro/strategy/prompts/macro-explain-v1.en.md`
 
 规格要点：
-- 事实句 = 模板 id ↔ 中英渲染函数（§6.3 输出分工）。固定格式（全部在十进制文本上做，不经浮点）：水平值原样（规范十进制）加千分位与单位（`pct` → `%`，`usd_per_bbl`、`cny_per_100usd` 有中英后缀，其余无后缀）；`pp` / `points` 变化原样带符号；`bp` 变化半数远离零舍入到整数 bp；百分比变化 `pct_chg` 半数远离零舍入到一位小数并带符号（结果为零时不带符号，`-0.04` → `0.0`）；计数取整加千分位；日期原样 ISO。`TEMPLATES` 必须恰好覆盖 Task 9 产生的 15 个模板 id（测试强制）。
+- 事实句 = 模板 id ↔ 中英渲染函数（§6.3 输出分工）。固定格式（全部在十进制文本上做，不经浮点）：水平值原样（规范十进制）加千分位与单位（`pct` → `%`，`usd_per_bbl`、`cny_per_100usd` 有中英后缀，其余无后缀）；`pp` / `points` 变化原样带符号；`bp` 变化半数远离零舍入到整数 bp；百分比变化 `pct_ratio`（精确比值 `'<末>/<基>'`）用 `numeric.ts::roundPctRatio` 从比值一次舍入（半数远离零）到一位小数并带符号（结果为零时不带符号；真实变化 +0.04996% → `0.0%`，不是先舍到 4 位再舍成 `+0.1%`）；计数取整加千分位；日期原样 ISO。`TEMPLATES` 必须恰好覆盖 Task 9 产生的 16 个模板 id（含 `events_truncated`；测试强制）。
 - 校验器是**词法策略**（§6.3 第 3 稿 N10），顺序：解析（容许外层 ```json 围栏）→ ajv 结构（`points` 1–6 条，`counterpoints` 0–6 条，`fact_ids` 1–4 个，文本 1–240 字符，不允许多余键）→ `fact_id` 必须在本次事实清单 → 对每段文本 `normalize('NFKC')` 后检查：
   - `numeral`：任一 `\p{Nd}` / `\p{No}` 字符；`%`、`‰`、`‱`；`bp`/`bps`/`pp`（前后不是拉丁字母，故 `25bp` 也命中，`happen` 不命中）；`基点`、`百分点`、`百分之`；`第` + 中文数字；中文数字串后接量词或单位（`个百分点`、`基点`、`个次年月日周倍成点%`）；英文数词（词边界、不区分大小写）。
   - `forbidden_term`：`FORBIDDEN_TERMS`（中文子串；英文词边界、不区分大小写、空格匹配任意空白）。
@@ -5512,7 +5968,7 @@ Expected: PASS，`Tests  111 passed (111)`。
 // src/lib/macro/strategy/explain-render.test.ts
 import {describe,expect,it} from 'vitest';
 import type {Fact} from './contract';
-import {formatSlot,namesFrom,pctOneDecimal,renderExplanation,renderFact,renderFacts,roundDecimal,roundDecimalToInteger,TEMPLATE_IDS} from './explain-render';
+import {formatSlot,namesFrom,renderExplanation,renderFact,renderFacts,roundDecimal,roundDecimalToInteger,TEMPLATE_IDS} from './explain-render';
 import {FORBIDDEN_TERMS,REGIME_TERMS} from './explain-validate';
 
 const CATALOG=[{id:'US_CPI_YOY',name:{zh:'美国 CPI 同比',en:'US CPI YoY'}},{id:'US_DGS10',name:{zh:'美债 10 年',en:'UST 10Y'}},{id:'CN_CGB_10Y',name:{zh:'中债 10 年',en:'CGB 10Y'}},{id:'US_WTI',name:{zh:'WTI 原油',en:'WTI crude'}}];
@@ -5532,9 +5988,10 @@ const SAMPLES:[Fact,string,string][]=[
  [fact('timeliness_missing',{series:'US_CPI_YOY',date:'2026-11-03'}),'截至 2026-11-03，美国 CPI 同比 在快照中无观测。','As of 2026-11-03, US CPI YoY had no observation in the snapshot.'],
  [fact('episode_opened',{direction:'hike',start:'2026-10-28',end:'2026-10-28',events:v('1','count'),upper_from:v('3.75','pct'),upper_to:v('4','pct'),cumulative:v('25','bp')}),'加息行动段自 2026-10-28 开始，至 2026-10-28 共 1 次变动，上限 3.75% → 4%，累计 +25 个基点。','A hike episode began on 2026-10-28: 1 moves through 2026-10-28, upper bound 3.75% → 4%, cumulative +25 bp.'],
  [fact('episode_ended',{direction:'cut',start:'2025-09-17',end:'2025-12-10',events:v('3','count'),upper_from:v('4.5','pct'),upper_to:v('3.75','pct'),cumulative:v('-75','bp')}),'2025-09-17 至 2025-12-10 的降息行动段已结束（3 次变动，上限 4.5% → 3.75%，累计 -75 个基点）。','The cut episode from 2025-09-17 to 2025-12-10 ended (3 moves, upper bound 4.5% → 3.75%, cumulative -75 bp).'],
- [fact('asset_move',{series:'US_WTI',base_period:'2026-09-30',period:'2026-10-31',from:v('62','usd_per_bbl'),to:v('60.5','usd_per_bbl'),change:v('-2.4194','pct_chg')}),'WTI 原油 2026-09-30 → 2026-10-31：62 美元/桶 → 60.5 美元/桶（-2.4%）。','WTI crude 2026-09-30 → 2026-10-31: 62 USD/bbl → 60.5 USD/bbl (-2.4%).'],
+ [fact('asset_move',{series:'US_WTI',base_period:'2026-09-30',period:'2026-10-31',from:v('62','usd_per_bbl'),to:v('60.5','usd_per_bbl'),change:v('60.5/62','pct_ratio')}),'WTI 原油 2026-09-30 → 2026-10-31：62 美元/桶 → 60.5 美元/桶（-2.4%）。','WTI crude 2026-09-30 → 2026-10-31: 62 USD/bbl → 60.5 USD/bbl (-2.4%).'],
  [fact('asset_missing',{series:'US_WTI',base_month:'2026-09',month:'2026-10',reason:'out_of_coverage'}),'WTI 原油 2026-09 至 2026-10 无法比较：月末观测不全。','WTI crude 2026-09 to 2026-10 not comparable: month-end observations incomplete.'],
  [fact('coverage',{verified:v('1234','count'),missing:v('4','count'),restricted:v('5','count')}),'快照目录计数：已核实 1,234，缺失 4，受限 5。','Snapshot catalog counts: verified 1,234, missing 4, restricted 5.'],
+ [fact('events_truncated',{date:'2026-11-03',sources:'US_FED_TARGET_UPPER_D'}),'截至 2026-11-03，政策事件序列读取被截断（US_FED_TARGET_UPPER_D），本节无法列出。','As of 2026-11-03, the policy event history read was truncated (US_FED_TARGET_UPPER_D); this section cannot be listed.'],
  [fact('catalog_unavailable',{series:'US_ISM_PMI',status:'missing'}),'US_ISM_PMI 目录状态：缺失。','US_ISM_PMI catalog status: missing.'],
 ];
 
@@ -5570,12 +6027,14 @@ describe('number formatting rules',()=>{
   expect(roundDecimalToInteger('12.49')).toBe('12');expect(roundDecimalToInteger('-0.4')).toBe('0');expect(roundDecimalToInteger('7')).toBe('7');
   expect(formatSlot(v('-0.4','bp'),'en')).toBe('0 bp');
  });
- it('percent changes round half away from zero to one decimal on the text; a zero result has no sign',()=>{
-  expect(pctOneDecimal('-0.04')).toBe('0.0');expect(pctOneDecimal('0.05')).toBe('0.1');expect(pctOneDecimal('-0.05')).toBe('-0.1');
-  expect(pctOneDecimal('-2.4194')).toBe('-2.4');expect(pctOneDecimal('10')).toBe('10.0');
-  expect(formatSlot(v('0.4149','pct_chg'),'zh')).toBe('+0.4%');expect(formatSlot(v('-0.04','pct_chg'),'en')).toBe('0.0%');
+ it('percent changes are rounded once from the exact ratio, half away from zero, to one decimal; a zero result has no sign',()=>{
+  expect(formatSlot(v('121/120.5','pct_ratio'),'zh')).toBe('+0.4%');expect(formatSlot(v('60.5/62','pct_ratio'),'en')).toBe('-2.4%');
+  expect(formatSlot(v('110/100','pct_ratio'),'en')).toBe('+10.0%');
+  expect(formatSlot(v('100.04996/100','pct_ratio'),'en')).toBe('0.0%');    // true +0.04996 %: no double rounding up to +0.1 %
+  expect(formatSlot(v('99.95004/100','pct_ratio'),'zh')).toBe('0.0%');     // true −0.04996 %
+  expect(formatSlot(v('100.05/100','pct_ratio'),'en')).toBe('+0.1%');expect(formatSlot(v('99.95/100','pct_ratio'),'en')).toBe('-0.1%');
   expect(roundDecimal('9.99',1)).toBe('10.0');expect(roundDecimal('0.0049',2)).toBe('0.00');
-  expect(()=>pctOneDecimal('abc')).toThrow('invalid_decimal:abc');expect(()=>pctOneDecimal('1e3')).toThrow('invalid_decimal:1e3');
+  expect(()=>formatSlot(v('2.4','pct_ratio'),'en')).toThrow('invalid_pct_ratio:2.4');expect(()=>roundDecimal('1e3',1)).toThrow('invalid_decimal:1e3');
  });
  it('pp and points keep the exact decimal with a sign; levels get thousands separators and unit suffixes',()=>{
   expect(formatSlot(v('0.2','pp'),'zh')).toBe('+0.2 个百分点');expect(formatSlot(v('-0.2','pp'),'en')).toBe('-0.2 pp');
@@ -5612,10 +6071,12 @@ Expected: FAIL，`Failed to resolve import "./explain-render"`。
 // Deterministic fact sentences (spec 2026-11-07 §6.3 "输出分工"). Every number a reader sees in an explanation comes from
 // here: template id ↔ zh / en render function over the fact's slots. Fixed formatting rules: level values verbatim
 // (canonical decimal) with thousands separators and the series unit; pp / points changes verbatim with an explicit sign;
-// bp changes rounded half away from zero to whole bp; percent changes rounded half away from zero to one decimal; counts as integers; dates
-// verbatim ISO. No float anywhere: rounding is done on the decimal text. Series names come from the manifest's frozen
+// bp changes rounded half away from zero to whole bp; percent changes arrive as the exact ratio '<to>/<from>' (unit
+// 'pct_ratio') and are rounded ONCE, half away from zero, to one decimal (numeric.ts roundPctRatio — never a pre-rounded
+// value); counts as integers; dates verbatim ISO. No float anywhere: rounding is done on the decimal text. Series names come from the manifest's frozen
 // catalog. The model never writes a fact sentence.
 import type {Bilingual,Fact,FrozenSeriesDef,RenderedExplanation} from './contract';
+import {roundPctRatio} from './numeric';
 
 export type Locale='zh'|'en';
 export type NameLookup=(seriesId:string)=>Bilingual|null;
@@ -5643,15 +6104,13 @@ export function roundDecimal(text:string,dp:number):string{
  return `${m[1]==='-'&&n!==0n?'-':''}${digits}`;
 }
 export const roundDecimalToInteger=(text:string):string=>roundDecimal(text,0);
-/** Percent changes: one decimal (pctText gives exact 4-decimal text). */
-export const pctOneDecimal=(text:string):string=>roundDecimal(text,1);
 export function formatSlot(s:Slot,locale:Locale):string{
  switch(s.unit){
   case 'pct':return `${groupThousands(s.value_text)}%`;
   case 'pp':return locale==='zh'?`${signed(s.value_text)} 个百分点`:`${signed(s.value_text)} pp`;
   case 'pp_level':return locale==='zh'?`${s.value_text} 个百分点`:`${s.value_text} pp`;
   case 'bp':return locale==='zh'?`${signed(roundDecimalToInteger(s.value_text))} 个基点`:`${signed(roundDecimalToInteger(s.value_text))} bp`;
-  case 'pct_chg':return `${signed(pctOneDecimal(s.value_text))}%`;
+  case 'pct_ratio':return `${signed(roundPctRatio(s.value_text,1))}%`;
   case 'points':return locale==='zh'?`${signed(s.value_text)} 点`:`${signed(s.value_text)} pts`;
   case 'count':return groupThousands(roundDecimalToInteger(s.value_text));
   default:return `${groupThousands(s.value_text)}${UNIT_SUFFIX[s.unit]?.[locale]??''}`;
@@ -5683,6 +6142,7 @@ export const TEMPLATES:Record<string,Record<Locale,Renderer>>={
  asset_move:{zh:c=>`${c.name('series')} ${c.str('base_period')} → ${c.str('period')}：${c.num('from')} → ${c.num('to')}（${c.num('change')}）。`,en:c=>`${c.name('series')} ${c.str('base_period')} → ${c.str('period')}: ${c.num('from')} → ${c.num('to')} (${c.num('change')}).`},
  asset_missing:{zh:c=>`${c.name('series')} ${c.str('base_month')} 至 ${c.str('month')} 无法比较：${c.word(REASON,'reason')}。`,en:c=>`${c.name('series')} ${c.str('base_month')} to ${c.str('month')} not comparable: ${c.word(REASON,'reason')}.`},
  coverage:{zh:c=>`快照目录计数：已核实 ${c.num('verified')}，缺失 ${c.num('missing')}，受限 ${c.num('restricted')}。`,en:c=>`Snapshot catalog counts: verified ${c.num('verified')}, missing ${c.num('missing')}, restricted ${c.num('restricted')}.`},
+ events_truncated:{zh:c=>`截至 ${c.str('date')}，政策事件序列读取被截断（${c.str('sources')}），本节无法列出。`,en:c=>`As of ${c.str('date')}, the policy event history read was truncated (${c.str('sources')}); this section cannot be listed.`},
  catalog_unavailable:{zh:c=>`${c.name('series')} 目录状态：${c.word(STATUS,'status')}。`,en:c=>`${c.name('series')} catalog status: ${c.word(STATUS,'status')}.`},
 };
 export const TEMPLATE_IDS=Object.keys(TEMPLATES);
@@ -5707,7 +6167,7 @@ export function renderExplanation(facts:readonly Fact[],output:{points:{fact_ids
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/explain-render.test.ts src/lib/macro/strategy/explain-validate.test.ts`
-Expected: PASS，`Tests  136 passed (136)`。
+Expected: PASS，`Tests  137 passed (137)`。
 
 - [ ] **Step 9: 写两份提示文件**（Task 11 的 `explain-request.ts` 读取它们；Task 14 的禁用词扫描覆盖 `prompts/**`，两份文件都不含 `FORBIDDEN_TERMS` 与象限名）
 
@@ -5795,8 +6255,8 @@ EOF
 
 规格要点：
 - `f4-client.ts`（§9.1）：`createF4Client({baseUrl?, fetch?, timeoutMs?})`；默认 `baseUrl = process.env.NEXT_PUBLIC_SITE_URL`（未设或空 → 每次调用抛 `F4Unavailable('f4_unconfigured')`）；每次请求 `AbortSignal.timeout(3000)`、`cache:'no-store'`。任何失败（网络、超时、非 2xx、非 JSON、形状不对）→ `F4Unavailable`；详情路由返回 **JSON 的 404** → `null`（判断不存在），非 JSON 的 404（路由不存在）→ `F4Unavailable`。`F4CardLite` 只投影无数字字段（`display.value` 是象限名时作为 `selected`）。`F4Client` 与 `F4Unavailable` 逐字取自计划骨架"依赖注入"节；`F4CardLite` / `F4JudgmentDetail` 已由 Task 6 放在 `f4-types.ts`，这里 `import type` 后再导出，不重复声明。
-- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs` 或其中有不完整项 → `evidence_incomplete`、`diffs=[]`。
-- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于底座与主体检查）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 为 `<region>:<YYYY-MM>`，取当前指针的结果与其清单，再经 `reviewFactsManifest` 生成解读清单）不存在 → 404 `subject_not_found`；解读清单 `putManifest`；事实为空 → 422 `no_facts` → `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（失败 → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `finish('failed', ['provider_error' 或成本错误码], accounting=LlmCallError.accounting)` → `finalize(failed)` → `markFinalized` → 200 投影）→ 解析 + 校验 → `finish(accepted|rejected)` → `finalize(completed)`（拒绝也是已完成调用）→ `markFinalized` → 200 投影。`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalized=false` 供运维重试）。
+- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`；**满页且页尾两条 `as_of` 相同**（排他游标可能漏掉同 `as_of` 的其余卡片，无法证明完整）→ 停止并 `incomplete:true`（计划审计 #12；稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项 D19）。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs` 或其中有不完整项 → `evidence_incomplete`、`diffs=[]`。
+- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于代码版本、底座与主体检查）→ `codeVersion` 为 null → 503 `code_version_unavailable`（计划审计 #9：重放不需要代码版本）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 是不可变的 `result_id`，`db.reviewResult(id)` 取结果、`db.manifest` 取其清单，再经 `reviewFactsManifest` 生成解读清单；计划审计 #5）不存在 → 404 `subject_not_found`；事实（`explanationFacts`，即清单 `body.facts`）为空 → 422 `no_facts`；解读清单 `putManifest`；模型输入只由已存清单重建（`modelInput(stored.body, locale)`，计划审计 #16）→ `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（抛错 = 结果不明，用量运行可能已提交：`recordCompletion(null, finalizePayload('failed', []))` → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → finally：`finalize(同一审计键, 该载荷)`，成功才 `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `recordCompletion(null, finalizePayload('failed', [LlmCallError.accounting]))` → `finish('failed', ['provider_error' 或成本错误码])` → finally：`finalize` → 成功才 `markFinalized` → 200 投影）→ 成功返回后**立即** `recordCompletion({content}, finalizePayload('completed', [accounting]))`（先于校验）→ 解析 + 校验 → `finish(accepted|rejected)`（拒绝也是已完成调用）→ finally：`finalize` → 成功才 `markFinalized` → 200 投影。`finish` 或校验抛错时 `finalize` 仍执行，然后错误上抛（500）；`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试，计划审计 #6–#8）；`recordCompletion` 自身失败不阻断后续步骤。
 - `LlmCallError(message, accounting)`：Task 12 的生产 `LlmDeps.call` 在 `runMeteredLlmCall` 抛错时用 `meteredUsageFromError(e)` 构造它（成本错误时 `message` 用成本错误码，如 `daily_cost_exhausted`）。
 - `REPLAY_MANIFEST_ID`（全零 uuid）只在重放路径传给 `claimExplanation`：该 `(user_id, request_id)` 行已存在，RPC 不会插入。
 
@@ -5983,7 +6443,7 @@ Expected: PASS，`Tests  15 passed (15)`。
 ```ts
 // src/lib/macro/strategy/deviations.test.ts
 import {describe,expect,it,vi} from 'vitest';
-import {classifyDiffs,DEVIATION_CAP,deviationCase,listDeviationCases,type FrozenObs} from './deviations';
+import {classifyDiffs,DEVIATION_CAP,deviationCase,HISTORY_PAGE,listDeviationCases,type FrozenObs} from './deviations';
 import {F4Unavailable,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4-client';
 
 const o=(series_id:string,period_end:string,vintage_id:string,value=1):FrozenObs=>({series_id,period_end,vintage_id,value});
@@ -6065,6 +6525,21 @@ describe('listDeviationCases (spec §6.4 enumeration)',()=>{
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(true);
   expect(f4.before).toEqual([null,'2026-05-01']);
  });
+ it('a full page whose boundary ties on as_of → incomplete (cards with that as_of may sit behind the exclusive cursor)',async()=>{
+  const full=Array.from({length:HISTORY_PAGE},(_,k)=>card(`t${k}`,k<HISTORY_PAGE-2?`2026-0${1+(k%5)}-01`:'2025-12-31'));
+  full.sort((a,b)=>a.as_of<b.as_of?1:a.as_of>b.as_of?-1:0);
+  const f4=fakeF4([full,[card('next','2025-12-30')],[]],{});
+  expect((await listDeviationCases(f4,'US')).incomplete).toBe(true);
+  expect(f4.before).toEqual([null]);   // stopped before following the unsafe cursor
+ });
+ it('a full page without a boundary tie, or a short page with one, keeps paging',async()=>{
+  const day=(n:number)=>new Date(Date.UTC(2026,0,1)-n*86_400_000).toISOString().slice(0,10);
+  const full=Array.from({length:HISTORY_PAGE},(_,k)=>card(`u${k}`,day(k+1)));
+  const short=[card('s1','2024-01-02'),card('s2','2024-01-02')];
+  const f4=fakeF4([full,short,[]],{});
+  expect((await listDeviationCases(f4,'US')).incomplete).toBe(false);
+  expect(f4.before).toEqual([null,day(HISTORY_PAGE),'2024-01-02']);
+ });
  it('F4Unavailable propagates',async()=>{
   const f4=fakeF4([],{});f4.latestRegimeCard=async()=>{throw new F4Unavailable();};
   await expect(listDeviationCases(f4,'US')).rejects.toBeInstanceOf(F4Unavailable);
@@ -6083,6 +6558,9 @@ Expected: FAIL，`Failed to resolve import "./deviations"`。
 // src/lib/macro/strategy/deviations.ts
 // Deviation cases macro-deviations/1 (spec 2026-11-07 §6.4, draft 3 N13; judgment layer on only). Enumerate macro_regime
 // cards of a region through F4: latest card, then /history pages until an empty page; more than 5000 cards → incomplete.
+// The cursor is the last card's as_of (exclusive `before`): a FULL page whose last card ties on as_of with the card before
+// it cannot prove that no further card with that as_of was cut off, so it ends the walk with incomplete (until F4 offers a
+// stable (as_of, judgment_id) cursor — plan open item); a cursor that does not move is incomplete too.
 // Keep macro_regime@v1 cards with lifecycle 'settled' whose latest settlement outcome is 'miss'. For each, diff the
 // registered inputs (macro_observation frozen projections) against the latest settlement's evidence.observation_refs,
 // matched by (series_id, period_end); classification is exhaustive (revised / unchanged / dropped / newly_available with
@@ -6150,6 +6628,7 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
   if(seen.size>DEVIATION_CAP){incomplete=true;break;}
   const next=page[page.length-1].as_of;
   if(before!==null&&next>=before){incomplete=true;break;}   // cursor did not move: stop rather than loop
+  if(page.length>=HISTORY_PAGE&&page.length>1&&page[page.length-2].as_of===next){incomplete=true;break;}   // tie at a full page boundary: completeness unprovable
   before=next;
  }
  const cards=[...seen.values()].slice(0,DEVIATION_CAP).filter(c=>c.methodology.id===METHOD.id&&c.methodology.version===METHOD.version&&c.lifecycle==='settled');
@@ -6166,7 +6645,7 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/deviations.test.ts`
-Expected: PASS，`Tests  10 passed (10)`。
+Expected: PASS，`Tests  12 passed (12)`。
 
 - [ ] **Step 9: 写 `explain-request.ts` 的失败测试**（全部用假实现：`memoryStrategyDb()`、`memoryStrategyPort(fixture(...))`、假 `LlmDeps`）
 
@@ -6176,7 +6655,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection} from './contract';
 import {memoryStrategyDb} from './db';
-import {handleExplainRequest,LlmCallError,promptText,type ExplainDeps,type LlmDeps} from './explain-request';
+import {handleExplainRequest,LlmCallError,modelInput,promptText,type ExplainDeps,type LlmDeps} from './explain-request';
 import {buildSnapshotFactsManifest} from './facts';
 import {memoryStrategyPort} from './port';
 import {runReview} from './review';
@@ -6191,21 +6670,26 @@ const port=()=>memoryStrategyPort(fixture({snapshots:[SNAP],observations:[...ROW
 const VALID=JSON.stringify({points:[{fact_ids:['obs:US_CPI_YOY','chg:US_CPI_YOY'],hypothesis:'通胀读数抬升可能通过实际利率渠道影响美元资产的相对吸引力'}],counterpoints:[{fact_ids:['evt:2026-09-18'],text:'若政策调整已被提前定价，该渠道的作用可能有限'}]});
 const body=(o:Partial<{request_id:string;subject:{kind:'snapshot'|'review';id:string};locale:'zh'|'en'}>={})=>({request_id:REQ,subject:{kind:'snapshot' as const,id:SNAP.snapshot_id},locale:'zh' as const,...o});
 
+/** Fake LlmDeps. finalizePayload returns {status, accounting, pricing}; `pricing` stands for the config read at completion
+ *  (pricing version, FX), so tests can change it afterwards and check that retries use the stored payload verbatim. */
 function fakeLlm(o:{byo?:boolean;resolveNull?:boolean;quota?:{allowed:boolean;used:number;limit:number}|null;content?:string;callError?:Error;beginError?:Error;finalizeError?:Error}={}){
- const calls:string[]=[];const finalized:{status:string;accounting:unknown[]}[]=[];const prompts:{system:string;user:string}[]=[];
+ const calls:string[]=[];const finalized:Record<string,unknown>[]=[];const prompts:{system:string;user:string}[]=[];
+ const state={pricing:'p1',finalizeError:o.finalizeError};
  const llm:LlmDeps={
   resolve:async()=>{calls.push('resolve');return o.resolveNull?null:{provider:'deepseek',model:'deepseek-chat',byo:o.byo??false};},
   checkQuota:async()=>{calls.push('checkQuota');return o.quota===undefined?{allowed:true,used:1,limit:10}:o.quota;},
   begin:async(key)=>{calls.push(`begin:${key}`);if(o.beginError)throw o.beginError;},
   call:async(system,user)=>{calls.push('call');prompts.push({system,user});if(o.callError)throw o.callError;return {content:o.content??VALID,accounting:{tokens:42}};},
-  finalize:async(_key,status,accounting)=>{calls.push(`finalize:${status}`);finalized.push({status,accounting});if(o.finalizeError)throw o.finalizeError;},
+  finalizePayload:(status,accounting)=>({status,accounting,pricing:state.pricing}),
+  finalize:async(_key,payload)=>{calls.push(`finalize:${String(payload.status)}`);finalized.push(payload);if(state.finalizeError)throw state.finalizeError;},
  };
- return {llm,calls,finalized,prompts};
+ return {llm,calls,finalized,prompts,state};
 }
 function deps(over:Partial<ExplainDeps>={}):ExplainDeps&{db:ReturnType<typeof memoryStrategyDb>}{
  return {db:memoryStrategyDb(),port:port(),llm:fakeLlm().llm,now:()=>new Date('2026-11-03T00:00:00Z'),codeVersion:'test-code',...over} as ExplainDeps&{db:ReturnType<typeof memoryStrategyDb>};
 }
 const projection=(r:{body:unknown})=>r.body as ExplanationProjection;
+const PAY=(status:'completed'|'failed',accounting:unknown[])=>({status,accounting,pricing:'p1'});
 
 describe('handleExplainRequest — happy path (spec §6.3 steps 1–8)',()=>{
  it('accepted: resolve → quota → claim → begin → call → finish → finalize(completed) → markFinalized',async()=>{
@@ -6217,24 +6701,47 @@ describe('handleExplainRequest — happy path (spec §6.3 steps 1–8)',()=>{
   expect(p.rendered?.facts.map(x=>x.fact_id)).toEqual(['obs:US_CPI_YOY','chg:US_CPI_YOY','evt:2026-09-18']);
   expect(p.rendered?.facts[0].text).toContain('2.9%');
   expect(p.rendered?.hypotheses[0].text).toContain('实际利率');
-  expect(f.calls).toEqual(['resolve','checkQuota',`begin:macro-explain:${p.explanation_id}`,'call','finalize:completed']);
-  expect(f.finalized).toEqual([{status:'completed',accounting:[{tokens:42}]}]);
+  expect(f.calls).toEqual(['resolve','checkQuota',`begin:${p.explanation_id}`,'call','finalize:completed']);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
   expect(mark).toHaveBeenCalledWith(p.explanation_id);
+  expect(d.db._run(p.explanation_id)).toMatchObject({state:'accepted',raw_output:{content:VALID},finalize_payload:PAY('completed',[{tokens:42}]),finalized:true});
   expect(f.prompts[0].system).toBe(promptText('zh'));
   expect(f.prompts[0].user).toContain('"fact_id":"obs:US_CPI_YOY"');
   expect(f.prompts[0].user).toContain('2.9%');
   expect(p.manifest_id).toMatch(/\S/);
   expect((await d.db.manifest(p.manifest_id))?.body.kind).toBe('explain_facts');
  });
- it('review subject: facts come from the current result and its manifest',async()=>{
+ it('review subject: the immutable result id; facts come from that result and are frozen in the fact manifest',async()=>{
   const d=deps();
-  await runReview({port:d.port!,db:d.db,codeVersion:'c'},'US','2026-10',{preview:false});
+  const rr=await runReview({port:d.port!,db:d.db,codeVersion:'c'},'US','2026-10',{preview:false});
   const f=fakeLlm({content:JSON.stringify({points:[{fact_ids:['cov:counts'],hypothesis:'覆盖不全可能削弱该月读数的代表性'}]})});
-  const r=await handleExplainRequest({...d,llm:f.llm},USER,body({subject:{kind:'review',id:'US:2026-10'}}));
+  const r=await handleExplainRequest({...d,llm:f.llm},USER,body({subject:{kind:'review',id:rr.result_id!}}));
   expect(r.status).toBe(200);
-  expect(projection(r)).toMatchObject({state:'accepted',subject_kind:'review',subject_id:'US:2026-10'});
-  const cur=(await d.db.reviewCurrent('US','2026-10'))!;
-  expect((await d.db.manifest(projection(r).manifest_id))?.body).toMatchObject({kind:'explain_facts',params:{subject_kind:'review',result_id:cur.result.result_id,review_manifest_id:cur.result.manifest_id}});
+  expect(projection(r)).toMatchObject({state:'accepted',subject_kind:'review',subject_id:rr.result_id});
+  const result=(await d.db.reviewResult(rr.result_id!))!;
+  const m=(await d.db.manifest(projection(r).manifest_id))!.body;
+  expect(m).toMatchObject({kind:'explain_facts',params:{subject_kind:'review',result_id:result.result_id,review_manifest_id:result.manifest_id}});
+  expect(m.facts?.map(x=>x.fact_id)).toContain('cov:counts');
+ });
+ it('a review explanation stays bound to its result after the pointer advances',async()=>{
+  const d=deps();
+  const first=await runReview({port:d.port!,db:d.db,codeVersion:'c'},'US','2026-10',{preview:false});
+  const content=JSON.stringify({points:[{fact_ids:['cov:counts'],hypothesis:'覆盖不全可能削弱该月读数的代表性'}]});
+  const r1=await handleExplainRequest({...d,llm:fakeLlm({content}).llm},USER,body({subject:{kind:'review',id:first.result_id!}}));
+  const second=await runReview({port:d.port!,db:d.db,codeVersion:'c2'},'US','2026-10',{preview:false});   // new code version → new result, pointer moves
+  expect(second).toMatchObject({outcome:'advanced',generation:2});expect(second.result_id).not.toBe(first.result_id);
+  d.db._userId(USER);
+  expect((await d.db.explanationsOf('session','review',second.result_id!,20))).toEqual([]);
+  expect((await d.db.explanationsOf('session','review',first.result_id!,20)).map(p=>p.explanation_id)).toEqual([projection(r1).explanation_id]);
+  const r2=await handleExplainRequest({...d,llm:fakeLlm({content}).llm},USER,body({request_id:'33333333-3333-4333-8333-333333333333',subject:{kind:'review',id:first.result_id!}}));
+  expect(projection(r2)).toMatchObject({state:'accepted',subject_id:first.result_id});   // the older result can still be explained
+ });
+ it('the model input is rebuilt offline from the stored fact manifest alone',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  const p=projection(await handleExplainRequest(d,USER,body()));
+  const stored=(await d.db.manifest(p.manifest_id))!;
+  const offline=JSON.parse(JSON.stringify(stored.body));                       // no port, no db, no live catalog
+  expect(modelInput(offline,'zh')).toEqual(f.prompts[0]);
  });
 });
 
@@ -6245,6 +6752,14 @@ describe('ordering and idempotency (spec §6.3 step 2, §9.1)',()=>{
   const again=await handleExplainRequest({...d,port:null},USER,body());
   expect(again.status).toBe(200);
   expect(projection(again)).toEqual(first);
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
+ });
+ it('replay needs no code version: a stored request answers even when the code version is unavailable',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  const first=projection(await handleExplainRequest(d,USER,body()));
+  const again=await handleExplainRequest({...d,codeVersion:null},USER,body());
+  expect(again).toEqual({status:200,body:first});
+  expect(await handleExplainRequest({...d,codeVersion:null},USER,body({request_id:'44444444-4444-4444-8444-444444444444'}))).toEqual({status:503,body:{error:{code:'code_version_unavailable',message:'code_version_unavailable'}}});
   expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
  });
  it('same request id with another payload → 409 payload_conflict, no model call',async()=>{
@@ -6295,7 +6810,7 @@ describe('outcomes after the claim (spec §6.3 steps 6–8)',()=>{
   const f=fakeLlm({content:JSON.stringify({points:[{fact_ids:['obs:US_CPI_YOY'],hypothesis:'三成的影响'}]})});const d=deps({llm:f.llm});const mark=vi.spyOn(d.db,'markFinalized');
   const r=await handleExplainRequest(d,USER,body());
   expect(projection(r)).toMatchObject({state:'rejected',failure_codes:['numeral'],rendered:null});
-  expect(f.finalized).toEqual([{status:'completed',accounting:[{tokens:42}]}]);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
   expect(mark).toHaveBeenCalledTimes(1);
  });
  it('unparseable model output → rejected(parse), completed call',async()=>{
@@ -6308,27 +6823,78 @@ describe('outcomes after the claim (spec §6.3 steps 6–8)',()=>{
   const r=await handleExplainRequest(d,USER,body());
   expect(r.status).toBe(200);
   expect(projection(r)).toMatchObject({state:'failed',failure_codes:['provider_error']});
-  expect(f.finalized).toEqual([{status:'failed',accounting:[{tokens:7}]}]);
+  expect(f.finalized).toEqual([PAY('failed',[{tokens:7}])]);
   expect(mark).toHaveBeenCalledTimes(1);
+  expect(d.db._run(projection(r).explanation_id)).toMatchObject({raw_output:null,finalize_payload:PAY('failed',[{tokens:7}]),finalized:true});
  });
  it('a cost error from the call keeps its code',async()=>{
   const f=fakeLlm({callError:new Error('daily_cost_exhausted')});
   expect(projection(await handleExplainRequest(deps({llm:f.llm}),USER,body())).failure_codes).toEqual(['daily_cost_exhausted']);
-  expect(f.finalized).toEqual([{status:'failed',accounting:[]}]);
+  expect(f.finalized).toEqual([PAY('failed',[])]);
  });
- it('begin failure → failed(usage_audit_unavailable), 503, no model call',async()=>{
-  const f=fakeLlm({beginError:new Error('boom')});
-  const r=await handleExplainRequest(deps({llm:f.llm}),USER,body());
+ it('begin failure is ambiguous: failed payload recorded under the same audit key, finalize(failed) attempted, then markFinalized',async()=>{
+  const f=fakeLlm({beginError:new Error('boom')});const d=deps({llm:f.llm});
+  const r=await handleExplainRequest(d,USER,body());
   expect(r.status).toBe(503);
   expect(r.body).toMatchObject({error:{code:'usage_audit_unavailable'},explanation:{state:'failed',failure_codes:['usage_audit_unavailable']}});
-  expect(f.calls).not.toContain('call');
+  const id=(r.body as {explanation:ExplanationProjection}).explanation.explanation_id;
+  expect(f.calls).toEqual(['resolve','checkQuota',`begin:${id}`,'finalize:failed']);
+  expect(d.db._run(id)).toMatchObject({state:'failed',finalize_payload:PAY('failed',[]),finalized:true});
  });
- it('finalize failure leaves the response intact and does not mark the run finalized',async()=>{
+ it('begin failure + finalize failure (the usage run never committed): not finalized, payload kept for reconciliation',async()=>{
+  const f=fakeLlm({beginError:new Error('boom'),finalizeError:new Error('usage run not found')});const d=deps({llm:f.llm});const mark=vi.spyOn(d.db,'markFinalized');
+  const r=await handleExplainRequest(d,USER,body());
+  const id=(r.body as {explanation:ExplanationProjection}).explanation.explanation_id;
+  expect(r.status).toBe(503);expect(mark).not.toHaveBeenCalled();
+  expect(d.db._run(id)).toMatchObject({finalize_payload:PAY('failed',[]),finalized:false});
+ });
+ it('finalize failure leaves the response intact; the stored payload is retried verbatim later, even after a config change',async()=>{
   const f=fakeLlm({finalizeError:new Error('usage_audit_unavailable')});const d=deps({llm:f.llm});const mark=vi.spyOn(d.db,'markFinalized');
   const r=await handleExplainRequest(d,USER,body());
   expect(r.status).toBe(200);
   expect(projection(r).state).toBe('accepted');
   expect(mark).not.toHaveBeenCalled();
+  const id=projection(r).explanation_id;
+  expect(d.db._run(id)).toMatchObject({finalize_payload:PAY('completed',[{tokens:42}]),finalized:false});
+  // ops retry (runbook §4): pricing config changed meanwhile; the stored payload is replayed as is
+  f.state.pricing='p2';f.state.finalizeError=undefined;
+  await f.llm.finalize(`${id}`,d.db._run(id)!.finalize_payload!);await d.db.markFinalized(id);
+  expect(f.finalized.at(-1)).toEqual(PAY('completed',[{tokens:42}]));
+  expect(d.db._run(id)?.finalized).toBe(true);
+ });
+});
+
+describe('injected failures after the provider returned (spec §4.4 macro_record_completion)',()=>{
+ it('finish fails: raw output + payload were recorded first, finalize still runs, markFinalized follows, the error surfaces',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});const order:string[]=[];
+  const rec=d.db.recordCompletion.bind(d.db);vi.spyOn(d.db,'recordCompletion').mockImplementation(async a=>{order.push('record');return rec(a);});
+  vi.spyOn(d.db,'finishExplanation').mockImplementation(async()=>{order.push('finish');throw new Error('connection reset');});
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  expect(order).toEqual(['record','finish']);
+  expect(f.calls.at(-1)).toBe('finalize:completed');
+  const run=(await d.db.runOf(USER,REQ))!;
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'running',raw_output:{content:VALID},finalize_payload:PAY('completed',[{tokens:42}]),finalized:true});
+ });
+ it('finish and finalize both fail: the run keeps raw output and payload with finalized=false for the ops retry',async()=>{
+  const f=fakeLlm({finalizeError:new Error('down')});const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValue(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  const run=(await d.db.runOf(USER,REQ))!;
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'running',raw_output:{content:VALID},finalize_payload:PAY('completed',[{tokens:42}]),finalized:false});
+ });
+ it('a throw inside validate / finish: finalize still runs with the recorded payload',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockImplementationOnce(()=>{throw new TypeError('render bug');});
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('render bug');
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+ });
+ it('recordCompletion failure does not stop finish or finalize; without a recorded payload the run is not marked finalized',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'recordCompletion').mockRejectedValue(new Error('db down'));
+  const r=await handleExplainRequest(d,USER,body());
+  expect(projection(r).state).toBe('accepted');
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+  expect(d.db._run(projection(r).explanation_id)).toMatchObject({finalize_payload:null,finalized:false});
  });
 });
 
@@ -6345,7 +6911,8 @@ describe('input and subject checks',()=>{
  it.each([
   ['unknown snapshot',{kind:'snapshot' as const,id:'snap:US:nope'}],
   ['malformed review id',{kind:'review' as const,id:'US-2026-10'}],
-  ['review without a pointer',{kind:'review' as const,id:'CN:2026-10'}],
+  ['a pointer key is not a result id',{kind:'review' as const,id:'US:2026-10'}],
+  ['unknown review result',{kind:'review' as const,id:'55555555-5555-4555-8555-555555555555'}],
  ])('404 subject_not_found: %s',async(_,subject)=>{
   const f=fakeLlm();
   expect((await handleExplainRequest(deps({llm:f.llm}),USER,body({subject}))).status).toBe(404);
@@ -6376,19 +6943,24 @@ Expected: FAIL，`Failed to resolve import "./explain-request"`。
 // src/lib/macro/strategy/explain-request.ts
 // POST /api/macro/strategy/explanations orchestration (spec 2026-11-07 §6.3 steps 1–8, §9.1 order). The route does the
 // session (401) and MACRO_STRATEGY_ENABLED (404) checks and passes the user id; everything after is here, with injected
-// deps so tests run offline: body ajv → payload_hash → idempotent replay (BEFORE foundation / subject checks) → foundation
-// (port null → 503) → subject + fact manifest → resolve → (non-BYO) quota → claim (only 'claimed' may bill or call) →
-// begin → call → finish → finalize → markFinalized. Validation rejection is a completed call (billed as completed).
-// A finalize failure never changes the user response; the run row stays finalized=false for the ops retry.
+// deps so tests run offline: body ajv → payload_hash → idempotent replay (BEFORE the code version, foundation and subject
+// checks) → code version (null → 503) → foundation (port null → 503) → subject + fact manifest (the exact fact list is
+// frozen in body.facts) → resolve → (non-BYO) quota → claim (only 'claimed' may bill or call) → begin → call →
+// recordCompletion (raw output + the exact finalize payload, durable before validation) → validate → finish → finalize →
+// markFinalized. finalize runs in a finally path even when validation or finish throws; markFinalized only after finalize
+// succeeded. A begin failure is ambiguous (the usage run may exist): it records a failed payload under the same audit key
+// and tries finalize(failed) too. Validation rejection is a completed call (billed as completed). A finalize failure
+// never changes the user response; the run row keeps finalize_payload with finalized=false for the ops retry.
+// Review subjects are immutable result ids (never the moving pointer).
 import {readFileSync} from 'node:fs';
 import Ajv from 'ajv';
 import {canonicalJson,sha256Hex} from './hash';
-import type {ExplanationProjection,Fact,FrozenSeriesDef} from './contract';
+import type {ExplanationProjection,StrategyManifest} from './contract';
 import {VERSIONS} from './contract';
 import {StrategyDbError,type StrategyDb} from './db';
 import {renderExplanation,renderFacts} from './explain-render';
 import {parseModelContent,validateExplanation,VALIDATOR_VERSION} from './explain-validate';
-import {buildSnapshotFactsManifest,flattenReviewFacts,reviewFactsManifest,snapshotFacts} from './facts';
+import {buildSnapshotFactsManifest,explanationFacts,reviewFactsManifest} from './facts';
 import type {StrategyReadPort} from './port';
 
 export interface LlmDeps{
@@ -6396,11 +6968,16 @@ export interface LlmDeps{
  checkQuota():Promise<{allowed:boolean;used:number;limit:number}|null>;
  begin(usageAuditKey:string,meta:Record<string,unknown>):Promise<void>;
  call(system:string,user:string):Promise<{content:string;accounting:unknown}>;
- finalize(usageAuditKey:string,status:'completed'|'failed',accounting:unknown[]):Promise<void>;
+ /** The exact finalizeUsageRun payload (status, provider, model, tokens, cost, pricingVersion, usdCnyMicros, usageEstimated,
+  *  byo), computed once at completion and stored on the run row; retries replay it verbatim. */
+ finalizePayload(status:'completed'|'failed',accounting:unknown[]):Record<string,unknown>;
+ /** finalizeUsageRun(userId, usageAuditKey, 'perspectives', payload) with the payload verbatim. */
+ finalize(usageAuditKey:string,payload:Record<string,unknown>):Promise<void>;
 }
 /** Thrown by LlmDeps.call when the provider call failed; accounting = meteredUsageFromError(e) (null when none). */
 export class LlmCallError extends Error{constructor(message:string,readonly accounting:unknown|null=null){super(message);this.name='LlmCallError';}}
-export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDeps;now:()=>Date;codeVersion:string}
+/** codeVersion null = not configured: 503 code_version_unavailable, checked only after the idempotent replay. */
+export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDeps;now:()=>Date;codeVersion:string|null}
 export interface ExplainBody{request_id:string;subject:{kind:'snapshot'|'review';id:string};locale:'zh'|'en'}
 export type ExplainResponse={status:number;body:ExplanationProjection|{error:{code:string;message:string};explanation?:ExplanationProjection}};
 
@@ -6411,8 +6988,6 @@ const UUID='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 const validateBody=new Ajv({strict:true}).compile({type:'object',additionalProperties:false,required:['request_id','subject','locale'],properties:{
  request_id:{type:'string',pattern:UUID},locale:{type:'string',enum:['zh','en']},
  subject:{type:'object',additionalProperties:false,required:['kind','id'],properties:{kind:{type:'string',enum:['snapshot','review']},id:{type:'string',minLength:1,maxLength:200}}}}});
-/** Review subject id = '<region>:<YYYY-MM>': the current result of that pointer (StrategyDb has no result-by-id read). */
-const REVIEW_ID=/^(US|CN):(\d{4}-(0[1-9]|1[0-2]))$/;
 const COST_ERROR_CODES=new Set(['daily_cost_exhausted','pricing_unavailable','budget_unavailable','budget_invariant_violation','usage_audit_unavailable','usage_audit_invariant']);
 export function costErrorCode(e:unknown):string|null{const c=e instanceof Error?e.message:String(e);return COST_ERROR_CODES.has(c)?c:null;}
 export function costErrorStatus(code:string):number{return code==='daily_cost_exhausted'?429:code==='budget_unavailable'||code==='usage_audit_unavailable'?503:500;}
@@ -6427,17 +7002,16 @@ export function promptText(locale:'zh'|'en'):string{
 export function userMessage(locale:'zh'|'en',facts:{fact_id:string;text:string}[]):string{
  return `${locale==='zh'?'事实清单（JSON）：':'Fact list (JSON):'}\n${JSON.stringify(facts)}`;
 }
-async function subjectFacts(d:ExplainDeps,port:StrategyReadPort,body:ExplainBody):Promise<{manifestId:string;facts:Fact[];catalog:FrozenSeriesDef[]}|null>{
- if(body.subject.kind==='snapshot'){
-  const m=await buildSnapshotFactsManifest(port,body.subject.id,d.codeVersion);if(!m)return null;
-  const stored=await d.db.putManifest(m);
-  return {manifestId:stored.manifest_id,facts:snapshotFacts(stored.body),catalog:stored.body.catalog};
- }
- const id=REVIEW_ID.exec(body.subject.id);if(!id)return null;
- const cur=await d.db.reviewCurrent(id[1] as 'US'|'CN',id[2]);if(!cur)return null;
- const review=await d.db.manifest(cur.result.manifest_id);if(!review)return null;
- const stored=await d.db.putManifest(reviewFactsManifest(review,cur.result,d.codeVersion));
- return {manifestId:stored.manifest_id,facts:flattenReviewFacts(cur.result.facts),catalog:stored.body.catalog};
+/** The model input of an explanation, rebuilt from its 'explain_facts' manifest alone (frozen facts + frozen catalog names). */
+export function modelInput(m:StrategyManifest,locale:'zh'|'en'):{system:string;user:string}{
+ return {system:promptText(locale),user:userMessage(locale,renderFacts(explanationFacts(m),locale,m.catalog))};
+}
+/** Fact manifest of the subject, stored before the claim. Review subjects are result ids (StrategyDb.reviewResult). */
+async function subjectManifest(d:ExplainDeps,port:StrategyReadPort,codeVersion:string,body:ExplainBody):Promise<StrategyManifest|null>{
+ if(body.subject.kind==='snapshot')return buildSnapshotFactsManifest(port,body.subject.id,codeVersion);
+ const result=await d.db.reviewResult(body.subject.id);if(!result)return null;
+ const review=await d.db.manifest(result.manifest_id);if(!review)return null;
+ return reviewFactsManifest(review,result,codeVersion);
 }
 export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unknown):Promise<ExplainResponse>{
  // step 1 (after session + flag in the route): body + payload hash
@@ -6452,11 +7026,14 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   try{return {status:200,body:(await d.db.claimExplanation({...claimArgs,manifestId:REPLAY_MANIFEST_ID})).projection};}
   catch(e){if(e instanceof StrategyDbError&&e.code==='payload_conflict')return err(409,'payload_conflict');throw e;}
  }
- // step 3: foundation and subject
+ // step 3: code version, foundation and subject (a replay above needs none of them)
+ if(!d.codeVersion)return err(503,'code_version_unavailable');
  if(!d.port)return err(503,'macro_foundation_unavailable');
- const subject=await subjectFacts(d,d.port,body);
- if(!subject)return err(404,'subject_not_found');
- if(subject.facts.length===0)return err(422,'no_facts');
+ const built=await subjectManifest(d,d.port,d.codeVersion,body);
+ if(!built)return err(404,'subject_not_found');
+ if(explanationFacts(built).length===0)return err(422,'no_facts');
+ const stored=await d.db.putManifest(built);
+ const facts=explanationFacts(stored.body),catalog=stored.body.catalog;
  // step 4: model and quota (perspectives route order: resolve first, BYO skips the feature quota)
  const llm=await d.llm.resolve();
  if(!llm)return err(503,'llm_not_configured');
@@ -6466,36 +7043,56 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
  }
  // step 5: claim — only 'claimed' continues to billing and the model
  let claim:Awaited<ReturnType<StrategyDb['claimExplanation']>>;
- try{claim=await d.db.claimExplanation({...claimArgs,manifestId:subject.manifestId});}
+ try{claim=await d.db.claimExplanation({...claimArgs,manifestId:stored.manifest_id});}
  catch(e){if(e instanceof StrategyDbError&&e.code==='payload_conflict')return err(409,'payload_conflict');throw e;}
  if(claim.outcome==='existing')return {status:200,body:claim.projection};
  const base={explanationId:claim.explanation_id,provider:llm.provider,model:llm.model,promptVersion:PROMPT_VERSION,validatorVersion:VALIDATOR_VERSION};
  const started=d.now().getTime();
- // step 6: usage run
- try{await d.llm.begin(claim.usage_audit_key,{provider:llm.provider,model:llm.model,byo:llm.byo,subject_kind:body.subject.kind,subject_id:body.subject.id,locale:body.locale});}
+ const id=claim.explanation_id,key=claim.usage_audit_key;
+ /** Durable completion (spec §4.4 macro_record_completion). A failure here does not stop finish / finalize; without a
+  *  recorded payload markFinalized refuses and ops reconcile the row by its audit key (runbook §4). */
+ const record=async(rawOutput:unknown,finalizePayload:Record<string,unknown>)=>{try{await d.db.recordCompletion({explanationId:id,rawOutput,finalizePayload});}catch{/* see above */}};
+ /** finalize with the recorded payload verbatim; markFinalized only after it succeeded. Never throws. */
+ const settle=async(finalizePayload:Record<string,unknown>)=>{
+  try{await d.llm.finalize(key,finalizePayload);}catch{return;}   // finalized stays false: the ops retry replays finalize_payload
+  try{await d.db.markFinalized(id);}catch{/* finalize succeeded; the flag is retried by the ops script (finalize is idempotent per audit key) */}
+ };
+ // step 6: usage run. A begin error is ambiguous (the run may have committed): record and settle a failed payload under the same key.
+ try{await d.llm.begin(key,{provider:llm.provider,model:llm.model,byo:llm.byo,subject_kind:body.subject.kind,subject_id:body.subject.id,locale:body.locale});}
  catch(e){
   const code=costErrorCode(e)??'usage_audit_unavailable';
-  const projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'begin',code},rendered:null,failureCodes:[code],accounting:null});
-  await d.db.markFinalized(claim.explanation_id);   // no usage run was opened: nothing to settle
+  const payload=d.llm.finalizePayload('failed',[]);
+  await record(null,payload);
+  let projection:ExplanationProjection;
+  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'begin',code},rendered:null,failureCodes:[code],accounting:null});}
+  finally{await settle(payload);}
   return err(costErrorStatus(code),code,projection);
  }
- // step 7: metered model call
- const factLines=renderFacts(subject.facts,body.locale,subject.catalog);
+ // step 7: metered model call, then the durable completion before anything else can fail
+ const input=modelInput(stored.body,body.locale);
  let content:string;let accounting:unknown;
- try{({content,accounting}=await d.llm.call(promptText(body.locale),userMessage(body.locale,factLines)));}
+ try{({content,accounting}=await d.llm.call(input.system,input.user));}
  catch(e){
   const code=costErrorCode(e)??'provider_error';const acc=e instanceof LlmCallError?e.accounting:null;
-  const projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'call',code,message:e instanceof Error?e.message:String(e)},rendered:null,failureCodes:[code],accounting:acc});
-  try{await d.llm.finalize(claim.usage_audit_key,'failed',acc===null?[]:[acc]);await d.db.markFinalized(claim.explanation_id);}catch{/* left finalized=false for the ops retry */}
+  const payload=d.llm.finalizePayload('failed',acc===null?[]:[acc]);
+  await record(null,payload);
+  let projection:ExplanationProjection;
+  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'call',code,message:e instanceof Error?e.message:String(e)},rendered:null,failureCodes:[code],accounting:acc});}
+  finally{await settle(payload);}
   return {status:200,body:projection};
  }
- // step 8: validate → accepted | rejected (both are completed calls)
- const result=validateExplanation(parseModelContent(content),new Set(subject.facts.map(f=>f.fact_id)));
- const validation={validator_version:VALIDATOR_VERSION,ok:result.ok,failures:result.failures,elapsed_ms:d.now().getTime()-started};
- const projection=await d.db.finishExplanation(result.ok
-  ?{...base,state:'accepted',rawOutput:{content},validation,rendered:renderExplanation(subject.facts,result.output,body.locale,subject.catalog),failureCodes:[],accounting}
-  :{...base,state:'rejected',rawOutput:{content},validation,rendered:null,failureCodes:result.codes,accounting});
- try{await d.llm.finalize(claim.usage_audit_key,'completed',[accounting]);await d.db.markFinalized(claim.explanation_id);}catch{/* left finalized=false for the ops retry */}
+ const payload=d.llm.finalizePayload('completed',[accounting]);
+ const rawOutput={content};
+ await record(rawOutput,payload);
+ // step 8: validate → accepted | rejected (both are completed calls); finalize runs even if this throws
+ let projection:ExplanationProjection;
+ try{
+  const result=validateExplanation(parseModelContent(content),new Set(facts.map(f=>f.fact_id)));
+  const validation={validator_version:VALIDATOR_VERSION,ok:result.ok,failures:result.failures,elapsed_ms:d.now().getTime()-started};
+  projection=await d.db.finishExplanation(result.ok
+   ?{...base,state:'accepted',rawOutput,validation,rendered:renderExplanation(facts,result.output,body.locale,catalog),failureCodes:[],accounting}
+   :{...base,state:'rejected',rawOutput,validation,rendered:null,failureCodes:result.codes,accounting});
+ }finally{await settle(payload);}
  return {status:200,body:projection};
 }
 ```
@@ -6503,7 +7100,7 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
 - [ ] **Step 12: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/explain-request.test.ts src/lib/macro/strategy/deviations.test.ts src/lib/macro/strategy/f4-client.test.ts`
-Expected: PASS，`Tests  51 passed (51)`。
+Expected: PASS，`Tests  62 passed (62)`。
 
 再跑整个模块，确认 Task 9–11 与前序任务一起通过：
 
@@ -6529,9 +7126,13 @@ f4-client.ts reads F4's public routes on this site with a 3 s timeout and
 maps every failure to F4Unavailable. deviations.ts pages card history to an
 empty page (cap 5000 → incomplete) and classifies registered vs settled inputs
 exhaustively. explain-request.ts orchestrates the POST with injected deps:
-replay before foundation and subject checks, 409 on payload conflict, quota
-for non-BYO only, claim before billing, rejected outputs billed as completed,
-finalize failures leave the response intact for the ops retry.
+replay before code version, foundation and subject checks, 409 on payload
+conflict, quota for non-BYO only, claim before billing, durable completion
+(raw output + exact finalize payload) before validation, finalize in a finally
+path even when finish fails, ambiguous begin failures settled as failed under
+the same audit key, rejected outputs billed as completed, review subjects as
+immutable result ids, model input rebuilt from the frozen fact manifest.
+History paging stops as incomplete on a tie at a full page boundary.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -6543,13 +7144,13 @@ EOF
 Exports from earlier tasks used here (verified by the integrator: Tasks 1–14 extracted from this plan into one scratch tree compile with `tsc --noEmit`, pass ESLint and their unit suites):
 
 - Task 2: `flags.ts` `strategyEnabled(env?)`, `judgmentsEnabled(env?)` (`'1'` = on); `port.ts` `strategyPort():StrategyReadPort|null`, `StrategyReadPort`.
-- Task 3: `db.ts` `StrategyDb`, `supabaseStrategyDb({admin,anon,session?})`, `memoryStrategyDb()` with `_userId` (claims need an `explain_facts` manifest; `publishReview` needs a `review` manifest and its hash).
-- Task 6: `transmission.ts` `buildTransmissionManifest(port,{now,codeVersion}):Promise<StrategyManifest|null>` (null = no active snapshot in either region), `buildTransmission(stored,region)`; `playbooks.ts` `buildPlaybooks(manifest,region)`, `selectF4Mark({card,detail,snapshotId})`; `data/playbooks-v1.ts` `PLAYBOOK_DISCLAIMER_V1`; `f4-types.ts`.
-- Task 7: `policy-response.ts` `buildPolicyResponseManifest(port,{now,codeVersion})`, `buildPolicyResponse(stored,window)`.
-- Task 8: `cycle-table.ts` `buildCycleTableManifest(port,{now,codeVersion})`, `buildCycleTable(stored,boundary)`.
+- Task 3: `db.ts` `StrategyDb` (incl. `reviewResult`, `recordCompletion`, `expireExplanations`), `supabaseStrategyDb({admin,anon,session?})`, `memoryStrategyDb({now?})` with `_userId` and `_run` (claims need an `explain_facts` manifest; `publishReview` needs a `review` manifest and its hash).
+- Task 6: `transmission.ts` `buildTransmissionManifest(port,{now,codeVersion,region}):Promise<StrategyManifest|null>` (null = no active snapshot in either region), `buildTransmission(stored)` (region from `params`); `playbooks.ts` `buildPlaybooks(manifest,region)`, `selectF4Mark({card,detail,snapshotId})`; `data/playbooks-v1.ts` `PLAYBOOK_DISCLAIMER_V1`; `f4-types.ts`.
+- Task 7: `policy-response.ts` `buildPolicyResponseManifest(port,{now,codeVersion,window})`, `buildPolicyResponse(stored)` (window from `params`).
+- Task 8: `cycle-table.ts` `buildCycleTableManifest(port,{now,codeVersion,boundary})`, `buildCycleTable(stored)` (boundary from `params`).
 - Task 9: `review.ts` `runReview({port,db,codeVersion},region,month,{preview}):Promise<ReviewReceipt>` (never throws; a failure comes back as `outcome:'failed'` with `error`).
 - Task 10: `explain-render.ts` `renderFact(fact,locale,names)`, `namesFrom(catalog)`; `explain-validate.ts` `FORBIDDEN_TERMS`.
-- Task 11: `f4-client.ts` `createF4Client()`, `F4Client`, `F4CardLite`; `deviations.ts` `listDeviationCases(f4,region)`; `explain-request.ts` `handleExplainRequest({db,port,llm,now,codeVersion},userId,body):Promise<{status,body}>`, `LlmDeps`, `LlmCallError(message,accounting)`. Review explanation subjects are `'<US|CN>:<YYYY-MM>'`.
+- Task 11: `f4-client.ts` `createF4Client()`, `F4Client`, `F4CardLite`; `deviations.ts` `listDeviationCases(f4,region)`; `explain-request.ts` `handleExplainRequest({db,port,llm,now,codeVersion:string|null},userId,body):Promise<{status,body}>`, `LlmDeps` (with `finalizePayload` and `finalize(key,payload)`), `LlmCallError(message,accounting)`, `modelInput(manifest,locale)`. Review explanation subjects are immutable review `result_id`s.
 
 Test files can import only `.ts` modules (vitest runs `src/**/*.test.ts` in node, and a `.test.ts` cannot import a `.tsx`). Every decision a component makes lives in `strategy-view-model.ts` and is tested there; the `.tsx` files are thin renderers checked by `tsc`, ESLint and the page structure test.
 
@@ -6575,11 +7176,11 @@ The worktree has no installed `node_modules` of its own. If `npm test` cannot fi
 Design decisions (spec §8, §9.1, §6.2, §6.3):
 - **Decision order** in every read route: session (`getServerSupabase().auth.getUser()`; no user or any throw → 401 `unauthorized`) → `strategyEnabled()` (404 `strategy_disabled`) → `strategyPort()` (null → 503 `macro_foundation_unavailable`) → parameters (whitelist; an unknown or repeated parameter → 400 `invalid_parameter:<name>`) → judgment layer. `POST /explanations` stops after the flag and hands the body to `handleExplainRequest`, whose replay runs before its own foundation check, so the route passes `strategyPort()` even when it is null. The cron route checks the bearer first, then the flag, then the port, then parameters.
 - **Combined routes** (transmission, review detail) always answer 200 once the facts are available, with `judgment_status`. `judgmentSection()` builds an F4 client only when `judgmentsEnabled()`; any F4 throw, a missing card or a `null` from `selectF4Mark` → `'unavailable'`. With the layer off the body has no `f4` key and F4 is never called. Only `/deviations` answers 404 `judgments_disabled` / 503 `judgments_unavailable`.
-- **Manifests** (Part B, "One manifest per kind"): each fact route builds the manifest body of its kind with `{now:new Date(), codeVersion}`, stores it with `putManifest` (idempotent by hash), then calls the pure view builder with the stored manifest and the view parameter (region / window / boundary). The F4 mark uses `stored.body.snapshots[region]?.snapshot_id ?? null`. `buildTransmissionManifest` returning `null` → 404 `no_published_snapshot` (the page shows "尚无发布快照"). The process LRU of spec §4.5 is not built here (已知偏差与开放项 D1).
-- **Code version**: `resolveCodeVersion({allowGit:false})`. When it is null the manifest-writing routes (transmission, policy-response, cycle-table, explanations POST) and the cron answer 503 `code_version_unavailable`, as `/api/cron/facts-sync` does, instead of freezing `'unknown'` into manifest identities (已知偏差与开放项 D2).
+- **Manifests** (Part B, "One manifest per kind"): each fact route builds the manifest body of its kind with `{now:new Date(), codeVersion, region | window | boundary}` (the parameter is frozen into `params`, plan audit #3), stores it with `putManifest` (idempotent by hash), then calls the pure view builder with the stored manifest only (it reads the parameter from `body.params`). The F4 mark uses `stored.body.snapshots[region]?.snapshot_id ?? null`. `buildTransmissionManifest` returning `null` → 404 `no_published_snapshot` (the page shows "尚无发布快照"). The process LRU of spec §4.5 is not built here (已知偏差与开放项 D1).
+- **Code version**: `resolveCodeVersion({allowGit:false})`. When it is null the manifest-writing routes (transmission, policy-response, cycle-table) and the cron answer 503 `code_version_unavailable`, as `/api/cron/facts-sync` does; explanations POST passes `codeVersion: null` into the handler, which answers 503 only after its idempotent replay (plan audit #9), instead of freezing `'unknown'` into manifest identities (已知偏差与开放项 D2).
 - **Review detail** returns `{result, manifest_id, generation, names, judgment_status, f4?}`. `names` is the review manifest's frozen catalog `{id, name}` list, so the UI can call `renderFact(fact, locale, namesFrom(names))`. The judgment section reads `latestRegimeCard(region, {asOf: reviewAsOfDate(month)})` (the review cutoff date, the 3rd of the next month; F4 `view=as_known`), then `judgmentDetail`, and keeps only `selectF4Mark({card, detail, snapshotId: null}).summary`: number-free and never stored.
-- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are `<US|CN>:<YYYY-MM>` (已知偏差与开放项 D3).
-- **Production `LlmDeps`** (`llm-deps.ts`) makes the perspectives route's calls in the same order. It uses `resolveLlm()` (the perspectives route's call; `resolveUserLlm()` would only ever return BYO keys), `checkQuota('perspectives')`, the same limiter choice built right before `beginUsageRun(userId, key, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`, then one `limiter.runWithBudgetRetry(() => runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call: () => chatResolved(...)}))`, `meteredUsageFromError` on failure, and `finalizeUsageRun` with the field mapping of the route's `finalizeAccounting` minus `ticker`. `budgetExempt` is true when the quota answered `limit === -1`. A failed call throws `LlmCallError(e.message, meteredUsageFromError(e) ?? null)`, so a cost error code such as `daily_cost_exhausted` stays the message.
+- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion: codeVersionOrNull()}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → first `db.expireExplanations(userId)` (admin RPC `macro_expire_explanations`: the caller's runs left `running` for more than five minutes become abandoned → projection failed, plan audit #14), then `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are immutable review result ids (uuid; 已知偏差与开放项 D3).
+- **Production `LlmDeps`** (`llm-deps.ts`) makes the perspectives route's calls in the same order. It uses `resolveLlm()` (the perspectives route's call; `resolveUserLlm()` would only ever return BYO keys), `checkQuota('perspectives')`, the same limiter choice built right before `beginUsageRun(userId, key, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`, then one `limiter.runWithBudgetRetry(() => runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call: () => chatResolved(...)}))`, `meteredUsageFromError` on failure, and `finalizeUsageRun` with the field mapping of the route's `finalizeAccounting` minus `ticker`. That body is built once by `finalizePayload(status, accounting)` (aggregate + the pricing version and FX in force at completion, JSON-safe) and stored on the run row; `finalize(key, payload)` sends a payload verbatim, so a retry after a pricing / FX change replays what the request computed (plan audit #8). `budgetExempt` is true when the quota answered `limit === -1`. A failed call throws `LlmCallError(e.message, meteredUsageFromError(e) ?? null)`, so a cost error code such as `daily_cost_exhausted` stays the message.
 - **Cron**: `GET /api/cron/macro-review` with `authorizedCronRequest(header, CRON_SECRET)`. The default month is the newest closed month — a month is closed once its review cutoff (`monthCutoff`, the 3rd of the next month 00:00:00Z) has passed, so the run on the 3rd at 06:00 UTC targets the previous month — both regions in order US, CN. `?month=YYYY-MM` must be a closed month ≥ 2000-01; `?preview` accepts only `1`. The receipt keeps `runReview`'s fields but replaces a failed unit's `error` message with `code:'review_failed'` (codes only over HTTP, as facts-sync does); any failed unit makes the response 500.
 - Errors are `{error:{code,message}}` with `Cache-Control: no-store`. Reads send `private, max-age=300`; explanations send `private, no-store`.
 
@@ -6589,7 +7190,7 @@ Create `src/lib/macro/strategy/llm-deps.test.ts`:
 
 ```ts
 // Production LlmDeps (spec §6.3): the perspectives-route metering calls in order, BYO vs platform, fail-open quota,
-// failure accounting carried on the thrown error, finalize aggregates.
+// failure accounting carried on the thrown error, finalizePayload aggregates once (JSON-safe), finalize sends it verbatim.
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {PRICING_VERSION} from '@/lib/billing/llm-pricing';
 import type {MeteredUsage} from '@/lib/billing/metered-llm';
@@ -6636,9 +7237,9 @@ describe('productionLlmDeps',()=>{
   await expect(d.checkQuota()).rejects.toThrow('not authenticated');
  });
  it('begin builds the persona limiter for platform keys, then beginUsageRun with pricing metadata',async()=>{
-  const d=productionLlmDeps('u1');await d.resolve();await d.begin('macro-explain:e1',{});
+  const d=productionLlmDeps('u1');await d.resolve();await d.begin('00000000-0000-4000-8000-0000000000e1',{});
   expect(m.persona).toHaveBeenCalledWith({provider:'deepseek',model:'deepseek-chat',maxOutputTokens:EXPLAIN_MAX_OUTPUT_TOKENS});
-  expect(m.begin).toHaveBeenCalledWith('u1','macro-explain:e1','perspectives',{provider:'deepseek',model:'deepseek-chat',pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,byo:false});
+  expect(m.begin).toHaveBeenCalledWith('u1','00000000-0000-4000-8000-0000000000e1','perspectives',{provider:'deepseek',model:'deepseek-chat',pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,byo:false});
   expect(m.persona.mock.invocationCallOrder[0]).toBeLessThan(m.begin.mock.invocationCallOrder[0]);
  });
  it('begin for BYO uses the plain limiter and no pricing metadata; begin errors propagate with their code',async()=>{
@@ -6674,12 +7275,24 @@ describe('productionLlmDeps',()=>{
   m.run.mockRejectedValueOnce('weird');m.fromErr.mockReturnValueOnce(undefined);
   await expect(d.call('s','u')).rejects.toMatchObject({message:'weird',accounting:null});
  });
- it('finalize sends the aggregate of the accounting rows, or the resolved provider with zero usage',async()=>{
+ it('finalizePayload is the aggregate of the accounting rows, or the resolved provider with zero usage; finalize sends a payload verbatim',async()=>{
   const d=productionLlmDeps('u1');await d.resolve();
-  await d.finalize('k','completed',[usage(),usage({costMicrormb:200}),null]);
-  expect(m.finalize).toHaveBeenCalledWith('u1','k','perspectives',{provider:'deepseek',model:'deepseek-chat',inputTokens:200,cacheHitInputTokens:20,cacheMissInputTokens:180,outputTokens:100,costMicrormb:500,pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,usageEstimated:false,byo:false,status:'completed'});
-  await d.finalize('k2','failed',[]);
-  expect(m.finalize).toHaveBeenLastCalledWith('u1','k2','perspectives',{provider:'deepseek',model:'deepseek-chat',inputTokens:0,cacheHitInputTokens:0,cacheMissInputTokens:0,outputTokens:0,costMicrormb:0,pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,usageEstimated:true,byo:false,status:'failed'});
+  const p=d.finalizePayload('completed',[usage(),usage({costMicrormb:200}),null]);
+  expect(p).toEqual({provider:'deepseek',model:'deepseek-chat',inputTokens:200,cacheHitInputTokens:20,cacheMissInputTokens:180,outputTokens:100,costMicrormb:500,pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,usageEstimated:false,byo:false,status:'completed'});
+  expect(m.finalize).not.toHaveBeenCalled();                                   // computing the payload settles nothing
+  await d.finalize('k',p);
+  expect(m.finalize).toHaveBeenCalledWith('u1','k','perspectives',p);
+  const failed=d.finalizePayload('failed',[]);
+  expect(failed).toEqual({provider:'deepseek',model:'deepseek-chat',inputTokens:0,cacheHitInputTokens:0,cacheMissInputTokens:0,outputTokens:0,costMicrormb:0,pricingVersion:PRICING_VERSION,usdCnyMicros:7_200_000,usageEstimated:true,byo:false,status:'failed'});
+  await d.finalize('k2',JSON.parse(JSON.stringify(failed)));                  // a payload read back from the run row
+  expect(m.finalize).toHaveBeenLastCalledWith('u1','k2','perspectives',failed);
+ });
+ it('BYO payloads carry no pricing version or FX and survive a JSON round trip unchanged',async()=>{
+  m.resolve.mockResolvedValueOnce(USER_LLM);
+  const d=productionLlmDeps('u1');await d.resolve();
+  const p=d.finalizePayload('failed',[]);
+  expect(p).toEqual({provider:'openai',model:'gpt-x',inputTokens:0,cacheHitInputTokens:0,cacheMissInputTokens:0,outputTokens:0,costMicrormb:0,usageEstimated:true,byo:true,status:'failed'});
+  expect(JSON.parse(JSON.stringify(p))).toEqual(p);
  });
 });
 ```
@@ -6700,13 +7313,16 @@ Create `src/lib/macro/strategy/llm-deps.ts`:
 // checkQuota('perspectives') only for platform keys, a throw other than 'not authenticated' fails open (→ null), and
 // limit -1 marks the caller budget-exempt; the limiter (createPersonaConcurrencyLimiter for env keys, else
 // createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP)) is built right before beginUsageRun(feature 'perspectives');
-// one limiter.runWithBudgetRetry(runMeteredLlmCall(chatResolved)); meteredUsageFromError on failure; finalizeUsageRun
-// with the aggregate of the accounting rows (the perspectives finalizeAccounting body, without ticker).
+// one limiter.runWithBudgetRetry(runMeteredLlmCall(chatResolved)); meteredUsageFromError on failure. finalizePayload builds
+// the exact finalizeUsageRun body once, at completion (the perspectives finalizeAccounting body, without ticker: aggregate
+// of the accounting rows plus the pricing version and FX in force at that moment, status included; JSON-safe, undefined
+// keys dropped); it is stored on the run row (macro_record_completion) and finalize sends a payload verbatim, so an ops
+// retry after a pricing or FX change replays exactly what the request computed.
 // One instance serves one request. A failed call throws Task 11's LlmCallError(message, meteredUsageFromError(e)): the
 // message keeps a cost error code (daily_cost_exhausted …) when that is what failed.
 import {chatResolved} from '@/lib/data/sources/llm';
 import {resolveLlm,type ResolvedLlm} from '@/lib/llm/resolve';
-import {beginUsageRun,checkQuota,finalizeUsageRun} from '@/lib/billing/quota';
+import {beginUsageRun,checkQuota,finalizeUsageRun,type RecordUsageMeta} from '@/lib/billing/quota';
 import {aggregateMeteredUsage,meteredUsageFromError,runMeteredLlmCall,type MeteredUsage} from '@/lib/billing/metered-llm';
 import {getBudgetConfig} from '@/lib/billing/cost-budget';
 import {createConcurrencyLimiter,createPersonaConcurrencyLimiter,PERSONA_CONCURRENCY_HARD_CAP,type ConcurrencyLimiter} from '@/lib/billing/llm-concurrency';
@@ -6748,11 +7364,11 @@ export function productionLlmDeps(userId:string):LlmDeps{
     throw new LlmCallError(e instanceof Error?e.message:String(e),meteredUsageFromError(e)??null);
    }
   },
-  async finalize(usageAuditKey,status,accounting){
+  finalizePayload(status,accounting){
    const rows=accounting.filter(isMeteredUsage);
    const aggregate=rows.length>0?aggregateMeteredUsage(rows):null;
    const budget=getBudgetConfig(),byo=llm?.source==='user';
-   await finalizeUsageRun(userId,usageAuditKey,'perspectives',{
+   const body:RecordUsageMeta={
     provider:aggregate?.provider??llm?.provider??'unknown',model:aggregate?.model??llm?.model??'unknown',
     inputTokens:aggregate?.usage.inputTokens??0,cacheHitInputTokens:aggregate?.usage.cacheHitInputTokens??0,
     cacheMissInputTokens:aggregate?.usage.cacheMissInputTokens??0,outputTokens:aggregate?.usage.outputTokens??0,
@@ -6760,7 +7376,11 @@ export function productionLlmDeps(userId:string):LlmDeps{
     pricingVersion:aggregate?.pricingVersion??(byo?undefined:PRICING_VERSION),
     usdCnyMicros:aggregate?.usdCnyMicros??(byo?undefined:budget.usdCnyMicros),
     usageEstimated:aggregate?.usageEstimated??true,byo:aggregate?.byo??byo,status,
-   });
+   };
+   return JSON.parse(JSON.stringify(body)) as Record<string,unknown>;
+  },
+  async finalize(usageAuditKey,payload){
+   await finalizeUsageRun(userId,usageAuditKey,'perspectives',payload as unknown as RecordUsageMeta);
   },
  };
 }
@@ -6769,7 +7389,7 @@ export function productionLlmDeps(userId:string):LlmDeps{
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `npm test -- src/lib/macro/strategy/llm-deps.test.ts`
-Expected: PASS, `Tests  8 passed (8)`.
+Expected: PASS, `Tests  9 passed (9)`.
 
 - [ ] **Step 5: Write the failing route test (capability matrix, parameters, judgment fields, cron)**
 
@@ -6816,7 +7436,7 @@ import {GET as reviewDetail} from './reviews/[region]/[month]/route';
 import {GET as reviewsIndex} from './reviews/route';
 import {GET as transmission} from './transmission/route';
 
-const USER='11111111-1111-4111-8111-111111111111',REQ='22222222-2222-4222-8222-222222222222',MID='33333333-3333-4333-8333-333333333333';
+const USER='11111111-1111-4111-8111-111111111111',REQ='22222222-2222-4222-8222-222222222222',MID='33333333-3333-4333-8333-333333333333',RID='44444444-4444-4444-8444-444444444444';
 const PORT={tag:'port'};
 const U='https://alpha.example/api/macro/strategy';
 const get=(path:string)=>new Request(`${U}${path}`);
@@ -6850,9 +7470,9 @@ const FACT_ROUTES:[string,Call][]=[
  ['reviews',()=>reviewsIndex(get('/reviews?region=US'))],
  ['review',()=>reviewDetail(get('/reviews/US/2026-10'),{params:Promise.resolve({region:'US',month:'2026-10'})})],
  ['deviations',()=>deviations(get('/deviations?region=US'))],
- ['explanations GET',()=>listExplanations(get('/explanations?subject_kind=review&subject_id=US:2026-10'))],
+ ['explanations GET',()=>listExplanations(get(`/explanations?subject_kind=review&subject_id=${RID}`))],
 ];
-const EXPLAIN_BODY={request_id:REQ,subject:{kind:'review',id:'US:2026-10'},locale:'zh'};
+const EXPLAIN_BODY={request_id:REQ,subject:{kind:'review',id:RID},locale:'zh'};
 const ALL_ROUTES:[string,Call][]=[...FACT_ROUTES,['explanations POST',()=>postExplanation(post(EXPLAIN_BODY))]];
 const COMPUTE=()=>[m.trManifest,m.prManifest,m.ctManifest,m.listDeviationCases,m.handle,m.createF4Client];
 const ENV_KEYS=['MACRO_STRATEGY_ENABLED','MACRO_JUDGMENTS_ENABLED','CRON_SECRET'] as const;
@@ -6928,16 +7548,16 @@ describe('parameters (whitelist, 400 invalid_parameter:<name>)',()=>{
   ['review region',()=>reviewDetail(get('/reviews/EU/2026-10'),{params:Promise.resolve({region:'EU',month:'2026-10'})}),'invalid_parameter:region'],
   ['deviations region',()=>deviations(get('/deviations?region=us')),'invalid_parameter:region'],
   ['explanations kind',()=>listExplanations(get('/explanations?subject_kind=x&subject_id=a')),'invalid_parameter:subject_kind'],
-  ['explanations review id',()=>listExplanations(get(`/explanations?subject_kind=review&subject_id=${REQ}`)),'invalid_parameter:subject_id'],
+  ['explanations review id (a pointer key is not a result id)',()=>listExplanations(get('/explanations?subject_kind=review&subject_id=US:2026-10')),'invalid_parameter:subject_id'],
  ];
  it.each(BAD)('%s',async(_n,call,code)=>{
   const r=await call();
   expect(r.status).toBe(400);expect(await codeOf(r)).toBe(code);
   for(const f of COMPUTE())expect(f).not.toHaveBeenCalled();
  });
- it('defaults: window 3, boundary event_day',async()=>{
+ it('defaults: window 3, boundary event_day (frozen into the manifest params)',async()=>{
   await policyResponse(get('/policy-response'));await cycleTable(get('/cycle-table'));
-  expect(m.buildPolicyResponse.mock.calls[0][1]).toBe(3);expect(m.buildCycleTable.mock.calls[0][1]).toBe('event_day');
+  expect(m.prManifest.mock.calls[0][1]).toMatchObject({window:3});expect(m.ctManifest.mock.calls[0][1]).toMatchObject({boundary:'event_day'});
  });
  it('explanations POST rejects a non-JSON body',async()=>{
   const r=await postExplanation(new Request(`${U}/explanations`,{method:'POST',body:'{'}));
@@ -6945,10 +7565,17 @@ describe('parameters (whitelist, 400 invalid_parameter:<name>)',()=>{
  });
  it('manifest-writing routes refuse without a code version',async()=>{
   m.code.mockReturnValue(null);
-  for(const call of [()=>transmission(get('/transmission?region=US')),()=>policyResponse(get('/policy-response')),()=>cycleTable(get('/cycle-table')),()=>postExplanation(post(EXPLAIN_BODY))]){
+  for(const call of [()=>transmission(get('/transmission?region=US')),()=>policyResponse(get('/policy-response')),()=>cycleTable(get('/cycle-table'))]){
    const r=await call();expect(r.status).toBe(503);expect(await codeOf(r)).toBe('code_version_unavailable');
   }
-  expect(m.trManifest).not.toHaveBeenCalled();expect(m.handle).not.toHaveBeenCalled();
+  expect(m.trManifest).not.toHaveBeenCalled();
+ });
+ it('explanations POST without a code version still reaches the handler (a replay needs none; the handler answers 503 after it)',async()=>{
+  m.code.mockReturnValue(null);
+  m.handle.mockResolvedValueOnce({status:200,body:{explanation_id:'e0',state:'accepted'}});
+  const r=await postExplanation(post(EXPLAIN_BODY));
+  expect(r.status).toBe(200);
+  expect(m.handle.mock.calls[0][0]).toMatchObject({codeVersion:null});
  });
 });
 
@@ -6961,10 +7588,10 @@ describe('fact routes',()=>{
   expect('f4' in out).toBe(false);
   expect(JSON.stringify(out)).not.toMatch(/judgment_id|f4Mark|contributions|distribution|margin_pp/);
   expect(m.createF4Client).not.toHaveBeenCalled();expect(m.selectF4Mark).not.toHaveBeenCalled();
-  expect(m.trManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123'});
+  expect(m.trManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',region:'US'});
   const stored=m.buildTransmission.mock.calls[0][0];
   expect(stored).toEqual(await db.manifest(stored.manifest_id));
-  expect(m.buildTransmission.mock.calls[0][1]).toBe('US');
+  expect(m.buildTransmission.mock.calls[0]).toHaveLength(1);   // the view reads the region from the manifest params
   expect(m.buildPlaybooks).toHaveBeenCalledWith(stored.body,'US');
  });
  it('transmission, judgment layer on: ok carries {mark, summary} for the manifest snapshot of the region',async()=>{
@@ -6996,11 +7623,12 @@ describe('fact routes',()=>{
  it('policy-response and cycle-table: stored manifest → view for the requested window / boundary',async()=>{
   let r=await policyResponse(get('/policy-response?window=6'));
   expect(r.status).toBe(200);expect(await r.json()).toEqual(PV);
-  expect(m.prManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123'});
-  expect(m.buildPolicyResponse.mock.calls[0][0]).toMatchObject({body:body('policy_response')});expect(m.buildPolicyResponse.mock.calls[0][1]).toBe(6);
+  expect(m.prManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',window:6});
+  expect(m.buildPolicyResponse.mock.calls[0]).toEqual([expect.objectContaining({body:body('policy_response')})]);
   r=await cycleTable(get('/cycle-table?boundary=month_end'));
   expect(r.headers.get('cache-control')).toBe('private, max-age=300');
-  expect(m.buildCycleTable.mock.calls[0][0]).toMatchObject({body:body('cycle_table')});expect(m.buildCycleTable.mock.calls[0][1]).toBe('month_end');
+  expect(m.ctManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',boundary:'month_end'});
+  expect(m.buildCycleTable.mock.calls[0]).toEqual([expect.objectContaining({body:body('cycle_table')})]);
  });
  it('manifest: stored body by id; unknown id → 404 manifest_not_found',async()=>{
   const stored=await db.putManifest(MANIFEST);
@@ -7036,15 +7664,28 @@ describe('fact routes',()=>{
   const down=await call();
   expect(down.status).toBe(200);const b=await json(down);expect(b.judgment_status).toBe('unavailable');expect('f4' in b).toBe(false);
  });
- it('explanations GET returns only the caller\'s projections, private no-store',async()=>{
+ it('explanations GET returns only the caller\'s projections of that result id, private no-store',async()=>{
   const facts=await db.putManifest(body('explain_facts'));
-  await db.claimExplanation({userId:USER,requestId:REQ,payloadHash:'a'.repeat(64),subjectKind:'review',subjectId:'US:2026-10',locale:'zh',manifestId:facts.manifest_id});
-  await db.claimExplanation({userId:'99999999-9999-4999-8999-999999999999',requestId:REQ,payloadHash:'b'.repeat(64),subjectKind:'review',subjectId:'US:2026-10',locale:'zh',manifestId:facts.manifest_id});
+  await db.claimExplanation({userId:USER,requestId:REQ,payloadHash:'a'.repeat(64),subjectKind:'review',subjectId:RID,locale:'zh',manifestId:facts.manifest_id});
+  await db.claimExplanation({userId:'99999999-9999-4999-8999-999999999999',requestId:REQ,payloadHash:'b'.repeat(64),subjectKind:'review',subjectId:RID,locale:'zh',manifestId:facts.manifest_id});
+  await db.claimExplanation({userId:USER,requestId:MID,payloadHash:'c'.repeat(64),subjectKind:'review',subjectId:'55555555-5555-4555-8555-555555555555',locale:'zh',manifestId:facts.manifest_id});
   db._userId(USER);
-  const r=await listExplanations(get('/explanations?subject_kind=review&subject_id=US:2026-10'));
+  const r=await listExplanations(get(`/explanations?subject_kind=review&subject_id=${RID}`));
   expect(r.headers.get('cache-control')).toBe('private, no-store');
   const items=(await json(r)).items as {state:string;subject_id:string}[];
-  expect(items).toHaveLength(1);expect(items[0]).toMatchObject({state:'running',subject_id:'US:2026-10'});
+  expect(items).toHaveLength(1);expect(items[0]).toMatchObject({state:'running',subject_id:RID});
+ });
+ it('explanations GET expires the caller\'s dead runs first: a reload after five minutes shows failed {abandoned}, never running',async()=>{
+  let t=Date.parse('2026-11-07T00:00:00Z');db=memoryStrategyDb({now:()=>new Date(t)});m.db=db;
+  const facts=await db.putManifest(body('explain_facts'));
+  await db.claimExplanation({userId:USER,requestId:REQ,payloadHash:'a'.repeat(64),subjectKind:'review',subjectId:RID,locale:'zh',manifestId:facts.manifest_id});
+  db._userId(USER);
+  const expire=vi.spyOn(db,'expireExplanations');
+  const call=async()=>((await json(await listExplanations(get(`/explanations?subject_kind=review&subject_id=${RID}`)))).items as {state:string;failure_codes:string[]}[])[0];
+  expect(await call()).toMatchObject({state:'running'});
+  t+=6*60_000;
+  expect(await call()).toMatchObject({state:'failed',failure_codes:['abandoned']});
+  expect(expire).toHaveBeenCalledWith(USER);
  });
 });
 
@@ -7135,7 +7776,7 @@ describe('route helpers',()=>{
  it('window and subject ids',()=>{
   expect(windowOf(undefined)).toBe(3);expect(windowOf('1')).toBe(1);expect(()=>windowOf('12')).toThrow(ParamError);
   expect(subjectIdOf('snapshot','snap:US:2026-11-03T06:02:00Z')).toBe('snap:US:2026-11-03T06:02:00Z');
-  expect(subjectIdOf('review','CN:2026-09')).toBe('CN:2026-09');
+  expect(subjectIdOf('review',RID.toUpperCase())).toBe(RID);expect(()=>subjectIdOf('review','CN:2026-09')).toThrow(ParamError);
   expect(()=>subjectIdOf('snapshot','a b')).toThrow(ParamError);expect(()=>subjectIdOf('review','US:2026-13')).toThrow(ParamError);expect(()=>subjectIdOf('review',undefined)).toThrow(ParamError);
  });
 });
@@ -7202,10 +7843,11 @@ export function boundaryOf(v:string|undefined):Boundary{if(v===undefined)return 
 export const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function uuidOf(v:string|undefined,name:string):string{if(v!==undefined&&UUID_RE.test(v))return v.toLowerCase();throw new ParamError(name);}
 export function subjectKindOf(v:string|undefined):'snapshot'|'review'{if(v==='snapshot'||v==='review')return v;throw new ParamError('subject_kind');}
-/** Review subjects are '<US|CN>:<YYYY-MM>' (Task 11 handleExplainRequest); snapshot ids are P1 text ids. */
+/** Review subjects are immutable review result ids (uuid; Task 11 handleExplainRequest); snapshot ids are P1 text ids. */
 export function subjectIdOf(kind:'snapshot'|'review',v:string|undefined):string{
  if(v===undefined)throw new ParamError('subject_id');
- if(kind==='review'?/^(US|CN):\d{4}-(0[1-9]|1[0-2])$/.test(v):/^[A-Za-z0-9:._-]{1,200}$/.test(v))return v;
+ if(kind==='review')return uuidOf(v,'subject_id');
+ if(/^[A-Za-z0-9:._-]{1,200}$/.test(v))return v;
  throw new ParamError('subject_id');
 }
 // ---- months (UTC; the review cutoff rule is manifest.ts monthCutoff, spec §6.2)
@@ -7262,7 +7904,8 @@ Create `src/app/api/macro/strategy/transmission/route.ts`:
 ```ts
 // src/app/api/macro/strategy/transmission/route.ts
 // GET /api/macro/strategy/transmission?region=US|CN (spec §8, §5.1, §5.2, §9.1): one frozen transmission manifest
-// (buildTransmissionManifest → putManifest, idempotent by hash) feeds the flow and the playbooks. Always 200 once the
+// (buildTransmissionManifest → putManifest, idempotent by hash; the region is frozen in its params) feeds the flow and
+// the playbooks. Always 200 once the
 // facts are available, with judgment_status; f4 {mark, summary} (selectF4Mark) only when 'ok'. With the judgment layer
 // off nothing reaches F4 and the body has no f4 key. Neither region has an active snapshot → 404 no_published_snapshot.
 import {NextResponse} from 'next/server';
@@ -7279,10 +7922,10 @@ export async function GET(req:Request){
   const region=regionOf(readParams(new URL(req.url),['region']).get('region'));
   const codeVersion=codeVersionOrNull();
   if(!codeVersion)return errorResponse('code_version_unavailable','code version not set',503);
-  const body=await buildTransmissionManifest(g.port,{now:new Date(),codeVersion});
+  const body=await buildTransmissionManifest(g.port,{now:new Date(),codeVersion,region});
   if(!body)return errorResponse('no_published_snapshot','no published snapshot yet',404);
   const stored=await strategyDb(g.session).putManifest(body);
-  const transmission=buildTransmission(stored,region);
+  const transmission=buildTransmission(stored);
   const playbooks=buildPlaybooks(stored.body,region);
   const j=await judgmentSection(async f4=>{
    const card=await f4.latestRegimeCard(region);
@@ -7301,8 +7944,8 @@ Create `src/app/api/macro/strategy/policy-response/route.ts`:
 
 ```ts
 // src/app/api/macro/strategy/policy-response/route.ts
-// GET /api/macro/strategy/policy-response?window=1|3|6 (default 3; spec §8, §5.3): one frozen policy_response manifest
-// (shared by the three windows) → the Fed policy → US/CN asset response matrix for the requested window.
+// GET /api/macro/strategy/policy-response?window=1|3|6 (default 3; spec §8, §5.3): one frozen policy_response manifest per
+// window (N is in its params) → the Fed policy → US/CN asset response matrix for that window.
 import {NextResponse} from 'next/server';
 import {buildPolicyResponse,buildPolicyResponseManifest} from '@/lib/macro/strategy/policy-response';
 import {READ_HEADERS,codeVersionOrNull,errorResponse,failureResponse,readGate,readParams,strategyDb,windowOf} from '@/lib/macro/strategy/route-helpers';
@@ -7315,8 +7958,8 @@ export async function GET(req:Request){
   const window=windowOf(readParams(new URL(req.url),['window']).get('window'));
   const codeVersion=codeVersionOrNull();
   if(!codeVersion)return errorResponse('code_version_unavailable','code version not set',503);
-  const stored=await strategyDb(g.session).putManifest(await buildPolicyResponseManifest(g.port,{now:new Date(),codeVersion}));
-  return NextResponse.json(buildPolicyResponse(stored,window),{headers:READ_HEADERS});
+  const stored=await strategyDb(g.session).putManifest(await buildPolicyResponseManifest(g.port,{now:new Date(),codeVersion,window}));
+  return NextResponse.json(buildPolicyResponse(stored),{headers:READ_HEADERS});
  }catch(e){return failureResponse(e);}
 }
 ```
@@ -7326,7 +7969,7 @@ Create `src/app/api/macro/strategy/cycle-table/route.ts`:
 ```ts
 // src/app/api/macro/strategy/cycle-table/route.ts
 // GET /api/macro/strategy/cycle-table?boundary=event_day|first_trading_day|month_end (default event_day; spec §8, §5.5):
-// one frozen cycle_table manifest (shared by the three boundaries) → policy action episodes × asset interval changes.
+// one frozen cycle_table manifest per boundary (in its params) → policy action episodes × asset interval changes.
 import {NextResponse} from 'next/server';
 import {buildCycleTable,buildCycleTableManifest} from '@/lib/macro/strategy/cycle-table';
 import {READ_HEADERS,boundaryOf,codeVersionOrNull,errorResponse,failureResponse,readGate,readParams,strategyDb} from '@/lib/macro/strategy/route-helpers';
@@ -7339,8 +7982,8 @@ export async function GET(req:Request){
   const boundary=boundaryOf(readParams(new URL(req.url),['boundary']).get('boundary'));
   const codeVersion=codeVersionOrNull();
   if(!codeVersion)return errorResponse('code_version_unavailable','code version not set',503);
-  const stored=await strategyDb(g.session).putManifest(await buildCycleTableManifest(g.port,{now:new Date(),codeVersion}));
-  return NextResponse.json(buildCycleTable(stored,boundary),{headers:READ_HEADERS});
+  const stored=await strategyDb(g.session).putManifest(await buildCycleTableManifest(g.port,{now:new Date(),codeVersion,boundary}));
+  return NextResponse.json(buildCycleTable(stored),{headers:READ_HEADERS});
  }catch(e){return failureResponse(e);}
 }
 ```
@@ -7459,10 +8102,12 @@ Create `src/app/api/macro/strategy/explanations/route.ts`:
 ```ts
 // src/app/api/macro/strategy/explanations/route.ts
 // POST /api/macro/strategy/explanations {request_id, subject:{kind, id}, locale} (spec §6.3, §8): session → flag →
-// code version → handleExplainRequest (Task 11), which validates the body, replays an existing (user, request_id) run
-// before the foundation and subject checks, and runs the metered call through productionLlmDeps. Responses are
-// projections (or {error, explanation?}), private, no-store. Review subjects are '<US|CN>:<YYYY-MM>'.
-// GET ?subject_kind=snapshot|review&subject_id= → the caller's own projections (RLS), newest 20.
+// handleExplainRequest (Task 11), which validates the body, replays an existing (user, request_id) run before the code
+// version, foundation and subject checks (a replay needs no code version), and runs the metered call through
+// productionLlmDeps. Responses are projections (or {error, explanation?}), private, no-store. Review subjects are
+// immutable review result ids. GET ?subject_kind=snapshot|review&subject_id= → first macro_expire_explanations(user)
+// (admin; a run left running for more than five minutes becomes abandoned → failed, so a reload never shows a dead run
+// as running), then the caller's own projections (RLS), newest 20.
 import {NextResponse} from 'next/server';
 import {handleExplainRequest} from '@/lib/macro/strategy/explain-request';
 import {productionLlmDeps} from '@/lib/macro/strategy/llm-deps';
@@ -7479,19 +8124,19 @@ export async function GET(req:Request){
   const p=readParams(new URL(req.url),['subject_kind','subject_id']);
   const kind=subjectKindOf(p.get('subject_kind'));
   const id=subjectIdOf(kind,p.get('subject_id'));
-  const items=await strategyDb(g.session).explanationsOf('session',kind,id,LIST_LIMIT);
+  const db=strategyDb(g.session);
+  await db.expireExplanations(g.userId);
+  const items=await db.explanationsOf('session',kind,id,LIST_LIMIT);
   return NextResponse.json({items},{headers:NO_STORE});
  }catch(e){return failureResponse(e);}
 }
 
 export async function POST(req:Request){
  const g=await sessionGate();if(!g.ok)return g.res;
- const codeVersion=codeVersionOrNull();
- if(!codeVersion)return errorResponse('code_version_unavailable','code version not set',503);
  let body:unknown;
  try{body=await req.json();}catch{return errorResponse('invalid_body','body must be JSON',400);}
  try{
-  const r=await handleExplainRequest({db:strategyDb(g.session),port:strategyPort(),llm:productionLlmDeps(g.userId),now:()=>new Date(),codeVersion},g.userId,body);
+  const r=await handleExplainRequest({db:strategyDb(g.session),port:strategyPort(),llm:productionLlmDeps(g.userId),now:()=>new Date(),codeVersion:codeVersionOrNull()},g.userId,body);
   return NextResponse.json(r.body,{status:r.status,headers:NO_STORE});
  }catch(e){
   if(e instanceof Error&&e.message==='not authenticated')return errorResponse('unauthorized','sign in required',401);
@@ -7580,7 +8225,7 @@ If a sibling session has appended entries after the facts-sync CN entry in the m
 - [ ] **Step 10: Run the tests to verify they pass**
 
 Run: `npm test -- src/app/api/macro/strategy/routes.test.ts src/lib/macro/strategy/llm-deps.test.ts`
-Expected: PASS, `Tests  82 passed (82)` (routes 74, llm-deps 8).
+Expected: PASS, `Tests  85 passed (85)` (routes 76, llm-deps 9).
 
 Run: `npm test -- src/lib/macro/strategy`
 Expected: PASS; no earlier task's suite fails.
@@ -7629,6 +8274,7 @@ EOF
 Design decisions (spec §3, §10, §3.8, canvas `https://claude.ai/artifact/2s8t4QpQGAGCXWZNfQ2TUW`, read 2026-11-06):
 - **Canvas layout followed**: header line (manifest · cutoff · catalog · method), link tabs (宏观工作台 · 传导 · 历史 · 复盘), US / CN switch; transmission flow as six columns of node cards (badge word, name, mono value, period, reason; dashed border for missing / restricted / not-in-catalog / assumption, a brass-free card for observed / derived), an assumption edge line per stage; four neutral playbook cards (triggers in mono, mechanism, implications, disclaimer, watch links); the response matrix (policy rows × dimension columns, median + "q1 至 q3 · n", "n=… < 5 逐事件", restricted / not-in-catalog words, the QE / QT row as one spanning cell) with a 1 / 3 / 6 month switch and the footer; the history table with a boundary switch, its definition, episode header lines and tags (左删失 / 进行中 / 数据缺口), cells with "起值 (日期) → 止值 (日期)", the per-column median chart with a table toggle and the first_seen footer; the review index grid (month × US / CN); the single-month review sections, the judgment section, deviation cases and the explanation panel; the derived-node and per-event drawers.
 - **Superseded canvas details** (spec draft 3 wins): no "已通过事实校验" header (the header names subject, manifest, model, prompt and validator, and the disclaimer says the hypotheses are unverified); the explanation is split into system fact sentences and model hypotheses citing fact numbers; no "本快照命中" rule-hit table and no F4 numbers ("有效样本 3/100" is dropped); event-window changes are simple percentages, not `ln`; the history table is "政策行动段", not "周期".
+- **Plan-audit write-back**: the review page's `ExplanationPanel` binds to the displayed immutable `result.result_id` (never `<region>:<YYYY-MM>`; audit #5); the panel's running state tells the user that a refresh after five minutes marks a dead run failed (GET runs `macro_expire_explanations`), and the failed state offers a new request id (audit #14); pct changes are shown from the exact ratio with one rounding (`formatPctRatio`; audit #10); an empty episode list caused by a truncated event history shows `history.eventsTruncated`, never `history.noEpisodes` (`episodesEmptyKey`; audit #11).
 - **Tokens** (`DESIGN.md`, `globals.css`): `Panel` (`data-density="data"`), `Tag`, `Button`; colours only through `text-text-dim`, `border-border`, `bg-bg-card`, `bg-bg-elevated`, `text-accent`, `text-warn` and `var(--…)`; brass (`--border-active`, `--accent-wash`, `Tag tone="accent"`) only for the marked playbook card and the selected switch button; `rounded` / `rounded-md` (≤ 6px); every number `font-mono tabular-nums`; up / down washes (three levels, `color-mix` on `--up` / `--down`, which follow `data-color-scheme`) only on asset changes in the matrix and the history table; macro indicator values are never coloured.
 - **Every chart has a table view**: the transmission flow has a table toggle; the median chart has a table toggle.
 - **Mobile** (spec §3.7): the flow stacks below `lg`; playbook cards become `<details>` below `sm`; the matrix and the history table become one list per column below `sm` (640px); the explanation panel is full width.
@@ -7710,8 +8356,8 @@ Create `src/components/macro/strategy/strategy-view-model.test.ts`:
 import {describe,expect,it} from 'vitest';
 import type {Cell,CycleTableView,DeviationCase,Episode,EventRow,ExplanationProjection,F4Summary,Fact,NodeView,ObsRef,PlaybookView,PolicyResponseView,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
 import {MINUS,MISSING,barGeometry,closedMonths,columnMedians,coverageText,cycleCell,cycleGroups,deviationRows,episodeView,errorCode,eventRows,explainErrorText,f4SummaryDisplay,failureLabel,flowRows,
- formatBpText,formatInstant,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
- projectionOfError,quantile7,remainingToday,renderedSections,reviewSubjectId,reviewGrid,reviewSections,roundDecimalText,strategyApi,toneClass,toneLevel,toneOfText,uniformReason,type StrategyT} from './strategy-view-model';
+ episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
+ projectionOfError,quantile7,remainingToday,renderedSections,reviewGrid,reviewSections,roundDecimalText,strategyApi,toneClass,toneLevel,toneOfText,uniformReason,type StrategyT} from './strategy-view-model';
 
 const t:StrategyT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
 const ref=(series:string,pe:string,v:string):ObsRef=>({observation_id:`obs:${series}:${pe}:v1`,series_id:series,period_end:pe,value_text:v,version:1,available_at:`${pe}T12:00:00Z`,source:{kind:'snapshot',snapshot_id:'snap:US:1'}});
@@ -7833,6 +8479,12 @@ describe('policy response matrix (spec §5.3)',()=>{
    {key:'2022-03-17',date:'2022-03-17',changeBp:'+25 bp',base:'2022-02 · 112.6',end:'2022-05 · 115.48',change:'+2.6%',selected:true,exclusionKey:null},
    {key:'2022-05-05',date:'2022-05-05',changeBp:'+50 bp',base:'2022-02 · 112.6',end:MISSING,change:MISSING,selected:false,exclusionKey:'matrix.exclusion.overlap'}]);
   expect(eventRows([ev({change_text:'-7',change_raw:null})],'bp')[0].change).toBe(`${MINUS}7 bp`);
+  expect(eventRows([ev({change_text:'115.48/112.6'})],'pct')[0].change).toBe('+2.6%');   // exact ratio, rounded once
+ });
+ it('pct changes are rounded once from the exact ratio (no double rounding at the boundary)',()=>{
+  expect(formatPctRatio('100.04996/100')).toBe('0.0%');expect(formatPctRatio('99.95004/100')).toBe('0.0%');
+  expect(formatPctRatio('100.05/100')).toBe('+0.1%');expect(formatPctRatio('99.95/100')).toBe(`${MINUS}0.1%`);
+  expect(formatPctRatio('-14.5424')).toBe(MISSING);
  });
  it('column scale, uniform-missing rows, coverage header and mobile groups',()=>{
   expect(matrixScale(view)).toEqual({US_DTWEXBGS:1.2345,US_SP500:0});
@@ -7853,7 +8505,7 @@ describe('policy action episodes × assets (spec §5.5)',()=>{
   columns:[{id:'US_UST10Y',label:{zh:'美债10Y',en:'UST 10Y'},change_kind:'bp',daily_series:'US_DGS10_D',monthly_series:'US_DGS10',restricted:false},
    {id:'US_WTI',label:{zh:'WTI',en:'WTI'},change_kind:'pct',daily_series:'US_WTI_D',monthly_series:'US_WTI',restricted:false}],
   cells:{'0':{US_UST10Y:{status:'ok',from:ref('US_DGS10','2022-02-28','1.93'),to:ref('US_DGS10','2023-07-31','3.96'),change_raw:null,change_text:'203',change_kind:'bp'},
-   US_WTI:{status:'ok',from:ref('US_WTI','2022-02-28','95.72'),to:ref('US_WTI','2023-07-31','81.8'),change_raw:-14.5424,change_text:'-14.5424',change_kind:'pct'}},
+   US_WTI:{status:'ok',from:ref('US_WTI','2022-02-28','95.72'),to:ref('US_WTI','2023-07-31','81.8'),change_raw:-14.5424,change_text:'81.8/95.72',change_kind:'pct'}},
    '1':{US_UST10Y:{status:'ok',from:ref('US_DGS10','2024-08-30','3.91'),to:ref('US_DGS10','2025-12-31','4.15'),change_raw:null,change_text:'24',change_kind:'bp'},US_WTI:{status:'missing',reason:'month_not_closed'}}}};
  it('ok cells show the change and both endpoints; missing cells say why',()=>{
   expect(cycleCell(view.cells['0'].US_UST10Y,t)).toMatchObject({main:'+203 bp',sub:'1.93 (2022-02-28) → 3.96 (2023-07-31)',tone:'up',drill:true,raw:203});
@@ -7861,6 +8513,11 @@ describe('policy action episodes × assets (spec §5.5)',()=>{
   expect(cycleCell(view.cells['0'].US_WTI,t).refs.map(r=>r.observation_id)).toEqual(['obs:US_WTI:2022-02-28:v1','obs:US_WTI:2023-07-31:v1']);
   expect(cycleCell({status:'missing',reason:'degenerate'},t)).toEqual({main:'state.missing',sub:'history.missing.degenerate',tone:'missing',drill:false,raw:null,refs:[]});
   expect(cycleCell({status:'restricted'},t).main).toBe('state.restricted');
+ });
+ it('an empty episode list says why: truncated event history vs no episodes',()=>{
+  expect(episodesEmptyKey(view)).toBeNull();
+  expect(episodesEmptyKey({...view,episodes:[]})).toBe('history.noEpisodes');
+  expect(episodesEmptyKey({...view,episodes:[],gaps:[{kind:'history_truncated',reason:'US_FED_TARGET_UPPER_D',near:'2026-11-03'}]})).toBe('history.eventsTruncated');
  });
  it('episode header with flags',()=>{
   expect(episodeView(view.episodes[1],t)).toEqual({key:'cut:2024-09-19',direction:'history.direction.cut',dates:'2024-09-19 → 2025-12-11',
@@ -7930,7 +8587,6 @@ describe('explanation panel (spec §3.6, §6.3)',()=>{
   expect(explainErrorText('quota_exceeded',t)).toBe('explain.quota');expect(explainErrorText('llm_not_configured',t)).toBe('explain.noModel');
   expect(explainErrorText('payload_conflict',t)).toBe('explain.conflict{"code":"payload_conflict"}');expect(explainErrorText('network',t)).toBe('explain.error{"code":"network"}');
   expect(projectionOfError({error:{code:'usage_audit_unavailable'},explanation:proj({state:'failed'})})?.state).toBe('failed');expect(projectionOfError({error:{code:'x'}})).toBeNull();
-  expect(reviewSubjectId('CN','2026-09')).toBe('CN:2026-09');
  });
 });
 
@@ -7965,9 +8621,11 @@ Create `src/components/macro/strategy/strategy-view-model.ts`:
 // src/components/macro/strategy/strategy-view-model.ts
 // Pure view helpers for the macro strategy UI (spec §3, §8, §9.1). vitest runs in node and cannot import .tsx, so every
 // decision a component makes lives here and the .tsx files stay thin renderers. Display rounding happens only here
-// (spec §5.3, §5.6): views carry exact value_text and full-precision *_raw numbers. No F4 number is ever formatted.
+// (spec §5.3, §5.6): views carry exact value_text, the exact pct ratio '<end>/<base>' in change_text and full-precision *_raw
+// numbers; a pct change is rounded once, from the exact ratio (formatPctRatio). No F4 number is ever formatted.
 import type {Bilingual,Boundary,Cell,CycleCell,CycleTableView,DeviationCase,DiffKind,Episode,EventRow,ExplanationProjection,F4Mark,F4Summary,Fact,JudgmentStatus,
  NodeView,ObsRef,PlaybookView,PolicyResponseView,Regime,Region,RenderedExplanation,ResponseDim,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
+import {roundPctRatio} from '@/lib/macro/strategy/numeric';
 import type {ReviewIndexItem} from '@/lib/macro/strategy/route-helpers';
 export type Locale='zh'|'en';
 export type StrategyT=(key:string,values?:Record<string,string|number>)=>string;
@@ -8023,6 +8681,11 @@ const signed=(t:string):string=>t===MISSING?t:t.startsWith('-')?`${MINUS}${t.sli
 export function formatRaw(raw:number|null,unit:'pct'|'bp'):string{
  if(raw===null||!Number.isFinite(raw))return MISSING;
  return `${signed(roundDecimalText(raw.toFixed(10),unit==='pct'?1:0))}${unit==='pct'?'%':' bp'}`;
+}
+/** Exact pct ratio '<end>/<base>' → display to 0.1 %, rounded once (no pre-rounded value in between). */
+export function formatPctRatio(ratio:string):string{
+ let r:string;try{r=roundPctRatio(ratio,1);}catch{return MISSING;}
+ return `${signed(r)}%`;
 }
 /** Exact bp decimal string → display to 1 bp. */
 export function formatBpText(text:string):string{const r=roundDecimalText(text,0);return r===MISSING?r:`${signed(r)} bp`;}
@@ -8117,7 +8780,7 @@ export interface EventDisplay{key:string;date:string;changeBp:string;base:string
 export function eventRows(events:EventRow[],unit:'pct'|'bp'):EventDisplay[]{
  const end=(e:EventRow['base'])=>e?`${e.period_end.slice(0,7)} · ${formatValueText(e.value_text)}`:MISSING;
  return events.map(e=>({key:e.effective_date,date:e.effective_date,changeBp:formatBpText(e.change_bp),base:end(e.base),end:end(e.end),
-  change:unit==='bp'&&e.change_text!==null?formatBpText(e.change_text):formatRaw(e.change_raw,unit),selected:e.selected,exclusionKey:e.exclusion?`matrix.exclusion.${e.exclusion}`:null}));
+  change:e.change_text===null?formatRaw(e.change_raw,unit):unit==='bp'?formatBpText(e.change_text):formatPctRatio(e.change_text),selected:e.selected,exclusionKey:e.exclusion?`matrix.exclusion.${e.exclusion}`:null}));
 }
 export function coverageText(d:ResponseDim,t:StrategyT):string{
  return d.coverage.from&&d.coverage.to?t('matrix.coverage',{from:d.coverage.from.slice(0,7),to:d.coverage.to.slice(0,7)}):t('matrix.noCoverage');
@@ -8130,7 +8793,7 @@ export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:stri
 // ---- policy action episodes × assets (spec §3.4, §5.5)
 export function cycleCell(c:CycleCell,t:StrategyT):CellDisplay&{refs:ObsRef[]}{
  if(c.status==='ok'){
-  const main=c.change_kind==='bp'?formatBpText(c.change_text):c.change_raw!==null?formatRaw(c.change_raw,'pct'):`${signed(roundDecimalText(c.change_text,1))}%`;
+  const main=c.change_kind==='bp'?formatBpText(c.change_text):formatPctRatio(c.change_text);
   return {main,sub:`${formatValueText(c.from.value_text)} (${c.from.period_end}) → ${formatValueText(c.to.value_text)} (${c.to.period_end})`,tone:toneOfText(main),drill:true,
    raw:c.change_kind==='bp'?Number(c.change_text):c.change_raw,refs:[c.from,c.to]};
  }
@@ -8165,6 +8828,11 @@ export function barGeometry(median:number|null,scaleMax:number,half:number):{x:n
  if(median===null||!(scaleMax>0))return {x:half,width:0};
  const width=Math.min(1,Math.abs(median)/scaleMax)*half;
  return {x:median<0?half-width:half,width};
+}
+/** Empty episode list: an explicit truncation notice when the event history read was truncated, else "no episodes". */
+export function episodesEmptyKey(v:CycleTableView):string|null{
+ if(v.episodes.length>0)return null;
+ return v.gaps.some(g=>g.kind==='history_truncated')?'history.eventsTruncated':'history.noEpisodes';
 }
 export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:{key:string;episode:string;cell:CellDisplay}[]}[]{
  return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{const ev=episodeView(e,t);return {key:ev.key,episode:`${ev.direction} ${ev.dates}`,cell:cycleCell(cycleCellOf(v,e,c.id),t)};})}));
@@ -8229,8 +8897,6 @@ export function projectionOfError(body:unknown):ExplanationProjection|null{
  const p=(body as {explanation?:unknown}|null)?.explanation;
  return typeof p==='object'&&p!==null&&typeof (p as {explanation_id?:unknown}).explanation_id==='string'?p as ExplanationProjection:null;
 }
-/** Review explanations bind to the pointer '<region>:<YYYY-MM>' (Task 11 subject id). */
-export const reviewSubjectId=(region:Region,month:string):string=>`${region}:${month}`;
 // ---- deviation cases (spec §6.4): input differences only, unchanged rows folded by default
 const KIND_ORDER:Record<DiffKind,number>={revised:0,dropped:1,newly_available:2,unchanged:3};
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
@@ -8350,7 +9016,8 @@ Create `messages/zh/macroStrategy.json`:
     "footer": "观测的可得时间为首次采集时间（first_seen），本表是回溯事实表，不代表当时可知",
     "gaps": "数据缺口",
     "cellTitle": "{episode} · {column}",
-    "noEpisodes": "没有政策行动段"
+    "noEpisodes": "没有政策行动段",
+    "eventsTruncated": "政策事件序列读取被截断：无法列出行动段（这不是“没有行动段”）"
   },
   "review": {
     "title": "月度复盘",
@@ -8387,6 +9054,7 @@ Create `messages/zh/macroStrategy.json`:
     "counterpoints": "反例与限制（模型生成，未经核实）",
     "refs": "依据事实 {refs}",
     "runningBody": "模型生成中，随后做确定性校验。",
+    "runningStale": "超过 {minutes} 分钟仍在运行的请求，刷新状态时会标记为失败，之后可重新生成。",
     "rejectedBody": "不显示模型文本。校验失败项：",
     "failedBody": "模型调用失败，没有可校验的文字。可以用新请求重试。",
     "quota": "今日次数已用完",
@@ -8523,7 +9191,8 @@ Create `messages/en/macroStrategy.json`:
     "footer": "Availability is the first-seen collection time (first_seen); this is a retrospective fact table, not what was knowable at the time",
     "gaps": "Data gap",
     "cellTitle": "{episode} · {column}",
-    "noEpisodes": "No policy action episodes"
+    "noEpisodes": "No policy action episodes",
+    "eventsTruncated": "The policy event history read was truncated: episodes cannot be listed (this is not an empty history)"
   },
   "review": {
     "title": "Monthly review",
@@ -8560,6 +9229,7 @@ Create `messages/en/macroStrategy.json`:
     "counterpoints": "Counterpoints and limits (model generated, unverified)",
     "refs": "Based on facts {refs}",
     "runningBody": "The model is writing; deterministic validation follows.",
+    "runningStale": "A request still running after {minutes} minutes is marked failed when you refresh; you can then generate again.",
     "rejectedBody": "Model text is not shown. Validation failures:",
     "failedBody": "The model call failed and produced no text to validate. A new request can retry.",
     "quota": "No runs left today",
@@ -8615,7 +9285,7 @@ If the P1 `// MACRO` block (`'macro'`) is already present when this task runs, k
 - [ ] **Step 7: Run both tests to verify they pass**
 
 Run: `npm test -- src/components/macro/strategy`
-Expected: PASS, `Tests  36 passed (36)` (view model 31, messages 5).
+Expected: PASS, `Tests  38 passed (38)` (view model 33, messages 5).
 
 - [ ] **Step 8: Add the hooks**
 
@@ -9113,7 +9783,7 @@ import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { Boundary, CycleTableView, ObsRef } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
-import { MISSING, barGeometry, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, formatRaw, shortId, strategyApi, toneClass, toneLevel } from './strategy-view-model';
+import { MISSING, barGeometry, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, episodesEmptyKey, formatRaw, shortId, strategyApi, toneClass, toneLevel } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 const BOUNDARIES: readonly Boundary[] = ['event_day', 'first_trading_day', 'month_end'];
@@ -9137,11 +9807,11 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
         <p className="text-xs text-text-dim">{t(`history.boundaryDef.${view.boundary}`)}</p>
         <p className="text-[11px] text-text-dim">{t('history.coverageNote')}</p>
         {view.gaps.length > 0 ? (
-          <ul className="text-[11px] text-text-dim">{view.gaps.map((g) => <li key={g.near}>{t('history.gaps')}：{g.near} · {g.reason}</li>)}</ul>
+          <ul className="text-[11px] text-text-dim">{view.gaps.map((g) => <li key={`${g.kind}:${g.near}`}>{t('history.gaps')}：{g.near} · {g.reason}</li>)}</ul>
         ) : null}
       </Panel>
       <Panel>
-        {view.episodes.length === 0 ? <p className="text-xs text-text-dim">{t('history.noEpisodes')}</p> : (
+        {episodesEmptyKey(view) ? <p role="status" className="text-xs text-text-dim">{t(episodesEmptyKey(view)!)}</p> : (
           <>
             <div className="hidden overflow-x-auto sm:block">
               <table className="w-full text-xs">
@@ -9384,7 +10054,9 @@ Create `src/components/macro/strategy/ExplanationPanel.tsx`:
 // LLM explanation panel (spec §3.6, §6.3): not generated → running → accepted (system fact sentences, then the
 // model's hypotheses citing fact numbers) / rejected (failure codes only, never model text) / failed. The fixed header
 // names the bound subject, manifest, model, prompt and validator versions. A request id is reused only for a retry
-// after a network failure. Remaining runs come from the shared perspectives quota.
+// after a network failure. A run whose worker died stays 'running' only until a refresh: GET /explanations expires runs
+// older than five minutes (abandoned → failed), and the failed state offers a new request. Review panels bind to the
+// displayed immutable result_id. Remaining runs come from the shared perspectives quota.
 import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { ExplanationProjection } from '@/lib/macro/strategy/contract';
@@ -9450,6 +10122,7 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
       {state === 'running' ? (
         <div className="space-y-2">
           <p className="text-xs text-text-dim">{t('explain.runningBody')}</p>
+          {!busy ? <p className="text-[11px] text-text-dim">{t('explain.runningStale', { minutes: 5 })}</p> : null}
           {!busy ? <Button variant="secondary" size="sm" onClick={refresh}>{t('explain.refresh')}</Button> : null}
         </div>
       ) : null}
@@ -9503,7 +10176,7 @@ Create `src/components/macro/strategy/ReviewView.tsx`:
 'use client';
 // Single-month review (spec §3.2, §3.5, §6.2): the seven fact sections in spec order (fact text from the system
 // templates), the read-time judgment section and deviation cases when the judgment layer is on, the explanation panel
-// bound to this result, and the method footer (method · manifest · input hash · code version · generation).
+// bound to this immutable result_id (never the moving month pointer), and the method footer (method · manifest · input hash · code version · generation).
 import Link from 'next/link';
 import { Panel, Tag } from '@/components/ui';
 import { namesFrom, renderFact } from '@/lib/macro/strategy/explain-render';
@@ -9512,7 +10185,7 @@ import { DependencyState } from './DependencyState';
 import { DeviationCases } from './DeviationCases';
 import { ExplanationPanel } from './ExplanationPanel';
 import { F4SummaryPanel } from './F4Summary';
-import { formatInstant, reviewSections, reviewSubjectId, strategyApi } from './strategy-view-model';
+import { formatInstant, reviewSections, strategyApi } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 export function ReviewView({ data }: { data: ReviewDetailResponse }) {
@@ -9557,7 +10230,7 @@ export function ReviewView({ data }: { data: ReviewDetailResponse }) {
           <DeviationCases region={r.region} />
         </section>
       ) : null}
-      <ExplanationPanel subject={{ kind: 'review', id: reviewSubjectId(r.region, r.month) }} />
+      <ExplanationPanel subject={{ kind: 'review', id: r.result_id }} />
       <p className="border-t border-border pt-2 font-mono text-[11px] text-text-dim">
         {t('review.footer', { method: r.method_version, manifest: r.manifest_id, hash: r.manifest_hash.slice(0, 12), code: r.code_version.slice(0, 12), generation: data.generation })}
         {' · '}<a className="text-accent hover:underline" href={strategyApi.manifest(r.manifest_id)}>{t('meta.manifestLink')}</a>
@@ -9726,7 +10399,7 @@ export function ReviewScreen({ region, month }: { region: Region; month: string 
 - [ ] **Step 10: Run the module tests again, typecheck and lint**
 
 Run: `npm test -- src/components/macro/strategy`
-Expected: PASS, `Tests  36 passed (36)`.
+Expected: PASS, `Tests  38 passed (38)`.
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0 with no errors and no warnings (the React hooks rule is a warning, and lint runs with `--max-warnings=0`).
@@ -10008,9 +10681,12 @@ Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact
 ## 4. Explanations (LLM)
 
 - Quota and billing reuse the `perspectives` feature: `checkQuota('perspectives')` for platform keys (BYO skips it), `beginUsageRun` / `runMeteredLlmCall` / `finalizeUsageRun` exactly as the perspectives route. A rejected output is a completed call and counts.
-- The usage audit key is `macro-explain:<explanation_id>` (made by `macro_claim_explanation`). Only the request that got `claimed` bills and calls the model; concurrent duplicates get the existing projection.
-- A running claim older than 5 minutes is turned into `abandoned` (projection `failed`, code `abandoned`) by the next claim of the same request.
-- Settlement retry: runs in a final state with `finalized = false` had a `finalizeUsageRun` failure. List them with the service role: `select explanation_id, user_id, usage_audit_key, state, accounting from public.macro_explanation_runs where state in ('accepted','rejected','failed') and finalized = false;` Retry `finalizeUsageRun(user_id, usage_audit_key, 'perspectives', …)` from the stored `accounting` (never rerun the model), then call `macro_mark_finalized(explanation_id)`.
+- The usage audit key is the explanation_id itself (uuid text; `begin_usage_run` / `finalize_usage_run` declare `p_idempotency_key uuid`) (made by `macro_claim_explanation`). Only the request that got `claimed` bills and calls the model; concurrent duplicates get the existing projection.
+- A running claim older than 5 minutes is turned into `abandoned` (projection `failed`, code `abandoned`) by the next claim of the same request, and by `macro_expire_explanations(user_id)`, which `GET /explanations` runs before every read — so a page reload resolves a run whose worker died; the panel then offers a new request.
+- Durable completion: right after the provider returns (or throws, or `beginUsageRun` fails) the request stores the raw output and the exact `finalizeUsageRun` body (`finalize_payload`: status, provider, model, tokens, cost, pricing version, FX, `usageEstimated`, `byo`) with `macro_record_completion`, before validation and finish. `finalizeUsageRun` then runs in a finally path even when finish fails; `macro_mark_finalized` is called only after it succeeded.
+- Settlement retry: every run with a recorded payload and `finalized = false`, in any state (final, still `running` after a failed finish, or `abandoned` with a late completion). List them with the service role: `select explanation_id, user_id, usage_audit_key, state, finalize_payload from public.macro_explanation_runs where finalize_payload is not null and finalized = false order by claimed_at;` For each, call `finalizeUsageRun(user_id, usage_audit_key, 'perspectives', finalize_payload)` with the stored payload **verbatim** (never recompute it from current pricing or FX, never rerun the model), then `select public.macro_mark_finalized(explanation_id)`. `finalize_usage_run` is idempotent for identical arguments, so a run already settled with the same payload is safe to repeat; `usage run finalize conflict` means the usage run was settled differently (for example failed by `fail_stale_usage_runs`) — reconcile by hand, do not change the stored payload.
+- A begin-stage payload (`finalize_payload.status = 'failed'`, zero usage, failure code `usage_audit_unavailable` or a cost code) whose retry fails with `usage run not found` means `beginUsageRun` never committed: there is nothing to settle; mark it with `macro_mark_finalized` after checking `usage_events` for the audit key.
+- Rows with `finalize_payload` null and `finalized = false` in a final state: `macro_record_completion` itself failed during the request (the request still tried `finalizeUsageRun` in memory). Reconcile them by `usage_audit_key` against `usage_events`; `macro_mark_finalized` refuses them until a payload is recorded.
 - Failure codes shown to users:
 
 | Code | Meaning | Action |
