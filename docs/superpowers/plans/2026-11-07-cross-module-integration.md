@@ -1,0 +1,18 @@
+# Cross-module integration — execution plan (2026-11-07)
+
+Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
+
+Flags turn on by default in code only when the pair's PG17 end-to-end test passes against the real provider.
+
+| PR | Pair | Base | Can start | Contents | Flag after |
+|---|---|---|---|---|---|
+| 0 | spec + plan | main | now | this plan, spec, audit | — |
+| A1 | judgments→macro (consumer side) | main | now | AUD-01/02/10/14/16: fail-closed F4 HTTP parser, as-of batch visibility in `classifyAsOf`, shared `'1'` flag parser; PG17 test for future-finalized batch | `MACRO_JUDGMENTS_ENABLED` off (F4 not on main) |
+| D | docs→company | stacked on #114 + #115 | now | `/api/documents/by-filing/[filingId]` read-only exact-key resolver, company `f3-source-drawer.tsx` adapter over F3 doc/page/citation routes, PG17 e2e with real F3 + company rows | `NEXT_PUBLIC_COMPANY_F3_DRAWER` on iff e2e passes |
+| A2 | judgments→macro (F4 side) | main after F4 | F4 lands | F4 `deps.ts` uses shared parser, `macro-bridge.integration.test.ts` real macro + F4 producer/settler + anon route + P3/P4 parser | stays off until `macro_regime@v1` publishable (owner Q1) |
+| B | judgments→industry | after F4 | F4 lands | whitelist `industry_metrics`, delegate input builder to `src/lib/industry/judgment-input.ts`, real-route test | off (no industry method — owner Q2) |
+| C | judgments→company | after F4 + #115 | both land | company renders F4 `JudgmentCard`, parser from F4 types, contract test | off (no issuer method — owner Q2) |
+| F | F6→F3 | after #114 | F3 lands + D8 licence | extraction_gold adapter over real F3 candidates | registry disabled until D8 |
+| E, G | docs→foreign, F6→F4 | after foreign runtime / F4 probability method | blocked | per spec §2.5/§2.6 | off |
+
+Per task: Codex prompt in `.claude/scratch/integ/<task>-prompt.md` → commit → mmx audit `<task>-mmx.md` → Codex fix P1/P2 → re-audit once → PG17 → PR.
