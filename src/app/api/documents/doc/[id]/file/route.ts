@@ -5,9 +5,10 @@
 // read audited (signed_url_issued) before it is returned (audit failure → 500, no URL). Everyone
 // else: 404.
 import {NextResponse} from 'next/server';
-import {UUID_RE,errorResponse,failureResponse} from '@/lib/facts/public-route';
-import {PRIVATE_HEADERS,SIGNED_URL_SECONDS,auditFailedResponse,notFound,ownerReadDeps,publicDocs,serviceStore,sessionUserId} from '@/lib/documents/read-route';
+import {UUID_RE,errorResponse,failureResponse,paramErrorResponse} from '@/lib/facts/public-route';
+import {strictParams,PRIVATE_HEADERS,SIGNED_URL_SECONDS,auditFailedResponse,notFound,ownerReadDeps,publicDocs,serviceStore,sessionUserId} from '@/lib/documents/read-route';
 import {OwnerAuditError,readOwnedDocument} from '@/lib/documents/upload';
+import {ObjectStoreError} from '@/lib/documents/object-store';
 import type {DocumentRow} from '@/lib/documents/types';
 
 export const dynamic='force-dynamic';
@@ -18,9 +19,10 @@ async function signed(row:DocumentRow){
  return {url,expiresAt:new Date(issued+SIGNED_URL_SECONDS*1000).toISOString()};
 }
 
-export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){
+export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const {id}=await params;
  if(!UUID_RE.test(id))return errorResponse('invalid_parameter:id','invalid id',400);
+ try{strictParams(new URL(req.url),[]);}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const userId=await sessionUserId();
   if(!userId)return errorResponse('unauthenticated','sign in required',401);
@@ -32,6 +34,7 @@ export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){
   return notFound();
  }catch(e){
   if(e instanceof OwnerAuditError)return auditFailedResponse();
+  if(e instanceof ObjectStoreError&&e.code==='object_not_found'){console.error('[documents/file] object missing');return notFound();}
   return failureResponse(e,'documents/file','file link failed');
  }
 }

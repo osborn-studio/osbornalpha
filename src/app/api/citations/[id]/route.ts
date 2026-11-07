@@ -5,21 +5,23 @@
 // A citation of a licensed/private document is returned only to the document's owner (service read,
 // audited with citation_id before it is returned; private, no-store). Everyone else: 404.
 import {NextResponse} from 'next/server';
-import {UUID_RE,errorResponse,failureResponse} from '@/lib/facts/public-route';
-import {auditFailedResponse,cacheHeadersFor,notFound,ownerReadDeps,publicDocs,sessionUserId} from '@/lib/documents/read-route';
+import {UUID_RE,errorResponse,failureResponse,paramErrorResponse} from '@/lib/facts/public-route';
+import {strictParams,auditFailedResponse,cacheHeadersFor,notFound,ownerReadDeps,publicDocs,sessionUserId} from '@/lib/documents/read-route';
 import {citationView} from '@/lib/documents/citations';
 import {OwnerAuditError,readOwnedDocument} from '@/lib/documents/upload';
 
 export const dynamic='force-dynamic';
 
-export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){
+export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const now=new Date();
  const {id}=await params;
  if(!UUID_RE.test(id))return errorResponse('invalid_parameter:id','invalid id',400);
+ try{strictParams(new URL(req.url),[]);}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const {db}=publicDocs();
   const c=await db.citationById(id);
-  if(c){
+  const pubDoc=c?await db.documentById(c.document_id):null;
+  if(c&&pubDoc&&pubDoc.permission==='public'){
    const view=await citationView(db,c);
    if(view)return NextResponse.json(view,{headers:cacheHeadersFor('public',undefined,now)});
   }

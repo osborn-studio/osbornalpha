@@ -6,9 +6,9 @@
 // classifierGen. Empty pages and errors are no-store.
 import {NextResponse} from 'next/server';
 import {TICKER_RE,decodeTicker,errorResponse,failureResponse,paramErrorResponse,utcDate} from '@/lib/facts/public-route';
-import {cacheHeadersFor,docParams,publicDocs,publicDocumentView,resolveDocIssuer} from '@/lib/documents/read-route';
+import {cacheHeadersFor,docParams,isCursorError,publicDocs,publicDocumentView,resolveDocIssuer} from '@/lib/documents/read-route';
 import type {DocListParams} from '@/lib/documents/read-route';
-import {CLASSIFIER_GEN,DocumentsDbError,EXTRACTOR_VERSION} from '@/lib/documents/types';
+import {CLASSIFIER_GEN,EXTRACTOR_VERSION} from '@/lib/documents/types';
 
 export const dynamic='force-dynamic';
 
@@ -27,7 +27,7 @@ export async function GET(req:Request,{params}:{params:Promise<{ticker:string}>}
   const body={issuerId:issuer.issuerId,ticker:issuer.ticker,asOf:q.asOf,extractorVersion:EXTRACTOR_VERSION,classifierGen:CLASSIFIER_GEN,documents:rows.map(publicDocumentView),nextCursor:page.nextCursor};
   return NextResponse.json(body,{headers:cacheHeadersFor(rows.length===0?'empty':'public',q.asOf,now)});
  }catch(e){
-  if(e instanceof DocumentsDbError&&e.code==='invalid_input')return errorResponse('invalid_parameter:cursor','invalid cursor',400);
+  if(isCursorError(e))return errorResponse('invalid_parameter:cursor','invalid cursor',400);
   return failureResponse(e,'documents','documents read failed');
  }
 }

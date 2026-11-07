@@ -5,8 +5,8 @@
 // the service client, audited before it is returned ('private, no-store'; audit failure → 500).
 // Everyone else gets the same 404 as for a missing id.
 import {NextResponse} from 'next/server';
-import {UUID_RE,errorResponse,failureResponse,paramErrorResponse,readParams} from '@/lib/facts/public-route';
-import {auditFailedResponse,cacheHeadersFor,cursorParam,docDetail,notFound,ownerDocumentView,ownerReadDeps,publicDocs,sessionUserId} from '@/lib/documents/read-route';
+import {UUID_RE,errorResponse,failureResponse,paramErrorResponse} from '@/lib/facts/public-route';
+import {auditFailedResponse,cacheHeadersFor,cursorParam,isCursorError,strictParams,docDetail,notFound,ownerDocumentView,ownerReadDeps,publicDocs,sessionUserId} from '@/lib/documents/read-route';
 import {OwnerAuditError,readOwnedDocument} from '@/lib/documents/upload';
 
 export const dynamic='force-dynamic';
@@ -16,7 +16,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const {id}=await params;
  if(!UUID_RE.test(id))return errorResponse('invalid_parameter:id','invalid id',400);
  let extractionsCursor:string|null;
- try{extractionsCursor=cursorParam(readParams(new URL(req.url),['extractionsCursor']),'extractionsCursor');}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
+ try{extractionsCursor=cursorParam(strictParams(new URL(req.url),['extractionsCursor']),'extractionsCursor','timestamp_uuid');}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const {db}=publicDocs();
   const row=await db.documentById(id);
@@ -30,6 +30,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
   return notFound();
  }catch(e){
   if(e instanceof OwnerAuditError)return auditFailedResponse();
+  if(isCursorError(e))return errorResponse('invalid_parameter:extractionsCursor','invalid extractionsCursor',400);
   return failureResponse(e,'documents/doc','document read failed');
  }
 }

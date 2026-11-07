@@ -17,13 +17,13 @@ import type {TableClient} from '../db/table-client';
 import {isCurrentSecurity,resolveIssuer,successCacheControl} from '../entities/resolve';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {QueryError,asOfParam,dateParam,errorResponse,flagParam,intParam,readParams,utcDate} from '../facts/public-route';
-import {decodeCursor,supabaseDocumentsDb} from './db';
+import {decodeCursor,encodeCursor,supabaseDocumentsDb,timestampUuidCursor} from './db';
 import {supabaseObjectStore} from './object-store';
 import {cpLength,sha256Hex} from './extract/pages-json';
 import {audit} from '../research/store';
 import type {ResearchSupabase} from '../research/store';
 import type {OwnerReadDeps} from './upload';
-import {CLASSIFIER_GEN,EXTRACTOR_VERSION,PAGE_LIMIT_MAX} from './types';
+import {CLASSIFIER_GEN,DocumentsDbError,EXTRACTOR_VERSION,PAGE_LIMIT_MAX} from './types';
 import type {AssetRow,DocClass,DocumentRow,DocumentsDb,ExtractionRow,LayoutLine,LayoutTable,ListedSource,ObjectStore,PagesJson} from './types';
 
 export const LISTED_SOURCES:ReadonlySet<string>=new Set<ListedSource>(['edgar','cninfo','hkexnews']);
@@ -37,15 +37,22 @@ export const PRIVATE_HEADERS={'Cache-Control':'private, no-store'} as const;
 export interface DocListParams{asOf:string;source?:ListedSource;docClass?:DocClass;from?:string;to?:string;versions:boolean;cursor:string|null;limit:number}
 
 /** An opaque cursor that our db layer can decode; anything else → invalid_parameter:<name>. */
-export function cursorParam(p:Map<string,string>,name:string):string|null{
+export function cursorParam(p:Map<string,string>,name:string,keyset:'timestamp_uuid'|'any'='any'):string|null{
  const v=p.get(name);if(v===undefined)return null;
  if(v.length===0||v.length>MAX_CURSOR)throw new QueryError(name);
- try{decodeCursor(v);}catch{throw new QueryError(name);}
+ try{if(keyset==='timestamp_uuid')timestampUuidCursor(v);else decodeCursor(v);}catch{throw new QueryError(name);}
  return v;
 }
+/** readParams plus: any query parameter outside `allowed` → invalid_parameter:<name> (unknown parameters would otherwise be cache-busters). */
+export function strictParams(url:URL,allowed:readonly string[]):Map<string,string>{
+ for(const k of url.searchParams.keys())if(!allowed.includes(k))throw new QueryError(k);
+ return readParams(url,allowed);
+}
+/** True for a DocumentsDbError that rejected the keyset cursor (and nothing else). */
+export function isCursorError(e:unknown):boolean{return e instanceof DocumentsDbError&&e.code==='invalid_input'&&/cursor/i.test(e.message);}
 /** GET /api/documents/[ticker] parameters (spec §9). */
 export function docParams(url:URL,today:string):DocListParams{
- const p=readParams(url,['asOf','source','class','from','to','versions','cursor','limit']);
+ const p=strictParams(url,['asOf','source','class','from','to','versions','cursor','limit']);
  const source=p.get('source');if(source!==undefined&&!LISTED_SOURCES.has(source))throw new QueryError('source');
  const docClass=p.get('class');if(docClass!==undefined&&!DOC_CLASSES.has(docClass))throw new QueryError('class');
  const from=dateParam(p,'from'),to=dateParam(p,'to');
@@ -106,17 +113,11 @@ export async function sessionUserId():Promise<string|null>{
  return error||!data.user?null:data.user.id;
 }
 
-/** The version that superseded this one (same source/source_ref, source_version + 1), if visible through db. */
+/** The version that superseded this one: the first visible version above source_version (one keyset read, limit 1); it is the successor only if it is exactly +1. */
 async function supersededBy(db:DocumentsDb,row:DocumentRow):Promise<string|null>{
- let cursor:string|null=null;
- for(let k=0;k<20;k++){
-  const page=await db.documentVersions(row.source,row.source_ref,{cursor,limit:PAGE_LIMIT_MAX});
-  const next=page.rows.find(d=>d.source_version===row.source_version+1);
-  if(next)return next.document_id;
-  if(!page.nextCursor)return null;
-  cursor=page.nextCursor;
- }
- return null;
+ const page=await db.documentVersions(row.source,row.source_ref,{cursor:encodeCursor([row.source_version]),limit:1});
+ const next=page.rows[0];
+ return next&&next.source_version===row.source_version+1?next.document_id:null;
 }
 
 /** GET /api/documents/doc/[id] body for a row already visible to the caller through db. */

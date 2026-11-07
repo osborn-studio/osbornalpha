@@ -60,7 +60,9 @@ describe('GET /api/documents/[ticker]',()=>{
   expect(body).toMatchObject({issuerId:ISSUER,ticker:'00268.HK',asOf:'2026-02-01',extractorVersion:EXTRACTOR_VERSION,classifierGen:CLASSIFIER_GEN,nextCursor:null});
   expect(body.documents.map((d:{documentId:string})=>d.documentId)).toEqual([v1]);
   expect(body.documents[0]).toMatchObject({source:'hkexnews',sourceRef:'2026090300863_c',sourceVersion:1,observedReplacement:false,docClass:'annual_report',language:'zh',status:'stored',currentExtractionId:null,availableDate:'2026-01-10'});
-  expect(body.documents[0]).not.toHaveProperty('ownerUserId');
+  expect(Object.keys(body.documents[0]).sort()).toEqual(['availableAt','availableDate','bytes','contentSha256','currentExtractionId','docClass','documentId','filingSourceRef','fiscalPeriod','fiscalYear','formType','language','mime','observedReplacement','periodEnd','publishedAt','publishedAtPrecision','source','sourceRef','sourceUrl','sourceVersion','status','title'].sort());
+  expect(Object.keys(body).sort()).toEqual(['asOf','classifierGen','documents','extractorVersion','issuerId','nextCursor','ticker']);
+  expect(JSON.stringify(body)).not.toMatch(/owner|license|permission|storage/i);
   expect(S.resolve).toHaveBeenCalledWith(expect.anything(),{ticker:'0268.HK'},{today:TODAY});
  });
  it('default asOf = today → latest version (short public cache); versions=1 → all versions; cursor pages',async()=>{
@@ -199,5 +201,64 @@ describe('GET /api/citations/[id]',()=>{
    document:{title:'2025 年報',docClass:'annual_report',language:'zh',publishedAt:'2026-01-10T02:00:00.000Z',availableAt:'2026-01-10T02:00:00.000Z'}});
   for(const id of [internal,'00000000-0000-4000-8000-000000000000']){const r=await citation(id);expect(r.status).toBe(404);expect(r.headers.get('cache-control')).toBe('no-store');}
   expect((await citation('x')).status).toBe(400);
+ });
+});
+
+describe('Task 11 review fixes',()=>{
+ const WRONG_SHAPE='WyJ4Il0';   // base64url of ["x"]: decodes, is not a keyset cursor
+ it('a decodable cursor of the wrong shape is 400 on the doc route, never 500',async()=>{
+  let res=await doc(v1,`extractionsCursor=${WRONG_SHAPE}`);
+  expect(res.status).toBe(400);
+  expect((await res.json()).error.code).toBe('invalid_parameter:extractionsCursor');
+  // a db-level cursor rejection (valid at the route, refused below) is still the caller's 400
+  const {DocumentsDbError}=await import('@/lib/documents/types');
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{extractionsOf:async()=>{throw new DocumentsDbError('invalid_input','invalid_cursor');}});
+  expect((await doc(v1)).status).toBe(400);
+ });
+ it('only cursor-related invalid_input is 400 on the list route; other errors are 500',async()=>{
+  const {DocumentsDbError}=await import('@/lib/documents/types');
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{readDocuments:async()=>{throw new DocumentsDbError('invalid_input','invalid_asof');}});
+  expect((await list('00268.HK')).status).toBe(500);
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{readDocuments:async()=>{throw new DocumentsDbError('invalid_input','invalid_cursor');}});
+  expect((await list('00268.HK')).status).toBe(400);
+  spy.mockRestore();
+ });
+ it('supersededBy is a direct successor lookup (limit 1), not a bounded scan',async()=>{
+  const calls:unknown[]=[];
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{documentVersions:async(s,r,p)=>{calls.push(p.limit);return (db as DocumentsDb).documentVersions(s,r,p);}});
+  expect((await (await doc(v1)).json()).supersededBy).toBe(v2);
+  expect(calls).toEqual([1]);
+  // a first visible version above the current one that is not +1 (gap): no successor is claimed
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{documentVersions:async()=>({rows:[{...(await db.documentById(v2))!,source_version:20000}],nextCursor:null})});
+  expect((await (await doc(v1)).json()).supersededBy).toBeNull();   // first version above is not +1 → no successor claimed from a gap
+ });
+ it('pages: n must be 1-999999 without leading zeros',async()=>{
+  for(const n of ['01','0','1000000','-1','1.5'])expect((await page(v1,n)).status,n).toBe(400);
+ });
+ it('unknown query parameters are 400 invalid_parameter:<name> on every public read route',async()=>{
+  const r1=await list('00268.HK','x=1');expect(r1.status).toBe(400);expect((await r1.json()).error.code).toBe('invalid_parameter:x');
+  const r2=await doc(v1,'bust=1');expect(r2.status).toBe(400);expect((await r2.json()).error.code).toBe('invalid_parameter:bust');
+  expect((await page(v1,'1','cb=1&layout=1')).status).toBe(400);
+  const r3=await fileGET(new Request(`${BASE}/api/documents/doc/${v1}/file?t=1`),{params:Promise.resolve({id:v1})});expect(r3.status).toBe(400);
+  const r4=await citationGET(new Request(`${BASE}/api/citations/00000000-0000-4000-8000-000000000000?t=1`),{params:Promise.resolve({id:'00000000-0000-4000-8000-000000000000'})});expect(r4.status).toBe(400);
+ });
+ it('a citation on a licensed document is 404 to anon, even when the anon client leaks the row',async()=>{
+  const ext=await seedExtraction(db,licensed,['secret Revenue 5']);
+  const c=await cite(db,{document_id:licensed,extraction_id:ext,page_no:1,char_start:7,char_end:14,created_by:'human',created_ref:OWNER_A});
+  const r=await citation(c);
+  expect(r.status).toBe(404);
+  expect(r.headers.get('cache-control')).toBe('no-store');
+  S.anon=db;   // RLS bypassed: the explicit permission check still refuses
+  expect((await citation(c)).status).toBe(404);
+ });
+ it('file: a missing stored object is 404 not_found (not 500)',async()=>{
+  S.user='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const missing=await seedPublicDocument(db,enc('%PDF-nostore'),{source_ref:'2026090300999_c'});   // no store passed: no object
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const res=await file(missing);
+  spy.mockRestore();
+  expect(res.status).toBe(404);
+  expect((await res.json()).error.code).toBe('not_found');
  });
 });
