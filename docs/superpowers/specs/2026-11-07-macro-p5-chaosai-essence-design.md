@@ -1,7 +1,7 @@
 # 宏观工作台 P5 · ChaosAI 精华吸收（美林时钟卡片 · 图表组织 · 数据缺口）设计规格
 
-日期：2026-11-07。第 1 稿；第 2 稿（§0.1）；第 3 稿（§0.2）；第 4 稿（§0.3，完整规范文本）；第 5 稿（§0.4）；第 6 稿（§0.5）；**第 7 稿**（处置第六轮 Codex N9/N10、mmx #107–#150，§0.6）
-状态：第 7 稿，待第七轮（终审）（`docs/audits/2026-11-07-macro-p5/`）
+日期：2026-11-07。第 1 稿；第 2 稿（§0.1）；第 3 稿（§0.2）；第 4 稿（§0.3，完整规范文本）；第 5 稿（§0.4）；第 6 稿（§0.5）；第 7 稿（§0.6）；**第 8 稿**（处置第七轮 Codex N11，§0.7）
+状态：第 8 稿，待终审（`docs/audits/2026-11-07-macro-p5/`）
 前置：`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（P1+P2 第 6 稿；其 §3.2 已含本规格 §2.4 的"第 7 稿修订"）、`docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（P3+P4 第 3 稿）、F4 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`
 研究输入：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、`docs/research/chaosai-macro-2026-11-07/handoff-chatgpt-2026-11-07.md`
 总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5。
@@ -148,6 +148,12 @@
 | #145 / #147（MLF 期限识别；主机精确匹配） | 接受：期限列精确文本由 D0d 记录；主机精确相等，不含子域/端口 | §5.3、§5.5 |
 | #148–#150 | 接受：轴值固定 2 位；覆盖显示为权重整数；源码断言扩展；旧 `barGeometry` 导出删除 | §3.5、§3.8、§4.3 |
 
+### 0.7 第 8 稿处置（第七轮：Codex `24-spec-round7b-codex.md`）
+
+| 来源 | 处置 | 落点 |
+|---|---|---|
+| N11（清单含展示行与不变式 9 的"行集合 = keys(W)"矛盾） | 接受：不变式 9 分区校验——评分行（`display_only=false`）集合 === keys(W) 且 `weight === W[id]`；展示行（`display_only=true`）属于快照展示集合（manifest 中不在 keys(W) 的指标序列）、`weight===0`、`matched=false`、`rule_id/support/contribution` 皆 null、元数据与角色同样核对；D1 fixture 含三条流动性展示行；§8 改为"九条" | §3.4、§8 |
+
 ---
 
 ## 1. WP-A · 基线：ChaosAI 各板块对照矩阵（2026-11-07 核实）
@@ -290,7 +296,7 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 | 6 | （regime 非 null）axes 用 `C` 的 `support`/`weight` 按 `regime.ts` 顺序重算（无命中 → null），r6 后精确相等 | reconcile_failed |
 | 7 | F4 详情 `claim.selected === primary_state`；`|claim.distribution[q] − norm[q]| ≤ 1e-6`；`claim.catalog_version === snapshot.catalog_version`；`|claim.margin_pp − r6(100×(norm[p]−(norm[s]??0)))| ≤ 1e-6`（F4 的 `marginPp` 用存储 r6 norm）；`rec.regime` 非 null | f4_mismatch |
 | 8 | （只对 `C` 中的行）`rule_id` ∈ `RULES[row.type]`；`support` 逐象限 === 规则表（缺省 0） | reconcile_failed |
-| 9 | （`rec.method_manifest` 存在时）`manifest.version==='macro-method-manifest/1'`；`manifest.rules_version/catalog_version/weights_version` 与快照/记录一致；`manifest.rows[].series_id` 集合 === keys(W) 且唯一；`manifest.denominator === D`；每行 `weight === W[id]` 且 `name/type/unit/change_kind/status/reason` 与门槛内目录 `catalogById(id)` 逐字段相等（`state` 用 §3.3 行状态词表并与目录 `status`/观测存在性一致）；`latest/prev/prev3m_observation_id` ∈ manifest 观测且 `series_id` 相同，角色与 §3.3 日期规则一致；`matched` 行与 `C` 一一对应且 `rule_id/support/contribution` 逐格相等；非 matched 行三者皆 null | reconcile_failed |
+| 9 | （`rec.method_manifest` 存在时）`manifest.version==='macro-method-manifest/1'`；`manifest.rules_version === rec.rules_version`、`catalog_version === snapshot.catalog_version`、`weights_version === METHODOLOGY_VERSION`；`manifest.denominator === D`；行 `series_id` 唯一；**评分行**（`display_only=false`）集合 === keys(W) 且 `weight === W[id]`；**展示行**（`display_only=true`）集合 === manifest 观测中 `series_id ∉ keys(W)` 的指标集合，`weight===0`、`matched=false`、`rule_id/support/contribution` 皆 null；所有行 `name/type/unit/change_kind/reason` 与门槛内目录 `catalogById(id)` 逐字段相等（`state` 用 §3.3 行状态词表并与目录 `status`/观测存在性一致）；`latest/prev/prev3m_observation_id` ∈ manifest 观测且 `series_id` 相同，角色与 §3.3 日期规则一致；评分行中 `matched=true` 者与 `C` 一一对应且 `rule_id/support/contribution` 逐格相等，其余评分行三者皆 null；分母与分数只由评分行决定 | reconcile_failed |
 
 执行顺序 1,2,4,8,（9）→（regime 非 null）3,5,6 → F4 → 7。清单存在时 `rows` **只**从清单渲染（观测值仍从 manifest 观测读取）；破坏用例：只改清单的一个贡献格 / 一个 `latest_observation_id` / 一行的 `change_kind`，`rec` 与 F4 不变 → `reconcile_failed`。数值比较用 IEEE-754 `Number`（输入均为 r6 值或整数）。失败：`diagnostics[]{code:'invariant_<n>', ids}`，差值 `console.error('[macro-clock] reconcile', {snapshot_id, invariant, delta, …})`。现有 F4 fixture（US `us-2026-09-11.json` 的 margin `11.023622`，CN `28.333333`）必须作为 `ok` 端到端用例通过。
 
@@ -550,7 +556,7 @@ WP-D：`catalog.ts`、`types.ts`、`snapshots.ts`、`freshness.ts`、`views.ts`�
 
 | 面 | 必须成立 | 证明 |
 |---|---|---|
-| 贡献算术 | §3.4 八条 | `clock-view.test.ts`（含两份真实 F4 fixture 成功 + 全部破坏用例） |
+| 贡献算术 | §3.4 九条（9 在 D1 前为空操作） | `clock-view.test.ts`（含真实 fixture 成功 + 全部破坏用例；D1 起含三条流动性展示行的清单 fixture 与错分类/重复行拒绝用例） |
 | 快照一致 | 单一响应；活动快照；版本门槛；F4 同快照 | 路由与 `clock-f4` 测试 |
 | 规则类型 | fx/GDP 边界 | `regime.rules-boundary.test.ts` |
 | 缺失语义 | 11 卡级 + 2 传输 + 5 行级状态，无零 | 状态测试 + ClockStates 画板 |

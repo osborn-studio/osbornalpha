@@ -1,0 +1,15 @@
+Reviewed **DRAFT 7**; “draft-2” is a stale reference. Closures below concern design adequacy, not completed implementation or passing migration tests.
+
+- **N9 — closed:** §5.8 now places required `p_method_manifest` before the four defaulted parameters. The explicit revoke/grant signature matches that declaration and preserves the old RPC.
+- **N10 — closed:** §5.2 explicitly updates the actual transmission formatter, `strategy-view-model.ts::unitSuffix`, with localized units and tests through both `nodeDisplay` and `flowRows`.
+- **Earlier P1 dispositions — closed:** Publication gating, number-free reconciliation failures, rule/support validation, production method-version switching, mixed-adapter ingestion, null-regime handling, transmission-version dispatch, manifest/source reconciliation, retirement SQL, and schema-before-code rollout have adequate specified fixes against their code contracts. Historical settlement and subsequent quarantine decisions remain accepted documented limitations.
+
+**D1:** Reading stored regime/contributions through the flag-gated snapshot route is permitted by P1’s server-read contract. Display additionally requires a publishable, eligible, same-snapshot F4 card and reconciliation. P1 §3.2 explicitly authorizes labelled rule shares while categorical `display.percent` remains null. This violates neither that revised rule nor “只有满足既有发布条件才展示”.
+
+**Presets:** P1’s explicit amendment permits fixed-preset computation without persistence or quota charges. Arbitrary saved analyses retain the quota RPC. Database and computation costs remain, including per-instance cold starts.
+
+| # | Severity P1/P2/P3 | Section | Defect | Concrete fix |
+|---|---|---|---|---|
+| N11 | P1 | §0.6 #120/#121; §3.3–§3.4 invariant 9; §5.2; §8 | **The newly expanded manifest cannot pass its mandatory validator.** Draft 7 requires `method_manifest.rows` to contain scoring **and display-only** rows. Invariant 9 still requires the entire row-ID set to equal `keys(W)` and every row’s weight to equal `W[id]`. In `regime.ts`, `regionWeights()` contains only `WEIGHTS_V1` keys; the new `US_WALCL`, `US_RRPONTSYD`, and `US_WTREGEN` rows are deliberately outside it. Including those rows therefore fails both membership and weight checks, producing `reconcile_failed` before F4 even when the snapshot and judgment are valid. Omitting them violates the new manifest contract. This is a new contradiction introduced by the display-row expansion, not the previously closed unchecked-manifest defect. | Partition validation explicitly: scoring rows must uniquely equal `keys(W)` and retain all existing contribution/denominator checks; display-only rows must belong to the declared display set, have weight 0, `matched=false`, and null rule/support/contribution. Validate their metadata and observation roles against the same catalog and snapshot, then project them into `display_only_rows`. Add a successful D1 fixture containing all three liquidity rows, plus duplicate/misclassified-row rejection tests; assert denominator and scores remain unchanged. Update §8’s stale “八条” acceptance reference to include invariant 9. |
+
+not ready
