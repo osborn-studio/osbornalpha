@@ -1,45 +1,45 @@
-# 宏观工作台上线闭环记录（2026-11-07）
+# 美林时钟与宏观缓存发布记录（2026-11-07）
 
-状态：**事实层已部署并通过登录态验收；用户目标是美林时钟四象限与判断能力上线，目前目标尚未完成。判断链路未通过，不能标记整体完成。**
+## 当前发布范围
 
-## 最终发布处置
+本次目标为 `/macro` 登录态可见的四象限投资时钟，以及重复打开、刷新和策略读取的缓存优化。仅事实指标页面可用不代表美林时钟验收完成。
 
-为保留可用宏观事实页面并隐藏未通过验收的判断入口，已删除生产 `MACRO_JUDGMENTS_ENABLED`，再次部署相同且 CI 通过的 `01308b44347421f061cc03cef36a0f172df41bc6`。最终部署 `dpl_DwaboWbskuigTUh2nJEqxwwmTpR8`，地址 `https://stock-monitor-oeyz3cjii-gilosbornhellos-projects.vercel.app`，READY 并 alias `osbornalpha.com`；`MACRO_STRATEGY_ENABLED` 保持启用。v2 注册许可保留，弃权记录不删除或篡改。下面首次部署和故障过程为历史证据，判断 flag=1 不是最终配置。
+- #133 修复 JSONB containment 查询编码，避免真实判断补登记返回 500。
+- #134 修复 `/manifest.json` 被认证中间件重定向的问题。
+- #135 增加真正四象限展示、当前快照匹配、输入覆盖率／缺轴／并列说明，以及同页 canonical 导航。
+- #136 加入跨实例纯事实缓存、同查询刷新保留内容，并减少重复读取。
+- 合并后待验收提交：`e0b82b25d3f63cc45ac808aadc0de63541504e32`；该精确提交的 [完整 CI 42380190615](https://github.com/osborn-studio/osbornalpha/actions/runs/42380190615) 已通过。
 
-最终登录态复测通过：`/macro` 事实正常、F4 判断区消失，中美 transmission 均 HTTP 200 且 `judgment_status=disabled`。这是事实层发布验收通过，不是判断功能完成。
+## 生产部署与真实作业
 
-## 首次部署的版本与注册状态
+2026-11-07 22:24（北京时间）已部署上述精确提交。Vercel `dpl_EUnPvGFah2xHt3zJE58KhcQtPRGb`，部署地址 `https://stock-monitor-mpjyhdjo1-gilosbornhellos-projects.vercel.app`，READY 并绑定 `osbornalpha.com`。`MACRO_STRATEGY_ENABLED` 保持启用，`MACRO_JUDGMENTS_ENABLED=1` 已随部署生效。
 
-- main / production codeVersion：`01308b44347421f061cc03cef36a0f172df41bc6`（包含 #132）。
-- CI：[42375057467](https://github.com/osborn-studio/osbornalpha/actions/runs/42375057467)，success。
-- Vercel deployment：`dpl_AVDJbTXWs3RuGtmZJtUm1xAYYcne`，READY；部署地址 `https://stock-monitor-1whb9u41m-gilosbornhellos-projects.vercel.app`，alias `osbornalpha.com`。
-- 约 13:04 UTC 核对：v1 判断数为 0，v2 尚未注册。随后按 #132 代码登记 v2、确认许可并设 `publishable=true`，复查无 drift。v1 原样保留且 unpublished。
-- v2 formula hash：`dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`。
-- 生产配置 `MACRO_JUDGMENTS_ENABLED=1`、`NEXT_PUBLIC_SITE_URL=https://www.osbornalpha.com`；部署后公开 `/api/methodologies` HTTP 200，实际 codeVersion、publishable 和 hash 与上述一致。
-- 13:16 UTC settle / calibrate preview HTTP 200、ok。preview 成功不代表真实补登记成功。
+线上 judgments settle preview、真实 apply 与 calibrate preview 均 HTTP 200、`ok`；真实 apply 为 `success`、`errors=[]`、`compensation=done`。这是线上真实作业验证，不是只跑 preview。脱敏回执见 [production-crons.json](production-crons.json)。登录态界面与缓存测量另行记录，不以部署成功替代浏览器验收。
 
-## 已验证与未完成
+## 登录态验收与当前结论
 
-登录态 `/macro` 中美视图、来源抽屉、指标详情、传导、历史、复盘和旧路径重定向通过。逐项证据见 [acceptance.md](acceptance.md)。2026 年 10 月复盘为 `insufficient`，界面如实说明历史截止时点缺少快照。
+功能部署成功，**整体视觉与性能验收尚未完成**。用户明确不接受当前视觉设计，后续将按 ChaosAI 参考重新设计；不能把本轮 US 功能检查称为用户视觉目标完成。
 
-当前阻碍：
+已验证：正式部署 US 登录态显示展开的四象限、过热分类、60% 输入覆盖率（明确非概率）、增长轴缺失、对应快照及未校准说明；展开依据可见真实 DFF／DGS10／CPI／PPI 观测、规则与权重。公开中美卡片与方法哈希、部署版本一致。`manifest.json` 为有效 JSON/200，匿名 overview 返回 401。
 
-1. 真实判断补登记链路失败；根因为 Supabase `.contains(inputs, JS array)` 将 JSONB 查询编码为 PostgreSQL 数组，导致语法错误。本地修复 `4ee12c7ccb42d25197f31dd5fb24fe1b35c49ee2`（`codex/fix-judgment-json-filter`）通过 52 项定向测试、定向类型检查及 lint，方法 hash 复查不变；全量类型检查受本机缺少 pdfjs-dist 依赖阻碍，不能记录为通过。生产 cron 尚未包含此修复；最终已移除判断 flag 隐藏入口。传导返回 `judgment_status: unavailable`，总览无判断卡片。该项未验收通过，正在修复。
-2. cycle-table 单次登录态 GET 为 13,106 ms；这是一次样本，不是 p95，仍未达到延迟目标。
-3. `/manifest.json` 被认证中间件重定向，浏览器保留 manifest 语法错误。局部修复 `67df3c62f2f67ac5538fc898f357b2bb9a186a73` 已通过 23 项定向测试及 lint，但尚未发布。
-4. GitHub 写权限受阻：本机钥匙串取凭据错误 `-25308`，connector 写分支/树返回 403。不能把本地修复记录为生产已修复。
-5. 判断面板描述仍写默认关闭，实际部署 flag 已启用，需同步文案。
+未完成：正式部署 CN 视觉／并列展示、最终截图、控制台无错误、首次进入／刷新／离开返回计时、18 个 API 测量样本。测试脚本已准备但尚未执行。跨账号、生产 TTL 边界／版本变更实验也未执行；对应的确定性测试和设计审查不等于生产实测。完整分项见 [production-acceptance.md](production-acceptance.md)。
 
-## 本地修复对生产补登记的有限验证
+## 已确认的注册与数据依据
 
-修复版本 `4ee12c7c` 本地执行的回执顶层为 success，但 compensation 为 stopped/deadline，scanned=1、produced=1、错误 `deadline_hit`。生产库新增 1 条 US v2 弃权记录，理由 `upstream_version_mismatch`，codeVersion 为本地修复提交，**不是已部署版本**。该回执不能证明判断链路通过，也不能用单条弃权冒充有效宏观判断。MiniMax 最终审查 approved 仅针对修复代码。
+`macro_regime@v2` 已注册且 `publishable=true`；生产与合并代码公式哈希一致：`dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`。本次 I/O／缓存／UI 改动不改方法版本或历史判断。
 
-## 恢复开发（GitHub 授权已恢复）
+此前 `upstream_version_mismatch` 来自旧 superseded 快照，属于正确弃权，不是当前快照缺陷。续跑补登记后，4 个快照扫描完成，最后回执 `compensation=done`、`errors=[]`。当前中美快照有真实 v2 判断：US `overheat`，CN `stagflation`；均为 `open`、`retrospective=false`、`as_of=2026-11-07`，未校准。
 
-此前写权限阻塞已解除。下一阶段继续修复判断链路、核对四象限 UI，并以生产登录态看到真实且有证据的美林时钟结果为验收目标；仅事实页面可用不代表该目标达成。本文此前部署与故障记录作为历史证据保留，新的实测结果另行追加。
+两地输入覆盖率均为 60%，不是分类概率。US 缺增长轴，CN 滞胀与衰退并列、margin=0。界面必须呈现这些限制；不绘制伪精确 XY 点，不把未校准分类称为概率。
 
-## 后续顺序
+## 缓存边界与测量口径
 
-发布判断链路及 manifest 修复 → 通过对应 CI → 部署精确提交 → 复跑真实补登记和登录态判断/console验收。性能需独立测量冷/热请求，再记录是否达标。保留现有事实页面可用，不将空判断伪装成成功结果。
+纯事实使用版本化 Next Data Cache，300 秒硬过期；key 包含快照、目录、部署 SHA 和输入／发布修订。每次请求在缓存外检查登录、功能开关、当前版本。判断结果和 collection 新鲜度不共享缓存，未知版本不复用。浏览器 `no-store` 只绕过 HTTP 缓存，不会绕过服务端事实缓存。
 
-[MiniMax 发布核对清单](mmx-checklist.md) 是审查建议，不代表测试通过。验收脚本与 manifest 修复由明确调用的 `gpt-6.1-sol` 编写。
+合并前只读测量记录在 [性能报告](../2026-11-07-macro-performance/README.md)。US/CN overview 暖路径约 543/552ms，是数据库读取样本，不是完整浏览器首屏或 p95。周期表冷扫描仍存在成本；必须记录上线后的首轮观察值和重复样本，不能将一次首轮样本称为受控冷启动，也不能把进程 memo header 当作跨实例命中证明。
+
+## 历史与后续
+
+[首次事实层发布与回滚](initial-facts-only-release.md) 保留先前故障、临时关闭判断开关及当时写权限阻塞的历史；这些不是本次最终状态。首次登录记录见 [acceptance.md](acceptance.md)。
+
+下一步：完成用户要求的视觉重做 → 新提交 CI／部署 → 重做中美登录态视觉与证据验收 → 执行浏览器性能样本并报告范围。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次成功的功能发布证据。

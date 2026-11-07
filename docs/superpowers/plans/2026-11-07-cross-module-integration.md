@@ -4,6 +4,8 @@ Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. To
 
 The table below preserves the original execution order. Current disposition: A1 #120, D #118, A2 relayed to main by #125, B #123, C #124 and F #127 are merged. F4 itself is on main via #117. Macro v2 is the current method after #129 and #132; #131 confirms its active input licences. Registration, publishability and production flags must be verified separately; a merged PR is not proof of deployment. E remains blocked on the foreign runtime; G / judgment_calibration remains unavailable without a calibrated probability method.
 
+Release follow-up: #133 repairs the production JSONB lookup, #134 the public manifest route, #135 adds the evidence-backed four-quadrant clock and #136 the versioned cross-instance fact cache. All are merged into `e0b82b25`. v2 is registered/publishable with unchanged hash; old-snapshot version mismatch remains a legitimate abstention. Final production state and logged-in acceptance are tracked in [the release record](../../audits/2026-11-07-launch-closeout/README.md), separately from the original flag intentions below. This follow-up code and test tooling used `gpt-6.1-sol`; mmx supplied independent audit/acceptance advice, not proof that production tests passed.
+
 Flags turn on by default in code only when the pair's PG17 end-to-end test passes against the real provider.
 
 | PR | Pair | Base | Can start | Contents | Flag after |

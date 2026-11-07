@@ -14,7 +14,7 @@
 
 ## 2. 部署顺序
 
-2026-11-07 上线核对：生产 v1 判断数为 0，v2 原先未注册；#132 合并后已登记 v2 并设 `publishable=true`，公式哈希为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`，复查无 drift。首次部署配置了 `MACRO_JUDGMENTS_ENABLED=1` 和 `NEXT_PUBLIC_SITE_URL=https://www.osbornalpha.com`；方法公开接口核对一致，但真实补登记及判断链路验收失败。最终已移除判断 flag 并重部署，事实层继续可用；见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)。以下 `publishable=false` 指初始代码默认值，实际生产状态以上述核对及后续部署记录为准。
+2026-11-07 上线核对：生产 v1 判断数为 0，v2 原先未注册；#132 后已登记 v2 并设 `publishable=true`，公式哈希为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`，#136 合并后仍无 drift。首次部署曾因真实补登记错误关闭判断开关；#133 修复 JSONB containment，后续扫描完成，旧 superseded 快照的 `upstream_version_mismatch` 保留为正确弃权，当前中美有效快照判断正常。#133–#136 精确提交 `e0b82b25` 已部署，`MACRO_JUDGMENTS_ENABLED=1`、`NEXT_PUBLIC_SITE_URL=https://www.osbornalpha.com`，线上 settle preview/apply 和 calibrate preview 均成功。当前结论及限制见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)。以下 `publishable=false` 指初始代码默认值，不是此次生产状态。
 
 `macro_regime@v2` 的公式哈希覆盖方法实现、结算 resolver、`regime-selection.ts` 的历史 vintage 资格与输入构造规则，以及其导入闭包中的分类规则、目录和日期计算。`db.ts`、`snapshots.ts`、`read-api.ts` 只负责查询、分页、缓存、并行读取和错误映射，不纳入公式哈希；这些 I/O 优化不改变分类或结算输入，因此不应造成方法漂移。注册前仍须核对冻结输入快照与结算证据。
 
