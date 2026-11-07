@@ -10,6 +10,7 @@ import type {ReadFactsEnvelope} from '../facts/db';
 import type {MemoryFactsDb} from '../facts/memory-facts-db';
 import type {FilingRow} from '../facts/types';
 import {toCompanyDbError} from './db';
+import {CompanyDbError} from './types';
 import type {PgErrorLike} from './db';
 import type {FilingSummary,Market,ReadSnapshotOptions,ReadSnapshotResult} from './types';
 
@@ -44,16 +45,29 @@ export async function readSnapshot(client:SupabaseClient|RpcClient,issuer:string
 }
 export const snapshotReader=(client:SupabaseClient|RpcClient):SnapshotReader=>(issuer,market,opts)=>readSnapshot(client,issuer,market,opts);
 
-/** company_read_snapshot over memoryFactsDb: readFacts + filings with mapping_gen > 0 and available by asOf, factCount over ok rows of the filing's generation. */
+/** Bounded retries of the memory reader before it gives up on a stream that keeps publishing. */
+const SNAPSHOT_TRIES=5;
+/**
+ * company_read_snapshot over memoryFactsDb: readFacts + filings with mapping_gen > 0 and available by asOf, factCount over ok rows of the filing's generation.
+ * memoryFactsDb serialises its calls, so the facts envelope and the later sync captures of filings/facts could straddle a queued publish; the read is
+ * repeated until the state_rev before the read, in the envelope and after capturing filings all agree (else CompanyDbError('internal','snapshot_unstable')).
+ */
 export function memorySnapshotReader(facts:MemoryFactsDb):SnapshotReader{
+ const revOf=(issuer:string,market:Market)=>facts.scope().find(s=>s.issuer_id===issuer&&s.market===market)?.state_rev??0;
  return async(issuer,market,o)=>{
-  const mine=facts.facts().filter(f=>f.issuer_id===issuer&&f.market===market);
-  const concepts=o.concepts??[...new Set(mine.map(f=>f.concept))].sort();
-  const env=concepts.length
-   ?await facts.readFacts(issuer,market,{concepts,asOf:o.asOf,from:o.from??undefined,to:o.to??undefined,history:o.history,limit:o.limit})
-   :{stateRev:facts.scope().find(s=>s.issuer_id===issuer&&s.market===market)?.state_rev??0,rows:[],truncated:false};
-  const filings=facts.filings().filter(g=>g.issuer_id===issuer&&g.market===market&&g.mapping_gen>0&&g.available_date<=o.asOf)
-   .sort((a,b)=>a.available_date<b.available_date?1:a.available_date>b.available_date?-1:a.filing_id<b.filing_id?-1:a.filing_id>b.filing_id?1:0);
-  return {...env,filings:filings.map(g=>filingSummaryOf(g,mine.filter(f=>f.filing_id===g.filing_id&&f.status==='ok'&&f.mapping_gen===g.mapping_gen&&f.available_date<=o.asOf).length))};
+  for(let attempt=0;attempt<SNAPSHOT_TRIES;attempt++){
+   const start=revOf(issuer,market);
+   const known=[...new Set(facts.facts().filter(f=>f.issuer_id===issuer&&f.market===market).map(f=>f.concept))].sort();
+   const concepts=o.concepts??known;
+   const env=concepts.length
+    ?await facts.readFacts(issuer,market,{concepts,asOf:o.asOf,from:o.from??undefined,to:o.to??undefined,history:o.history,limit:o.limit})
+    :{stateRev:revOf(issuer,market),rows:[],truncated:false};
+   const mine=facts.facts().filter(f=>f.issuer_id===issuer&&f.market===market);
+   const filings=facts.filings().filter(g=>g.issuer_id===issuer&&g.market===market&&g.mapping_gen>0&&g.available_date<=o.asOf)
+    .sort((a,b)=>a.available_date<b.available_date?1:a.available_date>b.available_date?-1:a.filing_id<b.filing_id?-1:a.filing_id>b.filing_id?1:0);
+   if(start!==env.stateRev||revOf(issuer,market)!==start)continue;
+   return {...env,filings:filings.map(g=>filingSummaryOf(g,mine.filter(f=>f.filing_id===g.filing_id&&f.status==='ok'&&f.mapping_gen===g.mapping_gen&&f.available_date<=o.asOf).length))};
+  }
+  throw new CompanyDbError('internal','snapshot_unstable');
  };
 }

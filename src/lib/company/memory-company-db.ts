@@ -164,7 +164,7 @@ function checkCoverage(v:unknown):CoverageInput{
  const st=text(p.scope_last_status,true,'coverage.scope_last_status');
  if(st!==null&&st!=='success'&&st!=='failed')ev('coverage.scope_last_status: success, failed or null expected');
  const ts=p.scope_last_success_at;
- if(ts!==null&&(typeof ts!=='string'||Number.isNaN(Date.parse(ts))))ev('coverage.scope_last_success_at: timestamp or null expected');
+ if(ts!==null&&!isoWithZone(ts))ev('coverage.scope_last_success_at: timestamp or null expected');
  return p as unknown as CoverageInput;
 }
 /** A key containing 'token' (case-insensitive) at any depth of params, arrays included. */
@@ -174,6 +174,12 @@ function hasTokenKey(v:unknown):boolean{
  return Object.entries(v).some(([k,x])=>/token/i.test(k)||hasTokenKey(x));
 }
 const ISO_TS=/^\d{4}-\d{2}-\d{2}T[0-9:.]+(Z|[+-]\d{2}:?\d{2})$/;
+/** ISO timestamp with a zone whose calendar date round-trips (2024-02-30 is refused, as the timestamptz cast does). */
+const isoWithZone=(v:unknown):boolean=>{
+ if(typeof v!=='string'||!ISO_TS.test(v)||Number.isNaN(Date.parse(v)))return false;
+ const d=new Date(`${v.slice(0,10)}T00:00:00.000Z`);
+ return !Number.isNaN(d.getTime())&&d.toISOString().slice(0,10)===v.slice(0,10);
+};
 function checkEvidence(x:Ctx,r:unknown):void{
  if(!isObj(r)||Object.keys(r).some(k=>!EVIDENCE_KEYS.includes(k))||EVIDENCE_KEYS.some(k=>!(k in r)))evd('row: exactly the EvidenceIndexRow keys expected');
  if(typeof r.fact_id!=='string'||!UUID.test(r.fact_id))evd('fact_id: uuid expected');
@@ -194,7 +200,7 @@ function checkEvidence(x:Ctx,r:unknown):void{
  if(!optStr(r.url,2048))evd('url: null or string of 1..2048 characters expected');
  if(r.params!==null&&!isObj(r.params))evd('params: null or object expected');
  if(hasTokenKey(r.params))evd('params: must not carry a token');
- if(r.captured_at!==null&&(typeof r.captured_at!=='string'||!ISO_TS.test(r.captured_at)||Number.isNaN(Date.parse(r.captured_at))))evd('captured_at: timestamp or null expected');
+ if(r.captured_at!==null&&!isoWithZone(r.captured_at))evd('captured_at: timestamp or null expected');
  const optInt=(v:unknown,min:number,max:number)=>v===null||(typeof v==='number'&&Number.isInteger(v)&&v>=min&&v<=max);
  if(!optInt(r.http_status,100,599))evd('http_status: integer 100..599 or null expected');
  if(!optInt(r.page,0,2147483647))evd('page: non-negative integer or null expected');
@@ -355,13 +361,14 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
    const want=filter.issuerIds?new Set(filter.issuerIds):null;
    const rows=[...coverage.values()].filter(c=>(filter.market===undefined||c.market===filter.market)&&(want===null||want.has(c.issuer_id)));
    const desc=(a:string|null,b:string|null)=>a===b?0:a===null?1:b===null?-1:cmp(b,a);
-   const name=(c:CoverageRow)=>names.get(c.issuer_id)??'';
-   rows.sort((a,b)=>(sort==='latest_available_date'?desc(a.latest_available_date,b.latest_available_date):sort==='latest_period_end'?desc(a.latest_period_end,b.latest_period_end):compareCodePoints(name(a),name(b)))
+   const nameCmp=(a:string|undefined,b:string|undefined)=>a===b?0:a===undefined?1:b===undefined?-1:compareCodePoints(a,b);   // SQL: missing names last
+   rows.sort((a,b)=>(sort==='latest_available_date'?desc(a.latest_available_date,b.latest_available_date):sort==='latest_period_end'?desc(a.latest_period_end,b.latest_period_end):nameCmp(names.get(a.issuer_id),names.get(b.issuer_id)))
     ||cmp(a.issuer_id,b.issuer_id)||cmp(a.market,b.market));
    return {rows:clone(rows.slice(page.offset,page.offset+page.limit)),total:rows.length};
   },
   async watchesOf(userId){return clone([...watches.values()].filter(w=>w.user_id===userId).sort((a,b)=>cmp(b.updated_at,a.updated_at)||cmp(a.issuer_id,b.issuer_id)));},
   async upsertWatch(userId,issuerId){
+   if(!names.has(issuerId))throw internal('insert or update on table "company_watches" violates foreign key constraint (unknown issuer)');   // SQL FK; supabaseCompanyDb maps it to internal
    const k=sk(userId,issuerId);const w=watches.get(k);
    if(w)return {row:clone(w),created:false};
    if([...watches.values()].filter(x=>x.user_id===userId).length>=MAX_COMPANY_WATCHES)throw new CompanyDbError('watch_limit',`watch_limit: MAX_COMPANY_WATCHES = ${MAX_COMPANY_WATCHES}`);

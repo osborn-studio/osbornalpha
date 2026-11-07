@@ -8,7 +8,7 @@ import {describe,expect,it} from 'vitest';
 import {factInsert,filingInsert} from '../facts/db-contract';
 import {memoryFactsDb} from '../facts/memory-facts-db';
 import {companyDbContract,coverageInput,filingPublishedOf} from './db-contract';
-import {CompanyDbError,decodeInboxCursor,encodeCursor,supabaseCompanyDb,toCompanyDbError,tsKey} from './db';
+import {CompanyDbError,decodeInboxCursor,encodeCursor,inboxPage,supabaseCompanyDb,toCompanyDbError,tsKey} from './db';
 import {memoryCompanyDb} from './memory-company-db';
 import {memorySnapshotReader,readSnapshot} from './snapshot-read';
 
@@ -42,7 +42,7 @@ describe('memoryCompanyDb specifics',()=>{
   expect(db.events()).toEqual([]);expect(db.coverage()).toEqual([]);
   expect(db.states()[0]).toMatchObject({digested_rev:0,last_status:null});
  });
- it('stamps first_seen_at / rebuilt_at with the injected clock and serialises calls',async()=>{
+ it('stamps first_seen_at / rebuilt_at with the injected clock; two concurrent identical replaces are both accepted',async()=>{
   const {facts,db,iss,b,f}=await memoryStream();
   const good=filingPublishedOf((await facts.filingsOfIssuer(iss,'US',{})).find(r=>r.filing_id===f.filing_id)!,2);
   db.setNow('2026-11-06T10:00:00.000Z');
@@ -132,6 +132,72 @@ describe('supabaseCompanyDb wiring',()=>{
  });
 });
 
+const hex=(c:string)=>c.repeat(64);
+const rawWatch=(o:Record<string,unknown>={})=>({user_id:'u',issuer_id:'i',note:null,muted:false,created_at:'2026-11-06T10:00:00+00:00',updated_at:'2026-11-06T10:00:00+00:00',...o});
+describe('supabaseCompanyDb wiring (more)',()=>{
+ it('replaceEvidence passes the fence arguments; sweepDue and listCoverage use their functions',async()=>{
+  const s=stub({rpc:fn=>({data:fn==='replace_company_fact_evidence'?{upserted:'2',deleted:'1'}:fn==='company_sweep_due'?[{issuerId:'i',market:'CN',stateRev:'4',digestedRev:'4'}]:{rows:[],total:'0'},error:null})});
+  const db=supabaseCompanyDb(s.client);const now=new Date('2026-11-06T00:00:00.000Z');const older=new Date('2026-11-05T00:00:00.000Z');
+  expect(await db.replaceEvidence('i','US',9,4,[])).toEqual({upserted:2,deleted:1});
+  expect(await db.sweepDue(older,now,50,'CN')).toEqual([{issuerId:'i',market:'CN',stateRev:4,digestedRev:4}]);
+  expect(await db.listCoverage({market:'US',issuerIds:['a']},'name',{offset:20,limit:10})).toEqual({rows:[],total:0});
+  expect(await db.listCoverage({},'latest_period_end',{offset:0,limit:5})).toEqual({rows:[],total:0});
+  expect(s.calls).toEqual([
+   {fn:'replace_company_fact_evidence',args:{p_issuer:'i',p_market:'US',p_attempt_id:9,p_based_on_rev:4,p_rows:[]}},
+   {fn:'company_sweep_due',args:{p_older_than:'2026-11-05T00:00:00.000Z',p_now:'2026-11-06T00:00:00.000Z',p_limit:50,p_market:'CN'}},
+   {fn:'company_list_coverage',args:{p_market:'US',p_issuer_ids:['a'],p_sort:'name',p_offset:20,p_limit:10}},
+   {fn:'company_list_coverage',args:{p_market:null,p_issuer_ids:null,p_sort:'latest_period_end',p_offset:0,p_limit:5}},
+  ]);
+ });
+ it('eventsOfIssuer filters, orders and builds the keyset .or() from the cursor',async()=>{
+  const id=hex('a');const s=stub({from:()=>({data:[rawEvent({event_id:hex('b'),occurred_on:'2024-05-01'}),rawEvent({event_id:id,occurred_on:'2024-05-01'})],error:null})});
+  const db=supabaseCompanyDb(s.client);
+  const p=await db.eventsOfIssuer('i','US',{limit:1,since:'2024-01-01',until:'2024-12-31',kinds:['fact_revised']});
+  expect(p.rows).toHaveLength(1);
+  expect(p.nextCursor).toBe(encodeCursor(['2024-05-01',hex('b')]));
+  const ops=s.queries[0].ops;
+  expect(s.queries[0].table).toBe('issuer_events');
+  expect(ops).toEqual([['select','*'],['eq','issuer_id','i'],['eq','market','US'],['is','retired_at',null],['gte','occurred_on','2024-01-01'],['lte','occurred_on','2024-12-31'],['in','kind',['fact_revised']],
+   ['order','occurred_on',{ascending:false}],['order','event_id'],['limit',2]]);
+  await db.eventsOfIssuer('i','US',{limit:1,cursor:p.nextCursor});
+  expect(s.queries[1].ops).toContainEqual(['or',`occurred_on.lt.2024-05-01,and(occurred_on.eq.2024-05-01,event_id.gt.${hex('b')})`]);
+ });
+ it('coverageOf and readEventIds chunk their .in() filters by 100 and deduplicate',async()=>{
+  const ids=Array.from({length:150},()=>randomUUID());
+  const c=stub();
+  await supabaseCompanyDb(c.client).coverageOf([...ids,...ids.slice(0,5)]);
+  expect(c.queries.map(q=>[q.table,(q.ops.find(o=>o[0]==='in')![2] as string[]).length])).toEqual([['issuer_coverage',100],['issuer_coverage',50]]);
+  const evs=Array.from({length:130},(_,i)=>i.toString(16).padStart(64,'0'));
+  const r=stub({from:(_t,ops)=>({data:(ops.find(o=>o[0]==='in')![2] as string[]).slice(0,1).map(event_id=>({event_id})),error:null})});
+  const got=await supabaseCompanyDb(r.client).readEventIds('u',evs);
+  expect(r.queries.map(q=>[q.table,q.ops.find(o=>o[0]==='eq')!.slice(1),(q.ops.find(o=>o[0]==='in')![2] as string[]).length])).toEqual([['company_event_reads',['user_id','u'],100],['company_event_reads',['user_id','u'],30]]);
+  expect([...got].sort()).toEqual([evs[0],evs[100]].sort());
+ });
+ it('watch methods build the expected query chains (user filter in depth)',async()=>{
+  const made=stub({from:()=>({data:[rawWatch()],error:null})});
+  expect(await supabaseCompanyDb(made.client).upsertWatch('u','i')).toMatchObject({created:true,row:{user_id:'u',issuer_id:'i',muted:false}});
+  expect(made.queries[0]).toEqual({table:'company_watches',ops:[['upsert',{user_id:'u',issuer_id:'i'},{onConflict:'user_id,issuer_id',ignoreDuplicates:true}],['select','*']]});
+  const dup=stub({from:(_t,ops)=>({data:ops[0][0]==='upsert'?[]:[rawWatch({note:'n'})],error:null})});
+  expect(await supabaseCompanyDb(dup.client).upsertWatch('u','i')).toMatchObject({created:false,row:{note:'n'}});
+  expect(dup.queries[1].ops).toEqual([['select','*'],['eq','user_id','u'],['eq','issuer_id','i'],['limit',1]]);
+  const none=stub({from:()=>({data:[],error:null})});
+  await expect(supabaseCompanyDb(none.client).upsertWatch('u','i')).rejects.toMatchObject({code:'internal'});
+  const p=stub({from:()=>({data:[rawWatch({muted:true})],error:null})});
+  expect(await supabaseCompanyDb(p.client).patchWatch('u','i',{muted:true,note:undefined})).toMatchObject({muted:true});
+  expect(p.queries[0].ops).toEqual([['update',{muted:true}],['eq','user_id','u'],['eq','issuer_id','i'],['select','*']]);
+  await supabaseCompanyDb(p.client).patchWatch('u','i',{});
+  expect(p.queries[1].ops).toEqual([['select','*'],['eq','user_id','u'],['eq','issuer_id','i'],['limit',1]]);
+  const d=stub({from:()=>({data:[{issuer_id:'i'}],error:null})});
+  expect(await supabaseCompanyDb(d.client).deleteWatch('u','i')).toBe(true);
+  expect(d.queries[0].ops).toEqual([['delete'],['eq','user_id','u'],['eq','issuer_id','i'],['select','issuer_id']]);
+  expect(await supabaseCompanyDb(stub().client).deleteWatch('u','i')).toBe(false);
+ });
+ it('inboxPage refuses an unparsable timestamp instead of crashing on a null key',()=>{
+  const row=(seen:string)=>({row:{event_id:hex('a')} as never,seen});
+  expect(()=>inboxPage([row('2026-11-06T10:00:00Z'),row('yesterday')],5)).toThrow(CompanyDbError);
+ });
+});
+
 describe('cursors and timestamps',()=>{
  it('tsKey orders PostgREST, node-postgres and ISO forms of the same instant identically, to the microsecond',()=>{
   const k=tsKey('2026-11-06T10:00:00.123456+00:00');
@@ -150,6 +216,29 @@ describe('cursors and timestamps',()=>{
 });
 
 describe('snapshot readers',()=>{
+ it('memorySnapshotReader: a publish queued right before the read yields one consistent state (retry), never a mix',async()=>{
+  const {facts,iss,x}=await memoryStream();
+  const fb=randomUUID();await facts.claimLease(iss,'US',fb,600).catch(()=>false);
+  const lease=(await facts.scopeRows('US',[iss]))[0].lease_batch_id;
+  const h=filingInsert(iss,{availableDate:'2024-06-01',formType:'10-Q',fiscalPeriod:'Q2',periodEnd:'2024-06-30'});
+  const run=await facts.beginRun(iss,'US',lease??fb,1);
+  await facts.stageFilings(run,[h]);
+  const z=factInsert(iss,h,{concept:'net_income_parent',value:'9',period_start:'2024-04-01',period_end:'2024-06-30'});
+  await facts.stageFacts(run,[z]);
+  const queued=facts.publishRun(run,[h.filing_id]);   // not awaited: runs first on the facts chain
+  const out=await memorySnapshotReader(facts)(iss,'US',{concepts:null,asOf:'2030-01-01',history:true});
+  await queued;
+  expect(out.stateRev).toBe(2);
+  expect(out.rows.map(r=>r.fact_id)).toContain(z.fact_id);
+  expect(out.rows.map(r=>r.fact_id)).toContain(x.fact_id);
+  expect(out.filings.find(r=>r.filingId===h.filing_id)!.factCount).toBe(1);
+ });
+ it('memorySnapshotReader gives up with snapshot_unstable when the stream keeps moving',async()=>{
+  const {facts,iss}=await memoryStream();
+  let n=0;   // every scope() read reports a newer state_rev: the start and end revisions never agree
+  const moving={...facts,scope:()=>facts.scope().map(q=>({...q,state_rev:q.state_rev+(++n)})),facts:()=>facts.facts(),filings:()=>facts.filings(),readFacts:facts.readFacts} as typeof facts;
+  await expect(memorySnapshotReader(moving)(iss,'US',{concepts:null,asOf:'2030-01-01',history:true})).rejects.toMatchObject({code:'internal',message:'snapshot_unstable'});
+ });
  it('readSnapshot calls company_read_snapshot and converts the envelope with resultFromEnvelope',async()=>{
   const fact={fact_id:'f1',issuer_id:'i',market:'US',filing_id:'g1',run_id:'r',concept:'revenue',source_concept:'Revenues',statement:'IS',period_start:'2023-01-01',period_end:'2023-12-31',duration:'12M',value:'100.50',value_text:'100.50',unit:'USD',consolidation:'consolidated',available_date:'2024-02-01',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:'h',created_at:'2024-02-01T00:00:00+00:00',disclosure_seq:1,is_current:true,is_revision:false};
   const filing={filingId:'g1',formType:'10-K',fiscalYear:2023,fiscalPeriod:'FY',periodEnd:'2023-12-31',availableDate:'2024-02-01',sourceRef:'0000320193-24-000001',source:'edgar',url:'https://www.sec.gov/x',documentUrl:null,citation:'edgar',linkAttempts:0,factCount:1,mappingGen:1};

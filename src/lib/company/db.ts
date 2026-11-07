@@ -103,7 +103,8 @@ export function issuerPage(rows:EventRow[],limit:number):{rows:EventRow[];nextCu
 export interface RawEvent{row:EventRow;seen:string}
 /** Rows (possibly several keyset pages, one per chunk) → one page in (first_seen_at desc, event_id desc) order; the cursor keeps the raw timestamp. */
 export function inboxPage(raw:RawEvent[],limit:number):{rows:EventRow[];nextCursor:string|null}{
- const sorted=[...raw].sort((a,b)=>{const ka=tsKey(a.seen)!,kb=tsKey(b.seen)!;return ka>kb?-1:ka<kb?1:a.row.event_id>b.row.event_id?-1:a.row.event_id<b.row.event_id?1:0;});
+ const key=(t:string)=>{const k=tsKey(t);if(k===null)throw new CompanyDbError('internal',`unparsable first_seen_at: ${t}`);return k;};
+ const sorted=[...raw].sort((a,b)=>{const ka=key(a.seen),kb=key(b.seen);return ka>kb?-1:ka<kb?1:a.row.event_id>b.row.event_id?-1:a.row.event_id<b.row.event_id?1:0;});
  const page=sorted.slice(0,limit);
  return {rows:page.map(r=>r.row),nextCursor:sorted.length>limit?encodeCursor([page[limit-1].seen,page[limit-1].row.event_id]):null};
 }

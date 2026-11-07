@@ -200,6 +200,9 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    expect(await codeOf(ev([row(f0,1)]))).toMatch(/^invalid_evidence:invalid_evidence: raw_hash: differs/);
    expect(await codeOf(ev([row(f0,0,{params:{api_token:'x'}})]))).toMatch(/^invalid_evidence:invalid_evidence: params: must not carry a token/);
    expect(await codeOf(ev([row(f0,0,{snapshot_path:`edgar/${randomUUID()}/${sha}.json`})]))).toMatch(/^invalid_evidence:invalid_evidence: snapshot_path/);
+   expect(await codeOf(ev([row(f0,0,{params:{q:{api_token:'x'}}})]))).toMatch(/^invalid_evidence:invalid_evidence: params: must not carry a token/);   // nested key
+   expect(await codeOf(ev([row(f0,0,{params:{q:[{a:1},{apiToken:'x'}]}})]))).toMatch(/^invalid_evidence:invalid_evidence: params: must not carry a token/);   // inside an array
+   expect(await codeOf(ev([row(f0,0,{captured_at:'2024-02-02 00:00:00'})]))).toMatch(/^invalid_evidence:invalid_evidence: captured_at/);
    expect(await codeOf(ev([],{issuer:randomUUID(),attempt:1}))).toMatch(/^unknown_stream:/);
    expect(await codeOf(ev([row(f0,0)],{rev:2}))).toMatch(/^stale_computation:/);   // fence: the facts moved
    const old=await attempt(iss);const newer=await attempt(iss);
@@ -212,6 +215,22 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    expect(await ev([row(f1,1)])).toEqual({upserted:1,deleted:1});
    expect([...(await db.evidenceOf([f0,f1])).keys()]).toEqual([f1]);
    expect((await db.evidenceOf([])).size).toBe(0);
+  });
+
+  it('evidenceOf omits a fact of a run that is not published (staged, not ok)',async()=>{
+   const {iss,fb}=await ready();
+   const sha='b'.repeat(64);const loc=(i:number)=>`us-gaap/Revenues/USD/x${i}`;const rh=(i:number)=>sha256Utf8(`${sha}\n${loc(i)}`);
+   const row=(id:string,i:number):EvidenceIndexRow=>({fact_id:id,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`edgar/${iss}/${sha}.json`,hash_locator:loc(i),json_pointer:`/facts/x/${i}`,field:null,
+    source:'edgar',api:null,url:null,params:null,captured_at:null,http_status:null,page:null,index_version:'company-evidence/1'});
+   const s=await publish(iss,fb,[{facts:[{raw_hash:rh(0)}]}]);const ok=s.facts[0][0].fact_id;
+   // a run that is never published: its facts are staged, not ok
+   expect(await h.facts.claimLease(iss,'US',fb,600)).toBe(true);
+   const r3=await h.facts.beginRun(iss,'US',fb,1);const g3=filingInsert(iss,{availableDate:'2024-08-01'});await h.facts.stageFilings(r3,[g3]);
+   const u=factInsert(iss,g3,{raw_hash:rh(3)});await h.facts.stageFacts(r3,[u]);
+   const rev=(await h.facts.scopeRows('US',[iss]))[0].state_rev;
+   const a=await db.beginAttempt(iss,'US',new Date());
+   expect(await db.replaceEvidence(iss,'US',a,rev,[row(ok,0),row(u.fact_id,3)])).toEqual({upserted:2,deleted:0});
+   expect([...(await db.evidenceOf([ok,u.fact_id])).keys()].sort()).toEqual([ok]);
   });
 
   it('eventsOfIssuer pages by (occurred_on desc, event_id) with filters; eventsOfIssuers pages by (first_seen_at desc, event_id desc); bad queries are invalid_read',async()=>{
