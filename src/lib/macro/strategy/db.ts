@@ -54,7 +54,7 @@ export interface StrategyDb{
 // ---------------------------------------------------------------- transport
 export type StrategyTable='macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
 export type ReadRole='anon'|'admin'|'session';
-export interface SelectSpec{table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
+export interface SelectSpec{columns?:readonly string[];table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
 /** rpc runs as service_role and rejects with the database error (message = code for raised errors); select runs under `role`. */
 export interface StrategyTransport{
  rpc(fn:string,args:Record<string,unknown>):Promise<unknown>;
@@ -98,11 +98,20 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
  };
  return {
   async putManifest(body){
-   const hash=sha256Hex(canonicalJson(body));
-   const id=String(await rpc('macro_put_manifest',{p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version}));
-   const stored=await manifestById('admin',id);
-   if(!stored)throw new StrategyDbError('rpc_failed',`manifest_not_readable:${id}`);
-   return stored;
+   // Capture one JSON value before awaiting I/O: hash, RPC payload and returned evidence must agree,
+   // even if the caller changes its object while the RPC is in flight. Undefined fields disappear as on wire.
+   const canonical=canonicalJson(body),hash=sha256Hex(canonical);
+   const frozen=JSON.parse(canonical) as StrategyManifest;
+   const id=await rpc('macro_put_manifest',{p_kind:frozen.kind,p_body:frozen,p_manifest_hash:hash,p_cutoff:frozen.cutoff,p_method_version:frozen.method_version,p_code_version:frozen.code_version,p_catalog_version:frozen.catalog_version});
+   if(typeof id!=='string'||!UUID.test(id))throw new StrategyDbError('rpc_failed','invalid_manifest_id');
+   // The service-only RPC inserts this exact JSONB value or verifies equality on hash conflict.
+   // Manifest rows have no update/delete grants. Read metadata only; manifest(id) still reads full evidence.
+   const rows=await select('admin',{table:'macro_strategy_manifests',columns:['manifest_id','manifest_hash','created_at'],eq:{manifest_id:id},order:[],limit:1});
+   const r=rows[0];
+   if(rows.length!==1||!r||typeof r.manifest_id!=='string'||r.manifest_id.toLowerCase()!==id.toLowerCase()||r.manifest_hash!==hash
+    ||!(r.created_at instanceof Date||typeof r.created_at==='string'&&/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(r.created_at)))
+    throw new StrategyDbError('rpc_failed','invalid_manifest_metadata');
+   return {manifest_id:r.manifest_id,manifest_hash:hash,body:frozen,created_at:iso(r.created_at)};
   },
   manifest:id=>manifestById('anon',id),
   async reviewCurrent(region,month){
@@ -182,7 +191,7 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
  return {
   async rpc(fn,args){const {data,error}=await pick('admin').rpc(fn,args);if(error)throw error;return data;},
   async select(role,spec){
-   let q=pick(role).from(spec.table).select('*');
+   let q=pick(role).from(spec.table).select(spec.columns?.join(',')??'*');
    for(const [k,v] of Object.entries(spec.eq))q=q.eq(k,v);
    if(spec.in)q=q.in(spec.in.column,spec.in.values);
    for(const o of spec.order)q=q.order(o.column,{ascending:o.ascending});

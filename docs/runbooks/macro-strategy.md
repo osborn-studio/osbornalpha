@@ -1,6 +1,6 @@
 # Macro strategy (P3 + P4) runbook
 
-最新生产验收见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)：#133–#136 已部署，判断开关启用，真实线上作业通过；界面与缓存性能以该记录的登录态测量为准。
+最新生产验收见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)：生产 `98e9a819` 已包含 #142 新时钟与 #144/#145/#148；原生 Chrome 登录态 US/CN 时钟、量化依据及真实来源抽屉核心流程通过，判断开关启用且方法版本未变。这不是用户审美批准，也不包含完整移动端／退出登录验证。此前 `dc47ba2e` 的 18 个 200/private-no-store 样本保留为历史证据；cycle 首次观察 miss 16.114 秒尚未通过新版本重测解除，重复命中不等于 p95/SLA 达标，#150 优化未发布。
 
 路径 2026-11-07 起为 `/macro`（旧路径 `/intel/macro/*` 308 永久重定向）
 
@@ -38,6 +38,12 @@ Status: P1 + P2 #109 and P3 + P4 #110/#111/#112 are on `main`. F4 (`src/lib/judg
 8. DONE (verified, guarded by `strategy/vercel-crons.test.ts`). `vercel.json` `crons` holds `/api/cron/macro-sync` (`30 5 * * *`) and `/api/cron/macro-review` (`0 6 3 * *`).
 9. DONE. The formerly 404 links resolve to existing routes: `/macro` (`src/app/(app)/macro/page.tsx`) and `/macro/<seriesId>` (`[seriesId]/page.tsx`). F4 method routes are now present via #117; public visibility still depends on method publication.
 10. INTEGRATED (#120, #125). The HTTP parser and macro bridge tests cover the merged F4 route contract; deployment smoke checks must still verify: the history cursor (`before`), `{cards}` vs `{items}`, the shape of `realized`, `settlement_id`, and the calibration values mapped by `f4.calibrationState.*`.
+
+### Shared-cache expiry and browser reloads (#138)
+
+An expired shared entry can trigger both Next background revalidation and a foreground hard-expiry fallback. These now reuse a single build promise for that lookup, including a rejection; a later request may retry. This avoids duplicate manifest work without changing the 300-second TTL or version identity.
+
+Authenticated strategy reads return `Cache-Control: private, no-store`, and the strategy client hook requests `cache: 'no-store'`. Same-URL reloads therefore re-enter the server gates rather than relying on a fresh browser HTTP response. Server pure-fact caches remain active after those gates. Verify actual response headers and logged-in reload behavior after deployment; this design alone does not prove every intermediary, account-switch path, cold instance, or latency target.
 
 ## 3. Monthly review
 

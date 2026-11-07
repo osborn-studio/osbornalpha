@@ -1,5 +1,13 @@
 # Macro loading performance — 2026-11-07
 
+## Follow-up cache correctness fixes
+
+PR #138 (deployed with `dc47ba2e`) coalesces the foreground hard-expiry rebuild with Next's stale-revalidation callback, sharing failure within that lookup and allowing a later request to retry. Authenticated strategy responses are implemented as `private, no-store`, and the strategy hook explicitly uses `cache: 'no-store'`; HTTP refreshes therefore reach the server's current auth/revision/judgment checks. The 300-second server fact cache and its version keys remain unchanged. Anonymous production checks confirm 401/no-store; a later signed-in native Chrome run confirms 18/18 HTTP 200 and `private, no-store` responses. See the [release record](../2026-11-07-launch-closeout/README.md) and [raw samples](../2026-11-07-launch-closeout/cache-authenticated-cua.json).
+
+That browser run used sequential same-origin GET with HTTP `cache: 'no-store'` and consumed response bodies. Cycle-table was 16,114 ms on the first observed process-memo miss, then 1,167 and 663 ms on hits. This is a real remaining cold-path concern despite faster repeat responses. The six endpoints each have only three samples: no p95/SLA, controlled-cold-start, full page-load, logout/account-switch, or cross-instance persistence claim is supported. A process memo hit does not establish a Next distributed-cache hit.
+
+Follow-up read-only local profiling of production data separately observed cycle at 49 database HTTP calls, approximately 21,097 KB and 22,451 frozen inputs, with 3,583 ms read/build time; policy had 25 calls, approximately 9,536 KB and 3,281 ms. Those figures exclude session handling, manifest persistence and production HTTP. They motivate investigation of serialization/persistence costs and are **not** evidence that the 16.114-second browser request has been fixed. New changes must preserve frozen-input evidence and method/version semantics before another deployed measurement.
+
 The production authenticated baseline included a 13,106 ms cycle-table request. The previous process-local strategy memo did not share work across cold Vercel instances. The overview rebuilt observation/provenance facts on every request and reset its loading state during same-query refreshes.
 
 ## Change

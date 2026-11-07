@@ -468,7 +468,7 @@ function pgTransport(pool:Pool,sessionUser:()=>string|null):StrategyTransport{
    for(const [k,v] of Object.entries(spec.eq)){values.push(v);where.push(`${ident(k)} = $${values.length}`);}
    if(spec.in){values.push(spec.in.values);where.push(`${ident(spec.in.column)}::text = any($${values.length}::text[])`);}
    const order=spec.order.length?` order by ${spec.order.map(o=>`${ident(o.column)} ${o.ascending?'asc':'desc'}`).join(', ')}`:'';
-   return (await c.query(`select * from public.${ident(spec.table)}${where.length?` where ${where.join(' and ')}`:''}${order} limit ${Number(spec.limit)}`,values)).rows as Record<string,unknown>[];
+   return (await c.query(`select ${spec.columns?.map(ident).join(', ')??'*'} from public.${ident(spec.table)}${where.length?` where ${where.join(' and ')}`:''}${order} limit ${Number(spec.limit)}`,values)).rows as Record<string,unknown>[];
   }),
  };
 }
