@@ -13,6 +13,7 @@ import {randomUUID} from 'node:crypto';
 import type {TableClient} from '@/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '@/lib/dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '@/lib/dq/batches';
+import {DATASETS} from '@/lib/dq/datasets';
 import {recordAttempt} from '@/lib/dq/freshness';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {FORMULA_VERSION} from '@/lib/facts/derive';
@@ -25,7 +26,7 @@ import {CompanyDbError,EVIDENCE_INDEX_VERSION} from './types';
 import type {CompanyDb,ReadSnapshotOptions,ReadSnapshotResult,ReplaceResult} from './types';
 
 export const DIGEST_PRODUCER='company-digest';
-export const DIGEST_DATASET='company.events';
+export const DIGEST_DATASET=DATASETS.company.events;
 export const DEFAULT_DIGEST_LIMIT=200;
 export const SWEEP_AGE_MS=7*86_400_000;
 export const STREAM_MIN_MS=30_000;

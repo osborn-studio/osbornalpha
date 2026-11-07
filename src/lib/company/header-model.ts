@@ -1,6 +1,7 @@
 // src/lib/company/header-model.ts
 // Pure header view model of the company page (plan 2026-11-06 Task 11; spec §5.2, §5.7, §0 #69).
 // Shared by the server loader (page-data.ts) and the client header; no server imports.
+import {DATASETS} from '@/lib/dq/datasets';
 import type {ResolvedIssuer,ResolvedSecurity} from '@/lib/entities/resolve';
 import type {CoverageRow,Market} from './types';
 
@@ -23,7 +24,7 @@ export function securityMarket(ticker:string):SecurityMarket{
  if(/^[A-Z][A-Z0-9-]*(\.[A-Z])?$/.test(t))return 'US';
  return 'OTHER';
 }
-export const datasetOf=(m:Market)=>m==='US'?'facts.us':'facts.cn';
+export const datasetOf=DATASETS.facts;
 export function securityChips(secs:ResolvedSecurity[],current:string):Chip[]{
  const cur=current.toUpperCase();
  return [...secs].sort((a,b)=>Number(b.is_primary)-Number(a.is_primary)||a.ticker.localeCompare(b.ticker))

@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { ReactElement } from 'react';
-import { isTabActive } from './tab-active';
 
 interface TabDef {
   id: string;
@@ -110,7 +109,7 @@ export function TabBar() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {TABS.map((t) => {
-        const active = isTabActive(t.href, pathname);
+        const active = (t.href === '/today' && pathname === '/today') || (t.href !== '/today' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}
