@@ -679,8 +679,9 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    const m=await synced();const b=await h.batch();
    const ids:string[]=[];
    for(const as_of of ['2025-03-01','2025-06-01','2025-09-01'])ids.push((await registered(m,b,{as_of})).id);
-   await registered(m,b,{as_of:'2024-01-01'});await registered(m,b,{as_of:'2025-05-01',abstained:true});
-   await pause(5);   // E-01: frozen_at is truncated to the millisecond; members must be registered before it
+   await registered(m,b,{as_of:'2024-01-01'});const lastReg=await registered(m,b,{as_of:'2025-05-01',abstained:true});
+   // E-01: frozen_at is truncated to the millisecond: wait on the server clock until the ms after the last registration has begun.
+   while(Date.parse(await db.serverTime())<Date.parse(lastReg.registered_at)+1)await pause(1);
    const w={from:'2025-01-01',to:'2025-12-31'};
    const gen=randomUUID();
    const f=await db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w);

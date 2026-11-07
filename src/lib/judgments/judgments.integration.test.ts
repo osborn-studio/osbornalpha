@@ -323,6 +323,15 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
   try{await c.query('select pg_advisory_lock($1)',[F4_CLAIM_LOCK]);return await fn();}
   finally{await c.query('select pg_advisory_unlock($1)',[F4_CLAIM_LOCK]).catch(()=>{});c.release();}
  }
+ /** E-01: frozen_at is truncated to the millisecond, so wait (on the database clock, not a fixed sleep) until the next millisecond after the
+  *  methodology's latest registration has begun: every freeze statement started afterwards has trunc(frozen_at) >= those registered_at. */
+ const pastRegistrations=async(m:string)=>{
+  for(const deadline=Date.now()+5000;;){
+   if(await one(`select clock_timestamp() >= date_trunc('milliseconds',max(registered_at)) + interval '1 millisecond' v from public.judgments where methodology_id=$1`,[m])===true)return;
+   if(Date.now()>deadline)throw new Error('database clock did not advance');
+   await pause(1);
+  }
+ };
  const waitBlocked=async(pid:number)=>{
   for(const deadline=Date.now()+3000;;){
    if(Number(await one(`select count(*)::int v from pg_stat_activity where $1 = any(pg_blocking_pids(pid))`,[pid]))>=1)return;
@@ -995,7 +1004,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
   ids.push(dueId);
   await register(judgmentRow(m,b,{asOf:'2024-01-01'}));                                    // outside the window
   await register(judgmentRow(m,b,{asOf:'2025-05-01',abstained:true}));                     // abstained: not a member
-  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
+  await pastRegistrations(m);
   // A registration whose transaction began BEFORE the freeze and commits AFTER it.
   const late=judgmentRow(m,b,{asOf:'2025-07-01'});
   const gen=randomUUID();
@@ -1052,7 +1061,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
  it('freeze_calibration_cohort: two concurrent freezes of one generation — the second waits on the claim and returns already_frozen; members are inserted once (Q1-05)',async()=>{
   const m=await syncNew();const b=await batch();
   for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
-  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
+  await pastRegistrations(m);
   const gen=randomUUID();
   const c=await admin.connect();
   try{
@@ -1191,7 +1200,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
  it('freeze and clear of one generation serialise on a per-generation lock, in either order (C-04)',async()=>{
   const m=await syncNew();const b=await batch();
   for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
-  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
+  await pastRegistrations(m);
   const frz=(g:string)=>`select public.freeze_calibration_cohort('${g}','${m}','v1','2025-01-01','2025-12-31') v`;
   // freeze in flight, clear waits and then removes what the freeze wrote
   const g1=randomUUID();const c=await admin.connect();
@@ -1223,8 +1232,8 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
 
  it('freeze: only registrations at or before frozen_at and settlements at or before it are frozen (minor 7)',async()=>{
   const m=await syncNew();const b=await batch();
-  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
   await register(judgmentRow(m,b,{asOf:'2025-03-01'}));
+  await pastRegistrations(m);
   const gen=randomUUID();const c=await admin.connect();
   try{
    await c.query('begin');
