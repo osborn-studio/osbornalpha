@@ -1,7 +1,7 @@
 // F4 judgment response handling (spec §3.2): tolerant card extraction, percent only when numeric, contributions.
 import {describe,expect,it} from 'vitest';
 import type {JudgmentCardView} from '@/lib/macro/judgment-contract';
-import {parseJudgments,contributionText,contributionsFrom,percentOf,clockFrom,basisFrom} from './judgment-view';
+import {parseJudgments,contributionText,contributionsFrom,percentOf,clockFrom,basisFrom,clockMetadataFrom} from './judgment-view';
 // `satisfies` keeps lifecycle/calibration as their literal types (an unannotated literal widens them to string; 第 4 稿 P1-1).
 const card={judgment_id:'j1',lifecycle:'open',calibration:'insufficient_sample',as_of:'2026-11-03T03:20:00Z',methodology:{id:'macro_regime',version:'1.0',title:{zh:'宏观状态',en:'Macro regime'},href:'/methods/macro_regime'},display:{headline:{zh:'复苏',en:'Recovery'},percent:null,value:null}} satisfies JudgmentCardView;
 describe('judgment view',()=>{
@@ -69,5 +69,34 @@ describe('live clock selection',()=>{
   const c={series_id:'US_CPI_YOY',observation_id:'o',rule_id:'infl.gt4',weight:15,support:{},contribution:{recovery:0,overheat:6,stagflation:9,recession:0}};
   expect(basisFrom({snapshot:{snapshot_id:'exact-input'},contributions:[c]},'exact-input')).toEqual([c]);
   expect(basisFrom({snapshot:{snapshot_id:'current'},contributions:[c]},'exact-input')).toBeNull();
+ });
+});
+
+describe('public F4 release DTOs',()=>{
+ it.each([['US','overheat'],['CN','stagflation']] as const)('replays %s with absent percent and nullable abstain reason', (region,value)=>{
+  const dto={...card,calibration:'insufficient',as_of:'2026-11-07',judgment_type:'macro_regime',kind:'categorical',subject:{type:'macro_region',key:region},retrospective:false,abstain_reason:null,methodology:{...card.methodology,version:'v2',href:'/intel/methods/macro_regime/v2'},display:{headline:{zh:'判定',en:'Call'},value},inputs:[{kind:'macro_observation',ref:{series_id:'CPI'}},{kind:'macro_snapshot',ref:{snapshot_id:'bound'}}]};
+  const parsed=parseJudgments({cards:[dto]});
+  expect(parsed.ok).toBe(true);
+  expect(clockFrom(parsed.ok?parsed.cards:[],region)).toMatchObject({selected:value,reason:null});
+ });
+});
+
+
+describe('exact snapshot clock metadata',()=>{
+ const dto={snapshot:{snapshot_id:'bound'},regime:{primary_state:'stagflation',secondary_state:'recession',coverage:0.6,margin_pp:0,growth_axis:null,inflation_axis:0.2},uncoveredWeight:40};
+ it('preserves coverage, a missing axis and the CN zero-margin secondary category',()=>{
+  expect(clockMetadataFrom(dto,'bound')).toEqual({...dto.regime,uncoveredWeight:40});
+ });
+ it('accepts the US missing growth axis without inventing coordinates',()=>{
+  expect(clockMetadataFrom({...dto,regime:{...dto.regime,primary_state:'overheat',margin_pp:12}},'bound')).toMatchObject({coverage:0.6,growth_axis:null});
+ });
+ it('rejects unbound, absent, nonfinite or incorrectly named metadata',()=>{
+  expect(clockMetadataFrom(dto,'overview')).toBeNull();
+  expect(clockMetadataFrom({snapshot:dto.snapshot},'bound')).toBeNull();
+  for(const field of ['coverage','margin_pp','growth_axis','inflation_axis']){
+   for(const invalid of [NaN,Infinity,'0.6',undefined])expect(clockMetadataFrom({...dto,regime:{...dto.regime,[field]:invalid}},'bound')).toBeNull();
+  }
+  expect(clockMetadataFrom({...dto,uncoveredWeight:Infinity},'bound')).toBeNull();
+  expect(clockMetadataFrom({...dto,regime:{coverage:0.6,margin:0,primary:'stagflation',secondary:'recession'}},'bound')).toBeNull();
  });
 });

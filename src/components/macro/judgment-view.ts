@@ -14,7 +14,7 @@ function toCard(v:unknown):JudgmentCard|null{
  if(!isObj(m)||typeof m.id!=='string'||typeof m.version!=='string'||!isBilingual(m.title)||typeof m.href!=='string'||(!/^\/(?!\/)/.test(m.href)||/[\\\u0000-\u0020]/.test(m.href)))return null;
  if(!isObj(d)||!isBilingual(d.headline))return null;
  if(d.percent!==undefined&&d.percent!==null&&typeof d.percent!=='number')return null;
- if(v.abstain_reason!==undefined&&typeof v.abstain_reason!=='string')return null;
+ if(v.abstain_reason!==undefined&&v.abstain_reason!==null&&typeof v.abstain_reason!=='string')return null;
  const inputs=isObj(v.inputs)?v.inputs.snapshot_id:undefined;
  const refs=Array.isArray(v.inputs)?v.inputs.filter(i=>isObj(i)&&i.kind==='macro_snapshot').map(i=>isObj(i.ref)?i.ref.snapshot_id:null):[];
  const snap=refs.length===1&&typeof refs[0]==='string'&&refs[0].length>0?refs[0]:Array.isArray(v.inputs)?null:[v.input_snapshot_id,v.macro_snapshot_id,inputs].find((x):x is string=>typeof x==='string')??null;
@@ -58,4 +58,16 @@ export function clockFrom(cards:JudgmentCard[],region:'US'|'CN'):ClockView{
 export function basisFrom(json:unknown,snapshotId:string):RegimeContribution[]|null{
  if(!isObj(json)||!isObj(json.snapshot)||json.snapshot.snapshot_id!==snapshotId)return null;
  return contributionsFrom(json);
+}
+
+export type ClockMetadata = Pick<import('@/lib/macro/judgment-contract').RegimeResult, 'coverage'|'margin_pp'|'primary_state'|'secondary_state'|'growth_axis'|'inflation_axis'> & {uncoveredWeight:number};
+const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
+const regime=(v:unknown):v is ClockMetadata['primary_state']=>v==='recovery'||v==='overheat'||v==='stagflation'||v==='recession';
+/** Read verified fields from the exact snapshot API DTO; never rerun classification. */
+export function clockMetadataFrom(json:unknown,snapshotId:string):ClockMetadata|null{
+ if(!isObj(json)||!isObj(json.snapshot)||json.snapshot.snapshot_id!==snapshotId||!isObj(json.regime))return null;
+ const r=json.regime;
+ if(!finite(r.coverage)||r.coverage<0||r.coverage>1||!finite(r.margin_pp)||r.margin_pp<0||r.margin_pp>100||!regime(r.primary_state)||(r.secondary_state!==null&&!regime(r.secondary_state))||!finite(json.uncoveredWeight)||json.uncoveredWeight<0)return null;
+ if((r.growth_axis!==null&&!finite(r.growth_axis))||(r.inflation_axis!==null&&!finite(r.inflation_axis)))return null;
+ return {coverage:r.coverage,margin_pp:r.margin_pp,primary_state:r.primary_state,secondary_state:r.secondary_state,growth_axis:r.growth_axis,inflation_axis:r.inflation_axis,uncoveredWeight:json.uncoveredWeight};
 }

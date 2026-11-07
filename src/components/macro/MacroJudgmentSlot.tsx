@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import type { RegimeContribution } from '@/lib/macro/types';
-import { contributionText, basisFrom, clockFrom, parseJudgments, type JudgmentCard } from './judgment-view';
+import { contributionText, basisFrom, clockFrom, clockMetadataFrom, parseJudgments, type ClockMetadata, type ClockView, type JudgmentCard } from './judgment-view';
 import { MacroRegimeClock } from './MacroRegimeClock';
 import { RULES, RULES_VERSION } from '@/lib/macro/regime';
 import { formatInstant } from './macro-format';
@@ -10,19 +10,9 @@ import { pick, type Locale } from './view-model';
 
 type SlotState = { status: 'idle' } | { status: 'loading' } | { status: 'unavailable' } | { status: 'ok'; cards: JudgmentCard[] };
 
-function Basis({ snapshotId, t, locale }: { snapshotId: string; t: MacroT; locale: Locale }) {
-  const [rows, setRows] = useState<{rows: RegimeContribution[]; rulesVersion: unknown} | null | 'error'>(null);
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/macro/snapshots/${encodeURIComponent(snapshotId)}`)
-      .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((j) => {
-        const basis = basisFrom(j, snapshotId);
-        if (!cancelled) setRows(basis === null ? 'error' : {rows: basis, rulesVersion: j.rulesVersion});
-      })
-      .catch(() => { if (!cancelled) setRows('error'); });
-    return () => { cancelled = true; };
-  }, [snapshotId]);
+type BasisState = {rows: RegimeContribution[]; rulesVersion: unknown; metadata: ClockMetadata | null} | null | 'error';
+
+function Basis({ rows, snapshotId, t, locale }: { rows: BasisState; snapshotId: string; t: MacroT; locale: Locale }) {
   if (rows === null) return <div className="text-xs text-text-dim">{t('judgment.loading')}</div>;
   if (rows === 'error' || rows.rows.length === 0) return <div className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</div>;
   return (
@@ -50,7 +40,7 @@ function Basis({ snapshotId, t, locale }: { snapshotId: string; t: MacroT; local
 }
 
 /** Fetch basis by the F4 input reference, including when it differs from the overview. */
-function Card({ card, t, locale }: { card: JudgmentCard; t: MacroT; locale: Locale }) {
+function Card({ card, rows, t, locale }: { card: JudgmentCard; rows: BasisState; t: MacroT; locale: Locale }) {
   const [basisOpen, setBasisOpen] = useState(false);
   const basisId = card.input_snapshot_id;
   return (
@@ -74,12 +64,34 @@ function Card({ card, t, locale }: { card: JudgmentCard; t: MacroT; locale: Loca
         {basisId ? (
           <>
             <button type="button" aria-expanded={basisOpen} onClick={() => setBasisOpen((v) => !v)} className="text-xs text-text">{t('judgment.basis')}</button>
-            {basisOpen && <div className="mt-2 overflow-x-auto"><Basis key={basisId} snapshotId={basisId} t={t} locale={locale} /></div>}
+            {basisOpen && <div className="mt-2 overflow-x-auto"><Basis rows={rows} snapshotId={basisId} t={t} locale={locale} /></div>}
           </>
         ) : <span className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</span>}
       </div>
     </article>
   );
+}
+
+/** One request supplies both the adjacent limitations and the expandable evidence table. */
+function BoundClock({ clock, reason, t, locale }: { clock: ClockView; reason: string | null; t: MacroT; locale: Locale }) {
+  const snapshotId = clock.card?.input_snapshot_id;
+  const [rows, setRows] = useState<BasisState>(null);
+  useEffect(() => {
+    if (!snapshotId) return;
+    let cancelled = false;
+    fetch(`/api/macro/snapshots/${encodeURIComponent(snapshotId)}`)
+      .then(async r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(j => {
+        const basis = basisFrom(j, snapshotId);
+        if (!cancelled) setRows(basis === null ? 'error' : {rows: basis, rulesVersion: j.rulesVersion, metadata: clockMetadataFrom(j, snapshotId)});
+      })
+      .catch(() => { if (!cancelled) setRows('error'); });
+    return () => { cancelled = true; };
+  }, [snapshotId]);
+  return <>
+    <MacroRegimeClock selected={clock.selected} reason={reason} metadata={rows && rows !== 'error' ? rows.metadata : null} metadataLoading={!!snapshotId && rows === null} t={t} />
+    {clock.card && <Card card={clock.card} rows={rows} t={t} locale={locale} />}
+  </>;
 }
 
 export function MacroJudgmentSlot({ region }: { region: 'US' | 'CN' }) {
@@ -127,8 +139,7 @@ export function MacroJudgmentSlot({ region }: { region: 'US' | 'CN' }) {
           <button type="button" onClick={() => setNonce((n) => n + 1)} className="ml-auto rounded border border-border px-3 py-1">{t('judgment.retry')}</button>
         </div>
       )}
-      {open && <MacroRegimeClock selected={clock.selected} reason={reason} t={t} />}
-      {open && clock.card && <Card key={clock.card.judgment_id} card={clock.card} t={t} locale={locale} />}
+      {open && <BoundClock key={`${clock.card?.judgment_id}:${clock.card?.input_snapshot_id}`} clock={clock} reason={reason} t={t} locale={locale} />}
     </section>
   );
 }
