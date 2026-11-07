@@ -103,7 +103,7 @@ select revision, input_revision from macro_publish_state where region = 'US';   
 select public.republish_macro_snapshot('<要恢复的 snapshot_id>', <revision>, <input_revision>);   -- 返回 {snapshot_id, revision, source_snapshot_id}
 ```
 
-`stale_publisher` 表示期间有写入或发布：重读两个值再执行。执行后 `GET /api/macro/overview?region=US` 的 `snapshotId` 应为新返回的 id（内容与源快照相同）。注意：下一次成功发布会按当前合格输入生成新快照——如果是坏输入导致的问题，先把坏观测隔离 / 拒绝（§7），否则回滚会被覆盖。在 `docs/audits/` 记录原因与时间。
+`stale_publisher` 表示期间有写入或发布：重读两个值再执行。执行后 `GET /api/macro/overview?region=US` 的 `snapshotId` 应为新返回的 id（内容与源快照相同）。注意：下一次成功发布会按当前合格输入生成新快照——如果是坏输入导致的问题：**先暂停发布者**（§13.6 第 2 条）；已发布的 `ok` 观测不能拒绝，更正路径见 §13.6 第 1 条；否则回滚会被下一次发布覆盖。在 `docs/audits/` 记录原因与时间。
 
 ## 9. 启用受限（restricted）序列
 
@@ -174,9 +174,16 @@ q "select version, name from supabase_migrations.schema_migrations order by vers
 任何前置对象为 null → 停，先补齐更早的迁移。然后执行（文件约 100 KB；端点把整个请求作为一个事务执行，失败整体回滚，可原样重跑，迁移是可重放的）：
 
 ```bash
-q "$(cat supabase/migrations/20261114090000_macro_workbench.sql)" | jq .          # 成功返回 []；失败返回 message，库未改动
-# 记入迁移历史，否则以后 `supabase db push` 会重跑它（与记忆中的方法一致）
-q "insert into supabase_migrations.schema_migrations(version, name, statements) values ('20261114090000','macro_workbench', array[]::text[]) on conflict (version) do nothing"
+# 迁移与迁移历史在**同一个请求 = 同一个事务**里执行：要么一起成功，要么一起回滚，不会出现"历史已记但迁移未执行"。
+SQL="$(cat supabase/migrations/20261114090000_macro_workbench.sql)
+insert into supabase_migrations.schema_migrations(version, name, statements) values ('20261114090000','macro_workbench', array[]::text[]) on conflict (version) do nothing;"
+OUT=$(jq -n --arg q "$SQL" '{query:$q}' | curl -sS -w '\n%{http_code}' -X POST "https://api.supabase.com/v1/projects/$REF/database/query" \
+      -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data @-)
+CODE=$(printf '%s' "$OUT" | tail -1); BODY=$(printf '%s' "$OUT" | sed '$d')
+echo "HTTP $CODE"; echo "$BODY" | head -c 600; echo
+[ "$CODE" = "201" ] || [ "$CODE" = "200" ] || { echo "STOP: migration request failed"; }
+# 必须同时满足：HTTP 2xx 且 BODY 是 [] 且下一行查询返回 1 行；任一不满足即停，不要手工补记历史
+q "select version from supabase_migrations.schema_migrations where version='20261114090000'"
 ```
 
 验证查询（逐条执行，对照期望）：
@@ -220,10 +227,12 @@ openssl rand -hex 32 | tee >(pbcopy) | vercel env add MACRO_INGEST_SECRET produc
 
 ```bash
 git fetch origin main
-git worktree add --detach ../osbornalpha-deploy origin/main
-mkdir -p ../osbornalpha-deploy/.vercel && cp .vercel/project.json ../osbornalpha-deploy/.vercel/project.json
-( cd ../osbornalpha-deploy && vercel deploy --prod --yes )
-git worktree remove --force ../osbornalpha-deploy
+D=~/Developer/CodeX/.worktrees/OsbornAlpha/deploy          # 外置 SSD 上的统一工作树位置（全局规则：不在内置盘、不建兄弟目录）
+mkdir -p "$(dirname "$D")"
+git worktree add --detach "$D" origin/main
+mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/project.json"
+( cd "$D" && vercel deploy --prod --yes )
+git worktree remove --force "$D" && git worktree prune
 ```
 
 `vercel.json` 已含 `/api/cron/macro-sync` `30 5 * * *`；该文件里还有每 4 小时一次的 `facts-sync`，套餐要求见 `data-foundation.md` §8.11（已满足才会部署成功）。部署完成后用未带令牌的请求确认路由存在：`curl -s -o /dev/null -w '%{http_code}\n' https://osbornalpha.com/api/cron/macro-sync` 期望 401（不是 404）。
@@ -315,7 +324,10 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
 
 迁移是**锁定**的、只增不删：**不得 `drop table` / `drop function` / `drop policy`，也不得改迁移文件或 `schema_migrations` 历史**。表与桶留着无害——没有人写入时它们是惰性的。安全回滚按影响面由小到大：
 
-1. **坏数据已发布 → 重发布旧快照**：§8 的 `republish_macro_snapshot`（新 active 快照复制旧清单）。随后把导致问题的观测按 §7 隔离 / 拒绝，否则下一次发布会按当前合格输入重新生成。
+1. **坏数据已发布 → 先停发布者，再重发布旧快照**：
+   - 先暂停两个发布者（见下面第 2 条：撤 cron 条目或部署前移除路由、`launchctl bootout` AKShare 任务），否则下一次成功发布会按当前合格输入重新生成快照，把回滚覆盖掉。
+   - 再执行 §8 的 `republish_macro_snapshot`（新 active 快照复制旧清单）。
+   - **已发布的 `ok` 观测不能被拒绝**：生命周期触发器不允许 `ok → rejected`，`resolve-quarantine` 只作用于隔离中的成员（§7）。P1 没有"原地更正已发布观测"的受支持路径。正确的更正只有两种：上游发布更正值（下一次采集按修订规则写入新版本，或对不可修订序列进入隔离后由 owner 接受），或另立一个更正迁移 / RPC（新迁移，需审计）。在更正到位之前保持发布者暂停，并在 `docs/audits/` 记录。
 2. **停止自动采集**：
    - FRED：从 `vercel.json` 删掉 `/api/cron/macro-sync` 条目，经 PR → 合并 → §13.2 手动部署；或在不改代码的前提下撤掉 `CRON_SECRET`（会让所有 cron 失效，**不推荐**）。
    - AKShare：`launchctl bootout gui/$(id -u)/studio.osborn.alpha.macro-collect`；要同时拒绝一切 ingest：`vercel env rm MACRO_INGEST_SECRET production` 后重新部署（ingest 未配置 → 503）。

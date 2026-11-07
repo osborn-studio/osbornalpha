@@ -50,4 +50,4 @@
 
 - 浏览器检查（Step 8）、概览延迟 p95（Step 7.3）、路由 `?preview=1` 的 HTTP 层实测：未做，指挥官清单见 `21-live-checks.md`。
 - 计划里的日志路径 `10-implementation-log.md` 实际为本文件（`20-implementation-log.md`）。
-| 18 | 30b11ef | (runbook/gate task; Codex round below) | pending | — |
+| 18 | 30b11ef | runbook + gate (Codex only) | T18-1,2 P2, T18-3 P2, T18-4 P3 | 1 (runbook: atomic migration+history with HTTP check, rollback pauses publishers and states ok rows cannot be rejected, deploy worktree on SSD). T18-3 blockers kept explicit: HTTP preview=1, logged-in browser render and overview p95 need a hosted DB — runbook §13.3/§13.5; guest-mode browser evidence in 22-browser-check.md |
