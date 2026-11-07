@@ -250,6 +250,18 @@ describe('review fixes (Task 18a)',()=>{
   expect(recent.detail).toMatchObject({upstream_sha256:'sub-sha',upstream_page:'recent',upstream_pages:pages});
   expect(rows.find(x=>x.disclosure_state==='pending')!.detail).toMatchObject({upstream_sha256:'sub-sha',upstream_pages:pages});
  });
+ it('conflicting copies of one accession on two pages: the row cites the page whose filingDate is the selected upstream_filed_date',async()=>{
+  const v=view();
+  const k=v.entries[1];   // 10-K for 2025-12-31, filed 2026-02-20
+  const early={...k,filingDate:'2026-02-18',page:'old-page.json',pageSha256:'old-sha'};
+  const late={...k,page:'recent',pageSha256:'sub-sha'};
+  const pages=[{name:'recent',sha256:'sub-sha'},{name:'old-page.json',sha256:'old-sha'}];
+  const h=await harness({members:[A],submissions:async()=>({...v,entries:[v.entries[0],early,late],pages})});
+  await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
+  const row=rowsOf(h.tables,A).find(x=>x.period_end==='2025-12-31')!;
+  expect(row.upstream_filed_date).toBe('2026-02-18');   // the earliest copy is selected
+  expect(row.detail).toMatchObject({upstream_page:'old-page.json',upstream_sha256:'old-sha'});
+ });
  it('a CN raw-store failure is a real error: member failed (retryable), raw_upload_failed, never success',async()=>{
   const h=await harness({market:'CN',members:[C],disclosure:async()=>({bytes:new Uint8Array([1]),sha256:'x',httpStatus:200,requestId:null,code:0,msg:'',fields:[],items:[],hasMore:false})});
   h.deps.raw={...h.raw,put:async()=>{throw new RawStoreError('raw_upload_failed','503');}};

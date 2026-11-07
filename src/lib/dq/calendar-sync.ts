@@ -183,10 +183,12 @@ async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string
  if(upstream.lookup==='ok'&&market==='US')rows=applyUpstreamCoverage(rows,upstream.us??[]);
  const shown=await display(deps.tables,issuerId,scope,market,today);
  // US: a positive-evidence row cites the submissions page that holds its entry (historical pages have their own bytes); the manifest lists every page used
- const pageOf=new Map((view?.entries??[]).map(e=>[e.accessionNumber,e]));
+ // keyed by (accession, filingDate): conflicting copies of one accession can sit on different pages and the selected copy is the one whose date is upstream_filed_date
+ const pageOf=new Map<string,SubmissionsView['entries'][number]>();
+ for(const e of view?.entries??[]){const k=`${e.accessionNumber}|${e.filingDate}`;if(!pageOf.has(k))pageOf.set(k,e);}
  const manifest=view?(view.pages??[{name:'recent',sha256:view.sha256}]):null;
  rows=rows.map(r=>{
-  const hit=typeof r.detail.upstream_accession==='string'?pageOf.get(r.detail.upstream_accession):undefined;
+  const hit=typeof r.detail.upstream_accession==='string'?pageOf.get(`${r.detail.upstream_accession}|${r.upstream_filed_date}`):undefined;
   const cite=hit&&hit.pageSha256?{upstream_sha256:hit.pageSha256,upstream_page:hit.page}:upstream.sha256?{upstream_sha256:upstream.sha256,...(manifest?{upstream_page:manifest[0]?.name??'recent'}:{})}:{};
   return {...r,detail:{...r.detail,display:shown,...cite,...(manifest?{upstream_pages:manifest}:{}),...(scheduleReason?{schedule_unavailable:scheduleReason}:{})}};
  });
