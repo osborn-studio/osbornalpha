@@ -95,6 +95,19 @@ describe('licensed document, owner A',()=>{
  });
 });
 
+describe('owner A with a foreign extraction id',()=>{
+ it('own document id but owner B extraction id → 404 on page, nothing audited',async()=>{
+  const db=S.db as ReturnType<typeof memoryDocumentsDb>;
+  const bDoc=await seedUpload(db,OWNER_B,enc('%PDF-b-private'),{});
+  const bExt=await seedExtraction(db,bDoc,['b secret'],{});
+  S.user=OWNER_A;
+  const r=await page(licensed,'1',`extraction=${bExt}`);
+  expect(r.status).toBe(404);
+  expect(JSON.stringify(await r.json())).not.toContain('b secret');
+  expect(S.audit).not.toHaveBeenCalled();
+ });
+});
+
 describe('public documents are not affected by the owner branch',()=>{
  it('signed-in users read public documents without audit; an internal citation of a public document stays 404 even for a signed-in user',async()=>{
   S.user=OWNER_A;

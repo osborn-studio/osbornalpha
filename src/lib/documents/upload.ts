@@ -1,6 +1,7 @@
 // src/lib/documents/upload.ts
 // Licensed / private documents (spec §8.2–8.3).
-// ingestUpload: the interface the foreign-research spec calls. PDF only (mime and %PDF- magic),
+// ingestUpload: ownerUserId MUST be the session user's id, never a value taken from the request
+//   (body, query, header). The interface the foreign-research spec calls. PDF only (mime and %PDF- magic),
 //   1..MAX_DOC_BYTES bytes, permission 'licensed'|'private' (never public), optional issuer and licence
 //   ref. One ingest_batches row (producer documents-upload, dataset documents.upload, triggered_by
 //   manual) → object first (blobs/<sha256>.pdf, content-addressed: an object shared with another
@@ -22,13 +23,13 @@ import {sha256Hex} from './extract/pages-json';
 import {CLASSIFIER_GEN,MAX_DOC_BYTES} from './types';
 import type {DocumentInsert,DocumentRow,DocumentsDb,ObjectStore} from './types';
 
-export type UploadErrorCode='invalid_input'|'unsupported_mime'|'empty'|'too_large'|'not_pdf';
-export class UploadError extends Error{constructor(public code:UploadErrorCode,message?:string){super(message??code);this.name='UploadError';}}
-export interface UploadDeps{db:Pick<DocumentsDb,'insertUploadDocument'>;store:ObjectStore;tables:TableClient;now:()=>Date;codeVersion:string}
+export type UploadErrorCode='invalid_input'|'unsupported_mime'|'empty'|'too_large'|'not_pdf'|'upload_conflict';
+export class UploadError extends Error{constructor(public code:UploadErrorCode,message?:string,public stored?:{documentId:string;permission:string;licenseRef:string|null}){super(message??code);this.name='UploadError';}}
+export interface UploadDeps{db:Pick<DocumentsDb,'insertUploadDocument'|'documentById'>;store:ObjectStore;tables:TableClient;now:()=>Date;codeVersion:string}
 export interface UploadInput{ownerUserId:string;bytes:Uint8Array;filename:string;mime:string;permission:'licensed'|'private';license?:{ref:string};issuerId?:string;title?:string}
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CONTROL=/[\u0000-\u001f\u007f]/;
+const CONTROL=/[\u0000-\u001f\u007f\p{Cf}]/u;
 /** Last path component, trimmed; 1..255 code points, no control characters. */
 function cleanFilename(name:string):string{
  const base=(name.split(/[\\/]/).pop()??'').trim();
@@ -37,12 +38,12 @@ function cleanFilename(name:string):string{
 }
 const utc8Date=(d:Date)=>new Date(d.getTime()+8*3_600_000).toISOString().split('T')[0];
 
-export async function ingestUpload(deps:UploadDeps,input:UploadInput):Promise<{documentId:string;duplicate:boolean}>{
+export async function ingestUpload(deps:UploadDeps,input:UploadInput):Promise<{documentId:string;duplicate:boolean;batchError?:string}>{
  if(!UUID.test(input.ownerUserId))throw new UploadError('invalid_input','owner');
  if(input.mime!=='application/pdf')throw new UploadError('unsupported_mime');
  if(input.permission!=='licensed'&&input.permission!=='private')throw new UploadError('invalid_input','permission');
  if(input.issuerId!==undefined&&!UUID.test(input.issuerId))throw new UploadError('invalid_input','issuer');
- if(input.license!==undefined&&(typeof input.license.ref!=='string'||input.license.ref.trim()===''||input.license.ref.length>200))throw new UploadError('invalid_input','license');
+ if(input.license!==undefined&&(typeof input.license.ref!=='string'||input.license.ref.trim()===''||Array.from(input.license.ref.trim()).length>200))throw new UploadError('invalid_input','license');
  if(input.bytes.length===0)throw new UploadError('empty');
  if(input.bytes.length>MAX_DOC_BYTES)throw new UploadError('too_large');
  if(new TextDecoder().decode(input.bytes.subarray(0,5))!=='%PDF-')throw new UploadError('not_pdf');
@@ -60,10 +61,22 @@ export async function ingestUpload(deps:UploadDeps,input:UploadInput):Promise<{d
    published_at:at,published_at_precision:'instant',available_at:at,available_date:utc8Date(now),fiscal_year:null,fiscal_period:null,period_end:null,filing_source_ref:null,
    permission:input.permission,owner_user_id:input.ownerUserId,license_ref:input.license?.ref.trim()??null,batch_id:batchId,code_version:deps.codeVersion};
   const r=await deps.db.insertUploadDocument(input.ownerUserId,doc);
-  if(r.outcome==='duplicate')counts.duplicates++;else counts.inserted++;
-  await finishBatch(deps.tables,batchId,{counts,errors:[]},deps.now());
-  return {documentId:r.document_id,duplicate:r.outcome==='duplicate'};
+  if(r.outcome==='duplicate'){
+   counts.duplicates++;
+   // same owner + bytes: a different permission / licence is a conflict, never a silent duplicate
+   const stored=await deps.db.documentById(r.document_id);
+   if(stored&&(stored.permission!==doc.permission||stored.license_ref!==doc.license_ref)){
+    await finishBatch(deps.tables,batchId,{counts,errors:[]},deps.now()).catch(()=>undefined);
+    throw new UploadError('upload_conflict','stored permission or licence differs',{documentId:stored.document_id,permission:stored.permission,licenseRef:stored.license_ref});
+   }
+  }else counts.inserted++;
+  // the row is stored: a batch-finalisation failure is reported, not counted as a failed upload
+  let batchError:string|undefined;
+  try{await finishBatch(deps.tables,batchId,{counts,errors:[]},deps.now());}
+  catch(e){batchError=e instanceof Error?e.message:String(e);}
+  return {documentId:r.document_id,duplicate:r.outcome==='duplicate',...(batchError!==undefined?{batchError}:{})};
  }catch(e){
+  if(e instanceof UploadError&&e.code==='upload_conflict')throw e;
   counts.failed++;
   await finishBatch(deps.tables,batchId,{counts,errors:[{code:'upload_failed',message:e instanceof Error?e.message:String(e)}]},deps.now()).catch(()=>undefined);
   throw e;

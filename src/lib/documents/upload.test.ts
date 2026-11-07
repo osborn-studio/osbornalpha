@@ -55,7 +55,7 @@ describe('ingestUpload',()=>{
   expect(await code(ingestUpload(deps,input({bytes:new Uint8Array(0)})))).toBe('empty');
   expect(await code(ingestUpload(deps,input({bytes:new Uint8Array(MAX_DOC_BYTES+1)})))).toBe('too_large');
   expect(await code(ingestUpload(deps,input({bytes:new TextEncoder().encode('<html>')})))).toBe('not_pdf');
-  for(const filename of ['','dir/','a\u0000b.pdf','x'.repeat(256)])expect(await code(ingestUpload(deps,input({filename}))),JSON.stringify(filename)).toBe('invalid_input');
+  for(const filename of ['','dir/','a\u0000b.pdf','a\u202eb.pdf','x'.repeat(256)])expect(await code(ingestUpload(deps,input({filename}))),JSON.stringify(filename)).toBe('invalid_input');
  });
  it('a failed object put writes no row and finishes the batch failed',async()=>{
   const {db,tables,deps}=harness();
@@ -63,6 +63,33 @@ describe('ingestUpload',()=>{
   await expect(ingestUpload({...deps,store:broken},input())).rejects.toThrow('storage down');
   expect(db.documents()).toEqual([]);
   expect((tables as ReturnType<typeof memoryTableClient>).rows('ingest_batches')[0]).toMatchObject({status:'failed',counts:{failed:1}});
+ });
+});
+
+describe('ingestUpload follow-ups',()=>{
+ it('same owner and bytes with a different permission or licence is upload_conflict carrying the stored values',async()=>{
+  const {deps}=harness();
+  const a=await ingestUpload(deps,input());
+  for(const o of [{permission:'private' as const,license:undefined},{license:{ref:'other'}}]){
+   const e=await ingestUpload(deps,input(o)).catch(x=>x);
+   expect(e).toBeInstanceOf(UploadError);
+   expect(e).toMatchObject({code:'upload_conflict',stored:{documentId:a.documentId,permission:'licensed',licenseRef:'gs-2026-11'}});
+  }
+  expect((await ingestUpload(deps,input({license:{ref:' gs-2026-11 '}}))).duplicate).toBe(true);
+ });
+ it('a finishBatch failure after the insert keeps the result and reports batchError',async()=>{
+  const {db,tables,deps}=harness();
+  const t=tables as ReturnType<typeof memoryTableClient>;
+  const broken=withOverride(t,{update:async()=>{throw new Error('batch down');}} as never);
+  const r=await ingestUpload({...deps,tables:broken},input());
+  expect(r.duplicate).toBe(false);
+  expect(r.batchError).toBeDefined();
+  expect(db.documents()).toHaveLength(1);
+ });
+ it('measures the trimmed licence ref in code points',async()=>{
+  const {deps}=harness();
+  expect((await ingestUpload(deps,input({license:{ref:'𠀋'.repeat(200)}}))).duplicate).toBe(false);
+  expect(await code(ingestUpload(deps,input({ownerUserId:OWNER_B,license:{ref:'𠀋'.repeat(201)}})))).toBe('invalid_input');
  });
 });
 
