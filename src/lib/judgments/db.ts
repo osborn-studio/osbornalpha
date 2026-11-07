@@ -49,13 +49,15 @@ const CODES:readonly string[]=JUDGMENT_ERROR_CODES;
 /** PostgreSQL / PostgREST error (or anything thrown) → JudgmentError. */
 export function toJudgmentError(e:unknown):JudgmentError{
  if(e instanceof JudgmentError)return e;
- const p=(e!==null&&typeof e==='object'?e:{}) as PgErrorLike;
+ const p=(e!==null&&typeof e==='object'?e:{}) as PgErrorLike&{detail?:string|null};
  const message=p.message??String(e);
+ // E-07: the original SQLSTATE / details / hint stay available (PostgREST says `details`, node-postgres `detail`).
+ const detail:Record<string,unknown>={sqlstate:p.code??null,details:p.details??p.detail??null,hint:p.hint??null};
  const head=message.split(/[\s:]/,1)[0];
- if(p.code==='55P03'||head==='lease_lost')return new JudgmentError('lease_lost',message);
- if(CODES.includes(head))return new JudgmentError(head as JudgmentErrorCode,message);
- if(p.code==='23505')return new JudgmentError('duplicate_key',message);
- return new JudgmentError('unknown',message);
+ if(p.code==='55P03'||head==='lease_lost')return new JudgmentError('lease_lost',message,detail);
+ if(CODES.includes(head))return new JudgmentError(head as JudgmentErrorCode,message,detail);
+ if(p.code==='23505')return new JudgmentError('duplicate_key',message,detail);
+ return new JudgmentError('unknown',message,detail);
 }
 export function assertLimit(n:number,max:number):void{
  if(!Number.isInteger(n)||n<1||n>max)throw new JudgmentError('invalid_parameter',`limit:${String(n)}`);
@@ -137,8 +139,8 @@ const QUEUE_FILTERS=['due','backoff','leased','all'];
 interface RpcResult{data:unknown;error:PgErrorLike|null}
 export type RpcFn=(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;
 // The query builder is left untyped on purpose (same as table-client.ts / facts db.ts).
-interface NarrowClient{rpc:RpcFn;from:(table:string)=>any}
 type Query=PromiseLike<RpcResult>&{range:(from:number,to:number)=>Query};
+interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>Query;from:(table:string)=>any}
 
 export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseClient}):JudgmentsDb{
  const anon=clients.anon as unknown as NarrowClient;const admin=clients.admin as unknown as NarrowClient;
@@ -168,7 +170,11 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
    const r=await call<{registered_at:string;retrospective:boolean}>(admin,'register_judgment',{p_row:row,p_queue:queue});
    return {registered_at:isoTs(r.registered_at),retrospective:r.retrospective===true};
   },
-  latestCards:(subject,o)=>envelopes(anon,'latest_judgment_cards',{p_subject_type:subject.type,p_subject_key:subject.key,p_types:o.types??null,p_view:o.view,p_cutoff:o.cutoff??null}),
+  // E-02: one card per (type, methodology) can exceed a capped max_rows; the function orders deterministically, so drain by range() until an empty page.
+  async latestCards(subject,o){
+   const args={p_subject_type:subject.type,p_subject_key:subject.key,p_types:o.types??null,p_view:o.view,p_cutoff:o.cutoff??null};
+   return (await pageAll(()=>anon.rpc('latest_judgment_cards',args))).map(envelopeFromRpc);
+  },
   historyOf:(subject,type,m,o)=>envelopes(anon,'judgment_history',{p_subject_type:subject.type,p_subject_key:subject.key,p_type:type,p_methodology:m.id,p_version:m.version,p_view:o.view,p_cutoff:o.cutoff??null,p_before:o.before??null,p_limit:o.limit}),
   async claimDue(limit,leaseSeconds){return ((await call<Row[]|null>(admin,'claim_due_judgments',{p_limit:limit,p_lease_seconds:leaseSeconds}))??[]).map(queueFromTable).sort(byQueueOrder);},
   async releaseLease(judgmentId,leaseToken,patch){await call(admin,'release_lease',{p_judgment_id:judgmentId,p_lease_token:leaseToken,p_patch:patch});},

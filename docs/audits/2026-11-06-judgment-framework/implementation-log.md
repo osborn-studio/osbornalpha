@@ -8,6 +8,8 @@
 | T3 migration II | 本提交（`feat(judgments): F4 Task 3`） | 待复审 | 待审 | 0 | judgments.integration 31/31（连跑 3 次稳定）；test:migrations PASS；typecheck、lint 干净；executed on plan draft 4；复审修复提交 `fix(judgments): F4 Task 3 review round 1`（39/39） |
 | T6 origins / facts-derive / macro-api / inputs-db | 本提交（`feat(judgments): origin table, deriveMetricsAsOf`） | 待复审 | 待审 | 0 | 4 测试文件 17/17；typecheck、lint 干净；executed on plan draft 4；复审修复提交 见 T6 fix 行 |
 | T6 fix | 本提交（`fix(judgments): Task 6 review`） | 待复审 | 待审 | 1 | filings 过滤未发布(mapping_gen<=0)先于 limit；tableRows / issuer_securities 用 selectAll 分页（max_rows 上限桩）；asOf 真实日期 + JudgmentError(invalid_parameter)；注释补充；先红 3 失败后绿 |
+| T4 JudgmentsDb | b7e421e7 | 待复审 | 待审 | 1 | db.test 28/28；pg 契约+并发与 judgments.integration 同跑 65/65 |
+| T4 fix | 本提交（`fix(judgments): F4 Task 4 review round 1`） | 复审意见已处理 | Codex E-01..E-07 已处理 | 1 | db.test 34/34；两个集成文件同跑 70/70 连跑 5 次，0 死锁；test:migrations PASS；typecheck、lint 干净 |
 
 ## 偏差 · Task 1
 
@@ -102,3 +104,13 @@
 - K-03：概率（卡片的 `claim.p`、赔率的 thesis `p`）必须有限且在 [0,1]：卡片 `percent=null`、无 `band`、标题标"判断值无效 / invalid claim"、`missing=['invalid_claim']`；赔率 → `not_computed` 原因 `invalid_probability`（zh/en 文案已加，先于一致性检查，NaN 不再绕过 `inputs_inconsistent`）。情景 `p` 原本已校验有限且在 [0,1]。
 - 次要：可达组合测试改为对每个公开组合构造真实信封，断言 `toCard` 的 percent/band 有无、lifecycle、calibration、outcome 与 `REACHABLE_COMBINATIONS` 一致（不再重算公式）。
 - 红测：先改测试，`npm test -- src/lib/judgments/display.test.ts` 3 failed / 23 passed（K-02 溢出、K-03 卡片、K-03 赔率）；实现后 display+messages+i18n 31 passed，typecheck、lint 干净。
+
+## Task 4 复审第 1 轮修复（迁移原地改，未锁）
+- 红测：改测试后 `db.test.ts` 5 failed / 29 passed（calibration_id 唯一、supabase 路由计数、latestCards 排空、toJudgmentError detail、内存原子性）；集成两文件同跑 17 failed / 53 passed（`claim_due_judgments` 改为 jsonb 数组后的辅助、新增 E-03 / E-01 用例）。
+- E-06：去掉 `pgJudgmentsDb.run` 的 40P01 重试。`F4_SCHEMA_LOCK=20261110`（db-contract.ts 导出）：`replayMigration` 在事务开头取 `pg_advisory_xact_lock`，`run()` 在 `begin` 后取 `pg_advisory_xact_lock_shared`。两文件同跑 5 次：0 死锁、0 失败。
+- E-01：`freeze_calibration_cohort` 的 `frozen_at = date_trunc('milliseconds', statement_timestamp())`，成员按截断值过滤。后果：与冻结同一毫秒登记的判断可能落在 `frozen_at` 之后——依赖"登记后立即冻结"的测试在冻结前 `pause(5)`（C-04、并发冻结、minor-7、契约用例）。
+- E-03：`claim_due_judgments` 返回单个 jsonb 数组（`drop function` 后重建，签名不变；授权块重授）；pg 实现 / Task 3 测试辅助改为 `jsonb_populate_recordset`。
+- E-02：`supabaseJudgmentsDb.latestCards` 用 `.range()` 分页直至空页（`NarrowClient.rpc` 返回可 `range` 的 Query）。
+- E-04：内存实现的 `quarantineSettlement / applyQuarantineOverride / rejectQuarantinedSettlement` 经 `atomic()`：快照内存表，失败时还原并撤销已写的 `dq_quarantine` 更新；审计插入放在最后。故障注入用例在 `db.test.ts`（pg 无法注入）。
+- E-05：内存 `insertCalibration` 对 `calibration_id` 重复抛 `duplicate_key`。E-07：`toJudgmentError` 的 `detail = {sqlstate, details, hint}`。
+- 契约新增：latest 视图 calibration_valid 以 now 判（cutoff < valid_until ≤ now → false）；apply / reject 对错误 quarantine_id / table_name 均 stale；`calibration_id` 唯一；过期租约用例改为一次领取一次等待。

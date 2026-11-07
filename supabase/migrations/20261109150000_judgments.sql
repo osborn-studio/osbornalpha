@@ -665,22 +665,28 @@ end $$;
 
 -- §5.4: due = open, next_attempt_at <= now, lease free or expired; order (next_attempt_at, judgment_id);
 -- skip rows another transaction holds; a fresh lease token per claim.
-create or replace function public.claim_due_judgments(p_limit integer, p_lease_seconds integer)
-returns setof public.judgment_settle_queue language plpgsql security definer set search_path = '' as $$
+-- Review E-03: ONE jsonb array (a scalar result), ordered by next_attempt_at, judgment_id — a setof result would be cut by a
+-- lower hosted PostgREST max_rows AFTER the rows were leased. The return type changed, so the old definition is dropped first.
+drop function if exists public.claim_due_judgments(integer, integer);
+create function public.claim_due_judgments(p_limit integer, p_lease_seconds integer)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_out jsonb;
 begin
   if p_limit is null or p_limit < 1 or p_limit > 100 then raise exception 'invalid_parameter: limit' using errcode = '22023'; end if;
   if p_lease_seconds is null or p_lease_seconds < 1 or p_lease_seconds > 3600 then raise exception 'invalid_parameter: lease_seconds' using errcode = '22023'; end if;
-  return query
   with due as (
     select x.judgment_id from public.judgment_settle_queue x
     where x.closed_at is null and x.next_attempt_at <= pg_catalog.now() and (x.leased_until is null or x.leased_until < pg_catalog.now())
     order by x.next_attempt_at, x.judgment_id
     limit p_limit
-    for update skip locked)
-  update public.judgment_settle_queue q
-  set leased_until = pg_catalog.now() + pg_catalog.make_interval(secs => p_lease_seconds), lease_token = pg_catalog.gen_random_uuid(), updated_at = pg_catalog.now()
-  from due where q.judgment_id = due.judgment_id
-  returning q.*;
+    for update skip locked),
+  leased as (
+    update public.judgment_settle_queue q
+    set leased_until = pg_catalog.now() + pg_catalog.make_interval(secs => p_lease_seconds), lease_token = pg_catalog.gen_random_uuid(), updated_at = pg_catalog.now()
+    from due where q.judgment_id = due.judgment_id
+    returning q.*)
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(l) order by l.next_attempt_at, l.judgment_id), '[]'::jsonb) into v_out from leased l;
+  return v_out;
 end $$;
 
 -- §5.4: fencing by token; next_attempt_at is never set before now(). Plan audit R3-01: last_detail.incident is never
@@ -962,7 +968,7 @@ end $$;
 -- claim). A claimed generation — including an empty one — returns already_frozen from the marker and inserts nothing.
 create or replace function public.freeze_calibration_cohort(p_generation uuid, p_methodology text, p_version text, p_window_from date, p_window_to date) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare n bigint; v_at timestamptz := pg_catalog.statement_timestamp(); v_job text; v_claimed text; v_marker jsonb;
+declare n bigint; v_at timestamptz := pg_catalog.date_trunc('milliseconds', pg_catalog.statement_timestamp()); v_job text; v_claimed text; v_marker jsonb;   -- review E-01: frozen_at is a millisecond value, so adapters round-trip it exactly
 begin
   if p_generation is null or p_methodology is null or p_version is null or p_window_from is null or p_window_to is null or p_window_from > p_window_to then
     raise exception 'invalid_parameter: window' using errcode = '22023';

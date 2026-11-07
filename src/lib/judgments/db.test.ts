@@ -6,6 +6,8 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
+import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
 import {calibrationFixture,judgmentFixture,judgmentsDbContract,methodologyFixture,settlementFixture} from './db-contract';
 import {envelopeFromRpc,supabaseJudgmentsDb,toJudgmentError,transitionAllowed} from './db';
@@ -79,7 +81,7 @@ describe('transitionAllowed (settlement_sequence twin)',()=>{
 
 type Call={fn:string;args:Record<string,unknown>};
 /** A stub SupabaseClient: rpc answers from `rpc` (an Error answers as a PostgREST error); from() is a chainable builder recording its calls. */
-function stub(rpc:Record<string,unknown>={},tables:Record<string,unknown[]>={}){
+function stub(rpc:Record<string,unknown>={},tables:Record<string,unknown[]>={},cap=Infinity){
  const calls:Call[]=[];const reads:{table:string;ops:string[]}[]=[];
  const builder=(table:string)=>{
   const rec={table,ops:[] as string[]};reads.push(rec);
@@ -90,7 +92,13 @@ function stub(rpc:Record<string,unknown>={},tables:Record<string,unknown[]>={}){
   return proxy;
  };
  const client={
-  rpc:(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});const r=rpc[fn];return Promise.resolve(r instanceof Error?{data:null,error:{message:r.message,code:(r as Error&{code?:string}).code??null}}:{data:r===undefined?null:r,error:null});},
+  // rpc() answers like a PostgREST builder: awaiting it gives the (capped) result, .range(a,b) gives that window of it (max_rows = cap).
+  rpc:(fn:string,args:Record<string,unknown>)=>{
+   calls.push({fn,args});const r=rpc[fn];
+   const answer=(from:number,to:number)=>Promise.resolve(r instanceof Error?{data:null,error:{message:r.message,code:(r as Error&{code?:string}).code??null}}:{data:r===undefined?null:Array.isArray(r)?r.slice(from,Math.min(to+1,from+cap)):r,error:null});
+   const b={then:(ok:(v:unknown)=>unknown,ko:(e:unknown)=>unknown)=>answer(0,Number.MAX_SAFE_INTEGER).then(ok,ko),range:(from:number,to:number)=>answer(from,to)};
+   return b;
+  },
   from:builder,
  };
  return {client:client as unknown as SupabaseClient,calls,reads};
@@ -124,7 +132,9 @@ describe('supabaseJudgmentsDb wiring',()=>{
   expect(await db.latestCalibration('macro_regime','v1',{scope_type:'all',scope_key:''})).toBeNull();
   expect(a.calls).toEqual([
    {fn:'judgments_server_time',args:{}},
-   {fn:'latest_judgment_cards',args:{p_subject_type:'issuer',p_subject_key:J,p_types:null,p_view:'latest',p_cutoff:null}},
+   {fn:'latest_judgment_cards',args:{p_subject_type:'issuer',p_subject_key:J,p_types:null,p_view:'latest',p_cutoff:null}},   // page 1
+   {fn:'latest_judgment_cards',args:{p_subject_type:'issuer',p_subject_key:J,p_types:null,p_view:'latest',p_cutoff:null}},   // the empty page that ends the drain (E-02)
+   {fn:'latest_judgment_cards',args:{p_subject_type:'macro_region',p_subject_key:'US',p_types:['macro_regime'],p_view:'as_known',p_cutoff:'2026-11-01T23:59:59.999Z'}},
    {fn:'latest_judgment_cards',args:{p_subject_type:'macro_region',p_subject_key:'US',p_types:['macro_regime'],p_view:'as_known',p_cutoff:'2026-11-01T23:59:59.999Z'}},
    {fn:'judgment_history',args:{p_subject_type:'macro_region',p_subject_key:'US',p_type:'macro_regime',p_methodology:'macro_regime',p_version:'v1',p_view:'latest',p_cutoff:null,p_before:J,p_limit:50}},
    {fn:'calibration_cohort',args:{p_methodology:'macro_regime',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01',p_cutoff:'2026-11-06T00:00:00.000Z',p_after:null,p_limit:500}},
@@ -200,5 +210,47 @@ describe('supabaseJudgmentsDb wiring',()=>{
   for(const [message,sqlCode,c] of [['settlement_sequence: settled -> settled by cron','23514','settlement_sequence'],['methodology_mismatch: horizon','22023','methodology_mismatch'],['invalid_parameter: limit','22023','invalid_parameter'],['unknown_judgment','P0002','unknown_judgment'],['append_only:judgments','23514','unknown'],['whatever','55P03','lease_lost']] as const)
    expect({message,c:toJudgmentError({message,code:sqlCode}).code}).toEqual({message,c});
   expect(toJudgmentError(new JudgmentError('lookahead'))).toBeInstanceOf(JudgmentError);
+ });
+});
+
+describe('supabaseJudgmentsDb hardening',()=>{
+ it('latestCards drains with .range() pages until an empty page, so a PostgREST max_rows cap below the card count loses nothing (E-02)',async()=>{
+  const env=(n:number)=>({judgment:{...JUDGMENT,judgment_id:`0b0e1d8e-0000-4000-8000-0000000001${String(n).padStart(2,'0')}`,methodology_id:`ztest_m${n}`},settlement:null,calibration:null,calibration_valid:false,methodology_state:EVENT});
+  const a=stub({latest_judgment_cards:[1,2,3,4,5].map(env)},{},2);
+  const db=supabaseJudgmentsDb({anon:a.client,admin:stub().client});
+  expect((await db.latestCards({type:'macro_region',key:'US'},{view:'latest'})).map(e=>e.judgment.methodology_id)).toEqual(['ztest_m1','ztest_m2','ztest_m3','ztest_m4','ztest_m5']);
+  expect(a.calls.length).toBe(4);   // 2 + 2 + 1 rows, then the empty page
+ });
+ it('toJudgmentError keeps the original SQLSTATE, details and hint in detail',()=>{
+  const e=toJudgmentError({message:'lease_lost',code:'55P03',details:'row locked',hint:'retry'});
+  expect(e).toMatchObject({code:'lease_lost',detail:{sqlstate:'55P03',details:'row locked',hint:'retry'}});
+  expect(toJudgmentError({message:'boom',code:'XX000',detail:'pg detail'})).toMatchObject({code:'unknown',detail:{sqlstate:'XX000',details:'pg detail'}});
+ });
+});
+
+describe('memoryJudgmentsDb atomicity (E-04)',()=>{
+ it('apply / reject that fail midway (audit insert throws) leave the queue, settlements, validity and item exactly as before, and work again once the audit store recovers',async()=>{
+  const base=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],research_audit_log:['id']});
+  let down=false;
+  const tables:TableClient={...base,insert:async(t,r)=>{if(down&&t==='research_audit_log')throw new Error('audit down');return base.insert(t,r);}};
+  const db=memoryJudgmentsDb({tables});const m=methodologyFixture();await db.syncMethodology(m,'script',null);
+  const {batchId:b}=await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.ztest'});
+  const f=judgmentFixture(m,b,{target:{kind:'date',date:'2026-01-10'}});await db.registerJudgment(f.row,f.queue);const j=f.row.judgment_id;
+  const [claimed]=await db.claimDue(10,600);
+  const H='e'.repeat(64),CUT='2026-03-02T04:00:00.000Z';const attempt={reason_code:'settlement_basis_mismatch',evidence_hash:H,cutoff:CUT};
+  const pub=await db.quarantineSettlement(j,claimed.lease_token!,'settlement_basis_mismatch',{evidence_hash:H,cutoff:CUT,judgment_id:j},{last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at:CUT}},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0},b);
+  const by=randomUUID();const item=pub.quarantine_id!;
+  const before=JSON.stringify([db.snapshot(),await tables.select('dq_quarantine',{id:item})]);
+  const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:H,evidence:{}},evidence_hash:H,resolved_by:by,at:CUT,cutoff:CUT};
+  down=true;
+  await expect(db.applyQuarantineOverride(j,override,item,{})).rejects.toThrow('audit down');
+  expect(JSON.stringify([db.snapshot(),await tables.select('dq_quarantine',{id:item})])).toBe(before);
+  const row=settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
+  await expect(db.rejectQuarantinedSettlement(j,item,{evidence_hash:H,cutoff:CUT},'adm:key-reject-1',row,{})).rejects.toThrow('audit down');
+  expect(JSON.stringify([db.snapshot(),await tables.select('dq_quarantine',{id:item})])).toBe(before);
+  expect((await tables.select('dq_quarantine',{id:item}))[0].status).toBe('open');
+  expect(await db.settlementsOf([j])).toEqual([]);
+  down=false;
+  expect(await db.rejectQuarantinedSettlement(j,item,{evidence_hash:H,cutoff:CUT},'adm:key-reject-1',row,{})).toMatchObject({seq:1,status:'applied'});
  });
 });

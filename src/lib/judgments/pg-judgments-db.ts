@@ -9,6 +9,7 @@
 // order. Nothing in src/app imports this.
 import type {Pool} from 'pg';
 import {byQueueOrder,calibrationFromTable,calibrationIsValid,envelopeFromRpc,eventFromTable,isoTs,judgmentFromTable,methodologyFromTable,queueFromTable,settlementArgs,settlementFromTable,subjectStatus,toJudgmentError,assertLimit,QUEUE_LIST_MAX} from './db';
+import {F4_SCHEMA_LOCK} from './db-contract';
 import {JudgmentError} from './errors';
 import type {AppendStatus,JudgmentsDb} from './types';
 
@@ -21,22 +22,17 @@ const QUEUE_WHERE:Record<string,string>={
 };
 
 export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
- // 40P01 is retried (3 attempts, whole transaction): judgments.integration.test.ts replays the migration (DDL locks) while this
- // file's tests run in parallel under test:db; a deadlock victim there is a harness artefact, not an F4 function defect.
+ // Every call holds the shared F4_SCHEMA_LOCK for its transaction: judgments.integration.test.ts's replayMigration takes it exclusively
+ // before any DDL, so a migration replay never interleaves with (or deadlocks against) a contract / concurrency call.
  const run=async(role:'anon'|'service_role',text:string,values:unknown[]=[]):Promise<unknown[]>=>{
-  for(let attempt=1;;attempt++){
-   const c=await pool.connect();
-   try{
-    await c.query('begin');await c.query(`set local role ${role}`);
-    const r=await c.query(text,values);
-    await c.query('commit');
-    return r.rows.map(x=>(x as {v:unknown}).v);
-   }catch(e){
-    await c.query('rollback').catch(()=>{});
-    if((e as {code?:string}).code==='40P01'&&attempt<3)continue;
-    throw toJudgmentError(e);
-   }finally{c.release();}
-  }
+  const c=await pool.connect();
+  try{
+   await c.query('begin');await c.query('select pg_advisory_xact_lock_shared($1)',[F4_SCHEMA_LOCK]);await c.query(`set local role ${role}`);
+   const r=await c.query(text,values);
+   await c.query('commit');
+   return r.rows.map(x=>(x as {v:unknown}).v);
+  }catch(e){await c.query('rollback').catch(()=>{});throw toJudgmentError(e);}
+  finally{c.release();}
  };
  const pub=(t:string,v:unknown[]=[])=>run('anon',t,v);
  const svc=(t:string,v:unknown[]=[])=>run('service_role',t,v);
@@ -59,7 +55,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
   },
   async latestCards(subject,o){return (await pub(srf('latest_judgment_cards','$1,$2,$3::text[],$4,$5::timestamptz'),[subject.type,subject.key,o.types??null,o.view,o.cutoff??null])).map(x=>envelopeFromRpc(x as Row));},
   async historyOf(subject,type,m,o){return (await pub(srf('judgment_history','$1,$2,$3,$4,$5,$6,$7::timestamptz,$8::uuid,$9'),[subject.type,subject.key,type,m.id,m.version,o.view,o.cutoff??null,o.before??null,o.limit])).map(x=>envelopeFromRpc(x as Row));},
-  async claimDue(limit,leaseSeconds){return (await svc(`select to_jsonb(q) v from public.claim_due_judgments($1,$2) q`,[limit,leaseSeconds])).map(x=>queueFromTable(x as Row)).sort(byQueueOrder);},
+  async claimDue(limit,leaseSeconds){return (((await first(svc(`select public.claim_due_judgments($1,$2) v`,[limit,leaseSeconds])))??[]) as Row[]).map(queueFromTable).sort(byQueueOrder);},   // one jsonb array (E-03)
   async releaseLease(judgmentId,leaseToken,patch){await svc(`select public.release_lease($1::uuid,$2::uuid,$3::jsonb) v`,[judgmentId,leaseToken,JSON.stringify(patch)]);},
   async queueRow(id){const r=await first(svc(`select to_jsonb(q) v from public.judgment_settle_queue q where q.judgment_id=$1::uuid`,[id]));return r?queueFromTable(r as Row):null;},
   async queueList(o){

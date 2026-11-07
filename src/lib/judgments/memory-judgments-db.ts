@@ -117,6 +117,20 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
  const addEvent=(r:Omit<MethodologyRow,'created_at'|'synced_at'>,seq:number,event:MethodologyEventKind,status:MethodologyStatus,pub:boolean,actor:string,reason:string|null,at:string)=>
   events.push({event_id:randomUUID(),methodology_id:r.methodology_id,version:r.version,seq,event,status,publishable:pub,formula_hash:r.formula_hash,code_version:r.code_version,actor,reason,occurred_at:at});
 
+ /** E-04: a multi-store mutation is all-or-nothing, like the SQL function's transaction. The in-memory stores are snapshotted and put
+  *  back on any thrown error; writes to the shared TableClient (no delete there) register an undo and are ordered so the one that can
+  *  fail without a trace (the last insert) comes last. */
+ const atomic=async<T>(f:(undo:(u:()=>Promise<void>)=>void)=>Promise<T>):Promise<T>=>{
+  const snap=structuredClone({settlements,queue:[...queue],validity:[...validity],jobs:[...jobs],members:[...members]});
+  const undos:(()=>Promise<void>)[]=[];
+  try{return await f(u=>{undos.push(u);});}
+  catch(e){
+   settlements.length=0;settlements.push(...snap.settlements);
+   for(const [store,entries] of [[queue,snap.queue],[validity,snap.validity],[jobs,snap.jobs],[members,snap.members]] as [Map<string,unknown>,[string,unknown][]][]){store.clear();for(const [k,v] of entries)store.set(k,v);}
+   for(const u of undos.reverse())await u();
+   throw e;
+  }
+ };
  /** The single append implementation (append_settlement / judgment_append_settlement_internal in SQL); also used by
   *  rejectQuarantinedSettlement inside its own serialised operation (plan audit P1-05). */
  const appendCore=async(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>=>{
@@ -250,7 +264,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   /** quarantine_settlement (Q1-02): one serialised operation — lease check, quarantine()-style upsert of the open item
    *  (same key + reason reused, payload refreshed), queue publish with last_detail.incident (R3-01) keeping an open incident's
    *  quarantined_at whatever the last attempt status (Q1-01). */
-  async quarantineSettlement(judgmentId,leaseToken,reasonCode,payload,patch,batchId){
+  quarantineSettlement:(judgmentId,leaseToken,reasonCode,payload,patch,batchId)=>atomic(async undo=>{
    const d=(isObj(patch)&&isObj(patch.last_detail)?patch.last_detail:null) as Record<string,unknown>|null;
    const pi=d!==null&&isObj(d.incident)?d.incident:null;   // the incident settle.ts proposes (R3-01)
    if(!isObj(payload)||typeof payload.evidence_hash!=='string'||!HEX64.test(payload.evidence_hash)||typeof payload.cutoff!=='string'
@@ -264,15 +278,15 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const key={dataset:'judgments',table_name:'judgment_settlements',natural_key:judgmentId,reason_code:reasonCode};
    const [open]=await tables.select('dq_quarantine',{...key,status:'open'},{limit:1});
    let id:string;
-   if(open){id=String(open.id);await tables.update('dq_quarantine',{id,status:'open'},{payload:clone(payload)});}
+   if(open){id=String(open.id);await tables.update('dq_quarantine',{id,status:'open'},{payload:clone(payload)});undo(async()=>{await tables.update('dq_quarantine',{id,status:'open'},{payload:open.payload});});}
    else{id=randomUUID();await tables.insert('dq_quarantine',{id,...key,detail:{},payload:clone(payload),batch_id:batchId,status:'open',resolved_by:null,resolved_at:null,created_at:at});}
    const prior=q.last_detail.incident;   // R3-01: an open incident keeps its first quarantine time, whatever the last attempt status
    const incident={quarantine_id:id,reason_code:reasonCode,evidence_hash:String(payload.evidence_hash),cutoff:String(payload.cutoff),
     quarantined_at:isObj(prior)&&typeof prior.quarantined_at==='string'?prior.quarantined_at:String(pi!.quarantined_at)};
    Object.assign(q,{last_status:'inconsistent',last_detail:{...withoutIncident(clone(d!)),incident},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),leased_until:null,lease_token:null,updated_at:at});
    return {status:'quarantined',quarantine_id:id};
-  },
-  async applyQuarantineOverride(judgmentId,override,quarantineId,audit){
+  }),
+  applyQuarantineOverride:(judgmentId,override,quarantineId,audit)=>atomic(async undo=>{
    const o=override as unknown as Record<string,unknown>;
    if(!isObj(o)||!isObj(o.resolution)||typeof o.reason_code!=='string'||o.reason_code===''||typeof o.evidence_hash!=='string'||!HEX64.test(o.evidence_hash)
     ||typeof o.resolved_by!=='string'||!UUID.test(o.resolved_by)||typeof o.at!=='string'||typeof o.cutoff!=='string'||!isObj(audit))fail('invalid_parameter','override');
@@ -286,12 +300,13 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const inc=q.last_detail.incident;   // R3-01: the open incident decides, not last_status
    if(item.table_name!=='judgment_settlements'||!isObj(inc)||inc.quarantine_id!==quarantineId||inc.evidence_hash!==override.evidence_hash||inc.cutoff!==override.cutoff||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
    const at=now();
-   Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_accept',resolved_by:override.resolved_by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),override}});
-   await tables.insert('research_audit_log',{id:randomUUID(),user_id:override.resolved_by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,override},created_at:at});
+   undo(async()=>{await tables.update('dq_quarantine',{id:quarantineId,status:'resolved_accept'},{status:'open',resolved_by:item.resolved_by??null,resolved_at:item.resolved_at??null,detail:item.detail});});
+   await tables.insert('research_audit_log',{id:randomUUID(),user_id:override.resolved_by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,override},created_at:at});   // last write: its failure leaves no trace
+   Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    return 'applied';
-  },
-  async rejectQuarantinedSettlement(judgmentId,quarantineId,expected,requestKey,row,audit){
+  }),
+  rejectQuarantinedSettlement:(judgmentId,quarantineId,expected,requestKey,row,audit)=>atomic(async undo=>{
    if(!isObj(row)||row.kind!=='void'||typeof row.actor!=='string'||!/^admin:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.actor)||typeof requestKey!=='string'||!isObj(audit)
     ||!isObj(expected)||typeof expected.evidence_hash!=='string'||!HEX64.test(expected.evidence_hash)||typeof expected.cutoff!=='string')fail('invalid_parameter','rejection');
    const digest=operationDigest(judgmentId,row);
@@ -311,9 +326,10 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(res.status!=='applied')return res;
    const at=now();const by=row.actor.slice('admin:'.length);
    await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_reject',resolved_by:by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),rejected_settlement_seq:res.seq}});
+   undo(async()=>{await tables.update('dq_quarantine',{id:quarantineId,status:'resolved_reject'},{status:'open',resolved_by:item.resolved_by??null,resolved_at:item.resolved_at??null,detail:item.detail});});
    await tables.insert('research_audit_log',{id:randomUUID(),user_id:by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:quarantineId,detail:{...audit,judgment_id:judgmentId,decision:'reject',seq:res.seq},created_at:at});
    return res;
-  },
+  }),
   async envelopeById(id,o){
    assertView(o.view,o.cutoff);
    const j=judgments.get(id);
@@ -357,6 +373,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(!v)return fail('unknown_methodology',`${row.methodology_id}@${row.methodology_version}`);
    if(row.validity_revision!==expectedRevision||expectedRevision!==v.revision)return 'stale_revision';
    if(calibrations.some(c=>c.fingerprint===row.fingerprint))return 'duplicate';
+   if(calibrations.some(c=>c.calibration_id===row.calibration_id))fail('duplicate_key','duplicate key value violates unique constraint "judgment_calibrations_pkey"');
    const okState=row.kind==='score'?['insufficient','evaluated'].includes(row.state):['insufficient','failed','calibrated'].includes(row.state);
    if(!okState)fail('unknown','judgment_calibrations_state_by_kind');
    if(!(await batchExists(row.batch_id)))fail('unknown','judgment_calibrations_batch_id_fkey');

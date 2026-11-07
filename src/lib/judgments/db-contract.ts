@@ -37,6 +37,8 @@ export interface JudgmentsContractHarness{
 }
 
 export const F4_CLAIM_LOCK=20261109;
+/** Schema-change mutex: judgments.integration.test.ts's replayMigration takes it exclusively, pgJudgmentsDb calls take it shared (no deadlocks between DDL replays and the contract). */
+export const F4_SCHEMA_LOCK=20261110;
 /** Cross-file mutex for claim_due_judgments in integration tests (see header). */
 export async function withClaimLock<T>(pool:Pool,fn:()=>Promise<T>):Promise<T>{
  const c=await pool.connect();
@@ -551,10 +553,10 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    const m=await synced();const b=await h.batch();const by=await h.adminUser();
    await h.exclusiveClaims(async()=>{
     const j=await registered(m,b,{target:DUE});
-    const expired=async()=>{const t=(await db.claimDue(100,1)).find(r=>r.judgment_id===j.id)!.lease_token!;await pause(1150);return t;};
-    expect(await code(db.releaseLease(j.id,await expired(),{...PARK,attempts_increment:1}))).toBe('lease_lost');
-    expect(await code(db.appendSettlement(j.id,await expired(),`${b}:${j.id}:1`,settlementFixture(b)))).toBe('lease_lost');
-    expect(await db.quarantineSettlement(j.id,await expired(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id},incPatch(H('e'),CUT),b)).toEqual({status:'lease_lost',quarantine_id:null});
+    const t=(await db.claimDue(100,1)).find(r=>r.judgment_id===j.id)!.lease_token!;await pause(1150);                  // one claim, one wait: the token stays expired through all three refusals
+    expect(await code(db.releaseLease(j.id,t,{...PARK,attempts_increment:1}))).toBe('lease_lost');
+    expect(await code(db.appendSettlement(j.id,t,`${b}:${j.id}:1`,settlementFixture(b)))).toBe('lease_lost');
+    expect(await db.quarantineSettlement(j.id,t,'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id},incPatch(H('e'),CUT),b)).toEqual({status:'lease_lost',quarantine_id:null});
     expect(await db.settlementsOf([j.id])).toEqual([]);
     expect(await db.queueRow(j.id)).toMatchObject({attempts:0,last_status:null,closed_at:null});
     expect(await h.tables.select('dq_quarantine',{natural_key:j.id})).toEqual([]);
@@ -575,6 +577,46 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    });
   });
 
+  it('latest view: calibration_valid is judged at now, never at the supplied cutoff (cutoff < valid_until <= now → false)',async()=>{
+   const m=await synced({publishable:true});const b=await h.batch();const subject:Subject={type:'macro_region',key:'CN'};
+   await registered(m,b,{subject});
+   const until=new Date(Date.now()-5000).toISOString();
+   expect(await db.insertCalibration(calibrationFixture(m,b,1,{valid_until:until,computed_at:new Date(Date.now()-3_600_000).toISOString()}),1)).toBe('inserted');
+   const mine=async(cutoff?:string)=>(await db.latestCards(subject,{view:'latest',cutoff})).find(e=>e.judgment.methodology_id===m.methodology_id)!;
+   expect((await mine()).calibration_valid).toBe(false);
+   expect((await mine(new Date(Date.parse(until)-1000).toISOString())).calibration_valid).toBe(false);
+   expect((await mine(new Date(Date.parse(until)-1000).toISOString())).calibration).not.toBeNull();
+  });
+
+  it('apply / reject answer stale for an item that is not the queue incident\'s own: wrong quarantine_id or wrong table_name write nothing',async()=>{
+   const m=await synced();const b=await h.batch();const by=await h.adminUser();
+   await h.exclusiveClaims(async()=>{
+    const {j,itemId}=await inconsistent(m,b);
+    const payload={evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id};
+    const wrongTable=await quarantine(h.tables,{dataset:'judgments',table:'judgments',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload});
+    const wrongId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload});
+    expect(new Set([wrongTable,wrongId,itemId]).size).toBe(3);
+    for(const id of [wrongTable,wrongId]){
+     expect(await db.applyQuarantineOverride(j.id,overrideOf(by),id,{})).toBe('stale');
+     expect(await db.rejectQuarantinedSettlement(j.id,id,EXP,`adm:${randomUUID()}`,rejectRow(b,by),{})).toEqual({seq:0,status:'stale'});
+     expect((await h.tables.select('dq_quarantine',{id}))[0].status).toBe('open');
+    }
+    expect((await db.queueRow(j.id))!.override).toBeNull();
+    expect(await db.settlementsOf([j.id])).toEqual([]);
+    expect(await h.tables.select('research_audit_log',{object_id:wrongId})).toEqual([]);
+    expect(await db.applyQuarantineOverride(j.id,overrideOf(by),itemId,{})).toBe('applied');
+    const mine=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;await db.releaseLease(j.id,mine.lease_token!,PARK);
+   });
+  });
+
+  it('insertCalibration: calibration_id is unique — a second row with the same id but another fingerprint is refused as duplicate_key (23505)',async()=>{
+   const m=await synced();const b=await h.batch();
+   const c=calibrationFixture(m,b,1);
+   expect(await db.insertCalibration(c,1)).toBe('inserted');
+   expect(await code(db.insertCalibration({...c,fingerprint:digest({other:c.calibration_id})},1))).toBe('duplicate_key');
+   expect(await db.insertCalibration(c,1)).toBe('duplicate');
+  });
+
   it('envelopeById: the history view semantics by id, publishable-gated; null for unknown ids (P2-01)',async()=>{
    const m=await synced({publishable:true});const hidden=await synced();const b=await h.batch();
    const j=await registered(m,b);const x=await registered(hidden,b);
@@ -591,10 +633,13 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    const ids:string[]=[];
    for(const as_of of ['2025-03-01','2025-06-01','2025-09-01'])ids.push((await registered(m,b,{as_of})).id);
    await registered(m,b,{as_of:'2024-01-01'});await registered(m,b,{as_of:'2025-05-01',abstained:true});
+   await pause(5);   // E-01: frozen_at is truncated to the millisecond; members must be registered before it
    const w={from:'2025-01-01',to:'2025-12-31'};
    const gen=randomUUID();
    const f=await db.freezeCalibrationCohort(gen,m.methodology_id,'v1',w);
    expect(f).toMatchObject({status:'frozen',n:3});expect(Number.isFinite(Date.parse(f.frozen_at))).toBe(true);
+   expect(f.frozen_at).toBe(new Date(f.frozen_at).toISOString());                             // E-01: a millisecond value, so adapters round-trip it exactly
+   expect(ids.slice().sort()).toEqual((await db.calibrationCohortInternal(m.methodology_id,'v1',w,f.frozen_at,null,100)).map(e=>e.judgment.judgment_id));   // the same set at cutoff = frozen_at
    const later=await registered(m,b,{as_of:'2025-07-01'});                                    // after the freeze
    const p1=await db.cohortMembers(gen,null,2);
    expect(ids.slice().sort().slice(0,2)).toEqual(p1.map(e=>e.judgment.judgment_id));

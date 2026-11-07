@@ -29,6 +29,8 @@ const PRIVATE=['judgment_settle_queue','judgment_job_state','judgment_calibratio
 const TRIGGER_FNS=['judgment_methodologies_limited_update()','judgments_append_only()','judgment_settlements_sequence()'];
 const ROLES=['anon','authenticated','service_role'];
 const F4_CLAIM_LOCK=20261109;
+/** Schema-change mutex shared with pgJudgmentsDb (db-contract.ts F4_SCHEMA_LOCK): replayMigration holds it exclusively, every pg-judgments-db call shared. */
+const F4_SCHEMA_LOCK=20261110;
 const JSONB=new Set(['producer_ref','inputs','claim','condition','horizon','target','realized','evidence','params','params_json','upstream','metrics','reliability','isotonic_segments','query_bounds','state','last_detail','override','retrospective_hint']);
 const H=(c:string)=>c.repeat(64);
 const hex64=()=>`${randomUUID()}${randomUUID()}`.replaceAll('-','');
@@ -44,7 +46,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   await c.query(`begin; select pg_advisory_xact_lock(${F4_SCHEMA_LOCK}); set local lock_timeout='3s';\n${sql}\n;commit;`);
    return;
   }catch(e){
    await c.query('rollback').catch(()=>{});
@@ -311,7 +313,8 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
  const sRow=(b:string,o:Partial<SettlementInsert>={}):SettlementInsert=>({kind:'settled',outcome:'hit',realized:{value:'recovery',unit:null,from:null,to:null,label_policy:'first_observed'},evidence:{observed:true},resolver:'macro_regime_replay',resolver_version:'1.0.0',reason:null,actor:'cron',code_version:'abcdef1',batch_id:b,...o});
  const append=(j:string,token:string|null,key:string,row:Record<string,unknown>)=>one(`select public.append_settlement($1,$2,$3,$4::jsonb) v`,[j,token,key,JSON.stringify(row)]);
  const appendOp=(j:string,token:string|null,key:string,row:SettlementInsert)=>append(j,token,key,{...row,request_digest:operationDigest(j,row)});
- const claim=async(limit=100,lease=600)=>q(`select * from public.claim_due_judgments($1,$2)`,[limit,lease]);
+ const CLAIM_ROWS=(args:string)=>`select q.* from jsonb_populate_recordset(null::public.judgment_settle_queue, public.claim_due_judgments(${args})) q`;   // E-03: the function returns ONE jsonb array
+const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
  const release=(j:string,token:string|null,patch:Record<string,unknown>)=>q(`select public.release_lease($1,$2,$3::jsonb)`,[j,token,JSON.stringify(patch)]);
  const park=(j:string,token:string)=>release(j,token,{last_status:'pending',last_detail:{},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
  /** Cross-file mutex for claims (see file header). */
@@ -466,7 +469,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const c1=await admin.connect();let held:Record<string,any>[]=[];let rest:Record<string,any>[]=[];
    try{
     await c1.query('begin');
-    held=(await c1.query(`select * from public.claim_due_judgments(1,600)`)).rows;
+    held=(await c1.query(CLAIM_ROWS('1,600'))).rows;
     expect(held.map(r=>r.judgment_id)).toEqual([ids[1]]);                                 // earliest next_attempt_at first
     rest=(await claim()).filter(r=>ids.includes(r.judgment_id)).sort((a,b2)=>a.next_attempt_at-b2.next_attempt_at);
     expect(rest.map(r=>r.judgment_id)).toEqual([ids[2],ids[0]]);                          // the row locked by c1 is skipped
@@ -493,6 +496,20 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    await park(ids[1],String(again.lease_token));
    for(const id of [ids[0],ids[2]])await park(id,tok(id));
    expect((await q(`select attempts from public.judgment_settle_queue where judgment_id=any($1::uuid[]) order by judgment_id`,[ids])).map(r=>r.attempts).sort()).toEqual([0,0,1]);
+  });
+ });
+
+ it('claim_due_judgments returns one jsonb array (a scalar, so a capped max_rows cannot drop leased rows), ordered, [] when nothing is due (E-03)',async()=>{
+  const m=await syncNew();const b=await batch();
+  await withClaimLock(async()=>{
+   const late=judgmentRow(m,b,{target:{kind:'date',date:'2026-01-12'}}),early=judgmentRow(m,b,{target:{kind:'date',date:'2026-01-10'}});await register(late);await register(early);
+   const arr=await one(`select public.claim_due_judgments(100,600) v`) as {judgment_id:string;lease_token:string}[];
+   expect(Array.isArray(arr)).toBe(true);
+   const mine=arr.filter(r=>[late.row.judgment_id,early.row.judgment_id].includes(r.judgment_id as never));
+   expect(mine.map(r=>r.judgment_id)).toEqual([early.row.judgment_id,late.row.judgment_id]);
+   expect(await q(`select 1 from public.claim_due_judgments(100,600)`)).toHaveLength(1);   // one scalar row, whatever the array holds
+   for(const r of arr)await park(r.judgment_id,r.lease_token);
+   expect(await one(`select public.claim_due_judgments(100,600) v`)).toEqual([]);
   });
  });
 
@@ -972,6 +989,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   ids.push(dueId);
   await register(judgmentRow(m,b,{asOf:'2024-01-01'}));                                    // outside the window
   await register(judgmentRow(m,b,{asOf:'2025-05-01',abstained:true}));                     // abstained: not a member
+  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
   // A registration whose transaction began BEFORE the freeze and commits AFTER it.
   const late=judgmentRow(m,b,{asOf:'2025-07-01'});
   const gen=randomUUID();
@@ -1028,6 +1046,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
  it('freeze_calibration_cohort: two concurrent freezes of one generation — the second waits on the claim and returns already_frozen; members are inserted once (Q1-05)',async()=>{
   const m=await syncNew();const b=await batch();
   for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
+  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
   const gen=randomUUID();
   const c=await admin.connect();
   try{
@@ -1166,6 +1185,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
  it('freeze and clear of one generation serialise on a per-generation lock, in either order (C-04)',async()=>{
   const m=await syncNew();const b=await batch();
   for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
+  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
   const frz=(g:string)=>`select public.freeze_calibration_cohort('${g}','${m}','v1','2025-01-01','2025-12-31') v`;
   // freeze in flight, clear waits and then removes what the freeze wrote
   const g1=randomUUID();const c=await admin.connect();
@@ -1197,6 +1217,7 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
 
  it('freeze: only registrations at or before frozen_at and settlements at or before it are frozen (minor 7)',async()=>{
   const m=await syncNew();const b=await batch();
+  await pause(5);   // E-01: frozen_at is truncated to the millisecond, so a member registered in the same ms may fall after it
   await register(judgmentRow(m,b,{asOf:'2025-03-01'}));
   const gen=randomUUID();const c=await admin.connect();
   try{
@@ -1210,6 +1231,22 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect(await freezing).toMatchObject({status:'frozen',n:1});
   }finally{await c.query('rollback').catch(()=>{});c.release();}
   expect(Number(await one(`select count(*)::int v from public.judgment_calibration_cohort_members where generation=$1`,[gen]))).toBe(1);
+ });
+
+ it('freeze: frozen_at has millisecond precision and the ms value reproduces the frozen set, also for a member registered in the same millisecond (E-01)',async()=>{
+  const m=await syncNew();const b=await batch();
+  for(let i=0;i<25;i++){
+   const c=await admin.connect();
+   try{
+    await c.query('begin');
+    const r=judgmentRow(m,b,{asOf:`2025-02-${String(i+1).padStart(2,'0')}`});
+    await c.query(`select public.register_judgment($1::jsonb,$2::jsonb)`,[JSON.stringify(r.row),JSON.stringify(r.queue)]);
+    const f=(await c.query(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[randomUUID(),m])).rows[0].v as {frozen_at:string;n:number};
+    const at=(await c.query(`select ($1::timestamptz = date_trunc('milliseconds',$1::timestamptz)) ms, count(*)::int n from public.judgments j where j.methodology_id=$2 and not j.abstained and j.as_of between '2025-01-01' and '2025-12-31' and j.registered_at <= date_trunc('milliseconds',$1::timestamptz)`,[f.frozen_at,m])).rows[0] as {ms:boolean;n:number};
+    expect({i,ms:at.ms,n:at.n}).toEqual({i,ms:true,n:Number(f.n)});
+    await c.query('commit');
+   }finally{await c.query('rollback').catch(()=>{});c.release();}
+  }
  });
 
  it('apply / reject require the item to be a judgment_settlements item and to be the queue incident\'s own quarantine_id, else stale (minor 6)',async()=>{
