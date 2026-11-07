@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 跟踪收件箱</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 1300px; display: flex; flex-direction: column">
+  <div class="mtop"><span class="brand">跟踪</span><span class="en">Tracking</span><span class="chip m" style="margin-left: auto">6 / 200</span></div>
+  <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+    <div class="scrollx" style="display: flex; gap: 8px"><button class="chip ac" style="height: 32px">全部 15</button><button class="chip" style="height: 32px">贵州茅台 3</button><button class="chip" style="height: 32px">百济神州 12</button><button class="chip" style="height: 32px">Apple 99+</button></div>
+    <div class="row"><div class="seg lg"><button class="on">全部</button><button>文件</button><button>财期</button><button>修订</button></div></div>
+    <div class="row"><label class="row cap" style="gap: 6px; min-height: 44px"><input type="checkbox" checked style="accent-color: #ca8a04; width: 18px; height: 18px"> 仅未读</label><button class="btn lg" style="margin-left: auto">标记本页已读</button></div>
+    <div class="card" style="padding: 0">
+      <div class="row" style="padding: 12px; flex-wrap: nowrap; align-items: flex-start"><span class="dot ac" style="margin-top: 7px"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 4px"><div class="row"><strong style="font-size: 13px">贵州茅台</strong><span class="chip sq">修订</span><span class="chip warn">已更新</span></div><div class="cap">2024 FY 营业收入 → <button class="src">1,709.12 亿</button></div><div class="tiny">可得 2025-08-13</div></div></div>
+      <div class="row" style="padding: 12px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start"><span class="dot ac" style="margin-top: 7px"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 4px"><div class="row"><strong style="font-size: 13px">百济神州</strong><span class="chip sq">新文件</span><span class="tiny">+1</span></div><div class="cap">10-Q 2025 Q3 · 事实 164</div><div class="tiny">可得 2025-11-06</div></div></div>
+      <div class="row" style="padding: 12px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start"><span class="dot ac" style="margin-top: 7px"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 4px"><div class="row"><strong style="font-size: 13px">Apple</strong><span class="chip sq">新文件</span></div><div class="cap">10-K 2025 FY · 事实 498</div><div class="tiny">可得 2025-10-31</div></div></div>
+      <div class="row" style="padding: 12px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start"><span class="dot off" style="margin-top: 7px"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 4px"><div class="row"><span style="font-size: 13px" class="dim">贵州茅台</span><span class="chip sq">新财期</span></div><div class="cap">2025-09-30 9M · <span class="wh">— 引用待挂接</span></div></div></div>
+    </div>
+    <button class="btn lg" style="justify-content: center">加载更多</button>
+  </div>
+  <nav class="tabbar" aria-label="底部导航">
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 11l8-7 8 7v9H4z"></path></svg>首页</a>
+    <a class="on" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4v16M12 4v10M19 4v13"></path></svg>自选</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle></svg>雷达</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h9l3 3v15H6z"></path><path d="M9 10h6M9 14h6"></path></svg>研究</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>设置</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -9,6 +9,8 @@ import type {Cadence} from './freshness';
 import {RECONCILE_PAIR_IDS,type ReconcilePairId} from './reconcile/types';
 
 export const DATASETS={
+ // COMPANY
+ company:{events:'company.events'},
  entities:{sec:'entities.sec',researchLink:'entities.research-link',identifiers:'entities.identifiers',cninfo:'entities.cninfo',ahLink:'entities.ah-link',windows:'entities.windows',submissions:'entities.sec-submissions'},
  facts:(m:Market)=>(m==='US'?'facts.us':'facts.cn') as 'facts.us'|'facts.cn',   // landed sync.ts identifiers (spec T4)
  acceptance:'facts.acceptance',
@@ -31,6 +33,8 @@ const RECONCILE_PRODUCERS:Record<ReconcilePairId,{producer:string;cadence:Cadenc
 };
 
 export const DQ_DATASET_INVENTORY:readonly DatasetEntry[]=[
+ // COMPANY
+ {dataset:DATASETS.company.events,producer:'company-digest',cadence:'daily'},
  {dataset:DATASETS.entities.sec,producer:'sec-company-tickers',cadence:'event'},
  {dataset:DATASETS.entities.researchLink,producer:'research-entity-link',cadence:'event'},
  {dataset:DATASETS.entities.identifiers,producer:'fill-identifiers',cadence:'event'},

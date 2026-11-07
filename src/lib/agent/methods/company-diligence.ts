@@ -45,7 +45,7 @@ export const COMPANY_DILIGENCE: AgentMethod = {
     '§5 治理与管理层：董监高、关联交易、合规历史(holders 看股东结构)。',
     '§6 风险与诉讼：重大诉讼、监管处罚、舆情负面——osbornalpha 无网络检索工具，此段以可得数据为主，缺口标「待核实(需外部检索裁判文书/监管公告)」。',
     '§7 前景与催化：增长驱动、在建/募投项目、关键不确定性(calendar 看未来事件)。核验：管理层指引 vs 行业趋势。',
-    '工具：search 解析实体；quote/financials 取行情与财务；holders 取股东；calendar 取事件；signals 看技术面。A 股专属数据(financials/flows/holders/calendar)对港美标注「暂无数据」。',
+    '工具：search 解析实体；quote/financials 取行情与财务；holders 取股东；calendar 取事件；signals 看技术面。financials 覆盖 A/US，港股暂无；flows/holders/calendar 仅 A 股，对港美标注「暂无数据」。',
     '报告主体用 markdown，章节遵循 §1–§7，标题用法定名称、副标题用一句话摘要·ticker·官网。',
     '完成 §1–§7 后，最后输出一个 ```json 代码块，且仅一个——这是尽调摘要不是评级，形如：',
     '{"ticker":"","name":"","canonical_name":"","one_line":"一句话摘要","unverified":["需外部核实的关键项"],"disclaimer":"尽调简报，不构成投资建议"}',

@@ -31,6 +31,9 @@ const MESSAGE_DOMAINS = [
   // F3 document pipeline (source drawer, spec 2026-11-04 §9.1):
   'documents',
   // F3 end
+  // COMPANY — company research module (plan 2026-11-06 Task 11)
+  'company', 'tracking',
+  // /COMPANY
 ] as const;
 
 export default getRequestConfig(async () => {

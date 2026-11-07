@@ -1,0 +1,113 @@
+{
+  "version": 2,
+  "note": "spec §12.0 / §0 #72. Expected values are transcribed by a person other than the implementer from primary documents (EDGAR filing index, 10-K text). Never fill them from implementation output. Entries stay 'pending' (skipped by tests, listed as owner items) until transcribed; set status 'ready' only together with source.transcribed_by and source.transcribed_at.",
+  "fixtures": [
+    {
+      "id": "edgar-aapl-trimmed",
+      "path": "src/lib/facts/fixtures/edgar/CIK0000320193.trimmed.json",
+      "sha256": "5e5de06b2bcb1a21cfd422ccd25f26d077886c3512feec159b40f73580396a24",
+      "recorded_at": "2026-11-05",
+      "source": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json (trimmed by scripts/facts/record-fixture.ts)"
+    },
+    {
+      "id": "edgar-msft-trimmed",
+      "path": "src/lib/facts/fixtures/edgar/CIK0000789019.trimmed.json",
+      "sha256": "bd23911cf33e86a333b9e4ede31f3bfb2dab5d80a21b63894427914e28c1080f",
+      "recorded_at": "2026-11-05",
+      "source": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json (trimmed by scripts/facts/record-fixture.ts)"
+    },
+    {
+      "id": "edgar-aapl-revised",
+      "path": "src/lib/facts/fixtures/edgar/CIK0000320193.revised.json",
+      "sha256": "3101dfbf935f2c1f387a4df354e21c9c4048969d5554b134af613a87f08562a2",
+      "recorded_at": "2026-11-05",
+      "source": "synthetic later 10-K revision derived from the AAPL trimmed fixture (plan 2 §11.3)"
+    },
+    {
+      "id": "tushare-600519-synthetic",
+      "path": "src/lib/facts/fixtures/tushare/_synthetic/600519.SH.manifest.json",
+      "sha256": "9f888a697d41792b4ad21b4abc127c9d890d2df1a5d4c63e8c0f4d5eebe408d4",
+      "recorded_at": "2026-11-05",
+      "synthetic": true,
+      "source": "synthetic Tushare fixture manifest (not primary-source acceptance truth)"
+    }
+  ],
+  "expectations": [
+    {
+      "id": "aapl-revenue-fy2023-replay",
+      "kind": "statement_cell",
+      "status": "pending",
+      "query": {
+        "ticker": "AAPL",
+        "statement": "IS",
+        "basis": "annual",
+        "asOf": "2024-06-30",
+        "concept": "revenue",
+        "periodKey": "2022-09-25:2023-09-30:12M"
+      },
+      "expected": {
+        "value": "pending",
+        "unit": "USD",
+        "availableDate": "2023-11-03",
+        "disclosureSeq": 1,
+        "latest": {
+          "disclosureSeq": 2,
+          "isRevision": false,
+          "asOf": "2025-06-30"
+        }
+      },
+      "source": {
+        "document": "pending",
+        "page_or_row": "pending",
+        "url": "pending",
+        "transcribed_by": "pending",
+        "transcribed_at": null
+      },
+      "notes": "value = FY2023 total net sales as printed in the 10-K filed 2023-11-03 (page and line recorded by the transcriber)"
+    },
+    {
+      "id": "aapl-filings-last10",
+      "kind": "filing_published_list",
+      "status": "pending",
+      "query": {
+        "ticker": "AAPL",
+        "kinds": [
+          "filing_published"
+        ],
+        "limit": 10
+      },
+      "expected": {
+        "filings": "pending"
+      },
+      "source": {
+        "document": "EDGAR filing index, AAPL (CIK 0000320193), forms 10-K/10-Q",
+        "page_or_row": "pending",
+        "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193&type=10-&dateb=&owner=include&count=40",
+        "transcribed_by": "pending",
+        "transcribed_at": null
+      },
+      "notes": "filings = [{accession, form, filed}] newest first, copied from the index; mirrored in docs/audits/2026-11-04-company-research/events-gold.md. Only filings present in the trimmed fixture can match; the transcriber records the fixture cut-off."
+    },
+    {
+      "id": "gold-matrix-6x2x6",
+      "kind": "statement_matrix",
+      "status": "pending",
+      "query": {
+        "issuers": 6,
+        "periods": 2,
+        "concepts": 6
+      },
+      "expected": {
+        "cells": "pending"
+      },
+      "source": {
+        "document": "pending",
+        "page_or_row": "pending",
+        "url": "pending",
+        "transcribed_by": "pending",
+        "transcribed_at": null
+      },
+      "notes": "spec §14 replay matrix; may only be claimed as passed once every cell is transcribed (spec §0 #72). expected.cells = 72 × {query, concept, periodKey, value, unit, availableDate, disclosureSeq, isRevision}; consumed by e2e test 'gold: 6 issuers × 2 periods × 6 concepts'"
+    }
+  ]
+}

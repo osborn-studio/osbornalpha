@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>跟踪收件箱</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1650px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <div class="row" style="gap: 16px">
+      <h1 class="h1">跟踪 <span class="en" style="font-size: 16px">Tracking</span></h1>
+      <div class="tabs" style="border: 0"><a href="#">看板 Kanban</a><a class="on" href="#">跟踪 Tracking</a></div>
+      <span class="tiny" style="margin-left: auto">站内收件箱；按事件首次可见时间计未读 · 无邮件/推送</span>
+    </div>
+
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start">
+      <aside class="card" style="flex: 1 1 320px; max-width: 380px; padding: 0">
+        <div class="row" style="padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.06)"><span class="h3">跟踪的公司 <span class="en">Watches</span></span><span class="chip m" style="margin-left: auto">6 / 200</span></div>
+        <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid rgba(255,255,255,.06)">
+          <div class="field"><label for="add">添加 Add by ticker</label><input id="add" class="inp" placeholder="600519.SH / AAPL"></div>
+          <button class="btn sm" style="align-self: flex-start">从自选导入 Import from watchlist</button>
+        </div>
+        <ul style="list-style: none; margin: 0; padding: 6px 0">
+          <li class="row" style="padding: 10px 16px; background: rgba(202,138,4,.12); flex-wrap: nowrap"><span class="dot ac"></span><div style="flex: 1; min-width: 0"><div style="font-size: 13px">贵州茅台</div><div class="tiny">A 股流</div></div><span class="chip ac m">3</span></li>
+          <li class="row" style="padding: 10px 16px; flex-wrap: nowrap"><span class="dot ac"></span><div style="flex: 1"><div style="font-size: 13px">百济神州</div><div class="tiny">美股流 · A 股流</div></div><span class="chip m">12</span></li>
+          <li class="row" style="padding: 10px 16px; flex-wrap: nowrap"><span class="dot ac"></span><div style="flex: 1"><div style="font-size: 13px">Apple</div><div class="tiny">美股流</div></div><span class="chip m">99+</span></li>
+          <li class="row" style="padding: 10px 16px; flex-wrap: nowrap"><span class="dot off"></span><div style="flex: 1"><div style="font-size: 13px">宁德时代</div><div class="tiny">A 股流</div></div><span class="tiny">0</span></li>
+          <li class="row" style="padding: 10px 16px; flex-wrap: nowrap"><span class="dot off"></span><div style="flex: 1"><div style="font-size: 13px" class="dim">腾讯控股</div><div class="tiny">港股：待文档管道（F3）</div></div><span class="tiny">—</span></li>
+          <li class="row" style="padding: 10px 16px; flex-wrap: nowrap"><span class="dot off"></span><div style="flex: 1"><div style="font-size: 13px" class="dim">Microsoft</div><div class="tiny">已静音 muted · 公司页仍可见</div></div><button class="btn ghost sm">取消静音</button></li>
+        </ul>
+      </aside>
+
+      <section style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+        <div class="card pad" style="display: flex; flex-direction: column; gap: 8px; background: #141417">
+          <div class="row"><span class="h3">导入结果 <span class="en">Import result</span></span><button class="ibtn" style="margin-left: auto; width: 32px; height: 32px" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+          <div class="row" style="gap: 16px"><span class="cap">新增 <span class="m" style="color: #fafafa">4</span></span><span class="cap">已存在 <span class="m" style="color: #fafafa">2</span></span><span class="cap">未解析 <span class="m" style="color: #fafafa">1</span>（NVTS）</span><span class="cap">超出上限 <span class="m" style="color: #fafafa">0</span></span></div>
+        </div>
+
+        <div class="row" style="gap: 10px">
+          <div class="seg"><button class="on">全部</button><button>新文件</button><button>新财期</button><button>修订</button></div>
+          <label class="row cap" style="gap: 6px"><input type="checkbox" checked style="accent-color: #ca8a04; width: 16px; height: 16px"> 仅未读 Unread only</label>
+          <button class="btn sm" style="margin-left: auto">标记本页已读 Mark this page read</button>
+        </div>
+
+        <div class="card" style="padding: 0">
+          <div class="ml" style="padding: 12px 16px 6px">今天首次可见 · first seen 2026-11-02</div>
+          <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start">
+            <span class="dot ac" style="margin-top: 7px" aria-label="未读"></span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px">
+              <div class="row"><strong style="font-size: 13px">贵州茅台</strong><span class="chip sq">修订</span><span class="chip warn">已更新</span><span class="tiny" style="margin-left: auto">可得 <span class="m">2025-08-13</span></span></div>
+              <div class="cap">2024 FY 营业收入 <span class="m">1,708.99</span> → <button class="src">1,709.12 亿</button>（+0.0078%）· 迟到的中间披露插入，payload 已更新，不重新计未读</div>
+            </div>
+            <a class="btn ghost sm" href="#">报表 →</a>
+          </div>
+          <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start">
+            <span class="dot ac" style="margin-top: 7px" aria-label="未读"></span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px">
+              <div class="row"><strong style="font-size: 13px">百济神州</strong><span class="chip sq">新文件</span><span class="chip sq">新财期</span><span class="tiny">同日折叠 +1</span><span class="tiny" style="margin-left: auto">可得 <span class="m">2025-11-06</span></span></div>
+              <div class="cap">10-Q 2025 Q3 · 事实 <span class="m">164</span> · 2025-09-30 9M 营业收入 <button class="src">$3.81bn</button></div>
+              <button class="btn ghost sm" style="align-self: flex-start">展开 2 条</button>
+            </div>
+            <a class="btn ghost sm" href="#">文件 →</a>
+          </div>
+          <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start">
+            <span class="dot ac" style="margin-top: 7px" aria-label="未读"></span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px">
+              <div class="row"><strong style="font-size: 13px">Apple</strong><span class="chip sq">新文件</span><span class="tiny" style="margin-left: auto">可得 <span class="m">2025-10-31</span></span></div>
+              <div class="cap">10-K 2025 FY · 事实 <span class="m">498</span></div>
+            </div>
+            <a class="btn ghost sm" href="#">文件 →</a>
+          </div>
+          <div class="ml" style="padding: 14px 16px 6px; border-top: 1px solid rgba(255,255,255,.06)">更早 · earlier</div>
+          <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06); flex-wrap: nowrap; align-items: flex-start">
+            <span class="dot off" style="margin-top: 7px" aria-label="已读"></span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px">
+              <div class="row"><span style="font-size: 13px" class="dim">贵州茅台</span><span class="chip sq">新财期</span><span class="tiny" style="margin-left: auto">可得 <span class="m">2025-10-25</span></span></div>
+              <div class="cap">2025-09-30 9M · 营业收入 <span class="wh">— 引用待挂接</span></div>
+            </div>
+            <a class="btn ghost sm" href="#">报表 →</a>
+          </div>
+          <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06)"><button class="btn sm">加载更多 Load more</button><span class="tiny">keyset：first_seen_at desc, event_id desc · 每页 50</span></div>
+        </div>
+        <div class="callout" style="font-size: 12px">空态：还没有跟踪的公司。从自选导入，或在公司页点“跟踪”。· 全部已读：“没有未读事件”，并提供“显示全部”。</div>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1650}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

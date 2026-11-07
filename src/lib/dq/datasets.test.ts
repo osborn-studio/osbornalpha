@@ -8,7 +8,7 @@ import {RECONCILE_PAIRS} from './reconcile/pairs';
 import {CYCLE_PAIR_IDS,RECONCILE_PAIR_IDS} from './reconcile/types';
 
 // A dataset literal anywhere but the registry means a producer bypassed DATASETS (spec 3 §6.3).
-const LITERAL=/(['"`])(entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|reconcile\.[a-z][a-z_.]*)\1/;
+const LITERAL=/(['"`])(entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|company\.events|reconcile\.[a-z][a-z_.]*)\1/;
 // db-contract.ts is a test-fixture module (shared FactsDb contract cases), not a producer.
 const EXEMPT=new Set(['src/lib/dq/datasets.ts','src/lib/facts/db-contract.ts']);
 function sources(dir:string):string[]{
@@ -34,10 +34,10 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
   }
  });
  it('expands every DATASETS leaf, market and reconcile pair into the inventory, and nothing else',()=>{
-  const leaves=[...Object.values(DATASETS.entities),DATASETS.facts('US'),DATASETS.facts('CN'),DATASETS.acceptance,DATASETS.filerCategories,
+  const leaves=[...Object.values(DATASETS.company),...Object.values(DATASETS.entities),DATASETS.facts('US'),DATASETS.facts('CN'),DATASETS.acceptance,DATASETS.filerCategories,
    ...RECONCILE_PAIR_IDS.map(p=>DATASETS.reconcile(p)),DATASETS.calendar('US'),DATASETS.calendar('CN')];
   expect([...leaves].sort()).toEqual([...DQ_DATASET_NAMES].sort());
-  expect(DQ_DATASET_NAMES).toHaveLength(7+2+1+1+7+2);
+  expect(DQ_DATASET_NAMES).toHaveLength(1+7+2+1+1+7+2);
  });
  it('keeps the identifiers plans 1 and 2 already persist',()=>{
   expect(DATASETS.facts('US')).toBe('facts.us');
@@ -55,6 +55,7 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
   expect(inventoryEntry(DATASETS.reconcile('entities.isin_hkex_vs_gleif'))).toEqual({dataset:'reconcile.entities.isin_hkex_vs_gleif',producer:'fill-identifiers',cadence:'event'});
   expect(inventoryEntry(DATASETS.calendar('US'))).toEqual({dataset:'dq.calendar.us',producer:'filing-calendar',cadence:'daily'});
   expect(inventoryEntry(DATASETS.facts('CN'))).toEqual({dataset:'facts.cn',producer:'facts-sync',cadence:'daily'});
+  expect(inventoryEntry(DATASETS.company.events)).toEqual({dataset:'company.events',producer:'company-digest',cadence:'daily'});
   expect(()=>inventoryEntry('macro.cpi')).toThrow('unknown_dataset:macro.cpi');
  });
  it('finds no hard-coded dataset literal outside the registry',()=>{
