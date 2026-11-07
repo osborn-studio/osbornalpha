@@ -61,7 +61,7 @@ src/lib/macro/fixtures/fred/*.csv + manifest.json         真实录制（Task 4�
 scripts/macro/record-fred-fixtures.ts                    （Task 4）
 src/lib/macro/derive.ts            deriveSeries（month_end / yoy_from_index / index_minus_100；Task 5）
 src/lib/macro/quality.ts           MACRO_RULES_VERSION、validatePoint、KNOWN_UNITS（Task 5）
-src/lib/macro/ingest.ts            ingestEvidence / deriveAndWrite / IngestDeps / IngestReceipt（cron 与 ingest 路由共用；Task 6）
+src/lib/macro/ingest.ts            ingestEvidence / deriveAndWrite / IngestDeps / IngestReceipt / IngestAbort（带 partial，四轮 P2-2）/ abortError（cron 与 ingest 路由共用；Task 6）
 src/lib/macro/providers/fred.ts    fetchFredCsv、fredCosdFor（Task 7）
 src/lib/macro/deps.ts              MacroDeps、productionMacroDeps（Task 7）
 src/app/api/cron/macro-sync/route.ts                     （Task 7，Task 11 接入发布）
@@ -354,7 +354,7 @@ export interface MacroDb{
 }
 ```
 
-`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效），`regimeOf` 例外走 admin（第 6 稿 P1-2）；`memoryMacroDb(opts?: {tables?: TableClient})`（可无参数调用，不要求 `ingest_batches` 行）在内存里实现同样语义（含 `stale_publisher`、隔离/拒绝行不可读、版本规则、发布资格、隔离成员、ingest 租约与分块认领）。内存库没有 `ingest_batches` 表：批次状态由 `setBatchStatus(batchId, status)` 声明，**从未声明的批次按 `success` 处理**（等同 SQL 中批次已正常结束；只建模发布前状态的单测无需登记批次），建模未结束/失败批次的测试显式声明 `running` / `failed`；`claimIngest` 取得租约时把该批次声明为 `running`（SQL 只允许 running 批次取租约）。`finalizeBatch` / `recordFreshness`（第 6 稿 P1-1）需要传入的 `tables`（DQ 的 `TableClient`，路由测试里与路由共用同一个 `memoryTableClient`）：令牌校验后写 `tables` 的 `ingest_batches` / `dq_freshness`（新鲜度用落地的 `recordAttempt`，与 SQL 平价测试同一语义），`finalizeBatch` 同时 `setBatchStatus` 为写入的状态，于是发布资格立即反映结束状态；没传 `tables` → `rpc_failed:memory_tables_required`；共用契约的 harness 用 `batch()` 建 `running` 批次、`finish(batchId,status)` 结束它，两种实现语义一致。路由与视图的全部数据库读取都经 `MacroDb`（`previousSnapshot`、`retrievalsOf`、`retrievalsByIds` 也在这里），`route-helpers.ts` 不写临时 anon 查询。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 只授 service_role，Task 15 路由经 `requireSessionUser()` 取得已验证的会话用户后，用 admin 客户端 rpc 并传 `p_user_id`；读单个运行走登录用户的 server 客户端（RLS `user_id = auth.uid()`）。
+`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效），`regimeOf` 例外走 admin（第 6 稿 P1-2）；`memoryMacroDb(opts?: {tables?: TableClient})`（可无参数调用，不要求 `ingest_batches` 行）在内存里实现同样语义（含 `stale_publisher`、隔离/拒绝行不可读、版本规则、发布资格、隔离成员、ingest 租约与分块认领）。内存库没有 `ingest_batches` 表：批次状态由 `setBatchStatus(batchId, status)` 声明，**从未声明的批次按 `success` 处理**（等同 SQL 中批次已正常结束；只建模发布前状态的单测无需登记批次），建模未结束/失败批次的测试显式声明 `running` / `failed`；`claimIngest` 取得租约时把该批次声明为 `running`（SQL 只允许 running 批次取租约）。`finalizeBatch` / `recordFreshness`（第 6 稿 P1-1）需要传入的 `tables`（DQ 的 `TableClient`，路由测试里与路由共用同一个 `memoryTableClient`）：令牌校验后写 `tables` 的 `ingest_batches` / `dq_freshness`（新鲜度用落地的 `recordAttempt`，与 SQL 平价测试同一语义），`finalizeBatch` 同时 `setBatchStatus` 为写入的状态，于是发布资格立即反映结束状态；没传 `tables` → `rpc_failed:memory_tables_required`；共用契约的 harness 用 `batch()` 建 `running` 批次、`finish(batchId,status)` 结束它，两种实现语义一致。**内存运行锁（四轮 P2-1）**：内存库以按 `run:<batch_id>` 键的 FIFO promise 链锁（claim 另取 `dataset:<dataset>` 再取该数据集全部活 run 的键；`recordFreshness` 另取 `freshness:<dataset>`）包住每个带栅栏的方法，锁一直持有到其被 await 的写入完成，与 SQL 的 run 行 `for update` 同语义；屏障测试见 Task 3。路由与视图的全部数据库读取都经 `MacroDb`（`previousSnapshot`、`retrievalsOf`、`retrievalsByIds` 也在这里），`route-helpers.ts` 不写临时 anon 查询。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 只授 service_role，Task 15 路由经 `requireSessionUser()` 取得已验证的会话用户后，用 admin 客户端 rpc 并传 `p_user_id`；读单个运行走登录用户的 server 客户端（RLS `user_id = auth.uid()`）。
 
 Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated/service_role，RLS 生效）：`macro_latest_observations(p_series_ids text[], p_as_of timestamptz, p_period_end_lte date) returns setof macro_observations`（每序列最新期内最高 ok 版本，至多一行/序列）、`macro_snapshots_since(p_created_at timestamptz, p_snapshot_id uuid, p_limit int) returns setof macro_snapshots`（按 `(created_at, snapshot_id)` 键集分页，`p_limit` 夹在 1..1000）。发布资格读函数（`security definer`，只授 service_role，因为 `ingest_batches` 只有 service 可读）：`macro_latest_eligible_observations(p_series_ids, p_as_of, p_period_end_lte, p_include_batch)` 与 `macro_eligible_history(p_series_id, p_from, p_to, p_as_of, p_include_batch, p_after, p_limit)`（每期最高合格版本、按 `period_end` 升序、`p_after` 键集分页、每页 ≤ 1000）；二者都经 `macro_ineligible_ids(p_ids uuid[], p_include_batch uuid)`（见下文"发布资格"）。写目录走 service RPC `macro_upsert_catalog(p_catalog_version, p_rules_version, p_defs jsonb)`：同一版本号已存在且目录 JSON 不同 → `catalog_version_conflict`（一个版本号永远只指一个目录）。
 
@@ -389,7 +389,7 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 
 ### 隔离裁决（SQL `macro_link_quarantine` + `macro_resolve_conflict`；Task 1 / Task 6 / Task 18；第 4 稿 P1-4）
 
-成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[], p_batch_id, p_owner_token)`：先所有者校验（第 5 稿 P1-3），再 **`select … from dq_quarantine where id = … for update`**（与裁决同一把行锁，第 5 稿 P2-3）：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）；条目已关闭时**原子地检查确切成员（第 6 稿 P2-3）**：给定的每个观测都已是**本条目**成员且现为 `ok` 或 `rejected`（本条目的裁决已处置它：并发接受 / 拒绝了复用的成员）→ 链接视为已完成，返回 0；否则（有观测仍是 `quarantined`）→ `quarantine_closed`；条目 open 时每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。调用方每次只链接一个观测（Task 6）。`quarantine_closed`（行仍被隔离，裁决在 `quarantine()` 与链接之间关闭了条目）——Task 6 再调一次 `quarantine()`（旧条目已非 open，于是新建 open 条目）并重试链接一次；仍失败则整块失败（`IngestAbort('quarantine_link_failed')`，不 `completeChunk`），绝不留下未绑定的被隔离行。
+成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[], p_batch_id, p_owner_token)`：先所有者校验（第 5 稿 P1-3），再 **`select … from dq_quarantine where id = … for update`**（与裁决同一把行锁，第 5 稿 P2-3）：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）；条目已关闭时**原子地检查确切成员（第 6 稿 P2-3）**：给定的每个观测都已是**本条目**成员且现为 `ok` 或 `rejected`（本条目的裁决已处置它：并发接受 / 拒绝了复用的成员）→ 链接视为已完成，返回 0；否则（有观测仍是 `quarantined`）→ `quarantine_closed`；条目 open 时每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。调用方每次只链接一个观测（Task 6）。`quarantine_closed`（行仍被隔离，裁决在 `quarantine()` 与链接之间关闭了条目）——Task 6 再调一次 `quarantine()`（旧条目已非 open，于是新建 open 条目）并重试链接一次；仍失败则整块失败（`IngestAbort('quarantine_link_failed')`，携带已提交结果 `partial`；四轮 P2-2：ingest 路由把它合并一次经 `completeChunk` 记下并在 finish 强制 `failed`，cron 合并一次后以 `failed` 结束），被隔离行所在批次永不合格。
 
 `macro_resolve_conflict(p_quarantine_id uuid, p_decision text, p_resolved_by uuid, p_observation_id uuid default null)`，只授 service_role。锁 `dq_quarantine` 行（`for update`），不存在 → `not_found`，`dataset`/`table_name`/`natural_key` 不合 → `invalid_item`，非 `open` → `already_resolved`。
 - `accept`：`reason_code` 为 `adapter_mismatch` 或 `rule_failed:%` → `reject_only`（这两类值从未写入，SQL 强制只能拒绝）；`p_observation_id` 为空 → `observation_required`；它必须是该条目的成员（`not_member`）、当前 `quarantined`（`not_quarantined`；被拒绝的行永不复活），且其批次不是 `failed`/`rejected`（`member_ineligible`，第 5 稿 P1-6：接受失败批次的行只会得到一个永不合格的 ok 行；成功批次的重交付是同一条目下另一个成员）→ 该行 `ok`；该条目其余仍为 `quarantined` 的成员全部 `rejected`；区域 `input_revision+1`。
@@ -520,6 +520,8 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 | 第 6 稿 P2-2 发布键回放时回执取自持久化的快照与判定 | 11 |
 | 第 6 稿 P2-3 已关闭条目：确切成员已被本条目处置 → 链接完成；仍隔离 → 新条目重绑 | 1、3、6、18 |
 | 第 6 稿 P2-4 cron 致命中止（派生期 `quarantine_link_failed`）以显式 `failed` 经 `macro_finalize_batch` 结束，计数如实 | 1、6、7 |
+| 四轮 P2-1 内存 MacroDb 运行锁（`run:` / `dataset:` / `freshness:` FIFO 锁持有到写入完成）；两项屏障测试 | 3 |
+| 四轮 P2-2 每个回执后更新汇总；`IngestAbort.partial` 携带已提交结果，cron / ingest chunk / finish 合并一次后强制 `failed` | 6、7、9 |
 
 ## 执行顺序
 
@@ -3701,6 +3703,7 @@ import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
 import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,packWrites,supabaseMacroDb,toMacroDbError} from './db';
 import {macroDbContract,nativeRow,outcome} from './db-contract';
@@ -3776,6 +3779,73 @@ describe('memoryMacroDb specifics',()=>{
   expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',consecutive_errors:1,status:'missing',detail:{batch_id:b}})]);
   await db.recordFinishStep(b,'receipt',{},cur);
   expect(await outcome(db.recordFreshness(b,fw,old))).toBe('fenced:fenced');                                     // obsolete token after finish: fenced, not run_not_finishing
+ });
+ // ---- run-lock barriers (四轮 P2-1): a TableClient whose next write to `table` pauses until released holds a call inside its
+ // awaited mutation, exactly where the unlocked twin used to yield.
+ function gated(base:ReturnType<typeof memoryTableClient>){
+  let armed:{table:string;hit:()=>void;open:Promise<void>}|null=null;
+  const pause=async(table:string)=>{const a=armed;if(a&&a.table===table){armed=null;a.hit();await a.open;}};
+  const client:TableClient={
+   insert:(t,r)=>base.insert(t,r),select:(t,m,o)=>base.select(t,m,o),count:(t,m,o)=>base.count(t,m,o),
+   async update(t,m,p){await pause(t);return base.update(t,m,p);},
+   async upsert(t,r,k){await pause(t);return base.upsert(t,r,k);},
+  };
+  const arm=(table:string)=>{let hit!:()=>void,release!:()=>void;const reached=new Promise<void>(r=>{hit=r;});const open=new Promise<void>(r=>{release=r;});armed={table,hit,open};return {reached,release};};
+  return {client,arm};
+ }
+ const settled=<T,>(p:Promise<T>,log:string[],name:string)=>p.then(v=>{log.push(name);return v;},e=>{log.push(name);throw e;});
+ const drain=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r));};
+ const LEASE={maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:false};
+ const fw=(batch:string)=>({dataset:'macro.akshare',ok:false,cadence:'daily' as const,now:'2026-11-06T05:31:00.000Z',detail:{batch_id:batch}});
+ it('run lock (四轮 P2-1): a freshness write paused inside the lock holds off token rotation and takeover; the newer run\'s attempt is never overwritten',async()=>{
+  const base=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});const {client,arm}=gated(base);
+  const db=memoryMacroDb({tables:client});
+  const {batchId:a}=await startBatch(base,{producer:'py-akshare',dataset:'macro.akshare'});
+  const ta=(await db.claimIngest(a,'macro.akshare',LEASE)).ownerToken!;
+  const fa=await db.beginFinish(a,0,ta);if(fa.status!=='finishing')throw new Error('unreachable');
+  const gate=arm('dq_freshness');const log:string[]=[];
+  const held=settled(db.recordFreshness(a,fw(a),{ownerToken:ta,finishToken:fa.finishToken}),log,'freshness');
+  await gate.reached;                                                                                    // A is inside its upsert, lock held
+  const rotate=settled(db.beginFinish(a,0,ta),log,'rotate');
+  const {batchId:b}=await startBatch(base,{producer:'py-akshare',dataset:'macro.akshare'});
+  db.setNow(new Date(Date.now()+3*3_600_000).toISOString());                                           // A is past its max age
+  const takeover=settled(db.claimIngest(b,'macro.akshare',LEASE),log,'takeover');
+  await drain();
+  expect(log).toEqual([]);                                                                               // both wait for A's run lock
+  gate.release();
+  const [rec,rot,claim]=await Promise.all([held,rotate,takeover]);
+  expect(log).toEqual(['freshness','rotate','takeover']);
+  expect(rec).toMatchObject({freshness_recorded:{ok:false,status:'missing'}});
+  expect(rot.status).toBe('finishing');                                                                  // rotated only after A's write
+  expect(claim).toMatchObject({status:'claimed',aborted:[a]});
+  const tb=claim.ownerToken!;const fb=await db.beginFinish(b,0,tb);if(fb.status!=='finishing')throw new Error('unreachable');
+  await db.recordFreshness(b,fw(b),{ownerToken:tb,finishToken:fb.finishToken});
+  expect(await outcome(db.recordFreshness(a,fw(a),{ownerToken:ta,finishToken:fa.finishToken}))).toBe('fenced:fenced');
+  expect(base.rows('dq_freshness')).toEqual([expect.objectContaining({consecutive_errors:2,detail:{batch_id:b}})]);   // B's attempt follows A's, never overwritten
+ });
+ it('run lock (四轮 P2-1): an obsolete operation entering after a queued rotation runs after it and is fenced',async()=>{
+  const ZERO={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
+  const fin={status:'success' as const,counts:ZERO,errors:[],finishedAt:'2026-11-06T05:31:00.000Z'};
+  const base=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});const {client,arm}=gated(base);
+  const db=memoryMacroDb({tables:client});
+  const {batchId:a}=await startBatch(base,{producer:'py-akshare',dataset:'macro.akshare'});
+  const t=(await db.claimIngest(a,'macro.akshare',LEASE)).ownerToken!;
+  const f1=await db.beginFinish(a,0,t);if(f1.status!=='finishing')throw new Error('unreachable');
+  const cur={ownerToken:t,finishToken:f1.finishToken};
+  const gate=arm('dq_freshness');const log:string[]=[];
+  const held=settled(db.recordFreshness(a,fw(a),cur),log,'freshness');
+  await gate.reached;
+  const rotate=settled(db.beginFinish(a,0,t),log,'rotate');                                             // queued: will rotate the finish token
+  const late=outcome(settled(db.finalizeBatch(a,fin,cur),log,'finalize'));                                // cur is still current when called…
+  await drain();
+  expect(log).toEqual([]);
+  gate.release();
+  const [,rot]=await Promise.all([held,rotate]);
+  expect(await late).toBe('fenced:fenced');                                                                // …but it runs after the rotation
+  expect(log).toEqual(['freshness','rotate','finalize']);
+  expect(base.rows('ingest_batches').find(x=>x.batch_id===a)).toMatchObject({status:'running'});
+  if(rot.status!=='finishing')throw new Error('unreachable');
+  expect(await db.finalizeBatch(a,fin,{ownerToken:t,finishToken:rot.finishToken})).toEqual({status:'success',finalized:true});
  });
  it('returns copies: mutating a read row does not change stored state',async()=>{
   const db=memoryMacroDb();
@@ -4478,6 +4548,25 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  const audit:AuditRow[]=[];
  const zeroCounts=():ChunkCounts=>({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0});
  const needTables=():TableClient=>{if(!opts.tables)throw rpc('memory_tables_required');return opts.tables;};
+ // ---- run lock (四轮 P2-1): SQL holds the run row FOR UPDATE until commit (claim: the dataset advisory lock, then the live runs'
+ // rows; record_freshness: also the dq_freshness:<dataset> advisory lock). finalizeBatch / recordFreshness await the TableClient,
+ // so without a lock they would yield between the token check and the write. Every fenced method runs under FIFO promise-chain
+ // locks keyed `run:<batch_id>` (plus `dataset:` / `freshness:`) held through completion of its awaited mutations. Keys are taken
+ // in sorted order; only claimIngest takes several run keys and it holds its dataset key first, so there is no cycle.
+ const tails=new Map<string,Promise<void>>();
+ const acquire=async(key:string):Promise<()=>void>=>{
+  const prev=tails.get(key)??Promise.resolve();
+  let release!:()=>void;const mine=new Promise<void>(r=>{release=r;});
+  const tail=prev.then(()=>mine);tails.set(key,tail);
+  await prev;
+  return ()=>{release();if(tails.get(key)===tail)tails.delete(key);};
+ };
+ const locked=async<T>(keys:readonly (string|null|undefined)[],fn:()=>Promise<T>):Promise<T>=>{
+  const held:(()=>void)[]=[];
+  try{for(const k of [...new Set(keys.filter((k):k is string=>!!k))].sort())held.push(await acquire(k));return await fn();}
+  finally{for(const r of held.reverse())r();}
+ };
+ const runKey=(batchId:string|null|undefined)=>batchId?`run:${batchId}`:null;
 
  // ---- publication eligibility (SQL macro_ineligible_ids)
  const batchOk=(b:string,include?:string|null)=>b===include||['success','partial'].includes(batchStatus.get(b)??'success');
@@ -4892,6 +4981,26 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    return s?clone(s):null;
   },
   async regimeOf(id){const r=regimes.get(id);return r?clone(r):null;},
+ };
+ // ---- every fenced method under the run lock (四轮 P2-1). Tests that monkeypatch a method replace the wrapper, as before.
+ const {claimIngest,claimChunk,completeChunk,beginFinish,recordFinishStep,finalizeBatch,recordFreshness,putRetrieval,writeObservations,linkQuarantine,publishSnapshot}=db;
+ db.claimChunk=(b,seq,total,t)=>locked([runKey(b)],()=>claimChunk(b,seq,total,t));
+ db.completeChunk=(b,seq,res,t)=>locked([runKey(b)],()=>completeChunk(b,seq,res,t));
+ db.beginFinish=(b,total,t)=>locked([runKey(b)],()=>beginFinish(b,total,t));
+ db.recordFinishStep=(b,step,data,fence)=>locked([runKey(b)],()=>recordFinishStep(b,step,data,fence));
+ db.finalizeBatch=(b,input,fence)=>locked([runKey(b)],()=>finalizeBatch(b,input,fence));
+ db.recordFreshness=(b,input,fence)=>locked([runKey(b),typeof input?.dataset==='string'?`freshness:${input.dataset}`:null],()=>recordFreshness(b,input,fence));
+ db.putRetrieval=(obj,r,t)=>locked([runKey(r?.batch_id)],()=>putRetrieval(obj,r,t));
+ db.writeObservations=(b,c,rows,t)=>locked([runKey(b)],()=>writeObservations(b,c,rows,t));
+ db.linkQuarantine=(q,ids,fence)=>locked([runKey(fence?.batchId)],()=>linkQuarantine(q,ids,fence));
+ db.publishSnapshot=i=>locked([runKey(i?.batchId)],()=>publishSnapshot(i));
+ db.claimIngest=async(batchId,dataset,o)=>{
+  const releaseDataset=await acquire(`dataset:${String(dataset)}`);
+  try{
+   // the SQL update locks every live run row of the dataset before judging it: wait for their in-flight fenced calls
+   const live=[...runs].filter(([,r])=>r.dataset===dataset&&(r.state==='open'||r.state==='finishing')).map(([id])=>runKey(id));
+   return await locked([...live,runKey(batchId)],()=>claimIngest(batchId,dataset,o));
+  }finally{releaseDataset();}
  };
  return db;
 }
@@ -5697,6 +5806,7 @@ Semantics fixed here (the routes rely on them):
 - **Owner fence (第 5 稿 P1-3).** `ingestEvidence({…, ownerToken})` and `deriveAndWrite(deps, region, batchId, ownerToken)` pass the run's token to every `putRetrieval` / `writeObservations` / `linkQuarantine` (cron passes nothing: its batch has no run). A `fenced` MacroDbError from any of them throws `IngestAbort('fenced')` at once — it is a protocol abort, never a counted failure, and nothing after it runs.
 - `deriveAndWrite` recomputes the **complete** eligible history of every derived series on every run (第 4 稿 P1-7): inputs are read in full with `db.eligibleHistory(input, {includeBatch: batchId, maxRows: DERIVE_MAX_ROWS})` (paged), so a revision of an old input period (FRED re-sends six years) reaches that period's derived row and, for yoy, period + 12. Unchanged rows come back as duplicates, which are cheap.
 - A thrown `writeObservations` → that call's rows `failed`, error `write_<MacroDbError.code>` or `write_failed`; the function never throws for data problems (only `IngestAbort` for `fenced` / `quarantine_link_failed`).
+- **Partial receipt on abort (四轮 P2-2).** An `IngestAbort` escaping `ingestEvidence` / `deriveAndWrite` carries `partial: IngestReceipt` = every outcome recorded before the abort (all committed: written rows, parked / failed points; `retrievalIds` so far). `partial.counts.fetched` leaves out the points of the aborted unit (retrieval / derived series) that never got an outcome, so the counters equal committed rows. `partial.errors` does not contain the abort itself; callers add `abortError(e)`. Callers merge `partial` exactly once (the call never returned a receipt) before a forced `failed` finalization (Task 7 cron; Task 9 chunk → `completeChunk`, finish → `derived` step).
 - Rows go to the RPC in calls of ≈1000 (`chunkWrites`) that never split one `(series_id, period_end)` group.
 
 - [ ] **Step 1: Write the failing test**
@@ -5709,7 +5819,7 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {CATALOG_VERSION,MACRO_CATALOG} from './catalog';
 import {MacroDbError} from './db';
 import {UNACCOUNTED_ERROR,batchStatusFromCounts} from '../dq/batches';
-import {MAX_BATCH_ERRORS,batchFinalizeInput,chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
+import {IngestAbort,MAX_BATCH_ERRORS,batchFinalizeInput,chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
 import type {IngestDeps} from './ingest';
 import {memoryMacroDb} from './memory-db';
 import {parseFredCsv} from './parsers/fred-csv';
@@ -5921,6 +6031,23 @@ describe('ingestEvidence',()=>{
   expect(rec.counts).toMatchObject({fetched:2,inserted:0,failed:2});
   expect(rec.errors).toEqual([{code:'write_failed',key:'US_DGS10_D'}]);
  });
+ it('a native abort after committed writes carries the committed outcomes as partial counts (四轮 P2-2)',async()=>{
+  const B2='55555555-5555-4555-8555-555555555555';
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+  db.linkQuarantine=async()=>{throw new MacroDbError('rpc_failed','link down');};
+  const e=await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[
+   fred('UNRATE','US_UNRATE','month','2026-08-01,4.1\n2026-09-01,4.2\n'),                                       // inserted 2
+   fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n2026-10-02,4.3\n',{fetchedAt:'2026-11-08T05:30:00.000Z'}),   // 1 inserted + 1 stored quarantined, then the link fails
+   fred('CPIAUCSL','US_CPI_INDEX','month','2026-09-01,330\n'),                                                 // never reached
+  ]}).catch(x=>x);
+  expect(e).toBeInstanceOf(IngestAbort);expect(e.code).toBe('quarantine_link_failed');
+  const mine=db.allObservations().filter(o=>o.batch_id===B2);
+  const ok=mine.filter(o=>o.status==='ok').length,q=mine.filter(o=>o.status==='quarantined').length;
+  expect([ok,q]).toEqual([3,1]);
+  expect(e.partial.counts).toEqual({fetched:4,inserted:ok,duplicates:0,versioned:0,quarantined:q,failed:0});   // = committed rows; the third retrieval is not counted
+  expect(e.partial.usable).toBe(3);expect(e.partial.retrievalIds).toHaveLength(2);expect(e.partial.errors).toEqual([]);
+  expect(batchFinalizeInput(e.partial,new Date('2026-11-08T05:31:00Z'),'failed')).toMatchObject({status:'failed',counts:{inserted:3,quarantined:1}});
+ });
 });
 
 describe('batchFinalizeInput (第 6 稿 P1-1/P2-4)',()=>{
@@ -5992,6 +6119,23 @@ describe('deriveAndWrite',()=>{
   expect(rec.counts.fetched).toBe(0);
   expect(await history('US_CPI_YOY')).toEqual([]);
  });
+ it('a derivation abort after committed derived writes carries exactly those rows as partial counts (四轮 P2-2)',async()=>{
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[
+   fred('DGS10','US_DGS10_D','day','2026-09-30,4.35\n2026-10-01,4.4\n2026-11-02,4.5\n'),
+   fred('CPIAUCSL','US_CPI_INDEX','month','2025-09-01,324.368\n2026-09-01,336.298\n'),
+  ]});
+  const write=db.writeObservations.bind(db);const seen=new Set<string>();
+  db.writeObservations=async(b,c,rows,t)=>{
+   const id=rows[0]?.series_id;
+   if(rows.some(r=>'derived_from' in r)){if(seen.size>0&&!seen.has(id))throw new MacroDbError('fenced');seen.add(id);}   // the second derived series aborts
+   return write(b,c,rows,t);
+  };
+  const e=await deriveAndWrite(deps,'US',BATCH).catch(x=>x);
+  expect(e).toBeInstanceOf(IngestAbort);expect(e.code).toBe('fenced');
+  const derived=db.allObservations().filter(o=>o.batch_id===BATCH&&o.derived_from!==null);
+  expect(derived.length).toBeGreaterThan(0);
+  expect(e.partial.counts).toEqual({fetched:derived.length,inserted:derived.length,duplicates:0,versioned:0,quarantined:0,failed:0});   // the aborted series' rows are not counted
+ });
 });
 ```
 
@@ -6041,8 +6185,11 @@ export interface IngestReceipt{counts:ChunkCounts;usable:number;errors:BatchErro
  *  superseded by a takeover (P1-3); `quarantine_link_failed` — a stored quarantined row could not be bound to an open item
  *  (P2-3). The ingest route answers 409 fenced / 500 without completing the chunk; cron closes its batch failed. */
 export class IngestAbort extends Error{
- constructor(readonly code:'fenced'|'quarantine_link_failed',readonly key?:string){super(key===undefined?code:`${code}:${key}`);this.name='IngestAbort';}
+ /** partial (四轮 P2-2): committed outcomes of the aborted call, attached by ingestEvidence / deriveAndWrite on the way out. */
+ constructor(readonly code:'fenced'|'quarantine_link_failed',readonly key?:string,readonly partial?:IngestReceipt){super(key===undefined?code:`${code}:${key}`);this.name='IngestAbort';}
 }
+/** The batch error for an abort (callers push it once; partial.errors never contains it). */
+export const abortError=(e:IngestAbort):BatchError=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key};
 const isFenced=(e:unknown)=>e instanceof MacroDbError&&e.code==='fenced';
 
 export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'>={fred_csv:'macro.fred',akshare:'macro.akshare'};
@@ -6096,7 +6243,20 @@ export function chunkWrites<T extends {series_id:string;period_end:string}>(rows
  return out;
 }
 
-interface Ctx{deps:IngestDeps;dataset:string;batchId:string;ownerToken:string|null;counts:ChunkCounts;usable:number;errors:BatchError[]}
+/** unit (四轮 P2-2): the retrieval / derived series in progress — its size and the outcome total when it began. */
+interface Ctx{deps:IngestDeps;dataset:string;batchId:string;ownerToken:string|null;counts:ChunkCounts;usable:number;errors:BatchError[];unit:{size:number;base:number}|null}
+const outcomesOf=(c:ChunkCounts)=>c.inserted+c.duplicates+c.versioned+c.quarantined+c.failed;
+const beginUnit=(ctx:Ctx,n:number)=>{ctx.counts.fetched+=n;ctx.unit={size:n,base:outcomesOf(ctx.counts)};};
+/** Committed outcomes so far: fetched leaves out the aborted unit's points that never got an outcome. */
+function partialOf(ctx:Ctx,retrievalIds:readonly string[]):IngestReceipt{
+ const unanswered=ctx.unit?Math.max(0,ctx.unit.size-(outcomesOf(ctx.counts)-ctx.unit.base)):0;
+ return {counts:{...ctx.counts,fetched:ctx.counts.fetched-unanswered},usable:ctx.usable,errors:[...ctx.errors],retrievalIds:[...retrievalIds]};
+}
+/** Runs the body; an IngestAbort leaves with the partial receipt attached (四轮 P2-2). */
+async function withPartial(ctx:Ctx,retrievalIds:readonly string[],body:()=>Promise<void>):Promise<void>{
+ try{await body();}
+ catch(e){if(e instanceof IngestAbort&&!e.partial)throw new IngestAbort(e.code,e.key,partialOf(ctx,retrievalIds));throw e;}
+}
 
 /** quarantine() that never aborts the batch: a failed insert into dq_quarantine is a failed row. Returns the (possibly
  *  reused) item id when parked, else null. */
@@ -6162,12 +6322,13 @@ const collectable=(def:MacroSeriesDef|undefined,adapter:Adapter):def is MacroSer
 
 /** ownerToken: the AKShare run's token (第 5 稿 P1-3); omitted / null for cron (its batch has no run row). */
 export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapter:Adapter;retrievals:RetrievalInput[];ownerToken?:string|null}):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,ownerToken:input.ownerToken??null,counts:emptyChunkCounts(),usable:0,errors:[]};
+ const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,ownerToken:input.ownerToken??null,counts:emptyChunkCounts(),usable:0,errors:[],unit:null};
  const retrievalIds:string[]=[];
+ await withPartial(ctx,retrievalIds,async()=>{
  for(const r of input.retrievals){
   const e=r.evidence,n=r.parsed.length;
   const label=[...new Set(r.parsed.map(p=>p.seriesId))].join(',')||e.fetchUrl.slice(0,120);
-  ctx.counts.fetched+=n;
+  beginUnit(ctx,n);
   if(e.adapter!==input.adapter){ctx.counts.failed+=n;ctx.errors.push({code:'evidence_adapter_mismatch',key:label});continue;}
   let objectPath:string;
   try{({objectPath}=await deps.evidence.put(e));}
@@ -6213,7 +6374,9 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
    }
   }
   await writeAll(ctx,writes);
+  ctx.unit=null;
  }
+ });
  return {counts:ctx.counts,usable:ctx.usable,errors:ctx.errors,retrievalIds};
 }
 
@@ -6230,8 +6393,9 @@ export function derivedOf(region:Region):MacroSeriesDef[]{
  * back must reach its derived period and, for yoy, period + 12; unchanged rows return as duplicates.
  */
 export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:string,ownerToken:string|null=null):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,ownerToken,counts:emptyChunkCounts(),usable:0,errors:[]};
+ const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,ownerToken,counts:emptyChunkCounts(),usable:0,errors:[],unit:null};
  const now=deps.now();
+ await withPartial(ctx,[],async()=>{
  for(const def of derivedOf(region)){
   const input=catalogById(def.derive!.from);
   if(!input){ctx.errors.push({code:'missing_derive_input',key:def.id});continue;}
@@ -6241,9 +6405,11 @@ export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:strin
   let writes:ObservationWrite[];
   try{writes=deriveSeries(def,history,{now});}
   catch{ctx.errors.push({code:'derive_failed',key:def.id});continue;}
-  ctx.counts.fetched+=writes.length;
+  beginUnit(ctx,writes.length);
   await writeAll(ctx,writes);
+  ctx.unit=null;
  }
+ });
  return {counts:ctx.counts,usable:ctx.usable,errors:ctx.errors,retrievalIds:[]};
 }
 ```
@@ -6295,7 +6461,7 @@ Design notes:
 - `fetchFredCsv` retries timeouts, network errors, 429 and 5xx three times (1 s, 2 s, 4 s; injectable `sleep`), refuses any other 4xx at once, and refuses a final URL whose host is not `fred.stlouisfed.org`. The evidence carries the **server's** `Content-Type` (FRED says `application/csv`).
 - First run per series backfills from `2000-01-01` (spec §4.4). Once a series has observations, `fredCosdFor` asks for 400 days (daily) or 6 years (monthly; BLS revises seasonal factors 5 years back) so a daily run of ~9 series stays well inside `maxDuration` (a full-history daily run would push ~50 000 rows through the write RPC every day). `deriveAndWrite` (Task 6) likewise re-derives only a recent window once a derived series has rows. Preview always uses `2000-01-01` because it must not read the database either.
 - `?preview=1` never touches `deps.db`, `deps.evidence` or `deps.tables` (the test replaces them with proxies that throw on any property access) and needs no code version.
-- **Batch finalization (第 6 稿 P1-1/P2-4).** The cron closes its batch with `deps.db.finalizeBatch(batchId, batchFinalizeInput(…), null)` (no run row, so no tokens), not `finishBatch`. A fatal abort — `IngestAbort('quarantine_link_failed')` thrown by `deriveAndWrite` after the native writes, or any crash — finalizes with an explicit `'failed'` and the actual counts (`batchFinalizeInput(…, 'failed')`), so already written native rows never make the batch `partial` or publication-eligible. The derivation / freshness gate is `Σ rec.usable > 0` (第 6 稿 P2-1: a rejected redelivery is a duplicate counter, not data). Freshness stays `recordAttempt('macro.fred')` (single writer, no run).
+- **Batch finalization (第 6 稿 P1-1/P2-4).** The cron closes its batch with `deps.db.finalizeBatch(batchId, batchFinalizeInput(…), null)` (no run row, so no tokens), not `finishBatch`. A fatal abort — `IngestAbort('quarantine_link_failed')` thrown by `deriveAndWrite` after the native writes, or any crash — finalizes with an explicit `'failed'` and the actual counts (`batchFinalizeInput(…, 'failed')`; 四轮 P2-2: the aggregates move after every completed receipt and the aborted call's `IngestAbort.partial` is merged exactly once first), so already written native rows never make the batch `partial` or publication-eligible. The derivation / freshness gate is `Σ rec.usable > 0` (第 6 稿 P2-1: a rejected redelivery is a duplicate counter, not data). Freshness stays `recordAttempt('macro.fred')` (single writer, no run).
 - Only `GET`/`POST`/`dynamic`/`maxDuration` are exported from `route.ts` (Next.js rejects other exports from route files), which is why `fredCosdFor` lives in `providers/fred.ts`.
 - `deps.ts` assumes Task 3 exports `supabaseMacroDb({admin,anon})` (skeleton) and `supabaseEvidenceStore(admin:SupabaseClient)`. If `supabaseEvidenceStore` takes other arguments, change only that line and say so in the commit body.
 
@@ -6412,14 +6578,14 @@ function csvFor(code:string){
 const trap=(name:string)=>new Proxy({},{get:(_t,k)=>{throw new Error(`preview touched ${name}.${String(k)}`);}});
 function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:EvidenceInput){puts.push(e);return {objectPath:`fred_csv/${e.sha256}.csv`,status:'stored' as const};}};}
 
-let fetchCalls:string[],failCodes:Set<string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
+let fetchCalls:string[],failCodes:Set<string>,overrides:Map<string,string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
- fetchCalls=[];failCodes=new Set();
+ fetchCalls=[];failCodes=new Set();overrides=new Map();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
  const fetch=(async(input:string|URL|Request)=>{
   const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
-  return failCodes.has(code)?new Response('down',{status:503}):new Response(csvFor(code),{status:200,headers:{'content-type':'application/csv'}});
+  return failCodes.has(code)?new Response('down',{status:503}):new Response(overrides.get(code)??csvFor(code),{status:200,headers:{'content-type':'application/csv'}});
  }) as typeof globalThis.fetch;
  deps={db:memoryMacroDb({tables}),evidence,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z'),fetch,sleep:async()=>{}};   // tables: finalizeBatch (第 6 稿)
  mocks.deps.mockImplementation(()=>deps);
@@ -6513,11 +6679,28 @@ describe('macro-sync cron',()=>{
   const res=await GET(req());
   expect(res.status).toBe(500);expect((await res.json()).error.code).toBe('sync_failed');
   const [batch]=tables.rows('ingest_batches');
-  expect(batch).toMatchObject({status:'failed',counts:{inserted:2*FRED.length,failed:0}});           // the native writes, as they happened — not 'partial'
+  expect(batch).toMatchObject({status:'failed',counts:{inserted:2*FRED.length,quarantined:1,failed:0}});   // native writes + the aborted derivation's committed outcome — not 'partial'
   expect(batch.errors).toContainEqual(expect.objectContaining({code:'quarantine_link_failed'}));
   expect(await deps.db.latestEligible(['US_DGS10_D'])).toEqual([]);                                // a failed batch's rows never publish
   expect((await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).length).toBe(2);                  // written (ok) but ineligible
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
+ });
+ it('a native abort after a committed retrieval (四轮 P2-2): stored counters equal the committed rows, batch failed',async()=>{
+  const [a,b]=FRED;expect([a.period,b.period]).toEqual(['day','day']);
+  expect((await (await GET(req())).json()).status).toBe('success');
+  const code=(d:typeof a)=>d.source!.seriesKey;
+  overrides.set(code(a),`observation_date,${code(a)}\n2026-10-02,4.3\n2026-10-05,4.4\n`);                    // two new periods: inserted 2
+  overrides.set(code(b),`observation_date,${code(b)}\n2026-09-30,4.1\n2026-10-01,4.15\n`);                   // duplicate + an older-dated different value
+  deps.now=()=>new Date('2026-11-05T05:30:00Z');                                                     // fetched before run 1 → stale_delivery, stored quarantined; its item cannot be bound
+  const res=await GET(req());
+  expect(res.status).toBe(500);
+  const batch=tables.rows('ingest_batches').find(r=>r.status==='failed')!;
+  const mine=(await deps.db.seriesHistory(a.id,{maxRows:10})).filter(o=>o.batch_id===batch.batch_id).length;
+  const quarantinedRows=(deps.db as ReturnType<typeof memoryMacroDb>).allObservations().filter(o=>o.batch_id===batch.batch_id&&o.status==='quarantined').length;
+  expect([mine,quarantinedRows]).toEqual([2,1]);
+  expect(batch.counts).toEqual({fetched:4,inserted:2,duplicates:1,versioned:0,quarantined:1,failed:0});      // before: all six were zero
+  expect(batch.errors).toContainEqual(expect.objectContaining({code:'quarantine_link_failed'}));
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
  });
  it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
   const cfg=JSON.parse(readFileSync(new URL('../../../../../vercel.json',import.meta.url),'utf8')) as {crons:{path:string;schedule:string}[]};
@@ -6665,7 +6848,8 @@ import {authorizedCronRequest} from '@/lib/observability/cron-auth';
 import {CATALOG_VERSION,MACRO_CATALOG,collectableOf} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
-import {IngestAbort,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import type {IngestReceipt} from '@/lib/macro/ingest';
 import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
@@ -6705,6 +6889,17 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
  const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
   toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
  let native=emptyChunkCounts(),nativeUsable=0,derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
+ // 四轮 P2-2: aggregates move after EVERY completed receipt, and an aborted call's partial (its committed outcomes) is merged
+ // exactly once — the call never returned a receipt — so a forced failure finalizes the counts as they were committed.
+ const take=(rec:IngestReceipt,phase:'native'|'derived')=>{
+  if(phase==='native'){native=addCounts(native,rec.counts);nativeUsable+=rec.usable;}else derivedCounts=addCounts(derivedCounts,rec.counts);
+  counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
+ };
+ const settle=async(phase:'native'|'derived',call:()=>Promise<IngestReceipt>)=>{
+  let rec:IngestReceipt;
+  try{rec=await call();}catch(e){if(e instanceof IngestAbort&&e.partial)take(e.partial,phase);throw e;}
+  take(rec,phase);
+ };
  try{
   // backfill decision on eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   const stored=new Set((await deps.db.latestEligible(defs.map(d=>d.id))).map(o=>o.series_id));
@@ -6712,19 +6907,16 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
    let retrieval;
    try{retrieval=await fetchAndParse(deps,def,signal,fredCosdFor(def.period,stored.has(def.id),today));}
    catch(e){errors.push({code:errCode(e),key:def.id});continue;}
-   const rec=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]});   // no owner token: cron batches have no run
-   native=addCounts(native,rec.counts);nativeUsable+=rec.usable;errors.push(...rec.errors);
+   await settle('native',()=>ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]}));   // no owner token: cron batches have no run
   }
-  counts=native;
   if(nativeUsable>0){                                                                               // 第 6 稿 P2-1
-   const derived=await deriveAndWrite(deps,'US',batchId);
-   derivedCounts=derived.counts;counts=addCounts(native,derived.counts);errors.push(...derived.errors);
+   await settle('derived',()=>deriveAndWrite(deps,'US',batchId));
   }else errors.push({code:'no_native_outcomes'});                                                   // 第 5 稿 P2-2
  }catch(e){
-  // Fatal abort (第 6 稿 P2-4): an unbindable quarantined row during derivation (IngestAbort quarantine_link_failed) or any crash.
-  // Finalize FAILED explicitly with the actual counts — batchStatusFromCounts would say 'partial' once native rows landed, leaving
+  // Fatal abort (第 6 稿 P2-4): an unbindable quarantined row (IngestAbort quarantine_link_failed, native or derivation) or any crash.
+  // counts already hold every completed receipt plus the aborted call's partial (四轮 P2-2). Finalize FAILED explicitly with them — batchStatusFromCounts would say 'partial' once native rows landed, leaving
   // them publication-eligible — so the batch never stays 'running' and its rows never publish; then rethrow.
-  errors.push(e instanceof IngestAbort?(e.key===undefined?{code:e.code}:{code:e.code,key:e.key}):{code:'sync_crashed'});
+  errors.push(e instanceof IngestAbort?abortError(e):{code:'sync_crashed'});
   await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now(),'failed'),null).catch(()=>undefined);
   await recordAttempt(deps.tables,'macro.fred',{ok:false,cadence:'daily'}).catch(()=>undefined);
   throw e;
@@ -7930,7 +8122,7 @@ Design notes:
 - **Evidence acceptance.** Every item's bytes must hash to its `sha256`, or the whole chunk gets a 400 before anything is written. An item is parsed only if its host equals the series' official host, its path equals the spec's `evidence_path`, its status is 200, and its `fetched_at` is at most 5 min in the future and at most 24 h old. `fetched_at` becomes `available_at`, so it must be plausible. A failing item counts one `failed` with an error code. Parser failures count `failed` with `parse_<code>`.
 - **Claims** are mapped with `claimPeriodEnd` (`2026年9月`, `2026年第三季度`, `YYYY-MM-DD`) and handed to `ingestEvidence`, which compares them by decimal equality. Claims that match no parsed point (SAFE dates covered only by the XLSX, or a label that does not map) are **not** quarantined (no raw value exists to hold). Each chunk stores its `claim_keys` (`<series>|<period_end>`, or `<series>|?<label>` when the label does not map) and `located_keys` (`<series>|<period_end>` of every parsed point); `finish` computes the batch-wide distinct `⋃claim_keys − ⋃located_keys` and, when n > 0, adds one informational batch error `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}` (`skipped_summary` is an existing INFO code in `src/lib/dq/batches.ts`; do not edit that file). Python repeats a series' claims in every chunk that carries its evidence, so per-chunk counts would over-count (第 4 稿 P2-1).
 - **Idempotency and single processing (第 4 稿 P1-6).** `chunk` first verifies every hash, then `claimChunk` inserts `(batch, seq)` as `processing`; only the claiming request ingests. A repeat of a `done` chunk returns its stored receipt (`status:'duplicate'`, stored counts and errors) without touching anything; a repeat of a `processing` chunk gets 409 `chunk_in_progress` (the collector retries, then restarts the collection, see below). After ingestion `completeChunk` stores counts, sanitized errors and the two key sets. Every stored chunk error reaches `finalizeBatch` (P2-1).
-- **One writer per dataset, owner token (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1).** `start` calls `startBatch`, then `claimIngest(batchId,'macro.akshare',{maxAgeMs:2 h, processingTimeoutMs:10 min, takeover: body.takeover===true})` and answers `{batch_id, owner_token}`. Aborted runs whose batch still runs are finished `failed` (error `aborted`; `batch_not_running` = already finished elsewhere, ignored; any other error is logged and the batch is listed again by the next `start`, so the sweep heals). If another live run holds the lease, the new batch is finished `rejected` (error `concurrent_batch`) and the route answers 409 `batch_running` with the holder's id. Two concurrent starts therefore produce exactly one claim (the advisory lock + partial unique index in SQL). `chunk` and `finish` carry `owner_token`; every MacroDb mutation passes it; `fenced` (an `IngestAbort` or MacroDbError) → 409 `fenced`, and a chunk/finish on a batch whose run is `aborted` → 409 `fenced`, so the collector restarts the whole collection under a new batch. `IngestAbort('quarantine_link_failed')` → 500 without `completeChunk` (the chunk stays `processing`; the stall path restarts). The route's `maxDuration` (300 s) is below the 10-minute processing timeout, so a live request is never mistaken for a stall.
+- **One writer per dataset, owner token (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1).** `start` calls `startBatch`, then `claimIngest(batchId,'macro.akshare',{maxAgeMs:2 h, processingTimeoutMs:10 min, takeover: body.takeover===true})` and answers `{batch_id, owner_token}`. Aborted runs whose batch still runs are finished `failed` (error `aborted`; `batch_not_running` = already finished elsewhere, ignored; any other error is logged and the batch is listed again by the next `start`, so the sweep heals). If another live run holds the lease, the new batch is finished `rejected` (error `concurrent_batch`) and the route answers 409 `batch_running` with the holder's id. Two concurrent starts therefore produce exactly one claim (the advisory lock + partial unique index in SQL). `chunk` and `finish` carry `owner_token`; every MacroDb mutation passes it; `fenced` (an `IngestAbort` or MacroDbError) → 409 `fenced`, and a chunk/finish on a batch whose run is `aborted` → 409 `fenced`, so the collector restarts the whole collection under a new batch. `IngestAbort('quarantine_link_failed')` (四轮 P2-2) → its `partial` (committed outcomes) is merged once into the chunk's counts and stored by `completeChunk` with the error `quarantine_link_failed` (a retry gets that stored receipt), the route answers 500, and `finish` forces the batch `failed`; a derivation abort in `finish` stores its partial in the `derived` checkpoint and also forces `failed`. Without a partial, or when `completeChunk` itself fails, the chunk stays `processing` and the stall path restarts. The route's `maxDuration` (300 s) is below the 10-minute processing timeout, so a live request is never mistaken for a stall.
 - **Exclusive, resumable finish (第 4 稿 P2-2, P2-4; 第 5 稿 P1-4/P1-5/P2-2).** `finish` carries `series_outcomes` from the collector. `beginFinish(batch,total,owner_token)` hands the owner a fresh `finishToken` (another owner → 409 `fenced`; a concurrent finish of the same owner is fenced at its next step); each step is recorded with `{ownerToken, finishToken}`: `derived` (skipped as `{skipped:'no_native_outcomes'}` when `Σ native_usable = 0`, 第 6 稿 P2-1) → `batch_finished` (`deps.db.finalizeBatch(batch, batchFinalizeInput(…), fence)`: the macro-owned fenced finalizer, 第 6 稿 P1-1; `finalized:false` = an earlier attempt finished it, the stored status is read back) → freshness (`deps.db.recordFreshness(batch, {dataset:'macro.akshare', ok, cadence:'daily', now, detail}, fence)`: the `dq_freshness` upsert and the `freshness_recorded` checkpoint commit in one transaction under the finish token — a retry either sees the checkpoint or repeats a write that never committed; the 第 5 稿 `freshness_started` skip is gone) → Task 11's `published` → `receipt` (ends the run, releases the lease). A finisher whose finish token was rotated is `fenced` at its finalize / freshness call and changes neither `ingest_batches` nor `dq_freshness`. A retried finish skips completed steps; a finished run returns the stored receipt. `batchRow` accepts a finished `ingest_batches` row for `finish` when its run is no longer `open`. Counts = native chunk counts + derived counts + `failed += 1` per failed series; the receipt also reports `native_counts` and `derived_counts`; errors = all stored chunk errors + the unlocated summary + derived errors + `{code, key: series_id}` per failed series + `{code:'no_native_outcomes'}` when no usable native row landed (`Σ native_usable = 0`; a chunk of only previously_rejected redeliveries counts duplicates but zero usable rows, 第 6 稿 P2-1). `recordFreshness` gets `ok = status !== 'failed' && Σ native_usable > 0` and `detail:{batch_id, batch_status, failed_series}`. Each chunk stores `native_usable = rec.usable` from `ingestEvidence`.
 - **Retrieval tool_versions** = the batch's `tool_versions` (AKShare, pandas, Python, collector, ingest route, catalog, rules) plus `parser` (`nbs-esdata/1` | `chinabond-history/1` | `safe-rmbquery/1`).
 
@@ -8470,6 +8662,28 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{derived:{skipped:'no_native_outcomes'}}});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1,detail:{batch_status:'failed'}});
  });
+ it('a chunk aborted by an unbindable quarantined row stores its committed outcomes once; finish forces the batch failed (四轮 P2-2)',async()=>{
+  const id=await startBatch();
+  // a later-dated different PMI value (another, finished batch) makes the chunk's 2026-10 value a stored stale_delivery whose
+  // dq_quarantine item the memory db never sees → the link fails after the writes committed
+  const seedBatch='00000000-0000-4000-8000-0000000000ee',sha='e'.repeat(64);
+  const r=await mem.putRetrieval({sha256:sha,object_path:`akshare/${sha}.json`,adapter:'akshare',content_type:'application/json',byte_length:1},
+   {fetch_url:'https://data.stats.gov.cn/x',fetch_host:'data.stats.gov.cn',http_status:200,fetched_at:RECORDED.toISOString(),batch_id:seedBatch,tool_versions:{}});
+  await mem.writeObservations(seedBatch,'seed',[{series_id:'CN_PMI_MFG',period_end:'2026-10-31',value_text:'99',available_at:RECORDED.toISOString(),revisable:false,retrieval_id:r,locator:{kind:'json_pointer',pointer:'/x'}}]);
+  const res=await post(chunkBody(id));
+  expect(res.status).toBe(500);expect((await res.json()).error.code).toBe('quarantine_link_failed');
+  const [c]=await mem.chunksOf(id);
+  const mine=mem.allObservations().filter(o=>o.batch_id===id);
+  expect(c.state).toBe('done');
+  expect([c.counts.inserted,c.counts.quarantined]).toEqual([mine.filter(o=>o.status==='ok').length,mine.filter(o=>o.status==='quarantined').length]);   // = committed rows
+  expect(c.native_usable).toBe(c.counts.inserted);
+  expect(c.errors[0]).toMatchObject({code:'quarantine_link_failed'});
+  expect(await (await post(chunkBody(id))).json()).toMatchObject({status:'duplicate',counts:c.counts});   // merged once: a retry reads it back
+  const body=await (await post(finishBody(id,1,OK))).json();
+  expect(body).toMatchObject({status:'failed',native_counts:c.counts});
+  expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'failed',counts:body.counts});
+  expect(await mem.latestEligible(['CN_PMI_MFG'])).toMatchObject([{batch_id:seedBatch}]);              // the failed batch's rows never publish
+ });
  it('a rejected-only redelivery after a populated run is not usable data: no derivation, no_native_outcomes, freshness ok:false (第 6 稿 P2-1)',async()=>{
   const first=await startBatch();await post(chunkBody(first));
   expect((await (await post(finishBody(first,1,OK))).json()).status).toBe('success');
@@ -8869,8 +9083,8 @@ import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {MacroDbError} from '@/lib/macro/db';
-import {IngestAbort,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
-import type {Claim,RetrievalInput} from '@/lib/macro/ingest';
+import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import type {Claim,IngestReceipt,RetrievalInput} from '@/lib/macro/ingest';
 import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
 import type {IngestBody,SeriesOutcome} from '@/lib/macro/ingest-schema';
 import {claimPeriodEnd,parserFor} from '@/lib/macro/parsers';
@@ -8958,10 +9172,20 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
   retrievals.push({evidence:{sha256:e.sha256,bytes,adapter:'akshare',fetchUrl:e.url,fetchHost:url.hostname,httpStatus:e.status,contentType:e.content_type,
    fetchedAt:new Date(fetched).toISOString(),toolVersions:{...batchTools,parser:parser.version}},parsed,claims});
  }
- const rec=await ingestEvidence(deps,{batchId:body.batch_id,adapter:'akshare',retrievals,ownerToken:body.owner_token});   // IngestAbort propagates: no completeChunk
- counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
  // Claim identities: the batch-wide unlocated summary is computed at finish from these sets (P2-1), never per chunk.
  const claimKeys=[...new Set(body.claims.map(c=>{const p=parserFor(c.series_id),pe=p?claimPeriodEnd(c.period_label,p.spec.period):null;return pe?`${c.series_id}|${pe}`:`${c.series_id}|?${c.period_label}`;}))].sort();
+ let rec:IngestReceipt;
+ try{rec=await ingestEvidence(deps,{batchId:body.batch_id,adapter:'akshare',retrievals,ownerToken:body.owner_token});}
+ catch(e){
+  // 四轮 P2-2: an unbindable quarantined row aborts after committed writes. Merge the committed outcomes (partial) exactly once and
+  // store them with the abort error through completeChunk — the chunk's single write; a retry gets the stored receipt — so finish
+  // forces the batch failed with true counts. fenced (or no partial) propagates: 409 / 500 without completeChunk.
+  if(!(e instanceof IngestAbort)||e.code!=='quarantine_link_failed'||!e.partial)throw e;
+  counts=addCounts(counts,e.partial.counts);
+  await deps.db.completeChunk(body.batch_id,body.seq,{counts,nativeUsable:e.partial.usable,errors:storedErrors([abortError(e),...errors,...e.partial.errors]),claimKeys,locatedKeys:[...located].sort()},body.owner_token);
+  return err('quarantine_link_failed','A quarantined value could not be bound; the chunk is recorded and the batch will finish failed',500);
+ }
+ counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
  // native_usable (第 6 稿 P2-1): rows that are data — previously_rejected redeliveries count as duplicates but not as usable
  const stored=await deps.db.completeChunk(body.batch_id,body.seq,{counts,nativeUsable:rec.usable,errors:storedErrors(errors),claimKeys,locatedKeys:[...located].sort()},body.owner_token);
  return json({status:'accepted',batch_id:body.batch_id,seq:body.seq,counts:stored.counts,errors:publicErrors(errors)});
@@ -9006,7 +9230,14 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
  if(!p.derived){
   // idempotent by nature: a retry after a crash past deriveAndWrite writes duplicates only
   if(nativeLanded){
-   const d=await deriveAndWrite(deps,'CN',body.batch_id,body.owner_token);
+   let d:IngestReceipt;
+   try{d=await deriveAndWrite(deps,'CN',body.batch_id,body.owner_token);}
+   catch(e){
+    // 四轮 P2-2: a derivation abort keeps its committed outcomes — merged exactly once through the 'derived' checkpoint (a retry
+    // reads it back, never re-derives), with the abort error first so it survives the cap; finalize below is forced failed
+    if(!(e instanceof IngestAbort)||e.code!=='quarantine_link_failed'||!e.partial)throw e;
+    d={...e.partial,errors:[abortError(e),...e.partial.errors]};
+   }
    p=await step('derived',{counts:d.counts,errors:storedErrors(d.errors)});
   }else p=await step('derived',{skipped:'no_native_outcomes'});                                       // 第 5 稿 P2-2
  }
@@ -9015,7 +9246,8 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
  if(!p.batch_finished){
   // fenced side effect (第 6 稿 P1-1): written only under the current finish token and only while the batch runs; finalized:false =
   // an earlier attempt of this run finished it — the stored status is read back, never finished twice
-  const fin=await deps.db.finalizeBatch(body.batch_id,batchFinalizeInput({counts,errors},deps.now()),fence);
+  const fatal=errors.some(e=>e.code==='quarantine_link_failed');                                     // a chunk or the derivation aborted (四轮 P2-2)
+  const fin=await deps.db.finalizeBatch(body.batch_id,batchFinalizeInput({counts,errors},deps.now(),fatal?'failed':undefined),fence);
   p=await step('batch_finished',{status:fin.status,date:deps.now().toISOString().slice(0,10)});
  }
  const batchStatus=p.batch_finished!.status as BatchStatus;

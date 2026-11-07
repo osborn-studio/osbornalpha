@@ -110,6 +110,7 @@
 | P2-2 | 发布键回放时 `publishRegion` 读回返回的快照与存储的判定行（admin），回执的 `observation_count`、`regime`、`uncovered_weight` 取自持久化字段，而非本次重建的输入 |
 | P2-3 | `macro_link_quarantine` 遇到已关闭条目时在同一把行锁下检查确切成员：给定的行都已是本条目成员且现为 `ok` / `rejected`（本条目的裁决已处置它）→ 链接完成，返回 0；仍是 `quarantined` → `quarantine_closed`，Task 6 新建条目重绑。覆盖并发接受与并发拒绝 |
 | P2-4 | cron 的致命中止（派生期 `quarantine_link_failed` 等）经 `macro_finalize_batch` 以显式 `failed` 与实际计数结束批次（不再因已写原生行变成 `partial`）；测试：原生写入后派生链接失败 → 批次 `failed`，其行不进入合格读取 |
+| 四轮 P2-1 / P2-2（`12-codex-plan-round4.md`） | 内存 `MacroDb` 以按 `run:<batch_id>`（claim 另加 `dataset:`、新鲜度另加 `freshness:`）的 FIFO 锁包住令牌校验、轮换/接管、finish 步骤、`finalizeBatch` 与 `recordFreshness`，持有到被 await 的写入完成，与 SQL `for update` 同语义（两项屏障测试）。致命中止计数：每个回执后更新汇总；`ingestEvidence` / `deriveAndWrite` 抛出的 `IngestAbort` 携带已提交结果 `partial`，cron、ingest chunk（经 `completeChunk` 记下，finish 强制 `failed`）与 finish 派生（经 `derived` 检查点）各合并一次后以 `failed` 结束；测试：原生循环中止与派生中止后存储计数等于已提交行 |
 
 ---
 
