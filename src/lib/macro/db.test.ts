@@ -12,6 +12,7 @@ import {startBatch} from '../dq/batches';
 import {HISTORY_PAGE_CONCURRENCY,IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,selectEligibleHistoryAsOf,supabaseMacroDb,toMacroDbError} from './db';
 import {macroDbContract,nativeRow,outcome} from './db-contract';
 import {memoryMacroDb} from './memory-db';
+import {verifyHistoricalBatches} from './regime-selection';
 import type {ObservationRow,ObservationWrite,PublishInput} from './types';
 
 describe('historical vintage selection',()=>{
@@ -29,6 +30,28 @@ describe('historical vintage selection',()=>{
   const ancestor=row(3,'b');const derived={...row(2,'a'),derived_from:[ancestor.observation_id]};
   expect((await selectEligibleHistoryAsOf([row(1,'a'),derived],cutoff,10,async()=>[ancestor],async()=>receipts)).map(r=>r.version)).toEqual([1]);
   await expect(selectEligibleHistoryAsOf([row(1,'a'),derived],cutoff,10,async()=>[{...ancestor,batch_id:'missing'}],async()=>receipts)).rejects.toThrow('historical_cutoff_unsupported');
+ });
+ it('rejects an invalid cutoff before selecting even an empty history',async()=>{
+  await expect(selectEligibleHistoryAsOf([],'not-a-date',10,async()=>[],async()=>receipts)).rejects.toThrow('historical_cutoff_unsupported');
+ });
+ it('rejects missing or invalid availability on any candidate or ancestor',async()=>{
+  for(const available_at of [undefined,'not-a-date']){
+   await expect(select([row(1,'a'),{...row(2,'a'),available_at} as ObservationRow])).rejects.toThrow('historical_cutoff_unsupported');
+   const derived={...row(2,'a'),derived_from:['parent']};
+   await expect(selectEligibleHistoryAsOf([row(1,'a'),derived],cutoff,10,async()=>[{...row(3,'a'),observation_id:'parent',available_at} as ObservationRow],async()=>receipts)).rejects.toThrow('historical_cutoff_unsupported');
+  }
+ });
+ it('rejects a missing required ancestor instead of selecting an older vintage',async()=>{
+  const derived={...row(2,'a'),derived_from:['missing-parent']};
+  await expect(select([row(1,'a'),derived])).rejects.toThrow('historical_cutoff_unsupported');
+ });
+ it('receipt verification rejects malformed cutoff and dangling ancestry',async()=>{
+  const derived={...row(2,'a'),derived_from:['missing-parent']};
+  const built={input:{region:'US' as const,series:{}},observations:[derived],historyIds:[]};
+  const loadRows=async(ids:string[])=>ids.includes(derived.observation_id)?[derived]:[];
+  const loadBatches=async()=>({a:'2026-10-16T00:00:00Z'});
+  await expect(verifyHistoricalBatches(built,'not-a-date',loadRows,loadBatches)).rejects.toThrow('historical_cutoff_unsupported');
+  await expect(verifyHistoricalBatches(built,cutoff,loadRows,loadBatches)).rejects.toThrow('historical_cutoff_unsupported');
  });
 });
 

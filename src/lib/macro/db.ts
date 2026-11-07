@@ -12,9 +12,10 @@
 // Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
 // Counted strategy histories use bounded parallel pages; id chunks preserve result order.
 import type {SupabaseClient} from '@supabase/supabase-js';
+import {MacroDbError,selectEligibleHistoryAsOf} from './regime-selection';
+export {MacroDbError,selectEligibleHistoryAsOf} from './regime-selection';
 import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
 
-export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
  /** Finalization receipts for candidate observations; null means the cutoff cannot be proven. service */
  batchFinishedAt(batchIds:string[]):Promise<Record<string,string|null>>;
@@ -112,30 +113,6 @@ export interface MacroDb{
 export const READ_PAGE=1000;      // PostgREST max_rows
 export const IN_CHUNK=200;        // ids per .in() filter (URL length)
 export const WRITE_CHUNK=2000;    // rows per macro_write_observations call when a caller packs writes itself (packWrites)
-export async function selectEligibleHistoryAsOf(candidates:ObservationRow[],cutoff:string,maxRows:number,
- loadRows:(ids:string[])=>Promise<ObservationRow[]>,loadBatches:(ids:string[])=>Promise<Record<string,{status:string;finished_at:string|null}>>):Promise<ObservationRow[]>{
- if(!Number.isInteger(maxRows)||maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
- const found=new Map(candidates.map(r=>[r.observation_id,r]));let pending=[...new Set(candidates.flatMap(r=>r.derived_from??[]))];
- for(let depth=1;pending.length;depth++){
-  if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
-  pending=pending.filter(id=>!found.has(id));if(!pending.length)break;
-  const got=await loadRows(pending);for(const row of got)found.set(row.observation_id,row);
-  pending=[...new Set(got.flatMap(r=>r.derived_from??[]))];
- }
- const batches=await loadBatches([...new Set([...found.values()].map(r=>r.batch_id))]);const cutoffMs=Date.parse(cutoff);
- const eligible=(r:ObservationRow,depth=0):boolean=>{
-  if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
-  if(r.status!=='ok'||Date.parse(r.available_at)>cutoffMs)return false;
-  const b=batches[r.batch_id];if(b&&!['success','partial'].includes(b.status))return false;
-  if(!b?.finished_at||!Number.isFinite(Date.parse(b.finished_at)))throw new Error('historical_cutoff_unsupported');
-  if(Date.parse(b.finished_at)>cutoffMs)return false;
-  return (r.derived_from??[]).every(id=>{const ancestor=found.get(id);return !!ancestor&&eligible(ancestor,depth+1);});
- };
- const byPeriod=new Map<string,ObservationRow>();
- for(const r of [...candidates].sort((a,b)=>b.version-a.version))if(!byPeriod.has(r.period_end)&&eligible(r))byPeriod.set(r.period_end,r);
- if(byPeriod.size>maxRows)throw new MacroDbError('truncated',`eligible_history_asof:>${maxRows}`);
- return [...byPeriod.values()].sort((a,b)=>a.period_end.localeCompare(b.period_end));
-}
 const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','reject_only','fenced','quarantine_closed','truncated'] as const;
 interface PgErrorLike{message?:string;code?:string}
 export function toMacroDbError(e:PgErrorLike):MacroDbError{

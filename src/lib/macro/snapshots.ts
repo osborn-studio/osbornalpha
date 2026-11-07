@@ -7,53 +7,24 @@
 // up. Other failures record a failed snapshot; active is untouched. 第 5 稿: an optional publish key makes a repeated
 // publish replay the stored snapshot (replayed:true) — its receipt is read back from the persisted snapshot and regime row
 // (第 6 稿 P2-2); the ingest finish adds its owner fence, and `fenced` propagates.
-import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
+import {CATALOG_VERSION,catalogById} from './catalog';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
 import {macroJudgmentsEnabled} from './flags';
-import {shiftMonthEnd} from './freshness';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime} from './regime';
-import type {ObsRef,RegimeInput,RegimeSeriesInput} from './regime';
-import type {CatalogCounts,MacroSeriesDef,ObservationRow,Region,SnapshotRecord} from './types';
+import type {CatalogCounts,MacroSeriesDef,Region,SnapshotRecord} from './types';
+import {buildRegimeInputFromRows} from './regime-selection';
+import type {BuiltRegimeInput} from './regime-selection';
+export {HISTORY_MONTHS,SPARK_POINTS} from './regime-selection';
+export type {BuiltRegimeInput} from './regime-selection';
 
-/** prev = previous existing period within this window; an older gap leaves prev absent. */
-export const HISTORY_MONTHS=24;
-/** Frozen sparkline length per indicator (history_ids). */
-export const SPARK_POINTS=24;
-const ref=(r:ObservationRow):ObsRef=>({observation_id:r.observation_id,period_end:r.period_end,value_text:r.value_text});
-/** observations = the manifest rows; historyIds = the frozen display history (last SPARK_POINTS eligible rows per input). */
-export interface BuiltRegimeInput{input:RegimeInput;observations:ObservationRow[];historyIds:string[]}
 /** Weighted catalog items of a region (active, missing and restricted), in WEIGHTS_V1 order: the overview rows and catalog counts. */
 export function catalogItemsOf(region:Region):MacroSeriesDef[]{
  return Object.keys(WEIGHTS_V1).map(id=>catalogById(id)).filter((d):d is MacroSeriesDef=>d!==undefined&&d.region===region);
 }
-/** Latest eligible (≤ periodEndLte, available_at ≤ asOf), previous existing period, and the period exactly 3 months
- *  earlier (= previous quarter for quarterly). Missing comparison periods stay absent. Reads only publication-eligible
- *  rows (第 4 稿 P1-5) and returns the frozen sparkline history ids (P1-8). */
+/** Build from database reads while keeping the selection rules in regime-selection. */
 export async function buildRegimeInput(db:MacroDb,region:Region,opts:{asOf?:string;periodEndLte?:string}={}):Promise<BuiltRegimeInput>{
- const defs=regimeInputsOf(region).filter(d=>d.region===region);
- const histories=opts.asOf?await Promise.all(defs.map(d=>db.eligibleHistoryAsOf(d.id,{to:opts.periodEndLte??'9999-12-31',asOf:opts.asOf!,maxRows:10000}))):null;
- const latest=histories?histories.flatMap(h=>h.length?[h[h.length-1]]:[]):await db.latestEligible(defs.map(d=>d.id),{asOf:opts.asOf,periodEndLte:opts.periodEndLte});
- const series:Record<string,RegimeSeriesInput>={};
- const used=new Map<string,ObservationRow>();
- const historyIds:string[]=[];
- for(const row of latest){
-  const def=defs.find(d=>d.id===row.series_id);
-  if(!def)continue;
-  const span=def.period==='quarter'?3*SPARK_POINTS:SPARK_POINTS;   // months covering SPARK_POINTS periods
-  const all=histories?histories[defs.indexOf(def)].filter(h=>h.period_end>=shiftMonthEnd(row.period_end,-span)):await db.eligibleHistory(row.series_id,{from:shiftMonthEnd(row.period_end,-span),to:row.period_end,asOf:opts.asOf,maxRows:4*SPARK_POINTS});
-  historyIds.push(...all.slice(-SPARK_POINTS).map(h=>h.observation_id));
-  const windowStart=shiftMonthEnd(row.period_end,-HISTORY_MONTHS);
-  const earlier=all.filter(h=>h.period_end<row.period_end&&h.period_end>=windowStart);   // ascending by contract
-  const prev=earlier.at(-1);
-  const target3m=shiftMonthEnd(row.period_end,-3);
-  const prev3m=earlier.find(h=>h.period_end===target3m);
-  const s:RegimeSeriesInput={latest:ref(row)};used.set(row.observation_id,row);
-  if(prev){s.prev=ref(prev);used.set(prev.observation_id,prev);}
-  if(prev3m){s.prev3m=ref(prev3m);used.set(prev3m.observation_id,prev3m);}
-  series[row.series_id]=s;
- }
- return {input:{region,series},observations:[...used.values()],historyIds:[...new Set(historyIds)]};
+ return buildRegimeInputFromRows(region,opts,{latestEligible:db.latestEligible.bind(db),eligibleHistory:db.eligibleHistory.bind(db),eligibleHistoryAsOf:db.eligibleHistoryAsOf.bind(db)});
 }
 /** verified = active items with ≥ 1 ok observation; missing = status missing + active without data; restricted. */
 export async function catalogCounts(db:MacroDb,region:Region):Promise<CatalogCounts>{
