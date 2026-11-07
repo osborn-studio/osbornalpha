@@ -2,12 +2,11 @@
 'use client';
 // Company page client shell (plan 2026-11-06 Task 11; spec §5.1, §5.2, §5.7, §5.9, §5.10):
 // header, stream switch, nine tabs by ?view=, asOf replay bar, special states, legacy tabs.
-// Fact views are wired in Tasks 12/13 by replacing renderFactView only.
+// Fact views: statements (Task 12), metrics / filings / overview / judgments (Task 13).
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { Disclaimer } from '@/components/Disclaimer';
-import { Card } from '@/components/ui';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { REPLAY_UNSUPPORTED, type ViewId } from '@/lib/company/client';
 import type { CompanyPageData } from '@/lib/company/page-data';
@@ -16,6 +15,10 @@ import { ViewTabs } from '@/components/company/ViewTabs';
 import { ReplayBar, ReplayOpener, ReplayUnsupportedBanner } from '@/components/company/ReplayBar';
 import { DrawerHost } from '@/components/company/DrawerHost';
 import { StatementsView } from '@/components/company/StatementsView';
+import { MetricsView } from '@/components/company/MetricsView';
+import { FilingsView } from '@/components/company/FilingsView';
+import { OverviewView, SignalsCard } from '@/components/company/OverviewView';
+import { JudgmentsView } from '@/components/company/JudgmentsView';
 import { ErrorCard, FactStateCallout } from '@/components/company/StateCallout';
 import { CompanyTrackingView } from '@/components/company/tracking/CompanyTrackingView';
 import { AiView } from './legacy/AiView';
@@ -72,11 +75,19 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
     return renderFactView();
   }
 
-  // ---- Task 12: statements wired; Task 13 replaces this whole function again. ----
+  // ---- Task 13: final fact-view routing (spec §5.1, §5.7, §5.10). ----
   function renderFactView() {
-    if (view !== 'judgments' && data.factState !== 'ok') return <FactStateCallout state={data.factState as 'no_issuer' | 'no_facts' | 'hk_pending'} isAdmin={isAdmin} />;
-    if (view === 'statements') return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} adminView={isAdmin && adminView} onAdminView={setAdminView} highlight={highlight} />;
-    return <PendingView />;
+    if (view === 'judgments') return <JudgmentsView issuerId={issuer?.issuer_id ?? null} asOf={asOf} />;
+    if (data.factState !== 'ok' || !data.market) {
+      const callout = <FactStateCallout state={data.factState === 'ok' ? 'no_facts' : data.factState as 'no_issuer' | 'no_facts' | 'hk_pending'} isAdmin={isAdmin} />;
+      return view === 'overview' ? <div className="flex flex-col gap-5">{callout}<SignalsCard /></div> : callout;
+    }
+    switch (view) {
+      case 'statements': return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} adminView={isAdmin && adminView} onAdminView={setAdminView} highlight={highlight} />;
+      case 'metrics': return <MetricsView ticker={ticker} market={data.market} asOf={asOf} />;
+      case 'filings': return <FilingsView ticker={ticker} market={data.market} asOf={asOf} />;
+      default: return <OverviewView ticker={ticker} market={data.market} asOf={asOf} />;
+    }
   }
 
   return (
@@ -90,9 +101,4 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       <Disclaimer />
     </div>
   );
-}
-
-function PendingView() {
-  const t = useTranslations('company.states');
-  return <Card className="text-sm text-[var(--text-dim)]">{t('viewPending')}</Card>;
 }
