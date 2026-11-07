@@ -9969,3 +9969,479 @@ cc4c3acb docs(macro): P5 spec draft 6 (round-5 dispositions: two migrations, v2 
 53fb37f6 docs(macro): P5 spec draft 5 (round-4 dispositions) + round-4 audit records
 8e5e8b2e docs(macro): P5 spec draft 4 (complete text; round-3 dispositions) + round-3 audit records
 
+exec
+/bin/zsh -lc "rg -n 'test:migrations|test:db' package.json; rg -n 'replay|twice|second|migrations.lock|apply' scripts/db* scripts/*migr* 2>/dev/null; sed -n '704,792p' supabase/migrations/20261114090000_macro_workbench.sql; git show b3276365:docs/superpowers/specs/2026-11-07-macro-p5-chaosai-essence-design.md | sed -n '300,317p'; sed -n '100,150p' src/lib/judgments/testing/macro-fixture.ts; rg -n 'toEqual|toHaveLength|WALCL|expectedDerived' src/lib/macro/{catalog,cn-series,replay}.test.ts" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+20:    "test:db": "tsx scripts/ci/research-db.ts",
+21:    "test:migrations": "tsx scripts/ci/migration-rehearsal.ts",
+zsh:1: no matches found: scripts/db*
+create or replace function public.publish_macro_snapshot(
+  p_region text, p_expected_revision bigint, p_expected_input_revision bigint, p_as_of date,
+  p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_history_ids uuid[], p_catalog_counts jsonb,
+  p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric,
+  p_publish_key text default null, p_batch_id uuid default null, p_owner_token uuid default null, p_finish_token uuid default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare st public.macro_publish_state; v_id uuid := gen_random_uuid(); v_regime jsonb := nullif(p_regime, 'null'::jsonb); prior public.macro_snapshots;
+  r public.macro_ingest_runs; v_ts timestamptz;
+begin
+  r := public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  -- A2: under the run lock a run-bound publication must also carry the run's CURRENT finish token (a rotated-out finisher is fenced)
+  if p_owner_token is not null and (p_finish_token is null or r.finish_token is distinct from p_finish_token) then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
+  if p_publish_key is not null and length(p_publish_key) not between 1 and 128 then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  select * into st from public.macro_publish_state where region = p_region for update;
+  if not found then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  if p_publish_key is not null then
+    select * into prior from public.macro_snapshots where publish_key = p_publish_key;
+    if found then
+      if prior.region <> p_region then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;   -- R3
+      return jsonb_build_object('snapshot_id', prior.snapshot_id, 'revision', prior.revision, 'replayed', true);
+    end if;
+  end if;
+  if st.revision <> p_expected_revision or st.input_revision <> p_expected_input_revision then
+    raise exception 'stale_publisher' using errcode = 'P0001';
+  end if;
+  if p_as_of is null or p_methodology_version is null or length(p_methodology_version) not between 1 and 64
+     or p_rules_version is null or length(p_rules_version) not between 1 and 64
+     or not exists (select 1 from public.macro_catalog_versions where catalog_version = p_catalog_version) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  if p_observation_ids is null or p_history_ids is null
+     or cardinality(p_observation_ids) <> (select count(distinct i) from unnest(p_observation_ids) as t(i))
+     or cardinality(p_history_ids) <> (select count(distinct i) from unnest(p_history_ids) as t(i))
+     or not public.macro_manifest_ok(p_region, p_observation_ids) or not public.macro_manifest_ok(p_region, p_history_ids) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  if p_catalog_counts is null or jsonb_typeof(p_catalog_counts) <> 'object'
+     or not (p_catalog_counts ?& array['verified','missing','restricted'])
+     or (select count(*) from jsonb_object_keys(p_catalog_counts)) <> 3
+     or exists (select 1 from jsonb_each(p_catalog_counts) where jsonb_typeof(value) <> 'number'
+                  or (value #>> '{}')::numeric < 0 or (value #>> '{}')::numeric <> trunc((value #>> '{}')::numeric)) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  if (v_regime is not null and jsonb_typeof(v_regime) <> 'object') or p_contributions is null or jsonb_typeof(p_contributions) <> 'array'
+     or p_uncovered_weight is null or p_uncovered_weight < 0 then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  update public.macro_snapshots set status = 'superseded' where region = p_region and status = 'active';
+  v_ts := public.macro_next_snapshot_cursor();
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, publish_key, created_at)
+  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_history_ids, p_catalog_counts, 'active', p_publish_key, v_ts);
+  insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
+  values (v_id, p_region, v_regime, p_contributions, p_rules_version, p_uncovered_weight);
+  update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = p_region;
+  return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1, 'replayed', false);
+end $$;
+revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid, uuid) to service_role;
+
+-- Rollback (第 4 稿 P1-11): a NEW active snapshot (new id, next revision) copying a non-failed snapshot's as_of,
+-- versions, manifest, history, counts and regime result, after re-validating eligibility. Snapshot rows stay
+-- immutable (the lifecycle trigger still allows only active → superseded).
+create or replace function public.republish_macro_snapshot(p_snapshot_id uuid, p_expected_revision bigint, p_expected_input_revision bigint)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare src public.macro_snapshots; rr public.macro_regime_results; st public.macro_publish_state; v_id uuid := gen_random_uuid();
+begin
+  select * into src from public.macro_snapshots where snapshot_id = p_snapshot_id;
+  if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
+  if src.status = 'failed' then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  select * into st from public.macro_publish_state where region = src.region for update;
+  if st.revision <> p_expected_revision or st.input_revision <> p_expected_input_revision then
+    raise exception 'stale_publisher' using errcode = 'P0001';
+  end if;
+  select * into rr from public.macro_regime_results where snapshot_id = p_snapshot_id;
+  if not found or not public.macro_manifest_ok(src.region, src.observation_ids) or not public.macro_manifest_ok(src.region, src.history_ids) then
+    raise exception 'invalid_manifest' using errcode = 'P0001';
+  end if;
+  update public.macro_snapshots set status = 'superseded' where region = src.region and status = 'active';
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, created_at)
+  values (v_id, src.region, src.as_of, p_expected_revision + 1, src.methodology_version, src.catalog_version, src.observation_ids, src.history_ids, src.catalog_counts, 'active', public.macro_next_snapshot_cursor());
+  insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
+  values (v_id, src.region, rr.regime, rr.contributions, rr.rules_version, rr.uncovered_weight);
+  update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = src.region;
+  return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1, 'source_snapshot_id', p_snapshot_id);
+end $$;
+revoke execute on function public.republish_macro_snapshot(uuid, bigint, bigint) from public, anon, authenticated;
+grant execute on function public.republish_macro_snapshot(uuid, bigint, bigint) to service_role;
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+- F4 行：`judgment.clock.regime.<selected>`、`judgment.clock.lifecycle.<lifecycle>`、`judgment.clock.calibration.<state>`（枚举值不在表 → 显示代码）、方法链接文本 `id@version`。
+- 摘要行：主/次/`marginLabel`（"主次占比差（pp）" / "primary–secondary share gap (pp)"）/覆盖 `coverageLabel`（"命中权重 X / 评分权重 Y（含缺失、受限）"）/轴（"规则支持度合成，非实测"）+ `notProbability`（"规则得分占比，不是概率"；唯一含"概率"的键）。
+- 驱动按钮 `aria-controls="clock-row-<series_id>"`：展开表、`scrollIntoView({block:'center'})`、focus、高亮 2 s。
+- 分解表：matched 按 max_q contribution desc → not_matched/no_data → missing/restricted；非命中行 `text-text-dim` + "计入分母，不计入分子"；not_matched 文案 "规则未命中（上期：有/缺；3M 前：有/缺）"（事实）；比较列 `2026-08 · 2.6（上期）· 2026-06 · 2.7（3M 前）`，同一观测两角色 → "（上期 = 3M 前）"；显示变化列按 `change_kind`；脚注三条（上期定义；规则输入 = 精确十进制差值，利率类百分点、汇率类百分比变化；显示值舍入 2 位）。
+- 证据：任何 `latest` 非 null 的行（matched 与 not_matched）当前值按钮 → `SourceDrawer`（冻结 `observation_id`）。
+- 精度：占比 1 位 %；分数/贡献 2 位；margin 1 位；轴 2 位带符号；覆盖整数；负零 → 0；`−` 用 U+2212。
+- 页头版本 → `?tab=methodology`；方法 tab `RulesTable`（`page.tsx` 服务端从 `RULES` 投影为 prop；关态 null）。
+- 禁词：`judgment.clock.*` 不含 概率|置信度|可靠度|预测|probabilit|confidence|reliab|forecast（豁免 `notProbability`）；运行时字符串只有本模块 i18n、目录 `name`、规则 `label`、枚举代码；`catalog.test.ts` 与 `regime.rules-boundary.test.ts` 对 `name`/`label` 做同一禁词扫描。
+- 窄屏：象限 2×2；分解表行卡。
+
+### 3.6 状态矩阵（11 个卡级状态 + 2 个传输态 + 开关关；互斥；HTTP 400/401/404/503 是传输层错误码，不计入）
+
+| 编号 | 状态 | 触发 | UI | 测试 |
+|---|---|---|---|---|
+| 0 | judgments_disabled | prop false | 不挂载 | `pages.test` |
+| 0a / 0b | loading / load_failed | 请求中 / 非 2xx | 骨架 / "读取失败 · 重试" | `clock-model.test` |
+| 1 | snapshot_not_active | 非活动 | "概览快照已更新，请刷新" | `route.test.status.1` |
+| 2 | version_unsupported | 三版本任一不等 | 显示两版本 | `clock.status.2` |
+src/lib/macro/cn-series.test.ts:17:  expect(s).toEqual({series_id:'CN_PMI_MFG',fetch_host:'data.stats.gov.cn',period:'month',function:'macro_china_nbs_nation',
+src/lib/macro/cn-series.test.ts:21:  expect(cnSpecOf(def('CN_CPI_INDEX','macro_china_nbs_nation|月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)','data.stats.gov.cn')).backfill!.map(b=>b.period)).toEqual(['2026-','2021-2025','2016-2020']);
+src/lib/macro/cn-series.test.ts:23:  expect(cpi.backfill![0]).toEqual({path:cpi.path,period:'2026-'});
+src/lib/macro/cn-series.test.ts:40:  expect(specs.map(s=>s.series_id)).toEqual(collectableOf('akshare').map(d=>d.id));
+src/lib/macro/catalog.test.ts:24:   if(d.source.adapter==='akshare')expect({id:d.id,host:d.source.fetchHost,ok:AKSHARE_HOSTS.has(d.source.fetchHost)}).toEqual({id:d.id,host:d.source.fetchHost,ok:true});
+src/lib/macro/catalog.test.ts:44:   if(d.derive){const from=catalogById(d.derive.from);expect({id:d.id,from:from?.id,region:from?.region}).toEqual({id:d.id,from:d.derive.from,region:d.region});expect(from!.derive).toBeUndefined();expect(d.source).toEqual(from!.source);expect(d.status).toBe(from!.status);}
+src/lib/macro/catalog.test.ts:45:   if(d.aliasOf){const to=catalogById(d.aliasOf);expect(to?.region).toBe(d.region);expect(d.source).toEqual(to!.source);expect(d.derive).toBeUndefined();expect(d.weight).toBe(0);}
+src/lib/macro/catalog.test.ts:47:  expect(catalogById('US_CPI_YOY')!.derive).toEqual({kind:'yoy_from_index',from:'US_CPI_INDEX'});
+src/lib/macro/catalog.test.ts:48:  expect(catalogById('CN_CPI_YOY')!.derive).toEqual({kind:'index_minus_100',from:'CN_CPI_INDEX'});
+src/lib/macro/catalog.test.ts:49:  expect(catalogById('US_DGS10')!.derive).toEqual({kind:'month_end',from:'US_DGS10_D'});
+src/lib/macro/catalog.test.ts:55:   if(!d.derive&&(d.nativeFrequency==='daily'||d.nativeFrequency==='event')&&d.status==='active')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+src/lib/macro/catalog.test.ts:56:   if(!d.derive&&d.nativeFrequency==='daily')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+src/lib/macro/catalog.test.ts:57:   if(d.role!=='indicator')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+src/lib/macro/catalog.test.ts:62:  expect([w('US_DFF'),w('US_DGS10'),w('US_DTWEXBGS'),w('US_CPI_YOY'),w('US_UNRATE'),w('US_PPI_FD_YOY'),w('US_ISM_PMI'),w('US_VIX')]).toEqual([25,15,10,15,10,5,15,5]);
+src/lib/macro/catalog.test.ts:63:  expect([w('CN_CPI_YOY'),w('CN_PPI_YOY'),w('CN_PMI_MFG'),w('CN_GDP_YOY'),w('CN_M2_YOY'),w('CN_EXPORT_YOY'),w('CN_CGB_10Y'),w('CN_USDCNY_CP'),w('CN_LPR_1Y'),w('CN_MLF_1Y'),w('CN_AFRE_STOCK_YOY')]).toEqual([10,15,15,5,10,10,15,5,10,10,20]);
+src/lib/macro/catalog.test.ts:68:  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||(d.derive?.kind==='month_end'))expect({id:d.id,a:d.adjustment}).toEqual({id:d.id,a:'na'});
+src/lib/macro/catalog.test.ts:71:  expect([lag('US_CPI_YOY'),lag('US_UNRATE'),lag('US_PPI_FD_YOY'),lag('CN_CPI_YOY'),lag('CN_PPI_YOY'),lag('CN_PMI_MFG'),lag('CN_GDP_YOY'),lag('CN_M2_YOY'),lag('CN_EXPORT_YOY')]).toEqual([15,7,15,12,12,1,20,15,10]);
+src/lib/macro/catalog.test.ts:72:  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||d.nativeFrequency==='event'||d.derive?.kind==='month_end')expect({id:d.id,lag:d.releaseLagDays}).toEqual({id:d.id,lag:undefined});
+src/lib/macro/catalog.test.ts:73:  expect(MACRO_CATALOG.filter(d=>d.status==='missing').map(d=>d.id).sort()).toEqual(['CN_AFRE_STOCK_YOY','CN_LPR_1Y','CN_MLF_1Y','US_ISM_PMI']);
+src/lib/macro/catalog.test.ts:74:  expect(MACRO_CATALOG.filter(d=>d.status==='restricted').map(d=>d.id).sort()).toEqual(['CN_CSI300','US_DJIA','US_NASDAQCOM','US_SP500','US_VIX','US_VIX_D']);
+src/lib/macro/catalog.test.ts:90:  expect(indicatorsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
+src/lib/macro/catalog.test.ts:91:  expect(indicatorsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP','CN_LPR_1Y','CN_MLF_1Y','CN_AFRE_STOCK_YOY']);
+src/lib/macro/catalog.test.ts:92:  expect(regimeInputsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY']);
+src/lib/macro/catalog.test.ts:93:  expect(regimeInputsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP']);
+src/lib/macro/catalog.test.ts:97:  expect(collectableOf('fred_csv').map(d=>d.source!.seriesKey)).toEqual(['DFF','DFEDTARU','DFEDTARL','DFEDTAR','DGS10','DTWEXBGS','CPIAUCSL','UNRATE','PPIFIS','DCOILWTICO']);
+src/lib/macro/catalog.test.ts:98:  expect(collectableOf('akshare').map(d=>d.id)).toEqual(['CN_CPI_INDEX','CN_PPI_INDEX','CN_PMI_MFG','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y_D','CN_USDCNY_CP_D']);
+src/lib/macro/catalog.test.ts:125: it('keeps the F4 regime tie-break order',()=>{expect(REGIMES).toEqual(['recovery','overheat','stagflation','recession']);});
+src/lib/macro/replay.test.ts:50:  expect(res.conflicts,def.id).toEqual([]);
+src/lib/macro/replay.test.ts:72:   expect(res.conflicts,sid).toEqual([]);
+src/lib/macro/replay.test.ts:116:  const expectedDerived=region==='US'?['US_CPI_YOY','US_DGS10']:['CN_CPI_YOY'];
+src/lib/macro/replay.test.ts:118:  for(const id of expectedDerived){
+src/lib/macro/replay.test.ts:155:  expect(row.locator).toEqual(locator);
+src/lib/macro/replay.test.ts:167:    expect(b).toEqual(a);
+src/lib/macro/replay.test.ts:173:     expect({value_text:row.value_text,locator:row.locator}).toEqual({value_text:p.valueText,locator:p.locator});
+src/lib/macro/replay.test.ts:186:  expect(rows).toHaveLength(snap!.observation_ids.length);
+src/lib/macro/replay.test.ts:196:  expect(await facts()).toEqual(await facts());
+
+exec
+/bin/zsh -lc "rg -n 'replay|twice|second|apply' scripts/ci/migration-rehearsal.ts; sed -n '1,75p' src/lib/judgments/testing/macro-fixture.ts; sed -n '232,240p' docs/superpowers/plans/2026-11-07-macro-p5.md; rg -n 'MACRO|transmission' src/lib/macro/strategy/wiring.ts; rg -n 'macro-regime|formula_hash|REGISTRY' src/lib/judgments/replay.test.ts; rg -n 'getAdminSupabase|createServerClient|env' src/lib/supabase/admin.ts; cat docs/methodologies/licenses.json" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+// src/lib/judgments/testing/macro-fixture.ts
+// Test / script helpers for macro_regime@v1 (Task 19). Loads fixtures/judgments/macro/*.json, serves them through
+// fixtureMacroReadApi (synthetic macro results), syncs the methodology row into a
+// memory JudgmentsDb with a deterministic clock and an optional draft override for gate tests —
+// and builds the golden replay fixture (spec §14.4). Production code never imports this file.
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import type {Input,JudgmentInputsDb,WorkItem} from '@/lib/judgments/types';
+import {fixtureMacroReadApi,type MacroFixture} from '@/lib/judgments/macro-api';
+import {memoryJudgmentsDb,type MemoryJudgmentsDb} from '@/lib/judgments/memory-judgments-db';
+import {formulaHashOf} from '@/lib/judgments/formula-hash';
+import {methodologyRowOf} from '@/lib/judgments/registry';
+import {produce,type ProduceDeps} from '@/lib/judgments/produce';
+import {defaultResolverOf,type CompensateDeps} from '@/lib/judgments/compensate';
+import {REPLAY_FIXTURE_VERSION,type ReplayFixture} from '@/lib/judgments/replay';
+import {macroRegimeV1} from '@/lib/judgments/methodologies/macro-regime.v1';
+
+export const MACRO_S1='6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01';
+export const MACRO_S2='6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a02';
+export const MACRO_CODE_VERSION='f4-fixture-code-version';
+export const MACRO_BATCH_ID='00000000-0000-4000-8000-0000000019b1';
+/** Normalised run metadata of the golden fixture: excluded from the id and from replay (spec §6.2, §6.3). */
+export const REPLAY_REGISTERED_AT='2026-09-11T23:00:00.000Z';
+export type MacroFixtureName='us-2026-09-11'|'us-2026-09-revised'|'us-2026-09-low-coverage';
+
+export function loadMacroFixture(name:MacroFixtureName):MacroFixture{
+ return JSON.parse(readFileSync(join(process.cwd(),'fixtures/judgments/macro',`${name}.json`),'utf8')) as MacroFixture;
+}
+export function mergeMacroFixtures(base:MacroFixture,...more:MacroFixture[]):MacroFixture{
+ const out:MacroFixture=structuredClone(base);
+ for(const m of more){
+  out.observations.push(...m.observations);out.snapshots.push(...m.snapshots);out.classifications.push(...m.classifications);
+  for(const r of ['US','CN'] as const)out.series_catalog[r]=[...(out.series_catalog[r]??[]),...(m.series_catalog[r]??[])];
+ }
+ return out;
+}
+const notInFixture=(what:string)=>async():Promise<never>=>{throw new Error(`${what} is not part of the macro fixture`);};
+export function macroInputsDb(fx:MacroFixture):JudgmentInputsDb{
+ return {
+  facts:{readFacts:notInFixture('facts.readFacts'),factsByIds:notInFixture('facts.factsByIds'),filingsOfIssuer:notInFixture('facts.filingsOfIssuer')},
+  deriveMetricsAsOf:notInFixture('deriveMetricsAsOf'),
+  macro:fixtureMacroReadApi(fx),
+  tableRows:notInFixture('tableRows: catalog is versioned code'),
+  async publicJudgment(){return null;},
+  async kline(){return {failure:'unsupported' as const};},
+  async issuerPrimarySecurity(){return null;},
+ };
+}
+export async function macroDb(status:'active'|'draft'):Promise<MemoryJudgmentsDb>{
+ const db=memoryJudgmentsDb();db.setNow(REPLAY_REGISTERED_AT);
+ await db.tables.insert('ingest_batches',{batch_id:MACRO_BATCH_ID,status:'running',dataset:'judgments.produce.macro_regime'});
+ const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
+ await db.syncMethodology({...row,status},'script','Task 19 fixture status');
+ return db;
+}
+export function macroWork(fx:MacroFixture,snapshotId:string):WorkItem{
+ const s=fx.snapshots.find(x=>x.snapshot_id===snapshotId);
+ if(!s)throw new Error(`snapshot ${snapshotId} is not in the fixture`);
+ return {subject:{type:'macro_region',key:s.region},asOf:s.as_of,observedAt:REPLAY_REGISTERED_AT,binding:{snapshot_id:s.snapshot_id}};
+}
+/** Task 10 ProduceDeps over the real resolver table (Task 11 via compensate.ts defaultResolverOf). */
+export const produceCtx=(db:MemoryJudgmentsDb,inputsDb:JudgmentInputsDb,opts:{dryRun?:boolean}={}):ProduceDeps=>
+ ({db,inputsDb,tables:db.tables,resolverOf:defaultResolverOf,batchId:MACRO_BATCH_ID,codeVersion:MACRO_CODE_VERSION,signal:new AbortController().signal,dryRun:opts.dryRun??false,actor:'test'});
+/** Task 12 CompensateDeps: the scan opens its own produce batch in `tables`. */
+export const compensateCtx=(db:MemoryJudgmentsDb,inputsDb:JudgmentInputsDb):CompensateDeps=>
+ ({db,inputsDb,tables:db.tables,codeVersion:MACRO_CODE_VERSION,triggeredBy:'cron',signal:new AbortController().signal,methodology:macroRegimeV1});
+
+/** Frozen inputs of snapshot s1, for REGISTRY-wide property tests (spec §14.1). */
+export async function macroSampleInputs():Promise<Input[]>{
+ const fx=loadMacroFixture('us-2026-09-11');
+ const g=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+ if(!Array.isArray(g))throw new Error(`macro sample gather abstained: ${g.reason}`);
+ return g;
+}
+
+### Task C1: 概览大图卡
+**Files:** Modify `src/components/macro/view-model.ts`(+`view-model.test.ts`: `KEY_INDICATORS` 两地区各 4、都在目录、`role==='indicator'`)、`src/components/macro/detail-model.ts`(+test: `fetchSeriesWindow(seriesId,from,to,period,transform,fetcher,asOf?)` 把 `asOf` 加入查询串)、`src/components/macro/IndicatorDetail.tsx`（新 props `asOf?:string`、`snapshotObservationId?:string|null`、`onLatestLoaded?:(id:string|null)=>void`；内部比较 `obs.at(-1)?.observation_id` 与 `snapshotObservationId`，不等 → 卡内 `text-text-dim` 提示 `overview.keyIndicators.mismatch`）；Create `src/components/macro/KeyIndicatorCards.tsx`（标题行取 envelope 行；折叠态 `Sparkline`；展开态先 `fetch('/api/macro/snapshots/'+snapshotId)` 取 `snapshot.created_at`（缓存 by snapshotId；失败 → 不展开并显示 `states.loadFailed`），再渲染 `IndicatorDetail compact asOf={createdAt} snapshotObservationId={row.observationId}`；默认前 2 张展开）；Modify `MacroWorkbench.tsx`（概览插入位置：时钟卡之下、指标表之上）、`messages/*/macro.json`（`overview.keyIndicators.*`）。
+- [ ] 红 → 实现 → 绿 → 提交。
+
+### Task C2: 标记层与事件列表
+**Files:** `src/components/macro/charts/MacroLineChart.tsx`（`layers?:{derived?:boolean;calendar?:boolean}`）、`src/components/macro/detail-model.ts`(+test: `markersOf(events, calendar, firstPeriod, layers={derived:true,calendar:false})`：身份 derived `kind|region|series_id|effective_date`（US 事件 `series_id` 固定 `'US_FED_TARGET'`），calendar `start|end`，只去身份相同者；`recentEvents(events, calendar, layers, n=6)` → 按 `effective_date` desc，同日 derived 先于 calendar，再按身份键 `localeCompare('en')` 升序)、`IndicatorDetail.tsx`（两个 `aria-pressed` pill、事件列表、`|change_bp|>=25` 才带文字）、`messages/*/macro.json`。
+- [ ] 红 → 实现 → 绿 → 提交。
+
+### Task C3: 资产条形
+6:import {MACRO_CATALOG,CATALOG_VERSION} from '../catalog';
+89:  catalog:()=>MACRO_CATALOG,
+14:import {REGISTRY} from './registry';
+24:const REPLAY_REGISTRY:readonly Methodology[]=[...REGISTRY,syntheticFactMetric];
+44:   const r=await replayJudgment(fx.judgment.judgment_id,{db:fixtureJudgmentsDb([fx.judgment]),registry:REPLAY_REGISTRY});
+50:   const r=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY});
+62: const run=(r:JudgmentRow,registry:readonly Methodology[]=REPLAY_REGISTRY)=>replayJudgment(r.judgment_id,{db:fixtureJudgmentsDb([r]),registry});
+80:  await expect(replayJudgment('00000000-0000-8000-8000-0000000000ff',{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY})).rejects.toMatchObject({code:'unknown_judgment'});
+92:   const same=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true});
+94:   const gone=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:memoryJudgmentInputsDb(),reconcile:true});
+96:   const none=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,reconcile:true});
+102:   const ok=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+106:   const bad=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+112:   const r=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,reconcile:true,now:()=>{n++;return 'x';}});
+117:   const r=await replayJudgment(row.judgment_id,{db:{...fixtureJudgmentsDb([row]),serverTime:async()=>{seen.push('t');return '2030-01-01T00:00:00.000Z';}},registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true});
+15:  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+16:  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+25:export function getAdminSupabase() {
+{
+  "financial_fact×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_fact×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_observation×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_snapshot×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×datagateway": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×supabase_public": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "judgment×judgments": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "legacy_fill×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  }
+}
+
+codex
+I’m consolidating the report by original P1 number, followed by new defects. The revised tasks use `.test.ts` model tests, but one timeout test would hang because its fake fetch ignores cancellation. The local acceptance command also fails the sync script’s argument and license checks.
+
+exec
+/bin/zsh -lc "python3 -c 'import uuid; print(uuid.uuid5(uuid.NAMESPACE_DNS,\"www.example.com\")); print(round(100*(0.403846-0.355769),6)); print(abs(4.807692-4.8077))'; rg -n 'new RegExp|twice|idempot|migration' scripts/ci/migration-rehearsal.ts | head -25; rg -n 'timeliness|Record<.*Adapter|Record<.*NativeFrequency' src/lib/macro src/components/macro --glob '*.ts' | head -35; git status --short" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+2ed6657d-e927-568b-95e1-2665a8aea6a2
+4.8077
+7.999999999341867e-06
+1:/** Fresh vs seeded pre-migration upgrade. Local synthetic data only. */
+7:import { migrationInventory, recoveredMigration } from './research-checks';
+10:  migrationInventory();
+11:  mkdirSync('reports', { recursive: true }); rmSync('reports/migration-rehearsal.json', { force: true });
+21:      await db.query(`insert into auth.users(id,email) values('00000000-0000-4000-8000-000000000001','migration@example.test');
+31:    if (!seeded) throw new Error('Upgrade fixture was not inserted before recovered migration');
+55:      if (!acl.default_update_allowed || acl.update_allowed || acl.claim_allowed || acl.anon_allowed || !acl.owner_allowed) throw new Error('Recovered migration ACL regression');
+66:  writeFileSync('reports/migration-rehearsal.json', JSON.stringify({ schemaHash, fresh: 'passed', seededUpgrade: 'passed', cleanup: 'stopped', productionEquivalence: 'not_verified', acl: 'passed', scope: 'public schema and ACL excluding owners; not full Supabase parity' }, null, 2));
+src/lib/macro/strategy/port.ts:5:// StrategyFixture; its derivePolicyEvents / timeliness reproduce P2 events.ts derivePolicyEvents and P1 freshness.ts
+src/lib/macro/strategy/port.ts:28: timeliness(def:MacroSeriesDef,latestPeriodEnd:string|null,today:string):Timeliness;
+src/lib/macro/strategy/port.ts:121:  timeliness:memoryTimeliness,
+src/components/macro/strategy/strategy-view-model.test.ts:218:  releases:[fact('obs:US_CPI_YOY','US_CPI_YOY')],revisions:[],timeliness:[],policy_events:[fact('evt:2026-10-29')],episode_changes:[],asset_moves:[],coverage:[],...o});
+src/components/macro/strategy/strategy-view-model.test.ts:221:  expect(s.map(x=>x.key)).toEqual(['releases','revisions','timeliness','policy_events','episode_changes','asset_moves','coverage']);
+src/components/macro/view-model.test.ts:12: period_end:'2026-09-30',available_at:'2026-10-15T12:30:00Z',timeliness:'current',status:'A',retrieval_id:'r1',sparkline:['4.3','4.2'],...o});
+src/components/macro/view-model.test.ts:24:  const v=toIndicatorView(row({series_id:'US_ISM_PMI',status:'M',reason:{zh:'无可采的原始来源',en:'No source'},value_text:null,change:null,period_end:null,available_at:null,retrieval_id:null,sparkline:[],timeliness:'missing'}),'zh',t);
+src/components/macro/view-model.test.ts:28: it('status key falls back to timeliness, n/a → na',()=>{
+src/components/macro/view-model.test.ts:29:  expect(statusKey({status:'active',timeliness:'late'})).toBe('timeliness.late');
+src/components/macro/view-model.test.ts:30:  expect(statusKey({status:'active',timeliness:'n/a'})).toBe('timeliness.na');
+src/lib/macro/strategy/facts.ts:99: return [...f.releases,...f.revisions,...f.timeliness,...f.policy_events,...f.episode_changes,...f.asset_moves,...f.coverage];
+src/components/macro/strategy/strategy-view-model.ts:234:export const REVIEW_SECTIONS=['releases','revisions','timeliness','policy_events','episode_changes','asset_moves','coverage'] as const;
+src/components/macro/view-model.ts:21: period_end:string|null;available_at:string|null;timeliness:Timeliness;status:'A'|'M'|'R';reason?:Bilingual;retrieval_id:string|null;sparkline:string[]}
+src/components/macro/view-model.ts:54: period:string;periodEnd:string|null;available:string;timeliness:Timeliness;spark:string[];hasEvidence:boolean;source:SourceJson|null}
+src/components/macro/view-model.ts:61:  timeliness:row.timeliness,spark:row.sparkline,hasEvidence:has,source:status==='active'?sourceOf(row.series_id):null};
+src/components/macro/view-model.ts:63:/** Status pill key: catalog status first (missing / restricted), then publication timeliness. */
+src/components/macro/view-model.ts:64:export const statusKey=(v:Pick<IndicatorView,'status'|'timeliness'>):string=>v.status!=='active'?`status.${v.status}`:`timeliness.${v.timeliness==='n/a'?'na':v.timeliness}`;
+src/lib/macro/views.ts:21: /** Release timeliness (schedule) — independent of presence (data in this snapshot or not). */
+src/lib/macro/views.ts:22: timeliness:Timeliness;presence:'present'|'missing';
+src/lib/macro/views.ts:80:function emptyRow(def:MacroSeriesDef,timeliness:Timeliness):IndicatorRow{
+src/lib/macro/views.ts:81: return {observation_id:null,series_id:def.id,name:def.name,value_text:null,unit:def.unit,change:null,period_end:null,available_at:null,availability_basis:null,timeliness,presence:'missing',
+src/lib/macro/views.ts:86:const timelinessOf=(def:MacroSeriesDef,latest:string|null,today:string):Timeliness=>
+src/lib/macro/views.ts:99:  const rows=items.map(d=>emptyRow(d,timelinessOf(d,null,today)));
+src/lib/macro/views.ts:118:  const timeliness=timelinessOf(def,latest?.period_end??null,today);
+src/lib/macro/views.ts:120:   const row=emptyRow(def,timeliness);rows.push(row);
+src/lib/macro/views.ts:127:   period_end:latest.period_end,available_at:latest.available_at,availability_basis:latest.availability_basis,timeliness,presence:'present',status:STATUS_LETTER[def.status],
+src/lib/macro/views.ts:135:  if(timeliness==='late')note(def.id,'late',latest.period_end);
+src/lib/macro/strategy/explain-render.ts:70: timeliness_late:{zh:c=>`截至 ${c.str('date')}，${c.name('series')} 发布迟于预期（最新期 ${c.str('period')}）。`,en:c=>`As of ${c.str('date')}, ${c.name('series')} was late (latest period ${c.str('period')}).`},
+src/lib/macro/strategy/explain-render.ts:71: timeliness_missing:{zh:c=>`截至 ${c.str('date')}，${c.name('series')} 在快照中无观测。`,en:c=>`As of ${c.str('date')}, ${c.name('series')} had no observation in the snapshot.`},
+src/lib/macro/freshness.ts:2:// Two freshness notions kept apart (spec §4.5, §0.2 M11): release timeliness per series (pure;
+src/lib/macro/views.test.ts:57:   timeliness:releaseTimeliness(def,'2026-09-30',TODAY)});   // derived: provenance = the index rows' retrieval
+src/lib/macro/views.test.ts:60:  expect(ism).toMatchObject({status:'M',presence:'missing',observation_id:null,value_text:null,change:null,timeliness:'missing',sparkline:[],evidence:[]});
+src/lib/macro/views.test.ts:62:  expect(env.indicators.find(r=>r.series_id==='US_VIX')).toMatchObject({status:'R',timeliness:'n/a',value_text:null});
+src/lib/macro/views.test.ts:86:  const lateIds=env.indicators.filter(r=>r.timeliness==='late').map(r=>r.series_id);
+src/lib/macro/views.test.ts:159:  // data presence and release timeliness are separate (第 4 稿 P1-3): no data ⇒ timeliness 'missing' only where a release
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+ M docs/audits/2026-11-07-macro-p5/.codex-plan2.log
+ M docs/audits/2026-11-07-macro-p5/.codex-plan2b.log
+?? docs/audits/2026-11-07-macro-p5/26-plan-round2-codex.md
+
+codex
+| # | Severity P1/P2/P3 | Task | Defect | Concrete fix |
+|---|---|---|---|---|
+| R1-2 | P1 | D1a | **Closed.** The latency-branch merge/rebase prerequisite is explicit. Existing #125 routes remain outside the task file lists. | Retain the prerequisite. |
+| R1-3 | P1 | B1→B2 | **Closed.** B1 owns `F4Match` and the clock-local optional manifest extension; it can compile before B2 without modifying protected storage types. | — |
+| R1-4 | P1 | B1 | **Closed.** `ClockInput.snapshot` now uses `SnapshotRecord`; the regime comes separately from `regimeRecord`. | — |
+| R1-5 | P1 | B1 | **Closed.** The interfaces now use `roles[]`, `display_only_rows`, and diagnostics supporting invariants 1–9; `by_state` is gone. | — |
+| R1-6 | P1 | B1/B3 | **Still open.** B3 reads observations and the regime before B1 checks snapshot versions or observation integrity. An observation-read exception can therefore replace `version_unsupported` with 503; a regime-read exception can replace `integrity_error`. | Execute the gates between reads: snapshot versions → observation read/integrity → regime read/rules version → reconciliation → F4. Add combined-failure tests proving short-circuiting. |
+| R1-7 | P1 | B1 | **Still open.** The success fixture stores F4 margin `4.807692`; its rounded norms require `4.8077`. The difference is `8e-6`, exceeding invariant 7’s `1e-6` tolerance. | Keep stored regime margin `4.807692`; set F4 claim margin to `4.8077`. |
+| R1-10 | P1 | B2/B4 | **Closed.** `ClockCard` excludes headline/title, and B4 renders local regime/lifecycle/calibration labels plus `id@version`. | — |
+| R1-11 | P1 | B2 | **Still open.** The implementation rule requires list/detail lifecycle equality, but the test says list `open` plus detail `withdrawn` produces `ineligible`. The specified result is `unavailable/detail_mismatch`. | Make the mismatch test expect unavailable. Test ineligibility with matching list/detail lifecycles for each excluded lifecycle. |
+| R1-14 | P1 | B4 | **Closed.** The source scan excludes tests, and the forbidden flag token is assembled without placing its contiguous spelling in the scanned component tree. | — |
+| R1-15 | P1 | B5 | **Still open.** Page wiring and `setDrawer` are corrected, but B5 now requires adding `rulesTableData()` to `clock-view.ts` and `RulesTableData` to `clock-contract.ts`; neither file is allowed by B5’s Files list. | Add both paths and their tests to B5, or implement these exports in B1 explicitly. |
+| R1-22 | P1 | C6 | **Closed for the original finding.** The service, POST route, benchmark and tests are listed, and dependency/result interfaces exist. New contract defects are listed below. | — |
+| R1-23 | P1 | C6 | **Closed.** Presets are compared with `prepareAnalysis(...eligible_as_of)`, and a late-finalized-batch fixture distinguishes POST’s `as_of` behavior. | — |
+| R1-26 | P1 | C6/C7 | **Still open.** Adding `dataHash` and a TypeScript field does not add `data_hash` to saved-run JSON. `src/app/api/macro/analyses/[runId]/route.ts` returns selected stored columns without that field and is absent from Files. C7 compares `undefined` with the preset hash. | Add the saved-run GET route/tests to C6; project `data_hash` from frozen inputs. Test unchanged observations across different cutoffs and an actual revision. |
+| R1-27 | P1 | C7 | **Still open.** Explicit preset submission and nullable run IDs are addressed, but “generate new `request_id`” lacks the existing retry contract. A retry after an ambiguous POST can create another run; the shared `savedRunId` can also resume a different card’s request. | Define attempt state keyed by submitted spec/preset, retain IDs across ambiguous retries, and retain the corresponding run ID across failed GETs. Add pure `.test.ts` submission-model tests. |
+| R1-29 | P1 | D0e/D1a | **Still open.** D0a now backfills the spec, but D0e is omitted from execution order and D1a prerequisites. Its command contains literal `…`, and its historical JSON schema is undefined. | Put executable D0e before every closure-changing D1 task; specify the complete capture command, artifact schema and consuming helper. |
+| R1-30 | P1 | D1a/D1d | **Closed.** Schema and retirement migrations are separated, with the runbook directed to the spec’s schema → sync → deploy → verify → retire sequence. | — |
+| R1-31 | P1 | D1a | **Closed.** The task explicitly adopts the v2 RPC signature, service-only grants, old-RPC compatibility and republish copying. | — |
+| R1-32 | P1 | B1/D1b | **Closed for schema completeness.** The manifest now includes versions, metadata, roles, matched flags and contribution cells, with construction from the same publication inputs. | Address the separate nullable-type defect below. |
+| R1-35 | P1 | D1b | **Still open.** `Timeliness` actually lives in `types.ts`, absent from D1b’s Files. More fundamentally, `views.ts` is told to obtain native input periods from a manifest whose display-input selection only includes monthly/quarterly rows; daily, weekly and event inputs will not be there. | Add `types.ts`; define and implement a frozen input-period source available to the overview, including the no-derived-row case. Test that normal publication actually produces `awaiting_witness`. |
+| R1-36 | P1 | D1c | **Still open.** `testing/macro-fixture.ts::macroDb()` still hashes live v1 dependencies. Generic `src/lib/judgments/replay.test.ts` builds its replay registry from production `REGISTRY`, so switching to v2 removes the method needed by historical v1 goldens. Neither file is listed. | List and update both files: inject captured historical hashes and use an explicit historical replay registry while separately testing the production v2 registry. |
+| R1-38 | P1 | D2 | **Still open.** Adapter matching and failed-evidence retention are specified, but HTTPS enforcement is attached to the Python collector, not the ingest endpoint. The server currently accepts HTTP URLs. The MIME-to-locator mapping remains unnamed. | Specify server-side `url.protocol === 'https:'`, exact host validation, JSON→`json_pointer`, HTML→`html_cell`, rejection of other MIME types, and protocol/mapping tests. |
+| R1-39 | P1 | D2/D9 | **Closed.** The JSON regeneration and `cn-series.test.ts` updates are now assigned when the version changes and when official sources activate. | — |
+| R1-40 | P1 | D2–D4 | **Still open.** LPR tenor keys and MLF aggregation are improved, but D3 still omits cross-page AFRE publication-date ordering and same-date conflicts. D3/D4 lack complete parser signatures and fixture paths/contracts. | Specify each parser’s exported signature, raw fixture files, failure codes and registry binding. Assign AFRE page discovery, publication-date extraction, ordering and cross-page conflict handling to explicit files. |
+| R1-41 | P1 | D2 | **Closed.** `IndicatorDetail.tsx` is listed and explicitly branches between US target-range and CN rate-change fields. | — |
+| R1-42 | P1 | D9 | **Closed.** Event-source IDs, monthly derivations and all four production version switches are now assigned. | — |
+| N1 | P1 | B1→D1b | **New:** `MethodManifestRow.type: SeriesType` cannot represent the liquidity rows, whose catalog `type` is explicitly `null`. Casting or inventing a type also violates metadata reconciliation. | Declare `type: SeriesType \| null` for manifest rows; retain non-null types for scoring rows after validation. Include an actual liquidity display row in the manifest success fixture. |
+| N2 | P2 | B1 | **New:** The isolated `invariant.8.support` test changes support without changing contribution. Invariant 2 necessarily fails first, so it cannot produce the requested invariant-8 diagnostic. | Recompute the altered contribution cells and dependent totals for this case, or test invariant 8 through a separately defined validator. Preserve production precedence. |
+| N3 | P2 | B1 | **New:** A non-finite `not_matched` value must remain displayable, but the unconditional `changeOf(...)` call uses decimal parsing and throws on values such as `"NaN"` when a previous observation exists. | Preserve raw `latest.value_text`, return `display_change:null` for invalid decimal inputs, and test this row without weakening matched-row reconciliation. |
+| N4 | P2 | B2 | **New:** The timeout test supplies a fetcher that never resolves. Aborting a signal does not settle a fake promise that ignores that signal; advancing timers leaves the test hanging. | Make the fake fetch reject on `signal.abort`; separately test list timeout prevents detail fetching and that body reading remains within the timeout budget. |
+| N5 | P1 | B4 | **New:** The explicit percentage formatter is `toFixed(1)+'%'`, although `norm` is a fraction. The fixture’s `0.403846` would display `0.4%`. | Specify `(norm * 100).toFixed(1) + '%'`; assert `0.403846 → 40.4%`. |
+| N6 | P1 | B6 | **New:** The newly supplied sync command passes `"local acceptance sample"` as an unsupported positional argument. Adding `--owner-confirmation` alone still fails because the checked-in macro licenses are unverified. | Provide an executable local-only registration path using an explicit synthetic test license table, or an isolated test configuration supported by the script. Do not change production license assertions to make synthetic acceptance pass. |
+| N7 | P2 | C1 | **New:** The instructed mismatch comparison is unconditional even though `snapshotObservationId` is optional. Existing standalone detail pages pass no snapshot ID, so a loaded observation differs from `undefined` and produces a false mismatch. | Compare only when snapshot binding was explicitly supplied; define empty-history/null-ID behavior and test both standalone and snapshot-bound details. |
+| N8 | P1 | C6 | **New:** The UUIDv5 test vector is wrong. DNS namespace plus `www.example.com` produces `2ed6657d-e927-568b-95e1-2665a8aea6a2`, not the specified `…95e3-5c7ccf6f6b0d`. | Replace the expected UUID with the correct value; keep the RFC version/variant bit assertions. |
+| N9 | P2 | C6 | **New:** `Prepared` failures retain only an error code. Existing POST persists and returns `code: message`, including calculation details, and converts unexpected calculation exceptions to `analysis_input_invalid`. The proposed service contract cannot preserve that behavior. | Return a structured calculation failure containing code and message; distinguish it from read failures and preserve POST’s truncated-input 422 and unexpected-calculation handling. Add regression assertions for stored error text/status. |
+| N10 | P1 | D1a→D2 | **New:** Adding `official_http` to `Adapter` immediately breaks `ingest.ts::DATASET_OF: Record<Adapter,…>`. Its required entry is postponed until D2, after the separately deployable D1 PR. | Move the mapping and required adapter plumbing into D1, as specified; leave verified parsers and collection activation in later tasks. |
+| N11 | P2 | D1a | **New:** The task orders changes to `clock-contract.ts` but omits it from Files. It also invokes fixture recording without listing the generated FRED fixture files/manifest. The “only Files” rule prevents completing the task. | Enumerate `clock-contract.ts`, generated raw fixture paths and `fixtures/fred/manifest.json`, plus the exact affected tests. |
+| N12 | P1 | D1a | **New:** The referenced migration instructions demand zero remaining matches for the old enum-check regex after replacement. The new `CHECK (... IN (...))` normalizes to the same `= ANY` prefix, so that assertion also matches the new constraint and fails. | Capture old constraint identities before replacement; assert their removal and validate the new constraint’s name and allowed values separately. |
+| N13 | P1 | D9 | **New:** “Production sequence same as D1, v2→v3” has no corresponding v2-retirement migration or lockfile entry in Files. Reusing D1’s retirement migration only targets v1. The promised D5 old-publish-RPC cleanup is also unassigned. | Add uniquely named v2-retirement and old-RPC cleanup migrations/tests, with explicit deployment prerequisites and lockfile updates. |
+
+not ready
+tokens used
+200,411
+| # | Severity P1/P2/P3 | Task | Defect | Concrete fix |
+|---|---|---|---|---|
+| R1-2 | P1 | D1a | **Closed.** The latency-branch merge/rebase prerequisite is explicit. Existing #125 routes remain outside the task file lists. | Retain the prerequisite. |
+| R1-3 | P1 | B1→B2 | **Closed.** B1 owns `F4Match` and the clock-local optional manifest extension; it can compile before B2 without modifying protected storage types. | — |
+| R1-4 | P1 | B1 | **Closed.** `ClockInput.snapshot` now uses `SnapshotRecord`; the regime comes separately from `regimeRecord`. | — |
+| R1-5 | P1 | B1 | **Closed.** The interfaces now use `roles[]`, `display_only_rows`, and diagnostics supporting invariants 1–9; `by_state` is gone. | — |
+| R1-6 | P1 | B1/B3 | **Still open.** B3 reads observations and the regime before B1 checks snapshot versions or observation integrity. An observation-read exception can therefore replace `version_unsupported` with 503; a regime-read exception can replace `integrity_error`. | Execute the gates between reads: snapshot versions → observation read/integrity → regime read/rules version → reconciliation → F4. Add combined-failure tests proving short-circuiting. |
+| R1-7 | P1 | B1 | **Still open.** The success fixture stores F4 margin `4.807692`; its rounded norms require `4.8077`. The difference is `8e-6`, exceeding invariant 7’s `1e-6` tolerance. | Keep stored regime margin `4.807692`; set F4 claim margin to `4.8077`. |
+| R1-10 | P1 | B2/B4 | **Closed.** `ClockCard` excludes headline/title, and B4 renders local regime/lifecycle/calibration labels plus `id@version`. | — |
+| R1-11 | P1 | B2 | **Still open.** The implementation rule requires list/detail lifecycle equality, but the test says list `open` plus detail `withdrawn` produces `ineligible`. The specified result is `unavailable/detail_mismatch`. | Make the mismatch test expect unavailable. Test ineligibility with matching list/detail lifecycles for each excluded lifecycle. |
+| R1-14 | P1 | B4 | **Closed.** The source scan excludes tests, and the forbidden flag token is assembled without placing its contiguous spelling in the scanned component tree. | — |
+| R1-15 | P1 | B5 | **Still open.** Page wiring and `setDrawer` are corrected, but B5 now requires adding `rulesTableData()` to `clock-view.ts` and `RulesTableData` to `clock-contract.ts`; neither file is allowed by B5’s Files list. | Add both paths and their tests to B5, or implement these exports in B1 explicitly. |
+| R1-22 | P1 | C6 | **Closed for the original finding.** The service, POST route, benchmark and tests are listed, and dependency/result interfaces exist. New contract defects are listed below. | — |
+| R1-23 | P1 | C6 | **Closed.** Presets are compared with `prepareAnalysis(...eligible_as_of)`, and a late-finalized-batch fixture distinguishes POST’s `as_of` behavior. | — |
+| R1-26 | P1 | C6/C7 | **Still open.** Adding `dataHash` and a TypeScript field does not add `data_hash` to saved-run JSON. `src/app/api/macro/analyses/[runId]/route.ts` returns selected stored columns without that field and is absent from Files. C7 compares `undefined` with the preset hash. | Add the saved-run GET route/tests to C6; project `data_hash` from frozen inputs. Test unchanged observations across different cutoffs and an actual revision. |
+| R1-27 | P1 | C7 | **Still open.** Explicit preset submission and nullable run IDs are addressed, but “generate new `request_id`” lacks the existing retry contract. A retry after an ambiguous POST can create another run; the shared `savedRunId` can also resume a different card’s request. | Define attempt state keyed by submitted spec/preset, retain IDs across ambiguous retries, and retain the corresponding run ID across failed GETs. Add pure `.test.ts` submission-model tests. |
+| R1-29 | P1 | D0e/D1a | **Still open.** D0a now backfills the spec, but D0e is omitted from execution order and D1a prerequisites. Its command contains literal `…`, and its historical JSON schema is undefined. | Put executable D0e before every closure-changing D1 task; specify the complete capture command, artifact schema and consuming helper. |
+| R1-30 | P1 | D1a/D1d | **Closed.** Schema and retirement migrations are separated, with the runbook directed to the spec’s schema → sync → deploy → verify → retire sequence. | — |
+| R1-31 | P1 | D1a | **Closed.** The task explicitly adopts the v2 RPC signature, service-only grants, old-RPC compatibility and republish copying. | — |
+| R1-32 | P1 | B1/D1b | **Closed for schema completeness.** The manifest now includes versions, metadata, roles, matched flags and contribution cells, with construction from the same publication inputs. | Address the separate nullable-type defect below. |
+| R1-35 | P1 | D1b | **Still open.** `Timeliness` actually lives in `types.ts`, absent from D1b’s Files. More fundamentally, `views.ts` is told to obtain native input periods from a manifest whose display-input selection only includes monthly/quarterly rows; daily, weekly and event inputs will not be there. | Add `types.ts`; define and implement a frozen input-period source available to the overview, including the no-derived-row case. Test that normal publication actually produces `awaiting_witness`. |
+| R1-36 | P1 | D1c | **Still open.** `testing/macro-fixture.ts::macroDb()` still hashes live v1 dependencies. Generic `src/lib/judgments/replay.test.ts` builds its replay registry from production `REGISTRY`, so switching to v2 removes the method needed by historical v1 goldens. Neither file is listed. | List and update both files: inject captured historical hashes and use an explicit historical replay registry while separately testing the production v2 registry. |
+| R1-38 | P1 | D2 | **Still open.** Adapter matching and failed-evidence retention are specified, but HTTPS enforcement is attached to the Python collector, not the ingest endpoint. The server currently accepts HTTP URLs. The MIME-to-locator mapping remains unnamed. | Specify server-side `url.protocol === 'https:'`, exact host validation, JSON→`json_pointer`, HTML→`html_cell`, rejection of other MIME types, and protocol/mapping tests. |
+| R1-39 | P1 | D2/D9 | **Closed.** The JSON regeneration and `cn-series.test.ts` updates are now assigned when the version changes and when official sources activate. | — |
+| R1-40 | P1 | D2–D4 | **Still open.** LPR tenor keys and MLF aggregation are improved, but D3 still omits cross-page AFRE publication-date ordering and same-date conflicts. D3/D4 lack complete parser signatures and fixture paths/contracts. | Specify each parser’s exported signature, raw fixture files, failure codes and registry binding. Assign AFRE page discovery, publication-date extraction, ordering and cross-page conflict handling to explicit files. |
+| R1-41 | P1 | D2 | **Closed.** `IndicatorDetail.tsx` is listed and explicitly branches between US target-range and CN rate-change fields. | — |
+| R1-42 | P1 | D9 | **Closed.** Event-source IDs, monthly derivations and all four production version switches are now assigned. | — |
+| N1 | P1 | B1→D1b | **New:** `MethodManifestRow.type: SeriesType` cannot represent the liquidity rows, whose catalog `type` is explicitly `null`. Casting or inventing a type also violates metadata reconciliation. | Declare `type: SeriesType \| null` for manifest rows; retain non-null types for scoring rows after validation. Include an actual liquidity display row in the manifest success fixture. |
+| N2 | P2 | B1 | **New:** The isolated `invariant.8.support` test changes support without changing contribution. Invariant 2 necessarily fails first, so it cannot produce the requested invariant-8 diagnostic. | Recompute the altered contribution cells and dependent totals for this case, or test invariant 8 through a separately defined validator. Preserve production precedence. |
+| N3 | P2 | B1 | **New:** A non-finite `not_matched` value must remain displayable, but the unconditional `changeOf(...)` call uses decimal parsing and throws on values such as `"NaN"` when a previous observation exists. | Preserve raw `latest.value_text`, return `display_change:null` for invalid decimal inputs, and test this row without weakening matched-row reconciliation. |
+| N4 | P2 | B2 | **New:** The timeout test supplies a fetcher that never resolves. Aborting a signal does not settle a fake promise that ignores that signal; advancing timers leaves the test hanging. | Make the fake fetch reject on `signal.abort`; separately test list timeout prevents detail fetching and that body reading remains within the timeout budget. |
+| N5 | P1 | B4 | **New:** The explicit percentage formatter is `toFixed(1)+'%'`, although `norm` is a fraction. The fixture’s `0.403846` would display `0.4%`. | Specify `(norm * 100).toFixed(1) + '%'`; assert `0.403846 → 40.4%`. |
+| N6 | P1 | B6 | **New:** The newly supplied sync command passes `"local acceptance sample"` as an unsupported positional argument. Adding `--owner-confirmation` alone still fails because the checked-in macro licenses are unverified. | Provide an executable local-only registration path using an explicit synthetic test license table, or an isolated test configuration supported by the script. Do not change production license assertions to make synthetic acceptance pass. |
+| N7 | P2 | C1 | **New:** The instructed mismatch comparison is unconditional even though `snapshotObservationId` is optional. Existing standalone detail pages pass no snapshot ID, so a loaded observation differs from `undefined` and produces a false mismatch. | Compare only when snapshot binding was explicitly supplied; define empty-history/null-ID behavior and test both standalone and snapshot-bound details. |
+| N8 | P1 | C6 | **New:** The UUIDv5 test vector is wrong. DNS namespace plus `www.example.com` produces `2ed6657d-e927-568b-95e1-2665a8aea6a2`, not the specified `…95e3-5c7ccf6f6b0d`. | Replace the expected UUID with the correct value; keep the RFC version/variant bit assertions. |
+| N9 | P2 | C6 | **New:** `Prepared` failures retain only an error code. Existing POST persists and returns `code: message`, including calculation details, and converts unexpected calculation exceptions to `analysis_input_invalid`. The proposed service contract cannot preserve that behavior. | Return a structured calculation failure containing code and message; distinguish it from read failures and preserve POST’s truncated-input 422 and unexpected-calculation handling. Add regression assertions for stored error text/status. |
+| N10 | P1 | D1a→D2 | **New:** Adding `official_http` to `Adapter` immediately breaks `ingest.ts::DATASET_OF: Record<Adapter,…>`. Its required entry is postponed until D2, after the separately deployable D1 PR. | Move the mapping and required adapter plumbing into D1, as specified; leave verified parsers and collection activation in later tasks. |
+| N11 | P2 | D1a | **New:** The task orders changes to `clock-contract.ts` but omits it from Files. It also invokes fixture recording without listing the generated FRED fixture files/manifest. The “only Files” rule prevents completing the task. | Enumerate `clock-contract.ts`, generated raw fixture paths and `fixtures/fred/manifest.json`, plus the exact affected tests. |
+| N12 | P1 | D1a | **New:** The referenced migration instructions demand zero remaining matches for the old enum-check regex after replacement. The new `CHECK (... IN (...))` normalizes to the same `= ANY` prefix, so that assertion also matches the new constraint and fails. | Capture old constraint identities before replacement; assert their removal and validate the new constraint’s name and allowed values separately. |
+| N13 | P1 | D9 | **New:** “Production sequence same as D1, v2→v3” has no corresponding v2-retirement migration or lockfile entry in Files. Reusing D1’s retirement migration only targets v1. The promised D5 old-publish-RPC cleanup is also unassigned. | Add uniquely named v2-retirement and old-RPC cleanup migrations/tests, with explicit deployment prerequisites and lockfile updates. |
+
+not ready
+exit=0
