@@ -1,0 +1,370 @@
+{
+  "page": {
+    "title": "Industry research",
+    "subtitle": "Industry facts are aggregated from members' primary filings (aggregate method); every number opens its source drawer and replays from its manifest.",
+    "breadcrumbResearch": "Research",
+    "breadcrumbIndustries": "Industry research",
+    "constituents": "Constituents"
+  },
+  "schemes": {
+    "sw2021": "SW 2021",
+    "sic": "SIC (SEC)",
+    "sw2021Market": "SW 2021 · China A-shares",
+    "sicMarket": "SIC · US (SEC)"
+  },
+  "levels": {
+    "1": "Level 1",
+    "2": "Level 2",
+    "3": "Level 3",
+    "4": "Level 4"
+  },
+  "controls": {
+    "scheme": "Scheme",
+    "level": "Level",
+    "metric": "Metric",
+    "basis": "Basis",
+    "view": "View",
+    "heatmap": "Heatmap",
+    "table": "Table",
+    "window": "Window",
+    "chartAndTable": "Chart + table",
+    "tableOnly": "Table only",
+    "today": "Today",
+    "apply": "Show",
+    "prev": "Previous",
+    "next": "Next"
+  },
+  "metrics": {
+    "revenue_sum": "Revenue",
+    "net_income_parent_sum": "Net income (parent)",
+    "gross_margin": "Gross margin",
+    "roe": "ROE (TTM)",
+    "revenue_yoy": "Revenue YoY",
+    "net_income_yoy": "Net income YoY",
+    "member_count": "Members"
+  },
+  "durations": {
+    "12M": "Annual",
+    "3M": "Quarterly",
+    "TTM": "TTM",
+    "INSTANT": "Point in time"
+  },
+  "windows": {
+    "5y": "5Y",
+    "10y": "10Y",
+    "all": "All"
+  },
+  "header": {
+    "factsAsOf": "Facts as of",
+    "run": "Run",
+    "generation": "gen {n}",
+    "method": "Method",
+    "grid": "{codes} industries · {periods} period ends"
+  },
+  "freshness": {
+    "fresh": "fresh",
+    "stale": "stale",
+    "error": "failed",
+    "missing": "no record"
+  },
+  "historyClass": {
+    "point_in_time": "Point-in-time",
+    "reconstruction": "Reconstruction"
+  },
+  "states": {
+    "loading": {
+      "title": "Reading industry data",
+      "body": "Reading industry data"
+    },
+    "stale": {
+      "title": "Stale data",
+      "body": "Expected weekly; past the 2-day grace. The page keeps showing the latest active run (facts as of {date}); each cell's drawer names the run time."
+    },
+    "error": {
+      "title": "Read failed",
+      "body": "Showing the last good response ({at} UTC). Missing values are never shown as 0.",
+      "bodyNoCache": "Nothing to show yet; try again shortly. Missing values are never shown as 0.",
+      "retry": "Retry"
+    },
+    "unlicensed": {
+      "title": "{scheme} data licence pending",
+      "body": "Classification and membership data are SWS Research data relayed by Tushare; no number is shown until the display terms are confirmed. You can switch to the SIC scheme (US, public SEC data).",
+      "switchToSic": "Switch to SIC",
+      "learnMore": "Sources and licensing"
+    },
+    "adminPreview": {
+      "title": "Internal preview",
+      "body": "Dataset {dataset} is not public: only admins see these numbers; everyone else sees the licence-pending state."
+    },
+    "empty": {
+      "title": "No active run yet",
+      "body": "The scheme is licensed but has no active aggregate run. The heatmap appears once the first run completes."
+    },
+    "reconstruction": {
+      "title": "Reconstruction: these cells are not what was visible at the time",
+      "body": "Historical periods are rebuilt from membership evidence obtained later: SW membership availability is assumed at the inclusion date (the source has no announcement time) and issuers are resolved by today's ownership. Compare trends, but do not read them as what investors saw then. Each cell becomes available at the run's activation, never back-dated to its period."
+    },
+    "partialUnpublished": {
+      "title": "Some dates not published",
+      "body": "Only dates that pass the daily comparison are published; the series breaks at unpublished dates and percentiles use published dates only."
+    },
+    "replayMismatch": {
+      "title": "Replay mismatch",
+      "body": "The manifest recomputes to a different value than the stored one. The cell is not treated as replayable: the page keeps the stored value with an anomaly badge, and a manifest_mismatch quarantine item is open."
+    },
+    "officialUnavailable": {
+      "title": "Official comparison value unavailable",
+      "body": "While the official dataset is not public, only the comparison status is shown, never the official value."
+    },
+    "notEnabled": {
+      "title": "Valuation not enabled",
+      "body": "Self-computed valuations are computed and published only after two basis checks are complete (SW PE/PB basis, total-share basis). Until then no self-computed valuation is shown, and official values are never shown in its place."
+    },
+    "noJudgment": {
+      "title": "No judgment registered",
+      "body": "Lifecycle stage, prosperity and over/under-valuation are judgments, not facts. They appear here only once registered in F4 with a falsifiable condition that can be settled; uncalibrated ones show only their category and a badge."
+    },
+    "currentOnly": {
+      "title": "Current value only (current_only)",
+      "body": "SEC publishes only the current SIC, with no inclusion or exclusion history: the in-date column is the first observation date and dates before it have no members. SIC is not aggregated or valued."
+    },
+    "noMembers": {
+      "title": "No known members on this date",
+      "body": "No member is valid on {on} by the evidence known today."
+    }
+  },
+  "missing": {
+    "empty_set": "No usable data (empty_set)",
+    "zero_denominator": "Zero denominator (zero_denominator)",
+    "no_members": "No members (no_members)",
+    "financial_excluded": "Excluded by method: no gross margin for financials (financial_excluded)",
+    "unresolved_over_limit": "Too many unresolved members (unresolved_over_limit)",
+    "manifest_mismatch": "Manifest self-check failed (manifest_mismatch)",
+    "absent": "Row missing from the expected grid"
+  },
+  "roles": {
+    "included": "Included",
+    "excluded": "Excluded",
+    "missing_concept": "missing concept",
+    "unit_excluded": "currency excluded",
+    "read_truncated": "read truncated",
+    "version_inconsistent": "version inconsistent",
+    "not_in_comparable_set": "not in comparable set",
+    "financial_excluded": "financials excluded"
+  },
+  "coverage": {
+    "unresolved": "{n} unresolved",
+    "ratio": "{n}/{d}",
+    "legendLow": "Low",
+    "legendHigh": "High",
+    "legendInsufficient": "coverage below 0.8",
+    "legendUnresolved": "unresolved above 5%",
+    "legendMissing": "missing (hover for the reason)"
+  },
+  "heatmap": {
+    "label": "Heatmap",
+    "industry": "Industry",
+    "cellTitle": "{industry} · {period} · {metric}: open the source drawer",
+    "caption": "Click a cell for its source drawer; click a name for the industry detail. One brass hue: shade means level, not up or down.",
+    "mobileNote": "Narrow screens show the last 5 periods; see the table for the full series."
+  },
+  "table": {
+    "label": "Table view",
+    "industry": "Industry",
+    "code": "Code",
+    "members": "Members (unresolved)",
+    "latestPeriod": "Latest period end",
+    "value": "Value",
+    "coverage": "Coverage",
+    "yoy": "YoY",
+    "source": "Source",
+    "sourceButton": "Source ▸",
+    "yoyNotStored": "No stored YoY for this metric",
+    "note": "YoY shows only the stored YoY metrics (revenue, net income), signed, never red/green: an industry level is not a price move. Coverage = n_with_data / (n_members + n_unresolved); below 0.8 the value cell shows the coverage instead."
+  },
+  "valuation": {
+    "title": "Valuation snapshot",
+    "titleDetail": "Valuation & percentile",
+    "publishedOnly": "published cells only",
+    "industry": "Industry",
+    "pe": "PE (TTM)",
+    "pb": "PB",
+    "percentile": "Percentile",
+    "mcapCoverage": "Mcap coverage",
+    "date": "Date",
+    "within": "✓ within",
+    "unpublished": "— not published",
+    "percentileDeferred": "percentile not enabled"
+  },
+  "judgments": {
+    "title": "Judgments",
+    "uncalibrated": "Uncalibrated · effective sample {n}/{threshold}",
+    "calibrated": "Calibrated",
+    "evaluated": "Evaluated",
+    "self_assessed": "Self-assessed",
+    "condition": "Falsifiable condition",
+    "method": "Method",
+    "asOf": "as of",
+    "settlement": "settle by",
+    "abstained": "Abstained: {reason}",
+    "retrospective": "Retrospective",
+    "loadFailed": "Judgments could not be read",
+    "lifecycle": {
+      "abstained": "abstained",
+      "open": "open",
+      "settled": "settled",
+      "void": "void",
+      "withdrawn": "withdrawn",
+      "pending_fill": "pending fill"
+    }
+  },
+  "sources": {
+    "title": "Sources",
+    "sw_via_tushare": "Tushare → SWS Research",
+    "exchange_via_tushare": "Tushare → exchanges",
+    "tushare_statements": "Tushare statements → CNINFO",
+    "sec_submissions": "SEC submissions",
+    "edgar_companyfacts": "EDGAR companyfacts"
+  },
+  "detail": {
+    "summary": "Constituent summary",
+    "members": "Members",
+    "unresolved": "Unresolved",
+    "lastAddition": "Latest inclusion",
+    "children": "Sub-industries",
+    "viewConstituents": "View constituents",
+    "series": "Aggregate series",
+    "tableEquivalent": "Table equivalent",
+    "notAggregated": "v1 aggregates SW level 1 only; this node offers navigation and constituents.",
+    "chartLabel": "{industry} {metric} series line; values in the table beside it",
+    "chartCaption": "Any point opens the source drawer (same as the table). Gaps are missing cells, not zeros.",
+    "methods": "Methods & sources",
+    "methodConfig": "METHOD_CONFIG",
+    "configHash": "config",
+    "formulaVersion": "formula",
+    "schemeSource": "Classification source",
+    "schemeSourceSw": "SWS Research, Shenwan Industry Classification Standard (2021), adapted via Tushare index_classify / index_member_all",
+    "schemeSourceSic": "Current SIC in SEC submissions and the SEC SIC code list",
+    "availabilityAssumption": "Availability assumption",
+    "availabilitySw": "Members are assumed available on their inclusion date (the source has no announcement time); issuers are resolved by today's ownership",
+    "availabilitySic": "SIC has current values only; valid_from = first observation date",
+    "licence": "Licence",
+    "codeVersion": "Code version",
+    "namesNote": "SW publishes no English names: the English UI shows the Chinese name plus the code, without machine translation."
+  },
+  "constituents": {
+    "title": "{name} · Constituents",
+    "asOf": "As of",
+    "members": "{n} members",
+    "unresolved": "{n} unresolved (count only)",
+    "rule": "Date-driven: included on or before the as-of date and not yet excluded, by the evidence known today",
+    "ticker": "Ticker",
+    "name": "Name",
+    "inDate": "In",
+    "outDate": "Out",
+    "observed": "First observed",
+    "path": "L2 / L3",
+    "sic": "SIC",
+    "revenue": "Latest annual revenue",
+    "netIncome": "Latest annual net income",
+    "company": "Company",
+    "companyLink": "Company page",
+    "noFact": "No published annual fact on this date",
+    "unit": "Amounts: CNY in 1e8, USD in billions (raw values in the drawer) · page {page} / {pages}, {size} per page"
+  },
+  "drawer": {
+    "title": "Source drawer",
+    "close": "Close",
+    "kind": {
+      "aggregate": "Aggregate number",
+      "valuation": "Valuation number",
+      "fact": "Disclosed fact",
+      "membership": "Membership row"
+    },
+    "sections": {
+      "value": "Value & method",
+      "coverage": "Coverage",
+      "replay": "Replay as recorded",
+      "membership": "Membership source",
+      "evidence": "Evidence"
+    },
+    "formula": "Formula",
+    "period": "Period",
+    "method": "Method",
+    "factsAsOf": "Facts as of",
+    "availableAt": "Cell available at",
+    "availableAtNote": "(= run activation, never back-dated)",
+    "historyClass": "History class",
+    "codeVersion": "Code version",
+    "manifest": "Manifest",
+    "coverageRatio": "= n_with_data / (n_members + n_unresolved)",
+    "excludedBy": "{reason} · {n}",
+    "unresolvedCount": "{n} unresolved (count only)",
+    "replayLoading": "Reading the manifest",
+    "replayFailed": "Replay could not be read ({code})",
+    "reproducedTrue": "reproduced = true",
+    "reproducedNote": "replayFromManifest() recomputes {value} from the manifest alone, equal to the stored value.",
+    "mismatchNote": "The manifest recomputes to {replayed}; the stored value is {stored}.",
+    "roles": "Role",
+    "issuers": "Issuers",
+    "recompute": "Recompute on current evidence",
+    "recomputeMatch": "match: a recompute on current evidence equals the recorded manifest.",
+    "recomputeChanged": "changed: current evidence differs from the recorded manifest. Late filings, quarantine decisions, mapping upgrades and membership corrections all do this; it is expected.",
+    "diffCounts": "members +{ma}/−{mr} · unresolved +{ua}/−{ur} · facts +{fa}/−{fr} · state revisions changed {revs}",
+    "inputsTop": "Inputs (first {n} of {total})",
+    "issuer": "Issuer",
+    "concept": "Concept",
+    "value": "Value",
+    "availableDate": "Available",
+    "missingCell": "A missing cell has no manifest: {reason}",
+    "counts": "members {members} · with data {withData} · unresolved {unresolved}",
+    "upstream": "Upstream",
+    "membershipUpstreamSw": "SWS Research → Tushare index_member_all",
+    "membershipUpstreamSic": "SEC submissions (sic field)",
+    "availableDateLabel": "Available",
+    "availabilityAssumed": "assumed at the inclusion date (effective_date_assumed)",
+    "availabilityObserved": "first observation date (observed)",
+    "availabilityEvidenced": "announcement evidence (evidenced)",
+    "path": "Path",
+    "sourceRecord": "Source record",
+    "rawHash": "raw_hash",
+    "locator": "locator",
+    "validFrom": "In",
+    "validTo": "Out",
+    "batch": "Batch",
+    "tradeDate": "Mark date",
+    "mcapCoverage": "Mcap coverage",
+    "pairStatus": "Comparison",
+    "officialValue": "Official value",
+    "officialUnavailable": "Official value unavailable (dataset not public)",
+    "valuationReplayDeferred": "Valuation manifest replay arrives with the valuation pipeline (I-3).",
+    "filingId": "filing_id",
+    "factEvidence": "View the raw fact by fact_id"
+  },
+  "entry": {
+    "title": "Industry research",
+    "titleEn": "行业研究",
+    "desc": "SW 2021 · SIC · aggregated industry facts and valuation percentiles",
+    "factsAsOf": "Facts as of {date}",
+    "unlicensed": "SW 2021 data licence pending"
+  },
+  "stock": {
+    "label": "Industry",
+    "since": "since {date}",
+    "unlicensed": "SW 2021: data licence pending (classification hidden)",
+    "currentOnly": "current_only"
+  },
+  "formulas": {
+    "revenue_sum": "Σ revenue (quarterly: q_single_revenue)",
+    "net_income_parent_sum": "Σ net_income_parent (quarterly: q_single_net_income_parent)",
+    "gross_margin": "(Σ revenue_operating − Σ cost_of_revenue) / Σ revenue_operating",
+    "roe": "Σ ttm_net_income_parent / Σ avg(equity_parent the day before the window, at period end)",
+    "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
+    "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
+    "member_count": "n_members (with n_unresolved)",
+    "pe_ttm": "Σ market cap / Σ ttm_net_income_parent",
+    "pe_static": "Σ market cap / Σ net_income_parent (12M)",
+    "pb": "Σ market cap / Σ equity_parent",
+    "market_cap": "Σ close × total_share"
+  }
+}
