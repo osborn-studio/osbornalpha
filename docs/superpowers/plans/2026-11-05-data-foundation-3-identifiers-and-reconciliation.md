@@ -431,6 +431,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 70 | 无已收年报时以 `fiscal_year_end` 回退的锚未归一（Codex 17a P2） | 回退锚同样经 `nearestMonthEnd` 归一（`0201`/`0203` → 1 月锚，`0102` → 12 月锚）。 |
 | 71 | 估计期末 ≥ today 会把已有上游证据的期间挤出 6 槽（Codex 17a P2） | 先把上游证据（submissions `reportDate`、filings）配到槽，再选 6 个已结束槽：配上的实际期末 < today 即视为已结束，保留估计元数据。 |
 | 72 | 20-F 早期财年因假日表起于 2024 落 `no_rule` | `SEC_HOLIDAYS` 向前补到 2021；`rollForward` 超出搜索上限抛错而非静默停止。 |
+| 73 | 档案写入绕过日历遍栅栏（Codex 18a P2） | 执行期指挥者裁决：`replace_filing_expectations` 改为 5 参 `(p_issuer, p_market, p_rows, p_pass_token, p_profile jsonb default null)`，旧 4 参删除；`p_profile` 在令牌/租约/成员校验之后同事务 upsert `issuer_filing_profiles`，null 保持已存档案。迁移一原地修改、锁文件 sha 更新。TS 端不再单独 upsert 档案。C5 表中该行以此为准。 |
 
 ---
 
