@@ -1,28 +1,30 @@
 'use client';
-// MacroJudgmentSlot — F4 judgment card mount (spec §3.2, canvas JudgmentSlot). Rendered only when the server page
-// passes judgmentsEnabled (the judgment flag is read server-side, never here). Collapsed by default. Any F4 failure shows
-// "判断层暂不可用" and never falls back to macro-computed numbers. A percent appears only when display.percent is a number.
 import { useEffect, useState } from 'react';
 import type { RegimeContribution } from '@/lib/macro/types';
-import { contributionText, contributionsFrom, parseJudgments, percentOf, type JudgmentCard } from './judgment-view';
+import { contributionText, basisFrom, clockFrom, parseJudgments, type JudgmentCard } from './judgment-view';
+import { MacroRegimeClock } from './MacroRegimeClock';
+import { RULES, RULES_VERSION } from '@/lib/macro/regime';
 import { formatInstant } from './macro-format';
 import { useMacroT, type MacroT } from './use-macro-t';
 import { pick, type Locale } from './view-model';
 
 type SlotState = { status: 'idle' } | { status: 'loading' } | { status: 'unavailable' } | { status: 'ok'; cards: JudgmentCard[] };
 
-function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
-  const [rows, setRows] = useState<RegimeContribution[] | null | 'error'>(null);
+function Basis({ snapshotId, t, locale }: { snapshotId: string; t: MacroT; locale: Locale }) {
+  const [rows, setRows] = useState<{rows: RegimeContribution[]; rulesVersion: unknown} | null | 'error'>(null);
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/macro/snapshots/${encodeURIComponent(snapshotId)}`)
       .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((j) => { if (!cancelled) setRows(contributionsFrom(j)); })
+      .then((j) => {
+        const basis = basisFrom(j, snapshotId);
+        if (!cancelled) setRows(basis === null ? 'error' : {rows: basis, rulesVersion: j.rulesVersion});
+      })
       .catch(() => { if (!cancelled) setRows('error'); });
     return () => { cancelled = true; };
   }, [snapshotId]);
   if (rows === null) return <div className="text-xs text-text-dim">{t('judgment.loading')}</div>;
-  if (rows === 'error' || rows.length === 0) return <div className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</div>;
+  if (rows === 'error' || rows.rows.length === 0) return <div className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</div>;
   return (
     <table className="w-full text-xs">
       <thead>
@@ -34,10 +36,10 @@ function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map((c) => (
+        {rows.rows.map((c) => (
           <tr key={`${c.series_id}-${c.rule_id}`} className="border-t border-border">
-            <td className="py-1 font-mono">{c.series_id}</td>
-            <td className="py-1 font-mono text-text-dim">{c.rule_id}</td>
+            <td className="py-1 font-mono"><a className="text-accent" href={`/api/macro/snapshots/${encodeURIComponent(snapshotId)}`}>{c.series_id}</a><div className="max-w-40 break-all text-[10px] text-text-dim">{c.observation_id}</div></td>
+            <td className="py-1 font-mono text-text-dim">{rows.rulesVersion === RULES_VERSION ? pick(Object.values(RULES).flat().find(r => r.id === c.rule_id)?.label ?? {en: c.rule_id, zh: c.rule_id}, locale) : c.rule_id}</td>
             <td className="py-1 text-right font-mono tabular-nums">{c.weight}</td>
             <td className="py-1 font-mono tabular-nums">{contributionText(c)}</td>
           </tr>
@@ -47,12 +49,10 @@ function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
   );
 }
 
-/** The contribution basis is the macro snapshot behind the overview; it substantiates a judgment only when that judgment was
- *  computed from exactly this snapshot. Otherwise the basis is stated as unavailable. */
-function Card({ card, t, locale, snapshotId }: { card: JudgmentCard; t: MacroT; locale: Locale; snapshotId: string | null }) {
+/** Fetch basis by the F4 input reference, including when it differs from the overview. */
+function Card({ card, t, locale }: { card: JudgmentCard; t: MacroT; locale: Locale }) {
   const [basisOpen, setBasisOpen] = useState(false);
-  const percent = percentOf(card);
-  const basisId = snapshotId !== null && card.input_snapshot_id === snapshotId ? snapshotId : null;
+  const basisId = card.input_snapshot_id;
   return (
     <article className="rounded-md border border-border bg-bg-elevated">
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-[11px] text-text-dim">
@@ -63,7 +63,7 @@ function Card({ card, t, locale, snapshotId }: { card: JudgmentCard; t: MacroT; 
       <div className="flex flex-wrap items-baseline gap-3 px-4 pb-3">
         <span className="text-[11px] text-text-dim">{t('judgment.primary')}</span>
         <span className="text-xl font-semibold">{pick(card.display.headline, locale)}</span>
-        {percent !== null ? <span className="font-mono tabular-nums">{t('judgment.percent', { value: percent })}</span> : <span className="text-[11px] text-text-dim">{t('judgment.noPercent')}</span>}
+        {card.settlement_summary && <span className="text-xs text-text-dim">{pick(card.settlement_summary, locale)}</span>}
         {card.lifecycle === 'abstained' && card.abstain_reason && <span className="text-xs text-text-dim">{t('judgment.abstained', { reason: card.abstain_reason })}</span>}
       </div>
       <div className="flex flex-wrap gap-4 border-t border-border px-4 py-2 text-xs text-text-dim">
@@ -74,7 +74,7 @@ function Card({ card, t, locale, snapshotId }: { card: JudgmentCard; t: MacroT; 
         {basisId ? (
           <>
             <button type="button" aria-expanded={basisOpen} onClick={() => setBasisOpen((v) => !v)} className="text-xs text-text">{t('judgment.basis')}</button>
-            {basisOpen && <div className="mt-2"><Basis snapshotId={basisId} t={t} /></div>}
+            {basisOpen && <div className="mt-2 overflow-x-auto"><Basis key={basisId} snapshotId={basisId} t={t} locale={locale} /></div>}
           </>
         ) : <span className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</span>}
       </div>
@@ -82,16 +82,23 @@ function Card({ card, t, locale, snapshotId }: { card: JudgmentCard; t: MacroT; 
   );
 }
 
-export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN'; snapshotId: string | null }) {
+export function MacroJudgmentSlot({ region }: { region: 'US' | 'CN' }) {
   const { t, locale } = useMacroT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => setNonce(n => n + 1);
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, [open]);
   const [state, setState] = useState<SlotState>({ status: 'idle' });
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`/api/judgments?subject_type=macro_region&subject_key=${region}`)
+    fetch(`/api/judgments?subject_type=macro_region&subject_key=${region}&types=macro_regime&view=latest&include_abstained=1`, { cache: 'no-store' })
       .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((j) => {
         if (cancelled) return;
@@ -101,12 +108,15 @@ export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN';
       .catch(() => { if (!cancelled) setState({ status: 'unavailable' }); });
     return () => { cancelled = true; };
   }, [open, region, nonce]);
+  const clock = clockFrom(state.status === 'ok' ? state.cards : [], region);
+  const reason = state.status === 'loading' || state.status === 'idle' ? t('judgment.loading') : state.status === 'unavailable' ? t('judgment.unavailable') : clock.reason ? t(`judgment.clock.reasons.${clock.reason}`) + (clock.card?.abstain_reason ? `: ${clock.card.abstain_reason}` : '') : null;
   return (
     <section aria-label={t('judgment.title')} className="space-y-2">
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-elevated px-3 py-2 text-left text-sm">
         <span className="text-text">{t('judgment.title')}</span>
         <span className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-text-dim">{open ? t('judgment.collapse') : t('judgment.expand')}</span>
       </button>
+      {open && <button type="button" onClick={() => setNonce(n => n + 1)} className="text-xs text-accent">{t('judgment.clock.refresh')}</button>}
       {open && state.status === 'loading' && <div className="text-xs text-text-dim">{t('judgment.loading')}</div>}
       {open && state.status === 'unavailable' && (
         <div role="status" className="flex items-start gap-3 rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-bg-elevated px-4 py-3 text-xs">
@@ -117,9 +127,8 @@ export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN';
           <button type="button" onClick={() => setNonce((n) => n + 1)} className="ml-auto rounded border border-border px-3 py-1">{t('judgment.retry')}</button>
         </div>
       )}
-      {open && state.status === 'ok' && (state.cards.length === 0
-        ? <div className="text-xs text-text-dim">{t('judgment.noCards')}</div>
-        : state.cards.map((c) => <Card key={c.judgment_id} card={c} t={t} locale={locale} snapshotId={snapshotId} />))}
+      {open && <MacroRegimeClock selected={clock.selected} reason={reason} t={t} />}
+      {open && clock.card && <Card key={clock.card.judgment_id} card={clock.card} t={t} locale={locale} />}
     </section>
   );
 }

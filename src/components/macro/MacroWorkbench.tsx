@@ -121,13 +121,14 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
       {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
 
+      {tab === 'overview' && judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} />}
+
       {tab === 'overview' && env && (
         <div className="space-y-3">
           <div className="grid gap-3 lg:grid-cols-2">
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
-          {judgmentsEnabled && <MacroJudgmentSlot region={region} snapshotId={env.snapshotId} />}
           <section className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>
