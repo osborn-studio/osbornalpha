@@ -146,6 +146,8 @@
       "as_of_mismatch": "Different as-of dates",
       "subject_mismatch": "Different subjects",
       "target_mismatch": "Different targets",
+      "invalid_probability": "Invalid probability",
+      "odds_not_finite": "Odds or fraction not finite",
       "unit_mismatch": "Different horizon units"
     }
   },

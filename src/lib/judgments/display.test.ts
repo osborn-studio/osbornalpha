@@ -42,14 +42,40 @@ describe('lifecycle and calibration state',()=>{
  it('reachable combinations: percent only for probability × calibrated, band for every other probability state, private cards are self_assessed',()=>{
   for(const c of REACHABLE_COMBINATIONS){
    expect(CALIBRATION_STATES_BY_KIND[c.kind].includes(c.calibration)||c.calibration==='self_assessed').toBe(true);
-   expect(c.percent).toBe(c.kind==='probability'&&c.calibration==='calibrated'&&c.lifecycle!=='abstained'&&c.lifecycle!=='pending_fill');
    if(c.source==='recommendation')expect(c).toMatchObject({kind:'probability',calibration:'self_assessed',percent:false});
    if(c.lifecycle==='settled')expect(c.outcome).not.toBeNull();else expect(c.outcome).toBeNull();
   }
   expect(REACHABLE_COMBINATIONS.some(c=>c.kind==='score'&&c.calibration==='calibrated')).toBe(false);
   expect(REACHABLE_COMBINATIONS.some(c=>c.source==='public'&&c.lifecycle==='pending_fill')).toBe(false);
   expect(REACHABLE_COMBINATIONS.filter(c=>c.source==='recommendation').map(c=>c.lifecycle)).toEqual(['abstained','pending_fill','open','settled','settled','withdrawn']);
-  expect(REACHABLE_COMBINATIONS).toHaveLength(3*3*6+2*6+6);   // probability/categorical/interval: 3 states × 6 lifecycle rows (settled = hit + miss); score: 2 × 6; private: 6
+  expect(REACHABLE_COMBINATIONS).toHaveLength(3*3*6+2*6+6);
+ });
+ it('every public combination, built as a real envelope, renders what REACHABLE_COMBINATIONS says (percent / band presence, lifecycle, calibration, outcome)',()=>{
+  const claims:Record<Kind,unknown>={probability:{p:0.7,event:{zh:'事件',en:'event'}},categorical:{selected:'recovery',classes:['recovery'],scores_are_not_probabilities:true},
+   score:{value:1,scale:{min:0,max:10},dims:[],coverage:1,realized_metric:'m'},interval:{metric:'m',low:0,high:1,unit:'u',nominal_coverage:0.5}};
+  for(const c of REACHABLE_COMBINATIONS.filter(x=>x.source==='public')){
+   const abst={abstained:true,abstain_reason:'x',claim:null,condition:null,horizon:null,target:null,label_policy:null,settle_after:null,settle_by:null};
+   const judgment={kind:c.kind,claim:claims[c.kind],...(c.lifecycle==='abstained'?abst:{})} as EnvelopeSpec['judgment'];
+   const settlement=c.lifecycle==='settled'?{outcome:c.outcome}:c.lifecycle==='void'?{kind:'void' as const,outcome:null,realized:null,reason:'r'}:c.lifecycle==='withdrawn'?{kind:'withdrawn' as const,outcome:null,realized:null,reason:'r'}:undefined;
+   const calibration=c.calibration==='insufficient'?undefined:{kind:c.kind,state:c.calibration as 'failed'|'calibrated'|'evaluated'};
+   const k=toCard(envelope({judgment,settlement,calibration}),{title:TITLE,now:NOW});
+   const label=JSON.stringify(c);
+   expect(k.lifecycle,label).toBe(c.lifecycle);expect(k.calibration,label).toBe(c.calibration);expect(k.outcome,label).toBe(c.outcome);
+   expect(k.display.percent!==null,label).toBe(c.percent);expect(k.display.band!==undefined,label).toBe(c.band);
+  }
+ });
+ it('an expired report never speaks: valid_until 2026-01-01 at 2026-11-06 → insufficient, no percent, no % in the headline (K-01)',()=>{
+  const k=toCard(envelope({calibration:{state:'calibrated',valid_until:'2026-01-01T00:00:00.000Z'}}),{title:TITLE,now:'2026-11-06T00:00:00.000Z'});
+  expect(k.calibration).toBe('insufficient');expect(k.display.percent).toBeNull();expect(k.display.headline.zh).not.toContain('%');expect(k.display.headline.en).not.toContain('%');
+  expect(k.calibration_summary).toBeNull();
+ });
+ it('a non-probability claim p (NaN, >1, <0, Infinity) is invalid: no percent, no band, invalid_claim marker (K-03)',()=>{
+  for(const p of [NaN,1.5,-0.1,Infinity]){
+   const k=card({judgment:{claim:{p,event:{zh:'事件',en:'event'}}},calibration:CAL});
+   expect(k.display.percent,String(p)).toBeNull();expect(k.display.band).toBeUndefined();expect(k.missing).toEqual(['invalid_claim']);
+   expect(k.display.headline.en).toContain('invalid claim');expect(k.display.headline.zh).not.toContain('%');
+  }
+  expect(card({}).missing).toBeUndefined();
  });
 });
 
@@ -140,18 +166,18 @@ describe('toCard rendering (spec §9.3)',()=>{
 describe('cardsOf',()=>{
  const methods=new Map([[methodKey(methodologyRow()),methodologyRow()]]);
  it('publishable=false or an unknown method → no card (second gate after RLS)',()=>{
-  expect(cardsOf([envelope()],new Map([[methodKey(methodologyRow()),methodologyRow({publishable:false})]]),{includeAbstained:false})).toEqual([]);
-  expect(cardsOf([envelope()],new Map(),{includeAbstained:false})).toEqual([]);
-  expect(cardsOf([envelope()],methods,{includeAbstained:false})).toHaveLength(1);
+  expect(cardsOf([envelope()],new Map([[methodKey(methodologyRow()),methodologyRow({publishable:false})]]),{includeAbstained:false,now:NOW})).toEqual([]);
+  expect(cardsOf([envelope()],new Map(),{includeAbstained:false,now:NOW})).toEqual([]);
+  expect(cardsOf([envelope()],methods,{includeAbstained:false,now:NOW})).toHaveLength(1);
  });
  it('abstained only with include_abstained; merged issuers are marked',()=>{
   const ab=envelope({judgment:{n:2,abstained:true,abstain_reason:'x',claim:null,condition:null,horizon:null,target:null,label_policy:null,settle_after:null,settle_by:null}});
-  expect(cardsOf([ab],methods,{includeAbstained:false})).toEqual([]);
-  expect(cardsOf([ab],methods,{includeAbstained:true})).toHaveLength(1);
+  expect(cardsOf([ab],methods,{includeAbstained:false,now:NOW})).toEqual([]);
+  expect(cardsOf([ab],methods,{includeAbstained:true,now:NOW})).toHaveLength(1);
   const old='33333333-3333-4333-8333-333333333333';
-  const [m]=cardsOf([envelope({judgment:{subject_key:old}})],methods,{includeAbstained:false,requestedKey:'44444444-4444-4444-8444-444444444444'});
+  const [m]=cardsOf([envelope({judgment:{subject_key:old}})],methods,{includeAbstained:false,now:NOW,requestedKey:'44444444-4444-4444-8444-444444444444'});
   expect(m.merged_from).toBe(old);
-  expect(cardsOf([envelope()],methods,{includeAbstained:false,requestedKey:envelope().judgment.subject_key})[0].merged_from).toBeUndefined();
+  expect(cardsOf([envelope()],methods,{includeAbstained:false,now:NOW,requestedKey:envelope().judgment.subject_key})[0].merged_from).toBeUndefined();
  });
 });
 
@@ -163,16 +189,16 @@ describe('derivedOdds (spec §9.4)',()=>{
  const range=(claim:Partial<IntervalClaim>={},over:EnvelopeSpec['judgment']={},cal:EnvelopeSpec['calibration']={kind:'interval',state:'calibrated'})=>envelope({judgment:{n:2,as_of:'2026-01-02',judgment_type:'return_range',kind:'interval',
   claim:{metric:'return_12m',low:-0.2,high:0.4,unit:'ratio',nominal_coverage:0.8,scenarios:[{label:'up',p:0.6,value:0.3},{label:'down',p:0.4,value:-0.15}],scenario_event_hash:digest(condition),...claim},condition,target,...over},calibration:cal});
  it('computes b and fractional Kelly when every gate passes',()=>{
-  const r=derivedOdds(win(),range(),{k:0.5});
+  const r=derivedOdds(win(),range(),{k:0.5,now:NOW});
   expect(r.status).toBe('computed');
   if(r.status==='computed'){expect(r.b).toBeCloseTo(2,12);expect(r.f).toBeCloseTo(0.5*(0.6*2-0.4)/2,12);}
  });
  it('|p_up − p| ≤ 0.01 passes at the boundary and fails beyond it',()=>{
-  expect(derivedOdds(win(0.61),range(),{k:0.5}).status).toBe('computed');
-  expect(derivedOdds(win(0.62),range(),{k:0.5})).toEqual({status:'not_computed',reasons:['inputs_inconsistent']});
+  expect(derivedOdds(win(0.61),range(),{k:0.5,now:NOW}).status).toBe('computed');
+  expect(derivedOdds(win(0.62),range(),{k:0.5,now:NOW})).toEqual({status:'not_computed',reasons:['inputs_inconsistent']});
  });
  it('every precondition failure is a reason',()=>{
-  const reasonsOf=(a:Envelope,b:Envelope,k=0.5)=>{const r=derivedOdds(a,b,{k});return r.status==='not_computed'?r.reasons:[];};
+  const reasonsOf=(a:Envelope,b:Envelope,k=0.5)=>{const r=derivedOdds(a,b,{k,now:NOW});return r.status==='not_computed'?r.reasons:[];};
   expect(reasonsOf(win(0.6,{}),range({},{},{kind:'interval',state:'failed'}))).toEqual(['not_calibrated']);
   expect(reasonsOf(envelope({judgment:{n:1,as_of:'2026-01-02',judgment_type:'thesis_win_rate',claim:{p:0.6,event:{zh:'涨',en:'up'}},condition,target},calibration:CAL,settlement:{}}),range())).toEqual(['not_open']);
   expect(reasonsOf(win(),range({scenarios:undefined}))).toEqual(['scenarios_missing']);
@@ -186,6 +212,15 @@ describe('derivedOdds (spec §9.4)',()=>{
   expect(reasonsOf(win(),range({},{horizon:{unit:'calendar_months',n:12}}))).toEqual(['unit_mismatch']);
   expect(reasonsOf(win(),range(),0)).toEqual(['invalid_k']);
   expect(reasonsOf(range(),win())).toContain('wrong_type');
+ });
+ it('non-finite odds are not computed (K-02): overflow in b, underflow to b = 0',()=>{
+  for(const [u,d] of [[1e308,-1e-308],[1e-308,-1e308]]){
+   const r=derivedOdds(win(),range({scenarios:[{label:'up',p:0.6,value:u},{label:'down',p:0.4,value:d}]}),{k:0.5,now:NOW});
+   expect(r).toEqual({status:'not_computed',reasons:['odds_not_finite']});
+  }
+ });
+ it('an invalid thesis p is not computed (K-03)',()=>{
+  for(const p of [NaN,1.5,-0.1]){const r=derivedOdds(win(p),range(),{k:0.5,now:NOW});expect(r.status,String(p)).toBe('not_computed');if(r.status==='not_computed')expect(r.reasons).toContain('invalid_probability');}
  });
  it('uses calibrationRow defaults from the shared builder',()=>{expect(calibrationRow().state).toBe('calibrated');});
 });

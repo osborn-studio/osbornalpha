@@ -43,15 +43,15 @@ export function lifecycleOf(e:Envelope):Lifecycle{
  return s.kind;
 }
 /** The calibration row that may speak for the method: scope 'all', same method and kind, calibration_valid, not expired at `now`. */
-export function validCalibration(e:Envelope,kind:Kind,now?:string):CalibrationRow|null{
+export function validCalibration(e:Envelope,kind:Kind,now:string):CalibrationRow|null{
  const c=e.calibration;
  if(!c||!e.calibration_valid)return null;
  if(c.scope_type!=='all'||c.kind!==kind||c.methodology_id!==e.judgment.methodology_id||c.methodology_version!==e.judgment.methodology_version)return null;
- if(now!==undefined&&!(Date.parse(c.valid_until)>Date.parse(now)))return null;
+ if(!(Date.parse(c.valid_until)>Date.parse(now)))return null;   // expiry is always enforced: `now` is required (as_known views pass their cutoff)
  return c;
 }
 /** spec §9.1: invalid, expired or missing → insufficient; score rows say evaluated or insufficient; never calibrated without a valid row. */
-export function calibrationStateOf(e:Envelope,kind:Kind,now?:string):CalibrationState{
+export function calibrationStateOf(e:Envelope,kind:Kind,now:string):CalibrationState{
  const c=validCalibration(e,kind,now);
  if(!c)return 'insufficient';
  if(kind==='score')return c.state==='evaluated'?'evaluated':'insufficient';
@@ -65,6 +65,7 @@ export const classLabel=(c:string):Bilingual=>CLASS_LABELS[c]??{zh:c,en:c};
 const fmt=(x:number,d=2)=>String(Number(x.toFixed(d)));
 const pct=(x:number)=>String(Math.round(x*100));
 const numOr=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null;
+const validP=(p:unknown)=>typeof p==='number'&&Number.isFinite(p)&&p>=0&&p<=1;
 const both=(zh:string,en:string):Bilingual=>({zh,en});
 const join=(a:Bilingual,b:Bilingual):Bilingual=>({zh:a.zh+b.zh,en:a.en+b.en});
 
@@ -100,6 +101,7 @@ function displayOf(e:Envelope,state:CalibrationState,s:Summary|null):Display{
  switch(j.kind){
   case 'probability':{
    const c=j.claim as ProbabilityClaim;
+   if(!validP(c.p))return {headline:both(`${c.event.zh}：判断值无效`,`${c.event.en}: invalid claim`),percent:null,value:null};
    if(state==='calibrated'){const p=Math.round(c.p*100);return {headline:both(`${c.event.zh}：${p}%`,`${c.event.en}: ${p}%`),percent:p,value:null};}
    const band=bandOf(c.p);
    return {headline:join(both(`${c.event.zh}：信心${BAND[band].zh}`,`${c.event.en}: ${BAND[band].en} confidence`),tag),percent:null,value:null,band};
@@ -134,8 +136,8 @@ function overlay(e:Envelope,lifecycle:Lifecycle):Bilingual{
 }
 const inputHref=(i:Input):string|null=>i.kind==='judgment'?`/api/judgments/${i.ref.judgment_id}`:null;
 
-export interface ToCardOptions{title:Bilingual;now?:string;merged_from?:string}
-/** Envelope → JudgmentCard (spec §9.2, §9.3). Pure; `now` only tightens expiry (the SQL already applied it). */
+export interface ToCardOptions{title:Bilingual;now:string;merged_from?:string}
+/** Envelope → JudgmentCard (spec §9.2, §9.3). Pure; `now` (the cutoff for as_known views) is required so an expired report can never speak. */
 export function toCard(e:Envelope,opts:ToCardOptions):JudgmentCard{
  const j=e.judgment;const lifecycle=lifecycleOf(e);
  const calibration=calibrationStateOf(e,j.kind,opts.now);
@@ -154,12 +156,13 @@ export function toCard(e:Envelope,opts:ToCardOptions):JudgmentCard{
   calibration_summary:summary,
   inputs:j.inputs.map(i=>({kind:i.kind,ref:i.ref,available_at:i.available_at,origin:i.origin,href:inputHref(i)})),
  };
+ if(!j.abstained&&j.kind==='probability'&&!validP((j.claim as ProbabilityClaim|null)?.p))card.missing=['invalid_claim'];
  if(j.abstained){card.abstain_reason=j.abstain_reason??undefined;}
  if(opts.merged_from!==undefined)card.merged_from=opts.merged_from;
  return card;
 }
 
-export interface CardsOptions{now?:string;includeAbstained:boolean;requestedKey?:string}
+export interface CardsOptions{now:string;includeAbstained:boolean;requestedKey?:string}
 /**
  * Envelopes → cards with the publication gate applied a second time (defence in depth over RLS,
  * spec §4.1): a method missing from `methods` or with publishable=false yields no card. Abstained
@@ -188,7 +191,7 @@ const P_TOLERANCE=0.01,EPS=1e-9;
  * as_of / subject / target / horizon unit, |p_up − p| ≤ 0.01, and 0 < k ≤ 1. Otherwise every failed
  * precondition is listed and nothing is computed.
  */
-export function derivedOdds(winRate:Envelope,returnRange:Envelope,opts:{k:number;now?:string}):DerivedOdds{
+export function derivedOdds(winRate:Envelope,returnRange:Envelope,opts:{k:number;now:string}):DerivedOdds{
  const reasons:string[]=[];
  const w=winRate.judgment,r=returnRange.judgment;
  if(w.judgment_type!=='thesis_win_rate'||w.kind!=='probability'||r.judgment_type!=='return_range'||r.kind!=='interval')reasons.push('wrong_type');
@@ -196,6 +199,7 @@ export function derivedOdds(winRate:Envelope,returnRange:Envelope,opts:{k:number
  if(calibrationStateOf(winRate,w.kind,opts.now)!=='calibrated'||calibrationStateOf(returnRange,r.kind,opts.now)!=='calibrated')reasons.push('not_calibrated');
  if(!(Number.isFinite(opts.k)&&opts.k>0&&opts.k<=1))reasons.push('invalid_k');
  const claim=r.claim as IntervalClaim|null;const p=(w.claim as ProbabilityClaim|null)?.p;
+ if(!validP(p))reasons.push('invalid_probability');
  const sc=claim?.scenarios;
  const up=sc?.find(s=>s.label==='up'),down=sc?.find(s=>s.label==='down');
  if(!sc||sc.length!==2||!up||!down)reasons.push('scenarios_missing');
@@ -204,7 +208,7 @@ export function derivedOdds(winRate:Envelope,returnRange:Envelope,opts:{k:number
   else{
    if(Math.abs(up.p+down.p-1)>EPS)reasons.push('scenarios_not_normalized');
    if(!(up.value>0&&down.value<0))reasons.push('scenario_values_invalid');
-   if(typeof p!=='number'||Math.abs(up.p-p)>P_TOLERANCE+EPS)reasons.push('inputs_inconsistent');
+   if(validP(p)&&Math.abs(up.p-(p as number))>P_TOLERANCE+EPS)reasons.push('inputs_inconsistent');
   }
  }
  if(!w.condition||!claim||claim.scenario_event_hash!==digest(w.condition))reasons.push('event_mismatch');
@@ -214,5 +218,7 @@ export function derivedOdds(winRate:Envelope,returnRange:Envelope,opts:{k:number
  if(!w.horizon||!r.horizon||w.horizon.unit!==r.horizon.unit)reasons.push('unit_mismatch');
  if(reasons.length>0||!up||!down||typeof p!=='number')return {status:'not_computed',reasons:[...new Set(reasons)]};
  const b=up.value/Math.abs(down.value);
- return {status:'computed',b,f:opts.k*(p*b-(1-p))/b};
+ const f=opts.k*(p*b-(1-p))/b;
+ if(!(Number.isFinite(b)&&b>0&&Number.isFinite(f)))return {status:'not_computed',reasons:['odds_not_finite']};
+ return {status:'computed',b,f};
 }

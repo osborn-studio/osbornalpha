@@ -26,7 +26,7 @@ describe('judgments messages',()=>{
    ...[...new Set([...Object.values(CALIBRATION_STATES_BY_KIND).flat(),'self_assessed'])].map(c=>`calibration.${c}`),
    ...KINDS.map(k=>`kind.${k}`),
    ...[...PUBLIC_INPUT_KINDS,'legacy_fill','document_span'].map(k=>`inputs.kind.${k}`),
-   ...['wrong_type','not_open','not_calibrated','invalid_k','scenarios_missing','scenarios_not_normalized','scenario_values_invalid','inputs_inconsistent','event_mismatch','as_of_mismatch','subject_mismatch','target_mismatch','unit_mismatch'].map(r=>`derived.reasons.${r}`),
+   ...['wrong_type','not_open','not_calibrated','invalid_k','scenarios_missing','scenarios_not_normalized','scenario_values_invalid','inputs_inconsistent','event_mismatch','as_of_mismatch','subject_mismatch','target_mismatch','unit_mismatch','invalid_probability','odds_not_finite'].map(r=>`derived.reasons.${r}`),
   ];
   for(const k of need)expect(zh.has(k),k).toBe(true);
  });

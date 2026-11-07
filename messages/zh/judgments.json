@@ -146,6 +146,8 @@
       "as_of_mismatch": "截至日期不同",
       "subject_mismatch": "主体不同",
       "target_mismatch": "目标期不同",
+      "invalid_probability": "概率无效",
+      "odds_not_finite": "赔率或仓位不是有限数",
       "unit_mismatch": "期限单位不同"
     }
   },

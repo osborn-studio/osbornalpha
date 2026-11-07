@@ -86,3 +86,19 @@
 - H-04：`canonicalize/digest/jsonClean` 拒绝稀疏数组与带额外属性的数组（`invalid_parameter`）；`rebuildAndCompare` 要求快照 JSON 往返后摘要不变。
 - 次要：financial_metric 标签含 issuer_id 与 market；`asOf` 校验真实日期（`invalid_parameter`，原为 RangeError）。
 - H2-01（Codex 复核）：table_rows 区分缺失（null/undefined）与畸形（存在但不可解析）的 created_at/updated_at；任一畸形 → `input_unavailable`，再套用 max 与 updated<created 规则。
+
+## Task 17（显示契约 display.ts + i18n）
+- 提交 c51555f7：`band.ts`、`display.ts`、`display.test.ts`、`messages/{zh,en}/judgments.json`、`messages.test.ts`、`src/i18n/request.ts`（`// F4` 围栏加 `'judgments'`）。计划代码原样落地，红测：缺 `./display` 导入失败。
+- 规格偏差（计划已列，记入实施记录）：
+  1. §1.1 percent 字段：内存契约里 `display.percent` 必有（`null`），HTTP 层由 Task 18 `serializeBody` 删去值为 `null` 的 `percent` 键（决策 D2）；卡片任何字段都不含登记的 `p`。
+  2. `toCard` 需要方法标题，由调用方传 `title`；`cardsOf` 在 RLS 之外再按方法行 `publishable` 过滤一次。
+  3. 维度标签 v1 两语都用维度 `id`；`evidence_summary` 是通用的 `resolver@version · 原因`。
+  4. §9.5 的 `messages-parity.test.ts` 不覆盖本域：F4 用自己的 `messages.test.ts` 做键与占位符对称检查。
+  5. §9.4 "同 `unit`" 解释为 `horizon.unit` 相同；`k` 由调用方传入，要求 `0 < k ≤ 1`。
+
+## Task 17 review fixes（K-01..K-03）
+- K-01：参考时间必填。`toCard / cardsOf / derivedOdds / calibrationStateOf / validCalibration` 的 `now` 改为必填 `string`（as_known 视图传 cutoff）；过期（`valid_until ≤ now`）或不可解析一律 `insufficient`，percent 为 `null`。反例测试：`valid_until 2026-01-01`、`now 2026-11-06` → 无 percent、标题无 `%`、无校准摘要。
+- K-02：`derivedOdds` 仅当 `b` 有限且 `> 0`、`f` 有限时才 `computed`，否则 `not_computed`，原因 `odds_not_finite`（zh/en 文案已加）。两个溢出反例（1e308/−1e-308、1e-308/−1e308）有测试。
+- K-03：概率（卡片的 `claim.p`、赔率的 thesis `p`）必须有限且在 [0,1]：卡片 `percent=null`、无 `band`、标题标"判断值无效 / invalid claim"、`missing=['invalid_claim']`；赔率 → `not_computed` 原因 `invalid_probability`（zh/en 文案已加，先于一致性检查，NaN 不再绕过 `inputs_inconsistent`）。情景 `p` 原本已校验有限且在 [0,1]。
+- 次要：可达组合测试改为对每个公开组合构造真实信封，断言 `toCard` 的 percent/band 有无、lifecycle、calibration、outcome 与 `REACHABLE_COMBINATIONS` 一致（不再重算公式）。
+- 红测：先改测试，`npm test -- src/lib/judgments/display.test.ts` 3 failed / 23 passed（K-02 溢出、K-03 卡片、K-03 赔率）；实现后 display+messages+i18n 31 passed，typecheck、lint 干净。
