@@ -15608,14 +15608,17 @@ export function TrackingInbox() {
   const groups = useMemo(() => foldSameIssuerDay(rows), [rows]);
   const hasUnread = rows.some((r) => !r.read);
 
+  // plan audit S3: a delayed response only touches the ids it submitted, and only in the scope that submitted them.
   const markPage = async () => {
+    const generation = seq.current;
+    const submitted = new Set(rows.filter((r) => !r.read).map((r) => r.eventId));
     try {
-      const n = await markRowsRead(rows);
-      setRows((prev) => (unreadOnly ? [] : prev.map((r) => ({ ...r, read: true }))));
+      const n = await markRowsRead(rows.filter((r) => submitted.has(r.eventId)));
+      if (generation !== seq.current) { void loadWatches(); return; }
+      setRows((prev) => (unreadOnly ? prev.filter((r) => !submitted.has(r.eventId)) : prev.map((r) => (submitted.has(r.eventId) ? { ...r, read: true } : r))));
       show(t('inbox.markedRead', { count: n }));
       void loadWatches();
-      if (unreadOnly) void loadInbox(null);
-    } catch (e) { show(errorText(e, watches?.limit ?? 200)); }
+    } catch (e) { if (generation === seq.current) show(errorText(e, watches?.limit ?? 200)); }
   };
 
   let lastSection: string | null = null;
@@ -15672,7 +15675,7 @@ export function TrackingInbox() {
               <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               {t('filters.unreadOnly')}
             </label>
-            <Button variant="secondary" size="sm" className="ml-auto" disabled={!hasUnread} onClick={markPage}>
+            <Button variant="secondary" size="sm" className="ml-auto" disabled={!hasUnread || loading} onClick={markPage}>
               {t('filters.markPageRead')}
             </Button>
           </div>
@@ -15914,7 +15917,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: { issuer
     return guardedLoad<DisplayEvent>(gens, from, async (c) => {
       if (!replay && watching) {
         const r = await fetchInbox({ issuerId, cursor: c, limit: 50 });
-        return { rows: r.rows, nextCursor: r.nextCursor };
+        return { rows: r.rows.filter((e) => e.market === market), nextCursor: r.nextCursor };   // inbox filters by issuer only; keep the selected stream (plan audit S2). The cursor is preserved even when the filtered page is empty.
       }
       const r = await fetchCompanyEvents(ticker, { asOf, cursor: c, limit: 50 });
       return { rows: r.rows.filter((e) => e.market === market).map((e) => ({ ...e, read: true })), nextCursor: r.nextCursor };   // no read state outside the inbox
@@ -16020,6 +16023,8 @@ git commit -m "feat(tracking): tracking inbox page and company tracking view" -m
 ```
 
 ---
+
+- [ ] **Step S（计划第 4 轮审计 S2/S3 补充测试）**：在本任务的纯模块测试里（`guarded-load.test.ts` 或新建 `src/components/company/tracking/mark-scope.ts` + 测试，若需要把 `markPage` 的"只改已提交 id、只在同一 generation 生效"的逻辑抽成纯函数 `applyMarkResult(rows, submitted, {unreadOnly})` 与 `shouldApply(generation, current)`）加：(1) 双市场已跟踪发行人：显示与标读的 id 只属于所选市场；(2) 标读请求挂起期间切换筛选或翻页 → 回包不改新范围的行；(3) `unreadOnly` 下只移除已提交的 id。跑 `npm test -- src/components/company/tracking` 通过后并入本任务提交。
 
 ### Task 18: 覆盖目录 `GET /api/companies` + `/intel/companies` + `/intel` 入口卡
 
@@ -17183,7 +17188,7 @@ Expected：
 ````markdown
 # 公司研究与跟踪运行手册
 
-适用迁移：`supabase/migrations/20261112090000_company_research.sql`（表、索引、触发器、RLS、授权）、`supabase/migrations/20261112091000_company_research_functions.sql`（全部函数与授权）。前提：规格二的 `20261106090000_financial_facts.sql` 已在库中。规格：`docs/superpowers/specs/2026-11-04-company-research-design.md`（§0 优先）。代码：`src/lib/company/*`、`/api/companies/*`、`/api/admin/companies/*`、`/api/tracking/*`、`/api/cron/company-digest`、`scripts/company/*`。
+适用迁移：`supabase/migrations/20261112090000_company_research.sql`（表、索引、触发器、RLS、授权）、`supabase/migrations/20261112091000_company_research_functions.sql`（全部函数与授权）、`supabase/migrations/20261112092000_company_evidence_fence.sql`（证据替换的尝试/版本围栏）。前提：规格二的 `20261106090000_financial_facts.sql` 已在库中。规格：`docs/superpowers/specs/2026-11-04-company-research-design.md`（§0 优先）。代码：`src/lib/company/*`、`/api/companies/*`、`/api/admin/companies/*`、`/api/tracking/*`、`/api/cron/company-digest`、`scripts/company/*`。
 
 ## 1. 表与权限
 
@@ -17199,7 +17204,7 @@ Expected：
 ## 2. 迁移应用顺序
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
-2. 按文件名顺序应用：先 `20261112090000_company_research.sql`，再 `20261112091000_company_research_functions.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。两份文件可重放；已锁定在 `supabase/migrations.lock.json`，任何修改都要新迁移。
+2. 按文件名顺序应用：先 `20261112090000_company_research.sql`，再 `20261112091000_company_research_functions.sql`，再 `20261112092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`（计划第 4 轮审计 S1）；已锁定在 `supabase/migrations.lock.json`，任何修改都要新迁移。
 3. 核对：`select proname from pg_proc where proname like 'company_%' or proname in ('begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','replace_company_fact_evidence');` 列出全部函数；`select has_table_privilege('anon','public.issuer_events','select');` 为 `false`。
 
 ## 3. 首轮物化（owner，合并后）
