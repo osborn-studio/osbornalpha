@@ -1,5 +1,9 @@
 # Macro loading performance — 2026-11-07
 
+## Follow-up cache correctness fixes
+
+PR #138 (merged into the `dc47ba2e` release candidate) coalesces the foreground hard-expiry rebuild with Next's stale-revalidation callback, sharing failure within that lookup and allowing a later request to retry. Authenticated strategy responses are now `private, no-store`, and the strategy hook explicitly uses `cache: 'no-store'`; HTTP refreshes therefore reach the server's current auth/revision/judgment checks. The 300-second server fact cache and its version keys remain unchanged. This is not a claim that the cold scan or browser performance targets have been met. See the [release record](../2026-11-07-launch-closeout/README.md) for actual deployment and measurements.
+
 The production authenticated baseline included a 13,106 ms cycle-table request. The previous process-local strategy memo did not share work across cold Vercel instances. The overview rebuilt observation/provenance facts on every request and reset its loading state during same-query refreshes.
 
 ## Change

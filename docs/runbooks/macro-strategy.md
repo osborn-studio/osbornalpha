@@ -39,6 +39,12 @@ Status: P1 + P2 #109 and P3 + P4 #110/#111/#112 are on `main`. F4 (`src/lib/judg
 9. DONE. The formerly 404 links resolve to existing routes: `/macro` (`src/app/(app)/macro/page.tsx`) and `/macro/<seriesId>` (`[seriesId]/page.tsx`). F4 method routes are now present via #117; public visibility still depends on method publication.
 10. INTEGRATED (#120, #125). The HTTP parser and macro bridge tests cover the merged F4 route contract; deployment smoke checks must still verify: the history cursor (`before`), `{cards}` vs `{items}`, the shape of `realized`, `settlement_id`, and the calibration values mapped by `f4.calibrationState.*`.
 
+### Shared-cache expiry and browser reloads (#138)
+
+An expired shared entry can trigger both Next background revalidation and a foreground hard-expiry fallback. These now reuse a single build promise for that lookup, including a rejection; a later request may retry. This avoids duplicate manifest work without changing the 300-second TTL or version identity.
+
+Authenticated strategy reads return `Cache-Control: private, no-store`, and the strategy client hook requests `cache: 'no-store'`. Same-URL reloads therefore re-enter the server gates rather than relying on a fresh browser HTTP response. Server pure-fact caches remain active after those gates. Verify actual response headers and logged-in reload behavior after deployment; this design alone does not prove every intermediary, account-switch path, cold instance, or latency target.
+
 ## 3. Monthly review
 
 - Schedule: `vercel.json` runs `GET /api/cron/macro-review` at `0 6 3 * *` (UTC) for the newest closed month, US then CN.
