@@ -1,6 +1,6 @@
 # 宏观工作台（Macro Workbench）设计规格 · P3 + P4
 
-- 稿次：第 4 稿（2026-11-07；Codex 第一轮 `02-codex-spec-round1.md` 21 条 → 第 2 稿；第二轮 `04-codex-spec-round2.md` 14 条新问题与 14 条部分解决 → 第 3 稿，处置见 §0 与 §0.2；两轮上限已用完，残余风险由计划审计兜底。计划审计第一轮 `06-codex-plan-round1.md` 16 条回写 → 第 4 稿，见 §0.2 末"第 4 稿（计划审计回写）"）
+- 稿次：第 5 稿（2026-11-07；Codex 第一轮 `02-codex-spec-round1.md` 21 条 → 第 2 稿；第二轮 `04-codex-spec-round2.md` 14 条新问题与 14 条部分解决 → 第 3 稿，处置见 §0 与 §0.2；两轮上限已用完，残余风险由计划审计兜底。计划审计第一轮 `06-codex-plan-round1.md` 16 条回写 → 第 4 稿；第二轮 `08-codex-plan-round2.md` 4 条 P2（R2-1…R2-4）回写 → 第 5 稿；两轮都见 §0.2 末"第 4 稿（计划审计回写）"）
 - 上游：宏观工作台 P1 + P2 规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（分支 `claude/macro-workbench-bbde80` 第 4 稿）与计划 `docs/superpowers/plans/2026-11-06-macro-workbench.md`（第 2 稿，"共享契约"与 Task 14 / 15）；F4 判断层规格 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（分支 `claude/judgment-framework-50f9e1`）。
 - 依据：ChaosAI 拆解 `docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md` §7（传导链、美联储→中国资产）、§8（历史周期表）、§10、§11.6；总纲 `EXPERT_PLAYBOOK_AND_BRIEF.md` §5。
 - 审计目录：`docs/audits/2026-11-07-macro-p3-p4/`。设计稿：§16。
@@ -56,6 +56,8 @@
 
 计划 `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md` 的 Codex 审计第一轮（`docs/audits/2026-11-07-macro-p3-p4/06-codex-plan-round1.md`，结论 not ready）16 条全部回写；计划的代码、测试与本规格同步修改。
 
+**第 5 稿**：审计第二轮（`docs/audits/2026-11-07-macro-p3-p4/08-codex-plan-round2.md`，结论 ready with P2 fixes；16 条中 14 条已解决、#6 / #12 部分解决）新提 4 条 P2，处置为表末 R2-1…R2-4。
+
 | # | 级别 | 处置 | 落点 |
 |---|---|---|---|
 | P1-1 | P1 | `macro_claim_explanation` 先对已有运行行 `SELECT … FOR UPDATE` 再读状态；完成登记、终态、结算标记、过期四个 RPC 同样先锁该行。过期认领因此不会把并发提交的 `rejected` / `failed` 改成 `abandoned`，也不会在并发 `accepted` 后写坏投影。集成测试覆盖"终态先提交 / 认领先提交 / 过期函数等锁"三种先后 | §4.4 |
@@ -74,6 +76,10 @@
 | P2-14 | P2 | 新 RPC `macro_expire_explanations(p_user_id)`：把该用户超过 5 分钟的 `running` 行改 `abandoned`（投影 `failed {abandoned}`）；`GET /explanations` 读之前用 admin 客户端调用，页面刷新即可收敛；面板失败态以新 `request_id` 重新生成。迁移 RPC 共八个 | §4.4、§6.3 |
 | P2-15 | P2 | 快照 id 未被 `observationsByIds` 解析（未知或不再是 ok）→ 该区域快照不完整：记录 `snapshot_rows` 读取 `missing`，该区域所有快照取值记 `truncated` 并返回空，绝不把比较期提升为 `latest`、也不回退到 `latestObservations` | §4.3、§4.5 |
 | P2-16 | P2 | 解读清单冻结交给模型的确切事实列表（`body.facts`）；`subjectFacts` / `explanationFacts` 只读它；离线测试只凭已存清单重建模型输入并与实际提示逐字相等 | §4.5、§6.1、§6.3 |
+| R2-1 | P2 | 已持久化的完成可以不经提供方恢复：成功调用登记为完成信封 `{content, provider, model, prompt_version, validator_version, accounting}`；认领 RPC 的 5 分钟放弃与 `macro_expire_explanations` 跳过已登记完成（`raw_output` 为 JSON 对象）的 `running` 行；POST 幂等重放遇该行 → 只凭信封与清单冻结事实重新校验 / 渲染并 `finish`（校验器版本与信封不同 → `failed {validator_version_changed}`），从不调提供方，再对未结算载荷原样结算；`GET /explanations` 在过期之前对本人至多 3 行做同样的恢复。测试：finish 失败 → 重放 → `accepted` / `rejected` 投影，提供方恰好调用一次 | §4.4、§6.3 |
+| R2-2 | P2 | `macro_finish_explanation` 增加 `p_finalize_payload`：行上 `finalize_payload` 为空时在同一事务内写入（running、abandoned 与幂等分支），已有值绝不覆盖；`macro_record_completion` 失败而 finish 成功时载荷仍落库。测试：登记失败、finish 成功、结算失败 → 恢复按已存载荷结算并标记，不按当前定价重算 | §4.4、§6.3 |
+| R2-3 | P2 | 偏差枚举：只凭时间戳游标越过任何满页一律 `incomplete:true`（页尾 `[…, T+1, T]` 时页外仍可能有同为 T 的卡片），继续翻页收集；稳定游标 `(as_of, judgment_id)` 仍是给 F4 的开放项，提供后取消。新增"页尾单条 T"夹具 | §6.4 |
+| R2-4 | P2 | 结算核对不依赖 `finalizeUsageRun` 的错误：该封装只抛 `usage_audit_invariant`（55000 冲突）或 `usage_audit_unavailable`（含 `usage run not found` 与瞬时错误）。新增 `scripts/macro/strategy-reconcile.ts`（逻辑 `src/lib/macro/strategy/reconcile.ts`）按 `usage_events.idempotency_key` 查行：absent → 标记（模型从未调用）；pending → 原样 finalize 后标记；与载荷一致的终态 → 标记；不一致的终态 → 留人工。单测用真实封装 + 假客户端；runbook §4 按此重写 | §11、§13 |
 
 ---
 
@@ -253,11 +259,11 @@ RPC（全部 `security definer`、`set search_path = public`，`revoke execute �
 - `macro_publish_review(p_region, p_month, p_expected_generation, p_cutoff, p_status, p_manifest_id, p_manifest_hash, p_facts, p_method_version, p_code_version)`：对 `(region, month)` 事务级咨询锁 → 按 `(region, month, manifest_hash)` 取或插入结果行 → 读当前指针（不存在视为 `generation=0, cutoff=null, result_id=null`）：① 指针已指向该结果 → `outcome='replayed'`（不前移，无论期望代际）；② `generation <> p_expected_generation` → `outcome='stale'`；③ 当前 `cutoff` 非空且 `p_cutoff < cutoff` → `outcome='stale'`；④ 否则指针指向该结果、`generation+1`（首次发布得 1）、`cutoff = p_cutoff` → `outcome='advanced'`。每次调用都在同一事务内写一条尝试日志（`ok`/`replayed`/`stale`）；`stale` 是返回值，不抛异常。返回 `{result_id, generation, outcome}`。
 - `macro_record_review_attempt(p_region, p_month, p_status, p_error)`：只记失败尝试（计算或清单阶段的异常）。
 - 改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `SELECT … FOR UPDATE` 锁该行再读状态，彼此串行；过期认领不会覆盖并发提交的终态（第 4 稿 P1-1）。
-- `macro_claim_explanation(p_user_id, p_request_id, p_payload_hash, p_subject_kind, p_subject_id, p_locale, p_manifest_id)`：对 `(user_id, request_id)` 加事务级咨询锁并锁定已有运行行；已存在：`payload_hash` 不同 → 抛 `payload_conflict`；`running` 且 `claimed_at` 早于 5 分钟 → 原子改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回 `{outcome:'existing', …}`；其他 → `{outcome:'existing', explanation_id, usage_audit_key, projection}`；不存在 → 生成 `explanation_id`、`usage_audit_key = explanation_id::text`，插入 `running` 运行行与投影，返回 `{outcome:'claimed', explanation_id, usage_audit_key, projection}`。**只有 `claimed` 的调用方可以进入计费与模型调用。**
+- `macro_claim_explanation(p_user_id, p_request_id, p_payload_hash, p_subject_kind, p_subject_id, p_locale, p_manifest_id)`：对 `(user_id, request_id)` 加事务级咨询锁并锁定已有运行行；已存在：`payload_hash` 不同 → 抛 `payload_conflict`；`running`、`claimed_at` 早于 5 分钟且未登记完成（`raw_output` 不是 JSON 对象）→ 原子改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回 `{outcome:'existing', …}`（已登记完成的行留给完成恢复，第 5 稿 R2-1）；其他 → `{outcome:'existing', explanation_id, usage_audit_key, projection}`；不存在 → 生成 `explanation_id`、`usage_audit_key = explanation_id::text`，插入 `running` 运行行与投影，返回 `{outcome:'claimed', explanation_id, usage_audit_key, projection}`。**只有 `claimed` 的调用方可以进入计费与模型调用。**
 - `macro_record_completion(p_explanation_id, p_raw_output, p_finalize_payload)`：提供方返回（或抛错、或 `beginUsageRun` 失败）后、校验与终态之前调用；对 `running` 或 `abandoned` 行写 `raw_output` 与 `finalize_payload`；已登记同值 → 无操作；已登记不同值或其他状态 → `invalid_transition`。使计量在之后任何失败下都可恢复。
-- `macro_finish_explanation(p_explanation_id, p_state, p_provider, p_model, p_prompt_version, p_validator_version, p_raw_output, p_validation, p_rendered, p_failure_codes, p_accounting)`：`running → accepted/rejected/failed` 写运行行与投影；行已处于**同一**终态且 `raw_output` 相同 → 返回现有投影（幂等）；行已处于其他终态 → 抛 `invalid_transition`；行为 `abandoned` → 只写 `late_output` 与 `accounting`（投影保持 `failed`），返回投影。
+- `macro_finish_explanation(p_explanation_id, p_state, p_provider, p_model, p_prompt_version, p_validator_version, p_raw_output, p_validation, p_rendered, p_failure_codes, p_accounting, p_finalize_payload)`：`running → accepted/rejected/failed` 写运行行与投影；行已处于**同一**终态且 `raw_output` 相同 → 返回现有投影（幂等）；行已处于其他终态 → 抛 `invalid_transition`；行为 `abandoned` → 只写 `late_output` 与 `accounting`（投影保持 `failed`），返回投影。三个非错误分支都在 `finalize_payload` 为空时写入 `p_finalize_payload`，已有值绝不覆盖（第 5 稿 R2-2）。
 - `macro_mark_finalized(p_explanation_id)`：用 `finalize_payload` 结算成功后置 `finalized=true`（幂等）；要求已登记载荷，状态不限（含 finish 失败仍为 `running` 的行与 `abandoned` 行）。运维脚本列出 `finalize_payload` 非空且 `finalized=false` 的全部运行行，按载荷**原样**重试 `finalizeUsageRun`（不按当前定价 / 汇率重算，不重跑模型），成功后标记。
-- `macro_expire_explanations(p_user_id)`：把该用户 `claimed_at` 早于 5 分钟的 `running` 行改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回条数；`GET /explanations` 读取前调用，使进程死亡后的请求在页面刷新时收敛。
+- `macro_expire_explanations(p_user_id)`：把该用户 `claimed_at` 早于 5 分钟且未登记完成的 `running` 行改 `abandoned`、投影 `failed`（`failure_codes=['abandoned']`），返回条数；`GET /explanations` 读取前调用，使进程死亡后的请求在页面刷新时收敛。
 
 迁移共八个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`。
 
@@ -431,19 +437,19 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 **请求流程**（`POST /api/macro/strategy/explanations`，body `{request_id, subject:{kind:'snapshot'|'review', id}, locale}`）：
 处理顺序（§9.1 能力矩阵的前两层先于一切）：
 1. `getServerSupabase().auth.getUser()`（无 → 401）→ `MACRO_STRATEGY_ENABLED`（关 → 404）→ body ajv → `payload_hash = sha256(canonicalJson({subject, locale}))`。
-2. **幂等重放**：服务端用 admin 客户端查 `(user_id, request_id)` 的运行行；存在 → `payload_hash` 不同 → 409 `payload_conflict`，否则经 `macro_claim_explanation` 返回其投影（含超时 `abandoned` 处理）——在代码版本、底座与主体检查之前（重放不需要新清单与代码版本）。
+2. **幂等重放**：服务端用 admin 客户端查 `(user_id, request_id)` 的运行行；存在 → `payload_hash` 不同 → 409 `payload_conflict`，否则先做**完成恢复**（行为 `running` 且已登记完成信封 → 只凭信封与清单冻结事实重新校验 / 渲染并 `finish`，校验器版本已变 → `failed {validator_version_changed}`；行上有未结算载荷 → 原样结算；绝不再调提供方，第 5 稿 R2-1），再经 `macro_claim_explanation` 返回其投影（含超时 `abandoned` 处理）——在代码版本、底座与主体检查之前（重放不需要新清单与代码版本）。
 3. 代码版本（缺失 → 503 `code_version_unavailable`）、底座（端口为 null → 503）与主体检查：快照须为非 failed 快照；复盘主体 id 是不可变的复盘结果 `result_id`（`StrategyDb.reviewResult(id)`，anon 读 `macro_review_results`），须为存在的结果行——不用 `<region>:<YYYY-MM>` 指针键，指针前移后旧解读仍绑定旧结果。构造事实清单（§4.5"快照解读的清单"或复盘结果的清单，`facts` 冻结交给模型的事实列表）→ `macro_put_manifest(kind 'explain_facts')`；模型输入只由已存清单重建。
 4. LLM 与配额（与 `src/app/api/perspectives/[ticker]/route.ts` 一致的顺序）：`resolveUserLlm()`（null → 该路由同样的"未配置模型"响应）→ 非 BYO 时 `checkQuota('perspectives')`：`!quota.allowed` → 429 `quota_exceeded`（`limit === -1` 表示不限；`checkQuota` 抛错按该路由的 fail-open 规则）；BYO 跳过特性配额。
 5. **认领**：`macro_claim_explanation(...)` → `outcome='existing'` → 直接返回投影（并发请求的输家在此停止，不进入计费）；`outcome='claimed'` → 继续，拿到 RPC 生成的 `explanation_id` 与 `usage_audit_key`。
 6. `beginUsageRun(userId, usageAuditKey, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`。失败 = **结果不明**（RPC 可能已提交）：同一审计键 `macro_record_completion(null, 失败结算载荷)` → `macro_finish_explanation('failed', failure_codes=['usage_audit_unavailable' 或成本错误码])` → 尝试 `finalizeUsageRun(..., failed)`，成功才 `macro_mark_finalized` → 该路由同样的 `cost_quota` 响应。
-7. `runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call})`（与该路由同一 limiter 的 `runWithBudgetRetry`）。**提供方返回（或抛错）后立即** `macro_record_completion(raw_output, finalize_payload)`：结算载荷 = `finalizeUsageRun` 的完整参数（状态、提供方、模型、聚合计量、成本、定价版本、汇率、`usageEstimated`、`byo`），在此刻计算一次并持久化。异常路径：`meteredUsageFromError` → 登记 `failed` 载荷 → `macro_finish_explanation('failed', accounting)`。
-8. 解析 + 校验 → `accepted` 或 `rejected`，两种都是**已完成**的模型调用：`macro_finish_explanation(state, raw, validation, rendered|failure_codes, accounting)`。随后在 finally 路径里用已登记的载荷原样 `finalizeUsageRun`——finish 或校验抛错也执行（已发生的提供方成本不退；BYO 与 admin 豁免沿用已有规则）——成功后才 `macro_mark_finalized`。结算失败不影响用户响应，运行行保留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试（含 `abandoned` 行）。
+7. `runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call})`（与该路由同一 limiter 的 `runWithBudgetRetry`）。**提供方返回（或抛错）后立即** `macro_record_completion(raw_output, finalize_payload)`（成功时 `raw_output` 为完成信封 `{content, provider, model, prompt_version, validator_version, accounting}`）：结算载荷 = `finalizeUsageRun` 的完整参数（状态、提供方、模型、聚合计量、成本、定价版本、汇率、`usageEstimated`、`byo`），在此刻计算一次并持久化。异常路径：`meteredUsageFromError` → 登记 `failed` 载荷 → `macro_finish_explanation('failed', accounting)`。
+8. 解析 + 校验 → `accepted` 或 `rejected`，两种都是**已完成**的模型调用：`macro_finish_explanation(state, raw, validation, rendered|failure_codes, accounting, finalize_payload)`（载荷在登记失败时由 finish 落库）。随后在 finally 路径里用已登记的载荷原样 `finalizeUsageRun`——finish 或校验抛错也执行（已发生的提供方成本不退；BYO 与 admin 豁免沿用已有规则）——成功后才 `macro_mark_finalized`。结算失败不影响用户响应，运行行保留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试（含 `abandoned` 行）。
 
-读取：`GET /api/macro/strategy/explanations?subject_kind&subject_id`（复盘的 `subject_id` = `result_id`）→ 先以 admin 客户端调用 `macro_expire_explanations(user_id)`（超过 5 分钟仍 `running` 的本人请求 → `abandoned` / 投影 `failed`），再返回本人投影最近 20 条（`private, no-store`）；页面刷新即可收敛死掉的请求，面板用新 `request_id` 重新生成。POST、GET、重放都返回同一投影形状。
+读取：`GET /api/macro/strategy/explanations?subject_kind&subject_id`（复盘的 `subject_id` = `result_id`）→ 先对本人至多 3 条已登记完成的 `running` 行做完成恢复（同上，不调提供方），再以 admin 客户端调用 `macro_expire_explanations(user_id)`（超过 5 分钟仍 `running` 且未登记完成的本人请求 → `abandoned` / 投影 `failed`），再返回本人投影最近 20 条（`private, no-store`）；页面刷新即可收敛死掉的请求，面板用新 `request_id` 重新生成。POST、GET、重放都返回同一投影形状。
 
 ### 6.4 偏差案例 `deviations.ts`（`macro-deviations/1`，仅判断层开启）
 
-- 枚举：先 `GET /api/judgments?…types=macro_regime` 取最新卡片 id，再 `GET /api/judgments/[id]/history?limit=500&before=…` 分页**直到空页**；单区域累计超过 5000 条 → 返回 `{incomplete:true}` 并在页面显示"案例列表不完整"。游标 `before` = 上一页末条 `as_of`（排他）：满页且页尾两条 `as_of` 相同（同一 `as_of` 的其余卡片可能被跳过，无法证明完整）或游标不前进 → 停止并 `{incomplete:true}`。稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项，提供后改用。只保留 `lifecycle='settled'` 且结算结果为未命中（`settlement.outcome='miss'`）。
+- 枚举：先 `GET /api/judgments?…types=macro_regime` 取最新卡片 id，再 `GET /api/judgments/[id]/history?limit=500&before=…` 分页**直到空页**；单区域累计超过 5000 条 → 返回 `{incomplete:true}` 并在页面显示"案例列表不完整"。游标 `before` = 上一页末条 `as_of`（排他）：只凭时间戳游标越过任何**满页** → `{incomplete:true}`（页尾 `as_of` 为 T 时，页外可能还有同为 T 的卡片，即使页尾为 `[…, T+1, T]`，无法证明完整），继续翻页收集；游标不前进 → 停止并 `{incomplete:true}`（第 5 稿 R2-3）。稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项，提供后改用并取消满页标记。只保留 `lifecycle='settled'` 且结算结果为未命中（`settlement.outcome='miss'`）。
 - 每条：`GET /api/judgments/[id]` 取 `{judgment, settlements}`：登记值 = `judgment.inputs` 中 `macro_observation` 输入的冻结投影 `snapshot{series_id, period_end, vintage_id, value}` 与 `macro_snapshot` 输入的冻结投影；结算值 = 最新结算行证据中的重算输入（`observation_refs`）。证据缺这一字段 → 案例 `evidence_incomplete`，不自行重算。
 - 范围：只针对 `macro_regime@v1`（其他方法 / 版本的卡片跳过）。
 - 匹配键 = `(series_id, period_end)`，角色 = 该观测在登记快照中的用途（`latest` / `comparison`，由 `period_end` 与该序列登记时最新期比较得出；结算侧同理）。分类穷尽：
@@ -507,7 +513,7 @@ F4 读取经 `f4-client.ts`（服务端 `fetch` 本站 `/api/judgments*`，带�
 src/lib/macro/strategy/
   contract.ts  port.ts  wiring.ts（WP-S6）  manifest.ts  numeric.ts
   transmission.ts  playbooks.ts  policy-events.ts  policy-response.ts  policy-response-explain.ts  cycle-table.ts
-  facts.ts  review.ts  explain-request.ts  explain-render.ts  explain-validate.ts  deviations.ts  f4-client.ts  flags.ts
+  facts.ts  review.ts  explain-request.ts  explain-render.ts  explain-validate.ts  deviations.ts  f4-client.ts  flags.ts  reconcile.ts
   db.ts（四组 RPC + 读取；supabase + memory）
   data/{transmission-v1,playbooks-v1,response-dims-v1}.ts  prompts/macro-explain-v1.{zh,en}.md
   *.test.ts  replay.test.ts  strategy.integration.test.ts（S4_TEST_STATE；criticalSuites）
@@ -519,6 +525,7 @@ src/components/macro/strategy/
   DeviationCases.tsx  ExplanationPanel.tsx  EvidencePairDrawer.tsx  DependencyState.tsx  F4Summary.tsx  strategy-view-model.ts  use-strategy-t.ts
 messages/{zh,en}/macroStrategy.json
 supabase/migrations/20261115090000_macro_strategy.sql
+scripts/macro/strategy-reconcile.ts（结算核对，第 5 稿 R2-4）
 docs/runbooks/macro-strategy.md
 ```
 
@@ -546,9 +553,9 @@ docs/runbooks/macro-strategy.md
 | F4 卡片对应较早快照 | 不标记，显示对应快照日期 |
 | LLM 失败 / 未通过校验 | `failed` / `rejected`；计量按 §6.3 |
 | 解读请求重复 / 载荷冲突 / 超时 | 返回原投影 / 409 / `failed(abandoned)`（再次认领或 `GET` 时过期） |
-| 解读完成后存储失败 | 原始输出与结算载荷已由 `macro_record_completion` 持久化；`finalizeUsageRun` 仍执行；未结算行按载荷原样重试 |
+| 解读完成后存储失败 | 原始输出与结算载荷已由 `macro_record_completion` 持久化（登记失败时由 `finish` 落载荷）；`finalizeUsageRun` 仍执行；finish 失败的行由重放或 `GET` 只凭已存输出完成（不再调提供方）；未结算行由 `scripts/macro/strategy-reconcile.ts` 按 `usage_events` 行分类处理 |
 | 复盘并发、过期代际、旧截止 | 咨询锁；`stale_generation` / 不前移；尝试日志 |
-| 偏差枚举超上限 | `incomplete:true` |
+| 偏差枚举超上限，或越过满页（时间戳游标） | `incomplete:true` |
 
 ---
 
@@ -557,9 +564,9 @@ docs/runbooks/macro-strategy.md
 - 纯函数（vitest，`memoryStrategyPort` 夹具）：`manifest`（截止选择、快照 vs 历史来源、哈希稳定、同 created_at 定序）；`transmission`（五种节点态、同期 / 错期推导）；`playbooks`（触发条件 = 规则表投影与排序；三条件标记矩阵）；`policy-events`（单一目标、衔接成功、衔接缺上限 / 下限 / 间隔 > 5 天 → 缺口）；`policy-response`（N=1/3/6 端点、例子 2022-03-16、完整窗口资格、跨方向贪心、排除原因、n<5、QE/QT、受限列、非正基值、type-7、推导端点）；`cycle-table`（行动段 vs P2 周期例子、左删失、进行中、三种边界、7 天间隔、覆盖外、degenerate、别名解析）；`review`（七节、无快照、缺基线、及时性按月末、修订只覆盖最新期）；`explain-render`（模板中英、格式）；`explain-validate`（数字：ASCII / 全角 / 中文数字 / 英文数词 / % / bp / pp；禁用词逐条；象限词；结构；合法文本通过）；`deviations`（四种差异、证据缺字段、分页到空页、上限 incomplete）。
 - `replay.test.ts`：提交的清单夹具（每个参数值一份，参数取自清单 `params`）→ 传导、矩阵、历史表、复盘视图与期望 JSON 完全一致（读清单，不调端口）；解读：只凭已存 `explain_facts` 清单重建模型输入。
 - 禁用词扫描只覆盖生产文本面：`src/lib/macro/strategy/**/*.ts` 中非 `*.test.ts` 且非 `explain-validate.ts`（策略常量）的文件、`src/components/macro/strategy/**/*.tsx`、`messages/*/macroStrategy.json`、`src/lib/macro/strategy/data/**`、`prompts/**`；校验器的反例夹具留在 `explain-validate.test.ts`，由运行时拒绝测试覆盖。
-- 数据库（`test:db`，`S4_TEST_STATE`，`criticalSuites`）：六表 grants / RLS（anon 读清单与复盘；读不到运行表、尝试表；用户只读自己的投影）；`macro_put_manifest` 幂等；`macro_publish_review`（同身份重放、A→B→A 指针前移语义、过期代际、旧截止不前移、并发）；`macro_claim_explanation`（载荷冲突、超时放弃、重复返回、与终态并发的行锁）；`macro_record_completion`；`macro_finish_explanation` 状态机；`macro_mark_finalized`（需已登记载荷）；`macro_expire_explanations`。
+- 数据库（`test:db`，`S4_TEST_STATE`，`criticalSuites`）：六表 grants / RLS（anon 读清单与复盘；读不到运行表、尝试表；用户只读自己的投影）；`macro_put_manifest` 幂等；`macro_publish_review`（同身份重放、A→B→A 指针前移语义、过期代际、旧截止不前移、并发）；`macro_claim_explanation`（载荷冲突、超时放弃、已登记完成不放弃、重复返回、与终态并发的行锁）；`macro_record_completion`；`macro_finish_explanation` 状态机与载荷补写（不覆盖）；`macro_mark_finalized`（需已登记载荷）；`macro_expire_explanations`（跳过已登记完成）。
 - 迁移：`npm run test:migrations`；锁文件追加。
-- API：401；参数白名单；能力矩阵五态；判断层关闭响应无判断字段；解读：重放先于主体检查、409、429、假提供者返回含数字文本 → `rejected` 且仍 `finalizeUsageRun(completed)`。
+- API：401；参数白名单；能力矩阵五态；判断层关闭响应无判断字段；解读：重放先于主体检查、409、429、假提供者返回含数字文本 → `rejected` 且仍 `finalizeUsageRun(completed)`；finish 失败 → 重放 → 投影完成且提供方只调用一次；登记 + 结算失败 → 恢复按已存载荷结算。结算核对：真实 `finalizeUsageRun` 封装 + 假客户端。
 - 端到端（WP-S6 后）：三个子路由；边界切换；解读拒绝态。
 
 ---
@@ -568,7 +575,7 @@ docs/runbooks/macro-strategy.md
 
 - 矩阵与历史表：输入 ≤ 12 条序列 × ≤ 7000 日点；p95 < 500 ms（清单命中缓存时 < 100 ms）。
 - 复盘 cron 每月一次、每区域一个单元。
-- 解读结算重试：`finalize_payload` 非空且 `finalized=false` 的运行行（任何状态）按载荷原样重试 `finalizeUsageRun`，成功后 `macro_mark_finalized`（runbook §4）。
+- 解读结算核对：`finalize_payload` 非空且 `finalized=false` 的运行行（任何状态）由 `scripts/macro/strategy-reconcile.ts` 按 `usage_events.idempotency_key` 分 absent / pending / settled / conflict 处理：pending 原样重试 `finalizeUsageRun`，absent 与一致的终态直接 `macro_mark_finalized`，不一致的终态留人工（runbook §4；不依赖封装的错误码）。
 - 环境变量：`MACRO_STRATEGY_ENABLED`（新）、`MACRO_JUDGMENTS_ENABLED`、`CRON_SECRET`；无新密钥。
 - 运行手册 `docs/runbooks/macro-strategy.md`：能力矩阵、接线步骤（WP-S6）、复盘重算、解读失败码说明、目录增补流程。
 

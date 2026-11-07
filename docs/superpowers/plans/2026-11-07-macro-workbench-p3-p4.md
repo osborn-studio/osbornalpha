@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（第 4 稿；§0 / §0.2 为 Codex 两轮规格处置，§0.2 末"第 4 稿（计划审计回写）"为计划审计 16 条的回写）：策略清单与冻结输入、政策事件合并、实时传导流、剧本库（静态假设框架）、政策反应矩阵、政策行动段 × 资产表、月度复盘（不可变结果 + 当前指针）、LLM 解读（系统模板事实句 + 模型无数字假设句 + 确定性校验 + 预先认领的幂等计量）、偏差案例（F4 读接口）、四个页面与能力矩阵。WP-S6（接线 P1+P2 / F4）不在本计划内：P1+P2 与 F4 合并到 main 后另行 rebase 接线。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（第 5 稿；§0 / §0.2 为 Codex 两轮规格处置，§0.2 末"第 4 稿（计划审计回写）"为计划审计第一轮 16 条与第二轮 R2-1…R2-4 的回写）：策略清单与冻结输入、政策事件合并、实时传导流、剧本库（静态假设框架）、政策反应矩阵、政策行动段 × 资产表、月度复盘（不可变结果 + 当前指针）、LLM 解读（系统模板事实句 + 模型无数字假设句 + 确定性校验 + 预先认领的幂等计量）、偏差案例（F4 读接口）、四个页面与能力矩阵。WP-S6（接线 P1+P2 / F4）不在本计划内：P1+P2 与 F4 合并到 main 后另行 rebase 接线。
 
 **Architecture:** 一个迁移 `20261115090000_macro_strategy.sql` 建六表与八个 `security definer` RPC（不引用 P1 / F4 表）；`src/lib/macro/strategy/**` 只依赖窄端口 `StrategyReadPort`（P1+P2 契约的结构镜像，生产实现在 WP-S6 加入，此前 `strategyPort()` 返回 `null` → 503）与 `StrategyDb`（本模块六表，Supabase + 内存两实现）；所有计算是读"策略清单"的纯函数；LLM 与 F4 读取都经注入的依赖，测试用假实现。
 
@@ -70,6 +70,7 @@ src/components/macro/strategy/{strategy-messages.test.ts,strategy-view-model.ts,
 src/components/macro/strategy/{DependencyState,EvidencePairDrawer,F4Summary,TransmissionFlow,PlaybookGrid,PolicyResponseMatrix,CycleReturnsTable,ReviewIndex,DeviationCases,ExplanationPanel,ReviewView,StrategyScreens}.tsx （Task 13）
 src/app/(app)/intel/macro/{transmission,history,review,review/[region]/[month]}/page.tsx  src/app/(app)/intel/macro/transmission/strategy-pages.test.ts （Task 14）
 src/lib/macro/strategy/forbidden-terms.test.ts  docs/runbooks/macro-strategy.md          （Task 14）
+src/lib/macro/strategy/reconcile.ts  reconcile.test.ts  scripts/macro/strategy-reconcile.ts   结算核对（usage_events 按审计键分类；Task 14）
 docs/audits/2026-11-07-macro-p3-p4/10-implementation-log.md （指挥方在每个任务复审后追加一行；实施代理不写，任何任务都不改它）
 ```
 
@@ -265,21 +266,29 @@ export interface StrategyDb{
  /** RPC macro_record_completion: durable raw output + the exact finalizeUsageRun payload, right after the provider returns
   *  (or throws, or begin fails) and before validation / finish; running or abandoned rows; same values → no-op. */
  recordCompletion(a:{explanationId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;
- /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only. */
- finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown}):Promise<ExplanationProjection>;
+ /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only.
+  *  finalizePayload is stored atomically when the row has none yet (a failed recordCompletion), never overwritten (plan audit R2-2). */
+ finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown;finalizePayload:Record<string,unknown>|null}):Promise<ExplanationProjection>;
  markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; needs a recorded finalize payload; any state; idempotent
- /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago → abandoned (projection failed). */
+ /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago WITHOUT a recorded completion → abandoned
+  *  (projection failed); a row whose raw output is recorded is left for completion recovery (plan audit R2-1). */
  expireExplanations(userId:string):Promise<number>;
+ /** Admin read of one run row for completion recovery and settlement (plan audit R2-1 / R2-2); non-uuid → null without a query. */
+ runDetail(explanationId:string):Promise<RunDetail|null>;
+ /** Admin: ids of the user's running rows with a recorded raw output, oldest claim first, at most `limit` (GET recovery). */
+ recoverableRuns(userId:string,limit:number):Promise<string[]>;
  explanationsOf(client:'session',subjectKind:'snapshot'|'review',subjectId:string,limit:number):Promise<ExplanationProjection[]>;   // user session client (RLS)
 }
 export function supabaseStrategyDb(c:{admin:SupabaseClient;anon:SupabaseClient;session?:SupabaseClient}):StrategyDb;
+/** A run row as completion recovery reads it (service role). */
+export interface RunDetail{explanation_id:string;user_id:string;state:ExplanationState;locale:'zh'|'en';manifest_id:string;usage_audit_key:string;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean}
 export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean;late_output:unknown};
 export function memoryStrategyDb(opts?:{now?:()=>Date}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null};   // _userId sets the RLS identity for explanationsOf; _run inspects a run row (tests)
 ```
 
-`db.ts` 另有骨架之外的导出（签名本身不变）：`StrategyTransport`、`SelectSpec`、`ReadRole`、`StrategyTable`、`strategyDbOver(transport)`、`supabaseTransport`、`toStrategyDbError`、`projectionFrom`、`MAX_SELECT`——让同一份映射代码在集成测试里跑 node-postgres（`supabaseStrategyDb(c) = strategyDbOver(supabaseTransport(c))`）。哈希来自 `hash.ts`（Task 3）：`canonicalJson`、`sha256Hex`；`manifest.ts`（Task 4）再导出二者并加 `manifestHash(body)`。
+`db.ts` 另有骨架之外的导出（签名本身不变）：`StrategyTransport`、`SelectSpec`、`ReadRole`、`StrategyTable`、`strategyDbOver(transport)`、`supabaseTransport`、`toStrategyDbError`、`projectionFrom`、`MAX_SELECT`、`hasRecordedCompletion`、`RECOVERY_SCAN`——让同一份映射代码在集成测试里跑 node-postgres（`supabaseStrategyDb(c) = strategyDbOver(supabaseTransport(c))`）。哈希来自 `hash.ts`（Task 3）：`canonicalJson`、`sha256Hex`；`manifest.ts`（Task 4）再导出二者并加 `manifestHash(body)`。
 
-RPC 语义见规格 §4.4（第 4 稿，逐字）。`claimExplanation` 先对运行行 `FOR UPDATE` 再读状态；遇 `running` 且 `claimed_at` 早于 5 分钟 → RPC 原子改 `abandoned`（投影 `failed`、`failure_codes=['abandoned']`）并返回 `existing`。迁移一共八个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`。改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `FOR UPDATE` 锁该行。
+RPC 语义见规格 §4.4（第 5 稿，逐字）。`claimExplanation` 先对运行行 `FOR UPDATE` 再读状态；遇 `running`、`claimed_at` 早于 5 分钟且**未登记完成**（`raw_output` 不是 JSON 对象）→ RPC 原子改 `abandoned`（投影 `failed`、`failure_codes=['abandoned']`）并返回 `existing`；已登记完成的 `running` 行不放弃，留给完成恢复（计划审计 R2-1）。`finishExplanation` 带结算载荷：行上尚无载荷时原子写入，已有则不覆盖（计划审计 R2-2）。`RunDetail`（`runDetail` 的返回类型）属于上面的接口清单。迁移一共八个 RPC：`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`。改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `FOR UPDATE` 锁该行。
 
 ### 依赖注入（Task 11 / 12）
 
@@ -313,6 +322,12 @@ export class LlmCallError extends Error{constructor(message:string,readonly acco
 /** handleExplainRequest(d:ExplainDeps,userId,body):Promise<{status,body}> (Task 11); Task 12 passes productionLlmDeps(userId). */
 /** codeVersion null = not configured: 503 code_version_unavailable, checked only after the idempotent replay. */
 export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDeps;now:()=>Date;codeVersion:string|null}
+/** Completion recovery (plan audit R2-1 / R2-2; never calls the provider, never throws): a running row with a recorded raw
+ *  output is validated / rendered again from that output and the manifest's frozen facts and finished (validator version
+ *  changed → failed {validator_version_changed}); then a recorded, unsettled finalize payload is finalized verbatim and
+ *  marked. POST replay runs it for the replayed run; GET /explanations runs recoverUserExplanations (≤ 3 rows). */
+export function recoverExplanation(d:Pick<ExplainDeps,'db'|'llm'>,explanationId:string):Promise<void>;
+export function recoverUserExplanations(d:Pick<ExplainDeps,'db'|'llm'>,userId:string,limit?:number):Promise<number>;
 ```
 
 ### 复盘截止规则（规格 §4.5、§6.2，第 3 稿）
@@ -344,7 +359,7 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 | §5.6 | 十进制、单次浮点、type-7 四分位、展示层舍入 | 4、13 |
 | §6.1 | 事实（模板 + 槽位、`fact_id` 规则、快照解读清单） | 9 |
 | §6.2 | 月度复盘（次月 3 日截止 / 本月 3 日基线、七节、行动段新开 / 结束、`runReview`、cron、判断节读时） | 4（`monthCutoff`）、9、12、13 |
-| §6.3 | LLM 解读（模板事实句、无数字假设、校验步骤 1–7、预先认领、只有 claimed 计费、BYO、`limit=-1`、拒绝计完成、finalize 可重试） | 1、3、10、11、12（`llm-deps.ts`）、13 |
+| §6.3 | LLM 解读（模板事实句、无数字假设、校验步骤 1–7、预先认领、只有 claimed 计费、BYO、`limit=-1`、拒绝计完成、finalize 可重试、已登记完成的恢复不再调提供方） | 1、3、10、11、12（`llm-deps.ts`、GET 恢复）、13 |
 | §6.4 | 偏差案例（分页、5000 上限、`macro_regime@v1`、穷尽分类、证据缺字段、`settlement_id`） | 6（`f4-types.ts`）、11、12、13 |
 | §7 | 判断边界不变量 1–7 | 6、9、10、12、14 |
 | §8 | 十个路由、错误形状、`version` / `manifest_id` | 12 |
@@ -353,7 +368,7 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 | §10 | i18n 域、zh/en 键与占位符一致、禁用词 | 10（`FORBIDDEN_TERMS`）、13、14 |
 | §11 | 错误处理（截断、无快照、F4 不可用、载荷冲突、复盘并发、解读超时） | 1、4、6、7、11、12 |
 | §12 | 测试策略（数据库、单元、replay、API、词汇扫描） | 1、3–12、14 |
-| §13 | 性能与运维（环境变量、运行手册；LRU 见 D1） | 12、14 |
+| §13 | 性能与运维（环境变量、运行手册、结算核对脚本；LRU 见 D1） | 12、14 |
 | §14 | WP-S1…S5 与验收样例 1（利差）/ 2（判断层关闭无 F4 字段）/ 3（2022-03-16 → 2023-07-26 行动段）/ 4（"3""三成" → rejected） | WP-S1：1–3；S2：4–8；S3：9–11；S4：12；S5：13–14；样例 1：6；2：12、14；3：8；4：10、11 |
 | §15 | owner 默认（判断层默认关、受限列、`perspectives` 配额） | 2、7、8、11、12 |
 | §16 | Claude Design 画布 | 13（按画布布局；实页对照在 WP-S6 后） |
@@ -386,13 +401,15 @@ export interface ExplainDeps{db:StrategyDb;port:StrategyReadPort|null;llm:LlmDep
 | D16 | 接口在规格 §8 之外的增补：传导无任何 active 快照 → 404 `no_published_snapshot`；复盘详情加 `names`、`judgment_status`、`f4?`；`GET /explanations` 返回 `{items}` | 接受（§9.1 把复盘详情列为组合路由） |
 | D17 | 复盘判断节用 `selectF4Mark({card, detail, snapshotId:null}).summary`：非 `macro_regime@v1` 或非 open / settled 的卡显示"判断层暂不可用" | 接受 |
 | D18 | 词汇扫描用完整 `FORBIDDEN_TERMS`（含"将会""必然""odds""chance of""will rise"），比仓库约定的五个词更严 | 接受；命中时改写所在任务的数据 / 提示文件 |
-| D19 | F4 读接口细节未与 F4 实现核对：history 游标（`before` = 上一页末条 `as_of`，排他；满页且页尾与前一条 `as_of` 相同 → 无法证明完整 → `incomplete:true`；游标不前进 → `incomplete`）、响应接受 `{cards}` 或 `{items}`、`realized` 的形状、`f4.calibrationState.*` 的四个值 | WP-S6 接线时核对并改 `f4-client.ts` / 文案；**开放项**：请 F4 提供稳定游标 `(as_of, judgment_id)`，有了之后 `deviations.ts` 改用它并删去页尾并列兜底 |
+| D19 | F4 读接口细节未与 F4 实现核对：history 游标（`before` = 上一页末条 `as_of`，排他；只凭时间戳游标越过任何**满页** → 无法证明完整 → `incomplete:true`，继续翻页收集；游标不前进 → 停止并 `incomplete`；计划审计 R2-3）、响应接受 `{cards}` 或 `{items}`、`realized` 的形状、`f4.calibrationState.*` 的四个值 | WP-S6 接线时核对并改 `f4-client.ts` / 文案；**开放项**：请 F4 提供稳定游标 `(as_of, judgment_id)`，有了之后 `deviations.ts` 改用它，满页不再标记不完整 |
 | D20 | 画布对照（§14 WP-S5 退出条件）在 WP-S6 前只能看到"底座未就绪"态 | 数据态的浏览器走查放到 WP-S6 |
 | D21 | `numeric.ts` 用 BigInt 自实现十进制（P1 `decimal.ts` 不在 main） | WP-S6 可换回 P1 实现；`replay` 夹具哈希必须不变 |
-| D22 | 计划审计 #6–#8：解读结算的持久化 | 迁移新增 `finalize_payload` 列与 `macro_record_completion`：提供方返回（或抛错、或 begin 失败）后、校验 / finish 之前，先存原始输出与 `finalizeUsageRun` 的完整参数（含状态、定价版本、汇率、聚合计量）；finish 之后在 finally 路径里用存下的载荷原样 `finalize`，成功才 `markFinalized`（`macro_mark_finalized` 要求已登记载荷，任何状态都可）。恢复：对 `finalize_payload` 非空且 `finalized=false` 的行（含 `abandoned`、含 finish 失败仍为 `running` 的行）原样重试（runbook §4）。`recordCompletion` 自身失败时不阻断 finish / finalize，但该行无法标记已结算，按审计键人工核对 |
-| D23 | 计划审计 #14：进程死亡后的 `running` 投影 | 迁移新增 `macro_expire_explanations(p_user_id)`：`GET /explanations` 读之前用 admin 客户端调用，把该用户超过 5 分钟的 `running` 行改 `abandoned`（投影 `failed`、`['abandoned']`）；面板在 `running` 时提示"超过 5 分钟刷新即标记失败"，失败态用新的 `request_id` 重新生成 |
+| D22 | 计划审计 #6–#8：解读结算的持久化 | 迁移新增 `finalize_payload` 列与 `macro_record_completion`：提供方返回（或抛错、或 begin 失败）后、校验 / finish 之前，先存原始输出与 `finalizeUsageRun` 的完整参数（含状态、定价版本、汇率、聚合计量）；finish 之后在 finally 路径里用存下的载荷原样 `finalize`，成功才 `markFinalized`（`macro_mark_finalized` 要求已登记载荷，任何状态都可）。恢复：对 `finalize_payload` 非空且 `finalized=false` 的行（含 `abandoned`、含 finish 失败仍为 `running` 的行）原样重试（runbook §4，`scripts/macro/strategy-reconcile.ts`）。`recordCompletion` 自身失败时不阻断 finish / finalize；finish 在行上尚无载荷时原子写入同一载荷（计划审计 R2-2），所以之后的恢复仍按已存载荷结算、不重算定价 |
+| D23 | 计划审计 #14：进程死亡后的 `running` 投影 | 迁移新增 `macro_expire_explanations(p_user_id)`：`GET /explanations` 读之前用 admin 客户端调用，把该用户超过 5 分钟、**未登记完成**的 `running` 行改 `abandoned`（投影 `failed`、`['abandoned']`；已登记原始输出的行留给完成恢复，计划审计 R2-1）；面板在 `running` 时提示"超过 5 分钟刷新即标记失败"，失败态用新的 `request_id` 重新生成 |
 | D24 | 计划审计 #10：百分比变化的舍入 | 事实与视图都存精确比值 `'<末>/<基>'`（`numeric.ts::pctRatio`；事实单位 `pct_ratio`），展示时 `roundPctRatio` 只舍入一次（BigInt，远离零）；不再有 4 位小数的中间值 |
 | D25 | 计划审计 #11：事件源读取被截断 | `readPolicyEvents` 返回 `gaps:[{kind:'history_truncated', reason:<序列>, near:<截止日>}]`（`EventGap.kind` 增加该值）；历史表显示"事件序列读取被截断"而不是"没有行动段"；复盘第 4、5 节各放一条 `events_truncated` 事实；矩阵沿用读取状态整列 `missing` |
+| D26 | 计划审计 R2-1：已付费的完成无法投影 | 认领 RPC 与 `macro_expire_explanations` 跳过已登记 `raw_output` 的 `running` 行；`explain-request.ts::recoverExplanation` 只凭已存原始输出（完成信封 `{content, provider, model, prompt_version, validator_version, accounting}`）与清单冻结事实重新校验 / 渲染并 finish，绝不再调提供方；校验器版本与信封不同 → `failed {validator_version_changed}`；随后对未结算载荷原样 `finalize` 并标记。POST 幂等重放对该运行执行一次；`GET /explanations` 对本人至多 3 行执行（`recoverUserExplanations`），再过期、再读取 |
+| D27 | 计划审计 R2-4：结算核对 | `finalizeUsageRun` 只抛 `usage_audit_unavailable`（含 `usage run not found` 与瞬时错误）或 `usage_audit_invariant`（`usage run finalize conflict`），不能据此分类；`scripts/macro/strategy-reconcile.ts`（逻辑在 `src/lib/macro/strategy/reconcile.ts`，假客户端单测）按 `usage_events.idempotency_key` 查行分 absent / pending / settled / conflict 处理，runbook §4 按它重写 |
 
 已闭合（不再是开放项）：Part C 提出的"资产月末值在月末截止时不可得"——规格第 3 稿把复盘截止改为次月 3 日 `00:00:00Z`，Task 4 / 9 / 12 已按新规则实现与测试。
 
@@ -417,12 +434,14 @@ Part A 串行：Task 1 → 2 → 3。Task 1 只落迁移与数据库测试（不
 - Create (untracked, never commit): `.claude/scratch/db-one.ts`（若不存在）
 
 Notes for the implementer:
-- 规格 §4.4（第 4 稿）是唯一依据：六表、八个 `security definer` RPC（`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`）。另有一个**内部**辅助函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），它对 `public, anon, authenticated, service_role` 全部 revoke，不是 RPC。
+- 规格 §4.4（第 5 稿）是唯一依据：六表、八个 `security definer` RPC（`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`）。另有一个**内部**辅助函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），它对 `public, anon, authenticated, service_role` 全部 revoke，不是 RPC。
 - 迁移不引用 P1 / F4 的表（无外键出模块）；模块内的外键（结果 → 清单、指针 → 结果、运行 / 投影 → 清单）保留。`user_id` 不加 `auth.users` 外键。
 - RPC 用 `raise exception '<code>'` 抛错（SQLSTATE P0001，message 恰为代码）：`not_found`、`payload_conflict`、`invalid_transition`、`invalid_status`。表约束违例是 23514。
 - 改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `select … for update` 锁该行再读状态（计划审计 #1）：过期的认领不会覆盖并发提交的终态。集成测试用"一个连接开事务先执行 A、另一连接执行 B 必须等锁、提交后看 B 的结果"验证两种先后。
 - 结算持久化（计划审计 #6–#8）：`finalize_payload jsonb`（`status ∈ completed/failed` 的对象）由 `macro_record_completion` 在提供方返回后、校验 / 终态之前写入（`running` 或 `abandoned` 行；同值重复 = 无操作；已有不同值或其他状态 → `invalid_transition`）；`macro_mark_finalized` 只要求已登记载荷（任何状态，含 finish 失败仍为 `running` 的行与 `abandoned` 行）；未结算索引按 `finalize_payload is not null and finalized = false`。
-- `macro_expire_explanations(p_user_id)`（计划审计 #14）：把该用户 `claimed_at` 早于 5 分钟的 `running` 行改 `abandoned`、投影 `failed {abandoned}`，返回条数；`GET /explanations` 读之前调用。
+- `macro_finish_explanation` 多一个参数 `p_finalize_payload jsonb`（计划审计 R2-2）：行上 `finalize_payload` 为空时在同一事务内写入（running、abandoned 与幂等重放三个分支都如此），已有值绝不覆盖；`macro_record_completion` 失败而 finish 成功时，结算载荷因此仍落库，之后的恢复按它结算。
+- 已登记完成不放弃（计划审计 R2-1）：认领 RPC 的 5 分钟放弃与 `macro_expire_explanations` 都跳过 `raw_output is not null` 的 `running` 行（提供方已返回、原始输出已持久化），这些行由服务端的完成恢复（Task 11 `recoverExplanation`）只凭已存输出 finish。
+- `macro_expire_explanations(p_user_id)`（计划审计 #14）：把该用户 `claimed_at` 早于 5 分钟且未登记完成的 `running` 行改 `abandoned`、投影 `failed {abandoned}`，返回条数；`GET /explanations` 读之前调用。
 - "超过 5 分钟放弃"用 `now()` 判定；测试通过把 `claimed_at` 往回挪（`update … set claimed_at = claimed_at - make_interval(mins => n)`，测试连接是超级用户）使它可测，RPC 签名不加时钟参数。
 - `macro_publish_review` 里 `stale` 是返回值：函数正常返回、事务提交、尝试日志落一行 `stale`。指针不存在 = 代际 0。判定顺序固定：①指针已指向该结果 → `replayed`（无论期望代际）；②代际不等 → `stale`；③`p_cutoff` 早于当前 `cutoff` → `stale`；④前移。
 - 本地 harness 的 `auth.uid()` 读 `request.jwt.claim.sub`；测试以 `set local role authenticated` + `set_config('request.jwt.claim.sub', …, true)` 模拟登录用户。
@@ -441,8 +460,9 @@ Create `src/lib/macro/strategy/strategy.integration.test.ts`（Task 3 会在文�
 // log), macro_record_review_attempt, macro_claim_explanation (claimed / existing / payload_conflict / abandoned after
 // five minutes — made testable by moving claimed_at back), the row lock shared by claim / expire and finish (an expiring
 // claim never overwrites a concurrent finish), macro_record_completion (durable raw output + finalize payload),
-// macro_finish_explanation (idempotent, invalid_transition, late_output), macro_mark_finalized (needs a recorded
-// payload, any state) and macro_expire_explanations. Rows are never cleaned up: test:db creates a fresh database per run, and
+// macro_finish_explanation (idempotent, invalid_transition, late_output, stores a missing finalize payload, never
+// overwrites one), macro_mark_finalized (needs a recorded payload, any state) and macro_expire_explanations; a running row
+// with a recorded completion is never abandoned (claim and expire skip it). Rows are never cleaned up: test:db creates a fresh database per run, and
 // every case uses its own month or random user / request ids.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -456,7 +476,7 @@ const PUBLIC_READ=['macro_strategy_manifests','macro_review_results','macro_revi
 const SERVICE_ONLY=['macro_review_attempts','macro_explanation_runs'];
 const RPCS=['public.macro_put_manifest(text,jsonb,text,timestamptz,text,text,text)','public.macro_publish_review(text,text,bigint,timestamptz,text,uuid,text,jsonb,text,text)',
  'public.macro_record_review_attempt(text,text,text,jsonb)','public.macro_claim_explanation(uuid,uuid,text,text,text,text,uuid)',
- 'public.macro_record_completion(uuid,jsonb,jsonb)','public.macro_finish_explanation(uuid,text,text,text,text,text,jsonb,jsonb,jsonb,text[],jsonb)',
+ 'public.macro_record_completion(uuid,jsonb,jsonb)','public.macro_finish_explanation(uuid,text,text,text,text,text,jsonb,jsonb,jsonb,text[],jsonb,jsonb)',
  'public.macro_mark_finalized(uuid)','public.macro_expire_explanations(uuid)'];
 
 // Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
@@ -515,10 +535,11 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  const claim=(a:{user:string;request:string;payload?:string;manifest:string})=>
   one(`select public.macro_claim_explanation($1,$2,$3,'review','subject-1','zh',$4) v`,[a.user,a.request,a.payload??HEX('a'),a.manifest]) as Promise<Claim>;
  const newClaim=async()=>{const a={user:randomUUID(),request:randomUUID(),manifest:await explainManifest()};return {a,c:await claim(a)};};
- const FINISH_SQL=`select public.macro_finish_explanation($1,$2,'prov','model','macro-explain-prompt/1','macro-explain-validator/1',$3::jsonb,'{"ok":true}'::jsonb,$4::jsonb,$5::text[],$6::jsonb) v`;
- const finishArgs=(id:string,state:string,raw:unknown,o:{rendered?:unknown;codes?:string[];accounting?:unknown}={})=>
-  [id,state,JSON.stringify(raw),o.rendered===undefined?null:JSON.stringify(o.rendered),o.codes??[],JSON.stringify(o.accounting??{tokens:1})];
- const finish=(id:string,state:string,raw:unknown,o:{rendered?:unknown;codes?:string[];accounting?:unknown}={})=>
+ const FINISH_SQL=`select public.macro_finish_explanation($1,$2,'prov','model','macro-explain-prompt/1','macro-explain-validator/1',$3::jsonb,'{"ok":true}'::jsonb,$4::jsonb,$5::text[],$6::jsonb,$7::jsonb) v`;
+ type FinishOpts={rendered?:unknown;codes?:string[];accounting?:unknown;payload?:unknown};
+ const finishArgs=(id:string,state:string,raw:unknown,o:FinishOpts={})=>
+  [id,state,JSON.stringify(raw),o.rendered===undefined?null:JSON.stringify(o.rendered),o.codes??[],JSON.stringify(o.accounting??{tokens:1}),o.payload===undefined?null:JSON.stringify(o.payload)];
+ const finish=(id:string,state:string,raw:unknown,o:FinishOpts={})=>
   one(FINISH_SQL,finishArgs(id,state,raw,o)) as Promise<Record<string,any>>;
  const PAYLOAD={status:'completed',provider:'prov',model:'model',inputTokens:3,outputTokens:2,costMicrormb:5,pricingVersion:'p1',usdCnyMicros:7100000,usageEstimated:false,byo:false};
  const record=(id:string,raw:unknown,payload:unknown=PAYLOAD)=>
@@ -745,6 +766,36 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await fails(record(randomUUID(),null))).toMatchObject({message:'not_found'});
  });
 
+ it('macro_finish_explanation stores p_finalize_payload when none is recorded (a failed record_completion) and never overwrites one',async()=>{
+  const {c}=await newClaim();
+  await finish(c.explanation_id,'accepted',{content:'x'},{rendered:RENDERED,payload:PAYLOAD});
+  expect(await run(c.explanation_id)).toMatchObject({state:'accepted',raw_output:{content:'x'},finalize_payload:PAYLOAD,finalized:false});
+  await one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]);   // settles from the payload finish stored
+  expect(await run(c.explanation_id)).toMatchObject({finalized:true});
+  const r=await newClaim();await record(r.c.explanation_id,{content:'y'});
+  await finish(r.c.explanation_id,'accepted',{content:'y'},{rendered:RENDERED,payload:{...PAYLOAD,pricingVersion:'p2'}});
+  expect(await run(r.c.explanation_id)).toMatchObject({finalize_payload:PAYLOAD});   // the recorded payload stays
+  const i=await newClaim();await finish(i.c.explanation_id,'failed',null,{codes:['provider_error']});
+  await finish(i.c.explanation_id,'failed',null,{codes:['provider_error'],payload:{...PAYLOAD,status:'failed'}});   // idempotent replay fills a missing payload
+  expect(await run(i.c.explanation_id)).toMatchObject({state:'failed',finalize_payload:{status:'failed'}});
+  const ab=await newClaim();await age(ab.c.explanation_id,6);await expire(ab.a.user);
+  await finish(ab.c.explanation_id,'accepted',{content:'z'},{rendered:RENDERED,payload:PAYLOAD});
+  expect(await run(ab.c.explanation_id)).toMatchObject({state:'abandoned',finalize_payload:PAYLOAD,late_output:{state:'accepted'}});
+  const bad=await newClaim();
+  expect(await fails(finish(bad.c.explanation_id,'failed',null,{payload:{status:'pending'}}))).toMatchObject({code:'23514'});
+ });
+
+ it('a recorded completion is never abandoned: the claim and macro_expire_explanations skip running rows whose raw output is recorded',async()=>{
+  const rec=await newClaim();await record(rec.c.explanation_id,{content:'x'});await age(rec.c.explanation_id,6);
+  expect((await claim(rec.a)).projection).toMatchObject({state:'running'});
+  expect(await expire(rec.a.user)).toBe(0);
+  expect(await run(rec.c.explanation_id)).toMatchObject({state:'running',raw_output:{content:'x'}});
+  const threw=await newClaim();await record(threw.c.explanation_id,null,{...PAYLOAD,status:'failed'});await age(threw.c.explanation_id,6);   // provider threw: no output to recover
+  expect(await expire(threw.a.user)).toBe(1);
+  expect(await run(threw.c.explanation_id)).toMatchObject({state:'abandoned',finalize_payload:{status:'failed'}});
+  expect(await finish(rec.c.explanation_id,'accepted',{content:'x'},{rendered:RENDERED})).toMatchObject({state:'accepted'});   // completion recovery finishes it
+ });
+
  it('macro_mark_finalized: needs a recorded finalize payload, then finalizes in any state (running after a failed finish, final, abandoned); idempotent; unknown → not_found',async()=>{
   const {c}=await newClaim();
   expect(await fails(one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]))).toMatchObject({message:'invalid_transition'});
@@ -803,7 +854,7 @@ main();
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: FAIL — 17 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
+Expected: FAIL — 19 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
 
 - [ ] **Step 3: Write the migration**
 
@@ -824,10 +875,12 @@ Create `supabase/migrations/20261115090000_macro_strategy.sql`:
 -- Errors are raised with the code as the message: not_found, payload_conflict, invalid_transition,
 -- invalid_status (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
 -- minutes is turned into abandoned by the next claim of the same (user_id, request_id) or by
--- macro_expire_explanations(user_id) (GET /explanations runs it before reading). Accounting is durable before
--- anything else can fail: macro_record_completion stores the raw output and the exact finalizeUsageRun payload
--- right after the provider returns; macro_mark_finalized needs that payload. Every RPC that changes a run row
--- first locks it (select … for update), so an expiring claim never overwrites a concurrent finish.
+-- macro_expire_explanations(user_id) (GET /explanations runs it before reading) — unless its completion is recorded
+-- (raw_output is a json object): such a row is finished later from the stored output by the server's completion
+-- recovery, never abandoned. Accounting is durable before anything else can fail: macro_record_completion stores the
+-- raw output and the exact finalizeUsageRun payload right after the provider returns; macro_finish_explanation stores
+-- the same payload when none is recorded yet (never overwrites one); macro_mark_finalized needs a payload. Every RPC
+-- that changes a run row first locks it (select … for update), so an expiring claim never overwrites a concurrent finish.
 
 -- ---------------------------------------------------------------- tables
 create table if not exists public.macro_strategy_manifests (
@@ -1039,20 +1092,20 @@ revoke execute on function public.macro_explanation_projection(uuid) from public
 -- ---------------------------------------------------------------- RPC 4: macro_claim_explanation
 -- Advisory lock on (user_id, request_id), then the existing run row is locked FOR UPDATE before its state is
 -- read (finish, record_completion and expire lock the same row). Existing row: different payload_hash →
--- payload_conflict; running and claimed more than five minutes ago → abandoned (projection failed, failure_codes
--- {abandoned}); return outcome existing. New: generate explanation_id and usage_audit_key, insert the running run and projection,
+-- payload_conflict; running, claimed more than five minutes ago and without a recorded completion (raw_output not a
+-- json object) → abandoned (projection failed, failure_codes {abandoned}); return outcome existing. New: generate explanation_id and usage_audit_key, insert the running run and projection,
 -- return outcome claimed. Only a 'claimed' caller may bill or call the model.
 create or replace function public.macro_claim_explanation(p_user_id uuid, p_request_id uuid, p_payload_hash text, p_subject_kind text,
   p_subject_id text, p_locale text, p_manifest_id uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_id uuid; v_key text; v_hash text; v_state text; v_claimed timestamptz;
+declare v_id uuid; v_key text; v_hash text; v_state text; v_claimed timestamptz; v_raw jsonb;
 begin
   perform pg_advisory_xact_lock(hashtextextended('macro_explain:' || p_user_id::text || ':' || p_request_id::text, 0));
-  select explanation_id, usage_audit_key, payload_hash, state, claimed_at into v_id, v_key, v_hash, v_state, v_claimed
+  select explanation_id, usage_audit_key, payload_hash, state, claimed_at, raw_output into v_id, v_key, v_hash, v_state, v_claimed, v_raw
   from public.macro_explanation_runs where user_id = p_user_id and request_id = p_request_id for update;
   if found then
     if v_hash <> p_payload_hash then raise exception 'payload_conflict'; end if;
-    if v_state = 'running' and v_claimed < now() - interval '5 minutes' then
+    if v_state = 'running' and v_claimed < now() - interval '5 minutes' and jsonb_typeof(v_raw) is distinct from 'object' then
       update public.macro_explanation_runs set state = 'abandoned', finished_at = now() where explanation_id = v_id;
       update public.macro_explanations set state = 'failed', failure_codes = array['abandoned'], finished_at = now() where explanation_id = v_id and state = 'running';
     end if;
@@ -1100,9 +1153,11 @@ grant execute on function public.macro_record_completion(uuid, jsonb, jsonb) to 
 -- idempotent (returns the projection unchanged). Another final state, or the same state with a different
 -- raw_output → invalid_transition. abandoned → only late_output and accounting are written; the
 -- projection stays failed. A raw_output already stored by macro_record_completion is overwritten by the same
--- value (the caller passes what it recorded).
+-- value (the caller passes what it recorded). p_finalize_payload is stored in every non-error branch when the row has
+-- none yet (macro_record_completion failed), never overwriting a recorded one, so recovery can still settle it.
 create or replace function public.macro_finish_explanation(p_explanation_id uuid, p_state text, p_provider text, p_model text,
-  p_prompt_version text, p_validator_version text, p_raw_output jsonb, p_validation jsonb, p_rendered jsonb, p_failure_codes text[], p_accounting jsonb)
+  p_prompt_version text, p_validator_version text, p_raw_output jsonb, p_validation jsonb, p_rendered jsonb, p_failure_codes text[], p_accounting jsonb,
+  p_finalize_payload jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_state text; v_raw jsonb;
 begin
@@ -1111,7 +1166,8 @@ begin
   if not found then raise exception 'not_found'; end if;
   if v_state = 'running' then
     update public.macro_explanation_runs set state = p_state, finished_at = now(), provider = p_provider, model = p_model,
-      prompt_version = p_prompt_version, validator_version = p_validator_version, raw_output = p_raw_output, validation = p_validation, accounting = p_accounting
+      prompt_version = p_prompt_version, validator_version = p_validator_version, raw_output = p_raw_output, validation = p_validation, accounting = p_accounting,
+      finalize_payload = coalesce(finalize_payload, p_finalize_payload)
     where explanation_id = p_explanation_id;
     update public.macro_explanations set state = p_state,
       rendered = case when p_state = 'accepted' then p_rendered else null end,
@@ -1119,20 +1175,21 @@ begin
       provider = p_provider, model = p_model, prompt_version = p_prompt_version, validator_version = p_validator_version, finished_at = now()
     where explanation_id = p_explanation_id;
   elsif v_state = 'abandoned' then
-    update public.macro_explanation_runs set accounting = p_accounting,
+    update public.macro_explanation_runs set accounting = p_accounting, finalize_payload = coalesce(finalize_payload, p_finalize_payload),
       late_output = jsonb_build_object('state', p_state, 'provider', p_provider, 'model', p_model, 'prompt_version', p_prompt_version,
         'validator_version', p_validator_version, 'raw_output', p_raw_output, 'validation', p_validation, 'rendered', p_rendered,
         'failure_codes', to_jsonb(coalesce(p_failure_codes, '{}'::text[])), 'received_at', now())
     where explanation_id = p_explanation_id;
   elsif v_state = p_state and v_raw is not distinct from p_raw_output then
-    null;
+    update public.macro_explanation_runs set finalize_payload = p_finalize_payload
+    where explanation_id = p_explanation_id and finalize_payload is null and p_finalize_payload is not null;
   else
     raise exception 'invalid_transition';
   end if;
   return public.macro_explanation_projection(p_explanation_id);
 end $$;
-revoke execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb) from public, anon, authenticated;
-grant execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb) to service_role;
+revoke execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_finish_explanation(uuid, text, text, text, text, text, jsonb, jsonb, jsonb, text[], jsonb, jsonb) to service_role;
 
 -- ---------------------------------------------------------------- RPC 7: macro_mark_finalized
 -- After finalizeUsageRun(finalize_payload) succeeded: finalized = true (idempotent), in any state. A row without a
@@ -1151,14 +1208,15 @@ grant execute on function public.macro_mark_finalized(uuid) to service_role;
 
 -- ---------------------------------------------------------------- RPC 8: macro_expire_explanations
 -- GET /explanations runs this (service role) before reading, so a reload resolves a run whose worker died: every
--- running row of the user claimed more than five minutes ago → abandoned, projection failed {abandoned}. Rows are
--- locked in a stable order; returns the number expired.
+-- running row of the user claimed more than five minutes ago without a recorded completion (raw_output not a json
+-- object) → abandoned, projection failed {abandoned}. Rows are locked in a stable order; returns the number expired.
 create or replace function public.macro_expire_explanations(p_user_id uuid)
 returns integer language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_n integer := 0;
 begin
   for v_id in select explanation_id from public.macro_explanation_runs
     where user_id = p_user_id and state = 'running' and claimed_at < now() - interval '5 minutes'
+      and jsonb_typeof(raw_output) is distinct from 'object'
     order by explanation_id for update
   loop
     update public.macro_explanation_runs set state = 'abandoned', finished_at = now() where explanation_id = v_id and state = 'running';
@@ -1176,7 +1234,7 @@ grant execute on function public.macro_expire_explanations(uuid) to service_role
 - [ ] **Step 4: Run the integration test until it passes**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  17 passed (17)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
+Expected: PASS — `Tests  19 passed (19)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
 
 - [ ] **Step 5: Database types**
 
@@ -1326,7 +1384,7 @@ Run: `LC_ALL=C npm run test:migrations`
 Expected: PASS (fresh and seeded-upgrade schemas identical; report written to `reports/migration-rehearsal.json`).
 
 Run: `LC_ALL=C npm run test:db`
-Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 17 passed tests (no "Database suite inventory drift").
+Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 19 passed tests (no "Database suite inventory drift").
 
 - [ ] **Step 8: Typecheck and lint**
 
@@ -2116,6 +2174,7 @@ Notes for the implementer:
 - 时间戳一律规范为 `toISOString()`（PostgREST 给 `+00:00`，pg 给 `Date`）；`generation` 用 `Number()`（pg 的 bigint 是字符串）。投影的 `prompt_version` / `validator_version` 在认领后、完成前为 SQL null，映射为 `''`（契约类型是 `string`）。
 - `memoryStrategyDb` 逐条复刻 SQL 规则（同一份契约用例约束）；`_userId(id)` 设定 `explanationsOf` 的 RLS 身份，未设 → 空列表（等同 `auth.uid()` 为 null）；`_run(id)` 只给测试看运行行（`state`、`raw_output`、`finalize_payload`、`finalized`、`late_output`）。
 - 计划审计回写：`reviewResult(id)`（anon 读 `macro_review_results`，非 uuid → null 不查询）、`recordCompletion`（`macro_record_completion`）、`expireExplanations(userId)`（`macro_expire_explanations`，非 uuid → 0 不调用）；`markFinalized` 需要已登记的结算载荷（任何状态）。
+- 第二轮回写（R2-1 / R2-2）：`finishExplanation` 多传 `finalizePayload`（`p_finalize_payload`；行上无载荷时写入，已有不覆盖）；`runDetail(id)`（admin 读 `macro_explanation_runs` 一行，非 uuid → null）与 `recoverableRuns(userId, limit)`（admin 读该用户 `running` 行，按 `claimed_at` 升序最多扫 50 行，只留 `raw_output` 为 JSON 对象的，即已登记完成）；"已登记完成"的判定 `hasRecordedCompletion(raw)` 与 SQL 的 `jsonb_typeof(raw_output) = 'object'` 一致，内存实现的认领放弃与过期同样跳过这些行。
 - 契约用例的月份：内存用 5000 年起、pg 用 6000–7999 年中随机一年起，互不冲突，也不与 Task 1 用例（3000–4999）冲突。
 
 - [ ] **Step 1: Write the shared contract cases and the failing unit tests**
@@ -2202,9 +2261,9 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    const args={userId:o.user??randomUUID(),requestId:o.request??randomUUID(),payloadHash:o.payload??'a'.repeat(64),subjectKind:'review' as const,subjectId:'subject-1',locale:'zh' as const,manifestId};
    return {args,out:await db.claimExplanation(args)};
   };
-  const finish=(id:string,state:'accepted'|'rejected'|'failed',raw:unknown,o:{failureCodes?:string[]}={})=>db.finishExplanation({explanationId:id,state,provider:'test-provider',model:'test-model',
+  const finish=(id:string,state:'accepted'|'rejected'|'failed',raw:unknown,o:{failureCodes?:string[];finalizePayload?:Record<string,unknown>}={})=>db.finishExplanation({explanationId:id,state,provider:'test-provider',model:'test-model',
    promptVersion:'macro-explain-prompt/1',validatorVersion:'macro-explain-validator/1',rawOutput:raw,validation:{ok:state==='accepted'},rendered:state==='accepted'?RENDERED:null,
-   failureCodes:o.failureCodes??(state==='accepted'?[]:['numeral']),accounting:{tokens:10}});
+   failureCodes:o.failureCodes??(state==='accepted'?[]:['numeral']),accounting:{tokens:10},finalizePayload:o.finalizePayload??null});
 
   it('putManifest: identity is sha256 of the canonical body; idempotent; any field change is a new manifest; anon read; unknown → null',async()=>{
    const body=testManifest('transmission');
@@ -2340,6 +2399,36 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(await code(db.markFinalized(randomUUID()))).toBe('not_found');
   });
 
+  it('finishExplanation stores the finalize payload when none was recorded; a recorded payload is never overwritten',async()=>{
+   const a=await claim();
+   await finish(a.out.explanation_id,'accepted',{content:'x'},{finalizePayload:PAYLOAD});   // recordCompletion failed during the request
+   expect(await db.runDetail(a.out.explanation_id)).toMatchObject({state:'accepted',finalize_payload:PAYLOAD,finalized:false});
+   await expect(db.markFinalized(a.out.explanation_id)).resolves.toBeUndefined();
+   expect((await db.runDetail(a.out.explanation_id))!.finalized).toBe(true);
+   const b=await claim();
+   await db.recordCompletion({explanationId:b.out.explanation_id,rawOutput:{content:'y'},finalizePayload:PAYLOAD});
+   await finish(b.out.explanation_id,'accepted',{content:'y'},{finalizePayload:{...PAYLOAD,pricingVersion:'p2'}});
+   expect((await db.runDetail(b.out.explanation_id))!.finalize_payload).toEqual(PAYLOAD);
+  });
+
+  it('a running row with a recorded raw output is never abandoned; runDetail and recoverableRuns expose it for recovery',async()=>{
+   const user=randomUUID();
+   const rec=await claim({user});const bare=await claim({user});const done=await claim({user});
+   await db.recordCompletion({explanationId:rec.out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD});
+   await db.recordCompletion({explanationId:done.out.explanation_id,rawOutput:{content:'z'},finalizePayload:PAYLOAD});
+   await finish(done.out.explanation_id,'accepted',{content:'z'});
+   await h.ageClaim(rec.out.explanation_id,6);await h.ageClaim(bare.out.explanation_id,6);
+   expect((await db.claimExplanation(rec.args)).projection.state).toBe('running');
+   expect(await db.expireExplanations(user)).toBe(1);                              // only the row without a completion
+   expect((await db.runOf(user,bare.args.requestId))!.state).toBe('abandoned');
+   expect(await db.recoverableRuns(user,3)).toEqual([rec.out.explanation_id]);
+   expect(await db.recoverableRuns(randomUUID(),3)).toEqual([]);
+   expect(await db.runDetail(rec.out.explanation_id)).toEqual({explanation_id:rec.out.explanation_id,user_id:user,state:'running',locale:'zh',manifest_id:rec.args.manifestId,
+    usage_audit_key:rec.out.usage_audit_key,raw_output:{content:'x'},finalize_payload:PAYLOAD,finalized:false});
+   expect(await db.runDetail(randomUUID())).toBeNull();
+   expect(await db.runDetail('not-a-uuid')).toBeNull();
+  });
+
   it('expireExplanations: only the user\'s running claims older than five minutes → abandoned, projection failed {abandoned}',async()=>{
    const user=randomUUID();
    const old=await claim({user});const other=await claim();
@@ -2464,6 +2553,23 @@ describe('supabaseStrategyDb wiring',()=>{
   expect(await db.reviewResult('CN:2026-09')).toBeNull();expect(await db.expireExplanations('x')).toBe(0);
   expect(admin.calls).toHaveLength(2);expect(anon.calls).toHaveLength(3);
  });
+ it('finishExplanation sends p_finalize_payload; runDetail and recoverableRuns read run rows as admin',async()=>{
+  const rid='22222222-2222-4222-8222-222222222222',uid='33333333-3333-4333-8333-333333333333';
+  const proj={explanation_id:rid,subject_kind:'review',subject_id:'s',locale:'zh',manifest_id:'m',state:'failed',rendered:null,failure_codes:['provider_error'],provider:null,model:null,
+   prompt_version:'p',validator_version:'v',created_at:'2026-11-07T00:00:00+00:00',finished_at:'2026-11-07T00:00:01+00:00'};
+  const row=(id:string,raw:unknown)=>({explanation_id:id,user_id:uid,state:'running',locale:'en',manifest_id:'m',usage_audit_key:id,raw_output:raw,finalize_payload:null,finalized:false});
+  const admin=stub(()=>({data:proj,error:null}),{macro_explanation_runs:[row(rid,{content:'x'}),row('44444444-4444-4444-8444-444444444444',null)]});
+  const db=supabaseStrategyDb({admin:admin.client,anon:stub(()=>({data:null,error:null})).client});
+  await db.finishExplanation({explanationId:rid,state:'failed',provider:null,model:null,promptVersion:'p',validatorVersion:'v',rawOutput:null,validation:{},rendered:null,failureCodes:['provider_error'],accounting:null,finalizePayload:{status:'failed',byo:false}});
+  expect(admin.calls[0]).toEqual(['rpc','macro_finish_explanation',{p_explanation_id:rid,p_state:'failed',p_provider:null,p_model:null,p_prompt_version:'p',p_validator_version:'v',p_raw_output:null,
+   p_validation:{},p_rendered:null,p_failure_codes:['provider_error'],p_accounting:null,p_finalize_payload:{status:'failed',byo:false}}]);
+  expect(await db.runDetail(rid)).toEqual(row(rid,{content:'x'}));   // the stub answers its first row
+  expect(admin.calls.slice(1,4)).toEqual([['select','macro_explanation_runs','*'],['eq','explanation_id',rid],['limit',1]]);
+  expect(await db.recoverableRuns(uid,3)).toEqual([rid]);            // the row without a recorded output is dropped
+  expect(admin.calls.slice(4)).toEqual([['select','macro_explanation_runs','*'],['eq','user_id',uid],['eq','state','running'],['order','claimed_at',{ascending:true}],['order','explanation_id',{ascending:true}],['limit',50]]);
+  expect(await db.runDetail('x')).toBeNull();expect(await db.recoverableRuns('x',3)).toEqual([]);
+  expect(admin.calls).toHaveLength(10);
+ });
  it('runOf and manifest short-circuit non-uuid ids without a query',async()=>{
   const admin=stub(()=>({data:null,error:null}));const anon=stub(()=>({data:null,error:null}));
   const db=supabaseStrategyDb({admin:admin.client,anon:anon.client});
@@ -2531,6 +2637,13 @@ import type {SupabaseClient} from '@supabase/supabase-js';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection,ExplanationState,Region,RenderedExplanation,ReviewFacts,ReviewResult,ReviewStatus,StoredManifest,StrategyManifest} from './contract';
 
+/** A run row as completion recovery reads it (service role). */
+export interface RunDetail{explanation_id:string;user_id:string;state:ExplanationState;locale:'zh'|'en';manifest_id:string;usage_audit_key:string;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean}
+/** A completion is recorded when raw_output is a json object (the completion envelope); the SQL tests jsonb_typeof = 'object'. */
+export const hasRecordedCompletion=(raw:unknown):boolean=>typeof raw==='object'&&raw!==null&&!Array.isArray(raw);
+/** Running rows scanned per recoverableRuns call. */
+export const RECOVERY_SCAN=50;
+
 export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
 export interface StrategyDb{
  putManifest(body:StrategyManifest):Promise<StoredManifest>;   // computes manifest_hash = sha256Hex(canonicalJson(body)); RPC macro_put_manifest; idempotent by hash
@@ -2548,11 +2661,17 @@ export interface StrategyDb{
  /** RPC macro_record_completion: durable raw output + the exact finalizeUsageRun payload, right after the provider returns
   *  (or throws, or begin fails) and before validation / finish; running or abandoned rows; same values → no-op. */
  recordCompletion(a:{explanationId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;
- /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only. */
- finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown}):Promise<ExplanationProjection>;
+ /** running → final; same final state + same raw output → idempotent; other final → invalid_transition; abandoned → late_output only.
+  *  finalizePayload is stored atomically when the row has none yet (a failed recordCompletion), never overwritten (plan audit R2-2). */
+ finishExplanation(a:{explanationId:string;state:'accepted'|'rejected'|'failed';provider:string|null;model:string|null;promptVersion:string;validatorVersion:string;rawOutput:unknown;validation:Record<string,unknown>;rendered:RenderedExplanation|null;failureCodes:string[];accounting:unknown;finalizePayload:Record<string,unknown>|null}):Promise<ExplanationProjection>;
  markFinalized(explanationId:string):Promise<void>;   // RPC macro_mark_finalized; needs a recorded finalize payload; any state; idempotent
- /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago → abandoned (projection failed). */
+ /** RPC macro_expire_explanations: the user's running rows claimed > 5 minutes ago WITHOUT a recorded completion → abandoned
+  *  (projection failed); a row whose raw output is recorded is left for completion recovery (plan audit R2-1). */
  expireExplanations(userId:string):Promise<number>;
+ /** Admin read of one run row for completion recovery and settlement (plan audit R2-1 / R2-2); non-uuid → null without a query. */
+ runDetail(explanationId:string):Promise<RunDetail|null>;
+ /** Admin: ids of the user's running rows with a recorded raw output, oldest claim first, at most `limit` (GET recovery). */
+ recoverableRuns(userId:string,limit:number):Promise<string[]>;
  explanationsOf(client:'session',subjectKind:'snapshot'|'review',subjectId:string,limit:number):Promise<ExplanationProjection[]>;   // user session client (RLS)
 }
 
@@ -2583,6 +2702,8 @@ const str=(v:unknown):string|null=>v===null||v===undefined?null:String(v);
 const manifestFrom=(r:Record<string,unknown>):StoredManifest=>({manifest_id:String(r.manifest_id),manifest_hash:String(r.manifest_hash),body:r.body as StrategyManifest,created_at:iso(r.created_at)});
 const resultFrom=(r:Record<string,unknown>):ReviewResult=>({result_id:String(r.result_id),region:r.region as Region,month:String(r.month),status:r.status as ReviewStatus,
  manifest_id:String(r.manifest_id),manifest_hash:String(r.manifest_hash),facts:r.facts as ReviewFacts,method_version:String(r.method_version),code_version:String(r.code_version),created_at:iso(r.created_at)});
+const runDetailFrom=(r:Record<string,unknown>):RunDetail=>({explanation_id:String(r.explanation_id),user_id:String(r.user_id),state:r.state as ExplanationState,locale:r.locale as 'zh'|'en',
+ manifest_id:String(r.manifest_id),usage_audit_key:String(r.usage_audit_key),raw_output:r.raw_output??null,finalize_payload:(r.finalize_payload??null) as Record<string,unknown>|null,finalized:r.finalized===true});
 /** Projection row or RPC projection json → ExplanationProjection. prompt_version / validator_version are null until finish → ''. */
 export function projectionFrom(r:Record<string,unknown>):ExplanationProjection{
  return {explanation_id:String(r.explanation_id),subject_kind:r.subject_kind as 'snapshot'|'review',subject_id:String(r.subject_id),locale:r.locale as 'zh'|'en',
@@ -2648,10 +2769,21 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
   async recordCompletion(a){await rpc('macro_record_completion',{p_explanation_id:a.explanationId,p_raw_output:a.rawOutput??null,p_finalize_payload:a.finalizePayload});},
   async finishExplanation(a){
    return projectionFrom(await rpc('macro_finish_explanation',{p_explanation_id:a.explanationId,p_state:a.state,p_provider:a.provider,p_model:a.model,p_prompt_version:a.promptVersion,
-    p_validator_version:a.validatorVersion,p_raw_output:a.rawOutput??null,p_validation:a.validation,p_rendered:a.rendered,p_failure_codes:a.failureCodes,p_accounting:a.accounting??null}) as Record<string,unknown>);
+    p_validator_version:a.validatorVersion,p_raw_output:a.rawOutput??null,p_validation:a.validation,p_rendered:a.rendered,p_failure_codes:a.failureCodes,p_accounting:a.accounting??null,
+    p_finalize_payload:a.finalizePayload??null}) as Record<string,unknown>);
   },
   async markFinalized(id){await rpc('macro_mark_finalized',{p_explanation_id:id});},
   async expireExplanations(userId){if(!UUID.test(userId))return 0;return Number(await rpc('macro_expire_explanations',{p_user_id:userId}));},
+  async runDetail(id){
+   if(!UUID.test(id))return null;
+   const [r]=await select('admin',{table:'macro_explanation_runs',eq:{explanation_id:id},order:[],limit:1});
+   return r?runDetailFrom(r):null;
+  },
+  async recoverableRuns(userId,limit){
+   if(!UUID.test(userId))return [];
+   const rows=await select('admin',{table:'macro_explanation_runs',eq:{user_id:userId,state:'running'},order:[{column:'claimed_at',ascending:true},{column:'explanation_id',ascending:true}],limit:RECOVERY_SCAN});
+   return rows.filter(r=>hasRecordedCompletion(r.raw_output)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>String(r.explanation_id));
+  },
   async explanationsOf(_client,subjectKind,subjectId,limit){
    const rows=await select('session',{table:'macro_explanations',eq:{subject_kind:subjectKind,subject_id:subjectId},order:[{column:'created_at',ascending:false},{column:'explanation_id',ascending:false}],limit});
    return rows.map(projectionFrom);
@@ -2687,7 +2819,7 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
 export function supabaseStrategyDb(c:{admin:SupabaseClient;anon:SupabaseClient;session?:SupabaseClient}):StrategyDb{return strategyDbOver(supabaseTransport(c));}
 
 // ---------------------------------------------------------------- memory (unit tests; same rules as the SQL)
-interface MemRun{explanation_id:string;user_id:string;request_id:string;payload_hash:string;state:ExplanationState;claimed_at:number;raw_output:unknown;finalize_payload:Record<string,unknown>|null;accounting:unknown;finalized:boolean;late_output:unknown;usage_audit_key:string}
+interface MemRun{explanation_id:string;user_id:string;request_id:string;payload_hash:string;locale:'zh'|'en';manifest_id:string;state:ExplanationState;claimed_at:number;raw_output:unknown;finalize_payload:Record<string,unknown>|null;accounting:unknown;finalized:boolean;late_output:unknown;usage_audit_key:string}
 const ABANDON_MS=5*60*1000;
 export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_payload:Record<string,unknown>|null;finalized:boolean;late_output:unknown};
 export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null}{
@@ -2705,7 +2837,13 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
   const t=now().toISOString();r.state='abandoned';
   const p=projections.get(r.explanation_id)!;if(p.state==='running'){p.state='failed';p.failure_codes=['abandoned'];p.finished_at=t;}
  };
- const expired=(r:MemRun)=>r.state==='running'&&r.claimed_at<now().getTime()-ABANDON_MS;
+ const expired=(r:MemRun)=>r.state==='running'&&r.claimed_at<now().getTime()-ABANDON_MS&&!hasRecordedCompletion(r.raw_output);
+ /** finish's p_finalize_payload: validated like the column check, stored only when the row has none. */
+ const payloadFill=(r:MemRun,p:Record<string,unknown>|null)=>{
+  if(r.finalize_payload!==null||p===null)return null;
+  if(p.status!=='completed'&&p.status!=='failed')throw new StrategyDbError('rpc_failed','macro_explanation_runs_finalize_payload');
+  return clone(p);
+ };
  return {
   _userId(id){sessionUser=id;},
   _run(id){const r=runs.get(id);return r?clone({state:r.state,raw_output:r.raw_output,finalize_payload:r.finalize_payload,finalized:r.finalized,late_output:r.late_output}):null;},
@@ -2761,7 +2899,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    const m=manifests.get(a.manifestId);
    if(!m||m.body.kind!=='explain_facts')throw new StrategyDbError('not_found');
    const eid=randomUUID();const key=eid;const t=now();
-   runs.set(eid,{explanation_id:eid,user_id:a.userId,request_id:a.requestId,payload_hash:a.payloadHash,state:'running',claimed_at:t.getTime(),raw_output:null,finalize_payload:null,accounting:null,finalized:false,late_output:null,usage_audit_key:key});
+   runs.set(eid,{explanation_id:eid,user_id:a.userId,request_id:a.requestId,payload_hash:a.payloadHash,locale:a.locale,manifest_id:a.manifestId,state:'running',claimed_at:t.getTime(),raw_output:null,finalize_payload:null,accounting:null,finalized:false,late_output:null,usage_audit_key:key});
    runByRequest.set(`${a.userId}|${a.requestId}`,eid);
    projections.set(eid,{user_id:a.userId,explanation_id:eid,subject_kind:a.subjectKind,subject_id:a.subjectId,locale:a.locale,manifest_id:a.manifestId,state:'running',rendered:null,failure_codes:[],
     provider:null,model:null,prompt_version:'',validator_version:'',created_at:t.toISOString(),finished_at:null});
@@ -2785,13 +2923,18 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    const raw=clone(a.rawOutput??null);
    if(r.state==='running'){
     if(a.state==='accepted'&&a.rendered===null)throw new StrategyDbError('rpc_failed','macro_explanations_rendered');
-    const t=now().toISOString();r.state=a.state;r.raw_output=raw;r.accounting=clone(a.accounting??null);
+    const fill=payloadFill(r,a.finalizePayload);
+    const t=now().toISOString();r.state=a.state;r.raw_output=raw;r.accounting=clone(a.accounting??null);if(fill)r.finalize_payload=fill;
     const p=projections.get(a.explanationId)!;
     Object.assign(p,{state:a.state,rendered:a.state==='accepted'?clone(a.rendered):null,failure_codes:a.state==='accepted'?[]:[...a.failureCodes],provider:a.provider,model:a.model,
      prompt_version:a.promptVersion,validator_version:a.validatorVersion,finished_at:t});
    }else if(r.state==='abandoned'){
+    const fill=payloadFill(r,a.finalizePayload);
     r.accounting=clone(a.accounting??null);r.late_output={state:a.state,raw_output:raw,validation:clone(a.validation),rendered:clone(a.rendered),failure_codes:[...a.failureCodes]};
-   }else if(!(r.state===a.state&&canonicalJson(r.raw_output)===canonicalJson(raw))){
+    if(fill)r.finalize_payload=fill;
+   }else if(r.state===a.state&&canonicalJson(r.raw_output)===canonicalJson(raw)){
+    const fill=payloadFill(r,a.finalizePayload);if(fill)r.finalize_payload=fill;
+   }else{
     throw new StrategyDbError('invalid_transition');
    }
    return projection(a.explanationId);
@@ -2807,6 +2950,15 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    for(const r of runs.values())if(r.user_id===userId&&expired(r)){abandon(r);n++;}
    return n;
   },
+  async runDetail(id){
+   const r=runs.get(id);if(!r)return null;
+   return clone({explanation_id:r.explanation_id,user_id:r.user_id,state:r.state,locale:r.locale,manifest_id:r.manifest_id,usage_audit_key:r.usage_audit_key,raw_output:r.raw_output,
+    finalize_payload:r.finalize_payload,finalized:r.finalized});
+  },
+  async recoverableRuns(userId,limit){
+   return [...runs.values()].filter(r=>r.user_id===userId&&r.state==='running'&&hasRecordedCompletion(r.raw_output))
+    .sort((a,b)=>a.claimed_at-b.claimed_at||(a.explanation_id<b.explanation_id?-1:1)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>r.explanation_id);
+  },
   async explanationsOf(_client,subjectKind,subjectId,limit){
    if(sessionUser===null)return [];
    return [...projections.values()].filter(p=>p.user_id===sessionUser&&p.subject_kind===subjectKind&&p.subject_id===subjectId)
@@ -2820,7 +2972,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
 - [ ] **Step 4: Run the unit tests**
 
 Run: `npm test -- src/lib/macro/strategy/hash.test.ts src/lib/macro/strategy/db.test.ts`
-Expected: PASS — `Tests  23 passed (23)` (hash 3; db 20 = 12 memory contract cases + 6 wiring + 2 memory specifics).
+Expected: PASS — `Tests  26 passed (26)` (hash 3; db 23 = 14 memory contract cases + 7 wiring + 2 memory specifics).
 
 - [ ] **Step 5: Run the same contract on real PostgreSQL**
 
@@ -2899,10 +3051,10 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  29 passed (29)` (17 migration cases + 12 pg contract cases).
+Expected: PASS — `Tests  33 passed (33)` (19 migration cases + 14 pg contract cases).
 
 Run: `npm test -- src/lib/macro/strategy`
-Expected: PASS for the unit files; `strategy.integration.test.ts` shows 29 skipped (no `S4_TEST_STATE`).
+Expected: PASS for the unit files; `strategy.integration.test.ts` shows 33 skipped (no `S4_TEST_STATE`).
 
 - [ ] **Step 6: Typecheck and lint**
 
@@ -2933,7 +3085,7 @@ EOF
 
 ## Part B — P3 计算：数值、清单、事件、传导、剧本、矩阵、行动段（Task 4–8）
 
-> Part B of `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`. Uses the skeleton's SHARED CONTRACT (`contract.ts`), `StrategyReadPort` / `memoryStrategyPort` (`port.ts`) and the fixture API (`testing/fixture.ts`: `fixture`, `FIXTURE_CATALOG`, `FIXTURE_RULES`, `obs`, `monthly`, `daily`, `snap`, `fedTargetFixture`) exactly as declared there; nothing in them is changed. Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` draft 4 (§4.5, §5.1–§5.6; §0.2 "第 4 稿" lists the plan-audit write-back).
+> Part B of `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`. Uses the skeleton's SHARED CONTRACT (`contract.ts`), `StrategyReadPort` / `memoryStrategyPort` (`port.ts`) and the fixture API (`testing/fixture.ts`: `fixture`, `FIXTURE_CATALOG`, `FIXTURE_RULES`, `obs`, `monthly`, `daily`, `snap`, `fedTargetFixture`) exactly as declared there; nothing in them is changed. Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` draft 5 (§4.5, §5.1–§5.6; §0.2 "第 4 稿" lists the plan-audit write-back).
 
 Cross-task decisions fixed in Part B (later tasks rely on them):
 - **Input roles.** Every `ManifestInput.role` is built with `inputRole(purpose, seriesId, tag)` from `manifest.ts` = `'<purpose>:<series_id>:<tag>'`. Purposes: `node` (transmission), `dim` (policy response), `col` (cycle table), `events` (event sources: reads plus the evidence rows), `snapshot_rows` (a read recording unresolved snapshot ids). Tags: `latest | prev | prev3m` (snapshot roles), `base | end | from | to` (reserved for Part C), `month_end` (a whole monthly window), `history` (a whole daily window), `evidence` (single event-source rows; all listed in the `ManifestInput.role` comment of `contract.ts`).
@@ -6255,8 +6407,9 @@ EOF
 
 规格要点：
 - `f4-client.ts`（§9.1）：`createF4Client({baseUrl?, fetch?, timeoutMs?})`；默认 `baseUrl = process.env.NEXT_PUBLIC_SITE_URL`（未设或空 → 每次调用抛 `F4Unavailable('f4_unconfigured')`）；每次请求 `AbortSignal.timeout(3000)`、`cache:'no-store'`。任何失败（网络、超时、非 2xx、非 JSON、形状不对）→ `F4Unavailable`；详情路由返回 **JSON 的 404** → `null`（判断不存在），非 JSON 的 404（路由不存在）→ `F4Unavailable`。`F4CardLite` 只投影无数字字段（`display.value` 是象限名时作为 `selected`）。`F4Client` 与 `F4Unavailable` 逐字取自计划骨架"依赖注入"节；`F4CardLite` / `F4JudgmentDetail` 已由 Task 6 放在 `f4-types.ts`，这里 `import type` 后再导出，不重复声明。
-- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`；**满页且页尾两条 `as_of` 相同**（排他游标可能漏掉同 `as_of` 的其余卡片，无法证明完整）→ 停止并 `incomplete:true`（计划审计 #12；稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项 D19）。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs` 或其中有不完整项 → `evidence_incomplete`、`diffs=[]`。
-- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于代码版本、底座与主体检查）→ `codeVersion` 为 null → 503 `code_version_unavailable`（计划审计 #9：重放不需要代码版本）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 是不可变的 `result_id`，`db.reviewResult(id)` 取结果、`db.manifest` 取其清单，再经 `reviewFactsManifest` 生成解读清单；计划审计 #5）不存在 → 404 `subject_not_found`；事实（`explanationFacts`，即清单 `body.facts`）为空 → 422 `no_facts`；解读清单 `putManifest`；模型输入只由已存清单重建（`modelInput(stored.body, locale)`，计划审计 #16）→ `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（抛错 = 结果不明，用量运行可能已提交：`recordCompletion(null, finalizePayload('failed', []))` → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → finally：`finalize(同一审计键, 该载荷)`，成功才 `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `recordCompletion(null, finalizePayload('failed', [LlmCallError.accounting]))` → `finish('failed', ['provider_error' 或成本错误码])` → finally：`finalize` → 成功才 `markFinalized` → 200 投影）→ 成功返回后**立即** `recordCompletion({content}, finalizePayload('completed', [accounting]))`（先于校验）→ 解析 + 校验 → `finish(accepted|rejected)`（拒绝也是已完成调用）→ finally：`finalize` → 成功才 `markFinalized` → 200 投影。`finish` 或校验抛错时 `finalize` 仍执行，然后错误上抛（500）；`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试，计划审计 #6–#8）；`recordCompletion` 自身失败不阻断后续步骤。
+- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`；**只凭时间戳游标越过任何满页** → `incomplete:true`（排他游标下，页尾 `as_of` 为 T 时，页外可能还有同为 T 的卡片——哪怕页尾前一条不是 T，如 `[…, T+1, T]`——无法证明完整），继续翻页收集其余卡片（计划审计 #12、R2-3；稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项 D19，有了之后满页不再标记）。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs` 或其中有不完整项 → `evidence_incomplete`、`diffs=[]`。
+- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 先 `recoverExplanation`（完成恢复，见下），再经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于代码版本、底座与主体检查）→ `codeVersion` 为 null → 503 `code_version_unavailable`（计划审计 #9：重放不需要代码版本）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 是不可变的 `result_id`，`db.reviewResult(id)` 取结果、`db.manifest` 取其清单，再经 `reviewFactsManifest` 生成解读清单；计划审计 #5）不存在 → 404 `subject_not_found`；事实（`explanationFacts`，即清单 `body.facts`）为空 → 422 `no_facts`；解读清单 `putManifest`；模型输入只由已存清单重建（`modelInput(stored.body, locale)`，计划审计 #16）→ `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（抛错 = 结果不明，用量运行可能已提交：`recordCompletion(null, finalizePayload('failed', []))` → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → finally：`finalize(同一审计键, 该载荷)`，成功才 `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `recordCompletion(null, finalizePayload('failed', [LlmCallError.accounting]))` → `finish('failed', ['provider_error' 或成本错误码])` → finally：`finalize` → 成功才 `markFinalized` → 200 投影）→ 成功返回后**立即** `recordCompletion({content}, finalizePayload('completed', [accounting]))`（先于校验）→ 解析 + 校验 → `finish(accepted|rejected)`（拒绝也是已完成调用）→ finally：`finalize` → 成功才 `markFinalized` → 200 投影。`finish` 或校验抛错时 `finalize` 仍执行，然后错误上抛（500）；`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试，计划审计 #6–#8）；`recordCompletion` 自身失败不阻断后续步骤，`finish` 带同一载荷，行上无载荷时原子写入（计划审计 R2-2）。
+- 完成恢复（计划审计 R2-1 / R2-2）：登记的原始输出是**完成信封** `{content, provider, model, prompt_version, validator_version, accounting}`，足以在不调提供方的情况下重建 finish。`recoverExplanation(d, id)`：`runDetail` → 行为 `running` 且已登记完成 → 只凭信封与 `db.manifest(run.manifest_id)` 的冻结事实重新解析 / 校验 / 渲染并 `finish`（信封里的校验器版本 ≠ 当前 `VALIDATOR_VERSION` → `failed {validator_version_changed}`）→ 行上有载荷且未结算 → 原样 `finalize`，成功才 `markFinalized`。从不抛错（失败时行保持原状，下次重放或 GET 再试）。POST 幂等重放对该运行调用一次；`recoverUserExplanations(d, userId, limit=3)` 供 `GET /explanations` 调用（Task 12）。认领 RPC 与过期函数不放弃已登记完成的行，所以恢复总能在过期之前看到它们。
 - `LlmCallError(message, accounting)`：Task 12 的生产 `LlmDeps.call` 在 `runMeteredLlmCall` 抛错时用 `meteredUsageFromError(e)` 构造它（成本错误时 `message` 用成本错误码，如 `daily_cost_exhausted`）。
 - `REPLAY_MANIFEST_ID`（全零 uuid）只在重放路径传给 `claimExplanation`：该 `(user_id, request_id)` 行已存在，RPC 不会插入。
 
@@ -6525,20 +6678,26 @@ describe('listDeviationCases (spec §6.4 enumeration)',()=>{
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(true);
   expect(f4.before).toEqual([null,'2026-05-01']);
  });
- it('a full page whose boundary ties on as_of → incomplete (cards with that as_of may sit behind the exclusive cursor)',async()=>{
+ it('a full page whose boundary ties on as_of → incomplete, and the walk still collects the later pages',async()=>{
   const full=Array.from({length:HISTORY_PAGE},(_,k)=>card(`t${k}`,k<HISTORY_PAGE-2?`2026-0${1+(k%5)}-01`:'2025-12-31'));
   full.sort((a,b)=>a.as_of<b.as_of?1:a.as_of>b.as_of?-1:0);
-  const f4=fakeF4([full,[card('next','2025-12-30')],[]],{});
+  const f4=fakeF4([full,[card('next','2025-12-30',{lifecycle:'open'})],[]],{});
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(true);
-  expect(f4.before).toEqual([null]);   // stopped before following the unsafe cursor
+  expect(f4.before).toEqual([null,'2025-12-31','2025-12-30']);
  });
- it('a full page without a boundary tie, or a short page with one, keeps paging',async()=>{
+ it('singleton at the boundary: a full page ending [… T+1, T] with an unseen card at T behind the cursor → incomplete',async()=>{
   const day=(n:number)=>new Date(Date.UTC(2026,0,1)-n*86_400_000).toISOString().slice(0,10);
-  const full=Array.from({length:HISTORY_PAGE},(_,k)=>card(`u${k}`,day(k+1)));
-  const short=[card('s1','2024-01-02'),card('s2','2024-01-02')];
-  const f4=fakeF4([full,short,[]],{});
+  const full=Array.from({length:HISTORY_PAGE},(_,k)=>card(`u${k}`,day(k+1)));   // distinct as_of values; the last two differ
+  const T=day(HISTORY_PAGE);
+  const f4=fakeF4([full,[]],{});   // F4 holds another card at T, which the exclusive `before=T` page can never return
+  const r=await listDeviationCases(f4,'US');
+  expect(f4.before).toEqual([null,T]);
+  expect(r.incomplete).toBe(true);
+ });
+ it('short pages (even with an as_of tie) keep the result complete',async()=>{
+  const f4=fakeF4([[card('s1','2024-01-02'),card('s2','2024-01-02')],[card('s3','2024-01-01')],[]],{});
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(false);
-  expect(f4.before).toEqual([null,day(HISTORY_PAGE),'2024-01-02']);
+  expect(f4.before).toEqual([null,'2024-01-02','2024-01-01']);
  });
  it('F4Unavailable propagates',async()=>{
   const f4=fakeF4([],{});f4.latestRegimeCard=async()=>{throw new F4Unavailable();};
@@ -6558,9 +6717,11 @@ Expected: FAIL，`Failed to resolve import "./deviations"`。
 // src/lib/macro/strategy/deviations.ts
 // Deviation cases macro-deviations/1 (spec 2026-11-07 §6.4, draft 3 N13; judgment layer on only). Enumerate macro_regime
 // cards of a region through F4: latest card, then /history pages until an empty page; more than 5000 cards → incomplete.
-// The cursor is the last card's as_of (exclusive `before`): a FULL page whose last card ties on as_of with the card before
-// it cannot prove that no further card with that as_of was cut off, so it ends the walk with incomplete (until F4 offers a
-// stable (as_of, judgment_id) cursor — plan open item); a cursor that does not move is incomplete too.
+// The cursor is the last card's as_of (exclusive `before`). Advancing past a FULL page with that timestamp-only cursor
+// can never prove that no unseen card shares the boundary as_of (the page may end [… T+1, T] while another card with T
+// sits behind it), so every full page marks the result incomplete; the walk still continues to collect the rest. Only
+// a stable (as_of, judgment_id) cursor from F4 (plan open item D19) can lift this. A cursor that does not move stops the
+// walk, incomplete.
 // Keep macro_regime@v1 cards with lifecycle 'settled' whose latest settlement outcome is 'miss'. For each, diff the
 // registered inputs (macro_observation frozen projections) against the latest settlement's evidence.observation_refs,
 // matched by (series_id, period_end); classification is exhaustive (revised / unchanged / dropped / newly_available with
@@ -6628,7 +6789,7 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
   if(seen.size>DEVIATION_CAP){incomplete=true;break;}
   const next=page[page.length-1].as_of;
   if(before!==null&&next>=before){incomplete=true;break;}   // cursor did not move: stop rather than loop
-  if(page.length>=HISTORY_PAGE&&page.length>1&&page[page.length-2].as_of===next){incomplete=true;break;}   // tie at a full page boundary: completeness unprovable
+  if(page.length>=HISTORY_PAGE)incomplete=true;             // full page + timestamp-only cursor: completeness unprovable (R2-3)
   before=next;
  }
  const cards=[...seen.values()].slice(0,DEVIATION_CAP).filter(c=>c.methodology.id===METHOD.id&&c.methodology.version===METHOD.version&&c.lifecycle==='settled');
@@ -6645,7 +6806,7 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/deviations.test.ts`
-Expected: PASS，`Tests  12 passed (12)`。
+Expected: PASS，`Tests  13 passed (13)`。
 
 - [ ] **Step 9: 写 `explain-request.ts` 的失败测试**（全部用假实现：`memoryStrategyDb()`、`memoryStrategyPort(fixture(...))`、假 `LlmDeps`）
 
@@ -6655,7 +6816,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection} from './contract';
 import {memoryStrategyDb} from './db';
-import {handleExplainRequest,LlmCallError,modelInput,promptText,type ExplainDeps,type LlmDeps} from './explain-request';
+import {handleExplainRequest,LlmCallError,modelInput,promptText,recoverUserExplanations,type ExplainDeps,type LlmDeps} from './explain-request';
 import {buildSnapshotFactsManifest} from './facts';
 import {memoryStrategyPort} from './port';
 import {runReview} from './review';
@@ -6888,13 +7049,71 @@ describe('injected failures after the provider returned (spec §4.4 macro_record
   await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('render bug');
   expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
  });
- it('recordCompletion failure does not stop finish or finalize; without a recorded payload the run is not marked finalized',async()=>{
+ it('recordCompletion failure does not stop finish or finalize; finish stores the same payload, so the run is marked finalized',async()=>{
   const f=fakeLlm();const d=deps({llm:f.llm});
   vi.spyOn(d.db,'recordCompletion').mockRejectedValue(new Error('db down'));
   const r=await handleExplainRequest(d,USER,body());
   expect(projection(r).state).toBe('accepted');
   expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
-  expect(d.db._run(projection(r).explanation_id)).toMatchObject({finalize_payload:null,finalized:false});
+  expect(d.db._run(projection(r).explanation_id)).toMatchObject({finalize_payload:PAY('completed',[{tokens:42}]),finalized:true});
+ });
+});
+
+describe('completion recovery without the provider (plan audit R2-1 / R2-2)',()=>{
+ it('finish failure → replay POST → accepted from the recorded output, exactly one provider call, no second finalize',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  const run=(await d.db.runOf(USER,REQ))!;
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'running',raw_output:{content:VALID,validator_version:'macro-explain-validator/1',prompt_version:'macro-explain-prompt/1',provider:'deepseek',model:'deepseek-chat',accounting:{tokens:42}}});
+  const again=await handleExplainRequest({...d,port:null,codeVersion:null},USER,body());   // a replay needs neither
+  expect(again.status).toBe(200);
+  expect(projection(again)).toMatchObject({explanation_id:run.explanation_id,state:'accepted',provider:'deepseek',model:'deepseek-chat',validator_version:'macro-explain-validator/1'});
+  expect(projection(again).rendered?.facts.map(x=>x.fact_id)).toEqual(['obs:US_CPI_YOY','chg:US_CPI_YOY','evt:2026-09-18']);
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
+  expect(f.calls.filter(c=>c.startsWith('finalize'))).toEqual(['finalize:completed']);   // settled during the first request already
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'accepted',finalized:true});
+ });
+ it('a recorded output that fails validation is recovered as rejected, still one provider call',async()=>{
+  const f=fakeLlm({content:JSON.stringify({points:[{fact_ids:['obs:US_CPI_YOY'],hypothesis:'三成的影响'}]})});const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  expect(projection(await handleExplainRequest(d,USER,body()))).toMatchObject({state:'rejected',failure_codes:['numeral'],rendered:null});
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
+ });
+ it('validator version changed since the call → failed {validator_version_changed}, the model text is not re-judged',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  const detail=d.db.runDetail.bind(d.db);
+  vi.spyOn(d.db,'runDetail').mockImplementation(async id=>{const r=await detail(id);return r&&{...r,raw_output:{...(r.raw_output as Record<string,unknown>),validator_version:'macro-explain-validator/0'}};});
+  const p=projection(await handleExplainRequest(d,USER,body()));
+  expect(p).toMatchObject({state:'failed',failure_codes:['validator_version_changed'],rendered:null,validator_version:'macro-explain-validator/0'});
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
+ });
+ it('recordCompletion, then finalize fail: finish stored the payload; the replay settles it verbatim after a pricing change and marks finalized',async()=>{
+  const f=fakeLlm({finalizeError:new Error('usage_audit_unavailable')});const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'recordCompletion').mockRejectedValue(new Error('db down'));
+  const first=projection(await handleExplainRequest(d,USER,body()));
+  expect(first.state).toBe('accepted');
+  expect(d.db._run(first.explanation_id)).toMatchObject({finalize_payload:PAY('completed',[{tokens:42}]),finalized:false});
+  f.state.pricing='p2';f.state.finalizeError=undefined;   // config moved on; the stored payload must not be recomputed
+  expect(projection(await handleExplainRequest(d,USER,body()))).toEqual(first);
+  expect(f.finalized.at(-1)).toEqual(PAY('completed',[{tokens:42}]));
+  expect(d.db._run(first.explanation_id)?.finalized).toBe(true);
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
+ });
+ it('recoverUserExplanations (GET) finishes the user\'s recorded completions, bounded by the limit, and is a no-op otherwise',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('reset')).mockRejectedValueOnce(new Error('reset'));
+  const second='33333333-3333-4333-8333-333333333333';
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('reset');
+  await expect(handleExplainRequest(d,USER,body({request_id:second}))).rejects.toThrow('reset');
+  expect(await recoverUserExplanations(d,USER,1)).toBe(1);
+  expect(await recoverUserExplanations(d,USER)).toBe(1);
+  expect(await recoverUserExplanations(d,USER)).toBe(0);
+  for(const req of [REQ,second])expect((await d.db.runOf(USER,req))!.state).toBe('accepted');
+  expect(f.calls.filter(c=>c==='call')).toHaveLength(2);
  });
 });
 
@@ -6951,13 +7170,17 @@ Expected: FAIL，`Failed to resolve import "./explain-request"`。
 // succeeded. A begin failure is ambiguous (the usage run may exist): it records a failed payload under the same audit key
 // and tries finalize(failed) too. Validation rejection is a completed call (billed as completed). A finalize failure
 // never changes the user response; the run row keeps finalize_payload with finalized=false for the ops retry.
-// Review subjects are immutable result ids (never the moving pointer).
+// Review subjects are immutable result ids (never the moving pointer). Completion recovery (plan audit R2-1 / R2-2): the
+// recorded raw output is a completion envelope {content, provider, model, prompt_version, validator_version, accounting};
+// recoverExplanation rebuilds validation / rendering from it and the manifest's frozen facts and finishes the run without
+// ever calling the provider (validator version changed → failed {validator_version_changed}), then settles a recorded,
+// unsettled finalize payload verbatim. finish also carries the payload so a failed recordCompletion still leaves it stored.
 import {readFileSync} from 'node:fs';
 import Ajv from 'ajv';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection,StrategyManifest} from './contract';
 import {VERSIONS} from './contract';
-import {StrategyDbError,type StrategyDb} from './db';
+import {StrategyDbError,hasRecordedCompletion,type RunDetail,type StrategyDb} from './db';
 import {renderExplanation,renderFacts} from './explain-render';
 import {parseModelContent,validateExplanation,VALIDATOR_VERSION} from './explain-validate';
 import {buildSnapshotFactsManifest,explanationFacts,reviewFactsManifest} from './facts';
@@ -6992,6 +7215,57 @@ const COST_ERROR_CODES=new Set(['daily_cost_exhausted','pricing_unavailable','bu
 export function costErrorCode(e:unknown):string|null{const c=e instanceof Error?e.message:String(e);return COST_ERROR_CODES.has(c)?c:null;}
 export function costErrorStatus(code:string):number{return code==='daily_cost_exhausted'?429:code==='budget_unavailable'||code==='usage_audit_unavailable'?503:500;}
 const err=(status:number,code:string,explanation?:ExplanationProjection):ExplainResponse=>({status,body:{error:{code,message:code},...(explanation?{explanation}:{})}});
+/** Recorded completions finished per GET /explanations (bounded work on a read). */
+export const RECOVER_PER_READ=3;
+type FinishArgs=Parameters<StrategyDb['finishExplanation']>[0];
+type RecoveryDeps=Pick<ExplainDeps,'db'|'llm'>;
+interface Completion{content:string;provider:string|null;model:string|null;prompt_version:string;validator_version:string;accounting:unknown}
+function completionOf(raw:unknown):Completion|null{
+ if(!hasRecordedCompletion(raw))return null;
+ const c=raw as Record<string,unknown>;
+ if(typeof c.content!=='string'||typeof c.prompt_version!=='string'||typeof c.validator_version!=='string')return null;
+ return {content:c.content,provider:typeof c.provider==='string'?c.provider:null,model:typeof c.model==='string'?c.model:null,prompt_version:c.prompt_version,validator_version:c.validator_version,accounting:c.accounting??null};
+}
+/** finalize with a recorded payload verbatim; markFinalized only after it succeeded. Never throws. */
+async function settleStored(d:RecoveryDeps,id:string,key:string,payload:Record<string,unknown>):Promise<void>{
+ try{await d.llm.finalize(key,payload);}catch{return;}   // finalized stays false: a replay, a GET or the reconcile script retries
+ try{await d.db.markFinalized(id);}catch{/* finalize succeeded; the flag is set by the next recovery (finalize is idempotent per audit key) */}
+}
+/** finish arguments rebuilt from the recorded completion and the frozen fact manifest alone (no provider call). */
+async function recoveredFinish(db:StrategyDb,run:RunDetail):Promise<FinishArgs>{
+ const c=completionOf(run.raw_output);
+ const base={explanationId:run.explanation_id,provider:c?.provider??null,model:c?.model??null,promptVersion:c?.prompt_version??PROMPT_VERSION,rawOutput:run.raw_output,accounting:c?.accounting??null,finalizePayload:run.finalize_payload};
+ if(!c||c.validator_version!==VALIDATOR_VERSION){   // an envelope without versions cannot be checked by this validator either
+  return {...base,state:'failed',validatorVersion:c?.validator_version??'',validation:{stage:'recovery',code:'validator_version_changed'},rendered:null,failureCodes:['validator_version_changed']};
+ }
+ const m=await db.manifest(run.manifest_id);
+ if(!m)throw new Error(`manifest_missing:${run.manifest_id}`);   // unreachable (foreign key); the row stays running
+ const facts=explanationFacts(m.body);
+ const result=validateExplanation(parseModelContent(c.content),new Set(facts.map(f=>f.fact_id)));
+ const validation={validator_version:VALIDATOR_VERSION,ok:result.ok,failures:result.failures,recovered:true};
+ return result.ok
+  ?{...base,state:'accepted',validatorVersion:VALIDATOR_VERSION,validation,rendered:renderExplanation(facts,result.output,run.locale,m.body.catalog),failureCodes:[]}
+  :{...base,state:'rejected',validatorVersion:VALIDATOR_VERSION,validation,rendered:null,failureCodes:result.codes};
+}
+/** Completion recovery (plan audit R2-1 / R2-2). Never calls the provider and never throws: a failure leaves the row as it
+ *  was for the next replay or GET. */
+export async function recoverExplanation(d:RecoveryDeps,explanationId:string):Promise<void>{
+ let run:RunDetail|null;
+ try{run=await d.db.runDetail(explanationId);}catch{return;}
+ if(!run)return;
+ if(run.state==='running'&&hasRecordedCompletion(run.raw_output)){
+  try{await d.db.finishExplanation(await recoveredFinish(d.db,run));}catch{return;}
+  try{run=(await d.db.runDetail(explanationId))??run;}catch{return;}
+ }
+ if(run.finalize_payload!==null&&!run.finalized)await settleStored(d,run.explanation_id,run.usage_audit_key,run.finalize_payload);
+}
+/** GET /explanations: recover the user's running rows with a recorded completion, oldest first, at most `limit`. */
+export async function recoverUserExplanations(d:RecoveryDeps,userId:string,limit=RECOVER_PER_READ):Promise<number>{
+ let ids:string[];
+ try{ids=await d.db.recoverableRuns(userId,limit);}catch{return 0;}
+ for(const id of ids)await recoverExplanation(d,id);
+ return ids.length;
+}
 
 const PROMPT_URLS={zh:new URL('./prompts/macro-explain-v1.zh.md',import.meta.url),en:new URL('./prompts/macro-explain-v1.en.md',import.meta.url)};
 const promptCache=new Map<'zh'|'en',string>();
@@ -7023,6 +7297,7 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
  const prior=await d.db.runOf(userId,body.request_id);
  if(prior){
   if(prior.payload_hash!==payloadHash)return err(409,'payload_conflict');
+  await recoverExplanation(d,prior.explanation_id);   // a recorded completion is finished / settled here, never sent to the provider again
   try{return {status:200,body:(await d.db.claimExplanation({...claimArgs,manifestId:REPLAY_MANIFEST_ID})).projection};}
   catch(e){if(e instanceof StrategyDbError&&e.code==='payload_conflict')return err(409,'payload_conflict');throw e;}
  }
@@ -7050,13 +7325,9 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
  const started=d.now().getTime();
  const id=claim.explanation_id,key=claim.usage_audit_key;
  /** Durable completion (spec §4.4 macro_record_completion). A failure here does not stop finish / finalize; without a
-  *  recorded payload markFinalized refuses and ops reconcile the row by its audit key (runbook §4). */
+  *  recorded payload finish stores the same one (p_finalize_payload), so markFinalized still works afterwards (R2-2). */
  const record=async(rawOutput:unknown,finalizePayload:Record<string,unknown>)=>{try{await d.db.recordCompletion({explanationId:id,rawOutput,finalizePayload});}catch{/* see above */}};
- /** finalize with the recorded payload verbatim; markFinalized only after it succeeded. Never throws. */
- const settle=async(finalizePayload:Record<string,unknown>)=>{
-  try{await d.llm.finalize(key,finalizePayload);}catch{return;}   // finalized stays false: the ops retry replays finalize_payload
-  try{await d.db.markFinalized(id);}catch{/* finalize succeeded; the flag is retried by the ops script (finalize is idempotent per audit key) */}
- };
+ const settle=(finalizePayload:Record<string,unknown>)=>settleStored(d,id,key,finalizePayload);
  // step 6: usage run. A begin error is ambiguous (the run may have committed): record and settle a failed payload under the same key.
  try{await d.llm.begin(key,{provider:llm.provider,model:llm.model,byo:llm.byo,subject_kind:body.subject.kind,subject_id:body.subject.id,locale:body.locale});}
  catch(e){
@@ -7064,7 +7335,7 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   const payload=d.llm.finalizePayload('failed',[]);
   await record(null,payload);
   let projection:ExplanationProjection;
-  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'begin',code},rendered:null,failureCodes:[code],accounting:null});}
+  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'begin',code},rendered:null,failureCodes:[code],accounting:null,finalizePayload:payload});}
   finally{await settle(payload);}
   return err(costErrorStatus(code),code,projection);
  }
@@ -7077,12 +7348,13 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   const payload=d.llm.finalizePayload('failed',acc===null?[]:[acc]);
   await record(null,payload);
   let projection:ExplanationProjection;
-  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'call',code,message:e instanceof Error?e.message:String(e)},rendered:null,failureCodes:[code],accounting:acc});}
+  try{projection=await d.db.finishExplanation({...base,state:'failed',rawOutput:null,validation:{stage:'call',code,message:e instanceof Error?e.message:String(e)},rendered:null,failureCodes:[code],accounting:acc,finalizePayload:payload});}
   finally{await settle(payload);}
   return {status:200,body:projection};
  }
  const payload=d.llm.finalizePayload('completed',[accounting]);
- const rawOutput={content};
+ /** Completion envelope: everything finish needs, so recovery never calls the provider again (R2-1). */
+ const rawOutput={content,provider:llm.provider,model:llm.model,prompt_version:PROMPT_VERSION,validator_version:VALIDATOR_VERSION,accounting:accounting??null};
  await record(rawOutput,payload);
  // step 8: validate → accepted | rejected (both are completed calls); finalize runs even if this throws
  let projection:ExplanationProjection;
@@ -7090,8 +7362,8 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   const result=validateExplanation(parseModelContent(content),new Set(facts.map(f=>f.fact_id)));
   const validation={validator_version:VALIDATOR_VERSION,ok:result.ok,failures:result.failures,elapsed_ms:d.now().getTime()-started};
   projection=await d.db.finishExplanation(result.ok
-   ?{...base,state:'accepted',rawOutput,validation,rendered:renderExplanation(facts,result.output,body.locale,catalog),failureCodes:[],accounting}
-   :{...base,state:'rejected',rawOutput,validation,rendered:null,failureCodes:result.codes,accounting});
+   ?{...base,state:'accepted',rawOutput,validation,rendered:renderExplanation(facts,result.output,body.locale,catalog),failureCodes:[],accounting,finalizePayload:payload}
+   :{...base,state:'rejected',rawOutput,validation,rendered:null,failureCodes:result.codes,accounting,finalizePayload:payload});
  }finally{await settle(payload);}
  return {status:200,body:projection};
 }
@@ -7100,7 +7372,7 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
 - [ ] **Step 12: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/explain-request.test.ts src/lib/macro/strategy/deviations.test.ts src/lib/macro/strategy/f4-client.test.ts`
-Expected: PASS，`Tests  62 passed (62)`。
+Expected: PASS，`Tests  68 passed (68)`（explain-request 40、deviations 13、f4-client 15）。
 
 再跑整个模块，确认 Task 9–11 与前序任务一起通过：
 
@@ -7128,11 +7400,14 @@ empty page (cap 5000 → incomplete) and classifies registered vs settled inputs
 exhaustively. explain-request.ts orchestrates the POST with injected deps:
 replay before code version, foundation and subject checks, 409 on payload
 conflict, quota for non-BYO only, claim before billing, durable completion
-(raw output + exact finalize payload) before validation, finalize in a finally
-path even when finish fails, ambiguous begin failures settled as failed under
+(a completion envelope + exact finalize payload) before validation, finish
+carrying the payload too, completion recovery from the recorded output on
+replay (never a second provider call), finalize in a finally path even when
+finish fails, ambiguous begin failures settled as failed under
 the same audit key, rejected outputs billed as completed, review subjects as
 immutable result ids, model input rebuilt from the frozen fact manifest.
-History paging stops as incomplete on a tie at a full page boundary.
+History paging marks the list incomplete whenever a full page is advanced with
+the timestamp-only cursor.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -7144,13 +7419,13 @@ EOF
 Exports from earlier tasks used here (verified by the integrator: Tasks 1–14 extracted from this plan into one scratch tree compile with `tsc --noEmit`, pass ESLint and their unit suites):
 
 - Task 2: `flags.ts` `strategyEnabled(env?)`, `judgmentsEnabled(env?)` (`'1'` = on); `port.ts` `strategyPort():StrategyReadPort|null`, `StrategyReadPort`.
-- Task 3: `db.ts` `StrategyDb` (incl. `reviewResult`, `recordCompletion`, `expireExplanations`), `supabaseStrategyDb({admin,anon,session?})`, `memoryStrategyDb({now?})` with `_userId` and `_run` (claims need an `explain_facts` manifest; `publishReview` needs a `review` manifest and its hash).
+- Task 3: `db.ts` `StrategyDb` (incl. `reviewResult`, `recordCompletion`, `expireExplanations`, `runDetail`, `recoverableRuns`), `supabaseStrategyDb({admin,anon,session?})`, `memoryStrategyDb({now?})` with `_userId` and `_run` (claims need an `explain_facts` manifest; `publishReview` needs a `review` manifest and its hash).
 - Task 6: `transmission.ts` `buildTransmissionManifest(port,{now,codeVersion,region}):Promise<StrategyManifest|null>` (null = no active snapshot in either region), `buildTransmission(stored)` (region from `params`); `playbooks.ts` `buildPlaybooks(manifest,region)`, `selectF4Mark({card,detail,snapshotId})`; `data/playbooks-v1.ts` `PLAYBOOK_DISCLAIMER_V1`; `f4-types.ts`.
 - Task 7: `policy-response.ts` `buildPolicyResponseManifest(port,{now,codeVersion,window})`, `buildPolicyResponse(stored)` (window from `params`).
 - Task 8: `cycle-table.ts` `buildCycleTableManifest(port,{now,codeVersion,boundary})`, `buildCycleTable(stored)` (boundary from `params`).
 - Task 9: `review.ts` `runReview({port,db,codeVersion},region,month,{preview}):Promise<ReviewReceipt>` (never throws; a failure comes back as `outcome:'failed'` with `error`).
 - Task 10: `explain-render.ts` `renderFact(fact,locale,names)`, `namesFrom(catalog)`; `explain-validate.ts` `FORBIDDEN_TERMS`.
-- Task 11: `f4-client.ts` `createF4Client()`, `F4Client`, `F4CardLite`; `deviations.ts` `listDeviationCases(f4,region)`; `explain-request.ts` `handleExplainRequest({db,port,llm,now,codeVersion:string|null},userId,body):Promise<{status,body}>`, `LlmDeps` (with `finalizePayload` and `finalize(key,payload)`), `LlmCallError(message,accounting)`, `modelInput(manifest,locale)`. Review explanation subjects are immutable review `result_id`s.
+- Task 11: `f4-client.ts` `createF4Client()`, `F4Client`, `F4CardLite`; `deviations.ts` `listDeviationCases(f4,region)`; `explain-request.ts` `handleExplainRequest({db,port,llm,now,codeVersion:string|null},userId,body):Promise<{status,body}>`, `recoverUserExplanations({db,llm},userId,limit=3):Promise<number>` (completion recovery for GET), `LlmDeps` (with `finalizePayload` and `finalize(key,payload)`), `LlmCallError(message,accounting)`, `modelInput(manifest,locale)`. Review explanation subjects are immutable review `result_id`s.
 
 Test files can import only `.ts` modules (vitest runs `src/**/*.test.ts` in node, and a `.test.ts` cannot import a `.tsx`). Every decision a component makes lives in `strategy-view-model.ts` and is tested there; the `.tsx` files are thin renderers checked by `tsc`, ESLint and the page structure test.
 
@@ -7179,7 +7454,7 @@ Design decisions (spec §8, §9.1, §6.2, §6.3):
 - **Manifests** (Part B, "One manifest per kind"): each fact route builds the manifest body of its kind with `{now:new Date(), codeVersion, region | window | boundary}` (the parameter is frozen into `params`, plan audit #3), stores it with `putManifest` (idempotent by hash), then calls the pure view builder with the stored manifest only (it reads the parameter from `body.params`). The F4 mark uses `stored.body.snapshots[region]?.snapshot_id ?? null`. `buildTransmissionManifest` returning `null` → 404 `no_published_snapshot` (the page shows "尚无发布快照"). The process LRU of spec §4.5 is not built here (已知偏差与开放项 D1).
 - **Code version**: `resolveCodeVersion({allowGit:false})`. When it is null the manifest-writing routes (transmission, policy-response, cycle-table) and the cron answer 503 `code_version_unavailable`, as `/api/cron/facts-sync` does; explanations POST passes `codeVersion: null` into the handler, which answers 503 only after its idempotent replay (plan audit #9), instead of freezing `'unknown'` into manifest identities (已知偏差与开放项 D2).
 - **Review detail** returns `{result, manifest_id, generation, names, judgment_status, f4?}`. `names` is the review manifest's frozen catalog `{id, name}` list, so the UI can call `renderFact(fact, locale, namesFrom(names))`. The judgment section reads `latestRegimeCard(region, {asOf: reviewAsOfDate(month)})` (the review cutoff date, the 3rd of the next month; F4 `view=as_known`), then `judgmentDetail`, and keeps only `selectF4Mark({card, detail, snapshotId: null}).summary`: number-free and never stored.
-- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion: codeVersionOrNull()}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → first `db.expireExplanations(userId)` (admin RPC `macro_expire_explanations`: the caller's runs left `running` for more than five minutes become abandoned → projection failed, plan audit #14), then `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are immutable review result ids (uuid; 已知偏差与开放项 D3).
+- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion: codeVersionOrNull()}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → first `recoverUserExplanations({db, llm: productionLlmDeps(userId)}, userId)` (Task 11: at most three of the caller's running rows with a recorded completion are finished from the stored output and settled, never sent to the provider again; plan audit R2-1), then `db.expireExplanations(userId)` (admin RPC `macro_expire_explanations`: the caller's runs left `running` for more than five minutes without a recorded completion become abandoned → projection failed, plan audit #14), then `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are immutable review result ids (uuid; 已知偏差与开放项 D3).
 - **Production `LlmDeps`** (`llm-deps.ts`) makes the perspectives route's calls in the same order. It uses `resolveLlm()` (the perspectives route's call; `resolveUserLlm()` would only ever return BYO keys), `checkQuota('perspectives')`, the same limiter choice built right before `beginUsageRun(userId, key, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`, then one `limiter.runWithBudgetRetry(() => runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call: () => chatResolved(...)}))`, `meteredUsageFromError` on failure, and `finalizeUsageRun` with the field mapping of the route's `finalizeAccounting` minus `ticker`. That body is built once by `finalizePayload(status, accounting)` (aggregate + the pricing version and FX in force at completion, JSON-safe) and stored on the run row; `finalize(key, payload)` sends a payload verbatim, so a retry after a pricing / FX change replays what the request computed (plan audit #8). `budgetExempt` is true when the quota answered `limit === -1`. A failed call throws `LlmCallError(e.message, meteredUsageFromError(e) ?? null)`, so a cost error code such as `daily_cost_exhausted` stays the message.
 - **Cron**: `GET /api/cron/macro-review` with `authorizedCronRequest(header, CRON_SECRET)`. The default month is the newest closed month — a month is closed once its review cutoff (`monthCutoff`, the 3rd of the next month 00:00:00Z) has passed, so the run on the 3rd at 06:00 UTC targets the previous month — both regions in order US, CN. `?month=YYYY-MM` must be a closed month ≥ 2000-01; `?preview` accepts only `1`. The receipt keeps `runReview`'s fields but replaces a failed unit's `error` message with `code:'review_failed'` (codes only over HTTP, as facts-sync does); any failed unit makes the response 500.
 - Errors are `{error:{code,message}}` with `Cache-Control: no-store`. Reads send `private, max-age=300`; explanations send `private, no-store`.
@@ -7408,7 +7683,7 @@ import {memoryStrategyDb,type StrategyDb} from '@/lib/macro/strategy/db';
 import type {F4CardLite} from '@/lib/macro/strategy/f4-client';
 
 const m=vi.hoisted(()=>({user:vi.fn(),port:vi.fn(),db:null as unknown,code:vi.fn(),trManifest:vi.fn(),buildTransmission:vi.fn(),buildPlaybooks:vi.fn(),selectF4Mark:vi.fn(),
- prManifest:vi.fn(),buildPolicyResponse:vi.fn(),ctManifest:vi.fn(),buildCycleTable:vi.fn(),runReview:vi.fn(),handle:vi.fn(),listDeviationCases:vi.fn(),createF4Client:vi.fn(),card:vi.fn(),detail:vi.fn()}));
+ prManifest:vi.fn(),buildPolicyResponse:vi.fn(),ctManifest:vi.fn(),buildCycleTable:vi.fn(),runReview:vi.fn(),handle:vi.fn(),recover:vi.fn(),listDeviationCases:vi.fn(),createF4Client:vi.fn(),card:vi.fn(),detail:vi.fn()}));
 vi.mock('@/lib/supabase/server',()=>({getServerSupabase:async()=>({auth:{getUser:m.user}})}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({})}));
 vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({})}));
@@ -7420,7 +7695,7 @@ vi.mock('@/lib/macro/strategy/playbooks',()=>({buildPlaybooks:m.buildPlaybooks,s
 vi.mock('@/lib/macro/strategy/policy-response',()=>({buildPolicyResponseManifest:m.prManifest,buildPolicyResponse:m.buildPolicyResponse}));
 vi.mock('@/lib/macro/strategy/cycle-table',()=>({buildCycleTableManifest:m.ctManifest,buildCycleTable:m.buildCycleTable}));
 vi.mock('@/lib/macro/strategy/review',()=>({runReview:m.runReview}));
-vi.mock('@/lib/macro/strategy/explain-request',()=>({handleExplainRequest:m.handle}));
+vi.mock('@/lib/macro/strategy/explain-request',()=>({handleExplainRequest:m.handle,recoverUserExplanations:m.recover}));
 vi.mock('@/lib/macro/strategy/deviations',()=>({listDeviationCases:m.listDeviationCases}));
 vi.mock('@/lib/macro/strategy/f4-client',()=>({createF4Client:m.createF4Client,F4Unavailable:class F4Unavailable extends Error{}}));
 vi.mock('@/lib/macro/strategy/llm-deps',()=>({productionLlmDeps:(userId:string)=>({tag:'llm',userId})}));
@@ -7490,7 +7765,7 @@ beforeEach(()=>{
  m.createF4Client.mockReturnValue({latestRegimeCard:m.card,judgmentDetail:m.detail,history:vi.fn()});
  m.card.mockResolvedValue(CARD);m.detail.mockResolvedValue({judgment_id:'j1'});m.selectF4Mark.mockReturnValue(MARK);
  m.listDeviationCases.mockResolvedValue({cases:[],incomplete:false});
- m.handle.mockResolvedValue({status:200,body:{explanation_id:'e1',state:'accepted'}});
+ m.handle.mockResolvedValue({status:200,body:{explanation_id:'e1',state:'accepted'}});m.recover.mockResolvedValue(0);
  m.runReview.mockImplementation(async(_d:unknown,region:string,month:string,o:{preview:boolean})=>({region,month,outcome:o.preview?'preview':'advanced',status:'ok',manifest_hash:'h',manifest_id:MID,result_id:REQ,generation:1}));
 });
 afterEach(()=>{for(const k of ENV_KEYS){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}vi.useRealTimers();});
@@ -7675,7 +7950,7 @@ describe('fact routes',()=>{
   const items=(await json(r)).items as {state:string;subject_id:string}[];
   expect(items).toHaveLength(1);expect(items[0]).toMatchObject({state:'running',subject_id:RID});
  });
- it('explanations GET expires the caller\'s dead runs first: a reload after five minutes shows failed {abandoned}, never running',async()=>{
+ it('explanations GET recovers recorded completions, then expires the caller\'s dead runs: a reload after five minutes shows failed {abandoned}, never running',async()=>{
   let t=Date.parse('2026-11-07T00:00:00Z');db=memoryStrategyDb({now:()=>new Date(t)});m.db=db;
   const facts=await db.putManifest(body('explain_facts'));
   await db.claimExplanation({userId:USER,requestId:REQ,payloadHash:'a'.repeat(64),subjectKind:'review',subjectId:RID,locale:'zh',manifestId:facts.manifest_id});
@@ -7686,6 +7961,8 @@ describe('fact routes',()=>{
   t+=6*60_000;
   expect(await call()).toMatchObject({state:'failed',failure_codes:['abandoned']});
   expect(expire).toHaveBeenCalledWith(USER);
+  expect(m.recover).toHaveBeenCalledWith({db,llm:{tag:'llm',userId:USER}},USER);
+  expect(m.recover.mock.invocationCallOrder.at(-1)!).toBeLessThan(expire.mock.invocationCallOrder.at(-1)!);   // recovery runs before expiry
  });
 });
 
@@ -8105,11 +8382,13 @@ Create `src/app/api/macro/strategy/explanations/route.ts`:
 // handleExplainRequest (Task 11), which validates the body, replays an existing (user, request_id) run before the code
 // version, foundation and subject checks (a replay needs no code version), and runs the metered call through
 // productionLlmDeps. Responses are projections (or {error, explanation?}), private, no-store. Review subjects are
-// immutable review result ids. GET ?subject_kind=snapshot|review&subject_id= → first macro_expire_explanations(user)
-// (admin; a run left running for more than five minutes becomes abandoned → failed, so a reload never shows a dead run
-// as running), then the caller's own projections (RLS), newest 20.
+// immutable review result ids. GET ?subject_kind=snapshot|review&subject_id= → first recoverUserExplanations (at most
+// three of the caller's running rows whose provider output is recorded are finished from that output and settled — the
+// provider is never called again; plan audit R2-1), then macro_expire_explanations(user) (admin; a run left running for
+// more than five minutes without a recorded completion becomes abandoned → failed, so a reload never shows a dead run as
+// running), then the caller's own projections (RLS), newest 20.
 import {NextResponse} from 'next/server';
-import {handleExplainRequest} from '@/lib/macro/strategy/explain-request';
+import {handleExplainRequest,recoverUserExplanations} from '@/lib/macro/strategy/explain-request';
 import {productionLlmDeps} from '@/lib/macro/strategy/llm-deps';
 import {strategyPort} from '@/lib/macro/strategy/port';
 import {NO_STORE,codeVersionOrNull,errorResponse,failureResponse,readGate,readParams,sessionGate,strategyDb,subjectIdOf,subjectKindOf} from '@/lib/macro/strategy/route-helpers';
@@ -8125,6 +8404,7 @@ export async function GET(req:Request){
   const kind=subjectKindOf(p.get('subject_kind'));
   const id=subjectIdOf(kind,p.get('subject_id'));
   const db=strategyDb(g.session);
+  await recoverUserExplanations({db,llm:productionLlmDeps(g.userId)},g.userId);
   await db.expireExplanations(g.userId);
   const items=await db.explanationsOf('session',kind,id,LIST_LIMIT);
   return NextResponse.json({items},{headers:NO_STORE});
@@ -8876,7 +9156,7 @@ export function headerLine(p:ExplanationProjection,t:StrategyT):string{
   model:p.provider&&p.model?`${p.provider}/${p.model}`:MISSING,prompt:p.prompt_version,validator:p.validator_version});
 }
 /** Failure codes of Task 10 (validator) and Task 11 (run lifecycle and the perspectives cost errors). */
-export const KNOWN_FAILURES:readonly string[]=['parse','schema','unknown_fact','numeral','forbidden_term','regime_term','abandoned','provider_error',
+export const KNOWN_FAILURES:readonly string[]=['parse','schema','unknown_fact','numeral','forbidden_term','regime_term','abandoned','provider_error','validator_version_changed',
  'usage_audit_unavailable','usage_audit_invariant','daily_cost_exhausted','pricing_unavailable','budget_unavailable','budget_invariant_violation'];
 export const failureLabel=(code:string,t:StrategyT):string=>KNOWN_FAILURES.includes(code)?t(`explain.failure.${code}`):code;
 /** Today's remaining runs of the shared 'perspectives' quota from GET /api/usage/today; limit -1 = unlimited. */
@@ -9063,7 +9343,7 @@ Create `messages/zh/macroStrategy.json`:
     "noModel": "未配置可用的模型",
     "noFacts": "该主体没有可解读的事实",
     "noSubject": "找不到要解读的快照或复盘",
-    "failure": {"parse": "输出无法解析", "schema": "结构不符", "unknown_fact": "引用了不存在的事实", "numeral": "含数字记号", "forbidden_term": "含禁用词", "regime_term": "含象限词", "abandoned": "生成超时被放弃", "provider_error": "模型调用失败", "usage_audit_unavailable": "计量暂不可用", "usage_audit_invariant": "计量记录不一致", "daily_cost_exhausted": "今日平台成本额度已用完", "pricing_unavailable": "该模型缺少定价", "budget_unavailable": "成本预算暂不可用", "budget_invariant_violation": "成本预算记录不一致"}
+    "failure": {"parse": "输出无法解析", "schema": "结构不符", "unknown_fact": "引用了不存在的事实", "numeral": "含数字记号", "forbidden_term": "含禁用词", "regime_term": "含象限词", "abandoned": "生成超时被放弃", "provider_error": "模型调用失败", "validator_version_changed": "校验器版本已更新，原输出未重新判定", "usage_audit_unavailable": "计量暂不可用", "usage_audit_invariant": "计量记录不一致", "daily_cost_exhausted": "今日平台成本额度已用完", "pricing_unavailable": "该模型缺少定价", "budget_unavailable": "成本预算暂不可用", "budget_invariant_violation": "成本预算记录不一致"}
   },
   "deviation": {
     "title": "偏差案例",
@@ -9238,7 +9518,7 @@ Create `messages/en/macroStrategy.json`:
     "noModel": "No model is configured",
     "noFacts": "This subject has no facts to explain",
     "noSubject": "The snapshot or review to explain was not found",
-    "failure": {"parse": "Output could not be parsed", "schema": "Wrong structure", "unknown_fact": "Cites a fact that does not exist", "numeral": "Contains a number token", "forbidden_term": "Contains a forbidden term", "regime_term": "Contains a regime term", "abandoned": "Abandoned after a timeout", "provider_error": "Model call failed", "usage_audit_unavailable": "Metering unavailable", "usage_audit_invariant": "Metering record inconsistent", "daily_cost_exhausted": "Today's platform cost budget is used up", "pricing_unavailable": "No pricing for this model", "budget_unavailable": "Cost budget unavailable", "budget_invariant_violation": "Cost budget record inconsistent"}
+    "failure": {"parse": "Output could not be parsed", "schema": "Wrong structure", "unknown_fact": "Cites a fact that does not exist", "numeral": "Contains a number token", "forbidden_term": "Contains a forbidden term", "regime_term": "Contains a regime term", "abandoned": "Abandoned after a timeout", "provider_error": "Model call failed", "validator_version_changed": "Validator updated; the stored output was not re-judged", "usage_audit_unavailable": "Metering unavailable", "usage_audit_invariant": "Metering record inconsistent", "daily_cost_exhausted": "Today's platform cost budget is used up", "pricing_unavailable": "No pricing for this model", "budget_unavailable": "Cost budget unavailable", "budget_invariant_violation": "Cost budget record inconsistent"}
   },
   "deviation": {
     "title": "Deviation cases",
@@ -10054,8 +10334,9 @@ Create `src/components/macro/strategy/ExplanationPanel.tsx`:
 // LLM explanation panel (spec §3.6, §6.3): not generated → running → accepted (system fact sentences, then the
 // model's hypotheses citing fact numbers) / rejected (failure codes only, never model text) / failed. The fixed header
 // names the bound subject, manifest, model, prompt and validator versions. A request id is reused only for a retry
-// after a network failure. A run whose worker died stays 'running' only until a refresh: GET /explanations expires runs
-// older than five minutes (abandoned → failed), and the failed state offers a new request. Review panels bind to the
+// after a network failure. A run whose worker died stays 'running' only until a refresh: GET /explanations first finishes
+// runs whose model output was already recorded (no second model call), then expires the rest older than five minutes
+// (abandoned → failed), and the failed state offers a new request. Review panels bind to the
 // displayed immutable result_id. Remaining runs come from the shared perspectives quota.
 import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
@@ -10438,13 +10719,16 @@ EOF
 - Create: `src/app/(app)/intel/macro/review/[region]/[month]/page.tsx`
 - Create: `src/app/(app)/intel/macro/transmission/strategy-pages.test.ts` (P1 owns `src/app/(app)/intel/macro/pages.test.ts`; this file lives in a directory this plan owns)
 - Create: `src/lib/macro/strategy/forbidden-terms.test.ts`
+- Create: `src/lib/macro/strategy/reconcile.ts`, `src/lib/macro/strategy/reconcile.test.ts`
+- Create: `scripts/macro/strategy-reconcile.ts`
 - Create: `docs/runbooks/macro-strategy.md`
 
 Design decisions (spec §3.1, §9.1, §12, §13):
 - The repo's page-test pattern is structural (P1 plan Task 17 `pages.test.ts`, and `src/app/(app)/dynamic-rendering.test.ts`): read the page source and assert `force-dynamic`, no `'use client'`, and the gate calls. The four pages follow it. The shared `dynamic-rendering.test.ts` is not edited (shared file outside the MACRO-P3 list); `strategy-pages.test.ts` asserts the same two properties for these pages.
 - Each page is a thin server component: `strategyEnabled()` off → `notFound()` (spec §9.1 "子路由 404"); `strategyPort()` null → `<DependencyState kind="foundation" />` ("宏观数据底座未就绪") before anything loads; otherwise the client screen from `StrategyScreens.tsx`. The month page also turns an invalid region or month into `notFound()`. The `(app)` layout already requires a signed-in user. Pages read flags only through `flags.ts`; the judgment layer state reaches the UI only through the APIs' `judgment_status` / 404 `judgments_disabled`.
 - `forbidden-terms.test.ts` scans the production text surfaces of spec §12 (N11): the strategy library (non-test `.ts`, minus `explain-validate.ts` whose constants hold the list, minus the test-only `testing/` helpers), its `data/**` and `prompts/**`, the strategy components, the `macroStrategy` messages, plus the strategy routes, the cron route and the four pages. It uses the validator's `FORBIDDEN_TERMS` (Chinese terms as substrings, English terms on word boundaries, case-insensitive), a superset of 概率 / 置信 / 胜率 / probability / confidence, so the test file itself never spells those words. Each surface also has a minimum file count, so a moved directory cannot pass by scanning nothing.
-- The runbook covers spec §13: the capability matrix, WP-S6 wiring steps, review recompute, explanation failure codes and finalize retry, catalog additions, and the verification gate with the known local flakes.
+- The runbook covers spec §13: the capability matrix, WP-S6 wiring steps, review recompute, explanation failure codes, completion recovery and settlement reconcile, catalog additions, and the verification gate with the known local flakes.
+- Settlement reconcile (plan audit R2-4): `finalizeUsageRun` (`src/lib/billing/quota.ts`) throws only `usage_audit_invariant` (SQLSTATE 55000, `usage run finalize conflict`) or `usage_audit_unavailable` (everything else, including P0002 `usage run not found` after three attempts), so its error cannot classify a run. `reconcile.ts` reads `usage_events` by `idempotency_key` (= `usage_audit_key`) and classifies absent / pending / settled / conflict; `scripts/macro/strategy-reconcile.ts` is the thin CLI (dry run by default, `--apply`). The unit test drives the real wrapper over a stubbed admin rpc, so the runbook's statements about its errors are tested, not assumed.
 
 - [ ] **Step 1: Write the failing page and vocabulary tests**
 
@@ -10529,10 +10813,98 @@ describe('forbidden vocabulary on production text surfaces',()=>{
 });
 ```
 
+Create `src/lib/macro/strategy/reconcile.test.ts`:
+
+```ts
+// src/lib/macro/strategy/reconcile.test.ts
+// reconcile.ts (plan audit R2-4) over a fake client whose finalize is the REAL finalizeUsageRun wrapper on a stubbed admin
+// rpc, so the test pins the wrapper's error mapping the runbook relies on (P0002 or a transient error →
+// usage_audit_unavailable, 55000 → usage_audit_invariant) and shows why the usage_events lookup, not that error, decides.
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+
+const m=vi.hoisted(()=>({rpc:vi.fn()}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn()}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({rpc:m.rpc})}));
+
+import {finalizeUsageRun,type RecordUsageMeta} from '@/lib/billing/quota';
+import {classifyUsageEvent,expectedUsageColumns,reconcileSettlements,type ReconcileClient,type UnsettledRun,type UsageEventRow} from './reconcile';
+
+const PAYLOAD={status:'completed',provider:'deepseek',model:'deepseek-chat',inputTokens:120,cacheHitInputTokens:20,cacheMissInputTokens:100,outputTokens:80,costMicrormb:900,
+ pricingVersion:'p1',usdCnyMicros:7_100_000,usageEstimated:false,byo:false};
+const row=(o:Partial<UsageEventRow>={}):UsageEventRow=>({status:'completed',provider:'deepseek',model:'deepseek-chat',input_tokens:120,cache_hit_input_tokens:20,cache_miss_input_tokens:100,
+ output_tokens:80,cost_micrormb:'900',pricing_version:'p1',usd_cny_micros:'7100000',usage_estimated:false,byo:false,...o});
+const run=(id:string,payload:Record<string,unknown>=PAYLOAD):UnsettledRun=>({explanation_id:id,user_id:'u1',usage_audit_key:id,state:'accepted',finalize_payload:payload});
+const meta=(p:Record<string,unknown>)=>p as unknown as RecordUsageMeta;
+
+function fakeClient(runs:UnsettledRun[],events:Record<string,UsageEventRow>){
+ const marked:string[]=[];const finalized:{key:string;payload:Record<string,unknown>}[]=[];
+ const c:ReconcileClient={
+  unsettledRuns:async limit=>runs.slice(0,limit),
+  usageEvent:async key=>events[key]??null,
+  finalize:async(userId,key,payload)=>{finalized.push({key,payload});await finalizeUsageRun(userId,key,'perspectives',meta(payload));},
+  markFinalized:async id=>{marked.push(id);},
+ };
+ return {c,marked,finalized};
+}
+beforeEach(()=>{m.rpc.mockReset();});
+
+describe('the billing wrapper cannot classify a failed retry',()=>{
+ it('usage run not found (P0002) and a transient error both surface as usage_audit_unavailable; a finalize conflict (55000) as usage_audit_invariant',async()=>{
+  m.rpc.mockResolvedValue({data:null,error:{code:'P0002',message:'usage run not found'}});
+  await expect(finalizeUsageRun('u1','k','perspectives',meta(PAYLOAD))).rejects.toThrow('usage_audit_unavailable');
+  expect(m.rpc).toHaveBeenCalledTimes(3);
+  m.rpc.mockReset();m.rpc.mockResolvedValue({data:null,error:{code:'08006',message:'connection failure'}});
+  await expect(finalizeUsageRun('u1','k','perspectives',meta(PAYLOAD))).rejects.toThrow('usage_audit_unavailable');
+  m.rpc.mockReset();m.rpc.mockResolvedValue({data:null,error:{code:'55000',message:'usage run finalize conflict'}});
+  await expect(finalizeUsageRun('u1','k','perspectives',meta(PAYLOAD))).rejects.toThrow('usage_audit_invariant');
+  expect(m.rpc).toHaveBeenCalledTimes(1);
+ });
+});
+
+describe('classifyUsageEvent',()=>{
+ it('absent / pending / settled / conflict; bigint strings and the wrapper defaults compare as the wrapper writes them',()=>{
+  expect(classifyUsageEvent(null,PAYLOAD)).toBe('absent');
+  expect(classifyUsageEvent(row({status:'pending'}),PAYLOAD)).toBe('pending');
+  expect(classifyUsageEvent(row(),PAYLOAD)).toBe('settled');
+  expect(classifyUsageEvent(row({status:'failed',usage_estimated:true}),PAYLOAD)).toBe('conflict');   // failed by fail_stale_usage_runs
+  expect(classifyUsageEvent(row({cost_micrormb:901}),PAYLOAD)).toBe('conflict');
+  const byo={status:'failed',provider:'openai',model:'gpt-x',byo:true};   // a begin-stage BYO payload: zero usage, wrapper defaults
+  expect(expectedUsageColumns(byo)).toMatchObject({input_tokens:0,cache_miss_input_tokens:0,cost_micrormb:0,pricing_version:null,usd_cny_micros:null,usage_estimated:false});
+  expect(classifyUsageEvent(row({status:'failed',provider:'openai',model:'gpt-x',input_tokens:0,cache_hit_input_tokens:0,cache_miss_input_tokens:0,output_tokens:0,cost_micrormb:0,
+   pricing_version:null,usd_cny_micros:null,byo:true}),byo)).toBe('settled');
+ });
+});
+
+describe('reconcileSettlements',()=>{
+ it('a dry run reads only',async()=>{
+  const f=fakeClient([run('a'),run('b')],{b:row({status:'pending'})});
+  expect((await reconcileSettlements(f.c,{apply:false,limit:10})).map(l=>[l.explanation_id,l.class,l.action])).toEqual([['a','absent','dry_run'],['b','pending','dry_run']]);
+  expect(f.marked).toEqual([]);expect(f.finalized).toEqual([]);expect(m.rpc).not.toHaveBeenCalled();
+ });
+ it('apply: absent and settled are marked without a finalize; pending is finalized verbatim through the wrapper, then marked; conflict is left for review',async()=>{
+  m.rpc.mockResolvedValue({data:[{id:'x',status:'completed'}],error:null});
+  const f=fakeClient([run('absent'),run('settled'),run('pending'),run('conflict')],{settled:row(),pending:row({status:'pending'}),conflict:row({status:'failed',usage_estimated:true})});
+  const out=await reconcileSettlements(f.c,{apply:true,limit:10});
+  expect(out.map(l=>[l.explanation_id,l.class,l.action])).toEqual([['absent','absent','marked'],['settled','settled','marked'],['pending','pending','finalized_and_marked'],['conflict','conflict','left_for_review']]);
+  expect(f.finalized).toEqual([{key:'pending',payload:PAYLOAD}]);
+  expect(m.rpc).toHaveBeenCalledTimes(1);
+  expect(m.rpc).toHaveBeenCalledWith('finalize_usage_run',expect.objectContaining({p_idempotency_key:'pending',p_user_id:'u1',p_feature:'perspectives',p_cost_micrormb:900,
+   p_pricing_version:'p1',p_usd_cny_micros:7_100_000,p_status:'completed'}));
+  expect(f.marked).toEqual(['absent','settled','pending']);
+ });
+ it('a pending row whose finalize still fails stays unmarked with the wrapper code; the limit bounds the batch',async()=>{
+  m.rpc.mockResolvedValue({data:null,error:{code:'08006',message:'connection failure'}});
+  const f=fakeClient([run('p1'),run('p2')],{p1:row({status:'pending'}),p2:row({status:'pending'})});
+  expect(await reconcileSettlements(f.c,{apply:true,limit:1})).toEqual([{explanation_id:'p1',usage_audit_key:'p1',state:'accepted',class:'pending',action:'finalize_failed',error:'usage_audit_unavailable'}]);
+  expect(f.marked).toEqual([]);
+ });
+});
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `npm test -- "src/app/(app)/intel/macro/transmission/strategy-pages.test.ts" src/lib/macro/strategy/forbidden-terms.test.ts`
-Expected: FAIL. The four page cases fail with ENOENT (no page files yet), and `pages: no forbidden term` fails on `expected 0 to be greater than or equal to 4`. The other surfaces already pass, because Tasks 2–13 exist; the component case of the page test passes too.
+Run: `npm test -- "src/app/(app)/intel/macro/transmission/strategy-pages.test.ts" src/lib/macro/strategy/forbidden-terms.test.ts src/lib/macro/strategy/reconcile.test.ts`
+Expected: FAIL. The four page cases fail with ENOENT (no page files yet), and `pages: no forbidden term` fails on `expected 0 to be greater than or equal to 4`. `reconcile.test.ts` fails with `Failed to resolve import "./reconcile"`. The other surfaces already pass, because Tasks 2–13 exist; the component case of the page test passes too.
 
 If a surface other than `pages` reports a hit (for example a data or prompt file of Tasks 6–10 using 将会 or "chance of"), do not weaken the test: stop and report the file and line to the orchestrator, because the wording fix belongs to that task's file.
 
@@ -10626,6 +10998,153 @@ export default async function ReviewMonthPage({ params }: { params: Promise<{ re
 }
 ```
 
+Create `src/lib/macro/strategy/reconcile.ts`:
+
+```ts
+// src/lib/macro/strategy/reconcile.ts
+// Settlement reconciliation of macro explanation runs (spec §13, runbook §4; plan audit R2-4). The billing wrapper cannot
+// classify a failed retry: finalizeUsageRun (src/lib/billing/quota.ts) maps SQLSTATE 55000 ('usage run finalize conflict')
+// to usage_audit_invariant and every other error, including P0002 'usage run not found' after three attempts, to
+// usage_audit_unavailable. This module therefore reads the usage_events row by idempotency_key (= the run's
+// usage_audit_key) and acts on what it finds:
+//   absent   no usage run: beginUsageRun never committed, so the model was never called → markFinalized (nothing to settle)
+//   pending  finalizeUsageRun(the stored payload, verbatim) → markFinalized on success
+//   settled  terminal row equal to the stored payload (an earlier finalize succeeded, the mark was lost) → markFinalized
+//   conflict terminal row that differs (for example failed by fail_stale_usage_runs) → left unfinalized for a person
+// The stored payload is never recomputed from current pricing or FX, and the model is never called. A dry run reads only.
+// expectedUsageColumns mirrors finalizeUsageRun's argument mapping (defaults, integer bounding, derived cache misses).
+
+export interface UnsettledRun{explanation_id:string;user_id:string;usage_audit_key:string;state:string;finalize_payload:Record<string,unknown>}
+/** usage_events columns compared with the stored payload (bigint columns may arrive as strings). */
+export interface UsageEventRow{status:string;provider:string|null;model:string|null;input_tokens:number|string|null;cache_hit_input_tokens:number|string|null;
+ cache_miss_input_tokens:number|string|null;output_tokens:number|string|null;cost_micrormb:number|string|null;pricing_version:string|null;
+ usd_cny_micros:number|string|null;usage_estimated:boolean|null;byo:boolean|null}
+export const USAGE_EVENT_COLUMNS='status,provider,model,input_tokens,cache_hit_input_tokens,cache_miss_input_tokens,output_tokens,cost_micrormb,pricing_version,usd_cny_micros,usage_estimated,byo';
+export interface ReconcileClient{
+ /** macro_explanation_runs with finalize_payload set and finalized = false, oldest claim first. */
+ unsettledRuns(limit:number):Promise<UnsettledRun[]>;
+ /** usage_events row whose idempotency_key equals the key, or null. */
+ usageEvent(idempotencyKey:string):Promise<UsageEventRow|null>;
+ /** finalizeUsageRun(userId, key, 'perspectives', payload) with the payload verbatim. */
+ finalize(userId:string,idempotencyKey:string,payload:Record<string,unknown>):Promise<void>;
+ markFinalized(explanationId:string):Promise<void>;
+}
+export type UsageEventClass='absent'|'pending'|'settled'|'conflict';
+export type ReconcileAction='dry_run'|'marked'|'finalized_and_marked'|'finalize_failed'|'mark_failed'|'left_for_review';
+export interface ReconcileLine{explanation_id:string;usage_audit_key:string;state:string;class:UsageEventClass;action:ReconcileAction;error?:string}
+
+const bounded=(v:unknown):number=>typeof v==='number'&&Number.isFinite(v)?Math.min(Math.max(0,Math.trunc(v)),Number.MAX_SAFE_INTEGER):0;
+const num=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
+/** The usage_events values finalizeUsageRun writes for this payload (same defaults and bounding as the wrapper). */
+export function expectedUsageColumns(p:Record<string,unknown>):Record<string,unknown>{
+ const input=bounded(p.inputTokens??p.tokensIn),hit=bounded(p.cacheHitInputTokens);
+ return {status:p.status??'completed',provider:String(p.provider??'unknown').trim(),model:String(p.model??'unknown').trim(),
+  input_tokens:input,cache_hit_input_tokens:hit,cache_miss_input_tokens:p.cacheMissInputTokens===undefined?Math.max(0,input-hit):bounded(p.cacheMissInputTokens),
+  output_tokens:bounded(p.outputTokens??p.tokensOut),cost_micrormb:bounded(p.costMicrormb),pricing_version:p.pricingVersion??null,
+  usd_cny_micros:p.usdCnyMicros===undefined?null:bounded(p.usdCnyMicros),usage_estimated:p.usageEstimated??false,byo:p.byo};
+}
+export function classifyUsageEvent(ev:UsageEventRow|null,payload:Record<string,unknown>):UsageEventClass{
+ if(!ev)return 'absent';
+ if(ev.status==='pending')return 'pending';
+ const want=expectedUsageColumns(payload);
+ const got:Record<string,unknown>={status:ev.status,provider:ev.provider,model:ev.model,input_tokens:num(ev.input_tokens),cache_hit_input_tokens:num(ev.cache_hit_input_tokens),
+  cache_miss_input_tokens:num(ev.cache_miss_input_tokens),output_tokens:num(ev.output_tokens),cost_micrormb:num(ev.cost_micrormb),pricing_version:ev.pricing_version,
+  usd_cny_micros:num(ev.usd_cny_micros),usage_estimated:ev.usage_estimated,byo:ev.byo};
+ return Object.keys(want).every(k=>want[k]===got[k])?'settled':'conflict';
+}
+const message=(e:unknown)=>e instanceof Error?e.message:String(e);
+/** One line per unsettled run. apply=false reads only; apply=true finalizes pending rows and marks what is settled. */
+export async function reconcileSettlements(c:ReconcileClient,o:{apply:boolean;limit:number}):Promise<ReconcileLine[]>{
+ const out:ReconcileLine[]=[];
+ for(const run of await c.unsettledRuns(o.limit)){
+  const cls=classifyUsageEvent(await c.usageEvent(run.usage_audit_key),run.finalize_payload);
+  const line={explanation_id:run.explanation_id,usage_audit_key:run.usage_audit_key,state:run.state,class:cls};
+  if(!o.apply){out.push({...line,action:'dry_run'});continue;}
+  if(cls==='conflict'){out.push({...line,action:'left_for_review'});continue;}
+  if(cls==='pending'){
+   try{await c.finalize(run.user_id,run.usage_audit_key,run.finalize_payload);}
+   catch(e){out.push({...line,action:'finalize_failed',error:message(e)});continue;}
+  }
+  try{await c.markFinalized(run.explanation_id);out.push({...line,action:cls==='pending'?'finalized_and_marked':'marked'});}
+  catch(e){out.push({...line,action:'mark_failed',error:message(e)});}
+ }
+ return out;
+}
+```
+
+Create `scripts/macro/strategy-reconcile.ts`:
+
+```ts
+// scripts/macro/strategy-reconcile.ts
+/**
+ * Settlement reconcile for macro explanations (runbook §4; plan audit R2-4). Dry run by default.
+ *
+ *   node --env-file=.env.local --import tsx scripts/macro/strategy-reconcile.ts [--limit n] [--apply]
+ *
+ * Lists macro_explanation_runs with finalize_payload set and finalized = false (oldest claim first, default 100), reads
+ * the usage_events row whose idempotency_key is the run's usage_audit_key, and prints one JSON line per run:
+ * {explanation_id, usage_audit_key, state, class: absent|pending|settled|conflict, action}. --apply finalizes pending rows
+ * with the stored payload verbatim through finalizeUsageRun and marks absent / settled / newly finalized rows with
+ * macro_mark_finalized; conflict rows are left for a person (runbook §4). Service role only; it never calls a model and
+ * never recomputes pricing or FX. Exit 0 when every line is dry_run / marked / finalized_and_marked, 1 when any run still
+ * needs attention, 2 on bad arguments. tsx does NOT load .env.local: use node --env-file as above (never commit that file).
+ */
+import {finalizeUsageRun,type RecordUsageMeta} from '../../src/lib/billing/quota';
+import {supabaseStrategyDb} from '../../src/lib/macro/strategy/db';
+import {reconcileSettlements,USAGE_EVENT_COLUMNS,type ReconcileClient,type UnsettledRun,type UsageEventRow} from '../../src/lib/macro/strategy/reconcile';
+import {getAdminSupabase} from '../../src/lib/supabase/admin';
+import {getAnonSupabase} from '../../src/lib/supabase/anon';
+
+type Result<T>={data:T|null;error:{message:string}|null};
+interface Query<T>{
+ eq(column:string,value:unknown):Query<T>;
+ not(column:string,operator:string,value:unknown):Query<T>;
+ order(column:string,options:{ascending:boolean}):Query<T>;
+ limit(n:number):PromiseLike<Result<T[]>>;
+ maybeSingle():PromiseLike<Result<T>>;
+}
+interface AdminTables{from<T>(table:string):{select(columns:string):Query<T>}}
+const USAGE='usage: strategy-reconcile.ts [--limit n] [--apply]';
+const DONE=new Set(['dry_run','marked','finalized_and_marked']);
+
+function parseArgs(argv:string[]):{apply:boolean;limit:number}|null{
+ const a={apply:false,limit:100};
+ for(let i=0;i<argv.length;i++){
+  if(argv[i]==='--apply')a.apply=true;
+  else if(argv[i]==='--limit'){const n=Number(argv[++i]);if(!Number.isInteger(n)||n<1||n>1000)return null;a.limit=n;}
+  else return null;
+ }
+ return a;
+}
+function client():ReconcileClient{
+ const admin=getAdminSupabase();const tables=admin as unknown as AdminTables;
+ const db=supabaseStrategyDb({admin,anon:getAnonSupabase()});
+ return {
+  async unsettledRuns(limit){
+   const {data,error}=await tables.from<UnsettledRun>('macro_explanation_runs').select('explanation_id,user_id,usage_audit_key,state,finalize_payload')
+    .eq('finalized',false).not('finalize_payload','is',null).order('claimed_at',{ascending:true}).limit(limit);
+   if(error)throw new Error(error.message);
+   return data??[];
+  },
+  async usageEvent(key){
+   const {data,error}=await tables.from<UsageEventRow>('usage_events').select(USAGE_EVENT_COLUMNS).eq('idempotency_key',key).maybeSingle();
+   if(error)throw new Error(error.message);
+   return data;
+  },
+  finalize:(userId,key,payload)=>finalizeUsageRun(userId,key,'perspectives',payload as unknown as RecordUsageMeta),
+  markFinalized:id=>db.markFinalized(id),
+ };
+}
+async function main(){
+ const args=parseArgs(process.argv.slice(2));
+ if(!args){process.stderr.write(`${USAGE}\n`);process.exitCode=2;return;}
+ const lines=await reconcileSettlements(client(),args);
+ for(const l of lines)process.stdout.write(`${JSON.stringify(l)}\n`);
+ process.exitCode=lines.every(l=>DONE.has(l.action))?0:1;
+}
+main().catch(e=>{process.stderr.write(`${e instanceof Error?e.message:String(e)}\n`);process.exitCode=1;});
+```
+
 - [ ] **Step 4: Write the runbook**
 
 Create `docs/runbooks/macro-strategy.md`:
@@ -10633,9 +11152,9 @@ Create `docs/runbooks/macro-strategy.md`:
 ````markdown
 # Macro strategy (P3 + P4) runbook
 
-Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` (draft 3). Plan: `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`.
+Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` (draft 5). Plan: `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`.
 Code: `src/lib/macro/strategy/**`, `src/app/api/macro/strategy/**`, `src/app/api/cron/macro-review/route.ts`, `src/components/macro/strategy/**`, `src/app/(app)/intel/macro/{transmission,history,review}/**`.
-Storage: migration `supabase/migrations/20261115090000_macro_strategy.sql` (six tables, six `security definer` RPCs, writes only through the RPCs).
+Storage: migration `supabase/migrations/20261115090000_macro_strategy.sql` (six tables, eight `security definer` RPCs, writes only through the RPCs).
 
 ## 1. Switches and the capability matrix (spec §9.1)
 
@@ -10682,11 +11201,23 @@ Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact
 
 - Quota and billing reuse the `perspectives` feature: `checkQuota('perspectives')` for platform keys (BYO skips it), `beginUsageRun` / `runMeteredLlmCall` / `finalizeUsageRun` exactly as the perspectives route. A rejected output is a completed call and counts.
 - The usage audit key is the explanation_id itself (uuid text; `begin_usage_run` / `finalize_usage_run` declare `p_idempotency_key uuid`) (made by `macro_claim_explanation`). Only the request that got `claimed` bills and calls the model; concurrent duplicates get the existing projection.
-- A running claim older than 5 minutes is turned into `abandoned` (projection `failed`, code `abandoned`) by the next claim of the same request, and by `macro_expire_explanations(user_id)`, which `GET /explanations` runs before every read — so a page reload resolves a run whose worker died; the panel then offers a new request.
-- Durable completion: right after the provider returns (or throws, or `beginUsageRun` fails) the request stores the raw output and the exact `finalizeUsageRun` body (`finalize_payload`: status, provider, model, tokens, cost, pricing version, FX, `usageEstimated`, `byo`) with `macro_record_completion`, before validation and finish. `finalizeUsageRun` then runs in a finally path even when finish fails; `macro_mark_finalized` is called only after it succeeded.
-- Settlement retry: every run with a recorded payload and `finalized = false`, in any state (final, still `running` after a failed finish, or `abandoned` with a late completion). List them with the service role: `select explanation_id, user_id, usage_audit_key, state, finalize_payload from public.macro_explanation_runs where finalize_payload is not null and finalized = false order by claimed_at;` For each, call `finalizeUsageRun(user_id, usage_audit_key, 'perspectives', finalize_payload)` with the stored payload **verbatim** (never recompute it from current pricing or FX, never rerun the model), then `select public.macro_mark_finalized(explanation_id)`. `finalize_usage_run` is idempotent for identical arguments, so a run already settled with the same payload is safe to repeat; `usage run finalize conflict` means the usage run was settled differently (for example failed by `fail_stale_usage_runs`) — reconcile by hand, do not change the stored payload.
-- A begin-stage payload (`finalize_payload.status = 'failed'`, zero usage, failure code `usage_audit_unavailable` or a cost code) whose retry fails with `usage run not found` means `beginUsageRun` never committed: there is nothing to settle; mark it with `macro_mark_finalized` after checking `usage_events` for the audit key.
-- Rows with `finalize_payload` null and `finalized = false` in a final state: `macro_record_completion` itself failed during the request (the request still tried `finalizeUsageRun` in memory). Reconcile them by `usage_audit_key` against `usage_events`; `macro_mark_finalized` refuses them until a payload is recorded.
+- A running claim older than 5 minutes **without a recorded completion** is turned into `abandoned` (projection `failed`, code `abandoned`) by the next claim of the same request, and by `macro_expire_explanations(user_id)`, which `GET /explanations` runs before every read — so a page reload resolves a run whose worker died; the panel then offers a new request.
+- Durable completion: right after the provider returns (or throws, or `beginUsageRun` fails) the request stores the raw output and the exact `finalizeUsageRun` body (`finalize_payload`: status, provider, model, tokens, cost, pricing version, FX, `usageEstimated`, `byo`) with `macro_record_completion`, before validation and finish. A successful provider call is stored as a completion envelope `{content, provider, model, prompt_version, validator_version, accounting}`. `macro_finish_explanation` carries the same payload and stores it when none is recorded (never overwriting one). `finalizeUsageRun` then runs in a finally path even when finish fails; `macro_mark_finalized` is called only after it succeeded.
+- Completion recovery (no second model call): a run still `running` with a recorded envelope (finish failed after the provider answered) is never abandoned. The next POST with the same `request_id`, or the user's next `GET /explanations` (at most three such runs per read), validates and renders the stored output against the manifest's frozen facts and finishes it as `accepted` / `rejected`; if `VALIDATOR_VERSION` changed since the call it finishes `failed` with `validator_version_changed`. The same step finalizes a recorded, unsettled payload verbatim. List rows waiting for it: `select explanation_id, user_id, claimed_at from public.macro_explanation_runs where state = 'running' and jsonb_typeof(raw_output) = 'object' order by claimed_at;` — a row that stays there means its manifest read or finish keeps failing; check the function logs.
+- Settlement reconcile: every run with a recorded payload and `finalized = false`, in any state (final, still `running` after a failed finish, or `abandoned` with a late completion). Do **not** classify a run from a `finalizeUsageRun` error: the wrapper (`src/lib/billing/quota.ts`) retries three times and then throws only `usage_audit_invariant` (SQLSTATE 55000, `usage run finalize conflict`) or `usage_audit_unavailable` (everything else — `usage run not found` (P0002) and a transient outage look the same). Look the usage run up by its key instead. Run the script with the service-role environment:
+  - `node --env-file=.env.local --import tsx scripts/macro/strategy-reconcile.ts` (dry run: one JSON line per run with its class), then the same with `--apply` (`--limit n`, default 100, max 1000).
+  - It reads `usage_events` where `idempotency_key = usage_audit_key` and acts per class:
+
+| Class | `usage_events` row | `--apply` does | Why |
+|---|---|---|---|
+| `absent` | none | `macro_mark_finalized` | `beginUsageRun` never committed, so the model was never called; nothing to settle |
+| `pending` | `status = 'pending'` | `finalizeUsageRun(user_id, usage_audit_key, 'perspectives', finalize_payload)` verbatim, then `macro_mark_finalized` | the earlier finalize never landed; a failure is printed as `finalize_failed` with the wrapper code and the run stays unfinalized for the next pass |
+| `settled` | terminal and equal to the stored payload | `macro_mark_finalized` | an earlier finalize succeeded and only the mark was lost |
+| `conflict` | terminal and different (for example `failed` with `usage_estimated = true` from `fail_stale_usage_runs`) | nothing (`left_for_review`) | decide by hand with billing; never edit the stored payload |
+
+  - Exit 0 when every line is `dry_run` / `marked` / `finalized_and_marked`; 1 when any run still needs attention. Manual equivalent of the lookup: `select status, provider, model, input_tokens, output_tokens, cost_micrormb, pricing_version, usd_cny_micros, usage_estimated, byo, finalized_at from public.usage_events where idempotency_key = '<usage_audit_key>';`
+  - Never recompute the payload from current pricing or FX and never rerun the model; `finalize_usage_run` is idempotent for identical arguments, so repeating a settled payload is safe.
+- Runs with `finalize_payload` null: since `macro_finish_explanation` stores the payload too, this happens only when both `macro_record_completion` and finish failed. The run expires to `abandoned` (it has no recorded output) and its usage run stays `pending` until `fail_stale_usage_runs` marks it failed. List them with `select explanation_id, usage_audit_key, state from public.macro_explanation_runs where finalize_payload is null and finalized = false and state = 'abandoned';`, look each key up in `usage_events` as above and settle by hand with billing; `macro_mark_finalized` refuses them.
 - Failure codes shown to users:
 
 | Code | Meaning | Action |
@@ -10698,6 +11229,7 @@ Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact
 | `forbidden_term` | a term from `FORBIDDEN_TERMS` | none |
 | `regime_term` | a regime name (v1 explanations carry no judgment) | none |
 | `provider_error` | the model call failed | check provider status; user retries with a new request |
+| `validator_version_changed` | a recorded output was recovered after a validator release, so it was not judged again | none; user may regenerate |
 | `abandoned` | the claim timed out | check function timeouts |
 | `usage_audit_unavailable`, `usage_audit_invariant`, `daily_cost_exhausted`, `pricing_unavailable`, `budget_unavailable`, `budget_invariant_violation` | metering refused the run (same codes as perspectives) | see the billing runbook entries for the code |
 
@@ -10727,8 +11259,8 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `npm test -- "src/app/(app)/intel/macro/transmission/strategy-pages.test.ts" src/lib/macro/strategy/forbidden-terms.test.ts`
-Expected: PASS, `Tests  12 passed (12)` (pages 6, vocabulary 6).
+Run: `npm test -- "src/app/(app)/intel/macro/transmission/strategy-pages.test.ts" src/lib/macro/strategy/forbidden-terms.test.ts src/lib/macro/strategy/reconcile.test.ts`
+Expected: PASS, `Tests  17 passed (17)` (pages 6, vocabulary 6, reconcile 5).
 
 - [ ] **Step 6: Typecheck and lint**
 
@@ -10770,7 +11302,7 @@ LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/
 - [ ] **Step 9: Commit**
 
 ```bash
-git add "src/app/(app)/intel/macro/transmission" "src/app/(app)/intel/macro/history" "src/app/(app)/intel/macro/review" src/lib/macro/strategy/forbidden-terms.test.ts docs/runbooks/macro-strategy.md
+git add "src/app/(app)/intel/macro/transmission" "src/app/(app)/intel/macro/history" "src/app/(app)/intel/macro/review" src/lib/macro/strategy/forbidden-terms.test.ts src/lib/macro/strategy/reconcile.ts src/lib/macro/strategy/reconcile.test.ts scripts/macro/strategy-reconcile.ts docs/runbooks/macro-strategy.md
 ```
 
 ```bash
@@ -10784,7 +11316,11 @@ pins the gates and keeps environment reads out of pages and components. A
 scan of every production text surface (library, data, prompts, components,
 messages, routes, pages) rejects the validator's forbidden terms. The
 runbook covers the capability matrix, WP-S6 wiring, review recompute,
-explanation failure codes and finalize retry, and the verification gate.
+explanation failure codes, completion recovery and settlement reconcile, and
+the verification gate. reconcile.ts and scripts/macro/strategy-reconcile.ts
+classify unsettled runs by their usage_events row (absent / pending /
+settled / conflict) instead of the billing wrapper's error, which cannot tell
+a missing usage run from an outage.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
