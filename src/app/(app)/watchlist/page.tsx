@@ -58,6 +58,7 @@ export default function WatchlistPage() {
   const router = useRouter();
   const { show } = useToast();
   const t = useTranslations('market.watchlist');
+  const tt = useTranslations('tracking');
   const locale = useLocale() as AppLocale;
   const { groups, hydrated, setGroups } = useWatchlist();
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
@@ -415,7 +416,13 @@ export default function WatchlistPage() {
     <>
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold">{t('heading')}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold">{t('heading')}</h1>
+            <div className="flex gap-1 rounded-md border border-border p-0.5 text-xs">
+              <span aria-current="page" className="rounded bg-accent-dim/20 px-2 py-0.5 font-semibold text-accent">{tt('page.kanban')}</span>
+              <Link href="/watchlist/tracking" className="rounded px-2 py-0.5 text-text-dim">{tt('page.tracking')}</Link>
+            </div>
+          </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
             <span>
               {viewMode === 'kanban' ? t('hintKanban') : t('hintTable')}

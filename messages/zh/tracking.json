@@ -6,5 +6,99 @@
     "loginRequired": "登录后可跟踪",
     "limit": "已达跟踪上限 200 家（watch_limit）。先取消跟踪其他公司。",
     "error": "跟踪操作失败，请重试。"
+  },
+  "page": {
+    "title": "跟踪",
+    "subtitle": "站内收件箱；按事件首次可见时间计未读 · 无邮件/推送",
+    "kanban": "看板",
+    "tracking": "跟踪",
+    "count": "{count} / {limit}"
+  },
+  "watches": {
+    "title": "跟踪的公司",
+    "addPlaceholder": "代码，如 AAPL、600519.SH",
+    "add": "添加",
+    "import": "从自选导入",
+    "all": "全部",
+    "muted": "已静音",
+    "mutedHint": "公司页仍可见",
+    "mute": "静音",
+    "unmute": "取消静音",
+    "note": "备注",
+    "notePlaceholder": "备注（≤ 2000 字）",
+    "save": "保存",
+    "cancel": "取消",
+    "remove": "移除",
+    "confirmRemove": "确认移除（同时清除已读记录）",
+    "manage": "管理",
+    "empty": "还没有跟踪的公司。从自选导入，或在公司页点“跟踪”。"
+  },
+  "stream": {
+    "US": "美股流",
+    "CN": "A 股流",
+    "hkPending": "港股：待文档管道（F3）",
+    "none": "尚无披露事实"
+  },
+  "import": {
+    "title": "导入结果",
+    "added": "新增 {count}",
+    "existing": "已存在 {count}",
+    "unresolved": "未解析 {count}",
+    "skippedByLimit": "超出上限 {count}",
+    "dismiss": "关闭",
+    "noServerWatchlist": "没有服务端自选（访客模式的自选只保存在本机）"
+  },
+  "filters": {
+    "all": "全部",
+    "filing_published": "新文件",
+    "period_first_seen": "新财期",
+    "fact_revised": "修订",
+    "unreadOnly": "仅未读",
+    "markPageRead": "标记本页已读"
+  },
+  "inbox": {
+    "today": "今天首次可见",
+    "earlier": "更早",
+    "firstSeen": "首次可见 {date}",
+    "available": "可得 {date}",
+    "updated": "已更新",
+    "folded": "同日折叠 +{count}",
+    "expand": "展开 {count} 条",
+    "collapse": "收起",
+    "toStatements": "报表 →",
+    "toFilings": "文件 →",
+    "loadMore": "加载更多",
+    "loading": "加载中…",
+    "empty": "暂无事件",
+    "noUnread": "没有未读事件",
+    "showAll": "显示全部",
+    "unread": "未读",
+    "read": "已读",
+    "error": "跟踪数据加载失败（{code}）",
+    "retry": "重试",
+    "markedRead": "已标记 {count} 条为已读"
+  },
+  "summary": {
+    "facts": "事实 {count}",
+    "concepts": "概念 {count}",
+    "ambiguous": "多单位未列出：{concepts}",
+    "noHeadline": "—"
+  },
+  "withheld": {
+    "evidence_incomplete": "来源记录不完整",
+    "citation_pending": "引用待挂接"
+  },
+  "errors": {
+    "watch_limit": "最多跟踪 {limit} 家公司",
+    "unknown_ticker": "未找到该代码",
+    "generic": "操作失败（{code}）"
+  },
+  "company": {
+    "replayNoRead": "回放模式不记录已读",
+    "notWatching": "跟踪后可记录已读",
+    "track": "跟踪",
+    "tracking": "跟踪中 ✓",
+    "live": "按回放日现算，不含首次可见时间",
+    "markRead": "标记已读"
   }
 }

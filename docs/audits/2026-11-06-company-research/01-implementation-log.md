@@ -29,3 +29,11 @@
 - 规格 §17 待记：未读计数无 SQL 计数函数（迁移已锁）。
 | 13 | Task 13 指标视图 + 估值区、文件视图（F3 开关）、概览、判断视图（F4 开关）、跟踪接入点 | 7e0e2bef, bbace952, da249b6b | ✅（判断回放截止也查校准时间） | 修后通过（概览货币与缩放标注、未知表单类型、链接可访问性、flag 开无发行人提示） | review: P2 概览金额无单位、判断嵌套字段未校验会崩；挑战: P2 admin 抽屉跨视图、判断卡无证据链接；修复复审: P2 与 F4 §9.2 契约对齐（href 可空、computed_at 非必填） | 2 | 275+ 单测 |
 | 16 | Task 16 跟踪 API（watches/read/import/inbox）+ inbox.ts | 519ffdc6, 18b06cfb | ✅（只经 service_role 读用户所跟踪发行人的事件；未跟踪 issuerId 在调用前 404） | 修后通过（未读计数只重扫未饱和发行人、合并发行人目标校验、cursor 错误码、CSRF/500 用例） | review: P2 导入 1000 行截断 → 全量分页 + 并发 8 解析、P2 大写 UUID；挑战: P2 同前；修复复审无缺陷 | 1 | 47 单测 |
+
+## Task 17 跟踪页与公司页跟踪视图
+
+- 页面 `/watchlist/tracking`；组件 `src/components/company/tracking/*`；公司页 `view=tracking`（CompanyPage 已接线）与页头 `TrackButton`（CompanyHeader 已接线，无需补线）。
+- 偏差（指挥决定）："本页"= 已加载的全部行；收件箱数值不做抽屉；概念名缺标签时显示 id；移动端"管理"展开面板。
+- 实施偏差（按指令跟随已提交 DTO / 概览做法）：事件金额不再按披露单位原样分组，而是与概览一致经 `defaultScale` + `formatValue` 缩放，并附 `unitCaption`（缩放 · 币种，如“亿 · CNY”）；`valueView`/`eventSummary` 增加 `locale` 参数，值为 `{kind:'value',text,caption}`。headline/from/to 的 withheld 标记读取 `.value`，`relChange` 可为 withheld 对象。
+- 实施偏差：Step S 的纯逻辑抽到 `mark-scope.ts`（`marketRows`/`unreadIds`/`shouldApply`/`applyMarkResult`）并有测试；公司页与收件箱共用。收件箱在被选发行人被移除后自动回到“全部”。`TrackButton` 保留 Task 11 的失败关闭语义（401→登录提示，其他读失败→不可用）。
+- 未显示"预计披露日"（决策 G 默认）。未做本机目视核对（需登录的本机栈），留给 Task 19 e2e。

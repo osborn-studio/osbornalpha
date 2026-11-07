@@ -6,5 +6,99 @@
     "loginRequired": "Sign in to track",
     "limit": "Tracking limit of 200 companies reached (watch_limit). Untrack another company first.",
     "error": "Tracking action failed; please retry."
+  },
+  "page": {
+    "title": "Tracking",
+    "subtitle": "In-app inbox; unread by first-seen time · no email or push",
+    "kanban": "Kanban",
+    "tracking": "Tracking",
+    "count": "{count} / {limit}"
+  },
+  "watches": {
+    "title": "Tracked companies",
+    "addPlaceholder": "Ticker, e.g. AAPL, 600519.SH",
+    "add": "Add",
+    "import": "Import from watchlist",
+    "all": "All",
+    "muted": "Muted",
+    "mutedHint": "still visible on the company page",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "note": "Note",
+    "notePlaceholder": "Note (≤ 2000 characters)",
+    "save": "Save",
+    "cancel": "Cancel",
+    "remove": "Remove",
+    "confirmRemove": "Confirm removal (read receipts are cleared too)",
+    "manage": "Manage",
+    "empty": "No tracked companies yet. Import from your watchlist, or press “Track” on a company page."
+  },
+  "stream": {
+    "US": "US stream",
+    "CN": "A-share stream",
+    "hkPending": "HK: awaiting document pipeline (F3)",
+    "none": "No disclosed facts yet"
+  },
+  "import": {
+    "title": "Import result",
+    "added": "Added {count}",
+    "existing": "Existing {count}",
+    "unresolved": "Unresolved {count}",
+    "skippedByLimit": "Over the limit {count}",
+    "dismiss": "Dismiss",
+    "noServerWatchlist": "No server-side watchlist (guest watchlists live only on this device)"
+  },
+  "filters": {
+    "all": "All",
+    "filing_published": "New filing",
+    "period_first_seen": "New period",
+    "fact_revised": "Revision",
+    "unreadOnly": "Unread only",
+    "markPageRead": "Mark this page read"
+  },
+  "inbox": {
+    "today": "First seen today",
+    "earlier": "Earlier",
+    "firstSeen": "First seen {date}",
+    "available": "Available {date}",
+    "updated": "Updated",
+    "folded": "Same day +{count}",
+    "expand": "Show {count} more",
+    "collapse": "Collapse",
+    "toStatements": "Statements →",
+    "toFilings": "Filings →",
+    "loadMore": "Load more",
+    "loading": "Loading…",
+    "empty": "No events",
+    "noUnread": "No unread events",
+    "showAll": "Show all",
+    "unread": "Unread",
+    "read": "Read",
+    "error": "Tracking data failed to load ({code})",
+    "retry": "Retry",
+    "markedRead": "Marked {count} as read"
+  },
+  "summary": {
+    "facts": "{count} facts",
+    "concepts": "{count} concepts",
+    "ambiguous": "Multiple units, not listed: {concepts}",
+    "noHeadline": "—"
+  },
+  "withheld": {
+    "evidence_incomplete": "Source record incomplete",
+    "citation_pending": "Citation pending"
+  },
+  "errors": {
+    "watch_limit": "You can track at most {limit} companies",
+    "unknown_ticker": "Ticker not found",
+    "generic": "Action failed ({code})"
+  },
+  "company": {
+    "replayNoRead": "Replay mode does not record reads",
+    "notWatching": "Track this company to record reads",
+    "track": "Track",
+    "tracking": "Tracking ✓",
+    "live": "Computed for the replay date; no first-seen times",
+    "markRead": "Mark read"
   }
 }

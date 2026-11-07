@@ -1,51 +1,43 @@
 // src/components/company/tracking/TrackButton.tsx
+// Header action (spec §5.2 "跟踪 ✓"): not watching → POST watch; watching → link to /watchlist/tracking.
+// Watching state = inbox?issuerId=&limit=1 (200 / 404), not the unread-scanning GET /watches. Fails closed:
+// 401 → sign-in hint, any other read failure → disabled "unavailable" (never offers a blind POST).
 'use client';
-// Header track toggle against the tracking API (plan 2026-11-06 Task 11 → Task 16 routes; spec §6.2).
-// Fails closed: 404 (routes not deployed) disables the button; watch_limit shows the fixed message.
-// Placeholder: Task 17 overwrites this file (same export TrackButton({issuerId}), same data-testid).
+
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
-import { fetchCompanyJson, trackStateOf, type TrackState } from '@/lib/company/client';
 import { useToast } from '@/components/Toast';
+import { addWatch, isWatching, TrackingApiError } from '@/lib/company/tracking-client';
+import { useTrackingError } from './WatchPanel';
+
+type State = 'loading' | 'watching' | 'idle' | 'login' | 'unavailable';
 
 export function TrackButton({ issuerId }: { issuerId: string }) {
-  const t = useTranslations('tracking.button');
+  const t = useTranslations('tracking');
   const { show } = useToast();
-  const [state, setState] = useState<TrackState>('loading');
-  const [busy, setBusy] = useState(false);
+  const errorText = useTrackingError();
+  const [state, setState] = useState<State>('loading');
   useEffect(() => {
-    const ac = new AbortController();
-    void fetchCompanyJson<{ watches?: { issuerId?: unknown }[] }>('/api/tracking/watches', ac.signal)
-      .then((r) => { if (!ac.signal.aborted) setState(trackStateOf(r, issuerId)); });
-    return () => ac.abort();
+    let live = true;
+    setState('loading');
+    isWatching(issuerId)
+      .then((w) => { if (live) setState(w ? 'watching' : 'idle'); })
+      .catch((e) => { if (live) setState(e instanceof TrackingApiError && e.status === 401 ? 'login' : 'unavailable'); });
+    return () => { live = false; };
   }, [issuerId]);
-
-  async function toggle() {
-    if (busy || (state !== 'tracked' && state !== 'untracked')) return;
-    setBusy(true);
-    try {
-      const res = state === 'tracked'
-        ? await fetch(`/api/tracking/watches/${encodeURIComponent(issuerId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
-        : await fetch('/api/tracking/watches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ issuerId }) });
-      if (res.ok) { setState(state === 'tracked' ? 'untracked' : 'tracked'); return; }
-      const body = await res.json().catch(() => null) as { error?: { code?: string } } | null;
-      show(body?.error?.code === 'watch_limit' ? t('limit') : t('error'));
-    } catch {
-      show(t('error'));
-    } finally {
-      setBusy(false);
-    }
+  if (state === 'watching') {
+    return <Link href="/watchlist/tracking" className="inline-flex min-h-9 items-center text-sm text-accent" data-testid="track-button">{t('company.tracking')}</Link>;
   }
-
-  const label = state === 'tracked' ? t('tracking') : state === 'login' ? t('loginRequired') : state === 'unavailable' ? t('unavailable') : t('track');
   return (
     <Button
-      variant="secondary" size="sm" onClick={toggle} aria-pressed={state === 'tracked'} data-testid="track-button"
-      disabled={busy || state === 'loading' || state === 'login' || state === 'unavailable'}
-      className={state === 'tracked' ? 'border-[var(--border-active)] text-[var(--accent)]' : undefined}
+      variant="secondary" size="sm" data-testid="track-button" disabled={state !== 'idle'}
+      onClick={async () => {
+        try { await addWatch({ issuerId }); setState('watching'); } catch (e) { show(errorText(e, 200)); }
+      }}
     >
-      {label}
+      {state === 'login' ? t('button.loginRequired') : state === 'unavailable' ? t('button.unavailable') : t('company.track')}
     </Button>
   );
 }
