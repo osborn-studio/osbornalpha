@@ -4,10 +4,10 @@ import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {pgJudgmentsDb} from '@/lib/judgments/pg-judgments-db';
+import {pgTableClient} from '@/lib/db/pg-table-client';
+import {startBatch} from '@/lib/dq/batches';
+import {judgmentFixture,methodologyFixture} from '@/lib/judgments/db-contract';
 import {checkJudgmentsResponse,judgmentsUrl} from './judgments';
-import {toJudgmentCard} from '@/lib/judgments/adapters/recommendation';
-import {fixtureRecommendation} from '@/lib/judgments/testing/recommendation-fixture';
-import {cardBody,visiblePercent} from '@/components/judgments/view-model';
 
 const bridge=vi.hoisted(()=>({db:null as ReturnType<typeof pgJudgmentsDb>|null}));
 vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:bridge.db})}));
@@ -33,30 +33,22 @@ describe.skipIf(!enabled)('company → F4 list route on PG17',()=>{
    if(parsed.ok)expect(parsed.cards.length===0).toBe(true); // JudgmentsView's `none` branch
   }
  });
- it('an owner-only issuer recommendation stays off the anon list and uses F4 card semantics',async()=>{
-  const issuer=randomUUID(),owner=randomUUID();
-  const c=await pool.connect();
-  try{
-   await c.query('begin');
-   await c.query('insert into auth.users(id,email) values($1,$2)',[owner,`${owner}@example.test`]);
-   const profile=(await c.query("insert into public.analyst_profiles(user_id,display_name,is_self) values($1,'me',true) returning id",[owner])).rows[0] as {id:string};
-   const inserted=(await c.query("insert into public.recommendations(user_id,analyst_id,ticker,market,action,reference_price,confidence,rationale) values($1,$2,'NVDA','US','buy',120.5,70,'private call') returning id",[owner,profile.id])).rows[0] as {id:string};
-   await c.query('grant usage on schema public to anon, authenticated');
-   await c.query('grant select on public.recommendations to anon, authenticated');
-   await c.query('set local role anon');
-   expect((await c.query('select id from public.recommendations where id=$1',[inserted.id])).rows).toEqual([]);
-   await c.query('reset role');
-   await c.query("select set_config('request.jwt.claim.sub',$1,true)",[owner]);
-   await c.query('set local role authenticated');
-   expect((await c.query('select id from public.recommendations where id=$1',[inserted.id])).rows).toEqual([{id:inserted.id}]);
-   await c.query('reset role');
-   const recommendation=fixtureRecommendation({id:inserted.id,user_id:owner,analyst_id:profile.id,ticker:'NVDA',market:'US'});
-   const ownerCard=toJudgmentCard(recommendation,null,{issuerOf:()=>issuer});
-   expect(ownerCard).toMatchObject({source:'recommendation',subject:{type:'issuer',key:issuer},calibration:'self_assessed'});
-   expect(visiblePercent(ownerCard)).toBeNull();
-   expect(cardBody(ownerCard,'en').type).toBe('band');
-   const anonymous=checkJudgmentsResponse(await (await GET(new Request(`https://alpha.example${judgmentsUrl(issuer,null)}`))).json(),null);
-   expect(anonymous).toEqual({ok:true,cards:[]});
-  }finally{await c.query('rollback');c.release();}
+ it('replays a SQL registered issuer card through the F4 list route and company parser',async()=>{
+  const issuer=randomUUID(),tables=pgTableClient(pool),db=bridge.db!;
+  await pool.query(`with s as (select set_config('entities.allow_topology_write','on',true)) insert into public.issuers(issuer_id,canonical_name_en,status) select $1,'ZZ Company judgment','active' from s`,[issuer]);
+  const method=methodologyFixture({publishable:true});await db.syncMethodology(method,'script',null);
+  const {batchId}=await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.ztest'});
+  const fixture=judgmentFixture(method,batchId,{subject:{type:'issuer',key:issuer},as_of:'2026-03-01'});
+  await db.registerJudgment(fixture.row,fixture.queue);
+  const today=new Date().toISOString().slice(0,10);
+  const response=await GET(new Request(`https://alpha.example${judgmentsUrl(issuer,today)}`));
+  expect(response.status).toBe(200);
+  const parsed=checkJudgmentsResponse(await response.json(),today);
+  expect(parsed.ok).toBe(true);
+  if(parsed.ok)expect(parsed.cards.map(c=>c.judgment_id)).toEqual([fixture.row.judgment_id]);
  });
+ // F4's public list route always constructs an anon DB client and never reads recommendation_scores.
+ // Owner identity cannot select a private recommendation through this route; a real Next/PostgREST
+ // owner route is an accepted residual until F4 exposes one. Do not mislabel an adapter unit call as E2E.
+ it.skip('owner-only recommendation through an authenticated F4 list route (route does not exist)',()=>{});
 });

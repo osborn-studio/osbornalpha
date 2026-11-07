@@ -2,10 +2,12 @@
 // Response shapes of the Task 18 read routes as the judgment UI consumes them (spec §10). This is the one file to edit if the
 // routes' JSON differs; every page and component reads the routes only through these types. (Integrator: aligned with the
 // Task 18 route bodies; every body also carries codeVersion; `display.percent` is ABSENT when null — decision D2.)
-import type {CalibrationRow,CalibrationState,JudgmentCard,JudgmentRow,MethodologyRow,QueueRow,SettlementKind,SettlementRow,Target} from '@/lib/judgments/types';
+import type {CalibrationRow,CalibrationState,CardView,JudgmentCard,JudgmentRow,MethodologyRow,QueueRow,SettlementKind,SettlementRow,Subject,Target} from '@/lib/judgments/types';
 
 /** Over the wire `display.percent` is omitted when null (Task 18 serializeBody); read it as optional. */
 export type WireCard=Omit<JudgmentCard,'display'>&{display:Omit<JudgmentCard['display'],'percent'>&{percent?:number|null}};
+/** GET /api/judgments list response. */
+export interface JudgmentsListResponse{codeVersion:string|null;subject:Subject;view:CardView;asOf:string|null;cards:WireCard[]}
 /** GET /api/methodologies[?status=] — registry rows with the latest scope='all' calibration summary (null when none / unpublished). */
 export interface MethodologyCalibrationSummary{state:CalibrationState;valid:boolean;n_independent:number;threshold_n:number;computed_at:string;valid_until:string;metrics:Record<string,unknown>}
 export interface MethodologyListItem{methodology:MethodologyRow;calibration:MethodologyCalibrationSummary|null}

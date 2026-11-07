@@ -21,15 +21,17 @@ async function seededRoute(){
 }
 
 describe('company consumes the real F4 list route',()=>{
- it('parses the route JSON over F4 memory DB for latest and as_known',async()=>{
+ it('parses the route JSON over F4 DB contract for latest and as_known',async()=>{
   db=await seededRoute();
-  for(const asOf of [null,'2026-06-30']){
+  for(const asOf of [null,'2026-03-01']){
    const response=await route(asOf);
    expect(response.status).toBe(200);
    const parsed=checkJudgmentsResponse(await response.json(),asOf);
    expect(parsed.ok).toBe(true);
    if(parsed.ok){expect(parsed.cards).toHaveLength(1);expect(displayPercent(parsed.cards[0])).toBeNull();expect(visiblePercent(parsed.cards[0])).toBeNull();}
   }
+  const before=await route('2026-02-28');
+  expect(checkJudgmentsResponse(await before.json(),'2026-02-28')).toEqual({ok:true,cards:[]});
  });
  it('rejects a real route card with incompatible F4 fields',async()=>{
   db=await seededRoute();
