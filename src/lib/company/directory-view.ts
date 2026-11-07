@@ -11,9 +11,11 @@ export const queryKeyOf=(o:{q:string;market:string;sort:string;page:number}):str
 
 export type DirectoryView<D>={status:'ready';data:D}|{status:'error';code:string}|{status:'loading'};
 /** Rows, totals and pagination belong to the query key of the response that produced them; a different current key is loading (or that key's own error). */
-export function viewOf<D>(currentKey:string,ok:{key:string;data:D}|null,err:{key:string;code:string}|null):DirectoryView<D>{
- if(ok&&ok.key===currentKey)return {status:'ready',data:ok.data};
- if(err&&err.key===currentKey)return {status:'error',code:err.code};
+export function viewOf<D>(currentKey:string,ok:{key:string;seq:number;data:D}|null,err:{key:string;seq:number;code:string}|null):DirectoryView<D>{
+ const okHere=ok&&ok.key===currentKey?ok:null,errHere=err&&err.key===currentKey?err:null;
+ // The latest outcome for the current key wins (seq = request generation): a cached success never masks a newer failure.
+ if(errHere&&(!okHere||errHere.seq>okHere.seq))return {status:'error',code:errHere.code};
+ if(okHere)return {status:'ready',data:okHere.data};
  return {status:'loading'};
 }
 

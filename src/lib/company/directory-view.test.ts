@@ -8,14 +8,21 @@ describe('directory view helpers',()=>{
  });
  it('a filter or page change followed by a rejected request never shows the old rows or enables old pagination',()=>{
   const k1=queryKeyOf({q:'',market:'all',sort:'name',page:1});
-  const ok={key:k1,data:{total:250,rows:['a']}};
+  const ok={key:k1,seq:1,data:{total:250,rows:['a']}};
   expect(viewOf(k1,ok,null)).toEqual({status:'ready',data:ok.data});
   const k2=queryKeyOf({q:'',market:'all',sort:'name',page:2});   // page change, request pending
   expect(viewOf(k2,ok,null)).toEqual({status:'loading'});
-  expect(viewOf(k2,ok,{key:k2,code:'internal'})).toEqual({status:'error',code:'internal'});   // rejected: still no rows
+  expect(viewOf(k2,ok,{key:k2,seq:2,code:'internal'})).toEqual({status:'error',code:'internal'});   // rejected: still no rows
   const k3=queryKeyOf({q:'aap',market:'US',sort:'name',page:1});   // filter change, previous error is for another key
-  expect(viewOf(k3,ok,{key:k2,code:'internal'})).toEqual({status:'loading'});
-  expect(viewOf(k1,ok,{key:k2,code:'internal'}).status).toBe('ready');   // back to the successful key
+  expect(viewOf(k3,ok,{key:k2,seq:2,code:'internal'})).toEqual({status:'loading'});
+  expect(viewOf(k1,ok,{key:k2,seq:2,code:'internal'}).status).toBe('ready');   // back to the successful key
+ });
+ it('A → B → back to A where A fails: the newer failure wins over the cached success; a later retry success wins again',()=>{
+  const kA=queryKeyOf({q:'',market:'all',sort:'name',page:1}),kB=queryKeyOf({q:'x',market:'all',sort:'name',page:1});
+  const okA={key:kA,seq:1,data:'A'};
+  expect(viewOf(kB,okA,null)).toEqual({status:'loading'});
+  expect(viewOf(kA,okA,{key:kA,seq:3,code:'internal'})).toEqual({status:'error',code:'internal'});
+  expect(viewOf(kA,{key:kA,seq:4,data:'A2'},{key:kA,seq:3,code:'internal'})).toEqual({status:'ready',data:'A2'});
  });
  it('displayName follows the sort key under sort=name, else the locale',()=>{
   const r={names:{zh:'贵州茅台',en:'Kweichow Moutai'},primaryTicker:'600519.SH',issuerId:'x'};

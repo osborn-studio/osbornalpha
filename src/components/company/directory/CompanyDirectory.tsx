@@ -5,7 +5,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Button, Card, Tag } from '@/components/ui';
 import { ErrorCard } from '@/components/company/StateCallout';
@@ -31,10 +31,11 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const [market, setMarket] = useState<MarketFilter>('all');
   const [sort, setSort] = useState<DirectorySort>('latest_available_date');
   const [page, setPage] = useState(1);
-  const [ok, setOk] = useState<{ key: string; data: DirectoryResponse } | null>(null);
-  const [err, setErr] = useState<{ key: string; code: string } | null>(null);
+  const [ok, setOk] = useState<{ key: string; seq: number; data: DirectoryResponse } | null>(null);
+  const [err, setErr] = useState<{ key: string; seq: number; code: string } | null>(null);
   const [fresh, setFresh] = useState<Freshness[] | 'unavailable' | null>(null);
   const [reload, setReload] = useState(0);
+  const gen = useRef(0);
 
   useEffect(() => { const h = setTimeout(() => { setDebouncedQ(q.trim()); setPage(1); }, 250); return () => clearTimeout(h); }, [q]);
   useEffect(() => {
@@ -50,6 +51,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const key = queryKeyOf({ q: debouncedQ, market, sort, page });
   useEffect(() => {
     if (qState === 'invalid') return;   // invalid q: inline hint, no request
+    const seq = ++gen.current;
     const ctl = new AbortController();
     const p = new URLSearchParams({ sort, page: String(page), pageSize: String(PAGE_SIZE) });
     if (market !== 'all') p.set('market', market);
@@ -65,8 +67,8 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
         if (!b || !Array.isArray((b as DirectoryResponse).rows)) throw new Error('bad_response');
         return b as DirectoryResponse;
       })
-      .then((data) => { setOk({ key, data }); setErr(null); })
-      .catch((e: Error) => { if (e.name !== 'AbortError') setErr({ key, code: e.message || 'internal' }); });
+      .then((data) => setOk({ key, seq, data }))
+      .catch((e: Error) => { if (e.name !== 'AbortError') setErr({ key, seq, code: e.message || 'internal' }); });
     return () => ctl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, qState, reload]);
@@ -119,7 +121,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
       </Card>
 
       {qState !== 'invalid' && view.status === 'error' && (
-        <div className="mb-3"><ErrorCard message={t('error', { code: view.code })} onRetry={() => { setErr(null); setReload((n) => n + 1); }} /></div>
+        <div className="mb-3"><ErrorCard message={t('error', { code: view.code })} onRetry={() => setReload((n) => n + 1)} /></div>
       )}
 
       {qState !== 'invalid' && view.status === 'loading' && (
