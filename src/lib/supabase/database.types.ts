@@ -26,6 +26,7 @@
 //   macro_review_attempts, macro_explanation_runs, macro_explanations; the eight RPCs are not registered)
 // /MACRO-P3
 // + 20261117090000_disclosure_documents.sql (F3: disclosure_documents and its eight child/scheduling tables)
+// + 20261118090000_company_research.sql (COMPANY block below)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -704,6 +705,98 @@ export interface FactSyncScope {
   last_status: 'success' | 'failed' | null;
   updated_at: string;
 }
+// COMPANY
+// 20261118090000_company_research.sql. issuer_events / company_digest_state / company_fact_evidence are
+// service-role only (§0 #64); issuer_coverage is public read; company_watches / company_event_reads are
+// RLS own-rows. bigint columns arrive as JSON numbers through PostgREST (Number() them anyway).
+export interface IssuerEvent {
+  event_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  kind: 'filing_published' | 'period_first_seen' | 'fact_revised';
+  natural_key: string;
+  occurred_on: string;
+  period_end: string | null;
+  concept: string | null;
+  filing_id: string | null;
+  payload: Record<string, unknown>;
+  meta: Record<string, unknown>;
+  payload_hash: string;
+  based_on_rev: number;
+  first_seen_at: string;
+  payload_changed_at: string | null;
+  retired_at: string | null;
+  rebuilt_at: string;
+  rebuild_id: string;
+  rebuild_batch_id: string;
+}
+export interface IssuerCoverage {
+  issuer_id: string;
+  market: FactMarket;
+  filings_count: number;
+  facts_count: number;
+  concepts_covered: number;
+  earliest_period_end: string | null;
+  latest_period_end: string | null;
+  latest_available_date: string | null;
+  citation_summary: { linked: number; pending: number; edgar: number };
+  scope_last_success_at: string | null;
+  scope_last_status: 'success' | 'failed' | null;
+  based_on_rev: number;
+  rebuilt_at: string;
+  rebuild_id: string;
+  rebuild_batch_id: string;
+}
+export interface CompanyWatch {
+  user_id: string;
+  issuer_id: string;
+  note: string | null;
+  muted: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface CompanyEventRead {
+  user_id: string;
+  issuer_id: string;
+  event_id: string;
+  read_at: string;
+}
+export interface CompanyDigestState {
+  issuer_id: string;
+  market: FactMarket;
+  digested_rev: number;
+  attempt_seq: number;
+  last_attempt_id: number | null;
+  last_success_attempt_id: number | null;
+  last_failed_attempt_id: number | null;
+  last_attempt_at: string | null;
+  last_status: 'success' | 'failed' | null;
+  consecutive_failures: number;
+  next_attempt_at: string;
+  swept_at: string | null;
+  updated_at: string;
+}
+export interface CompanyFactEvidence {
+  fact_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  raw_hash: string;
+  snapshot_sha256: string;
+  snapshot_path: string;
+  hash_locator: string;
+  json_pointer: string;
+  field: string | null;
+  source: 'edgar' | 'tushare';
+  api: string | null;
+  url: string | null;
+  params: Record<string, unknown> | null;
+  captured_at: string | null;
+  http_status: number | null;
+  page: number | null;
+  index_version: string;
+  verified_at: string;
+}
+// COMPANY end
 
 // MACRO
 // 20261114090000_macro_workbench.sql. numeric columns (value, weight, uncovered_weight) arrive as
@@ -1580,6 +1673,14 @@ export type Database = {
       fact_citations: { Row: FactCitationLink; Insert: Partial<FactCitationLink>; Update: Partial<FactCitationLink> };
       filing_documents: { Row: FilingDocument; Insert: Partial<FilingDocument>; Update: Partial<FilingDocument> };
       // F3 document pipeline — end
+      // COMPANY
+      issuer_events: { Row: IssuerEvent; Insert: Partial<IssuerEvent>; Update: Partial<IssuerEvent> };
+      issuer_coverage: { Row: IssuerCoverage; Insert: Partial<IssuerCoverage>; Update: Partial<IssuerCoverage> };
+      company_watches: { Row: CompanyWatch; Insert: Partial<CompanyWatch>; Update: Partial<CompanyWatch> };
+      company_event_reads: { Row: CompanyEventRead; Insert: Partial<CompanyEventRead>; Update: Partial<CompanyEventRead> };
+      company_digest_state: { Row: CompanyDigestState; Insert: Partial<CompanyDigestState>; Update: Partial<CompanyDigestState> };
+      company_fact_evidence: { Row: CompanyFactEvidence; Insert: Partial<CompanyFactEvidence>; Update: Partial<CompanyFactEvidence> };
+      // COMPANY end
     };
     Functions: {
       quote_alert_window_samples: {

@@ -37,14 +37,14 @@ export default function IntelPage() {
         <button
           type="button"
           onClick={() => setTab('discover')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
+          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
         >
           {t('tabs.discover')}
         </button>
         <button
           type="button"
           onClick={() => setTab('research')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
+          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
         >
           {t('tabs.research')}
         </button>
@@ -84,6 +84,7 @@ function DiscoverTab() {
 
 function ResearchTab() {
   const t = useTranslations('intel');
+  const tc = useTranslations('company.directory');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -131,6 +132,11 @@ function ResearchTab() {
       {/* INDUSTRY:BEGIN */}
       <IndustryEntryCard />
       {/* INDUSTRY:END */}
+      <Link href="/intel/companies" className="card-base block hover:bg-bg-elevated" data-testid="intel-companies-card">
+        <div className="text-sm font-semibold">{tc('entry.title')}</div>
+        <div className="mt-0.5 text-xs text-text-dim">{tc('entry.desc')}</div>
+        <div className="mt-1 text-xs text-accent">{tc('entry.open')}</div>
+      </Link>
       <div className="card-base">
         <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input

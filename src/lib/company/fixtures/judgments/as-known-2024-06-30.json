@@ -1,0 +1,57 @@
+{
+  "_note": "hand-written to F4 spec §9.2/§10 (2026-11-06); replace with a recorded ...&view=as_known&asOf=2024-06-30",
+  "subject": {
+    "type": "issuer",
+    "key": "11111111-1111-4111-8111-111111111111"
+  },
+  "asOf": "2024-06-30",
+  "view": "as_known",
+  "cards": [
+    {
+      "judgment_id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "subject": {
+        "type": "issuer",
+        "key": "11111111-1111-4111-8111-111111111111"
+      },
+      "judgment_type": "thesis_win_rate",
+      "kind": "probability",
+      "lifecycle": "open",
+      "calibration": "insufficient",
+      "retrospective": false,
+      "as_of": "2024-05-10",
+      "registered_at": "2024-05-10T08:00:00Z",
+      "methodology": {
+        "id": "thesis-win",
+        "version": "1.0.0",
+        "title": {
+          "zh": "论点胜率",
+          "en": "Thesis win rate"
+        },
+        "href": "/intel/methods/thesis-win/1.0.0"
+      },
+      "display": {
+        "headline": {
+          "zh": "一年内营收增速高于 10%",
+          "en": "Revenue growth above 10% within a year"
+        },
+        "percent": null,
+        "value": null,
+        "band": "mid"
+      },
+      "condition": {
+        "text": {
+          "zh": "FY2024 营业收入同比 > 10%",
+          "en": "FY2024 operating revenue YoY > 10%"
+        },
+        "horizon": "1y",
+        "target": "revenue_yoy",
+        "label_policy": "strict",
+        "settle_after": "2025-03-01",
+        "settle_by": "2025-06-30"
+      },
+      "settlement": null,
+      "calibration_summary": null,
+      "inputs": []
+    }
+  ]
+}

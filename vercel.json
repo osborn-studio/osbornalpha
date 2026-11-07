@@ -73,6 +73,10 @@
     {
       "path": "/api/cron/documents-sync?source=edgar",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/company-digest",
+      "schedule": "20 * * * *"
     }
   ]
 }

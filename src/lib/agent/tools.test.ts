@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TOOLS, TOOLS_BY_NAME } from './tools';
 
 describe('tool registry', () => {
@@ -34,4 +34,15 @@ describe('tool registry', () => {
     expect(tool).toBeDefined();
     await expect(tool.handler({input_json:'{"ticker":"AAPL"}'},{origin:'https://unused.invalid'})).rejects.toThrow();
   });
+ it('financials covers A/US via the company packet, no aShareOnly flag (spec §9.2)', async () => {
+  const tool = TOOLS_BY_NAME.financials;
+  expect(tool.aShareOnly).toBeUndefined();
+  expect(tool.description).toContain('A/US');
+  expect(tool.description).toContain('clipped');
+  const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+  await tool.handler({ ticker: 'BRK.A' }, { origin: 'https://alpha.example' });
+  expect(spy).toHaveBeenCalledWith('https://alpha.example/api/companies/BRK.A/packet', expect.objectContaining({ cache: 'no-store' }));
+  spy.mockRestore();
+  for (const name of ['flows', 'holders', 'calendar']) expect(TOOLS_BY_NAME[name].aShareOnly).toBe(true);
+ });
 });

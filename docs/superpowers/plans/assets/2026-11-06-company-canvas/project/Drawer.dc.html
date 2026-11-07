@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>披露历史抽屉与公式抽屉</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1920px; height: 1500px; padding: 32px; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start">
+
+  <aside class="drawer" aria-label="披露历史抽屉" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; align-items: flex-start; gap: 12px">
+      <div style="flex: 1">
+        <div class="lbl-state">A · 披露历史 Disclosure history</div>
+        <div class="h3" style="margin-top: 6px">贵州茅台 · 营业收入 revenue_operating · 2024-01-01 → 2024-12-31 · 12M</div>
+        <div class="row" style="margin-top: 6px"><span class="m" style="font-size: 26px; font-weight: 500">1,708.99</span><span class="cap">亿元（显示 = 原值 ÷ 1e8）</span><span class="bdg">R</span></div>
+      </div>
+      <button class="ibtn" aria-label="关闭 Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px">
+      <table class="t">
+        <thead><tr><th>可得日期<span class="en">Available</span></th><th>文件<span class="en">Filing</span></th><th class="n">值 · 单位<span class="en">value_text · unit</span></th><th class="n">修订<span class="en">Revision</span></th><th>变换链<span class="en">Transforms</span></th><th>代码版本</th></tr></thead>
+        <tbody>
+          <tr><td class="m">2025-04-03</td><td><a href="#" style="font-size: 12px">年报 2024 · 巨潮 PDF ↗</a></td><td class="n m">170,899,152,276.34 CNY</td><td class="n fog">—</td><td class="tiny">① 营业收入 → revenue_operating（map v7 · gen 3）② CNY 原值 ④ ÷1e8</td><td class="m dim">3f9c2e1</td></tr>
+          <tr style="background: rgba(202,138,4,.06)"><td class="m">2025-04-29</td><td><a href="#" style="font-size: 12px">一季报（含上年更正）↗</a></td><td class="n m">170,899,152,276.34 → 170,899,152,276.34</td><td class="n m dim">0 · 同值</td><td class="tiny">同上 · 不产生修订事件</td><td class="m dim">3f9c2e1</td></tr>
+          <tr><td class="m">2025-08-13</td><td><a href="#" style="font-size: 12px">半年报（追溯调整）↗</a></td><td class="n m">170,912,400,118.02 CNY</td><td class="n m">+13.25 亿元 · +0.0078%</td><td class="tiny">同上</td><td class="m dim">5a10b7d</td></tr>
+        </tbody>
+      </table>
+
+      <div class="card pad" style="background: #1c1c20">
+        <div class="row" style="margin-bottom: 10px"><span class="h3">证据 Evidence</span><span class="chip ac">evidenceEligible ✓</span><span class="tiny" style="margin-left: auto">随响应返回，不按需取</span></div>
+        <dl class="kv">
+          <dt>rawHash</dt><dd class="hash">sha256:7f2c…a019</dd>
+          <dt>snapshot</dt><dd class="m" style="font-size: 12px">tushare · income · params {ts_code:600519.SH, period:20241231} · fetchedAt 2025-04-03 18:20 · HTTP 200</dd>
+          <dt>locator.jsonPointer</dt><dd class="m" style="font-size: 12px">/data/items/0 · field revenue</dd>
+          <dt>locator.pdf</dt><dd class="m" style="font-size: 12px">page 112 · table 合并利润表 · row 营业收入 · column 本期发生额</dd>
+          <dt>sourceDocument</dt><dd><a href="#">cninfo_pdf · 贵州茅台 2024 年年度报告 ↗</a></dd>
+          <dt>run</dt><dd class="m" style="font-size: 12px">run 9c41… · codeVersion 3f9c2e1 · units.ts rule cny_yuan</dd>
+          <dt>download</dt><dd class="cap">null（Tushare 对象不可再分发）</dd>
+        </dl>
+      </div>
+
+      <div class="card pad" style="background: #1c1c20">
+        <div class="row" style="margin-bottom: 8px"><span class="h3">美股事实的同一区块</span><span class="tiny">EDGAR</span></div>
+        <dl class="kv">
+          <dt>locator.jsonPointer</dt><dd class="m" style="font-size: 12px">/facts/us-gaap/Revenues/units/USD/41</dd>
+          <dt>download</dt><dd><a class="m" href="#" style="font-size: 12px">/api/facts/snapshot?hash=sha256:4be0…</a> <span class="tiny">稳定端点，每次下载现铸 60 s 签名 URL</span></dd>
+          <dt>回放步骤</dt><dd class="cap">下载原文字节 → 按 jsonPointer 定位 → 与 rawHash 核对</dd>
+        </dl>
+      </div>
+      <div class="row"><button class="btn sm">复制可复现查询 Copy replay query</button><code class="hash">/api/facts/600519.SH?concepts=revenue_operating&amp;from=2024-12-31&amp;to=2024-12-31&amp;history=1</code></div>
+    </div>
+  </aside>
+
+  <aside class="drawer" aria-label="公式抽屉" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div class="lbl-state">B · 公式抽屉 Formula (derived)</div>
+      <div class="h3" style="margin-top: 6px">毛利率 gross_margin · 2025-06-30 · 6M</div>
+      <div class="m" style="font-size: 26px; font-weight: 500; margin-top: 4px">91.86%</div>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+      <div class="card pad" style="background: #1c1c20; font-size: 13px">(revenue_operating − cost_of_revenue) / revenue_operating<div class="tiny" style="margin-top: 6px">Gross margin = (operating revenue − cost of revenue) / operating revenue</div></div>
+      <dl class="kv" style="grid-template-columns: 110px 1fr">
+        <dt>basis</dt><dd class="m">disclosed</dd><dt>inputUnit</dt><dd class="m">CNY</dd><dt>formula</dt><dd class="m">m-2</dd><dt>rule</dt><dd class="m">a（同一披露）</dd><dt>asOf</dt><dd class="m">—（最新）</dd><dt>computedAt</dt><dd class="m">2026-11-02 04:10</dd><dt>basedOnRev</dt><dd class="m">rev 4182</dd>
+      </dl>
+      <div><div class="ml" style="margin-bottom: 6px">inputs</div>
+        <table class="t dense"><tbody>
+          <tr><td class="tiny">revenue_operating</td><td class="n"><button class="src">893.89 亿</button></td><td class="m dim">2025-08-13</td></tr>
+          <tr><td class="tiny">cost_of_revenue</td><td class="n"><button class="src">72.77 亿</button></td><td class="m dim">2025-08-13</td></tr>
+        </tbody></table>
+        <div class="tiny" style="margin-top: 6px">每个输入可点进披露历史抽屉。</div>
+      </div>
+    </div>
+  </aside>
+
+  <div style="display: flex; flex-direction: column; gap: 24px">
+    <aside class="card" aria-label="概念说明" style="padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #141417">
+      <div class="lbl-state">C · 概念说明 Concept notes</div>
+      <div class="h3">营业收入 revenue_operating</div>
+      <dl class="kv" style="grid-template-columns: 110px 1fr">
+        <dt>sourceConcepts</dt><dd class="m" style="font-size: 12px">Tushare income.revenue</dd>
+        <dt>mappingGen</dt><dd class="m">3</dd>
+        <dt>notes</dt><dd class="cap">A 股“营业收入”；与营业总收入（含利息等）区分。CN 的收入速览用此概念。</dd>
+      </dl>
+    </aside>
+    <aside class="card" aria-label="多单位" style="padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #141417">
+      <div class="lbl-state">D · 多单位 U 徽标</div>
+      <div class="cap">主单位按出现期间数最多者，并列取码点序最小。其他单位的事实在抽屉列出：</div>
+      <table class="t dense"><tbody><tr><td class="tiny">CNY/share</td><td class="n m">68.64</td><td class="tiny">主单位</td></tr><tr><td class="tiny">CNY/share (diluted)</td><td class="n m">68.64</td><td class="tiny">其他</td></tr></tbody></table>
+    </aside>
+    <aside class="card" aria-label="来源不完整" style="padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #141417">
+      <div class="lbl-state">E · withheld 格的抽屉</div>
+      <div class="cap">单元格“— 待挂接”点开后只显示原因：filing citation = pending，或 linked 但无 locator.pdf。不显示数值，也不显示替代来源。</div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

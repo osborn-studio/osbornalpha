@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 回放态</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1350px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <section class="row" style="gap: 16px">
+      <h1 class="h1">贵州茅台 <span class="en" style="font-size: 16px">Kweichow Moutai</span></h1>
+      <span class="chip ac m">600519.SH ◉</span>
+      <span class="tiny" style="margin-left: auto">最近文件（按 asOf 重算）<span class="m" style="color: #fafafa">2024-04-03</span> · 最近财期 <span class="m" style="color: #fafafa">2024-03-31</span></span>
+    </section>
+
+    <div role="status" style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid #ca8a04; border-radius: 8px; background: rgba(202,138,4,.12)">
+      <span class="lbl-state">回放 Replay</span>
+      <span style="font-size: 14px">截至 <span class="m">2024-06-30</span> 可见的披露 <span class="fog">· Disclosures visible as of this date</span></span>
+      <span class="tiny">页头的发行人、证券与标识符仍是今天的归属</span>
+      <div class="row" style="margin-left: auto">
+        <div class="field" style="width: 160px"><label for="d" class="sr" style="position: absolute; left: -9999px">回放日期</label><input id="d" class="inp m focus" value="2024-06-30"></div>
+        <a class="btn sm" href="Main.dc.html">回到最新 Back to latest</a>
+      </div>
+    </div>
+
+    <nav class="tabs"><a href="#">概览</a><a class="on" href="#">报表</a><a href="#">指标</a><a href="#">文件</a><a href="#">跟踪</a><a href="#">判断</a><a href="#">模型观点（未校准）</a><a href="#">信号</a><a href="#">持仓</a></nav>
+
+    <div class="row" style="gap: 12px">
+      <div class="seg"><button class="on">利润表 IS</button><button>资产负债表 BS</button><button>现金流量表 CF</button></div>
+      <div class="seg"><button class="on">按披露</button><button>年度</button><button>单季</button></div>
+      <div class="seg"><button>原值</button><button>千</button><button>百万</button><button class="on">亿</button></div>
+      <span class="tiny" style="margin-left: auto">readFacts(asOf = 2024-06-30) · 页签切换保留 asOf</span>
+    </div>
+
+    <section class="card scrollx" style="padding: 0">
+      <table class="t">
+        <thead><tr><th style="padding-left: 16px; min-width: 220px">概念</th><th class="n"><span class="m" style="color: #fafafa">2024-03-31</span><span class="en">3M</span></th><th class="n"><span class="m" style="color: #fafafa">2023-12-31</span><span class="en">12M</span></th><th class="n"><span class="m" style="color: #fafafa">2023-09-30</span><span class="en">9M</span></th><th class="n"><span class="m" style="color: #fafafa">2023-06-30</span><span class="en">6M</span></th><th class="n"><span class="m" style="color: #fafafa">2023-03-31</span><span class="en">3M</span></th></tr></thead>
+        <tbody>
+          <tr><td style="padding-left: 16px">营业总收入<span class="en">revenue</span></td><td class="n"><button class="src">464.85</button></td><td class="n"><button class="src">1,505.60</button></td><td class="n"><button class="src">1,053.17</button></td><td class="n"><button class="src">709.89</button></td><td class="n"><button class="src">393.79</button></td></tr>
+          <tr><td style="padding-left: 16px">营业收入<span class="en">revenue_operating</span></td><td class="n"><button class="src">454.61</button></td><td class="n"><button class="src">1,476.94</button><span class="bdg">R</span></td><td class="n"><button class="src">1,033.11</button></td><td class="n"><button class="src">695.74</button></td><td class="n"><button class="src">386.49</button></td></tr>
+          <tr><td style="padding-left: 16px">归母净利润<span class="en">net_income_parent</span></td><td class="n"><button class="src">240.65</button></td><td class="n"><button class="src">747.34</button></td><td class="n"><button class="src">528.76</button></td><td class="n"><button class="src">359.80</button></td><td class="n"><button class="src">207.94</button></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <div class="tiny">R 徽标表示截至回放日已知的修订；更晚的修订在回放里不出现。</div>
+
+    <section class="card pad" aria-label="回放下各视图">
+      <div class="h3" style="margin-bottom: 10px">回放模式下的其他视图 <span class="en">Other views under replay</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">指标 · 估值模型区</strong><br>指标实时 derive；估值模型区隐藏，显示“回放模式下不运行估值模型”。</div>
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">跟踪</strong><br>事件按 asOf 现算；“标记已读”禁用：“回放模式不记录已读”。</div>
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">判断</strong><br>F4 返回当时版本的卡（view=as_known）：截止后才结算或校准的不出现。</div>
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">文件</strong><br>只列 available_date ≤ 2024-06-30 的文件。</div>
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">概览</strong><br>速览从同一信封现算；K 线若保留则显示“不支持回放”横幅。</div>
+        <div class="callout" style="font-size: 12px"><strong style="color: #fafafa">模型观点 / 信号 / 持仓</strong><br>显示“不支持回放 Replay not supported”横幅。</div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1350}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
