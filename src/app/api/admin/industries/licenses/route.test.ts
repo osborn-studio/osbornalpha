@@ -6,6 +6,8 @@ vi.mock('@/lib/admin/auth',async(importOriginal)=>({...await importOriginal<type
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({from:mocks.from})}));
 vi.mock('@/lib/industry/db',()=>({supabaseIndustryDb:()=>({setDatasetLicense:mocks.setLicense})}));
 vi.mock('next/cache',()=>({revalidateTag:mocks.revalidate}));
+const forget=vi.hoisted(()=>vi.fn());
+vi.mock('@/lib/industry/stale-views',()=>({forgetViews:forget}));
 
 import {AdminForbidden,AdminUnauthenticated} from '@/lib/admin/auth';
 import {POST} from './route';
@@ -31,6 +33,7 @@ describe('POST /api/admin/industries/licenses',()=>{
   expect(mocks.insert.mock.calls[0][0]).toMatchObject({user_id:ADMIN,action:'industry.license_set',object_type:'industry',object_id:null,detail:{dataset_key:'scheme:sw2021:2021',status:'public',object_ref:'scheme:sw2021:2021'}});
   expect(mocks.revalidate).toHaveBeenCalledWith('industries');
   expect(mocks.setLicense.mock.invocationCallOrder[0]).toBeLessThan(mocks.revalidate.mock.invocationCallOrder[0]);
+  expect(forget).toHaveBeenCalledWith('scheme:sw2021:2021');
  });
  it('an audit failure after the committed switch is logged, still 200 and still revalidated',async()=>{
   mocks.insert.mockResolvedValue({error:{message:'audit down'}});

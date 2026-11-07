@@ -14,6 +14,7 @@ import {DATASET_KEYS,isLicensedStatus} from '@/lib/industry/licenses';
 import type {DatasetKey} from '@/lib/industry/types';
 import {audit,type ResearchSupabase} from '@/lib/research/store';
 import {getAdminSupabase} from '@/lib/supabase/admin';
+import {forgetViews} from '@/lib/industry/stale-views';
 
 export const dynamic='force-dynamic';
 const NO_STORE={'Cache-Control':'no-store'};
@@ -39,6 +40,7 @@ export async function POST(request:Request){
    console.error('[admin/industries] audit failed',auditError instanceof Error?auditError.message:auditError);
   }
   revalidateTag('industries');
+  forgetViews(key);   // this instance's stale page views of the dataset (page-data.ts re-checks the licence on every other instance)
   return NextResponse.json({dataset_key:key,status},{headers:NO_STORE});
  }catch(error){
   if(error instanceof AdminUnauthenticated)return NextResponse.json({error:'authentication required'},{status:401,headers:NO_STORE});

@@ -9,6 +9,9 @@ import { WizardCard } from '@/components/intel/WizardCard';
 import { WatchlistScreener } from '@/components/intel/WatchlistScreener';
 import type { Market } from '@/lib/supabase/database.types';
 import { Disclaimer } from '@/components/Disclaimer';
+// INDUSTRY:BEGIN
+import { IndustryEntryCard } from '@/components/industries/IndustryEntryCard';
+// INDUSTRY:END
 
 interface SearchResult { t: string; n: string; py: string; m: Market }
 interface Artifact { id: string; skill_id: string; ticker: string | null; title: string; content_md: string; created_at: string }
@@ -119,6 +122,9 @@ function ResearchTab() {
 
   return (
     <div className="space-y-3">
+      {/* INDUSTRY:BEGIN */}
+      <IndustryEntryCard />
+      {/* INDUSTRY:END */}
       <div className="card-base">
         <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input
