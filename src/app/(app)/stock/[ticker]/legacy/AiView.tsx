@@ -5,12 +5,15 @@
 import { useTranslations } from 'next-intl';
 import { PerspectiveCard } from '@/components/PerspectiveCard';
 import { QuotaNotice } from '@/components/QuotaNotice';
-import { usePerspectives } from '@/lib/hooks/useQuote';
+import { Button } from '@/components/ui';
+import type { usePerspectives } from '@/lib/hooks/useQuote';
 
-export function AiView({ ticker }: { ticker: string }) {
+export type Perspectives = ReturnType<typeof usePerspectives>;
+
+/** Presentational: the persistent shell owns usePerspectives so results and in-flight runs survive tab switches. */
+export function AiView({ pers }: { pers: Perspectives }) {
   const t = useTranslations('market.stock');
   const tc = useTranslations('company.legacy');
-  const pers = usePerspectives(ticker);
   const perspectives = pers.perspectives;
   const bullish = perspectives.filter((p) => p.stance === 'bullish');
   const neutral = perspectives.filter((p) => p.stance === 'neutral');
@@ -27,7 +30,7 @@ export function AiView({ ticker }: { ticker: string }) {
           {t('ai.pendingLine1')}
           {pers.error && <div className="mt-2 text-xs text-down">{t('ai.errorLine', { error: pers.error })}</div>}
           <br />
-          <button onClick={pers.refetch} className="mt-3 rounded bg-accent-dim px-4 py-2 text-white">{t('ai.generate')}</button>
+          <Button className="mt-3" onClick={pers.refetch}>{t('ai.generate')}</Button>
         </div>
       ) : (
         <>
@@ -38,7 +41,7 @@ export function AiView({ ticker }: { ticker: string }) {
           {neutral.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
           {bearish.length > 0 && <h3 className="mb-2 mt-3 text-sm font-semibold text-bearish">{t('ai.bearishHeading', { count: bearish.length })}</h3>}
           {bearish.map((p) => <PerspectiveCard key={p.persona} {...p} />)}
-          <button onClick={pers.refetch} className="mt-3 rounded border border-accent-dim/60 px-3 py-1.5 text-xs font-semibold text-accent-dim">{t('ai.regenerate')}</button>
+          <Button variant="secondary" size="sm" className="mt-3" onClick={pers.refetch}>{t('ai.regenerate')}</Button>
         </>
       )}
     </div>

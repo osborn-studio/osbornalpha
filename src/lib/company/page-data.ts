@@ -6,6 +6,7 @@
 import type {TableClient} from '@/lib/db/table-client';
 import {resolveIssuer,type ResolvedIssuer} from '@/lib/entities/resolve';
 import {resolvePublicIssuer} from '@/lib/facts/public-route';
+import {inferCoreMarket,normalizeSecurityTicker} from '@/lib/securities/ticker';
 import type {CoverageRow,Market} from './types';
 import {factStateOf,streamOptions,type FactState,type StreamOption} from './header-model';
 
@@ -31,3 +32,12 @@ export async function loadCompanyPageData(deps:PageDataDeps,rawTicker:string,tod
   return {...base,errorCode:ambiguous?'ambiguous_ticker':'internal'};
  }
 }
+
+/** Candidate stocks_universe tickers: same normalisation as page-data (`/` → `.`), plus the market-suffixed form (600519 → 600519.SH). */
+export function universeCandidates(ticker:string):string[]{
+  const given = ticker.trim().toUpperCase().replace(/\//g, '.');
+  const core = inferCoreMarket(given);
+  const normalised = core ? normalizeSecurityTicker(given, core) : null;
+  return [...new Set([given, ...(normalised ? [normalised] : [])])];
+}
+

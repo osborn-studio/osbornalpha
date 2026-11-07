@@ -1,7 +1,7 @@
 // src/lib/company/page-data.test.ts
 import {describe,it,expect,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import {loadCompanyPageData} from './page-data';
+import {loadCompanyPageData,universeCandidates} from './page-data';
 import type {CoverageRow} from './types';
 
 const TODAY='2026-11-06';
@@ -42,5 +42,13 @@ describe('loadCompanyPageData',()=>{
   expect((await loadCompanyPageData({tables:boom,coverageOf:async()=>[]},'X',TODAY)).errorCode).toBe('ambiguous_ticker');
   const down={...tables,select:async()=>{throw new Error('db down');}};
   expect((await loadCompanyPageData({tables:down,coverageOf:async()=>[]},'X',TODAY)).errorCode).toBe('internal');
+ });
+});
+
+describe('universeCandidates',()=>{
+ it('normalises like page-data and adds the market-suffixed form',()=>{
+  expect(universeCandidates('600519')).toEqual(['600519','600519.SH']);
+  expect(universeCandidates('BRK/B')).toEqual(['BRK.B']);
+  expect(universeCandidates(' aapl ')).toEqual(['AAPL']);
  });
 });

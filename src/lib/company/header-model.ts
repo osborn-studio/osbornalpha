@@ -48,3 +48,7 @@ export function factStateOf(issuer:ResolvedIssuer|null,market:Market|null,covera
  }
  return coverage?'ok':'no_facts';
 }
+/** Freshness label key: a null/unknown status (or no dataset row) is 'unknown', never a missing message key. */
+export function freshnessKey(status:string|null|undefined):'fresh'|'stale'|'error'|'missing'|'unknown'{
+ return status==='fresh'||status==='stale'||status==='error'||status==='missing'?status:'unknown';
+}

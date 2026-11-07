@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Disclaimer } from '@/components/Disclaimer';
 import { Card } from '@/components/ui';
-import { useQuote } from '@/lib/hooks/useQuote';
+import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { REPLAY_UNSUPPORTED, type ViewId } from '@/lib/company/client';
 import type { CompanyPageData } from '@/lib/company/page-data';
 import { CompanyHeader } from '@/components/company/CompanyHeader';
@@ -50,12 +50,14 @@ export function CompanyPage(props: CompanyPageProps) {
 
 function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyPageProps) {
   const ticker = data.publicTicker ?? data.ticker;
+  // Lifted here (button-triggered, quota-costing) so leaving and returning to the AI tab keeps results and in-flight runs.
+  const pers = usePerspectives(ticker);
   const issuer = data.issuer;
   const extra = view === 'statements' && highlight ? { highlight } : undefined;
 
   function renderBody() {
     if (REPLAY_UNSUPPORTED.has(view)) {
-      const body = view === 'ai' ? <AiView ticker={ticker} /> : view === 'signals' ? <SignalsView /> : <HoldingsView ticker={ticker} />;
+      const body = view === 'ai' ? <AiView pers={pers} /> : view === 'signals' ? <SignalsView /> : <HoldingsView ticker={ticker} />;
       return <>{asOf && <ReplayUnsupportedBanner ticker={ticker} view={view} />}{body}</>;
     }
     if (view === 'tracking') {

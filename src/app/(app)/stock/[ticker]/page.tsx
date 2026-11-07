@@ -7,7 +7,7 @@ import { getLocale } from 'next-intl/server';
 import { getAnonSupabase } from '@/lib/supabase/anon';
 import { supabaseTableClient } from '@/lib/db/table-client';
 import { supabaseCompanyDb } from '@/lib/company/db';
-import { loadCompanyPageData } from '@/lib/company/page-data';
+import { loadCompanyPageData, universeCandidates } from '@/lib/company/page-data';
 import { parseAsOf, parseView } from '@/lib/company/client';
 import { requireAdminUser } from '@/lib/admin/auth';
 import { CompanyPage } from './CompanyPage';
@@ -24,7 +24,7 @@ async function isAdminViewer(): Promise<boolean> {
 /** Spec §5.7 "未知 ticker": no issuer AND not a known security → the framework 404 (stocks_universe is public-read). Fails open. */
 async function knownSecurity(anon: ReturnType<typeof getAnonSupabase>, ticker: string): Promise<boolean> {
   try {
-    const { data, error } = await anon.from('stocks_universe').select('ticker').eq('ticker', ticker.trim().toUpperCase()).limit(1);
+    const { data, error } = await anon.from('stocks_universe').select('ticker').in('ticker', universeCandidates(ticker)).limit(1);
     return error ? true : (data?.length ?? 0) > 0;
   } catch { return true; }
 }

@@ -10,7 +10,7 @@ import { Button, Card, Tag } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { companyApi, companyHref, type CompanyFilingsResponse, type FreshnessResponse, type ViewId } from '@/lib/company/client';
-import { datasetOf, displayNames, padCik, securityChips } from '@/lib/company/header-model';
+import { datasetOf, displayNames, freshnessKey, padCik, securityChips } from '@/lib/company/header-model';
 import type { CompanyPageData } from '@/lib/company/page-data';
 import { useCompanyFetch } from './useCompanyFetch';
 import { TrackButton } from './tracking/TrackButton';
@@ -53,6 +53,19 @@ function AnalyzeMenu({ ticker }: { ticker: string }) {
   );
 }
 
+function Pair({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="flex min-w-0 flex-col gap-0.5"><span className="text-[var(--text-dim)]">{label}</span>{children}</div>;
+}
+
+function InlineError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const t = useTranslations('company.states');
+  return (
+    <span role="alert" className="flex flex-wrap items-center gap-1.5 text-[var(--danger)]">
+      {message}<Button variant="ghost" size="sm" onClick={onRetry}>{t('retry')}</Button>
+    </span>
+  );
+}
+
 const dot: Record<string, string> = { fresh: 'bg-[var(--bearish)]', stale: 'bg-[var(--warn)]', error: 'bg-[var(--danger)]', missing: 'bg-[var(--text-muted)]' };
 
 export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageData; view: ViewId; asOf: string | null; locale: 'zh' | 'en' }) {
@@ -60,15 +73,15 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
   const tf = useTranslations('company.header.freshness');
   const issuer = data.issuer;
   const ticker = data.publicTicker ?? data.ticker;
-  const freshness = useCompanyFetch<FreshnessResponse>(data.market ? '/api/companies/freshness' : null).state;
-  const replayFilings = useCompanyFetch<CompanyFilingsResponse>(asOf && data.coverage ? companyApi('filings', ticker, { asOf }) : null).state;
+  const { state: freshness, retry: freshnessRetry } = useCompanyFetch<FreshnessResponse>(data.market ? '/api/companies/freshness' : null);
+  const { state: replayFilings, retry: replayRetry } = useCompanyFetch<CompanyFilingsResponse>(asOf && data.coverage ? companyApi('filings', ticker, { asOf }) : null);
   const names = issuer ? displayNames(issuer.names, locale, ticker) : { title: data.ticker, subtitle: null };
   const chips = issuer ? securityChips(issuer.securities, ticker) : [];
   const cov = data.coverage;
-  const ds = data.market && freshness.status === 'ok' ? freshness.data.datasets.find((d) => d.dataset === datasetOf(data.market!)) : undefined;
   const latestFiling = asOf
-    ? (replayFilings.status === 'ok' ? replayFilings.data.filings[0]?.availableDate ?? '—' : '…')
-    : cov?.latest_available_date ?? '—';
+    ? (replayFilings.status === 'ok' ? replayFilings.data.filings[0]?.availableDate ?? t('none') : replayFilings.status === 'loading' || replayFilings.status === 'idle' ? '…' : t('none'))
+    : cov?.latest_available_date ?? t('none');
+  const fkey = freshnessKey(freshness.status === 'ok' && data.market ? freshness.data.datasets.find((d) => d.dataset === datasetOf(data.market!))?.status : null);
   const marketLabel = (m: string) => (m === 'CN' ? t('marketCN') : m === 'US' ? t('marketUS') : m === 'HK' ? t('marketHK') : m);
 
   return (
@@ -111,32 +124,42 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
           </div>
         )}
         {issuer && data.market && (
-          <Card className="grid grid-cols-2 gap-x-5 gap-y-1 px-3.5 py-2.5 text-xs sm:grid-cols-3">
+          <Card className="grid grid-cols-2 gap-x-5 gap-y-2 px-3.5 py-2.5 text-xs sm:grid-cols-3">
             {cov ? (
               <>
-                <span className="text-[var(--text-dim)]">{t('latestPeriod')}</span>
-                <span className="text-[var(--text-dim)]">{t('latestFiling')}{asOf ? ` ${t('latestFilingReplay')}` : ''}</span>
-                <span className="text-[var(--text-dim)]">{t('citations')}</span>
-                <span className="num">{cov.latest_period_end ?? '—'}</span>
-                <span className="num">{latestFiling}</span>
-                <span className="num">
-                  {data.market === 'US'
-                    ? t('citationEdgar', { n: cov.citation_summary.edgar })
-                    : `${t('citationLinked', { n: cov.citation_summary.linked })} · ${t('citationPending', { n: cov.citation_summary.pending })}`}
-                </span>
-                <span className="text-[var(--text-dim)]">{cov.scope_last_status === 'failed' ? t('lastSyncFailed') : t('lastSync')}</span>
-                <span className="text-[var(--text-dim)]">{t('dataset')}</span>
-                <span />
-                <span className="num">{cov.scope_last_success_at?.slice(0, 10) ?? '—'}</span>
+                <Pair label={t('latestPeriod')}><span className="num">{cov.latest_period_end ?? t('none')}</span></Pair>
+                <Pair label={`${t('latestFiling')}${asOf ? ` ${t('latestFilingReplay')}` : ''}`}>
+                  {replayFilings.status === 'error'
+                    ? <InlineError message={t('replayError', { code: replayFilings.code })} onRetry={replayRetry} />
+                    : <span className="num">{latestFiling}</span>}
+                </Pair>
+                <Pair label={t('citations')}>
+                  <span className="num">
+                    {data.market === 'US'
+                      ? t('citationEdgar', { n: cov.citation_summary.edgar })
+                      : `${t('citationLinked', { n: cov.citation_summary.linked })} · ${t('citationPending', { n: cov.citation_summary.pending })}`}
+                  </span>
+                </Pair>
+                <Pair label={cov.scope_last_status === 'failed' ? t('lastSyncFailed') : t('lastSync')}>
+                  <span className="num">{cov.scope_last_success_at?.slice(0, 10) ?? t('none')}</span>
+                </Pair>
               </>
             ) : (
-              <span className="col-span-2 text-[var(--text-dim)]">{t('noFacts')}</span>
+              <span className="col-span-2 text-[var(--text-dim)] sm:col-span-3">{t('noFacts')}</span>
             )}
-            <span className="flex items-center gap-1.5" data-testid="data-status">
-              <span className="num">{datasetOf(data.market)}</span>
-              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot[ds?.status ?? 'missing']}`} />
-              <span>{ds ? tf(ds.status) : tf('unknown')}</span>
-            </span>
+            <Pair label={t('dataset')}>
+              <span className="flex flex-wrap items-center gap-1.5" data-testid="data-status">
+                <span className="num">{datasetOf(data.market)}</span>
+                {freshness.status === 'error' ? (
+                  <InlineError message={t('freshnessError', { code: freshness.code })} onRetry={freshnessRetry} />
+                ) : (
+                  <>
+                    <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot[fkey] ?? dot.missing}`} />
+                    <span>{tf(fkey)}</span>
+                  </>
+                )}
+              </span>
+            </Pair>
           </Card>
         )}
       </div>

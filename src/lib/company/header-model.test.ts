@@ -1,6 +1,6 @@
 // src/lib/company/header-model.test.ts
 import {describe,it,expect} from 'vitest';
-import {displayNames,securityChips,padCik,streamOptions,securityMarket,datasetOf,factStateOf} from './header-model';
+import {displayNames,securityChips,padCik,streamOptions,securityMarket,datasetOf,factStateOf,freshnessKey} from './header-model';
 import type {ResolvedIssuer} from '@/lib/entities/resolve';
 import type {CoverageRow} from './types';
 
@@ -38,5 +38,12 @@ describe('header model',()=>{
   expect(factStateOf(issuer([sec('AAPL',true)]),'US',null)).toBe('no_facts');
   expect(factStateOf(issuer([sec('AAPL',true)]),'US',cov('US'))).toBe('ok');
   expect(factStateOf(issuer([sec('XYZ.T',true)]),null,null)).toBe('no_facts');
+ });
+});
+
+describe('freshnessKey',()=>{
+ it('maps null, unknown and absent statuses to unknown',()=>{
+  expect(freshnessKey('fresh')).toBe('fresh');expect(freshnessKey('missing')).toBe('missing');
+  expect(freshnessKey(null)).toBe('unknown');expect(freshnessKey(undefined)).toBe('unknown');expect(freshnessKey('weird')).toBe('unknown');
  });
 });

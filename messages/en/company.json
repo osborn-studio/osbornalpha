@@ -46,7 +46,10 @@
     "quoteRemoved": "Quote row and K-line are hidden (the quote chain has no replay contract yet)",
     "analyze": "Analyze ▸",
     "addWatchlist": "Add to watchlist",
-    "inWatchlist": "In watchlist"
+    "inWatchlist": "In watchlist",
+    "replayError": "Latest filing for the replay date failed to load ({code})",
+    "freshnessError": "Data status failed to load ({code})",
+    "adminTag": "Admin"
   },
   "replay": {
     "button": "Replay asOf ▾",
@@ -58,7 +61,9 @@
     "unsupportedTitle": "Replay not supported",
     "unsupportedBody": "Showing today's content",
     "dcfHidden": "Valuation model is not run in replay",
-    "readsDisabled": "Read receipts are off in replay"
+    "readsDisabled": "Read receipts are off in replay",
+    "apply": "Apply",
+    "cancel": "Cancel"
   },
   "states": {
     "loading": "Loading…",

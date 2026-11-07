@@ -11,11 +11,12 @@ export function Callout({ children }: { children: React.ReactNode }) {
 
 export function FactStateCallout({ state, isAdmin }: { state: 'no_issuer' | 'no_facts' | 'hk_pending'; isAdmin: boolean }) {
   const t = useTranslations('company.states');
+  const th = useTranslations('company.header');
   return (
     <div className="flex flex-col gap-2">
       <Callout>{state === 'no_issuer' ? t('noIssuer') : state === 'hk_pending' ? t('hkPending') : t('noFacts')}</Callout>
       {state === 'no_facts' && isAdmin && (
-        <div className="flex items-center gap-2 text-sm"><Tag tone="accent">admin</Tag><Link href="/admin/dq">{t('adminDq')}</Link></div>
+        <div className="flex items-center gap-2 text-sm"><Tag tone="accent">{th('adminTag')}</Tag><Link href="/admin/dq">{t('adminDq')}</Link></div>
       )}
     </div>
   );

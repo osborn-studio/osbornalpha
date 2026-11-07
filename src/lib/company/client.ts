@@ -70,7 +70,7 @@ export interface OverviewResponse{ticker:string;market:Market;asOf:string;covera
 export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;inputUnit:string;basis:string;basedOnRev:number;computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
 export interface MetricsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
-export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}[]}
+export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus|null;lastOkAt:string|null;lastAttemptAt:string|null}[]}
 export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;filings:FilingSummary[]}
 /** Spec-2 /api/facts?factIds= row, used only to locate a fact's natural key (its value is never displayed, §0 #68). */
 export interface FactKeyRow{factId:string;concept:string;periodStart:string|null;periodEnd:string;duration:string;unit:string}
