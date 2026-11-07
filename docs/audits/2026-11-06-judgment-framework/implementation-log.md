@@ -85,3 +85,4 @@
 - H-03：table_rows 每行 max(created_at, updated_at)；updated_at < created_at → `input_unavailable`。
 - H-04：`canonicalize/digest/jsonClean` 拒绝稀疏数组与带额外属性的数组（`invalid_parameter`）；`rebuildAndCompare` 要求快照 JSON 往返后摘要不变。
 - 次要：financial_metric 标签含 issuer_id 与 market；`asOf` 校验真实日期（`invalid_parameter`，原为 RangeError）。
+- H2-01（Codex 复核）：table_rows 区分缺失（null/undefined）与畸形（存在但不可解析）的 created_at/updated_at；任一畸形 → `input_unavailable`，再套用 max 与 updated<created 规则。

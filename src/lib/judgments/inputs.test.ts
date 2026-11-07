@@ -261,6 +261,13 @@ describe('review fixes H-01..H-04',()=>{
   expect(await code(buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z',updated_at:'2026-01-01T00:00:00.000Z'}),'2026-11-08'))).toBe('input_unavailable');
   expect((await buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z'}),'2026-11-08')).available_at).toBe('2026-11-06T00:00:00.000Z');
  });
+ it('H2-01: a present but malformed timestamp is unevidenced, never silently dropped',async()=>{
+  const mk=(row:object)=>memoryJudgmentInputsDb({macro:fixtureMacroReadApi({...MACRO,series_catalog:{US:[{id:'x',weight:1,...row}]}})});
+  const req:InputRequest={kind:'table_rows',ref:{table:'macro_series',natural_key:'US'}};
+  expect(await code(buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z',updated_at:'garbage'}),'2026-11-08'))).toBe('input_unavailable');
+  expect(await code(buildInput(req,mk({created_at:'garbage',updated_at:'2026-11-07T00:00:00.000Z'}),'2026-11-08'))).toBe('input_unavailable');
+  expect(await code(buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z',updated_at:12345}),'2026-11-08'))).toBe('input_unavailable');
+ });
  it('H-04: sparse arrays are rejected; a snapshot must survive a JSON round trip',async()=>{
   const holes=[1,,3] as unknown[];
   expect(()=>canonicalize(holes)).toThrow(JudgmentError);

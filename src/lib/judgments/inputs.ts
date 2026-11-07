@@ -175,8 +175,9 @@ async function buildTable(raw:{table:PublicTable;natural_key:string},db:Judgment
  // P1-08: availability is the rows' system time (updated_at, else created_at) — valid_from is an effective date,
  // not a publication time, and the requested as_of is never a substitute.
  // H-03: per row max(valid created_at, valid updated_at); updated_at earlier than created_at is inconsistent → unevidenced.
- const ts=(v:unknown):number|null=>typeof v==='string'&&Number.isFinite(Date.parse(v))?Date.parse(v):null;
- const stampOf=(r:Record<string,unknown>):string|null=>{const c=ts(r.created_at),u=ts(r.updated_at);if(c!==null&&u!==null&&u<c)return null;const m=Math.max(c??-Infinity,u??-Infinity);return Number.isFinite(m)?new Date(m).toISOString():null;};
+ // ABSENT (null / undefined) differs from MALFORMED (present but unparseable): malformed → NaN → unevidenced (H2-01).
+ const ts=(v:unknown):number|null=>v===null||v===undefined?null:typeof v==='string'&&Number.isFinite(Date.parse(v))?Date.parse(v):NaN;
+ const stampOf=(r:Record<string,unknown>):string|null=>{const c=ts(r.created_at),u=ts(r.updated_at);if(Number.isNaN(c)||Number.isNaN(u)||(c!==null&&u!==null&&u<c))return null;const m=Math.max(c??-Infinity,u??-Infinity);return Number.isFinite(m)?new Date(m).toISOString():null;};
  const stamps=rows.map(stampOf);
  if(stamps.some(s=>s===null))throw new JudgmentError('input_unavailable',`${label}: a row has no system timestamp (valid, ordered updated_at / created_at), so its availability at ${asOf} cannot be evidenced`);
  const snapshot={table:ref.table,natural_key:ref.natural_key,rows};
