@@ -11,7 +11,7 @@ import type {MetricRow} from '@/lib/facts/types';
 import {canonicalize,digest,jsonClean} from './canonical';
 import {JudgmentError} from './errors';
 import {memoryJudgmentInputsDb} from './inputs-db';
-import {buildInput as rawBuild,buildOrAbstain as rawAbstain,inputLabel,inputsHashOf,rebuildAndCompare as rawRebuild,sortInputs} from './inputs';
+import {buildInput as rawBuild,buildOrAbstain as rawAbstain,inputLabel,inputsHashOf,mapIndustryInputError,rebuildAndCompare as rawRebuild,sortInputs} from './inputs';
 import type {BuildOptions,InputRequest} from './inputs';
 import type {KlineRange} from './kline';
 import {fixtureMacroReadApi,observationIdOf} from './macro-api';
@@ -19,7 +19,7 @@ import type {MacroFixture} from './macro-api';
 import {originKnown} from './origins';
 import {closeInstantUtc} from './time';
 import {RUN_ID,cellRow,runRow,stubIndustryDb} from '@/lib/industry/fixture-rows';
-import {metricsNaturalKey,valuationsNaturalKey,industryTableRowsInput} from '@/lib/industry/judgment-input';
+import {IndustryInputError,metricsNaturalKey,valuationsNaturalKey,industryTableRowsInput} from '@/lib/industry/judgment-input';
 import type {Input,JudgmentInputsDb,JudgmentRow,KlineRangeRequest,MetricKey} from './types';
 import {AAPL_ISSUER,FIXED_NOW,aaplParse,factCandidate,filingCandidate,publishFacts,seedFactId} from './testing/facts-fixture';
 
@@ -36,12 +36,31 @@ describe('industry table input bridge',()=>{
   const db={...memoryJudgmentInputsDb(),industry};
   const input=await rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:nk}},db,'2026-11-04',OBS);
   const adapted=await industryTableRowsInput(industry,{table:'industry_metrics',natural_key:nk});
-  expect(input).toEqual({...adapted,origin:{publisher:adapted.origin.publisher,adapter:adapted.origin.adapter,locator:adapted.origin.locator,transform:adapted.origin.transform}});
+  expect(input).toEqual(adapted);
   expect(originKnown('table_rows',input.origin)).toBe(true);
   expect(await rawRebuild(input,db,'2026-11-04',OBS)).toEqual({status:'ok'});
+  expect(await rawRebuild({...input,origin:{...input.origin,locator:`manifest:${'f'.repeat(64)}`}},db,'2026-11-04',OBS)).toEqual({status:'input_snapshot_mismatch',field:'origin'});
+ });
+ it('tableRows resolves industry rows through the adapter and rejects keys outside its grammar',async()=>{
+  const industry=stubIndustryDb({runs:[runRow()],cells:[cellRow()]});
+  const db=memoryJudgmentInputsDb({industry});
+  expect(await db.tableRows('industry_metrics',nk)).toEqual((await industryTableRowsInput(industry,{table:'industry_metrics',natural_key:nk})).snapshot.rows);
+  for(const key of [metricsNaturalKey('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA','801120.SI','2025-12-31'),metricsNaturalKey(RUN_ID,'801120.SI','2025-02-30'),`industry_metrics:${RUN_ID}:801120:SI:2025-12-31`])
+   expect(await code(db.tableRows('industry_metrics',key))).toBe('input_not_allowed');
+ });
+ it.each([
+  ['invalid_natural_key','input_not_allowed'],['input_not_public','input_not_public'],
+  ['input_ambiguous_manifest','input_unavailable'],['unsupported_deferred_i3','input_not_allowed'],
+ ] as const)('maps adapter %s to F4 %s',async(adapterCode,f4Code)=>{
+  expect(mapIndustryInputError(new IndustryInputError(adapterCode)).code).toBe(f4Code);
+ });
+ it('does not freeze a run that became available after judgment asOf',async()=>{
+  const db=memoryJudgmentInputsDb({industry:stubIndustryDb({runs:[runRow()],cells:[cellRow()]})});
+  expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:nk}},db,'2020-01-01',OBS))).toBe('input_not_public');
  });
  it('rejects valuations and malformed metric keys before reading rows',async()=>{
   const db={...memoryJudgmentInputsDb(),industry:stubIndustryDb({runs:[runRow()],cells:[cellRow()]})};
+  expect(await code(db.tableRows('industry_valuations' as never,valuationsNaturalKey(RUN_ID,'801120.SI','2025-12-31')))).toBe('input_not_allowed');
   expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_valuations' as 'industry_metrics',natural_key:valuationsNaturalKey(RUN_ID,'801120.SI','2025-12-31')}},db,'2026-11-04',OBS))).toBe('input_not_allowed');
   expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:'industry_metrics:bad:801120.SI:2025-12-31'}},db,'2026-11-04',OBS))).toBe('input_not_allowed');
   expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:metricsNaturalKey(RUN_ID,'801120.SI','2025-02-30')}},db,'2026-11-04',OBS))).toBe('input_not_allowed');

@@ -28,7 +28,8 @@ import {JudgmentError} from './errors';
 import {deriveMetricsAsOf} from './facts-derive';
 import {unavailableMacroReadApi} from './macro-api';
 import {readKlineRange} from './kline';
-import {parseIndustryNaturalKey} from '@/lib/industry/judgment-input';
+import {IndustryInputError,industryTableRowsInput,parseIndustryNaturalKey} from '@/lib/industry/judgment-input';
+import {mapIndustryInputError} from './inputs';
 import type {IndustryDb} from '@/lib/industry/types';
 
 export type KlineFn=JudgmentInputsDb['kline'];
@@ -41,17 +42,20 @@ const isoKeys=(r:Row):Record<string,unknown>=>Object.fromEntries(Object.entries(
 export function normalizeTableRows(rows:Row[]):Record<string,unknown>[]{
  return rows.map(isoKeys).map(r=>({r,c:canonicalize(r)})).sort((a,b)=>a.c<b.c?-1:a.c>b.c?1:0).map(x=>x.r);
 }
-const NK:Record<PublicTable,RegExp>={
- industry_metrics:/^industry_metrics:([0-9a-f-]+):([^:]+):(\d{4}-\d{2}-\d{2})$/,
+const NK:Record<Exclude<PublicTable,'industry_metrics'>,RegExp>={
  industry_classifications:/^([^:]+):([^:]+):([^:]+)$/,
  issuer_industry_memberships:/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([^:]+):([^:]+)$/,
  macro_series:/^(US|CN)$/,
 };
 export function parseNaturalKey(table:PublicTable,key:string):string[]{
  if(!(PUBLIC_TABLES as readonly string[]).includes(table))throw new JudgmentError('input_not_allowed',`table ${table} is not a public input table`);
+ if(table==='industry_metrics'){
+  const k=parseIndustryNaturalKey(key);
+  if(!k||k.table!==table)throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
+  return [k.runId,k.code,k.date];
+ }
  const m=NK[table].exec(key);
  if(!m)throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
- if(table==='industry_metrics'&&!parseIndustryNaturalKey(key))throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
  return m.slice(1);
 }
 /** Complete-set read of one match in a COMPLETE unique ordering, paged until an empty page (PostgREST max_rows may be small). */
@@ -82,9 +86,13 @@ function memoryPaged(tables:TableClient):PagedRead{
   return (await tables.select(table,match)).sort((a,b)=>key(a)<key(b)?-1:key(a)>key(b)?1:0);
  };
 }
-async function publicTableRows(tables:TableClient,paged:PagedRead,macro:MacroReadApi,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
+async function publicTableRows(tables:TableClient,paged:PagedRead,macro:MacroReadApi,industry:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>|undefined,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
  const parts=parseNaturalKey(table,naturalKey);
- if(table==='industry_metrics')throw new JudgmentError('input_not_allowed','industry_metrics requires the industry adapter');
+ if(table==='industry_metrics'){
+  if(!industry)throw new JudgmentError('input_unavailable','industry provider unavailable');
+  try{return (await industryTableRowsInput(industry,{table,natural_key:naturalKey})).snapshot.rows as unknown as Record<string,unknown>[];}
+  catch(e){if(e instanceof IndustryInputError)throw mapIndustryInputError(e);throw e;}
+ }
  let rows:Row[];
  if(table==='industry_classifications'){const [scheme,version,code]=parts;rows=await tables.select(table,{scheme,version,code},{limit:2});}
  else if(table==='issuer_industry_memberships'){
@@ -127,13 +135,13 @@ export function publicFacts(db:FactsDb):JudgmentInputsDb['facts']{
   filingsOfIssuer:async(issuer,market,o)=>{const rows=(await db.filingsOfIssuer(issuer,market,{to:o.to})).filter(f=>f.mapping_gen>0);return o.limit===undefined?rows:rows.slice(0,o.limit);},
  };
 }
-function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:MacroReadApi;kline:KlineFn}):JudgmentInputsDb{
+export function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:MacroReadApi;kline:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}):JudgmentInputsDb{
  const facts=publicFacts(p.facts);
  return {
   facts,
   deriveMetricsAsOf:(issuer,market,asOf,formulaVersion)=>deriveMetricsAsOf(facts,issuer,market,asOf,formulaVersion),
   macro:p.macro,
-  tableRows:(table,key)=>publicTableRows(p.tables,p.paged,p.macro,table,key),
+  tableRows:(table,key)=>publicTableRows(p.tables,p.paged,p.macro,p.industry,table,key),
   publicJudgment:id=>publicJudgmentFrom(p.tables,id),
   kline:p.kline,
   issuerPrimarySecurity:(issuer,on)=>primarySecurityFrom(p.tables,p.paged,issuer,on),
@@ -141,13 +149,13 @@ function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:Ma
 }
 export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}
 export function anonJudgmentInputsDb(d:AnonInputsDeps):JudgmentInputsDb{
- return {...inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))}),industry:d.industry};
+ return {...inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req)),industry:d.industry}),industry:d.industry};
 }
 export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}
 /** Test double over memory stores; `judgments` are treated as publishable public rows. */
 export function memoryJudgmentInputsDb(fx:MemoryInputsFixture={}):JudgmentInputsDb{
  const tables=fx.tables??memoryTableClient();
- const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,paged:memoryPaged(tables),macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline});
+ const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,paged:memoryPaged(tables),macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline,industry:fx.industry});
  const judgments=new Map((fx.judgments??[]).map(j=>[j.judgment_id,j] as const));
  return {...base,industry:fx.industry,publicJudgment:async id=>{const j=judgments.get(id);return j?structuredClone(j):base.publicJudgment(id);}};
 }

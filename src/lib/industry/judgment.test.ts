@@ -8,14 +8,15 @@ import {fetchIndustryJudgments,industrySubjectKey,judgmentCardView,judgmentsEnab
 import type {JudgmentCard} from './judgment-contract';
 import {IndustryInputError,endOfUtcDay,industryTableRowsInput,metricsNaturalKey,parseIndustryNaturalKey,valuationsNaturalKey} from './judgment-input';
 
-const card=(p:Record<string,unknown>={}):JudgmentCard=>({
+const baseCard:JudgmentCard={
  judgment_id:'j1',subject:{type:'industry',key:'sw2021:2021:801120.SI'},judgment_type:'industry_lifecycle_stage',kind:'categorical',
  lifecycle:'open',outcome:null,calibration:'insufficient',retrospective:false,as_of:'2026-11-01',registered_at:'2026-11-01T04:00:00Z',
  methodology:{id:'industry_lifecycle',version:'v1',title:{zh:'生命周期阶段',en:'Lifecycle stage'},href:'/intel/methods/industry_lifecycle/v1'},
  display:{headline:{zh:'成熟期',en:'Mature'},percent:null,value:'mature',band:'mid'},
- condition:{text:{zh:'若 2027 年报期营收 3 年 CAGR > 8% 则判断不成立',en:'Fails if the 3-year revenue CAGR at FY2027 exceeds 8%'},horizon:{},target:{},label_policy:'first_observed',settle_after:'2028-01-01',settle_by:'2028-05-01'},
- settlement:null,calibration_summary:{n_independent:0,n_total:0,threshold_n:30,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:null,hit_rate:null,href:'#'},inputs:[],...p,
-} as unknown as JudgmentCard);
+ condition:{text:{zh:'若 2027 年报期营收 3 年 CAGR > 8% 则判断不成立',en:'Fails if the 3-year revenue CAGR at FY2027 exceeds 8%'},horizon:{unit:'calendar_months',n:12},target:{kind:'date',date:'2027-12-31'},label_policy:'first_observed',settle_after:'2028-01-01T00:00:00Z',settle_by:'2028-05-01T00:00:00Z'},
+ settlement:null,calibration_summary:{n_independent:0,n_total:0,threshold_n:30,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:'2029-01-01T00:00:00Z',hit_rate:null,href:'#'},inputs:[],
+};
+const card=(p:Record<string,unknown>={}):JudgmentCard=>({...baseCard,...p} as JudgmentCard);
 
 describe('judgment contract (F4 §9 + owner decision D)',()=>{
  it('subject key, flag, URL',()=>{
@@ -25,7 +26,7 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
  });
  it('uncalibrated: label + badge + condition; no percent even for a probability with a percent',()=>{
   const v=judgmentCardView(card(),'zh');
-  expect(v).toMatchObject({title:'生命周期阶段',headline:'成熟期',badge:{kind:'uncalibrated',n:0,threshold:30},percent:null,condition:'若 2027 年报期营收 3 年 CAGR > 8% 则判断不成立',footer:{method:'industry_lifecycle@v1',asOf:'2026-11-01',settleBy:'2028-05-01'}});
+  expect(v).toMatchObject({title:'生命周期阶段',headline:'成熟期',badge:{kind:'uncalibrated',n:0,threshold:30},percent:null,condition:'若 2027 年报期营收 3 年 CAGR > 8% 则判断不成立',footer:{method:'industry_lifecycle@v1',asOf:'2026-11-01',settleBy:'2028-05-01T00:00:00Z'}});
   expect(judgmentCardView(card({kind:'probability',display:{headline:{zh:'x',en:'x'},percent:62,value:0.62}}),'en').percent).toBeNull();
   expect(judgmentCardView(card({kind:'probability',calibration:'calibrated',display:{headline:{zh:'x',en:'x'},percent:62,value:0.62}}),'en')).toMatchObject({percent:62,badge:{kind:'calibrated'}});
   expect(judgmentCardView(card({lifecycle:'abstained',condition:null,abstain_reason:'needs 3y CAGR'}),'en')).toMatchObject({abstainReason:'needs 3y CAGR',condition:null});
@@ -44,7 +45,7 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
   expect(v.footer).toMatchObject({target:'{"metric":"revenue_cagr_3y","gt":0.08}',horizon:'FY2027'});
   expect(v.inputs).toEqual([{kind:'table_rows',ref:'industry_metrics:r:801120.SI:2025-12-31',availableAt:'2026-11-03T23:59:59.999Z',href:'/api/industries/sw2021/801120.SI/replay'},{kind:'table_rows',ref:'{"table":"x"}',availableAt:'2026-11-04T00:00:00Z',href:null}]);
   expect(v.settlement).toEqual({outcome:'hit',realized:'0.05',settledAt:'2028-05-02T01:00:00Z'});
-  expect(judgmentCardView(card(),'en')).toMatchObject({inputs:[],settlement:null,footer:{target:null,horizon:null}});
+  expect(judgmentCardView(card({condition:null}),'en')).toMatchObject({inputs:[],settlement:null,footer:{target:null,horizon:null}});
  });
  it('view state: disabled wins; loading until the fetched subject matches (loaded→disabled, A→B)',()=>{
   const A={key:'A',result:{state:'ok' as const,cards:[card()]}};
@@ -79,6 +80,18 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
   for(const body of [{cards:[card()]},{subject:{type:'industry',key:'other'},asOf:null,view:'latest',cards:[]},{subject:{type:'industry',key:'k'},asOf:null,view:'latest',cards:[{}]},{subject:{type:'industry',key:'k'},asOf:null,view:'other',cards:[]}])
    expect(await fetchIndustryJudgments('k',{enabled:true,fetch:vi.fn(async()=>new Response(JSON.stringify(body),{status:200}))})).toEqual({state:'error',code:'malformed'});
  });
+ it.each([
+  ['display value',{display:{headline:{zh:'x',en:'x'},value:{arbitrary:true}}}],
+  ['uncalibrated percent',{kind:'probability',display:{headline:{zh:'x',en:'x'},value:0.42,percent:42}}],
+  ['categorical percent',{display:{headline:{zh:'x',en:'x'},value:'mature',percent:42}}],
+  ['missing settlement',{settlement:undefined}],
+  ['bad condition',{condition:{text:{zh:'x',en:'x'},horizon:{},target:{},label_policy:'first_observed',settle_after:'2028-01-01',settle_by:'2028-02-01'}}],
+  ['bad summary',{calibration_summary:{n_independent:1,threshold_n:30}}],
+  ['unknown field',{surprise:true}],
+ ] as const)('rejects malformed F4 card %s',async(_name,patch)=>{
+  const body={subject:{type:'industry',key:'k'},asOf:null,view:'latest',cards:[card({subject:{type:'industry',key:'k'},...patch})]};
+  expect(await fetchIndustryJudgments('k',{enabled:true,fetch:async()=>new Response(JSON.stringify(body),{status:200})})).toEqual({state:'error',code:'malformed'});
+ });
 });
 
 describe('F4 table_rows input adapter (spec §7.1)',()=>{
@@ -96,7 +109,7 @@ describe('F4 table_rows input adapter (spec §7.1)',()=>{
   expect(input.snapshot.rows.map(r=>[r.metric,r.period_start,r.duration])).toEqual([['gross_margin','2025-01-01','12M'],['revenue_sum','2025-01-01','12M'],['revenue_sum','2025-10-01','3M']]);
   expect(input.hash).toBe(digest(input.snapshot));
   expect(input.available_at).toBe('2026-11-03T23:59:59.999Z');
-  expect(input.origin).toEqual({publisher:'OsbornAlpha',adapter:'industry-agg/1.0',locator:`manifest:${'e'.repeat(64)}`,transform:`${'c'.repeat(64)};history_class=reconstruction`,license:'scheme:sw2021:2021'});
+  expect(input.origin).toEqual({publisher:'OsbornAlpha',adapter:'industry-agg/1.0',locator:`manifest:${'e'.repeat(64)}`,transform:`${'c'.repeat(64)};history_class=reconstruction`});
   expect(Object.keys(input.snapshot.rows[0]).sort()).toEqual(['code','duration','manifest_hash','metric','missing_reason','n_members','n_unresolved','n_with_data','period_end','period_start','run_id','status','unit','updated_at','value']);
  });
  it('not public: invisible run, no ok rows, building rows; valuations deferred; bad key',async()=>{

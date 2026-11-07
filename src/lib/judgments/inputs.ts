@@ -36,6 +36,7 @@ import {capabilityOf} from './resolvers/price-capabilities';
 import type {CapabilityStatus} from './resolvers/price-capabilities';
 import {addDaysIso,closeInstantUtc,endOfUtcDay} from './time';
 import {industryTableRowsInput,IndustryInputError,parseIndustryNaturalKey} from '@/lib/industry/judgment-input';
+import type {JudgmentErrorCode} from './errors';
 export {inputsHash as inputsHashOf} from './canonical';
 
 export type PublicInputKind=typeof PUBLIC_INPUT_KINDS[number];
@@ -175,8 +176,9 @@ async function buildTable(raw:{table:PublicTable;natural_key:string},db:Judgment
   if(!db.industry)throw new JudgmentError('input_unavailable',`${label}: industry provider unavailable`);
   try{
    const input=await industryTableRowsInput(db.industry,{table:'industry_metrics',natural_key:ref.natural_key});
-   return {...input,ref:{table:'industry_metrics',natural_key:ref.natural_key},snapshot:{...input.snapshot,table:'industry_metrics',rows:input.snapshot.rows as unknown as Record<string,unknown>[]},origin:{publisher:input.origin.publisher,adapter:input.origin.adapter,locator:input.origin.locator,transform:input.origin.transform}};
-  }catch(e){if(e instanceof IndustryInputError)throw new JudgmentError(e.code==='invalid_natural_key'||e.code==='unsupported_deferred_i3'?'input_not_allowed':e.code==='input_ambiguous_manifest'?'input_unavailable':e.code,e.message);throw e;}
+   if(input.available_at>`${asOf}T23:59:59.999Z`)throw notPublic(`${label}: unavailable at ${asOf}`);
+   return input as unknown as Input;
+  }catch(e){if(e instanceof IndustryInputError)throw mapIndustryInputError(e);throw e;}
  }
  const all=await viaMacro(()=>db.tableRows(ref.table,ref.natural_key));
  const rows=all.filter(r=>typeof r.valid_from!=='string'||r.valid_from<=asOf);
@@ -192,6 +194,13 @@ async function buildTable(raw:{table:PublicTable;natural_key:string},db:Judgment
  const snapshot={table:ref.table,natural_key:ref.natural_key,rows};
  return {kind:'table_rows',ref,snapshot,hash:digest(snapshot),available_at:isoMax(stamps as string[]),
   origin:originFor('table_rows',ref.table==='macro_series'?'macro_workbench':'supabase_public',{table:ref.table,natural_key:ref.natural_key})};
+}
+const INDUSTRY_ERROR_CODES:Record<IndustryInputError['code'],JudgmentErrorCode>={
+ invalid_natural_key:'input_not_allowed',input_not_public:'input_not_public',
+ input_ambiguous_manifest:'input_unavailable',unsupported_deferred_i3:'input_not_allowed',
+};
+export function mapIndustryInputError(e:IndustryInputError):JudgmentError{
+ return new JudgmentError(INDUSTRY_ERROR_CODES[e.code]??'unknown',e.message);
 }
 async function buildJudgment(ref:{judgment_id:string},db:JudgmentInputsDb):Promise<Input>{
  const j=await db.publicJudgment(ref.judgment_id);

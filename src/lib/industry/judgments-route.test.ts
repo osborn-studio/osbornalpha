@@ -26,10 +26,19 @@ describe('real F4 industry list route parameter matrix',()=>{
  });
  it.each([
   ['missing subject_type',`http://localhost/api/judgments?subject_key=${key}`,'subject_type'],
+  ['invalid subject_type',`http://localhost/api/judgments?subject_type=security&subject_key=${key}`,'subject_type'],
+  ['duplicate subject_type',`http://localhost/api/judgments?subject_type=industry&subject_type=industry&subject_key=${key}`,'subject_type'],
   ['bad subject_key','http://localhost/api/judgments?subject_type=industry&subject_key=bad','subject_key'],
+  ['missing subject_key','http://localhost/api/judgments?subject_type=industry','subject_key'],
+  ['duplicate subject_key',request(`&subject_key=${key}`).url,'subject_key'],
   ['bad view',request('&view=unknown').url,'view'],
+  ['duplicate view',request('&view=latest&view=latest').url,'view'],
   ['as_known missing asOf',request('&view=as_known').url,'asOf'],
   ['latest with asOf',request('&view=latest&asOf=2026-11-01').url,'asOf'],
+  ['malformed asOf',request('&asOf=not-a-date').url,'asOf'],
+  ['invalid leap day',request('&asOf=2025-02-29').url,'asOf'],
+  ['future asOf',request('&asOf=2999-01-01').url,'asOf'],
+  ['duplicate asOf',request('&asOf=2026-11-01&asOf=2026-11-01').url,'asOf'],
   ['bad include_abstained',request('&include_abstained=0').url,'include_abstained'],
   ['repeated include_abstained',request('&include_abstained=1&include_abstained=1').url,'include_abstained'],
  ])('%s fails closed',async(_name,url,param)=>{
