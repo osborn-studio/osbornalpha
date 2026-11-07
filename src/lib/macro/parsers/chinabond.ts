@@ -11,6 +11,7 @@ import {isIsoDate} from '../periods';
 import type {ParsedPoint} from '../types';
 import {htmlTables} from './html-table';
 
+const PLAIN_DECIMAL=/^-?[0-9]+(\.[0-9]+)?$/;   // no exponents, signs other than '-', separators or garbage
 export const CHINABOND_PARSER_VERSION='chinabond-history/1';
 export class ChinabondParseError extends Error{
  readonly code:string;
@@ -33,7 +34,7 @@ export function parseChinabondHistory(bytes:Uint8Array,opts:{seriesId:string;cur
   const raw=cells[ci]??'';
   if(raw==='')continue;
   let valueText:string;
-  try{valueText=canonical(raw);}catch{throw new ChinabondParseError('chinabond_bad_value',`row ${r}`);}
+  try{if(!PLAIN_DECIMAL.test(raw))throw new Error('not_plain');valueText=canonical(raw);}catch{throw new ChinabondParseError('chinabond_bad_value',`row ${r}`);}
   out.push({seriesId:opts.seriesId,periodEnd:date,valueText,locator:{kind:'html_cell',table:table.index,row:r,cell:ci}});
  }
  return out;

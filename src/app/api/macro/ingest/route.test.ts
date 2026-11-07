@@ -355,4 +355,56 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect((await history('CN_CPI_YOY')).length).toBe(derivedBefore);                                  // no re-derivation from old history
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.akshare',consecutive_errors:1,detail:{batch_id:id,batch_status:'partial'}});
  });
+
+ it('evidence URLs compare host (with port) and reject userinfo (Task 9)',async()=>{
+  const id=await startBatch();
+  const pmi=ALL_EVIDENCE.find(e=>e.series_id==='CN_PMI_MFG')!;
+  const u=new URL(pmi.url);
+  const bad=[{...pmi,url:`${u.protocol}//user:pw@${u.host}${u.pathname}`},{...pmi,url:`${u.protocol}//${u.hostname}:8443${u.pathname}`}];
+  const body=await (await post(chunkBody(id,0,1,bad,[]))).json();
+  expect(body.errors).toEqual([{code:'evidence_not_allowed',key:'CN_PMI_MFG'},{code:'evidence_not_allowed',key:'CN_PMI_MFG'}]);
+  expect(evidence.puts).toEqual([]);
+ });
+ it('T9-1: hash-verified bytes the parser rejects are still stored with a retrieval; the chunk error carries the retrieval id',async()=>{
+  const id=await startBatch();
+  const pmi=ALL_EVIDENCE.find(e=>e.series_id==='CN_PMI_MFG')!;
+  const junk=new TextEncoder().encode('<html>not json</html>');
+  const {createHash}=await import('node:crypto');
+  const bad={...pmi,bytes_b64:Buffer.from(junk).toString('base64'),sha256:createHash('sha256').update(junk).digest('hex')};
+  const res=await post(chunkBody(id,0,1,[bad],[]));
+  expect(res.status).toBe(200);
+  expect((await res.json()).errors).toEqual([{code:'parse_failed',key:'CN_PMI_MFG'}]);
+  expect(evidence.puts.map(e=>e.sha256)).toEqual([bad.sha256]);
+  const [c]=await mem.chunksOf(id);
+  expect(c.counts.failed).toBe(1);
+  expect(c.errors).toEqual([{code:'parse_failed',key:'CN_PMI_MFG',message:expect.stringMatching(/^retrieval [0-9a-f-]{36}: nbs_bad_json$/)}]);
+  const rid=/^retrieval ([0-9a-f-]{36}):/.exec(c.errors[0].message!)![1];
+  expect(await deps.db.retrieval(rid)).toMatchObject({sha256:bad.sha256,batch_id:id,fetch_host:'data.stats.gov.cn'});
+ });
+ it('T9-2/T9-3: derived counts and series_outcomes are frozen with the derived checkpoint; a resume reuses them and a changed payload is a 409',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  const record=mem.recordFinishStep.bind(mem);let armed=true;
+  mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name==='batch_finished'){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+  expect((await post(finishBody(id,1,OK))).status).toBe(500);                                    // derived is checkpointed, batch_finished is not
+  const prog=(await mem.ingestRun(id))!.progress.derived as {counts:{inserted:number};usable:number;series_outcomes:unknown[]};
+  expect(prog.counts.inserted).toBeGreaterThan(0);expect(prog.usable).toBe(prog.counts.inserted);expect(prog.series_outcomes).toEqual(OK);
+  const changed=OK.map((o,i)=>i===0?{...o,ok:false,code:'collect_timeout'}:o);
+  const conflict=await post(finishBody(id,1,changed));
+  expect(conflict.status).toBe(409);expect((await conflict.json()).error.code).toBe('finish_payload_conflict');
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finishing'});                             // the refused retry changed nothing
+  const res=await post(finishBody(id,1,[...OK].reverse()));                                       // same outcomes, any order
+  expect(res.status).toBe(200);
+  const body=await res.json();
+  expect(body.status).toBe('success');
+  expect(body.derived_counts.inserted).toBe(prog.counts.inserted);                                // the persisted counts, not duplicates from a recompute
+  expect(body.derived_counts.duplicates).toBe(0);
+ });
+ it('a failed claimIngest finalizes the freshly started batch as failed (no orphan running batch)',async()=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>undefined);
+  mem.claimIngest=async()=>{throw new Error('lease db down');};
+  const res=await post({action:'start',tool_versions:{a:'1'}});
+  expect(res.status).toBe(500);
+  expect(tables.rows('ingest_batches')).toEqual([expect.objectContaining({status:'failed',errors:[{code:'claim_failed'}]})]);
+  log.mockRestore();
+ });
 });

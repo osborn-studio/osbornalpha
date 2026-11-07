@@ -103,7 +103,8 @@ export type FinishStep='derived'|'batch_finished'|'published'|'publish_attempt'|
  *  dq_freshness status), so a retry either sees it and skips, or repeats a write that never committed — never a double count.
  *  publish_attempt appends to attempts[] (retryable publication failures; the run stays finishing). */
 export interface FinishProgress{
- derived?:{counts:ChunkCounts;errors:ChunkError[]}|{skipped:'no_native_outcomes'};
+ /** series_outcomes (T9-3): the collector's failed-series report, frozen by the first finish; retries must present the same one. usable (T9-2): derived usable rows. */
+ derived?:({counts:ChunkCounts;errors:ChunkError[];usable?:number}|{skipped:'no_native_outcomes'})&{series_outcomes?:{series_id:string;ok:boolean;code?:string}[]};
  batch_finished?:{status:string;date:string};
  freshness_recorded?:{ok:boolean;status:string};
  published?:Record<string,unknown>;

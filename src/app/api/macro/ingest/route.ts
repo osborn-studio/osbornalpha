@@ -39,7 +39,7 @@ import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
 import type {IngestBody,SeriesOutcome} from '@/lib/macro/ingest-schema';
 import {claimPeriodEnd,parserFor} from '@/lib/macro/parsers';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
-import type {ChunkCounts,ChunkError,ChunkRecord,FinishProgress,FinishStep,ParsedPoint} from '@/lib/macro/types';
+import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceInput,FinishProgress,FinishStep,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
@@ -52,7 +52,12 @@ const err=(code:string,message:string,status:number,extra:Record<string,unknown>
 /** Codes and keys only (messages may echo upstream text), except the skipped_summary INFO entry whose message is a count. */
 const publicErrors=(errors:BatchError[])=>errors.map(e=>e.code==='skipped_summary'&&e.message?{code:e.code,key:e.key,message:e.message}:e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
 /** Stored chunk errors: code + key only, ≤ 500 per chunk (macro_complete_chunk limit). */
-const storedErrors=(errors:BatchError[])=>errors.slice(0,500).map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
+const storedErrors=(errors:BatchError[])=>errors.slice(0,500).map(e=>{
+ const o:{code:string;key?:string;message?:string}={code:e.code};
+ if(e.key!==undefined)o.key=e.key;
+ if(e.code==='parse_failed'&&e.message)o.message=e.message.slice(0,500);   // T9-1: 'retrieval <id>: <parser code>' — an id and a code, never upstream text
+ return o;
+});
 
 const fencedResponse=()=>err('fenced','This batch was taken over; restart the collection under a new batch',409);
 /** The batch row; finishing:true also accepts a finished batch whose run is no longer open (a retried finish, P2-4). A batch
@@ -75,7 +80,16 @@ async function start(deps:MacroDeps,body:Extract<IngestBody,{action:'start'}>){
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:DATASET,codeVersion:deps.codeVersion,triggeredBy:'script',
   toolVersions:{...body.tool_versions,ingest:INGEST_ROUTE_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
- const claim=await deps.db.claimIngest(batchId,DATASET,{maxAgeMs:LEASE_MS,processingTimeoutMs:PROCESSING_TIMEOUT_MS,takeover:body.takeover===true});
+ let claim:Awaited<ReturnType<MacroDeps['db']['claimIngest']>>;
+ try{claim=await deps.db.claimIngest(batchId,DATASET,{maxAgeMs:LEASE_MS,processingTimeoutMs:PROCESSING_TIMEOUT_MS,takeover:body.takeover===true});}
+ catch(e){
+  // no orphan running batch: finalize the batch startBatch just created as failed (best effort, one retry, logged), then surface the error
+  for(let attempt=0;attempt<2;attempt++){
+   try{await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[{code:'claim_failed'}]});break;}
+   catch(x){if(notRunning(x))break;if(attempt===1)console.error('[macro-ingest] finalizing the batch after a failed claim failed',batchId,x instanceof Error?x.message:x);}
+  }
+  throw e;
+ }
  // Batches of aborted runs (第 5 稿 P1-3/P2-1): finish them failed. batch_not_running = finished elsewhere (idempotent); any other
  // failure is logged, never fatal here — claimIngest lists the batch again on the next start until it is finished.
  for(const id of claim.aborted){
@@ -106,12 +120,33 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
  for(const {e,bytes} of decoded){
   const parser=parserFor(e.series_id);
   if(!parser){counts.failed+=1;errors.push({code:'unknown_series',key:e.series_id});continue;}
-  const url=new URL(e.url),fetched=Date.parse(e.fetched_at);
-  if(url.hostname!==parser.spec.fetch_host||url.pathname!==parser.spec.evidence_path||e.status!==200){counts.failed+=1;errors.push({code:'evidence_not_allowed',key:e.series_id});continue;}
+  let url:URL;
+  try{url=new URL(e.url);}catch{counts.failed+=1;errors.push({code:'evidence_not_allowed',key:e.series_id});continue;}
+  const fetched=Date.parse(e.fetched_at);
+  // host (with port) must equal the allowed host exactly, and no userinfo
+  if(url.host!==parser.spec.fetch_host||url.username!==''||url.password!==''||url.pathname!==parser.spec.evidence_path||e.status!==200){counts.failed+=1;errors.push({code:'evidence_not_allowed',key:e.series_id});continue;}
   if(fetched>now+MAX_FUTURE_MS||now-fetched>MAX_AGE_MS){counts.failed+=1;errors.push({code:'fetched_at_out_of_range',key:e.series_id});continue;}
+  const evidenceInput:EvidenceInput={sha256:e.sha256,bytes,adapter:'akshare',fetchUrl:e.url,fetchHost:url.hostname,httpStatus:e.status,contentType:e.content_type,
+   fetchedAt:new Date(fetched).toISOString(),toolVersions:{...batchTools,parser:parser.version}};
   let parsed:ParsedPoint[];
   try{parsed=parser.parse(bytes);}
-  catch(x){counts.failed+=1;errors.push({code:`parse_${(x as {code?:string}).code??'failed'}`,key:e.series_id});continue;}
+  catch(x){
+   // T9-1: hash-verified official bytes are kept even when the parser rejects them — store them and the retrieval receipt, and carry the
+   // retrieval id in the chunk error so the failure can be investigated and replayed
+   counts.failed+=1;
+   const reason=(x as {code?:string}).code??'unparseable';
+   let note=`retrieval unavailable: ${reason}`;
+   try{
+    const {objectPath}=await deps.evidence.put(evidenceInput);
+    const id=await deps.db.putRetrieval({sha256:e.sha256,object_path:objectPath,adapter:'akshare',content_type:e.content_type,byte_length:bytes.byteLength},
+     {fetch_url:e.url,fetch_host:url.hostname,http_status:e.status,fetched_at:evidenceInput.fetchedAt,batch_id:body.batch_id,tool_versions:evidenceInput.toolVersions},body.owner_token);
+    note=`retrieval ${id}: ${reason}`;
+   }catch(y){
+    if(y instanceof MacroDbError&&y.code==='fenced')throw y;
+   }
+   errors.push({code:'parse_failed',key:e.series_id,message:note});
+   continue;
+  }
   const claims:Claim[]=[];
   for(const c of body.claims){
    if(c.series_id!==e.series_id)continue;
@@ -119,8 +154,7 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
    if(pe)claims.push({series_id:c.series_id,period_end:pe,value_text:c.value_text});
   }
   for(const p of parsed)located.add(`${p.seriesId}|${p.periodEnd}`);
-  retrievals.push({evidence:{sha256:e.sha256,bytes,adapter:'akshare',fetchUrl:e.url,fetchHost:url.hostname,httpStatus:e.status,contentType:e.content_type,
-   fetchedAt:new Date(fetched).toISOString(),toolVersions:{...batchTools,parser:parser.version}},parsed,claims});
+  retrievals.push({evidence:evidenceInput,parsed,claims});
  }
  // Claim identities: the batch-wide unlocated summary is computed at finish from these sets (P2-1), never per chunk.
  const claimKeys=[...new Set(body.claims.map(c=>{const p=parserFor(c.series_id),pe=p?claimPeriodEnd(c.period_label,p.spec.period):null;return pe?`${c.series_id}|${pe}`:`${c.series_id}|?${c.period_label}`;}))].sort();
@@ -165,6 +199,8 @@ function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:Chunk
  return {counts,errors,failedSeries:failed.map(o=>o.series_id)};
 }
 
+const outcomesKey=(o:readonly SeriesOutcome[])=>JSON.stringify([...o].map(x=>[x.series_id,x.ok,x.code??null]).sort((a,b)=>String(a[0])<String(b[0])?-1:String(a[0])>String(b[0])?1:0));
+
 async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>){
  const b=await batchRow(deps,body.batch_id,{finishing:true});
  if(b instanceof NextResponse)return b;
@@ -188,11 +224,16 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
     if(!(e instanceof IngestAbort)||e.code!=='quarantine_link_failed'||!e.partial)throw e;
     d={...e.partial,errors:[abortError(e),...e.partial.errors]};
    }
-   p=await step('derived',{counts:d.counts,errors:storedErrors(d.errors)});
-  }else p=await step('derived',{skipped:'no_native_outcomes'});                                       // 第 5 稿 P2-2
+   // T9-2/T9-3: the outcome counts and the collector's series_outcomes are frozen in the very call that marks 'derived'
+   p=await step('derived',{counts:d.counts,errors:storedErrors(d.errors),usable:d.usable,series_outcomes:body.series_outcomes});
+  }else p=await step('derived',{skipped:'no_native_outcomes',series_outcomes:body.series_outcomes});                                       // 第 5 稿 P2-2
  }
  const derived='counts' in p.derived!?p.derived!:{counts:emptyChunkCounts(),errors:[]};
- const {counts,errors,failedSeries}=summarise(chunks,derived,body.series_outcomes,nativeUsable);
+ // T9-3: retries use the frozen outcomes; a different payload is refused (checkpoints written before this field existed keep the request's)
+ const frozen=p.derived!.series_outcomes;
+ if(frozen&&outcomesKey(frozen)!==outcomesKey(body.series_outcomes))return err('finish_payload_conflict','series_outcomes differ from the first finish of this batch',409);
+ const outcomes=frozen??body.series_outcomes;
+ const {counts,errors,failedSeries}=summarise(chunks,derived,outcomes,nativeUsable);
  if(!p.batch_finished){
   // fenced side effect (第 6 稿 P1-1): written only under the current finish token and only while the batch runs; finalized:false =
   // an earlier attempt of this run finished it — the stored status is read back, never finished twice

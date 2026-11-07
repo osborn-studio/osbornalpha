@@ -12,6 +12,7 @@ import {canonical} from '../decimal';
 import {monthEnd,quarterEnd} from '../periods';
 import type {ParsedPoint,PeriodKind} from '../types';
 
+const PLAIN_DECIMAL=/^-?[0-9]+(\.[0-9]+)?$/;   // no exponents, signs other than '-', separators or garbage
 export const NBS_PARSER_VERSION='nbs-esdata/1';
 export class NbsParseError extends Error{
  readonly code:string;
@@ -53,7 +54,7 @@ export function parseNbsEsData(bytes:Uint8Array,opts:{seriesId:string;indicator:
   const t=raw.trim();
   if(t==='')return;
   let valueText:string;
-  try{valueText=canonical(t);}catch{throw new NbsParseError('nbs_bad_value',`data/${i}/values/${j}`);}
+  try{if(!PLAIN_DECIMAL.test(t))throw new Error('not_plain');valueText=canonical(t);}catch{throw new NbsParseError('nbs_bad_value',`data/${i}/values/${j}`);}
   out.push({seriesId:opts.seriesId,periodEnd,valueText,locator:{kind:'json_pointer',pointer:`/data/${i}/values/${j}/value`}});
  });
  return out;

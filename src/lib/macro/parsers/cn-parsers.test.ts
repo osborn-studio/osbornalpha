@@ -94,6 +94,20 @@ describe('parseSafeCentralParity',()=>{
  });
 });
 
+describe('strict plain-decimal values (no exponents or garbage)',()=>{
+ const bad=['1e3','1E-2','+1.5','.5','1.','0x10','1_000','1 2','Infinity','NaN'];
+ it('rejects them in NBS, ChinaBond and SAFE',()=>{
+  for(const x of bad){
+   expect(codeOf(()=>parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数 (%) ',x)]}]),pmi)),`nbs ${x}`).toBe('nbs_bad_value');
+   expect(codeOf(()=>parseChinabondHistory(cbHtml(cbRow('中债国债收益率曲线','2026-11-05',x)),cgb)),`cb ${x}`).toBe('chinabond_bad_value');
+   expect(codeOf(()=>parseSafeCentralParity(safeHtml(safeRow('2026-11-06',x)),{seriesId:'X',column:'美元'})),`safe ${x}`).toBe('safe_bad_value');
+  }
+ });
+ it('still accepts plain and negative decimals',()=>{
+  expect(parseNbsEsData(nbsDoc([{code:'202610MM',values:[v('制造业采购经理指数 (%) ','-0.5')]}]),pmi)[0].valueText).toBe('-0.5');
+ });
+});
+
 describe('htmlTables',()=>{
  it('numbers tables by start tag, keeps nested tables apart and decodes cell text',()=>{
   const t=htmlTables('<table><tr><td>a<!-- c -->b</td><td><table><tr><td>in</td></tr></table></td></tr><tr><th>&nbsp;x &amp; y&#33;</th></tr></table>');

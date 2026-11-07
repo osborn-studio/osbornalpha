@@ -11,6 +11,7 @@ import {isIsoDate} from '../periods';
 import type {ParsedPoint} from '../types';
 import {htmlTables} from './html-table';
 
+const PLAIN_DECIMAL=/^-?[0-9]+(\.[0-9]+)?$/;   // no exponents, signs other than '-', separators or garbage
 export const SAFE_PARSER_VERSION='safe-rmbquery/1';
 export class SafeParseError extends Error{
  readonly code:string;
@@ -30,7 +31,7 @@ export function parseSafeCentralParity(bytes:Uint8Array,opts:{seriesId:string;co
   const raw=cells[ci]??'';
   if(raw===''||raw==='-')continue;
   let valueText:string;
-  try{valueText=canonical(raw);}catch{throw new SafeParseError('safe_bad_value',`row ${r}`);}
+  try{if(!PLAIN_DECIMAL.test(raw))throw new Error('not_plain');valueText=canonical(raw);}catch{throw new SafeParseError('safe_bad_value',`row ${r}`);}
   out.push({seriesId:opts.seriesId,periodEnd:cells[0],valueText,locator:{kind:'html_cell',table:table.index,row:r,cell:ci}});
  }
  return out;
