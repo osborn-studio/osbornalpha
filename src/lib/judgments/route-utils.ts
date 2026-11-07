@@ -9,13 +9,13 @@ import type {User} from '@supabase/supabase-js';
 import {NextResponse} from 'next/server';
 import {AdminForbidden,AdminUnauthenticated,requireAdminUser} from '../admin/auth';
 import {resolveCodeVersion} from './deps';
+import {UUID_RE} from './wire';
 import {PUBLIC_SUBJECT_TYPES} from './types';
-import type {CardView,JudgmentType,PublicSubjectType,Subject} from './types';
+import type {CardView,PublicSubjectType,Subject} from './types';
+export {JUDGMENT_TYPES,UUID_RE} from './wire';
 
-export const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const METHOD_ID_RE=/^[a-z][a-z0-9_]{1,63}$/,VERSION_RE=/^v[1-9][0-9]{0,3}$/;
 export const SUCCESS_CACHE='public, max-age=300, s-maxage=600';
-export const JUDGMENT_TYPES:readonly JudgmentType[]=['macro_regime','macro_regime_asset_pair','recommendation_call','industry_lifecycle_stage','industry_prosperity','valuation_verdict','thesis_win_rate','return_range','sellside_rating','sellside_target_price','synthetic_fact_metric'];
 
 export class ParamError extends Error{constructor(readonly param:string){super(`invalid_parameter:${param}`);this.name='ParamError';}}
 /** The allowed parameters, each at most once. */

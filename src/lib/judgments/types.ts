@@ -263,7 +263,7 @@ export interface JudgmentCard{
  display:{headline:Bilingual;percent:number|null;value:number|string|[number,number]|null;scale?:{min:number;max:number};dims?:{id:string;label:Bilingual;value:number|null;coverage:boolean}[];band?:'low'|'mid'|'high';nominal_coverage?:number};
  condition:{text:Bilingual;horizon:Horizon;target:Target;label_policy:LabelPolicy;settle_after:string;settle_by:string}|null;
  settlement:{kind:SettlementKind;outcome:'hit'|'miss'|null;realized:Realized|null;settled_at:string;evidence_summary:Bilingual}|null;
- calibration_summary:{n_independent:number;n_total:number;threshold_n:number;brier:number|null;brier_skill:number|null;ece_raw_holdout:number|null;valid_until:string;hit_rate:{rate:number;low:number|null;high:number|null}|null;accuracy?:number|null;coverage?:number|null;spearman?:number|null;href:string}|null;
+ calibration_summary:{n_independent:number;n_total:number;threshold_n:number;brier:number|null;brier_skill:number|null;ece_raw_holdout:number|null;valid_until:string;computed_at?:string;hit_rate:{rate:number;low:number|null;high:number|null}|null;accuracy?:number|null;coverage?:number|null;spearman?:number|null;href:string}|null;
  inputs:{kind:InputKind;ref:unknown;available_at:string;origin:Origin;href:string|null}[];
  abstain_reason?:string;missing?:string[];
  merged_from?:string;
