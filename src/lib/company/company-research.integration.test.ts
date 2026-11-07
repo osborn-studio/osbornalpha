@@ -950,4 +950,4 @@ describe.skipIf(!enabled)('company digest on a replayed US fixture (§1.1 #4)',(
   const e=(await rows()).find(x=>x.event_id===revisedEvent!.event_id)!;
   expect(e.retired_at).toBeNull();expect(e.first_seen_at).toEqual(revisedEvent!.first_seen_at);
  });
-});
+},30_000);   // replay cases run near the 5 s default under load
