@@ -23,9 +23,10 @@ const PERIOD = '2022-09-25:2023-09-30:12M';
 async function login(page: Page) {
   await page.context().addCookies([{ name: 'NEXT_LOCALE', value: 'zh', url: process.env.E2E_BASE_URL ?? 'http://localhost:3000' }]);
   await page.goto('/login');
+  await expect(page.locator('input[type="email"]')).toBeVisible();
   await page.locator('input[type="email"]').fill(process.env.E2E_EMAIL!);
   await page.locator('input[type="password"]').fill(process.env.E2E_PASSWORD!);
-  await page.getByRole('button', { name: /登录/ }).click();
+  await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.waitForURL('**/today');
 }
 type GridCell = { kind: string; value?: string; availableDate?: string; disclosureSeq?: number; isRevision?: boolean } | null;
