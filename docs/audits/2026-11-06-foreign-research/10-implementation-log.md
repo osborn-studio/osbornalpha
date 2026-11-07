@@ -43,3 +43,5 @@
 | D1 | 公开 DTO 白名单序列化 + 公开读加载器 + 五条公开路由 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see D1-mmx.md (batch triage pending) |
 | D2 | 2026-11-07 | pending commander commit | 20/20 D2 unit tests PASS; typecheck/lint PASS; no D2 DB suite | Independent foreign-research i18n domain; public list/detail/institution pages, charts, grounded summary links, analyst card. Facts title “报告所载” and F4 judgment labels follow plan; no git mutation |
 | D2 | i18n 域 + 公开列表 / 详情 / 机构页 + 图表组件 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see D2-mmx.md (batch triage pending) |
+| D3 | 2026-11-07 | pending commander commit | 8/8 D3 tests PASS; 96/96 regression tests PASS; typecheck/lint PASS | /stock 馆藏块 + mock 研报删除 + consensus none + /intel 入口；共享文件：stock page、consensus route、intel page（FOREIGN 围栏）；TSX test uses existing D2 tsx/cjs loader; no DB integration suite; no git mutation |
+| D3 | `/stock/[ticker]` "馆藏研报（n）" 块 + mock 研报移除 + consensus `none` + `/intel` 入口 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see D3-mmx.md (batch triage pending) |

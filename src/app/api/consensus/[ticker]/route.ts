@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isTushareConfigured, fetchTushareReportRc, TushareError } from '@/lib/data/sources/tushare-cached';
 import { deriveConsensus } from '@/lib/stocks/consensus';
-import { deriveTargetPrice, deriveValuationRange } from '@/lib/stocks/metrics';
-import { getStockOrStub } from '@/lib/data/mock';
+// FOREIGN: mock imports removed (spec §9.4)
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 3600; // 1h cache — mirrors /api/financials
@@ -14,12 +13,9 @@ interface Ctx { params: Promise<{ ticker: string }> }
  *
  * Broker consensus target price, with graceful degradation:
  *   1. A-share + TUSHARE_TOKEN configured → report_rc (real broker research)
- *   2. Otherwise (non-A-share, no token, Tushare error, or tushare returned no
- *      usable reports) → mock broker_reports via deriveTargetPrice /
- *      deriveValuationRange, reshaped to the same { target_median, target_min,
- *      target_max, n } shape so callers don't need to branch on source.
-   *      (Consumed by the stock detail page.)
- *   3. No usable data anywhere → { source: 'none', consensus: null }
+ *   2. Otherwise (non-A-share, no token, Tushare error, or Tushare returned no
+ *      usable reports) → { source: 'none', consensus: null }.
+ *      FOREIGN: library reports now come from /api/broker-research/by-ticker.
  */
 export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
@@ -30,7 +26,7 @@ export async function GET(_req: Request, { params }: Ctx) {
     try {
       const reports = await fetchTushareReportRc(ticker);
       const consensus = deriveConsensus(reports);
-      // Zero usable reports (no broker coverage) → try the mock fallback below.
+      // Zero usable reports (no broker coverage) → fall through to source none below.
       if (consensus !== null) {
         return NextResponse.json({ source: 'tushare', ticker, consensus });
       }
@@ -41,27 +37,11 @@ export async function GET(_req: Request, { params }: Ctx) {
           { status: 502 }
         );
       }
-      // fall through to mock degradation below
+      // fall through to source none below
     }
   }
 
-  const stub = getStockOrStub(ticker);
-  if (stub && stub.broker_reports?.length) {
-    const target_median = deriveTargetPrice(stub.broker_reports);
-    if (target_median != null) {
-      const range = deriveValuationRange(stub.broker_reports);
-      return NextResponse.json({
-        source: 'mock',
-        ticker,
-        consensus: {
-          target_median,
-          target_min: range?.min ?? null,
-          target_max: range?.max ?? null,
-          n: stub.broker_reports.length,
-        },
-      });
-    }
-  }
-
+  // FOREIGN ↓ no mock fallback (spec §9.4)
+  // FOREIGN ↑
   return NextResponse.json({ source: 'none', ticker, consensus: null });
 }

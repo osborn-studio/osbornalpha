@@ -23,6 +23,9 @@ type Tab = 'discover' | 'research';
 
 export default function IntelPage() {
   const t = useTranslations('intel');
+  // FOREIGN ↓ entry to the foreign research module (plan 2026-11-06 Task D3)
+  const tfr = useTranslations('foreign-research.public.entry');
+  // FOREIGN ↑
   const [tab, setTab] = useState<Tab>('discover');
 
   return (
@@ -48,6 +51,14 @@ export default function IntelPage() {
         >
           {t('tabs.research')}
         </button>
+        {/* FOREIGN ↓ */}
+        <Link
+          href="/intel/foreign-research"
+          className="flex-1 rounded px-3 py-1.5 text-center font-semibold text-text-dim hover:text-accent hover:no-underline"
+        >
+          {tfr('tab')}
+        </Link>
+        {/* FOREIGN ↑ */}
       </div>
 
       {tab === 'discover' ? <DiscoverTab /> : <ResearchTab />}
