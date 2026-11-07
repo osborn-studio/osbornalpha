@@ -237,6 +237,31 @@ const finalizeInput={status:'success' as const,counts:chunkRow.counts,errors:[],
 const freshnessInput={dataset:'macro.akshare',ok:true,cadence:'daily' as const,now:'2026-11-06T05:31:00.000Z',detail:{batch_id:'b1'}};
 
 describe('supabaseMacroDb wiring',()=>{
+ it('eligibleHistoryAsOf applies cutoff and receipt filters with bounded batch-id reads',async()=>{
+  const cutoff='2026-10-18T00:00:00.000Z';
+  const first=pgObs({available_at:'2026-10-15T00:00:00Z',batch_id:'a',version:1});
+  const second=pgObs({available_at:'2026-10-15T00:00:00Z',batch_id:'b',version:2});
+  const admin=stub({select:calls=>{
+   const table=calls[0][1][0];
+   if(table==='macro_observations')return {data:[first,second],error:null};
+   return {data:[{batch_id:'a',status:'success',finished_at:'2026-10-16T00:00:00Z'},{batch_id:'b',status:'success',finished_at:'2026-10-20T00:00:00Z'}],error:null};
+  }});
+  const db=supabaseMacroDb({admin:admin.client,anon:stub().client});
+  expect((await db.eligibleHistoryAsOf('US_UNRATE',{to:'2026-10-31',asOf:cutoff,maxRows:2})).map(r=>r.version)).toEqual([1]);
+  const observationQuery=admin.queries.find(q=>q[0][1][0]==='macro_observations')!;
+  expect(observationQuery).toContainEqual(['eq',['series_id','US_UNRATE']]);
+  expect(observationQuery).toContainEqual(['eq',['status','ok']]);
+  expect(observationQuery).toContainEqual(['lte',['available_at',cutoff]]);
+  expect(observationQuery).toContainEqual(['lte',['period_end','2026-10-31']]);
+  expect(observationQuery).toContainEqual(['in',['batch.status',['success','partial']]]);
+  expect(observationQuery).toContainEqual(['or',[`finished_at.lte.${cutoff},finished_at.is.null`,{referencedTable:'batch'}]]);
+  const batchQueries=admin.queries.filter(q=>q[0][1][0]==='ingest_batches');
+  expect(batchQueries.length).toBeGreaterThan(0);
+  for(const q of batchQueries){
+   const ids=q.find(([name])=>name==='in')![1][1] as string[];
+   expect(ids.length).toBeLessThanOrEqual(IN_CHUNK);
+  }
+ });
  it('maps every write to its service RPC with exact argument names, on the admin client only',async()=>{
   const data:Record<string,unknown>={macro_put_retrieval:'id-1',record_failed_macro_snapshot:'id-1',publish_macro_snapshot:{snapshot_id:'s1',revision:'4',replayed:false},republish_macro_snapshot:{snapshot_id:'s2',revision:'5',source_snapshot_id:'s1'},
    macro_write_observations:{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]},macro_claim_ingest:{status:'claimed',owner_token:'tok-1',aborted:[]},macro_claim_chunk:{status:'done',chunk:chunkRow},

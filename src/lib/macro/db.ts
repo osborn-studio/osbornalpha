@@ -229,6 +229,25 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    if(part.length<size)return out;
   }
  };
+ const asOfReads={
+  async candidates(id:string,o:{to:string;asOf:string},offset:number):Promise<ObservationRow[]>{
+   return (await rows(admin.from('macro_observations').select('*,batch:ingest_batches!inner(status,finished_at)')
+    .eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf)
+    .in('batch.status',['success','partial']).or(`finished_at.lte.${o.asOf},finished_at.is.null`,{referencedTable:'batch'})
+    .order('period_end',{ascending:false}).order('version',{ascending:false}).range(offset,offset+READ_PAGE-1))).map(observationFromRow);
+  },
+  async observations(ids:string[]):Promise<ObservationRow[]>{
+   const out:ObservationRow[]=[];
+   for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));
+   return out;
+  },
+  async receipts(ids:string[]):Promise<Record<string,{status:string;finished_at:string|null}>>{
+   const out:Record<string,{status:string;finished_at:string|null}>={};
+   for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))
+    out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};
+   return out;
+  },
+ };
  return {
   async batchFinishedAt(batchIds){
    const out:Record<string,string|null>={};
@@ -330,15 +349,10 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
   },
   async eligibleHistoryAsOf(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
-   const loadRows=async(ids:string[])=>{const out:ObservationRow[]=[];for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));return out;};
-   const loadBatches=async(ids:string[])=>{const out:Record<string,{status:string;finished_at:string|null}>={};for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};return out;};
    const out:ObservationRow[]=[];let group:ObservationRow[]=[];let offset=0;
-   const flush=async()=>{if(!group.length)return;out.push(...await selectEligibleHistoryAsOf(group,o.asOf,1,loadRows,loadBatches));group=[];if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history_asof:${id}:>${o.maxRows}`);};
+   const flush=async()=>{if(!group.length)return;out.push(...await selectEligibleHistoryAsOf(group,o.asOf,1,asOfReads.observations,asOfReads.receipts));group=[];if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history_asof:${id}:>${o.maxRows}`);};
    for(;;){
-    const part=(await rows(admin.from('macro_observations').select('*,batch:ingest_batches!inner(status,finished_at)')
-     .eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf)
-     .in('batch.status',['success','partial']).or(`finished_at.lte.${o.asOf},finished_at.is.null`,{referencedTable:'batch'})
-     .order('period_end',{ascending:false}).order('version',{ascending:false}).range(offset,offset+READ_PAGE-1))).map(observationFromRow);
+    const part=await asOfReads.candidates(id,o,offset);
     for(const candidate of part){if(group.length&&candidate.period_end!==group[0].period_end)await flush();group.push(candidate);}
     if(part.length<READ_PAGE){await flush();return out.sort((a,b)=>a.period_end.localeCompare(b.period_end));}
     offset+=READ_PAGE;
