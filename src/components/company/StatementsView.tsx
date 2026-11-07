@@ -2,7 +2,7 @@
 'use client';
 // Statements view (plan 2026-11-06 Task 12; spec §5.3, §5.7, §5.9; canvas Main, Replay, M-Company, States).
 // Table is the primary view; values are display strings from value_text; withheld cells never show a value.
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { Button, Tag } from '@/components/ui';
@@ -15,6 +15,7 @@ import { ConceptPopover } from './ConceptPopover';
 import { MiniBars } from './MiniBars';
 import { Callout, ErrorCard, LoadingGrid, TruncatedCard } from './StateCallout';
 import { SCALES, SCALE_EXP, defaultScale, type ScaleId } from './format';
+import { focusKey, focusStatement, resolveFocusOpen, type FocusTarget } from './focus-target';
 import { otherUnitCellOpensHistory, barSeries, cellView, gridEmptyState, moneyCurrency, statementsCsv, type Badge } from './statements-model';
 
 const PERIODS = [8, 20, 40] as const;
@@ -31,7 +32,7 @@ function BadgeMark({ b }: { b: Badge }) {
   );
 }
 
-export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, highlight }: { ticker: string; asOf: string | null; isAdmin: boolean; adminView: boolean; onAdminView: (v: boolean) => void; highlight: string | null }) {
+export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, highlight, focus = null }: { ticker: string; asOf: string | null; isAdmin: boolean; adminView: boolean; onAdminView: (v: boolean) => void; highlight: string | null; focus?: FocusTarget | null }) {
   const t = useTranslations('company.statements');
   const ts = useTranslations('company.states');
   const tc = useTranslations('company.concepts');
@@ -39,7 +40,7 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
   const tab = useTranslations('company.tabs');
   const router = useRouter();
   const drawers = useDrawers();
-  const [statement, setStatement] = useState<StatementKind>('IS');
+  const [statement, setStatement] = useState<StatementKind>(focusStatement(focus));
   const [basis, setBasis] = useState<Basis>('disclosed');
   const [periods, setPeriods] = useState<(typeof PERIODS)[number]>(8);
   const [scale, setScale] = useState<ScaleId | null>(null);
@@ -80,6 +81,17 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
     }
   }
   function closePopover(concept: string) { setPopover(null); requestAnimationFrame(() => headRefs.current.get(concept)?.focus()); }
+
+  // Event deep link: open the matching disclosure once per navigation, after the grid of its statement loads.
+  const openedFor = useRef<string | null>(null);
+  const focusSig = focus ? `${focusKey(focus)}@${asOf ?? ''}` : null;
+  useEffect(() => {
+    if (!focus || !focusSig || openedFor.current === focusSig || !data) return;
+    const target = resolveFocusOpen(focus, data, exp);
+    if (!target) return;
+    openedFor.current = focusSig;
+    drawers.open(target);
+  }, [focus, focusSig, data, exp, drawers]);
 
   const hl = highlight && data?.filings[highlight];
 

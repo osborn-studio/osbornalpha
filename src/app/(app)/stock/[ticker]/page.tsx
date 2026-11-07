@@ -10,6 +10,7 @@ import { supabaseCompanyDb } from '@/lib/company/db';
 import { loadCompanyPageData, universeCandidates } from '@/lib/company/page-data';
 import { parseAsOf, parseView } from '@/lib/company/client';
 import { requireAdminUser } from '@/lib/admin/auth';
+import { parseFocus } from '@/components/company/focus-target';
 import { CompanyPage } from './CompanyPage';
 
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
@@ -49,6 +50,7 @@ export default async function StockPage({ params, searchParams }: { params: Prom
       view={parseView(query.view)}
       asOf={parseAsOf(query.asOf, today)}
       highlight={highlight}
+      focus={parseFocus(query)}
       isAdmin={isAdmin}
       locale={locale === 'en' ? 'en' : 'zh'}
     />

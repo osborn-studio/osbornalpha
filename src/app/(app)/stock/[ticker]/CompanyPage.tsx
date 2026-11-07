@@ -14,6 +14,7 @@ import { CompanyHeader } from '@/components/company/CompanyHeader';
 import { ViewTabs } from '@/components/company/ViewTabs';
 import { ReplayBar, ReplayOpener, ReplayUnsupportedBanner } from '@/components/company/ReplayBar';
 import { DrawerHost } from '@/components/company/DrawerHost';
+import type { FocusTarget } from '@/components/company/focus-target';
 import { StatementsView } from '@/components/company/StatementsView';
 import { MetricsView } from '@/components/company/MetricsView';
 import { FilingsView } from '@/components/company/FilingsView';
@@ -26,7 +27,7 @@ import { SignalsView } from './legacy/SignalsView';
 import { HoldingsView } from './legacy/HoldingsView';
 
 export interface CompanyPageProps {
-  data: CompanyPageData; view: ViewId; asOf: string | null; highlight: string | null; isAdmin: boolean; locale: 'zh' | 'en';
+  data: CompanyPageData; view: ViewId; asOf: string | null; highlight: string | null; focus?: FocusTarget | null; isAdmin: boolean; locale: 'zh' | 'en';
 }
 
 export function CompanyPage(props: CompanyPageProps) {
@@ -54,7 +55,7 @@ export function CompanyPage(props: CompanyPageProps) {
   return <CompanyShell {...props} />;
 }
 
-function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyPageProps) {
+function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, locale }: CompanyPageProps) {
   const ticker = data.publicTicker ?? data.ticker;
   // Lifted here (button-triggered, quota-costing) so leaving and returning to the AI tab keeps results and in-flight runs.
   const pers = usePerspectives(ticker);
@@ -85,7 +86,7 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       return view === 'overview' ? <div className="flex flex-col gap-5">{callout}<SignalsCard /></div> : callout;
     }
     switch (view) {
-      case 'statements': return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} adminView={isAdmin && adminView} onAdminView={setAdminView} highlight={highlight} />;
+      case 'statements': return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} adminView={isAdmin && adminView} onAdminView={setAdminView} highlight={highlight} focus={focus} />;
       case 'metrics': return <MetricsView ticker={ticker} market={data.market} asOf={asOf} />;
       case 'filings': return <FilingsView ticker={ticker} market={data.market} asOf={asOf} />;
       default: return <OverviewView ticker={ticker} market={data.market} asOf={asOf} />;
