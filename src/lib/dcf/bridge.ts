@@ -11,12 +11,15 @@ export const BRIDGE_KEYS:readonly BridgeKey[]=['baseRevenue','sharesDiluted','ne
 export const BRIDGE_PATH:Record<BridgeKey,string>={baseRevenue:'revenueLines[0].baseRevenue',sharesDiluted:'sharesDiluted',netDebt:'netDebt'};
 export interface SeedBridgeField{value:number|null;source:'fact'|null;factIds:string[];basis:string|null;periodEnd:string|null;divisor:string|null;reason:string|null}
 export interface DcfMeta{currency:string;currencyUnit:string;divisor:string}
-export interface DcfSeedResponse{status:'seed';ticker:string;market:'US'|'CN';meta:DcfMeta;bridge:Record<BridgeKey,SeedBridgeField>;grossMarginPct:{value:number|null;factIds:string[]};missing:{field:string;reason:string}[];evidence:Record<string,EvidenceDto>}
+export interface DcfSeedResponse{status:'seed';ticker:string;market:'US'|'CN';meta:DcfMeta;bridge:Record<BridgeKey,SeedBridgeField>;grossMarginPct:{value:number|null;factIds:string[]};missing:{field:string;reason:string}[];evidence:Record<string,EvidenceDto>;truncated?:boolean}
 export interface DcfRunResponse{
  status:'ok'|'unavailable';code?:'dcf_bridge_missing';ticker:string;market:'US'|'CN';meta:DcfMeta;
  assumptions:Record<string,unknown>|null;provenance:Record<string,'fact'|'llm'|'default'|'user'>;missing:{field:string;reason:string}[];
  result:DcfResult|null;warnings:{code:string;detail?:string}[];evidence:Record<string,EvidenceDto>;
+ factProvenance?:Record<string,RunFactLeaf>;truncated?:boolean;
 }
+/** Per-leaf fact provenance as POST returns it (SeedLeaf, client-safe copy). */
+export interface RunFactLeaf{source:'fact';value:number;factIds:string[];metric?:string;divisor:string;basis:string;periodEnd:string;unit:string}
 export interface BridgeField{value:number|null;source:'fact'|'user'|'missing';factIds:string[];basis:string|null;reason:string|null}
 export function bridgeFields(seed:DcfSeedResponse,user:Partial<Record<BridgeKey,string>>):Record<BridgeKey,BridgeField>{
  const out={} as Record<BridgeKey,BridgeField>;

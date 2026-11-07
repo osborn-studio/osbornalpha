@@ -21,23 +21,29 @@ export const SEED_CONCEPTS:Record<Market,readonly string[]>={
 const UNITS:Record<string,{currencyUnit:string;divisor:string}>={USD:{currencyUnit:'百万',divisor:'1000000'},CNY:{currencyUnit:'亿',divisor:'100000000'}};
 export const SEED_FIELDS=['revenueLines[0].baseRevenue','grossMarginPct','sharesDiluted','netDebt'] as const;
 export type SeedField=typeof SEED_FIELDS[number];
-export type SeedMissingReason='no_fact'|'period_mismatch'|'unit_mismatch'|'share_basis_unverified'|'multi_class_shares'|WithheldReason;
+export type SeedMissingReason='read_truncated'|'no_fact'|'period_mismatch'|'unit_mismatch'|'share_basis_unverified'|'multi_class_shares'|WithheldReason;
 export interface SeedLeaf{source:'fact';value:number;factIds:string[];metric?:string;divisor:string;basis:string;periodEnd:string;unit:string}
 export interface SeedResult{
  seed:{baseRevenue?:number;grossMarginPct?:number;sharesDiluted?:number;netDebt?:number};
  provenance:Partial<Record<SeedField,SeedLeaf>>;missing:{field:SeedField;reason:SeedMissingReason}[];
  meta:{currency:string|null;currencyUnit:string|null;divisor:string|null};evidence:Record<string,EvidenceDto>;
+ truncated?:boolean;   // the snapshot read hit its row limit: no seed is built from a partial envelope
 }
 export interface SeedSecurity{shareClass:string;openSecuritiesInMarket:number}
 interface Cand{field:SeedField;factIds:string[];value:()=>number;metric?:string;basis:string;divisor:string;unit:string}
 const KEY:Record<SeedField,keyof SeedResult['seed']>={'revenueLines[0].baseRevenue':'baseRevenue',grossMarginPct:'grossMarginPct',sharesDiluted:'sharesDiluted',netDebt:'netDebt'};
 const scaled=(v:string,divisor:string)=>Number(formatDecimalText(v,BigInt(divisor),6));
 
-export function seedFromFacts(snapshot:ReadSnapshotResult,security:SeedSecurity,opts:{market:Market;asOf:string;evidence:ReadonlyMap<string,EvidenceRecord>;pdf:ReadonlyMap<string,PdfLocator>;admin:boolean}):SeedResult{
+interface Plan{out:SeedResult;cands:Cand[];rows:FactRow[];end:string;market:Market}
+export type SeedPlanOpts={market:Market;asOf:string};
+/** Phase 1: pick candidate leaves from the envelope (no gate). Phase 2 (seedFromFacts) gates every fact behind a leaf. */
+function plan(snapshot:ReadSnapshotResult,security:SeedSecurity,opts:SeedPlanOpts):Plan{
  const {market}=opts;
  const out:SeedResult={seed:{},provenance:{},missing:[],meta:{currency:null,currencyUnit:null,divisor:null},evidence:{}};
- const missAll=(reason:SeedMissingReason)=>{for(const f of SEED_FIELDS)out.missing.push({field:f,reason});return out;};
  const rows=snapshot.rows.filter(r=>r.consolidation==='consolidated');
+ const done=(cands:Cand[],end:string):Plan=>({out,cands,rows,end,market});
+ const missAll=(reason:SeedMissingReason)=>{for(const f of SEED_FIELDS)out.missing.push({field:f,reason});return done([],'');};
+ if(snapshot.truncated){out.truncated=true;return missAll('read_truncated');}
  const cur=rows.filter(r=>r.is_current===true);
  const revC=market==='US'?'revenue':'revenue_operating';
  const revs=cur.filter(r=>r.concept===revC&&r.duration==='12M');
@@ -74,6 +80,16 @@ export function seedFromFacts(snapshot:ReadSnapshotResult,security:SeedSecurity,
  else if(cash.length!==1)miss('netDebt',cashAtEnd.length?'unit_mismatch':cashAll.length?'period_mismatch':'no_fact');
  else cands.push({field:'netDebt',factIds:[...bt[0].inputs.map(i=>i.fact_id),cash[0].fact_id],value:()=>scaled(decimalSub(bt[0].value,cash[0].value_text),u.divisor),metric:'borrowings_total',
   basis:market==='US'?'us_standard':'cn_borrowings_less_monetary_funds_incl_restricted',divisor:u.divisor,unit:rev.unit});
+ return done(cands,end);
+}
+
+/** Fact ids behind the candidate leaves: the only ids the route needs evidence / PDF locators for. */
+export const seedFactIds=(snapshot:ReadSnapshotResult,security:SeedSecurity,opts:SeedPlanOpts):string[]=>[...new Set(plan(snapshot,security,opts).cands.flatMap(c=>c.factIds))];
+
+export function seedFromFacts(snapshot:ReadSnapshotResult,security:SeedSecurity,opts:SeedPlanOpts&{evidence:ReadonlyMap<string,EvidenceRecord>;pdf:ReadonlyMap<string,PdfLocator>;admin:boolean}):SeedResult{
+ const {out,cands,rows,end,market}=plan(snapshot,security,opts);
+ const miss=(field:SeedField,reason:SeedMissingReason)=>out.missing.push({field,reason});
+ if(end==='')return out;   // truncated or no 12M revenue: nothing to gate
  // one gate over every candidate fact
  const byId=new Map(rows.map(r=>[r.fact_id,r]));
  const ids=[...new Set(cands.flatMap(c=>c.factIds))];
@@ -101,5 +117,5 @@ export function seedResponse(ticker:string,market:Market,s:SeedResult,fallback:{
   meta:s.meta.currency?{currency:s.meta.currency,currencyUnit:s.meta.currencyUnit!,divisor:s.meta.divisor!}:fallback,
   bridge:{baseRevenue:field('revenueLines[0].baseRevenue'),sharesDiluted:field('sharesDiluted'),netDebt:field('netDebt')},
   grossMarginPct:{value:s.provenance.grossMarginPct?.value??null,factIds:s.provenance.grossMarginPct?.factIds??[]},
-  missing:s.missing,evidence:s.evidence};
+  missing:s.missing,evidence:s.evidence,...(s.truncated?{truncated:true}:{})};
 }

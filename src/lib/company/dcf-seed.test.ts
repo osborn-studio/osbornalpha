@@ -70,6 +70,14 @@ describe('seedFromFacts (spec §9.1, §0 #65)',()=>{
   expect(Object.keys(s.provenance)).toEqual([]);
   expect(s.missing.map(m=>m.reason)).toEqual(['citation_pending','citation_pending','citation_pending','citation_pending']);
  });
+ it('truncated envelope (rows may even be empty): no seed, every leaf read_truncated, flagged',()=>{
+  const rows=usRows();
+  for(const r of [rows,[]]){
+   const s=seedFromFacts(emptySnapshot({rows:r,truncated:true,filings:[summary()]}),COMMON,{market:'US',asOf:'2026-11-06',evidence:evidenceFor(rows),pdf:new Map(),admin:false});
+   expect(s.truncated).toBe(true);expect(s.seed).toEqual({});expect(s.provenance).toEqual({});
+   expect(s.missing.map(m=>m.reason)).toEqual(['read_truncated','read_truncated','read_truncated','read_truncated']);
+  }
+ });
  it('no 12M revenue → every leaf no_fact; CN issuer id comes from the kit',()=>{
   expect(CN).toBeTruthy();
   const s=seedFromFacts(emptySnapshot(),COMMON,{market:'US',asOf:'2026-11-06',evidence:new Map(),pdf:new Map(),admin:false});

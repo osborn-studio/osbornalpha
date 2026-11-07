@@ -53,6 +53,30 @@ describe('assembleAssumptions (spec §9.1)',()=>{
   expect(r.warnings.map(w=>w.code)).toEqual(expect.arrayContaining(['dcf_llm_failed','dcf_no_facts']));
   for(const v of [r.assumptions!.wacc,r.assumptions!.terminalG,r.assumptions!.taxRate,r.assumptions!.revenueLines[0].cagr])expect(Number.isFinite(v)).toBe(true);
  });
+ it('user nonRecurring is kept (user provenance); invalid arrays are rejected',async()=>{
+  const ok=await assembleAssumptions('AAPL','US',fullSeed(),{nonRecurring:[1,2,3]},async()=>null);
+  expect(ok.assumptions!.nonRecurring).toEqual([1,2,3]);expect(ok.provenance.nonRecurring).toBe('user');
+  const bad=await assembleAssumptions('AAPL','US',fullSeed(),{nonRecurring:[1,'x']},async()=>null);
+  expect(bad.assumptions!.nonRecurring).toBeUndefined();
+  expect(bad.warnings).toContainEqual({code:'dcf_user_field_rejected',detail:'nonRecurring'});
+ });
+ it('range validation of user and LLM fields: out of range is dropped with a warning, never clamped',async()=>{
+  const w:DcfWarning[]=[];
+  const u=layerOf('user',{forecastYears:2.5,wacc:1.2,terminalG:0.2,sharesDiluted:0,exitEvEbitda:101,taxRate:1.5,sgaPct:-2,revenueLines:[{cagr:3}]},w);
+  expect([...u.keys()]).toEqual([]);expect(w.filter(x=>x.code==='dcf_user_field_rejected')).toHaveLength(8);
+  expect([...layerOf('user',{forecastYears:30,wacc:0.09,terminalG:-0.05,sharesDiluted:1,exitEvEbitda:100,taxRate:0,sgaPct:-1,revenueLines:[{cagr:-1}]},[]).keys()]).toHaveLength(8);
+  const lw:DcfWarning[]=[];
+  expect([...layerOf('llm',{sgaPct:5,taxRate:0.2,revenueLines:[{cagr:9}]},lw).keys()]).toEqual(['taxRate']);
+  expect(lw.map(x=>x.code)).toEqual(['dcf_llm_field_rejected','dcf_llm_field_rejected']);
+  const r=await assembleAssumptions('AAPL','US',fullSeed(),{wacc:0.02},async()=>null);   // wacc <= default terminalG 0.025
+  expect(r.assumptions!.wacc).toBe(0.1);expect(r.warnings).toContainEqual({code:'dcf_user_field_rejected',detail:'wacc<=terminalG'});
+ });
+ it('prompt omits grossMarginPct when the fact exists and states ratios are decimal shares of revenue',async()=>{
+  const a=vi.fn<LlmFill>(async()=>null);await assembleAssumptions('AAPL','US',fullSeed(),{},a);
+  expect(a.mock.calls[0][0]).not.toContain('"grossMarginPct":0');expect(a.mock.calls[0][0]).toContain('小数份额');
+  const s=fullSeed();delete s.seed.grossMarginPct;const b=vi.fn<LlmFill>(async()=>null);await assembleAssumptions('AAPL','US',s,{},b);
+  expect(b.mock.calls[0][0]).toContain('"grossMarginPct":0');
+ });
  it('layer rules: LLM may not write baseRevenue, bridge or other scalars; user may',()=>{
   const w:DcfWarning[]=[];
   expect([...layerOf('llm',{wacc:0.5,netDebt:1,taxRate:0.2},w).keys()]).toEqual(['taxRate']);

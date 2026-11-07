@@ -10,7 +10,7 @@ vi.mock('@/lib/data/sources/llm',()=>({chatResolved:vi.fn(),extractJson:(s:strin
 
 import {GET,POST} from './route';
 import {SEED_CONCEPTS} from '@/lib/company/dcf-seed';
-import {usRows,cnRows} from '@/lib/company/dcf-seed.test-rows';
+import {inst,usRows,cnRows} from '@/lib/company/dcf-seed.test-rows';
 import {CN,FIL_CN_LINKED,US,cnSummary,emptySnapshot,makeDeps,seededTables,summary} from '@/lib/company/route-test-kit';
 
 const ctx=(ticker:string)=>({params:Promise.resolve({ticker})});
@@ -59,6 +59,23 @@ describe('/api/dcf/[ticker] (spec §9.1, §0 #65)',()=>{
   expect(a).toMatchObject({status:'unavailable',code:'dcf_bridge_missing',missing:[{field:'sharesDiluted',reason:'share_basis_unverified'}]});
   const b=await (await post('AAPL',{overrides:{sharesDiluted:15550}})).json();
   expect(b.status).toBe('ok');expect(b.provenance).toMatchObject({sharesDiluted:'user','revenueLines[0].baseRevenue':'fact',netDebt:'fact'});
+ });
+ it('truncated envelope (even with empty rows): GET/POST say truncated, no seed, no LLM, no valuation, even with full user overrides',async()=>{
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:3,rows:[],truncated:true}));
+  const g=await (await GET(new Request('https://alpha.example/api/dcf/AAPL'),ctx('AAPL'))).json();
+  expect(g).toMatchObject({status:'seed',truncated:true,bridge:{baseRevenue:{value:null,reason:'read_truncated'}}});
+  const p=await (await post('AAPL',{overrides:{revenueLines:[{baseRevenue:1}],sharesDiluted:2,netDebt:3}})).json();
+  expect(p).toMatchObject({status:'unavailable',code:'dcf_bridge_missing',truncated:true,result:null,assumptions:null});
+  expect(p.missing.map((m:{reason:string})=>m.reason)).toEqual(['read_truncated','read_truncated','read_truncated','read_truncated']);
+  expect(mocks.llm).not.toHaveBeenCalled();
+ });
+ it('one snapshot read per request; evidence is fetched only for the candidate leaf facts',async()=>{
+  const rows=usRows();rows.push(inst('goodwill','1'));   // current fact that backs no leaf
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:3,rows,filings:[summary()]}));
+  await post('AAPL');
+  expect(mocks.deps.snapshot).toHaveBeenCalledTimes(1);
+  const asked=fn(mocks.deps.company.evidenceOf).mock.calls[0][0] as string[];
+  expect(asked).not.toContain(rows[rows.length-1].fact_id);expect(asked.length).toBeGreaterThan(0);
  });
  it('GET returns the bridge panel seed (no engine, no LLM); HK and unknown tickers 404',async()=>{
   const body=await (await GET(new Request('https://alpha.example/api/dcf/AAPL'),ctx('AAPL'))).json();
