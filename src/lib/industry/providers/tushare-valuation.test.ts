@@ -1,5 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {fixtureTushareCall} from './tushare-industry';
+import type {TushareCall} from './tushare-industry';
+import {scanJsonNumbers} from '../../facts/json-numbers';
 import {fetchSwDaily, fetchTradeCalendar} from './tushare-valuation';
 import {planOfficialObservations, validateTradeCalendar} from '../valuation-ingestion';
 
@@ -82,5 +84,57 @@ describe('disabled valuation ingestion preparation', () => {
   expect(planOfficialObservations([repeatedNulls], q).missingMetrics).toBe(1);
   expect(plan.rows.find(r => r.metric === 'pb')?.value).toBe('-1');
   expect(() => planOfficialObservations([p], {...q, expectedDates: ['2026-10-30', '2026-10-30']})).toThrow('expected_dates');
+ });
+});
+
+// Start at provider bytes, before any numeric coercion or observation planning.
+const day = '2026-10-30';
+async function sourcePages(dateLiteral: string, metrics = '10,2,100,80,3', codeLiteral = '"801780.SI"') {
+ const raw = new TextEncoder().encode(`{"data":{"fields":["ts_code","trade_date","pe","pb","total_mv","float_mv","close"],"items":[[${codeLiteral},${dateLiteral},${metrics}]]}}`);
+ const {data} = scanJsonNumbers(raw) as {data: {fields: string[]; items: unknown[][]}};
+ const call: TushareCall = async () => ({...data, raw, has_more: false});
+ return fetchSwDaily(call, {tsCode: '801780.SI', from: day, to: day}, opts);
+}
+const officialQuery = {code: '801780', expectedDates: [day]};
+describe('lossless provider date ingress', () => {
+ it.each(['"20261030"', '20261030'])('accepts exact scalar %s and fills only its date', async literal => {
+  const pages = await sourcePages(literal);
+  expect(pages[0].rows[0].trade_date).toBe('20261030');
+  const plan = planOfficialObservations(pages, officialQuery);
+  expect(plan.rows).toHaveLength(5);
+  expect(plan.rows.every(r => r.trade_date === day)).toBe(true);
+  expect(plan.missingMetrics).toBe(0);
+ });
+ it.each(['20261029.999999999999999999', '20261030.000000000000000001', '20261030.0', '2.026103e7',
+  '["20261030"]', '{"date":"20261030"}', 'true', 'null', '""', JSON.stringify('20261030\n'), '"20260230"', '"2026103"', '"2026-10-30"'])
+ ('rejects malformed provider date %s before returning pages', async literal => {
+  await expect(sourcePages(literal)).rejects.toThrow();
+ });
+ it.each(['["801780.SI"]', '{"code":"801780.SI"}', 'null', '801780', JSON.stringify('801780.SI\n')])('rejects malformed identity %s', async literal => {
+  await expect(sourcePages('"20261030"', undefined, literal)).rejects.toThrow();
+ });
+ it('validates real calendar dates while preserving exact date literals', async () => {
+  for (const literal of ['"20240229"', '20240229']) {
+   const pages = await sourcePages(literal);
+   expect(planOfficialObservations(pages, {code: '801780', expectedDates: ['2024-02-29']}).rows).toHaveLength(5);
+   expect(planOfficialObservations(pages, officialQuery)).toMatchObject({rows: [], skippedDates: 1, missingMetrics: 5});
+  }
+  await expect(sourcePages('20230229')).rejects.toThrow();
+ });
+ it('retains null as unavailable, zero and negatives as observations, and exact decimals', async () => {
+  const pages = await sourcePages('20261030', 'null,0,-1,12345678901234567890.123456789,3e-2');
+  const plan = planOfficialObservations(pages, {...officialQuery, expectedDates: [day, '2026-10-29']});
+  expect(plan.missingMetrics).toBe(6); // one null plus all five slots on the absent day
+  expect(Object.fromEntries(plan.rows.map(r => [r.metric, r.value]))).toEqual({pb: '0', total_mv: '-1', float_mv: '12345678901234567890.123456789', close: '0.03'});
+  const allNull = await sourcePages('"20261030"', 'null,null,null,null,null');
+  expect(planOfficialObservations(allNull, officialQuery)).toMatchObject({rows: [], missingMetrics: 5});
+  await expect(sourcePages('"20261030"', '10,2,100,80')).rejects.toThrow(); // absent cell is not null
+ });
+ it('rejects non-string dates even when supplied directly to the planner', async () => {
+  const pages = await sourcePages('"20261030"');
+  for (const value of [20261030, ['20261030'], {toString: () => '20261030'}]) {
+   const rows = [{...pages[0].rows[0], trade_date: value as unknown as string}];
+   expect(() => planOfficialObservations([{...pages[0], rows}], officialQuery)).toThrow('invalid_source_date');
+  }
  });
 });

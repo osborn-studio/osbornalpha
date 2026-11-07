@@ -1,7 +1,7 @@
 /** Preparatory adapters only: no job registration, database writes or comparator policy. */
-import {decodeColumns} from '../../facts/json-numbers';
+import {canonicalDecimal} from '../../facts/json-numbers';
 import {assertDay} from '../method';
-import {decodeText, fetchPaged} from './tushare-industry';
+import {decodeText, fetchPaged, ymdToIso} from './tushare-industry';
 import type {FetchOptions, TushareCall, TusharePage} from './tushare-industry';
 
 export const SW_DAILY_FIELDS = ['ts_code', 'trade_date', 'pe', 'pb', 'total_mv', 'float_mv', 'close'] as const;
@@ -21,7 +21,13 @@ export function fetchSwDaily(call: TushareCall, q: DateRange & {tsCode: string},
  if (!/^\d{6}\.SI$/.test(q.tsCode)) throw new Error('invalid_sw_code');
  if (q.from.slice(0, 4) !== q.to.slice(0, 4)) throw new Error('sw_year_segment_required');
  return fetchPaged(call, 'sw_daily', {ts_code: q.tsCode, start_date: compact(q.from), end_date: compact(q.to)}, SW_DAILY_FIELDS,
-  (fields, items) => decodeColumns(fields, items, {control: [], decimal: ['pe', 'pb', 'total_mv', 'float_mv', 'close']}) as unknown as SwDailyRow[], {...opts, pageSize: opts.pageSize ?? 4000});
+  (fields, items) => decodeText(fields, items).map(r => {
+   // Decode scalar text first: Number() would round malformed date literals into real days.
+   if (r.ts_code === null || r.ts_code.length !== 9 || !/^\d{6}\.SI$/.test(r.ts_code)) throw new Error('invalid_sw_code');
+   if (r.trade_date === null || r.trade_date.length !== 8 || !ymdToIso(r.trade_date)) throw new Error('invalid_source_date');
+   const decimal = (field: string) => r[field] === null ? null : canonicalDecimal(r[field]);
+   return {ts_code: r.ts_code, trade_date: r.trade_date, pe: decimal('pe'), pb: decimal('pb'), total_mv: decimal('total_mv'), float_mv: decimal('float_mv'), close: decimal('close')};
+  }), {...opts, pageSize: opts.pageSize ?? 4000});
 }
 
 /** SSE is explicit (verified recording K1–K3); no inference from missing market data. */

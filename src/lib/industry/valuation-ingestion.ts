@@ -14,6 +14,7 @@ import type {OfficialInput} from './types';
 const METRICS = ['pe', 'pb', 'total_mv', 'float_mv', 'close'] as const;
 const HASH = /^[a-f0-9]{64}$/;
 function iso(v: string): string {
+ if (typeof v !== 'string' || v.length !== 8) throw new Error('invalid_source_date');
  const d = ymdToIso(v);
  if (!d) throw new Error('invalid_source_date');
  return d;
