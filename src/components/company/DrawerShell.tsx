@@ -27,8 +27,8 @@ export function DrawerShell({ label, kicker, title, onClose, children }: {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-stretch sm:justify-end" onKeyDown={onKeyDown}>
       <div aria-hidden className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg)_70%,transparent)]" onClick={onClose} />
-      <div ref={panel} role="dialog" aria-modal="true" aria-label={label}
-        className="relative flex h-[100dvh] w-full flex-col overflow-y-auto border-[var(--border)] bg-[var(--bg-elevated)] sm:h-full sm:w-[min(760px,100vw)] sm:border-l">
+      <div ref={panel} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}
+        className="relative flex h-[100dvh] w-full flex-col overflow-y-auto focus:outline-none border-[var(--border)] bg-[var(--bg-elevated)] sm:h-full sm:w-[min(760px,100vw)] sm:border-l">
         <div aria-hidden className="mx-auto mt-2 h-1 w-10 rounded-full bg-[var(--text-muted)] sm:hidden" />
         <div className="flex items-start gap-3 border-b border-[var(--border)] px-4 py-3">
           <div className="min-w-0 flex-1">

@@ -3,7 +3,7 @@
 // Revision differences are the server's exact entry.delta / entry.relChange (Task 9), formatted only (计划第 3 轮审计 R3).
 import {companyApi,type FactKeyRow,type FactSeriesResponse,type SeriesEntry} from '@/lib/company/client';
 import type {EvidenceDto,FilingSummary} from '@/lib/company/types';
-import {formatPercent,formatScaled,signed} from './format';
+import {formatPercent,formatScaled,signed,unitKindOfUnit} from './format';
 
 export interface SeriesKey{concept:string;periodStart:string|null;periodEnd:string;unit:string|null}
 export type Revision={kind:'first'}|{kind:'same'}|{kind:'withheld'}|{kind:'diff';abs:string;rel:string|null};
@@ -51,4 +51,10 @@ export function evidenceFields(d:EvidenceDto):[string,string][]{
   ['run.runId',d.run.runId],['run.codeVersion',str(d.run.codeVersion)],['run.toolVersions',str(d.run.toolVersions)],
   ['mappingVersion',d.mappingVersion],['unitRule',str(d.unitRule)],
  ];
+}
+/** Display exponent of a series: the page scale applies to money units only (shares, per-share, pure stay raw). */
+export function scaleExpFor(unit:string|null,scaleExp:number):number{return unit!==null&&unitKindOfUnit(unit)==='money'?scaleExp:0;}
+/** Evidence + row view of an other-unit entry (no revision chain: delta/relChange are always null there). */
+export function otherUnitRows(r:FactSeriesResponse):DrawerRow[]{
+ return r.otherUnitSeries.map(entry=>({entry,valueText:entry.kind==='fact'?entry.value:null,revision:entry.kind==='withheld'?{kind:'withheld'}:{kind:'first'},codeVersion:r.evidence[entry.factId]?.run.codeVersion?.slice(0,7)??null,evidence:r.evidence[entry.factId]??null}));
 }

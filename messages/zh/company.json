@@ -109,6 +109,7 @@
     "cellPendingTitle": "引用待挂接或待逐值核对（citation_pending）：服务端置空，不显示替代值",
     "cellIncomplete": "来源记录不完整",
     "cellIncompleteTitle": "证据 DTO 缺失或 codeVersion 为空（evidence_incomplete）",
+    "cellOtherUnitTitle": "该期仅有其他单位的事实，点开查看",
     "cellMissingTitle": "该期无此概念的可见披露",
     "miniBars": "迷你柱",
     "miniBarsAria": "{concept} 各期柱图，数值即本行单元格",
@@ -181,7 +182,16 @@
     "sourceConcepts": "sourceConcepts",
     "notes": "notes",
     "mappingGen": "mappingGen",
-    "noNotes": "—"
+    "noNotes": "—",
+    "truncated": "读取被截断，未显示披露历史（truncated）。",
+    "notFound": "未找到该事实（可能在回放日之后才披露，或已不可见）。",
+    "rawValue": "原值",
+    "displayUnit": "显示单位",
+    "copyFailed": "无法写入剪贴板，请手动复制下方查询。",
+    "openUnitHistory": "打开 {unit} 的披露历史",
+    "selectEvidence": "查看该行证据",
+    "withheldRow": "未显示：{reason}",
+    "retry": "重试"
   },
   "metrics": {
     "materialized": "读物化表 · basedOnRev {rev} · formula_version {version}",

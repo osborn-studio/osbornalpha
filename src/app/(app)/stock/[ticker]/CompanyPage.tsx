@@ -5,6 +5,7 @@
 // Fact views are wired in Tasks 12/13 by replacing renderFactView only.
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import { useState } from 'react';
 import { Disclaimer } from '@/components/Disclaimer';
 import { Card } from '@/components/ui';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
@@ -55,6 +56,8 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
   // Lifted here (button-triggered, quota-costing) so leaving and returning to the AI tab keeps results and in-flight runs.
   const pers = usePerspectives(ticker);
   const issuer = data.issuer;
+  // Admin unredacted view toggle (statements): lifted so drawers and the copied query use the grid's access mode.
+  const [adminView, setAdminView] = useState(false);
   const extra = view === 'statements' && highlight ? { highlight } : undefined;
 
   function renderBody() {
@@ -72,7 +75,7 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
   // ---- Task 12: statements wired; Task 13 replaces this whole function again. ----
   function renderFactView() {
     if (view !== 'judgments' && data.factState !== 'ok') return <FactStateCallout state={data.factState as 'no_issuer' | 'no_facts' | 'hk_pending'} isAdmin={isAdmin} />;
-    if (view === 'statements') return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} highlight={highlight} />;
+    if (view === 'statements') return <StatementsView ticker={ticker} asOf={asOf} isAdmin={isAdmin} adminView={isAdmin && adminView} onAdminView={setAdminView} highlight={highlight} />;
     return <PendingView />;
   }
 
@@ -81,7 +84,7 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       <CompanyHeader data={data} view={view} asOf={asOf} locale={locale} />
       {asOf && <ReplayBar ticker={ticker} view={view} asOf={asOf} extra={extra} />}
       <ViewTabs ticker={ticker} view={view} asOf={asOf} right={asOf ? undefined : <ReplayOpener ticker={ticker} view={view} />} />
-      <DrawerHost ticker={ticker} asOf={asOf} admin={false}>
+      <DrawerHost ticker={ticker} asOf={asOf} admin={isAdmin && adminView}>
         <div>{renderBody()}</div>
       </DrawerHost>
       <Disclaimer />

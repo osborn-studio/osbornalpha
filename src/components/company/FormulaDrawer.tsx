@@ -4,7 +4,7 @@
 import { useLocale, useTranslations } from 'next-intl';
 import { catalogFor } from '@/lib/company/metric-catalog';
 import { DrawerShell } from './DrawerShell';
-import { formatValue, unitKindOfUnit } from './format';
+import { divisorLabel, formatValue, groupNumber, unitKindOfUnit } from './format';
 import type { DrawerTarget } from './DrawerHost';
 
 export function FormulaDrawer({ asOf, target, onClose, onOpenInput }: {
@@ -17,8 +17,12 @@ export function FormulaDrawer({ asOf, target, onClose, onOpenInput }: {
   const { cell, metric } = target;
   const entry = catalogFor(cell.formulaVersion)?.[metric];
   const name = tm.has(metric) ? tm(metric) : metric;
-  const value = formatValue(cell.value, cell.unit === 'pure' ? 'ratio' : unitKindOfUnit(cell.unit), target.scaleExp);
+  const kind = cell.unit === 'pure' ? 'ratio' : unitKindOfUnit(cell.unit);
+  const exp = kind === 'money' ? target.scaleExp : 0;
+  const value = formatValue(cell.value, kind, target.scaleExp);
+  const transform = kind === 'ratio' ? '× 100 → %' : exp ? t('displayTransform', { divisor: divisorLabel(exp) }) : t('displayRaw');
   const rows: [string, string][] = [
+    [t('rawValue'), `${groupNumber(cell.value)} ${cell.unit}`], [t('displayUnit'), `${cell.unit} · ${transform}`],
     [t('basis'), cell.basis], [t('inputUnit'), cell.inputUnit], [t('formulaVersion'), cell.formulaVersion],
     [t('rule'), cell.rule === 'a' ? t('ruleA') : cell.rule === 'b' ? t('ruleB') : '—'],
     [t('asOf'), asOf ?? t('asOfLatest')],
@@ -27,7 +31,10 @@ export function FormulaDrawer({ asOf, target, onClose, onOpenInput }: {
   ];
   return (
     <DrawerShell label={t('formulaTitle')} kicker={t('formulaTitle')} title={`${name} ${metric} · ${target.periodLabel}`} onClose={onClose}>
-      <div className="num text-2xl font-medium">{value}</div>
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="num text-2xl font-medium">{value}</span>
+        <span className="text-xs text-[var(--text-dim)]">{cell.unit} · {transform}</span>
+      </div>
       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
         {entry ? (<>{entry[locale].formula}<div className="mt-1.5 text-xs text-[var(--text-dim)]">{entry[locale === 'zh' ? 'en' : 'zh'].formula}</div></>)
           : <span className="text-[var(--text-dim)]">{t('formulaMissing', { version: cell.formulaVersion })}</span>}

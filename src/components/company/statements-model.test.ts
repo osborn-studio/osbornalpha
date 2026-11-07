@@ -53,3 +53,12 @@ describe('grid helpers',()=>{
   expect(s).toEqual([{key:K1,value:-5,blank:false},{key:K2,value:null,blank:true}]);
  });
 });
+
+describe('withheld cells expose no digits (review fix 8)',()=>{
+ it('the cell view model and the CSV value column of a withheld cell carry no number',()=>{
+  const v=cellView({kind:'withheld',reason:'evidence_incomplete',factId:'fx'},row({}),8,{});
+  expect(JSON.stringify(v)).not.toMatch(/\d/);
+  const csv=statementsCsv(resp([row({[K1]:{kind:'withheld',reason:'evidence_incomplete',factId:'fx'}})]));
+  expect(csv.trim().split('\n')[1].split(',')[10]).toBe('');
+ });
+});

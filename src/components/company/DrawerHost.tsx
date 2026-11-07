@@ -1,13 +1,15 @@
 // src/components/company/DrawerHost.tsx
 'use client';
-// Drawer stack of the company page (plan 2026-11-06 Task 12): any view opens a disclosure-history,
-// withheld-reason or formula drawer; drawers stack (formula → input history); closing pops the top
-// and returns focus to the element that opened it.
-import { createContext, useCallback, useContext, useRef, useState } from 'react';
+// Drawer stack of the company page (plan 2026-11-06 Task 12 + review fixes): any view opens a
+// disclosure-history, withheld-reason or formula drawer; drawers stack (formula → input history) and ALL stay
+// mounted (state survives) while only the top is interactive; closing pops the top and returns focus to the
+// exact element that opened it. While any drawer is open the page behind is inert and body scroll is locked.
+import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
 import type { DerivedCell, WithheldReason } from '@/lib/company/types';
 import type { SeriesKey } from './drawer-model';
 import { DisclosureDrawer, WithheldDrawer } from './DisclosureDrawer';
 import { FormulaDrawer } from './FormulaDrawer';
+import { emptyStack, isInteractive, stackReducer } from './drawer-stack';
 
 export type DrawerTarget =
   | { kind: 'history'; key: SeriesKey; duration: string; otherUnits: boolean; scaleExp: number }
@@ -20,25 +22,43 @@ const DrawerCtx = createContext<Ctx>({ open: () => {} });
 export const useDrawers = () => useContext(DrawerCtx);
 
 export function DrawerHost({ ticker, asOf, admin, children }: { ticker: string; asOf: string | null; admin: boolean; children: React.ReactNode }) {
-  const [stack, setStack] = useState<DrawerTarget[]>([]);
-  const openers = useRef<(HTMLElement | null)[]>([]);
+  const [stack, dispatch] = useReducer(stackReducer<DrawerTarget>, undefined, emptyStack<DrawerTarget>);
+  const openers = useRef(new Map<number, HTMLElement | null>());
+  const nextId = useRef(1);
   const open = useCallback((t: DrawerTarget) => {
-    openers.current.push(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    setStack((s) => [...s, t]);
+    openers.current.set(nextId.current++, document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    dispatch({ type: 'open', target: t });
   }, []);
-  const close = useCallback(() => {
-    const el = openers.current.pop();
-    setStack((s) => s.slice(0, -1));
-    requestAnimationFrame(() => el?.focus());
-  }, []);
-  const top = stack[stack.length - 1];
+  const close = useCallback(() => dispatch({ type: 'close' }), []);
+  useEffect(() => {
+    if (stack.returnFocusTo === null) return;
+    const el = openers.current.get(stack.returnFocusTo);
+    openers.current.delete(stack.returnFocusTo);
+    dispatch({ type: 'focused' });
+    if (el && el.isConnected) el.focus();
+  }, [stack.returnFocusTo]);
+  const anyOpen = stack.entries.length > 0;
+  useEffect(() => {
+    if (!anyOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [anyOpen]);
   return (
     <DrawerCtx.Provider value={{ open }}>
-      {children}
-      {top?.kind === 'history' && <DisclosureDrawer ticker={ticker} asOf={asOf} admin={admin} target={top} onClose={close} />}
-      {top?.kind === 'historyByFact' && <DisclosureDrawer ticker={ticker} asOf={asOf} admin={admin} target={top} onClose={close} />}
-      {top?.kind === 'withheld' && <WithheldDrawer reason={top.reason} title={top.title} onClose={close} />}
-      {top?.kind === 'formula' && <FormulaDrawer asOf={asOf} target={top} onClose={close} onOpenInput={(factId) => open({ kind: 'historyByFact', factId, scaleExp: top.scaleExp })} />}
+      <div inert={anyOpen}>{children}</div>
+      {stack.entries.map(({ id, target }) => {
+        const live = isInteractive(stack, id);
+        return (
+          <div key={id} inert={!live} aria-hidden={!live || undefined}>
+            {target.kind === 'history' || target.kind === 'historyByFact'
+              ? <DisclosureDrawer ticker={ticker} asOf={asOf} admin={admin} target={target} onClose={close} />
+              : target.kind === 'withheld'
+                ? <WithheldDrawer reason={target.reason} title={target.title} onClose={close} />
+                : <FormulaDrawer asOf={asOf} target={target} onClose={close} onOpenInput={(factId) => open({ kind: 'historyByFact', factId, scaleExp: target.scaleExp })} />}
+          </div>
+        );
+      })}
     </DrawerCtx.Provider>
   );
 }

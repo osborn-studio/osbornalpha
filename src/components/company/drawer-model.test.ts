@@ -1,6 +1,6 @@
 // src/components/company/drawer-model.test.ts
 import {describe,it,expect} from 'vitest';
-import {drawerRows,defaultSelected,factsRequest,keyFromFactRow,filingLink,evidenceFields} from './drawer-model';
+import {drawerRows,defaultSelected,scaleExpFor,otherUnitRows,factsRequest,keyFromFactRow,filingLink,evidenceFields} from './drawer-model';
 import type {FactSeriesResponse,SeriesEntry} from '@/lib/company/client';
 import type {EvidenceDto,FilingSummary} from '@/lib/company/types';
 
@@ -50,5 +50,26 @@ describe('requests and links',()=>{
   expect(fields.map(([k])=>k)).toEqual(['rawHash','snapshot.source','snapshot.sha256','snapshot.path','snapshot.api','snapshot.url','snapshot.params','snapshot.capturedAt','snapshot.httpStatus','snapshot.page','locator.hashLocator','locator.jsonPointer','locator.field','locator.pdf','run.runId','run.codeVersion','run.toolVersions','mappingVersion','unitRule']);
   expect(Object.fromEntries(fields)['snapshot.params']).toBe('{"ts_code":"600519.SH"}');
   expect(Object.fromEntries(fields)['locator.pdf']).toBe('page 112 · 合并利润表 · 营业收入 · 本期发生额');
+ });
+});
+
+describe('display exponent and other units (review fixes 3, 7, 8)',()=>{
+ it('the page scale applies to money units only; a shares series at scale 8 stays raw in the revision column',()=>{
+  expect(scaleExpFor('CNY',8)).toBe(8);
+  expect(['shares','CNY/shares','pure',null].map(u=>scaleExpFor(u,8))).toEqual([0,0,0,0]);
+  const sh=resp([e({factId:'a',unit:'shares',value:'1000000000'}),e({factId:'b',unit:'shares',value:'1000000500',disclosureSeq:2,isRevision:true,delta:'500',relChange:'0.0000005'})]);
+  const rows=drawerRows(sh,scaleExpFor('shares',8));
+  expect(rows[1].revision).toEqual({kind:'diff',abs:'+500',rel:'+0.0001%'});
+ });
+ it('other-unit rows carry evidence and withheld rows carry no value',()=>{
+  const r=resp([e({factId:'f1'})]);
+  r.otherUnitSeries=[e({factId:'f3',unit:'USD'}),w({factId:'f9',unit:'USD',reason:'evidence_incomplete'})];
+  const o=otherUnitRows(r);
+  expect(o[0].evidence?.run.codeVersion).toBe('5a10b7dbbbb');expect(o[0].valueText).toBe('170899152276.34');
+  expect(o[1].valueText).toBeNull();expect(o[1].evidence).toBeNull();
+ });
+ it('withheld rows expose no digits in their view model',()=>{
+  const rows=drawerRows(resp([e({factId:'f1'}),w({factId:'f2',reason:'citation_pending',disclosureSeq:2,isRevision:true})]),8);
+  expect(JSON.stringify({v:rows[1].valueText,r:rows[1].revision})).not.toMatch(/\d/);
  });
 });

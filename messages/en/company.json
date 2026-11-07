@@ -109,6 +109,7 @@
     "cellPendingTitle": "Citation pending or per-value check pending (citation_pending): withheld on the server, no substitute value",
     "cellIncomplete": "Source record incomplete",
     "cellIncompleteTitle": "Evidence DTO missing or empty codeVersion (evidence_incomplete)",
+    "cellOtherUnitTitle": "Only other-unit facts exist for this period; open to see them",
     "cellMissingTitle": "No visible disclosure of this concept for this period",
     "miniBars": "Mini bars",
     "miniBarsAria": "Bar chart of {concept} by period; values are this row's cells",
@@ -181,7 +182,16 @@
     "sourceConcepts": "sourceConcepts",
     "notes": "notes",
     "mappingGen": "mappingGen",
-    "noNotes": "—"
+    "noNotes": "—",
+    "truncated": "Read truncated; disclosure history is not shown (truncated).",
+    "notFound": "Fact not found (it may be disclosed after the replay date, or no longer visible).",
+    "rawValue": "Raw value",
+    "displayUnit": "Display unit",
+    "copyFailed": "Clipboard unavailable; copy the query below manually.",
+    "openUnitHistory": "Open disclosure history in {unit}",
+    "selectEvidence": "Show evidence for this row",
+    "withheldRow": "Not shown: {reason}",
+    "retry": "Retry"
   },
   "metrics": {
     "materialized": "Materialized · basedOnRev {rev} · formula_version {version}",
