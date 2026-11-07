@@ -3,7 +3,7 @@
 // scripts/judgments/settle.ts and the /api/admin/dq/quarantine judgments branch: the anon client for public reads
 // (RLS on: public RPCs and the inputs db), the service-role client for RPC writes and the dq tables, the inputs db
 // over anon reads + the frozen-source K-line reader. MacroReadApi uses the real macro workbench when
-// MACRO_JUDGMENTS_ENABLED is 1/true, otherwise unavailableMacroReadApi (info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
+// MACRO_JUDGMENTS_ENABLED is '1' only, otherwise unavailableMacroReadApi (info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
 // `git rev-parse HEAD` (+ "-dirty"); null means "refuse to apply".
 import {execFileSync} from 'node:child_process';
 import {supabaseTableClient} from '../db/table-client';
@@ -16,6 +16,7 @@ import {MacroUnavailable,unavailableMacroReadApi} from './macro-api';
 import {supabaseMacroDb} from '../macro/db';
 import {macroJudgmentsEnabled} from '../macro/flags';
 import {macroReadApi,MacroUnavailable as UpstreamMacroUnavailable} from '../macro/read-api';
+import {supabaseIndustryDb} from '../industry/db';
 import type {SettleDeps} from './settle';
 import type {JudgmentsDb,MacroReadApi} from './types';
 
@@ -47,7 +48,7 @@ export function productionJudgmentDeps(o:ProductionJudgmentDepsOptions):SettleDe
  const macro=enabled?adaptMacroApi(macroReadApi(supabaseMacroDb({admin,anon}),{judgments:true})):unavailableMacroReadApi();
  return {
   db:supabaseJudgmentsDb({anon,admin}),
-  inputsDb:anonJudgmentInputsDb({anon,macro}),
+  inputsDb:anonJudgmentInputsDb({anon,macro,industry:supabaseIndustryDb(anon)}),
   tables:supabaseTableClient(admin),
   codeVersion:o.codeVersion,actor:o.actor,triggeredBy:o.triggeredBy,
   ...(o.signal?{signal:o.signal}:{}),

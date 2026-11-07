@@ -288,6 +288,8 @@ it('pins the v2 hashed file list and formula_hash after the #120 input selection
   'src/lib/facts/derive.ts',
   'src/lib/facts/json-numbers.ts',
   'src/lib/facts/types.ts',
+  'src/lib/industry/judgment-input.ts',
+  'src/lib/industry/types.ts',
   'src/lib/judgments/canonical.ts',
   'src/lib/judgments/errors.ts',
   'src/lib/judgments/inputs.ts',
@@ -311,7 +313,7 @@ it('pins the v2 hashed file list and formula_hash after the #120 input selection
   'src/lib/research/ingest/pa-v1/json.js',
   'src/lib/supabase/database.types.ts',
  ]);
- expect(hash.formula_hash).toBe('5fe54a14fcbbf41439536c9d354958233f3eaf70d684f6b48ed2780c72db01ed');
+ expect(hash.formula_hash).toBe('c3cd924c8da5f855f247e5375b0d7befcfef87939d73b6fdf9dacf124a25fc32');
 });
 
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{
