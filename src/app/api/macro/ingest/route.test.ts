@@ -463,6 +463,7 @@ describe('POST /api/macro/ingest — Task 11 publication',()=>{
   const second=await post(finishBody(id,1,OK));
   expect(second.status).toBe(200);expect((await second.json()).publish.status).toBe('published');
   expect(publishMock).toHaveBeenCalledTimes(2);
+  expect(publishMock.mock.calls[1][3]).toMatchObject({fence:{batchId:id,finishToken:expect.stringMatching(/^[0-9a-f-]{36}$/)}});
   expect(tables.rows('dq_freshness')).toHaveLength(1);
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:0});
  });

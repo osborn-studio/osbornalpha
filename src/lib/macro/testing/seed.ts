@@ -41,6 +41,7 @@ export function yoyPoints(indexId:string,rows:readonly (readonly [string,string]
 export async function seedPoints(db:MacroDb,points:SeedPoint[],opts:{fetchedAt?:string;batchId?:string}={}):Promise<Seeded>{
  // The memory twin writes only into a declared running batch and publishes only finished ones: the default SEED_BATCH runs while seeding
  // and is success afterwards; a caller-supplied batch keeps whatever status the test declared (open-batch tests leave it running).
+ // setBatchStatus exists only on the memory twin (optional call): the SQL-backed MacroDb has no such backdoor and runs real batches
  const twin=db as Partial<MemoryMacroDb>;
  if(opts.batchId===undefined)twin.setBatchStatus?.(SEED_BATCH,'running');
  try{return await seedPointsIn(db,points,opts);}

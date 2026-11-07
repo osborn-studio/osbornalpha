@@ -4,6 +4,8 @@
 // buildRegimeInput + classifyRegime: there is exactly one classification function. Server-only: stored judgments come from
 // the service-only macro_regime_results (admin) and only when judgments are enabled (第 6 稿 P1-2); F4 builds its macro
 // snapshot inputs through this API, never with anon table reads.
+// Known limitation: classifyAsOf evaluates publication eligibility (batch status, ancestor eligibility) NOW, not as of the
+// cutoff; only available_at and period_end are cut off. A batch finalized after the cutoff therefore still contributes.
 import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
 import {monthEnd} from './freshness';
@@ -14,10 +16,34 @@ import type {ObservationRow,Region,SnapshotRecord} from './types';
 
 export const MAX_SNAPSHOTS_PAGE=200;
 const PERIOD_RE=/^(\d{4})-(0[1-9]|1[0-2])$/;
-const CUTOFF_RE=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+// full ISO timestamp with zone required: a date-only cutoff is ambiguous (which instant of the day?)
+const CUTOFF_RE=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COMPOSITE_RE=/^([A-Za-z0-9_]+):(\d{4}-\d{2}-\d{2}):(\d+)$/;
+
+/** F4 fixture semantics: the requested macro methodology / data is not available. */
+export class MacroUnavailable extends Error{
+ readonly code:string;
+ constructor(code:string,message?:string){super(message??code);this.name='MacroUnavailable';this.code=code;}
+}
 
 function toRef(r:ObservationRow):MacroObservationRef{
- return {series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit:catalogById(r.series_id)?.unit??'',available_at:r.available_at};
+ const unit=catalogById(r.series_id)?.unit;
+ if(unit===undefined)throw new Error(`catalog_unit_missing:${r.series_id}`);
+ return {series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit,available_at:r.available_at};
+}
+/** Composite F4 id series_id:period_end:vintage_id (vintage_id = String(version)) → exact, ok and eligible row, else null. */
+async function byCompositeId(db:MacroDb,m:RegExpExecArray):Promise<ObservationRow|null>{
+ const [,seriesId,periodEnd,vintage]=m;
+ const version=Number(vintage);
+ if(!Number.isSafeInteger(version)||String(version)!==vintage||!Number.isFinite(Date.parse(periodEnd)))return null;
+ const row=(await db.versionsOf(seriesId,periodEnd)).find(r=>r.version===version);
+ if(!row||row.status!=='ok')return null;
+ const eligible=await db.eligibleHistory(seriesId,{from:periodEnd,to:periodEnd,maxRows:2});
+ const top=eligible[0];
+ if(!top||top.version<version)return null;                           // nothing publishable for this period, or this vintage is newer than every eligible one
+ if(top.version===version&&top.observation_id!==row.observation_id)return null;
+ return row;
 }
 async function toRow(db:MacroDb,s:SnapshotRecord,judgments:boolean):Promise<MacroSnapshotRow>{
  const regime=judgments?(await db.regimeOf(s.snapshot_id))?.regime??null:null;   // flag off: no judgment read at all
@@ -37,6 +63,10 @@ export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadA
  const judgments=opts.judgments??process.env.MACRO_JUDGMENTS_ENABLED==='1';
  return {
   async observation(observationId){
+   if(typeof observationId!=='string')return null;
+   const m=COMPOSITE_RE.exec(observationId);
+   if(m){const r=await byCompositeId(db,m);return r?toRef(r):null;}
+   if(!UUID_RE.test(observationId))return null;                          // never pass a non-uuid to the uuid column
    const [row]=await db.observationsByIds([observationId]);
    return row&&row.status==='ok'?toRef(row):null;
   },
@@ -61,12 +91,12 @@ export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadA
    }));
   },
   async classifyAsOf(region,referencePeriod,cutoff,macroMethodologyVersion){
-   if(macroMethodologyVersion!==METHODOLOGY_VERSION)throw new Error('methodology_mismatch');
+   if(macroMethodologyVersion!==METHODOLOGY_VERSION)throw new MacroUnavailable('methodology_mismatch');
    const m=PERIOD_RE.exec(referencePeriod);
    if(!m)throw new Error('invalid_reference_period');
    if(!CUTOFF_RE.test(cutoff)||!Number.isFinite(Date.parse(cutoff)))throw new Error('invalid_cutoff');
    const built=await buildRegimeInput(db,region as Region,{asOf:cutoff,periodEndLte:monthEnd(Number(m[1]),Number(m[2]))});
-   const {regime}=classifyRegime(built.input);
+   const regime=judgments?classifyRegime(built.input).regime:null;        // judgments disabled: no classification (regime = null)
    return {regime,observation_refs:built.observations.map(toRef),catalog:{version:CATALOG_VERSION,weights:regionWeights(region as Region),rules_version:RULES_VERSION}};
   },
  };

@@ -2,7 +2,7 @@
 import {describe,expect,it} from 'vitest';
 import {CATALOG_VERSION,catalogById} from './catalog';
 import {memoryMacroDb} from './memory-db';
-import {macroReadApi,snapshotAvailableAt} from './read-api';
+import {MacroUnavailable,macroReadApi,snapshotAvailableAt} from './read-api';
 import {buildRegimeInput,publishRegion} from './snapshots';
 import {classifyRegime,WEIGHTS_V1} from './regime';
 import {US_FIXTURE,seedCatalog,seedPoints,yoyPoints} from './testing/seed';
@@ -20,6 +20,19 @@ describe('observation',()=>{
   const id=seed.ids.get('US_CPI_YOY|2026-09-30')!;
   expect(await api.observation(id)).toEqual({series_id:'US_CPI_YOY',period_end:'2026-09-30',vintage_id:'1',value:2.9,unit:catalogById('US_CPI_YOY')!.unit,available_at:'2026-10-15T05:30:00.000Z'});
   expect(await api.observation('00000000-0000-4000-8000-00000000dead')).toBeNull();
+ });
+ it('accepts F4 composite ids series_id:period_end:vintage_id (exact version); malformed ids give null without throwing',async()=>{
+  const {db,api}=await setup();
+  const ref=await api.observation('US_CPI_YOY:2026-09-30:1');
+  expect(ref).toMatchObject({series_id:'US_CPI_YOY',period_end:'2026-09-30',vintage_id:'1',value:2.9});
+  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-20T05:30:00.000Z'});   // yoy v2
+  expect(await api.observation('US_CPI_YOY:2026-09-30:2')).toMatchObject({vintage_id:'2',value:4.2});
+  expect(await api.observation('US_CPI_YOY:2026-09-30:1')).toMatchObject({vintage_id:'1',value:2.9});
+  expect(await api.observation('US_CPI_YOY:2026-09-30:3')).toBeNull();
+  expect(await api.observation('US_CPI_YOY:2026-08-15:1')).toBeNull();
+  expect(await api.observation('NOPE:2026-09-30:1')).toBeNull();
+  for(const bad of ['','not-a-uuid','US_CPI_YOY:2026-09-30','US_CPI_YOY:2026-09-30:x','US_CPI_YOY:2026-13-45:1','US_CPI_YOY:2026-09-30:01',"a:b:c:d",'00000000-0000-4000-8000-00000000dea'])
+   expect(await api.observation(bad),bad).toBeNull();
  });
 });
 
@@ -90,9 +103,24 @@ describe('seriesCatalog',()=>{
 });
 
 describe('classifyAsOf',()=>{
+ it('judgments disabled (explicit false or flag unset): regime null, observation_refs and catalog still returned',async()=>{
+  const {db}=await setup();
+  const on=await macroReadApi(db,{judgments:true}).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');
+  expect(on.regime).not.toBeNull();
+  const off=await macroReadApi(db,{judgments:false}).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');
+  expect(off.regime).toBeNull();
+  expect(off.observation_refs).toEqual(on.observation_refs);expect(off.catalog).toEqual(on.catalog);
+  const prev=process.env.MACRO_JUDGMENTS_ENABLED;delete process.env.MACRO_JUDGMENTS_ENABLED;
+  try{expect((await macroReadApi(db).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0')).regime).toBeNull();}
+  finally{if(prev!==undefined)process.env.MACRO_JUDGMENTS_ENABLED=prev;}
+ });
  it('rejects any methodology other than v1.0 and malformed periods/cutoffs',async()=>{
   const {api}=await setup();
   await expect(api.classifyAsOf('US','2026-10','2026-11-01T00:00:00Z','v2.0')).rejects.toThrow('methodology_mismatch');
+  const err=await api.classifyAsOf('US','2026-10','2026-11-01T00:00:00Z','v2.0').catch(e=>e);
+  expect(err).toBeInstanceOf(MacroUnavailable);
+  expect(err).toMatchObject({name:'MacroUnavailable',code:'methodology_mismatch'});
+  await expect(api.classifyAsOf('US','2026-10','2026-11-01','v1.0')).rejects.toThrow('invalid_cutoff');   // date-only cutoff
   await expect(api.classifyAsOf('US','2026-13','2026-11-01T00:00:00Z','v1.0')).rejects.toThrow('invalid_reference_period');
   await expect(api.classifyAsOf('US','2026-10','yesterday','v1.0')).rejects.toThrow('invalid_cutoff');
  });

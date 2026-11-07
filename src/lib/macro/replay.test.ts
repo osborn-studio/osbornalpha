@@ -5,7 +5,7 @@
 // listed in the fixture manifest. No network.
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
@@ -17,8 +17,9 @@ import {parserFor} from './parsers/index';
 import {publishRegion} from './snapshots';
 import {overviewEnvelope} from './views';
 import {SEED_BATCH,seedCatalog} from './testing/seed';
-import type {Adapter,ObservationRow,ParsedPoint,Region} from './types';
+import type {Adapter,Locator,ObservationRow,ParsedPoint,Region} from './types';
 
+vi.setConfig({testTimeout:60_000});   // derivation now really runs over every replayed series (it used to see empty inputs)
 const TODAY='2026-11-06';
 const DIRS:Record<Region,string>={US:join(__dirname,'fixtures','fred'),CN:join(__dirname,'fixtures','cn')};
 
@@ -42,7 +43,7 @@ function parseFixture(seriesId:string,adapter:Adapter,bytes:Uint8Array):ParsedPo
 async function deriveAll(db:MacroDb,region:Region):Promise<void>{
  // month_end/index_minus_100/yoy inputs are native, so one pass in catalog order suffices
  for(const def of MACRO_CATALOG.filter(d=>d.region===region&&d.derive&&d.status==='active')){
-  const inputs=await db.seriesHistory(def.derive!.from,{maxRows:20000});
+  const inputs=await db.eligibleHistory(def.derive!.from,{includeBatch:SEED_BATCH,maxRows:20000});   // the seed batch is still running here: public reads would hide it
   const writes=deriveSeries(def,inputs,{now:new Date(`${TODAY}T06:00:00.000Z`)});
   if(writes.length===0)continue;
   const res=await db.writeObservations(SEED_BATCH,'replay',writes);
@@ -86,6 +87,74 @@ export async function evidenceShasOf(db:MacroDb,row:ObservationRow,depth=0):Prom
  return (await Promise.all(inputs.map(i=>evidenceShasOf(db,i,depth+1)))).flat();
 }
 
+// ── independent evidence reader (deliberately NOT the parsers): reads a value back from raw bytes at a locator ──
+function splitCsvLine(l:string):string[]{return l.split(',');}   // fixture CSVs have no quoted commas
+function readBack(bytes:Uint8Array,loc:Locator):string{
+ const text=new TextDecoder().decode(bytes);
+ if(loc.kind==='csv_row')return splitCsvLine(text.split(/\r?\n/)[loc.line-1])[loc.column].trim();
+ if(loc.kind==='json_pointer'){
+  let cur:unknown=JSON.parse(text);
+  for(const raw of loc.pointer.split('/').slice(1)){
+   const k=raw.replace(/~1/g,'/').replace(/~0/g,'~');
+   cur=(cur as Record<string,unknown>)[k];
+  }
+  return String(cur);
+ }
+ const noComments=text.replace(/<!--[\s\S]*?-->/g,'');
+ const tableStarts=[...noComments.matchAll(/<table\b/gi)];
+ const from=tableStarts[loc.table].index!;
+ const end=noComments.indexOf('</table>',from);
+ const rows=[...noComments.slice(from,end).matchAll(/<tr\b[\s\S]*?<\/tr>/gi)].map(m=>m[0]);
+ const cells=[...rows[loc.row].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(m=>m[1].replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim());
+ return cells[loc.cell];
+}
+const numEq=(a:string,b:string)=>Number(a.replace(/,/g,''))===Number(b);
+describe.each(['US','CN'] as const)('replay %s evidence read-back',(region)=>{
+ it('derives the expected indicators; every derived row reaches a native row with a manifest sha; every native value reads back from the evidence bytes',async()=>{
+  const {db,entries,dir}=await replayRegion(region);
+  const known=new Set(entries.map(e=>e.sha256));
+  const expectedDerived=region==='US'?['US_CPI_YOY','US_DGS10']:['CN_CPI_YOY'];
+  const derivedIds=MACRO_CATALOG.filter(d=>d.region===region&&d.derive&&d.status==='active').map(d=>d.id);
+  for(const id of expectedDerived){
+   expect(derivedIds,id).toContain(id);
+   expect((await db.eligibleHistory(id,{maxRows:20000})).length,id).toBeGreaterThan(0);
+  }
+  let derivedSeen=0,nativeRead=0;
+  for(const id of derivedIds){
+   for(const row of await db.eligibleHistory(id,{maxRows:20000})){
+    derivedSeen++;
+    const shas=await evidenceShasOf(db,row);
+    expect(shas.length,`${id}|${row.period_end}`).toBeGreaterThan(0);
+    for(const s of shas)expect(known.has(s),`${id} → ${s}`).toBe(true);
+   }
+  }
+  expect(derivedSeen).toBeGreaterThan(0);
+  for(const e of entries){
+   const bytes=new Uint8Array(readFileSync(join(dir,e.file)));
+   for(const sid of e.series_ids){
+    if(catalogById(sid)?.status!=='active')continue;
+    for(const row of await db.eligibleHistory(sid,{maxRows:20000})){
+     if(!row.locator||!row.retrieval_id||(await db.retrieval(row.retrieval_id))!.sha256!==e.sha256)continue;
+     expect(numEq(readBack(bytes,row.locator),row.value_text),`${sid}|${row.period_end}|${JSON.stringify(row.locator)}`).toBe(true);
+     nativeRead++;
+    }
+   }
+  }
+  expect(nativeRead).toBeGreaterThan(0);
+ });
+});
+describe('replay CN html_cell goldens (hard-coded from the fixture files, not derived by any parser)',()=>{
+ it.each([
+  ['CN_CGB_10Y_D','2026-11-06','1.5868',{kind:'html_cell',table:1,row:1,cell:8}],     // CN_CGB_10Y_D-00.html line 201: <td>1.5868</td>
+  ['CN_USDCNY_CP_D','2026-11-06','671.68',{kind:'html_cell',table:4,row:1,cell:1}],   // CN_USDCNY_CP_D-00.html line 285
+  ['CN_USDCNY_CP_D','2026-01-05','702.3',{kind:'html_cell',table:4,row:203,cell:1}],  // CN_USDCNY_CP_D-00.html line 16647
+ ] as const)('%s %s = %s',async(sid,period,value,locator)=>{
+  const {db}=await replayRegion('CN');
+  const row=(await db.eligibleHistory(sid,{maxRows:20000})).find(r=>r.period_end===period)!;
+  expect(row.value_text).toBe(value);
+  expect(row.locator).toEqual(locator);
+ });
+});
 describe.each(['US','CN'] as const)('replay %s',(region)=>{
  it('re-parsing the same bytes yields identical value_text and locators, equal to the stored rows',async()=>{
   const {db,entries,dir}=await replayRegion(region);

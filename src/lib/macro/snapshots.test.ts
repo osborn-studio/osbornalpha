@@ -156,6 +156,14 @@ describe('publishRegion',()=>{
   expect(again.observation_count).toBe(snap.observation_ids.length);
   expect([again.regime,again.uncovered_weight]).toEqual([stored.regime?'classified':'null',stored.uncovered_weight]);
  });
+ it('a replay whose stored regime row is missing fails instead of inventing uncovered_weight 0',async()=>{
+  const {db}=await seeded();
+  const key='ingest:33333333-3333-4333-8333-333333333333';
+  const first=await publishRegion({db,env:{}},'US',TODAY,{publishKey:key});
+  if(first.status!=='published')throw new Error('setup');
+  const lost=wrap(db,{regimeOf:async()=>null});
+  expect(await publishRegion({db:lost,env:{}},'US',TODAY,{publishKey:key})).toMatchObject({status:'failed',reason:'rpc_failed'});
+ });
  it('fenced is a protocol abort: it propagates and records no failed snapshot (第 5 稿 P1-3)',async()=>{
   const {db}=await seeded();
   const recordFailed=vi.fn(db.recordFailedSnapshot.bind(db));
@@ -169,6 +177,9 @@ describe('publishRegion',()=>{
   const off=await publishRegion({db,onPublished:hook,env:{}},'US',TODAY);
   expect(hook).not.toHaveBeenCalled();
   expect(off).toMatchObject({status:'published',hook:'skipped'});
+  const notOne=await publishRegion({db,onPublished:hook,env:{MACRO_JUDGMENTS_ENABLED:'true'}},'US',TODAY);   // only the exact value '1' enables
+  expect(notOne).toMatchObject({status:'published',hook:'skipped'});
+  expect(hook).not.toHaveBeenCalled();
   const on=await publishRegion({db,onPublished:hook,env:{MACRO_JUDGMENTS_ENABLED:'1'}},'US',TODAY);
   if(on.status!=='published')throw new Error('unreachable');
   expect(hook).toHaveBeenCalledTimes(1);

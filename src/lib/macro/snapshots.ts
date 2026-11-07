@@ -109,8 +109,9 @@ export async function publishRegion(deps:PublishDeps,region:Region,today:string,
      const snap=await deps.db.snapshot(res.snapshot_id);
      if(!snap)throw new MacroDbError('rpc_failed',`replayed_snapshot_missing:${res.snapshot_id}`);
      const stored=await deps.db.regimeOf(res.snapshot_id);                                             // admin read (service-only table)
+     if(!stored)throw new MacroDbError('rpc_failed',`replayed_regime_missing:${res.snapshot_id}`);     // never invent uncovered_weight 0
      return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:snap.observation_ids.length,
-      regime:stored?.regime?'classified':'null',uncovered_weight:stored?stored.uncovered_weight:0,attempts,hook:'skipped',replayed:true};
+      regime:stored.regime?'classified':'null',uncovered_weight:stored.uncovered_weight,attempts,hook:'skipped',replayed:true};
     }
     const hook=await runHook(deps,env,res.snapshot_id);
     return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:built.observations.length,
