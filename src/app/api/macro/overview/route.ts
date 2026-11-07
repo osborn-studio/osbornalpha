@@ -3,10 +3,13 @@
 // active snapshots. Never contains judgment fields (F4 /api/judgments serves those).
 import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {enumParam,failureResponse,flagParam,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser} from '@/lib/macro/route-helpers';
+import {overviewFactsStore} from '@/lib/macro/overview-data-cache';
 import {overviewEnvelope} from '@/lib/macro/views';
 import type {Region} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
+// Only globally shared macro facts enter this cache, after the session gate below.
+const factsCache=overviewFactsStore();
 const PARAMS=['region','compact'] as const;
 export async function GET(req:Request){
  const auth=await requireSessionUser();if(!auth.ok)return auth.response;
@@ -20,7 +23,10 @@ export async function GET(req:Request){
   const deps=macroRouteDeps();
   const today=new Date().toISOString().slice(0,10);
   const regions:Region[]=region==='all'?['US','CN']:[region];
-  const envs=await Promise.all(regions.map(r=>overviewEnvelope(deps,r,today,{compact})));
-  return okJson({catalogVersion:CATALOG_VERSION,regions:Object.fromEntries(regions.map((r,i)=>[r,envs[i]]))});
+  const envs=await Promise.all(regions.map(r=>overviewEnvelope({...deps,factsCache},r,today,{compact})));
+  const response=okJson({catalogVersion:CATALOG_VERSION,regions:Object.fromEntries(regions.map((r,i)=>[r,envs[i]]))});
+  // Every request must reach the session gate, including account changes in one browser.
+  response.headers.set('Cache-Control','private, no-store');
+  return response;
  }catch(e){return failureResponse(e,'macro-overview');}
 }

@@ -1,5 +1,5 @@
 // src/app/api/macro/strategy/transmission/route.ts
-// GET /api/macro/strategy/transmission?region=US|CN (spec §8, §5.1, §5.2, §9.1): process-memoized facts, fresh judgment section, one frozen transmission manifest
+// GET /api/macro/strategy/transmission?region=US|CN (spec §8, §5.1, §5.2, §9.1): shared-cached facts, fresh judgment section, one frozen transmission manifest
 // (buildTransmissionManifest → putManifest, idempotent by hash; the region is frozen in its params) feeds the flow and
 // the playbooks. Always 200 once the
 // facts are available, with judgment_status; f4 {mark, summary} (selectF4Mark) only when 'ok'. With the judgment layer
@@ -7,7 +7,7 @@
 import {NextResponse} from 'next/server';
 import type {TransmissionResponse} from '@/lib/macro/strategy/contract';
 import {buildPlaybooks,selectF4Mark} from '@/lib/macro/strategy/playbooks';
-import {memoKey,readMemoState,strategyMemo} from '@/lib/macro/strategy/memo';
+import {canCacheFacts,factView,memoKey,readMemoState} from '@/lib/macro/strategy/memo';
 import {memoHeaders,codeVersionOrNull,errorResponse,failureResponse,judgmentSection,readGate,readParams,regionOf,strategyDb} from '@/lib/macro/strategy/route-helpers';
 import {buildTransmission,buildTransmissionManifest} from '@/lib/macro/strategy/transmission';
 
@@ -20,12 +20,13 @@ export async function GET(req:Request){
   const region=regionOf(readParams(new URL(req.url),['region']).get('region'));
   const codeVersion=codeVersionOrNull();
   if(!codeVersion)return errorResponse('code_version_unavailable','code version not set',503);
-  const state=await readMemoState(g.port);
+  const {port}=g;
+  const state=await readMemoState(port);
   if(state.snapshots.US===null&&state.snapshots.CN===null)throw new NoPublishedSnapshot();
-  const {value,outcome}=await strategyMemo.getOrCompute(memoKey({kind:'transmission',params:{region},state,codeVersion}),async()=>{
-   const body=await buildTransmissionManifest(g.port,{now:new Date(),codeVersion,region,snapshots:state.snapshots});
+  const {value,outcome}=await factView(canCacheFacts(state)?memoKey({kind:'transmission',params:{region},state,codeVersion}):'',state,async()=>{
+   const body=await buildTransmissionManifest(port,{now:new Date(),codeVersion,region,snapshots:state.snapshots});
    if(!body)throw new NoPublishedSnapshot();
-   const stored=await strategyDb(g.session).putManifest(body);
+   const stored=await strategyDb().putManifest(body);
    return {manifest_id:stored.manifest_id,transmission:buildTransmission(stored),playbooks:buildPlaybooks(stored.body,region),snapshotId:stored.body.snapshots[region]?.snapshot_id??null};
   });
   const {transmission,playbooks,snapshotId}=value;

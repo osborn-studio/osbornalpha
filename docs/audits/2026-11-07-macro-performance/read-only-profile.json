@@ -1,0 +1,278 @@
+{
+  "baseline": [
+    {
+      "route": "transmission?region=US",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 1892,
+      "min_ms": 1490,
+      "max_ms": 3093,
+      "requests": [
+        7
+      ],
+      "kb": [
+        191
+      ],
+      "hashes": [
+        "fa074c8e3fbc5d56"
+      ]
+    },
+    {
+      "route": "transmission?region=US",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 545,
+      "min_ms": 490,
+      "max_ms": 690,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "fa074c8e3fbc5d56"
+      ]
+    },
+    {
+      "route": "transmission?region=CN",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 1005,
+      "min_ms": 970,
+      "max_ms": 2173,
+      "requests": [
+        7
+      ],
+      "kb": [
+        191
+      ],
+      "hashes": [
+        "33f17386ff8ff071"
+      ]
+    },
+    {
+      "route": "transmission?region=CN",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 271,
+      "min_ms": 268,
+      "max_ms": 742,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "33f17386ff8ff071"
+      ]
+    },
+    {
+      "route": "policy-response?window=3",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 2816,
+      "min_ms": 2518,
+      "max_ms": 8991,
+      "requests": [
+        35
+      ],
+      "kb": [
+        9537
+      ],
+      "hashes": [
+        "d66f51a2f8001fcf"
+      ]
+    },
+    {
+      "route": "policy-response?window=3",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 535,
+      "min_ms": 307,
+      "max_ms": 545,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "d66f51a2f8001fcf"
+      ]
+    },
+    {
+      "route": "cycle-table?boundary=event_day",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 3420,
+      "min_ms": 2783,
+      "max_ms": 5858,
+      "requests": [
+        64
+      ],
+      "kb": [
+        21097
+      ],
+      "hashes": [
+        "09e341c0af6f0915"
+      ]
+    },
+    {
+      "route": "cycle-table?boundary=event_day",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 411,
+      "min_ms": 283,
+      "max_ms": 423,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "09e341c0af6f0915"
+      ]
+    }
+  ],
+  "optimized": [
+    {
+      "route": "transmission?region=US",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 1579,
+      "min_ms": 1369,
+      "max_ms": 1631,
+      "requests": [
+        7
+      ],
+      "kb": [
+        191
+      ],
+      "hashes": [
+        "fa074c8e3fbc5d56"
+      ]
+    },
+    {
+      "route": "transmission?region=US",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 419,
+      "min_ms": 272,
+      "max_ms": 513,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "fa074c8e3fbc5d56"
+      ]
+    },
+    {
+      "route": "transmission?region=CN",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 1082,
+      "min_ms": 998,
+      "max_ms": 1119,
+      "requests": [
+        7
+      ],
+      "kb": [
+        191
+      ],
+      "hashes": [
+        "33f17386ff8ff071"
+      ]
+    },
+    {
+      "route": "transmission?region=CN",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 486,
+      "min_ms": 413,
+      "max_ms": 493,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "33f17386ff8ff071"
+      ]
+    },
+    {
+      "route": "policy-response?window=3",
+      "outcome": "miss",
+      "n": 3,
+      "median_ms": 2138,
+      "min_ms": 2039,
+      "max_ms": 3337,
+      "requests": [
+        27
+      ],
+      "kb": [
+        9537
+      ],
+      "hashes": [
+        "d66f51a2f8001fcf"
+      ]
+    },
+    {
+      "route": "policy-response?window=3",
+      "outcome": "hit",
+      "n": 3,
+      "median_ms": 401,
+      "min_ms": 265,
+      "max_ms": 525,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "d66f51a2f8001fcf"
+      ]
+    },
+    {
+      "route": "cycle-table?boundary=event_day",
+      "outcome": "miss",
+      "n": 2,
+      "median_ms": 4230.5,
+      "min_ms": 4210,
+      "max_ms": 4251,
+      "requests": [
+        51
+      ],
+      "kb": [
+        21097
+      ],
+      "hashes": [
+        "09e341c0af6f0915"
+      ]
+    },
+    {
+      "route": "cycle-table?boundary=event_day",
+      "outcome": "hit",
+      "n": 2,
+      "median_ms": 339.5,
+      "min_ms": 274,
+      "max_ms": 405,
+      "requests": [
+        4
+      ],
+      "kb": [
+        15
+      ],
+      "hashes": [
+        "09e341c0af6f0915"
+      ]
+    }
+  ]
+}
