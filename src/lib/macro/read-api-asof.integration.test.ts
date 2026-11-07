@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {typeParsers} from '../db/pg-table-client';
 import {catalogById} from './catalog';
 import {memoryMacroDb} from './memory-db';
 import {observationFromRow,selectEligibleHistoryAsOf} from './db';
@@ -11,7 +12,7 @@ import {macroReadApi} from './read-api';
 const enabled=!!process.env.S4_TEST_STATE;
 describe.skipIf(!enabled)('classifyAsOf batch visibility (PG17)',()=>{
  let pg:Pool;
- beforeAll(()=>{const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));pg=new Pool({connectionString:state.adminUrl});});
+ beforeAll(()=>{const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));pg=new Pool({connectionString:state.adminUrl,types:typeParsers});});
  afterAll(async()=>{await pg?.end();});
  it('uses A before B finalizes and B afterward for one series and period',async()=>{
   const series='US_UNRATE',period='2026-09-30',before='2026-10-18T00:00:00.000Z',after='2026-10-25T00:00:00.000Z';
@@ -28,6 +29,7 @@ describe.skipIf(!enabled)('classifyAsOf batch visibility (PG17)',()=>{
   };
   await seed('4.1','2026-10-16T00:00:00Z');
   await seed('4.2','2026-10-20T00:00:00Z');
+  expect((await pg.query('select period_end from public.macro_observations where series_id=$1 limit 1',[series])).rows[0].period_end).toBe(period);
   expect((await pg.query('select value_text from public.macro_latest_eligible_observations($1,$2,$3,null)',[[series],after,'2026-10-31'])).rows.map(r=>r.value_text)).toEqual(['4.2']);
   const db={...memoryMacroDb(),
    eligibleHistoryAsOf:async(id:string,o:{to:string;asOf:string;maxRows:number})=>{
