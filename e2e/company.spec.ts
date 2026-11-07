@@ -196,3 +196,20 @@ test('gold: 6 issuers × 2 periods × 6 concepts statement matrix (spec §14, §
     expect(got, `${c.query} ${c.concept} ${c.periodKey}`).toMatchObject({ kind: 'fact', value: c.value, unit: c.unit, availableDate: c.availableDate, disclosureSeq: c.disclosureSeq, isRevision: c.isRevision });
   }
 });
+
+// Replay must render even when the live membership/inbox service is unavailable.
+test('replay tracking bypasses membership and materialized inbox reads', async ({ page }) => {
+  const trackingRequests: string[] = [];
+  await page.route('**/api/tracking/**', async (route) => {
+    trackingRequests.push(route.request().url());
+    await route.abort();
+  });
+  const events = page.waitForResponse((r) => r.url().includes('/api/companies/AAPL/events') && r.url().includes('asOf=2024-06-30'));
+  await page.goto('/stock/AAPL?view=tracking&asOf=2024-06-30');
+  expect((await events).ok()).toBe(true);
+  const view = page.getByTestId('company-tracking');
+  await expect(view.getByTestId('replay-no-read')).toBeVisible();
+  await expect(view.getByRole('button', { name: '标记已读' })).toBeDisabled();
+  await expect(page.getByTestId('track-button')).toHaveCount(0);
+  expect(trackingRequests).toEqual([]);
+});

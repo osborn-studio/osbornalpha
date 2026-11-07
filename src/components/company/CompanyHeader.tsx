@@ -166,7 +166,8 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
 
       <div className="flex basis-full flex-wrap items-center gap-2">
         <WatchlistButton ticker={ticker} />
-        {issuer && <TrackButton issuerId={issuer.issuer_id} />}
+        {/* Live membership probes read the materialized inbox; replay stays on the snapshot path. */}
+        {issuer && !asOf && <TrackButton issuerId={issuer.issuer_id} />}
         <AnalyzeMenu ticker={ticker} />
         <span className="ml-auto text-[11px] text-[var(--text-dim)]">{t('quoteRemoved')}</span>
       </div>
