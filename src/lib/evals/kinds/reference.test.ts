@@ -16,10 +16,10 @@ const THRESHOLDS={max_fail:0,min_coverage_optional:'0.95'};
 
 describe('parseReferenceResult (strict)',()=>{
  it('accepts exactly {total, within, beyond_explained, beyond_unexplained, unavailable, missing} of non-negative integers that add up',()=>{
-  expect(parseReferenceResult({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0})).toEqual({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0});
+  expect(parseReferenceResult({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0,read_error:0})).toEqual({total:3,within:1,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0,read_error:0});
  });
  it('refuses extra / missing keys, negatives, fractions, strings, a wrong total, arrays and class instances',()=>{
-  const ok={total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0};
+  const ok={total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:0};
   class R{total=1;within=1;beyond_explained=0;beyond_unexplained=0;unavailable=0;missing=0;}
   for(const bad of [{...ok,value:'918273645.5'},{total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0},{...ok,within:-1,total:-1},{...ok,within:0.5,total:0.5},{...ok,within:'1'},{...ok,total:2},[1,1,0,0,0,0],new R(),null,'ok'])
    expect(code(()=>parseReferenceResult(bad))).toBe('reference_result_schema');
@@ -42,7 +42,7 @@ describe('evaluateReference',()=>{
  it(`within at rel ${REFERENCE_REL} (ours left, theirs right)`,async()=>{
   const r=await evaluateReference([sample()],[],deps({'cn.cpi':'100'}));
   expect(r.cases[0]).toMatchObject({case_id:'s1',outcome:{result:'within'},left:'100',right:'100.5',tolerance:'0.01'});
-  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0});
+  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:0});
  });
  it('beyond: explained only by an approved, non-unknown entry whose their/our values equal the compared values',async()=>{
   const run=async(e?:Record<string,unknown>)=>(await evaluateReference([sample()],e?parseReferenceLedger([e]):[],deps({'cn.cpi':'110'}))).cases[0].outcome;
@@ -57,7 +57,7 @@ describe('evaluateReference',()=>{
  it('sample without a value (LPR rows, asset prices) → skipped(unavailable); a value on their side but none on ours → missing (P1-1)',async()=>{
   const r=await evaluateReference([sample({sample_id:'lpr',parsed_value:null}),sample({sample_id:'gone'})],[],deps({}));
   expect(r.cases.map(c=>c.outcome)).toEqual([{result:'skipped',reason:'unavailable'},{result:'missing'}]);
-  expect(r.result).toEqual({total:2,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:1,missing:1});
+  expect(r.result).toEqual({total:2,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:1,missing:1,read_error:0});
   expect(referenceSummary(r.result,THRESHOLDS)).toMatchObject({coverage:{missing_required:1,skipped:1,evaluated:0},gate:'incomplete'});
  });
  it('P1-1: 36 unavailable samples and zero comparisons are incomplete, never pass',async()=>{
@@ -70,7 +70,7 @@ describe('evaluateReference',()=>{
   const c=r.cases.find(x=>x.case_id==='canary')!;
   expect(c).toMatchObject({outcome:{result:'beyond_unexplained'},left:'1',right:CANARY_VALUE});
   expect(r.countedCases.map(x=>x.case_id)).toEqual(['s1']);
-  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0});
+  expect(r.result).toEqual({total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:0});
   const finishRun=vi.fn(async(_runId:string,_status:string,_summary:Summary,_at:string)=>{});
   const summary=await referenceSummaryWriter({finishRun},{thresholds:THRESHOLDS,now:()=>new Date('2026-11-06T00:00:00Z')}).writeReferenceSummary('run-1',r.result);
   expect(JSON.stringify(summary)).not.toContain(CANARY_VALUE);
@@ -90,17 +90,17 @@ describe('evaluateReference',()=>{
 
 describe('referenceSummary / referenceSummaryWriter',()=>{
  it('§3.2 shape from counts: comparison evidence; beyond_unexplained 0 → pass, > 0 → fail; total 0 → incomplete',()=>{
-  const s:Summary=referenceSummary({total:4,within:2,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0},THRESHOLDS);
+  const s:Summary=referenceSummary({total:4,within:2,beyond_explained:1,beyond_unexplained:0,unavailable:1,missing:0,read_error:0},THRESHOLDS);
   expect(s).toMatchObject({population:4,required:4,correctness:{pass:3,fail:0,unit_mismatch:0,provenance_incomplete:0,unexplained_diff:0},coverage:{evaluated:3,skipped:1},evidence_class:'comparison',gate:'pass'});
-  expect(referenceSummary({total:2,within:1,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0},THRESHOLDS).gate).toBe('fail');
-  expect(referenceSummary({total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0},THRESHOLDS).gate).toBe('incomplete');
+  expect(referenceSummary({total:2,within:1,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0,read_error:0},THRESHOLDS).gate).toBe('fail');
+  expect(referenceSummary({total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:0},THRESHOLDS).gate).toBe('incomplete');
  });
  it('the writer validates before writing and finishes the run with the gate status',async()=>{
   const finishRun=vi.fn(async(_runId:string,_status:string,_summary:Summary,_at:string)=>{});
   const w=referenceSummaryWriter({finishRun},{thresholds:THRESHOLDS,now:()=>new Date('2026-11-06T00:00:00Z')});
   await expect(w.writeReferenceSummary('run-1',{total:1,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,extra:1})).rejects.toMatchObject({code:'reference_result_schema'});
   expect(finishRun).not.toHaveBeenCalled();
-  await w.writeReferenceSummary('run-1',{total:1,within:0,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0});
+  await w.writeReferenceSummary('run-1',{total:1,within:0,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0,read_error:0});
   expect(finishRun).toHaveBeenCalledWith('run-1','failed',expect.objectContaining({gate:'fail'}),'2026-11-06T00:00:00.000Z');
  });
 });
@@ -116,5 +116,59 @@ describe('parseReferenceSamples / parseReferenceLedger',()=>{
   expect(code(()=>parseReferenceLedger([entry({reason_code:'vibes'})]))).toBe('gold_invalid');
   expect(code(()=>parseReferenceLedger([entry({evidence:{type:'hunch',ref:'x'}})]))).toBe('gold_invalid');
   expect(code(()=>parseReferenceLedger([entry({approval_ref:''})]))).toBe('gold_invalid');
+ });
+});
+
+const readerOf=(f:(series:string)=>Promise<{value_text:string;unit:string|null;run_id:string|null}|null>):ReferenceReadDeps=>({today:'2026-11-06',evaluatorCodeVersion:'d'.repeat(40),reader:{value:t=>f(t.series_id)}});
+
+describe('Codex Task 14 review fixes',()=>{
+ it('parsed_value: exponents / plus signs are refused at parse time; values are normalized',()=>{
+  for(const bad of ['1e2','+5',' 5','1E-3'])expect(code(()=>parseReferenceSamples({schema_version:1,samples:[sample({parsed_value:bad})]}))).toBe('gold_invalid');
+  expect(parseReferenceSamples({schema_version:1,samples:[sample({parsed_value:'100.500'})]}).samples[0].parsed_value).toBe('100.5');
+ });
+ it('rel exactly 0.01 is within (inclusive); just beyond is not',async()=>{
+  expect((await evaluateReference([sample({parsed_value:'101'})],[],deps({'cn.cpi':'100'}))).cases[0].outcome).toEqual({result:'within'});
+  expect((await evaluateReference([sample({parsed_value:'102'})],[],deps({'cn.cpi':'100'}))).cases[0].outcome).toEqual({result:'beyond_unexplained'});
+ });
+ it('units must agree: billion vs million (or a null sample unit) is beyond_unexplained(unit_mismatch), never within, never explained',async()=>{
+  const d=readerOf(async()=>({value_text:'100.5',unit:'CNY_million',run_id:'r1'}));
+  const r=await evaluateReference([sample({parsed_unit:'CNY_billion'})],[],d);
+  expect(r.cases[0]).toMatchObject({outcome:{result:'beyond_unexplained'},detail:{reason:'unit_mismatch',our_unit:'CNY_million',their_unit:'CNY_billion'}});
+  expect(r.result.beyond_unexplained).toBe(1);
+  const ex=await evaluateReference([sample({parsed_unit:'CNY_billion',parsed_value:'100.5'})],parseReferenceLedger([entry({their_value:'100.5',our_value:'100.5'})]),d);
+  expect(ex.cases[0].outcome).toEqual({result:'beyond_unexplained'});
+  expect((await evaluateReference([sample({parsed_unit:null})],[],deps({'cn.cpi':'100.5'}))).cases[0].detail.reason).toBe('unit_mismatch');
+ });
+ it('ledger: our_run_id must equal the compared non-null run_id; the matched ledger id is recorded; misses say why',async()=>{
+  const run=async(runId:string|null,e:Record<string,unknown>)=>(await evaluateReference([sample()],parseReferenceLedger([e]),readerOf(async()=>({value_text:'110',unit:'index',run_id:runId})))).cases[0];
+  expect(await run('r1',entry())).toMatchObject({outcome:{result:'beyond_explained',ledger_ids:['s1']},detail:{ledger_id:'s1'}});
+  expect(await run('r2',entry())).toMatchObject({outcome:{result:'beyond_unexplained'},detail:{ledger_miss:'run_id'}});
+  expect(await run(null,entry())).toMatchObject({outcome:{result:'beyond_unexplained'},detail:{ledger_miss:'run_id'}});
+  expect((await run('r1',entry({our_value:'111'}))).detail.ledger_miss).toBe('values');
+  expect((await run('r1',entry({reason_code:'unknown'}))).detail.ledger_miss).toBe('reason_unknown');
+  expect((await evaluateReference([sample()],[],deps({'cn.cpi':'110'}))).cases[0].detail.ledger_miss).toBe('no_entry');
+ });
+ it('a canary with a matching ledger entry stays beyond_unexplained and uncounted',async()=>{
+  const l=parseReferenceLedger([entry({sample_id:'canary',their_value:CANARY_VALUE,our_value:'1'})]);
+  const r=await evaluateReference([canary()],l,deps({[CANARY_SERIES]:'1'}));
+  expect(r.cases[0]).toMatchObject({outcome:{result:'beyond_unexplained'},detail:{ledger_miss:'canary'}});
+  expect(r.result.total).toBe(0);
+ });
+ it('thresholds are fixed: a max_fail override is rejected by the summary and the writer',async()=>{
+  const res={total:1,within:0,beyond_explained:0,beyond_unexplained:1,unavailable:0,missing:0,read_error:0};
+  expect(code(()=>referenceSummary(res,{max_fail:1,min_coverage_optional:'0.95'}))).toBe('reference_result_schema');
+  const finishRun=vi.fn(async(_a:string,_b:string,_c:Summary,_d:string)=>{});
+  await expect(referenceSummaryWriter({finishRun},{thresholds:{max_fail:1,min_coverage_optional:'0.95'},now:()=>new Date()}).writeReferenceSummary('r',res)).rejects.toMatchObject({code:'reference_result_schema'});
+  expect(finishRun).not.toHaveBeenCalled();
+  expect(referenceSummary(res).gate).toBe('fail');
+ });
+ it('a reader throwing, or an unparsable value from ours, is a read_error case; completed cases are kept and the gate is incomplete',async()=>{
+  const d=readerOf(async s=>{if(s==='boom')throw new Error('db down');return {value_text:s==='junk'?'1e2':'100',unit:'index',run_id:'r1'};});
+  const t=(id:string,series:string)=>sample({sample_id:id,our_target:{series_id:series,period_end:'2026-09-30',which:'latest'}});
+  const r=await evaluateReference([t('a','cn.cpi'),t('b','boom'),t('c','junk')],[],d);
+  expect(r.cases.map(c=>c.outcome)).toEqual([{result:'within'},{result:'read_error',reason:'read_failed'},{result:'read_error',reason:'read_failed'}]);
+  expect(r.result).toEqual({total:3,within:1,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:2});
+  const s=referenceSummary(r.result);
+  expect(s).toMatchObject({execution:{read_error:2},gate:'incomplete'});
  });
 });

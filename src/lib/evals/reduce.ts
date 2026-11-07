@@ -7,13 +7,14 @@
 // evidence class. `subset` is read from the cases (any skipped(subset)); the report's own thresholds / gold / subset are
 // never inputs. reference_regression: the fixture-designated canary (sample.canary) is excluded from the population
 // consistently — its case stays in report.cases (§5.4 (c)) but is never reduced.
+import type {PairRegistration} from './kinds/dual-source';
 import {REFERENCE_THRESHOLDS} from './kinds/reference';
 import type {ReferenceSampleFile} from './kinds/reference';
 import {REPLAY_THRESHOLDS} from './kinds/replay';
 import {recordedCases} from './replay/fixture';
 import type {ReplayFile} from './replay/fixture';
-import {goldBlockOf,summarize} from './summary';
-import type {CaseReport,EvalKind,EvidenceClass,GoldSet,Summary,SummaryContext} from './types';
+import {READY_GOLD,goldBlockOf,summarize} from './summary';
+import type {CaseReport,EvalKind,GoldSet,Summary,SummaryContext} from './types';
 
 export type ReductionFixture=
  |{kind:'official_reconciliation'|'dual_source';set:GoldSet}
@@ -21,8 +22,8 @@ export type ReductionFixture=
  |{kind:'reference_regression';samples:ReferenceSampleFile};
 export interface Reduction{summary:Summary;problems:string[]}
 export interface ReduceOptions{
- /** dual_source only: the pair registration's class (same_feed → adapter_check); other kinds derive it from the kind. */
- evidenceClass?:EvidenceClass;
+ /** dual_source only, REQUIRED: the F6 pair registration (kinds/pairs.ts); same_feed → adapter_check, otherwise truth. No default. */
+ registration?:PairRegistration;
  /** store.ts::caseRowsTruncated of the report (a pure function of its cases). */
  reconciliationsTruncated?:boolean;
 }
@@ -30,19 +31,24 @@ export interface ReduceOptions{
 interface Member{id:string;required:boolean;retracted:boolean}
 const isSkip=(c:CaseReport,reason:string)=>c.outcome.result==='skipped'&&c.outcome.reason===reason;
 
+function dualClass(r:PairRegistration|undefined){
+ if(!r)throw new Error('reduceForKind: dual_source needs the F6 pair registration (opts.registration)');
+ return r.independence==='same_feed'?'adapter_check' as const:'truth' as const;
+}
+
 export function reduceForKind(kind:EvalKind,cases:CaseReport[],fixture:ReductionFixture,opts:ReduceOptions={}):Reduction{
  if(fixture.kind!==kind)throw new Error(`reduceForKind: ${kind} with a ${fixture.kind} fixture`);
  let members:Member[];let ctx:Omit<SummaryContext,'subset'>;let excluded=new Set<string>();
  if('set' in fixture){
   members=fixture.set.cases.map(c=>({id:c.case_id,required:c.required,retracted:c.retracted!==null}));
-  ctx={thresholds:fixture.set.thresholds,gold:goldBlockOf(fixture.set),evidenceClass:fixture.kind==='dual_source'?(opts.evidenceClass??'truth'):'truth'};
+  ctx={thresholds:fixture.set.thresholds,gold:goldBlockOf(fixture.set),evidenceClass:fixture.kind==='dual_source'?dualClass(opts.registration):'truth'};
  }else if('file' in fixture){
   members=recordedCases(fixture.file).map(c=>({id:c.case_id,required:true,retracted:false}));
-  ctx={thresholds:REPLAY_THRESHOLDS,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidenceClass:'truth'};
+  ctx={thresholds:REPLAY_THRESHOLDS,gold:{...READY_GOLD},evidenceClass:'truth'};
  }else{
   excluded=new Set(fixture.samples.samples.filter(s=>s.canary).map(s=>s.sample_id));
   members=fixture.samples.samples.filter(s=>!s.canary).map(s=>({id:s.sample_id,required:true,retracted:false}));
-  ctx={thresholds:REFERENCE_THRESHOLDS,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidenceClass:'comparison'};
+  ctx={thresholds:REFERENCE_THRESHOLDS,gold:{...READY_GOLD},evidenceClass:'comparison'};
  }
  const problems:string[]=[];
  const byId=new Map<string,CaseReport>();

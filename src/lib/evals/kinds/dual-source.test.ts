@@ -25,7 +25,7 @@ function plan3RelDiff(l:string,r:string):string{
 }
 
 describe('evaluateDualSource',()=>{
- it('compares both value_text at the registration tolerance (F6 recomputes; plan 3 passed/rel_diff are ignored)',()=>{
+ it('compares both value_text at the registration tolerance',()=>{
   const r=evaluateDualSource(reg(),[obs(),obs({key:key({concept:'cash',period_start:null,duration:'INSTANT'}),right:side('1006',{fact_id:'f-right'})})]);
   const [cash,rev]=r.cases;
   expect(rev).toMatchObject({case_id:`us.companyfacts_vs_ixbrl:${KEY}`,outcome:{result:'pass'},left:'1000',right:'1004',tolerance:'0.005',required:true});
@@ -83,17 +83,18 @@ describe('evaluateDualSource',()=>{
  });
 });
 
+const source=(p:Partial<PairSource>={}):PairSource=>({observations:async()=>({rows:[obs()],truncated:false}),...p});
 describe('runDualSource',()=>{
- const source=(p:Partial<PairSource>={}):PairSource=>({registration:async id=>id===reg().pair_id?reg():null,observations:async()=>({rows:[obs()],truncated:false}),...p});
  it('reads the registration and observations through the injected source',async()=>{
-  const r=await runDualSource(source(),reg().pair_id);
+  const r=await runDualSource(source(),reg().pair_id,[reg()]);
   expect(r.cases.map(c=>c.outcome.result)).toEqual(['pass']);
  });
  it('unregistered pair → gold_invalid; a write-capable source is refused before any read',async()=>{
-  await expect(runDualSource(source(),'nope')).rejects.toMatchObject({code:'gold_invalid'});
+  await expect(runDualSource(source(),'nope',[reg()])).rejects.toMatchObject({code:'gold_invalid'});
+  await expect(runDualSource(source(),reg().pair_id)).rejects.toMatchObject({code:'gold_invalid'});   // F6_PAIRS is empty until plan 3
   let read=false;
   const writable={...source({registration:async()=>{read=true;return reg();}}),upsertResult:async()=>undefined} as unknown as PairSource;
-  await expect(runDualSource(writable,reg().pair_id)).rejects.toThrow(/pair_source_write_capable/);
+  await expect(runDualSource(writable,reg().pair_id,[reg()])).rejects.toMatchObject({code:'gold_invalid',detail:{reason:'pair_source_write_capable'}});
   expect(read).toBe(false);
  });
 });
@@ -106,5 +107,20 @@ describe('relDiff conformance: plan 3 rounds half away from zero, F6 truncates (
    expect(plan3RelDiff(v.left,v.right)).toBe(v.plan3);
    expect(v.plan3).not.toBe(v.f6);
   }
+ });
+
+ it('the F6 registration decides: a source claiming independent_publication for an F6 same_feed pair still yields adapter_check',async()=>{
+  const f6=reg({independence:'same_feed'});
+  const lying=source({registration:async()=>reg({independence:'independent_publication'})});
+  await expect(runDualSource(lying,f6.pair_id,[f6])).rejects.toMatchObject({code:'gold_invalid',detail:{reason:'registration_mismatch'}});
+  const echo=source({registration:async()=>f6});
+  expect((await runDualSource(echo,f6.pair_id,[f6])).evidenceClass).toBe('adapter_check');
+  expect((await runDualSource(source(),f6.pair_id,[f6])).evidenceClass).toBe('adapter_check');
+ });
+ it('observations outside the registration key scope are read_error(read_failed) with detail.reason out_of_scope',()=>{
+  const scoped=reg({scope:{concepts:['revenue'],durations:['12M'],units:['USD'],consolidations:['consolidated']}});
+  const r=evaluateDualSource(scoped,[obs(),obs({key:key({concept:'cash'})}),obs({key:key({unit:'EUR'})})]);
+  expect(r.cases.map(c=>c.outcome.result).sort()).toEqual(['pass','read_error','read_error']);
+  expect(r.cases.filter(c=>c.detail.reason==='out_of_scope').length).toBe(2);
  });
 });

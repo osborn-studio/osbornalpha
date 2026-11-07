@@ -14,10 +14,11 @@
 // key set, non-negative safe integers, total = sum); the only write path is
 // referenceSummaryWriter(sink).writeReferenceSummary(run_id, result) → finishRun with the §3.2 summary.
 import {canonicalDecimal} from '../../facts/json-numbers';
-import {compareWithinTolerance} from '../compare';
+import {compareWithinTolerance,parseDecimalParts} from '../compare';
 import {EvalError} from '../errors';
 import type {EvalStore} from '../store';
-import {gateOf,statusOfGate} from '../summary';
+import {canonicalJson} from '../canonical-json';
+import {READY_GOLD,ZERO_FAIL_THRESHOLDS,gateOf,statusOfGate} from '../summary';
 import type {CaseOutcome,CaseReport,Summary,Thresholds} from '../types';
 import {assertReadOnly} from './read-only';
 
@@ -33,17 +34,18 @@ export interface ReferenceSampleFile{schema_version:1;samples:ReferenceSample[]}
 export const REFERENCE_REASONS=['membership_pointintime','aggregation_method','restatement','unit_or_basis','their_placeholder','their_proxy','their_stale_snapshot','unknown'] as const;
 export type ReferenceReason=typeof REFERENCE_REASONS[number];
 export interface ReferenceLedgerEntry{sample_id:string;their_value:string;our_value:string;our_run_id:string;reason_code:ReferenceReason;evidence:{type:'computation'|'document';ref:string};added_by:string;approved_by:string;approval_ref:string}
-export interface ReferenceResult{total:number;within:number;beyond_explained:number;beyond_unexplained:number;unavailable:number;missing:number}
+export interface ReferenceResult{total:number;within:number;beyond_explained:number;beyond_unexplained:number;unavailable:number;missing:number;read_error:number}
 /** reference_regression thresholds (§5.4: beyond_unexplained = 0 → pass); also used by reduce.ts and the manifest validator. */
-export const REFERENCE_THRESHOLDS:Thresholds={max_fail:0,min_coverage_optional:'0.95'};
+export const REFERENCE_THRESHOLDS:Thresholds={...ZERO_FAIL_THRESHOLDS};
 export interface ReferenceReader{value(target:OurTarget):Promise<{value_text:string;unit:string|null;run_id:string|null}|null>}
 export interface ReferenceReadDeps{reader:ReferenceReader;today:string;evaluatorCodeVersion:string}
 export interface ReferenceEvaluation{cases:CaseReport[];countedCases:CaseReport[];result:ReferenceResult}
 
-const RESULT_KEYS=['beyond_explained','beyond_unexplained','missing','total','unavailable','within'];
+const RESULT_KEYS=['beyond_explained','beyond_unexplained','missing','read_error','total','unavailable','within'];
 const HEX64=/^[0-9a-f]{64}$/,DAY=/^\d{4}-\d{2}-\d{2}$/;
 const isObj=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 const nonEmpty=(v:unknown):v is string=>typeof v==='string'&&v.trim().length>0;
+const isPlainDecimal=(v:unknown):v is string=>{if(typeof v!=='string')return false;try{parseDecimalParts(v);return true;}catch{return false;}};
 const isDecimal=(v:unknown):v is string=>{if(typeof v!=='string')return false;try{canonicalDecimal(v);return true;}catch{return false;}};
 
 export function parseReferenceResult(v:unknown):ReferenceResult{
@@ -53,8 +55,8 @@ export function parseReferenceResult(v:unknown):ReferenceResult{
  if(keys.length!==RESULT_KEYS.length||keys.some((k,i)=>k!==RESULT_KEYS[i]))return bad(`keys ${keys.join(',')}`);
  for(const k of RESULT_KEYS){const x=v[k];if(typeof x!=='number'||!Number.isSafeInteger(x)||x<0)return bad(`${k} is not a non-negative integer`);}
  const r=v as unknown as ReferenceResult;
- if(r.total!==r.within+r.beyond_explained+r.beyond_unexplained+r.unavailable+r.missing)return bad('total ≠ sum');
- return {total:r.total,within:r.within,beyond_explained:r.beyond_explained,beyond_unexplained:r.beyond_unexplained,unavailable:r.unavailable,missing:r.missing};
+ if(r.total!==r.within+r.beyond_explained+r.beyond_unexplained+r.unavailable+r.missing+r.read_error)return bad('total ≠ sum');
+ return {total:r.total,within:r.within,beyond_explained:r.beyond_explained,beyond_unexplained:r.beyond_unexplained,unavailable:r.unavailable,missing:r.missing,read_error:r.read_error};
 }
 
 export function parseReferenceSamples(raw:unknown):ReferenceSampleFile{
@@ -70,7 +72,7 @@ export function parseReferenceSamples(raw:unknown):ReferenceSampleFile{
   if(!nonEmpty(s.page_url)||typeof s.page_sha256!=='string'||!HEX64.test(s.page_sha256))return bad('page_url/page_sha256');
   if(typeof s.captured_at!=='string'||Number.isNaN(Date.parse(s.captured_at)))return bad('captured_at');
   if(typeof s.as_displayed!=='string')return bad('as_displayed');
-  if(s.parsed_value!==null&&!isDecimal(s.parsed_value))return bad('parsed_value');
+  if(s.parsed_value!==null&&!isPlainDecimal(s.parsed_value))return bad('parsed_value');   // compareWithinTolerance grammar: no exponent / '+' / whitespace
   if(s.parsed_unit!==null&&typeof s.parsed_unit!=='string')return bad('parsed_unit');
   if(s.their_declared_source!==null&&typeof s.their_declared_source!=='string')return bad('their_declared_source');
   const t=s.our_target;
@@ -78,7 +80,7 @@ export function parseReferenceSamples(raw:unknown):ReferenceSampleFile{
   if(typeof s.canary!=='boolean')return bad('canary');
   if(s.canary){canaries++;if(t.series_id!==CANARY_SERIES)return bad('canary_series');}
   else if(t.series_id===CANARY_SERIES)return bad('canary_series_without_flag');
-  return s as unknown as ReferenceSample;
+  return {...(s as unknown as ReferenceSample),parsed_value:s.parsed_value===null?null:canonicalDecimal(s.parsed_value as string)};
  });
  if(canaries>1)return top('more than one canary');
  return {schema_version:1,samples};
@@ -99,26 +101,47 @@ export function parseReferenceLedger(raw:unknown):ReferenceLedgerEntry[]{
  });
 }
 
-const explains=(e:ReferenceLedgerEntry,ours:string,theirs:string)=>e.reason_code!=='unknown'&&e.approved_by!==e.added_by&&e.approval_ref.trim().length>0
- &&canonicalDecimal(e.our_value)===canonicalDecimal(ours)&&canonicalDecimal(e.their_value)===canonicalDecimal(theirs);
+/** Why a ledger entry does not explain this comparison (null = it does). Values compare as decimals; our_run_id must equal the compared
+ *  observation's non-null run_id (a null run_id never matches). */
+function ledgerMiss(e:ReferenceLedgerEntry,ours:string,theirs:string,runId:string|null):string|null{
+ if(e.reason_code==='unknown')return 'reason_unknown';
+ if(e.approved_by===e.added_by)return 'self_approved';
+ if(e.approval_ref.trim().length===0)return 'approval_ref';
+ if(canonicalDecimal(e.our_value)!==canonicalDecimal(ours)||canonicalDecimal(e.their_value)!==canonicalDecimal(theirs))return 'values';
+ if(runId===null||e.our_run_id!==runId)return 'run_id';
+ return null;
+}
 
 export async function evaluateReference(samples:ReferenceSample[],ledger:ReferenceLedgerEntry[],deps:ReferenceReadDeps):Promise<ReferenceEvaluation>{
  assertReadOnly(deps,'reference_write_attempt','reference_regression ReadDeps');
  const cases:CaseReport[]=[];const counted:CaseReport[]=[];
- const result:ReferenceResult={total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0};
+ const result:ReferenceResult={total:0,within:0,beyond_explained:0,beyond_unexplained:0,unavailable:0,missing:0,read_error:0};
  for(const s of samples){
   const rep=(outcome:CaseOutcome,left:string|null,abs:string|null,rel:string|null,detail:Record<string,unknown>):CaseReport=>
    ({case_id:s.sample_id,required:true,outcome,left,right:s.parsed_value,abs_diff:abs,rel_diff:rel,tolerance:REFERENCE_REL,provenance:null,detail:{our_target:s.our_target,parsed_unit:s.parsed_unit,canary:s.canary,...detail}});
-  const ours=s.parsed_value===null?null:await deps.reader.value(s.our_target);
-  let c:CaseReport;
-  if(s.parsed_value===null){c=rep({result:'skipped',reason:'unavailable'},null,null,null,{});if(!s.canary)result.unavailable++;}
-  else if(ours===null){c=rep(s.canary?{result:'skipped',reason:'unavailable'}:{result:'missing'},null,null,null,{});if(!s.canary)result.missing++;}
-  else{
-   const cmpRes=compareWithinTolerance(ours.value_text,s.parsed_value,REFERENCE_REL);
-   const detail={our_unit:ours.unit,our_run_id:ours.run_id};
-   if(cmpRes.passed){c=rep({result:'within'},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,detail);if(!s.canary)result.within++;}
-   else if(!s.canary&&ledger.some(e=>e.sample_id===s.sample_id&&explains(e,ours.value_text,s.parsed_value!))){c=rep({result:'beyond_explained',ledger_ids:[s.sample_id]},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,detail);result.beyond_explained++;}
-   else{c=rep({result:'beyond_unexplained'},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,detail);if(!s.canary)result.beyond_unexplained++;}
+  let c!:CaseReport;
+  try{
+   const ours=s.parsed_value===null?null:await deps.reader.value(s.our_target);
+   if(s.parsed_value===null){c=rep({result:'skipped',reason:'unavailable'},null,null,null,{});if(!s.canary)result.unavailable++;}
+   else if(ours===null){c=rep(s.canary?{result:'skipped',reason:'unavailable'}:{result:'missing'},null,null,null,{});if(!s.canary)result.missing++;}
+   else{
+    const cmpRes=compareWithinTolerance(ours.value_text,s.parsed_value,REFERENCE_REL);
+    const detail:Record<string,unknown>={our_unit:ours.unit,our_run_id:ours.run_id};
+    const beyond=(extra:Record<string,unknown>)=>{c=rep({result:'beyond_unexplained'},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,{...detail,...extra});if(!s.canary)result.beyond_unexplained++;};
+    if(ours.unit!==s.parsed_unit)beyond({reason:'unit_mismatch',their_unit:s.parsed_unit});   // never within, never explainable
+    else if(cmpRes.passed){c=rep({result:'within'},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,detail);if(!s.canary)result.within++;}
+    else if(s.canary)beyond({ledger_miss:'canary'});
+    else{
+     const mine=ledger.filter(e=>e.sample_id===s.sample_id);
+     const misses=mine.map(e=>ledgerMiss(e,ours.value_text,s.parsed_value!,ours.run_id));
+     const hit=misses.indexOf(null);
+     if(hit>=0){c=rep({result:'beyond_explained',ledger_ids:[s.sample_id]},ours.value_text,cmpRes.absDiff,cmpRes.relDiff,{...detail,ledger_id:s.sample_id});result.beyond_explained++;}
+     else beyond({ledger_miss:misses[0]??'no_entry'});
+    }
+   }
+  }catch(e){
+   c=rep({result:'read_error',reason:'read_failed'},null,null,null,{error:e instanceof Error?e.message.slice(0,200):'read_failed'});
+   if(!s.canary)result.read_error++;
   }
   cases.push(c);
   if(!s.canary){counted.push(c);result.total++;}
@@ -128,21 +151,22 @@ export async function evaluateReference(samples:ReferenceSample[],ledger:Referen
 
 /** §3.2 summary from validated counts: within + beyond_explained → pass, beyond_unexplained → unexplained_diff, unavailable → skipped,
  *  missing → coverage.missing_required. Equals reduce.ts::reduceForKind over the same cases (reduce.test.ts). */
-export function referenceSummary(raw:unknown,thresholds:Thresholds):Summary{
+export function referenceSummary(raw:unknown,thresholds:Thresholds=REFERENCE_THRESHOLDS):Summary{
+ if(canonicalJson(thresholds)!==canonicalJson(REFERENCE_THRESHOLDS))throw new EvalError('reference_result_schema','reference_regression thresholds are fixed (REFERENCE_THRESHOLDS)',{thresholds});
  const r=parseReferenceResult(raw);
  const base:Omit<Summary,'gate'>={population:r.total,required:r.total,
   correctness:{pass:r.within+r.beyond_explained,fail:0,unit_mismatch:0,provenance_incomplete:0,unexplained_diff:r.beyond_unexplained},
   coverage:{evaluated:r.within+r.beyond_explained+r.beyond_unexplained,evaluated_optional:0,missing_required:r.missing,missing_optional:0,not_visible:0,skipped:r.unavailable},
-  execution:{read_error:0,truncated:0,subset:false},thresholds,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},evidence_class:'comparison',reconciliations_truncated:false};
+  execution:{read_error:r.read_error,truncated:0,subset:false},thresholds,gold:{...READY_GOLD},evidence_class:'comparison',reconciliations_truncated:false};
  return {...base,gate:gateOf(base)};
 }
 
 export type ReferenceSummarySink=Pick<EvalStore,'finishRun'>;
 /** The only write path of reference_regression: validate, build the counts-only summary, finish the run. */
-export function referenceSummaryWriter(sink:ReferenceSummarySink,opts:{thresholds:Thresholds;now():Date}){
+export function referenceSummaryWriter(sink:ReferenceSummarySink,opts:{thresholds?:Thresholds;now():Date}){
  return {
   async writeReferenceSummary(run_id:string,result:unknown):Promise<Summary>{
-   const summary=referenceSummary(result,opts.thresholds);
+   const summary=referenceSummary(result,opts.thresholds??REFERENCE_THRESHOLDS);
    await sink.finishRun(run_id,statusOfGate(summary.gate),summary,opts.now().toISOString());
    return summary;
   },

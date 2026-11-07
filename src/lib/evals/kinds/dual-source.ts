@@ -17,17 +17,23 @@
 import {compareWithinTolerance} from '../compare';
 import {EvalError} from '../errors';
 import type {CaseOutcome,CaseReport,EvalModule,EvidenceClass,SummaryContext} from '../types';
+import {canonicalJson} from '../canonical-json';
+import {READY_GOLD,ZERO_FAIL_THRESHOLDS} from '../summary';
+import {F6_PAIRS} from './pairs';
 import {writeLikeProperties} from './read-only';
 
 export type Independence='independent_publication'|'same_upstream_independent_extraction'|'same_feed';
-export interface PairRegistration{pair_id:string;module:EvalModule;left:{source:string;upstream:string};right:{source:string;upstream:string};independence:Independence;tolerance:{rel:string}}
+/** §5.5 key scope: the observation keys a pair may contain (empty list = unconstrained for that field is NOT allowed; omit `scope` to skip the check). */
+export interface PairScope{concepts:string[];durations:string[];units:string[];consolidations:string[]}
+export interface PairRegistration{pair_id:string;module:EvalModule;left:{source:string;upstream:string};right:{source:string;upstream:string};independence:Independence;tolerance:{rel:string};scope?:PairScope}
 export interface ObservationKey{issuer:string;concept:string;period_start:string|null;period_end:string;duration:string;consolidation:string;unit:string}
 export interface ObservationSide{fact_id:string;value_text:string;source_ref:string;raw_hash:string;available_date:string}
 export interface Disposition{quarantine_id:string;natural_key:string;status:string;chosen_fact_ids?:string[]}
 export interface PairObservation{key:ObservationKey;left:ObservationSide|null;right:ObservationSide|null;upstream_outcome:string;disposition?:Disposition}
-/** Read-only by contract: runDualSource refuses a source exposing insert/update/upsert/store/delete/rpc-like members. */
+/** Read-only by contract: runDualSource refuses a source exposing insert/update/upsert/store/delete/rpc-like members.
+ *  F6 owns the registrations (kinds/pairs.ts); a source may only echo one, and an echo that differs is gold_invalid. */
 export interface PairSource{
- registration(pairId:string):Promise<PairRegistration|null>;
+ registration?(pairId:string):Promise<PairRegistration|null>;
  observations(pairId:string):Promise<{rows:PairObservation[];truncated:boolean}>;
 }
 export interface DualSourceResult{cases:CaseReport[];evidenceClass:EvidenceClass;trend:{pass:number;fail:number}}
@@ -59,6 +65,7 @@ export function dispositionHandles(d:Disposition|undefined,key:ObservationKey,us
  if(d.chosen_fact_ids!==undefined&&!d.chosen_fact_ids.some(id=>used.includes(id)))return {handled:false,why:'chosen_fact_ids'};
  return {handled:true};
 }
+const inScope=(r:PairRegistration,k:ObservationKey)=>!r.scope||(r.scope.concepts.includes(k.concept)&&r.scope.durations.includes(k.duration)&&r.scope.units.includes(k.unit)&&r.scope.consolidations.includes(k.consolidation));
 function validateRegistration(r:PairRegistration):void{
  const bad=(field:string):never=>{throw new EvalError('gold_invalid',`pair registration ${r.pair_id||'?'}: ${field}`,{pair_id:r.pair_id,field});};
  if(typeof r.pair_id!=='string'||r.pair_id.length===0)bad('pair_id');
@@ -78,6 +85,7 @@ export function evaluateDualSource(reg:PairRegistration,rows:PairObservation[],o
  for(const [k,g] of [...groups.entries()].sort((a,b)=>cmp(a[0],b[0]))){
   const id=`${reg.pair_id}:${k}`;const o=g[0];
   const detail:Record<string,unknown>={pair_id:reg.pair_id,key:o.key,upstream_outcome:o.upstream_outcome,left:sideDetail(o.left),right:sideDetail(o.right)};
+  if(!inScope(reg,o.key)){cases.push(rep(id,{result:'read_error',reason:'read_failed'},null,null,null,null,{...detail,reason:'out_of_scope'}));continue;}
   if(g.length>1){cases.push(rep(id,{result:'fail',reason:'ambiguous'},null,null,null,null,{...detail,observations:g.length}));continue;}
   const mapped=upstreamOutcomeOf(o.upstream_outcome);
   if(mapped){cases.push(rep(id,mapped,o.left?.value_text??null,o.right?.value_text??null,null,null,detail));continue;}
@@ -96,14 +104,16 @@ export function evaluateDualSource(reg:PairRegistration,rows:PairObservation[],o
  return {cases,evidenceClass:reg.independence==='same_feed'?'adapter_check':'truth',trend};
 }
 
-export async function runDualSource(source:PairSource,pairId:string):Promise<DualSourceResult>{
+export async function runDualSource(source:PairSource,pairId:string,registrations:readonly PairRegistration[]=F6_PAIRS):Promise<DualSourceResult>{
  const w=writeLikeProperties(source);
- if(w.length>0)throw new Error(`pair_source_write_capable: ${w.join(', ')}`);
- const reg=await source.registration(pairId);
- if(!reg)throw new EvalError('gold_invalid',`pair not registered: ${pairId}`,{pair_id:pairId});
+ if(w.length>0)throw new EvalError('gold_invalid',`pair_source_write_capable: ${w.join(', ')}`,{reason:'pair_source_write_capable',properties:w});
+ const reg=registrations.find(r=>r.pair_id===pairId);
+ if(!reg)throw new EvalError('gold_invalid',`pair not registered in F6: ${pairId}`,{pair_id:pairId});
+ const echoed=source.registration?await source.registration(pairId):null;
+ if(echoed&&canonicalJson(echoed)!==canonicalJson(reg))throw new EvalError('gold_invalid',`pair source registration differs from the F6 registration: ${pairId}`,{pair_id:pairId,reason:'registration_mismatch'});
  const {rows,truncated}=await source.observations(pairId);
  return evaluateDualSource(reg,rows,{truncated});
 }
 
 export const dualSourceSummaryContext=(r:Pick<DualSourceResult,'evidenceClass'>):SummaryContext=>({
- thresholds:{max_fail:0,min_coverage_optional:'0.95'},gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},subset:false,evidenceClass:r.evidenceClass});
+ thresholds:{...ZERO_FAIL_THRESHOLDS},gold:{...READY_GOLD},subset:false,evidenceClass:r.evidenceClass});

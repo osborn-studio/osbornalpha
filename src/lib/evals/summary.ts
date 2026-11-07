@@ -14,7 +14,7 @@
 //   one place that computes it (pending = non-retracted cases with pending=true, provenance_gaps =
 //   non-retracted cases with ≥ 1 gap). skipped(pending) itself only counts in coverage.skipped.
 import {parseDecimalParts} from './compare';
-import type {CaseOutcome,CaseReport,Gate,GoldSet,Summary,SummaryContext} from './types';
+import type {CaseOutcome,CaseReport,Gate,GoldSet,Summary,SummaryContext,Thresholds} from './types';
 
 export type Bucket='pass'|'fail'|'unit_mismatch'|'provenance_incomplete'|'unexplained_diff'|'missing'|'not_visible'|'skipped'|'read_error';
 const CORRECTNESS:ReadonlySet<Bucket>=new Set(['pass','fail','unit_mismatch','provenance_incomplete','unexplained_diff']);
@@ -94,3 +94,7 @@ export function gateOf(s:Omit<Summary,'gate'>):Gate{
 }
 export const exitCodeOf=(g:Gate):0|1|3=>g==='pass'?0:g==='fail'?1:3;
 export const statusOfGate=(g:Gate):'passed'|'failed'|'incomplete'=>g==='pass'?'passed':g==='fail'?'failed':'incomplete';
+
+/** Shared literals: a plain f6 gold block with nothing pending, and the zero-failure / 95% optional-coverage thresholds (replay, reference, dual_source). */
+export const READY_GOLD:Summary['gold']={format:'f6',ready:true,pending:0,provenance_gaps:0};
+export const ZERO_FAIL_THRESHOLDS:Thresholds={max_fail:0,min_coverage_optional:'0.95'};

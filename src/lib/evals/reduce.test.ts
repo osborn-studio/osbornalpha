@@ -4,6 +4,7 @@ import {CANARY_SERIES,CANARY_VALUE,REFERENCE_THRESHOLDS,evaluateReference,refere
 import type {ReferenceSample} from './kinds/reference';
 import {gcase,gset} from './kinds/official-test-support';
 import {reduceForKind} from './reduce';
+import type {PairRegistration} from './kinds/dual-source';
 import type {CaseReport,CaseOutcome} from './types';
 
 const rep=(case_id:string,outcome:CaseOutcome={result:'pass'},required=true):CaseReport=>({case_id,required,outcome,left:'1',right:'1',abs_diff:'0',rel_diff:'0',tolerance:'0',provenance:null,detail:{}});
@@ -35,5 +36,23 @@ describe('reduceForKind (P1-2, P2-2)',()=>{
   expect(r.problems).toEqual([]);
   expect(r.summary).toEqual(referenceSummary(run.result,REFERENCE_THRESHOLDS));
   expect(r.summary).toMatchObject({population:2,gate:'pass',evidence_class:'comparison'});
+ });
+
+ it('reference: beyond_unexplained, beyond_explained, missing, unavailable and read_error runs reduce to referenceSummary of the same run',async()=>{
+  const ts=(id:string,series:string,v:string|null='100')=>sample({sample_id:id,parsed_value:v,our_target:{series_id:series,period_end:'2026-09-30',which:'latest'}});
+  const samples={schema_version:1 as const,samples:[ts('ok','a'),ts('far','b','200'),ts('exp','c','150'),ts('gone','d'),ts('na','e',null),ts('err','f')]};
+  const ledger=[{sample_id:'exp',their_value:'150',our_value:'100',our_run_id:'r1',reason_code:'aggregation_method' as const,evidence:{type:'computation' as const,ref:'x'},added_by:'claude-code',approved_by:'owner',approval_ref:'pr#1'}];
+  const run=await evaluateReference(samples.samples,ledger,{today:'2026-11-06',evaluatorCodeVersion:'d'.repeat(40),reader:{value:async t=>{if(t.series_id==='d')return null;if(t.series_id==='f')throw new Error('x');return {value_text:'100',unit:'index',run_id:'r1'};}}});
+  expect(run.result).toEqual({total:6,within:1,beyond_explained:1,beyond_unexplained:1,unavailable:1,missing:1,read_error:1});
+  const r=reduceForKind('reference_regression',run.cases,{kind:'reference_regression',samples});
+  expect(r.problems).toEqual([]);
+  expect(r.summary).toEqual(referenceSummary(run.result,REFERENCE_THRESHOLDS));
+ });
+ it('dual_source: the evidence class comes from the F6 registration, never a default; missing registration throws',()=>{
+  const dset=gset([gcase({case_id:'a'})]);
+  const reg=(independence:PairRegistration['independence']):PairRegistration=>({pair_id:'p',module:'facts',left:{source:'a',upstream:'u'},right:{source:'b',upstream:'v'},independence,tolerance:{rel:'0.005'}});
+  expect(reduceForKind('dual_source',[rep('a')],{kind:'dual_source',set:dset},{registration:reg('same_feed')}).summary.evidence_class).toBe('adapter_check');
+  expect(reduceForKind('dual_source',[rep('a')],{kind:'dual_source',set:dset},{registration:reg('independent_publication')}).summary.evidence_class).toBe('truth');
+  expect(()=>reduceForKind('dual_source',[rep('a')],{kind:'dual_source',set:dset})).toThrow(/registration/);
  });
 });

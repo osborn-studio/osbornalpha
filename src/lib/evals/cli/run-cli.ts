@@ -138,8 +138,8 @@ export async function runCli(argv:string[],io:CliIo,deps:CliDeps=defaultCliDeps(
  catch(e){if(e instanceof UsageError){io.stderr(`${e.message}\n${USAGE}`);return 2;}throw e;}
  let run:Pick<RunDeps,'store'|'close'>|null=null;
  try{
+  assertKindEnabled(args.kind);          // kinds/registry.ts is the one enablement table (Task 14); also gates --resume
   if(args.resume!==undefined)return await resumeRun(args.resume,args,io,deps);
-  assertKindEnabled(args.kind);          // kinds/registry.ts is the one enablement table (Task 14)
   const runner=KIND_RUNNERS[args.kind];
   if(!runner)throw new EvalError('kind_not_enabled',`kind ${args.kind} is not enabled in this build`,{kind:args.kind});
   const started=await runner(args,deps);
