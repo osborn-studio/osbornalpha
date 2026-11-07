@@ -82,7 +82,7 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
 
   await admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','missing')`,[d]);
   const f2=newDs();
-  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
+  await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'hourly','missing')`,[f2])).rejects.toThrow(/dq_freshness_expected_cadence_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status,consecutive_errors) values($1,'daily','error',-1)`,[f2])).rejects.toThrow(/dq_freshness_consecutive_errors_check/);
   await expect(admin.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'daily','fresh')`,[f2])).rejects.toThrow(/dq_freshness_ok_requires_last_ok/);
  });

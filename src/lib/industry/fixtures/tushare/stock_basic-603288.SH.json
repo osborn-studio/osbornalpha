@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "603288.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "f19c7494744fc5aac7ca5b6d6d95bc5c2caed935b50144308a626146fd23a5d9",
+ "request_id": "7653bcdd-a87e-4a1a-bc80-6090d6b771b6",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "603288.SH",
+    "603288",
+    "海天味业",
+    "广东",
+    "食品",
+    "佛山市海天调味食品股份有限公司",
+    "Foshan Haitian Flavouring and Food Company Ltd.",
+    "HTWY",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20140211",
+    null,
+    "H",
+    "庞康,程雪,管江华,陈军阳,文志州,廖长辉",
+    "自然人"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

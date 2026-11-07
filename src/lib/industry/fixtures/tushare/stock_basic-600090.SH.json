@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "600090.SH",
+   "list_status": "D"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "3c08a2b77465975eac8d01d3c55ea5fdc74bee29458c5d737d88ad9eaeedcb6f",
+ "request_id": "d09828cc-7ab9-447b-82d4-9a90c0492be6",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "600090.SH",
+    "600090",
+    "退济堂(退)",
+    null,
+    null,
+    "新疆同济堂健康产业股份有限公司",
+    "Xin Jiang Ready Health Industry Co.,Ltd.",
+    "tsjt",
+    "主板",
+    "SSE",
+    "CNY",
+    "D",
+    "19970616",
+    "20220707",
+    "N",
+    "四川蓝剑投资管理有限公司",
+    "民营企业"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}
