@@ -27,7 +27,15 @@ export function canonicalJson(v:unknown):string{
    return String(v);   // String(-0) === '0'
   case 'string':return str(v);
   case 'object':{
-   if(Array.isArray(v))return '['+v.map(x=>{if(x===undefined)throw new CanonicalJsonError('undefined_in_array');return canonicalJson(x);}).join(',')+']';
+   if(Array.isArray(v)){
+    const parts:string[]=[];
+    for(let i=0;i<v.length;i++){   // index loop: map() would skip sparse holes
+     const x:unknown=v[i];
+     if(x===undefined)throw new CanonicalJsonError('undefined_in_array');
+     parts.push(canonicalJson(x));
+    }
+    return '['+parts.join(',')+']';
+   }
    const proto=Object.getPrototypeOf(v);
    if(proto!==Object.prototype&&proto!==null)throw new CanonicalJsonError('not_a_plain_object');
    const o=v as Record<string,unknown>;

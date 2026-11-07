@@ -25,6 +25,8 @@ describe('canonicalJson',()=>{
  it('omits undefined object values, refuses undefined array items, NUL, lone surrogates and non-plain objects',()=>{
   expect(canonicalJson({a:1,b:undefined})).toBe('{"a":1}');
   expect(()=>canonicalJson([undefined])).toThrow(CanonicalJsonError);
+  expect(()=>canonicalJson(Array(1))).toThrow(CanonicalJsonError);
+  expect(()=>canonicalJson([1,,3])).toThrow(CanonicalJsonError);
   expect(()=>canonicalJson('a\u0000b')).toThrow(CanonicalJsonError);
   expect(()=>canonicalJson({['\uD800']:1})).toThrow(CanonicalJsonError);
   expect(()=>canonicalJson('\uDC00x')).toThrow(CanonicalJsonError);

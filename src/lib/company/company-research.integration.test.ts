@@ -14,6 +14,7 @@ import {canonicalJson,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261112090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261112091000_company_research_functions.sql';
+const FENCE_MIGRATION='supabase/migrations/20261112092000_company_evidence_fence.sql';
 const TABLES=['issuer_events','issuer_coverage','company_watches','company_event_reads','company_digest_state','company_fact_evidence'];
 const SERVICE_ONLY=['issuer_events','company_digest_state','company_fact_evidence'];
 const NO_DIRECT_WRITE=['issuer_events','issuer_coverage','company_digest_state','company_fact_evidence'];
@@ -376,7 +377,7 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   {sig:'public.begin_company_digest_attempt(uuid,text,timestamptz)',definer:true,roles:['service_role']},
   {sig:'public.replace_company_digest(uuid,text,uuid,bigint,uuid,bigint,boolean,jsonb,jsonb)',definer:true,roles:['service_role']},
   {sig:'public.mark_company_digest_failed(uuid,text,bigint,timestamptz)',definer:true,roles:['service_role']},
-  {sig:'public.replace_company_fact_evidence(uuid,text,jsonb)',definer:true,roles:['service_role']},
+  {sig:'public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)',definer:true,roles:['service_role']},
   {sig:'public.company_digest_due(timestamptz,int,text)',definer:true,roles:['service_role']},
   {sig:'public.company_sweep_due(timestamptz,timestamptz,int,text)',definer:true,roles:['service_role']},
   {sig:'public.company_digest_backlog()',definer:true,roles:['service_role']},
@@ -386,6 +387,14 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   {sig:'public.company_canonical_json(jsonb)',definer:false,roles:[]},
   {sig:'public.company_ev_check(uuid,text,jsonb,date)',definer:false,roles:[]},
   {sig:'public.company_cov_check(jsonb)',definer:false,roles:[]},
+  {sig:'public.company_ev_keys(jsonb,text[],text[],text)',definer:false,roles:[]},
+  {sig:'public.company_ev_text(jsonb,boolean,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_date(jsonb,boolean,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_int(jsonb,boolean,bigint,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_uuid(jsonb,boolean,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_fact(uuid,text,jsonb,date,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_filing(uuid,text,jsonb,date,text)',definer:false,roles:[]},
+  {sig:'public.company_ev_side(uuid,text,jsonb,date,text)',definer:false,roles:[]},
   {sig:'public.company_evidence_check(uuid,text,jsonb)',definer:false,roles:[]},
  ];
 
@@ -398,12 +407,15 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   }
   const s=await fx.stream([{facts:[{}]}]);
   const calls=[`select public.begin_company_digest_attempt('${s.iss}','US',now())`,`select public.replace_company_digest('${s.iss}','US',gen_random_uuid(),1,gen_random_uuid(),1,false,'[]','{}')`,
-   `select public.mark_company_digest_failed('${s.iss}','US',1,now())`,`select public.replace_company_fact_evidence('${s.iss}','US','[]')`,`select public.company_digest_due(now(),10)`,`select public.company_digest_backlog()`];
+   `select public.mark_company_digest_failed('${s.iss}','US',1,now())`,`select public.replace_company_fact_evidence('${s.iss}','US',1,1,'[]')`,`select public.company_digest_due(now(),10)`,`select public.company_digest_backlog()`];
   for(const role of ['anon','authenticated'] as const)for(const sql of calls)
    expect({role,sql,msg:(await fails(inTx(admin,{role},tx=>tx.c.query(sql)))).message}).toEqual({role,sql,msg:expect.stringMatching(/permission denied/)});
   await expect(replayMigration(admin,readFileSync(TABLES_MIGRATION,'utf8'))).resolves.toBeUndefined();
-  await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
-  await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  for(let i=0;i<2;i++){   // replay in lock order: the fence migration supersedes the 3-arg evidence writer and the evidence check
+   await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  }
+  expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
  });
 
  it('company_canonical_json is byte-identical to canonicalJson; replace stores eventIdOf / payloadHashOf',async()=>{
@@ -505,7 +517,12 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   const pe=await periodEvent(f.filingIds[0],[f.factIds[0][0],f.factIds[1][0]]);
   expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[pe]}))).detail).toMatch(/^payload\.headline\.net_income_parent\.factId: fact not visible/);
   expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[await filingEvent(f.filingIds[1])]}))).detail).toMatch(/^occurred_on: after today/);
-  expect((await code(replace({iss:f.iss,batch:b,attempt:fa,rev:1,events:[{...pe,payload:{...pe.payload,ambiguousUnits:['revenue']}}]}))).detail).toMatch(/^payload\.(headline|ambiguousUnits)/);
+  // ambiguousUnits, isolated: a visible headline-only event (revenue only) with each bad ambiguousUnits
+  const g=await fx.stream([{facts:[{concept:'revenue',value:'5'}]}]);const ga=await begin(g.iss);
+  const gpe=await periodEvent(g.filingIds[0],[g.factIds[0][0]]);
+  expect((await replace({iss:g.iss,batch:b,attempt:ga,rev:1,events:[gpe]})).upserted).toBe(1);   // the headline-only event itself is valid
+  for(const [name,units] of [['in headline',['revenue']],['duplicate',['net_income_parent','net_income_parent']],['not a headline concept',['gross_profit']]] as [string,string[]][])
+   expect({name,detail:(await code(replace({iss:g.iss,batch:b,attempt:ga,rev:1,events:[{...gpe,payload:{...gpe.payload,ambiguousUnits:units}}]}))).detail}).toEqual({name,detail:expect.stringMatching(/^payload\.ambiguousUnits/)});
  });
 
  it('rebuilds: a late intermediate disclosure changes one edge and adds one; omitted events are tombstoned and revive with first_seen_at kept; meta is not hashed; p_sweep writes swept_at',async()=>{
@@ -565,7 +582,7 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(((await fx.one(`select public.company_digest_due(now(),100000,'CN') v`)) as Due[]).filter(x=>mine.has(x.issuerId))).toEqual([]);
   expect(((await fx.one(`select public.company_digest_due(now(),100000,'US') v`)) as Due[]).filter(x=>mine.has(x.issuerId)).length).toBeGreaterThan(0);
   const sweep=async(older:string,at:string)=>((await fx.one(`select public.company_sweep_due($1::timestamptz,$2::timestamptz,100000) v`,[older,at])) as Due[]).filter(x=>mine.has(x.issuerId)).map(x=>x.issuerId);
-  expect(await sweep(iso(0),iso(0))).toEqual([behind1.iss,behind2.iss,current.iss].sort());     // all never swept: issuer order
+  expect(await sweep(iso(0),iso(60_000))).toEqual([behind1.iss,behind2.iss,current.iss].sort());     // all never swept: issuer order
   const ca2=await begin(current.iss);await replace({iss:current.iss,batch:b,attempt:ca2,rev:1,sweep:true,events:[]});
   expect(await sweep(iso(-3600_000),iso(60_000))).toEqual([behind1.iss,behind2.iss].sort());   // at: a minute ahead (the sweep replace set next_attempt_at = its now())
   expect(await sweep(iso(3600_000),iso(60_000))).toEqual([...[behind1.iss,behind2.iss].sort(),current.iss]);   // nulls first, then swept_at
@@ -682,7 +699,10 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   const row=(factId:string,i:number,o:Record<string,unknown>={})=>({fact_id:factId,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`edgar/${s.iss}/${sha}.json`,hash_locator:loc(i),
    json_pointer:`/facts/us-gaap/Revenues/units/USD/${i}`,field:null,source:'edgar',api:null,url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',params:null,
    captured_at:'2024-02-02T00:00:00Z',http_status:200,page:null,index_version:'company-evidence/1',...o});
-  const put=(rows:unknown[],iss=s.iss)=>fx.one(`select public.replace_company_fact_evidence($1,'US',$2::jsonb) v`,[iss,JSON.stringify(rows)]);
+  const put=async(rows:unknown[],iss=s.iss,o:{attempt?:number;rev?:number}={})=>{   // default: a fresh attempt on the current state_rev
+   const attempt=o.attempt??await begin(iss).catch(()=>1);const rev=o.rev??await fx.rev(iss,'US').catch(()=>1);
+   return fx.one(`select public.replace_company_fact_evidence($1,'US',$2,$3,$4::jsonb) v`,[iss,attempt,rev,JSON.stringify(rows)]);
+  };
   expect(await put([row(f0,0),row(f1,1),row(f2,2)])).toEqual({upserted:3,deleted:0});
   expect(await put([row(f0,0),row(f1,1)])).toEqual({upserted:2,deleted:1});
   expect(await code(put([],randomUUID()))).toMatchObject({message:'unknown_stream'});
@@ -697,6 +717,9 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
    ['duplicate fact',[row(f0,0),row(f0,0)],/^rows: duplicate fact_id/],
    ['http_status',[row(f0,0,{http_status:42})],/^http_status/],
    ['captured_at',[row(f0,0,{captured_at:'soon'})],/^captured_at/],
+   ['captured_at now',[row(f0,0,{captured_at:'now'})],/^captured_at/],
+   ['nested token in params',[row(f0,0,{params:{x:{token:'y'}}})],/^params: must not carry a token/],
+   ['nested token in params array',[row(f0,0,{params:{x:[{a:{Api_Token:'y'}}]}})],/^params: must not carry a token/],
   ];
   for(const [name,rows,re] of badRows)expect({name,...await code(put(rows))}).toEqual({name,message:'invalid_evidence',code:'22023',detail:expect.stringMatching(re)});
   const read=(ids:string[],role:Role='anon')=>inTx(admin,{role},async tx=>(await tx.c.query(`select public.company_fact_evidence($1::uuid[]) v`,[ids])).rows[0].v as Record<string,Record<string,unknown>>);
@@ -710,6 +733,27 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await read([f0],'service_role')).toEqual({});
   expect(await code(read(Array.from({length:101},()=>randomUUID())))).toMatchObject({message:'invalid_read',code:'22023'});
   expect(await read([])).toEqual({});
+ });
+
+ it('evidence writer fence: an older attempt or a moved state_rev is refused and leaves the newer attempt\'s evidence intact',async()=>{
+  const sha=hex('fence-snapshot');const loc=(i:number)=>`us-gaap/Revenues/USD/f${i}`;const rh=(i:number)=>hex(`${sha}\n${loc(i)}`);
+  const s=await fx.stream([{facts:[{concept:'revenue',raw_hash:rh(0)},{concept:'net_income_parent',raw_hash:rh(1)}]}]);const b=await fx.batch();
+  const [f0,f1]=s.factIds[0];
+  const row=(id:string,i:number)=>({fact_id:id,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`edgar/${s.iss}/${sha}.json`,hash_locator:loc(i),json_pointer:`/facts/x/${i}`,field:null,source:'edgar',api:null,url:null,params:null,captured_at:'2024-02-02T00:00:00Z',http_status:200,page:null,index_version:'company-evidence/1'});
+  const put=(rows:unknown[],attempt:number,rev:number)=>fx.one(`select public.replace_company_fact_evidence($1,'US',$2,$3,$4::jsonb) v`,[s.iss,attempt,rev,JSON.stringify(rows)]);
+  const stored=()=>fx.q(`select fact_id::text id from public.company_fact_evidence where issuer_id=$1 order by 1`,[s.iss]).then(r=>r.map(x=>x.id));
+  const a1=await begin(s.iss);const a2=await begin(s.iss);
+  // attempt 2 materialises and writes its evidence; attempt 1 (older, slow) then tries to replace it
+  await replace({iss:s.iss,batch:b,attempt:a2,rev:1,events:[]});
+  expect(await put([row(f0,0),row(f1,1)],a2,1)).toEqual({upserted:2,deleted:0});
+  expect(await code(put([row(f0,0)],a1,1))).toMatchObject({message:'stale_attempt',code:'P0001'});
+  expect(await stored()).toEqual([f0,f1].sort());
+  // wrong based_on_rev (state_rev moved on, or the caller is ahead)
+  expect(await code(put([row(f0,0)],a2,0))).toMatchObject({message:'stale_computation',code:'55P03'});
+  await fx.publish(s.iss,'US',s.factsBatch,[{available:'2024-05-01',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M'}]}]);
+  expect(await code(put([row(f0,0)],a2,1))).toMatchObject({message:'stale_computation',code:'55P03'});
+  expect(await stored()).toEqual([f0,f1].sort());
+  expect(await put([row(f0,0)],a2,2)).toEqual({upserted:1,deleted:1});   // the current rev with the owning attempt passes
  });
 
  it('company_read_snapshot: read_facts envelope and the stream filings in one statement; ok facts only for every role; counts and citation computed in-statement',async()=>{

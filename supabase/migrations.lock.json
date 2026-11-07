@@ -208,6 +208,10 @@
     {
       "file": "20261112091000_company_research_functions.sql",
       "sha256": "51e81dc139eab901203e2b649836d7ca744cfda46485a1b901a7402f9142346c"
+    },
+    {
+      "file": "20261112092000_company_evidence_fence.sql",
+      "sha256": "7f86cf1d2cfe059259f9daeadf90b4c24d647be157cdba4f99d1b43939c26a5c"
     }
   ]
 }
