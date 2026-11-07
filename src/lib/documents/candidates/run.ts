@@ -19,7 +19,8 @@
 //     table_algo_version / code_version equal the candidate's extraction row and whose concepts
 //     contain the candidate's concept → decideCandidate(auto). too_many_approvals stops the phase
 //     (and makes the batch partial/failed: the approvals table needs an owner).
-//  3. promote — see Task 16.
+//  3. promote — runHkFactsSync for every issuer promotionDue(HK_PUB_GEN, limit) selects (spec
+//     §4.11 conditions ab, c, d); each issuer's counts and errors join the batch.
 // Counters: candidates phase fetched = generated candidates, inserted = new rows, duplicates =
 // rows that already existed, quarantined = check findings parked, failed = extractions that failed.
 // dryRun writes nothing (no batch, lease or row): it reports what is due.
@@ -40,10 +41,11 @@ import {buildCheckContext,hkCheckFindings,runHkChecks} from '../hk-facts/checks'
 import {supabaseHkFactsPort} from '../hk-facts/facts-port';
 import type {HkFactsPort} from '../hk-facts/facts-port';
 import {generateHkCandidates} from '../hk-facts/generate';
+import {runHkFactsSync} from '../hk-facts/promote';
 import {FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
-export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto'];
+export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto','promote'];
 export const CANDIDATES_DATASET='documents.candidates';
 export const LEASE_TTL_S=600;
 export const MIN_ITEM_MS=90_000;
@@ -193,7 +195,8 @@ async function dryRun(deps:CandidatesDeps,opts:CandidatesOptions,phases:Set<Cand
   for(const ex of due)extractions.push({...blank(ex),outcome:'due'});
   for(const id of notDue)extractions.push({...blank({extraction_id:id,document_id:null}),code:'not_due'});
  }
- return {batchId:null,status:'dry_run',counts:emptyCounts(),errors:[],extractions,auto:{considered:0,decided:0,stopped:null},promote:[],idle:!extractions.some(e=>e.outcome==='due')};
+ const promote:PromoteSummary[]=phases.has('promote')?(await deps.port.promotionDue(HK_PUB_GEN,opts.limit)).map(d=>({issuerId:d.issuerId,outcome:'skipped' as const,code:'due',counts:emptyCounts()})):[];
+ return {batchId:null,status:'dry_run',counts:emptyCounts(),errors:[],extractions,auto:{considered:0,decided:0,stopped:null},promote,idle:!extractions.some(e=>e.outcome==='due')&&promote.length===0};
 }
 
 export async function runDocumentsCandidates(deps:CandidatesDeps,opts:CandidatesOptions):Promise<CandidatesReceipt>{
@@ -221,8 +224,16 @@ export async function runDocumentsCandidates(deps:CandidatesDeps,opts:Candidates
    catch(e){errors.push({code:'auto_failed',message:errMsg(e)});}
   }
   if(phases.has('promote')){
-   // Task 16 replaces this block with promotionDue → runHkFactsSync.
-   errors.push({code:'skipped_summary',key:'promote',message:JSON.stringify({not_wired:1})});
+   try{
+    if(remainingMs(deps)<MIN_ITEM_MS)errors.push({code:'deadline_hit',message:JSON.stringify({promote_not_started:1})});
+    else{
+     const due=await deps.port.promotionDue(HK_PUB_GEN,opts.limit);
+     if(due.length>0)idle=false;
+     for(const x of await runHkFactsSync(deps,{issuerIds:due.map(d=>d.issuerId),batchId,triggeredBy:opts.triggeredBy})){
+      promote.push(x);for(const k of COUNTERS)counts[k]+=x.counts[k];errors.push(...x.errors);
+     }
+    }
+   }catch(e){errors.push({code:'promote_failed',message:errMsg(e)});}
   }
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
   await recordAttempt(deps.tables,CANDIDATES_DATASET,{ok:status!=='failed',cadence:'daily',now:deps.now(),

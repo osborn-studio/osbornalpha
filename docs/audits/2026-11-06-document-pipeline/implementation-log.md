@@ -18,3 +18,4 @@
 - Task 13：迁移二 fact_citations/filing_documents + HK 函数（publish_hk_run 含 p_expected_rev/p_zero_output、renew_hk_fact_lease、unit_currency 引用角色）；HkFactsPort（supabase/memory/pg）；约束扩展按落地名；规格二函数定义哈希不变；迁移二未锁（锁由指挥在复审后加）；Codex 审计：待审（2026-11-06）
 - Task 14：港股候选生成 hk-facts/{exact,locate,period,scale,labels,values,generate}；合成夹具 5 份（构造器 + 漂移检查，含 0268 形双语中期 interim-bilingual）；表头年份按 items x 定位；适配已提交表形状（换行标签多 col-0 单元格、独立标签行、尾部双语标签）；F3_INFO_CODES（INFO_CODES 被规格二测试钉死，isInfoError 合并判定）；Codex 审计：待审
 - Task 15：HK 确定性检查（精确十进制）+ 候选运行阶段 candidates/auto + candidates 脚本；Codex 审计：待审（2026-11-06）
+- Task 16：runHkFactsSync（§7.7 第 0–5 步，仅经 publish_hk_run，暂存的值/标签/期间引用集合与候选声明一致）+ 候选阶段 3（promotionDue）+ documents-candidates cron（DOCUMENTS_CANDIDATES_ENABLED 关闭时认证后 200 skipped）+ promote-hk 脚本；Codex 审计：待审（2026-11-06）

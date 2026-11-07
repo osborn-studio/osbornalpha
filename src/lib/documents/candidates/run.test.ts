@@ -9,7 +9,7 @@ import type {CandidateInsert,DocumentRow,ExtractionRow,FinancialFactPayload,Page
 import {HEARTBEAT_MS} from '../lease';
 import {CandidatesRunError,runDocumentsCandidates} from './run';
 import type {CandidatesOptions} from './run';
-import {ADMIN,CODE,FY25,candidatesDepsOf,citeSeedFact,hkHarness,naturalKeyOf,seedCandidateInsert,seedHkCandidates,seedHkExtraction,snapshotOf} from '../hk-facts/test-support';
+import {ADMIN,CODE,FY25,ISSUER,candidatesDepsOf,citeSeedFact,hkHarness,naturalKeyOf,seedCandidateInsert,seedHkCandidates,seedHkExtraction,snapshotOf} from '../hk-facts/test-support';
 import type {CiteAt,HkHarness,SeedFact,SeededExtraction} from '../hk-facts/test-support';
 
 /** The generator stand-in: candidates for the seeded facts of the extraction, cited through ctx.cite, plus one info code. */
@@ -220,5 +220,35 @@ describe('runDocumentsCandidates — auto phase',()=>{
   expect(r.errors).toContainEqual({code:'too_many_approvals',key:HK_EXTRACTOR_REF});
   expect(r.status).not.toBe('success');
   expect(h.docs.candidates().every(c=>c.status==='candidate')).toBe(true);
+ });
+});
+
+describe('runDocumentsCandidates — promote phase',()=>{
+ const approval=(h:HkHarness,over:Record<string,unknown>={})=>h.docs.insertApproval({extractor_ref:HK_EXTRACTOR_REF,extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:CODE,
+  concepts:['revenue','gross_profit'],gold_sha256:'a'.repeat(64),precision:'0.97',recall:'0.96',report_path:'docs/audits/2026-11-06-document-pipeline/eval-hk-facts.json',approved_by:ADMIN,...over});
+ it('auto-decided candidates are published within the same run (spec §12 example 8)',async()=>{
+  const h=hkHarness();await pending(h);await approval(h);
+  const r=await run(h,{phases:undefined});                                 // default: all three phases
+  expect(r.status).toBe('success');
+  expect(r.auto.decided).toBe(2);
+  expect(r.promote).toEqual([expect.objectContaining({issuerId:ISSUER,outcome:'published'})]);
+  expect(h.facts.facts().filter(f=>f.status==='ok').map(f=>f.concept).sort()).toEqual(['gross_profit','revenue']);
+  expect(h.docs.candidates().filter(c=>c.status==='promoted').every(c=>c.decision_kind==='auto')).toBe(true);
+ });
+ it('an approval below 0.95 never lands (ea_threshold)',async()=>{
+  const h=hkHarness();
+  await expect(approval(h,{precision:'0.94'})).rejects.toThrow();
+  await expect(approval(h,{recall:'0.949'})).rejects.toThrow();
+ });
+ it('lists due issuers in a dry run, publishes them, and is idle once nothing is due',async()=>{
+  const h=hkHarness();await pending(h);await run(h);
+  await h.docs.decideCandidate(h.docs.candidates().find(c=>c.natural_key===naturalKeyOf(FY25[0]))!.candidate_id,{kind:'human',decided_by:ADMIN,status:'confirmed'});
+  const dry=await run(h,{dryRun:true,phases:['promote']});
+  expect(dry.promote).toEqual([{issuerId:ISSUER,outcome:'skipped',code:'due',counts:expect.any(Object)}]);
+  const r=await run(h,{phases:['promote']});
+  expect(r.promote).toEqual([expect.objectContaining({issuerId:ISSUER,outcome:'published'})]);
+  expect(r.counts).toMatchObject({fetched:1,inserted:1});
+  const again=await run(h,{phases:['promote']});
+  expect(again.promote).toEqual([]);expect(again.idle).toBe(true);
  });
 });
