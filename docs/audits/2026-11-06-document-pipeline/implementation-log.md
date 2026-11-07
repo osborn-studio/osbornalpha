@@ -14,3 +14,4 @@
 - Task 10：引用 citations（cite/verify/view）、抽取调度 extract/run、租约心跳 lease.ts、esbuild 打包的抽取 worker（isolate/worker-job/worker-entry）、门控的 documents-extract cron、extract/record-fixture 脚本与 next.config 追踪；Codex 审计：待审（2026-11-06）
 - Task 6 修复：来源适配器主机白名单/重定向≤3 跳/UA 分流、巨潮与 HKEX 总数完整性（HKEX t1code 仍为 -2：40000 等代码离线无法确认）、EDGAR 列校验与 forms 追加、串行限速、Retry-After、20MB 列表上限；HKEX 英文路径在指挥步骤 b 录制真实 lang=en 页面前仍未核实（测试夹具由中文页派生）；Codex 审计：待审（2026-11-06）
 - Task 11：公共读接口（列表 asOf/versions/cursor、doc、pages+layout、file 签名链接、citations）、管理重处理、documents i18n（F3 块）；Codex 审计：待审（2026-11-06）
+- Task 12：授权上传 ingestUpload（仅 PDF、licensed/private、内容寻址、UTC+8 available_date）与持有人读取路径 readOwnedDocument（doc/pages/file/citations，先读后审计 document.read，审计失败 500、private, no-store）；Codex 审计：待审（2026-11-06）

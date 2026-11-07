@@ -8,7 +8,8 @@
 // otherwise successCacheControl(now); empty → no-store; anything answered after a session check
 // (owner reads, signed URLs) → 'private, no-store'. Tickers resolve by today's ownership through
 // resolveIssuer, INCLUDING .HK (the facts public-route resolver rejects HK; documents do not).
-// The page/layout body is shared with the owner branch (Task 12), which passes the service db.
+// The page/layout body is shared with the owner branch (Task 12), which passes the service db;
+// ownerReadDeps/ownerDocumentView/auditFailedResponse at the end serve that branch.
 import {getAnonSupabase} from '../supabase/anon';
 import {getAdminSupabase} from '../supabase/admin';
 import {supabaseTableClient} from '../db/table-client';
@@ -19,6 +20,9 @@ import {QueryError,asOfParam,dateParam,errorResponse,flagParam,intParam,readPara
 import {decodeCursor,supabaseDocumentsDb} from './db';
 import {supabaseObjectStore} from './object-store';
 import {cpLength,sha256Hex} from './extract/pages-json';
+import {audit} from '../research/store';
+import type {ResearchSupabase} from '../research/store';
+import type {OwnerReadDeps} from './upload';
 import {CLASSIFIER_GEN,EXTRACTOR_VERSION,PAGE_LIMIT_MAX} from './types';
 import type {AssetRow,DocClass,DocumentRow,DocumentsDb,ExtractionRow,LayoutLine,LayoutTable,ListedSource,ObjectStore,PagesJson} from './types';
 
@@ -144,3 +148,13 @@ export async function pageDetail(db:DocumentsDb,store:ObjectStore,row:DocumentRo
  if(!pl||pl.text!==page.text||cpLength(pl.text)!==page.char_count)throw new Error('pages_json_corrupt');
  return {...body,lines:pl.lines.map(lineView),tables:pl.tables.map(tableView)};
 }
+
+// ── Owner branch (Task 12, spec §8.2): session → owner check → service read → audit → private, no-store ──
+/** Service-role db + research_audit_log writer for readOwnedDocument (audit scoped to the owner, who is the requester). */
+export function ownerReadDeps():OwnerReadDeps{
+ const admin=getAdminSupabase();
+ return {db:supabaseDocumentsDb(admin),audit:(userId,action,objectId,detail)=>audit({supabase:admin as unknown as ResearchSupabase,userId},action,objectId,detail)};
+}
+/** The owner sees the permission and licence reference of their own document as well. */
+export const ownerDocumentView=(r:DocumentRow)=>({...publicDocumentView(r),permission:r.permission,licenseRef:r.license_ref});
+export const auditFailedResponse=()=>errorResponse('audit_failed','audit failed',500);

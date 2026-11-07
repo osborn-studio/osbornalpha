@@ -1,10 +1,12 @@
 // src/app/api/documents/doc/[id]/pages/[n]/route.ts
 // One page of one extraction (spec §9): `extraction` (default: the document's current extraction;
 // must belong to the document), `layout=1` adds lines and tables from pages.json (read from the
-// private bucket by the server and hash-checked). Public documents only here (owner branch: Task 12).
+// private bucket by the server and hash-checked). Public documents with a public cache; the owner of
+// a licensed/private document through the audited owner branch (spec §8.2, private, no-store).
 import {NextResponse} from 'next/server';
 import {QueryError,UUID_RE,errorResponse,failureResponse,flagParam,paramErrorResponse,readParams} from '@/lib/facts/public-route';
-import {cacheHeadersFor,notFound,pageDetail,publicDocs,serviceStore} from '@/lib/documents/read-route';
+import {auditFailedResponse,cacheHeadersFor,notFound,ownerReadDeps,pageDetail,publicDocs,serviceStore,sessionUserId} from '@/lib/documents/read-route';
+import {OwnerAuditError,readOwnedDocument} from '@/lib/documents/upload';
 
 export const dynamic='force-dynamic';
 
@@ -28,6 +30,15 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string;n:stri
    const body=await pageDetail(db,serviceStore(),row,pageNo,extraction,layout);
    return body?NextResponse.json(body,{headers:cacheHeadersFor('public',undefined,now)}):notFound();
   }
-  return notFound();   // owner branch: Task 12
- }catch(e){return failureResponse(e,'documents/page','page read failed');}
+  const userId=await sessionUserId();
+  if(userId){
+   const deps=ownerReadDeps();
+   const owned=await readOwnedDocument(deps,{documentId:id,requester:userId,route:'documents/page',pageNo,load:d=>pageDetail(deps.db,serviceStore(),d,pageNo,extraction,layout)});
+   if(owned)return NextResponse.json(owned.data,{headers:cacheHeadersFor('private',undefined,now)});
+  }
+  return notFound();
+ }catch(e){
+  if(e instanceof OwnerAuditError)return auditFailedResponse();
+  return failureResponse(e,'documents/page','page read failed');
+ }
 }
