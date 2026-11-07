@@ -43,3 +43,11 @@
 - `GET /api/companies`（公共、anon、无会话、无按用户字段）；`/intel/companies`（需登录，决策 H 默认）；`/intel` 研究页签入口卡；`isTabActive` 段前缀高亮。
 - 偏差（指挥决定）：`q` 白名单字符集；`conceptsTotal` 由响应给出；空状态区分"无事实"与"无匹配"。
 - 实施偏差：新鲜度条的 status 允许 null，经 `freshnessKey` 映射为"未知"（复用 `company.header.freshness` 文案）；“最近同步”只写时间与结果，不用状态色。
+
+| 序 | 任务 | 提交 | 规格复审 | 质量复审 | Codex review / 挑战 | 修复轮次 | 备注 |
+|---|---|---|---|---|---|---|---|
+| 17 | Task 17 /watchlist/tracking 收件箱 + 公司页跟踪视图 | f4828691, d6ff101a, 5479a4af（深链参数接入报表视图） | ✅ | 修后通过（44px 触控、Tailwind 透明度修饰符对 var() token 不生效 → color-mix 全局替换、本地日分组、按钮语义） | review: P2 跟踪后视图不同步、筛选失败残留可操作；挑战: P2 headline 链接应用 headlineAsOf、折叠子项无链接；修复复审: P2 深链参数未被页面消费 → 接入 | 2 | 385 单测 |
+
+| 18 | Task 18 /api/companies + /intel/companies + /intel 入口卡 | f7ebf011, 3449419f, b8b07321 | ✅（响应形状收回 §6.1 {total, conceptsTotal, rows}） | 修后通过（按语言显示名称并与 SQL 排序键一致、q 客户端校验、Seg/ErrorCard/scope、加载态） | review: P2 参数变化后残留旧结果；挑战: P2 证券富化 1000 行截断 → 分页到尽；修复复审: P2 缓存成功掩盖新失败 → 请求代次 | 2 | 721 单测（全目录） |
+
+
