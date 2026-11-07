@@ -19,6 +19,9 @@ export const criticalSuites = [
  // MACRO
  .concat('src/lib/macro/macro.integration.test.ts')
  // /MACRO
+ // MACRO-P3
+ .concat('src/lib/macro/strategy/strategy.integration.test.ts')
+ // /MACRO-P3
 ;
 
 export function migrationInventory(root = process.cwd()) {

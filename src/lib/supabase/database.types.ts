@@ -14,6 +14,10 @@
 // F6 begin
 // + 20261110090000_dq_eval_runs.sql (dq_eval_runs, dq_eval_case_results)
 // F6 end
+// MACRO-P3
+// + 20261115090000_macro_strategy.sql (macro_strategy_manifests, macro_review_results, macro_review_current,
+//   macro_review_attempts, macro_explanation_runs, macro_explanations; the eight RPCs are not registered)
+// /MACRO-P3
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -844,6 +848,95 @@ export interface DqEvalCaseResult {
 }
 // F6 end
 
+// MACRO-P3
+// Macro strategy (supabase/migrations/20261115090000_macro_strategy.sql). Manifests and the two review tables are
+// public read; attempts and runs are service-role only; macro_explanations is readable by its owner only (RLS).
+// No role writes directly: the eight RPCs (service_role) do, and they are not registered under Functions (narrow
+// clients, src/lib/macro/strategy/db.ts). jsonb columns are typed loosely; src/lib/macro/strategy/contract.ts owns
+// their shapes. generation is bigint (a JSON number from PostgREST).
+export type MacroManifestKind = 'transmission' | 'policy_response' | 'cycle_table' | 'review' | 'explain_facts';
+export interface MacroStrategyManifestRow {
+  manifest_id: string;
+  kind: MacroManifestKind;
+  body: Record<string, unknown>;
+  manifest_hash: string;
+  cutoff: string;
+  method_version: string;
+  code_version: string;
+  catalog_version: string;
+  created_at: string;
+}
+export interface MacroReviewResultRow {
+  result_id: string;
+  region: 'US' | 'CN';
+  month: string;
+  status: 'ok' | 'insufficient';
+  manifest_id: string;
+  manifest_hash: string;
+  facts: Record<string, unknown>;
+  method_version: string;
+  code_version: string;
+  created_at: string;
+}
+export interface MacroReviewCurrentRow {
+  region: 'US' | 'CN';
+  month: string;
+  result_id: string;
+  generation: number;
+  cutoff: string;
+  updated_at: string;
+}
+export interface MacroReviewAttemptRow {
+  attempt_id: string;
+  region: 'US' | 'CN';
+  month: string;
+  status: 'ok' | 'replayed' | 'insufficient' | 'failed' | 'stale';
+  result_id: string | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+}
+export interface MacroExplanationRunRow {
+  explanation_id: string;
+  user_id: string;
+  request_id: string;
+  payload_hash: string;
+  subject_kind: 'snapshot' | 'review';
+  subject_id: string;
+  locale: 'zh' | 'en';
+  manifest_id: string;
+  state: 'running' | 'accepted' | 'rejected' | 'failed' | 'abandoned';
+  claimed_at: string;
+  finished_at: string | null;
+  provider: string | null;
+  model: string | null;
+  prompt_version: string | null;
+  validator_version: string | null;
+  raw_output: unknown;
+  validation: Record<string, unknown> | null;
+  usage_audit_key: string;
+  accounting: unknown;
+  finalize_payload: Record<string, unknown> | null;
+  finalized: boolean;
+  late_output: Record<string, unknown> | null;
+}
+export interface MacroExplanationRow {
+  explanation_id: string;
+  user_id: string;
+  subject_kind: 'snapshot' | 'review';
+  subject_id: string;
+  locale: 'zh' | 'en';
+  manifest_id: string;
+  state: 'running' | 'accepted' | 'rejected' | 'failed';
+  rendered: Record<string, unknown> | null;
+  failure_codes: string[];
+  provider: string | null;
+  model: string | null;
+  prompt_version: string | null;
+  validator_version: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+// /MACRO-P3
 export type Database = {
   public: {
     Tables: {
@@ -912,6 +1005,14 @@ export type Database = {
       macro_quarantine_members: { Row: MacroQuarantineMemberRow; Insert: Partial<MacroQuarantineMemberRow>; Update: Partial<MacroQuarantineMemberRow> };
       macro_analysis_runs: { Row: MacroAnalysisRunRow; Insert: Partial<MacroAnalysisRunRow>; Update: Partial<MacroAnalysisRunRow> };
       // /MACRO
+      // MACRO-P3
+      macro_strategy_manifests: { Row: MacroStrategyManifestRow; Insert: Partial<MacroStrategyManifestRow>; Update: Partial<MacroStrategyManifestRow> };
+      macro_review_results: { Row: MacroReviewResultRow; Insert: Partial<MacroReviewResultRow>; Update: Partial<MacroReviewResultRow> };
+      macro_review_current: { Row: MacroReviewCurrentRow; Insert: Partial<MacroReviewCurrentRow>; Update: Partial<MacroReviewCurrentRow> };
+      macro_review_attempts: { Row: MacroReviewAttemptRow; Insert: Partial<MacroReviewAttemptRow>; Update: Partial<MacroReviewAttemptRow> };
+      macro_explanation_runs: { Row: MacroExplanationRunRow; Insert: Partial<MacroExplanationRunRow>; Update: Partial<MacroExplanationRunRow> };
+      macro_explanations: { Row: MacroExplanationRow; Insert: Partial<MacroExplanationRow>; Update: Partial<MacroExplanationRow> };
+      // /MACRO-P3
     };
     Functions: {
       quote_alert_window_samples: {

@@ -208,6 +208,10 @@
     {
       "file": "20261114090000_macro_workbench.sql",
       "sha256": "aea3f93c9d05e3fc3c93c7ea85618e744ed1ed8189a74319ecd8b62d16960835"
+    },
+    {
+      "file": "20261115090000_macro_strategy.sql",
+      "sha256": "8d8adb4907cb6495da64ab202866be88c0f8ac28dff2e392dbfeba4f3420d535"
     }
   ]
 }
