@@ -3,7 +3,7 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
 import {validateExpertRecord} from './expert';
-import {f6Handlers} from './handlers';
+import {f6Handlers,manifestFindings} from './handlers';
 import {validateManifest} from './manifest';
 import type {ManifestDeps} from './manifest';
 
@@ -12,21 +12,24 @@ const h=f6Handlers(process.cwd(),()=>noDb);
 const codes=async(flag:string,args:string[])=>(await h[flag](args)).map(f=>f.code);
 
 describe('f6Handlers',()=>{
- it('registers exactly the three Task-12 flags',()=>expect(Object.keys(h).sort()).toEqual(['--audit','--expert','--manifest']));
+ it('registers --audit and --expert only (--manifest is manifestHandler, the one implementation)',()=>expect(Object.keys(h).sort()).toEqual(['--audit','--expert']));
  it('--audit validates a directory and honours --release',async()=>{
   expect(await codes('--audit',['docs/audits/2026-11-04-evals-gold-sets'])).toEqual([]);
   expect(await codes('--audit',['docs/audits/2026-11-04-evals-gold-sets','--release'])).toEqual(['audit_release_open_verify']);
   expect(await codes('--audit',['docs/audits/does-not-exist'])).toEqual(['audit_index_missing']);
  });
  it('reports a missing argument as cli_usage',async()=>{
-  for(const flag of ['--audit','--expert','--manifest']){expect(await codes(flag,[])).toEqual(['cli_usage']);expect(await codes(flag,['--release'])).toEqual(['cli_usage']);}
+  for(const flag of ['--audit','--expert']){expect(await codes(flag,[])).toEqual(['cli_usage']);expect(await codes(flag,['--release'])).toEqual(['cli_usage']);}
  });
  it('--expert / --manifest report unreadable files',async()=>{
   expect(await codes('--expert',['docs/evals/nope.json'])).toEqual(['expert_invalid']);
-  expect(await codes('--manifest',['docs/evals/nope.json'])).toEqual(['manifest_invalid']);
+  expect((await manifestFindings(process.cwd(),'docs/evals/nope.json',noDb)).map(f=>f.code)).toEqual(['manifest_invalid']);
  });
  it('--manifest without database access fails closed',async()=>{
-  expect(await codes('--manifest',['docs/evals/templates/release-manifest.template.json'])).toContain('manifest_no_db');
+  expect((await manifestFindings(process.cwd(),'docs/evals/templates/release-manifest.template.json',noDb)).map(f=>f.code)).toContain('manifest_no_db');
+ });
+ it('P2: --expert without database access fails closed (expert_run_unverified)',async()=>{
+  expect(await codes('--expert',['docs/evals/templates/expert-sampling.template.json'])).toEqual(['expert_set_unresolved','expert_run_unverified']);
  });
 });
 

@@ -1,6 +1,6 @@
 // src/lib/evals/validate/handlers.ts
-// The Task-12 flags of scripts/evals/validate.ts (entries in validate/cli.ts HANDLERS): --expert <file> [--release], --audit <dir> [--release],
-// --manifest <file> [--online]. The manifest reads committed bytes only (`git show <commit>:<path>` in root), checks
+// The Task-12 flags of scripts/evals/validate.ts (entries in validate/cli.ts HANDLERS): --expert <file> [--release], --audit <dir> [--release]
+// (the --manifest [--online] entry is manifestHandler below, the only --manifest implementation). The manifest reads committed bytes only (`git show <commit>:<path>` in root), checks
 // ancestry with `git merge-base --is-ancestor`, the origin remote with `git remote get-url origin`, and with --online
 // the CI run with `gh api repos/<owner>/<repo>/actions/runs/<id>` (Codex plan round 1 P1-3). `args` are the flag's value followed by its modifiers (validate/cli.ts passes [value,...modifiers]). Production DB
 // access for --manifest is the service-role client when SUPABASE_SERVICE_ROLE_KEY and
@@ -15,7 +15,7 @@ import {LOCK_PATH as GOLD_LOCK_PATH,RECORDERS_PATH,loadGoldSet,parseGoldBytes,pa
 import {evalStore} from '../store';
 import type {GoldLock} from '../types';
 import {validateAuditDir} from './audit';
-import {findSetBySha,validateExpertRecord} from './expert';
+import {findSetBySha,validateExpertRecord,verifyExpertRun} from './expert';
 import {finding} from './finding';
 import type {ValidatorFinding} from './finding';
 import {validateManifest} from './manifest';
@@ -89,17 +89,14 @@ export function f6Handlers(root=process.cwd(),deps:(o:{online:boolean})=>Manifes
    try{rec=readJson(root,file);}catch(e){return [finding('expert_invalid',file,`cannot read JSON: ${(e as Error).message}`)];}
    const sha=(rec as {population?:{set_sha256?:unknown}})?.population?.set_sha256;
    const set=typeof sha==='string'?findSetBySha(readLock(root),sha,p=>loadGoldSet(p,root)):null;
-   return validateExpertRecord(rec,set,{release:args.includes('--release'),where:file});
+   // P2: the evaluated run is authenticated through the service-role store; without access this fails closed (expert_run_unverified)
+   const found=validateExpertRecord(rec,set,{release:args.includes('--release'),where:file});
+   return [...found,...await verifyExpertRun(rec,deps({online:false}).getRun,file)];
   },
   '--audit':async args=>{
    const dir=args[0];
    if(!dir||dir.startsWith('--'))return usage('--audit','<dir>');
    return validateAuditDir(dir,{root,release:args.includes('--release')});
-  },
-  '--manifest':async args=>{
-   const file=args[0];
-   if(!file||file.startsWith('--'))return usage('--manifest','<file>');
-   return manifestFindings(root,file,deps({online:args.includes('--online')}));
   },
  };
 }

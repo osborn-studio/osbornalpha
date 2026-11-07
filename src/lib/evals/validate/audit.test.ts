@@ -6,7 +6,7 @@ import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,relative} from 'node:path';
 import {afterEach,describe,expect,it} from 'vitest';
-import {isAccept,isOpenVerify,isOwner,markdownTables,parseDispositions,parseFindings,parseVerdict,tableCells,validateAuditDir} from './audit';
+import {analyzeReport,decisionKind,isAccept,isOpenVerify,isOwner,markdownTables,parseDispositions,parseFindings,parseVerdict,tableCells,validateAuditDir} from './audit';
 
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
 const dirs:string[]=[];
@@ -134,5 +134,55 @@ describe('validateAuditDir on the real audit directories',()=>{
  it('docs/audits/2026-11-04-evals-gold-sets is consistent; release mode reports only N11 (P1, OPEN-verify)',()=>{
   expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets')).toEqual([]);
   expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets',{release:true})).toEqual([{code:'audit_release_open_verify',where:'round 2 #N11',message:'P1 finding is OPEN-verify'}]);
+ });
+});
+
+describe('P1 fail-closed report parsing (analyzeReport / parseFindings)',()=>{
+ it('reads "# | P1/P2/P3 | …" and "# | Severity | …" headers',()=>{
+  expect(parseFindings('| # | P1/P2/P3 | Issue |\n|---|---|---|\n| R1 | P1 | a |\n| R2 | P2 | b |\n',1)).toEqual([{id:'R1',severity:'P1'},{id:'R2',severity:'P2'}]);
+  expect(parseFindings('| # | Severity | Issue |\n|---|---|---|\n| 7 | P2 | a |\n',2)).toEqual([{id:'7',severity:'P2'}]);
+ });
+ it('reads numbered and bulleted list findings and P-level headings with synthesized ids',()=>{
+  expect(parseFindings('1. **P1** — a\n2) **P2**: b\n- P3 c\n* **R7 · P1** d\n### P2 heading\n',4)).toEqual([
+   {id:'R4-P1-1',severity:'P1'},{id:'R4-P2-1',severity:'P2'},{id:'R4-P3-1',severity:'P3'},{id:'R7',severity:'P1'},{id:'R4-P2-2',severity:'P2'}]);
+ });
+ it('synthesized ids are unique report-wide (the counter is not reset per table)',()=>{
+  const md='| Severity | Issue |\n|---|---|\n| P1 | a |\n\n| Severity | Issue |\n|---|---|\n| P1 | b |\n\n1. **P1** c\n';
+  expect(parseFindings(md,1).map(f=>f.id)).toEqual(['R1-P1-1','R1-P1-2','R1-P1-3']);
+ });
+ it('flags P1/P2 lines it did not capture (fail closed)',()=>{
+  expect(analyzeReport('| Priority | Issue |\n|---|---|\n| P1 | foo |\n',1).unparsed.length).toBe(1);
+  expect(analyzeReport('P1: the thing is broken\n',1).unparsed.length).toBe(1);
+  expect(analyzeReport('| # | Severity | Issue |\n|---|---|---|\n| | P1 | no id |\n',1).unparsed.length).toBe(1);
+  expect(analyzeReport('| x | y |\n|---|---|\n| a | P2 |\n',1).unparsed.length).toBeGreaterThan(0);
+  expect(analyzeReport('| # | Severity | Issue |\n|---|---|---|\n| 1 | P1 | a |\n',1).unparsed).toEqual([]);
+  // status tables that merely mention P1 in a header are not findings
+  expect(analyzeReport('| Round-3 P1 | Status |\n|---|---|\n| x | CLOSED |\n\nNo new P1/P2 findings.\n',1)).toMatchObject({unparsed:[],explicitNone:true,findings:[]});
+ });
+ it('accepts zero findings only when the report says so explicitly',()=>{
+  for(const t of ['No P1/P2 findings.','No new P1/P2 findings within scope.','No actionable defects were identified.','no actionable defects were found','No findings.'])
+   expect(analyzeReport(`**Verdict: ready**\n\n${t}\n`,1).explicitNone).toBe(true);
+  expect(analyzeReport('**Verdict: ready**\n\nLooks fine to me.\n',1).explicitNone).toBe(false);
+ });
+ it('validateAuditDir: audit_findings_unparsed for unexplained zero findings or uncaptured P1/P2 lines',()=>{
+  const zero={round:{findings:{p1:0,p2:0,p3:0}},dispo:'| # | 决定 | 实施 |\n|---|---|---|\n'};
+  expect(codes(auditDir({...zero,report:'**Verdict: ready.**\n\nLooks fine.\n',index:{open:{owner:[],verify:[]}}}))).toEqual(['audit_findings_unparsed']);
+  expect(codes(auditDir({...zero,report:'**Verdict: ready.**\n\nNo P1/P2 findings.\n',index:{open:{owner:[],verify:[]}}}))).toEqual([]);
+  expect(codes(auditDir({report:REPORT+'\nP1: an uncaptured finding\n',dispo:DISPO}))).toEqual(['audit_findings_unparsed']);
+ });
+});
+
+describe('P1 disposition decisions are validated against the supported states',()=>{
+ it('classifies every decision found in the real disposition files',()=>{
+  const ok=['ACCEPT','ACCEPT WITH LIMIT','ACCEPT (partial)','ACCEPT + OWNER','ACCEPT + OPEN-verify','ACCEPT：§3.2 规则 1','ACCEPT（备注：x）','ACCEPT — implemented per Codex\'s prescribed fix (round 4), not re-audited（第 5 稿 §10）',
+   'DECLINE','DECLINE（部分）','PARTIAL：不建 index.json','owner','OWNER','owner (default: publish with `citation` state)','OPEN (verify)','OPEN-verify','OPEN-verify / OWNER','RESOLVED by the same function.',"implemented per Codex's prescribed fix (round 4), not re-audited",'ACCEPT (persist) / DECLINE (exact arithmetic)'];
+  for(const d of ok)expect(decisionKind(d),d).not.toBe('unknown');
+  for(const d of ['','TBD','maybe','pending review'])expect(decisionKind(d),d).toBe('unknown');
+ });
+ it('a blank or unknown decision disposes nothing and is reported (so release is blocked)',()=>{
+  const blank=DISPO.replace('| 3 c | DECLINE | minor |','| 3 c |  | minor |');
+  expect(codes(auditDir({dispo:blank}))).toEqual(expect.arrayContaining(['audit_decision_unknown','audit_finding_undisposed']));
+  expect(codes(auditDir({dispo:blank}),true)).toEqual(expect.arrayContaining(['audit_decision_unknown']));
+  expect(codes(auditDir({dispo:DISPO.replace('DECLINE','maybe')}))).toEqual(expect.arrayContaining(['audit_decision_unknown']));
  });
 });

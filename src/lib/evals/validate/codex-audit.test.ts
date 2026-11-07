@@ -89,6 +89,17 @@ describe('runCodexAudit',()=>{
   runCodexAudit({root,dir:DIR,prompt:'00-prompt-round1.md',out:'01-codex-round1.md',target:TARGET},deps(root));
   expect(code(()=>runCodexAudit({root,dir:DIR,prompt:'00-prompt-round1.md',out:'02-codex-round2.md',target:'docs/other.md'},deps(root)))).toBe('audit_invalid');
  });
+ it('P1: refuses to write index.json when the report has uncaptured P1/P2 text or unexplained zero findings',()=>{
+  const {root}=repo();
+  const o={root,dir:DIR,prompt:'00-prompt-round1.md',out:'01-codex-round1.md',target:TARGET};
+  expect(code(()=>runCodexAudit(o,deps(root,'**Verdict: not ready.**\n\nP1: something broke\n')))).toBe('audit_invalid');
+  expect(existsSync(join(root,DIR,'index.json'))).toBe(false);
+  rmSync(join(root,DIR,'01-codex-round1.md'),{force:true});
+  expect(code(()=>runCodexAudit(o,deps(root,'**Verdict: ready.**\n\nLooks fine.\n')))).toBe('audit_invalid');
+  expect(existsSync(join(root,DIR,'index.json'))).toBe(false);
+  rmSync(join(root,DIR,'01-codex-round1.md'),{force:true});
+  expect(code(()=>runCodexAudit(o,deps(root,'**Verdict: ready.**\n\nNo P1/P2 findings.\n')))).toBe('ok');
+ });
  it('invokes codex exec read-only with gpt-6-astra at medium effort, prompt on stdin',()=>{
   expect(codexArgs('/tmp/out.md')).toEqual(['exec','-s','read-only','-c','model="gpt-6-astra"','-c','model_reasoning_effort="medium"','--skip-git-repo-check','-o','/tmp/out.md','-']);
  });

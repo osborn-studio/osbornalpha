@@ -3,6 +3,7 @@
     "Copy to docs/evals/<date>/expert-sampling-<module>-<n>.json and fill every field; validate with: npx tsx scripts/evals/validate.ts --expert <file> [--release]",
     "selected_case_ids: recompute with seeded_sha256 (sha256(seed + case_id), first N companies by smallest hash, first M cases each); the validator rejects any other set",
     "population.set_sha256 must be a sha256 listed in src/lib/evals/fixtures/gold/lock.json; evaluated_run_id is the privileged official_reconciliation run (gate pass)",
+    "an agree/disagree check needs decimal our_value and document_value (or absent: true with both null for an expect=missing case) and document = {document_id:{kind,value} | url, sha256, locator}; otherwise it counts as cannot_verify and not toward the 80 % rule",
     "every disagree (checks and basis_review) needs a follow_up whose ref is the case_id or the basis topic",
     "release: every follow_up has closed_at and closure_ref = dq_quarantine:<uuid> | https://github.com/<owner>/<repo>/pull/<n> | gold:<set_id>@<version>",
     "use the expert alias only; no names, e-mail addresses or report PDFs"

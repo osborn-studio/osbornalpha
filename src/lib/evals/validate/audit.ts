@@ -50,26 +50,63 @@ export function markdownTables(md:string):{header:string[];rows:string[][]}[]{
  flush();return out;
 }
 const SEV=/\bP([123])\b/;
-export function parseFindings(md:string,round:number):ParsedFinding[]{
- const out:ParsedFinding[]=[];const seen=new Set<string>();
- const add=(id:string,severity:Severity)=>{if(id&&!seen.has(id)){seen.add(id);out.push({id,severity});}};
- for(const t of markdownTables(md)){
-  const h=t.header.map(x=>strip(x).toLowerCase());
-  const s=h.findIndex(x=>x.startsWith('severity'));
-  if(s<0)continue;
-  const idCol=h.indexOf('#');const k:Record<string,number>={};
-  for(const r of t.rows){
-   const cell=strip(r[s]??'');const m=SEV.exec(cell);if(!m)continue;
+const SEV_HEADER=/^(severity|p[123]([\s/,]*p[123])*(\b|$))/;
+export interface ReportAnalysis{findings:ParsedFinding[];
+ /** lines that look like P1/P2 findings but were not captured (fail closed: audit_findings_unparsed) */
+ unparsed:string[];
+ /** the report states explicitly that there are no P1/P2 findings / no actionable defects */
+ explicitNone:boolean}
+const NONE=/\bno\s+(?:new\s+)?P1(?:\/P2)?\b|\bno\s+actionable\s+(?:defects|regressions|findings)|\bno\s+findings\b/i;
+// a line that starts with a P1/P2 marker (after table pipes, list markers, headings, bold)
+const STARTS_P=/^[\s>*_#\-\d.)|]*\**\s*(?:[A-Za-z]+\d*(?:-\w+)*\s*·\s*)?P[12]\b/;
+const LIST_P=/^\s*(?:\d+[.)]|[-*•])\s+\**\s*(?:([A-Za-z]+\d+(?:-\w+)*)\s*·\s*)?(P[123])\b/;
+const HEAD_P=/^#{2,6}\s+\**\s*(?:([A-Za-z]+\d+(?:-\w+)*)\s*·\s*)?(P[123])\b/;
+const BOLD_P=/^\*\*(?:([A-Za-z]+\d+(?:-\w+)*)\s*·\s*)?(P[123])\b/;
+/** Findings of a Codex report plus the lines it could not capture; synthesized ids (`R<round>-<P>-<k>`) are unique report-wide. */
+export function analyzeReport(md:string,round:number):ReportAnalysis{
+ const findings:ParsedFinding[]=[];const seen=new Set<string>();const k:Record<string,number>={};
+ const add=(id:string,severity:Severity)=>{if(id&&!seen.has(id)){seen.add(id);findings.push({id,severity});}};
+ const synth=(severity:Severity)=>{k[severity]=(k[severity]??0)+1;return `R${round}-${severity}-${k[severity]}`;};
+ const lines=md.split(/\r?\n/);const consumed=new Set<number>();
+ // tables with line indexes
+ let i=0;
+ while(i<lines.length){
+  if(!lines[i].trimStart().startsWith('|')){i++;continue;}
+  const start=i;while(i<lines.length&&lines[i].trimStart().startsWith('|'))i++;
+  const block=lines.slice(start,i);
+  if(block.length<2||!/^\|\s*:?-{3,}/.test(block[1].trim()))continue;
+  const h=tableCells(block[0]).map(x=>strip(x).toLowerCase());
+  const sev=h.findIndex(x=>SEV_HEADER.test(x));
+  if(sev<0)continue;
+  const idCol=h.indexOf('#');
+  consumed.add(start);consumed.add(start+1);
+  for(let r=2;r<block.length;r++){
+   const row=tableCells(block[r]);const cell=strip(row[sev]??'');const m=SEV.exec(cell);
+   if(!m){consumed.add(start+r);continue;}
    const severity=`P${m[1]}` as Severity;
-   if(idCol>=0){add(strip(r[idCol]??''),severity);continue;}
+   if(idCol>=0){const id=strip(row[idCol]??'');if(!id)continue;add(id,severity);consumed.add(start+r);continue;}
    const inline=/^P[123]\s*·\s*(\S+)$/.exec(cell);
+   consumed.add(start+r);
    if(inline){add(inline[1],severity);continue;}
-   k[severity]=(k[severity]??0)+1;add(`R${round}-${severity}-${k[severity]}`,severity);
+   add(synth(severity),severity);
   }
  }
- for(const m of md.matchAll(/^\*\*([A-Z]+\d+-\d+)\s*·\s*(P[123])\b/gm))add(m[1],m[2] as Severity);
- return out;
+ lines.forEach((line,n)=>{
+  if(consumed.has(n))return;
+  const t=line.trim();
+  const m=LIST_P.exec(t)??HEAD_P.exec(t)??BOLD_P.exec(t);
+  if(m){add(m[1]??synth(m[2] as Severity),m[2] as Severity);consumed.add(n);}
+ });
+ const unparsed:string[]=[];
+ lines.forEach((line,n)=>{
+  if(consumed.has(n))return;
+  const t=line.trim();
+  const cellP=t.startsWith('|')&&tableCells(t).some(c=>/^P[12]$/.test(strip(c)));
+  if(STARTS_P.test(t)||cellP)unparsed.push(`line ${n+1}: ${t.slice(0,60)}`);
+ });
+ return {findings,unparsed,explicitNone:NONE.test(md)};
 }
+export const parseFindings=(md:string,round:number):ParsedFinding[]=>analyzeReport(md,round).findings;
 export function parseDispositions(md:string,file:string):DispositionRow[]{
  const out:DispositionRow[]=[];
  for(const t of markdownTables(md)){
@@ -87,6 +124,20 @@ export function parseDispositions(md:string,file:string):DispositionRow[]{
   }
  }
  return out;
+}
+export type DecisionKind='accept'|'decline'|'partial'|'owner'|'open_verify'|'resolved'|'implemented'|'unknown';
+/** Supported disposition states, derived from the real disposition files (ACCEPT [+ …], DECLINE, PARTIAL, OWNER, OPEN-verify, RESOLVED, implemented per Codex's fix). Blank / anything else = unknown. */
+export function decisionKind(d:string):DecisionKind{
+ const t=d.trim();
+ if(!t)return 'unknown';
+ if(/^\**\s*ACCEPT\b/i.test(t))return 'accept';
+ if(/^\**\s*DECLINE/i.test(t))return 'decline';
+ if(/^\**\s*PARTIAL/i.test(t))return 'partial';
+ if(/^\**\s*OPEN[\s-]*\(?verify\)?/i.test(t))return 'open_verify';
+ if(/^\**\s*OWNER\b/i.test(t))return 'owner';
+ if(/^\**\s*RESOLVED\b/i.test(t))return 'resolved';
+ if(/^implemented per Codex/i.test(t))return 'implemented';
+ return 'unknown';
 }
 export const isAccept=(d:string)=>/\bACCEPT\b/i.test(d);
 export const isOpenVerify=(d:string)=>/OPEN[\s-]*\(?verify\)?/i.test(d);
@@ -122,6 +173,14 @@ function indexShape(v:unknown):string|null{
  return null;
 }
 
+/** audit_findings_unparsed: P1/P2 lines nobody captured, or zero findings without an explicit statement (fail closed). */
+export function unparsedFindings(a:ReportAnalysis,where:string):ValidatorFinding[]{
+ const out:ValidatorFinding[]=[];
+ if(a.unparsed.length>0)out.push(finding('audit_findings_unparsed',where,`P1/P2 text not recognised as a finding (${a.unparsed.slice(0,3).join('; ')})`));
+ else if(a.findings.length===0&&!a.explicitNone)out.push(finding('audit_findings_unparsed',where,'no findings were parsed and the report does not state "No P1/P2" / "no actionable defects"'));
+ return out;
+}
+
 /** Validates one audit directory (spec §9). `release` adds the release-manifest rules (§10 model_audit). */
 export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[]{
  const root=deps.root??process.cwd();
@@ -148,8 +207,10 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
   if(r.prompt_file!==null&&read(r.prompt_file)===null)out.push(finding('audit_file_missing',rel(r.prompt_file),'prompt file not found'));
   const reportText=read(r.report_file);
   if(reportText===null){out.push(finding('audit_file_missing',rel(r.report_file),'report file not found'));byRound.set(r.n,[]);return;}
-  const parsed=parseFindings(reportText,r.n);
+  const analysis=analyzeReport(reportText,r.n);
+  const parsed=analysis.findings;
   byRound.set(r.n,parsed);
+  out.push(...unparsedFindings(analysis,`${rel(r.report_file)}`));
   const c=severityCounts(parsed);
   for(const k of ['p1','p2','p3'] as const)if((r.findings[k]??0)!==c[k])out.push(finding('audit_findings_count',where,`findings.${k}=${r.findings[k]??0} but the report has ${c[k]}`));
   if(r.target_git_ref==='uncommitted'){
@@ -178,7 +239,8 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
   const hit=roundsOf(r).filter(n=>(byRound.get(n)??[]).some(f=>f.id===r.id));
   if(hit.length>1){ambiguous.add(r);out.push(finding('audit_disposition_ambiguous',`${rel(r.file)} #${r.id}`,`row without a round qualifier matches findings of rounds ${hit.join(',')}; write "Round-N #${r.id}"`));}
  }
- const rowsFor=(n:number,id:string)=>rows.filter(r=>r.id===id&&!ambiguous.has(r)&&roundsOf(r).includes(n));
+ for(const r of rows)if(decisionKind(r.decision)==='unknown')out.push(finding('audit_decision_unknown',`${rel(r.file)} #${r.id}`,`decision "${r.decision.slice(0,40)}" is not a supported state (ACCEPT, DECLINE, PARTIAL, OWNER, OPEN-verify, RESOLVED); the row disposes nothing`));
+ const rowsFor=(n:number,id:string)=>rows.filter(r=>r.id===id&&!ambiguous.has(r)&&decisionKind(r.decision)!=='unknown'&&roundsOf(r).includes(n));
  for(const [n,list] of byRound)for(const f of list)if(rowsFor(n,f.id).length===0)out.push(finding('audit_finding_undisposed',`round ${n} #${f.id}`,'no disposition row for this round and id'));
  for(const r of rows)if(isAccept(r.decision)&&!r.implemented_in)out.push(finding('audit_accept_unimplemented',`${rel(r.file)} #${r.id}`,'ACCEPT row without implemented_in'));
  if(rows.some(r=>isOpenVerify(r.decision))&&index.open.verify.length===0)out.push(finding('audit_open_inconsistent',rel('index.json'),'OPEN-verify dispositions exist but open.verify is empty'));

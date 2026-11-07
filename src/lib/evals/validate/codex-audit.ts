@@ -9,7 +9,7 @@ import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import {basename,isAbsolute,join} from 'node:path';
 import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
-import {parseFindings,parseVerdict,severityCounts} from './audit';
+import {analyzeReport,parseVerdict,severityCounts,unparsedFindings} from './audit';
 import type {AuditIndex,AuditRound} from './audit';
 
 export const CODEX_MODEL='gpt-6-astra';
@@ -50,7 +50,10 @@ export function runCodexAudit(o:CodexAuditOptions,deps:CodexAuditDeps):AuditRoun
  const verdict=parseVerdict(md);
  if(verdict===null)throw fail(`${o.out} lacks a **Verdict: …** first line; index.json not updated`);
  const n=index.rounds.length+1;
- const round:AuditRound={n,target_sha256:sha256Hex(bytes),target_git_ref:head,prompt_file:o.prompt,report_file:o.out,model:CODEX_MODEL,effort:CODEX_EFFORT,verdict,findings:severityCounts(parseFindings(md,n))};
+ const analysis=analyzeReport(md,n);
+ const unparsed=unparsedFindings(analysis,o.out);
+ if(unparsed.length>0)throw fail(`${o.out}: ${unparsed[0].message}; index.json not updated`);
+ const round:AuditRound={n,target_sha256:sha256Hex(bytes),target_git_ref:head,prompt_file:o.prompt,report_file:o.out,model:CODEX_MODEL,effort:CODEX_EFFORT,verdict,findings:severityCounts(analysis.findings)};
  index.rounds.push(round);
  writeFileSync(indexPath,JSON.stringify(index,null,2)+'\n');
  return round;

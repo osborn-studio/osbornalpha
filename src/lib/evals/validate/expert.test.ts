@@ -3,7 +3,8 @@
 import {createHash} from 'node:crypto';
 import {describe,expect,it} from 'vitest';
 import type {GoldCase,GoldSet} from '../types';
-import {CLOSURE_REF,findSetBySha,seededSelection,validateExpertRecord} from './expert';
+import {CLOSURE_REF,findSetBySha,seededSelection,validateExpertRecord,verifyExpertRun} from './expert';
+import type {EvalRunRow} from '../types';
 import type {ExpertRecord} from './expert';
 
 const gc=(case_id:string,subject:GoldCase['subject'],retracted:GoldCase['retracted']=null):GoldCase=>({
@@ -21,6 +22,7 @@ const CASES:GoldCase[]=[
 ];
 const SET:GoldSet={schema_version:1,format:'f6',set_id:'facts/expert-test',version:2,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,
  tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],cases:CASES,ready:true,path:'src/lib/evals/fixtures/gold/facts/expert-test.json',sha256:'9'.repeat(64)};
+const DOC={document_id:{kind:'edgar_accession',value:'0000999061-24-000001'},sha256:'0'.repeat(64),locator:{page:1}};
 const RUN='aaaaaaaa-0000-4000-8000-000000000001';
 const record=(o:Partial<ExpertRecord>={}):ExpertRecord=>{
  const selected=seededSelection(SET.cases,'seed-1',2,2);
@@ -28,7 +30,7 @@ const record=(o:Partial<ExpertRecord>={}):ExpertRecord=>{
   schema_version:1,module:'facts',sampled_at:'2026-11-20T00:00:00Z',expert:{alias:'E1',background:'CPA',independence:'not an implementer',contact_held_by:'owner'},
   population:{set_id:SET.set_id,set_version:2,set_sha256:SET.sha256,case_count:8,evaluated_run_id:RUN,db_state_rev:'7'},
   selection:{method:'seeded_sha256',seed:'seed-1',companies:2,cases_per_company:2,selected_case_ids:selected},
-  checks:selected.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:{page:1},verdict:'agree' as const,note:''})),
+  checks:selected.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:DOC,verdict:'agree' as const,note:''})),
   basis_review:[{topic:'revenue basis',verdict:'agree',note:''}],summary:{agree:4,disagree:0,cannot_verify:0},follow_ups:[],...o,
  };
 };
@@ -97,10 +99,41 @@ describe('validateExpertRecord',()=>{
   expect(codes(r,true)).toEqual(['expert_follow_up_open']);
   r.follow_ups[0]={...r.follow_ups[0],closed_at:'2026-11-25T00:00:00Z',closure_ref:'see chat'};
   expect(codes(r,true)).toEqual(['expert_follow_up_open']);
-  for(const ref of ['dq_quarantine:3f2c1d4e-1111-4222-8333-444455556666','https://github.com/osborn-studio/OsbornAlpha/pull/123','gold:facts/expert-test@3']){
+  for(const ref of ['dq_quarantine:3f2c1d4e-1111-4222-8333-444455556666','https://github.com/osborn-studio/OsbornAlpha/pull/123','gold:facts/expert-test@2']){
    r.follow_ups[0]={...r.follow_ups[0],closure_ref:ref};expect(codes(r,true)).toEqual([]);
   }
   expect(CLOSURE_REF.test('gold:facts/x')).toBe(false);
+  // the gold ref must resolve against the population set (id + a version in its history or current)
+  const set3={...SET,history:[{version:1,changed_at:'2026-11-01',changed_by:'r1',reason:'x',fields:['cases']}]};
+  for(const ref of ['gold:facts/expert-test@1','gold:facts/expert-test@2']){r.follow_ups[0]={...r.follow_ups[0],closure_ref:ref};expect(validateExpertRecord(r,set3,{release:true}).map(f=>f.code)).toEqual([]);}
+  for(const ref of ['gold:facts/expert-test@3','gold:facts/other@2']){r.follow_ups[0]={...r.follow_ups[0],closure_ref:ref};expect(validateExpertRecord(r,set3,{release:true}).map(f=>f.code)).toEqual(['expert_follow_up_open']);}
+ });
+ it('P1: agree/disagree need decimal values and document identity, else the check counts as cannot_verify (not toward 80 %)',()=>{
+  for(const bad of [{our_value:null},{document_value:null},{our_value:'1e6'},{document_value:'abc'},{document:{page:1}},{document:{...DOC,sha256:'x'}},{document:{...DOC,locator:null}},{document:{url:'https://x.example/a',sha256:'0'.repeat(64)}}]){
+   const r=record();Object.assign(r.checks[0],bad);
+   expect(codes(r),JSON.stringify(bad)).toEqual(['expert_check_evidence','expert_coverage']);
+  }
+  const url=record();url.checks[0].document={url:'https://www.sec.gov/Archives/x.htm',sha256:'1'.repeat(64),locator:'p.3 line 4'};expect(codes(url)).toEqual([]);
+  const neg=record();neg.checks[0].our_value='-12.50';neg.checks[0].document_value='-12.50';expect(codes(neg)).toEqual([]);
+ });
+ it('P1: an expected-absent case is checked with the explicit absent marker (null values), and only then',()=>{
+  const sel=seededSelection(SET.cases,'seed-1',2,2);const T=sel[0];
+  const set={...SET,cases:SET.cases.map(c=>c.case_id===T?{...c,expect:'missing' as const}:c)};
+  const mk=(f:(c:ExpertRecord['checks'][number])=>void)=>{const r=record({population:{...record().population,case_count:8},selection:{...record().selection,selected_case_ids:sel},checks:sel.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:DOC,verdict:'agree' as const,note:''}))});f(r.checks.find(c=>c.case_id===T)!);return r;};
+    expect(validateExpertRecord(mk(c=>{c.our_value=null;c.document_value=null;(c as {absent?:boolean}).absent=true;}),set,{}).map(f=>f.code)).toEqual([]);
+  expect(validateExpertRecord(mk(()=>{}),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
+ });
+ it('P2: verifyExpertRun fails closed without a store and requires a passed privileged official run of the same set',async()=>{
+  const row=(o:Partial<EvalRunRow>={}):EvalRunRow=>({run_id:RUN,kind:'official_reconciliation',module:'facts',mode:'report',privileged:true,artifact_class:'public',set_id:SET.set_id,set_version:2,set_sha256:SET.sha256,evaluator_code_version:'c'.repeat(40),started_at:'x',finished_at:'y',status:'passed',summary:{} as never,report_ref:'r',report_sha256:'0'.repeat(64),triggered_by:'script',...o});
+  const rec=record();const c=async(g?:(id:string)=>Promise<EvalRunRow|null>)=>(await verifyExpertRun(rec,g)).map(f=>f.code);
+  expect(await c()).toEqual(['expert_run_unverified']);
+  expect(await c(async()=>null)).toEqual(['expert_run_missing']);
+  expect(await c(async()=>row())).toEqual([]);
+  expect(await c(async()=>row({privileged:false}))).toEqual(['expert_run_invalid']);
+  expect(await c(async()=>row({status:'failed'}))).toEqual(['expert_run_invalid']);
+  expect(await c(async()=>row({kind:'replay_consistency'}))).toEqual(['expert_run_invalid']);
+  expect(await c(async()=>row({set_sha256:'7'.repeat(64)}))).toEqual(['expert_run_invalid']);
+  expect(await verifyExpertRun({}, async()=>row())).toEqual([]);   // shape errors are validateExpertRecord's business
  });
  it('findSetBySha loads the locked set with that sha256',()=>{
   const lock={files:[{path:'a.json',sha256:'1'.repeat(64),version:1,format:'f6' as const},{path:SET.path,sha256:SET.sha256,version:2,format:'f6' as const}]};

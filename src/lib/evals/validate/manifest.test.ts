@@ -47,6 +47,7 @@ const AUDIT_DIR='docs/audits/2026-11-20-release-audit';
 const AUDIT_FILES=new Map<string,Uint8Array>([[`${AUDIT_DIR}/01-codex-round1.md`,new TextEncoder().encode('**Verdict: ready.**\n\nNo findings.\n')]]);
 const DESCENDANT='f'.repeat(40);
 const EXPERT_FILE='docs/evals/2026-11-20/expert-sampling-facts-1.json';
+const DOC={document_id:{kind:'edgar_accession',value:'0000999061-24-000001'},sha256:'0'.repeat(64),locator:{page:1}};
 const TH={max_fail:0,min_coverage_optional:'0.95'};
 const GOLD={format:'f6' as const,ready:true,pending:0,provenance_gaps:0};
 
@@ -63,7 +64,7 @@ const passCase=(case_id:string,result:CaseReport['outcome']={result:'pass'}):Cas
 
 interface Fx{
  sets:Record<string,GoldSet>;reports:Record<keyof typeof ID,EvalReport>;rowPatch:Partial<Record<keyof typeof ID,Partial<EvalRunRow>>>;
- manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noPair?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
+ manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noPair?:boolean;pairIndependence?:'same_feed'|'independent_publication';now?:string;noFresh?:boolean;keepSummary?:Set<string>;
  /** files missing at evidence_commit (e.g. present only in a working tree) */
  uncommitted?:Set<string>;origin?:string|null;
  /** the GitHub run --online returns; default: success at RELEASE; 'offline' = no --online */
@@ -105,7 +106,7 @@ function fx():Fx{
   expert:{schema_version:1,module:'facts',sampled_at:'2026-11-20T00:00:00Z',expert:{alias:'E1',background:'CPA',independence:'not an implementer',contact_held_by:'owner'},
    population:{set_id:set.set_id,set_version:1,set_sha256:S.set,case_count:2,evaluated_run_id:ID.official,db_state_rev:'7'},
    selection:{method:'seeded_sha256',seed:'seed-1',companies:1,cases_per_company:2,selected_case_ids:selected},
-   checks:selected.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:{page:1},verdict:'agree',note:''})),
+   checks:selected.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:DOC,verdict:'agree',note:''})),
    basis_review:[],summary:{agree:2,disagree:0,cannot_verify:0},follow_ups:[]},
   lock:{files:[{path:SET_PATH,sha256:S.set,version:1,format:'f6'},{path:PAIR_PATH,sha256:S.pair,version:1,format:'f6'}]},
   fresh:{'facts.us':'fresh'},
@@ -135,7 +136,8 @@ async function depsOf(f:Fx):Promise<{deps:ManifestDeps;manifest:Record<string,an
   getRun:f.noRuns?undefined:async id=>rows.get(id)??null,
   freshness:f.noFresh?undefined:async d=>f.freshRows?.[d]??(f.fresh[d]?{expected_cadence:'daily',last_ok_at:f.fresh[d]==='fresh'?'2026-11-20T12:00:00Z':'2026-11-10T00:00:00Z',consecutive_errors:0}:null),
   audit:{gitShow:()=>new TextEncoder().encode('spec\n')},
-  pairs:f.noPair?[]:[{pair_id:'s',module:'facts',left:{source:'a',upstream:'u'},right:{source:'b',upstream:'v'},tolerance:{rel:'0.005'},independence:f.reports.dual?.summary.evidence_class==='adapter_check'?'same_feed':'independent_publication'}],
+  pairs:f.noPair?[]:[{pair_id:'s',module:'facts',left:{source:'a',upstream:'u'},right:{source:'b',upstream:'v'},tolerance:{rel:'0.005'},independence:f.pairIndependence??'independent_publication'}],
+  now:()=>new Date(f.now??'2026-11-22T00:00:00Z'),
  };
  return {deps,manifest:m};
 }
@@ -182,12 +184,16 @@ describe('validateManifest (spec §10)',()=>{
   const g=fx();g.manifest.evidence.reference_regression={run_id:ID.reference};g.reports.reference.privileged=true;expect(await codes(g)).toEqual(['manifest_privileged']);
   const h=fx();h.manifest.evidence.reference_regression={run_id:ID.reference};h.reports.reference.summary.evidence_class='truth';resummarize(h.reports.reference);expect(await codes(h)).toEqual(['manifest_evidence_class','manifest_summary_mismatch']);
  });
- it('rejects adapter_check dual-source evidence and accepts a truth dual-source run',async()=>{
+ it('P6: the dual_source class comes only from the F6 registration — same_feed is an adapter check whatever the report says',async()=>{
   const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};expect(await codes(f)).toEqual([]);
-  const g=fx();g.manifest.evidence.dual_source={run_id:ID.dual};g.reports.dual.summary.evidence_class='adapter_check';resummarize(g.reports.dual);expect(await codes(g)).toEqual(['manifest_adapter_check']);
+  const g=fx();g.manifest.evidence.dual_source={run_id:ID.dual};g.pairIndependence='same_feed';expect(await codes(g)).toContain('manifest_adapter_check');
+  // a report that merely CLAIMS adapter_check under an independent registration is a summary mismatch, not trusted either way
+  const h=fx();h.manifest.evidence.dual_source={run_id:ID.dual};h.reports.dual.summary.evidence_class='adapter_check';resummarize(h.reports.dual);
+  const found=await codes(h);expect(found).toContain('manifest_summary_mismatch');expect(found).not.toContain('manifest_adapter_check');
  });
- it('a dual_source report whose pair is not registered in F6 is manifest_invalid',async()=>{
-  const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};f.noPair=true;expect(await codes(f)).toContain('manifest_invalid');
+ it('a dual_source report whose pair is not registered in F6 is manifest_invalid (only not_applicable is acceptable then)',async()=>{
+  const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};f.noPair=true;expect(await codes(f)).toEqual(['manifest_invalid']);
+  const g=fx();g.noPair=true;expect(await codes(g)).toEqual([]);   // the default fixture waives dual_source
  });
  it('rejects synthetic gold, dirty trees and evidence from another commit',async()=>{
   const f=fx();f.sets[SET_PATH].cases[0].provenance_kind='synthetic';expect(await codes(f)).toEqual(['manifest_synthetic']);
@@ -281,6 +287,32 @@ describe('validateManifest (spec §10)',()=>{
  it('P2-3: official evidence on a review_required set needs a second reviewer on every case',async()=>{
   const f=fx();f.sets[SET_PATH].review_required=true;f.sets[SET_PATH].cases[0].reviewed_by=null;expect(await codes(f)).toEqual(['manifest_review_missing']);
   const g=fx();g.sets[SET_PATH].review_required=true;expect(await codes(g)).toEqual([]);
+ });
+ it('P4: prepared_at must follow every referenced run, not be in the future, and freshness must be establishable at that time',async()=>{
+  const early=fx();early.manifest.prepared_at='2026-11-20T00:01:00Z';expect(await codes(early)).toEqual(expect.arrayContaining(['manifest_prepared_before_run']));
+  const back=fx();back.manifest.prepared_at='2026-11-19T00:00:00Z';expect(await codes(back)).toEqual(expect.arrayContaining(['manifest_prepared_before_run','manifest_freshness_unverifiable']));
+  const unfinished=fx();unfinished.rowPatch.official={finished_at:null};expect(await codes(unfinished)).toContain('manifest_run_unfinished');
+  const future=fx();future.now='2026-11-20T10:00:00Z';expect(await codes(future)).toEqual(['manifest_prepared_future']);
+  const later=fx();later.freshRows={'facts.us':{expected_cadence:'daily',last_ok_at:'2026-11-21T06:00:00Z',consecutive_errors:0}};expect(await codes(later)).toEqual(['manifest_freshness_unverifiable']);
+  const frozen=fx();frozen.manifest.prepared_at='2026-11-20T00:01:00Z';frozen.reports.live.finished_at='2026-11-19T00:00:00Z';
+  expect(await codes(frozen)).toEqual(expect.arrayContaining(['manifest_prepared_before_run']));   // official + frozen copy still finish at 00:05
+  const bad=fx();bad.manifest.prepared_at='2026-13-45';expect(await codes(bad)).toEqual(['manifest_invalid']);
+  const bad2=fx();bad2.manifest.prepared_at='2026-02-30T00:00:00Z';expect(await codes(bad2)).toEqual(['manifest_invalid']);
+ });
+ it('P5: replay slots check the fixture mode and module (frozen ≠ live)',async()=>{
+  const LIVE_PATH=REPLAY_PATH.replace('frozen','live');
+  const a=fx();a.reports.frozen.set={...a.reports.frozen.set,path:LIVE_PATH,sha256:sha(LIVE_BYTES)};expect(await codes(a)).toContain('manifest_fixture');
+  const b=fx();b.reports.live.set={...b.reports.live.set,path:REPLAY_PATH,sha256:sha(REPLAY_BYTES)};expect(await codes(b)).toContain('manifest_fixture');
+  const c=fx();c.manifest.module='metrics';expect(await codes(c)).toContain('manifest_module');
+ });
+ it('minors: gold set module, run_id + not_applicable, expert db_state_rev, row/report mismatches',async()=>{
+  const a=fx();a.sets[SET_PATH].module='metrics';expect(await codes(a)).toContain('manifest_module');
+  const b=fx();b.manifest.evidence.dual_source={run_id:ID.dual,not_applicable:{reason:'r',approved_by:'owner',at:'2026-11-21T00:00:00Z'}};expect(await codes(b)).toEqual(['manifest_invalid']);
+  const c=fx();c.expert.population.db_state_rev='6';expect(await codes(c)).toEqual(['manifest_expert_run']);
+  const d=fx();d.rowPatch.official={kind:'dual_source'};expect(await codes(d)).toContain('manifest_report_run');
+  const e=fx();e.rowPatch.official={set_sha256:'7'.repeat(64)};expect(await codes(e)).toContain('manifest_report_run');
+  const g=fx();g.rowPatch.official={privileged:false};expect(await codes(g)).toContain('manifest_privileged');
+  const h=fx();h.expert.follow_ups=[{ref:'X',action:'a',owner:'owner',due:'2026-12-01',closed_at:'2026-11-25T00:00:00Z',closure_ref:'gold:facts/us-release@9'}];expect(await codes(h)).toEqual(['expert_follow_up_open']);
  });
  it('R2-1 at the CLI: offline the --manifest check is ok:false and runValidate exits 1; with --online and a verified run it exits 0',async()=>{
   const f=fx();

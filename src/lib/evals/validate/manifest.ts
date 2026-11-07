@@ -65,6 +65,8 @@ export interface ManifestDeps{
  audit?:Omit<AuditDeps,'readFile'|'release'>;
  /** F6 pair registrations (kinds/pairs.ts F6_PAIRS by default); a dual_source report's set.id is its pair id. */
  pairs?:readonly PairRegistration[];
+ /** validator clock (prepared_at must not be in the future); default new Date(). */
+ now?:()=>Date;
 }
 export interface ManifestOptions{
  /** notices: diagnostics only (the offline CI identity is ALSO a blocking finding, R2-1). */
@@ -76,7 +78,13 @@ const WAIVABLE=new Set<Item>(['dual_source','reference_regression','replay_live'
 const RUN_KIND:Record<'official_reconciliation'|'replay_live'|'dual_source'|'reference_regression',EvalKind>={official_reconciliation:'official_reconciliation',replay_live:'replay_consistency',dual_source:'dual_source',reference_regression:'reference_regression'};
 export const CI_RUN=/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?$/;
 const CADENCES:readonly string[]=['daily','monthly','quarterly','event'];
-const ts=(v:unknown)=>typeof v==='string'&&(ISO_TS.test(v)||ISO_DATE.test(v));
+/** ISO timestamp / date that is a real calendar instant (Date.parse alone rolls 02-30 over to 03-02). */
+const ts=(v:unknown)=>{
+ if(typeof v!=='string'||!(ISO_TS.test(v)||ISO_DATE.test(v))||!Number.isFinite(Date.parse(v)))return false;
+ const [y,mo,d]=v.slice(0,10).split('-').map(Number);
+ const c=new Date(Date.UTC(y,mo-1,d));
+ return c.getUTCFullYear()===y&&c.getUTCMonth()===mo-1&&c.getUTCDate()===d;
+};
 const str=(v:unknown)=>typeof v==='string'&&v.length>0;
 /** Repo-relative POSIX path: no absolute path, drive letter, backslash, '.' / '..' or empty segment. */
 export const isRepoPath=(p:unknown):p is string=>typeof p==='string'&&p.length>0&&!p.startsWith('/')&&!/^[A-Za-z]:/.test(p)&&!p.includes('\\')&&p.split('/').every(s=>s!==''&&s!=='.'&&s!=='..');
@@ -120,6 +128,14 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(!b)out.push(finding('manifest_report_missing',at(item),`${path} is not committed at evidence_commit`));
   return b;
  };
+ const prepared=Date.parse(m.prepared_at);
+ const now=(deps.now?.()??new Date()).getTime();
+ if(prepared>now)out.push(finding('manifest_prepared_future',`${where}#prepared_at`,'prepared_at is in the future'));
+ /** every referenced run must have finished before the manifest was prepared */
+ const preparedAfter=(item:string,finishedAt:string)=>{
+  const t=Date.parse(finishedAt);
+  if(!Number.isFinite(t)||t>prepared)out.push(finding('manifest_prepared_before_run',at(item),`run finished_at ${finishedAt} is after prepared_at`));
+ };
  const waivers=m.waivers??[];
  for(const [i,w] of waivers.entries()){
   if(!isObject(w)||w.item!=='gold_approval')out.push(finding('manifest_waiver_not_allowed',`${where}#waivers[${i}]`,'only gold_approval can be waived; other items use not_applicable'));
@@ -142,6 +158,7 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
    let set:GoldSet;
    try{set=deps.loadSetAt(REL,p);}catch(e){out.push(finding('manifest_set_unreadable',at(item),(e as Error).message));return null;}
    if(set.sha256!==r.set.sha256)out.push(finding('manifest_lock',at(item),'set bytes at release_commit differ from report.set.sha256'));
+   if(set.module!==m.module)out.push(finding('manifest_module',at(item),`gold set module ${set.module}, manifest module ${m.module}`));
    if(set.format!=='f6'||r.set.format!=='f6')out.push(finding('manifest_legacy_set',at(item),'legacy_plan2 sets are never release evidence'));
    if(set.cases.some(c=>c.provenance_kind==='synthetic'))out.push(finding('manifest_synthetic',at(item),'gold set contains synthetic cases'));
    if(set.review_required&&set.cases.some(c=>c.retracted===null&&(c.reviewed_by===null||c.reviewed_by===c.recorded_by)))
@@ -152,7 +169,12 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(!bytes||sha256Hex(bytes)!==r.set.sha256){out.push(finding('manifest_fixture',at(item),`fixture ${p} at release_commit does not hash to report.set.sha256 ${r.set.sha256}`));return null;}
   try{
    const json=JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-   if(kind==='replay_consistency')return {fixture:{kind,file:parseReplayFile(json,{allowDrafts:false,file:p})},set:null};
+   if(kind==='replay_consistency'){
+    const file=parseReplayFile(json,{allowDrafts:false,file:p});
+    const want=item==='replay_frozen'?'frozen':'live';
+    if(file.mode!==want||file.module!==m.module){out.push(finding('manifest_fixture',at(item),`fixture ${p} is a ${file.mode} ${file.module} replay file; ${item} needs a ${want} ${m.module} file`));return null;}
+    return {fixture:{kind,file},set:null};
+   }
    if(kind==='reference_regression')return {fixture:{kind,samples:parseReferenceSamples(json)},set:null};
   }catch(e){out.push(finding('manifest_fixture',at(item),`fixture ${p} unparsable: ${(e as Error).message}`));return null;}
   out.push(finding('manifest_kind',at(item),`no fixture rule for kind ${kind}`));return null;
@@ -193,12 +215,19 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(row.mode!=='report'||r.mode!=='report')out.push(finding('manifest_mode',at(item),`mode ${r.mode}/${row.mode}; release evidence needs mode 'report'`));
   const wantPriv=item!=='reference_regression';
   if(row.privileged!==wantPriv||r.privileged!==wantPriv)out.push(finding('manifest_privileged',at(item),`privileged must be ${wantPriv}`));
+  if(row.finished_at===null)out.push(finding('manifest_run_unfinished',at(item),'dq_eval_runs.finished_at is null'));
+  else preparedAfter(item,row.finished_at);
   if(row.status!=='passed')out.push(finding('manifest_run_status',at(item),`dq_eval_runs.status ${row.status}`));
   if(row.evaluator_code_version!==REL)out.push(finding('manifest_code_version',at(item),'dq_eval_runs.evaluator_code_version differs from release_commit'));
   if(row.set_sha256!==r.set.sha256||row.kind!==r.kind)out.push(finding('manifest_report_run',at(item),'dq_eval_runs row and report disagree on kind/set'));
   const cls=r.summary.evidence_class;
-  if(item==='reference_regression'){if(cls!=='comparison')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${cls}, expected comparison`));}
-  else if(item==='dual_source'&&cls==='adapter_check')out.push(finding('manifest_adapter_check',at(item),'same_feed dual-source runs are adapter checks, not evidence'));
+  if(item==='dual_source'){
+   // the class is the F6 registration's, never the report's: unregistered → invalid (only not_applicable is acceptable); same_feed → adapter check
+   const reg=pairRegistration(r.set.id,deps.pairs??F6_PAIRS);
+   if(!reg){out.push(finding('manifest_invalid',at(item),`pair ${r.set.id} is not registered in F6 (kinds/pairs.ts); use not_applicable`));return null;}
+   if(reg.independence==='same_feed')out.push(finding('manifest_adapter_check',at(item),'same_feed dual-source runs are adapter checks, not evidence'));
+  }
+  else if(item==='reference_regression'){if(cls!=='comparison')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${cls}, expected comparison`));}
   else if(cls!=='truth')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${cls}, expected truth`));
   if(item==='official_reconciliation'&&(r.provenance?.verified?.artifacts!==true||r.provenance?.verified?.sources!==true))
    out.push(finding('manifest_unverified',at(item),'official run lacks verified artifacts and sources'));
@@ -211,6 +240,7 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(ev===undefined){out.push(finding('manifest_evidence_missing',at(item),'missing'));continue;}
   if(!isObject(ev)){out.push(finding('manifest_invalid',at(item),'must be an object'));continue;}
   if('not_applicable' in ev){
+   if(Object.keys(ev).length>1){out.push(finding('manifest_invalid',at(item),'not_applicable cannot be combined with run evidence'));continue;}
    if(!WAIVABLE.has(item))out.push(finding('manifest_non_waivable',at(item),`${item} cannot be not_applicable`));
    else if(!naValid(ev.not_applicable))out.push(finding('manifest_waiver_invalid',at(item),'not_applicable needs reason, approved_by "owner" and at'));
    continue;
@@ -242,6 +272,7 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
    const r=parseReport(bytes);
    if(!r){out.push(finding('manifest_report_invalid',at(item),`${String(ev.report)} is not an F6 report`));continue;}
    if(r.mode!=='ci')out.push(finding('manifest_mode',at(item),"frozen replay evidence is a mode 'ci' run"));
+   if(typeof r.finished_at!=='string')out.push(finding('manifest_run_unfinished',at(item),'report has no finished_at'));else preparedAfter(item,r.finished_at);
    if(r.summary.evidence_class!=='truth')out.push(finding('manifest_evidence_class',at(item),`evidence_class ${r.summary.evidence_class}`));
    checkReport(item,r,'replay_consistency');
    continue;
@@ -255,6 +286,9 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
    const officialId=(m.evidence.official_reconciliation as {run_id?:unknown}|undefined)?.run_id;
    if(runId!==officialId)out.push(finding('manifest_expert_run',at(item),'population.evaluated_run_id must equal the official_reconciliation run_id'));
    out.push(...validateExpertRecord(rec,official?.set??null,{release:true,where:at(item)}));
+   const evRev=isObject(rec)&&isObject(rec.population)?rec.population.db_state_rev:undefined;
+   const offRev=official?.report.environment?.db_state_rev;
+   if(official&&evRev!==undefined&&String(offRev)!==evRev)out.push(finding('manifest_expert_run',at(item),`population.db_state_rev ${String(evRev)} differs from the official report's db_state_rev ${String(offRev)}`));
    continue;
   }
   if(!isRepoPath(ev.dir)){out.push(finding('manifest_path',at(item),'dir must be repo-relative without .. segments'));continue;}
@@ -272,8 +306,9 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
  if(deps.freshness)for(const market of new Set(m.scope.markets)){
   const dataset=`${m.module}.${market.toLowerCase()}`;
   const f=await deps.freshness(dataset);
+  if(f?.last_ok_at&&Date.parse(f.last_ok_at)>prepared){out.push(finding('manifest_freshness_unverifiable',`${where}#scope.markets.${market}`,`dq_freshness ${dataset} last_ok_at is after prepared_at: historical freshness cannot be established`));continue;}
   const status=!f?'absent':!CADENCES.includes(f.expected_cadence)?'error'
-   :computeFreshness({cadence:f.expected_cadence as Cadence,lastOkAt:f.last_ok_at?new Date(f.last_ok_at):null,consecutiveErrors:Number(f.consecutive_errors??0),now:new Date(m.prepared_at)});
+   :computeFreshness({cadence:f.expected_cadence as Cadence,lastOkAt:f.last_ok_at?new Date(f.last_ok_at):null,consecutiveErrors:Number(f.consecutive_errors??0),now:new Date(prepared)});
   if(status!=='fresh')out.push(finding('manifest_stale',`${where}#scope.markets.${market}`,`dq_freshness ${dataset} recomputed at prepared_at is ${status}`));
  }
  return out;
