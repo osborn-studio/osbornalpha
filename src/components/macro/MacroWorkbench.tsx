@@ -113,7 +113,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
         )}
       </div>
 
-      <nav aria-label={t('tabs.label')} className="flex gap-1 border-b border-border">
+      <nav aria-label={t('tabs.label')} className="flex flex-wrap gap-1 whitespace-nowrap border-b border-border">
         {TABS.map((tb) => <button key={tb} type="button" aria-current={tab === tb ? 'page' : undefined} onClick={() => go(region, tb)} className={tabBtn(tab === tb)}>{t(`tabs.${tb}`)}</button>)}
         {/* MACRO-P3 */}
         {strategyLinkTabs(strategyEnabled).map((l) => <Link key={l.key} href={l.href} className={tabBtn(false)}>{t(`tabs.${l.key}`)}</Link>)}
@@ -123,15 +123,20 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
       {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
 
-      {tab === 'overview' && judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
+      {tab === 'overview' && <div className="macro-overview-layout">
+        <nav className="macro-local-nav" aria-label={t('tabs.overview')}>
+          {judgmentsEnabled && <a href="#investment-clock">{t('judgment.widget.title')}</a>}
+          {env && <><a href="#macro-updates">{t('changes.title')}</a><a href="#macro-indicators">{t('tabs.indicators')}</a><a href="#macro-sources">{t('sources.title')}</a></>}
+        </nav><div className="macro-overview-main">
+      {judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
 
       {tab === 'overview' && env && (
         <div className="space-y-3">
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div id="macro-updates" className="grid gap-3 lg:grid-cols-2">
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
-          <section className="card-base space-y-2">
+          <section id="macro-indicators" className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>
               <span className="text-[11px] text-text-dim">{t('table.hint')}</span>
@@ -141,9 +146,10 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
             <div className="text-[11px] text-text-dim">{t('table.neutralNote')}</div>
           </section>
           {preview && <IndicatorDetail key={preview} seriesId={preview} compact />}
-          <SourceFooter labels={sourceLabels(env.indicators, locale)} t={t} onOpen={() => { const first = rows.find((r) => r.hasEvidence); if (first) openEvidence(first); }} />
+          <div id="macro-sources"><SourceFooter labels={sourceLabels(env.indicators, locale)} t={t} onOpen={() => { const first = rows.find((r) => r.hasEvidence); if (first) openEvidence(first); }} /></div>
         </div>
       )}
+      </div></div>}
       {tab === 'indicators' && env && (
         <section className="card-base"><IndicatorTable rows={rows} t={t} onOpenEvidence={openEvidence} /></section>
       )}

@@ -1,0 +1,116 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Arial, "PingFang SC", sans-serif;
+}
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+}
+a {
+  color: var(--accent);
+}
+.clock-preview-shell {
+  max-width: 1440px;
+  margin: auto;
+  padding: 0 28px 32px;
+}
+.preview-header {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  letter-spacing: 0.12em;
+}
+.preview-gold {
+  color: var(--accent);
+}
+.preview-header nav {
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.preview-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 28px;
+  padding-top: 28px;
+}
+.preview-layout aside {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  top: 28px;
+  height: fit-content;
+}
+.preview-layout aside p {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+.preview-layout aside a {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-left: 2px solid transparent;
+}
+.preview-layout aside a:first-of-type {
+  background: var(--accent-wash);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.preview-content {
+  min-width: 0;
+}
+.preview-content > h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.preview-caption {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+}
+@media (max-width: 1100px) {
+  .preview-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .preview-layout aside {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .clock-preview-shell {
+    padding: 0 12px 24px;
+  }
+  .preview-header {
+    height: 60px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+  .preview-header nav {
+    gap: 10px;
+    font-size: 10px;
+  }
+  .preview-layout {
+    padding-top: 20px;
+  }
+  .preview-caption {
+    margin-bottom: 20px;
+  }
+}

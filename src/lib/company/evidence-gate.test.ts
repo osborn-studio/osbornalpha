@@ -68,6 +68,13 @@ describe('evidenceEligible (§0 #63): each condition alone disqualifies',()=>{
    expect(elig(dto,fact,f,'US',true),`${name} (admin)`).toEqual(no('evidence_incomplete'));
   }
  });
+ it.each(['US','CN'] as const)('%s: rejects missing or mismatched run provenance for public and admin',market=>{
+  const fact=market==='US'?us:cn,filing=market==='US'?usF:cnF;
+  for(const run_id of ['','another-run']){
+   const dto=market==='US'?usDto({run_id}):cnDto({run_id});
+   for(const admin of [false,true])expect(elig(dto,fact,filing,market,admin)).toEqual(no('evidence_incomplete'));
+  }
+ });
  it('CN: linked + https document + bound pdf locator is eligible',()=>{expect(elig(cnDto(),cn,cnF,'CN')).toEqual({ok:true});});
  it('CN PDF conditions → citation_pending; admin waives exactly these',()=>{
   const cases:[string,EvidenceDto,FilingSummary][]=[
@@ -100,6 +107,14 @@ describe('applyGate / gateFacts',()=>{
   expect(r.eligibility.get(bad.fact_id)).toEqual(no('evidence_incomplete'));
   expect(r.eligibility.get('missing')).toEqual(no('evidence_incomplete'));
   expect(r.withheld).toEqual({evidenceIncomplete:2,citationPending:0});
+ });
+ it.each(['US','CN'] as const)('%s: mismatched run evidence is withheld from the response dictionary',market=>{
+  const fact=market==='US'?us:cn,filing=market==='US'?usF:cnF;
+  const result=applyGate({factIds:[fact.fact_id],facts:new Map([[fact.fact_id,fact]]),filings:new Map([[filing.filingId,filing]]),
+   records:new Map([[fact.fact_id,record(fact,{run_id:'another-run'})]]),pdf:new Map([[fact.fact_id,pdfOf()]]),market,admin:true});
+  expect(result.eligibility.get(fact.fact_id)).toEqual(no('evidence_incomplete'));
+  expect(result.evidence).toEqual({});
+  expect(result.withheld).toEqual({evidenceIncomplete:1,citationPending:0});
  });
  it('gateFacts reads evidence once for the sorted unique ids, asks the PDF source only for CN, and does nothing for no ids',async()=>{
   const evidenceOf=vi.fn(async(ids:string[])=>new Map(ids.map(id=>[id,record(id===cn.fact_id?cn:us)])));
