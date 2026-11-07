@@ -7,14 +7,15 @@
 import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {beforeAll,describe,expect,it} from 'vitest';
-import type {ObservationRow,StoredManifest,StrategyManifest} from './contract';
+import type {ObservationRow,ReviewFacts,ReviewStatus,StoredManifest,StrategyManifest} from './contract';
 import {BOUNDARIES,buildCycleTable,buildCycleTableManifest} from './cycle-table';
 import {manifestHash,monthEnd} from './manifest';
 import {subtract,toBp} from './numeric';
 import {buildPlaybooks} from './playbooks';
 import {buildPolicyResponse,buildPolicyResponseManifest} from './policy-response';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
-import {daily,fixture,monthly,obs,snap} from './testing/fixture';
+import {buildReviewManifest,reviewFromManifest} from './review';
+import {daily,FIXTURE_CATALOG,fixture,monthly,obs,snap} from './testing/fixture';
 import {buildTransmission,buildTransmissionManifest,regionParam} from './transmission';
 
 const DIR=fileURLToPath(new URL('./fixtures/replay/',import.meta.url));
@@ -139,5 +140,59 @@ describe('replayed numbers match hand computation',()=>{
   const spread=t.stages.flatMap(s=>s.nodes).find(n=>n.id==='us_cn_10y_spread')!;
   const i=MONTHS.indexOf('2025-05');
   expect(spread).toMatchObject({state:'derived',period_end:'2025-05-31',value_text:subtract(hundredths(dgs10(i)),hundredths(cgb10(i)))});
+ });
+});
+
+// ---------------------------------------------------------------- review (Part C, Task 9): its own scenario
+// Part B's shared scenario has one snapshot pair and no baseline snapshot, so the review case carries its own: US 2026-10,
+// baseline snapshot with August data, October snapshot with September data and a revised August unemployment rate,
+// month-end assets for September and October, three 2025 cuts and a 2026-10-28 hike. The catalog is the FIXTURE_CATALOG
+// subset the review reads, so the committed manifest stays small. Recorded together with the cases above
+// (MACRO_REPLAY_RECORD=1); the committed file holds {manifest_hash, manifest, expected}.
+const REVIEW_FILE=`${DIR}review-us-2026-10.json`;
+const REVIEW_IDS=['US_CPI_YOY','US_UNRATE','US_ISM_PMI','US_DGS10_D','US_DGS10','US_DTWEXBGS_D','US_DTWEXBGS','US_WTI_D','US_WTI','US_UST10Y','US_SP500','US_FED_TARGET_D','US_FED_TARGET_UPPER_D','US_FED_TARGET_LOWER_D'];
+function reviewScenario(){
+ const base=[...monthly('US_CPI_YOY','2026-08',['2.7']),obs('US_UNRATE','2026-08-31','4.2'),...monthly('US_DGS10','2026-08',['4.23']),...monthly('US_DTWEXBGS','2026-08',['121.2'])];
+ const cur=[...monthly('US_CPI_YOY','2026-09',['2.9']),obs('US_UNRATE','2026-08-31','4.3',{version:2,availableAt:'2026-10-02T12:00:00Z'}),...monthly('US_DGS10','2026-09',['4.16']),...monthly('US_DTWEXBGS','2026-09',['120.5'])];
+ const monthEnds=[...monthly('US_WTI','2026-09',['62','60.5']),obs('US_DGS10','2026-10-31','4.08'),obs('US_DTWEXBGS','2026-10-31','121')];
+ const days:[string,string,string][]=[['2025-09-16','4.5','4.25'],['2025-09-17','4.25','4'],['2025-10-29','4','3.75'],['2025-12-10','3.75','3.5'],['2026-10-28','4','3.75']];
+ return fixture({catalog:FIXTURE_CATALOG.filter(d=>REVIEW_IDS.includes(d.id)),
+  snapshots:[snap('US','2026-09-14T06:00:00Z',base.map(o=>o.observation_id)),snap('US','2026-10-15T06:00:00Z',cur.map(o=>o.observation_id),{counts:{verified:21,missing:4,restricted:5}})],
+  observations:[...base,...cur,...monthEnds,...daily('US_FED_TARGET_UPPER_D',days.map(([d,u])=>[d,u])),...daily('US_FED_TARGET_LOWER_D',days.map(([d,,l])=>[d,l]))]});
+}
+type ReviewFixture={manifest_hash:string;manifest:StrategyManifest;expected:{status:ReviewStatus;facts:ReviewFacts}};
+const buildReview=()=>buildReviewManifest(memoryStrategyPort(reviewScenario()),'US','2026-10',CODE);
+describe('replay review US 2026-10 (spec §6.2, §12: the view reads the committed manifest only)',()=>{
+ beforeAll(async()=>{
+  if(process.env.MACRO_REPLAY_RECORD!=='1')return;
+  const manifest=await buildReview();
+  writeFileSync(REVIEW_FILE,`${JSON.stringify({manifest_hash:manifestHash(manifest),manifest,expected:reviewFromManifest(manifest)})}\n`);
+ });
+ const fx=()=>JSON.parse(readFileSync(REVIEW_FILE,'utf8')) as ReviewFixture;
+ it('manifest_hash is the hash of the committed body',()=>{
+  expect(fx().manifest_hash).toBe(manifestHash(fx().manifest));
+ });
+ it('reviewFromManifest(committed manifest) deep-equals the committed expected facts',()=>{
+  expect(JSON.parse(JSON.stringify(reviewFromManifest(fx().manifest)))).toEqual(fx().expected);
+ });
+ it('the builder still produces the committed manifest (same hash) from the scenario',async()=>{
+  expect(manifestHash(await buildReview()),'builder output changed: re-record with MACRO_REPLAY_RECORD=1 only if the change is intended').toBe(fx().manifest_hash);
+ });
+ it('hand-computed: releases, the revision, the October event, episode ended / opened, asset moves, coverage',()=>{
+  const f=fx().expected.facts;
+  expect(fx().expected.status).toBe('ok');
+  expect(f.releases.map(x=>x.fact_id)).toEqual(['rel:US_CPI_YOY','rel:US_DGS10','rel:US_DTWEXBGS']);
+  expect(f.revisions).toHaveLength(1);
+  expect(f.revisions[0].slots).toMatchObject({series:'US_UNRATE',period:'2026-08-31',from:{value_text:'4.2'},to:{value_text:'4.3'}});
+  expect(f.timeliness.map(x=>x.fact_id)).toEqual(['tml:US_UNRATE']);
+  expect(f.policy_events.map(x=>x.fact_id)).toEqual(['evt:2026-10-28']);
+  expect(f.policy_events[0].slots.change).toEqual({value_text:toBp(subtract('4','3.75')),unit:'bp'});
+  expect(f.episode_changes.map(x=>x.fact_id)).toEqual(['ep:cut:2025-09-17:ended','ep:hike:2026-10-28:opened']);
+  expect(f.episode_changes[0].slots.cumulative).toEqual({value_text:'-75',unit:'bp'});
+  const mv=new Map(f.asset_moves.map(x=>[x.fact_id,x.slots.change]));
+  expect(mv.get('mv:US_UST10Y')).toEqual({value_text:toBp(subtract('4.08','4.16')),unit:'bp'});
+  expect(mv.get('mv:US_WTI')).toEqual({value_text:'60.5/62',unit:'pct_ratio'});        // exact ratio; (60.5 / 62 − 1) × 100 rounded once at display
+  expect(mv.get('mv:US_DTWEXBGS')).toEqual({value_text:'121/120.5',unit:'pct_ratio'});  // (121 / 120.5 − 1) × 100
+  expect(f.coverage.map(x=>x.fact_id)).toEqual(['cov:counts','cov:US_ISM_PMI','cov:US_SP500']);
  });
 });
