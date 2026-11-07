@@ -15,6 +15,8 @@ import {supabaseIndustryDb} from './db';
 import {schemeDatasetKey} from './licenses';
 import {supabaseManifestStore} from './manifest';
 import {buildCellManifest} from './run-aggregation';
+// E2E fixture mode (Task 20): synthetic deps under INDUSTRY_E2E_FIXTURES=1 outside production only.
+import {fixtureMode,fixtureReadDeps,fixtureReplayDeps,fixtureValuationReplayDeps} from './e2e-fixture';
 import type {IssuerCard,ReadDb,ReadDeps,ReplayDeps,ValuationReplayDeps} from './read';
 import type {IndustryDb} from './types';
 
@@ -88,16 +90,19 @@ export function memberCounter(sb:unknown):NonNullable<ReadDeps['memberCounts']>{
 
 /** Public pages and routes: anon reads; service role only for unresolved counts (lazy: no key needed until used). */
 export function publicReadDeps(now:Date):ReadDeps{
+ if(fixtureMode())return fixtureReadDeps(now);
  const anon=getAnonSupabase();
  return {db:readDb(supabaseIndustryDb(anon),true),unresolved:{unresolvedCount:q=>supabaseIndustryDb(getAdminSupabase()).unresolvedCount(q)},
   issuers:issuerDirectory(anon),facts:supabaseFactsDb(anon),memberCounts:memberCounter(anon),now,preview:false};
 }
 /** Admin internal preview only (the caller has passed requireAdminUser): service-role reads, licence gate skipped. */
 export function adminReadDeps(now:Date):ReadDeps{
+ if(fixtureMode())return fixtureReadDeps(now,true);
  const admin=getAdminSupabase();const db=supabaseIndustryDb(admin);
  return {db:readDb(db,false),unresolved:db,issuers:issuerDirectory(admin),facts:supabaseFactsDb(admin),memberCounts:memberCounter(admin),now,preview:true};
 }
 export function replayDeps(now:Date):ReplayDeps{
+ if(fixtureMode())return fixtureReplayDeps(now);
  return {
   db:supabaseIndustryDb(getAnonSupabase()),
   manifests:{get:h=>{const admin=getAdminSupabase();return supabaseManifestStore(admin,supabaseIndustryDb(admin)).get(h);}},
@@ -106,6 +111,7 @@ export function replayDeps(now:Date):ReplayDeps{
  };
 }
 export function valuationReplayDeps():ValuationReplayDeps{
+ if(fixtureMode())return fixtureValuationReplayDeps();
  return {
   db:supabaseIndustryDb(getAnonSupabase()),
   officialValue:async q=>{

@@ -728,6 +728,85 @@ type IndustryTableRows = InputRef<'table_rows',
 
 第 6 稿（2026-11-06）相对第 5 稿的变化，均来自 Codex 第五轮增量审计（`docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md`，处置表 `02-disposition.md`）：V1 取消 `industry_publisher`，沿用计划二"迁移角色拥有表与函数 + 撤销 `service_role` 写权限"的模型；V2 run 表写权限撤销、建/失败/覆盖/授权/来源记录/SIC 全部经函数，状态转换与元数据冻结；V3 行业宇宙并入 `desiredCn`（开关 `FACTS_CN_INDUSTRY_UNIVERSE`）；V4 CN 启用依赖；V5 清单保留 `MetricRow.inputs`；V6 每 run 每发行人一个事实信封；V7 观测回执表；V8 剪除路径与冻结触发器兼容；V9 迁移 `20261111090000`/`20261111091000`；V10 调用签名；V11 复用 `issuers_cninfo_idx`；V12 开篇可得时刻规则。另（指挥会话自查）：清单 GC 拆为"列候选 + TS 删桶对象 + 删索引"，因为迁移不能引用 `storage.objects`。
 
+### 18.1 计划 `2026-11-06-industry-research` 的实施记录与偏差（Task 1–20 与修复批次 1–8）
+
+来源：计划骨架《已知规格偏差》节（逐条、同编号）。"决定"不改变规格语义；"偏差"与规格文字不同。
+
+| # | 范围 | 类别 | 内容 |
+|---|---|---|---|
+| 1 | 迁移与契约（Task 1–4） | 决定 | `coverage_summary` 默认 `'{}'` 并约束为 object（规格写 `'[]'`；契约类型是 `Record<string,unknown>`，`set_*_coverage`/`fail_*` 写对象键）。 |
+| 2 | 迁移与契约（Task 1–4） | 决定 | `membership_id` 只做主键（主键已含唯一性，未另加 unique）。 |
+| 3 | 迁移与契约（Task 1–4） | 决定 | 估值行激活盖章顺序为先置 run `active` 并写 `activated_at = t`，再写行 `updated_at = t`；冻结触发器放行条件为"run 为 active、只改 `updated_at`、旧值 null、新值 = run.activated_at"（规格写"run 状态为 published"，不变量相同）；同一触发器用于 `industry_metrics`；delete 放行 run 为 `superseded/failed` 或 run 已不存在（级联）。 |
+| 4 | 迁移与契约（Task 1–4） | 偏差 | `dependencies_incomplete` 在**激活时**校验（暂存分块，stage 函数里无法校验整格）。 |
+| 5 | 迁移与契约（Task 1–4） | 决定 | GC 两函数增加 `p_min_age_seconds default 86400`；`put_industry_manifest` 冲突时刷新 `created_at`；`prune_industry_runs` 增加可选 `p_scheme/p_version`（契约方法只传 `p_keep`）。 |
+| 6 | 迁移与契约（Task 1–4） | 决定 | advisory lock 键带命名空间与分隔符：`'industry-run:<kind>:<scheme>:<version>:<level>'`、`'industry-obs:<kind>:<natural_key>'`、`'industry-src:<source>:<ts_code>:<l3_code>:<in_date>'`。 |
+| 7 | 迁移与契约（Task 1–4） | 偏差 | `industry_state_fingerprint` 返回 `{taken_at, revs:[{issuer_id,state_rev}]}`（规格只写了数组；契约要 `takenAt`）。 |
+| 8 | 迁移与契约（Task 1–4） | 决定 | 额外保护——`industry_source_memberships_immutable` 触发器（证据列不可改、不可删）；`security_marks`、`industry_official_valuations`、`industry_valuations` 加 `*_text` 生成列（PostgREST 把 numeric 发成 JSON 数，十进制字符串端到端靠它们）。 |
+| 9 | 迁移与契约（Task 1–4） | 决定 | 迁移一开头按函数访问顺序 `lock table … in access exclusive mode` 锁已存在的行业表，随后是"归属表必须为空"的升级守卫 `industry_upgrade_requires_empty_memberships`（生产该表此前无写入者）。 |
+| 10 | 迁移与契约（Task 1–4） | 决定 | 估值激活时 run 不是 `published` → `illegal_transition`；聚合激活时 run 不是 `building` → `run_not_building`。 |
+| 11 | 迁移与契约（Task 1–4） | 偏差（集成） | 激活完整性按 `(code, metric, duration, period_end)` 校验（规格 §5.4 只说 `expected_grid` 的 codes × period_ends × metrics），`(metric, duration)` 表 = `method.ts::cellSpecs`（与 22 一致）。 |
+| 12 | 迁移与契约（Task 1–4） | 决定（第 7 稿 K3） | 未解析计数 `unresolvedOf/Count` 用 `in_date <= least(on, knownBy)` 与 `out_date is null or out_date >= on`（`out_date` 含当日）；SQL/pg/内存与 `memberships.ts::countUnresolved` 逐条一致。 |
+| 13 | 迁移与契约（Task 1–4） | 决定（集成） | `upsertClassifications` 对 `attributes` 也做（键序无关的）比较，不同即 `conflicts` 不覆盖；Task 7/9 把冲突一律隔离为 `classification_name_conflict`——上游只改 `is_pub` 等属性时也会以该码隔离。 |
+| 14 | 迁移与契约（Task 1–4） | 决定 | `src/lib/entities/issuers.integration.test.ts` 的 INDUSTRY 块按迁移一后的状态改断言、重放计划一迁移后接着重放迁移一（先锁 `issuers` 防死锁）；`dq_freshness` weekly 改动与计划三逐字相同、不加标记。 |
+| 15 | 采集与成分（Task 5–9） | 偏差 | 规格的 `src/lib/entities/load-a-share.ts` 落在 `src/lib/industry/load-a-share.ts`；`providers/tushare-sw.ts` 落在 `providers/tushare-industry.ts`（计划文件表）。 |
+| 16 | 采集与成分（Task 5–9） | 偏差 | 规格说分页用 `keysetAll`；`facts-scope.ts` 用已落地的 `selectAll` 按唯一列（`industry_source_memberships.id`、`issuers.issuer_id`、单一宇宙内的 `ticker`）分页，加 `scope.ts::currentSecurities`（`keysetAll` 未导出，且只允许改 INDUSTRY 块）。 |
+| 17 | 采集与成分（Task 5–9） | 决定 | `industryCnUniverse` 经 service-role `TableClient` 直接读 `industry_source_memberships`（生产 `desiredCn` 只有 `tables` + `FactsDb`；见《跨任务接口约定》B1）。 |
+| 18 | 采集与成分（Task 5–9） | 决定 | SIC 节点平铺为 level 1（`parent_code null`，`attributes {office}`），`apply_sic_memberships` 行 level = 1。 |
+| 19 | 采集与成分（Task 5–9） | 决定（第 7 稿 K1–K3） | 夹具为 2026-11-06 的真实录制（36 份，逐字节拷贝，保留 `request`/`response_sha256`）；真实数据造不出的情形在测试内以标注的"synthetic edit of a real response"构造，不建合成夹具文件；`parent_code` 属 `industry_code` 命名空间（`index_code` 形式仍防御性接受），原值存 `attributes.parent_industry_code`。 |
+| 20 | 采集与成分（Task 5–9） | 已知限制 | `load-a-share` 跳过已退市 `stock_basic` 行（§4.7 第 4 步），历史成员在规格三落地前保持未解析（K4 之后：已退市 ts_code 的来源记录不再计入 `n_unresolved`，见第 70 条）；上游消失的来源记录保持 `current`（规格未定义来源记录的退役）。 |
+| 21 | 聚合、清单、标记（Task 10–14） | 偏差（契约变更） | `ManifestRole` 加 `duration`；清单 `roles` 全序为 `(metric, duration, issuer_id)`（规格 §5.3 写 `(metric, issuer_id)`）。同一指标在 12-31 有 12M 与 3M 两格，一个发行人可能一格纳入、一格排除。 |
+| 22 | 聚合、清单、标记（Task 10–14） | 偏差 | `12M` 格只在 `period_end` 为 12-31 时存在（A 股 12M 事实是会计年度；其他季末 12M 格恒为空集）；其他季末用 `3M` 与 `TTM`。 |
+| 23 | 聚合、清单、标记（Task 10–14） | 决定 | 同比的上年同期 = 期间起止各移一年的精确匹配（不用计划二 derive 的 350–380 天窗口）；同集合 = 当期与上年同期都有值的成员。 |
+| 24 | 聚合、清单、标记（Task 10–14） | 决定 | `roe` 分母 Σ(期初+期末)/2 ≤ 0 → `missing(zero_denominator)`（与计划二个股 ROE 非正平均权益不出值一致）。 |
+| 25 | 聚合、清单、标记（Task 10–14） | 决定 | `unresolved_over_limit` 只在 `n_members=0` 且 `n_unresolved>0` 时使用；显示阈值从不改变 `status`（§5.2）。 |
+| 26 | 聚合、清单、标记（Task 10–14） | 偏差 | 就绪门分母 = 本 run 网格中全部 (code, period_end) 的成员发行人并集（规格写"全部来源记录解析发行人 ∪ a_stock"）：只衡量本次聚合实际依赖的发行人，且不受并行测试数据影响。 |
+| 27 | 聚合、清单、标记（Task 10–14） | 决定 | 状态指纹用 `FactsDb.scopeAll('CN')`（一次读取同时给 `state_rev` 与 `last_success_at`）；`fingerprint_at` 是该读取的客户端时刻（仅编排元数据，U4）；`IndustryDb.stateFingerprint` 未被编排使用。 |
+| 28 | 聚合、清单、标记（Task 10–14） | 决定 | 清单只在该组至少一个格 `ok` 时上传（全 `missing` 的组没有行引用它）。 |
+| 29 | 聚合、清单、标记（Task 10–14） | 决定（集成） | `mark_revised` 隔离由 `apply_observations` 在同一事务内写（Task 2 SQL / Task 3 内存）；`marks.ts` 不预读当前观测、不重复写。 |
+| 30 | 聚合、清单、标记（Task 10–14） | 决定 | Task 14 用 `IndustryDb` 契约（`upsertSourceMemberships` → `applyMemberships`）播种成分，与 Task 7/8 编排调用同一组 RPC，但不依赖其编排函数签名。 |
+| 31 | 聚合、清单、标记（Task 10–14） | 决定 | `AggregationOptions.level` 是 `number`（生产传 1），另有 `codes?` 过滤（脚本与 Task 14 用）。 |
+| 32 | 聚合、清单、标记（Task 10–14） | 决定（集成） | `buildCellManifest`（`/replay?mode=recompute`）与 run 共用 `loadGroup/readIssuerFacts/computeGroup`；recompute 清单头的 `code_version` = 当前部署的 `VERCEL_GIT_COMMIT_SHA`（缺省 `'unknown'`）。 |
+| 33 | 聚合、清单、标记（Task 10–14） | 决定（第 7 稿 K1/K2） | `security_marks` 增可空列 `free_share`（Tushare `free_share` 万股 × 10000，非正视为缺失）；它属于观测内容（修订 → 新观测，`payload_hash` 含它）；`METHOD_CONFIG.total_share_basis='all_classes_incl_h_b'`、`code_aliases` 入 `METHOD_CONFIG`（`CONFIG_HASH` 钉值随之更新；方法版本仍为首发的 `industry-agg/1.0`）。 |
+| 34 | 读接口、页面、调度（Task 15–20） | 偏差 | `/replay` 另收可选 `duration`；同一 `period_end` 有多格（12M 与 3M）而未给 → 400 `invalid_parameter:duration`（格主键含 `period_start`/`duration`）。 |
+| 35 | 读接口、页面、调度（Task 15–20） | 偏差 | `/replay` 估值格只做授权顺序与 `officialValue`，不读估值清单，返回 `replay:'deferred_i3'`（I-3 未实施）。 |
+| 36 | 读接口、页面、调度（Task 15–20） | 决定 | `/replay?mode=recompute` 依赖 `buildCellManifest`；差异按成分/未解析/事实/state_rev/格列出（§5.5）；`filterManifest` 的 `roles` 按 metric **和**格的 duration 裁剪（见 21）。 |
+| 37 | 读接口、页面、调度（Task 15–20） | 偏差 | `GET /api/entities/[issuerId]/industries` 另返回 `schemes:[{scheme,version,datasetKey,public}]`（公司页区分"授权待确认"与"无分类"）。 |
+| 38 | 读接口、页面、调度（Task 15–20） | 偏差 | admin replay 另返回 `focus`（与公共 original 回放同形），供内部预览的来源抽屉使用。 |
+| 39 | 读接口、页面、调度（Task 15–20） | 决定 | cron/脚本作业门——Tushare 作业无 token → 503 `tushare_unavailable`；`facts-scope`/`aggregate` 的 apply 未开 `FACTS_CN_INDUSTRY_UNIVERSE`/`FACTS_CN_ENABLED` → 403 `job_disabled`；`official`/`valuation` → 200 `skipped:'deferred_i3'`（owner 默认 E、V4）。 |
+| 40 | 读接口、页面、调度（Task 15–20） | 决定（集成） | `memberships-sic`、`marks`、`aggregate` 无 dry-run（运行函数总是写库），dry-run 返回 `dry_run_unsupported`；`marks` 的交易日必须显式给出（`trade_cal` 随 I-3 延后）；`facts-scope` 作业在 `jobs.ts` 内实现（dry-run = `industryCnUniverse`，apply = `reconcileScope`）；`load-a-share` 的 `--limit` 映射为 cninfo 查询上限 `maxLookups`。 |
+| 41 | 读接口、页面、调度（Task 15–20） | 决定 | `vercel.json` 只加 `memberships-sic`（频率与上限见第 69 条）；其余作业为脚本（owner 默认 E；无 Tushare token）。 |
+| 42 | 读接口、页面、调度（Task 15–20） | 决定 | 表格"同比"只显示存储的同比指标（营收、归母净利），其余显示 "—"（页面不做派生运算）。 |
+| 43 | 读接口、页面、调度（Task 15–20） | 决定 | 列表页判断区只放"未设判断"说明；F4 卡在详情页（F4 主体是单个行业）。 |
+| 44 | 读接口、页面、调度（Task 15–20） | 偏差 | 成分页 L2 过滤未做（画布有）；路径列显示二级/三级。 |
+| 45 | 读接口、页面、调度（Task 15–20） | 决定 | 页面"上次成功响应"为进程内内存（单实例、≤ 200 个查询、读到 `unlicensed` 即清除）。 |
+| 46 | 读接口、页面、调度（Task 15–20） | 偏差 | E2E 为夹具模式（`INDUSTRY_E2E_FIXTURES=1`，非生产），不连数据库（§13.5）。 |
+| 47 | 读接口、页面、调度（Task 15–20） | 决定 | §7.1 输入适配——`industry_valuations` 自然键可解析、构造返回 `unsupported_deferred_i3`；`origin.adapter` = run 的 `method_version`。 |
+| 48 | 读接口、页面、调度（Task 15–20） | 偏差 | 三级文字用 `text-text-dim`（#a1a1aa），不用画布的 Distant Fog（对比度不足，待 owner 确认）。 |
+| 49 | 读接口、页面、调度（Task 15–20） | 决定 | 新鲜度数据集名以运行函数实际写入为准（见《跨任务接口约定》B3）；读模型 `AGG_FRESHNESS = {sw2021:'industry.agg.sw2021'}`、`MEMBERSHIP_FRESHNESS = {sw2021:'industry.sw2021.memberships', sic:'industry.sic.memberships'}`。 |
+| 50 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 偏差（第 7 稿 K3） | 成分窗口 `valid_to = valid_to_available_date = min(out_date + 1 日, delist_date)`；`in_date >= delist_date`（规格写 `>`；相等时窗口为空）→ 不写归属，隔离 `membership_after_delist`。 |
+| 51 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 决定（第 7 稿 K3） | `out_date = in_date` 是合法的单日记录，只拒绝 `out_date < in_date`；成员代码经 `SW2021_CODE_ALIASES`（`850412.SI→850401.SI`）映射，原值存 `locator.code_aliases`；L1/L2/L3 任一不在分类树 → 隔离 `classification_code_unknown`、不写。 |
+| 52 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 决定（第 7 稿 §17.1） | `load-a-share` 取 `stock_basic` 的 `L`、`D`、`P` 三遍（D 行只记 `skipped_summary(delisted)`，规格 §4.7 第 4 步）；`runResolveMemberships` 另取一次 `list_status='D'` 得 `delist_date`。 |
+| 53 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#1） | 客户端组件只经 `display.ts` → `method-constants.ts`（无 import）取方法常量；`method.ts` 再导出它们；守卫测试扫描客户端 import 图；Task 20 门禁加 `npm run build`。 |
+| 54 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#2） | 页面"上次成功响应"只在本次授权重验通过后显示（重验失败或为 false → 关闭并忘掉该数据集），2 小时过期，授权开关路由切换后立即失效（规格 §11 的"上次成功响应"收紧，§4.8 授权门优先）。 |
+| 55 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#3） | 已解析成分在股票后来退市时由 `reconcileDelistings` 经 `apply_industry_memberships` 的关窗步骤就地关到 `min(out_date+1, delist_date)`；已关闭且终点不同的不改写，隔离 `membership_delist_conflict`。 |
+| 56 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#4） | 清单 GC 改为认领/tombstone 协议（`industry_manifests.gc_claimed_at`；认领期间登记与暂存引用都被拒 `manifest_gc_in_progress`；认领超过 1 h 可重认领）；`ManifestStore.put` 改为先登记后上传。新错误码 `manifest_gc_in_progress` 进共享契约。 |
+| 57 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#5） | 成分取代按"来源谱系 + 层级"配对后继（不再只按层级取第一个）。 |
+| 58 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#6） | SIC 调度行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领，完成以 `lease_batch_id` 为栅栏；新行只 insert、从不覆盖已有行与租约。 |
+| 59 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#7） | 离开 US 事实范围的 SIC 调度行被退役（`next_due_at='9999-12-31T00:00:00Z'`），回到范围再激活；取到期行时分页过滤到凑满 `limit` 个合格行。 |
+| 60 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#8） | E2E 夹具的每个格由真实计算生成的独立清单支撑，原样回放必须 `reproduced="true"`；另有一个故意篡改的格断言 `reproduced="false"`；`fixture-rows.ts::manifestOf` 标明只作版面（使用处都 mock 回放）。 |
+| 61 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-1） | 清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。 |
+| 62 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-2） | 已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。 |
+| 63 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-3） | `apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。 |
+| 64 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-1） | 已解析成分在得知退市日 `<=` 窗口起点时（无有效区间），`correct_industry_membership_windows` 在同一事务内把这些 `ok` 行改为 `quarantined`（不插后继），聚合排除；同时记 `dq_quarantine(membership_after_delist)`。 |
+| 65 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-2） | `apply_sic_memberships` 先 `FOR UPDATE` 锁调度行，再以 `clock_timestamp()` 校验租约归属与未过期，然后才做任何写入。 |
+| 66 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（画布抽屉内容未实现） | A 类抽屉缺 Σ 值与文件链接；B 类缺逐角色差异表、隔离链接、复制哈希；C 类缺 Σ mcap、相对差、历史类别、标记输入；D 类缺成分历史与解析过程。当前抽屉按规格 §8.5 的最小内容集实现（值/覆盖/回放/输入前 5/成分来源）。 |
+| 67 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（对比度） | 浅色主题下 `--accent`/`--warn` 与背景对比度约 2.9:1，低于 WCAG AA 4.5:1。属 DESIGN.md 令牌问题，留给 DESIGN.md 所有者；本计划未改令牌。 |
+| 68 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（Task 18） | 列表页 CSV 导出未实现；移动端"表格优先"未实现（移动端仍以热力图最近 5 期为主、表格视图一键可达）。 |
+| 69 | 读接口、页面、调度（Task 15–20，修复批次） | 决定（Codex task16 P1） | SIC 调度改为每天 `0 2 * * *` 且带 `limit=200`（`vercel.json`）。cron 路由已透传 `limit`（1..500），`runMembershipsSic` 默认 200，到期间隔 `NEXT_RUN_MS=7 天`，所以每天最多处理 200 个到期发行人，US 范围在数日内排空，之后每个发行人每周刷新一次；`dq_freshness` 仍为 weekly。 |
+| 70 | 采集与成分（修复批次 3/8） | 决定（第 7 稿 K4） | 新表 `industry_security_delistings`（`stock_basic list_status='D'` 遍写入，保留页面证据，日期变化隔离 `delist_date_changed`，仅 service_role）；`n_unresolved` 排除 `delist_date <= on` 的 ts_code；`load-a-share` 的 D 行仍只记 `skipped_summary(delisted)`，不建发行人。 |
+
+本轮不实施（规格自己的门）：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
+
 ---
 
 ## Claude Design 画布
