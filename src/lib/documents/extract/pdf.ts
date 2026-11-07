@@ -7,7 +7,7 @@
 // interpolated by code-point position → pieces clustered into lines (same line: |Δy| <= 0.5 × the
 // item height; pieces sorted by y descending, then x) → within a line sorted by x, one space where
 // the gap to the previous piece exceeds SPACE_EM × height (a "space width"), an identical piece
-// drawn again within half a height (fake bold) dropped → lines joined with '\n' in descending y.
+// drawn again in the same box (x, y, width, height within OVERPRINT_TOL of the height: fake bold; adjacent repeated glyphs are kept) dropped → lines joined with '\n' in descending y.
 // Offsets are code points recorded during concatenation (assemblePage). Coordinates are PDF user
 // space (pt, origin bottom-left, page.view), as pdf.js reports them, rounded to 0.01 pt. hasTextLayer = some page has
 // text; an all-empty document is 'no_text_layer' upstream. The budget is checked before each page
@@ -25,13 +25,17 @@ import {assemblePage,cpLength,normalizeText} from './pages-json';
 import type {LinePiece} from './pages-json';
 import {detectTables} from './tables';
 
-/** maxPages: refuse a document with more pages before reading any (ExtractTooManyPages; R1-P2-7 round 2 bounds the blocking work). */
+/** maxPages (default DEFAULT_MAX_PAGES): refuse a document with more pages before reading any (ExtractTooManyPages; R1-P2-7 round 2 bounds the blocking work). */
 export interface ExtractBudget{remainingMs():number;maxPages?:number;/** aborted when the lease heartbeat stops (round 3: the worker is terminated) */signal?:AbortSignal}
 export class ExtractTimeout extends Error{constructor(){super('extract_timeout');this.name='ExtractTimeout';}}
 export class ExtractTooManyPages extends Error{constructor(readonly pages:number){super('too_many_pages');this.name='ExtractTooManyPages';}}
 /** One text item as pdf.js reports it: string, origin (transform[4], transform[5]), advance width, height. */
 export interface RawItem{str:string;x:number;y:number;w:number;h:number}
 export const SPACE_EM=0.25;
+/** Default page cap when the caller sets none (the same bound as the extraction scheduler's MAX_PDF_PAGES). */
+export const DEFAULT_MAX_PAGES=1500;
+/** Fake bold = the same text drawn again at (almost) the same box: x, y, width and height each within this fraction of the height. */
+const OVERPRINT_TOL=0.1;
 /** Coordinates are kept to 0.01 pt: enough for clustering, and pages.json stays compact and stable. */
 const r2=(v:number)=>Math.round(v*100)/100;
 
@@ -65,6 +69,12 @@ function piecesOf(it:RawItem):LinePiece[]{
  return out;
 }
 
+function overprinted(a:LinePiece,b:LinePiece):boolean{
+ if(a.text!==b.text)return false;
+ const tol=OVERPRINT_TOL*Math.max(a.h,b.h,1);
+ return Math.abs(a.x0-b.x0)<=tol&&Math.abs(a.y-b.y)<=tol&&Math.abs((a.x1-a.x0)-(b.x1-b.x0))<=tol&&Math.abs(a.h-b.h)<=tol;
+}
+
 /** Pure layout step (unit-tested without pdf.js): raw items of one page → page text and lines. */
 export function layoutFromItems(raw:RawItem[]):{text:string;lines:LayoutLine[]}{
  const pieces=raw.flatMap(piecesOf).sort((a,b)=>b.y-a.y||a.x0-b.x0);
@@ -78,7 +88,7 @@ export function layoutFromItems(raw:RawItem[]):{text:string;lines:LayoutLine[]}{
   const sorted=[...row.pieces].sort((a,b)=>a.x0-b.x0);const kept:LinePiece[]=[];
   for(const p of sorted){
    const prev=kept.at(-1);
-   if(prev&&prev.text===p.text&&Math.abs(prev.x0-p.x0)<0.5*Math.max(prev.h,p.h,1))continue;
+   if(kept.some(k=>overprinted(k,p)))continue;
    if(prev&&!p.spaceBefore)p.spaceBefore=p.x0-prev.x1>SPACE_EM*Math.max(prev.h,p.h);   // words after the first of one item keep their space
    kept.push(p);
   }
@@ -92,12 +102,15 @@ export async function extractPdf(bytes:Uint8Array,budget:ExtractBudget,opts:Extr
  const pdfjs=await (opts.loader??loadPdfJs)();
  // pdf.js may transfer (detach) the buffer it is given: hand it a copy. CMaps: see the header.
  const task=pdfjs.getDocument({data:new Uint8Array(bytes),isEvalSupported:false,disableFontFace:true,useSystemFonts:false,verbosity:0,...(opts.assets??pdfjsAssets())});
+ const onAbort=()=>{void task.destroy().catch(()=>{});};   // the lease heartbeat stopped: tear pdf.js down; the pending call rejects
+ budget.signal?.addEventListener('abort',onAbort,{once:true});
  try{
+  if(budget.signal?.aborted)throw new ExtractTimeout();
   const doc=await task.promise;
-  if(budget.maxPages!==undefined&&doc.numPages>budget.maxPages)throw new ExtractTooManyPages(doc.numPages);
+  if(doc.numPages>(budget.maxPages??DEFAULT_MAX_PAGES))throw new ExtractTooManyPages(doc.numPages);
   const pages:PageLayout[]=[];
   for(let n=1;n<=doc.numPages;n++){
-   if(budget.remainingMs()<=0)throw new ExtractTimeout();
+   if(budget.remainingMs()<=0||budget.signal?.aborted)throw new ExtractTimeout();
    const page=await doc.getPage(n);
    const content=await page.getTextContent();
    const raw:RawItem[]=[];
@@ -113,6 +126,7 @@ export async function extractPdf(bytes:Uint8Array,budget:ExtractBudget,opts:Extr
   }
   return {pages,hasTextLayer:pages.some(p=>p.text!=='')};
  }finally{
+  budget.signal?.removeEventListener('abort',onAbort);
   await task.destroy();
  }
 }

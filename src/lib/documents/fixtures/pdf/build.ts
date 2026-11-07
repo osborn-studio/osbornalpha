@@ -49,3 +49,28 @@ export const minimalTwoPagePdf=()=>buildPdf([
 ]);
 /** One page with no text operators: the no_text_layer case. */
 export const noTextPdf=()=>buildPdf([[]]);
+
+/**
+ * CID-keyed CJK page (no embedded font, no ToUnicode): Type0 / UniGB-UCS2-H / CIDFontType0 Adobe-GB1. pdf.js can
+ * only map these codes to Unicode through its packed CMaps (cMapUrl), so the text "中文报告 收益" (UCS-2BE hex
+ * below) comes out only when the asset directories are passed — the production path for HKEX / cninfo reports.
+ */
+export function cjkCidPdf():Uint8Array{
+ const objs:string[]=[];
+ const add=(s:string)=>{objs.push(s);return objs.length;};
+ const catalog=add(''),pagesObj=add('');
+ const desc=add('<</Type/FontDescriptor/FontName/STSong-Light/Flags 4/FontBBox[0 0 1000 1000]/ItalicAngle 0/Ascent 880/Descent -120/CapHeight 700/StemV 80>>');
+ const cid=add(`<</Type/Font/Subtype/CIDFontType0/BaseFont/STSong-Light/CIDSystemInfo<</Registry(Adobe)/Ordering(GB1)/Supplement 2>>/FontDescriptor ${desc} 0 R/DW 1000>>`);
+ const fc=add(`<</Type/Font/Subtype/Type0/BaseFont/STSong-Light-UniGB-UCS2-H/Encoding/UniGB-UCS2-H/DescendantFonts[${cid} 0 R]>>`);
+ const body='BT/FC 12 Tf 20 250 Td<4E2D658762A5544A>Tj ET\nBT/FC 12 Tf 20 230 Td<653676CA>Tj ET';   // 中文报告 / 收益
+ const content=add(`<</Length ${body.length}>>\nstream\n${body}\nendstream`);
+ const pageObj=add(`<</Type/Page/Parent ${pagesObj} 0 R/MediaBox[0 0 300 300]/Resources<</Font<</FC ${fc} 0 R>>>>/Contents ${content} 0 R>>`);
+ objs[catalog-1]=`<</Type/Catalog/Pages ${pagesObj} 0 R>>`;
+ objs[pagesObj-1]=`<</Type/Pages/Kids[${pageObj} 0 R]/Count 1>>`;
+ let out='%PDF-1.4\n';const offsets:number[]=[];
+ objs.forEach((o,i)=>{offsets.push(out.length);out+=`${i+1} 0 obj\n${o}\nendobj\n`;});
+ const xref=out.length;
+ out+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n${offsets.map(n=>`${String(n).padStart(10,'0')} 00000 n \n`).join('')}`;
+ out+=`trailer\n<</Size ${objs.length+1}/Root ${catalog} 0 R>>\nstartxref\n${xref}\n%%EOF\n`;
+ return new TextEncoder().encode(out);
+}

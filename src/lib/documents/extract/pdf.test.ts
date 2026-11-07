@@ -2,12 +2,13 @@
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {describe,expect,it} from 'vitest';
+import {existsSync as exists} from 'node:fs';
 import {existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {extractPdf,layoutFromItems,pdfjsAssets,ExtractTimeout} from './pdf';
 import type {RawItem} from './pdf';
 import {cpSlice} from './pages-json';
-import {minimalTwoPagePdf,noTextPdf} from '../fixtures/pdf/build';
+import {cjkCidPdf,minimalTwoPagePdf,noTextPdf} from '../fixtures/pdf/build';
 import type {PageLayout} from '../types';
 
 const FIX=fileURLToPath(new URL('../fixtures/pdf/',import.meta.url));
@@ -28,6 +29,7 @@ describe('fixture files',()=>{
  it('the committed PDFs are exactly the builder output (scripts/documents/make-fixture-pdf.ts)',()=>{
   expect(new Uint8Array(readFileSync(FIX+'minimal-two-pages.pdf'))).toEqual(minimalTwoPagePdf());
   expect(new Uint8Array(readFileSync(FIX+'no-text.pdf'))).toEqual(noTextPdf());
+  expect(new Uint8Array(readFileSync(FIX+'cjk-cid.pdf'))).toEqual(cjkCidPdf());
   expect(minimalTwoPagePdf().length).toBeLessThanOrEqual(2048);
  });
 });
@@ -44,8 +46,8 @@ describe('extractPdf (pdfjs-dist legacy build)',()=>{
   expect(l0).toMatchObject({index:0,text:'𠀋😀 Revenue',char_start:0,char_end:10,y:270});
   expect(l0.items.map(i=>[i.text,i.char_start,i.char_end])).toEqual([['𠀋😀',0,2],['Revenue',3,10]]);
   expect(l1).toMatchObject({index:1,char_start:11,char_end:30});
-  // a UTF-16 offset would put 'Revenue' at 5..12 — the stored offsets are code points
-  expect('𠀋😀 Revenue'.indexOf('Revenue')).toBe(5);
+  expect(pages[0].text.indexOf('Revenue')).toBe(5);   // UTF-16 index; the stored offset is the code-point index 3
+  expect(l0.items[1].char_start).toBe(3);
   for(const p of pages)assertOffsets(p);
  });
  it('detects the two-row table with label and numeric cells (offsets relative to the page text)',async()=>{
@@ -105,4 +107,60 @@ describe('layoutFromItems (synthetic items)',()=>{
   expect(lines[0].text).toBe('Total 1,234');
   expect(lines[0].items.map(i=>[i.text,i.char_start,i.char_end,Math.round(i.x0),Math.round(i.x1)])).toEqual([['Total',0,5,0,50],['1,234',6,11,60,110]]);
  });
+});
+
+describe('review fixes',()=>{
+ const it_=(str:string,x:number,y:number,w:number,h=10):RawItem=>({str,x,y,w,h});
+ it('fake bold: the same text in the same box is dropped, adjacent repeated glyphs are kept',()=>{
+  expect(layoutFromItems([it_('1',10,100,3),it_('1',13,100,3)]).text).toBe('11');
+  expect(layoutFromItems([it_('1',10,100,4),it_('1',14,100,4)]).text).toBe('11');
+  expect(layoutFromItems([it_('1',10,100,3),it_('1',13.5,100,3),it_('1',17,100,3)]).text).toBe('111');
+  expect(layoutFromItems([it_('Total',10,100,30),it_('Total',10.3,100.2,30)]).text).toBe('Total');
+  expect(layoutFromItems([it_('Total',10,100,30),it_('Total',10.3,100,31.5)]).text).toBe('TotalTotal');   // other width: not an overprint, both kept
+ });
+ it('budget: the clock is read before every page (second page times out), not only at the start',async()=>{
+  let calls=0;
+  await expect(extractPdf(minimalTwoPagePdf(),{remainingMs:()=>++calls<=2?60_000:0})).rejects.toBeInstanceOf(ExtractTimeout);
+  expect(calls).toBe(3);   // start, page 1, page 2
+ });
+ it('default page cap applies when the caller sets none; an aborted signal stops the extraction and destroys the document task',async()=>{
+  let destroyed=0;
+  const mk=(numPages:number)=>async()=>({getDocument:()=>({promise:Promise.resolve({numPages}),destroy:async()=>{destroyed++;}})}) as never;
+  await expect(extractPdf(new Uint8Array([0x25]),open,{loader:mk(1501)})).rejects.toMatchObject({name:'ExtractTooManyPages',pages:1501});
+  const ac=new AbortController();ac.abort();
+  await expect(extractPdf(new Uint8Array([0x25]),{remainingMs:()=>60_000,signal:ac.signal},{loader:mk(1)})).rejects.toBeInstanceOf(ExtractTimeout);
+  expect(destroyed).toBe(2);
+  let destroyedOnAbort=0;
+  const ac2=new AbortController();
+  const slow=async()=>({getDocument:()=>({promise:new Promise(()=>{}),destroy:async()=>{destroyedOnAbort++;}})}) as never;
+  const run=extractPdf(new Uint8Array([0x25]),{remainingMs:()=>60_000,signal:ac2.signal},{loader:slow});
+  await new Promise(r=>setTimeout(r,5));ac2.abort();
+  await new Promise(r=>setTimeout(r,5));
+  expect(destroyedOnAbort).toBeGreaterThanOrEqual(1);   // signal → task.destroy()
+  void run;
+ });
+ it('CID-keyed CJK text (no embedded font, no ToUnicode) is extracted only through the packed CMaps',async()=>{
+  const {pages}=await extractPdf(cjkCidPdf(),open);
+  expect(pages[0].text).toBe('中文报告\n收益');
+  for(const p of pages)assertOffsets(p);
+  const without=await extractPdf(cjkCidPdf(),open,{assets:{cMapUrl:'/nonexistent/',cMapPacked:true,standardFontDataUrl:'/nonexistent/'}});
+  expect(without.pages[0].text).toBe('');
+ });
+ it('pdfjsAssets are plain absolute directory paths with a trailing separator, never file:// URLs',()=>{
+  const a=pdfjsAssets('/app');
+  for(const v of [a.cMapUrl,a.standardFontDataUrl]){expect(v.startsWith('/')).toBe(true);expect(v.endsWith('/')).toBe(true);expect(v).not.toContain('file:');}
+ });
+});
+
+// Local-only smoke against a real HKEX report (never committed): DOCS_REAL_PDF=/path/to.pdf npm test -- extract/pdf
+const REAL=process.env.DOCS_REAL_PDF;
+describe.skipIf(!REAL||!exists(REAL))('real HKEX PDF (local only)',()=>{
+ it('pages 44–52 carry Chinese text and detected tables, offsets slice their text',async()=>{
+  const {pages}=await extractPdf(new Uint8Array(readFileSync(REAL as string)),{remainingMs:()=>300_000});
+  const sel=pages.filter(p=>p.page_no>=44&&p.page_no<=52);
+  const han=sel.reduce((n,p)=>n+(p.text.match(/\p{Script=Han}/gu)?.length??0),0);
+  expect(han).toBeGreaterThan(500);
+  expect(sel.reduce((n,p)=>n+p.tables.length,0)).toBeGreaterThan(0);
+  for(const p of sel)assertOffsets(p);
+ },120_000);
 });

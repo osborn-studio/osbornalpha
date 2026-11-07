@@ -3,8 +3,8 @@
 // Unicode code point offset (Array.from), equal to PostgreSQL length/substr on UTF-8 text; nothing
 // here uses String.prototype.slice/substring/length for offsets. Item text is normalised once
 // (NFKC, whitespace runs folded to one space, trimmed) and offsets are recorded while the page text
-// is concatenated, never searched for afterwards. pages.json is serialised with JSON.stringify in
-// the object-literal key order below, so parse → serialise reproduces the same bytes and hash.
+// is concatenated, never searched for afterwards. pages.json is serialised with JSON.stringify over
+// key-sorted objects (canonical at every level), so parse → serialise reproduces the same bytes and hash.
 import {createHash} from 'node:crypto';
 import {EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {LayoutItem,LayoutLine,PageInsert,PageLayout,PagesJson} from '../types';
@@ -13,7 +13,10 @@ export const sha256Hex=(bytes:Uint8Array|string)=>createHash('sha256').update(by
 export const cpLength=(s:string)=>Array.from(s).length;
 export const cpSlice=(s:string,start:number,end:number)=>Array.from(s).slice(start,end).join('');
 /** NFKC, every whitespace run (incl. U+3000 and NBSP) folded to one ASCII space, trimmed. */
-export const normalizeText=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim();
+const LONE_SURROGATE=/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+const C0_CONTROLS=/[\u0000-\u0008\u000e-\u001f\u007f]/g;   // \t \n \v \f \r are whitespace, folded below
+/** Also: lone surrogates → U+FFFD (they cannot be stored as UTF-8 text), C0 controls other than whitespace removed. */
+export const normalizeText=(s:string)=>s.replace(LONE_SURROGATE,'\ufffd').normalize('NFKC').replace(C0_CONTROLS,'').replace(/\s+/gu,' ').trim();
 
 /** One positioned piece of a line; text is already normalised and non-empty. */
 export interface LinePiece{text:string;x0:number;x1:number;y:number;h:number;spaceBefore:boolean}
@@ -38,7 +41,13 @@ export function assemblePage(rows:{y:number;pieces:LinePiece[]}[]):{text:string;
  return {text:parts.join(''),lines};
 }
 
-export const serializePagesJson=(json:PagesJson)=>JSON.stringify(json);
+/** Canonical form: object keys sorted at every nesting level (arrays keep their order), so the bytes do not depend on construction order. */
+function sortKeys(v:unknown):unknown{
+ if(Array.isArray(v))return v.map(sortKeys);
+ if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,sortKeys((v as Record<string,unknown>)[k])]));
+ return v;
+}
+export const serializePagesJson=(json:PagesJson)=>JSON.stringify(sortKeys(json));
 
 export function buildPagesJson(input:{content_sha256:string;code_version:string;has_text_layer:boolean;pages:PageLayout[]}):{json:PagesJson;bytes:Uint8Array;sha256:string}{
  const json:PagesJson={extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:input.code_version,content_sha256:input.content_sha256,has_text_layer:input.has_text_layer,
@@ -62,6 +71,8 @@ const subsetOk=(f:RecordedPagesFixture)=>f.pages_json.pages.every((p,i,a)=>Numbe
 export function parseRecordedFixture(text:string):{fixture:RecordedPagesFixture;pagesJsonBytes:Uint8Array;pagesJsonSha256:string}{
  const f=JSON.parse(text) as RecordedPagesFixture;
  if(!f||typeof f!=='object'||!HEX64.test(String(f.content_sha256))||!f.pages_json||!Array.isArray(f.pages_json.pages))throw new Error('invalid_fixture');
+ const versionsOk=[f,f.pages_json].every(o=>o.extractor_version===EXTRACTOR_VERSION&&o.table_algo_version===TABLE_ALGO_VERSION);
+ if(!versionsOk)throw new Error('invalid_fixture');
  if(f.pages_json.content_sha256!==f.content_sha256||(f.pages_subset===true?!subsetOk(f):f.pages_json.pages.length!==f.page_count))throw new Error('invalid_fixture');
  const pagesJsonBytes=new TextEncoder().encode(serializePagesJson(f.pages_json));
  return {fixture:f,pagesJsonBytes,pagesJsonSha256:sha256Hex(pagesJsonBytes)};

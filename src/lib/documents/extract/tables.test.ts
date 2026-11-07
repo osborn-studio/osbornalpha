@@ -69,3 +69,67 @@ describe('detectTables on a synthetic HK income statement page',()=>{
   expect(ts.map(t=>t.row_count)).toEqual([2,2]);
  });
 });
+
+describe('detectTables review fixes',()=>{
+ const L=(items:RawItem[])=>layoutFromItems(items).lines;
+ const row=(y:number,label:string,a:string,b:string,extra:RawItem[]=[]):RawItem[]=>[{str:label,x:60,y,w:40,h:10},{str:a,x:300,y,w:40,h:10},{str:b,x:400,y,w:40,h:10},...extra];
+ it('labelled rows whose amounts look like years are body rows; a bare year row is still a header',()=>{
+  const t=detectTables(L([...row(100,'Revenue','3000','2800'),...row(86,'Cost','2025','2024'),...row(72,'Profit','975','776')]));
+  expect(t).toHaveLength(1);
+  expect(t[0].row_count).toBe(3);
+  const t2=detectTables(L([...row(100,'Revenue','2025','2024'),...row(86,'Cost','1900','1901')]));
+  expect(t2).toHaveLength(1);
+  expect(t2[0].cells.map(c=>c.text)).toEqual(['Revenue','2025','2024','Cost','1900','1901']);
+  const t3=detectTables(L([{str:'2025',x:300,y:120,w:40,h:10},{str:'2024',x:400,y:120,w:40,h:10},...row(100,'Revenue','1','2'),...row(86,'Cost','3','4')]));
+  expect(t3[0].header_lines.map(l=>l.text)).toEqual(['2025 2024']);
+  const t4=detectTables(L([{str:'Year ended 31 December',x:60,y:120,w:90,h:10},{str:'2025',x:300,y:120,w:40,h:10},{str:'2024',x:400,y:120,w:40,h:10},...row(100,'Revenue','1','2'),...row(86,'Cost','3','4')]));
+  expect(t4[0].header_lines).toHaveLength(1);
+ });
+ it('fragmented numbers: separately drawn parentheses merge into one negative; offsets still slice',()=>{
+  const items:RawItem[]=[
+   {str:'Cost',x:60,y:100,w:30,h:10},{str:'(',x:300,y:100,w:3,h:10},{str:'50',x:303,y:100,w:10,h:10},{str:')',x:313,y:100,w:3,h:10},{str:'60',x:400,y:100,w:10,h:10},
+   {str:'Profit',x:60,y:86,w:30,h:10},{str:'(800,000',x:300,y:86,w:40,h:10},{str:')',x:340,y:86,w:3,h:10},{str:'(70',x:400,y:86,w:15,h:10},{str:')',x:415,y:86,w:3,h:10},
+  ];
+  const {text,lines}=layoutFromItems(items);
+  const [t]=detectTables(lines);
+  expect(t.cells.map(c=>[c.row,c.col,c.text])).toEqual([[0,0,'Cost'],[0,1,'(50)'],[0,2,'60'],[1,0,'Profit'],[1,1,'(800,000)'],[1,2,'(70)']]);
+  for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
+  expect(t.cells[1].bbox).toMatchObject({x0:300,x1:316});
+ });
+ it('U+2212 minus is a sign',()=>{
+  expect(isNumericItem('−12')).toBe(true);expect(isNumericItem('(−1,000)')).toBe(true);expect(isNumericItem('−')).toBe(true);
+  const [t]=detectTables(L([...row(100,'Loss','−12','−3'),...row(86,'Gain','5','6')]));
+  expect(t.cells.filter(c=>c.numeric).map(c=>c.text)).toEqual(['−12','−3','5','6']);
+ });
+ it('bilingual rows: a trailing label column 1 em past the figures is a second label cell',()=>{
+  const bi=(y:number,en:string,a:string,b:string,zh:string)=>row(y,en,a,b,[{str:zh,x:480,y,w:30,h:10}]);
+  const {text,lines}=layoutFromItems([...bi(100,'Revenue','1,234','1,100','收益'),...bi(86,'Cost','(5)','(6)','成本')]);
+  const [t]=detectTables(lines);
+  expect(t).toMatchObject({row_count:2,col_count:4});
+  expect(t.cells.filter(c=>c.col===3).map(c=>[c.row,c.text,c.numeric])).toEqual([[0,'收益',false],[1,'成本',false]]);
+  expect(t.cells.filter(c=>c.col===1||c.col===2).every(c=>c.numeric)).toBe(true);
+  for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
+  expect(t.col_x0).toEqual([60,300,400,480]);
+ });
+ it('wrapped labels: label-only lines at the same x above/below a body row join its label (extra col-0 cells), headings with a colon do not',()=>{
+  const lab=(y:number,s:string,x=60):RawItem=>({str:s,x,y,w:60,h:10});
+  const items=[lab(130,'Profit for the year attributable'),lab(118,'to owners of the Company'),{str:'300',x:300,y:118,w:20,h:10},{str:'280',x:400,y:118,w:20,h:10},
+   lab(104,'Revenue'),{str:'5',x:300,y:104,w:20,h:10},{str:'6',x:400,y:104,w:20,h:10},lab(92,'from contracts'),
+   lab(78,'Attributable to:'),lab(64,'Owners',70),{str:'7',x:300,y:64,w:20,h:10},{str:'8',x:400,y:64,w:20,h:10}] as RawItem[];
+  const {text,lines}=layoutFromItems(items);
+  const [t]=detectTables(lines);
+  expect(t.row_count).toBe(4);
+  expect(t.cells.filter(c=>c.col===0).map(c=>[c.row,c.text])).toEqual([[0,'Profit for the year attributable'],[0,'to owners of the Company'],[1,'Revenue'],[1,'from contracts'],[2,'Attributable to:'],[3,'Owners']]);
+  for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
+  expect(t.header_lines).toEqual([]);
+ });
+ it('header block: at most 6 lines, stops at a line wider than the table',()=>{
+  const hdr:RawItem[]=Array.from({length:9},(_,k)=>({str:`H${k}`,x:300,y:300-k*14,w:20,h:10}));
+  const wide:RawItem={str:'A very long running paragraph that is far wider than the table below it, spanning the page',x:0,y:300+14,w:900,h:10};
+  const body=[...row(80,'Revenue','1','2'),...row(66,'Cost','3','4')];
+  const [t]=detectTables(L([wide,...hdr,...body]));
+  expect(t.header_lines.map(l=>l.text)).toEqual(['H3','H4','H5','H6','H7','H8']);
+  const [t2]=detectTables(L([wide,...hdr.slice(5),...body]));
+  expect(t2.header_lines.map(l=>l.text)).toEqual(['H5','H6','H7','H8']);
+ });
+});

@@ -24,6 +24,26 @@ describe('code points',()=>{
  });
 });
 
+describe('normalizeText review fixes',()=>{
+ it('strips C0 controls except whitespace and replaces lone surrogates with U+FFFD',()=>{
+  expect(normalizeText('a\u0000b\u0007c\u001fd\te\nf\u007f')).toBe('abcd e f');
+  expect(normalizeText('x\ud800y\udc00z')).toBe('x\ufffdy\ufffdz');
+  expect(normalizeText('𠀋😀')).toBe('𠀋😀');   // a valid pair is kept
+ });
+});
+
+describe('canonical serialisation',()=>{
+ it('sorts keys at every level, so construction order does not change bytes or hash',()=>{
+  const a={...page(1,'x'),lines:page(1,'x').lines};
+  const reordered=JSON.parse(JSON.stringify(a,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v)) as PageLayout;
+  const x=buildPagesJson({content_sha256:SHA,code_version:'c',has_text_layer:true,pages:[a]});
+  const y=buildPagesJson({content_sha256:SHA,code_version:'c',has_text_layer:true,pages:[reordered]});
+  expect(y.sha256).toBe(x.sha256);
+  expect(new TextDecoder().decode(x.bytes).startsWith('{"code_version"')).toBe(true);
+  expect(new TextDecoder().decode(x.bytes)).toContain('"items":[{"char_end":1,"char_start":0,');
+ });
+});
+
 describe('assemblePage',()=>{
  it('records page offsets while concatenating; rows joined by \\n, spaceBefore only between pieces',()=>{
   const {text,lines}=assemblePage([{y:200,pieces:[piece('𠀋😀',0,true),piece('Revenue',30,true)]},{y:180,pieces:[]},{y:150,pieces:[piece('Total',0),piece('1,234',50)]}]);
@@ -59,6 +79,9 @@ describe('parseRecordedFixture',()=>{
   expect(()=>parseRecordedFixture(JSON.stringify({...file,page_count:2}))).toThrow('invalid_fixture');
   expect(()=>parseRecordedFixture(JSON.stringify({...file,content_sha256:'b'.repeat(64)}))).toThrow('invalid_fixture');
   // --pages subset: page_count describes the whole PDF, stored pages keep their numbers
+  expect(()=>parseRecordedFixture(JSON.stringify({...file,extractor_version:'docs-extract/0.9'}))).toThrow('invalid_fixture');
+  expect(()=>parseRecordedFixture(JSON.stringify({...file,table_algo_version:'tables/0.1'}))).toThrow('invalid_fixture');
+  expect(()=>parseRecordedFixture(JSON.stringify({...file,pages_json:{...json,extractor_version:'other'}}))).toThrow('invalid_fixture');
   expect(parseRecordedFixture(JSON.stringify({...file,page_count:84,pages_subset:true})).fixture.page_count).toBe(84);
   expect(()=>parseRecordedFixture(JSON.stringify({...file,page_count:0,pages_subset:true}))).toThrow('invalid_fixture');
  });
