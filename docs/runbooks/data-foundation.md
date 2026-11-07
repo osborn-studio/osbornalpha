@@ -625,3 +625,12 @@ vercel env add MACRO_STRATEGY_ENABLED production      # 输入 1；然后按第 
 - **线上核对**：两个 cron 无令牌 401；带令牌 `judgments-settle?preview=1` → `ok`、idle、0 项；`judgments-calibrate?preview=1` → `ok`，`calibrate:macro_regime@v1:*` 单元 idle、`current_revision 1`。`/api/methodologies` 200（`codeVersion 78e9c4d7…`，含 `macro_regime v1`）；`/api/judgments` 无 `subject_type` → 400 `invalid_parameter:subject_type`（参数校验生效）。
 - **首轮载入**：F4 没有独立的首轮脚本；判断由宏观登记（`MACRO_JUDGMENTS_ENABLED`，指挥/owner 决定）和每日结算 cron 产生。未开启 `MACRO_JUDGMENTS_ENABLED`。
 - **未做（owner）**：发布准入（`docs/methodologies/licenses.json` 许可确认后 `--publishable`）、复权验证录制（手册 §4）、O1–O7 决策、`recommendation_call@v1` 私有路径评审。
+
+### 11.4 集成 D（#118）与 A1（#120），main `4610dba5`，10:2x
+
+外资研报尚未提交 PR。期间 main 合入集成 D（docs→company）与 A1（judgments→macro，宏观侧）；D 带一份新迁移，生产代码随之需要更新。
+
+- **迁移** `20261118093000_documents_by_filing`（sha256 `b89c8090…`）：`read_documents_by_filing(uuid,date)`，security invoker（调用者 RLS 生效），三角色可执行（迁移显式 grant）。演练 `rehearsal_ok`（演练内对不存在的 filing 返回 `{"rows":[],"filing_found":false}`）→ 一个事务 + 历史行 → applied。**未进锁文件**（#121 只含此前六份）。
+- **部署**：本想部署 `87dcc2cf`，建部署工作树时 `origin/main` 已前进到 `4610dba58edec37194445991067f22fe6715e16b`（#120 合入，无迁移、无 cron 变更）→ **`stock-monitor-ocyws5e16-gilosbornhellos-projects.vercel.app`**（osbornalpha.com）。部署从新建的干净 detached 工作树 `.claude/worktrees/rollout2-deploy` 执行（目录存在检查 + `cd … || exit 1`；被忽略文件只有 `.vercel/`）。
+- **核对**：`GET /api/documents/by-filing/<Xcel 2018 10-K filing>?asOf=2026-11-07` 200，返回 `0000072903-19-000010/xcel1231201810-k.htm`（精确绑定）；其他发行人的无匹配 filing → 200 `document:null, reason:"not_found"`；不存在的 filing → 404 `filing_not_found`。`/api/methodologies` 200（`codeVersion 4610dba5…`）；两个 judgments cron preview 仍 `ok`。
+- **发现：`macro_regime@v1` 注册表漂移**。#120 的 `b2d7b278` 把 `src/lib/macro/flags.ts` 加入 `macro_regime@v1` 的公式哈希闭包，代码现算 `formula_hash 9de7405c…`，生产注册表存的是 11.3 同步的 `3478e0d2…`。`sync-methodologies.ts --dry-run` → `action:"drift"`、`refused:true`。按判断层手册 §2 第 3 条，漂移必须升方法版本，不能覆盖，所以本会话**未处理**：需要代码侧决定（升 `macro_regime@v2`，或在 v1 尚无任何判断时经 owner 批准的其他处置）。目前 v1 `publishable=false`、`MACRO_JUDGMENTS_ENABLED` 未开、库中判断 0 行，结算/校准 cron 预览正常；开启宏观登记前必须先解决。
