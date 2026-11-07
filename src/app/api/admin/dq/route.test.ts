@@ -7,6 +7,14 @@ vi.mock('@/lib/admin/auth', async (importOriginal) => {
 });
 vi.mock('@/lib/supabase/admin', () => ({ getAdminSupabase: mocks.getAdmin }));
 
+const load = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/dq/dashboard', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/lib/dq/dashboard')>();
+  return { ...original, loadDqDashboard: load };
+});
+const hashNow = vi.hoisted(() => vi.fn(async () => ({ unavailable: 'inputs_unavailable' })));
+vi.mock('@/lib/dq/reconcile/deps', () => ({ restoreInputsHashNow: () => hashNow }));
+
 import { AdminUnauthenticated } from '@/lib/admin/auth';
 import { GET } from './route';
 
@@ -35,5 +43,24 @@ describe('GET /api/admin/dq', () => {
     expect(await res.json()).toEqual({ error: 'dq dashboard unavailable' });
     expect(spy).toHaveBeenCalledWith('[admin/dq]', 'no service role key');
     spy.mockRestore();
+  });
+
+  it('rejects an unknown market before constructing the admin client', async () => {
+    mocks.requireAdmin.mockResolvedValue({ id: 'admin-1' });
+    const res = await GET(new Request('https://alpha.example/api/admin/dq?market=HK'));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_market' });
+    expect(mocks.getAdmin).not.toHaveBeenCalled();
+  });
+
+  it('passes the market filter and the restore hash function to the dashboard loader', async () => {
+    mocks.requireAdmin.mockResolvedValue({ id: 'admin-1' });
+    mocks.getAdmin.mockReturnValue({ from: vi.fn() });
+    load.mockResolvedValue({ ok: true });
+    const res = await GET(new Request('https://alpha.example/api/admin/dq?market=CN&page=2'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(load.mock.calls[0][1]).toEqual({ dataset: undefined, page: 2, pageSize: 50, market: 'CN' });
+    expect(load.mock.calls[0][3]).toEqual({ inputsHashNow: hashNow });
   });
 });

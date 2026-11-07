@@ -281,12 +281,12 @@ describe.skipIf(!enabled)('F2-3 US offline replay on real PostgreSQL',()=>{
   const superseded=before.inputs.find(i=>i.concept==='revenue')!.fact_id;
   let reads=0,bumpedTo=0;let competing!:Awaited<ReturnType<typeof run>>;
   const racing:FactsDb={...db,
-   readFacts:async(i,m,o)=>{
-    const env=await db.readFacts(i,m,o);reads++;
+   readFactsLineage:async(i,m,o)=>{
+    const env=await db.readFactsLineage(i,m,o);reads++;
     if(reads===1){                                                              // the competing writer publishes a changed fact after our snapshot
      zzRevised=true;competing=await run([zz]);
      bumpedTo=await rev();
-     expect(bumpedTo).toBeGreaterThan(env.stateRev);
+     expect(bumpedTo).toBeGreaterThan(env.stateRevs.find(x=>x.issuer_id===zz)!.state_rev);
     }
     return env;
    }};

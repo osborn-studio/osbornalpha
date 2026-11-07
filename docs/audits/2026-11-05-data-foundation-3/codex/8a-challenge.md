@@ -1,0 +1,5 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `supabase/migrations/20261107091000_facts_extensions.sql:281` | Topology placeholders break explicit fact ingestion. Merging into an active target without an existing scope creates `fetch_key='topology'`. Landed `sync.ts:360` skips key derivation whenever a scope exists, and explicit runs bypass scope reconciliation. Consequently, `--issuer <target>` passes `"topology"` to the SEC adapter, which rejects it as `bad cik topology`, even when the target has a valid CIK. Repeated explicit runs cannot repair the placeholder. | Keep the required placeholders, but update explicit scope selection to derive and persist a real fetch key for placeholder rows before ingestion. Add a regression covering merge into an unscoped target followed by explicit sync. |
+
+Verdict: fix required

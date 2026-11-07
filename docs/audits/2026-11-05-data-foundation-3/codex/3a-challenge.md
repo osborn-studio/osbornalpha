@@ -1,0 +1,5 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/entities/identifiers/hkex-list.ts:10–17` | The verified secondary sources are binary `.xls`, but the exported storage contract still supplies only `XLSX_MIME`. Task 4b passes this constant for every HKEX file. Reproducing with the downloaded `isinsehk.xls` and landed `memoryRawStore` stores OLE bytes (`d0cf11e0…`) under `.xlsx` and asserts an incorrect OOXML `content_type` in immutable evidence metadata. Consumers following that format cannot reliably replay it. | Add per-file MIME types; support `application/vnd.ms-excel` → `.xls` in `RawStore` and the bucket allowlist through a new migration. Update the later-task upload contract and test both actual workbook formats through storage and replay. |
+
+Verdict: fix required

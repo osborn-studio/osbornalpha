@@ -10,7 +10,7 @@
 // world.sync() of a later file throws SetupMismatch. Rebuilding on a database that already holds the world is a
 // duplicate-only sync. Backends: buildFrozenDb(pool) = pgFactsDb + pgTableClient (integration tests; CLI ci with a
 // test database); buildFrozenMemory() = memoryFactsDb (CLI ci without one; unit tests). runFactsSync always records
-// dq_freshness 'facts.us' (sync.ts → dq/freshness.ts recordAttempt, no opt-out); with the fixed clock that row would be
+// dq_freshness DATASETS.facts('US') (sync.ts → dq/freshness.ts recordAttempt, no opt-out); with the fixed clock that row would be
 // stale for every other suite sharing the database, so the world's sync deps get withoutFreshness(tables): writes to
 // dq_freshness are dropped, reads pass through. The world build therefore leaves dq_freshness untouched.
 // sealSetupFromPaths() seals a replay draft that names files by path only (Task 11's facts.frozen.json drafts).

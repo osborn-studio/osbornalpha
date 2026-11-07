@@ -50,7 +50,8 @@ export function selectIsinsForLeis(lines: Iterable<string>, leis: Set<string>): 
 export interface SecExchangeRow { cik: string; name: string; ticker: string; exchange: string }
 export interface SecExchangeParse {
   rows: SecExchangeRow[];
-  rejected: { index: number; reason: 'invalid_cik' | 'missing_ticker' | 'missing_name' }[];
+  /** cik / ticker: whatever identity the malformed row still carries (a rejected row is UNKNOWN, never absence). */
+  rejected: { index: number; reason: 'invalid_cik' | 'missing_ticker' | 'missing_name'; cik?: string; ticker?: string }[];
 }
 
 /** A CIK that normalizeCik accepts (1–10 digits, not zero; number or digit string), unpadded. */
@@ -84,11 +85,11 @@ export function parseSecCompanyTickersExchange(json: string): SecExchangeParse {
   (d.data as unknown[]).forEach((raw, index) => {
     const r = Array.isArray(raw) ? raw : [];
     const cik = secExchangeCik(r[ci]);
-    if (cik === null) { out.rejected.push({ index, reason: 'invalid_cik' }); return; }
     const ticker = nonEmpty(r[ti]);
-    if (ticker === null) { out.rejected.push({ index, reason: 'missing_ticker' }); return; }
+    if (cik === null) { out.rejected.push({ index, reason: 'invalid_cik', ...(ticker !== null ? { ticker } : {}) }); return; }
+    if (ticker === null) { out.rejected.push({ index, reason: 'missing_ticker', cik }); return; }
     const name = nonEmpty(r[ni]);
-    if (name === null) { out.rejected.push({ index, reason: 'missing_name' }); return; }
+    if (name === null) { out.rejected.push({ index, reason: 'missing_name', cik, ticker }); return; }
     const exchange = typeof r[ei] === 'string' ? (r[ei] as string).trim() : '';
     out.rows.push({ cik, name, ticker, exchange });
   });

@@ -1,6 +1,6 @@
-# 数据底座运行手册（DQ 基础 + 发行人主数据 + 披露事实库）
+# 数据底座运行手册（DQ 基础 + 发行人主数据 + 披露事实库 + 标识符与对账）
 
-适用迁移：`supabase/migrations/20261105090000_dq_foundation.sql`、`supabase/migrations/20261105091000_issuers.sql`、`supabase/migrations/20261106090000_financial_facts.sql`。
+适用迁移：`supabase/migrations/20261105090000_dq_foundation.sql`、`supabase/migrations/20261105091000_issuers.sql`、`supabase/migrations/20261106090000_financial_facts.sql`、`supabase/migrations/20261107090000_identifiers_and_dq.sql`、`supabase/migrations/20261107091000_facts_extensions.sql`。
 类型定义：`src/lib/supabase/database.types.ts`（手工维护，与上述迁移逐列对应）。`npm run supabase:types` 只是占位：它打印提示并以退出码 1 结束，**不会**生成类型；改迁移时请同步手改该文件。
 
 ## 1. 表与访问权限
@@ -141,8 +141,8 @@ drop table if exists public.ingest_batches;
 
 - `src/lib/db/pg-table-client.ts` 目前仅用于测试（集成测试），生产路径走 Supabase TableClient。
 - `/api/entities/resolve` 尚无限流。
-- 看板 dataset 下拉选项只来自当前已加载的 freshness/批次/隔离行，未出现在这些行中的隔离数据集选不到；需要一个独立的数据集清单（inventory）查询。
-- FIGI/ISIN 补全与 A/H 股配对放在 plan 3。
+- 看板 dataset 下拉已改为登记表 `DQ_DATASET_INVENTORY` ∪ 已加载行（计划三 Task 2）。
+- FIGI/ISIN 补全与 A/H 股配对：见第 9 章（计划三）。
 
 ## 8. 披露事实库（计划二）
 
@@ -342,3 +342,114 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 - `GET /api/facts/{ticker}/metrics`：无 `asOf` 时读物化行，且仅当所有行 `based_on_rev` = 当前 `fact_state_rev` 才返回，否则 `stale:true` + 无行；新鲜指标 `s-maxage=60`，stale `s-maxage=30`。带 `asOf` 时即时用 `read_facts` 信封派生，`truncated` 时无行。
 - `GET /api/filings/{ticker}`：只返回已发布（`mapping_gen>0`）的 filing，已发布过滤在 `limit` 之前。
 - 票据解析：精确匹配优先（`BRK.A` 不会被规范化成 `BRK`），市场取自实际匹配到的证券行（不是后缀猜测），HK 证券拒绝；合并后的发行人经源证券行重定向。
+
+## 9. 标识符补全、对账与日历新鲜度（计划三）
+
+规格：`docs/superpowers/specs/2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md`（下称"规格三"）；计划：`docs/superpowers/plans/2026-11-05-data-foundation-3-identifiers-and-reconciliation.md`；实施日志：`docs/audits/2026-11-05-data-foundation-3/implementation-log.md`；核对记录：`docs/audits/2026-11-05-data-foundation-3/verification.md`。
+
+### 9.1 迁移
+
+| 文件 | 内容 | 依赖 |
+|---|---|---|
+| `20261107090000_identifiers_and_dq.sql` | `issuer_securities` 方法列与回填；`issuer_identifier_claims` 的 `op/target_key/detail/resolved_*` 与新唯一索引；`dq_reconciliations` 的 `pair/kind/outcome/detail/cycle_*`；`dq_reconcile_cycles`/`dq_reconcile_cursor`；`dq_calendar_passes`/`dq_calendar_pass_members`；`issuer_filer_categories`；`dq_filing_expectations`；`issuer_filing_profiles`；`dq_freshness` 加 `weekly`；`resolve_identifier_claim`；`replace_filing_expectations`（5 参，含 `p_profile`）；`dq_reconcile_failed_counts()`；`set_security_window`/`set_security_identifier`/`set_issuer_identifier`/`patch_security_provenance`/`close_security_absent`/`patch_quarantine_detail`；四个日历遍函数；触发器 `issuers_topology_guard`；桶 `reconcile-raw` | 计划一 |
+| `20261107091000_facts_extensions.sql` | `filings.accepted_at/acceptance_source`；`financial_metrics.based_on_lineage`（回填）；`fact_promote_rows` 附加谓词；`read_filing_facts`、`read_facts_lineage`（`read_facts` 改包装）、`replace_financial_metrics_lineage`（旧函数改包装）、`set_filing_acceptance`、`adopt_candidate`、`restore_reconciled`、`resolve_lineage_conflict`、`apply_reconcile_result`、`open_reconcile_cycle`、`settle_reconcile_cycle`、`record_cycle_freshness`、游标函数、`set_merge`、`set_dissolved` | 计划二 `20261106090000` |
+
+- 两个文件都已登记 `supabase/migrations.lock.json`，**合并后不可再改**；修正一律新迁移（合并前的原地修改已记入实施日志）。
+- 生产按文件名顺序各执行一次（托管库按 owner 的部署流程执行，非超级用户，见 `alpha-production-deploy-and-hosted-db` 记忆）；回填只在加列那次执行，重放不改写已写入的证据（`npm run test:migrations` 在有数据的库上演练两次）。
+- 执行后核对：`select count(*) from issuer_securities where valid_to is not null and valid_to_method is null` = 0；`select count(*) from issuer_identifier_claims where op='legacy'` = 迁移前声明行数；`select count(*) from financial_metrics where jsonb_array_length(based_on_lineage) < 1` = 0。
+- 合并后，`issuers.status/merged_into` 的任何改动只能经 `set_merge`/`set_dissolved`（直接 `update` 抛 `topology_write_forbidden`）。§1.1 的手工合并步骤改为：先手工关闭/转移证券行 → `select public.set_merge('<source>','<target>','<RESEARCH_OWNER_USER_ID>')`。
+
+### 9.2 首轮运行顺序（owner，合并后；cron 与脚本不要同时跑同一数据集）
+
+除第 10 步外，下列脚本默认 dry-run，`--apply` 才写库（第 10 步 `materialize.ts --pending-hooks` **没有 dry-run，运行即写**：更新物化指标与钩子状态）；需要 `node --env-file=.env.local --import tsx …`（`tsx` 不读 `.env.local`）。命令行以各脚本的 usage 为准：
+
+1. `scripts/entity-keys/load-sec-issuers.ts <company_tickers_exchange.json> [--as-of YYYY-MM-DD] [--apply --fetched-at <下载时刻 ISO>]`：换码检测、`stale_snapshot`/`incomplete_snapshot` 守卫。
+2. `scripts/entity-keys/fill-identifiers.ts --gleif <lei-isin.csv> --hkex <dir> [--stage A|B|C|D|all] [--gleif-downloaded-at <ISO>] [--issuer <uuid>]... [--apply]`：先 dry-run 看预估报告；OpenFIGI exchCode/securityType 实测核对已完成（`verification.md` Task 3b，无 key），`EXCH_MAP_VERIFIED=true`；之后 `--apply`，再 `scripts/entity-keys/coverage.ts [--segment e1|windows|all] [--out <file.md>]` 得 E1 数字。
+3. `scripts/entity-keys/backfill-windows.ts --apply`，再 `coverage.ts --segment windows` 得 E2。
+4. `scripts/entity-keys/link-ah.ts --gleif <lei-isin.csv> --hkex <dir> [--apply]`；产生的 pending 声明在 `/admin/dq` 声明面板审核（§9.6）。
+5. `scripts/facts/enrich-acceptance.ts [--issuer <ticker>]... [--full-history] [--apply]`，再 `--report` 得 E7（需生产库，见 9.9）。
+6. `scripts/dq/filer-categories.ts [--issuer <uuid>]... [--limit n] [--apply]`（每个范围内美股发行人最近 3 份 10-K 封面 → `issuer_filer_categories`；同时记 `sec.filer_category`）。
+7. 先预览 `scripts/dq/calendar-sync.ts --market US [--issuer <uuid>]... [--limit n]`（`--issuer` 只用于预览，与 `--apply` 同用会以退出码 2 拒绝），再全市场写入 `scripts/dq/calendar-sync.ts --market US [--limit n] --apply`（处理遍冻结的成员），之后 `--market CN --apply`（一次跑不完就再跑，同一遍会继续）。
+8. `scripts/dq/select-us-sample.ts`（`--fixtures` 或 `--live --universe <path> --out <path>`）生成/核对样本清单（变更走 PR），然后 `scripts/dq/reconcile.ts --pair us.companyfacts_vs_ixbrl [--issuer <ticker>...] --apply`；周期回执 + `docs/audits/2026-11-05-data-foundation-3/ixbrl-run-<date>.md` 得 E4。
+9. `scripts/dq/reconcile.ts --pair facts.lineage_same_day --apply`（无合并时空转）。
+10. `scripts/facts/materialize.ts --pending-hooks`（扫描并补做未完成的物化钩子；**立即写库，无 dry-run**）。
+
+### 9.3 cron 与顺序（`vercel.json`，UTC）
+
+| 时刻 | 路径 | 说明 |
+|---|---|---|
+| 每 4 小时 :05 | `/api/cron/facts-sync?market=US`、`?market=CN` | 计划二 |
+| 01:00 | `/api/cron/filing-calendar?market=US` | 日历遍；持租约，重复投递无害（`pass_claimed`） |
+| 01:10 | `/api/cron/filing-calendar?market=CN` | **不受** `FACTS_CN_ENABLED` 门控：CN 日历只计算法定节点并如实显示不可查 |
+| 02:00 | `/api/cron/reconcile?pair=us.companyfacts_vs_ixbrl` | 对账周期；新鲜度节奏 weekly |
+| 04:00 | `/api/cron/reconcile?pair=facts.lineage_same_day` | 无成员时空转 |
+| （未加） | `/api/cron/reconcile?pair=cn.tushare_vs_cninfo_pdf_gold` | 门槛：`FACTS_CN_ENABLED` 开启 **且** 黄金集核实完成、`gold-cn.integration.test.ts` 登记且绿（规格三 §5.4 T15） |
+
+顺序意图：日历先于对账；US 对账先于谱系对账。所有 cron 路由：缺 `CRON_SECRET` → 503；缺 `VERCEL_GIT_COMMIT_SHA` → 503 `code_version_unavailable`；HTTP 回执只含码与计数。
+
+### 9.4 owner 事项（规格三 §13）
+
+| 事项 | 默认（计划三按此实施） | 状态 |
+|---|---|---|
+| 决策 A OpenFIGI 许可与展示 | FIGI 入库并公开展示；证券描述只作匹配 | 待 owner 确认 |
+| 决策 B A 股 ISIN 不推导 | 不推导；E1 按实际覆盖 | 待确认 |
+| 决策 C 黄金集抄录/复核人与日期 | — | 未指定 → F3-6 未达成 |
+| 决策 D 对账容差 | 美股精确；A 股印刷精度区间 | 待确认 |
+| 决策 E 样本规则 | 美股 30 家；A 股 min(30, N)，FY2022–FY2025 | 待确认 |
+| 决策 F 对账失败隔离已公开事实 | 隔离（公共接口答案会变） | 待确认 |
+| 决策 G 换码关闭门槛 | 两次缺失、≥ 7 天、不同哈希、submissions 确认 | 待确认 |
+| 决策 H 样本清单授权 | `RESEARCH_OWNER_USER_ID` 的范围 | 待确认 |
+| 决策 I E1 未达标处理 | 按实际数字报告，由 owner 决定 | 待 E1 数字 |
+| 秘密 | `OPENFIGI_API_KEY`（可选，无 key 按 25 请求/分钟；本机无，实施按无 key 路径）、`TUSHARE_TOKEN`（现已可用，仓库外 `~/.config/osbornalpha/secrets.env`；Vercel 环境另需配置）、`EDGAR_USER_AGENT`（真实联系方式；缺省时用 `DEFAULT_USER_AGENT`，sec.gov 实测可用）、`CRON_SECRET` | 见左 |
+
+### 9.5 CN 状态（Tushare 已核对；黄金集仍降级）
+
+- `TUSHARE_TOKEN` 已可用；计划二 §15 1/4/5 的公告日核对与真实 Tushare 夹具已由 PR #104 合入本分支（`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`）。
+- 日历：`src/lib/dq/calendar-sync.ts::CN_DISCLOSURE_VERIFIED=true`（2026-11-06 用 600519.SH、000333.SZ 的真实 `disclosure_date` 响应核对 `actual_date`/`modify_date` 语义，见 `verification.md`，原始响应入桶 `reconcile-raw/tushare-disclosure/<sha256>.json`）。响应缺列/`data:null`（`bad_shape`）、`has_more` → `unavailable`；**CN 槽在 Tushare 没有排期行时保持 `unknown_upstream`，不按法定期限判逾期**（Task 18b 复审后的收紧）。回执 `skipped_summary(schedule_unavailable)` 给出原因计数（`no_token`、`api_code_<n>`、`unverified`、`bad_shape`、`has_more`）。北交所（`.BJ`）未单独抽查。
+- 对账：`gold-cn.integration.test.ts` 不存在；`cn.tushare_vs_cninfo_pdf_gold` 只交付模式、校验器、脚本（`select-cn-sample.ts`、`gold-pdf.ts`）与抄录指引（`docs/runbooks/cn-gold-transcription.md`）。**降级仅因 owner 决策 C（抄录人/复核人未指定）**；E5 记"未达成"，不报数字。解除步骤见 `verification.md` "F3-6"。
+- 事实层：计划二的 `FACTS_CN_ENABLED` 门控不变（缺省开启，CN facts-sync 已在 `vercel.json`）。
+
+### 9.6 声明审核（`/admin/dq` 标识符声明面板，`POST /api/admin/dq/claims/[id]`）
+
+- 体 `{status:'accepted'|'rejected', amend?:{op,target,params}}`；接受在同一事务内按 op 写目标行（`resolve_identifier_claim`）。
+- `evidence_only`（8-A/25、换码观测）：读原文后用面板的修订表单指定证券行、生效日与方法，提交为 `amend`；脚本**从不**预填所有权日期。
+- `legacy`（计划三之前的声明）：页面只显示"需 SQL 处理"，按 §4 用 SQL 处理或拒绝。
+- 409：`already_resolved`、`legacy_claim`、`amend_required`、`value_conflict`、`ownership_conflict`、`already_closed`（项保持 pending）。
+
+### 9.7 隔离项的新处置（`POST /api/admin/dq/quarantine/[id]`）
+
+| 原因 | 接受 | 说明 |
+|---|---|---|
+| `ambiguous_value` | 带 `chosen_candidate_index` → `adopt_candidate` | 不带索引的接受 = 确认知晓（计划二路径）；`stale_evaluation` 自动重评一次后 409 |
+| `reconcile_mismatch` | `restore_reconciled` | 要求最近一次对账通过且当前输入哈希相同，否则 409 `not_passing`（先重跑对账）；`promoted=0` → 200 + `restore_note='no_rows_promoted'` |
+| `lineage_conflict` | 带 `keep_fact_id` → `resolve_lineage_conflict` | 结束后该键该日在谱系内恰一个 `ok` 值，否则回滚 `unresolved`；目标已非活跃 → 409 `target_not_active` |
+| `reconcile_review` | 只改状态 | 舍入印刷的 A 股差异，人工判断 |
+
+通用的 `resolve_facts_quarantine` 对 `reconcile_mismatch`/`lineage_conflict` 抛 `use_dedicated_resolver`（22023），路由映射为 409。物化钩子未完成（崩溃于函数提交与物化之间）→ `scripts/facts/materialize.ts --pending-hooks`。
+
+### 9.8 日历运维
+
+- 遍：每市场同一时刻至多一个未完成遍，租约 10 分钟；成员冻结于建遍时；成员失败 3 次为终态，遍以 `complete_with_failures` 结束（新鲜度 `ok:false`）。查看：`select market, pass_id, status, started_at, finished_at, claimed_by, claim_until from dq_calendar_passes order by started_at desc limit 5;`、`select state, count(*) from dq_calendar_pass_members where market='US' and pass_id='<id>' group by 1;`、失败原因 `select issuer_id, attempts, last_error from dq_calendar_pass_members where state='failed' and pass_id='<id>';`。
+- 遍卡住（租约持有者崩溃）：等 10 分钟租约过期，下一次 cron/脚本自动接管；**不要**手工改成员状态。
+- 状态含义：`overdue` 只来自法定期限已知、期末为实际值、上游查得到且未申报；`filed_not_ingested` = SEC/巨潮已申报但本库未入库（查 facts-sync）；`unknown_upstream` = 上游不可查（含 CN 无排期行）；`no_rule` = 期限未知（无 N−1 财年封面类别、40-F、表外年份）。估计期末（52/53 周）不计逾期，`detail.estimated_due_passed=true` 表示估计期限已过。
+- **已知限制**：52/53 周申报人（如 Costco 12/12/12/16 周）10-Q 期末不按月末网格，估计偏差可达约 3 周（2026-11-07 冒烟：COST 第三季度估计 05-31 对实际 05-10，差 21 天），10-Q 行可能停在 `pending`（带 `estimated_due_passed`）；年报不受影响。AAPL 的年报与部分 10-Q 估计差 7 天（冒烟已匹配）。
+- **每年 12 月**：在 `src/lib/dq/calendar.ts::SEC_HOLIDAYS` 补次年联邦假日（OPM 表），并按 SEC 公告补 `SEC_CLOSURES`；表外年份的行为 `no_rule`（`none.holiday_table_missing/1`）。2021–2025 假日表未经 OPM 复核（OPM 页面只列当前及后续年份）；`SEC_CLOSURES` 的 2025-01-09 未证实（2024-12-24、2025-12-24/26 已证实）。
+- 申报人类别每季度跑一次 `filer-categories.ts --apply`（新 10-K 出现后）；没有 N−1 财年封面类别的发行人在回执 `no_category` 计数里。`issuer_filer_categories` 无可排序列，并发两个运行时较旧快照可能覆盖同财年较新类别（cron 单日一次 + 手工脚本，风险低；彻底修复需加 `accepted_at`/`filing_date` 列与条件写）。
+
+### 9.9 验证记录
+
+| 项 | 位置 | 状态 |
+|---|---|---|
+| OpenFIGI exchCode/securityType/compositeFIGI 实测（无 key）、HKEX 表头、submissions 分页结构 | `verification.md` Task 3a/3b/6a | 2026-11-05/06 已核；`EXCH_MAP_VERIFIED=true` |
+| SEC 假日与 Rule 0-3 来源 | `verification.md` "SEC 假日与 Rule 0-3" | 2026/2027 已对 OPM；2021–2025 未复核 |
+| 52/53 周估计（AAPL、COST、WMT） | `verification.md` "日历冒烟（2026-11-07）" | 已核；±7 天对 COST 第三季度不足 |
+| `disclosure_date` 语义 | `verification.md` "CN disclosure_date 真实响应核对" | 已核，`CN_DISCLOSURE_VERIFIED=true` |
+| E1–E9 | 实施日志末尾"Task 20 收尾"退出条件表 | 见该表 |
+| E7 `enrich-acceptance --report` 实测 | — | 需生产库，owner 动作（未跑） |
+| 规格三 §11 独立验证（标识符抽样 20 条、换码 5 例、日历规则人工核对） | 实施日志 | 待 owner/核对人 |
+
+### 9.10 回滚
+
+- 代码：回退提交即可；cron 先从 `vercel.json` 删除对应项并部署，再回退代码。
+- 数据：可清空的只有可从一手来源重算的派生表——`dq_filing_expectations`、`issuer_filing_profiles`、`issuer_filer_categories`、`dq_calendar_*`（重跑 filer-categories 与 calendar-sync 即恢复）。**不要**删除对账证据：`dq_reconciliations`、`dq_reconcile_cycles`/成员与游标等 `dq_reconcile_*` 状态、`reconcile-raw` 桶中的对象——原始字节无法单独重建已记录的比较、冻结成员与结论；且未结的 `reconcile_mismatch` 隔离项以 `detail.latest_result.reconciliation_id` 指向这些行，删除后 `inputsHashNow()` 抛 `no_latest_result`，事实将无法恢复。需要停用对账时：从 `vercel.json` 删 reconcile cron 并部署，保留表与函数；若必须处置某个对账对，先在 `/admin/dq` 逐项处理（恢复/拒绝）其未结隔离项，再另写迁移归档，不直接删除。
+- 迁移二的函数改包装（`read_facts`、`replace_financial_metrics`）签名不变，回退代码不需要回退迁移；确需回退迁移时新写迁移恢复计划二的函数体，不改已锁文件。

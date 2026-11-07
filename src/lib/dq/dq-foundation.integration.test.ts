@@ -18,7 +18,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);
    return;
   }catch(e){
    await c.query('rollback').catch(()=>{});
@@ -111,7 +111,7 @@ describe.skipIf(!enabled)('WP-F0 dq foundation on real PostgreSQL',()=>{
 
   const reconciled=await insertBatch(d);
   const recId=randomUUID();
-  await admin.query(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,tolerance,passed,batch_id) values($1,$2,'a','b','k',0,true,$3)`,[recId,d,reconciled]);
+  await admin.query(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,left_value,right_value,tolerance,passed,batch_id) values($1,$2,'a','b','k',1,1,0,true,$3)`,[recId,d,reconciled]);
   await admin.query(`delete from public.ingest_batches where batch_id=$1`,[reconciled]);
   const rec=(await admin.query(`select batch_id from public.dq_reconciliations where id=$1`,[recId])).rows[0];
   expect(rec.batch_id).toBeNull();

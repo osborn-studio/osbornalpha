@@ -1,0 +1,1159 @@
+{
+ "schema": "us-ixbrl-sample/1",
+ "generated_at": "2026-11-05T00:00:00Z",
+ "selection": "fixture/1",
+ "issuers": [
+  {
+   "cik": "320193",
+   "ticker": "AAPL",
+   "regime": "10-K",
+   "filings": [
+    {
+     "accn": "0000320193-23-000106",
+     "form": "10-K",
+     "period_end": "2023-09-30",
+     "primary_document": "aapl-20230930.htm",
+     "doc_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/aapl-20230930.htm",
+     "is_inline_xbrl": true,
+     "submissions_category": "Large accelerated filer",
+     "raw_sha256": "5e5de06b2bcb1a21cfd422ccd25f26d077886c3512feec159b40f73580396a24",
+     "doc_sha256": "0f18e0ee9f9e7ebf89e8d4edae8fbebe33c8c9fb4ac43a9b9e5c777e02991bc6",
+     "expected_keys": [
+      {
+       "concept": "capex",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "capex",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "capex",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2020-09-26",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+       "origin": "both"
+      },
+      {
+       "concept": "cash",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "dividends_paid",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsOfDividends",
+       "origin": "both"
+      },
+      {
+       "concept": "dividends_paid",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsOfDividends",
+       "origin": "both"
+      },
+      {
+       "concept": "dividends_paid",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsOfDividends",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2020-09-26",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "liabilities_and_equity",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:LiabilitiesAndStockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "liabilities_and_equity",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LiabilitiesAndStockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "long_term_borrowings",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:LongTermDebtNoncurrent",
+       "origin": "both"
+      },
+      {
+       "concept": "long_term_borrowings",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LongTermDebtNoncurrent",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "sga_expense",
+       "period_start": "2020-09-27",
+       "period_end": "2021-09-25",
+       "unit": "USD",
+       "source_concept": "us-gaap:SellingGeneralAndAdministrativeExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "sga_expense",
+       "period_start": "2021-09-26",
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:SellingGeneralAndAdministrativeExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "sga_expense",
+       "period_start": "2022-09-25",
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:SellingGeneralAndAdministrativeExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2023-10-20",
+       "unit": "shares",
+       "source_concept": "dei:EntityCommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "total_assets",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:Assets",
+       "origin": "both"
+      },
+      {
+       "concept": "total_assets",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Assets",
+       "origin": "both"
+      },
+      {
+       "concept": "total_liabilities",
+       "period_start": null,
+       "period_end": "2022-09-24",
+       "unit": "USD",
+       "source_concept": "us-gaap:Liabilities",
+       "origin": "both"
+      },
+      {
+       "concept": "total_liabilities",
+       "period_start": null,
+       "period_end": "2023-09-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Liabilities",
+       "origin": "both"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "cik": "789019",
+   "ticker": "MSFT",
+   "regime": "10-K",
+   "filings": [
+    {
+     "accn": "0000950170-23-035122",
+     "form": "10-K",
+     "period_end": "2023-06-30",
+     "primary_document": "msft-20230630.htm",
+     "doc_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm",
+     "is_inline_xbrl": true,
+     "submissions_category": "Large accelerated filer",
+     "raw_sha256": "bd23911cf33e86a333b9e4ede31f3bfb2dab5d80a21b63894427914e28c1080f",
+     "doc_sha256": "df4c8e4eab796f8c6bb3b986f841abf7d598e68feabde71f6834c431c61362b4",
+     "expected_keys": [
+      {
+       "concept": "capex",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "capex",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "capex",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2020-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash_and_restricted_cash",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+       "origin": "both"
+      },
+      {
+       "concept": "cash",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+       "origin": "both"
+      },
+      {
+       "concept": "cash",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "cost_of_revenue",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CostOfGoodsAndServicesSold",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_basic",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareBasic",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "eps_diluted",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD/share",
+       "source_concept": "us-gaap:EarningsPerShareDiluted",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "equity_parent",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:StockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "financing_cash_flow",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInFinancingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "gross_profit",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:GrossProfit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "income_tax",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:IncomeTaxExpenseBenefit",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "interest_expense",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:InterestExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "investing_cash_flow",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInInvestingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "liabilities_and_equity",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LiabilitiesAndStockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "liabilities_and_equity",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LiabilitiesAndStockholdersEquity",
+       "origin": "both"
+      },
+      {
+       "concept": "long_term_borrowings",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LongTermDebtNoncurrent",
+       "origin": "both"
+      },
+      {
+       "concept": "long_term_borrowings",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:LongTermDebtNoncurrent",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_change_in_cash_and_restricted",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "net_income_parent",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_cash_flow",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:NetCashProvidedByUsedInOperatingActivities",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "operating_income",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:OperatingIncomeLoss",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "rd_expense",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:ResearchAndDevelopmentExpense",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2020-07-01",
+       "period_end": "2021-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2021-07-01",
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "revenue",
+       "period_start": "2022-07-01",
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2020-06-30",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2021-06-30",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "shares",
+       "source_concept": "us-gaap:CommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "shares_outstanding",
+       "period_start": null,
+       "period_end": "2023-07-24",
+       "unit": "shares",
+       "source_concept": "dei:EntityCommonStockSharesOutstanding",
+       "origin": "both"
+      },
+      {
+       "concept": "total_assets",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Assets",
+       "origin": "both"
+      },
+      {
+       "concept": "total_assets",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Assets",
+       "origin": "both"
+      },
+      {
+       "concept": "total_liabilities",
+       "period_start": null,
+       "period_end": "2022-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Liabilities",
+       "origin": "both"
+      },
+      {
+       "concept": "total_liabilities",
+       "period_start": null,
+       "period_end": "2023-06-30",
+       "unit": "USD",
+       "source_concept": "us-gaap:Liabilities",
+       "origin": "both"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

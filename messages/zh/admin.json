@@ -150,14 +150,18 @@
       "batches24h": "批次（24 小时）",
       "notFreshNote": "stale {stale} · missing {missing} · error {error}",
       "batchesNote": "success {success} · partial {partial} · failed {failed}",
-      "openQuarantineNote": "真实计数（count），非截断样本"
+      "openQuarantineNote": "真实计数（count），非截断样本",
+      "overdue": "逾期披露",
+      "overdueNote": "US {us} · CN {cn} · 已申报未入库 {filed} · 上游不可查 {unknown}"
     },
     "sections": {
       "freshness": "新鲜度",
       "batches": "最近批次",
       "quarantine": "隔离队列",
       "reconciliations": "对账失败",
-      "reconciliationsLatest": "最近 {shown} / {total}"
+      "reconciliationsLatest": "最近 {shown} / {total}",
+      "calendar": "披露日历",
+      "claims": "标识符声明"
     },
     "columns": {
       "dataset": "数据集",
@@ -182,11 +186,123 @@
       "rightSource": "右源",
       "rightValue": "右值",
       "relDiff": "相对差",
-      "tolerance": "容差"
+      "tolerance": "容差",
+      "pair": "对账对",
+      "kind": "类型",
+      "outcome": "结果"
     },
     "notes": {
       "freshness": "状态按当前时间读时重算；≠ 表示与写入时存储的状态不一致。",
-      "quarantine": "接受/拒绝只改变隔离项状态，不会写入目标表；若已被他人处理，将提示并刷新列表。"
+      "quarantine": "接受/拒绝只改变隔离项状态，不会写入目标表；若已被他人处理，将提示并刷新列表。",
+      "calendar": "逾期只计法定期限已知且期末为实际值的行；估计期末（52/53 周）与无规则行不计逾期；上游不可查不算逾期。",
+      "claims": "接受会在同一事务内写入目标行；evidence_only 须先填修订表单；legacy 声明只能按运行手册用 SQL 处理。"
+    },
+    "calendar": {
+      "market": "市场",
+      "allMarkets": "全部市场",
+      "counts": "逾期 {overdue} · 已申报未入库 {filed} · 上游不可查 {unknown} · 估计 {estimated} · 无规则 {noRule}",
+      "legend": "法定 / 估计 / 无规则 · 逾期红、已申报未入库黄、上游不可查灰斜",
+      "empty": "暂无需要关注的期间",
+      "estimatedMark": "（估）",
+      "estimatedHint": "52/53 周申报人的估计期末，收到申报后以实际期末替换",
+      "noRuleTitle": "无规则行（{n}）",
+      "noRuleEmpty": "暂无无规则行",
+      "columns": {
+        "issuer": "ticker / 发行人",
+        "market": "市场",
+        "reportKind": "报告种类",
+        "periodEnd": "期末",
+        "deadlineState": "期限状态",
+        "dueDate": "应披露日",
+        "dueRule": "规则",
+        "expectedDate": "预约日",
+        "upstreamFiled": "上游申报日",
+        "disclosureState": "披露状态",
+        "overdueDays": "逾期天数"
+      },
+      "deadline": {
+        "statutory": "法定",
+        "estimated": "估计",
+        "no_rule": "无规则"
+      }
+    },
+    "claims": {
+      "latest": "最近 {shown} / {total}",
+      "empty": "暂无待审核声明",
+      "sqlOnly": "需 SQL 处理",
+      "amendAccept": "修订并接受",
+      "columns": {
+        "time": "时间",
+        "issuer": "发行人",
+        "op": "操作",
+        "idType": "类型",
+        "value": "值",
+        "evidenceKind": "证据类别",
+        "source": "来源",
+        "detail": "详情",
+        "actions": "操作"
+      },
+      "amend": {
+        "op": "改写为",
+        "security": "证券行",
+        "newValidFrom": "新的起始日",
+        "validTo": "终止日",
+        "method": "方法",
+        "submit": "提交修订",
+        "cancel": "取消",
+        "noSecurities": "该发行人没有证券行，无法修订"
+      },
+      "errors": {
+        "amend_security": "请选择证券行",
+        "amend_date": "请填写有效日期",
+        "amend_method": "请选择方法"
+      }
+    },
+    "reconciliation": {
+      "failed": "失败 {n}",
+      "lastCycle": "最近周期 {status}",
+      "noCycle": "无周期"
+    },
+    "quarantine": {
+      "chooseCandidate": "选择候选值",
+      "keepRow": "选择保留的行",
+      "adopt": "接受并采用候选 {n}",
+      "keep": "接受并保留所选行",
+      "noRowsPromoted": "已关闭该项，但没有事实被恢复（仍被其他争议项引用）。",
+      "restore": {
+        "action": "恢复",
+        "passing": "最近一次对账已通过；输入若有变化，服务器会拒绝并提示重跑。",
+        "not_passing": "最近一次对账未通过，需先修正并重跑对账。",
+        "no_result": "尚无对账结果，需先重跑对账。",
+        "inputs_changed": "最近一次对账通过后输入已变化，需先重跑对账。",
+        "unchecked": "未核对（超出单次核对上限，筛选后重试）"
+      },
+      "acknowledge": "仅确认知晓（不采用候选）"
+    },
+    "conflicts": {
+      "already_resolved": "该项已被处理，列表已刷新。",
+      "item_not_open": "该项已被处理，列表已刷新。",
+      "legacy_claim": "旧声明不能在页面处理，请按运行手册用 SQL 处理。",
+      "amend_required": "evidence_only 声明必须先填写修订再接受。",
+      "value_conflict": "目标值已变化或冲突，声明保持待审核。",
+      "ownership_conflict": "证券归属冲突，声明保持待审核。",
+      "already_closed": "目标证券行已关闭。",
+      "not_passing": "最近一次对账未通过或输入已变化，请先重跑对账。",
+      "reconcile_wiring_missing": "服务器尚未接上对账输入哈希，暂不能恢复。",
+      "inputs_unavailable": "当前对账输入不可得（无最近结果或左侧事实缺失），请先重跑对账。",
+      "current_evidence_unavailable": "此刻取不到该对账对的当前右侧证据（主文档或清单条目），暂不能恢复。",
+      "read_truncated": "读取结果被截断，未做评估，请稍后重试。",
+      "stale_evaluation": "数据刚刚变化，请刷新后重试。",
+      "generation_moved": "映射代已变化，请刷新后重试。",
+      "conflict_exists": "同键同日存在争议或不同的现值，不能直接采用。",
+      "duplicate": "该候选已存在，无需重复采用。",
+      "replay_required": "需要重放原始快照后才能采用该候选。",
+      "filing_not_found": "找不到候选所指的申报。",
+      "lineage_changed": "谱系已变化，请刷新后重试。",
+      "scope_missing": "谱系成员缺少同步范围行，请联系管理员。",
+      "unresolved": "裁决后仍不止一个当前值，已回滚。",
+      "run_pending": "相关同步运行尚未结束，请稍后重试。",
+      "issuer_not_active": "发行人当前不是活跃状态，声明保持待审核。"
     }
   }
 }

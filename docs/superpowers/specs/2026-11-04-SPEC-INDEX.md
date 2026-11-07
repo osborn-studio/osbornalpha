@@ -4,9 +4,9 @@
 
 | 规格 | 文件 | 稿次 | Codex 终审 | 审计目录 | 状态 / 下一步 |
 |---|---|---|---|---|---|
-| 数据底座一（F1 发行人 + F5 质量设施） | `2026-11-04-data-foundation-design.md` | 已实施（§14 偏差） | 任务级审计 | — | PR #100 待合并 |
+| 数据底座一（F1 发行人 + F5 质量设施） | `2026-11-04-data-foundation-design.md` | 已实施（§14 偏差） | 任务级审计 | — | PR #100 已合并 |
 | 数据底座二（F2 披露事实库） | `2026-11-04-data-foundation-2-disclosure-facts-design.md` | 8 | 第八轮："ready for an implementation plan with owner decisions A/B/C pending" | `2026-11-04-data-foundation-2/`（01–15 + README） | owner 决策 A/B/C → 写计划二 |
-| 数据底座三（F1b 标识符 + F5 对账与日历新鲜度） | `2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` | 5 | 第四轮 "not ready"；S1–S7 已按 Codex 原方案实现，未复审 | `2026-11-04-data-foundation-3/` | 计划前再做一轮 Codex；依赖计划二落地 |
+| 数据底座三（F1b 标识符 + F5 对账与日历新鲜度） | `2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` | 6 | 第五轮（增量 + 落地代码核对）T1–T15、第六轮确认 U1–U3 均按规定修法落实 | `2026-11-04-data-foundation-3/`（01–07 + 03 处置） | 计划三编写与执行中（`docs/superpowers/plans/2026-11-05-data-foundation-3-identifiers-and-reconciliation.md`） |
 | F3 披露文档管道 | `2026-11-04-document-pipeline-design.md` | 5 | 第四轮 "not ready"；R4-1–7 已按原方案实现，未复审 | `2026-11-04-document-pipeline/` | 同上；owner 决策 A–G |
 | F4 判断层框架 | `2026-11-04-judgment-framework-design.md` | 5 | 第四轮 "not ready"；R01–R06 已按原方案实现，未复审 | `2026-11-04-judgment-framework/` | 同上；owner 决策 O1–O7 |
 | F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 6 | 第 6 稿已按计划 `2026-11-06-evals-and-gold-sets.md` 实施，见 §18.1 | `2026-11-04-evals-gold-sets/` | owner 决策 D1–D8 |

@@ -137,7 +137,7 @@ describe('factsReader.stateRev / project',()=>{
 });
 
 describe('selectFiling (spec §4.2, §0 R5-8)',()=>{
- const g=(o:Partial<FilingRow>):FilingRow=>({filing_id:'g',issuer_id:UNIT_ISSUER,market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-04-03',source_ref:'600519.SH:20231231:1:20240403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2026-01-01T00:00:00.000Z',...o});
+ const g=(o:Partial<FilingRow>):FilingRow=>({filing_id:'g',issuer_id:UNIT_ISSUER,market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-04-03',source_ref:'600519.SH:20231231:1:20240403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2026-01-01T00:00:00.000Z',accepted_at:null,acceptance_source:null,...o});
  const cn=(value:string)=>({kind:'cninfo_announcement' as const,value});
  const t2023:FactTarget={...revenue,period_start:'2023-01-01',period_end:'2023-12-31'};
  const t2022:FactTarget={...revenue,period_start:'2022-01-01',period_end:'2022-12-31'};

@@ -85,9 +85,11 @@ issuer_industry_memberships            -- 时点成分（只建表，行业规�
 | CIK ↔ 美股 ticker | SEC `company_tickers.json`、`company_tickers_exchange.json` | 已有 `scripts/entity-keys/parse-sec-tickers.ts`，改为写 `issuers`/`issuer_securities` | 免费，日更 |
 | LEI ↔ ISIN | GLEIF ISIN-LEI 映射 CSV | 已有 `parse-gleif-isin-lei.ts` | 免费 |
 | 统一社会信用代码、巨潮 orgId | 巨潮 | 已有 `fill-cninfo-org-id.ts` | A 股 |
-| ISIN（A 股 CNE…、港股 HK…、美股 US…） | GLEIF 映射；交易所代码表；OpenFIGI 返回 | 新 `scripts/entity-keys/fill-isin.ts` | A 股 ISIN 规则可由代码推导作兜底，并标 `provenance.method='derived'` |
+| ISIN（A 股 CNE…、港股 HK…、美股 US…） | GLEIF 映射；交易所代码表；OpenFIGI 返回 | 新 `scripts/entity-keys/fill-isin.ts` | A 股 ISIN 规则可由代码推导作兜底，并标 `provenance.method='derived'` **（已撤回，2026-11-05：A 股 ISIN 不由代码推导，见规格三 §4.1.5）** |
 | FIGI | OpenFIGI v3 `/mapping`（按 ticker + exchCode，或 ISIN） | 新 `src/lib/entities/providers/openfigi.ts` | 免费 key，限速 25 req/min；使用条款见开放问题 |
 | A/H 双重上市配对 | 港交所 A+H 名单、GLEIF 同 LEI、名称归一 | 新 `scripts/entity-keys/link-ah.ts` | 人工审核 `pending` 项 |
+
+> **已撤回（2026-11-05）**：上表 ISIN 行的"A 股 ISIN 规则可由代码推导作兜底"已撤回——A 股 ISIN 的 NSIN 由境内编码机构分配，与证券代码无函数关系；ISIN 只来自 GLEIF、交易所名单与 OpenFIGI，取不到保持为空。见 `docs/superpowers/specs/2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` §4.1.5。FIGI 行与 A/H 配对行由规格三 §4.1–§4.2 实现（脚本名以规格三为准：`fill-identifiers.ts`、`src/lib/entities/identifiers/openfigi.ts`）。
 
 解析规则：同一 LEI 或 CIK → 同一发行人；无 LEI/CIK 时用 USCI；都没有则按名称归一 + 人工确认进 `issuer_identifier_claims(status='pending')`。自动合并只发生在"硬标识符"一致时。
 

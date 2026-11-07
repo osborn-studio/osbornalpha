@@ -1,0 +1,13 @@
+{
+ "api": "disclosure_date",
+ "params": {
+  "ts_code": "000333.SZ"
+ },
+ "fields": "ts_code,ann_date,end_date,pre_date,actual_date,modify_date",
+ "sha256": "f69c95b7db4dd242c1af2c3b7b08c99293aa3e9157ebba342893739fe0872a51",
+ "fetched_at": "2026-11-07T01:24:00.384Z",
+ "http_status": 200,
+ "code": 0,
+ "msg": "",
+ "request_id": "1262cddd-efde-4351-a73c-92f0eaf78d8b"
+}

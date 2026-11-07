@@ -265,7 +265,7 @@ describe('resolveProvenance — Tushare rows (one statement row feeds many conce
  const bytes=new TextEncoder().encode(text);
  const snap=snapshotOf(bytes,{source:'tushare',api:'income',params:{ts_code:'600519.SH',report_type:'1'},page:1});
  const parsed=parseTushareStatements([snap],{sinceYear:1900});
- const filing:FilingRow={filing_id:'fil-cn',issuer_id:CN,market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-04-03',source_ref:parsed.filings[0].sourceRef,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:RUN,created_at:'2026-01-01T00:00:00.000Z'};
+ const filing:FilingRow={filing_id:'fil-cn',issuer_id:CN,market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-04-03',source_ref:parsed.filings[0].sourceRef,url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:RUN,created_at:'2026-01-01T00:00:00.000Z',accepted_at:null,acceptance_source:null};
  const factOf=(c:FactCandidate):FactRow=>({fact_id:`f-${c.concept}`,issuer_id:CN,market:'CN',filing_id:'fil-cn',run_id:RUN,concept:c.concept,source_concept:c.sourceConcept,statement:c.statement,period_start:c.periodStart,period_end:c.periodEnd,duration:c.duration,value:c.value,value_text:c.value,unit:c.unit,consolidation:'consolidated',available_date:'2024-04-03',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:c.rawHash,created_at:'2026-01-01T00:00:00.000Z'});
  const facts=parsed.candidates.map(factOf);
  const path=`tushare/${CN}/${snap.sha256}.json`;
