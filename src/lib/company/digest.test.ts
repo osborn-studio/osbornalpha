@@ -127,6 +127,15 @@ describe('runCompanyDigest',()=>{
   expect(evAttempts).toHaveLength(2);expect(evAttempts[0]).toBe(evAttempts[1]);expect(attempts).toEqual([evAttempts[0]]);
   expect((await h.db.digestState(a,'US'))?.digested_rev).toBe(r.streams[0].basedOnRev);
  });
+ it('storageError in the evidence index → no evidence/digest write, failed evidence_index_failed, backed off',async()=>{
+  const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
+  const ev=vi.fn(h.db.replaceEvidence),rd=vi.fn(h.db.replaceDigest),mark=vi.spyOn(h.db,'markDigestFailed');
+  const failing:DigestDeps['reader']={get:async()=>{throw new Error('storage 500');},meta:async()=>{throw new Error('storage 500');}} as unknown as DigestDeps['reader'];
+  const r=await runCompanyDigest({...h.deps,reader:failing,db:{...h.db,replaceEvidence:ev,replaceDigest:rd,markDigestFailed:mark}},{mode:'incremental'});
+  expect(r.streams[0]).toMatchObject({outcome:'failed',code:'evidence_index_failed'});
+  expect(ev).not.toHaveBeenCalled();expect(rd).not.toHaveBeenCalled();expect(mark).toHaveBeenCalledTimes(1);
+  expect(r.counts).toMatchObject({fetched:1,failed:1,inserted:0});expect(r.status).toBe('failed');
+ });
  it('stale_computation twice → failed and backed off',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
   const mark=vi.spyOn(h.db,'markDigestFailed');

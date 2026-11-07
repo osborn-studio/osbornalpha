@@ -94,6 +94,7 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
   if(env.truncated)return fail('read_truncated');
   try{
    const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache:ctx.cache});
+   if(built.stats.storageError>0)return fail('evidence_index_failed');   // transient storage failure: never replace (would delete valid evidence) nor mark success
    if(!ctx.dryRun)await deps.db.replaceEvidence(p.issuerId,p.market,attemptId,env.stateRev,built.rows);   // evidence fence
    out.evidence={indexed:built.rows.length,facts:built.stats.facts};
   }catch(e){
