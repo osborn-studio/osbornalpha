@@ -19,7 +19,11 @@ Actual local verification on Node v22.22.1:
 MiniMax-M2.5 supplied a completed design review. Its conditions concerning
 concurrent writers, input consistency, paths and approval claims are addressed by
 exclusive staging, pre-rename input checks, symlink refusal and explicit
-`integrity_lock_only` output. Final code-review disposition is recorded in the PR.
+`integrity_lock_only` output. The final code-review continuation returned actual
+`end_turn` text: **No confirmed P1/P2 defect**, scoped to the documented local
+updater. Two earlier code-review attempts exhausted their thinking budgets and
+are not counted as approvals. Neither model review establishes human gold truth,
+licensing or release readiness.
 
 No DB integration, app build, source verification, real transcription/review,
 production evaluation, release acceptance, merge or deployment was performed.
