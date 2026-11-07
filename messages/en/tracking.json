@@ -1,0 +1,10 @@
+{
+  "button": {
+    "track": "Track",
+    "tracking": "Tracking ✓",
+    "unavailable": "Tracking unavailable",
+    "loginRequired": "Sign in to track",
+    "limit": "Tracking limit of 200 companies reached (watch_limit). Untrack another company first.",
+    "error": "Tracking action failed; please retry."
+  }
+}

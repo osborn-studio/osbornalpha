@@ -1,0 +1,10 @@
+{
+  "button": {
+    "track": "跟踪",
+    "tracking": "跟踪 ✓",
+    "unavailable": "跟踪暂不可用",
+    "loginRequired": "登录后可跟踪",
+    "limit": "已达跟踪上限 200 家（watch_limit）。先取消跟踪其他公司。",
+    "error": "跟踪操作失败，请重试。"
+  }
+}

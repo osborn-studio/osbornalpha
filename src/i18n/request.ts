@@ -17,6 +17,9 @@ const MESSAGE_DOMAINS = [
   'admin',
   // Analyst scoring layer (spec 2026-10-17):
   'analyst',
+  // COMPANY — company research module (plan 2026-11-06 Task 11)
+  'company', 'tracking',
+  // /COMPANY
 ] as const;
 
 export default getRequestConfig(async () => {

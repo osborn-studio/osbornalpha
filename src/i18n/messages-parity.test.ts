@@ -40,3 +40,21 @@ describe('usage notice translations', () => {
     }
   });
 });
+
+// COMPANY — company research module domains (plan 2026-11-06 Task 11)
+describe('company module translations', () => {
+  const read = (locale: 'en' | 'zh', file: 'company' | 'tracking') =>
+    JSON.parse(readFileSync(resolve(process.cwd(), 'messages', locale, `${file}.json`), 'utf8')) as unknown;
+  const leaves = (value: unknown, prefix = ''): [string, string][] =>
+    typeof value === 'string' ? [[prefix, value]]
+      : Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => leaves(v, prefix ? `${prefix}.${k}` : k));
+  for (const file of ['company', 'tracking'] as const) {
+    it(`${file}: zh and en keys and placeholders are in parity`, () => {
+      const zh = new Map(leaves(read('zh', file)));
+      const en = new Map(leaves(read('en', file)));
+      expect([...zh.keys()].sort()).toEqual([...en.keys()].sort());
+      for (const [key, value] of en) expect(placeholders(zh.get(key) ?? '')).toEqual(placeholders(value));
+    });
+  }
+});
+// /COMPANY
