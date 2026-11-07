@@ -6,6 +6,12 @@ import {memoryBrokerResearchDb} from './memory-db';
 import {brokerPaths,memoryBrokerStorage} from './storage';
 import type {MemoryBrokerStorage} from './storage';
 import type {CoreDeps} from './deps';
+import type {BrokerDeps} from './deps';
+import {fakeF3Port} from './ports/f3';
+import type {F3Port} from './ports/f3';
+import {recordedLlmPort} from './ports/llm';
+import type {LlmPort} from './ports/llm';
+import {EXTRACT_RESPONSE,pipelineExtraction} from './fixtures/pipeline';
 import type {BrokerResearchDb,DocumentRow,LicenceInput,LicenceRow} from './types';
 export const ADMIN_ID='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 export const OTHER_ADMIN='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6e';
@@ -31,4 +37,18 @@ export async function seedDocument(d:MemoryCore,licenceId:string,bytes=synthetic
  if(await d.db.insertDocument({document_id:documentId,sha256:sha,storage_path:brokerPaths.report(sha),byte_size:bytes.byteLength,licence_id:licenceId,uploaded_by:ADMIN_ID,original_filename:'synthetic.pdf'})!=='inserted')throw new Error('seed: duplicate');
  await d.storage.upload(brokerPaths.report(sha),bytes,'application/pdf');await d.db.updateDocument(documentId,{promotion_pending:false});
  return (await d.db.getDocument(documentId))!;
+}
+export interface MemoryDeps extends MemoryCore,BrokerDeps{storage:MemoryBrokerStorage}
+export function memoryBrokerDeps(o:{f3?:F3Port;llm?:LlmPort;tables?:TableClient;db?:BrokerResearchDb}={}):MemoryDeps{
+ const core=memoryCoreDeps(o);
+ return {...core,f3:o.f3??fakeF3Port(i=>pipelineExtraction(i.sha256)),llm:o.llm??recordedLlmPort([EXTRACT_RESPONSE])};
+}
+export const DEADLINE=()=>new Date(T0.getTime()+280_000);
+/** Seed a parsed document through the same lease, write inventory, and run path as production. */
+export async function seedParsed(d:MemoryDeps,licenceId:string):Promise<DocumentRow>{
+ const doc=await seedDocument(d,licenceId);
+ const {runParse}=await import('./parse');
+ const r=await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+ if(r.status!=='succeeded')throw new Error(`seed: parse failed ${r.errorCode}`);
+ return (await d.db.getDocument(doc.document_id))!;
 }
