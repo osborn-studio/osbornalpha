@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+// F4: + Fragment (row expansion)
+import { Fragment, useCallback, useEffect, useState } from 'react';
+// /F4
 import { useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
 import { exchangeDate } from '@/lib/scoring/forward';
@@ -10,6 +12,13 @@ import { fetchBook, fetchRecommendations, patchProfile, withdrawRecommendation, 
 import type { AnalystProfile } from '@/lib/supabase/database.types';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
 import { BookSummaryPanel, BookTables, formatFill, pctOrDash } from '@/components/analyst/BookTables';
+// F4: spec §11.2 / §8.6 — banded confidence + self-assessment (owner decision O5); type-only imports keep server code out of the bundle
+import { ConfidenceCell, ConfidenceDetail } from '@/components/judgments/ConfidenceCell';
+import { SelfAssessmentPanel } from '@/components/judgments/SelfAssessmentPanel';
+import type { PrivateJudgmentCard } from '@/lib/judgments/types';
+import type { SelfAssessment } from '@/lib/judgments/adapters/recommendation';
+type RecommendationWithCard = RecommendationView & { judgment_card?: PrivateJudgmentCard };
+// /F4
 
 // Mirrors the .limit(500) in listRecommendations (lib/analyst/store.ts).
 const RECS_CAP = 500;
@@ -24,11 +33,18 @@ export default function AnalystDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // F4
+  const [selfAssessment, setSelfAssessment] = useState<SelfAssessment | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // /F4
 
   const load = useCallback(async () => {
     try {
       const [b, r] = await Promise.all([fetchBook(analystId), fetchRecommendations({ analyst: analystId })]);
       setProfile(b.profile); setBook(b.book); setRecs(r.recommendations); setError(null);
+      // F4: GET /api/analyst/book now also returns self_assessment (fetchBook's declared type predates it)
+      setSelfAssessment((b as typeof b & { self_assessment?: SelfAssessment }).self_assessment ?? null);
+      // /F4
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -96,6 +112,9 @@ export default function AnalystDetailPage() {
             )}
           </header>
           <BookSummaryPanel book={book} />
+          {/* F4: 自评：Brier、n（不可审计） */}
+          {selfAssessment && <SelfAssessmentPanel assessment={selfAssessment} />}
+          {/* /F4 */}
           <BookTables book={book} />
           <Panel title={t('timeline.title', { count: recs.length })}>
             {recs.length === RECS_CAP && <p className="mb-1 text-xs text-[var(--text-dim)]">{t('timeline.capped', { count: RECS_CAP })}</p>}
@@ -123,14 +142,18 @@ export default function AnalystDetailPage() {
                   </thead>
                   <tbody>
                     {recs.map((r) => (
-                      <tr key={r.id} className={`border-t border-[var(--border)] ${r.withdrawn_at ? 'opacity-50' : ''}`}>
+                      // F4: expandable recommendation rows
+                      <Fragment key={r.id}>
+                      <tr className={`border-t border-[var(--border)] ${r.withdrawn_at ? 'opacity-50' : ''}`}>
                         <td className="py-1">{exchangeDate(r.recommended_at, r.market)}</td>
                         <td className="py-1"><Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">{r.ticker}</Link></td>
                         <td className="py-1">{t(`action.${r.action}`)}</td>
                         <td className="py-1">{r.reference_price === null ? '--' : formatFill(r.reference_price, r.market)}</td>
                         {/* Shows the frozen first-score fill; when the latest refresh restated it on a new price basis (qfq / split) the title carries both. */}
                         <td className="py-1" title={r.fill_price !== null && r.score?.base_close !== null && r.score?.base_close !== undefined && r.score.base_close !== r.fill_price ? `${formatFill(r.fill_price, r.market)} → ${formatFill(r.score.base_close, r.market)} (${r.score.base_date ?? ''})` : undefined}>{r.fill_price === null ? <span className="text-[var(--text-dim)]">{t('scores.pending')}</span> : formatFill(r.fill_price, r.market)}</td>
-                        <td className="py-1">{r.confidence ?? '--'}</td>
+                        {/* F4: band + 未校准, never a percent; the registered value is in the expansion row */}
+                        <td className="py-1"><ConfidenceCell card={(r as RecommendationWithCard).judgment_card ?? null} expanded={expandedId === r.id} controls={`rec-detail-${r.id}`} onToggle={() => setExpandedId((id) => (id === r.id ? null : r.id))} /></td>
+                        {/* /F4 */}
                         <td className="py-1">{pctOrDash(r.score?.forward_5d_pct ?? null)}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_20d_pct ?? null)}</td>
                         <td className="py-1">{pctOrDash(r.score?.forward_60d_pct ?? null)}</td>
@@ -154,6 +177,13 @@ export default function AnalystDetailPage() {
                           )}
                         </td>
                       </tr>
+                      {expandedId === r.id && (
+                        <tr id={`rec-detail-${r.id}`} className="border-t border-[var(--border)] bg-[var(--bg-card)]">
+                          <td colSpan={13} className="px-2 py-2"><ConfidenceDetail card={(r as RecommendationWithCard).judgment_card ?? null} /></td>
+                        </tr>
+                      )}
+                      {/* /F4 */}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

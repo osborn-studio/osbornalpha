@@ -14,6 +14,12 @@ vi.mock('@/lib/dq/facts-resolver', () => ({ resolveFactsItem: mocks.resolveFacts
 vi.mock('@/lib/dq/reconcile/deps', () => ({ restoreInputsHashNow: () => mocks.hashNow }));
 vi.mock('@/lib/facts/db', () => ({ supabaseFactsDb: () => ({ facts: 'db' }) }));
 
+// F4
+const f4 = vi.hoisted(() => ({ resolveJudgments: vi.fn(), judgmentsDb: vi.fn(), codeVersion: vi.fn() }));
+vi.mock('@/lib/dq/judgments-resolver', () => ({ resolveJudgmentsItem: f4.resolveJudgments }));
+vi.mock('@/lib/judgments/deps', () => ({ adminJudgmentsDb: f4.judgmentsDb, resolveCodeVersion: f4.codeVersion }));
+// /F4
+
 import { POST } from './route';
 
 const ID = '3f2b6c1e-8a4d-4f0e-9b7a-1c2d3e4f5a6b';
@@ -310,3 +316,72 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
     expect(mocks.insert.mock.calls[0][0].detail.chosen_candidate_index).not.toBe(7);
   });
 });
+
+// F4
+describe('POST /api/admin/dq/quarantine/[id] — judgments items (F4, spec §7.6)', () => {
+  const JUDGMENT = '7c1e2d3f-4a5b-4c6d-8e7f-90a1b2c3d4e5';
+  const H = 'e'.repeat(64);
+  let client: ReturnType<typeof memoryTableClient>;
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    client = memoryTableClient({ dq_quarantine: ['id'] });
+    mocks.client = client;
+    await client.insert('dq_quarantine', { id: ID, dataset: 'judgments', table_name: 'judgment_settlements', natural_key: JUDGMENT, reason_code: 'settlement_basis_mismatch', status: 'open', payload: { evidence_hash: H }, detail: {} });
+    mocks.requireAdmin.mockResolvedValue({ id: ADMIN });
+    mocks.insert.mockResolvedValue({ error: null });
+    mocks.from.mockReturnValue({ insert: mocks.insert });
+    mocks.getAdmin.mockReturnValue({ from: mocks.from });
+    f4.judgmentsDb.mockReturnValue({ judgments: 'db' });
+    f4.codeVersion.mockReturnValue('a'.repeat(40));
+  });
+
+  it('routes judgments items to resolveJudgmentsItem with the resolution body; an accept audited by the RPC is not audited again', async () => {
+    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: true, judgmentId: JUDGMENT, resolution: 'accept_refetched', seq: null });
+    const res = await json({ status: 'resolved_accept', resolution: { kind: 'accept_refetched', evidence_hash: H } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: ID, outcome: 'resolved', judgment_id: JUDGMENT, resolution: 'accept_refetched', seq: null });
+    expect(f4.judgmentsDb).toHaveBeenCalledWith({ from: mocks.from });
+    expect(f4.codeVersion).toHaveBeenCalledWith({ allowGit: false });
+    expect(f4.resolveJudgments).toHaveBeenCalledWith(
+      { db: { judgments: 'db' }, tables: client, codeVersion: 'a'.repeat(40) },
+      expect.objectContaining({ id: ID, dataset: 'judgments', reason_code: 'settlement_basis_mismatch' }),
+      { status: 'resolved_accept', resolution: { kind: 'accept_refetched', evidence_hash: H }, resolvedBy: ADMIN },
+    );
+    expect(mocks.resolve).not.toHaveBeenCalled();
+    expect(mocks.resolveFacts).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('a reject of an already-final judgment is audited atomically by the RPC without a second route audit', async () => {
+    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: true, judgmentId: JUDGMENT, resolution: 'quarantine_rejected', seq: 2 });
+    expect((await json({ status: 'resolved_reject' })).status).toBe(200);
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('a plain non-settlement verdict is audited by the route', async () => {
+    await client.update('dq_quarantine', { id: ID }, { table_name: 'judgments', reason_code: 'idempotency_conflict' });
+    f4.resolveJudgments.mockResolvedValue({ outcome: 'resolved', audited: false, judgmentId: JUDGMENT, resolution: 'plain', seq: null });
+    expect((await json({ status: 'resolved_reject' })).status).toBe(200);
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ user_id: ADMIN, action: 'dq.quarantine_resolve', object_id: ID });
+  });
+
+  it('maps hook outcomes to HTTP statuses without auditing failures', async () => {
+    const cases: [string, number][] = [['resolution_not_applicable', 400], ['invalid_resolution', 400], ['unknown_judgment', 404], ['code_version_unavailable', 503], ['already_resolved', 409], ['stale', 409]];
+    for (const [outcome, status] of cases) {
+      f4.resolveJudgments.mockResolvedValueOnce({ outcome, audited: false, judgmentId: JUDGMENT, resolution: null, seq: null });
+      const res = await json({ status: 'resolved_accept', resolution: { kind: 'accept_refetched', evidence_hash: H } });
+      expect({ outcome, status: res.status }).toEqual({ outcome, status });
+    }
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('non-judgments datasets never reach the judgments hook', async () => {
+    await client.update('dq_quarantine', { id: ID }, { dataset: 'macro', table_name: 't' });
+    mocks.resolve.mockResolvedValue('resolved');
+    expect((await json({ status: 'resolved_accept', resolution: { kind: 'accept_refetched' } })).status).toBe(200);
+    expect(f4.resolveJudgments).not.toHaveBeenCalled();
+    expect(mocks.resolve).toHaveBeenCalledTimes(1);
+  });
+});
+// /F4

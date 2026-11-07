@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 概览</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1600px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <section style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap">
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <h1 class="h1">百济神州 <span class="en" style="font-size: 16px">BeOne Medicines</span></h1>
+        <div class="row">
+          <a class="chip m" href="#" style="text-decoration: none">ONC</a>
+          <span class="chip ac m" aria-current="true">688235.SH ◉</span>
+          <a class="chip m" href="#" style="text-decoration: none">06160.HK</a>
+          <span class="tiny">CIK <span class="m">0001651308</span> · LEI <span class="m">—</span> · USCI <span class="m">—</span></span>
+        </div>
+        <div class="tiny">示例：访问旧代码时提示“该代码已并入 ONC”（redirected_from）。</div>
+      </div>
+      <div style="margin-left: auto; display: flex; flex-direction: column; gap: 8px; align-items: flex-end">
+        <div class="row"><span class="ml">披露流 Disclosure stream</span><div class="seg" aria-label="披露流"><button>美股 10-K / 10-Q</button><button class="on">A 股定期报告</button></div></div>
+        <div class="tiny">两路不合并；切换即跳到该市场主证券的路由</div>
+        <div class="tiny">最近财期 <span class="m" style="color: #fafafa">2025-09-30</span> · 最近文件 <span class="m" style="color: #fafafa">2025-11-06</span> · facts.cn <span class="dot ok"></span> fresh</div>
+      </div>
+    </section>
+    <nav class="tabs"><a class="on" href="#">概览</a><a href="Main.dc.html">报表</a><a href="Metrics.dc.html">指标</a><a href="Filings.dc.html">文件</a><a href="#">跟踪</a><a href="#">判断</a><a href="#">模型观点（未校准）</a><a href="#">信号</a><a href="#">持仓</a></nav>
+
+    <div style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; align-items: start">
+      <div style="display: flex; flex-direction: column; gap: 20px">
+        <section class="card pad" aria-label="最新财期速览">
+          <div class="row" style="margin-bottom: 12px"><h2 class="h2">最新财期速览 <span class="en">Latest period</span></h2><span class="chip m">2025-01-01 → 09-30 · 9M</span><span class="tiny" style="margin-left: auto">readFacts(asOf=今天, history) 一次信封现算</span></div>
+          <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px">
+            <div><div class="ml">营业收入</div><div class="tiny">revenue_operating</div><button class="src" style="font-size: 20px; margin-top: 4px">275.95 亿</button></div>
+            <div><div class="ml">归母净利润</div><div class="tiny">net_income_parent</div><button class="src" style="font-size: 20px; margin-top: 4px">11.39 亿</button></div>
+            <div><div class="ml">经营现金流</div><div class="tiny">operating_cash_flow</div><button class="src" style="font-size: 20px; margin-top: 4px">36.08 亿</button></div>
+            <div><div class="ml">毛利率</div><div class="tiny">gross_margin · 派生</div><button class="src" style="font-size: 20px; margin-top: 4px">86.10%</button></div>
+            <div><div class="ml">营收同比</div><div class="tiny">revenue_yoy · 派生</div><button class="src" style="font-size: 20px; margin-top: 4px">+44.18%</button></div>
+          </div>
+          <div class="tiny" style="margin-top: 12px">同一信封 · state_rev <span class="m">rev 4182</span>。同比用中性符号，不用涨跌色。</div>
+        </section>
+
+        <section class="card pad" aria-label="最近事件">
+          <div class="row" style="margin-bottom: 8px"><h2 class="h2">最近事件 <span class="en">Recent events</span></h2><a href="#" style="margin-left: auto; font-size: 13px">全部 → 跟踪</a></div>
+          <table class="t">
+            <tbody>
+              <tr><td class="m dim" style="width: 110px">2025-11-06</td><td><span class="chip sq">新文件</span></td><td>三季报 2025 Q3 · 事实 <span class="m">198</span></td><td class="n"><a href="Filings.dc.html" style="font-size: 12px">文件 →</a></td></tr>
+              <tr><td class="m dim">2025-11-06</td><td><span class="chip sq">新财期</span></td><td>2025-09-30 9M · 营业收入 <button class="src">275.95 亿</button></td><td class="n"><a href="Main.dc.html" style="font-size: 12px">报表 →</a></td></tr>
+              <tr><td class="m dim">2025-08-28</td><td><span class="chip sq">修订</span></td><td>2024 FY 研发费用 <span class="m">141.4</span> → <button class="src">141.6 亿</button> <span class="tiny">+0.14%</span></td><td class="n"><a href="#" style="font-size: 12px">报表 →</a></td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 20px">
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 8px">
+          <h2 class="h3">所属行业 <span class="en">Industry</span></h2>
+          <a class="chip" href="#" style="text-decoration: none; align-self: flex-start">申万 2021 · 医药生物 › 化学制药 › 创新药</a>
+          <a class="chip" href="#" style="text-decoration: none; align-self: flex-start">SIC 2834 · Pharmaceutical Preparations</a>
+        </section>
+        <section class="callout" style="display: flex; flex-direction: column; gap: 8px">
+          <strong style="color: #fafafa">K 线与行情卡已移除（决策 J 默认）</strong>
+          <span>行情链路没有回放契约。若 owner 批准例外：保留 K 线并加“图 | 表”开关，表格逐行列出图上同一序列（日期、开高低收、成交量、已绘指标）；行情卡只留价格、涨跌、成交量/额、来源、更新时间。</span>
+          <div class="seg" style="align-self: flex-start"><button class="on">图 Chart</button><button>表 Table</button></div>
+          <span class="tiny">PE / PB / ROE / 股息率 / 市值卡无论如何不显示。</span>
+        </section>
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 6px">
+          <h2 class="h3">信号 <span class="en">Signals</span></h2>
+          <span class="cap">今日无触发 · 现有信号卡不变</span>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1600}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

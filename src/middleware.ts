@@ -72,6 +72,11 @@ export async function middleware(request: NextRequest) {
     ? rewriteWithLocale(request, pathname, 'en')
     : NextResponse.next({ request });
 
+  // COMPANY: public composed company routes are session-independent (shared-cache safe): the
+  // gate must not run getUser() (it may Set-Cookie). /api/admin/companies and /api/tracking are NOT exempt.
+  if (pathname === '/api/companies' || pathname.startsWith('/api/companies/')) return response;
+  // END COMPANY
+
   const sbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const sbKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!sbUrl || !sbKey || sbUrl.includes('placeholder')) return response; // unconfigured → no gate (dev)
