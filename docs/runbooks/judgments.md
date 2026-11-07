@@ -20,6 +20,8 @@
 4. 配置 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_ROLE_KEY`、`CRON_SECRET`，按准备程度配置 `MACRO_JUDGMENTS_ENABLED=1`。当前真实 `MacroReadApi` 已接入，但宏观方法 `active`、`publishable=false`；开启生产宏观登记前核对目录输入可用时间与许可。关闭开关时补偿报告 `macro_unavailable`。
 5. 核对 Vercel 套餐支持两个路由的 `maxDuration=300`，再部署。`vercel.json` 的 `/api/cron/judgments-settle` 为 `0 3 * * *`、`/api/cron/judgments-calibrate` 为 `0 4 * * 1`（UTC）。用 `Authorization: Bearer $CRON_SECRET` 调各路由 `?preview=1`，核对回执、批次新鲜度与 `/api/methodologies`。正式 cron 必须在迁移和注册表同步之后启用。
 
+**零判断的旧版。** `macro_regime@v1` 已由 v2 取代，生产库中已注册的 v1 行保留原样；代码 REGISTRY 只列 v2，`sync-methodologies.ts` 仅遍历 REGISTRY 并按 id/version 查询，忽略未列出的 v1 行。先确认 v1 判断数为零，再同步 v2；不覆盖、删除或退役 v1 行。
+
 ## 3. 发布准入
 
 初始方法均 `publishable=false`。owner 核对每个方法 `input_kinds` 可达的 `kind×adapter` 来源，取得公开展示许可，在 `docs/methodologies/licenses.json` 填 `confirmed`、`confirmed_by`、`confirmed_at`、`evidence`。该文件位于公式哈希闭包外，许可变更不触发 `formula_hash` 漂移。评审合并后先用 `scripts/judgments/sync-methodologies.ts --dry-run --publishable <id>@<version> --owner-confirmation '<人/日期/证据>'` 审阅，再去掉 `--dry-run` 应用。任何来源许可未确认均不发布。撤销许可时改回 `unverified` 并用脚本 `--unpublish <id>@<version>`；公共 RLS 立即隐藏该方法判断。需 owner 再核对东方财富和 DataGateway 的结算证据展示许可。
@@ -30,7 +32,7 @@
 
 ## 5. 宏观与私有适配器
 
-`macro_regime@v1` 已使用真实宏观分类函数和 `MacroReadApi`，状态 `active`、`publishable=false`。`MACRO_JUDGMENTS_ENABLED` 控制生产装配；目录 `created_at/updated_at` 不可证时输入弃权，当前缺失 / 受限序列不等同于合成夹具。`recommendation_call@v1` 仅私有只读卡片和自评，不写公共 judgments，也不同步公共方法注册表；`pending_fill.condition=null`。私有百分比不发布。
+`macro_regime@v2` 已使用真实宏观分类函数和 `MacroReadApi`，状态 `active`、`publishable=false`。`MACRO_JUDGMENTS_ENABLED` 控制生产装配；目录 `created_at/updated_at` 不可证时输入弃权，当前缺失 / 受限序列不等同于合成夹具。`recommendation_call@v1` 仅私有只读卡片和自评，不写公共 judgments，也不同步公共方法注册表；`pending_fill.condition=null`。私有百分比不发布。
 
 ## 6. 日常结算与隔离
 
@@ -56,7 +58,7 @@
 
 | 项 | 当前默认 / 待决事项 |
 |---|---|
-| O1 | 首批公共 macro_regime@v1 + 私有 recommendation_call@v1；decisions 适配器待决定 |
+| O1 | 首批公共 macro_regime@v2 + 私有 recommendation_call@v1；decisions 适配器待决定 |
 | O2 | threshold_n=100、ece_max=0.10、window_years=3，待确认 |
 | O3 | 截止 vintage 同分类函数重算；asset_pair 后续立项待决定 |
 | O4 | trading_sessions 用 K 线序号，待确认 |

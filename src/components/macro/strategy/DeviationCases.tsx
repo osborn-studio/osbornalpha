@@ -1,5 +1,5 @@
 'use client';
-// Deviation cases (spec §3.2, §6.4; judgment layer on only): settled misses of macro_regime@v1 with the per-input
+// Deviation cases (spec §3.2, §6.4; judgment layer on only): settled misses of macro_regime@v2 with the per-input
 // differences between registration and settlement. No narrative; unchanged rows folded; an incomplete enumeration says
 // so.
 import { useState } from 'react';

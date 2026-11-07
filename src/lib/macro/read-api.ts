@@ -8,7 +8,6 @@
 // No migration currently freezes ingest_batches.finished_at after terminal status; a service-role edit could rewrite history.
 import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
-import {macroJudgmentsEnabled} from './flags';
 import {monthEnd} from './freshness';
 import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow} from './judgment-contract';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime,regionWeights} from './regime';
@@ -71,9 +70,9 @@ export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecor
  for(const r of rows)if(best===null||Date.parse(r.available_at)>Date.parse(best))best=r.available_at;
  return best;
 }
-/** judgments: whether stored regimes are read (default MACRO_JUDGMENTS_ENABLED === '1'; 第 6 稿 P1-2). */
+/** judgments: whether stored regimes are read (default false; callers pass the flag explicitly; 第 6 稿 P1-2). */
 export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadApi{
- const judgments=opts.judgments??macroJudgmentsEnabled();
+ const judgments=opts.judgments??false;
  return {
   async observation(observationId){
    if(typeof observationId!=='string')return null;
