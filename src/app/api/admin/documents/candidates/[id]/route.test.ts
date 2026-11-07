@@ -9,6 +9,7 @@ vi.mock('@/lib/documents/hk-facts/promote',()=>({promoteIssuerNow:mocks.promote}
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
 vi.mock('@/lib/research/store',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/research/store')>(),audit:mocks.audit}));
 
+import {AdminForbidden,AdminUnauthenticated} from '@/lib/admin/auth';
 import {DocumentsDbError} from '@/lib/documents/types';
 import {POST} from './route';
 
@@ -58,6 +59,11 @@ describe('POST /api/admin/documents/candidates/[id]',()=>{
   db.candidateById.mockResolvedValueOnce(null);
   expect((await post({status:'confirmed'})).status).toBe(404);
   expect(mocks.promote).not.toHaveBeenCalled();
+ });
+ it('401 / 403 from the admin guard before touching the database',async()=>{
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminUnauthenticated('x'));expect((await post({status:'confirmed'})).status).toBe(401);
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminForbidden('x'));expect((await post({status:'confirmed'})).status).toBe(403);
+  expect(db.candidateById).not.toHaveBeenCalled();
  });
  it('415 non-JSON, 403 foreign Origin, 400 bad id / status',async()=>{
   expect((await post({status:'confirmed'},{'content-type':'text/plain'})).status).toBe(415);

@@ -1,5 +1,5 @@
 // src/app/api/admin/documents/candidates/regenerate/route.ts
-// POST regeneration request (spec §7.3, §9): {filter:{source?, issuer_id?, document_id?}} →
+// POST regeneration request (spec §7.3, §9): {filter:{source?, issuer_id?, document_id?}} (at least one key, or an explicit {filter:{},all:true}) →
 // requestCandidatesRegen (current extraction versions with candidates_role <> 'none' and a
 // finished candidates status go back to pending); the next candidates run regenerates. Audited.
 import {requireAdminUser} from '@/lib/admin/auth';
@@ -30,6 +30,10 @@ export async function POST(request:Request){
   const body:unknown=await request.json().catch(()=>null);
   const filter=parseFilter((body as {filter?:unknown}|null)?.filter);
   if(filter===null)return jsonError('invalid_filter',400);
+  // an empty filter regenerates EVERY eligible version: it must be asked for explicitly ({all:true}) and cannot be mixed with filter keys
+  const all=(body as {all?:unknown}).all;
+  if(all!==undefined&&all!==true)return jsonError('invalid_all',400);
+  if(Object.keys(filter).length===0?all!==true:all===true)return jsonError('filter_required',400);
   const admin=getAdminSupabase();
   const requested=await supabaseDocumentsDb(admin).requestCandidatesRegen(filter,user.id);
   await auditBestEffort(admin,user.id,'document.candidates_regenerate',null,{filter,requested});

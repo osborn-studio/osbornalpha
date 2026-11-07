@@ -9,7 +9,6 @@
 // spec-2 resolveFactsItem promotes but records hook 'no_target' failed for a market it does not
 // know): every resolved_accept facts.hk item whose hook is not done gets the done hook. The
 // candidates cron calls it at the start of its promote phase.
-import {selectAll} from '../../db/table-client';
 import type {Row,TableClient} from '../../db/table-client';
 import {resolveQuarantine} from '../../dq/quarantine';
 import {decimalEquals} from '../../facts/json-numbers';
@@ -51,15 +50,49 @@ export async function resolveHkFactsItem(port:Pick<HkFactsPort,'resolveHkFactsQu
  }
 }
 
-/** Closes the hook of every accepted facts.hk item that is not done yet; returns how many were fixed. */
-export async function finalizeHkHooks(tables:TableClient,now:Date):Promise<number>{
- const rows=await selectAll(tables,'dq_quarantine',{dataset:HK_FACTS_ITEM_DATASET,status:'resolved_accept'},'id');
+export const HOOK_REPAIR_LIMIT=500;
+const HOOK_BATCH=100;
+/** Server-side repair (migration one finalize_hk_hooks): picks only items whose detail.hook.state is not 'done' and merges ONLY detail.hook (detail || jsonb_build_object('hook', …)). */
+export interface HookRepair{finalize(limit:number,atIso:string):Promise<number>}
+export function supabaseHookRepair(admin:{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<{data:unknown;error:{message:string}|null}>}):HookRepair{
+ return {async finalize(limit,atIso){
+  const {data,error}=await admin.rpc('finalize_hk_hooks',{p_limit:limit,p_at:atIso});
+  if(error)throw new Error(error.message);
+  return Number(data);
+ }};
+}
+const doneHook=(now:Date)=>({stage:'done',state:'done',at:now.toISOString(),message:'hk_no_metrics'});
+
+/**
+ * Closes the hook of accepted facts.hk items that are not done yet; returns how many were fixed.
+ * Bounded: at most opts.limit items (default 500) and nothing after opts.deadline. With opts.hooks
+ * (production: supabaseHookRepair) the selection and the detail.hook merge happen in SQL; without
+ * it the generic TableClient path scans accepted items (equality filters only) and rewrites each
+ * item's detail with the hook replaced.
+ */
+export async function finalizeHkHooks(tables:TableClient,now:Date,opts:{limit?:number;deadline?:Date|null;hooks?:HookRepair;clock?:()=>Date}={}):Promise<number>{
+ const limit=opts.limit??HOOK_REPAIR_LIMIT;
+ if(!Number.isInteger(limit)||limit<1)throw new Error('invalid_limit');
+ const expired=()=>opts.deadline!=null&&(opts.clock?.()??new Date())>=opts.deadline;
  let n=0;
- for(const r of rows){
-  const detail=(r.detail&&typeof r.detail==='object'?r.detail:{}) as Record<string,unknown>;
-  const hook=detail.hook as {state?:unknown}|undefined;
-  if(hook?.state==='done')continue;
-  n+=await tables.update('dq_quarantine',{id:r.id as string,status:'resolved_accept'},{detail:{...detail,hook:{stage:'done',state:'done',at:now.toISOString(),message:'hk_no_metrics'}}});
+ if(opts.hooks){
+  while(n<limit&&!expired()){
+   const want=Math.min(HOOK_BATCH,limit-n);
+   const got=await opts.hooks.finalize(want,now.toISOString());
+   n+=got;if(got<want)break;
+  }
+  return n;
+ }
+ for(let offset=0;n<limit&&!expired();offset+=HOOK_BATCH){
+  const rows=await tables.select('dq_quarantine',{dataset:HK_FACTS_ITEM_DATASET,status:'resolved_accept'},{orderBy:'id',offset,limit:HOOK_BATCH});
+  if(rows.length===0)break;
+  for(const r of rows){
+   if(n>=limit||expired())break;
+   const detail=(r.detail&&typeof r.detail==='object'?r.detail:{}) as Record<string,unknown>;
+   if((detail.hook as {state?:unknown}|undefined)?.state==='done')continue;
+   n+=await tables.update('dq_quarantine',{id:r.id as string,status:'resolved_accept'},{detail:{...detail,hook:doneHook(now)}});
+  }
+  if(rows.length<HOOK_BATCH)break;
  }
  return n;
 }

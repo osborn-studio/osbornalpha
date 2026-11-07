@@ -14,6 +14,7 @@ import {successCacheControl} from '@/lib/entities/resolve';
 import {getAnonSupabase} from '@/lib/supabase/anon';
 
 export const dynamic='force-dynamic';
+const LINK_PAGE=500;   // below any PostgREST max_rows we run with, so a short page really is the last one
 const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'no-store'}});
 interface Res<T>{data:T;error:{message:string}|null}
@@ -33,7 +34,13 @@ export async function GET(request:Request){
   if(!fact)return err('not_found','No published fact with this id',404);
   const filing=await read<{mapping_gen:number|string}|null>(anon.from('filings').select('mapping_gen').eq('filing_id',String(fact.filing_id)).maybeSingle());
   if(!filing||Number(filing.mapping_gen)<1)return err('not_found','No published fact with this id',404);
-  const links=(await read<{role:string;citation_id:string}[]|null>(anon.from('fact_citations').select('role,citation_id').eq('fact_id',factId).order('role').order('citation_id')))??[];
+  // PostgREST caps one response (max_rows 1000): page the links in a stable (role, citation_id) order until a short page
+  const links:{role:string;citation_id:string}[]=[];
+  for(let from=0;;from+=LINK_PAGE){
+   const part=(await read<{role:string;citation_id:string}[]|null>(anon.from('fact_citations').select('role,citation_id').eq('fact_id',factId).order('role').order('citation_id').range(from,from+LINK_PAGE-1)))??[];
+   links.push(...part);
+   if(part.length<LINK_PAGE)break;
+  }
   const wanted=[...new Set(links.map(l=>l.citation_id))];
   const db=supabaseDocumentsDb(getAnonSupabase());
   const rows=new Map<string,{citation_id:string;document_id:string;extraction_id:string;page_no:number}>();

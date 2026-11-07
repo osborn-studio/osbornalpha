@@ -28,7 +28,7 @@ export async function POST(request:Request){
   if(!Array.isArray(concepts)||concepts.length===0||concepts.some(c=>typeof c!=='string'||!HK_CONCEPT_IDS.includes(c))||new Set(concepts).size!==concepts.length)return jsonError('invalid_concepts',400);
   if(typeof goldSha256!=='string'||!/^[0-9a-f]{64}$/.test(goldSha256))return jsonError('invalid_gold_sha256',400);
   if(typeof precision!=='string'||!RATIO.test(precision)||typeof recall!=='string'||!RATIO.test(recall))return jsonError('invalid_ratio',400);
-  if(!text(reportPath,512)||!(reportPath as string).startsWith('docs/audits/'))return jsonError('invalid_report_path',400);
+  if(!text(reportPath,512)||!(reportPath as string).startsWith('docs/audits/')||(reportPath as string).split(/[\\/]/).includes('..'))return jsonError('invalid_report_path',400);
   if(!atLeast(precision,'0.95')||!atLeast(recall,'0.95'))return jsonError('threshold',422);
   const admin=getAdminSupabase();
   let approvalId:string;

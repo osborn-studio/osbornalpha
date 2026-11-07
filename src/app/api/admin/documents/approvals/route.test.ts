@@ -7,6 +7,7 @@ vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:mocks.getAdmin}));
 vi.mock('@/lib/documents/db',()=>({supabaseDocumentsDb:()=>({insertApproval:mocks.insert})}));
 vi.mock('@/lib/research/store',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/research/store')>(),audit:mocks.audit}));
 
+import {AdminForbidden,AdminUnauthenticated} from '@/lib/admin/auth';
 import {DocumentsDbError} from '@/lib/documents/types';
 import {POST} from './route';
 
@@ -36,8 +37,13 @@ describe('POST /api/admin/documents/approvals',()=>{
   mocks.insert.mockRejectedValueOnce(new DocumentsDbError('unknown','new row violates check constraint "ea_threshold"'));
   expect((await post(BODY)).status).toBe(422);
  });
+ it('401 / 403 from the admin guard before touching the database',async()=>{
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminUnauthenticated('x'));expect((await post(BODY)).status).toBe(401);
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminForbidden('x'));expect((await post(BODY)).status).toBe(403);
+  expect(mocks.insert).not.toHaveBeenCalled();
+ });
  it('400 on malformed fields',async()=>{
-  for(const over of [{concepts:[]},{concepts:['revenue','revenue']},{concepts:['rd_expense']},{goldSha256:'x'},{precision:'1.5'},{precision:'95%'},{extractorRef:''},{reportPath:'/etc/passwd'},{codeVersion:7}])
+  for(const over of [{concepts:[]},{concepts:['revenue','revenue']},{concepts:['rd_expense']},{goldSha256:'x'},{precision:'1.5'},{precision:'95%'},{extractorRef:''},{reportPath:'/etc/passwd'},{reportPath:'docs/audits/../../etc/passwd'},{reportPath:'docs/audits/x/..\\y.json'},{codeVersion:7}])
    expect((await post({...BODY,...over})).status,JSON.stringify(over)).toBe(400);
   expect(mocks.insert).not.toHaveBeenCalled();
  });

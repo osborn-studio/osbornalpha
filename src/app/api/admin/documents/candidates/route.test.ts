@@ -23,7 +23,7 @@ describe('GET /api/admin/documents/candidates',()=>{
   vi.clearAllMocks();
   mocks.requireAdmin.mockResolvedValue({id:'admin-1'});mocks.getAdmin.mockReturnValue({});
   db={candidatesOf:vi.fn(async()=>({rows:[CAND],nextCursor:'next'})),citationsByIds:vi.fn(async(ids:string[])=>ids.filter(i=>i!=='h1').map(i=>cite(i,i==='v1'?'6,256,000':'x'))),
-   documentById:vi.fn(async()=>({document_id:DOC,title:'二零二五年年報'})),publicationsOf:vi.fn(async()=>({rows:[{candidate_id:'c1',pub_gen:1,run_id:'r1',fact_id:'f1',state:'published',created_at:'x',updated_at:'y'}],nextCursor:null}))};
+   documentsByIds:vi.fn(async()=>[{document_id:DOC,title:'二零二五年年報'}]),publicationsOf:vi.fn(async()=>({rows:[{candidate_id:'c1',pub_gen:1,run_id:'r1',fact_id:'f1',state:'published',created_at:'x',updated_at:'y'}],nextCursor:null}))};
   mocks.db=db;
  });
  it('lists candidates with checks, cited snippets, the document title and publications (private, no-store)',async()=>{
@@ -38,6 +38,13 @@ describe('GET /api/admin/documents/candidates',()=>{
    {role:'value',citationId:'v1',pageNo:3,charStart:10,charEnd:19,snippet:'6,256,000'},{role:'label',citationId:'l1',pageNo:3,charStart:10,charEnd:11,snippet:'x'},
    {role:'unit',citationId:'u1',pageNo:3,charStart:10,charEnd:11,snippet:'x'},{role:'period:statement_title',citationId:'t1',pageNo:3,charStart:10,charEnd:11,snippet:'x'},
    {role:'period:column_header',citationId:'h1',pageNo:null,charStart:null,charEnd:null,snippet:null}]);
+ });
+ it('returns the unit_currency evidence of an inherited-currency EPS candidate',async()=>{
+  db.candidatesOf.mockResolvedValueOnce({rows:[{...CAND,payload:{concept:'eps_basic',unit:'HKD/share'},citations:{...CAND.citations,unit_currency:'uc1'}}],nextCursor:null});
+  const body=await (await GET(url('status=confirmed'))).json();
+  expect(body.candidates[0].citations.find((c:{role:string})=>c.role==='unit_currency')).toEqual({role:'unit_currency',citationId:'uc1',pageNo:3,charStart:10,charEnd:11,snippet:'x'});
+  expect(db.citationsByIds.mock.calls[0][0]).toContain('uc1');
+  expect(db.documentsByIds).toHaveBeenCalledTimes(1);   // one batched lookup, not one read per candidate
  });
  it('extraction wins over issuer; a status next to an extraction filters the page',async()=>{
   await GET(url(`extraction=${EXT}&issuer=${ISS}&status=candidate`));

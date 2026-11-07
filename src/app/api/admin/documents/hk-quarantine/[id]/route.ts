@@ -3,8 +3,10 @@
 // 'resolved_reject', chosenFactIds?} (chosenFactIds only with accept, ≤ 100 uuids). Accept →
 // resolve_hk_facts_quarantine through resolveHkFactsItem (promotion + done hook in one
 // transaction); run_pending 409, invalid_choice 422, not_hk_item 404, already_resolved 409. Reject →
-// the plan-1 flip. The generic /api/admin/dq/quarantine/[id] must not be used to accept facts.hk
-// items (its hook records no_target); the candidates cron repairs such hooks (finalizeHkHooks).
+// the plan-1 flip. Accept facts.hk items here, not through the generic /api/admin/dq/quarantine/[id]
+// (its hook records no_target after the promotion). Items that were accepted there anyway are
+// repaired afterwards by finalizeHkHooks, which closes only the hook (HK has no metrics); that
+// repair runs when the candidates job reaches its promote phase and is bounded per run.
 import {requireAdminUser} from '@/lib/admin/auth';
 import {supabaseTableClient} from '@/lib/db/table-client';
 import {adminFailure,auditBestEffort,json,jsonError,UUID_RE,writeGuard} from '@/lib/documents/candidates/admin-http';

@@ -314,10 +314,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
    if(!r)throw new DocumentsDbError('unknown','approval_not_returned');
    return String(r.approval_id);
   },
-  async revokeApproval(approvalId){
-   const changed=await rows(c.from('extraction_approvals').update({revoked_at:new Date().toISOString()}).eq('approval_id',approvalId).is('revoked_at',null).select('approval_id'));
-   if(changed.length===0&&!(await maybe(c.from('extraction_approvals').select('approval_id').eq('approval_id',approvalId).maybeSingle())))throw new DocumentsDbError('not_found');
-  },
+  async revokeApproval(approvalId){return (await call<boolean>('revoke_extraction_approval',{p_approval:approvalId}))===true;},
   async documentVersions(source,sourceRef,page){
    const limit=lookaheadLimit(page.limit);
    let q=c.from('disclosure_documents').select('*').eq('source',source).eq('source_ref',sourceRef);
@@ -331,6 +328,10 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   },
   async readDocuments(issuer,opts){return pageOf(await call<Envelope>('read_documents',readDocumentsArgs(issuer,opts)),documentFromRow,READ_DOC_KEYS);},
   async documentById(id){const r=await maybe(c.from('disclosure_documents').select('*').eq('document_id',id).maybeSingle());return r?documentFromRow(r):null;},
+  async documentsByIds(ids){
+   if(checkIds(ids).length===0)return [];
+   return (await rows(c.from('disclosure_documents').select('*').in('document_id',[...new Set(ids)]).order('document_id'))).map(documentFromRow);
+  },
   async assetsOf(documentId){return (await rows(c.from('document_assets').select('*').eq('document_id',documentId).order('role').order('filename').limit(PAGE_LIMIT_MAX))).map(assetFromRow);},
   async extractionsOf(documentId,page){
    const limit=lookaheadLimit(page.limit);

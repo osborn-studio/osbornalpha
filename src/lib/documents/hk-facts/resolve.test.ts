@@ -79,4 +79,22 @@ describe('finalizeHkHooks',()=>{
   expect(await get('q4')).toEqual({});
   expect(await finalizeHkHooks(tables,now)).toBe(0);
  });
+ it('is bounded by limit and by deadline',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id']});
+  for(let i=0;i<5;i++)await tables.insert('dq_quarantine',{id:`q${i}`,dataset:'facts.hk',table_name:'financial_facts',natural_key:`${i}`,reason_code:'identity_bs',status:'resolved_accept',payload:{},detail:{},batch_id:'b',resolved_by:ADMIN,resolved_at:'x',created_at:'x'});
+  const now=new Date('2026-11-06T03:00:00.000Z');
+  expect(await finalizeHkHooks(tables,now,{limit:2})).toBe(2);
+  expect(await finalizeHkHooks(tables,now,{limit:10,deadline:new Date('2026-11-06T02:00:00.000Z'),clock:()=>now})).toBe(0);   // deadline already passed
+  expect(await finalizeHkHooks(tables,now,{limit:10})).toBe(3);
+  await expect(finalizeHkHooks(tables,now,{limit:0})).rejects.toThrow('invalid_limit');
+ });
+ it('with a server-side repair it asks for at most the remaining limit per call and stops on a short batch',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id']});
+  const calls:number[]=[];
+  const hooks={finalize:vi.fn(async(n:number)=>{calls.push(n);return calls.length<3?n:3;})};
+  const now=new Date('2026-11-06T03:00:00.000Z');
+  expect(await finalizeHkHooks(tables,now,{limit:250,hooks})).toBe(203);
+  expect(calls).toEqual([100,100,50]);
+  expect(hooks.finalize).toHaveBeenLastCalledWith(50,now.toISOString());
+ });
 });

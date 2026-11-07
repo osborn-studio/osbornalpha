@@ -10,6 +10,7 @@ vi.mock('@/lib/documents/hk-facts/facts-port',()=>({supabaseHkFactsPort:()=>({po
 vi.mock('@/lib/documents/hk-facts/resolve',()=>({resolveHkFactsItem:mocks.resolve}));
 vi.mock('@/lib/research/store',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/research/store')>(),audit:mocks.audit}));
 
+import {AdminForbidden,AdminUnauthenticated} from '@/lib/admin/auth';
 import {POST} from './route';
 
 const ID='3f2b6c1e-8a4d-4f0e-9b7a-1c2d3e4f5a6b',ADMIN='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -45,6 +46,11 @@ describe('POST /api/admin/documents/hk-quarantine/[id]',()=>{
   expect((await post({status:'open'})).status).toBe(400);
   expect((await post({status:'resolved_accept',chosenFactIds:['x']})).status).toBe(400);
   expect((await post({status:'resolved_reject',chosenFactIds:[F1]})).status).toBe(400);
+  expect(mocks.resolve).not.toHaveBeenCalled();
+ });
+ it('401 / 403 from the admin guard before touching the database',async()=>{
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminUnauthenticated('x'));expect((await post({status:'resolved_reject'})).status).toBe(401);
+  mocks.requireAdmin.mockRejectedValueOnce(new AdminForbidden('x'));expect((await post({status:'resolved_reject'})).status).toBe(403);
   expect(mocks.resolve).not.toHaveBeenCalled();
  });
  it('415 / 403 write guards',async()=>{

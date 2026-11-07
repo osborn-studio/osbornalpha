@@ -424,7 +424,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
     if(!decision.decided_by||!['confirmed','rejected','candidate'].includes(decision.status))throw invalid('human decision');
     if(c.status===decision.status)return {status:c.status};
     if(c.status==='candidate'&&decision.status==='confirmed'){
-     if(!c.checks_passed)throw new DocumentsDbError('not_eligible');
+     if(!c.checks_passed||c.kind!=='financial_fact'||c.extractor_kind!=='rule'||extractions.get(c.extraction_id)?.candidates_role!=='primary')throw new DocumentsDbError('not_eligible');   // Task 17 review: mirrors SQL
      Object.assign(c,{status:'confirmed',decision_kind:'human',decided_by:decision.decided_by,approval_id:null,decided_at:now(),inherited_from:null});
     }else if(c.status==='candidate'&&decision.status==='rejected'){
      Object.assign(c,{status:'rejected',decision_kind:'human',decided_by:decision.decided_by,approval_id:null,decided_at:now(),inherited_from:null});
@@ -441,6 +441,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if(!a)throw new DocumentsDbError('not_eligible');
    if(a.revoked_at!==null)throw new DocumentsDbError('approval_revoked');
    const e=extractions.get(c.extraction_id)!;
+   if(c.kind!=='financial_fact'||e.candidates_role!=='primary')throw new DocumentsDbError('not_eligible');
    const concept=(c.payload as {concept?:unknown}).concept;
    if(a.extractor_ref!==c.extractor_ref||a.extractor_version!==e.extractor_version||a.table_algo_version!==e.table_algo_version||a.code_version!==e.code_version||typeof concept!=='string'||a.concepts.some(x=>x===null||x===undefined)||!a.concepts.includes(concept))throw new DocumentsDbError('not_eligible');   // F3: a NULL concept element fails closed like SQL
    Object.assign(c,{status:'confirmed',decision_kind:'auto',decided_by:null,approval_id:a.approval_id,decided_at:now(),inherited_from:null});
@@ -469,7 +470,8 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   },
   async revokeApproval(approvalId){
    const a=approvals.get(approvalId);if(!a)throw notFound();
-   if(a.revoked_at===null)a.revoked_at=now();
+   if(a.revoked_at!==null)return false;
+   a.revoked_at=now();return true;
   },
 
   // ---------------------------------------------------------------- reads
@@ -494,6 +496,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    return page(picked,limit,d=>[d.available_at,d.document_id]);
   },
   async documentById(id){const d=documents.get(id);return d?clone(d):null;},
+  async documentsByIds(ids){checkIds(ids);return [...new Set(ids)].sort(cmp).map(id=>documents.get(id)).filter((d):d is DocumentRow=>!!d).map(clone);},
   async assetsOf(documentId){return [...assets.values()].filter(a=>a.document_id===documentId).sort((x,y)=>cmp(x.role,y.role)||cmp(x.filename,y.filename)).slice(0,PAGE_LIMIT_MAX).map(clone);},
   async extractionsOf(documentId,p){
    const limit=lookaheadLimit(p.limit);const a=after(p.cursor,2);

@@ -68,10 +68,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
     [a.extractor_ref,a.extractor_version,a.table_algo_version,a.code_version,a.concepts,a.gold_sha256,a.precision,a.recall,a.report_path,a.approved_by]);
    return String(r!.approval_id);
   },
-  async revokeApproval(approvalId){
-   const changed=await run(`update public.extraction_approvals set revoked_at = now() where approval_id = $1 and revoked_at is null`,[approvalId]);
-   if(changed.rowCount===0&&!(await one(`select 1 from public.extraction_approvals where approval_id = $1`,[approvalId])))throw new DocumentsDbError('not_found');
-  },
+  async revokeApproval(approvalId){return (await fn<boolean>('public.revoke_extraction_approval($1)',[approvalId]))===true;},
   async documentVersions(source,sourceRef,page){
    const limit=lookaheadLimit(page.limit);const after=page.cursor?versionCursor(page.cursor):null;
    const r=await run(`select * from public.disclosure_documents where source = $1 and source_ref = $2 and ($3::int is null or source_version > $3) order by source_version limit $4`,[source,sourceRef,after,limit+1]);
@@ -87,6 +84,10 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    return pageOf(await fn<Envelope>('public.read_documents($1,$2::date,$3,$4,$5::date,$6::date,$7::jsonb,$8,$9)',[a.p_issuer,a.p_as_of,a.p_source,a.p_doc_class,a.p_from,a.p_to,json(a.p_cursor),a.p_limit,a.p_all_versions]),documentFromRow,READ_DOC_KEYS);
   },
   async documentById(id){const r=await one(`select * from public.disclosure_documents where document_id = $1`,[id]);return r?documentFromRow(r):null;},
+  async documentsByIds(ids){
+   if(checkIds(ids).length===0)return [];
+   return (await run(`select * from public.disclosure_documents where document_id = any($1::uuid[]) order by document_id`,[[...new Set(ids)]])).rows.map(documentFromRow);
+  },
   async assetsOf(documentId){return (await run(`select * from public.document_assets where document_id = $1 order by role, filename limit $2`,[documentId,PAGE_LIMIT_MAX])).rows.map(assetFromRow);},
   async extractionsOf(documentId,page){
    const limit=lookaheadLimit(page.limit);const [at,id]=page.cursor?timestampUuidCursor(page.cursor):[null,null];

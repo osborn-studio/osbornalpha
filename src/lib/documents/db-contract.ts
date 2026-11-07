@@ -340,6 +340,7 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect((await db.citationById(human))!.visibility).toBe('public');
    expect(await code(db.publishCitations([human,randomUUID()]))).toBe('not_publishable');
    expect((await db.citationsByIds([emoji,id,randomUUID()])).map(c=>c.citation_id).sort()).toEqual([emoji,id].sort());
+   expect((await db.documentsByIds([doc,randomUUID(),doc])).map(d=>d.document_id)).toEqual([doc]);
    // a private upload's citation can never be published
    const owner=await h.user();const b=await h.batchId();const content=sha(randomUUID());
    const up=await db.insertUploadDocument(owner,docInsert({source:'upload',market:'other',source_url:null,language:null,permission:'private',owner_user_id:owner,batch_id:b,content_sha256:content,storage_path:`blobs/${content}.pdf`}));
@@ -384,6 +385,14 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await db.decideCandidate(r2.candidate_id,{kind:'human',decided_by:user,status:'rejected'})).toEqual({status:'rejected'});
    expect(await code(db.writeCandidateChecks(ext,b,[{candidate_id:r1.candidate_id,checks:passed,checks_passed:true}]))).toBe('decided');
    expect(await code(db.decideCandidate(randomUUID(),{kind:'human',decided_by:user,status:'confirmed'}))).toBe('not_found');
+   // Task 17 review: a candidate of a COMPARISON extraction (English twin) or a non-financial_fact kind can never be confirmed
+   const en=await extracted({language:'en',source_ref:`${Date.now()}${Math.floor(Math.random()*1e6)}_c`});
+   expect(await db.claimCandidatesLease(en.ext,en.b,600)).toBe(true);
+   const ce=await factCandidate(en.doc,en.ext);
+   expect(await db.insertCandidates(en.ext,en.b,[ce,{...(await factCandidate(en.doc,en.ext,{natural_key:'cell',fingerprint:sha('cell')})),kind:'table_cell'}])).toEqual({inserted:2});
+   const enRows=(await drain(p=>db.candidatesOf({extractionId:en.ext},p),10)).rows;
+   await db.writeCandidateChecks(en.ext,en.b,enRows.map(r=>({candidate_id:r.candidate_id,checks:passed,checks_passed:true})));
+   for(const r of enRows)expect(await code(db.decideCandidate(r.candidate_id,{kind:'human',decided_by:user,status:'confirmed'}))).toBe('not_eligible');
    // regeneration under a new extractor_ref: same fingerprint → the human decision is inherited once checks pass
    await db.finishCandidates(ext,b,'done');
    expect(await db.requestCandidatesRegen({document_id:doc},user)).toBe(1);
@@ -452,7 +461,7 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    // revocation: a confirmed auto candidate returns to 'candidate' when it is next staged
    const B=await db.insertApproval({...approval,gold_sha256:sha('gold-b')});
    expect(await db.decideCandidate(byKey('b'),{kind:'auto',approval_id:B})).toEqual({status:'confirmed'});
-   await db.revokeApproval(B);await db.revokeApproval(B);
+   expect(await db.revokeApproval(B)).toBe(true);expect(await db.revokeApproval(B)).toBe(false);   // second call: already revoked, nothing changed
    expect(await code(db.stageCandidatePublication(byKey('b'),1,run2,randomUUID()))).toBe('approval_revoked');
    expect(await db.candidateById(byKey('b'))).toMatchObject({status:'candidate',decision_kind:null,approval_id:null,decided_at:null});
    expect(await code(db.decideCandidate(byKey('b'),{kind:'auto',approval_id:B}))).toBe('approval_revoked');

@@ -16,7 +16,7 @@ const PARAMS=['status','extraction','issuer','cursor','limit'] as const;
 
 function citedIds(c:CandidateRow):[string,string][]{
  const x=c.citations as Partial<FactCitations>;const out:[string,string][]=[];
- for(const r of ['value','label','unit'] as const){const id=x[r];if(typeof id==='string')out.push([r,id]);}
+ for(const r of ['value','label','unit','unit_currency'] as const){const id=x[r];if(typeof id==='string')out.push([r,id]);}
  for(const p of Array.isArray(x.period)?x.period:[])out.push([`period:${p.role}`,p.citation_id]);
  return out;
 }
@@ -51,7 +51,8 @@ export async function GET(request:Request){
   const cites=new Map<string,CitationRow>();
   for(let i=0;i<ids.length;i+=100)for(const r of await db.citationsByIds(ids.slice(i,i+100)))cites.set(r.citation_id,r);
   const docs=new Map<string,DocumentRow|null>();
-  for(const id of new Set(rows.map(c=>c.document_id)))docs.set(id,await db.documentById(id));
+  const docIds=[...new Set(rows.map(c=>c.document_id))];
+  for(let i=0;i<docIds.length;i+=100)for(const d of await db.documentsByIds(docIds.slice(i,i+100)))docs.set(d.document_id,d);
   const pubs=new Map<string,PublicationRow[]>();
   const cids=rows.map(c=>c.candidate_id);
   for(let i=0;i<cids.length;i+=100){

@@ -137,12 +137,13 @@ export interface DocumentsDb{
  decideCandidate(candidate:string,decision:HumanDecision|AutoDecision):Promise<{status:CandidateStatus}>;
  stageCandidatePublication(candidate:string,pubGen:number,run:string,factId:string):Promise<void>;
  insertApproval(row:Omit<ApprovalRow,'approval_id'|'approved_at'|'revoked_at'>):Promise<string>;
- revokeApproval(approvalId:string):Promise<void>;
+ revokeApproval(approvalId:string):Promise<boolean>;   // true = this call revoked it, false = already revoked; revoked_at is the database clock
  // reads: paged, or bounded with an explicit limit
  documentVersions(source:DocSource,sourceRef:string,page:PageOpts):Promise<Page<DocumentRow>>;
  knownSourceRefs(issuer:string,source:ListedSource,refs:string[]):Promise<Set<string>>;            // refs chunked ≤ 500
  readDocuments(issuer:string,opts:{asOf:string;source?:DocSource;docClass?:DocClass;from?:string;to?:string;allVersions?:boolean}&PageOpts):Promise<Page<DocumentRow>>;
  documentById(id:string):Promise<DocumentRow|null>;
+ documentsByIds(ids:string[]):Promise<DocumentRow[]>;                                            // ≤ 100 ids, unknown ids omitted (Task 17 review: batched lookup)
  assetsOf(documentId:string):Promise<AssetRow[]>;                                                  // ≤ 100 (unique per role/filename)
  extractionsOf(documentId:string,page:PageOpts):Promise<Page<ExtractionRow>>;
  extractionById(id:string):Promise<ExtractionRow|null>;

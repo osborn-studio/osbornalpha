@@ -26,7 +26,7 @@ const WRITE_FUNCTIONS=[
  'public.reconcile_document_sync_scope(text,jsonb,timestamptz)','public.claim_document_sync_lease(uuid,text,uuid,int)','public.renew_document_sync_lease(uuid,text,uuid,int)','public.insert_document_version(uuid,text,uuid,jsonb,jsonb)',
  'public.insert_upload_document(uuid,jsonb)','public.advance_document_cursor(uuid,text,uuid,text,jsonb,boolean,boolean)','public.release_document_sync_lease(uuid,text,uuid,text,timestamptz)',
  'public.reclassify_document(uuid,jsonb,uuid)','public.claim_document_extract_lease(uuid,uuid,int)','public.finish_document_extract(uuid,uuid,jsonb,jsonb)',
- 'public.fail_document_extract(uuid,uuid,text)','public.fail_document_extract_terminal(uuid,uuid,text,jsonb)','public.request_document_extract(uuid,uuid,text,text)','public.claim_candidates_lease(uuid,uuid,int)',
+ 'public.fail_document_extract(uuid,uuid,text)','public.fail_document_extract_terminal(uuid,uuid,text,jsonb)','public.request_document_extract(uuid,uuid,text,text)','public.revoke_extraction_approval(uuid)','public.finalize_hk_hooks(int,text)','public.claim_candidates_lease(uuid,uuid,int)',
  'public.finish_candidates(uuid,uuid,text)','public.request_candidates_regen(jsonb,uuid)','public.write_candidate_checks(uuid,uuid,jsonb)','public.insert_citation(jsonb)',
  'public.publish_citations(uuid[])','public.insert_candidates(uuid,uuid,jsonb)','public.decide_candidate(uuid,jsonb)','public.stage_candidate_publication(uuid,int,uuid,uuid)',
  'public.documents_stored_due(int)','public.extractions_candidates_due(int)','public.known_source_refs(uuid,text,text[])','public.list_candidates(uuid,text,uuid,jsonb,int)',
@@ -678,6 +678,34 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect(Number(await one(`select count(*) v from public.disclosure_documents where source_ref=$1`,[d.source_ref]))).toBe(0);
   const r=await insertDoc(iss,b,d,mk(100),'edgar');expect(r.outcome).toBe('inserted');
   expect(Number(await one(`select count(*) v from public.document_assets where document_id=$1`,[r.document_id]))).toBe(100);
+ });
+
+ it('Task 17 review: finalize_hk_hooks is bounded, picks only facts.hk accepted items whose hook is not done, and merges only detail.hook',async()=>{
+  const b=await batch();const user_=await user();
+  const ins=async(o:{dataset?:string;status?:string;detail:Record<string,unknown>})=>{
+   const id=randomUUID();const st=o.status??'resolved_accept';
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,detail,payload,batch_id,status,resolved_by,resolved_at) values($1::uuid,$2,'financial_facts',$1::text,'identity_bs',$3::jsonb,'{}'::jsonb,$4,$5,$6,$7)`,
+    [id,o.dataset??'facts.hk',JSON.stringify(o.detail),b,st,st==='open'?null:user_,st==='open'?null:new Date().toISOString()]);
+   return id;
+  };
+  const detailOf=async(id:string)=>(await one(`select detail v from public.dq_quarantine where id=$1`,[id])) as Record<string,unknown>;
+  const failed=await ins({detail:{chosen_fact_ids:['x'],hook:{stage:'materialize',state:'failed',at:'t',message:'no_target'}}});
+  const missing=await ins({detail:{note:1}});
+  const done=await ins({detail:{hook:{stage:'done',state:'done',at:'old'}}});
+  const us=await ins({dataset:'facts.us',detail:{hook:{state:'failed'}}});
+  const open=await ins({status:'open',detail:{}});
+  expect(await fails(q(`select public.finalize_hk_hooks(0,'x')`))).toMatchObject({code:'22023'});
+  const n=Number(await one(`select public.finalize_hk_hooks(1000,'2026-11-06T03:00:00.000Z') v`));
+  expect(n).toBeGreaterThanOrEqual(2);
+  expect(await detailOf(failed)).toEqual({chosen_fact_ids:['x'],hook:{stage:'done',state:'done',at:'2026-11-06T03:00:00.000Z',message:'hk_no_metrics'}});
+  expect(await detailOf(missing)).toEqual({note:1,hook:{stage:'done',state:'done',at:'2026-11-06T03:00:00.000Z',message:'hk_no_metrics'}});
+  expect(await detailOf(done)).toEqual({hook:{stage:'done',state:'done',at:'old'}});
+  expect(await detailOf(us)).toEqual({hook:{state:'failed'}});
+  expect(await detailOf(open)).toEqual({});
+  const a=await ins({detail:{}});const c=await ins({detail:{}});
+  expect(Number(await one(`select public.finalize_hk_hooks(1,'t') v`))).toBe(1);   // bounded by p_limit
+  const hooks=await Promise.all([a,c].map(async id=>(await detailOf(id)).hook));
+  expect(hooks.filter(Boolean)).toHaveLength(1);
  });
 
  it('review fix: reconcile_document_sync_scope rejects duplicate issuer ids; lock modes (approval share locks, no-key-update on documents)',async()=>{

@@ -21,3 +21,4 @@
 - Task 16：runHkFactsSync（§7.7 第 0–5 步，仅经 publish_hk_run，暂存的值/标签/期间引用集合与候选声明一致）+ 候选阶段 3（promotionDue）+ documents-candidates cron（DOCUMENTS_CANDIDATES_ENABLED 关闭时认证后 200 skipped）+ promote-hk 脚本；Codex 审计：待审（2026-11-06）
 - Task 17：候选/审批(含撤销)/再生/港股隔离裁决管理接口、GET /api/citations?factId=、finalizeHkHooks（run.ts 阶段 3 接线待修复者释放该文件）；Codex 审计：待审（2026-11-06）
 - Task 15 修复：HK 检查回放期间/标签证据、身份按完整列与单位、缺输入记 applicable:false、consolidated 母公司排除、auto 阶段预算/主版本、发现先于资格、zh/en 对比与顺序无关、候选阶段 finalizeHkHooks；Codex 审计：待审（2026-11-06）
+- Task 17 修复：候选确认需主语言抽取+financial_fact+rule（SQL/内存/契约）、unit_currency 证据、citations 分页、regenerate 需显式 all、撤销用库时钟并报告 alreadyRevoked、finalize_hk_hooks（SQL 局部合并 detail.hook、有界；run.ts 需传 supabaseHookRepair 才走服务端路径）；新增 revoke 路由 POST /api/admin/documents/approvals/[id]/revoke（规格 §9 增补，供 Task 19 §17 偏差表）；Codex 审计：待审（2026-11-06）

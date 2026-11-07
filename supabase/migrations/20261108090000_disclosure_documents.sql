@@ -1081,7 +1081,9 @@ begin
     if v_by is null or v_target is null or v_target not in ('confirmed','rejected','candidate') then raise exception 'invalid_input: human decision' using errcode = '22023'; end if;
     if c.status = v_target then return jsonb_build_object('status', c.status); end if;
     if c.status = 'candidate' and v_target = 'confirmed' then
-      if not c.checks_passed then raise exception 'not_eligible' using errcode = 'P0001'; end if;
+      select * into e from public.document_extractions where extraction_id = c.extraction_id;
+      -- Task 17 review: only a rule-made financial_fact of a PRIMARY extraction can be confirmed (a comparison-language one never publishes)
+      if not c.checks_passed or c.kind <> 'financial_fact' or c.extractor_kind <> 'rule' or e.candidates_role is distinct from 'primary' then raise exception 'not_eligible' using errcode = 'P0001'; end if;
       update public.extraction_candidates set status = 'confirmed', decision_kind = 'human', decided_by = v_by, approval_id = null, decided_at = now(), inherited_from = null
       where candidate_id = p_candidate;
     elsif c.status = 'candidate' and v_target = 'rejected' then
@@ -1104,6 +1106,7 @@ begin
   if not found then raise exception 'not_eligible' using errcode = 'P0001'; end if;
   if a.revoked_at is not null then raise exception 'approval_revoked' using errcode = 'P0001'; end if;
   select * into e from public.document_extractions where extraction_id = c.extraction_id;
+  if c.kind <> 'financial_fact' or e.candidates_role is distinct from 'primary' then raise exception 'not_eligible' using errcode = 'P0001'; end if;
   if a.extractor_ref <> c.extractor_ref or a.extractor_version <> e.extractor_version or a.table_algo_version <> e.table_algo_version
      or a.code_version <> e.code_version
      or (c.payload ->> 'concept') is null or array_position(a.concepts, null) is not null
@@ -1116,6 +1119,43 @@ begin
 end $$;
 revoke execute on function public.decide_candidate(uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.decide_candidate(uuid, jsonb) to service_role;
+
+-- Task 17 review: revocation stamped with the database clock. Returns true when this call revoked
+-- the approval, false when it was already revoked; unknown id → not_found.
+create or replace function public.revoke_extraction_approval(p_approval uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_row public.extraction_approvals;
+begin
+  select * into v_row from public.extraction_approvals where approval_id = p_approval for update;
+  if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
+  if v_row.revoked_at is not null then return false; end if;
+  update public.extraction_approvals set revoked_at = now() where approval_id = p_approval;
+  return true;
+end $$;
+revoke execute on function public.revoke_extraction_approval(uuid) from public, anon, authenticated;
+grant execute on function public.revoke_extraction_approval(uuid) to service_role;
+
+-- Task 17 review: closes the hook of accepted facts.hk quarantine items that are not done yet (items
+-- accepted through the generic dq route record hook 'no_target'; HK has no metrics to materialize).
+-- Picks at most p_limit items whose detail.hook.state is not 'done', skips rows another worker holds,
+-- and merges ONLY detail.hook, so a concurrent change to other detail keys is never overwritten.
+create or replace function public.finalize_hk_hooks(p_limit int, p_at text)
+returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 1000 or p_at is null then raise exception 'invalid_input: finalize_hk_hooks' using errcode = '22023'; end if;
+  with picked as (
+    select id from public.dq_quarantine
+    where dataset = 'facts.hk' and status = 'resolved_accept' and coalesce(detail #>> '{hook,state}', '') <> 'done'
+    order by id limit p_limit for update skip locked)
+  update public.dq_quarantine q
+     set detail = q.detail || jsonb_build_object('hook', jsonb_build_object('stage','done','state','done','at',p_at,'message','hk_no_metrics'))
+    from picked where q.id = picked.id;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+revoke execute on function public.finalize_hk_hooks(int, text) from public, anon, authenticated;
+grant execute on function public.finalize_hk_hooks(int, text) to service_role;
 
 -- Candidate row lock. Requires confirmed|promoted (else not_eligible). An auto-decided candidate
 -- whose approval was revoked since: a confirmed one returns to 'candidate' and the call answers
