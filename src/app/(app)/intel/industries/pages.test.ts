@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 
 const ROOT=join(process.cwd(),'src/app/(app)/intel/industries');
-const PAGES=['page.tsx'];
+const PAGES=['page.tsx','[scheme]/[code]/page.tsx','[scheme]/[code]/constituents/page.tsx'];
 
 describe('industry pages are dynamic server components',()=>{
  it.each(PAGES)('%s',rel=>{

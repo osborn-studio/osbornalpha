@@ -16,6 +16,9 @@ import { useToast } from '@/components/Toast';
 import { useWatchlist } from '@/lib/hooks/useWatchlist';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { QuotaNotice } from '@/components/QuotaNotice';
+// INDUSTRY:BEGIN
+import { IndustryRow } from '@/components/industries/IndustryRow';
+// INDUSTRY:END
 
 type Tab = 'overview' | 'ai' | 'fundamentals' | 'news' | 'signals' | 'holdings';
 
@@ -234,6 +237,9 @@ export default function StockDetailPage() {
               <MetricCard label={t('overview.nextEarnings')} value="—" small />
             </div>
           </div>
+          {/* INDUSTRY:BEGIN */}
+          <IndustryRow ticker={stock.ticker} />
+          {/* INDUSTRY:END */}
           <div className="card-base">
             <div className="mb-3 text-sm font-semibold text-text-dim">{t('overview.signalsHeadingStatic')}</div>
             <div className="py-6 text-center text-sm text-text-dim">{t('overview.noTriggersToday')}</div>
