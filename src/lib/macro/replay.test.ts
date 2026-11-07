@@ -6,6 +6,7 @@
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
 import {MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
 import {deriveSeries} from './derive';
@@ -14,6 +15,7 @@ import {memoryMacroDb} from './memory-db';
 import {parseFredCsv} from './parsers/fred-csv';
 import {parserFor} from './parsers/index';
 import {publishRegion} from './snapshots';
+import {overviewEnvelope} from './views';
 import {SEED_BATCH,seedCatalog} from './testing/seed';
 import type {Adapter,ObservationRow,ParsedPoint,Region} from './types';
 
@@ -123,5 +125,24 @@ describe.each(['US','CN'] as const)('replay %s',(region)=>{
   const facts=async()=>{const {db}=await replayRegion(region);const s=await db.activeSnapshot(region);
    return (await db.observationsByIds(s!.observation_ids)).map(r=>`${r.series_id}|${r.period_end}|${r.value_text}|${r.version}`).sort();};
   expect(await facts()).toEqual(await facts());
+ });
+});
+describe.each(['US','CN'] as const)('replay %s → overview',(region)=>{
+ it('every value shown on the overview traces to a fixture retrieval and equals the replayed observation',async()=>{
+  const {db,entries}=await replayRegion(region);
+  const known=new Set(entries.map(e=>e.sha256));
+  const env=await overviewEnvelope({db,tables:memoryTableClient({dq_freshness:['dataset']})},region,TODAY);
+  const shown=env.indicators.filter(r=>r.value_text!==null);
+  expect(shown.length).toBeGreaterThan(0);
+  const snap=await db.activeSnapshot(region);
+  const manifest=await db.observationsByIds(snap!.observation_ids);
+  for(const row of shown){
+   const obs=manifest.find(o=>o.series_id===row.series_id&&o.period_end===row.period_end)!;
+   expect(obs.value_text).toBe(row.value_text);
+   expect(row.retrieval_id).not.toBeNull();
+   const r=await db.retrieval(row.retrieval_id!);
+   expect(known.has(r!.sha256),row.series_id).toBe(true);
+   for(const s of await evidenceShasOf(db,obs))expect(known.has(s)).toBe(true);
+  }
  });
 });
