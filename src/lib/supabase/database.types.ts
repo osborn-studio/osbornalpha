@@ -21,7 +21,7 @@
 // INDUSTRY:BEGIN
 // + 20261111090000_industry_research.sql (industry_* tables, security_marks; altered industry_classifications / issuer_industry_memberships)
 // INDUSTRY:END
-// + 20261108090000_disclosure_documents.sql (F3: disclosure_documents and its eight child/scheduling tables)
+// + 20261115090000_disclosure_documents.sql (F3: disclosure_documents and its eight child/scheduling tables)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -755,7 +755,7 @@ export interface MacroAnalysisRunRow {
 }
 // /MACRO
 
-// F3 document pipeline — 20261108090000_disclosure_documents.sql. Hand-maintained like the blocks
+// F3 document pipeline — 20261115090000_disclosure_documents.sql. Hand-maintained like the blocks
 // above; RPCs are not registered (supabaseDocumentsDb narrows the client locally). bigint (bytes)
 // and numeric (width, height, precision, recall) arrive as JSON numbers from PostgREST: readers go
 // through the src/lib/documents/db.ts normalisers.
@@ -921,7 +921,7 @@ export interface DocumentSyncScope {
   updated_at: string;
   scope_confirmed_at: string; // F3 review (Task 5): retirement guard
 }
-// F3 migration two (20261108091000_fact_citations.sql): written only through bind_filing_documents /
+// F3 migration two (20261115091000_fact_citations.sql): written only through bind_filing_documents /
 // insert_fact_citations (no direct writes for any role); anon/authenticated read under RLS.
 export interface FactCitationLink { fact_id: string; citation_id: string; role: 'value' | 'label' | 'period' | 'unit' | 'unit_currency'; }
 export interface FilingDocument { filing_id: string; document_id: string; created_at: string; }

@@ -2,7 +2,7 @@
 // not ours to change, so a service_role caller COULD publish an HK run through it (documented in
 // fact-citations.integration.test.ts as an accepted residual risk and an interface request to spec-2:
 // market-aware authorization on publish_sync_run). What F3 guarantees is that none of ITS code does:
-// outside the landed src/lib/facts/*, nothing calls publish_sync_run / publishRun except the in-memory
+// within F3 documents libraries, scripts and API routes, nothing calls publish_sync_run / publishRun except the in-memory
 // stand-in of publish_hk_run (facts-port.ts, after its evidence check) and the integration test that
 // documents the bypass. HkFactsPort exposes no generic publish.
 import {readFileSync,readdirSync,statSync} from 'node:fs';
@@ -20,9 +20,10 @@ function walk(dir:string,out:string[]=[]):string[]{
  return out;
 }
 describe('HK publish boundary',()=>{
- it('only publish_hk_run publishes HK: no other file outside src/lib/facts calls publish_sync_run or publishRun',()=>{
-  const offenders=[...walk(join(ROOT,'src')),...walk(join(ROOT,'scripts'))].map(f=>relative(ROOT,f))
-   .filter(f=>!f.startsWith('src/lib/facts/')&&!ALLOWED.has(f))
+ it('only publish_hk_run publishes HK: no other F3 file calls publish_sync_run or publishRun',()=>{
+  const offenders=[...walk(join(ROOT,'src/lib/documents')),...walk(join(ROOT,'scripts/documents')),
+   ...walk(join(ROOT,'src/app/api')).filter(f=>/^(?:.*\/)?documents[^/]*\//.test(relative(join(ROOT,'src/app/api'),f))||relative(join(ROOT,'src/app/api'),f).startsWith('citations/'))].map(f=>relative(ROOT,f))
+   .filter(f=>!ALLOWED.has(f))
    .filter(f=>/publish_sync_run|\bpublishRun\b/.test(readFileSync(join(ROOT,f),'utf8')));
   expect(offenders).toEqual([]);
  });

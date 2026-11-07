@@ -22,10 +22,8 @@ import {code,hkCite,hkExtraction,hkFactsPortContract,hkFilingRow,hkStagedRun,hkW
 import type {HkPortHarness} from './hk-facts/facts-port-contract';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const MIGRATION_TWO='supabase/migrations/20261108091000_fact_citations.sql';
-const SPEC2_MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
-const SPEC2_TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
-const SPEC2_FUNCTIONS=['financial_facts_lifecycle','filings_limited_update','fact_scope_lock','fact_run_lock','fact_abandon_run','fact_item_members','fact_promote_rows','reconcile_fact_sync_scope','claim_fact_sync_lease','begin_sync_run','stage_filings','stage_facts','quarantine_facts','publish_sync_run','abandon_sync_run','release_fact_sync_lease','promote_quarantined','resolve_facts_quarantine','replace_financial_metrics','fact_state_rev','read_facts'];
+const MIGRATION_TWO='supabase/migrations/20261115091000_fact_citations.sql';
+const MIGRATION_ONE='supabase/migrations/20261115090000_disclosure_documents.sql';
 const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint,jsonb)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.renew_hk_fact_lease(uuid,uuid,int)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
 const F3_INTERNAL=['public.assert_run_evidence_complete(uuid)','public.fact_citations_guard()','public.filing_documents_guard()'];
 
@@ -82,10 +80,10 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   finally{await c.query('rollback').catch(()=>{});c.release();}
  };
  const checksOf=(table:string)=>q(`select conname, pg_get_constraintdef(oid) def from pg_constraint where conrelid=('public.'||$1)::regclass and contype='c' order by conname`,[table]);
- /** Definitions of the spec-2 functions and triggers, read through `read` (the shared or a fresh database). */
- const spec2Defs=async(read:(text:string,values?:unknown[])=>Promise<Record<string,any>[]>=q)=>({
-  functions:await read(`select p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' sig, md5(pg_get_functiondef(p.oid)) h from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=any($1) order by 1`,[SPEC2_FUNCTIONS]),
-  triggers:await read(`select c.relname, t.tgname, md5(pg_get_triggerdef(t.oid)) h from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1) and not t.tgisinternal order by 1,2`,[SPEC2_TABLES]),
+ /** Definitions of all existing public functions and triggers, read through `read` (the shared or a fresh database). */
+ const existingDefs=async(read:(text:string,values?:unknown[])=>Promise<Record<string,any>[]>=q)=>({
+  functions:await read(`select p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' sig, md5(pg_get_functiondef(p.oid)) h from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.prokind in ('f','p') order by 1`),
+  triggers:await read(`select c.relname, t.tgname, md5(pg_get_triggerdef(t.oid)) h from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal order by 1,2`),
  });
 
  beforeAll(async()=>{
@@ -121,7 +119,11 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   expect(env.rows.map((x:Record<string,unknown>)=>[x.fact_id,x.market,x.value]).sort()).toEqual([[r.fact24.fact_id,'HK','1000000'],[r.fact25.fact_id,'HK','1234000']].sort());
   expect((await q(`select market,source,origin,mapping_gen from public.filings where filing_id=$1`,[r.filingId]))[0]).toEqual({market:'HK',source:'hkex',origin:'hkex',mapping_gen:1});
   const e=await fails(q(`select public.replace_financial_metrics($1,'HK',1,$2::jsonb)`,[w.iss,JSON.stringify([{metric:'gross_margin',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'0.4',unit:'pure',input_unit:'CNY',basis:'us_standard',formula_version:'t',inputs:[],as_of:'2026-03-20'}])]));
-  expect(e.code).toBe('23514');expect(e.message).toMatch(/financial_metrics_market_check/);
+  // facts_extensions delegates to replace_financial_metrics_lineage, which rejects HK
+  // with 22023 before the original 23514 table constraint can run. Either must leave no row.
+  expect(['22023','23514']).toContain(e.code);
+  expect(e.message).toMatch(/invalid_based_on|financial_metrics_market_check/);
+  expect(await count(`select count(*) v from public.financial_metrics where issuer_id=$1`,[w.iss])).toBe(0);
  });
 
  it('F3: filings source/origin are market-aware through the unchanged stage_filings — US/CN keep their domains, HK must be hkex',async()=>{
@@ -190,26 +192,20 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
   }finally{await fresh.drop();}
  },120000);
 
- it('spec-2 functions and triggers are unchanged: identical definitions before and after replaying the spec-2 migration and then migration two; migration two defines none of them',async()=>{
-  const before=await spec2Defs();
-  expect(before.functions.map(r=>String(r.sig).split('(')[0]).sort()).toEqual([...SPEC2_FUNCTIONS].sort());   // one overload each
-  expect(before.triggers.map(r=>[r.relname,r.tgname])).toEqual([['filings','filings_limited_update'],['financial_facts','financial_facts_lifecycle']]);
-  // P2-2: replaying the spec-2 migration drops 'HK' from its market checks until migration two runs
-  // again — so this happens in a dedicated temporary database, never in the shared one
-  const fresh=await freshMigratedDatabase(adminUrl);
+ it('F3 migrations leave every pre-existing function and trigger unchanged',async()=>{
+  // Include all of main's extensions before taking the baseline; replaying spec-2 alone
+  // would incorrectly undo definitions that main legitimately replaced after spec-2.
+  const fresh=await freshMigratedDatabase(adminUrl,'20261115090000_disclosure_documents.sql');
   try{
    const read=async(text:string,values:unknown[]=[])=>(await fresh.pool.query(text,values)).rows as Record<string,any>[];
-   expect(await spec2Defs(read)).toEqual(before);
-   await replayFiles(fresh.pool,[SPEC2_MIGRATION]);
-   const spec2=await spec2Defs(read);
-   await replayFiles(fresh.pool,[MIGRATION_TWO]);
-   const after=await spec2Defs(read);
-   expect(spec2).toEqual(before);
-   expect(after).toEqual(before);
+   const before=await existingDefs(read);
+   expect(before.functions.length).toBeGreaterThan(0);expect(before.triggers.length).toBeGreaterThan(0);
+   await replayFiles(fresh.pool,[MIGRATION_ONE,MIGRATION_TWO]);
+   const after=await existingDefs(read);
+   // New F3 definitions are additive; every baseline signature/trigger must still exist unchanged.
+   expect(after.functions.filter(r=>before.functions.some(b=>b.sig===r.sig))).toEqual(before.functions);
+   expect(after.triggers.filter(r=>before.triggers.some(b=>b.relname===r.relname&&b.tgname===r.tgname))).toEqual(before.triggers);
   }finally{await fresh.drop();}
-  const sql=readFileSync(MIGRATION_TWO,'utf8');
-  for(const name of SPEC2_FUNCTIONS)expect({name,defined:new RegExp(`create\\s+(or\\s+replace\\s+)?function\\s+public\\.${name}\\s*\\(`,'i').test(sql)}).toEqual({name,defined:false});
-  expect(/create\s+trigger[^;]*\son\s+public\.(fact_sync_runs|filings|financial_facts|financial_metrics|fact_sync_scope)\b/i.test(sql)).toBe(false);
  },120000);
 
  it('fact_citations and filing_documents are never updated nor deleted directly; abandoning a staged run cascades both; ok facts keep their evidence',async()=>{

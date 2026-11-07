@@ -7,7 +7,7 @@
 // admin is a superuser), installs the auth/storage stand-ins of scripts/s4/local-db.ts (keep the two
 // in sync; the cluster roles postgres/anon/authenticated/service_role already exist and the
 // migrations create their own roles only if missing), applies every supabase/migrations file in
-// order and returns a pool on it; drop() closes the pool and drops the database. replayFiles applies
+// order (optionally stopping before beforeMigration) and returns a pool on it; drop() closes the pool and drops the database. replayFiles applies
 // files again, each in one transaction. Not a test file: it never reads S4_TEST_STATE itself.
 import {randomBytes} from 'node:crypto';
 import {readdirSync,readFileSync} from 'node:fs';
@@ -25,7 +25,7 @@ async function onAdmin(adminUrl:string,sql:string):Promise<void>{
  const a=new Pool({connectionString:adminUrl,max:1});a.on('error',()=>{});
  try{await a.query(sql);}finally{await a.end();}
 }
-export async function freshMigratedDatabase(adminUrl:string):Promise<FreshDatabase>{
+export async function freshMigratedDatabase(adminUrl:string,beforeMigration?:string):Promise<FreshDatabase>{
  const name=`f3_replay_${randomBytes(6).toString('hex')}`;
  await onAdmin(adminUrl,`create database ${name}`);
  const url=new URL(adminUrl);url.pathname=`/${name}`;
@@ -34,7 +34,7 @@ export async function freshMigratedDatabase(adminUrl:string):Promise<FreshDataba
  const drop=async()=>{if(dropped)return;dropped=true;await pool.end().catch(()=>{});await onAdmin(adminUrl,`drop database if exists ${name} with (force)`);};
  try{
   await pool.query(SHIM);
-  for(const file of readdirSync(MIGRATIONS_DIR).filter(n=>n.endsWith('.sql')).sort()){
+  for(const file of readdirSync(MIGRATIONS_DIR).filter(n=>n.endsWith('.sql')&&(!beforeMigration||n<beforeMigration)).sort()){
    try{await pool.query(readFileSync(join(MIGRATIONS_DIR,file),'utf8'));}
    catch(e){throw new Error(`fresh database: migration ${file}: ${(e as Error).message}`);}
   }

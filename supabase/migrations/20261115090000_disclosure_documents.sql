@@ -1,4 +1,4 @@
--- supabase/migrations/20261108090000_disclosure_documents.sql
+-- supabase/migrations/20261115090000_disclosure_documents.sql
 -- F3-0 (document pipeline spec §4.1–§4.8, §4.10, §4.12): the global disclosure document library.
 -- disclosure_documents (one row per (source, source_ref, source_version)), its assets, immutable
 -- extraction versions with their pages, code-point citations, extraction candidates with their
@@ -7,7 +7,7 @@
 -- included — except extraction_approvals (service_role insert + update(revoked_at)); every other
 -- change goes through the security definer functions below, each of which states its lock and its
 -- authority (lease / row lock / admin route). Functions that read financial_facts belong to
--- migration two (20261108091000_fact_citations.sql), which also replaces the document_citations
+-- migration two (20261115091000_fact_citations.sql), which also replaces the document_citations
 -- read policy with the fact-linked one.
 -- Errors carry the code as the first word of the message: lease_lost (55P03); not_eligible,
 -- revision_exists, approval_revoked, not_publishable, decided, already_staged (P0001);

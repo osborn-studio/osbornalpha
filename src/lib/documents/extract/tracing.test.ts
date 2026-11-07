@@ -22,8 +22,11 @@ describe('outputFileTracingIncludes carries a complete worker deployment',()=>{
   await buildExtractWorker(workerEntry(built));
  },120_000);
  it('every extracting route lists the same assets, manifest included',()=>{
-  expect(Object.keys(routes).sort()).toEqual(['/api/admin/documents/[id]/reprocess','/api/cron/documents-candidates','/api/cron/documents-extract']);
-  for(const files of Object.values(routes)){
+  const extractingRoutes=['/api/admin/documents/[id]/reprocess','/api/cron/documents-candidates','/api/cron/documents-extract'];
+  for(const route of extractingRoutes){
+   const files=routes[route];
+   expect(files).toBeDefined();
+   expect(files).toEqual(routes['/api/cron/documents-extract']);
    expect(files).toContain('./build/extract-worker/extract-worker.mjs');
    expect(files).toContain('./build/extract-worker/extract-worker.manifest.json');
   }

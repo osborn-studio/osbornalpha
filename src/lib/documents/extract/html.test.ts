@@ -53,11 +53,20 @@ describe('extractHtml review fixes',()=>{
   expect(extractHtml(enc('<table><tr><td>Revenue</td><td>1,234</td></tr><tr><td>Cost</td><td>(5)</td></tr></table>'))[0].text).toBe('Revenue 1,234\nCost (5)');
   expect(extractHtml(enc('<p>one\ntwo\n  three</p><p>four<br>five</p>'))[0].text).toBe('one two three\nfour\nfive');
  });
- it('unterminated tags and comments stay linear (80 KB in well under 200 ms)',()=>{
+ it('unterminated tags and comments scale well below quadratic (20 KB to 160 KB)',()=>{
   for(const piece of ['<a ','<!--','<a href="','<a b=\'','<'+'x'.repeat(3),'<script ','<p '] ){
-   const t0=performance.now();
-   extractHtml(enc(piece.repeat(Math.floor(80_000/piece.length))));
-   expect(performance.now()-t0).toBeLessThan(200);
+   const small=enc(piece.repeat(Math.floor(20_000/piece.length)));
+   const large=enc(piece.repeat(Math.floor(160_000/piece.length)));
+   // Warm both paths, then use the median of interleaved samples to tolerate scheduling pauses.
+   extractHtml(small);extractHtml(large);
+   const measure=(input:Uint8Array)=>{const start=performance.now();extractHtml(input);return performance.now()-start;};
+   const smallTimes:number[]=[];const largeTimes:number[]=[];
+   for(let i=0;i<7;i++){smallTimes.push(measure(small));largeTimes.push(measure(large));}
+   const median=(times:number[])=>times.sort((a,b)=>a-b)[3];
+   const smallMs=median(smallTimes);const largeMs=median(largeTimes);
+   // 8x input would cost 64x for quadratic scanning; allow 24x for runtime noise.
+   expect(largeMs/smallMs,piece).toBeLessThan(24);
+   expect(Math.max(...largeTimes),piece).toBeLessThan(2000);
   }
   expect(extractHtml(enc('a < b <a href="x'))[0].text).toBe('a < b <a href="x');
  });

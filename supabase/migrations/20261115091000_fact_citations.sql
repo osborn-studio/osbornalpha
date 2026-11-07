@@ -1,4 +1,4 @@
--- supabase/migrations/20261108091000_fact_citations.sql
+-- supabase/migrations/20261115091000_fact_citations.sql
 -- F3 migration two (spec §4.8, §4.9, §4.12; plan F3 Task 13). Joins the document pipeline to the
 -- landed spec-2 facts layer WITHOUT replacing any spec-2 function or trigger:
 --   1. additive extension of the spec-2 check constraints (drop if exists + add, under the landed
