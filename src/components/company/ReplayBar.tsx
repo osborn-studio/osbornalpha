@@ -19,11 +19,12 @@ function DateInput({ value, onPick, onCancel }: { value: string; onPick: (d: str
   const apply = () => { if (valid && draft !== value) onPick(draft); };
   return (
     <div className="flex items-center gap-2 text-xs text-[var(--text-dim)]"
-      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } else if (e.key === 'Escape' && onCancel) onCancel(); }}>
+      onKeyDown={(e) => { if (e.key === 'Escape' && onCancel) onCancel(); }}>
       <label>
         <span className="sr-only">{t('dateLabel')}</span>
         <input type="date" min={REPLAY_MIN_DATE} max={today} value={draft} aria-label={t('dateLabel')} className="num w-[160px]"
-          onChange={(e) => setDraft(e.target.value)} />
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } }} />
       </label>
       <Button variant="secondary" size="sm" disabled={!valid || draft === value} onClick={apply}>{t('apply')}</Button>
       {onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>{t('cancel')}</Button>}
