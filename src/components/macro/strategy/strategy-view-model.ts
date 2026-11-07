@@ -167,8 +167,17 @@ export function coverageText(d:ResponseDim,t:StrategyT):string{
 }
 export const dimLabel=(d:ResponseDim,l:Locale):string=>`${d.label[l]} ${d.unit==='pct'?'%':'bp'}`;
 /** Mobile (< 640px) fallback: one group per column, one line per policy row (spec §3.7). */
-export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:string;label:string;coverage:string;rows:{direction:'hike'|'cut'|'qe_qt';cell:CellDisplay}[]}[]{
- return v.dims.map(d=>({id:d.id,label:dimLabel(d,l),coverage:coverageText(d,t),rows:v.rows.map(r=>({direction:r.direction,cell:matrixCell(cellOf(r,d.id),l,t)}))}));
+export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:string;label:string;coverage:string;rows:{direction:'hike'|'cut'|'qe_qt';cell:CellDisplay;source:Cell}[]}[]{
+ // `source` is the Cell itself so the mobile list opens the same per-event drawer as the desktop table (n < 5 included).
+ return v.dims.map(d=>({id:d.id,label:dimLabel(d,l),coverage:coverageText(d,t),rows:v.rows.map(r=>{const source=cellOf(r,d.id);return {direction:r.direction,cell:matrixCell(source,l,t),source};})}));
+}
+/** The matrix's own manifest, cutoff and version (spec §3.2): the page header links the transmission manifest, not this one. */
+export function matrixMeta(v:PolicyResponseView,t:StrategyT):{href:string;manifest:string;fullId:string;cutoff:string;version:string}{
+ return {href:strategyApi.manifest(v.manifest_id),manifest:t('meta.manifest',{id:shortId(v.manifest_id)}),fullId:v.manifest_id,cutoff:t('meta.cutoff',{time:formatInstant(v.cutoff)}),version:v.version};
+}
+/** Per-event frozen inputs of both endpoints (spread endpoints carry two observations each): dates, values, versions, sources. */
+export function eventEvidence(events:EventRow[]):{key:string;date:string;base:ObsRef[];end:ObsRef[]}[]{
+ return events.map(e=>({key:e.effective_date,date:e.effective_date,base:e.base?.inputs??[],end:e.end?.inputs??[]}));
 }
 // ---- policy action episodes × assets (spec §3.4, §5.5)
 export function cycleCell(c:CycleCell,t:StrategyT):CellDisplay&{refs:ObsRef[]}{
@@ -214,8 +223,12 @@ export function episodesEmptyKey(v:CycleTableView):string|null{
  if(v.episodes.length>0)return null;
  return v.gaps.some(g=>g.kind==='history_truncated')?'history.eventsTruncated':'history.noEpisodes';
 }
-export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:{key:string;episode:string;cell:CellDisplay}[]}[]{
- return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{const ev=episodeView(e,t);return {key:ev.key,episode:`${ev.direction} ${ev.dates}`,cell:cycleCell(cycleCellOf(v,e,c.id),t)};})}));
+export interface CycleGroupRow{key:string;episode:string;line:string;flags:string[];cell:CellDisplay;refs:ObsRef[];drillTitle:string}
+/** Mobile (< 640px) list per column: keeps the episode line, its left-censored / ongoing / gap flags and the endpoint drill. */
+export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:CycleGroupRow[]}[]{
+ return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{
+  const ev=episodeView(e,t),cell=cycleCell(cycleCellOf(v,e,c.id),t),episode=`${ev.direction} ${ev.dates}`;
+  return {key:ev.key,episode,line:ev.line,flags:ev.flags,cell,refs:cell.refs,drillTitle:t('history.cellTitle',{episode,column:c.label[l]})};})}));
 }
 // ---- monthly review (spec §3.5, §6.2)
 export const REVIEW_SECTIONS=['releases','revisions','timeliness','policy_events','episode_changes','asset_moves','coverage'] as const;
@@ -246,10 +259,14 @@ export function panelState(p:ExplanationProjection|null):PanelState{
 }
 /** Newest projection in the page locale (the list arrives newest first). */
 export const latestFor=(items:ExplanationProjection[],l:Locale):ExplanationProjection|null=>items.find(p=>p.locale===l)??null;
-export function renderedSections(r:RenderedExplanation):{facts:{n:number;factId:string;text:string}[];hypotheses:{text:string;refs:number[]}[];counterpoints:{text:string;refs:number[]}[]}{
+/** Citation into the explanation's own frozen manifest (its explain_facts manifest, spec §3.6): the fact_id is the stable key in manifest.facts. */
+export const factCitation=(manifestId:string,factId:string):string=>`${strategyApi.manifest(manifestId)}#fact=${encodeURIComponent(factId)}`;
+export function renderedSections(r:RenderedExplanation,manifestId:string):{facts:{n:number;factId:string;text:string;href:string}[];hypotheses:{text:string;refs:number[];factIds:string[]}[];counterpoints:{text:string;refs:number[];factIds:string[]}[]}{
  const index=new Map(r.facts.map((f,i)=>[f.fact_id,i+1]));
  const refs=(ids:string[])=>ids.map(id=>index.get(id)).filter((n):n is number=>n!==undefined);
- return {facts:r.facts.map((f,i)=>({n:i+1,factId:f.fact_id,text:f.text})),hypotheses:r.hypotheses.map(h=>({text:h.text,refs:refs(h.fact_ids)})),counterpoints:r.counterpoints.map(c=>({text:c.text,refs:refs(c.fact_ids)}))};
+ const known=(ids:string[])=>ids.filter(id=>index.has(id));
+ return {facts:r.facts.map((f,i)=>({n:i+1,factId:f.fact_id,text:f.text,href:factCitation(manifestId,f.fact_id)})),
+  hypotheses:r.hypotheses.map(h=>({text:h.text,refs:refs(h.fact_ids),factIds:known(h.fact_ids)})),counterpoints:r.counterpoints.map(c=>({text:c.text,refs:refs(c.fact_ids),factIds:known(c.fact_ids)}))};
 }
 export function headerLine(p:ExplanationProjection,t:StrategyT):string{
  return t('explain.header',{subject:t(`explain.subject.${p.subject_kind}`,{id:shortId(p.subject_id)}),manifest:shortId(p.manifest_id),
@@ -265,8 +282,51 @@ export function remainingToday(body:unknown):{kind:'unlimited'}|{kind:'count';n:
  if(!p||typeof p.used!=='number'||typeof p.limit!=='number')return null;
  return p.limit===-1?{kind:'unlimited'}:{kind:'count',n:Math.max(0,p.limit-p.used)};
 }
-/** A request id is reused only to retry after a network failure (pending); otherwise every submit is a new request. */
+/** A request id is reused only to retry after an ambiguous outcome (pending); otherwise every submit is a new request. */
 export const nextRequestId=(pending:string|null,gen:()=>string):string=>pending??gen();
+/** A held request id: bound to the subject and locale it was minted for (a different payload under the same id would be a 409). */
+export interface PendingRequest{key:string;id:string}
+export const explainPendingKey=(subject:{kind:string;id:string},locale:Locale):string=>`${subject.kind}:${subject.id}:${locale}`;
+export const pendingFor=(pending:PendingRequest|null,subject:{kind:string;id:string},locale:Locale):string|null=>pending&&pending.key===explainPendingKey(subject,locale)?pending.id:null;
+const REFUSED_CODES:readonly string[]=['quota_exceeded','llm_not_configured','no_facts','subject_not_found','payload_conflict','invalid_body','unauthorized'];
+export type ExplainOutcome=
+ |{kind:'done';projection:ExplanationProjection}
+ |{kind:'run_failed';projection:ExplanationProjection;code:string}   // the server finished the run as failed (its projection came back)
+ |{kind:'refused';code:string}                                       // definitively not started (4xx / known code): a new request is right
+ |{kind:'ambiguous';code:string};                                    // 5xx / gateway / network / unreadable: the run may have completed server-side
+/** status null = the fetch itself threw. Only an ambiguous outcome keeps the idempotency key (spec §6.3). */
+export function explainOutcome(status:number|null,body:unknown):ExplainOutcome{
+ if(status===null)return {kind:'ambiguous',code:'network'};
+ if(status>=200&&status<300){
+  const p=(body as {explanation_id?:unknown}|null)?.explanation_id;
+  return typeof p==='string'?{kind:'done',projection:body as ExplanationProjection}:{kind:'ambiguous',code:'unreadable'};
+ }
+ const code=errorCode(body)??`http_${status}`;
+ const failed=projectionOfError(body);
+ if(failed)return {kind:'run_failed',projection:failed,code};
+ if(REFUSED_CODES.includes(code)||(status>=400&&status<500&&status!==408))return {kind:'refused',code};
+ return {kind:'ambiguous',code};
+}
+export async function submitExplanation(deps:{fetch:typeof fetch;gen:()=>string},pending:PendingRequest|null,subject:{kind:'snapshot'|'review';id:string},locale:Locale):Promise<{pending:PendingRequest|null;outcome:ExplainOutcome}>{
+ const id=nextRequestId(pendingFor(pending,subject,locale),deps.gen);
+ const held:PendingRequest={key:explainPendingKey(subject,locale),id};
+ let outcome:ExplainOutcome;
+ try{
+  const r=await deps.fetch('/api/macro/strategy/explanations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({request_id:id,subject,locale})});
+  const body:unknown=await r.json().catch(()=>undefined);
+  outcome=explainOutcome(r.status,body===undefined?null:body);
+ }catch{outcome=explainOutcome(null,null);}
+ return {pending:outcome.kind==='ambiguous'?held:null,outcome};
+}
+export type PanelPhase=PanelState|'loading'|'readError';
+/** Phase, button state and reload offer of the panel: nothing is "not generated" until the existing-run lookup has succeeded. */
+export function explainControls(i:{busy:boolean;listKind:LoadState<unknown>['kind'];hasCurrent:boolean;projection:ExplanationProjection|null;pending:boolean}):{phase:PanelPhase;canGenerate:boolean;showGenerate:boolean;showReload:boolean}{
+ const phase:PanelPhase=i.busy?'running':i.hasCurrent||i.listKind==='ok'?panelState(i.projection):i.listKind==='loading'?'loading':'readError';
+ const lookupFailed=phase==='readError',lookingUp=phase==='loading';
+ return {phase,showGenerate:phase!=='running',showReload:lookupFailed,
+  canGenerate:!i.busy&&phase!=='running'&&(i.pending||(!lookupFailed&&!lookingUp))};
+}
+export const generateLabelKey=(state:PanelState,error:string|null,held:boolean):string=>held?'explain.retry':state==='none'&&!error?'explain.generate':'explain.regenerate';
 const EXPLAIN_ERRORS:Record<string,string>={quota_exceeded:'explain.quota',llm_not_configured:'explain.noModel',no_facts:'explain.noFacts',subject_not_found:'explain.noSubject'};
 export function explainErrorText(code:string,t:StrategyT):string{
  if(code==='payload_conflict')return t('explain.conflict',{code});

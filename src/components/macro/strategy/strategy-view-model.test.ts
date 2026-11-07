@@ -3,7 +3,7 @@
 import {describe,expect,it} from 'vitest';
 import type {Cell,CycleTableView,DeviationCase,Episode,EventRow,ExplanationProjection,F4Summary,Fact,NodeView,ObsRef,PlaybookView,PolicyResponseView,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
 import {MINUS,MISSING,barGeometry,closedMonths,columnMedians,coverageText,cycleCell,cycleGroups,deviationRows,episodeView,errorCode,eventRows,explainErrorText,f4SummaryDisplay,failureLabel,flowRows,
- episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
+ episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixMeta,eventEvidence,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
  projectionOfError,quantile7,remainingToday,renderedSections,reviewGrid,reviewSections,roundDecimalText,strategyApi,toneClass,toneLevel,toneOfText,uniformReason,type StrategyT} from './strategy-view-model';
 
 const t:StrategyT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
@@ -143,6 +143,25 @@ describe('policy response matrix (spec §5.3)',()=>{
   expect(g.map(x=>x.label)).toEqual(['美元广义 %','标普 %']);
   expect(g[0].rows.map(r=>[r.direction,r.cell.main])).toEqual([['hike','+1.2%'],['qe_qt','state.missing']]);
  });
+ it('mobile groups keep the desktop drill: every drillable cell carries its Cell, n < 5 included',()=>{
+  const g=matrixGroups(view,'zh',t);
+  for(const grp of g)for(const r of grp.rows)expect([r.cell.drill,r.source===view.rows.find(x=>x.direction===r.direction)!.cells[grp.id]]).toEqual([r.cell.drill,true]);
+  const few:PolicyResponseView={...view,rows:[{direction:'hike',cells:{US_DTWEXBGS:{status:'events_only',n:3,unit:'pct',events:[ev({})]},US_SP500:{status:'missing',reason:{zh:'无',en:'none'}}}}]};
+  const fg=matrixGroups(few,'zh',t)[0].rows[0];
+  expect([fg.cell.drill,fg.cell.main,fg.cell.sub,fg.source.status]).toEqual([true,'matrix.n{"n":3}','matrix.fewEvents','events_only']);
+  expect(matrixGroups(few,'zh',t)[1].rows[0].cell.drill).toBe(false);
+ });
+ it('matrix meta links its own manifest and shows cutoff and version',()=>{
+  expect(matrixMeta({...view,manifest_id:'man-pr',cutoff:'2026-11-03T00:00:00Z',version:'macro-policy-response/1'},t)).toEqual({
+   href:'/api/macro/strategy/manifests/man-pr',manifest:'meta.manifest{"id":"man-pr"}',fullId:'man-pr',cutoff:'meta.cutoff{"time":"2026-11-03 00:00 UTC"}',version:'macro-policy-response/1'});
+ });
+ it('event evidence exposes base and end inputs with exact dates, values, versions and sources',()=>{
+  const base=[ref('US_DTWEXBGS','2022-02-28','112.6')],end=[{...ref('US_DTWEXBGS','2022-05-31','115.48'),version:3,source:{kind:'history' as const,as_of:'2026-11-03T00:00:00Z'}}];
+  const e=ev({base:{period_end:'2022-02-28',value_text:'112.6',inputs:base},end:{period_end:'2022-05-31',value_text:'115.48',inputs:end}});
+  const out=eventEvidence([e,ev({effective_date:'2022-06-16',base:null,end:null,selected:false,exclusion:'missing_endpoint'})]);
+  expect(out).toEqual([{key:'2022-03-17',date:'2022-03-17',base:base,end:end},{key:'2022-06-16',date:'2022-06-16',base:[],end:[]}]);
+  expect(out[0].end[0]).toMatchObject({value_text:'115.48',version:3,available_at:'2022-05-31T12:00:00Z',source:{kind:'history'}});
+ });
 });
 
 describe('policy action episodes × assets (spec §5.5)',()=>{
@@ -170,6 +189,15 @@ describe('policy action episodes × assets (spec §5.5)',()=>{
   expect(episodeView(view.episodes[1],t)).toEqual({key:'cut:2024-09-19',direction:'history.direction.cut',dates:'2024-09-19 → 2025-12-11',
    line:`history.episodeLine{"from":"5.50","to":"3.75","bp":"${MINUS}175 bp","n":6}`,flags:['history.flag.ongoing']});
   expect(episodeView({...view.episodes[0],left_censored:true,gap_after:true},t).flags).toEqual(['history.flag.leftCensored','history.flag.gapAfter']);
+ });
+ it('mobile groups keep episode annotations and the endpoint drill',()=>{
+  const v:CycleTableView={...view,episodes:[{...view.episodes[0],left_censored:true,gap_after:true},view.episodes[1]]};
+  const g=cycleGroups(v,t,'zh');
+  expect(g[0].rows[0]).toMatchObject({flags:['history.flag.leftCensored','history.flag.gapAfter'],line:expect.stringContaining('history.episodeLine'),
+   cell:{drill:true},drillTitle:'history.cellTitle{"episode":"history.direction.hike 2022-03-17 → 2023-07-27","column":"美债10Y"}'});
+  expect(g[0].rows[0].refs.map(r=>r.observation_id)).toEqual(['obs:US_DGS10:2022-02-28:v1','obs:US_DGS10:2023-07-31:v1']);
+  expect(g[0].rows[1].flags).toEqual(['history.flag.ongoing']);
+  expect(g[1].rows[1]).toMatchObject({cell:{drill:false},refs:[]});
  });
  it('type-7 median per column and centred bars',()=>{
   expect(quantile7([1,2,3,4],0.5)).toBe(2.5);expect(quantile7([1,2,3,4],0.25)).toBe(1.75);expect(quantile7([7],0.5)).toBe(7);
@@ -217,8 +245,9 @@ describe('explanation panel (spec §3.6, §6.3)',()=>{
   expect(latestFor([],'en')).toBeNull();
  });
  it('fact sentences are numbered; hypotheses cite them by number; unknown ids drop',()=>{
-  expect(renderedSections({facts:[{fact_id:'obs:a',text:'A'},{fact_id:'chg:b',text:'B'}],hypotheses:[{text:'H',fact_ids:['chg:b','zz']}],counterpoints:[{text:'C',fact_ids:['obs:a']}]})).toEqual({
-   facts:[{n:1,factId:'obs:a',text:'A'},{n:2,factId:'chg:b',text:'B'}],hypotheses:[{text:'H',refs:[2]}],counterpoints:[{text:'C',refs:[1]}]});
+  expect(renderedSections({facts:[{fact_id:'obs:a',text:'A'},{fact_id:'chg:b',text:'B'}],hypotheses:[{text:'H',fact_ids:['chg:b','zz']}],counterpoints:[{text:'C',fact_ids:['obs:a']}]},'man-1')).toEqual({
+   facts:[{n:1,factId:'obs:a',text:'A',href:'/api/macro/strategy/manifests/man-1#fact=obs%3Aa'},{n:2,factId:'chg:b',text:'B',href:'/api/macro/strategy/manifests/man-1#fact=chg%3Ab'}],
+   hypotheses:[{text:'H',refs:[2],factIds:['chg:b']}],counterpoints:[{text:'C',refs:[1],factIds:['obs:a']}]});
  });
  it('header names subject, manifest, model, prompt and validator versions',()=>{
   expect(headerLine(proj({}),t)).toBe('explain.header{"subject":"explain.subject.review{\\"id\\":\\"aaaaaaaa…\\"}","manifest":"bbbbbbbb…","model":"deepseek/deepseek-chat","prompt":"macro-explain-prompt/1","validator":"macro-explain-validator/1"}');

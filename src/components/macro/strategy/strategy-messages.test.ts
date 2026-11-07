@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import type {Boundary,DiffKind,ExclusionReason,NodeState,NewlySubkind,Regime} from '@/lib/macro/strategy/contract';
 import {FORBIDDEN_TERMS} from '@/lib/macro/strategy/explain-validate';
-import {KNOWN_FAILURES,REVIEW_SECTIONS,type PanelState} from './strategy-view-model';
+import {KNOWN_FAILURES,REVIEW_SECTIONS,type PanelPhase} from './strategy-view-model';
 const load=(l:'zh'|'en'):unknown=>JSON.parse(readFileSync(resolve(process.cwd(),'messages',l,'macroStrategy.json'),'utf8'));
 function flat(v:unknown,p=''):[string,string][]{
  if(typeof v==='string')return [[p,v]];
@@ -26,7 +26,7 @@ const FAMILIES:Record<string,readonly string[]>={
  'history.direction':['hike','cut'],
  'review.section':REVIEW_SECTIONS,
  'review.status':['ok','insufficient','none'],
- 'explain.state':['none','running','accepted','rejected','failed'] satisfies readonly PanelState[],
+ 'explain.state':['none','loading','readError','running','accepted','rejected','failed'] satisfies readonly PanelPhase[],
  'explain.subject':['snapshot','review'],
  'explain.failure':KNOWN_FAILURES,
  'deviation.kind':['revised','dropped','unchanged','newly_available'] satisfies readonly DiffKind[],

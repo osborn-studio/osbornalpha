@@ -2,12 +2,13 @@
 // Fed policy → US/CN asset response matrix (spec §3.3, §5.3): rows hike / cut / QE·QT, columns are dimensions with
 // their real coverage in the header, cells give the median with type-7 quartiles and n (n < 5 → per-event only), asset
 // moves washed by sign in three levels. A cell opens the per-event drawer (selected and excluded events with reasons).
-// Below sm the table becomes one list per column.
+// Below sm the table becomes one list per column; its drillable cells open the same drawer. The matrix links its own
+// manifest with cutoff and version, and each event lists the frozen base / end input observations.
 import { useMemo, useState } from 'react';
 import { Button, Panel } from '@/components/ui';
 import type { Cell, PolicyResponseView, ResponseDim } from '@/lib/macro/strategy/contract';
-import { EvidencePairDrawer } from './EvidencePairDrawer';
-import { cellEvents, cellOf, coverageText, dimLabel, eventRows, matrixCell, matrixGroups, matrixScale, toneClass, toneLevel, uniformReason } from './strategy-view-model';
+import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
+import { cellEvents, cellOf, coverageText, dimLabel, eventEvidence, eventRows, matrixCell, matrixGroups, matrixMeta, matrixScale, toneClass, toneLevel, uniformReason } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 const WINDOWS = [1, 3, 6] as const;
@@ -16,6 +17,7 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
   const { t, locale } = useStrategyT();
   const [drill, setDrill] = useState<{ direction: string; dim: ResponseDim; cell: Cell } | null>(null);
   const scale = useMemo(() => matrixScale(view), [view]);
+  const meta = matrixMeta(view, t);
   return (
     <Panel className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -80,13 +82,28 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
               {g.rows.map((r) => (
                 <li key={r.direction} className="flex justify-between gap-2">
                   <span>{t(`matrix.rows.${r.direction}`)}</span>
-                  <span className="text-right"><span className="font-mono tabular-nums">{r.cell.main}</span>{r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}</span>
+                  {(() => {
+                    const body = (
+                      <>
+                        <span className="font-mono tabular-nums">{r.cell.main}</span>
+                        {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
+                      </>
+                    );
+                    const dim = view.dims.find((d) => d.id === g.id)!;
+                    return r.cell.drill ? (
+                      <button type="button" className="text-right underline-offset-2 hover:underline" aria-label={`${t(`matrix.rows.${r.direction}`)} · ${g.label} · ${t('matrix.openCell')}`} onClick={() => setDrill({ direction: r.direction, dim, cell: r.source })}>{body}</button>
+                    ) : <span className="text-right">{body}</span>;
+                  })()}
                 </li>
               ))}
             </ul>
           </section>
         ))}
       </div>
+      <p className="font-mono text-[11px] text-text-dim">
+        <a className="text-accent hover:underline" href={meta.href} title={meta.fullId}>{meta.manifest}</a>
+        {' · '}{meta.cutoff}{' · '}{meta.version}
+      </p>
       <p className="text-[11px] text-text-dim">{t('matrix.footer')}</p>
       {view.sentences.map((s, i) => <p key={i} className="text-xs text-text-dim">{s[locale]}</p>)}
       <EvidencePairDrawer
@@ -95,7 +112,8 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
         onClose={() => setDrill(null)}
       >
         {drill ? (
-          <div className="overflow-x-auto">
+          <div className="space-y-3">
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-text-dim">
@@ -115,6 +133,18 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
                 ))}
               </tbody>
             </table>
+            </div>
+            {eventEvidence(cellEvents(drill.cell)).map((e) => (
+              <details key={e.key} className="rounded border border-border p-2">
+                <summary className="cursor-pointer text-xs font-semibold">{t('matrix.evidenceTitle', { date: e.date })}</summary>
+                <div className="mt-2 space-y-2">
+                  <h4 className="text-[11px] text-text-dim">{t('matrix.evidenceBase')}</h4>
+                  {e.base.length > 0 ? <ObsRefTable refs={e.base} /> : <p className="text-[11px] text-text-dim">{t('matrix.noInputs')}</p>}
+                  <h4 className="text-[11px] text-text-dim">{t('matrix.evidenceEnd')}</h4>
+                  {e.end.length > 0 ? <ObsRefTable refs={e.end} /> : <p className="text-[11px] text-text-dim">{t('matrix.noInputs')}</p>}
+                </div>
+              </details>
+            ))}
           </div>
         ) : null}
       </EvidencePairDrawer>

@@ -84,8 +84,22 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                   <ul className="mt-1 space-y-1 text-xs">
                     {g.rows.map((r) => (
                       <li key={r.key} className="flex justify-between gap-2">
-                        <span className="font-mono text-[11px] tabular-nums">{r.episode}</span>
-                        <span className="text-right"><span className="font-mono tabular-nums">{r.cell.main}</span>{r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}</span>
+                        <span>
+                          <span className="font-mono text-[11px] tabular-nums">{r.episode}</span>
+                          <span className="block font-mono text-[10px] tabular-nums text-text-dim">{r.line}</span>
+                          {r.flags.length > 0 ? <span className="mt-0.5 flex flex-wrap gap-1">{r.flags.map((f) => <Tag key={f} tone="accent">{t(f)}</Tag>)}</span> : null}
+                        </span>
+                        {(() => {
+                          const body = (
+                            <>
+                              <span className="font-mono tabular-nums">{r.cell.main}</span>
+                              {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
+                            </>
+                          );
+                          return r.cell.drill ? (
+                            <button type="button" className="text-right underline-offset-2 hover:underline" onClick={() => setDrill({ title: r.drillTitle, refs: r.refs })}>{body}</button>
+                          ) : <span className="text-right">{body}</span>;
+                        })()}
                       </li>
                     ))}
                   </ul>

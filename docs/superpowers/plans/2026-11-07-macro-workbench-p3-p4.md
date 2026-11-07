@@ -9282,7 +9282,7 @@ EOF
 - Create: `messages/zh/macroStrategy.json`, `messages/en/macroStrategy.json`
 - Modify: `src/i18n/request.ts` (add `'macroStrategy'` to `MESSAGE_DOMAINS` inside a `// MACRO-P3` … `// /MACRO-P3` block)
 - Create: `src/components/macro/strategy/strategy-messages.test.ts`
-- Create: `src/components/macro/strategy/strategy-view-model.ts`, `src/components/macro/strategy/strategy-view-model.test.ts`
+- Create: `src/components/macro/strategy/strategy-view-model.ts`, `src/components/macro/strategy/strategy-view-model.test.ts`, `src/components/macro/strategy/explain-flow.test.ts`
 - Create: `src/components/macro/strategy/use-strategy-t.ts`, `src/components/macro/strategy/use-strategy-fetch.ts`
 - Create: `src/components/macro/strategy/DependencyState.tsx`, `EvidencePairDrawer.tsx`, `F4Summary.tsx`, `TransmissionFlow.tsx`, `PlaybookGrid.tsx`, `PolicyResponseMatrix.tsx`, `CycleReturnsTable.tsx`, `ReviewIndex.tsx`, `DeviationCases.tsx`, `ExplanationPanel.tsx`, `ReviewView.tsx`, `StrategyScreens.tsx` (all under `src/components/macro/strategy/`)
 
@@ -9294,7 +9294,8 @@ Design decisions (spec §3, §10, §3.8, canvas `https://claude.ai/artifact/2s8t
 - **Every chart has a table view**: the transmission flow has a table toggle; the median chart has a table toggle.
 - **Mobile** (spec §3.7): the flow stacks below `lg`; playbook cards become `<details>` below `sm`; the matrix and the history table become one list per column below `sm` (640px); the explanation panel is full width.
 - **Loading** follows the existing `(app)` pages: thin server pages (Task 14), client screens that fetch the strategy APIs (`useStrategyFetch` → `loadStateOf`, which maps the §9.1 error codes to page states).
-- The explanation panel reuses a request id only to retry after a network failure (`nextRequestId`), shows the remaining runs of the shared `perspectives` quota from the existing `GET /api/usage/today` (`usage.perspectives.{used,limit}`, `-1` = unlimited), and shows a failed run's projection when an error body carries `explanation`.
+- The explanation panel reuses a request id only to retry after an ambiguous outcome (`nextRequestId`, `submitExplanation`), shows the remaining runs of the shared `perspectives` quota from the existing `GET /api/usage/today` (`usage.perspectives.{used,limit}`, `-1` = unlimited), and shows a failed run's projection when an error body carries `explanation`.
+- **Codex audit fixes (Task 13)**: the repo has no DOM test setup, so component decisions live in the view model and are tested as pure functions. (1) `submitExplanation` keeps the idempotency key (`PendingRequest`, bound to subject + locale) for every ambiguous outcome (network, 5xx, gateway, unreadable body) and clears it only for a definitive answer (`explainOutcome`: done / run_failed / refused); tested over a fake idempotent server (persisted completion → 500 → retry → same id, one provider call). (2) `explainControls` renders explicit loading / read-error phases and disables generation until the existing-run lookup succeeded (a held id still allows the safe retry). (3) The matrix links its own manifest with cutoff and version (`matrixMeta`) and the drawer lists each event's frozen base / end inputs (`eventEvidence`, via `ObsRefTable`). (4) Mobile groups keep the drill (`source` cell / `refs`) and the episode line and flags. (5) The explanation header links the full projection manifest and every fact shows its stable `fact_id` as a citation into that manifest (`factCitation`); hypotheses carry their cited `factIds`.
 - No component reads `process.env` or imports a server-only module (`port`, `db`, `flags`, `llm-deps`, `route-helpers` values, `f4-client`, `@/lib/supabase/*`); type-only imports of `route-helpers` response shapes are allowed. Task 14's page test enforces this.
 
 - [ ] **Step 1: Write the failing message test**
@@ -9310,7 +9311,7 @@ import {resolve} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import type {Boundary,DiffKind,ExclusionReason,NodeState,NewlySubkind,Regime} from '@/lib/macro/strategy/contract';
 import {FORBIDDEN_TERMS} from '@/lib/macro/strategy/explain-validate';
-import {KNOWN_FAILURES,REVIEW_SECTIONS,type PanelState} from './strategy-view-model';
+import {KNOWN_FAILURES,REVIEW_SECTIONS,type PanelPhase} from './strategy-view-model';
 const load=(l:'zh'|'en'):unknown=>JSON.parse(readFileSync(resolve(process.cwd(),'messages',l,'macroStrategy.json'),'utf8'));
 function flat(v:unknown,p=''):[string,string][]{
  if(typeof v==='string')return [[p,v]];
@@ -9330,7 +9331,7 @@ const FAMILIES:Record<string,readonly string[]>={
  'history.direction':['hike','cut'],
  'review.section':REVIEW_SECTIONS,
  'review.status':['ok','insufficient','none'],
- 'explain.state':['none','running','accepted','rejected','failed'] satisfies readonly PanelState[],
+ 'explain.state':['none','loading','readError','running','accepted','rejected','failed'] satisfies readonly PanelPhase[],
  'explain.subject':['snapshot','review'],
  'explain.failure':KNOWN_FAILURES,
  'deviation.kind':['revised','dropped','unchanged','newly_available'] satisfies readonly DiffKind[],
@@ -9371,7 +9372,7 @@ Create `src/components/macro/strategy/strategy-view-model.test.ts`:
 import {describe,expect,it} from 'vitest';
 import type {Cell,CycleTableView,DeviationCase,Episode,EventRow,ExplanationProjection,F4Summary,Fact,NodeView,ObsRef,PlaybookView,PolicyResponseView,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
 import {MINUS,MISSING,barGeometry,closedMonths,columnMedians,coverageText,cycleCell,cycleGroups,deviationRows,episodeView,errorCode,eventRows,explainErrorText,f4SummaryDisplay,failureLabel,flowRows,
- episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
+ episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixMeta,eventEvidence,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
  projectionOfError,quantile7,remainingToday,renderedSections,reviewGrid,reviewSections,roundDecimalText,strategyApi,toneClass,toneLevel,toneOfText,uniformReason,type StrategyT} from './strategy-view-model';
 
 const t:StrategyT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
@@ -9511,6 +9512,25 @@ describe('policy response matrix (spec §5.3)',()=>{
   expect(g.map(x=>x.label)).toEqual(['美元广义 %','标普 %']);
   expect(g[0].rows.map(r=>[r.direction,r.cell.main])).toEqual([['hike','+1.2%'],['qe_qt','state.missing']]);
  });
+ it('mobile groups keep the desktop drill: every drillable cell carries its Cell, n < 5 included',()=>{
+  const g=matrixGroups(view,'zh',t);
+  for(const grp of g)for(const r of grp.rows)expect([r.cell.drill,r.source===view.rows.find(x=>x.direction===r.direction)!.cells[grp.id]]).toEqual([r.cell.drill,true]);
+  const few:PolicyResponseView={...view,rows:[{direction:'hike',cells:{US_DTWEXBGS:{status:'events_only',n:3,unit:'pct',events:[ev({})]},US_SP500:{status:'missing',reason:{zh:'无',en:'none'}}}}]};
+  const fg=matrixGroups(few,'zh',t)[0].rows[0];
+  expect([fg.cell.drill,fg.cell.main,fg.cell.sub,fg.source.status]).toEqual([true,'matrix.n{"n":3}','matrix.fewEvents','events_only']);
+  expect(matrixGroups(few,'zh',t)[1].rows[0].cell.drill).toBe(false);
+ });
+ it('matrix meta links its own manifest and shows cutoff and version',()=>{
+  expect(matrixMeta({...view,manifest_id:'man-pr',cutoff:'2026-11-03T00:00:00Z',version:'macro-policy-response/1'},t)).toEqual({
+   href:'/api/macro/strategy/manifests/man-pr',manifest:'meta.manifest{"id":"man-pr"}',fullId:'man-pr',cutoff:'meta.cutoff{"time":"2026-11-03 00:00 UTC"}',version:'macro-policy-response/1'});
+ });
+ it('event evidence exposes base and end inputs with exact dates, values, versions and sources',()=>{
+  const base=[ref('US_DTWEXBGS','2022-02-28','112.6')],end=[{...ref('US_DTWEXBGS','2022-05-31','115.48'),version:3,source:{kind:'history' as const,as_of:'2026-11-03T00:00:00Z'}}];
+  const e=ev({base:{period_end:'2022-02-28',value_text:'112.6',inputs:base},end:{period_end:'2022-05-31',value_text:'115.48',inputs:end}});
+  const out=eventEvidence([e,ev({effective_date:'2022-06-16',base:null,end:null,selected:false,exclusion:'missing_endpoint'})]);
+  expect(out).toEqual([{key:'2022-03-17',date:'2022-03-17',base:base,end:end},{key:'2022-06-16',date:'2022-06-16',base:[],end:[]}]);
+  expect(out[0].end[0]).toMatchObject({value_text:'115.48',version:3,available_at:'2022-05-31T12:00:00Z',source:{kind:'history'}});
+ });
 });
 
 describe('policy action episodes × assets (spec §5.5)',()=>{
@@ -9538,6 +9558,15 @@ describe('policy action episodes × assets (spec §5.5)',()=>{
   expect(episodeView(view.episodes[1],t)).toEqual({key:'cut:2024-09-19',direction:'history.direction.cut',dates:'2024-09-19 → 2025-12-11',
    line:`history.episodeLine{"from":"5.50","to":"3.75","bp":"${MINUS}175 bp","n":6}`,flags:['history.flag.ongoing']});
   expect(episodeView({...view.episodes[0],left_censored:true,gap_after:true},t).flags).toEqual(['history.flag.leftCensored','history.flag.gapAfter']);
+ });
+ it('mobile groups keep episode annotations and the endpoint drill',()=>{
+  const v:CycleTableView={...view,episodes:[{...view.episodes[0],left_censored:true,gap_after:true},view.episodes[1]]};
+  const g=cycleGroups(v,t,'zh');
+  expect(g[0].rows[0]).toMatchObject({flags:['history.flag.leftCensored','history.flag.gapAfter'],line:expect.stringContaining('history.episodeLine'),
+   cell:{drill:true},drillTitle:'history.cellTitle{"episode":"history.direction.hike 2022-03-17 → 2023-07-27","column":"美债10Y"}'});
+  expect(g[0].rows[0].refs.map(r=>r.observation_id)).toEqual(['obs:US_DGS10:2022-02-28:v1','obs:US_DGS10:2023-07-31:v1']);
+  expect(g[0].rows[1].flags).toEqual(['history.flag.ongoing']);
+  expect(g[1].rows[1]).toMatchObject({cell:{drill:false},refs:[]});
  });
  it('type-7 median per column and centred bars',()=>{
   expect(quantile7([1,2,3,4],0.5)).toBe(2.5);expect(quantile7([1,2,3,4],0.25)).toBe(1.75);expect(quantile7([7],0.5)).toBe(7);
@@ -9585,8 +9614,9 @@ describe('explanation panel (spec §3.6, §6.3)',()=>{
   expect(latestFor([],'en')).toBeNull();
  });
  it('fact sentences are numbered; hypotheses cite them by number; unknown ids drop',()=>{
-  expect(renderedSections({facts:[{fact_id:'obs:a',text:'A'},{fact_id:'chg:b',text:'B'}],hypotheses:[{text:'H',fact_ids:['chg:b','zz']}],counterpoints:[{text:'C',fact_ids:['obs:a']}]})).toEqual({
-   facts:[{n:1,factId:'obs:a',text:'A'},{n:2,factId:'chg:b',text:'B'}],hypotheses:[{text:'H',refs:[2]}],counterpoints:[{text:'C',refs:[1]}]});
+  expect(renderedSections({facts:[{fact_id:'obs:a',text:'A'},{fact_id:'chg:b',text:'B'}],hypotheses:[{text:'H',fact_ids:['chg:b','zz']}],counterpoints:[{text:'C',fact_ids:['obs:a']}]},'man-1')).toEqual({
+   facts:[{n:1,factId:'obs:a',text:'A',href:'/api/macro/strategy/manifests/man-1#fact=obs%3Aa'},{n:2,factId:'chg:b',text:'B',href:'/api/macro/strategy/manifests/man-1#fact=chg%3Ab'}],
+   hypotheses:[{text:'H',refs:[2],factIds:['chg:b']}],counterpoints:[{text:'C',refs:[1],factIds:['obs:a']}]});
  });
  it('header names subject, manifest, model, prompt and validator versions',()=>{
   expect(headerLine(proj({}),t)).toBe('explain.header{"subject":"explain.subject.review{\\"id\\":\\"aaaaaaaa…\\"}","manifest":"bbbbbbbb…","model":"deepseek/deepseek-chat","prompt":"macro-explain-prompt/1","validator":"macro-explain-validator/1"}');
@@ -9619,6 +9649,125 @@ describe('deviation cases (spec §6.4)',()=>{
    ['US_PPI','deviation.kind.dropped',null,'v1 · 2.4',MISSING],
    ['US_UNRATE','deviation.kind.newly_available','deviation.subkind.later_period',MISSING,'v1 · 4.2']]);
   expect(deviationRows(c,true).rows.map(x=>x.kindKey).at(-1)).toBe('deviation.kind.unchanged');
+ });
+});
+```
+
+Create `src/components/macro/strategy/explain-flow.test.ts` (Codex audit fix: request-id retention, loading / read-error phases and manifest citations; the repo has no DOM test setup, so the panel state machine is tested as pure functions over a fake idempotent server):
+
+```ts
+// Explanation panel decisions that used to live inside the component (Task 13 Codex audit): request-id retention after
+// ambiguous outcomes, explicit loading / read-error phases that disable generation, and manifest citations taken from
+// the projection. The repo has no DOM test setup (vitest runs in node, no testing-library), so the component's state
+// machine is exercised here as pure functions over a fake idempotent server.
+import {describe,expect,it} from 'vitest';
+import type {ExplanationProjection} from '@/lib/macro/strategy/contract';
+import {explainControls,explainOutcome,explainPendingKey,factCitation,generateLabelKey,pendingFor,strategyApi,submitExplanation,type PendingRequest,type StrategyT} from './strategy-view-model';
+
+const t:StrategyT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
+const proj=(o:Partial<ExplanationProjection>={}):ExplanationProjection=>({explanation_id:'e1',subject_kind:'snapshot',subject_id:'snap:US:1',locale:'en',manifest_id:'man-explain-1',state:'accepted',
+ rendered:null,failure_codes:[],provider:'p',model:'m',prompt_version:'pv',validator_version:'vv',created_at:'c',finished_at:null,...o});
+const subject={kind:'snapshot' as const,id:'snap:US:1'};
+const res=(status:number,body:unknown):Response=>({status,ok:status>=200&&status<300,json:async()=>{if(body===undefined)throw new Error('bad json');return body;}}) as Response;
+
+/** Fake route: one provider call per request id; a stored completion is replayed by the same id (spec §6.3 idempotency). */
+function fakeServer(script:('finish_fails'|'gateway'|'ok')[]){
+ const stored = new Map<string,ExplanationProjection>();let providerCalls=0;const ids:string[]=[];
+ const fetchFn=(async(_u:string,init:{body:string})=>{
+  const {request_id}=JSON.parse(init.body) as {request_id:string};ids.push(request_id);
+  const hit=stored.get(request_id);
+  if(hit)return res(200,hit);
+  const step=script.shift()??'ok';
+  if(step==='gateway')return res(502,{});
+  providerCalls+=1;
+  const p=proj({explanation_id:`run-${request_id}`});
+  stored.set(request_id,p);
+  return step==='finish_fails'?res(500,{error:{code:'internal',message:'x'}}):res(200,p);
+ }) as unknown as typeof fetch;
+ return {fetchFn,calls:()=>providerCalls,ids};
+}
+
+describe('request id retention (ambiguous outcomes)',()=>{
+ it('classifies outcomes: only unknown results are ambiguous',()=>{
+  expect(explainOutcome(200,proj()).kind).toBe('done');
+  expect(explainOutcome(200,{nope:1})).toEqual({kind:'ambiguous',code:'unreadable'});
+  expect(explainOutcome(null,null)).toEqual({kind:'ambiguous',code:'network'});
+  expect(explainOutcome(500,{error:{code:'internal'}})).toEqual({kind:'ambiguous',code:'internal'});
+  expect(explainOutcome(502,null)).toEqual({kind:'ambiguous',code:'http_502'});
+  expect(explainOutcome(429,{error:{code:'quota_exceeded'}})).toEqual({kind:'refused',code:'quota_exceeded'});
+  expect(explainOutcome(409,{error:{code:'payload_conflict'}})).toEqual({kind:'refused',code:'payload_conflict'});
+  expect(explainOutcome(503,{error:{code:'llm_not_configured'}}).kind).toBe('refused');
+  const failed=proj({state:'failed'});
+  expect(explainOutcome(500,{error:{code:'usage_audit_unavailable'},explanation:failed})).toEqual({kind:'run_failed',code:'usage_audit_unavailable',projection:failed});
+ });
+ it('completion persisted → HTTP 500 → retry → same request id, no second provider call',async()=>{
+  const s=fakeServer(['finish_fails']);let n=0;const gen=()=>`req-${++n}`;
+  const first=await submitExplanation({fetch:s.fetchFn,gen},null,subject,'en');
+  expect(first.outcome.kind).toBe('ambiguous');expect(first.pending).toEqual({key:explainPendingKey(subject,'en'),id:'req-1'});
+  const second=await submitExplanation({fetch:s.fetchFn,gen},first.pending,subject,'en');
+  expect(second.outcome.kind).toBe('done');expect(second.pending).toBeNull();
+  expect(s.ids).toEqual(['req-1','req-1']);expect(s.calls()).toBe(1);expect(n).toBe(1);
+ });
+ it('gateway failure and unreadable body also keep the id; network error too',async()=>{
+  const s=fakeServer(['gateway','ok']);const gen=()=>'g';
+  const a=await submitExplanation({fetch:s.fetchFn,gen},null,subject,'en');
+  expect(a.pending?.id).toBe('g');
+  const throwing=(async()=>{throw new TypeError('offline');}) as unknown as typeof fetch;
+  expect((await submitExplanation({fetch:throwing,gen:()=>'h'},null,subject,'en')).pending?.id).toBe('h');
+  const unreadable=(async()=>res(200,undefined)) as unknown as typeof fetch;
+  expect((await submitExplanation({fetch:unreadable,gen:()=>'u'},null,subject,'en')).outcome).toEqual({kind:'ambiguous',code:'unreadable'});
+ });
+ it('definitive answers clear the id so the next click is a new request',async()=>{
+  const refused=(async()=>res(429,{error:{code:'quota_exceeded'}})) as unknown as typeof fetch;
+  const r=await submitExplanation({fetch:refused,gen:()=>'a'},null,subject,'en');
+  expect([r.pending,r.outcome.kind]).toEqual([null,'refused']);
+ });
+ it('a pending id is reused only for the same subject and locale',()=>{
+  const p:PendingRequest={key:explainPendingKey(subject,'en'),id:'keep'};
+  expect(pendingFor(p,subject,'en')).toBe('keep');expect(pendingFor(p,subject,'zh')).toBeNull();expect(pendingFor(p,{kind:'review',id:'x'},'en')).toBeNull();expect(pendingFor(null,subject,'en')).toBeNull();
+ });
+ it('button label says retry whenever an id is held',()=>{
+  expect(generateLabelKey('none',null,false)).toBe('explain.generate');
+  expect(generateLabelKey('none','internal',true)).toBe('explain.retry');
+  expect(generateLabelKey('failed',null,false)).toBe('explain.regenerate');
+  expect(generateLabelKey('none','quota_exceeded',false)).toBe('explain.regenerate');
+ });
+});
+
+describe('explicit loading and read-error phases',()=>{
+ const base={busy:false,hasCurrent:false,pending:false};
+ it('delayed GET: loading disables generation instead of showing "not generated"',()=>{
+  expect(explainControls({...base,listKind:'loading',projection:null})).toEqual({phase:'loading',canGenerate:false,showGenerate:true,showReload:false});
+ });
+ it('failed GET: read error disables generation and offers a reload',()=>{
+  for(const k of ['error','disabled','foundation','not_found'] as const)
+   expect(explainControls({...base,listKind:k,projection:null})).toEqual({phase:'readError',canGenerate:false,showGenerate:true,showReload:true});
+ });
+ it('refresh of a running request returns to loading, then to running; never enabled in between',()=>{
+  const running=proj({state:'running'});
+  expect(explainControls({...base,listKind:'loading',projection:null})).toMatchObject({phase:'loading',canGenerate:false});
+  expect(explainControls({...base,listKind:'ok',projection:running})).toEqual({phase:'running',canGenerate:false,showGenerate:false,showReload:false});
+ });
+ it('after a successful GET with nothing stored, generation is enabled; a stored result keeps regenerate',()=>{
+  expect(explainControls({...base,listKind:'ok',projection:null})).toMatchObject({phase:'none',canGenerate:true});
+  expect(explainControls({...base,listKind:'ok',projection:proj()})).toMatchObject({phase:'accepted',canGenerate:true});
+ });
+ it('our own POST result stands even while the list reloads; busy always disables; a held id allows the safe retry',()=>{
+  expect(explainControls({...base,hasCurrent:true,listKind:'loading',projection:proj()})).toMatchObject({phase:'accepted',canGenerate:true});
+  expect(explainControls({...base,busy:true,listKind:'ok',projection:null})).toMatchObject({phase:'running',canGenerate:false});
+  expect(explainControls({...base,pending:true,listKind:'error',projection:null})).toMatchObject({phase:'readError',canGenerate:true});
+ });
+});
+
+describe('manifest citations come from the projection',()=>{
+ it('fact citations point into the explanation manifest, never a page manifest',()=>{
+  const href=factCitation('man-explain-1','chg:US_DFF:2026-10');
+  expect(href).toBe(`${strategyApi.manifest('man-explain-1')}#fact=chg%3AUS_DFF%3A2026-10`);
+  expect(href).not.toContain('man-transmission');
+ });
+ it('the full manifest id is available for the link text (not only the short id)',()=>{
+  expect(strategyApi.manifest(proj().manifest_id)).toBe('/api/macro/strategy/manifests/man-explain-1');
+  expect(t('meta.manifestLink')).toBe('meta.manifestLink');
  });
 });
 ```
@@ -9802,8 +9951,17 @@ export function coverageText(d:ResponseDim,t:StrategyT):string{
 }
 export const dimLabel=(d:ResponseDim,l:Locale):string=>`${d.label[l]} ${d.unit==='pct'?'%':'bp'}`;
 /** Mobile (< 640px) fallback: one group per column, one line per policy row (spec §3.7). */
-export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:string;label:string;coverage:string;rows:{direction:'hike'|'cut'|'qe_qt';cell:CellDisplay}[]}[]{
- return v.dims.map(d=>({id:d.id,label:dimLabel(d,l),coverage:coverageText(d,t),rows:v.rows.map(r=>({direction:r.direction,cell:matrixCell(cellOf(r,d.id),l,t)}))}));
+export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:string;label:string;coverage:string;rows:{direction:'hike'|'cut'|'qe_qt';cell:CellDisplay;source:Cell}[]}[]{
+ // `source` is the Cell itself so the mobile list opens the same per-event drawer as the desktop table (n < 5 included).
+ return v.dims.map(d=>({id:d.id,label:dimLabel(d,l),coverage:coverageText(d,t),rows:v.rows.map(r=>{const source=cellOf(r,d.id);return {direction:r.direction,cell:matrixCell(source,l,t),source};})}));
+}
+/** The matrix's own manifest, cutoff and version (spec §3.2): the page header links the transmission manifest, not this one. */
+export function matrixMeta(v:PolicyResponseView,t:StrategyT):{href:string;manifest:string;fullId:string;cutoff:string;version:string}{
+ return {href:strategyApi.manifest(v.manifest_id),manifest:t('meta.manifest',{id:shortId(v.manifest_id)}),fullId:v.manifest_id,cutoff:t('meta.cutoff',{time:formatInstant(v.cutoff)}),version:v.version};
+}
+/** Per-event frozen inputs of both endpoints (spread endpoints carry two observations each): dates, values, versions, sources. */
+export function eventEvidence(events:EventRow[]):{key:string;date:string;base:ObsRef[];end:ObsRef[]}[]{
+ return events.map(e=>({key:e.effective_date,date:e.effective_date,base:e.base?.inputs??[],end:e.end?.inputs??[]}));
 }
 // ---- policy action episodes × assets (spec §3.4, §5.5)
 export function cycleCell(c:CycleCell,t:StrategyT):CellDisplay&{refs:ObsRef[]}{
@@ -9849,8 +10007,12 @@ export function episodesEmptyKey(v:CycleTableView):string|null{
  if(v.episodes.length>0)return null;
  return v.gaps.some(g=>g.kind==='history_truncated')?'history.eventsTruncated':'history.noEpisodes';
 }
-export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:{key:string;episode:string;cell:CellDisplay}[]}[]{
- return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{const ev=episodeView(e,t);return {key:ev.key,episode:`${ev.direction} ${ev.dates}`,cell:cycleCell(cycleCellOf(v,e,c.id),t)};})}));
+export interface CycleGroupRow{key:string;episode:string;line:string;flags:string[];cell:CellDisplay;refs:ObsRef[];drillTitle:string}
+/** Mobile (< 640px) list per column: keeps the episode line, its left-censored / ongoing / gap flags and the endpoint drill. */
+export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:CycleGroupRow[]}[]{
+ return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{
+  const ev=episodeView(e,t),cell=cycleCell(cycleCellOf(v,e,c.id),t),episode=`${ev.direction} ${ev.dates}`;
+  return {key:ev.key,episode,line:ev.line,flags:ev.flags,cell,refs:cell.refs,drillTitle:t('history.cellTitle',{episode,column:c.label[l]})};})}));
 }
 // ---- monthly review (spec §3.5, §6.2)
 export const REVIEW_SECTIONS=['releases','revisions','timeliness','policy_events','episode_changes','asset_moves','coverage'] as const;
@@ -9881,10 +10043,14 @@ export function panelState(p:ExplanationProjection|null):PanelState{
 }
 /** Newest projection in the page locale (the list arrives newest first). */
 export const latestFor=(items:ExplanationProjection[],l:Locale):ExplanationProjection|null=>items.find(p=>p.locale===l)??null;
-export function renderedSections(r:RenderedExplanation):{facts:{n:number;factId:string;text:string}[];hypotheses:{text:string;refs:number[]}[];counterpoints:{text:string;refs:number[]}[]}{
+/** Citation into the explanation's own frozen manifest (its explain_facts manifest, spec §3.6): the fact_id is the stable key in manifest.facts. */
+export const factCitation=(manifestId:string,factId:string):string=>`${strategyApi.manifest(manifestId)}#fact=${encodeURIComponent(factId)}`;
+export function renderedSections(r:RenderedExplanation,manifestId:string):{facts:{n:number;factId:string;text:string;href:string}[];hypotheses:{text:string;refs:number[];factIds:string[]}[];counterpoints:{text:string;refs:number[];factIds:string[]}[]}{
  const index=new Map(r.facts.map((f,i)=>[f.fact_id,i+1]));
  const refs=(ids:string[])=>ids.map(id=>index.get(id)).filter((n):n is number=>n!==undefined);
- return {facts:r.facts.map((f,i)=>({n:i+1,factId:f.fact_id,text:f.text})),hypotheses:r.hypotheses.map(h=>({text:h.text,refs:refs(h.fact_ids)})),counterpoints:r.counterpoints.map(c=>({text:c.text,refs:refs(c.fact_ids)}))};
+ const known=(ids:string[])=>ids.filter(id=>index.has(id));
+ return {facts:r.facts.map((f,i)=>({n:i+1,factId:f.fact_id,text:f.text,href:factCitation(manifestId,f.fact_id)})),
+  hypotheses:r.hypotheses.map(h=>({text:h.text,refs:refs(h.fact_ids),factIds:known(h.fact_ids)})),counterpoints:r.counterpoints.map(c=>({text:c.text,refs:refs(c.fact_ids),factIds:known(c.fact_ids)}))};
 }
 export function headerLine(p:ExplanationProjection,t:StrategyT):string{
  return t('explain.header',{subject:t(`explain.subject.${p.subject_kind}`,{id:shortId(p.subject_id)}),manifest:shortId(p.manifest_id),
@@ -9900,8 +10066,51 @@ export function remainingToday(body:unknown):{kind:'unlimited'}|{kind:'count';n:
  if(!p||typeof p.used!=='number'||typeof p.limit!=='number')return null;
  return p.limit===-1?{kind:'unlimited'}:{kind:'count',n:Math.max(0,p.limit-p.used)};
 }
-/** A request id is reused only to retry after a network failure (pending); otherwise every submit is a new request. */
+/** A request id is reused only to retry after an ambiguous outcome (pending); otherwise every submit is a new request. */
 export const nextRequestId=(pending:string|null,gen:()=>string):string=>pending??gen();
+/** A held request id: bound to the subject and locale it was minted for (a different payload under the same id would be a 409). */
+export interface PendingRequest{key:string;id:string}
+export const explainPendingKey=(subject:{kind:string;id:string},locale:Locale):string=>`${subject.kind}:${subject.id}:${locale}`;
+export const pendingFor=(pending:PendingRequest|null,subject:{kind:string;id:string},locale:Locale):string|null=>pending&&pending.key===explainPendingKey(subject,locale)?pending.id:null;
+const REFUSED_CODES:readonly string[]=['quota_exceeded','llm_not_configured','no_facts','subject_not_found','payload_conflict','invalid_body','unauthorized'];
+export type ExplainOutcome=
+ |{kind:'done';projection:ExplanationProjection}
+ |{kind:'run_failed';projection:ExplanationProjection;code:string}   // the server finished the run as failed (its projection came back)
+ |{kind:'refused';code:string}                                       // definitively not started (4xx / known code): a new request is right
+ |{kind:'ambiguous';code:string};                                    // 5xx / gateway / network / unreadable: the run may have completed server-side
+/** status null = the fetch itself threw. Only an ambiguous outcome keeps the idempotency key (spec §6.3). */
+export function explainOutcome(status:number|null,body:unknown):ExplainOutcome{
+ if(status===null)return {kind:'ambiguous',code:'network'};
+ if(status>=200&&status<300){
+  const p=(body as {explanation_id?:unknown}|null)?.explanation_id;
+  return typeof p==='string'?{kind:'done',projection:body as ExplanationProjection}:{kind:'ambiguous',code:'unreadable'};
+ }
+ const code=errorCode(body)??`http_${status}`;
+ const failed=projectionOfError(body);
+ if(failed)return {kind:'run_failed',projection:failed,code};
+ if(REFUSED_CODES.includes(code)||(status>=400&&status<500&&status!==408))return {kind:'refused',code};
+ return {kind:'ambiguous',code};
+}
+export async function submitExplanation(deps:{fetch:typeof fetch;gen:()=>string},pending:PendingRequest|null,subject:{kind:'snapshot'|'review';id:string},locale:Locale):Promise<{pending:PendingRequest|null;outcome:ExplainOutcome}>{
+ const id=nextRequestId(pendingFor(pending,subject,locale),deps.gen);
+ const held:PendingRequest={key:explainPendingKey(subject,locale),id};
+ let outcome:ExplainOutcome;
+ try{
+  const r=await deps.fetch('/api/macro/strategy/explanations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({request_id:id,subject,locale})});
+  const body:unknown=await r.json().catch(()=>undefined);
+  outcome=explainOutcome(r.status,body===undefined?null:body);
+ }catch{outcome=explainOutcome(null,null);}
+ return {pending:outcome.kind==='ambiguous'?held:null,outcome};
+}
+export type PanelPhase=PanelState|'loading'|'readError';
+/** Phase, button state and reload offer of the panel: nothing is "not generated" until the existing-run lookup has succeeded. */
+export function explainControls(i:{busy:boolean;listKind:LoadState<unknown>['kind'];hasCurrent:boolean;projection:ExplanationProjection|null;pending:boolean}):{phase:PanelPhase;canGenerate:boolean;showGenerate:boolean;showReload:boolean}{
+ const phase:PanelPhase=i.busy?'running':i.hasCurrent||i.listKind==='ok'?panelState(i.projection):i.listKind==='loading'?'loading':'readError';
+ const lookupFailed=phase==='readError',lookingUp=phase==='loading';
+ return {phase,showGenerate:phase!=='running',showReload:lookupFailed,
+  canGenerate:!i.busy&&phase!=='running'&&(i.pending||(!lookupFailed&&!lookingUp))};
+}
+export const generateLabelKey=(state:PanelState,error:string|null,held:boolean):string=>held?'explain.retry':state==='none'&&!error?'explain.generate':'explain.regenerate';
 const EXPLAIN_ERRORS:Record<string,string>={quota_exceeded:'explain.quota',llm_not_configured:'explain.noModel',no_facts:'explain.noFacts',subject_not_found:'explain.noSubject'};
 export function explainErrorText(code:string,t:StrategyT):string{
  if(code==='payload_conflict')return t('explain.conflict',{code});
@@ -10006,6 +10215,11 @@ Create `messages/zh/macroStrategy.json`:
     "drawerTitle": "{direction} · {dim} · {n} 个月窗口",
     "selected": "入选",
     "excluded": "未计入",
+    "evidenceTitle": "输入观测 · {date}",
+    "evidenceBase": "基期输入",
+    "evidenceEnd": "末期输入",
+    "noInputs": "无记录的输入",
+    "openCell": "打开逐事件表",
     "columns": {"date": "生效日", "changeBp": "政策变化", "base": "基期月末", "end": "末期月末", "change": "变化", "status": "状态"},
     "exclusion": {"incomplete_window": "窗口不完整", "overlap": "窗口与较早入选事件重叠", "non_positive_base": "基值非正", "missing_endpoint": "端点缺失"}
   },
@@ -10053,7 +10267,13 @@ Create `messages/zh/macroStrategy.json`:
   },
   "explain": {
     "title": "解读",
-    "state": {"none": "未生成", "running": "生成中", "accepted": "已接受", "rejected": "未通过校验", "failed": "失败"},
+    "state": {"none": "未生成", "loading": "读取中", "readError": "读取失败", "running": "生成中", "accepted": "已接受", "rejected": "未通过校验", "failed": "失败"},
+    "loadingList": "正在查询该对象已有的解读；查询完成前不能生成。",
+    "readError": "无法读取已有解读（{code}）；为避免重复生成正在运行或已保存的解读，已停用生成。",
+    "reloadList": "重新读取",
+    "pendingNote": "上一次请求的结果未知。重试会沿用同一请求，已保存的结果会被取回，不会再次调用模型。",
+    "manifestFull": "解读清单",
+    "factId": "事实标识 {id}",
     "header": "绑定 {subject} · 清单 {manifest} · 模型 {model} · 提示 {prompt} · 校验 {validator}",
     "subject": {"snapshot": "快照 {id}", "review": "复盘 {id}"},
     "disclaimer": "事实句由系统从冻结数据生成；机制假设由模型生成，未经核实。",
@@ -10181,6 +10401,11 @@ Create `messages/en/macroStrategy.json`:
     "drawerTitle": "{direction} · {dim} · {n}-month window",
     "selected": "Selected",
     "excluded": "Excluded",
+    "evidenceTitle": "Input observations · {date}",
+    "evidenceBase": "Base inputs",
+    "evidenceEnd": "End inputs",
+    "noInputs": "No inputs recorded",
+    "openCell": "Open the per-event table",
     "columns": {"date": "Effective date", "changeBp": "Policy change", "base": "Base month end", "end": "End month end", "change": "Change", "status": "Status"},
     "exclusion": {"incomplete_window": "Incomplete window", "overlap": "Window overlaps an earlier selected event", "non_positive_base": "Non-positive base", "missing_endpoint": "Missing endpoint"}
   },
@@ -10228,7 +10453,13 @@ Create `messages/en/macroStrategy.json`:
   },
   "explain": {
     "title": "Explanation",
-    "state": {"none": "Not generated", "running": "Generating", "accepted": "Accepted", "rejected": "Failed validation", "failed": "Failed"},
+    "state": {"none": "Not generated", "loading": "Loading", "readError": "Could not read", "running": "Generating", "accepted": "Accepted", "rejected": "Failed validation", "failed": "Failed"},
+    "loadingList": "Looking up earlier explanations for this subject; generation stays off until the lookup finishes.",
+    "readError": "Earlier explanations could not be read ({code}); generation is off so a running or stored explanation is not duplicated.",
+    "reloadList": "Read again",
+    "pendingNote": "The outcome of the last request is unknown. Retrying reuses the same request, so a stored result is recovered without a second model call.",
+    "manifestFull": "Explanation manifest",
+    "factId": "Fact id {id}",
     "header": "Bound to {subject} · manifest {manifest} · model {model} · prompt {prompt} · validator {validator}",
     "subject": {"snapshot": "snapshot {id}", "review": "review {id}"},
     "disclaimer": "Fact sentences are generated by the system from frozen data; mechanism hypotheses are written by the model and are unverified.",
@@ -10300,7 +10531,7 @@ If the P1 `// MACRO` block (`'macro'`) is already present when this task runs, k
 - [ ] **Step 7: Run both tests to verify they pass**
 
 Run: `npm test -- src/components/macro/strategy`
-Expected: PASS, `Tests  38 passed (38)` (view model 33, messages 5).
+Expected: PASS, `Tests  55 passed (55)` (view model 37, explain flow 13, messages 5).
 
 - [ ] **Step 8: Add the hooks**
 
@@ -10665,12 +10896,13 @@ Create `src/components/macro/strategy/PolicyResponseMatrix.tsx`:
 // Fed policy → US/CN asset response matrix (spec §3.3, §5.3): rows hike / cut / QE·QT, columns are dimensions with
 // their real coverage in the header, cells give the median with type-7 quartiles and n (n < 5 → per-event only), asset
 // moves washed by sign in three levels. A cell opens the per-event drawer (selected and excluded events with reasons).
-// Below sm the table becomes one list per column.
+// Below sm the table becomes one list per column; its drillable cells open the same drawer. The matrix links its own
+// manifest with cutoff and version, and each event lists the frozen base / end input observations.
 import { useMemo, useState } from 'react';
 import { Button, Panel } from '@/components/ui';
 import type { Cell, PolicyResponseView, ResponseDim } from '@/lib/macro/strategy/contract';
-import { EvidencePairDrawer } from './EvidencePairDrawer';
-import { cellEvents, cellOf, coverageText, dimLabel, eventRows, matrixCell, matrixGroups, matrixScale, toneClass, toneLevel, uniformReason } from './strategy-view-model';
+import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
+import { cellEvents, cellOf, coverageText, dimLabel, eventEvidence, eventRows, matrixCell, matrixGroups, matrixMeta, matrixScale, toneClass, toneLevel, uniformReason } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 const WINDOWS = [1, 3, 6] as const;
@@ -10679,6 +10911,7 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
   const { t, locale } = useStrategyT();
   const [drill, setDrill] = useState<{ direction: string; dim: ResponseDim; cell: Cell } | null>(null);
   const scale = useMemo(() => matrixScale(view), [view]);
+  const meta = matrixMeta(view, t);
   return (
     <Panel className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -10743,13 +10976,28 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
               {g.rows.map((r) => (
                 <li key={r.direction} className="flex justify-between gap-2">
                   <span>{t(`matrix.rows.${r.direction}`)}</span>
-                  <span className="text-right"><span className="font-mono tabular-nums">{r.cell.main}</span>{r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}</span>
+                  {(() => {
+                    const body = (
+                      <>
+                        <span className="font-mono tabular-nums">{r.cell.main}</span>
+                        {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
+                      </>
+                    );
+                    const dim = view.dims.find((d) => d.id === g.id)!;
+                    return r.cell.drill ? (
+                      <button type="button" className="text-right underline-offset-2 hover:underline" aria-label={`${t(`matrix.rows.${r.direction}`)} · ${g.label} · ${t('matrix.openCell')}`} onClick={() => setDrill({ direction: r.direction, dim, cell: r.source })}>{body}</button>
+                    ) : <span className="text-right">{body}</span>;
+                  })()}
                 </li>
               ))}
             </ul>
           </section>
         ))}
       </div>
+      <p className="font-mono text-[11px] text-text-dim">
+        <a className="text-accent hover:underline" href={meta.href} title={meta.fullId}>{meta.manifest}</a>
+        {' · '}{meta.cutoff}{' · '}{meta.version}
+      </p>
       <p className="text-[11px] text-text-dim">{t('matrix.footer')}</p>
       {view.sentences.map((s, i) => <p key={i} className="text-xs text-text-dim">{s[locale]}</p>)}
       <EvidencePairDrawer
@@ -10758,7 +11006,8 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
         onClose={() => setDrill(null)}
       >
         {drill ? (
-          <div className="overflow-x-auto">
+          <div className="space-y-3">
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-text-dim">
@@ -10778,6 +11027,18 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
                 ))}
               </tbody>
             </table>
+            </div>
+            {eventEvidence(cellEvents(drill.cell)).map((e) => (
+              <details key={e.key} className="rounded border border-border p-2">
+                <summary className="cursor-pointer text-xs font-semibold">{t('matrix.evidenceTitle', { date: e.date })}</summary>
+                <div className="mt-2 space-y-2">
+                  <h4 className="text-[11px] text-text-dim">{t('matrix.evidenceBase')}</h4>
+                  {e.base.length > 0 ? <ObsRefTable refs={e.base} /> : <p className="text-[11px] text-text-dim">{t('matrix.noInputs')}</p>}
+                  <h4 className="text-[11px] text-text-dim">{t('matrix.evidenceEnd')}</h4>
+                  {e.end.length > 0 ? <ObsRefTable refs={e.end} /> : <p className="text-[11px] text-text-dim">{t('matrix.noInputs')}</p>}
+                </div>
+              </details>
+            ))}
           </div>
         ) : null}
       </EvidencePairDrawer>
@@ -10875,8 +11136,22 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                   <ul className="mt-1 space-y-1 text-xs">
                     {g.rows.map((r) => (
                       <li key={r.key} className="flex justify-between gap-2">
-                        <span className="font-mono text-[11px] tabular-nums">{r.episode}</span>
-                        <span className="text-right"><span className="font-mono tabular-nums">{r.cell.main}</span>{r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}</span>
+                        <span>
+                          <span className="font-mono text-[11px] tabular-nums">{r.episode}</span>
+                          <span className="block font-mono text-[10px] tabular-nums text-text-dim">{r.line}</span>
+                          {r.flags.length > 0 ? <span className="mt-0.5 flex flex-wrap gap-1">{r.flags.map((f) => <Tag key={f} tone="accent">{t(f)}</Tag>)}</span> : null}
+                        </span>
+                        {(() => {
+                          const body = (
+                            <>
+                              <span className="font-mono tabular-nums">{r.cell.main}</span>
+                              {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
+                            </>
+                          );
+                          return r.cell.drill ? (
+                            <button type="button" className="text-right underline-offset-2 hover:underline" onClick={() => setDrill({ title: r.drillTitle, refs: r.refs })}>{body}</button>
+                          ) : <span className="text-right">{body}</span>;
+                        })()}
                       </li>
                     ))}
                   </ul>
@@ -11069,14 +11344,15 @@ Create `src/components/macro/strategy/ExplanationPanel.tsx`:
 // LLM explanation panel (spec §3.6, §6.3): not generated → running → accepted (system fact sentences, then the
 // model's hypotheses citing fact numbers) / rejected (failure codes only, never model text) / failed. The fixed header
 // names the bound subject, manifest, model, prompt and validator versions. A request id is reused only for a retry
-// after a network failure. A run whose worker died stays 'running' only until a refresh: GET /explanations first finishes
+// after an ambiguous outcome (network error, gateway or 5xx failure, unreadable body: the run may have completed server-side,
+// and the same id recovers it without a second model call); definitive answers clear it. A run whose worker died stays 'running' only until a refresh: GET /explanations first finishes
 // runs whose model output was already recorded (no second model call), then expires the rest older than five minutes
 // (abandoned → failed), and the failed state offers a new request. Review panels bind to the
 // displayed immutable result_id. Remaining runs come from the shared perspectives quota.
 import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { ExplanationProjection } from '@/lib/macro/strategy/contract';
-import { errorCode, explainErrorText, failureLabel, headerLine, latestFor, nextRequestId, panelState, projectionOfError, remainingToday, renderedSections, strategyApi } from './strategy-view-model';
+import { explainControls, explainErrorText, failureLabel, generateLabelKey, headerLine, latestFor, remainingToday, renderedSections, strategyApi, submitExplanation, type PendingRequest } from './strategy-view-model';
 import { useStrategyFetch } from './use-strategy-fetch';
 import { useStrategyT } from './use-strategy-t';
 
@@ -11086,38 +11362,28 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
   const usage = useStrategyFetch<unknown>('/api/usage/today');
   const [current, setCurrent] = useState<ExplanationProjection | null>(null);
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projection = current ?? (list.state.kind === 'ok' ? latestFor(list.state.data.items, locale) : null);
-  const state = busy ? 'running' : panelState(projection);
+  const controls = explainControls({ busy, listKind: list.state.kind, hasCurrent: current !== null, projection, pending: pending !== null });
+  const phase = controls.phase;
+  const state = phase === 'loading' || phase === 'readError' ? 'none' : phase;
   const remaining = usage.state.kind === 'ok' ? remainingToday(usage.state.data) : null;
 
   async function generate() {
-    const requestId = nextRequestId(pending, () => crypto.randomUUID());
-    setPending(requestId);
     setBusy(true);
     setError(null);
-    try {
-      const r = await fetch('/api/macro/strategy/explanations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ request_id: requestId, subject, locale }),
-      });
-      const body: unknown = await r.json().catch(() => null);
-      setPending(null);
-      if (r.ok) {
-        setCurrent(body as ExplanationProjection);
-        usage.reload();
-      } else {
-        const failed = projectionOfError(body);
-        if (failed) setCurrent(failed);
-        setError(errorCode(body) ?? `http_${r.status}`);
-      }
-    } catch {
-      setError('network');
-    } finally {
-      setBusy(false);
+    const r = await submitExplanation({ fetch: ((u, init) => fetch(u, init)) as typeof fetch, gen: () => crypto.randomUUID() }, pending, subject, locale);
+    setPending(r.pending);
+    const o = r.outcome;
+    if (o.kind === 'done') {
+      setCurrent(o.projection);
+      usage.reload();
+    } else {
+      if (o.kind === 'run_failed') setCurrent(o.projection);
+      setError(o.code);
     }
+    setBusy(false);
   }
 
   function refresh() {
@@ -11125,16 +11391,31 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
     list.reload();
   }
 
-  const sections = state === 'accepted' && projection?.rendered ? renderedSections(projection.rendered) : null;
+  const sections = state === 'accepted' && projection?.rendered ? renderedSections(projection.rendered, projection.manifest_id) : null;
   return (
     <Panel className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">{t('explain.title')}</h2>
-        <Tag>{t(`explain.state.${state}`)}</Tag>
+        <Tag>{t(`explain.state.${phase}`)}</Tag>
       </div>
-      {projection ? <p className="rounded border border-border px-2 py-1 font-mono text-[11px] text-text-dim">{headerLine(projection, t)}</p> : null}
+      {projection ? (
+        <div className="space-y-1 rounded border border-border px-2 py-1 font-mono text-[11px] text-text-dim">
+          <p>{headerLine(projection, t)}</p>
+          <p className="break-all">
+            <a className="text-accent hover:underline" href={strategyApi.manifest(projection.manifest_id)}>{t('explain.manifestFull')} {projection.manifest_id}</a>
+          </p>
+        </div>
+      ) : null}
       <p className="text-[11px] text-text-dim">{t('explain.disclaimer')}</p>
-      {state === 'none' ? <p className="text-xs text-text-dim">{t('explain.intro')}</p> : null}
+      {phase === 'loading' ? <p role="status" className="text-xs text-text-dim">{t('explain.loadingList')}</p> : null}
+      {phase === 'readError' ? (
+        <div role="alert" className="space-y-2">
+          <p className="text-xs text-warn">{t('explain.readError', { code: list.state.kind === 'error' ? list.state.code : list.state.kind })}</p>
+          {controls.showReload ? <Button variant="secondary" size="sm" onClick={refresh}>{t('explain.reloadList')}</Button> : null}
+        </div>
+      ) : null}
+      {phase === 'none' ? <p className="text-xs text-text-dim">{t('explain.intro')}</p> : null}
+      {pending ? <p className="text-[11px] text-text-dim">{t('explain.pendingNote')}</p> : null}
       {state === 'running' ? (
         <div className="space-y-2">
           <p className="text-xs text-text-dim">{t('explain.runningBody')}</p>
@@ -11147,20 +11428,23 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
           <section>
             <h3 className="text-xs text-text-dim">{t('explain.facts')}</h3>
             <ol className="space-y-1">
-              {sections.facts.map((f) => <li key={f.factId}><sup className="mr-1 font-mono text-[10px] text-accent">{f.n}</sup>{f.text}</li>)}
+              {sections.facts.map((f) => <li key={f.factId}>
+                  <sup className="mr-1 font-mono text-[10px] text-accent">{f.n}</sup>{f.text}{' '}
+                  <a className="break-all font-mono text-[10px] text-text-dim hover:underline" href={f.href} title={t('explain.factId', { id: f.factId })}>{f.factId}</a>
+                </li>)}
             </ol>
           </section>
           <section>
             <h3 className="text-xs text-text-dim">{t('explain.hypotheses')}</h3>
             <ul className="space-y-1">
-              {sections.hypotheses.map((h, i) => <li key={i}>{h.text} <span className="font-mono text-[10px] text-text-dim">{t('explain.refs', { refs: h.refs.join(', ') })}</span></li>)}
+              {sections.hypotheses.map((h, i) => <li key={i}>{h.text} <span className="font-mono text-[10px] text-text-dim" title={h.factIds.join(', ')}>{t('explain.refs', { refs: h.refs.join(', ') })}</span></li>)}
             </ul>
           </section>
           {sections.counterpoints.length > 0 ? (
             <section>
               <h3 className="text-xs text-text-dim">{t('explain.counterpoints')}</h3>
               <ul className="space-y-1">
-                {sections.counterpoints.map((c, i) => <li key={i}>{c.text} <span className="font-mono text-[10px] text-text-dim">{t('explain.refs', { refs: c.refs.join(', ') })}</span></li>)}
+                {sections.counterpoints.map((c, i) => <li key={i}>{c.text} <span className="font-mono text-[10px] text-text-dim" title={c.factIds.join(', ')}>{t('explain.refs', { refs: c.refs.join(', ') })}</span></li>)}
               </ul>
             </section>
           ) : null}
@@ -11173,11 +11457,9 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
         </div>
       ) : null}
       {error ? <p role="alert" className="text-xs text-warn">{explainErrorText(error, t)}</p> : null}
-      {state !== 'running' ? (
+      {controls.showGenerate ? (
         <div className="flex flex-wrap items-center gap-3">
-          <Button size="sm" onClick={generate} disabled={busy}>
-            {state === 'none' && !error ? t('explain.generate') : error === 'network' ? t('explain.retry') : t('explain.regenerate')}
-          </Button>
+          <Button size="sm" onClick={generate} disabled={!controls.canGenerate}>{t(generateLabelKey(state, error, pending !== null))}</Button>
           {remaining ? <span className="text-[11px] text-text-dim">{remaining.kind === 'unlimited' ? t('explain.unlimited') : t('explain.remaining', { n: remaining.n })}</span> : null}
         </div>
       ) : null}
@@ -11415,7 +11697,7 @@ export function ReviewScreen({ region, month }: { region: Region; month: string 
 - [ ] **Step 10: Run the module tests again, typecheck and lint**
 
 Run: `npm test -- src/components/macro/strategy`
-Expected: PASS, `Tests  38 passed (38)`.
+Expected: PASS, `Tests  55 passed (55)`.
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0 with no errors and no warnings (the React hooks rule is a warning, and lint runs with `--max-warnings=0`).
