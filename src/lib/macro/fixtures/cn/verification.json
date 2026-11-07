@@ -1,0 +1,229 @@
+[
+ {
+  "series_id": "CN_CPI_INDEX",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "69216e8ef8d01132d256f14da1a5c80154e6be97579848e9c408a3eb5132bc19",
+    "bytes": 82868
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/page.html#/pc/national/monthData",
+    "status": 200,
+    "content_type": "text/html"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=fc982599aa684be7969d7b90b1bd0e84&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=3c9c459384c74f578f3541b2198aac70&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=5b434e4d5e634a39b27a95f8251e9aae&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=5c7452825c7c4dcba391db5ca7f335c5&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 9,
+  "claims_located_in_bytes": 9
+ },
+ {
+  "series_id": "CN_PPI_INDEX",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "30f50c4d1e52f0d270b081679626a3b5ef28bd2ed1baf7c5d2d75e72b9108a65",
+    "bytes": 22450
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=55de73673b3d440585cff051fb2e8694&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=60e8b361f11c4a878c652a6487a25561&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 12,
+  "claims_located_in_bytes": 12
+ },
+ {
+  "series_id": "CN_PMI_MFG",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "d44657d7682f4275057d4411e6507de195178e455a8c147d6e0b75379015df2c",
+    "bytes": 102541
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=8f108f3406d7436b82498390d9e08da7&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=93ffbb1aa85740d3aa2618371508b606&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 13,
+  "claims_located_in_bytes": 13
+ },
+ {
+  "series_id": "CN_GDP_INDEX",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "cae08b7943ccb2044f2bf47e11b7639708a76f4f734d07aa46f39e5dc7e11ca9",
+    "bytes": 149158
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=&code=2",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=a94b8b7365a94874968cabbe392cf679&code=2",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=1b1ce0cfd03646dc9e15103ea4c570f6&code=2",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=f9b694c9b79e4ce5958bc88c6410fa67&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 8,
+  "claims_located_in_bytes": 8
+ },
+ {
+  "series_id": "CN_M2_YOY",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "e144c9939d84b7654d4d9bface151173910b932fd31f3dc4f18da490964faa89",
+    "bytes": 45106
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=4fb2f4d836a24c1a824a26e2b04b7009&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=82130c6621a745cda3d64b090e733383&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 12,
+  "claims_located_in_bytes": 12
+ },
+ {
+  "series_id": "CN_EXPORT_YOY",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData",
+    "status": 200,
+    "sha256": "60b968182b0b4e353e967357ddae0f66db129e48957cb418450196953094915c",
+    "bytes": 101195
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndexTreeAsync?pid=73f0f0fafb31475ab48a309cc25dedd9&code=1",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   },
+   {
+    "url": "https://data.stats.gov.cn/dg/website/publicrelease/web/external/new/queryIndicatorsByCid?cid=7e11b47c828d4e4e925f1c5a98305558&dt=&name=",
+    "status": 200,
+    "content_type": "application/json;charset=UTF-8"
+   }
+  ],
+  "claims": 12,
+  "claims_located_in_bytes": 12
+ },
+ {
+  "series_id": "CN_CGB_10Y_D",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery?startDate=2026-09-22&endDate=2026-11-06&gjqx=0&qxId=ycqx&locale=cn_ZH",
+    "status": 200,
+    "sha256": "727350f408afabfc5e3cd08c050f3fe24522a77a0398e59bdbf2a8066f08aa04",
+    "bytes": 35090
+   }
+  ],
+  "other_responses": [],
+  "claims": 29,
+  "claims_located_in_bytes": 29
+ },
+ {
+  "series_id": "CN_USDCNY_CP_D",
+  "error": null,
+  "evidence": [
+   {
+    "url": "https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do",
+    "status": 200,
+    "sha256": "ec5144b975e31f4c4cc23ef49ad408a63ff5c71d5f98b6e367e4d7d268957346",
+    "bytes": 525478
+   }
+  ],
+  "other_responses": [
+   {
+    "url": "https://www.safe.gov.cn/safe/2020/1218/17833.html",
+    "status": 200,
+    "content_type": "text/html"
+   },
+   {
+    "url": "https://www.safe.gov.cn/safe/file/file/20260106/0f147e5357eb4c12a6406fc575cc21e8.xlsx",
+    "status": 200,
+    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+   }
+  ],
+  "claims": 263,
+  "claims_located_in_bytes": 203
+ }
+]

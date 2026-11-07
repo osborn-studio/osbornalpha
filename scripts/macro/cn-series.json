@@ -1,0 +1,134 @@
+{
+ "version": "cn-series/1",
+ "series": [
+  {
+   "series_id": "CN_CPI_INDEX",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "month",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "居民消费价格指数(上年同月=100)",
+   "kind": "月度数据",
+   "path": "价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-)",
+   "daily_period": "LAST13",
+   "backfill": [
+    {
+     "path": "价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-)",
+     "period": "2026-"
+    },
+    {
+     "path": "价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2021-2025)",
+     "period": "2021-2025"
+    },
+    {
+     "path": "价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2016-2020)",
+     "period": "2016-2020"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "month",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "工业生产者出厂价格指数(上年同月=100)",
+   "kind": "月度数据",
+   "path": "价格指数 > 工业生产者出厂价格分类指数 > 工业生产者出厂价格指数(上年同月=100)",
+   "daily_period": "LAST13",
+   "backfill": [
+    {
+     "path": "价格指数 > 工业生产者出厂价格分类指数 > 工业生产者出厂价格指数(上年同月=100)",
+     "period": "2016-"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "month",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "制造业采购经理指数(%)",
+   "kind": "月度数据",
+   "path": "采购经理指数 > 制造业采购经理指数",
+   "daily_period": "LAST13",
+   "backfill": [
+    {
+     "path": "采购经理指数 > 制造业采购经理指数",
+     "period": "2016-"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "quarter",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "国内生产总值指数(上年同期=100)当季值",
+   "kind": "季度数据",
+   "path": "国民经济核算 > 国内生产总值指数",
+   "daily_period": "LAST8",
+   "backfill": [
+    {
+     "path": "国民经济核算 > 国内生产总值指数",
+     "period": "2016-"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "month",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "货币和准货币(M2)供应量_同比增长(%)",
+   "kind": "月度数据",
+   "path": "金融 > 货币供应量",
+   "daily_period": "LAST13",
+   "backfill": [
+    {
+     "path": "金融 > 货币供应量",
+     "period": "2016-"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "fetch_host": "data.stats.gov.cn",
+   "period": "month",
+   "function": "macro_china_nbs_nation",
+   "evidence_path": "/dg/website/publicrelease/web/external/stream/esData",
+   "column": "出口总值同比增长(%)",
+   "kind": "月度数据",
+   "path": "对外经济 > 货物进出口总额",
+   "daily_period": "LAST13",
+   "backfill": [
+    {
+     "path": "对外经济 > 货物进出口总额",
+     "period": "2016-"
+    }
+   ]
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "fetch_host": "yield.chinabond.com.cn",
+   "period": "day",
+   "function": "bond_china_yield",
+   "evidence_path": "/cbweb-pbc-web/pbc/historyQuery",
+   "curve": "中债国债收益率曲线",
+   "column": "10年",
+   "window_days": 45,
+   "backfill_from": "2016-01-01"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "fetch_host": "www.safe.gov.cn",
+   "period": "day",
+   "function": "currency_boc_safe",
+   "evidence_path": "/AppStructured/hlw/RMBQuery.do",
+   "column": "美元"
+  }
+ ]
+}

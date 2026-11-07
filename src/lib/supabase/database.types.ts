@@ -700,6 +700,60 @@ export interface FactSyncScope {
   updated_at: string;
 }
 
+// MACRO
+// 20261114090000_macro_workbench.sql. numeric columns (value, weight, uncovered_weight) arrive as
+// JSON numbers and round in JavaScript — readers use value_text; bigint (revision,
+// input_revision, byte_length) arrives as a JSON number. All writes go through RPCs
+// (src/lib/macro/db.ts); these types serve reads.
+export type MacroRegion = 'US' | 'CN';
+export interface MacroSeriesRow {
+  id: string; region: MacroRegion; role: 'indicator' | 'asset' | 'event_source'; type: string | null;
+  name: { zh: string; en: string }; unit: string; native_frequency: 'daily' | 'monthly' | 'quarterly' | 'event';
+  period: 'day' | 'month' | 'quarter'; adjustment: 'sa' | 'nsa' | 'na'; status: 'active' | 'missing' | 'restricted';
+  reason: { zh: string; en: string } | null; source: Record<string, unknown> | null; derive: { kind: string; from: string } | null;
+  alias_of: string | null; revision_policy: 'revisable' | 'immutable'; weight: number; change_kind: 'bp' | 'pp' | 'pct' | 'points';
+  release_lag_days: number | null; definition_version: number; catalog_version: string; updated_at: string;
+}
+export interface MacroCatalogVersionRow { catalog_version: string; catalog: unknown[]; rules_version: string; created_at: string }
+export interface MacroEvidenceObjectRow { sha256: string; object_path: string; adapter: 'fred_csv' | 'akshare'; content_type: string; byte_length: number; created_at: string }
+export interface MacroRetrievalRow {
+  retrieval_id: string; sha256: string; fetch_url: string; fetch_host: string; http_status: number; fetched_at: string;
+  batch_id: string; tool_versions: Record<string, string>;
+}
+export interface MacroObservationRow {
+  observation_id: string; series_id: string; period_end: string; value: number; value_text: string; version: number;
+  available_at: string; availability_basis: 'first_seen'; ingested_at: string; status: 'ok' | 'quarantined' | 'rejected';
+  retrieval_id: string | null; locator: Record<string, unknown> | null; derived_from: string[] | null; transform: string | null;
+  code_version: string; batch_id: string;
+}
+export interface MacroSnapshotTableRow {
+  snapshot_id: string; region: MacroRegion; as_of: string; revision: number; methodology_version: string; catalog_version: string;
+  observation_ids: string[]; history_ids: string[]; catalog_counts: { verified: number; missing: number; restricted: number };
+  status: 'active' | 'superseded' | 'failed'; failure_reason: string | null; publish_key: string | null; created_at: string;
+}
+export interface MacroRegimeResultRow {
+  snapshot_id: string; region: MacroRegion; regime: Record<string, unknown> | null; contributions: unknown[];
+  rules_version: string; uncovered_weight: number;
+}
+export interface MacroPublishStateRow { region: MacroRegion; revision: number; input_revision: number; updated_at: string }
+export interface MacroIngestChunkRow {
+  batch_id: string; seq: number; total: number; state: 'processing' | 'done'; counts: Record<string, number>; native_usable: number;
+  errors: { code: string; key?: string; message?: string }[]; claim_keys: string[]; located_keys: string[];
+  received_at: string; completed_at: string | null;
+}
+export interface MacroIngestRunRow {
+  batch_id: string; dataset: string; state: 'open' | 'finishing' | 'finished' | 'aborted'; owner_token: string;
+  processing_timeout: string; finish_token: string | null; finish_progress: Record<string, unknown>;
+  created_at: string; updated_at: string;
+}
+export interface MacroQuarantineMemberRow { quarantine_id: string; observation_id: string; created_at: string }
+export interface MacroAnalysisRunRow {
+  run_id: string; user_id: string; request_id: string; kind: 'change' | 'level' | 'rolling' | 'event_window';
+  spec: Record<string, unknown>; inputs: unknown; inputs_hash: string; results: unknown | null; code_version: string;
+  method_version: string; status: 'ok' | 'failed'; error: string | null; created_at: string;
+}
+// /MACRO
+
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
 // industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
 export type IssuerStatus = 'active' | 'merged' | 'dissolved';
@@ -1226,6 +1280,20 @@ export type Database = {
       industry_sync_scope: { Row: IndustrySyncScope; Insert: Partial<IndustrySyncScope>; Update: Partial<IndustrySyncScope> };
       industry_security_delistings: { Row: IndustrySecurityDelisting; Insert: Partial<IndustrySecurityDelisting>; Update: Partial<IndustrySecurityDelisting> };
       // INDUSTRY:END
+      // MACRO
+      macro_series: { Row: MacroSeriesRow; Insert: Partial<MacroSeriesRow>; Update: Partial<MacroSeriesRow> };
+      macro_catalog_versions: { Row: MacroCatalogVersionRow; Insert: Partial<MacroCatalogVersionRow>; Update: Partial<MacroCatalogVersionRow> };
+      macro_evidence_objects: { Row: MacroEvidenceObjectRow; Insert: Partial<MacroEvidenceObjectRow>; Update: Partial<MacroEvidenceObjectRow> };
+      macro_retrievals: { Row: MacroRetrievalRow; Insert: Partial<MacroRetrievalRow>; Update: Partial<MacroRetrievalRow> };
+      macro_observations: { Row: MacroObservationRow; Insert: Partial<MacroObservationRow>; Update: Partial<MacroObservationRow> };
+      macro_snapshots: { Row: MacroSnapshotTableRow; Insert: Partial<MacroSnapshotTableRow>; Update: Partial<MacroSnapshotTableRow> };
+      macro_regime_results: { Row: MacroRegimeResultRow; Insert: Partial<MacroRegimeResultRow>; Update: Partial<MacroRegimeResultRow> };
+      macro_publish_state: { Row: MacroPublishStateRow; Insert: Partial<MacroPublishStateRow>; Update: Partial<MacroPublishStateRow> };
+      macro_ingest_chunks: { Row: MacroIngestChunkRow; Insert: Partial<MacroIngestChunkRow>; Update: Partial<MacroIngestChunkRow> };
+      macro_ingest_runs: { Row: MacroIngestRunRow; Insert: Partial<MacroIngestRunRow>; Update: Partial<MacroIngestRunRow> };
+      macro_quarantine_members: { Row: MacroQuarantineMemberRow; Insert: Partial<MacroQuarantineMemberRow>; Update: Partial<MacroQuarantineMemberRow> };
+      macro_analysis_runs: { Row: MacroAnalysisRunRow; Insert: Partial<MacroAnalysisRunRow>; Update: Partial<MacroAnalysisRunRow> };
+      // /MACRO
     };
     Functions: {
       quote_alert_window_samples: {

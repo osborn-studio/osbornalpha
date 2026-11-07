@@ -1,0 +1,7 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T14-1 | P2 | src/lib/macro/series-extras.ts:15 | Required API integration is absent. At `304c3c9`, the series route and route tests do not exist; extras have no API caller, breaking Task 14’s delivery contract. | Land Task 13 prerequisite, apply Task 14’s prescribed route edits and response assertions, including `input_truncated` handling. |
+| T14-2 | P2 | src/lib/macro/series-extras.ts:38 | Calendar ignores `asOf`: historical requests receive calendar evidence retrieved on `2026-11-07`. Recorder replacement of yearly entries also prevents selecting earlier calendar versions. | Retain calendar retrieval versions; select the latest retrieved at or before `asOf`, return none when unavailable, and expose retrieval time. |
+| T14-3 | P2 | src/lib/macro/fomc.ts:27 | Parser silently drops unmatched meeting markup. Wrapping one fixture date in `<span>` reduces matches from 57 to 56 without error; recorder then overwrites the year with incomplete data. Re-parsing tests repeat the same omission. | Enumerate meeting rows independently; require every row to parse or be explicitly excluded as a notation vote. Reject incomplete parses before writing; add malformed-markup regression tests. |
+
+Verdict: fix P1/P2

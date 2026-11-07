@@ -13,7 +13,7 @@
 | 行业研究 | `2026-11-04-industry-research-design.md` | 5 | 第四轮 "not ready"；U1–U6 已按原方案实现，未复审 | `2026-11-04-industry-research/` | 依赖 F2/F4；owner 决策 A–G；Claude Design 画布 |
 | 公司研究与跟踪 | `2026-11-04-company-research-design.md` | 5 | 第四轮 "not ready"；#40/#57–#60 已按原方案实现，未复审 | `2026-11-04-company-research/` | 依赖 F2/F3/F4；§10.1/§10.2 对计划二/三的接口请求待接受；owner 决策 A–K；画布 |
 | 外资研报 | `2026-11-04-foreign-research-design.md` | 4 | 第四轮 "READY WITH P2 FIXES"；三条 P2 已实现 | `2026-11-04-foreign-research/` | 依赖 F3/F4；owner 决策 D1–D7；画布 |
-| 宏观工作台（P1+P2） | `2026-11-04-macro-workbench-design.md` | 1 | 早先通过 | — | 等 F4 落地后对齐判断契约 |
+| 宏观工作台（P1+P2） | `2026-11-04-macro-workbench-design.md` | 2 | 2026-11-06 增量轮 "not ready"（M1–M26 全部接受并落实） | `2026-11-06-macro-workbench/` | 计划 `2026-11-06-macro-workbench.md`；判定按 F4 契约、flag 默认关 |
 
 实施顺序（总纲）：计划二 → 计划三 → F3 → F4 → F6 → 行业 → 公司 → 外资研报；宏观工作台在 F4 后对齐。
 

@@ -21,6 +21,10 @@ const MESSAGE_DOMAINS = [
   // Industry research module (spec 2026-11-04-industry-research §12):
   'industries',
   // INDUSTRY:END
+  // MACRO
+  // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
+  'macro',
+  // /MACRO
 ] as const;
 
 export default getRequestConfig(async () => {
