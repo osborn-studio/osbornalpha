@@ -105,7 +105,7 @@ export interface ManifestBuilder{
  readonly port:StrategyReadPort;readonly cutoff:string;
  /** Catalog row by id, frozen into manifest.catalog on first use; null when the live catalog has no such id. */
  def(id:string):FrozenSeriesDef|null;
- /** Freeze the two snapshots; unless loadRows=false, load their observations (one observationsByIds per snapshot) for snapshotValue.
+ /** Freeze the two snapshots; unless loadRows=false, load their observations in one combined id lookup for snapshotValue.
   *  Unresolved ids → read {series_id: snapshot_id, purpose: 'snapshot_rows', state: 'missing'} and the region is incomplete. */
  useSnapshots(s:{US:SnapshotRecord|null;CN:SnapshotRecord|null},opts?:{loadRows?:boolean}):Promise<void>;
  /** Latest value of a series (§4.5 value rule) plus the requested comparison roles from the snapshot; records one read.
@@ -140,15 +140,18 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
   async useSnapshots(s,opts={}){
    snapshots={US:s.US?freezeSnapshot(s.US):null,CN:s.CN?freezeSnapshot(s.CN):null};
    if(opts.loadRows===false)return;
-   await Promise.all((['US','CN'] as const).map(async r=>{
+   const idsOf=(rec:SnapshotRecord|null)=>new Set(rec?[...rec.observation_ids,...rec.history_ids]:[]);
+   const ids={US:idsOf(s.US),CN:idsOf(s.CN)};
+   const allIds=[...new Set([...ids.US,...ids.CN])];
+   const rows=allIds.length?await port.observationsByIds(allIds):[];
+   const found=new Set(rows.map(o=>o.observation_id));
+   for(const r of ['US','CN'] as const){
     const rec=s[r];incomplete[r]=false;
-    if(!rec){roles[r]=new Map();return;}
-    const ids=[...new Set([...rec.observation_ids,...rec.history_ids])];
-    const rows=await port.observationsByIds(ids);
-    const found=new Set(rows.map(o=>o.observation_id));
-    if(ids.some(id=>!found.has(id))){incomplete[r]=true;read(rec.snapshot_id,SNAPSHOT_ROWS_PURPOSE,'missing');}
-    roles[r]=snapshotRoles(rows,periodOf);
-   }));
+    if(!rec){roles[r]=new Map();continue;}
+    if([...ids[r]].some(id=>!found.has(id))){incomplete[r]=true;read(rec.snapshot_id,SNAPSHOT_ROWS_PURPOSE,'missing');}
+    // A row belongs to a snapshot only when that snapshot references it, even if the peer returned it too.
+    roles[r]=snapshotRoles(rows.filter(o=>ids[r].has(o.observation_id)),periodOf);
+   }
   },
   async snapshotValue(seriesId,purpose,comparison=[]){return (await this.snapshotValues([seriesId],purpose,comparison)).get(seriesId)??null;},
   async snapshotValues(seriesIds,purpose,comparison=[]){

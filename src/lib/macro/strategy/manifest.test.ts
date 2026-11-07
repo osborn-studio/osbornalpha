@@ -157,6 +157,25 @@ describe('manifestBuilder',()=>{
   await expect(down.history('US_DGS10','dim','month_end')).rejects.toThrow('connection reset');
   expect(readState(down.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBeNull();
  });
+ it('batches both snapshot id sets and isolates an incomplete region',async()=>{
+  const usRows=monthly('US_UNRATE','2026-08',['4','4.1']);
+  const cnRows=monthly('CN_CGB_10Y','2026-09',['1.8']);
+  const us=snap('US','2026-10-15T00:00:00Z',usRows.map(o=>o.observation_id));
+  const cn=snap('CN','2026-10-10T00:00:00Z',[cnRows[0].observation_id,'unknown']);
+  const base=memoryStrategyPort(fixture({observations:[...usRows,...cnRows]}));
+  const calls:string[][]=[];
+  const b=manifestBuilder(override(base,{observationsByIds:async ids=>{calls.push(ids);return base.observationsByIds(ids);}}),us.created_at);
+  await b.useSnapshots({US:us,CN:cn});
+  const values=await b.snapshotValues(['US_UNRATE','CN_CGB_10Y'],'node',['prev']);
+  expect(values.get('US_UNRATE')).toEqual(usRows[1]);
+  expect(values.get('CN_CGB_10Y')).toBeNull();
+  const m=b.build({kind:'transmission',params:{region:'US'},methodVersion:'m',codeVersion:'c'});
+  expect(m.inputs.map(i=>i.observation_id).sort()).toEqual(usRows.map(o=>o.observation_id).sort());
+  expect(readState(m,'CN_CGB_10Y','node')).toBe('truncated');
+  expect(readState(m,'US_UNRATE','node')).toBe('ok');
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toEqual([...us.observation_ids,...cn.observation_ids]);
+ });
  it('useSnapshots({loadRows:false}) freezes the snapshot records without fetching observations',async()=>{
   let fetched=0;
   const port=override(memoryStrategyPort(f),{observationsByIds:async()=>{fetched++;return [];}});

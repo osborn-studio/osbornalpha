@@ -10,6 +10,9 @@ import {memoryStrategyDb,type StrategyDb} from '@/lib/macro/strategy/db';
 import type {F4CardLite} from '@/lib/macro/strategy/f4-client';
 import {strategyMemo} from '@/lib/macro/strategy/memo';
 
+const shared=vi.hoisted(()=>new Map<string,unknown>());
+vi.mock('next/cache',()=>({unstable_cache:(cb:()=>Promise<unknown>,parts:string[])=>async()=>{const key=JSON.stringify(parts);if(shared.has(key))return structuredClone(shared.get(key));const value=await cb();shared.set(key,structuredClone(value));return value;}}));
+
 const m=vi.hoisted(()=>({user:vi.fn(),port:vi.fn(),db:null as unknown,code:vi.fn(),trManifest:vi.fn(),buildTransmission:vi.fn(),buildPlaybooks:vi.fn(),selectF4Mark:vi.fn(),
  prManifest:vi.fn(),buildPolicyResponse:vi.fn(),ctManifest:vi.fn(),buildCycleTable:vi.fn(),runReview:vi.fn(),handle:vi.fn(),recover:vi.fn(),listDeviationCases:vi.fn(),createF4Client:vi.fn(),card:vi.fn(),detail:vi.fn()}));
 vi.mock('@/lib/supabase/server',()=>({getServerSupabase:async()=>({auth:{getUser:m.user}})}));
@@ -83,7 +86,7 @@ const saved=Object.fromEntries(ENV_KEYS.map(k=>[k,process.env[k]]));
 
 beforeEach(()=>{
  vi.clearAllMocks();
- strategyMemo.clear();PORT.activeSnapshot.mockImplementation(async(r:string)=>r==='US'?FROZEN_US:null);PORT.publishState.mockResolvedValue(null);PORT.catalogVersion.mockReturnValue('cat/1');
+ shared.clear();strategyMemo.clear();PORT.activeSnapshot.mockImplementation(async(r:string)=>r==='US'?FROZEN_US:null);PORT.publishState.mockResolvedValue({revision:1,input_revision:1});PORT.catalogVersion.mockReturnValue('cat/1');
  process.env.MACRO_STRATEGY_ENABLED='1';delete process.env.MACRO_JUDGMENTS_ENABLED;process.env.CRON_SECRET='cron-secret';
  m.user.mockResolvedValue({data:{user:{id:USER}},error:null});
  m.port.mockReturnValue(PORT);m.code.mockReturnValue('abc123');
@@ -192,9 +195,30 @@ describe('fact routes',()=>{
   expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
   PORT.publishState.mockResolvedValue({revision:1,input_revision:2});
   expect((await call()).headers.get('X-Macro-Strategy-Memo')).toBe('miss');expect(builder).toHaveBeenCalledTimes(2);
-  strategyMemo.clear();builder.mockClear();put.mockClear();
+  shared.clear();strategyMemo.clear();builder.mockClear();put.mockClear();
   const both=await Promise.all([call(),call()]);expect(both.map(r=>r.headers.get('X-Macro-Strategy-Memo'))).toEqual(['miss','coalesced']);
   expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
+ });
+ it.each(FACT_ROUTES.slice(0,3))('%s reuses persisted facts after a cold process memo, gates warm cache, and retries errors',async(_name,call)=>{
+  const first=await call();expect(first.status).toBe(200);const expected=await first.json();
+  strategyMemo.clear();
+  expect(await (await call()).json()).toEqual(expected);
+  expect(m.trManifest.mock.calls.length+m.prManifest.mock.calls.length+m.ctManifest.mock.calls.length).toBe(1);
+  expect(PORT.activeSnapshot).toHaveBeenCalledTimes(4);expect(PORT.publishState).toHaveBeenCalledTimes(4);
+  strategyMemo.clear();m.user.mockResolvedValue({data:{user:null},error:null});expect((await call()).status).toBe(401);
+  m.user.mockResolvedValue({data:{user:{id:USER}},error:null});delete process.env.MACRO_STRATEGY_ENABLED;expect((await call()).status).toBe(404);
+  expect(PORT.activeSnapshot).toHaveBeenCalledTimes(4);
+  process.env.MACRO_STRATEGY_ENABLED='1';shared.clear();strategyMemo.clear();
+  const put=vi.spyOn(db,'putManifest').mockRejectedValueOnce(new Error('storage down'));
+  expect((await call()).status).toBe(500);expect(shared.size).toBe(0);
+  expect((await call()).status).toBe(200);expect(put).toHaveBeenCalledTimes(2);
+ });
+ it.each(FACT_ROUTES.slice(0,3))('%s bypasses both caches for unverifiable publish state',async(_name,call)=>{
+  for(const state of [null,{revision:1,input_revision:NaN},{revision:-1,input_revision:1}]){
+   shared.clear();strategyMemo.clear();PORT.publishState.mockResolvedValue(state);
+   expect((await call()).status).toBe(200);expect((await call()).status).toBe(200);
+   expect(shared.size).toBe(0);expect(strategyMemo.stats().size).toBe(0);
+  }
  });
  it('without either snapshot, policy and cycle builds use request time and bypass the memo',async()=>{
   PORT.activeSnapshot.mockResolvedValue(null);
@@ -208,8 +232,9 @@ describe('fact routes',()=>{
  it('transmission evaluates judgments on a memo hit',async()=>{
   process.env.MACRO_JUDGMENTS_ENABLED='1';
   await transmission(get('/transmission?region=US'));
+  strategyMemo.clear();m.selectF4Mark.mockReturnValue({...MARK,summary:{...SUMMARY,judgment_id:'fresh'}});
   const r=await transmission(get('/transmission?region=US'));
-  expect(r.headers.get('X-Macro-Strategy-Memo')).toBe('hit');expect(m.card).toHaveBeenCalledTimes(2);
+  expect((await r.json()).f4.summary.judgment_id).toBe('fresh');expect(m.trManifest).toHaveBeenCalledTimes(1);expect(m.card).toHaveBeenCalledTimes(2);
  });
  it('different fact params occupy separate memo entries',async()=>{
   await transmission(get('/transmission?region=US'));await transmission(get('/transmission?region=CN'));

@@ -349,13 +349,17 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
     if(o.asOf)q=q.lte('available_at',o.asOf);
     return q;
    };
-   const make=()=>{
-    const q=filtered(anon.from('macro_observations').select('*'));
+   const make=(counted=false)=>{
+    const q=filtered(counted?anon.from('macro_observations').select('*',{count:'exact'}):anon.from('macro_observations').select('*'));
     return q.order('period_end',{ascending:true}).order('version',{ascending:true}) as Query;
    };
    const limit=o.maxRows+1;
-   const [first,countResult]=await Promise.all([rows(make().range(0,Math.min(READ_PAGE,limit)-1)),filtered(anon.from('macro_observations').select('*',{count:'exact',head:true})) as PromiseLike<Res>]);
+   // Page zero and its count share one filtered request / database statement. Later pages stay bounded and concurrent.
+   const countResult=await make(true).range(0,Math.min(READ_PAGE,limit)-1);
    if(countResult.error)throw toMacroDbError(countResult.error);
+   const first=(countResult.data??[]) as Record<string,unknown>[];
+   // The cap counts visible raw vintages. Do not download pages already proven to exceed it; callers may retry a larger cap.
+   if(typeof countResult.count==='number'&&Number.isInteger(countResult.count)&&countResult.count>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
    let got:Record<string,unknown>[];
    if(typeof countResult.count!=='number'||!Number.isInteger(countResult.count)||countResult.count<0){
     got=[...first];

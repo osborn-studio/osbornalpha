@@ -7,11 +7,12 @@
 import type {TableClient} from '../db/table-client';
 import {CATALOG_VERSION} from './catalog';
 import type {MacroDb} from './db';
+import type {OverviewFacts,OverviewFactsStore} from './overview-facts-cache';
 import {canonical,compare,subtract,yoyPct} from './decimal';
 import {collectionStatus,datasetOf,releaseTimeliness} from './freshness';
 import type {CollectionStatus} from './freshness';
 import {catalogItemsOf} from './snapshots';
-import type {Bilingual,CatalogCounts,ChangeKind,MacroSeriesDef,ObservationRow,Region,Timeliness} from './types';
+import type {Bilingual,CatalogCounts,ChangeKind,MacroSeriesDef,ObservationRow,Region,SnapshotRecord,Timeliness} from './types';
 
 export interface IndicatorRow{
  /** The exact manifest version shown (the drawer selects it); null without data. */
@@ -31,7 +32,7 @@ export interface Envelope{
  snapshotId:string|null;asOf:string|null;catalogVersion:string;methodologyVersion:string|null;
  collection:CollectionStatus[];indicators:IndicatorRow[];changes:Changes;catalogCounts:CatalogCounts|null;
 }
-export interface ViewDeps{db:MacroDb;tables:TableClient;now?:()=>Date}
+export interface ViewDeps{db:MacroDb;tables:TableClient;now?:()=>Date;factsCache?:OverviewFactsStore}
 export const COMPACT_KEYS:Record<Region,readonly string[]>={US:['US_DFF','US_DGS10','US_CPI_YOY'],CN:['CN_CPI_YOY','CN_PMI_MFG','CN_CGB_10Y']};
 const SPARK_POINTS=24;
 const MAX_DEPTH=4;
@@ -72,9 +73,11 @@ export async function resolveClosure(db:Pick<MacroDb,'observationsByIds'>,rows:O
 }
 async function provenanceOf(db:MacroDb,rows:ObservationRow[]):Promise<Map<string,Provenance>>{
  const known=await resolveClosure(db,rows);
+ if([...known.values()].some(r=>(r.derived_from??[]).some(id=>!known.has(id))))throw new Error('incomplete_overview_provenance');
  const leaves=(r:ObservationRow,depth=0):string[]=>r.retrieval_id?[r.retrieval_id]:depth>=MAX_DEPTH?[]:(r.derived_from??[]).flatMap(id=>{const i=known.get(id);return i?leaves(i,depth+1):[];});
  const perRow=new Map(rows.map(r=>[r.observation_id,[...new Set(leaves(r))]]));
  const sha=new Map((await db.retrievalsByIds([...new Set([...perRow.values()].flat())])).map(x=>[x.retrieval_id,x.sha256]));
+ if([...perRow.values()].flat().some(id=>!sha.has(id)))throw new Error('incomplete_overview_provenance');
  return new Map([...perRow].map(([id,ids])=>[id,{retrieval_ids:ids,evidence:ids.flatMap(rid=>{const h=sha.get(rid);return h?[{retrieval_id:rid,sha256:h}]:[];})}]));
 }
 function emptyRow(def:MacroSeriesDef,timeliness:Timeliness):IndicatorRow{
@@ -88,8 +91,28 @@ const timelinessOf=(def:MacroSeriesDef,latest:string|null,today:string):Timeline
 
 export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,opts:{compact?:boolean}={}):Promise<Envelope>{
  const now=deps.now?.()??new Date();
- const [snap,allCollection]=await Promise.all([deps.db.activeSnapshot(region),collectionStatus(deps.tables,now)]);
+ // Selection and collection health are always live, even on a cache hit. The previous
+ // snapshot can change independently (e.g. repair/republish), changing the comparison card.
+ // Resolve it as soon as activeSnapshot completes, independently of collection pagination.
+ const selection=async()=>{
+  const [snap,publishState]=await Promise.all([
+   deps.db.activeSnapshot(region),
+   // Unknown publication state must bypass every cache tier; facts can still be read live.
+   deps.db.publishState(region).catch(()=>null),
+  ]);
+  return {snap,publishState,prevSnap:snap?await deps.db.previousSnapshot(region,snap.created_at):null};
+ };
+ const [{snap,prevSnap,publishState},allCollection]=await Promise.all([selection(),collectionStatus(deps.tables,now)]);
  const collection=allCollection.filter(c=>c.dataset===datasetOf(region));
+ const load=()=>buildOverviewFacts(deps.db,region,today,opts,snap,prevSnap);
+ const knownRevision=publishState&&Number.isSafeInteger(publishState.inputRevision)&&publishState.inputRevision>=0&&Number.isSafeInteger(publishState.revision)&&publishState.revision>=0;
+ const facts=deps.factsCache&&snap?.status==='active'&&knownRevision
+  ?await deps.factsCache.get(JSON.stringify(['overview-facts/2',CATALOG_VERSION,catalogItemsOf(region),region,today,!!opts.compact,snap,prevSnap,publishState]),load)
+  :await load();
+ return {...facts,collection};
+}
+
+async function buildOverviewFacts(db:MacroDb,region:Region,today:string,opts:{compact?:boolean},snap:SnapshotRecord|null,prevSnap:SnapshotRecord|null):Promise<OverviewFacts>{
  const items=catalogItemsOf(region);
  const keep=(id:string)=>!opts.compact||COMPACT_KEYS[region].includes(id);
  const counts:Record<ChangeItemKind,number>={new_release:0,revised:0,late:0,missing:0};
@@ -98,20 +121,20 @@ export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,
  if(!snap){
   const rows=items.map(d=>emptyRow(d,timelinessOf(d,null,today)));
   for(const r of rows)if(countsAsMissing(r))note(r.series_id,'missing',null);
-  return {snapshotId:null,asOf:null,catalogVersion:CATALOG_VERSION,methodologyVersion:null,collection,
+  return {snapshotId:null,asOf:null,catalogVersion:CATALOG_VERSION,methodologyVersion:null,
    indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:null};
  }
- const prevSnap=await deps.db.previousSnapshot(region,snap.created_at);
  // One read for everything shown: frozen manifest, frozen sparkline history, previous manifest (第 4 稿 P1-8/P2-3).
  const wanted=[...new Set([...snap.observation_ids,...(opts.compact?[]:snap.history_ids),...(prevSnap?.observation_ids??[])])];
- const byId=new Map((await deps.db.observationsByIds(wanted)).map(r=>[r.observation_id,r]));
+ const byId=new Map((await db.observationsByIds(wanted)).map(r=>[r.observation_id,r]));
+ if(wanted.some(id=>!byId.has(id)))throw new Error('incomplete_overview_snapshot');
  const pick=(ids:readonly string[])=>ids.flatMap(id=>{const r=byId.get(id);return r?[r]:[];});
  const manifest=latestTwo(pick(snap.observation_ids));
  const prevLatest=prevSnap?latestTwo(pick(prevSnap.observation_ids)):null;
  const history=new Map<string,ObservationRow[]>();
  for(const r of opts.compact?[]:pick(snap.history_ids)){const a=history.get(r.series_id)??[];a.push(r);history.set(r.series_id,a);}
  const shown=[...manifest.values()].map(a=>a[0]);
- const provenance=opts.compact?new Map<string,Provenance>():await provenanceOf(deps.db,shown);
+ const provenance=opts.compact?new Map<string,Provenance>():await provenanceOf(db,shown);
  const rows:IndicatorRow[]=[];
  for(const def of items){
   const [latest,prev]=manifest.get(def.id)??[];
@@ -134,6 +157,6 @@ export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,
   }
   if(timeliness==='late')note(def.id,'late',latest.period_end);
  }
- return {snapshotId:snap.snapshot_id,asOf:snap.as_of,catalogVersion:snap.catalog_version,methodologyVersion:snap.methodology_version,collection,
+ return {snapshotId:snap.snapshot_id,asOf:snap.as_of,catalogVersion:snap.catalog_version,methodologyVersion:snap.methodology_version,
   indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:snap.catalog_counts};
 }
