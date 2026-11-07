@@ -2,6 +2,9 @@
 // correlation options from the catalog; data loads client-side from /api/macro/*.
 import { MacroWorkbench, type WorkbenchTab } from '@/components/macro/MacroWorkbench';
 import { correlationOptions } from '@/lib/macro/workbench-options';
+// MACRO-P3
+import { strategyEnabled } from '@/lib/macro/strategy/flags';
+// /MACRO-P3
 
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
 export const dynamic = 'force-dynamic';
@@ -12,5 +15,8 @@ export default async function MacroPage({ searchParams }: { searchParams: Promis
   const region = sp.region === 'CN' ? 'CN' : 'US';
   const tab = TABS.find((x) => x === sp.tab) ?? 'overview';
   const judgmentsEnabled = process.env.MACRO_JUDGMENTS_ENABLED === '1';
-  return <MacroWorkbench initialRegion={region} initialTab={tab} judgmentsEnabled={judgmentsEnabled} options={correlationOptions()} />;
+  // MACRO-P3
+  const strategyOn = strategyEnabled();
+  // /MACRO-P3
+  return <MacroWorkbench initialRegion={region} initialTab={tab} judgmentsEnabled={judgmentsEnabled} options={correlationOptions()} strategyEnabled={strategyOn} />;
 }

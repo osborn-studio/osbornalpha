@@ -4,6 +4,7 @@
 // the page names a regime, score, margin or coverage percentage. Collection failures show the last published
 // snapshot with its collection status; they never show zeros.
 import { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CORRELATION_VERSION } from '@/lib/macro/correlation';
 import { CYCLES_VERSION } from '@/lib/macro/cycles';
@@ -14,6 +15,9 @@ import { ChangesCard } from './ChangesCard';
 import { CorrelationWorkbench } from './CorrelationWorkbench';
 import { IndicatorDetail } from './IndicatorDetail';
 import { IndicatorTable } from './IndicatorTable';
+// MACRO-P3
+import { strategyLinkTabs } from './strategy-links';
+// /MACRO-P3
 import { MacroJudgmentSlot } from './MacroJudgmentSlot';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { SourceFooter } from './SourceFooter';
@@ -61,8 +65,10 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
   );
 }
 
-export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, options }: {
+export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, options, strategyEnabled = false }: {
   initialRegion: 'US' | 'CN'; initialTab: WorkbenchTab; judgmentsEnabled: boolean; options: { indicators: SeriesOption[]; assets: SeriesOption[] };
+  /** MACRO-P3: the strategy switch, read on the server page; link tabs to the strategy pages render only when true. */
+  strategyEnabled?: boolean;
 }) {
   const { t, locale } = useMacroT();
   const router = useRouter();
@@ -107,6 +113,9 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
 
       <nav aria-label={t('tabs.label')} className="flex gap-1 border-b border-border">
         {TABS.map((tb) => <button key={tb} type="button" aria-current={tab === tb ? 'page' : undefined} onClick={() => go(region, tb)} className={tabBtn(tab === tb)}>{t(`tabs.${tb}`)}</button>)}
+        {/* MACRO-P3 */}
+        {strategyLinkTabs(strategyEnabled).map((l) => <Link key={l.key} href={l.href} className={tabBtn(false)}>{t(`tabs.${l.key}`)}</Link>)}
+        {/* /MACRO-P3 */}
       </nav>
 
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}

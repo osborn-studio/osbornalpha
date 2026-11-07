@@ -87,6 +87,8 @@ describe('parseFredCsv (recorded fixtures)',()=>{
    ['DFF','2015-01-01','0.06',2],['DFF','2020-03-16','0.25',1903],
    ['DFEDTARL','2015-01-01','0',2],                                     // raw "0.00"
    ['DFEDTARU','2020-03-16','0.25',1903],
+   ['DFEDTAR','2008-12-15','1',9578],                                   // MACRO-P3: last row of the single-target series (FRED ignores cosd after the series end: 1982-09-27 .. 2008-12-15)
+   ['DFEDTAR','1982-09-27','10.25',2],                                    // raw "10.2500"
    ['DGS10','2015-01-02','2.12',2],['DGS10','2020-03-16','0.73',1358],
    ['DTWEXBGS','2015-01-02','102.9027',2],
    ['DCOILWTICO','2020-04-20','-36.98',1383],                           // a negative price is data, not an error

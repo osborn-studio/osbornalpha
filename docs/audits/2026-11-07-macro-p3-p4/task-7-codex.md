@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/macro/strategy/policy-response-explain.ts:5` | Negative half-bp values round incorrectly: `Math.round(-1.5)` produces `-1`, and `-0.5` becomes `0`. Valid interpolated statistics therefore produce incorrect public sentences under §5.3’s rounding rule. Reproduced directly without Vitest; existing sentence tests cover only positive integers. | Use explicit half-away-from-zero rounding. Add negative half-bp median/quartile cases and zero normalization tests. |
+| 2 | P2 | `src/lib/macro/strategy/policy-response.ts:102` | Caller-supplied dimensions alter calculations without being frozen into the manifest. Reproduced identical manifest hashes for dimension definitions differing only in `unit`; replaying the same stored manifest yields either **100 bp** or **50%** for endpoints `2 → 3`. This violates the manifest-only computation contract in §4.5. | Remove dimension overrides from the public builders, or freeze the complete definitions into the hashed manifest and have replay read them exclusively. Add an identity/replay regression test. |
+
+fix required
