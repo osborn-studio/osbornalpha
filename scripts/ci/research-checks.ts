@@ -16,13 +16,16 @@ export const criticalSuites = [
  // F6 begin
  .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts')
  // F6 end
- // MACRO
- .concat('src/lib/macro/macro.integration.test.ts')
- // /MACRO
- // MACRO-P3
- .concat('src/lib/macro/strategy/strategy.integration.test.ts')
- // /MACRO-P3
 ;
+// INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
+criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts');
+// INDUSTRY:END
+// MACRO
+criticalSuites.push('src/lib/macro/macro.integration.test.ts');
+// /MACRO
+// MACRO-P3
+criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
+// /MACRO-P3
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

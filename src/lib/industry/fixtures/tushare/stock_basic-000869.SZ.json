@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "000869.SZ",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "7ef43a311998525bd1f1616ad9cf42cf88fc53ac9254e1d8a784ea1d70deb7c0",
+ "request_id": "30d9d521-12ca-4a12-a141-db6da624df9d",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "000869.SZ",
+    "000869",
+    "张裕A",
+    "山东",
+    "红黄酒",
+    "烟台张裕葡萄酿酒股份有限公司",
+    "Yantai Changyu Pioneer Wine Company Limited",
+    "ZYA",
+    "主板",
+    "SZSE",
+    "CNY",
+    "L",
+    "20001026",
+    null,
+    "S",
+    "烟台裕华投资发展有限公司,意迩瓦萨隆诺控股股份公司,国际金融公司,烟台国丰投资控股有限公司",
+    null
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

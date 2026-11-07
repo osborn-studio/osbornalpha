@@ -35,6 +35,10 @@
       "schedule": "35 */4 * * *"
     },
     {
+      "path": "/api/cron/industry-sync?job=memberships-sic&limit=200",
+      "schedule": "0 2 * * *"
+    },
+    {
       "path": "/api/cron/macro-sync",
       "schedule": "30 5 * * *"
     },

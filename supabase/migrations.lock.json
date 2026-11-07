@@ -206,6 +206,14 @@
       "sha256": "7808ea386e4547c8b0e34dc891d2bc1a2c69a2cf2f32fc675a26bf130cd1a591"
     },
     {
+      "file": "20261111090000_industry_research.sql",
+      "sha256": "16cdb2194f7ae4905e877899c8b35c2a10d682925048b60364c31e8e5cecb448"
+    },
+    {
+      "file": "20261111091000_industry_research_functions.sql",
+      "sha256": "b241d00656e2bfb6a96601f2467c732b7dd0c6f1a407a02222d1a90c4096b1b0"
+    },
+    {
       "file": "20261114090000_macro_workbench.sql",
       "sha256": "aea3f93c9d05e3fc3c93c7ea85618e744ed1ed8189a74319ecd8b62d16960835"
     },

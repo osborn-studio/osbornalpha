@@ -1,6 +1,6 @@
 # 行业研究模块设计规格 · 分类成分 + 行业聚合事实 + 行业估值 + 页面
 
-日期：2026-11-04（第 5 稿。审计轨迹 `docs/audits/2026-11-04-industry-research/`：01 Codex 一轮（13 项）、02 Codex 二轮（R1–R13 复核 + N1–N6）、03 处置表（含三、四轮）、05 Codex 三轮（T1–T6 + 复核）、06 Codex 四轮（第 4 稿新引入缺陷 U1–U6 + 终审"not ready"）。第 5 稿按 Codex 四轮处方逐字实施 U1–U6，**未再审**（协调者指示：不再开 Codex 轮次））
+日期：2026-11-06（第 7 稿 = 第 6 稿 + 核对项 1–3 实测结论（`docs/audits/2026-11-06-industry-research/03-tushare-verification.md`，以「（K*n*）」标注）；第 6 稿 = 第 5 稿 + Codex 第五轮增量审计 V1–V12 按处方修正，见 `docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md` 与 `02-disposition.md`；修正点以"（V*n*）"标注）。第 5 稿日期 2026-11-04（审计轨迹 `docs/audits/2026-11-04-industry-research/`：01 Codex 一轮（13 项）、02 Codex 二轮（R1–R13 复核 + N1–N6）、03 处置表（含三、四轮）、05 Codex 三轮（T1–T6 + 复核）、06 Codex 四轮（第 4 稿新引入缺陷 U1–U6 + 终审"not ready"）。第 5 稿按 Codex 四轮处方逐字实施 U1–U6，**未再审**（协调者指示：不再开 Codex 轮次））
 状态：草案，待 owner 评审（§16 七项决策；A（Tushare/申万授权）、E（A 股事实公开宇宙）决定本规格能否进入计划；G 只决定历史重建期的显示方式）
 上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一；§1.2 把分类加载与授权交给本规格；§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二**第 8 稿**：`fact_sync_runs`、`read_facts` 信封 `{state_rev, rows, truncated}`、`fact_state_rev()`、`derive.ts` 版本一致性规则、`reconcile_fact_sync_scope`）；`docs/superpowers/specs/2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md`（规格三：`resolveIssuer(asOf)`、`valid_from_method/valid_to_method`、`tickerAsOf`；其 §1.2 把 **A 股全宇宙发行人装载**归到本规格）；`docs/superpowers/specs/2026-11-04-judgment-framework-design.md`（F4 §3.5：`InputRef{kind, ref, snapshot, hash=digest(snapshot), available_at, origin}`，`table_rows` 快照 `{table, natural_key, rows}`，公共表白名单）；`docs/superpowers/specs/2026-11-04-company-research-design.md` §10.5；`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（UI 约定）。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5（owner 2026-11-04 确认）。逐条对照：
@@ -8,7 +8,7 @@
 | 总纲约束 | 本规格的落点 |
 |---|---|
 | 1 只用一手来源；Tushare 仅作适配器并记录上游；对方数据一律不导入 | §4.1：SIC 来自 SEC `submissions`（一手）；申万 2021、收盘价/总股本、申万指数估值三组数据经 Tushare 适配，上游分别记"申万宏源研究所""交易所""申万宏源研究所"，每组数据有独立的授权状态行，授权在数据库层执行（§4.8）；证监会 2017Q2–2021Q3 PDF 只作人工对照；对方 31×10 热力图只作私有回归样本 |
-| 2 每个展示数字可回放 | 每个单元格有**内容寻址、不可变的输入清单**（成分证据含定位与可得日期、事实含 filing/原始哈希/映射代/状态版本、标记含观测 id 与观测时刻、每个发行人在每个指标里的角色、方法配置与代码版本）；`replayFromManifest()` 纯函数只用清单就能重算出该格（§5.3）；每个单元格自己的可得时刻 = 计算它的 run 的创建时刻（`updated_at`），**从不回溯到它描述的期间**（§5.4、§7.1）；接口分"原样回放"与"按当前证据重算"，回放授权与发布状态一致（§9） |
+| 2 每个展示数字可回放 | 每个单元格有**内容寻址、不可变的输入清单**（成分证据含定位与可得日期、事实含 filing/原始哈希/映射代/状态版本、标记含观测 id 与观测时刻、每个发行人在每个指标里的角色、方法配置与代码版本）；`replayFromManifest()` 纯函数只用清单就能重算出该格（§5.3）；每个单元格的可得时刻是它的激活时刻：`updated_at = run.activated_at`，在全部读取、计算与对账之后写入；building 期间的行没有发布时刻（V12），**从不回溯到它描述的期间**（§5.3、§5.4、§7.1）；接口分"原样回放"与"按当前证据重算"，回放授权与发布状态一致（§9） |
 | 3 事实与判断分层 | 行业聚合、估值序列、分位数是事实/派生统计；生命周期、景气、高估低估是判断，走 F4（§7） |
 | 4 缺失就是缺失；时点成分；聚合方法显式 | 不做占位/代理；每格 `n_members / n_with_data / n_unresolved` 与 `status ok|missing(+reason)`；成分按"`period_end` 当日有效且 `knowledge_date` 已知"取（§4.6 的时间估计对象）；SIC 无历史因此不聚合；`point_in_time` 只在成分可得日期**有证据**且解析按当日归属时成立，否则 run 标 `reconstruction`（§4.6；v1 申万没有公告日来源，因此全部为 `reconstruction`，owner 决策 G 只决定显示或抑制）；方法名与版本进每一行 |
 | 6 UI tokens；双语；表格等价视图 | §8 |
@@ -61,7 +61,7 @@
 | 质量设施 | `startBatch/finishBatch`、`quarantine()`、`recordAttempt`；`dq_freshness.expected_cadence` CHECK 只允许 `daily/monthly/quarterly/event`（`20261105090000_dq_foundation.sql:76`），`freshness.ts:9–14` 同 | 本规格迁移改 CHECK 加 `weekly` 并改 `freshness.ts` |
 | `TableClient` | 无事务、无 rpc | `IndustryDb`（§4.9） |
 | 行情 | 无落库收盘价/市值历史 | `security_marks`（§6.1） |
-| 页面/i18n/cron/迁移 | 同第 2 稿：`intel/page.tsx`、`TabBar startsWith('/intel')`、`middleware.ts` session 门禁、`MESSAGE_DOMAINS`、`messages-parity.test.ts` 硬编码四域、`vercel.json`、锁到 `20261105091000`、规格二占 `20261106090000` | 本规格 `20261107090000_industry_research.sql`（实施时按合并顺序重排时间戳） |
+| 页面/i18n/cron/迁移 | （V9：本规格迁移为 `20261111090000_industry_research.sql` 与 `20261111091000_industry_research_functions.sql`）同第 2 稿：`intel/page.tsx`、`TabBar startsWith('/intel')`、`middleware.ts` session 门禁、`MESSAGE_DOMAINS`、`messages-parity.test.ts` 硬编码四域、`vercel.json`、锁到 `20261105091000`、规格二占 `20261106090000` | 本规格两个 `20261111…` 迁移（§4.3） |
 
 ---
 
@@ -87,7 +87,14 @@
 
 同第 2 稿：`sw2021` 三次 `index_classify`，`code=index_code`，`parent_code` 命名空间在夹具核对（不符 → 经同批映射转换并写 `attributes`，映射失败隔离 `classification_parent_unmapped`）；`sic` 码表夹具，左补零；节点只增不删，名称冲突隔离。
 
-### 4.3 迁移 `supabase/migrations/20261107090000_industry_research.sql` —— 完整对象清单
+### 4.3 迁移 `supabase/migrations/20261111090000_industry_research.sql`（表、约束、策略）+ `20261111091000_industry_research_functions.sql`（函数、触发器、函数权限） —— 完整对象清单
+
+（V9）时间戳按并行会话分配取 `20261111HHMMSS_`；两个文件各自追加锁条目，不改任何已落地迁移。
+
+**所有权与权限模型（V1 处方的落实；取代第 5 稿的 `industry_publisher` 角色）。** 托管实例的迁移角色 `postgres` 不是超级用户，计划二已落地的做法（`20261106090000_financial_facts.sql:718–742`）是：表与 `security definer` 函数都由迁移角色拥有，函数以表所有者身份执行（表未 `force row level security`，所有者不受 RLS 约束，且拥有全部权限），`service_role` 被**撤销**受保护表的全部写权限、只保留 `select` 与函数 `execute`。本规格沿用这一模型，不创建 `industry_publisher`，不 `alter function … owner to`：
+- 受保护表（`industry_metric_runs`、`industry_metrics`、`industry_valuation_runs`、`industry_valuations`、`industry_valuation_pairs`、`industry_run_dependencies`、`industry_manifests`、`security_marks`、`industry_official_valuations`、`industry_fetch_events`、`industry_observation_receipts`、`issuer_industry_memberships`、`industry_source_memberships`）：`revoke all on … from public, anon, authenticated, service_role`，再按需 `grant select`（`service_role` 全部；`anon, authenticated` 只给 §4.3 策略列出的公共表）。**`service_role` 对这些表没有任何 insert/update/delete/truncate**，所有写入经下列函数（V2）。
+- 半受保护表：`industry_classifications`（适配器写入，`service_role` 保留 `insert, update`（只增节点、改名称经隔离），不给 `delete/truncate`）；`industry_dataset_licenses`（只经 `set_industry_dataset_license` 函数写，`service_role` 仅 `select`）；`industry_sync_scope`（`service_role` 读写，非事实层）。
+- 测试断言：每个函数 `prosecdef=true`、`proowner` = 表所有者、`proconfig` 含 `search_path`；`service_role` 对每张受保护表的直接 `insert/update/delete/truncate` 均 `42501`；每个 RPC 以 `service_role` 调用成功（它确实以所有者身份读写了 `fact_sync_scope`、`issuers`、`ingest_batches` 等跨模块表）。
 
 可重放：约束/策略/索引 `drop … if exists` 后建或 `if not exists`；函数 `create or replace`。锁文件、`database.types.ts` 补齐。
 
@@ -98,8 +105,8 @@
 | `industry_classifications` | `scheme` CHECK 加 `'sic'`；`attributes jsonb not null default '{}' check (jsonb_typeof(attributes)='object')`；`create unique index if not exists industry_classifications_code_level_uidx on (scheme, version, code, level)` |
 | `issuer_industry_memberships` | **先显式 `alter table … drop constraint if exists issuer_industry_memberships_no_overlap`**（已落地的排他约束覆盖所有 status，会让被取代的历史版本与其替代行冲突；只加新的部分排他不能替代它）。新列：`membership_id uuid not null default gen_random_uuid() unique`、`level int not null check (level between 1 and 4)`、`available_date date not null`、`valid_to_available_date date`（`check ((valid_to is null) = (valid_to_available_date is null))`）、`source_membership_id uuid references industry_source_memberships(id)`（SIC 行为 null）、`batch_id uuid not null references ingest_batches on delete restrict`、`status text not null default 'ok' check (status in ('ok','quarantined','superseded'))`、`superseded_by uuid`，自引用 FK `references issuer_industry_memberships(membership_id) deferrable initially deferred`（`check ((status='superseded') = (superseded_by is not null))`，CHECK 不可延迟，因此写入顺序按 §4.5）；**主键改为** `(membership_id)`（原五列主键改为部分唯一索引 `where status='ok'`，让被取代的历史版本可与新版本同键并存）；复合 FK `(scheme, version, code, level) → industry_classifications(scheme, version, code, level)`（已落地的分类 FK 方向是归属→分类，不依赖被移除的主键，保留）；新排他 `issuer_industry_memberships_one_per_level exclude using gist (issuer_id with =, scheme with =, version with =, level with =, daterange(valid_from, valid_to, '[)') with &&) where (status='ok')`；gist 索引 `(scheme, version, code, daterange(valid_from, valid_to, '[)')) where status='ok'`；触发器 `issuer_industry_memberships_lifecycle`（`update` 只允许 (a) `valid_to` null→日期（`> valid_from`，同时写 `valid_to_available_date >= valid_from`），(b) `status` `ok→quarantined`、`quarantined→ok`、`ok→superseded`（必须在同一 `update` 语句里同时写 `superseded_by`），(c) `provenance` 只增键；`delete` 禁止；`23514`，前缀 `append_only:`）；替换策略 `"issuer_industry_memberships public read"` → `"licensed read"`（§4.8） |
 | `industry_classifications` 策略 | 同上替换为 `licensed read` |
-| `issuers` | `create unique index if not exists issuers_cninfo_org_id_uidx on issuers(cninfo_org_id) where cninfo_org_id is not null`（§4.7 的硬键） |
-| `dq_freshness` | `alter table … drop constraint if exists dq_freshness_expected_cadence_check; add constraint … check (expected_cadence in ('daily','weekly','monthly','quarterly','event'))`（约束名以实际为准，迁移里用 `pg_constraint` 查名）；`freshness.ts` 加 `weekly`（窗口 7 天、宽限 2 天） |
+| `issuers` | 不改：§4.7 的硬键复用已落地的部分唯一索引 `issuers_cninfo_idx`（`20261105091000_issuers.sql:43`），测试断言它存在（V11） |
+| `dq_freshness` | `alter table … drop constraint if exists dq_freshness_expected_cadence_check; add constraint … check (expected_cadence in ('daily','weekly','monthly','quarterly','event'))`（约束名以实际为准，迁移里用 `pg_constraint` 查名）；`freshness.ts` 的 `Cadence` 联合、`WINDOW_MS`、`GRACE_MS` 与 `CADENCES` 校验列表加 `weekly`（窗口 7 天、宽限 2 天；计划三做同一改动，迁移语句与之逐字相同，合并顺序无关） |
 
 **新表**（全部先 `revoke all from public, anon, authenticated`，再按"读"列授权；service_role 读写除注明外）
 
@@ -128,6 +135,14 @@ industry_fetch_events                             -- 一次持久化的抓取（
   fetch_event_id uuid primary key, job text not null, params jsonb not null, started_at timestamptz not null,
   batch_id uuid not null references ingest_batches on delete restrict, attempt int not null default 1
   -- 同一抓取的重试复用同一 fetch_event_id（attempt + 1）；新抓取 = 新 id。仅 service_role
+
+industry_observation_receipts                     -- V7：每个 (抓取事件, 自然键) 的处理回执，与观测处理同事务写入；无内容变化也写
+  fetch_event_id uuid not null references industry_fetch_events(fetch_event_id), kind text not null check (kind in ('marks','official')),
+  natural_key text not null,                        -- marks: '<ticker>:<trade_date>'；official: '<scheme>:<version>:<code>:<trade_date>:<metric>'
+  payload_hash text not null,                       -- 本事件对该键取到的规范化内容哈希（不可变证据）
+  outcome text not null check (outcome in ('inserted','duplicate','superseded_previous')), observation_id uuid,   -- duplicate 时为当时的当前观测
+  created_at timestamptz not null default now(), primary key (fetch_event_id, kind, natural_key)
+  -- 仅 service_role 可读；只经 apply_observations 写
 
 security_marks                                    -- §6.1（观测版本化）
   observation_id uuid primary key default gen_random_uuid(),
@@ -241,7 +256,7 @@ industry_sync_scope                               -- SIC 调度（同规格二 f
 桶 industry-manifests（私有；application/gzip；单文件 ≤ 20 MB）；路径 sha256/<manifest_hash>.json.gz
 ```
 
-**函数**（全部 `create or replace function public.<name>(…) … language plpgsql|sql security definer set search_path = pg_catalog, public`；函数体内对象全部 `public.` 限定；每个函数 `revoke execute on function public.<name>(<签名>) from public;` 后只授列出的角色。**所有者**：专用非登录角色 `industry_publisher`（迁移 `create role industry_publisher nologin` 若不存在；`alter function … owner to industry_publisher`），`industry_publisher` 拥有对 `industry_metrics`、`industry_valuations`、`industry_valuation_pairs`、`industry_run_dependencies`、`security_marks`、`industry_official_valuations`、`industry_fetch_events` 的 DML；`service_role` 对这些表 **显式 `revoke insert, update, delete`**，只能执行函数（U5））
+**函数**（全部 `create or replace function public.<name>(…) … language plpgsql|sql security definer set search_path = pg_catalog, public`；函数体内对象全部 `public.` 限定；每个函数 `revoke execute on function public.<name>(<签名>) from public;` 后只授列出的角色。**所有者**：迁移角色（= 表所有者，见本节开头的所有权与权限模型；V1 取代第 5 稿的 `industry_publisher`）。`service_role` 对受保护表无任何写权限，只能执行函数（U5、V2））
 
 | 函数 | 授权 | 作用 |
 |---|---|---|
@@ -255,8 +270,18 @@ industry_sync_scope                               -- SIC 调度（同规格二 f
 | `apply_industry_memberships(p_batch uuid, p_issuer uuid, p_scheme text, p_version text, p_rows jsonb, p_source_ids uuid[], p_resolution jsonb) returns jsonb` | service_role | §4.5：预分配 id、取代更新、插入、解析落账同一事务（U1） |
 | `activate_industry_metric_run(p_run uuid)` / `activate_industry_valuation_run(p_run uuid)` | service_role | §5.4 / §6.4：`pg_advisory_xact_lock(hashtext(scheme||version||level))`；聚合校验 `status='building'`，估值校验 `status='published'` 并**复核发布不变量**（每个 `published` 行对应对照行 `pair_status='within'` 且 `series_qualified`）；完整性；`generation > active.generation`；`industry_run_dependencies` **逐格逐发行人**与活跃 run 比较，任何 `state_rev` 下降 → `raise 'dependency_regression'`；然后取**一个**数据库时刻 `t = clock_timestamp()`，写 run `activated_at = t`、本 run 全部行 `updated_at = t`，切换 active → superseded；`fingerprint_at` 不参与（U4、U6） |
 | `industry_state_fingerprint(p_market text) returns jsonb` | service_role | `fact_sync_scope` 的 `[{issuer_id, state_rev}]` |
-| `gc_industry_manifests() returns int` | service_role | 删除 `industry_manifests` 中不被任何 `industry_metrics`/`industry_valuations` 行引用、且不被 `judgments`（F4，表存在时）引用的哈希（先删桶对象再删索引行；桶对象删除失败的哈希保留） |
-| `prune_industry_runs(p_keep int) returns int` | service_role | 删除同 (scheme, version, level) 中 `superseded` 且 `generation` 排名在最近 `p_keep` 之外、且不被 F4 判断引用的 run（行级联删除；清单由 `gc_industry_manifests` 处理） |
+| `gc_industry_manifest_candidates(p_limit int) returns jsonb` / `delete_industry_manifests(p_hashes text[]) returns int` | service_role | 前者列出不被任何 `industry_metrics`/`industry_valuations` 行引用、且不被 `judgments`（F4，表存在时）引用的哈希；TS（`gcManifests`）先经 Storage API 删桶对象，再调后者删索引行（后者复核仍未被引用）；桶对象删除失败的哈希保留（迁移不能引用 `storage.objects`） |
+| `prune_industry_runs(p_keep int) returns int` | service_role | 删除同 (scheme, version, level) 中 `superseded` 且 `generation` 排名在最近 `p_keep` 之外、且不被 F4 判断引用的 run（行级联删除；清单由 `gc_industry_manifests` 处理）。**V8**：这是删除 run 及其行/对照行/依赖行的唯一路径（`service_role` 无 delete 权限）；冻结触发器对 `delete` 只放行所属 run 状态为 `superseded` 或 `failed` 的行，对 `update` 规则不变；函数先 `for update` 锁每个待删 run 并复核保留/引用条件。测试：剪除一个同时有估值行与对照行的 `superseded` 估值 run 成功；对 `active`/`published` run 的行删除被拒 |
+| `create_industry_metric_run(p jsonb) returns jsonb` / `create_industry_valuation_run(p jsonb) returns jsonb` | service_role | **V2**：建 run 的唯一路径；`pg_advisory_xact_lock(hashtext(kind||scheme||version||level))` 内取 `generation = max + 1`，插入 `status='building'`，返回 `{run_id, generation}`；`batch_id` 必须存在 |
+| `fail_industry_run(p_kind text, p_run uuid, p_reason text) returns void` | service_role | **V2**：`for update` 锁 run；只允许 `building`/`published` → `failed`，写 `coverage_summary`/`reconciliation` 中的 `failure_reason`；其他状态 `raise 'illegal_transition'` |
+| `set_industry_metric_run_coverage(p_run uuid, p_summary jsonb) returns void` | service_role | **V2**：`for update` 锁 run；只在 `building` 时写 `coverage_summary`（含 `facts_scope_ready`） |
+| `put_industry_manifest(p_hash text, p_kind text, p_bytes int) returns boolean` | service_role | 索引行 `insert … on conflict do nothing`，返回是否新建（桶对象由 TS 先上传，见 §5.3） |
+| `apply_sic_memberships(p_batch uuid, p_issuer uuid, p_version text, p_observed date, p_code text, p_provenance jsonb) returns jsonb` | service_role | §4.4 SIC：持发行人行锁；当前 `ok` 行同码 → `duplicate`；异码 → 关旧（`valid_to = valid_to_available_date = p_observed`；旧行 `valid_from = p_observed` → `raise 'same_day_change'`）开新；无行 → 插入 |
+| `set_industry_dataset_license(p_key text, p_status text, p_by text, p_note text) returns void` | service_role | admin 授权开关的唯一写路径（§9 `POST /api/admin/industries/licenses`） |
+| `record_industry_source_resolution_error(p_ids uuid[], p_error jsonb) returns int` / `upsert_industry_source_memberships(p_batch uuid, p_rows jsonb) returns jsonb` | service_role | 来源记录写入（§4.4 同键去重/取代）与解析失败记录；来源记录表对 `service_role` 无直接写 |
+| `begin_industry_fetch_event(p_job text, p_params jsonb, p_batch uuid) returns uuid` / `retry_industry_fetch_event(p_id uuid) returns int` | service_role | 抓取事件（U3）；重试 `attempt + 1` |
+
+**通用规则（V2）**：所有 `stage_*`、`publish_*`、`activate_*`、`fail_*`、`set_*_coverage` 在检查状态之前先对**同一个**父 run 行 `select … for update`，并持锁到写完；run 表对 `service_role` 撤销全部写权限（先 `revoke all`，再只 `grant select`，因此不残留 `truncate`）；已发布/激活 run 的元数据列（`generation`、`facts_as_of`、`knowledge_date`、`history_class`、`method_version`、`config_hash`、`formula_version`、`code_version`、`expected_grid`/`expected_dates`、`batch_id`、`created_at`）由触发器 `industry_runs_immutable` 冻结；合法状态转换只有 `building→active|failed`（聚合）、`building→published|failed`、`published→active|failed`（估值）、`active→superseded`（由 `activate_*` 写）。§6.4 中"写 `industry_valuation_pairs`（service_role）"等直接写表措辞一律读作"经对应函数写入"。
 
 **策略**（每张公共表一条，均 `for select to anon, authenticated using (...)`，只调用上述函数）：
 - `industry_classifications`、`issuer_industry_memberships`：`public.industry_dataset_is_public('scheme:' || scheme || ':' || version)`；归属另加 `status='ok'`。
@@ -271,12 +296,12 @@ industry_sync_scope                               -- SIC 调度（同规格二 f
 **来源记录与解析分离。** 适配器只产出 `industry_source_memberships`（不可变、带 `raw_hash`/`locator`）；解析器把当前来源记录映射为 `issuer_industry_memberships`。
 
 **申万（`providers/tushare-sw.ts`）**
-- 两遍（默认 `is_new='Y'` 与 `is_new='N'`）按 31 个 L1 循环、`has_more` 翻页、每页一个快照。**核对项 3**（I-1b 第一步）：两遍并集是否覆盖全部进出、`out_date` 是否为剔除日（窗口 `[in_date, out_date)`）、2021 版生效前的 `in_date` 含义、`parent_code` 命名空间；结论写 runbook 并决定 §4.6 的历史起点。
+- 两遍（默认 `is_new='Y'` 与 `is_new='N'`）按 31 个 L1 循环、`has_more` + `limit/offset` 翻页、每页一个快照；进出覆盖只在 31×2 遍的全集上成立，衔接检查跨 L1 做（K3）。成员接口只给 `index_code` 形式的 `l1/l2/l3_code`；分类表上下级用 `industry_code` 连接（`parent_code` 属 `industry_code` 命名空间，经同批映射为 `index_code` 后写入 `parent_code`，原值存 `attributes.parent_industry_code`）；代码别名表 `SW2021_CODE_ALIASES = {'850412.SI':'850401.SI'}`（特钢Ⅲ：成员接口与分类接口不一致；别名进 `METHOD_CONFIG` 并随方法版本），未在分类表中的 l3 代码隔离 `classification_code_unknown`。`stock_basic` 必须显式取 `list_status` = `L`、`D`、`P` 三遍（默认只返回 L；K-§17.1）。**核对项 3**（I-1b 第一步）：两遍并集是否覆盖全部进出、`out_date` 是否为剔除日（窗口 `[in_date, out_date)`）、2021 版生效前的 `in_date` 含义、`parent_code` 命名空间；结论写 runbook 并决定 §4.6 的历史起点。
 - 来源记录键 `(scheme, version, source, ts_code, l3_code, in_date)`；同键再次出现：全同 → `duplicates`；任何差异（含 `out_date` null→日期、日期更正）→ 新记录 `current`、旧记录 `superseded`（`superseded_by`），非"null→日期"的差异另隔离 `source_membership_changed`（供人工看原因）。新 `current` 记录的 `issuer_id` 为 null（待解析），旧记录的归属行在解析应用时被取代（§4.5）。
-- **解析与应用是一个事务**（`resolveSourceMemberships` 只做计算，写入全部在 `apply_industry_memberships` 内）：对每条 `current` 且 `issuer_id is null` 的记录：规格三落地前 `resolveIssuer({ticker: ts_code},{today})`（`resolution.method='today'`），落地后 `{asOf: in_date}`（`method='as_of'`）；解析到发行人 → 调 `apply_industry_memberships(…, p_rows=三行, p_source_ids=[该记录 id], p_resolution)`，函数在同一事务内写归属行并把来源记录的 `issuer_id/resolution` 置好；函数抛错 → 事务回滚，来源记录 `issuer_id` 仍为 null，`resolution_error` 记录原因（下次运行重试，不跳过；`n_unresolved` 仍计入）。解析不到 → `resolution_error={code:'no_issuer'}`。三行归属：`valid_from=in_date`，`valid_to=out_date`，`available_date=in_date`，`valid_to_available_date=out_date`，`provenance={availability:'effective_date_assumed', source_membership_id, raw_hash, locator}`。
+- **解析与应用是一个事务**（`resolveSourceMemberships` 只做计算，写入全部在 `apply_industry_memberships` 内）：对每条 `current` 且 `issuer_id is null` 的记录：规格三落地前 `resolveIssuer(tables, {ticker: ts_code}, {today})`（`src/lib/entities/resolve.ts:81`；`resolution.method='today'`），规格三的 `asOf` 选项落地后 `resolveIssuer(tables, {ticker: ts_code}, {asOf: in_date})`（`method='as_of'`）（V10）；解析到发行人 → 调 `apply_industry_memberships(…, p_rows=三行, p_source_ids=[该记录 id], p_resolution)`，函数在同一事务内写归属行并把来源记录的 `issuer_id/resolution` 置好；函数抛错 → 事务回滚，来源记录 `issuer_id` 仍为 null，`resolution_error` 记录原因（下次运行重试，不跳过；`n_unresolved` 仍计入）。解析不到 → `resolution_error={code:'no_issuer'}`。三行归属（K3：`out_date` 是**最后一个成员日（含）**，退市不关窗）：`valid_from=in_date`，`valid_to = min(out_date + 1 日, stock_basic.delist_date)`（两者皆空 → null），`available_date=in_date`，`valid_to_available_date = valid_to`；`in_date > delist_date` → 不写归属，隔离 `membership_after_delist`；`provenance={availability:'effective_date_assumed', source_membership_id, raw_hash, locator}`。
 - **纠正路径**：(a) 来源记录被取代（§4.4 第二条）：新记录解析应用时，函数把旧记录对应的 `ok` 归属行置 `superseded`（`superseded_by` 指向新行）后插入新行（§4.5 的取代转换）；(b) 规格三落地后以 `as_of` 重跑解析，发行人不同 → 现有三行 `status='quarantined'`（隔离 `membership_reassigned`），新归属以新 `batch_id` 写入；清单与 run 不回改。
 
-**SIC（`providers/sec-sic.ts`）**：同第 2 稿（范围由 `fact_sync_scope(market='US')` 同步到 `industry_sync_scope`；`valid_from=available_date=观察日`；变化关旧开新；同日二次变化隔离 `same_day_change`；`fiscalYearEnd` 追加到 `issuers.provenance.sec_submissions`）。SIC 不产生来源记录（`source_membership_id` null），`provenance` 直接记 `raw_hash`/`locator`。
+**SIC（`providers/sec-sic.ts`）**：同第 2 稿（范围由 `fact_sync_scope(market='US')` 同步到 `industry_sync_scope`；`valid_from=available_date=观察日`；变化关旧开新；同日二次变化隔离 `same_day_change`；`fiscalYearEnd` 追加到 `issuers.provenance.sec_submissions`）。SIC 不产生来源记录（`source_membership_id` null），`provenance` 直接记 `raw_hash`/`locator`。写入经 `apply_sic_memberships`（§4.3 函数表；V2：归属表对 `service_role` 无直接写）。
 
 ### 4.5 `apply_industry_memberships` 语义
 
@@ -311,8 +336,8 @@ member(on, knownBy) ⇔ status='ok' and available_date <= knownBy and valid_from
 
 规格三 §1.2 指派；**不**复用 `upsertIssuerByIdentifiers`（它要求 LEI/CIK/USCI，`merge.ts:12`）。专用路径（`TableClient`，按 ticker 逐个，幂等）：
 1. 输入：`stock_basic`（`ts_code, fullname, name, list_date, delist_date, list_status`）+ `resolveOrgId(symbol)` → `orgId`（无 → `skipped_summary(no_org_id)`）。
-2. 匹配顺序：(a) `issuers.cninfo_org_id = orgId` → 命中；(b) 否则 `issuer_securities` 当前行 `ticker = ts_code`（`valid_to is null`）→ 其发行人：若 `cninfo_org_id` 为空 → 回填（`provenance.cninfo_org_id={source:'cninfo:topSearch', observed_at}`）；若非空且不同 → 不写，`fileClaim({id_type:'cninfo_org_id', value: orgId, source})`，`skipped_summary(org_id_mismatch)`；(c) 都无 → 新建 `issuers{canonical_name_zh: fullname, cninfo_org_id: orgId, status:'active', provenance:{…}}`（`issuers_cninfo_org_id_uidx` 保证并发下只建一个；`23505` → 重读按 (a) 处理）。
-3. 证券：`attachSecurity({ticker: ts_code, share_class:'A', is_primary: true, valid_from: list_date ?? 观察日, source:'tushare:stock_basic', provenance:{list_date, exchange}})`；已有同发行人重叠窗口 → `duplicate`（不回填 `valid_from`；回填由规格三 F3-2 的 `listing_date` 证据脚本完成，本规格只把 `list_date` 留在 provenance）；不同发行人持有 → `conflict` → `fileClaim(pending)`。一个 orgId 已有多个 A 股 ticker（换码）→ 第二个 ticker 不自动挂，`fileClaim`。
+2. 匹配顺序：(a) `issuers.cninfo_org_id = orgId` → 命中；(b) 否则 `issuer_securities` 当前行 `ticker = ts_code`（`valid_to is null`）→ 其发行人：若 `cninfo_org_id` 为空 → 回填（`provenance.cninfo_org_id={source:'cninfo:topSearch', observed_at}`）；若非空且不同 → 不写，`fileClaim(tables, {issuer_id: <该证券的发行人>, id_type:'cninfo_org_id', value: orgId, source:'cninfo:topSearch'})`（V10），`skipped_summary(org_id_mismatch)`；(c) 都无 → 新建 `issuers{canonical_name_zh: fullname, cninfo_org_id: orgId, status:'active', provenance:{…}}`（`issuers_cninfo_idx` 保证并发下只建一个；`23505` → 重读按 (a) 处理）。
+3. 证券：`attachSecurity(tables, {issuer_id, ticker: ts_code, share_class:'A', is_primary: true, valid_from: list_date ?? 观察日, source:'tushare:stock_basic', provenance:{list_date, exchange}})`；已有同发行人重叠窗口 → `duplicate`（不回填 `valid_from`；回填由规格三 F3-2 的 `listing_date` 证据脚本完成，本规格只把 `list_date` 留在 provenance）；不同发行人持有 → `conflict`（`attachSecurity` 只为 ISIN 建 claim，本路径另 `fileClaim(tables, {issuer_id, id_type:'cninfo_org_id', value: orgId, source:'tushare:stock_basic'})` 记录待审）。一个 orgId 已有多个 A 股 ticker（换码）→ 第二个 ticker 不自动挂，同样 `fileClaim`。
 4. `delist_date` 非空且 `list_status='D'`：不处理窗口关闭（规格三 `valid_to_method='delisting'`），只记 `skipped_summary(delisted)`。
 5. 回执 `producer='load-a-share'`，`dataset='issuers.a_stock'`，cadence `daily`；cron `30 22 * * *`。
 
@@ -354,8 +379,10 @@ export interface IndustryDb {
 
 ### 4.10 A 股事实范围（与规格二的衔接）
 
-- **行业事实宇宙** = `industry_source_memberships` 当前记录解析出的全部发行人（含历史成分，因此含已退市者）∪ `a_stock` 活跃发行人。`scripts/industry/sync.ts --job facts-scope` 把该集合以 `reasons=['universe:sw2021']`、`priority 10` 经规格二 `reconcile_fact_sync_scope('CN', rows)` 写入（规格二决策 A 选"公开宇宙"的具体定义即本集合；**owner 决策 E**）。
+- **行业事实宇宙** = `industry_source_memberships` 当前记录解析出的全部发行人（含历史成分，因此含已退市者）∪ `a_stock` 活跃发行人。
+- **写入方式（V3）**：不另起 upsert 作业（计划二的 CN 同步在每次调度前调用 `reconcileScope(…,'CN')`，`desiredCn` 只含研究队列，会把单独写入的行业行在下一次运行退休；SQL `reconcile_fact_sync_scope` 用新 `reasons` 整体替换旧值）。改为扩展权威的 CN 期望集合构造：`src/lib/facts/scope.ts::desiredCn` 在 `// INDUSTRY` 块内并入 `src/lib/industry/facts-scope.ts::industryCnUniverse(tables, today, skipped)` 的结果，**按发行人合并 `reasons`**（`cohort` ∪ `universe:sw2021`，取并集后排序），只退休两集合并集之外的发行人；每行有合法 `fetch_key`（`fetchKey('CN',{ticker})`）；无当前 A 股证券的历史成分发行人取其**最近关闭**的 A 股窗口的 ticker（`chooseCnTicker` 作用于 `valid_to` 最大的那组行），仍无 → `skipped.no_cn_ticker` 计数；未解析的来源记录（`issuer_id is null`）不进入（它们在 `n_unresolved` 里）；全部输入用 `keysetAll` 分页取尽；`snapshotAt` 照旧由 `reconcileScope` 在读任何来源之前取得并传入 `FactsDb.reconcileScope`。并入受开关 `FACTS_CN_INDUSTRY_UNIVERSE=1` 控制（owner 决策 E；缺省关 → `desiredCn` 行为与计划二逐字相同，测试断言）。`scripts/industry/sync.ts --job facts-scope` 只是对 `reconcileScope('CN')` 的 dry-run/apply 包装与报告。
 - 退市发行人的 Tushare 三表是否仍可取：未核对（§17.1）；取不到者在规格二回执里体现，行业格子按 `n_with_data` 反映。
+- **CN 启用依赖（V4）**：`facts-scope` 只写调度范围，不是采集。CN 事实真正进入数据库还需要：完成计划二记录的 CN 真实数据核对（规格二 §16、计划二 Task 12/13 的未核对项）、提供 `TUSHARE_TOKEN`、设置 `FACTS_CN_ENABLED=1`（`src/app/api/cron/facts-sync/route.ts:48`）并配置 CN 事实 worker（`vercel.json` 目前只有 US）。在此之前允许离线实施与夹具测试，但生产聚合保持关闭（`aggregate` 不进 cron），不得声称 95% 就绪门可通过。
 - **就绪门**：聚合 run 激活额外要求"行业事实宇宙内 `last_success_at is not null` 的发行人占比 ≥ 95%"（`industry_metric_runs.coverage_summary.facts_scope_ready`），否则 run `failed`（`facts_scope_not_ready`）。
 - 规格二决策 C 若选"严格"（CN 行留 `quarantined` 直到对账），`read_facts` 对 anon/服务端都只给 `ok` 行 → 行业聚合无输入 → I-2/I-3 不启用；本规格不绕过。
 
@@ -365,7 +392,7 @@ export interface IndustryDb {
 
 ### 5.1 原则
 
-整体法；时点成分 + 知识截止（§4.6）；当时可见披露（`readFacts(issuer,'CN',{concepts, asOf: facts_as_of, history: true})`，`truncated=true` → **该发行人排除**（角色 `excluded:read_truncated`），格子照常产出）；派生用规格二 `derive.ts` 纯函数（版本一致性规则）；同集合同比；只汇总 `CNY`；金融业不算毛利率（`METHOD_CONFIG.financial_l1_codes`）；`METHOD_VERSION='industry-agg/1.0'`，`config_hash = sha256(canonicalJson(METHOD_CONFIG))`。
+整体法；时点成分 + 知识截止（§4.6）；当时可见披露：**每个 run 每个发行人恰好一次** `db.readFacts(issuer, 'CN', {concepts: AGG_CONCEPTS, asOf: facts_as_of, history: true})`（`AGG_CONCEPTS` = 全部指标所需概念的并集，即计划二 `DERIVE_CONCEPTS.CN`），同一 run 内该发行人的所有格、所有指标共用这一个信封（V6；不同调用的 `state_rev` 不得混用，也不取 MIN/MAX）；`truncated=true` → **该发行人在本 run 的全部格排除**（角色 `excluded:read_truncated`），格子照常产出；派生用 `deriveMetrics(result.rows, {market:'CN', asOf: facts_as_of, basedOnRev: result.stateRev})`（V5；适配器返回 `stateRev`，清单里显式写成 `state_rev`），保持十进制字符串与计划二的舍入规则（`RATIO_SCALE=10`）；同集合同比；只汇总 `CNY`；金融业不算毛利率（`METHOD_CONFIG.financial_l1_codes`）；`METHOD_VERSION='industry-agg/1.0'`，`config_hash = sha256(canonicalJson(METHOD_CONFIG))`。
 
 ### 5.2 指标表（只用规格二第 8 稿已有的概念与派生）
 
@@ -380,7 +407,7 @@ export interface IndustryDb {
 
 期望网格 `expected_grid`：L1 代码（分类表）× 期间（历史起点至 `facts_as_of` 的每个 3/6/9/12 月末；`gross_margin` 只 12-31）× 指标。每格一行：可算 → `ok`；不可算 → `missing` + `missing_reason ∈ {empty_set, zero_denominator, no_members, financial_excluded, unresolved_over_limit}`。显示阈值 `DISPLAY_MIN_COVERAGE=0.8`（`n_with_data/(n_members+n_unresolved)`）与 `DISPLAY_MAX_UNRESOLVED=0.05`；不满足的 `ok` 格页面显示"覆盖不足 x/y"/"未解析 z"，值在接口里仍返回。
 
-`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date > on)`、`in_date <= knownBy` 的**去重 ts_code** 数。
+`n_unresolved(code, on, knownBy)` = `industry_source_memberships` 中 `status='current'`、`issuer_id is null`（含 `resolution_error` 非空者）、`l1_code=code`（或 L2/L3）、`in_date <= on`、`(out_date is null or out_date >= on)`（K3：`out_date` 含当日）、`in_date <= knownBy` 的**去重 ts_code** 数。另排除 `industry_security_delistings` 中 `delist_date <= on` 的 ts_code（K4：退市股不建发行人，其来源记录永不解析；不排除会让它们在退市后永久计入 `n_unresolved`，与已解析成员按 `delist_date` 截断的口径不一致）。`industry_security_delistings(ts_code pk, delist_date, list_status, observed_at, batch_id, raw_hash)` 由 `load-a-share` 的 `stock_basic list_status='D'` 遍写入，日期变化隔离 `delist_date_changed`；仅 service_role 可读写。
 
 ### 5.3 输入清单（manifest）与离线重算
 
@@ -391,9 +418,9 @@ export interface IndustryDb {
   facts_as_of, knowledge_date, history_class, method_version, config_hash, formula_version, code_version,
   members:    [{issuer_id, ticker, valid_from, valid_to, available_date, valid_to_available_date, source_membership_id, raw_hash, locator, resolution_method}],
   unresolved: [{ts_code, in_date, out_date, source_membership_id}],
-  member_state_revs: [{issuer_id, state_rev}],                                                   -- 全部成员，含无事实者
-  facts:      [{issuer_id, concept, period_start, period_end, duration, fact_id, value_text, unit, consolidation, available_date, mapping_gen, filing_id, source_ref, raw_hash, citation}],
-  derived:    [{issuer_id, metric, period_start, period_end, rule: 'direct'|'a'|'b', input_fact_ids: []}],
+  member_state_revs: [{issuer_id, state_rev}],                                                   -- 全部成员，含无事实者；= 该发行人本 run 唯一信封的 stateRev（V6）
+  facts:      [{issuer_id, concept, period_start, period_end, duration, fact_id, value_text, unit, consolidation, available_date, mapping_gen, filing_id, source_ref, raw_hash, citation}],   -- source_ref/citation 经 FactsDb.filingsOfIssuer 显式查得（FactRow 不含），查不到 → 该字段 null 并在清单 warnings 记录
+  derived:    [{issuer_id, metric, period_start, period_end, duration, value, unit, basis, formula_version, inputs: MetricRow['inputs']}],   -- V5：原样保留计划二 MetricRow.inputs（每个输入的 fact_id/concept/filing_id/available_date、可选 ytd_rule same_filing|never_revised 与 quarter），不压成单一 rule
   roles:      [{issuer_id, metric, role: 'included'|'excluded', reason?: 'missing_concept'|'unit_excluded'|'read_truncated'|'version_inconsistent'|'not_in_comparable_set'|'financial_excluded'}],
   cells:      [{metric, duration, period_start, status, value_text?, missing_reason?, n_members, n_with_data, n_unresolved}] }
 ```
@@ -413,9 +440,9 @@ export interface IndustryDb {
 2. 就绪门（§4.10）不满足 → run `failed(facts_scope_not_ready)`。
 3. `stateFingerprint('CN')`；上一活跃 run 的 `industry_metrics` 行与清单。
 4. 对每个 (code, period_end)：**复用条件**（全部成立）：上一 run 同格 `ok` 且 `facts_as_of`、`knowledge_date`、`history_class`、`method_version`、`config_hash`、`formula_version` 相同；成分集合（含未解析集合、每条归属的 `status/valid_to/valid_to_available_date`）与清单 `members/unresolved` 逐条相同；清单 `member_state_revs` 中每个成员的 `state_rev` 等于当前（含无事实成员）；→ 复用清单哈希与行。否则重算、写清单、`replayFromManifest` 自检。`code_version` 不在复用键内（方法与公式版本相同即可复用；新行记录本 run 的 `code_version`，清单保留原 `code_version`）。规格二每次发布都 `state_rev + 1`（含只有重复行的运行），因此复用率预计很低，首版按"每周全量重算"规划预算，复用只是优化。
-5. 全部格完成 → `stageMetricRows`（`updated_at` 为 null）+ `stageRunDependencies`（**每格每候选成员**一行：`state_rev` 取该格实际使用的 `read_facts` 信封的 `state_rev`；复用格从冻结清单的 `member_state_revs` 复制；函数校验每格的依赖行集合 = 该格候选成员集合，缺失 → `raise 'dependencies_incomplete'`）→ `activateMetricRun`：advisory lock 内校验 `status='building'`；完整性 = `expected_grid` 的每格都有行（`ok` 或 `missing`）；**非过期** = `generation > active.generation` 且 `facts_as_of >= active.facts_as_of`，否则 `raise 'obsolete_run'`；**依赖非回退** = 对 active run 的 `industry_run_dependencies` 中每个 (cell_key, issuer_id)，本 run 若也有同键行则 `state_rev` 不小于 active 的，任何下降 → `raise 'dependency_regression'`（run `failed`；说明某格漏读了更新的发布，重跑即可）；不用 `fingerprint_at`、不用 MIN/MAX 聚合（U4）；然后取一个数据库时刻 `t`，写 run `activated_at=t` 与全部行 `updated_at=t`，切换 active → superseded（U6）。
+5. 全部格完成 → `stageMetricRows`（`updated_at` 为 null）+ `stageRunDependencies`（**每格每候选成员**一行：`state_rev` 取该发行人本 run 唯一 `read_facts` 信封的 `stateRev`（V6：一格内各指标共用同一信封，故 (cell_key, issuer_id) 粒度足够且无歧义）；复用格从冻结清单的 `member_state_revs` 复制；函数校验每格的依赖行集合 = 该格候选成员集合，缺失 → `raise 'dependencies_incomplete'`）→ `activateMetricRun`：advisory lock 内校验 `status='building'`；完整性 = `expected_grid` 的每格都有行（`ok` 或 `missing`）；**非过期** = `generation > active.generation` 且 `facts_as_of >= active.facts_as_of`，否则 `raise 'obsolete_run'`；**依赖非回退** = 对 active run 的 `industry_run_dependencies` 中每个 (cell_key, issuer_id)，本 run 若也有同键行则 `state_rev` 不小于 active 的，任何下降 → `raise 'dependency_regression'`（run `failed`；说明某格漏读了更新的发布，重跑即可）；不用 `fingerprint_at`、不用 MIN/MAX 聚合（U4）；然后取一个数据库时刻 `t`，写 run `activated_at=t` 与全部行 `updated_at=t`，切换 active → superseded（U6）。
 6. 任一格重算抛错 → run `failed`（行保留，RLS 不可见）。
-7. `recordAttempt('industry.agg.<scheme>', {ok, cadence:'weekly'})`；`finishBatch`。
+7. `recordAttempt(tables, 'industry.agg.<scheme>', {ok, cadence:'weekly'})`；`finishBatch(tables, batchId, {counts, errors})`（V10；`Cadence` 联合、窗口 7 天、宽限 2 天与校验列表同步加 `weekly`）。
 
 首版 `aggregate`/`valuation` 在 Mac Studio launchd 脚本运行；cron 版只在实测 < 240 s 时启用。全量耗时实施第一步实测。
 
@@ -433,11 +460,12 @@ export interface IndustryDb {
 
 - 适配器 `providers/tushare-marks.ts`：每次运行先 `beginFetchEvent('marks', {trade_date: D}, batch)` 得到 `fetch_event_id`（同一次抓取的重试复用该 id）；`daily_basic(trade_date=D)` 全市场，`has_more` 翻页；`total_share` 万股 × 10000（`transform='wan_to_unit'`）；行经 `apply_observations('marks', fetch_event_id, rows)` 写入。函数对每行（U2/U3 处方）：
   1. 对自然键 `(ticker, trade_date)` 取事务级锁 `pg_advisory_xact_lock(hashtext('marks:'||ticker||':'||trade_date))`（没有当前行时也锁）；
-  2. 幂等：`(ticker, trade_date, fetch_event_id)` 已存在 → `duplicates`（同一抓取事件的重试）；
+  2. 幂等（V7）：先查回执 `industry_observation_receipts(fetch_event_id, 'marks', natural_key)`：存在 → 该行 `duplicates`，不再与当前内容比较（即使当前观测已被更晚的事件改变）；回执的 `payload_hash` 与本次重试内容不同 → `raise 'fetch_event_payload_changed'`（重试必须是同一份已取得的载荷；新的网络抓取取新事件 id）；
   3. 与**当前** `ok` 观测比较内容（`close`、`total_share` 的规范十进制）：相同 → `duplicates`（不插行）；不同（包括等于某个被取代观测的内容，即 A→B→A 的回归）→ 先把当前 `ok` 观测 `update … set status='superseded'`，再 `insert` 新观测 `ok`（`supersedes=旧 observation_id`，`observed_at=now()`），同一事务，插入失败则整体回滚；隔离 `mark_revised`（供人工看原因）；
   4. 无当前观测 → 直接插入 `ok`。
-  `raw_hash` 只作证据，不参与身份。估值取 `status='ok'` 的当前观测，并把 `observation_id/observed_at` 冻结进清单；修正后的重算产生新 run 行（可得时刻规则见 §5.3）。测试：A→B→A 三个不同 `fetch_event_id` → 三条观测，当前为第三条；同一 `fetch_event_id` 重试 → `duplicates`。
-- **估计对象**：发行人 D 日市值 = 其**唯一**主 A 股 ticker（`issuer_securities.is_primary and share_class='A'`，D 日有效；0 或 >1 个 → 角色 `excluded:ambiguous_primary`）的 `close × total_share`；`total_share` 的口径（是否含 H/B 股股本）是 **核对项 2**（I-3 前置，用一家 A+H 公司对照交易所公布总股本），结论写入 `METHOD_CONFIG.total_share_basis` 并随方法版本。
+  5. 每个分支都在同一事务内写回执（`inserted` / `duplicate` / `superseded_previous`）。测试（V7）：A/E1 → 无变化 A/E2 → B/E3 → 重试 E2：B 仍为当前，E2 结果 `duplicates`。
+  `raw_hash` 只作证据，不参与身份。估值取 `status='ok'` 的当前观测，并把 `observation_id/observed_at` 冻结进清单；修正后的重算产生新 run 行（可得时刻规则见 §5.3）。测试：A→B→A 三个不同 `fetch_event_id` → 三条观测，当前为第三条；同一 `fetch_event_id` 重试 → `duplicates`；V7 用例见上。
+- **估计对象**：发行人 D 日市值 = 其**唯一**主 A 股 ticker（`issuer_securities.is_primary and share_class='A'`，D 日有效；0 或 >1 个 → 角色 `excluded:ambiguous_primary`）的 `close × total_share`；`total_share` 的口径（是否含 H/B 股股本）是 **核对项 2**（已完成，K2：`daily_basic.total_share` = 全部股份类别 A+H+B 发行总数，`float_share` = 流通 A 股；招行、平安、工行、张裕与月报逐股一致），`METHOD_CONFIG.total_share_basis='all_classes_incl_h_b'` 并随方法版本。`security_marks` 增列 `free_share numeric`（可空，Tushare `free_share` 万股 × 10000）供 §6.4 将来的申万口径对照（K1）。
 - 期望日期 `expected_dates` 由交易日历生成（Tushare `trade_cal`，字段实施时核对）：全历史每月最后一个交易日 + 最近 2 年每周最后一个交易日；`marks` 任务每次补齐**所有**尚未入库的期望日期（不只是上周五）；空响应 → `skipped_summary(no_rows)` 并在回执标出（不以空响应判定非交易日）。
 - 规则：`identityRule('mcap_vs_tushare', close×total_share, total_mv×10000, 0.001)`（同一来源内算术一致性，不是独立核对）失败 → `quarantined`；`rangeRule('close_range', 0.01, 100000)`。独立核对：§13.4 的交易所公布总股本/收盘价金集。
 - 不存 Tushare `pe/pb/ps`。
@@ -458,7 +486,7 @@ export interface IndustryDb {
 
 ### 6.4 运行、两级门控、发布
 
-- `comparator_basis` 来自 **核对项 1**（`sw_daily` 的 `pe/pb` 是 TTM 还是静态、整体法、负值处理；以申万官网发布说明为准）；`unknown` 时 run 可建但 `pe_*` 全部 `series_qualified=false`（只 `pb` 可能发布，若核对也确认 pb 口径）。**核对未完成，I-3 不进计划。**
+- `comparator_basis` 来自 **核对项 1**（K1 实测：`sw_daily.pe` 是 **TTM**，但按申万算法——A 股自由流通市值加权调和平均、申万季度日历选 TTM、亏损股市值留在分子；按该算法重建 10 格全部在 0.5% 内；§6.3 现行「Σ总市值/ΣTTM」与官方值差约 +17%（银行）、−3.9%～+3.2%（食饮）；`pb` 口径未确认）。因此 **§6.3/§6.4 需修订后 I-3 才能进计划**：owner/规格作者在 (a) 新增按申万算法的对照指标 `pe_ttm_sw`（需 `security_marks.free_share`，本稿已加列）、现有 `pe_ttm` 对照标 `not_applicable`，与 (b) 保留现公式、`pe_*` 对照全部 `not_applicable`（无官方锚点 → 不发布）之间选择（**新 owner 决策 H**）；`pb` 在 PB 核对完成前 `series_qualified=false`。**本稿 I-3 仍不进计划**（表、函数与标记采集照常落地）。
 - 每 run 完整快照（全部 `expected_dates` × 行业 × 指标，每格一行 `ok|missing`，经 `stage_industry_valuations` 暂存，`updated_at` 为 null 直到激活）；`recompute_from = 今天 − 400 天`（周运行）或历史起点（季度全量 / `--recompute-from` 手动）；更早日期从上一活跃 run **承接**（行复制为本 run 的行、清单共享），**承接条件**：上一活跃 run 的 `method_version`、`config_hash`、`formula_version`、`comparator_basis` 与本 run 全部相同，否则本 run 必须从历史起点全量重算（`recompute_from = 历史起点`，承接不允许；运行时自动降级并在回执记 `full_recompute_forced`）。`recompute_from` 只是覆盖元数据，不参与过期判定。
 - **逐日对照**（写 `industry_valuation_pairs`，service_role）`pair_status`：`within`（官方当前观测存在且 `|自算/官方 − 1| ≤ 0.01`）、`outside`（存在但超差 → 隔离 `valuation_mismatch`）、`no_official`、`no_computed`（本格 `missing`）、`invalid_denominator`、`not_applicable`（`market_cap`，以及与 `comparator_basis` 不匹配的 `pe_*`）。承接的日期也在本 run 内**重新对照**（官方观测可能已修正）。
 - **序列资格** `series_qualified(code, metric)`：对本 run 的完整快照（含承接日期）在 `expected_dates` 上计算：`n_pairs = within + outside` ≥ 0.9 × `n_expected`，且 `within / n_pairs ≥ 0.95`，且 `n_pairs ≥ 24`。每个 run 重新计算，不承接。
@@ -558,7 +586,7 @@ type IndustryTableRows = InputRef<'table_rows',
 |---|---|---|
 | `load-a-share` | `30 22 * * *` | cron |
 | `facts-scope` | `45 22 * * *`（`load-a-share` 后） | cron |
-| `memberships-sic` | `0 2 * * 0` | cron |
+| `memberships-sic` | `0 2 * * *`（每日，`limit=200`；第 69 条） | cron |
 | `memberships-sw` | `0 2 * * 1` | cron（积分允许）或脚本 |
 | `marks` | `0 2 * * 6`（补齐全部缺失期望日期） | cron |
 | `official` | `20 2 * * 6` | cron |
@@ -608,7 +636,7 @@ type IndustryTableRows = InputRef<'table_rows',
 同第 2 稿，增补：`source-memberships.test.ts`（同键去重、`out_date` 补齐 → superseded、内容变化隔离、`n_unresolved` 去重计数、解析纠正路径）；`load-a-share.test.ts`（匹配顺序 a/b/c、orgId 不一致 claim、并发 `23505` 重读）；`memberships.test.ts`（`effective_valid_to` 四种组合：未关闭 / 已关闭且已知 / 已关闭但 `knownBy` 早于关闭可知日 / `available_date > knownBy`）；`replay.test.ts`（`replayFromManifest` 与 `aggregate` 结果相等；打乱顺序哈希不变；篡改一个值 → `reproduced=false`）；`reuse.test.ts`（复用键每一项变化都导致重算，含"无事实成员获得首个事实"）；`valuation.test.ts`（主 A 股唯一性、观测版本冻结、`pe_ttm` 与 `pe_static` 各自门控、序列资格三个阈值、逐日 `pair_status` 六态、`published` CHECK、月末分位资格）；`freshness.test.ts`（`weekly`）；`licenses.test.ts`（数据集键四种）。
 
 ### 13.2 数据库（`test:db`，critical）
-`industry.integration.test.ts`：迁移可重放两次（含 `dq_freshness` CHECK 改动与 `weekly` 写入、归属表主键改动、**旧排他 `issuer_industry_memberships_no_overlap` 已不存在**、`superseded_by` FK 为 deferrable）；复合 FK；层级排他（仅 `ok` 行参与；`superseded` 历史版本与新版本同键并存）；生命周期触发器（`ok→superseded` 必须同语句带 `superseded_by`）；`apply_industry_memberships` 原子（预分配 id、取代更新、插入、解析落账同事务；替代行插入失败时取代更新回滚；失败后来源仍未解析且 `resolution_error` 非空）、并发、取代转换；`apply_observations`：同自然键并发两事务串行、先取代后插入、A→B→A 三个 `fetch_event_id` 产生三条观测、同 `fetch_event_id` 重试 `duplicate`、同内容不插行；`issuers_cninfo_org_id_uidx`；两类 run 的 `generation` 唯一与活跃唯一；`stage_*` 只接受 `building`、强制 `published=false`/`updated_at=null`；`activate_*` 的完整性、`obsolete_run`、`dependencies_incomplete`、`dependency_regression`（构造 active run 某格某发行人 `state_rev` 高于新 run 同格同发行人；同 run 内不同格不同 `state_rev` 可激活）；连续两次周运行（不同 `recompute_from`）都能激活；**U5**：`service_role` 直接 `insert … published=true`、直接 `update published`、直接 `delete` 对照行均被权限拒绝（`42501`），`industry_publisher` 为函数所有者且 nologin，发布后 `update` 被冻结触发器拒绝；**U6**：激活后全部行 `updated_at = run.activated_at`，building 行 `updated_at is null` 且 anon 不可见，跨 UTC 午夜用例（run 午夜前创建、午夜后激活 → `updated_at` 在午夜后）；函数 `search_path`/`EXECUTE` 权限（anon 只能执行四个只读函数；`pg_proc.proconfig` 断言）；RLS 真实角色三态 + `failed` run 不可见 + 未 `published` 估值不可见 + `official`/`pairs`/`source_memberships`/`licenses`/`run_dependencies`/`fetch_events` 不可见 + **`scheme` public 且 `official` internal 时 anon 在任何公共表/视图都取不到官方值**；`industry_freshness()` 只返回三列。
+`industry.integration.test.ts`：迁移可重放两次（含 `dq_freshness` CHECK 改动与 `weekly` 写入、归属表主键改动、**旧排他 `issuer_industry_memberships_no_overlap` 已不存在**、`superseded_by` FK 为 deferrable）；复合 FK；层级排他（仅 `ok` 行参与；`superseded` 历史版本与新版本同键并存）；生命周期触发器（`ok→superseded` 必须同语句带 `superseded_by`）；`apply_industry_memberships` 原子（预分配 id、取代更新、插入、解析落账同事务；替代行插入失败时取代更新回滚；失败后来源仍未解析且 `resolution_error` 非空）、并发、取代转换；`apply_observations`：同自然键并发两事务串行、先取代后插入、A→B→A 三个 `fetch_event_id` 产生三条观测、同 `fetch_event_id` 重试 `duplicate`、同内容不插行；`issuers_cninfo_idx` 存在（不新增等价索引）；两类 run 的 `generation` 唯一与活跃唯一；`stage_*` 只接受 `building`、强制 `published=false`/`updated_at=null`；`activate_*` 的完整性、`obsolete_run`、`dependencies_incomplete`、`dependency_regression`（构造 active run 某格某发行人 `state_rev` 高于新 run 同格同发行人；同 run 内不同格不同 `state_rev` 可激活）；连续两次周运行（不同 `recompute_from`）都能激活；**U5**：`service_role` 直接 `insert … published=true`、直接 `update published`、直接 `delete` 对照行均被权限拒绝（`42501`），全部函数 `prosecdef` 且所有者 = 表所有者、`service_role` 对受保护表直接 `truncate` 也 `42501`（V1/V2），run 表直接 `update status` 被拒、`active` run 无法被改回 `building`（V2），发布后 `update` 被冻结触发器拒绝；**U6**：激活后全部行 `updated_at = run.activated_at`，building 行 `updated_at is null` 且 anon 不可见，跨 UTC 午夜用例（run 午夜前创建、午夜后激活 → `updated_at` 在午夜后）；函数 `search_path`/`EXECUTE` 权限（anon 只能执行四个只读函数；`pg_proc.proconfig` 断言）；RLS 真实角色三态 + `failed` run 不可见 + 未 `published` 估值不可见 + `official`/`pairs`/`source_memberships`/`licenses`/`run_dependencies`/`fetch_events` 不可见 + **`scheme` public 且 `official` internal 时 anon 在任何公共表/视图都取不到官方值**；`industry_freshness()` 只返回三列。
 
 ### 13.3 离线集成（critical）
 `sync.integration.test.ts`：申万来源记录两遍；解析（含 `out_date` 更正 → 旧归属 `superseded`）；`load-a-share`；标记 + 规格二 A 股夹具 → 聚合 run → 删库后仅凭清单 `replayFromManifest` 相等；注入更晚 filing 夹具（规格二写路径）→ `recompute` 为 `changed`，重算得到的新行 `updated_at` 为新 run 时刻；第二次运行复用（构造 `state_rev` 不变的夹具）；估值 run 两级门控（三种不达标各自不发布；`outside` 日期不发布而同序列其他日期发布）；承接：第二次周运行承接旧日期、第三次改 `config_hash` 后强制全量；标记修正后估值重算行的 `updated_at` 晚于修正观测；`/replay` 对未发布格 404，对 `official` internal 不含 `officialValue`。
@@ -667,9 +695,10 @@ type IndustryTableRows = InputRef<'table_rows',
 | **决策 E**：A 股事实范围 = 行业事实宇宙（§4.10，= 规格二决策 A 的"公开宇宙"定义；配额与回填时间另算） | owner | I-1a 前 | 未选 → I-2/I-3 不启用 |
 | **决策 F**：`anon` 与 `authenticated` 是否同等可读 | owner | I-0 前 | 同等 |
 | **决策 G**：历史重建期（`history_class='reconstruction'`，v1 申万全部如此）是"显示 + 徽标"还是"抑制到有公告日证据与 `as_of` 解析为止" | owner | I-2 前 | 显示 + 徽标 |
-| **核对项 1**（I-3 前置）：`sw_daily` `pe/pb` 口径 → `comparator_basis` | owner / 实施者 | I-3 计划前 | 未完成 → I-3 不进计划 |
-| **核对项 2**（I-3 前置）：`daily_basic.total_share` 是否含 H/B 股 → `total_share_basis` | 实施者 | I-3 计划前 | 同上 |
-| **核对项 3**（I-1b 第一步）：`index_member_all` 两遍覆盖、`out_date`、2021 前 `in_date`、`parent_code` 命名空间 → 历史起点与 `history_class` | 实施者 | I-1b | — |
+| **核对项 1**（I-3 前置）：`sw_daily` `pe/pb` 口径 → `comparator_basis` | 实施者 | 2026-11-06 完成（K1）：`ttm`（申万算法）；`pb` 未定 | §6.4 需修订 → 决策 H |
+| **决策 H**：估值对照口径 (a) 申万算法对照指标 `pe_ttm_sw` / (b) 无对照不发布 | owner | I-3 计划前 | 未选 → I-3 不进计划 |
+| **核对项 2**：`daily_basic.total_share` 是否含 H/B 股 → `total_share_basis` | 实施者 | 2026-11-06 完成（K2）：`all_classes_incl_h_b` | — |
+| **核对项 3**：`index_member_all` 两遍覆盖、`out_date`、2021 前 `in_date`、`parent_code` 命名空间 → 历史起点与 `history_class` | 实施者 | 2026-11-06 完成（K3）：31/134/346；`parent_code`=`industry_code`；`out_date` 含当日；退市不关窗；2021-07-30 前为回溯映射；别名 850412→850401 | — |
 | `TUSHARE_TOKEN`；Mac Studio launchd；生产迁移与首轮脚本；黄金集抄录；卖方分析师抽样；Claude Design canvas | owner | 各工作包前 | — |
 
 ---
@@ -692,6 +721,97 @@ type IndustryTableRows = InputRef<'table_rows',
 ## 18. 实施记录与偏差
 
 （计划落地后补记，格式同规格一 §14。）
+
+第 7 稿补充 K4（2026-11-06，实施复审发现）：`n_unresolved` 排除已退市 ts_code（新表 `industry_security_delistings`）。
+
+第 7 稿（2026-11-06）：核对项 1–3 与 §17.1 实测（`03-tushare-verification.md`，真实录制夹具 36 份）——K3 窗口 `valid_to=min(out_date+1, delist_date)`、`membership_after_delist`、`stock_basic` 显式 L/D/P、别名表、`parent_code` 命名空间、`n_unresolved` 的 `out_date >= on`；K2 `total_share_basis`；K1 `comparator_basis=ttm`（申万算法）使 §6.3 公式无法通过对照 → 新 owner 决策 H，I-3 仍不进计划，`security_marks.free_share` 先行加列。§17.1 已答：退市公司 `stock_basic`（需 `list_status='D'`）与 `income` 都可取。
+
+第 6 稿（2026-11-06）相对第 5 稿的变化，均来自 Codex 第五轮增量审计（`docs/audits/2026-11-06-industry-research/01-codex-spec-round5.md`，处置表 `02-disposition.md`）：V1 取消 `industry_publisher`，沿用计划二"迁移角色拥有表与函数 + 撤销 `service_role` 写权限"的模型；V2 run 表写权限撤销、建/失败/覆盖/授权/来源记录/SIC 全部经函数，状态转换与元数据冻结；V3 行业宇宙并入 `desiredCn`（开关 `FACTS_CN_INDUSTRY_UNIVERSE`）；V4 CN 启用依赖；V5 清单保留 `MetricRow.inputs`；V6 每 run 每发行人一个事实信封；V7 观测回执表；V8 剪除路径与冻结触发器兼容；V9 迁移 `20261111090000`/`20261111091000`；V10 调用签名；V11 复用 `issuers_cninfo_idx`；V12 开篇可得时刻规则。另（指挥会话自查）：清单 GC 拆为"列候选 + TS 删桶对象 + 删索引"，因为迁移不能引用 `storage.objects`。
+
+### 18.1 计划 `2026-11-06-industry-research` 的实施记录与偏差（Task 1–20 与修复批次 1–8）
+
+来源：计划骨架《已知规格偏差》节（逐条、同编号）。"决定"不改变规格语义；"偏差"与规格文字不同。
+
+| # | 范围 | 类别 | 内容 |
+|---|---|---|---|
+| 1 | 迁移与契约（Task 1–4） | 决定 | `coverage_summary` 默认 `'{}'` 并约束为 object（规格写 `'[]'`；契约类型是 `Record<string,unknown>`，`set_*_coverage`/`fail_*` 写对象键）。 |
+| 2 | 迁移与契约（Task 1–4） | 决定 | `membership_id` 只做主键（主键已含唯一性，未另加 unique）。 |
+| 3 | 迁移与契约（Task 1–4） | 决定 | 估值行激活盖章顺序为先置 run `active` 并写 `activated_at = t`，再写行 `updated_at = t`；冻结触发器放行条件为"run 为 active、只改 `updated_at`、旧值 null、新值 = run.activated_at"（规格写"run 状态为 published"，不变量相同）；同一触发器用于 `industry_metrics`；delete 放行 run 为 `superseded/failed` 或 run 已不存在（级联）。 |
+| 4 | 迁移与契约（Task 1–4） | 偏差 | `dependencies_incomplete` 在**激活时**校验（暂存分块，stage 函数里无法校验整格）。 |
+| 5 | 迁移与契约（Task 1–4） | 决定 | GC 两函数增加 `p_min_age_seconds default 86400`；`put_industry_manifest` 冲突时刷新 `created_at`；`prune_industry_runs` 增加可选 `p_scheme/p_version`（契约方法只传 `p_keep`）。 |
+| 6 | 迁移与契约（Task 1–4） | 决定 | advisory lock 键带命名空间与分隔符：`'industry-run:<kind>:<scheme>:<version>:<level>'`、`'industry-obs:<kind>:<natural_key>'`、`'industry-src:<source>:<ts_code>:<l3_code>:<in_date>'`。 |
+| 7 | 迁移与契约（Task 1–4） | 偏差 | `industry_state_fingerprint` 返回 `{taken_at, revs:[{issuer_id,state_rev}]}`（规格只写了数组；契约要 `takenAt`）。 |
+| 8 | 迁移与契约（Task 1–4） | 决定 | 额外保护——`industry_source_memberships_immutable` 触发器（证据列不可改、不可删）；`security_marks`、`industry_official_valuations`、`industry_valuations` 加 `*_text` 生成列（PostgREST 把 numeric 发成 JSON 数，十进制字符串端到端靠它们）。 |
+| 9 | 迁移与契约（Task 1–4） | 决定 | 迁移一开头按函数访问顺序 `lock table … in access exclusive mode` 锁已存在的行业表，随后是"归属表必须为空"的升级守卫 `industry_upgrade_requires_empty_memberships`（生产该表此前无写入者）。 |
+| 10 | 迁移与契约（Task 1–4） | 决定 | 估值激活时 run 不是 `published` → `illegal_transition`；聚合激活时 run 不是 `building` → `run_not_building`。 |
+| 11 | 迁移与契约（Task 1–4） | 偏差（集成） | 激活完整性按 `(code, metric, duration, period_end)` 校验（规格 §5.4 只说 `expected_grid` 的 codes × period_ends × metrics），`(metric, duration)` 表 = `method.ts::cellSpecs`（与 22 一致）。 |
+| 12 | 迁移与契约（Task 1–4） | 决定（第 7 稿 K3） | 未解析计数 `unresolvedOf/Count` 用 `in_date <= least(on, knownBy)` 与 `out_date is null or out_date >= on`（`out_date` 含当日）；SQL/pg/内存与 `memberships.ts::countUnresolved` 逐条一致。 |
+| 13 | 迁移与契约（Task 1–4） | 决定（集成） | `upsertClassifications` 对 `attributes` 也做（键序无关的）比较，不同即 `conflicts` 不覆盖；Task 7/9 把冲突一律隔离为 `classification_name_conflict`——上游只改 `is_pub` 等属性时也会以该码隔离。 |
+| 14 | 迁移与契约（Task 1–4） | 决定 | `src/lib/entities/issuers.integration.test.ts` 的 INDUSTRY 块按迁移一后的状态改断言、重放计划一迁移后接着重放迁移一（先锁 `issuers` 防死锁）；`dq_freshness` weekly 改动与计划三逐字相同、不加标记。 |
+| 15 | 采集与成分（Task 5–9） | 偏差 | 规格的 `src/lib/entities/load-a-share.ts` 落在 `src/lib/industry/load-a-share.ts`；`providers/tushare-sw.ts` 落在 `providers/tushare-industry.ts`（计划文件表）。 |
+| 16 | 采集与成分（Task 5–9） | 偏差 | 规格说分页用 `keysetAll`；计划二的 `scope.ts::keysetAll` 保持原样（只服务计划二调用方）。工业侧使用 `src/lib/industry/keyset.ts::industryKeysetAll`（不依赖 `scope.ts`）：每页从上一页末值（含）重启，读到某页没有新行才结束，不以短页结束（服务端页大小可能小于 `MAX_PAGE`）；整页 `MAX_PAGE` 行都已见过（同值组无法推进）则抛 `scope_tie_group_overflow`，绝不静默截断。`facts-scope.ts` 与 `run-aggregation.ts` 使用它，另加 `scope.ts::currentSecurities`。 |
+| 17 | 采集与成分（Task 5–9） | 决定 | `industryCnUniverse` 经 service-role `TableClient` 直接读 `industry_source_memberships`（生产 `desiredCn` 只有 `tables` + `FactsDb`；见《跨任务接口约定》B1）。 |
+| 18 | 采集与成分（Task 5–9） | 决定 | SIC 节点平铺为 level 1（`parent_code null`，`attributes {office}`），`apply_sic_memberships` 行 level = 1。 |
+| 19 | 采集与成分（Task 5–9） | 决定（第 7 稿 K1–K3） | 夹具为 2026-11-06 的真实录制（36 份，逐字节拷贝，保留 `request`/`response_sha256`）；真实数据造不出的情形在测试内以标注的"synthetic edit of a real response"构造，不建合成夹具文件；`parent_code` 属 `industry_code` 命名空间（`index_code` 形式仍防御性接受），原值存 `attributes.parent_industry_code`。 |
+| 20 | 采集与成分（Task 5–9） | 已知限制 | `load-a-share` 跳过已退市 `stock_basic` 行（§4.7 第 4 步），历史成员在规格三落地前保持未解析（K4 之后：已退市 ts_code 的来源记录不再计入 `n_unresolved`，见第 70 条）；上游消失的来源记录保持 `current`（规格未定义来源记录的退役）。 |
+| 21 | 聚合、清单、标记（Task 10–14） | 偏差（契约变更） | `ManifestRole` 加 `duration`；清单 `roles` 全序为 `(metric, duration, issuer_id)`（规格 §5.3 写 `(metric, issuer_id)`）。同一指标在 12-31 有 12M 与 3M 两格，一个发行人可能一格纳入、一格排除。 |
+| 22 | 聚合、清单、标记（Task 10–14） | 偏差 | `12M` 格只在 `period_end` 为 12-31 时存在（A 股 12M 事实是会计年度；其他季末 12M 格恒为空集）；其他季末用 `3M` 与 `TTM`。 |
+| 23 | 聚合、清单、标记（Task 10–14） | 决定 | 同比的上年同期 = 期间起止各移一年的精确匹配（不用计划二 derive 的 350–380 天窗口）；同集合 = 当期与上年同期都有值的成员。 |
+| 24 | 聚合、清单、标记（Task 10–14） | 决定 | `roe` 分母 Σ(期初+期末)/2 ≤ 0 → `missing(zero_denominator)`（与计划二个股 ROE 非正平均权益不出值一致）。 |
+| 25 | 聚合、清单、标记（Task 10–14） | 决定 | `unresolved_over_limit` 只在 `n_members=0` 且 `n_unresolved>0` 时使用；显示阈值从不改变 `status`（§5.2）。 |
+| 26 | 聚合、清单、标记（Task 10–14） | 已废止 | 修复批 5：就绪门分母现为全宇宙（`factsUniverse`），不再是本 run 网格的成员并集；见 75、76。 |
+| 27 | 聚合、清单、标记（Task 10–14） | 决定 | 状态指纹用 `FactsDb.scopeAll('CN')`（一次读取同时给 `state_rev` 与 `last_success_at`）；`fingerprint_at` 是该读取的客户端时刻（仅编排元数据，U4）；`IndustryDb.stateFingerprint` 未被编排使用。 |
+| 28 | 聚合、清单、标记（Task 10–14） | 决定 | 清单只在该组至少一个格 `ok` 时上传（全 `missing` 的组没有行引用它）。 |
+| 29 | 聚合、清单、标记（Task 10–14） | 决定（集成） | `mark_revised` 隔离由 `apply_observations` 在同一事务内写（Task 2 SQL / Task 3 内存）；`marks.ts` 不预读当前观测、不重复写。 |
+| 30 | 聚合、清单、标记（Task 10–14） | 决定 | Task 14 用 `IndustryDb` 契约（`upsertSourceMemberships` → `applyMemberships`）播种成分，与 Task 7/8 编排调用同一组 RPC，但不依赖其编排函数签名。 |
+| 31 | 聚合、清单、标记（Task 10–14） | 决定 | `AggregationOptions.level` 是 `number`（生产传 1），另有 `codes?` 过滤（脚本与 Task 14 用）。 |
+| 32 | 聚合、清单、标记（Task 10–14） | 决定（集成） | `buildCellManifest`（`/replay?mode=recompute`）与 run 共用 `loadGroup/readIssuerFacts/computeGroup`；recompute 清单头的 `code_version` = 当前部署的 `VERCEL_GIT_COMMIT_SHA`（缺省 `'unknown'`）。 |
+| 33 | 聚合、清单、标记（Task 10–14） | 决定（第 7 稿 K1/K2） | `security_marks` 增可空列 `free_share`（Tushare `free_share` 万股 × 10000，非正视为缺失）；它属于观测内容（修订 → 新观测，`payload_hash` 含它）；`METHOD_CONFIG.total_share_basis='all_classes_incl_h_b'`、`code_aliases` 入 `METHOD_CONFIG`（`CONFIG_HASH` 钉值随之更新；方法版本仍为首发的 `industry-agg/1.0`）。 |
+| 34 | 读接口、页面、调度（Task 15–20） | 偏差 | `/replay` 另收可选 `duration`；同一 `period_end` 有多格（12M 与 3M）而未给 → 400 `invalid_parameter:duration`（格主键含 `period_start`/`duration`）。 |
+| 35 | 读接口、页面、调度（Task 15–20） | 偏差 | `/replay` 估值格只做授权顺序与 `officialValue`，不读估值清单，返回 `replay:'deferred_i3'`（I-3 未实施）。 |
+| 36 | 读接口、页面、调度（Task 15–20） | 决定 | `/replay?mode=recompute` 依赖 `buildCellManifest`；差异按成分/未解析/事实/state_rev/格列出（§5.5）；`filterManifest` 的 `roles` 按 metric **和**格的 duration 裁剪（见 21）。 |
+| 37 | 读接口、页面、调度（Task 15–20） | 偏差 | `GET /api/entities/[issuerId]/industries` 另返回 `schemes:[{scheme,version,datasetKey,public}]`（公司页区分"授权待确认"与"无分类"）。 |
+| 38 | 读接口、页面、调度（Task 15–20） | 偏差 | admin replay 另返回 `focus`（与公共 original 回放同形），供内部预览的来源抽屉使用。 |
+| 39 | 读接口、页面、调度（Task 15–20） | 决定 | cron/脚本作业门——Tushare 作业无 token → 503 `tushare_unavailable`；`facts-scope`/`aggregate` 的 apply 未开 `FACTS_CN_INDUSTRY_UNIVERSE`/`FACTS_CN_ENABLED` → 403 `job_disabled`；`official`/`valuation` → 200 `skipped:'deferred_i3'`（owner 默认 E、V4）。 |
+| 40 | 读接口、页面、调度（Task 15–20） | 决定（集成） | `memberships-sic`、`marks`、`aggregate` 无 dry-run（运行函数总是写库），dry-run 返回 `dry_run_unsupported`；`marks` 的交易日必须显式给出（`trade_cal` 随 I-3 延后）；`facts-scope` 作业在 `jobs.ts` 内实现（dry-run = `industryCnUniverse`，apply = `reconcileScope`）；`load-a-share` 的 `--limit` 映射为 cninfo 查询上限 `maxLookups`。 |
+| 41 | 读接口、页面、调度（Task 15–20） | 决定 | `vercel.json` 只加 `memberships-sic`（频率与上限见第 69 条）；其余作业为脚本（owner 默认 E；无 Tushare token）。 |
+| 42 | 读接口、页面、调度（Task 15–20） | 决定 | 表格"同比"只显示存储的同比指标（营收、归母净利），其余显示 "—"（页面不做派生运算）。 |
+| 43 | 读接口、页面、调度（Task 15–20） | 决定 | 列表页判断区只放"未设判断"说明；F4 卡在详情页（F4 主体是单个行业）。 |
+| 44 | 读接口、页面、调度（Task 15–20） | 偏差 | 成分页 L2 过滤未做（画布有）；路径列显示二级/三级。 |
+| 45 | 读接口、页面、调度（Task 15–20） | 决定 | 页面"上次成功响应"为进程内内存（单实例、≤ 200 个查询、读到 `unlicensed` 即清除）。 |
+| 46 | 读接口、页面、调度（Task 15–20） | 偏差 | E2E 为夹具模式（`INDUSTRY_E2E_FIXTURES=1`，非生产），不连数据库（§13.5）。 |
+| 47 | 读接口、页面、调度（Task 15–20） | 决定 | §7.1 输入适配——`industry_valuations` 自然键可解析、构造返回 `unsupported_deferred_i3`；`origin.adapter` = run 的 `method_version`。 |
+| 48 | 读接口、页面、调度（Task 15–20） | 偏差 | 三级文字用 `text-text-dim`（#a1a1aa），不用画布的 Distant Fog（对比度不足，待 owner 确认）。 |
+| 49 | 读接口、页面、调度（Task 15–20） | 决定 | 新鲜度数据集名以运行函数实际写入为准（见《跨任务接口约定》B3）；读模型 `AGG_FRESHNESS = {sw2021:'industry.agg.sw2021'}`、`MEMBERSHIP_FRESHNESS = {sw2021:'industry.sw2021.memberships', sic:'industry.sic.memberships'}`。 |
+| 50 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 偏差（第 7 稿 K3） | 成分窗口 `valid_to = valid_to_available_date = min(out_date + 1 日, delist_date)`；`in_date >= delist_date`（规格写 `>`；相等时窗口为空）→ 不写归属，隔离 `membership_after_delist`。 |
+| 51 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 决定（第 7 稿 K3） | `out_date = in_date` 是合法的单日记录，只拒绝 `out_date < in_date`；成员代码经 `SW2021_CODE_ALIASES`（`850412.SI→850401.SI`）映射，原值存 `locator.code_aliases`；L1/L2/L3 任一不在分类树 → 隔离 `classification_code_unknown`、不写。 |
+| 52 | 第 7 稿 K1–K3 带来的窗口与代码规则（Task 5–8） | 决定（第 7 稿 §17.1） | `load-a-share` 取 `stock_basic` 的 `L`、`D`、`P` 三遍（D 行只记 `skipped_summary(delisted)`，规格 §4.7 第 4 步）；`runResolveMemberships` 另取一次 `list_status='D'` 得 `delist_date`。 |
+| 53 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#1） | 客户端组件只经 `display.ts` → `method-constants.ts`（无 import）取方法常量；`method.ts` 再导出它们；守卫测试扫描客户端 import 图；Task 20 门禁加 `npm run build`。 |
+| 54 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#2） | 页面"上次成功响应"只在本次授权重验通过后显示（重验失败或为 false → 关闭并忘掉该数据集），2 小时过期，授权开关路由切换后立即失效（规格 §11 的"上次成功响应"收紧，§4.8 授权门优先）。 |
+| 55 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#3） | 已解析成分在股票后来退市时由 `reconcileDelistings` 经 `apply_industry_memberships` 的关窗步骤就地关到 `min(out_date+1, delist_date)`；已关闭且终点不同的不改写，隔离 `membership_delist_conflict`。 |
+| 56 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#4） | 清单 GC 改为认领/tombstone 协议（`industry_manifests.gc_claimed_at`；认领期间登记与暂存引用都被拒 `manifest_gc_in_progress`；认领超过 1 h 可重认领）；`ManifestStore.put` 改为先登记后上传。新错误码 `manifest_gc_in_progress` 进共享契约。 |
+| 57 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#5） | 成分取代按"来源谱系 + 层级"配对后继（不再只按层级取第一个）。 |
+| 58 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#6） | SIC 调度行以 `(updated_at, lease_batch_id)` 做 compare-and-swap 认领，完成以 `lease_batch_id` 为栅栏；新行只 insert、从不覆盖已有行与租约。 |
+| 59 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#7） | 离开 US 事实范围的 SIC 调度行被退役（`next_due_at='9999-12-31T00:00:00Z'`），回到范围再激活；取到期行时分页过滤到凑满 `limit` 个合格行。 |
+| 60 | Codex 计划审计第 1 轮（`06-codex-plan-round1.md`）带来的决定 | 决定（#8） | E2E 夹具的每个格由真实计算生成的独立清单支撑，原样回放必须 `reproduced="true"`；另有一个故意篡改的格断言 `reproduced="false"`；`fixture-rows.ts::manifestOf` 标明只作版面（使用处都 mock 回放）。 |
+| 61 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-1） | 清单对象键按登记代次区分 `sha256/<hash>/<upload_id>.json.gz`，索引行存 `object_path`，读写都走索引路径；GC 认领发 `gc_claim` 令牌，只删认领到的路径，`delete_industry_manifests(jsonb)` 只删令牌仍匹配的行（规格 §8 的 `sha256/<hash>.json.gz` 路径改为带代次）。 |
+| 62 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-2） | 已关闭窗口在后来得知更早的退市时，由新函数 `correct_industry_membership_windows` 在同一事务内把旧 `ok` 行置 `superseded` 并插入 K3 截短的新行（同来源记录、谱系保留）；只有数据库拒绝时才隔离 `membership_delist_conflict`（取代第 55 条的"不改写"）。 |
+| 63 | Codex 计划审计第 2 轮（`08-codex-plan-round2.md`）带来的决定 | 决定（R2-3） | `apply_sic_memberships` 加 `p_lease_batch`，事务内锁住调度行验证租约归属与未过期，否则 `lease_lost`；`sec_submissions` 出处并入同一事务（新参数 `p_sec_submissions`，`p_code` 为空时只写出处、返回 `none`）。新错误码 `lease_lost` 进共享契约。 |
+| 64 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-1） | 已解析成分在得知退市日 `<=` 窗口起点时（无有效区间），`correct_industry_membership_windows` 在同一事务内把这些 `ok` 行改为 `quarantined`（不插后继），聚合排除；同时记 `dq_quarantine(membership_after_delist)`。 |
+| 65 | Codex 计划审计第 3 轮（`10-codex-plan-round3.md`）带来的决定 | 决定（R3-2） | `apply_sic_memberships` 先 `FOR UPDATE` 锁调度行，再以 `clock_timestamp()` 校验租约归属与未过期，然后才做任何写入。 |
+| 66 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（画布抽屉内容未实现） | A 类抽屉缺 Σ 值与文件链接；B 类缺逐角色差异表、隔离链接、复制哈希；C 类缺 Σ mcap、相对差、历史类别、标记输入；D 类缺成分历史与解析过程。当前抽屉按规格 §8.5 的最小内容集实现（值/覆盖/回放/输入前 5/成分来源）。 |
+| 67 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（对比度） | 浅色主题下 `--accent`/`--warn` 与背景对比度约 2.9:1，低于 WCAG AA 4.5:1。属 DESIGN.md 令牌问题，留给 DESIGN.md 所有者；本计划未改令牌。 |
+| 68 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（Task 18） | 列表页 CSV 导出未实现；移动端"表格优先"未实现（移动端仍以热力图最近 5 期为主、表格视图一键可达）。 |
+| 69 | 读接口、页面、调度（Task 15–20，修复批次） | 决定（Codex task16 P1） | SIC 调度改为每天 `0 2 * * *` 且带 `limit=200`（`vercel.json`）。cron 路由已透传 `limit`（1..500），`runMembershipsSic` 默认 200，到期间隔 `NEXT_RUN_MS=7 天`，所以每天最多处理 200 个到期发行人，US 范围在数日内排空，之后每个发行人每周刷新一次；`dq_freshness` 仍为 weekly。 |
+| 70 | 采集与成分（修复批次 3/8） | 决定（第 7 稿 K4） | 新表 `industry_security_delistings`（`stock_basic list_status='D'` 遍写入，保留页面证据，日期变化隔离 `delist_date_changed`，仅 service_role）；`n_unresolved` 排除 `delist_date <= on` 的 ts_code；`load-a-share` 的 D 行仍只记 `skipped_summary(delisted)`，不建发行人。 |
+| 71 | 读接口、页面、调度（Task 15–20，修复批次） | 偏差（Task 19，Codex task19 / 批 9） | 成分页（constituents）未提供 L2 过滤（规格 §8.4 的层级筛选）；当前只按日期与分页浏览该节点成分，L2 路径列仅作展示。 |
+| 72 | 采集与成分（修复批次 3/8） | 偏差（修复批 8） | `reconcileDelistings` 遇到已解析记录且无可用退市日的 D 行，记为错误/隔离，但其 `ok` 行保持开放（谱系隔离 `quarantineMembershipLineage` 只处理未解析的取代记录）。 |
+| 73 | 采集与成分（修复批次 3/8） | 决定（修复批 8） | 许可操作者（`actor`）必须是 `auth.users` 的 id；审计日志在同一事务内写入（`set_industry_dataset_license`）。 |
+| 74 | 聚合、清单、标记（Task 10–14） | 决定（Task 14） | `sync.integration.test.ts` 的 `REUSE_OPTS`（不带 `codes`）用于复用类用例，因为 `codes` 现在只选择重算的组，发布网格恒为该层级全部代码（见 76）；首个 run 与更正用例仍用带 `codes` 的 `OPTS`。 |
+| 75 | 聚合、清单、标记（Task 10–14） | 决定（修复批 9） | `AggregationDeps.factsUniverse?` 可注入就绪门分母（生产缺省为数据库全局计算 `factsUniverse()`）；与其他套件共库的测试注入自己的发行人集合。 |
+| 76 | 聚合、清单、标记（Task 10–14） | 偏差（修复批 5） | 发布网格恒为该层级全部代码（全网格发布）；`codes` 只选择重算哪些组，且就绪门分母是全宇宙；因此废止原第 26 条。 |
+
+本轮不实施（规格自己的门）：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 
 ---
 

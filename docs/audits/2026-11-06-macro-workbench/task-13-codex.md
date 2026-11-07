@@ -1,0 +1,8 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T13-1 | P2 | `src/app/api/macro/series/[id]/route.ts:51` | `diff` replaces the value but retains the original observation ID, transform and ancestry. E.g. `4.25` becomes `0.1` while its evidence still describes `4.25`; the previous input version is missing. | Return a separate computed value with versioned `diff` metadata and both exact input IDs; preserve original observations. |
+| T13-2 | P2 | `src/app/api/macro/series/[id]/route.ts:52` | Derived series return null retrieval/SHA/locator and only ancestor UUIDs. No supplied read endpoint resolves those exact ancestor versions; fetching series history can return later revisions. Evidence drawers cannot reliably replay these values. | Batch-resolve ancestor closure and return exact native observations, locators, retrievals and hashes. Include stored `code_version` in series and snapshot observation projections. |
+| T13-3 | P2 | `src/app/api/macro/series/[id]/route.ts:47` | Daily requests with `asOf` but no range use today minus 730 days. The same historical query changes over time and eventually returns empty despite eligible historical observations. | Anchor the implicit window to `to ?? asOf-date ?? today`; test identical historical queries under different clocks. |
+| T13-4 | P2 | `src/app/api/macro/series/[id]/route.ts:51` | Applying `from` before differencing discards the first requested period. A one-period range returns no difference even when its preceding observation exists. | Fetch one preceding eligible observation, compute differences, then trim to the requested range. |
+
+Verdict: fix P1/P2

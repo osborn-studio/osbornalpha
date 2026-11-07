@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 来源抽屉</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 1300px; display: flex; flex-direction: column; background: #0a0a0b">
+  <div class="sheet" role="dialog" aria-label="来源抽屉" style="flex: 1; display: flex; flex-direction: column; margin-top: 12px">
+    <div class="grab"></div>
+    <div style="display: flex; align-items: flex-start; gap: 8px; padding: 8px 16px 14px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div style="flex: 1">
+        <div class="lbl-state">聚合数字 · match</div>
+        <div class="h3" style="margin-top: 4px">食品饮料 · 毛利率 · 2024-12-31</div>
+        <div class="m" style="font-size: 26px; font-weight: 500">47.8%</div>
+      </div>
+      <button class="ibtn" aria-label="关闭 Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div class="tabs" style="padding: 0 8px"><button class="on">值与方法</button><button>覆盖</button><button>回放</button><button>输入</button><button>成分来源</button></div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px">
+      <dl class="kv" style="grid-template-columns: 100px 1fr">
+        <dt>公式</dt><dd>(Σ revenue_operating − Σ cost_of_revenue) / Σ revenue_operating</dd>
+        <dt>期间</dt><dd class="m">2024 · 12M</dd>
+        <dt>方法</dt><dd class="m">industry-agg/1.0</dd>
+        <dt>事实截至</dt><dd class="m">2026-11-03</dd>
+        <dt>格可得时刻</dt><dd class="m">2026-11-01 03:10</dd>
+        <dt>代码版本</dt><dd class="m">3f9c2e1</dd>
+      </dl>
+      <div class="callout ac" style="display: flex; flex-direction: column; gap: 6px">
+        <span class="chip ac" style="align-self: flex-start">reproduced = true</span>
+        <span class="cap">清单重算一致 · <span class="hash">9b1e…04fa</span></span>
+      </div>
+      <div class="errcard" style="display: flex; flex-direction: column; gap: 6px">
+        <div class="row"><span class="dot err"></span><strong>异常态：reproduced = false</strong></div>
+        <span class="cap">同一位置换成红框说明与“查看隔离项”按钮；值仍显示并带异常徽标。</span>
+      </div>
+      <div><div class="ml" style="margin-bottom: 6px">输入（前 3 / 118）</div>
+        <table class="t dense"><tbody>
+          <tr><td>贵州茅台</td><td class="n"><button class="src">1,708.99</button></td><td><a href="#" style="font-size: 12px">PDF</a></td></tr>
+          <tr><td>五粮液</td><td class="n"><button class="src">891.75</button></td><td><a href="#" style="font-size: 12px">PDF</a></td></tr>
+          <tr><td>海天味业</td><td class="n"><button class="src">165.70</button></td><td class="tiny">pending</td></tr>
+        </tbody></table>
+      </div>
+      <button class="btn lg" style="justify-content: center">复制可复现查询 Copy replay query</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

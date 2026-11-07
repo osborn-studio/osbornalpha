@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "601318.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "e68e294cc18823dcae0e0d6019729bcee335bf8f6d412aad6e6a02b2acdc555e",
+ "request_id": "06e4fb6b-62ad-49e4-a3c7-d44ca4e1e7b8",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "601318.SH",
+    "601318",
+    "中国平安",
+    "深圳",
+    "保险",
+    "中国平安保险(集团)股份有限公司",
+    "Ping An Insurance (Group) Company of China, Ltd.",
+    "ZGPA",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20070301",
+    null,
+    "H",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "601166.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "5ae0a3e2f0f86fb65dd9176a0e7712c7cd051d04aeb4cce3ee45ded9cbb84601",
+ "request_id": "a7376cf3-972b-4b11-b782-0f507471a4a1",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "601166.SH",
+    "601166",
+    "兴业银行",
+    "福建",
+    "银行",
+    "兴业银行股份有限公司",
+    "Industrial Bank Co.,Ltd.",
+    "XYYH",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20070205",
+    null,
+    "H",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

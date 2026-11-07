@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "000001.SZ",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "98895bc0f793a5bd9b0f694ef46cb4b79f3bffea306efa416c2cc18f9d8bb5d8",
+ "request_id": "e08e4577-5d66-4a10-8194-798c45b351b5",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "000001.SZ",
+    "000001",
+    "平安银行",
+    "深圳",
+    "银行",
+    "平安银行股份有限公司",
+    "Ping An Bank Co., Ltd.",
+    "PAYH",
+    "主板",
+    "SZSE",
+    "CNY",
+    "L",
+    "19910403",
+    null,
+    "S",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

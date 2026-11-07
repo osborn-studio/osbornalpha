@@ -1,0 +1,381 @@
+{
+  "page": {
+    "title": "行业研究",
+    "subtitle": "行业聚合事实来自成分发行人的一手披露，整体法汇总；每个数字都能打开来源抽屉并按清单回放。",
+    "breadcrumbResearch": "研究",
+    "breadcrumbIndustries": "行业研究",
+    "constituents": "成分"
+  },
+  "schemes": {
+    "sw2021": "申万 2021",
+    "sic": "SIC（SEC）",
+    "sw2021Market": "申万 2021 · A 股",
+    "sicMarket": "SIC · 美股（SEC）"
+  },
+  "levels": {
+    "1": "一级",
+    "2": "二级",
+    "3": "三级",
+    "4": "四级"
+  },
+  "controls": {
+    "scheme": "方案",
+    "level": "层级",
+    "metric": "指标",
+    "basis": "口径",
+    "view": "显示",
+    "heatmap": "热力图",
+    "table": "表格",
+    "window": "窗口",
+    "chartAndTable": "图 + 表",
+    "tableOnly": "只看表",
+    "today": "今天",
+    "apply": "查看",
+    "prev": "上一页",
+    "next": "下一页"
+  },
+  "metrics": {
+    "revenue_sum": "营收合计",
+    "net_income_parent_sum": "归母净利合计",
+    "gross_margin": "毛利率",
+    "roe": "ROE（TTM）",
+    "revenue_yoy": "营收同比",
+    "net_income_yoy": "归母净利同比",
+    "member_count": "成分数"
+  },
+  "durations": {
+    "12M": "年度",
+    "3M": "单季",
+    "TTM": "TTM",
+    "INSTANT": "时点"
+  },
+  "windows": {
+    "5y": "5 年",
+    "10y": "10 年",
+    "all": "全部"
+  },
+  "header": {
+    "factsAsOf": "事实截至",
+    "run": "聚合运行",
+    "generation": "第 {n} 代",
+    "method": "方法",
+    "grid": "{codes} 个行业 · {periods} 个期末"
+  },
+  "freshness": {
+    "fresh": "新鲜",
+    "stale": "过期",
+    "error": "失败",
+    "missing": "无记录"
+  },
+  "historyClass": {
+    "point_in_time": "时点成分",
+    "reconstruction": "历史重建"
+  },
+  "states": {
+    "loading": {
+      "title": "正在读取行业数据",
+      "body": "正在读取行业数据"
+    },
+    "stale": {
+      "title": "数据过期",
+      "body": "期望每周更新，已超出 2 天宽限。页面继续显示最近一个 active 运行（事实截至 {date}）；该运行于 {activatedAt} 生效（代次 {generation}）。每个格的抽屉里写明运行时刻。"
+    },
+    "error": {
+      "title": "读取失败",
+      "body": "显示上次成功响应（{at} UTC）。永不以 0 替代缺失。",
+      "bodyNoCache": "暂无可显示的数据，请稍后重试。永不以 0 替代缺失。",
+      "retry": "重试"
+    },
+    "unlicensed": {
+      "title": "{scheme} 数据授权待确认",
+      "body": "分类与成分经 Tushare 转载申万宏源研究所数据，展示条款确认前不对外显示任何数字。可以切换到 SIC 方案（美股，SEC 公开数据）。",
+      "switchToSic": "切换到 SIC",
+      "learnMore": "数据来源与授权说明"
+    },
+    "adminPreview": {
+      "title": "内部预览",
+      "body": "数据集 {dataset} 尚未公开：只有 admin 看到这些数字，其他用户看到授权待确认空态。"
+    },
+    "empty": {
+      "title": "尚未聚合",
+      "body": "方案已授权，但还没有 active 的聚合运行。首轮运行完成后这里出现热力图。聚合仅一级：二级、三级选项只提供导航与成分，没有聚合格。"
+    },
+    "reconstruction": {
+      "title": "历史重建：这些格不是当时可见的数字",
+      "body": "历史期间用之后才拿到的成分证据重建：申万成分的可得日按纳入日假设（来源没有公告时刻），发行人按今天的归属解析。可以比较趋势，但不能当作当时投资者看到的值。每格的可得时刻是本次运行的激活时刻，不回溯到期间。"
+    },
+    "partialUnpublished": {
+      "title": "部分日期未发布",
+      "body": "只有通过逐日对照的日期才发布；序列在未发布日期断开，分位只在已发布日期上计算。"
+    },
+    "replayMismatch": {
+      "title": "回放不一致",
+      "body": "清单重算值与存储值不同。该格不作为可回放数字：页面仍显示原值并加异常徽标，隔离项 manifest_mismatch 已开。"
+    },
+    "officialUnavailable": {
+      "title": "官方对照值不可用",
+      "body": "官方数据集未公开时只显示对照状态，不显示官方值。"
+    },
+    "notEnabled": {
+      "title": "估值未启用",
+      "body": "自算估值要等两项口径核对完成（申万 PE/PB 口径、总股本口径）才计算与对照发布。在此之前不显示任何自算估值，也不用官方值顶替。"
+    },
+    "noJudgment": {
+      "title": "未设判断",
+      "body": "生命周期阶段、景气、高估/低估是判断，不是事实。它们只在 F4 登记、带可证伪条件并可结算后出现在这里；未校准时只显示类别与徽标。"
+    },
+    "currentOnly": {
+      "title": "只有当前值（current_only）",
+      "body": "SEC 只提供当前 SIC，没有纳入/剔除历史：纳入日一列是首次观察日，早于首次观察日的日期没有成分。SIC 不做聚合与估值。"
+    },
+    "noMembers": {
+      "title": "该日无已知成分",
+      "body": "截至 {on} 没有按今天已知证据有效的成分。"
+    }
+  },
+  "missing": {
+    "empty_set": "无可用数据（empty_set）",
+    "zero_denominator": "分母为零（zero_denominator）",
+    "no_members": "无成分（no_members）",
+    "financial_excluded": "方法排除：金融业不算毛利率（financial_excluded）",
+    "unresolved_over_limit": "未解析超限（unresolved_over_limit）",
+    "manifest_mismatch": "清单自检失败（manifest_mismatch）",
+    "absent": "期望网格缺行"
+  },
+  "roles": {
+    "included": "计入",
+    "excluded": "排除",
+    "missing_concept": "缺概念",
+    "unit_excluded": "币种排除",
+    "read_truncated": "读取截断",
+    "version_inconsistent": "版本不一致",
+    "not_in_comparable_set": "不在可比集合",
+    "financial_excluded": "金融业排除"
+  },
+  "coverage": {
+    "unresolved": "{n} 未解析",
+    "ratio": "{n}/{d}",
+    "legendLow": "低",
+    "legendHigh": "高",
+    "legendInsufficient": "覆盖不足（低于 0.8）",
+    "legendUnresolved": "未解析超过 5%",
+    "legendMissing": "缺失（悬停看原因）"
+  },
+  "heatmap": {
+    "label": "热力图",
+    "industry": "行业",
+    "cellTitle": "{industry} · {period} · {metric}：{value}（打开来源抽屉）",
+    "caption": "点击格 → 来源抽屉；点击行名 → 行业详情。单色黄铜深浅只表示高低，不表示涨跌。",
+    "mobileNote": "窄屏只显示最近 5 期，完整序列见表格。"
+  },
+  "table": {
+    "label": "表格视图",
+    "industry": "行业",
+    "code": "代码",
+    "members": "成分数（未解析）",
+    "latestPeriod": "最近期末",
+    "value": "值",
+    "coverage": "覆盖",
+    "yoy": "同比",
+    "source": "来源",
+    "sourceButton": "来源 ▸",
+    "yoyNotStored": "该指标没有存储的同比",
+    "note": "同比只显示存储的同比指标（营收、归母净利），用正负号，不用红绿：行业指标高低不是涨跌。覆盖 = n_with_data / (n_members + n_unresolved)，低于 0.8 时值格显示覆盖不足。"
+  },
+  "valuation": {
+    "title": "估值快照",
+    "titleDetail": "估值与分位",
+    "publishedOnly": "仅已发布格",
+    "industry": "行业",
+    "pe": "PE（TTM）",
+    "pb": "PB",
+    "percentile": "分位",
+    "mcapCoverage": "市值覆盖",
+    "date": "日期",
+    "within": "✓ within",
+    "unpublished": "— 未发布",
+    "percentileDeferred": "分位未启用"
+  },
+  "judgments": {
+    "title": "判断",
+    "methodsLink": "方法注册表（F4 上线后可用）",
+    "scope": "范围：{scheme} · {level}。该范围下暂无已登记的判断。",
+    "uncalibrated": "未校准 · 有效样本 {n}/{threshold}",
+    "calibrated": "已校准",
+    "evaluated": "已评估",
+    "self_assessed": "自评",
+    "failed": "校准未通过：ECE {ece}",
+    "target": "目标",
+    "horizon": "期限",
+    "inputs": "输入 Inputs ({n})",
+    "outcome": "结果",
+    "realized": "实现值",
+    "settledAt": "结算于",
+    "condition": "可证伪条件",
+    "method": "方法",
+    "asOf": "截至",
+    "settlement": "结算期限",
+    "abstained": "弃权：{reason}",
+    "retrospective": "补登记",
+    "loadFailed": "判断读取失败",
+    "lifecycle": {
+      "abstained": "弃权",
+      "open": "进行中",
+      "settled": "已结算",
+      "void": "作废",
+      "withdrawn": "撤回",
+      "pending_fill": "待成交"
+    }
+  },
+  "sources": {
+    "title": "来源",
+    "sw_via_tushare": "Tushare → 申万宏源研究所",
+    "exchange_via_tushare": "Tushare → 交易所",
+    "tushare_statements": "Tushare 三表 → 巨潮",
+    "sec_submissions": "SEC submissions",
+    "edgar_companyfacts": "EDGAR companyfacts"
+  },
+  "detail": {
+    "periodEnd": "期末",
+    "summary": "成分摘要",
+    "members": "成分数",
+    "unresolved": "未解析",
+    "lastAddition": "最近纳入",
+    "children": "下级行业",
+    "viewConstituents": "查看成分",
+    "series": "聚合序列",
+    "tableEquivalent": "表格等价视图",
+    "notAggregated": "v1 只对申万一级聚合；本节点只提供分类导航与成分。",
+    "chartLabel": "{industry} {metric} 序列折线，数值见旁边的表格",
+    "chartCaption": "点选任一点 → 来源抽屉（同表格）。断开处是缺失格，不是 0。",
+    "methods": "方法与来源",
+    "methodConfig": "METHOD_CONFIG",
+    "configHash": "配置",
+    "formulaVersion": "公式",
+    "schemeSource": "分类来源",
+    "schemeSourceSw": "申万宏源研究所《申万行业分类标准（2021 版）》，经 Tushare index_classify / index_member_all 适配",
+    "schemeSourceSic": "SEC submissions 的当前 SIC 与 SEC SIC 码表页",
+    "availabilityAssumption": "可得日期假设",
+    "availabilitySw": "成分纳入日当天即可得（来源没有公告时刻）；发行人按今天的归属解析",
+    "availabilitySic": "SIC 只有当前值，valid_from = 首次观察日",
+    "licence": "授权",
+    "codeVersion": "代码版本",
+    "namesNote": "申万不发布英文名：英文界面显示中文名 + 代码，不做机器翻译。"
+  },
+  "constituents": {
+    "title": "{name} · 成分",
+    "asOf": "截至",
+    "members": "{n} 在册",
+    "unresolved": "{n} 未解析成分（只给计数）",
+    "rule": "日期驱动：纳入日不晚于截至日、剔除日晚于截至日，按今天已知的证据",
+    "ticker": "代码",
+    "name": "名称",
+    "inDate": "纳入日",
+    "outDate": "剔除日",
+    "observed": "观察日",
+    "path": "二级 / 三级",
+    "sic": "SIC",
+    "revenue": "最近年度营收",
+    "revenueFy": "最近年度营收（{fy}）",
+    "netIncome": "最近年度归母净利",
+    "company": "公司",
+    "companyLink": "公司页",
+    "noFact": "该日没有已发布的年度事实",
+    "unit": "金额：CNY 按亿元、USD 按十亿美元缩放（抽屉里给原值）· 第 {page} / {pages} 页，每页 {size}"
+  },
+  "drawer": {
+    "title": "来源抽屉",
+    "close": "关闭",
+    "kind": {
+      "aggregate": "聚合数字",
+      "valuation": "估值数字",
+      "fact": "披露事实",
+      "membership": "成分行"
+    },
+    "sections": {
+      "value": "值与方法",
+      "coverage": "覆盖",
+      "replay": "原样回放",
+      "membership": "成分来源",
+      "evidence": "证据"
+    },
+    "formula": "公式",
+    "period": "期间",
+    "method": "方法",
+    "factsAsOf": "事实截至",
+    "availableAt": "格可得时刻",
+    "availableAtNote": "（= 运行激活时刻，不回溯）",
+    "historyClass": "历史类别",
+    "codeVersion": "代码版本",
+    "manifest": "清单",
+    "coverageRatio": "= n_with_data / (n_members + n_unresolved)",
+    "excludedBy": "{reason} · {n}",
+    "unresolvedCount": "未解析 {n}（只给计数）",
+    "replayLoading": "正在读取清单",
+    "replayFailed": "回放读取失败（{code}）",
+    "reproducedTrue": "reproduced = true",
+    "reproducedNote": "replayFromManifest() 只用清单重算出 {value}，与存储值一致。",
+    "mismatchNote": "清单重算得 {replayed}，存储值 {stored}。",
+    "roles": "角色",
+    "issuers": "发行人数",
+    "recompute": "按当前证据重算",
+    "recomputeMatch": "match：按当前证据重算与原清单一致。",
+    "recomputeChanged": "changed：当前证据与原清单不同。迟到披露、隔离处置、映射升级、成分纠正都会如此，这是正常现象。",
+    "diffCounts": "成分 +{ma}/−{mr} ~{mm} · 未解析 +{ua}/−{ur} · 事实 +{fa}/−{fr} · 状态版本变化 {revs}",
+    "inputsTop": "输入（前 {n} / {total}）",
+    "issuer": "发行人",
+    "concept": "概念",
+    "value": "值",
+    "availableDate": "可得日",
+    "missingCell": "缺失格没有清单：{reason}",
+    "counts": "成分 {members} · 有数据 {withData} · 未解析 {unresolved}",
+    "upstream": "上游",
+    "membershipUpstreamSw": "申万宏源研究所 → Tushare index_member_all",
+    "membershipUpstreamSic": "SEC submissions（sic 字段）",
+    "availableDateLabel": "可得日",
+    "availabilityAssumed": "按纳入日假设（effective_date_assumed）",
+    "availabilityObserved": "首次观察日（observed）",
+    "availabilityEvidenced": "有公告证据（evidenced）",
+    "path": "归属路径",
+    "sourceRecord": "来源记录",
+    "rawHash": "raw_hash",
+    "locator": "locator",
+    "validFrom": "纳入",
+    "validTo": "剔除",
+    "batch": "批次",
+    "tradeDate": "标记日",
+    "mcapCoverage": "市值覆盖",
+    "pairStatus": "对照状态",
+    "officialValue": "官方对照值",
+    "officialUnavailable": "官方对照值不可用（数据集未公开）",
+    "valuationReplayDeferred": "估值清单回放随估值流水线（I-3）上线。",
+    "filingId": "filing_id",
+    "factEvidence": "按 fact_id 查看原始事实"
+  },
+  "entry": {
+    "title": "行业研究",
+    "titleEn": "Industry research",
+    "desc": "申万 2021 · SIC · 行业聚合事实与估值分位",
+    "factsAsOf": "事实截至 {date}",
+    "unlicensed": "申万 2021 数据授权待确认"
+  },
+  "stock": {
+    "label": "所属行业",
+    "since": "自 {date}",
+    "unlicensed": "申万 2021：数据授权待确认（不显示分类）",
+    "currentOnly": "current_only"
+  },
+  "formulas": {
+    "revenue_sum": "Σ revenue（单季用 q_single_revenue）",
+    "net_income_parent_sum": "Σ net_income_parent（单季用 q_single_net_income_parent）",
+    "gross_margin": "(Σ revenue_operating − Σ cost_of_revenue) / Σ revenue_operating",
+    "roe": "Σ ttm_net_income_parent / Σ avg(equity_parent 窗口起点前一日, 期末)",
+    "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
+    "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
+    "member_count": "n_members（另给 n_unresolved）",
+    "pe_ttm": "Σ 市值 / Σ ttm_net_income_parent",
+    "pe_static": "Σ 市值 / Σ net_income_parent（12M）",
+    "pb": "Σ 市值 / Σ equity_parent",
+    "market_cap": "Σ close × total_share"
+  }
+}
