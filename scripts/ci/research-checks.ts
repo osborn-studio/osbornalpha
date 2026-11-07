@@ -33,6 +33,9 @@ criticalSuites.push('src/lib/documents/documents.integration.test.ts', 'src/lib/
 // COMPANY
 criticalSuites.push('src/lib/company/company-research.integration.test.ts', 'src/lib/company/documents-bridge.integration.test.ts');
 // /COMPANY
+// F4
+criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
+// /F4
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

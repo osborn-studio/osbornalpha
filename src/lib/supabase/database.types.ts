@@ -27,7 +27,16 @@
 // /MACRO-P3
 // + 20261117090000_disclosure_documents.sql (F3: disclosure_documents and its eight child/scheduling tables)
 // + 20261118090000_company_research.sql (COMPANY block below)
+// F4
+// + 20261116090000_judgments.sql (judgment_methodologies, judgment_methodology_events, judgments, judgment_settlements,
+//   judgment_settle_queue, judgment_calibrations, judgment_calibration_validity, judgment_job_state,
+//   judgment_calibration_cohort_members; RPCs not typed here)
+// /F4
 // Regenerate with: npm run supabase:types (after supabase link)
+
+// F4
+import type {CalibrationRow,JudgmentRow,MethodologyEvent,MethodologyRow,QueueRow,SettlementRow} from '@/lib/judgments/types';
+// /F4
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
 export type AssetType = 'stock' | 'etf' | 'convertible_bond' | 'fund' | 'index' | 'unknown';
@@ -1470,6 +1479,20 @@ export interface IndustrySecurityDelisting {
   raw_hash: string;
 }
 // INDUSTRY:END
+// F4 — judgment framework tables (supabase/migrations/20261116090000_judgments.sql). Row = the shared
+// contract shape (src/lib/judgments/types.ts). No role has direct insert/update grants (every write is an
+// RPC), so Insert/Update exist only for type completeness; the RPCs are not registered under Functions
+// (repo convention: callers narrow with RpcFn from src/lib/judgments/db.ts).
+export type JudgmentMethodologyTableRow = MethodologyRow;
+export type JudgmentMethodologyEventTableRow = MethodologyEvent;
+export type JudgmentTableRow = JudgmentRow;
+export type JudgmentSettlementTableRow = SettlementRow;
+export type JudgmentSettleQueueTableRow = QueueRow;
+export type JudgmentCalibrationTableRow = CalibrationRow;
+export interface JudgmentCalibrationValidityTableRow { methodology_id: string; version: string; revision: number; bumped_at: string; reason: string | null }
+export interface JudgmentJobStateTableRow { job: string; state: Record<string, unknown>; updated_at: string }
+export interface JudgmentCalibrationCohortMemberTableRow { generation: string; judgment_id: string; settlement_id: string | null; ord: number }
+// /F4
 
 // MACRO-P3
 // Macro strategy (supabase/migrations/20261115090000_macro_strategy.sql). Manifests and the two review tables are
@@ -1681,6 +1704,17 @@ export type Database = {
       company_digest_state: { Row: CompanyDigestState; Insert: Partial<CompanyDigestState>; Update: Partial<CompanyDigestState> };
       company_fact_evidence: { Row: CompanyFactEvidence; Insert: Partial<CompanyFactEvidence>; Update: Partial<CompanyFactEvidence> };
       // COMPANY end
+      // F4
+      judgment_methodologies: { Row: JudgmentMethodologyTableRow; Insert: Partial<JudgmentMethodologyTableRow>; Update: Partial<JudgmentMethodologyTableRow> };
+      judgment_methodology_events: { Row: JudgmentMethodologyEventTableRow; Insert: Partial<JudgmentMethodologyEventTableRow>; Update: Partial<JudgmentMethodologyEventTableRow> };
+      judgments: { Row: JudgmentTableRow; Insert: Partial<JudgmentTableRow>; Update: Partial<JudgmentTableRow> };
+      judgment_settlements: { Row: JudgmentSettlementTableRow; Insert: Partial<JudgmentSettlementTableRow>; Update: Partial<JudgmentSettlementTableRow> };
+      judgment_settle_queue: { Row: JudgmentSettleQueueTableRow; Insert: Partial<JudgmentSettleQueueTableRow>; Update: Partial<JudgmentSettleQueueTableRow> };
+      judgment_calibrations: { Row: JudgmentCalibrationTableRow; Insert: Partial<JudgmentCalibrationTableRow>; Update: Partial<JudgmentCalibrationTableRow> };
+      judgment_calibration_validity: { Row: JudgmentCalibrationValidityTableRow; Insert: Partial<JudgmentCalibrationValidityTableRow>; Update: Partial<JudgmentCalibrationValidityTableRow> };
+      judgment_job_state: { Row: JudgmentJobStateTableRow; Insert: Partial<JudgmentJobStateTableRow>; Update: Partial<JudgmentJobStateTableRow> };
+      judgment_calibration_cohort_members: { Row: JudgmentCalibrationCohortMemberTableRow; Insert: Partial<JudgmentCalibrationCohortMemberTableRow>; Update: Partial<JudgmentCalibrationCohortMemberTableRow> };
+      // /F4
     };
     Functions: {
       quote_alert_window_samples: {

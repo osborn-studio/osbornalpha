@@ -83,7 +83,7 @@ async function main():Promise<void>{
   try{
    const out=await enrichAcceptance({db:writes,submissions:(c,b,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw,budget:b},{coverFrom}),
     ...(apply?{recordDateMismatch:async(r:ReconcileResultInput)=>{if((await recordReconciliationDetailed(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:batchId})).duplicate)mismatchDuplicates++;}}:{})},{issuerId:it.issuerId,cik10:it.cik10},budget,{fullHistory});
-   for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]+=out.counts[k];
+   for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]=(counts[k]??0)+(out.counts[k]??0);/* F4: deferred is optional */
    errors.push(...out.errors);mismatches+=out.mismatches.length;
    if(out.counts.failed>0||out.errors.some(e=>!isInfoError(e)))issuerFailures++;
    console.log(JSON.stringify({issuer:it.issuerId,label:it.label,counts:out.counts,errors:out.errors.map(e=>e.code),date_mismatches:out.mismatches.map(m=>m.natural_key)}));

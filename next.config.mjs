@@ -24,6 +24,10 @@ const nextConfig = {
   // esbuild bundle build/extract-worker/extract-worker.mjs (pdf.js inlined; codex plan round 4), which
   // import tracing cannot see either; pdf.worker.mjs stays traced as an asset next to the CMaps/fonts.
   outputFileTracingIncludes: {
+    // F4
+    // Registry-selected methodology documents are read at runtime (spec §10).
+    '/api/methodologies/*/*': ['./docs/methodologies/**/*.md'],
+    // /F4
     '/api/cron/reconcile': RECONCILE_MANIFESTS,
     '/api/admin/dq/quarantine/[id]': RECONCILE_MANIFESTS,
     '/api/admin/dq': RECONCILE_MANIFESTS,
