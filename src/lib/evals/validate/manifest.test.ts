@@ -63,7 +63,7 @@ const passCase=(case_id:string,result:CaseReport['outcome']={result:'pass'}):Cas
 
 interface Fx{
  sets:Record<string,GoldSet>;reports:Record<keyof typeof ID,EvalReport>;rowPatch:Partial<Record<keyof typeof ID,Partial<EvalRunRow>>>;
- manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
+ manifest:Record<string,any>;expert:Record<string,any>;lock:GoldLock;fresh:Record<string,string>;freshRows?:Record<string,FreshnessRow>;noRuns?:boolean;noPair?:boolean;noFresh?:boolean;keepSummary?:Set<string>;
  /** files missing at evidence_commit (e.g. present only in a working tree) */
  uncommitted?:Set<string>;origin?:string|null;
  /** the GitHub run --online returns; default: success at RELEASE; 'offline' = no --online */
@@ -135,6 +135,7 @@ async function depsOf(f:Fx):Promise<{deps:ManifestDeps;manifest:Record<string,an
   getRun:f.noRuns?undefined:async id=>rows.get(id)??null,
   freshness:f.noFresh?undefined:async d=>f.freshRows?.[d]??(f.fresh[d]?{expected_cadence:'daily',last_ok_at:f.fresh[d]==='fresh'?'2026-11-20T12:00:00Z':'2026-11-10T00:00:00Z',consecutive_errors:0}:null),
   audit:{gitShow:()=>new TextEncoder().encode('spec\n')},
+  pairs:f.noPair?[]:[{pair_id:'s',module:'facts',left:{source:'a',upstream:'u'},right:{source:'b',upstream:'v'},tolerance:{rel:'0.005'},independence:f.reports.dual?.summary.evidence_class==='adapter_check'?'same_feed':'independent_publication'}],
  };
  return {deps,manifest:m};
 }
@@ -184,6 +185,9 @@ describe('validateManifest (spec §10)',()=>{
  it('rejects adapter_check dual-source evidence and accepts a truth dual-source run',async()=>{
   const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};expect(await codes(f)).toEqual([]);
   const g=fx();g.manifest.evidence.dual_source={run_id:ID.dual};g.reports.dual.summary.evidence_class='adapter_check';resummarize(g.reports.dual);expect(await codes(g)).toEqual(['manifest_adapter_check']);
+ });
+ it('a dual_source report whose pair is not registered in F6 is manifest_invalid',async()=>{
+  const f=fx();f.manifest.evidence.dual_source={run_id:ID.dual};f.noPair=true;expect(await codes(f)).toContain('manifest_invalid');
  });
  it('rejects synthetic gold, dirty trees and evidence from another commit',async()=>{
   const f=fx();f.sets[SET_PATH].cases[0].provenance_kind='synthetic';expect(await codes(f)).toEqual(['manifest_synthetic']);

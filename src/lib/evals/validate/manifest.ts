@@ -27,6 +27,8 @@
 // consecutive_errors (never the stored status; P1-4) must be 'fresh'. No DB access (getRun/freshness absent) fails the
 // manifest. Non-waivable: official, replay_frozen, model_audit, expert_sampling; waivable via not_applicable:
 // dual_source, reference_regression, replay_live; `waivers` may only waive gold_approval.
+import type {PairRegistration} from '../kinds/dual-source';
+import {F6_PAIRS,pairRegistration} from '../kinds/pairs';
 import {computeFreshness} from '../../dq/freshness';
 import type {Cadence} from '../../dq/freshness';
 import {canonicalJson,sha256Hex} from '../canonical-json';
@@ -61,6 +63,8 @@ export interface ManifestDeps{
  /** the dq_freshness row of a dataset ('facts.us'); undefined = no database access. */
  freshness?:(dataset:string)=>Promise<FreshnessRow|null>;
  audit?:Omit<AuditDeps,'readFile'|'release'>;
+ /** F6 pair registrations (kinds/pairs.ts F6_PAIRS by default); a dual_source report's set.id is its pair id. */
+ pairs?:readonly PairRegistration[];
 }
 export interface ManifestOptions{
  /** notices: diagnostics only (the offline CI identity is ALSO a blocking finding, R2-1). */
@@ -161,7 +165,12 @@ export async function validateManifest(raw:unknown,deps:ManifestDeps,where='mani
   if(r.dirty!==false)out.push(finding('manifest_dirty',at(item),'report was produced from a dirty tree'));
   const fx=fixtureOf(item,r,expectKind);
   if(!fx)return null;
-  const red=reduceForKind(expectKind,r.cases,fx.fixture,{...(expectKind==='dual_source'?{evidenceClass:r.summary.evidence_class}:{}),reconciliationsTruncated:caseRowsTruncated(r)});
+  let registration:PairRegistration|undefined;
+  if(expectKind==='dual_source'){
+   registration=pairRegistration(r.set.id,deps.pairs??F6_PAIRS);
+   if(!registration){out.push(finding('manifest_invalid',at(item),`pair ${r.set.id} is not registered in F6 (kinds/pairs.ts)`));return null;}
+  }
+  const red=reduceForKind(expectKind,r.cases,fx.fixture,{...(registration?{registration}:{}),reconciliationsTruncated:caseRowsTruncated(r)});
   for(const p of red.problems)out.push(finding('manifest_population',at(item),p));
   if(canonicalJson(red.summary)!==canonicalJson(r.summary))out.push(finding('manifest_summary_mismatch',at(item),'stored summary differs from the one re-derived from the authenticated fixture'));
   if(red.summary.gate!=='pass')out.push(finding('manifest_gate',at(item),`re-derived gate ${red.summary.gate}`));
