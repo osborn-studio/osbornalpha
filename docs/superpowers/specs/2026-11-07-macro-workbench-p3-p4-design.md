@@ -197,7 +197,7 @@ P1 工作台页内 tab 增加三个**链接型** tab："传导"、"历史"、"�
 export interface StrategyReadPort{
  activeSnapshot(region:Region):Promise<SnapshotRecord|null>;
  snapshot(snapshotId:string):Promise<SnapshotRecord|null>;
- snapshotsUpTo(region:Region,cutoff:string):Promise<SnapshotRecord|null>;   // created_at ≤ cutoff 的最新非 failed 快照；同 created_at 取 snapshot_id 最大
+ snapshotUpTo(region:Region,cutoff:string):Promise<SnapshotRecord|null>;   // created_at ≤ cutoff 的最新非 failed 快照；同 created_at 取 snapshot_id 最大
  observationsByIds(ids:string[]):Promise<ObservationRow[]>;                  // ok 行，输入顺序；缺失 id 不返回（调用方视为缺失）
  latestObservations(seriesIds:string[],opts:{asOf:string}):Promise<ObservationRow[]>;
  seriesHistory(seriesId:string,opts:{from?:string;to?:string;asOf:string;maxRows:number}):Promise<ObservationRow[]>;  // 读完或抛 truncated
@@ -209,7 +209,7 @@ export interface StrategyReadPort{
 }
 ```
 
-`memoryStrategyPort(fixture)` 供单测。`snapshotsUpTo` 在 `MacroDb` 上用 `snapshotsSince` 键集分页实现，读不完 → 抛 `truncated`。
+`memoryStrategyPort(fixture)` 供单测。`snapshotUpTo` 在 `MacroDb` 上用 `snapshotsSince` 键集分页实现，读不完 → 抛 `truncated`。
 
 ### 4.4 存储（迁移 `supabase/migrations/20261115090000_macro_strategy.sql`）
 
@@ -256,7 +256,7 @@ interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:string;catal
 - **快照内观测的角色**：同一序列在快照 `observation_ids ∪ history_ids` 中可能有多条（最新期、上一可比期、3 个月前）。`period_end` 最大者角色 `latest`，用于节点与"当前值"；`prev`（前一个 `period_end`）与 `prev3m`（3 个月前的 `period_end`，季度序列取前一季度）角色用于变化事实；其余不入清单。
 - **重放**：`replay(body)` 只读清单本身——目录投影、规则、快照记录、读取状态、及时性结果都在清单里，不访问端口与当前目录；测试断言重放视图与原视图逐字段相等。
 
-- **截止** `cutoff`：传导 / 矩阵 / 历史表 = 两区域 active 快照 `created_at` 的较大者（任一区域无快照则取另一者；都无 → 传导页"尚无发布快照"，矩阵与历史表用请求时刻）；复盘 = 该月最后一天 `23:59:59Z`；解读 = 主体（快照 / 复盘）的清单截止。
+- **截止** `cutoff`：传导 / 矩阵 / 历史表 = 两区域 active 快照 `created_at` 的较大者（任一区域无快照则取另一者；都无 → 传导页"尚无发布快照"，矩阵与历史表用请求时刻）；复盘 = 次月 3 日 `00:00:00Z`（§6.2）；解读 = 主体（快照 / 复盘）的清单截止。
 - **取值规则**：一个序列若在其区域在截止时的快照 `observation_ids` 中 → 取那条（`source.kind='snapshot'`）；否则 → `latestObservations([id], {asOf: cutoff})`（`source.kind='history'`）。历史窗口序列一律 `seriesHistory(id, {asOf: cutoff})`。
 - **冻结**：计算前组装清单 → `manifest_hash = sha256(canonicalJson(body))`（唯一身份，§4.4）→ `macro_put_manifest`（幂等）→ 计算只读清单。响应带 `manifest_id`。
 - **缓存**：进程内 LRU 键 = `(kind, params, 两区域快照 id, cutoff, catalog_version, code_version)` → 已存清单 id 与视图；新快照发布或代码 / 目录版本变化 → 键变化。
@@ -357,21 +357,21 @@ interface Fact{fact_id:string;      // 'obs:<series>' | 'chg:<series>' | 'evt:<d
 
 ### 6.2 月度复盘 `review.ts`（`macro-review/1`）
 
-**范围**：月末对月末比较（不是逐日活动账本）。截止 `cutoff = 月末 23:59:59Z`；基线截止 = 上月末。
+**范围**：月末对月末比较（不是逐日活动账本）。截止 `cutoff = 次月 3 日 00:00:00Z`（月末派生观测要到次月才首次可见，以月末本身为截止会让资产月末值全部缺失；与 cron 时间对齐）；基线截止 = 本月 3 日 00:00:00Z。比较的仍是"本月月末 vs 上月月末"的数据期，截止只决定"何时已知"。
 
-- 快照：`snapshotsUpTo(region, cutoff)` 与 `snapshotsUpTo(region, 基线截止)`（`created_at` 相同按 `snapshot_id` 定序，§4.3）。当月截止快照不存在 → `status='insufficient'`（原因 `no_snapshot`）；基线不存在 → 第 1、2 节为空并标 `baseline_missing`，其余节照常。
+- 快照：`snapshotUpTo(region, cutoff)` 与 `snapshotUpTo(region, 基线截止)`（`created_at` 相同按 `snapshot_id` 定序，§4.3）。当月截止快照不存在 → `status='insufficient'`（原因 `no_snapshot`）；基线不存在 → 第 1、2 节为空并标 `baseline_missing`，其余节照常。
 - 清单：两张快照的冻结记录与观测 + 资产与视角序列在两截止处的月末观测（`latestObservations` asOf）+ 截至 cutoff 的**全部**政策事件（事件日序列全史，asOf = cutoff；基线时的事件集 = 其中生效日 ≤ 基线截止日者）+ 目录投影 + 冻结的及时性结果。
 - 行动段身份 = `(direction, start)`；"新开" = 截止时存在、基线时不存在的段；"结束" = 基线时 `ongoing`、截止时不再 `ongoing` 的段（翻转或 12 个月无变动）。
 - 七节（全部从清单计算）：
   1. `releases`：截止快照中 `period_end` 晚于基线快照的序列（旧期 → 新期、值）；
   2. `revisions`：两快照中同一序列同一 `period_end`、截止快照版本更高（旧值 → 新值）；**只覆盖各序列在快照中的最新期**（更早期的修订不在 v1 范围，页面写明）；
-  3. `timeliness`：对截止快照的每个目录 active 指标调用 `port.timeliness(def, latest_period_end, today = 月末日期)`，冻结 `late` / `missing`；目录 missing / restricted 项计入"目录缺失 / 受限"，不与"迟发"混淆；
+  3. `timeliness`：对截止快照的每个目录 active 指标调用 `port.timeliness(def, latest_period_end, today = 截止日期)`，冻结 `late` / `missing`；目录 missing / restricted 项计入"目录缺失 / 受限"，不与"迟发"混淆；
   4. `policy_events`：生效日落在本月的 §5.4 事件；
   5. `episode_changes`：截止时相对基线时新开或结束的政策行动段（§5.5 定义）；
   6. `asset_moves`：资产与视角序列本月月末相对上月末的变化（口径同 §5.5 月末边界）；
   7. `coverage`：截止快照的目录计数（计数，不是百分比）。
 - 生成：`/api/cron/macro-review`（`vercel.json` `0 6 3 * *`，生成上一个月两区域；`?month=YYYY-MM&region=` 手动；`?preview=1` 零写入；`authorizedCronRequest`）。流程：读当前指针 `generation` → 组装清单 → `macro_put_manifest` → 计算 → `macro_publish_review(expected_generation, cutoff, …)`；异常 → `macro_record_review_attempt('failed')`，指针不动。
-- **判断节**（仅判断层开启，读时）：页面服务端调用 F4 `GET /api/judgments?subject_type=macro_region&subject_key=<region>&types=macro_regime&view=as_known&asOf=<月末>`，得到截至月末已知的最新卡片，以 `F4Summary`（§5.2，无数字）渲染；不落 P3 表。
+- **判断节**（仅判断层开启，读时）：页面服务端调用 F4 `GET /api/judgments?subject_type=macro_region&subject_key=<region>&types=macro_regime&view=as_known&asOf=<截止日期>`，得到截至截止已知的最新卡片，以 `F4Summary`（§5.2，无数字）渲染；不落 P3 表。
 
 ### 6.3 LLM 解读（`explain-request.ts`、`explain-render.ts`、`explain-validate.ts`；提示 `macro-explain-prompt/1`，校验器 `macro-explain-validator/1`）
 
