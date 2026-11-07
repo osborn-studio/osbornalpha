@@ -23,7 +23,7 @@ const TABLES=['disclosure_documents','document_assets','document_extractions','d
 const PUBLIC_TABLES=['disclosure_documents','document_assets','document_extractions','document_pages','document_citations'];
 const SERVICE_TABLES=['extraction_candidates','candidate_publications','extraction_approvals','document_sync_scope'];
 const WRITE_FUNCTIONS=[
- 'public.reconcile_document_sync_scope(text,jsonb,timestamptz)','public.claim_document_sync_lease(uuid,text,uuid,int)','public.insert_document_version(uuid,text,uuid,jsonb,jsonb)',
+ 'public.reconcile_document_sync_scope(text,jsonb,timestamptz)','public.claim_document_sync_lease(uuid,text,uuid,int)','public.renew_document_sync_lease(uuid,text,uuid,int)','public.insert_document_version(uuid,text,uuid,jsonb,jsonb)',
  'public.insert_upload_document(uuid,jsonb)','public.advance_document_cursor(uuid,text,uuid,text,jsonb,boolean,boolean)','public.release_document_sync_lease(uuid,text,uuid,text,timestamptz)',
  'public.reclassify_document(uuid,jsonb,uuid)','public.claim_document_extract_lease(uuid,uuid,int)','public.finish_document_extract(uuid,uuid,jsonb,jsonb)',
  'public.fail_document_extract(uuid,uuid,text)','public.request_document_extract(uuid,uuid,text,text)','public.claim_candidates_lease(uuid,uuid,int)',

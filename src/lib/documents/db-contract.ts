@@ -139,6 +139,22 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect((await db.scopeAll('cninfo')).some(r=>r.issuer_id===iss)).toBe(false);
   });
 
+  it('renewSyncLease (Task 7 review): holder-only, never reacquires; false for another batch, an expired lease, or no row',async()=>{
+   const {iss,b}=await ready();const b2=await h.batchId();
+   expect(await db.renewSyncLease(iss,'hkexnews',b,600)).toBe(true);
+   expect(await db.renewSyncLease(iss,'hkexnews',b2,600)).toBe(false);
+   expect(await db.renewSyncLease(randomUUID(),'hkexnews',b,600)).toBe(false);
+   expect(await code(db.renewSyncLease(iss,'hkexnews',b,0))).toBe('invalid_input');
+   await db.advanceCursor(iss,'hkexnews',b,'backfill',{segment:'y1',last_ref:'r',settled:[],attempts:{},seq:99},false);
+   await h.expire('sync',iss,'hkexnews');
+   expect(await db.renewSyncLease(iss,'hkexnews',b,600)).toBe(false);                               // expired: the old holder may not renew …
+   expect(await db.claimSyncLease(iss,'hkexnews',b2,600)).toBe(true);                               // … another batch takes over,
+   expect(await db.renewSyncLease(iss,'hkexnews',b,600)).toBe(false);                               // and the paused holder cannot reclaim it
+   expect(await code(db.advanceCursor(iss,'hkexnews',b,'backfill',null,true))).toBe('lease_lost');
+   expect((await db.scopeRows('hkexnews',[iss]))[0]).toMatchObject({lease_batch_id:b2,backfill_done:false,backfill_cursor:{seq:99}});
+   await db.releaseSyncLease(iss,'hkexnews',b2,'success','2030-01-01T00:00:00.000Z');
+  });
+
   it('advanceCursor never moves backwards without reset (P2-4): stale or missing seq, reopening a finished backfill',async()=>{
    const {iss,b}=await ready();
    const cur=(seq:number,last_ref:string|null='r'):DocScopeCursor=>({segment:'y2026',last_ref,settled:[],attempts:{},seq});

@@ -2,11 +2,14 @@
 import {createHash} from 'node:crypto';
 import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {docInsert} from './db-contract';
 import {memoryDocumentsDb} from './memory-documents-db';
 import {blobPath,memoryObjectStore} from './object-store';
 import {DocumentsSyncError,availableDateOf,runDocumentsSync} from './sync';
 import type {SyncDeps,SyncOptions} from './sync';
+import {pollSegment} from './sources/shared';
 import type {FetchBytes,FetchedBytes,Listed,ListedAsset,Segment,SourceAdapter} from './sources/shared';
+import {DocumentsDbError} from './types';
 import type {ListedSource} from './types';
 
 const NOW_ISO='2026-11-06T02:00:00.000Z';const NOW=new Date(NOW_ISO);
@@ -47,6 +50,11 @@ async function setup(o:{source?:ListedSource;gap?:string|null;fromIndex?:(l:List
  const scopeRow=()=>db.scope().find(s=>s.issuer_id===H&&s.source===source)!;
  const quarantined=()=>tables.rows('dq_quarantine');
  return {tables,db,store,a,f,deps,run,scopeRow,quarantined,source};
+}
+function spyDb(s:Awaited<ReturnType<typeof setup>>){
+ const calls:string[]=[];
+ s.deps.db=new Proxy(s.db,{get:(t,k)=>{const v=(t as never)[k] as unknown;return typeof v==='function'?(...a:unknown[])=>{calls.push(String(k));return (v as (...x:unknown[])=>unknown)(...a);}:v;}});
+ return calls;
 }
 const backfillLists=(s:Awaited<ReturnType<typeof setup>>)=>{
  s.a.lists={y2025:[item('2025082500100_c','2025-08-25')],y2026:[item('2026031900200_c','2026-03-19'),item('2026090300863_c','2026-09-03')],'poll:2026-11-05':[item('2026090300863_c','2026-09-03')]};
@@ -240,7 +248,7 @@ describe('runDocumentsSync — item failures',()=>{
   expect(r.counts).toMatchObject({fetched:2,quarantined:2,inserted:0,failed:0});
   expect(r.status).toBe('success');
   expect(s.quarantined().map(q=>q.reason_code).sort()).toEqual(['document_too_large','unexpected_mime']);
-  expect(r.errors).toContainEqual({code:'skipped_summary',key:`${H}:document_missing`,message:'{"document_missing":1}'});
+  expect(r.errors).toContainEqual({code:'skipped_summary',key:`${H}:document_missing`,message:JSON.stringify({document_missing:1,refs:['2026090300863_c']})});
   expect(s.db.documents()).toEqual([]);expect(s.store.objects().size).toBe(0);
   expect(s.scopeRow().backfill_done).toBe(true);
  });
@@ -345,9 +353,11 @@ describe('runDocumentsSync — leases, batches, dry run',()=>{
  });
  it('a lease lost mid-run fails the issuer with no further database call for it',async()=>{
   const s=await setup();backfillLists(s);
-  const orig=s.f.fetch;let n=0;
+  const orig=s.f.fetch;let n=0;const calls=spyDb(s);
   s.deps.fetchBytes=async(u,b,m)=>{if(n++===1){s.db.expireSyncLease(H,'hkexnews');await s.db.claimSyncLease(H,'hkexnews','00000000-0000-4000-8000-0000000000ee',600);}return orig(u,b,m);};
   const r=await s.run();
+  expect(calls.at(-1)).toBe('insertDocumentVersion');                         // the refused write is the last database call for this issuer
+  expect(calls).not.toContain('releaseSyncLease');
   expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'lease_lost'});
   expect(s.db.documents()).toHaveLength(1);
   expect(s.scopeRow()).toMatchObject({lease_batch_id:'00000000-0000-4000-8000-0000000000ee',last_status:null});
@@ -409,4 +419,157 @@ it('availableDateOf: New York for EDGAR, UTC+8 for cninfo/HKEX',()=>{
  expect(availableDateOf('edgar','2026-08-04T02:00:00.000Z')).toBe('2026-08-03');
  expect(availableDateOf('hkexnews','2026-08-03T16:30:00.000Z')).toBe('2026-08-04');
  expect(availableDateOf('cninfo','2026-09-08T16:00:00.000Z')).toBe('2026-09-09');
+});
+
+describe('runDocumentsSync — Task 7 review fixes',()=>{
+ const OTHER='00000000-0000-4000-8000-0000000000ee';
+ it('T7-01: a poll window is persisted before it is listed — a run that exhausts the budget keeps the unfinished window',async()=>{
+  const s=await setup();backfillLists(s);
+  let clock=NOW.getTime();s.deps.now=()=>new Date(clock);
+  s.a.segments=(sc,mode)=>mode==='poll'?[pollSegment(sc,s.deps.now())]:s.a.segs.backfill;
+  await s.run();                                                               // backfill done, last_success_at = 2026-11-06
+  clock=Date.parse('2026-11-10T02:00:00.000Z');s.db.setNow('2026-11-10T02:00:00.000Z');
+  s.deps.deadline=new Date(clock+100_000);
+  const list=s.a.list.bind(s.a);s.a.list=async(sc,seg,b)=>{clock+=80_000;return list(sc,seg,b);};   // listing takes 80 s: 20 s left, no item starts
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'success',code:'deadline_hit'});
+  expect(s.scopeRow().poll_cursor).toMatchObject({segment:'poll:2026-11-05'});   // the old window, not one derived from the new last_success_at
+  expect(s.scopeRow().last_success_at).toBe('2026-11-10T02:00:00.000Z');
+  s.a.list=list;s.deps.deadline=null;
+  await s.run();
+  expect(s.a.listed.at(-1)).toBe('poll:2026-11-05');
+ });
+ it('T7-02: renewal is holder-only — a paused worker cannot reclaim the lease and the other batch cursor survives',async()=>{
+  const s=await setup();backfillLists(s);
+  let clock=NOW.getTime();s.deps.now=()=>new Date(clock);
+  const orig=s.f.fetch;let n=0;
+  s.deps.fetchBytes=async(u,b,m)=>{
+   if(n++===1){
+    clock+=500_000;                                                            // paused: the next write must renew
+    s.db.expireSyncLease(H,'hkexnews');await s.db.claimSyncLease(H,'hkexnews',OTHER,600);
+    await s.db.advanceCursor(H,'hkexnews',OTHER,'backfill',{segment:'y2026',last_ref:'z',settled:[],attempts:{},seq:99},false);
+   }
+   return orig(u,b,m);
+  };
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'lease_lost'});
+  expect(s.scopeRow()).toMatchObject({lease_batch_id:OTHER,backfill_done:false,backfill_cursor:{segment:'y2026',seq:99}});
+ });
+ it('renews the lease with renewSyncLease once 480 s have passed, and finishes',async()=>{
+  const s=await setup();backfillLists(s);
+  let clock=NOW.getTime();s.deps.now=()=>new Date(clock);const calls=spyDb(s);
+  const orig=s.f.fetch;let n=0;
+  s.deps.fetchBytes=async(u,b,m)=>{if(n++===0)clock+=500_000;return orig(u,b,m);};
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'success'});
+  expect(calls).toContain('renewSyncLease');
+  expect(calls.filter(c=>c==='claimSyncLease')).toHaveLength(1);                // claimed once, never reclaimed
+ });
+ it('T7-03: losing the lease at release fails the issuer, is not counted as a success and does not reset freshness',async()=>{
+  const s=await setup();backfillLists(s);
+  s.deps.db={...s.db,releaseSyncLease:async()=>{throw new DocumentsDbError('lease_lost');}};
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'lease_lost'});
+  expect(r.status).not.toBe('success');
+  expect(s.tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
+ });
+ it('T7-04: an infrastructure failure rejects the run after best-effort cleanup of the lease, the batch and freshness',async()=>{
+  const s=await setup();backfillLists(s);
+  s.deps.db={...s.db,knownSourceRefs:async()=>{throw new Error('database unavailable');}};
+  await expect(s.run()).rejects.toThrow('database unavailable');
+  expect(s.tables.rows('ingest_batches')[0].status).not.toBe('running');
+  expect(s.scopeRow()).toMatchObject({lease_batch_id:null,last_status:'failed'});
+  expect(s.tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
+ });
+ it('a source_ref held by another issuer is quarantined document_ref_conflict (holder in the payload) and the issuer carries on',async()=>{
+  const s=await setup();backfillLists(s);
+  await s.db.reconcileScope('hkexnews',[{issuer_id:M,reasons:['cohort'],priority:10,fetch_key:'09999'}]);
+  await s.db.claimSyncLease(M,'hkexnews',OPS,600);
+  await s.db.insertDocumentVersion(M,'hkexnews',OPS,docInsert({source_ref:'2025082500100_c'}),[]);
+  await s.db.releaseSyncLease(M,'hkexnews',OPS,'success',NOW_ISO);
+  const r=await s.run();
+  expect(r.status).toBe('success');
+  expect(r.counts).toMatchObject({inserted:2,quarantined:1,failed:0});
+  expect(s.quarantined()).toEqual([expect.objectContaining({natural_key:'hkexnews:2025082500100_c',reason_code:'document_ref_conflict'})]);
+  expect(s.quarantined()[0].payload).toMatchObject({holder_issuer_id:M});
+  expect(s.scopeRow().backfill_done).toBe(true);
+ });
+ it('another per-item database refusal goes through attempts: the third quarantines and the issuer moves on',async()=>{
+  const s=await setup();backfillLists(s);
+  s.deps.db={...s.db,insertDocumentVersion:async(i,src,b,d,a)=>{if(d.source_ref==='2025082500100_c')throw new DocumentsDbError('not_found');return s.db.insertDocumentVersion(i,src,b,d,a);}};
+  const r1=await s.run();
+  expect(r1.issuers[0]).toMatchObject({outcome:'failed',code:'not_found'});
+  await s.run();
+  const r3=await s.run();
+  expect(r3.counts).toMatchObject({quarantined:1,inserted:2});
+  expect(s.quarantined()).toEqual([expect.objectContaining({reason_code:'document_fetch_exhausted'})]);
+  expect(s.scopeRow().backfill_done).toBe(true);
+ });
+ it('running out of budget mid-item (budget_exhausted) is deadline_hit: no attempt counted, due now',async()=>{
+  const s=await setup();backfillLists(s);
+  s.f.set(item('2025082500100_c','2025-08-25').source_url,new Error('budget_exhausted'));
+  const r=await s.run();
+  expect(r.issuers[0]).toMatchObject({outcome:'success',code:'deadline_hit'});
+  expect(r.counts.failed).toBe(0);
+  expect(s.scopeRow()).toMatchObject({last_status:'success',next_due_at:NOW_ISO,backfill_cursor:{}});
+ });
+ it('a deadline reached between segments stops before listing the next one, keeping the checkpoint',async()=>{
+  const s=await setup({deadline:new Date(NOW.getTime()+200_000)});backfillLists(s);s.a.lists.y2025=[];
+  let clock=NOW.getTime();s.deps.now=()=>new Date(clock);
+  const list=s.a.list.bind(s.a);s.a.list=async(sc,seg,b)=>{clock+=150_000;return list(sc,seg,b);};
+  const r=await s.run();
+  expect(s.a.listed).toEqual(['y2025']);
+  expect(r.issuers[0]).toMatchObject({outcome:'success',code:'deadline_hit'});
+  expect(s.scopeRow().backfill_cursor).toMatchObject({segment:'y2026'});
+ });
+ it('an explicit refetch=true downloads a known ref even for a source that does not refetch by default',async()=>{
+  const s=await setup({source:'cninfo'});backfillLists(s);
+  await s.run();
+  const calls=s.f.calls.length;
+  const r=await s.run({refetch:true});
+  expect(r.counts).toMatchObject({fetched:1,duplicates:1,inserted:0});
+  expect(s.f.calls.length).toBe(calls+1);
+ });
+ it('adapter.rejected rows are quarantined document_url_rejected and reported, never silently dropped',async()=>{
+  const s=await setup();backfillLists(s);
+  s.a.rejected=[{source_ref:'bad1',url:'https://evil.example/x.pdf',reason:'host_not_allowed: evil.example'}];
+  const r=await s.run();
+  expect(r.counts).toMatchObject({inserted:3,quarantined:1});
+  expect(s.quarantined()).toEqual([expect.objectContaining({natural_key:'hkexnews:bad1',reason_code:'document_url_rejected'})]);
+  expect(s.quarantined()[0].payload).toMatchObject({url:'https://evil.example/x.pdf',reason:'host_not_allowed: evil.example'});
+  expect(r.errors).toContainEqual({code:'document_url_rejected',key:`${H}:bad1`,message:'host_not_allowed: evil.example'});
+  const again=await s.run();                                                   // the same rows are not reported twice within one run
+  expect(again.errors.filter(e=>e.code==='document_url_rejected')).toHaveLength(1);
+ });
+ it('duplicates are found beyond the first page of versions, in apply and dry run, before any object is put',async()=>{
+  const s=await setup();
+  const ref='2026090300863_c';const url=item(ref,'2026-09-03').source_url;
+  s.a.lists={y2025:[],y2026:[item(ref,'2026-09-03')]};s.f.set(url,s.f.ok(pdfBytes(ref)));
+  await s.db.claimSyncLease(H,'hkexnews',OPS,600);
+  for(const tag of ['old1','old2',ref])await s.db.insertDocumentVersion(H,'hkexnews',OPS,docInsert({source_ref:ref,content_sha256:sha(pdfBytes(tag))}),[]);
+  await s.db.releaseSyncLease(H,'hkexnews',OPS,'success',NOW_ISO);
+  s.deps.db={...s.db,documentVersions:(src,r,pg)=>s.db.documentVersions(src,r,{...pg,limit:1})};   // one version per page
+  const dry=await s.run({dryRun:true});
+  expect(dry.counts).toMatchObject({duplicates:1,versioned:0,inserted:0});
+  const applied=await s.run();
+  expect(applied.counts).toMatchObject({duplicates:1,versioned:0,inserted:0});
+  expect(s.db.documents()).toHaveLength(3);expect(s.store.objects().size).toBe(0);
+ });
+ it('a coverage-gap restart keeps the settled refs, and an item with an open quarantine is not fetched again',async()=>{
+  const s=await setup({source:'edgar',gap:'edgar_files_unverified'});
+  const l:Listed={source_ref:'0001321655-26-000041/pltr-20260630.htm',source_url:'https://www.sec.gov/Archives/edgar/data/1321655/000132165526000041/pltr-20260630.htm',title:'10-Q',form_type:'10-Q',published_at:'2026-08-03T22:06:38.000Z',precision:'instant'};
+  s.a.segs.backfill=[{id:'recent',from:'2025-01-01',to:'2026-11-06'}];s.a.lists={recent:[l]};
+  s.f.set(l.source_url,s.f.ok(new TextEncoder().encode('plain'),'text/plain'));
+  await s.run();
+  expect(s.scopeRow().backfill_cursor).toMatchObject({segment:null,settled:[l.source_ref]});
+  const calls=s.f.calls.length;
+  await s.run();
+  expect(s.f.calls.length).toBe(calls);
+  await s.db.claimSyncLease(H,'edgar',OPS,600);
+  await s.db.advanceCursor(H,'edgar',OPS,'backfill',null,false,true);          // an operator reset forgets the cursor; the open quarantine still holds
+  await s.db.releaseSyncLease(H,'edgar',OPS,'success',NOW_ISO);
+  const r=await s.run();
+  expect(s.f.calls.length).toBe(calls);
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'skipped_summary',key:`${H}:already_quarantined`}));
+ });
 });

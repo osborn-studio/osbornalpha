@@ -263,6 +263,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
  const maybe=async(q:PromiseLike<RpcResult>):Promise<Record<string,unknown>|null>=>{const {data,error}=await q;if(error)throw toDocumentsDbError(error);return (data??null) as Record<string,unknown>|null;};
  return {
   async reconcileScope(source,input,snapshotAt){return Number(await call('reconcile_document_sync_scope',{p_source:source,p_rows:input,p_snapshot_at:snapshotAt??null}));},
+  async renewSyncLease(issuer,source,batch,ttl){return (await call('renew_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_ttl:ttl}))===true;},
   async claimSyncLease(issuer,source,batch,ttl){return (await call('claim_document_sync_lease',{p_issuer:issuer,p_source:source,p_batch:batch,p_ttl:ttl}))===true;},
   insertDocumentVersion:async(issuer,source,batch,doc,assets)=>call<InsertVersionResult>('insert_document_version',{p_issuer:issuer,p_source:source,p_batch:batch,p_doc:docArg(doc),p_assets:assetsArg(assets)}),
   insertUploadDocument:async(owner,doc)=>call<InsertVersionResult>('insert_upload_document',{p_owner:owner,p_doc:docArg(doc)}),

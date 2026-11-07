@@ -169,6 +169,12 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    if(s.lease_batch_id===null||!live(s.lease_until)||s.lease_batch_id===batch){s.lease_batch_id=batch;s.lease_until=later(ttl);s.updated_at=now();return true;}
    return false;
   },
+  async renewSyncLease(issuer,source,batch,ttl){
+   ttlCheck(ttl);
+   const s=scope.get(sk(issuer,source));
+   if(!s||batch==null||s.lease_batch_id!==batch||!live(s.lease_until))return false;   // never reacquires
+   s.lease_until=later(ttl);s.updated_at=now();return true;
+  },
   async advanceCursor(issuer,source,batch,mode,cursor,done,reset=false){
    if(mode!=='backfill'&&mode!=='poll')throw invalid('mode');
    if(cursor!==null&&(typeof cursor!=='object'||Array.isArray(cursor)))throw invalid('cursor');

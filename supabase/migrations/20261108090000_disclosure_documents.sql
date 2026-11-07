@@ -520,6 +520,23 @@ end $$;
 revoke execute on function public.claim_document_sync_lease(uuid, text, uuid, int) from public, anon, authenticated;
 grant execute on function public.claim_document_sync_lease(uuid, text, uuid, int) to service_role;
 
+-- F3 review (Task 7): holder-only renewal. Extends the lease only when the SAME batch still holds an unexpired one;
+-- never (re)acquires, so a paused worker whose lease expired (or was taken over) cannot silently resume on stale state.
+create or replace function public.renew_document_sync_lease(p_issuer uuid, p_source text, p_batch uuid, p_ttl int)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_n int;
+begin
+  if p_ttl is null or p_ttl < 1 then raise exception 'invalid_input: ttl' using errcode = '22023'; end if;
+  if p_batch is null then return false; end if;
+  update public.document_sync_scope
+  set lease_until = now() + make_interval(secs => p_ttl), updated_at = now()
+  where issuer_id = p_issuer and source = p_source and lease_batch_id = p_batch and lease_until is not null and lease_until > now();
+  get diagnostics v_n = row_count;
+  return v_n > 0;
+end $$;
+revoke execute on function public.renew_document_sync_lease(uuid, text, uuid, int) from public, anon, authenticated;
+grant execute on function public.renew_document_sync_lease(uuid, text, uuid, int) to service_role;
+
 -- Scope lock + sync lease. One transaction: versions of (source, source_ref) are read under a
 -- per-ref advisory lock; same content_sha256 → duplicate (nothing written); else version max + 1
 -- with supersedes/observed_replacement, the document and all its assets. The listed sources are

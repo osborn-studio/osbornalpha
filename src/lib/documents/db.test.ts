@@ -109,6 +109,11 @@ const pgDocRow={document_id:'d1',issuer_id:'i1',source:'hkexnews',market:'HK',so
  extract_lease_batch_id:null,extract_attempts:0,batch_id:'b1',code_version:'c',created_at:'2026-03-20T09:00:01+00:00'};
 
 describe('supabaseDocumentsDb wiring',()=>{
+ it('renewSyncLease calls renew_document_sync_lease (holder-only, no reacquire)',async()=>{
+  const {db,calls}=stub({renew_document_sync_lease:()=>false});
+  expect(await db.renewSyncLease('i','hkexnews','b',600)).toBe(false);
+  expect(calls.map(c=>c.fn)).toEqual(['renew_document_sync_lease']);
+ });
  it('calls each write function with p_* arguments; requestExtract passes the current versions',async()=>{
   const {db,calls}=stub({
    claim_document_sync_lease:()=>true,insert_document_version:()=>({outcome:'inserted',document_id:'d1'}),finish_document_extract:()=>'e1',request_document_extract:()=>null,
