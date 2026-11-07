@@ -7477,8 +7477,13 @@ describe('completion recovery without the provider (plan audit R2-1 / R2-2)',()=
   await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
   const detail=d.db.runDetail.bind(d.db);
   vi.spyOn(d.db,'runDetail').mockImplementation(async id=>{const r=await detail(id);return r&&{...r,raw_output:{...(r.raw_output as Record<string,unknown>),validator_version:'macro-explain-validator/0'}};});
-  const p=projection(await handleExplainRequest(d,USER,body()));
-  expect(p).toMatchObject({state:'failed',failure_codes:['validator_version_changed'],rendered:null,validator_version:'macro-explain-validator/0'});
+  // the stored row keeps its original envelope (a recorded completion is evidence: the db rejects a different raw output), so the
+  // recovery finish is captured instead of applied
+  const finish=vi.spyOn(d.db,'finishExplanation').mockImplementation(async a=>({explanation_id:a.explanationId} as ExplanationProjection));
+  finish.mockClear();
+  await handleExplainRequest(d,USER,body());
+  expect(finish).toHaveBeenCalledTimes(1);
+  expect(finish.mock.calls[0][0]).toMatchObject({state:'failed',failureCodes:['validator_version_changed'],rendered:null,validatorVersion:'macro-explain-validator/0'});
   expect(f.calls.filter(c=>c==='call')).toHaveLength(1);
  });
  it('recordCompletion, then finalize fail: finish stored the payload; the replay settles it verbatim after a pricing change and marks finalized',async()=>{
