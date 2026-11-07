@@ -14,14 +14,14 @@ const env=(o:Partial<OverviewEnvelopeJson>={}):OverviewEnvelopeJson=>({snapshotI
  collection:[{dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-03T05:31:00Z'}],indicators:[row({})],changes:{counts:{new_release:0,revised:0,late:0,missing:0},items:[]},catalogCounts:{verified:6,missing:1,restricted:1},...o});
 describe('toIndicatorView',()=>{
  it('active row: formatted value, formatted change, period from the catalog, available, catalog source',()=>{
-  const v=toIndicatorView(row({}),'zh');
+  const v=toIndicatorView(row({}),'zh',t);
   expect(v).toMatchObject({seriesId:'US_UNRATE',name:'失业率',value:'4.2',unit:'%',change:{text:'−0.1 pp',arrow:'↓'},period:'2026-09',available:'2026-10-15 12:30 UTC',muted:false,hasEvidence:true,spark:['4.3','4.2']});
   expect(v.source).toEqual(sourceOf('US_UNRATE'));
   expect(v.source?.fetch_host).toBe('fred.stlouisfed.org');
-  expect(toIndicatorView(row({series_id:'CN_GDP_YOY',period_end:'2026-09-30'}),'zh').period).toBe('2026-Q3');
+  expect(toIndicatorView(row({series_id:'CN_GDP_YOY',period_end:'2026-09-30'}),'zh',t).period).toBe('2026-Q3');
  });
  it('missing / restricted rows are muted with reason and no numbers',()=>{
-  const v=toIndicatorView(row({series_id:'US_ISM_PMI',status:'M',reason:{zh:'无可采的原始来源',en:'No source'},value_text:null,change:null,period_end:null,available_at:null,retrieval_id:null,sparkline:[],timeliness:'missing'}),'zh');
+  const v=toIndicatorView(row({series_id:'US_ISM_PMI',status:'M',reason:{zh:'无可采的原始来源',en:'No source'},value_text:null,change:null,period_end:null,available_at:null,retrieval_id:null,sparkline:[],timeliness:'missing'}),'zh',t);
   expect(v).toMatchObject({muted:true,value:MISSING,change:null,period:MISSING,available:MISSING,reason:'无可采的原始来源',hasEvidence:false,source:null});
   expect(statusKey(v)).toBe('status.missing');
  });
@@ -40,7 +40,7 @@ describe('overview pieces',()=>{
   const e=env({changes:{counts:{new_release:1,revised:1,late:0,missing:1},items:[{series_id:'US_UNRATE',kind:'revised',period_end:'2026-09-30'},{series_id:'US_CPI_YOY',kind:'new_release',period_end:'2026-10-31'},{series_id:'US_ISM_PMI',kind:'missing',period_end:null}]},
    indicators:[row({}),row({series_id:'US_CPI_YOY',name:{zh:'美国 CPI 同比',en:'US CPI YoY'},value_text:'3',period_end:'2026-10-31'})]});
   expect(changeCounts(e)).toEqual({new_release:1,revised:1,late:0,missing:1});
-  const lines=changeLines(e,'zh');
+  const lines=changeLines(e,'zh',t);
   expect(lines[0]).toEqual({kind:'revised',seriesId:'US_UNRATE',name:'失业率',value:'4.2%',previous:null,period:'2026-09'});
   expect(lines[1]).toMatchObject({kind:'new_release',name:'美国 CPI 同比',value:'3%',period:'2026-10'});
   expect(lines[2]).toMatchObject({kind:'missing',name:'US_ISM_PMI',value:MISSING,period:MISSING});
@@ -54,16 +54,16 @@ describe('overview pieces',()=>{
  });
  it('glance ids equal the overview compact keys; glance takes only the key ids present, never placeholders',()=>{
   expect(GLANCE_IDS).toEqual(COMPACT_KEYS);
-  const g=glanceRows({regions:{US:env({indicators:[row({series_id:'US_DFF'}),row({series_id:'US_DGS10',name:{zh:'10 年美债',en:'UST 10Y'},change:{kind:'bp',value_text:'10'}})]})}},'zh');
+  const g=glanceRows({regions:{US:env({indicators:[row({series_id:'US_DFF'}),row({series_id:'US_DGS10',name:{zh:'10 年美债',en:'UST 10Y'},change:{kind:'bp',value_text:'10'}})]})}},'zh',t);
   expect(g).toHaveLength(1);expect(g[0].region).toBe('US');expect(g[0].rows.map(r=>r.seriesId)).toEqual(['US_DFF','US_DGS10']);
   expect(g[0].rows[1].change?.text).toBe('+10 bp');
-  expect(glanceRows({regions:{}},'zh')).toEqual([]);
+  expect(glanceRows({regions:{}},'zh',t)).toEqual([]);
  });
 });
 describe('drawer rows',()=>{
  const v=(o:Partial<VersionJson>={}):VersionJson=>({observation_id:'o2',series_id:'US_UNRATE',version:2,value_text:'4.2',available_at:'2026-10-03T12:30:00Z',availability_basis:'first_seen',
   retrieval:{retrieval_id:'r1',fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-10-03T12:30:00Z',tool_versions:{parser:'fred-csv@1',code:'abc'}},
-  evidence:{sha256:'b'.repeat(64),adapter:'fred_csv',content_type:'text/csv',byte_length:12345},locator:{kind:'csv_row',line:933,column:1},transform:null,derived_from:null,inputs:[],...o});
+  evidence:{sha256:'b'.repeat(64),adapter:'fred_csv',content_type:'text/csv',byte_length:12345},locator:{kind:'csv_row',line:933,column:1},transform:null,derived_from:null,code_version:'abc123',inputs:[],...o});
  it('source rows: publisher, via, rights, attribution',()=>{
   expect(sourceRows(src,t,'en').map(r=>[r.key,r.value])).toEqual([['publisher','BLS'],['via','FRED'],['rights','drawer.rightsValues.public_domain'],['attribution','Source: BLS via FRED']]);
   expect(sourceRows(null,t,'en').every(r=>r.missing&&r.value==='drawer.missing')).toBe(true);
@@ -71,14 +71,22 @@ describe('drawer rows',()=>{
  it('proof rows for a native observation',()=>{
   const r=Object.fromEntries(proofRows(v(),t).map(x=>[x.key,x.value]));
   expect(r).toMatchObject({fetchUrl:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2000-01-01',host:'fred.stlouisfed.org',fetchedAt:'2026-10-03 12:30 UTC',sha256:'b'.repeat(64),
-   locator:'drawer.csvRow{"line":933,"column":1}',transform:'drawer.none',adapter:'drawer.adapters.fred_csv',toolVersions:'code=abc · parser=fred-csv@1'});
+   locator:'drawer.csvRow{"line":933,"column":2}',transform:'drawer.none',adapter:'drawer.adapters.fred_csv',toolVersions:'code=abc · parser=fred-csv@1',codeVersion:'abc123'});
  });
  it('missing evidence keeps every field name with the value 缺失',()=>{
   const rows=proofRows(v({retrieval:null,evidence:null,locator:null}),t);
   for(const k of ['fetchUrl','host','fetchedAt','sha256','locator','adapter','toolVersions'])expect(rows.find(r=>r.key===k)).toMatchObject({value:'drawer.missing',missing:true});
  });
- it('revision rows: newest first; older versions marked superseded',()=>{
-  expect(revisionRows([v({version:1,observation_id:'o1',value_text:'4.3'}),v()],t).map(r=>[r.version,r.value,r.note])).toEqual([['v2','4.2','drawer.current'],['v1','4.3','drawer.superseded{"version":2}']]);
+ it('revision rows: newest first; the displayed observation is current; superseded names the following version; the previous value is shown',()=>{
+  const vs=[v({version:1,observation_id:'o1',value_text:'4.3'}),v(),v({version:3,observation_id:'o3',value_text:'4.1'})];
+  const newest=revisionRows(vs,t,'pct');
+  expect(newest.map(r=>[r.version,r.value,r.note,r.current])).toEqual([['v3','changes.revisedFrom{"from":"4.2%","to":"4.1%"}','drawer.current',true],['v2','changes.revisedFrom{"from":"4.3%","to":"4.2%"}','drawer.superseded{"version":3}',false],['v1','4.3%','drawer.superseded{"version":2}',false]]);
+  const old=revisionRows(vs,t,'pct','o2');   // the user opened the v2 value: v2 is current, v3 is a later revision, v1 was superseded by v2
+  expect(old.map(r=>[r.version,r.note,r.current])).toEqual([['v3','drawer.later',false],['v2','drawer.current',true],['v1','drawer.superseded{"version":2}',false]]);
+  expect(revisionRows([v()],t,'cny_per_100usd')[0].value).toBe('4.2 units.cny_per_100usd');
+ });
+ it('proof rows include the code version, also for derived inputs (missing → 缺失)',()=>{
+  expect(proofRows(v({code_version:null}),t).find(r=>r.key==='codeVersion')).toMatchObject({missing:true});
  });
  it('the drawer proves the exact version shown: an old snapshot after a new revision selects v1, not the newest (第 4 稿 P1-9)',()=>{
   const versions=[v(),v({version:1,observation_id:'o1',value_text:'4.3'})];   // route order: newest first
@@ -86,6 +94,6 @@ describe('drawer rows',()=>{
   expect(selectVersion(versions,'o2')).toMatchObject({observation_id:'o2',version:2});
   expect(selectVersion(versions,'gone')).toBeNull();                                               // never relabels another version's proof
   expect(selectVersion(versions,null)).toMatchObject({version:2});                                 // no id (legacy caller) → newest
-  expect(toIndicatorView(row({observation_id:'o1'}),'zh').observationId).toBe('o1');
+  expect(toIndicatorView(row({observation_id:'o1'}),'zh',t).observationId).toBe('o1');
  });
 });

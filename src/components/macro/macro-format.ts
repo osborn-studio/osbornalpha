@@ -18,8 +18,12 @@ export function roundDecimalText(text:string,places:number):string{
  const out=places>0?`${s.slice(0,-places)}.${s.slice(-places)}`:s;
  return `${neg&&v!==0n?'-':''}${out}`;
 }
-/** Source precision, capped at 2 decimals for display. */
-export const formatValueText=(text:string):string=>{const c=canonicalDecimal(text);return roundDecimalText(c,Math.min(fractionDigits(c),MAX_DISPLAY_DECIMALS));};
+/** Source precision (trailing zeros kept: '4.80' stays '4.80'), capped at 2 decimals for display. */
+export const formatValueText=(text:string):string=>{
+ const c=canonicalDecimal(text);const raw=text.trim();
+ const sourceDigits=/^[+-]?\d*\.\d+$/.test(raw)?raw.length-raw.indexOf('.')-1:fractionDigits(c);
+ return roundDecimalText(c,Math.min(Math.max(sourceDigits,fractionDigits(c)),MAX_DISPLAY_DECIMALS));
+};
 export interface TypedChange{text:string;arrow:'↑'|'↓'|'→';kind:ChangeKind}
 const isPositive=(text:string)=>{const c=canonicalDecimal(text);return c!=='0'&&!c.startsWith('-');};
 /** Formats an exact change text in its kind: bp ≤ 1 decimal, pct 2 decimals, pp / points ≤ 2 decimals. Used directly for
@@ -47,4 +51,11 @@ export function formatInstant(iso:string):string{
  const d=new Date(iso);if(!Number.isFinite(d.getTime()))return MISSING;
  const s=d.toISOString();return `${s.slice(0,10)} ${s.slice(11,16)} UTC`;
 }
-export const unitSuffix=(unit:string):string=>unit==='pct'?'%':'';
+const KNOWN_UNITS=new Set(['pct','index','index_1982_84_100','index_2009_11_100','index_prev_year_100','cny_per_100usd','usd_per_bbl']);
+/** Localized catalog unit as a value suffix: '%' attaches directly, every other known unit follows a space; unknown → ''. */
+export function unitSuffix(unit:string,t:(key:string)=>string):string{
+ if(!KNOWN_UNITS.has(unit))return '';
+ return unit==='pct'?'%':` ${t(`units.${unit}`)}`;
+}
+/** Localized unit name for headings (no leading space); '' for an unknown unit. */
+export const unitLabel=(unit:string,t:(key:string)=>string):string=>KNOWN_UNITS.has(unit)?t(`units.${unit}`):'';

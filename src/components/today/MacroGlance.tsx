@@ -14,7 +14,7 @@ import { glanceRows } from '@/components/macro/view-model';
 export function MacroGlance() {
   const { t, locale } = useMacroT();
   const state = useMacroOverview('region=all&compact=1');
-  const groups = state.status === 'ok' ? glanceRows(state.data, locale) : [];
+  const groups = state.status === 'ok' ? glanceRows(state.data, locale, t) : [];
   return (
     <Panel title={t('glance.title')}>
       {state.status === 'loading' && <div className="text-[11px] text-text-dim">{t('states.loading')}</div>}

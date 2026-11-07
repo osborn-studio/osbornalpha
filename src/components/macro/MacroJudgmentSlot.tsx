@@ -3,14 +3,13 @@
 // passes judgmentsEnabled (the judgment flag is read server-side, never here). Collapsed by default. Any F4 failure shows
 // "判断层暂不可用" and never falls back to macro-computed numbers. A percent appears only when display.percent is a number.
 import { useEffect, useState } from 'react';
-import type { JudgmentCardView } from '@/lib/macro/judgment-contract';
 import type { RegimeContribution } from '@/lib/macro/types';
-import { cardsFromResponse, contributionText, contributionsFrom, percentOf } from './judgment-view';
+import { contributionText, contributionsFrom, parseJudgments, percentOf, type JudgmentCard } from './judgment-view';
 import { formatInstant } from './macro-format';
 import { useMacroT, type MacroT } from './use-macro-t';
 import { pick, type Locale } from './view-model';
 
-type SlotState = { status: 'idle' } | { status: 'loading' } | { status: 'unavailable' } | { status: 'ok'; cards: JudgmentCardView[] };
+type SlotState = { status: 'idle' } | { status: 'loading' } | { status: 'unavailable' } | { status: 'ok'; cards: JudgmentCard[] };
 
 function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
   const [rows, setRows] = useState<RegimeContribution[] | null | 'error'>(null);
@@ -48,9 +47,12 @@ function Basis({ snapshotId, t }: { snapshotId: string; t: MacroT }) {
   );
 }
 
-function Card({ card, t, locale, snapshotId }: { card: JudgmentCardView; t: MacroT; locale: Locale; snapshotId: string | null }) {
+/** The contribution basis is the macro snapshot behind the overview; it substantiates a judgment only when that judgment was
+ *  computed from exactly this snapshot. Otherwise the basis is stated as unavailable. */
+function Card({ card, t, locale, snapshotId }: { card: JudgmentCard; t: MacroT; locale: Locale; snapshotId: string | null }) {
   const [basisOpen, setBasisOpen] = useState(false);
   const percent = percentOf(card);
+  const basisId = snapshotId !== null && card.input_snapshot_id === snapshotId ? snapshotId : null;
   return (
     <article className="rounded-md border border-border bg-bg-elevated">
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-[11px] text-text-dim">
@@ -66,14 +68,16 @@ function Card({ card, t, locale, snapshotId }: { card: JudgmentCardView; t: Macr
       </div>
       <div className="flex flex-wrap gap-4 border-t border-border px-4 py-2 text-xs text-text-dim">
         <span>{t('judgment.asOf')} <span className="font-mono text-text">{formatInstant(card.as_of)}</span></span>
-        {snapshotId && <span>{t('judgment.snapshot')} <span className="font-mono text-text">{snapshotId}</span></span>}
+        {card.input_snapshot_id && <span>{t('judgment.snapshot')} <span className="font-mono text-text">{card.input_snapshot_id}</span></span>}
       </div>
-      {snapshotId && (
-        <div className="border-t border-border px-4 py-2">
-          <button type="button" aria-expanded={basisOpen} onClick={() => setBasisOpen((v) => !v)} className="text-xs text-text">{t('judgment.basis')}</button>
-          {basisOpen && <div className="mt-2"><Basis snapshotId={snapshotId} t={t} /></div>}
-        </div>
-      )}
+      <div className="border-t border-border px-4 py-2">
+        {basisId ? (
+          <>
+            <button type="button" aria-expanded={basisOpen} onClick={() => setBasisOpen((v) => !v)} className="text-xs text-text">{t('judgment.basis')}</button>
+            {basisOpen && <div className="mt-2"><Basis snapshotId={basisId} t={t} /></div>}
+          </>
+        ) : <span className="text-xs text-text-dim">{t('judgment.basisUnavailable')}</span>}
+      </div>
     </article>
   );
 }
@@ -89,7 +93,11 @@ export function MacroJudgmentSlot({ region, snapshotId }: { region: 'US' | 'CN';
     setState({ status: 'loading' });
     fetch(`/api/judgments?subject_type=macro_region&subject_key=${region}`)
       .then(async (r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((j) => { if (!cancelled) setState({ status: 'ok', cards: cardsFromResponse(j) }); })
+      .then((j) => {
+        if (cancelled) return;
+        const parsed = parseJudgments(j);
+        setState(parsed.ok ? { status: 'ok', cards: parsed.cards } : { status: 'unavailable' });
+      })
       .catch(() => { if (!cancelled) setState({ status: 'unavailable' }); });
     return () => { cancelled = true; };
   }, [open, region, nonce]);

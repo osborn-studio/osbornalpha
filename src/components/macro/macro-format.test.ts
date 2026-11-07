@@ -1,6 +1,6 @@
 // Display formatting from value_text (spec §3.2): string rounding (no float drift), typed changes, neutral arrows.
 import {describe,expect,it} from 'vitest';
-import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,roundDecimalText,typedChange,unitSuffix} from './macro-format';
+import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,roundDecimalText,typedChange,unitLabel,unitSuffix} from './macro-format';
 describe('roundDecimalText',()=>{
  it('rounds half away from zero on the decimal string and pads',()=>{
   expect(roundDecimalText('2.9381',2)).toBe('2.94');
@@ -15,7 +15,7 @@ describe('roundDecimalText',()=>{
 });
 describe('formatValueText',()=>{
  it('keeps source precision up to 2 decimals',()=>{
-  expect(formatValueText('2.9381')).toBe('2.94');expect(formatValueText('4.80')).toBe('4.8');expect(formatValueText('50')).toBe('50');expect(formatValueText('710.255')).toBe('710.26');
+  expect(formatValueText('2.9381')).toBe('2.94');expect(formatValueText('4.80')).toBe('4.80');expect(formatValueText('4.800')).toBe('4.80');expect(formatValueText('4.8')).toBe('4.8');expect(formatValueText('-0.50')).toBe('-0.50');expect(formatValueText('50')).toBe('50');expect(formatValueText('710.255')).toBe('710.26');
  });
 });
 describe('typedChange',()=>{
@@ -47,5 +47,10 @@ describe('period / instant / unit',()=>{
  it('instants are printed in UTC, invalid → missing',()=>{
   expect(formatInstant('2026-11-03T03:12:08Z')).toBe('2026-11-03 03:12 UTC');expect(formatInstant('nope')).toBe(MISSING);
  });
- it('unit suffix only for percent',()=>{expect(unitSuffix('pct')).toBe('%');expect(unitSuffix('index')).toBe('');});
+ it('unit suffix: percent attaches, every other catalog unit is localized, unknown is empty',()=>{
+  const tt=(k:string)=>`<${k}>`;
+  expect(unitSuffix('pct',tt)).toBe('%');expect(unitSuffix('cny_per_100usd',tt)).toBe(' <units.cny_per_100usd>');expect(unitSuffix('usd_per_bbl',tt)).toBe(' <units.usd_per_bbl>');
+  expect(unitSuffix('index',tt)).toBe(' <units.index>');expect(unitSuffix('mystery',tt)).toBe('');
+  expect(unitLabel('pct',tt)).toBe('<units.pct>');expect(unitLabel('mystery',tt)).toBe('');
+ });
 });

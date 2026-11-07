@@ -11,7 +11,7 @@ export function DataTableToggle({ chart, table, t, narrowTable = false }: { char
   }, [narrowTable]);
   return (
     <div>
-      <div role="group" className="mb-2 flex justify-end gap-1 text-[11px]">
+      <div role="group" aria-label={t('detail.viewLabel')} className="mb-2 flex justify-end gap-1 text-[11px]">
         {(['chart', 'table'] as const).map((v) => (
           <button
             key={v}

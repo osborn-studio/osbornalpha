@@ -4,15 +4,17 @@
 // assets only) → method → source, evidence and revisions (drawer). `compact` (overview preview) keeps the facts and
 // the chart/table only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { catalogById } from '@/lib/macro/catalog';
 import { DataTableToggle } from './charts/DataTableToggle';
 import { MacroLineChart } from './charts/MacroLineChart';
-import { assetChangeView, bandsOf, chartPoints, cycleKey, diffRows, markersOf, sourceJsonOf, windowFrom, type DetailWindow } from './detail-model';
+import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
 import { MISSING, formatInstant, formatPeriod, formatValueText, typedChange, unitSuffix } from './macro-format';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { useMacroT } from './use-macro-t';
 import { pick, type SeriesJson } from './view-model';
 
-const WINDOWS: DetailWindow[] = ['y3', 'y5', 'y10', 'all'];
+type Mode = 'level' | 'diff' | 'yoy';
+type Load = { data: SeriesJson | null; error: string | null };
 const cell = 'py-1 pr-3';
 
 function Fact({ label, value, note }: { label: string; value: string; note?: string }) {
@@ -30,56 +32,81 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 export function IndicatorDetail({ seriesId, compact = false }: { seriesId: string; compact?: boolean }) {
   const { t, locale } = useMacroT();
-  const [win, setWin] = useState<DetailWindow>('y5');
-  const [mode, setMode] = useState<'level' | 'diff'>('level');
-  const [state, setState] = useState<{ data: SeriesJson | null; error: string | null }>({ data: null, error: null });
+  const def0 = catalogById(seriesId);
+  const windows = windowsFor(def0?.period ?? 'month');
+  const [win, setWin] = useState<DetailWindow>(defaultWindow(def0?.period ?? 'month'));
+  const [mode, setMode] = useState<Mode>('level');
+  const [base, setBase] = useState<Load>({ data: null, error: null });
+  const [diffLoad, setDiffLoad] = useState<Load>({ data: null, error: null });
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const closeDrawer = useCallback(() => setDrawer(null), []);
-  const from = useMemo(() => windowFrom(win, new Date().toISOString().slice(0, 10)), [win]);
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const from = useMemo(() => windowFrom(win, today), [win, today]);
+  const yoy = def0 ? yoyOf(def0) : null;
+  const baseTransform: Transform = mode === 'yoy' ? 'yoy' : 'raw';
+  const period = def0?.period ?? 'month';
+  // Bounded date chunks (≤ 600 points each, merged): the 5Y daily default and the long monthly "All" never hit the API limit.
   useEffect(() => {
     let cancelled = false;
-    setState({ data: null, error: null });
-    fetch(`/api/macro/series/${encodeURIComponent(seriesId)}${from ? `?from=${from}` : ''}`)
-      .then(async (r) => { const b = await r.json().catch(() => null); if (!r.ok) throw new Error(b?.error?.code ?? `http_${r.status}`); return b as SeriesJson; })
-      .then((data) => { if (!cancelled) setState({ data, error: null }); })
-      .catch((e: Error) => { if (!cancelled) setState({ data: null, error: e.message }); });
+    setBase({ data: null, error: null });
+    fetchSeriesWindow(seriesId, from, today, period, baseTransform)
+      .then((data) => { if (!cancelled) setBase({ data, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setBase({ data: null, error: e.message }); });
     return () => { cancelled = true; };
-  }, [seriesId, from]);
-  const d = state.data;
-  const rows = useMemo(() => (d ? diffRows(d.observations, d.def.changeKind) : []), [d]);
-  const points = useMemo(() => (d ? chartPoints(d.observations, mode, d.def.changeKind) : []), [d, mode]);
+  }, [seriesId, from, today, period, baseTransform]);
+  const wantDiff = mode === 'diff';
+  useEffect(() => {
+    if (!wantDiff) return;
+    let cancelled = false;
+    setDiffLoad({ data: null, error: null });
+    fetchSeriesWindow(seriesId, from, today, period, 'diff')
+      .then((data) => { if (!cancelled) setDiffLoad({ data, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setDiffLoad({ data: null, error: e.message }); });
+    return () => { cancelled = true; };
+  }, [wantDiff, seriesId, from, today, period]);
+  const d = base.data;
+  const diffRowsJson = wantDiff ? diffLoad.data?.observations ?? null : null;
+  const diffMap = useMemo(() => (diffRowsJson ? diffByPeriod(diffRowsJson) : new Map<string, string>()), [diffRowsJson]);
+  const points = useMemo(() => (d ? chartPoints(wantDiff ? diffRowsJson ?? [] : d.observations) : []), [d, wantDiff, diffRowsJson]);
   const bands = useMemo(() => (d ? bandsOf(d.cycles) : []), [d]);
   const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end) : []), [d]);
-  if (state.error) return <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.error })}</div>;
-  if (!d) return <div className="text-xs text-text-dim">{t('states.loading')}</div>;
+  if (!def0) return <div className="card-base text-xs text-text-dim">{t('detail.notFound')}</div>;
 
-  const def = d.def;
+  const def = d?.def ?? def0;
+  const readDef = (d && catalogById(d.seriesRead)) || def;
   const name = pick(def.name, locale);
-  const unit = unitSuffix(def.unit);
-  const cur = d.observations.at(-1) ?? null;
-  const prev = d.observations.at(-2) ?? null;
-  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, def.changeKind) : null;
-  const source = sourceJsonOf(def);
-  const open = (observationId: string, periodEnd: string, valueText: string) => setDrawer({ seriesId: def.id, observationId, name, periodEnd, display: `${formatValueText(valueText)}${unit}`, source });
+  const unit = unitSuffix(readDef.unit, t);
+  const diffUnit = readDef.unit === 'pct' ? ' pp' : unit;
+  const obs = d?.observations ?? [];
+  const cur = obs.at(-1) ?? null;
+  const prev = obs.at(-2) ?? null;
+  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, readDef.changeKind) : null;
+  const source = sourceJsonOf(readDef);
+  const open = (observationId: string | null, periodEnd: string, valueText: string) => setDrawer({ seriesId: readDef.id, observationId, name, periodEnd, display: `${formatValueText(valueText)}${unit}`, unit: readDef.unit, source });
   const method = def.derive ? t(`detail.derive.${def.derive.kind}`, { from: def.derive.from }) : def.aliasOf ? t('detail.alias', { from: def.aliasOf }) : t('detail.native');
   const btn = (active: boolean) => `rounded border border-border px-2 py-0.5 text-[11px] ${active ? 'bg-[var(--accent-wash)] text-accent' : 'text-text-dim'}`;
+  const modes: Mode[] = yoy && !yoy.self ? ['level', 'diff', 'yoy'] : ['level', 'diff'];
+  const tLabel = d ? transformLabel(wantDiff ? diffLoad.data?.observations ?? [] : obs, wantDiff) : null;
+  const error = base.error ?? (wantDiff ? diffLoad.error : null);
+  const loading = !error && (!d || (wantDiff && !diffLoad.data));
 
   const obsTable = (
     <div className="max-h-80 overflow-y-auto">
+      {tLabel && <div className="mb-1 text-[11px] text-text-dim">{t('detail.transformId', { id: tLabel })}</div>}
       <table className="w-full text-xs">
         <thead><tr className="text-left text-[10px] text-text-dim">
           <th className={cell}>{t('detail.columns.period')}</th><th className={`${cell} text-right`}>{t('detail.columns.value')}</th>
-          {mode === 'diff' && <th className={`${cell} text-right`}>{t('detail.columns.diff')}</th>}
+          {wantDiff && <th className={`${cell} text-right`}>{t('detail.columns.diff')}{tLabel ? ` · ${tLabel}` : ''}</th>}
           <th className={cell}>{t('detail.columns.available')}</th><th className={cell}>{t('detail.columns.version')}</th>
         </tr></thead>
         <tbody>
-          {[...rows].reverse().map((o) => (
-            <tr key={o.observation_id} className="border-t border-border">
+          {[...obs].reverse().map((o) => (
+            <tr key={`${o.period_end}-${o.observation_id}`} className="border-t border-border">
               <td className={`${cell} font-mono`}>{formatPeriod(o.period_end, def.period)}</td>
               <td className={`${cell} text-right`}><button type="button" onClick={() => open(o.observation_id, o.period_end, o.value_text)} className="border-b border-dotted border-accent font-mono tabular-nums">{formatValueText(o.value_text)}{unit}</button></td>
-              {mode === 'diff' && <td className={`${cell} text-right font-mono tabular-nums`}>{o.diff_text === null ? MISSING : formatValueText(o.diff_text)}</td>}
+              {wantDiff && <td className={`${cell} text-right font-mono tabular-nums`}>{diffMap.has(o.period_end) ? `${formatValueText(diffMap.get(o.period_end) as string)}${diffUnit}` : MISSING}</td>}
               <td className={`${cell} font-mono tabular-nums`}>{formatInstant(o.available_at)}</td>
-              <td className={`${cell} font-mono`}>v{o.version}</td>
+              <td className={`${cell} font-mono`}>{o.version === null ? MISSING : `v${o.version}`}</td>
             </tr>
           ))}
         </tbody>
@@ -106,16 +133,18 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
       <section className="card-base space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold">{t('detail.chart')}</h3>
-          <div className="ml-auto flex gap-1">{WINDOWS.map((w) => <button key={w} type="button" aria-pressed={win === w} onClick={() => setWin(w)} className={btn(win === w)}>{t(`detail.windows.${w}`)}</button>)}</div>
-          <div className="flex gap-1">{(['level', 'diff'] as const).map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} className={btn(mode === m)}>{t(`detail.transforms.${m}`)}</button>)}</div>
+          <div role="group" aria-label={t('detail.windowLabel')} className="ml-auto flex gap-1">{windows.map((w) => <button key={w} type="button" aria-pressed={win === w} onClick={() => setWin(w)} className={btn(win === w)}>{t(`detail.windows.${w}`)}</button>)}</div>
+          <div role="group" aria-label={t('detail.transformLabel')} className="flex gap-1">{modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} className={btn(mode === m)}>{t(`detail.transforms.${m}`)}</button>)}{yoy?.self && <span className={btn(true)}>{t('detail.transforms.yoy')}</span>}</div>
         </div>
-        {points.length === 0
+        {error && <div role="alert" className="text-xs text-text-dim">{t('states.loadFailed', { code: error })}</div>}
+        {loading && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
+        {!error && !loading && (points.length === 0
           ? <div className="text-xs text-text-dim">{t('detail.empty')}</div>
-          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />}
-        {d.cycles.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.confirmNote')}</div>}
+          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />)}
+        {d && d.cycles.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.confirmNote')}</div>}
       </section>
 
-      {!compact && (
+      {!compact && d && (
         <>
           <Section title={t('detail.cycles')}>
             {d.cycles.length === 0 ? <div className="text-xs text-text-dim">{t('states.empty')}</div> : (

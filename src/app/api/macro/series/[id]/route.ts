@@ -34,7 +34,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  let source:MacroSeriesDef=def.aliasOf?(catalogById(def.aliasOf)??def):def;
  if(q.transform==='yoy'){
-  const y=MACRO_CATALOG.find(d=>d.derive?.kind==='yoy_from_index'&&d.derive.from===source.id);
+  const y=MACRO_CATALOG.find(d=>(d.derive?.kind==='yoy_from_index'||d.derive?.kind==='index_minus_100')&&d.derive.from===source.id);
   if(!y)return errorResponse('invalid_parameter:transform','series declares no yoy derivation',400);
   source=y;
  }

@@ -38,22 +38,24 @@ export function sourceOf(seriesId:string):SourceJson|null{
  return s?{publisher:s.publisher,via:s.via??null,fetch_host:s.fetchHost,adapter:s.adapter,rights:s.rights,attribution:s.attribution}:null;
 }
 // ---- series JSON (GET /api/macro/series/[id]) ----
-export interface SeriesObsJson{observation_id:string;period_end:string;value_text:string;version:number;available_at:string;availability_basis:'first_seen';retrieval_id:string|null;evidence_sha256:string|null;locator:Locator|null}
-export interface SeriesJson{def:MacroSeriesDef;observations:SeriesObsJson[];cycles:Cycle[];insufficient:InsufficientSegment[];events:PolicyEvent[];calendar:CalendarEvent[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
+/** Stored rows carry observation_id/version; server-computed diff rows (transform=diff) have both null and a `computed` block. */
+export interface SeriesObsJson{observation_id:string|null;period_end:string;value_text:string;version:number|null;available_at:string;availability_basis:'first_seen'|null;retrieval_id:string|null;evidence_sha256:string|null;locator:Locator|null;transform:string|null;code_version:string|null;
+ computed?:{kind:'diff';version:string;inputs:[string,string]}}
+export interface SeriesJson{def:MacroSeriesDef;seriesRead:string;transform:'raw'|'yoy'|'diff';observations:SeriesObsJson[];cycles:Cycle[];insufficient:InsufficientSegment[];events:PolicyEvent[];calendar:CalendarEvent[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
 // ---- versions JSON (GET /api/macro/series/[id]/versions) ----
 export interface ProvenanceJson{observation_id:string;series_id:string;version:number;value_text:string;available_at:string;availability_basis:'first_seen';
  retrieval:{retrieval_id:string;fetch_url:string;fetch_host:string;http_status:number;fetched_at:string;tool_versions:Record<string,string>}|null;
- evidence:{sha256:string;adapter:Adapter;content_type:string;byte_length:number}|null;locator:Locator|null;transform:string|null;derived_from:string[]|null}
+ evidence:{sha256:string;adapter:Adapter;content_type:string;byte_length:number}|null;locator:Locator|null;transform:string|null;derived_from:string[]|null;code_version:string|null}
 export type MissingInput={observation_id:string;missing:true};
 export interface VersionJson extends ProvenanceJson{inputs:(ProvenanceJson|MissingInput)[]}
 export interface VersionsJson{series_id:string;read_series_id:string;period_end:string;versions:VersionJson[]}
 
-export interface IndicatorView{seriesId:string;observationId:string|null;name:string;status:SeriesStatus;reason:string|null;muted:boolean;value:string;valueText:string|null;unit:string;change:TypedChange|null;
+export interface IndicatorView{seriesId:string;observationId:string|null;name:string;status:SeriesStatus;reason:string|null;muted:boolean;value:string;valueText:string|null;unit:string;unitKey:string;change:TypedChange|null;
  period:string;periodEnd:string|null;available:string;timeliness:Timeliness;spark:string[];hasEvidence:boolean;source:SourceJson|null}
-export function toIndicatorView(row:IndicatorRowJson,locale:Locale):IndicatorView{
+export function toIndicatorView(row:IndicatorRowJson,locale:Locale,t:MacroT):IndicatorView{
  const status=STATUS[row.status];const period=catalogById(row.series_id)?.period??'month';const has=row.value_text!==null&&row.period_end!==null;
  return {seriesId:row.series_id,observationId:row.observation_id,name:pick(row.name,locale),status,reason:row.reason?pick(row.reason,locale):null,muted:status!=='active'||!has,
-  value:row.value_text!==null?formatValueText(row.value_text):MISSING,valueText:row.value_text,unit:row.value_text!==null?unitSuffix(row.unit):'',
+  value:row.value_text!==null?formatValueText(row.value_text):MISSING,valueText:row.value_text,unit:row.value_text!==null?unitSuffix(row.unit,t):'',unitKey:row.unit,
   change:row.change?formatChange(row.change):null,
   period:row.period_end?formatPeriod(row.period_end,period):MISSING,periodEnd:row.period_end,available:row.available_at?formatInstant(row.available_at):MISSING,
   timeliness:row.timeliness,spark:row.sparkline,hasEvidence:has,source:status==='active'?sourceOf(row.series_id):null};
@@ -74,10 +76,10 @@ export function coverageOf(env:OverviewEnvelopeJson,locale:Locale):CoverageView{
 export const changeCounts=(env:Pick<OverviewEnvelopeJson,'changes'>):Record<ChangeKindJson,number>=>({...env.changes.counts});
 export interface ChangeLine{kind:ChangeKindJson;seriesId:string;name:string;value:string;previous:string|null;period:string}
 /** Change lines name the row and show its current published value (the envelope carries no previous value text). */
-export function changeLines(env:OverviewEnvelopeJson,locale:Locale,limit=6):ChangeLine[]{
+export function changeLines(env:OverviewEnvelopeJson,locale:Locale,t:MacroT,limit=6):ChangeLine[]{
  const by=new Map(env.indicators.map(r=>[r.series_id,r]));
  return env.changes.items.slice(0,limit).map(c=>{
-  const r=by.get(c.series_id);const u=r?unitSuffix(r.unit):'';const period=catalogById(c.series_id)?.period??'month';
+  const r=by.get(c.series_id);const u=r?unitSuffix(r.unit,t):'';const period=catalogById(c.series_id)?.period??'month';
   const shown=c.kind!=='missing'&&r?.value_text!=null&&r.period_end===c.period_end?r.value_text:null;
   return {kind:c.kind,seriesId:c.series_id,name:r?pick(r.name,locale):c.series_id,value:shown?formatValueText(shown)+u:MISSING,previous:null,
    period:c.period_end?formatPeriod(c.period_end,period):MISSING};
@@ -92,11 +94,11 @@ export function collectionOf(env:Pick<OverviewEnvelopeJson,'collection'>):{items
 /** Today / /intel key indicators (spec §3.5) = Task 13's COMPACT_KEYS (asserted in view-model.test.ts). Only rows present
  *  in the envelope are shown; nothing is invented. */
 export const GLANCE_IDS={US:['US_DFF','US_DGS10','US_CPI_YOY'],CN:['CN_CPI_YOY','CN_PMI_MFG','CN_CGB_10Y']} as const;
-export function glanceRows(o:OverviewJson,locale:Locale):{region:'US'|'CN';asOf:string|null;overall:CollectionStatus;rows:IndicatorView[]}[]{
+export function glanceRows(o:OverviewJson,locale:Locale,t:MacroT):{region:'US'|'CN';asOf:string|null;overall:CollectionStatus;rows:IndicatorView[]}[]{
  return (['US','CN'] as const).flatMap(region=>{
   const env=o.regions[region];if(!env)return [];
   const by=new Map(env.indicators.map(r=>[r.series_id,r]));
-  return [{region,asOf:env.asOf,overall:collectionOf(env).overall,rows:GLANCE_IDS[region].flatMap(id=>{const r=by.get(id);return r?[toIndicatorView(r,locale)]:[];})}];
+  return [{region,asOf:env.asOf,overall:collectionOf(env).overall,rows:GLANCE_IDS[region].flatMap(id=>{const r=by.get(id);return r?[toIndicatorView(r,locale,t)]:[];})}];
  });
 }
 // ---- evidence drawer rows ----
@@ -104,7 +106,7 @@ export interface DrawerRow{key:string;label:string;value:string;mono:boolean;mis
 const drawerRow=(t:MacroT,key:string,value:string|null|undefined,mono=false,href?:string):DrawerRow=>({key,label:t(`drawer.${key}`),value:value??t('drawer.missing'),mono,missing:value==null,...(href&&value!=null?{href}:{})});
 export function locatorText(l:Locator|null,t:MacroT):string|null{
  if(!l)return null;
- if(l.kind==='csv_row')return t('drawer.csvRow',{line:l.line,column:l.column});
+ if(l.kind==='csv_row')return t('drawer.csvRow',{line:l.line,column:l.column+1});   // stored line is 1-based, stored column 0-based: both shown 1-based
  if(l.kind==='html_cell')return t('drawer.htmlCell',{table:l.table,row:l.row,cell:l.cell});
  return t('drawer.jsonPointer',{pointer:l.pointer});
 }
@@ -125,12 +127,24 @@ export function proofRows(p:ProvenanceJson,t:MacroT):DrawerRow[]{
   drawerRow(t,'transform',p.transform??t('drawer.none'),true),
   drawerRow(t,'adapter',p.evidence?t(`drawer.adapters.${p.evidence.adapter}`):null),
   drawerRow(t,'toolVersions',tools||null,true),
+  drawerRow(t,'codeVersion',p.code_version,true),
  ];
 }
-export interface RevisionRow{version:string;value:string;available:string;note:string;superseded:boolean}
-export function revisionRows(versions:readonly ProvenanceJson[],t:MacroT):RevisionRow[]{
- const sorted=[...versions].sort((a,b)=>b.version-a.version);const top=sorted[0]?.version;
- return sorted.map((v,i)=>({version:`v${v.version}`,value:formatValueText(v.value_text),available:formatInstant(v.available_at),note:i===0?t('drawer.current'):t('drawer.superseded',{version:top}),superseded:i>0}));
+export interface RevisionRow{version:string;value:string;available:string;note:string;superseded:boolean;current:boolean}
+/** Newest first. The row whose observation_id is the displayed target is the current one (no target → the newest);
+ *  an older row says which version immediately followed it; a newer row is a later revision. The value shows the
+ *  previous version's value ("4.3% → 4.2%") with the series unit. */
+export function revisionRows(versions:readonly ProvenanceJson[],t:MacroT,unit:string,targetObservationId:string|null=null):RevisionRow[]{
+ const asc=[...versions].sort((a,b)=>a.version-b.version);
+ const shown=targetObservationId===null?asc.at(-1)?.version:asc.find(v=>v.observation_id===targetObservationId)?.version;
+ const u=unitSuffix(unit,t);
+ return asc.map((v,i)=>{
+  const cur=formatValueText(v.value_text)+u;
+  const value=i>0?t('changes.revisedFrom',{from:formatValueText(asc[i-1].value_text)+u,to:cur}):cur;
+  const next=asc[i+1];
+  const note=v.version===shown?t('drawer.current'):shown!==undefined&&v.version>shown?t('drawer.later'):next?t('drawer.superseded',{version:next.version}):t('drawer.later');
+  return {version:`v${v.version}`,value,available:formatInstant(v.available_at),note,superseded:shown!==undefined&&v.version<shown,current:v.version===shown};
+ }).reverse();
 }
 export const isMissingInput=(x:ProvenanceJson|MissingInput):x is MissingInput=>'missing' in x;
 /** The version the drawer proves (第 4 稿 P1-9): exactly the displayed observation; an id that is not among the versions

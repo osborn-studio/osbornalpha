@@ -1,16 +1,30 @@
 // F4 judgment response handling (spec §3.2): tolerant card extraction, percent only when numeric, contributions.
 import {describe,expect,it} from 'vitest';
 import type {JudgmentCardView} from '@/lib/macro/judgment-contract';
-import {cardsFromResponse,contributionText,contributionsFrom,percentOf} from './judgment-view';
+import {parseJudgments,contributionText,contributionsFrom,percentOf} from './judgment-view';
 // `satisfies` keeps lifecycle/calibration as their literal types (an unannotated literal widens them to string; 第 4 稿 P1-1).
 const card={judgment_id:'j1',lifecycle:'open',calibration:'insufficient_sample',as_of:'2026-11-03T03:20:00Z',methodology:{id:'macro_regime',version:'1.0',title:{zh:'宏观状态',en:'Macro regime'},href:'/methods/macro_regime'},display:{headline:{zh:'复苏',en:'Recovery'},percent:null,value:null}} satisfies JudgmentCardView;
 describe('judgment view',()=>{
- it('accepts an array, {judgments}, {cards} or {judgment}; drops malformed entries',()=>{
-  expect(cardsFromResponse([card])).toHaveLength(1);
-  expect(cardsFromResponse({judgments:[card,{judgment_id:3}]})).toHaveLength(1);
-  expect(cardsFromResponse({cards:[card]})).toHaveLength(1);
-  expect(cardsFromResponse({judgment:card})).toHaveLength(1);
-  expect(cardsFromResponse({error:'x'})).toEqual([]);expect(cardsFromResponse(null)).toEqual([]);
+ it('accepts an array, {judgments}, {cards} or {judgment}; a valid empty list is ok, anything malformed is not',()=>{
+  expect(parseJudgments([card])).toMatchObject({ok:true,cards:[{judgment_id:'j1',input_snapshot_id:null}]});
+  expect(parseJudgments({judgments:[card]})).toMatchObject({ok:true});
+  expect(parseJudgments({cards:[card]})).toMatchObject({ok:true});expect(parseJudgments({judgment:card})).toMatchObject({ok:true});
+  expect(parseJudgments([])).toEqual({ok:true,cards:[]});expect(parseJudgments({judgments:[]})).toEqual({ok:true,cards:[]});
+  expect(parseJudgments({judgments:[card,{judgment_id:3}]})).toEqual({ok:false});
+  expect(parseJudgments({error:'x'})).toEqual({ok:false});expect(parseJudgments(null)).toEqual({ok:false});expect(parseJudgments('x')).toEqual({ok:false});
+ });
+ it('every rendered nested field is validated',()=>{
+  expect(parseJudgments([{...card,methodology:{}}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,methodology:{...card.methodology,title:{zh:'x'}}}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,methodology:{...card.methodology,href:'javascript:alert(1)'}}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,display:{headline:{zh:'a'},percent:null}}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,display:{...card.display,percent:'62'}}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,lifecycle:'weird'}])).toEqual({ok:false});
+  expect(parseJudgments([{...card,abstain_reason:3}])).toEqual({ok:false});
+ });
+ it('the input snapshot id is read from the card, never assumed',()=>{
+  expect(parseJudgments([{...card,input_snapshot_id:'s1'}])).toMatchObject({cards:[{input_snapshot_id:'s1'}]});
+  expect(parseJudgments([{...card,inputs:{snapshot_id:'s2'}}])).toMatchObject({cards:[{input_snapshot_id:'s2'}]});
  });
  it('percent only when display.percent is a finite number',()=>{
   expect(percentOf(card)).toBeNull();
@@ -22,6 +36,7 @@ describe('judgment view',()=>{
   expect(contributionsFrom({contributions:[c,{bad:1}]})).toEqual([c]);
   expect(contributionsFrom({regime:{contributions:[c]}})).toEqual([c]);
   expect(contributionsFrom({})).toEqual([]);
+  expect(contributionsFrom({contributions:[{...c,contribution:{overheat:'4'}}]})).toEqual([]);
   expect(contributionText(c)).toBe('overheat 4.5');
  });
 });

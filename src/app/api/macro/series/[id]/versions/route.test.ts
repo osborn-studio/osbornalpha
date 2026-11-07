@@ -23,7 +23,18 @@ describe('GET versions',()=>{
   expect((await get('US_CPI_YOY','period_end=2026-09-30')).status).toBe(200);
   expect((await get('NOPE','period_end=2026-09-30')).status).toBe(404);
   expect((await get('US_CPI_YOY','period_end=2026-9-30')).status).toBe(400);
-  m.auth.mockResolvedValue({data:{user:null}});expect((await get('US_CPI_YOY','period_end=2026-09-30')).status).toBe(401);
+  expect((await get('US_CPI_YOY','period_end=2026-02-30')).status).toBe(400);
+  expect((await get('US_CPI_YOY','period_end=2026-09-30&x=1')).status).toBe(400);
+  expect((await get('US_CPI_YOY','')).status).toBe(400);
+  m.auth.mockResolvedValue({data:{user:null}});const r=await get('NOPE','period_end=bad');expect(r.status).toBe(401);expect(r.headers.get('cache-control')).toBe('no-store');
+ });
+ it('failures are no-store; every version and input carries code_version',async()=>{
+  const ok=await get('US_CPI_YOY','period_end=2026-09-30');
+  const j=await ok.json();
+  expect(j.versions[0].code_version).toBe('c');expect(j.versions[0].inputs[0].code_version).toBe('c');
+  m.versionsOf.mockRejectedValue(new Error('db down'));
+  const bad=await get('US_CPI_YOY','period_end=2026-09-30');
+  expect(bad.status).toBe(500);expect(bad.headers.get('cache-control')).toBe('no-store');
  });
  it('derived version lists each input with its own receipt; an unreadable input is marked missing, not dropped',async()=>{
   const j=await (await get('US_CPI_YOY','period_end=2026-09-30')).json();

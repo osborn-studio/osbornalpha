@@ -1,6 +1,7 @@
 'use client';
 // MacroLineChart — lightweight-charts 4.2 line with cycle bands (histogram on a hidden scale) and event markers
-// (spec §3.3). Up/hiking bands use --warn at low alpha, down/cutting bands use --accent-wash, plateau a faint grey.
+// (spec §3.3). Band tokens stay neutral and distinguishable: up/hiking = --warn (amber) wash, down/cutting = --text-dim
+// (grey) wash, plateau = --text-muted at a faint alpha. Axis text uses Geist Mono (--font-mono).
 // Derived events are arrows above the line; calendar entries are circles below it.
 import { useEffect, useRef } from 'react';
 import type { IChartApi, SeriesMarker, Time } from 'lightweight-charts';
@@ -33,12 +34,13 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
       const dim = cssVariable('--text-dim', '#a1a1aa');
       const grid = cssVariable('--border', 'rgba(255,255,255,0.06)');
       const warn = cssVariable('--warn', '#eab308');
-      const wash = cssVariable('--accent-wash', 'rgba(202,138,4,0.12)');
       const accent = cssVariable('--accent', '#ca8a04');
+      const muted = cssVariable('--text-muted', '#52525b');
+      const mono = cssVariable('--font-mono', 'Geist Mono, ui-monospace, monospace');
       chart = lwc.createChart(el, {
         width: Math.max(el.clientWidth, 1),
         height,
-        layout: { background: { color: 'transparent' }, textColor: dim, fontFamily: 'system-ui' },
+        layout: { background: { color: 'transparent' }, textColor: dim, fontFamily: mono },
         grid: { vertLines: { color: grid }, horzLines: { color: grid } },
         timeScale: { borderColor: grid },
         rightPriceScale: { borderColor: grid },
@@ -52,7 +54,7 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
         band.setData(shaded.map((b) => ({
           time: b.time as Time,
           value: 1,
-          color: b.direction === 'up' ? withAlpha(warn, 0.14) : b.direction === 'down' ? wash : withAlpha(dim, 0.08),
+          color: b.direction === 'up' ? withAlpha(warn, 0.2) : b.direction === 'down' ? withAlpha(dim, 0.22) : withAlpha(muted, 0.08),
         })));
       }
       const line = chart.addLineSeries({ color: text, lineWidth: 2, priceLineVisible: false });

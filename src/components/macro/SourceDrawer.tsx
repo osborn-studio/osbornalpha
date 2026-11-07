@@ -2,12 +2,12 @@
 // SourceDrawer — 证据抽屉 (spec §3.2, canvas SourceDrawer): source, proof and revision history for one value.
 // Fetches /api/macro/series/[id]/versions. A field that cannot be shown keeps its name and reads 缺失. Derived values
 // show their transform and the proof of each input. Read failure never hides the published value.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { MacroT } from './use-macro-t';
 import { isMissingInput, proofRows, revisionRows, selectVersion, sourceRows, type DrawerRow, type Locale, type SourceJson, type VersionsJson } from './view-model';
 
 /** observationId = the exact version on screen (overview manifest row or detail row); the proof shown is that version's (第 4 稿 P1-9). */
-export interface DrawerTarget { seriesId: string; observationId: string | null; name: string; periodEnd: string; display: string; source: SourceJson | null }
+export interface DrawerTarget { seriesId: string; observationId: string | null; name: string; periodEnd: string; display: string; unit: string; source: SourceJson | null }
 
 function Rows({ rows }: { rows: DrawerRow[] }) {
   return (
@@ -40,6 +40,15 @@ export function SourceDrawer({ target, onClose, t, locale }: { target: DrawerTar
       .catch((e: Error) => { if (!cancelled) setState({ data: null, error: e.message, loading: false }); });
     return () => { cancelled = true; };
   }, [target]);
+  // Focus moves into the dialog on open and returns to the element that opened it on close.
+  const dialogRef = useRef<HTMLElement>(null);
+  const open = target !== null;
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => { if (opener && opener.isConnected) opener.focus(); };
+  }, [open]);
   useEffect(() => {
     if (!target) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -52,7 +61,7 @@ export function SourceDrawer({ target, onClose, t, locale }: { target: DrawerTar
   const section = 'border-t border-border px-4 py-3 space-y-2';
   const cap = 'text-[10px] uppercase tracking-wider text-text-dim';
   return (
-    <aside role="dialog" aria-label={`${t('drawer.title')} · ${target.name}`} className="fixed inset-y-0 right-0 z-40 w-full max-w-[560px] overflow-y-auto border-l border-border bg-bg-elevated shadow-none">
+    <aside ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="false" aria-label={`${t('drawer.title')} · ${target.name}`} className="fixed inset-y-0 right-0 z-40 w-full max-w-[560px] overflow-y-auto border-l border-border bg-bg-elevated shadow-none focus:outline-none">
       <div className="flex items-start gap-3 px-4 py-3">
         <div className="min-w-0">
           <div className={cap}>{t('drawer.title')}</div>
@@ -71,7 +80,7 @@ export function SourceDrawer({ target, onClose, t, locale }: { target: DrawerTar
         {(state.error || (state.data && !latest)) && <div className="rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] p-2 text-xs">{t('drawer.loadFailed')}</div>}
         {latest && (latest.derived_from ? (
           <>
-            <Rows rows={proofRows(latest, t).filter((r) => r.key === 'transform' || r.key === 'available')} />
+            <Rows rows={proofRows(latest, t).filter((r) => r.key === 'transform' || r.key === 'available' || r.key === 'codeVersion')} />
             <div className="text-xs text-text-dim">{t('drawer.derivedFrom', { count: latest.inputs.length })}</div>
             {latest.inputs.map((input) => (
               <div key={input.observation_id} className="rounded-md border border-border p-2">
@@ -98,8 +107,8 @@ export function SourceDrawer({ target, onClose, t, locale }: { target: DrawerTar
               </tr>
             </thead>
             <tbody>
-              {revisionRows(state.data.versions, t).map((r) => (
-                <tr key={r.version} className={`border-t border-border ${r.superseded ? 'text-text-dim' : ''}`}>
+              {revisionRows(state.data.versions, t, target.unit, target.observationId).map((r) => (
+                <tr key={r.version} aria-current={r.current ? 'true' : undefined} className={`border-t border-border ${r.current ? '' : 'text-text-dim'}`}>
                   <td className="py-1 font-mono">{r.version}</td>
                   <td className="py-1 text-right font-mono tabular-nums">{r.value}</td>
                   <td className="py-1 font-mono tabular-nums">{r.available}</td>

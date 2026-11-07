@@ -1,6 +1,8 @@
 'use client';
 // CorrelationWorkbench — 关联工作台 form (spec §3.4): indicator × asset × mode × window × lag (or ±N). Presets only fill
 // the form. request_id is generated client-side and reused while a network failure is retried (idempotent run).
+// Once the POST returns a runId it is kept: a failed result GET is retried against that run (never a second run) and
+// the saved run stays linked.
 import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { SeriesOption } from '@/lib/macro/workbench-options';
@@ -9,7 +11,9 @@ import { CorrelationResult, type RunJson } from './CorrelationResult';
 import { useMacroT } from './use-macro-t';
 import { pick } from './view-model';
 
-const KNOWN_ERRORS = new Set(['quota_exceeded', 'insufficient_sample', 'zero_variance', 'non_positive_price', 'no_events', 'invalid_inputs', 'input_truncated', 'unauthorized', 'read_failed', 'write_failed']);
+const KNOWN_ERRORS = new Set(['quota_exceeded', 'insufficient_sample', 'zero_variance', 'non_positive_price', 'no_events', 'invalid_inputs', 'input_truncated', 'unauthorized', 'unauthenticated', 'read_failed', 'write_failed', 'request_conflict', 'code_version_unavailable', 'analysis_input_invalid']);
+/** Status fallbacks when a response carries no error code. */
+const STATUS_CODES: Record<number, string> = { 401: 'unauthenticated', 409: 'request_conflict', 422: 'analysis_input_invalid', 503: 'code_version_unavailable' };
 const field = 'w-full rounded-md border border-border bg-bg-card px-2 py-1.5 text-sm';
 
 export function CorrelationWorkbench({ options, region }: { options: { indicators: SeriesOption[]; assets: SeriesOption[] }; region: 'US' | 'CN' }) {
@@ -18,13 +22,26 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<RunJson | null>(null);
+  const [savedRunId, setSavedRunId] = useState<string | null>(null);
   const attempt = useRef<{ signature: string; id: string } | null>(null);
-  const set = (patch: Partial<PresetForm>) => { setForm((f) => ({ ...f, ...patch })); setRun(null); setError(null); };
+  const set = (patch: Partial<PresetForm>) => { setForm((f) => ({ ...f, ...patch })); setRun(null); setError(null); setSavedRunId(null); };
   const errorText = (code: string) => (KNOWN_ERRORS.has(code) ? t(`correlation.errors.${code}`) : t('correlation.errors.unknown', { code }));
+
+  /** GET a saved run; a failure keeps the runId so the next attempt retries the read instead of creating another run. */
+  async function loadRun(runId: string) {
+    try {
+      const rr = await fetch(`/api/macro/analyses/${encodeURIComponent(runId)}`);
+      const jj = await rr.json().catch(() => null);
+      if (rr.ok && jj?.run) { setRun(jj.run as RunJson); setSavedRunId(null); setError(null); return; }
+    } catch { /* falls through to the saved-run message */ }
+    setSavedRunId(runId);
+    setError(t('correlation.result.savedRun', { id: runId }));
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true); setError(null); setRun(null);
+    if (savedRunId) { try { await loadRun(savedRunId); } finally { setBusy(false); } return; }
     const body: PresetForm = form.kind === 'event_window' ? { ...form, lag: 0, event_n: form.event_n ?? 6 } : { kind: form.kind, indicator_id: form.indicator_id, asset_id: form.asset_id, lag: form.lag, window: form.window };
     const signature = JSON.stringify(body);
     if (attempt.current?.signature !== signature) attempt.current = { signature, id: crypto.randomUUID() };
@@ -32,17 +49,16 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
       const r = await fetch('/api/macro/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, request_id: attempt.current.id }) });
       const j = await r.json().catch(() => null);
       if (!r.ok) {
-        const code: string = j?.error?.code ?? `http_${r.status}`;
+        const code: string = j?.error?.code ?? STATUS_CODES[r.status] ?? `http_${r.status}`;
         setError(code === 'invalid_parameter'
           ? t('correlation.errors.invalid_parameter', { fields: (j?.error?.fields ?? []).map((x: { field: string; code: string }) => `${x.field}:${x.code}`).join(', ') })
           : errorText(code));
-        if (j?.runId) attempt.current = null;
+        // A different spec under the same request id (409) or a stored failed run: the next submit gets a fresh request id.
+        if (j?.runId || code === 'request_conflict') attempt.current = null;
         return;
       }
       attempt.current = null;
-      const rr = await fetch(`/api/macro/analyses/${j.runId}`);
-      const jj = await rr.json().catch(() => null);
-      if (rr.ok && jj?.run) setRun(jj.run as RunJson); else setError(t('correlation.result.loadFailed'));
+      await loadRun(j.runId);
     } catch {
       setError(t('states.loadFailed', { code: 'network' }));
     } finally {
@@ -102,13 +118,23 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
           </label>
         )}
         <div className="flex flex-col justify-end gap-1">
-          <button type="submit" disabled={busy} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-black disabled:opacity-50">
+          <button type="submit" disabled={busy} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-bg disabled:opacity-50">
             {busy ? t('correlation.submitting') : t('correlation.submit')}
           </button>
           <span className="text-[11px] text-text-dim">{t('correlation.gateNote')}</span>
         </div>
       </form>
-      {error && <div role="alert" className="rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] px-3 py-2 text-xs">{error}</div>}
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] px-3 py-2 text-xs">
+          <span>{error}</span>
+          {savedRunId && (
+            <>
+              <button type="button" disabled={busy} onClick={() => { setBusy(true); void loadRun(savedRunId).finally(() => setBusy(false)); }} className="rounded border border-border px-2 py-0.5">{t('correlation.result.retryLoad')}</button>
+              <Link href={`/intel/macro/analyses/${savedRunId}`} className="text-accent">{t('correlation.result.openRun')}</Link>
+            </>
+          )}
+        </div>
+      )}
       {run && (
         <>
           <CorrelationResult run={run} />

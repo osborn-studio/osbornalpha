@@ -73,13 +73,13 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const state = useMacroOverview(`region=${region}`);
   const env = state.status === 'ok' ? state.data.regions[region] ?? null : null;
-  const rows = useMemo(() => (env ? env.indicators.map((r) => toIndicatorView(r, locale)) : []), [env, locale]);
+  const rows = useMemo(() => (env ? env.indicators.map((r) => toIndicatorView(r, locale, t)) : []), [env, locale, t]);
   const go = (r: 'US' | 'CN', tb: WorkbenchTab) => {
     setRegion(r); setTab(tb); setPreview(null); setDrawer(null);
     router.replace(`/intel/macro?region=${r}&tab=${tb}`, { scroll: false });
   };
   const openEvidence = (row: IndicatorView) => {
-    if (row.periodEnd) setDrawer({ seriesId: row.seriesId, observationId: row.observationId, name: row.name, periodEnd: row.periodEnd, display: `${row.value}${row.unit}`, source: row.source });
+    if (row.periodEnd) setDrawer({ seriesId: row.seriesId, observationId: row.observationId, name: row.name, periodEnd: row.periodEnd, display: `${row.value}${row.unit}`, unit: row.unitKey, source: row.source });
   };
   const coll = env ? collectionOf(env) : null;
   const tabBtn = (active: boolean) => `px-3 py-2 text-sm ${active ? 'border-b-2 border-accent font-semibold text-text' : 'text-text-dim'}`;
@@ -115,7 +115,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       {tab === 'overview' && env && (
         <div className="space-y-3">
           <div className="grid gap-3 lg:grid-cols-2">
-            <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale)} t={t} />
+            <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
           {judgmentsEnabled && <MacroJudgmentSlot region={region} snapshotId={env.snapshotId} />}

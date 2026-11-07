@@ -1,7 +1,7 @@
 'use client';
 // IndicatorTable — overview / indicators table (spec §3.2, canvas OverviewOff): name | value | change | period |
 // available | status | sparkline. Clicking a value opens the evidence drawer. Missing/restricted rows are greyed with
-// their reason. Moves use neutral arrows only. Below 640px only name / value / change are shown (spec §3.6).
+// their reason. Moves use neutral arrows only. Below 640px name / value / change stay, with the status (and the reason for missing rows) under the name (spec §3.6).
 import Link from 'next/link';
 import { Sparkline } from './charts/Sparkline';
 import type { MacroT } from './use-macro-t';
@@ -44,6 +44,7 @@ export function IndicatorTable({ rows, t, onOpenEvidence, onPreview, previewId }
                     </Link>
                   )}
                 </div>
+                <div className="mt-0.5 text-[11px] text-text-dim sm:hidden">{t(statusKey(row))}{row.muted && row.reason ? ` · ${row.reason}` : ''}</div>
               </td>
               <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                 {row.hasEvidence && onOpenEvidence ? (
