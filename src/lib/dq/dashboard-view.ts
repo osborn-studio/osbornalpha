@@ -63,3 +63,27 @@ export function quarantineAcceptBody(c:QuarantineControl,choice:number|string|nu
  if(c.kind==='restore'&&!c.enabled)return null;
  return {status:'resolved_accept'};
 }
+
+/** Which buttons a quarantine row shows and the POST body each sends (null body = disabled). Reject is always last. */
+export type QuarantineActionId='adopt'|'keep'|'acknowledge'|'accept'|'restore'|'reject';
+export interface QuarantineAction{id:QuarantineActionId;body:Record<string,unknown>|null;reason?:string}
+export function quarantineActions(c:QuarantineControl,choice:number|string|null):QuarantineAction[]{
+ const reject:QuarantineAction={id:'reject',body:{status:'resolved_reject'}};
+ switch(c.kind){
+  case 'candidates':return [{id:'adopt',body:quarantineAcceptBody(c,choice)},{id:'acknowledge',body:{status:'resolved_accept'}},reject];
+  case 'lineage':return [{id:'keep',body:quarantineAcceptBody(c,choice)},reject];
+  case 'restore':return [{id:'restore',body:quarantineAcceptBody(c,null),reason:c.reason},reject];
+  default:return [{id:'accept',body:{status:'resolved_accept'}},reject];
+ }
+}
+/** Page notice for a successful quarantine POST: the restore note lives in detail.restore_note (top-level tolerated). */
+export function successNoticeCode(body:unknown):'no_rows_promoted'|null{
+ const b=(body??{}) as {detail?:{restore_note?:unknown};restore_note?:unknown};
+ return (b.detail?.restore_note??b.restore_note)==='no_rows_promoted'?'no_rows_promoted':null;
+}
+/** Code of a 409 body: detail.restore_note, top-level restore_note, error, then outcome. */
+export function conflictCode(body:unknown):string|null{
+ const b=(body??{}) as {detail?:{restore_note?:unknown};restore_note?:unknown;error?:unknown;outcome?:unknown};
+ for(const v of [b.detail?.restore_note,b.restore_note,b.error,b.outcome])if(typeof v==='string'&&v!=='')return v;
+ return null;
+}

@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { Panel } from '@/components/ui';
 import type { DqSummary } from '@/lib/dq/dashboard';
 import type { CalendarBlock, ClaimsBlock, ReconciliationsByPair } from '@/lib/dq/dashboard-blocks';
-import { quarantineAcceptBody, quarantineControl, sumByMarket } from '@/lib/dq/dashboard-view';
+import { conflictCode, quarantineActions, quarantineControl, successNoticeCode, sumByMarket } from '@/lib/dq/dashboard-view';
 import { CalendarPanel, ClaimsPanel, ReconciliationPairs } from './panels';
 import type { MarketFilter } from './panels';
 import { DANGER_BG, Detail, Pill, Table, Tile, btn, count, num, pct, s, td } from './primitives';
@@ -70,14 +70,12 @@ export function AdminDqClient() {
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' });
       if (r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { restore?: { restore_note?: string } };
-        if (j.restore?.restore_note === 'no_rows_promoted') setNotice(t('quarantine.noRowsPromoted'));
+        if (successNoticeCode(await r.json().catch(() => ({})))) setNotice(t('quarantine.noRowsPromoted'));
         reload();
       } else if (r.status === 409) {
         // The claims route answers 409 {error:<code>}; the quarantine route keeps {id, outcome} and may add
         // detail.restore_note or a top-level restore_note (plan 3 接口对齐记录 #9). All three are read.
-        const j = (await r.json().catch(() => ({}))) as { error?: string; outcome?: string; restore_note?: string; detail?: { restore_note?: string } };
-        const code = j.detail?.restore_note ?? j.restore_note ?? j.error ?? j.outcome;
+        const code = conflictCode(await r.json().catch(() => ({})));
         setNotice(code && t.has(`conflicts.${code}`) ? t(`conflicts.${code}`) : t('alreadyResolved'));
         reload();
       } else if (r.status === 404) { setError(t('notFound')); reload(); }
@@ -198,7 +196,7 @@ export function AdminDqClient() {
                   <td className={td}>{time(r.created_at)}</td><td className={`${td} font-mono`}>{s(r.dataset)}</td><td className={`${td} font-mono`}>{s(r.table_name)}</td>
                   <td className={`${td} font-mono`}>{s(r.natural_key)}</td><td className={td}>{s(r.reason_code)}</td>
                   <td className="max-w-[16rem] px-2 py-1.5 align-top"><Detail value={r.detail} /></td>
-                  <td className="px-2 py-1.5 align-top">{inline ? plainActions(r) : actions(r, 'table')}</td>
+                  <td className="px-2 py-1.5 align-top">{actions(r, 'table')}</td>
                 </tr>
               );
               // Canvas: candidate / keep-row choices sit in a sub-row under the item (Quarantine artboard).
@@ -228,60 +226,58 @@ export function AdminDqClient() {
     </div>
   );
 
-  /** Accept / reject without a selection. For a restore row the accept button is the restore control (server-computed enablement). */
-  function plainActions(row: Row) {
-    const id = String(row.id);
-    const key = s(row.natural_key);
-    const control = quarantineControl(row);
-    const restore = control.kind === 'restore';
-    return (
-      <div className="flex gap-2">
-        <button type="button" disabled={busy || (restore && !control.enabled)} aria-label={`${t('accept')} ${key}`}
-          title={restore && !control.enabled ? t(`quarantine.restore.${control.reason}`) : undefined}
-          onClick={() => resolve(id, { status: 'resolved_accept' })} className={`${btn} text-accent`}>{restore ? t('quarantine.restore.action') : t('accept')}</button>
-        <button type="button" disabled={busy} aria-label={`${t('reject')} ${key}`} onClick={() => resolve(id, { status: 'resolved_reject' })} className={`${btn} text-danger`}>{t('reject')}</button>
-      </div>
-    );
-  }
-
+  /** Radios only; the buttons (adopt / keep / acknowledge / accept / restore / reject) come from quarantineActions. */
   function choiceBlock(row: Row, surface: 'table' | 'card') {
     const id = String(row.id);
     const control = quarantineControl(row);
     if (control.kind !== 'candidates' && control.kind !== 'lineage') return null;
     const options = control.kind === 'candidates' ? control.options.map((o) => ({ value: o.index as number | string, label: o.label })) : control.options.map((o) => ({ value: o.factId as number | string, label: o.label }));
-    const body = quarantineAcceptBody(control, choice[id] ?? null);
     return (
-      <div className="space-y-2">
-        <fieldset className="space-y-1 text-xs">
-          <legend className="text-text-dim">{control.kind === 'candidates' ? t('quarantine.chooseCandidate') : t('quarantine.keepRow')}</legend>
-          {options.map((o) => (
-            <label key={String(o.value)} className="flex items-center gap-2 font-mono">
-              <input type="radio" name={`choice-${surface}-${id}`} checked={choice[id] === o.value} onChange={() => setChoice((c) => ({ ...c, [id]: o.value }))} disabled={busy} />
-              <span className="break-all">{o.label}</span>
-            </label>
-          ))}
-        </fieldset>
-        <button type="button" disabled={busy || body === null} onClick={() => body && resolve(id, body)} className={`${btn} text-accent`}>
-          {control.kind === 'candidates' ? t('quarantine.adopt', { n: typeof choice[id] === 'number' ? Number(choice[id]) : '—' }) : t('quarantine.keep')}
-        </button>
+      <fieldset className="space-y-1 text-xs">
+        <legend className="text-text-dim">{control.kind === 'candidates' ? t('quarantine.chooseCandidate') : t('quarantine.keepRow')}</legend>
+        {options.map((o) => (
+          <label key={String(o.value)} className="flex items-center gap-2 font-mono">
+            <input type="radio" name={`choice-${surface}-${id}`} checked={choice[id] === o.value} onChange={() => setChoice((c) => ({ ...c, [id]: o.value }))} disabled={busy} />
+            <span className="break-all">{o.label}</span>
+          </label>
+        ))}
+      </fieldset>
+    );
+  }
+
+  function buttons(row: Row) {
+    const id = String(row.id);
+    const key = s(row.natural_key);
+    const control = quarantineControl(row);
+    const sel = choice[id] ?? null;
+    return (
+      <div className="flex flex-wrap gap-2">
+        {quarantineActions(control, sel).map((a) => {
+          const label = a.id === 'adopt' ? t('quarantine.adopt', { n: typeof sel === 'number' ? sel : '—' })
+            : a.id === 'keep' ? t('quarantine.keep')
+            : a.id === 'acknowledge' ? t('quarantine.acknowledge')
+            : a.id === 'restore' ? t('quarantine.restore.action')
+            : a.id === 'reject' ? t('reject') : t('accept');
+          return (
+            <button key={a.id} type="button" disabled={busy || a.body === null} aria-label={`${label} ${key}`}
+              title={a.id === 'restore' && a.body === null && a.reason ? t(`quarantine.restore.${a.reason}`) : undefined}
+              onClick={() => a.body && resolve(id, a.body as { status: Resolution })}
+              className={`${btn} ${a.id === 'reject' ? 'text-danger' : 'text-accent'}`}>{label}</button>
+          );
+        })}
       </div>
     );
   }
 
   function actions(row: Row, surface: 'table' | 'card') {
     const control = quarantineControl(row);
-    if (control.kind === 'candidates' || control.kind === 'lineage') {
-      return <div className="space-y-2">{choiceBlock(row, surface)}{plainActions(row)}</div>;
-    }
-    if (control.kind === 'restore') {
-      return (
-        <div className="space-y-1">
-          {plainActions(row)}
-          <div className={`text-[11px] ${control.enabled ? 'text-text-dim' : 'text-text-muted'}`}>{t(`quarantine.restore.${control.reason}`)}</div>
-        </div>
-      );
-    }
-    return plainActions(row);
+    return (
+      <div className="space-y-2">
+        {surface === 'card' ? choiceBlock(row, 'card') : null}
+        {buttons(row)}
+        {control.kind === 'restore' ? <div className={`text-[11px] ${control.enabled ? 'text-text-dim' : 'text-text-muted'}`}>{t(`quarantine.restore.${control.reason}`)}</div> : null}
+      </div>
+    );
   }
 
   function quarantineCard(row: Row) {

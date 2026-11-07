@@ -267,7 +267,7 @@
       "chooseCandidate": "Choose a candidate value",
       "keepRow": "Choose the row to keep",
       "adopt": "Accept and adopt candidate {n}",
-      "keep": "Keep this row",
+      "keep": "Accept with selected keep row",
       "noRowsPromoted": "The item was closed, but no fact was restored (still referenced by another disputed item).",
       "restore": {
         "action": "Restore",
@@ -276,7 +276,8 @@
         "no_result": "No reconciliation result yet; re-run it first.",
         "inputs_changed": "Inputs changed after the latest passing reconciliation; re-run it first.",
         "unchecked": "Not checked (over the per-load check limit; narrow the filter and reload)"
-      }
+      },
+      "acknowledge": "Acknowledge only (no candidate adopted)"
     },
     "conflicts": {
       "already_resolved": "This item was already handled; the list has been refreshed.",
@@ -300,7 +301,8 @@
       "lineage_changed": "The lineage changed; refresh and try again.",
       "scope_missing": "A lineage member has no sync scope row; contact an administrator.",
       "unresolved": "More than one current value would remain; rolled back.",
-      "run_pending": "The related sync run has not finished; try again later."
+      "run_pending": "The related sync run has not finished; try again later.",
+      "issuer_not_active": "The issuer is not currently active; the claim stays pending."
     }
   }
 }

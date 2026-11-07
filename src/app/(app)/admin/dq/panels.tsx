@@ -4,7 +4,7 @@
 // brief): filing calendar, identifier claims (evidence_only amendment form), reconciliation counts
 // by pair. Pure rules live in src/lib/dq/dashboard-view.ts; tokens and components are the existing ones.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Panel } from '@/components/ui';
 import type { CalendarBlock, ClaimsBlock, ReconciliationsByPair } from '@/lib/dq/dashboard-blocks';
 import { AMEND_METHODS, amendBody, claimMode, disclosureTone, overdueDays, suggestedOp, sumByMarket } from '@/lib/dq/dashboard-view';
@@ -14,6 +14,7 @@ import type { Row, T } from './primitives';
 
 export type MarketFilter = '' | 'US' | 'CN';
 const display = (r: Row) => (r.detail as { display?: { ticker?: unknown; name?: unknown } } | null)?.display ?? {};
+const deadlineLabel = (t: T, state: unknown) => (t.has(`calendar.deadline.${s(state)}`) ? t(`calendar.deadline.${s(state)}`) : s(state));
 const rowKey = (r: Row) => `${s(r.issuer_id)}|${s(r.market)}|${s(r.report_kind)}|${s(r.period_end)}`;
 
 export function CalendarPanel({ t, calendar, market, onMarket, today, busy }: { t: T; calendar: CalendarBlock | undefined; market: MarketFilter; onMarket: (m: MarketFilter) => void; today: string; busy: boolean }) {
@@ -49,7 +50,7 @@ export function CalendarPanel({ t, calendar, market, onMarket, today, busy }: { 
               <div className="flex items-center justify-between gap-2"><span><span className="font-mono">{s(d.ticker)}</span> <span className="text-text-dim">{s(d.name)}</span></span><Pill value={s(r.disclosure_state)} tone={disclosureTone(String(r.disclosure_state))} /></div>
               <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.reportKind')}</span><span className="font-mono">{s(r.market)} · {s(r.report_kind)}</span></div>
               <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.periodEnd')}</span><span className="font-mono">{period(r)}</span></div>
-              <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.deadlineState')}</span><span>{t(`calendar.deadline.${s(r.deadline_state)}`)} · <span className="font-mono text-text-dim">{s(r.due_rule)}</span></span></div>
+              <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.deadlineState')}</span><span>{deadlineLabel(t, r.deadline_state)} · <span className="font-mono text-text-dim">{s(r.due_rule)}</span></span></div>
               <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.dueDate')}</span><span className="font-mono">{s(r.due_date)}</span></div>
               {r.expected_date ? <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.expectedDate')}</span><span className="font-mono">{s(r.expected_date)}</span></div> : null}
               {r.upstream_filed_date ? <div className="flex justify-between gap-2"><span className="text-text-dim">{t('calendar.columns.upstreamFiled')}</span><span className="font-mono">{s(r.upstream_filed_date)}</span></div> : null}
@@ -69,7 +70,7 @@ export function CalendarPanel({ t, calendar, market, onMarket, today, busy }: { 
                 <td className={td}><span className="font-mono">{s(d.ticker)}</span> <span className="text-text-dim">{s(d.name)}</span></td>
                 <td className={td}>{s(r.market)}</td><td className={`${td} font-mono`}>{s(r.report_kind)}</td>
                 <td className={`${td} font-mono`}>{period(r)}</td>
-                <td className={td}>{t(`calendar.deadline.${s(r.deadline_state)}`)}</td>
+                <td className={td}>{deadlineLabel(t, r.deadline_state)}</td>
                 <td className={`${td} font-mono`}>{s(r.due_date)}</td><td className={`${td} font-mono text-text-dim`}>{s(r.due_rule)}</td>
                 <td className={`${td} font-mono`}>{s(r.expected_date)}</td><td className={`${td} font-mono`}>{s(r.upstream_filed_date)}</td>
                 <td className={td}><Pill value={s(r.disclosure_state)} tone={disclosureTone(String(r.disclosure_state))} /></td>
@@ -98,18 +99,51 @@ export function CalendarPanel({ t, calendar, market, onMarket, today, busy }: { 
   );
 }
 
+interface Draft { id: string; op: AmendForm['op']; security: string; date: string; method: string }
+const securityKey = (x: Row | undefined) => (x ? `${s(x.ticker)}|${s(x.valid_from)}` : '');
+
 export function ClaimsPanel({ t, claims, busy, pending, time, onResolve }: { t: T; claims: ClaimsBlock | undefined; busy: boolean; pending: string | null; time: (v: unknown) => string; onResolve: (id: string, body: Record<string, unknown>) => void }) {
-  const [amending, setAmending] = useState<string | null>(null);
+  // One draft shared by the mobile card and the desktop row, so resizing never loses input.
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [amendError, setAmendError] = useState<string | null>(null);
+  const toggles = useRef<Record<string, HTMLButtonElement | null>>({});
   const rows = claims?.rows ?? [];
   const title = claims && claims.total > rows.length ? `${t('sections.claims')} · ${t('claims.latest', { shown: rows.length, total: claims.total })}` : t('sections.claims');
-  const controls = (r: Row) => {
+  const securitiesOf = (r: Row) => claims?.securitiesByIssuer[String(r.issuer_id)] ?? [];
+  const focusToggle = (id: string) => {
+    // Return focus to the visible toggle of the row (the other surface is display:none).
+    setTimeout(() => { for (const k of [`card-${id}`, `table-${id}`]) { const el = toggles.current[k]; if (el && el.offsetParent !== null) { el.focus(); return; } } }, 0);
+  };
+  const close = (id: string) => { setDraft(null); setAmendError(null); focusToggle(id); };
+  const open = (r: Row) => {
+    const id = String(r.id);
+    if (draft?.id === id) { close(id); return; }
+    const op = suggestedOp(r.detail);
+    setAmendError(null);
+    setDraft({ id, op, security: securityKey(securitiesOf(r)[0]), date: '', method: AMEND_METHODS[op][0] });
+  };
+  const submit = (r: Row) => {
+    if (!draft) return;
+    const [ticker, validFrom] = draft.security.split('|');
+    const res = amendBody({ op: draft.op, issuerId: String(r.issuer_id), ticker: ticker ?? '', validFrom: validFrom ?? '', date: draft.date, method: draft.method });
+    if (!res.ok) { setAmendError(t(`claims.errors.${res.error}`)); return; }
+    const id = String(r.id);
+    setAmendError(null); setDraft(null); focusToggle(id);
+    onResolve(id, res.body);
+  };
+  const form = (r: Row) => draft && draft.id === String(r.id)
+    ? <AmendFormView t={t} draft={draft} onChange={setDraft} securities={securitiesOf(r)} busy={busy} error={amendError} onSubmit={() => submit(r)} onCancel={() => close(draft.id)} />
+    : null;
+  const controls = (r: Row, surface: 'card' | 'table') => {
     const id = String(r.id);
     const mode = claimMode(r.op);
     if (mode === 'sql_only') return <span className="text-text-muted">{t('claims.sqlOnly')}</span>;
+    const acceptLabel = mode === 'amend' ? t('claims.amendAccept') : t('accept');
     return (
       <div className="flex gap-2">
-        <button type="button" disabled={busy} className={`${btn} text-accent`} aria-label={`${t('accept')} ${id}`}
-          onClick={() => (mode === 'amend' ? setAmending(amending === id ? null : id) : onResolve(id, { status: 'accepted' }))}>{mode === 'amend' ? t('claims.amendAccept') : t('accept')}</button>
+        <button type="button" ref={(el) => { toggles.current[`${surface}-${id}`] = el; }} disabled={busy} className={`${btn} text-accent`} aria-label={`${acceptLabel} ${id}`}
+          aria-expanded={mode === 'amend' ? draft?.id === id : undefined}
+          onClick={() => (mode === 'amend' ? open(r) : onResolve(id, { status: 'accepted' }))}>{acceptLabel}</button>
         <button type="button" disabled={busy} className={`${btn} text-danger`} aria-label={`${t('reject')} ${id}`} onClick={() => onResolve(id, { status: 'rejected' })}>{t('reject')}</button>
       </div>
     );
@@ -126,8 +160,8 @@ export function ClaimsPanel({ t, claims, busy, pending, time, onResolve }: { t: 
             <div className="flex justify-between gap-2 font-mono"><span>{s(r.op)} · {s(r.id_type)}</span><span className="text-text-dim">{time(r.created_at)}</span></div>
             <div className="break-all font-mono">{s(r.value)}</div>
             <Detail value={r.detail} className="min-w-0" />
-            <div className="py-1">{controls(r)}</div>
-            {amending === String(r.id) ? <AmendFormView t={t} row={r} securities={claims?.securitiesByIssuer[String(r.issuer_id)] ?? []} busy={busy} onSubmit={(body) => { setAmending(null); onResolve(String(r.id), body); }} onCancel={() => setAmending(null)} /> : null}
+            <div className="py-1">{controls(r, 'card')}</div>
+            {form(r)}
           </div>
         ))}
         {rows.length === 0 ? <div className="p-3 text-xs text-text-muted">{t('claims.empty')}</div> : null}
@@ -140,14 +174,12 @@ export function ClaimsPanel({ t, claims, busy, pending, time, onResolve }: { t: 
               <tr key={id} className={pending === id ? 'opacity-50' : undefined}>
                 {cells(r).map((c, i) => <td key={i} className={`${td} ${i > 0 && i < 5 ? 'font-mono' : ''}`}>{c}</td>)}
                 <td className="max-w-[16rem] px-2 py-1.5 align-top"><Detail value={r.detail} /></td>
-                <td className={td}>{controls(r)}</td>
+                <td className={td}>{controls(r, 'table')}</td>
               </tr>
             );
-            if (amending !== id) return [main];
+            if (draft?.id !== id) return [main];
             return [main, (
-              <tr key={`${id}-amend`} className="bg-bg-card"><td colSpan={9} className="px-2 py-2">
-                <AmendFormView t={t} row={r} securities={claims?.securitiesByIssuer[String(r.issuer_id)] ?? []} busy={busy} onSubmit={(body) => { setAmending(null); onResolve(id, body); }} onCancel={() => setAmending(null)} />
-              </td></tr>
+              <tr key={`${id}-amend`} className="bg-bg-card"><td colSpan={9} className="px-2 py-2">{form(r)}</td></tr>
             )];
           })}
         </Table>
@@ -157,32 +189,26 @@ export function ClaimsPanel({ t, claims, busy, pending, time, onResolve }: { t: 
   );
 }
 
-function AmendFormView({ t, row, securities, busy, onSubmit, onCancel }: { t: T; row: Row; securities: Row[]; busy: boolean; onSubmit: (body: Record<string, unknown>) => void; onCancel: () => void }) {
-  const [op, setOp] = useState<AmendForm['op']>(suggestedOp(row.detail));
-  const [security, setSecurity] = useState(securities[0] ? `${s(securities[0].ticker)}|${s(securities[0].valid_from)}` : '');
-  const [date, setDate] = useState('');
-  const [method, setMethod] = useState<string>(AMEND_METHODS[op][0]);
-  const [error, setError] = useState<string | null>(null);
-  const [ticker, validFrom] = security.split('|');
+function AmendFormView({ t, draft, onChange, securities, busy, error, onSubmit, onCancel }: { t: T; draft: Draft; onChange: (d: Draft) => void; securities: Row[]; busy: boolean; error: string | null; onSubmit: () => void; onCancel: () => void }) {
   const field = 'min-h-9 rounded-md border border-border bg-bg-elevated px-2 font-mono text-text';
+  const { op } = draft;
   return (
-    <form className="flex flex-wrap items-end gap-2 rounded-md border border-border bg-bg-card p-2 text-xs"
-      onSubmit={(e) => { e.preventDefault(); const r = amendBody({ op, issuerId: String(row.issuer_id), ticker: ticker ?? '', validFrom: validFrom ?? '', date, method }); if (!r.ok) { setError(t(`claims.errors.${r.error}`)); return; } setError(null); onSubmit(r.body); }}>
+    <form className="flex flex-wrap items-end gap-2 rounded-md border border-border bg-bg-card p-2 text-xs" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
       <label className="flex flex-col gap-1 text-text-dim">{t('claims.amend.op')}
-        <select value={op} onChange={(e) => { const next = e.target.value as AmendForm['op']; setOp(next); setMethod(AMEND_METHODS[next][0]); }} className={field}>
+        <select value={op} onChange={(e) => { const next = e.target.value as AmendForm['op']; onChange({ ...draft, op: next, method: AMEND_METHODS[next][0] }); }} className={field}>
           <option value="backdate_window">backdate_window</option><option value="close_security">close_security</option>
         </select>
       </label>
       <label className="flex flex-col gap-1 text-text-dim">{t('claims.amend.security')}
-        <select value={security} onChange={(e) => setSecurity(e.target.value)} className={field}>
-          {securities.map((x) => { const v = `${s(x.ticker)}|${s(x.valid_from)}`; return <option key={v} value={v}>{s(x.ticker)} · {s(x.valid_from)} → {s(x.valid_to)}</option>; })}
+        <select value={draft.security} onChange={(e) => onChange({ ...draft, security: e.target.value })} className={field}>
+          {securities.map((x) => <option key={securityKey(x)} value={securityKey(x)}>{s(x.ticker)} · {s(x.valid_from)} → {s(x.valid_to)}</option>)}
         </select>
       </label>
       <label className="flex flex-col gap-1 text-text-dim">{op === 'backdate_window' ? t('claims.amend.newValidFrom') : t('claims.amend.validTo')}
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={field} />
+        <input type="date" value={draft.date} onChange={(e) => onChange({ ...draft, date: e.target.value })} className={field} />
       </label>
       <label className="flex flex-col gap-1 text-text-dim">{t('claims.amend.method')}
-        <select value={method} onChange={(e) => setMethod(e.target.value)} className={field}>
+        <select value={draft.method} onChange={(e) => onChange({ ...draft, method: e.target.value })} className={field}>
           {AMEND_METHODS[op].map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       </label>

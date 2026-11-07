@@ -267,7 +267,7 @@
       "chooseCandidate": "选择候选值",
       "keepRow": "选择保留的行",
       "adopt": "接受并采用候选 {n}",
-      "keep": "保留此行",
+      "keep": "接受并保留所选行",
       "noRowsPromoted": "已关闭该项，但没有事实被恢复（仍被其他争议项引用）。",
       "restore": {
         "action": "恢复",
@@ -276,7 +276,8 @@
         "no_result": "尚无对账结果，需先重跑对账。",
         "inputs_changed": "最近一次对账通过后输入已变化，需先重跑对账。",
         "unchecked": "未核对（超出单次核对上限，筛选后重试）"
-      }
+      },
+      "acknowledge": "仅确认知晓（不采用候选）"
     },
     "conflicts": {
       "already_resolved": "该项已被处理，列表已刷新。",
@@ -300,7 +301,8 @@
       "lineage_changed": "谱系已变化，请刷新后重试。",
       "scope_missing": "谱系成员缺少同步范围行，请联系管理员。",
       "unresolved": "裁决后仍不止一个当前值，已回滚。",
-      "run_pending": "相关同步运行尚未结束，请稍后重试。"
+      "run_pending": "相关同步运行尚未结束，请稍后重试。",
+      "issuer_not_active": "发行人当前不是活跃状态，声明保持待审核。"
     }
   }
 }

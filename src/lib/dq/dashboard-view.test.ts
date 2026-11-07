@@ -1,6 +1,6 @@
 // src/lib/dq/dashboard-view.test.ts
 import {describe,expect,it} from 'vitest';
-import {amendBody,claimMode,disclosureTone,overdueDays,quarantineAcceptBody,quarantineControl,suggestedOp,sumByMarket} from './dashboard-view';
+import {conflictCode,quarantineActions,successNoticeCode,amendBody,claimMode,disclosureTone,overdueDays,quarantineAcceptBody,quarantineControl,suggestedOp,sumByMarket} from './dashboard-view';
 
 describe('calendar view rules',()=>{
  it.each([['overdue','text-danger'],['filed_not_ingested','text-warn'],['unknown_upstream','text-text-muted italic'],['pending','text-text-dim'],['received_late','text-warn'],['received',''],['other','text-text-dim']])('%s → %j',(s,tone)=>{expect(disclosureTone(s)).toBe(tone);});
@@ -60,5 +60,35 @@ describe('quarantine inline controls',()=>{
   // settled from the stored result alone: the stored reason wins even when the row was not live-checked
   expect(quarantineControl({reason_code:'reconcile_mismatch',restorable:false,restorable_checked:false,detail:{latest_result:{passed:false}}})).toEqual({kind:'restore',enabled:false,reason:'not_passing'});
   expect(quarantineControl({reason_code:'reconcile_mismatch',restorable:false,restorable_checked:false,detail:{}})).toEqual({kind:'restore',enabled:false,reason:'no_result'});
+ });
+});
+
+describe('quarantine actions and response notices',()=>{
+ const cand=quarantineControl({reason_code:'ambiguous_value',payload:{candidates:[{value:'1'},{value:'2'}]}});
+ const lin=quarantineControl({reason_code:'lineage_conflict',payload:{fact_ids:['f1','f2'],values:[]}});
+ it('ambiguous rows: adopt needs a selection, acknowledge is explicit, no generic accept',()=>{
+  expect(quarantineActions(cand,null)).toEqual([{id:'adopt',body:null},{id:'acknowledge',body:{status:'resolved_accept'}},{id:'reject',body:{status:'resolved_reject'}}]);
+  expect(quarantineActions(cand,1)[0]).toEqual({id:'adopt',body:{status:'resolved_accept',chosen_candidate_index:1}});
+ });
+ it('lineage rows: only keep-selected and reject',()=>{
+  expect(quarantineActions(lin,null).map(a=>a.id)).toEqual(['keep','reject']);
+  expect(quarantineActions(lin,null)[0].body).toBeNull();
+  expect(quarantineActions(lin,'f2')[0].body).toEqual({status:'resolved_accept',keep_fact_id:'f2'});
+ });
+ it('restore and plain rows',()=>{
+  const on=quarantineControl({reason_code:'reconcile_mismatch',restorable:true,detail:{latest_result:{passed:true}}});
+  expect(quarantineActions(on,null)[0]).toEqual({id:'restore',body:{status:'resolved_accept'},reason:'passing'});
+  const off=quarantineControl({reason_code:'reconcile_mismatch',restorable:false,restorable_checked:false,detail:{latest_result:{passed:true}}});
+  expect(quarantineActions(off,null)[0]).toEqual({id:'restore',body:null,reason:'unchecked'});
+  expect(quarantineActions({kind:'plain'},null)).toEqual([{id:'accept',body:{status:'resolved_accept'}},{id:'reject',body:{status:'resolved_reject'}}]);
+ });
+ it('reads the landed route envelope',()=>{
+  expect(successNoticeCode({id:'q',outcome:'resolved',restore:{promoted:0,skipped:['f1']},detail:{restore_note:'no_rows_promoted'}})).toBe('no_rows_promoted');
+  expect(successNoticeCode({restore:{promoted:2,skipped:[]}})).toBeNull();
+  expect(successNoticeCode(null)).toBeNull();
+  expect(conflictCode({id:'q',outcome:'conflict',error:'not_passing',detail:{restore_note:'inputs_unavailable'}})).toBe('inputs_unavailable');
+  expect(conflictCode({error:'value_conflict'})).toBe('value_conflict');
+  expect(conflictCode({id:'q',outcome:'already_resolved'})).toBe('already_resolved');
+  expect(conflictCode({})).toBeNull();
  });
 });

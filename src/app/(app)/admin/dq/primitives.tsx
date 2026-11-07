@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 export type Row = Record<string, unknown>;
 export type Col = { label: string; num?: boolean };
-export type T = (key: string, values?: Record<string, string | number>) => string;
+export type T = { (key: string, values?: Record<string, string | number>): string; has: (key: string) => boolean };
 
 export const s = (v: unknown) => (v === null || v === undefined || v === '' ? '—' : String(v));
 export const pct = (v: unknown) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? '—' : `${(Number(v) * 100).toFixed(2)}%`);
