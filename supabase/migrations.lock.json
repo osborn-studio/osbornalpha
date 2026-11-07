@@ -200,6 +200,10 @@
     {
       "file": "20261106090000_financial_facts.sql",
       "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
+    },
+    {
+      "file": "20261114090000_macro_workbench.sql",
+      "sha256": "fc9aba52b62aef758ab074e601ae18260f663ace58085d53596f224dcad7514a"
     }
   ]
 }
