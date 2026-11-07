@@ -24,7 +24,7 @@ criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/in
 criticalSuites.push('src/lib/macro/macro.integration.test.ts');
 // /MACRO
 // F4
-criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts');
+criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
 // /F4
 
 export function migrationInventory(root = process.cwd()) {

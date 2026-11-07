@@ -10,6 +10,7 @@
 | T6 fix | 本提交（`fix(judgments): Task 6 review`） | 待复审 | 待审 | 1 | filings 过滤未发布(mapping_gen<=0)先于 limit；tableRows / issuer_securities 用 selectAll 分页（max_rows 上限桩）；asOf 真实日期 + JudgmentError(invalid_parameter)；注释补充；先红 3 失败后绿 |
 | T4 JudgmentsDb | b7e421e7 | 待复审 | 待审 | 1 | db.test 28/28；pg 契约+并发与 judgments.integration 同跑 65/65 |
 | T4 fix | 本提交（`fix(judgments): F4 Task 4 review round 1`） | 复审意见已处理 | Codex E-01..E-07 已处理 | 1 | db.test 34/34；两个集成文件同跑 70/70 连跑 5 次，0 死锁；test:migrations PASS；typecheck、lint 干净 |
+| T16 resumable calibration / cohort store / cron | 本提交（`feat(judgments): resumable calibration job and weekly cron`） | 待复审 | Codex gpt-6-astra 实施 | 0 | 首次红测 4 suites missing imports；追加回归 6 failed / 25 passed → 39/39；影响面 441 passed / 82 DB skipped；typecheck、lint、critical inventory PASS；PostgreSQL harness 被 sandbox EPERM 阻止，待指挥 db-one |
 
 ## 偏差 · Task 1
 
@@ -173,3 +174,26 @@
 - **未开始**：T16 校准任务与 cron、T18 读接口与 admin 路由、T19 `macro_regime@v1`、T20 私有适配器与 `/analyst`、T21 UI（按画布）、T22 运行手册 / 规格 §19 / 锁迁移 / 全量门禁。
 - **恢复时**：先对 T12 第二轮与 T14 做 Opus 复审 + Codex 挑战；再按计划执行顺序 16 → 18 → 19 → 20 → 21 → 22。计划 `docs/superpowers/plans/2026-11-06-judgment-framework.md`（Codex 计划审计第四轮 ready）；实施期对计划的偏差均记在本日志各任务节（含 `WorkItem.observedAt` 契约变更、`claim_judgment` RPC、`setJobState` 返回 `{ok, updated_at}`、`claim_due_judgments` 返回 jsonb 数组、隔离复核期 incident 子对象、补偿 3 次失败跳过规则）。
 - **复权能力（东方财富）**：verified 仅 A qfq、HK qfq、US hfq；DataGateway 本机未配置，全部 unverified。
+
+
+## Task 16 — 校准作业、存储与周 cron（Codex gpt-6-astra）
+
+- 已实施：`calibrate.ts` 的冻结代际、不可变 attempt 分页、manifest CAS、续跑 / stale 重算、round outcomes、公有 preview；`cohort-store.ts` 的 memory / Supabase 实现；生产装配、cron GET/POST、默认 preview CLI、周一 04:00 UTC cron；7 个 PostgreSQL 集成用例已登记在现有 F4 `criticalSuites.push` 内。claimDue 均在 `withClaimLock` 内。
+- 与计划 / 旧契约的适配：所有 `setJobState` 判断读取 `.ok`；测试 fake / failed-clear proxy 返回 `{ok, updated_at}`。每一步仍重读已提交 state / updated_at，不把返回对象当 boolean。
+- 生产客户端复用 Task 14 `deps.ts::adminJudgmentsDb(admin)`，cron / CLI 复用 `resolveCodeVersion`；auth、no-store headers、错误消息隐藏沿用 committed settle route。
+- 直接消费 committed `entryOf / optionsOf / evaluateCohort`（后者内部调用 `selectIndependent`），完整保留 `n_invalid_endpoint`、`n_unusable_value` 与 unavailable scenarios 等 metrics；不重写数学 / display / produce 契约。
+- SQL 未修改：本工作树实际 committed 迁移为 `20261116090000_judgments.sql`，不是任务提示的 `20261115090000` 或旧计划的 `20261109150000`。沿用 freeze 的毫秒精度、`cohort:<generation>` claim marker 与既有 freeze / members / clear RPC。
+- 共享文件适配：criticalSuites 在现有 F4 `push` 追加，不改成计划旧 `.concat`；vercel.json 仅末尾追加 `0 4 * * 1`。
+- 超出计划示例的修正（均先红后绿）：manifest 无效 JSON、job 不匹配、重复 / 非升序 / 超 cursor 条目 → `cohort_object_invalid` 并清空代际；同时校验 partial 路径属于当前 unit / generation / start cursor、scope、非负 count。存储 transport error 仍保留代际以便重试。
+- 超出计划示例的修正（先红后绿）：planRound 等 run-level 异常先记录非信息错误再 finally finishBatch / freshness，避免未完成运行被记成 success；`windowOf` 仅在目标年非闰年时把 2 月 29 日夹到 28 日。
+- 保留 Task 16 明列的规格偏差：最终对象内容寻址 `cohorts/<sha256>.json`；query_bounds 入 cohort（跨代际比 entries）；state 带 done / manifest count；stale 同次最多重算一次；目的专用 fake DB；store 不提供 listing / 自动孤儿回收；freshness 保持计划的 event cadence；真实结算走 claim lock + cron lease，撤回走 admin；MVCC 物化冻结，CAS 前崩溃的孤儿代际不读；round completed / failed / in_progress 防饥饿；already_frozen → generation_reused，绝不清别人代际。
+
+验证：
+- 首次 `npm test -- src/lib/judgments/cohort-store.test.ts src/lib/judgments/calibrate.test.ts src/lib/judgments/calibrate.integration.test.ts src/app/api/cron/judgments-calibrate/route.test.ts`：4 suites failed（missing modules，0 test bodies）。实现后 33 passed / 7 DB skipped。
+- 新增边界回归 `npm test -- src/lib/judgments/calibrate.test.ts`：6 failed / 25 passed；修正后 calibrate + store + cron 为 39 passed。
+- `npm test -- src/lib/judgments src/lib/dq/batches.test.ts src/app/api/cron/judgments-calibrate/route.test.ts src/app/api/cron/judgments-settle/route.test.ts`：441 passed / 82 DB skipped，38 passed suites / 4 skipped。
+- `npm run typecheck && npm run lint`：PASS（lint --max-warnings=0）。`verifyCriticalSuiteInventory()`：PASS，F4 4 个 critical suites。cron schedule 检查：PASS。
+- CLI 非法参数 smoke：输出 usage（预期 exit 2）；未访问生产数据库。
+- `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts` 与 `LC_ALL=C npm run test:db`：sandbox 在 tsx IPC socket listen 处 EPERM；改 `node --import tsx` 后仍在 127.0.0.1 listen EPERM。未启动 PostgreSQL / 未运行 SQL 测试；指挥需运行 db-one 的 7 个新用例及全量 test:db。
+
+关注：数据库验证尚未完成。按计划，未引用的 partial 对象 / CAS 前崩溃的 frozen generations 由 Task 22 运行手册清理；本任务不增加存储 listing 或孤儿回收作业。
