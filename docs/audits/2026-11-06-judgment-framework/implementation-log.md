@@ -58,3 +58,15 @@
 ### Task 3 复审第 2 轮修复（Codex D-01）
 
 `judgment_envelope_of` 只信任 `p_j.judgment_id`：改为 plpgsql，先校验视图（`latest`/`as_known`，`as_known` 要求 cutoff），再在调用者 RLS 下按 id 读取已存行，所有返回字段、join 与 as_known 谓词都用该已存行；伪造 `registered_at` 或替换 `methodology_id/version` 的复合值无效，不可读或不存在 → NULL。新增用例（anon 与 authenticated，三种伪造）先红（旧函数返回伪造行）后绿；`judgments.integration` 40/40（2 次），`test:migrations` PASS，lint 干净。
+
+## Task 7 — 复权能力验证（spec §7.4）
+
+- 运行：`node --import tsx scripts/judgments/verify-adjustment.ts`（无 `.env.local`，DataGateway 未配置），2026-11-07（UTC 录制日期），代码为 Task 7 提交前的工作树。
+- 事件核对（逐一对照一手文件，均一致，未改 `ADJUST_EVENTS`）：600519.SH 2024-06-19 每股 30.876 元——巨潮下载的上交所披露公告 PDF（static.cninfo.com.cn/finalpage/2024-06-12/1220324741.PDF）列"A 股每股现金红利 30.876 元（含税）"，除权（息）日 2024/6/19；00700.HK 2024-05-17 每股 3.4 港元——披露易公告 PDF（hkexnews.hk/listedco/listconews/sehk/2024/0320/2024032000532_c.pdf）列"除淨日 2024年5月17日"；NVDA 2024-06-10 十拆一——nvidianews.nvidia.com 2024-05-22 新闻稿含 ten-for-one forward stock split 与 June 10, 2024 起按拆股后价格交易。
+- 结果：
+  - eastmoney A qfq: verified(difference, 观测 30.88 / 期望 30.876)；hfq: inconclusive（观测 1.02345，期望 1.02071，两种模型均不符）→ 保持 unverified
+  - eastmoney HK qfq: verified(ratio, 1.00975 / 1.00864)；hfq: verified(ratio, 1.00707 / 1.00864)
+  - eastmoney US qfq: verified(ratio, 10.0025 / 10)；hfq: verified(ratio, 9.99992 / 10)
+  - datagateway A/HK/US: not_configured（本机无 DataGateway 配置；未录制，未改表，保持 unverified）
+- 夹具：fixtures/judgments/kline/eastmoney-A-600519_SH-2024-06-19.json、eastmoney-HK-00700_HK-2024-05-17.json、eastmoney-US-NVDA-2024-06-10.json。
+- 能力表：eastmoney A qfq、HK qfq/hfq、US qfq/hfq 五行改为 verified；其余七行 unverified。O6 待 owner：A 股 hfq 与全部 datagateway 行未验证（datagateway 需在有配置的环境补录）；使用这些组合的价格判断在 v1 一律 void(adjustment_unsupported)。

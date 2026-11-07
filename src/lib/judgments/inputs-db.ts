@@ -13,7 +13,7 @@
 // to stocks_universe.market ∈ {A, HK, US}; the single is_primary holding wins, else the single
 // holding; anything else is ambiguous → null (never guess). memoryJudgmentInputsDb runs the same
 // code over memoryFactsDb + memoryTableClient and hides non-ok facts like the anon policy.
-// The kline default is unsupportedKline here; Task 7 wires readKlineRange into the anon variant.
+// kline: anon default = readKlineRange (Task 7); the memory variant defaults to unsupportedKline (no network in tests).
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {supabaseTableClient} from '@/lib/db/table-client';
@@ -28,6 +28,7 @@ import {canonicalize} from './canonical';
 import {JudgmentError} from './errors';
 import {deriveMetricsAsOf} from './facts-derive';
 import {unavailableMacroReadApi} from './macro-api';
+import {readKlineRange} from './kline';
 
 export type KlineFn=JudgmentInputsDb['kline'];
 /** No price source wired: every request is unsupported. */
@@ -109,7 +110,7 @@ function inputsDbOf(p:{facts:FactsDb;tables:TableClient;macro:MacroReadApi;kline
 }
 export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn}
 export function anonJudgmentInputsDb(d:AnonInputsDeps):JudgmentInputsDb{
- return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??unsupportedKline});
+ return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))});
 }
 export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn}
 /** Test double over memory stores; `judgments` are treated as publishable public rows. */
