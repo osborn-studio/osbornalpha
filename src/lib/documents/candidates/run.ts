@@ -37,12 +37,14 @@ import {sha256Hex} from '../extract/pages-json';
 import {supabaseObjectStore} from '../object-store';
 import {DocumentsDbError,HK_EXTRACTOR_REF,HK_LABEL_GEN,HK_PUB_GEN,HK_RULES_VERSION} from '../types';
 import type {ApprovalRow,CandidateRow,DocumentsDb,ExtractionRow,FinancialFactPayload,ObjectStore,Page,PagesJson} from '../types';
-import {buildCheckContext,hkCheckFindings,runHkChecks} from '../hk-facts/checks';
+import {buildCheckContext,checkTally,counterpartCandidates,crossCheckFindings,hkCheckFindings,runHkChecks} from '../hk-facts/checks';
+import type {CheckFinding,CheckRowResult} from '../hk-facts/checks';
 import {supabaseHkFactsPort} from '../hk-facts/facts-port';
 import type {HkFactsPort} from '../hk-facts/facts-port';
 import {generateHkCandidates} from '../hk-facts/generate';
 import {runHkFactsSync} from '../hk-facts/promote';
-import {FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat} from '../lease';
+import {finalizeHkHooks} from '../hk-facts/resolve';
+import {BudgetExceeded,FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat,withinBudget} from '../lease';
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
 export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto','promote'];
@@ -54,13 +56,16 @@ export const MIN_PHASE_MS=20_000;
 export const APPROVALS_LIMIT=100;
 export interface CandidatesDeps{db:DocumentsDb;tables:TableClient;store:ObjectStore;port:HkFactsPort;now:()=>Date;deadline:Date|null;codeVersion:string|null}
 export interface CandidatesOptions{limit:number;extractionIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;phases?:CandidatesPhase[]}
-export interface ExtractionOutcome{extractionId:string;documentId:string|null;outcome:'done'|'failed'|'skipped'|'due';code?:string;inserted:number;written:number;inherited:number;quarantined:number}
+export interface ExtractionOutcome{extractionId:string;documentId:string|null;outcome:'done'|'failed'|'skipped'|'due';code?:string;inserted:number;written:number;inherited:number;quarantined:number;identity?:IdentityTally}
+export interface IdentityTally{checked:number;skipped:number;failed:number}
 export interface AutoSummary{considered:number;decided:number;stopped:string|null}
 /** Structural subset of hk-facts/promote.ts::HkIssuerOutcome (Task 16). */
 export interface PromoteSummary{issuerId:string;outcome:'published'|'failed'|'skipped';code?:string;counts:BatchCounts}
-export interface CandidatesReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];extractions:ExtractionOutcome[];auto:AutoSummary;promote:PromoteSummary[];idle:boolean}
+export interface CandidatesReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];extractions:ExtractionOutcome[];auto:AutoSummary;promote:PromoteSummary[];identity:IdentityTally;idle:boolean}
 export class CandidatesRunError extends Error{constructor(public code:'code_version_unavailable'){super(code);this.name='CandidatesRunError';}}
 
+/** The Hong Kong calendar date (UTC+8): the as-of day of the reads a check makes. */
+export const hkToday=(now:Date)=>new Date(now.getTime()+8*3_600_000).toISOString().slice(0,10);
 export const COUNTERS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
 export const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,200);
 export const remainingMs=(deps:Pick<CandidatesDeps,'deadline'|'now'>)=>deps.deadline===null?Number.POSITIVE_INFINITY:deps.deadline.getTime()-deps.now().getTime();
@@ -112,6 +117,19 @@ async function candidatesFor(deps:CandidatesDeps,batchId:string,ex:ExtractionRow
  }
  Object.assign(out,local.out);for(const k of COUNTERS)counts[k]+=local.counts[k];errors.push(...local.errors);
 }
+/** Parks findings in quarantine; a finding whose members are all decided is recreated only when no item of that key and reason exists in any state (recovery without noise). Returns how many were parked. */
+async function parkFindings(tables:TableClient,batchId:string,findings:CheckFinding[],decided:Set<string>):Promise<number>{
+ let n=0;
+ for(const f of findings){
+  if(f.candidateIds.every(id=>decided.has(id))){
+   const have=await tables.select('dq_quarantine',{dataset:CANDIDATES_DATASET,table_name:'extraction_candidates',natural_key:f.naturalKey,reason_code:f.reasonCode},{limit:1});
+   if(have.length>0)continue;
+  }
+  await quarantine(tables,{dataset:CANDIDATES_DATASET,table:'extraction_candidates',naturalKey:f.naturalKey,reasonCode:f.reasonCode,batchId,payload:{...f.payload,candidate_ids:f.candidateIds}});
+  n++;
+ }
+ return n;
+}
 async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:ExtractionRow,today:string,out:ExtractionOutcome,counts:BatchCounts,errors:BatchError[],quiesce:()=>Promise<void>):Promise<void>{
  // P2-7: renew before every mutating phase; a takeover → lease_lost (no finishCandidates, nothing more written)
  const keep=async()=>{if(!await deps.db.renewCandidatesLease(ex.extraction_id,batchId,LEASE_TTL_S))throw new DocumentsDbError('lease_lost');};
@@ -130,20 +148,46 @@ async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:Extractio
   const {inserted}=await deps.db.insertCandidates(ex.extraction_id,batchId,gen.candidates);
   out.inserted=inserted;
   counts.fetched+=gen.candidates.length;counts.inserted+=inserted;counts.duplicates+=gen.candidates.length-inserted;
-  const open=(await allPages(cursor=>deps.db.candidatesOf({extractionId:ex.extraction_id},{cursor,limit:1000})))
-   .filter(c=>c.status==='candidate'&&c.kind==='financial_fact'&&c.extractor_kind==='rule'&&c.extractor_ref===HK_EXTRACTOR_REF);
-  if(open.length>0){
+  const reload=async()=>(await allPages(cursor=>deps.db.candidatesOf({extractionId:ex.extraction_id},{cursor,limit:1000})))
+   .filter(c=>c.kind==='financial_fact'&&c.extractor_kind==='rule'&&c.extractor_ref===HK_EXTRACTOR_REF);
+  // the COMPLETE generated set (decided rows included): identities need every member of a column; only undecided rows are written
+  const all=await reload();
+  if(all.length>0){
    budget();
-   const ctx=await buildCheckContext(deps,doc,ex,open,today);
-   const results=runHkChecks(open,ctx);
-   await keep();
-   const w=await deps.db.writeCandidateChecks(ex.extraction_id,batchId,results);
-   out.written=w.written;out.inherited=w.inherited;
-   const {findings,info}=hkCheckFindings(ex,open,results);
+   const ctx=await buildCheckContext(deps,doc,ex,all,today,pages);
+   if(ctx.priorTruncated)errors.push({code:'skipped_summary',key:ex.extraction_id,message:JSON.stringify({prior_facts_truncated:1})});
+   const results=runHkChecks(all,ctx);
+   const decided=new Set(all.filter(c=>c.status!=='candidate').map(c=>c.candidate_id));
+   const {findings,info}=hkCheckFindings(ex,all,results);
    errors.push(...info);
+   out.identity=checkTally(results.filter(r=>!decided.has(r.candidate_id)),all).identity;
    await keep();
-   for(const f of findings)await quarantine(deps.tables,{dataset:CANDIDATES_DATASET,table:'extraction_candidates',naturalKey:f.naturalKey,reasonCode:f.reasonCode,batchId,payload:{...f.payload,candidate_ids:f.candidateIds}});
-   out.quarantined=findings.length;counts.quarantined+=findings.length;
+   // findings BEFORE the checks make a candidate decision-eligible (a failure after the checks commit must not lose them)
+   out.quarantined=await parkFindings(deps.tables,batchId,findings,decided);
+   counts.quarantined+=out.quarantined;
+   if(ex.candidates_role==='comparison'){
+    const cross=crossCheckFindings(await counterpartCandidates(deps.db,doc,today,'zh'),all);
+    if(cross.length>0){
+     const n=await parkFindings(deps.tables,batchId,cross,new Set(cross.flatMap(f=>f.candidateIds)));
+     out.quarantined+=n;counts.quarantined+=n;
+     errors.push({code:'en_zh_mismatch',key:ex.extraction_id,message:JSON.stringify({count:cross.length})});
+    }
+   }
+   await keep();
+   const forOpen=(rs:CheckRowResult[],skip:Set<string>)=>rs.filter(r=>!skip.has(r.candidate_id));
+   let w:{written:number;inherited:number}={written:0,inherited:0};
+   const rows=forOpen(results,decided);
+   if(rows.length>0){
+    try{w=await deps.db.writeCandidateChecks(ex.extraction_id,batchId,rows);}
+    catch(e){
+     if(!(e instanceof DocumentsDbError&&e.code==='decided'))throw e;
+     // a reviewer decided a row between the read and the write: re-read and retry once on the rows still undecided
+     const now=await reload();const still=new Set(now.filter(c=>c.status!=='candidate').map(c=>c.candidate_id));
+     const again=forOpen(results,still);
+     w=again.length>0?await deps.db.writeCandidateChecks(ex.extraction_id,batchId,again):w;
+    }
+   }
+   out.written=w.written;out.inherited=w.inherited;
   }
   await quiesce();                                                       // no heartbeat beat after the lease ends (R3-P2-1)
   await deps.db.finishCandidates(ex.extraction_id,batchId,'done');
@@ -160,30 +204,36 @@ async function candidatesClaimed(deps:CandidatesDeps,batchId:string,ex:Extractio
 
 async function autoDecide(deps:CandidatesDeps,errors:BatchError[]):Promise<AutoSummary>{
  const summary:AutoSummary={considered:0,decided:0,stopped:null};
+ const left=()=>remainingMs(deps)-FINAL_RESERVE_MS;
+ const stop=()=>{summary.stopped='deadline_hit';errors.push({code:'deadline_hit',message:JSON.stringify({phase:'auto'})});return summary;};
+ if(left()<=0)return stop();
+ // approvals first: without an unrevoked approval of the HK rule extractor nothing is paged
+ let approvals:ApprovalRow[];
+ try{approvals=(await deps.db.approvalsFor(HK_EXTRACTOR_REF,{limit:APPROVALS_LIMIT})).filter(a=>a.revoked_at===null&&a.extractor_ref===HK_EXTRACTOR_REF);}
+ catch(e){
+  if(e instanceof DocumentsDbError&&e.code==='too_many_approvals'){summary.stopped='too_many_approvals';errors.push({code:'too_many_approvals',key:HK_EXTRACTOR_REF});return summary;}
+  throw e;
+ }
+ if(approvals.length===0)return summary;
  // collected first: deciding changes the status the cursor pages over
- const pending=(await allPages(cursor=>deps.db.candidatesOf({status:'candidate'},{cursor,limit:1000})))
-  .filter(c=>c.extractor_kind==='rule'&&c.checks_passed&&c.kind==='financial_fact');
+ const pending:CandidateRow[]=[];let cursor:string|null=null;
+ do{
+  if(left()<=0)return stop();
+  const page:Page<CandidateRow>=await deps.db.candidatesOf({status:'candidate'},{cursor,limit:1000});
+  pending.push(...page.rows.filter(c=>c.extractor_kind==='rule'&&c.extractor_ref===HK_EXTRACTOR_REF&&c.checks_passed&&c.kind==='financial_fact'));
+  cursor=page.nextCursor;
+ }while(cursor!==null);
  summary.considered=pending.length;
- const byRef=new Map<string,CandidateRow[]>();
- for(const c of pending){const g=byRef.get(c.extractor_ref);if(g)g.push(c);else byRef.set(c.extractor_ref,[c]);}
  const rows=new Map<string,ExtractionRow|null>();
- for(const [ref,list] of [...byRef].sort(([a],[b])=>a<b?-1:a>b?1:0)){
-  let approvals:ApprovalRow[];
-  try{approvals=(await deps.db.approvalsFor(ref,{limit:APPROVALS_LIMIT})).filter(a=>a.revoked_at===null&&a.extractor_ref===ref);}
-  catch(e){
-   if(e instanceof DocumentsDbError&&e.code==='too_many_approvals'){summary.stopped='too_many_approvals';errors.push({code:'too_many_approvals',key:ref});return summary;}
-   throw e;
-  }
-  if(approvals.length===0)continue;
-  for(const c of list){
-   if(!rows.has(c.extraction_id))rows.set(c.extraction_id,await deps.db.extractionById(c.extraction_id));
-   const ex=rows.get(c.extraction_id);if(!ex)continue;
-   const concept=(c.payload as FinancialFactPayload).concept;
-   const a=approvals.find(x=>x.extractor_version===ex.extractor_version&&x.table_algo_version===ex.table_algo_version&&x.code_version===ex.code_version&&x.concepts.includes(concept));
-   if(!a)continue;
-   try{const r=await deps.db.decideCandidate(c.candidate_id,{kind:'auto',approval_id:a.approval_id});if(r.status==='confirmed')summary.decided++;}
-   catch(e){if(e instanceof DocumentsDbError&&(e.code==='not_eligible'||e.code==='decided'||e.code==='approval_revoked'))continue;throw e;}
-  }
+ for(const c of pending){
+  if(left()<=0)return stop();
+  if(!rows.has(c.extraction_id))rows.set(c.extraction_id,await deps.db.extractionById(c.extraction_id));
+  const ex=rows.get(c.extraction_id);if(!ex||ex.candidates_role!=='primary')continue;   // comparison versions are never decided automatically
+  const concept=(c.payload as FinancialFactPayload).concept;
+  const a=approvals.find(x=>x.extractor_version===ex.extractor_version&&x.table_algo_version===ex.table_algo_version&&x.code_version===ex.code_version&&x.concepts.includes(concept));
+  if(!a)continue;
+  try{const r=await deps.db.decideCandidate(c.candidate_id,{kind:'auto',approval_id:a.approval_id});if(r.status==='confirmed')summary.decided++;}
+  catch(e){if(e instanceof DocumentsDbError&&(e.code==='not_eligible'||e.code==='decided'||e.code==='approval_revoked'))continue;throw e;}
  }
  return summary;
 }
@@ -196,14 +246,14 @@ async function dryRun(deps:CandidatesDeps,opts:CandidatesOptions,phases:Set<Cand
   for(const id of notDue)extractions.push({...blank({extraction_id:id,document_id:null}),code:'not_due'});
  }
  const promote:PromoteSummary[]=phases.has('promote')?(await deps.port.promotionDue(HK_PUB_GEN,opts.limit)).map(d=>({issuerId:d.issuerId,outcome:'skipped' as const,code:'due',counts:emptyCounts()})):[];
- return {batchId:null,status:'dry_run',counts:emptyCounts(),errors:[],extractions,auto:{considered:0,decided:0,stopped:null},promote,idle:!extractions.some(e=>e.outcome==='due')&&promote.length===0};
+ return {batchId:null,status:'dry_run',counts:emptyCounts(),errors:[],extractions,auto:{considered:0,decided:0,stopped:null},promote,identity:{checked:0,skipped:0,failed:0},idle:!extractions.some(e=>e.outcome==='due')&&promote.length===0};
 }
 
 export async function runDocumentsCandidates(deps:CandidatesDeps,opts:CandidatesOptions):Promise<CandidatesReceipt>{
  const phases=new Set<CandidatesPhase>(opts.phases??DEFAULT_PHASES);
  if(opts.dryRun)return dryRun(deps,opts,phases);
  if(!deps.codeVersion)throw new CandidatesRunError('code_version_unavailable');
- const today=deps.now().toISOString().slice(0,10);
+ const today=hkToday(deps.now());
  const {batchId}=await startBatch(deps.tables,{producer:'documents-candidates',dataset:CANDIDATES_DATASET,
   toolVersions:{hk_label_gen:String(HK_LABEL_GEN),hk_rules_version:HK_RULES_VERSION,hk_pub_gen:String(HK_PUB_GEN)},codeVersion:deps.codeVersion,triggeredBy:opts.triggeredBy});
  const counts=emptyCounts();const errors:BatchError[]=[];const extractions:ExtractionOutcome[]=[];const promote:PromoteSummary[]=[];
@@ -227,18 +277,24 @@ export async function runDocumentsCandidates(deps:CandidatesDeps,opts:Candidates
    try{
     if(remainingMs(deps)<MIN_ITEM_MS)errors.push({code:'deadline_hit',message:JSON.stringify({promote_not_started:1})});
     else{
+     const fixed=await withinBudget(finalizeHkHooks(deps.tables,deps.now()),Math.max(0,remainingMs(deps)-FINAL_RESERVE_MS));   // R5-12: accepts made through the generic dq route
+     if(fixed>0)errors.push({code:'skipped_summary',key:'facts.hk:hooks',message:JSON.stringify({hk_no_metrics:fixed})});
      const due=await deps.port.promotionDue(HK_PUB_GEN,opts.limit);
      if(due.length>0)idle=false;
      for(const x of await runHkFactsSync(deps,{issuerIds:due.map(d=>d.issuerId),batchId,triggeredBy:opts.triggeredBy})){
       promote.push(x);for(const k of COUNTERS)counts[k]+=x.counts[k];errors.push(...x.errors);
      }
     }
-   }catch(e){errors.push({code:'promote_failed',message:errMsg(e)});}
+   }catch(e){
+    if(e instanceof BudgetExceeded)errors.push({code:'deadline_hit',message:JSON.stringify({promote_hooks:1})});
+    else errors.push({code:'promote_failed',message:errMsg(e)});
+   }
   }
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
   await recordAttempt(deps.tables,CANDIDATES_DATASET,{ok:status!=='failed',cadence:'daily',now:deps.now(),
-   detail:{extractions:extractions.length,failed:extractions.filter(e=>e.outcome==='failed').length,auto_decided:auto.decided,promoted:promote.filter(p=>p.outcome==='published').length,idle}});
-  return {batchId,status,counts,errors,extractions,auto,promote,idle};
+   detail:{identity_skipped:extractions.reduce((n,x)=>n+(x.identity?.skipped??0),0),extractions:extractions.length,failed:extractions.filter(e=>e.outcome==='failed').length,auto_decided:auto.decided,promoted:promote.filter(p=>p.outcome==='published').length,idle}});
+  const identity={checked:0,skipped:0,failed:0};for(const x of extractions)if(x.identity){identity.checked+=x.identity.checked;identity.skipped+=x.identity.skipped;identity.failed+=x.identity.failed;}
+  return {batchId,status,counts,errors,extractions,auto,promote,identity,idle};
  }catch(e){
   // infrastructure failure outside an extraction: close the receipt so no running batch dangles, then rethrow
   errors.push({code:'unknown',message:errMsg(e)});

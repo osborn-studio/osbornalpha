@@ -86,7 +86,8 @@ export function buildSeedPages(facts:readonly SeedFact[],meta:{contentSha256:str
   const lines:LayoutLine[]=[];let pos=0;
   texts.forEach((text,index)=>{const n=cpLength(text);const y=800-index*20;lines.push({index,y,x0:50,x1:500,text,char_start:pos,char_end:pos+n,items:[{text,x0:50,x1:500,y,h:10,char_start:pos,char_end:pos+n}]});pos+=n+1;});
   const span=(li:number,from=0,to?:number):Span=>({page_no,start:lines[li].char_start+from,end:to===undefined?lines[li].char_end:lines[li].char_start+to});
-  out.title.set(s,span(1));out.unit.set(s,span(3));out.header.set(s,span(4,0,cpLength(year)));
+  out.title.set(s,{page_no,start:lines[1].char_start,end:lines[2].char_end});   // title line + period phrase: one range (the period replay reads both)
+  out.unit.set(s,span(3));out.header.set(s,span(4,0,cpLength(year)));
   rows.forEach((f,k)=>{
    const li=5+k;const n=cpLength(labelOf(f));const extra=f.cents?3:0;   // （仙）
    out.label.set(naturalKeyOf(f),span(li,0,n));out.value.set(naturalKeyOf(f),span(li,n+extra+1));

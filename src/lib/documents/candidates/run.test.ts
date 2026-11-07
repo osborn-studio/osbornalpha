@@ -37,7 +37,7 @@ describe('runDocumentsCandidates — candidates phase',()=>{
   expect(r.errors).toContainEqual(expect.objectContaining({code:'label_ambiguous',key:ex.extractionId}));
   const cands=h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId);
   expect(cands).toHaveLength(6);
-  expect(cands.every(c=>c.status==='candidate'&&c.checks_passed&&c.checks.length===8)).toBe(true);
+  expect(cands.every(c=>c.status==='candidate'&&c.checks_passed&&c.checks.length===9)).toBe(true);
   expect((await h.docs.extractionById(ex.extractionId))!.candidates_status).toBe('done');
   const cites=h.docs.citations().filter(c=>c.extraction_id===ex.extractionId);
   expect(cites.length).toBe(6*5);                                         // value, label, unit, statement title, column header
@@ -188,7 +188,7 @@ describe('runDocumentsCandidates — auto phase',()=>{
  it('without an approval row nothing is decided (owner decision C default)',async()=>{
   const h=hkHarness();await pending(h);
   const r=await run(h);
-  expect(r.auto).toEqual({considered:6,decided:0,stopped:null});
+  expect(r.auto).toEqual({considered:0,decided:0,stopped:null});   // no approval: candidates are not even paged
   expect(h.docs.candidates().every(c=>c.status==='candidate')).toBe(true);
  });
  it('decides exactly the approved concepts when all three versions equal the extraction row; the next run decides nothing more',async()=>{
@@ -250,5 +250,100 @@ describe('runDocumentsCandidates — promote phase',()=>{
   expect(r.counts).toMatchObject({fetched:1,inserted:1});
   const again=await run(h,{phases:['promote']});
   expect(again.promote).toEqual([]);expect(again.idle).toBe(true);
+ });
+ it('closes the hook of facts.hk items accepted through the generic dq route',async()=>{
+  const h=hkHarness();
+  await h.tables.insert('dq_quarantine',{id:'q-hk',dataset:'facts.hk',table_name:'financial_facts',natural_key:'k',reason_code:'identity_bs',status:'resolved_accept',payload:{},
+   detail:{hook:{stage:'materialize',state:'failed',at:'x',message:'no_target'}},batch_id:'b',resolved_by:ADMIN,resolved_at:'2026-11-05T00:00:00.000Z',created_at:'2026-11-05T00:00:00.000Z'});
+  const r=await run(h,{phases:['promote']});
+  expect(r.errors).toContainEqual({code:'skipped_summary',key:'facts.hk:hooks',message:JSON.stringify({hk_no_metrics:1})});
+  expect((h.tables.rows('dq_quarantine').find(q=>q.id==='q-hk')!.detail as {hook:{state:string;message:string}}).hook).toMatchObject({state:'done',message:'hk_no_metrics'});
+ });
+});
+
+describe('Task 15 fix: identity scope, findings order, race, auto budget, comparison order',()=>{
+ const approval=(h:HkHarness,over:Record<string,unknown>={})=>h.docs.insertApproval({extractor_ref:HK_EXTRACTOR_REF,extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:CODE,
+  concepts:['revenue','gross_profit'],gold_sha256:'a'.repeat(64),precision:'0.97',recall:'0.96',report_path:'docs/audits/2026-11-06-document-pipeline/eval-hk-facts.json',approved_by:ADMIN,...over});
+ const bad=FY25.map(f=>f.concept==='gross_profit'?{...f,value:'4000000'}:f);
+ it('regeneration after a reviewer rejected one member still fails the column (identity over the complete set) and rewrites only undecided rows',async()=>{
+  const h=hkHarness();const ex=await pending(h,bad);await run(h);
+  const cost=h.docs.candidates().find(c=>(c.payload as FinancialFactPayload).concept==='cost_of_revenue')!;
+  await h.docs.decideCandidate(cost.candidate_id,{kind:'human',decided_by:ADMIN,status:'rejected'});
+  const before=JSON.stringify((await h.docs.candidateById(cost.candidate_id))!.checks);
+  await h.docs.requestCandidatesRegen({document_id:ex.document.document_id},ADMIN);
+  const r=await run(h);
+  expect(r.extractions[0]).toMatchObject({outcome:'done',written:5});
+  const is=h.docs.candidates().filter(c=>statementOf(c)==='IS'&&c.status==='candidate');
+  expect(is).toHaveLength(2);expect(is.every(c=>!c.checks_passed)).toBe(true);
+  expect(JSON.stringify((await h.docs.candidateById(cost.candidate_id))!.checks)).toBe(before);
+ });
+ it('findings are parked before the checks commit: a failure while writing checks leaves the item and no decision-eligible candidate',async()=>{
+  const h=hkHarness();const ex=await pending(h,bad);
+  const deps=candidatesDepsOf(h);
+  const r=await run(h,{},{...deps,db:{...deps.db,writeCandidateChecks:async()=>{throw new Error('boom');}}});
+  expect(r.extractions[0]).toMatchObject({outcome:'failed',code:'candidates_error'});
+  expect(h.tables.rows('dq_quarantine').map(q=>q.reason_code)).toEqual(['hk_identity_gp']);
+  expect(h.docs.candidates().filter(c=>c.extraction_id===ex.extractionId).some(c=>c.checks_passed)).toBe(false);
+ });
+ it('recovery: a decided row whose finding is missing gets it recreated without its checks being rewritten',async()=>{
+  const h=hkHarness();const ex=await pending(h,bad);await run(h);
+  const gp=h.docs.candidates().find(c=>(c.payload as FinancialFactPayload).concept==='gross_profit')!;
+  await h.docs.decideCandidate(gp.candidate_id,{kind:'human',decided_by:ADMIN,status:'rejected'});
+  for(const row of h.tables.rows('dq_quarantine'))await h.tables.update('dq_quarantine',{id:row.id as string},{natural_key:'orphaned'});
+  const before=JSON.stringify((await h.docs.candidateById(gp.candidate_id))!.checks);
+  await h.docs.requestCandidatesRegen({document_id:ex.document.document_id},ADMIN);
+  await run(h);
+  expect(h.tables.rows('dq_quarantine').filter(q=>q.reason_code==='hk_identity_gp'&&q.natural_key!=='orphaned')).toHaveLength(1);
+  expect(JSON.stringify((await h.docs.candidateById(gp.candidate_id))!.checks)).toBe(before);
+ });
+ it('a decided race in writeCandidateChecks is re-read and retried once',async()=>{
+  const h=hkHarness();const ex=await pending(h);
+  const deps=candidatesDepsOf(h);let calls=0;
+  const r=await run(h,{},{...deps,db:{...deps.db,writeCandidateChecks:async(e:string,b:string,rows:Parameters<typeof deps.db.writeCandidateChecks>[2])=>{
+   calls++;if(calls===1)throw new DocumentsDbError('decided');return deps.db.writeCandidateChecks(e,b,rows);}}});
+  expect(calls).toBe(2);expect(r.extractions[0]).toMatchObject({outcome:'done',written:6});expect(ex.extractionId).toBeTruthy();
+ });
+ it('a lone-input identity is skipped, non-blocking, and counted in the receipt and an info code',async()=>{
+  const h=hkHarness();await pending(h,[FY25[0]]);
+  const r=await run(h);
+  expect(r.identity).toEqual({checked:0,skipped:1,failed:0});
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'skipped_summary',message:JSON.stringify({identity_skipped:1})}));
+  expect(h.docs.candidates().every(c=>c.checks_passed)).toBe(true);
+ });
+ it('the as-of day of the reads is the Hong Kong date',async()=>{
+  const h=hkHarness({now:'2026-11-05T17:00:00.000Z'});await pending(h);
+  const seen:string[]=[];const deps=candidatesDepsOf(h);
+  await run(h,{},{...deps,port:{...deps.port,readFacts:async(i:string,o:Parameters<typeof deps.port.readFacts>[1])=>{seen.push(String(o.asOf));return deps.port.readFacts(i,o);}}});
+  expect(seen).toEqual(['2026-11-06']);
+ });
+ it('auto: no approval means no candidate paging; comparison versions are never decided; an exhausted budget stops with deadline_hit',async()=>{
+  const h=hkHarness();await pending(h);await run(h);
+  let paged=0;const deps=candidatesDepsOf(h);
+  const counting={...deps,db:{...deps.db,candidatesOf:async(...a:Parameters<typeof deps.db.candidatesOf>)=>{paged++;return deps.db.candidatesOf(...a);}}};
+  await run(h,{phases:['auto']},counting);expect(paged).toBe(0);
+  await approval(h);
+  const late=await run(h,{phases:['auto']},{...deps,deadline:new Date(h.now().getTime()+10_000)});
+  expect(late.auto.stopped).toBe('deadline_hit');
+  expect(late.errors).toContainEqual(expect.objectContaining({code:'deadline_hit'}));
+  expect(h.docs.candidates().every(c=>c.status==='candidate')).toBe(true);
+  // an English (comparison) version with approved concepts and passing checks stays undecided
+  const g=hkHarness();
+  const en=await seedHkExtraction(g,{sourceRef:'2026032500201_e',language:'en',facts:[FY25[0]]});seeded.set(en.extractionId,en);
+  await run(g);await approval(g);
+  const r=await run(g,{phases:['auto']});
+  expect(r.auto.decided).toBe(0);expect(g.docs.candidates().every(c=>c.status==='candidate')).toBe(true);
+ });
+ it('zh↔en comparison does not depend on processing order: the English side parks the mismatch when it arrives after the Chinese side',async()=>{
+  const h=hkHarness();
+  const zh=await pending(h,[FY25[0]],'2026032500301_c');await run(h);
+  expect(h.tables.rows('dq_quarantine')).toEqual([]);
+  const en=await seedHkExtraction(h,{sourceRef:'2026032500302_e',language:'en',facts:[{...FY25[0],value:'6256001'}]});seeded.set(en.extractionId,en);
+  const r=await run(h);
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'en_zh_mismatch',key:en.extractionId}));
+  const items=h.tables.rows('dq_quarantine');
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({reason_code:'hk_en_zh_mismatch'});
+  expect(items[0].natural_key).toBe(`${zh.document.document_id}:${zh.extractionId}:${naturalKeyOf(FY25[0])}`);
+  await run(h);expect(h.tables.rows('dq_quarantine')).toHaveLength(1);   // idempotent
  });
 });
