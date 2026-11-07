@@ -9,11 +9,14 @@ import {memoryJudgmentsDb} from './memory-judgments-db';
 import {bindingReferenced,produce} from './produce';
 import type {ProduceDeps} from './produce';
 import type {CategoricalClaim,Input,JudgmentsDb,Methodology,WorkItem} from './types';
-import {FIXTURE_ASOF,FIXTURE_RESOLVERS,fixtureInputsDb,fixtureRegimeMethod} from './testing/fixture-methods';
+import {JudgmentError} from './errors';
+import {memoryJudgmentInputsDb} from './inputs-db';
+import {fixtureMacroReadApi} from './macro-api';
+import {FIXTURE_ASOF,FIXTURE_MACRO,FIXTURE_RESOLVERS,fixtureInputsDb,fixtureRegimeMethod} from './testing/fixture-methods';
 import {batchTables,spyRegister,syncTestMethod,withSubjects} from './testing/db-helpers';
 
 const BATCH='00000000-0000-4000-8000-00000000b101';
-const item=(snapshot_id:string,asOf=FIXTURE_ASOF):WorkItem=>({subject:{type:'macro_region',key:'US'},asOf,binding:{snapshot_id}});
+const item=(snapshot_id:string,asOf=FIXTURE_ASOF):Omit<WorkItem,'observedAt'>=>({subject:{type:'macro_region',key:'US'},asOf,binding:{snapshot_id}});
 async function setup(mk:(t:TableClient)=>JudgmentsDb=t=>withSubjects(memoryJudgmentsDb({tables:t})),methods:Methodology[]=[fixtureRegimeMethod]){
  const tables=await batchTables(BATCH);const db=mk(tables);
  for(const m of methods)await syncTestMethod(db,m);
@@ -90,5 +93,37 @@ describe('produce (spec §6.4)',()=>{
   expect(r.counts).toMatchObject({fetched:1,inserted:1});
   expect(r.items.map(i=>i.status)).toEqual(['inserted','skipped','skipped']);
   expect(r.errors).toEqual([{code:'deadline_hit',message:'2 work items not processed'}]);
+ });
+ it('observedAt: produce sets it once per item from db.serverTime() (overriding a caller value); bindingInputs uses it',async()=>{
+  const seen:string[]=[];const NOW='2026-11-06T01:02:03.004Z';
+  const spyM:Methodology<CategoricalClaim>={...fixtureRegimeMethod,id:'fixture_observed',gather:async(w,db)=>{seen.push(w.observedAt);return fixtureRegimeMethod.gather(w,db);}};
+  const {deps}=await setup(t=>{const d=withSubjects(memoryJudgmentsDb({tables:t}));return new Proxy(d,{get:(x,k,r)=>k==='serverTime'?async()=>NOW:Reflect.get(x,k,r)});},[spyM]);
+  await produce(spyM,[{...item('s-a'),observedAt:'bogus'} as never],deps);
+  expect(seen).toEqual([NOW]);
+ });
+ it('R-02: a transient failure while building the binding input fails the item; it is never an empty-input registration',async()=>{
+  const abstainsLate:Methodology<CategoricalClaim>={...fixtureRegimeMethod,id:'fixture_abstains_transient',gather:async()=>({abstained:true,reason:'observation_missing'})};
+  const {deps,db}=await setup(undefined,[abstainsLate]);
+  const flaky=memoryJudgmentInputsDb({macro:{...fixtureMacroReadApi(FIXTURE_MACRO),snapshot:async()=>{throw new JudgmentError('macro_unavailable','boom');}}});
+  const r=await produce(abstainsLate,[item('s-a')],{...deps,inputsDb:flaky});
+  expect(r.counts).toMatchObject({fetched:1,inserted:0,failed:1});expect(r.items[0]).toMatchObject({status:'failed',code:'macro_unavailable'});
+  expect(await db.judgmentsBySnapshot('s-a')).toEqual([]);
+  const down=new Proxy(deps.db,{get:(x,k,rc)=>k==='serverTime'?async()=>{throw new Error('db down');}:Reflect.get(x,k,rc)});
+  const r2=await produce(abstainsLate,[item('s-a')],{...deps,db:down});
+  expect(r2.counts).toMatchObject({fetched:1,inserted:0,failed:1});
+ });
+ it('R-04: dry-run reports nothing as written: inserted / duplicates stay 0, planned items, no abstained_summary',async()=>{
+  const {deps,db}=await setup();
+  const r=await produce(fixtureRegimeMethod,[item('s-a'),item('s-none')],{...deps,dryRun:true});
+  expect(r.counts).toMatchObject({inserted:0,duplicates:0,quarantined:0,failed:0});
+  expect(r.items.map(i=>i.status)).toEqual(['planned_insert','planned_abstain']);
+  expect(r.errors.map(e=>e.code)).not.toContain('abstained_summary');
+  expect(await db.getJudgment(r.items[0].judgment_id!)).toBeNull();
+ });
+ it('R-05: quarantined counts only a written quarantine row; an upstream idempotency_conflict from gather is a failure',async()=>{
+  const {deps,tables}=await setup();
+  const upstream:Methodology<CategoricalClaim>={...fixtureRegimeMethod,gather:async()=>{throw new JudgmentError('idempotency_conflict','from elsewhere');}};
+  const r=await produce(upstream,[item('s-a')],deps);
+  expect(r.counts).toMatchObject({quarantined:0,failed:1});expect(r.items[0].status).toBe('failed');expect(tables.rows('dq_quarantine')).toHaveLength(0);
  });
 });

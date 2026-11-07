@@ -18,9 +18,9 @@ import type {TableClient} from '@/lib/db/table-client';
 import {quarantine} from '@/lib/dq/quarantine';
 import type {Abstained,Active,CategoricalClaim,Claim,Condition,Horizon,Input,IntervalClaim,JudgmentInputsDb,JudgmentInsert,JudgmentRow,JudgmentsDb,Kind,LabelPolicy,Methodology,ProducerRef,PublicSubjectType,Resolver,ResolverName,Subject,Target} from './types';
 import {PUBLIC_INPUT_KINDS,PUBLIC_PRODUCER_KINDS,PUBLIC_RESOLVERS,PUBLIC_SUBJECT_TYPES} from './types';
-import {canonicalize,inputsHash} from './canonical';
+import {canonicalize,inputsHash,jsonClean} from './canonical';
 import {JudgmentError} from './errors';
-import {judgmentIdOf,producerNonceOf,validateClaim,validateHorizon,validateSubject} from './contract';
+import {isAbstained,judgmentIdOf,producerNonceOf,validateClaim,validateHorizon,validateSubject} from './contract';
 import {inputLabel,rebuildAndCompare,sortInputs} from './inputs';
 import type {BuildOptions} from './inputs';
 import {originKnown} from './origins';
@@ -29,9 +29,9 @@ import {endOfUtcDay} from './time';
 
 export type ResolverLookup=(name:ResolverName)=>Pick<Resolver,'name'|'version'|'validateParams'|'labelAvailableAt'>|null;
 export interface RegisterActor{actor:'cron'|'script'|'admin'|'test';dryRun?:boolean}
-export interface RegisterInput{methodology:Methodology;subject:Subject;asOf:string;producerRef:ProducerRef;inputs:Input[];outcome:Active<Claim>|Abstained;condition:Condition|null;target:Target|null;codeVersion:string;batchId:string}
+export interface RegisterInput{binding?:Record<string,string>;methodology:Methodology;subject:Subject;asOf:string;producerRef:ProducerRef;inputs:Input[];outcome:Active<Claim>|Abstained;condition:Condition|null;target:Target|null;codeVersion:string;batchId:string}
 export interface RegisterDeps{db:JudgmentsDb;inputsDb:JudgmentInputsDb;tables:TableClient;resolverOf:ResolverLookup;build?:BuildOptions}
-export interface RegisterResult{judgment_id:string;duplicate:boolean;abstained:boolean;dry_run:boolean;row:JudgmentInsert;registered_at:string|null;retrospective:boolean|null}
+export interface RegisterResult{judgment_id:string;duplicate:boolean;abstained:boolean;dry_run:boolean;row:JudgmentInsert;registered_at:string|null;retrospective:boolean|null;quarantined:boolean}
 export const PAYLOAD_FIELDS=['judgment_id','subject_type','subject_key','judgment_type','methodology_id','methodology_version','kind','producer_kind','producer_ref','producer_nonce','as_of','inputs','inputs_hash','abstained','abstain_reason','claim','condition','horizon','target','label_policy','settle_after','settle_by'] as const satisfies readonly (keyof JudgmentRow)[];
 export function normalizedPayload(row:Partial<JudgmentRow>|JudgmentInsert):Record<string,unknown>{
  const r=row as Record<string,unknown>;
@@ -57,6 +57,8 @@ function checkPredicate(kind:Kind,claim:Claim,c:Condition):void{
 }
 interface Semantic{claim:Claim|null;condition:Condition|null;horizon:Horizon|null;target:Target|null;label_policy:LabelPolicy|null;settle_after:string|null;settle_by:string|null;abstain_reason:string|null}
 
+/** idempotency_conflict; `quarantined` says whether a dq_quarantine row was written (not in dry runs). */
+export class IdempotencyConflict extends JudgmentError{constructor(message:string,public readonly quarantined:boolean){super('idempotency_conflict',message);}}
 export async function registerJudgment(actor:RegisterActor,input:RegisterInput,deps:RegisterDeps):Promise<RegisterResult>{
  const m=input.methodology;const {db}=deps;const s=input.subject;
  if(typeof input.codeVersion!=='string'||input.codeVersion.length<7||input.codeVersion.length>64)throw new JudgmentError('code_version_missing');
@@ -94,7 +96,13 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
   if(r.status==='input_not_public')throw new JudgmentError('input_not_public',`${inputLabel(x)}: ${r.code}`);
  }
  // 5. outcome
- const o=input.outcome;let sem:Semantic;let labelAvailableAt:string|null=null;
+ let o:Active<Claim>|Abstained=jsonClean(input.outcome);let sem:Semantic;let labelAvailableAt:string|null=null;
+ // R-01: the target is recomputed from the frozen inputs, never trusted from the caller (spec §6.2 step 2).
+ let recomputed:Target|null=null;
+ if(!o.abstained){
+  const tr=await m.resolveTarget({subject:s,asOf:input.asOf,observedAt,...(input.binding?{binding:input.binding}:{})},inputs,deps.inputsDb);
+  if(isAbstained(tr))o={abstained:true,reason:tr.reason,...(tr.missing?{missing:tr.missing}:{})};else recomputed=tr;
+ }
  if(o.abstained){
   if(!str(o.reason))throw new JudgmentError('invalid_claim','abstained without a reason');
   sem={claim:null,condition:null,horizon:null,target:null,label_policy:null,settle_after:null,settle_by:null,abstain_reason:o.reason};
@@ -103,7 +111,7 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
   validateClaim(m.kind,o.claim);
   validateHorizon(m.horizon);
   if(canonicalize(mrow.horizon)!==canonicalize(m.horizon))throw new JudgmentError('methodology_unavailable','horizon differs from the synced row');
-  const c=input.condition,t=input.target;
+  const c=input.condition===null?null:jsonClean(input.condition),t=input.target;
   if(!c)throw new JudgmentError('invalid_condition','missing condition');
   if(!t)throw new JudgmentError('invalid_condition','missing target');
   if(!(PUBLIC_RESOLVERS as readonly string[]).includes(c.resolver))throw new JudgmentError('invalid_condition',`resolver ${c.resolver} is not public`);
@@ -111,6 +119,7 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
   if(!res)throw new JudgmentError('invalid_condition',`no resolver ${c.resolver}`);
   if(!res.validateParams(c.params))throw new JudgmentError('invalid_condition',`params rejected by ${c.resolver}@${res.version}`);
   checkPredicate(m.kind,o.claim,c);
+  if(canonicalize(jsonClean(t))!==canonicalize(recomputed))throw new JudgmentError('invalid_condition','target differs from the one recomputed from the inputs');
   if(!targetConsistent(t,m.horizon,input.asOf,inputs))throw new JudgmentError('invalid_condition','target does not match the horizon');
   const label_policy=labelPolicyOf(m.params);
   const w=settleWindow(t,m.horizon,m.params);
@@ -120,20 +129,20 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
  // 6. identity and duplicate / conflict
  const inputs_hash=inputsHash(inputs);
  const judgment_id=judgmentIdOf({subject_type:s.type,subject_key:s.key,judgment_type:m.judgment_type,methodology_id:m.id,methodology_version:m.version,as_of:input.asOf,inputs_hash,producer_nonce});
- const row:JudgmentInsert={judgment_id,subject_type:s.type as PublicSubjectType,subject_key:s.key,judgment_type:m.judgment_type,methodology_id:m.id,methodology_version:m.version,kind:m.kind,producer_kind:m.producer_kind as 'rule'|'model',
-  producer_ref:input.producerRef,producer_nonce,as_of:input.asOf,inputs,inputs_hash,abstained:o.abstained,...sem,code_version:input.codeVersion,batch_id:input.batchId,retrospective_hint:{label_available_at:labelAvailableAt}};
+ const row:JudgmentInsert=jsonClean({judgment_id,subject_type:s.type as PublicSubjectType,subject_key:s.key,judgment_type:m.judgment_type,methodology_id:m.id,methodology_version:m.version,kind:m.kind,producer_kind:m.producer_kind as 'rule'|'model',
+  producer_ref:input.producerRef,producer_nonce,as_of:input.asOf,inputs,inputs_hash,abstained:o.abstained,...sem,code_version:input.codeVersion,batch_id:input.batchId,retrospective_hint:{label_available_at:labelAvailableAt}} as JudgmentInsert);
  const dry=!!actor.dryRun;
  const settle=async(existing:JudgmentRow):Promise<RegisterResult>=>{
-  if(samePayload(existing,row))return {judgment_id,duplicate:true,abstained:row.abstained,dry_run:dry,row,registered_at:existing.registered_at,retrospective:existing.retrospective};
+  if(samePayload(existing,row))return {judgment_id,duplicate:true,abstained:row.abstained,dry_run:dry,row,registered_at:existing.registered_at,retrospective:existing.retrospective,quarantined:false};
   if(!dry)await quarantine(deps.tables,{dataset:'judgments',table:'judgments',naturalKey:judgment_id,reasonCode:'idempotency_conflict',batchId:input.batchId,payload:{registered:normalizedPayload(existing),attempted:normalizedPayload(row)}});
-  throw new JudgmentError('idempotency_conflict',`${judgment_id}: same id, different payload`);
+  throw new IdempotencyConflict(`${judgment_id}: same id, different payload`,!dry);
  };
  const existing=await db.getJudgment(judgment_id);
  if(existing)return settle(existing);
- if(dry)return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:true,row,registered_at:null,retrospective:null};
+ if(dry)return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:true,row,registered_at:null,retrospective:null,quarantined:false};
  try{
   const r=await db.registerJudgment(row,row.abstained?null:{settle_after:row.settle_after!,settle_by:row.settle_by!,label_policy:row.label_policy!});
-  return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:false,row,registered_at:r.registered_at,retrospective:r.retrospective};
+  return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:false,row,registered_at:r.registered_at,retrospective:r.retrospective,quarantined:false};
  }catch(e){
   if(!isUniqueViolation(e))throw e;
   const winner=await db.getJudgment(judgment_id);

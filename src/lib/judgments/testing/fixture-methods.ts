@@ -16,8 +16,6 @@ import type {ResolverLookup} from '../register';
 import {defaultResolveTarget} from '../target';
 
 export const FIXTURE_ASOF='2026-10-16';
-// Methodology.gather has no observation instant (WorkItem carries none); macro inputs ignore it, so the fixture uses the wall clock.
-const observedNow=()=>new Date().toISOString();
 const REGIMES:Regime[]=['recovery','overheat','stagflation','recession'];
 const obs=(series_id:string,vintage_id:string,value:number,available_at:string)=>({observation_id:observationIdOf({series_id,period_end:'2026-09-30',vintage_id}),series_id,period_end:'2026-09-30',vintage_id,value,unit:'pct',available_at});
 const PMI=obs('us_ism_pmi','v1',49.1,'2026-10-01T14:00:00.000Z');
@@ -44,14 +42,14 @@ export const fixtureRegimeMethod:Methodology<CategoricalClaim>={
  async gather(item,db){
   const id=item.binding?.snapshot_id;
   if(!id)return {abstained:true,reason:'binding_missing',missing:['snapshot_id']};
-  const s=await buildOrAbstain({kind:'macro_snapshot',ref:{snapshot_id:id}},db,item.asOf,observedNow());
+  const s=await buildOrAbstain({kind:'macro_snapshot',ref:{snapshot_id:id}},db,item.asOf,item.observedAt);
   if('abstained' in s)return s;
   if(s.kind!=='macro_snapshot')throw new Error('fixture_regime: unexpected input kind');
   const out:Input[]=[s];
   for(const oid of s.snapshot.observation_ids){
    const o=await db.macro.observation(oid);
    if(!o)return {abstained:true,reason:'input_not_public',missing:[oid]};
-   out.push(await buildInput({kind:'macro_observation',ref:{series_id:o.series_id,period_end:o.period_end,vintage_id:o.vintage_id}},db,item.asOf,observedNow()));
+   out.push(await buildInput({kind:'macro_observation',ref:{series_id:o.series_id,period_end:o.period_end,vintage_id:o.vintage_id}},db,item.asOf,item.observedAt));
   }
   return out;
  },

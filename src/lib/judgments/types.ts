@@ -203,7 +203,11 @@ export interface JudgmentInputsDb{
 
 // ── methodology module (spec §4.1) ──
 export type Active<C extends Claim>={abstained:false;claim:C};
-export interface WorkItem{subject:Subject;asOf:string;binding?:Record<string,string>}
+export interface WorkItem{
+ subject:Subject;asOf:string;binding?:Record<string,string>;
+ /** DB server time at which produce() observes inputs; set by produce from db.serverTime(); methods pass it to buildOrAbstain/buildInput. */
+ observedAt:string;
+}
 export interface Methodology<C extends Claim=Claim>{
  id:string;version:string;judgment_type:JudgmentType;kind:Kind;producer_kind:ProducerKind;
  subject_types:SubjectType[];markets?:PriceMarket[];input_kinds:InputKind[];

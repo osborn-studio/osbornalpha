@@ -16,6 +16,7 @@ import {REGISTRY} from './registry';
 import {nonceOf,normalizedPayload,registerJudgment,samePayload} from './register';
 import type {RegisterDeps,RegisterInput} from './register';
 import type {CategoricalClaim,Condition,Input,JudgmentInsert,JudgmentsDb,Methodology,Subject,Target} from './types';
+import type {ResolverLookup} from './register';
 import {FIXTURE_ASOF,FIXTURE_RESOLVERS,fixtureInputsDb,fixtureModelMethod,fixtureRegimeMethod} from './testing/fixture-methods';
 import {batchTables,spyRegister,syncTestMethod,withSubjects} from './testing/db-helpers';
 
@@ -31,7 +32,7 @@ async function setup(o:{db?:(t:TableClient)=>JudgmentsDb}={}){
  return {db,tables,deps};
 }
 async function evaluated(m:Methodology<CategoricalClaim>,snapshotId:string,asOf=FIXTURE_ASOF){
- const db=fixtureInputsDb();const item={subject:US,asOf,binding:{snapshot_id:snapshotId}};
+ const db=fixtureInputsDb();const item={subject:US,asOf,observedAt:new Date().toISOString(),binding:{snapshot_id:snapshotId}};
  const g=await m.gather(item,db);if(!Array.isArray(g))throw new Error(`gather abstained: ${g.reason}`);
  const target=await m.resolveTarget(item,g,db);if('abstained' in target)throw new Error('target abstained');
  const out=m.compute(US,g);if(out.abstained)throw new Error('compute abstained');
@@ -164,6 +165,54 @@ describe('registerJudgment: gates (spec §6.2, §13)',()=>{
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,e,{condition:null}),deps))).toBe('invalid_condition');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,e),{...deps,resolverOf:()=>null}))).toBe('invalid_condition');
   expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,e),{...deps,resolverOf:n=>({...FIXTURE_RESOLVERS(n)!,validateParams:()=>false})}))).toBe('invalid_condition');
+ });
+});
+
+describe('registerJudgment: review round 1 (R-01, R-03, retrospective hint)',()=>{
+ const ISSUER:Subject={type:'issuer',key:'00000000-0000-4000-8000-0000000000aa'};
+ const fiscalTarget=(anchor:string):Target=>({kind:'fiscal_period',period_end:'2026-12-31',calendar:{anchor_period_end:anchor,months:3},extrapolated:false});
+ const fiscal=(recomputed:Target|'abstain'):Methodology<CategoricalClaim>=>({...fixtureRegimeMethod,id:'fixture_fiscal',subject_types:['issuer'],horizon:{unit:'fiscal_quarters',n:1},
+  resolveTarget:async()=>recomputed==='abstain'?{abstained:true,reason:'target_unresolvable',missing:['published_filing']}:recomputed});
+ it('R-01: a submitted target that differs from the recomputed one (invented fiscal calendar) → invalid_condition',async()=>{
+  const m=fiscal(fiscalTarget('2026-09-30'));const {deps}=await setup();await syncTestMethod(deps.db,m);
+  const e=await evaluated(fixtureRegimeMethod,'s-a');
+  expect(await code(registerJudgment(ACTOR,req(m,e,{subject:ISSUER,target:fiscalTarget('2026-06-30')}),deps))).toBe('invalid_condition');
+  expect(await code(registerJudgment(ACTOR,req(m,e,{subject:ISSUER,target:fiscalTarget('2026-09-30')}),deps))).toBe('ok');
+ });
+ it('R-01: resolveTarget abstaining at registration → registered as abstained target_unresolvable, no queue row',async()=>{
+  const m=fiscal('abstain');const {deps}=await setup();await syncTestMethod(deps.db,m);
+  const e=await evaluated(fixtureRegimeMethod,'s-a');
+  const r=await registerJudgment(ACTOR,req(m,e,{subject:ISSUER,target:fiscalTarget('2026-06-30')}),deps);
+  expect(r.abstained).toBe(true);
+  expect(await deps.db.getJudgment(r.judgment_id)).toMatchObject({abstained:true,abstain_reason:'target_unresolvable',claim:null,condition:null,target:null,settle_after:null});
+  expect(await deps.db.queueRow(r.judgment_id)).toBeNull();
+ });
+ it('R-03: margin_pp:undefined is an omission, never a throw; it differs from a registered margin_pp (conflict + quarantine); an identical claim is a duplicate',async()=>{
+  const {deps,tables}=await setup();const e=await evaluated(fixtureRegimeMethod,'s-a');
+  const a=await registerJudgment(ACTOR,req(fixtureRegimeMethod,e),deps);
+  expect((e.outcome.claim as CategoricalClaim).margin_pp).toBeDefined();
+  const omitted:Awaited<ReturnType<typeof evaluated>>={...e,outcome:{abstained:false,claim:{...e.outcome.claim,margin_pp:undefined}}};
+  expect(await code(registerJudgment(ACTOR,req(fixtureRegimeMethod,omitted),deps))).toBe('idempotency_conflict');
+  expect(tables.rows('dq_quarantine')).toHaveLength(1);
+  expect(await registerJudgment(ACTOR,req(fixtureRegimeMethod,{...e,outcome:{abstained:false,claim:{...e.outcome.claim}}}),deps)).toMatchObject({duplicate:true,judgment_id:a.judgment_id});
+  // a first registration with the undefined member stores the omission
+  const b=await setup();
+  const first=await registerJudgment(ACTOR,req(fixtureRegimeMethod,omitted),b.deps);
+  expect(first.duplicate).toBe(false);
+  expect(Object.keys((await b.deps.db.getJudgment(first.judgment_id))!.claim as object)).not.toContain('margin_pp');
+  expect(await registerJudgment(ACTOR,req(fixtureRegimeMethod,omitted),b.deps)).toMatchObject({duplicate:true});
+ });
+ it('retrospective: RegisterResult carries the db verdict and a resolver labelAvailableAt reaches retrospective_hint',async()=>{
+  const {deps}=await setup();const e=await evaluated(fixtureRegimeMethod,'s-a');
+  const label='2026-01-02T00:00:00.000Z';
+  const resolverOf:ResolverLookup=n=>({...FIXTURE_RESOLVERS(n)!,labelAvailableAt:()=>label});
+  const r=await registerJudgment(ACTOR,req(fixtureRegimeMethod,e),{...deps,resolverOf});
+  expect(r.row.retrospective_hint).toEqual({label_available_at:label});
+  expect(r.retrospective).toBe(true);
+  expect(r.retrospective).toBe((await deps.db.getJudgment(r.judgment_id))!.retrospective);
+  const fresh=await setup();
+  const none=await registerJudgment({actor:'test',dryRun:true},req(fixtureRegimeMethod,e),fresh.deps);
+  expect(none.row.retrospective_hint).toEqual({label_available_at:null});expect(none.retrospective).toBeNull();
  });
 });
 

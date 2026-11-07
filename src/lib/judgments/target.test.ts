@@ -16,12 +16,12 @@ const I='00000000-0000-4000-8000-0000000000f1';
 describe('defaultResolveTarget (spec §3.4)',()=>{
  const empty=memoryJudgmentInputsDb();
  it('session_index from the latest price_bar input; no bar → target_unresolvable',async()=>{
-  const item={subject:{type:'issuer' as const,key:I},asOf:'2024-06-12'};
+  const item={subject:{type:'issuer' as const,key:I},asOf:'2024-06-12',observedAt:'2024-06-13T00:00:00.000Z'};
   expect(await defaultResolveTarget(H('trading_sessions',5),item,[bar('2024-06-10'),bar('2024-06-12')],empty)).toEqual({kind:'session_index',base_date:'2024-06-12',n:5});
   expect(await defaultResolveTarget(H('trading_sessions',5),item,[],empty)).toEqual({abstained:true,reason:'target_unresolvable',missing:['price_bar']});
  });
  it('date = as_of + n days (leap day); period = month(as_of) + n, n = 0 is the as_of month',async()=>{
-  const item={subject:{type:'macro_region' as const,key:'US'},asOf:'2024-02-28'};
+  const item={subject:{type:'macro_region' as const,key:'US'},asOf:'2024-02-28',observedAt:'2024-03-01T00:00:00.000Z'};
   expect(await defaultResolveTarget(H('calendar_days',1),item,[],empty)).toEqual({kind:'date',date:'2024-02-29'});
   expect(await defaultResolveTarget(H('calendar_months',3),{...item,asOf:'2024-11-15'},[],empty)).toEqual({kind:'period',period:'2025-02'});
   expect(await defaultResolveTarget(H('calendar_months',0),{...item,asOf:'2024-11-15'},[],empty)).toEqual({kind:'period',period:'2024-11'});
@@ -37,13 +37,13 @@ describe('defaultResolveTarget (spec §3.4)',()=>{
   await tables.insert('stocks_universe',{ticker:'XYZ',name:'XYZ',market:'US'});
   await tables.insert('issuer_securities',{issuer_id:I,ticker:'XYZ',valid_from:'2000-01-01',valid_to:null,is_primary:true});
   const db=memoryJudgmentInputsDb({facts,tables});
-  const item={subject:{type:'issuer' as const,key:I},asOf:'2024-07-20'};
+  const item={subject:{type:'issuer' as const,key:I},asOf:'2024-07-20',observedAt:'2024-07-21T00:00:00.000Z'};
   expect(await defaultResolveTarget(H('fiscal_quarters',1),item,[],db)).toEqual({kind:'fiscal_period',period_end:'2024-09-30',calendar:{anchor_period_end:'2024-03-31',months:3},extrapolated:true});
   expect(await defaultResolveTarget(H('fiscal_quarters',3),item,[],db)).toMatchObject({period_end:'2025-03-31',calendar:{anchor_period_end:'2024-03-31',months:3}});
   expect(await defaultResolveTarget(H('fiscal_quarters',1),{...item,asOf:'2024-08-02'},[],db)).toMatchObject({period_end:'2024-09-30',calendar:{anchor_period_end:'2024-06-30',months:3}});
   expect(await defaultResolveTarget(H('fiscal_quarters',1),{...item,asOf:'2024-01-15'},[],db)).toEqual({abstained:true,reason:'target_unresolvable',missing:['published_filing']});
-  expect(await defaultResolveTarget(H('fiscal_quarters',1),{subject:{type:'macro_region',key:'US'},asOf:'2024-07-20'},[],db)).toMatchObject({reason:'target_unresolvable',missing:['issuer_subject']});
-  expect(await defaultResolveTarget(H('fiscal_quarters',1),{subject:{type:'issuer',key:'00000000-0000-4000-8000-0000000000f9'},asOf:'2024-07-20'},[],db)).toMatchObject({missing:['facts_market']});
+  expect(await defaultResolveTarget(H('fiscal_quarters',1),{subject:{type:'macro_region',key:'US'},asOf:'2024-07-20',observedAt:'2024-07-21T00:00:00.000Z'},[],db)).toMatchObject({reason:'target_unresolvable',missing:['issuer_subject']});
+  expect(await defaultResolveTarget(H('fiscal_quarters',1),{subject:{type:'issuer',key:'00000000-0000-4000-8000-0000000000f9'},asOf:'2024-07-20',observedAt:'2024-07-21T00:00:00.000Z'},[],db)).toMatchObject({missing:['facts_market']});
  });
  it('stepQuarter keeps month ends on month ends and clamps other days; nthQuarterEndAfter counts strictly after as_of',()=>{
   expect(stepQuarter('2023-11-30',1)).toBe('2024-02-29');

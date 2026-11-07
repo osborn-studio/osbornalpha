@@ -119,3 +119,12 @@
 - M-01：`formula-hash.ts` 对闭包内任一文件的非字面量 `import(expr)` / `require(expr)` 抛 `nonliteral_import:<file>`（TS AST 扫描）。M-02：`.d.ts` 排在解析顺序最后，不遮蔽 `.js/.mjs/.ts/.tsx`；`.js` 说明符也可解析到 `.tsx`；可执行文件的同名 `.d.ts` 一并入闭包。
 - M-03：`validateMethodology` 以规范化绝对路径比较，`licenses.json` 出现在闭包或 deps → `licenses_in_closure`（deps 另保留 `licenses_in_deps`）。M-04：结果行将为 publishable 时即核对许可；已发布方法的许可不再全部 confirmed → 计划置 `publishable=false`，原因 `license_withdrawn`，不静默保留。
 - M-05：`invalid_horizon`（单位须为四种之一，n 为有限整数且 ≥1；`calendar_months` 允许 0，因 `defaultResolveTarget` 以 n=0 表示 as_of 当月）。
+
+## Task 10 review fixes (Codex R-01..R-05)
+- 契约偏差（指挥官决定）：`types.ts` 的 `WorkItem` 新增必填 `observedAt`（DB 服务器时间，由 `produce()` 每项从 `db.serverTime()` 设置并覆盖调用方的值）；方法 `gather` 必须把 `item.observedAt` 作为第 4 参数传给 `buildOrAbstain` / `buildInput`（Task 13、19 的 gather 同）。`produce` 的工作项类型为 `ProduceWork = Omit<WorkItem,'observedAt'>`。`target.test.ts` 的 WorkItem 字面量补了 `observedAt`（仅测试）。
+- R-01：`registerJudgment` 在登记时用方法的 `resolveTarget` 重算目标，与提交的目标深度相等，否则 `invalid_condition`；重算弃权 → 以 `target_unresolvable` 弃权登记（保留输入）。`RegisterInput.binding?` 透传。
+- R-02：`bindingInputs` 只有 `buildOrAbstain` 的弃权结果得到 `inputs=[]`，其余错误（含 serverTime 失败）冒泡为该项失败。
+- R-03：登记前对 outcome / condition / row 做 `jsonClean`，`margin_pp:undefined` 等同省略，比较永不抛。
+- R-04：dry-run 不计 inserted / duplicates，项状态 `planned_insert` / `planned_abstain`，`ProduceResult.planned`；`abstained_summary` 只计已落库的弃权。
+- R-05：`IdempotencyConflict`（带 `quarantined` 标志）；仅真正写了隔离行才计 `quarantined`，上游 gather 抛出的 `idempotency_conflict` 计 failed。`RegisterResult.quarantined` 恒为 false（冲突走抛出）。
+- 备注：`db.test.ts`「calibrationCohortInternal paging…」偶发失败（Task 4 内存 db，与本任务无关，重跑通过）。
