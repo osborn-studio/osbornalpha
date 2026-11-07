@@ -3,8 +3,7 @@ import type {AnyCard} from '@/components/judgments/view-model';
 import type {JudgmentsListResponse,WireCard} from '@/components/judgments/api-types';
 import {visiblePercent} from '@/components/judgments/view-model';
 import type {Bilingual,CalibrationState,Horizon,InputKind,Origin,Realized,Subject,Target} from '@/lib/judgments/types';
-import {validateSubject} from '@/lib/judgments/contract';
-import {JUDGMENT_TYPES} from '@/lib/judgments/route-utils';
+import {JUDGMENT_TYPES,UUID_RE} from '@/lib/judgments/wire';
 
 export type JudgmentCardDto=AnyCard;
 export type JudgmentsCheck={ok:true;cards:JudgmentCardDto[]}|{ok:false;reason:'view_mismatch'|'asof_mismatch'|'post_cutoff'|'malformed'};
@@ -42,7 +41,7 @@ const CARD_KEYS={judgment_id:true,subject:true,judgment_type:true,kind:true,life
 const ENVELOPE_KEYS={codeVersion:true,subject:true,view:true,asOf:true,cards:true} satisfies Record<keyof JudgmentsListResponse,true>;
 const CALIBRATION={insufficient:true,failed:true,calibrated:true,evaluated:true,self_assessed:true} satisfies Record<CalibrationState,true>;
 const INPUT_KINDS={financial_fact:true,financial_metric:true,macro_observation:true,macro_snapshot:true,price_bar:true,table_rows:true,judgment:true,legacy_fill:true,document_span:true} satisfies Record<InputKind,true>;
-const validSubject=(v:unknown)=>{if(!keys(v,SUBJECT_KEYS)||v.type!=='issuer')return false;try{validateSubject(v);return true;}catch{return false;}};
+const validSubject=(v:unknown)=>keys(v,SUBJECT_KEYS)&&v.type==='issuer'&&str(v.key)&&UUID_RE.test(v.key);
 export const safeHref=(v:unknown):v is string=>str(v)&&(/^\/(?!\/)/.test(v)||/^https:\/\//i.test(v));
 const target=(v:unknown):boolean=>{
  if(!obj(v))return false;
