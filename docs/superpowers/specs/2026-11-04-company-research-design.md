@@ -765,9 +765,11 @@ interface JudgmentCard {
 | §8 TabBar | 高亮改为路径段前缀（`/intel` 不匹配 `/intelligence`） | `startsWith` 的更严格形式 |
 | §12.3 环境 | e2e 用本机 Supabase 栈 + `scripts/company/e2e-seed.ts` 回放美股夹具；报告附 PR、复审者复跑（决策 I 默认） | `test:db` 的裸 PostgreSQL 无 PostgREST/GoTrue |
 | §12.3 第 6 条 | 断言无 K 线、无行情行（决策 J 默认） | 规格原文是批准例外时的断言 |
+| §1.1 / §12.3 #3 | FY2023 revenue 的 “latest is seq 2” 仅对 2024-11-01 至 2025-10-31 前的 asOf 成立；第二请求固定 `asOf=2025-06-30`，seq 2、非修订 | 录制夹具另含 2025-10-31 第三次披露；今日为 seq 3 |
+| §5.4 / §12.3 #3–4 回放估值 | “hidden in replay” 指保留估值 section，以“回放模式下不运行估值模型”提示替换 DcfStudio；无 asOf 时显示模型 | e2e 在 metrics 页签分别验证回放提示和当前模型 |
+| §6 合并发行人读取 | statements / drawer / overview / packet 仍读单一发行人，不并入合并前身事实；metrics proxy 已按 lineage 读取 | 已知缺口（实施日志“合并 main 后的兼容”）；补齐需要 lineage 版同快照读函数与新迁移 |
 | §12.3 第 11 条 | 直接写 `NEXT_LOCALE=en` cookie，不驱动设置页 | 设置页 DOM 不在本模块范围 |
-| §12.0 / §0 #72 | 夹具清单五条期望值保持 `pending`，测试与 e2e 跳过并列出；"6×2×6"矩阵未宣称通过 | 期望值必须人工抄录 |
-
+| §12.0 / §0 #72 | 夹具清单三条期望值保持 `pending`，测试与 e2e 跳过并列出；"6×2×6"矩阵未宣称通过 | 期望值必须人工抄录；删除无消费者的 `aapl-recent-10-filings` / `aapl-revenue-fy2023-current`，保留四个夹具、三条期望 |
 | §4.6 / §0.1 证据写入 | 新增第三份已锁迁移 `20261112092000_company_evidence_fence.sql`，`replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 五参、尝试与版本围栏 | Task 2 Codex 挑战：证据替换无尝试/版本围栏，旧尝试可能覆盖新证据 |
 | §0 #64 事件权限 | `issuer_events` 仅 service_role 可读；公共读经事件证据门槛 | 原始 payload 带财务值，不能绕过门槛 |
 | §0.1 同快照内存读 | 前后 rev 一致才返回，最多五次重试 | Task 3 挑战：并发发布可能混合状态 |

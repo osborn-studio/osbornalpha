@@ -11,6 +11,10 @@ test.skip(
   process.env.E2E_COMPANY !== '1' || !process.env.E2E_EMAIL || !process.env.E2E_PASSWORD,
   'company e2e needs E2E_COMPANY=1, E2E_EMAIL, E2E_PASSWORD and the seeded local database',
 );
+test.skip(({ baseURL }) => {
+  try { return !['localhost', '127.0.0.1'].includes(new URL(baseURL ?? '').hostname); }
+  catch { return true; }
+}, 'company e2e mutates data and requires a localhost/127.0.0.1 base URL');
 test.describe.configure({ mode: 'serial' });
 test.use({ screenshot: 'on', trace: 'on' });
 
@@ -50,24 +54,30 @@ test('2 statements: revenue row; a cell opens the disclosure drawer by keyboard'
   await expect(drawer).toBeVisible();
   await expect(drawer.getByTestId('drawer-available-date').first()).toHaveText(/\d{4}-\d{2}-\d{2}/);
   await expect(drawer.locator('a[href*="sec.gov"]').first()).toBeVisible();
-  await expect(drawer.getByTestId('drawer-transform-chain')).toBeVisible();
-  await expect(drawer.getByTestId('drawer-code-version').first()).not.toBeEmpty();
+  await expect(drawer.getByTestId('drawer-transform-chain').first()).toBeVisible();
+  await expect(drawer.getByTestId('drawer-code-version').first()).toHaveText(/^[0-9a-f]{7,40}$/);
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(cell).toBeFocused();
 });
 
-test('3 replay asOf=2024-06-30: replay bar, disclosureSeq 1, valuation hidden; latest is seq 2', async ({ page }) => {
+test('3 replay asOf=2024-06-30: replay bar, disclosureSeq 1, valuation callout; asOf=2025-06-30 is seq 2', async ({ page }) => {
   const resp = page.waitForResponse((r) => r.url().includes('/api/companies/AAPL/statements') && r.url().includes('statement=IS') && r.url().includes('asOf=2024-06-30'));
   await page.goto('/stock/AAPL?view=statements&asOf=2024-06-30');
   await expect(page.getByTestId('replay-bar')).toContainText('2024-06-30');
-  const replay = cellOf(await (await resp).json() as Grid, 'revenue', PERIOD);
+  const response = await resp;
+  expect(response.ok()).toBe(true);
+  const replay = cellOf(await response.json() as Grid, 'revenue', PERIOD);
   expect(replay).toMatchObject({ kind: 'fact', availableDate: '2023-11-03', disclosureSeq: 1 });
   const gold = readyExpectation('aapl-revenue-fy2023-replay');
   if (gold) expect(replay?.value).toBe((gold.expected as { value: string }).value);
   else test.info().annotations.push({ type: 'pending', description: 'aapl-revenue-fy2023-replay: value not transcribed yet (spec §0 #72)' });
-  await expect(page.getByTestId('valuation-section')).toHaveCount(0);
-  const latest = await page.request.get('/api/companies/AAPL/statements?statement=IS&basis=annual');
+  await page.goto('/stock/AAPL?view=metrics&asOf=2024-06-30');
+  const valuation = page.getByTestId('valuation-section');
+  await expect(valuation).toBeVisible();
+  await expect(valuation.getByText('回放模式下不运行估值模型', { exact: true })).toBeVisible();
+  await expect(valuation.getByTestId('dcf-studio')).toHaveCount(0);
+  const latest = await page.request.get('/api/companies/AAPL/statements?statement=IS&basis=annual&asOf=2025-06-30');
   expect(latest.ok()).toBe(true);
   expect(cellOf(await latest.json() as Grid, 'revenue', PERIOD)).toMatchObject({ kind: 'fact', disclosureSeq: 2, isRevision: false });
 });
@@ -75,7 +85,11 @@ test('3 replay asOf=2024-06-30: replay bar, disclosureSeq 1, valuation hidden; l
 test('4 metrics: gross_margin row; formula drawer shows the formula version', async ({ page }) => {
   const resp = page.waitForResponse((r) => r.url().includes('/api/companies/AAPL/metrics'));
   await page.goto('/stock/AAPL?view=metrics');
-  const body = await (await resp).json() as { formulaVersion?: string; metrics?: { formulaVersion?: string }[] };
+  const response = await resp;
+  expect(response.ok()).toBe(true);
+  const body = await response.json() as { formulaVersion?: string; metrics?: { formulaVersion?: string }[] };
+  await expect(page.getByTestId('valuation-section')).toBeVisible();
+  await expect(page.getByTestId('valuation-section').getByTestId('dcf-studio')).toBeVisible();
   const version = body.formulaVersion ?? body.metrics?.[0]?.formulaVersion;
   expect(version).toBeTruthy();
   const row = page.getByTestId('metric-row-gross_margin');
@@ -95,7 +109,7 @@ test('6 overview: no K-line and no quote row (decision J default)', async ({ pag
   await page.goto('/stock/AAPL?view=overview');
   await expect(page.getByTestId('company-header')).toBeVisible();
   await expect(page.getByTestId('kline-chart')).toHaveCount(0);
-  await expect(page.getByTestId('quote-row')).toHaveCount(0);
+  await expect(page.getByTestId('company-header').getByText('行情行与 K 线暂不显示（行情链路尚无回放契约）', { exact: true })).toBeVisible();
 });
 
 test('7 HK issuer: F3 missing-state copy, no proxy numbers', async ({ page }) => {

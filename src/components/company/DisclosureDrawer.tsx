@@ -132,7 +132,7 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, scaleExp, onClose }: {
           <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[640px] text-xs">
               <thead className="text-left text-[var(--text-dim)]">
-                <tr><th className="py-1.5 pr-2">{t('colAvailable')}</th><th className="pr-2">{t('colFiling')}</th><th className="pr-2 text-right">{t('colValue')}</th><th className="pr-2 text-right">{t('colRevision')}</th><th className="pr-2" data-testid="drawer-transform-chain">{t('colTransforms')}</th><th>{t('colCode')}</th></tr>
+                <tr><th className="py-1.5 pr-2">{t('colAvailable')}</th><th className="pr-2">{t('colFiling')}</th><th className="pr-2 text-right">{t('colValue')}</th><th className="pr-2 text-right">{t('colRevision')}</th><th className="pr-2">{t('colTransforms')}</th><th>{t('colCode')}</th></tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
@@ -141,7 +141,7 @@ function SeriesDrawer({ ticker, asOf, admin, seriesKey, scaleExp, onClose }: {
                     <td className="pr-2">{filingCell(r)}</td>
                     <td className="num pr-2 text-right">{valueCell(r)}</td>
                     <td className="num pr-2 text-right"><RevisionText r={r} /></td>
-                    <td className="pr-2 text-[11px] text-[var(--text-dim)]">{transforms(r, exp)}</td>
+                    <td data-testid="drawer-transform-chain" className="pr-2 text-[11px] text-[var(--text-dim)]">{transforms(r, exp)}</td>
                     <td className="num text-[var(--text-dim)]" data-testid="drawer-code-version">{r.codeVersion ?? '—'}</td>
                   </tr>
                 ))}

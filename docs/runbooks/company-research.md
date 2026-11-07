@@ -18,7 +18,7 @@
 origin/main 已有迁移至 `20261114090000_macro_workbench.sql`。三份 company 迁移编号较旧但已经锁定，保持原编号并按文件顺序应用，不重编号、不修改锁定字节。
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
-2. 按文件名顺序应用：先 `20261112090000_company_research.sql`，再 `20261112091000_company_research_functions.sql`，再 `20261112092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`（计划第 4 轮审计 S1）；已锁定在 `supabase/migrations.lock.json`，任何修改都要新迁移。
+2. 按文件名顺序应用：先 `20261112090000_company_research.sql`，再 `20261112091000_company_research_functions.sql`，再 `20261112092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；已锁定在 `supabase/migrations.lock.json`，任何修改都要新迁移。
 3. 核对：`select proname from pg_proc where proname like 'company_%' or proname in ('begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','replace_company_fact_evidence');` 列出全部函数；`select has_table_privilege('anon','public.issuer_events','select');` 为 `false`。
 
 ## 3. 首轮物化（owner，合并后）
@@ -73,6 +73,7 @@ node --import tsx scripts/company/e2e-seed.ts --apply
 npx playwright test e2e/company.spec.ts --reporter=list,html
 ```
 
+- e2e 整套仅在 base URL 主机为 `localhost` / `127.0.0.1` 时运行，否则跳过（会修改跟踪数据）。
 - 种子脚本只接受本机 Supabase URL；夹具账号是本机测试值，不进仓库。
 - 种子：AAPL、MSFT（美股夹具回放）、腾讯（仅 HK 证券，用于 F3 空状态）；物化与 digest 全量；清空夹具账号的 watch。可重复运行；禁用可选的实时 SEC acceptance enrichment，回放只读录制的 companyfacts。
 - 若 `supabase db reset` 因 `config.toml` 的 `major_version` 失败：本机临时改为 17，不提交。
@@ -110,7 +111,7 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 | 决策 J 公司页行情行与 K 线 | 移除 |
 | 决策 K 分数凯利 | `k = 0.25`，无星级 |
 | Tushare 原始快照再分发 | 仅 admin |
-| 夹具清单人工抄录（`src/lib/company/fixtures/manifest.json` 五条 pending） | 待抄录；抄录人不得是实施者 |
+| 夹具清单人工抄录（`src/lib/company/fixtures/manifest.json` 三条 pending） | 待抄录；抄录人不得是实施者 |
 | 事件黄金集 `docs/audits/2026-11-04-company-research/events-gold.md` | 待抄录 |
 | 专家抽样 `expert-sampling.md`（AAPL、600519.SH、000333.SZ 五处口径） | 待安排 |
 | 回归对照 `regression-sample.md`（信息性） | 目录上线后 |
@@ -133,4 +134,4 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 
 ## 12. 本次验证范围（2026-11-06）
 
-Task 19 按 owner 指令只跑定向单测、typecheck、lint；本机 Supabase、种子实跑、Playwright、全量 npm test、test:db、test:migrations 由指挥执行。本手册的命令是复跑说明，不代表已执行。四个夹具哈希已核对，五条期望保持 pending；不得宣称黄金矩阵通过。
+Task 19 按 owner 指令只跑定向单测、typecheck、lint；本机 Supabase、种子实跑、Playwright、全量 npm test、test:db、test:migrations 由指挥执行。本手册的命令是复跑说明，不代表已执行。四个夹具哈希已核对，三条期望保持 pending；不得宣称黄金矩阵通过。

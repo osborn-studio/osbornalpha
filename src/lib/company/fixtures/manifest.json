@@ -52,7 +52,8 @@
         "disclosureSeq": 1,
         "latest": {
           "disclosureSeq": 2,
-          "isRevision": false
+          "isRevision": false,
+          "asOf": "2025-06-30"
         }
       },
       "source": {
@@ -107,49 +108,6 @@
         "transcribed_at": null
       },
       "notes": "spec §14 replay matrix; may only be claimed as passed once every cell is transcribed (spec §0 #72). expected.cells = 72 × {query, concept, periodKey, value, unit, availableDate, disclosureSeq, isRevision}; consumed by e2e test 'gold: 6 issuers × 2 periods × 6 concepts'"
-    },
-    {
-      "id": "aapl-revenue-fy2023-current",
-      "kind": "statement_cell",
-      "status": "pending",
-      "expected": {
-        "value": "pending"
-      },
-      "source": {
-        "document": "Apple Inc. Form 10-K FY2024 comparative column",
-        "page_or_row": "pending",
-        "url": "pending",
-        "transcribed_by": "pending",
-        "transcribed_at": null
-      },
-      "query": {
-        "ticker": "AAPL",
-        "statement": "IS",
-        "basis": "annual",
-        "asOf": null,
-        "periodKey": "2022-09-25:2023-09-30:12M",
-        "concept": "revenue"
-      }
-    },
-    {
-      "id": "aapl-recent-10-filings",
-      "kind": "filing_published_list",
-      "status": "pending",
-      "expected": {
-        "filings": "pending"
-      },
-      "source": {
-        "document": "EDGAR filing index for CIK 0000320193 (accession, form, filed)",
-        "page_or_row": "pending",
-        "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193&type=10-&dateb=&owner=include&count=40",
-        "transcribed_by": "pending",
-        "transcribed_at": null
-      },
-      "query": {
-        "ticker": "AAPL",
-        "fixture": "edgar-aapl-trimmed",
-        "count": 10
-      }
     }
   ]
 }

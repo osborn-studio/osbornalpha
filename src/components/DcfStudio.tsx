@@ -80,7 +80,7 @@ export function DcfStudio({ ticker, asOf = null, onOpenFact }: { ticker: string;
     : <a key={id} href={`/api/facts/${encodeURIComponent(ticker)}?factIds=${id}`} target="_blank" rel="noreferrer" className="text-[11px] text-accent underline">{t('factLink', { n: i + 1 })}</a>;
 
   return (
-    <div className="space-y-3 border-t border-border pt-3">
+    <div data-testid="dcf-studio" className="space-y-3 border-t border-border pt-3">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-text-dim">{t('modelHeading')}</div>
         {loading && <span className="text-xs text-text-dim">{t('calculating')}</span>}
