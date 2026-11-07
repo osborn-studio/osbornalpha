@@ -436,14 +436,14 @@ Part A 串行：Task 1 → 2 → 3。Task 1 只落迁移与数据库测试（不
 Notes for the implementer:
 - 规格 §4.4（第 5 稿）是唯一依据：六表、八个 `security definer` RPC（`macro_put_manifest`、`macro_publish_review`、`macro_record_review_attempt`、`macro_claim_explanation`、`macro_record_completion`、`macro_finish_explanation`、`macro_mark_finalized`、`macro_expire_explanations`）。另有一个**内部**辅助函数 `macro_explanation_projection(uuid)`（三个 RPC 共用的投影 JSON），它对 `public, anon, authenticated, service_role` 全部 revoke，不是 RPC。
 - 迁移不引用 P1 / F4 的表（无外键出模块）；模块内的外键（结果 → 清单、指针 → 结果、运行 / 投影 → 清单）保留。`user_id` 不加 `auth.users` 外键。
-- RPC 用 `raise exception '<code>'` 抛错（SQLSTATE P0001，message 恰为代码）：`not_found`、`payload_conflict`、`invalid_transition`、`invalid_status`。表约束违例是 23514。
+- RPC 用 `raise exception '<code>'` 抛错（SQLSTATE P0001，message 恰为代码）：`not_found`、`payload_conflict`、`invalid_transition`、`invalid_status`、`invalid_argument`（`macro_publish_review` 的期望代际为 null）、`cutoff_mismatch`（`p_cutoff` 与已存清单的 `cutoff` 列不等）。表约束违例是 23514。
 - 改运行行的 RPC（认领、完成登记、终态、结算标记、过期）都先 `select … for update` 锁该行再读状态（计划审计 #1）：过期的认领不会覆盖并发提交的终态。集成测试用"一个连接开事务先执行 A、另一连接执行 B 必须等锁、提交后看 B 的结果"验证两种先后。
-- 结算持久化（计划审计 #6–#8）：`finalize_payload jsonb`（`status ∈ completed/failed` 的对象）由 `macro_record_completion` 在提供方返回后、校验 / 终态之前写入（`running` 或 `abandoned` 行；同值重复 = 无操作；已有不同值或其他状态 → `invalid_transition`）；`macro_mark_finalized` 只要求已登记载荷（任何状态，含 finish 失败仍为 `running` 的行与 `abandoned` 行）；未结算索引按 `finalize_payload is not null and finalized = false`。
+- 结算持久化（计划审计 #6–#8）：`finalize_payload jsonb`（`status ∈ completed/failed` 的对象）由 `macro_record_completion` 在提供方返回后、校验 / 终态之前写入（只限 `running` 或 `abandoned` 行——**先**检查状态，终态行即使存的值相同也 → `invalid_transition`（Codex #5）；同值重复 = 无操作；已有不同值 → `invalid_transition`）；CHECK 写成 `(…) is true`，缺失或 JSON null 的 `status` / `kind` 一律 23514（Codex #4）；`running` 行上已登记完成时，`macro_finish_explanation` 只接受与已登记 `raw_output` 相同（含 null）的输出，否则 `invalid_transition`，已登记的包络不被改写（Codex #1）；`macro_mark_finalized` 只要求已登记载荷（任何状态，含 finish 失败仍为 `running` 的行与 `abandoned` 行）；未结算索引按 `finalize_payload is not null and finalized = false`。
 - `macro_finish_explanation` 多一个参数 `p_finalize_payload jsonb`（计划审计 R2-2）：行上 `finalize_payload` 为空时在同一事务内写入（running、abandoned 与幂等重放三个分支都如此），已有值绝不覆盖；`macro_record_completion` 失败而 finish 成功时，结算载荷因此仍落库，之后的恢复按它结算。
 - 已登记完成不放弃（计划审计 R2-1）：认领 RPC 的 5 分钟放弃与 `macro_expire_explanations` 都跳过 `raw_output is not null` 的 `running` 行（提供方已返回、原始输出已持久化），这些行由服务端的完成恢复（Task 11 `recoverExplanation`）只凭已存输出 finish。
 - `macro_expire_explanations(p_user_id)`（计划审计 #14）：把该用户 `claimed_at` 早于 5 分钟且未登记完成的 `running` 行改 `abandoned`、投影 `failed {abandoned}`，返回条数；`GET /explanations` 读之前调用。
 - "超过 5 分钟放弃"用 `now()` 判定；测试通过把 `claimed_at` 往回挪（`update … set claimed_at = claimed_at - make_interval(mins => n)`，测试连接是超级用户）使它可测，RPC 签名不加时钟参数。
-- `macro_publish_review` 里 `stale` 是返回值：函数正常返回、事务提交、尝试日志落一行 `stale`。指针不存在 = 代际 0。判定顺序固定：①指针已指向该结果 → `replayed`（无论期望代际）；②代际不等 → `stale`；③`p_cutoff` 早于当前 `cutoff` → `stale`；④前移。
+- `macro_publish_review` 里 `stale` 是返回值：函数正常返回、事务提交、尝试日志落一行 `stale`。指针不存在 = 代际 0。前置校验：期望代际为 null → `invalid_argument`；清单（id + hash + kind=review）不存在 → `not_found`；`p_cutoff` 不等于该清单的 `cutoff` → `cutoff_mismatch`（RPC 签名不变，参数仍传，但必须等于清单的冻结截止；指针的 `cutoff` 因而总是其证据的截止）。判定顺序固定：①指针已指向该结果 → `replayed`（无论期望代际）；②代际 `is distinct from` 期望 → `stale`；③`p_cutoff` 早于当前 `cutoff` → `stale`；④前移。
 - 本地 harness 的 `auth.uid()` 读 `request.jwt.claim.sub`；测试以 `set local role authenticated` + `set_config('request.jwt.claim.sub', …, true)` 模拟登录用户。
 - 测试数据不清理（`test:db` 每次新建库）；每个用例用自己的月份（随机年份起的连续月份）与随机 uuid，复跑同一个库也不冲突。
 
@@ -462,7 +462,9 @@ Create `src/lib/macro/strategy/strategy.integration.test.ts`（Task 3 会在文�
 // claim never overwrites a concurrent finish), macro_record_completion (durable raw output + finalize payload),
 // macro_finish_explanation (idempotent, invalid_transition, late_output, stores a missing finalize payload, never
 // overwrites one), macro_mark_finalized (needs a recorded payload, any state) and macro_expire_explanations; a running row
-// with a recorded completion is never abandoned (claim and expire skip it). Rows are never cleaned up: test:db creates a fresh database per run, and
+// with a recorded completion is never abandoned (claim and expire skip it); publish rejects a cutoff that differs from the manifest's and a
+// null expected generation; record_completion rejects terminal rows; finish cannot replace a recorded output; JSON-null/missing status and kind are
+// rejected by the CHECKs. Rows are never cleaned up: test:db creates a fresh database per run, and
 // every case uses its own month or random user / request ids.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -525,8 +527,8 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  const put=(kind:string,hash:string,body:Record<string,unknown>=manifestBody(kind),cutoff='3000-01-31T23:59:59Z')=>
   one(`select public.macro_put_manifest($1,$2::jsonb,$3,$4,'mv','code','cv') v`,[kind,JSON.stringify(body),hash,cutoff]) as Promise<string>;
  const newHash=()=>randomUUID().replace(/-/g,'').padEnd(64,'0');
- const reviewManifest=async()=>{const h=newHash();return {id:await put('review',h),hash:h};};
- const publish=(region:string,month:string,expected:number,m:{id:string;hash:string},cutoff='3000-01-31T23:59:59Z')=>
+ const reviewManifest=async(cutoff='3000-01-31T23:59:59Z')=>{const h=newHash();return {id:await put('review',h,manifestBody('review'),cutoff),hash:h,cutoff};};
+ const publish=(region:string,month:string,expected:number|null,m:{id:string;hash:string;cutoff?:string},cutoff=m.cutoff??'3000-01-31T23:59:59Z')=>
   one(`select public.macro_publish_review($1,$2,$3,$4,'ok',$5,$6,$7::jsonb,'macro-review/1','code') v`,[region,month,expected,cutoff,m.id,m.hash,JSON.stringify({region,month})]) as Promise<{result_id:string;generation:number;outcome:string}>;
  const pointer=async(region:string,month:string)=>(await q(`select result_id,generation::int generation,cutoff from public.macro_review_current where region=$1 and month=$2`,[region,month]))[0]??null;
  const attempts=async(region:string,month:string)=>(await q(`select status,result_id from public.macro_review_attempts where region=$1 and month=$2 order by created_at,attempt_id`,[region,month]));
@@ -630,15 +632,15 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  });
 
  it('macro_publish_review: replayed before stale; A→B→A moves the pointer back to the same A row; stale generation; older cutoff',async()=>{
-  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest(),C=await reviewManifest();
+  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest(),C=await reviewManifest('3000-01-30T00:00:00Z'),D=await reviewManifest('3000-02-01T00:00:00Z');
   const a1=await publish('US',month,0,A);expect(a1.outcome).toBe('advanced');
   expect(await publish('US',month,0,A)).toEqual({result_id:a1.result_id,generation:1,outcome:'replayed'});    // expected 0 is stale, but the pointer already is A
   expect(await publish('US',month,7,A)).toEqual({result_id:a1.result_id,generation:1,outcome:'replayed'});
   const b0=await publish('US',month,0,B);expect(b0).toMatchObject({generation:1,outcome:'stale'});
   const b1=await publish('US',month,1,B);expect(b1).toEqual({result_id:b0.result_id,generation:2,outcome:'advanced'});
   const a3=await publish('US',month,2,A);expect(a3).toEqual({result_id:a1.result_id,generation:3,outcome:'advanced'});
-  expect(await publish('US',month,3,C,'3000-01-30T00:00:00Z')).toMatchObject({generation:3,outcome:'stale'});   // older cutoff never advances
-  const c4=await publish('US',month,3,C,'3000-02-01T00:00:00Z');expect(c4).toMatchObject({generation:4,outcome:'advanced'});
+  expect(await publish('US',month,3,C)).toMatchObject({generation:3,outcome:'stale'});   // older cutoff never advances
+  const c4=await publish('US',month,3,D);expect(c4).toMatchObject({generation:4,outcome:'advanced'});
   expect(await pointer('US',month)).toMatchObject({result_id:c4.result_id,generation:4});
   expect(new Date((await pointer('US',month)).cutoff).toISOString()).toBe('3000-02-01T00:00:00.000Z');
   expect((await attempts('US',month)).map(r=>r.status)).toEqual(['ok','replayed','replayed','stale','ok','ok','stale','ok']);
@@ -652,7 +654,7 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await fails(publish('US',month,0,T))).toMatchObject({message:'not_found'});
   expect(await fails(publish('JP',month,0,A))).toMatchObject({code:'23514'});
   expect(await fails(publish('US','3000-13',0,A))).toMatchObject({code:'23514'});
-  expect(await fails(one(`select public.macro_publish_review('US',$1,0,now(),'great',$2,$3,'{}'::jsonb,'m','c') v`,[month,A.id,A.hash]))).toMatchObject({code:'23514'});
+  expect(await fails(one(`select public.macro_publish_review('US',$1,0,$4,'great',$2,$3,'{}'::jsonb,'m','c') v`,[month,A.id,A.hash,A.cutoff]))).toMatchObject({code:'23514'});
   expect(await attempts('US',month)).toEqual([]);   // a failed call rolls back with its attempt row
  });
 
@@ -827,8 +829,63 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await run(other.c.explanation_id)).toMatchObject({state:'running'});
   expect(await expire(user)).toBe(0);
  });
-});
 
+ it('macro_publish_review: p_cutoff must equal the stored manifest cutoff → cutoff_mismatch; an older manifest cannot advance with a newer argument',async()=>{
+  const month=freshMonth();const NEW=await reviewManifest('3000-02-01T00:00:00Z'),OLD=await reviewManifest('3000-01-30T00:00:00Z');
+  const n1=await publish('US',month,0,NEW);expect(n1).toMatchObject({generation:1,outcome:'advanced'});
+  expect(await fails(publish('US',month,1,OLD,'3000-03-01T00:00:00Z'))).toMatchObject({message:'cutoff_mismatch'});   // newer argument for an older manifest
+  expect(await fails(publish('US',month,1,NEW,'3000-01-01T00:00:00Z'))).toMatchObject({message:'cutoff_mismatch'});   // even a replay must carry the manifest cutoff
+  expect(await publish('US',month,1,OLD)).toMatchObject({generation:1,outcome:'stale'});   // its own cutoff is older than the pointer's
+  expect(await pointer('US',month)).toMatchObject({result_id:n1.result_id,generation:1});
+  expect(new Date((await pointer('US',month)).cutoff).toISOString()).toBe('3000-02-01T00:00:00.000Z');
+ });
+
+ it('macro_publish_review: a null expected generation is invalid_argument (absent and existing pointer); nothing is stored or logged',async()=>{
+  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest('3000-02-01T00:00:00Z');
+  expect(await fails(publish('US',month,null,A))).toMatchObject({message:'invalid_argument'});
+  expect(await pointer('US',month)).toBeNull();
+  const a1=await publish('US',month,0,A);expect(a1.outcome).toBe('advanced');
+  expect(await fails(publish('US',month,null,B))).toMatchObject({message:'invalid_argument'});
+  expect(await pointer('US',month)).toMatchObject({result_id:a1.result_id,generation:1});
+  expect(await one(`select count(*)::int v from public.macro_review_results where region='US' and month=$1`,[month])).toBe(1);
+  expect((await attempts('US',month)).map(r=>r.status)).toEqual(['ok']);
+ });
+
+ it('macro_record_completion: a terminal row is invalid_transition even when the stored values match',async()=>{
+  for(const state of ['accepted','rejected','failed'] as const){
+   const {c}=await newClaim();
+   await record(c.explanation_id,{content:state});
+   await finish(c.explanation_id,state,{content:state},{rendered:state==='accepted'?RENDERED:undefined,codes:state==='accepted'?[]:['x']});
+   expect(await fails(record(c.explanation_id,{content:state}))).toMatchObject({message:'invalid_transition'});   // same raw output + same payload
+  }
+  const ab=await newClaim();await age(ab.c.explanation_id,6);await expire(ab.a.user);await record(ab.c.explanation_id,null);
+  await record(ab.c.explanation_id,null);   // abandoned rows still accept the idempotent repeat
+ });
+
+ it('macro_finish_explanation: a finish whose output differs from the recorded completion is invalid_transition and keeps the recorded envelope',async()=>{
+  const {c}=await newClaim();await record(c.explanation_id,{content:'A'});
+  expect(await fails(finish(c.explanation_id,'accepted',{content:'B'},{rendered:RENDERED}))).toMatchObject({message:'invalid_transition'});
+  expect(await fails(one(FINISH_SQL,[c.explanation_id,'accepted',null,null,[],'{"tokens":1}',null]))).toMatchObject({message:'invalid_transition'});   // SQL NULL output
+  expect(await run(c.explanation_id)).toMatchObject({state:'running',raw_output:{content:'A'},finalize_payload:PAYLOAD});
+  expect(await finish(c.explanation_id,'accepted',{content:'A'},{rendered:RENDERED})).toMatchObject({state:'accepted'});
+  const t=await newClaim();await record(t.c.explanation_id,null,{...PAYLOAD,status:'failed'});   // provider threw: recorded without output
+  expect(await fails(finish(t.c.explanation_id,'failed',{content:'B'},{codes:['x']}))).toMatchObject({message:'invalid_transition'});
+  expect(await run(t.c.explanation_id)).toMatchObject({state:'running',finalize_payload:{status:'failed'}});
+ });
+
+ it('constraints: a settlement payload needs status completed/failed present and non-null; a manifest body needs its kind',async()=>{
+  const {c}=await newClaim();
+  for(const bad of [{},{status:null},{status:'pending'},[]]){
+   expect(await fails(record(c.explanation_id,null,bad))).toMatchObject({code:'23514'});
+   expect(await fails(finish(c.explanation_id,'failed',null,{codes:['x'],payload:bad}))).toMatchObject({code:'23514'});
+  }
+  expect(await run(c.explanation_id)).toMatchObject({state:'running',finalize_payload:null});
+  expect(await fails(one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]))).toMatchObject({message:'invalid_transition'});
+  const {kind:_k,...noKind}=manifestBody('transmission');
+  expect(await fails(put('transmission',newHash(),noKind))).toMatchObject({code:'23514'});
+  expect(await fails(put('transmission',newHash(),{...noKind,kind:null as unknown as string}))).toMatchObject({code:'23514'});
+ });
+});
 ```
 
 - [ ] **Step 2: Run it against an empty database and confirm it fails**
@@ -854,7 +911,7 @@ main();
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: FAIL — 19 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
+Expected: FAIL — 24 tests fail: the first with `expected [] to deeply equal [ 'macro_explanation_runs', … ]` (tables absent), the rest with `function public.macro_put_manifest(…) does not exist` / `relation "public.macro_explanation_runs" does not exist`.
 
 - [ ] **Step 3: Write the migration**
 
@@ -873,7 +930,7 @@ Create `supabase/migrations/20261115090000_macro_strategy.sql`:
 --   macro_explanation_runs    service-only LLM run rows (raw output, finalize payload, validation, accounting, finalized)
 --   macro_explanations        user-readable projection (RLS user_id = auth.uid())
 -- Errors are raised with the code as the message: not_found, payload_conflict, invalid_transition,
--- invalid_status (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
+-- invalid_status, invalid_argument, cutoff_mismatch (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
 -- minutes is turned into abandoned by the next claim of the same (user_id, request_id) or by
 -- macro_expire_explanations(user_id) (GET /explanations runs it before reading) — unless its completion is recorded
 -- (raw_output is a json object): such a row is finished later from the stored output by the server's completion
@@ -886,7 +943,7 @@ Create `supabase/migrations/20261115090000_macro_strategy.sql`:
 create table if not exists public.macro_strategy_manifests (
   manifest_id uuid primary key default gen_random_uuid(),
   kind text not null constraint macro_strategy_manifests_kind check (kind in ('transmission','policy_response','cycle_table','review','explain_facts')),
-  body jsonb not null constraint macro_strategy_manifests_body check (jsonb_typeof(body) = 'object' and body->>'kind' = kind),
+  body jsonb not null constraint macro_strategy_manifests_body check ((jsonb_typeof(body) = 'object' and body->>'kind' = kind) is true),
   manifest_hash text not null constraint macro_strategy_manifests_hash check (manifest_hash ~ '^[0-9a-f]{64}$'),
   cutoff timestamptz not null,
   method_version text not null constraint macro_strategy_manifests_method check (length(method_version) between 1 and 128),
@@ -951,7 +1008,7 @@ create table if not exists public.macro_explanation_runs (
   validation jsonb null,
   usage_audit_key text not null,
   accounting jsonb null,
-  finalize_payload jsonb null constraint macro_explanation_runs_finalize_payload check (finalize_payload is null or (jsonb_typeof(finalize_payload) = 'object' and finalize_payload->>'status' in ('completed','failed'))),
+  finalize_payload jsonb null constraint macro_explanation_runs_finalize_payload check (finalize_payload is null or ((jsonb_typeof(finalize_payload) = 'object' and finalize_payload->>'status' in ('completed','failed')) is true)),
   finalized boolean not null default false,
   late_output jsonb null,
   constraint macro_explanation_runs_request unique (user_id, request_id),
@@ -1027,18 +1084,21 @@ grant execute on function public.macro_put_manifest(text, jsonb, text, timestamp
 -- ---------------------------------------------------------------- RPC 2: macro_publish_review
 -- Transaction-level advisory lock on (region, month); get-or-insert the immutable result by
 -- (region, month, manifest_hash); then: pointer already on this result → replayed (whatever the expected
--- generation); generation <> expected → stale; cutoff older than the current cutoff → stale; else advance
+-- generation); generation is distinct from expected → stale; cutoff older than the current cutoff → stale; else advance
 -- (an absent pointer is generation 0, so the first publish yields 1). Every call logs one attempt row.
--- stale is a return value, never an exception.
+-- stale is a return value, never an exception. A null expected generation → invalid_argument; p_cutoff must equal the
+-- stored manifest's cutoff, otherwise cutoff_mismatch (the pointer's cutoff always is its frozen evidence's cutoff).
 create or replace function public.macro_publish_review(p_region text, p_month text, p_expected_generation bigint, p_cutoff timestamptz,
   p_status text, p_manifest_id uuid, p_manifest_hash text, p_facts jsonb, p_method_version text, p_code_version text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_result uuid; v_cur_result uuid; v_cur_cutoff timestamptz; v_gen bigint := 0; v_outcome text;
+declare v_man_cutoff timestamptz;
 begin
+  if p_expected_generation is null then raise exception 'invalid_argument'; end if;
   perform pg_advisory_xact_lock(hashtextextended('macro_review:' || p_region || ':' || p_month, 0));
-  if not exists (select 1 from public.macro_strategy_manifests where manifest_id = p_manifest_id and manifest_hash = p_manifest_hash and kind = 'review') then
-    raise exception 'not_found';
-  end if;
+  select cutoff into v_man_cutoff from public.macro_strategy_manifests where manifest_id = p_manifest_id and manifest_hash = p_manifest_hash and kind = 'review';
+  if not found then raise exception 'not_found'; end if;
+  if v_man_cutoff is distinct from p_cutoff then raise exception 'cutoff_mismatch'; end if;
   insert into public.macro_review_results (region, month, status, manifest_id, manifest_hash, facts, method_version, code_version)
   values (p_region, p_month, p_status, p_manifest_id, p_manifest_hash, p_facts, p_method_version, p_code_version)
   on conflict (region, month, manifest_hash) do nothing
@@ -1050,7 +1110,7 @@ begin
   v_gen := coalesce(v_gen, 0);
   if v_cur_result = v_result then
     v_outcome := 'replayed';
-  elsif v_gen <> p_expected_generation then
+  elsif v_gen is distinct from p_expected_generation then
     v_outcome := 'stale';
   elsif v_cur_cutoff is not null and p_cutoff < v_cur_cutoff then
     v_outcome := 'stale';
@@ -1129,8 +1189,8 @@ grant execute on function public.macro_claim_explanation(uuid, uuid, text, text,
 -- Called right after the provider returned (or threw, or beginUsageRun failed), before validation and finish: stores
 -- the raw output and the exact finalizeUsageRun payload ({status, provider, model, tokens, cost, pricingVersion,
 -- usdCnyMicros, usageEstimated, byo}) so accounting survives any later failure. Allowed on running and abandoned
--- rows; a repeat with the same values is a no-op; a different payload or output once one is stored, or any other
--- state → invalid_transition.
+-- rows only (the state is checked first: a terminal row is invalid_transition even when the stored values match); a
+-- repeat with the same values is a no-op; a different payload or output once one is stored → invalid_transition.
 create or replace function public.macro_record_completion(p_explanation_id uuid, p_raw_output jsonb, p_finalize_payload jsonb)
 returns void language plpgsql security definer set search_path = public as $$
 declare v_state text; v_raw jsonb; v_payload jsonb;
@@ -1138,11 +1198,11 @@ begin
   if p_finalize_payload is null then raise exception 'invalid_transition'; end if;
   select state, raw_output, finalize_payload into v_state, v_raw, v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
   if not found then raise exception 'not_found'; end if;
+  if v_state not in ('running','abandoned') then raise exception 'invalid_transition'; end if;
   if v_payload is not null then
     if v_payload is distinct from p_finalize_payload or v_raw is distinct from p_raw_output then raise exception 'invalid_transition'; end if;
     return;
   end if;
-  if v_state not in ('running','abandoned') then raise exception 'invalid_transition'; end if;
   update public.macro_explanation_runs set raw_output = p_raw_output, finalize_payload = p_finalize_payload where explanation_id = p_explanation_id;
 end $$;
 revoke execute on function public.macro_record_completion(uuid, jsonb, jsonb) from public, anon, authenticated;
@@ -1152,19 +1212,21 @@ grant execute on function public.macro_record_completion(uuid, jsonb, jsonb) to 
 -- running → accepted / rejected / failed (run row + projection). Same final state and same raw_output →
 -- idempotent (returns the projection unchanged). Another final state, or the same state with a different
 -- raw_output → invalid_transition. abandoned → only late_output and accounting are written; the
--- projection stays failed. A raw_output already stored by macro_record_completion is overwritten by the same
--- value (the caller passes what it recorded). p_finalize_payload is stored in every non-error branch when the row has
+-- projection stays failed. A completion recorded by macro_record_completion is evidence: a running row with a
+-- recorded finalize payload accepts only a finish whose raw_output equals the recorded one (null included), otherwise
+-- invalid_transition and the recorded envelope is untouched. p_finalize_payload is stored in every non-error branch when the row has
 -- none yet (macro_record_completion failed), never overwriting a recorded one, so recovery can still settle it.
 create or replace function public.macro_finish_explanation(p_explanation_id uuid, p_state text, p_provider text, p_model text,
   p_prompt_version text, p_validator_version text, p_raw_output jsonb, p_validation jsonb, p_rendered jsonb, p_failure_codes text[], p_accounting jsonb,
   p_finalize_payload jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_state text; v_raw jsonb;
+declare v_state text; v_raw jsonb; v_payload jsonb;
 begin
   if p_state is null or p_state not in ('accepted','rejected','failed') then raise exception 'invalid_transition'; end if;
-  select state, raw_output into v_state, v_raw from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
+  select state, raw_output, finalize_payload into v_state, v_raw, v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
   if not found then raise exception 'not_found'; end if;
   if v_state = 'running' then
+    if v_payload is not null and v_raw is distinct from p_raw_output then raise exception 'invalid_transition'; end if;
     update public.macro_explanation_runs set state = p_state, finished_at = now(), provider = p_provider, model = p_model,
       prompt_version = p_prompt_version, validator_version = p_validator_version, raw_output = p_raw_output, validation = p_validation, accounting = p_accounting,
       finalize_payload = coalesce(finalize_payload, p_finalize_payload)
@@ -1234,7 +1296,7 @@ grant execute on function public.macro_expire_explanations(uuid) to service_role
 - [ ] **Step 4: Run the integration test until it passes**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  19 passed (19)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
+Expected: PASS — `Tests  24 passed (24)`. If a case fails, fix the migration (it is not locked yet), never the expectation, unless the expectation contradicts spec §4.4 — then stop and report NEEDS_CONTEXT.
 
 - [ ] **Step 5: Database types**
 
@@ -1384,7 +1446,7 @@ Run: `LC_ALL=C npm run test:migrations`
 Expected: PASS (fresh and seeded-upgrade schemas identical; report written to `reports/migration-rehearsal.json`).
 
 Run: `LC_ALL=C npm run test:db`
-Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 19 passed tests (no "Database suite inventory drift").
+Expected: PASS, and `strategy.integration.test.ts` is listed among the critical suites with 24 passed tests (no "Database suite inventory drift").
 
 - [ ] **Step 8: Typecheck and lint**
 
@@ -3051,10 +3113,10 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  33 passed (33)` (19 migration cases + 14 pg contract cases).
+Expected: PASS — `Tests  38 passed (38)` (24 migration cases + 14 pg contract cases).
 
 Run: `npm test -- src/lib/macro/strategy`
-Expected: PASS for the unit files; `strategy.integration.test.ts` shows 33 skipped (no `S4_TEST_STATE`).
+Expected: PASS for the unit files; `strategy.integration.test.ts` shows 38 skipped (no `S4_TEST_STATE`).
 
 - [ ] **Step 6: Typecheck and lint**
 

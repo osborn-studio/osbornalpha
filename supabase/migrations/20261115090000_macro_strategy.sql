@@ -10,7 +10,7 @@
 --   macro_explanation_runs    service-only LLM run rows (raw output, finalize payload, validation, accounting, finalized)
 --   macro_explanations        user-readable projection (RLS user_id = auth.uid())
 -- Errors are raised with the code as the message: not_found, payload_conflict, invalid_transition,
--- invalid_status (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
+-- invalid_status, invalid_argument, cutoff_mismatch (src/lib/macro/strategy/db.ts maps them). A claim left running for more than five
 -- minutes is turned into abandoned by the next claim of the same (user_id, request_id) or by
 -- macro_expire_explanations(user_id) (GET /explanations runs it before reading) — unless its completion is recorded
 -- (raw_output is a json object): such a row is finished later from the stored output by the server's completion
@@ -23,7 +23,7 @@
 create table if not exists public.macro_strategy_manifests (
   manifest_id uuid primary key default gen_random_uuid(),
   kind text not null constraint macro_strategy_manifests_kind check (kind in ('transmission','policy_response','cycle_table','review','explain_facts')),
-  body jsonb not null constraint macro_strategy_manifests_body check (jsonb_typeof(body) = 'object' and body->>'kind' = kind),
+  body jsonb not null constraint macro_strategy_manifests_body check ((jsonb_typeof(body) = 'object' and body->>'kind' = kind) is true),
   manifest_hash text not null constraint macro_strategy_manifests_hash check (manifest_hash ~ '^[0-9a-f]{64}$'),
   cutoff timestamptz not null,
   method_version text not null constraint macro_strategy_manifests_method check (length(method_version) between 1 and 128),
@@ -88,7 +88,7 @@ create table if not exists public.macro_explanation_runs (
   validation jsonb null,
   usage_audit_key text not null,
   accounting jsonb null,
-  finalize_payload jsonb null constraint macro_explanation_runs_finalize_payload check (finalize_payload is null or (jsonb_typeof(finalize_payload) = 'object' and finalize_payload->>'status' in ('completed','failed'))),
+  finalize_payload jsonb null constraint macro_explanation_runs_finalize_payload check (finalize_payload is null or ((jsonb_typeof(finalize_payload) = 'object' and finalize_payload->>'status' in ('completed','failed')) is true)),
   finalized boolean not null default false,
   late_output jsonb null,
   constraint macro_explanation_runs_request unique (user_id, request_id),
@@ -164,18 +164,21 @@ grant execute on function public.macro_put_manifest(text, jsonb, text, timestamp
 -- ---------------------------------------------------------------- RPC 2: macro_publish_review
 -- Transaction-level advisory lock on (region, month); get-or-insert the immutable result by
 -- (region, month, manifest_hash); then: pointer already on this result → replayed (whatever the expected
--- generation); generation <> expected → stale; cutoff older than the current cutoff → stale; else advance
+-- generation); generation is distinct from expected → stale; cutoff older than the current cutoff → stale; else advance
 -- (an absent pointer is generation 0, so the first publish yields 1). Every call logs one attempt row.
--- stale is a return value, never an exception.
+-- stale is a return value, never an exception. A null expected generation → invalid_argument; p_cutoff must equal the
+-- stored manifest's cutoff, otherwise cutoff_mismatch (the pointer's cutoff always is its frozen evidence's cutoff).
 create or replace function public.macro_publish_review(p_region text, p_month text, p_expected_generation bigint, p_cutoff timestamptz,
   p_status text, p_manifest_id uuid, p_manifest_hash text, p_facts jsonb, p_method_version text, p_code_version text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_result uuid; v_cur_result uuid; v_cur_cutoff timestamptz; v_gen bigint := 0; v_outcome text;
+declare v_man_cutoff timestamptz;
 begin
+  if p_expected_generation is null then raise exception 'invalid_argument'; end if;
   perform pg_advisory_xact_lock(hashtextextended('macro_review:' || p_region || ':' || p_month, 0));
-  if not exists (select 1 from public.macro_strategy_manifests where manifest_id = p_manifest_id and manifest_hash = p_manifest_hash and kind = 'review') then
-    raise exception 'not_found';
-  end if;
+  select cutoff into v_man_cutoff from public.macro_strategy_manifests where manifest_id = p_manifest_id and manifest_hash = p_manifest_hash and kind = 'review';
+  if not found then raise exception 'not_found'; end if;
+  if v_man_cutoff is distinct from p_cutoff then raise exception 'cutoff_mismatch'; end if;
   insert into public.macro_review_results (region, month, status, manifest_id, manifest_hash, facts, method_version, code_version)
   values (p_region, p_month, p_status, p_manifest_id, p_manifest_hash, p_facts, p_method_version, p_code_version)
   on conflict (region, month, manifest_hash) do nothing
@@ -187,7 +190,7 @@ begin
   v_gen := coalesce(v_gen, 0);
   if v_cur_result = v_result then
     v_outcome := 'replayed';
-  elsif v_gen <> p_expected_generation then
+  elsif v_gen is distinct from p_expected_generation then
     v_outcome := 'stale';
   elsif v_cur_cutoff is not null and p_cutoff < v_cur_cutoff then
     v_outcome := 'stale';
@@ -266,8 +269,8 @@ grant execute on function public.macro_claim_explanation(uuid, uuid, text, text,
 -- Called right after the provider returned (or threw, or beginUsageRun failed), before validation and finish: stores
 -- the raw output and the exact finalizeUsageRun payload ({status, provider, model, tokens, cost, pricingVersion,
 -- usdCnyMicros, usageEstimated, byo}) so accounting survives any later failure. Allowed on running and abandoned
--- rows; a repeat with the same values is a no-op; a different payload or output once one is stored, or any other
--- state → invalid_transition.
+-- rows only (the state is checked first: a terminal row is invalid_transition even when the stored values match); a
+-- repeat with the same values is a no-op; a different payload or output once one is stored → invalid_transition.
 create or replace function public.macro_record_completion(p_explanation_id uuid, p_raw_output jsonb, p_finalize_payload jsonb)
 returns void language plpgsql security definer set search_path = public as $$
 declare v_state text; v_raw jsonb; v_payload jsonb;
@@ -275,11 +278,11 @@ begin
   if p_finalize_payload is null then raise exception 'invalid_transition'; end if;
   select state, raw_output, finalize_payload into v_state, v_raw, v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
   if not found then raise exception 'not_found'; end if;
+  if v_state not in ('running','abandoned') then raise exception 'invalid_transition'; end if;
   if v_payload is not null then
     if v_payload is distinct from p_finalize_payload or v_raw is distinct from p_raw_output then raise exception 'invalid_transition'; end if;
     return;
   end if;
-  if v_state not in ('running','abandoned') then raise exception 'invalid_transition'; end if;
   update public.macro_explanation_runs set raw_output = p_raw_output, finalize_payload = p_finalize_payload where explanation_id = p_explanation_id;
 end $$;
 revoke execute on function public.macro_record_completion(uuid, jsonb, jsonb) from public, anon, authenticated;
@@ -289,19 +292,21 @@ grant execute on function public.macro_record_completion(uuid, jsonb, jsonb) to 
 -- running → accepted / rejected / failed (run row + projection). Same final state and same raw_output →
 -- idempotent (returns the projection unchanged). Another final state, or the same state with a different
 -- raw_output → invalid_transition. abandoned → only late_output and accounting are written; the
--- projection stays failed. A raw_output already stored by macro_record_completion is overwritten by the same
--- value (the caller passes what it recorded). p_finalize_payload is stored in every non-error branch when the row has
+-- projection stays failed. A completion recorded by macro_record_completion is evidence: a running row with a
+-- recorded finalize payload accepts only a finish whose raw_output equals the recorded one (null included), otherwise
+-- invalid_transition and the recorded envelope is untouched. p_finalize_payload is stored in every non-error branch when the row has
 -- none yet (macro_record_completion failed), never overwriting a recorded one, so recovery can still settle it.
 create or replace function public.macro_finish_explanation(p_explanation_id uuid, p_state text, p_provider text, p_model text,
   p_prompt_version text, p_validator_version text, p_raw_output jsonb, p_validation jsonb, p_rendered jsonb, p_failure_codes text[], p_accounting jsonb,
   p_finalize_payload jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_state text; v_raw jsonb;
+declare v_state text; v_raw jsonb; v_payload jsonb;
 begin
   if p_state is null or p_state not in ('accepted','rejected','failed') then raise exception 'invalid_transition'; end if;
-  select state, raw_output into v_state, v_raw from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
+  select state, raw_output, finalize_payload into v_state, v_raw, v_payload from public.macro_explanation_runs where explanation_id = p_explanation_id for update;
   if not found then raise exception 'not_found'; end if;
   if v_state = 'running' then
+    if v_payload is not null and v_raw is distinct from p_raw_output then raise exception 'invalid_transition'; end if;
     update public.macro_explanation_runs set state = p_state, finished_at = now(), provider = p_provider, model = p_model,
       prompt_version = p_prompt_version, validator_version = p_validator_version, raw_output = p_raw_output, validation = p_validation, accounting = p_accounting,
       finalize_payload = coalesce(finalize_payload, p_finalize_payload)

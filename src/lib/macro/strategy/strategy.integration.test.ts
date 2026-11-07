@@ -8,7 +8,9 @@
 // claim never overwrites a concurrent finish), macro_record_completion (durable raw output + finalize payload),
 // macro_finish_explanation (idempotent, invalid_transition, late_output, stores a missing finalize payload, never
 // overwrites one), macro_mark_finalized (needs a recorded payload, any state) and macro_expire_explanations; a running row
-// with a recorded completion is never abandoned (claim and expire skip it). Rows are never cleaned up: test:db creates a fresh database per run, and
+// with a recorded completion is never abandoned (claim and expire skip it); publish rejects a cutoff that differs from the manifest's and a
+// null expected generation; record_completion rejects terminal rows; finish cannot replace a recorded output; JSON-null/missing status and kind are
+// rejected by the CHECKs. Rows are never cleaned up: test:db creates a fresh database per run, and
 // every case uses its own month or random user / request ids.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -71,8 +73,8 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  const put=(kind:string,hash:string,body:Record<string,unknown>=manifestBody(kind),cutoff='3000-01-31T23:59:59Z')=>
   one(`select public.macro_put_manifest($1,$2::jsonb,$3,$4,'mv','code','cv') v`,[kind,JSON.stringify(body),hash,cutoff]) as Promise<string>;
  const newHash=()=>randomUUID().replace(/-/g,'').padEnd(64,'0');
- const reviewManifest=async()=>{const h=newHash();return {id:await put('review',h),hash:h};};
- const publish=(region:string,month:string,expected:number,m:{id:string;hash:string},cutoff='3000-01-31T23:59:59Z')=>
+ const reviewManifest=async(cutoff='3000-01-31T23:59:59Z')=>{const h=newHash();return {id:await put('review',h,manifestBody('review'),cutoff),hash:h,cutoff};};
+ const publish=(region:string,month:string,expected:number|null,m:{id:string;hash:string;cutoff?:string},cutoff=m.cutoff??'3000-01-31T23:59:59Z')=>
   one(`select public.macro_publish_review($1,$2,$3,$4,'ok',$5,$6,$7::jsonb,'macro-review/1','code') v`,[region,month,expected,cutoff,m.id,m.hash,JSON.stringify({region,month})]) as Promise<{result_id:string;generation:number;outcome:string}>;
  const pointer=async(region:string,month:string)=>(await q(`select result_id,generation::int generation,cutoff from public.macro_review_current where region=$1 and month=$2`,[region,month]))[0]??null;
  const attempts=async(region:string,month:string)=>(await q(`select status,result_id from public.macro_review_attempts where region=$1 and month=$2 order by created_at,attempt_id`,[region,month]));
@@ -176,15 +178,15 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
  });
 
  it('macro_publish_review: replayed before stale; A→B→A moves the pointer back to the same A row; stale generation; older cutoff',async()=>{
-  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest(),C=await reviewManifest();
+  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest(),C=await reviewManifest('3000-01-30T00:00:00Z'),D=await reviewManifest('3000-02-01T00:00:00Z');
   const a1=await publish('US',month,0,A);expect(a1.outcome).toBe('advanced');
   expect(await publish('US',month,0,A)).toEqual({result_id:a1.result_id,generation:1,outcome:'replayed'});    // expected 0 is stale, but the pointer already is A
   expect(await publish('US',month,7,A)).toEqual({result_id:a1.result_id,generation:1,outcome:'replayed'});
   const b0=await publish('US',month,0,B);expect(b0).toMatchObject({generation:1,outcome:'stale'});
   const b1=await publish('US',month,1,B);expect(b1).toEqual({result_id:b0.result_id,generation:2,outcome:'advanced'});
   const a3=await publish('US',month,2,A);expect(a3).toEqual({result_id:a1.result_id,generation:3,outcome:'advanced'});
-  expect(await publish('US',month,3,C,'3000-01-30T00:00:00Z')).toMatchObject({generation:3,outcome:'stale'});   // older cutoff never advances
-  const c4=await publish('US',month,3,C,'3000-02-01T00:00:00Z');expect(c4).toMatchObject({generation:4,outcome:'advanced'});
+  expect(await publish('US',month,3,C)).toMatchObject({generation:3,outcome:'stale'});   // older cutoff never advances
+  const c4=await publish('US',month,3,D);expect(c4).toMatchObject({generation:4,outcome:'advanced'});
   expect(await pointer('US',month)).toMatchObject({result_id:c4.result_id,generation:4});
   expect(new Date((await pointer('US',month)).cutoff).toISOString()).toBe('3000-02-01T00:00:00.000Z');
   expect((await attempts('US',month)).map(r=>r.status)).toEqual(['ok','replayed','replayed','stale','ok','ok','stale','ok']);
@@ -198,7 +200,7 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await fails(publish('US',month,0,T))).toMatchObject({message:'not_found'});
   expect(await fails(publish('JP',month,0,A))).toMatchObject({code:'23514'});
   expect(await fails(publish('US','3000-13',0,A))).toMatchObject({code:'23514'});
-  expect(await fails(one(`select public.macro_publish_review('US',$1,0,now(),'great',$2,$3,'{}'::jsonb,'m','c') v`,[month,A.id,A.hash]))).toMatchObject({code:'23514'});
+  expect(await fails(one(`select public.macro_publish_review('US',$1,0,$4,'great',$2,$3,'{}'::jsonb,'m','c') v`,[month,A.id,A.hash,A.cutoff]))).toMatchObject({code:'23514'});
   expect(await attempts('US',month)).toEqual([]);   // a failed call rolls back with its attempt row
  });
 
@@ -372,5 +374,61 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await run(done.explanation_id)).toMatchObject({state:'rejected'});
   expect(await run(other.c.explanation_id)).toMatchObject({state:'running'});
   expect(await expire(user)).toBe(0);
+ });
+
+ it('macro_publish_review: p_cutoff must equal the stored manifest cutoff → cutoff_mismatch; an older manifest cannot advance with a newer argument',async()=>{
+  const month=freshMonth();const NEW=await reviewManifest('3000-02-01T00:00:00Z'),OLD=await reviewManifest('3000-01-30T00:00:00Z');
+  const n1=await publish('US',month,0,NEW);expect(n1).toMatchObject({generation:1,outcome:'advanced'});
+  expect(await fails(publish('US',month,1,OLD,'3000-03-01T00:00:00Z'))).toMatchObject({message:'cutoff_mismatch'});   // newer argument for an older manifest
+  expect(await fails(publish('US',month,1,NEW,'3000-01-01T00:00:00Z'))).toMatchObject({message:'cutoff_mismatch'});   // even a replay must carry the manifest cutoff
+  expect(await publish('US',month,1,OLD)).toMatchObject({generation:1,outcome:'stale'});   // its own cutoff is older than the pointer's
+  expect(await pointer('US',month)).toMatchObject({result_id:n1.result_id,generation:1});
+  expect(new Date((await pointer('US',month)).cutoff).toISOString()).toBe('3000-02-01T00:00:00.000Z');
+ });
+
+ it('macro_publish_review: a null expected generation is invalid_argument (absent and existing pointer); nothing is stored or logged',async()=>{
+  const month=freshMonth();const A=await reviewManifest(),B=await reviewManifest('3000-02-01T00:00:00Z');
+  expect(await fails(publish('US',month,null,A))).toMatchObject({message:'invalid_argument'});
+  expect(await pointer('US',month)).toBeNull();
+  const a1=await publish('US',month,0,A);expect(a1.outcome).toBe('advanced');
+  expect(await fails(publish('US',month,null,B))).toMatchObject({message:'invalid_argument'});
+  expect(await pointer('US',month)).toMatchObject({result_id:a1.result_id,generation:1});
+  expect(await one(`select count(*)::int v from public.macro_review_results where region='US' and month=$1`,[month])).toBe(1);
+  expect((await attempts('US',month)).map(r=>r.status)).toEqual(['ok']);
+ });
+
+ it('macro_record_completion: a terminal row is invalid_transition even when the stored values match',async()=>{
+  for(const state of ['accepted','rejected','failed'] as const){
+   const {c}=await newClaim();
+   await record(c.explanation_id,{content:state});
+   await finish(c.explanation_id,state,{content:state},{rendered:state==='accepted'?RENDERED:undefined,codes:state==='accepted'?[]:['x']});
+   expect(await fails(record(c.explanation_id,{content:state}))).toMatchObject({message:'invalid_transition'});   // same raw output + same payload
+  }
+  const ab=await newClaim();await age(ab.c.explanation_id,6);await expire(ab.a.user);await record(ab.c.explanation_id,null);
+  await record(ab.c.explanation_id,null);   // abandoned rows still accept the idempotent repeat
+ });
+
+ it('macro_finish_explanation: a finish whose output differs from the recorded completion is invalid_transition and keeps the recorded envelope',async()=>{
+  const {c}=await newClaim();await record(c.explanation_id,{content:'A'});
+  expect(await fails(finish(c.explanation_id,'accepted',{content:'B'},{rendered:RENDERED}))).toMatchObject({message:'invalid_transition'});
+  expect(await fails(one(FINISH_SQL,[c.explanation_id,'accepted',null,null,[],'{"tokens":1}',null]))).toMatchObject({message:'invalid_transition'});   // SQL NULL output
+  expect(await run(c.explanation_id)).toMatchObject({state:'running',raw_output:{content:'A'},finalize_payload:PAYLOAD});
+  expect(await finish(c.explanation_id,'accepted',{content:'A'},{rendered:RENDERED})).toMatchObject({state:'accepted'});
+  const t=await newClaim();await record(t.c.explanation_id,null,{...PAYLOAD,status:'failed'});   // provider threw: recorded without output
+  expect(await fails(finish(t.c.explanation_id,'failed',{content:'B'},{codes:['x']}))).toMatchObject({message:'invalid_transition'});
+  expect(await run(t.c.explanation_id)).toMatchObject({state:'running',finalize_payload:{status:'failed'}});
+ });
+
+ it('constraints: a settlement payload needs status completed/failed present and non-null; a manifest body needs its kind',async()=>{
+  const {c}=await newClaim();
+  for(const bad of [{},{status:null},{status:'pending'},[]]){
+   expect(await fails(record(c.explanation_id,null,bad))).toMatchObject({code:'23514'});
+   expect(await fails(finish(c.explanation_id,'failed',null,{codes:['x'],payload:bad}))).toMatchObject({code:'23514'});
+  }
+  expect(await run(c.explanation_id)).toMatchObject({state:'running',finalize_payload:null});
+  expect(await fails(one(`select public.macro_mark_finalized($1) v`,[c.explanation_id]))).toMatchObject({message:'invalid_transition'});
+  const {kind:_k,...noKind}=manifestBody('transmission');
+  expect(await fails(put('transmission',newHash(),noKind))).toMatchObject({code:'23514'});
+  expect(await fails(put('transmission',newHash(),{...noKind,kind:null as unknown as string}))).toMatchObject({code:'23514'});
  });
 });
