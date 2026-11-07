@@ -1,6 +1,6 @@
 // src/lib/company/client.test.ts
 import {describe,it,expect,vi,afterEach} from 'vitest';
-import {VIEW_IDS,parseView,parseAsOf,companyHref,companyApi,fetchCompanyJson,isWithheld,flagOn,REPLAY_UNSUPPORTED,trackStateOf} from './client';
+import {VIEW_IDS,parseView,parseAsOf,companyHref,companyApi,fetchCompanyJson,isWithheld,flagOn,f3DrawerFlagOn,REPLAY_UNSUPPORTED,trackStateOf} from './client';
 
 describe('view and asOf parsing',()=>{
  it('has the nine views in tab order; news and unknown fall back to overview',()=>{
@@ -58,6 +58,7 @@ describe('misc guards',()=>{
   expect(isWithheld({factId:'f',value:'1'})).toBe(false);
   expect(isWithheld(null)).toBe(false);
   expect(flagOn('1')).toBe(true);expect(flagOn('true')).toBe(true);expect(flagOn(undefined)).toBe(false);expect(flagOn('0')).toBe(false);
+  expect(f3DrawerFlagOn(undefined)).toBe(true);expect(f3DrawerFlagOn('0')).toBe(false);expect(f3DrawerFlagOn('false')).toBe(false);expect(f3DrawerFlagOn('1')).toBe(true);
  });
 });
 

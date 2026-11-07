@@ -57,3 +57,10 @@ export async function citationView(db:Pick<DocumentsDb,'pagesOf'|'documentById'>
   integrity:integrityOf(page,c),currentExtraction:doc.current_extraction_id===c.extraction_id,createdBy:c.created_by,createdRef:c.created_ref,
   document:{title:doc.title,sourceUrl:doc.source_url,publishedAt:doc.published_at,availableAt:doc.available_at,docClass:doc.doc_class,language:doc.language}};
 }
+
+/** The anon route's public citation decision, shared with the PostgreSQL bridge test. */
+export async function readPublicCitationById(db:Pick<DocumentsDb,'citationById'|'documentById'|'pagesOf'>,id:string):Promise<CitationView|null>{
+ const citation=await db.citationById(id);
+ const document=citation?await db.documentById(citation.document_id):null;
+ return citation&&document?.permission==='public'?citationView(db,citation):null;
+}
