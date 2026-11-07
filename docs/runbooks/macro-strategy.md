@@ -9,7 +9,7 @@ Storage: migration `supabase/migrations/20261115090000_macro_strategy.sql` (six 
 | Condition | Pages | Fact APIs (transmission, policy-response, cycle-table, reviews, manifests) | Explanations | Playbook mark / judgment section / deviations |
 |---|---|---|---|---|
 | `MACRO_STRATEGY_ENABLED` unset | 404 | 404 `strategy_disabled` | 404 | 404 |
-| enabled, P1+P2 not wired (`strategyPort()` is `null`) | "宏观数据底座未就绪" | 503 `macro_foundation_unavailable` | 503 (a replay of an existing request still answers) | 503 |
+| enabled, foundation unavailable (`strategyPort()` is `null`: Supabase environment missing since WP-S6) | "宏观数据底座未就绪" | 503 `macro_foundation_unavailable` | 503 (a replay of an existing request still answers) | 503 |
 | wired, `MACRO_JUDGMENTS_ENABLED` unset | normal | normal | normal, no judgments | absent; `/deviations` 404 `judgments_disabled` |
 | wired, judgments on, F4 unreachable | normal, "判断层暂不可用" | normal (`judgment_status: 'unavailable'`) | normal | `/deviations` 503 `judgments_unavailable` |
 | everything available | normal | normal | normal | normal |
@@ -18,21 +18,22 @@ Order inside every route: session (401) → `MACRO_STRATEGY_ENABLED` (404) → e
 
 Other variables: `CRON_SECRET` (review cron bearer), `NEXT_PUBLIC_SITE_URL` (F4 client base URL; unset → F4 unavailable), `VERCEL_GIT_COMMIT_SHA` (code version; unset → manifest-writing routes and the cron answer 503 `code_version_unavailable`). No new secrets.
 
-Turn on order: WP-S6 wiring merged and verified → set `MACRO_STRATEGY_ENABLED=1` in Vercel production → redeploy (manual CLI deploy, see the production deploy notes) → open `/intel/macro/transmission`. The judgment layer stays off until the F4 owner turns `MACRO_JUDGMENTS_ENABLED` on.
+Turn on: follow the exact production bring-up procedure in section 8 (prerequisites, data checks, flag, smoke checks, rollback). `MACRO_JUDGMENTS_ENABLED` stays unset in the first release.
 
 ## 2. Wiring P1 + P2 and F4 (WP-S6)
 
-Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact route answers 503. After they merge, in one rebase:
-1. Replace the mirrored declarations in `src/lib/macro/strategy/contract.ts` with imports from `src/lib/macro/{types,judgment-contract,events}`; add a type test asserting assignability both ways.
-2. Add `src/lib/macro/strategy/wiring.ts` with `macroDbStrategyPort` over P1 `MacroDb` (`snapshotUpTo` pages `snapshotsSince` with a keyset and throws `truncated` when it cannot finish), `rules()` from P1 `RULES`, `derivePolicyEvents` from P2 `events.ts`, `timeliness` from P1 `releaseTimeliness`; make `strategyPort()` return it.
-3. Add `US_FED_TARGET_D` to P1 `catalog.ts` inside a `// MACRO-P3` block (new `CATALOG_VERSION`).
-4. Add the three link tabs (传导 / 历史 / 复盘) to P1 `MacroWorkbench.tsx` inside a `// MACRO-P3` block, rendered only while `MACRO_STRATEGY_ENABLED` is on.
-5. Replace the HTTP F4 client by F4's in-process read functions if F4 ships them.
-6. Re-record the replay fixtures only if the real catalog changes the frozen manifests, then run the full gate (section 7).
-7. Measure the fact routes against spec §13 (p95 < 500 ms; < 100 ms on a cache hit). The process LRU of spec §4.5 is not built yet (every request rebuilds the manifest and `putManifest` is idempotent by hash); add it in `route-helpers.ts`, keyed by `(kind, both snapshot ids, cutoff, catalog_version, code_version)`, only if the targets are missed.
-8. `vercel.json`: P1 also appends `/api/cron/macro-sync`. Merge the `crons` array by hand at rebase and keep both entries.
-9. Links that 404 until this step lands: the 宏观工作台 tab (`/intel/macro`), observed-node and watch links (`/intel/macro/<seriesId>`) and the F4 method link (`/intel/methods/<id>/<version>`). Open each once after wiring.
-10. Check the F4 read details against the merged F4 routes: the history cursor (`before`), `{cards}` vs `{items}`, the shape of `realized`, `settlement_id`, and the calibration values mapped by `f4.calibrationState.*`.
+Status: steps 1-4, 6, 8, 9 are done on branch `claude/macro-wp-s6-38eb0f` (P1 + P2 are on `main` via #109; P3 + P4 #110 was merged into this line). F4 (`src/lib/judgments`, `/api/judgments`) is not on `main`, so steps 5 and 10 are deferred and the HTTP F4 client stays.
+
+1. DONE. `contract.ts` imports the real types from `src/lib/macro/{types,judgment-contract,events}`: identical types are re-exported (`Region`, `SeriesType`, `ChangeKind`, `Bilingual`, `DeriveRule`, `Timeliness`, `Regime`, `REGIMES`, `EventInput`, `PolicyEvent`); three types the strategy code reads only partly are projections of the real ones (`ObservationRow` = real minus `locator` / `code_version` / `batch_id`; `SnapshotRecord` = real minus `failure_reason`; `MacroSeriesDef` = real with `source` narrowed to `publisher` / `via` / `fetchHost` / `rights`). `RulesView` / `RuleRow` stay this module's own projection of P1 `RULES`. `contract.types.test.ts` pins this: equal both ways for identical types, real-assignable and exact Pick / Omit for projections. No P1 type contradicted the mirror; the differences are only the extra storage fields above (the mirror was a subset), so no strategy code changed. Replay and manifest bodies are unchanged because they never carried those fields.
+2. DONE. `src/lib/macro/strategy/wiring.ts` `macroDbStrategyPort(db, {pageSize, maxPages})`: `snapshotUpTo` pages `MacroDb.snapshotsSince` (all regions, ascending by `(created_at, snapshot_id)`, failed rows excluded) with the keyset marker, keeps the last match of the region (greatest id on a `created_at` tie), stops at the first row past the cutoff, and throws `Error('truncated')` after `maxPages` (200 pages x 200 rows). `MacroDbError('truncated')` from `seriesHistory` is normalised to `Error('truncated')` (the strategy code matches `message === 'truncated'`). Rows are projected to the contract shape. `rules()` projects P1 `RULES` in table order, `derivePolicyEvents` is P2 `events.ts`, `timeliness` is P1 `releaseTimeliness`, `catalog()` / `catalogVersion()` are P1 `MACRO_CATALOG` / `CATALOG_VERSION`. No `MacroDb` method was added (so no SQL change). `strategyPort()` builds the port from `macroRouteDeps().db` (anon reads under RLS plus the service-role client, as every P1 route does); it returns `null` only when the Supabase environment is missing, which the capability matrix answers with 503 `macro_foundation_unavailable`. `wiring.test.ts` runs the port on P1's memory `MacroDb` with `memoryStrategyPort` semantics.
+3. DONE. `US_FED_TARGET_D` (FRED `DFEDTAR`, `event_source`, weight 0, `immutable`, `daily`) is in `src/lib/macro/catalog.ts` inside `// MACRO-P3` ... `// /MACRO-P3`; `CATALOG_VERSION` is content-addressed, so it changed by construction. The FRED cron picks it up automatically (`collectableOf('fred_csv')`); a recorded fixture `src/lib/macro/fixtures/fred/DFEDTAR.csv` and its manifest entry were added from the public CSV (no key), and the catalog / fixture / cron tests were updated. `DFEDTAR` ends on 2008-12-15 and FRED ignores `cosd` beyond a series' end (verified 2026-11-07: `cosd=2015-01-01` and `cosd=2025-01-01` both return 1982-09-27 .. 2008-12-15, 172 645 bytes), so every daily run re-reads the whole 170 KB series; the rewrites are duplicates (immutable, idempotent) and the first run after backfill also stores 1982-1999.
+4. DONE. Link tabs 传导 / 历史 / 复盘 (`/intel/macro/transmission`, `/history`, `/review`) in `MacroWorkbench.tsx` inside a `// MACRO-P3` block (`strategy-links.ts`), shown only when the server page passes `strategyEnabled` (read through `strategyEnabled()`; the client component never sees the env name). Strings: `tabs.transmission|history|review` in `messages/{zh,en}/macro.json`.
+5. DEFERRED (F4 not on `main`). Keep the HTTP F4 client; replace it by F4's in-process read functions when F4 ships them. No judgments behaviour changed.
+6. DONE. Replay tests (`strategy/replay.test.ts`, P1 `replay.test.ts`) pass and no replay fixture or hash was re-recorded: the strategy manifests freeze their own fixture catalog projection (replay never reads the live catalog, spec §4.5 N2), and the P1 replay hashes cover recorded evidence bytes and published snapshots that the new row does not touch. The only recorded file added is the FRED fixture `DFEDTAR.csv` (step 3).
+7. NOT BUILT, by design. The process LRU of spec §4.5 is not built; section 13 latency (p95 < 500 ms, < 100 ms on a cache hit) is measured after the production data load (section 8.5). Add the LRU in `route-helpers.ts` keyed by `(kind, both snapshot ids, cutoff, catalog_version, code_version)` only if the targets are missed.
+8. DONE (verified, guarded by `strategy/vercel-crons.test.ts`). `vercel.json` `crons` holds `/api/cron/macro-sync` (`30 5 * * *`) and `/api/cron/macro-review` (`0 6 3 * *`).
+9. DONE. The formerly 404 links resolve to existing routes: `/intel/macro` (`src/app/(app)/intel/macro/page.tsx`) and `/intel/macro/<seriesId>` (`[seriesId]/page.tsx`). The F4 method link `/intel/methods/<id>/<version>` still 404s until F4 lands.
+10. DEFERRED (F4 not on `main`). Check the F4 read details against the merged F4 routes when F4 merges: the history cursor (`before`), `{cards}` vs `{items}`, the shape of `realized`, `settlement_id`, and the calibration values mapped by `f4.calibrationState.*`.
 
 ## 3. Monthly review
 
@@ -95,8 +96,9 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 
 ## 6. Troubleshooting
 
-- Every fact route 503 `macro_foundation_unavailable`: WP-S6 not deployed, or `strategyPort()` still returns `null`.
-- Transmission 404 `no_published_snapshot`: neither region has an active P1 snapshot.
+- Every fact route 503 `macro_foundation_unavailable`: `strategyPort()` returned `null`, i.e. `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing in that deployment.
+- Transmission 404 `no_published_snapshot`: neither region has an active P1 snapshot (run the checks of section 8.1 and 8.2).
+- A fact route 500 right after enabling: read the function log; a `truncated` thrown outside the routes' own handling means a bounded read ran past its cap (`snapshotsSince` paging in `wiring.ts`, or `HISTORY_MAX_ROWS`).
 - A matrix or history column all `missing (history_truncated)`: the history read exceeded `HISTORY_MAX_ROWS`; check P1 observation counts.
 - `judgment_status: 'unavailable'` while F4 is up: check `NEXT_PUBLIC_SITE_URL` and that `/api/judgments` answers JSON within 3 s.
 - Manifests: `GET /api/macro/strategy/manifests/<id>` returns the full frozen input set of any view (ids in each view's `manifest_id`).
@@ -104,3 +106,113 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 ## 7. Verification gate
 
 `npm test`, `npm run typecheck`, `npm run lint`, then with Homebrew PostgreSQL 17 and only for these two commands `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db` and `… npm run test:migrations`. Known local flakes under load (pass in isolation; Linux CI is the gate): research suites `s6/store`, `s6/arm-lineage`, `fanout/run`, `s4/ledger`, `s4/checkpoint-registry`, `s4/anchor-two-phase` (5 s timeouts that cascade within the file). Rerun a single DB file with `.claude/scratch/db-one.ts` (handoff doc 2026-11-04 §5).
+
+## 8. Production bring-up (for the `prod-bringup` session)
+
+Run after the WP-S6 branch is merged to `origin/main`. Production is the Supabase project `stock-monitor` (ref `mzfcaabhuwtfvsvadvsv`, PostgreSQL 17; the hosted `postgres` role is not a superuser) and the Vercel project `stock-monitor` (not connected to Git, manual CLI deploys). The helper `q` (Management API SQL endpoint with the Supabase CLI token from the keychain), the migration method and the cron call pattern are exactly those of `docs/runbooks/macro-sync.md` §13.1-§13.4; this section only adds what P3 + P4 need. The token and `CRON_SECRET` stay in shell variables, never printed or written to disk.
+
+Defaults that do not change: `MACRO_STRATEGY_ENABLED` unset until 8.3; **`MACRO_JUDGMENTS_ENABLED` stays unset** (judgment layer off) until F4 merges and its owner turns it on; no flag default changes in code.
+
+```bash
+mount | grep -q AIMATE_WORK || echo "SSD NOT MOUNTED — stop"
+cd ~/Developer/CodeX/OsbornAlpha && git fetch origin main && git log origin/main --oneline -8 | cat   # the WP-S6 merge must be here
+REF=mzfcaabhuwtfvsvadvsv
+TOKEN=$(security find-generic-password -s "Supabase CLI" -w | sed 's/^go-keyring-base64://' | base64 -d)
+q(){ jq -n --arg q "$1" '{query:$q}' | curl -sS -X POST "https://api.supabase.com/v1/projects/$REF/database/query" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data @-; }
+BASE=https://osbornalpha.com
+```
+
+### 8.1 Prerequisites (all must hold; stop at the first that does not)
+
+1. **P1 migration `20261114090000_macro_workbench.sql` applied, with its history row** (macro-sync §13.1). Check: `q "select version, name from supabase_migrations.schema_migrations where version in ('20261114090000','20261115090000') order by 1"` must list `20261114090000` now and `20261115090000` after item 2.
+2. **P3 migration `20261115090000_macro_strategy.sql` applied, with its history row, in one request (one transaction)**. The file is locked (`supabase/migrations.lock.json`): do not edit it. It has no `alter … owner`, no extension, no reference to P1 or F4 tables, so it runs under the non-superuser role and is replayable.
+   ```bash
+   SQL="$(cat supabase/migrations/20261115090000_macro_strategy.sql)
+   insert into supabase_migrations.schema_migrations(version, name, statements) values ('20261115090000','macro_strategy', array[]::text[]) on conflict (version) do nothing;"
+   OUT=$(jq -n --arg q "$SQL" '{query:$q}' | curl -sS -w '\n%{http_code}' -X POST "https://api.supabase.com/v1/projects/$REF/database/query" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data @-)
+   echo "HTTP $(printf '%s' "$OUT" | tail -1)"; printf '%s' "$OUT" | sed '$d' | head -c 400; echo   # 2xx and []
+   q "select version from supabase_migrations.schema_migrations where version='20261115090000'"          # exactly 1 row; otherwise stop, never back-fill the history by hand
+   ```
+   Verify the schema (expected values in the comments):
+   ```bash
+   q "select count(*) from pg_tables where schemaname='public' and tablename in ('macro_strategy_manifests','macro_review_results','macro_review_current','macro_review_attempts','macro_explanation_runs','macro_explanations')"   # 6
+   q "select relname, relrowsecurity from pg_class where relnamespace='public'::regnamespace and relkind='r' and relname in ('macro_strategy_manifests','macro_review_results','macro_review_current','macro_review_attempts','macro_explanation_runs','macro_explanations') order by 1"   # 6 rows, all true
+   q "select grantee, table_name, privilege_type from information_schema.role_table_grants where table_schema='public' and table_name in ('macro_strategy_manifests','macro_review_results','macro_review_current','macro_review_attempts','macro_explanation_runs','macro_explanations') and privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE') and grantee in ('anon','authenticated','service_role','public')"   # []
+   q "select p.proname, has_function_privilege('anon',p.oid,'execute') anon_x, has_function_privilege('authenticated',p.oid,'execute') auth_x, has_function_privilege('service_role',p.oid,'execute') svc_x from pg_proc p where p.pronamespace='public'::regnamespace and p.proname in ('macro_put_manifest','macro_publish_review','macro_record_review_attempt','macro_claim_explanation','macro_record_completion','macro_finish_explanation','macro_mark_finalized','macro_expire_explanations') order by 1"   # 8 rows: svc_x true, anon_x and auth_x false
+   ```
+   If a grant differs, do not edit the migration: add the missing `revoke execute … from public, anon, authenticated` on production and record it in `docs/audits/`.
+3. **`MACRO_INGEST_SECRET` set** in Vercel production (macro-sync §13.2; unset means ingest answers 503 and the owner's AKShare run cannot upload). `vercel env ls production | grep -E 'MACRO_INGEST_SECRET|CRON_SECRET'` lists both.
+4. **`CRON_SECRET` present** (with it unset `/api/cron/macro-review` answers 401 `unauthorized`, because the bearer check can never pass; no 503 is returned, so a 401 on a correct bearer means the secret is missing in the deployment).
+5. **`VERCEL_GIT_COMMIT_SHA` present in the deployment.** It is set only by deploying from a git checkout: use the clean `origin/main` worktree method of macro-sync §13.2 (`vercel deploy --prod --yes` from `git worktree add --detach "$D" origin/main`). Without it, manifest-writing routes and the review cron answer 503 `code_version_unavailable`.
+6. **The first `macro-sync` run published an active US snapshot** and the owner ran AKShare and published a CN snapshot (macro-sync §13.3 and §13.4). The CN snapshot is the owner's step on the owner's Mac; the strategy pages degrade without it (a region with no snapshot shows its nodes missing) but the transmission route answers 404 `no_published_snapshot` only when neither region has one.
+7. **`US_FED_TARGET_D` (DFEDTAR), `US_FED_TARGET_UPPER_D` and `US_FED_TARGET_LOWER_D` are loaded.** They come from the same macro-sync run once the WP-S6 code is deployed (the catalog gained `US_FED_TARGET_D`, so a deployment that predates WP-S6 never fetched it: rerun `GET $BASE/api/cron/macro-sync` with the bearer after the deploy and read a `success` receipt).
+
+### 8.2 Data checks (read-only; all before the flag is set)
+
+```bash
+# snapshots: one active per region (CN only after the owner's run), catalog version = the deployed one
+q "select region, snapshot_id, revision, as_of, status, catalog_version, created_at from macro_snapshots where status='active' order by region"   # US row required; CN row after the owner's run
+# the three policy-event sources: each has rows, DFEDTAR ends 2008-12-15, UPPER/LOWER start 2008-12-16
+q "select series_id, count(*) n, min(period_end) first, max(period_end) last from macro_observations where series_id in ('US_FED_TARGET_D','US_FED_TARGET_UPPER_D','US_FED_TARGET_LOWER_D') and status='ok' group by 1 order by 1"   # 3 rows; D: n > 2000 and last 2008-12-15; UPPER/LOWER: last within a few days of today
+# the 2008 switch evidence the history views need
+q "select series_id, period_end, value_text from macro_observations where status='ok' and ((series_id='US_FED_TARGET_D' and period_end='2008-12-15') or (series_id in ('US_FED_TARGET_UPPER_D','US_FED_TARGET_LOWER_D') and period_end='2008-12-16')) order by 1"   # D 1 (1.0000 raw → 1), UPPER 0.25, LOWER 0
+# no open macro quarantine items on those series
+q "select count(*) from dq_quarantine where dataset like 'macro.%' and status='open'"   # 0
+# freshness
+q "select dataset, last_ok_at, consecutive_errors, status from dq_freshness where dataset like 'macro.%' order by 1"   # macro.fred has last_ok_at; macro.akshare after the owner's run
+# P3 tables start empty
+q "select (select count(*) from macro_strategy_manifests) manifests, (select count(*) from macro_review_results) reviews"   # 0 0
+# the flag matrix is as intended
+vercel env ls production | grep -E 'MACRO_(STRATEGY|JUDGMENTS)_ENABLED' || echo "both unset (expected)"
+```
+
+If `US_FED_TARGET_D` has no rows, stop: run `curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-sync?preview=1" | jq '.series[] | select(.series_id|test("TARGET"))'` first (fetch + parse only; `points > 0` for all three), then the real run.
+
+### 8.3 Turn the flag on
+
+```bash
+vercel env add MACRO_STRATEGY_ENABLED production      # enter: 1   (any other value is off)
+vercel env ls production | grep -E 'MACRO_(STRATEGY|JUDGMENTS)_ENABLED'   # STRATEGY present, JUDGMENTS absent
+# manual CLI deploy from a clean origin/main checkout (macro-sync §13.2): env changes need a redeploy
+git fetch origin main
+D=~/Developer/CodeX/.worktrees/OsbornAlpha/deploy; mkdir -p "$(dirname "$D")"
+git worktree add --detach "$D" origin/main
+mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/project.json"
+( cd "$D" && vercel deploy --prod --yes )
+git worktree remove --force "$D" && git worktree prune
+```
+Then run 8.4 (the cron answers 404 `strategy_disabled` before this step, so the preview can only run now) before the smoke checks of 8.5.
+
+### 8.4 Review cron preview (`&preview=1`, zero writes) — after 8.3, first thing after the deploy
+
+```bash
+# no `month`: the server picks the newest closed month (a month is closed once the 3rd of the next month 00:00:00Z has passed,
+# so on the 1st-2nd of a month the previous month is NOT closed yet and an explicit month=<previous> is a 400)
+R=$(curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?preview=1"); echo "$R" | jq .
+M=$(echo "$R" | jq -r .month); echo "server-selected month: $M"   # reuse exactly this month for the real run below
+```
+Expect HTTP 200, `ok: true`, `preview: true`, one receipt per region with `outcome: 'preview'`, a `status` of `ok` (or `insufficient` for a region with no snapshot at that month's cutoff, which is a data gap, not a failure) and a 64-hex `manifest_hash`. A 503 `code_version_unavailable` means 8.1 item 5 failed; a 503 `macro_foundation_unavailable` means the Supabase environment is missing in the deployment. Only after the preview is clean (and the 8.5 smoke checks pass), publish the first review for real (one unit at a time): `curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?month=$M&region=US" | jq .` (with the `month` read from the preview receipt, not a locally computed one) then `region=CN`; receipts `advanced`, rerun gives `replayed`.
+
+### 8.5 Smoke checks (flag on, `MACRO_JUDGMENTS_ENABLED` still unset)
+
+Fact routes need a session (401 without one; `/api/*` is not covered by the middleware). From a logged-in browser tab on `$BASE` (DevTools console), expected 200 and never 503:
+
+```js
+const u=['/api/macro/strategy/transmission?region=US','/api/macro/strategy/transmission?region=CN','/api/macro/strategy/policy-response?window=3',
+ '/api/macro/strategy/cycle-table?boundary=event_day','/api/macro/strategy/reviews?region=US','/api/macro/strategy/reviews?region=CN'];
+console.table(await Promise.all(u.map(async x=>{const r=await fetch(x);return {url:x,status:r.status,body:r.status===200?'ok':(await r.text()).slice(0,120)};})));
+const t=await (await fetch('/api/macro/strategy/transmission?region=US')).json();
+console.log(t.judgment_status, t.transmission.manifest_id);                                // 'disabled' while judgments are off
+console.log((await fetch('/api/macro/strategy/manifests/'+t.transmission.manifest_id)).status);   // 200: the frozen inputs of that view
+console.log((await fetch('/api/macro/strategy/deviations?region=US')).status);             // 404 judgments_disabled (expected: the judgment layer is off)
+```
+- Any `503 macro_foundation_unavailable` (Supabase environment) or `503 code_version_unavailable` (no `VERCEL_GIT_COMMIT_SHA`): stop and fix; do not roll forward. `404 strategy_disabled`: the deploy predates the flag. `404 no_published_snapshot`: 8.1 item 6.
+- Pages (logged in): `/intel/macro/transmission`, `/intel/macro/history`, `/intel/macro/review` render content (not the "宏观数据底座未就绪" state); on `/intel/macro` the tabs 传导 / 历史 / 复盘 are visible and each link opens its page; there is no judgment UI anywhere (`document.body.innerText.match(/象限|得分|margin|概率|置信度/)` is `null`); `/intel/macro/US_UNRATE` opens (formerly a dead link).
+- Latency (runbook section 2 step 7): note the time of the transmission and policy-response calls from the Network panel; the targets are p95 < 500 ms and < 100 ms on a repeat. Record the numbers in `docs/audits/`; build the LRU only if missed.
+- Next 05:30 UTC cron and 3rd-of-month 06:00 UTC review cron: read the receipts in the Vercel logs the first time they run.
+
+### 8.6 Rollback
+
+1. Unset the flag and redeploy: `vercel env rm MACRO_STRATEGY_ENABLED production` then the 8.3 deploy. Pages, fact routes, explanations and the review cron answer 404 again; the six P3 tables and any published reviews stay (inert and read-only through the RPCs; never drop them).
+2. A bad published review: rerun that month after the fix (the pointer only moves forward, section 3); do not edit rows.
+3. Data problems are P1 problems: roll the snapshot back with macro-sync §8 / §13.6. Record every rollback in `docs/audits/`.

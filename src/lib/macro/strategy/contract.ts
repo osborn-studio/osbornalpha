@@ -1,38 +1,28 @@
 // src/lib/macro/strategy/contract.ts
-// Structural mirror of the P1+P2 macro contract (plan 2026-11-06-macro-workbench.md §共享契约, Task 14) plus this module's
-// shared types (spec 2026-11-07 §4–§6). P1+P2 is not on main: at WP-S6 the mirrored declarations are replaced by imports
-// from src/lib/macro/{types,judgment-contract,events} and a type test asserts assignability both ways. Mirror only fields
-// that P1+P2 define.
-// ---- P1+P2 mirror ----
-export type Region='US'|'CN';
-export type SeriesType='policy_rate'|'bond_yield'|'fx'|'inflation_yoy'|'pmi'|'labor_rate'|'growth_yoy'|'liquidity_yoy'|'risk_index'|'asset_price';
-export type ChangeKind='bp'|'pp'|'pct'|'points';
-export interface Bilingual{zh:string;en:string}
-export type DeriveRule={kind:'month_end';from:string}|{kind:'yoy_from_index';from:string}|{kind:'index_minus_100';from:string};
-export interface MacroSeriesDef{
- id:string;region:Region;role:'indicator'|'asset'|'event_source';type:SeriesType|null;name:Bilingual;unit:string;
- nativeFrequency:'daily'|'monthly'|'quarterly'|'event';period:'day'|'month'|'quarter';adjustment:'sa'|'nsa'|'na';
- status:'active'|'missing'|'restricted';reason?:Bilingual;source:{publisher:Bilingual;via?:Bilingual;fetchHost:string;rights:'public_domain'|'official_open'|'third_party'}|null;
- derive?:DeriveRule;aliasOf?:string;revisionPolicy:'revisable'|'immutable';weight:number;changeKind:ChangeKind;releaseLagDays?:number;definitionVersion:number;
-}
-export interface ObservationRow{
- observation_id:string;series_id:string;period_end:string;value_text:string;version:number;
- available_at:string;availability_basis:'first_seen';ingested_at:string;status:'ok'|'quarantined'|'rejected';
- retrieval_id:string|null;derived_from:string[]|null;transform:string|null;
-}
-export interface SnapshotRecord{
- snapshot_id:string;region:Region;as_of:string;revision:number;methodology_version:string;catalog_version:string;
- observation_ids:string[];history_ids:string[];catalog_counts:{verified:number;missing:number;restricted:number};
- status:'active'|'superseded'|'failed';created_at:string;
-}
-export type Regime='recovery'|'overheat'|'stagflation'|'recession';
-export const REGIMES:readonly Regime[]=['recovery','overheat','stagflation','recession'];
-export type Timeliness='current'|'late'|'missing'|'n/a';
-export type EventInput=Pick<ObservationRow,'observation_id'|'period_end'|'value_text'>;
-export interface PolicyEvent{
- kind:'policy_target_change';region:'US';effective_date:string;upper_from:string;upper_to:string;lower_from:string;lower_to:string;change_bp:string;source:'derived';
- evidence:[string,string,string,string];version:string;
-}
+// Shared types of the macro strategy module (spec 2026-11-07 §4–§6). The P1+P2 declarations are no longer mirrored: since
+// WP-S6 they are the real types from src/lib/macro/{types,judgment-contract,events}. Types the strategy code only partly
+// needs are narrowed projections (Pick / Omit) of the real ones, so P1 drift fails typecheck; contract.types.test.ts pins
+// the relation both ways. RulesView / RuleRow are this module's own projection of P1 regime.ts RULES.
+import type * as P1 from '../types';
+import type {EventInput as P2EventInput,PolicyEvent as P2PolicyEvent} from '../events';
+import {REGIMES as P1_REGIMES,type Regime as P1Regime} from '../judgment-contract';
+// ---- P1+P2 types (re-exports and projections) ----
+export type Region=P1.Region;
+export type SeriesType=P1.SeriesType;
+export type ChangeKind=P1.ChangeKind;
+export type Bilingual=P1.Bilingual;
+export type DeriveRule=P1.DeriveRule;
+/** Real MacroSeriesDef with the source narrowed to the fields strategy code reads (adapter / seriesKey / attribution dropped). */
+export type MacroSeriesDef=Omit<P1.MacroSeriesDef,'source'>&{source:Pick<P1.SeriesSource,'publisher'|'via'|'fetchHost'|'rights'>|null};
+/** Real ObservationRow without storage-only members (locator, code_version, batch_id). */
+export type ObservationRow=Omit<P1.ObservationRow,'locator'|'code_version'|'batch_id'>;
+/** Real SnapshotRecord without failure_reason. */
+export type SnapshotRecord=Omit<P1.SnapshotRecord,'failure_reason'>;
+export type Regime=P1Regime;
+export const REGIMES:readonly Regime[]=P1_REGIMES;
+export type Timeliness=P1.Timeliness;
+export type EventInput=P2EventInput;
+export type PolicyEvent=P2PolicyEvent;
 /** Read-only projection of P1 regime.ts RULES (spec §5.2). support values are rule parameters, never shown as percentages. */
 export interface RuleRow{rule_id:string;type:SeriesType;condition:Bilingual;support:Partial<Record<Regime,number>>}
 export interface RulesView{rulesVersion:string;rows:RuleRow[]}

@@ -1,11 +1,22 @@
 // src/lib/macro/strategy/port.test.ts
 // StrategyReadPort semantics on memoryStrategyPort (spec §4.3) and the null production port (§9.1).
-import {describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it,vi} from 'vitest';
+import {CATALOG_VERSION,MACRO_CATALOG} from '../catalog';
 import {memoryStrategyPort,strategyPort} from './port';
 import {FIXTURE_CATALOG,FIXTURE_CATALOG_VERSION,FIXTURE_RULES,fedTargetFixture,fixture,monthly,obs,snap} from './testing/fixture';
 
-describe('strategyPort',()=>{
- it('is null until WP-S6 wires P1+P2',()=>{expect(strategyPort()).toBeNull();});
+describe('strategyPort (WP-S6: wired to P1 MacroDb)',()=>{
+ afterEach(()=>vi.unstubAllEnvs());
+ it('is null while the Supabase environment is not configured (→ 503 macro_foundation_unavailable)',()=>{
+  for(const k of ['NEXT_PUBLIC_SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','NEXT_PUBLIC_SUPABASE_ANON_KEY'])vi.stubEnv(k,'');
+  expect(strategyPort()).toBeNull();
+ });
+ it('is the wired port once configured: P1 catalog, rules and P2 events',()=>{
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','http://127.0.0.1:54321');vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY','service-test');vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY','anon-test');
+  const p=strategyPort();
+  expect(p).not.toBeNull();
+  expect(p!.catalog()).toBe(MACRO_CATALOG);expect(p!.catalogVersion()).toBe(CATALOG_VERSION);expect(p!.rules().rulesVersion).toBe('macro-regime-rules/1.0');
+ });
 });
 
 describe('memoryStrategyPort snapshots',()=>{

@@ -18,6 +18,15 @@
   "http_status": 200
  },
  {
+  "code": "DFEDTAR",
+  "series_id": "US_FED_TARGET_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTAR&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T07:28:30.000Z",
+  "sha256": "323b6d9fb014cdd8b39eab02025bb37111e9497c75fdd24ea1731ed3f360376c",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
   "code": "DFEDTARL",
   "series_id": "US_FED_TARGET_LOWER_D",
   "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARL&cosd=2015-01-01",

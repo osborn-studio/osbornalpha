@@ -156,6 +156,8 @@ cd ~/Developer/CodeX/OsbornAlpha && git fetch origin main && git status -sb | he
 git log origin/main --oneline -5 | cat       # 确认宏观工作台的合并提交已在 origin/main
 ```
 
+> **P3 + P4（传导 / 历史 / 复盘）/ strategy layer:** 本节完成并验证之后，再按 [`docs/runbooks/macro-strategy.md`](macro-strategy.md) 第 8 节上线（P3 迁移 `20261115090000`、`US_FED_TARGET_D` 数据、`MACRO_STRATEGY_ENABLED=1`、复盘 cron preview、smoke checks、回滚）。`MACRO_STRATEGY_ENABLED` 与 `MACRO_JUDGMENTS_ENABLED` 在本节全程保持不设置；§13.2 的 flag 矩阵不变。
+
 ### 13.1 应用迁移 `20261114090000_macro_workbench.sql`
 
 迁移文件已锁定，**一个字符都不改**。它不含 `alter … owner`、不建扩展，只引用 `storage.buckets`（建私有桶 `macro-raw`），可在非超级用户下执行；依赖已存在的 `ingest_batches`、`dq_quarantine`、`dq_freshness`、`research_audit_log`、`profiles`（来自 `20261105090000_dq_foundation.sql` 与更早的迁移）。方法同 `alpha-production-deploy-and-hosted-db` 记忆与 `docs/runbooks/data-foundation.md` §8 的生产迁移步骤：Supabase Management API 的 SQL 端点，令牌取自 macOS 钥匙串（Supabase CLI 登录态）。令牌只放在 shell 变量里，不打印、不落盘、不进仓库。
@@ -220,6 +222,7 @@ openssl rand -hex 32 | tee >(pbcopy) | vercel env add MACRO_INGEST_SECRET produc
 
 - `MACRO_INGEST_SECRET`：新增（上面生成）。不要在聊天或日志里回显它。
 - `MACRO_JUDGMENTS_ENABLED`：**保持不设置**（判断层关闭；只有 F4 上线后才设为 `1`）。
+- `MACRO_STRATEGY_ENABLED`：**保持不设置**；P3 + P4 的上线与该开关见 `macro-strategy.md` 第 8 节。
 - `CRON_SECRET`：确认已存在（`vercel env ls`）；缺失会让 cron 503 `cron_unavailable`。不需要 `FRED_API_KEY`。
 - 不需要 `MACRO_INGEST_URL`（它在 Mac 端）。
 
