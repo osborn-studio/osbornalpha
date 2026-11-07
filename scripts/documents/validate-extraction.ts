@@ -1,7 +1,7 @@
 /**
  * Real-bytes validation (spec §11.3, F3-4 exit condition; local only, never CI).
  *
- *   node --env-file=.env.local --import tsx scripts/documents/validate-extraction.ts [--gold <path>] [--fixtures <dir>] [--out <path>]
+ *   node --env-file=.env.local --import tsx scripts/documents/validate-extraction.ts [--gold <path>] [--fixtures <dir>] [--out <path>] [--apply]
  *
  * For every gold document hash with a recorded fixtures/hkex/*.pages.json: downloads header.source_url
  * (User-Agent EDGAR_USER_AGENT or the collectors' DEFAULT_USER_AGENT, 120 s timeout), requires
@@ -9,36 +9,37 @@
  * text_hash (sha256 of the UTF-8 text) with the recorded layout, then runs generate + checks
  * offline and scores the result against the gold file. Report:
  * docs/audits/2026-11-06-document-pipeline/real-bytes-validation-<date>.json (default --out).
- * Exit 0 when every document matched bytes and page texts, 1 otherwise, 2 on bad arguments.
+ * Without --apply only stdout is written.
+ * Exit 0 when every document matched bytes, page texts, and gold, 1 otherwise, 2 on bad arguments.
  */
 import {createHash} from 'node:crypto';
 import {existsSync,mkdirSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {extractPdf} from '../../src/lib/documents/extract/pdf';
 import {sha256Hex} from '../../src/lib/documents/extract/pages-json';
-import {isPendingGold,loadRecordedFixture,offlineHkCandidates,scoredRows,scoreHkFacts} from '../../src/lib/documents/hk-facts/eval';
+import {isPendingGold,loadRecordedFixture,recordedOfflineDoc,offlineHkCandidates,scoredRows,scoreHkFacts} from '../../src/lib/documents/hk-facts/eval';
 import type {HkGoldFile,ScoredCandidate} from '../../src/lib/documents/hk-facts/eval';
 import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,TABLE_ALGO_VERSION} from '../../src/lib/documents/types';
 import type {PagesJson} from '../../src/lib/documents/types';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/shared';
 
-const USAGE='usage: validate-extraction.ts [--gold <path>] [--fixtures <dir>] [--out <path>]';
+const USAGE='usage: validate-extraction.ts [--gold <path>] [--fixtures <dir>] [--out <path>] [--apply]';
 const bad=(m:string):never=>{console.error(m);console.error(USAGE);process.exit(2);};
-interface Args{gold:string;fixtures:string;out:string}
+interface Args{gold:string;fixtures:string;out:string;apply:boolean}
 function parseArgs(argv:string[]):Args{
- const a:Args={gold:'src/lib/documents/fixtures/gold/hk-facts.json',fixtures:'src/lib/documents/fixtures/hkex',out:`docs/audits/2026-11-06-document-pipeline/real-bytes-validation-${new Date().toISOString().slice(0,10)}.json`};
+ const a:Args={apply:false,gold:'src/lib/documents/fixtures/gold/hk-facts.json',fixtures:'src/lib/documents/fixtures/hkex',out:`docs/audits/2026-11-06-document-pipeline/real-bytes-validation-${new Date().toISOString().slice(0,10)}.json`};
  const next=(i:number)=>{const v=argv[i+1];if(v===undefined||v.startsWith('--'))bad(`missing value for ${argv[i]}`);return v as string;};
  for(let i=0;i<argv.length;i++){
   const x=argv[i];
-  if(x==='--gold')a.gold=next(i++);else if(x==='--fixtures')a.fixtures=next(i++);else if(x==='--out')a.out=next(i++);else bad(`unknown argument: ${x}`);
+  if(x==='--gold')a.gold=next(i++);else if(x==='--fixtures')a.fixtures=next(i++);else if(x==='--out')a.out=next(i++);else if(x==='--apply')a.apply=true;else bad(`unknown argument: ${x}`);
  }
  return a;
 }
 const textHash=(s:string)=>createHash('sha256').update(s,'utf8').digest('hex');
 
-async function main(){
- const args=parseArgs(process.argv.slice(2));
+export async function main(argv:string[]=process.argv.slice(2)){
+ const args=parseArgs(argv);
  const goldBytes=readFileSync(args.gold);const gold=JSON.parse(goldBytes.toString('utf8')) as HkGoldFile;
  const shas=[...new Set(gold.entries.filter(e=>!isPendingGold(e)).map(e=>e.source.document_sha256))].sort();
  const fixtures=new Map<string,string>();
@@ -61,16 +62,20 @@ async function main(){
   const mismatches=fresh.pages.filter(p=>recordedHash.has(p.page_no)&&recordedHash.get(p.page_no)!==textHash(p.text)).map(p=>p.page_no);
   if(fresh.pages.length!==header.page_count||mismatches.length>0)ok=false;
   const json:PagesJson={extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:codeVersion,content_sha256:s,has_text_layer:fresh.hasTextLayer,pages:fresh.pages};
-  const {candidates,results}=await offlineHkCandidates(json,{content_sha256:s,source_ref:file.replace(/\.pages\.json$/,'')});
+  const {candidates,results}=await offlineHkCandidates(json,recordedOfflineDoc(header,file.replace(/\.pages\.json$/,'')));
   rows.push(...scoredRows(s,candidates,results));
   documents.push({file,source_url:header.source_url,content_sha256:s,bytes:bytes.length,page_count:fresh.pages.length,recorded_page_count:header.page_count,compared_pages:recordedPageNos.length,text_hash_mismatches:mismatches,candidates:candidates.length,checks_passed:results.filter(r=>r.checks_passed).length});
  }
  const evaluation=scoreHkFacts(gold,createHash('sha256').update(goldBytes).digest('hex'),rows,{extractor_ref:HK_EXTRACTOR_REF,extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,code_version:codeVersion});
- const report={generated_at:new Date().toISOString(),code_version:codeVersion,ok,documents,evaluation};
- mkdirSync(dirname(args.out),{recursive:true});
- writeFileSync(args.out,`${JSON.stringify(report,null,1)}\n`);
- console.log(JSON.stringify({out:args.out,ok,documents:documents.length,precision:evaluation.precision,recall:evaluation.recall},null,1));
- process.exit(ok?0:1);
+ const bytes_text_ok=ok;const gold_ok=shas.length>0&&evaluation.mismatches.length===0;
+ ok=bytes_text_ok&&gold_ok;
+ const report={generated_at:new Date().toISOString(),code_version:codeVersion,ok,bytes_text_ok,gold_ok,documents,evaluation};
+ if(args.apply){
+  mkdirSync(dirname(args.out),{recursive:true});
+  writeFileSync(args.out,`${JSON.stringify(report,null,1)}\n`);
+ }
+ console.log(JSON.stringify(report,null,1));
+ return ok?0:1;
 }
 
-main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exit(1);});
+if(process.argv[1]?.endsWith('validate-extraction.ts'))main().then(code=>{process.exitCode=code;}).catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exit(1);});

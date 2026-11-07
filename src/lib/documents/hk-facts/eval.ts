@@ -76,7 +76,7 @@ export function scoreHkFacts(gold:HkGoldFile,goldSha256:string,candidates:Scored
   counts:{considered,matched,gold_values:valued.length,covered,unscored},mismatches};
 }
 
-export interface RecordedHeader{recorded_at:string;source_url:string;content_sha256:string;bytes:number;page_count:number;extractor_version:string;table_algo_version:string;pages_subset?:boolean}
+export interface RecordedHeader{doc_class?:'annual_report'|'interim_report';language?:'zh'|'en';period_end?:string|null;recorded_at:string;source_url:string;content_sha256:string;bytes:number;page_count:number;extractor_version:string;table_algo_version:string;pages_subset?:boolean}
 /** record-fixture.ts output: {header, pages_json} or the header fields flat next to the PagesJson fields (the shape
  * record-fixture.ts writes). A --pages subset (pages_subset: true) is expanded to page_count pages, the pages not
  * recorded being empty (text ''), so it can stand in for a whole extraction (finish_document_extract wants pages
@@ -104,6 +104,11 @@ function lineAt(pages:PagesJson,page_no:number,offset:number):number|null{
  return before?before.index:null;
 }
 export interface OfflineDoc{content_sha256:string;source_ref:string;doc_class?:'annual_report'|'interim_report';language?:'zh'|'en';period_end?:string|null}
+/** Never silently reinterpret an unclassified recording as an annual report. */
+export function recordedOfflineDoc(header:Pick<RecordedHeader,'content_sha256'|'doc_class'|'language'|'period_end'>,source_ref:string):OfflineDoc{
+ if(header.doc_class!=='annual_report'&&header.doc_class!=='interim_report')throw new Error('recorded_fixture_doc_class_required');
+ return {content_sha256:header.content_sha256,source_ref,doc_class:header.doc_class,language:header.language,period_end:header.period_end};
+}
 /** generate + check without a database (citations live in memory; prior facts and English candidates are empty). */
 export async function offlineHkCandidates(pages:PagesJson,doc:OfflineDoc):Promise<{candidates:CandidateRow[];results:CheckRowResult[];info:BatchError[]}>{
  const now=new Date().toISOString();const documentId=randomUUID();const extractionId=randomUUID();const language=doc.language??'zh';

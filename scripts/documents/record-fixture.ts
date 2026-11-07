@@ -1,7 +1,7 @@
 /**
  * Record an HKEXnews PDF as a pages.json fixture (spec §11.3). Network; never run in CI.
  *
- *   npx tsx scripts/documents/record-fixture.ts --hkex <https://www1.hkexnews.hk/listedco/…/<file id>.pdf> [--pages 44-47,51-52] [--out <dir>]
+ *   npx tsx scripts/documents/record-fixture.ts --hkex <https://www1.hkexnews.hk/listedco/…/<file id>.pdf> --doc-class annual_report|interim_report [--pages 44-47,51-52] [--out <dir>]
  *
  * --pages keeps only those pages in pages_json (pages_subset: true; page_count and content_sha256 stay
  * those of the whole PDF): the committed 0268.HK fixture stores only its primary-statement pages.
@@ -30,7 +30,7 @@ import {buildPagesJson,sha256Hex} from '../../src/lib/documents/extract/pages-js
 import type {RecordedPagesFixture} from '../../src/lib/documents/extract/pages-json';
 import {EXTRACTOR_VERSION,MAX_DOC_BYTES,TABLE_ALGO_VERSION} from '../../src/lib/documents/types';
 
-const USAGE='usage: record-fixture.ts --hkex <hkexnews pdf url> [--pages a-b,c] [--out <dir>]';
+const USAGE='usage: record-fixture.ts --hkex <hkexnews pdf url> --doc-class annual_report|interim_report [--pages a-b,c] [--out <dir>]';
 /** '44-47,51' → {44,45,46,47,51}; null on any malformed part. */
 function parsePages(spec:string):Set<number>|null{
  const out=new Set<number>();
@@ -87,14 +87,15 @@ export function writeFileAtomic(path:string,data:string):void{
 }
 
 async function main(){
- const argv=process.argv.slice(2);let url:string|undefined;let outDir=DEFAULT_OUT;let only:Set<number>|null=null;
+ const argv=process.argv.slice(2);let url:string|undefined;let docClass:'annual_report'|'interim_report'|undefined;let outDir=DEFAULT_OUT;let only:Set<number>|null=null;
  for(let i=0;i<argv.length;i++){
   if(argv[i]==='--hkex'&&argv[i+1])url=argv[++i];
+  else if(argv[i]==='--doc-class'&&argv[i+1]){const value=argv[++i];if(value!=='annual_report'&&value!=='interim_report')fail(USAGE);docClass=value as typeof docClass;}
   else if(argv[i]==='--out'&&argv[i+1])outDir=argv[++i];
   else if(argv[i]==='--pages'&&argv[i+1])only=parsePages(argv[++i])??fail(USAGE);
   else fail(USAGE);
  }
- if(!url)fail(USAGE);
+ if(!url||!docClass)fail(USAGE);
  const sourceRef=hkexSourceRef(url!)??fail(`not an HKEXnews listedco PDF url: ${url}`);
  let bytes:Uint8Array;
  try{bytes=await download(url!);}catch(e){return fail(e instanceof Error?e.message:String(e),1);}
@@ -105,7 +106,7 @@ async function main(){
  if(only!==null&&[...only].some(n=>n>pages.length))fail(`--pages beyond the document's ${pages.length} pages`);
  const kept=only===null?pages:pages.filter(p=>only!.has(p.page_no));
  const built=buildPagesJson({content_sha256:contentSha,code_version:resolveCodeVersion({allowGit:true})??'unknown',has_text_layer:hasTextLayer,pages:kept});
- const fixture:RecordedPagesFixture={recorded_at:new Date().toISOString(),source_url:url!,source_ref:sourceRef,content_sha256:contentSha,bytes:bytes.length,page_count:pages.length,
+ const fixture:RecordedPagesFixture={doc_class:docClass,recorded_at:new Date().toISOString(),source_url:url!,source_ref:sourceRef,content_sha256:contentSha,bytes:bytes.length,page_count:pages.length,
   extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,...(only===null?{}:{pages_subset:true as const}),pages_json:built.json};
  // every check before the first byte is written: a Chinese document without CJK text means the CMaps were not found
  const problem=recordProblem(sourceRef,cjkChars);

@@ -7,7 +7,8 @@ vi.mock('../hk-facts/generate',()=>({generateHkCandidates:mocks.generate}));
 import {DocumentsDbError,EXTRACTOR_VERSION,HK_EXTRACTOR_REF,TABLE_ALGO_VERSION} from '../types';
 import type {CandidateInsert,DocumentRow,ExtractionRow,FinancialFactPayload,PagesJson} from '../types';
 import {HEARTBEAT_MS} from '../lease';
-import {CandidatesRunError,runDocumentsCandidates} from './run';
+import {CandidatesRunError,runDocumentsCandidates,supabaseCandidatesDeps} from './run';
+import type {SupabaseClient} from '@supabase/supabase-js';
 import type {CandidatesOptions} from './run';
 import {ADMIN,CODE,FY25,ISSUER,candidatesDepsOf,citeSeedFact,hkHarness,naturalKeyOf,seedCandidateInsert,seedHkCandidates,seedHkExtraction,snapshotOf} from '../hk-facts/test-support';
 import type {CiteAt,HkHarness,SeedFact,SeededExtraction} from '../hk-facts/test-support';
@@ -345,5 +346,51 @@ describe('Task 15 fix: identity scope, findings order, race, auto budget, compar
   expect(items[0]).toMatchObject({reason_code:'hk_en_zh_mismatch'});
   expect(items[0].natural_key).toBe(`${zh.document.document_id}:${zh.extractionId}:${naturalKeyOf(FY25[0])}`);
   await run(h);expect(h.tables.rows('dq_quarantine')).toHaveLength(1);   // idempotent
+ });
+});
+
+
+describe('production hook repair wiring',()=>{
+ it('does not start another RPC when an in-flight repair returns after the runner timed out',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=hkHarness();vi.setSystemTime(h.now());
+   let finish!:(value:{data:number;error:null})=>void;
+   const rpc=vi.fn(()=>new Promise<{data:number;error:null}>(resolve=>{finish=resolve;}));
+   const production=supabaseCandidatesDeps({rpc} as unknown as SupabaseClient,{deadline:new Date(Date.now()+120_000),now:()=>new Date(),codeVersion:CODE});
+   const memory=candidatesDepsOf(h);
+   const result=run(h,{phases:['promote']},{...production,db:memory.db,tables:memory.tables,store:memory.store,port:memory.port});
+   await vi.advanceTimersByTimeAsync(100_000);
+   expect((await result).errors).toContainEqual(expect.objectContaining({code:'deadline_hit'}));
+   expect(rpc).toHaveBeenCalledTimes(1);
+   finish({data:100,error:null});
+   await vi.advanceTimersByTimeAsync(1);
+   expect(rpc).toHaveBeenCalledTimes(1);
+  }finally{vi.useRealTimers();}
+ });
+
+ it('uses the SQL repair, preserves audit detail, and issues no more work at the repair deadline',async()=>{
+  const h=hkHarness();let now=h.now();
+  const deadline=new Date(now.getTime()+120_000);
+  const detail:Record<string,unknown>={chosen_fact_ids:['fact'],audit:{reviewer:'admin'},hook:{state:'failed'}};
+  const rpc=vi.fn(async(name:string,args:Record<string,unknown>)=>{
+   expect(name).toBe('finalize_hk_hooks');expect(args.p_limit).toBe(100);
+   // Model the SQL hook-only merge, including an audit update made after the run began.
+   detail.audit={reviewer:'admin',concurrent:true};
+   detail.hook={stage:'done',state:'done',at:args.p_at,message:'hk_no_metrics'};
+   now=new Date(deadline.getTime()-20_000); // final receipt reserve starts here
+   return {data:100,error:null};
+  });
+  const production=supabaseCandidatesDeps({rpc} as unknown as SupabaseClient,{deadline,now:()=>now,codeVersion:CODE});
+  const memory=candidatesDepsOf(h);
+  const select=vi.spyOn(h.tables,'select');
+  const due=vi.spyOn(h.port,'promotionDue');
+  const result=await run(h,{phases:['promote']},{...production,db:memory.db,tables:memory.tables,store:memory.store,port:memory.port});
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(select.mock.calls.some(([table])=>table==='dq_quarantine')).toBe(false);
+  expect(due).not.toHaveBeenCalled();
+  expect(result.errors).toContainEqual(expect.objectContaining({code:'deadline_hit'}));
+  expect(detail).toEqual({chosen_fact_ids:['fact'],audit:{reviewer:'admin',concurrent:true},hook:{stage:'done',state:'done',at:h.now().toISOString(),message:'hk_no_metrics'}});
+  await Promise.resolve();expect(rpc).toHaveBeenCalledTimes(1);
  });
 });

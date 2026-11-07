@@ -64,7 +64,7 @@ export function pageInsertsOf(json:PagesJson):PageInsert[]{
 /** File written by scripts/documents/record-fixture.ts (spec §11.3): header fields plus the pages.json it produced.
  * pages_subset: only the pages chosen with --pages are stored (an 84-page report's full pages.json is ~4.9 MB);
  * page_count and content_sha256 still describe the whole PDF, the stored pages keep their page_no. */
-export interface RecordedPagesFixture{recorded_at:string;source_url:string;source_ref:string;content_sha256:string;bytes:number;page_count:number;extractor_version:string;table_algo_version:string;pages_subset?:true;pages_json:PagesJson}
+export interface RecordedPagesFixture{doc_class?:'annual_report'|'interim_report';recorded_at:string;source_url:string;source_ref:string;content_sha256:string;bytes:number;page_count:number;extractor_version:string;table_algo_version:string;pages_subset?:true;pages_json:PagesJson}
 const HEX64=/^[0-9a-f]{64}$/;
 /** A subset's page numbers are strictly ascending inside 1..page_count. */
 const subsetOk=(f:RecordedPagesFixture)=>f.pages_json.pages.every((p,i,a)=>Number.isInteger(p.page_no)&&p.page_no>=1&&p.page_no<=f.page_count&&(i===0||p.page_no>a[i-1].page_no));

@@ -43,7 +43,8 @@ import {supabaseHkFactsPort} from '../hk-facts/facts-port';
 import type {HkFactsPort} from '../hk-facts/facts-port';
 import {generateHkCandidates} from '../hk-facts/generate';
 import {runHkFactsSync} from '../hk-facts/promote';
-import {finalizeHkHooks} from '../hk-facts/resolve';
+import {finalizeHkHooks,supabaseHookRepair} from '../hk-facts/resolve';
+import type {HookRepair} from '../hk-facts/resolve';
 import {BudgetExceeded,FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbeat,withinBudget} from '../lease';
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
@@ -54,7 +55,7 @@ export const MIN_ITEM_MS=90_000;
 /** Budget a costly phase (generation, checks) needs to start (P2-7). */
 export const MIN_PHASE_MS=20_000;
 export const APPROVALS_LIMIT=100;
-export interface CandidatesDeps{db:DocumentsDb;tables:TableClient;store:ObjectStore;port:HkFactsPort;now:()=>Date;deadline:Date|null;codeVersion:string|null}
+export interface CandidatesDeps{db:DocumentsDb;tables:TableClient;store:ObjectStore;port:HkFactsPort;hooks?:HookRepair;now:()=>Date;deadline:Date|null;codeVersion:string|null}
 export interface CandidatesOptions{limit:number;extractionIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;phases?:CandidatesPhase[]}
 export interface ExtractionOutcome{extractionId:string;documentId:string|null;outcome:'done'|'failed'|'skipped'|'due';code?:string;inserted:number;written:number;inherited:number;quarantined:number;identity?:IdentityTally}
 export interface IdentityTally{checked:number;skipped:number;failed:number}
@@ -78,7 +79,7 @@ export async function allPages<T>(read:(cursor:string|null)=>Promise<Page<T>>):P
 
 /** Production wiring over the service-role client (spec §6.3 cron, admin routes, scripts). */
 export function supabaseCandidatesDeps(admin:SupabaseClient,opts:{deadline:Date|null;codeVersion:string|null;now?:()=>Date}):CandidatesDeps{
- return {db:supabaseDocumentsDb(admin),tables:supabaseTableClient(admin),store:supabaseObjectStore(admin),port:supabaseHkFactsPort(admin),
+ return {db:supabaseDocumentsDb(admin),tables:supabaseTableClient(admin),store:supabaseObjectStore(admin),port:supabaseHkFactsPort(admin),hooks:supabaseHookRepair(admin),
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }
 
@@ -277,8 +278,10 @@ export async function runDocumentsCandidates(deps:CandidatesDeps,opts:Candidates
    try{
     if(remainingMs(deps)<MIN_ITEM_MS)errors.push({code:'deadline_hit',message:JSON.stringify({promote_not_started:1})});
     else{
-     const fixed=await withinBudget(finalizeHkHooks(deps.tables,deps.now()),Math.max(0,remainingMs(deps)-FINAL_RESERVE_MS));   // R5-12: accepts made through the generic dq route
+     const repairDeadline=deps.deadline===null?null:new Date(deps.deadline.getTime()-FINAL_RESERVE_MS);
+     const fixed=await withinBudget(finalizeHkHooks(deps.tables,deps.now(),{hooks:deps.hooks,deadline:repairDeadline,clock:deps.now}),Math.max(0,remainingMs(deps)-FINAL_RESERVE_MS));   // R5-12: accepts made through the generic dq route
      if(fixed>0)errors.push({code:'skipped_summary',key:'facts.hk:hooks',message:JSON.stringify({hk_no_metrics:fixed})});
+     if(remainingMs(deps)<=FINAL_RESERVE_MS)throw new BudgetExceeded();
      const due=await deps.port.promotionDue(HK_PUB_GEN,opts.limit);
      if(due.length>0)idle=false;
      for(const x of await runHkFactsSync(deps,{issuerIds:due.map(d=>d.issuerId),batchId,triggeredBy:opts.triggeredBy})){

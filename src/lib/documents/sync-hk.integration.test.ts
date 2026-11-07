@@ -6,7 +6,7 @@
 // committed synthetic layout for those bytes → candidates + checks → human decisions → promote
 // into the spec-2 tables; evidence is invisible to anon until the run publishes. Recorded layer:
 // when fixtures/hkex/2026090300863_c.pages.json exists (recorded by record-fixture.ts at execution
-// time) the same pipeline runs on it and every recorded gold entry of that document is asserted.
+// time) the same pipeline runs on it. Every recorded gold document is also checked offline below.
 // HK gold gate mirrors src/lib/facts/sync-us.integration.test.ts: ready:false warns, ready:true
 // enforces the §11.4 matrix. The cases run in order and SHARE STATE; do not reorder them.
 import {existsSync,readFileSync,readdirSync} from 'node:fs';
@@ -17,12 +17,13 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
 import {runDocumentsCandidates} from './candidates/run';
 import type {CandidatesDeps} from './candidates/run';
+import {cpSlice,sha256Hex} from './extract/pages-json';
 import {runDocumentsExtract} from './extract/run';
 import type {ExtractDeps} from './extract/run';
 import {SYNTHETIC_ANCHORS,SYNTHETIC_SOURCE_REF,syntheticAnnualPages} from './fixtures/hkex/synthetic-annual';
 import {HK_CONCEPT_IDS} from './hk-facts/checks';
-import {goldNaturalKey,goldProvenanceGaps,isPendingGold,loadRecordedFixture} from './hk-facts/eval';
-import type {HkGoldFile} from './hk-facts/eval';
+import {goldNaturalKey,goldProvenanceGaps,isPendingGold,loadRecordedFixture,offlineHkCandidates,recordedOfflineDoc} from './hk-facts/eval';
+import type {HkGoldEntry,HkGoldFile} from './hk-facts/eval';
 import {pgHkFactsPort} from './hk-facts/pg-facts-port';
 import type {HkFactsPort} from './hk-facts/facts-port';
 import {memoryObjectStore} from './object-store';
@@ -146,7 +147,7 @@ describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
 
  it('human confirmation and the promote phase publish HK facts with evidence; anon sees the evidence only after publish (spec §12 example 3)',async()=>{
   const d=await docRow(SYNTHETIC_SOURCE_REF);
-  const main=(await allCandidates(d.current_extraction_id)).filter(c=>c.checks_passed&&(c.payload as FinancialFactPayload).period_end==='2025-12-31');
+  const main=(await allCandidates(d.current_extraction_id)).filter(c=>c.checks_passed);
   expect(main.length).toBeGreaterThanOrEqual(SYNTHETIC_ANCHORS.filter(a=>a.natural_key.includes(':2025-12-31:')).length);
   for(const c of main)await db.decideCandidate(c.candidate_id,{kind:'human',decided_by:adminUser,status:'confirmed'});
   const revenue=main.find(c=>c.natural_key===SYNTHETIC_ANCHORS[0].natural_key)!;
@@ -154,25 +155,53 @@ describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
   expect((await port.promotionDue(HK_PUB_GEN,100)).map(x=>x.issuerId)).toContain(issuer);
   const r=await runDocumentsCandidates(candDeps,{limit:100,dryRun:false,triggeredBy:'script',phases:['promote']});
   expect(r.promote.find(p=>p.issuerId===issuer)).toMatchObject({outcome:'published'});
-  const facts=(await admin.query(`select f.fact_id,f.concept,f.value_text,f.status,f.market,f.mapping_gen,f.raw_hash,g.source,g.origin,g.source_ref,g.mapping_gen g_gen
-   from public.financial_facts f join public.filings g on g.filing_id=f.filing_id where f.issuer_id=$1 and f.market='HK'`,[issuer])).rows;
-  expect(facts).toHaveLength(main.length);
-  for(const f of facts)expect(f).toMatchObject({status:'ok',market:'HK',mapping_gen:HK_PUB_GEN,source:'hkex',origin:'hkex',source_ref:`hkex:${SYNTHETIC_SOURCE_REF}:v1`,g_gen:HK_PUB_GEN});
-  const rev=facts.find(f=>f.concept==='revenue')!;
-  expect(rev.value_text).toBe(SYNTHETIC_ANCHORS[0].value);
-  expect(rev.raw_hash).toMatch(new RegExp(`^hkex:${String(d.content_sha256).slice(0,16)}:${d.current_extraction_id}:p\\d+:c\\d+-\\d+$`));
-  const roles=(await admin.query(`select role,count(*)::int n from public.fact_citations where fact_id=$1 group by role`,[rev.fact_id])).rows as {role:string;n:number}[];
-  const n=(role:string)=>roles.find(x=>x.role===role)?.n??0;
-  expect([n('value'),n('label'),n('unit')]).toEqual([1,1,1]);expect(n('period')).toBeGreaterThanOrEqual(2);
-  // migration two: the published evidence is exactly the candidate's citations (no more, no fewer)
-  const cites=revenue.citations as {value:string;label:string;unit:string;unit_currency?:string;period:{citation_id:string}[]};
-  const want=[...new Set([cites.value,cites.label,cites.unit,...(cites.unit_currency?[cites.unit_currency]:[]),...cites.period.map(p=>p.citation_id)])].sort();
-  const got=(await admin.query(`select citation_id from public.fact_citations where fact_id=$1`,[rev.fact_id])).rows.map(r=>r.citation_id as string).sort();
-  expect(got).toEqual(want);
-  expect((await admin.query(`select fd.document_id from public.filing_documents fd join public.financial_facts f on f.filing_id=fd.filing_id where f.fact_id=$1`,[rev.fact_id])).rows[0].document_id).toBe(d.document_id);
   await asAnon(async c=>{
-   expect((await c.query('select citation_id from public.document_citations where citation_id=$1',[valueCitation(revenue)])).rows).toHaveLength(1);
-   expect(Number((await c.query('select count(*) n from public.fact_citations where fact_id=$1',[rev.fact_id])).rows[0].n)).toBeGreaterThanOrEqual(5);
+   const envelope=(await c.query("select public.read_facts($1,'HK',null,'2026-12-31',null,null,false,100,false) facts",[issuer])).rows[0].facts;
+   expect(envelope.truncated).toBe(false);
+   expect(envelope.rows).toHaveLength(main.length);
+   const expectedCells=[['收益','6,256,000'],['銷售成本','(2,100,000)'],['毛利','4,156,000'],['資產總值','20,000,000'],
+    ['經營活動所得現金淨額','900,000'],['投資活動所用現金淨額','(500,000)'],['收益','5,679,000']];
+   for(const [index,anchor] of SYNTHETIC_ANCHORS.entries()){
+    const fact=envelope.rows.find((f:FinancialFactPayload)=>goldNaturalKey(f)===anchor.natural_key);
+    expect(fact,`public fact ${anchor.natural_key}`).toBeDefined();
+    expect(fact.value,anchor.natural_key).toBe(anchor.value);
+    expect(fact).toMatchObject({status:'ok',market:'HK',mapping_gen:HK_PUB_GEN});
+    const filing=(await c.query('select source,origin,source_ref,mapping_gen from public.filings where filing_id=$1',[fact.filing_id])).rows[0];
+    expect(filing).toMatchObject({source:'hkex',origin:'hkex',source_ref:`hkex:${SYNTHETIC_SOURCE_REF}:v1`,mapping_gen:HK_PUB_GEN});
+    const candidate=main.find(x=>x.natural_key===anchor.natural_key)!;
+    const cites=candidate.citations as {value:string;label:string;unit:string;unit_currency?:string;period:{citation_id:string}[]};
+    const expectedRoles=[['value',cites.value],['label',cites.label],['unit',cites.unit],
+     ...(cites.unit_currency?[['unit_currency',cites.unit_currency]]:[]),...cites.period.map(p=>['period',p.citation_id])];
+    const links=(await c.query('select role,citation_id from public.fact_citations where fact_id=$1',[fact.fact_id])).rows;
+    expect(links.map(x=>[x.role,x.citation_id]).sort()).toEqual(expectedRoles.sort());
+    expect(cites.period.length).toBeGreaterThanOrEqual(2);
+    for(const link of links){
+     const evidence=(await c.query(`select dc.*,p.text,p.text_hash page_hash,d.current_extraction_id
+      from public.document_citations dc join public.document_pages p using(extraction_id,page_no)
+      join public.disclosure_documents d on d.document_id=dc.document_id where dc.citation_id=$1`,[link.citation_id])).rows[0];
+     expect(evidence).toBeDefined();
+     expect(evidence.document_id).toBe(d.document_id);
+     expect(evidence.extraction_id).toBe(d.current_extraction_id);
+     expect(evidence.extraction_id).toBe(evidence.current_extraction_id);
+     expect(evidence.text_hash).toBe(sha256Hex(evidence.text));
+     expect(evidence.page_hash).toBe(evidence.text_hash);
+     expect(cpSlice(evidence.text,evidence.char_start,evidence.char_end)).toBe(evidence.snippet);
+     const page=syntheticAnnualPages()[evidence.page_no-1];
+     expect(evidence.text).toBe(page.text);
+     if(link.role==='value'||link.role==='label'){
+      const expected=expectedCells[index][link.role==='label'?0:1];
+      const cell=page.tables.flatMap(t=>t.cells).find(cell=>cell.text===expected);
+      expect(cell).toBeDefined();
+      expect(evidence).toMatchObject({snippet:expected,char_start:cell!.char_start,char_end:cell!.char_end});
+     }else{
+      const header=page.tables.flatMap(t=>t.header_lines).flatMap(line=>[line,...line.items]);
+      expect(header.some(h=>h.text===evidence.snippet&&h.char_start===evidence.char_start&&h.char_end===evidence.char_end)).toBe(true);
+      if(link.role==='unit')expect(evidence.snippet).toBe('人民幣千元');
+     }
+     if(link.role==='value')expect(fact.raw_hash).toBe(`hkex:${String(d.content_sha256).slice(0,16)}:${d.current_extraction_id}:p${evidence.page_no}:c${evidence.char_start}-${evidence.char_end}`);
+    }
+    expect((await c.query('select document_id from public.filing_documents where filing_id=$1',[fact.filing_id])).rows.map(r=>r.document_id)).toContain(d.document_id);
+   }
   });
   expect((await allCandidates(d.current_extraction_id)).filter(c=>c.status==='promoted')).toHaveLength(main.length);
  },120_000);
@@ -241,5 +270,51 @@ describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
    expect(full.length,`${t}: 2 periods carrying all 18 concepts (have ${[...periods].map(([p,c])=>`${p}:${c.size}`).join(', ')})`).toBeGreaterThanOrEqual(2);
   }
   for(const s of new Set(gold.entries.map(e=>e.source.document_sha256)))expect(fixtures.has(s),`no recorded fixture for document ${s} (record-fixture.ts --hkex <url>)`).toBe(true);
+ });
+});
+
+// The recorded extraction layer does not need PostgreSQL: run the real generator and checks for
+// every non-pending gold document, even while ready:false. Missing recordings must not silently
+// suppress assertions for already transcribed gold entries.
+async function assertRecordedGold(gold:HkGoldFile,load:(hash:string)=>ReturnType<typeof loadRecordedFixture>){
+ const entries=gold.entries.filter(e=>!isPendingGold(e));
+ for(const hash of new Set(entries.map(e=>e.source.document_sha256))){
+  const fixture=load(hash);
+  const {candidates,results}=await offlineHkCandidates(fixture.pages,recordedOfflineDoc(fixture.header,hash));
+  const passed=new Set(results.filter(r=>r.checks_passed).map(r=>r.candidate_id));
+  for(const entry of entries.filter(e=>e.source.document_sha256===hash)){
+   const found=candidates.filter(c=>c.natural_key===goldNaturalKey(entry)&&passed.has(c.candidate_id));
+   const context=`${entry.issuer.ticker} ${hash} ${goldNaturalKey(entry)}`;
+   if(entry.value==='missing')expect(found,`${context} must stay missing`).toEqual([]);
+   else{
+    expect(found,context).toHaveLength(1);
+    expect((found[0].payload as FinancialFactPayload).value,context).toBe(entry.value);
+   }
+  }
+ }
+}
+describe('HK recorded gold extraction coverage',()=>{
+ it('generates and checks every recorded gold document, including missing entries',async()=>{
+  const gold=JSON.parse(readFileSync(GOLD,'utf8')) as HkGoldFile;
+  const fixtures=recordedFixtures();
+  await assertRecordedGold(gold,hash=>{
+   const file=fixtures.get(hash);
+   expect(file,`recorded gold requires fixture ${hash}`).toBeDefined();
+   return loadRecordedFixture(JSON.parse(readFileSync(new URL(file!,HKEX_DIR),'utf8')));
+  });
+ });
+ it('detects wrong values and unexpected missing-entry candidates in the second document',async()=>{
+  const hashes=['a'.repeat(64),'b'.repeat(64)];
+  const entry=(hash:string,value:string):HkGoldEntry=>({issuer:{ticker:'TEST.HK'},concept:'revenue',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',unit:'CNY',value,
+   source:{document_sha256:hash,page:1,line_text:'收益 6,256,000 5,679,000'},recorded_by:'synthetic regression',recorded_at:'2026-11-06T00:00:00Z'});
+  const load=(hash:string)=>loadRecordedFixture({header:{content_sha256:hash,doc_class:'annual_report'},pages_json:{content_sha256:hash,extractor_version:'docs-extract/1.0',table_algo_version:'tables/1.0',code_version:CODE,has_text_layer:true,pages:syntheticAnnualPages()}});
+  const gold:HkGoldFile={version:1,ready:false,required:{HK:true},issuers:[],entries:[entry(hashes[0],'6256000000'),entry(hashes[1],'6256000000')]};
+  await expect(assertRecordedGold(gold,load)).resolves.toBeUndefined();
+  gold.entries[1].value='1';
+  await expect(assertRecordedGold(gold,load)).rejects.toThrow(hashes[1]);
+  gold.entries[1].value='missing';
+  await expect(assertRecordedGold(gold,load)).rejects.toThrow('must stay missing');
+  gold.entries[1].concept='capital_expenditure';
+  await expect(assertRecordedGold(gold,load)).resolves.toBeUndefined();
  });
 });
