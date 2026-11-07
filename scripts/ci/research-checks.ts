@@ -26,6 +26,10 @@ criticalSuites.push('src/lib/macro/macro.integration.test.ts');
 // MACRO-P3
 criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
 // /MACRO-P3
+// F3 document pipeline (Tasks 1, 13, 18)
+criticalSuites.push('src/lib/documents/documents.integration.test.ts', 'src/lib/documents/fact-citations.integration.test.ts',
+   'src/lib/documents/sync-hk.integration.test.ts', 'src/lib/documents/sync-us.integration.test.ts');
+// end F3
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

@@ -48,7 +48,13 @@ function capErrors(errors:BatchError[]):BatchError[]{
  */
 export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary'] as const;
 export type InfoCode=typeof INFO_CODES[number];
-export const isInfoError=(e:BatchError)=>(INFO_CODES as readonly string[]).includes(e.code);
+// F3 document pipeline (spec §10): informational codes of the HK candidate generator, the
+// comparative / en-zh checks and the LLM boundary. Kept outside INFO_CODES, whose exact value is
+// pinned by src/lib/facts/rules.test.ts (not editable by F3); isInfoError consults both lists.
+export const F3_INFO_CODES=['locate_ambiguous','period_unparsed','unit_ambiguous','label_ambiguous','not_consolidated','restated_comparative','en_zh_mismatch','extractor_disagreement','llm_uncited'] as const;
+export type F3InfoCode=typeof F3_INFO_CODES[number];
+export const isInfoError=(e:BatchError)=>(INFO_CODES as readonly string[]).includes(e.code)||(F3_INFO_CODES as readonly string[]).includes(e.code);
+// end F3
 
 const accounted=(c:BatchCounts)=>c.inserted+c.duplicates+c.versioned+c.quarantined+c.failed;
 export const UNACCOUNTED_ERROR:BatchError={code:'unaccounted',message:'fetched rows without outcomes'};

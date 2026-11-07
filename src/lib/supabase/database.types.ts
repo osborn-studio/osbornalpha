@@ -25,6 +25,7 @@
 // + 20261115090000_macro_strategy.sql (macro_strategy_manifests, macro_review_results, macro_review_current,
 //   macro_review_attempts, macro_explanation_runs, macro_explanations; the eight RPCs are not registered)
 // /MACRO-P3
+// + 20261117090000_disclosure_documents.sql (F3: disclosure_documents and its eight child/scheduling tables)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -758,6 +759,177 @@ export interface MacroAnalysisRunRow {
 }
 // /MACRO
 
+// F3 document pipeline — 20261117090000_disclosure_documents.sql. Hand-maintained like the blocks
+// above; RPCs are not registered (supabaseDocumentsDb narrows the client locally). bigint (bytes)
+// and numeric (width, height, precision, recall) arrive as JSON numbers from PostgREST: readers go
+// through the src/lib/documents/db.ts normalisers.
+export interface DisclosureDocument {
+  document_id: string;
+  issuer_id: string | null;
+  source: 'edgar' | 'cninfo' | 'hkexnews' | 'upload';
+  market: 'US' | 'CN' | 'HK' | 'other';
+  source_ref: string;
+  source_version: number;
+  supersedes_document_id: string | null;
+  observed_replacement: boolean;
+  form_type: string | null;
+  doc_class: 'annual_report' | 'interim_report' | 'quarterly_report' | 'results_announcement' | 'current_report' | 'registration' | 'proxy' | 'ownership' | 'other';
+  classifier_gen: number;
+  title: string;
+  language: 'zh' | 'en' | null;
+  source_url: string | null;
+  content_sha256: string;
+  bytes: number;
+  mime: 'application/pdf' | 'text/html' | 'application/xhtml+xml' | 'application/xml' | 'text/xml' | 'application/json';
+  storage_path: string;
+  acquisition: Record<string, unknown>;
+  published_at: string;
+  published_at_precision: 'instant' | 'date';
+  available_at: string;
+  available_date: string;
+  fiscal_year: number | null;
+  fiscal_period: 'FY' | 'H1' | 'Q1' | 'Q3' | null;
+  period_end: string | null;
+  filing_source_ref: string | null;
+  permission: 'public' | 'licensed' | 'private';
+  owner_user_id: string | null;
+  license_ref: string | null;
+  status: 'stored' | 'extracted' | 'no_text_layer' | 'extract_failed';
+  current_extraction_id: string | null;
+  extract_lease_until: string | null;
+  extract_lease_batch_id: string | null;
+  extract_attempts: number;
+  batch_id: string;
+  code_version: string;
+  created_at: string;
+}
+export interface DocumentAsset {
+  asset_id: string;
+  document_id: string;
+  role: 'filing_index' | 'xbrl_instance' | 'exhibit';
+  filename: string;
+  source_url: string;
+  content_sha256: string;
+  bytes: number;
+  mime: string;
+  storage_path: string;
+  acquisition: Record<string, unknown>;
+  created_at: string;
+}
+export interface DocumentExtraction {
+  extraction_id: string;
+  document_id: string;
+  extractor_version: string;
+  table_algo_version: string;
+  code_version: string;
+  has_text_layer: boolean;
+  page_count: number;
+  pages_json_path: string;
+  pages_json_sha256: string;
+  candidates_role: 'none' | 'primary' | 'comparison';
+  candidates_status: 'n/a' | 'pending' | 'done' | 'failed' | 'exhausted';
+  candidates_attempts: number;
+  candidates_lease_until: string | null;
+  candidates_lease_batch_id: string | null;
+  batch_id: string;
+  created_at: string;
+}
+export interface DocumentPage {
+  extraction_id: string;
+  page_no: number;
+  text: string;
+  text_hash: string;
+  char_count: number;
+  width: number | null;
+  height: number | null;
+  line_count: number;
+  has_tables: boolean;
+}
+export interface DocumentCitation {
+  citation_id: string;
+  document_id: string;
+  extraction_id: string;
+  page_no: number;
+  char_start: number;
+  char_end: number;
+  bbox: { x0: number; y0: number; x1: number; y1: number } | null;
+  snippet: string;
+  text_hash: string;
+  visibility: 'internal' | 'public';
+  created_by: 'extractor' | 'human' | 'llm' | 'module';
+  created_ref: string;
+  created_at: string;
+}
+export interface ExtractionApproval {
+  approval_id: string;
+  extractor_ref: string;
+  extractor_version: string;
+  table_algo_version: string;
+  code_version: string;
+  concepts: string[];
+  gold_sha256: string;
+  precision: number;
+  recall: number;
+  report_path: string;
+  approved_by: string;
+  approved_at: string;
+  revoked_at: string | null;
+}
+export interface ExtractionCandidate {
+  candidate_id: string;
+  document_id: string;
+  extraction_id: string;
+  kind: 'financial_fact' | 'table_cell' | 'field';
+  extractor_kind: 'rule' | 'llm';
+  extractor_ref: string;
+  natural_key: string;
+  citations: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  fingerprint: string;
+  checks: Array<{ check: string; blocking: boolean; passed: boolean | null; detail?: Record<string, unknown> }>;
+  checks_passed: boolean;
+  status: 'candidate' | 'confirmed' | 'rejected' | 'promoted';
+  decision_kind: 'human' | 'auto' | null;
+  decided_by: string | null;
+  approval_id: string | null;
+  decided_at: string | null;
+  inherited_from: string | null;
+  input_snapshot: Record<string, unknown>;
+  batch_id: string;
+  created_at: string;
+}
+export interface CandidatePublication {
+  candidate_id: string;
+  pub_gen: number;
+  run_id: string;
+  fact_id: string;
+  state: 'staged' | 'published' | 'abandoned';
+  created_at: string;
+  updated_at: string;
+}
+export interface DocumentSyncScope {
+  issuer_id: string;
+  source: 'edgar' | 'cninfo' | 'hkexnews';
+  reasons: string[];
+  priority: number;
+  fetch_key: string;
+  backfill_cursor: Record<string, unknown>;
+  backfill_done: boolean;
+  poll_cursor: Record<string, unknown>;
+  next_due_at: string;
+  lease_until: string | null;
+  lease_batch_id: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_status: 'success' | 'failed' | null;
+  updated_at: string;
+  scope_confirmed_at: string; // F3 review (Task 5): retirement guard
+}
+// F3 migration two (20261117091000_fact_citations.sql): written only through bind_filing_documents /
+// insert_fact_citations (no direct writes for any role); anon/authenticated read under RLS.
+export interface FactCitationLink { fact_id: string; citation_id: string; role: 'value' | 'label' | 'period' | 'unit' | 'unit_currency'; }
+export interface FilingDocument { filing_id: string; document_id: string; created_at: string; }
+// F3 document pipeline — end
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
 // industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
 export type IssuerStatus = 'active' | 'merged' | 'dissolved';
@@ -1395,6 +1567,19 @@ export type Database = {
       macro_explanation_runs: { Row: MacroExplanationRunRow; Insert: Partial<MacroExplanationRunRow>; Update: Partial<MacroExplanationRunRow> };
       macro_explanations: { Row: MacroExplanationRow; Insert: Partial<MacroExplanationRow>; Update: Partial<MacroExplanationRow> };
       // /MACRO-P3
+      // F3 document pipeline
+      disclosure_documents: { Row: DisclosureDocument; Insert: Partial<DisclosureDocument>; Update: Partial<DisclosureDocument> };
+      document_assets: { Row: DocumentAsset; Insert: Partial<DocumentAsset>; Update: Partial<DocumentAsset> };
+      document_extractions: { Row: DocumentExtraction; Insert: Partial<DocumentExtraction>; Update: Partial<DocumentExtraction> };
+      document_pages: { Row: DocumentPage; Insert: Partial<DocumentPage>; Update: Partial<DocumentPage> };
+      document_citations: { Row: DocumentCitation; Insert: Partial<DocumentCitation>; Update: Partial<DocumentCitation> };
+      extraction_approvals: { Row: ExtractionApproval; Insert: Partial<ExtractionApproval>; Update: Partial<ExtractionApproval> };
+      extraction_candidates: { Row: ExtractionCandidate; Insert: Partial<ExtractionCandidate>; Update: Partial<ExtractionCandidate> };
+      candidate_publications: { Row: CandidatePublication; Insert: Partial<CandidatePublication>; Update: Partial<CandidatePublication> };
+      document_sync_scope: { Row: DocumentSyncScope; Insert: Partial<DocumentSyncScope>; Update: Partial<DocumentSyncScope> };
+      fact_citations: { Row: FactCitationLink; Insert: Partial<FactCitationLink>; Update: Partial<FactCitationLink> };
+      filing_documents: { Row: FilingDocument; Insert: Partial<FilingDocument>; Update: Partial<FilingDocument> };
+      // F3 document pipeline — end
     };
     Functions: {
       quote_alert_window_samples: {
