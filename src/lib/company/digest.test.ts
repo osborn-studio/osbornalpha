@@ -53,7 +53,7 @@ describe('selection',()=>{
   expect(interleave([1,2,3,4,5,6,7,8,9],['a','b','c'])).toEqual([1,2,3,4,'a',5,6,7,8,'b',9,'c']);
   expect(interleave([],['a','b'])).toEqual(['a','b']);expect(interleave([1,2],[])).toEqual([1,2]);
  });
- it('80/20 budget with integer arithmetic, 7-day sweep age, dedupe (both lists → sweep=true in place), market filter',async()=>{
+ it('80/20 budget with integer arithmetic, 7-day sweep age, dedupe (both lists → sweep=true, moved to the sweep list), market filter',async()=>{
   const digestDue=vi.fn(async()=>[due('i1'),due('i2'),due('x'),due('c1',1,0,'CN')]);
   const sweepDue=vi.fn(async()=>[due('x',1,1),due('s1',1,1)]);
   const now=new Date('2026-11-06T12:00:00.000Z');
@@ -61,10 +61,17 @@ describe('selection',()=>{
   const plan=await selectStreams(deps,{mode:'incremental',limit:200},now);
   expect(digestDue).toHaveBeenCalledWith(now,160,undefined);
   expect(sweepDue).toHaveBeenCalledWith(new Date('2026-10-30T12:00:00.000Z'),now,40,undefined);
-  expect(plan.map(p=>[p.issuerId,p.sweep,p.source])).toEqual([['i1',false,'incremental'],['i2',false,'incremental'],['x',true,'incremental'],['c1',false,'incremental'],['s1',true,'sweep']]);
+  expect(plan.map(p=>[p.issuerId,p.sweep,p.source])).toEqual([['i1',false,'incremental'],['i2',false,'incremental'],['c1',false,'incremental'],['x',true,'sweep'],['s1',true,'sweep']]);
   expect((await selectStreams(deps,{mode:'incremental',limit:7,market:'CN'},now)).map(p=>p.issuerId)).toEqual(['c1']);
   expect(digestDue).toHaveBeenLastCalledWith(now,6,'CN');expect(sweepDue).toHaveBeenLastCalledWith(expect.any(Date),now,1,'CN');
   sweepDue.mockClear();await selectStreams(deps,{mode:'incremental',limit:4},now);expect(sweepDue).not.toHaveBeenCalled();
+ });
+ it('overlap keeps the sweep share: 160 incremental + 40 sweep overlapping positions 121-160 → 4 sweeps in the first 20',async()=>{
+  const inc=Array.from({length:160},(_,i)=>due(`i${i+1}`)),sw=inc.slice(120).map(d=>({...d,digestedRev:1}));
+  const deps={db:{digestDue:async()=>inc,sweepDue:async()=>sw}} as unknown as DigestDeps;
+  const plan=await selectStreams(deps,{mode:'incremental',limit:200},new Date('2026-11-06T12:00:00.000Z'));
+  expect(plan).toHaveLength(160);expect(plan.slice(0,20).filter(p=>p.sweep)).toHaveLength(4);
+  expect(plan.filter(p=>p.sweep).map(p=>p.issuerId)).toEqual(sw.map(d=>d.issuerId));
  });
  it('full mode: explicit issuers via scopeRows per market, otherwise scopeAll; all sweep; issuerIds without full is rejected',async()=>{
   const h=harness();const a=await stream(h),b=await stream(h),c=await stream(h,'CN');
@@ -135,6 +142,12 @@ describe('runCompanyDigest',()=>{
   expect(r.streams[0]).toMatchObject({outcome:'failed',code:'evidence_index_failed'});
   expect(ev).not.toHaveBeenCalled();expect(rd).not.toHaveBeenCalled();expect(mark).toHaveBeenCalledTimes(1);
   expect(r.counts).toMatchObject({fetched:1,failed:1,inserted:0});expect(r.status).toBe('failed');
+ });
+ it('each stream gets a fresh evidence cache (released after the stream)',async()=>{
+  const h=harness();const a=await stream(h),b=await stream(h);await disclose(h.facts,a,'2024-02-01','1');await disclose(h.facts,b,'2024-02-01','2');
+  const made:Map<string,unknown>[]=[];
+  await runCompanyDigest({...h.deps,newCache:()=>{const m=new Map();made.push(m);return m;}},{mode:'incremental'});
+  expect(made).toHaveLength(2);expect(made[0]).not.toBe(made[1]);
  });
  it('stale_computation twice → failed and backed off',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');

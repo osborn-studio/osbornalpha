@@ -34,6 +34,8 @@ export interface DigestDeps{
  db:CompanyDb;tables:TableClient;readSnapshot:ReadSnapshotFn;
  facts:Pick<FactsDb,'scopeRows'|'scopeAll'>;reader:SnapshotObjectStore;
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
+ /** Evidence-index cache factory, one cache per stream (tests inject; default new Map). */
+ newCache?:()=>ParsedSnapshotCache;
 }
 export interface DigestOptions{mode:'incremental'|'full';issuerIds?:string[];market?:Market;limit?:number;now?:Date;dryRun?:boolean;triggeredBy?:TriggeredBy}
 export class DigestError extends Error{constructor(public code:'code_version_missing'|'invalid_options',message?:string){super(message??code);this.name='DigestError';}}
@@ -68,16 +70,17 @@ export async function selectStreams(deps:Pick<DigestDeps,'db'|'facts'>,opts:Dige
  const inMarket=(s:{market:Market})=>!opts.market||s.market===opts.market;
  const inc=(await deps.db.digestDue(now,incN,opts.market)).filter(inMarket);   // market filtered in SQL before the limit (Q6); local filter kept as a guard
  const sw=swN>0?(await deps.db.sweepDue(new Date(now.getTime()-SWEEP_AGE_MS),now,swN,opts.market)).filter(inMarket):[];
- const swKeys=new Set(sw.map(keyOf)),incKeys=new Set(inc.map(keyOf));
+ const swKeys=new Set(sw.map(keyOf));
  return interleave(
-  inc.map(s=>({issuerId:s.issuerId,market:s.market,stateRev:s.stateRev,sweep:swKeys.has(keyOf(s)),source:'incremental' as const})),
-  sw.filter(s=>!incKeys.has(keyOf(s))).map(s=>({issuerId:s.issuerId,market:s.market,stateRev:s.stateRev,sweep:true,source:'sweep' as const})));
+  inc.filter(s=>!swKeys.has(keyOf(s))).map(s=>({issuerId:s.issuerId,market:s.market,stateRev:s.stateRev,sweep:false,source:'incremental' as const})),
+  sw.map(s=>({issuerId:s.issuerId,market:s.market,stateRev:s.stateRev,sweep:true,source:'sweep' as const})));   // overlap lives only in the sweep list, so the reserved 1-in-5 share survives a deadline
 }
 
-interface Ctx{batchId:string|null;today:string;now:Date;cache:ParsedSnapshotCache;dryRun:boolean}
+interface Ctx{batchId:string|null;today:string;now:Date;dryRun:boolean}
 async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<StreamOutcome>{
  const out:StreamOutcome={issuerId:p.issuerId,market:p.market,sweep:p.sweep,outcome:'failed',attemptId:null,basedOnRev:null,events:0,result:null,evidence:null,retried:false};
  let attemptId=0;
+ const cache:ParsedSnapshotCache=deps.newCache?deps.newCache():new Map();   // per stream: kept only across its own stale_computation retry
  if(!ctx.dryRun){
   try{attemptId=await deps.db.beginAttempt(p.issuerId,p.market,ctx.now);}
   catch(e){if(dbCode(e)==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';}else out.code='digest_issuer_failed';return out;}
@@ -93,7 +96,7 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
   try{env=await deps.readSnapshot(p.issuerId,p.market,{concepts:null,asOf:ctx.today,history:true});}catch{return fail('digest_issuer_failed');}
   if(env.truncated)return fail('read_truncated');
   try{
-   const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache:ctx.cache});
+   const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache});
    if(built.stats.storageError>0)return fail('evidence_index_failed');   // transient storage failure: never replace (would delete valid evidence) nor mark success
    if(!ctx.dryRun)await deps.db.replaceEvidence(p.issuerId,p.market,attemptId,env.stateRev,built.rows);   // evidence fence
    out.evidence={indexed:built.rows.length,facts:built.stats.facts};
@@ -140,7 +143,7 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
  let batchId:string|null=null;
  if(!dryRun)({batchId}=await startBatch(deps.tables,{producer:DIGEST_PRODUCER,dataset:DIGEST_DATASET,
   toolVersions:{events:EVENTS_VERSION,mappingGen:String(MAPPING_GEN),formulaVersion:FORMULA_VERSION,evidenceIndex:EVIDENCE_INDEX_VERSION},codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script'}));
- const ctx:Ctx={batchId,today,now,cache:new Map(),dryRun};
+ const ctx:Ctx={batchId,today,now,dryRun};
  const detailOf=(backlogFailed:number):DigestDetail=>({events:{...events},attempted,succeeded,failed,skippedStale,skippedUnknown,swept,idle,backlogFailed,evidence:{...evidence}});
  try{
   const planned=await selectStreams(deps,opts,now);idle=planned.length===0;
