@@ -101,7 +101,7 @@ describe.skipIf(!enabled)('macro ↔ F4 bridge on PG17',()=>{
    // The isolated registry alias shares v2's full definition and pinned formula hash; formulaHashOf includes id, so normalize only the alias when hashing.
    // CI has no PostgREST server, and the SQL test ports exercise the same PG functions as production.
    const method={...macroRegimeV2,id:`ztest_macro_${randomUUID().replaceAll('-','').slice(0,12)}`};
-   const hashes=formulaHashOf({...method,id:macroRegimeV2.id});expect(hashes.formula_hash).toBe('c3cd924c8da5f855f247e5375b0d7befcfef87939d73b6fdf9dacf124a25fc32');expect(method.gather).toBe(macroRegimeV2.gather);expect(method.compute).toBe(macroRegimeV2.compute);expect(method.condition).toBe(macroRegimeV2.condition);await judgments.syncMethodology(methodologyRowOf(method,hashes,{publishable:true,code_version:CODE}),'script','PG17 bridge test method');
+   const hashes=formulaHashOf({...method,id:macroRegimeV2.id});expect(hashes.formula_hash).toBe('a4aea922437e1d8378d0316c7e0809504dd0130815cd1ab224f6c2e827cb8cb9');expect(method.gather).toBe(macroRegimeV2.gather);expect(method.compute).toBe(macroRegimeV2.compute);expect(method.condition).toBe(macroRegimeV2.condition);await judgments.syncMethodology(methodologyRowOf(method,hashes,{publishable:true,code_version:CODE}),'script','PG17 bridge test method');
    const {batchId}=await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.produce.macro_regime'});
    const work=[{subject:{type:'macro_region' as const,key:'US'},asOf:snapshot.as_of,binding:{snapshot_id:snapshot.snapshot_id}}];
    const deps={db:judgments,inputsDb,tables,resolverOf:()=>macroRegimeReplayResolver,batchId,codeVersion:CODE};

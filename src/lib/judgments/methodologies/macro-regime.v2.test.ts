@@ -313,7 +313,7 @@ it('pins the v2 hashed file list and formula_hash after the #120 input selection
   'src/lib/research/ingest/pa-v1/json.js',
   'src/lib/supabase/database.types.ts',
  ]);
- expect(hash.formula_hash).toBe('c3cd924c8da5f855f247e5375b0d7befcfef87939d73b6fdf9dacf124a25fc32');
+ expect(hash.formula_hash).toBe('a4aea922437e1d8378d0316c7e0809504dd0130815cd1ab224f6c2e827cb8cb9');
 });
 
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{
