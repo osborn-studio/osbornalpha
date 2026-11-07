@@ -6,7 +6,7 @@
 // case uses its own series ids; publish state is shared, so cases read it right before publishing.
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
-import {DATASETS} from '@/lib/dq/datasets';
+import {DATASETS} from '../dq/datasets';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
 import type {MacroSeriesDef,ObservationRow,ObservationWrite,PublishInput,Region} from './types';
