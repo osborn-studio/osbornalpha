@@ -15,7 +15,7 @@ describe('ci.yml F6 block',()=>{
   const i=yml.indexOf('run: npm run test:db');const j=yml.indexOf('F6 frozen replay report digest');
   expect(i).toBeGreaterThan(0);expect(j).toBeGreaterThan(i);
   const step=yml.slice(j,yml.indexOf('# F6 end',j));
-  expect(step).toContain('if: always()');expect(step).toContain('sha256sum');expect(step).toContain('"kind":"replay_consistency"');expect(step).toContain('exit 1');
+  expect(step).toContain('if: always()');expect(step).toContain('sha256sum');expect(step).toContain('"kind":"replay_consistency"');expect(step).toContain('"id":"replay/facts.frozen"');expect(step).toContain('exit 1');
  });
  it('checks out the full history',()=>{
   const at=lines.findIndex(l=>l.includes('uses: actions/checkout@v4'));

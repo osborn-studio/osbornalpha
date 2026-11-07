@@ -97,7 +97,7 @@ jobs:
           shopt -s nullglob
           found=()
           for f in reports/evals/*.json; do
-            if grep -q '"kind":"replay_consistency"' "$f" && grep -q '"mode":"ci"' "$f"; then found+=("$f"); fi
+            if grep -q '"kind":"replay_consistency"' "$f" && grep -q '"mode":"ci"' "$f" && grep -q '"id":"replay/facts.frozen"' "$f"; then found+=("$f"); fi
           done
           echo "### F6 frozen replay report" >> "$GITHUB_STEP_SUMMARY"
           if [ ${#found[@]} -eq 0 ]; then

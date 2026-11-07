@@ -50,9 +50,13 @@ export function applyRecording(file:ReplayFile,input:RecordInput,opts:RecordOpti
   return {file:next,action:'recorded',projection_hash:hash};
  }
  const before=c.expected.projection_hash;
- if(before===hash)return {file,action:'unchanged',projection_hash:hash};
- const detail={case_id:c.case_id,before_hash:before,after_hash:hash};
- if(opts.supersede===undefined)throw refuse(`case ${c.case_id}: projection changed (${before} → ${hash}); re-recording needs --supersede <approved ledger_id>`,detail);
+ // A frozen input.setup is the CANDIDATE setup (built from the current setup draft / config). It may differ from the recorded one:
+ // a setup transition is as much a change as a new projection hash and needs the same approved ledger entry (matched on the OLD recorded setup).
+ const oldSetupSha=file.mode==='frozen'?(c as FrozenReplayCase).setup?.setup_sha256:undefined;
+ const setupMoved=file.mode==='frozen'&&input.setup!==undefined&&input.setup.setup_sha256!==oldSetupSha;
+ if(before===hash&&!setupMoved)return {file,action:'unchanged',projection_hash:hash};
+ const detail={case_id:c.case_id,before_hash:before,after_hash:hash,...(setupMoved?{from_setup_sha256:oldSetupSha,to_setup_sha256:input.setup!.setup_sha256}:{})};
+ if(opts.supersede===undefined)throw refuse(`case ${c.case_id}: ${before===hash?'setup changed':`projection changed (${before} → ${hash})`}; re-recording needs --supersede <approved ledger_id>`,detail);
  const e=opts.ledger.find(x=>x.ledger_id===opts.supersede);
  const why=!e?'ledger_id not found':isSelfApproved(e)?'ledger entry is self-approved':e.case_id!==c.case_id?'ledger entry is for another case'
   :e.mode!==file.mode?'ledger entry is for another mode':e.before_hash!==before?'ledger before_hash ≠ recorded projection hash':e.after_hash!==hash?'ledger after_hash ≠ new projection hash':null;
@@ -60,6 +64,6 @@ export function applyRecording(file:ReplayFile,input:RecordInput,opts:RecordOpti
  const observed=observedDiffOf(c,file.mode,input.projection,{code:input.code_version,setupSha256:input.setup?.setup_sha256??(c as FrozenReplayCase).setup?.setup_sha256,stateRev:input.state_rev??null});
  const m=matchLedger([e],observed);
  if(m.kind!=='hit')throw refuse(`case ${c.case_id}: ledger entry ${e.ledger_id} does not match the observed change (${m.kind}: code versions, setup/state pair or changed_fields differ)`,{...detail,ledger_id:e.ledger_id,observed});
- next.cases[i]={...c,recorded:recorded(),expected,supersessions:[...(c.supersessions??[]),{ledger_id:e.ledger_id,before_hash:before,after_hash:hash,at:input.at}]} as FrozenReplayCase|LiveReplayCase;
+ next.cases[i]={...c,...(setupMoved?{setup:structuredClone(input.setup)}:{}),recorded:recorded(),expected,supersessions:[...(c.supersessions??[]),{ledger_id:e.ledger_id,before_hash:before,after_hash:hash,at:input.at}]} as FrozenReplayCase|LiveReplayCase;
  return {file:next,action:'superseded',projection_hash:hash};
 }

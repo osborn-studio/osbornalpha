@@ -65,6 +65,7 @@ export async function buildRunDeps(mode:EvalMode,privileged:boolean,opts:BuildRu
   if(statePath){
    const adminUrl=(JSON.parse(readFileSync(statePath,'utf8')) as {adminUrl:string}).adminUrl;
    const pool=new Pool({connectionString:adminUrl});
+   pool.on('error',()=>{});
    let w:FrozenWorld;
    let b:FrozenBuild;
    try{b=await buildFrozenDb(pool,setup,opts.root);}catch(e){await pool.end();throw e;}   // an isolated database (replay/setup.ts, R2-2)

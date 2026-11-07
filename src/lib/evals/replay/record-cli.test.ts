@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {afterAll,describe,expect,it} from 'vitest';
 import {projectionHash} from '../canonical-json';
+import {runRecordCli} from './record-cli';
 import type {Projection} from '../types';
 
 const script=resolve('scripts/evals/record-replay.ts');
@@ -44,3 +45,26 @@ describe('record-replay CLI',()=>{
   expect(readFileSync(fixture,'utf8')).toBe(before);
  },120000);
 });
+
+describe('runRecordCli in process (injected version and environment)',()=>{
+ const stateFile=join(dir,'state.json');
+ writeFileSync(stateFile,JSON.stringify({adminUrl:'postgres://nobody@127.0.0.1:1/none'}));   // never connected: refusals happen before any build
+ const go=async(version:{sha:string;dirty:boolean})=>{
+  const out:string[]=[],err:string[]=[];
+  const code=await runRecordCli(['--mode','frozen','--case','c1','--file',fixture,'--ledger',ledger],{log:l=>out.push(l),err:l=>err.push(l)},{version:()=>version,env:{[STATE_VAR]:stateFile}});
+  return {code,out,err:err.join('\n')};
+ };
+ it('a dirty tree is refused (dirty_tree, exit 2) and the file is not touched',async()=>{
+  const before=readFileSync(fixture,'utf8');
+  const r=await go({sha:'1'.repeat(40),dirty:true});
+  expect(r.code).toBe(2);expect(r.err).toContain('dirty_tree');expect(r.out).toEqual([]);
+  expect(readFileSync(fixture,'utf8')).toBe(before);
+ });
+ it('a recorded case whose setup was edited but kept its declared setup_sha256 is refused (setup_mismatch, exit 2) before any database build',async()=>{
+  const before=readFileSync(fixture,'utf8');
+  const r=await go({sha:'1'.repeat(40),dirty:false});
+  expect(r.code).toBe(2);expect(r.err).toContain('setup_mismatch');
+  expect(readFileSync(fixture,'utf8')).toBe(before);
+ });
+});
+

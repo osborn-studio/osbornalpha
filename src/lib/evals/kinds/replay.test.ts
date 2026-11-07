@@ -126,3 +126,20 @@ describe('evaluateReplay live',()=>{
   expect(summarize(all,replaySummaryContext(true)).gate).toBe('incomplete');   // --case subset
  });
 });
+
+describe('frozen ledger-backed explained_diff through the shared reducer',()=>{
+ it('an approved exact ledger hit is explained_diff and counts as a pass; an unapproved sibling fails the gate',async()=>{
+  const lg=ledger(frozenEntry());
+  const ok=await evaluateReplay([frozen({case_id:'f1'}),frozen({case_id:'f2'})],returns(P0),lg,fctx());
+  expect(ok.map(r=>r.outcome.result)).toEqual(['identical','identical']);
+  const rs=await evaluateReplay([frozen()],returns(P1),lg,fctx());
+  expect(rs[0].outcome).toEqual({result:'explained_diff',ledger_ids:['L1']});
+  const s=summarize(rs,replaySummaryContext(false));
+  expect(s.correctness).toMatchObject({pass:1,unexplained_diff:0,fail:0});
+  expect(s.gate).toBe('pass');
+  const mixed=[...rs,...await evaluateReplay([frozen({case_id:'f2'})],returns(P1),lg,fctx())];   // f2 has no entry
+  expect(mixed.map(r=>r.outcome.result)).toEqual(['explained_diff','unexplained_diff']);
+  expect(summarize(mixed,replaySummaryContext(false)).gate).toBe('fail');
+ });
+});
+

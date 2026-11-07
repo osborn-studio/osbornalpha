@@ -17,7 +17,7 @@ import type {FactsDb} from '../facts/types';
 import {factsReader,privilegedFactsReader} from './adapters/facts';
 import {memoryRawStorage} from './adapters/provenance';
 import {LANDED_PARSERS} from './cli/deps';
-import {checkLock,loadGoldSet,loadRecorders} from './gold/load';
+import {checkLock,loadGoldSet} from './gold/load';
 import {SETUP_CODE_VERSION,buildFrozenDb,loadSetup} from './replay/setup';
 import type {FrozenWorld} from './replay/setup';
 import {runGoldSet} from './run-gold-set';
@@ -27,19 +27,19 @@ import {cpSync as cpReplay,mkdtempSync as mkdtempReplay,readFileSync as readRepl
 import {tmpdir as replayTmpdir} from 'node:os';
 import {join as joinReplay} from 'node:path';
 import {Pool as ReplayPool} from 'pg';
-import {randomUUID as replayRunId} from 'node:crypto';
 import {projectionHash as projectionHashForReplay} from './canonical-json';
-import {evaluateReplay,replaySetOf,replaySummaryContext} from './kinds/replay';
+import {evaluateReplay} from './kinds/replay';
 import type {SetupCheck} from './kinds/replay';
-import {buildReport as buildReplayReport,writeReportFiles as writeReplayReportFiles} from './report';
+import {writeReportFiles as writeReplayReportFiles} from './report';
 import {projectRequest,resolveFactsSubject} from './projections/facts';
 import {parseReplayFile,recordedCases} from './replay/fixture';
 import type {FrozenReplayCase} from './replay/fixture';
-import {loadLedger} from './replay/ledger';
-import {buildFrozenDb as buildFrozenDbForReplay,groupSealedSetups,loadSetup as loadSetupForReplay} from './replay/setup';
+import {defaultCliDeps as defaultCliDepsForReplay,parseRunArgs as parseRunArgsForReplay} from './cli/run-cli';
+import type {CliDeps as CliDepsForReplay} from './cli/run-cli';
+import {defaultReplayBackend as defaultReplayBackendForTest,replayRunner as replayRunnerForTest} from './cli/run-replay';
+import {buildFrozenDb as buildFrozenDbForReplay,loadSetup as loadSetupForReplay} from './replay/setup';
 import type {FrozenSetup as FrozenSetupForReplay} from './replay/setup';
-import {summarize as summarizeReplay} from './summary';
-import type {CaseReport as ReplayCaseReport,ReplayRequest as ReplayRequestForReplay,Subject as ReplaySubject} from './types';
+import type {ReplayRequest as ReplayRequestForReplay,Subject as ReplaySubject} from './types';
 import {evaluatorVersion as replayEvaluatorVersion} from './version';
 // Task 11 end (imports)
 
@@ -86,6 +86,7 @@ describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)'
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')) as {adminUrl:string};
   pool=new Pool({connectionString:state.adminUrl});
+  pool.on('error',()=>{});
   const b=await buildFrozenDb(pool,loadSetup(SETUP));
   if(!b.ok)throw new Error(`F6 base setup does not verify: ${b.mismatch}`);
   world=b.world;
@@ -182,45 +183,33 @@ describe.skipIf(!enabled)('F6 facts evaluation on real PostgreSQL (evals-facts)'
 // Task 11 begin — replay frozen over the committed cases (spec §5.3.1, §13.3)
 describe.skipIf(!process.env.S4_TEST_STATE)('evals-facts: replay frozen (Task 11)',()=>{
  const FROZEN='src/lib/evals/fixtures/replay/facts.frozen.json';
- const LEDGER='src/lib/evals/fixtures/replay/explanations.json';
  let replayPool:ReplayPool;
- beforeAll(()=>{replayPool=new ReplayPool({connectionString:JSON.parse(readReplayFile(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
+ beforeAll(()=>{replayPool=new ReplayPool({connectionString:JSON.parse(readReplayFile(process.env.S4_TEST_STATE!,'utf8')).adminUrl});replayPool.on('error',()=>{});});
  afterAll(async()=>{await replayPool?.end();});
  const frozenCases=()=>recordedCases(parseReplayFile(JSON.parse(readReplayFile(FROZEN,'utf8')),{allowDrafts:false,file:FROZEN})) as FrozenReplayCase[];
  const ctxOf=(check:SetupCheck)=>({mode:'frozen' as const,evaluatorCodeVersion:replayEvaluatorVersion().sha,checkSetup:async()=>check});
 
- it('every committed frozen case replays identical; the real EvalReport is built, and written to reports/evals/ under CI (P1-10)',async()=>{
-  const cases=frozenCases();const ledger=loadLedger(LEDGER,{recorders:loadRecorders().recorders});
+
+ it('the committed frozen cases through the SAME runner as run.ts (replayRunner over defaultReplayBackend): report built and written first, then the gate and the baseline are asserted (P1-10)',async()=>{
+  const cases=frozenCases();
   expect(cases.length).toBeGreaterThanOrEqual(10);
-  const startedAt=new Date().toISOString();
-  // P1-6: every case's setup is recomputed before grouping; nothing may be mismatched in the committed file
-  const {groups,mismatched}=groupSealedSetups(cases);
-  expect(mismatched.map(m=>m.case.case_id)).toEqual([]);
-  const reports:ReplayCaseReport[]=[];
-  for(const group of groups){
-   const setup=group.setup;
-   const built=await buildFrozenDbForReplay(replayPool,setup);
-   if(!built.ok){reports.push(...await evaluateReplay(group.cases,async()=>{throw new Error('setup not built');},ledger,ctxOf({ok:false,mismatch:[built.mismatch]})));continue;}
-   const tables=built.world.tables;
-   const deps={db:built.world.db,resolve:(s:ReplaySubject,t:string)=>resolveFactsSubject(tables,s,t)};
-   try{reports.push(...await evaluateReplay(group.cases,(r:ReplayRequestForReplay)=>projectRequest(deps,r,setup.today),ledger,ctxOf({ok:true,setupSha256:built.world.setup.setup_sha256})));}
-   finally{await built.world.close();}
-  }
-  expect(reports.filter(r=>r.outcome.result!=='identical').map(r=>({case_id:r.case_id,outcome:r.outcome,changed:r.detail.changed_fields??null}))).toEqual([]);
-  const s=summarizeReplay(reports,replaySummaryContext(false));
-  expect(s.population).toBe(cases.length);
-  expect(s.correctness.pass).toBe(cases.length);
-  expect(s.gate).toBe('pass');
-  // P1-10: the release evidence is this run's real report (mode ci), built with the same builder as run.ts
-  const v=replayEvaluatorVersion();const now=new Date();
-  const report=buildReplayReport({runId:replayRunId(),kind:'replay_consistency',mode:'ci',privileged:false,set:replaySetOf(FROZEN,new Uint8Array(readReplayFile(FROZEN)),'facts'),
-   env:{today:now.toISOString().slice(0,10),now:()=>now,evaluatorCodeVersion:v.sha,dirty:v.dirty},environment:{db_host:null,app_origin:null,db_state_rev:null},
-   startedAt,finishedAt:now.toISOString(),verified:{artifacts:false,sources:false},summary:s,cases:reports});
-  expect(report).toMatchObject({kind:'replay_consistency',mode:'ci',set:{id:'replay/facts.frozen',path:FROZEN},summary:{gate:'pass',population:cases.length}});
-  if(process.env.CI){
-   const files=writeReplayReportFiles(report);
-   expect(files.json).toContain('reports/evals/');expect(files.sha256).toMatch(/^[0-9a-f]{64}$/);
-  }
+  const args=parseRunArgsForReplay(['--kind','replay_consistency','--module','facts','--mode','ci']);
+  const deps:CliDepsForReplay=defaultCliDepsForReplay();
+  const {outcome,run}=await replayRunnerForTest(defaultReplayBackendForTest,{S4_TEST_STATE:process.env.S4_TEST_STATE})(args,deps);
+  try{
+   const report=outcome.report;
+   // evidence first: under CI the full report is written to reports/evals/<run_id>.json whatever the verdict (the ci.yml digest step publishes it)
+   if(process.env.CI){
+    const files=writeReplayReportFiles(report);
+    expect(files.json).toContain('reports/evals/');expect(files.sha256).toMatch(/^[0-9a-f]{64}$/);
+   }
+   expect(report).toMatchObject({kind:'replay_consistency',mode:'ci',privileged:false,set:{id:'replay/facts.frozen',path:FROZEN}});
+   expect(report.environment.db_host).not.toBeNull();   // like run.ts: the bare database host
+   expect(report.summary.population).toBe(cases.length);
+   expect(report.summary.gate).toBe('pass');expect(outcome.exitCode).toBe(0);
+   // the initial baseline is all identical (no ledger entry is needed for the committed recording)
+   expect(report.cases.filter(r=>r.outcome.result!=='identical').map(r=>({case_id:r.case_id,outcome:r.outcome,changed:r.detail.changed_fields??null}))).toEqual([]);
+  }finally{await run.close();}
  },600000);
  it('R2-2: build → mutate ZZEVC (10-K/A + same-day conflict) → rebuild the SAME setup: the rebuild is an isolated database in the declared state',async()=>{
   const setup=loadSetupForReplay('src/lib/evals/fixtures/replay/f6-base.setup.json');

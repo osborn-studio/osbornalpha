@@ -20,7 +20,7 @@ import {getAnonSupabase} from '../../supabase/anon';
 import {privilegedFactsReader} from '../adapters/facts';
 import {supabaseRawStorage} from '../adapters/provenance';
 import {EvalError} from '../errors';
-import {loadRecorders} from '../gold/load';
+import {RECORDERS_PATH,parseRecorders} from '../gold/load';
 import {evaluateReplay,replaySetOf,replaySummaryContext} from '../kinds/replay';
 import type {ProjectFn,ReplayContext,SetupCheck} from '../kinds/replay';
 import {projectRequest,projectWithRev,resolveFactsSubject} from '../projections/facts';
@@ -59,6 +59,7 @@ export const defaultReplayBackend:ReplayBackendFactory=async(mode,privileged,env
   if(!state)throw new EvalError('kind_not_enabled','replay frozen needs S4_TEST_STATE (a freshly migrated local database)',{reason:'no_test_database'});
   const adminUrl=(JSON.parse(readFileSync(state,'utf8')) as {adminUrl:string}).adminUrl;
   const pool=new Pool({connectionString:adminUrl});
+  pool.on('error',()=>{});
   const builds=new Map<string,{check:SetupCheck;project:ProjectFn}>();
   const worlds:{close():Promise<void>}[]=[];   // each build is an isolated database (replay/setup.ts, R2-2), dropped on close
   return {environment:{...none,db_host:hostOf(adminUrl)},store:null,close:async()=>{for(const w of worlds)await w.close().catch(()=>{});await pool.end();},
@@ -106,7 +107,7 @@ export function replayRunner(factory:ReplayBackendFactory=defaultReplayBackend,e
   let chosen=all.filter(c=>args.caseIds.length===0||args.caseIds.includes(c.case_id));
   if(args.limit!==undefined)chosen=chosen.slice(0,args.limit);
   const subset=args.caseIds.length>0||args.limit!==undefined;
-  const ledger=parseLedger(JSON.parse(new TextDecoder().decode(deps.readFile(LEDGER_PATH))),{recorders:loadRecorders().recorders,module:args.module});
+  const ledger=parseLedger(JSON.parse(new TextDecoder().decode(deps.readFile(LEDGER_PATH))),{recorders:parseRecorders(JSON.parse(new TextDecoder().decode(deps.readFile(RECORDERS_PATH)))).recorders,module:args.module});
   const v=deps.version();
   if(!/^[0-9a-f]{40}$/.test(v.sha))throw new EvalError('code_version_missing','evaluator code version must be a 40-hex commit',{value:v.sha});
   if(args.mode==='report'&&v.dirty)throw new EvalError('dirty_tree','report runs need a clean working tree');

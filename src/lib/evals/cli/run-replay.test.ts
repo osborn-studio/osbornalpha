@@ -1,5 +1,7 @@
 // src/lib/evals/cli/run-replay.test.ts
+import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
+import {RECORDERS_PATH} from '../gold/load';
 import {projectionHash,sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
 import type {Projection,ReplayRequest} from '../types';
@@ -18,7 +20,7 @@ const rec={code_version:'c'.repeat(40),at:'2026-11-20T00:00:00.000Z'};
 const frozenFile={schema_version:1,module:'facts',mode:'frozen',cases:['f-1','f-2'].map(case_id=>({case_id,request:REQ,setup:SETUP,recorded:rec,expected:{projection_hash:projectionHash(P),projection:P}}))};
 const liveFile={schema_version:1,module:'facts',mode:'live',cases:[{case_id:'l-1',request:REQ,recorded:{...rec,state_rev:5},expected:{projection_hash:projectionHash(P),projection:P}}]};
 const enc=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v));
-const FILES:Record<string,Uint8Array>={[replayFileOf('facts','frozen')]:enc(frozenFile),[replayFileOf('facts','live')]:enc(liveFile),[LEDGER_PATH]:enc([])};
+const FILES:Record<string,Uint8Array>={[replayFileOf('facts','frozen')]:enc(frozenFile),[replayFileOf('facts','live')]:enc(liveFile),[LEDGER_PATH]:enc([]),[RECORDERS_PATH]:new Uint8Array(readFileSync(RECORDERS_PATH))};
 
 function cli(over:Partial<CliDeps>={}):CliDeps{
  return {buildDeps:async()=>{throw new Error('replay does not use buildDeps');},loadSet:()=>{throw new Error('no gold set');},loadLock:()=>({files:[]}),

@@ -233,6 +233,7 @@ export async function createIsolatedDatabase(admin:Pool,setup:FrozenSetup):Promi
  await admin.query(`create database ${name}`);
  const u=new URL(url);u.pathname=`/${name}`;
  const pool=new Pool({connectionString:u.toString()});
+ pool.on('error',()=>{});   // an idle client killed by the forced drop must not crash the process after the report
  let dropped=false;
  const drop=async()=>{if(dropped)return;dropped=true;await pool.end().catch(()=>{});await admin.query(`drop database if exists ${name} with (force)`);};
  try{
