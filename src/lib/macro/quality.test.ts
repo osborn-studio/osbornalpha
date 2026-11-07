@@ -43,6 +43,14 @@ describe('validatePoint',()=>{
   expect(ids(validatePoint(d('index_1982_84_100',null),'336.298','335.1'))).toEqual([]);                     // US CPI index level
   expect(ids(validatePoint(d('index_2009_11_100',null),'-1',null))).toEqual(['macro.range']);
  });
+ it('usd_mn / usd_bn profiles (Fed balance-sheet levels, RRP volumes)',()=>{
+  expect(KNOWN_UNITS).toContain('usd_mn');expect(KNOWN_UNITS).toContain('usd_bn');
+  expect(profileOf(d('usd_mn',null))).toEqual({min:0,max:20_000_000,maxRelJump:0.5});
+  expect(profileOf(d('usd_bn',null))).toEqual({min:0,max:10_000,maxRelJump:null});
+  expect(validatePoint(d('usd_mn',null),'6748145','6745635').passed).toBe(true);
+  expect(validatePoint(d('usd_mn',null),'6748145','3000000').passed).toBe(false);  // > 50% week-on-week jump
+  expect(validatePoint(d('usd_bn',null),'0.15','2500').passed).toBe(true);          // RRP collapses are real
+ });
  it('applies jump limits on levels, not on rates of change',()=>{
   expect(ids(validatePoint(d('pct','bond_yield'),'4.9','2.1'))).toEqual(['macro.jump']);
   expect(ids(validatePoint(d('pct','bond_yield'),'0.73','1.0'))).toEqual([]);
