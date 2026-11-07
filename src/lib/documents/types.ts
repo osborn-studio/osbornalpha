@@ -124,6 +124,7 @@ export interface DocumentsDb{
  renewExtractLease(document:string,batch:string,ttlSeconds:number):Promise<boolean>;      // holder only, no attempt counted; false = taken over / moved on (P2-7)
  finishExtract(document:string,batch:string,extraction:ExtractionInsert,pages:PageInsert[]):Promise<string>;
  failExtract(document:string,batch:string,code:string):Promise<void>;
+ failExtractTerminal(document:string,batch:string,code:string,detail:Record<string,unknown>):Promise<void>;   // atomic: extract_failed + lease cleared + open dq_quarantine item (holder only, status stored)
  requestExtract(document:string,actor:string):Promise<void>;
  claimCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;
  renewCandidatesLease(extraction:string,batch:string,ttlSeconds:number):Promise<boolean>;  // holder only, no attempt counted (P2-7)

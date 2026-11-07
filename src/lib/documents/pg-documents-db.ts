@@ -39,6 +39,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
   async renewExtractLease(document,batch,ttl){return (await fn<boolean>('public.renew_document_extract_lease($1,$2,$3)',[document,batch,ttl]))===true;},
   async finishExtract(document,batch,extraction,pages){return String(await fn('public.finish_document_extract($1,$2,$3::jsonb,$4::jsonb)',[document,batch,json(extraction),json(pages)]));},
   async failExtract(document,batch,code){await fn('public.fail_document_extract($1,$2,$3)',[document,batch,code]);},
+  async failExtractTerminal(document,batch,code,detail){await fn('public.fail_document_extract_terminal($1,$2,$3,$4::jsonb)',[document,batch,code,JSON.stringify(detail)]);},
   async requestExtract(document,actor){await fn('public.request_document_extract($1,$2,$3,$4)',[document,actor,EXTRACTOR_VERSION,TABLE_ALGO_VERSION]);},
   async claimCandidatesLease(extraction,batch,ttl){return (await fn<boolean>('public.claim_candidates_lease($1,$2,$3)',[extraction,batch,ttl]))===true;},
   async renewCandidatesLease(extraction,batch,ttl){return (await fn<boolean>('public.renew_candidates_lease($1,$2,$3)',[extraction,batch,ttl]))===true;},

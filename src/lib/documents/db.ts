@@ -287,6 +287,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async renewExtractLease(document,batch,ttl){return (await call('renew_document_extract_lease',{p_document:document,p_batch:batch,p_ttl:ttl}))===true;},
   async finishExtract(document,batch,extraction,pages){return String(await call('finish_document_extract',{p_document:document,p_batch:batch,p_extraction:extractionArg(extraction),p_pages:pagesArg(pages)}));},
   async failExtract(document,batch,code){await call('fail_document_extract',{p_document:document,p_batch:batch,p_code:code});},
+  async failExtractTerminal(document,batch,code,detail){await call('fail_document_extract_terminal',{p_document:document,p_batch:batch,p_code:code,p_detail:detail});},
   async requestExtract(document,actor){await call('request_document_extract',{p_document:document,p_actor:actor,p_extractor_version:EXTRACTOR_VERSION,p_table_algo_version:TABLE_ALGO_VERSION});},
   async claimCandidatesLease(extraction,batch,ttl){return (await call('claim_candidates_lease',{p_extraction:extraction,p_batch:batch,p_ttl:ttl}))===true;},
   async renewCandidatesLease(extraction,batch,ttl){return (await call('renew_candidates_lease',{p_extraction:extraction,p_batch:batch,p_ttl:ttl}))===true;},

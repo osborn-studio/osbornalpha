@@ -31,7 +31,6 @@ import {DocumentsDbError,EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {DocumentRow,DocumentsDb,ObjectStore,PageLayout} from '../types';
 import {buildPagesJson,pageInsertsOf,sha256Hex} from './pages-json';
 import {BudgetExceeded,FINAL_RESERVE_MS,HEARTBEAT_MS,withinBudget,withLeaseHeartbeat} from '../lease';
-import {quarantine} from '../../dq/quarantine';
 import {ExtractTimeout,ExtractTooManyPages} from './pdf';
 import type {ExtractBudget} from './pdf';
 
@@ -45,7 +44,8 @@ export const MAX_PDF_PAGES=1500;
 export const FINISH_RESERVE_MS=20_000;
 /** failExtract / terminalizing may use the budget down to this reserve (the batch finalization keeps it). */
 export const FAIL_RESERVE_MS=5_000;
-const MAX_EXTRACT_ATTEMPTS=3;
+/** Batch row and freshness may be written until this long after the run deadline (cron: 240 s + 30 s < maxDuration 300). */
+export const FINALIZE_GRACE_MS=30_000;
 const HTML_MIMES=new Set(['text/html','application/xhtml+xml','application/xml','text/xml']);
 
 export interface ExtractDeps{
@@ -65,6 +65,8 @@ export interface ExtractReceipt{batchId:string|null;status:BatchStatus|'dry_run'
 const remaining=(deps:ExtractDeps)=>deps.deadline===null?Number.POSITIVE_INFINITY:deps.deadline.getTime()-deps.now().getTime();
 const errCode=(e:unknown)=>e instanceof DocumentsDbError?e.code:e instanceof BudgetExceeded?'deadline_exceeded':e instanceof ExtractTimeout?'extract_timeout':e instanceof ExtractTooManyPages?'too_many_pages':'extract_error';
 
+/** Batch/freshness writes (startBatch, finishBatch, recordAttempt): bounded by the deadline plus the finalization grace. */
+const settle=<T>(deps:ExtractDeps,p:Promise<T>)=>withinBudget(p,remaining(deps)+FINALIZE_GRACE_MS);
 /** A coded stage failure (object_get_failed, content_hash_mismatch). */
 class StageError extends Error{constructor(readonly code:string,readonly actual?:string){super(code);this.name='StageError';}}
 /** p bounded by the run budget less `reserve` (kept for failExtract and the batch finalization); no deadline = unbounded. */
@@ -108,7 +110,7 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  const setup=deps.preflight?.()??null;
  if(setup!==null&&opts.dryRun)return {batchId:null,status:'dry_run',counts,errors:[{code:setup,message:'setup'}],documents:[],idle:false};
  if(opts.dryRun){
-  const due=await dueDocuments(db,opts,errors);
+  const due=await bound(deps,dueDocuments(db,opts,errors));
   for(const doc of due){
    if(remaining(deps)<MIN_DOC_MS){errors.push({code:'deadline_hit',message:`${due.length-documents.length} documents not started`});break;}
    try{const l=await layoutOf(deps,doc,await loadBytes(deps,doc));documents.push({documentId:doc.document_id,outcome:'planned',pageCount:l.pages.length});}
@@ -118,17 +120,17 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  }
  const codeVersion=deps.codeVersion;
  if(!codeVersion)throw new Error('code_version_unavailable');
- const {batchId}=await startBatch(tables,{producer:'documents-extract',dataset:'documents.extract',toolVersions:{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION},codeVersion,triggeredBy:opts.triggeredBy});
+ const {batchId}=await settle(deps,startBatch(tables,{producer:'documents-extract',dataset:'documents.extract',toolVersions:{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION},codeVersion,triggeredBy:opts.triggeredBy}));
  if(setup!==null){
   errors.push({code:setup,message:'setup: nothing claimed (build the extraction worker: npx tsx scripts/documents/build-extract-worker.ts)'});
   counts.failed=1;
-  const status=await finishBatch(tables,batchId,{counts,errors},deps.now());
-  await recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,setup}});
+  const status=await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));
+  await settle(deps,recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,setup}}));
   return {batchId,status,counts,errors,documents:[],idle:false};
  }
  let idle=false;
  try{
- const due=await dueDocuments(db,opts,errors);
+ const due=await bound(deps,dueDocuments(db,opts,errors));
  const fail=async(doc:DocumentRow,code:string,message?:string,callFail=true)=>{
   counts.failed++;errors.push({code,key:doc.document_id,...(message?{message}:{})});documents.push({documentId:doc.document_id,outcome:'failed',code});
   if(callFail){try{await bound(deps,db.failExtract(doc.document_id,batchId,code),FAIL_RESERVE_MS);}catch(e){errors.push({code:errCode(e),key:doc.document_id,message:'fail_extract'});}}
@@ -140,14 +142,12 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   if(!ok){counts.failed++;errors.push({code,key:doc.document_id});documents.push({documentId:doc.document_id,outcome:'failed',code});}
   return ok;
  };
- /** content_hash_mismatch is terminal on first sight (a swapped or corrupt object never heals by retrying): a quarantine row for the
-  *  operator, then the document is driven to extract_failed with the existing methods — re-claiming under this batch consumes the
-  *  remaining attempts and the claim past the third turns the row extract_failed. */
+ /** content_hash_mismatch is terminal on first sight (a swapped or corrupt object never heals by retrying): one atomic, holder-checked
+  *  db call (T10 recheck N4) makes the document extract_failed, clears the lease and records the open quarantine item together. Its
+  *  budget is reserved independently (FAIL_RESERVE_MS), nothing else runs before it. */
  const terminalMismatch=async(doc:DocumentRow,actual:string)=>{
   counts.failed++;errors.push({code:'content_hash_mismatch',key:doc.document_id});documents.push({documentId:doc.document_id,outcome:'failed',code:'content_hash_mismatch'});
-  try{await quarantine(tables,{dataset:'documents.extract',table:'disclosure_documents',naturalKey:doc.document_id,reasonCode:'content_hash_mismatch',detail:{expected_sha256:doc.content_sha256,actual_sha256:actual,storage_path:doc.storage_path},batchId});}
-  catch(e){errors.push({code:errCode(e),key:doc.document_id,message:'quarantine'});}
-  try{for(let k=0;k<=MAX_EXTRACT_ATTEMPTS;k++)if(!await bound(deps,db.claimExtractLease(doc.document_id,batchId,EXTRACT_LEASE_TTL_S),FAIL_RESERVE_MS))break;}
+  try{await bound(deps,db.failExtractTerminal(doc.document_id,batchId,'content_hash_mismatch',{expected_sha256:doc.content_sha256,actual_sha256:actual,storage_path:doc.storage_path}),FAIL_RESERVE_MS);}
   catch(e){errors.push({code:errCode(e),key:doc.document_id,message:'terminalize'});}
  };
  let started=0;
@@ -194,11 +194,11 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  }catch(e){
   // T10 review: anything thrown after startBatch (storedDue, documentById, ...) still closes the batch and records the failed attempt
   counts.failed++;errors.push({code:errCode(e),message:'run_error'});
-  try{await finishBatch(tables,batchId,{counts,errors},deps.now());}catch{/* left running; the runbook SQL closes it */}
-  try{await recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,error:true}});}catch{/* same */}
+  try{await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));}catch{/* left running; the runbook SQL closes it */}
+  try{await settle(deps,recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,error:true}}));}catch{/* same */}
   throw e;
  }
- const status=await finishBatch(tables,batchId,{counts,errors},deps.now());
- await recordAttempt(tables,'documents.extract',{ok:idle||counts.inserted>0,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,idle}});
+ const status=await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));
+ await settle(deps,recordAttempt(tables,'documents.extract',{ok:idle||counts.inserted>0,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,idle}}));
  return {batchId,status,counts,errors,documents,idle};
 }

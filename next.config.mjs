@@ -3,6 +3,7 @@ import createNextIntlPlugin from 'next-intl/plugin';
 // F3 document pipeline: files the extraction routes read or start at runtime (see outputFileTracingIncludes)
 const F3_EXTRACT_FILES = [
   './build/extract-worker/extract-worker.mjs',   // the self-contained worker bundle (npm run prebuild)
+  './build/extract-worker/extract-worker.manifest.json',   // its manifest: workerPreflight refuses a bundle without it (worker_stale)
   './node_modules/pdfjs-dist/cmaps/**/*', './node_modules/pdfjs-dist/standard_fonts/**/*', './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
 ];
 // end F3

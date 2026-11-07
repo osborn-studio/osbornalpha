@@ -26,7 +26,7 @@ const WRITE_FUNCTIONS=[
  'public.reconcile_document_sync_scope(text,jsonb,timestamptz)','public.claim_document_sync_lease(uuid,text,uuid,int)','public.renew_document_sync_lease(uuid,text,uuid,int)','public.insert_document_version(uuid,text,uuid,jsonb,jsonb)',
  'public.insert_upload_document(uuid,jsonb)','public.advance_document_cursor(uuid,text,uuid,text,jsonb,boolean,boolean)','public.release_document_sync_lease(uuid,text,uuid,text,timestamptz)',
  'public.reclassify_document(uuid,jsonb,uuid)','public.claim_document_extract_lease(uuid,uuid,int)','public.finish_document_extract(uuid,uuid,jsonb,jsonb)',
- 'public.fail_document_extract(uuid,uuid,text)','public.request_document_extract(uuid,uuid,text,text)','public.claim_candidates_lease(uuid,uuid,int)',
+ 'public.fail_document_extract(uuid,uuid,text)','public.fail_document_extract_terminal(uuid,uuid,text,jsonb)','public.request_document_extract(uuid,uuid,text,text)','public.claim_candidates_lease(uuid,uuid,int)',
  'public.finish_candidates(uuid,uuid,text)','public.request_candidates_regen(jsonb,uuid)','public.write_candidate_checks(uuid,uuid,jsonb)','public.insert_citation(jsonb)',
  'public.publish_citations(uuid[])','public.insert_candidates(uuid,uuid,jsonb)','public.decide_candidate(uuid,jsonb)','public.stage_candidate_publication(uuid,int,uuid,uuid)',
  'public.documents_stored_due(int)','public.extractions_candidates_due(int)','public.known_source_refs(uuid,text,text[])','public.list_candidates(uuid,text,uuid,jsonb,int)',
@@ -334,6 +334,13 @@ describe.skipIf(!enabled)('F3-0 disclosure documents migration on real PostgreSQ
   expect(await claimExtract(doc,b)).toBe(false);
   expect((await q(`select status,extract_lease_batch_id from public.disclosure_documents where document_id=$1`,[doc]))[0]).toEqual({status:'extract_failed',extract_lease_batch_id:null});
   expect(await fails(q(`select public.fail_document_extract($1,$2,'extract_error')`,[doc,b]))).toMatchObject({message:'lease_lost',code:'55P03'});
+  await q(`select public.request_document_extract($1,$2,'docs-extract/1.0','tables/1.0')`,[doc,actor]);
+  // T10 recheck N4: the terminal failure is atomic — extract_failed, lease cleared and one open quarantine item together; a repeat reuses the open item
+  expect(await claimExtract(doc,b)).toBe(true);
+  await q(`select public.fail_document_extract_terminal($1,$2,'content_hash_mismatch','{"expected_sha256":"a"}'::jsonb)`,[doc,b]);
+  expect((await q(`select status,extract_lease_batch_id from public.disclosure_documents where document_id=$1`,[doc]))[0]).toEqual({status:'extract_failed',extract_lease_batch_id:null});
+  expect(await q(`select reason_code,status,detail,batch_id from public.dq_quarantine where dataset='documents.extract' and natural_key=$1`,[doc])).toEqual([{reason_code:'content_hash_mismatch',status:'open',detail:{expected_sha256:'a'},batch_id:b}]);
+  expect(await fails(q(`select public.fail_document_extract_terminal($1,$2,'content_hash_mismatch','{}'::jsonb)`,[doc,b]))).toMatchObject({message:'lease_lost'});
   await q(`select public.request_document_extract($1,$2,'docs-extract/1.0','tables/1.0')`,[doc,actor]);
   expect((await q(`select status,extract_attempts from public.disclosure_documents where document_id=$1`,[doc]))[0]).toEqual({status:'stored',extract_attempts:0});
   expect(await claimExtract(doc,b)).toBe(true);

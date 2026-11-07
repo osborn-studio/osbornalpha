@@ -82,9 +82,25 @@ describe('deadlineFetch (T8-02)',()=>{
   await expect(f('https://x.test/again')).rejects.toMatchObject({name:'TimeoutError',message:'request_deadline'});
   expect(base).toHaveBeenCalledTimes(1);
  });
+ it('T10 recheck N3: the abort stays armed through the response BODY — a stalled body errors at the cap; a consumed one leaves no timer',async()=>{
+  vi.useFakeTimers();
+  const enc=new TextEncoder();
+  // headers arrive at once, the body sends one chunk and then stalls forever (a real fetch body would error on the signal; this one does not, so the wrapper must)
+  const stalledBody:typeof fetch=async()=>new Response(new ReadableStream<Uint8Array>({start(c){c.enqueue(enc.encode('{"a":'));}}),{status:200});
+  const f=deadlineFetch(stalledBody,new Date(Date.now()+240_000));
+  const res=await f('https://x.test/rpc/y');
+  const reading=expect(res.text()).rejects.toMatchObject({name:'TimeoutError',message:'request_timeout'});
+  await vi.advanceTimersByTimeAsync(REQUEST_CAP_MS+1);await reading;
+  expect(vi.getTimerCount()).toBe(0);
+  const done=await deadlineFetch(async()=>new Response('{"ok":true}',{status:200}),new Date(Date.now()+240_000))('https://x.test/rpc/z');
+  expect(vi.getTimerCount()).toBe(1);                                          // armed until the body is read
+  expect(await done.json()).toEqual({ok:true});
+  expect(vi.getTimerCount()).toBe(0);
+  expect(done.status).toBe(200);
+ });
  it('passes a fast response through and does not leave a timer behind; a caller abort is not rewritten',async()=>{
   vi.useFakeTimers();
-  const ok=new Response('{}');
+  const ok=new Response(null,{status:204});
   const f=deadlineFetch(async()=>ok,new Date(Date.now()+240_000));
   expect(await f('https://x.test')).toBe(ok);expect(vi.getTimerCount()).toBe(0);
   const ctl=new AbortController();const g=deadlineFetch(stall,new Date(Date.now()+240_000));

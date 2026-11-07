@@ -790,6 +790,26 @@ end $$;
 revoke execute on function public.fail_document_extract(uuid, uuid, text) from public, anon, authenticated;
 grant execute on function public.fail_document_extract(uuid, uuid, text) to service_role;
 
+-- Terminal extraction failure (T10 recheck N4): for a failure no retry can heal (content_hash_mismatch).
+-- Holder-checked (an unexpired lease of p_batch on a 'stored' document) and atomic: the document goes
+-- to extract_failed, its lease is cleared and an open dq_quarantine item is recorded in the same
+-- transaction (an open item with the same key is reused). Not locked in migrations.lock.json yet.
+create or replace function public.fail_document_extract_terminal(p_document uuid, p_batch uuid, p_code text, p_detail jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare d public.disclosure_documents;
+begin
+  if p_code is null or length(p_code) = 0 or length(p_code) > 64 then raise exception 'invalid_input: code' using errcode = '22023'; end if;
+  if p_detail is null or jsonb_typeof(p_detail) <> 'object' then raise exception 'invalid_input: detail' using errcode = '22023'; end if;
+  d := public.doc_extract_lock(p_document, p_batch);
+  if d.status <> 'stored' then raise exception 'not_eligible' using errcode = 'P0001'; end if;
+  update public.disclosure_documents set status = 'extract_failed', extract_lease_until = null, extract_lease_batch_id = null where document_id = p_document;
+  insert into public.dq_quarantine (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status)
+  values (gen_random_uuid(), 'documents.extract', 'disclosure_documents', p_document::text, p_code, p_detail, '{}'::jsonb, p_batch, 'open')
+  on conflict (dataset, table_name, natural_key, reason_code) where status = 'open' do nothing;
+end $$;
+revoke execute on function public.fail_document_extract_terminal(uuid, uuid, text, jsonb) from public, anon, authenticated;
+grant execute on function public.fail_document_extract_terminal(uuid, uuid, text, jsonb) to service_role;
+
 -- Document row lock; admin authority. The caller passes the CURRENT extractor and table-algorithm
 -- versions (TS constants): a version already extracted → revision_exists (versions are immutable);
 -- otherwise extracted|no_text_layer|extract_failed → stored with attempts reset. Already stored →

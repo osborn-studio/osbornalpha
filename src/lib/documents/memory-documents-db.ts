@@ -27,6 +27,8 @@ export interface MemoryDocumentsDb extends DocumentsDb{
  expireSyncLease(issuer:string,source:ListedSource):void;
  expireExtractLease(document:string):void;
  expireCandidatesLease(extraction:string):void;
+ /** The open quarantine items failExtractTerminal recorded (the pg function inserts into dq_quarantine). */
+ terminalQuarantine():{document_id:string;batch_id:string;reason_code:string;detail:Record<string,unknown>}[];
  documents():DocumentRow[];extractions():ExtractionRow[];pages():PageRow[];citations():CitationRow[];candidates():CandidateRow[];
  publications():PublicationRow[];approvals():ApprovalRow[];scope():DocScopeRow[];assets():AssetRow[];
  _raw:{documents:Map<string,DocumentRow>;assets:Map<string,AssetRow>;extractions:Map<string,ExtractionRow>;pages:Map<string,PageRow>;citations:Map<string,CitationRow>;
@@ -101,6 +103,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   return s;
  };
  const docOf=(id:string)=>{const d=documents.get(id);if(!d)throw notFound();return d;};
+ const terminal:{document_id:string;batch_id:string;reason_code:string;detail:Record<string,unknown>}[]=[];
  const extractLock=(document:string,batch:string)=>{const d=docOf(document);if(d.extract_lease_batch_id!==batch||!live(d.extract_lease_until))throw leaseLost();return d;};
  const candidatesLock=(extraction:string,batch:string)=>{
   const e=extractions.get(extraction);if(!e)throw notFound();
@@ -128,6 +131,7 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
   setNow(iso){fixedNow=iso===null?null:normTs(iso,'now');},
   expireSyncLease(issuer,source){const s=scope.get(sk(issuer,source));if(s&&s.lease_until)s.lease_until=new Date(Date.parse(now())-1000).toISOString();},
   expireExtractLease(document){const d=documents.get(document);if(d&&d.extract_lease_until)d.extract_lease_until=new Date(Date.parse(now())-1000).toISOString();},
+  terminalQuarantine:()=>clone(terminal),
   expireCandidatesLease(extraction){const e=extractions.get(extraction);if(e&&e.candidates_lease_until)e.candidates_lease_until=new Date(Date.parse(now())-1000).toISOString();},
   documents:()=>[...documents.values()].map(clone),extractions:()=>[...extractions.values()].map(clone),pages:()=>[...pages.values()].map(clone),
   citations:()=>[...citations.values()].map(clone),candidates:()=>[...candidates.values()].map(clone),publications:()=>[...publications.values()].map(clone),
@@ -290,6 +294,14 @@ export function memoryDocumentsDb(opts:{now?:()=>Date}={}):MemoryDocumentsDb{
    const d=extractLock(document,batch);
    if(d.extract_attempts>=3)d.status='extract_failed';
    d.extract_lease_until=null;d.extract_lease_batch_id=null;
+  },
+  async failExtractTerminal(document,batch,code,detail){
+   if(!code||code.length>64)throw invalid('code');
+   if(detail===null||typeof detail!=='object'||Array.isArray(detail))throw invalid('detail');
+   const d=extractLock(document,batch);
+   if(d.status!=='stored')throw new DocumentsDbError('not_eligible');
+   d.status='extract_failed';d.extract_lease_until=null;d.extract_lease_batch_id=null;
+   if(!terminal.some(q=>q.document_id===document&&q.reason_code===code))terminal.push({document_id:document,batch_id:batch,reason_code:code,detail:clone(detail)});
   },
   async requestExtract(document,actor){
    if(!actor)throw invalid('actor');

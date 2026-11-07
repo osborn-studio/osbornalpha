@@ -271,6 +271,19 @@ export function documentsDbContract(label:string,setup:()=>Promise<DocsContractH
    expect(await code(db.requestExtract(randomUUID(),actor))).toBe('not_found');
   });
 
+  it('failExtractTerminal (T10 recheck N4): holder only, stored only; extract_failed at once with the lease cleared; no retry afterwards',async()=>{
+   const {doc,b}=await stored();const other=await h.batchId();
+   expect(await code(db.failExtractTerminal(doc,b,'content_hash_mismatch',{expected:'a'}))).toBe('lease_lost');   // no lease yet
+   expect(await db.claimExtractLease(doc,b,600)).toBe(true);
+   expect(await code(db.failExtractTerminal(doc,other,'content_hash_mismatch',{}))).toBe('lease_lost');            // not the holder
+   expect(await code(db.failExtractTerminal(doc,b,'',{}))).toBe('invalid_input');
+   await db.failExtractTerminal(doc,b,'content_hash_mismatch',{expected_sha256:'a',actual_sha256:'b'});
+   expect(await db.documentById(doc)).toMatchObject({status:'extract_failed',extract_lease_until:null,extract_lease_batch_id:null,extract_attempts:1});
+   expect(await db.claimExtractLease(doc,b,600)).toBe(false);
+   expect((await db.storedDue(1000)).some(d=>d.document_id===doc)).toBe(false);
+   expect(await code(db.failExtractTerminal(doc,b,'content_hash_mismatch',{}))).toBe('lease_lost');               // second call: nothing held any more
+  });
+
   it('finishExtract: candidates role per source/market/class/language, pages validated, revision_exists for the current versions',async()=>{
    const zh=await extracted();
    const e=(await db.extractionById(zh.ext))!;

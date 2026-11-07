@@ -8,7 +8,7 @@ import {memoryObjectStore} from '../object-store';
 import {seedPublicDocument,withOverride} from '../test-seed';
 import {EXTRACTOR_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {ObjectStore,PageLayout} from '../types';
-import {runDocumentsExtract,MIN_DOC_MS} from './run';
+import {runDocumentsExtract,FINALIZE_GRACE_MS,MIN_DOC_MS} from './run';
 import type {ExtractDeps} from './run';
 import {assemblePage,parseRecordedFixture,pageInsertsOf,sha256Hex} from './pages-json';
 import {extractHtml} from './html';
@@ -20,7 +20,7 @@ const layoutPage=(no:number,text:string):PageLayout=>{const a=assemblePage(text?
 
 function harness(over:Partial<ExtractDeps>={}){
  const db=memoryDocumentsDb();const store=memoryObjectStore();
- const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset'],dq_quarantine:['id']});
+ const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
  const calls:string[]=[];
  const deps:ExtractDeps={db,tables,store,now:()=>new Date(),deadline:null,codeVersion:CODE,
   extractPdf:async(bytes)=>{calls.push(new TextDecoder().decode(bytes));return {pages:[layoutPage(1,'𠀋😀 綜合損益表'),layoutPage(2,'')],hasTextLayer:true};},
@@ -136,7 +136,7 @@ describe('runDocumentsExtract',()=>{
   expect((await run(h.deps)).documents).toEqual([expect.objectContaining({documentId:doc,outcome:'extracted'})]);   // once ready, the same document extracts
  });
  it('extract_timeout, content hash mismatch, missing object and unsupported MIME are coded failures',async()=>{
-  const {db,store,tables,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
+  const {db,store,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
   const slow=await seedPublicDocument(db,enc('%PDF-slow'),{},store);
   const swapped=await seedPublicDocument(db,enc('%PDF-real'),{source_ref:'2026090300866_c'});
   store.objects().set((await db.documentById(swapped))!.storage_path,{bytes:enc('%PDF-other'),mime:'application/pdf'});   // the committed store refuses a mismatching put, so swap the stored object directly
@@ -149,7 +149,7 @@ describe('runDocumentsExtract',()=>{
   for(const id of [slow,missing,json])expect((await db.documentById(id))!).toMatchObject({status:'stored',extract_lease_until:null});
   // T10 review: a hash mismatch is terminal on first sight (extract_failed, no retries) and parked in quarantine
   expect((await db.documentById(swapped))!).toMatchObject({status:'extract_failed',extract_lease_until:null});
-  expect((tables as ReturnType<typeof memoryTableClient>).rows('dq_quarantine')).toEqual([expect.objectContaining({reason_code:'content_hash_mismatch',natural_key:swapped,status:'open'})]);
+  expect(db.terminalQuarantine()).toEqual([expect.objectContaining({document_id:swapped,reason_code:'content_hash_mismatch',detail:expect.objectContaining({expected_sha256:expect.any(String),actual_sha256:expect.any(String)})})]);   // one atomic db call: extract_failed + the quarantine item
   expect(await db.storedDue(10)).not.toContainEqual(expect.objectContaining({document_id:swapped}));
  });
  it('a pages.json put failure neither fails nor finishes: the lease is left to expire and the attempt stays counted',async()=>{
@@ -243,6 +243,38 @@ describe('runDocumentsExtract',()=>{
    const t0=Date.now();
    return {...h.deps,now:()=>new Date(Date.now()),deadline:new Date(t0+MIN_DOC_MS+30_000),...over};   // 120 s total: the stalled call is cut at 100 s, 20 s stay for finalization
   };
+  it('T10 recheck N2/N4: a stalled terminal call, selection or batch finalization is cut by the budget (finalization may use the grace after the deadline)',async()=>{
+   vi.useFakeTimers();
+   try{
+    // 1. the atomic terminal call stalls: bounded at deadline − 5 s, recorded as an error, the run finishes in time
+    const h=harness();const doc=await seedPublicDocument(h.db,enc('%PDF-real'),{},h.store);
+    h.store.objects().set((await h.db.documentById(doc))!.storage_path,{bytes:enc('%PDF-other'),mime:'application/pdf'});
+    const t0=Date.now();let endedAt=Infinity;
+    const p=run(budgeted(h,{db:withOverride(h.db,{failExtractTerminal:()=>new Promise<void>(()=>{})})})).then(r=>{endedAt=Date.now();return r;});
+    await vi.advanceTimersByTimeAsync(130_000);
+    const r=await p;
+    expect(endedAt-t0).toBeLessThanOrEqual(115_000+1_000);
+    expect(r.errors).toContainEqual({code:'deadline_exceeded',key:doc,message:'terminalize'});
+    expect(r.documents).toEqual([{documentId:doc,outcome:'failed',code:'content_hash_mismatch'}]);
+    // 2. selection stalls: the batch is closed as failed and the error rethrown, inside the deadline
+    const g=harness();
+    const rows=g.tables as ReturnType<typeof memoryTableClient>;
+    const q=run(budgeted(g,{db:withOverride(g.db,{storedDue:()=>new Promise(()=>{})})}));const seen=q.catch(e=>e);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(await seen).toMatchObject({name:'BudgetExceeded'});
+    expect(rows.rows('ingest_batches')[0]).toMatchObject({status:'failed'});
+    // 3. the batch finalization itself stalls: it is cut at deadline + grace instead of hanging
+    const k=harness();await seedPublicDocument(k.db,enc('%PDF-fin'),{},k.store);
+    const real=k.tables;let finishing=false;
+    const slowTables=new Proxy(real,{get(t,key,rcv){const v=Reflect.get(t,key,rcv);if(key==='update'&&typeof v==='function')return (...a:unknown[])=>finishing?new Promise(()=>{}):(v as (...x:unknown[])=>unknown).apply(t,a);return typeof v==='function'?v.bind(t):v;}});
+    const t1=Date.now();let fin=Infinity;
+    finishing=true;
+    const z=run(budgeted(k,{tables:slowTables as typeof real})).then(x=>x,e=>e).then(x=>{fin=Date.now();return x;});
+    await vi.advanceTimersByTimeAsync(200_000);
+    await z;
+    expect(fin-t1).toBeLessThanOrEqual(120_000+FINALIZE_GRACE_MS+1_000);
+   }finally{vi.useRealTimers();}
+  });
   it('a stalled storage read ends the document as object_get_failed in time; failExtract and the batch finalization still happen',async()=>{
    vi.useFakeTimers();
    try{

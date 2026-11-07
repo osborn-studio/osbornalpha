@@ -14,7 +14,7 @@ import {supabaseObjectStore} from '../object-store';
 import {extractInWorker,workerPreflight} from './isolate';
 import {pdfjsAssets} from './pdf';
 import type {ExtractBudget} from './pdf';
-import {MAX_PDF_PAGES} from './run';
+import {FINALIZE_GRACE_MS,MAX_PDF_PAGES} from './run';
 import type {ExtractDeps} from './run';
 
 /** Codex plan round 3 (R1-P2-7 final): pdf.js and the HTML parser block the event loop, so they run in a
@@ -25,9 +25,7 @@ const viaWorker=(kind:'pdf'|'html')=>(bytes:Uint8Array,budget:ExtractBudget)=>{
  const hardMs=budget.remainingMs();
  return extractInWorker({kind,bytes,maxPages:budget.maxPages??MAX_PDF_PAGES,softMs:Math.max(hardMs-WORKER_SOFT_MARGIN_MS,1),assets:pdfjsAssets()},{hardMs,...(budget.signal?{signal:budget.signal}:{})});
 };
-export interface ExtractDepsOptions{deadline:Date|null;codeVersion:string|null;now?:()=>Date;/** Reuse an existing admin client (scripts hold one). */admin?:ReturnType<typeof getAdminSupabase>}
-/** Finalization (batch row, freshness) may run until this long after the run deadline (the function limit is 60 s further out). */
-export const FINALIZE_GRACE_MS=30_000;
+export interface ExtractDepsOptions{deadline:Date|null;codeVersion:string|null;now?:()=>Date;/** Reused only when there is no deadline (scripts hold one); with a deadline the bounded transport is always built. */admin?:ReturnType<typeof getAdminSupabase>}
 /** Service-role client with every request capped (and, when given a deadline, aborted by it): the work client stops 5 s before the
  *  deadline so run.ts' own reserve stays usable; the finalize client may run FINALIZE_GRACE_MS past it. */
 function boundedAdmin(deadline:Date,reserveMs:number,graceMs:number){
@@ -36,9 +34,10 @@ function boundedAdmin(deadline:Date,reserveMs:number,graceMs:number){
  return createClient<Database>(url,key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:deadlineFetch(fetch,new Date(deadline.getTime()+graceMs),{reserveMs})}});
 }
 export function productionExtractDeps(opts:ExtractDepsOptions):ExtractDeps{
- // T10 review: with a deadline (the cron) no storage or rpc call can outlive the run; scripts/admin hold their own client and run.ts bounds each call itself
- const bounded=!opts.admin&&opts.deadline!==null;
- const sb=opts.admin??(bounded?boundedAdmin(opts.deadline!,5_000,0):getAdminSupabase());
+ // T10 recheck N2: with a deadline (the cron AND the admin reprocess route, which hands in its own client) the transport is always the
+ // deadline-aware one — an injected client cannot be re-wired, so it is not used; only a run without a deadline (scripts) keeps `admin`
+ const bounded=opts.deadline!==null;
+ const sb=bounded?boundedAdmin(opts.deadline!,5_000,0):(opts.admin??getAdminSupabase());
  const fin=bounded?boundedAdmin(opts.deadline!,0,FINALIZE_GRACE_MS):sb;
  return {db:supabaseDocumentsDb(sb),tables:supabaseTableClient(fin),store:supabaseObjectStore(sb),extractPdf:viaWorker('pdf'),extractHtml:async(bytes,budget)=>(await viaWorker('html')(bytes,budget)).pages,
   preflight:()=>workerPreflight(),   // R5-P2-1: worker_missing / worker_stale, checked before any claim (no attempt consumed)

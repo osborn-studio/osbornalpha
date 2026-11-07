@@ -40,13 +40,30 @@ export function deadlineFetch(base:typeof fetch,deadline:Date,opts:{capMs?:numbe
   const ms=Math.min(cap,deadline.getTime()-now()-reserve);
   if(ms<=0)throw Object.assign(new Error('request_deadline'),{name:'TimeoutError'});
   const ctl=new AbortController();
-  const timer=setTimeout(()=>ctl.abort(Object.assign(new Error('request_timeout'),{name:'TimeoutError'})),ms);
+  const timeout=()=>Object.assign(new Error('request_timeout'),{name:'TimeoutError'});
+  const timer=setTimeout(()=>ctl.abort(timeout()),ms);
   const outer=init?.signal;
   const onAbort=()=>ctl.abort(outer?.reason);
+  const cleanup=()=>{clearTimeout(timer);outer?.removeEventListener('abort',onAbort);};
   if(outer){if(outer.aborted)ctl.abort(outer.reason);else outer.addEventListener('abort',onAbort,{once:true});}
-  try{return await base(input,{...init,signal:ctl.signal});}
-  catch(e){if(ctl.signal.aborted&&!(outer?.aborted))throw Object.assign(new Error('request_timeout'),{name:'TimeoutError'});throw e;}
-  finally{clearTimeout(timer);outer?.removeEventListener('abort',onAbort);}
+  let res:Response;
+  try{res=await base(input,{...init,signal:ctl.signal});}
+  catch(e){cleanup();if(ctl.signal.aborted&&!(outer?.aborted))throw timeout();throw e;}
+  // T10 recheck N3: the abort stays armed until the BODY is consumed (supabase-js reads it after fetch resolves);
+  // a body that stalls past the deadline errors the stream instead of hanging the SDK call
+  if(!res.body){cleanup();return res;}
+  const reader=res.body.getReader();
+  const stream=new ReadableStream<Uint8Array>({
+   start(c){
+    ctl.signal.addEventListener('abort',()=>{reader.cancel().catch(()=>{});try{c.error(outer?.aborted?outer.reason:timeout());}catch{/* already closed */}},{once:true});
+   },
+   async pull(c){
+    try{const r=await reader.read();if(r.done){cleanup();c.close();}else c.enqueue(r.value);}
+    catch(e){cleanup();try{c.error(ctl.signal.aborted&&!(outer?.aborted)?timeout():e);}catch{/* already errored by the abort */}}
+   },
+   cancel(reason){cleanup();return reader.cancel(reason);},
+  });
+  return new Response(stream,{status:res.status,statusText:res.statusText,headers:res.headers});
  };
 }
 
