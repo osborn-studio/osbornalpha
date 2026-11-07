@@ -7,6 +7,7 @@ vi.mock('../entities/identifiers/sec-submissions',async(orig)=>({...(await orig<
 vi.mock('../supabase/admin',()=>({getAdminSupabase:()=>{throw new Error('no admin in unit tests');}}));
 
 import {productionCalendarDeps} from './calendar-deps';
+import {memoryRawStore} from './raw-store';
 import {DISCLOSURE_FIELDS} from './calendar-sync';
 
 const fakeAdmin={rpc:vi.fn(),from:vi.fn(),storage:{from:vi.fn()}} as never;
@@ -25,5 +26,18 @@ describe('productionCalendarDeps',()=>{
   expect(mocks.submissions.mock.calls[0][2]).toEqual({coverFrom:expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)});
   expect(deps.budget.remainingMs()).toBeGreaterThan(200_000);
   expect(deps.codeVersion).toBe('c');
+ });
+ it('an injected raw store is the one the returned deps AND the submissions fetcher use (preview must never upload to the Supabase store)',async()=>{
+  const uploads:string[]=[];
+  const admin={rpc:vi.fn(),from:vi.fn(),storage:{from:(b:string)=>{uploads.push(b);throw new Error('production storage touched');}}} as never;
+  const raw=memoryRawStore();
+  const deps=productionCalendarDeps({deadline:null,codeVersion:'c',admin,raw});
+  expect(deps.raw).toBe(raw);
+  mocks.submissions.mockClear();
+  mocks.submissions.mockResolvedValue({cik:'320193',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'main',sha256:'s',path:'p'},pages:[],complete:true,
+   parsed:{cik:'320193',name:null,category:null,fiscalYearEnd:null,tickers:[],exchanges:[],formerNames:[],filings:[],files:[]}});
+  await deps.submissions('0000320193',deps.budget);
+  expect(mocks.submissions.mock.calls[0][1].raw).toBe(raw);
+  expect(uploads).toEqual([]);
  });
 });

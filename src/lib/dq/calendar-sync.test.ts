@@ -319,9 +319,33 @@ describe('runCalendarSync (CN)',()=>{
   await runCalendarSync(h.deps,{market:'CN',limit:100,triggeredBy:'cron'});
   expect([...h.raw.objects.keys()].filter(k=>!k.endsWith('.meta.json'))).toHaveLength(1);   // landed raw-store also writes a .meta.json sidecar
   const rows=rowsOf(h.tables,C);
-  expect(rows.every(x=>x.upstream_lookup==='ok'&&x.detail.schedule_unavailable===undefined&&typeof x.detail.upstream_sha256==='string')).toBe(true);
+  expect(rows.filter(x=>['2026-09-30','2026-06-30'].includes(x.period_end)).every(x=>x.upstream_lookup==='ok'&&x.detail.schedule_unavailable===undefined&&typeof x.detail.upstream_sha256==='string')).toBe(true);
   expect(rows.find(x=>x.period_end==='2026-09-30')).toMatchObject({disclosure_state:'overdue',expected_date:'2026-10-30',upstream_filed_date:null});
   expect(rows.find(x=>x.period_end==='2026-06-30')).toMatchObject({disclosure_state:'filed_not_ingested',expected_date:'2026-08-29',upstream_filed_date:'2026-08-28',detail:expect.objectContaining({schedule_modified:true})});
+ });
+ const CN_FIELDS=['ts_code','ann_date','end_date','pre_date','actual_date','modify_date'];
+ const cnRaw=(p:Partial<TushareRaw>={}):TushareRaw=>({bytes:new TextEncoder().encode('{"code":0}'),sha256:'x',httpStatus:200,requestId:null,code:0,msg:'',fields:CN_FIELDS,items:[],hasMore:false,...p});
+ it('a code-0 response that is not a usable schedule (data:null, missing fields, has_more) is unavailable, never a false overdue; the bytes are still kept',async()=>{
+  for(const [name,raw] of [['data_null',cnRaw({fields:[],items:[]})],['missing_field',cnRaw({fields:['ts_code','end_date','pre_date'],items:[['600000.SH','20260930','20261030']]})],['empty_has_more',cnRaw({items:[],hasMore:true})],['has_more_rows',cnRaw({items:[['600000.SH','20260930','20260930','20261030','20261030',null]],hasMore:true})]] as const){
+   const h=await harness({market:'CN',members:[C],disclosure:async()=>raw});
+   const r=await runCalendarSync(h.deps,{market:'CN',limit:100,triggeredBy:'cron'});
+   const rows=rowsOf(h.tables,C);
+   expect(rows.length,name).toBeGreaterThan(0);
+   expect(rows.every(x=>x.upstream_lookup==='unavailable'&&x.disclosure_state==='unknown_upstream'),name).toBe(true);
+   expect(rows.some(x=>x.disclosure_state==='overdue'),name).toBe(false);
+   expect(r.errors.find(e=>e.key==='schedule_unavailable')?.message,name).toMatch(name==='has_more_rows'||name==='empty_has_more'?/has_more/:/bad_shape/);
+   expect([...h.raw.objects.keys()].filter(k=>!k.endsWith('.meta.json')),name).toHaveLength(1);
+  }
+ });
+ it('per-period coverage: a CN slot with no schedule row stays unknown_upstream (never overdue); a row or a published filing still decides',async()=>{
+  const h=await harness({market:'CN',members:[C],disclosure:async()=>cnRaw({items:[['600000.SH','20260630','20260630','20260829','20260828',null]]})});
+  await runCalendarSync(h.deps,{market:'CN',limit:100,triggeredBy:'cron'});
+  const rows=rowsOf(h.tables,C);
+  expect(rows.find(x=>x.period_end==='2026-06-30')).toMatchObject({upstream_lookup:'ok',disclosure_state:'filed_not_ingested'});
+  const missing=rows.filter(x=>x.period_end!=='2026-06-30');
+  expect(missing.length).toBeGreaterThan(0);
+  expect(missing.every(x=>x.upstream_lookup==='unavailable'&&x.disclosure_state==='unknown_upstream'&&x.detail.upstream_incomplete===true)).toBe(true);
+  expect(missing.some(x=>x.disclosure_state==='overdue')).toBe(false);
  });
  it('a Tushare API error code (积分不足) is unavailable with the code as reason',async()=>{
   const h=await harness({market:'CN',members:[C],disclosure:async()=>({bytes:new Uint8Array(),sha256:'x',httpStatus:200,requestId:null,code:40203,msg:'',fields:[],items:[],hasMore:false})});

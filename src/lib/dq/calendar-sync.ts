@@ -33,6 +33,8 @@ import type {SubmissionsView} from './filer-categories';
 /** Verified 2026-11-06 against real disclosure_date responses (600519.SH, 000333.SZ; docs/audits/2026-11-05-data-foundation-3/verification.md "CN disclosure_date 真实响应核对"): actual_date = periodic-report disclosure date, null while only scheduled. */
 export const CN_DISCLOSURE_VERIFIED=true;
 export const DISCLOSURE_FIELDS='ts_code,ann_date,end_date,pre_date,actual_date,modify_date';
+/** Columns the CN schedule needs: a response without one of them is not a schedule. */
+const CN_REQUIRED_FIELDS=['end_date','pre_date','actual_date'] as const;
 export const MIN_MEMBER_MS=60_000;
 export const MAX_MEMBER_ATTEMPTS=3;
 export const PASS_MAX_AGE_MS=2*86_400_000;
@@ -135,6 +137,16 @@ export function applyUpstreamCoverage(rows:ExpectationRow[],entries:readonly UsU
  });
 }
 
+/** CN counterpart of applyUpstreamCoverage: a period is judged from the schedule only if the response has a row for its end_date; without one it stays unknown (missing stays missing). Positive evidence is kept. */
+export function applyCnCoverage(rows:ExpectationRow[],schedule:readonly CnScheduleRow[]):ExpectationRow[]{
+ const have=new Set(schedule.map(r=>r.end_date));
+ return rows.map((r):ExpectationRow=>{
+  if((r.disclosure_state!=='pending'&&r.disclosure_state!=='overdue')||have.has(r.period_end))return r;
+  const {estimated_due_passed:_e,...detail}=r.detail;
+  return {...r,upstream_lookup:'unavailable',upstream_filed_date:null,disclosure_state:'unknown_upstream',detail:{...detail,upstream_incomplete:true,schedule_row_missing:true}};
+ });
+}
+
 interface MemberResult{profile:FilingProfile|null;rows:ExpectationRow[];upstreamUnavailable:boolean;noProfile:boolean;noFye:boolean;noCategory:boolean;errors:BatchError[];scheduleReason?:string}
 async function display(tables:TableClient,issuerId:string,scope:Row|undefined,market:Market,today:string):Promise<{ticker:string|null;name:string|null}>{
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
@@ -170,7 +182,10 @@ async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string
    else{
     // a storage failure is a real error (member failed, retryable), not an informational upstream gap
     const stored=await deps.raw.put({kind:'tushare-disclosure',bytes:raw.bytes,contentType:'application/json',meta:{api:'disclosure_date',ts_code:fetchKey}},deps.budget).catch((e:unknown)=>{throw e instanceof RawStoreError?e:new RawStoreError('raw_upload_failed',errText(e));});
-    if(CN_DISCLOSURE_VERIFIED)upstream={lookup:'ok',cn:parseDisclosureDate(raw),sha256:stored.sha256};
+    // code 0 alone proves nothing: data:null, a missing column or a partial page (has_more; offset paging is not order-stable, plan 2 §17) is not a schedule
+    if(!CN_REQUIRED_FIELDS.every(f=>raw.fields.includes(f))||!Array.isArray(raw.items)){upstream={lookup:'unavailable',sha256:stored.sha256};scheduleReason='bad_shape';}
+    else if(raw.hasMore){upstream={lookup:'unavailable',sha256:stored.sha256};scheduleReason='has_more';}
+    else if(CN_DISCLOSURE_VERIFIED)upstream={lookup:'ok',cn:parseDisclosureDate(raw),sha256:stored.sha256};
     else{upstream={lookup:'unavailable',sha256:stored.sha256};scheduleReason='unverified';}
    }
   }catch(e){if(e instanceof RawStoreError)throw e;scheduleReason=e instanceof TushareError&&e.code===-1?'no_token':e instanceof Error&&(e.message==='no_ts_code')?'no_ts_code':'error';}
@@ -181,6 +196,7 @@ async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string
  let rows=computeExpectations({profile,categories,filings,upstream,today});
  // US: coverage is per expected period (plan audit Q1); positive evidence is never discarded.
  if(upstream.lookup==='ok'&&market==='US')rows=applyUpstreamCoverage(rows,upstream.us??[]);
+ if(upstream.lookup==='ok'&&market==='CN')rows=applyCnCoverage(rows,upstream.cn??[]);
  const shown=await display(deps.tables,issuerId,scope,market,today);
  // US: a positive-evidence row cites the submissions page that holds its entry (historical pages have their own bytes); the manifest lists every page used
  // keyed by (accession, filingDate): conflicting copies of one accession can sit on different pages and the selected copy is the one whose date is upstream_filed_date

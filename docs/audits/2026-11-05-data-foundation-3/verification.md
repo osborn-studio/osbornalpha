@@ -123,4 +123,8 @@
 
 **结论。** 语义与计划一致：`actual_date` = 定期报告实际披露日，`end_date` = 报告期末，`modify_date` = 预约日修订记录，`ann_date` = 预约记录公告日。`parseDisclosureDate` 解析两份夹具全部行。据此 `CN_DISCLOSURE_VERIFIED` 翻 `true`（独立提交）。
 
-**保留事项（不阻塞翻开关）。** (1) Tushare 对尚无预约记录的期间不返回行（`end_date=20261231` 为 0 行；记录在期末当日即出现，`ann_date=end_date`），所以"上游成功但该期无行"= 暂无预约，日历按法定期限给 `pending`/`overdue`，若 Tushare 回填滞后可能把一个期限已过但行未到的期间标 `overdue`；这是 CN 数据延迟的固有风险，已由 `detail.schedule_*` 之外的行级 `upstream_sha256` 留证。(2) 只核对了两只 A 股的整历史与两个报告期的全市场形状；北交所（`.BJ`）未单独抽查。
+**日历如何使用该响应（审查后收紧，Task 18b 复审）。** code=0 不等于可用的预约表：`calendar-sync.ts` 把缺 `end_date/pre_date/actual_date` 列、`data:null`（`fields=[]`）判为 `bad_shape`，`has_more=true` 判为 `has_more`（offset 分页在并列行上不稳定，见计划二 17 号核对，不拼页），两者都得 `upstream_lookup='unavailable'` → `unknown_upstream`，原始字节仍入桶，原因进 `skipped_summary(schedule_unavailable)`。响应可用时按**期间**判定：只有响应里存在该 `end_date` 的行，才可由上游把该期判为 `pending`/`overdue`/`filed_not_ingested`；没有该期的行 → 该期保持 `unknown_upstream`（`detail.upstream_incomplete`、`detail.schedule_row_missing`），不因"上游没有这行"而判逾期；已入库的已发布 filing 仍使该期为 `received`。这样 Tushare 对尚无预约记录的期间不返回行（`end_date=20261231` 为 0 行）不会产生假逾期。
+
+**时间戳说明。** 夹具 meta 的 `fetched_at` 是脚本取响应时 `new Date().toISOString()` 的 UTC 值：2026-11-07T01:24Z；本机当时 `date -u` 为 2026-11-07 01:31（PST 为 2026-11-06 17:31），所以正确，对应上文标题里的本地日期 2026-11-06。
+
+**保留事项。** 只核对了两只 A 股的整历史与两个报告期的全市场形状；北交所（`.BJ`）未单独抽查。

@@ -87,7 +87,7 @@ async function main(){
  }
  const admin=getAdminSupabase();
  if(!args.apply){
-  const deps={...productionCalendarDeps({deadline:null,codeVersion,admin}),raw:memoryRawStore()};
+  const deps=productionCalendarDeps({deadline:null,codeVersion,admin,raw:memoryRawStore()});
   const out=await previewCalendar(deps,{market:args.market,issuerIds:args.issuers.length?args.issuers:undefined,limit:args.limit});
   console.log(JSON.stringify({mode:'preview (nothing written; pass --apply)',market:args.market,out},null,1));
   process.exit(out.some(o=>o.errors.length>0)?1:0);

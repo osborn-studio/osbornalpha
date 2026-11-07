@@ -32,7 +32,11 @@ describe.each(['600519.SH','000333.SZ'])('recorded disclosure_date %s',ts=>{
   expect(createHash('sha256').update(bytes).digest('hex')).toBe(meta.sha256);
   expect(meta).toMatchObject({api:'disclosure_date',params:{ts_code:ts},fields:DISCLOSURE_FIELDS,code:0});
   expect(data.fields.join(',')).toBe(DISCLOSURE_FIELDS);
-  expect(JSON.stringify(meta)).not.toMatch(/token/i);
+  // no secrets in either file: no "token" key/text, and (when the secret is loaded) never its value
+  for(const text of [bytes.toString('utf8'),JSON.stringify(meta)]){
+   expect(text).not.toMatch(/token/i);
+   if(process.env.TUSHARE_TOKEN)expect(text).not.toContain(process.env.TUSHARE_TOKEN);
+  }
  });
  it('parseDisclosureDate reads every recorded row into ISO dates',()=>{
   const rows=parseDisclosureDate(data);
@@ -47,7 +51,7 @@ describe.each(['600519.SH','000333.SZ'])('recorded disclosure_date %s',ts=>{
   }
   expect(new Set(rows.map(r=>r.end_date)).size).toBe(rows.length);   // one row per period end
  });
- it('actual_date is the announcement date of the periodic report: equals income rt1 ann_date for every period both files cover',()=>{
+ it('actual_date is the announcement date of the periodic report: equals the earliest income rt1 ann_date for every period both files cover',()=>{
   const ann=incomeAnn(ts);
   const rows=parseDisclosureDate(data);
   let compared=0;
@@ -55,7 +59,7 @@ describe.each(['600519.SH','000333.SZ'])('recorded disclosure_date %s',ts=>{
    const a=ann.get(r.end_date.replaceAll('-',''));
    if(!a)continue;
    compared++;
-   expect(a.map(iso),r.end_date).toContain(r.actual_date);
+   expect([...new Set(a.map(iso))].sort()[0],r.end_date).toBe(r.actual_date);   // earliest rt1 ann_date = original publication
   }
   expect(compared).toBeGreaterThanOrEqual(40);
  });
