@@ -401,6 +401,37 @@
     "wacc": "WACC",
     "terminalG": "永续增长 g",
     "forecastYears": "预测年数",
-    "recalculate": "重新计算"
+    "recalculate": "重新计算",
+    "modelHeading": "估值模型（假设含模型/默认/用户估计；不是事实）",
+    "replayHidden": "回放模式下不运行估值模型",
+    "bridgeHeading": "股权桥输入",
+    "unitNote": "金额单位：{unit} {currency}（原值 ÷ {divisor}）；股数用同一除数",
+    "bridge": { "baseRevenue": "基期收入（最近财年）", "sharesDiluted": "在外股数（封面日期），非稀释股数", "netDebt": "净债务" },
+    "basis": {
+      "us_standard": "借款合计 − 现金及现金等价物；不含租赁负债、应付票据等",
+      "cn_borrowings_less_monetary_funds_incl_restricted": "借款合计减货币资金（含受限资金）；不是现金及现金等价物",
+      "shares_outstanding": "在外股数（封面日期），非稀释股数",
+      "revenue": "营业收入（US revenue）",
+      "revenue_operating": "营业收入（不含利息等其他收入）"
+    },
+    "source": { "fact": "事实", "user": "用户", "missing": "无披露事实，需手工填写并确认" },
+    "missingReason": {
+      "no_fact": "无披露事实", "period_mismatch": "期末日期不对齐", "unit_mismatch": "单位不一致",
+      "share_basis_unverified": "股份类别未核实（非普通股/A 股或多条证券）", "multi_class_shares": "多类别股本",
+      "evidence_incomplete": "来源记录不完整", "citation_pending": "引用待挂接 / 待逐值核对"
+    },
+    "userPlaceholder": "手工填写（{unit}）",
+    "factLink": "事实 {n}",
+    "run": "运行",
+    "loadingSeed": "读取披露事实…",
+    "unavailable": "股权桥缺事实且未确认，未运行估值",
+    "warnings": {
+      "dcf_revenue_line_rejected": "已丢弃对收入行的非事实写入",
+      "dcf_llm_field_rejected": "已丢弃模型对股权桥字段的写入",
+      "dcf_llm_failed": "AI 假设抽取失败，使用默认比率",
+      "dcf_llm_unconfigured": "未配置用户 LLM，使用默认比率",
+      "dcf_no_facts": "暂无财报事实，估值完全基于用户输入与默认假设",
+      "dcf_estimates": "假设含模型/默认估计，关键数据请人工复核"
+    }
   }
 }

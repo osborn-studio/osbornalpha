@@ -401,6 +401,37 @@
     "wacc": "WACC",
     "terminalG": "Terminal Growth g",
     "forecastYears": "Forecast Years",
-    "recalculate": "Recalculate"
+    "recalculate": "Recalculate",
+    "modelHeading": "Valuation model (assumptions include model/default/user estimates; not facts)",
+    "replayHidden": "The valuation model does not run in replay mode",
+    "bridgeHeading": "Equity bridge inputs",
+    "unitNote": "Amounts in {unit} {currency} (raw ÷ {divisor}); shares use the same divisor",
+    "bridge": { "baseRevenue": "Base revenue (latest fiscal year)", "sharesDiluted": "Shares outstanding (cover date), not diluted", "netDebt": "Net debt" },
+    "basis": {
+      "us_standard": "Total borrowings − cash and cash equivalents; excludes leases, notes payable etc.",
+      "cn_borrowings_less_monetary_funds_incl_restricted": "Total borrowings less monetary funds (incl. restricted funds); not cash equivalents",
+      "shares_outstanding": "Shares outstanding (cover date), not diluted",
+      "revenue": "Revenue",
+      "revenue_operating": "Operating revenue (excludes interest and other income)"
+    },
+    "source": { "fact": "Fact", "user": "User", "missing": "No disclosed fact — enter and confirm manually" },
+    "missingReason": {
+      "no_fact": "No disclosed fact", "period_mismatch": "Period ends do not align", "unit_mismatch": "Units differ",
+      "share_basis_unverified": "Share class unverified (not common/A, or several securities)", "multi_class_shares": "Multiple share classes",
+      "evidence_incomplete": "Source record incomplete", "citation_pending": "Citation pending / value not yet verified"
+    },
+    "userPlaceholder": "Enter manually ({unit})",
+    "factLink": "Fact {n}",
+    "run": "Run",
+    "loadingSeed": "Reading disclosed facts…",
+    "unavailable": "Equity bridge lacks facts and confirmation; valuation not run",
+    "warnings": {
+      "dcf_revenue_line_rejected": "Non-fact writes to the revenue line were dropped",
+      "dcf_llm_field_rejected": "Model writes to equity-bridge fields were dropped",
+      "dcf_llm_failed": "AI assumption extraction failed; default ratios used",
+      "dcf_llm_unconfigured": "No user LLM configured; default ratios used",
+      "dcf_no_facts": "No disclosed facts; valuation rests on user inputs and defaults",
+      "dcf_estimates": "Assumptions include model/default estimates; review key inputs"
+    }
   }
 }
