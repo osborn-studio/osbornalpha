@@ -19,12 +19,16 @@ describe('explain',()=>{
   const e=explainResult(pair({r:-0.004,r2:0.000016}),names);
   expect(e.zh).toContain('近零相关');expect(e.zh).not.toMatch(/[正负]相关/);
  });
+ it('never prints -0.00',()=>{
+  const e=explainResult(pair({r:-0.004,r2:0.000016}),names);
+  expect(e.zh).toContain('r = 0.00');expect(e.en).toContain('r = 0.00');expect(e.zh+e.en).not.toContain('-0.00');
+ });
  it('level: exploratory label and no strength words',()=>{
   const e=explainResult(pair({kind:'level',transform:'level',exploratory:true,r:0.81,r2:0.6561,x_unit:'level',y_unit:'level'}),names);
   expect(e.zh).toContain('探索性');expect(e.zh).not.toMatch(/弱|中等|强/);expect(e.en).not.toMatch(/weak|moderate|strong/);
  });
  it('rolling and event window',()=>{
-  const roll:RollingResult={kind:'rolling',window_months:36,min_pairs:30,lag:0,points:[{end:'2020-01',r:-0.2,n:36},{end:'2020-02',r:0.4,n:36}],from:'2020-01',to:'2020-02',method_version:'m',code_version:'c'};
+  const roll:RollingResult={kind:'rolling',window_months:36,min_pairs:30,lag:0,points:[{end:'2020-01',r:-0.2,n:36},{end:'2020-02',r:0.4,n:36}],skipped_windows:0,from:'2020-01',to:'2020-02',method_version:'m',code_version:'c'};
   expect(explainResult(roll,names).zh).toContain('r 介于 -0.20 与 0.40 之间');
   const ev:EventResult={kind:'event_window',n_months:6,events:[],candidates:3,independent:3,dropped:[],stats:null,y_unit:'bp',method_version:'m',code_version:'c'};
   expect(explainResult(ev,names).zh).toContain('少于 5 个');

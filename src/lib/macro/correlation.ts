@@ -19,11 +19,11 @@ export interface FrozenObservation{observation_id:string;period_end:string;value
 export interface FrozenSeries{series_id:string;source_series_id:string;change_kind:ChangeKind;observations:FrozenObservation[]}
 export interface FrozenEvent{effective_date:string;change_bp:string;evidence:string[]}
 export interface FrozenInputs{indicator:FrozenSeries;asset:FrozenSeries;events?:FrozenEvent[];cutoff:string;catalog_version:string}
-export type AnalysisErrorCode='insufficient_sample'|'zero_variance'|'non_positive_price'|'no_events'|'invalid_inputs';
+export type AnalysisErrorCode='insufficient_sample'|'zero_variance'|'non_positive_price'|'no_events'|'invalid_inputs'|'analysis_input_invalid';
 export class AnalysisError extends Error{constructor(readonly code:AnalysisErrorCode,message?:string){super(message??code);this.name='AnalysisError';}}
 export interface Pair{t:string;s:string;x:number;y:number}
 export interface PairResult{kind:'change'|'level';r:number;r2:number;slope:number;intercept:number;n:number;from:string;to:string;lag:number;transform:'change'|'level';exploratory:boolean;x_unit:string;y_unit:string;pairs:Pair[];method_version:string;code_version:string}
-export interface RollingResult{kind:'rolling';window_months:number;min_pairs:number;lag:number;points:{end:string;r:number;n:number}[];from:string;to:string;method_version:string;code_version:string}
+export interface RollingResult{kind:'rolling';window_months:number;min_pairs:number;lag:number;points:{end:string;r:number;n:number}[];skipped_windows:number;from:string;to:string;method_version:string;code_version:string}
 export interface Quartiles{median:number;q1:number;q3:number}
 export interface EventRow{effective_date:string;anchor:string;change_bp:string;pre_from:string;post_to:string;pre:number;post:number}
 export interface EventResult{kind:'event_window';n_months:number;events:EventRow[];candidates:number;independent:number;dropped:{effective_date:string;reason:'incomplete_window'|'overlap'}[];stats:{pre:Quartiles;post:Quartiles}|null;y_unit:string;method_version:string;code_version:string}
@@ -59,18 +59,25 @@ function windowMove(to:string,from:string,kind:ChangeKind):number{
  if(kind==='bp')return Number(toBp(subtract(to,from)));
  return Number(subtract(to,from));
 }
-function alignedPairs(inputs:FrozenInputs,lag:number,transform:'change'|'level'):Pair[]{
+/** Pair plus the exact-decimal keys its x and y were derived from (used only to detect constant inputs; never stored). */
+interface KPair extends Pair{xk:string;yk:string}
+const plain=(p:KPair):Pair=>({t:p.t,s:p.s,x:p.x,y:p.y});
+const isConstant=(keys:readonly string[])=>keys.every(k=>k===keys[0]);
+/** Constant x or y (all keys equal as canonical decimals): no variance, whatever float rounding says. */
+const constantInput=(w:readonly KPair[])=>isConstant(w.map(p=>p.xk))||isConstant(w.map(p=>p.yk));
+function alignedPairs(inputs:FrozenInputs,lag:number,transform:'change'|'level'):KPair[]{
  const xi=byMonth(inputs.indicator),ya=byMonth(inputs.asset);
- const out:Pair[]=[];
+ const out:KPair[]=[];
  for(const k of [...xi.keys()].sort((a,b)=>a-b)){
   const s=k+lag;const yCur=ya.get(s);if(yCur===undefined)continue;
-  if(transform==='level'){out.push({t:monthKey(k),s:monthKey(s),x:Number(xi.get(k)!),y:Number(yCur)});continue;}
+  if(transform==='level'){out.push({t:monthKey(k),s:monthKey(s),x:Number(xi.get(k)!),y:Number(yCur),xk:xi.get(k)!,yk:yCur});continue;}
   const xPrev=xi.get(k-1),yPrev=ya.get(s-1);if(xPrev===undefined||yPrev===undefined)continue;
-  out.push({t:monthKey(k),s:monthKey(s),x:indicatorDelta(xi.get(k)!,xPrev,inputs.indicator.change_kind),y:assetDelta(yCur,yPrev,inputs.asset.change_kind)});
+  const x=indicatorDelta(xi.get(k)!,xPrev,inputs.indicator.change_kind),y=assetDelta(yCur,yPrev,inputs.asset.change_kind);
+  out.push({t:monthKey(k),s:monthKey(s),x,y,xk:inputs.indicator.change_kind==='pct'?String(x):subtract(xi.get(k)!,xPrev),yk:inputs.asset.change_kind==='pct'?String(y):subtract(yCur,yPrev)});
  }
  return out;
 }
-function windowed(pairs:Pair[],window:AnalysisWindow):Pair[]{
+function windowed(pairs:KPair[],window:AnalysisWindow):KPair[]{
  if(window==='all'||!pairs.length)return pairs;
  const months=window==='5y'?60:120;const last=monthIndex(pairs[pairs.length-1].t);
  return pairs.filter(p=>monthIndex(p.t)>last-months);
@@ -94,29 +101,33 @@ export function runAnalysis(spec:AnalysisSpec,inputs:FrozenInputs,codeVersion:st
  if(spec.kind==='change'||spec.kind==='level'){
   const pairs=windowed(alignedPairs(inputs,spec.lag,spec.kind),spec.window);
   if(pairs.length<MIN_PAIRS)throw new AnalysisError('insufficient_sample',`n=${pairs.length} < ${MIN_PAIRS}`);
+  if(constantInput(pairs))throw new AnalysisError('zero_variance','constant input');
   const {r,slope,intercept}=pearson(pairs.map(p=>p.x),pairs.map(p=>p.y));
   return {kind:spec.kind,r,r2:r*r,slope,intercept,n:pairs.length,from:pairs[0].t,to:pairs[pairs.length-1].t,lag:spec.lag,transform:spec.kind,exploratory:spec.kind==='level',
-   x_unit:spec.kind==='level'?'level':inputs.indicator.change_kind,y_unit:yUnit(inputs.asset.change_kind,spec.kind),pairs,...base};
+   x_unit:spec.kind==='level'?'level':inputs.indicator.change_kind,y_unit:yUnit(inputs.asset.change_kind,spec.kind),pairs:pairs.map(plain),...base};
  }
  if(spec.kind==='rolling'){
   const pairs=windowed(alignedPairs(inputs,spec.lag,'change'),spec.window);
   const idx=pairs.map(p=>monthIndex(p.t));
   const points:RollingResult['points']=[];
-  let start=0;
+  let start=0,skipped=0;
   for(let j=0;j<pairs.length;j++){
    while(idx[start]<=idx[j]-ROLLING_WINDOW)start++;
    const w=pairs.slice(start,j+1);if(w.length<ROLLING_MIN_PAIRS)continue;
+   if(constantInput(w)){skipped++;continue;}
    try{points.push({end:pairs[j].t,r:pearson(w.map(p=>p.x),w.map(p=>p.y)).r,n:w.length});}
-   catch(e){if(e instanceof AnalysisError&&e.code==='zero_variance')continue;throw e;}
+   catch(e){if(e instanceof AnalysisError&&e.code==='zero_variance'){skipped++;continue;}throw e;}
   }
   if(!points.length)throw new AnalysisError('insufficient_sample',`no ${ROLLING_WINDOW}-month window with ≥ ${ROLLING_MIN_PAIRS} pairs`);
-  return {kind:'rolling',window_months:ROLLING_WINDOW,min_pairs:ROLLING_MIN_PAIRS,lag:spec.lag,points,from:points[0].end,to:points[points.length-1].end,...base};
+  return {kind:'rolling',window_months:ROLLING_WINDOW,min_pairs:ROLLING_MIN_PAIRS,lag:spec.lag,points,skipped_windows:skipped,from:points[0].end,to:points[points.length-1].end,...base};
  }
  // event_window
  const n=spec.event_n;if(n===undefined)throw new AnalysisError('invalid_inputs','event_n required');
- const ya=byMonth(inputs.asset);
- const lastAsset=Math.max(...ya.keys());
+ const yAll=byMonth(inputs.asset);
+ const lastAsset=Math.max(...yAll.keys());
  const months=spec.window==='5y'?60:spec.window==='10y'?120:Infinity;
+ // Completeness counts only asset months inside the selected window.
+ const ya=new Map([...yAll].filter(([k])=>k>lastAsset-months));
  const events=[...(inputs.events??[])].sort((a,b)=>a.effective_date.localeCompare(b.effective_date)).filter(e=>monthIndex(e.effective_date)>lastAsset-months);
  if(!events.length)throw new AnalysisError('no_events');
  const kept:EventRow[]=[];const dropped:EventResult['dropped']=[];let lastKept:number|null=null;

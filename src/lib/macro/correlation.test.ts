@@ -61,6 +61,14 @@ describe('change / level',()=>{
   const i=fixture(48);i.asset.observations=i.asset.observations.map(o=>({...o,value_text:'2'}));
   expect(code(()=>run(spec({lag:1}),i))).toBe('zero_variance');
  });
+ it('constant non-binary decimals (48 × x=0.1, y=0.2) → zero_variance, never r = 1 (T15-1)',()=>{
+  const i=fixture(48);
+  i.indicator.observations=i.indicator.observations.map(o=>({...o,value_text:'0.1'}));
+  i.asset.observations=i.asset.observations.map(o=>({...o,value_text:'0.20'}));
+  for(const kind of ['level','change'] as const)expect(code(()=>run(spec({kind,lag:0}),i))).toBe('zero_variance');
+  i.asset.observations=fixture(48).asset.observations;
+  expect(code(()=>run(spec({kind:'level',lag:0}),i))).toBe('zero_variance');   // constant x only
+ });
  it('a non-positive price used in a log return → non_positive_price',()=>{
   const i=fixture(48);i.asset.change_kind='pct';i.asset.observations[10]={...i.asset.observations[10],value_text:'0'};
   expect(code(()=>run(spec({lag:1}),i))).toBe('non_positive_price');
@@ -84,6 +92,15 @@ describe('rolling',()=>{
   expect(r.points.every(p=>Math.abs(p.r-1)<1e-12)).toBe(true);
   expect([r.window_months,r.min_pairs]).toEqual([36,30]);
  });
+ it('constant windows are skipped and counted (x flat at 0.1 after month 20)',()=>{
+  const i=fixture(72);
+  i.indicator.observations=i.indicator.observations.map((o,t)=>t<20?o:{...o,value_text:'0.1'});
+  const r=run(spec({kind:'rolling',lag:0}),i) as RollingResult;
+  expect(r.skipped_windows).toBeGreaterThan(0);expect(r.points.length).toBeGreaterThan(0);
+  expect(r.points.every(p=>Number.isFinite(p.r)&&Math.abs(p.r)<=1)).toBe(true);
+  expect(r.points[r.points.length-1].end).not.toBe('2027-01');
+  expect((run(spec({kind:'rolling',lag:1}),fixture(48)) as RollingResult).skipped_windows).toBe(0);
+ });
  it('no window with ≥ 30 pairs → insufficient_sample',()=>{expect(code(()=>run(spec({kind:'rolling',lag:1}),fixture(25)))).toBe('insufficient_sample');});
 });
 
@@ -103,6 +120,13 @@ describe('event_window',()=>{
  it('fewer than 5 independent events → per-event table only',()=>{
   const r=run(ew(),inputs([10,23,36,49])) as EventResult;
   expect(r.independent).toBe(4);expect(r.stats).toBeNull();expect(r.events).toHaveLength(4);
+ });
+ it('completeness counts only asset months inside the selected window',()=>{
+  // 72 months, window 5y keeps months 12..71; an event at 14 needs 8..20, of which 8..11 lie outside the window.
+  const r=run(ew({window:'5y'}),inputs([14,40])) as EventResult;
+  expect(r.dropped).toEqual([{effective_date:evAt(14).effective_date,reason:'incomplete_window'}]);
+  expect(r.independent).toBe(1);
+  expect((run(ew({window:'all'}),inputs([14,40])) as EventResult).independent).toBe(2);
  });
  it('no events → no_events',()=>{expect(code(()=>run(ew(),inputs([])))).toBe('no_events');});
 });

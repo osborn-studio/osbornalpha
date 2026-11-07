@@ -6,7 +6,7 @@
 import type {AnalysisResult} from './correlation';
 import type {Bilingual} from './types';
 export function strengthOf(r:number):Bilingual{const a=Math.abs(r);return a<0.3?{zh:'弱',en:'weak'}:a<0.6?{zh:'中等',en:'moderate'}:{zh:'强',en:'strong'};}
-const f2=(v:number)=>v.toFixed(2);
+const f2=(v:number)=>{const s=v.toFixed(2);return s==='-0.00'?'0.00':s;};
 function lagText(k:number):Bilingual{
  if(k>0)return {zh:`指标领先 ${k} 个月`,en:`indicator leads by ${k} month${k===1?'':'s'}`};
  if(k<0)return {zh:`资产领先 ${-k} 个月`,en:`asset leads by ${-k} month${k===-1?'':'s'}`};

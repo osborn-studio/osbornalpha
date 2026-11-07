@@ -1,8 +1,12 @@
 // POST /api/macro/analyses: session, validation, truncation, quota, frozen inputs, failed runs (spec §7, §8, N1).
 import {beforeEach,describe,expect,it,vi} from 'vitest';
-const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn(),history:vi.fn(),codeVersion:vi.fn()}));
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn(),history:vi.fn(),codeVersion:vi.fn(),find:vi.fn()}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:m.codeVersion}));
-vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>({auth:{getUser:m.auth}}))}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn(async()=>{
+ const q:Record<string,unknown>={};const cols:Record<string,string>={};
+ q.select=()=>q;q.eq=(c:string,v:string)=>{cols[c]=v;return q;};q.maybeSingle=()=>m.find(cols);
+ return {auth:{getUser:m.auth},from:()=>q};
+})}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:vi.fn(()=>({rpc:m.rpc}))}));
 vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:vi.fn(()=>({}))}));
 vi.mock('@/lib/macro/db',async orig=>({...(await orig<typeof import('@/lib/macro/db')>()),supabaseMacroDb:vi.fn(()=>({seriesHistory:m.history}))}));
@@ -22,6 +26,7 @@ describe('POST /api/macro/analyses',()=>{
   m.history.mockImplementation(async(id:string)=>id==='US_DFF'?rows(xh):id==='US_DGS10'?rows(xh.map(v=>2*v),1):[]);
   m.rpc.mockResolvedValue({data:'9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f',error:null});
   m.codeVersion.mockReturnValue('c'.repeat(40));
+  m.find.mockResolvedValue({data:null,error:null});
  });
  it('503 code_version_unavailable when no verifiable code version exists: nothing read, computed or stored (第 4 稿 P1-10)',async()=>{
   for(const impl of [()=>null,()=>{throw new Error('git_not_allowed');}]){
@@ -67,5 +72,59 @@ describe('POST /api/macro/analyses',()=>{
   expect(r.status).toBe(400);
   const j=await r.json();expect(j.error.code).toBe('insufficient_sample');expect(j.runId).toBe('9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f');
   expect(m.rpc.mock.calls[0][1]).toMatchObject({p_status:'failed',p_results:null});
+ });
+ it('non-AnalysisError from the analysis → stored failed run, 422 analysis_input_invalid, no stack leak',async()=>{
+  const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
+  m.history.mockImplementation(async(id:string)=>id==='US_DFF'?rows(xh).map((r,i)=>i===5?{...r,value_text:'not-a-number'}:r):rows(xh.map(v=>2*v),1));
+  const r=await post(body);
+  expect(r.status).toBe(422);const j=await r.json();expect(j.error.code).toBe('analysis_input_invalid');expect(JSON.stringify(j)).not.toMatch(/at |\.ts|invalid_decimal/);
+  expect(m.rpc.mock.calls[0][1]).toMatchObject({p_status:'failed',p_results:null});
+  spy.mockRestore();
+ });
+ describe('idempotent retries (M22)',()=>{
+  const RUN='9d0c1a8e-1f2b-4c3d-8e4f-5a6b7c8d9e0f';
+  const stored=(o:Record<string,unknown>={})=>({data:{run_id:RUN,spec:{...body},status:'ok',error:null,...o},error:null});
+  it('a stored ok run is returned before any read, even if new data arrived',async()=>{
+   m.find.mockResolvedValue(stored());
+   const r=await post({...body});
+   expect(r.status).toBe(201);expect(await r.json()).toEqual({runId:RUN});
+   expect(m.history).not.toHaveBeenCalled();expect(m.rpc).not.toHaveBeenCalled();
+  });
+  it('key order of the stored spec does not matter',async()=>{
+   m.find.mockResolvedValue(stored({spec:Object.fromEntries(Object.entries(body).reverse())}));
+   expect((await post(body)).status).toBe(201);
+  });
+  it('a stored failed run returns its stored failure, not the recomputed outcome',async()=>{
+   m.find.mockResolvedValue(stored({status:'failed',error:'insufficient_sample: n=20 < 36'}));
+   const r=await post(body);
+   expect(r.status).toBe(400);const j=await r.json();expect(j.error.code).toBe('insufficient_sample');expect(j.runId).toBe(RUN);
+   expect(m.history).not.toHaveBeenCalled();expect(m.rpc).not.toHaveBeenCalled();
+  });
+  it('a stored analysis_input_invalid failure keeps 422',async()=>{
+   m.find.mockResolvedValue(stored({status:'failed',error:'analysis_input_invalid: x'}));
+   expect((await post(body)).status).toBe(422);
+  });
+  it('same request_id with a different spec → 409 request_conflict',async()=>{
+   m.find.mockResolvedValue(stored({spec:{...body,lag:2}}));
+   const r=await post(body);
+   expect(r.status).toBe(409);expect((await r.json()).error.code).toBe('request_conflict');expect(m.rpc).not.toHaveBeenCalled();
+  });
+  it('input read failure on retry still returns the existing run',async()=>{
+   m.find.mockResolvedValue(stored());m.history.mockRejectedValue(new Error('down'));
+   expect((await post(body)).status).toBe(201);
+  });
+  it('after the RPC the persisted outcome wins (concurrent retry: stored failed, this attempt ok)',async()=>{
+   m.find.mockImplementation(async(c:Record<string,string>)=>c.run_id?stored({status:'failed',error:'zero_variance: constant input'}):{data:null,error:null});
+   const r=await post(body);
+   expect(r.status).toBe(400);expect((await r.json()).error.code).toBe('zero_variance');
+  });
+  it('after the RPC a stored run with a different spec → 409',async()=>{
+   m.find.mockImplementation(async(c:Record<string,string>)=>c.run_id?stored({spec:{...body,lag:3}}):{data:null,error:null});
+   expect((await post(body)).status).toBe(409);
+  });
+  it('a failed lookup falls through to compute and the local outcome',async()=>{
+   m.find.mockResolvedValue({data:null,error:{message:'x'}});
+   expect((await post(body)).status).toBe(201);
+  });
  });
 });
