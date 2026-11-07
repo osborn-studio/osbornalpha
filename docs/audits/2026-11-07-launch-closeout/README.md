@@ -1,5 +1,20 @@
 # 美林时钟与宏观缓存发布记录（2026-11-07）
 
+## 最新生产发布与中美核心流程（98e9a819）
+
+2026-11-07 23:38:41（北京时间）生产检查：提交 `98e9a819d8f8ccc73de8f69df9feac09690014f3`，精确 [CI 42386242631](https://github.com/osborn-studio/osbornalpha/actions/runs/42386242631) 成功；部署 `dpl_BddX8KCD6DnK3a6KrVjtsaVEbikV` READY，绑定 `osbornalpha.com`。不可变部署地址为 `https://stock-monitor-5ebaim1ps-gilosbornhellos-projects.vercel.app`。策略与判断开关保持启用。该提交包含 #142 新 widget、#144 集成回归、#145 公司证据门以及 #148 评测准入修复；#148 的 merge commit `7adb5429` 已经祖先关系检查确认包含。不要把后来 main 合并的 #146/#151 或未发布的 #150 算作本次生产内容。#148 不解除禁用评测的许可证、人工 gold 或概率方法前置条件。
+
+公开方法与中美判断卡均为 200，响应 codeVersion 精确匹配上述 SHA；`macro_regime@v2` 为 active/publishable，公式 hash 无漂移。US 为 overheat、CN 为 stagflation，仍为未校准判断。匿名 transmission 返回 401/no-store，settle preview 为 200/ok、errors=[]；本次是 idle preview，不是新的真实 apply。原始脱敏回执见 [widget-release-evidence.json](widget-release-evidence.json)。
+
+原生 Chrome 既有登录会话已刷新真实 `/macro` 并完成中美核心流程，记录见 [widget-production-cua.json](widget-production-cua.json)：
+
+- 新版全宽四阶段时钟及本地导航实际可见。US 当前过热、覆盖率 60% 及缺增长轴限制可见；展开过热量化依据，CPI 3.72%、2026-09-30、规则 `3% < inflation <= 4%`、权重 15、贡献 9 一致。
+- US 点击来源进入真实抽屉，显示 BLS 经 FRED、`yoy_from_index@1` 及两个可读 `US_CPI_INDEX` 上游输入，CSV 行 322/310、列 2 与同一来源 SHA 可见。
+- 切换 CN 时先清除 US 数据再绑定 CN。当前滞胀与衰退 21/21 并列、覆盖率 60% 明示；PPI 5%、权重 15、贡献 9，PMI 49.3、权重 15、贡献 6，总分 21。
+- CN PPI 来源抽屉显示 NBS `data.stats.gov.cn`、`index_minus_100@1`、可读 `CN_PPI_INDEX` 输入与 JSON pointer `/data/1/values/0/value`。
+
+这是 agent 的生产功能与界面核验，不是用户审美认可。未下载或重新计算原始证据字节；未完整重跑生产移动端、控制台、退出登录、账号切换、中文及浅色主题。下面 `dc47ba2e` 的 18 个缓存样本仍是旧版本历史样本，不是新部署性能基准；cycle 首次观察 16.114 秒的风险尚未用本次生产重测解除，#150 延迟优化没有随本次部署发布。
+
 ## 后续发布跟踪（#137–#142）
 
 #137–#141 已合并并部署，精确提交为 `dc47ba2eb0768971f7362750bf504a90ceb68026`；[该提交 CI 42383255509](https://github.com/osborn-studio/osbornalpha/actions/runs/42383255509) 已通过。其中 #138 修复过期共享缓存的重复构建，并让认证策略请求绕过浏览器 HTTP 缓存；#137 是 F6 数据有效性与诊断修复，#140 是公司回放不再读实时收件箱，#141 是行业离线对账诊断与 I-3 决策计划。后三者不是对应整个模块完成，也没有启用 F6 禁用评测、实施 I-3 估值流水线或新增许可证／判断方法。
@@ -78,4 +93,4 @@
 
 [首次事实层发布与回滚](initial-facts-only-release.md) 保留先前故障、临时关闭判断开关及当时写权限阻塞的历史；这些不是本次最终状态。首次登录记录见 [acceptance.md](acceptance.md)。
 
-下一步：对已合并的 widget 完成视觉复核及部署验证 → 重做中美登录态视觉与证据验收；同时继续定位 cycle 首次 miss 延迟，分离数据读取、完整 frozen inputs 的序列化和 manifest 持久化成本，再重测浏览器样本。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次成功的功能发布证据。
+下一步：补齐生产移动端、中文／浅色主题、控制台、退出登录／账号切换与原始文件下载验证，并由用户评价视觉目标；继续完成 cycle 首次 miss 优化的审批、部署及新浏览器样本。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次中美核心流程成功的发布证据。
