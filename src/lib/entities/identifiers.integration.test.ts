@@ -13,7 +13,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
-import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {SCHEMA_BOOTSTRAP_SQL} from '../../../scripts/s4/local-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -52,19 +52,32 @@ const BOOTSTRAP=SCHEMA_BOOTSTRAP_SQL;
 async function withPreMigrationDatabase(adminUrl:string,version:string,body:(db:Pool)=>Promise<void>):Promise<void>{
  const name='df3_upgrade_'+randomBytes(4).toString('hex');
  const root=new Pool({connectionString:adminUrl,max:1});
- await root.query(`create database ${name}`);
- const url=new URL(adminUrl);url.pathname=`/${name}`;
- const db=new Pool({connectionString:url.toString(),max:2});
  try{
-  await db.query(BOOTSTRAP);
-  for(const f of readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')&&f<version).sort()){
-   try{await db.query(readFileSync(join('supabase/migrations',f),'utf8'));}
-   catch(e){throw new Error(`pre-migration ${f}: ${(e as Error).message}`);}
-  }
-  await body(db);
+  await root.query(`create database ${name}`);
+  const url=new URL(adminUrl);url.pathname=`/${name}`;
+  const db=new Pool({connectionString:url.toString(),max:2});
+  // Pool.end() may resolve before its clients' sockets close. Await every actual
+  // client end before DROP; FORCE would race those sockets and deliver 57P01.
+  const disconnected:Promise<void>[]=[];
+  const failures=new Set<unknown>();
+  db.on('error',error=>{failures.add(error);});
+  db.on('connect',client=>{
+   disconnected.push(new Promise(resolve=>client.once('end',resolve)));
+   client.on('error',error=>{failures.add(error);});
+  });
+  try{
+   await db.query(BOOTSTRAP);
+   for(const f of readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')&&f<version).sort()){
+    try{await db.query(readFileSync(join('supabase/migrations',f),'utf8'));}
+    catch(e){throw new Error(`pre-migration ${f}: ${(e as Error).message}`);}
+   }
+   await body(db);
+  }catch(error){failures.add(error);}
+  try{await Promise.all([db.end(),...disconnected]);}catch(error){failures.add(error);}
+  try{await root.query(`drop database if exists ${name}`);}catch(error){failures.add(error);}
+  if(failures.size===1)throw [...failures][0];
+  if(failures.size>1)throw new AggregateError(failures,'Temporary database body or cleanup failed');
  }finally{
-  await db.end();
-  await root.query(`drop database if exists ${name} with (force)`);
   await root.end();
  }
 }
@@ -116,6 +129,46 @@ beforeAll(async()=>{
 afterAll(async()=>{await admin?.end();});
 
 describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
+ it.each([false,true])('waits for every temporary database client before DROP DATABASE (idle error: %s)',async idleError=>{
+  const idleFailure=new Error('controlled idle client failure');
+  let poolEnded!:()=>void;
+  const atPoolEnd=new Promise<void>(resolve=>{poolEnded=resolve;});
+  const release:(()=>void)[]=[];
+  let dropStarted=false;
+  const query=Pool.prototype.query;
+  const spy=vi.spyOn(Pool.prototype,'query').mockImplementation(function(this:Pool,...args:unknown[]){
+   if(typeof args[0]==='string'&&args[0].startsWith('drop database'))dropStarted=true;
+   return Reflect.apply(query,this,args);
+  } as Pool['query']);
+  const run=withPreMigrationDatabase(adminUrl,VERSION,async db=>{
+   const clients=await Promise.all([db.connect(),db.connect()]);
+   for(const client of clients){
+    const end=client.end.bind(client);
+    const gate=new Promise<void>(resolve=>{release.push(resolve);});
+    // Hold real sockets open after pool shutdown starts, reproducing the CI race.
+    client.end=((callback?:(err:Error)=>void)=>{void gate.then(()=>callback?end(callback):end());}) as typeof client.end;
+    client.release();
+   }
+   const end=db.end.bind(db);
+   db.end=async()=>{await end();poolEnded();};
+   if(idleError)clients[0].emit('error',idleFailure);
+  });
+  // Propagate helper failures immediately rather than hanging on the test barrier.
+  const failed=run.then(()=>{throw new Error('database dropped before client disconnects');});
+  try{
+   await Promise.race([atPoolEnd,failed]);
+   await new Promise<void>(resolve=>setImmediate(resolve));
+   expect(dropStarted).toBe(false);
+   release[0]();
+   await new Promise<void>(resolve=>setImmediate(resolve));
+   expect(dropStarted).toBe(false);
+  }finally{
+   for(const open of release)open();
+   try{if(idleError)await expect(run).rejects.toBe(idleFailure);else await run;}finally{spy.mockRestore();}
+  }
+  expect(dropStarted).toBe(true);
+ },120000);
+
  it('adds the columns, creates seven service-role-only tables and the reconcile-raw bucket, and replays twice',async()=>{
   const cols=await q(`select table_name,column_name from information_schema.columns where table_schema='public' and (table_name,column_name) in (
    ('issuer_securities','valid_from_method'),('issuer_securities','valid_to_method'),
