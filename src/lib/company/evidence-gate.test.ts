@@ -146,7 +146,7 @@ describe('consumers: every financial value is withheld when its fact is not elig
   const derived={kind:'derived' as const,metric:'q_single_revenue',value:'5',unit:'USD',inputUnit:'USD',basis:'us_standard',formulaVersion:'facts-derive/1.0',inputs:[{factId:'a',concept:'revenue',filingId:'g',availableDate:'2024-01-01'},{factId:'b',concept:'revenue',filingId:'g',availableDate:'2024-01-01'}],rule:'a' as const};
   expect(gateCell(derived,E([['a',{ok:true}],['b',{ok:true}]]))).toBe(derived);
   expect(gateCell(derived,E([['a',{ok:true}],['b',no('citation_pending')]]))).toEqual({kind:'withheld',reason:'citation_pending',factId:'b'});
-  expect(gateCell(derived,E([['a',no('citation_pending')],['b',no('evidence_incomplete')]]))).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:'a'});
+  expect(gateCell(derived,E([['a',no('citation_pending')],['b',no('evidence_incomplete')]]))).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:'b'});
   expect(gateCell(null,E([]))).toBeNull();
  });
  it('event headline, fact_revised from/to and relChange; filing_published untouched',()=>{

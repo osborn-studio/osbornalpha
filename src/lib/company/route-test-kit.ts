@@ -7,10 +7,11 @@
 import {vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import type {TableClient} from '@/lib/db/table-client';
+import {rawHashOf} from '@/lib/facts/providers/shared';
 import type {FactRow,FilingRow,Market,MetricRow} from '@/lib/facts/types';
 import type {ReadDeps} from './deps';
 import type {Eligibility,GateInput,GateResult} from './evidence-gate';
-import type {CompanyDb,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,ReadSnapshotResult,WithheldReason} from './types';
+import type {CompanyDb,EventRow,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,ReadSnapshotResult,WithheldReason} from './types';
 
 export const kid=(n:number)=>`${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
 export const US=kid(1),BRKA=kid(2),CN=kid(4),HK=kid(5),OLD=kid(6),AMB1=kid(7),AMB2=kid(8);
@@ -34,6 +35,11 @@ export const cnSummary=(p:Partial<FilingSummary>={}):FilingSummary=>summary({fil
 export const filingRow=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:FIL_US,issuer_id:US,market:'US',source:'edgar',origin:'sec',form_type:'10-K',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-09-30',available_date:'2023-11-03',source_ref:'0000320193-23-000106',url:'https://www.sec.gov/x',document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r0000000-0000-4000-8000-000000000000',created_at:'2023-11-03T00:00:00Z',...p});
 export const metricRow=(p:Partial<MetricRow>={}):MetricRow=>({issuer_id:US,market:'US',metric:'gross_margin',period_start:'2022-09-25',period_end:'2023-09-30',duration:'12M',value:'0.4413',unit:'pure',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[],based_on_rev:3,as_of:'2024-06-01',...p});
 export const record=(factId:string,p:Partial<EvidenceRecord>={}):EvidenceRecord=>({fact_id:factId,raw_hash:'h'.repeat(64),snapshot_sha256:'s'.repeat(64),snapshot_path:`edgar/${US}/${'s'.repeat(64)}.json`,hash_locator:'us-gaap/Revenues/USD/0',json_pointer:'/facts/us-gaap/Revenues/units/USD/0',field:null,source:'edgar',api:null,url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json',params:null,captured_at:'2026-11-06T00:00:00Z',http_status:200,page:null,index_version:'company-evidence/1',run_id:'r0000000-0000-4000-8000-000000000000',code_version:'abc123',tool_versions:{mapping_gen:'1'},mapping_version:'facts-map/1',...p});
+export const HEADLINE_FACT='b0000000-0000-4000-8000-000000000001';
+export const eventRow=(p:Partial<EventRow>={}):EventRow=>({event_id:'e'.repeat(64),issuer_id:US,market:'US',kind:'period_first_seen',natural_key:'2023-07-02:2023-09-30:3M',occurred_on:'2023-11-03',period_end:'2023-09-30',concept:null,filing_id:FIL_US,
+ payload:{periodStart:'2023-07-02',periodEnd:'2023-09-30',duration:'3M',filingId:FIL_US,conceptCount:12,headline:{revenue:{factId:HEADLINE_FACT,value:'89498000000',unit:'USD'}},ambiguousUnits:[]},
+ meta:{headlineAsOf:'2026-11-06'},payload_hash:'p'.repeat(64),based_on_rev:3,first_seen_at:'2026-11-06T01:00:00Z',payload_changed_at:null,retired_at:null,rebuilt_at:'2026-11-06T01:00:00Z',
+ rebuild_id:'c0000000-0000-4000-8000-000000000000',rebuild_batch_id:'d0000000-0000-4000-8000-000000000000',...p});
 export const emptySnapshot=(p:Partial<ReadSnapshotResult>={}):ReadSnapshotResult=>({stateRev:1,rows:[],truncated:false,filings:[],...p});
 
 /** ReadDeps of vi.fn members. `noEvidence`: fact ids evidenceOf omits. `pdfFor`: fact ids the PDF source locates. */
@@ -71,6 +77,7 @@ export function fakeApplyGate(input:GateInput):GateResult{
  for(const id of [...new Set(input.factIds)].sort()){
   const f=input.facts.get(id);const rec=input.records.get(id);
   if(!f||!rec||!rec.code_version){no(id,'evidence_incomplete');continue;}
+  if(input.market==='US'&&!input.filings.has(f.filing_id)){no(id,'evidence_incomplete');continue;}
   if(input.market==='CN'&&!input.admin){
    const fl=input.filings.get(f.filing_id);
    if(!fl||fl.citation!=='linked'||!fl.documentUrl||!input.pdf.has(id)){no(id,'citation_pending');continue;}
@@ -81,3 +88,16 @@ export function fakeApplyGate(input:GateInput):GateResult{
 }
 
 export type KitDeps=ReturnType<typeof makeDeps>;
+
+// ---- fixtures for tests that run the REAL applyGate (no fakeApplyGate): the fact's raw_hash is the replay hash of
+// (snapshot sha, locator) and the evidence record carries exactly that, so a US fact with a record is eligible
+// and a fact whose id is missing from the evidence map (or listed in deps.noEvidence) is withheld by the real rules.
+export const REAL_SHA='a'.repeat(64);
+export const realLocator=(factId:string)=>`real/${factId}`;
+export const realFact=(p:Partial<FactRow>={}):FactRow=>{const f=fact(p);return {...f,raw_hash:rawHashOf(REAL_SHA,realLocator(f.fact_id))};};
+export const realRecord=(f:FactRow):EvidenceRecord=>record(f.fact_id,{raw_hash:f.raw_hash,snapshot_sha256:REAL_SHA,hash_locator:realLocator(f.fact_id)});
+/** evidenceOf answers with a consistent record for each of `facts` except those in deps.noEvidence. */
+export function realEvidence(deps:KitDeps,facts:FactRow[]):void{
+ const by=new Map(facts.map(f=>[f.fact_id,f]));
+ (deps.company.evidenceOf as unknown as ReturnType<typeof vi.fn>).mockImplementation(async(ids:string[])=>new Map(ids.filter(id=>by.has(id)&&!deps.noEvidence.has(id)).map(id=>[id,realRecord(by.get(id)!)])));
+}

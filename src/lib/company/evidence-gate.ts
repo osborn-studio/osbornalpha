@@ -86,7 +86,9 @@ export function gateCell(cell:Cell,elig:Map<string,Eligibility>):Cell{
  if(cell.kind==='fact'){const r=reasonOf(elig.get(cell.factId));return r===null?cell:{kind:'withheld',reason:r,factId:cell.factId};}
  if(cell.inputs.length===0)return {kind:'withheld',reason:'evidence_incomplete',factId:''};
  const bad=cell.inputs.map(i=>({id:i.factId,r:reasonOf(elig.get(i.factId))})).filter((x):x is {id:string;r:WithheldReason}=>x.r!==null);
- return bad.length===0?cell:{kind:'withheld',reason:worst(bad.map(b=>b.r)),factId:bad[0].id};
+ if(bad.length===0)return cell;
+ const reason=worst(bad.map(b=>b.r));
+ return {kind:'withheld',reason,factId:bad.find(b=>b.r===reason)!.id};
 }
 export function metricWithheldReason(inputs:{fact_id:string}[],elig:Map<string,Eligibility>):WithheldReason|null{
  if(inputs.length===0)return 'evidence_incomplete';

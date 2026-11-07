@@ -86,17 +86,17 @@ export interface Gated{
  * belong to this (issuer, market); filings not in `filings` come from filingsOfIssuer (published only);
  * evidence via the service_role company_fact_evidence read; CN PDF locators via the injected source.
  */
-export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
+export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer;asOf?:string},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
  const {deps,issuer}=ctx;
  const ids=[...new Set(factIds)];
  const byId=new Map<string,FactRow>();
  for(const r of known)byId.set(r.fact_id,r);
  const unknown=ids.filter(id=>!byId.has(id));
- if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(r.issuer_id===issuer.issuerId&&r.market===issuer.market&&r.status==='ok')byId.set(r.fact_id,r);
+ if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(r.issuer_id===issuer.issuerId&&r.market===issuer.market&&r.status==='ok'&&(!ctx.asOf||r.available_date<=ctx.asOf))byId.set(r.fact_id,r);
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
  const filingMap=new Map<string,FilingSummary>(filings.map(f=>[f.filingId,f]));
  if(facts.some(r=>!filingMap.has(r.filing_id)))
-  for(const f of await deps.facts.filingsOfIssuer(issuer.issuerId,issuer.market,{}))if(f.mapping_gen>0&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
+  for(const f of await deps.facts.filingsOfIssuer(issuer.issuerId,issuer.market,{}))if(f.mapping_gen>0&&(!ctx.asOf||f.available_date<=ctx.asOf)&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
  const present=facts.map(r=>r.fact_id);
  const [records,pdf]=present.length>0
   ?await Promise.all([deps.company.evidenceOf(present),issuer.market==='CN'?deps.pdf.locate(issuer.issuerId,issuer.market,present):Promise.resolve(new Map<string,PdfLocator>())])
