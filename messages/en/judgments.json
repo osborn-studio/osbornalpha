@@ -211,5 +211,286 @@
       },
       "note": "Self-assessed from owner-writable score records: visible only to you, never part of public calibration, and it never turns confidence into a percentage. Intervals are Wilson 95%."
     }
+  },
+  "ui": {
+    "common": {
+      "loading": "Loading…",
+      "error": "Error: {message}"
+    },
+    "nav": {
+      "breadcrumb": "Breadcrumb",
+      "intel": "Research",
+      "methods": "Methods"
+    },
+    "type": {
+      "macro_regime": "Macro regime",
+      "macro_regime_asset_pair": "Macro asset pair",
+      "recommendation_call": "Analyst call",
+      "industry_lifecycle_stage": "Industry lifecycle",
+      "industry_prosperity": "Industry prosperity",
+      "valuation_verdict": "Valuation verdict",
+      "thesis_win_rate": "Thesis win rate",
+      "return_range": "Return range",
+      "sellside_rating": "Sell-side rating",
+      "sellside_target_price": "Sell-side target price",
+      "synthetic_fact_metric": "Synthetic fact metric"
+    },
+    "kind": {
+      "all": "All kinds",
+      "probability": "Probability",
+      "categorical": "Categorical",
+      "score": "Score",
+      "interval": "Interval"
+    },
+    "domain": {
+      "all": "All",
+      "macro": "Macro",
+      "industry": "Industry",
+      "company": "Company",
+      "private": "Private"
+    },
+    "status": {
+      "draft": "Draft",
+      "active": "Active",
+      "retired": "Retired"
+    },
+    "band": {
+      "low": "Low",
+      "mid": "Mid",
+      "high": "High"
+    },
+    "classes": {
+      "recovery": "Recovery",
+      "overheat": "Overheat",
+      "stagflation": "Stagflation",
+      "recession": "Recession"
+    },
+    "lifecycle": {
+      "abstained": "Abstained",
+      "open": "Open",
+      "settled": "Settled",
+      "void": "Void",
+      "withdrawn": "Withdrawn",
+      "pending_fill": "Awaiting fill",
+      "hit": "Hit",
+      "miss": "Miss"
+    },
+    "calibration": {
+      "calibrated": "Calibrated",
+      "insufficient": "Uncalibrated",
+      "insufficientN": "Uncalibrated · independent samples {n}/{threshold}",
+      "failed": "Calibration failed",
+      "failedEce": "Calibration failed · ECE {ece}",
+      "evaluated": "Evaluated",
+      "evaluatedSpearman": "Evaluated · Spearman {rho} (n {n})",
+      "selfAssessed": "Self-assessed"
+    },
+    "inputKind": {
+      "financial_fact": "Fact",
+      "financial_metric": "Derived metric",
+      "macro_observation": "Macro observation",
+      "macro_snapshot": "Macro snapshot",
+      "price_bar": "Price bar",
+      "table_rows": "Catalog rows",
+      "judgment": "Judgment",
+      "legacy_fill": "Fill price",
+      "document_span": "Document span"
+    },
+    "card": {
+      "retrospective": "Back-registered",
+      "mergedFrom": "Registered under pre-merger subject {key}",
+      "private": "Only visible to you",
+      "confidence": "Confidence (band)",
+      "bandAria": "Tercile band: {band}",
+      "hitRate": "Method hit rate {rate} ({low}–{high}, n = {n})",
+      "reliabilityLink": "Reliability",
+      "accuracy": "Historical accuracy {rate} (n = {n})",
+      "coverage": "Historical coverage {rate} (nominal {nominal})",
+      "nominalCoverage": "Nominal coverage {nominal} · uncalibrated",
+      "selected": "Judged",
+      "realized": "Realized",
+      "realizedValue": "Realized {value}",
+      "scoresInDrawer": "Scores are shown in the inputs drawer only, never as %.",
+      "dims": "Dimensions",
+      "dimMissing": "n/a",
+      "abstained": "Abstained: {reason}",
+      "missing": "Missing: {items}",
+      "result": "Result: {outcome} · realized {value}",
+      "reason": {
+        "void": "Void: {reason}",
+        "withdrawn": "Withdrawn: {reason}",
+        "reopened": "Reopened: {reason}"
+      },
+      "method": "Method",
+      "asOf": "as of {date}",
+      "condition": "Condition: {text}",
+      "target": "Target: {target}",
+      "settlement": "Settlement: {state}",
+      "inputs": "Inputs {count}",
+      "timeline": "Settlement timeline"
+    },
+    "drawer": {
+      "close": "Close",
+      "tabs": "Inputs and settlement",
+      "registeredAt": "registered {at}",
+      "frozenNote": "Each input’s projection is frozen in the registered row, so replay never refetches; verify hashes with scripts/judgments/replay.ts.",
+      "noInputs": "This judgment has no frozen inputs.",
+      "caption": "Frozen inputs",
+      "columns": {
+        "kind": "Kind",
+        "ref": "Locator",
+        "availableAt": "Available",
+        "origin": "Origin",
+        "source": "Source link"
+      },
+      "source": "Source",
+      "registeredValue": "Registered value (uncalibrated)",
+      "registeredNote": "Shown here only, as a decimal; the card shows the band.",
+      "scores": "Scores (not probabilities)",
+      "scoresNote": "Normalised scores, never shown as percentages.",
+      "detailUnavailable": "Settlement history is unavailable right now; showing the card’s latest settlement only."
+    },
+    "timeline": {
+      "title": "Settlement timeline",
+      "registered": "Registered",
+      "target": "Target",
+      "settledHit": "Settled · hit",
+      "settledMiss": "Settled · miss",
+      "void": "Void",
+      "withdrawn": "Withdrawn",
+      "reopened": "Reopened",
+      "pending": "Awaiting settlement",
+      "pendingFill": "Awaiting fill price",
+      "abstained": "Abstained",
+      "asKnownNote": "The historical (as_known) view only shows settlements and calibrations known before its cutoff."
+    },
+    "reliability": {
+      "title": "Reliability",
+      "view": "Display",
+      "tableOnly": "Table only",
+      "chartAndTable": "Chart + table",
+      "chartLabel": "Reliability chart: mean forecast vs observed frequency for {bins} bins; the dashed line is perfect calibration",
+      "caption": "Reliability bins",
+      "columns": {
+        "bin": "Bin",
+        "n": "n",
+        "meanP": "Mean forecast",
+        "hitRate": "Observed",
+        "wilson": "Wilson 95%"
+      },
+      "summary": "Brier {brier} · Brier skill {skill} · holdout ECE (raw) {ece}"
+    },
+    "methods": {
+      "title": "Methodology registry",
+      "subtitle": "Every judgment-type number comes from one method version listed here. Whether it may show as a percentage depends on two gates: enough samples, calibration passes.",
+      "filterDomain": "Filter by domain",
+      "filterKind": "Filter by kind",
+      "caption": "Methodology registry",
+      "columns": {
+        "method": "Method",
+        "version": "Version",
+        "kind": "Kind",
+        "subject": "Subject",
+        "status": "Status",
+        "calibration": "Calibration",
+        "samples": "Independent samples",
+        "brier": "Brier",
+        "validUntil": "Valid until"
+      },
+      "publishable": "public",
+      "unpublished": "not public",
+      "adapterTitle": "My calls (read-only adapter)",
+      "adapterStatus": "read-only adapter",
+      "empty": "No method matches the filters.",
+      "note": "Methods that are not public (publishable = false) return no judgments from the read routes; draft methods only register in tests and dry runs."
+    },
+    "method": {
+      "unknown": "No such method version.",
+      "producer": "Producer: {kind}",
+      "gates": "Two gates",
+      "gateSample": "Gate 1 · enough samples",
+      "gateSampleDetail": "Independent {n} / threshold {threshold} (settled {total})",
+      "gateCalibration": "Gate 2 · calibration passes",
+      "gateEce": "Holdout ECE {ece} ≤ {max}, skill {skill}",
+      "gateAccuracy": "Accuracy Wilson lower bound {low} > majority baseline {base}",
+      "gateCoverage": "Coverage {coverage} (nominal {nominal}), width ratio {ratio}",
+      "gateSpearman": "Spearman {rho} (scores are evaluated, not calibrated)",
+      "gatePass": "Pass",
+      "gateFail": "Fail",
+      "gateNa": "Not decided",
+      "validity": "Validity",
+      "validityDetail": "until {until} · computed {computed} · revision {revision}",
+      "noCalibration": "No calibration report yet: shown as uncalibrated.",
+      "confusion": "Confusion matrix (rows = judged, columns = realized)",
+      "confusionCaption": "Confusion matrix",
+      "confusionCorner": "Judged \\ realized",
+      "temporal": "Time-ordered validation",
+      "splitColumns": {
+        "segment": "Segment",
+        "skill": "Skill"
+      },
+      "splitAll": "All independent samples",
+      "splitHoldout": "Out-of-time holdout (last 30%)",
+      "doc": "Formula document",
+      "params": "Parameters",
+      "paramColumns": {
+        "name": "Parameter",
+        "value": "Value"
+      },
+      "versions": "Versions",
+      "recent": "Recent settlements",
+      "noSettlements": "No settlements yet."
+    },
+    "admin": {
+      "deniedTitle": "Admin access required",
+      "deniedBody": "Judgment administration is restricted to admins.",
+      "title": "Judgment administration",
+      "summary": "Queue summary",
+      "filterLabel": "Queue filter",
+      "filters": {
+        "due": "Due",
+        "backoff": "Backing off",
+        "leased": "Leased",
+        "all": "All"
+      },
+      "quarantine": "Quarantine",
+      "quarantineLink": "Handle in /admin/dq",
+      "caption": "Settle queue",
+      "columns": {
+        "judgment": "Judgment",
+        "method": "Method",
+        "target": "Target",
+        "window": "settle_after / by",
+        "attempts": "Attempts",
+        "next": "Next",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "lastStatus": {
+        "pending": "Not due (backing off)",
+        "unavailable": "Unavailable (backing off)",
+        "inconsistent": "Awaiting quarantine",
+        "error": "Error"
+      },
+      "leasedUntil": "leased until {at}",
+      "settle": "Settle now",
+      "settleDisabled": {
+        "not_due": "Not due",
+        "leased": "Leased",
+        "closed": "Final"
+      },
+      "withdraw": "Withdraw",
+      "withdrawEllipsis": "Withdraw…",
+      "withdrawTitle": "Withdraw settlement",
+      "reopen": "Reopen",
+      "reopenTitle": "Reopen judgment",
+      "reasonLabel": "Reason (required)",
+      "appendOnlyNote": "Appends to judgment_settlements and research_audit_log; earlier settlement rows are kept.",
+      "cancel": "Cancel",
+      "done": "{action}: {status}",
+      "empty": "No queue rows for this filter.",
+      "refresh": "Refresh",
+      "more": "Load more"
+    }
   }
 }

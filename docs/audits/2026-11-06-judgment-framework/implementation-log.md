@@ -16,6 +16,7 @@
 
 | T16 review fixes | 本提交（`fix(judgments): T16 review fixes`） | 待复审 | Codex gpt-6-astra 实施 | 1 | 红测 7 failed / 38 passed；最终 51 passed / 7 DB skipped；typecheck、lint PASS；DB harness sandbox EPERM |
 | T19 macro_regime method / real macro wiring | 本提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 红测；502 passed / 83 DB skipped；typecheck、lint、golden --check PASS；CLI dry-run 缺配置；db-one EPERM |
+| T21 judgment UI / methods / admin | 待提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 首轮 5 failed + 1 suite missing；契约/交互回归 4 failed → 45 passed；typecheck、lint PASS；浏览器 host unavailable |
 
 ## 偏差 · Task 1
 
@@ -261,3 +262,18 @@
 - 验证命令：`npm test -- src/lib/judgments src/lib/macro/read-api.test.ts` → 42 suites passed / 4 skipped，502 tests passed / 83 DB skipped；`npm run typecheck && npm run lint` → PASS（max-warnings=0）；`git diff --check` → PASS。`node --import tsx scripts/judgments/build-replay-fixture.ts macro` → 15453 bytes；同命令加 `--check` → up to date。npx tsx 入口受 sandbox IPC listen EPERM，改用 node --import tsx。
 - 同步验证：`node --import tsx scripts/judgments/sync-methodologies.ts --dry-run --only macro_regime@v1` 因缺 NEXT_PUBLIC_SUPABASE_URL / ANON_KEY 无法运行数据库读取；同一 planMethodologySync 核心的内存 dry-run 测试通过：register / problems=[] / active / publishable=false / 64-hex formula_hash 与重算相同，未写库。需指挥在配置环境补跑真实 CLI dry-run。
 - PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH node --import tsx .claude/scratch/db-one.ts src/lib/judgments/settle.integration.test.ts` → listen 127.0.0.1 EPERM，需指挥 db-one 补验；本任务未新增数据库 integration suite、未领取 due judgments，无 criticalSuites / claim lock 改动。
+
+
+## Task 21 — 判断层 UI（F4-4）
+
+- 新增五个组件 JudgmentCard / InputsDrawer / SettlementTimeline / CalibrationBadge / ReliabilityTable、view-model、api-types；方法注册表 / 版本详情 / 管理员队列三个页面及 AdminJudgmentsClient。移动卡默认折叠、抽屉为底部 sheet、可靠性默认只看表，图为可选且表始终保留。方法详情包含实际门槛、混淆矩阵、单次时间留出、Markdown 原文、参数、版本和最近结算；管理员页沿 requireAdminUser 门禁。
+- 已读共享计划约定和 Task 21、十张画板、DESIGN.md、spec §9、依赖的已提交类型/路由。计划推荐的 superpowers 执行技能未在可用技能中；按本次 ONE task 指令直接执行，使用 frontend-ui-engineering / test-driven-development / git-workflow-and-versioning / browser-testing-with-devtools，不委派其他任务。
+- 画布 → 规格偏差 1–17：①宏观 categorical，不显示分布百分比；②四个契约类名；③标题/条件用服务端 nowcast 文案；④显示校准实际 threshold_n/ece_max；⑤卡边框中性；⑥混淆矩阵对角线加粗而非黄铜；⑦无虚假哈希通过/回放按钮/param 输入，提示 replay 脚本；⑧单次 70/30 留出表；⑨Markdown 原文；⑩版本列表而非事件历史；⑪到期/退避/租约及 /admin/dq 链接，不伪造隔离/有效性汇总；⑫展示 API 返回的 draft/active/retired 与公开状态；⑬可靠性默认表格；⑭命中/未命中用 --up/--down；⑮使用现有 --text-muted；⑯统一信心（档位）；⑰recommendation_call 静态自评行链接 /analyst。
+- 已提交契约适配：WireCard 的 percent 可缺省，view-model / 卡片 / 抽屉 / 时间线全程接收 wire 形状，不强转回 required-percent 类型；public response 的 codeVersion 在未配置时可为 null。概率还拒绝 NaN/Infinity/范围外 percent。校准留出指标从 metrics.temporal_split 读取；类别 Wilson 下界从 metrics.accuracy_wilson.low 读取，修正计划扁平字段与测试夹具。其它新 metrics（invalid endpoints/unusable values/scenarios unavailable）不重算、不伪造。未调用需要 now 的 display 核心函数。
+- 交互适配：原生 dialog.showModal 管理模态焦点边界，关闭恢复触发焦点，Escape 关闭，抽屉页签支持方向/Home/End 键；详情读取失败在两个页签均可见。管理员原因 maxLength=500，提交中禁止取消/重复写入；失败重试保持同一 payload 的 request_id，错误在 modal 内可见。队列支持游标分页/刷新、过期读取抑制、服务端计数上限以 500+ 显示；隔离链接取 last_detail.incident 而非 last_status；settle outcome 原样展示（含 quarantined/quarantine_pending）。方法切换清除上一版本数据与错误。
+- Task 20 的 ConfidenceCell / SelfAssessmentPanel / analyst-view 未改，analyst 文案原样保留，messages 仅追加 ui，zh/en parity 通过。卡片作为可复用组件交付，未擅自改宏观/行业/公司宿主页面；现有宏观页面虽已存在，嵌入不属于本任务文件范围。
+- 当前迁移实际是 20261116090000_judgments.sql（与旧计划和提示时间戳均不同），本任务无需 SQL、DB 或生产者变更；未改 facts/entities/macro/industry 和共享文件。无新 S4_TEST_STATE 测试、无 claimDue，故无 criticalSuites/withClaimLock 改动；本任务无需 PostgreSQL 集成 harness。
+- TDD：先写 plan view-model.test.ts 与 ui-source.test.ts，`npm test -- src/components/judgments/view-model.test.ts src/components/judgments/ui-source.test.ts` → 5 failed，另 1 suite 因缺实现无法收集；初版 → 40 passed。追加已提交 metrics/非有限百分比/native modal/分页/隔离回归 → 4 failed / 25 passed；修复后影响面 `npm test -- src/components/judgments src/lib/judgments/messages.test.ts src/i18n/messages-parity.test.ts 'src/app/(app)/dynamic-rendering.test.ts'` → 6 suites / 45 tests PASS。
+- 验证：`npm run typecheck && npm run lint` 最终 PASS（max-warnings=0）；中间 typecheck 发现重写 effect 遗留两行语法错误，已修；lint 曾报 ref cleanup 警告，已用稳定 invalidate callback 修复。`git diff --check` PASS。`npm run build` 仅运行一次，完整 PASS（42 static pages；三个新页面均列为 ƒ dynamic）。构建后仅将 HTTP codeVersion 类型放宽为 string|null，与 route-utils 实际返回一致，随后再次 typecheck/lint。
+- 浏览器核对受阻：`npm run dev` 可启动（随后停止）；cua 创建 localhost 方法页返回 browser access host unavailable，curl localhost / 127.0.0.1 均返回连接失败（exit 7）。因此未声称已完成视觉、390px 和键盘浏览器验收；需指挥在可访问浏览器与登录/数据库配置环境补验。使用源码守卫、纯逻辑测试、typecheck 与 build 覆盖当前可运行验证。
+- 工作树已有 Task 20 implementation-log 修改，原样保留；期间出现的 t19-mmx.md / t20-mmx.md 非本任务文件，未修改。
