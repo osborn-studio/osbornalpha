@@ -1,6 +1,6 @@
 // src/lib/documents/citations.test.ts
 import {describe,expect,it} from 'vitest';
-import {cite,citationView,integrityOf,verify} from './citations';
+import {cite,citationView,integrityOf,readPublicCitationById,verify} from './citations';
 import {memoryDocumentsDb} from './memory-documents-db';
 import {seedExtraction,seedPublicDocument,seedUpload,withOverride,OWNER_A} from './test-seed';
 import {DocumentsDbError} from './types';
@@ -63,6 +63,8 @@ describe('verify / citationView',()=>{
   expect(await verify(tampered,id)).toEqual({integrity:'corrupt',currentExtraction:true});
   const c=(await db.citationById(id))!;
   expect(integrityOf(undefined,c)).toBe('corrupt');
+  const storedHashMismatch=withOverride<DocumentsDb>(db,{citationById:async()=>({...c,text_hash:'0'.repeat(64)})});
+  expect((await readPublicCitationById(storedHashMismatch,id))?.integrity).toBe('corrupt');
  });
  it('citationView is null when the document is not visible through the given db',async()=>{
   const {db,doc,ext}=await setup();

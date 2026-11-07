@@ -66,6 +66,17 @@ describe('createF4Client (spec ยง9.1: same-site HTTP, 3 s timeout, any failure โ
   vi.stubEnv('NEXT_PUBLIC_SITE_URL','');
   await expect(createF4Client({fetch:f as unknown as typeof fetch}).latestRegimeCard('US')).rejects.toThrow('f4_unconfigured');
  });
+ it.each([
+  ...['https://site.test','http://localhost','http://127.0.0.1:3000'].flatMap(origin=>[`${origin}/path`,`${origin}/?x=1`,`${origin}/#frag`,origin.replace('://','://u:p@')]),
+  'http://site.test','http://localhost.evil','http://[::1]','//site.test','javascript:alert(1)',
+ ])('rejects unsafe base URL %s',async(baseUrl)=>{
+  await expect(client(()=>json({cards:[]}),{baseUrl}).c.latestRegimeCard('US')).rejects.toThrow('f4_unconfigured');
+ });
+ it.each(['https://site.test','https://site.test/','https://SITE.TEST:443','http://localhost','http://localhost/','http://127.0.0.1:3000'])('accepts normalized origin URL %s',async(baseUrl)=>{
+  const {c,urls}=client(()=>json({cards:[]}),{baseUrl});
+  expect(await c.latestRegimeCard('US')).toBeNull();
+  expect(urls[0].origin+urls[0].pathname).toBe(`${new URL(baseUrl).origin}/api/judgments`);
+ });
 });
 
 describe('projections',()=>{
@@ -79,7 +90,7 @@ describe('projections',()=>{
  });
  it('judgmentDetailOf rejects malformed collections instead of normalizing them to empty / dropping entries',()=>{
   const j={judgment_id:'j1',as_of:'2026-10-15',inputs:[]};
-  const S={outcome:'miss',realized:'recovery',evidence:null,settled_at:'2027-02-01T00:00:00Z'};
+  const S={outcome:'miss',realized:'recovery',evidence:{source:'test'},settled_at:'2027-02-01T00:00:00Z'};
   for(const bad of [
    {card:CARD,judgment:j},                                         // settlements missing
    {card:CARD,judgment:j,settlements:{}},                          // settlements not an array
@@ -89,6 +100,9 @@ describe('projections',()=>{
    {card:CARD,judgment:j,settlements:[{...S,evidence:'x'}]},
    {card:CARD,judgment:{...j,inputs:undefined},settlements:[]},
    {card:CARD,judgment:{...j,inputs:[null]},settlements:[]},
+   ...[undefined,null,{},[], 'bad'].map(ref=>({card:CARD,judgment:{...j,inputs:[{kind:'macro_observation',ref,snapshot:{value:1}}]},settlements:[]})),
+   ...[undefined,null,{},[], 'bad'].map(snapshot=>({card:CARD,judgment:{...j,inputs:[{kind:'macro_observation',ref:{id:'x'},snapshot}]},settlements:[]})),
+   ...[undefined,null,{}].map(evidence=>({card:CARD,judgment:j,settlements:[{...S,evidence}]})),
   ])expect(()=>judgmentDetailOf(bad)).toThrow(F4Unavailable);
   expect(judgmentDetailOf({card:CARD,judgment:j,settlements:[S]}).settlements).toHaveLength(1);
  });
