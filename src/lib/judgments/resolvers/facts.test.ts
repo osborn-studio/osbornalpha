@@ -206,4 +206,25 @@ describe('fact_metric resolver',()=>{
   const allZero=edited(derive,ms=>ms.map(m=>isQ(m,'2024-09-30')?{...m,value:'0'}:m));
   expect(await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),allZero))).toEqual({status:'unavailable',failure:'prior_zero'});
  });
+ it('S2-04: the ordinary path applies the override-path availability checks: a row available after the cutoff, or a foreign as_of, is Unavailable(data_after_cutoff)',async()=>{
+  const {facts,issuer,params,derive}=await setup();
+  const CUT='2026-01-01T00:00:00.000Z';
+  const late=(over:'row'|'as_of')=>stubInputsDb({deriveMetricsAsOf:async(...a)=>{
+   const r=await derive(...a);
+   if(over==='as_of')return r;
+   const base=r.envelope.rows.find(x=>x.period_end==='2025-09-30')!;
+   const extra={...base,fact_id:randomUUID(),period_start:'2025-04-01',period_end:'2025-06-30',available_date:'2026-02-01'};
+   return {...r,envelope:{...r.envelope,rows:[...r.envelope.rows,extra]}};
+  }});
+  void facts;void issuer;
+  expect(await factMetricResolver.resolve(ctxOf(params(),late('row'),CUT))).toEqual({status:'unavailable',failure:'data_after_cutoff'});
+  expect(await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),late('row'),CUT))).toEqual({status:'unavailable',failure:'data_after_cutoff'});
+  // candidates too
+  const dup=stubInputsDb({deriveMetricsAsOf:async(...a)=>{const r=await derive(...a);
+   const base=r.envelope.rows.find(x=>x.period_end==='2025-09-30')!;
+   return {metrics:[...r.metrics,{...r.metrics.find(m=>isQ(m,'2025-09-30'))!,value:'1001'}],envelope:{...r.envelope,rows:[...r.envelope.rows,{...base,fact_id:randomUUID(),period_start:'2025-04-01',period_end:'2025-06-30',available_date:'2026-02-01'}]}};}});
+  expect(await factMetricResolver.resolve(ctxOf(params(),dup,CUT))).toEqual({status:'unavailable',failure:'data_after_cutoff'});
+  // the same data at a later cutoff is fine
+  expect((await factMetricResolver.resolve(ctxOf(params(),late('row'),'2026-03-02T00:00:00.000Z'))).status).toBe('resolved');
+ });
 });

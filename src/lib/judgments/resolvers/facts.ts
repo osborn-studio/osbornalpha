@@ -76,6 +76,13 @@ export function operandReproduces(op:FactOperand):boolean{
  return again.some(m=>sameKey(m,op.key)&&m.value===op.value_text&&canonicalize(m.inputs)===canonicalize(op.lineage));
 }
 
+/** Availability duty shared by the ordinary and the override path (S-02 / S2-04): derived at the cutoff's derive date, from rows available by the cutoff. */
+export function operandAvailable(op:FactOperand,cutoff:string):boolean{
+ const d=op.derivation;
+ if(!d||d.as_of!==factsAsOfDate(cutoff)||!Array.isArray(d.rows))return false;
+ return d.rows.every(r=>typeof r.available_date==='string'&&isRealDate(r.available_date)&&endOfUtcDay(r.available_date)<=cutoff);
+}
+
 export const factMetricResolver:Resolver={
  name:'fact_metric',version:FACT_RESOLVER_VERSION,maxFetchMs:FACT_MAX_FETCH_MS,
  validateParams:validate,
@@ -100,6 +107,7 @@ export const factMetricResolver:Resolver={
   const ambiguous=(list:MetricRow[],role:FactCandidate['role'],realized:(m:MetricRow)=>number,counterpart:MetricRow|null):ResolverResult=>{
    const other=counterpart?operandOf(env,counterpart,role==='current'?'prior':'current',asOf):null;
    const candidates:FactCandidate[]=list.map(m=>({...operandOf(env,m,role,asOf),realized_value:realized(m),label_available_at:labelOf(counterpart?[m,counterpart]:[m]),counterpart:other}));
+   if(!candidates.every(cd=>operandAvailable(cd,ctx.cutoff)&&(!cd.counterpart||operandAvailable(cd.counterpart,ctx.cutoff))))return unavailable('data_after_cutoff');
    const evidence={role,candidate_digests:candidates.map(x=>digest(x)),state_rev:env.stateRev,cutoff:ctx.cutoff,as_of:asOf,formula_version:p.formula_version,compare:p.compare};
    return {status:'inconsistent',reason_code:'settlement_ambiguous_fact',detail:{candidates},evidence,evidence_hash:digest(evidence)};
   };
@@ -108,6 +116,7 @@ export const factMetricResolver:Resolver={
    const mappingGen=[...new Set(env.rows.filter(r=>ids.has(r.fact_id)).map(r=>r.mapping_gen))].sort((a,b)=>a-b);
    // Every operand frozen with its full derivation (P1-06); one that its own frozen rows cannot reproduce is not settled on.
    const operands=used.map((m,i)=>operandOf(env,m,i===0?'current':'prior',asOf));
+   if(!operands.every(x=>operandAvailable(x,ctx.cutoff)))return unavailable('data_after_cutoff');
    if(!operands.every(operandReproduces))return unavailable('metric_not_reproducible');
    return {status:'resolved',value,unit:p.compare==='yoy'?'ratio':p.unit,from:p.period_start,to:p.period_end,label_available_at:labelOf(used),
     evidence:{metric_keys:used.map(keyOf),fact_ids:[...ids].sort(cmp),filing_ids:uniq(lineage.map(i=>i.filing_id)),available_dates:uniq(lineage.map(i=>i.available_date)),
@@ -135,11 +144,7 @@ export const factMetricResolver:Resolver={
   // Recompute, never trust: every operand must be reproduced by deriveMetrics from its own frozen rows (P1-06).
   const ops:FactOperand[]=[ch,...(ch.counterpart?[ch.counterpart]:[])];
   // S-02: every operand must have been derived at the derive date of THIS override's cutoff, from rows already available at it.
-  const asOfAt=factsAsOfDate(o.cutoff);
-  for(const x of ops){
-   if(x.derivation.as_of!==asOfAt)throw new JudgmentError('override_mismatch','derivation_as_of');
-   if(x.derivation.rows.some(r=>typeof r.available_date!=='string'||!isRealDate(r.available_date)||endOfUtcDay(r.available_date)>o.cutoff))throw new JudgmentError('override_mismatch','row_after_cutoff');
-  }
+  if(!ops.every(x=>operandAvailable(x,o.cutoff)))throw new JudgmentError('override_mismatch','operand_availability');
   if(!ops.every(operandReproduces))throw new JudgmentError('override_mismatch','derivation_does_not_reproduce');
   const cur=ops.filter(x=>x.role==='current'),pr=ops.filter(x=>x.role==='prior');
   if(cur.length!==1||!isCurrent(cur[0].key,p))throw new JudgmentError('override_mismatch','current_key');

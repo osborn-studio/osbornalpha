@@ -55,7 +55,8 @@ export function priceWindow(p:PriceReturnParams,t:Target):{from:string;to:string
 /** The registered price_bar input of the base date (spec §7.4 basis check); null when the judgment froze none. */
 export function registeredBase(j:JudgmentRow,p:PriceReturnParams):PriceBarInput|null{
  const hits=j.inputs.filter((i):i is PriceBarInput=>i.kind==='price_bar'&&i.ref.ticker===p.ticker&&i.ref.market===p.market&&i.ref.date===p.base_date&&i.ref.source===p.source&&i.ref.adjustment===p.adjustment);
- return hits.length===1?hits[0]:null;   // S-03: exactly one registered base of the condition's own source and adjustment; never a fallback
+ const ok=(h:PriceBarInput)=>{const q=h.snapshot;return !!q&&q.ticker===h.ref.ticker&&q.market===h.ref.market&&q.date===h.ref.date&&q.source===h.ref.source&&q.adjustment===h.ref.adjustment&&q.ticker===p.ticker&&q.market===p.market&&q.date===p.base_date&&q.source===p.source&&q.adjustment===p.adjustment&&Number.isFinite(q.close)&&q.close>0;};   // S2-03: the frozen snapshot carries the identity of its ref and of the condition
+ return hits.length===1&&ok(hits[0])?hits[0]:null;   // S-03: exactly one registered base of the condition's own source and adjustment; never a fallback
 }
 /** DataGateway's close-only branch synthesises open=high=low=close and volume=0. */
 const closeOnlyBar=(source:KlineSourceName,b:SourceKlineBar)=>source==='datagateway'&&b.volume===0&&b.open===b.close&&b.high===b.close&&b.low===b.close;
@@ -64,16 +65,15 @@ export function evidenceBar(b:SourceKlineBar,closeOnly:boolean):EvidenceBar{
  return {date:b.time,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume,amount:b.amount??null,fields_present:b.amount===undefined?FULL_FIELDS:[...FULL_FIELDS,'amount']};
 }
 
-/** S-06 / spec §12.4: the frozen ticker was the issuer's primary security at the base date, and at the target date the issuer's
- *  primary is another ticker or none (valid_to <= target end; OLD -> NEW listing change). A frozen ticker that was never primary
- *  (dual listing) is never judged delisted from the primary alone. */
-async function frozenTickerDelisted(ctx:ResolveContext,p:PriceReturnParams,t:Target):Promise<boolean>{
+/** S-06 / S2-02 / spec §12.4: no end bar exists. The frozen ticker was the issuer's primary security at the base date and by the end
+ *  of the scan window `to` (the date bound the read used; there is no exchange calendar, O4) the issuer's primary is another ticker
+ *  or none (OLD -> NEW listing change). A frozen ticker that was never primary (dual listing) is never judged delisted from the
+ *  primary alone. */
+async function frozenTickerDelisted(ctx:ResolveContext,p:PriceReturnParams,scanEnd:string):Promise<boolean>{
  const j=ctx.judgment;
- const end=t.kind==='session_index'?addDaysIso(p.base_date,t.n):t.kind==='date'?t.date:null;
- if(end===null)return false;
  const at=(s:{ticker:string;market:PriceMarket}|null)=>s!==null&&s.ticker===p.ticker&&s.market===p.market;
  if(!at(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,p.base_date)))return false;
- return !at(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,end));
+ return !at(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,scanEnd));
 }
 
 export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Resolver{
@@ -119,8 +119,8 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   if(baseIdx<PRE_BASE_BARS){
    const backFrom=addDaysIso(from,-BACK_PAGE_DAYS);
    const back=await read(p.ticker,p.market,backFrom,addDaysIso(from,-1));
-   if(!Array.isArray(back))return unavailable(back.failure);
-   from=backFrom;bars=merge(back,bars);baseIdx=bars.findIndex(b=>b.time===p.base_date);
+   if(!Array.isArray(back)&&back.failure!=='empty')return unavailable(back.failure);   // S2-01: empty = zero additional pre-base bars
+   from=backFrom;bars=merge(Array.isArray(back)?back:[],bars);baseIdx=bars.findIndex(b=>b.time===p.base_date);
   }
   if(baseIdx<PRE_BASE_BARS){
    // S-04: the evidence needs PRE_BASE_BARS bars before the base (n + 6 in all); a young listing may still be catching up at the provider.
@@ -131,11 +131,11 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   if(endIdx<0&&t.kind==='session_index'){
    const nextTo=addDaysIso(to,Math.ceil(t.n*SESSION_DAYS)+TAIL_DAYS);
    const fwd=await read(p.ticker,p.market,addDaysIso(to,1),nextTo);
-   if(!Array.isArray(fwd))return unavailable(fwd.failure);
-   to=nextTo;bars=merge(bars,fwd);endIdx=endIdxOf();
+   if(!Array.isArray(fwd)&&fwd.failure!=='empty')return unavailable(fwd.failure);   // nothing printed after `to` yet
+   to=nextTo;bars=merge(bars,Array.isArray(fwd)?fwd:[]);endIdx=endIdxOf();
   }
   if(endIdx<0){
-   if(j.subject_type==='issuer'&&await frozenTickerDelisted(ctx,p,t))return unavailable('delisted');
+   if(j.subject_type==='issuer'&&await frozenTickerDelisted(ctx,p,to))return unavailable('delisted');
    if(t.kind==='date'&&ctx.now.slice(0,10)>to)return unavailable('empty');
    const est=labelAvailableAt(p,t);
    return est?{status:'pending',reason:'awaiting_bars',estimated_at:est}:{status:'pending',reason:'awaiting_bars'};

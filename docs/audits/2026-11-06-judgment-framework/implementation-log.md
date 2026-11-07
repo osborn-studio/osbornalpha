@@ -144,3 +144,10 @@
 - 次要：`prior_zero` 仅当所有候选上年值为零；零上年与非零上年并存时，零值候选不进入 `ambiguous_fact` 候选列表。
 - 红测：先写测试，`npm test -- src/lib/judgments/resolvers` 9 failed / 39 passed；实现后 48 passed。typecheck 的 resolvers 范围内无错误，lint 干净。
 - Task 13 修订（Codex P-01/P-02）：回放先出冻结判定再做 reconcile（时钟与 reconcile 错误一律记为 unavailable，不改结论/退出码）；合成夹具固定内存时钟，--check 改为字节比较；夹具 judgment_id 不变，仅 registered_at/created_at 固定为 2026-11-06T00:00:00.000Z。synthetic_fact_metric@v1 注明仅用于回放。
+
+## Task 11 复审第 2 轮（Codex S2-01..S2-04）
+- S2-01：价格向后翻页返回 `{failure:'empty'}` 视为零根新增前置 bar，走 insufficient_history 的 30 天 Pending / Unavailable 规则（向前翻页的 `empty` 同样当作无新 bar）。
+- S2-02：无终点 bar 时的退市判定改为：冻结 ticker 在基准日是主证券，且在扫描窗口末端 `to`（读取实际用的日期上界，含向前翻页后的值；无交易日历，O4）主证券已换或消失 → `delisted`，否则 Pending。不再用 base + n 个日历日。
+- S2-03：`registeredBase` 还要求快照的 ticker / market / date / source / adjustment 与 ref 及条件一致且 close 有限 > 0；否则正常路径 `base_input_missing`，override 路径 `override_mismatch`。
+- S2-04：`operandAvailable(op, cutoff)`（as_of = factsAsOfDate(cutoff)，每行 endOfUtcDay(available_date) ≤ cutoff）由 override 路径与正常路径共用；正常路径的已结算算子与 ambiguous 候选（含 counterpart）违反 → `Unavailable(data_after_cutoff)`。
+- 红测：`npm test -- src/lib/judgments/resolvers` 4 failed / 48 passed；实现后 52 passed，typecheck（resolvers 范围）与 lint 干净。

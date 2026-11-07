@@ -223,4 +223,36 @@ describe('price_return resolver',()=>{
   const {benchmark_bars:_b,benchmark_bars_sha256:_h,...noBench}=ev;
   expect(codeOf(()=>resolver.fromOverride(j,mk(noBench)))).toBe('override_mismatch');
  });
+ it('S2-01: a backward page failing with empty adds zero bars: the insufficient_history rule applies, not Unavailable(empty)',async()=>{
+  const young:KlineFixture={...ZZA,bars:ZZA.bars.filter(b=>b.time>='2026-01-05')};
+  const j=judgment({baseDate:'2026-01-07',registeredClose:103});
+  const kline=(inner:ResolveContext['inputsDb']['kline']):ResolveContext['inputsDb']['kline']=>async r=>r.to<'2026-01-02'?{failure:'empty'}:inner(r);
+  const go=(now:string)=>resolver.resolve({judgment:j,cutoff:now,now,inputsDb:stubInputsDb({kline:kline(fixtureKline([young])),issuerPrimarySecurity:async()=>({ticker:'ZZA',market:'US'})}),signal:new AbortController().signal});
+  expect(await go('2026-01-20T22:00:00.000Z')).toEqual({status:'pending',reason:'insufficient_history'});
+  expect(await go(NOW)).toEqual({status:'unavailable',failure:'insufficient_history'});
+ });
+ it('S2-02: delisting looks at the frozen ticker at the scan window end `to`, not at base + n calendar days',async()=>{
+  const short=truncateFixture(ZZA,'2026-01-16');
+  // OLD disappears Jan 19; the fifth session after base is Jan 20 (Jan 17/18 weekend, no calendar): base + 5 days = Jan 17 would still see OLD
+  const gone19=(on:string):Sec=>on<'2026-01-19'?{ticker:'ZZA',market:'US'}:{ticker:'ZZANEW',market:'US'};
+  expect(await run(judgment(),[short],{primary:gone19}).result).toEqual({status:'unavailable',failure:'delisted'});
+  // it disappears only after the scan window: still waiting for bars
+  const late=(on:string):Sec=>on<'2026-03-01'?{ticker:'ZZA',market:'US'}:null;
+  expect((await run(judgment(),[short],{primary:late}).result).status).toBe('pending');
+ });
+ it('S2-03: the registered base snapshot must carry the same identity as its ref and the condition (qfq ref, hfq snapshot → base_input_missing / override_mismatch)',async()=>{
+  const j=judgment({registeredClose:107});
+  const bar=j.inputs[0] as Extract<JudgmentRow['inputs'][number],{kind:'price_bar'}>;
+  for(const snap of [{adjustment:'hfq' as const},{source:'sina' as const},{ticker:'ZZB'},{market:'HK' as const},{date:'2026-01-13'}]){
+   const bent={...j,inputs:[{...bar,snapshot:{...bar.snapshot,...snap}}]};
+   expect({snap,r:await run(bent,[ZZA]).result}).toEqual({snap,r:{status:'unavailable',failure:'base_input_missing'}});
+  }
+  const inc=await run(j,[ZZA]).result;
+  if(inc.status!=='inconsistent')throw new Error(inc.status);
+  const h=digest(inc.evidence);
+  const o:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:h,evidence:inc.evidence},evidence_hash:h,resolved_by:'r',at:NOW,cutoff:NOW};
+  const bent={...j,inputs:[{...bar,snapshot:{...bar.snapshot,adjustment:'hfq' as const}}]};
+  let code:string|undefined;try{resolver.fromOverride(bent,o);}catch(e){code=(e as {code?:string}).code;}
+  expect(code).toBe('override_mismatch');
+ });
 });
