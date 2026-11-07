@@ -67,3 +67,21 @@
 2. 全量门禁：`npm test`、typecheck、lint、`LC_ALL=C … npm run test:db`、`npm run test:migrations`、本机 Playwright 报告（决策 I）；浏览器目测公司页/收件箱/目录（含 390px）。
 3. 推送后开 PR 到 `main`，列出接口请求（计划末尾"接口请求清单"）、owner 事项（§15 默认值、黄金抄录、F3/F4 开关、CN PDF 定位）、偏差。
 4. 已知待跟进：`/api/facts/*` 同样受中间件 `getUser()` 影响（规格二所有者处理）；Codex Task 12/18 的少量 minor 未做（见各行）。
+
+## Task 19 收尾（2026-11-06，Codex gpt-6-astra）
+
+- 交付：`e2e/company.spec.ts`（§12.3 1–11 + 两个 gold 用例）；`scripts/company/e2e-seed.ts`；`scripts/company/manifest-hash.ts`；新 `fixtures/manifest.ts` 读取器与测试；旧 `fixture-manifest.ts` / 测试删除，`rg 'fixture-manifest' src scripts e2e` 无引用。
+- 清单：保留 Task 5 所有额外条目，所以是 **4 个夹具哈希、5 条 pending**，不是模板的 3/3。保留的额外项为 `tushare-600519-synthetic`、`aapl-revenue-fy2023-current`、`aapl-recent-10-filings`；新增计划的 `aapl-filings-last10`、`gold-matrix-6x2x6`。全部 expected value 仍 pending，未从实施输出填入；recorded_at 以每文件 git log 日期为准。黄金矩阵未验收。
+- 文档：runbook、`regression-sample.md` / `events-gold.md` 存根；规格 §17 汇总 Task 1–18 日志和 owner 指定补充（含 IndustryRow）。runbook 明确三份锁定迁移顺序、五参 `to_regprocedure` → true、issuer_events private、main 已到 `20261114090000_macro_workbench.sql` 但 company 旧编号按文件顺序应用。
+- Task 19 相对计划文本的全部调整：
+  1. 依 owner 指令不执行 Step 7 本机栈/e2e 与 Step 11 全量门禁，仅定向单测、typecheck、lint；没有 Playwright 报告，指挥/复审者实跑待办。
+  2. 清单 4/5 而非 3/3（按 Step 3 保留既有项）；存根与 runbook 同步计数。人工抄录未完成不宣称验收通过。
+  3. seed 导出 main、CLI guard，失败抛错后由 CLI 设置退出码，便于隔离单测；禁止可选 enrichAcceptance（main 新增的实时 SEC 请求），保持录制文件回放。按指挥决定仅接受 localhost/127.0.0.1，不接受代码模板额外列出的 IPv6。
+  4. 补充 seed 边界/编排与 hash CLI 单测；放 `src/lib/company/fixtures`，因为 vitest 只 include `src/**/*.test.ts`（最初放 scripts 的探测没有收集到测试，已迁移）。hash 测试核对 --write 只改 sha256、不改 pending 期望。
+  5. e2e 使用已提交 ViewTabs 的 `role=link`（不是 tab）；已跟踪文案匹配“跟踪 ✓”；登录先设 zh cookie，语言测试再改 en；分页/目录搜索等待响应，替代固定 300ms sleep；黄金事件请求增加 HTTP 成功断言。没有修改断言的业务含义。
+  6. runbook 替换遗留“两份迁移”、不存在的可选 evidence-only 参数；补入 middleware、storageError、invalid_event 退避和 sweep 去重行为；回滚注明先审查函数依赖并同时备份 watch/回执。
+  7. 移除模板中未启用规则的 eslint-disable（计划已预告）；提交 co-author 按本轮 owner 指令使用 Codex gpt-6-astra。
+- testid 逐项 `rg -l -F` 核对：company-header / security-chip / data-status → CompanyHeader；grid-row-${concept} / cell-${concept}-${periodKey} → StatementsView；drawer-available-date / drawer-transform-chain / drawer-code-version → DisclosureDrawer；replay-bar → ReplayBar；valuation-section / metric-row-${metric} → MetricsView；filing-row → FilingsView；track-button → TrackButton；watch-item / unread-count → WatchPanel；inbox-list → TrackingInbox；directory-row / directory-search → CompanyDirectory；kline-chart → KlineChart（公司页不渲染）。**新增 testid：无**。`quote-row` 全仓库无实现，保留为决策 J 的“应不存在”断言，不能为了负断言复活已退役行情 UI。
+- TDD：新 manifest 首跑失败（无 TS reader，解析到 JSON，loadManifest 不是函数）；reader/schema 后哈希断言失败（3 个 pending hash）；hash CLI 首跑失败（脚本尚不存在）；seed 首跑失败（脚本尚不存在）；实现后定向 3 files / **7 passed、5 skipped、0 failed**。5 skipped 全是人工抄录期望。
+- 验证：`node --import tsx scripts/company/manifest-hash.ts --write` 更新 3 个 hash（第 4 个原有 hash 已匹配）；check 模式 **4/4 匹配**。`npm run typecheck && npm run lint` 最终 **2/2 命令通过**（首轮 typecheck 通过、lint 因模板 unused disable 一条 warning 失败，修后通过）。`npm test -- src/lib/company src/components/company src/i18n scripts`：**41 passed / 1 skipped files；327 passed / 45 skipped / 0 failed tests**（40 DB 用例无 harness 自动跳过 + 5 pending）。`git diff --check` 通过。
+- 未运行：全量 npm test、test:db、test:migrations、Supabase start/reset、seed 实库写入、Playwright、浏览器目视；未生成报告，未声称全量门禁完成。没有改只读依赖或锁定迁移，没有 stash、改历史、跳过 hooks。

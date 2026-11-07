@@ -750,7 +750,59 @@ interface JudgmentCard {
 
 ## 17. 实施记录与偏差
 
-（落地后补记，格式同规格一 §14。）
+（2026-11-06，计划 `docs/superpowers/plans/2026-11-06-company-research.md` 落地后补记）以下为与本规格文字的差异，均为有意决定；逐任务记录见 `docs/audits/2026-11-06-company-research/01-implementation-log.md`。
+
+| 规格条目 | 实施 | 原因 |
+|---|---|---|
+| §6.2 未读数 | 无 SQL 计数函数：按收件箱顺序扫描（每页 200、≤ 25 页），每发行人数到 100 即 `99+`；扫描未完给下界 `n+` 与 `unreadComplete:false` | 迁移已锁定；给诚实下界而不猜测 |
+| §6.2 收件箱 | 增可选参数 `issuerId`（须为本人 watch，含静音），供公司页跟踪视图；对外游标绑定过滤条件，换条件复用 → 400 `invalid_parameter:cursor` | 公司页需要已读状态，会话客户端不能读 `issuer_events` |
+| §6.2 `POST /watches` | `{ticker}` 用 `resolveIssuer`（港股发行人可跟踪）；新建 201、已存在 200 | 跟踪是发行人级（§4.3）；§0 #69 约束的是事实流 |
+| §6.2 `/read`、§11 | 未持有 watch → 404 `watch_not_found`；CSRF 失败 415 `unsupported_media_type` / 403 `forbidden_origin`；`DELETE` 也要求 JSON Content-Type | §11 未列；与 `/api/admin/dq/quarantine/[id]` 一致 |
+| §7.3 折叠 | 同发行人 + 同 `occurred_on` + 同首次可见 UTC 日 | 规格未定义"同日"指哪个日期 |
+| §7.3 "标记本页已读" | 提交当前已加载显示的全部未读行（含折叠行），按发行人分批 ≤ 500 | "本页"即用户所见 |
+| 收件箱数值 | 按 defaultScale + formatValue 缩放并附 unitCaption，不做抽屉按钮，整行深链到公司页 | Task 17 按指令跟随已提交 DTO / 概览做法；抽屉属于公司页同快照读（§0 #68） |
+| §8 目录 `q` | 只允许字母、数字、空格、`.`、`-` | PostgREST 过滤语法字符不进过滤串 |
+| §8 TabBar | 高亮改为路径段前缀（`/intel` 不匹配 `/intelligence`） | `startsWith` 的更严格形式 |
+| §12.3 环境 | e2e 用本机 Supabase 栈 + `scripts/company/e2e-seed.ts` 回放美股夹具；报告附 PR、复审者复跑（决策 I 默认） | `test:db` 的裸 PostgreSQL 无 PostgREST/GoTrue |
+| §12.3 第 6 条 | 断言无 K 线、无行情行（决策 J 默认） | 规格原文是批准例外时的断言 |
+| §12.3 第 11 条 | 直接写 `NEXT_LOCALE=en` cookie，不驱动设置页 | 设置页 DOM 不在本模块范围 |
+| §12.0 / §0 #72 | 夹具清单五条期望值保持 `pending`，测试与 e2e 跳过并列出；"6×2×6"矩阵未宣称通过 | 期望值必须人工抄录 |
+
+| §4.6 / §0.1 证据写入 | 新增第三份已锁迁移 `20261112092000_company_evidence_fence.sql`，`replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 五参、尝试与版本围栏 | Task 2 Codex 挑战：证据替换无尝试/版本围栏，旧尝试可能覆盖新证据 |
+| §0 #64 事件权限 | `issuer_events` 仅 service_role 可读；公共读经事件证据门槛 | 原始 payload 带财务值，不能绕过门槛 |
+| §0.1 同快照内存读 | 前后 rev 一致才返回，最多五次重试 | Task 3 挑战：并发发布可能混合状态 |
+| §5.6 证据定位 | PDF 页码、行、列均校验 | Task 6 挑战：无效 PDF 定位可公开 |
+| §0.1 证据重建 | 含 storageError 的构建拒绝替换证据；解析缓存仅限每流 | Task 6/8 复审：存储瞬时错误部分构建会删旧证据；批次级缓存过大 |
+| §5.3 annual BS | 资产负债表年度口径等同 disclosed（瞬时值） | BS 不适用流量年度汇总 |
+| §5.3 U 徽标 | `badgesOf` 从五参到六参，`GridResult.otherUnitsAlso` 传递单季其他单位信息 | Task 7 挑战：单季派生格丢 U 徽标 |
+| §4.7 digest sweep 去重 | 重叠流留在 sweep 列表，从增量列表移除，保留 4:1 交错 | Task 8 review：重叠流丢 sweep 份额，截止时间前可能饿死 sweep |
+| §4.6 / §11 invalid_event | `invalid_event` 仍调用失败记录并退避 | 保留已提交失败状态契约；修代码后可定向重跑 |
+| §6 公共路由 | `src/middleware.ts` 的 `// COMPANY` 块跳过 `/api/companies` 和 `/api/companies/*` 会话 | Task 9 挑战：getUser 可能 Set-Cookie，破坏公共响应语义 |
+| §5.4 派生输入 | `DerivedCell.inputs` 新增 `quarter` / `ytdRule`；不同规则不合并 | Task 10 挑战：指标输入丢 quarter/ytd_rule |
+| §9.1 DCF | `/api/dcf/[ticker]` 增 GET 种子；截断读不种子；运行记录与 GET 统一种子 | Task 14 挑战：运行记录与 GET 不一致、截断误判为缺失 |
+| §9.1 DCF 输入 | 保留 nonRecurring 覆盖，校验覆盖/LLM 值范围，修正 taxRate 口径，仅取候选叶子证据 | Task 14 复审：非经常性覆盖被丢、税率口径与来源不一致 |
+| §9.2 packet | 复用 derivedCellOf + gateCell，逐输入保留 lineage（quarter/ytdRule 等） | Task 15 挑战：packet 指标丢输入谱系 |
+| §5.1 AI 页签 | AI 请求与结果状态提升到 CompanyPage 外壳 | Task 11 review：切页签丢结果 |
+| §5.6 抽屉 | 栈 reducer、inert、portal、焦点归还；跟随 admin 视图 | Task 12 复审：叠放焦点丢失与 admin 视图不一致 |
+| §5.3 CN 单季其他单位 | 单季派生“— U”格不可点并提示；其他可读口径仍可达证据 | Task 12 挑战复审：单季派生格没有直接事实 |
+| §10.4 判断 | 对齐 F4 §9.2：href 可空、computed_at 非必填；回放截止也检查校准时间 | Task 13 修复复审：契约不一致；嵌套字段校验与证据链接补全 |
+| §6.2 路由测试 | mock db 时展开 importOriginal | Task 16 实施偏差：否则 MAX_COMPANY_WATCHES 缺失导致 500 |
+| §6.2 导入 | 分页到尽，最多八个并发解析；UUID 规范为小写 | Task 16 review/挑战：1000 行截断、大写 UUID |
+| §7.3 概念标签 | 缺标签时显示概念 id | Task 17 指挥决定：保留可识别的事实概念 |
+| §5.9 跟踪移动端 | “管理”展开面板；触控目标 44px | Task 17 指挥决定与质量复审 |
+| §7.3 已读逻辑 | Step S 抽到 mark-scope.ts，共享 marketRows/unreadIds/shouldApply/applyMarkResult 并测试 | Task 17 实施偏差：公司页与收件箱共用 |
+| §7.3 跟踪选择 | 被选发行人移除后回到全部；TrackButton 保留 401 登录提示、其他读失败不可用 | Task 17 实施偏差：沿用 Task 11 失败关闭语义 |
+| §7.3 深链 | headline 用 headlineAsOf；折叠子项也有链接；报表消费焦点参数并同步挂载中页签 | Task 17 review/挑战及 70631d99：链接目标未被页面消费 |
+| UI tokens | CSS-variable token 上 Tailwind opacity 修饰符改用 color-mix | Task 17 质量复审：透明度修饰符对 var() token 不生效 |
+| §8 目录响应 | conceptsTotal 由响应给出，空状态区分无事实/无匹配 | Task 18 指挥决定 |
+| §8 新鲜度 | status 可 null，由 freshnessKey 映射未知；最近同步仅时间/结果，不用状态色 | Task 18 实施偏差：复用 company.header.freshness 文案 |
+| §8 名称排序 | 英文名优先、否则中文（English-else-Chinese），与 SQL 排序键一致；显示名随语言 | Task 18 质量复审：显示名称和稳定排序键区分 |
+| §8 目录请求 | 证券富化分页到尽；响应绑定 query key 和请求代次 | Task 18 review/挑战：1000 行截断、参数变化残留旧结果、成功缓存掩盖新失败 |
+| §5.8 概览 | 集成 main 的 IndustryRow | main 行业模块合入后的兼容，保留行业入口 |
+| §12.0 清单迁移 | 保留 Task 5 额外 synthetic fixture 和两条旧 expectation：四个夹具、五条 pending；旧读取器删除 | Task 19 Step 3 要求保留旧条目，不从输出填期望 |
+| §12.3 选择器 | 英文 Statements 用 link（已提交 ViewTabs）；跟踪文字匹配“跟踪 ✓”；分页等响应，不固定 sleep；登录固定 zh cookie | 已提交 UI 契约优先；避免语言与请求竞态 |
+| §12.3 种子 | 导出 main 供单测；禁用可选实时 SEC enrichment；仅接受 localhost / 127.0.0.1 | Task 19 TDD 与录制夹具离线回放；遵守本机 URL 限制 |
+| §12.4 本轮验证 | 仅定向单测、typecheck、lint；不启动 Supabase/Playwright，不跑 full npm test/test:db/test:migrations | 2026-11-06 owner 明确要求由指挥运行全量门禁 |
 
 ---
 
