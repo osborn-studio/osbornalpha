@@ -331,7 +331,8 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await page(null,100,new Date(Date.now()+60_000).toISOString())).toEqual([...reg,late.id].sort());
    expect(await code(db.calibrationCohortInternal(m.methodology_id,'v1',{from:'2025-12-31',to:'2025-01-01'},cutoff,null,10))).toBe('invalid_parameter');
    expect(await code(db.calibrationCohortInternal(m.methodology_id,'v1',win,cutoff,null,1001))).toBe('invalid_parameter');
-   const c=calibrationFixture(m,b,1);
+   const at=(i:number)=>new Date(Date.parse('2026-01-03T00:00:00.000Z')+i*1000).toISOString();   // strictly increasing computed_at: latestCalibration ties on computed_at break on a random id
+   const c=calibrationFixture(m,b,1,{computed_at:at(0)});
    expect(await db.insertCalibration(c,1)).toBe('inserted');
    expect(await db.insertCalibration({...c,calibration_id:randomUUID()},1)).toBe('duplicate');
    expect(await db.insertCalibration(calibrationFixture(m,b,2),1)).toBe('stale_revision');
@@ -345,7 +346,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    });
    expect(await db.insertCalibration(calibrationFixture(m,b,1),1)).toBe('stale_revision');
    expect((await db.latestCalibration(m.methodology_id,'v1',{scope_type:'all',scope_key:''}))!.valid).toBe(false);
-   expect(await db.insertCalibration(calibrationFixture(m,b,2),2)).toBe('inserted');
+   expect(await db.insertCalibration(calibrationFixture(m,b,2,{computed_at:at(1)}),2)).toBe('inserted');
    expect((await db.latestCalibration(m.methodology_id,'v1',{scope_type:'all',scope_key:''}))!.valid).toBe(true);
   });
 
