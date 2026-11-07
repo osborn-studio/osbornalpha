@@ -578,3 +578,38 @@ vercel env add MACRO_STRATEGY_ENABLED production      # 输入 1；然后按第 
 ```
 
 另：A 股装载与研究实体链接是否 `--apply`（10.6）；计划三 §9.2 的首轮脚本（fill-identifiers、backfill-windows、link-ah、enrich-acceptance、filer-categories、calendar-sync、reconcile）；`/admin/dq` 16 个事实隔离项；黄金集抄录（8.11-6）；`stocks_universe` 是否纳入纽交所。宏观的 owner 步骤见 `docs/runbooks/macro-sync.md` §13.7。
+
+## 11. 第二轮生产启用记录（模块 PR，2026-11-07 起）
+
+执行：第二轮生产启用会话（Opus 5.5）。方法同 §10：托管库 `stock-monitor`（`mzfcaabhuwtfvsvadvsv`），SQL 走 Management API（令牌只在 shell 变量中）；每批迁移先在生产 `begin; … rollback;` 演练（演练前后对象数一致），再**一个文件一个请求一个事务**：`begin; <文件原文>; insert into supabase_migrations.schema_migrations(version,name,statements) values (<v>,<name>,array[<文件原文>]); commit;`（`statements` 存原文，同 §10.2 偏差 2）。Vercel 环境拉到仓库外的临时文件；部署一律 `vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)`，从干净的 `origin/main` detached 检出执行（§10.7）。时间均为 UTC。
+
+合并顺序与原计划不同：F3 #114（08:38）与公司研究 #115（09:1x）先于 F4（#117，未合并）进入 main。
+
+### 11.1 F3 披露文档管道（#114，main `d3f5f4e6`，08:4x–09:15）
+
+按 `docs/runbooks/document-pipeline.md` §1 的 owner 启用顺序执行到"每来源手动小批 sync"为止；三开关保持关闭。
+
+- **迁移**：`20261117090000_disclosure_documents`（sha256 `b012f5f0…`）、`20261117091000_fact_citations`（`79ccfb99…`）。两份合并演练 `rehearsal_ok`（演练中 public 关系 463 → 507，回滚后回到 463）→ 逐个应用，均 applied，无部分失败。**两份文件尚未进 `supabase/migrations.lock.json`**（#114 有意留未锁，"在 F4 之后合并时锁"）；生产已按合并时字节应用，锁定时应使用上面的哈希，之后不得改字节。
+- **核对**（全部符合设计）：12 张表/视图全部 RLS（视图除外）；anon/authenticated 无任何写授权；`disclosure_documents`、`document_assets`、`document_extractions`、`document_pages`、`document_citations`、`fact_citations`、`filing_documents` 公共 SELECT（经 RLS）；`document_sync_scope`、`extraction_candidates`、`candidate_publications`、`extraction_approvals` 对 anon/authenticated 不可读；service_role 对表无直接写，唯一例外是 `extraction_approvals` 的 insert 与 `update(revoked_at)`（迁移第 1385–1390 行，有意）。新增 anon 可执行函数只有 `read_documents`；`doc_candidates_lock` 三角色均不可执行（内部助手，有意）。桶 `disclosure-docs` 私有、52428800、MIME 为 pdf/html/xhtml/xml/json。四处 `market` 检查加 `HK`；`filings.source/origin` 改为 HK ⇔ `hkex` 的条件式。
+- **部署**：`d3f5f4e64c04e6ecf61bf80f322c2e56c63668b2` → `stock-monitor-nm835tup8-gilosbornhellos-projects.vercel.app`（osbornalpha.com；新增三条 `documents-sync` cron）。无令牌三个 `documents-*` cron 401；带令牌 `{"skipped":"disabled"}`。`GET /api/documents/AAPL` 200（加载前 `documents:[]`）；`GET /api/citations?factId=<不存在>` 404 `not_found`；`/api/facts/AAPL` 不受影响。
+- **首轮小批**（本机脚本，不受开关阻挡；`EDGAR_USER_AGENT` 仍缺失 → 默认 UA）：
+  - dry-run `--limit 5`：hkexnews、cninfo **idle**（生产还没有 HK 发行人，也还没有 A 股发行人，§10.6）；edgar 计划 5 家 188 份。
+  - `sync.ts --source edgar --limit 5 --apply` 第一次：批次 `fc9ca875-0586-4322-8e99-66a8379a3a3b` success/**idle**。原因与 §10.5 相同：对账新建的 801 行 `document_sync_scope` 的 `next_due_at` 取数据库 `now()`，到期查询用进程时钟（本机比数据库慢），同一次运行里尚未到期。无数据影响。
+  - 第二次（09:00–09:14）：批次 `edffab3c-a63c-4b21-9c3f-3778329e4a41` **success**：fetched 188、inserted 188、duplicates/quarantined/failed 0；5 个发行人（CIK 0001855557、0002038378、0000072903、0001094831、0001318605）各 success；信息码 `coverage_summary`×2（`edgar_files_unverified`，只同步了 `recent` 段——代码 `EDGAR_FILES_VERIFIED=false`，文档手册 §10(a)）。`disclosure_documents` 188 行 `stored`。
+- **未做（owner/后续）**：`DOCUMENTS_SYNC_ENABLED=1`（检查回执后由 owner 开）；文档手册 §9 preview 冒烟（pdf.js/CMaps/Storage）后才开 `DOCUMENTS_EXTRACT_ENABLED` 并追加抽取/候选 cron；HK 与 A 股采集需要先有 HK/A 股发行人；黄金集 `hk-facts.json` 抄录；零输出代激活决定（文档手册 §13）。
+
+### 11.2 公司研究与跟踪（#115，main `458389e5`，09:2x）
+
+按 `docs/runbooks/company-research.md` §2–§3 执行。
+
+- **前提**：`to_regclass('public.financial_facts')` 存在；`issuer_events` 不存在。
+- **迁移**：`20261118090000_company_research`、`20261118091000_company_research_functions`、`20261118092000_company_evidence_fence`。三份合并演练 `rehearsal_ok`（演练内新五参 `replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 存在、旧三参不存在）→ 逐个应用，均 applied。同样**未进锁文件**（公司手册 §2："合并者追加"），待锁。
+- **核对**（与手册 §1 一致）：6 张表全部 RLS；`issuer_events`、`company_digest_state`、`company_fact_evidence` 仅 service_role 可读；`issuer_coverage` 三角色可读、无写；`company_watches`/`company_event_reads` authenticated 可读写（RLS 限本人）；anon 无任何写。函数：`company_fact_evidence(uuid[])`、`company_read_snapshot(…)`、`company_list_coverage(…)` 三角色可执行；`begin_company_digest_attempt`、`replace_company_digest`、`mark_company_digest_failed`、`company_digest_due`、`company_sweep_due`、`company_digest_backlog`、`replace_company_fact_evidence` 仅 service_role；`company_ev_*` 助手与触发器函数三角色均不可执行。
+- **部署**：生产在 09:08 与 09:15 已由**另一会话**部署 main（最新 `stock-monitor-pjqx3ov0z-gilosbornhellos-projects.vercel.app`，`458389e5`，带 sha：09:20 的首个 `company-digest` cron 批次 `071d752b-4fb4-4efb-93be-9d5e6d481069` 记录了 `code_version=458389e5…`，success，33 个流）。本会话未重复部署。**注意**：同一时间有多个会话在部署生产，后续部署前先 `vercel ls stock-monitor --prod` 看最新者。
+- **首轮物化**（手册 §3；全量 `--full` dry-run 对 880 个发行人超过 10 分钟，改为有界运行；开始前 `company-digest` running 批次 0，在两次 :20 cron 之间执行）：
+  - `digest.ts --full --issuer AAPL --issuer MSFT --issuer NVDA` dry-run → 3 流 planned；AAPL 236 事件、证据 3000/3000；MSFT、NVDA 无事实（尚未同步）。
+  - 同上 `--apply` → 批次 `abc692d7-9ad5-4ed2-b7e0-f509a85173d0` success（attempted 3、succeeded 3、事件 upsert 236、证据 3000）。
+  - `digest.ts --limit 50 --apply`（增量）→ 批次 `10fa2f9d-a5db-4424-ab90-12e4a91686d1` success（1 流，事件 257、证据 3109）。
+  - 运行后：`issuer_coverage` 37、未退役 `issuer_events` 7170、`company_fact_evidence` 68257、`company_digest_state` 37 行全部 success；`company.events` 新鲜度 fresh。其余发行人随美股事实同步由每小时 cron 增量覆盖。
+- **线上核对**（无会话）：`GET /api/companies?limit=3` 200（total 37）；`/api/companies/AAPL/overview` 200；`/api/companies/AAPL/statements?statement=IS` 200（`basis:"disclosed"`，最新期 FY 2025-09-28..2026-09-26）；`/api/companies/AAPL/events` 200（`computed:"materialized"`）；`/api/companies/freshness` 200；`/api/tracking/inbox` 401 `not_authenticated`；`/stock/AAPL`、`/intel/companies` 307（登录，决策 H）。公司 e2e（`e2e/company.spec.ts`）设计上只对 localhost 运行，生产未跑；登录后页面的视觉核对需要 owner 会话。
+- **未做（owner）**：夹具清单 3 条与事件黄金集抄录、专家抽样（手册 §9）；`NEXT_PUBLIC_COMPANY_F3_DRAWER` / `NEXT_PUBLIC_COMPANY_JUDGMENTS` 保持关闭。
