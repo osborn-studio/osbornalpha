@@ -75,6 +75,8 @@ describe('evidenceEligible (§0 #63): each condition alone disqualifies',()=>{
    ['no document url',cnDto({},pdfOf(),{...cnF,documentUrl:null}),{...cnF,documentUrl:null}],
    ['http document url',cnDto({},pdfOf({documentUrl:'http://x/1.PDF'}),{...cnF,documentUrl:'http://x/1.PDF'}),{...cnF,documentUrl:'http://x/1.PDF'}],
    ['no pdf locator',cnDto({},null),cnF],
+   ['page -1',cnDto({},pdfOf({page:-1})),cnF],['page 0',cnDto({},pdfOf({page:0})),cnF],['page 1.5',cnDto({},pdfOf({page:1.5})),cnF],
+   ['empty row',cnDto({},pdfOf({row:''})),cnF],['blank column',cnDto({},pdfOf({column:'  '})),cnF],['empty table',cnDto({},pdfOf({table:''})),cnF],
    ['pdf of another document',cnDto({},pdfOf({documentUrl:'https://static.cninfo.com.cn/other.PDF'})),cnF],
   ];
   for(const [name,dto,f] of cases){
@@ -117,6 +119,20 @@ describe('applyGate / gateFacts',()=>{
   const evidenceOf=async(ids:string[])=>new Map(ids.map(id=>[id,record(cn)]));
   const r=await gateFacts({db:{evidenceOf},pdf:emptyPdfLocatorSource},{issuerId:ISSUER,market:'CN',admin:false,factIds:[cn.fact_id],facts:new Map([[cn.fact_id,cn]]),filings:new Map([[cnF.filingId,cnF]])});
   expect(r.eligibility.get(cn.fact_id)).toEqual(no('citation_pending'));expect(r.evidence).toEqual({});
+ });
+});
+
+describe('index_version and empty inputs',()=>{
+ it('a record from another index_version is evidence_incomplete (applyGate)',()=>{
+  const r=applyGate({factIds:[us.fact_id],facts:new Map([[us.fact_id,us]]),filings:new Map([[usF.filingId,usF]]),records:new Map([[us.fact_id,record(us,{index_version:'company-evidence/0'})]]),pdf:new Map(),market:'US',admin:false});
+  expect(r.eligibility.get(us.fact_id)).toEqual(no('evidence_incomplete'));expect(r.evidence).toEqual({});
+ });
+ it('derived cell / metric without inputs is withheld; unknown event kind throws; filing_published passes',()=>{
+  const d={kind:'derived' as const,metric:'m',value:'1',unit:'USD',inputUnit:'USD',basis:'b',formulaVersion:'v',inputs:[]};
+  expect(gateCell(d,new Map())).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:''});
+  expect(metricWithheldReason([],new Map())).toBe('evidence_incomplete');
+  expect(()=>gateEventPayload({kind:'bogus' as never,payload:{}},new Map())).toThrow('unknown_event_kind');
+  expect(gateEventPayload({kind:'filing_published',payload:{a:1}},new Map())).toEqual({a:1});
  });
 });
 

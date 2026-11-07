@@ -11,6 +11,7 @@ import {rawHashOf} from '@/lib/facts/providers/shared';
 import {unitKindOf} from '@/lib/facts/units';
 import type {FactRow,Market} from '@/lib/facts/types';
 import type {PdfLocatorSource} from './pdf-locator';
+import {EVIDENCE_INDEX_VERSION} from './types';
 import type {Cell,CompanyDb,EventKind,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,WithheldCounts,WithheldReason} from './types';
 
 export type Eligibility={ok:true}|{ok:false;reason:WithheldReason};
@@ -31,6 +32,8 @@ export function toEvidenceDto(record:EvidenceRecord,fact:GateFact,filing:FilingS
   mappingVersion:record.mapping_version,unitRule:kind?`unit_${kind}`:null,sourceDocument};
 }
 
+const nonBlank=(v:unknown)=>typeof v==='string'&&v.trim()!=='';
+const validPdfLocator=(p:PdfLocator)=>Number.isInteger(p.page)&&p.page>=1&&nonBlank(p.row)&&nonBlank(p.column)&&(p.table===null||nonBlank(p.table));
 const NO=(reason:WithheldReason):Eligibility=>({ok:false,reason});
 export function evidenceEligible(dto:EvidenceDto|null,fact:GateFact,filing:FilingSummary|null,market:Market,opts:{admin:boolean}):Eligibility{
  if(!dto||dto.factId!==fact.fact_id||!filing||filing.filingId!==fact.filing_id||dto.rawHash!==fact.raw_hash)return NO('evidence_incomplete');
@@ -43,7 +46,7 @@ export function evidenceEligible(dto:EvidenceDto|null,fact:GateFact,filing:Filin
  }
  if(opts.admin)return {ok:true};
  const pdf=dto.locator.pdf;
- if(filing.citation!=='linked'||!httpsUrl(filing.documentUrl)||!pdf||pdf.documentUrl!==filing.documentUrl)return NO('citation_pending');
+ if(filing.citation!=='linked'||!httpsUrl(filing.documentUrl)||!pdf||pdf.documentUrl!==filing.documentUrl||!validPdfLocator(pdf))return NO('citation_pending');
  return {ok:true};
 }
 
@@ -57,7 +60,7 @@ export function applyGate(input:GateInput):GateResult{
   if(!fact)e=NO('evidence_incomplete');
   else{
    const rec=input.records.get(id);const filing=input.filings.get(fact.filing_id)??null;
-   dto=rec?toEvidenceDto(rec,fact,filing,input.pdf.get(id)??null):null;
+   dto=rec&&rec.index_version===EVIDENCE_INDEX_VERSION?toEvidenceDto(rec,fact,filing,input.pdf.get(id)??null):null;
    e=evidenceEligible(dto,fact,filing,input.market,{admin:input.admin});
   }
   eligibility.set(id,e);
@@ -81,10 +84,12 @@ const worst=(rs:WithheldReason[])=>rs.includes('evidence_incomplete')?'evidence_
 export function gateCell(cell:Cell,elig:Map<string,Eligibility>):Cell{
  if(cell===null||cell.kind==='withheld')return cell;
  if(cell.kind==='fact'){const r=reasonOf(elig.get(cell.factId));return r===null?cell:{kind:'withheld',reason:r,factId:cell.factId};}
+ if(cell.inputs.length===0)return {kind:'withheld',reason:'evidence_incomplete',factId:''};
  const bad=cell.inputs.map(i=>({id:i.factId,r:reasonOf(elig.get(i.factId))})).filter((x):x is {id:string;r:WithheldReason}=>x.r!==null);
  return bad.length===0?cell:{kind:'withheld',reason:worst(bad.map(b=>b.r)),factId:bad[0].id};
 }
 export function metricWithheldReason(inputs:{fact_id:string}[],elig:Map<string,Eligibility>):WithheldReason|null{
+ if(inputs.length===0)return 'evidence_incomplete';
  const rs=inputs.map(i=>reasonOf(elig.get(i.fact_id))).filter((r):r is WithheldReason=>r!==null);
  return rs.length===0?null:worst(rs);
 }
@@ -109,5 +114,6 @@ export function gateEventPayload(ev:{kind:EventKind;payload:Record<string,unknow
   if('relChange' in ev.payload)out.relChange={kind:'withheld',reason:worst([rf,rt].filter((r):r is WithheldReason=>r!==null))};
   return out;
  }
- return ev.payload;
+ if(ev.kind==='filing_published')return ev.payload;
+ throw new Error(`unknown_event_kind`);
 }

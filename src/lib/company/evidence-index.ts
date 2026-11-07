@@ -40,7 +40,7 @@ export function memorySnapshotObjectStore(objects:Map<string,string|Uint8Array>)
  };
 }
 interface StorageError{message:string;statusCode?:string|number;status?:number}
-const notFound=(e:StorageError)=>['400','404'].includes(String(e.statusCode??e.status??''))||/not found/i.test(e.message);
+const notFound=(e:StorageError)=>String(e.statusCode??e.status??'')==='404'||/not found/i.test(e.message);
 export function supabaseSnapshotObjectStore(admin:SupabaseClient):SnapshotObjectStore{
  const bucket=()=>admin.storage.from(SNAPSHOT_BUCKET);
  const get=async(path:string):Promise<Uint8Array|null>=>{
@@ -94,16 +94,18 @@ const cellDecimal=(v:unknown):string|null=>{
 function tushareValue(json:unknown,pointer:string,field:string):string|null{
  const fields=resolvePointer(json,'/data/fields');const row=resolvePointer(json,pointer);
  if(!Array.isArray(fields)||!Array.isArray(row))return null;
- const parts=field.split('+').map(f=>{const i=fields.indexOf(f);return i<0?null:cellDecimal(row[i]);});
+ const parts=field.split('+').map(f=>{const i=fields.indexOf(f);return i<0||i!==fields.lastIndexOf(f)?null:cellDecimal(row[i]);});
  return parts.every((p):p is string=>p!==null)?parts.reduce(addDecimals):null;
 }
 
 // ---- builder ----
 type Located=FactCandidate&{locator:string};
-export interface ParsedSnapshot{path:string;sha256:string;meta:SnapshotSidecar;candidates:Located[];doc:unknown}
-export type SnapshotFailure='missingObject'|'missingSidecar'|'hashMismatch'|'parseFailed';
+/** A candidate with its pointer and re-resolved value; the decoded document itself is dropped after loading. */
+export interface ResolvedCandidate{concept:string;sourceConcept:string;filingRef:string;periodStart:string|null;periodEnd:string;unit:string;value:string;locator:string;pointer:string|null;field:string|null;resolved:string|null}
+export interface ParsedSnapshot{path:string;sha256:string;meta:SnapshotSidecar;byHash:Map<string,ResolvedCandidate[]>}
+export type SnapshotFailure='missingObject'|'missingSidecar'|'hashMismatch'|'parseFailed'|'storageError';
 export type ParsedSnapshotCache=Map<string,ParsedSnapshot|{failed:SnapshotFailure}>;
-export interface EvidenceIndexStats{objects:number;missingObject:number;missingSidecar:number;hashMismatch:number;parseFailed:number;facts:number;indexed:number;unmatched:number;multiMatch:number;valueMismatch:number;pointerUnresolved:number}
+export interface EvidenceIndexStats{objects:number;missingObject:number;missingSidecar:number;hashMismatch:number;parseFailed:number;facts:number;indexed:number;unmatched:number;multiMatch:number;valueMismatch:number;pointerUnresolved:number;storageError:number}
 export interface EvidenceIndexResult{rows:EvidenceIndexRow[];stats:EvidenceIndexStats}
 export interface EvidenceIndexInput{issuerId:string;market:Market;rows:FactRow[];filings:FilingSummary[];cache?:ParsedSnapshotCache}
 export const EVIDENCE_SINCE_YEAR=1900;
@@ -117,11 +119,24 @@ const tsOf=(v:unknown)=>typeof v==='string'&&ISO_TS.test(v)&&!Number.isNaN(Date.
 const strOf=(v:unknown,max:number)=>typeof v==='string'&&v.length>=1&&v.length<=max?v:null;
 const intOf=(v:unknown,lo:number,hi:number)=>typeof v==='number'&&Number.isInteger(v)&&v>=lo&&v<=hi?v:null;
 const sha256=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
-const emptyStats=():EvidenceIndexStats=>({objects:0,missingObject:0,missingSidecar:0,hashMismatch:0,parseFailed:0,facts:0,indexed:0,unmatched:0,multiMatch:0,valueMismatch:0,pointerUnresolved:0});
+const emptyStats=():EvidenceIndexStats=>({objects:0,missingObject:0,missingSidecar:0,hashMismatch:0,parseFailed:0,facts:0,indexed:0,unmatched:0,multiMatch:0,valueMismatch:0,pointerUnresolved:0,storageError:0});
 
+function resolveCandidate(c:Located,source:Source,doc:unknown):ResolvedCandidate{
+ let pointer:string|null=null,field:string|null=null,resolved:string|null=null;
+ if(source==='edgar'){
+  pointer=edgarPointer(c.locator);
+  const entry=pointer===null?undefined:resolvePointer(doc,pointer) as {val?:unknown}|undefined;
+  resolved=entry&&typeof entry.val==='string'?entry.val:null;
+ }else{
+  const t=tusharePointer(c.locator,c.sourceConcept);
+  if(t){pointer=t.pointer;field=t.field;resolved=tushareValue(doc,t.pointer,t.field);}
+ }
+ return {concept:c.concept,sourceConcept:c.sourceConcept,filingRef:c.filingRef,periodStart:c.periodStart??null,periodEnd:c.periodEnd,unit:c.unit,value:c.value,locator:c.locator,pointer,field,resolved};
+}
 async function loadSnapshot(reader:SnapshotObjectStore,path:string,prefix:string,source:Source):Promise<ParsedSnapshot|{failed:SnapshotFailure}>{
- const bytes=await reader.get(path);if(!bytes)return {failed:'missingObject'};
- const meta=await reader.meta(path);if(!meta)return {failed:'missingSidecar'};
+ let bytes:Uint8Array|null,meta:SnapshotSidecar|null;
+ try{bytes=await reader.get(path);if(!bytes)return {failed:'missingObject'};meta=await reader.meta(path);}catch{return {failed:'storageError'};}
+ if(!meta)return {failed:'missingSidecar'};
  const sha=sha256(bytes);
  if(sha!==path.slice(prefix.length,-'.json'.length)||(meta.sha256!==undefined&&meta.sha256!==sha)||meta.source!==source)return {failed:'hashMismatch'};
  const snap:RawSnapshot={bytes,sha256:sha,meta:meta as RawSnapshot['meta']};
@@ -129,7 +144,9 @@ async function loadSnapshot(reader:SnapshotObjectStore,path:string,prefix:string
   const p:ParseResult=source==='edgar'?parseCompanyFacts(snap,{sinceYear:EVIDENCE_SINCE_YEAR}):parseTushareStatements([snap],{sinceYear:EVIDENCE_SINCE_YEAR});
   const candidates=[...p.candidates,...p.ambiguous.flatMap(a=>a.candidates),...p.oddDuration].filter((c):c is Located=>typeof (c as Partial<Located>).locator==='string');
   const doc=source==='edgar'?decodeCompanyFacts(bytes):scanJsonNumbers(bytes);
-  return {path,sha256:sha,meta,candidates,doc};
+  const byHash=new Map<string,ResolvedCandidate[]>();
+  for(const c of candidates){const list=byHash.get(c.rawHash)??[];list.push(resolveCandidate(c,source,doc));byHash.set(c.rawHash,list);}
+  return {path,sha256:sha,meta,byHash};   // doc and candidates go out of scope here
  }catch{return {failed:'parseFailed'};}
 }
 
@@ -138,35 +155,28 @@ export async function buildEvidenceIndex(deps:{reader:SnapshotObjectStore},input
  const prefix=`${source}/${input.issuerId}/`;
  const cache:ParsedSnapshotCache=input.cache??new Map();
  const stats=emptyStats();
- const byHash=new Map<string,{snap:ParsedSnapshot;cand:Located}[]>();
- for(const path of await deps.reader.list(prefix)){
+ const byHash=new Map<string,{snap:ParsedSnapshot;cand:ResolvedCandidate}[]>();
+ for(const path of await deps.reader.list(prefix)){   // sequential: one decoded document alive at a time
   stats.objects++;
   let got=cache.get(path);
   if(got===undefined){got=await loadSnapshot(deps.reader,path,prefix,source);cache.set(path,got);}
   if('failed' in got){stats[got.failed]++;continue;}
-  for(const cand of got.candidates){const list=byHash.get(cand.rawHash)??[];list.push({snap:got,cand});byHash.set(cand.rawHash,list);}
+  for(const [h,cands] of got.byHash){const list=byHash.get(h)??[];for(const cand of cands)list.push({snap:got,cand});byHash.set(h,list);}
  }
- const refOf=new Map(input.filings.map(f=>[f.filingId,f.sourceRef]));
+ const filingOf=new Map(input.filings.map(f=>[f.filingId,f]));
  const out:EvidenceIndexRow[]=[];
  for(const f of input.rows){
   if(f.status!=='ok')continue;
   stats.facts++;
-  const ref=refOf.get(f.filing_id);
+  const filing=filingOf.get(f.filing_id);
+  const ref=filing&&filing.source===source?filing.sourceRef:undefined;
   const hits=(byHash.get(f.raw_hash)??[]).filter(({cand:c})=>ref!==undefined&&c.concept===f.concept&&c.sourceConcept===f.source_concept&&c.filingRef===ref
    &&(c.periodStart??'')===(f.period_start??'')&&c.periodEnd===f.period_end&&c.unit===f.unit);
   if(hits.length===0){stats.unmatched++;continue;}
   if(hits.length>1){stats.multiMatch++;continue;}
   const {snap,cand}=hits[0];
   if(!decimalEquals(cand.value,f.value_text)){stats.valueMismatch++;continue;}
-  let pointer:string|null=null,field:string|null=null,resolved:string|null=null;
-  if(source==='edgar'){
-   pointer=edgarPointer(cand.locator);
-   const entry=pointer===null?undefined:resolvePointer(snap.doc,pointer) as {val?:unknown}|undefined;
-   resolved=entry&&typeof entry.val==='string'?entry.val:null;
-  }else{
-   const t=tusharePointer(cand.locator,cand.sourceConcept);
-   if(t){pointer=t.pointer;field=t.field;resolved=tushareValue(snap.doc,t.pointer,t.field);}
-  }
+  const {pointer,field,resolved}=cand;
   if(pointer===null||pointer.length>1024||cand.locator.length>1024||resolved===null||!decimalEquals(resolved,f.value_text)){stats.pointerUnresolved++;continue;}
   out.push({fact_id:f.fact_id,raw_hash:f.raw_hash,snapshot_sha256:snap.sha256,snapshot_path:snap.path,hash_locator:cand.locator,json_pointer:pointer,field:strOf(field,64),source,
    api:strOf(snap.meta.api,64),url:strOf(snap.meta.url,2048),params:scrub(snap.meta.params),captured_at:tsOf(snap.meta.fetched_at),http_status:intOf(snap.meta.http_status,100,599),page:intOf(snap.meta.page,0,2147483647),index_version:EVIDENCE_INDEX_VERSION});
