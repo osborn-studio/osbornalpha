@@ -239,6 +239,19 @@ describe('runIndustryAggregation',()=>{
   expect(r).toMatchObject({status:'failed',code:'facts_scope_not_ready'});
   expect((await db.metricRun(r.runId!))?.coverage_summary).toMatchObject({facts_scope_ready:false,universe:6,ready:5});
  });
+ it('an injected factsUniverse replaces the database-global readiness denominator (restricted → ready; with an unsynced outsider → blocked)',async()=>{
+  const extra='10000000-0000-4000-8000-0000000000fe';
+  await tables.insert('issuers',{issuer_id:extra,canonical_name_zh:'X',status:'active',cninfo_org_id:null,provenance:{}});
+  await tables.insert('issuer_securities',{issuer_id:extra,ticker:'688887.SH',isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2020-01-01',valid_to:null});
+  await tables.insert('security_universe_memberships',{universe:'a_stock',ticker:'688887.SH',is_active:true});
+  const own=new Set(Object.values(ISSUERS));
+  const ok=await runIndustryAggregation({...deps,factsUniverse:async()=>own},OPTS);
+  expect(ok).toMatchObject({status:'active'});
+  expect((await db.metricRun(ok.runId!))?.coverage_summary).toMatchObject({facts_scope_ready:true,universe:own.size,ready:own.size});
+  const blocked=await runIndustryAggregation({...deps,factsUniverse:async()=>new Set([...own,extra])},OPTS);
+  expect(blocked).toMatchObject({status:'failed',code:'facts_scope_not_ready'});
+  expect((await db.metricRun(blocked.runId!))?.coverage_summary).toMatchObject({universe:own.size+1,ready:own.size});
+ });
  it('a reused group keeps its truncated issuers in the run coverage summary', async()=>{
   const trunc={...facts,readFacts:async(i:string,m:'CN'|'US',o:Parameters<MemoryFactsDb['readFacts']>[2])=>{const e=await facts.readFacts(i,m,o);return i===ISSUERS.F2?{...e,rows:[],truncated:true}:e;}};
   await runIndustryAggregation({...deps,facts:trunc},OPTS);

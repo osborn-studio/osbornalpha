@@ -6,7 +6,7 @@
 // hash = digest(snapshot) (F4: RFC 8785 canonical JSON + sha256, the pa-v1 helper F4 reuses);
 // available_at = end of the UTC day of the rows' updated_at (F4 §3.7 table_rows rule; = run activation,
 // never facts_as_of / period_end / created_at); origin locator = the cell group's content-addressed
-// manifest. Reads go through the ANON IndustryDb, so a row of an invisible run, an unlicensed dataset
+// manifest (exactly one per group, else 'input_ambiguous_manifest'). Reads go through the ANON IndustryDb, so a row of an invisible run, an unlicensed dataset
 // or a building/failed run is 'input_not_public' (F4 §3.5 constructor rule). The valuation table is the
 // deferred I-3 pipeline: its natural keys parse but construction answers 'unsupported_deferred_i3'.
 import {digest} from '../research/ingest/pa-v1/json';
@@ -20,7 +20,7 @@ export interface IndustryTableRowsInput{
  kind:'table_rows';ref:IndustryTableRowsRef;snapshot:IndustryTableRowsSnapshot;hash:string;available_at:string;
  origin:{publisher:'OsbornAlpha';adapter:string;locator:string;transform:string;license:DatasetKey};
 }
-export class IndustryInputError extends Error{constructor(public code:'invalid_natural_key'|'input_not_public'|'unsupported_deferred_i3'){super(code);this.name='IndustryInputError';}}
+export class IndustryInputError extends Error{constructor(public code:'invalid_natural_key'|'input_not_public'|'input_ambiguous_manifest'|'unsupported_deferred_i3'){super(code);this.name='IndustryInputError';}}
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
@@ -50,15 +50,18 @@ export async function industryTableRowsInput(db:Pick<IndustryDb,'metricRun'|'met
  if(!k||k.table!==ref.table)throw new IndustryInputError('invalid_natural_key');
  if(k.table==='industry_valuations')throw new IndustryInputError('unsupported_deferred_i3');
  const run=await db.metricRun(k.runId);
- if(!run||run.status!=='active'&&run.status!=='superseded')throw new IndustryInputError('input_not_public');
+ if(!run||run.status!=='active')   // anon RLS only exposes active runs; anything else is not public
+  throw new IndustryInputError('input_not_public');
  const rows=(await db.metricRowsOfRun(k.runId,{codes:[k.code],periodEnds:[k.date]})).filter(r=>r.code===k.code&&r.period_end===k.date&&r.status==='ok').sort(order);
  if(rows.length===0||rows.some(r=>r.updated_at===null))throw new IndustryInputError('input_not_public');
  const snapshot:IndustryTableRowsSnapshot={table:ref.table,natural_key:ref.natural_key,rows:rows.map(project)};
+ // one manifest per (run, code, period_end) group (aggregation writes a group from one manifest); more would make the locator ambiguous
  const hashes=[...new Set(rows.map(r=>r.manifest_hash))];
+ if(hashes.length!==1)throw new IndustryInputError('input_ambiguous_manifest');
  const latest=rows.map(r=>r.updated_at!).sort().at(-1)!;
  return {
   kind:'table_rows',ref:{table:ref.table,natural_key:ref.natural_key},snapshot,hash:digest(snapshot),available_at:endOfUtcDay(latest),
-  origin:{publisher:'OsbornAlpha',adapter:run.method_version,locator:hashes.map(h=>`manifest:${h}`).join(','),
+  origin:{publisher:'OsbornAlpha',adapter:run.method_version,locator:`manifest:${hashes[0]}`,
    transform:run.history_class==='reconstruction'?`${run.config_hash};history_class=reconstruction`:run.config_hash,license:schemeDatasetKey(run.scheme,run.version)},
  };
 }

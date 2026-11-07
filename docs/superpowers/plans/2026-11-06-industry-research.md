@@ -646,6 +646,7 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 67. 偏差（对比度）：浅色主题下 `--accent`/`--warn` 与背景对比度约 2.9:1，低于 WCAG AA 4.5:1。属 DESIGN.md 令牌问题，留给 DESIGN.md 所有者；本计划未改令牌。
 68. 偏差（Task 18）：列表页 CSV 导出未实现；移动端"表格优先"未实现（移动端仍以热力图最近 5 期为主、表格视图一键可达）。
 69. 决定（Codex task16 P1）：SIC 调度改为每天 `0 2 * * *` 且带 `limit=200`（`vercel.json`）。cron 路由已透传 `limit`（1..500），`runMembershipsSic` 默认 200，到期间隔 `NEXT_RUN_MS=7 天`，所以每天最多处理 200 个到期发行人，US 范围在数日内排空，之后每个发行人每周刷新一次；`dq_freshness` 仍为 weekly。
+70. 偏差（Task 19，Codex task19 / 批 9）：成分页（constituents）未提供 L2 过滤（规格 §8.4 的层级筛选）；当前只按日期与分页浏览该节点成分，L2 路径列仅作展示。
 
 **本轮不实施（规格自己的门，非偏差，照录）**：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 

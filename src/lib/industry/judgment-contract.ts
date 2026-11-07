@@ -37,7 +37,7 @@ export interface JudgmentsResponse{subject:Subject;asOf:string;view:string;cards
 /** F4 §3.1 industry subject key: `${scheme}:${version}:${code}`. */
 export const industrySubjectKey=(scheme:string,version:string,code:string)=>`${scheme}:${version}:${code}`;
 export const judgmentsEnabled=(env:Record<string,string|undefined>=process.env)=>env.INDUSTRY_JUDGMENTS_ENABLED==='1';
-export const judgmentsUrl=(subjectKey:string)=>`/api/judgments?subject_type=industry&subject_key=${encodeURIComponent(subjectKey)}`;
+export const judgmentsUrl=(subjectKey:string)=>`/api/judgments?subject_type=industry&subject_key=${encodeURIComponent(subjectKey)}&include_abstained=1`;
 
 export type JudgmentsState={state:'disabled'}|{state:'ok';cards:JudgmentCard[]}|{state:'error';code:string};
 /** Client fetch of the F4 cards; never called while the flag is off. */
@@ -53,24 +53,53 @@ export async function fetchIndustryJudgments(subjectKey:string,opts:{enabled:boo
  }
 }
 
+/** The result of one fetch, tagged with the subject it was fetched for. */
+export interface LoadedJudgments{key:string;result:JudgmentsState}
+export type JudgmentsView=JudgmentsState|{state:'loading'};
+/** What the area shows now: disabled when off or without a subject; loading until the fetched subject
+ *  matches the current one (a stale result of another subject or of an earlier enabled state is never shown). */
+export function judgmentsViewState(enabled:boolean,subjectKey:string|null,loaded:LoadedJudgments|null):JudgmentsView{
+ if(!enabled||subjectKey===null)return {state:'disabled'};
+ return loaded!==null&&loaded.key===subjectKey?loaded.result:{state:'loading'};
+}
+/** Starts the fetch for an active area (never while disabled); returns the cleanup that aborts it. */
+export function startJudgmentsLoad(opts:{enabled:boolean;subjectKey:string|null;onResult:(l:LoadedJudgments)=>void;fetch?:typeof fetch}):()=>void{
+ const key=opts.subjectKey;
+ if(!opts.enabled||key===null)return ()=>{};
+ const ctrl=new AbortController();
+ fetchIndustryJudgments(key,{enabled:true,fetch:opts.fetch,signal:ctrl.signal}).then(result=>{if(!ctrl.signal.aborted)opts.onResult({key,result});});
+ return ()=>ctrl.abort();
+}
+
 export interface CardView{
  title:string;headline:string;
- badge:{kind:'uncalibrated';n:number;threshold:number}|{kind:'calibrated'}|{kind:'evaluated'}|{kind:'self_assessed'};
+ badge:{kind:'uncalibrated';n:number;threshold:number}|{kind:'failed';ece:number|null}|{kind:'calibrated'}|{kind:'evaluated'}|{kind:'self_assessed'};
  /** only probability × calibrated (F4 §9.3); null everywhere else */
  percent:number|null;
  condition:string|null;abstainReason:string|null;lifecycle:Lifecycle;retrospective:boolean;
- footer:{method:string;asOf:string;settleBy:string|null};
+ footer:{method:string;asOf:string;settleBy:string|null;target:string|null;horizon:string|null};
+ inputs:{kind:string;ref:string;availableAt:string;href:string|null}[];
+ settlement:{outcome:string;realized:string|null;settledAt:string}|null;
 }
+const plain=(v:unknown):string|null=>{
+ if(v===null||v===undefined)return null;
+ if(typeof v==='string')return v||null;
+ if(typeof v==='number'||typeof v==='boolean')return String(v);
+ if(typeof v==='object'&&Object.keys(v as object).length===0)return null;
+ return JSON.stringify(v);
+};
 /** F4 §9.3 rendering rules with owner decision D: uncalibrated → label + badge + condition only. */
 export function judgmentCardView(card:JudgmentCard,locale:'zh'|'en'):CardView{
  const calibrated=card.calibration==='calibrated';
  const s=card.calibration_summary;
- const badge:CardView['badge']=calibrated?{kind:'calibrated'}:card.calibration==='evaluated'?{kind:'evaluated'}:card.calibration==='self_assessed'?{kind:'self_assessed'}:{kind:'uncalibrated',n:s?.n_independent??0,threshold:s?.threshold_n??0};
+ const badge:CardView['badge']=calibrated?{kind:'calibrated'}:card.calibration==='evaluated'?{kind:'evaluated'}:card.calibration==='self_assessed'?{kind:'self_assessed'}:card.calibration==='failed'?{kind:'failed',ece:s?.ece_raw_holdout??null}:{kind:'uncalibrated',n:s?.n_independent??0,threshold:s?.threshold_n??0};
  return {
   title:card.methodology.title[locale],headline:card.display.headline[locale],badge,
   percent:card.kind==='probability'&&calibrated&&card.display.percent!==null?card.display.percent:null,
   condition:card.condition?.text[locale]??null,abstainReason:card.lifecycle==='abstained'?card.abstain_reason??null:null,
   lifecycle:card.lifecycle,retrospective:card.retrospective,
-  footer:{method:`${card.methodology.id}@${card.methodology.version}`,asOf:card.as_of,settleBy:card.condition?.settle_by??null},
+  footer:{method:`${card.methodology.id}@${card.methodology.version}`,asOf:card.as_of,settleBy:card.condition?.settle_by??null,target:plain(card.condition?.target),horizon:plain(card.condition?.horizon)},
+  inputs:(card.inputs??[]).map(i=>({kind:i.kind,ref:plain(i.ref)??'',availableAt:i.available_at,href:i.href})),
+  settlement:card.settlement?{outcome:card.settlement.outcome,realized:plain(card.settlement.realized),settledAt:card.settlement.settled_at}:null,
  };
 }

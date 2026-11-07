@@ -4,7 +4,7 @@ vi.mock('./memberships',()=>({isMemberAt:()=>true}));
 vi.mock('./replay',()=>({replayFromManifest:(m:{cells:unknown[]})=>({cells:m.cells})}));
 import {digest} from '../research/ingest/pa-v1/json';
 import {RUN_ID,cellRow,missingCell,runRow,stubIndustryDb} from './fixture-rows';
-import {fetchIndustryJudgments,industrySubjectKey,judgmentCardView,judgmentsEnabled,judgmentsUrl} from './judgment-contract';
+import {fetchIndustryJudgments,industrySubjectKey,judgmentCardView,judgmentsEnabled,judgmentsUrl,judgmentsViewState,startJudgmentsLoad} from './judgment-contract';
 import type {JudgmentCard} from './judgment-contract';
 import {IndustryInputError,endOfUtcDay,industryTableRowsInput,metricsNaturalKey,parseIndustryNaturalKey,valuationsNaturalKey} from './judgment-input';
 
@@ -21,7 +21,7 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
  it('subject key, flag, URL',()=>{
   expect(industrySubjectKey('sw2021','2021','801120.SI')).toBe('sw2021:2021:801120.SI');
   expect(judgmentsEnabled({})).toBe(false);expect(judgmentsEnabled({INDUSTRY_JUDGMENTS_ENABLED:'1'})).toBe(true);
-  expect(judgmentsUrl('sw2021:2021:801120.SI')).toBe('/api/judgments?subject_type=industry&subject_key=sw2021%3A2021%3A801120.SI');
+  expect(judgmentsUrl('sw2021:2021:801120.SI')).toBe('/api/judgments?subject_type=industry&subject_key=sw2021%3A2021%3A801120.SI&include_abstained=1');
  });
  it('uncalibrated: label + badge + condition; no percent even for a probability with a percent',()=>{
   const v=judgmentCardView(card(),'zh');
@@ -29,6 +29,45 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
   expect(judgmentCardView(card({kind:'probability',display:{headline:{zh:'x',en:'x'},percent:62,value:0.62}}),'en').percent).toBeNull();
   expect(judgmentCardView(card({kind:'probability',calibration:'calibrated',display:{headline:{zh:'x',en:'x'},percent:62,value:0.62}}),'en')).toMatchObject({percent:62,badge:{kind:'calibrated'}});
   expect(judgmentCardView(card({lifecycle:'abstained',condition:null,abstain_reason:'needs 3y CAGR'}),'en')).toMatchObject({abstainReason:'needs 3y CAGR',condition:null});
+ });
+ it('failed calibration: badge carries the raw holdout ECE; no percent',()=>{
+  const v=judgmentCardView(card({kind:'probability',calibration:'failed',display:{headline:{zh:'x',en:'x'},percent:62,value:0.62},calibration_summary:{n_independent:40,n_total:40,threshold_n:30,brier:0.3,brier_skill:-0.1,ece_raw_holdout:0.137,valid_until:null,hit_rate:null,href:'#'}}),'zh');
+  expect(v.badge).toEqual({kind:'failed',ece:0.137});expect(v.percent).toBeNull();
+  expect(judgmentCardView(card({calibration:'failed',calibration_summary:null}),'en').badge).toEqual({kind:'failed',ece:null});
+ });
+ it('footer target/horizon, inputs (with and without href) and a settled card\'s outcome',()=>{
+  const v=judgmentCardView(card({
+   condition:{text:{zh:'a',en:'a'},horizon:'FY2027',target:{metric:'revenue_cagr_3y',gt:0.08},label_policy:'first_observed',settle_after:'2028-01-01',settle_by:'2028-05-01'},
+   inputs:[{kind:'table_rows',ref:'industry_metrics:r:801120.SI:2025-12-31',available_at:'2026-11-03T23:59:59.999Z',origin:{},href:'/api/industries/sw2021/801120.SI/replay'},{kind:'table_rows',ref:{table:'x'},available_at:'2026-11-04T00:00:00Z',origin:{},href:null}],
+   lifecycle:'settled',settlement:{kind:'auto',outcome:'hit',realized:0.05,settled_at:'2028-05-02T01:00:00Z',evidence_summary:{}},
+  }),'en');
+  expect(v.footer).toMatchObject({target:'{"metric":"revenue_cagr_3y","gt":0.08}',horizon:'FY2027'});
+  expect(v.inputs).toEqual([{kind:'table_rows',ref:'industry_metrics:r:801120.SI:2025-12-31',availableAt:'2026-11-03T23:59:59.999Z',href:'/api/industries/sw2021/801120.SI/replay'},{kind:'table_rows',ref:'{"table":"x"}',availableAt:'2026-11-04T00:00:00Z',href:null}]);
+  expect(v.settlement).toEqual({outcome:'hit',realized:'0.05',settledAt:'2028-05-02T01:00:00Z'});
+  expect(judgmentCardView(card(),'en')).toMatchObject({inputs:[],settlement:null,footer:{target:null,horizon:null}});
+ });
+ it('view state: disabled wins; loading until the fetched subject matches (loaded→disabled, A→B)',()=>{
+  const A={key:'A',result:{state:'ok' as const,cards:[card()]}};
+  expect(judgmentsViewState(true,'A',A)).toEqual(A.result);
+  expect(judgmentsViewState(false,'A',A)).toEqual({state:'disabled'});
+  expect(judgmentsViewState(true,null,A)).toEqual({state:'disabled'});
+  expect(judgmentsViewState(true,'B',A)).toEqual({state:'loading'});
+  expect(judgmentsViewState(true,'B',null)).toEqual({state:'loading'});
+ });
+ it('startJudgmentsLoad: no request while disabled or without a subject; tags the result with its subject; aborted loads are dropped',async()=>{
+  const f=vi.fn(async()=>new Response(JSON.stringify({cards:[card()]}),{status:200}));
+  const got=vi.fn();
+  startJudgmentsLoad({enabled:false,subjectKey:'A',onResult:got,fetch:f})();
+  startJudgmentsLoad({enabled:true,subjectKey:null,onResult:got,fetch:f})();
+  expect(f).not.toHaveBeenCalled();
+  startJudgmentsLoad({enabled:true,subjectKey:'A',onResult:got,fetch:f});
+  await vi.waitFor(()=>expect(got).toHaveBeenCalledWith({key:'A',result:expect.objectContaining({state:'ok'})}));
+  expect(f).toHaveBeenCalledTimes(1);
+  expect(String((f.mock.calls as unknown as unknown[][])[0][0])).toContain('include_abstained=1');
+  got.mockClear();
+  startJudgmentsLoad({enabled:true,subjectKey:'B',onResult:got,fetch:f})();
+  await new Promise(r=>setTimeout(r,10));
+  expect(got).not.toHaveBeenCalled();
  });
  it('fetch: never requests while disabled; ok / error otherwise',async()=>{
   const f=vi.fn(async()=>new Response(JSON.stringify({cards:[card()]}),{status:200}));
@@ -64,6 +103,7 @@ describe('F4 table_rows input adapter (spec §7.1)',()=>{
   await err(industryTableRowsInput(db,{table:'industry_metrics',natural_key:metricsNaturalKey(RUN_ID,'801080.SI','2025-12-31')}),'input_not_public');
   await err(industryTableRowsInput(stubIndustryDb({runs:[runRow({status:'building'})],cells:rows}),{table:'industry_metrics',natural_key:nk}),'input_not_public');
   await err(industryTableRowsInput(stubIndustryDb({runs:[runRow()],cells:[cellRow({updated_at:null})]}),{table:'industry_metrics',natural_key:nk}),'input_not_public');
+  await err(industryTableRowsInput(stubIndustryDb({runs:[runRow()],cells:[cellRow(),cellRow({metric:'revenue_sum',manifest_hash:'f'.repeat(64)})]}),{table:'industry_metrics',natural_key:nk}),'input_ambiguous_manifest');
   await err(industryTableRowsInput(db,{table:'industry_valuations',natural_key:valuationsNaturalKey(RUN_ID,'801120.SI','2026-10-30')}),'unsupported_deferred_i3');
   await err(industryTableRowsInput(db,{table:'industry_valuations',natural_key:nk}),'invalid_natural_key');
  });

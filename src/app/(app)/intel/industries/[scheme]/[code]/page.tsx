@@ -82,7 +82,7 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
             </section>
             {scheme==='sw2021'&&<ValuationSnapshot scheme={scheme} nodes={[v.node]} block={v.valuation} preview={v.preview} title="titleDetail" />}
             <JudgmentArea enabled={judgmentsEnabled()} subjectKey={scheme==='sw2021'?industrySubjectKey(scheme,'2021',code):null} scope={{scheme:t(`schemes.${scheme}`),level:t(`levels.${v.node.level}`)}} />
-            <details className="card-base" open>
+            <details className="card-base">
               <summary className="cursor-pointer text-lg font-semibold">{t('detail.methods')}</summary>
               <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-y-2">
                 <dt className="text-text-dim">{t('drawer.method')}</dt><dd className="m-0 font-mono text-xs">{v.method.methodVersion} · {t('detail.configHash')} {v.method.configHash.slice(0,8)} · {t('detail.formulaVersion')} {v.method.formulaVersion??'—'}</dd>

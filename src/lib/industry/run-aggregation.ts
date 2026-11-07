@@ -156,7 +156,9 @@ const rowOf=(code:string,periodEnd:string,c:AggregateManifest['cells'][number],h
  code,metric:c.metric,period_start:c.period_start,period_end:periodEnd,duration:c.duration,status:c.status,missing_reason:c.status==='missing'?c.missing_reason??null:null,
  value:c.status==='ok'?c.value_text??null:null,unit:c.unit,n_members:c.n_members,n_with_data:c.n_with_data,n_unresolved:c.n_unresolved,manifest_hash:c.status==='ok'?hash:null});
 
-export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationOptions,hooks:AggregationHooks={}):Promise<AggregationReceipt>{
+/** `factsUniverse` replaces the readiness denominator (default: the database-global computation of `factsUniverse()`); tests that share a database with other suites inject their own issuers. */
+export type AggregationDeps=IndustryDeps&{factsUniverse?:()=>Promise<Set<string>>};
+export async function runIndustryAggregation(deps:AggregationDeps,opts:AggregationOptions,hooks:AggregationHooks={}):Promise<AggregationReceipt>{
  const receipt:AggregationReceipt={status:'rejected',batchId:null,batchStatus:null,runId:null,generation:null,activatedAt:null,historyClass:null,groups:0,reusedGroups:0,cells:{ok:0,missing:0},manifestMismatches:0,truncatedIssuers:[]};
  assertDay('factsAsOf',opts.factsAsOf);
  const historyStart=opts.historyStart??DEFAULT_HISTORY_START;assertDay('historyStart',historyStart);
@@ -219,7 +221,7 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
    reused_from_run:reuse.size>0&&prev?prev.run_id:null,batch_id:batchId});
   runId=run.runId;receipt.runId=run.runId;receipt.generation=run.generation;
   // ---- 3. readiness gate ----
-  const universe=await factsUniverse(tables,db,deps.now().toISOString().slice(0,10),allMembers.map(r=>r.issuer_id));
+  const universe=deps.factsUniverse?[...await deps.factsUniverse()].sort(cmp):await factsUniverse(tables,db,deps.now().toISOString().slice(0,10),allMembers.map(r=>r.issuer_id));
   const readyN=universe.filter(id=>scopeOf.get(id)?.last_success_at!=null).length;
   const ready=universe.length>0&&readyN*100>=READINESS_MIN_PERCENT*universe.length;
   if(!ready){

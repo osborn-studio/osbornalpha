@@ -32,9 +32,10 @@ import {fetchDailyBasic,fixtureTushareCall} from './providers/tushare-industry';
 import {replayFromManifest} from './replay';
 import {windowEnd} from './resolve-memberships';
 import {claimSicScopeRow,finishSicScopeRow} from './sic';
-import {runIndustryAggregation} from './run-aggregation';
-import type {AggregationOptions,AggregationReceipt} from './run-aggregation';
-import type {ClassificationRow,IndustryDb,IndustryDeps,MetricCellRow} from './types';
+import {buildCellManifest,runIndustryAggregation} from './run-aggregation';
+import type {AggregationDeps,AggregationOptions,AggregationReceipt} from './run-aggregation';
+import {isEmptyDiff,manifestDiff} from './read';
+import type {ClassificationRow,IndustryDb,MetricCellRow} from './types';
 
 const enabled=!!process.env.S4_TEST_STATE;
 interface Fixture{
@@ -81,13 +82,14 @@ async function publishCn(facts:FactsDb,tables:TableClient,key:string,reports:Fix
 const cellOf=(rows:MetricCellRow[],code:string,metric:string,duration:string,pe:string)=>{const r=rows.find(x=>x.code===code&&x.metric===metric&&x.duration===duration&&x.period_end===pe);expect(r,`${code} ${metric} ${duration} ${pe}`).toBeDefined();return r!;};
 
 describe.skipIf(!enabled)('industry offline integration on real PostgreSQL (Task 14)',()=>{
- let admin:Pool;let tables:TableClient;let db:IndustryDb;let facts:FactsDb;let manifests:ReturnType<typeof memoryManifestStore>;let deps:IndustryDeps;let batch:string;
+ let admin:Pool;let tables:TableClient;let db:IndustryDb;let facts:FactsDb;let manifests:ReturnType<typeof memoryManifestStore>;let deps:AggregationDeps;let batch:string;
  const runs:AggregationReceipt[]=[];
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});
   tables=pgTableClient(admin);db=pgIndustryDb(admin);facts=pgFactsDb(admin);manifests=memoryManifestStore(db);
-  deps={tables,db,facts,manifests,now:()=>new Date(),codeVersion:'t14-industry-sync'};
+  // the readiness universe is database-global by default; other suites share this database, so restrict it to this suite's own issuers
+  deps={tables,db,facts,manifests,now:()=>new Date(),codeVersion:'t14-industry-sync',factsUniverse:async()=>new Set(FX.issuers.map(i=>i.issuer_id))};
   // issuers, A-share securities and universe rows (FK order); the unresolved ticker gets a universe row only
   for(const i of FX.issuers){
    await admin.query(`insert into public.stocks_universe(ticker,name,market) values($1,$2,'A') on conflict (ticker) do nothing`,[i.ticker,i.name]);
@@ -97,7 +99,9 @@ describe.skipIf(!enabled)('industry offline integration on real PostgreSQL (Task
   ({batchId:batch}=await startBatch(tables,{producer:'test-industry',dataset:'industry.t14'}));
   const tree:ClassificationRow[]=FX.classifications.map(c=>({scheme:'sw2021',version:'2021',code:c.code,level:c.level,name_zh:c.name_zh,name_en:null,parent_code:c.parent_code,attributes:{}}));
   await db.upsertClassifications(batch,tree);
-  await db.upsertSourceMemberships(batch,FX.source_memberships.map(m=>({source:SOURCE,ts_code:m.ts_code,name:null,l1_code:m.l1_code,l2_code:m.l2_code,l3_code:m.l3_code,in_date:m.in_date,out_date:m.out_date,observed_at:'2025-05-01T00:00:00.000Z',raw_hash:sha256Hex(`t14:member:${m.ts_code}`),locator:{api:'index_member_all',is_new:'Y',ts_code:m.ts_code}})));
+  const sourceInputs=FX.source_memberships.map(m=>({source:SOURCE,ts_code:m.ts_code,name:null,l1_code:m.l1_code,l2_code:m.l2_code,l3_code:m.l3_code,in_date:m.in_date,out_date:m.out_date,observed_at:'2025-05-01T00:00:00.000Z',raw_hash:sha256Hex(`t14:member:${m.ts_code}`),locator:{api:'index_member_all',is_new:'Y',ts_code:m.ts_code}}));
+  await db.upsertSourceMemberships(batch,sourceInputs);
+  expect(await db.upsertSourceMemberships(batch,sourceInputs)).toEqual({inserted:0,superseded:0,duplicates:sourceInputs.length,changed:[]});   // an identical second upsert is all duplicates
   const current=await db.currentSourceMemberships({});
   for(const m of FX.source_memberships){
    if(m.issuer===null)continue;
@@ -176,9 +180,21 @@ describe.skipIf(!enabled)('industry offline integration on real PostgreSQL (Task
   const old=replayFromManifest(await manifests.get(oldCell.manifest_hash!));
   expect(old.reproduced).toBe(true);
   expect(old.cells.find(c=>c.metric==='revenue_sum'&&c.duration==='12M')?.value_text).toBe('2640');
-  // banks did not change: same manifests (reused)
+  // banks did not change: recomputed to identical manifests
   expect(cellOf(after,BANK,'revenue_sum','12M','2024-12-31').manifest_hash).toBe(cellOf(before,BANK,'revenue_sum','12M','2024-12-31').manifest_hash);
   expect((await db.metricRun(runs[0].runId!))?.status).toBe('superseded');
+  // recompute on PostgreSQL (spec §5.5 mode=recompute): FOOD 2024-12-31 at the OLD run's facts_as_of differs from the old manifest by exactly the later filing
+  const oldRun=(await db.metricRun(runs[0].runId!))!;
+  const recomputed=await buildCellManifest({db,facts,codeVersion:'t14-industry-sync'},{scheme:'sw2021',version:'2021',level:FX.level,code:FOOD,periodEnd:'2024-12-31',factsAsOf:oldRun.facts_as_of,knowledgeDate:oldRun.knowledge_date,historyClass:oldRun.history_class});
+  const diff=manifestDiff(await manifests.get(oldCell.manifest_hash!),recomputed);
+  expect(isEmptyDiff(diff)).toBe(false);
+  expect(diff.facts.added).toHaveLength(1);                                                // the restatement's revenue fact
+  expect(diff.facts.removed.length).toBeGreaterThan(0);                                            // the original-version revenue facts it supersedes leave the as-of view
+  expect(diff.stateRevs.map(x=>x.issuerId)).toEqual([ID.F1]);expect(diff.stateRevs[0].to).toBeGreaterThan(diff.stateRevs[0].from!);
+  expect(diff.cells.find(c=>c.metric==='revenue_sum'&&c.duration==='12M')).toMatchObject({stored:{value_text:'2640'},recomputed:{value_text:'2660'}});
+  // the new run's rows are stamped with the run's activation instant
+  const newRun=(await db.metricRun(r.runId!))!;
+  expect(after.every(x=>x.updated_at!==null&&new Date(x.updated_at).toISOString()===new Date(newRun.activated_at!).toISOString())).toBe(true);
  },120_000);
 
  it('a second run with unchanged state_rev reuses every manifest hash and copies the dependencies',async()=>{

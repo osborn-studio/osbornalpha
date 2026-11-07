@@ -10,13 +10,11 @@ import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
 import type {IssuerIndustriesView} from '@/lib/industry/read';
 import {industryPath,nodeName} from './hrefs';
+import {rowVisible,swLicencePending} from './row-model';
 
 type Ok=Extract<IssuerIndustriesView,{state:'ok'}>;
 
 export function IndustryRow({ticker}:{ticker:string}){
-  const t=useTranslations('industries.stock');
-  const ts=useTranslations('industries.schemes');
-  const locale=useLocale()==='en'?'en':'zh';
   const [data,setData]=useState<Ok|null>(null);
   useEffect(()=>{
     const ctrl=new AbortController();
@@ -32,10 +30,16 @@ export function IndustryRow({ticker}:{ticker:string}){
     })().catch(()=>{});
     return ()=>ctrl.abort();
   },[ticker]);
-  if(!data)return null;
-  const aShare=/\.(SH|SZ|BJ)$/i.test(ticker);
-  const swHidden=aShare&&data.schemes.some(s=>s.scheme==='sw2021'&&!s.public);
-  if(data.industries.length===0&&!swHidden)return null;
+  return data?<IndustryRowView ticker={ticker} data={data} />:null;
+}
+
+/** Presentational part (no fetching): chips, current-only badges, and "licence pending" for an A-share whose SW scheme is not public. */
+export function IndustryRowView({ticker,data}:{ticker:string;data:Ok}){
+  const t=useTranslations('industries.stock');
+  const ts=useTranslations('industries.schemes');
+  const locale=useLocale()==='en'?'en':'zh';
+  const swHidden=swLicencePending(ticker,data);
+  if(!rowVisible(ticker,data))return null;
   return (
     <div className="card-base flex flex-col gap-2" data-industry-row="">
       {data.industries.map(i=>(

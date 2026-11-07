@@ -18,6 +18,12 @@ import {SOURCES,constituentsView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
+/** "FY2024" or "FY2022–FY2024" from the period ends of the shown revenue facts; null when none. */
+function fiscalYearLabel(periodEnds:(string|undefined)[]):string|null{
+  const ys=[...new Set(periodEnds.filter((p):p is string=>!!p).map(p=>p.slice(0,4)))].sort();
+  return ys.length===0?null:ys.length===1?`FY${ys[0]}`:`FY${ys[0]}–FY${ys[ys.length-1]}`;
+}
+
 export default async function ConstituentsPage({params,searchParams}:{params:Promise<{scheme:string;code:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const raw=await params;
   const scheme=schemeOfPath(raw.scheme),code=codeOfPath(raw.code);
@@ -32,6 +38,7 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
   if(v?.state==='unknown_industry')notFound();
   const path=constituentsPath(scheme,code);
   const today=now.toISOString().slice(0,10);
+  const revenueFy=v?.state==='ok'?fiscalYearLabel(v.rows.map(r=>r.revenue?.periodEnd)):null;
   const pages=v?.state==='ok'?Math.max(1,Math.ceil(v.total/v.pageSize)):1;
   return (
     <SourceDrawerProvider>
@@ -70,9 +77,9 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
                       <th className="py-2 pl-3 font-normal sm:pl-4">{t('constituents.ticker')}</th>
                       <th className="py-2 font-normal">{t('constituents.name')}</th>
                       <th className="py-2 font-normal">{v.currentOnly?t('constituents.observed'):t('constituents.inDate')}</th>
-                      <th className="hidden py-2 font-normal sm:table-cell">{t('constituents.outDate')}</th>
+                      {!v.currentOnly&&<th className="hidden py-2 font-normal sm:table-cell">{t('constituents.outDate')}</th>}
                       <th className="hidden py-2 font-normal md:table-cell">{v.currentOnly?t('constituents.sic'):t('constituents.path')}</th>
-                      <th className="py-2 text-right font-normal">{t('constituents.revenue')}</th>
+                      <th className="py-2 text-right font-normal">{revenueFy?t('constituents.revenueFy',{fy:revenueFy}):t('constituents.revenue')}</th>
                       <th className="hidden py-2 text-right font-normal sm:table-cell">{t('constituents.netIncome')}</th>
                       <th className="hidden py-2 pr-4 font-normal sm:table-cell">{t('constituents.company')}</th>
                     </tr>
@@ -87,7 +94,7 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
                           <td className="py-1.5 pl-3 font-mono text-xs sm:pl-4">{r.ticker??'—'}</td>
                           <td className="py-1.5">{name}</td>
                           <td className="py-1.5"><SourceButton payload={memberPayload} label={`${name} ${r.membership.validFrom}`} className="text-xs text-text-dim">{r.membership.validFrom}</SourceButton></td>
-                          <td className="hidden py-1.5 font-mono text-xs tabular-nums text-text-dim sm:table-cell">{r.membership.validTo??'—'}</td>
+                          {!v.currentOnly&&<td className="hidden py-1.5 font-mono text-xs tabular-nums text-text-dim sm:table-cell">{r.membership.validTo??'—'}</td>}
                           <td className="hidden py-1.5 text-xs text-text-dim md:table-cell">{v.currentOnly?<span className="font-mono">{r.membership.code}</span>:r.path.slice(1).map(n=>nodeName(n,locale)).join(' / ')||'—'}</td>
                           <td className="py-1.5 text-right">{fact(r.revenue)}</td>
                           <td className="hidden py-1.5 text-right sm:table-cell">{fact(r.netIncome)}</td>

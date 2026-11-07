@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({})}));
 vi.mock('@/lib/industry/db',()=>({supabaseIndustryDb:()=>mocks.db}));
 vi.mock('@/lib/industry/manifest',async()=>{const f=await import('@/lib/industry/fixture-rows');return {supabaseManifestStore:()=>({get:async()=>f.manifestOf()})};});
 vi.mock('@/lib/industry/memberships',()=>({isMemberAt:()=>true}));
-vi.mock('@/lib/industry/replay',()=>({replayFromManifest:(m:{cells:unknown[]})=>({cells:m.cells})}));
+vi.mock('@/lib/industry/replay',()=>({replayFromManifest:(m:{cells:unknown[]})=>({cells:m.cells}),replayCell:(m:{cells:{metric:string;duration:string;period_start:string}[]},k:{metric:string;duration:string;period_start:string})=>({cell:m.cells.find(c=>c.metric===k.metric&&c.duration===k.duration&&c.period_start===k.period_start)??null,reproduced:true,mismatches:[]})}));
 
 import {RUN_ID,cellRow,runRow,stubIndustryDb} from '@/lib/industry/fixture-rows';
 import {GET} from './route';
