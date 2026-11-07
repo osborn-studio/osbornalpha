@@ -1,6 +1,6 @@
 // Tushare three-statement adapter (spec §6.3, §5.1, §4.7 raw_hash). fetchTushareStatements: income /
-// balancesheet / cashflow × report_type 1/4/5 since <sinceYear>0101, paged by limit/offset (upstream
-// semantics unverified, §15 — never claim completeness before the runbook check), one RawSnapshot per page,
+// balancesheet / cashflow × report_type 1/4/5 since <sinceYear>0101, ONE request per stream (limit/offset kept in the
+// snapshot meta; multi-page streams fail closed, see deviation 6), one RawSnapshot per stream,
 // quota messages / HTTP 429 → ProviderError quota_exhausted. parseTushareStatements: columns by name from
 // data.fields, control columns → number, EVERY value column of tushareFieldsFor(api) → canonical decimal
 // (TUSHARE_NUMBER_SCHEMA is built from the catalogue, the single source; an unlisted numeric column would
@@ -16,10 +16,11 @@
 // bytes (offset ignored upstream) stops the fetch with tushare_unavailable instead of looping.
 // (4) Invalid calendar dates in end_date / ann dates are treated as row_shape / missing available date.
 // Review follow-up: (5) every row's ts_code must equal the snapshot's requested ts_code and all snapshots of one
-// parse must be for the same requested issuer (parse_error ts_code_mismatch). (6) has_more=true always continues
-// (even on a short page); an empty page with has_more=true or a page whose fields+items hash equals the previous
-// page's (request_id and other envelope fields are ignored) fails as paging_not_advancing; a full page with
-// has_more=false is reported as skipped reason page_full_no_more. (7) A present-but-invalid f_ann_date never
+// parse must be for the same requested issuer (parse_error ts_code_mismatch). (6) Single page only: real Tushare offset paging is not order-stable on tied rows (same end_date, update_flag
+// 0/1), so a multi-page concatenation can drop or duplicate rows (verified 2026-11-06, 17-tushare-verification.md).
+// A page with has_more=true (even empty or short) fails as tushare_unavailable multi_page_unverified:<api>:rt<n> instead of
+// requesting the next page; a full page with has_more=false is reported as skipped reason page_full_no_more.
+// (7) A present-but-invalid f_ann_date never
 // falls back to ann_date: the row is parked as missing_available_date with both original strings; ann_date is
 // used only when f_ann_date is absent/null/empty. (8) Budget: the 20 s reserve is applied once, here (the raw call
 // gets reserveMs 0 and an explicit timeout); TushareError -2 → budget_exhausted, -4 → snapshot_too_large, abort of
@@ -31,15 +32,14 @@ import type {NumberSchema} from '../json-numbers';
 import {TUSHARE_CONTROL_FIELDS,canonicalDecimal,decodeColumns,scanJsonNumbers} from '../json-numbers';
 import {classifyDuration,isDate} from '../classify';
 import {tushareCallRaw,type TushareRaw} from '../../data/sources/tushare';
-import {createPacer,nearestDuration,PacerError,ProviderError,rawHashOf,sha256Hex,sleep,snapshotOf,ymd} from './shared';
+import {createPacer,nearestDuration,PacerError,ProviderError,rawHashOf,sleep,snapshotOf,ymd} from './shared';
 
 export type TushareApi='income'|'balancesheet'|'cashflow';
 export const TUSHARE_APIS:TushareApi[]=['income','balancesheet','cashflow'];
 export const TUSHARE_REPORT_TYPES=[1,4,5] as const;
 export const COMMON_FIELDS=['ts_code','ann_date','f_ann_date','end_date','report_type','comp_type','end_type','update_flag'];
 export const PAGE_SIZE=2000;
-export const TUSHARE_MIN_INTERVAL_MS=300;
-const MAX_PAGES=200;
+export const TUSHARE_MIN_INTERVAL_MS=400;   // 150 calls/min: headroom under the 200/min tier limit
 const RESERVE_MS=20_000;
 const CALL_TIMEOUT_MS=30_000;
 const API_OF_STATEMENT:Record<string,TushareApi|undefined>={IS:'income',BS:'balancesheet',CF:'cashflow'};
@@ -72,9 +72,8 @@ export async function fetchTushareStatements(tsCode:string,sinceYear:number,budg
  for(const api of TUSHARE_APIS)for(const rt of TUSHARE_REPORT_TYPES){
   const fields=fieldsFor(api,opts.concepts);
   const params={ts_code:tsCode,start_date:`${sinceYear}0101`,report_type:String(rt)};
-  let previousContent:string|null=null;
-  for(let page=1,offset=0;;page++){
-   if(page>MAX_PAGES)throw new ProviderError('tushare_unavailable','too_many_pages');
+  {
+   const page=1,offset=0;   // single page per stream (see deviation 6)
    try{await pacer.admit({budget,reserveMs:RESERVE_MS,now,sleep:wait});}catch(e){throw new ProviderError('tushare_unavailable',e instanceof PacerError?e.code:'budget_aborted');}
    let raw:TushareRaw;
    try{raw=await call(api,params,fields,{limit:pageSize,offset,budget,reserveMs:0,timeoutMs:Math.min(CALL_TIMEOUT_MS,budget.remainingMs()-RESERVE_MS)});}
@@ -89,14 +88,8 @@ export async function fetchTushareStatements(tsCode:string,sinceYear:number,budg
     throw new ProviderError('tushare_unavailable',`request_failed_${typeof code==='number'&&Number.isInteger(code)?code:'x'}`);
    }
    if(raw.code!==0)throw new ProviderError(isTushareQuotaMessage(raw.msg)?'quota_exhausted':'tushare_unavailable',`api_code_${Number.isInteger(raw.code)?raw.code:'x'}`);
-   // content hash over fields+items only: a real response carries a unique request_id, so whole-body equality never repeats
-   const content=sha256Hex(JSON.stringify([raw.fields,raw.items]));
-   if(raw.hasMore&&raw.items.length===0)throw new ProviderError('tushare_unavailable','paging_not_advancing');
-   if(previousContent!==null&&previousContent===content)throw new ProviderError('tushare_unavailable','paging_not_advancing');
-   previousContent=content;
+   if(raw.hasMore)throw new ProviderError('tushare_unavailable',`multi_page_unverified:${api}:rt${rt}`);
    out.push(snapshotOf(raw.bytes,{source:'tushare',api,params:{...params,limit:pageSize,offset},fields,http_status:raw.httpStatus,has_more:raw.hasMore,page}));
-   if(!raw.hasMore)break;
-   offset+=raw.items.length;
   }
  }
  return out;

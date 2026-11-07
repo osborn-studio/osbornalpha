@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-trimmed unit-test fixture: Apple Inc. Form 10-K FY2023, accession 0000320193-23-000106, primary document aapl-20230930.htm.
+     Values equal the companyfacts entries of that accession in src/lib/facts/fixtures/edgar/CIK0000320193.trimmed.json.
+     Reproducible full trims are made by scripts/dq/record-ixbrl-fixture.ts (Task 13c). -->
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ix="http://www.xbrl.org/2013/inlineXBRL" xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:iso4217="http://www.xbrl.org/2003/iso4217" xmlns:ixt="http://www.xbrl.org/inlineXBRL/transformation/2020-02-12" xmlns:us-gaap="http://fasb.org/us-gaap/2023" xmlns:dei="http://xbrl.sec.gov/dei/2023" xmlns:srt="http://fasb.org/srt/2023" xmlns:aapl="http://www.apple.com/20230930" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>aapl-20230930</title></head>
+<body>
+<div style="display:none"><ix:header><ix:hidden>
+<ix:nonNumeric name="dei:DocumentFiscalYearFocus" contextRef="c-1">2023</ix:nonNumeric>
+</ix:hidden><ix:resources>
+<xbrli:context id="c-1"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2022-09-25</xbrli:startDate><xbrli:endDate>2023-09-30</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="c-2"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2021-09-26</xbrli:startDate><xbrli:endDate>2022-09-24</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="c-3"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2020-09-27</xbrli:startDate><xbrli:endDate>2021-09-25</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="c-4"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2023-09-30</xbrli:instant></xbrli:period></xbrli:context>
+<xbrli:context id="c-5"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2023-10-20</xbrli:instant></xbrli:period></xbrli:context>
+<xbrli:context id="c-6"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000320193</xbrli:identifier><xbrli:segment><xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">aapl:IPhoneMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity><xbrli:period><xbrli:startDate>2022-09-25</xbrli:startDate><xbrli:endDate>2023-09-30</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:unit id="usd"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+<xbrli:unit id="usdPerShare"><xbrli:divide><xbrli:unitNumerator><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unitNumerator><xbrli:unitDenominator><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unitDenominator></xbrli:divide></xbrli:unit>
+<xbrli:unit id="shares"><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unit>
+</ix:resources></ix:header></div>
+<p>For the fiscal year ended <ix:nonNumeric name="dei:DocumentPeriodEndDate" contextRef="c-1" format="ixt:date-monthname-day-year-en">September 30, 2023</ix:nonNumeric></p>
+<p><ix:nonNumeric name="dei:EntityFilerCategory" contextRef="c-1">Large Accelerated Filer</ix:nonNumeric></p>
+<p><ix:nonFraction name="dei:EntityCommonStockSharesOutstanding" contextRef="c-5" unitRef="shares" decimals="INF" scale="0" format="ixt:num-dot-decimal">15,552,752,000</ix:nonFraction> shares of common stock were issued and outstanding as of October&#160;20, 2023.</p>
+<table>
+<tr><td>Total net sales</td><td>$<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-1" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">383,285</ix:nonFraction></td><td>$<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-2" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">394,328</ix:nonFraction></td><td>$<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-3" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">365,817</ix:nonFraction></td></tr>
+<tr><td>iPhone</td><td>$<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-6" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">200,583</ix:nonFraction></td></tr>
+<tr><td>Net income</td><td>$<ix:nonFraction name="us-gaap:NetIncomeLoss" contextRef="c-1" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">96,995</ix:nonFraction></td></tr>
+<tr><td>Basic earnings per share</td><td>$<ix:nonFraction name="us-gaap:EarningsPerShareBasic" contextRef="c-1" unitRef="usdPerShare" decimals="2" scale="0" format="ixt:num-dot-decimal">6.16</ix:nonFraction></td></tr>
+<tr><td>Cash generated by/(used in) investing activities</td><td><ix:nonFraction name="us-gaap:NetCashProvidedByUsedInInvestingActivities" contextRef="c-1" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">3,705</ix:nonFraction></td><td>(<ix:nonFraction name="us-gaap:NetCashProvidedByUsedInInvestingActivities" contextRef="c-2" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal" sign="-">22,354</ix:nonFraction>)</td></tr>
+<tr><td>Total assets</td><td>$<ix:nonFraction name="us-gaap:Assets" contextRef="c-4" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">352,583</ix:nonFraction></td></tr>
+<tr><td>Total shareholders' equity</td><td><ix:nonFraction name="us-gaap:StockholdersEquity" contextRef="c-4" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">62,146</ix:nonFraction></td></tr>
+</table>
+<p>Total net sales were $<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-1" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">383,285</ix:nonFraction> million in 2023.</p>
+</body>
+</html>

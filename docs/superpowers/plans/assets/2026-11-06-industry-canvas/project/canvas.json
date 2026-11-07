@@ -1,0 +1,28 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-04T18:00:00Z"},
+  "title": "行业研究 Industry Research",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1440, "h": 2150, "title": "列表 · 热力图 List · heatmap (ok)", "expand": "fill"},
+    "List-Table.dc.html": {"x": 1520, "y": 0, "w": 1440, "h": 1700, "title": "列表 · 表格视图 List · table view", "expand": "fill"},
+    "Detail.dc.html": {"x": 3040, "y": 0, "w": 1440, "h": 2650, "title": "行业详情 Industry detail", "expand": "fill"},
+    "Constituents.dc.html": {"x": 4560, "y": 0, "w": 1440, "h": 1500, "title": "成分页 Constituents", "expand": "fill"},
+    "Drawer.dc.html": {"x": 0, "y": 3070, "w": 1920, "h": 1500, "title": "来源抽屉 Source drawer (3 contents · reproduced true/false)"},
+    "States.dc.html": {"x": 2000, "y": 3070, "w": 1440, "h": 1900, "title": "状态 States · list / detail / valuation"},
+    "Entry.dc.html": {"x": 3520, "y": 3070, "w": 1440, "h": 1250, "title": "入口与组件 Entry points & components"},
+    "M-List.dc.html": {"x": 0, "y": 5390, "w": 390, "h": 1760, "title": "移动 · 列表 Mobile list"},
+    "M-Detail.dc.html": {"x": 470, "y": 5390, "w": 390, "h": 2080, "title": "移动 · 详情 Mobile detail"},
+    "M-Drawer.dc.html": {"x": 940, "y": 5390, "w": 390, "h": 1300, "title": "移动 · 来源抽屉 Mobile source sheet"}
+  },
+  "order": ["Main.dc.html", "List-Table.dc.html", "Detail.dc.html", "Constituents.dc.html", "Drawer.dc.html", "States.dc.html", "Entry.dc.html", "M-List.dc.html", "M-Detail.dc.html", "M-Drawer.dc.html"],
+  "notes": {
+    "t1": {"x": 0, "y": -300, "text": "桌面页面 Desktop pages — /intel/industries", "kind": "title1", "maxW": 6000},
+    "t2": {"x": 0, "y": 2770, "text": "抽屉、状态与组件 Drawer, states, components", "kind": "title1", "maxW": 4960},
+    "t3": {"x": 0, "y": 5090, "text": "移动 Mobile (390)", "kind": "title1", "maxW": 1330},
+    "s1": {"x": -620, "y": 0, "w": 520, "size": "m", "fill": "gray", "text": "规格 Spec: docs/superpowers/specs/2026-11-04-industry-research-design.md §8（第 5 稿）\n\n约定 Conventions\n• 所有数值均为版式示意，不是事实。Every number here is illustrative layout data, not a fact.\n• 每个数字都是按钮：点开即来源抽屉。Every number is a button that opens the source drawer.\n• 每张图都有同一序列的表格视图。Every chart has a table view of the same series.\n• 热力图只用单色黄铜透明度 0.12–0.6，数值叠印；行业指标不用红绿。\n• 判断区只渲染 F4 卡；无判断即“未设判断”。\n• 缺失永远显示原因，不以 0 顶替。"},
+    "s2": {"x": -620, "y": 760, "w": 520, "size": "m", "fill": "gray", "text": "Token 偏差 Token deviation\n三级文字用 #8b8b94，而不是 Distant Fog #52525b：后者在深底上对比度约 2.6:1，低于 4.5:1。#52525b 只用于装饰与禁用。请 owner 确认。"}
+  },
+  "designSystems": []
+}

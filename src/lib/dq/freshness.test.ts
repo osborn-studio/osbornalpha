@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {computeFreshness,recordAttempt,freshnessOf} from './freshness';
+import {CADENCES,computeFreshness,recordAttempt,freshnessOf} from './freshness';
 
 const T=(iso:string)=>new Date(iso);
 
@@ -33,6 +33,12 @@ describe('computeFreshness',()=>{
   expect(()=>computeFreshness({cadence:'event',lastOkAt:T('2026-11-04T00:00:00Z'),consecutiveErrors:0,now:new Date(NaN)})).toThrow('invalid_now');
   expect(()=>computeFreshness({cadence:'event',lastOkAt:null,consecutiveErrors:5,now:'2026-11-05' as never})).toThrow('invalid_now');
  });
+ it('weekly cadence: 7d window plus 2d grace',()=>{
+  const now=T('2026-11-10T00:00:00Z');
+  expect(computeFreshness({cadence:'weekly',lastOkAt:T('2026-11-01T01:00:00Z'),consecutiveErrors:0,now})).toBe('fresh');   // 8d23h
+  expect(computeFreshness({cadence:'weekly',lastOkAt:T('2026-10-31T23:00:00Z'),consecutiveErrors:0,now})).toBe('stale');   // 9d1h
+  expect(CADENCES).toEqual(['daily','weekly','monthly','quarterly','event']);
+ });
 });
 
 describe('recordAttempt',()=>{
@@ -53,6 +59,11 @@ describe('recordAttempt',()=>{
   const c=memoryTableClient();
   await expect(recordAttempt(c,'d',{ok:true,cadence:'event',now:new Date('x')})).rejects.toThrow('invalid_now');
   expect(c.rows('dq_freshness')).toEqual([]);
+ });
+ it('records a weekly attempt',async()=>{
+  const c=memoryTableClient();
+  expect(await recordAttempt(c,'reconcile.us.companyfacts_vs_ixbrl',{ok:true,cadence:'weekly',now:T('2026-11-05T00:00:00Z')})).toBe('fresh');
+  expect(c.rows('dq_freshness')[0]).toMatchObject({expected_cadence:'weekly',status:'fresh'});
  });
 });
 

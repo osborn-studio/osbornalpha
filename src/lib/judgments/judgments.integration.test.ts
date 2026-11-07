@@ -21,7 +21,7 @@ import {F4_FUNCTIONS,INTERNAL_FUNCTION_NAMES,PUBLIC_RPC_NAMES,SERVICE_RPC_NAMES}
 import type {Horizon,SettlementInsert,Target} from './types';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const MIGRATION='supabase/migrations/20261109150000_judgments.sql';
+const MIGRATION='supabase/migrations/20261115090000_judgments.sql';
 const TABLES=['judgment_methodologies','judgment_methodology_events','judgments','judgment_settlements','judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state','judgment_calibration_cohort_members'];
 const OPEN_READ=['judgment_methodologies','judgment_methodology_events','judgment_calibration_validity'];
 const GATED=['judgments','judgment_settlements','judgment_calibrations'];
@@ -616,7 +616,8 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
   const m1=await syncNew();const m2=await syncNew();const b=await batch();
   const x=randomUUID(),y=randomUUID();
   await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Judgments X')`,[x]);
-  await q(`insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) values($1,'ZZ Judgments Y','merged',$2)`,[y,x]);
+  // plan 3 issuers_topology_guard: a non-active issuer may only be born with the transaction-local switch on
+  await q(`with s as (select set_config('entities.allow_topology_write','on',true)) insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) select $1,'ZZ Judgments Y','merged',$2 from s`,[y,x]);
   const reg=async(m:string,key:string,asOf:string)=>{const r=judgmentRow(m,b,{subjectType:'issuer',subjectKey:key,asOf});await register(r);return String(r.row.judgment_id);};
   const a1=await reg(m1,x,'2026-01-02');const a2=await reg(m1,x,'2026-01-05');const a3=await reg(m1,y,'2026-01-04');const bb=await reg(m2,y,'2026-01-03');
   const cards=async(key:string,view='latest',cutoff:string|null=null,types:string[]|null=null)=>q(`select (e.judgment).judgment_id id,(e.judgment).subject_key k,e.calibration_valid cv,(e.methodology_state).seq ms from public.latest_judgment_cards('issuer',$1,$2::text[],$3,$4::timestamptz) e`,[key,types,view,cutoff]);

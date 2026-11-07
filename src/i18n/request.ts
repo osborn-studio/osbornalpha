@@ -17,6 +17,14 @@ const MESSAGE_DOMAINS = [
   'admin',
   // Analyst scoring layer (spec 2026-10-17):
   'analyst',
+  // INDUSTRY:BEGIN
+  // Industry research module (spec 2026-11-04-industry-research §12):
+  'industries',
+  // INDUSTRY:END
+  // MACRO
+  // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
+  'macro',
+  // /MACRO
   // F4
   // Judgment framework (spec 2026-11-04 §9.5):
   'judgments',

@@ -1,0 +1,1808 @@
+{
+ "CN_CPI_INDEX": [
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年9月",
+   "value_text": "100.9"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年8月",
+   "value_text": "100.8"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年7月",
+   "value_text": "100.5"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年6月",
+   "value_text": "101.0"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年5月",
+   "value_text": "101.2"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年4月",
+   "value_text": "101.2"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年3月",
+   "value_text": "101.0"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年2月",
+   "value_text": "101.3"
+  },
+  {
+   "series_id": "CN_CPI_INDEX",
+   "period_label": "2026年1月",
+   "value_text": "100.2"
+  }
+ ],
+ "CN_PPI_INDEX": [
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年9月",
+   "value_text": "105.0"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年8月",
+   "value_text": "103.8"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年7月",
+   "value_text": "103.5"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年6月",
+   "value_text": "104.1"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年5月",
+   "value_text": "103.9"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年4月",
+   "value_text": "102.8"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年3月",
+   "value_text": "100.5"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年2月",
+   "value_text": "99.1"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2026年1月",
+   "value_text": "98.6"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2025年12月",
+   "value_text": "98.1"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2025年11月",
+   "value_text": "97.8"
+  },
+  {
+   "series_id": "CN_PPI_INDEX",
+   "period_label": "2025年10月",
+   "value_text": "97.9"
+  }
+ ],
+ "CN_PMI_MFG": [
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年10月",
+   "value_text": "49.3"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年9月",
+   "value_text": "50.1"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年8月",
+   "value_text": "49.8"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年7月",
+   "value_text": "49.2"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年6月",
+   "value_text": "50.3"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年5月",
+   "value_text": "50.0"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年4月",
+   "value_text": "50.3"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年3月",
+   "value_text": "50.4"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年2月",
+   "value_text": "49.0"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2026年1月",
+   "value_text": "49.3"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2025年12月",
+   "value_text": "50.1"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2025年11月",
+   "value_text": "49.2"
+  },
+  {
+   "series_id": "CN_PMI_MFG",
+   "period_label": "2025年10月",
+   "value_text": "49.0"
+  }
+ ],
+ "CN_GDP_INDEX": [
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2026年第三季度",
+   "value_text": "104.5"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2026年第二季度",
+   "value_text": "104.3"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2026年第一季度",
+   "value_text": "105.0"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2025年第四季度",
+   "value_text": "104.5"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2025年第三季度",
+   "value_text": "104.8"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2025年第二季度",
+   "value_text": "105.2"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2025年第一季度",
+   "value_text": "105.4"
+  },
+  {
+   "series_id": "CN_GDP_INDEX",
+   "period_label": "2024年第四季度",
+   "value_text": "105.4"
+  }
+ ],
+ "CN_M2_YOY": [
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年9月",
+   "value_text": "7.2"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年8月",
+   "value_text": "7.5"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年7月",
+   "value_text": "7.7"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年6月",
+   "value_text": "8.0"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年5月",
+   "value_text": "8.6"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年4月",
+   "value_text": "8.6"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年3月",
+   "value_text": "8.5"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年2月",
+   "value_text": "9.0"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2026年1月",
+   "value_text": "9.0"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2025年12月",
+   "value_text": "8.5"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2025年11月",
+   "value_text": "8.0"
+  },
+  {
+   "series_id": "CN_M2_YOY",
+   "period_label": "2025年10月",
+   "value_text": "8.2"
+  }
+ ],
+ "CN_EXPORT_YOY": [
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年9月",
+   "value_text": "36.3"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年8月",
+   "value_text": "25.0"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年7月",
+   "value_text": "23.9"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年6月",
+   "value_text": "27.0"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年5月",
+   "value_text": "19.4"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年4月",
+   "value_text": "14.1"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年3月",
+   "value_text": "2.5"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年2月",
+   "value_text": "39.6"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2026年1月",
+   "value_text": "10.0"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2025年12月",
+   "value_text": "6.6"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2025年11月",
+   "value_text": "5.9"
+  },
+  {
+   "series_id": "CN_EXPORT_YOY",
+   "period_label": "2025年10月",
+   "value_text": "-1.1"
+  }
+ ],
+ "CN_CGB_10Y_D": [
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-22",
+   "value_text": "1.6791"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-23",
+   "value_text": "1.6807"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-24",
+   "value_text": "1.6738"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-28",
+   "value_text": "1.679"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-29",
+   "value_text": "1.667"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-09-30",
+   "value_text": "1.6822"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-08",
+   "value_text": "1.6899"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-09",
+   "value_text": "1.6864"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-10",
+   "value_text": "1.6849"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-12",
+   "value_text": "1.6722"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-13",
+   "value_text": "1.6654"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-14",
+   "value_text": "1.6516"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-15",
+   "value_text": "1.6601"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-16",
+   "value_text": "1.648"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-19",
+   "value_text": "1.6497"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-20",
+   "value_text": "1.6354"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-21",
+   "value_text": "1.6412"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-22",
+   "value_text": "1.6414"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-23",
+   "value_text": "1.64"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-26",
+   "value_text": "1.6376"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-27",
+   "value_text": "1.6258"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-28",
+   "value_text": "1.6345"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-29",
+   "value_text": "1.6233"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-10-30",
+   "value_text": "1.65"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-11-02",
+   "value_text": "1.6343"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-11-03",
+   "value_text": "1.621"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-11-04",
+   "value_text": "1.6077"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-11-05",
+   "value_text": "1.6038"
+  },
+  {
+   "series_id": "CN_CGB_10Y_D",
+   "period_label": "2026-11-06",
+   "value_text": "1.5868"
+  }
+ ],
+ "CN_USDCNY_CP_D": [
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-09",
+   "value_text": "711.02"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-10",
+   "value_text": "710.48"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-13",
+   "value_text": "710.07"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-14",
+   "value_text": "710.21"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-15",
+   "value_text": "709.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-16",
+   "value_text": "709.68"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-17",
+   "value_text": "709.49"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-20",
+   "value_text": "709.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-21",
+   "value_text": "709.3"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-22",
+   "value_text": "709.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-23",
+   "value_text": "709.18"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-24",
+   "value_text": "709.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-27",
+   "value_text": "708.81"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-28",
+   "value_text": "708.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-29",
+   "value_text": "708.43"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-30",
+   "value_text": "708.64"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-10-31",
+   "value_text": "708.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-03",
+   "value_text": "708.67"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-04",
+   "value_text": "708.85"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-05",
+   "value_text": "709.01"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-06",
+   "value_text": "708.65"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-07",
+   "value_text": "708.36"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-10",
+   "value_text": "708.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-11",
+   "value_text": "708.66"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-12",
+   "value_text": "708.33"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-13",
+   "value_text": "708.65"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-14",
+   "value_text": "708.25"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-17",
+   "value_text": "708.16"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-18",
+   "value_text": "708.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-19",
+   "value_text": "708.72"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-20",
+   "value_text": "709.05"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-21",
+   "value_text": "708.75"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-24",
+   "value_text": "708.47"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-25",
+   "value_text": "708.26"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-26",
+   "value_text": "707.96"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-27",
+   "value_text": "707.79"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-11-28",
+   "value_text": "707.89"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-01",
+   "value_text": "707.59"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-02",
+   "value_text": "707.94"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-03",
+   "value_text": "707.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-04",
+   "value_text": "707.33"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-05",
+   "value_text": "707.49"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-08",
+   "value_text": "707.64"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-09",
+   "value_text": "707.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-10",
+   "value_text": "707.53"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-11",
+   "value_text": "706.86"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-12",
+   "value_text": "706.38"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-15",
+   "value_text": "706.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-16",
+   "value_text": "706.02"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-17",
+   "value_text": "705.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-18",
+   "value_text": "705.83"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-19",
+   "value_text": "705.5"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-22",
+   "value_text": "705.72"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-23",
+   "value_text": "705.23"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-24",
+   "value_text": "704.71"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-25",
+   "value_text": "703.92"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-26",
+   "value_text": "703.58"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-29",
+   "value_text": "703.31"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-30",
+   "value_text": "703.48"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2025-12-31",
+   "value_text": "702.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-05",
+   "value_text": "702.3"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-06",
+   "value_text": "701.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-07",
+   "value_text": "701.87"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-08",
+   "value_text": "701.97"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-09",
+   "value_text": "701.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-12",
+   "value_text": "701.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-13",
+   "value_text": "701.03"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-14",
+   "value_text": "701.2"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-15",
+   "value_text": "700.64"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-16",
+   "value_text": "700.78"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-19",
+   "value_text": "700.51"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-20",
+   "value_text": "700.06"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-21",
+   "value_text": "700.14"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-22",
+   "value_text": "700.19"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-23",
+   "value_text": "699.29"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-26",
+   "value_text": "698.43"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-27",
+   "value_text": "698.58"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-28",
+   "value_text": "697.55"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-29",
+   "value_text": "697.71"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-01-30",
+   "value_text": "696.78"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-02",
+   "value_text": "696.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-03",
+   "value_text": "696.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-04",
+   "value_text": "695.33"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-05",
+   "value_text": "695.7"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-06",
+   "value_text": "695.9"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-09",
+   "value_text": "695.23"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-10",
+   "value_text": "694.58"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-11",
+   "value_text": "694.38"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-12",
+   "value_text": "694.57"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-13",
+   "value_text": "693.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-24",
+   "value_text": "694.14"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-25",
+   "value_text": "693.21"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-26",
+   "value_text": "692.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-02-27",
+   "value_text": "692.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-02",
+   "value_text": "692.36"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-03",
+   "value_text": "690.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-04",
+   "value_text": "691.24"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-05",
+   "value_text": "690.07"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-06",
+   "value_text": "690.25"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-09",
+   "value_text": "691.58"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-10",
+   "value_text": "689.82"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-11",
+   "value_text": "689.17"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-12",
+   "value_text": "689.59"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-13",
+   "value_text": "690.07"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-16",
+   "value_text": "690.57"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-17",
+   "value_text": "689.61"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-18",
+   "value_text": "689.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-19",
+   "value_text": "689.75"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-20",
+   "value_text": "688.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-23",
+   "value_text": "690.41"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-24",
+   "value_text": "689.43"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-25",
+   "value_text": "689.11"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-26",
+   "value_text": "690.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-27",
+   "value_text": "691.41"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-30",
+   "value_text": "692.23"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-03-31",
+   "value_text": "691.94"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-01",
+   "value_text": "690.25"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-02",
+   "value_text": "688.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-03",
+   "value_text": "689.29"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-07",
+   "value_text": "688.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-08",
+   "value_text": "686.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-09",
+   "value_text": "686.49"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-10",
+   "value_text": "686.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-13",
+   "value_text": "686.57"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-14",
+   "value_text": "685.93"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-15",
+   "value_text": "685.82"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-16",
+   "value_text": "686.16"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-17",
+   "value_text": "686.22"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-20",
+   "value_text": "686.48"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-21",
+   "value_text": "685.94"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-22",
+   "value_text": "686.35"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-23",
+   "value_text": "686.5"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-24",
+   "value_text": "686.74"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-27",
+   "value_text": "685.79"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-28",
+   "value_text": "685.89"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-29",
+   "value_text": "686.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-04-30",
+   "value_text": "686.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-06",
+   "value_text": "685.62"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-07",
+   "value_text": "684.87"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-08",
+   "value_text": "685.02"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-11",
+   "value_text": "684.67"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-12",
+   "value_text": "684.26"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-13",
+   "value_text": "684.31"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-14",
+   "value_text": "684.01"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-15",
+   "value_text": "684.15"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-18",
+   "value_text": "684.35"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-19",
+   "value_text": "683.75"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-20",
+   "value_text": "683.97"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-21",
+   "value_text": "683.49"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-22",
+   "value_text": "683.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-25",
+   "value_text": "683.18"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-26",
+   "value_text": "682.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-27",
+   "value_text": "682.91"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-28",
+   "value_text": "682.4"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-05-29",
+   "value_text": "681.76"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-01",
+   "value_text": "681.67"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-02",
+   "value_text": "681.87"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-03",
+   "value_text": "681.84"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-04",
+   "value_text": "682.03"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-05",
+   "value_text": "681.57"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-08",
+   "value_text": "681.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-09",
+   "value_text": "681.47"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-10",
+   "value_text": "681.3"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-11",
+   "value_text": "681.5"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-12",
+   "value_text": "681.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-15",
+   "value_text": "680.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-16",
+   "value_text": "681.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-17",
+   "value_text": "680.96"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-18",
+   "value_text": "681.3"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-22",
+   "value_text": "681.5"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-23",
+   "value_text": "681.71"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-24",
+   "value_text": "681.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-25",
+   "value_text": "682.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-26",
+   "value_text": "681.66"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-29",
+   "value_text": "681.75"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-06-30",
+   "value_text": "681.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-01",
+   "value_text": "680.67"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-02",
+   "value_text": "680.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-03",
+   "value_text": "680.47"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-06",
+   "value_text": "680.66"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-07",
+   "value_text": "680.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-08",
+   "value_text": "680.77"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-09",
+   "value_text": "680.36"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-10",
+   "value_text": "679.89"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-13",
+   "value_text": "679.72"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-14",
+   "value_text": "679.9"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-15",
+   "value_text": "679.1"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-16",
+   "value_text": "679.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-17",
+   "value_text": "679.34"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-20",
+   "value_text": "679.48"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-21",
+   "value_text": "679.17"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-22",
+   "value_text": "679.33"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-23",
+   "value_text": "679.06"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-24",
+   "value_text": "679.39"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-27",
+   "value_text": "679.11"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-28",
+   "value_text": "679.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-29",
+   "value_text": "678.99"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-30",
+   "value_text": "678.92"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-07-31",
+   "value_text": "678.94"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-03",
+   "value_text": "678.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-04",
+   "value_text": "679.17"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-05",
+   "value_text": "678.89"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-06",
+   "value_text": "678.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-07",
+   "value_text": "679.04"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-10",
+   "value_text": "678.84"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-11",
+   "value_text": "679.0"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-12",
+   "value_text": "678.82"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-13",
+   "value_text": "678.88"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-14",
+   "value_text": "678.78"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-17",
+   "value_text": "678.73"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-18",
+   "value_text": "679.05"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-19",
+   "value_text": "678.54"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-20",
+   "value_text": "678.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-21",
+   "value_text": "678.17"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-24",
+   "value_text": "678.41"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-25",
+   "value_text": "678.52"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-26",
+   "value_text": "678.29"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-27",
+   "value_text": "678.4"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-28",
+   "value_text": "678.11"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-08-31",
+   "value_text": "678.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-01",
+   "value_text": "678.09"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-02",
+   "value_text": "678.29"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-03",
+   "value_text": "678.07"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-04",
+   "value_text": "677.87"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-07",
+   "value_text": "677.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-08",
+   "value_text": "678.04"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-09",
+   "value_text": "677.69"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-10",
+   "value_text": "677.66"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-11",
+   "value_text": "677.43"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-14",
+   "value_text": "676.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-15",
+   "value_text": "676.7"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-16",
+   "value_text": "676.28"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-17",
+   "value_text": "675.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-18",
+   "value_text": "675.21"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-21",
+   "value_text": "674.87"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-22",
+   "value_text": "674.59"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-23",
+   "value_text": "674.68"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-24",
+   "value_text": "674.89"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-28",
+   "value_text": "673.99"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-29",
+   "value_text": "674.11"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-09-30",
+   "value_text": "673.51"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-08",
+   "value_text": "673.67"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-09",
+   "value_text": "673.3"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-12",
+   "value_text": "673.13"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-13",
+   "value_text": "672.98"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-14",
+   "value_text": "672.49"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-15",
+   "value_text": "672.53"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-16",
+   "value_text": "672.2"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-19",
+   "value_text": "672.08"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-20",
+   "value_text": "672.0"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-21",
+   "value_text": "671.92"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-22",
+   "value_text": "671.95"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-23",
+   "value_text": "671.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-26",
+   "value_text": "671.62"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-27",
+   "value_text": "671.71"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-28",
+   "value_text": "671.65"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-29",
+   "value_text": "671.47"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-10-30",
+   "value_text": "671.38"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-11-02",
+   "value_text": "671.46"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-11-03",
+   "value_text": "671.5"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-11-04",
+   "value_text": "671.8"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-11-05",
+   "value_text": "671.56"
+  },
+  {
+   "series_id": "CN_USDCNY_CP_D",
+   "period_label": "2026-11-06",
+   "value_text": "671.68"
+  }
+ ]
+}

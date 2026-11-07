@@ -6,6 +6,10 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261105091000_issuers.sql';
+// INDUSTRY:BEGIN — 20261111090000 replaces the two industry tables' public-read policies and service_role writes; a replay of
+// the issuers migration re-creates them, so the replay below re-applies the industry migration in the same transaction.
+const INDUSTRY_MIGRATION='supabase/migrations/20261111090000_industry_research.sql';
+// INDUSTRY:END
 const TABLES=['issuers','issuer_securities','issuer_identifier_claims','industry_classifications','issuer_industry_memberships'];
 const PUBLIC_TABLES=TABLES.filter(t=>t!=='issuer_identifier_claims');
 const hex=(n:number)=>randomBytes(n).toString('hex').toUpperCase();
@@ -20,7 +24,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);
    return;
   }catch(e){
    await c.query('rollback').catch(()=>{});
@@ -41,6 +45,24 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await admin.query(`insert into public.issuers(issuer_id,canonical_name_en${cols}) values($1,'Test Co'${vals})`,[id,...params]);
   return id;
  };
+ // Plan 3 migration one guards issuers.status/merged_into (issuers_topology_guard): lifecycle fixtures
+ // switch the transaction-local setting on, as set_merge/set_dissolved do. The plan-1 triggers still run.
+ const topo=async(sql:string,params:unknown[]=[])=>{
+  const c=await admin.connect();
+  try{
+   await c.query('begin');
+   await c.query(`select set_config('entities.allow_topology_write','on',true)`);
+   await c.query(sql,params);
+   await c.query('commit');
+  }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ };
+ // Inserts born merged/dissolved are guarded too (plan 3 接口对齐记录 #7): same fixture, inside a topo transaction.
+ const newIssuerTopo=async(cols:string,vals:string,params:unknown[]=[])=>{
+  const id=randomUUID();issuers.push(id);
+  await topo(`insert into public.issuers(issuer_id,canonical_name_en${cols}) values($1,'Test Co'${vals})`,[id,...params]);
+  return id;
+ };
  // Tickers enter the cleanup list only after their own insert succeeded. US tickers use a ZZ
  // prefix no seed uses; an A-share code can collide with seed data, so it is inserted with
  // ON CONFLICT DO NOTHING and the caller skips that case (returns null) rather than adopting it.
@@ -52,7 +74,11 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   return t;
  };
  const usTicker=async()=>{const t=await newTicker('US');if(!t) throw new Error('ZZ test ticker collided');return t;};
- const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${extraCols}) values($1,$2,$3,$4,'test'${extraVals})`,[issuer,ticker,from,to,...params]);
+ // plan 3: a closed window must name how it was closed (issuer_securities_to_method_iff_to)
+ const sec=(issuer:string,ticker:string,from:string,to:string|null,extraCols='',extraVals='',params:unknown[]=[])=>admin.query(`insert into public.issuer_securities(issuer_id,ticker,valid_from,valid_to,source${to===null?'':',valid_to_method'}${extraCols}) values($1,$2,$3,$4,'test'${to===null?'':",'unrecorded'"}${extraVals})`,[issuer,ticker,from,to,...params]);
+ // INDUSTRY:BEGIN — membership rows need an ingest batch since 20261111090000
+ const newBatch=async()=>{const id=randomUUID();await admin.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'issuers-test','issuers.test')`,[id]);return id;};
+ // INDUSTRY:END
  const newVersion=async()=>{
   const version='t'+hex(4);
   await admin.query(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('custom',$1,'10',1,'Energy')`,[version]);
@@ -66,26 +92,41 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  afterAll(async()=>{
   if(admin){
    // Child and link FKs are RESTRICT: children first, merged issuers before their targets.
-   await admin.query(`delete from public.issuer_industry_memberships where issuer_id=any($1::uuid[])`,[issuers]);
+   // INDUSTRY:BEGIN — removed here: `delete from public.issuer_industry_memberships where issuer_id=any($1::uuid[])` (append-only since 20261111090000/20261111091000; see the guarded deletes below)
+   // INDUSTRY:END
    await admin.query(`delete from public.issuer_identifier_claims where issuer_id=any($1::uuid[])`,[issuers]);
    await admin.query(`delete from public.issuer_securities where issuer_id=any($1::uuid[])`,[issuers]);
-   await admin.query(`delete from public.issuers where issuer_id=any($1::uuid[]) and merged_into is not null`,[issuers]);
-   await admin.query(`delete from public.issuers where issuer_id=any($1::uuid[])`,[issuers]);
-   await admin.query(`delete from public.industry_classifications where scheme='custom' and version=any($1)`,[classifications]);
+   // INDUSTRY:BEGIN — issuer_industry_memberships is append-only since 20261111090000/20261111091000 (delete refused): issuers and
+   // classification versions that carry membership rows stay behind (test:db uses a fresh database per run).
+   const free=`not exists (select 1 from public.issuer_industry_memberships m where m.issuer_id = i.issuer_id)`;
+   await admin.query(`delete from public.issuers i where issuer_id=any($1::uuid[]) and merged_into is not null and ${free}`,[issuers]);
+   await admin.query(`delete from public.issuers i where issuer_id=any($1::uuid[]) and ${free}`,[issuers]);
+   await admin.query(`delete from public.industry_classifications c where scheme='custom' and version=any($1) and not exists (select 1 from public.issuer_industry_memberships m where m.scheme=c.scheme and m.version=c.version)`,[classifications]);
+   // INDUSTRY:END
    await admin.query(`delete from public.stocks_universe where ticker=any($1)`,[tickers]);
    await admin.end();
   }
  },30000);
 
- it('creates five tables with RLS, public-read policies on four, none on claims, link columns, and replays',async()=>{
+ // INDUSTRY:BEGIN — title changed (was 'public-read policies on four'): licence-gated reads on the industry tables (20261111090000)
+ it('creates five tables with RLS, public-read policies on issuers and securities, licensed-read policies on the industry tables, none on claims, link columns, and replays',async()=>{
   const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
   expect(rows.map((r:{relname:string})=>r.relname).sort()).toEqual([...TABLES].sort());
   for(const r of rows) expect(r.relrowsecurity).toBe(true);
-  const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename`,[TABLES])).rows;
-  expect(policies).toEqual([...PUBLIC_TABLES].sort().map(t=>({tablename:t,policyname:`${t} public read`})));
+  // INDUSTRY:END
+  // INDUSTRY:BEGIN — ordered by policyname too; 20261111090000: licence-gated reads and service_role policies on the two industry tables
+  const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename,policyname`,[TABLES])).rows;
+  expect(policies).toEqual([
+   {tablename:'industry_classifications',policyname:'industry_classifications licensed read'},{tablename:'industry_classifications',policyname:'industry_classifications service insert'},
+   {tablename:'industry_classifications',policyname:'industry_classifications service read'},{tablename:'industry_classifications',policyname:'industry_classifications service update'},
+   {tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships licensed read'},{tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships service read'},
+   {tablename:'issuer_securities',policyname:'issuer_securities public read'},{tablename:'issuers',policyname:'issuers public read'}]);
+  // INDUSTRY:END
   const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
   expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+  // INDUSTRY:BEGIN — replaces `await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();`: one transaction; issuers is locked first so a concurrent apply_industry_memberships (issuers row → memberships) waits instead of deadlocking
+  await expect(replayMigration(admin,'lock table public.issuers in access exclusive mode;\n'+readFileSync(MIGRATION,'utf8')+'\n;\n'+readFileSync(INDUSTRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  // INDUSTRY:END
  },60000);
 
  it('enforces named issuer constraints',async()=>{
@@ -94,11 +135,11 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await expect(newIssuer(',cik',',$2',[cik])).rejects.toThrow(/issuers_cik_idx/);
   await expect(newIssuer(',cik',',$2',['0123'])).rejects.toThrow(/issuers_cik_check/);
   await expect(admin.query(`insert into public.issuers(issuer_id) values($1)`,[randomUUID()])).rejects.toThrow(/issuers_has_name/);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=issuer_id where issuer_id=$1`,[a])).rejects.toThrow(/issuers_merged_not_self/);
-  await expect(newIssuer(',status',`,'merged'`)).rejects.toThrow(/issuers_merged_iff_status/);
-  await expect(newIssuer(',merged_into',',$2',[a])).rejects.toThrow(/issuers_merged_iff_status/);
+  await expect(topo(`update public.issuers set status='merged',merged_into=issuer_id where issuer_id=$1`,[a])).rejects.toThrow(/issuers_merged_not_self/);
+  await expect(newIssuerTopo(',status',`,'merged'`)).rejects.toThrow(/issuers_merged_iff_status/);
+  await expect(newIssuerTopo(',merged_into',',$2',[a])).rejects.toThrow(/issuers_merged_iff_status/);
   await expect(newIssuer(',provenance',`,'[]'::jsonb`)).rejects.toThrow(/issuers_provenance_object/);
-  await newIssuer(',status,merged_into',`,'merged',$2`,[a]);
+  await newIssuerTopo(',status,merged_into',`,'merged',$2`,[a]);
  },30000);
 
  it('enforces security ownership windows, identifiers and foreign keys',async()=>{
@@ -130,14 +171,17 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await claim('cik',0.6,'Y');
   const claims=(await admin.query(`select id_type,value,status from public.issuer_identifier_claims where issuer_id=$1 order by id_type,status`,[a])).rows;
   expect(claims).toEqual([{id_type:'cik',value:'Y',status:'accepted'},{id_type:'cik',value:'Y',status:'pending'},{id_type:'cik',value:'Y',status:'rejected'},{id_type:'lei',value:'X',status:'pending'},{id_type:'lei',value:'X',status:'rejected'}]);
-  await expect(claim('ticker',0.5)).rejects.toThrow(/issuer_identifier_claims_id_type_check/);
+  await expect(claim('ric',0.5)).rejects.toThrow(/issuer_identifier_claims_id_type_check/);
   await expect(claim('cik',1.5)).rejects.toThrow(/issuer_identifier_claims_confidence_check/);
 
   const version=await newVersion();
   await expect(admin.query(`insert into public.industry_classifications(scheme,version,code,level) values('custom',$1,'11',1)`,[version])).rejects.toThrow(/industry_classifications_has_name/);
-  const mem=(code:string)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,valid_from,source) values($1,'custom',$2,$3,'2020-01-01','test')`,[a,version,code]);
+  // INDUSTRY:BEGIN — 20261111090000 adds level, available_date and batch_id (not null) and a (scheme, version, code, level) FK
+  const batch=await newBatch();
+  const mem=(code:string,level=1)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,level,valid_from,available_date,source,batch_id) values($1,'custom',$2,$3,$4,'2020-01-01','2020-01-01','test',$5)`,[a,version,code,level,batch]);
   await mem('10');
-  await expect(mem('99')).rejects.toThrow(/issuer_industry_memberships_scheme_version_code_fkey/);
+  await expect(mem('99',4)).rejects.toThrow(/issuer_industry_memberships_(scheme_version_code|classification_level)_fkey/);   // another level: the per-level exclusion (checked first) cannot fire
+  // INDUSTRY:END
  },30000);
 
  it('rejects overlapping ownership windows and accepts adjacent ones',async()=>{
@@ -174,12 +218,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  it('enforces the merge and ownership lifecycle',async()=>{
   const a=await newIssuer();
   const b=await newIssuer();
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,a])).rejects.toThrow(/merge_target_not_active/);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,a])).rejects.toThrow(/merge_target_not_active/);
   const c=await newIssuer();
-  await expect(newIssuer(',status,merged_into',`,'merged',$2`,[a])).rejects.toThrow(/merge_target_not_active/);
-  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[c]);
-  await expect(newIssuer(',status,merged_into',`,'merged',$2`,[c])).rejects.toThrow(/merge_target_not_active/);
+  await expect(newIssuerTopo(',status,merged_into',`,'merged',$2`,[a])).rejects.toThrow(/merge_target_not_active/);
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[c]);
+  await expect(newIssuerTopo(',status,merged_into',`,'merged',$2`,[c])).rejects.toThrow(/merge_target_not_active/);
   const t=await usTicker();
   await expect(sec(a,t,'2021-01-01',null)).rejects.toThrow(/issuer_not_active/);
   await sec(a,t,'2020-01-01','2021-01-01');
@@ -189,12 +233,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
 
  it('rejects merge chains: an issuer that others merged into cannot itself be merged or dissolved',async()=>{
   const a=await newIssuer(),b=await newIssuer(),c=await newIssuer();
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c])).rejects.toThrow(/merge_target_has_referrers/);
-  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[b])).rejects.toThrow(/merge_target_has_referrers/);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b]);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c])).rejects.toThrow(/merge_target_has_referrers/);
+  await expect(topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[b])).rejects.toThrow(/merge_target_has_referrers/);
   // Re-point the referrer first, then the former target can be retired.
-  await admin.query(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,c]);
-  await admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c]);
+  await topo(`update public.issuers set merged_into=$2 where issuer_id=$1`,[a,c]);
+  await topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[b,c]);
   const rows=(await admin.query(`select issuer_id,status,merged_into from public.issuers where issuer_id=any($1::uuid[]) order by issuer_id`,[[a,b,c]])).rows;
   expect(rows).toEqual([{issuer_id:a,status:'merged',merged_into:c},{issuer_id:b,status:'merged',merged_into:c},{issuer_id:c,status:'active',merged_into:null}].sort((x,y)=>x.issuer_id.localeCompare(y.issuer_id)));
  },30000);
@@ -203,10 +247,10 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   const a=await newIssuer(),b=await newIssuer();
   const t=await usTicker();
   await sec(a,t,'2020-01-01',null);
-  await expect(admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
-  await expect(admin.query(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
-  await admin.query(`update public.issuer_securities set valid_to='2024-01-01' where issuer_id=$1 and ticker=$2`,[a,t]);
-  await admin.query(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
+  await expect(topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[a])).rejects.toThrow(/open_securities_exist/);
+  await expect(topo(`update public.issuers set status='merged',merged_into=$2 where issuer_id=$1`,[a,b])).rejects.toThrow(/open_securities_exist/);
+  await admin.query(`update public.issuer_securities set valid_to='2024-01-01',valid_to_method='unrecorded' where issuer_id=$1 and ticker=$2`,[a,t]);
+  await topo(`update public.issuers set status='dissolved' where issuer_id=$1`,[a]);
   expect((await admin.query(`select status from public.issuers where issuer_id=$1`,[a])).rows[0].status).toBe('dissolved');
  },30000);
 
@@ -217,9 +261,12 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   await expect(cls('21','99')).rejects.toThrow(/industry_classifications_parent_fkey/);
   await cls('1010','10');
   const a=await newIssuer();
-  const mem=(from:string,to:string|null)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,valid_from,valid_to,source) values($1,'custom',$2,'1010',$3,$4,'test')`,[a,version,from,to]);
+  // INDUSTRY:BEGIN — new not-null columns; the all-status exclusion no_overlap is replaced by one_per_level over ok rows (20261111090000)
+  const batch=await newBatch();
+  const mem=(from:string,to:string|null)=>admin.query(`insert into public.issuer_industry_memberships(issuer_id,scheme,version,code,level,valid_from,valid_to,available_date,valid_to_available_date,source,batch_id) values($1,'custom',$2,'1010',2,$3,$4,$3,$4,'test',$5)`,[a,version,from,to,batch]);
   await mem('2020-01-01','2022-01-01');
-  await expect(mem('2021-01-01',null)).rejects.toThrow(/issuer_industry_memberships_no_overlap/);
+  await expect(mem('2021-01-01',null)).rejects.toThrow(/issuer_industry_memberships_one_per_level/);
+  // INDUSTRY:END
   await expect(mem('2023-01-01','2023-01-01')).rejects.toThrow(/issuer_industry_memberships_window/);
   await mem('2022-01-01',null);
  },30000);
@@ -235,10 +282,14 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
     expect({role,priv,allowed}).toEqual({role,priv,allowed:false});
    }
   }
+  // INDUSTRY:BEGIN — 20261111090000: service_role keeps insert/update on classifications and only select on memberships (writes go through functions)
+  const serviceWrites:Record<string,string[]>={issuers:['SELECT','INSERT','UPDATE','DELETE'],issuer_securities:['SELECT','INSERT','UPDATE','DELETE'],issuer_identifier_claims:['SELECT','INSERT','UPDATE','DELETE'],
+   industry_classifications:['SELECT','INSERT','UPDATE'],issuer_industry_memberships:['SELECT']};
   for(const t of TABLES) for(const priv of ['SELECT','INSERT','UPDATE','DELETE']){
    const ok=(await admin.query(`select has_table_privilege('service_role','public.'||$1,$2) ok`,[t,priv])).rows[0].ok;
-   expect({t,priv,ok}).toEqual({t,priv,ok:true});
+   expect({t,priv,ok}).toEqual({t,priv,ok:serviceWrites[t].includes(priv)});
   }
+  // INDUSTRY:END
   const seeded=await newIssuer();
   for(const role of ['anon','authenticated']){
    const c=await admin.connect();

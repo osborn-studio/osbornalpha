@@ -72,6 +72,22 @@
         "p2": 2,
         "p3": 0
       }
+    },
+    {
+      "n": 5,
+      "target_draft": 5,
+      "target_sha256": "266f7c571ac3a5b4bf2355bffa281fdee8071d14ff7e98ffa2c4cc1005180cca",
+      "target_git_ref": "394d5141e88b913d38b816ebf369efce4d9b320a",
+      "prompt_file": "00-prompt-round5.md",
+      "report_file": "06-codex-round5.md",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "verdict": "not ready for implementation planning—the R4 edits close their targeted defects, but the draft still conflicts with landed plan-2 evidence contracts and plan-3 storage ownership.",
+      "findings": {
+        "p1": 5,
+        "p2": 7,
+        "p3": 0
+      }
     }
   ],
   "dispositions": [
@@ -85,12 +101,7 @@
       ]
     }
   ],
-  "current_draft": {
-    "n": 5,
-    "sha256": "266f7c571ac3a5b4bf2355bffa281fdee8071d14ff7e98ffa2c4cc1005180cca",
-    "git_ref": "uncommitted",
-    "note": "draft 4 + R4-1/R4-2 implemented per Codex's prescribed fix (round 4), not re-audited"
-  },
+  "current_draft": 6,
   "open": {
     "owner": [
       "D1 thresholds",
@@ -114,5 +125,5 @@
     ],
     "blocking": []
   },
-  "final_verdict": "Round 4 (on draft 4): not ready for implementation planning — no new P1; two P2 (R4-1, R4-2) implemented in draft 5 per Codex's prescribed fixes, not re-audited; no open blockers recorded."
+  "final_verdict": "round 5 not ready; all 12 findings ACCEPTED and implemented in draft 6 (not re-audited; plan audit covers)"
 }

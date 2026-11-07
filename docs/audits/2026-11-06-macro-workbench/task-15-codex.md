@@ -1,0 +1,6 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T15-1 | P2 | src/lib/macro/correlation.ts:80 | Zero-variance detection fails for non-exact binary decimals. With 48 identical `x=0.1`, `y=0.2` values, mean-rounding leaves positive variance and produces `r=1`, publishing a false strong correlation instead of rejecting. | Detect constant inputs explicitly before calculating moments; add constant-decimal regression tests for pair and rolling modes. |
+| T15-2 | P2 | src/app/api/macro/analyses/route.ts:63 | Retries report the recomputed attempt’s outcome although the RPC returns the original run. A stored failed run can return 201 after new observations arrive; a stored successful run can return 400. Read failures also prevent retrieving an existing run. Violates §0.2 M22. | Look up `(user_id, request_id)` before reading inputs; return its stored outcome. After the RPC, read the returned run’s persisted status/error to handle concurrent retries correctly. |
+
+Verdict: fix P1/P2

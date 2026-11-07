@@ -1,0 +1,9 @@
+{
+ "accessionNumber": ["0000999001-14-000002", "0000999001-01-000001"],
+ "filingDate": ["2014-12-31", "2001-02-05"],
+ "reportDate": ["2014-09-30", ""],
+ "acceptanceDateTime": ["2014-12-31T15:00:00.000Z", "2001-02-05T12:00:00.000Z"],
+ "form": ["10-Q", "8-A12B"],
+ "primaryDocument": ["zz-q3.htm", "zz-8a.htm"],
+ "isInlineXBRL": [0, 0]
+}

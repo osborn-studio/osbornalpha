@@ -150,14 +150,18 @@
       "batches24h": "Batches (24 hours)",
       "notFreshNote": "stale {stale} · missing {missing} · error {error}",
       "batchesNote": "success {success} · partial {partial} · failed {failed}",
-      "openQuarantineNote": "Real count, not a truncated sample"
+      "openQuarantineNote": "Real count, not a truncated sample",
+      "overdue": "Overdue disclosures",
+      "overdueNote": "US {us} · CN {cn} · filed not ingested {filed} · upstream unknown {unknown}"
     },
     "sections": {
       "freshness": "Freshness",
       "batches": "Recent batches",
       "quarantine": "Quarantine queue",
       "reconciliations": "Failed reconciliations",
-      "reconciliationsLatest": "latest {shown} of {total}"
+      "reconciliationsLatest": "latest {shown} of {total}",
+      "calendar": "Disclosure calendar",
+      "claims": "Identifier claims"
     },
     "columns": {
       "dataset": "Dataset",
@@ -182,11 +186,123 @@
       "rightSource": "Right source",
       "rightValue": "Right value",
       "relDiff": "Rel. diff",
-      "tolerance": "Tolerance"
+      "tolerance": "Tolerance",
+      "pair": "Pair",
+      "kind": "Kind",
+      "outcome": "Outcome"
     },
     "notes": {
       "freshness": "Status is recomputed against the current time; ≠ marks a mismatch with the status stored at write time.",
-      "quarantine": "Accept/reject only changes the item's status and never writes the target table; if someone else already resolved it, you'll be told and the list refreshes."
+      "quarantine": "Accept/reject only changes the item's status and never writes the target table; if someone else already resolved it, you'll be told and the list refreshes.",
+      "calendar": "Overdue counts only rows with a known statutory deadline and an actual period end; estimated (52/53-week) and no-rule rows never count, nor does an unknown upstream.",
+      "claims": "Accepting writes the target row in the same transaction; evidence_only claims need the amendment form first; legacy claims are handled with SQL per the runbook."
+    },
+    "calendar": {
+      "market": "Market",
+      "allMarkets": "All markets",
+      "counts": "overdue {overdue} · filed not ingested {filed} · upstream unknown {unknown} · estimated {estimated} · no rule {noRule}",
+      "legend": "Statutory / estimated / no rule · overdue red, filed-not-ingested amber, upstream unknown grey italic",
+      "empty": "No periods need attention",
+      "estimatedMark": "(est.)",
+      "estimatedHint": "Estimated period end of a 52/53-week filer; replaced by the actual end once the filing arrives",
+      "noRuleTitle": "No-rule rows ({n})",
+      "noRuleEmpty": "No no-rule rows",
+      "columns": {
+        "issuer": "Ticker / issuer",
+        "market": "Market",
+        "reportKind": "Report",
+        "periodEnd": "Period end",
+        "deadlineState": "Deadline",
+        "dueDate": "Due date",
+        "dueRule": "Rule",
+        "expectedDate": "Scheduled",
+        "upstreamFiled": "Filed upstream",
+        "disclosureState": "Disclosure",
+        "overdueDays": "Days overdue"
+      },
+      "deadline": {
+        "statutory": "Statutory",
+        "estimated": "Estimated",
+        "no_rule": "No rule"
+      }
+    },
+    "claims": {
+      "latest": "Latest {shown} / {total}",
+      "empty": "No pending claims",
+      "sqlOnly": "SQL only",
+      "amendAccept": "Amend and accept",
+      "columns": {
+        "time": "Time",
+        "issuer": "Issuer",
+        "op": "Operation",
+        "idType": "Type",
+        "value": "Value",
+        "evidenceKind": "Evidence",
+        "source": "Source",
+        "detail": "Detail",
+        "actions": "Actions"
+      },
+      "amend": {
+        "op": "Rewrite as",
+        "security": "Security row",
+        "newValidFrom": "New valid from",
+        "validTo": "Valid to",
+        "method": "Method",
+        "submit": "Submit amendment",
+        "cancel": "Cancel",
+        "noSecurities": "This issuer has no security rows to amend"
+      },
+      "errors": {
+        "amend_security": "Choose a security row",
+        "amend_date": "Enter a valid date",
+        "amend_method": "Choose a method"
+      }
+    },
+    "reconciliation": {
+      "failed": "failed {n}",
+      "lastCycle": "last cycle {status}",
+      "noCycle": "no cycle"
+    },
+    "quarantine": {
+      "chooseCandidate": "Choose a candidate value",
+      "keepRow": "Choose the row to keep",
+      "adopt": "Accept and adopt candidate {n}",
+      "keep": "Accept with selected keep row",
+      "noRowsPromoted": "The item was closed, but no fact was restored (still referenced by another disputed item).",
+      "restore": {
+        "action": "Restore",
+        "passing": "The latest reconciliation passed; if inputs changed since, the server refuses and asks for a re-run.",
+        "not_passing": "The latest reconciliation did not pass; fix and re-run it first.",
+        "no_result": "No reconciliation result yet; re-run it first.",
+        "inputs_changed": "Inputs changed after the latest passing reconciliation; re-run it first.",
+        "unchecked": "Not checked (over the per-load check limit; narrow the filter and reload)"
+      },
+      "acknowledge": "Acknowledge only (no candidate adopted)"
+    },
+    "conflicts": {
+      "already_resolved": "This item was already handled; the list has been refreshed.",
+      "item_not_open": "This item was already handled; the list has been refreshed.",
+      "legacy_claim": "Legacy claims cannot be handled here; use SQL per the runbook.",
+      "amend_required": "An evidence_only claim needs an amendment before it can be accepted.",
+      "value_conflict": "The target value changed or conflicts; the claim stays pending.",
+      "ownership_conflict": "Security ownership conflict; the claim stays pending.",
+      "already_closed": "The target security row is already closed.",
+      "not_passing": "The latest reconciliation did not pass or its inputs changed; re-run it first.",
+      "reconcile_wiring_missing": "The server has no reconciliation input hash wired yet; restore is unavailable.",
+      "inputs_unavailable": "The current reconciliation inputs are unavailable (no latest result or the left fact is missing); re-run it first.",
+      "current_evidence_unavailable": "The pair's current right-side evidence (document or manifest entry) cannot be obtained right now; restore is unavailable.",
+      "read_truncated": "The read was truncated, so nothing was evaluated; try again later.",
+      "stale_evaluation": "The data just changed; refresh and try again.",
+      "generation_moved": "The mapping generation changed; refresh and try again.",
+      "conflict_exists": "A disputed or different current value exists for this key and date; adoption refused.",
+      "duplicate": "This candidate already exists; nothing to adopt.",
+      "replay_required": "The original snapshot must be replayed before this candidate can be adopted.",
+      "filing_not_found": "The filing the candidate points to was not found.",
+      "lineage_changed": "The lineage changed; refresh and try again.",
+      "scope_missing": "A lineage member has no sync scope row; contact an administrator.",
+      "unresolved": "More than one current value would remain; rolled back.",
+      "run_pending": "The related sync run has not finished; try again later.",
+      "issuer_not_active": "The issuer is not currently active; the claim stays pending."
     }
   }
 }

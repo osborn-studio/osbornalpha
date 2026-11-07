@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 行业详情</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 2080px; display: flex; flex-direction: column">
+  <div class="mtop"><a class="ibtn" href="M-List.dc.html" aria-label="返回 Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 5l-7 7 7 7"></path></svg></a><span class="brand">食品饮料</span><span class="hash">801120.SI</span></div>
+  <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px; flex: 1">
+    <div class="row"><span class="chip sq">申万 2021 · 一级</span><span class="chip"><span class="dot ok"></span>fresh</span><span class="tiny">运行 <span class="m">11-01</span></span></div>
+
+    <section class="card pad" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+      <div><div class="ml">成分</div><div class="m" style="font-size: 18px">124</div></div>
+      <div><div class="ml">未解析</div><div class="m" style="font-size: 18px">1</div></div>
+      <div><div class="ml">最近变动</div><div class="m" style="font-size: 14px">2026-09-29</div></div>
+      <a class="btn lg" href="#" style="grid-column: span 3; justify-content: center">查看成分 →</a>
+    </section>
+
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="h3">聚合序列 <span class="en">Aggregate series</span></div>
+      <button class="sel lg"><span class="k">指标</span>毛利率 Gross margin ▾</button>
+      <div class="seg lg" style="align-self: flex-start"><button class="on">年度</button><button>单季</button><button class="dis">TTM</button></div>
+      <div class="tiny">&lt; 640px 只显示表格，不渲染折线图（同一序列）。</div>
+      <table class="t">
+        <thead><tr><th>period_end</th><th class="n">毛利率</th><th class="n">覆盖</th></tr></thead>
+        <tbody>
+          <sc-for list="{{pts}}" as="p" hint-placeholder-count="10">
+            <tr><td class="m dim">{{p.pe}}</td><td class="n"><button class="src">{{p.v}}</button></td><td class="n m dim">{{p.cov}}</td></tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="row"><span class="h3">估值与分位</span><span class="chip ac">published</span></div>
+      <div class="row" style="align-items: baseline"><span class="ml">PE · 10-31</span><button class="src" style="font-size: 24px">24.8</button><span class="cap">分位 <button class="src">38.2%</button></span></div>
+      <div class="bar"><i style="width: 38.2%"></i></div>
+      <div class="tiny">n = <span class="m">572/574</span> · 未发布：outside <span class="m">1.4%</span> · no_official <span class="m">0.3%</span></div>
+      <table class="t dense">
+        <thead><tr><th>日期</th><th class="n">PE</th><th class="n">PB</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td class="m dim">10-31</td><td class="n"><button class="src">24.8</button></td><td class="n"><button class="src">4.91</button></td><td class="tiny">within</td></tr>
+          <tr><td class="m dim">10-24</td><td class="n"><button class="src">25.3</button></td><td class="n"><button class="src">5.02</button></td><td class="tiny">within</td></tr>
+          <tr><td class="m dim">10-17</td><td class="n wh" colspan="2">— 未发布</td><td class="tiny">outside</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 8px">
+      <div class="row"><span class="h3">判断</span><span class="chip sq">F4</span></div>
+      <div class="row"><span class="tiny">生命周期阶段</span><span class="chip" style="margin-left: auto">未校准 0/30</span></div>
+      <div style="font-size: 18px; font-weight: 600">成熟期 <span class="en">Mature</span></div>
+      <div class="cap">条件：2027 年报期营收 3 年 CAGR &gt; 8% 则不成立。</div>
+      <div class="tiny">industry_lifecycle@v1 · 截至 2026-11-01 · open</div>
+    </section>
+
+    <details class="card pad">
+      <summary class="h3" style="cursor: pointer; min-height: 32px; display: flex; align-items: center">方法与来源 <span class="en">Methods &amp; sources</span></summary>
+      <dl class="kv" style="grid-template-columns: 100px 1fr; margin-top: 10px"><dt>方法</dt><dd class="m">industry-agg/1.0</dd><dt>分类来源</dt><dd>申万宏源研究所 · 经 Tushare</dd><dt>代码</dt><dd class="m">3f9c2e1</dd></dl>
+    </details>
+  </div>
+  <nav class="tabbar" aria-label="底部导航">
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 11l8-7 8 7v9H4z"></path></svg>首页</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4v16M12 4v10M19 4v13"></path></svg>自选</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle></svg>雷达</a>
+    <a class="on" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h9l3 3v15H6z"></path><path d="M9 10h6M9 14h6"></path></svg>研究</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>设置</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":2080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var vals = [47.1, 47.9, 48.6, 49.2, 48.4, 47.6, 46.2, 46.9, 47.8, 47.3];
+    var pts = vals.map(function (v, i) { return { pe: (2016 + i) + "-12-31", v: v.toFixed(1) + "%", cov: (0.93 + (i % 3) * 0.02).toFixed(2) }; }).reverse();
+    return { pts: pts };
+  }
+}
+</script>
+</body>
+</html>

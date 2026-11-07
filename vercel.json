@@ -31,6 +31,34 @@
       "schedule": "5 */4 * * *"
     },
     {
+      "path": "/api/cron/facts-sync?market=CN",
+      "schedule": "35 */4 * * *"
+    },
+    {
+      "path": "/api/cron/reconcile?pair=us.companyfacts_vs_ixbrl",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/reconcile?pair=facts.lineage_same_day",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/filing-calendar?market=US",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/filing-calendar?market=CN",
+      "schedule": "10 1 * * *"
+    },
+    {
+      "path": "/api/cron/industry-sync?job=memberships-sic&limit=200",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/macro-sync",
+      "schedule": "30 5 * * *"
+    },
+    {
       "path": "/api/cron/judgments-settle",
       "schedule": "0 3 * * *"
     }

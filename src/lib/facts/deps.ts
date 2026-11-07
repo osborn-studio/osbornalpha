@@ -1,8 +1,8 @@
 // src/lib/facts/deps.ts
 // Production wiring of SyncDeps (spec §6.1) shared by /api/cron/facts-sync and scripts/facts/*:
-// Supabase FactsDb / TableClient / snapshot store, the two adapters (fetch + parse), and the cninfo
-// linker, which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass
-// (it hands over the FilingRow only). code_version = VERCEL_GIT_COMMIT_SHA (40 hex), else — scripts
+// Supabase FactsDb / TableClient / snapshot store, the two adapters (fetch + parse), the cninfo
+// linker (which needs the issuer's A-share ts_code and cninfo_org_id that sync.ts does not pass:
+// it hands over the FilingRow only), and step 9b (SEC acceptance times through sec-submissions.ts). code_version = VERCEL_GIT_COMMIT_SHA (40 hex), else — scripts
 // only — `git rev-parse HEAD` with "-dirty" when the tree has changes (sync.ts::resolveCodeVersion,
 // which this delegates to); null means "refuse to apply".
 import {getAdminSupabase} from '../supabase/admin';
@@ -11,6 +11,10 @@ import type {TableClient} from '../db/table-client';
 import {isCurrentSecurity} from '../entities/resolve';
 import {supabaseFactsDb} from './db';
 import {supabaseSnapshotStore} from './snapshot-store';
+import {supabaseRawStore} from '../dq/raw-store';
+import {fetchSubmissions} from '../entities/identifiers/sec-submissions';
+import {DATE_MISMATCH_PAIR,enrichAcceptance} from './providers/sec-acceptance';
+import {recordReconciliation} from '../dq/reconcile/record';
 import {fetchCompanyFacts,parseCompanyFacts} from './providers/edgar-companyfacts';
 import {coverageSummary,fetchTushareStatements,parseTushareStatements} from './providers/tushare-statements';
 import {linkCninfoFiling} from './providers/cninfo-link';
@@ -32,16 +36,21 @@ async function cnIssuer(tables:TableClient,issuerId:string,today:string):Promise
  const c=chooseCnTicker(current);
  return {ts_code:'ticker' in c?c.ticker:'',cninfo_org_id:typeof issuer?.cninfo_org_id==='string'?issuer.cninfo_org_id:null};
 }
-/** A type-1 filing is "corrected" when a type-5 filing exists for the same ts_code:end_date (spec §6.3: match 更正 titles). */
-const correctedKeys=(filings:FilingRow[])=>new Set(filings.filter(f=>f.source_ref.split(':')[2]==='5').map(f=>f.source_ref.split(':').slice(0,2).join(':')));
+/** A type-1 filing is "corrected" (spec §6.3: match 更正 titles) iff another type-1 filing exists for the same ts_code:end_date with an EARLIER date segment: the earliest rt1 date is the original publication. Real Tushare keeps the original rt1 row after a correction and adds a later-dated one, so the rt5 rows are not consulted. A malformed date segment is never corrected and never counts as earlier. */
+const DATE8=/^\d{8}$/;
+function correctedRefs(filings:FilingRow[]):(ref:string)=>boolean{
+ const earliest=new Map<string,string>();
+ for(const f of filings){const [code,end,rt,date]=f.source_ref.split(':');if(rt!=='1'||!DATE8.test(date??''))continue;const k=`${code}:${end}`;const cur=earliest.get(k);if(cur===undefined||date<cur)earliest.set(k,date);}
+ return ref=>{const [code,end,rt,date]=ref.split(':');if(rt!=='1'||!DATE8.test(date??''))return false;const first=earliest.get(`${code}:${end}`);return first!==undefined&&date>first;};
+}
 
 export interface LinkerOptions{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;today?:string}
 export function cninfoLinker(tables:TableClient,db:Pick<FactsDb,'filingsOfIssuer'>,opts:LinkerOptions={}):NonNullable<SyncDeps['linkCn']>{
- const cache=new Map<string,Promise<{issuer:LinkIssuer;corrected:Set<string>}>>();
+ const cache=new Map<string,Promise<{issuer:LinkIssuer;corrected:(ref:string)=>boolean}>>();
  const context=(issuerId:string)=>{
   let p=cache.get(issuerId);
   if(!p){
-   p=Promise.all([cnIssuer(tables,issuerId,opts.today??new Date().toISOString().slice(0,10)),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedKeys(filings)}));
+   p=Promise.all([cnIssuer(tables,issuerId,opts.today??new Date().toISOString().slice(0,10)),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedRefs(filings)}));
    cache.set(issuerId,p);
    p.catch(()=>{if(cache.get(issuerId)===p)cache.delete(issuerId);});   // a failed lookup is not cached
   }
@@ -50,8 +59,7 @@ export function cninfoLinker(tables:TableClient,db:Pick<FactsDb,'filingsOfIssuer
  return async(filing:FilingRow,b:Budget)=>{
   const {issuer,corrected}=await context(filing.issuer_id);
   if(!/^\d{6}\.(SH|SZ)$/.test(issuer.ts_code))return 'unlinkable';   // no usable A-share listing (none, ambiguous, BJ): no request is possible, no attempt consumed
-  const key=filing.source_ref.split(':').slice(0,2).join(':');
-  return linkCninfoFiling({form_type:filing.form_type,fiscal_year:filing.fiscal_year,period_end:filing.period_end,available_date:filing.available_date,corrected:filing.source_ref.split(':')[2]==='1'&&corrected.has(key)},issuer,{budget:b,fetch:opts.fetch,userAgent:opts.userAgent,minIntervalMs:opts.minIntervalMs});
+  return linkCninfoFiling({form_type:filing.form_type,fiscal_year:filing.fiscal_year,period_end:filing.period_end,available_date:filing.available_date,corrected:corrected(filing.source_ref)},issuer,{budget:b,fetch:opts.fetch,userAgent:opts.userAgent,minIntervalMs:opts.minIntervalMs});
  };
 }
 
@@ -68,6 +76,10 @@ export function productionSyncDeps(opts:ProductionDepsOptions):SyncDeps{
   parseCn:(snapshots,o)=>parseTushareStatements(snapshots,{sinceYear:o.sinceYear}),
   coverageCn:coverageSummary,   // → coverage_summary in the batch receipt
   linkCn:cninfoLinker(tables,db),
+  // 9b: one submissions fetch per published US issuer, pages back to the earliest pending filing (coverFrom, plan audit R3);
+  // raw bytes into reconcile-raw; date mismatches recorded out of cycle (record.ts).
+  enrichAcceptance:(issuer,cik10,b)=>enrichAcceptance({db,submissions:(c,bb,coverFrom)=>fetchSubmissions(c,{fetch,userAgent:process.env.EDGAR_USER_AGENT,raw:supabaseRawStore(sb),budget:bb},{coverFrom}),
+   recordDateMismatch:async r=>{await recordReconciliation(tables,{...r,pair:DATE_MISMATCH_PAIR,batch_id:null});}},{issuerId:issuer,cik10},b),
   now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion,
  };
 }

@@ -21,16 +21,16 @@ import type {NumberSchema} from '../json-numbers';
 import {normalizeUnit,unitKindOf} from '../units';
 import {classifyDuration,daysBetween as daysBetweenOrNull,isDate} from '../classify';
 import {DEFAULT_USER_AGENT} from '../../research/ingest/collectors/shared';
-import {createPacer,nearestDuration,PacerError,ProviderError,rawHashOf,sleep,snapshotOf} from './shared';
+import {nearestDuration,PacerError,ProviderError,rawHashOf,SEC_MIN_INTERVAL_MS,secPacer,sleep,snapshotOf} from './shared';
 
 export const companyFactsUrl=(cik10:string)=>`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik10}.json`;
 export const MAX_SNAPSHOT_BYTES=50*1024*1024;
-export const SEC_MIN_INTERVAL_MS=120;
+export {SEC_MIN_INTERVAL_MS};
 /** Same schema as json-numbers.ts: cik/fy control integers, val decimal text. */
 export const COMPANYFACTS_SCHEMA:NumberSchema=EDGAR_NUMBER_SCHEMA;
 const BACKOFF_MS=[1000,2000,4000,8000];
 const RESERVE_MS=20_000;
-const pacer=createPacer(SEC_MIN_INTERVAL_MS);   // module-level: one pace across every issuer and every concurrent caller of this process
+const pacer=secPacer;   // process-wide (shared with SEC submissions): one pace across every SEC caller
 /** Test hook: forget the pacing state (tests use fake clocks). */
 export const resetSecPacing=()=>pacer.reset();
 

@@ -25,7 +25,7 @@ describe.skipIf(!enabled)('pgJudgmentsDb on real PostgreSQL',()=>{
   const pool=new Pool({connectionString:adminUrl(),max:8});const tables=pgTableClient(pool);
   return {db:pgJudgmentsDb(pool),tables,
    batch:async()=>(await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.ztest'})).batchId,
-   issuer:async(o={})=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) values($1,'ZZ Judgments Contract',$2,$3)`,[id,o.status??'active',o.mergedInto??null]);return id;},
+   issuer:async(o={})=>{const id=randomUUID();/* plan 3 issuers_topology_guard: non-active issuers need the transaction-local switch */await pool.query(`with s as (select set_config('entities.allow_topology_write','on',true)) insert into public.issuers(issuer_id,canonical_name_en,status,merged_into) select $1,'ZZ Judgments Contract',$2,$3 from s`,[id,o.status??'active',o.mergedInto??null]);return id;},
    industry:async()=>{const code=randomUUID().slice(0,8);await pool.query(`insert into public.industry_classifications(scheme,version,code,level,name_en) values('custom','ztest',$1,1,'ZZ test industry')`,[code]);return `custom:ztest:${code}`;},
    adminUser:async()=>{const id=randomUUID();await pool.query(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@judgments.test`]);return id;},
    exclusiveClaims:fn=>withClaimLock(pool,fn),

@@ -1,0 +1,83 @@
+[
+ {
+  "code": "CPIAUCSL",
+  "series_id": "US_CPI_INDEX",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:55.450Z",
+  "sha256": "45eea839a280f54fd387c118467f8b6472ef989872a1f6981e6a3e510f4dbef6",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DCOILWTICO",
+  "series_id": "US_WTI_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILWTICO&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:56.692Z",
+  "sha256": "7fd2e91ed73c4bbfa68544799b4cf2b306cc3edf234411f8c5ad3241b9f9e2c4",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DFEDTARL",
+  "series_id": "US_FED_TARGET_LOWER_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARL&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:53.435Z",
+  "sha256": "4b6feea0953d66feb5b0d5e8fd6638cad95edde8c467fcdb34bf8b3565428e04",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DFEDTARU",
+  "series_id": "US_FED_TARGET_UPPER_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARU&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:52.978Z",
+  "sha256": "8ecbf2e612cee6eaa37913a13a5f66edd01ae984ac20b796b81b0008676c14dd",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DFF",
+  "series_id": "US_FEDFUNDS_EFF_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFF&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:52.380Z",
+  "sha256": "179ec1bc0fc543395ba69b0e82c4518950c86ce3ff26d27b971c422143a60b61",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DGS10",
+  "series_id": "US_DGS10_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:54.462Z",
+  "sha256": "e640fb3ee08e4ccb4e2db0279ec1b45eb782d386d7d7462d3f817182b9879764",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "DTWEXBGS",
+  "series_id": "US_DTWEXBGS_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:54.970Z",
+  "sha256": "dd418d7cd2e5f259918a89951521691412bf3b1959f9d4363101b635a7c04bf6",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "PPIFIS",
+  "series_id": "US_PPI_FD_INDEX",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=PPIFIS&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:56.213Z",
+  "sha256": "2ff0918172ba974fe96e85451ebe930da3a931859a2e547b5aab91d8914bc5db",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "UNRATE",
+  "series_id": "US_UNRATE",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T02:37:55.708Z",
+  "sha256": "e2629d9953d8ae24a5d41d4d1f33b606bb10d2a01400e2ac34945b3e871f9e0d",
+  "content_type": "application/csv",
+  "http_status": 200
+ }
+]
