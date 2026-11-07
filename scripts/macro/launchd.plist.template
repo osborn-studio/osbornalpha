@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- scripts/macro/launchd.plist.template — daily China macro collection on the Mac (spec §4.4: 05:00 UTC).
+     Install (docs/runbooks/macro-sync.md): replace {{REPO}} (absolute worktree/checkout path), {{HOUR}}/{{MINUTE}}
+     (05:00 UTC in the Mac's local time, e.g. 13 / 0 in Asia/Shanghai), {{MACRO_INGEST_URL}} (https://…/api/macro/ingest)
+     and {{HOME}}; store the secret in the login keychain once:
+       security add-generic-password -a "$USER" -s osbornalpha-macro-ingest -w '<MACRO_INGEST_SECRET>'
+     then copy to ~/Library/LaunchAgents/studio.osborn.alpha.macro-collect.plist and
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/studio.osborn.alpha.macro-collect.plist
+     The secret is read from the keychain at run time and never written to this file. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>studio.osborn.alpha.macro-collect</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-c</string>
+    <string>export MACRO_INGEST_SECRET="$(security find-generic-password -s osbornalpha-macro-ingest -w)" &amp;&amp; exec "{{REPO}}/scripts/macro/.venv/bin/python" "{{REPO}}/scripts/macro/collect.py" --mode daily</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MACRO_INGEST_URL</key>
+    <string>{{MACRO_INGEST_URL}}</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>{{HOUR}}</integer>
+    <key>Minute</key>
+    <integer>{{MINUTE}}</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/Library/Logs/osbornalpha-macro-collect.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/Library/Logs/osbornalpha-macro-collect.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
