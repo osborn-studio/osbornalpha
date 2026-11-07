@@ -102,6 +102,26 @@ describe('boundaries',()=>{
   expect(at(v('event_day'),0,'CN_CGB10Y')).toEqual({status:'missing',reason:'out_of_coverage'});
   expect(at(v('event_day',{reads:[{series_id:'US_DGS10_D',purpose:'col',state:'truncated'}]}),0,'US_UST10Y')).toEqual({status:'missing',reason:'history_truncated'});
  });
+ it('preserves stable duplicate endpoint selection and rebuilds projections on each invocation',()=>{
+  const original=dailyIn('US_DGS10_D',[['2022-03-16','2'],['2022-03-17','3'],['2023-07-27','4'],['2023-08-01','5']]);
+  const duplicates=original.slice(0,3).map(o=>({...o,observation_id:`duplicate:${o.observation_id}`,value_text:'6'}));
+  const inputs=[...original,...duplicates];
+  const event=manifest({events:HIKES,inputs});
+  const dailyCell=at(buildCycleTable(event),0,'US_UST10Y');
+  expect(dailyCell).toMatchObject({status:'ok',from:{observation_id:duplicates[0].observation_id},to:{observation_id:duplicates[2].observation_id}});
+  const first=manifest({events:HIKES,inputs,boundary:'first_trading_day'});
+  expect(at(buildCycleTable(first),0,'US_UST10Y')).toMatchObject({status:'ok',from:{observation_id:original[1].observation_id},to:{observation_id:original[2].observation_id}});
+  duplicates[0].value_text='7';
+  expect(at(buildCycleTable(event),0,'US_UST10Y')).toMatchObject({status:'ok',from:{value_text:'7'},change_text:'-100'});
+  expect(dailyCell).toMatchObject({status:'ok',from:{value_text:'6'},change_text:'0'});
+ });
+ it('preserves monthly Map last-wins selection for duplicate months',()=>{
+  const original=monthIn('US_DGS10',[['2022-02','1.1234567890123456789'],['2023-07','4']]);
+  const duplicate={...original[0],observation_id:'monthly-duplicate',value_text:'2.1234567890123456789'};
+  const stored=manifest({events:HIKES,inputs:[...original,duplicate],boundary:'month_end'});
+  expect(at(buildCycleTable(stored),0,'US_UST10Y')).toMatchObject({status:'ok',from:{observation_id:'monthly-duplicate'},change_text:'187.65432109876543211'});
+  expect(stored.body.inputs).toEqual([...original,duplicate]);
+ });
  it('the view carries versions, columns in config order and the manifest gaps',()=>{
   const gap:EventGap={kind:'transition_unverified',reason:'x',near:'2008-12-16'};
   const t=v('event_day',{gaps:[gap]});
