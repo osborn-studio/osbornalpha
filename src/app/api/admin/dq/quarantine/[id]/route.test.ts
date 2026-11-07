@@ -13,6 +13,10 @@ vi.mock('@/lib/dq/quarantine', () => ({ resolveQuarantine: mocks.resolve }));
 vi.mock('@/lib/dq/facts-resolver', () => ({ resolveFactsItem: mocks.resolveFacts, markAudited: mocks.markAudited }));
 vi.mock('@/lib/dq/reconcile/deps', () => ({ restoreInputsHashNow: () => mocks.hashNow }));
 vi.mock('@/lib/facts/db', () => ({ supabaseFactsDb: () => ({ facts: 'db' }) }));
+// FOREIGN ↓ broker research quarantine branch
+const brokerMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
+vi.mock('@/lib/broker-research/deps', () => ({ coreDeps: () => ({ db: { quarantineResolve: brokerMocks.resolve, findDocumentBySha: async () => null, reportByDocument: async () => null }, storage: {}, tables: {}, codeVersion: 't', now: () => new Date() }) }));
+// FOREIGN ↑
 
 import { POST } from './route';
 
@@ -43,6 +47,22 @@ describe('POST /api/admin/dq/quarantine/[id]', () => {
   });
   const facts = () => client.update('dq_quarantine', { id: ID }, { dataset: 'facts.us', table_name: 'financial_facts', reason_code: 'same_day_conflict', payload: { key: { issuer_id: 'i', market: 'US' }, fact_ids: [FACT_A, FACT_B] } });
 
+  // FOREIGN ↓ broker research quarantine resolution uses its own DB RPC
+  it('routes broker_research items to quarantineResolve', async () => {
+    await client.update('dq_quarantine', { id: ID }, { dataset: 'broker_research', table_name: 'broker_research_reports', natural_key: 'a:ticker_resolution:ZZBR', reason_code: 'unresolved_ticker' });
+    brokerMocks.resolve.mockResolvedValueOnce('already_resolved');
+    const res = await json({ status: 'resolved_accept', payload: { target_key: 'ZZBR', security_ticker: 'ZZBR' } });
+    expect(res.status).toBe(409);
+    expect(brokerMocks.resolve).toHaveBeenCalledWith(ID, 'resolved_accept', expect.any(String), { target_key: 'ZZBR', security_ticker: 'ZZBR' });
+    expect(mocks.resolve).not.toHaveBeenCalled();
+  });
+  it('maps hook_params_required to 400 for broker_research items', async () => {
+    await client.update('dq_quarantine', { id: ID }, { dataset: 'broker_research', natural_key: 'a:ticker_resolution:ZZBR' });
+    const { BrokerResearchDbError } = await import('@/lib/broker-research/types');
+    brokerMocks.resolve.mockRejectedValueOnce(new BrokerResearchDbError('hook_params_required', 'hook_params_required:security_ticker', 'security_ticker'));
+    expect((await json({ status: 'resolved_accept', payload: {} })).status).toBe(400);
+  });
+  // FOREIGN ↑
   it('resolves a same-origin JSON request', async () => {
     const res = await post({ 'content-type': 'application/json; charset=utf-8', origin: 'https://alpha.example' });
     expect(res.status).toBe(200);

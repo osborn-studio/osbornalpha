@@ -12,6 +12,11 @@ import { supabaseFactsDb } from '@/lib/facts/db';
 import { FactsDbError } from '@/lib/facts/types';
 import { audit, type ResearchSupabase } from '@/lib/research/store';
 import { getAdminSupabase } from '@/lib/supabase/admin';
+// FOREIGN ↓ broker research quarantine hook (spec §7.3)
+import {coreDeps as brokerCoreDeps} from '@/lib/broker-research/deps';
+import {resolveBrokerItem} from '@/lib/broker-research/quarantine-hook';
+import {BrokerResearchDbError} from '@/lib/broker-research/types';
+// FOREIGN ↑
 
 export const dynamic = 'force-dynamic';
 
@@ -133,6 +138,22 @@ export async function POST(request: Request, { params }: Ctx) {
         outcome = mapped.outcome;
         if (mapped.code !== undefined) extra = { error: mapped.code };
       }
+    // FOREIGN ↓ broker_research resolution is atomic in broker_quarantine_resolve
+    } else if (item.dataset === 'broker_research') {
+      const payload = (body as { payload?: unknown } | null)?.payload ?? {};
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return NextResponse.json({ error: 'invalid_payload' }, { status: 400 });
+      try {
+        const r = await resolveBrokerItem(brokerCoreDeps(), { id, natural_key: String(item.natural_key) },
+          { status: status as Resolution, by: user.id, payload: payload as Record<string, unknown> });
+        outcome = r.outcome;
+        extra = { rules: r.rules };
+      } catch (e) {
+        if (e instanceof BrokerResearchDbError && (e.code === 'published_immutable' || e.code === 'hook_params_required')) {
+          return NextResponse.json({ id, outcome: e.code }, { status: e.code === 'published_immutable' ? 409 : 400 });
+        }
+        throw e;
+      }
+    // FOREIGN ↑
     } else {
       outcome = await resolveQuarantine(client, id, { status: status as Resolution, resolvedBy: user.id });
     }
