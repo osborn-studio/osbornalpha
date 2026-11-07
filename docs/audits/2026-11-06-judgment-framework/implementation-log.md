@@ -143,3 +143,4 @@
 - S-07：`schemas.ts` 的三个 `validate*Params` 内含 `isIsoDate`（year ≥ 1000）检查：`base_date`、`period_start/end`、`reference_period`（`0000-xx` 被拒）。
 - 次要：`prior_zero` 仅当所有候选上年值为零；零上年与非零上年并存时，零值候选不进入 `ambiguous_fact` 候选列表。
 - 红测：先写测试，`npm test -- src/lib/judgments/resolvers` 9 failed / 39 passed；实现后 48 passed。typecheck 的 resolvers 范围内无错误，lint 干净。
+- Task 13 修订（Codex P-01/P-02）：回放先出冻结判定再做 reconcile（时钟与 reconcile 错误一律记为 unavailable，不改结论/退出码）；合成夹具固定内存时钟，--check 改为字节比较；夹具 judgment_id 不变，仅 registered_at/created_at 固定为 2026-11-06T00:00:00.000Z。synthetic_fact_metric@v1 注明仅用于回放。

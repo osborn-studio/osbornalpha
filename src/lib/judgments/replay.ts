@@ -52,10 +52,13 @@ export function checkInputHashes(row:Pick<JudgmentRow,'inputs'|'inputs_hash'>):H
 const same=(a:unknown,b:unknown)=>canonicalize(a??null)===canonicalize(b??null);
 async function reconcileInputs(row:JudgmentRow,deps:Omit<ReplayDeps,'db'>):Promise<ReconcileEntry[]>{
  const out:ReconcileEntry[]=[];
- const observedAt=await (deps.now??(()=>new Date().toISOString()))();
+ const noDb=row.inputs.map(x=>({kind:x.kind,ref:x.ref,label:inputLabel(x),status:'unavailable' as const,detail:'no_inputs_db'}));
+ if(!deps.inputsDb)return noDb;
+ let observedAt:string;
+ try{observedAt=await (deps.now??(()=>new Date().toISOString()))();}
+ catch(e){const detail=`clock_unavailable: ${e instanceof Error?e.message:String(e)}`;return noDb.map(x=>({...x,detail}));}
  for(const x of row.inputs){
   const base={kind:x.kind,ref:x.ref,label:inputLabel(x)};
-  if(!deps.inputsDb){out.push({...base,status:'unavailable',detail:'no_inputs_db'});continue;}
   try{
    const r=await rebuildAndCompare(x,deps.inputsDb,row.as_of,observedAt,deps.build);
    out.push(r.status==='ok'?{...base,status:'same'}:r.status==='input_not_public'?{...base,status:'unavailable',detail:r.code}:{...base,status:'changed',detail:r.field});
@@ -64,8 +67,17 @@ async function reconcileInputs(row:JudgmentRow,deps:Omit<ReplayDeps,'db'>):Promi
  return out;
 }
 export async function replayRow(row:JudgmentRow,deps:Omit<ReplayDeps,'db'>):Promise<ReplayReport>{
+ // The verdict comes from the frozen snapshots alone; reconcile runs afterwards and can only add its own entries.
+ const r=await replayFrozen(row,deps);
+ if(!deps.reconcile)return r;
+ let reconcile:ReconcileEntry[];
+ try{reconcile=await reconcileInputs(row,deps);}
+ catch(e){const detail=e instanceof Error?e.message:String(e);reconcile=row.inputs.map(x=>({kind:x.kind,ref:x.ref,label:inputLabel(x),status:'unavailable' as const,detail}));}
+ return {...r,reconcile};
+}
+async function replayFrozen(row:JudgmentRow,deps:Omit<ReplayDeps,'db'>):Promise<ReplayReport>{
  const base={judgment_id:row.judgment_id,methodology:{id:row.methodology_id,version:row.methodology_version},producer_kind:String(row.producer_kind)};
- const reconcile=deps.reconcile?await reconcileInputs(row,deps):null;
+ const reconcile=null;
  const hash_mismatches=checkInputHashes(row);
  if(hash_mismatches.length>0)return {...base,status:'input_hash_mismatch',hash_mismatches,diffs:[],reconcile};
  const diffs:ReplayDiff[]=[];

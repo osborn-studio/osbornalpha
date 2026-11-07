@@ -27,7 +27,8 @@ export async function aaplInputsDb(){
 export async function generateSyntheticReplayFixture(asOf=SYNTHETIC_AS_OF):Promise<ReplayFixture>{
  const inputsDb=await aaplInputsDb();
  const tables=await batchTables(SYNTHETIC_BATCH);
- const db=withSubjects(memoryJudgmentsDb({tables}));
+ const mem=memoryJudgmentsDb({tables});mem.setNow(FIXED_NOW);
+ const db=withSubjects(mem);
  await syncTestMethod(db,syntheticFactMetric);
  const r=await produce(syntheticFactMetric,[{subject:{type:'issuer',key:AAPL_ISSUER},asOf}],{db,inputsDb,tables,resolverOf:FIXTURE_RESOLVERS,batchId:SYNTHETIC_BATCH,codeVersion:'fixture0'});
  const item=r.items[0];

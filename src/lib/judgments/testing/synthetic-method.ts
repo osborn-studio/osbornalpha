@@ -5,7 +5,7 @@
 // frozen with its derivation rows by the fixed builder. Claim: probability p = params.p. Condition:
 // fact_metric "next quarter's TTM value > this TTM value", the key being this metric's key stepped one
 // quarter (stepQuarter). Horizon 1 fiscal quarter, target by defaultResolveTarget, first_observed.
-// Its numbers carry no meaning; it only exercises frozen-input replay of a fact-based judgment.
+// REPLAY-ONLY: its condition key / target are not meant to settle. Its numbers carry no meaning; it only exercises frozen-input replay of a fact-based judgment.
 import {FORMULA_VERSION} from '@/lib/facts/derive';
 import type {FactsMarket,Input,Methodology,MetricSnapshot,ProbabilityClaim} from '../types';
 import {buildOrAbstain} from '../inputs';

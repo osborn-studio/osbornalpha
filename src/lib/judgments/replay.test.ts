@@ -97,6 +97,21 @@ describe('replayJudgment on the synthetic fixture (spec §6.3)',()=>{
    expect(none.reconcile).toEqual([expect.objectContaining({status:'unavailable',detail:'no_inputs_db'})]);
    expect((await run(row)).reconcile).toBeNull();
   });
+  it('a failing clock never changes the verdict or exit code (reconcile runs after the frozen replay)',async()=>{
+   const boom=()=>{throw new Error('clock_down');};
+   const ok=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+   expect(ok.status).toBe('exact');expect(replayExitCode(ok)).toBe(0);
+   expect(ok.reconcile).toEqual([expect.objectContaining({status:'unavailable',detail:expect.stringContaining('clock_down')})]);
+   const t=tamper(row);
+   const bad=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+   expect(bad.status).toBe('input_hash_mismatch');expect(replayExitCode(bad)).toBe(2);
+   expect(bad.reconcile?.map(x=>x.status)).toEqual(['unavailable']);
+  });
+  it('does not read the clock when there is no inputsDb',async()=>{
+   let n=0;
+   const r=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,reconcile:true,now:()=>{n++;return 'x';}});
+   expect(n).toBe(0);expect(r.status).toBe('exact');
+  });
   it('rebuilds at the injected current server time, not at any stored instant',async()=>{
    const seen:string[]=[];
    const r=await replayJudgment(row.judgment_id,{db:{...fixtureJudgmentsDb([row]),serverTime:async()=>{seen.push('t');return '2030-01-01T00:00:00.000Z';}},registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true});
@@ -106,6 +121,7 @@ describe('replayJudgment on the synthetic fixture (spec §6.3)',()=>{
  it('the committed synthetic fixture is exactly what the generator produces today (normalised payload)',async()=>{
   const fresh=await generateSyntheticReplayFixture();
   expect(samePayload(fresh.judgment,row)).toBe(true);
+  expect(`${JSON.stringify(fresh,null,1)}\n`).toBe(readFileSync(SYNTHETIC_FIXTURE_PATH,'utf8'));
  },60_000);
  it('parseReplayFixture rejects malformed files',()=>{
   expect(()=>parseReplayFixture({...fx,fixture_version:'x'})).toThrow(/replay_fixture_invalid/);
