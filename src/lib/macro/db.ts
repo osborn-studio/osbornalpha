@@ -16,6 +16,8 @@ import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,Fi
 
 export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
+ /** Finalization receipts for candidate observations; null means the cutoff cannot be proven. service */
+ batchFinishedAt(batchIds:string[]):Promise<Record<string,string|null>>;
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
  upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
  /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
@@ -70,6 +72,8 @@ export interface MacroDb{
  /** Highest eligible version per period, ascending, paged to completion via RPC macro_eligible_history (throws truncated
   *  beyond maxRows periods). Publication and derivation read through this. service (第 4 稿 P1-5/P1-7) */
  eligibleHistory(seriesId:string,opts:{from?:string;to?:string;asOf?:string;includeBatch?:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
+ /** Point-in-time eligible vintages, with each candidate and ancestor batch finalized by cutoff. service. */
+ eligibleHistoryAsOf(seriesId:string,opts:{to:string;asOf:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
  /** Highest ok version per period, ascending period_end, paged to completion (throws truncated beyond maxRows). anon. */
  seriesHistory(seriesId:string,opts:{from?:string;to?:string;asOf?:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
  /** All ok versions of one series (revision history for the drawer). anon. */
@@ -108,6 +112,30 @@ export interface MacroDb{
 export const READ_PAGE=1000;      // PostgREST max_rows
 export const IN_CHUNK=200;        // ids per .in() filter (URL length)
 export const WRITE_CHUNK=2000;    // rows per macro_write_observations call when a caller packs writes itself (packWrites)
+export async function selectEligibleHistoryAsOf(candidates:ObservationRow[],cutoff:string,maxRows:number,
+ loadRows:(ids:string[])=>Promise<ObservationRow[]>,loadBatches:(ids:string[])=>Promise<Record<string,{status:string;finished_at:string|null}>>):Promise<ObservationRow[]>{
+ if(!Number.isInteger(maxRows)||maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+ const found=new Map(candidates.map(r=>[r.observation_id,r]));let pending=[...new Set(candidates.flatMap(r=>r.derived_from??[]))];
+ for(let depth=1;pending.length;depth++){
+  if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
+  pending=pending.filter(id=>!found.has(id));if(!pending.length)break;
+  const got=await loadRows(pending);for(const row of got)found.set(row.observation_id,row);
+  pending=[...new Set(got.flatMap(r=>r.derived_from??[]))];
+ }
+ const batches=await loadBatches([...new Set([...found.values()].map(r=>r.batch_id))]);const cutoffMs=Date.parse(cutoff);
+ const eligible=(r:ObservationRow,depth=0):boolean=>{
+  if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
+  if(r.status!=='ok'||Date.parse(r.available_at)>cutoffMs)return false;
+  const b=batches[r.batch_id];if(b&&!['success','partial'].includes(b.status))return false;
+  if(!b?.finished_at||!Number.isFinite(Date.parse(b.finished_at)))throw new Error('historical_cutoff_unsupported');
+  if(Date.parse(b.finished_at)>cutoffMs)return false;
+  return (r.derived_from??[]).every(id=>{const ancestor=found.get(id);return !!ancestor&&eligible(ancestor,depth+1);});
+ };
+ const byPeriod=new Map<string,ObservationRow>();
+ for(const r of [...candidates].sort((a,b)=>b.version-a.version))if(!byPeriod.has(r.period_end)&&eligible(r))byPeriod.set(r.period_end,r);
+ if(byPeriod.size>maxRows)throw new MacroDbError('truncated',`eligible_history_asof:>${maxRows}`);
+ return [...byPeriod.values()].sort((a,b)=>a.period_end.localeCompare(b.period_end));
+}
 const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','reject_only','fenced','quarantine_closed','truncated'] as const;
 interface PgErrorLike{message?:string;code?:string}
 export function toMacroDbError(e:PgErrorLike):MacroDbError{
@@ -205,7 +233,35 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    if(part.length<size)return out;
   }
  };
+ const asOfReads={
+  async candidates(id:string,o:{to:string;asOf:string},offset:number):Promise<ObservationRow[]>{
+   return (await rows(admin.from('macro_observations').select('*,batch:ingest_batches!inner(status,finished_at)')
+    .eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf)
+    .in('batch.status',['success','partial']).or(`finished_at.lte.${o.asOf},finished_at.is.null`,{referencedTable:'batch'})
+    .order('period_end',{ascending:false}).order('version',{ascending:false}).range(offset,offset+READ_PAGE-1))).map(observationFromRow);
+  },
+  async observations(ids:string[]):Promise<ObservationRow[]>{
+   const out:ObservationRow[]=[];
+   for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));
+   return out;
+  },
+  async receipts(ids:string[]):Promise<Record<string,{status:string;finished_at:string|null}>>{
+   const out:Record<string,{status:string;finished_at:string|null}>={};
+   for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))
+    out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};
+   return out;
+  },
+ };
  return {
+  async batchFinishedAt(batchIds){
+   const out:Record<string,string|null>={};
+   for(const id of [...new Set(batchIds)])out[id]=null;
+   for(let i=0;i<batchIds.length;i+=IN_CHUNK){
+    const got=await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',batchIds.slice(i,i+IN_CHUNK)));
+    for(const r of got)out[String(r.batch_id)]=(r.status==='success'||r.status==='partial')&&r.finished_at!=null?iso(r.finished_at):null;
+   }
+   return out;
+  },
   async upsertCatalog(defs,catalogVersion,rulesVersion){await call(admin,'macro_upsert_catalog',{p_catalog_version:catalogVersion,p_rules_version:rulesVersion,p_defs:defs});},
   async putRetrieval(obj,r,ownerToken){
    return String(await call<string>(admin,'macro_put_retrieval',{p_sha256:obj.sha256,p_object_path:obj.object_path,p_adapter:obj.adapter,p_content_type:obj.content_type,p_byte_length:obj.byte_length,
@@ -293,6 +349,17 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
     if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history:${id}:>${o.maxRows}`);
     if(part.length<READ_PAGE||lastPeriod===null)return out;
     after=lastPeriod;
+   }
+  },
+  async eligibleHistoryAsOf(id,o){
+   if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+   const out:ObservationRow[]=[];let group:ObservationRow[]=[];let offset=0;
+   const flush=async()=>{if(!group.length)return;out.push(...await selectEligibleHistoryAsOf(group,o.asOf,1,asOfReads.observations,asOfReads.receipts));group=[];if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history_asof:${id}:>${o.maxRows}`);};
+   for(;;){
+    const part=await asOfReads.candidates(id,o,offset);
+    for(const candidate of part){if(group.length&&candidate.period_end!==group[0].period_end)await flush();group.push(candidate);}
+    if(part.length<READ_PAGE){await flush();return out.sort((a,b)=>a.period_end.localeCompare(b.period_end));}
+    offset+=READ_PAGE;
    }
   },
   async seriesHistory(id,o){

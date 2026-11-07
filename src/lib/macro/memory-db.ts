@@ -18,7 +18,7 @@ import {randomUUID} from 'node:crypto';
 import {recordAttempt} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
 import {canonicalJson} from './catalog';
-import {MacroDbError,highestPerPeriod} from './db';
+import {MacroDbError,highestPerPeriod,selectEligibleHistoryAsOf} from './db';
 import type {MacroDb} from './db';
 import type {ChunkCounts,ChunkRecord,EvidenceObject,FinalizeResult,FinishFence,FinishProgress,IngestRunState,MacroSeriesDef,ObservationRow,ObservationWrite,QuarantineMember,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
 
@@ -46,7 +46,7 @@ export interface MemoryMacroDb extends MacroDb{
  /** Declares a batch's ingest_batches row: status and (optionally) dataset. Writes and evidence need a KNOWN batch (declared here, declared by
   *  claimIngest, or a row in opts.tables.ingest_batches), else invalid_batch (SQL: unknown batch); read-side eligibility treats an
   *  undeclared batch as 'success'. */
- setBatchStatus(batchId:string,status:MemoryBatchStatus,dataset?:string):void;
+ setBatchStatus(batchId:string,status:MemoryBatchStatus,dataset?:string,finishedAt?:string):void;
  /** Registers an open dq_quarantine item; `id` lets a test mirror the TableClient's dq_quarantine rows (Task 6). */
  addQuarantineItem(i:{id?:string;dataset:string;table_name?:string;natural_key:string;reason_code?:string;batch_id:string}):string;
  quarantineItem(id:string):QuarantineItem|undefined;
@@ -78,6 +78,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  const runs=new Map<string,Run>();
  const publishKeys=new Map<string,string>();                                                           // publish_key → snapshot_id
  const batchStatus=new Map<string,MemoryBatchStatus>();
+ const batchFinished=new Map<string,string>();
  const batchDataset=new Map<string,string>();
  const items=new Map<string,QuarantineItem>();
  const members=new Map<string,Set<string>>();
@@ -164,7 +165,15 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
 
  const db:MemoryMacroDb={
   setNow(iso){fixedNow=new Date(iso).toISOString();},
-  setBatchStatus(batchId,status,dataset){batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);},
+  setBatchStatus(batchId,status,dataset,finishedAt){
+   const stamp=finishedAt===undefined?undefined:Date.parse(finishedAt);
+   if(stamp!==undefined&&!Number.isFinite(stamp))throw new Error('invalid_finished_at');
+   const receipt=batchFinished.get(batchId);
+   if(receipt){if(status!==batchStatus.get(batchId)||(stamp!==undefined&&new Date(stamp).toISOString()!==receipt))throw new Error('immutable_finished_at');return;}
+   batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);
+   if((status==='success'||status==='partial')&&stamp!==undefined)batchFinished.set(batchId,new Date(stamp).toISOString());
+  },
+  async batchFinishedAt(ids){return Object.fromEntries(ids.map(id=>[id,batchFinished.get(id)??null]));},
   addQuarantineItem(i){const id=i.id??randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
   quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},
   get audit(){return clone(audit);},
@@ -294,6 +303,7 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
    const finishedAt=new Date(Math.max(msOf(input.finishedAt),msOf(String(b.started_at)))).toISOString();
    await tables.update('ingest_batches',{batch_id:batchId,status:'running'},{status:input.status,counts:clone(input.counts),errors:clone(input.errors),finished_at:finishedAt});
    batchStatus.set(batchId,input.status);                                                                // eligibility follows the written status
+   batchFinished.set(batchId,finishedAt);
    // review A3: finalization moves eligibility, so every region this batch wrote to gets input_revision + 1
    for(const r of new Set(observations.filter(o=>o.batch_id===batchId).map(o=>series.get(o.series_id)?.region)))if(r)state[r].inputRevision++;
    return {status:input.status,finalized:true};
@@ -407,6 +417,12 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
     .sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:a.version-b.version));
    if(got.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history:${id}:>${o.maxRows}`);
    return got.map(clone);
+  },
+  async eligibleHistoryAsOf(id,o){
+   const candidates=observations.filter(x=>x.series_id===id&&x.status==='ok'&&x.period_end<=o.to&&msOf(x.available_at)<=msOf(o.asOf));
+   return (await selectEligibleHistoryAsOf(candidates,o.asOf,o.maxRows,
+    async ids=>observations.filter(x=>ids.includes(x.observation_id)),
+    async ids=>Object.fromEntries(ids.filter(id=>batchStatus.has(id)).map(id=>[id,{status:batchStatus.get(id)!,finished_at:batchFinished.get(id)??null}])))).map(clone);
   },
   async seriesHistory(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw rpc('invalid_max_rows');
