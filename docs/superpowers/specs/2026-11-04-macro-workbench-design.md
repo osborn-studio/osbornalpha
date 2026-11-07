@@ -1,7 +1,7 @@
 # 宏观工作台（Macro Workbench）设计规格 · P1 + P2
 
 日期：2026-11-04（第 1 稿）；2026-11-06 第 2 稿（对齐已落地的计划一/二与总纲，处置 Codex 增量审计 M1–M26，见 §0）
-状态：第 4 稿（2026-11-06，计划审计 `06-codex-plan-round1.md` P1-1…P2-4 回写，见 §0.2 末"第 4 稿"表；第 3 稿：Codex 确认轮 `04-codex-spec-confirm.md` 的 partial 与 N1–N3 已处置），进入计划
+状态：第 5 稿（2026-11-06，计划二轮审计 `08-codex-plan-round2.md` P1-1…P2-3 回写，见 §0.2 末"第 5 稿"表，优先于第 4 稿表；第 4 稿：计划审计 `06-codex-plan-round1.md` P1-1…P2-4；第 3 稿：Codex 确认轮 `04-codex-spec-confirm.md` 的 partial 与 N1–N3），进入计划
 前置研究：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、同目录 `REPORT.md`、`SOURCE_MAP.csv`
 总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5
 已定决策（owner 2026-11-04）：范围 P1 纵向闭环 + P2 关联与事件；中国宏观走 AKShare 采集脚本（只作适配器，记录上游）；美国走 FRED；面向所有登录用户开放。
@@ -81,6 +81,22 @@
 | P2-1 | 块错误与 claim/定位键持久化；finish 按整批去重的 `⋃claim_keys − ⋃located_keys` 写一条 `skipped_summary/unlocated_claims`，连同全部块错误交 `finishBatch` |
 | P2-2 | finish 带 `series_outcomes:[{series_id, ok, code?}]`；失败序列计 `failed` 并写错误 `{code, key: series_id}`，进入 `recordAttempt` 的 detail（`failed_series`） |
 | P2-4 | finish 可续：`finish_progress` 记录 `derived`、`batch_finished`、`freshness_recorded`、`published`、`receipt`；重试跳过已完成步骤，已结束返回存储回执；批次已结束但 run 仍在 finishing 时接受 finish |
+
+#### 第 5 稿（计划二轮回写，`docs/audits/2026-11-06-macro-workbench/08-codex-plan-round2.md`）
+
+一个统一机制处置并发与重试类缺陷：**每个 ingest 变更都由 run 的所有者令牌栅栏保护，接管在同一事务里作废旧所有者；finish 由所有者独占，按 `(batch_id, step)` 检查点幂等。** 下表覆盖第 4 稿表与正文中与之冲突的表述；计划 `2026-11-06-macro-workbench.md` 共享契约"ingest 租约、所有者令牌、分块与独占可续完成"逐条落实。
+
+| id | 处置（SQL 语义） |
+|---|---|
+| P1-1 | `eligibleHistory` 分页循环 `const part:ObservationRow[]` 显式注解（`after` 由 `part` 赋值，推断会循环，TS7022）；同一助手内其余变量均已显式注解 |
+| P1-2 | **拒绝值终局**：写入 RPC 与内存实现在选择任何动作之前，若同 `(series_id, period_end)` 已有 `value` 相等的 `rejected` 行 → 不插入，计 `duplicates`，conflict `previously_rejected`（新增 `WriteConflictReason`；`observation_id` = 该 rejected 行；信息性，不建隔离条目、不计错误）。"4.1 ok → 4.2 被拒 → 更新的 4.2 再交付"保持被拒 |
+| P1-3 | `macro_ingest_runs` 加 `owner_token uuid not null`、`processing_timeout interval not null default '10 minutes'`、`finish_token uuid`，状态加 `aborted`（终态）；部分唯一索引改为 `state in ('open','finishing')`。`macro_claim_ingest(p_batch_id, p_dataset, p_max_age, p_processing_timeout, p_takeover)` 返回新令牌；在 dataset 锁下的同一事务里把超过 `p_max_age`（2 h）的 live run，以及 `p_takeover` 时有一块 `processing` 超过该 run 自身 `processing_timeout` 的 live run 置 `aborted`（progress `{aborted:{by, reason}}`），再判 busy / 插入；返回该 dataset 所有批次仍 running 的 aborted run，调用方以 `failed` 结束它们（只忽略 `batch_not_running`，下次 start 再列出，自愈）。`macro_assert_owner(p_batch_id, p_owner_token, p_states)` 在 run 行 `for update` 下校验：无 run 行时令牌必须为空（FRED cron：单写者由 Vercel cron 保证），有 run 行时令牌相符且状态允许，否则 `fenced`。所有 AKShare 路径变更 RPC 带 `p_owner_token`：`macro_put_retrieval`、`macro_write_observations`、`macro_link_quarantine`（另带 `p_batch_id`）、`macro_claim_chunk`、`macro_complete_chunk`、`macro_begin_finish`、`macro_record_finish_step`、`publish_macro_snapshot`（finish 调用时，另带 `p_batch_id`）。锁序恒为 run 行 → 区域 / 隔离行 |
+| P1-4 | **独占 finish**：`macro_begin_finish(p_batch_id, p_total, p_owner_token)` 只对令牌所有者开放（其他令牌 → `fenced`）；`open → finishing` 与同一所有者的重试（续做）都生成新 `finish_token`，`macro_record_finish_step(…, p_owner_token, p_finish_token)` 只接受当前令牌，所以并发的较早 finish 在下一步被 `fenced`。步骤幂等：派生本质幂等；`finishBatch` 遇 `batch_not_running` 读回状态；新鲜度先记 `freshness_started` 再 `recordAttempt` 再记 `freshness_recorded`，重试只见 `freshness_started` → 跳过（`recordAttempt` 读后 upsert 不幂等，宁可丢一次记录不重复计错误）；`publish_macro_snapshot` 加 `p_publish_key`（ingest `'ingest:'||batch_id`，cron `'cron:'||batch_id`），`macro_snapshots.publish_key` 部分唯一，已发布的键在区域锁下、修订号检查之前直接返回原快照（`replayed:true`），崩溃于发布之后、检查点之前的重试安全 |
+| P1-5 | `published` 检查点只在发布成功（含回放）或有意的终局跳过（批次 `failed`、`no_native_outcomes`）之后写；可重试的失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误等非 published 回执）→ `publish_attempt` 追加诊断到 `finish_progress.attempts`（≤ 20），run 保持 `finishing`，路由回 503 `publish_pending`，采集器以同一令牌重试 finish |
+| P1-6 | 写入时同值隔离行只在其批次合格（success/partial）或为本次批次时复用；失败 / 被拒 / 其他运行中批次留下的同值隔离行不复用，插入属于本次 retrieval 与批次的新隔离版本并链接它。`macro_resolve_conflict` 接受时，成员批次为 `failed`/`rejected` → `member_ineligible`（永不合格的行不得接受） |
+| P2-1 | 崩溃块的恢复路径：`chunk_in_progress` 重试用尽或任一 `fenced` → 采集器整次重来：`start {takeover:true}`（旧 run 停滞未满 10 分钟时 409，轮询），新批次新令牌重送全部结果，从不补发旧批次的部分块；旧批次 `failed`，其行永不合格；新批次的同值重交付不是旧行的 duplicate。函数 `maxDuration`（300 s）< `processing_timeout`（600 s） |
+| P2-2 | 块计数只含原生结果，派生计数在 `finish_progress.derived`，回执分列 `native_counts` / `derived_counts`。本次采集没有任何原生 inserted/versioned/duplicates → 跳过派生与发布，追加非 INFO 错误 `no_native_outcomes`（于是批次 `failed`；只有隔离行落地时共用 DQ 规则给 `partial`——`src/lib/dq/batches.ts` 不改），`recordAttempt({ok:false})`。cron（FRED）同一规则 |
+| P2-3 | `macro_link_quarantine` 对 `dq_quarantine` 行 `for update`（与裁决同一把锁），非 open → `quarantine_closed`（契约码）；Task 6 再 `quarantine()` 一次（旧条目已关闭，于是新建 open 条目）并重试链接一次；仍失败、或有存储行的冲突无法建条目 → 整块失败（不 `completeChunk`，cron 批次 `failed`），绝不留下未绑定的被隔离行 |
 
 ---
 

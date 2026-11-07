@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 4 稿：Codex 增量审计 M1–M26、确认轮 §0.2 与计划审计 `06-codex-plan-round1.md` P1-1…P2-4 已处置；§0.2 的规则覆盖正文中与之冲突的旧表述）：宏观目录、原始字节存证与定位、无损十进制观测（FRED 公开 CSV + AKShare 官方主机适配器）、共用 DQ 批次/隔离/新鲜度、事务发布的事实快照、F4 契约的判定结果与 `MacroReadApi`、工作台 UI（判断层默认关闭）、派生事件与周期、冻结输入的关联分析。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 5 稿：Codex 增量审计 M1–M26、确认轮 §0.2、计划审计 `06-codex-plan-round1.md` P1-1…P2-4 与二轮 `08-codex-plan-round2.md` P1-1…P2-3 已处置；§0.2 的规则覆盖正文中与之冲突的旧表述，第 5 稿表优先于第 4 稿表）：宏观目录、原始字节存证与定位、无损十进制观测（FRED 公开 CSV + AKShare 官方主机适配器）、共用 DQ 批次/隔离/新鲜度、事务发布的事实快照、F4 契约的判定结果与 `MacroReadApi`、工作台 UI（判断层默认关闭）、派生事件与周期、冻结输入的关联分析。
 
-**Architecture:** 一个迁移 `20261114090000_macro_workbench.sql` 建十二表、私有桶 `macro-raw`、写入/发布/隔离裁决/ingest 租约/分析几类 `security definer` RPC 与 RLS（发布资格：观测 ok + 批次 success/partial + 派生祖先递归合格，`macro_ineligible_ids`）；`src/lib/macro/db.ts` 的 `MacroDb` 契约有 Supabase（rpc + anon 读）与内存两个实现；采集编排 `ingest.ts` 只依赖注入的 `MacroDb`、`EvidenceStore`、`TableClient`（DQ）；数值只由 TS 解析器从存证字节中取出（Python/AKShare 只抓取、录制原始响应并给出交叉核对值）；判定、事件、周期、相关全是纯函数。
+**Architecture:** 一个迁移 `20261114090000_macro_workbench.sql` 建十二表、私有桶 `macro-raw`、写入/发布/隔离裁决/ingest 租约（所有者令牌栅栏、独占可续 finish）/分析几类 `security definer` RPC 与 RLS（发布资格：观测 ok + 批次 success/partial + 派生祖先递归合格，`macro_ineligible_ids`）；`src/lib/macro/db.ts` 的 `MacroDb` 契约有 Supabase（rpc + anon 读）与内存两个实现；采集编排 `ingest.ts` 只依赖注入的 `MacroDb`、`EvidenceStore`、`TableClient`（DQ）；数值只由 TS 解析器从存证字节中取出（Python/AKShare 只抓取、录制原始响应并给出交叉核对值）；判定、事件、周期、相关全是纯函数。
 
 **Tech Stack:** Next.js 15 App Router、TypeScript、Supabase（PostgreSQL 17 + PostgREST + Storage）、vitest、`pg`（集成测试）、`tsx` 脚本、Python 3.12 + AKShare（只在本机 uv 虚拟环境，非 Vercel 依赖）、`lightweight-charts`（已有）、next-intl。
 
@@ -147,12 +147,15 @@ export interface ObservationRow{
 export type ObservationWrite=
  |{series_id:string;period_end:string;value_text:string;available_at:string;revisable:boolean;retrieval_id:string;locator:Locator}
  |{series_id:string;period_end:string;value_text:string;available_at:string;revisable:boolean;derived_from:string[];transform:string};
-export type WriteConflictReason='unexpected_revision'|'conflicting_rows'|'stale_delivery'|'missing_evidence'|'missing_input';
+/** previously_rejected (第 5 稿 P1-2): the value was rejected before for this (series, period); nothing is inserted, the call
+ *  counts it under `duplicates`, and the conflict is informational (no quarantine item, no error). */
+export type WriteConflictReason='unexpected_revision'|'conflicting_rows'|'stale_delivery'|'missing_evidence'|'missing_input'|'previously_rejected';
 export interface WriteResult{
  inserted:number;duplicates:number;versioned:number;quarantined:number;
- /** observation_id: the quarantined row (newly inserted or the existing same-value quarantined/rejected row) for
-  *  unexpected_revision / stale_delivery; null for conflicting_rows / missing_evidence / missing_input (nothing stored).
-  *  Task 6 links it to the dq_quarantine item via macro_link_quarantine (第 4 稿 P1-4). */
+ /** observation_id: the quarantined row (newly inserted, or the existing same-value quarantined row of an eligible or the
+  *  current batch — 第 5 稿 P1-6) for unexpected_revision / stale_delivery; the rejected row for previously_rejected; null for
+  *  conflicting_rows / missing_evidence / missing_input (nothing stored). Task 6 links quarantined rows to the dq_quarantine
+  *  item via macro_link_quarantine (第 4 稿 P1-4). */
  conflicts:{series_id:string;period_end:string;reason:WriteConflictReason;value_text:string;current_value_text:string|null;observation_id:string|null}[];
 }
 export interface CatalogCounts{verified:number;missing:number;restricted:number}
@@ -163,7 +166,13 @@ export interface PublishInput{
  /** Frozen display history (第 4 稿 P1-8): the last 24 eligible observations per indicator (sparklines); validated like the manifest. */
  historyIds:string[];catalogCounts:CatalogCounts;
  regime:import('./judgment-contract').RegimeResult|null;contributions:RegimeContribution[];rulesVersion:string;uncoveredWeight:number;
+ /** Idempotency key (第 5 稿 P1-4): 'ingest:<batch_id>' (ingest finish) or 'cron:<batch_id>' (cron). A key that already
+  *  published returns that snapshot (replayed:true) instead of publishing again. Omitted only by tests and the rollback path. */
+ publishKey?:string;
+ /** Owner fence (第 5 稿 P1-3): the AKShare finish passes its batch and owner token; cron passes neither (its batch has no run). */
+ batchId?:string;ownerToken?:string|null;
 }
+export interface PublishResult{snapshot_id:string;revision:number;replayed:boolean}
 export interface SnapshotRecord{
  snapshot_id:string;region:Region;as_of:string;revision:number;methodology_version:string;catalog_version:string;
  observation_ids:string[];history_ids:string[];catalog_counts:CatalogCounts;status:'active'|'superseded'|'failed';failure_reason:string|null;created_at:string;
@@ -173,17 +182,31 @@ export type AnalysisKind='change'|'level'|'rolling'|'event_window';
 export interface ChunkCounts{fetched:number;inserted:number;duplicates:number;versioned:number;quarantined:number;failed:number}
 /** Same shape as dq/batches BatchError (kept structural so types.ts imports nothing from dq). */
 export interface ChunkError{code:string;key?:string;message?:string}
-/** macro_ingest_chunks row (第 4 稿 P1-6/P2-1): claimed as processing, completed once with counts, errors and claim/location keys. */
+/** macro_ingest_chunks row (第 4 稿 P1-6/P2-1): claimed as processing, completed once with counts, errors and claim/location keys.
+ *  Chunk counts are NATIVE outcomes only (chunks carry evidence); derived counts live in FinishProgress.derived (第 5 稿 P2-2). */
 export interface ChunkRecord{seq:number;total:number;state:'processing'|'done';counts:ChunkCounts;errors:ChunkError[];claim_keys:string[];located_keys:string[]}
-export type IngestRunState='open'|'finishing'|'finished';
-/** macro_ingest_runs.finish_progress (第 4 稿 P2-4): every finish step that already happened, so a retried finish resumes. */
+/** aborted (第 5 稿 P1-3): a takeover fenced this run; every later mutation carrying its owner token raises `fenced`. */
+export type IngestRunState='open'|'finishing'|'finished'|'aborted';
+/** The lease answer of macro_claim_ingest (第 5 稿 P1-3/P2-1). ownerToken only when claimed. aborted = batch ids of this
+ *  dataset's aborted runs whose ingest_batches row is still running (the caller finishes them failed; idempotent sweep). */
+export interface IngestClaim{status:'claimed'|'busy';ownerToken:string|null;aborted:string[];holder:string|null}
+/** Exclusive finish (第 5 稿 P1-4): beginFinish hands the owner a fresh finishToken (rotated on every resume, which fences an
+ *  older concurrent finisher of the same owner at its next checkpoint); every recordFinishStep presents both tokens. */
+export interface FinishFence{ownerToken:string;finishToken:string}
+export type FinishStep='derived'|'batch_finished'|'freshness_started'|'freshness_recorded'|'published'|'publish_attempt'|'receipt';
+/** macro_ingest_runs.finish_progress (第 4 稿 P2-4; 第 5 稿 P1-4/P1-5/P2-2): every finish step that already happened, so a
+ *  retried finish resumes. freshness_started is written BEFORE recordAttempt and freshness_recorded after it; a retry that
+ *  finds only freshness_started skips recordAttempt (one lost attempt record is preferred to a double-counted error).
+ *  publish_attempt appends to attempts[] (retryable publication failures; the run stays finishing). */
 export interface FinishProgress{
- derived?:{counts:ChunkCounts;errors:ChunkError[]};
+ derived?:{counts:ChunkCounts;errors:ChunkError[]}|{skipped:'no_native_outcomes'};
  batch_finished?:{status:string;date:string};
- freshness_recorded?:{ok:boolean};
+ freshness_started?:{ok:boolean};
+ freshness_recorded?:{ok:boolean;skipped?:'started_without_record'};
  published?:Record<string,unknown>;
+ attempts?:{at:string;status:string;reason:string|null}[];
  receipt?:Record<string,unknown>;
- abandoned?:boolean;
+ aborted?:{by:string;reason:'max_age'|'stalled_chunk'};
 }
 /** One member of a dq_quarantine item (macro_quarantine_members ⨝ macro_observations; 第 4 稿 P1-4). */
 export interface QuarantineMember{observation_id:string;series_id:string;period_end:string;value_text:string;version:number;status:ObservationStatus}
@@ -223,33 +246,43 @@ export interface JudgmentCardView{
 ### `MacroDb`（Task 3；`src/lib/macro/db.ts`）
 
 ```ts
-export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
+export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
  upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
- /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id. service */
- putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>):Promise<string>;
+ /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
+  *  ownerToken (第 5 稿 P1-3): the AKShare path passes its run's token (verified under the run lock, else `fenced`); FRED cron
+  *  passes nothing (its batch has no run row; a batch WITH a run refuses a missing token). service */
+ putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>,ownerToken?:string|null):Promise<string>;
  evidenceObject(sha256:string):Promise<import('./types').EvidenceObject|null>;                                   // anon
  retrieval(retrievalId:string):Promise<import('./types').Retrieval|null>;                                        // anon
  /** Every retrieval of one evidence object, fetched_at ascending (≤ 1000). anon. */
  retrievalsOf(sha256:string):Promise<import('./types').Retrieval[]>;
  /** Retrievals by id, input order, unknown ids dropped, deduplicated. anon. */
  retrievalsByIds(ids:string[]):Promise<import('./types').Retrieval[]>;
- /** RPC macro_claim_ingest (第 4 稿 P1-6): single-writer lease per dataset. Live runs older than maxAgeMs are first marked
-  *  finished {abandoned:true} and returned in `abandoned` (the caller finishes those ingest_batches rows as failed). busy ⇒ the
-  *  caller finishes its own batch rejected. service */
- claimIngest(batchId:string,dataset:string,maxAgeMs:number):Promise<{status:'claimed'|'busy';abandoned:string[];holder:string|null}>;
- /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. service */
- claimChunk(batchId:string,seq:number,total:number):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
- /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets. service */
- completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]}):Promise<import('./types').ChunkRecord>;
+ /** RPC macro_claim_ingest (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1): single-writer lease per dataset with a fresh owner token. In one
+  *  transaction under the dataset lock it first aborts (state 'aborted') every live run older than maxAgeMs and — only when
+  *  takeover is true — every live run holding a chunk in 'processing' for longer than that run's processingTimeoutMs; then a
+  *  remaining live run ⇒ busy (the caller finishes its own batch rejected), else the run is inserted open with a new
+  *  owner_token. `aborted` lists the dataset's aborted runs whose batch is still running (the caller finishes them failed,
+  *  ignoring batch_not_running). service */
+ claimIngest(batchId:string,dataset:string,opts:{maxAgeMs:number;processingTimeoutMs:number;takeover:boolean}):Promise<import('./types').IngestClaim>;
+ /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. Wrong token or
+  *  an aborted run ⇒ fenced. service */
+ claimChunk(batchId:string,seq:number,total:number,ownerToken:string):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
+ /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets (owner-fenced). service */
+ completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
  chunksOf(batchId:string):Promise<import('./types').ChunkRecord[]>;                                              // service, seq order
  ingestRun(batchId:string):Promise<{dataset:string;state:import('./types').IngestRunState;progress:import('./types').FinishProgress}|null>;   // service
- /** RPC macro_begin_finish: open → finishing once every chunk 0..total−1 is done; finishing/finished return the stored progress. service */
- beginFinish(batchId:string,total:number):Promise<{status:'incomplete';missing:number[]}|{status:'finishing'|'finished';progress:import('./types').FinishProgress}>;
- /** RPC macro_record_finish_step: merges one step into finish_progress; step 'receipt' finishes the run. service */
- recordFinishStep(batchId:string,step:'derived'|'batch_finished'|'freshness_recorded'|'published'|'receipt',data:Record<string,unknown>):Promise<import('./types').FinishProgress>;
- writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[]):Promise<import('./types').WriteResult>;   // service, RPC macro_write_observations
+ /** RPC macro_begin_finish (第 5 稿 P1-4): only the token owner; open → finishing once every chunk 0..total−1 is done; a
+  *  finishing run resumes. Both hand out a NEW finishToken (an older finisher is fenced at its next step); finished returns
+  *  the stored progress; another owner or an aborted run ⇒ fenced. service */
+ beginFinish(batchId:string,total:number,ownerToken:string):Promise<{status:'incomplete';missing:number[]}|{status:'finishing';progress:import('./types').FinishProgress;finishToken:string}|{status:'finished';progress:import('./types').FinishProgress}>;
+ /** RPC macro_record_finish_step: merges one step into finish_progress (publish_attempt appends to attempts[]); 'receipt'
+  *  finishes the run. Both tokens must match the run (else fenced). service */
+ recordFinishStep(batchId:string,step:import('./types').FinishStep,data:Record<string,unknown>,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
+ /** RPC macro_write_observations. ownerToken as putRetrieval (第 5 稿 P1-3). service */
+ writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[],ownerToken?:string|null):Promise<import('./types').WriteResult>;
  /** Latest period per series, highest ok version within it; asOf ⇒ only rows with available_at ≤ asOf. anon. */
  latestObservations(seriesIds:string[],opts?:{asOf?:string;periodEndLte?:string}):Promise<import('./types').ObservationRow[]>;
  /** Same, over publication-eligible rows only (ok + batch success/partial + ancestors eligible; includeBatch also admits that
@@ -264,14 +297,18 @@ export interface MacroDb{
  versionsOf(seriesId:string,periodEnd:string):Promise<import('./types').ObservationRow[]>;
  observationsByIds(ids:string[]):Promise<import('./types').ObservationRow[]>;                                    // anon; ok only
  publishState(region:import('./types').Region):Promise<{revision:number;inputRevision:number}>;                   // service
- /** RPC macro_link_quarantine (第 4 稿 P1-4): binds quarantined/rejected rows of the item's natural key to an open item. service */
- linkQuarantine(quarantineId:string,observationIds:string[]):Promise<number>;
+ /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds quarantined/rejected
+  *  rows of the item's natural key; a closed item ⇒ quarantine_closed. batchId + ownerToken fence the AKShare path (第 5 稿 P1-3). service */
+ linkQuarantine(quarantineId:string,observationIds:string[],fence?:{batchId:string;ownerToken:string|null}):Promise<number>;
  /** Members of one item with their current status, version ascending. service */
  quarantineMembers(quarantineId:string):Promise<import('./types').QuarantineMember[]>;
- /** RPC macro_resolve_conflict (spec §0.2 M10, 第 4 稿 P1-4): accept needs observationId (a quarantined member) — it becomes
-  *  ok, every other member rejected; reject rejects every member. Throws already_resolved / not_found / reject_only. service */
+ /** RPC macro_resolve_conflict (spec §0.2 M10, 第 4 稿 P1-4): accept needs observationId (a quarantined member whose batch is not
+  *  failed/rejected — 第 5 稿 P1-6, else member_ineligible) — it becomes ok, every other member rejected; reject rejects every
+  *  member. Throws already_resolved / not_found / reject_only. service */
  resolveConflict(quarantineId:string,decision:'accept'|'reject',resolvedBy:string,observationId?:string):Promise<void>;
- publishSnapshot(input:import('./types').PublishInput):Promise<{snapshot_id:string;revision:number}>;            // service, RPC publish_macro_snapshot; throws stale_publisher / invalid_manifest
+ /** RPC publish_macro_snapshot; throws stale_publisher / invalid_manifest / fenced. An already used publishKey returns its
+  *  snapshot with replayed:true and publishes nothing (第 5 稿 P1-4). service */
+ publishSnapshot(input:import('./types').PublishInput):Promise<import('./types').PublishResult>;
  /** RPC republish_macro_snapshot (第 4 稿 P1-11): a NEW active snapshot copying a non-failed snapshot's manifest, history and
   *  regime after re-validating eligibility (rollback). Throws stale_publisher / invalid_manifest / not_found. service */
  republishSnapshot(snapshotId:string,expectedRevision:number,expectedInputRevision:number):Promise<{snapshot_id:string;revision:number}>;
@@ -301,42 +338,55 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 
 ### 写入规则（SQL `macro_write_observations` 与 `memoryMacroDb.writeObservations` 必须一致；Task 1 / Task 3）
 
-调用开始时对涉及的每个区域 `select … from macro_publish_state where region = … for update`（按区域名排序加锁，避免死锁）；本次调用实际插入了任何行（ok 或 quarantined）的区域，在结束时 `input_revision = input_revision + 1`。
+调用开始时先做所有者校验（第 5 稿 P1-3，`macro_assert_owner(p_batch, p_owner_token, {open,finishing})`，见下文"ingest 租约"），再对涉及的每个区域 `select … from macro_publish_state where region = … for update`（按区域名排序加锁，避免死锁；锁序恒为 run 行 → 区域行）；本次调用实际插入了任何行（ok 或 quarantined）的区域，在结束时 `input_revision = input_revision + 1`。
 
 对 `p_rows` 按输入顺序逐行（同一调用内先按 `(series_id, period_end)` 分组）：
 1. 组内出现两个不同 `value_text`（十进制不等）→ 整组不写，每个不同值一条 conflict `conflicting_rows`，计 `quarantined`（每组 1）。
 2. 原生行 `retrieval_id` 不在 `macro_retrievals` → conflict `missing_evidence`，不写，不计数（调用方计 `failed`）。派生行任一 `derived_from` 不存在、非 `ok`，或不合格且不属于本次调用的批次（`macro_ineligible_ids(inputs, p_batch)` 非空）→ conflict `missing_input`，同上。
-3. 取该 `(series_id, period_end)` 的最高版本 `ok` 行 `cur`，**只在批次合格（success/partial）或属于本次调用批次 `p_batch` 的行中取**（第 4 稿 P1-5；行写入时其祖先已经合格或同批次，见第 2 步，所以这里看行自己的批次即可）：值不同且 `new.available_at < cur.available_at`（迟到交付）→ 不分配新的最新版本：插入 `quarantined` 新版本（同值 quarantined **或 rejected** 行已存在则不插），conflict `stale_delivery`，`quarantined+1`；否则：无 `cur` → 插入 `version = coalesce(max(version) over all statuses,0)+1`、`status ok`，`inserted+1`；`cur.value = new.value`（numeric 相等）→ `duplicates+1`；不等且 `revisable` → 插入新版本 ok，`versioned+1`；不等且不可修订 → 插入新版本 `quarantined`（若已有同值的 quarantined 或 rejected 行则不重复插入），conflict `unexpected_revision`（带 `current_value_text`），`quarantined+1`。
-4. `value` 列 = `value_text::numeric`；`value_text` 由调用方给 canonical 形式（RPC 校验 `value_text ~ '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'`，不符 → 抛错）。
-5. 每条 conflict 带 `observation_id`：`unexpected_revision` / `stale_delivery` = 新插入或已存在的同值 quarantined/rejected 行；其余原因为 `null`（第 4 稿 P1-4）。
-6. 返回 `WriteResult`（jsonb）。
+3. **拒绝值终局（第 5 稿 P1-2）**：在选择任何动作之前，若该 `(series_id, period_end)` 已有 `status='rejected'` 且 `value` 相等（numeric）的行 → 不插入任何行，`duplicates+1`，conflict `previously_rejected`（`observation_id` = 该 rejected 行，信息性：Task 6 不建隔离条目、不计错误），进入下一组。所以"4.1 ok → 4.2 被拒 → 更新的 4.2 再交付"永远不会变成 ok。
+4. 取该 `(series_id, period_end)` 的最高版本 `ok` 行 `cur`，**只在批次合格（success/partial）或属于本次调用批次 `p_batch` 的行中取**（第 4 稿 P1-5；行写入时其祖先已经合格或同批次，见第 2 步，所以这里看行自己的批次即可）：值不同且 `new.available_at < cur.available_at`（迟到交付）→ 不分配新的最新版本：插入 `quarantined` 新版本，conflict `stale_delivery`，`quarantined+1`；否则：无 `cur` → 插入 `version = coalesce(max(version) over all statuses,0)+1`、`status ok`，`inserted+1`；`cur.value = new.value`（numeric 相等）→ `duplicates+1`；不等且 `revisable` → 插入新版本 ok，`versioned+1`；不等且不可修订 → 插入新版本 `quarantined`，conflict `unexpected_revision`（带 `current_value_text`），`quarantined+1`。**隔离行复用（第 5 稿 P1-6）**：`stale_delivery` / `unexpected_revision` 只复用"同值、`quarantined`、且其批次合格（success/partial）或就是 `p_batch`"的已有行；失败 / 被拒 / 仍在运行的其他批次留下的同值隔离行不复用，而是插入一个新的 quarantined 版本（出处 = 本次 retrieval、批次 = `p_batch`），conflict 带新行 id，Task 6 把新行链接到（复用的）open 条目。于是"失败批次隔离了 B → 成功批次重交付 B → 接受"得到一个属于成功批次、可发布的 ok 行。
+5. `value` 列 = `value_text::numeric`；`value_text` 由调用方给 canonical 形式（RPC 校验 `value_text ~ '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'`，不符 → 抛错）。
+6. 每条 conflict 带 `observation_id`：`unexpected_revision` / `stale_delivery` = 新插入或复用的同值 quarantined 行；`previously_rejected` = 那条 rejected 行；其余原因为 `null`（第 4 稿 P1-4）。
+7. 返回 `WriteResult`（jsonb）。
 
 ### 发布规则（SQL `publish_macro_snapshot`；Task 1 / Task 3）
 
-`macro_publish_state` 两行（US、CN）由迁移 `insert … on conflict do nothing` 预置（revision 0、input_revision 0）。`select revision, input_revision from macro_publish_state where region = p_region for update`；`revision <> p_expected_revision or input_revision <> p_expected_input_revision` → `raise exception 'stale_publisher'`；`p_catalog_version` 必须存在于 `macro_catalog_versions` → 否则 `invalid_manifest`；`p_observation_ids` 与 `p_history_ids` 各自无重复、无 null，每个必须存在、`status='ok'`、其 `series_id` 属于 `macro_series` 中 `region = p_region`、并且**合格**（`macro_manifest_ok` = 上述检查 + `macro_ineligible_ids(ids, null)` 为空）→ 否则 `raise exception 'invalid_manifest'`；`update macro_snapshots set status='superseded' where region=p_region and status='active'`；插入新快照（active，`revision = p_expected_revision+1`，`history_ids` 冻结概览迷你图所用的历史观测，第 4 稿 P1-8）与 `macro_regime_results`；`update macro_publish_state set revision = revision+1, updated_at = now()`；返回 `{snapshot_id, revision}`。
+`macro_publish_state` 两行（US、CN）由迁移 `insert … on conflict do nothing` 预置（revision 0、input_revision 0）。所有者校验（`p_batch_id` / `p_owner_token`，第 5 稿 P1-3；cron 两者皆空）→ `select revision, input_revision from macro_publish_state where region = p_region for update`；**幂等键（第 5 稿 P1-4）**：`p_publish_key` 非空且 `macro_snapshots` 已有该键（`unique(publish_key)`，部分唯一索引）→ 直接返回 `{snapshot_id, revision, replayed:true}`，什么都不写（崩溃于发布之后、`published` 检查点之前的重试因此安全）；否则`revision <> p_expected_revision or input_revision <> p_expected_input_revision` → `raise exception 'stale_publisher'`；`p_catalog_version` 必须存在于 `macro_catalog_versions` → 否则 `invalid_manifest`；`p_observation_ids` 与 `p_history_ids` 各自无重复、无 null，每个必须存在、`status='ok'`、其 `series_id` 属于 `macro_series` 中 `region = p_region`、并且**合格**（`macro_manifest_ok` = 上述检查 + `macro_ineligible_ids(ids, null)` 为空）→ 否则 `raise exception 'invalid_manifest'`；`update macro_snapshots set status='superseded' where region=p_region and status='active'`；插入新快照（active，`revision = p_expected_revision+1`，`publish_key = p_publish_key`，`history_ids` 冻结概览迷你图所用的历史观测，第 4 稿 P1-8）与 `macro_regime_results`；`update macro_publish_state set revision = revision+1, updated_at = now()`；返回 `{snapshot_id, revision, replayed:false}`。键：ingest finish `'ingest:'||batch_id`，cron `'cron:'||batch_id`；回滚与失败快照的键为空。
 
 **回滚 / 重发布**（第 4 稿 P1-11）：`republish_macro_snapshot(p_snapshot_id, p_expected_revision, p_expected_input_revision)`，只授 service_role。源快照不存在 → `not_found`；`failed` → `invalid_manifest`；锁区域行并校验两个修订号（`stale_publisher`）；`macro_manifest_ok` 重新校验源快照的 `observation_ids` 与 `history_ids`（`invalid_manifest`）；把当前 active 置 superseded，插入**新的** active 快照（新 `snapshot_id`、`revision = p_expected_revision+1`，复制源快照的 `as_of`、方法与目录版本、清单、历史、目录计数与 `macro_regime_results`），`revision+1`。历史行一律不改（触发器只允许 active → superseded）。
 
 ### 隔离裁决（SQL `macro_link_quarantine` + `macro_resolve_conflict`；Task 1 / Task 6 / Task 18；第 4 稿 P1-4）
 
-成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[])`：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）、仍为 `open`（`already_resolved`）；每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。
+成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[], p_batch_id, p_owner_token)`：先所有者校验（第 5 稿 P1-3），再 **`select … from dq_quarantine where id = … for update`**（与裁决同一把行锁，第 5 稿 P2-3）：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）、仍为 `open`（否则 `quarantine_closed`）；每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。`quarantine_closed`：裁决在 `quarantine()` 与链接之间关闭了条目——Task 6 再调一次 `quarantine()`（旧条目已非 open，于是新建 open 条目）并重试链接一次；仍失败则整块失败（`IngestAbort('quarantine_link_failed')`，不 `completeChunk`），绝不留下未绑定的被隔离行。
 
 `macro_resolve_conflict(p_quarantine_id uuid, p_decision text, p_resolved_by uuid, p_observation_id uuid default null)`，只授 service_role。锁 `dq_quarantine` 行（`for update`），不存在 → `not_found`，`dataset`/`table_name`/`natural_key` 不合 → `invalid_item`，非 `open` → `already_resolved`。
-- `accept`：`reason_code` 为 `adapter_mismatch` 或 `rule_failed:%` → `reject_only`（这两类值从未写入，SQL 强制只能拒绝）；`p_observation_id` 为空 → `observation_required`；它必须是该条目的成员（`not_member`）且当前 `quarantined`（`not_quarantined`；被拒绝的行永不复活）→ 该行 `ok`；该条目其余仍为 `quarantined` 的成员全部 `rejected`；区域 `input_revision+1`。
+- `accept`：`reason_code` 为 `adapter_mismatch` 或 `rule_failed:%` → `reject_only`（这两类值从未写入，SQL 强制只能拒绝）；`p_observation_id` 为空 → `observation_required`；它必须是该条目的成员（`not_member`）、当前 `quarantined`（`not_quarantined`；被拒绝的行永不复活），且其批次不是 `failed`/`rejected`（`member_ineligible`，第 5 稿 P1-6：接受失败批次的行只会得到一个永不合格的 ok 行；成功批次的重交付是同一条目下另一个成员）→ 该行 `ok`；该条目其余仍为 `quarantined` 的成员全部 `rejected`；区域 `input_revision+1`。
 - `reject`：`p_observation_id` 必须为空（`observation_not_allowed`）；该条目全部 `quarantined` 成员 → `rejected`；不动 `input_revision`（被隔离行本来就不进发布）。
 - 两种决定都把 `dq_quarantine` 置 `resolved_accept`/`resolved_reject`、`resolved_by`、`resolved_at=now()`，插入 `research_audit_log`（action `dq.quarantine_resolve`，object_type `dq`，detail 含 `decision`、`observation_id`、`rejected` 数）。一个事务。返回 `{status, observation_id, rejected}`。
-- 观测状态只允许 `quarantined → ok` 与 `quarantined → rejected`（触发器）。`rejected` 行对 anon 不可见、永不合格；同值再交付不会再插入（写入规则第 3 步），conflict 的 `observation_id` 指向那条 rejected 行，新条目只能拒绝。
+- 观测状态只允许 `quarantined → ok` 与 `quarantined → rejected`（触发器）。`rejected` 行对 anon 不可见、永不合格；同值再交付（无论 `available_at` 多新）不会再插入（写入规则第 3 步，`previously_rejected`，第 5 稿 P1-2），conflict 的 `observation_id` 指向那条 rejected 行，不建新条目。
 
-### ingest 租约、分块与可续完成（SQL `macro_claim_ingest` / `macro_claim_chunk` / `macro_complete_chunk` / `macro_begin_finish` / `macro_record_finish_step`；Task 1 / Task 9；第 4 稿 P1-6、P2-1、P2-4）
+### ingest 租约、所有者令牌、分块与独占可续完成（SQL `macro_claim_ingest` / `macro_assert_owner` / `macro_claim_chunk` / `macro_complete_chunk` / `macro_begin_finish` / `macro_record_finish_step`；Task 1 / Task 3 / Task 6 / Task 8 / Task 9 / Task 11；第 4 稿 P1-6、P2-1、P2-4；第 5 稿 P1-3、P1-4、P1-5、P2-1）
 
-- `macro_ingest_runs(batch_id pk → ingest_batches, dataset, state 'open'|'finishing'|'finished', finish_progress jsonb, created_at, updated_at)`，部分唯一索引 `(dataset) where state <> 'finished'` = 单写者租约。状态只前进（触发器）。
-- `macro_claim_ingest(p_batch_id, p_dataset, p_max_age interval)`：批次必须存在、同 dataset、`running`（`invalid_batch`）；按 dataset 取 advisory 锁；先把该 dataset 中 `created_at < now() − p_max_age` 的未结束 run 置 `finished` 并在 progress 合并 `{abandoned:true}`（返回其 batch_id 列表 `abandoned`，调用方用 `finishBatch` 把这些批次以 `failed` 结束）；仍有未结束 run → `{status:'busy', holder}`（调用方把自己的批次以 `rejected` 结束并回 409）；否则插入 run（`open`）→ `{status:'claimed'}`。
-- `macro_ingest_chunks` 增列 `state 'processing'|'done'`、`errors jsonb`、`claim_keys jsonb`、`located_keys jsonb`、`completed_at`；只允许 `processing → done`（触发器）。
-- `macro_claim_chunk(p_batch_id, p_seq, p_total)`：run 必须存在（`batch_not_claimed`）；`(batch, seq)` 已有行 → 返回存储的行 `{status: state, chunk}`（**不再处理**：processing → 路由 409 稍后重试；done → 存储的回执）；run 非 `open` → `batch_not_open`；`total` 与已有块不一致 → `chunk_total_mismatch`；插入 processing 行 → `{status:'claimed'}`。认领对 run 行取 `for share`，与 `macro_begin_finish` 的 `for update` 串行。
-- `macro_complete_chunk(p_batch_id, p_seq, p_counts, p_errors, p_claim_keys, p_located_keys)`：只对 processing 行（否则 `chunk_not_processing`）写入计数（六个非负整数）、错误（`{code,key?,message?}` 数组，≤ 500 条）与两组键（字符串数组）并置 `done`。
-- `macro_begin_finish(p_batch_id, p_total)`（`p_total` 0..10000）：锁 run；非 `open` → 返回 `{status: state, progress}`（续做或回放回执）；任一 seq 缺失/未完成或 total 不一致 → `{status:'incomplete', missing}`；否则置 `finishing` → `{status:'finishing', progress}`。
-- `macro_record_finish_step(p_batch_id, p_step, p_data)`：`p_step ∈ derived | batch_finished | freshness_recorded | published | receipt`，run 必须 `finishing`（`run_not_finishing`）；合并进 `finish_progress`；`receipt` 同时把 run 置 `finished`。
-- 批次级未定位 claim（P2-1）：finish 时 `⋃claim_keys − ⋃located_keys`（跨全部块去重）的数量 n > 0 → 一条 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`，与全部已存块错误一起交给 `finishBatch`。
+一个统一机制：**每次 ingest 写入都由 run 的所有者令牌栅栏保护，接管在同一事务里作废旧所有者；finish 由所有者独占、按步骤检查点幂等。**
+
+- `macro_ingest_runs(batch_id pk → ingest_batches, dataset, state 'open'|'finishing'|'finished'|'aborted', owner_token uuid not null, processing_timeout interval not null default '10 minutes', finish_token uuid, finish_progress jsonb, created_at, updated_at)`，部分唯一索引 `(dataset) where state in ('open','finishing')` = 单写者租约。触发器：身份列（`batch_id, dataset, owner_token, processing_timeout, created_at`）不可改；状态只走 `open → finishing → finished`、`open|finishing → aborted`；`finished` / `aborted` 冻结。
+- **所有者校验** `macro_assert_owner(p_batch_id, p_owner_token, p_states text[]) returns macro_ingest_runs`（service-only 辅助，每个变更 RPC 开头调用；锁序恒为 run 行 → 其他行）：`p_batch_id` 为空 → 不校验（只有测试与 Task 18 的无批次链接）；`select … from macro_ingest_runs where batch_id = p_batch_id for update`；无 run 行 → 令牌必须为空（FRED cron：单写者由 Vercel cron 保证，批次没有 run 行），否则 `fenced`；有 run 行 → 令牌必须非空且等于 `owner_token`、`state = any(p_states)`，否则 `fenced`。所以一个 AKShare 批次永远不能被不带令牌的调用写入。
+- **带令牌的变更 RPC**：`macro_put_retrieval(…, p_owner_token)`、`macro_write_observations(…, p_owner_token)`、`macro_link_quarantine(…, p_batch_id, p_owner_token)`（状态 open/finishing：finish 内的派生也写入与链接）；`macro_claim_chunk(…, p_owner_token)`、`macro_complete_chunk(…, p_owner_token)`（open）；`macro_begin_finish(…, p_owner_token)`；`macro_record_finish_step(…, p_owner_token, p_finish_token)`；`publish_macro_snapshot(…, p_publish_key, p_batch_id, p_owner_token)`（finish 调用时）。被接管后仍在运行的旧 worker 的**每一个**变更都得到 `fenced`（MacroDbError 契约码，路由回 409 `fenced`）。
+- `macro_claim_ingest(p_batch_id, p_dataset, p_max_age, p_processing_timeout, p_takeover)`：批次必须存在、同 dataset、`running`（`invalid_batch`）；按 dataset 取 advisory 锁；在同一事务里把该 dataset 中 ① `created_at < now() − p_max_age`（2 h）的 live run，以及 ② 当 `p_takeover = true` 时，任何有一块 `processing` 且 `received_at < now() − 该 run 的 processing_timeout`（10 min）的 live run，置 `aborted` 并在 progress 合并 `{aborted:{by: p_batch_id, reason: 'max_age'|'stalled_chunk'}}`；仍有 live run → `{status:'busy', holder, aborted}`（调用方把自己的批次以 `rejected` 结束并回 409 `batch_running`）；否则插入 run（`open`、新 `owner_token = gen_random_uuid()`、`processing_timeout = p_processing_timeout`）→ `{status:'claimed', owner_token, aborted}`。`aborted` = 该 dataset **所有**仍处于 `running` 批次的 aborted run 的 batch_id（不只本次新作废的）：调用方对每个用 `finishBatch(…failed, errors:[{code:'aborted'}])` 结束，只忽略 `batch_not_running`（已被别处结束 = 幂等），其他错误照常抛出；下一次 `start` 会再次列出仍在 running 的，自愈。Vercel 函数 `maxDuration`（300 s）< `processing_timeout`（600 s），所以健康的块永远不会被当作停滞。
+- `macro_ingest_chunks` 列 `state 'processing'|'done'`、`errors`、`claim_keys`、`located_keys`、`received_at`、`completed_at`；只允许 `processing → done`（触发器）。
+- `macro_claim_chunk(p_batch_id, p_seq, p_total, p_owner_token)`：run 必须存在（`batch_not_claimed`）；令牌不符或 run `aborted` → `fenced`；`(batch, seq)` 已有行 → 返回存储的行 `{status: state, chunk}`（**不再处理**：processing → 路由 409 `chunk_in_progress`；done → 存储的回执）；run 非 `open` → `batch_not_open`；`total` 与已有块不一致 → `chunk_total_mismatch`；插入 processing 行 → `{status:'claimed'}`。
+- `macro_complete_chunk(p_batch_id, p_seq, p_counts, p_errors, p_claim_keys, p_located_keys, p_owner_token)`：所有者校验（open）后，只对 processing 行（否则 `chunk_not_processing`）写入计数（六个非负整数，**只含原生结果**）、错误（`{code,key?,message?}` 数组，≤ 500 条）与两组键并置 `done`。
+- **崩溃块的恢复（第 5 稿 P2-1）**：块在 `claimChunk` 之后、`completeChunk` 之前崩溃（观测可能已部分写入）就永远停在 `processing`。采集器在 `chunk_in_progress` 重试用尽、或任一响应为 `fenced` 时，**整次采集重来**：`start {takeover:true}` 取得新批次与新令牌（旧 run 若停滞超过 10 分钟即被作废，否则回 409 `batch_running` 并被轮询），然后把内存中的全部结果按新批次重新分块发送；**从不**在旧批次里补发部分块。旧批次以 `failed` 结束、其行永不合格；新批次里同值的重交付不是旧行的 duplicate（写入规则第 4 步只看合格或本批次的行），所以新批次完整成立。
+- **独占 finish（第 5 稿 P1-4）** `macro_begin_finish(p_batch_id, p_total, p_owner_token)`（`p_total` 0..10000）：锁 run；不存在 → `batch_not_claimed`；令牌不符或 `aborted` → `fenced`；`finished` → `{status:'finished', progress}`（回放回执）；`open` 且任一 seq 缺失/未完成或 total 不一致 → `{status:'incomplete', missing}`；`open` 且完整 → 置 `finishing`；`open → finishing` 与 `finishing`（同一所有者重试 = 续做）都生成新的 `finish_token` 并返回 `{status:'finishing', progress, finish_token}`。轮换令牌使同一所有者的较早的并发 finish 在其下一个检查点得到 `fenced`；另一个令牌的调用者永远 `fenced`。
+- `macro_record_finish_step(p_batch_id, p_step, p_data, p_owner_token, p_finish_token)`：`p_step ∈ derived | batch_finished | freshness_started | freshness_recorded | published | publish_attempt | receipt`；所有者与 `finish_token` 都必须相符（`fenced`），run 必须 `finishing`（`run_not_finishing`）；`publish_attempt` 追加到 `finish_progress.attempts`（≤ 20 条），其余合并；`receipt` 同时把 run 置 `finished`（释放租约）。
+- **finish 步骤的幂等（按 `(batch_id, step)`）**：
+  - `derived`：派生按本质幂等（重试写出的都是 duplicate）；**本次采集没有任何原生 inserted/versioned/duplicates 结果**（块计数之和）→ 不派生，记 `{skipped:'no_native_outcomes'}`（第 5 稿 P2-2，见下）。
+  - `batch_finished`：`finishBatch` 抛 `batch_not_running`（另一次尝试已结束该批次但没留下检查点）→ 重读 `ingest_batches.status` 并记下它，绝不第二次结束。
+  - 新鲜度：**先**记 `freshness_started {ok}`，再 `recordAttempt`，再记 `freshness_recorded {ok}`；重试时若只有 `freshness_started` → **跳过** `recordAttempt`，记 `freshness_recorded {ok, skipped:'started_without_record'}`。理由：`src/lib/dq/freshness.ts::recordAttempt` 是读后 upsert、不幂等，重做会让 `consecutive_errors` 多加一次（两次即 `error`）；宁可丢一次尝试记录（下一次采集会写），也不重复计数。
+  - `published`：`publishRegion(…, {publishKey:'ingest:'+batch_id, fence})`，SQL 键幂等保证崩溃于发布之后的重试回放同一快照；`published` 检查点只在成功（含 replayed）或**有意的终局跳过**（批次 `failed`、`no_native_outcomes`）之后写；可重试的失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误、记录失败快照的其他错误）→ 记 `publish_attempt {at, status, reason}`，run 保持 `finishing`，路由回 503 `publish_pending`，采集器以同一令牌重试 finish。
+  - `receipt`：最后写，结束 run。
+- **全部来源失败（第 5 稿 P2-2）**：finish 时 `native = Σ 块计数`（只有原生结果）。`native.inserted + native.versioned + native.duplicates = 0` → 跳过派生与发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），追加批次错误 `{code:'no_native_outcomes'}`（非 INFO），`recordAttempt({ok:false})`。没有任何行落地时批次因此是 `failed`；唯一例外是只有隔离行落地（`quarantined > 0`）时，共用 `batchStatusFromCounts` 给出 `partial`——`src/lib/dq/batches.ts` 不改，所以接受这一例外，但新鲜度仍记 `ok:false`、仍不发布。回执分开报告 `native_counts` 与 `derived_counts`，`counts` 是两者与失败序列之和（交给 `finishBatch`）。cron（Task 7）用同一规则。
+- 批次级未定位 claim（第 4 稿 P2-1）：finish 时 `⋃claim_keys − ⋃located_keys`（跨全部块去重）的数量 n > 0 → 一条 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`，与全部已存块错误一起交给 `finishBatch`。
 
 ### 分析运行配额（SQL `create_macro_analysis_run`；Task 1 / Task 15）
 
@@ -345,10 +395,10 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 ### 跨任务约定
 
 - 观测 id、快照 id、运行 id 都是 uuid（字符串）。日期一律 ISO `YYYY-MM-DD`；时间 ISO UTC。
-- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`stale_delivery`、`adapter_mismatch`、`rule_failed:<ruleId>`。重复冲突无妨：RPC 每次都报告冲突，`quarantine()` 复用同 `(dataset, table_name, natural_key, reason_code)` 的 open 条目（Task 6 有测试），复用条目保留第一次的 payload，所以条目与观测的对应**只**看 `macro_quarantine_members`（Task 6 每次 `quarantine()` 后立即 `linkQuarantine`）。`adapter_mismatch` 与 `rule_failed:*` 的值从未写入，没有被隔离的观测行，**只能拒绝**：SQL 对接受抛 `reject_only`（Task 18 脚本在调用前也拒绝，runbook §7 写明）。
+- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`stale_delivery`、`adapter_mismatch`、`rule_failed:<ruleId>`。重复冲突无妨：RPC 每次都报告冲突，`quarantine()` 复用同 `(dataset, table_name, natural_key, reason_code)` 的 open 条目（Task 6 有测试），复用条目保留第一次的 payload，所以条目与观测的对应**只**看 `macro_quarantine_members`（Task 6 每次 `quarantine()` 后立即 `linkQuarantine`；`quarantine_closed` → 再 `quarantine()` 一次并重试链接一次，仍失败则整块失败）。`previously_rejected` 不是隔离原因：信息性 conflict，不建条目、不计错误（第 5 稿 P1-2）。`adapter_mismatch` 与 `rule_failed:*` 的值从未写入，没有被隔离的观测行，**只能拒绝**：SQL 对接受抛 `reject_only`（Task 18 脚本在调用前也拒绝，runbook §7 写明）。
 - AKShare 交叉核对值（claim）周期不在 TS 解析出的原始点里 → **不隔离**、跳过。每块存下 `claim_keys` 与 `located_keys`；finish 按整批去重计算 `⋃claim_keys − ⋃located_keys`，n > 0 时向 `finishBatch` 交一条批次错误 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`（`skipped_summary` 是 `src/lib/dq/batches.ts` 已有的 INFO 码，不改该文件；Python 每块重复带同一序列的 claims，所以按块求和会重复计数，第 4 稿 P2-1）。
 - `macro_catalog_versions.rules_version` = `MACRO_RULES_VERSION`（`quality.ts` 的 DQ 规则版本，cron、ingest `start`、测试 seed 一致）；判定规则版本 `RULES_VERSION = 'macro-regime-rules/1.0'` 存在每个快照的 `macro_regime_results.rules_version`。
-- ingest 协议（§0.2 M24；第 4 稿 P1-6/P2-1/P2-2/P2-4）：`POST /api/macro/ingest` body `{action:'start', tool_versions}` → `startBatch` 后 `claimIngest` 原子取租约 → `{batch_id}`（租约被占 → 自己的批次以 `rejected` 结束，409 `batch_running`；超过 2h 的未结束 run 先被弃置，其批次以 `failed` 结束）；`{action:'chunk', batch_id, seq, total, evidence[], claims[]}` → `claimChunk` 认领后才处理（重复块返回存储的回执 `duplicate`，处理中 → 409 `chunk_in_progress`，绝不二次写入），处理完 `completeChunk` 存计数、错误与 claim/定位键；`{action:'finish', batch_id, total, series_outcomes:[{series_id, ok, code?}]}`（`total` 可为 0：全部序列都失败时没有块）→ `beginFinish`，按 `finish_progress` 可续执行：CN 派生（`derived`）→ 汇总（块计数 + 派生计数 + 每个失败序列 `failed+1` 与错误 `{code, key: series_id}` + 全部块错误 + 批次级未定位 claim 摘要）→ `finishBatch`（`batch_finished`）→ `recordAttempt('macro.akshare',{ok: status!=='failed', detail:{batch_status, failed_series}})`（`freshness_recorded`）→ `publishRegion('CN')`（`published`，Task 11）→ 回执（`receipt`，run 结束）。重试的 finish 跳过已完成步骤，已结束则原样返回存储的回执。cron 只发布 US。批次状态为 `failed` 时 cron / ingest 都**不发布**（回执 `publish:{status:'skipped',reason:'batch_failed'}`），上一个 active 快照继续服务。
+- ingest 协议（§0.2 M24；第 4 稿 P1-6/P2-1/P2-2/P2-4；第 5 稿 P1-3/P1-4/P1-5/P2-1/P2-2）：`POST /api/macro/ingest` body `{action:'start', tool_versions, takeover?:true}` → `startBatch` 后 `claimIngest(…,{maxAgeMs:2h, processingTimeoutMs:10min, takeover})` 原子取租约 → `{batch_id, owner_token}`（租约被占 → 自己的批次以 `rejected` 结束，409 `batch_running`；被作废 run 的仍在 running 的批次以 `failed` 结束）；`{action:'chunk', batch_id, owner_token, seq, total, evidence[], claims[]}` → `claimChunk` 认领后才处理（重复块返回存储的回执 `duplicate`，处理中 → 409 `chunk_in_progress`，绝不二次写入），每个写入都带令牌，处理完 `completeChunk` 存计数、错误与 claim/定位键；`{action:'finish', batch_id, owner_token, total, series_outcomes:[{series_id, ok, code?}]}`（`total` 可为 0）→ `beginFinish` 取得 `finish_token`，按 `finish_progress` 可续执行：CN 派生（`derived`，无原生结果则跳过）→ 汇总（原生块计数 + 派生计数 + 每个失败序列 `failed+1` 与错误 `{code, key: series_id}` + 全部块错误 + 批次级未定位 claim 摘要 + 必要时 `no_native_outcomes`）→ `finishBatch`（`batch_finished`）→ `freshness_started` → `recordAttempt('macro.akshare',{ok: status!=='failed' && 有原生结果, detail:{batch_id, batch_status, failed_series}})` → `freshness_recorded` → `publishRegion('CN',{publishKey:'ingest:'+batch_id, fence})`（`published`，Task 11；可重试失败 → `publish_attempt` + 503 `publish_pending`）→ 回执（`receipt`，run 结束）。任一步 `fenced` → 409 `fenced`，采集器整次重来（新批次）。重试的 finish 跳过已完成步骤，已结束则原样返回存储的回执。cron 只发布 US（键 `'cron:'+batch_id`）。批次状态为 `failed` 或无原生结果时 cron / ingest 都**不发布**（回执 `publish:{status:'skipped',reason:'batch_failed'|'no_native_outcomes'}`），上一个 active 快照继续服务。
 - 判定权重属于方法：`regime.ts` 导出 `WEIGHTS_V1: Record<string, number>`；`catalog.ts` 中每个 `role='indicator'` 的 `weight` 必须等于 `WEIGHTS_V1[id] ?? 0`（Task 10 测试）；覆盖率分母 = 该区域 `WEIGHTS_V1` 之和（含 missing/restricted 项）。
 - 同比：`(cur/prev − 1) × 100`，十进制，half-even 四舍五入到 4 位小数后 canonical（`decimal.ts::yoyPct`）；`index_minus_100`、`month_end` 精确。派生行 `transform` = `'<kind>@1'`。
 - 发布及时性（§0.2 M11）：下一期 = 最新期 + 1 个周期，截止 = 下一期期末 + `releaseLagDays` + 3 天，今天 > 截止 → `late`；无观测 → `missing`；`event` 或无 `releaseLagDays` → `n/a`（即使无观测）。**数据有无是另一个字段**：概览行 `presence: 'present'|'missing'`（第 4 稿 P1-3），"本期变化"的 `missing` 计数按 `presence` 而非及时性。
@@ -421,6 +471,15 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 | 第 4 稿 P2-1 块错误与 claim/定位键持久化、批次级未定位摘要 | 1、3、9 |
 | 第 4 稿 P2-2 `series_outcomes`、失败序列计入批次与新鲜度 | 8、9 |
 | 第 4 稿 P2-4 可续 finish（`finish_progress`） | 1、3、9、11 |
+| 第 5 稿 P1-1 `eligibleHistory` 的 `const part:ObservationRow[]` 显式注解 | 3 |
+| 第 5 稿 P1-2 拒绝值终局（`previously_rejected`，选择动作之前判定） | 1、2、3、6 |
+| 第 5 稿 P1-3 所有者令牌栅栏（`macro_assert_owner`，每个 ingest 变更 RPC，接管 → `aborted`） | 1、2、3、6、8、9、11 |
+| 第 5 稿 P1-4 独占 finish（`finish_token`）、按步骤幂等（`freshness_started`、`publish_key`） | 1、2、3、9、11 |
+| 第 5 稿 P1-5 可重试的发布失败留在 finishing（`publish_attempt`，503 `publish_pending`） | 1、3、9、11 |
+| 第 5 稿 P1-6 隔离行只复用合格或本批次的；`member_ineligible` | 1、3、18 |
+| 第 5 稿 P2-1 停滞块：`start {takeover:true}` 作废旧 run，整次采集换新批次重来 | 1、3、8、9 |
+| 第 5 稿 P2-2 无原生结果：跳过派生与发布、批次失败、`ok:false`（ingest 与 cron） | 7、9、11 |
+| 第 5 稿 P2-3 链接锁 `dq_quarantine` 行，`quarantine_closed` → 重建条目重试一次，失败则块失败 | 1、3、6 |
 
 ## 执行顺序
 
@@ -484,7 +543,10 @@ Create `src/lib/macro/macro.integration.test.ts`:
 // validation, supersede, stale_publisher on revision and on input_revision, two racing publishers),
 // republish_macro_snapshot, record_failed_macro_snapshot, quarantine members with macro_resolve_conflict
 // (accept one member, the rest rejected, reject_only in SQL, audit row), the ingest lease, chunk claiming
-// and resumable finish progress, and the analysis-run quota.
+// and resumable finish progress, and the analysis-run quota. 第 5 稿: owner-token fencing of every ingest
+// mutation after a takeover (P1-3/P2-1), exclusive finish with rotating finish tokens and publish-key replay
+// (P1-4/P1-5), rejected-value finality (P1-2), quarantine reuse only from eligible/current batches and
+// member_ineligible (P1-6), link-vs-resolve on the item row lock with two connections (P2-3).
 // Rows are never cleaned up (append-only by design; test:db creates a fresh database per run);
 // every test uses its own series ids. Publish state rows (US/CN) are shared, so publish tests
 // always read the current state right before publishing.
@@ -501,18 +563,19 @@ const SERVICE_READ=['macro_publish_state','macro_ingest_chunks','macro_ingest_ru
 const PUBLIC_READ=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots','macro_regime_results'];
 const SERVICE_RPCS=[
  'public.macro_upsert_catalog(text,text,jsonb)',
- 'public.macro_put_retrieval(text,text,text,text,bigint,text,text,int,timestamptz,uuid,jsonb)',
- 'public.macro_write_observations(uuid,text,jsonb)',
- 'public.publish_macro_snapshot(text,bigint,bigint,date,text,text,uuid[],uuid[],jsonb,jsonb,jsonb,text,numeric)',
+ 'public.macro_put_retrieval(text,text,text,text,bigint,text,text,int,timestamptz,uuid,jsonb,uuid)',
+ 'public.macro_write_observations(uuid,text,jsonb,uuid)',
+ 'public.publish_macro_snapshot(text,bigint,bigint,date,text,text,uuid[],uuid[],jsonb,jsonb,jsonb,text,numeric,text,uuid,uuid)',
  'public.republish_macro_snapshot(uuid,bigint,bigint)',
  'public.record_failed_macro_snapshot(text,date,text,text,text)',
- 'public.macro_link_quarantine(uuid,uuid[])',
+ 'public.macro_link_quarantine(uuid,uuid[],uuid,uuid)',
  'public.macro_resolve_conflict(uuid,text,uuid,uuid)',
- 'public.macro_claim_ingest(uuid,text,interval)',
- 'public.macro_claim_chunk(uuid,int,int)',
- 'public.macro_complete_chunk(uuid,int,jsonb,jsonb,jsonb,jsonb)',
- 'public.macro_begin_finish(uuid,int)',
- 'public.macro_record_finish_step(uuid,text,jsonb)',
+ 'public.macro_assert_owner(uuid,uuid,text[])',
+ 'public.macro_claim_ingest(uuid,text,interval,interval,boolean)',
+ 'public.macro_claim_chunk(uuid,int,int,uuid)',
+ 'public.macro_complete_chunk(uuid,int,jsonb,jsonb,jsonb,jsonb,uuid)',
+ 'public.macro_begin_finish(uuid,int,uuid)',
+ 'public.macro_record_finish_step(uuid,text,jsonb,uuid,uuid)',
  'public.macro_ineligible_ids(uuid[],uuid)',
  'public.macro_manifest_ok(text,uuid[])',
  'public.macro_latest_eligible_observations(text[],timestamptz,date,uuid)',
@@ -562,11 +625,12 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  const batch=async(dataset='macro.fred')=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'ts-fred',$2)`,[id,dataset]);return id;};
  /** Finishes a batch as finishBatch would (status + finished_at together: the DQ invariant). */
  const finish=async(b:string,status='success')=>{await q(`update public.ingest_batches set status=$2, finished_at=now() where batch_id=$1 and status='running'`,[b,status]);};
- const retrieval=async(b:string,fetchedAt:string,body:string=randomUUID())=>{
+ /** token: the run's owner token (AKShare path, 第 5 稿 P1-3); null = FRED cron (a batch without a run row). */
+ const retrieval=async(b:string,fetchedAt:string,body:string=randomUUID(),token:string|null=null)=>{
   const h=sha(body);
-  return await one(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',$3,'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE','fred.stlouisfed.org',200,$4,$5,'{"node":"22"}'::jsonb) v`,[h,`fred_csv/${h}.csv`,Buffer.byteLength(body),fetchedAt,b]) as string;
+  return await one(`select public.macro_put_retrieval($1,$2,'fred_csv','text/csv',$3,'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE','fred.stlouisfed.org',200,$4,$5,'{"node":"22"}'::jsonb,$6) v`,[h,`fred_csv/${h}.csv`,Buffer.byteLength(body),fetchedAt,b,token]) as string;
  };
- const write=async(b:string,rows:unknown[])=>(await one(`select public.macro_write_observations($1,'test-code',$2::jsonb) v`,[b,JSON.stringify(rows)])) as WriteResult;
+ const write=async(b:string,rows:unknown[],token:string|null=null)=>(await one(`select public.macro_write_observations($1,'test-code',$2::jsonb,$3) v`,[b,JSON.stringify(rows),token])) as WriteResult;
  const native=(series:string,period:string,value:string,ret:string,at:string,revisable=true)=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable,retrieval_id:ret,locator:{kind:'csv_row',line:2,column:1}});
  const derived=(series:string,period:string,value:string,from:string[],at:string)=>({series_id:series,period_end:period,value_text:value,available_at:at,revisable:true,derived_from:from,transform:'month_end@1'});
  const rows=async(series:string,period:string)=>q(`select observation_id,value_text,version,status,available_at from public.macro_observations where series_id=$1 and period_end=$2 order by version`,[series,period]);
@@ -590,8 +654,8 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   return id;
  };
  const counts={verified:1,missing:0,restricted:0};
- const publish=(region:'US'|'CN',rev:number,inputRev:number,catalogVersion:string,ids:string[],history:string[]=[])=>
-  one(`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],$6::uuid[],$7::jsonb,null,'[]'::jsonb,'macro-rules/1',0) v`,[region,rev,inputRev,catalogVersion,ids,history,JSON.stringify(counts)]) as Promise<{snapshot_id:string;revision:number}>;
+ const publish=(region:'US'|'CN',rev:number,inputRev:number,catalogVersion:string,ids:string[],history:string[]=[],k:{key?:string;batch?:string;token?:string|null}={})=>
+  one(`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],$6::uuid[],$7::jsonb,null,'[]'::jsonb,'macro-rules/1',0,$8,$9,$10) v`,[region,rev,inputRev,catalogVersion,ids,history,JSON.stringify(counts),k.key??null,k.batch??null,k.token??null]) as Promise<{snapshot_id:string;revision:number;replayed:boolean}>;
  /** A fresh US series with one ok observation (period 2026-09-30, value 4.1, fetched T2) in a FINISHED (success) batch, so
   *  the row is publication-eligible; later writes in the test may keep using that batch id. Returns ids. */
  const seeded=async(o:Record<string,unknown>={})=>{
@@ -601,7 +665,12 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   const [row]=await rows(s,'2026-09-30');
   return {s,v,b,r,id:row.observation_id as string};
  };
- const claim=(dataset:string,b:string,maxAge='2 hours')=>one(`select public.macro_claim_ingest($1,$2,$3::interval) v`,[b,dataset,maxAge]) as Promise<{status:string;abandoned:string[];holder?:string}>;
+ /** macro_claim_ingest (第 5 稿 P1-3): timeout = the NEW run's processing_timeout; takeover lets this claim abort live runs whose
+  *  processing chunk is older than their own timeout. */
+ const claim=(dataset:string,b:string,maxAge='2 hours',o:{takeover?:boolean;timeout?:string}={})=>
+  one(`select public.macro_claim_ingest($1,$2,$3::interval,$4::interval,$5) v`,[b,dataset,maxAge,o.timeout??'10 minutes',o.takeover??false]) as Promise<{status:string;owner_token?:string;aborted:string[];holder?:string}>;
+ /** An open dq_quarantine item for series|period (macro.fred, macro_observations). */
+ const qItem=async(series:string,b:string,reason='unexpected_revision',period='2026-09-30')=>{const id=randomUUID();await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,'macro.fred','macro_observations',$2,$3,$4)`,[id,`${series}|${period}`,reason,b]);return id;};
  const dataset=()=>`macro.t${randomBytes(4).toString('hex')}`;
 
  beforeAll(async()=>{
@@ -824,11 +893,12 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect(await q(`select status,resolved_by from public.dq_quarantine where id=$1`,[qa])).toEqual([{status:'resolved_accept',resolved_by:resolver}]);
   expect(await q(`select user_id,action,object_type,object_id,detail->>'decision' decision,detail->>'observation_id' obs from public.research_audit_log where object_id=$1`,[qa])).toEqual([{user_id:resolver,action:'dq.quarantine_resolve',object_type:'dq',object_id:qa,decision:'accept',obs:rb}]);
   expect((await fails(resolve(qa,'accept',rb))).message).toBe('already_resolved');
-  expect((await fails(link(qa,[ra]))).message).toBe('already_resolved');
+  expect((await fails(link(qa,[ra]))).message).toBe('quarantine_closed');                         // the item row is locked and closed (第 5 稿 P2-3)
   await asRole('anon',async c=>{expect((await c.query(`select value_text from public.macro_observations where series_id=$1 order by version`,[s])).rows).toEqual([{value_text:'4.1'},{value_text:'4.6'}]);});
-  // the rejected value re-delivered is not inserted again; the conflict points at the rejected row; a new item can only reject it
+  // the rejected value re-delivered is not inserted again: previously_rejected (counted as a duplicate, 第 5 稿 P1-2) points at the
+  // rejected row; even a hand-made item binding it can only reject it
   const again=await write(b,[native(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
-  expect(again.conflicts).toEqual([{series_id:s,period_end:'2026-09-30',reason:'unexpected_revision',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]);
+  expect(again).toEqual({inserted:0,duplicates:1,versioned:0,quarantined:0,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});
   expect(await rows(s,'2026-09-30')).toHaveLength(3);
   const qb=await item(s);await link(qb,[ra]);
   expect((await fails(resolve(qb,'accept',ra))).message).toBe('not_quarantined');                 // reject-then-accept elsewhere cannot resurrect
@@ -909,36 +979,47 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   await expect(q(`update public.macro_snapshots set status='active' where snapshot_id=$1`,[p1.snapshot_id])).rejects.toThrow(/append_only:/);   // the old way is still refused
  });
 
- it('ingest lease: concurrent starts → exactly one claim; stale live runs are abandoned first; a finished run frees the dataset',async()=>{
+ it('ingest lease: concurrent starts → exactly one claim with an owner token; stale live runs are aborted first; aborted batches still running are listed until finished; a fresh processing chunk is not a stall',async()=>{
   const ds=dataset();
   const [b1,b2]=[await batch(ds),await batch(ds)];
   const out=await Promise.all([claim(ds,b1),claim(ds,b2)]);
   expect(out.map(o=>o.status).sort()).toEqual(['busy','claimed']);
-  const winner=out[0].status==='claimed'?b1:b2;
-  expect(out.find(o=>o.status==='busy')!.holder).toBe(winner);
-  expect(await one(`select count(*)::int v from public.macro_ingest_runs where dataset=$1 and state<>'finished'`,[ds])).toBe(1);
+  const winner=out[0].status==='claimed'?b1:b2;const won=out.find(o=>o.status==='claimed')!;
+  expect(won.owner_token).toMatch(/^[0-9a-f-]{36}$/);
+  expect(out.find(o=>o.status==='busy')).toMatchObject({holder:winner,aborted:[]});
+  expect(out.find(o=>o.status==='busy')!.owner_token).toBeUndefined();                                 // the loser gets no token
+  expect(await one(`select count(*)::int v from public.macro_ingest_runs where dataset=$1 and state in ('open','finishing')`,[ds])).toBe(1);
+  expect(await one(`select owner_token::text v from public.macro_ingest_runs where batch_id=$1`,[winner])).toBe(won.owner_token);
+  expect((await one(`select public.macro_claim_chunk($1,0,1,$2) v`,[winner,won.owner_token])).status).toBe('claimed');   // processing, but fresh
+  expect(await claim(ds,await batch(ds),'2 hours',{takeover:true})).toMatchObject({status:'busy',holder:winner});   // a healthy chunk is never a stall
   await new Promise(r=>setTimeout(r,30));
   const b3=await batch(ds);
-  expect(await claim(ds,b3,'10 milliseconds')).toEqual({status:'claimed',abandoned:[winner]});      // older than max age → abandoned, reported to the caller
-  expect(await q(`select state,finish_progress from public.macro_ingest_runs where batch_id=$1`,[winner])).toEqual([{state:'finished',finish_progress:{abandoned:true}}]);
-  expect((await fails(claim(ds,await batch('macro.fred')))).message).toBe('invalid_batch');          // dataset must match the batch
+  const c3=await claim(ds,b3,'10 milliseconds');
+  expect(c3).toEqual({status:'claimed',owner_token:expect.any(String),aborted:[winner]});              // older than max age → aborted, reported to the caller
+  expect(await q(`select state,finish_progress from public.macro_ingest_runs where batch_id=$1`,[winner])).toEqual([{state:'aborted',finish_progress:{aborted:{by:b3,reason:'max_age'}}}]);
+  expect((await claim(ds,await batch(ds))).aborted).toEqual([winner]);                                  // still running → listed again (self-healing sweep)
+  await finish(winner,'failed');                                                                        // what the start route does
+  expect((await claim(ds,await batch(ds))).aborted).toEqual([]);
+  expect((await fails(claim(ds,await batch('macro.fred')))).message).toBe('invalid_batch');             // dataset must match the batch
   const done=await batch(ds);await finish(done);
-  expect((await fails(claim(ds,done))).message).toBe('invalid_batch');                                // only running batches claim
-  await expect(q(`update public.macro_ingest_runs set state='open' where batch_id=$1`,[winner])).rejects.toThrow(/append_only:/);
+  expect((await fails(claim(ds,done))).message).toBe('invalid_batch');                                   // only running batches claim
+  await expect(q(`update public.macro_ingest_runs set state='open' where batch_id=$1`,[winner])).rejects.toThrow(/append_only:/);   // aborted is final
+  await expect(q(`update public.macro_ingest_runs set owner_token=gen_random_uuid() where batch_id=$1`,[b3])).rejects.toThrow(/append_only:/);
  });
 
- it('chunks: claimed once (concurrent duplicates never both process), completion stores counts/errors/keys, finish begins when all are done and resumes from its progress',async()=>{
-  const ds=dataset();const b=await batch(ds);expect((await claim(ds,b)).status).toBe('claimed');
+ it('chunks: claimed once (concurrent duplicates never both process), completion stores counts/errors/keys, finish begins when all are done and resumes from its progress with a new finish token',async()=>{
+  const ds=dataset();const b=await batch(ds);const cl=await claim(ds,b);expect(cl.status).toBe('claimed');const t=cl.owner_token!;
   const c={fetched:3,inserted:2,duplicates:1,versioned:0,quarantined:0,failed:0};
-  const cc=(seq:number,total:number,batchId=b)=>one(`select public.macro_claim_chunk($1,$2,$3) v`,[batchId,seq,total]);
-  const done=(seq:number,counts:unknown=c,errors:unknown[]=[],ck:string[]=[],lk:string[]=[])=>one(`select public.macro_complete_chunk($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb) v`,[b,seq,JSON.stringify(counts),JSON.stringify(errors),JSON.stringify(ck),JSON.stringify(lk)]);
-  const begin=(total:number,batchId=b)=>one(`select public.macro_begin_finish($1,$2) v`,[batchId,total]);
-  const step=(name:string,data:unknown)=>one(`select public.macro_record_finish_step($1,$2,$3::jsonb) v`,[b,name,JSON.stringify(data)]);
+  const cc=(seq:number,total:number,batchId=b,token:string=t)=>one(`select public.macro_claim_chunk($1,$2,$3,$4) v`,[batchId,seq,total,token]);
+  const done=(seq:number,counts:unknown=c,errors:unknown[]=[],ck:string[]=[],lk:string[]=[])=>one(`select public.macro_complete_chunk($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7) v`,[b,seq,JSON.stringify(counts),JSON.stringify(errors),JSON.stringify(ck),JSON.stringify(lk),t]);
+  const begin=(total:number,batchId=b,token:string=t)=>one(`select public.macro_begin_finish($1,$2,$3) v`,[batchId,total,token]) as Promise<{status:string;missing?:number[];progress?:Record<string,unknown>;finish_token?:string}>;
+  const step=(name:string,data:unknown,ft:string)=>one(`select public.macro_record_finish_step($1,$2,$3::jsonb,$4,$5) v`,[b,name,JSON.stringify(data),t,ft]) as Promise<Record<string,unknown>>;
   const both=await Promise.all([cc(0,2),cc(0,2)]);
   expect(both.map(x=>x.status).sort()).toEqual(['claimed','processing']);
   expect((await fails(cc(1,3))).message).toBe('chunk_total_mismatch');
   expect((await fails(cc(2,2))).message).toBe('invalid_chunk');
   expect((await fails(cc(0,1,randomUUID()))).message).toBe('batch_not_claimed');
+  expect((await fails(cc(1,2,b,randomUUID()))).message).toBe('fenced');                                // another token
   expect(await begin(2)).toEqual({status:'incomplete',missing:[0,1]});
   const stored=await done(0,c,[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],['CN_A|2026-09-30','CN_A|2026-10-31'],['CN_A|2026-09-30']);
   expect(stored).toMatchObject({seq:0,total:2,state:'done',counts:c,errors:[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],claim_keys:['CN_A|2026-09-30','CN_A|2026-10-31'],located_keys:['CN_A|2026-09-30']});
@@ -948,25 +1029,152 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect(await begin(2)).toEqual({status:'incomplete',missing:[1]});
   expect((await fails(done(1,{fetched:1}))).message).toBe('invalid_chunk');
   await done(1,{...c,fetched:1},[],['CN_A|2026-10-31'],[]);
-  expect(await begin(2)).toEqual({status:'finishing',progress:{}});
-  expect(await step('derived',{counts:c,errors:[]})).toEqual({derived:{counts:c,errors:[]}});
-  expect(await begin(2)).toEqual({status:'finishing',progress:{derived:{counts:c,errors:[]}}});    // a retried finish resumes from its progress
-  await step('batch_finished',{status:'success',date:'2026-11-06'});
-  expect((await fails(step('nope',{}))).message).toBe('invalid_step');
+  const f1=await begin(2);
+  expect(f1).toEqual({status:'finishing',progress:{},finish_token:expect.any(String)});
+  expect(await step('derived',{counts:c,errors:[]},f1.finish_token!)).toEqual({derived:{counts:c,errors:[]}});
+  const f2=await begin(2);
+  expect(f2).toEqual({status:'finishing',progress:{derived:{counts:c,errors:[]}},finish_token:expect.any(String)});   // a retried finish resumes from its progress…
+  expect(f2.finish_token).not.toBe(f1.finish_token);                                                     // …with a new finish token
+  expect((await fails(step('batch_finished',{status:'success',date:'2026-11-06'},f1.finish_token!))).message).toBe('fenced');   // the older finisher is fenced
+  const ft=f2.finish_token!;
+  await step('batch_finished',{status:'success',date:'2026-11-06'},ft);
+  expect((await fails(step('nope',{},ft))).message).toBe('invalid_step');
+  await step('freshness_started',{ok:true},ft);
+  expect(await step('freshness_recorded',{ok:true},ft)).toMatchObject({freshness_started:{ok:true},freshness_recorded:{ok:true}});
   const receipt={batch_id:b,status:'success'};
-  await step('receipt',receipt);
+  await step('receipt',receipt,ft);
   expect(await begin(2)).toMatchObject({status:'finished',progress:{receipt,derived:{counts:c},batch_finished:{status:'success'}}});
-  expect((await fails(step('published',{}))).message).toBe('run_not_finishing');
+  expect((await fails(step('published',{},ft))).message).toBe('run_not_finishing');
   expect(await q(`select seq,state,claim_keys,located_keys from public.macro_ingest_chunks where batch_id=$1 order by seq`,[b])).toEqual([
    {seq:0,state:'done',claim_keys:['CN_A|2026-09-30','CN_A|2026-10-31'],located_keys:['CN_A|2026-09-30']},
    {seq:1,state:'done',claim_keys:['CN_A|2026-10-31'],located_keys:[]}]);
   expect((await claim(ds,await batch(ds))).status).toBe('claimed');                                  // the finished run released the lease
   // a run with no chunks may finish (every series failed): total 0; claiming after finishing has begun is refused
-  const ds2=dataset();const e=await batch(ds2);await claim(ds2,e);
-  expect(await begin(0,e)).toEqual({status:'finishing',progress:{}});
-  expect((await fails(cc(0,1,e))).message).toBe('batch_not_open');
+  const ds2=dataset();const e=await batch(ds2);const te=(await claim(ds2,e)).owner_token!;
+  expect(await begin(0,e,te)).toMatchObject({status:'finishing',progress:{}});
+  expect((await fails(cc(0,1,e,te))).message).toBe('batch_not_open');
  });
 
+ it('owner fence (第 5 稿 P1-3/P2-1): a takeover of a stalled run aborts it atomically; the paused old worker is fenced on every mutation; a new batch then succeeds and the old batch ends failed',async()=>{
+  const ds=dataset();const s=sid();await catalog([def(s)]);
+  const old=await batch(ds);const t1=(await claim(ds,old,'2 hours',{timeout:'10 milliseconds'})).owner_token!;
+  const r1=await retrieval(old,T2,randomUUID(),t1);
+  expect((await one(`select public.macro_claim_chunk($1,0,1,$2) v`,[old,t1])).status).toBe('claimed');
+  expect((await write(old,[native(s,'2026-09-30','4.1',r1,T2)],t1)).inserted).toBe(1);               // the worker crashes here: rows written, completeChunk never called
+  expect((await fails(write(old,[native(s,'2026-08-31','4',r1,T2)]))).message).toBe('fenced');         // a batch with a run never takes a token-less write
+  const plain=await batch();expect((await fails(retrieval(plain,T2,randomUUID(),t1))).message).toBe('fenced');   // a token on a run-less batch is refused too
+  await new Promise(r=>setTimeout(r,30));
+  expect(await claim(ds,await batch(ds))).toMatchObject({status:'busy',holder:old});                    // without takeover a stalled chunk frees nothing
+  const fresh=await batch(ds);
+  const c2=await claim(ds,fresh,'2 hours',{takeover:true});
+  expect(c2).toMatchObject({status:'claimed',aborted:[old]});const t2=c2.owner_token!;expect(t2).not.toBe(t1);
+  expect(await q(`select state,finish_progress->'aborted' a from public.macro_ingest_runs where batch_id=$1`,[old])).toEqual([{state:'aborted',a:{by:fresh,reason:'stalled_chunk'}}]);
+  // the paused worker wakes up: every mutation it attempts is refused
+  const ids=(await rows(s,'2026-09-30')).map(x=>x.observation_id as string);
+  const st=await state('US');const v=await catalog([def(sid())]);
+  const zeroCounts=JSON.stringify({fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0});
+  const attempts:[string,()=>Promise<unknown>][]=[
+   ['put_retrieval',()=>retrieval(old,T3,randomUUID(),t1)],
+   ['write',()=>write(old,[native(s,'2026-10-31','4.2',r1,T2)],t1)],
+   ['link',()=>q(`select public.macro_link_quarantine($1,$2::uuid[],$3,$4)`,[randomUUID(),ids,old,t1])],
+   ['claim_chunk',()=>q(`select public.macro_claim_chunk($1,0,1,$2)`,[old,t1])],
+   ['complete_chunk',()=>q(`select public.macro_complete_chunk($1,0,$2::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$3)`,[old,zeroCounts,t1])],
+   ['begin_finish',()=>q(`select public.macro_begin_finish($1,1,$2)`,[old,t1])],
+   ['record_finish_step',()=>q(`select public.macro_record_finish_step($1,'derived','{}'::jsonb,$2,$3)`,[old,t1,randomUUID()])],
+   ['publish',()=>publish('US',st.r,st.i,v,[],[],{key:`ingest:${old}`,batch:old,token:t1})],
+  ];
+  for(const [name,call] of attempts)expect({name,code:(await fails(call())).message}).toEqual({name,code:'fenced'});
+  expect(await rows(s,'2026-10-31')).toEqual([]);
+  await finish(old,'failed');                                                                           // what the start route does with c2.aborted
+  const r2=await retrieval(fresh,T3,randomUUID(),t2);
+  expect(await write(fresh,[native(s,'2026-09-30','4.1',r2,T3)],t2)).toMatchObject({inserted:1,duplicates:0});   // not a duplicate of the abandoned row
+  await finish(fresh,'success');
+  const [, mine]=await rows(s,'2026-09-30');
+  expect((await q(`select observation_id from public.macro_latest_eligible_observations($1::text[],null,null,null)`,[[s]])).map(x=>x.observation_id)).toEqual([mine.observation_id]);
+ });
+
+ it('exclusive finish (第 5 稿 P1-4/P1-5): only the owner begins; two concurrent begins of the same owner leave exactly one live finisher; publish_attempt appends; a publish key replays instead of publishing twice',async()=>{
+  const {v,id}=await seeded();
+  const ds=dataset();const b=await batch(ds);const t=(await claim(ds,b)).owner_token!;
+  const begin=(token:string)=>one(`select public.macro_begin_finish($1,0,$2) v`,[b,token]) as Promise<{status:string;finish_token?:string;progress?:Record<string,unknown>}>;
+  const step=(name:string,data:unknown,ft:string)=>one(`select public.macro_record_finish_step($1,$2,$3::jsonb,$4,$5) v`,[b,name,JSON.stringify(data),t,ft]) as Promise<Record<string,unknown>>;
+  expect((await fails(begin(randomUUID()))).message).toBe('fenced');                                   // another owner
+  const [x,y]=await Promise.all([begin(t),begin(t)]);                                                   // the same owner twice at once (a retry racing the original)
+  expect([x.status,y.status]).toEqual(['finishing','finishing']);expect(x.finish_token).not.toBe(y.finish_token);
+  const outcomes=await Promise.allSettled([step('derived',{counts:{},errors:[]},x.finish_token!),step('derived',{counts:{},errors:[]},y.finish_token!)]);
+  expect(outcomes.filter(o=>o.status==='fulfilled')).toHaveLength(1);                                  // only the holder of the latest token proceeds
+  expect(((outcomes.find(o=>o.status==='rejected') as PromiseRejectedResult).reason as PgErr).message).toBe('fenced');
+  const ft=(await begin(t)).finish_token!;
+  await step('publish_attempt',{at:T3,status:'stale',reason:null},ft);
+  expect((await step('publish_attempt',{at:T3,status:'failed',reason:'rpc_failed'},ft)).attempts).toEqual([{at:T3,status:'stale',reason:null},{at:T3,status:'failed',reason:'rpc_failed'}]);
+  let st=await state('US');
+  const p1=await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t});
+  expect(p1).toMatchObject({revision:st.r+1,replayed:false});
+  // crash after the publish, before the 'published' checkpoint: the retry still holds the state it read before
+  expect(await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t})).toEqual({snapshot_id:p1.snapshot_id,revision:p1.revision,replayed:true});
+  expect((await state('US')).r).toBe(st.r+1);
+  expect(await one(`select count(*)::int v from public.macro_snapshots where publish_key=$1`,[`ingest:${b}`])).toBe(1);
+  st=await state('US');
+  expect((await publish('US',st.r,st.i,v,[id],[],{key:`cron:${randomUUID()}`})).replayed).toBe(false);   // cron: a key, no run, no token
+  await step('published',{status:'published',snapshot_id:p1.snapshot_id},ft);
+  await step('receipt',{status:'success'},ft);
+  expect(await begin(t)).toMatchObject({status:'finished',progress:{published:{snapshot_id:p1.snapshot_id}}});
+ });
+
+ it('rejected values are final (第 5 稿 P1-2): 4.1 ok → 4.2 rejected → a NEWER 4.2 redelivery stays rejected and inserts nothing',async()=>{
+  const {s,b}=await seeded();                                                                          // revisable; 4.1 available at T2
+  const stale=await write(b,[native(s,'2026-09-30','4.2',await retrieval(b,T1),T1)]);
+  expect(stale.conflicts[0].reason).toBe('stale_delivery');const rej=stale.conflicts[0].observation_id!;
+  const qid=await qItem(s,b,'stale_delivery');
+  await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[rej]]);
+  await one(`select public.macro_resolve_conflict($1,'reject',$2,null) v`,[qid,await user()]);
+  const st0=await state('US');
+  const again=await write(b,[native(s,'2026-09-30','4.2',await retrieval(b,T3),T3)]);                 // newer than cur: 'versioned' without the finality check
+  expect(again).toEqual({inserted:0,duplicates:1,versioned:0,quarantined:0,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.2',current_value_text:'4.1',observation_id:rej}]});
+  expect((await rows(s,'2026-09-30')).map(x=>[x.value_text,x.status])).toEqual([['4.1','ok'],['4.2','rejected']]);
+  expect((await q(`select value_text from public.macro_latest_observations($1::text[],null,null)`,[[s]]))[0].value_text).toBe('4.1');
+  expect((await state('US')).i).toBe(st0.i);                                                            // nothing inserted ⇒ no bump
+ });
+
+ it('quarantine reuse across failed batches (第 5 稿 P1-6): a successful redelivery gets its own quarantined version; accepting it publishes; the stranded member is member_ineligible',async()=>{
+  const {s,v}=await seeded({revisionPolicy:'immutable'});                                             // 4.1 eligible
+  const failedB=await batch();
+  const stranded=(await write(failedB,[native(s,'2026-09-30','4.5',await retrieval(failedB,T3),T3,false)])).conflicts[0].observation_id!;
+  await finish(failedB,'failed');
+  const okB=await batch();
+  const c=await write(okB,[native(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)]);
+  expect(c).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'unexpected_revision',value_text:'4.5',current_value_text:'4.1',observation_id:expect.any(String)}]});
+  const own=c.conflicts[0].observation_id!;expect(own).not.toBe(stranded);
+  expect((await write(okB,[native(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id).toBe(own);   // the current batch's row is reused
+  expect(await q(`select version,status,batch_id from public.macro_observations where observation_id=any($1::uuid[]) order by version`,[[stranded,own]])).toEqual([{version:2,status:'quarantined',batch_id:failedB},{version:3,status:'quarantined',batch_id:okB}]);
+  const qid=await qItem(s,failedB);
+  expect(await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[stranded,own]])).toBe(2);
+  await finish(okB,'success');
+  const by=await user();
+  expect((await fails(q(`select public.macro_resolve_conflict($1,'accept',$2,$3)`,[qid,by,stranded]))).message).toBe('member_ineligible');
+  expect(await one(`select public.macro_resolve_conflict($1,'accept',$2,$3) v`,[qid,by,own])).toEqual({status:'resolved_accept',observation_id:own,rejected:1});
+  const st=await state('US');
+  expect((await publish('US',st.r,st.i,v,[own])).revision).toBe(st.r+1);                              // eligible: ok + successful batch
+ });
+
+ it('link vs resolve (第 5 稿 P2-3): a link waiting on the item row lock behind a resolution gets quarantine_closed and binds nothing',async()=>{
+  const {s,b}=await seeded({revisionPolicy:'immutable'});
+  const obs=(await write(b,[native(s,'2026-09-30','4.9',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+  const qid=await qItem(s,b);const by=await user();
+  const resolver=await admin.connect();
+  try{
+   await resolver.query('begin');
+   await resolver.query(`select public.macro_resolve_conflict($1,'reject',$2,null)`,[qid,by]);      // holds the dq_quarantine row lock, uncommitted
+   const linking=fails(q(`select public.macro_link_quarantine($1,$2::uuid[])`,[qid,[obs]]));
+   const waiting=()=>one(`select count(*)::int v from pg_stat_activity where wait_event_type='Lock' and query like '%macro_link_quarantine%' and pid<>pg_backend_pid()`);
+   for(let i=0;i<100&&(await waiting())<1;i++)await new Promise(r=>setTimeout(r,20));
+   expect(await waiting()).toBe(1);                                                                      // the link is blocked on the row lock
+   await resolver.query('commit');
+   expect((await linking).message).toBe('quarantine_closed');
+  }finally{await resolver.query('rollback').catch(()=>{});resolver.release();}
+  expect(await one(`select count(*)::int v from public.macro_quarantine_members where quarantine_id=$1`,[qid])).toBe(0);
+  expect(await one(`select status v from public.dq_quarantine where id=$1`,[qid])).toBe('resolved_reject');
+ });
 
  it('analysis runs: free 10/24h then quota_exceeded, idempotent request_id, failed runs free, pro and admin limits, own-rows RLS',async()=>{
   const run=(u:string,req=randomUUID(),status='ok')=>one(`select public.create_macro_analysis_run($1,$2,'change','{}'::jsonb,'{}'::jsonb,$3,$4::jsonb,'test-code','macro-correlation/1',$5,$6) v`,[u,req,'a'.repeat(64),status==='ok'?'{}':null,status,status==='ok'?null:'boom']) as Promise<string>;
@@ -1001,7 +1209,7 @@ Create `supabase/migrations/20261114090000_macro_workbench.sql`:
 
 ```sql
 -- supabase/migrations/20261114090000_macro_workbench.sql
--- Macro workbench (spec §4.3; §0.2 M6, M10, M14, M16, M22, M24, N1, N2, N3; plan 第 4 稿 P1-4…P2-4). Twelve tables:
+-- Macro workbench (spec §4.3; §0.2 M6, M10, M14, M16, M22, M24, N1, N2, N3; plan 第 4 稿 P1-4…P2-4, 第 5 稿 P1-1…P2-3). Twelve tables:
 --   macro_catalog_versions (append-only catalog JSON per version) and macro_series (mirror of the
 --   code catalog, src/lib/macro/catalog.ts); macro_evidence_objects (byte objects by sha256, bytes in
 --   the private bucket macro-raw) and macro_retrievals (one receipt per fetch, even for repeated
@@ -1009,7 +1217,7 @@ Create `supabase/migrations/20261114090000_macro_workbench.sql`:
 --   status ok | quarantined | rejected); macro_snapshots + macro_regime_results (transactional fact
 --   snapshots with frozen manifest and display history); macro_publish_state (per-region revision and
 --   input_revision, pre-seeded US/CN); macro_quarantine_members (dq_quarantine item → quarantined
---   observation rows); macro_ingest_runs (single-writer ingest lease + resumable finish progress) and
+--   observation rows); macro_ingest_runs (single-writer ingest lease with an owner token + exclusive resumable finish) and
 --   macro_ingest_chunks (claimed/completed chunk receipts with errors and claim/location keys);
 --   macro_analysis_runs (frozen, append-only correlation runs).
 -- Publication eligibility (macro_ineligible_ids): an observation is eligible when it is ok, its batch
@@ -1020,15 +1228,21 @@ Create `supabase/migrations/20261114090000_macro_workbench.sql`:
 -- security invoker read functions (macro_latest_observations, macro_snapshots_since) are open to
 -- every client role and stay under RLS; the eligibility reads are security definer, service only
 -- (ingest_batches is service-only).
--- Lock discipline: macro_write_observations locks the touched regions' macro_publish_state rows
--- (ordered by region) before writing; publish/republish lock their region row; the resolver locks the
--- dq_quarantine row, then the region row. Each bumps input_revision / revision under the lock, so a
--- publisher that read stale state fails with stale_publisher. Ingest: macro_claim_ingest takes a
--- per-dataset advisory lock (the partial unique index on live runs is the backstop); chunk claims
--- share-lock the run row, macro_begin_finish locks it for update.
+-- Owner fence (第 5 稿 P1-3): every ingest mutation first calls macro_assert_owner(batch, token, states), which
+-- locks the batch's macro_ingest_runs row FOR UPDATE and raises `fenced` unless the token matches and the run is in an
+-- allowed state; a batch without a run row (FRED cron, single writer by Vercel cron) must pass a null token. A
+-- takeover (macro_claim_ingest) sets the old run 'aborted' in the same transaction, so a paused old worker can never
+-- write again.
+-- Lock discipline (always run row → other rows): macro_write_observations locks the run row, then the touched
+-- regions' macro_publish_state rows (ordered by region); publish locks the run row (finish path), then its region
+-- row; republish locks the region row; the resolver locks the dq_quarantine row, then the region row; the linker
+-- locks the run row, then the dq_quarantine row (第 5 稿 P2-3). Each bumps input_revision / revision under the lock,
+-- so a publisher that read stale state fails with stale_publisher. Ingest: macro_claim_ingest takes a per-dataset
+-- advisory lock (the partial unique index on live runs is the backstop); chunk claims, completions, begin-finish and
+-- finish steps lock the run row for update.
 -- Errors carry the code as the message: stale_publisher, invalid_manifest, quota_exceeded,
--- already_resolved, reject_only, not_quarantined, chunk_total_mismatch, chunk_not_processing,
--- batch_not_open, run_not_finishing, evidence_mismatch, catalog_version_conflict (P0001);
+-- already_resolved, reject_only, not_quarantined, member_ineligible, fenced, quarantine_closed, chunk_total_mismatch,
+-- chunk_not_processing, batch_not_open, run_not_finishing, evidence_mismatch, catalog_version_conflict (P0001);
 -- not_found, not_member, batch_not_claimed (P0002); invalid_* / observation_required /
 -- observation_not_allowed (22023). Triggers refuse with 23514, prefix `append_only:`.
 -- Timestamps written by this migration are truncated to milliseconds so JS ISO strings round-trip.
@@ -1137,10 +1351,12 @@ create table if not exists public.macro_snapshots (
   catalog_counts      jsonb not null check (jsonb_typeof(catalog_counts) = 'object'),
   status              text not null check (status in ('active','superseded','failed')),
   failure_reason      text check (failure_reason is null or length(failure_reason) between 1 and 2000),
+  publish_key         text check (publish_key is null or length(publish_key) between 1 and 128),   -- 第 5 稿 P1-4: 'ingest:<batch>' | 'cron:<batch>'
   created_at          timestamptz not null default date_trunc('milliseconds', now()),
   constraint macro_snapshots_failure_iff check ((status = 'failed') = (failure_reason is not null))
 );
 create unique index if not exists macro_snapshots_one_active on public.macro_snapshots(region) where status = 'active';
+create unique index if not exists macro_snapshots_publish_key_uniq on public.macro_snapshots(publish_key) where publish_key is not null;
 create unique index if not exists macro_snapshots_revision_uniq on public.macro_snapshots(region, revision) where status <> 'failed';
 create index if not exists macro_snapshots_since_idx on public.macro_snapshots(created_at, snapshot_id) where status <> 'failed';
 
@@ -1172,17 +1388,24 @@ create table if not exists public.macro_quarantine_members (
 );
 create index if not exists macro_quarantine_members_obs_idx on public.macro_quarantine_members(observation_id);
 
--- ---------------------------------------------------------------- ingest lease, chunks (§0.2 M24; 第 4 稿 P1-6, P2-1, P2-4)
+-- ---------------------------------------------------------------- ingest lease, chunks (§0.2 M24; 第 4 稿 P1-6, P2-1, P2-4; 第 5 稿 P1-3, P1-4, P2-1)
+-- owner_token fences every mutation of the run's batch (macro_assert_owner); processing_timeout bounds how long a chunk may
+-- stay 'processing' before a takeover may abort the run; finish_token is rotated by every macro_begin_finish, so only the
+-- latest finisher of the owner can record steps.
 create table if not exists public.macro_ingest_runs (
-  batch_id        uuid primary key references public.ingest_batches(batch_id) on delete restrict,
-  dataset         text not null check (dataset ~ '^macro\.[a-z0-9_]{1,32}$'),
-  state           text not null default 'open' check (state in ('open','finishing','finished')),
-  finish_progress jsonb not null default '{}' check (jsonb_typeof(finish_progress) = 'object'),
-  created_at      timestamptz not null default date_trunc('milliseconds', now()),
-  updated_at      timestamptz not null default date_trunc('milliseconds', now())
+  batch_id           uuid primary key references public.ingest_batches(batch_id) on delete restrict,
+  dataset            text not null check (dataset ~ '^macro\.[a-z0-9_]{1,32}$'),
+  state              text not null default 'open' check (state in ('open','finishing','finished','aborted')),
+  owner_token        uuid not null,
+  processing_timeout interval not null default interval '10 minutes' check (processing_timeout > interval '0'),
+  finish_token       uuid,
+  finish_progress    jsonb not null default '{}' check (jsonb_typeof(finish_progress) = 'object'),
+  created_at         timestamptz not null default date_trunc('milliseconds', now()),
+  updated_at         timestamptz not null default date_trunc('milliseconds', now()),
+  constraint macro_ingest_runs_finish_token check (state not in ('finishing','finished') or finish_token is not null)
 );
--- the single-writer lease: at most one live (not finished) run per dataset
-create unique index if not exists macro_ingest_runs_one_live on public.macro_ingest_runs(dataset) where state <> 'finished';
+-- the single-writer lease: at most one live (open or finishing) run per dataset
+create unique index if not exists macro_ingest_runs_one_live on public.macro_ingest_runs(dataset) where state in ('open','finishing');
 
 create table if not exists public.macro_ingest_chunks (
   batch_id     uuid not null references public.ingest_batches(batch_id) on delete restrict,
@@ -1281,17 +1504,20 @@ drop trigger if exists macro_ingest_chunks_lifecycle on public.macro_ingest_chun
 create trigger macro_ingest_chunks_lifecycle before update or delete on public.macro_ingest_chunks
   for each row execute function public.macro_ingest_chunks_lifecycle();
 
--- Ingest runs: never deleted; identity fixed; state only moves forward (open → finishing → finished, or open → finished);
--- a finished run is frozen.
+-- Ingest runs: never deleted; identity (batch, dataset, owner token, processing timeout, created_at) fixed; state only
+-- moves forward: open → finishing → finished, open | finishing → aborted (takeover); finished and aborted are frozen.
 create or replace function public.macro_ingest_runs_lifecycle() returns trigger
 language plpgsql set search_path = public as $$
 begin
   if tg_op = 'DELETE' then
     raise exception 'append_only: macro_ingest_runs rows are never deleted' using errcode = '23514';
   end if;
-  if (new.batch_id, new.dataset, new.created_at) is distinct from (old.batch_id, old.dataset, old.created_at)
-     or old.state = 'finished' or (old.state = 'finishing' and new.state = 'open') then
-    raise exception 'append_only: macro_ingest_runs moves forward only (open -> finishing -> finished)' using errcode = '23514';
+  if (new.batch_id, new.dataset, new.owner_token, new.processing_timeout, new.created_at)
+       is distinct from (old.batch_id, old.dataset, old.owner_token, old.processing_timeout, old.created_at)
+     or old.state in ('finished','aborted')
+     or (old.state = 'finishing' and new.state = 'open')
+     or (old.state = 'open' and new.state = 'finished') then
+    raise exception 'append_only: macro_ingest_runs moves forward only (open -> finishing -> finished | aborted)' using errcode = '23514';
   end if;
   return new;
 end $$;
@@ -1358,16 +1584,41 @@ end $$;
 revoke execute on function public.macro_upsert_catalog(text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.macro_upsert_catalog(text, text, jsonb) to service_role;
 
+-- ---------------------------------------------------------------- owner fence (plan "ingest 租约、所有者令牌…"; 第 5 稿 P1-3)
+-- Locks the batch's run row FOR UPDATE (so a takeover waits for in-flight mutations and every later one sees 'aborted')
+-- and raises `fenced` unless: no run row and no token (FRED cron: its batch never has a run; single writer by Vercel
+-- cron), or a run whose owner_token equals the token and whose state is in p_states. p_batch_id null = no fencing
+-- context (tests and the batch-less Task 18 link only). Returns the run row (null without one).
+create or replace function public.macro_assert_owner(p_batch_id uuid, p_owner_token uuid, p_states text[])
+returns public.macro_ingest_runs language plpgsql security definer set search_path = public as $$
+declare r public.macro_ingest_runs;
+begin
+  if p_batch_id is null then return null; end if;
+  select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
+  if not found then
+    if p_owner_token is not null then raise exception 'fenced' using errcode = 'P0001'; end if;
+    return null;
+  end if;
+  if p_owner_token is null or r.owner_token <> p_owner_token or not (r.state = any(p_states)) then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
+  return r;
+end $$;
+revoke execute on function public.macro_assert_owner(uuid, uuid, text[]) from public, anon, authenticated;
+grant execute on function public.macro_assert_owner(uuid, uuid, text[]) to service_role;
+
 -- ---------------------------------------------------------------- evidence write (§0.2 N2)
 -- Inserts the byte object if new (by sha256; an existing object must agree on path, adapter, type
 -- and length, else evidence_mismatch) and ALWAYS a new retrieval row. fetched_at must already be
--- millisecond-precise (observations copy it into available_at and JS round-trips it).
+-- millisecond-precise (observations copy it into available_at and JS round-trips it). Owner-fenced (第 5 稿 P1-3).
 create or replace function public.macro_put_retrieval(
   p_sha256 text, p_object_path text, p_adapter text, p_content_type text, p_byte_length bigint,
-  p_fetch_url text, p_fetch_host text, p_http_status int, p_fetched_at timestamptz, p_batch_id uuid, p_tool_versions jsonb)
+  p_fetch_url text, p_fetch_host text, p_http_status int, p_fetched_at timestamptz, p_batch_id uuid, p_tool_versions jsonb,
+  p_owner_token uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare o public.macro_evidence_objects; v_id uuid := gen_random_uuid();
 begin
+  perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
   if p_fetched_at is null or p_fetched_at <> date_trunc('milliseconds', p_fetched_at) then
     raise exception 'invalid_retrieval' using errcode = '22023';
   end if;
@@ -1382,8 +1633,8 @@ begin
   values (v_id, p_sha256, p_fetch_url, p_fetch_host, p_http_status, p_fetched_at, p_batch_id, coalesce(p_tool_versions, '{}'::jsonb));
   return v_id;
 end $$;
-revoke execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb) from public, anon, authenticated;
-grant execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb) to service_role;
+revoke execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb, uuid) from public, anon, authenticated;
+grant execute on function public.macro_put_retrieval(text, text, text, text, bigint, text, text, int, timestamptz, uuid, jsonb, uuid) to service_role;
 
 -- ---------------------------------------------------------------- publication eligibility (plan "发布资格"; spec §0.2 N3; 第 4 稿 P1-5)
 -- The ids among p_ids that are NOT eligible: missing, not ok, batch not finished success/partial, or any
@@ -1433,16 +1684,19 @@ grant execute on function public.macro_manifest_ok(text, uuid[]) to service_role
 --     quarantined += 1, nothing written;
 --  2. native row whose retrieval is unknown → missing_evidence; derived row with an input that is
 --     unknown, not ok, or neither eligible nor of p_batch → missing_input; nothing written, not counted;
---  3. cur = highest-version ok row whose batch is eligible (success/partial) or p_batch — rows left by
+--  3. a REJECTED row with the same value exists → previously_rejected (第 5 稿 P1-2): nothing inserted,
+--     duplicates += 1, informational conflict carrying the rejected row's id — decided before any action,
+--     so a newer redelivery of a rejected value can never become ok;
+--  4. cur = highest-version ok row whose batch is eligible (success/partial) or p_batch — rows left by
 --     an abandoned batch are invisible here (第 4 稿 P1-5): different value delivered with
 --     available_at < cur.available_at → stale_delivery; no cur → inserted (version = max over all
 --     statuses + 1); same value → duplicate; different and revisable → versioned (new ok version);
---     different and immutable → unexpected_revision. stale_delivery / unexpected_revision insert a
---     quarantined version unless a quarantined or rejected row with the same value already exists,
---     and count quarantined += 1. Their conflict carries that row's observation_id (Task 6 links it
---     to the dq_quarantine item); every other conflict carries observation_id null.
--- Regions whose series received any row get input_revision + 1 at the end.
-create or replace function public.macro_write_observations(p_batch uuid, p_code_version text, p_rows jsonb)
+--     different and immutable → unexpected_revision. stale_delivery / unexpected_revision reuse a
+--     same-value quarantined row only when its batch is eligible or p_batch (第 5 稿 P1-6), else insert
+--     a new quarantined version, and count quarantined += 1. Their conflict carries that row's
+--     observation_id (Task 6 links it to the dq_quarantine item); conflicting_rows / missing_* carry null.
+-- Regions whose series received any row get input_revision + 1 at the end. Owner-fenced first (第 5 稿 P1-3).
+create or replace function public.macro_write_observations(p_batch uuid, p_code_version text, p_rows jsonb, p_owner_token uuid default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   e jsonb; s public.macro_series; g record; cur public.macro_observations; v_has_cur boolean;
@@ -1454,6 +1708,7 @@ begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   if p_code_version is null or length(p_code_version) not between 1 and 128 then raise exception 'invalid_code_version' using errcode = '22023'; end if;
   if not exists (select 1 from public.ingest_batches where batch_id = p_batch) then raise exception 'invalid_batch' using errcode = '22023'; end if;
+  perform public.macro_assert_owner(p_batch, p_owner_token, array['open','finishing']);   -- run row before region rows
 
   -- validate every row before any write
   for e in select value from jsonb_array_elements(p_rows) loop
@@ -1550,7 +1805,18 @@ begin
       select array_agg(x::uuid order by o) into v_inputs from jsonb_array_elements_text(e->'derived_from') with ordinality as t(x, o);   -- keep the caller's order
     end if;
 
-    -- 3. version identity
+    -- 3. rejected-value finality (第 5 稿 P1-2): checked before any action is chosen
+    select observation_id into v_obs from public.macro_observations
+     where series_id = g.series_id and period_end = g.period_end and status = 'rejected' and value = v_new
+     order by version desc limit 1;
+    if found then
+      n_dup := n_dup + 1;
+      v_conf := v_conf || jsonb_build_array(jsonb_build_object('series_id', g.series_id, 'period_end', g.period_end::text,
+        'reason', 'previously_rejected', 'value_text', v_text, 'current_value_text', case when v_has_cur then cur.value_text end, 'observation_id', v_obs));
+      continue;
+    end if;
+
+    -- 4. version identity
     if v_has_cur and cur.value <> v_new and v_avail < cur.available_at then v_action := 'stale_delivery';
     elsif not v_has_cur then v_action := 'inserted';
     elsif cur.value = v_new then v_action := 'duplicate';
@@ -1562,10 +1828,12 @@ begin
     v_obs := null;
     if v_action in ('inserted','versioned') then v_status := 'ok';
     else
-      -- an already quarantined (or already rejected) row with the same value is reported, never inserted twice
-      select observation_id into v_obs from public.macro_observations
-       where series_id = g.series_id and period_end = g.period_end and status in ('quarantined','rejected') and value = v_new
-       order by version desc limit 1;
+      -- a same-value quarantined row is reused only when its batch is eligible or this call's (第 5 稿 P1-6); a row
+      -- stranded in a failed / rejected / other running batch gets a fresh quarantined version backed by this delivery
+      select o.observation_id into v_obs from public.macro_observations o
+       where o.series_id = g.series_id and o.period_end = g.period_end and o.status = 'quarantined' and o.value = v_new
+         and (o.batch_id = p_batch or exists (select 1 from public.ingest_batches b where b.batch_id = o.batch_id and b.status in ('success','partial')))
+       order by o.version desc limit 1;
       v_status := case when v_obs is null then 'quarantined' end;
     end if;
 
@@ -1594,21 +1862,31 @@ begin
    where region = any(v_touched);
   return jsonb_build_object('inserted', n_ins, 'duplicates', n_dup, 'versioned', n_ver, 'quarantined', n_q, 'conflicts', v_conf);
 end $$;
-revoke execute on function public.macro_write_observations(uuid, text, jsonb) from public, anon, authenticated;
-grant execute on function public.macro_write_observations(uuid, text, jsonb) to service_role;
+revoke execute on function public.macro_write_observations(uuid, text, jsonb, uuid) from public, anon, authenticated;
+grant execute on function public.macro_write_observations(uuid, text, jsonb, uuid) to service_role;
 
 -- ---------------------------------------------------------------- publish (plan "发布规则"; spec §4.3, §0.2 M16; 第 4 稿 P1-5, P1-8)
 -- p_observation_ids is the manifest, p_history_ids the frozen sparkline history; both must be publishable
 -- (macro_manifest_ok: ok, region, eligible — checked here, in the transaction that inserts the snapshot).
+-- 第 5 稿 P1-3/P1-4: the AKShare finish passes p_batch_id + p_owner_token (fenced first; cron passes neither); a
+-- p_publish_key that already published returns that snapshot with replayed:true and writes nothing — checked under
+-- the region lock and BEFORE the revision check, so a retry after a crash between publish and its checkpoint is safe.
 create or replace function public.publish_macro_snapshot(
   p_region text, p_expected_revision bigint, p_expected_input_revision bigint, p_as_of date,
   p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_history_ids uuid[], p_catalog_counts jsonb,
-  p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric)
+  p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric,
+  p_publish_key text default null, p_batch_id uuid default null, p_owner_token uuid default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare st public.macro_publish_state; v_id uuid := gen_random_uuid(); v_regime jsonb := nullif(p_regime, 'null'::jsonb);
+declare st public.macro_publish_state; v_id uuid := gen_random_uuid(); v_regime jsonb := nullif(p_regime, 'null'::jsonb); prior public.macro_snapshots;
 begin
+  perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  if p_publish_key is not null and length(p_publish_key) not between 1 and 128 then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
   select * into st from public.macro_publish_state where region = p_region for update;
   if not found then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
+  if p_publish_key is not null then
+    select * into prior from public.macro_snapshots where publish_key = p_publish_key;
+    if found then return jsonb_build_object('snapshot_id', prior.snapshot_id, 'revision', prior.revision, 'replayed', true); end if;
+  end if;
   if st.revision <> p_expected_revision or st.input_revision <> p_expected_input_revision then
     raise exception 'stale_publisher' using errcode = 'P0001';
   end if;
@@ -1635,15 +1913,15 @@ begin
     raise exception 'invalid_manifest' using errcode = 'P0001';
   end if;
   update public.macro_snapshots set status = 'superseded' where region = p_region and status = 'active';
-  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status)
-  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_history_ids, p_catalog_counts, 'active');
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, publish_key)
+  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_history_ids, p_catalog_counts, 'active', p_publish_key);
   insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
   values (v_id, p_region, v_regime, p_contributions, p_rules_version, p_uncovered_weight);
   update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = p_region;
-  return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1);
+  return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1, 'replayed', false);
 end $$;
-revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric) from public, anon, authenticated;
-grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric) to service_role;
+revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid) to service_role;
 
 -- Rollback (第 4 稿 P1-11): a NEW active snapshot (new id, next revision) copying a non-failed snapshot's as_of,
 -- versions, manifest, history, counts and regime result, after re-validating eligibility. Snapshot rows stay
@@ -1692,15 +1970,19 @@ grant execute on function public.record_failed_macro_snapshot(text, date, text, 
 
 -- ---------------------------------------------------------------- quarantine members + conflict resolution (plan "隔离裁决"; spec §0.2 M10; 第 4 稿 P1-4)
 -- Binds stored quarantined/rejected rows of the item's natural key to an OPEN macro item (Task 6 calls it right
--- after quarantine() returned the possibly reused item id). Re-linking is a no-op; returns the rows added.
-create or replace function public.macro_link_quarantine(p_quarantine_id uuid, p_observation_ids uuid[])
+-- after quarantine() returned the possibly reused item id). Owner-fenced (p_batch_id + p_owner_token, 第 5 稿 P1-3), then
+-- the dq_quarantine row is locked FOR UPDATE like macro_resolve_conflict does (第 5 稿 P2-3): a resolution that wins the
+-- lock leaves the item closed and this call raises quarantine_closed (Task 6 re-parks and retries once). Re-linking is
+-- a no-op; returns the rows added.
+create or replace function public.macro_link_quarantine(p_quarantine_id uuid, p_observation_ids uuid[], p_batch_id uuid default null, p_owner_token uuid default null)
 returns int language plpgsql security definer set search_path = public as $$
 declare q public.dq_quarantine; n int;
 begin
-  select * into q from public.dq_quarantine where id = p_quarantine_id;
+  perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  select * into q from public.dq_quarantine where id = p_quarantine_id for update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   if q.dataset not like 'macro.%' or q.table_name <> 'macro_observations' then raise exception 'invalid_item' using errcode = '22023'; end if;
-  if q.status <> 'open' then raise exception 'already_resolved' using errcode = 'P0001'; end if;
+  if q.status <> 'open' then raise exception 'quarantine_closed' using errcode = 'P0001'; end if;
   if p_observation_ids is null or cardinality(p_observation_ids) = 0 or array_position(p_observation_ids, null) is not null
      or exists (select 1 from unnest(p_observation_ids) as t(i)
                  where not exists (select 1 from public.macro_observations o
@@ -1714,10 +1996,11 @@ begin
   get diagnostics n = row_count;
   return n;
 end $$;
-revoke execute on function public.macro_link_quarantine(uuid, uuid[]) from public, anon, authenticated;
-grant execute on function public.macro_link_quarantine(uuid, uuid[]) to service_role;
+revoke execute on function public.macro_link_quarantine(uuid, uuid[], uuid, uuid) from public, anon, authenticated;
+grant execute on function public.macro_link_quarantine(uuid, uuid[], uuid, uuid) to service_role;
 
--- accept: needs p_observation_id, a member that is still quarantined → ok; every other quarantined member of
+-- accept: needs p_observation_id, a member that is still quarantined and whose batch is not failed/rejected
+-- (member_ineligible, 第 5 稿 P1-6: such a row could never publish) → ok; every other quarantined member of
 -- the item → rejected; the region's input_revision + 1. adapter_mismatch / rule_failed:* items are reject-only
 -- (their values were never written). reject: every quarantined member → rejected (no input_revision change:
 -- quarantined rows never publish). Rejected rows are final (lifecycle trigger) and never eligible. Either
@@ -1748,6 +2031,9 @@ begin
      for update of ob;
     if not found then raise exception 'not_member' using errcode = 'P0002'; end if;
     if o.status <> 'quarantined' then raise exception 'not_quarantined' using errcode = 'P0001'; end if;
+    if exists (select 1 from public.ingest_batches b where b.batch_id = o.batch_id and b.status in ('failed','rejected')) then
+      raise exception 'member_ineligible' using errcode = 'P0001';
+    end if;
     update public.macro_observations set status = 'ok' where observation_id = p_observation_id;
     update public.macro_observations ob set status = 'rejected'
       from public.macro_quarantine_members m
@@ -1774,68 +2060,79 @@ end $$;
 revoke execute on function public.macro_resolve_conflict(uuid, text, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.macro_resolve_conflict(uuid, text, uuid, uuid) to service_role;
 
--- ---------------------------------------------------------------- ingest lease, chunks, resumable finish (plan "ingest 租约、分块与可续完成"; spec §0.2 M9/M24; 第 4 稿 P1-6, P2-1, P2-4)
--- Single-writer lease. Live runs of the dataset older than p_max_age are first marked finished {abandoned:true}
--- and returned (the caller finishes those ingest_batches rows as failed via finishBatch); a remaining live run →
--- busy (the caller finishes its own batch rejected and answers 409); else the run is inserted open.
-create or replace function public.macro_claim_ingest(p_batch_id uuid, p_dataset text, p_max_age interval)
+-- ---------------------------------------------------------------- ingest lease, owner token, chunks, exclusive finish (plan "ingest 租约、所有者令牌、分块与独占可续完成"; spec §0.2 M9/M24; 第 4 稿 P1-6, P2-1, P2-4; 第 5 稿 P1-3, P1-4, P2-1)
+-- Single-writer lease with a fresh owner token. Under the per-dataset advisory lock and in this one transaction: live
+-- runs older than p_max_age, and (p_takeover only) live runs holding a chunk in 'processing' for longer than their own
+-- processing_timeout, become 'aborted' (fencing their owner token for good); a remaining live run → busy (the caller
+-- finishes its own batch rejected and answers 409); else the run is inserted open with a new owner_token. `aborted` lists
+-- every aborted run of the dataset whose batch is still running (the caller finishes those batches failed, ignoring
+-- batch_not_running), so a sweep interrupted half-way heals on the next start.
+create or replace function public.macro_claim_ingest(p_batch_id uuid, p_dataset text, p_max_age interval, p_processing_timeout interval, p_takeover boolean)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_abandoned uuid[]; v_holder uuid;
+declare v_aborted uuid[]; v_holder uuid; v_token uuid := gen_random_uuid();
 begin
-  if p_batch_id is null or p_dataset is null or p_dataset !~ '^macro\.[a-z0-9_]{1,32}$' or p_max_age is null or p_max_age <= interval '0' then
+  if p_batch_id is null or p_dataset is null or p_dataset !~ '^macro\.[a-z0-9_]{1,32}$' or p_max_age is null or p_max_age <= interval '0'
+     or p_processing_timeout is null or p_processing_timeout <= interval '0' or p_takeover is null then
     raise exception 'invalid_claim' using errcode = '22023';
   end if;
   if not exists (select 1 from public.ingest_batches where batch_id = p_batch_id and dataset = p_dataset and status = 'running') then
     raise exception 'invalid_batch' using errcode = '22023';
   end if;
   perform pg_advisory_xact_lock(hashtextextended('macro_ingest:' || p_dataset, 0));
-  with stale as (
-    update public.macro_ingest_runs
-       set state = 'finished', finish_progress = finish_progress || '{"abandoned":true}'::jsonb, updated_at = date_trunc('milliseconds', now())
-     where dataset = p_dataset and state <> 'finished' and created_at < now() - p_max_age
-    returning batch_id)
-  select coalesce(array_agg(batch_id order by batch_id), '{}') into v_abandoned from stale;
-  select batch_id into v_holder from public.macro_ingest_runs where dataset = p_dataset and state <> 'finished' limit 1;
-  if found then
-    return jsonb_build_object('status', 'busy', 'abandoned', to_jsonb(v_abandoned), 'holder', v_holder);
+  update public.macro_ingest_runs r
+     set state = 'aborted',
+         finish_progress = r.finish_progress || jsonb_build_object('aborted', jsonb_build_object('by', p_batch_id,
+                             'reason', case when r.created_at < now() - p_max_age then 'max_age' else 'stalled_chunk' end)),
+         updated_at = date_trunc('milliseconds', now())
+   where r.dataset = p_dataset and r.state in ('open','finishing')
+     and (r.created_at < now() - p_max_age
+          or (p_takeover and exists (select 1 from public.macro_ingest_chunks c
+                                      where c.batch_id = r.batch_id and c.state = 'processing' and c.received_at < now() - r.processing_timeout)));
+  select coalesce(array_agg(r.batch_id order by r.batch_id), '{}') into v_aborted
+    from public.macro_ingest_runs r join public.ingest_batches b on b.batch_id = r.batch_id
+   where r.dataset = p_dataset and r.state = 'aborted' and b.status = 'running';
+  select batch_id into v_holder from public.macro_ingest_runs where dataset = p_dataset and state in ('open','finishing') limit 1;
+  if v_holder is not null then
+    return jsonb_build_object('status', 'busy', 'aborted', to_jsonb(v_aborted), 'holder', v_holder);
   end if;
-  insert into public.macro_ingest_runs(batch_id, dataset) values (p_batch_id, p_dataset);
-  return jsonb_build_object('status', 'claimed', 'abandoned', to_jsonb(v_abandoned));
+  insert into public.macro_ingest_runs(batch_id, dataset, owner_token, processing_timeout) values (p_batch_id, p_dataset, v_token, p_processing_timeout);
+  return jsonb_build_object('status', 'claimed', 'owner_token', v_token, 'aborted', to_jsonb(v_aborted));
 end $$;
-revoke execute on function public.macro_claim_ingest(uuid, text, interval) from public, anon, authenticated;
-grant execute on function public.macro_claim_ingest(uuid, text, interval) to service_role;
+revoke execute on function public.macro_claim_ingest(uuid, text, interval, interval, boolean) from public, anon, authenticated;
+grant execute on function public.macro_claim_ingest(uuid, text, interval, interval, boolean) to service_role;
 
--- Chunk claim: a (batch, seq) that already exists is returned as stored ({status: processing|done, chunk}) and is
--- never processed again; otherwise it is inserted as processing ({status:'claimed'}). The run row is share-locked,
--- so a claim and macro_begin_finish serialize.
-create or replace function public.macro_claim_chunk(p_batch_id uuid, p_seq int, p_total int)
+-- Chunk claim: the owner token must match a non-aborted run (else fenced); a (batch, seq) that already exists is returned
+-- as stored ({status: processing|done, chunk}) and is never processed again; otherwise it is inserted as processing
+-- ({status:'claimed'}). The run row is locked, so claims, completions and macro_begin_finish serialize.
+create or replace function public.macro_claim_chunk(p_batch_id uuid, p_seq int, p_total int, p_owner_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r public.macro_ingest_runs; c public.macro_ingest_chunks; v_total int; n int;
 begin
   if p_batch_id is null or p_seq is null or p_total is null or p_seq < 0 or p_total < 1 or p_total > 10000 or p_seq >= p_total then
     raise exception 'invalid_chunk' using errcode = '22023';
   end if;
-  select * into r from public.macro_ingest_runs where batch_id = p_batch_id for share;
+  select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
   if not found then raise exception 'batch_not_claimed' using errcode = 'P0002'; end if;
+  if p_owner_token is null or r.owner_token <> p_owner_token or r.state = 'aborted' then raise exception 'fenced' using errcode = 'P0001'; end if;
   select * into c from public.macro_ingest_chunks where batch_id = p_batch_id and seq = p_seq;
   if found then return jsonb_build_object('status', c.state, 'chunk', to_jsonb(c) - 'batch_id' - 'received_at' - 'completed_at'); end if;
   if r.state <> 'open' then raise exception 'batch_not_open' using errcode = 'P0001'; end if;
-  perform pg_advisory_xact_lock(hashtextextended('macro_chunk:' || p_batch_id::text, 0));
   select total into v_total from public.macro_ingest_chunks where batch_id = p_batch_id limit 1;
   if found and v_total <> p_total then raise exception 'chunk_total_mismatch' using errcode = 'P0001'; end if;
   insert into public.macro_ingest_chunks(batch_id, seq, total) values (p_batch_id, p_seq, p_total)
   on conflict (batch_id, seq) do nothing;
   get diagnostics n = row_count;
   if n = 1 then return jsonb_build_object('status', 'claimed'); end if;
-  select * into c from public.macro_ingest_chunks where batch_id = p_batch_id and seq = p_seq;   -- a concurrent claim won
+  select * into c from public.macro_ingest_chunks where batch_id = p_batch_id and seq = p_seq;   -- backstop: a concurrent claim won
   return jsonb_build_object('status', c.state, 'chunk', to_jsonb(c) - 'batch_id' - 'received_at' - 'completed_at');
 end $$;
-revoke execute on function public.macro_claim_chunk(uuid, int, int) from public, anon, authenticated;
-grant execute on function public.macro_claim_chunk(uuid, int, int) to service_role;
+revoke execute on function public.macro_claim_chunk(uuid, int, int, uuid) from public, anon, authenticated;
+grant execute on function public.macro_claim_chunk(uuid, int, int, uuid) to service_role;
 
--- Completes a processing chunk exactly once with its counts, sanitized errors ({code,key?,message?}, ≤ 500) and
--- the claim / location key sets the finish step needs for the batch-wide unlocated-claims summary (P2-1).
-create or replace function public.macro_complete_chunk(p_batch_id uuid, p_seq int, p_counts jsonb, p_errors jsonb, p_claim_keys jsonb, p_located_keys jsonb)
+-- Completes a processing chunk exactly once (owner-fenced, run open) with its NATIVE counts, sanitized errors
+-- ({code,key?,message?}, ≤ 500) and the claim / location key sets the finish step needs for the batch-wide
+-- unlocated-claims summary (P2-1).
+create or replace function public.macro_complete_chunk(p_batch_id uuid, p_seq int, p_counts jsonb, p_errors jsonb, p_claim_keys jsonb, p_located_keys jsonb, p_owner_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare c public.macro_ingest_chunks;
 begin
@@ -1850,6 +2147,7 @@ begin
      or p_located_keys is null or jsonb_typeof(p_located_keys) <> 'array' or exists (select 1 from jsonb_array_elements(p_located_keys) k where jsonb_typeof(k) <> 'string') then
     raise exception 'invalid_chunk' using errcode = '22023';
   end if;
+  perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open']);
   update public.macro_ingest_chunks
      set state = 'done', counts = p_counts, errors = p_errors, claim_keys = p_claim_keys, located_keys = p_located_keys,
          completed_at = date_trunc('milliseconds', now())
@@ -1858,53 +2156,67 @@ begin
   if not found then raise exception 'chunk_not_processing' using errcode = 'P0001'; end if;
   return to_jsonb(c) - 'batch_id' - 'received_at' - 'completed_at';
 end $$;
-revoke execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb) from public, anon, authenticated;
-grant execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb) to service_role;
+revoke execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb, uuid) from public, anon, authenticated;
+grant execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb, uuid) to service_role;
 
--- open → finishing once every chunk 0..p_total−1 is done with that total (p_total 0 = a run with no chunks);
--- finishing / finished return the stored progress so a retried finish resumes or replays its receipt.
-create or replace function public.macro_begin_finish(p_batch_id uuid, p_total int)
+-- Exclusive finish (第 5 稿 P1-4). Only the token owner (another token or an aborted run → fenced). open → finishing once
+-- every chunk 0..p_total−1 is done with that total (p_total 0 = a run with no chunks); a finishing run resumes. Both hand
+-- out a NEW finish_token, so an older concurrent finisher of the same owner is fenced at its next step; finished returns
+-- the stored progress so a retried finish replays its receipt.
+create or replace function public.macro_begin_finish(p_batch_id uuid, p_total int, p_owner_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare r public.macro_ingest_runs; v_missing int[];
+declare r public.macro_ingest_runs; v_missing int[]; v_ft uuid := gen_random_uuid();
 begin
   if p_batch_id is null or p_total is null or p_total < 0 or p_total > 10000 then raise exception 'invalid_chunk' using errcode = '22023'; end if;
   select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
   if not found then raise exception 'batch_not_claimed' using errcode = 'P0002'; end if;
-  if r.state <> 'open' then return jsonb_build_object('status', r.state, 'progress', r.finish_progress); end if;
-  select coalesce(array_agg(g.s order by g.s), '{}') into v_missing from generate_series(0, p_total - 1) as g(s)
-   where not exists (select 1 from public.macro_ingest_chunks c where c.batch_id = p_batch_id and c.seq = g.s and c.state = 'done');
-  if cardinality(v_missing) > 0 or exists (select 1 from public.macro_ingest_chunks where batch_id = p_batch_id and (total <> p_total or state <> 'done')) then
-    return jsonb_build_object('status', 'incomplete', 'missing', to_jsonb(v_missing));
+  if p_owner_token is null or r.owner_token <> p_owner_token or r.state = 'aborted' then raise exception 'fenced' using errcode = 'P0001'; end if;
+  if r.state = 'finished' then return jsonb_build_object('status', 'finished', 'progress', r.finish_progress); end if;
+  if r.state = 'open' then
+    select coalesce(array_agg(g.s order by g.s), '{}') into v_missing from generate_series(0, p_total - 1) as g(s)
+     where not exists (select 1 from public.macro_ingest_chunks c where c.batch_id = p_batch_id and c.seq = g.s and c.state = 'done');
+    if cardinality(v_missing) > 0 or exists (select 1 from public.macro_ingest_chunks where batch_id = p_batch_id and (total <> p_total or state <> 'done')) then
+      return jsonb_build_object('status', 'incomplete', 'missing', to_jsonb(v_missing));
+    end if;
   end if;
-  update public.macro_ingest_runs set state = 'finishing', updated_at = date_trunc('milliseconds', now()) where batch_id = p_batch_id;
-  return jsonb_build_object('status', 'finishing', 'progress', r.finish_progress);
+  update public.macro_ingest_runs set state = 'finishing', finish_token = v_ft, updated_at = date_trunc('milliseconds', now()) where batch_id = p_batch_id;
+  return jsonb_build_object('status', 'finishing', 'progress', r.finish_progress, 'finish_token', v_ft);
 end $$;
-revoke execute on function public.macro_begin_finish(uuid, int) from public, anon, authenticated;
-grant execute on function public.macro_begin_finish(uuid, int) to service_role;
+revoke execute on function public.macro_begin_finish(uuid, int, uuid) from public, anon, authenticated;
+grant execute on function public.macro_begin_finish(uuid, int, uuid) to service_role;
 
--- Records one completed finish step (derived | batch_finished | freshness_recorded | published | receipt);
--- 'receipt' also finishes the run (and so releases the dataset lease). Returns the merged progress.
-create or replace function public.macro_record_finish_step(p_batch_id uuid, p_step text, p_data jsonb)
+-- Records one completed finish step (derived | batch_finished | freshness_started | freshness_recorded | published |
+-- publish_attempt | receipt). Owner token and the CURRENT finish token must match (else fenced); the run must be
+-- finishing (run_not_finishing). publish_attempt appends p_data to finish_progress.attempts (at most 20 kept); every other
+-- step is merged under its name; 'receipt' also finishes the run (and so releases the dataset lease). Returns the progress.
+create or replace function public.macro_record_finish_step(p_batch_id uuid, p_step text, p_data jsonb, p_owner_token uuid, p_finish_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare r public.macro_ingest_runs; v jsonb;
+declare r public.macro_ingest_runs; v jsonb; v_att jsonb;
 begin
-  if p_step is null or p_step not in ('derived','batch_finished','freshness_recorded','published','receipt')
+  if p_step is null or p_step not in ('derived','batch_finished','freshness_started','freshness_recorded','published','publish_attempt','receipt')
      or p_data is null or jsonb_typeof(p_data) <> 'object' then
     raise exception 'invalid_step' using errcode = '22023';
   end if;
   select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
   if not found then raise exception 'batch_not_claimed' using errcode = 'P0002'; end if;
+  if p_owner_token is null or r.owner_token <> p_owner_token or r.state = 'aborted' then raise exception 'fenced' using errcode = 'P0001'; end if;
   if r.state <> 'finishing' then raise exception 'run_not_finishing' using errcode = 'P0001'; end if;
+  if p_finish_token is null or r.finish_token is distinct from p_finish_token then raise exception 'fenced' using errcode = 'P0001'; end if;
+  if p_step = 'publish_attempt' then
+    v_att := case when jsonb_typeof(r.finish_progress->'attempts') = 'array' then r.finish_progress->'attempts' else '[]'::jsonb end;
+    v := r.finish_progress || jsonb_build_object('attempts', case when jsonb_array_length(v_att) >= 20 then v_att else v_att || jsonb_build_array(p_data) end);
+  else
+    v := r.finish_progress || jsonb_build_object(p_step, p_data);
+  end if;
   update public.macro_ingest_runs
-     set finish_progress = finish_progress || jsonb_build_object(p_step, p_data),
+     set finish_progress = v,
          state = case when p_step = 'receipt' then 'finished' else state end,
          updated_at = date_trunc('milliseconds', now())
-   where batch_id = p_batch_id
-  returning finish_progress into v;
+   where batch_id = p_batch_id;
   return v;
 end $$;
-revoke execute on function public.macro_record_finish_step(uuid, text, jsonb) from public, anon, authenticated;
-grant execute on function public.macro_record_finish_step(uuid, text, jsonb) to service_role;
+revoke execute on function public.macro_record_finish_step(uuid, text, jsonb, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.macro_record_finish_step(uuid, text, jsonb, uuid, uuid) to service_role;
 
 -- ---------------------------------------------------------------- analysis run + quota (plan "分析运行配额"; spec §2, §0.2 M22, N1)
 -- The caller (route) passes the verified session user. Per-user advisory lock first, then: an
@@ -2043,12 +2355,14 @@ Implementer checks (resolve these in this task, before locking):
 - `macro_append_only()` builds its message from `lower(tg_op)`, so the text reads `…cannot be updated` / `…cannot be deleted`. The test matches only the prefix `append_only:`, so the exact wording does not matter.
 - If PostgreSQL rejects the `perform x::uuid from jsonb_array_elements_text(...) as t(x)` validation form, use `perform (select array_agg(x::uuid) from jsonb_array_elements_text(e->'derived_from') as t(x));` instead. Either form only has to make a malformed uuid raise before any write.
 - `macro_ineligible_ids` is a recursive CTE whose recursive term joins `macro_observations` and `unnest(derived_from)`. If PostgreSQL refuses the `cross join lateral` inside the recursive term, write it as `from walk w join public.macro_observations o on o.observation_id = w.id join lateral unnest(coalesce(o.derived_from,'{}'::uuid[])) as d(i) on true`. The tests that pin it are the eligibility, publish and republish cases.
-- `macro_claim_ingest` tests age a run with a 10 ms `p_max_age` after a 30 ms sleep (the trigger forbids rewriting `created_at`). If the harness clock is coarse, raise the sleep, never the trigger.
+- `macro_claim_ingest` tests age a run with a 10 ms `p_max_age` after a 30 ms sleep (the trigger forbids rewriting `created_at`), and a stalled chunk with a 10 ms `processing_timeout` set at the old run's claim. If the harness clock is coarse, raise the sleep, never the trigger.
+- Ingest mutations call `perform public.macro_assert_owner(…)` (a composite-returning function: `perform` discards the row). It must stay the FIRST statement that touches a row, so the lock order is always run row → region / quarantine rows; the link-vs-resolve test only passes if `macro_link_quarantine` takes the `dq_quarantine` row lock with `for update`.
+- The link-vs-resolve test polls `pg_stat_activity` for a `Lock` wait from another backend; if the harness reports `wait_event_type` differently, poll `pg_locks where not granted` instead. Never replace the poll by a fixed sleep.
 
 - [ ] **Step 4: Run the integration test until it passes**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/macro.integration.test.ts`
-Expected: PASS (16 tests). While the suite is red, fix only the migration. It is not locked yet, so it may still change.
+Expected: PASS (21 tests). While the suite is red, fix only the migration. It is not locked yet, so it may still change.
 
 - [ ] **Step 5: Database types**
 
@@ -2084,7 +2398,7 @@ export interface MacroObservationRow {
 export interface MacroSnapshotTableRow {
   snapshot_id: string; region: MacroRegion; as_of: string; revision: number; methodology_version: string; catalog_version: string;
   observation_ids: string[]; history_ids: string[]; catalog_counts: { verified: number; missing: number; restricted: number };
-  status: 'active' | 'superseded' | 'failed'; failure_reason: string | null; created_at: string;
+  status: 'active' | 'superseded' | 'failed'; failure_reason: string | null; publish_key: string | null; created_at: string;
 }
 export interface MacroRegimeResultRow {
   snapshot_id: string; region: MacroRegion; regime: Record<string, unknown> | null; contributions: unknown[];
@@ -2097,7 +2411,8 @@ export interface MacroIngestChunkRow {
   received_at: string; completed_at: string | null;
 }
 export interface MacroIngestRunRow {
-  batch_id: string; dataset: string; state: 'open' | 'finishing' | 'finished'; finish_progress: Record<string, unknown>;
+  batch_id: string; dataset: string; state: 'open' | 'finishing' | 'finished' | 'aborted'; owner_token: string;
+  processing_timeout: string; finish_token: string | null; finish_progress: Record<string, unknown>;
   created_at: string; updated_at: string;
 }
 export interface MacroQuarantineMemberRow { quarantine_id: string; observation_id: string; created_at: string }
@@ -2168,7 +2483,7 @@ git add supabase/migrations/20261114090000_macro_workbench.sql supabase/migratio
 ```
 ```bash
 git commit -F - <<'EOF'
-feat(macro): workbench migration — twelve tables, macro-raw bucket, write/publish/republish/eligibility/quarantine/ingest-lease/quota RPCs, RLS
+feat(macro): workbench migration — twelve tables, macro-raw bucket, write/publish/republish/eligibility/quarantine/owner-fenced ingest-lease/quota RPCs, RLS
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -2628,8 +2943,8 @@ EOF
 - Test: `src/lib/macro/db.test.ts`, `src/lib/macro/evidence.test.ts`
 
 Semantics source: the Task 1 SQL functions. `memoryMacroDb` must return the **same counts, conflicts, error codes and messages** for the same inputs. Error messages are mapped as follows:
-- An SQL exception whose message is a contract code (`stale_publisher`, `invalid_manifest`, `quota_exceeded`, `not_found`, `already_resolved`, `reject_only`) becomes `MacroDbError(code)`.
-- Every other SQL exception becomes `MacroDbError('rpc_failed', <message>)`. Examples: `invalid_value_text`, `invalid_row`, `invalid_series`, `invalid_available_at`, `invalid_retrieval`, `evidence_mismatch`, `catalog_version_conflict`, `chunk_total_mismatch`, `chunk_not_processing`, `batch_not_claimed`, `batch_not_open`, `run_not_finishing`, `invalid_step`, `invalid_chunk`, `invalid_decision`, `invalid_item`, `invalid_member`, `observation_required`, `observation_not_allowed`, `not_member`, `not_quarantined`, and constraint-violation texts naming the constraint, such as `macro_retrievals_host`.
+- An SQL exception whose message is a contract code (`stale_publisher`, `invalid_manifest`, `quota_exceeded`, `not_found`, `already_resolved`, `reject_only`, `fenced`, `quarantine_closed`) becomes `MacroDbError(code)`. `fenced` (第 5 稿 P1-3/P1-4) and `quarantine_closed` (P2-3) are contract codes because callers branch on them: `fenced` aborts the request, `quarantine_closed` triggers one re-park.
+- Every other SQL exception becomes `MacroDbError('rpc_failed', <message>)`. Examples: `invalid_value_text`, `invalid_row`, `invalid_series`, `invalid_available_at`, `invalid_retrieval`, `evidence_mismatch`, `catalog_version_conflict`, `chunk_total_mismatch`, `chunk_not_processing`, `batch_not_claimed`, `batch_not_open`, `run_not_finishing`, `invalid_step`, `invalid_chunk`, `invalid_claim`, `invalid_decision`, `invalid_item`, `invalid_member`, `observation_required`, `observation_not_allowed`, `not_member`, `not_quarantined`, `member_ineligible`, and constraint-violation texts naming the constraint, such as `macro_retrievals_host`.
 - Memory throws exactly the same `MacroDbError`s. For constraint violations, its message contains the constraint name.
 
 Read paths go through anon, so they are ok-only; the eligibility reads (`latestEligible`, `eligibleHistory`), publish state, chunks, runs and quarantine members are service reads on the admin client. `eligibleHistory` pages `macro_eligible_history` by `p_after` = the last period of the previous page (≤ 1000 periods per page) and throws `truncated` when more than `maxRows` periods exist. `latestObservations` / `latestEligible` return rows in **unspecified order**: callers index them by `series_id`. `seriesHistory`'s `maxRows` counts the raw rows fetched, older versions included. More raw rows than that ⇒ `truncated`. `snapshotsSince` clamps `limit` to 1..1000. `previousSnapshot(region, beforeCreatedAt)` (newest non-failed snapshot strictly before, used by Task 13's "changes"), `retrievalsOf(sha256)` and `retrievalsByIds(ids)` (evidence drawer and series route) are plain anon selects on tables anon can already read: no migration change. The memory clock is strictly increasing on the real clock, so two snapshots written in the same millisecond still order.
@@ -2640,8 +2955,8 @@ Create `src/lib/macro/db-contract.ts`:
 
 ```ts
 // src/lib/macro/db-contract.ts
-// Shared MacroDb contract (plan "写入规则 / 发布资格 / 发布规则 / 隔离裁决 / ingest 租约、分块与可续完成";
-// spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4/P1-5/P1-6/P1-11/P2-1/P2-4). The same scenarios run against memoryMacroDb in db.test.ts; the SQL functions are
+// Shared MacroDb contract (plan "写入规则 / 发布资格 / 发布规则 / 隔离裁决 / ingest 租约、所有者令牌、分块与独占可续完成";
+// spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4/P1-5/P1-6/P1-11/P2-1/P2-4; 第 5 稿 P1-2/P1-3/P1-4/P1-6/P2-1/P2-3). The same scenarios run against memoryMacroDb in db.test.ts; the SQL functions are
 // pinned by the same branches in macro.integration.test.ts, so the in-memory rules the unit tests
 // rely on are the SQL rules. Not a test file: it registers describe/it only when called. Every
 // case uses its own series ids; publish state is shared, so cases read it right before publishing.
@@ -2683,11 +2998,14 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
   beforeAll(async()=>{h=await setup();db=h.db;},60000);
   afterAll(async()=>{await h?.close?.();},30000);
   const catalog=async(defs:MacroSeriesDef[])=>{const v=`macro-catalog/${randomBytes(6).toString('hex')}`;await db.upsertCatalog(defs,v,'macro-rules/1');return v;};
-  const retrieval=async(b:string,at:string,text=`body-${randomUUID()}`)=>{
+  /** token: the run's owner token (AKShare path); omitted = a batch without a run (FRED cron). */
+  const retrieval=async(b:string,at:string,text=`body-${randomUUID()}`,token:string|null=null)=>{
    const bytes=new TextEncoder().encode(text);const sha=createHash('sha256').update(bytes).digest('hex');
    return db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:bytes.byteLength},
-    {fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:at,batch_id:b,tool_versions:{node:'22'}});
+    {fetch_url:'https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:at,batch_id:b,tool_versions:{node:'22'}},token);
   };
+  const LEASE={maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:false};
+  const zeroCounts={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
   /** A fresh series with one ok observation 2026-09-30 = 4.1 available at T2, in a FINISHED (success) batch so the row is
    *  publication-eligible; later writes may keep using that batch id. */
   const seeded=async(o:Partial<MacroSeriesDef>={})=>{
@@ -2881,8 +3199,9 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect((await db.latestObservations([s]))[0].value_text).toBe('4.6');
    expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision+1);
    expect(await outcome(db.resolveConflict(a,'accept',by,rb))).toBe('already_resolved:already_resolved');
+   expect(await outcome(db.linkQuarantine(a,[ra]))).toBe('quarantine_closed:quarantine_closed');   // a closed item takes no members (第 5 稿 P2-3)
    const again=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
-   expect(again.conflicts[0]).toMatchObject({reason:'unexpected_revision',observation_id:ra,current_value_text:'4.6'});   // never inserted again
+   expect(again).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});   // never inserted again (第 5 稿 P1-2)
    const a2=await item(s);await db.linkQuarantine(a2,[ra]);
    expect(await outcome(db.resolveConflict(a2,'accept',by,ra))).toBe('rpc_failed:not_quarantined');   // rejected rows never come back
    await db.resolveConflict(a2,'reject',by);
@@ -2947,34 +3266,125 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await outcome(db.republishSnapshot(randomUUID(),st.revision,st.inputRevision))).toBe('not_found:not_found');
   });
 
-  it('ingest lease, chunk claims (a repeat never re-processes), stored errors/keys, resumable finish progress',async()=>{
+  it('publish key (第 5 稿 P1-4): a used key replays its snapshot (replayed:true) and publishes nothing',async()=>{
+   const {v,id}=await seeded();
+   let st=await db.publishState('US');const key=`cron:${randomUUID()}`;
+   const p1=await db.publishSnapshot({...input('US',st,v,[id]),publishKey:key});
+   expect(p1).toEqual({snapshot_id:expect.any(String),revision:st.revision+1,replayed:false});
+   expect(await db.publishSnapshot({...input('US',st,v,[id]),publishKey:key})).toEqual({...p1,replayed:true});   // a retry holding the old state
+   expect((await db.publishState('US')).revision).toBe(st.revision+1);
+   st=await db.publishState('US');
+   expect((await db.publishSnapshot({...input('US',st,v,[id]),publishKey:`cron:${randomUUID()}`})).replayed).toBe(false);
+  });
+
+  it('rejected values are final (第 5 稿 P1-2): ok 4.1 → 4.2 rejected → a newer 4.2 redelivery is previously_rejected and inserts nothing',async()=>{
+   const {s,b}=await seeded();                                                                          // revisable; 4.1 available at T2
+   const rej=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.2',await retrieval(b,T1),T1)])).conflicts[0].observation_id!;
+   const q=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${s}|2026-09-30`,batchId:b,reasonCode:'stale_delivery'});
+   await db.linkQuarantine(q,[rej]);await db.resolveConflict(q,'reject',await h.resolver());
+   const st0=await db.publishState('US');
+   expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.2',await retrieval(b,T3),T3)])).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.2',current_value_text:'4.1',observation_id:rej}]});
+   expect((await db.versionsOf(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
+   expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision);
+  });
+
+  it('quarantine reuse (第 5 稿 P1-6): a failed batch’s quarantined row is not reused; the successful redelivery gets its own version; accepting it publishes; the stranded member is member_ineligible',async()=>{
+   const {s,v}=await seeded({revisionPolicy:'immutable'});
+   const failedB=await h.batch();
+   const stranded=(await db.writeObservations(failedB,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(failedB,T3),T3,false)])).conflicts[0].observation_id!;
+   await h.finish(failedB,'failed');
+   const okB=await h.batch();
+   const own=(await db.writeObservations(okB,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id!;
+   expect(own).not.toBe(stranded);
+   expect((await db.writeObservations(okB,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id).toBe(own);   // the current batch's row is reused
+   const q=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${s}|2026-09-30`,batchId:failedB,reasonCode:'unexpected_revision'});
+   expect(await db.linkQuarantine(q,[stranded,own])).toBe(2);
+   await h.finish(okB,'success');
+   const by=await h.resolver();
+   expect(await outcome(db.resolveConflict(q,'accept',by,stranded))).toBe('rpc_failed:member_ineligible');
+   await db.resolveConflict(q,'accept',by,own);
+   expect((await db.quarantineMembers(q)).map(m=>[m.observation_id,m.status])).toEqual([[stranded,'rejected'],[own,'ok']]);
+   const st=await db.publishState('US');
+   expect((await db.publishSnapshot(input('US',st,v,[own]))).revision).toBe(st.revision+1);
+  });
+
+  it('ingest lease with owner tokens, chunk claims (a repeat never re-processes), stored errors/keys, exclusive resumable finish',async()=>{
    const ds=`macro.t${randomBytes(4).toString('hex')}`;
    const b1=await h.batch(ds),b2=await h.batch(ds);
-   expect(await db.claimIngest(b1,ds,7_200_000)).toEqual({status:'claimed',abandoned:[],holder:null});
-   expect(await db.claimIngest(b2,ds,7_200_000)).toEqual({status:'busy',abandoned:[],holder:b1});
+   const c1=await db.claimIngest(b1,ds,LEASE);
+   expect(c1).toEqual({status:'claimed',ownerToken:expect.any(String),aborted:[],holder:null});
+   const t=c1.ownerToken!;
+   expect(await db.claimIngest(b2,ds,LEASE)).toEqual({status:'busy',ownerToken:null,aborted:[],holder:b1});
    const c={fetched:3,inserted:2,duplicates:1,versioned:0,quarantined:0,failed:0};
-   expect(await db.claimChunk(b1,1,2)).toEqual({status:'claimed'});
-   expect(await db.claimChunk(b1,1,2)).toMatchObject({status:'processing',chunk:{seq:1,state:'processing'}});
-   expect(await outcome(db.claimChunk(b1,0,3))).toBe('rpc_failed:chunk_total_mismatch');
-   expect(await outcome(db.claimChunk(b1,2,2))).toBe('rpc_failed:invalid_chunk');
-   expect(await outcome(db.claimChunk(randomUUID(),0,1))).toBe('rpc_failed:batch_not_claimed');
-   const done=await db.completeChunk(b1,1,{counts:c,errors:[{code:'parse_failed',key:'CN_A'}],claimKeys:['CN_A|2026-09-30'],locatedKeys:[]});
+   expect(await db.claimChunk(b1,1,2,t)).toEqual({status:'claimed'});
+   expect(await db.claimChunk(b1,1,2,t)).toMatchObject({status:'processing',chunk:{seq:1,state:'processing'}});
+   expect(await outcome(db.claimChunk(b1,1,2,randomUUID()))).toBe('fenced:fenced');
+   expect(await outcome(db.claimChunk(b1,0,3,t))).toBe('rpc_failed:chunk_total_mismatch');
+   expect(await outcome(db.claimChunk(b1,2,2,t))).toBe('rpc_failed:invalid_chunk');
+   expect(await outcome(db.claimChunk(randomUUID(),0,1,t))).toBe('rpc_failed:batch_not_claimed');
+   const done=await db.completeChunk(b1,1,{counts:c,errors:[{code:'parse_failed',key:'CN_A'}],claimKeys:['CN_A|2026-09-30'],locatedKeys:[]},t);
    expect(done).toEqual({seq:1,total:2,state:'done',counts:c,errors:[{code:'parse_failed',key:'CN_A'}],claim_keys:['CN_A|2026-09-30'],located_keys:[]});
-   expect(await outcome(db.completeChunk(b1,1,{counts:c,errors:[],claimKeys:[],locatedKeys:[]}))).toBe('rpc_failed:chunk_not_processing');
-   expect(await db.claimChunk(b1,1,2)).toEqual({status:'done',chunk:done});                        // the stored receipt
-   expect(await db.beginFinish(b1,2)).toEqual({status:'incomplete',missing:[0]});
-   await db.claimChunk(b1,0,2);
-   const zeroth=await db.completeChunk(b1,0,{counts:{...c,fetched:1},errors:[],claimKeys:[],locatedKeys:['CN_A|2026-09-30']});
+   expect(await outcome(db.completeChunk(b1,1,{counts:c,errors:[],claimKeys:[],locatedKeys:[]},t))).toBe('rpc_failed:chunk_not_processing');
+   expect(await db.claimChunk(b1,1,2,t)).toEqual({status:'done',chunk:done});                      // the stored receipt
+   expect(await db.beginFinish(b1,2,t)).toEqual({status:'incomplete',missing:[0]});
+   await db.claimChunk(b1,0,2,t);
+   const zeroth=await db.completeChunk(b1,0,{counts:{...c,fetched:1},errors:[],claimKeys:[],locatedKeys:['CN_A|2026-09-30']},t);
    expect(await db.chunksOf(b1)).toEqual([zeroth,done]);
-   expect(await db.beginFinish(b1,2)).toEqual({status:'finishing',progress:{}});
+   expect(await outcome(db.beginFinish(b1,2,randomUUID()))).toBe('fenced:fenced');                   // only the owner finishes
+   const f1=await db.beginFinish(b1,2,t);
+   expect(f1).toEqual({status:'finishing',progress:{},finishToken:expect.any(String)});
+   if(f1.status!=='finishing')throw new Error('unreachable');
    expect(await db.ingestRun(b1)).toEqual({dataset:ds,state:'finishing',progress:{}});
-   expect(await db.recordFinishStep(b1,'derived',{counts:c,errors:[]})).toEqual({derived:{counts:c,errors:[]}});
-   expect(await db.beginFinish(b1,2)).toEqual({status:'finishing',progress:{derived:{counts:c,errors:[]}}});   // a retried finish resumes
-   await db.recordFinishStep(b1,'receipt',{status:'success'});
-   expect(await db.beginFinish(b1,2)).toEqual({status:'finished',progress:{derived:{counts:c,errors:[]},receipt:{status:'success'}}});
-   expect(await outcome(db.recordFinishStep(b1,'published',{}))).toBe('rpc_failed:run_not_finishing');
-   expect(await db.claimIngest(await h.batch(ds),ds,7_200_000)).toMatchObject({status:'claimed'});   // the finished run released the lease
+   expect(await db.recordFinishStep(b1,'derived',{counts:c,errors:[]},{ownerToken:t,finishToken:f1.finishToken})).toEqual({derived:{counts:c,errors:[]}});
+   const f2=await db.beginFinish(b1,2,t);                                                              // a retried finish resumes…
+   if(f2.status!=='finishing')throw new Error('unreachable');
+   expect(f2.progress).toEqual({derived:{counts:c,errors:[]}});
+   expect(f2.finishToken).not.toBe(f1.finishToken);                                                    // …with a new finish token
+   expect(await outcome(db.recordFinishStep(b1,'batch_finished',{status:'success',date:'2026-11-06'},{ownerToken:t,finishToken:f1.finishToken}))).toBe('fenced:fenced');
+   const fence={ownerToken:t,finishToken:f2.finishToken};
+   await db.recordFinishStep(b1,'publish_attempt',{at:T3,status:'stale',reason:null},fence);
+   expect((await db.recordFinishStep(b1,'publish_attempt',{at:T3,status:'failed',reason:'rpc_failed'},fence)).attempts).toEqual([{at:T3,status:'stale',reason:null},{at:T3,status:'failed',reason:'rpc_failed'}]);
+   await db.recordFinishStep(b1,'receipt',{status:'success'},fence);
+   expect(await db.beginFinish(b1,2,t)).toMatchObject({status:'finished',progress:{derived:{counts:c,errors:[]},receipt:{status:'success'}}});
+   expect(await outcome(db.recordFinishStep(b1,'published',{},fence))).toBe('rpc_failed:run_not_finishing');
+   expect(await db.claimIngest(await h.batch(ds),ds,LEASE)).toMatchObject({status:'claimed'});   // the finished run released the lease
    expect(await db.ingestRun(randomUUID())).toBeNull();
+  });
+
+  it('owner fence after a takeover (第 5 稿 P1-3/P2-1): the stalled run is aborted, every old-owner mutation is fenced, a new batch succeeds',async()=>{
+   const ds=`macro.t${randomBytes(4).toString('hex')}`;const s=sid();await catalog([testDef(s)]);
+   const old=await h.batch(ds);
+   const t1=(await db.claimIngest(old,ds,{...LEASE,processingTimeoutMs:1})).ownerToken!;
+   const r1=await retrieval(old,T2,undefined,t1);
+   expect(await db.claimChunk(old,0,1,t1)).toEqual({status:'claimed'});
+   expect((await db.writeObservations(old,'c',[nativeRow(s,'2026-09-30','4.1',r1,T2)],t1)).inserted).toBe(1);   // the worker crashes before completeChunk
+   expect(await outcome(db.writeObservations(old,'c',[nativeRow(s,'2026-08-31','4',r1,T2)]))).toBe('fenced:fenced');   // a run's batch never takes a token-less write
+   await new Promise(r=>setTimeout(r,5));
+   const fresh=await h.batch(ds);
+   expect(await db.claimIngest(fresh,ds,LEASE)).toMatchObject({status:'busy',holder:old});             // without takeover nothing is aborted
+   const next=await h.batch(ds);
+   const c2=await db.claimIngest(next,ds,{...LEASE,takeover:true});
+   expect(c2).toMatchObject({status:'claimed',aborted:[old],holder:null});
+   expect(await db.ingestRun(old)).toMatchObject({state:'aborted',progress:{aborted:{by:next,reason:'stalled_chunk'}}});
+   const st=await db.publishState('US');const v=await catalog([testDef(sid())]);
+   const calls:[string,()=>Promise<unknown>][]=[
+    ['putRetrieval',()=>retrieval(old,T3,undefined,t1)],
+    ['writeObservations',()=>db.writeObservations(old,'c',[nativeRow(s,'2026-10-31','4.2',r1,T2)],t1)],
+    ['linkQuarantine',()=>db.linkQuarantine(randomUUID(),[randomUUID()],{batchId:old,ownerToken:t1})],
+    ['claimChunk',()=>db.claimChunk(old,0,1,t1)],
+    ['completeChunk',()=>db.completeChunk(old,0,{counts:zeroCounts,errors:[],claimKeys:[],locatedKeys:[]},t1)],
+    ['beginFinish',()=>db.beginFinish(old,1,t1)],
+    ['recordFinishStep',()=>db.recordFinishStep(old,'derived',{},{ownerToken:t1,finishToken:randomUUID()})],
+    ['publishSnapshot',()=>db.publishSnapshot({...input('US',st,v,[]),publishKey:`ingest:${old}`,batchId:old,ownerToken:t1})],
+   ];
+   for(const [name,call] of calls)expect({name,r:await outcome(call())}).toEqual({name,r:'fenced:fenced'});
+   expect((await db.claimIngest(await h.batch(ds),ds,LEASE)).aborted).toEqual([old]);                  // listed while its batch still runs
+   await h.finish(old,'failed');                                                                        // what the start route does
+   expect((await db.claimIngest(await h.batch(ds),ds,LEASE)).aborted).toEqual([]);
+   const r2=await retrieval(next,T3,undefined,c2.ownerToken);
+   expect(await db.writeObservations(next,'c',[nativeRow(s,'2026-09-30','4.1',r2,T3)],c2.ownerToken)).toMatchObject({inserted:1,duplicates:0});   // not a duplicate of the abandoned row
+   await h.finish(next,'success');
+   expect((await db.latestEligible([s]))[0]).toMatchObject({batch_id:next,version:2});
   });
  });
 }
@@ -3066,39 +3476,41 @@ const chunkRow={seq:0,total:1,state:'done',counts:{fetched:1,inserted:1,duplicat
 
 describe('supabaseMacroDb wiring',()=>{
  it('maps every write to its service RPC with exact argument names, on the admin client only',async()=>{
-  const data:Record<string,unknown>={macro_put_retrieval:'id-1',record_failed_macro_snapshot:'id-1',publish_macro_snapshot:{snapshot_id:'s1',revision:'4'},republish_macro_snapshot:{snapshot_id:'s2',revision:'5',source_snapshot_id:'s1'},
-   macro_write_observations:{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]},macro_claim_ingest:{status:'claimed',abandoned:[]},macro_claim_chunk:{status:'done',chunk:chunkRow},
-   macro_complete_chunk:chunkRow,macro_begin_finish:{status:'finishing',progress:{}},macro_record_finish_step:{derived:{counts:chunkRow.counts,errors:[]}},macro_link_quarantine:1};
+  const data:Record<string,unknown>={macro_put_retrieval:'id-1',record_failed_macro_snapshot:'id-1',publish_macro_snapshot:{snapshot_id:'s1',revision:'4',replayed:false},republish_macro_snapshot:{snapshot_id:'s2',revision:'5',source_snapshot_id:'s1'},
+   macro_write_observations:{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]},macro_claim_ingest:{status:'claimed',owner_token:'tok-1',aborted:[]},macro_claim_chunk:{status:'done',chunk:chunkRow},
+   macro_complete_chunk:chunkRow,macro_begin_finish:{status:'finishing',progress:{},finish_token:'fin-1'},macro_record_finish_step:{derived:{counts:chunkRow.counts,errors:[]}},macro_link_quarantine:1};
   const admin=stub({rpc:fn=>({data:data[fn]??null,error:null})});
   const anon=stub();
   const db=supabaseMacroDb({admin:admin.client,anon:anon.client});
   await db.upsertCatalog([],'macro-catalog/abcdefabcdef','macro-rules/1');
-  expect(await db.putRetrieval({sha256:'a'.repeat(64),object_path:`fred_csv/${'a'.repeat(64)}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:10},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-01T05:30:00.000Z',batch_id:'b1',tool_versions:{node:'22'}})).toBe('id-1');
-  expect(await db.claimIngest('b1','macro.akshare',7_200_000)).toEqual({status:'claimed',abandoned:[],holder:null});
-  expect(await db.claimChunk('b1',0,1)).toEqual({status:'done',chunk:chunkRow});
-  expect(await db.completeChunk('b1',0,{counts:chunkRow.counts,errors:chunkRow.errors,claimKeys:chunkRow.claim_keys,locatedKeys:[]})).toEqual(chunkRow);
-  expect(await db.beginFinish('b1',1)).toEqual({status:'finishing',progress:{}});
-  expect(await db.recordFinishStep('b1','derived',{counts:chunkRow.counts,errors:[]})).toEqual({derived:{counts:chunkRow.counts,errors:[]}});
-  expect(await db.writeObservations('b1','code',[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')])).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
-  expect(await db.publishSnapshot(publishInput)).toEqual({snapshot_id:'s1',revision:4});
+  expect(await db.putRetrieval({sha256:'a'.repeat(64),object_path:`fred_csv/${'a'.repeat(64)}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:10},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-01T05:30:00.000Z',batch_id:'b1',tool_versions:{node:'22'}},'tok-1')).toBe('id-1');
+  expect(await db.claimIngest('b1','macro.akshare',{maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:true})).toEqual({status:'claimed',ownerToken:'tok-1',aborted:[],holder:null});
+  expect(await db.claimChunk('b1',0,1,'tok-1')).toEqual({status:'done',chunk:chunkRow});
+  expect(await db.completeChunk('b1',0,{counts:chunkRow.counts,errors:chunkRow.errors,claimKeys:chunkRow.claim_keys,locatedKeys:[]},'tok-1')).toEqual(chunkRow);
+  expect(await db.beginFinish('b1',1,'tok-1')).toEqual({status:'finishing',progress:{},finishToken:'fin-1'});
+  expect(await db.recordFinishStep('b1','derived',{counts:chunkRow.counts,errors:[]},{ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({derived:{counts:chunkRow.counts,errors:[]}});
+  expect(await db.writeObservations('b1','code',[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],'tok-1')).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
+  expect(await db.publishSnapshot({...publishInput,publishKey:'ingest:b1',batchId:'b1',ownerToken:'tok-1'})).toEqual({snapshot_id:'s1',revision:4,replayed:false});
   expect(await db.republishSnapshot('s1',4,7)).toEqual({snapshot_id:'s2',revision:5});
   expect(await db.recordFailedSnapshot({region:'CN',asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:'c',reason:'x'})).toBe('id-1');
+  expect(await db.linkQuarantine('q1',['o9'],{batchId:'b1',ownerToken:'tok-1'})).toBe(1);
   expect(await db.linkQuarantine('q1',['o9'])).toBe(1);
   await db.resolveConflict('q1','accept','u1','o9');
   await db.resolveConflict('q2','reject','u1');
   expect(admin.rpcCalls).toEqual([
    ['macro_upsert_catalog',{p_catalog_version:'macro-catalog/abcdefabcdef',p_rules_version:'macro-rules/1',p_defs:[]}],
-   ['macro_put_retrieval',{p_sha256:'a'.repeat(64),p_object_path:`fred_csv/${'a'.repeat(64)}.csv`,p_adapter:'fred_csv',p_content_type:'text/csv',p_byte_length:10,p_fetch_url:'https://fred.stlouisfed.org/x',p_fetch_host:'fred.stlouisfed.org',p_http_status:200,p_fetched_at:'2026-11-01T05:30:00.000Z',p_batch_id:'b1',p_tool_versions:{node:'22'}}],
-   ['macro_claim_ingest',{p_batch_id:'b1',p_dataset:'macro.akshare',p_max_age:'7200 seconds'}],
-   ['macro_claim_chunk',{p_batch_id:'b1',p_seq:0,p_total:1}],
-   ['macro_complete_chunk',{p_batch_id:'b1',p_seq:0,p_counts:chunkRow.counts,p_errors:chunkRow.errors,p_claim_keys:chunkRow.claim_keys,p_located_keys:[]}],
-   ['macro_begin_finish',{p_batch_id:'b1',p_total:1}],
-   ['macro_record_finish_step',{p_batch_id:'b1',p_step:'derived',p_data:{counts:chunkRow.counts,errors:[]}}],
-   ['macro_write_observations',{p_batch:'b1',p_code_version:'code',p_rows:[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')]}],
-   ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_history_ids:['o0','o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20}],
+   ['macro_put_retrieval',{p_sha256:'a'.repeat(64),p_object_path:`fred_csv/${'a'.repeat(64)}.csv`,p_adapter:'fred_csv',p_content_type:'text/csv',p_byte_length:10,p_fetch_url:'https://fred.stlouisfed.org/x',p_fetch_host:'fred.stlouisfed.org',p_http_status:200,p_fetched_at:'2026-11-01T05:30:00.000Z',p_batch_id:'b1',p_tool_versions:{node:'22'},p_owner_token:'tok-1'}],
+   ['macro_claim_ingest',{p_batch_id:'b1',p_dataset:'macro.akshare',p_max_age:'7200000 milliseconds',p_processing_timeout:'600000 milliseconds',p_takeover:true}],
+   ['macro_claim_chunk',{p_batch_id:'b1',p_seq:0,p_total:1,p_owner_token:'tok-1'}],
+   ['macro_complete_chunk',{p_batch_id:'b1',p_seq:0,p_counts:chunkRow.counts,p_errors:chunkRow.errors,p_claim_keys:chunkRow.claim_keys,p_located_keys:[],p_owner_token:'tok-1'}],
+   ['macro_begin_finish',{p_batch_id:'b1',p_total:1,p_owner_token:'tok-1'}],
+   ['macro_record_finish_step',{p_batch_id:'b1',p_step:'derived',p_data:{counts:chunkRow.counts,errors:[]},p_owner_token:'tok-1',p_finish_token:'fin-1'}],
+   ['macro_write_observations',{p_batch:'b1',p_code_version:'code',p_rows:[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],p_owner_token:'tok-1'}],
+   ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_history_ids:['o0','o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20,p_publish_key:'ingest:b1',p_batch_id:'b1',p_owner_token:'tok-1'}],
    ['republish_macro_snapshot',{p_snapshot_id:'s1',p_expected_revision:4,p_expected_input_revision:7}],
    ['record_failed_macro_snapshot',{p_region:'CN',p_as_of:'2026-11-06',p_methodology_version:'m',p_catalog_version:'c',p_reason:'x'}],
-   ['macro_link_quarantine',{p_quarantine_id:'q1',p_observation_ids:['o9']}],
+   ['macro_link_quarantine',{p_quarantine_id:'q1',p_observation_ids:['o9'],p_batch_id:'b1',p_owner_token:'tok-1'}],
+   ['macro_link_quarantine',{p_quarantine_id:'q1',p_observation_ids:['o9'],p_batch_id:null,p_owner_token:null}],
    ['macro_resolve_conflict',{p_quarantine_id:'q1',p_decision:'accept',p_resolved_by:'u1',p_observation_id:'o9'}],
    ['macro_resolve_conflict',{p_quarantine_id:'q2',p_decision:'reject',p_resolved_by:'u1',p_observation_id:null}],
   ]);
@@ -3147,7 +3559,7 @@ describe('supabaseMacroDb wiring',()=>{
   expect(admin.rpcCalls).toEqual([]);
  });
  it('maps Postgres messages to MacroDbError codes',async()=>{
-  for(const [m,code] of [['stale_publisher','stale_publisher'],['invalid_manifest','invalid_manifest'],['quota_exceeded','quota_exceeded'],['already_resolved','already_resolved'],['not_found','not_found'],['reject_only','reject_only'],['not_quarantined','rpc_failed'],['invalid_value_text','rpc_failed'],['chunk_total_mismatch','rpc_failed'],['new row for relation "macro_retrievals" violates check constraint "macro_retrievals_host"','rpc_failed']] as const){
+  for(const [m,code] of [['stale_publisher','stale_publisher'],['invalid_manifest','invalid_manifest'],['quota_exceeded','quota_exceeded'],['already_resolved','already_resolved'],['not_found','not_found'],['reject_only','reject_only'],['fenced','fenced'],['quarantine_closed','quarantine_closed'],['member_ineligible','rpc_failed'],['not_quarantined','rpc_failed'],['invalid_value_text','rpc_failed'],['chunk_total_mismatch','rpc_failed'],['new row for relation "macro_retrievals" violates check constraint "macro_retrievals_host"','rpc_failed']] as const){
    const e=toMacroDbError({message:m});expect(e).toBeInstanceOf(MacroDbError);expect([e.code,e.message]).toEqual([code,m]);
   }
   const admin=stub({rpc:()=>({data:null,error:{message:'stale_publisher'}})});
@@ -3290,40 +3702,50 @@ Create `src/lib/macro/db.ts`:
 // receipts, ingest runs, quarantine members and the publication-eligible reads (latestEligible /
 // eligibleHistory: ingest_batches is service-only) go through the admin client. memory-db.ts implements the
 // same semantics and db-contract.ts pins both. Postgres messages that are contract codes (stale_publisher,
-// invalid_manifest, quota_exceeded, not_found, already_resolved, reject_only) become MacroDbError codes; any
-// other failure is rpc_failed with the original message (invalid_value_text, chunk_total_mismatch,
+// invalid_manifest, quota_exceeded, not_found, already_resolved, reject_only, fenced, quarantine_closed) become
+// MacroDbError codes; any other failure is rpc_failed with the original message (invalid_value_text, member_ineligible, chunk_total_mismatch,
 // chunk_not_processing, not_quarantined, evidence_mismatch, catalog_version_conflict, constraint texts, …). The new RPCs are not in
 // Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
 import type {SupabaseClient} from '@supabase/supabase-js';
 import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
 
-export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
+export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
  upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
- /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id. service */
- putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>):Promise<string>;
+ /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
+  *  ownerToken (第 5 稿 P1-3): the AKShare path passes its run's token (verified under the run lock, else `fenced`); FRED cron
+  *  passes nothing (its batch has no run row; a batch WITH a run refuses a missing token). service */
+ putRetrieval(obj:Omit<import('./types').EvidenceObject,'created_at'>,r:Omit<import('./types').Retrieval,'retrieval_id'|'sha256'>,ownerToken?:string|null):Promise<string>;
  evidenceObject(sha256:string):Promise<import('./types').EvidenceObject|null>;                                   // anon
  retrieval(retrievalId:string):Promise<import('./types').Retrieval|null>;                                        // anon
  /** Every retrieval of one evidence object, fetched_at ascending (≤ 1000). anon. */
  retrievalsOf(sha256:string):Promise<import('./types').Retrieval[]>;
  /** Retrievals by id, input order, unknown ids dropped, deduplicated. anon. */
  retrievalsByIds(ids:string[]):Promise<import('./types').Retrieval[]>;
- /** RPC macro_claim_ingest (第 4 稿 P1-6): single-writer lease per dataset. Live runs older than maxAgeMs are first marked
-  *  finished {abandoned:true} and returned in `abandoned` (the caller finishes those ingest_batches rows as failed). busy ⇒ the
-  *  caller finishes its own batch rejected. service */
- claimIngest(batchId:string,dataset:string,maxAgeMs:number):Promise<{status:'claimed'|'busy';abandoned:string[];holder:string|null}>;
- /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. service */
- claimChunk(batchId:string,seq:number,total:number):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
- /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets. service */
- completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]}):Promise<import('./types').ChunkRecord>;
+ /** RPC macro_claim_ingest (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1): single-writer lease per dataset with a fresh owner token. In one
+  *  transaction under the dataset lock it first aborts (state 'aborted') every live run older than maxAgeMs and — only when
+  *  takeover is true — every live run holding a chunk in 'processing' for longer than that run's processingTimeoutMs; then a
+  *  remaining live run ⇒ busy (the caller finishes its own batch rejected), else the run is inserted open with a new
+  *  owner_token. `aborted` lists the dataset's aborted runs whose batch is still running (the caller finishes them failed,
+  *  ignoring batch_not_running). service */
+ claimIngest(batchId:string,dataset:string,opts:{maxAgeMs:number;processingTimeoutMs:number;takeover:boolean}):Promise<import('./types').IngestClaim>;
+ /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. Wrong token or
+  *  an aborted run ⇒ fenced. service */
+ claimChunk(batchId:string,seq:number,total:number,ownerToken:string):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
+ /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets (owner-fenced). service */
+ completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
  chunksOf(batchId:string):Promise<import('./types').ChunkRecord[]>;                                              // service, seq order
  ingestRun(batchId:string):Promise<{dataset:string;state:import('./types').IngestRunState;progress:import('./types').FinishProgress}|null>;   // service
- /** RPC macro_begin_finish: open → finishing once every chunk 0..total−1 is done; finishing/finished return the stored progress. service */
- beginFinish(batchId:string,total:number):Promise<{status:'incomplete';missing:number[]}|{status:'finishing'|'finished';progress:import('./types').FinishProgress}>;
- /** RPC macro_record_finish_step: merges one step into finish_progress; step 'receipt' finishes the run. service */
- recordFinishStep(batchId:string,step:'derived'|'batch_finished'|'freshness_recorded'|'published'|'receipt',data:Record<string,unknown>):Promise<import('./types').FinishProgress>;
- writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[]):Promise<import('./types').WriteResult>;   // service, RPC macro_write_observations
+ /** RPC macro_begin_finish (第 5 稿 P1-4): only the token owner; open → finishing once every chunk 0..total−1 is done; a
+  *  finishing run resumes. Both hand out a NEW finishToken (an older finisher is fenced at its next step); finished returns
+  *  the stored progress; another owner or an aborted run ⇒ fenced. service */
+ beginFinish(batchId:string,total:number,ownerToken:string):Promise<{status:'incomplete';missing:number[]}|{status:'finishing';progress:import('./types').FinishProgress;finishToken:string}|{status:'finished';progress:import('./types').FinishProgress}>;
+ /** RPC macro_record_finish_step: merges one step into finish_progress (publish_attempt appends to attempts[]); 'receipt'
+  *  finishes the run. Both tokens must match the run (else fenced). service */
+ recordFinishStep(batchId:string,step:import('./types').FinishStep,data:Record<string,unknown>,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
+ /** RPC macro_write_observations. ownerToken as putRetrieval (第 5 稿 P1-3). service */
+ writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[],ownerToken?:string|null):Promise<import('./types').WriteResult>;
  /** Latest period per series, highest ok version within it; asOf ⇒ only rows with available_at ≤ asOf. anon. */
  latestObservations(seriesIds:string[],opts?:{asOf?:string;periodEndLte?:string}):Promise<import('./types').ObservationRow[]>;
  /** Same, over publication-eligible rows only (ok + batch success/partial + ancestors eligible; includeBatch also admits that
@@ -3338,14 +3760,18 @@ export interface MacroDb{
  versionsOf(seriesId:string,periodEnd:string):Promise<import('./types').ObservationRow[]>;
  observationsByIds(ids:string[]):Promise<import('./types').ObservationRow[]>;                                    // anon; ok only
  publishState(region:import('./types').Region):Promise<{revision:number;inputRevision:number}>;                   // service
- /** RPC macro_link_quarantine (第 4 稿 P1-4): binds quarantined/rejected rows of the item's natural key to an open item. service */
- linkQuarantine(quarantineId:string,observationIds:string[]):Promise<number>;
+ /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds quarantined/rejected
+  *  rows of the item's natural key; a closed item ⇒ quarantine_closed. batchId + ownerToken fence the AKShare path (第 5 稿 P1-3). service */
+ linkQuarantine(quarantineId:string,observationIds:string[],fence?:{batchId:string;ownerToken:string|null}):Promise<number>;
  /** Members of one item with their current status, version ascending. service */
  quarantineMembers(quarantineId:string):Promise<import('./types').QuarantineMember[]>;
- /** RPC macro_resolve_conflict (spec §0.2 M10, 第 4 稿 P1-4): accept needs observationId (a quarantined member) — it becomes
-  *  ok, every other member rejected; reject rejects every member. Throws already_resolved / not_found / reject_only. service */
+ /** RPC macro_resolve_conflict (spec §0.2 M10, 第 4 稿 P1-4): accept needs observationId (a quarantined member whose batch is not
+  *  failed/rejected — 第 5 稿 P1-6, else member_ineligible) — it becomes ok, every other member rejected; reject rejects every
+  *  member. Throws already_resolved / not_found / reject_only. service */
  resolveConflict(quarantineId:string,decision:'accept'|'reject',resolvedBy:string,observationId?:string):Promise<void>;
- publishSnapshot(input:import('./types').PublishInput):Promise<{snapshot_id:string;revision:number}>;            // service, RPC publish_macro_snapshot; throws stale_publisher / invalid_manifest
+ /** RPC publish_macro_snapshot; throws stale_publisher / invalid_manifest / fenced. An already used publishKey returns its
+  *  snapshot with replayed:true and publishes nothing (第 5 稿 P1-4). service */
+ publishSnapshot(input:import('./types').PublishInput):Promise<import('./types').PublishResult>;
  /** RPC republish_macro_snapshot (第 4 稿 P1-11): a NEW active snapshot copying a non-failed snapshot's manifest, history and
   *  regime after re-validating eligibility (rollback). Throws stale_publisher / invalid_manifest / not_found. service */
  republishSnapshot(snapshotId:string,expectedRevision:number,expectedInputRevision:number):Promise<{snapshot_id:string;revision:number}>;
@@ -3361,7 +3787,7 @@ export interface MacroDb{
 export const READ_PAGE=1000;      // PostgREST max_rows
 export const IN_CHUNK=200;        // ids per .in() filter (URL length)
 export const WRITE_CHUNK=2000;    // rows per macro_write_observations call
-const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','reject_only','truncated'] as const;
+const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','reject_only','fenced','quarantine_closed','truncated'] as const;
 interface PgErrorLike{message?:string;code?:string}
 export function toMacroDbError(e:PgErrorLike):MacroDbError{
  const m=String(e?.message??'');
@@ -3428,8 +3854,10 @@ export function mergeResults(parts:WriteResult[]):WriteResult{
 export function publishArgs(i:PublishInput){
  return {p_region:i.region,p_expected_revision:i.expectedRevision,p_expected_input_revision:i.expectedInputRevision,p_as_of:i.asOf,p_methodology_version:i.methodologyVersion,
   p_catalog_version:i.catalogVersion,p_observation_ids:i.observationIds,p_history_ids:i.historyIds,p_catalog_counts:i.catalogCounts,p_regime:i.regime,p_contributions:i.contributions,
-  p_rules_version:i.rulesVersion,p_uncovered_weight:i.uncoveredWeight};
+  p_rules_version:i.rulesVersion,p_uncovered_weight:i.uncoveredWeight,p_publish_key:i.publishKey??null,p_batch_id:i.batchId??null,p_owner_token:i.ownerToken??null};
 }
+/** Interval literal for the lease RPC (ms precision; PostgreSQL parses 'N milliseconds'). */
+const msInterval=(ms:number)=>`${Math.max(1,Math.round(ms))} milliseconds`;
 
 interface Res{data:unknown;error:PgErrorLike|null}
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained
@@ -3455,9 +3883,9 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
  };
  return {
   async upsertCatalog(defs,catalogVersion,rulesVersion){await call(admin,'macro_upsert_catalog',{p_catalog_version:catalogVersion,p_rules_version:rulesVersion,p_defs:defs});},
-  async putRetrieval(obj,r){
+  async putRetrieval(obj,r,ownerToken){
    return String(await call<string>(admin,'macro_put_retrieval',{p_sha256:obj.sha256,p_object_path:obj.object_path,p_adapter:obj.adapter,p_content_type:obj.content_type,p_byte_length:obj.byte_length,
-    p_fetch_url:r.fetch_url,p_fetch_host:r.fetch_host,p_http_status:r.http_status,p_fetched_at:r.fetched_at,p_batch_id:r.batch_id,p_tool_versions:r.tool_versions}));
+    p_fetch_url:r.fetch_url,p_fetch_host:r.fetch_host,p_http_status:r.http_status,p_fetched_at:r.fetched_at,p_batch_id:r.batch_id,p_tool_versions:r.tool_versions,p_owner_token:ownerToken??null}));
   },
   async evidenceObject(sha256){const r=await maybe(anon.from('macro_evidence_objects').select('*').eq('sha256',sha256).maybeSingle());return r?evidenceFromRow(r):null;},
   async retrieval(id){const r=await maybe(anon.from('macro_retrievals').select('*').eq('retrieval_id',id).maybeSingle());return r?retrievalFromRow(r):null;},
@@ -3471,19 +3899,21 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    }
    return uniq.flatMap(id=>{const r=found.get(id);return r?[r]:[];});
   },
-  async claimIngest(batchId,dataset,maxAgeMs){
-   const r=await call<{status:string;abandoned?:unknown[];holder?:string|null}>(admin,'macro_claim_ingest',{p_batch_id:batchId,p_dataset:dataset,p_max_age:`${Math.max(1,Math.round(maxAgeMs/1000))} seconds`});
+  async claimIngest(batchId,dataset,o){
+   const r=await call<{status:string;owner_token?:string|null;aborted?:unknown[];holder?:string|null}>(admin,'macro_claim_ingest',
+    {p_batch_id:batchId,p_dataset:dataset,p_max_age:msInterval(o.maxAgeMs),p_processing_timeout:msInterval(o.processingTimeoutMs),p_takeover:o.takeover});
    if(r?.status!=='claimed'&&r?.status!=='busy')throw new MacroDbError('rpc_failed',`unexpected_claim_result:${String(r?.status)}`);
-   return {status:r.status,abandoned:stringsOf(r.abandoned),holder:r.holder?String(r.holder):null};
+   if(r.status==='claimed'&&!r.owner_token)throw new MacroDbError('rpc_failed','claim_without_owner_token');
+   return {status:r.status,ownerToken:r.status==='claimed'?String(r.owner_token):null,aborted:stringsOf(r.aborted),holder:r.holder?String(r.holder):null};
   },
-  async claimChunk(batchId,seq,total){
-   const r=await call<{status:string;chunk?:Record<string,unknown>}>(admin,'macro_claim_chunk',{p_batch_id:batchId,p_seq:seq,p_total:total});
+  async claimChunk(batchId,seq,total,ownerToken){
+   const r=await call<{status:string;chunk?:Record<string,unknown>}>(admin,'macro_claim_chunk',{p_batch_id:batchId,p_seq:seq,p_total:total,p_owner_token:ownerToken});
    if(r?.status==='claimed')return {status:'claimed'};
    if((r?.status==='processing'||r?.status==='done')&&r.chunk)return {status:r.status,chunk:chunkFromRow(r.chunk)};
    throw new MacroDbError('rpc_failed',`unexpected_chunk_result:${String(r?.status)}`);
   },
-  async completeChunk(batchId,seq,res){
-   return chunkFromRow(await call<Record<string,unknown>>(admin,'macro_complete_chunk',{p_batch_id:batchId,p_seq:seq,p_counts:res.counts,p_errors:res.errors,p_claim_keys:res.claimKeys,p_located_keys:res.locatedKeys}));
+  async completeChunk(batchId,seq,res,ownerToken){
+   return chunkFromRow(await call<Record<string,unknown>>(admin,'macro_complete_chunk',{p_batch_id:batchId,p_seq:seq,p_counts:res.counts,p_errors:res.errors,p_claim_keys:res.claimKeys,p_located_keys:res.locatedKeys,p_owner_token:ownerToken}));
   },
   async chunksOf(batchId){
    const got=await pageAll(()=>admin.from('macro_ingest_chunks').select('*').eq('batch_id',batchId).order('seq',{ascending:true}) as Query,Number.MAX_SAFE_INTEGER);
@@ -3493,16 +3923,19 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    const r=await maybe(admin.from('macro_ingest_runs').select('dataset,state,finish_progress').eq('batch_id',batchId).maybeSingle());
    return r?{dataset:String(r.dataset),state:r.state as IngestRunState,progress:progressOf(r.finish_progress)}:null;
   },
-  async beginFinish(batchId,total){
-   const r=await call<{status:string;missing?:unknown[];progress?:unknown}>(admin,'macro_begin_finish',{p_batch_id:batchId,p_total:total});
+  async beginFinish(batchId,total,ownerToken){
+   const r=await call<{status:string;missing?:unknown[];progress?:unknown;finish_token?:string|null}>(admin,'macro_begin_finish',{p_batch_id:batchId,p_total:total,p_owner_token:ownerToken});
    if(r?.status==='incomplete')return {status:'incomplete',missing:(r.missing??[]).map(Number)};
-   if(r?.status==='finishing'||r?.status==='finished')return {status:r.status,progress:progressOf(r.progress)};
+   if(r?.status==='finishing'&&r.finish_token)return {status:'finishing',progress:progressOf(r.progress),finishToken:String(r.finish_token)};
+   if(r?.status==='finished')return {status:'finished',progress:progressOf(r.progress)};
    throw new MacroDbError('rpc_failed',`unexpected_finish_result:${String(r?.status)}`);
   },
-  async recordFinishStep(batchId,step,data){return progressOf(await call(admin,'macro_record_finish_step',{p_batch_id:batchId,p_step:step,p_data:data}));},
-  async writeObservations(batchId,codeVersion,input){
+  async recordFinishStep(batchId,step,data,fence){
+   return progressOf(await call(admin,'macro_record_finish_step',{p_batch_id:batchId,p_step:step,p_data:data,p_owner_token:fence.ownerToken,p_finish_token:fence.finishToken}));
+  },
+  async writeObservations(batchId,codeVersion,input,ownerToken){
    const parts:WriteResult[]=[];
-   for(const part of packWrites(input))parts.push(await call<WriteResult>(admin,'macro_write_observations',{p_batch:batchId,p_code_version:codeVersion,p_rows:part}));
+   for(const part of packWrites(input))parts.push(await call<WriteResult>(admin,'macro_write_observations',{p_batch:batchId,p_code_version:codeVersion,p_rows:part,p_owner_token:ownerToken??null}));
    return mergeResults(parts);
   },
   async latestObservations(ids,opts){
@@ -3518,11 +3951,13 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    const out:ObservationRow[]=[];let after:string|null=null;
    for(;;){
     // one row per period; keyset paging on period_end (the RPC returns ascending, ≤ READ_PAGE per call)
-    const part=(await rows(admin.rpc('macro_eligible_history',{p_series_id:id,p_from:o.from??null,p_to:o.to??null,p_as_of:o.asOf??null,p_include_batch:o.includeBatch??null,p_after:after,p_limit:READ_PAGE}))).map(observationFromRow);
+    // explicit annotation (第 5 稿 P1-1): `part` feeds `after`, so inference would be circular (TS7022 under strict)
+    const part:ObservationRow[]=(await rows(admin.rpc('macro_eligible_history',{p_series_id:id,p_from:o.from??null,p_to:o.to??null,p_as_of:o.asOf??null,p_include_batch:o.includeBatch??null,p_after:after,p_limit:READ_PAGE}))).map(observationFromRow);
+    const lastPeriod:string|null=part.length>0?part[part.length-1].period_end:null;
     out.push(...part);
     if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history:${id}:>${o.maxRows}`);
-    if(part.length<READ_PAGE)return out;
-    after=part[part.length-1].period_end;
+    if(part.length<READ_PAGE||lastPeriod===null)return out;
+    after=lastPeriod;
    }
   },
   async seriesHistory(id,o){
@@ -3553,7 +3988,9 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    if(!r)throw new MacroDbError('not_found',`publish_state:${region}`);
    return {revision:Number(r.revision),inputRevision:Number(r.input_revision)};
   },
-  async linkQuarantine(quarantineId,observationIds){return Number(await call(admin,'macro_link_quarantine',{p_quarantine_id:quarantineId,p_observation_ids:observationIds}));},
+  async linkQuarantine(quarantineId,observationIds,fence){
+   return Number(await call(admin,'macro_link_quarantine',{p_quarantine_id:quarantineId,p_observation_ids:observationIds,p_batch_id:fence?.batchId??null,p_owner_token:fence?.ownerToken??null}));
+  },
   async quarantineMembers(quarantineId){
    const ids=(await rows(admin.from('macro_quarantine_members').select('observation_id').eq('quarantine_id',quarantineId).range(0,READ_PAGE-1))).map(r=>String(r.observation_id));
    if(ids.length===0)return [];
@@ -3561,7 +3998,10 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    return obs.sort((a,b)=>a.version-b.version).map((o):QuarantineMember=>({observation_id:o.observation_id,series_id:o.series_id,period_end:o.period_end,value_text:o.value_text,version:o.version,status:o.status}));
   },
   async resolveConflict(quarantineId,decision,resolvedBy,observationId){await call(admin,'macro_resolve_conflict',{p_quarantine_id:quarantineId,p_decision:decision,p_resolved_by:resolvedBy,p_observation_id:observationId??null});},
-  async publishSnapshot(i){const r=await call<{snapshot_id:string;revision:number|string}>(admin,'publish_macro_snapshot',publishArgs(i));return {snapshot_id:String(r.snapshot_id),revision:Number(r.revision)};},
+  async publishSnapshot(i){
+   const r=await call<{snapshot_id:string;revision:number|string;replayed?:boolean}>(admin,'publish_macro_snapshot',publishArgs(i));
+   return {snapshot_id:String(r.snapshot_id),revision:Number(r.revision),replayed:r.replayed===true};
+  },
   async republishSnapshot(snapshotId,expectedRevision,expectedInputRevision){
    const r=await call<{snapshot_id:string;revision:number|string}>(admin,'republish_macro_snapshot',{p_snapshot_id:snapshotId,p_expected_revision:expectedRevision,p_expected_input_revision:expectedInputRevision});
    return {snapshot_id:String(r.snapshot_id),revision:Number(r.revision)};
@@ -3595,6 +4035,9 @@ Create `src/lib/macro/memory-db.ts`:
 // stale_publisher / invalid_manifest, failed snapshots, quarantine members and conflict resolution
 // with an audit row, the ingest lease, chunk claims and finish progress, and ok-only reads. Every
 // write validates the whole call first and commits atomically (one SQL call). Reads return copies.
+// 第 5 稿: owner-token fence on every ingest mutation (assertOwner = SQL macro_assert_owner), takeover → 'aborted',
+// rotating finish tokens, publish-key replay, previously_rejected before any action, quarantine reuse only from
+// eligible / current batches, member_ineligible, quarantine_closed on a closed item.
 // There is no ingest_batches table here: setBatchStatus declares a batch's status and a batch never
 // declared counts as success (= SQL after finishBatch). For unit tests and the shared contract.
 import {randomUUID} from 'node:crypto';
@@ -3608,9 +4051,11 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERIES_ID=/^[A-Z][A-Z0-9_]{0,63}$/;
 const NATURAL_KEY=/^[A-Z][A-Z0-9_]{0,63}\|\d{4}-\d{2}-\d{2}$/;
 const CHUNK_KEYS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
-const FINISH_STEPS=['derived','batch_finished','freshness_recorded','published','receipt'] as const;
+const FINISH_STEPS=['derived','batch_finished','freshness_started','freshness_recorded','published','publish_attempt','receipt'] as const;
+const MAX_ATTEMPTS=20;
 const DATASET=/^macro\.[a-z0-9_]{1,32}$/;
 const rpc=(m:string)=>new MacroDbError('rpc_failed',m);
+const fenced=()=>new MacroDbError('fenced');
 export type MemoryBatchStatus='running'|'success'|'partial'|'failed'|'rejected';
 const validDate=(s:unknown):s is string=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(`${s}T00:00:00Z`))&&new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s;
 const msOf=(s:string)=>Date.parse(s);
@@ -3622,7 +4067,8 @@ export interface MemoryMacroDb extends MacroDb{
  setNow(iso:string):void;
  /** Declares a batch's ingest_batches status (undeclared batches count as 'success'). */
  setBatchStatus(batchId:string,status:MemoryBatchStatus):void;
- addQuarantineItem(i:{dataset:string;table_name?:string;natural_key:string;reason_code?:string;batch_id:string}):string;
+ /** Registers an open dq_quarantine item; `id` lets a test mirror the TableClient's dq_quarantine rows (Task 6). */
+ addQuarantineItem(i:{id?:string;dataset:string;table_name?:string;natural_key:string;reason_code?:string;batch_id:string}):string;
  quarantineItem(id:string):QuarantineItem|undefined;
  readonly audit:readonly AuditRow[];
  /** Every observation incl. quarantined (tests only; MacroDb reads are ok-only). */
@@ -3643,7 +4089,10 @@ export function memoryMacroDb():MemoryMacroDb{
  const regimes=new Map<string,RegimeRecord>();
  const state:Record<Region,{revision:number;inputRevision:number}>={US:{revision:0,inputRevision:0},CN:{revision:0,inputRevision:0}};
  const chunks=new Map<string,Map<number,ChunkRecord>>();
- const runs=new Map<string,{dataset:string;state:IngestRunState;progress:FinishProgress;createdMs:number}>();
+ const chunkReceivedMs=new Map<string,number>();                                                      // `${batch}|${seq}` → claim time
+ interface Run{dataset:string;state:IngestRunState;progress:FinishProgress;createdMs:number;ownerToken:string;processingTimeoutMs:number;finishToken:string|null}
+ const runs=new Map<string,Run>();
+ const publishKeys=new Map<string,string>();                                                           // publish_key → snapshot_id
  const batchStatus=new Map<string,MemoryBatchStatus>();
  const items=new Map<string,QuarantineItem>();
  const members=new Map<string,Set<string>>();
@@ -3659,6 +4108,13 @@ export function memoryMacroDb():MemoryMacroDb{
   return depth>=8||(o.derived_from??[]).every(a=>eligible(a,include,depth+1));
  };
  const manifestOk=(region:Region,ids:readonly string[])=>ids.every(id=>{const o=byId(id);return !!o&&o.status==='ok'&&series.get(o.series_id)?.region===region&&eligible(id,null);});
+ // ---- owner fence (SQL macro_assert_owner, 第 5 稿 P1-3): no batch → no check; no run → token must be null; else token + state
+ const assertOwner=(batchId:string|null|undefined,token:string|null|undefined,states:readonly IngestRunState[])=>{
+  if(!batchId)return;
+  const run=runs.get(batchId);
+  if(!run){if(token!=null)throw fenced();return;}
+  if(token==null||run.ownerToken!==token||!states.includes(run.state))throw fenced();
+ };
 
  const validateRow=(r:ObservationWrite)=>{
   const x=r as unknown as Record<string,unknown>;
@@ -3681,7 +4137,7 @@ export function memoryMacroDb():MemoryMacroDb{
  const db:MemoryMacroDb={
   setNow(iso){fixedNow=new Date(iso).toISOString();},
   setBatchStatus(batchId,status){batchStatus.set(batchId,status);},
-  addQuarantineItem(i){const id=randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
+  addQuarantineItem(i){const id=i.id??randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
   quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},
   get audit(){return clone(audit);},
   allObservations(){return clone(observations);},
@@ -3697,7 +4153,8 @@ export function memoryMacroDb():MemoryMacroDb{
    for(const d of defs)series.set(d.id,clone(d));
   },
 
-  async putRetrieval(obj,r){
+  async putRetrieval(obj,r,ownerToken){
+   assertOwner(r.batch_id,ownerToken,['open','finishing']);
    const frac=/\.(\d+)/.exec(r.fetched_at??'');
    if(typeof r.fetched_at!=='string'||!Number.isFinite(msOf(r.fetched_at))||(frac&&/[1-9]/.test(frac[1].slice(3))))throw rpc('invalid_retrieval');
    if(!/^[0-9a-f]{64}$/.test(obj.sha256))throw rpc('violates check constraint macro_evidence_objects_sha256_check');
@@ -3716,20 +4173,29 @@ export function memoryMacroDb():MemoryMacroDb{
   async retrievalsOf(sha256){return [...retrievals.values()].filter(r=>r.sha256===sha256).sort((a,b)=>a.fetched_at<b.fetched_at?-1:a.fetched_at>b.fetched_at?1:a.retrieval_id<b.retrieval_id?-1:1).slice(0,1000).map(clone);},
   async retrievalsByIds(ids){return [...new Set(ids)].flatMap(id=>{const r=retrievals.get(id);return r?[clone(r)]:[];});},
 
-  async claimIngest(batchId,dataset,maxAgeMs){
-   if(!batchId||typeof dataset!=='string'||!DATASET.test(dataset)||!(maxAgeMs>0))throw rpc('invalid_claim');
-   const nowMs=msOf(now());const abandoned:string[]=[];
-   for(const [id,r] of runs)if(r.dataset===dataset&&r.state!=='finished'&&r.createdMs<nowMs-maxAgeMs){r.state='finished';r.progress={...r.progress,abandoned:true};abandoned.push(id);}
-   abandoned.sort();
-   const holder=[...runs].find(([,r])=>r.dataset===dataset&&r.state!=='finished');
-   if(holder)return {status:'busy',abandoned,holder:holder[0]};
-   runs.set(batchId,{dataset,state:'open',progress:{},createdMs:nowMs});
-   return {status:'claimed',abandoned,holder:null};
+  async claimIngest(batchId,dataset,o){
+   if(!batchId||typeof dataset!=='string'||!DATASET.test(dataset)||!(o.maxAgeMs>0)||!(o.processingTimeoutMs>0)||typeof o.takeover!=='boolean')throw rpc('invalid_claim');
+   const nowMs=msOf(now());
+   const live=(r:Run)=>r.state==='open'||r.state==='finishing';
+   const stalled=(id:string,r:Run)=>[...(chunks.get(id)?.values()??[])].some(c=>c.state==='processing'&&(chunkReceivedMs.get(`${id}|${c.seq}`)??nowMs)<nowMs-r.processingTimeoutMs);
+   for(const [id,r] of runs){
+    if(r.dataset!==dataset||!live(r))continue;
+    const old=r.createdMs<nowMs-o.maxAgeMs;
+    if(old||(o.takeover&&stalled(id,r))){r.state='aborted';r.progress={...r.progress,aborted:{by:batchId,reason:old?'max_age':'stalled_chunk'}};}
+   }
+   // every aborted run whose batch still runs (SQL joins ingest_batches; memory: a declared 'running' status)
+   const aborted=[...runs].filter(([id,r])=>r.dataset===dataset&&r.state==='aborted'&&batchStatus.get(id)==='running').map(([id])=>id).sort();
+   const holder=[...runs].find(([,r])=>r.dataset===dataset&&live(r));
+   if(holder)return {status:'busy',ownerToken:null,aborted,holder:holder[0]};
+   const ownerToken=randomUUID();
+   runs.set(batchId,{dataset,state:'open',progress:{},createdMs:nowMs,ownerToken,processingTimeoutMs:o.processingTimeoutMs,finishToken:null});
+   return {status:'claimed',ownerToken,aborted,holder:null};
   },
-  async claimChunk(batchId,seq,total){
+  async claimChunk(batchId,seq,total,ownerToken){
    if(!Number.isInteger(seq)||!Number.isInteger(total)||seq<0||total<1||total>10000||seq>=total)throw rpc('invalid_chunk');
    const run=runs.get(batchId);
    if(!run)throw rpc('batch_not_claimed');
+   if(!ownerToken||run.ownerToken!==ownerToken||run.state==='aborted')throw fenced();
    const m=chunks.get(batchId)??new Map<number,ChunkRecord>();
    const stored=m.get(seq);
    if(stored)return {status:stored.state,chunk:clone(stored)};
@@ -3737,13 +4203,15 @@ export function memoryMacroDb():MemoryMacroDb{
    const first=m.values().next().value;
    if(first&&first.total!==total)throw rpc('chunk_total_mismatch');
    m.set(seq,{seq,total,state:'processing',counts:zeroCounts(),errors:[],claim_keys:[],located_keys:[]});chunks.set(batchId,m);
+   chunkReceivedMs.set(`${batchId}|${seq}`,msOf(now()));
    return {status:'claimed'};
   },
-  async completeChunk(batchId,seq,res){
+  async completeChunk(batchId,seq,res,ownerToken){
    const c=res.counts as unknown as Record<string,unknown>;
    if(!c||typeof c!=='object'||Object.keys(c).length!==6||!CHUNK_KEYS.every(k=>Number.isSafeInteger(c[k])&&(c[k] as number)>=0))throw rpc('invalid_chunk');
    if(!Array.isArray(res.errors)||res.errors.length>500||res.errors.some(e=>!e||typeof e.code!=='string'))throw rpc('invalid_chunk');
    if(!Array.isArray(res.claimKeys)||!Array.isArray(res.locatedKeys)||[...res.claimKeys,...res.locatedKeys].some(k=>typeof k!=='string'))throw rpc('invalid_chunk');
+   assertOwner(batchId,ownerToken,['open']);
    const row=chunks.get(batchId)?.get(seq);
    if(!row||row.state!=='processing')throw rpc('chunk_not_processing');
    Object.assign(row,{state:'done',counts:clone(res.counts),errors:clone(res.errors),claim_keys:[...res.claimKeys],located_keys:[...res.locatedKeys]});
@@ -3751,30 +4219,40 @@ export function memoryMacroDb():MemoryMacroDb{
   },
   async chunksOf(batchId){return [...(chunks.get(batchId)??new Map<number,ChunkRecord>()).values()].sort((a,b)=>a.seq-b.seq).map(clone);},
   async ingestRun(batchId){const r=runs.get(batchId);return r?{dataset:r.dataset,state:r.state,progress:clone(r.progress)}:null;},
-  async beginFinish(batchId,total){
+  async beginFinish(batchId,total,ownerToken){
    if(!Number.isInteger(total)||total<0||total>10000)throw rpc('invalid_chunk');
    const run=runs.get(batchId);
    if(!run)throw rpc('batch_not_claimed');
-   if(run.state!=='open')return {status:run.state,progress:clone(run.progress)};
-   const m=chunks.get(batchId)??new Map<number,ChunkRecord>();
-   const missing=Array.from({length:total},(_,i)=>i).filter(i=>m.get(i)?.state!=='done');
-   if(missing.length||[...m.values()].some(c=>c.total!==total||c.state!=='done'))return {status:'incomplete',missing};
-   run.state='finishing';
-   return {status:'finishing',progress:clone(run.progress)};
+   if(!ownerToken||run.ownerToken!==ownerToken||run.state==='aborted')throw fenced();
+   if(run.state==='finished')return {status:'finished',progress:clone(run.progress)};
+   if(run.state==='open'){
+    const m=chunks.get(batchId)??new Map<number,ChunkRecord>();
+    const missing=Array.from({length:total},(_,i)=>i).filter(i=>m.get(i)?.state!=='done');
+    if(missing.length||[...m.values()].some(c=>c.total!==total||c.state!=='done'))return {status:'incomplete',missing};
+   }
+   const finishToken=randomUUID();run.state='finishing';run.finishToken=finishToken;                   // rotated on every begin (第 5 稿 P1-4)
+   return {status:'finishing',progress:clone(run.progress),finishToken};
   },
-  async recordFinishStep(batchId,step,data){
+  async recordFinishStep(batchId,step,data,fence){
    if(!(FINISH_STEPS as readonly string[]).includes(step)||!data||typeof data!=='object'||Array.isArray(data))throw rpc('invalid_step');
    const run=runs.get(batchId);
    if(!run)throw rpc('batch_not_claimed');
+   if(!fence?.ownerToken||run.ownerToken!==fence.ownerToken||run.state==='aborted')throw fenced();
    if(run.state!=='finishing')throw rpc('run_not_finishing');
-   run.progress={...run.progress,[step]:clone(data)};
+   if(!fence.finishToken||run.finishToken!==fence.finishToken)throw fenced();
+   if(step==='publish_attempt'){
+    const attempts=[...(run.progress.attempts??[])];
+    if(attempts.length<MAX_ATTEMPTS)attempts.push(clone(data) as NonNullable<FinishProgress['attempts']>[number]);
+    run.progress={...run.progress,attempts};
+   }else run.progress={...run.progress,[step]:clone(data)};
    if(step==='receipt')run.state='finished';
    return clone(run.progress);
   },
 
-  async writeObservations(batchId,codeVersion,rows){
+  async writeObservations(batchId,codeVersion,rows,ownerToken){
    if(!Array.isArray(rows))throw rpc('invalid_rows');
    if(typeof codeVersion!=='string'||codeVersion.length<1||codeVersion.length>128)throw rpc('invalid_code_version');
+   assertOwner(batchId,ownerToken,['open','finishing']);
    for(const r of rows)validateRow(r);
    const obs=[...observations];const touched=new Set<Region>();
    const res:WriteResult={inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]};
@@ -3801,6 +4279,9 @@ export function memoryMacroDb():MemoryMacroDb{
      if(msOf(e.available_at)!==max)throw rpc('invalid_available_at');
      avail=new Date(max).toISOString();
     }
+    // rejected-value finality (第 5 稿 P1-2): before any action is chosen
+    const rejected=same.filter(o=>o.status==='rejected'&&o.value_text===e.value_text).sort((a,b)=>b.version-a.version)[0];
+    if(rejected){res.duplicates++;conflict('previously_rejected',e.value_text,rejected.observation_id);continue;}
     let action:'inserted'|'duplicate'|'versioned'|'stale_delivery'|'unexpected_revision';
     if(cur&&cur.value_text!==e.value_text&&msOf(avail)<msOf(cur.available_at))action='stale_delivery';
     else if(!cur)action='inserted';
@@ -3808,8 +4289,9 @@ export function memoryMacroDb():MemoryMacroDb{
     else if(e.revisable)action='versioned';
     else action='unexpected_revision';
     if(action==='duplicate'){res.duplicates++;continue;}
+    // reuse a same-value quarantined row only from an eligible or this call's batch (第 5 稿 P1-6)
     const existing=action==='inserted'||action==='versioned'?undefined
-     :same.filter(o=>(o.status==='quarantined'||o.status==='rejected')&&o.value_text===e.value_text).sort((a,b)=>b.version-a.version)[0];
+     :same.filter(o=>o.status==='quarantined'&&o.value_text===e.value_text&&batchOk(o.batch_id,batchId)).sort((a,b)=>b.version-a.version)[0];
     let obsId:string|null=existing?.observation_id??null;
     if(!existing){
      const status=action==='inserted'||action==='versioned'?'ok' as const:'quarantined' as const;
@@ -3871,11 +4353,12 @@ export function memoryMacroDb():MemoryMacroDb{
   async observationsByIds(ids){return [...new Set(ids)].flatMap(id=>{const o=observations.find(x=>x.observation_id===id&&x.status==='ok');return o?[clone(o)]:[];});},
   async publishState(region){const s=state[region];if(!s)throw new MacroDbError('not_found',`publish_state:${region}`);return {...s};},
 
-  async linkQuarantine(quarantineId,observationIds){
+  async linkQuarantine(quarantineId,observationIds,fence){
+   assertOwner(fence?.batchId,fence?.ownerToken??null,['open','finishing']);
    const q=items.get(quarantineId);
    if(!q)throw new MacroDbError('not_found');
    if(!q.dataset.startsWith('macro.')||q.table_name!=='macro_observations')throw rpc('invalid_item');
-   if(q.status!=='open')throw new MacroDbError('already_resolved');
+   if(q.status!=='open')throw new MacroDbError('quarantine_closed');
    if(!Array.isArray(observationIds)||observationIds.length===0||observationIds.some(id=>{const o=byId(id);return !o||(o.status!=='quarantined'&&o.status!=='rejected')||`${o.series_id}|${o.period_end}`!==q.natural_key;}))throw rpc('invalid_member');
    const m=members.get(quarantineId)??new Set<string>();let added=0;
    for(const id of observationIds)if(!m.has(id)){m.add(id);added++;}
@@ -3907,7 +4390,9 @@ export function memoryMacroDb():MemoryMacroDb{
     if(q.reason_code==='adapter_mismatch'||q.reason_code.startsWith('rule_failed:'))throw new MacroDbError('reject_only');
     if(!observationId)throw rpc('observation_required');
     if(!m.has(observationId))throw rpc('not_member');
-    if(byId(observationId)?.status!=='quarantined')throw rpc('not_quarantined');
+    const target=byId(observationId);
+    if(target?.status!=='quarantined')throw rpc('not_quarantined');
+    if(['failed','rejected'].includes(batchStatus.get(target.batch_id)??'success'))throw rpc('member_ineligible');   // 第 5 稿 P1-6
     observations=observations.map(o=>o.observation_id===observationId?{...o,status:'ok' as const}:o);
     reject(observationId);
     state[s.region].inputRevision++;
@@ -3923,8 +4408,12 @@ export function memoryMacroDb():MemoryMacroDb{
   },
 
   async publishSnapshot(i){
+   assertOwner(i.batchId,i.ownerToken??null,['open','finishing']);
    const st=state[i.region];
    if(!st)throw new MacroDbError('invalid_manifest');
+   if(i.publishKey!==undefined&&(typeof i.publishKey!=='string'||i.publishKey.length<1||i.publishKey.length>128))throw new MacroDbError('invalid_manifest');
+   const prior=i.publishKey?snapshots.find(x=>x.snapshot_id===publishKeys.get(i.publishKey!)):undefined;
+   if(prior)return {snapshot_id:prior.snapshot_id,revision:prior.revision,replayed:true};          // before the revision check (第 5 稿 P1-4)
    if(st.revision!==i.expectedRevision||st.inputRevision!==i.expectedInputRevision)throw new MacroDbError('stale_publisher');
    const bad=()=>new MacroDbError('invalid_manifest');
    if(!validDate(i.asOf)||!i.methodologyVersion||i.methodologyVersion.length>64||!i.rulesVersion||i.rulesVersion.length>64||!catalogVersions.has(i.catalogVersion))throw bad();
@@ -3939,8 +4428,9 @@ export function memoryMacroDb():MemoryMacroDb{
    snapshots.push({snapshot_id,region:i.region,as_of:i.asOf,revision,methodology_version:i.methodologyVersion,catalog_version:i.catalogVersion,observation_ids:[...i.observationIds],
     history_ids:[...i.historyIds],catalog_counts:clone(i.catalogCounts),status:'active',failure_reason:null,created_at:now()});
    regimes.set(snapshot_id,{snapshot_id,region:i.region,regime:clone(i.regime),contributions:clone(i.contributions),rules_version:i.rulesVersion,uncovered_weight:i.uncoveredWeight});
+   if(i.publishKey)publishKeys.set(i.publishKey,snapshot_id);
    st.revision=revision;
-   return {snapshot_id,revision};
+   return {snapshot_id,revision,replayed:false};
   },
   async republishSnapshot(snapshotId,expectedRevision,expectedInputRevision){
    const src=snapshots.find(x=>x.snapshot_id===snapshotId);
@@ -4072,10 +4562,10 @@ export function memoryEvidenceStore():EvidenceStore&{objects:Map<string,string|U
 - [ ] **Step 4: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/macro/db.test.ts src/lib/macro/evidence.test.ts src/lib/macro/catalog.test.ts src/lib/macro/decimal.test.ts && npm run typecheck && npm run lint`
-Expected: PASS.
+Expected: PASS. `typecheck` must be clean under strict mode; in particular `eligibleHistory` keeps the explicit `const part:ObservationRow[]` (第 5 稿 P1-1: without it TS7022 fires because `after` is assigned from `part`).
 
 Then check that memory and SQL agree on the shared branches. Run the Task 1 suite against an empty database: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/macro.integration.test.ts`
-Expected: PASS. Then compare each conflict/count expectation in `db-contract.ts` with its integration-test twin by name: insert/duplicate/versioned, unexpected_revision, conflicting_rows, stale_delivery, missing_evidence, missing_input, conflict observation ids, eligibility, publish (manifest + history), republish, quarantine members / resolve, ingest lease / chunks / finish progress. If they disagree, the SQL is the authority: fix `memory-db.ts`, never the migration (it is locked).
+Expected: PASS. Then compare each conflict/count expectation in `db-contract.ts` with its integration-test twin by name: insert/duplicate/versioned, unexpected_revision, conflicting_rows, stale_delivery, missing_evidence, missing_input, conflict observation ids, eligibility, publish (manifest + history), republish, quarantine members / resolve, ingest lease / chunks / finish progress, and the 第 5 稿 branches (owner fence after takeover, rotating finish token, publish-key replay, previously_rejected, quarantine reuse from failed batches + member_ineligible, quarantine_closed). If they disagree, the SQL is the authority: fix `memory-db.ts`, never the migration (it is locked).
 
 - [ ] **Step 5: Commit**
 
@@ -4779,9 +5269,11 @@ Semantics fixed here (the routes rely on them):
 - Rule failure → one `dq_quarantine` row per failed rule (`rule_failed:macro.range|macro.jump|macro.unit`), counted once as `quarantined`; the jump rule compares with the previous **accepted** value of the same series in the same retrieval.
 - Claims: a claim for the same `(series_id, period_end)` that is not decimal-equal → `adapter_mismatch` (detail `{value_text, claim_value_texts}`), not written. A point without a claim is written unchecked; a claim without a point is ignored here (the ingest route reports it as informational).
 - Repeated conflicts are fine: re-delivering an already-quarantined value makes the RPC report the conflict again (and count `quarantined`), and `quarantine()` (`src/lib/dq/quarantine.ts`) **reuses** the open item with the same `(dataset, table_name, natural_key, reason_code)`, so no duplicate queue items appear (tested below). Do not add a second dedup layer.
-- Write conflicts `unexpected_revision`, `conflicting_rows`, `stale_delivery` → `dq_quarantine` with `dataset` (`macro.fred` / `macro.akshare`), `table_name 'macro_observations'`, `natural_key '<series_id>|<period_end>'`, detail `{value_text, current_value_text}`; the RPC's own `quarantined` count is used (not double-counted). Right after `quarantine()` returns the (possibly reused) item id, a conflict that carries an `observation_id` is bound to that item with `db.linkQuarantine(itemId,[observation_id])` (第 4 稿 P1-4; a failed link adds error `quarantine_link_failed`, the next re-delivery links again). `missing_evidence` / `missing_input` → `failed` + error.
+- Write conflicts `unexpected_revision`, `conflicting_rows`, `stale_delivery` → `dq_quarantine` with `dataset` (`macro.fred` / `macro.akshare`), `table_name 'macro_observations'`, `natural_key '<series_id>|<period_end>'`, detail `{value_text, current_value_text}`; the RPC's own `quarantined` count is used (not double-counted). Right after `quarantine()` returns the (possibly reused) item id, a conflict that carries an `observation_id` is bound to that item with `db.linkQuarantine(itemId,[observation_id],{batchId,ownerToken})` (第 4 稿 P1-4). **Link failures are never swallowed (第 5 稿 P2-3):** `quarantine_closed` (a resolution closed the item between `quarantine()` and the link) → `quarantine()` again (it now opens a NEW item) and one more link; any other link failure, a second failure, or a failed `quarantine()` for a conflict that has a stored row → `throw new IngestAbort('quarantine_link_failed')`, so the ingest route never completes that chunk (the collector's stall path restarts the collection) and cron closes its batch failed. `missing_evidence` / `missing_input` → `failed` + error.
+- `previously_rejected` (第 5 稿 P1-2) is informational: the RPC already counted it under `duplicates`; no quarantine item, no error.
+- **Owner fence (第 5 稿 P1-3).** `ingestEvidence({…, ownerToken})` and `deriveAndWrite(deps, region, batchId, ownerToken)` pass the run's token to every `putRetrieval` / `writeObservations` / `linkQuarantine` (cron passes nothing: its batch has no run). A `fenced` MacroDbError from any of them throws `IngestAbort('fenced')` at once — it is a protocol abort, never a counted failure, and nothing after it runs.
 - `deriveAndWrite` recomputes the **complete** eligible history of every derived series on every run (第 4 稿 P1-7): inputs are read in full with `db.eligibleHistory(input, {includeBatch: batchId, maxRows: DERIVE_MAX_ROWS})` (paged), so a revision of an old input period (FRED re-sends six years) reaches that period's derived row and, for yoy, period + 12. Unchanged rows come back as duplicates, which are cheap.
-- A thrown `writeObservations` → that call's rows `failed`, error `write_<MacroDbError.code>` or `write_failed`; the function never throws for data problems.
+- A thrown `writeObservations` → that call's rows `failed`, error `write_<MacroDbError.code>` or `write_failed`; the function never throws for data problems (only `IngestAbort` for `fenced` / `quarantine_link_failed`).
 - Rows go to the RPC in calls of ≈1000 (`chunkWrites`) that never split one `(series_id, period_end)` group.
 
 - [ ] **Step 1: Write the failing test**
@@ -4792,6 +5284,7 @@ import {createHash} from 'node:crypto';
 import {beforeEach,describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {CATALOG_VERSION,MACRO_CATALOG} from './catalog';
+import {MacroDbError} from './db';
 import {chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
 import type {IngestDeps} from './ingest';
 import {memoryMacroDb} from './memory-db';
@@ -4815,9 +5308,27 @@ function fakeEvidence(){
  return {failing,puts,async put(e:EvidenceInput){if(failing.has(e.sha256))throw new Error('upload_failed');puts.push(e);return {objectPath:`${e.adapter}/${e.sha256}.csv`,status:'stored' as const};}};
 }
 
+/** dq_quarantine rows written through the TableClient are mirrored into the memory MacroDb (same id), so linkQuarantine /
+ *  resolveConflict see the items quarantine() creates — in production both are the same Postgres table. */
+function mirrorQuarantine(t:ReturnType<typeof memoryTableClient>,m:ReturnType<typeof memoryMacroDb>){
+ const insert=t.insert.bind(t);
+ t.insert=async(table,row)=>{
+  const out=await insert(table,row);
+  if(table==='dq_quarantine')m.addQuarantineItem({id:String(row.id),dataset:String(row.dataset),table_name:String(row.table_name),natural_key:String(row.natural_key),reason_code:String(row.reason_code),batch_id:String(row.batch_id)});
+  return out;
+ };
+ return t;
+}
+const ADMIN='00000000-0000-4000-8000-0000000000aa';
+/** An admin resolution, as Task 18 does it: the MacroDb item and the dq_quarantine row both close. */
+const resolveBoth=async(id:string,decision:'accept'|'reject',observationId?:string)=>{
+ await db.resolveConflict(id,decision,ADMIN,observationId);
+ await tables.update('dq_quarantine',{id},{status:decision==='accept'?'resolved_accept':'resolved_reject',resolved_by:ADMIN,resolved_at:'2026-11-06T06:00:00.000Z'});
+};
+
 let db:ReturnType<typeof memoryMacroDb>,tables:ReturnType<typeof memoryTableClient>,ev:ReturnType<typeof fakeEvidence>,deps:IngestDeps;
 beforeEach(async()=>{
- db=memoryMacroDb();tables=memoryTableClient({dq_quarantine:['id']});ev=fakeEvidence();
+ db=memoryMacroDb();tables=mirrorQuarantine(memoryTableClient({dq_quarantine:['id']}),db);ev=fakeEvidence();
  deps={db,evidence:ev,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z')};
  await db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,'macro-regime-rules/1.0');
 });
@@ -4912,8 +5423,46 @@ describe('ingestEvidence',()=>{
   expect(tables.rows('dq_quarantine')).toHaveLength(1);
   const members=await db.quarantineMembers(itemId);
   expect(members.map(m=>m.value_text)).toEqual(['4.15','4.2']);
-  await db.resolveConflict(itemId,'accept','00000000-0000-4000-8000-0000000000aa',members[1].observation_id);
+  await resolveBoth(itemId,'accept',members[1].observation_id);
   expect((await db.quarantineMembers(itemId)).map(m=>[m.value_text,m.status])).toEqual([['4.15','rejected'],['4.2','ok']]);
+ });
+ it('a rejected value redelivered is previously_rejected: counted as a duplicate, no new quarantine item, no error (第 5 稿 P1-2)',async()=>{
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
+  await resolveBoth(String(tables.rows('dq_quarantine')[0].id),'reject');
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
+  expect(rec.counts).toEqual({fetched:1,inserted:0,duplicates:1,versioned:0,quarantined:0,failed:0});
+  expect(rec.errors).toEqual([]);
+  expect(tables.rows('dq_quarantine')).toHaveLength(1);                                           // no new item for a final value
+  expect(db.allObservations().filter(o=>o.series_id==='US_DGS10_D').map(o=>o.status)).toEqual(['ok','rejected']);
+ });
+ it('an item closed between quarantine() and the link is re-parked as a NEW open item and linked; a link that keeps failing aborts (第 5 稿 P2-3)',async()=>{
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+  const link=db.linkQuarantine.bind(db);let raced=false;
+  db.linkQuarantine=async(id,ids,fence)=>{
+   if(!raced){raced=true;await resolveBoth(id,'reject');}                                           // an admin closes the item right before our link
+   return link(id,ids,fence);
+  };
+  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
+  expect(rec.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
+  const items=tables.rows('dq_quarantine');
+  expect(items.map(r=>String(r.status)).sort()).toEqual(['open','resolved_reject']);
+  const open=String(items.find(r=>r.status==='open')!.id);
+  expect((await db.quarantineMembers(open)).map(m=>[m.value_text,m.status])).toEqual([['4.15','quarantined']]);   // never left unbound
+  db.linkQuarantine=async()=>{throw new MacroDbError('rpc_failed','link down');};
+  await expect(ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]}))
+   .rejects.toMatchObject({name:'IngestAbort',code:'quarantine_link_failed',key:'US_DGS10_D|2026-10-01'});
+ });
+ it('stops with IngestAbort(fenced) when the run was taken over: nothing is written, nothing is counted (第 5 稿 P1-3)',async()=>{
+  const old='33333333-3333-4333-8333-333333333333',next='44444444-4444-4444-8444-444444444444';
+  db.setBatchStatus(old,'running');db.setBatchStatus(next,'running');
+  const lease={maxAgeMs:1,processingTimeoutMs:600_000,takeover:false};
+  const t=(await db.claimIngest(old,'macro.akshare',lease)).ownerToken!;
+  await new Promise(r=>setTimeout(r,5));
+  expect((await db.claimIngest(next,'macro.akshare',lease)).aborted).toEqual([old]);              // older than max age: aborted
+  await expect(ingestEvidence(deps,{batchId:old,adapter:'fred_csv',ownerToken:t,retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]}))
+   .rejects.toMatchObject({name:'IngestAbort',code:'fenced'});
+  expect(await history('US_DGS10_D')).toEqual([]);
  });
  it('writes neither value of a period that appears twice with different values in one evidence',async()=>{
   const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-01,4.2\n2026-10-02,4.3\n')]});
@@ -5006,6 +5555,8 @@ Expected: FAIL (`Cannot find module './ingest'`)
 // (counted `failed`, nothing written: no observation without evidence). deriveAndWrite runs the
 // region's derived series inside the same batch (N3). Counts follow dq/batches BatchCounts semantics.
 // Values stay decimal text end to end; Number() happens only inside quality.ts.
+// 第 5 稿: every MacroDb mutation carries the run's owner token (null for cron); `fenced` and an unbindable quarantined row
+// throw IngestAbort (protocol aborts, never counted); previously_rejected conflicts are informational.
 import {quarantine} from '../dq/quarantine';
 import type {BatchError} from '../dq/batches';
 import type {TableClient} from '../db/table-client';
@@ -5023,6 +5574,13 @@ export interface IngestDeps{db:MacroDb;evidence:Pick<EvidenceStore,'put'>;tables
 export interface Claim{series_id:string;period_end:string;value_text:string}
 export interface RetrievalInput{evidence:EvidenceInput;parsed:ParsedPoint[];claims?:Claim[]}
 export interface IngestReceipt{counts:ChunkCounts;errors:BatchError[];retrievalIds:string[]}
+/** A protocol abort that must stop the request, never a counted data failure (第 5 稿): `fenced` — the run's owner token was
+ *  superseded by a takeover (P1-3); `quarantine_link_failed` — a stored quarantined row could not be bound to an open item
+ *  (P2-3). The ingest route answers 409 fenced / 500 without completing the chunk; cron closes its batch failed. */
+export class IngestAbort extends Error{
+ constructor(readonly code:'fenced'|'quarantine_link_failed',readonly key?:string){super(key===undefined?code:`${code}:${key}`);this.name='IngestAbort';}
+}
+const isFenced=(e:unknown)=>e instanceof MacroDbError&&e.code==='fenced';
 
 export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'>={fred_csv:'macro.fred',akshare:'macro.akshare'};
 export const DATASET_OF_REGION:Record<Region,'macro.fred'|'macro.akshare'>={US:'macro.fred',CN:'macro.akshare'};
@@ -5055,7 +5613,7 @@ export function chunkWrites<T extends {series_id:string;period_end:string}>(rows
  return out;
 }
 
-interface Ctx{deps:IngestDeps;dataset:string;batchId:string;counts:ChunkCounts;errors:BatchError[]}
+interface Ctx{deps:IngestDeps;dataset:string;batchId:string;ownerToken:string|null;counts:ChunkCounts;errors:BatchError[]}
 
 /** quarantine() that never aborts the batch: a failed insert into dq_quarantine is a failed row. Returns the (possibly
  *  reused) item id when parked, else null. */
@@ -5067,17 +5625,29 @@ async function park(ctx:Ctx,naturalKey:string,reasonCode:string,detail:Record<st
   return null;
  }
 }
-/** Binds the stored quarantined row to its dq_quarantine item (macro_link_quarantine; 第 4 稿 P1-4). */
-async function link(ctx:Ctx,itemId:string,observationId:string,naturalKey:string):Promise<void>{
- try{await ctx.deps.db.linkQuarantine(itemId,[observationId]);}
- catch{ctx.errors.push({code:'quarantine_link_failed',key:naturalKey});}
+/** Binds the stored quarantined row to its dq_quarantine item (macro_link_quarantine; 第 4 稿 P1-4, 第 5 稿 P2-3). The SQL
+ *  locks the item row; quarantine_closed = a resolution closed it after quarantine() returned it → park again (quarantine()
+ *  now opens a NEW item, the old one is no longer open) and link once more. Anything else, or a second failure, aborts: a
+ *  quarantined row must never stay unbound. */
+async function link(ctx:Ctx,itemId:string,observationId:string,naturalKey:string,repark:()=>Promise<string|null>):Promise<void>{
+ const fence={batchId:ctx.batchId,ownerToken:ctx.ownerToken};
+ try{await ctx.deps.db.linkQuarantine(itemId,[observationId],fence);return;}
+ catch(e){
+  if(isFenced(e))throw new IngestAbort('fenced',naturalKey);
+  if(!(e instanceof MacroDbError&&e.code==='quarantine_closed'))throw new IngestAbort('quarantine_link_failed',naturalKey);
+ }
+ const again=await repark();
+ if(!again)throw new IngestAbort('quarantine_link_failed',naturalKey);
+ try{await ctx.deps.db.linkQuarantine(again,[observationId],fence);}
+ catch(e){throw new IngestAbort(isFenced(e)?'fenced':'quarantine_link_failed',naturalKey);}
 }
 
 async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
  for(const chunk of chunkWrites(rows)){
   let res:WriteResult;
-  try{res=await ctx.deps.db.writeObservations(ctx.batchId,ctx.deps.codeVersion,chunk);}
+  try{res=await ctx.deps.db.writeObservations(ctx.batchId,ctx.deps.codeVersion,chunk,ctx.ownerToken);}
   catch(e){
+   if(isFenced(e))throw new IngestAbort('fenced',chunk[0].series_id);
    ctx.counts.failed+=chunk.length;
    ctx.errors.push({code:e instanceof MacroDbError?`write_${e.code}`:'write_failed',key:chunk[0].series_id});
    continue;
@@ -5085,10 +5655,16 @@ async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
   ctx.counts.inserted+=res.inserted;ctx.counts.duplicates+=res.duplicates;ctx.counts.versioned+=res.versioned;ctx.counts.quarantined+=res.quarantined;
   for(const c of res.conflicts){
    const key=keyOf(c.series_id,c.period_end);
+   if(c.reason==='previously_rejected')continue;   // informational: the RPC counted it as a duplicate; a rejected value is final (第 5 稿 P1-2)
    if(QUARANTINE_REASONS.includes(c.reason)){
-    // The RPC already stored the row as quarantined (and counted it); a failed dq_quarantine insert only adds an error.
-    const itemId=await park(ctx,key,c.reason,{value_text:c.value_text,current_value_text:c.current_value_text},{value_text:c.value_text});
-    if(itemId&&c.observation_id)await link(ctx,itemId,c.observation_id,key);
+    // The RPC already stored the row as quarantined (and counted it). conflicting_rows stores nothing (observation_id null):
+    // a failed park only adds an error. A stored row must end up bound to an open item, else the request aborts (P2-3).
+    const repark=()=>park(ctx,key,c.reason,{value_text:c.value_text,current_value_text:c.current_value_text},{value_text:c.value_text});
+    const itemId=await repark();
+    if(c.observation_id){
+     if(!itemId)throw new IngestAbort('quarantine_link_failed',key);
+     await link(ctx,itemId,c.observation_id,key,repark);
+    }
    }else{
     ctx.counts.failed+=1;ctx.errors.push({code:c.reason,key});
    }
@@ -5099,8 +5675,9 @@ async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
 const collectable=(def:MacroSeriesDef|undefined,adapter:Adapter):def is MacroSeriesDef=>
  !!def&&def.status==='active'&&!def.derive&&!def.aliasOf&&def.source?.adapter===adapter;
 
-export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapter:Adapter;retrievals:RetrievalInput[]}):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,counts:emptyChunkCounts(),errors:[]};
+/** ownerToken: the AKShare run's token (第 5 稿 P1-3); omitted / null for cron (its batch has no run row). */
+export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapter:Adapter;retrievals:RetrievalInput[];ownerToken?:string|null}):Promise<IngestReceipt>{
+ const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,ownerToken:input.ownerToken??null,counts:emptyChunkCounts(),errors:[]};
  const retrievalIds:string[]=[];
  for(const r of input.retrievals){
   const e=r.evidence,n=r.parsed.length;
@@ -5114,8 +5691,11 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
   try{
    retrievalId=await deps.db.putRetrieval(
     {sha256:e.sha256,object_path:objectPath,adapter:e.adapter,content_type:e.contentType,byte_length:e.bytes.byteLength},
-    {fetch_url:e.fetchUrl,fetch_host:e.fetchHost,http_status:e.httpStatus,fetched_at:e.fetchedAt,batch_id:input.batchId,tool_versions:e.toolVersions});
-  }catch{ctx.counts.failed+=n;ctx.errors.push({code:'retrieval_failed',key:label});continue;}
+    {fetch_url:e.fetchUrl,fetch_host:e.fetchHost,http_status:e.httpStatus,fetched_at:e.fetchedAt,batch_id:input.batchId,tool_versions:e.toolVersions},ctx.ownerToken);
+  }catch(x){
+   if(isFenced(x))throw new IngestAbort('fenced',label);
+   ctx.counts.failed+=n;ctx.errors.push({code:'retrieval_failed',key:label});continue;
+  }
   retrievalIds.push(retrievalId);
   const claims=new Map<string,string[]>();
   for(const c of r.claims??[]){const k=keyOf(c.series_id,c.period_end);claims.set(k,[...(claims.get(k)??[]),c.value_text]);}
@@ -5164,8 +5744,8 @@ export function derivedOf(region:Region):MacroSeriesDef[]{
  * `batchId`) and writes it in that batch (spec §0.2 N3; 第 4 稿 P1-5/P1-7). No window: a revised input three years
  * back must reach its derived period and, for yoy, period + 12; unchanged rows return as duplicates.
  */
-export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:string):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,counts:emptyChunkCounts(),errors:[]};
+export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:string,ownerToken:string|null=null):Promise<IngestReceipt>{
+ const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,ownerToken,counts:emptyChunkCounts(),errors:[]};
  const now=deps.now();
  for(const def of derivedOf(region)){
   const input=catalogById(def.derive!.from);
@@ -5186,6 +5766,7 @@ export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:strin
 Implementer checks (stop and report NEEDS_CONTEXT rather than editing Task 3 files):
 - `EvidenceStore.put` resolves to `{objectPath, status:'stored'|'exists'}` (plan shared contract, Task 3); `ingest.ts` types the dependency as `Pick<EvidenceStore,'put'>`.
 - `memoryMacroDb()` must take no arguments, and `upsertCatalog` must be enough to make the catalog's series writable (the SQL RPC rejects unknown series and native rows for derived series). Undeclared batches count as `success` in memory (Task 3), so `BATCH` needs no registration; the abandoned-batch case declares its batch with `db.setBatchStatus`.
+- The memory MacroDb keeps its own quarantine items; `mirrorQuarantine` in the test registers every `dq_quarantine` row the TableClient inserts (same id, via `addQuarantineItem({id,…})`), and `resolveBoth` closes both sides, exactly as the single Postgres table behaves. Without the mirror every link would answer `not_found` and now abort.
 
 - [ ] **Step 4: Run tests, typecheck, lint**
 
@@ -5426,6 +6007,16 @@ describe('macro-sync cron',()=>{
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
   expect(await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).toEqual([]);
  });
+ it('all series failing AFTER a populated run is still failed: no derivation, no duplicate inflation, freshness not refreshed (第 5 稿 P2-2)',async()=>{
+  expect((await (await GET(req())).json()).status).toBe('success');
+  for(const d of FRED)failCodes.add(d.source!.seriesKey);
+  const body=await (await GET(req())).json();
+  expect(body.status).toBe('failed');                                                              // derived duplicates no longer count as landed work
+  expect(body.native_counts).toMatchObject({inserted:0,duplicates:0,versioned:0});
+  expect(body.derived_counts).toEqual({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0});   // derivation skipped
+  expect(body.errors).toContainEqual({code:'no_native_outcomes'});
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
+ });
  it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
   const cfg=JSON.parse(readFileSync(new URL('../../../../../vercel.json',import.meta.url),'utf8')) as {crons:{path:string;schedule:string}[]};
   expect(cfg.crons).toContainEqual({path:'/api/cron/macro-sync',schedule:'30 5 * * *'});
@@ -5553,7 +6144,10 @@ export function productionMacroDeps(opts:{codeVersion:string}):MacroDeps{
 // A series with no stored observation is backfilled from FRED_COSD (2000-01-01, spec §4.4); afterwards the
 // daily run asks for a recent window only (daily series 400 days, monthly 6 years so the BLS 5-year
 // seasonal revisions are seen) to keep the run inside maxDuration.
-// recordAttempt('macro.fred', daily, ok = status !== 'failed'). Only US is published here (CN publishes
+// recordAttempt('macro.fred', daily, ok = status !== 'failed' and a native outcome landed). Derivation runs only when this
+// run produced at least one native inserted/versioned/duplicate outcome (第 5 稿 P2-2): otherwise re-derived old history
+// would come back as duplicates and turn an all-failed run into 'partial'; instead the batch gets {code:'no_native_outcomes'}
+// and finishes failed. The receipt reports native_counts and derived_counts separately. Only US is published here (CN publishes
 // after ingest finish). ?preview=1 fetches and parses only and returns counts and samples: ZERO database
 // writes, ZERO evidence uploads (it never touches deps.db / deps.evidence / deps.tables). A missing
 // code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
@@ -5606,7 +6200,7 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
   toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
- let counts=emptyChunkCounts();const errors:BatchError[]=[];
+ let native=emptyChunkCounts(),derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
  try{
   // backfill decision on eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   const stored=new Set((await deps.db.latestEligible(defs.map(d=>d.id))).map(o=>o.series_id));
@@ -5614,11 +6208,14 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
    let retrieval;
    try{retrieval=await fetchAndParse(deps,def,signal,fredCosdFor(def.period,stored.has(def.id),today));}
    catch(e){errors.push({code:errCode(e),key:def.id});continue;}
-   const rec=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]});
-   counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
+   const rec=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]});   // no owner token: cron batches have no run
+   native=addCounts(native,rec.counts);errors.push(...rec.errors);
   }
-  const derived=await deriveAndWrite(deps,'US',batchId);
-  counts=addCounts(counts,derived.counts);errors.push(...derived.errors);
+  counts=native;
+  if(native.inserted+native.versioned+native.duplicates>0){
+   const derived=await deriveAndWrite(deps,'US',batchId);
+   derivedCounts=derived.counts;counts=addCounts(native,derived.counts);errors.push(...derived.errors);
+  }else errors.push({code:'no_native_outcomes'});                                                   // 第 5 稿 P2-2
  }catch(e){
   // Unexpected crash: close the batch as failed so it never stays 'running', then rethrow.
   errors.push({code:'sync_crashed'});
@@ -5627,9 +6224,10 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
   throw e;
  }
  const batchStatus=await finishBatch(deps.tables,batchId,{counts,errors});
- await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed',cadence:'daily'});
+ const nativeLanded=native.inserted+native.versioned+native.duplicates>0;
+ await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed'&&nativeLanded,cadence:'daily'});
  // TASK 11: publishRegion(region)
- return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
+ return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,native_counts:native,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
 }
 
 async function run(request:Request):Promise<NextResponse>{
@@ -5941,12 +6539,14 @@ def test_build_bodies_follow_the_three_action_protocol():
                   b'{"data":[],"success":true}', "2026-11-06T05:00:00.000Z")
     results = [{"series_id": "CN_PMI_MFG", "captures": [cap], "evidence": [cap], "claims": [{"series_id": "CN_PMI_MFG", "period_label": "2026年10月", "value_text": "49.3"}], "error": None}]
     failed = {"series_id": "CN_M2_YOY", "captures": [], "evidence": [], "claims": [], "error": "RuntimeError: site down", "code": "collect_runtimeerror"}
-    start, chunks, finish = collect.build_bodies(results + [failed], "00000000-0000-4000-8000-000000000001", {"akshare": "1.20.35"})
+    start, chunks, finish = collect.build_bodies(results + [failed], "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-0000000000aa", {"akshare": "1.20.35"})
     assert start == {"action": "start", "tool_versions": {"akshare": "1.20.35"}}
-    assert finish == {"action": "finish", "batch_id": "00000000-0000-4000-8000-000000000001", "total": 1,
+    assert collect.build_bodies(results, "B", "T", {"a": "1"}, takeover=True)[0] == {"action": "start", "tool_versions": {"a": "1"}, "takeover": True}
+    assert finish == {"action": "finish", "batch_id": "00000000-0000-4000-8000-000000000001", "owner_token": "00000000-0000-4000-8000-0000000000aa", "total": 1,
                       "series_outcomes": [{"series_id": "CN_PMI_MFG", "ok": True}, {"series_id": "CN_M2_YOY", "ok": False, "code": "collect_runtimeerror"}]}
     (c,) = chunks
-    assert set(c) == {"action", "batch_id", "seq", "total", "evidence", "claims"} and c["action"] == "chunk"
+    assert set(c) == {"action", "batch_id", "owner_token", "seq", "total", "evidence", "claims"} and c["action"] == "chunk"
+    assert c["owner_token"] == "00000000-0000-4000-8000-0000000000aa"
     (e,) = c["evidence"]
     assert set(e) == {"series_id", "sha256", "url", "status", "content_type", "fetched_at", "bytes_b64"}
     assert base64.b64decode(e["bytes_b64"]) == cap.body and e["sha256"] == hashlib.sha256(cap.body).hexdigest()
@@ -5958,9 +6558,10 @@ def test_send_posts_start_chunks_finish_in_order():
 
     def post(body):
         posted.append(body["action"])
-        return {"batch_id": "B"} if body["action"] == "start" else {"ok": True}
+        assert body["action"] == "start" or body["owner_token"] == "T"   # every later body carries the owner token (P1-3)
+        return {"batch_id": "B", "owner_token": "T"} if body["action"] == "start" else {"ok": True}
     out = collect.send([{"series_id": "CN_USDCNY_CP_D", "captures": [cap], "evidence": [cap], "claims": [], "error": None}], post, {"akshare": "1.20.35"})
-    assert posted == ["start", "chunk", "finish"] and out["batch_id"] == "B" and out["chunks"] == 1
+    assert posted == ["start", "chunk", "finish"] and out["batch_id"] == "B" and out["chunks"] == 1 and out["restarts"] == []
 
 
 def test_send_reports_failed_series_and_finishes_even_without_chunks():
@@ -5968,10 +6569,69 @@ def test_send_reports_failed_series_and_finishes_even_without_chunks():
 
     def post(body):
         bodies.append(body)
-        return {"batch_id": "B"} if body["action"] == "start" else {"ok": True}
+        return {"batch_id": "B", "owner_token": "T"} if body["action"] == "start" else {"ok": True}
     collect.send([{"series_id": "CN_M2_YOY", "captures": [], "evidence": [], "claims": [], "error": "ValueError: x", "code": "collect_valueerror"}], post, {"akshare": "1.20.35"})
     assert [b["action"] for b in bodies] == ["start", "finish"]
-    assert bodies[-1] == {"action": "finish", "batch_id": "B", "total": 0, "series_outcomes": [{"series_id": "CN_M2_YOY", "ok": False, "code": "collect_valueerror"}]}
+    assert bodies[-1] == {"action": "finish", "batch_id": "B", "owner_token": "T", "total": 0, "series_outcomes": [{"series_id": "CN_M2_YOY", "ok": False, "code": "collect_valueerror"}]}
+
+
+def _scripted(monkeypatch, chunk_reply):
+    """send() over two fixed chunks per batch; chunk_reply(batch_id, seq) returns a payload or raises IngestHttpError."""
+    monkeypatch.setattr(collect, "build_bodies", lambda results, b, t, v, takeover=False: (
+        {"action": "start", "tool_versions": v, **({"takeover": True} if takeover else {})},
+        [{"action": "chunk", "batch_id": b, "owner_token": t, "seq": i, "total": 2, "evidence": [], "claims": []} for i in range(2)],
+        {"action": "finish", "batch_id": b, "owner_token": t, "total": 2, "series_outcomes": []}))
+    log, starts = [], iter([{"batch_id": "B1", "owner_token": "T1"}, {"batch_id": "B2", "owner_token": "T2"}, {"batch_id": "B3", "owner_token": "T3"}])
+
+    def post(body):
+        log.append((body["action"], body.get("batch_id"), body.get("seq"), body.get("takeover", False)))
+        if body["action"] == "start":
+            return next(starts)
+        return chunk_reply(body["batch_id"], body["seq"]) if body["action"] == "chunk" else {"batch_id": body["batch_id"], "status": "success"}
+    return post, log
+
+
+def test_send_restarts_under_a_new_batch_when_a_chunk_stays_processing(monkeypatch):
+    def reply(batch_id, seq):
+        if batch_id == "B1" and seq == 1:
+            raise collect.IngestHttpError("chunk", 409, "chunk_in_progress")   # a crashed request left it 'processing' (P2-1)
+        return {"status": "accepted"}
+    post, log = _scripted(monkeypatch, reply)
+    sleeps = []
+    out = collect.send([], post, {"a": "1"}, sleep=sleeps.append, chunk_retries=2)
+    assert out["batch_id"] == "B2" and out["restarts"] == [{"batch_id": "B1", "reason": "chunk_stalled"}]
+    assert [e for e in log if e[0] == "chunk"] == [("chunk", "B1", 0, False), ("chunk", "B1", 1, False), ("chunk", "B1", 1, False), ("chunk", "B1", 1, False),
+                                                   ("chunk", "B2", 0, False), ("chunk", "B2", 1, False)]   # the old batch's chunks are never replayed
+    assert ("start", None, None, True) in log and log[-1] == ("finish", "B2", None, False)
+    assert sleeps == [1, 2]
+
+
+def test_send_restarts_once_on_fenced_and_gives_up_on_a_second_fence(monkeypatch):
+    def reply(batch_id, seq):
+        if seq == 1:
+            raise collect.IngestHttpError("chunk", 409, "fenced")             # every batch fenced: someone else owns the dataset
+        return {"status": "accepted"}
+    post, log = _scripted(monkeypatch, reply)
+    with pytest.raises(RuntimeError, match="failed after 2 attempts"):
+        collect.send([], post, {"a": "1"}, sleep=lambda s: None)
+    assert [e[1] for e in log if e[0] == "start"] == [None, None]
+    assert [e for e in log if e[0] == "start"][1][3] is True                    # the restart asks for a takeover
+    assert not any(e[0] == "finish" for e in log)
+
+
+def test_takeover_start_polls_while_the_stalled_run_is_younger_than_the_server_timeout(monkeypatch):
+    calls = []
+
+    def post(body):
+        calls.append(body)
+        if body.get("takeover") and len([c for c in calls if c.get("takeover")]) < 3:
+            raise collect.IngestHttpError("start", 409, "batch_running")
+        return {"batch_id": "B", "owner_token": "T"}
+    sleeps = []
+    assert collect._start(post, {"a": "1"}, takeover=True, sleep=sleeps.append, polls=5, poll_s=60.0) == {"batch_id": "B", "owner_token": "T"}
+    assert sleeps == [60.0, 60.0]
+    with pytest.raises(collect.IngestHttpError):
+        collect._start(lambda b: (_ for _ in ()).throw(collect.IngestHttpError("start", 409, "batch_running")), {"a": "1"}, takeover=False, sleep=sleeps.append, polls=5, poll_s=60.0)
 
 
 def test_collect_series_records_errors_without_raising(monkeypatch):
@@ -6005,8 +6665,8 @@ def test_dry_run_writes_bodies_and_sends_nothing(tmp_path, monkeypatch):
     assert collect.main(["--series", "CN_PMI_MFG", "--dry-run", str(tmp_path)]) == 0
     assert json.loads((tmp_path / "start.json").read_text())["action"] == "start"
     chunk = json.loads((tmp_path / "chunk-000.json").read_text())
-    assert chunk["batch_id"] == "DRY-RUN" and chunk["evidence"][0]["series_id"] == "CN_PMI_MFG"
-    assert json.loads((tmp_path / "finish.json").read_text()) == {"action": "finish", "batch_id": "DRY-RUN", "total": 1, "series_outcomes": [{"series_id": "CN_PMI_MFG", "ok": True}]}
+    assert chunk["batch_id"] == "DRY-RUN" and chunk["owner_token"] == "DRY-RUN" and chunk["evidence"][0]["series_id"] == "CN_PMI_MFG"
+    assert json.loads((tmp_path / "finish.json").read_text()) == {"action": "finish", "batch_id": "DRY-RUN", "owner_token": "DRY-RUN", "total": 1, "series_outcomes": [{"series_id": "CN_PMI_MFG", "ok": True}]}
 ```
 
 - [ ] **Step 2: Create the venv and confirm the tests fail**
@@ -6231,12 +6891,19 @@ repr(float) — Python's shortest round-trip text, equal to the source decimal w
 mismatch → quarantine adapter_mismatch); NaN produces no claim.
 
 Protocol (POST $MACRO_INGEST_URL, Authorization: Bearer $MACRO_INGEST_SECRET, each body <= 3.5 MB):
-  {"action":"start","tool_versions":{...}}                                  -> {"batch_id"}
-  {"action":"chunk","batch_id","seq","total","evidence":[...],"claims":[...]} -> receipt (duplicate-safe)
-  {"action":"finish","batch_id","total","series_outcomes":[{"series_id","ok","code"?}]} -> batch receipt (resumable;
-                                                                             total may be 0 when every series failed)
+  {"action":"start","tool_versions":{...},"takeover"?:true}                 -> {"batch_id","owner_token"}
+  {"action":"chunk","batch_id","owner_token","seq","total","evidence":[...],"claims":[...]} -> receipt (duplicate-safe)
+  {"action":"finish","batch_id","owner_token","total","series_outcomes":[{"series_id","ok","code"?}]} -> batch receipt
+                                                         (resumable; total may be 0 when every series failed)
 evidence item: {series_id, sha256, url, status, content_type, fetched_at, bytes_b64}
 claim item:    {series_id, period_label, value_text}
+
+Restart rule (plan 第 5 稿 P1-3/P2-1): a chunk still answering 409 chunk_in_progress after its retries (a crashed request left
+it 'processing'), or any 409 fenced (this batch's owner token was superseded), restarts the WHOLE collection once: start
+{takeover:true} (polling 409 batch_running while the stalled run is younger than the server's 10-minute processing timeout),
+then every chunk again under the new batch and token, from the in-memory results. The old batch's remaining chunks are
+never sent; the server finishes the old batch failed. A finish answering 503 publish_pending is retried by the poster
+(same owner token, resumable finish); if it keeps failing the run stays 'finishing' and the next collection supersedes it.
 
 Usage:
   collect.py [--mode daily|backfill] [--series CN_X ...] [--dry-run DIR] [--record-fixtures DIR]
@@ -6473,16 +7140,33 @@ def series_outcomes(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             for r in results]
 
 
-def build_bodies(results: List[Dict[str, Any]], batch_id: str, versions: Dict[str, str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+def build_bodies(results: List[Dict[str, Any]], batch_id: str, owner_token: str, versions: Dict[str, str],
+                 takeover: bool = False) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     ok = [r for r in results if not r["error"]]
     items = [evidence_item(r["series_id"], c) for r in ok for c in r["evidence"]]
     claims = {r["series_id"]: r["claims"] for r in ok}
-    chunks = pack_chunks(batch_id, items, claims)
-    return ({"action": "start", "tool_versions": versions}, chunks,
-            {"action": "finish", "batch_id": batch_id, "total": len(chunks), "series_outcomes": series_outcomes(results)})
+    chunks = [{**c, "owner_token": owner_token} for c in pack_chunks(batch_id, items, claims)]   # the token fences every write (P1-3)
+    start: Dict[str, Any] = {"action": "start", "tool_versions": versions}
+    if takeover:
+        start["takeover"] = True
+    return (start, chunks,
+            {"action": "finish", "batch_id": batch_id, "owner_token": owner_token, "total": len(chunks), "series_outcomes": series_outcomes(results)})
 
 
 Post = Callable[[Dict[str, Any]], Dict[str, Any]]
+
+
+class IngestHttpError(RuntimeError):
+    """A non-200 answer after the poster's own retries; `code` is the route's error code (batch_running, chunk_in_progress,
+    fenced, publish_pending, ...)."""
+
+    def __init__(self, action: str, status: int, code: str):
+        super().__init__(f"{action} -> HTTP {status} {code}")
+        self.action, self.status, self.code = action, status, code
+
+
+class Restart(Exception):
+    """The batch cannot be completed (fenced, or a chunk stuck in 'processing'): start over under a new batch."""
 
 
 def http_poster(url: str, secret: str, timeout: float = 120.0) -> Post:
@@ -6503,24 +7187,68 @@ def http_poster(url: str, secret: str, timeout: float = 120.0) -> Post:
                 time.sleep(2 ** attempt)
                 continue
             payload = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
-            # a chunk another request is still processing: wait, then the retry gets its stored receipt (P1-6)
-            if res.status_code == 409 and payload.get("error", {}).get("code") == "chunk_in_progress" and attempt < 3:
-                time.sleep(2 ** attempt)
-                continue
             if res.status_code != 200:
-                raise RuntimeError(f"{body['action']} -> HTTP {res.status_code} {payload.get('error', {}).get('code', '')}")
+                raise IngestHttpError(body["action"], res.status_code, str(payload.get("error", {}).get("code", "")))
             return payload
         raise RuntimeError("unreachable")
     return post
 
 
-def send(results: List[Dict[str, Any]], post: Post, versions: Dict[str, str]) -> Dict[str, Any]:
-    start = post({"action": "start", "tool_versions": versions})
-    batch_id = start["batch_id"]
-    _, chunks, finish = build_bodies(results, batch_id, versions)
-    receipts = [post(c) for c in chunks]
-    done = post(finish)
-    return {"batch_id": batch_id, "chunks": len(chunks), "chunk_receipts": receipts, "finish": done}
+def _start(post: Post, versions: Dict[str, str], takeover: bool, sleep: Callable[[float], None], polls: int, poll_s: float) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"action": "start", "tool_versions": versions, **({"takeover": True} if takeover else {})}
+    for attempt in range(polls + 1 if takeover else 1):
+        try:
+            return post(body)
+        except IngestHttpError as e:
+            # a takeover aborts the old run only once its processing chunk is older than the server timeout (10 min)
+            if takeover and e.code == "batch_running" and attempt < polls:
+                sleep(poll_s)
+                continue
+            raise
+    raise RuntimeError("unreachable")
+
+
+def _post_chunk(post: Post, body: Dict[str, Any], sleep: Callable[[float], None], retries: int) -> Dict[str, Any]:
+    for attempt in range(retries + 1):
+        try:
+            return post(body)
+        except IngestHttpError as e:
+            if e.code == "fenced":
+                raise Restart("fenced") from e
+            if e.code == "chunk_in_progress":            # another request holds it; if it never completes, it crashed
+                if attempt == retries:
+                    raise Restart("chunk_stalled") from e
+                sleep(2 ** attempt)
+                continue
+            raise
+    raise RuntimeError("unreachable")
+
+
+def send(results: List[Dict[str, Any]], post: Post, versions: Dict[str, str], sleep: Callable[[float], None] = time.sleep,
+         chunk_retries: int = 4, start_polls: int = 15, poll_s: float = 60.0, max_restarts: int = 1) -> Dict[str, Any]:
+    """start → chunks → finish under one owner token; on Restart, the whole collection once more under a NEW batch."""
+    restarts: List[Dict[str, str]] = []
+    reason: Optional[str] = None
+    for attempt in range(max_restarts + 1):
+        # chunk_stalled: poll until the server may abort our stalled run; fenced: someone else owns the lease → one try
+        start = _start(post, versions, reason is not None, sleep, start_polls if reason == "chunk_stalled" else 0, poll_s)
+        batch_id, token = start["batch_id"], start["owner_token"]
+        _, chunks, finish = build_bodies(results, batch_id, token, versions)
+        try:
+            receipts = [_post_chunk(post, c, sleep, chunk_retries) for c in chunks]
+            try:
+                done = post(finish)
+            except IngestHttpError as e:
+                if e.code == "fenced":
+                    raise Restart("fenced") from e
+                raise
+            return {"batch_id": batch_id, "chunks": len(chunks), "chunk_receipts": receipts, "finish": done, "restarts": restarts}
+        except Restart as r:
+            reason = str(r)
+            restarts.append({"batch_id": batch_id, "reason": reason})
+            if attempt == max_restarts:
+                raise RuntimeError(f"ingest failed after {len(restarts)} attempts: {restarts}") from r
+    raise RuntimeError("unreachable")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -6544,7 +7272,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         record_fixtures(results, args.record_fixtures)
     if args.dry_run:
         args.dry_run.mkdir(parents=True, exist_ok=True)
-        start, chunks, finish = build_bodies(results, "DRY-RUN", versions)
+        start, chunks, finish = build_bodies(results, "DRY-RUN", "DRY-RUN", versions)
         (args.dry_run / "start.json").write_text(json.dumps(start, indent=1) + "\n", "utf-8")
         for c in chunks:
             (args.dry_run / f"chunk-{c['seq']:03d}.json").write_text(json.dumps(c, separators=(",", ":")) + "\n", "utf-8")
@@ -6555,7 +7283,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not url or not secret:
         raise SystemExit("MACRO_INGEST_URL and MACRO_INGEST_SECRET are required")
     summary = send(results, http_poster(url, secret), versions)   # failed series travel as series_outcomes
-    print(json.dumps({"batch_id": summary["batch_id"], "chunks": summary["chunks"], "finish": summary["finish"],
+    print(json.dumps({"batch_id": summary["batch_id"], "chunks": summary["chunks"], "finish": summary["finish"], "restarts": summary["restarts"],
                       "series_errors": {r["series_id"]: r["error"] for r in results if r["error"]}}, ensure_ascii=False))
     return 1 if any(r["error"] for r in results) else 0
 
@@ -6694,9 +7422,9 @@ Design notes:
 - **Schema: hand-written, not ajv.** `ajv@8.20.0` is in `package.json`, but these three bodies are small and fixed. Explicit checks give stable error codes (`invalid_body:evidence[0].sha256`) with no schema compilation on a cold start. Unknown keys are rejected everywhere.
 - **Evidence acceptance.** Every item's bytes must hash to its `sha256`, or the whole chunk gets a 400 before anything is written. An item is parsed only if its host equals the series' official host, its path equals the spec's `evidence_path`, its status is 200, and its `fetched_at` is at most 5 min in the future and at most 24 h old. `fetched_at` becomes `available_at`, so it must be plausible. A failing item counts one `failed` with an error code. Parser failures count `failed` with `parse_<code>`.
 - **Claims** are mapped with `claimPeriodEnd` (`2026年9月`, `2026年第三季度`, `YYYY-MM-DD`) and handed to `ingestEvidence`, which compares them by decimal equality. Claims that match no parsed point (SAFE dates covered only by the XLSX, or a label that does not map) are **not** quarantined (no raw value exists to hold). Each chunk stores its `claim_keys` (`<series>|<period_end>`, or `<series>|?<label>` when the label does not map) and `located_keys` (`<series>|<period_end>` of every parsed point); `finish` computes the batch-wide distinct `⋃claim_keys − ⋃located_keys` and, when n > 0, adds one informational batch error `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}` (`skipped_summary` is an existing INFO code in `src/lib/dq/batches.ts`; do not edit that file). Python repeats a series' claims in every chunk that carries its evidence, so per-chunk counts would over-count (第 4 稿 P2-1).
-- **Idempotency and single processing (第 4 稿 P1-6).** `chunk` first verifies every hash, then `claimChunk` inserts `(batch, seq)` as `processing`; only the claiming request ingests. A repeat of a `done` chunk returns its stored receipt (`status:'duplicate'`, stored counts and errors) without touching anything; a repeat of a `processing` chunk gets 409 `chunk_in_progress` (the collector retries). After ingestion `completeChunk` stores counts, sanitized errors and the two key sets. Every stored chunk error reaches `finishBatch` (P2-1).
-- **One writer per dataset (第 4 稿 P1-6).** `start` calls `startBatch`, then `claimIngest(batchId,'macro.akshare',2 h)`: live runs older than 2 h are abandoned (their batches finished `failed`, error `abandoned`); if another live run holds the lease, the new batch is finished `rejected` (error `concurrent_batch`) and the route answers 409 `batch_running` with the holder's id. Two concurrent starts therefore produce exactly one claim (the advisory lock + partial unique index in SQL).
-- **Resumable finish (第 4 稿 P2-2, P2-4).** `finish` carries `series_outcomes` from the collector. `beginFinish` moves the run to `finishing` once every chunk is done; each step is then recorded in `finish_progress` (`derived` → `batch_finished` → `freshness_recorded` → Task 11's `published` → `receipt`, which ends the run and releases the lease). A retried finish skips completed steps; a finished run returns the stored receipt. `batchRow` accepts a finished `ingest_batches` row for `finish` when its run is no longer `open`. Counts = chunk counts + derived counts + `failed += 1` per failed series; errors = all stored chunk errors + the unlocated summary + derived errors + `{code, key: series_id}` per failed series. `recordAttempt` gets `detail:{batch_id, batch_status, failed_series}`.
+- **Idempotency and single processing (第 4 稿 P1-6).** `chunk` first verifies every hash, then `claimChunk` inserts `(batch, seq)` as `processing`; only the claiming request ingests. A repeat of a `done` chunk returns its stored receipt (`status:'duplicate'`, stored counts and errors) without touching anything; a repeat of a `processing` chunk gets 409 `chunk_in_progress` (the collector retries, then restarts the collection, see below). After ingestion `completeChunk` stores counts, sanitized errors and the two key sets. Every stored chunk error reaches `finishBatch` (P2-1).
+- **One writer per dataset, owner token (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1).** `start` calls `startBatch`, then `claimIngest(batchId,'macro.akshare',{maxAgeMs:2 h, processingTimeoutMs:10 min, takeover: body.takeover===true})` and answers `{batch_id, owner_token}`. Aborted runs whose batch still runs are finished `failed` (error `aborted`; `batch_not_running` = already finished elsewhere, ignored; any other error is logged and the batch is listed again by the next `start`, so the sweep heals). If another live run holds the lease, the new batch is finished `rejected` (error `concurrent_batch`) and the route answers 409 `batch_running` with the holder's id. Two concurrent starts therefore produce exactly one claim (the advisory lock + partial unique index in SQL). `chunk` and `finish` carry `owner_token`; every MacroDb mutation passes it; `fenced` (an `IngestAbort` or MacroDbError) → 409 `fenced`, and a chunk/finish on a batch whose run is `aborted` → 409 `fenced`, so the collector restarts the whole collection under a new batch. `IngestAbort('quarantine_link_failed')` → 500 without `completeChunk` (the chunk stays `processing`; the stall path restarts). The route's `maxDuration` (300 s) is below the 10-minute processing timeout, so a live request is never mistaken for a stall.
+- **Exclusive, resumable finish (第 4 稿 P2-2, P2-4; 第 5 稿 P1-4/P1-5/P2-2).** `finish` carries `series_outcomes` from the collector. `beginFinish(batch,total,owner_token)` hands the owner a fresh `finishToken` (another owner → 409 `fenced`; a concurrent finish of the same owner is fenced at its next step); each step is recorded with `{ownerToken, finishToken}`: `derived` (skipped as `{skipped:'no_native_outcomes'}` when the chunks carry no native inserted/versioned/duplicate outcome) → `batch_finished` (`finishOnce`: a `batch_not_running` from `finishBatch` reads the stored status back) → `freshness_started` → `recordAttempt` → `freshness_recorded` (a retry that finds only `freshness_started` skips the attempt: one lost record beats a double-counted error) → Task 11's `published` → `receipt` (ends the run, releases the lease). A retried finish skips completed steps; a finished run returns the stored receipt. `batchRow` accepts a finished `ingest_batches` row for `finish` when its run is no longer `open`. Counts = native chunk counts + derived counts + `failed += 1` per failed series; the receipt also reports `native_counts` and `derived_counts`; errors = all stored chunk errors + the unlocated summary + derived errors + `{code, key: series_id}` per failed series + `{code:'no_native_outcomes'}` when nothing native landed. `recordAttempt` gets `ok = status !== 'failed' && nativeLanded` and `detail:{batch_id, batch_status, failed_series}`.
 - **Retrieval tool_versions** = the batch's `tool_versions` (AKShare, pandas, Python, collector, ingest route, catalog, rules) plus `parser` (`nbs-esdata/1` | `chinabond-history/1` | `safe-rmbquery/1`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -6871,20 +7599,21 @@ describe('CN parsers on recorded official responses',()=>{
 import {describe,expect,it} from 'vitest';
 import {parseIngestBody} from './ingest-schema';
 
-const B='00000000-0000-4000-8000-000000000001';
+const B='00000000-0000-4000-8000-000000000001',T='00000000-0000-4000-8000-0000000000aa';
 const ev={series_id:'CN_PMI_MFG',sha256:'a'.repeat(64),url:'https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData',status:200,content_type:'application/json;charset=UTF-8',fetched_at:'2026-11-06T05:00:00.123Z',bytes_b64:'e30='};
 const cl={series_id:'CN_PMI_MFG',period_label:'2026年10月',value_text:'49.3'};
-const chunk={action:'chunk',batch_id:B,seq:0,total:1,evidence:[ev],claims:[cl]};
+const chunk={action:'chunk',batch_id:B,owner_token:T,seq:0,total:1,evidence:[ev],claims:[cl]};
 const err=(v:unknown)=>{const r=parseIngestBody(v);return r.ok?'ok':r.error;};
 
 describe('parseIngestBody',()=>{
  it('accepts the three actions',()=>{
   expect(parseIngestBody({action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13'}})).toEqual({ok:true,body:{action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13'}}});
+  expect(parseIngestBody({action:'start',tool_versions:{a:'1'},takeover:true})).toEqual({ok:true,body:{action:'start',tool_versions:{a:'1'},takeover:true}});   // restart (第 5 稿 P2-1)
   expect(parseIngestBody(chunk)).toEqual({ok:true,body:chunk});
   expect(parseIngestBody({...chunk,claims:[]}).ok).toBe(true);
   const outcomes=[{series_id:'CN_PMI_MFG',ok:true},{series_id:'CN_M2_YOY',ok:false,code:'collect_runtimeerror'}];
-  expect(parseIngestBody({action:'finish',batch_id:B,total:3,series_outcomes:outcomes})).toEqual({ok:true,body:{action:'finish',batch_id:B,total:3,series_outcomes:outcomes}});
-  expect(parseIngestBody({action:'finish',batch_id:B,total:0,series_outcomes:[outcomes[1]]}).ok).toBe(true);   // every series failed: no chunks
+  expect(parseIngestBody({action:'finish',batch_id:B,owner_token:T,total:3,series_outcomes:outcomes})).toEqual({ok:true,body:{action:'finish',batch_id:B,owner_token:T,total:3,series_outcomes:outcomes}});
+  expect(parseIngestBody({action:'finish',batch_id:B,owner_token:T,total:0,series_outcomes:[outcomes[1]]}).ok).toBe(true);   // every series failed: no chunks
  });
  it('rejects unknown actions, unknown or missing keys and wrong types',()=>{
   expect(err(null)).toBe('invalid_body:root');
@@ -6892,14 +7621,19 @@ describe('parseIngestBody',()=>{
   expect(err({action:'start',tool_versions:{akshare:'1'},extra:1})).toBe('invalid_body:root.extra');
   expect(err({action:'start',tool_versions:{}})).toBe('invalid_body:tool_versions');
   expect(err({action:'start',tool_versions:{'bad key':'1'}})).toBe('invalid_body:tool_versions.bad key');
-  expect(err({action:'finish',batch_id:'not-a-uuid',total:1,series_outcomes:[]})).toBe('invalid_body:batch_id');
-  expect(err({action:'finish',batch_id:B,total:-1,series_outcomes:[]})).toBe('invalid_body:total');
-  expect(err({action:'finish',batch_id:B,series_outcomes:[]})).toBe('invalid_body:root.total');
-  expect(err({action:'finish',batch_id:B,total:1})).toBe('invalid_body:root.series_outcomes');
-  expect(err({action:'finish',batch_id:B,total:1,series_outcomes:[{series_id:'CN_A',ok:false}]})).toBe('invalid_body:series_outcomes[0].code');
-  expect(err({action:'finish',batch_id:B,total:1,series_outcomes:[{series_id:'CN_A',ok:true,code:'x'}]})).toBe('invalid_body:series_outcomes[0].code');
-  expect(err({action:'finish',batch_id:B,total:1,series_outcomes:[{series_id:'CN_A',ok:'yes'}]})).toBe('invalid_body:series_outcomes[0].ok');
-  expect(err({action:'finish',batch_id:B,total:1,series_outcomes:[{series_id:'CN_A',ok:true},{series_id:'CN_A',ok:true}]})).toBe('invalid_body:series_outcomes');
+  expect(err({action:'start',tool_versions:{a:'1'},takeover:false})).toBe('invalid_body:takeover');
+  const fin=(o:Record<string,unknown>)=>({action:'finish',batch_id:B,owner_token:T,total:1,series_outcomes:[],...o});
+  expect(err(fin({batch_id:'not-a-uuid'}))).toBe('invalid_body:batch_id');
+  expect(err(fin({owner_token:'nope'}))).toBe('invalid_body:owner_token');
+  expect(err({action:'finish',batch_id:B,total:1,series_outcomes:[]})).toBe('invalid_body:root.owner_token');   // every finish is fenced (第 5 稿 P1-3)
+  expect(err(Object.fromEntries(Object.entries(chunk).filter(([k])=>k!=='owner_token')))).toBe('invalid_body:root.owner_token');
+  expect(err(fin({total:-1}))).toBe('invalid_body:total');
+  expect(err({action:'finish',batch_id:B,owner_token:T,series_outcomes:[]})).toBe('invalid_body:root.total');
+  expect(err({action:'finish',batch_id:B,owner_token:T,total:1})).toBe('invalid_body:root.series_outcomes');
+  expect(err(fin({series_outcomes:[{series_id:'CN_A',ok:false}]}))).toBe('invalid_body:series_outcomes[0].code');
+  expect(err(fin({series_outcomes:[{series_id:'CN_A',ok:true,code:'x'}]}))).toBe('invalid_body:series_outcomes[0].code');
+  expect(err(fin({series_outcomes:[{series_id:'CN_A',ok:'yes'}]}))).toBe('invalid_body:series_outcomes[0].ok');
+  expect(err(fin({series_outcomes:[{series_id:'CN_A',ok:true},{series_id:'CN_A',ok:true}]}))).toBe('invalid_body:series_outcomes');
  });
  it('validates chunk numbering, sizes and every evidence and claim field',()=>{
   expect(err({...chunk,seq:1,total:1})).toBe('invalid_body:seq');
@@ -6952,16 +7686,26 @@ function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:E
 
 let deps:MacroDeps,mem:ReturnType<typeof memoryMacroDb>,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>,clock:Date;
 beforeEach(()=>{
- vi.clearAllMocks();process.env.MACRO_INGEST_SECRET=SECRET;clock=RECORDED;
+ vi.clearAllMocks();process.env.MACRO_INGEST_SECRET=SECRET;clock=RECORDED;tokens.clear();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();mem=memoryMacroDb();
  deps={db:mem,evidence,tables,codeVersion:'b'.repeat(40),now:()=>clock,fetch:(()=>{throw new Error('no fetch in ingest');}) as unknown as typeof fetch,sleep:async()=>{}};
  mocks.deps.mockImplementation(()=>deps);mocks.codeVersion.mockReturnValue('b'.repeat(40));
 });
 afterEach(()=>{if(original===undefined)delete process.env.MACRO_INGEST_SECRET;else process.env.MACRO_INGEST_SECRET=original;});
 
-const startBatch=async()=>{const res=await post({action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13',collector:'macro-collect/1'}});expect(res.status).toBe(200);return (await res.json()).batch_id as string;};
-const chunkBody=(batch_id:string,seq=0,total=1,evidence=ALL_EVIDENCE,claims=ALL_CLAIMS)=>({action:'chunk',batch_id,seq,total,evidence,claims});
-const finishBody=(batch_id:string,total=1,series_outcomes:{series_id:string;ok:boolean;code?:string}[]=[])=>({action:'finish',batch_id,total,series_outcomes});
+/** owner tokens by batch id (第 5 稿 P1-3): every chunk / finish body carries the token its start returned. */
+const tokens=new Map<string,string>();
+const NO_TOKEN='00000000-0000-4000-8000-000000000000';
+const startBatch=async(extra:Record<string,unknown>={})=>{
+ const res=await post({action:'start',tool_versions:{akshare:'1.20.35',python:'3.12.13',collector:'macro-collect/1'},...extra});expect(res.status).toBe(200);
+ const body=await res.json() as {batch_id:string;owner_token:string};
+ expect(body.owner_token).toMatch(/^[0-9a-f-]{36}$/);tokens.set(body.batch_id,body.owner_token);
+ return body.batch_id;
+};
+const chunkBody=(batch_id:string,seq=0,total=1,evidence=ALL_EVIDENCE,claims=ALL_CLAIMS)=>({action:'chunk',batch_id,owner_token:tokens.get(batch_id)??NO_TOKEN,seq,total,evidence,claims});
+const finishBody=(batch_id:string,total=1,series_outcomes:{series_id:string;ok:boolean;code?:string}[]=[])=>({action:'finish',batch_id,owner_token:tokens.get(batch_id)??NO_TOKEN,total,series_outcomes});
+/** Every fixture series reported ok. */
+const OK=[...new Set(manifest.files.map(f=>f.series_id))].map(series_id=>({series_id,ok:true}));
 const history=(id:string)=>deps.db.seriesHistory(id,{maxRows:5000});
 
 describe('POST /api/macro/ingest — auth and body',()=>{
@@ -6983,7 +7727,7 @@ describe('POST /api/macro/ingest — auth and body',()=>{
 });
 
 describe('POST /api/macro/ingest — protocol',()=>{
- it('start takes the lease: a second start is refused (its own batch finishes rejected); after 2 h the stale run is abandoned',async()=>{
+ it('start takes the lease and returns an owner token: a second start is refused (its own batch finishes rejected); after 2 h the stale run is aborted',async()=>{
   const id=await startBatch();
   expect(tables.rows('ingest_batches')).toEqual([expect.objectContaining({batch_id:id,producer:'py-akshare',dataset:'macro.akshare',status:'running',triggered_by:'script'})]);
   expect(tables.rows('ingest_batches')[0].tool_versions).toMatchObject({akshare:'1.20.35',ingest:'macro-ingest/1'});
@@ -6994,8 +7738,10 @@ describe('POST /api/macro/ingest — protocol',()=>{
   mem.setNow(new Date(Date.now()+3*3600_000).toISOString());                                     // the lease clock is the DB's (SQL now())
   const later=await post({action:'start',tool_versions:{akshare:'1.20.35'}});
   expect(later.status).toBe(200);
-  expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'failed'});   // abandoned
-  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{abandoned:true}});
+  expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'failed',errors:[{code:'aborted'}]});
+  expect(await mem.ingestRun(id)).toMatchObject({state:'aborted',progress:{aborted:{reason:'max_age'}}});
+  const stale=await post(chunkBody(id));                                                         // the old owner is fenced, not merely refused
+  expect(stale.status).toBe(409);expect((await stale.json()).error.code).toBe('fenced');
  });
  it('two concurrent starts → exactly one batch holds the lease',async()=>{
   const res=await Promise.all([post({action:'start',tool_versions:{a:'1'}}),post({action:'start',tool_versions:{a:'1'}})]);
@@ -7035,7 +7781,7 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(evidence.puts).toHaveLength(ALL_EVIDENCE.length);                                       // one ingestion
   expect((await (await post(finishBody(id))).json()).batch_id).toBe(id);                         // releases the lease
   const next=await startBatch();
-  expect(await mem.claimChunk(next,0,1)).toEqual({status:'claimed'});                              // another request holds seq 0
+  expect(await mem.claimChunk(next,0,1,tokens.get(next)!)).toEqual({status:'claimed'});             // another request holds seq 0
   const busy=await post(chunkBody(next));
   expect(busy.status).toBe(409);expect((await busy.json()).error.code).toBe('chunk_in_progress');
  });
@@ -7131,22 +7877,83 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(body).toMatchObject({status:'failed',counts:{fetched:0,failed:1}});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
  });
- it('finish resumes after a failure following finishBatch: derivation and finishBatch never run twice (第 4 稿 P2-4)',async()=>{
+ it('finish resumes after recordAttempt itself failed: derivation and finishBatch never run twice; the attempt is not retried (one lost record beats a double count, 第 5 稿 P1-4)',async()=>{
   const id=await startBatch();
   await post(chunkBody(id));
   const upsert=tables.upsert.bind(tables);let broken=true;
   tables.upsert=async(t,r,c)=>{if(t==='dq_freshness'&&broken){broken=false;throw new Error('freshness down');}return upsert(t,r,c);};
-  const first=await post(finishBody(id));
+  const first=await post(finishBody(id,1,OK));
   expect(first.status).toBe(500);
   expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'success'});                    // finishBatch already happened
-  expect(await mem.ingestRun(id)).toMatchObject({state:'finishing',progress:{derived:expect.any(Object),batch_finished:{status:'success'}}});
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finishing',progress:{derived:expect.any(Object),batch_finished:{status:'success'},freshness_started:{ok:true}}});
   const derivedRows=(await history('CN_CPI_YOY')).length;
-  const second=await post(finishBody(id));
+  const second=await post(finishBody(id,1,OK));
   expect(second.status).toBe(200);
   expect(await second.json()).toMatchObject({batch_id:id,status:'success'});
   expect((await history('CN_CPI_YOY')).length).toBe(derivedRows);
-  expect(tables.rows('dq_freshness')).toHaveLength(1);
+  expect(tables.rows('dq_freshness')).toHaveLength(0);                                            // started without a record ⇒ skipped, never repeated
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{freshness_recorded:{ok:true,skipped:'started_without_record'}}});
+ });
+ for(const crashAt of ['derived','batch_finished','freshness_recorded'] as const){
+  it(`crash right after the side effect of '${crashAt}', before its checkpoint: the retry completes and repeats nothing (第 5 稿 P1-4)`,async()=>{
+   const id=await startBatch();await post(chunkBody(id));
+   const record=mem.recordFinishStep.bind(mem);let armed=true;
+   mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name===crashAt){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+   expect((await post(finishBody(id,1,OK))).status).toBe(500);
+   const derivedRows=(await history('CN_CPI_YOY')).length;
+   const second=await post(finishBody(id,1,OK));
+   expect(second.status).toBe(200);expect(await second.json()).toMatchObject({batch_id:id,status:'success'});
+   expect((await history('CN_CPI_YOY')).length).toBe(derivedRows);                                // re-derivation wrote duplicates only
+   expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'success'});   // finished once (finishOnce read it back)
+   expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',consecutive_errors:0})]);   // one attempt, never two
+   expect(await mem.ingestRun(id)).toMatchObject({state:'finished'});
+  });
+ }
+ it('concurrent finish: another owner is fenced; two finishes of the owner leave exactly one finisher; every step happens once (第 5 稿 P1-4)',async()=>{
+  const id=await startBatch();await post(chunkBody(id));
+  const intruder=await post({...finishBody(id,1,OK),owner_token:'00000000-0000-4000-8000-00000000dead'});
+  expect(intruder.status).toBe(409);expect((await intruder.json()).error.code).toBe('fenced');
+  const res=await Promise.all([post(finishBody(id,1,OK)),post(finishBody(id,1,OK))]);
+  const out=await Promise.all(res.map(async r=>({status:r.status,body:await r.json()})));
+  expect(out.some(o=>o.status===200)).toBe(true);
+  for(const o of out)if(o.status!==200)expect([o.status,o.body.error.code]).toEqual([409,'fenced']);   // the older finisher, fenced at its next step
+  expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'success'});
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({consecutive_errors:0})]);
   expect(await mem.ingestRun(id)).toMatchObject({state:'finished'});
+  expect(await (await post(finishBody(id,1,OK))).json()).toMatchObject({batch_id:id,status:'success'});   // replay
+ });
+ it('takeover restart: a crash after observation writes leaves the chunk processing; start {takeover} after the processing timeout aborts it; the paused worker is fenced; the new batch succeeds; the old batch is failed (第 5 稿 P1-3/P2-1)',async()=>{
+  const old=await startBatch();
+  const complete=mem.completeChunk.bind(mem);let crash=true;
+  mem.completeChunk=async(b,seq,result,token)=>{if(crash){crash=false;throw new Error('lambda killed');}return complete(b,seq,result,token);};
+  expect((await post(chunkBody(old))).status).toBe(500);                                         // rows written, completeChunk never ran
+  expect((await history('CN_PMI_MFG')).some(o=>o.batch_id===old)).toBe(true);
+  expect(await mem.latestEligible(['CN_PMI_MFG'])).toEqual([]);                                  // a running batch is never eligible
+  const stuck=await post(chunkBody(old));
+  expect(stuck.status).toBe(409);expect((await stuck.json()).error.code).toBe('chunk_in_progress');
+  const early=await post({action:'start',tool_versions:{a:'1'},takeover:true});                  // stalled for less than 10 minutes: busy
+  expect(early.status).toBe(409);expect((await early.json()).error.code).toBe('batch_running');
+  mem.setNow(new Date(Date.now()+11*60_000).toISOString());                                        // the lease clock is the DB's
+  const fresh=await startBatch({takeover:true});
+  expect(tables.rows('ingest_batches').find(b=>b.batch_id===old)).toMatchObject({status:'failed',errors:[{code:'aborted'}]});
+  expect(await mem.ingestRun(old)).toMatchObject({state:'aborted',progress:{aborted:{by:fresh,reason:'stalled_chunk'}}});
+  for(const late of [chunkBody(old),finishBody(old,1,OK)]){                                        // the paused old worker wakes up
+   const r=await post(late);expect(r.status).toBe(409);expect((await r.json()).error.code).toBe('fenced');
+  }
+  expect((await post(chunkBody(fresh))).status).toBe(200);                                       // the whole collection again, new batch
+  const body=await (await post(finishBody(fresh,1,OK))).json();
+  expect(body.status).toBe('success');
+  expect((await mem.latestEligible(['CN_PMI_MFG']))[0].batch_id).toBe(fresh);
+ });
+ it('every source failed after a previously populated successful run: no derivation, batch failed, freshness ok:false (第 5 稿 P2-2)',async()=>{
+  const first=await startBatch();await post(chunkBody(first));
+  expect((await (await post(finishBody(first,1,OK))).json()).status).toBe('success');
+  const id=await startBatch();
+  const body=await (await post(finishBody(id,0,OK.map(o=>({series_id:o.series_id,ok:false,code:'collect_timeout'}))))).json();
+  expect(body).toMatchObject({status:'failed',native_counts:{inserted:0,duplicates:0,versioned:0},derived_counts:{fetched:0,duplicates:0}});
+  expect(body.errors).toContainEqual({code:'no_native_outcomes'});
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{derived:{skipped:'no_native_outcomes'}}});
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1,detail:{batch_status:'failed'}});
  });
 });
 ```
@@ -7399,10 +8206,11 @@ export interface EvidenceItem{series_id:string;sha256:string;url:string;status:n
 export interface ClaimItem{series_id:string;period_label:string;value_text:string}
 /** Collector-side result per expected series (第 4 稿 P2-2); code only (and required) when ok is false. */
 export interface SeriesOutcome{series_id:string;ok:boolean;code?:string}
+/** owner_token (第 5 稿 P1-3): returned by start, carried by every chunk and finish. takeover (P2-1): only `true`, on a restart. */
 export type IngestBody=
- |{action:'start';tool_versions:Record<string,string>}
- |{action:'chunk';batch_id:string;seq:number;total:number;evidence:EvidenceItem[];claims:ClaimItem[]}
- |{action:'finish';batch_id:string;total:number;series_outcomes:SeriesOutcome[]};
+ |{action:'start';tool_versions:Record<string,string>;takeover?:true}
+ |{action:'chunk';batch_id:string;owner_token:string;seq:number;total:number;evidence:EvidenceItem[];claims:ClaimItem[]}
+ |{action:'finish';batch_id:string;owner_token:string;total:number;series_outcomes:SeriesOutcome[]};
 export type SchemaResult={ok:true;body:IngestBody}|{ok:false;error:string};
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -7455,30 +8263,32 @@ export function parseIngestBody(v:unknown):SchemaResult{
  try{
   if(!isObj(v))return {ok:false,error:'invalid_body:root'};
   if(v.action==='start'){
-   const o=exactKeys(v,['action','tool_versions'],'root');
+   const takeover='takeover' in v;
+   const o=exactKeys(v,takeover?['action','tool_versions','takeover']:['action','tool_versions'],'root');
+   if(takeover&&o.takeover!==true)fail('takeover');
    const tv=o.tool_versions;
    if(!isObj(tv))fail('tool_versions');
    const entries=Object.entries(tv as Record<string,unknown>);
    if(entries.length<1||entries.length>20)fail('tool_versions');
    for(const [k,val] of entries){if(!TOOL_KEY.test(k))fail(`tool_versions.${k}`);str(val,`tool_versions.${k}`,100);}
-   return {ok:true,body:{action:'start',tool_versions:Object.fromEntries(entries) as Record<string,string>}};
+   return {ok:true,body:{action:'start',tool_versions:Object.fromEntries(entries) as Record<string,string>,...(takeover?{takeover:true as const}:{})}};
   }
   if(v.action==='chunk'){
-   const o=exactKeys(v,['action','batch_id','seq','total','evidence','claims'],'root');
+   const o=exactKeys(v,['action','batch_id','owner_token','seq','total','evidence','claims'],'root');
    const total=int(o.total,'total',1,MAX_CHUNKS),seq=int(o.seq,'seq',0,MAX_CHUNKS-1);
    if(seq>=total)fail('seq');
    if(!Array.isArray(o.evidence)||o.evidence.length<1||o.evidence.length>MAX_EVIDENCE)fail('evidence');
    if(!Array.isArray(o.claims)||o.claims.length>MAX_CLAIMS)fail('claims');
-   return {ok:true,body:{action:'chunk',batch_id:str(o.batch_id,'batch_id',36,UUID),seq,total,
+   return {ok:true,body:{action:'chunk',batch_id:str(o.batch_id,'batch_id',36,UUID),owner_token:str(o.owner_token,'owner_token',36,UUID),seq,total,
     evidence:(o.evidence as unknown[]).map((e,i)=>evidenceItem(e,`evidence[${i}]`)),claims:(o.claims as unknown[]).map((c,i)=>claimItem(c,`claims[${i}]`))}};
   }
   if(v.action==='finish'){
-   const o=exactKeys(v,['action','batch_id','total','series_outcomes'],'root');
-   const batch_id=str(o.batch_id,'batch_id',36,UUID),total=int(o.total,'total',0,MAX_CHUNKS);
+   const o=exactKeys(v,['action','batch_id','owner_token','total','series_outcomes'],'root');
+   const batch_id=str(o.batch_id,'batch_id',36,UUID),owner_token=str(o.owner_token,'owner_token',36,UUID),total=int(o.total,'total',0,MAX_CHUNKS);
    if(!Array.isArray(o.series_outcomes)||o.series_outcomes.length>MAX_OUTCOMES)fail('series_outcomes');
    const series_outcomes=(o.series_outcomes as unknown[]).map((x,i)=>seriesOutcome(x,`series_outcomes[${i}]`));
    if(new Set(series_outcomes.map(x=>x.series_id)).size!==series_outcomes.length)fail('series_outcomes');
-   return {ok:true,body:{action:'finish',batch_id,total,series_outcomes}};
+   return {ok:true,body:{action:'finish',batch_id,owner_token,total,series_outcomes}};
   }
   return {ok:false,error:'invalid_body:action'};
  }catch(e){
@@ -7490,22 +8300,27 @@ export function parseIngestBody(v:unknown):SchemaResult{
 
 ```ts
 // src/app/api/macro/ingest/route.ts
-// AKShare ingest endpoint (spec §4.4, §8, §11; §0.2 M9/M24/N2/N3; plan 第 4 稿 P1-6/P2-1/P2-2/P2-4). Auth:
-// MACRO_INGEST_SECRET bearer compared in constant time (authorizedCronRequest); unset secret → 503. Body ≤ 4 MB.
+// AKShare ingest endpoint (spec §4.4, §8, §11; §0.2 M9/M24/N2/N3; plan 第 4 稿 P1-6/P2-1/P2-2/P2-4; 第 5 稿 P1-3/P1-4/
+// P1-5/P2-1/P2-2). Auth: MACRO_INGEST_SECRET bearer compared in constant time (authorizedCronRequest); unset secret → 503.
+// Body ≤ 4 MB. Every chunk / finish carries the owner_token that start returned; every MacroDb mutation passes it, and a
+// superseded token (takeover) answers 409 fenced — the collector then restarts the whole collection under a new batch.
 //  start  → upserts the catalog mirror, starts batch producer 'py-akshare' / dataset 'macro.akshare', then takes the
-//           single-writer lease atomically (claimIngest, 2 h): stale live runs are abandoned first (their batches finish
-//           failed, 'abandoned'); a live holder → our batch finishes rejected ('concurrent_batch') and 409 batch_running.
+//           single-writer lease atomically (claimIngest: 2 h max age, 10 min processing timeout, takeover only when the
+//           body asks): runs it aborted whose batch still runs finish failed ('aborted'); a live holder → our batch
+//           finishes rejected ('concurrent_batch') and 409 batch_running; else {batch_id, owner_token}.
 //  chunk  → every evidence item's bytes must hash to its sha256 (else 400 before any claim or write); then claimChunk:
 //           only the claiming request ingests (a done repeat returns the stored receipt, a processing repeat → 409
 //           chunk_in_progress). Evidence must come from the series' official host and data path with HTTP 200 and a
 //           plausible fetched_at; the TS parser extracts the points — Python numbers are never stored; claims are
 //           compared by decimal equality inside ingestEvidence. completeChunk stores counts, sanitized errors and the
 //           claim / location key sets.
-//  finish → beginFinish (all chunks done, else 409); resumable via finish_progress: CN derivation (N3) → finishBatch
-//           with chunk + derived counts, failed series (series_outcomes) and every stored error plus the batch-wide
-//           unlocated-claims summary → recordAttempt('macro.akshare', daily, ok = status !== 'failed') → the Task 11
-//           publish point → stored receipt (run finished, lease released). A retry skips completed steps; a finished
-//           run returns its stored receipt. Only this route publishes CN.
+//  finish → beginFinish (owner only; all chunks done, else 409) hands out a finish token; resumable and exclusive via
+//           finish_progress: CN derivation (N3; skipped when no native outcome landed) → finishOnce with native chunk +
+//           derived counts, failed series (series_outcomes), every stored error, the batch-wide unlocated-claims summary
+//           and no_native_outcomes → freshness_started → recordAttempt('macro.akshare', daily, ok = status !== 'failed'
+//           && native landed) → freshness_recorded → the Task 11 publish point → stored receipt (run finished, lease
+//           released). A retry skips completed steps (and never repeats recordAttempt); a finished run returns its stored
+//           receipt. Only this route publishes CN.
 // Responses carry codes, keys and counts only.
 import {createHash} from 'node:crypto';
 import {NextResponse} from 'next/server';
@@ -7519,19 +8334,19 @@ import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {MacroDbError} from '@/lib/macro/db';
-import {addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import {IngestAbort,addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import type {Claim,RetrievalInput} from '@/lib/macro/ingest';
 import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
 import type {IngestBody,SeriesOutcome} from '@/lib/macro/ingest-schema';
 import {claimPeriodEnd,parserFor} from '@/lib/macro/parsers';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
-import type {ChunkCounts,ChunkRecord,FinishProgress,ParsedPoint} from '@/lib/macro/types';
+import type {ChunkCounts,ChunkError,ChunkRecord,FinishProgress,FinishStep,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
 const INGEST_ROUTE_VERSION='macro-ingest/1';
 const DATASET='macro.akshare',PRODUCER='py-akshare';
-const LEASE_MS=2*3600_000,MAX_FUTURE_MS=5*60_000,MAX_AGE_MS=24*3600_000;
+const LEASE_MS=2*3600_000,PROCESSING_TIMEOUT_MS=10*60_000,MAX_FUTURE_MS=5*60_000,MAX_AGE_MS=24*3600_000;   // maxDuration (300 s) < processing timeout
 const NO_STORE={'Cache-Control':'no-store'};
 const json=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:NO_STORE});
 const err=(code:string,message:string,status:number,extra:Record<string,unknown>={})=>json({error:{code,message,...extra}},status);
@@ -7540,28 +8355,48 @@ const publicErrors=(errors:BatchError[])=>errors.map(e=>e.code==='skipped_summar
 /** Stored chunk errors: code + key only, ≤ 500 per chunk (macro_complete_chunk limit). */
 const storedErrors=(errors:BatchError[])=>errors.slice(0,500).map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
 
-/** The batch row; finishing:true also accepts a finished batch whose run is no longer open (a retried finish, P2-4). */
+const fencedResponse=()=>err('fenced','This batch was taken over; restart the collection under a new batch',409);
+/** The batch row; finishing:true also accepts a finished batch whose run is no longer open (a retried finish, P2-4). A batch
+ *  whose run was aborted by a takeover answers fenced (第 5 稿 P1-3), so the collector restarts instead of giving up. */
 async function batchRow(deps:MacroDeps,batchId:string,opts:{finishing?:boolean}={}):Promise<Row|NextResponse>{
  const [b]=await deps.tables.select('ingest_batches',{batch_id:batchId},{limit:1});
  if(!b||b.dataset!==DATASET||b.producer!==PRODUCER)return err('batch_not_found','Unknown batch',404);
  if(b.status!=='running'){
-  if(opts.finishing){const run=await deps.db.ingestRun(batchId);if(run&&run.state!=='open')return b;}
+  const run=await deps.db.ingestRun(batchId);
+  if(run?.state==='aborted')return fencedResponse();
+  if(opts.finishing&&run&&run.state!=='open')return b;
   return err('batch_not_running','Batch is finished',409);
  }
  return b;
+}
+const notRunning=(e:unknown)=>e instanceof Error&&e.message==='batch_not_running';
+/** finishBatch exactly once (第 5 稿 P1-4): a batch an earlier attempt (or a fenced concurrent finisher) already finished is read
+ *  back, never finished again. */
+async function finishOnce(deps:MacroDeps,batchId:string,result:{counts:ChunkCounts;errors:BatchError[]}):Promise<BatchStatus>{
+ try{return await finishBatch(deps.tables,batchId,result);}
+ catch(e){
+  if(!notRunning(e))throw e;
+  const [row]=await deps.tables.select('ingest_batches',{batch_id:batchId},{limit:1});
+  return String(row?.status) as BatchStatus;
+ }
 }
 
 async function start(deps:MacroDeps,body:Extract<IngestBody,{action:'start'}>){
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:DATASET,codeVersion:deps.codeVersion,triggeredBy:'script',
   toolVersions:{...body.tool_versions,ingest:INGEST_ROUTE_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
- const claim=await deps.db.claimIngest(batchId,DATASET,LEASE_MS);
- for(const id of claim.abandoned)await finishBatch(deps.tables,id,{counts:emptyCounts(),errors:[{code:'abandoned'}]}).catch(()=>undefined);   // already finished → ignored
+ const claim=await deps.db.claimIngest(batchId,DATASET,{maxAgeMs:LEASE_MS,processingTimeoutMs:PROCESSING_TIMEOUT_MS,takeover:body.takeover===true});
+ // Batches of aborted runs (第 5 稿 P1-3/P2-1): finish them failed. batch_not_running = finished elsewhere (idempotent); any other
+ // failure is logged, never fatal here — claimIngest lists the batch again on the next start until it is finished.
+ for(const id of claim.aborted){
+  try{await finishBatch(deps.tables,id,{counts:emptyCounts(),errors:[{code:'aborted'}]});}
+  catch(e){if(!notRunning(e))console.error('[macro-ingest] finishing aborted batch failed; retried on the next start',id,e instanceof Error?e.message:e);}
+ }
  if(claim.status==='busy'){
   await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[{code:'concurrent_batch'}],rejected:true}).catch(()=>undefined);
   return err('batch_running','A macro.akshare batch is still running',409,{batch_id:claim.holder});
  }
- return json({batch_id:batchId});
+ return json({batch_id:batchId,owner_token:claim.ownerToken});
 }
 
 const duplicateReceipt=(batchId:string,c:ChunkRecord)=>json({status:'duplicate',batch_id:batchId,seq:c.seq,counts:c.counts,errors:publicErrors(c.errors)});
@@ -7571,7 +8406,7 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
  if(b instanceof NextResponse)return b;
  const decoded=body.evidence.map(e=>({e,bytes:new Uint8Array(Buffer.from(e.bytes_b64,'base64'))}));
  for(const {e,bytes} of decoded)if(createHash('sha256').update(bytes).digest('hex')!==e.sha256)return err('sha256_mismatch','Evidence bytes do not match sha256',400,{series_id:e.series_id});
- const claim=await deps.db.claimChunk(body.batch_id,body.seq,body.total);   // throws chunk_total_mismatch / batch_not_open
+ const claim=await deps.db.claimChunk(body.batch_id,body.seq,body.total,body.owner_token);   // throws fenced / chunk_total_mismatch / batch_not_open
  if(claim.status==='processing')return err('chunk_in_progress','This chunk is being processed; retry later',409,{seq:body.seq});
  if(claim.status==='done')return duplicateReceipt(body.batch_id,claim.chunk);
  const batchTools=(b.tool_versions&&typeof b.tool_versions==='object'?b.tool_versions:{}) as Record<string,string>;
@@ -7597,18 +8432,22 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
   retrievals.push({evidence:{sha256:e.sha256,bytes,adapter:'akshare',fetchUrl:e.url,fetchHost:url.hostname,httpStatus:e.status,contentType:e.content_type,
    fetchedAt:new Date(fetched).toISOString(),toolVersions:{...batchTools,parser:parser.version}},parsed,claims});
  }
- const rec=await ingestEvidence(deps,{batchId:body.batch_id,adapter:'akshare',retrievals});
+ const rec=await ingestEvidence(deps,{batchId:body.batch_id,adapter:'akshare',retrievals,ownerToken:body.owner_token});   // IngestAbort propagates: no completeChunk
  counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
  // Claim identities: the batch-wide unlocated summary is computed at finish from these sets (P2-1), never per chunk.
  const claimKeys=[...new Set(body.claims.map(c=>{const p=parserFor(c.series_id),pe=p?claimPeriodEnd(c.period_label,p.spec.period):null;return pe?`${c.series_id}|${pe}`:`${c.series_id}|?${c.period_label}`;}))].sort();
- const stored=await deps.db.completeChunk(body.batch_id,body.seq,{counts,errors:storedErrors(errors),claimKeys,locatedKeys:[...located].sort()});
+ const stored=await deps.db.completeChunk(body.batch_id,body.seq,{counts,errors:storedErrors(errors),claimKeys,locatedKeys:[...located].sort()},body.owner_token);
  return json({status:'accepted',batch_id:body.batch_id,seq:body.seq,counts:stored.counts,errors:publicErrors(errors)});
 }
 
-/** Batch totals for finishBatch: chunks + derivation + failed series; every stored error plus the distinct unlocated-claims summary. */
-function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:BatchError[]},outcomes:SeriesOutcome[]):{counts:ChunkCounts;errors:BatchError[];failedSeries:string[]}{
- let counts=chunks.reduce((acc,c)=>addCounts(acc,c.counts),emptyChunkCounts());
- counts=addCounts(counts,derived.counts);
+/** Native outcomes of THIS collection = the chunk counts (chunks carry evidence only; 第 5 稿 P2-2). */
+const nativeOf=(chunks:ChunkRecord[])=>chunks.reduce((acc,c)=>addCounts(acc,c.counts),emptyChunkCounts());
+const landed=(c:ChunkCounts)=>c.inserted+c.versioned+c.duplicates>0;
+/** Batch totals for finishBatch: native chunks + derivation + failed series; every stored error plus the distinct unlocated-claims
+ *  summary, and no_native_outcomes (non-INFO) when nothing native landed, so such a batch can never look partial (第 5 稿 P2-2). */
+function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:ChunkError[]},outcomes:SeriesOutcome[]):{counts:ChunkCounts;errors:BatchError[];failedSeries:string[]}{
+ const native=nativeOf(chunks);
+ let counts=addCounts(native,derived.counts);
  const failed=outcomes.filter(o=>!o.ok);
  counts={...counts,failed:counts.failed+failed.length};
  const errors:BatchError[]=chunks.flatMap(c=>c.errors);
@@ -7619,37 +8458,52 @@ function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:Batch
  if(unlocated>0)errors.push({code:'skipped_summary',key:'unlocated_claims',message:`${unlocated} claims without a located raw value`});
  errors.push(...derived.errors);
  for(const o of failed)errors.push({code:o.code??'collect_failed',key:o.series_id});
+ if(!landed(native))errors.push({code:'no_native_outcomes'});
  return {counts,errors,failedSeries:failed.map(o=>o.series_id)};
 }
 
 async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>){
  const b=await batchRow(deps,body.batch_id,{finishing:true});
  if(b instanceof NextResponse)return b;
- const begun=await deps.db.beginFinish(body.batch_id,body.total);
+ const begun=await deps.db.beginFinish(body.batch_id,body.total,body.owner_token);   // another owner / aborted run → fenced
  if(begun.status==='incomplete')return err('chunks_incomplete','Not every chunk has arrived',409,{missing:begun.missing.slice(0,50)});
+ if(begun.status==='finished')return begun.progress.receipt?json(begun.progress.receipt):err('batch_not_running','Batch is finished',409);   // replay, re-run nothing
+ // Only the holder of the latest finish token may record steps: a concurrent finish of the same owner is fenced at its next step.
+ const fence={ownerToken:body.owner_token,finishToken:begun.finishToken};
+ const step=(name:FinishStep,data:Record<string,unknown>)=>deps.db.recordFinishStep(body.batch_id,name,data,fence);
  let p:FinishProgress=begun.progress;
- if(p.receipt)return json(p.receipt);                                                      // finished earlier: replay, re-run nothing
- if(begun.status==='finished')return err('batch_abandoned','The batch was abandoned before it finished',409);
+ const chunks=await deps.db.chunksOf(body.batch_id);
+ const native=nativeOf(chunks);const nativeLanded=landed(native);
  if(!p.derived){
-  const d=await deriveAndWrite(deps,'CN',body.batch_id);
-  p=await deps.db.recordFinishStep(body.batch_id,'derived',{counts:d.counts,errors:storedErrors(d.errors)});
+  // idempotent by nature: a retry after a crash past deriveAndWrite writes duplicates only
+  if(nativeLanded){
+   const d=await deriveAndWrite(deps,'CN',body.batch_id,body.owner_token);
+   p=await step('derived',{counts:d.counts,errors:storedErrors(d.errors)});
+  }else p=await step('derived',{skipped:'no_native_outcomes'});                                       // 第 5 稿 P2-2
  }
- const {counts,errors,failedSeries}=summarise(await deps.db.chunksOf(body.batch_id),p.derived!,body.series_outcomes);
+ const derived='counts' in p.derived!?p.derived!:{counts:emptyChunkCounts(),errors:[]};
+ const {counts,errors,failedSeries}=summarise(chunks,derived,body.series_outcomes);
  if(!p.batch_finished){
-  // b.status !== 'running' ⇒ an earlier attempt finished the batch but lost its step record: keep that status
-  const status=b.status==='running'?await finishBatch(deps.tables,body.batch_id,{counts,errors}):b.status as BatchStatus;
-  p=await deps.db.recordFinishStep(body.batch_id,'batch_finished',{status,date:deps.now().toISOString().slice(0,10)});
+  const status=await finishOnce(deps,body.batch_id,{counts,errors});
+  p=await step('batch_finished',{status,date:deps.now().toISOString().slice(0,10)});
  }
  const batchStatus=p.batch_finished!.status as BatchStatus;
  const today=p.batch_finished!.date;
+ const ok=batchStatus!=='failed'&&nativeLanded;
  if(!p.freshness_recorded){
-  const ok=batchStatus!=='failed';
-  await recordAttempt(deps.tables,DATASET,{ok,cadence:'daily',detail:{batch_id:body.batch_id,batch_status:batchStatus,failed_series:failedSeries}});
-  p=await deps.db.recordFinishStep(body.batch_id,'freshness_recorded',{ok});
+  if(!p.freshness_started){
+   p=await step('freshness_started',{ok});                                                            // checkpoint BEFORE the side effect
+   await recordAttempt(deps.tables,DATASET,{ok,cadence:'daily',detail:{batch_id:body.batch_id,batch_status:batchStatus,failed_series:failedSeries}});
+   p=await step('freshness_recorded',{ok});
+  }else{
+   // started but not recorded: recordAttempt may or may not have run; it is not idempotent (consecutive_errors), so skip it —
+   // one lost attempt record (the next collection writes one) is preferred to a double-counted error (第 5 稿 P1-4)
+   p=await step('freshness_recorded',{ok,skipped:'started_without_record'});
+  }
  }
  // TASK 11: publishRegion(region)
- const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,errors:publicErrors(errors)};
- await deps.db.recordFinishStep(body.batch_id,'receipt',receipt);
+ const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,native_counts:native,derived_counts:derived.counts,errors:publicErrors(errors)};
+ await step('receipt',receipt);
  return json(receipt);
 }
 
@@ -7672,6 +8526,10 @@ export async function POST(request:Request):Promise<NextResponse>{
   const body=parsed.body;
   return body.action==='start'?await start(deps,body):body.action==='chunk'?await chunk(deps,body):await finish(deps,body);
  }catch(e){
+  // 第 5 稿 P1-3/P2-3: a superseded owner token → 409 fenced (the collector restarts under a new batch); an unbindable quarantined
+  // row → 500 with the chunk left 'processing' (never completed), which the collector's stall path also restarts
+  if(e instanceof IngestAbort)return e.code==='fenced'?fencedResponse():err('quarantine_link_failed','A quarantined value could not be bound; the chunk was not completed',500);
+  if(e instanceof MacroDbError&&e.code==='fenced')return fencedResponse();
   // protocol refusals from the lease / chunk RPCs (MacroDbError rpc_failed with the SQL code as message) → 409
   const m=e instanceof MacroDbError||e instanceof Error?e.message:'';
   if(['chunk_total_mismatch','batch_not_open','batch_not_claimed','run_not_finishing'].includes(m))return err(m,'Ingest protocol refusal',409);
@@ -8077,7 +8935,7 @@ EOF
 - Create: `src/lib/macro/testing/seed.ts` (test-only seeding helper that goes through the public `MacroDb` contract and Task 6's `deriveAndWrite`; reused by Tasks 12–13)
 - Modify: `src/app/api/cron/macro-sync/route.ts` (Part B Task 7). Replace the marker `// TASK 11: publishRegion(region)` with the US publish call.
 - Modify: `src/app/api/macro/ingest/route.ts` (Part B Task 9). Replace the marker `// TASK 11: publishRegion(region)` in the `finish` branch with the CN publish call.
-- Modify: `src/app/api/cron/macro-sync/route.test.ts` and `src/app/api/macro/ingest/route.test.ts` (Part B). Add one case to each.
+- Modify: `src/app/api/cron/macro-sync/route.test.ts` and `src/app/api/macro/ingest/route.test.ts` (Part B). Add the cases listed in Step 4 (one cron case; six ingest cases).
 - Test: `src/lib/macro/freshness.test.ts`, `src/lib/macro/snapshots.test.ts`
 
 Spec: §4.4 steps 4–5, §4.5, §5.3 (manifest, publish regardless of coverage), §11, and §0.2 M7/M11/M16/N3. Rules in this task:
@@ -8086,6 +8944,7 @@ Spec: §4.4 steps 4–5, §4.5, §5.3 (manifest, publish regardless of coverage)
 - **Frozen history (第 4 稿 P1-8).** `history_ids` = per regime input, the last `SPARK_POINTS` (24) eligible observations up to and including the latest period (window: 24 months, 72 for quarterly series), passed as `PublishInput.historyIds`. The overview's sparklines read exactly these ids, so a later accepted quarantine or revision never changes an already published snapshot.
 - **Seeds (第 4 稿 P1-2).** `testing/seed.ts` writes **native** inputs only (`US_FEDFUNDS_EFF_D`, `US_DGS10_D`, `US_DTWEXBGS_D`, `US_CPI_INDEX`, `US_PPI_FD_INDEX`, `US_UNRATE`, …) and produces derived rows through Task 6's `deriveAndWrite` (the real derive path), exactly as cron and ingest do. `yoyPoints(indexId, [[periodEnd, yoy]])` builds the two index points (base 100 one year earlier, `100 + yoy`) whose derived yoy equals `yoy` exactly. A derived row's provenance is its ancestors' retrievals.
 - **Retry.** `stale_publisher` is retried once, starting over from a fresh read of the publish state. A second `stale_publisher` gives up with a receipt and records no failure row: another publisher won, and the active snapshot is current. Any other error records a failed snapshot and leaves the active one untouched.
+- **Idempotency and fencing (第 5 稿 P1-3/P1-4/P1-5).** `publishRegion(deps, region, today, {publishKey, fence})`: cron passes `publishKey:'cron:'+batchId`; ingest finish passes `publishKey:'ingest:'+batchId` and `fence:{batchId, ownerToken}`. A key that already published returns the stored snapshot (`replayed:true`, hook `skipped`) — so a finish that crashed after the publish but before its `published` checkpoint never publishes twice. `fenced` is a protocol abort: `publishRegion` rethrows it (no failed snapshot, no receipt). In ingest finish, only `published` (incl. replayed) and the intentional skips (`batch_failed`, `no_native_outcomes`) are checkpointed as `published`; `stale` / `failed` receipts are retryable — recorded as `publish_attempt`, the run stays `finishing`, the route answers 503 `publish_pending` and the collector retries `finish` with the same owner token.
 - **Judgment hook.** Runs only when `MACRO_JUDGMENTS_ENABLED === '1'`. Its failure never fails the publish.
 
 - [ ] **Step 1: Write the failing tests**
@@ -8290,6 +9149,25 @@ describe('publishRegion',()=>{
   expect((await db.snapshot(r.failed_snapshot_id!))!.status).toBe('failed');
   expect((await db.activeSnapshot('US'))!.snapshot_id).toBe(first.snapshot_id);
  });
+ it('a publish key replays instead of publishing twice: same snapshot, no new revision, hook skipped (第 5 稿 P1-4)',async()=>{
+  const {db}=await seeded();
+  const key='ingest:11111111-1111-4111-8111-111111111111';
+  const first=await publishRegion({db,env:{}},'US',TODAY,{publishKey:key});
+  if(first.status!=='published')throw new Error('setup');
+  expect(first.replayed).toBe(false);
+  const hook=vi.fn(async()=>{});
+  const again=await publishRegion({db,onPublished:hook,env:{MACRO_JUDGMENTS_ENABLED:'1'}},'US',TODAY,{publishKey:key});
+  expect(again).toMatchObject({status:'published',snapshot_id:first.snapshot_id,revision:first.revision,replayed:true,hook:'skipped'});
+  expect(hook).not.toHaveBeenCalled();
+  expect((await db.publishState('US')).revision).toBe(first.revision);
+ });
+ it('fenced is a protocol abort: it propagates and records no failed snapshot (第 5 稿 P1-3)',async()=>{
+  const {db}=await seeded();
+  const recordFailed=vi.fn(db.recordFailedSnapshot.bind(db));
+  const fencedDb=wrap(db,{publishSnapshot:async()=>{throw new MacroDbError('fenced');},recordFailedSnapshot:recordFailed});
+  await expect(publishRegion({db:fencedDb,env:{}},'CN',TODAY,{publishKey:'ingest:x',fence:{batchId:'x',ownerToken:'t'}})).rejects.toMatchObject({name:'MacroDbError',code:'fenced'});
+  expect(recordFailed).not.toHaveBeenCalled();
+ });
  it('judgment hook: flag off → not called; flag on → called with the published snapshot; hook failure never fails the publish',async()=>{
   const {db}=await seeded();
   const hook=vi.fn(async()=>{});
@@ -8447,7 +9325,8 @@ export async function collectionStatus(tables:TableClient,now=new Date()):Promis
 // observations (ok + batch success/partial + ancestors eligible) plus the frozen sparkline history
 // (history_ids); it is published regardless of coverage (regime=null only means "no classification").
 // Optimistic: (revision, input_revision) is read first; stale_publisher → one retry from scratch, then give
-// up. Other failures record a failed snapshot; active is untouched.
+// up. Other failures record a failed snapshot; active is untouched. 第 5 稿: an optional publish key makes a repeated
+// publish replay the stored snapshot (replayed:true); the ingest finish adds its owner fence, and `fenced` propagates.
 import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
@@ -8509,8 +9388,10 @@ export type OnPublished=(snapshot:SnapshotRecord)=>Promise<void>;
 /** Default judgment hook: F4 wires produce(macro_regime_v1, …) here later (F4 spec §11.1). */
 export const noopOnPublished:OnPublished=async()=>{};
 export interface PublishDeps{db:MacroDb;onPublished?:OnPublished;env?:Record<string,string|undefined>}
+/** publishKey: 'cron:<batch>' | 'ingest:<batch>' (第 5 稿 P1-4); fence: the ingest run's batch + owner token (P1-3). */
+export interface PublishOptions{publishKey?:string;fence?:{batchId:string;ownerToken:string|null}}
 export type PublishReceipt=
- |{status:'published';region:Region;snapshot_id:string;revision:number;observation_count:number;regime:'classified'|'null';uncovered_weight:number;attempts:number;hook:'skipped'|'ok'|'failed'}
+ |{status:'published';region:Region;snapshot_id:string;revision:number;observation_count:number;regime:'classified'|'null';uncovered_weight:number;attempts:number;hook:'skipped'|'ok'|'failed';replayed:boolean}
  |{status:'stale';region:Region;attempts:number}
  |{status:'failed';region:Region;reason:string;failed_snapshot_id:string|null;attempts:number};
 async function runHook(deps:PublishDeps,env:Record<string,string|undefined>,snapshotId:string):Promise<'skipped'|'ok'|'failed'>{
@@ -8522,8 +9403,10 @@ async function runHook(deps:PublishDeps,env:Record<string,string|undefined>,snap
   return 'ok';
  }catch(e){console.error('[macro-publish] judgment hook failed',e instanceof Error?e.message:e);return 'failed';}
 }
-/** Never throws: every outcome is a receipt. `today` is the snapshot's as_of (YYYY-MM-DD). */
-export async function publishRegion(deps:PublishDeps,region:Region,today:string):Promise<PublishReceipt>{
+const isFenced=(e:unknown)=>e instanceof MacroDbError&&e.code==='fenced';
+/** Every outcome is a receipt, except `fenced` (a superseded ingest owner; 第 5 稿 P1-3), which is rethrown so the finish stops.
+ *  `today` is the snapshot's as_of (YYYY-MM-DD). */
+export async function publishRegion(deps:PublishDeps,region:Region,today:string,opts:PublishOptions={}):Promise<PublishReceipt>{
  const env=deps.env??process.env;
  let attempts=0;
  try{
@@ -8538,16 +9421,19 @@ export async function publishRegion(deps:PublishDeps,region:Region,today:string)
      region,expectedRevision:state.revision,expectedInputRevision:state.inputRevision,asOf:today,
      methodologyVersion:METHODOLOGY_VERSION,catalogVersion:CATALOG_VERSION,observationIds:built.observations.map(o=>o.observation_id),historyIds:built.historyIds,
      catalogCounts:counts,regime:cls.regime,contributions:cls.contributions,rulesVersion:RULES_VERSION,uncoveredWeight:cls.uncoveredWeight,
+     publishKey:opts.publishKey,batchId:opts.fence?.batchId,ownerToken:opts.fence?.ownerToken,
     });
-    const hook=await runHook(deps,env,res.snapshot_id);
+    // a replay means an earlier attempt published (and ran or lost its hook); F4's produce is never re-triggered from a replay
+    const hook=res.replayed?'skipped' as const:await runHook(deps,env,res.snapshot_id);
     return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:built.observations.length,
-     regime:cls.regime?'classified':'null',uncovered_weight:cls.uncoveredWeight,attempts,hook};
+     regime:cls.regime?'classified':'null',uncovered_weight:cls.uncoveredWeight,attempts,hook,replayed:res.replayed};
    }catch(e){
     if(e instanceof MacroDbError&&e.code==='stale_publisher'){if(attempts<2)continue;return {status:'stale',region,attempts};}
     throw e;
    }
   }
  }catch(e){
+  if(isFenced(e))throw e;                                                                             // protocol abort, not a failed publication
   const reason=(e instanceof MacroDbError?e.code:e instanceof Error?e.message:String(e)).slice(0,500);
   let failed:string|null=null;
   try{failed=await deps.db.recordFailedSnapshot({region,asOf:today,methodologyVersion:METHODOLOGY_VERSION,catalogVersion:CATALOG_VERSION,reason});}
@@ -8558,21 +9444,35 @@ export async function publishRegion(deps:PublishDeps,region:Region,today:string)
 ```
 - [ ] **Step 4: Wire the two integration points**
 
-Open `src/app/api/cron/macro-sync/route.ts`. Find the line `// TASK 11: publishRegion(region)`. It sits after FRED derivation, on the non-preview path. The preview path must never reach it: if it does, stop and report NEEDS_CONTEXT. Replace the marker with the snippet below. In the snippet, `deps.db` is the route's `MacroDb`, `today` is the run's `YYYY-MM-DD`, and `batchStatus` is the `finishBatch` result. If the route uses other names for these three values, use its names, and change nothing else in the route.
+Open `src/app/api/cron/macro-sync/route.ts`. Find the line `// TASK 11: publishRegion(region)`. It sits after FRED derivation, on the non-preview path. The preview path must never reach it: if it does, stop and report NEEDS_CONTEXT. Replace the marker with the snippet below. In the snippet, `deps.db` is the route's `MacroDb`, `today` is the run's `YYYY-MM-DD`, `batchStatus` is the `finishBatch` result, `nativeLanded` is the Task 7 flag (a native inserted/versioned/duplicate outcome landed) and `batchId` the run's batch. If the route uses other names for these values, use its names, and change nothing else in the route.
 ```ts
- // Task 11 (spec §4.4 step 4–5): publish US only; a failed FRED batch leaves the last active snapshot serving.
- const publish=batchStatus==='failed'?{status:'skipped' as const,region:'US' as const,reason:'batch_failed'}:await publishRegion({db:deps.db},'US',today);
+ // Task 11 (spec §4.4 step 4–5; 第 5 稿 P1-4/P2-2): publish US only, keyed by the batch; a failed FRED batch or a run without any
+ // native outcome leaves the last active snapshot serving.
+ const publish=batchStatus==='failed'||!nativeLanded
+  ?{status:'skipped' as const,region:'US' as const,reason:nativeLanded?'batch_failed':'no_native_outcomes'}
+  :await publishRegion({db:deps.db},'US',today,{publishKey:`cron:${batchId}`});
 ```
 Add `import {publishRegion} from '@/lib/macro/snapshots';`. Add `publish` to the JSON receipt the route returns, as a top-level field named `publish`.
 
-Open `src/app/api/macro/ingest/route.ts` and go to the `finish` function. The marker there sits after the `derived`, `batch_finished` and `freshness_recorded` steps (§0.2 N3) and before the receipt. Replace it with the resumable publish step (第 4 稿 P2-4: a retried finish never publishes twice; the stored publish receipt is reused):
+Open `src/app/api/macro/ingest/route.ts` and go to the `finish` function. The marker there sits after the `derived`, `batch_finished` and freshness steps (§0.2 N3) and before the receipt. Replace it with the resumable, keyed, fenced publish step (第 4 稿 P2-4; 第 5 稿 P1-3/P1-4/P1-5/P2-2):
 ```ts
- // Task 11 (spec §0.2 M24/N3; 第 4 稿 P2-4): CN publishes only here, after the batch's derivation; a failed batch publishes
- // nothing; the outcome is recorded as the 'published' step so a retried finish reuses it instead of publishing again.
+ // Task 11 (spec §0.2 M24/N3; 第 4 稿 P2-4; 第 5 稿 P1-3/P1-4/P1-5/P2-2): CN publishes only here, after the batch's derivation,
+ // keyed 'ingest:<batch_id>' and fenced by the owner token, so a retry after a crash past the publish replays the same
+ // snapshot. A failed batch or one without native outcomes is an intentional terminal skip. Any other non-published
+ // outcome is retryable: recorded as a publish_attempt, the run stays finishing and the collector retries finish
+ // (503 publish_pending). 'published' is checkpointed only after success (incl. replay) or an intentional skip.
  let publish=p.published as Record<string,unknown>|undefined;
  if(!publish){
-  publish=batchStatus==='failed'?{status:'skipped',region:'CN',reason:'batch_failed'}:{...await publishRegion({db:deps.db},'CN',today)};
-  p=await deps.db.recordFinishStep(body.batch_id,'published',publish);
+  if(batchStatus==='failed'||!nativeLanded)publish={status:'skipped',region:'CN',reason:nativeLanded?'batch_failed':'no_native_outcomes'};
+  else{
+   const r=await publishRegion({db:deps.db},'CN',today,{publishKey:`ingest:${body.batch_id}`,fence:{batchId:body.batch_id,ownerToken:body.owner_token}});
+   if(r.status!=='published'){
+    await step('publish_attempt',{at:deps.now().toISOString(),status:r.status,reason:r.status==='failed'?r.reason:null});
+    return err('publish_pending','CN publication did not complete; retry finish with the same owner token',503,{publish:r.status});
+   }
+   publish={...r};
+  }
+  p=await step('published',publish);
  }
 ```
 Add the same import, and add `publish` to the `receipt` object (`const receipt={…,publish};`), so the stored receipt carries it.
@@ -8581,10 +9481,19 @@ The production judgment hook stays the default no-op: no `onPublished` is passed
 
 Next, add one test to each Part B route test file, reusing that file's existing mocks and request helpers. Put this mock at the top of each file, next to the other `vi.mock` calls:
 ```ts
-const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string)=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped'})));
+// Typed loosely (Record) so cases can resolve other receipts (stale / failed) or reject (fenced); 4 params like publishRegion.
+const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string,_today?:string,_opts?:unknown):Promise<Record<string,unknown>>=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped',replayed:false})));
 vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
 ```
-In the cron test file, add a case that runs a successful non-preview sync and asserts `expect(publishMock).toHaveBeenCalledWith(expect.anything(),'US',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))` and `body.publish.status==='published'`. In the same case, run a `preview=1` sync and assert that `publishMock` was not called. In the ingest test file, add a case for a successful `finish` that asserts the call with `'CN'`. The `chunk` and `start` actions must never call it. Add a second ingest case for resumption after publication (第 4 稿 P2-4): make the `receipt` step fail once (wrap `mem.recordFinishStep` so the first call with step `'receipt'` throws), post `finish` (500), post it again (200 with `publish.status==='published'`), and assert `publishMock` was called exactly once and `mem.ingestRun(id)` is `finished`; a third `finish` returns the identical stored receipt.
+In the cron test file, add a case that runs a successful non-preview sync and asserts `expect(publishMock).toHaveBeenCalledWith(expect.anything(),'US',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),{publishKey:`cron:${body.batchId}`})` and `body.publish.status==='published'`. In the same case, run a `preview=1` sync and assert that `publishMock` was not called; then make every FRED series fail after that populated run and assert `body.publish` is `{status:'skipped',region:'US',reason:'no_native_outcomes'}` and `publishMock` was not called again (第 5 稿 P2-2).
+
+In the ingest test file (helpers `startBatch` / `chunkBody` / `finishBody` / `OK` / `tokens` from Task 9), add:
+1. A successful `finish` asserts `expect(publishMock).toHaveBeenCalledWith(expect.anything(),'CN',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),{publishKey:`ingest:${id}`,fence:{batchId:id,ownerToken:tokens.get(id)}})`. The `chunk` and `start` actions must never call it.
+2. Resumption after publication (第 4 稿 P2-4): wrap `mem.recordFinishStep` so the first call with step `'receipt'` throws; post `finish` (500), post it again (200 with `publish.status==='published'`); `publishMock` was called exactly once and `mem.ingestRun(id)` is `finished`; a third `finish` returns the identical stored receipt.
+3. Crash right after the publish, before its checkpoint (第 5 稿 P1-4): wrap `mem.recordFinishStep` so the first call with step `'published'` throws; post `finish` (500), then again (200). `publishMock` was called twice, both times with the identical `{publishKey:`ingest:${id}`,fence:{…}}` options (the SQL / memory key replays the snapshot — pinned in Task 1 and Task 3 — so the second call publishes nothing new).
+4. A retryable publication failure stays in `finishing` (第 5 稿 P1-5): `publishMock.mockResolvedValueOnce({status:'stale',region:'CN',attempts:2})`; the first `finish` answers 503 `publish_pending`; `mem.ingestRun(id)` is `{state:'finishing'}` with `progress.attempts` of length 1 (`status:'stale'`) and no `published`; the second `finish` (mock back to published) answers 200 with `publish.status==='published'`; `publishMock` was called twice and freshness has exactly one row.
+5. A finish of a batch without native outcomes (all series failed, `total` 0) answers `publish:{status:'skipped',region:'CN',reason:'no_native_outcomes'}` and never calls `publishMock`.
+6. A `fenced` publish (`publishMock.mockRejectedValueOnce(new MacroDbError('fenced'))`) answers 409 `fenced` and records no `published` step.
 - [ ] **Step 5: Run tests, typecheck, lint**
 Run: `npm test -- src/lib/macro/freshness.test.ts src/lib/macro/snapshots.test.ts src/app/api/cron/macro-sync src/app/api/macro/ingest && npm run typecheck && npm run lint`
 Expected: PASS
@@ -13659,7 +14568,7 @@ export type QuarantineCommand={kind:'list';json:boolean}|{kind:'resolve';decisio
 export interface OpenItem{id:string;dataset:string;natural_key:string;reason_code:string;detail:Record<string,unknown>;payload:Record<string,unknown>;batch_id:string;created_at:string;members:QuarantineMember[]}
 export interface QuarantineDeps{listOpen():Promise<OpenItem[]>;isAdmin(userId:string):Promise<boolean>;resolve(id:string,decision:'accept'|'reject',by:string,observationId?:string):Promise<void>;log(line:string):void}
 /** SQL refusals surfaced as exit code 3 (contract codes, or rpc_failed carrying one of these messages). */
-const REFUSALS=['already_resolved','not_found','reject_only','not_member','not_quarantined','observation_required'];
+const REFUSALS=['already_resolved','not_found','reject_only','not_member','not_quarantined','member_ineligible','observation_required'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** adapter_mismatch and rule_failed:* values were never written (no quarantined observation row exists): the RPC
  *  refuses accept with reject_only; the CLI refuses first. unexpected_revision and stale_delivery are accepted by
@@ -13807,7 +14716,14 @@ launchctl kickstart -k gui/$(id -u)/com.osbornalpha.macro-collect     # 立即�
 launchctl print gui/$(id -u)/com.osbornalpha.macro-collect | head -40 # 状态与上次退出码
 ```
 
-卸载：`launchctl bootout gui/$(id -u)/com.osbornalpha.macro-collect`。单写者租约在 `macro_ingest_runs`（每个 dataset 至多一个未结束 run）：ingest `start` 返回 409 `batch_running` 即说明上一次还没结束或卡住（409 的那次批次被记为 `rejected`）；超过 2 小时的未结束 run 在下一次 `start` 时被弃置（progress `{abandoned:true}`，其批次以 `failed` 结束）。块回 409 `chunk_in_progress` 表示同一块正被另一请求处理，采集器会退避重试；某块若因崩溃一直停在 processing，该批次 2 小时后被弃置，下一次采集重送（观测写入幂等）。`finish` 可安全重试：已完成的步骤（派生、`finishBatch`、新鲜度、发布）不会重做，已结束的批次原样返回存储的回执。查看：`select batch_id,state,finish_progress from macro_ingest_runs order by created_at desc limit 5;`。
+卸载：`launchctl bootout gui/$(id -u)/com.osbornalpha.macro-collect`。单写者租约在 `macro_ingest_runs`（每个 dataset 至多一个 `open`/`finishing` run），每个 run 有一个所有者令牌（`owner_token`，`start` 返回，之后每个 `chunk`/`finish` 都带它；第 5 稿 P1-3）：
+
+- `start` 返回 409 `batch_running`：上一次还没结束或卡住（409 的那次批次被记为 `rejected`）。超过 2 小时的 live run 在下一次 `start` 时被作废（`state='aborted'`，progress `{aborted:{by,reason:'max_age'}}`，其批次以 `failed`、错误 `aborted` 结束）。
+- 块回 409 `chunk_in_progress`：同一块正被另一请求处理；采集器退避重试 4 次。若仍是 processing（请求崩溃于写入之后、`completeChunk` 之前），采集器**整次重来**：`start {takeover:true}`——旧 run 有一块 processing 超过 10 分钟（`processing_timeout`）时被作废（`reason:'stalled_chunk'`），否则回 409 并被轮询（每 60 秒，最多 15 次）——然后把内存中的全部结果按新批次重新分块发送，**从不**补发旧批次的剩余块。Vercel `maxDuration`（300 秒）小于处理超时，健康请求不会被误判。
+- 任何响应为 409 `fenced`：这个批次已被接管，旧 worker 的每一次写入（retrieval、观测、隔离链接、块、finish、发布）都被数据库拒绝；采集器同样整次重来一次（不轮询）；仍 `fenced` 则退出码 1（另一采集器持有租约）。
+- `finish` 可安全重试，而且独占：只有令牌所有者能开始（其他令牌 → `fenced`）；每次开始都换新的 `finish_token`，同一所有者的并发 finish 中较早的那个在下一步得到 `fenced`。已完成的步骤（派生、`finishBatch`、新鲜度、发布）不会重做：`finishBatch` 已结束则读回状态；新鲜度先记 `freshness_started` 再 `recordAttempt`，只见到 `freshness_started` 的重试跳过这次尝试记录（宁可少记一次也不重复计错误）；发布按 `publish_key = 'ingest:<batch_id>'` 幂等，崩溃于发布之后的重试回放同一快照。可重试的发布失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误）→ 503 `publish_pending`，`finish_progress.attempts` 记下诊断，run 保持 `finishing`，采集器以同一令牌重试；一直失败则该 run 在下一次采集（> 2 小时）时被作废——批次此前已 `success`，其数据合格，下一次成功的采集会发布。已结束的批次原样返回存储的回执。
+- 全部来源失败（本次没有任何原生 inserted/versioned/duplicate 结果）：不派生、不发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），批次 `failed`（只有隔离行落地时为 `partial`，共用 DQ 规则），`dq_freshness` 记一次失败。cron（FRED）同一规则。
+- 查看：`select batch_id,state,owner_token,finish_progress from macro_ingest_runs order by created_at desc limit 5;`（`finish_progress.aborted` 说明谁、为何作废了它；`attempts` 是发布重试的诊断）。
 
 ## 5. 采集状态与发布及时性
 
@@ -13817,7 +14733,7 @@ launchctl print gui/$(id -u)/com.osbornalpha.macro-collect | head -40 # 状态�
 
 ## 6. 快照与发布
 
-每次发布在 `publish_macro_snapshot` 里一个事务完成：区域行锁，`revision` 与 `input_revision` 都对得上才写，否则 `stale_publisher`（后到者放弃，旧 active 不动）；清单 `observation_ids` 与冻结的迷你图历史 `history_ids` 都必须**合格**——观测 ok、所属批次 `success`/`partial`、派生行的全部祖先递归合格（`macro_ineligible_ids`）——否则 `invalid_manifest`。所以未结束或失败批次留下的行永远进不了快照。新快照 active，旧 active → superseded。失败只写 `record_failed_macro_snapshot`，不动 active。概览只读快照冻结的 id，之后的修订 / 裁决只影响下一次发布。
+每次发布在 `publish_macro_snapshot` 里一个事务完成：区域行锁；带 `publish_key`（cron `'cron:<batch>'`、ingest `'ingest:<batch>'`）且该键已发布过 → 直接返回那个快照（`replayed:true`），什么都不写；否则 `revision` 与 `input_revision` 都对得上才写，否则 `stale_publisher`（后到者放弃，旧 active 不动）；清单 `observation_ids` 与冻结的迷你图历史 `history_ids` 都必须**合格**——观测 ok、所属批次 `success`/`partial`、派生行的全部祖先递归合格（`macro_ineligible_ids`）——否则 `invalid_manifest`。所以未结束或失败批次留下的行永远进不了快照。新快照 active，旧 active → superseded。失败只写 `record_failed_macro_snapshot`，不动 active。概览只读快照冻结的 id，之后的修订 / 裁决只影响下一次发布。
 
 ## 7. 隔离裁决
 
@@ -13829,8 +14745,10 @@ node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --re
 ```
 
 - 列表里每个条目下列出它的成员（`macro_quarantine_members`：被隔离的观测行 id、版本、值、状态）。一个 open 条目可能绑定同一 `series|period` 的多个不同值（`quarantine()` 复用 open 条目并保留第一次的 payload，所以**以成员为准，不看 payload**）。
-- `--by` 必须是 `profiles.role='admin'` 的用户 id（脚本先检查）。退出码：0 成功；2 非管理员；3 被 SQL 拒绝（`already_resolved`、`not_found`、`reject_only`、`not_member`、`not_quarantined`）。
-- 接受：必须用 `--observation` 指定要接受的成员；它转为 `ok`（版本号更高即最新），该条目其余成员转为 `rejected`，`input_revision+1`，写 `research_audit_log`。拒绝：全部成员转为 `rejected` + 审计。`rejected` 永久不可恢复、永不进入发布；同值再交付不会再插入，新条目只能拒绝。
+- `--by` 必须是 `profiles.role='admin'` 的用户 id（脚本先检查）。退出码：0 成功；2 非管理员；3 被 SQL 拒绝（`already_resolved`、`not_found`、`reject_only`、`not_member`、`not_quarantined`、`member_ineligible`）。
+- 接受：必须用 `--observation` 指定要接受的成员；它转为 `ok`（版本号更高即最新），该条目其余成员转为 `rejected`，`input_revision+1`，写 `research_audit_log`。拒绝：全部成员转为 `rejected` + 审计。`rejected` 永久不可恢复、永不进入发布；同值再交付（无论多新）不会再插入，只得到信息性的 `previously_rejected`（不建新条目，第 5 稿 P1-2）。
+- 同一条目可能有两个同值成员：失败批次留下的隔离行，与后来成功批次重交付时新插入的隔离行（第 5 稿 P1-6：失败批次的行不被复用）。**接受成功批次那一个**；接受失败批次的成员会被 SQL 以 `member_ineligible` 拒绝（它永远不可能进入发布）。成员所属批次的状态：`select o.observation_id, o.version, b.status from macro_observations o join ingest_batches b using (batch_id) where o.observation_id = any('{<ids>}');`。
+- 裁决与采集并发时，采集侧的链接会锁住同一条目行：若裁决先关闭了条目，采集侧得到 `quarantine_closed`，自动新建一个 open 条目并重新链接（第 5 稿 P2-3），所以裁决之后出现的新冲突值会出现在新条目下，而不会挂到已关闭的条目上。
 - 已发布快照不改；下一次发布（cron 或 ingest finish）反映裁决。需要立即反映时按 §3 手动触发。
 - 原因码：`unexpected_revision`（不可修订序列出新值）、`conflicting_rows`（同一证据内矛盾）、`stale_delivery`（迟到交付）、`adapter_mismatch`（TS 解析值 ≠ AKShare 值）、`rule_failed:<id>`（范围/单位/跳变）。`adapter_mismatch` 与 `rule_failed:*` **只能拒绝**：这两类值从未写入（没有成员），SQL 对接受抛 `reject_only`，脚本在调用前也拒绝（列表里标 `[reject-only]`）。处理办法：查上游与解析器，修好后下一次采集会正常写入，再拒绝旧条目。`conflicting_rows` 同样没有存储行（没有成员），接受得到 `not_member`；`stale_delivery` 与 `unexpected_revision` 可接受。
 
