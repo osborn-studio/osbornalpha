@@ -19,6 +19,20 @@ beforeAll(()=>{root=mkdtempSync(join(tmpdir(),'f4-sync-'));put('src/lib/m/method
 afterAll(()=>{rmSync(root,{recursive:true,force:true});});
 
 describe('planMethodologySync / applyMethodologySync (spec §4.1, §5.1b)',()=>{
+ it('ignores an orphan macro_regime@v1 DB row and registers the v2 code definition',async()=>{
+  const db=memoryJudgmentsDb();
+  const v1=method({id:'macro_regime',version:'v1'});
+  const seed=(await planMethodologySync([v1],db,opts()))[0];
+  await db.syncMethodology({...seed.row!,formula_hash:'3478e0d2b54f02b8cdcff078939605bedfe9e0e93f540c3279a002f9fe091c35'},'script',null);
+  const v2=method({id:'macro_regime',version:'v2'});
+  const plan=await planMethodologySync([v2],db,opts());
+  expect(plan).toHaveLength(1);
+  expect(plan[0]).toMatchObject({key:'macro_regime@v2',action:'register',problems:[],existing:null});
+  expect(planExitCode(plan)).toBe(0);
+  await applyMethodologySync(plan,db);
+  expect((await db.methodology('macro_regime','v1'))?.formula_hash).toBe('3478e0d2b54f02b8cdcff078939605bedfe9e0e93f540c3279a002f9fe091c35');
+  expect(await db.methodology('macro_regime','v2')).not.toBeNull();
+ });
  it('register → resync → drift when the implementation changes without a new version (exit 2, nothing written)',async()=>{
   const db=memoryJudgmentsDb();
   const p1=await planMethodologySync([method()],db,opts());

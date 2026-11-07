@@ -67,7 +67,7 @@ export async function catalogCounts(db:MacroDb,region:Region):Promise<CatalogCou
  };
 }
 export type OnPublished=(snapshot:SnapshotRecord)=>Promise<void>;
-/** Default judgment hook: F4 wires produce(macro_regime_v1, …) here later (F4 spec §11.1). */
+/** Default judgment hook: F4 wires produce(macro_regime_v2, …) here later (F4 spec §11.1). */
 export const noopOnPublished:OnPublished=async()=>{};
 export interface PublishDeps{db:MacroDb;onPublished?:OnPublished;env?:Record<string,string|undefined>}
 /** publishKey: 'cron:<batch>' | 'ingest:<batch>' (第 5 稿 P1-4); fence: the ingest run's batch + owner token (P1-3). */

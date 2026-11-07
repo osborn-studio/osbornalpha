@@ -1,6 +1,6 @@
 // src/lib/judgments/testing/fixture-methods.ts
 // Test-only methods and fixtures (not a test file; never in REGISTRY). fixtureRegimeMethod has the
-// shape of macro_regime@v1 (Task 19) over the fixture macro API: inputs = the bound macro_snapshot
+// shape of macro_regime@v2 (Task 19) over the fixture macro API: inputs = the bound macro_snapshot
 // (binding.snapshot_id, spec §6.4) + each of its macro_observations; claim = categorical primary state,
 // normalised scores as a non-probability distribution, margin_pp, catalog_version; condition =
 // macro_regime_replay for the as_of month; horizon 3 calendar months; cutoff_vintage. FIXTURE_MACRO:

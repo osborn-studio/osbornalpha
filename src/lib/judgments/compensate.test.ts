@@ -15,8 +15,8 @@ import {memoryJudgmentsDb} from './memory-judgments-db';
 import {stubInputsDb,withOverrides} from './testing/fixtures';
 import type {JudgmentsDb,MacroSnapshotRow,Methodology} from './types';
 
-const METHOD={id:'macro_regime',version:'v1'} as unknown as Methodology;
-const KEY=jobKey('produce','macro_regime','v1');
+const METHOD={id:'macro_regime',version:'v2'} as unknown as Methodology;
+const KEY=jobKey('produce','macro_regime','v2');
 const sid=(i:number)=>`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`;
 const snap=(i:number,status:MacroSnapshotRow['status']='active'):MacroSnapshotRow=>({snapshot_id:sid(i),region:'US',as_of:`2026-10-${String(i).padStart(2,'0')}`,methodology_version:'v1.0',
  catalog_version:'catalog/1',observation_ids:[],regime:null,created_at:`2026-10-${String(i).padStart(2,'0')}T06:00:00.000Z`,status});

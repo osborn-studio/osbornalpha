@@ -64,8 +64,8 @@ describe('snapshot / snapshotsSince',()=>{
   expect((await off.snapshot(pub.snapshot_id))!.regime).toBeNull();
   expect((await off.snapshotsSince(null,200)).every(r=>r.regime===null)).toBe(true);
   expect(reads).toBe(0);
-  const prev=process.env.MACRO_JUDGMENTS_ENABLED;delete process.env.MACRO_JUDGMENTS_ENABLED;
-  try{expect((await macroReadApi(db).snapshot(pub.snapshot_id))!.regime).toBeNull();}                 // default follows the flag (unset = off)
+  const prev=process.env.MACRO_JUDGMENTS_ENABLED;process.env.MACRO_JUDGMENTS_ENABLED='1';
+  try{expect((await macroReadApi(db).snapshot(pub.snapshot_id))!.regime).toBeNull();}                 // default is off even when the flag is on
   finally{if(prev!==undefined)process.env.MACRO_JUDGMENTS_ENABLED=prev;}
   expect(reads).toBe(0);
  });
@@ -103,14 +103,14 @@ describe('seriesCatalog',()=>{
 });
 
 describe('classifyAsOf',()=>{
- it('judgments disabled (explicit false or flag unset): regime null, observation_refs and catalog still returned',async()=>{
+ it('judgments disabled (explicit false or no opts even when the flag is on): regime null, observation_refs and catalog still returned',async()=>{
   const {db}=await setup();
   const on=await macroReadApi(db,{judgments:true}).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');
   expect(on.regime).not.toBeNull();
   const off=await macroReadApi(db,{judgments:false}).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');
   expect(off.regime).toBeNull();
   expect(off.observation_refs).toEqual(on.observation_refs);expect(off.catalog).toEqual(on.catalog);
-  const prev=process.env.MACRO_JUDGMENTS_ENABLED;delete process.env.MACRO_JUDGMENTS_ENABLED;
+  const prev=process.env.MACRO_JUDGMENTS_ENABLED;process.env.MACRO_JUDGMENTS_ENABLED='1';
   try{expect((await macroReadApi(db).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0')).regime).toBeNull();}
   finally{if(prev!==undefined)process.env.MACRO_JUDGMENTS_ENABLED=prev;}
  });
