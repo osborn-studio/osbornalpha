@@ -17,7 +17,7 @@ import {ratioText} from './ratio';
 
 export interface Settlement{outcome:0|1;settled_at:string;evidence_ref:string;evidence_available_date:string}
 export interface SettledForecast{forecast_id:string;forecast_sha256:string;methodology_version:string;claim:string;p:string;registered_at:string;input_snapshot_sha256:string;horizon_end:string;revision_of:string|null;settlement:Settlement}
-export type IneligibleReason='p_invalid'|'p_out_of_range'|'outcome_invalid'|'timestamp_invalid'|'evidence_too_soon'|'settled_before_horizon'|'multiple_settlements'|'revision_parent_missing'|'revision_parent_ineligible'|'revision_cycle'|'superseded_in_chain';
+export type IneligibleReason='evidence_contract_invalid'|'p_invalid'|'p_out_of_range'|'outcome_invalid'|'timestamp_invalid'|'evidence_too_soon'|'settled_before_horizon'|'multiple_settlements'|'revision_parent_missing'|'revision_parent_ineligible'|'revision_cycle'|'superseded_in_chain';
 export interface ReliabilityBucket{index:number;lower:string;upper:string;n:number;mean_p:string|null;observed_rate:string|null}
 export interface CalibrationResult{gate:'incomplete'|null;detail:{reason:'thresholds_pending_f4'}|null;thresholds:Thresholds|null;cases:CaseReport[];eligible:number;brier:string|null;reliability:ReliabilityBucket[];ineligible:{case_id:string;forecast_id:string;reason:IneligibleReason}[]}
 
@@ -37,6 +37,11 @@ const ms=(v:unknown):number=>{
 };
 
 function recordReason(f:SettledForecast):IneligibleReason|null{
+ // Shape validation is not authentication: F4 must still bind these references to visible evidence.
+ const nonblank=(v:unknown)=>typeof v==='string'&&v.trim().length>0;
+ const hash=(v:unknown)=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
+ if(![f.forecast_id,f.methodology_version,f.claim].every(nonblank)||!hash(f.forecast_sha256)||!hash(f.input_snapshot_sha256)||
+  !(f.revision_of===null||nonblank(f.revision_of))||!f.settlement||typeof f.settlement!=='object'||!nonblank(f.settlement.evidence_ref))return 'evidence_contract_invalid';
  const p=parseP(f.p);
  if(!p)return 'p_invalid';
  if(p.n>10n**BigInt(p.s))return 'p_out_of_range';
@@ -81,7 +86,7 @@ export function evaluateCalibration(forecasts:SettledForecast[],thresholds?:Thre
   const k=(seenIds.get(f.forecast_id)??0)+1;seenIds.set(f.forecast_id,k);
   const case_id=k===1?f.forecast_id:`${f.forecast_id}#${k}`;
   const r=reason.get(f)??null;
-  const right=f.settlement.outcome===0||f.settlement.outcome===1?String(f.settlement.outcome):null;
+  const right=f.settlement?.outcome===0||f.settlement?.outcome===1?String(f.settlement.outcome):null;
   cases.push({case_id,required:true,outcome:r?{result:'skipped',reason:'ineligible'}:{result:'pass'},left:parseP(f.p)?f.p:null,right,abs_diff:null,rel_diff:null,tolerance:'0',provenance:null,
    detail:{eligible:r===null,...(r?{reason:r}:{}),methodology_version:f.methodology_version,horizon_end:f.horizon_end,revision_of:f.revision_of}});
   if(r)ineligible.push({case_id,forecast_id:f.forecast_id,reason:r});else eligible.push(f);
