@@ -81,6 +81,15 @@ beforeAll(async()=>{
 });
 
 describe.each(CASES)('replay $id',c=>{
+ it('random read completion order preserves the committed hash',async()=>{
+  const expected=load<StoredManifest>(c.id,'manifest');
+  for(let run=0;run<3;run++){
+   const base=memoryStrategyPort(scenario());
+   const delay=async<T>(f:()=>Promise<T>):Promise<T>=>{await new Promise(r=>setTimeout(r,Math.random()*10));return f();};
+   const port:StrategyReadPort={...base,activeSnapshot:r=>delay(()=>base.activeSnapshot(r)),snapshot:id=>delay(()=>base.snapshot(id)),snapshotUpTo:(r,c)=>delay(()=>base.snapshotUpTo(r,c)),publishState:r=>delay(()=>base.publishState(r)),observationsByIds:ids=>delay(()=>base.observationsByIds(ids)),latestObservations:(ids,o)=>delay(()=>base.latestObservations(ids,o)),seriesHistory:(id,o)=>delay(()=>base.seriesHistory(id,o))};
+   for(const p of c.params)expect(manifestHash(await c.build(port,p))).toBe(expected[String(p)].manifest_hash);
+  }
+ });
  it('the committed fixture files exist',()=>{
   expect(existsSync(file(c.id,'manifest'))).toBe(true);expect(existsSync(file(c.id,'expected'))).toBe(true);
  });

@@ -8,6 +8,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {F4Mark,F4Summary,ManifestKind,PlaybookView,PolicyResponseView,ReviewFacts,StrategyManifest,TransmissionView} from '@/lib/macro/strategy/contract';
 import {memoryStrategyDb,type StrategyDb} from '@/lib/macro/strategy/db';
 import type {F4CardLite} from '@/lib/macro/strategy/f4-client';
+import {strategyMemo} from '@/lib/macro/strategy/memo';
 
 const m=vi.hoisted(()=>({user:vi.fn(),port:vi.fn(),db:null as unknown,code:vi.fn(),trManifest:vi.fn(),buildTransmission:vi.fn(),buildPlaybooks:vi.fn(),selectF4Mark:vi.fn(),
  prManifest:vi.fn(),buildPolicyResponse:vi.fn(),ctManifest:vi.fn(),buildCycleTable:vi.fn(),runReview:vi.fn(),handle:vi.fn(),recover:vi.fn(),listDeviationCases:vi.fn(),createF4Client:vi.fn(),card:vi.fn(),detail:vi.fn()}));
@@ -39,7 +40,7 @@ import {GET as reviewsIndex} from './reviews/route';
 import {GET as transmission} from './transmission/route';
 
 const USER='11111111-1111-4111-8111-111111111111',REQ='22222222-2222-4222-8222-222222222222',MID='33333333-3333-4333-8333-333333333333',RID='44444444-4444-4444-8444-444444444444';
-const PORT={tag:'port'};
+const PORT={tag:'port',activeSnapshot:vi.fn(),publishState:vi.fn(),catalogVersion:vi.fn()};
 const U='https://alpha.example/api/macro/strategy';
 const get=(path:string)=>new Request(`${U}${path}`);
 const post=(body:unknown)=>new Request(`${U}/explanations`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -82,6 +83,7 @@ const saved=Object.fromEntries(ENV_KEYS.map(k=>[k,process.env[k]]));
 
 beforeEach(()=>{
  vi.clearAllMocks();
+ strategyMemo.clear();PORT.activeSnapshot.mockImplementation(async(r:string)=>r==='US'?FROZEN_US:null);PORT.publishState.mockResolvedValue(null);PORT.catalogVersion.mockReturnValue('cat/1');
  process.env.MACRO_STRATEGY_ENABLED='1';delete process.env.MACRO_JUDGMENTS_ENABLED;process.env.CRON_SECRET='cron-secret';
  m.user.mockResolvedValue({data:{user:{id:USER}},error:null});
  m.port.mockReturnValue(PORT);m.code.mockReturnValue('abc123');
@@ -182,6 +184,40 @@ describe('parameters (whitelist, 400 invalid_parameter:<name>)',()=>{
 });
 
 describe('fact routes',()=>{
+ it.each([['transmission',()=>transmission(get('/transmission?region=US')),m.trManifest],['policy-response',()=>policyResponse(get('/policy-response?window=3')),m.prManifest],['cycle-table',()=>cycleTable(get('/cycle-table?boundary=event_day')),m.ctManifest]] as const)('%s memo hits, invalidates on input revision, and single flights',async(_name,call,builder)=>{
+  PORT.publishState.mockResolvedValue({revision:1,input_revision:1});
+  const put=vi.spyOn(db,'putManifest');
+  const first=await call(),firstBody=await first.json();expect(first.headers.get('X-Macro-Strategy-Memo')).toBe('miss');
+  const second=await call();expect(await second.json()).toEqual(firstBody);expect(second.headers.get('X-Macro-Strategy-Memo')).toBe('hit');
+  expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
+  PORT.publishState.mockResolvedValue({revision:1,input_revision:2});
+  expect((await call()).headers.get('X-Macro-Strategy-Memo')).toBe('miss');expect(builder).toHaveBeenCalledTimes(2);
+  strategyMemo.clear();builder.mockClear();put.mockClear();
+  const both=await Promise.all([call(),call()]);expect(both.map(r=>r.headers.get('X-Macro-Strategy-Memo'))).toEqual(['miss','coalesced']);
+  expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
+ });
+ it('without either snapshot, policy and cycle builds use request time and bypass the memo',async()=>{
+  PORT.activeSnapshot.mockResolvedValue(null);
+  for(const [call,builder] of [[()=>policyResponse(get('/policy-response?window=3')),m.prManifest],[()=>cycleTable(get('/cycle-table?boundary=event_day')),m.ctManifest]] as const){
+   strategyMemo.clear();builder.mockClear();
+   const a=await call(),b=await call();expect([a.headers.get('X-Macro-Strategy-Memo'),b.headers.get('X-Macro-Strategy-Memo')]).toEqual(['miss','miss']);
+   expect(builder).toHaveBeenCalledTimes(2);
+  }
+  expect((await transmission(get('/transmission?region=US'))).status).toBe(404);
+ });
+ it('transmission evaluates judgments on a memo hit',async()=>{
+  process.env.MACRO_JUDGMENTS_ENABLED='1';
+  await transmission(get('/transmission?region=US'));
+  const r=await transmission(get('/transmission?region=US'));
+  expect(r.headers.get('X-Macro-Strategy-Memo')).toBe('hit');expect(m.card).toHaveBeenCalledTimes(2);
+ });
+ it('different fact params occupy separate memo entries',async()=>{
+  await transmission(get('/transmission?region=US'));await transmission(get('/transmission?region=CN'));
+  await policyResponse(get('/policy-response?window=1'));await policyResponse(get('/policy-response?window=6'));
+  await cycleTable(get('/cycle-table?boundary=event_day'));await cycleTable(get('/cycle-table?boundary=month_end'));
+  expect(m.trManifest).toHaveBeenCalledTimes(2);expect(m.prManifest).toHaveBeenCalledTimes(2);expect(m.ctManifest).toHaveBeenCalledTimes(2);
+  expect(strategyMemo.stats().size).toBe(6);
+ });
  it('transmission, judgment layer off: one stored manifest feeds flow and playbooks; judgment_status disabled, no f4 field, F4 never built',async()=>{
   const r=await transmission(get('/transmission?region=US'));
   expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('private, max-age=300');
@@ -190,7 +226,7 @@ describe('fact routes',()=>{
   expect('f4' in out).toBe(false);
   expect(JSON.stringify(out)).not.toMatch(/judgment_id|f4Mark|contributions|distribution|margin_pp/);
   expect(m.createF4Client).not.toHaveBeenCalled();expect(m.selectF4Mark).not.toHaveBeenCalled();
-  expect(m.trManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',region:'US'});
+  expect(m.trManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',region:'US',snapshots:{US:FROZEN_US,CN:null}});
   const stored=m.buildTransmission.mock.calls[0][0];
   expect(stored).toEqual(await db.manifest(stored.manifest_id));
   expect(m.buildTransmission.mock.calls[0]).toHaveLength(1);   // the view reads the region from the manifest params
@@ -217,6 +253,7 @@ describe('fact routes',()=>{
   expect(await json(r)).toEqual({transmission:TV,playbooks:PB,judgment_status:'unavailable'});
  });
  it('transmission without any active snapshot → 404 no_published_snapshot, nothing stored',async()=>{
+  PORT.activeSnapshot.mockResolvedValue(null);
   m.trManifest.mockResolvedValueOnce(null);
   const r=await transmission(get('/transmission?region=CN'));
   expect(r.status).toBe(404);expect(await codeOf(r)).toBe('no_published_snapshot');
@@ -225,11 +262,11 @@ describe('fact routes',()=>{
  it('policy-response and cycle-table: stored manifest → view for the requested window / boundary',async()=>{
   let r=await policyResponse(get('/policy-response?window=6'));
   expect(r.status).toBe(200);expect(await r.json()).toEqual(PV);
-  expect(m.prManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',window:6});
+  expect(m.prManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',window:6,snapshots:{US:FROZEN_US,CN:null}});
   expect(m.buildPolicyResponse.mock.calls[0]).toEqual([expect.objectContaining({body:body('policy_response')})]);
   r=await cycleTable(get('/cycle-table?boundary=month_end'));
   expect(r.headers.get('cache-control')).toBe('private, max-age=300');
-  expect(m.ctManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',boundary:'month_end'});
+  expect(m.ctManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',boundary:'month_end',snapshots:{US:FROZEN_US,CN:null}});
   expect(m.buildCycleTable.mock.calls[0]).toEqual([expect.objectContaining({body:body('cycle_table')})]);
  });
  it('manifest: stored body by id; unknown id → 404 manifest_not_found',async()=>{

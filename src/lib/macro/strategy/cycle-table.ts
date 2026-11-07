@@ -1,6 +1,5 @@
 // src/lib/macro/strategy/cycle-table.ts
-// Policy action episodes × asset interval changes (spec 2026-11-07 §5.5; table macro-cycle-table/1, episodes
-// macro-policy-episodes/1). An episode is a run of same-direction §5.4 events: start = first event, end = LAST event
+// Policy action episodes × asset interval changes (spec 2026-11-07 §5.5; table macro-cycle-table/1, episodes macro-policy-episodes/1). An episode is a run of same-direction §5.4 events: start = first event, end = LAST event
 // (P2 policyCycles instead extends to the day before a flip and adds plateaus — a different definition). A §5.4 gap breaks
 // a run and marks the episode before it gap_after; left_censored = the first episode; ongoing = the last episode when the
 // manifest cutoff is less than 12 months after its last event (a label only; end stays the last event).
@@ -14,6 +13,7 @@
 // canonical JSON text}); buildCycleTable reads both only from there (no caller override), so each has its own manifest
 // identity. The cutoff becomes a date through utcDate (UTC calendar date of the instant, any offset). A history_truncated gap (event source read truncated) yields no
 // episodes and stays in view.gaps, so the page shows the truncation instead of an empty history.
+// Episode and column histories load concurrently.
 import {VERSIONS} from './contract';
 import type {Boundary,CycleCell,CycleColumn,CycleTableView,Episode,EventGap,FrozenSeriesDef,ManifestInput,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {canonicalJson} from './hash';
@@ -78,20 +78,22 @@ export function policyEpisodes(events:readonly StrategyPolicyEvent[],gaps:readon
  return out;
 }
 
-export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;boundary:Boundary;columns?:readonly string[]}):Promise<StrategyManifest>{
+export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;boundary:Boundary;columns?:readonly string[];snapshots?:{US:import('./contract').SnapshotRecord|null;CN:import('./contract').SnapshotRecord|null}}):Promise<StrategyManifest>{
  const columns=o.columns??CYCLE_COLUMNS_V1;
- const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
+ const pair=o.snapshots?null:await Promise.all([port.activeSnapshot('US'),port.activeSnapshot('CN')]);
+ const snapshots=o.snapshots??{US:pair![0],CN:pair![1]};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
- const {events,gaps}=await readPolicyEvents(b);
  const live=port.catalog().map(freezeDef);
+ const histories:Promise<unknown>[]=[];
  for(const id of columns){
   const c=resolveColumn(id,live);
   const d=b.def(id);if(d?.aliasOf)b.def(d.aliasOf);
   if(c.restricted)continue;
-  if(c.daily_series)await b.history(c.daily_series,COL_PURPOSE,'history');
-  if(c.monthly_series)await b.history(c.monthly_series,COL_PURPOSE,'month_end');
+  if(c.daily_series)histories.push(b.history(c.daily_series,COL_PURPOSE,'history'));
+  if(c.monthly_series)histories.push(b.history(c.monthly_series,COL_PURPOSE,'month_end'));
  }
+ const [{events,gaps}]=await Promise.all([readPolicyEvents(b),...histories]);
  return b.build({kind:'cycle_table',params:{boundary:o.boundary,columns:canonicalJson(columns)},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 

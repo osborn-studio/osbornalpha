@@ -3,6 +3,7 @@
 // the memory MacroDb in unit tests and on supabaseMacroDb in production (port.ts strategyPort()). Semantics are those of
 // memoryStrategyPort: ok rows only, highest version <= asOf, ascending history, newest non-failed snapshot with ties on
 // created_at -> greatest snapshot_id, Error('truncated') when a bounded read cannot finish.
+// The port exposes publish state for memo invalidation.
 import {MACRO_CATALOG,CATALOG_VERSION} from '../catalog';
 import {MacroDbError} from '../db';
 import type {MacroDb} from '../db';
@@ -47,6 +48,7 @@ export function macroDbStrategyPort(db:MacroDb,opts:WiringOptions={}):StrategyRe
  const rules=rulesView();
  return {
   async activeSnapshot(region){const s=await db.activeSnapshot(region);return s?toSnapshot(s):null;},
+  async publishState(region){try{const s=await db.publishState(region);return {revision:s.revision,input_revision:s.inputRevision};}catch(e){if(e instanceof MacroDbError&&e.code==='not_found')return null;throw e;}},
   async snapshot(id){const s=await db.snapshot(id);return s?toSnapshot(s):null;},
   async snapshotUpTo(region,cutoff){
    const cut=ms(cutoff);

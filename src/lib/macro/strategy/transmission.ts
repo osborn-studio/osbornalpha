@@ -6,6 +6,7 @@
 // manifest and reads the region from its params: observed → the 'node:<series>:latest' input; catalog
 // missing / restricted → that state with the catalog reason; derived spread → exact a − b when both inputs share a
 // period_end, else 'missing' with the reason; edges are always mechanism assumptions.
+// Node reads are batched.
 import {VERSIONS} from './contract';
 import type {Bilingual,FrozenSeriesDef,NodeView,Region,Stage,StoredManifest,StrategyManifest,TransmissionView} from './contract';
 import {PLAYBOOKS_V1} from './data/playbooks-v1';
@@ -36,24 +37,27 @@ export function regionParam(m:StrategyManifest):Region{
  if(r!=='US'&&r!=='CN')throw new Error('invalid_manifest_params:region');
  return r;
 }
-export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;region:Region;stages?:Record<Region,StageDef[]>;playbooks?:readonly PlaybookDef[]}):Promise<StrategyManifest|null>{
+export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;region:Region;stages?:Record<Region,StageDef[]>;playbooks?:readonly PlaybookDef[];snapshots?:{US:import('./contract').SnapshotRecord|null;CN:import('./contract').SnapshotRecord|null}}):Promise<StrategyManifest|null>{
  const stages=o.stages??TRANSMISSION_V1,playbooks=o.playbooks??PLAYBOOKS_V1;
- const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
+ const pair=o.snapshots?null:await Promise.all([port.activeSnapshot('US'),port.activeSnapshot('CN')]);
+ const snapshots=o.snapshots??{US:pair![0],CN:pair![1]};
  if(!snapshots.US&&!snapshots.CN)return null;   // page: "no published snapshot yet"
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots);
  const done=new Set<string>();
- const readNodeSeries=async(id:string)=>{
+ const readNodeSeries=(id:string)=>{
   const d=b.def(id);if(!d||d.status!=='active')return;
   const target=readSeries(d),td=b.def(target);
   if(!td||td.status!=='active')return;   // an alias reads only an existing, active target
   if(done.has(target))return;done.add(target);
-  await b.snapshotValue(target,NODE_PURPOSE);
+  return target;
  };
+ const targets:string[]=[];
  for(const region of ['US','CN'] as const)for(const st of stages[region])for(const n of st.nodes){
-  if(n.kind==='observed')await readNodeSeries(n.seriesId);
-  else if(n.kind==='derived'){await readNodeSeries(n.a);await readNodeSeries(n.b);}
+  if(n.kind==='observed'){const id=readNodeSeries(n.seriesId);if(id)targets.push(id);}
+  else if(n.kind==='derived')for(const x of [n.a,n.b]){const id=readNodeSeries(x);if(id)targets.push(id);}
  }
+ await b.snapshotValues(targets,NODE_PURPOSE);
  for(const p of playbooks)for(const id of p.watch)b.def(id);
  return b.build({kind:'transmission',params:{region:o.region},methodVersion:VERSIONS.transmission,codeVersion:o.codeVersion,extra:{rules:port.rules()}});
 }

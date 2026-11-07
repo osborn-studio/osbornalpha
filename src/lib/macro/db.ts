@@ -1,5 +1,5 @@
 // src/lib/macro/db.ts
-// MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4…P2-4): the only way macro
+// MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4…P2-4) is the only way macro
 // code touches the database. supabaseMacroDb writes through the service-role client's RPCs (no role has table
 // writes) and reads through the anon client, so RLS applies (ok observations only); publish state, chunk
 // receipts, ingest runs, quarantine members, judgments (regimeOf: macro_regime_results is service-only, 第 6 稿 P1-2) and the
@@ -10,6 +10,7 @@
 // MacroDbError codes; any other failure is rpc_failed with the original message (invalid_value_text, member_ineligible, chunk_total_mismatch,
 // chunk_not_processing, not_quarantined, evidence_mismatch, catalog_version_conflict, constraint texts, …). The new RPCs are not in
 // Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
+// Counted strategy histories use bounded parallel pages; id chunks preserve result order.
 import type {SupabaseClient} from '@supabase/supabase-js';
 import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
 
@@ -207,7 +208,10 @@ export function publishArgs(i:PublishInput){
 /** Interval literal for the lease RPC (ms precision; PostgreSQL parses 'N milliseconds'). */
 const msInterval=(ms:number)=>`${Math.max(1,Math.round(ms))} milliseconds`;
 
-interface Res{data:unknown;error:PgErrorLike|null}
+// MACRO-P3-LATENCY
+export const HISTORY_PAGE_CONCURRENCY=8;
+interface Res{data:unknown;error:PgErrorLike|null;count?:number|null}
+// /MACRO-P3-LATENCY
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained
 // Database type lacks the Relationships/Views that supabase-js inference now needs.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<Res>;from:(table:string)=>any}
@@ -360,14 +364,37 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
   },
   async seriesHistory(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
-   const make=()=>{
-    let q=anon.from('macro_observations').select('*').eq('series_id',id).eq('status','ok');
+   // MACRO-P3-LATENCY
+   const filtered=(q:any)=>{
+    q=q.eq('series_id',id).eq('status','ok');
     if(o.from)q=q.gte('period_end',o.from);
     if(o.to)q=q.lte('period_end',o.to);
     if(o.asOf)q=q.lte('available_at',o.asOf);
+    return q;
+   };
+   const make=()=>{
+    const q=filtered(anon.from('macro_observations').select('*'));
     return q.order('period_end',{ascending:true}).order('version',{ascending:true}) as Query;
    };
-   const got=await pageAll(make,o.maxRows+1);
+   const limit=o.maxRows+1;
+   const [first,countResult]=await Promise.all([rows(make().range(0,Math.min(READ_PAGE,limit)-1)),filtered(anon.from('macro_observations').select('*',{count:'exact',head:true})) as PromiseLike<Res>]);
+   if(countResult.error)throw toMacroDbError(countResult.error);
+   let got:Record<string,unknown>[];
+   if(typeof countResult.count!=='number'||!Number.isInteger(countResult.count)||countResult.count<0){
+    got=[...first];
+    for(let from=READ_PAGE;first.length===Math.min(READ_PAGE,limit)&&got.length<limit;from+=READ_PAGE){
+     const size=Math.min(READ_PAGE,limit-got.length),part=await rows(make().range(from,from+size-1));
+     got.push(...part);if(part.length<size)break;
+    }
+   }else{
+    const n=Math.min(countResult.count,limit),starts=Array.from({length:Math.max(0,Math.ceil(n/READ_PAGE)-1)},(_,i)=>(i+1)*READ_PAGE);
+    const pages:Record<string,unknown>[][]=Array(starts.length);let next=0;
+    await Promise.all(Array.from({length:Math.min(HISTORY_PAGE_CONCURRENCY,starts.length)},async()=>{
+     for(;;){const index=next++;if(index>=starts.length)return;const from=starts[index];pages[index]=await rows(make().range(from,Math.min(from+READ_PAGE,n)-1));}
+    }));
+    got=[...first,...pages.flat()];
+   }
+   // /MACRO-P3-LATENCY
    if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
    return highestPerPeriod(got.map(observationFromRow));
   },
@@ -377,10 +404,12 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    return got.map(observationFromRow);
   },
   async observationsByIds(ids){
+   // MACRO-P3-LATENCY
    const uniq=[...new Set(ids)];const found=new Map<string,ObservationRow>();
-   for(let i=0;i<uniq.length;i+=IN_CHUNK){
-    for(const r of await rows(anon.from('macro_observations').select('*').in('observation_id',uniq.slice(i,i+IN_CHUNK)).eq('status','ok')))found.set(String(r.observation_id),observationFromRow(r));
-   }
+   const chunks=[] as Promise<Record<string,unknown>[]>[];
+   for(let i=0;i<uniq.length;i+=IN_CHUNK)chunks.push(rows(anon.from('macro_observations').select('*').in('observation_id',uniq.slice(i,i+IN_CHUNK)).eq('status','ok')));
+   for(const part of await Promise.all(chunks))for(const r of part)found.set(String(r.observation_id),observationFromRow(r));
+   // /MACRO-P3-LATENCY
    return uniq.flatMap(id=>{const o=found.get(id);return o?[o]:[];});
   },
   async publishState(region){
