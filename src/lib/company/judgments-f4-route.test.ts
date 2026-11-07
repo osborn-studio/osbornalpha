@@ -26,17 +26,17 @@ describe('company consumes the real F4 list route',()=>{
   for(const asOf of [null,'2026-03-01']){
    const response=await route(asOf);
    expect(response.status).toBe(200);
-   const parsed=checkJudgmentsResponse(await response.json(),asOf);
+   const parsed=checkJudgmentsResponse(await response.json(),asOf,issuer);
    expect(parsed.ok).toBe(true);
    if(parsed.ok){expect(parsed.cards).toHaveLength(1);expect(displayPercent(parsed.cards[0])).toBeNull();expect(visiblePercent(parsed.cards[0])).toBeNull();}
   }
   const before=await route('2026-02-28');
-  expect(checkJudgmentsResponse(await before.json(),'2026-02-28')).toEqual({ok:true,cards:[]});
+  expect(checkJudgmentsResponse(await before.json(),'2026-02-28',issuer)).toEqual({ok:true,cards:[]});
  });
  it('rejects a real route card with incompatible F4 fields',async()=>{
   db=await seededRoute();
   const body=await (await route(null)).json();
   body.cards[0].subject.key=42;
-  expect(checkJudgmentsResponse(body,null)).toEqual({ok:false,reason:'malformed'});
+  expect(checkJudgmentsResponse(body,null,issuer)).toEqual({ok:false,reason:'malformed'});
  });
 });
