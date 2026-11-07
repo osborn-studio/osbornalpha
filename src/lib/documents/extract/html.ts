@@ -2,8 +2,9 @@
 // HTML / iXBRL / XML text → PageLayout[] (spec §7.2). One linear pass over the markup (indexOf on '<'
 // and '>', each position visited a bounded number of times: unterminated '<a' / '<!--' cannot go
 // quadratic), no regex over the whole document with nested quantifiers.
-// - Charset: UTF-8 BOM, else <meta charset=…> / http-equiv content-type in the first 4 KB, else UTF-8,
-//   else windows-1252 when the bytes are not valid UTF-8. Input is capped at MAX_DOC_BYTES.
+// - Charset: a UTF-8 BOM, or bytes that are valid UTF-8 and carry no ACTIVE <meta charset=…> /
+//   http-equiv content-type (first 4 KB; comments, scripts, styles and other non-element text are
+//   ignored) mean UTF-8; an active meta names the charset; invalid UTF-8 without one is windows-1252. Input is capped at MAX_DOC_BYTES.
 // - Pages: an <hr> (split after it); an element whose style has page-break-before|break-before
 //   always|page (split before its start tag); page-break-after|break-after always|page (split after
 //   its matching closing tag, or at once for void / self-closing elements). No marker → one page.
@@ -37,12 +38,32 @@ function decodeEntity(m:string,e:string):string{
 }
 const decodeEntities=(t:string)=>t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,decodeEntity);
 
+/** The charset of the first ACTIVE <meta> in `head` (comments, script/style bodies and attribute-less text skipped), or null. */
+function activeMetaCharset(head:string):string|null{
+ let i=0;
+ while(i<head.length){
+  const lt=head.indexOf('<',i);
+  if(lt<0)return null;
+  if(head.startsWith('<!--',lt)){const e=head.indexOf('-->',lt+4);if(e<0)return null;i=e+3;continue;}
+  const gt=head.indexOf('>',lt);
+  const m=/^<([a-z][\w:.-]*)/i.exec(head.slice(lt,lt+40));
+  if(!m){i=lt+1;continue;}
+  const name=m[1].toLowerCase();
+  if(name==='script'||name==='style'){const e=new RegExp(`</${name}\\s*>`,'i').exec(head.slice(lt));if(!e)return null;i=lt+e.index+e[0].length;continue;}
+  const tag=gt<0?head.slice(lt):head.slice(lt,gt+1);
+  i=gt<0?head.length:gt+1;
+  if(name!=='meta')continue;
+  const c=/\bcharset\s*=\s*["']?\s*([\w:.-]+)/i.exec(tag);
+  if(c)return c[1];
+ }
+ return null;
+}
 export function decodeHtmlBytes(bytes:Uint8Array):string{
  if(bytes.length>=3&&bytes[0]===0xef&&bytes[1]===0xbb&&bytes[2]===0xbf)return new TextDecoder('utf-8').decode(bytes.subarray(3));
- const head=new TextDecoder('latin1').decode(bytes.subarray(0,4096));
- const m=/<meta\b[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/i.exec(head);
- if(m){try{return new TextDecoder(m[1]).decode(bytes);}catch{/* unknown label: sniff below */}}
- try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return new TextDecoder('windows-1252').decode(bytes);}
+ const label=activeMetaCharset(new TextDecoder('latin1').decode(bytes.subarray(0,4096)));
+ if(label){try{return new TextDecoder(label).decode(bytes);}catch{/* unknown label: sniff */}}
+ try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{/* not UTF-8 */}
+ return new TextDecoder('windows-1252').decode(bytes);
 }
 
 export interface HtmlBudget{remainingMs():number}

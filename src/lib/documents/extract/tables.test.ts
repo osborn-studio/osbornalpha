@@ -111,17 +111,35 @@ describe('detectTables review fixes',()=>{
   for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
   expect(t.col_x0).toEqual([60,300,400,480]);
  });
- it('wrapped labels: label-only lines at the same x above/below a body row join its label (extra col-0 cells), headings with a colon do not',()=>{
+ it('wrapped labels: only a strictly nearer neighbour at <= 1.2 em and the same x continues a row; headings, titles and notes never do',()=>{
   const lab=(y:number,s:string,x=60):RawItem=>({str:s,x,y,w:60,h:10});
-  const items=[lab(130,'Profit for the year attributable'),lab(118,'to owners of the Company'),{str:'300',x:300,y:118,w:20,h:10},{str:'280',x:400,y:118,w:20,h:10},
-   lab(104,'Revenue'),{str:'5',x:300,y:104,w:20,h:10},{str:'6',x:400,y:104,w:20,h:10},lab(92,'from contracts'),
-   lab(78,'Attributable to:'),lab(64,'Owners',70),{str:'7',x:300,y:64,w:20,h:10},{str:'8',x:400,y:64,w:20,h:10}] as RawItem[];
+  const num=(y:number,a:string,b:string):RawItem[]=>[{str:a,x:300,y,w:20,h:10},{str:b,x:400,y,w:20,h:10}];
+  const items=[lab(160,'Notes to the accounts',200),lab(130,'Profit for the year attributable'),lab(118,'to owners of the Company'),...num(118,'300','280'),
+   lab(104,'Revenue'),...num(104,'5','6'),lab(92,'from contracts'),
+   lab(78,'Attributable to:'),lab(64,'Owners',70),...num(64,'7','8')] as RawItem[];
   const {text,lines}=layoutFromItems(items);
   const [t]=detectTables(lines);
   expect(t.row_count).toBe(4);
   expect(t.cells.filter(c=>c.col===0).map(c=>[c.row,c.text])).toEqual([[0,'Profit for the year attributable'],[0,'to owners of the Company'],[1,'Revenue'],[1,'from contracts'],[2,'Attributable to:'],[3,'Owners']]);
   for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
-  expect(t.header_lines).toEqual([]);
+  expect(t.header_lines.map(l=>l.text)).toEqual(['Notes to the accounts']);
+ });
+ it('R1: equal spacing or 1.4 em never attaches (the recheck reproduction: "from contracts…" must not join Cost)',()=>{
+  const lab=(y:number,s:string):RawItem=>({str:s,x:60,y,w:60,h:10});
+  const num=(y:number,a:string,b:string):RawItem[]=>[{str:a,x:300,y,w:20,h:10},{str:b,x:400,y,w:20,h:10}];
+  for(const gap of [14,12]){
+   const [t]=detectTables(layoutFromItems([lab(100,'Revenue'),...num(100,'100','200'),lab(100-gap,'from contracts with customers'),lab(100-2*gap,'Cost'),...num(100-2*gap,'100','200')]).lines);
+   const owner=t.cells.find(c=>c.text==='from contracts with customers');
+   expect(owner).toBeDefined();
+   expect(owner?.row).toBe(1);                 // its own label-only row, not a cell of Cost (row 2)
+   expect(t.cells.find(c=>c.text==='Cost')?.row).toBe(2);
+   expect(t.row_count).toBe(3);
+  }
+  // a statement title and note text next to the table are never swallowed, however close
+  const items=[lab(120,'Consolidated Statement of Profit or Loss'),lab(108,'Revenue'),...num(108,'1','2'),lab(96,'Cost'),...num(96,'3','4'),lab(83,'See accompanying notes')];
+  const [t2]=detectTables(layoutFromItems(items).lines);
+  expect(t2.cells.some(c=>/Consolidated|accompanying/.test(c.text))).toBe(false);
+  expect(t2.header_lines.map(l=>l.text)).toEqual(['Consolidated Statement of Profit or Loss']);
  });
  it('header block: at most 6 lines, stops at a line wider than the table',()=>{
   const hdr:RawItem[]=Array.from({length:9},(_,k)=>({str:`H${k}`,x:300,y:300-k*14,w:20,h:10}));
@@ -131,5 +149,36 @@ describe('detectTables review fixes',()=>{
   expect(t.header_lines.map(l=>l.text)).toEqual(['H3','H4','H5','H6','H7','H8']);
   const [t2]=detectTables(L([wide,...hdr.slice(5),...body]));
   expect(t2.header_lines.map(l=>l.text)).toEqual(['H5','H6','H7','H8']);
+ });
+});
+
+describe('recheck fixes (R2, R3)',()=>{
+ it('R2: two independently complete numbers two points apart are never concatenated; fragments still merge',()=>{
+  const r=(y:number,l:string,a:string,b:string,c?:string):RawItem[]=>[{str:l,x:60,y,w:30,h:10},{str:a,x:300,y,w:25,h:10},{str:b,x:327,y,w:25,h:10},...(c?[{str:c,x:400,y,w:25,h:10}]:[])];
+  const {text,lines}=layoutFromItems([...r(100,'Revenue','1,234','3,456'),...r(86,'Cost','5,678','7,890')]);
+  expect(lines[0].text).toBe('Revenue 1,2343,456');   // text layer: no space inserted (gap 2pt <= quarter em)
+  const [t]=detectTables(lines);
+  expect(t.cells.filter(c=>c.numeric).map(c=>c.text)).toEqual(['1,234','3,456','5,678','7,890']);
+  for(const c of t.cells)expect(cpSlice(text,c.char_start,c.char_end)).toBe(c.text);
+  const three=detectTables(layoutFromItems([...r(100,'Revenue','1,234','3,456','9'),...r(86,'Cost','5,678','7,890','8')]).lines)[0];
+  expect(three.cells.filter(c=>c.numeric).map(c=>c.text)).toEqual(['1,234','3,456','9','5,678','7,890','8']);
+  // genuine fragments: sign + number, split inside one token (gap < 0.15 em)
+  const f=detectTables(layoutFromItems([
+   {str:'A',x:60,y:100,w:10,h:10},{str:'-',x:300,y:100,w:3,h:10},{str:'12',x:303,y:100,w:10,h:10},{str:'45',x:400,y:100,w:10,h:10},
+   {str:'B',x:60,y:86,w:10,h:10},{str:'1,2',x:300,y:86,w:15,h:10},{str:'34',x:315.5,y:86,w:10,h:10},{str:'6',x:400,y:86,w:10,h:10}]).lines)[0];
+  expect(f.cells.filter(c=>c.numeric).map(c=>c.text)).toEqual(['-12','45','1,234','6']);
+ });
+ it('R3: only a leading period phrase or an exact notes word makes a year-shaped row a header',()=>{
+  const row=(y:number,l:string,a:string,b:string):RawItem[]=>[{str:l,x:60,y,w:90,h:10},{str:a,x:300,y,w:30,h:10},{str:b,x:400,y,w:30,h:10}];
+  const t=detectTables(layoutFromItems([...row(100,'Revenue','3000','2800'),...row(86,'Prior year ended adjustment','2025','2024'),...row(72,'Profit','975','776')]).lines);
+  expect(t).toHaveLength(1);
+  expect(t[0].row_count).toBe(3);
+  for(const label of ['Year ended 31 December','For the year ended 31 December','Notes','附註','截至十二月三十一日止年度']){
+   const [h]=detectTables(layoutFromItems([...row(120,label,'2025','2024'),...row(100,'Revenue','1','2'),...row(86,'Cost','3','4')]).lines);
+   expect(h.header_lines.map(l=>l.text.startsWith(label.slice(0,3)))).toContain(true);
+   expect(h.row_count).toBe(2);
+  }
+  const [n]=detectTables(layoutFromItems([...row(100,'Notes receivable','2025','2024'),...row(86,'Cost','3','4')]).lines);
+  expect(n.row_count).toBe(2);   // 'Notes receivable' is a labelled body row, only the exact word 'Notes' is a header
  });
 });

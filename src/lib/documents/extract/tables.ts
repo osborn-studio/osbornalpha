@@ -1,9 +1,10 @@
 // src/lib/documents/extract/tables.ts
 // Table detection on one page's lines (spec §7.2, TABLE_ALGO_VERSION 'tables/1.0').
-// - Tokens: adjacent items with no space between them in the line text (char_end === next char_start,
-//   i.e. a geometry gap below the space width) are merged into one token before any numeric test, so
-//   '(' '50' ')' and '(800,000' ')' parse as one parenthesised negative. Cell offsets come from the
-//   merged items, so they keep pointing at the original evidence.
+// - Tokens: adjacent items with no space between them in the line text (char_end === next char_start)
+//   are merged only when one of them is a fragment that is not a number on its own: a lone '(' or sign
+//   before, a lone ')' or '%' after, or a gap under FRAGMENT_GAP_EM of the height (a split inside one
+//   token). Two complete numbers ('1,234' '3,456' two points apart) are never concatenated. So '(' '50' ')'
+//   and '(800,000' ')' parse as one parenthesised negative, and cell offsets come from the merged items.
 // - Numeric token: /^\(?[-–—−]?[\d,]+(\.\d+)?\)?$/ containing a digit (U+2212 minus included), or a lone dash.
 // - Numeric tail of a line: the longest suffix of numeric tokens whose first token stands at least
 //   TAIL_GAP_EM × height to the right of the token before it (shrunk from the left until it does).
@@ -13,17 +14,21 @@
 // - Trailing label: tokens after the last numeric token, starting at least TAIL_GAP_EM × height past it
 //   (bilingual rows "Revenue 1,234 1,100 收益"), become a last label cell.
 // - Year row (a header, never body): the whole tail is bare 19xx/20xx years AND the line has no row
-//   label, or its label is a period/notes word (年度/截至/year ended/Notes …). A labelled row whose
-//   amounts happen to look like years ("Cost 2025 2024") is a body row.
+//   label, or its label STARTS with a period phrase (年度/截至/year ended/for the/six months/as at) or is
+//   exactly a notes word (Notes/附註). A labelled row whose amounts happen to look like years ("Cost 2025
+//   2024", "Prior year ended adjustment 2025 2024") is a body row.
 // - Body line: not a year row and >= 2 tail tokens. A table is a run of body lines in which every
 //   body line has a numeric token whose x-interval overlaps one of the previous body line's; up to
 //   MAX_GAP_LINES non-body lines (sub-headings such as 以下人士應佔 / Attributable to, one-value rows)
 //   between two aligned body lines are rows of the table; a year row ends the run. A run needs
 //   MIN_BODY_ROWS body lines.
-// - Wrapped labels: a label-only line (no numbers, not ending in a colon) directly above or below a
-//   body row at the same label x (line spacing <= 1.8 × height) is a continuation of that row: it
-//   becomes an extra col-0 cell of the same row (its own line_index and offsets, so each cell still
-//   slices its text out of the page) and stays inside the table. Up to MAX_CONT_LINES per side.
+// - Wrapped labels (conservative: a missing association is acceptable, a wrong one is not): a label-only
+//   line (no numbers; not colon-ended, not a statement title, not note text) continues a neighbouring
+//   body row only when that neighbour is strictly the nearer one (baseline distance to the other
+//   neighbour is larger; equal spacing attaches nothing), the distance is <= CONT_SPACING_EM × height,
+//   and the label x matches. It becomes an extra col-0 cell of that row (own line_index and offsets, so
+//   every cell still slices its text out of the page). A line above needs a line before it on the page.
+//   Anything ambiguous stays an independent label-only row or header text. Up to MAX_CONT_LINES per side.
 // - Header block: the lines between the previous table's last row (or the page top) and the first
 //   row, at most MAX_HEADER_LINES of them, nearest first, stopping at a line wider than the table
 //   (a page title or running text), kept verbatim with offsets.
@@ -39,21 +44,30 @@ export const MAX_GAP_LINES=3;
 export const MAX_CONT_LINES=2;
 export const MAX_HEADER_LINES=6;
 export const TAIL_GAP_EM=1;
-const CONT_SPACING_EM=1.8;
+const CONT_SPACING_EM=1.2;
+export const FRAGMENT_GAP_EM=0.15;
 const NUMERIC=/^\(?[-–—−]?[\d,]+(\.\d+)?\)?$/;
 const DASH=/^[-–—−]$/;
 const YEAR=/^(19|20)\d{2}$/;
-const PERIOD_LABEL=/年度|截至|止年|止六個月|止六个月|year(s)? ended|period ended|six months|as (at|of)\b|^notes?$|附[註注]/i;
+const PERIOD_LABEL=/^(?:年度|截至|(?:for the|years? ended|periods? ended|six months|as (?:at|of))\b|(?:notes?|附[註注])$)/i;
+const NOT_CONTINUATION=/accompanying notes|^see\b|^notes?\b|^附[註注]|statement of|balance sheet|income statement|profit or loss|cash flows?|financial position|^consolidated\b|綜合|综合|損益表|损益表|資產負債表|资产负债表|財務狀況|财务状况|現金流量|现金流量/i;
 
 export const isNumericItem=(s:string)=>(NUMERIC.test(s)&&/\d/.test(s))||DASH.test(s);
 
 interface Analysis{tokens:LayoutItem[];label:LayoutItem[];tail:LayoutItem[];trailing:LayoutItem[]}
 const cache=new WeakMap<LayoutLine,Analysis>();
+const OPENERS=new Set(['(','-','–','—','−']);
+/** Only fragments that are not complete numbers by themselves are joined (see header). */
+function mergeable(a:LayoutItem,b:LayoutItem):boolean{
+ if(OPENERS.has(a.text)||a.text.endsWith('('))return true;
+ if(/^[)%]/.test(b.text))return true;
+ return b.x0-a.x1<FRAGMENT_GAP_EM*Math.max(a.h,b.h);
+}
 function tokensOf(l:LayoutLine):LayoutItem[]{
  const out:LayoutItem[]=[];
  for(const it of l.items){
   const prev=out.at(-1);
-  if(prev&&prev.char_end===it.char_start)out[out.length-1]={text:prev.text+it.text,x0:Math.min(prev.x0,it.x0),x1:Math.max(prev.x1,it.x1),y:prev.y,h:Math.max(prev.h,it.h),char_start:prev.char_start,char_end:it.char_end};
+  if(prev&&prev.char_end===it.char_start&&mergeable(prev,it))out[out.length-1]={text:prev.text+it.text,x0:Math.min(prev.x0,it.x0),x1:Math.max(prev.x1,it.x1),y:prev.y,h:Math.max(prev.h,it.h),char_start:prev.char_start,char_end:it.char_end};
   else out.push(it);
  }
  return out;
@@ -113,14 +127,15 @@ function cellOf(line:LayoutLine,items:LayoutItem[],row:number,col:number,numeric
 }
 
 interface Row{main:LayoutLine;above:LayoutLine[];below:LayoutLine[]}
-/** A label-only line that can continue the label of `body` (see header). */
-function continues(g:LayoutLine,body:LayoutLine):boolean{
- const a=analyze(g),b=analyze(body);
- if(a.tail.length>0||a.trailing.length>0||a.label.length===0||b.label.length===0||isBodyLine(g)||isYearRow(g))return false;
- if(/[:：]$/.test(g.text))return false;
- const h=Math.max(a.label[0].h,b.label[0].h,1);
- return Math.abs(a.label[0].x0-b.label[0].x0)<=0.5*h&&Math.abs(g.y-body.y)<=CONT_SPACING_EM*h;
+/** A line that may continue a neighbouring row's label at all (label only; no heading, title or note text). */
+function labelOnly(g:LayoutLine):boolean{
+ const a=analyze(g);
+ return a.tail.length===0&&a.trailing.length===0&&a.label.length>0&&!isBodyLine(g)&&!isYearRow(g)&&!/[:：]$/.test(g.text)&&!NOT_CONTINUATION.test(g.text);
 }
+const sameLabelX=(g:LayoutLine,body:LayoutLine)=>{
+ const a=analyze(g),b=analyze(body);
+ return b.label.length>0&&Math.abs(a.label[0].x0-b.label[0].x0)<=0.5*Math.max(a.label[0].h,b.label[0].h,1);
+};
 
 function buildTable(rows:Row[],header:LayoutLine[]):LayoutTable{
  const mains=rows.map(r=>r.main);
@@ -158,22 +173,32 @@ export function detectTables(lines:LayoutLine[]):LayoutTable[]{
    gaps++;j++;
   }
   if(bodyCount<MIN_BODY_ROWS){i++;continue;}
-  // wrapped labels: claim continuation lines above a body row first (nearest wins), then below
+  // wrapped labels: a label-only line joins the strictly nearer neighbouring row (see header)
   const claimed=new Set<number>();
   const above=new Map<number,LayoutLine[]>(),below=new Map<number,LayoutLine[]>();
-  const lo=Math.max(prevEnd+1,i-MAX_CONT_LINES);
+  const lo=Math.max(prevEnd+1,i-MAX_CONT_LINES),hi=Math.min(lines.length-1,last+MAX_CONT_LINES);
   const isMain=(k:number)=>k>=i&&k<=last&&isBodyLine(lines[k]);
-  for(let b=lo;b<=last;b++){
-   if(!isMain(b))continue;
-   const got:LayoutLine[]=[];
-   for(let k=b-1;k>=Math.max(lo,b-MAX_CONT_LINES)&&!claimed.has(k)&&!isMain(k)&&continues(lines[k],got.length>0?got[0]:lines[b]);k--){got.unshift(lines[k]);claimed.add(k);}
-   if(got.length>0)above.set(b,got);
+  const pref=new Map<number,'prev'|'next'>();
+  for(let k=lo;k<=hi;k++){
+   if(isMain(k)||!labelOnly(lines[k]))continue;
+   const g=lines[k],em=Math.max(analyze(g).label[0].h,1);
+   const dP=k>0?Math.abs(lines[k-1].y-g.y):Number.POSITIVE_INFINITY;
+   const dN=k<lines.length-1?Math.abs(g.y-lines[k+1].y):Number.POSITIVE_INFINITY;
+   if(dP<dN&&dP<=CONT_SPACING_EM*em)pref.set(k,'prev');
+   else if(dN<dP&&dN<=CONT_SPACING_EM*em&&k>0)pref.set(k,'next');
   }
-  for(let b=i;b<=Math.min(last+MAX_CONT_LINES,lines.length-1);b++){
-   if(!isMain(b))continue;
-   const got:LayoutLine[]=[];
-   for(let k=b+1;k<=Math.min(lines.length-1,b+MAX_CONT_LINES)&&k<=last+MAX_CONT_LINES&&!claimed.has(k)&&!isMain(k)&&continues(lines[k],got.length>0?got[got.length-1]:lines[b]);k++){got.push(lines[k]);claimed.add(k);}
-   if(got.length>0)below.set(b,got);
+  const ownerBelow=new Map<number,number>(),ownerAbove=new Map<number,number>();
+  for(let k=lo;k<=hi;k++){
+   if(pref.get(k)!=='prev')continue;
+   const own=isMain(k-1)?k-1:ownerBelow.get(k-1);
+   if(own===undefined||(below.get(own)?.length??0)>=MAX_CONT_LINES||!sameLabelX(lines[k],lines[own]))continue;
+   below.set(own,[...(below.get(own)??[]),lines[k]]);ownerBelow.set(k,own);claimed.add(k);
+  }
+  for(let k=hi;k>=lo;k--){
+   if(pref.get(k)!=='next')continue;
+   const own=isMain(k+1)?k+1:ownerAbove.get(k+1);
+   if(own===undefined||(above.get(own)?.length??0)>=MAX_CONT_LINES||!sameLabelX(lines[k],lines[own]))continue;
+   above.set(own,[lines[k],...(above.get(own)??[])]);ownerAbove.set(k,own);claimed.add(k);
   }
   const start=Math.min(i,...[...claimed]);
   const end=Math.max(last,...[...claimed]);

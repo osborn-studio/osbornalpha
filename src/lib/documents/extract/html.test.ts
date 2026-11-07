@@ -72,6 +72,13 @@ describe('extractHtml review fixes',()=>{
   expect(extractHtml(Uint8Array.from([0xef,0xbb,0xbf,...enc('<p>ok</p>')]))[0].text).toBe('ok');
   expect(extractHtml(enc('<meta charset="utf-8"><p>日本</p>'))[0].text).toBe('日本');
  });
+ it('R4: commented-out, script and style metas are not charset declarations; valid UTF-8 stays UTF-8',()=>{
+  expect(extractHtml(enc('<!-- <meta charset="windows-1252"> --><p>日本 café</p>'))[0].text).toBe('日本 café');
+  expect(extractHtml(enc('<script>var s="<meta charset=windows-1252>";</script><style>/*<meta charset=iso-8859-1>*/</style><p>日本</p>'))[0].text).toBe('日本');
+  const real=Uint8Array.from([...enc('<!-- <meta charset="utf-8"> --><meta charset="iso-8859-1"><p>caf'),0xe9,...enc('</p>')]);
+  expect(extractHtml(real)[0].text).toBe('café');   // the active meta is honoured, the commented one is not
+  expect(extractHtml(Uint8Array.from([0xef,0xbb,0xbf,...enc('<!-- <meta charset="windows-1252"> --><p>日本</p>')]))[0].text).toBe('日本');
+ });
  it('input cap and budget between segments',()=>{
   expect(()=>extractHtml(new Uint8Array(52_428_801))).toThrow('html_too_large');
   expect(()=>extractHtml(enc('<p>a</p><hr/><p>b</p>'),{remainingMs:()=>0})).toThrow(ExtractTimeout);
