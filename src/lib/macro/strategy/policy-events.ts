@@ -17,6 +17,7 @@
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {VERSIONS} from './contract';
 import type {EventGap,EventInput,PolicyEvent,StrategyPolicyEvent} from './contract';
+import {utcDate} from './manifest';
 import type {ManifestBuilder} from './manifest';
 import {sign,subtract,toBp} from './numeric';
 export const US_TARGET_SINGLE_ID='US_FED_TARGET_D',US_TARGET_UPPER_ID='US_FED_TARGET_UPPER_D',US_TARGET_LOWER_ID='US_FED_TARGET_LOWER_D';
@@ -70,7 +71,7 @@ export async function readPolicyEvents(b:ManifestBuilder):Promise<{events:Strate
  const lower=await b.history(US_TARGET_LOWER_ID,EVENTS_PURPOSE,'history',opts);
  if(!single||!upper||!lower){
   const truncated=[[US_TARGET_SINGLE_ID,single],[US_TARGET_UPPER_ID,upper],[US_TARGET_LOWER_ID,lower]].filter(([,r])=>r===null).map(([id])=>id);
-  return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:b.cutoff.slice(0,10)}]};
+  return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:utcDate(b.cutoff)}]};
  }
  const merged=mergePolicyEvents((u,l)=>b.port.derivePolicyEvents(u,l),single,upper,lower);
  const needed=new Set(merged.events.flatMap(e=>[...e.evidence]));

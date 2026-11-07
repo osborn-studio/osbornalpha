@@ -2,7 +2,8 @@
 // boundaries, the 7-day rule, coverage, degenerate, month_not_closed, non-positive base, restricted, truncated, manifest.
 import {describe,expect,it} from 'vitest';
 import type {Boundary,CycleCell,EventGap,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
-import {buildCycleTable,buildCycleTableManifest,policyEpisodes,resolveColumn} from './cycle-table';
+import {CYCLE_COLUMNS_V1,buildCycleTable,buildCycleTableManifest,policyEpisodes,resolveColumn} from './cycle-table';
+import {canonicalJson} from './hash';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
 import {subtract,toBp} from './numeric';
 import {mergePolicyEvents} from './policy-events';
@@ -16,8 +17,8 @@ const CATALOG=FIXTURE_CATALOG.map(freezeDef);
 const input=(role:string,id:string,d:string,v:string):ManifestInput=>({series_id:id,role,observation_id:`obs:${id}:${d}:v1`,period_end:d,value_text:v,version:1,available_at:`${d}T12:00:00Z`,source:{kind:'history',as_of:'2025-06-30T00:00:00Z'}});
 const dailyIn=(id:string,pts:[string,string][])=>pts.map(([d,v])=>input(`col:${id}:history`,id,d,v));
 const monthIn=(id:string,pts:[string,string][])=>pts.map(([ym,v])=>input(`col:${id}:month_end`,id,monthEnd(ym),v));
-function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];boundary?:Boundary;cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[]}):StoredManifest{
- const body:StrategyManifest={kind:'cycle_table',params:{boundary:o.boundary??'event_day'},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
+function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];boundary?:Boundary;cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[];columns?:readonly string[]}):StoredManifest{
+ const body:StrategyManifest={kind:'cycle_table',params:{boundary:o.boundary??'event_day',columns:canonicalJson(o.columns??CYCLE_COLUMNS_V1)},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
  return {manifest_id:'00000000-0000-4000-8000-000000000003',manifest_hash:manifestHash(body),body,created_at:body.cutoff};
 }
 const at=(v:ReturnType<typeof buildCycleTable>,ep:number,col:string):CycleCell=>v.cells[String(ep)][col];
@@ -128,7 +129,7 @@ describe('buildCycleTableManifest',()=>{
    ...daily('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20']]),...monthly('US_DGS10','2022-02',['1.83','2.32'])]});
   const body=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'month_end'});
   expect(body.kind).toBe('cycle_table');expect(body.cutoff).toBe(us.created_at);
-  expect(body.params).toEqual({boundary:'month_end'});
+  expect(body.params).toEqual({boundary:'month_end',columns:canonicalJson(CYCLE_COLUMNS_V1)});
   const other=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'event_day'});
   expect(manifestHash(other)).not.toBe(manifestHash(body));   // each boundary is its own manifest identity
   expect(body.events?.map(e=>[e.effective_date,e.change_bp,e.basis])).toEqual([['2022-03-17','25','range']]);
@@ -138,5 +139,38 @@ describe('buildCycleTableManifest',()=>{
   expect(body.reads.some(r=>r.series_id==='US_SP500')).toBe(false);
   expect(body.catalog.some(d=>d.id==='US_UST10Y')).toBe(true);
   expect(body.method_version).toBe('macro-cycle-table/1');
+ });
+});
+
+describe('frozen columns and UTC cutoff date',()=>{
+ const d10=dailyIn('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20'],['2024-09-18','3.7'],['2024-09-19','3.6']]);
+ it('column ids are part of the manifest identity and replay reads only the manifest',async()=>{
+  const us=snap('US','2025-06-30T06:00:00Z',[]);
+  const f=fixture({snapshots:[us],observations:[...daily('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20']])]});
+  const o={now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'event_day' as const};
+  const one=await buildCycleTableManifest(memoryStrategyPort(f),{...o,columns:['US_UST10Y']});
+  const all=await buildCycleTableManifest(memoryStrategyPort(f),o);
+  expect(manifestHash(one)).not.toBe(manifestHash(all));
+  const st=(b:StrategyManifest):StoredManifest=>({manifest_id:'00000000-0000-4000-8000-000000000003',manifest_hash:manifestHash(b),body:b,created_at:b.cutoff});
+  expect(buildCycleTable(st(one)).columns.map(c=>c.id)).toEqual(['US_UST10Y']);
+  expect(buildCycleTable(st(all)).columns.map(c=>c.id)).toEqual([...CYCLE_COLUMNS_V1]);
+  expect(()=>buildCycleTable(st({...one,params:{boundary:'event_day'}}))).toThrow('invalid_manifest_params:columns');
+  expect(()=>buildCycleTable(st({...one,params:{boundary:'event_day',columns:'[1]'}}))).toThrow('invalid_manifest_params:columns');
+ });
+ it('equivalent instants give the same ongoing flag (12-month boundary compared on the UTC date)',()=>{
+  // last cut 2024-12-19 → ongoing while the UTC date is before 2025-12-19
+  const on=(cutoff:string)=>buildCycleTable(manifest({events:CUTS,inputs:d10,cutoff})).episodes.at(-1)!.ongoing;
+  expect(on('2025-12-19T00:30:00+08:00')).toBe(true);    // = 2025-12-18T16:30Z
+  expect(on('2025-12-18T16:30:00Z')).toBe(true);
+  expect(on('2025-12-18T20:00:00-08:00')).toBe(false);   // = 2025-12-19T04:00Z
+  expect(on('2025-12-19T04:00:00Z')).toBe(false);
+ });
+ it('equivalent instants give the same month-closure verdict (month-end boundary compared on the UTC date)',()=>{
+  const cell=(cutoff:string)=>buildCycleTable(manifest({events:[ev('2025-07-30','-25')],inputs:[],boundary:'month_end',cutoff})).cells['0']['US_UST10Y'];
+  const open={status:'missing',reason:'month_not_closed'};
+  expect(cell('2025-07-31T00:30:00+08:00')).toEqual(open);   // = 2025-07-30T16:30Z, July not closed
+  expect(cell('2025-07-30T16:30:00Z')).toEqual(open);
+  expect(cell('2025-07-30T20:00:00-08:00')).not.toEqual(open);   // = 2025-07-31T04:00Z, closed
+  expect(cell('2025-07-31T04:00:00Z')).not.toEqual(open);
  });
 });

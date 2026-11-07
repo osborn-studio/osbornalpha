@@ -23,6 +23,8 @@ export const manifestHash=(body:StrategyManifest):string=>sha256Hex(canonicalJso
 
 // ---------------------------------------------------------------- calendar (UTC dates as YYYY-MM-DD, months as YYYY-MM)
 const ymParts=(ym:string):[number,number]=>{const m=/^(\d{4})-(\d{2})$/.exec(ym);if(!m)throw new Error(`invalid_month:${ym}`);return [Number(m[1]),Number(m[2])];};
+/** The UTC calendar date (YYYY-MM-DD) of an ISO timestamp, whatever offset it is written with; the only way a cutoff becomes a date. */
+export function utcDate(iso:string):string{const t=Date.parse(iso);if(!Number.isFinite(t))throw new Error(`invalid_timestamp:${iso}`);return new Date(t).toISOString().slice(0,10);}
 export const monthOf=(date:string):string=>date.slice(0,7);
 export function addMonthsYm(ym:string,n:number):string{const [y,m]=ymParts(ym);const t=y*12+(m-1)+n;return `${String(Math.floor(t/12)).padStart(4,'0')}-${String(t%12+1).padStart(2,'0')}`;}
 export function monthEnd(ym:string):string{const [y,m]=ymParts(ym);return new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);}

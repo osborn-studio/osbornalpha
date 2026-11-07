@@ -10,12 +10,14 @@
 // month not yet closed at the cutoff → month_not_closed). A chosen row more than 7 calendar days from its boundary, or a
 // boundary outside the series' first..last row → out_of_coverage; both ends on one row → degenerate. pct = (to/from − 1) × 100
 // (from ≤ 0 → non_positive_base; change_text = the exact ratio '<to>/<from>'), bp = toBp(to − from). Rounding is a display
-// concern. The boundary is a calculation parameter frozen in manifest.params ({boundary}); buildCycleTable reads it from
-// there, so each boundary has its own manifest identity. A history_truncated gap (event source read truncated) yields no
+// concern. The boundary and the ordered column ids are calculation parameters frozen in manifest.params ({boundary, columns as
+// canonical JSON text}); buildCycleTable reads both only from there (no caller override), so each has its own manifest
+// identity. The cutoff becomes a date through utcDate (UTC calendar date of the instant, any offset). A history_truncated gap (event source read truncated) yields no
 // episodes and stays in view.gaps, so the page shows the truncation instead of an empty history.
 import {VERSIONS} from './contract';
 import type {Boundary,CycleCell,CycleColumn,CycleTableView,Episode,EventGap,FrozenSeriesDef,ManifestInput,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
-import {addMonthsDate,addMonthsYm,dayDiff,freezeDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthEnd,monthOf,readState,toObsRef} from './manifest';
+import {canonicalJson} from './hash';
+import {addMonthsDate,addMonthsYm,dayDiff,freezeDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthEnd,monthOf,readState,toObsRef,utcDate} from './manifest';
 import {add,pctChange,pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -30,6 +32,16 @@ export function boundaryParam(m:StrategyManifest):Boundary{
  const b=m.params.boundary;
  if(typeof b!=='string'||!(BOUNDARIES as readonly string[]).includes(b))throw new Error(`invalid_manifest_params:boundary`);
  return b as Boundary;
+}
+
+/** The ordered column ids frozen in a cycle_table manifest's params (canonical JSON text, hashed with the body). */
+export function columnsParam(m:StrategyManifest):readonly string[]{
+ const t=m.params.columns;
+ if(typeof t!=='string')throw new Error('invalid_manifest_params:columns');
+ let v:unknown;
+ try{v=JSON.parse(t);}catch{throw new Error('invalid_manifest_params:columns');}
+ if(!Array.isArray(v)||v.some(x=>typeof x!=='string'))throw new Error('invalid_manifest_params:columns');
+ return v as string[];
 }
 
 /** Column resolution over a catalog projection: alias → target; month series → its derive.from daily; daily series → the month_end row derived from it. */
@@ -67,19 +79,20 @@ export function policyEpisodes(events:readonly StrategyPolicyEvent[],gaps:readon
 }
 
 export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;boundary:Boundary;columns?:readonly string[]}):Promise<StrategyManifest>{
+ const columns=o.columns??CYCLE_COLUMNS_V1;
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
  const {events,gaps}=await readPolicyEvents(b);
  const live=port.catalog().map(freezeDef);
- for(const id of o.columns??CYCLE_COLUMNS_V1){
+ for(const id of columns){
   const c=resolveColumn(id,live);
   const d=b.def(id);if(d?.aliasOf)b.def(d.aliasOf);
   if(c.restricted)continue;
   if(c.daily_series)await b.history(c.daily_series,COL_PURPOSE,'history');
   if(c.monthly_series)await b.history(c.monthly_series,COL_PURPOSE,'month_end');
  }
- return b.build({kind:'cycle_table',params:{boundary:o.boundary},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'cycle_table',params:{boundary:o.boundary,columns:canonicalJson(columns)},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Missing=Extract<CycleCell,{status:'missing'}>['reason'];
@@ -123,11 +136,12 @@ function cellOf(m:StrategyManifest,ep:Episode,c:CycleColumn,boundary:Boundary,cu
  if(typeof to==='string')return miss(to);
  return change(from,to,c.change_kind);
 }
-export function buildCycleTable(stored:StoredManifest,columns:readonly string[]=CYCLE_COLUMNS_V1):CycleTableView{
+export function buildCycleTable(stored:StoredManifest):CycleTableView{
  const m=stored.body;
  if(m.kind!=='cycle_table')throw new Error(`manifest_kind_mismatch:${m.kind}`);
  const boundary=boundaryParam(m);
- const cutoffDate=m.cutoff.slice(0,10);
+ const columns=columnsParam(m);
+ const cutoffDate=utcDate(m.cutoff);
  const episodes=policyEpisodes(m.events??[],m.gaps??[],cutoffDate);
  const cols=columns.map(id=>resolveColumn(id,m.catalog));
  const cells:CycleTableView['cells']={};

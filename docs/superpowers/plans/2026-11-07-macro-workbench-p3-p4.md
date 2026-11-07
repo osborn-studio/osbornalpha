@@ -131,7 +131,7 @@ export interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:strin
 export type FrozenSeriesDef=Pick<MacroSeriesDef,'id'|'region'|'role'|'type'|'name'|'unit'|'status'|'reason'|'aliasOf'|'derive'|'changeKind'|'releaseLagDays'|'nativeFrequency'|'period'>;
 export interface ManifestRead{series_id:string;purpose:string;state:'ok'|'missing'|'truncated'}
 /** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3).
- *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary}, review
+ *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary, columns}, review
  *  {region, month}, explain_facts {subject…}); views and replay read them from here. facts (explain_facts only) = the exact
  *  fact list given to the model, so an explanation's input is rebuilt from its manifest alone. */
 export interface StrategyManifest{
@@ -333,7 +333,7 @@ export function recoverUserExplanations(d:Pick<ExplainDeps,'db'|'llm'>,userId:st
 ### 复盘截止规则（规格 §4.5、§6.2，第 3 稿）
 
 - 复盘 `cutoff = monthCutoff(month)` = **次月 3 日 `00:00:00Z`**（`manifest.ts`，Task 4）；基线截止 = `monthCutoff(prevMonth(month))` = **本月 3 日 `00:00:00Z`**。比较的数据期仍是"本月月末 vs 上月月末"，截止只决定"何时已知"。
-- 及时性 `today` = 截止日期（`cutoff.slice(0,10)`，即次月 3 日）；复盘判断节 F4 `asOf` = 同一日期（`route-helpers.ts::reviewAsOfDate`）。
+- 及时性 `today` = 截止日期（`utcDate(cutoff)`，即次月 3 日；一律取 UTC 日历日）；复盘判断节 F4 `asOf` = 同一日期（`route-helpers.ts::reviewAsOfDate`）。
 - cron（`0 6 3 * *`）与手动 `?month=`：一个月份在其截止已过（`Date.parse(monthCutoff(m)) ≤ now`）后才算"已结束"（`isClosedMonth`）；默认月份 = 截止已过的最新月份（`lastClosedMonth`，3 日 06:00 UTC 运行时即上一个月）。
 
 ## 规格覆盖
@@ -1551,7 +1551,7 @@ export interface FrozenSnapshot{snapshot_id:string;created_at:string;as_of:strin
 export type FrozenSeriesDef=Pick<MacroSeriesDef,'id'|'region'|'role'|'type'|'name'|'unit'|'status'|'reason'|'aliasOf'|'derive'|'changeKind'|'releaseLagDays'|'nativeFrequency'|'period'>;
 export interface ManifestRead{series_id:string;purpose:string;state:'ok'|'missing'|'truncated'}
 /** The whole canonical manifest body; manifest_hash = sha256Hex(canonicalJson(body)) is its single identity (spec §4.4 N3).
- *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary}, review
+ *  params = the calculation parameters (transmission {region}, policy_response {window}, cycle_table {boundary, columns}, review
  *  {region, month}, explain_facts {subject…}); views and replay read them from here. facts (explain_facts only) = the exact
  *  fact list given to the model, so an explanation's input is rebuilt from its manifest alone. */
 export interface StrategyManifest{
@@ -3242,7 +3242,7 @@ EOF
 
 Cross-task decisions fixed in Part B (later tasks rely on them):
 - **Input roles.** Every `ManifestInput.role` is built with `inputRole(purpose, seriesId, tag)` from `manifest.ts` = `'<purpose>:<series_id>:<tag>'`. Purposes: `node` (transmission), `dim` (policy response), `col` (cycle table), `events` (event sources: reads plus the evidence rows), `snapshot_rows` (a read recording unresolved snapshot ids). Tags: `latest | prev | prev3m` (snapshot roles), `base | end | from | to` (reserved for Part C), `month_end` (a whole monthly window), `history` (a whole daily window), `evidence` (single event-source rows; all listed in the `ManifestInput.role` comment of `contract.ts`).
-- **One manifest per (kind, params); the calculation parameters live in the manifest (plan audit #3).** `transmission` has `params:{region}`, `policy_response` `params:{window}` (1/3/6), `cycle_table` `params:{boundary}`; builders take the parameter and freeze it before hashing, so each value is its own identity, and the views (`buildTransmission(stored)`, `buildPolicyResponse(stored)`, `buildCycleTable(stored)`) read it back from `body.params` (`regionParam` / `windowParam` / `boundaryParam` throw `invalid_manifest_params:<name>` otherwise). Replay derives every argument from the manifest. Views take the `StoredManifest` (they need `manifest_id`).
+- **One manifest per (kind, params); the calculation parameters live in the manifest (plan audit #3).** `transmission` has `params:{region}`, `policy_response` `params:{window}` (1/3/6), `cycle_table` `params:{boundary, columns}` (`columns` = the ordered column ids as canonical JSON text, like `policy_response`'s `dims`); builders take the parameter and freeze it before hashing, so each value is its own identity, and the views (`buildTransmission(stored)`, `buildPolicyResponse(stored)`, `buildCycleTable(stored)`) read it back from `body.params` (`regionParam` / `windowParam` / `boundaryParam` / `columnsParam` throw `invalid_manifest_params:<name>` otherwise). Replay derives every argument from the manifest. Views take the `StoredManifest` (they need `manifest_id`).
 - **Builders** live next to their views: `buildTransmissionManifest` (Task 6), `buildPolicyResponseManifest` (Task 7), `buildCycleTableManifest` (Task 8), all on the shared `manifestBuilder` (Task 4). They return the body; the route (Task 12) calls `StrategyDb.putManifest(body)` and passes the returned `StoredManifest` to the view.
 - **Event-source histories are not copied whole into manifests** (the daily Fed target history is tens of thousands of rows): the manifest freezes the merged `events` and `gaps`, records the three reads with purpose `events`, and freezes exactly the rows needed to derive and verify every event — each event's evidence observations plus the 2008 transition tuple (last single-target row, first upper and lower rows) — as `events:<series>:evidence` inputs (plan audit #4). A truncated source read gives a `history_truncated` gap (plan audit #11).
 - **Floats.** Only `pctChange` (one `Number()` per operand) and the type-7 quartiles over `change_raw`. Every `change_text` is exact: pct → the ratio text `'<end>/<base>'` (`pctRatio`, rounded once at presentation by `roundPctRatio`; plan audit #10), bp → `toBp`. For bp rows `change_raw = Number(change_text)`.
@@ -3627,6 +3627,8 @@ export const manifestHash=(body:StrategyManifest):string=>sha256Hex(canonicalJso
 
 // ---------------------------------------------------------------- calendar (UTC dates as YYYY-MM-DD, months as YYYY-MM)
 const ymParts=(ym:string):[number,number]=>{const m=/^(\d{4})-(\d{2})$/.exec(ym);if(!m)throw new Error(`invalid_month:${ym}`);return [Number(m[1]),Number(m[2])];};
+/** The UTC calendar date (YYYY-MM-DD) of an ISO timestamp, whatever offset it is written with; the only way a cutoff becomes a date. */
+export function utcDate(iso:string):string{const t=Date.parse(iso);if(!Number.isFinite(t))throw new Error(`invalid_timestamp:${iso}`);return new Date(t).toISOString().slice(0,10);}
 export const monthOf=(date:string):string=>date.slice(0,7);
 export function addMonthsYm(ym:string,n:number):string{const [y,m]=ymParts(ym);const t=y*12+(m-1)+n;return `${String(Math.floor(t/12)).padStart(4,'0')}-${String(t%12+1).padStart(2,'0')}`;}
 export function monthEnd(ym:string):string{const [y,m]=ymParts(ym);return new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);}
@@ -3980,6 +3982,7 @@ Expected: FAIL — `Failed to resolve import "./policy-events"`.
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {VERSIONS} from './contract';
 import type {EventGap,EventInput,PolicyEvent,StrategyPolicyEvent} from './contract';
+import {utcDate} from './manifest';
 import type {ManifestBuilder} from './manifest';
 import {sign,subtract,toBp} from './numeric';
 export const US_TARGET_SINGLE_ID='US_FED_TARGET_D',US_TARGET_UPPER_ID='US_FED_TARGET_UPPER_D',US_TARGET_LOWER_ID='US_FED_TARGET_LOWER_D';
@@ -4033,7 +4036,7 @@ export async function readPolicyEvents(b:ManifestBuilder):Promise<{events:Strate
  const lower=await b.history(US_TARGET_LOWER_ID,EVENTS_PURPOSE,'history',opts);
  if(!single||!upper||!lower){
   const truncated=[[US_TARGET_SINGLE_ID,single],[US_TARGET_UPPER_ID,upper],[US_TARGET_LOWER_ID,lower]].filter(([,r])=>r===null).map(([id])=>id);
-  return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:b.cutoff.slice(0,10)}]};
+  return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:utcDate(b.cutoff)}]};
  }
  const merged=mergePolicyEvents((u,l)=>b.port.derivePolicyEvents(u,l),single,upper,lower);
  const needed=new Set(merged.events.flatMap(e=>[...e.evidence]));
@@ -5008,7 +5011,8 @@ Design decisions (spec §5.5, §1.1 criterion 3, §12):
 // boundaries, the 7-day rule, coverage, degenerate, month_not_closed, non-positive base, restricted, truncated, manifest.
 import {describe,expect,it} from 'vitest';
 import type {Boundary,CycleCell,EventGap,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
-import {buildCycleTable,buildCycleTableManifest,policyEpisodes,resolveColumn} from './cycle-table';
+import {CYCLE_COLUMNS_V1,buildCycleTable,buildCycleTableManifest,policyEpisodes,resolveColumn} from './cycle-table';
+import {canonicalJson} from './hash';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
 import {subtract,toBp} from './numeric';
 import {mergePolicyEvents} from './policy-events';
@@ -5022,8 +5026,8 @@ const CATALOG=FIXTURE_CATALOG.map(freezeDef);
 const input=(role:string,id:string,d:string,v:string):ManifestInput=>({series_id:id,role,observation_id:`obs:${id}:${d}:v1`,period_end:d,value_text:v,version:1,available_at:`${d}T12:00:00Z`,source:{kind:'history',as_of:'2025-06-30T00:00:00Z'}});
 const dailyIn=(id:string,pts:[string,string][])=>pts.map(([d,v])=>input(`col:${id}:history`,id,d,v));
 const monthIn=(id:string,pts:[string,string][])=>pts.map(([ym,v])=>input(`col:${id}:month_end`,id,monthEnd(ym),v));
-function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];boundary?:Boundary;cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[]}):StoredManifest{
- const body:StrategyManifest={kind:'cycle_table',params:{boundary:o.boundary??'event_day'},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
+function manifest(o:{events:StrategyPolicyEvent[];inputs:ManifestInput[];boundary?:Boundary;cutoff?:string;gaps?:EventGap[];reads?:ManifestRead[];columns?:readonly string[]}):StoredManifest{
+ const body:StrategyManifest={kind:'cycle_table',params:{boundary:o.boundary??'event_day',columns:canonicalJson(o.columns??CYCLE_COLUMNS_V1)},cutoff:o.cutoff??'2025-06-30T00:00:00Z',snapshots:{US:null,CN:null},catalog:CATALOG,reads:o.reads??[],inputs:o.inputs,events:o.events,gaps:o.gaps??[],catalog_version:'macro-catalog/test',method_version:'macro-cycle-table/1',code_version:'test'};
  return {manifest_id:'00000000-0000-4000-8000-000000000003',manifest_hash:manifestHash(body),body,created_at:body.cutoff};
 }
 const at=(v:ReturnType<typeof buildCycleTable>,ep:number,col:string):CycleCell=>v.cells[String(ep)][col];
@@ -5134,7 +5138,7 @@ describe('buildCycleTableManifest',()=>{
    ...daily('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20']]),...monthly('US_DGS10','2022-02',['1.83','2.32'])]});
   const body=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'month_end'});
   expect(body.kind).toBe('cycle_table');expect(body.cutoff).toBe(us.created_at);
-  expect(body.params).toEqual({boundary:'month_end'});
+  expect(body.params).toEqual({boundary:'month_end',columns:canonicalJson(CYCLE_COLUMNS_V1)});
   const other=await buildCycleTableManifest(memoryStrategyPort(f),{now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'event_day'});
   expect(manifestHash(other)).not.toBe(manifestHash(body));   // each boundary is its own manifest identity
   expect(body.events?.map(e=>[e.effective_date,e.change_bp,e.basis])).toEqual([['2022-03-17','25','range']]);
@@ -5144,6 +5148,39 @@ describe('buildCycleTableManifest',()=>{
   expect(body.reads.some(r=>r.series_id==='US_SP500')).toBe(false);
   expect(body.catalog.some(d=>d.id==='US_UST10Y')).toBe(true);
   expect(body.method_version).toBe('macro-cycle-table/1');
+ });
+});
+
+describe('frozen columns and UTC cutoff date',()=>{
+ const d10=dailyIn('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20'],['2024-09-18','3.7'],['2024-09-19','3.6']]);
+ it('column ids are part of the manifest identity and replay reads only the manifest',async()=>{
+  const us=snap('US','2025-06-30T06:00:00Z',[]);
+  const f=fixture({snapshots:[us],observations:[...daily('US_DGS10_D',[['2022-03-16','2.18'],['2022-03-17','2.20']])]});
+  const o={now:new Date('2025-07-01T00:00:00Z'),codeVersion:'test',boundary:'event_day' as const};
+  const one=await buildCycleTableManifest(memoryStrategyPort(f),{...o,columns:['US_UST10Y']});
+  const all=await buildCycleTableManifest(memoryStrategyPort(f),o);
+  expect(manifestHash(one)).not.toBe(manifestHash(all));
+  const st=(b:StrategyManifest):StoredManifest=>({manifest_id:'00000000-0000-4000-8000-000000000003',manifest_hash:manifestHash(b),body:b,created_at:b.cutoff});
+  expect(buildCycleTable(st(one)).columns.map(c=>c.id)).toEqual(['US_UST10Y']);
+  expect(buildCycleTable(st(all)).columns.map(c=>c.id)).toEqual([...CYCLE_COLUMNS_V1]);
+  expect(()=>buildCycleTable(st({...one,params:{boundary:'event_day'}}))).toThrow('invalid_manifest_params:columns');
+  expect(()=>buildCycleTable(st({...one,params:{boundary:'event_day',columns:'[1]'}}))).toThrow('invalid_manifest_params:columns');
+ });
+ it('equivalent instants give the same ongoing flag (12-month boundary compared on the UTC date)',()=>{
+  // last cut 2024-12-19 → ongoing while the UTC date is before 2025-12-19
+  const on=(cutoff:string)=>buildCycleTable(manifest({events:CUTS,inputs:d10,cutoff})).episodes.at(-1)!.ongoing;
+  expect(on('2025-12-19T00:30:00+08:00')).toBe(true);    // = 2025-12-18T16:30Z
+  expect(on('2025-12-18T16:30:00Z')).toBe(true);
+  expect(on('2025-12-18T20:00:00-08:00')).toBe(false);   // = 2025-12-19T04:00Z
+  expect(on('2025-12-19T04:00:00Z')).toBe(false);
+ });
+ it('equivalent instants give the same month-closure verdict (month-end boundary compared on the UTC date)',()=>{
+  const cell=(cutoff:string)=>buildCycleTable(manifest({events:[ev('2025-07-30','-25')],inputs:[],boundary:'month_end',cutoff})).cells['0']['US_UST10Y'];
+  const open={status:'missing',reason:'month_not_closed'};
+  expect(cell('2025-07-31T00:30:00+08:00')).toEqual(open);   // = 2025-07-30T16:30Z, July not closed
+  expect(cell('2025-07-30T16:30:00Z')).toEqual(open);
+  expect(cell('2025-07-30T20:00:00-08:00')).not.toEqual(open);   // = 2025-07-31T04:00Z, closed
+  expect(cell('2025-07-31T04:00:00Z')).not.toEqual(open);
  });
 });
 ```
@@ -5169,12 +5206,14 @@ Expected: FAIL — `Failed to resolve import "./cycle-table"`.
 // month not yet closed at the cutoff → month_not_closed). A chosen row more than 7 calendar days from its boundary, or a
 // boundary outside the series' first..last row → out_of_coverage; both ends on one row → degenerate. pct = (to/from − 1) × 100
 // (from ≤ 0 → non_positive_base; change_text = the exact ratio '<to>/<from>'), bp = toBp(to − from). Rounding is a display
-// concern. The boundary is a calculation parameter frozen in manifest.params ({boundary}); buildCycleTable reads it from
-// there, so each boundary has its own manifest identity. A history_truncated gap (event source read truncated) yields no
+// concern. The boundary and the ordered column ids are calculation parameters frozen in manifest.params ({boundary, columns as
+// canonical JSON text}); buildCycleTable reads both only from there (no caller override), so each has its own manifest
+// identity. The cutoff becomes a date through utcDate (UTC calendar date of the instant, any offset). A history_truncated gap (event source read truncated) yields no
 // episodes and stays in view.gaps, so the page shows the truncation instead of an empty history.
 import {VERSIONS} from './contract';
 import type {Boundary,CycleCell,CycleColumn,CycleTableView,Episode,EventGap,FrozenSeriesDef,ManifestInput,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
-import {addMonthsDate,addMonthsYm,dayDiff,freezeDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthEnd,monthOf,readState,toObsRef} from './manifest';
+import {canonicalJson} from './hash';
+import {addMonthsDate,addMonthsYm,dayDiff,freezeDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthEnd,monthOf,readState,toObsRef,utcDate} from './manifest';
 import {add,pctChange,pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -5189,6 +5228,16 @@ export function boundaryParam(m:StrategyManifest):Boundary{
  const b=m.params.boundary;
  if(typeof b!=='string'||!(BOUNDARIES as readonly string[]).includes(b))throw new Error(`invalid_manifest_params:boundary`);
  return b as Boundary;
+}
+
+/** The ordered column ids frozen in a cycle_table manifest's params (canonical JSON text, hashed with the body). */
+export function columnsParam(m:StrategyManifest):readonly string[]{
+ const t=m.params.columns;
+ if(typeof t!=='string')throw new Error('invalid_manifest_params:columns');
+ let v:unknown;
+ try{v=JSON.parse(t);}catch{throw new Error('invalid_manifest_params:columns');}
+ if(!Array.isArray(v)||v.some(x=>typeof x!=='string'))throw new Error('invalid_manifest_params:columns');
+ return v as string[];
 }
 
 /** Column resolution over a catalog projection: alias → target; month series → its derive.from daily; daily series → the month_end row derived from it. */
@@ -5226,19 +5275,20 @@ export function policyEpisodes(events:readonly StrategyPolicyEvent[],gaps:readon
 }
 
 export async function buildCycleTableManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;boundary:Boundary;columns?:readonly string[]}):Promise<StrategyManifest>{
+ const columns=o.columns??CYCLE_COLUMNS_V1;
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
  const {events,gaps}=await readPolicyEvents(b);
  const live=port.catalog().map(freezeDef);
- for(const id of o.columns??CYCLE_COLUMNS_V1){
+ for(const id of columns){
   const c=resolveColumn(id,live);
   const d=b.def(id);if(d?.aliasOf)b.def(d.aliasOf);
   if(c.restricted)continue;
   if(c.daily_series)await b.history(c.daily_series,COL_PURPOSE,'history');
   if(c.monthly_series)await b.history(c.monthly_series,COL_PURPOSE,'month_end');
  }
- return b.build({kind:'cycle_table',params:{boundary:o.boundary},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'cycle_table',params:{boundary:o.boundary,columns:canonicalJson(columns)},methodVersion:VERSIONS.cycleTable,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Missing=Extract<CycleCell,{status:'missing'}>['reason'];
@@ -5282,11 +5332,12 @@ function cellOf(m:StrategyManifest,ep:Episode,c:CycleColumn,boundary:Boundary,cu
  if(typeof to==='string')return miss(to);
  return change(from,to,c.change_kind);
 }
-export function buildCycleTable(stored:StoredManifest,columns:readonly string[]=CYCLE_COLUMNS_V1):CycleTableView{
+export function buildCycleTable(stored:StoredManifest):CycleTableView{
  const m=stored.body;
  if(m.kind!=='cycle_table')throw new Error(`manifest_kind_mismatch:${m.kind}`);
  const boundary=boundaryParam(m);
- const cutoffDate=m.cutoff.slice(0,10);
+ const columns=columnsParam(m);
+ const cutoffDate=utcDate(m.cutoff);
  const episodes=policyEpisodes(m.events??[],m.gaps??[],cutoffDate);
  const cols=columns.map(id=>resolveColumn(id,m.catalog));
  const cells:CycleTableView['cells']={};
@@ -5926,7 +5977,7 @@ import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
 import {eventFact,levelIndicators} from './facts';
-import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth} from './manifest';
+import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,utcDate} from './manifest';
 import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -5946,7 +5997,7 @@ const byKey=<T>(k:(x:T)=>string)=>(x:T,y:T)=>k(x)<k(y)?-1:k(x)>k(y)?1:0;
 
 export async function buildReviewManifest(port:StrategyReadPort,region:Region,month:string,codeVersion:string):Promise<StrategyManifest>{
  assertMonth(month);
- const baseMonth=prevMonth(month);const cutoff=monthCutoff(month);const baselineCutoff=monthCutoff(baseMonth);const end=monthEnd(month);const today=cutoff.slice(0,10);
+ const baseMonth=prevMonth(month);const cutoff=monthCutoff(month);const baselineCutoff=monthCutoff(baseMonth);const end=monthEnd(month);const today=utcDate(cutoff);
  const [cur,base]=await Promise.all([port.snapshotUpTo(region,cutoff),port.snapshotUpTo(region,baselineCutoff)]);
  const pair=(s:SnapshotRecord|null)=>region==='US'?{US:s,CN:null}:{US:null,CN:s};
  const b=manifestBuilder(port,cutoff);const bb=manifestBuilder(port,baselineCutoff);
@@ -5985,7 +6036,7 @@ function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyP
 /** Pure: the seven sections from the manifest alone. status = 'insufficient' when the month has no snapshot (reason no_snapshot). */
 export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;facts:ReviewFacts}{
  if(m.kind!=='review'||!m.baseline)throw new Error(`not_review_manifest:${m.kind}`);
- const region=String(m.params.region) as Region;const month=String(m.params.month);const baseMonth=prevMonth(month);const today=m.cutoff.slice(0,10);
+ const region=String(m.params.region) as Region;const month=String(m.params.month);const baseMonth=prevMonth(month);const today=utcDate(m.cutoff);
  const cur=m.snapshots[region];const base=m.baseline[region];
  const snapIn=(purpose:string,id:string)=>m.inputs.find(i=>i.role===inputRole(purpose,id,'latest')&&i.source.kind==='snapshot')??null;
  const indicators=levelIndicators(m.catalog,region).filter(d=>d.status==='active');
@@ -6010,7 +6061,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const truncated=gaps.find(g=>g.kind==='history_truncated');
  const truncatedFact=(section:'evt'|'ep'):Fact=>({fact_id:`${section}:truncated`,kind:'coverage',template:'events_truncated',slots:{date:truncated!.near,sources:truncated!.reason},source_inputs:[]});
  const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
- const cutDate=m.cutoff.slice(0,10);const baseDate=m.baseline.cutoff.slice(0,10);
+ const cutDate=utcDate(m.cutoff);const baseDate=utcDate(m.baseline.cutoff);
  const episode_changes:Fact[]=[];
  if(truncated)episode_changes.push(truncatedFact('ep'));
  else{

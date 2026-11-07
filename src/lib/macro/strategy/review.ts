@@ -16,7 +16,7 @@ import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
 import {eventFact,levelIndicators} from './facts';
-import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth} from './manifest';
+import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,utcDate} from './manifest';
 import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -36,7 +36,7 @@ const byKey=<T>(k:(x:T)=>string)=>(x:T,y:T)=>k(x)<k(y)?-1:k(x)>k(y)?1:0;
 
 export async function buildReviewManifest(port:StrategyReadPort,region:Region,month:string,codeVersion:string):Promise<StrategyManifest>{
  assertMonth(month);
- const baseMonth=prevMonth(month);const cutoff=monthCutoff(month);const baselineCutoff=monthCutoff(baseMonth);const end=monthEnd(month);const today=cutoff.slice(0,10);
+ const baseMonth=prevMonth(month);const cutoff=monthCutoff(month);const baselineCutoff=monthCutoff(baseMonth);const end=monthEnd(month);const today=utcDate(cutoff);
  const [cur,base]=await Promise.all([port.snapshotUpTo(region,cutoff),port.snapshotUpTo(region,baselineCutoff)]);
  const pair=(s:SnapshotRecord|null)=>region==='US'?{US:s,CN:null}:{US:null,CN:s};
  const b=manifestBuilder(port,cutoff);const bb=manifestBuilder(port,baselineCutoff);
@@ -75,7 +75,7 @@ function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyP
 /** Pure: the seven sections from the manifest alone. status = 'insufficient' when the month has no snapshot (reason no_snapshot). */
 export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;facts:ReviewFacts}{
  if(m.kind!=='review'||!m.baseline)throw new Error(`not_review_manifest:${m.kind}`);
- const region=String(m.params.region) as Region;const month=String(m.params.month);const baseMonth=prevMonth(month);const today=m.cutoff.slice(0,10);
+ const region=String(m.params.region) as Region;const month=String(m.params.month);const baseMonth=prevMonth(month);const today=utcDate(m.cutoff);
  const cur=m.snapshots[region];const base=m.baseline[region];
  const snapIn=(purpose:string,id:string)=>m.inputs.find(i=>i.role===inputRole(purpose,id,'latest')&&i.source.kind==='snapshot')??null;
  const indicators=levelIndicators(m.catalog,region).filter(d=>d.status==='active');
@@ -100,7 +100,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const truncated=gaps.find(g=>g.kind==='history_truncated');
  const truncatedFact=(section:'evt'|'ep'):Fact=>({fact_id:`${section}:truncated`,kind:'coverage',template:'events_truncated',slots:{date:truncated!.near,sources:truncated!.reason},source_inputs:[]});
  const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
- const cutDate=m.cutoff.slice(0,10);const baseDate=m.baseline.cutoff.slice(0,10);
+ const cutDate=utcDate(m.cutoff);const baseDate=utcDate(m.baseline.cutoff);
  const episode_changes:Fact[]=[];
  if(truncated)episode_changes.push(truncatedFact('ep'));
  else{
