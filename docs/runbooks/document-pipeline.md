@@ -6,8 +6,8 @@
 
 | 组成 | 位置 | 说明 |
 |---|---|---|
-| 迁移一 | `supabase/migrations/20261115090000_disclosure_documents.sql` | 九表 `disclosure_documents`、`document_assets`、`document_extractions`、`document_pages`、`document_citations`、`extraction_candidates`、`extraction_approvals`、`candidate_publications`、`document_sync_scope`；视图 `disclosure_documents_public`；私有桶 `disclosure-docs`（`file_size_limit=52428800`）；全部写入经 `security definer` 函数 |
-| 迁移二 | `supabase/migrations/20261115091000_fact_citations.sql` | `fact_citations`、`filing_documents`；规格二四处检查约束加 `HK`/`hkex`；`publish_hk_run`、`assert_run_evidence_complete`、`bind_filing_documents`、`insert_fact_citations`、`finish/abandon_candidate_publications`、`hk_promotion_due`、`hk_zero_output_documents`、`ensure_hk_fact_scope`、`resolve_hk_facts_quarantine` |
+| 迁移一 | `supabase/migrations/20261117090000_disclosure_documents.sql` | 九表 `disclosure_documents`、`document_assets`、`document_extractions`、`document_pages`、`document_citations`、`extraction_candidates`、`extraction_approvals`、`candidate_publications`、`document_sync_scope`；视图 `disclosure_documents_public`；私有桶 `disclosure-docs`（`file_size_limit=52428800`）；全部写入经 `security definer` 函数 |
+| 迁移二 | `supabase/migrations/20261117091000_fact_citations.sql` | `fact_citations`、`filing_documents`；规格二四处检查约束加 `HK`/`hkex`；`publish_hk_run`、`assert_run_evidence_complete`、`bind_filing_documents`、`insert_fact_citations`、`finish/abandon_candidate_publications`、`hk_promotion_due`、`hk_zero_output_documents`、`ensure_hk_fact_scope`、`resolve_hk_facts_quarantine` |
 | 采集 cron | `/api/cron/documents-sync?source=hkexnews\|cninfo\|edgar[&limit=n]` | `vercel.json` 三条（Task 8）；批次 `producer='documents-sync'`，`dataset='documents.<source>'` |
 | 抽取 cron | `/api/cron/documents-extract[?limit=n]`（默认 10，≤ 100） | **未进 `vercel.json`**，见 §9；`DOCUMENTS_EXTRACT_ENABLED` 关闭 → 认证后 200 `{skipped:'disabled'}`；批次 `producer='documents-extract'`，`dataset='documents.extract'` |
 | 候选 cron | `/api/cron/documents-candidates[?limit=n]`（默认 25，≤ 200） | `DOCUMENTS_CANDIDATES_ENABLED` 独立门控；关闭 → 认证后 200 `{skipped:'disabled'}`；三阶段 candidates → auto → promote；批次 `producer='documents-candidates'`，`dataset='documents.candidates'`；港股事实新鲜度 `facts.hk` |
@@ -20,7 +20,7 @@
 
 pdf.js 固定 `pdfjs-dist@4.10.38` legacy build；PDF/HTML 在 `node:worker_threads` 中执行，主线程继续续租。esbuild 生成 `build/extract-worker/extract-worker.mjs` 和 `extract-worker.manifest.json`；`npm run dev/build` 的 `predev/prebuild` 自动构建，`scripts/documents/extract.ts` **每次都重建**。manifest 记录 extractor/table 版本与源码哈希；部署 preflight 校验版本和哈希格式，不是部署源码的独立哈希复算。`next.config.mjs` 给 extract/candidates/reprocess 路由追踪 bundle、manifest、CMaps、standard_fonts 与 `legacy/build/pdf.worker.mjs`。`pdfjsAssets()` 使用文件系统目录；CJK CID 字体必须有 CMaps。worker 硬截止终止线程，堆上限 1024 MB、PDF 上限 1500 页；逐文档最长 240 s，cron 工作截止 240 s，抽取收尾最多额外 30 s（路由上限 300 s）。
 
-**owner 启用顺序**：先完成 commander 门禁与锁，再生产应用 `20261115090000_disclosure_documents.sql` → `20261115091000_fact_citations.sql`（在 main 已锁 `20261114090000` 宏观迁移之后）→ 三开关关闭部署 → 每来源手动小批 sync → 检查回执、对象、权限后开 `DOCUMENTS_SYNC_ENABLED=1` → §9 preview worker/CJK/Storage 冒烟 → 开生产 `DOCUMENTS_EXTRACT_ENABLED=1` 并添加抽取 cron → 评审候选和零输出代激活决策后开 `DOCUMENTS_CANDIDATES_ENABLED=1` 并添加候选 cron。没有审批行时 auto 阶段不决定任何候选。
+**owner 启用顺序**：先完成 commander 门禁与锁，再生产应用 `20261117090000_disclosure_documents.sql` → `20261117091000_fact_citations.sql`（在 main 已锁 `20261114090000` 宏观迁移之后）→ 三开关关闭部署 → 每来源手动小批 sync → 检查回执、对象、权限后开 `DOCUMENTS_SYNC_ENABLED=1` → §9 preview worker/CJK/Storage 冒烟 → 开生产 `DOCUMENTS_EXTRACT_ENABLED=1` 并添加抽取 cron → 评审候选和零输出代激活决策后开 `DOCUMENTS_CANDIDATES_ENABLED=1` 并添加候选 cron。没有审批行时 auto 阶段不决定任何候选。
 
 ```bash
 node --env-file=.env.local --import tsx scripts/documents/sync.ts --source hkexnews --apply --limit 5

@@ -957,7 +957,7 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 | §12 样例 10 | 混合结果改用同日冲突构造（同一 HKEX 文件同日替换为不同值），断言形状不变 | 候选级 `identity_bs` 是阻断检查，规格二规则对同列值不会另行隔离，原样例不可达 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
 | §13 审计目录 | 实施期产物（实施日志、评测与真实字节验证报告、dry-run 回执、引用抽样）统一放 `docs/audits/2026-11-06-document-pipeline/` | 与实施日志同处 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
 | 测试 | 新增仅测试用 `pgDocumentsDb`、`pgHkFactsPort`（`hk-facts/pg-facts-port.ts`，因 `pg` 不得进生产代码路径）、`memoryHkFactsPort(facts, docs, {now})`（租约与 `memoryFactsDb.setNow` 同一时钟）；四个 critical 套件 | 内存实现无法表达数据库约束；固定时钟的测试不能依赖墙钟 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
-| §2/§4/§12 迁移名 | `20261108090000/20261108091000` → `20261115090000/20261115091000` | 排在 main 已锁 `20261114090000` macro 迁移之后，保持 append-only inventory | 合并 `5b046363` 后 `388ae30c` |
+| §2/§4/§12 迁移名 | `20261108090000/20261108091000` → `20261117090000/20261117091000` | 排在 main 已锁 `20261114090000` macro 迁移之后，保持 append-only inventory | 合并 `5b046363` 后 `388ae30c` |
 | 迁移锁 | 锁推迟至最终门禁全部通过，commander 追加 SHA-256 条目；本次失败/未跑的门禁不锁 | Tasks 1–18 审计仍需修改 F3 自有 SQL，避免锁定未定稿字节 | Task 1 原 implementation-log；Task 19 用户授权边界 |
 | §4.8/§7.3 租约 | 新增 holder-only renew：`renew_document_sync_lease`、`renew_document_extract_lease`、`renew_candidates_lease`、`renew_hk_fact_lease`；拒绝过期/无主/已释放/他批次，不增加 attempts；heartbeat 120s，quiesce 有界排空 | claim 可重新获取租约，迟到心跳会复活已释放 scope；主线程必须保持续租 | 计划 02 P2-7、04 R1-P2-7、06 R3-P2-1、08 R4-P2-2；`d7895e4b` |
 | §4.8 publish_hk_run | 第六参 `p_zero_output jsonb=[{document_id,extraction_id}]`；锁文档/抽取后验证当前 primary/done 与绑定，变化报 stale_plan | 防止选择与发布间重抽取/再生使零输出计划过期 | 计划 02 P1-4；`9cce0513` |

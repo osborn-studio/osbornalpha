@@ -18,7 +18,7 @@ import type {DocsContractHarness} from './db-contract';
 import {pgDocumentsDb} from './pg-documents-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const MIGRATION='supabase/migrations/20261115090000_disclosure_documents.sql';
+const MIGRATION='supabase/migrations/20261117090000_disclosure_documents.sql';
 const TABLES=['disclosure_documents','document_assets','document_extractions','document_pages','document_citations','extraction_candidates','candidate_publications','extraction_approvals','document_sync_scope'];
 const PUBLIC_TABLES=['disclosure_documents','document_assets','document_extractions','document_pages','document_citations'];
 const SERVICE_TABLES=['extraction_candidates','candidate_publications','extraction_approvals','document_sync_scope'];

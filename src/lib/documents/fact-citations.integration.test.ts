@@ -22,8 +22,8 @@ import {code,hkCite,hkExtraction,hkFactsPortContract,hkFilingRow,hkStagedRun,hkW
 import type {HkPortHarness} from './hk-facts/facts-port-contract';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const MIGRATION_TWO='supabase/migrations/20261115091000_fact_citations.sql';
-const MIGRATION_ONE='supabase/migrations/20261115090000_disclosure_documents.sql';
+const MIGRATION_TWO='supabase/migrations/20261117091000_fact_citations.sql';
+const MIGRATION_ONE='supabase/migrations/20261117090000_disclosure_documents.sql';
 const F3_RPC=['public.bind_filing_documents(uuid,jsonb)','public.insert_fact_citations(uuid,jsonb)','public.publish_hk_run(uuid,uuid,uuid,uuid[],bigint,jsonb)','public.finish_candidate_publications(uuid)','public.abandon_candidate_publications(uuid)','public.ensure_hk_fact_scope(uuid,text)','public.renew_hk_fact_lease(uuid,uuid,int)','public.resolve_hk_facts_quarantine(uuid,uuid[],uuid)','public.hk_promotion_due(int,text,int)','public.hk_zero_output_documents(uuid,int)'];
 const F3_INTERNAL=['public.assert_run_evidence_complete(uuid)','public.fact_citations_guard()','public.filing_documents_guard()'];
 
@@ -195,7 +195,7 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
  it('F3 migrations leave every pre-existing function and trigger unchanged',async()=>{
   // Include all of main's extensions before taking the baseline; replaying spec-2 alone
   // would incorrectly undo definitions that main legitimately replaced after spec-2.
-  const fresh=await freshMigratedDatabase(adminUrl,'20261115090000_disclosure_documents.sql');
+  const fresh=await freshMigratedDatabase(adminUrl,'20261117090000_disclosure_documents.sql');
   try{
    const read=async(text:string,values:unknown[]=[])=>(await fresh.pool.query(text,values)).rows as Record<string,any>[];
    const before=await existingDefs(read);
