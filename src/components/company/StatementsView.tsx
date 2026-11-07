@@ -15,7 +15,7 @@ import { ConceptPopover } from './ConceptPopover';
 import { MiniBars } from './MiniBars';
 import { Callout, ErrorCard, LoadingGrid, TruncatedCard } from './StateCallout';
 import { SCALES, SCALE_EXP, defaultScale, type ScaleId } from './format';
-import { barSeries, cellView, gridEmptyState, moneyCurrency, statementsCsv, type Badge } from './statements-model';
+import { otherUnitCellOpensHistory, barSeries, cellView, gridEmptyState, moneyCurrency, statementsCsv, type Badge } from './statements-model';
 
 const PERIODS = [8, 20, 40] as const;
 const SCALE_KEYS: Record<ScaleId, string> = { raw: 'scaleRaw', thousand: 'scaleThousand', million: 'scaleMillion', hundred_million: 'scaleHundredMillion' };
@@ -124,6 +124,9 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
             </div>
           )}
           <div className="text-[11px] text-[var(--text-dim)]">{t('badgeLegend')}</div>
+          {!otherUnitCellOpensHistory(data.basis) && Object.values(data.otherUnitOnly).some((k) => k.length > 0) && (
+            <div className="text-[11px] text-[var(--text-dim)]">{t('cellOtherUnitDerivedHint')}</div>
+          )}
 
           <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
             <table className="w-max min-w-full text-sm">
@@ -163,7 +166,13 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
                         return (
                           <td key={p.key} className={`num whitespace-nowrap px-3 py-1.5 text-right ${isHl ? 'bg-[var(--accent-wash)]' : ''}`}>
                             {v.kind === 'missing' && !v.otherUnitOnly && <span className="text-[var(--text-muted)]" title={t('cellMissingTitle')}>—</span>}
-                            {v.kind === 'missing' && v.otherUnitOnly && (
+                            {v.kind === 'missing' && v.otherUnitOnly && !otherUnitCellOpensHistory(data.basis) && (
+                              <>
+                                <span className="text-[var(--text-muted)]" title={t('cellOtherUnitDerivedHint')}>—</span>
+                                <BadgeMark b={{ code: 'U' }} />
+                              </>
+                            )}
+                            {v.kind === 'missing' && v.otherUnitOnly && otherUnitCellOpensHistory(data.basis) && (
                               <>
                                 <button type="button" onClick={() => openCell(row, p)} data-testid={`cell-${row.concept}-${p.key}`} title={t('cellOtherUnitTitle')}
                                   className="text-[var(--text-muted)] hover:text-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">—</button>

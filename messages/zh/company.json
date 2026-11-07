@@ -110,6 +110,7 @@
     "cellIncomplete": "来源记录不完整",
     "cellIncompleteTitle": "证据 DTO 缺失或 codeVersion 为空（evidence_incomplete）",
     "cellOtherUnitTitle": "该期仅有其他单位的事实，点开查看",
+    "cellOtherUnitDerivedHint": "单季派生值以其他单位存在；切换到“按披露”查看来源",
     "cellMissingTitle": "该期无此概念的可见披露",
     "miniBars": "迷你柱",
     "miniBarsAria": "{concept} 各期柱图，数值即本行单元格",

@@ -63,3 +63,5 @@ export function barSeries(row:GridRow,periods:PeriodCol[]):{key:string;value:num
   const v=Number(c.value);return Number.isFinite(v)?{key:p.key,value:v,blank:false}:{key:p.key,value:null,blank:true};
  });
 }
+/** A `— U` cell opens raw fact history only where the period can have a directly disclosed fact; quarterly periods may be derived. */
+export function otherUnitCellOpensHistory(basis:StatementsResponse['basis']):boolean{return basis!=='quarterly';}

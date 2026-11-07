@@ -110,6 +110,7 @@
     "cellIncomplete": "Source record incomplete",
     "cellIncompleteTitle": "Evidence DTO missing or empty codeVersion (evidence_incomplete)",
     "cellOtherUnitTitle": "Only other-unit facts exist for this period; open to see them",
+    "cellOtherUnitDerivedHint": "Derived quarter exists only in another unit; switch to Disclosed to see sources",
     "cellMissingTitle": "No visible disclosure of this concept for this period",
     "miniBars": "Mini bars",
     "miniBarsAria": "Bar chart of {concept} by period; values are this row's cells",

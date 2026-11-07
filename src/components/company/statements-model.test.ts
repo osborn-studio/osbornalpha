@@ -1,6 +1,6 @@
 // src/components/company/statements-model.test.ts
 import {describe,it,expect} from 'vitest';
-import {badgesOf,cellView,moneyCurrency,statementsCsv,barSeries,gridEmptyState,periodKeyParts} from './statements-model';
+import {otherUnitCellOpensHistory,badgesOf,cellView,moneyCurrency,statementsCsv,barSeries,gridEmptyState,periodKeyParts} from './statements-model';
 import type {StatementsResponse} from '@/lib/company/client';
 import type {FactCell,FilingSummary,GridRow} from '@/lib/company/types';
 
@@ -60,5 +60,11 @@ describe('withheld cells expose no digits (review fix 8)',()=>{
   expect(JSON.stringify(v)).not.toMatch(/\d/);
   const csv=statementsCsv(resp([row({[K1]:{kind:'withheld',reason:'evidence_incomplete',factId:'fx'}})]));
   expect(csv.trim().split('\n')[1].split(',')[10]).toBe('');
+ });
+});
+
+describe('other-unit-only cells by basis',()=>{
+ it('open history only in disclosed and annual basis; quarterly (possibly derived) stays inert',()=>{
+  expect(otherUnitCellOpensHistory('disclosed')).toBe(true);expect(otherUnitCellOpensHistory('annual')).toBe(true);expect(otherUnitCellOpensHistory('quarterly')).toBe(false);
  });
 });
