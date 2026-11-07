@@ -9087,3 +9087,803 @@ export const TRANSMISSION_V1:Record<Region,StageDef[]>={
 157:export const regimeInputsOf=(region:Region):MacroSeriesDef[]=>indicatorsOf(region).filter(d=>d.status==='active'&&d.weight>0&&d.nativeFrequency!=='daily'&&d.nativeFrequency!=='event');
 zsh:1: no matches found: scripts/*migration*
 
+exec
+/bin/zsh -lc "cat src/lib/macro/strategy/data/transmission-v1.ts; cat src/components/macro/charts/chart-geometry.ts; rg -n 'MacroDb|Record<Adapter|Record<NativeFrequency|Timeliness|DATASET_OF|macroRegimeV1|macroSampleInputs' src/lib/judgments/property* src/lib/judgments/replay* src/lib/macro/*.ts; sed -n '1,85p' src/components/macro/IndicatorDetail.tsx; sed -n '290,340p' src/lib/judgments/methodologies/macro-regime.v1.test.ts; cat docs/methodologies/licenses.json; rg -n 'test:db|test:migrations|typecheck' package.json" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+// src/lib/macro/strategy/data/transmission-v1.ts
+// Transmission flow configuration v1 (spec 2026-11-07 §5.1, macro-transmission/1): six stages per region,
+// economy → policy → liquidity → rates → risk → assets. Every edge is a mechanism assumption, never a measured link.
+// Observed nodes name catalog ids (asset views resolve through aliasOf when read); catalog missing / restricted rows show
+// their catalog state; series outside the catalog are 'not_in_catalog' nodes with a reason.
+import type {Region} from '../contract';
+import type {StageDef} from '../transmission';
+const SPREAD={kind:'derived',id:'us_cn_10y_spread',op:'spread',a:'US_DGS10',b:'CN_CGB_10Y',unit:'pp',label:{zh:'中美 10 年期国债利差',en:'US–China 10-year government bond spread'}} as const;
+const EDGE={
+ economy:{zh:'机制假设：通胀与就业变化影响央行的政策取向',en:'Mechanism assumption: inflation and employment shape the policy stance'},
+ policy:{zh:'机制假设：政策利率与操作改变银行体系流动性',en:'Mechanism assumption: policy rates and operations change banking-system liquidity'},
+ liquidity:{zh:'机制假设：流动性松紧传到无风险利率与汇率',en:'Mechanism assumption: liquidity conditions pass through to risk-free rates and the exchange rate'},
+ rates:{zh:'机制假设：无风险利率变化影响风险偏好与估值',en:'Mechanism assumption: risk-free rate moves affect risk appetite and valuations'},
+ risk:{zh:'机制假设：风险偏好变化反映到资产价格',en:'Mechanism assumption: shifts in risk appetite show up in asset prices'},
+};
+const LABEL={
+ economy:{zh:'经济数据',en:'Economic data'},policy:{zh:'政策',en:'Policy'},liquidity:{zh:'流动性',en:'Liquidity'},
+ rates:{zh:'无风险利率',en:'Risk-free rates'},risk:{zh:'风险偏好',en:'Risk appetite'},assets:{zh:'资产',en:'Assets'},
+};
+export const TRANSMISSION_V1:Record<Region,StageDef[]>={
+ US:[
+  {stage:'economy',label:LABEL.economy,edgeToNext:{text:EDGE.economy},nodes:[
+   {kind:'observed',id:'us_cpi_yoy',seriesId:'US_CPI_YOY'},{kind:'observed',id:'us_unrate',seriesId:'US_UNRATE'},
+   {kind:'observed',id:'us_ppi_fd_yoy',seriesId:'US_PPI_FD_YOY'},{kind:'observed',id:'us_ism_pmi',seriesId:'US_ISM_PMI'}]},
+  {stage:'policy',label:LABEL.policy,edgeToNext:{text:EDGE.policy},nodes:[{kind:'observed',id:'us_dff',seriesId:'US_DFF'}]},
+  {stage:'liquidity',label:LABEL.liquidity,edgeToNext:{text:EDGE.liquidity},nodes:[
+   {kind:'not_in_catalog',id:'us_rrp_tga',label:{zh:'隔夜逆回购（RRP）与财政部一般账户（TGA）',en:'Overnight reverse repo (RRP) and Treasury General Account (TGA)'},
+    reason:{zh:'目录尚未增补 RRPONTSYD / WTREGEN（owner 事项 A）',en:'RRPONTSYD / WTREGEN not yet added to the catalog (owner item A)'}}]},
+  {stage:'rates',label:LABEL.rates,edgeToNext:{text:EDGE.rates},nodes:[
+   {kind:'observed',id:'us_dgs10',seriesId:'US_DGS10'},{kind:'observed',id:'us_dtwexbgs',seriesId:'US_DTWEXBGS'},SPREAD]},
+  {stage:'risk',label:LABEL.risk,edgeToNext:{text:EDGE.risk},nodes:[
+   {kind:'observed',id:'us_vix',seriesId:'US_VIX'},
+   {kind:'not_in_catalog',id:'us_credit_spread',label:{zh:'信用利差',en:'Credit spread'},reason:{zh:'目录没有已确认权利的信用利差序列',en:'No credit spread series with confirmed rights in the catalog'}}]},
+  {stage:'assets',label:LABEL.assets,edgeToNext:null,nodes:[
+   {kind:'observed',id:'us_wti',seriesId:'US_WTI'},{kind:'observed',id:'us_sp500',seriesId:'US_SP500'},{kind:'observed',id:'cn_csi300',seriesId:'CN_CSI300'}]},
+ ],
+ CN:[
+  {stage:'economy',label:LABEL.economy,edgeToNext:{text:EDGE.economy},nodes:[
+   {kind:'observed',id:'cn_pmi_mfg',seriesId:'CN_PMI_MFG'},{kind:'observed',id:'cn_cpi_yoy',seriesId:'CN_CPI_YOY'},{kind:'observed',id:'cn_ppi_yoy',seriesId:'CN_PPI_YOY'},
+   {kind:'observed',id:'cn_gdp_yoy',seriesId:'CN_GDP_YOY'},{kind:'observed',id:'cn_export_yoy',seriesId:'CN_EXPORT_YOY'}]},
+  {stage:'policy',label:LABEL.policy,edgeToNext:{text:EDGE.policy},nodes:[
+   {kind:'observed',id:'cn_lpr_1y',seriesId:'CN_LPR_1Y'},{kind:'observed',id:'cn_mlf_1y',seriesId:'CN_MLF_1Y'}]},
+  {stage:'liquidity',label:LABEL.liquidity,edgeToNext:{text:EDGE.liquidity},nodes:[
+   {kind:'observed',id:'cn_m2_yoy',seriesId:'CN_M2_YOY'},{kind:'observed',id:'cn_afre_stock_yoy',seriesId:'CN_AFRE_STOCK_YOY'}]},
+  {stage:'rates',label:LABEL.rates,edgeToNext:{text:EDGE.rates},nodes:[
+   {kind:'observed',id:'cn_cgb_10y',seriesId:'CN_CGB_10Y'},{kind:'observed',id:'cn_usdcny_cp',seriesId:'CN_USDCNY_CP'},SPREAD]},
+  {stage:'risk',label:LABEL.risk,edgeToNext:{text:EDGE.risk},nodes:[
+   {kind:'not_in_catalog',id:'cn_risk_appetite',label:{zh:'中国风险偏好指标',en:'China risk-appetite gauge'},reason:{zh:'目录没有中国风险偏好序列',en:'No China risk-appetite series in the catalog'}}]},
+  {stage:'assets',label:LABEL.assets,edgeToNext:null,nodes:[
+   {kind:'observed',id:'cn_cgb10y_asset',seriesId:'CN_CGB10Y'},{kind:'observed',id:'cn_csi300',seriesId:'CN_CSI300'}]},
+ ],
+};
+// src/components/macro/charts/chart-geometry.ts
+// Pure geometry and data helpers for macro charts (spec §3.3, §3.4). Numbers here only position marks; every
+// printed number comes from value_text through macro-format.ts.
+const r1=(v:number)=>Math.round(v*10)/10;
+export function sparklinePoints(values:readonly string[],w:number,h:number,pad=2):string{
+ const nums=values.map(Number);if(nums.length<2||nums.some(n=>!Number.isFinite(n)))return '';
+ const lo=Math.min(...nums),hi=Math.max(...nums),span=hi-lo;
+ return nums.map((n,i)=>`${r1(pad+(i*(w-2*pad))/(nums.length-1))},${r1(span===0?h/2:pad+((hi-n)*(h-2*pad))/span)}`).join(' ');
+}
+export interface ScatterGeometry{dots:{cx:number;cy:number}[];line:{x1:number;y1:number;x2:number;y2:number};xDomain:[number,number];yDomain:[number,number]}
+export function scatterGeometry(pairs:readonly {x:number;y:number}[],fit:{slope:number;intercept:number},w:number,h:number,pad=28):ScatterGeometry{
+ const xs=pairs.map(p=>p.x),ys=pairs.map(p=>p.y);
+ let x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+ if(x0===x1){x0-=1;x1+=1;}if(y0===y1){y0-=1;y1+=1;}
+ const sx=(x:number)=>r1(pad+((x-x0)/(x1-x0))*(w-2*pad)),sy=(y:number)=>r1(h-pad-((y-y0)/(y1-y0))*(h-2*pad));
+ return {dots:pairs.map(p=>({cx:sx(p.x),cy:sy(p.y)})),line:{x1:sx(x0),y1:sy(fit.intercept+fit.slope*x0),x2:sx(x1),y2:sy(fit.intercept+fit.slope*x1)},xDomain:[x0,x1],yDomain:[y0,y1]};
+}
+export function withAlpha(color:string,alpha:number):string{
+ const hex=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+ if(hex){const h=hex[1].length===3?hex[1].split('').map(c=>c+c).join(''):hex[1];return `rgba(${parseInt(h.slice(0,2),16)}, ${parseInt(h.slice(2,4),16)}, ${parseInt(h.slice(4,6),16)}, ${alpha})`;}
+ const rgb=/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color.trim());
+ return rgb?`rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`:color;
+}
+/** Each marker moves to the first point time on/after its own date (lightweight-charts markers need a bar). */
+export function snapMarkers<T extends {time:string}>(times:readonly string[],markers:readonly T[]):T[]{
+ const out:T[]=[];
+ for(const m of markers){const at=times.find(x=>x>=m.time);if(at)out.push({...m,time:at});}
+ return out.sort((a,b)=>a.time.localeCompare(b.time));
+}
+/** Points whose month lies within a band's start..end months (inclusive); the first matching band wins. */
+export function bandPoints<D extends string>(times:readonly string[],bands:readonly {start:string;end:string;direction:D}[]):{time:string;direction:D}[]{
+ return times.flatMap(time=>{const m=time.slice(0,7);const b=bands.find(x=>m>=x.start.slice(0,7)&&m<=x.end.slice(0,7));return b?[{time,direction:b.direction}]:[];});
+}
+zsh:1: no matches found: src/lib/judgments/property*
+'use client';
+// IndicatorDetail — 指标详情 (spec §3.3): current value → typed change → period → availability + basis → chart with
+// cycle bands and event markers (with a table view) → cycles and events → asset moves per cycle (up/down colours for
+// assets only) → method → source, evidence and revisions (drawer). `compact` (overview preview) keeps the facts and
+// the chart/table only.
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { catalogById } from '@/lib/macro/catalog';
+import { DataTableToggle } from './charts/DataTableToggle';
+import { MacroLineChart } from './charts/MacroLineChart';
+import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
+import { MISSING, formatInstant, formatPeriod, formatValueText, typedChange, unitSuffix } from './macro-format';
+import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
+import { useMacroT } from './use-macro-t';
+import { pick, type SeriesJson } from './view-model';
+
+type Mode = 'level' | 'diff' | 'yoy';
+type Load = { data: SeriesJson | null; error: string | null };
+const cell = 'py-1 pr-3';
+
+function Fact({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div>
+      <dt className="text-[10px] uppercase tracking-wider text-text-dim">{label}</dt>
+      <dd className="font-mono text-base tabular-nums">{value}</dd>
+      {note && <dd className="text-[11px] text-text-dim">{note}</dd>}
+    </div>
+  );
+}
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="card-base space-y-2"><h3 className="text-sm font-semibold">{title}</h3>{children}</section>;
+}
+
+export function IndicatorDetail({ seriesId, compact = false }: { seriesId: string; compact?: boolean }) {
+  const { t, locale } = useMacroT();
+  const def0 = catalogById(seriesId);
+  const windows = windowsFor(def0?.period ?? 'month');
+  const [win, setWin] = useState<DetailWindow>(defaultWindow(def0?.period ?? 'month'));
+  const [mode, setMode] = useState<Mode>('level');
+  const [base, setBase] = useState<Load>({ data: null, error: null });
+  const [diffLoad, setDiffLoad] = useState<Load>({ data: null, error: null });
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const from = useMemo(() => windowFrom(win, today), [win, today]);
+  const yoy = def0 ? yoyOf(def0) : null;
+  const baseTransform: Transform = mode === 'yoy' ? 'yoy' : 'raw';
+  const period = def0?.period ?? 'month';
+  // Bounded date chunks (≤ 600 points each, merged): the 5Y daily default and the long monthly "All" never hit the API limit.
+  useEffect(() => {
+    let cancelled = false;
+    setBase({ data: null, error: null });
+    fetchSeriesWindow(seriesId, from, today, period, baseTransform)
+      .then((data) => { if (!cancelled) setBase({ data, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setBase({ data: null, error: e.message }); });
+    return () => { cancelled = true; };
+  }, [seriesId, from, today, period, baseTransform]);
+  const wantDiff = mode === 'diff';
+  useEffect(() => {
+    if (!wantDiff) return;
+    let cancelled = false;
+    setDiffLoad({ data: null, error: null });
+    fetchSeriesWindow(seriesId, from, today, period, 'diff')
+      .then((data) => { if (!cancelled) setDiffLoad({ data, error: null }); })
+      .catch((e: Error) => { if (!cancelled) setDiffLoad({ data: null, error: e.message }); });
+    return () => { cancelled = true; };
+  }, [wantDiff, seriesId, from, today, period]);
+  const d = base.data;
+  const diffRowsJson = wantDiff ? diffLoad.data?.observations ?? null : null;
+  const diffMap = useMemo(() => (diffRowsJson ? diffByPeriod(diffRowsJson) : new Map<string, string>()), [diffRowsJson]);
+  const points = useMemo(() => (d ? chartPoints(wantDiff ? diffRowsJson ?? [] : d.observations) : []), [d, wantDiff, diffRowsJson]);
+  const bands = useMemo(() => (d ? bandsOf(d.cycles) : []), [d]);
+  const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end) : []), [d]);
+  if (!def0) return <div className="card-base text-xs text-text-dim">{t('detail.notFound')}</div>;
+
+  const def = d?.def ?? def0;
+  const readDef = (d && catalogById(d.seriesRead)) || def;
+  const name = pick(def.name, locale);
+  const unit = unitSuffix(readDef.unit, t);
+  const diffUnit = readDef.unit === 'pct' ? ' pp' : unit;
+  const obs = d?.observations ?? [];
+  const cur = obs.at(-1) ?? null;
+  const prev = obs.at(-2) ?? null;
+  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, readDef.changeKind) : null;
+  const source = sourceJsonOf(readDef);
+  const open = (observationId: string | null, periodEnd: string, valueText: string) => setDrawer({ seriesId: readDef.id, observationId, name, periodEnd, display: `${formatValueText(valueText)}${unit}`, unit: readDef.unit, source });
+ const r=await produce(macroRegimeV1,[work],produceCtx(db,inputsDb));
+ expect(r.counts.inserted).toBe(1);
+ const ids=await db.judgmentsBySnapshot(MACRO_S1);
+ expect(ids).toHaveLength(1);
+ const row=(await db.getJudgment(ids[0]))!;
+ expect(row.abstain_reason).toBe('binding_mismatch');
+ expect(row.inputs.map(i=>i.kind)).toEqual(['macro_snapshot']);
+});
+{
+  "financial_fact×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_fact×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_observation×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_snapshot×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×datagateway": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×supabase_public": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "judgment×judgments": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "legacy_fill×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  }
+}
+13:    "typecheck": "tsc --noEmit",
+20:    "test:db": "tsx scripts/ci/research-db.ts",
+21:    "test:migrations": "tsx scripts/ci/migration-rehearsal.ts",
+
+exec
+/bin/zsh -lc "rg -n 'macroSampleInputs|macro-regime.v1|macroRegimeV1|REGISTRY' src/lib/judgments --glob '*test.ts' --glob '*fixture*.ts' | tail -65; rg -n 'from.*regime|from.*catalog|from.*snapshots|from.*read-api|from.*events' src/lib/judgments/formula-hash.ts src/lib/macro/read-api.ts; sed -n '1,100p' src/lib/judgments/formula-hash.ts; sed -n '145,159p' src/lib/macro/catalog.ts; rg -n 'macro|publi|input' src/lib/judgments/types.ts" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+src/lib/judgments/replay.test.ts:24:const REPLAY_REGISTRY:readonly Methodology[]=[...REGISTRY,syntheticFactMetric];
+src/lib/judgments/replay.test.ts:44:   const r=await replayJudgment(fx.judgment.judgment_id,{db:fixtureJudgmentsDb([fx.judgment]),registry:REPLAY_REGISTRY});
+src/lib/judgments/replay.test.ts:50:   const r=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY});
+src/lib/judgments/replay.test.ts:62: const run=(r:JudgmentRow,registry:readonly Methodology[]=REPLAY_REGISTRY)=>replayJudgment(r.judgment_id,{db:fixtureJudgmentsDb([r]),registry});
+src/lib/judgments/replay.test.ts:80:  await expect(replayJudgment('00000000-0000-8000-8000-0000000000ff',{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY})).rejects.toMatchObject({code:'unknown_judgment'});
+src/lib/judgments/replay.test.ts:92:   const same=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true});
+src/lib/judgments/replay.test.ts:94:   const gone=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:memoryJudgmentInputsDb(),reconcile:true});
+src/lib/judgments/replay.test.ts:96:   const none=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,reconcile:true});
+src/lib/judgments/replay.test.ts:102:   const ok=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+src/lib/judgments/replay.test.ts:106:   const bad=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true,now:boom});
+src/lib/judgments/replay.test.ts:112:   const r=await replayJudgment(row.judgment_id,{db:fixtureJudgmentsDb([row]),registry:REPLAY_REGISTRY,reconcile:true,now:()=>{n++;return 'x';}});
+src/lib/judgments/replay.test.ts:117:   const r=await replayJudgment(row.judgment_id,{db:{...fixtureJudgmentsDb([row]),serverTime:async()=>{seen.push('t');return '2030-01-01T00:00:00.000Z';}},registry:REPLAY_REGISTRY,inputsDb:aapl,reconcile:true});
+src/lib/judgments/settle.test.ts:11:import {REGISTRY} from './registry';
+src/lib/judgments/settle.test.ts:651:  const spy=vi.spyOn(await import('./registry'),'REGISTRY','get').mockReturnValue([{id:'repair_a'},{id:'repair_b'}] as unknown as typeof REGISTRY);
+src/lib/judgments/registry.test.ts:5:import {REGISTRY,findMethodology,methodologyRowOf} from './registry';
+src/lib/judgments/registry.test.ts:8:describe('REGISTRY (spec §4)',()=>{
+src/lib/judgments/registry.test.ts:10:  expect(new Set(REGISTRY.map(m=>`${m.id}@${m.version}`)).size).toBe(REGISTRY.length);
+src/lib/judgments/registry.test.ts:11:  for(const m of REGISTRY)expect({key:`${m.id}@${m.version}`,problems:validateMethodology(m,process.cwd(),formulaHashOf(m).closure)}).toEqual({key:`${m.id}@${m.version}`,problems:[]});
+src/lib/judgments/register.test.ts:15:import {REGISTRY} from './registry';
+src/lib/judgments/register.test.ts:248:  // Every REGISTRY rule method with a committed public replay fixture (Task 13 / 19 add files; this test picks them up).
+src/lib/judgments/register.test.ts:252:   const m=REGISTRY.find(x=>x.id===fx.judgment.methodology_id&&x.version===fx.judgment.methodology_version);
+src/lib/judgments/testing/macro-fixture.ts:16:import {macroRegimeV1} from '@/lib/judgments/methodologies/macro-regime.v1';
+src/lib/judgments/testing/macro-fixture.ts:52: const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
+src/lib/judgments/testing/macro-fixture.ts:66: ({db,inputsDb,tables:db.tables,codeVersion:MACRO_CODE_VERSION,triggeredBy:'cron',signal:new AbortController().signal,methodology:macroRegimeV1});
+src/lib/judgments/testing/macro-fixture.ts:68:/** Frozen inputs of snapshot s1, for REGISTRY-wide property tests (spec §14.1). */
+src/lib/judgments/testing/macro-fixture.ts:69:export async function macroSampleInputs():Promise<Input[]>{
+src/lib/judgments/testing/macro-fixture.ts:71: const g=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+src/lib/judgments/testing/macro-fixture.ts:78: const res=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(db,macroInputsDb(fx)));
+src/lib/judgments/testing/fixture-methods.ts:2:// Test-only methods and fixtures (not a test file; never in REGISTRY). fixtureRegimeMethod has the
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:1:// src/lib/judgments/methodologies/macro-regime.v1.test.ts
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:11:import {REGISTRY,methodologyRowOf} from '@/lib/judgments/registry';
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:16:import {MACRO_REGIMES,MACRO_UPSTREAM_VERSION,macroRegimeV1,marginPp} from './macro-regime.v1';
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:27: const res=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:42: it('is registered once in REGISTRY as an active categorical rule method with the spec §11.1 parameters and a 7-section doc',async()=>{
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:43:  expect(REGISTRY.filter(m=>m.id==='macro_regime')).toEqual([macroRegimeV1]);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:44:  const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:50:  expect(methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:'another-code-version'}).formula_hash).toBe(row.formula_hash);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:52:  expect(macroRegimeV1.params.catalog_version).toBe('macro-catalog/30bcaa2a33c5');
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:54:  for(const p of [macroRegimeV1.module,...macroRegimeV1.deps])expect({p,exists:existsSync(p)}).toEqual({p,exists:true});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:55:  const doc=readFileSync(macroRegimeV1.doc,'utf8');
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:98:  const inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),db);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:102:  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:116:  expect(await macroRegimeV1.gather(macroWork(fx,MACRO_S1),inputsDb)).toEqual({abstained:true,reason:'snapshot_not_published'});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:118:  const result=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:140:  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:144:  expect(macroRegimeV1.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:148:  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:152:  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:156:  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:161:  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:163:  expect(macroRegimeV1.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:201:  const again=await produce(macroRegimeV1,[macroWork(base(),MACRO_S1)],produceCtx(db,inputsDb));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:210:  const live=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx)));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:213:  const dry=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx),{dryRun:true}));
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:237:  expect(await macroRegimeV1.gather({subject:US,asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z'},inputsDb)).toEqual({abstained:true,reason:'binding_missing',missing:['snapshot_id']});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:238:  expect(await macroRegimeV1.gather({subject:{type:'macro_region',key:'CN'},asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:239:  expect(await macroRegimeV1.gather({subject:US,asOf:'2026-09-12',observedAt:'2026-09-12T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:248:   const c=macroRegimeV1.compute(US,inputs);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:251:   expect(digest(macroRegimeV1.condition(US,inputs,c.claim))).toBe(cond);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:271: const hashed=new Set([...formulaHashOf(macroRegimeV1).closure,...macroRegimeV1.deps]);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:272: expect(macroRegimeV1.deps).toContain('src/lib/macro/flags.ts');
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:281: const plan=await planMethodologySync([macroRegimeV1],db,{repoRoot:process.cwd(),codeVersion:MACRO_CODE_VERSION,licenses});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:283: expect(plan[0]).toMatchObject({key:'macro_regime@v1',action:'register',problems:[],row:{status:'active',publishable:false,formula_hash:formulaHashOf(macroRegimeV1).formula_hash}});
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:284: expect(licenseProblems(macroRegimeV1,licenses).length).toBeGreaterThan(0);
+src/lib/judgments/methodologies/macro-regime.v1.test.ts:290: const r=await produce(macroRegimeV1,[work],produceCtx(db,inputsDb));
+src/lib/macro/read-api.ts:9:import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
+src/lib/macro/read-api.ts:14:import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime,regionWeights} from './regime';
+src/lib/macro/read-api.ts:15:import {buildRegimeInput} from './snapshots';
+// src/lib/judgments/formula-hash.ts
+// formula_hash (spec §4.1, audits G20 / F22). implementation_sha256 = digest of [[repo path, sha256]]
+// over the method module's LOCAL import closure: every relative or '@/' specifier (static import,
+// import type, export … from, dynamic import(), require) reachable from Methodology.module, whether or
+// not it lives under src/lib/judgments/, resolved like the bundler (exact file; .ts / .tsx / .d.ts /
+// .js / .mjs / .json; a .js specifier naming a .ts file; dir/index.*). Bare specifiers (packages,
+// node:*) are excluded. Discovery uses the TypeScript compiler's preProcessFile scanner — comments
+// and string literals can neither add nor hide an import, which a regex cannot guarantee; no type
+// checking. An unresolvable local specifier throws (a silently dropped file would escape the hash).
+// deps_sha256 = digest over Methodology.deps (non-import files: data, rule tables, catalogue
+// snapshots). formula_hash = digest({id, version, params, params_json, horizon, upstream,
+// doc_sha256, implementation_sha256, deps_sha256}); status and publishable are not part of it.
+// Paths are repo-relative POSIX and sorted; bytes are hashed raw. Node-only (fs + typescript): the
+// sync script and tests use it, app code never imports it.
+import {createHash} from 'node:crypto';
+import {existsSync,readFileSync,statSync} from 'node:fs';
+import {dirname,join,relative,resolve,sep} from 'node:path';
+import ts from 'typescript';
+import type {Methodology} from './types';
+import {digest} from './canonical';
+import {upstreamOf} from './registry';
+import type {MethodologyHashes} from './registry';
+
+export interface FormulaHashes extends MethodologyHashes{closure:string[]}
+const EXT=['.ts','.tsx','.js','.mjs','.json','.d.ts'];   // .d.ts last: a declaration file never shadows runtime code (Codex M-02)
+const INDEX=['index.ts','index.tsx','index.js'];
+const isFile=(p:string)=>existsSync(p)&&statSync(p).isFile();
+const posix=(root:string,abs:string)=>relative(root,abs).split(sep).join('/');
+export const fileSha256=(repoRoot:string,path:string)=>createHash('sha256').update(readFileSync(join(repoRoot,path))).digest('hex');
+/** import(expr) / require(expr) whose argument is not a string literal: the dependency would escape the closure (Codex M-01). */
+export function hasNonLiteralLoad(source:string,fileName='x.ts'):boolean{
+ const sf=ts.createSourceFile(fileName,source,ts.ScriptTarget.Latest,true);
+ let found=false;
+ const visit=(n:ts.Node):void=>{
+  if(found)return;
+  if(ts.isCallExpression(n)&&(n.expression.kind===ts.SyntaxKind.ImportKeyword||(ts.isIdentifier(n.expression)&&n.expression.text==='require'))){
+   const a=n.arguments[0];
+   if(!a||!(ts.isStringLiteral(a)||ts.isNoSubstitutionTemplateLiteral(a))){found=true;return;}
+  }
+  ts.forEachChild(n,visit);
+ };
+ visit(sf);
+ return found;
+}
+export function importSpecifiers(source:string):string[]{return ts.preProcessFile(source,true,true).importedFiles.map(f=>f.fileName);}
+export function resolveImport(repoRoot:string,fromAbs:string,spec:string):string|null{
+ let base:string;
+ if(spec.startsWith('@/'))base=join(repoRoot,'src',spec.slice(2));
+ else if(spec==='.'||spec==='..'||spec.startsWith('./')||spec.startsWith('../'))base=resolve(dirname(fromAbs),spec);
+ else return null;
+ if(isFile(base))return base;
+ if(/\.m?js$/.test(base)){for(const x of ['.ts','.tsx']){const t=base.replace(/\.m?js$/,x);if(isFile(t))return t;}}
+ for(const e of EXT)if(isFile(base+e))return base+e;
+ for(const i of INDEX)if(isFile(join(base,i)))return join(base,i);
+ throw new Error(`formula_hash_unresolved_import:${posix(repoRoot,fromAbs)}:${spec}`);
+}
+export function importClosure(repoRoot:string,entry:string):string[]{
+ const root=resolve(repoRoot);const start=resolve(root,entry);
+ if(!isFile(start))throw new Error(`formula_hash_missing_module:${entry}`);
+ const seen=new Set<string>([start]);const stack=[start];
+ while(stack.length>0){
+  const file=stack.pop()!;
+  if(file.endsWith('.json'))continue;
+  const text=readFileSync(file,'utf8');
+  if(hasNonLiteralLoad(text,file))throw new Error(`nonliteral_import:${posix(root,file)}`);
+  for(const spec of importSpecifiers(text)){
+   const dep=resolveImport(root,file,spec);
+   if(dep&&!seen.has(dep)){seen.add(dep);stack.push(dep);}
+   // an executable's sibling declaration file is hashed too (it is the type surface importers may rely on)
+   const decl=dep&&!dep.endsWith('.d.ts')&&!dep.endsWith('.json')?dep.replace(/\.[^./\\]+$/,'.d.ts'):null;
+   if(decl&&!seen.has(decl)&&isFile(decl)){seen.add(decl);stack.push(decl);}
+  }
+ }
+ return [...seen].map(f=>posix(root,f)).sort();
+}
+export function implementationSha256(repoRoot:string,entry:string):{sha256:string;files:string[]}{
+ const files=importClosure(repoRoot,entry);
+ return {sha256:digest(files.map(f=>[f,fileSha256(repoRoot,f)])),files};
+}
+export function depsSha256(repoRoot:string,deps:readonly string[]):string{
+ return digest([...new Set(deps)].sort().map(f=>{if(!isFile(join(repoRoot,f)))throw new Error(`formula_hash_missing_dep:${f}`);return [f,fileSha256(repoRoot,f)];}));
+}
+export function formulaHashOf(m:Methodology,repoRoot:string=process.cwd()):FormulaHashes{
+ if(!isFile(join(repoRoot,m.doc)))throw new Error(`formula_hash_missing_doc:${m.doc}`);
+ const doc_sha256=fileSha256(repoRoot,m.doc);
+ const impl=implementationSha256(repoRoot,m.module);
+ const deps_sha256=depsSha256(repoRoot,m.deps);
+ const formula_hash=digest({id:m.id,version:m.version,params:m.params,params_json:m.params_json??{},horizon:m.horizon,upstream:upstreamOf(m),doc_sha256,implementation_sha256:impl.sha256,deps_sha256});
+ return {doc_sha256,implementation_sha256:impl.sha256,deps_sha256,formula_hash,closure:impl.files};
+}
+ }
+ return Array.from(H,x=>x.toString(16).padStart(8,'0')).join('');
+}
+export const CATALOG_VERSION=`macro-catalog/${sha256HexSync(canonicalJson(MACRO_CATALOG)).slice(0,12)}`;
+
+// ---------------------------------------------------------------- helpers
+const BY_ID=new Map(MACRO_CATALOG.map(d=>[d.id,d]));
+const DERIVE_INPUTS=new Set(MACRO_CATALOG.flatMap(d=>d.derive?[d.derive.from]:[]));
+export const catalogById=(id:string):MacroSeriesDef|undefined=>BY_ID.get(id);
+/** Display indicators of a region, catalog order: role indicator, not merely the input of a derived series (missing/restricted included). */
+export const indicatorsOf=(region:Region):MacroSeriesDef[]=>MACRO_CATALOG.filter(d=>d.region===region&&d.role==='indicator'&&!DERIVE_INPUTS.has(d.id));
+/** Judgment inputs (§0.2 M14/M15): active, weighted, monthly or quarterly (derived month-end included; daily natives never). */
+export const regimeInputsOf=(region:Region):MacroSeriesDef[]=>indicatorsOf(region).filter(d=>d.status==='active'&&d.weight>0&&d.nativeFrequency!=='daily'&&d.nativeFrequency!=='event');
+/** Series that own evidence for one adapter: active, not derived, not an alias. */
+export const collectableOf=(adapter:Adapter):MacroSeriesDef[]=>MACRO_CATALOG.filter(d=>d.status==='active'&&!d.derive&&!d.aliasOf&&d.source?.adapter===adapter);
+14:export type SubjectType='issuer'|'industry'|'macro_region'|'macro_series'|'security'|'document';
+15:export const PUBLIC_SUBJECT_TYPES=['issuer','industry','macro_region','macro_series'] as const;
+23:export type JudgmentType='macro_regime'|'macro_regime_asset_pair'|'recommendation_call'|'industry_lifecycle_stage'|'industry_prosperity'|'valuation_verdict'|'thesis_win_rate'|'return_range'|'sellside_rating'|'sellside_target_price'|'synthetic_fact_metric';
+41:export interface FactMetricParams{issuer_id:string;market:FactsMarket;metric:string;period_start:string;period_end:string;duration:string;unit:string;input_unit:string;basis:string;formula_version:string;compare:'value'|'yoy'}
+42:export interface MacroRegimeReplayParams{region:'US'|'CN';reference_period:string;macro_methodology_version:string;catalog_version:string}
+46: |{resolver:'macro_regime_replay';params:MacroRegimeReplayParams;predicate:{op:'eq';rhs:Regime};text:Bilingual}
+50:export const PUBLIC_RESOLVERS=['price_return','fact_metric','macro_regime_replay','industry_aggregate'] as const;
+61:// ── inputs (spec §3.5) ──
+63:export interface Origin{publisher:string;adapter:string;locator:string;transform?:string}
+68:export interface MetricKey{issuer_id:string;market:FactsMarket;metric:string;period_start:string;period_end:string;input_unit:string;basis:string;formula_version:string}
+69:export interface MetricSnapshot extends MetricKey{value_text:string;unit:string;duration:string;as_of:string;based_on_rev:number;lineage:MetricRow['inputs'];derivation:{formula_version:string;as_of:string;state_rev:number;rows:DerivationRow[]}}
+73:export const PUBLIC_TABLES=['issuer_industry_memberships','industry_classifications','macro_series'] as const;
+78: |InputRef<'macro_observation',{series_id:string;period_end:string;vintage_id:string},MacroObservationSnapshot>
+79: |InputRef<'macro_snapshot',{snapshot_id:string},MacroSnapshotSnapshot>
+86:export const PUBLIC_INPUT_KINDS=['financial_fact','financial_metric','macro_observation','macro_snapshot','price_bar','table_rows','judgment'] as const;
+93:export interface MethodologyRow{methodology_id:string;version:string;judgment_type:JudgmentType;kind:Kind;producer_kind:ProducerKind;subject_types:SubjectType[];input_kinds:InputKind[];markets:PriceMarket[]|null;title_zh:string;title_en:string;doc_path:string;doc_sha256:string;implementation_sha256:string;params:Record<string,number|string>;params_json:Record<string,unknown>;horizon:Horizon;upstream:Record<string,string>;deps_sha256:string;formula_hash:string;status:MethodologyStatus;publishable:boolean;code_version:string;created_at:string;synced_at:string}
+94:export type MethodologyEventKind='registered'|'status_changed'|'publishable_changed'|'resynced';
+95:export interface MethodologyEvent{event_id:string;methodology_id:string;version:string;seq:number;event:MethodologyEventKind;status:MethodologyStatus;publishable:boolean;formula_hash:string;code_version:string;actor:string;reason:string|null;occurred_at:string}
+96:export interface JudgmentRow{judgment_id:string;subject_type:PublicSubjectType;subject_key:string;judgment_type:JudgmentType;methodology_id:string;methodology_version:string;kind:Kind;producer_kind:'rule'|'model';producer_ref:ProducerRef;producer_nonce:string;as_of:string;registered_at:string;retrospective:boolean;inputs:Input[];inputs_hash:string;abstained:boolean;abstain_reason:string|null;claim:Claim|null;condition:Condition|null;horizon:Horizon|null;target:Target|null;label_policy:LabelPolicy|null;settle_after:string|null;settle_by:string|null;code_version:string;batch_id:string;created_at:string}
+97:/** register_judgment input: registered_at/retrospective/created_at are set by the RPC (spec §5.6). */
+127: /** Inputs containment lookup (GIN): judgments whose inputs contain {kind:'macro_snapshot',ref:{snapshot_id}} (spec §7.1). */
+145: /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
+185:// ── macro read interface (spec §12.1; implemented by the macro workbench later, by fixtures now) ──
+194: classifyAsOf(region:'US'|'CN',referencePeriod:string,cutoff:string,macroMethodologyVersion:string):Promise<{regime:RegimeResult|null;observation_refs:MacroObservationRef[];catalog:{version:string;weights:Record<string,number>;rules_version:string}}>;
+197:// ── inputs db (spec §5.7) ──
+204: macro:MacroReadApi;
+206: /** Public judgment lookup (anon; publishable only). */
+207: publicJudgment(id:string):Promise<JudgmentRow|null>;
+216: /** DB server time at which produce() observes inputs; set by produce from db.serverTime(); methods pass it to buildOrAbstain/buildInput. */
+221: subject_types:SubjectType[];markets?:PriceMarket[];input_kinds:InputKind[];
+222: upstream?:{macro_methodology_version?:string;facts_formula_version?:string};
+230: resolveTarget(item:WorkItem,inputs:Input[],db:JudgmentInputsDb):Promise<Target|Abstained>;
+231: compute(subject:Subject,inputs:Input[]):Active<C>|Abstained;
+232: condition(subject:Subject,inputs:Input[],claim:C):Condition;
+241:export interface ResolveContext{judgment:JudgmentRow;cutoff:string;now:string;inputsDb:JudgmentInputsDb;signal:AbortSignal}
+265: inputs:{kind:InputKind;ref:unknown;available_at:string;origin:Origin;href:string|null}[];
+
+exec
+/bin/zsh -lc "sed -n '1,40p' src/lib/judgments/formula-hash.ts; sed -n '1,70p' src/lib/judgments/inputs.ts; sed -n '1,70p' src/lib/judgments/replay.test.ts; sed -n '245,280p' src/lib/judgments/register.test.ts; rg -n 'macroSampleInputs|macro_regime' src/lib/judgments/determinism.test.ts src/lib/judgments/registry.test.ts; sed -n '1,55p' src/lib/macro/catalog.test.ts; sed -n '1,110p' src/lib/macro/cn-series.test.ts" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+// src/lib/judgments/formula-hash.ts
+// formula_hash (spec §4.1, audits G20 / F22). implementation_sha256 = digest of [[repo path, sha256]]
+// over the method module's LOCAL import closure: every relative or '@/' specifier (static import,
+// import type, export … from, dynamic import(), require) reachable from Methodology.module, whether or
+// not it lives under src/lib/judgments/, resolved like the bundler (exact file; .ts / .tsx / .d.ts /
+// .js / .mjs / .json; a .js specifier naming a .ts file; dir/index.*). Bare specifiers (packages,
+// node:*) are excluded. Discovery uses the TypeScript compiler's preProcessFile scanner — comments
+// and string literals can neither add nor hide an import, which a regex cannot guarantee; no type
+// checking. An unresolvable local specifier throws (a silently dropped file would escape the hash).
+// deps_sha256 = digest over Methodology.deps (non-import files: data, rule tables, catalogue
+// snapshots). formula_hash = digest({id, version, params, params_json, horizon, upstream,
+// doc_sha256, implementation_sha256, deps_sha256}); status and publishable are not part of it.
+// Paths are repo-relative POSIX and sorted; bytes are hashed raw. Node-only (fs + typescript): the
+// sync script and tests use it, app code never imports it.
+import {createHash} from 'node:crypto';
+import {existsSync,readFileSync,statSync} from 'node:fs';
+import {dirname,join,relative,resolve,sep} from 'node:path';
+import ts from 'typescript';
+import type {Methodology} from './types';
+import {digest} from './canonical';
+import {upstreamOf} from './registry';
+import type {MethodologyHashes} from './registry';
+
+export interface FormulaHashes extends MethodologyHashes{closure:string[]}
+const EXT=['.ts','.tsx','.js','.mjs','.json','.d.ts'];   // .d.ts last: a declaration file never shadows runtime code (Codex M-02)
+const INDEX=['index.ts','index.tsx','index.js'];
+const isFile=(p:string)=>existsSync(p)&&statSync(p).isFile();
+const posix=(root:string,abs:string)=>relative(root,abs).split(sep).join('/');
+export const fileSha256=(repoRoot:string,path:string)=>createHash('sha256').update(readFileSync(join(repoRoot,path))).digest('hex');
+/** import(expr) / require(expr) whose argument is not a string literal: the dependency would escape the closure (Codex M-01). */
+export function hasNonLiteralLoad(source:string,fileName='x.ts'):boolean{
+ const sf=ts.createSourceFile(fileName,source,ts.ScriptTarget.Latest,true);
+ let found=false;
+ const visit=(n:ts.Node):void=>{
+  if(found)return;
+  if(ts.isCallExpression(n)&&(n.expression.kind===ts.SyntaxKind.ImportKeyword||(ts.isIdentifier(n.expression)&&n.expression.text==='require'))){
+   const a=n.arguments[0];
+   if(!a||!(ts.isStringLiteral(a)||ts.isNoSubstitutionTemplateLiteral(a))){found=true;return;}
+  }
+  ts.forEachChild(n,visit);
+// src/lib/judgments/inputs.ts
+// Fixed input builders (spec §3.5, audit G03). buildInput(request, inputsDb, asOf) is the ONLY way an
+// Input is made — snapshot (frozen projection), hash = digest(snapshot), available_at (§3.7),
+// origin (origins.ts) — and it reads only through JudgmentInputsDb's public (anon) paths, so a
+// quarantined / unpublished / non-ok row never becomes a public input (input_not_public).
+// rebuildAndCompare re-runs the builder at registration and demands byte equality (§6.2 step 1).
+// Kinds: financial_fact — factsByIds locates the (ok) row, readFacts(asOf, history) proves it is
+// visible at as_of on its published generation; financial_metric — S04/S05: cutoff derivation via
+// deriveMetricsAsOf (never the materialised cache); the frozen derivation rows are every envelope
+// row whose concept is in the lineage and whose period_end ∈ [period_start − 400 d, period_end],
+// sorted (concept, period_start, period_end, unit, disclosure_seq, fact_id); self-check: deriving
+// from those rows alone must give exactly one row with the same key, value and inputs, else
+// metric_not_reproducible (so a too-narrow subset fails at registration, not at replay);
+// macro_observation; macro_snapshot — available_at = max of its observations' available_at, never
+// created_at (audit F10); a snapshot without a regime is snapshot_unclassified; price_bar — only
+// verified capability rows (else market_unsupported), close-only bars keep only close (G27);
+// table_rows — rows with valid_from after as_of are dropped; available_at = max over the rows of their SYSTEM
+// timestamp (updated_at, else created_at); a row with neither → input_unavailable (availability cannot be
+// evidenced; never substituted by as_of — plan audit P1-08; buildOrAbstain abstains on it for table_rows);
+// judgment — public table only, not abstained, available_at = registered_at. legacy_fill / document_span:
+// input_not_allowed.
+// Snapshots never contain undefined (canonicalize rejects it): optional values become null.
+import {FORMULA_VERSION,deriveMetrics} from '@/lib/facts/derive';
+import type {KlineSourceName} from '@/lib/data/kline/types';
+import type {FactRow,MetricRow} from '@/lib/facts/types';
+import type {Abstained,Adjustment,DerivationRow,FactProjection,FactsMarket,Input,InputKind,JudgmentInputsDb,MacroSnapshotSnapshot,MetricKey,MetricSnapshot,PriceBarSnapshot,PriceMarket,PublicTable,Regime} from './types';
+import {PUBLIC_INPUT_KINDS,PUBLIC_TABLES} from './types';
+import {canonicalize,digest} from './canonical';
+import {JudgmentError} from './errors';
+import {datagatewaySymbol} from '@/lib/data/sources/datagateway';
+import {tickerToSecid} from '@/lib/data/sources/eastmoney';
+import {closeOnlyOf} from './kline';
+import {MacroUnavailable,observationIdOf} from './macro-api';
+import {originFor} from './origins';
+import {capabilityOf} from './resolvers/price-capabilities';
+import type {CapabilityStatus} from './resolvers/price-capabilities';
+import {addDaysIso,closeInstantUtc,endOfUtcDay} from './time';
+export {inputsHash as inputsHashOf} from './canonical';
+
+export type PublicInputKind=typeof PUBLIC_INPUT_KINDS[number];
+type RefOf<K extends InputKind>=Extract<Input,{kind:K}>['ref'];
+export type InputRequest={[K in PublicInputKind]:{kind:K;ref:RefOf<K>}}[PublicInputKind];
+export interface BuildOptions{capability?:(source:KlineSourceName,market:PriceMarket,adjustment:Adjustment)=>{status:CapabilityStatus};signal?:AbortSignal;klineTimeoutMs?:number}
+/** Builder codes that mean "this input is missing" at gather time: produce / buildOrAbstain turn them into Abstained. */
+export const ABSTAIN_CODES=['input_not_public','market_unsupported','metric_not_reproducible','unsupported_formula_version','snapshot_unclassified','target_unresolvable'] as const;
+const NOT_PUBLIC_ON_REBUILD=new Set<string>(['input_not_public','market_unsupported','metric_not_reproducible','unsupported_formula_version','snapshot_unclassified']);
+const REGIMES:readonly Regime[]=['recovery','overheat','stagflation','recession'];
+const DAY_SHAPE=/^\d{4}-\d{2}-\d{2}$/;
+const DAY={test:(d:string)=>{if(!DAY_SHAPE.test(d))return false;const t=Date.parse(`${d}T00:00:00.000Z`);return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===d;}};
+/** The market the source would actually query for this ticker (review H-01): eastmoney resolves it from the ticker itself
+ *  (tickerToSecid, src/lib/data/sources/eastmoney.ts), datagateway validates ticker against the stated market
+ *  (datagatewaySymbol, src/lib/data/sources/datagateway.ts); other sources use eastmoney's ticker grammar. */
+function tickerMatchesMarket(source:KlineSourceName,ticker:string,market:PriceMarket):boolean{
+ if(source==='datagateway')return datagatewaySymbol(ticker,market)!==null;
+ return tickerToSecid(ticker)?.market===market;
+}
+const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
+const iso=(v:string)=>new Date(v).toISOString();
+const isoMax=(xs:string[])=>xs.reduce((m,x)=>Date.parse(x)>Date.parse(m)?x:m);
+const factsAdapter=(m:FactsMarket)=>m==='US'?'edgar':'tushare';
+const notPublic=(what:string)=>new JudgmentError('input_not_public',what);
+
+export function inputLabel(x:{kind:InputKind;ref:unknown}):string{
+ const r=(x.ref??{}) as Record<string,string>;
+ switch(x.kind){
+  case 'financial_fact':return `financial_fact:${r.fact_id}`;
+  case 'financial_metric':return `financial_metric:${r.issuer_id}:${r.market}:${r.metric}@${r.period_start}..${r.period_end}`;
+  case 'macro_observation':return `macro_observation:${r.series_id}@${r.period_end}#${r.vintage_id}`;
+  case 'macro_snapshot':return `macro_snapshot:${r.snapshot_id}`;
+  case 'price_bar':return `price_bar:${r.source}:${r.market}:${r.ticker}@${r.date}/${r.adjustment}`;
+// src/lib/judgments/replay.test.ts
+// spec §6.3 / §14.4 / §15 example 2. Golden loop: every JSON file in fixtures/judgments/replay replays
+// to its `expect` verdict, and tampering one frozen projection → input_hash_mismatch naming the input
+// (kind + key; for a macro observation the key contains its series_id). Tasks 19 (macro_regime@v1) and
+// 20 (private recommendation) only add files. Unit cases on the synthetic fixture: diverged claim / id,
+// inputs_only for model / abstained rows, unknown ids / methods, reconcile never changing the verdict,
+// and that the committed synthetic fixture is what the generator produces today.
+import {readFileSync,readdirSync} from 'node:fs';
+import {join} from 'node:path';
+import {beforeAll,describe,expect,it} from 'vitest';
+import {JudgmentError} from './errors';
+import {inputLabel} from './inputs';
+import {memoryJudgmentInputsDb} from './inputs-db';
+import {REGISTRY} from './registry';
+import {samePayload} from './register';
+import {fixtureJudgmentsDb,parseReplayFixture,replayExitCode,replayJudgment} from './replay';
+import type {ReplayFixture} from './replay';
+import type {InputKind,JudgmentRow,Methodology} from './types';
+import {SYNTHETIC_FIXTURE_PATH,aaplInputsDb,generateSyntheticReplayFixture} from './testing/synthetic-fixture';
+import {syntheticFactMetric} from './testing/synthetic-method';
+
+const DIR='fixtures/judgments/replay';
+const FILES=readdirSync(DIR).filter(f=>f.endsWith('.json')).sort();
+const REPLAY_REGISTRY:readonly Methodology[]=[...REGISTRY,syntheticFactMetric];
+const load=(path:string):ReplayFixture=>parseReplayFixture(JSON.parse(readFileSync(path,'utf8')));
+const TAMPER_ORDER:InputKind[]=['macro_observation','financial_metric','financial_fact','price_bar','legacy_fill','macro_snapshot','table_rows','judgment','document_span'];
+/** Changes the first value-like leaf of the preferred input's snapshot, leaving its stored hash. */
+function tamper(row:JudgmentRow):{row:JudgmentRow;kind:InputKind;label:string}{
+ const idx=[...row.inputs.keys()].sort((a,b)=>TAMPER_ORDER.indexOf(row.inputs[a].kind)-TAMPER_ORDER.indexOf(row.inputs[b].kind))[0];
+ const t=structuredClone(row);const s=t.inputs[idx].snapshot as Record<string,unknown>;
+ if(typeof s.value==='number')s.value=s.value+1;
+ else if(typeof s.value_text==='string')s.value_text=`${s.value_text}1`;
+ else if(typeof s.close==='number')s.close=s.close+1;
+ else if(typeof s.fill_price==='number')s.fill_price=s.fill_price+1;
+ else s.tampered=true;
+ return {row:t,kind:t.inputs[idx].kind,label:inputLabel(t.inputs[idx])};
+}
+
+describe('golden replay fixtures (spec §14.4)',()=>{
+ it('the folder holds the synthetic fact_metric fixture',()=>{expect(FILES).toContain('synthetic-fact-metric.json');});
+ describe.each(FILES)('%s',file=>{
+  const fx=load(join(DIR,file));
+  it('replays to its expected verdict with byte-identical claim / condition / id',async()=>{
+   const r=await replayJudgment(fx.judgment.judgment_id,{db:fixtureJudgmentsDb([fx.judgment]),registry:REPLAY_REGISTRY});
+   expect({status:r.status,diffs:r.diffs,hash_mismatches:r.hash_mismatches}).toEqual({status:fx.expect,diffs:[],hash_mismatches:[]});
+   expect(replayExitCode(r)).toBe(0);
+  });
+  it.skipIf(fx.judgment.inputs.length===0)('tampering a frozen projection → input_hash_mismatch naming the input (exit 2)',async()=>{
+   const t=tamper(fx.judgment);
+   const r=await replayJudgment(t.row.judgment_id,{db:fixtureJudgmentsDb([t.row]),registry:REPLAY_REGISTRY});
+   expect(r.status).toBe('input_hash_mismatch');
+   expect(r.hash_mismatches).toEqual([expect.objectContaining({kind:t.kind,label:t.label})]);
+   if(t.kind==='macro_observation')expect(t.label).toContain(String((t.row.inputs.find(x=>x.kind==='macro_observation')!.snapshot as {series_id:string}).series_id));
+   expect(r.diffs).toEqual([]);
+   expect(replayExitCode(r)).toBe(2);
+  });
+ });
+});
+
+describe('replayJudgment on the synthetic fixture (spec §6.3)',()=>{
+ const fx=load(SYNTHETIC_FIXTURE_PATH);const row=fx.judgment;
+ const run=(r:JudgmentRow,registry:readonly Methodology[]=REPLAY_REGISTRY)=>replayJudgment(r.judgment_id,{db:fixtureJudgmentsDb([r]),registry});
+ it('the fixture is a registered active synthetic_fact_metric judgment with one financial_metric input',()=>{
+  expect(row).toMatchObject({methodology_id:'synthetic_fact_metric',methodology_version:'v1',producer_kind:'rule',abstained:false,kind:'probability'});
+  expect(row.inputs.map(x=>x.kind)).toEqual(['financial_metric']);
+  expect(row.condition?.resolver).toBe('fact_metric');
+ });
+ it('a changed method (same id@version) replays as diverged with the claim diff',async()=>{
+  const changed:Methodology={...syntheticFactMetric,params:{...syntheticFactMetric.params,p:0.7}};
+  const r=await run(row,[changed]);
+ it('200 seeded shuffles per case: compute / condition byte-identical on repeat, id unchanged',async()=>{
+  const cases:{m:Methodology;subject:Subject;inputs:Input[];asOf:string}[]=[];
+  for(const s of ['s-a','s-b']){const e=await evaluated(fixtureRegimeMethod,s);cases.push({m:fixtureRegimeMethod,subject:US,inputs:e.inputs,asOf:FIXTURE_ASOF});}
+  // Every REGISTRY rule method with a committed public replay fixture (Task 13 / 19 add files; this test picks them up).
+  const dir='fixtures/judgments/replay';
+  if(existsSync(dir))for(const f of readdirSync(dir).filter(x=>x.endsWith('.json')).sort()){
+   const fx=JSON.parse(readFileSync(join(dir,f),'utf8')) as {judgment:{methodology_id:string;methodology_version:string;subject_type:Subject['type'];subject_key:string;inputs:Input[];as_of:string;abstained:boolean}};
+   const m=REGISTRY.find(x=>x.id===fx.judgment.methodology_id&&x.version===fx.judgment.methodology_version);
+   if(m&&m.producer_kind==='rule'&&!fx.judgment.abstained)cases.push({m,subject:{type:fx.judgment.subject_type,key:fx.judgment.subject_key},inputs:fx.judgment.inputs,asOf:fx.judgment.as_of});
+  }
+  for(const c of cases){
+   const base=c.m.compute(c.subject,c.inputs);if(base.abstained)throw new Error(`${c.m.id} abstains on its fixture`);
+   const baseCond=canonicalize(c.m.condition(c.subject,c.inputs,base.claim));
+   const idOf=(xs:Input[])=>judgmentIdOf({subject_type:c.subject.type,subject_key:c.subject.key,judgment_type:c.m.judgment_type,methodology_id:c.m.id,methodology_version:c.m.version,as_of:c.asOf,inputs_hash:inputsHash(xs),producer_nonce:''});
+   const baseId=idOf(c.inputs);
+   for(let seed=1;seed<=200;seed++){
+    const perm=shuffle(c.inputs,rng(seed));
+    const a=c.m.compute(c.subject,perm),b=c.m.compute(c.subject,perm);
+    expect(canonicalize(a)).toBe(canonicalize(b));expect(canonicalize(a)).toBe(canonicalize(base));
+    if(!a.abstained)expect(canonicalize(c.m.condition(c.subject,perm,a.claim))).toBe(baseCond);
+    expect(idOf(perm)).toBe(baseId);
+   }
+  }
+ });
+});
+
+describe('T12 r3 conflict mutation cancellation',()=>{
+ it.each([false,true])('guards conflict quarantine, unique recovery=%s',async recovery=>{
+  const {deps,tables,db}=await setup();const e=await evaluated(fixtureRegimeMethod,'s-a');
+  const original=await registerJudgment(ACTOR,req(fixtureRegimeMethod,e),deps);
+  const ac=new AbortController();let reads=0;
+  const drift={...e,outcome:{abstained:false as const,claim:{...e.outcome.claim,distribution:{recovery:0.5,overheat:0.2,stagflation:0.2,recession:0.1}}}};
+  const d=new Proxy(db,{get:(x,k,r)=>{
+   if(k==='getJudgment')return async()=>{if(recovery&&reads++===0)return null;ac.abort();return db.getJudgment(original.judgment_id);};
+   if(k==='registerJudgment')return async()=>{throw {code:'23505'};};
+   return Reflect.get(x,k,r);
+rg: src/lib/judgments/determinism.test.ts: No such file or directory (os error 2)
+src/lib/judgments/registry.test.ts:14:  const m={id:'row_test',version:'v2',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',subject_types:['macro_region'],input_kinds:['macro_snapshot'],markets:undefined,title:{zh:'行',en:'row'},doc:'docs/x.md',params:{grace_days:30,label_policy:'cutoff_vintage'},horizon:{unit:'calendar_months',n:3},upstream:{macro_methodology_version:'v1.0',facts_formula_version:undefined},deps:[],module:'src/x.ts',status:'draft'} as unknown as Methodology;
+src/lib/judgments/registry.test.ts:16:  expect(methodologyRowOf(m,h,{publishable:false,code_version:'abc1234'})).toEqual({methodology_id:'row_test',version:'v2',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',subject_types:['macro_region'],input_kinds:['macro_snapshot'],markets:null,title_zh:'行',title_en:'row',doc_path:'docs/x.md',...h,params:{grace_days:30,label_policy:'cutoff_vintage'},params_json:{},horizon:{unit:'calendar_months',n:3},upstream:{macro_methodology_version:'v1.0'},status:'draft',publishable:false,code_version:'abc1234'});
+// src/lib/macro/catalog.test.ts
+// Catalog invariants (spec §4.2, §0.2 M1–M5, M14, M15) and the content-derived CATALOG_VERSION.
+import {createHash} from 'node:crypto';
+import {describe,expect,it} from 'vitest';
+import {CATALOG_VERSION,MACRO_CATALOG,canonicalJson,catalogById,collectableOf,indicatorsOf,regimeInputsOf,sha256HexSync} from './catalog';
+import {REGIMES} from './judgment-contract';
+
+const BANNED=/yfinance|yahoo|eastmoney|jin10|sina|10jqka|xueqiu/i;
+const AKSHARE_HOSTS=new Set(['data.stats.gov.cn','yield.chinabond.com.cn','www.safe.gov.cn']);
+const weightOf=(region:'US'|'CN')=>MACRO_CATALOG.filter(d=>d.region===region&&d.role==='indicator').reduce((s,d)=>s+d.weight,0);
+
+describe('MACRO_CATALOG invariants',()=>{
+ it('has unique ids of the stored form and bilingual names',()=>{
+  const ids=MACRO_CATALOG.map(d=>d.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for(const d of MACRO_CATALOG){expect(d.id).toMatch(/^[A-Z][A-Z0-9_]{0,63}$/);expect(d.name.zh.length).toBeGreaterThan(0);expect(d.name.en.length).toBeGreaterThan(0);expect(d.definitionVersion).toBeGreaterThanOrEqual(1);}
+ });
+ it('never names a banned host or vendor anywhere',()=>{
+  expect(JSON.stringify(MACRO_CATALOG)).not.toMatch(BANNED);
+ });
+ it('active akshare series fetch only from verified official hosts; FRED series from fred.stlouisfed.org',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status!=='active'||!d.source)continue;
+   if(d.source.adapter==='akshare')expect({id:d.id,host:d.source.fetchHost,ok:AKSHARE_HOSTS.has(d.source.fetchHost)}).toEqual({id:d.id,host:d.source.fetchHost,ok:true});
+   else expect(d.source.fetchHost).toBe('fred.stlouisfed.org');
+  }
+ });
+ it('missing ⇒ source null + reason; restricted ⇒ third_party rights + reason; active ⇒ source and no reason',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status==='missing'){expect(d.source).toBeNull();expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='restricted'){expect(d.source?.rights).toBe('third_party');expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='active'){expect(d.source).not.toBeNull();expect(d.reason).toBeUndefined();expect(d.source!.rights).not.toBe('third_party');}
+  }
+ });
+ it('FRED rows record the original publisher via FRED; NBS-relayed rows record the original agency via NBS',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.source?.adapter==='fred_csv'){expect(d.source.via?.en).toMatch(/FRED/);expect(d.source.publisher.en).not.toMatch(/FRED/);}
+  }
+  expect(catalogById('CN_M2_YOY')!.source).toMatchObject({publisher:{en:"People's Bank of China"},via:{en:'National Bureau of Statistics of China'}});
+  expect(catalogById('CN_EXPORT_YOY')!.source).toMatchObject({publisher:{en:'General Administration of Customs of China'},via:{en:'National Bureau of Statistics of China'}});
+ });
+ it('derived and alias series point at an existing series of the same region; derived series carry their input source',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.derive){const from=catalogById(d.derive.from);expect({id:d.id,from:from?.id,region:from?.region}).toEqual({id:d.id,from:d.derive.from,region:d.region});expect(from!.derive).toBeUndefined();expect(d.source).toEqual(from!.source);expect(d.status).toBe(from!.status);}
+   if(d.aliasOf){const to=catalogById(d.aliasOf);expect(to?.region).toBe(d.region);expect(d.source).toEqual(to!.source);expect(d.derive).toBeUndefined();expect(d.weight).toBe(0);}
+  }
+  expect(catalogById('US_CPI_YOY')!.derive).toEqual({kind:'yoy_from_index',from:'US_CPI_INDEX'});
+  expect(catalogById('CN_CPI_YOY')!.derive).toEqual({kind:'index_minus_100',from:'CN_CPI_INDEX'});
+  expect(catalogById('US_DGS10')!.derive).toEqual({kind:'month_end',from:'US_DGS10_D'});
+  expect(catalogById('US_UST10Y')).toMatchObject({role:'asset',aliasOf:'US_DGS10',changeKind:'bp'});
+  expect(catalogById('CN_CGB10Y')).toMatchObject({role:'asset',aliasOf:'CN_CGB_10Y',changeKind:'bp'});
+ });
+ it('daily and event native ids carry weight 0; assets carry weight 0',()=>{
+  for(const d of MACRO_CATALOG){
+   if(!d.derive&&(d.nativeFrequency==='daily'||d.nativeFrequency==='event')&&d.status==='active')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+// src/lib/macro/cn-series.test.ts
+import {readFileSync} from 'node:fs';
+import {describe,expect,it} from 'vitest';
+import {collectableOf} from './catalog';
+import {cnSeriesDocument,cnSeriesSpecs,cnSpecOf} from './cn-series';
+import type {MacroSeriesDef} from './types';
+
+const def=(id:string,seriesKey:string,fetchHost:string,period:MacroSeriesDef['period']='month'):MacroSeriesDef=>({
+ id,region:'CN',role:'indicator',type:null,name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period,adjustment:'nsa',status:'active',
+ source:{adapter:'akshare',fetchHost,publisher:{zh:'x',en:'x'},seriesKey,rights:'official_open',attribution:{zh:'x',en:'x'}},
+ revisionPolicy:'immutable',weight:0,changeKind:'pp',definitionVersion:1,
+});
+
+describe('cnSpecOf',()=>{
+ it('splits an NBS key into kind, tree path and whitespace-free indicator, with daily and history calls',()=>{
+  const s=cnSpecOf(def('CN_PMI_MFG','macro_china_nbs_nation|月度数据|采购经理指数 > 制造业采购经理指数 > 制造业采购经理指数 (%)','data.stats.gov.cn'));
+  expect(s).toEqual({series_id:'CN_PMI_MFG',fetch_host:'data.stats.gov.cn',period:'month',function:'macro_china_nbs_nation',
+   evidence_path:'/dg/website/publicrelease/web/external/stream/esData',column:'制造业采购经理指数(%)',kind:'月度数据',
+   path:'采购经理指数 > 制造业采购经理指数',daily_period:'LAST13',backfill:[{path:'采购经理指数 > 制造业采购经理指数',period:'2016-'}]});
+  expect(cnSpecOf(def('CN_GDP_INDEX','macro_china_nbs_nation|季度数据|国民经济核算 > 国内生产总值指数 > 国内生产总值指数(上年同期=100)当季值','data.stats.gov.cn','quarter')).daily_period).toBe('LAST8');
+  expect(cnSpecOf(def('CN_CPI_INDEX','macro_china_nbs_nation|月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)','data.stats.gov.cn')).backfill!.map(b=>b.period)).toEqual(['2026-','2021-2025','2016-2020']);
+  const cpi=cnSeriesSpecs().find(x=>x.series_id==='CN_CPI_INDEX')!;
+  expect(cpi.backfill![0]).toEqual({path:cpi.path,period:'2026-'});
+  expect(cpi.path).toContain('(2026-)');
+ });
+ it('reads ChinaBond and SAFE keys',()=>{
+  expect(cnSpecOf(def('CN_CGB_10Y_D','bond_china_yield|中债国债收益率曲线|10年','yield.chinabond.com.cn','day'))).toMatchObject({function:'bond_china_yield',curve:'中债国债收益率曲线',column:'10年',evidence_path:'/cbweb-pbc-web/pbc/historyQuery',window_days:45,backfill_from:'2016-01-01'});
+  expect(cnSpecOf(def('CN_USDCNY_CP_D','currency_boc_safe|美元','www.safe.gov.cn','day'))).toMatchObject({function:'currency_boc_safe',column:'美元',evidence_path:'/AppStructured/hlw/RMBQuery.do'});
+ });
+ it('refuses unknown functions, malformed keys and non-akshare series',()=>{
+  expect(()=>cnSpecOf(def('X','stock_zh_index_hist_csindex|000300','www.csindex.com.cn'))).toThrow('unsupported_series_key');
+  expect(()=>cnSpecOf(def('X','macro_china_nbs_nation|月度数据|只有一段','data.stats.gov.cn'))).toThrow('bad_series_key');
+  expect(()=>cnSpecOf({...def('X','a|b','h'),source:null})).toThrow('not_akshare');
+ });
+});
+
+describe('catalog CN specs',()=>{
+ it('covers every active native akshare series on the three verified official hosts',()=>{
+  const specs=cnSeriesSpecs();
+  expect(specs.map(s=>s.series_id)).toEqual(collectableOf('akshare').map(d=>d.id));
+  for(const s of specs)expect(['data.stats.gov.cn','yield.chinabond.com.cn','www.safe.gov.cn'],s.series_id).toContain(s.fetch_host);
+ });
+ it('matches the committed scripts/macro/cn-series.json (re-run scripts/macro/export-cn-series.ts after catalog changes)',()=>{
+  expect(readFileSync(new URL('../../../scripts/macro/cn-series.json',import.meta.url),'utf8')).toBe(cnSeriesDocument());
+ });
+});
+
+codex
+The remaining problems include failure handling and migration checks: saved runs never receive the new `data_hash`, some B1 corruption tests fail an earlier invariant than the one they assert, and the migration’s “old constraint pattern count = 0” check also matches the replacement constraint. I’m separating those new findings from the round-1 closure table.
+
