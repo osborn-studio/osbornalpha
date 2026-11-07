@@ -51,3 +51,19 @@
 | 18 | Task 18 /api/companies + /intel/companies + /intel 入口卡 | f7ebf011, 3449419f, b8b07321 | ✅（响应形状收回 §6.1 {total, conceptsTotal, rows}） | 修后通过（按语言显示名称并与 SQL 排序键一致、q 客户端校验、Seg/ErrorCard/scope、加载态） | review: P2 参数变化后残留旧结果；挑战: P2 证券富化 1000 行截断 → 分页到尽；修复复审: P2 缓存成功掩盖新失败 → 请求代次 | 2 | 721 单测（全目录） |
 
 
+
+## 暂停记录（2026-11-06，owner 指令：预算收紧，优先数据底座 PR 与宏观工作台）
+
+分支 `claude/company-research-ebd56f` @ `70631d99`（推送；未开 PR——全量门禁未跑完）。
+
+**已完成（实施 + Opus 规格/质量复审 + Codex review/挑战 + 修复复审）**：Task 1–18。要点：三份已锁迁移 `20261112090000`、`20261112091000`、`20261112092000_company_evidence_fence.sql`；证据索引 + 统一证据门槛；digest cron（`vercel.json` 20 * * * *）；公共/管理读路由；公司页（报表/指标/文件/概览/判断/跟踪视图 + 抽屉）；DCF 改读事实；agent `financials` 工具改读 packet；`useFinancials` 删除；consensus mock 关闭；跟踪 API 与收件箱页；覆盖目录。最后一项修复 `70631d99`（报表深链在挂载状态下切换目标时同步页签）已提交。
+
+**门禁（`70631d99`）**：`npm run typecheck` 0；`npm run lint` 0；`npm test` 358 files / 3265 passed，1 failed = `observability/owned-process-group.test.ts`（与本模块无关的进程计时偶发；单独重跑 2/2 通过）。`company-research.integration.test.ts` 最近一次 db-one 40/40（Task 8 修复后）。**未跑**：全量 `npm run test:db`、`npm run test:migrations`（Task 2 时通过，之后迁移未变）、e2e、浏览器目测。
+
+**进行中**：无（Task 19 子代理已启动但未写入任何文件，已停止）。
+
+**剩余**：
+1. Task 19：`e2e/company.spec.ts`（§12.3 1–11 + 黄金用例 + 6×2×6 矩阵）、`manifest.ts` 替换 `fixture-manifest.ts`、`scripts/company/manifest-hash.ts`、e2e 种子脚本、`docs/runbooks/company-research.md`（三份迁移 + `to_regprocedure` 核对）、`regression-sample.md` / `events-gold.md` 存根、规格 §17 偏差表（从本日志汇总）。
+2. 全量门禁：`npm test`、typecheck、lint、`LC_ALL=C … npm run test:db`、`npm run test:migrations`、本机 Playwright 报告（决策 I）；浏览器目测公司页/收件箱/目录（含 390px）。
+3. 推送后开 PR 到 `main`，列出接口请求（计划末尾"接口请求清单"）、owner 事项（§15 默认值、黄金抄录、F3/F4 开关、CN PDF 定位）、偏差。
+4. 已知待跟进：`/api/facts/*` 同样受中间件 `getUser()` 影响（规格二所有者处理）；Codex Task 12/18 的少量 minor 未做（见各行）。
