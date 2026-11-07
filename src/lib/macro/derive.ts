@@ -8,6 +8,7 @@
 //  - yoy_from_index: (cur/prev − 1) × 100 with prev = same period one year earlier; no prev → no row
 //    (missing stays missing, never interpolated). Decimal arithmetic in decimal.ts::yoyPct.
 //  - index_minus_100: exact decimal "上年同月=100" index − 100.
+// month_end inputs include the completion witness (first later-month observation).
 // available_at = the max available_at of ALL inputs of the row; derived_from = the input observation
 // ids; transform = '<kind>@1'. Quarterly series are never forward-filled into months.
 import {equals,minus100,yoyPct} from './decimal';
@@ -40,13 +41,21 @@ export function deriveSeries(def:MacroSeriesDef,inputs:readonly ObservationRow[]
  if(rule.kind==='month_end'){
   const current=opts.now.toISOString().slice(0,7);
   const lastByMonth=new Map<string,ObservationRow>();
-  for(const r of rows)lastByMonth.set(monthKey(r.period_end),r);   // ascending ⇒ the last write per month wins
+  const firstByMonth=new Map<string,ObservationRow>();
+  for(const r of rows){
+   const k=monthKey(r.period_end);
+   lastByMonth.set(k,r);   // ascending ⇒ the last write per month wins
+   if(!firstByMonth.has(k))firstByMonth.set(k,r);
+  }
   const months=[...lastByMonth.keys()];
   const newest=months[months.length-1];
-  for(const m of months){
+  for(let i=0;i<months.length;i++){
+   const m=months[i];
    if(m>=current||m===newest)continue;   // calendar month not over, or no later observation yet
    const r=lastByMonth.get(m)!;
-   out.push({series_id:def.id,period_end:monthEnd(Number(m.slice(0,4)),Number(m.slice(5,7))),value_text:r.value_text,available_at:r.available_at,revisable,derived_from:[r.observation_id],transform});
+   // the first later-month observation is the completion witness: it is an input of the row
+   const w=firstByMonth.get(months[i+1])!;
+   out.push({series_id:def.id,period_end:monthEnd(Number(m.slice(0,4)),Number(m.slice(5,7))),value_text:r.value_text,available_at:latestOf(r.available_at,w.available_at),revisable,derived_from:[r.observation_id,w.observation_id],transform});
   }
   return out;
  }

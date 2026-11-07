@@ -13,6 +13,14 @@ describe('validatePoint',()=>{
   expect(r).toEqual({passed:true,failed:[],version:MACRO_RULES_VERSION});
   expect(MACRO_RULES_VERSION).toBe('macro-rules/1');
  });
+ it('rejects non-canonical value text before Number() conversion',()=>{
+  for(const t of ['',' ','0x10','Infinity','1e3']){
+   const r=validatePoint(d('pct','pmi'),t,null);
+   expect(r.passed).toBe(false);
+   expect(ids(r)).toEqual(['macro.canonical']);
+   expect(r.failed[0].detail).toEqual({reason:'not_canonical'});
+  }
+ });
  it('applies per-type ranges for pct series',()=>{
   expect(ids(validatePoint(d('pct','pmi'),'100.1',null))).toEqual(['macro.range']);
   expect(ids(validatePoint(d('pct','pmi'),'0',null))).toEqual([]);
@@ -47,8 +55,8 @@ describe('validatePoint',()=>{
   expect(ids(validatePoint(d('percent','pmi'),'50',null))).toEqual(['macro.unit']);
   expect(profileOf(d('percent','pmi'))).toBeNull();
   const r=validatePoint(d('pct','pmi'),'abc',null);
-  expect(ids(r)).toEqual(['macro.range','macro.jump']);
-  for(const f of r.failed)expect(f.detail).toMatchObject({reason:'not_a_number'});
+  expect(ids(r)).toEqual(['macro.canonical']);
+  expect(r.failed[0].detail).toMatchObject({reason:'not_canonical'});
  });
  it('has a known unit and a profile for every active native catalog series',()=>{
   for(const s of MACRO_CATALOG.filter(x=>x.status==='active'&&!x.derive&&!x.aliasOf)){

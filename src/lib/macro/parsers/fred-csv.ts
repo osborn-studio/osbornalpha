@@ -34,6 +34,7 @@ export function parseFredCsv(bytes:Uint8Array,opts:{seriesId:string;code:string;
   const date=line.slice(0,comma),raw=line.slice(comma+1);
   if(!isIsoDate(date))throw new FredParseError('bad_date',`line ${lineNo}`);
   if(raw===''||raw==='.')continue;
+  if(!/^-?[0-9]+(\.[0-9]+)?$/.test(raw))throw new FredParseError('bad_value',`line ${lineNo}`);
   let valueText:string;
   try{valueText=canonical(raw);}catch{throw new FredParseError('bad_value',`line ${lineNo}`);}
   if(opts.period!=='day'){

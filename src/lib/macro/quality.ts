@@ -46,10 +46,16 @@ export function profileOf(def:Pick<MacroSeriesDef,'unit'|'type'>):QualityProfile
  return null;
 }
 
+const CANONICAL=/^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
 const num=(t:string|null)=>t===null?null:Number(t);
 /** Validates one native point against its series profile. prevValueText = the previous accepted value of the same series (or null). */
 export function validatePoint(def:Pick<MacroSeriesDef,'unit'|'type'>,valueText:string,prevValueText:string|null):{passed:boolean;failed:RuleResult[];version:string}{
  const results:RuleResult[]=[unitRule('macro.unit',def.unit,KNOWN_UNITS)];
+ if(!CANONICAL.test(valueText)){
+  results.push({ruleId:'macro.canonical',passed:false,detail:{reason:'not_canonical'}});
+  const failed=results.filter(r=>!r.passed);
+  return {passed:false,failed,version:MACRO_RULES_VERSION};
+ }
  const p=profileOf(def);
  const v=num(valueText);
  if(p){

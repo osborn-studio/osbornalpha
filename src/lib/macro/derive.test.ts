@@ -21,9 +21,18 @@ describe('deriveSeries month_end',()=>{
   const a=obs('US_DGS10_D','2026-08-28','4.1'),b=obs('US_DGS10_D','2026-08-31','4.2'),c=obs('US_DGS10_D','2026-09-29','4.3'),d=obs('US_DGS10_D','2026-10-01','4.4');
   const w=deriveSeries(me,[d,b,a,c],{now:NOW});
   expect(w).toEqual([
-   {series_id:'US_DGS10',period_end:'2026-08-31',value_text:'4.2',available_at:b.available_at,revisable:true,derived_from:[b.observation_id],transform:'month_end@1'},
-   {series_id:'US_DGS10',period_end:'2026-09-30',value_text:'4.3',available_at:c.available_at,revisable:true,derived_from:[c.observation_id],transform:'month_end@1'},
+   {series_id:'US_DGS10',period_end:'2026-08-31',value_text:'4.2',available_at:b.available_at,revisable:true,derived_from:[b.observation_id,c.observation_id],transform:'month_end@1'},
+   {series_id:'US_DGS10',period_end:'2026-09-30',value_text:'4.3',available_at:c.available_at,revisable:true,derived_from:[c.observation_id,d.observation_id],transform:'month_end@1'},
   ]);
+ });
+ it('available_at and derived_from include the completion witness; replay from derived_from reproduces the row',()=>{
+  const oct=obs('US_DGS10_D','2026-10-30','4.4','2026-10-30T20:00:00.000Z'),nov=obs('US_DGS10_D','2026-11-02','4.5','2026-11-02T20:00:00.000Z');
+  const [row]=deriveSeries(me,[oct,nov],{now:NOW});
+  expect(row.period_end).toBe('2026-10-31');
+  expect(row.available_at).toBe('2026-11-02T20:00:00.000Z');
+  expect(row.derived_from).toEqual([oct.observation_id,nov.observation_id]);
+  const all=[oct,nov],used=all.filter(r=>row.derived_from.includes(r.observation_id));
+  expect(deriveSeries(me,used,{now:NOW})).toEqual([row]);
  });
  it('never emits the current month, nor the newest month before a later observation exists',()=>{
   const w=deriveSeries(me,[obs('US_DGS10_D','2026-10-30','4.4'),obs('US_DGS10_D','2026-11-05','4.5')],{now:NOW});
@@ -34,8 +43,9 @@ describe('deriveSeries month_end',()=>{
  it('uses the highest ok version per day, ignores quarantined rows and other series',()=>{
   const v1=obs('US_DGS10_D','2026-09-30','4.3'),v2=obs('US_DGS10_D','2026-09-30','4.31',undefined,{version:2});
   const q=obs('US_DGS10_D','2026-09-30','9.99',undefined,{version:3,status:'quarantined'});
-  const w=deriveSeries(me,[v1,v2,q,obs('US_DFF','2026-09-30','5'),obs('US_DGS10_D','2026-10-01','4.4')],{now:NOW});
-  expect(w).toHaveLength(1);expect(w[0].value_text).toBe('4.31');expect(w[0].derived_from).toEqual([v2.observation_id]);
+  const wit=obs('US_DGS10_D','2026-10-01','4.4');
+  const w=deriveSeries(me,[v1,v2,q,obs('US_DFF','2026-09-30','5'),wit],{now:NOW});
+  expect(w).toHaveLength(1);expect(w[0].value_text).toBe('4.31');expect(w[0].derived_from).toEqual([v2.observation_id,wit.observation_id]);
  });
  it('leaves a month with no observation missing (no carry-forward)',()=>{
   const w=deriveSeries(me,[obs('US_DGS10_D','2026-07-31','4'),obs('US_DGS10_D','2026-09-30','4.3'),obs('US_DGS10_D','2026-10-01','4.4')],{now:NOW});

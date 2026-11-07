@@ -49,6 +49,8 @@ describe('parseFredCsv (synthetic)',()=>{
    ['observation_date,DGS10\n2026-02-30,1\n','bad_date'],
    ['observation_date,DGS10\n2026-10-01,1e999\n','bad_value'],
    ['observation_date,DGS10\n2026-10-01,NaN\n','bad_value'],
+   ['observation_date,DGS10\n2026-10-01,1E3\n','bad_value'],
+   ['observation_date,DGS10\n2026-10-01,0x1\n','bad_value'],
    ['','bad_header'],
   ];
   for(const [csv,code] of bad){
