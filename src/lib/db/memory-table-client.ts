@@ -37,6 +37,15 @@ const isObj=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const sameEvidence=(a:unknown,b:Row)=>isObj(a)&&a.source===b.source&&a.evidence_sha256===b.evidence_sha256;
 const SHA256=/^[0-9a-f]{64}$/;
 const MEMORY_RPC:Record<string,(rowsOf:(t:string)=>Row[],a:Row)=>unknown>={
+ // twin of dq_reconcile_failed_counts: distinct (pair, natural_key) by latest row (created_at, then id), failures per pair
+ dq_reconcile_failed_counts(rowsOf){
+  const latest=new Map<string,Row>();
+  const key=(r:Row)=>`${String(r.created_at??'')}\u0000${String(r.id)}`;
+  for(const r of rowsOf('dq_reconciliations')){const k=`${String(r.pair)}\u0000${String(r.natural_key)}`;const cur=latest.get(k);if(!cur||key(r)>key(cur))latest.set(k,r);}
+  const out=new Map<string,number>();
+  for(const r of latest.values())if(r.passed===false)out.set(String(r.pair),(out.get(String(r.pair))??0)+1);
+  return [...out].map(([pair,failed])=>({pair,failed}));
+ },
  // Task 14b review: twins of settle_reconcile_cycle / record_cycle_freshness (migration 20261107091000 section 14); detail is only ever
  // touched at the freshness key, so a pending_members entry registered meanwhile survives.
  settle_reconcile_cycle(rowsOf,a){

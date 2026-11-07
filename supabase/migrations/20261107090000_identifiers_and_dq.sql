@@ -1000,3 +1000,21 @@ end $$;
 drop trigger if exists issuers_topology_guard on public.issuers;
 create trigger issuers_topology_guard before insert or update of status, merged_into on public.issuers
   for each row execute function public.issuers_topology_guard();
+
+-- ---------------------------------------------------------------- dq_reconcile_failed_counts (admin dashboard, Task 19a review)
+-- Per pair, the number of DISTINCT natural keys whose LATEST row (created_at desc, id desc) failed.
+-- Out-of-cycle recordReconciliation dedupe is best-effort, so a raw count of failed rows would
+-- double-count a key. Known limitation: a key that later leaves the sample keeps its last failed row in the count.
+create index if not exists dq_reconciliations_pair_key_latest_idx
+  on public.dq_reconciliations(pair, natural_key, created_at desc, id desc);
+create or replace function public.dq_reconcile_failed_counts() returns table(pair text, failed bigint)
+language sql stable security definer set search_path = public as $$
+  select l.pair, count(*)::bigint
+    from (select distinct on (r.pair, r.natural_key) r.pair, r.passed
+            from public.dq_reconciliations r
+           order by r.pair, r.natural_key, r.created_at desc, r.id desc) l
+   where l.passed = false
+   group by l.pair
+$$;
+revoke execute on function public.dq_reconcile_failed_counts() from public, anon, authenticated;
+grant execute on function public.dq_reconcile_failed_counts() to service_role;

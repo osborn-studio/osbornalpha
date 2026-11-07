@@ -111,6 +111,39 @@ export async function restorableOf(row:Row,hashNow?:InputsHashNow):Promise<boole
  try{return (await hashNow(row))===latest.inputs_hash;}catch{return false;}
 }
 
+/** Live hash checks per dashboard load (the iXBRL pair refetches SEC primary documents) and how many run at once. */
+export const RESTORABLE_CHECK_MAX=25;
+export const RESTORABLE_CONCURRENCY=4;
+/**
+ * restorable / restorable_checked for each reconcile_mismatch row, bounded: rows that cannot be restorable from the stored
+ * result alone (no result, failed, no hash) are settled without a live check; at most RESTORABLE_CHECK_MAX of the others are
+ * checked (RESTORABLE_CONCURRENCY at a time, memoised per request by the item's (dataset, natural_key) which fixes the pair,
+ * key and left fact the hash depends on); the rest answer restorable:false, restorable_checked:false.
+ */
+export async function withRestorable(rows:Row[],hashNow?:InputsHashNow):Promise<Row[]>{
+ const out:Row[]=rows.map(r=>({...r}));
+ const todo:number[]=[];
+ rows.forEach((r,i)=>{
+  if(r.reason_code!=='reconcile_mismatch')return;
+  const latest=((r.detail??{}) as {latest_result?:{passed?:unknown;inputs_hash?:unknown}}).latest_result;
+  if(!hashNow||latest?.passed!==true||typeof latest.inputs_hash!=='string'){out[i].restorable=false;out[i].restorable_checked=!!hashNow;return;}
+  if(todo.length<RESTORABLE_CHECK_MAX)todo.push(i);else{out[i].restorable=false;out[i].restorable_checked=false;}
+ });
+ const memo=new Map<string,Promise<boolean>>();
+ let next=0;
+ const worker=async()=>{
+  for(;;){
+   const i=next++;if(i>=todo.length)return;
+   const r=rows[todo[i]];
+   const k=`${String(r.dataset)}\u0000${String(r.natural_key??r.id)}`;
+   let p=memo.get(k);if(!p){p=restorableOf(r,hashNow);memo.set(k,p);}
+   out[todo[i]].restorable=await p;out[todo[i]].restorable_checked=true;
+  }
+ };
+ await Promise.all(Array.from({length:Math.min(RESTORABLE_CONCURRENCY,todo.length)},worker));
+ return out;
+}
+
 /**
  * All dashboard reads. The open-quarantine KPI is a global count; the pager total is a
  * separate count filtered by the selected dataset, so filtering never changes the KPI.
@@ -144,7 +177,7 @@ export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date,
   batches24hTruncated:batches.length===DQ_RECENT_BATCHES&&batches24h.length===DQ_RECENT_BATCHES,
   batches,
   freshness,
-  quarantine:{rows:await Promise.all(quarantineRows.map(async r=>r.reason_code==='reconcile_mismatch'?{...r,restorable:await restorableOf(r,opts.inputsHashNow)}:r)),page,pageSize,total:quarantineTotal??openQuarantineTotal},
+  quarantine:{rows:await withRestorable(quarantineRows,opts.inputsHashNow),page,pageSize,total:quarantineTotal??openQuarantineTotal},
   reconciliations,
   calendar,claims,reconciliationsByPair,
   datasets:dashboardDatasets([...batches,...freshness,...quarantineRows].map(r=>r.dataset),dataset),

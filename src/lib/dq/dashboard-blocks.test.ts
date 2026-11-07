@@ -42,6 +42,19 @@ describe('loadCalendarBlock',()=>{
   expect(b.overdueByMarket).toEqual({US:1,CN:1});
   expect(b.noRuleRows).toEqual([]);
  });
+ it('applies the attention order before the limit: dated rows first, ties on the boundary by period end descending',async()=>{
+  const t=memoryTableClient();
+  const pe=(i:number)=>`${2000+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}-28`;
+  for(let i=0;i<60;i++)await t.insert('dq_filing_expectations',exp(`n-${String(i).padStart(3,'0')}`,'CN',pe(i),'unknown_upstream',{due_date:null}));
+  for(let i=0;i<60;i++)await t.insert('dq_filing_expectations',exp(`d-${String(i).padStart(3,'0')}`,'CN','2026-09-30','unknown_upstream',{due_date:`2026-10-${String(i%28+1).padStart(2,'0')}`}));
+  const rows=(await loadCalendarBlock(t,'CN',NOW)).rows;
+  expect(rows).toHaveLength(CALENDAR_ROWS_MAX);
+  expect(rows.slice(0,60).every(r=>r.due_date!=null)).toBe(true);
+  expect(rows.slice(60).every(r=>r.due_date==null)).toBe(true);
+  expect(rows.slice(60).map(r=>r.period_end)).toEqual(Array.from({length:40},(_,k)=>pe(59-k)));   // the 40 newest null-deadline periods, newest first
+  const dues=rows.slice(0,60).map(r=>String(r.due_date));
+  expect(dues).toEqual([...dues].sort());
+ });
  it('caps the attention list',async()=>{
   const t=memoryTableClient();
   for(let i=0;i<150;i++)await t.insert('dq_filing_expectations',exp(`i-${String(i).padStart(3,'0')}`,'US','2026-06-30','overdue',{due_date:'2026-08-10'}));

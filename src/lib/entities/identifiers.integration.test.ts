@@ -709,7 +709,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
   const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
-   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb,text)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
+   'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb,text)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)','public.dq_reconcile_failed_counts()'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
    const ok=(await q(`select has_function_privilege($1,$2,'EXECUTE') ok`,[role,fn]))[0].ok;
@@ -1307,5 +1307,17 @@ describe.skipIf(!enabled)('plan 3 migration one: row-locked jsonb patches (appen
    expect(await second).toBe('conflict');
   });
   expect((await secState(t)).isin).toBe(i1);
+ });
+ it('dq_reconcile_failed_counts counts distinct natural keys by their latest row, per pair',async()=>{
+  const P1='test.'+randomBytes(4).toString('hex'),P2='test.'+randomBytes(4).toString('hex');
+  const ins=(pair:string,key:string,passed:boolean,at:string,id=randomUUID())=>q(`insert into public.dq_reconciliations(id,dataset,left_source,right_source,natural_key,tolerance,passed,pair,kind,outcome,detail,created_at) values($1,'reconcile.x','a','b',$2,0,$3,$4,'text','compared','{}',$5)`,[id,key,passed,pair,at]);
+  await ins(P1,'dup',false,'2026-11-01T00:00:00Z');await ins(P1,'dup',false,'2026-11-02T00:00:00Z');await ins(P1,'dup',false,'2026-11-03T00:00:00Z');
+  await ins(P1,'fixed',false,'2026-11-01T00:00:00Z');await ins(P1,'fixed',true,'2026-11-02T00:00:00Z');
+  await ins(P1,'other',false,'2026-11-01T00:00:00Z');
+  await ins(P1,'regressed',true,'2026-11-01T00:00:00Z');await ins(P1,'regressed',false,'2026-11-02T00:00:00Z');
+  await ins(P2,'tie',true,'2026-11-01T00:00:00Z','00000000-0000-4000-8000-000000000001');await ins(P2,'tie',false,'2026-11-01T00:00:00Z','00000000-0000-4000-8000-000000000002');
+  await ins(P2,'ok',true,'2026-11-01T00:00:00Z');
+  const got=Object.fromEntries((await q(`select pair, failed::int f from public.dq_reconcile_failed_counts() where pair in ($1,$2)`,[P1,P2])).map(r=>[r.pair,r.f]));
+  expect(got).toEqual({[P1]:3,[P2]:1});
  });
 });
