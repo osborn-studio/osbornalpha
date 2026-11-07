@@ -89,7 +89,7 @@ describe.each(CASES)('replay $id',c=>{
   for(const p of c.params){
    const s=all[String(p)];
    expect(s.manifest_hash).toBe(manifestHash(s.body));
-   expect(s.body.kind).toBe(c.id);expect(s.body.params).toEqual({[c.key]:p});
+   expect(s.body.kind).toBe(c.id);expect(s.body.params).toMatchObject({[c.key]:p});   // policy_response also freezes params.dims
   }
   expect(new Set(Object.values(all).map(s=>s.manifest_hash)).size).toBe(c.params.length);
  });

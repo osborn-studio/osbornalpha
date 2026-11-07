@@ -4575,7 +4575,7 @@ EOF
 Design decisions (spec §5.3, §5.6):
 - Dimensions are monthly series (P1 month-end derivations) plus the derived `US_DGS10 − CN_CGB_10Y` spread. Column state comes from the frozen catalog: a restricted series → whole column `restricted` (dim `kind:'restricted'`); catalog `missing` → whole column `missing`; an id absent from the catalog, or the config's `not_in_catalog` dim → `not_in_catalog`; a truncated `dim` read → `missing` with reason text containing `history_truncated`; a truncated `events` read → `missing` (event source truncated).
 - Window: event month `m`; base = month end of `m−1`, end = month end of `m+N−1`. Worked example (test): 2022-03-16, N = 3 → `2022-02-28` → `2022-05-31`.
-- Exclusion order per event and dimension: `missing_endpoint` (base or end month end absent) → `incomplete_window` (any month end strictly between them absent) → `non_positive_base` (pct only). Then eligible events, explicitly sorted by effective date, across both directions: windows are closed month ranges `[m−1, m+N−1]` (spec §5.3), so an event is `overlap` when its base month is on or before the end month of the last selected event — a shared endpoint month is an overlap (plan audit #2). Ineligible events never block later ones. N is the manifest's `params.window`.
+- Exclusion order per event and dimension: `missing_endpoint` (base or end month end absent) → `incomplete_window` (any month end strictly between them absent) → `non_positive_base` (pct only). Then eligible events, explicitly sorted by effective date, across both directions: windows are closed month ranges `[m−1, m+N−1]` (spec §5.3), so an event is `overlap` when its base month is on or before the end month of the last selected event — a shared endpoint month is an overlap (plan audit #2). Ineligible events never block later ones. N is the manifest's `params.window`; the complete dimension definitions are frozen in `params.dims` (canonical JSON text) and the view reads them from there only (Codex fix: no caller override). Display rounding is half away from zero (`roundHalfAway`).
 - Cell per direction: `n ≥ 5` → `stats` with `quartiles()` of the selected `change_raw`; `1..4` → `events_only`; `0` → `insufficient`. Every cell lists all events of its direction (selected and excluded with reason, endpoints with their input observations, exact `change_text`). QE/QT row: `missing` with `目录无联储资产负债表序列` for every data column (whole-column states stay as they are).
 - `coverage` = first and last month end where the dimension has a value (spread: where both inputs exist).
 - Sentences (`policy-response-explain.ts`): one per `stats` cell, numbers only, display rounding `0.1%` / `1 bp`.
@@ -4591,6 +4591,9 @@ Design decisions (spec §5.3, §5.6):
 import {describe,expect,it} from 'vitest';
 import type {Cell,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
+import {canonicalJson} from './hash';
+import {RESPONSE_DIMS_V1} from './data/response-dims-v1';
+import {cellSentence} from './policy-response-explain';
 import {add} from './numeric';
 import {buildPolicyResponse,buildPolicyResponseManifest} from './policy-response';
 import {memoryStrategyPort} from './port';
@@ -4609,7 +4612,7 @@ function manifest(events:StrategyPolicyEvent[],inputs:ManifestInput[],reads:Mani
  return {manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(body),body,created_at:CUTOFF};
 }
 /** The view for window N: N is a manifest parameter, so each N is its own stored manifest (same frozen data, other identity). */
-function view(m:StoredManifest,window:1|3|6){const body={...m.body,params:{window}};return buildPolicyResponse({...m,manifest_hash:manifestHash(body),body});}
+function view(m:StoredManifest,window:1|3|6){const body={...m.body,params:{window,dims:canonicalJson(RESPONSE_DIMS_V1)}};return buildPolicyResponse({...m,manifest_hash:manifestHash(body),body});}
 const cell=(v:ReturnType<typeof buildPolicyResponse>,dir:'hike'|'cut'|'qe_qt',dim:string):Cell=>v.rows.find(r=>r.direction===dir)!.cells[dim];
 const eventsOf=(c:Cell)=>'events' in c?c.events:[];
 
@@ -4719,7 +4722,7 @@ describe('sentences and manifest',()=>{
   const f=fixture({snapshots:[us],observations:[...monthly('US_DGS10','2022-01',['1.70','1.83','2.32','2.89']),
    {...monthly('US_DGS10','2022-05',['9'])[0],available_at:'2026-12-01T00:00:00Z'}]});
   const body=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:3});
-  expect(body.params).toEqual({window:3});
+  expect(body.params).toEqual({window:3,dims:canonicalJson(RESPONSE_DIMS_V1)});
   const n1=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:1});
   expect(manifestHash(n1)).not.toBe(manifestHash(body));   // N is part of the identity
   expect(buildPolicyResponse({manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(n1),body:n1,created_at:CUTOFF}).window).toBe(1);
@@ -4729,6 +4732,29 @@ describe('sentences and manifest',()=>{
   expect(body.reads.some(r=>r.series_id==='US_SP500')).toBe(false);
   expect(body.catalog.find(d=>d.id==='US_SP500')?.status).toBe('restricted');
   expect(body.events).toEqual([]);expect(body.method_version).toBe('macro-policy-response/1');
+ });
+});
+
+describe('rounding (half away from zero) and frozen dimensions',()=>{
+ const dim={id:'D',label:{zh:'某',en:'X'},unit:'bp',kind:'series',coverage:{from:null,to:null}} as const;
+ const stats=(median_raw:number,q1_raw:number,q3_raw:number):Cell=>({status:'stats',n:5,median_raw,q1_raw,q3_raw,unit:'bp',events:[]});
+ it('half-bp values round away from zero; zero never prints as -0',()=>{
+  const s=cellSentence('hike',dim,stats(-1.5,-0.5,2.5),1)!;
+  expect(s.en).toContain('was -2 bp (interquartile -1 bp to 3 bp)');
+  const z=cellSentence('cut',dim,stats(-0.4,0.4,-0.5),1)!;
+  expect(z.en).toContain('was 0 bp (interquartile 0 bp to -1 bp)');
+  expect(z.en).not.toContain('-0 bp');
+ });
+ it('dimension definitions are part of the manifest identity and replay reads only the manifest',async()=>{
+  const f=fixture({snapshots:[snap('US',CUTOFF,[])],observations:[...monthly('US_DGS10','2022-01',['1.70','1.83','2.32','2.89'])]});
+  const o={now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:1 as const};
+  const as=(unit:'pct'|'bp')=>buildPolicyResponseManifest(memoryStrategyPort(f),{...o,dims:[{id:'US_DGS10',label:{zh:'x',en:'x'},unit,kind:'series',series:'US_DGS10'}]});
+  const [bp,pct]=[await as('bp'),await as('pct')];
+  expect(manifestHash(bp)).not.toBe(manifestHash(pct));
+  const st=(b:StrategyManifest):StoredManifest=>({manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(b),body:b,created_at:CUTOFF});
+  expect(buildPolicyResponse(st(bp)).dims.map(d=>d.unit)).toEqual(['bp']);
+  expect(buildPolicyResponse(st(pct)).dims.map(d=>d.unit)).toEqual(['pct']);
+  expect(()=>buildPolicyResponse(st({...bp,params:{window:1}}))).toThrow('invalid_manifest_params:dims');
  });
 });
 ```
@@ -4767,7 +4793,9 @@ export const RESPONSE_DIMS_V1:readonly ResponseDimDef[]=[
 // Number-only sentences for the policy response matrix (spec 2026-11-07 §5.3): one per hike / cut cell with statistics.
 // They state the computed numbers and nothing else (no forecast wording). Display rounding only: 0.1% / 1 bp.
 import type {Bilingual,Cell,PolicyResponseView,ResponseDim} from './contract';
-const fmt=(x:number,unit:'pct'|'bp')=>unit==='pct'?`${x.toFixed(1)}%`:`${Math.round(x)+0} bp`;
+/** Half away from zero (spec §5.3); never -0. */
+export const roundHalfAway=(x:number):number=>{const r=Math.sign(x)*Math.round(Math.abs(x));return r===0?0:r;};
+const fmt=(x:number,unit:'pct'|'bp')=>unit==='pct'?`${x.toFixed(1)}%`:`${roundHalfAway(x)} bp`;
 const DIR={hike:{zh:'加息',en:'hikes'},cut:{zh:'降息',en:'cuts'}} as const;
 export function cellSentence(dir:'hike'|'cut',dim:ResponseDim,cell:Cell,window:number):Bilingual|null{
  if(cell.status!=='stats')return null;
@@ -4804,9 +4832,11 @@ export function responseSentences(v:Pick<PolicyResponseView,'window'|'dims'|'row
 // - cell: n ≥ 5 → median and type-7 quartiles (full precision, *_raw); 1 ≤ n < 5 → events only; n = 0 → insufficient.
 //   QE/QT row: missing (no Fed balance-sheet series in the catalog). Restricted / missing catalog rows → whole column state.
 // buildPolicyResponseManifest freezes the events, every dimension's monthly history asOf cutoff, the catalog projection and
-// the window N in params ({window}); buildPolicyResponse reads N from the manifest, so each N is its own manifest identity.
+// the window N and the complete dimension definitions in params ({window, dims}); buildPolicyResponse reads both from the
+// manifest and nothing else (no caller override), so each N and each dimension set is its own manifest identity.
 // pct change_text is the exact ratio '<end>/<base>' (rounded once at display).
 import {VERSIONS} from './contract';
+import {canonicalJson} from './hash';
 import type {Bilingual,Cell,EndpointRef,EventRow,ExclusionReason,ObsRef,PolicyResponseView,ResponseDim,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {RESPONSE_DIMS_V1,type ResponseDimDef} from './data/response-dims-v1';
 import {addMonthsYm,frozenDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthOf,readState,toObsRef} from './manifest';
@@ -4831,18 +4861,28 @@ export function windowParam(m:StrategyManifest):1|3|6{
  if(w!==1&&w!==3&&w!==6)throw new Error('invalid_manifest_params:window');
  return w;
 }
+/** The dimension definitions frozen in a policy_response manifest's params (canonical JSON text, hashed with the body). */
+export function dimsParam(m:StrategyManifest):readonly ResponseDimDef[]{
+ const t=m.params.dims;
+ if(typeof t!=='string')throw new Error('invalid_manifest_params:dims');
+ let v:unknown;
+ try{v=JSON.parse(t);}catch{throw new Error('invalid_manifest_params:dims');}
+ if(!Array.isArray(v)||v.some(d=>!d||typeof d!=='object'||typeof d.id!=='string'||(d.unit!=='pct'&&d.unit!=='bp')||!['series','spread','not_in_catalog'].includes(d.kind)))throw new Error('invalid_manifest_params:dims');
+ return v as ResponseDimDef[];
+}
 export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;window:1|3|6;dims?:readonly ResponseDimDef[]}):Promise<StrategyManifest>{
+ const dims=o.dims??RESPONSE_DIMS_V1;
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
  const {events,gaps}=await readPolicyEvents(b);
  const done=new Set<string>();
- for(const d of o.dims??RESPONSE_DIMS_V1)for(const id of dimSeries(d)){
+ for(const d of dims)for(const id of dimSeries(d)){
   const def=b.def(id);
   if(!def||def.status!=='active'||done.has(id))continue;
   done.add(id);await b.history(id,DIM_PURPOSE,'month_end');
  }
- return b.build({kind:'policy_response',params:{window:o.window},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'policy_response',params:{window:o.window,dims:canonicalJson(dims)},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Point={period_end:string;value_text:string;inputs:ObsRef[]};
@@ -4890,10 +4930,10 @@ function directionCell(unit:'pct'|'bp',rows:EventRow[]):Cell{
  if(sel.length>0)return {status:'events_only',n:sel.length,unit,events:rows};
  return {status:'insufficient',unit,events:rows};
 }
-export function buildPolicyResponse(stored:StoredManifest,dims:readonly ResponseDimDef[]=RESPONSE_DIMS_V1):PolicyResponseView{
+export function buildPolicyResponse(stored:StoredManifest):PolicyResponseView{
  const m=stored.body;
  if(m.kind!=='policy_response')throw new Error(`manifest_kind_mismatch:${m.kind}`);
- const window=windowParam(m);
+ const window=windowParam(m),dims=dimsParam(m);
  const events=(m.events??[]).filter(e=>sign(e.change_bp)!==0).sort((a,b)=>a.effective_date<b.effective_date?-1:a.effective_date>b.effective_date?1:0);
  const viewDims:ResponseDim[]=[];
  const cells:Record<'hike'|'cut'|'qe_qt',Record<string,Cell>>={hike:{},cut:{},qe_qt:{}};
@@ -5355,7 +5395,7 @@ describe.each(CASES)('replay $id',c=>{
   for(const p of c.params){
    const s=all[String(p)];
    expect(s.manifest_hash).toBe(manifestHash(s.body));
-   expect(s.body.kind).toBe(c.id);expect(s.body.params).toEqual({[c.key]:p});
+   expect(s.body.kind).toBe(c.id);expect(s.body.params).toMatchObject({[c.key]:p});   // policy_response also freezes params.dims
   }
   expect(new Set(Object.values(all).map(s=>s.manifest_hash)).size).toBe(c.params.length);
  });

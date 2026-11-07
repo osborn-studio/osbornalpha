@@ -13,9 +13,11 @@
 // - cell: n ≥ 5 → median and type-7 quartiles (full precision, *_raw); 1 ≤ n < 5 → events only; n = 0 → insufficient.
 //   QE/QT row: missing (no Fed balance-sheet series in the catalog). Restricted / missing catalog rows → whole column state.
 // buildPolicyResponseManifest freezes the events, every dimension's monthly history asOf cutoff, the catalog projection and
-// the window N in params ({window}); buildPolicyResponse reads N from the manifest, so each N is its own manifest identity.
+// the window N and the complete dimension definitions in params ({window, dims}); buildPolicyResponse reads both from the
+// manifest and nothing else (no caller override), so each N and each dimension set is its own manifest identity.
 // pct change_text is the exact ratio '<end>/<base>' (rounded once at display).
 import {VERSIONS} from './contract';
+import {canonicalJson} from './hash';
 import type {Bilingual,Cell,EndpointRef,EventRow,ExclusionReason,ObsRef,PolicyResponseView,ResponseDim,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {RESPONSE_DIMS_V1,type ResponseDimDef} from './data/response-dims-v1';
 import {addMonthsYm,frozenDef,inputRole,inputsWithRole,latestCutoff,manifestBuilder,monthOf,readState,toObsRef} from './manifest';
@@ -40,18 +42,28 @@ export function windowParam(m:StrategyManifest):1|3|6{
  if(w!==1&&w!==3&&w!==6)throw new Error('invalid_manifest_params:window');
  return w;
 }
+/** The dimension definitions frozen in a policy_response manifest's params (canonical JSON text, hashed with the body). */
+export function dimsParam(m:StrategyManifest):readonly ResponseDimDef[]{
+ const t=m.params.dims;
+ if(typeof t!=='string')throw new Error('invalid_manifest_params:dims');
+ let v:unknown;
+ try{v=JSON.parse(t);}catch{throw new Error('invalid_manifest_params:dims');}
+ if(!Array.isArray(v)||v.some(d=>!d||typeof d!=='object'||typeof d.id!=='string'||(d.unit!=='pct'&&d.unit!=='bp')||!['series','spread','not_in_catalog'].includes(d.kind)))throw new Error('invalid_manifest_params:dims');
+ return v as ResponseDimDef[];
+}
 export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;window:1|3|6;dims?:readonly ResponseDimDef[]}):Promise<StrategyManifest>{
+ const dims=o.dims??RESPONSE_DIMS_V1;
  const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
  const {events,gaps}=await readPolicyEvents(b);
  const done=new Set<string>();
- for(const d of o.dims??RESPONSE_DIMS_V1)for(const id of dimSeries(d)){
+ for(const d of dims)for(const id of dimSeries(d)){
   const def=b.def(id);
   if(!def||def.status!=='active'||done.has(id))continue;
   done.add(id);await b.history(id,DIM_PURPOSE,'month_end');
  }
- return b.build({kind:'policy_response',params:{window:o.window},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
+ return b.build({kind:'policy_response',params:{window:o.window,dims:canonicalJson(dims)},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
 type Point={period_end:string;value_text:string;inputs:ObsRef[]};
@@ -99,10 +111,10 @@ function directionCell(unit:'pct'|'bp',rows:EventRow[]):Cell{
  if(sel.length>0)return {status:'events_only',n:sel.length,unit,events:rows};
  return {status:'insufficient',unit,events:rows};
 }
-export function buildPolicyResponse(stored:StoredManifest,dims:readonly ResponseDimDef[]=RESPONSE_DIMS_V1):PolicyResponseView{
+export function buildPolicyResponse(stored:StoredManifest):PolicyResponseView{
  const m=stored.body;
  if(m.kind!=='policy_response')throw new Error(`manifest_kind_mismatch:${m.kind}`);
- const window=windowParam(m);
+ const window=windowParam(m),dims=dimsParam(m);
  const events=(m.events??[]).filter(e=>sign(e.change_bp)!==0).sort((a,b)=>a.effective_date<b.effective_date?-1:a.effective_date>b.effective_date?1:0);
  const viewDims:ResponseDim[]=[];
  const cells:Record<'hike'|'cut'|'qe_qt',Record<string,Cell>>={hike:{},cut:{},qe_qt:{}};

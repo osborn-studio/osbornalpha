@@ -5,6 +5,9 @@
 import {describe,expect,it} from 'vitest';
 import type {Cell,ManifestInput,ManifestRead,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
 import {freezeDef,manifestHash,monthEnd} from './manifest';
+import {canonicalJson} from './hash';
+import {RESPONSE_DIMS_V1} from './data/response-dims-v1';
+import {cellSentence} from './policy-response-explain';
 import {add} from './numeric';
 import {buildPolicyResponse,buildPolicyResponseManifest} from './policy-response';
 import {memoryStrategyPort} from './port';
@@ -23,7 +26,7 @@ function manifest(events:StrategyPolicyEvent[],inputs:ManifestInput[],reads:Mani
  return {manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(body),body,created_at:CUTOFF};
 }
 /** The view for window N: N is a manifest parameter, so each N is its own stored manifest (same frozen data, other identity). */
-function view(m:StoredManifest,window:1|3|6){const body={...m.body,params:{window}};return buildPolicyResponse({...m,manifest_hash:manifestHash(body),body});}
+function view(m:StoredManifest,window:1|3|6){const body={...m.body,params:{window,dims:canonicalJson(RESPONSE_DIMS_V1)}};return buildPolicyResponse({...m,manifest_hash:manifestHash(body),body});}
 const cell=(v:ReturnType<typeof buildPolicyResponse>,dir:'hike'|'cut'|'qe_qt',dim:string):Cell=>v.rows.find(r=>r.direction===dir)!.cells[dim];
 const eventsOf=(c:Cell)=>'events' in c?c.events:[];
 
@@ -133,7 +136,7 @@ describe('sentences and manifest',()=>{
   const f=fixture({snapshots:[us],observations:[...monthly('US_DGS10','2022-01',['1.70','1.83','2.32','2.89']),
    {...monthly('US_DGS10','2022-05',['9'])[0],available_at:'2026-12-01T00:00:00Z'}]});
   const body=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:3});
-  expect(body.params).toEqual({window:3});
+  expect(body.params).toEqual({window:3,dims:canonicalJson(RESPONSE_DIMS_V1)});
   const n1=await buildPolicyResponseManifest(memoryStrategyPort(f),{now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:1});
   expect(manifestHash(n1)).not.toBe(manifestHash(body));   // N is part of the identity
   expect(buildPolicyResponse({manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(n1),body:n1,created_at:CUTOFF}).window).toBe(1);
@@ -143,5 +146,28 @@ describe('sentences and manifest',()=>{
   expect(body.reads.some(r=>r.series_id==='US_SP500')).toBe(false);
   expect(body.catalog.find(d=>d.id==='US_SP500')?.status).toBe('restricted');
   expect(body.events).toEqual([]);expect(body.method_version).toBe('macro-policy-response/1');
+ });
+});
+
+describe('rounding (half away from zero) and frozen dimensions',()=>{
+ const dim={id:'D',label:{zh:'某',en:'X'},unit:'bp',kind:'series',coverage:{from:null,to:null}} as const;
+ const stats=(median_raw:number,q1_raw:number,q3_raw:number):Cell=>({status:'stats',n:5,median_raw,q1_raw,q3_raw,unit:'bp',events:[]});
+ it('half-bp values round away from zero; zero never prints as -0',()=>{
+  const s=cellSentence('hike',dim,stats(-1.5,-0.5,2.5),1)!;
+  expect(s.en).toContain('was -2 bp (interquartile -1 bp to 3 bp)');
+  const z=cellSentence('cut',dim,stats(-0.4,0.4,-0.5),1)!;
+  expect(z.en).toContain('was 0 bp (interquartile 0 bp to -1 bp)');
+  expect(z.en).not.toContain('-0 bp');
+ });
+ it('dimension definitions are part of the manifest identity and replay reads only the manifest',async()=>{
+  const f=fixture({snapshots:[snap('US',CUTOFF,[])],observations:[...monthly('US_DGS10','2022-01',['1.70','1.83','2.32','2.89'])]});
+  const o={now:new Date('2026-11-05T00:00:00Z'),codeVersion:'test',window:1 as const};
+  const as=(unit:'pct'|'bp')=>buildPolicyResponseManifest(memoryStrategyPort(f),{...o,dims:[{id:'US_DGS10',label:{zh:'x',en:'x'},unit,kind:'series',series:'US_DGS10'}]});
+  const [bp,pct]=[await as('bp'),await as('pct')];
+  expect(manifestHash(bp)).not.toBe(manifestHash(pct));
+  const st=(b:StrategyManifest):StoredManifest=>({manifest_id:'00000000-0000-4000-8000-000000000002',manifest_hash:manifestHash(b),body:b,created_at:CUTOFF});
+  expect(buildPolicyResponse(st(bp)).dims.map(d=>d.unit)).toEqual(['bp']);
+  expect(buildPolicyResponse(st(pct)).dims.map(d=>d.unit)).toEqual(['pct']);
+  expect(()=>buildPolicyResponse(st({...bp,params:{window:1}}))).toThrow('invalid_manifest_params:dims');
  });
 });

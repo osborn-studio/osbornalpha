@@ -2,7 +2,9 @@
 // Number-only sentences for the policy response matrix (spec 2026-11-07 §5.3): one per hike / cut cell with statistics.
 // They state the computed numbers and nothing else (no forecast wording). Display rounding only: 0.1% / 1 bp.
 import type {Bilingual,Cell,PolicyResponseView,ResponseDim} from './contract';
-const fmt=(x:number,unit:'pct'|'bp')=>unit==='pct'?`${x.toFixed(1)}%`:`${Math.round(x)+0} bp`;
+/** Half away from zero (spec §5.3); never -0. */
+export const roundHalfAway=(x:number):number=>{const r=Math.sign(x)*Math.round(Math.abs(x));return r===0?0:r;};
+const fmt=(x:number,unit:'pct'|'bp')=>unit==='pct'?`${x.toFixed(1)}%`:`${roundHalfAway(x)} bp`;
 const DIR={hike:{zh:'加息',en:'hikes'},cut:{zh:'降息',en:'cuts'}} as const;
 export function cellSentence(dir:'hike'|'cut',dim:ResponseDim,cell:Cell,window:number):Bilingual|null{
  if(cell.status!=='stats')return null;
