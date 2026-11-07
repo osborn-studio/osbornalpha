@@ -143,7 +143,7 @@ BASE=https://osbornalpha.com
    If a grant differs, do not edit the migration: add the missing `revoke execute … from public, anon, authenticated` on production and record it in `docs/audits/`.
 3. **`MACRO_INGEST_SECRET` set** in Vercel production (macro-sync §13.2; unset means ingest answers 503 and the owner's AKShare run cannot upload). `vercel env ls production | grep -E 'MACRO_INGEST_SECRET|CRON_SECRET'` lists both.
 4. **`CRON_SECRET` present** (with it unset `/api/cron/macro-review` answers 401 `unauthorized`, because the bearer check can never pass; no 503 is returned, so a 401 on a correct bearer means the secret is missing in the deployment).
-5. **`VERCEL_GIT_COMMIT_SHA` present in the deployment.** It is set only by deploying from a git checkout: use the clean `origin/main` worktree method of macro-sync §13.2 (`vercel deploy --prod --yes` from `git worktree add --detach "$D" origin/main`). Without it, manifest-writing routes and the review cron answer 503 `code_version_unavailable`.
+5. **`VERCEL_GIT_COMMIT_SHA` present in the deployment.** Vercel does **not** fill it for CLI deploys of this project (no Git connection; observed 2026-11-07, `data-foundation.md` §10.7): deploy from the clean `origin/main` worktree of macro-sync §13.2 **and** pass it explicitly, `vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)`. Without it, manifest-writing routes and the review cron answer 503 `code_version_unavailable`.
 6. **The first `macro-sync` run published an active US snapshot** and the owner ran AKShare and published a CN snapshot (macro-sync §13.3 and §13.4). The CN snapshot is the owner's step on the owner's Mac; the strategy pages degrade without it (a region with no snapshot shows its nodes missing) but the transmission route answers 404 `no_published_snapshot` only when neither region has one.
 7. **`US_FED_TARGET_D` (DFEDTAR), `US_FED_TARGET_UPPER_D` and `US_FED_TARGET_LOWER_D` are loaded.** They come from the same macro-sync run once the WP-S6 code is deployed (the catalog gained `US_FED_TARGET_D`, so a deployment that predates WP-S6 never fetched it: rerun `GET $BASE/api/cron/macro-sync` with the bearer after the deploy and read a `success` receipt).
 
@@ -178,8 +178,8 @@ git fetch origin main
 D=~/Developer/CodeX/.worktrees/OsbornAlpha/deploy; mkdir -p "$(dirname "$D")"
 git worktree add --detach "$D" origin/main
 mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/project.json"
-( cd "$D" && vercel deploy --prod --yes )
-git worktree remove --force "$D" && git worktree prune
+( cd "$D" && vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD) )   # --env required, see 8.1 item 5
+git worktree remove "$D" && git worktree prune
 ```
 Then run 8.4 (the cron answers 404 `strategy_disabled` before this step, so the preview can only run now) before the smoke checks of 8.5.
 
