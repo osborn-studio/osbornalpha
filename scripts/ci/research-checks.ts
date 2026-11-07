@@ -14,7 +14,7 @@ export const criticalSuites = [
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
 ].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts', 'src/lib/entities/identifiers.integration.test.ts', 'src/lib/entities/ah-link.integration.test.ts', 'src/lib/dq/dq-extensions.integration.test.ts', 'src/lib/dq/reconcile/ixbrl-pair.integration.test.ts', 'src/lib/dq/reconcile/lineage.integration.test.ts', 'src/lib/facts/sync-cn.integration.test.ts', 'src/lib/dq/calendar.integration.test.ts')
  // F6 begin
- .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts')
+ .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts', 'src/lib/evals/gold/registration-lifecycle.test.ts')
  // F6 end
 ;
 criticalSuites.push('src/lib/evals/f3-hook.integration.test.ts');
