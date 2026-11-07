@@ -28,3 +28,15 @@ The client membership helper now returns false without I/O when supplied an `asO
 - mmx review outcome recorded in the final report; its first 8,000-token response stopped at `max_tokens` with thinking only and is not counted as a completed review.
 
 No SQL, production setting, license, methodology registry or gold fixture was changed.
+
+## mmx review disposition
+
+Sanitized diff and test plan were reviewed through mmx CLI. Attempt 1 exhausted 8,000 output tokens with thinking only (`stop_reason=max_tokens`); attempt 2 timed out after 300 seconds. Neither counts as a completed review. Attempt 3 used the narrowed source diff and actual verification summary and returned a final **text** block with `stop_reason=end_turn`:
+
+> Verdict: Approved — no concrete blocking bugs found.
+>
+> Replay bypasses `isWatching` and live inbox reads, while live mode still probes membership. The reported component, unit, typecheck, and lint results are consistent with the change.
+>
+> Residual gap: seeded full-application E2E and PostgreSQL tests were not run.
+
+No blocking finding required a code revision. The original seeded e2e mark-read assertion was preserved; only the new replay regression was appended. This external review does not replace the unrun database/full-application gates.
