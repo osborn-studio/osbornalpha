@@ -68,6 +68,8 @@ export interface PublishInput{
  publishKey?:string;
  /** Owner fence (第 5 稿 P1-3): the AKShare finish passes its batch and owner token; cron passes neither (its batch has no run). */
  batchId?:string;ownerToken?:string|null;
+ /** Finish fence (review A2): the run's CURRENT finish token; required with ownerToken, else `fenced` (a rotated-out finisher cannot claim the publish key). */
+ finishToken?:string|null;
 }
 export interface PublishResult{snapshot_id:string;revision:number;replayed:boolean}
 export interface SnapshotRecord{

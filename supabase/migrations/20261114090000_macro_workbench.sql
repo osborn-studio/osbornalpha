@@ -414,9 +414,12 @@ create or replace function public.macro_put_retrieval(
   p_fetch_url text, p_fetch_host text, p_http_status int, p_fetched_at timestamptz, p_batch_id uuid, p_tool_versions jsonb,
   p_owner_token uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare o public.macro_evidence_objects; v_id uuid := gen_random_uuid();
+declare o public.macro_evidence_objects; v_id uuid := gen_random_uuid(); v_bstatus text;
 begin
   perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  select status into v_bstatus from public.ingest_batches where batch_id = p_batch_id;
+  if not found then raise exception 'invalid_batch' using errcode = '22023'; end if;
+  if v_bstatus <> 'running' then raise exception 'batch_not_running' using errcode = 'P0001'; end if;
   if p_fetched_at is null or p_fetched_at <> date_trunc('milliseconds', p_fetched_at) then
     raise exception 'invalid_retrieval' using errcode = '22023';
   end if;
@@ -439,7 +442,9 @@ grant execute on function public.macro_put_retrieval(text, text, text, text, big
 -- derived_from ancestor (recursively) failing the same test. p_include_batch additionally admits rows of
 -- that one batch (writes and derivation inside an open batch); publication never passes it.
 create or replace function public.macro_ineligible_ids(p_ids uuid[], p_include_batch uuid default null)
-returns setof uuid language sql stable security definer set search_path = public as $$
+returns setof uuid language plpgsql stable security definer set search_path = public as $$
+declare v_deep boolean; v_bad uuid[];
+begin
   with recursive walk(root, id, depth) as (
     select t.i, t.i, 0 from unnest(coalesce(p_ids, '{}'::uuid[])) as t(i)
     union all
@@ -448,14 +453,22 @@ returns setof uuid language sql stable security definer set search_path = public
     join public.macro_observations o on o.observation_id = w.id
     cross join lateral unnest(coalesce(o.derived_from, '{}'::uuid[])) as d(i)
     where w.depth < 8
+  ), bad as (
+    select distinct w.root
+    from walk w
+    left join public.macro_observations o on o.observation_id = w.id
+    left join public.ingest_batches b on b.batch_id = o.batch_id
+    where o.observation_id is null or o.status <> 'ok'
+       or not (coalesce(b.status in ('success','partial'), false) or (p_include_batch is not null and o.batch_id = p_include_batch))
   )
-  select distinct w.root
-  from walk w
-  left join public.macro_observations o on o.observation_id = w.id
-  left join public.ingest_batches b on b.batch_id = o.batch_id
-  where o.observation_id is null or o.status <> 'ok'
-     or not (coalesce(b.status in ('success','partial'), false) or (p_include_batch is not null and o.batch_id = p_include_batch))
-$$;
+  select exists (select 1 from walk w join public.macro_observations o on o.observation_id = w.id
+                  where w.depth = 8 and cardinality(coalesce(o.derived_from, '{}'::uuid[])) > 0),
+         coalesce((select array_agg(root) from bad), '{}'::uuid[])
+    into v_deep, v_bad;
+  -- depth 8 reached with ancestors remaining: the walk is incomplete, so no verdict is safe (R4)
+  if v_deep then raise exception 'ancestry_too_deep' using errcode = 'P0001'; end if;
+  return query select unnest(v_bad);
+end $$;
 revoke execute on function public.macro_ineligible_ids(uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.macro_ineligible_ids(uuid[], uuid) to service_role;
 
@@ -500,13 +513,15 @@ declare
   e jsonb; s public.macro_series; g record; cur public.macro_observations; v_has_cur boolean;
   v_region text; v_touched text[] := '{}'; v_native boolean; v_ret public.macro_retrievals;
   v_text text; v_new numeric; v_avail timestamptz; v_inputs uuid[]; v_input_ok int; v_input_n int; v_input_max timestamptz;
-  v_max int; v_action text; v_status text; v_t text; v_obs uuid;
+  v_max int; v_action text; v_status text; v_t text; v_obs uuid; v_bstatus text;
   n_ins int := 0; n_dup int := 0; n_ver int := 0; n_q int := 0; v_conf jsonb := '[]'::jsonb;
 begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   if p_code_version is null or length(p_code_version) not between 1 and 128 then raise exception 'invalid_code_version' using errcode = '22023'; end if;
-  if not exists (select 1 from public.ingest_batches where batch_id = p_batch) then raise exception 'invalid_batch' using errcode = '22023'; end if;
+  select status into v_bstatus from public.ingest_batches where batch_id = p_batch;
+  if not found then raise exception 'invalid_batch' using errcode = '22023'; end if;
   perform public.macro_assert_owner(p_batch, p_owner_token, array['open','finishing']);   -- run row before region rows
+  if v_bstatus <> 'running' then raise exception 'batch_not_running' using errcode = 'P0001'; end if;
 
   -- validate every row before any write
   for e in select value from jsonb_array_elements(p_rows) loop
@@ -663,6 +678,23 @@ end $$;
 revoke execute on function public.macro_write_observations(uuid, text, jsonb, uuid) from public, anon, authenticated;
 grant execute on function public.macro_write_observations(uuid, text, jsonb, uuid) to service_role;
 
+-- ---------------------------------------------------------------- snapshot cursor (A4)
+-- The snapshot feed is consumed by (created_at, snapshot_id) markers, so cursor order must equal COMMIT order and be strictly
+-- increasing. Every snapshot insert (publish, republish, failed) calls this LAST, holding a transaction-scoped advisory lock
+-- until commit: a later committer always draws a later value. Millisecond-aligned (JS Date round-trips milliseconds; every row
+-- is aligned), at least 1 ms after the newest stored row.
+create or replace function public.macro_next_snapshot_cursor()
+returns timestamptz language plpgsql set search_path = public as $$
+declare v timestamptz;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('macro_snapshot_cursor', 0));
+  select greatest(date_trunc('milliseconds', clock_timestamp()), coalesce(max(created_at), '-infinity'::timestamptz) + interval '1 millisecond')
+    into v from public.macro_snapshots;
+  return v;
+end $$;
+revoke execute on function public.macro_next_snapshot_cursor() from public, anon, authenticated;
+grant execute on function public.macro_next_snapshot_cursor() to service_role;
+
 -- ---------------------------------------------------------------- publish (plan "发布规则"; spec §4.3, §0.2 M16; 第 4 稿 P1-5, P1-8)
 -- p_observation_ids is the manifest, p_history_ids the frozen sparkline history; both must be publishable
 -- (macro_manifest_ok: ok, region, eligible — checked here, in the transaction that inserts the snapshot).
@@ -673,17 +705,25 @@ create or replace function public.publish_macro_snapshot(
   p_region text, p_expected_revision bigint, p_expected_input_revision bigint, p_as_of date,
   p_methodology_version text, p_catalog_version text, p_observation_ids uuid[], p_history_ids uuid[], p_catalog_counts jsonb,
   p_regime jsonb, p_contributions jsonb, p_rules_version text, p_uncovered_weight numeric,
-  p_publish_key text default null, p_batch_id uuid default null, p_owner_token uuid default null)
+  p_publish_key text default null, p_batch_id uuid default null, p_owner_token uuid default null, p_finish_token uuid default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare st public.macro_publish_state; v_id uuid := gen_random_uuid(); v_regime jsonb := nullif(p_regime, 'null'::jsonb); prior public.macro_snapshots;
+  r public.macro_ingest_runs; v_ts timestamptz;
 begin
-  perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  r := public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
+  -- A2: under the run lock a run-bound publication must also carry the run's CURRENT finish token (a rotated-out finisher is fenced)
+  if p_owner_token is not null and (p_finish_token is null or r.finish_token is distinct from p_finish_token) then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
   if p_publish_key is not null and length(p_publish_key) not between 1 and 128 then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
   select * into st from public.macro_publish_state where region = p_region for update;
   if not found then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;
   if p_publish_key is not null then
     select * into prior from public.macro_snapshots where publish_key = p_publish_key;
-    if found then return jsonb_build_object('snapshot_id', prior.snapshot_id, 'revision', prior.revision, 'replayed', true); end if;
+    if found then
+      if prior.region <> p_region then raise exception 'invalid_manifest' using errcode = 'P0001'; end if;   -- R3
+      return jsonb_build_object('snapshot_id', prior.snapshot_id, 'revision', prior.revision, 'replayed', true);
+    end if;
   end if;
   if st.revision <> p_expected_revision or st.input_revision <> p_expected_input_revision then
     raise exception 'stale_publisher' using errcode = 'P0001';
@@ -711,15 +751,16 @@ begin
     raise exception 'invalid_manifest' using errcode = 'P0001';
   end if;
   update public.macro_snapshots set status = 'superseded' where region = p_region and status = 'active';
-  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, publish_key)
-  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_history_ids, p_catalog_counts, 'active', p_publish_key);
+  v_ts := public.macro_next_snapshot_cursor();
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, publish_key, created_at)
+  values (v_id, p_region, p_as_of, p_expected_revision + 1, p_methodology_version, p_catalog_version, p_observation_ids, p_history_ids, p_catalog_counts, 'active', p_publish_key, v_ts);
   insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
   values (v_id, p_region, v_regime, p_contributions, p_rules_version, p_uncovered_weight);
   update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = p_region;
   return jsonb_build_object('snapshot_id', v_id, 'revision', p_expected_revision + 1, 'replayed', false);
 end $$;
-revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid) from public, anon, authenticated;
-grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid) to service_role;
+revoke execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.publish_macro_snapshot(text, bigint, bigint, date, text, text, uuid[], uuid[], jsonb, jsonb, jsonb, text, numeric, text, uuid, uuid, uuid) to service_role;
 
 -- Rollback (第 4 稿 P1-11): a NEW active snapshot (new id, next revision) copying a non-failed snapshot's as_of,
 -- versions, manifest, history, counts and regime result, after re-validating eligibility. Snapshot rows stay
@@ -740,8 +781,8 @@ begin
     raise exception 'invalid_manifest' using errcode = 'P0001';
   end if;
   update public.macro_snapshots set status = 'superseded' where region = src.region and status = 'active';
-  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status)
-  values (v_id, src.region, src.as_of, p_expected_revision + 1, src.methodology_version, src.catalog_version, src.observation_ids, src.history_ids, src.catalog_counts, 'active');
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, history_ids, catalog_counts, status, created_at)
+  values (v_id, src.region, src.as_of, p_expected_revision + 1, src.methodology_version, src.catalog_version, src.observation_ids, src.history_ids, src.catalog_counts, 'active', public.macro_next_snapshot_cursor());
   insert into public.macro_regime_results(snapshot_id, region, regime, contributions, rules_version, uncovered_weight)
   values (v_id, src.region, rr.regime, rr.contributions, rr.rules_version, rr.uncovered_weight);
   update public.macro_publish_state set revision = revision + 1, updated_at = date_trunc('milliseconds', now()) where region = src.region;
@@ -758,9 +799,9 @@ begin
   select revision into v_rev from public.macro_publish_state where region = p_region;
   if not found then raise exception 'invalid_region' using errcode = '22023'; end if;
   if p_reason is null or length(p_reason) not between 1 and 2000 then raise exception 'invalid_reason' using errcode = '22023'; end if;
-  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, catalog_counts, status, failure_reason)
+  insert into public.macro_snapshots(snapshot_id, region, as_of, revision, methodology_version, catalog_version, observation_ids, catalog_counts, status, failure_reason, created_at)
   values (v_id, p_region, p_as_of, v_rev, p_methodology_version, p_catalog_version, '{}',
-          '{"verified":0,"missing":0,"restricted":0}'::jsonb, 'failed', p_reason);
+          '{"verified":0,"missing":0,"restricted":0}'::jsonb, 'failed', p_reason, public.macro_next_snapshot_cursor());
   return v_id;
 end $$;
 revoke execute on function public.record_failed_macro_snapshot(text, date, text, text, text) from public, anon, authenticated;
@@ -842,7 +883,7 @@ begin
      for update of ob;
     if not found then raise exception 'not_member' using errcode = 'P0002'; end if;
     if o.status <> 'quarantined' then raise exception 'not_quarantined' using errcode = 'P0001'; end if;
-    if exists (select 1 from public.ingest_batches b where b.batch_id = o.batch_id and b.status in ('failed','rejected')) then
+    if not exists (select 1 from public.ingest_batches b where b.batch_id = o.batch_id and b.status in ('success','partial')) then
       raise exception 'member_ineligible' using errcode = 'P0001';
     end if;
     update public.macro_observations set status = 'ok' where observation_id = p_observation_id;
@@ -1044,7 +1085,7 @@ grant execute on function public.macro_record_finish_step(uuid, text, jsonb, uui
 -- passes 'failed' explicitly.
 create or replace function public.macro_finalize_batch(p_batch_id uuid, p_owner_token uuid, p_finish_token uuid, p_status text, p_counts jsonb, p_errors jsonb, p_finished_at timestamptz)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare r public.macro_ingest_runs; b public.ingest_batches;
+declare r public.macro_ingest_runs; b public.ingest_batches; v_region text;
 begin
   if p_batch_id is null or p_status is null or p_status not in ('success','partial','failed','rejected') or p_finished_at is null
      or p_counts is null or jsonb_typeof(p_counts) <> 'object'
@@ -1072,6 +1113,14 @@ begin
   update public.ingest_batches
      set status = p_status, counts = p_counts, errors = p_errors, finished_at = greatest(p_finished_at, b.started_at)
    where batch_id = p_batch_id;
+  -- A3: finalization changes which rows are publication-eligible, so every region this batch wrote to gets input_revision + 1
+  -- in the same transaction (region-name order, as macro_write_observations locks them)
+  for v_region in
+    select distinct ms.region from public.macro_observations o join public.macro_series ms on ms.id = o.series_id where o.batch_id = p_batch_id order by 1
+  loop
+    perform 1 from public.macro_publish_state where region = v_region for update;
+    update public.macro_publish_state set input_revision = input_revision + 1, updated_at = date_trunc('milliseconds', now()) where region = v_region;
+  end loop;
   return jsonb_build_object('status', p_status, 'finalized', true);
 end $$;
 revoke execute on function public.macro_finalize_batch(uuid, uuid, uuid, text, jsonb, jsonb, timestamptz) from public, anon, authenticated;
@@ -1248,9 +1297,18 @@ do $$ declare t text; begin
     execute format('create policy "%s service read" on public.%I for select to service_role using (true)', t, t);
   end loop;
 end $$;
+-- A1: public reads see ok rows of FINISHED (success/partial) batches only; rows of running, failed or rejected batches stay
+-- service-only. security definer so the policy can read ingest_batches (not granted to anon/authenticated).
+create or replace function public.macro_batch_eligible(p_batch_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.ingest_batches b where b.batch_id = p_batch_id and b.status in ('success','partial'))
+$$;
+revoke execute on function public.macro_batch_eligible(uuid) from public, anon, authenticated;
+grant execute on function public.macro_batch_eligible(uuid) to anon, authenticated, service_role;
 grant select on public.macro_observations to anon, authenticated, service_role;
 drop policy if exists "macro_observations public read" on public.macro_observations;
-create policy "macro_observations public read" on public.macro_observations for select to anon, authenticated using (status = 'ok');
+create policy "macro_observations public read" on public.macro_observations for select to anon, authenticated
+  using (status = 'ok' and public.macro_batch_eligible(batch_id));
 drop policy if exists "macro_observations service read" on public.macro_observations;
 create policy "macro_observations service read" on public.macro_observations for select to service_role using (true);
 grant select on public.macro_analysis_runs to authenticated, service_role;

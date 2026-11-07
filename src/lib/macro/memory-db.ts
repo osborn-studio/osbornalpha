@@ -43,8 +43,10 @@ export interface QuarantineItem{id:string;dataset:string;table_name:string;natur
 export interface AuditRow{user_id:string;action:string;object_type:string;object_id:string;detail:Record<string,unknown>}
 export interface MemoryMacroDb extends MacroDb{
  setNow(iso:string):void;
- /** Declares a batch's ingest_batches status (undeclared batches count as 'success'). */
- setBatchStatus(batchId:string,status:MemoryBatchStatus):void;
+ /** Declares a batch's ingest_batches row: status and (optionally) dataset. Writes and evidence need a KNOWN batch (declared here, declared by
+  *  claimIngest, or a row in opts.tables.ingest_batches), else invalid_batch (SQL: unknown batch); read-side eligibility treats an
+  *  undeclared batch as 'success'. */
+ setBatchStatus(batchId:string,status:MemoryBatchStatus,dataset?:string):void;
  /** Registers an open dq_quarantine item; `id` lets a test mirror the TableClient's dq_quarantine rows (Task 6). */
  addQuarantineItem(i:{id?:string;dataset:string;table_name?:string;natural_key:string;reason_code?:string;batch_id:string}):string;
  quarantineItem(id:string):QuarantineItem|undefined;
@@ -56,10 +58,12 @@ export interface MemoryMacroDb extends MacroDb{
 /** opts.tables: the DQ TableClient finalizeBatch / recordFreshness write (ingest_batches, dq_freshness) — route tests pass the same
  *  memoryTableClient the route uses; without it those two methods throw rpc_failed:memory_tables_required. */
 export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
- let fixedNow:string|null=null;let lastMs=0;
+ let fixedNow:string|null=null;let lastMs=0;let lastCursorMs=0;
  // Real-clock timestamps are strictly increasing (SQL now() has µs resolution; two writes in one ms must still order),
  // so previousSnapshot / snapshotsSince see insertion order. setNow pins the clock exactly (tests).
  const now=()=>{if(fixedNow)return fixedNow;const ms=Math.max(Date.now(),lastMs+1);lastMs=ms;return new Date(ms).toISOString();};
+ // Snapshot cursor (SQL macro_next_snapshot_cursor, review A4): strictly increasing, 1 ms apart at least, even under a pinned clock.
+ const cursorNow=()=>{const ms=Math.max(msOf(now()),lastCursorMs+1);lastCursorMs=ms;return new Date(ms).toISOString();};
  const catalogVersions=new Map<string,{json:string;rules:string}>();
  const series=new Map<string,MacroSeriesDef>();
  const evidence=new Map<string,EvidenceObject>();
@@ -74,6 +78,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  const runs=new Map<string,Run>();
  const publishKeys=new Map<string,string>();                                                           // publish_key → snapshot_id
  const batchStatus=new Map<string,MemoryBatchStatus>();
+ const batchDataset=new Map<string,string>();
  const items=new Map<string,QuarantineItem>();
  const members=new Map<string,Set<string>>();
  const audit:AuditRow[]=[];
@@ -102,10 +107,22 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  // ---- publication eligibility (SQL macro_ineligible_ids)
  const batchOk=(b:string,include?:string|null)=>b===include||['success','partial'].includes(batchStatus.get(b)??'success');
  const byId=(id:string)=>observations.find(o=>o.observation_id===id);
+ // SQL walks every ancestor to depth 8 and raises ancestry_too_deep (review R4) when a node at depth 8 still has ancestors
  const eligible=(id:string,include?:string|null,depth=0):boolean=>{
   const o=byId(id);
-  if(!o||o.status!=='ok'||!batchOk(o.batch_id,include))return false;
-  return depth>=8||(o.derived_from??[]).every(a=>eligible(a,include,depth+1));
+  if(!o)return false;
+  let ok=o.status==='ok'&&batchOk(o.batch_id,include);
+  const anc=o.derived_from??[];
+  if(depth>=8){if(anc.length>0)throw rpc('ancestry_too_deep');return ok;}
+  for(const a of anc)if(!eligible(a,include,depth+1))ok=false;
+  return ok;
+ };
+ // ---- known batch (SQL: the ingest_batches row): declared here, else the injected TableClient's row
+ const knownBatch=async(batchId:string):Promise<{status:string;dataset:string|null}|null>=>{
+  const declared=batchStatus.get(batchId);
+  if(declared)return {status:declared,dataset:batchDataset.get(batchId)??null};
+  if(opts.tables){const [b]=await opts.tables.select('ingest_batches',{batch_id:batchId},{limit:1});if(b)return {status:String(b.status),dataset:b.dataset==null?null:String(b.dataset)};}
+  return null;
  };
  const manifestOk=(region:Region,ids:readonly string[])=>ids.every(id=>{const o=byId(id);return !!o&&o.status==='ok'&&series.get(o.series_id)?.region===region&&eligible(id,null);});
  // ---- owner fence (SQL macro_assert_owner, 第 5 稿 P1-3): no batch → no check; no run → token must be null; else token + state
@@ -145,7 +162,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
 
  const db:MemoryMacroDb={
   setNow(iso){fixedNow=new Date(iso).toISOString();},
-  setBatchStatus(batchId,status){batchStatus.set(batchId,status);},
+  setBatchStatus(batchId,status,dataset){batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);},
   addQuarantineItem(i){const id=i.id??randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
   quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},
   get audit(){return clone(audit);},
@@ -164,14 +181,17 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
 
   async putRetrieval(obj,r,ownerToken){
    assertOwner(r.batch_id,ownerToken,['open','finishing']);
+   const bi=await knownBatch(r.batch_id);
+   if(!bi)throw rpc('invalid_batch');                                                                   // SQL: unknown batch (review R2)
+   if(bi.status!=='running')throw rpc('batch_not_running');
    const frac=/\.(\d+)/.exec(r.fetched_at??'');
    if(typeof r.fetched_at!=='string'||!Number.isFinite(msOf(r.fetched_at))||(frac&&/[1-9]/.test(frac[1].slice(3))))throw rpc('invalid_retrieval');
    if(!/^[0-9a-f]{64}$/.test(obj.sha256))throw rpc('violates check constraint macro_evidence_objects_sha256_check');
    if(!new RegExp(`^${obj.adapter}/${obj.sha256}\\.(csv|json|html|txt)$`).test(obj.object_path))throw rpc('violates check constraint macro_evidence_path');
+   const cur=evidence.get(obj.sha256);
+   if(cur&&(cur.object_path!==obj.object_path||cur.adapter!==obj.adapter||cur.content_type!==obj.content_type||cur.byte_length!==obj.byte_length))throw rpc('evidence_mismatch');   // before the host check, as SQL
    let host:string|null=null;try{const u=new URL(r.fetch_url);host=/^https?:$/.test(u.protocol)?u.hostname.toLowerCase():null;}catch{host=null;}
    if(host!==r.fetch_host)throw rpc('violates check constraint macro_retrievals_host');
-   const cur=evidence.get(obj.sha256);
-   if(cur&&(cur.object_path!==obj.object_path||cur.adapter!==obj.adapter||cur.content_type!==obj.content_type||cur.byte_length!==obj.byte_length))throw rpc('evidence_mismatch');
    if(!cur)evidence.set(obj.sha256,{...obj,created_at:now()});
    const id=randomUUID();
    retrievals.set(id,{retrieval_id:id,sha256:obj.sha256,fetch_url:r.fetch_url,fetch_host:r.fetch_host,http_status:r.http_status,fetched_at:new Date(r.fetched_at).toISOString(),batch_id:r.batch_id,tool_versions:clone(r.tool_versions??{})});
@@ -184,6 +204,8 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
 
   async claimIngest(batchId,dataset,o){
    if(!batchId||typeof dataset!=='string'||!DATASET.test(dataset)||!(o.maxAgeMs>0)||!(o.processingTimeoutMs>0)||typeof o.takeover!=='boolean')throw rpc('invalid_claim');
+   const bi=await knownBatch(batchId);
+   if(!bi||bi.status!=='running'||(bi.dataset!==null&&bi.dataset!==dataset))throw rpc('invalid_batch');   // SQL: a running batch of this dataset
    const nowMs=msOf(now());
    const live=(r:Run)=>r.state==='open'||r.state==='finishing';
    const stalled=(id:string,r:Run)=>[...(chunks.get(id)?.values()??[])].some(c=>c.state==='processing'&&(chunkReceivedMs.get(`${id}|${c.seq}`)??nowMs)<nowMs-r.processingTimeoutMs);
@@ -196,9 +218,10 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    const aborted=[...runs].filter(([id,r])=>r.dataset===dataset&&r.state==='aborted'&&batchStatus.get(id)==='running').map(([id])=>id).sort();
    const holder=[...runs].find(([,r])=>r.dataset===dataset&&live(r));
    if(holder)return {status:'busy',ownerToken:null,aborted,holder:holder[0]};
+   if(runs.has(batchId))throw rpc('duplicate key value violates unique constraint "macro_ingest_runs_pkey"');   // never resurrect an aborted / finished run
    const ownerToken=randomUUID();
    runs.set(batchId,{dataset,state:'open',progress:{},createdMs:nowMs,ownerToken,processingTimeoutMs:o.processingTimeoutMs,finishToken:null});
-   batchStatus.set(batchId,'running');                                                                 // SQL: only a running batch claims
+   batchStatus.set(batchId,'running');
    return {status:'claimed',ownerToken,aborted,holder:null};
   },
   async claimChunk(batchId,seq,total,ownerToken){
@@ -269,6 +292,8 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    const finishedAt=new Date(Math.max(msOf(input.finishedAt),msOf(String(b.started_at)))).toISOString();
    await tables.update('ingest_batches',{batch_id:batchId,status:'running'},{status:input.status,counts:clone(input.counts),errors:clone(input.errors),finished_at:finishedAt});
    batchStatus.set(batchId,input.status);                                                                // eligibility follows the written status
+   // review A3: finalization moves eligibility, so every region this batch wrote to gets input_revision + 1
+   for(const r of new Set(observations.filter(o=>o.batch_id===batchId).map(o=>series.get(o.series_id)?.region)))if(r)state[r].inputRevision++;
    return {status:input.status,finalized:true};
   },
   async recordFreshness(batchId,input,fence){
@@ -288,7 +313,10 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
   async writeObservations(batchId,codeVersion,rows,ownerToken){
    if(!Array.isArray(rows))throw rpc('invalid_rows');
    if(typeof codeVersion!=='string'||codeVersion.length<1||codeVersion.length>128)throw rpc('invalid_code_version');
+   const bi=await knownBatch(batchId);
+   if(!bi)throw rpc('invalid_batch');
    assertOwner(batchId,ownerToken,['open','finishing']);
+   if(bi.status!=='running')throw rpc('batch_not_running');                                              // review R2
    for(const r of rows)validateRow(r);
    const obs=[...observations];const touched=new Set<Region>();
    const res:WriteResult={inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]};
@@ -433,7 +461,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
     if(!m.has(observationId))throw rpc('not_member');
     const target=byId(observationId);
     if(target?.status!=='quarantined')throw rpc('not_quarantined');
-    if(['failed','rejected'].includes(batchStatus.get(target.batch_id)??'success'))throw rpc('member_ineligible');   // 第 5 稿 P1-6
+    if(!['success','partial'].includes(batchStatus.get(target.batch_id)??'success'))throw rpc('member_ineligible');   // 第 5 稿 P1-6; review R1: only a finished (success/partial) batch
     observations=observations.map(o=>o.observation_id===observationId?{...o,status:'ok' as const}:o);
     reject(observationId);
     state[s.region].inputRevision++;
@@ -450,11 +478,16 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
 
   async publishSnapshot(i){
    assertOwner(i.batchId,i.ownerToken??null,['open','finishing']);
+   // review A2: a run-bound publication must carry the run's CURRENT finish token
+   if(i.ownerToken!=null&&(!i.finishToken||runs.get(i.batchId??'')?.finishToken!==i.finishToken))throw fenced();
    const st=state[i.region];
    if(!st)throw new MacroDbError('invalid_manifest');
    if(i.publishKey!==undefined&&(typeof i.publishKey!=='string'||i.publishKey.length<1||i.publishKey.length>128))throw new MacroDbError('invalid_manifest');
    const prior=i.publishKey?snapshots.find(x=>x.snapshot_id===publishKeys.get(i.publishKey!)):undefined;
-   if(prior)return {snapshot_id:prior.snapshot_id,revision:prior.revision,replayed:true};          // before the revision check (第 5 稿 P1-4)
+   if(prior){
+    if(prior.region!==i.region)throw new MacroDbError('invalid_manifest');                          // review R3
+    return {snapshot_id:prior.snapshot_id,revision:prior.revision,replayed:true};                  // before the revision check (第 5 稿 P1-4)
+   }
    if(st.revision!==i.expectedRevision||st.inputRevision!==i.expectedInputRevision)throw new MacroDbError('stale_publisher');
    const bad=()=>new MacroDbError('invalid_manifest');
    if(!validDate(i.asOf)||!i.methodologyVersion||i.methodologyVersion.length>64||!i.rulesVersion||i.rulesVersion.length>64||!catalogVersions.has(i.catalogVersion))throw bad();
@@ -467,7 +500,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    for(const s of snapshots)if(s.region===i.region&&s.status==='active')s.status='superseded';
    const snapshot_id=randomUUID();const revision=i.expectedRevision+1;
    snapshots.push({snapshot_id,region:i.region,as_of:i.asOf,revision,methodology_version:i.methodologyVersion,catalog_version:i.catalogVersion,observation_ids:[...i.observationIds],
-    history_ids:[...i.historyIds],catalog_counts:clone(i.catalogCounts),status:'active',failure_reason:null,created_at:now()});
+    history_ids:[...i.historyIds],catalog_counts:clone(i.catalogCounts),status:'active',failure_reason:null,created_at:cursorNow()});
    regimes.set(snapshot_id,{snapshot_id,region:i.region,regime:clone(i.regime),contributions:clone(i.contributions),rules_version:i.rulesVersion,uncovered_weight:i.uncoveredWeight});
    if(i.publishKey)publishKeys.set(i.publishKey,snapshot_id);
    st.revision=revision;
@@ -483,7 +516,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    if(!rr||!manifestOk(src.region,src.observation_ids)||!manifestOk(src.region,src.history_ids))throw new MacroDbError('invalid_manifest');
    for(const x of snapshots)if(x.region===src.region&&x.status==='active')x.status='superseded';
    const snapshot_id=randomUUID();const revision=expectedRevision+1;
-   snapshots.push({...clone(src),snapshot_id,revision,status:'active',failure_reason:null,created_at:now()});
+   snapshots.push({...clone(src),snapshot_id,revision,status:'active',failure_reason:null,created_at:cursorNow()});
    regimes.set(snapshot_id,{...clone(rr),snapshot_id});
    st.revision=revision;
    return {snapshot_id,revision};
@@ -494,7 +527,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
    if(typeof i.reason!=='string'||i.reason.length<1||i.reason.length>2000)throw rpc('invalid_reason');
    const snapshot_id=randomUUID();
    snapshots.push({snapshot_id,region:i.region,as_of:i.asOf,revision:st.revision,methodology_version:i.methodologyVersion,catalog_version:i.catalogVersion,observation_ids:[],
-    history_ids:[],catalog_counts:{verified:0,missing:0,restricted:0},status:'failed',failure_reason:i.reason,created_at:now()});
+    history_ids:[],catalog_counts:{verified:0,missing:0,restricted:0},status:'failed',failure_reason:i.reason,created_at:cursorNow()});
    return snapshot_id;
   },
   async activeSnapshot(region){const s=snapshots.find(x=>x.region===region&&x.status==='active');return s?clone(s):null;},

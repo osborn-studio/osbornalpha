@@ -9,7 +9,7 @@ import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
-import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,packWrites,supabaseMacroDb,toMacroDbError} from './db';
+import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,supabaseMacroDb,toMacroDbError} from './db';
 import {macroDbContract,nativeRow,outcome} from './db-contract';
 import {memoryMacroDb} from './memory-db';
 import type {ObservationWrite,PublishInput} from './types';
@@ -17,7 +17,7 @@ import type {ObservationWrite,PublishInput} from './types';
 macroDbContract('memoryMacroDb contract',async()=>{
  const db=memoryMacroDb();
  return {db,resolver:async()=>randomUUID(),
-  batch:async()=>{const id=randomUUID();db.setBatchStatus(id,'running');return id;},
+  batch:async(dataset)=>{const id=randomUUID();db.setBatchStatus(id,'running',dataset);return id;},
   finish:async(id,status='success')=>{db.setBatchStatus(id,status);},
   addQuarantine:async i=>db.addQuarantineItem({dataset:i.dataset,natural_key:i.naturalKey,batch_id:i.batchId,reason_code:i.reasonCode}),
   quarantineStatus:async id=>db.quarantineItem(id)?.status??null};
@@ -28,7 +28,7 @@ describe('memoryMacroDb specifics',()=>{
   const db=memoryMacroDb();db.setNow('2026-11-06T05:30:00.000Z');
   const v='macro-catalog/abcdefabcdef';
   await db.upsertCatalog([{id:'X_A',region:'US',role:'indicator',type:'labor_rate',name:{zh:'a',en:'a'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'p',en:'p'},seriesKey:'X',rights:'public_domain',attribution:{zh:'a',en:'a'}},revisionPolicy:'immutable',weight:0,changeKind:'pp',definitionVersion:1}],v,'macro-rules/1');
-  const b=randomUUID();const sha='a'.repeat(64);
+  const b=randomUUID();db.setBatchStatus(b,'running');const sha='a'.repeat(64);
   const r=await db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});
   await db.writeObservations(b,'c',[nativeRow('X_A','2026-09-30','1',r,'2026-11-06T05:00:00.000Z')]);
   expect((await db.versionsOf('X_A','2026-09-30'))[0].ingested_at).toBe('2026-11-06T05:30:00.000Z');
@@ -37,22 +37,47 @@ describe('memoryMacroDb specifics',()=>{
   expect(db.allObservations().map(o=>o.status)).toEqual(['ok','quarantined']);
   const q=db.addQuarantineItem({dataset:'macro.fred',natural_key:'X_A|2026-09-30',batch_id:b,reason_code:'unexpected_revision'});
   const obs=res.conflicts[0].observation_id!;await db.linkQuarantine(q,[obs]);
-  const by=randomUUID();await db.resolveConflict(q,'accept',by,obs);
+  const by=randomUUID();db.setBatchStatus(b,'success');await db.resolveConflict(q,'accept',by,obs);
   expect(db.quarantineItem(q)).toMatchObject({status:'resolved_accept',resolved_by:by,resolved_at:'2026-11-06T06:00:00.000Z'});
   expect(db.audit).toEqual([{user_id:by,action:'dq.quarantine_resolve',object_type:'dq',object_id:q,detail:expect.objectContaining({decision:'accept',status:'resolved_accept',observation_id:obs,rejected:0})}]);
   const p=await db.publishSnapshot({region:'US',expectedRevision:0,expectedInputRevision:(await db.publishState('US')).inputRevision,asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:v,observationIds:[],historyIds:[],catalogCounts:{verified:0,missing:0,restricted:0},regime:null,contributions:[],rulesVersion:'r',uncoveredWeight:0});
   expect((await db.snapshot(p.snapshot_id))?.created_at).toBe('2026-11-06T06:00:00.000Z');
  });
- it('treats batches never declared with setBatchStatus as finished (success); declared running/failed batches are ineligible',async()=>{
+ it('writes need a known running batch (invalid_batch / batch_not_running); declared running batches are ineligible until they finish success/partial',async()=>{
   const db=memoryMacroDb();
   const v='macro-catalog/abcdefabcdef';
   await db.upsertCatalog([{id:'X_B',region:'US',role:'indicator',type:'labor_rate',name:{zh:'b',en:'b'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'p',en:'p'},seriesKey:'X',rights:'public_domain',attribution:{zh:'a',en:'a'}},revisionPolicy:'revisable',weight:0,changeKind:'pp',definitionVersion:1}],v,'macro-rules/1');
-  const write=async(b:string,period:string)=>{const sha=randomUUID().replace(/-/g,'').padEnd(64,'0');const r=await db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});await db.writeObservations(b,'c',[nativeRow('X_B',period,'1',r,'2026-11-06T05:00:00.000Z')]);};
-  const undeclared=randomUUID(),running=randomUUID();db.setBatchStatus(running,'running');
-  await write(undeclared,'2026-08-31');await write(running,'2026-09-30');
+  const retrieve=(b:string)=>{const sha=randomUUID().replace(/-/g,'').padEnd(64,'0');return db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});};
+  const write=async(b:string,period:string)=>{const r=await retrieve(b);await db.writeObservations(b,'c',[nativeRow('X_B',period,'1',r,'2026-11-06T05:00:00.000Z')]);};
+  const undeclared=randomUUID(),done=randomUUID(),running=randomUUID();db.setBatchStatus(done,'running');db.setBatchStatus(running,'running');
+  expect(await outcome(retrieve(undeclared))).toBe('rpc_failed:invalid_batch');
+  expect(await outcome(db.writeObservations(undeclared,'c',[]))).toBe('rpc_failed:invalid_batch');
+  await write(done,'2026-08-31');await write(running,'2026-09-30');
+  db.setBatchStatus(done,'success');
   expect((await db.latestEligible(['X_B']))[0].period_end).toBe('2026-08-31');
+  expect(await outcome(write(done,'2026-07-31'))).toBe('rpc_failed:batch_not_running');
   db.setBatchStatus(running,'partial');
   expect((await db.latestEligible(['X_B']))[0].period_end).toBe('2026-09-30');
+ });
+ it('finalizeBatch bumps input_revision of every region the batch wrote (review A3): a publisher that read before finalization is stale',async()=>{
+  const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
+  const db=memoryMacroDb({tables});
+  const v='macro-catalog/abcdefabcdef';
+  const def=(id:string,region:'US'|'CN')=>({id,region,role:'indicator' as const,type:'labor_rate' as const,name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly' as const,period:'month' as const,adjustment:'sa' as const,status:'active' as const,source:{adapter:'fred_csv' as const,fetchHost:'fred.stlouisfed.org',publisher:{zh:'p',en:'p'},seriesKey:id,rights:'public_domain' as const,attribution:{zh:'a',en:'a'}},revisionPolicy:'revisable' as const,weight:0,changeKind:'pp' as const,definitionVersion:1});
+  await db.upsertCatalog([def('X_US','US'),def('X_CN','CN')],v,'macro-rules/1');
+  const {batchId:b}=await startBatch(tables,{producer:'ts-fred',dataset:'macro.fred',triggeredBy:'cron'});
+  const sha=randomUUID().replace(/-/g,'').padEnd(64,'0');
+  const r=await db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});
+  await db.writeObservations(b,'c',[nativeRow('X_US','2026-09-30','1',r,'2026-11-06T05:00:00.000Z')]);
+  const us=await db.publishState('US'),cn=await db.publishState('CN');
+  const ZERO={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
+  await db.finalizeBatch(b,{status:'success',counts:ZERO,errors:[],finishedAt:'2026-11-06T05:31:00.000Z'},null);
+  expect(await db.publishState('US')).toEqual({revision:us.revision,inputRevision:us.inputRevision+1});
+  expect(await db.publishState('CN')).toEqual(cn);                                                      // untouched region
+  const stale={region:'US' as const,expectedRevision:us.revision,expectedInputRevision:us.inputRevision,asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:v,observationIds:[],historyIds:[],catalogCounts:{verified:0,missing:0,restricted:0},regime:null,contributions:[],rulesVersion:'r',uncoveredWeight:0};
+  expect(await outcome(db.publishSnapshot(stale))).toBe('stale_publisher:stale_publisher');
+  await db.finalizeBatch(b,{status:'failed',counts:ZERO,errors:[{code:'x'}],finishedAt:'2026-11-06T05:32:00.000Z'},null);   // already finished: no second bump
+  expect((await db.publishState('US')).inputRevision).toBe(us.inputRevision+1);
  });
  it('finalizeBatch / recordFreshness (第 6 稿 P1-1/P2-4): need the DQ TableClient; tokens are checked first; finalize writes once and moves eligibility; freshness has recordAttempt semantics and is recorded once per run',async()=>{
   const ZERO={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
@@ -201,7 +226,7 @@ describe('supabaseMacroDb wiring',()=>{
   expect(await db.finalizeBatch('b2',finalizeInput,null)).toEqual({status:'success',finalized:true});                          // cron: no run, no tokens
   expect(await db.recordFreshness('b1',freshnessInput,{ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({freshness_recorded:{ok:true,status:'fresh'}});
   expect(await db.writeObservations('b1','code',[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],'tok-1')).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
-  expect(await db.publishSnapshot({...publishInput,publishKey:'ingest:b1',batchId:'b1',ownerToken:'tok-1'})).toEqual({snapshot_id:'s1',revision:4,replayed:false});
+  expect(await db.publishSnapshot({...publishInput,publishKey:'ingest:b1',batchId:'b1',ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({snapshot_id:'s1',revision:4,replayed:false});
   expect(await db.republishSnapshot('s1',4,7)).toEqual({snapshot_id:'s2',revision:5});
   expect(await db.recordFailedSnapshot({region:'CN',asOf:'2026-11-06',methodologyVersion:'m',catalogVersion:'c',reason:'x'})).toBe('id-1');
   expect(await db.linkQuarantine('q1',['o9'],{batchId:'b1',ownerToken:'tok-1'})).toBe(1);
@@ -220,7 +245,7 @@ describe('supabaseMacroDb wiring',()=>{
    ['macro_finalize_batch',{p_batch_id:'b2',p_owner_token:null,p_finish_token:null,p_status:'success',p_counts:chunkRow.counts,p_errors:[],p_finished_at:'2026-11-06T05:31:00.000Z'}],
    ['macro_record_freshness',{p_batch_id:'b1',p_owner_token:'tok-1',p_finish_token:'fin-1',p_dataset:'macro.akshare',p_ok:true,p_cadence:'daily',p_now:'2026-11-06T05:31:00.000Z',p_detail:{batch_id:'b1'}}],
    ['macro_write_observations',{p_batch:'b1',p_code_version:'code',p_rows:[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],p_owner_token:'tok-1'}],
-   ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_history_ids:['o0','o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20,p_publish_key:'ingest:b1',p_batch_id:'b1',p_owner_token:'tok-1'}],
+   ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_history_ids:['o0','o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20,p_publish_key:'ingest:b1',p_batch_id:'b1',p_owner_token:'tok-1',p_finish_token:'fin-1'}],
    ['republish_macro_snapshot',{p_snapshot_id:'s1',p_expected_revision:4,p_expected_input_revision:7}],
    ['record_failed_macro_snapshot',{p_region:'CN',p_as_of:'2026-11-06',p_methodology_version:'m',p_catalog_version:'c',p_reason:'x'}],
    ['macro_link_quarantine',{p_quarantine_id:'q1',p_observation_ids:['o9'],p_batch_id:'b1',p_owner_token:'tok-1'}],
@@ -276,7 +301,7 @@ describe('supabaseMacroDb wiring',()=>{
   expect(admin.rpcCalls).toEqual([]);
  });
  it('maps Postgres messages to MacroDbError codes',async()=>{
-  for(const [m,code] of [['stale_publisher','stale_publisher'],['invalid_manifest','invalid_manifest'],['quota_exceeded','quota_exceeded'],['already_resolved','already_resolved'],['not_found','not_found'],['reject_only','reject_only'],['fenced','fenced'],['quarantine_closed','quarantine_closed'],['member_ineligible','rpc_failed'],['not_quarantined','rpc_failed'],['invalid_value_text','rpc_failed'],['chunk_total_mismatch','rpc_failed'],['new row for relation "macro_retrievals" violates check constraint "macro_retrievals_host"','rpc_failed']] as const){
+  for(const [m,code] of [['stale_publisher','stale_publisher'],['invalid_manifest','invalid_manifest'],['quota_exceeded','quota_exceeded'],['already_resolved','already_resolved'],['not_found','not_found'],['reject_only','reject_only'],['fenced','fenced'],['quarantine_closed','quarantine_closed'],['member_ineligible','rpc_failed'],['batch_not_running','rpc_failed'],['ancestry_too_deep','rpc_failed'],['not_quarantined','rpc_failed'],['invalid_value_text','rpc_failed'],['chunk_total_mismatch','rpc_failed'],['new row for relation "macro_retrievals" violates check constraint "macro_retrievals_host"','rpc_failed']] as const){
    const e=toMacroDbError({message:m});expect(e).toBeInstanceOf(MacroDbError);expect([e.code,e.message]).toEqual([code,m]);
   }
   const admin=stub({rpc:()=>({data:null,error:{message:'stale_publisher'}})});
@@ -286,7 +311,7 @@ describe('supabaseMacroDb wiring',()=>{
   await expect(supabaseMacroDb({admin:anonErr.client,anon:anonErr.client}).publishState('US')).rejects.toMatchObject({code:'rpc_failed'});
   await expect(supabaseMacroDb({admin:stub({select:()=>({data:null,error:null})}).client,anon:stub().client}).publishState('US')).rejects.toMatchObject({code:'not_found'});
  });
- it('packs writes into calls of at most WRITE_CHUNK rows without splitting a (series, period) group, and sums the results',async()=>{
+ it('packWrites packs into calls of at most WRITE_CHUNK rows without splitting a (series, period) group; writeObservations itself sends ONE RPC per call (review T3-1)',async()=>{
   const rows:ObservationWrite[]=[];
   for(let i=0;i<WRITE_CHUNK-1;i++)rows.push(nativeRow('S',`2000-01-${String(1+(i%28)).padStart(2,'0')}`.replace('2000',String(2000+Math.floor(i/28))),'1','r','2026-11-01T05:30:00.000Z'));
   rows.push(nativeRow('G','2026-09-30','1','r','2026-11-01T05:30:00.000Z'),nativeRow('X','2026-09-30','1','r','2026-11-01T05:30:00.000Z'),nativeRow('G','2026-09-30','2','r','2026-11-01T05:30:00.000Z'));
@@ -296,9 +321,37 @@ describe('supabaseMacroDb wiring',()=>{
   expect(packWrites([])).toEqual([]);
   const admin=stub({rpc:(_fn,args)=>({data:{inserted:(args.p_rows as unknown[]).length,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:'x',period_end:'2026-09-30',reason:'conflicting_rows',value_text:'1',current_value_text:null,observation_id:null}]},error:null})});
   const res=await supabaseMacroDb({admin:admin.client,anon:stub().client}).writeObservations('b','c',rows);
-  expect(admin.rpcCalls).toHaveLength(2);
-  expect(res.inserted).toBe(rows.length);expect(res.quarantined).toBe(2);expect(res.conflicts).toHaveLength(2);
+  expect(admin.rpcCalls).toHaveLength(1);                                                                // never split client-side
+  expect(admin.rpcCalls[0][1].p_rows).toHaveLength(rows.length);
+  expect(res.inserted).toBe(rows.length);expect(res.quarantined).toBe(1);expect(res.conflicts).toHaveLength(1);
   expect(await supabaseMacroDb({admin:stub().client,anon:stub().client}).writeObservations('b','c',[])).toEqual({inserted:0,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
+  const failing=stub({rpc:()=>({data:null,error:{message:'invalid_row'}})});
+  await expect(supabaseMacroDb({admin:failing.client,anon:stub().client}).writeObservations('b','c',rows)).rejects.toMatchObject({code:'rpc_failed',message:'invalid_row'});
+  expect(failing.rpcCalls).toHaveLength(1);                                                              // no later chunk after a failure
+  expect(mergeResults([{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]},{inserted:2,duplicates:1,versioned:0,quarantined:0,conflicts:[]}])).toEqual({inserted:3,duplicates:1,versioned:0,quarantined:0,conflicts:[]});
+ });
+ it('versionsOf and quarantineMembers page to completion (review T3-2): >1000 rows, stable ordering, member lookups in IN_CHUNK batches',async()=>{
+  const all=Array.from({length:1500},(_,i)=>pgObs({version:i+1,value_text:String(i)}));
+  const anon=stub({select:calls=>{const r=calls.find(c=>c[0]==='range')![1] as [number,number];return {data:all.slice(r[0],r[1]+1),error:null};}});
+  const got=await supabaseMacroDb({admin:stub().client,anon:anon.client}).versionsOf('US_UNRATE','2026-09-30');
+  expect(got).toHaveLength(1500);expect(got[1499].version).toBe(1500);
+  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')![1])).toEqual([[0,READ_PAGE-1],[READ_PAGE,2*READ_PAGE-1]]);
+  expect(anon.queries[0]).toContainEqual(['order',['version',{ascending:true}]]);
+  const members=Array.from({length:1250},()=>pgObs({status:'quarantined'}));
+  const byId=new Map<string,unknown>(members.map(m=>[m.observation_id as string,m]));
+  const admin=stub({select:calls=>{
+   const table=calls[0][1][0];
+   if(table==='macro_quarantine_members'){const r=calls.find(c=>c[0]==='range')![1] as [number,number];return {data:members.slice(r[0],r[1]+1).map(m=>({observation_id:m.observation_id})),error:null};}
+   const ids=calls.find(c=>c[0]==='in')![1][1] as string[];return {data:ids.map(id=>byId.get(id)),error:null};
+  }});
+  const ms=await supabaseMacroDb({admin:admin.client,anon:stub().client}).quarantineMembers('q1');
+  expect(ms).toHaveLength(1250);
+  const memberQueries=admin.queries.filter(q=>q[0][1][0]==='macro_quarantine_members');
+  expect(memberQueries.map(q=>q.find(c=>c[0]==='range')![1])).toEqual([[0,READ_PAGE-1],[READ_PAGE,2*READ_PAGE-1]]);
+  expect(memberQueries[0]).toContainEqual(['order',['observation_id',{ascending:true}]]);
+  const lookups=admin.queries.filter(q=>q[0][1][0]==='macro_observations').map(q=>(q.find(c=>c[0]==='in')![1][1] as string[]).length);
+  expect(lookups).toEqual([200,200,200,200,200,200,50]);
+  expect(Math.max(...lookups)).toBeLessThanOrEqual(IN_CHUNK);
  });
  it('pages history with .range() (≤ READ_PAGE per page), keeps the highest version per period, throws truncated beyond maxRows',async()=>{
   const all=Array.from({length:1500},(_,i)=>pgObs({period_end:`${String(1900+Math.floor(i/12)).padStart(4,'0')}-${String(1+(i%12)).padStart(2,'0')}-28`,value_text:String(i)}));

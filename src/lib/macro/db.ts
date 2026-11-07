@@ -106,7 +106,7 @@ export interface MacroDb{
 
 export const READ_PAGE=1000;      // PostgREST max_rows
 export const IN_CHUNK=200;        // ids per .in() filter (URL length)
-export const WRITE_CHUNK=2000;    // rows per macro_write_observations call
+export const WRITE_CHUNK=2000;    // rows per macro_write_observations call when a caller packs writes itself (packWrites)
 const CONTRACT_CODES=['stale_publisher','invalid_manifest','quota_exceeded','not_found','already_resolved','reject_only','fenced','quarantine_closed','truncated'] as const;
 interface PgErrorLike{message?:string;code?:string}
 export function toMacroDbError(e:PgErrorLike):MacroDbError{
@@ -174,7 +174,7 @@ export function mergeResults(parts:WriteResult[]):WriteResult{
 export function publishArgs(i:PublishInput){
  return {p_region:i.region,p_expected_revision:i.expectedRevision,p_expected_input_revision:i.expectedInputRevision,p_as_of:i.asOf,p_methodology_version:i.methodologyVersion,
   p_catalog_version:i.catalogVersion,p_observation_ids:i.observationIds,p_history_ids:i.historyIds,p_catalog_counts:i.catalogCounts,p_regime:i.regime,p_contributions:i.contributions,
-  p_rules_version:i.rulesVersion,p_uncovered_weight:i.uncoveredWeight,p_publish_key:i.publishKey??null,p_batch_id:i.batchId??null,p_owner_token:i.ownerToken??null};
+  p_rules_version:i.rulesVersion,p_uncovered_weight:i.uncoveredWeight,p_publish_key:i.publishKey??null,p_batch_id:i.batchId??null,p_owner_token:i.ownerToken??null,p_finish_token:i.finishToken??null};
 }
 /** Interval literal for the lease RPC (ms precision; PostgreSQL parses 'N milliseconds'). */
 const msInterval=(ms:number)=>`${Math.max(1,Math.round(ms))} milliseconds`;
@@ -264,9 +264,10 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
     p_dataset:input.dataset,p_ok:input.ok,p_cadence:input.cadence,p_now:input.now,p_detail:input.detail}));
   },
   async writeObservations(batchId,codeVersion,input,ownerToken){
-   const parts:WriteResult[]=[];
-   for(const part of packWrites(input))parts.push(await call<WriteResult>(admin,'macro_write_observations',{p_batch:batchId,p_code_version:codeVersion,p_rows:part,p_owner_token:ownerToken??null}));
-   return mergeResults(parts);
+   // ONE RPC = one transaction (review T3-1): a later failure can never discard committed counts / conflict ids. Callers that
+   // need several calls chunk with packWrites and merge the receipts with mergeResults themselves.
+   if(input.length===0)return mergeResults([]);
+   return mergeResults([await call<WriteResult>(admin,'macro_write_observations',{p_batch:batchId,p_code_version:codeVersion,p_rows:input,p_owner_token:ownerToken??null})]);
   },
   async latestObservations(ids,opts){
    if(ids.length===0)return [];
@@ -304,7 +305,9 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    return highestPerPeriod(got.map(observationFromRow));
   },
   async versionsOf(id,periodEnd){
-   return (await rows(anon.from('macro_observations').select('*').eq('series_id',id).eq('period_end',periodEnd).eq('status','ok').order('version',{ascending:true}))).map(observationFromRow);
+   // paged to completion (review T3-2): PostgREST silently caps a response at max_rows
+   const got=await pageAll(()=>anon.from('macro_observations').select('*').eq('series_id',id).eq('period_end',periodEnd).eq('status','ok').order('version',{ascending:true}) as Query,Number.MAX_SAFE_INTEGER);
+   return got.map(observationFromRow);
   },
   async observationsByIds(ids){
    const uniq=[...new Set(ids)];const found=new Map<string,ObservationRow>();
@@ -322,9 +325,11 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    return Number(await call(admin,'macro_link_quarantine',{p_quarantine_id:quarantineId,p_observation_ids:observationIds,p_batch_id:fence?.batchId??null,p_owner_token:fence?.ownerToken??null}));
   },
   async quarantineMembers(quarantineId){
-   const ids=(await rows(admin.from('macro_quarantine_members').select('observation_id').eq('quarantine_id',quarantineId).range(0,READ_PAGE-1))).map(r=>String(r.observation_id));
+   // review T3-2: member ids paged to completion in primary-key order, observations fetched in IN_CHUNK batches
+   const ids=(await pageAll(()=>admin.from('macro_quarantine_members').select('observation_id').eq('quarantine_id',quarantineId).order('observation_id',{ascending:true}) as Query,Number.MAX_SAFE_INTEGER)).map(r=>String(r.observation_id));
    if(ids.length===0)return [];
-   const obs=(await rows(admin.from('macro_observations').select('*').in('observation_id',ids))).map(observationFromRow);   // service: every status
+   const obs:ObservationRow[]=[];
+   for(let i=0;i<ids.length;i+=IN_CHUNK)obs.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));   // service: every status
    return obs.sort((a,b)=>a.version-b.version).map((o):QuarantineMember=>({observation_id:o.observation_id,series_id:o.series_id,period_end:o.period_end,value_text:o.value_text,version:o.version,status:o.status}));
   },
   async resolveConflict(quarantineId,decision,resolvedBy,observationId){await call(admin,'macro_resolve_conflict',{p_quarantine_id:quarantineId,p_decision:decision,p_resolved_by:resolvedBy,p_observation_id:observationId??null});},

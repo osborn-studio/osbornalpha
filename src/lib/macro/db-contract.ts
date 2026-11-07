@@ -50,14 +50,15 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
   };
   const LEASE={maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:false};
   const zeroCounts={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
-  /** A fresh series with one ok observation 2026-09-30 = 4.1 available at T2, in a FINISHED (success) batch so the row is
-   *  publication-eligible; later writes may keep using that batch id. */
+  /** A fresh series with one ok observation 2026-09-30 = 4.1 available at T2, written in the FINISHED (success) batch b0 so the row
+   *  is publication-eligible. `b` is a second, still RUNNING batch for the test's later writes (a finished batch takes no
+   *  more writes, review R2); finish it before relying on its rows. */
   const seeded=async(o:Partial<MacroSeriesDef>={})=>{
-   const s=sid();const v=await catalog([testDef(s,o)]);const b=await h.batch();const r=await retrieval(b,T2);
-   expect((await db.writeObservations(b,'test-code',[nativeRow(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
-   await h.finish(b,'success');
+   const s=sid();const v=await catalog([testDef(s,o)]);const b0=await h.batch();const r=await retrieval(b0,T2);
+   expect((await db.writeObservations(b0,'c',[nativeRow(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
+   await h.finish(b0,'success');
    const [row]=await db.versionsOf(s,'2026-09-30');
-   return {s,v,b,r,id:row.observation_id};
+   return {s,v,b0,b:await h.batch(),r,id:row.observation_id};
   };
   const input=(region:Region,st:{revision:number;inputRevision:number},catalogVersion:string,ids:string[]):PublishInput=>({region,expectedRevision:st.revision,expectedInputRevision:st.inputRevision,asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion,observationIds:ids,historyIds:[],catalogCounts:{verified:1,missing:0,restricted:0},regime:null,contributions:[],rulesVersion:'macro-rules/1',uncoveredWeight:0});
 
@@ -236,6 +237,10 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect((await db.quarantineMembers(a)).map(m=>[m.value_text,m.status])).toEqual([['4.5','quarantined'],['4.6','quarantined']]);
    const st0=await db.publishState('US');
    expect(await outcome(db.resolveConflict(a,'accept',by))).toBe('rpc_failed:observation_required');
+   expect(await outcome(db.resolveConflict(a,'accept',by,randomUUID()))).toBe('rpc_failed:not_member');
+   expect(await outcome(db.resolveConflict(a,'maybe' as never,by,rb))).toBe('rpc_failed:invalid_decision');
+   expect(await outcome(db.resolveConflict(a,'accept',by,rb))).toBe('rpc_failed:member_ineligible');   // its batch is still running (review R1)
+   await h.finish(b,'success');
    await db.resolveConflict(a,'accept',by,rb);
    expect(await h.quarantineStatus(a)).toBe('resolved_accept');
    expect((await db.quarantineMembers(a)).map(m=>[m.value_text,m.status])).toEqual([['4.5','rejected'],['4.6','ok']]);
@@ -244,9 +249,10 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision+1);
    expect(await outcome(db.resolveConflict(a,'accept',by,rb))).toBe('already_resolved:already_resolved');
    expect(await db.linkQuarantine(a,[ra])).toBe(0);                                                // closed: its exact member was disposed by this item → complete (第 6 稿 P2-3)
-   const rc=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.7',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+   const w2=await h.batch();
+   const rc=(await db.writeObservations(w2,'c',[nativeRow(s,'2026-09-30','4.7',await retrieval(w2,T3),T3,false)])).conflicts[0].observation_id!;
    expect(await outcome(db.linkQuarantine(a,[rc]))).toBe('quarantine_closed:quarantine_closed');   // a row still quarantined needs a new item (第 5 稿 P2-3)
-   const again=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
+   const again=await db.writeObservations(w2,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(w2,T3),T3,false)]);
    expect(again).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});   // never inserted again (第 5 稿 P1-2)
    const a2=await item(s);await db.linkQuarantine(a2,[ra]);
    expect(await outcome(db.resolveConflict(a2,'accept',by,ra))).toBe('rpc_failed:not_quarantined');   // rejected rows never come back
@@ -434,6 +440,86 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await db.writeObservations(next,'c',[nativeRow(s,'2026-09-30','4.1',r2,T3)],c2.ownerToken)).toMatchObject({inserted:1,duplicates:0});   // not a duplicate of the abandoned row
    await h.finish(next,'success');
    expect((await db.latestEligible([s]))[0]).toMatchObject({batch_id:next,version:2});
+  });
+
+  it('write / evidence need a RUNNING batch (review R2): finished batches take neither; unknown batches are invalid_batch',async()=>{
+   const s=sid();await catalog([testDef(s)]);const b=await h.batch();const r=await retrieval(b,T1);
+   await h.finish(b,'success');
+   expect(await outcome(db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.1',r,T1)]))).toBe('rpc_failed:batch_not_running');
+   expect(await outcome(retrieval(b,T1))).toBe('rpc_failed:batch_not_running');
+   const ghost=randomUUID();
+   expect(await outcome(db.writeObservations(ghost,'c',[]))).toBe('rpc_failed:invalid_batch');
+   expect(await outcome(retrieval(ghost,T1))).toBe('rpc_failed:invalid_batch');
+   const failed=await h.batch();await h.finish(failed,'failed');
+   expect(await outcome(db.writeObservations(failed,'c',[]))).toBe('rpc_failed:batch_not_running');
+   expect(await db.versionsOf(s,'2026-08-31')).toEqual([]);
+  });
+
+  it('claimIngest validates its batch (invalid_batch): unknown, another dataset, finished; an aborted run is never resurrected',async()=>{
+   const ds=`macro.t${randomBytes(4).toString('hex')}`;
+   expect(await outcome(db.claimIngest(randomUUID(),ds,LEASE))).toBe('rpc_failed:invalid_batch');
+   expect(await outcome(db.claimIngest(await h.batch('macro.other'),ds,LEASE))).toBe('rpc_failed:invalid_batch');
+   const done=await h.batch(ds);await h.finish(done,'success');
+   expect(await outcome(db.claimIngest(done,ds,LEASE))).toBe('rpc_failed:invalid_batch');     // never reopens a finished batch
+   const old=await h.batch(ds);
+   const t0=(await db.claimIngest(old,ds,{...LEASE,processingTimeoutMs:1})).ownerToken!;
+   await db.claimChunk(old,0,1,t0);
+   const next=await h.batch(ds);
+   let c=await db.claimIngest(next,ds,{...LEASE,takeover:true});
+   for(let i=0;i<200&&c.status==='busy';i++){await new Promise(r=>setTimeout(r,10));c=await db.claimIngest(next,ds,{...LEASE,takeover:true});}   // wait out the 1 ms processing timeout
+   expect(c).toMatchObject({status:'claimed',aborted:[old]});                                  // the stalled chunk aborts the run of `old`
+   expect((await db.ingestRun(old))?.state).toBe('aborted');
+   const f=await db.beginFinish(next,0,c.ownerToken!);
+   if(f.status!=='finishing')throw new Error('unreachable');
+   await db.recordFinishStep(next,'receipt',{status:'success'},{ownerToken:c.ownerToken!,finishToken:f.finishToken});   // releases the lease
+   expect(await outcome(db.claimIngest(old,ds,LEASE))).toMatch(/^rpc_failed:.*duplicate key/);   // old's batch still runs, but its aborted run stays aborted
+   expect((await db.ingestRun(old))?.state).toBe('aborted');
+  });
+
+  it('publication fence and cursor (review A2/A4/R3): a rotated-out finish token cannot publish; a publish key is region-bound; created_at strictly increases across regions',async()=>{
+   const ds=`macro.t${randomBytes(4).toString('hex')}`;
+   const {v,id}=await seeded();const cn=sid('C');const cv=await catalog([testDef(cn,{region:'CN'})]);
+   const b=await h.batch(ds);const t=(await db.claimIngest(b,ds,LEASE)).ownerToken!;
+   const f1=await db.beginFinish(b,0,t);const f2=await db.beginFinish(b,0,t);
+   if(f1.status!=='finishing'||f2.status!=='finishing')throw new Error('unreachable');
+   const key=`ingest:${randomUUID()}`;
+   const base={...input('US',await db.publishState('US'),v,[id]),publishKey:key,batchId:b,ownerToken:t};
+   expect(await outcome(db.publishSnapshot({...base,finishToken:f1.finishToken}))).toBe('fenced:fenced');      // rotated out
+   expect(await outcome(db.publishSnapshot({...base,finishToken:null}))).toBe('fenced:fenced');              // missing
+   const ok=await db.publishSnapshot({...base,finishToken:f2.finishToken});
+   expect(ok.replayed).toBe(false);
+   // R3: a stored key replays only for its own region
+   expect(await outcome(db.publishSnapshot({...input('CN',await db.publishState('CN'),cv,[]),publishKey:key}))).toBe('invalid_manifest:invalid_manifest');
+   expect(await db.publishSnapshot({...input('US',await db.publishState('US'),v,[id]),publishKey:key})).toEqual({...ok,replayed:true});
+   // A4: strictly increasing, in commit order, across regions (publish, republish, failed)
+   const p2=await db.publishSnapshot(input('CN',await db.publishState('CN'),cv,[]));
+   const p3=await db.publishSnapshot(input('US',await db.publishState('US'),v,[id]));
+   const cst=await db.publishState('CN');
+   const p4=await db.republishSnapshot(p2.snapshot_id,cst.revision,cst.inputRevision);
+   const failed=await db.recordFailedSnapshot({region:'US',asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion:v,reason:'x'});
+   const at=async(snapshotId:string)=>(await db.snapshot(snapshotId))!.created_at;
+   const stamps=[await at(ok.snapshot_id),await at(p2.snapshot_id),await at(p3.snapshot_id),await at(p4.snapshot_id),await at(failed)];
+   for(let i=1;i<stamps.length;i++)expect(stamps[i]>stamps[i-1]).toBe(true);
+  });
+
+  it('partial batches are publishable; a derived chain deeper than 8 raises ancestry_too_deep (review R4)',async()=>{
+   const s=sid();const v=await catalog([testDef(s)]);const b=await h.batch();
+   await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.1',await retrieval(b,T2),T2)]);
+   const id=(await db.versionsOf(s,'2026-09-30'))[0].observation_id;
+   expect(await outcome(db.publishSnapshot(input('US',await db.publishState('US'),v,[id])))).toBe('invalid_manifest:invalid_manifest');   // still running
+   await h.finish(b,'partial');
+   expect((await db.publishSnapshot(input('US',await db.publishState('US'),v,[id]))).replayed).toBe(false);
+   const chain=Array.from({length:10},()=>sid('D'));
+   await catalog(chain.map((c,i)=>testDef(c,{derive:{kind:'month_end',from:i===0?s:chain[i-1]}})));
+   const d=await h.batch();const ids:string[]=[];let prev=id;
+   for(let i=0;i<9;i++){
+    expect((await db.writeObservations(d,'c',[derivedRow(chain[i],'2026-09-30','4.1',[prev],T2)])).inserted).toBe(1);
+    prev=(await db.versionsOf(chain[i],'2026-09-30'))[0]?.observation_id;ids.push(prev);
+   }
+   expect(await outcome(db.writeObservations(d,'c',[derivedRow(chain[9],'2026-09-30','4.1',[prev],T2)]))).toBe('rpc_failed:ancestry_too_deep');
+   await h.finish(d,'success');
+   expect(await outcome(db.publishSnapshot(input('US',await db.publishState('US'),v,[ids[8]])))).toBe('rpc_failed:ancestry_too_deep');
+   expect((await db.publishSnapshot(input('US',await db.publishState('US'),v,[ids[7]]))).replayed).toBe(false);   // 8 levels walk completely
   });
  });
 }

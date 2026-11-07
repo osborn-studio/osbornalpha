@@ -36,7 +36,8 @@ const SERVICE_RPCS=[
  'public.macro_upsert_catalog(text,text,jsonb)',
  'public.macro_put_retrieval(text,text,text,text,bigint,text,text,int,timestamptz,uuid,jsonb,uuid)',
  'public.macro_write_observations(uuid,text,jsonb,uuid)',
- 'public.publish_macro_snapshot(text,bigint,bigint,date,text,text,uuid[],uuid[],jsonb,jsonb,jsonb,text,numeric,text,uuid,uuid)',
+ 'public.publish_macro_snapshot(text,bigint,bigint,date,text,text,uuid[],uuid[],jsonb,jsonb,jsonb,text,numeric,text,uuid,uuid,uuid)',
+ 'public.macro_next_snapshot_cursor()',
  'public.republish_macro_snapshot(uuid,bigint,bigint)',
  'public.record_failed_macro_snapshot(text,date,text,text,text)',
  'public.macro_link_quarantine(uuid,uuid[],uuid,uuid)',
@@ -55,7 +56,7 @@ const SERVICE_RPCS=[
  'public.macro_eligible_history(text,date,date,timestamptz,uuid,date,int)',
  'public.create_macro_analysis_run(uuid,uuid,text,jsonb,jsonb,text,jsonb,text,text,text,text)',
 ];
-const READ_RPCS=['public.macro_latest_observations(text[],timestamptz,date)','public.macro_snapshots_since(timestamptz,uuid,int)'];
+const READ_RPCS=['public.macro_latest_observations(text[],timestamptz,date)','public.macro_snapshots_since(timestamptz,uuid,int)','public.macro_batch_eligible(uuid)'];
 
 // Same replay policy as facts.integration.test.ts (not exported there): one transaction, short
 // lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
@@ -127,16 +128,16 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   return id;
  };
  const counts={verified:1,missing:0,restricted:0};
- const publish=(region:'US'|'CN',rev:number,inputRev:number,catalogVersion:string,ids:string[],history:string[]=[],k:{key?:string;batch?:string;token?:string|null}={})=>
-  one(`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],$6::uuid[],$7::jsonb,null,'[]'::jsonb,'macro-rules/1',0,$8,$9,$10) v`,[region,rev,inputRev,catalogVersion,ids,history,JSON.stringify(counts),k.key??null,k.batch??null,k.token??null]) as Promise<{snapshot_id:string;revision:number;replayed:boolean}>;
- /** A fresh US series with one ok observation (period 2026-09-30, value 4.1, fetched T2) in a FINISHED (success) batch, so
-  *  the row is publication-eligible; later writes in the test may keep using that batch id. Returns ids. */
+ const publish=(region:'US'|'CN',rev:number,inputRev:number,catalogVersion:string,ids:string[],history:string[]=[],k:{key?:string;batch?:string;token?:string|null;ft?:string|null}={})=>
+  one(`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],$6::uuid[],$7::jsonb,null,'[]'::jsonb,'macro-rules/1',0,$8,$9,$10,$11) v`,[region,rev,inputRev,catalogVersion,ids,history,JSON.stringify(counts),k.key??null,k.batch??null,k.token??null,k.ft??null]) as Promise<{snapshot_id:string;revision:number;replayed:boolean}>;
+ /** A fresh US series with one ok observation (period 2026-09-30, value 4.1, fetched T2) in the FINISHED (success) batch b0, so
+  *  the row is publication-eligible. b is a second RUNNING batch for the test's later writes. Returns ids. */
  const seeded=async(o:Record<string,unknown>={})=>{
-  const s=sid();const v=await catalog([def(s,o)]);const b=await batch();const r=await retrieval(b,T2);
-  expect((await write(b,[native(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
-  await finish(b);
+  const s=sid();const v=await catalog([def(s,o)]);const b0=await batch();const r=await retrieval(b0,T2);
+  expect((await write(b0,[native(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);
+  await finish(b0);
   const [row]=await rows(s,'2026-09-30');
-  return {s,v,b,r,id:row.observation_id as string};
+  return {s,v,b0,b:await batch(),r,id:row.observation_id as string};   // b: a second, still RUNNING batch (a finished batch takes no writes, review R2)
  };
  /** macro_claim_ingest (第 5 稿 P1-3): timeout = the NEW run's processing_timeout; takeover lets this claim abort live runs whose
   *  processing chunk is older than their own timeout. */
@@ -373,6 +374,9 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   const st0=await state('US');
   expect((await fails(resolve(qa,'accept'))).message).toBe('observation_required');
   expect((await fails(resolve(qa,'accept',other.id))).message).toBe('not_member');
+  expect((await fails(resolve(qa,'accept',rb))).message).toBe('member_ineligible');                 // its batch is still running (review R1)
+  expect((await rows(s,'2026-09-30')).map(x=>x.status)).toEqual(['ok','quarantined','quarantined']);   // nothing changed
+  await finish(b);
   expect(await resolve(qa,'accept',rb)).toEqual({status:'resolved_accept',observation_id:rb,rejected:1});
   expect((await rows(s,'2026-09-30')).map(x=>[x.value_text,x.status])).toEqual([['4.1','ok'],['4.5','rejected'],['4.6','ok']]);
   expect((await q(`select value_text from public.macro_latest_observations($1::text[],null,null)`,[[s]]))[0].value_text).toBe('4.6');   // higher version is latest
@@ -384,10 +388,11 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   await asRole('anon',async c=>{expect((await c.query(`select value_text from public.macro_observations where series_id=$1 order by version`,[s])).rows).toEqual([{value_text:'4.1'},{value_text:'4.6'}]);});
   // the rejected value re-delivered is not inserted again: previously_rejected (counted as a duplicate, 第 5 稿 P1-2) points at the
   // rejected row; even a hand-made item binding it can only reject it
-  const again=await write(b,[native(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
+  const w2=await batch();
+  const again=await write(w2,[native(s,'2026-09-30','4.5',await retrieval(w2,T3),T3,false)]);
   expect(again).toEqual({inserted:0,duplicates:1,versioned:0,quarantined:0,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});
   expect(await rows(s,'2026-09-30')).toHaveLength(3);
-  const rc=(await write(b,[native(s,'2026-09-30','4.7',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+  const rc=(await write(w2,[native(s,'2026-09-30','4.7',await retrieval(w2,T3),T3,false)])).conflicts[0].observation_id!;
   expect((await fails(link(qa,[rc]))).message).toBe('quarantine_closed');                          // a row still quarantined: closed item (第 5 稿 P2-3)
   const qb=await item(s);await link(qb,[ra]);
   expect((await fails(resolve(qb,'accept',ra))).message).toBe('not_quarantined');                 // reject-then-accept elsewhere cannot resurrect
@@ -604,10 +609,14 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   await step('publish_attempt',{at:T3,status:'stale',reason:null},ft);
   expect((await step('publish_attempt',{at:T3,status:'failed',reason:'rpc_failed'},ft)).attempts).toEqual([{at:T3,status:'stale',reason:null},{at:T3,status:'failed',reason:'rpc_failed'}]);
   let st=await state('US');
-  const p1=await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t});
+  // review A2: the publish carries the run's CURRENT finish token; a rotated-out or missing one is fenced and claims no key
+  for(const bad of [x.finish_token!,y.finish_token!,null])expect({ft:bad,msg:(await fails(publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t,ft:bad}))).message}).toEqual({ft:bad,msg:'fenced'});
+  expect((await fails(publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:randomUUID(),ft}))).message).toBe('fenced');
+  expect(await one(`select count(*)::int v from public.macro_snapshots where publish_key=$1`,[`ingest:${b}`])).toBe(0);
+  const p1=await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t,ft});
   expect(p1).toMatchObject({revision:st.r+1,replayed:false});
   // crash after the publish, before the 'published' checkpoint: the retry still holds the state it read before
-  expect(await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t})).toEqual({snapshot_id:p1.snapshot_id,revision:p1.revision,replayed:true});
+  expect(await publish('US',st.r,st.i,v,[id],[],{key:`ingest:${b}`,batch:b,token:t,ft})).toEqual({snapshot_id:p1.snapshot_id,revision:p1.revision,replayed:true});
   expect((await state('US')).r).toBe(st.r+1);
   expect(await one(`select count(*)::int v from public.macro_snapshots where publish_key=$1`,[`ingest:${b}`])).toBe(1);
   st=await state('US');
@@ -674,6 +683,7 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  });
 
  it('barrier (第 6 稿 P1-1): finisher A pauses, B takes the finish over and completes, the next collection records freshness; A wakes up and every finalize / freshness / step call is fenced, changing neither ingest_batches nor dq_freshness',async()=>{
+  const pub=await seeded();
   const ds=dataset();const b=await batch(ds);const t=(await claim(ds,b)).owner_token!;
   const begin=()=>one(`select public.macro_begin_finish($1,0,$2) v`,[b,t]) as Promise<{finish_token:string}>;
   const ftA=(await begin()).finish_token;                                                                // A begins … and pauses before its side effects
@@ -691,8 +701,10 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
    ['finalize',()=>finalize(b,'failed',{t,ft:ftA,counts:{...ZERO,fetched:9,failed:9}})],
    ['freshness',()=>freshness(b,t,ftA,ds,false,'2026-11-04T05:30:00.000Z')],
    ['step',()=>one(`select public.macro_record_finish_step($1,'published','{}'::jsonb,$2,$3) v`,[b,t,ftA])],
+   ['publish (review A2)',async()=>{const st=await state('US');return publish('US',st.r,st.i,pub.v,[pub.id],[],{key:`ingest:${b}`,batch:b,token:t,ft:ftA});}],
   ];
   for(const [name,call] of late)expect({name,code:(await fails(call())).message}).toEqual({name,code:'fenced'});   // fenced, not run_not_finishing
+  expect(await one(`select count(*)::int v from public.macro_snapshots where publish_key=$1`,[`ingest:${b}`])).toBe(0);   // A never claimed the immutable publish key
   expect(await q(`select status,counts,errors,finished_at from public.ingest_batches where batch_id=$1`,[b])).toEqual(batchBefore);
   expect(await freshRow(ds)).toEqual(freshBefore);
  });
@@ -704,6 +716,7 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
    const qid=await qItem(s,b);
    expect(await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[obs]])).toBe(1);       // an earlier delivery bound it
    expect((await write(b,[native(s,'2026-09-30','4.9',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id).toBe(obs);   // the redelivery reuses it
+   await finish(b);                                                                                     // accept needs a finished batch (review R1)
    const by=await user();const resolver=await admin.connect();
    try{
     await resolver.query('begin');
@@ -716,7 +729,8 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
     expect(await linking).toBe(0);                                                                       // linking already complete: no abort, no empty item
    }finally{await resolver.query('rollback').catch(()=>{});resolver.release();}
    expect(await one(`select status v from public.macro_observations where observation_id=$1`,[obs])).toBe(decision==='accept'?'ok':'rejected');
-   const still=(await write(b,[native(s,'2026-09-30','5.1',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+   const w2=await batch();
+   const still=(await write(w2,[native(s,'2026-09-30','5.1',await retrieval(w2,T3),T3,false)])).conflicts[0].observation_id!;
    expect((await fails(q(`select public.macro_link_quarantine($1,$2::uuid[])`,[qid,[still]]))).message).toBe('quarantine_closed');   // a row still quarantined needs a new item
   });
  }
@@ -774,6 +788,161 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   }finally{await resolver.query('rollback').catch(()=>{});resolver.release();}
   expect(await one(`select count(*)::int v from public.macro_quarantine_members where quarantine_id=$1`,[qid])).toBe(0);
   expect(await one(`select status v from public.dq_quarantine where id=$1`,[qid])).toBe('resolved_reject');
+ });
+
+ it('anon eligibility RLS (review A1): ok rows of running / failed batches are service-only; they appear once the batch is success or partial',async()=>{
+  const s=sid();await catalog([def(s)]);
+  const anonCount=(role:string)=>asRole(role,async c=>{
+   const t=(await c.query(`select count(*)::int n from public.macro_observations where series_id=$1`,[s])).rows[0].n as number;
+   const l=(await c.query(`select count(*)::int n from public.macro_latest_observations($1::text[],null,null)`,[[s]])).rows[0].n as number;
+   return [t,l];
+  });
+  const b=await batch();const r=await retrieval(b,T1);
+  expect((await write(b,[native(s,'2026-08-31','4',r,T1)])).inserted).toBe(1);
+  for(const role of ['anon','authenticated'])expect({role,n:await anonCount(role)}).toEqual({role,n:[0,0]});   // running batch
+  expect(await anonCount('service_role')).toEqual([1,1]);                                                // unfinished inputs stay readable by the service
+  await finish(b,'failed');
+  for(const role of ['anon','authenticated'])expect({role,n:await anonCount(role)}).toEqual({role,n:[0,0]});   // failed batch
+  expect(await anonCount('service_role')).toEqual([1,1]);
+  const b2=await batch();const r2=await retrieval(b2,T2);
+  expect((await write(b2,[native(s,'2026-09-30','4.1',r2,T2)])).inserted).toBe(1);
+  expect(await anonCount('anon')).toEqual([0,0]);
+  await finish(b2,'success');
+  for(const role of ['anon','authenticated'])expect({role,n:await anonCount(role)}).toEqual({role,n:[1,1]});   // only the finished batch's row
+  const b3=await batch();const r3=await retrieval(b3,T3);
+  await write(b3,[native(s,'2026-10-31','4.2',r3,T3)]);
+  expect(await anonCount('anon')).toEqual([1,1]);
+  await finish(b3,'partial');
+  expect(await anonCount('anon')).toEqual([2,1]);                                                 // two rows, one latest per series
+  expect(await one(`select public.macro_batch_eligible($1) v`,[b])).toBe(false);
+  expect(await one(`select public.macro_batch_eligible($1) v`,[b3])).toBe(true);
+  expect(await one(`select public.macro_batch_eligible($1) v`,[randomUUID()])).toBe(false);
+ });
+
+ it('write and evidence need a running batch (review R2); an unknown batch is invalid_batch',async()=>{
+  const s=sid();await catalog([def(s)]);const b=await batch();const r=await retrieval(b,T1);
+  await finish(b,'success');
+  expect((await fails(write(b,[native(s,'2026-08-31','4',r,T1)]))).message).toBe('batch_not_running');
+  expect((await fails(retrieval(b,T1))).message).toBe('batch_not_running');
+  const failed=await batch();await finish(failed,'failed');
+  expect((await fails(write(failed,[]))).message).toBe('batch_not_running');
+  expect((await fails(retrieval(randomUUID(),T1))).message).toBe('invalid_batch');
+  expect(await rows(s,'2026-08-31')).toEqual([]);
+ });
+
+ it('macro_finalize_batch bumps input_revision of every region the batch wrote, in the same transaction (review A3): a publisher that read before finalization is stale',async()=>{
+  const {ds,b,t,ft}=await finishingRun();void ds;
+  const us=sid(),cn=sid('C');const v=await catalog([def(us),def(cn,{region:'CN'})]);
+  const r=await retrieval(b,T1,randomUUID(),t);
+  await write(b,[native(us,'2026-09-30','4.1',r,T1)],t);
+  const stBefore=await state('US');const cnBefore=await state('CN');                                  // a publisher reads state here …
+  expect(await finalize(b,'success',{t,ft,counts:{...ZERO,fetched:1,inserted:1}})).toEqual({status:'success',finalized:true});
+  expect(await state('US')).toEqual({r:stBefore.r,i:stBefore.i+1});                                   // … finalization moved eligibility
+  expect(await state('CN')).toEqual(cnBefore);                                                         // a region the batch never wrote is untouched
+  const id=(await rows(us,'2026-09-30'))[0].observation_id as string;
+  expect((await fails(publish('US',stBefore.r,stBefore.i,v,[id]))).message).toBe('stale_publisher');
+  const st=await state('US');
+  expect((await publish('US',st.r,st.i,v,[id])).revision).toBe(st.r+1);
+  // a second finalize reads the status back and bumps nothing
+  const after=await state('US');
+  expect(await finalize(b,'failed',{t,ft})).toEqual({status:'success',finalized:false});
+  expect(await state('US')).toEqual(after);
+  // both regions written by one batch: both bump
+  const f2=await finishingRun();const u2=sid(),c2=sid('C');await catalog([def(u2),def(c2,{region:'CN'})]);
+  const r2=await retrieval(f2.b,T1,randomUUID(),f2.t);
+  await write(f2.b,[native(u2,'2026-09-30','1',r2,T1),native(c2,'2026-09-30','2',r2,T1)],f2.t);
+  const u0=await state('US'),c0=await state('CN');
+  await finalize(f2.b,'partial',{t:f2.t,ft:f2.ft});
+  expect([(await state('US')).i,(await state('CN')).i]).toEqual([u0.i+1,c0.i+1]);
+ });
+
+ it('snapshot cursor (review A4): created_at strictly increases in commit order across regions, also when a later transaction waits for an earlier one; republish and failed rows draw from the same cursor',async()=>{
+  const {v,id}=await seeded();
+  const ts=async(snapshotId:string)=>await one(`select created_at::text v from public.macro_snapshots where snapshot_id=$1`,[snapshotId]) as string;
+  const stamps:string[]=[];
+  for(let i=0;i<4;i++){
+   const us=await state('US'),cn=await state('CN');
+   stamps.push(await ts((await publish('US',us.r,us.i,v,[id])).snapshot_id));
+   stamps.push(await ts((await publish('CN',cn.r,cn.i,v,[])).snapshot_id));
+  }
+  for(let i=1;i<stamps.length;i++)expect(Date.parse(stamps[i]+'+00')>Date.parse(stamps[i-1]+'+00')||stamps[i]>stamps[i-1]).toBe(true);
+  expect(new Set(stamps).size).toBe(stamps.length);
+  // transaction A (US) draws its cursor and stays open; transaction B (CN) starts later, must wait, and so commits after A with a larger value
+  const sql=`select public.publish_macro_snapshot($1,$2,$3,'2026-11-06','macro-method/1.0',$4,$5::uuid[],'{}'::uuid[],$6::jsonb,null,'[]'::jsonb,'macro-rules/1',0) v`;
+  const us=await state('US'),cn=await state('CN');
+  const A=await admin.connect(),B=await admin.connect();let a:{snapshot_id:string},bRes:Promise<{snapshot_id:string}>|undefined;
+  try{
+   await A.query('begin');
+   a=(await A.query(sql,['US',us.r,us.i,v,[id],JSON.stringify(counts)])).rows[0].v;
+   bRes=B.query(sql,['CN',cn.r,cn.i,v,[],JSON.stringify(counts)]).then(x=>x.rows[0].v);
+   const waiting=()=>one(`select count(*)::int v from pg_stat_activity where wait_event_type='Lock' and query like '%publish_macro_snapshot%' and pid<>pg_backend_pid()`);
+   for(let i=0;i<100&&(await waiting())<1;i++)await new Promise(r=>setTimeout(r,20));
+   expect(await waiting()).toBe(1);                                                                      // B waits for A's cursor lock
+   await A.query('commit');
+   const b2=await bRes;
+   const [ta,tb]=[await ts(a.snapshot_id),await ts(b2.snapshot_id)];
+   expect(tb>ta).toBe(true);
+   const us2=await state('US');
+   const rep=await one(`select public.republish_macro_snapshot($1,$2,$3) v`,[a.snapshot_id,us2.r,us2.i]) as {snapshot_id:string};
+   const failed=await one(`select public.record_failed_macro_snapshot('US','2026-11-06','macro-method/1.0',$1,'x') v`,[v]) as string;
+   const [tr,tf]=[await ts(rep.snapshot_id),await ts(failed)];
+   expect(tr>tb&&tf>tr).toBe(true);
+  }finally{await A.query('rollback').catch(()=>{});A.release();B.release();}
+ });
+
+ it('publish key is bound to its region (review R3): another region cannot replay it',async()=>{
+  const {v,id}=await seeded();
+  const us=await state('US');const key=`cron:${randomUUID()}`;
+  const p=await publish('US',us.r,us.i,v,[id],[],{key});
+  const cn=await state('CN');
+  expect((await fails(publish('CN',cn.r,cn.i,v,[],[],{key}))).message).toBe('invalid_manifest');
+  expect((await state('CN')).r).toBe(cn.r);
+  expect(await publish('US',us.r,us.i,v,[id],[],{key})).toEqual({snapshot_id:p.snapshot_id,revision:p.revision,replayed:true});
+ });
+
+ it('accept needs a finished batch (review R1): a member of a running batch whose run was aborted is member_ineligible and its siblings stay quarantined',async()=>{
+  const {s,v}=await seeded({revisionPolicy:'immutable'});void v;
+  const ds=dataset();const old=await batch(ds);
+  const t1=(await claim(ds,old,'2 hours',{timeout:'10 milliseconds'})).owner_token!;
+  const r1=await retrieval(old,T3,randomUUID(),t1);
+  await one(`select public.macro_claim_chunk($1,0,1,$2) v`,[old,t1]);
+  const stranded=(await write(old,[native(s,'2026-09-30','4.5',r1,T3,false)],t1)).conflicts[0].observation_id!;
+  await new Promise(r=>setTimeout(r,30));
+  const next=await batch(ds);
+  expect(await claim(ds,next,'2 hours',{takeover:true})).toMatchObject({status:'claimed',aborted:[old]});
+  expect(await one(`select status v from public.ingest_batches where batch_id=$1`,[old])).toBe('running');   // not yet swept by the start route
+  const okB=await batch();
+  const sibling=(await write(okB,[native(s,'2026-09-30','4.6',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id!;
+  await finish(okB,'success');
+  const qid=await qItem(s,old);
+  await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[stranded]]);
+  await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[sibling]]);
+  const by=await user();const st=await state('US');
+  expect((await fails(q(`select public.macro_resolve_conflict($1,'accept',$2,$3)`,[qid,by,stranded]))).message).toBe('member_ineligible');
+  expect(await q(`select status from public.macro_observations where observation_id=any($1::uuid[]) order by version`,[[stranded,sibling]])).toEqual([{status:'quarantined'},{status:'quarantined'}]);
+  expect(await one(`select status v from public.dq_quarantine where id=$1`,[qid])).toBe('open');
+  expect((await state('US')).i).toBe(st.i);
+  expect(await one(`select public.macro_resolve_conflict($1,'accept',$2,$3) v`,[qid,by,sibling])).toEqual({status:'resolved_accept',observation_id:sibling,rejected:1});
+ });
+
+ it('ancestry deeper than 8 raises ancestry_too_deep instead of being waved through (review R4)',async()=>{
+  const s=sid();const v=await catalog([def(s)]);const b=await batch();
+  await write(b,[native(s,'2026-09-30','4.1',await retrieval(b,T2),T2)]);
+  const root=(await rows(s,'2026-09-30'))[0].observation_id as string;
+  await finish(b);
+  const chain=Array.from({length:10},()=>sid('D'));
+  await catalog(chain.map((c,i)=>def(c,{derive:{kind:'month_end',from:i===0?s:chain[i-1]}})));
+  const d=await batch();const ids:string[]=[];let prev=root;
+  for(let i=0;i<9;i++){
+   expect((await write(d,[derived(chain[i],'2026-09-30','4.1',[prev],T2)])).inserted).toBe(1);
+   prev=(await rows(chain[i],'2026-09-30'))[0].observation_id as string;ids.push(prev);
+  }
+  expect((await fails(write(d,[derived(chain[9],'2026-09-30','4.1',[prev],T2)]))).message).toBe('ancestry_too_deep');
+  await finish(d);
+  const st=await state('US');
+  expect((await fails(publish('US',st.r,st.i,v,[ids[8]]))).message).toBe('ancestry_too_deep');
+  expect((await fails(q(`select * from public.macro_latest_eligible_observations($1::text[],null,null,null)`,[[chain[8]]]))).message).toBe('ancestry_too_deep');
+  expect((await publish('US',st.r,st.i,v,[ids[7]])).revision).toBe(st.r+1);                            // exactly 8 levels walk completely
  });
 
  it('analysis runs: free 10/24h then quota_exceeded, idempotent request_id, failed runs free, pro and admin limits, own-rows RLS',async()=>{
