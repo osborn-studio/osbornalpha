@@ -27,6 +27,8 @@ import type {Abstained,Adjustment,DerivationRow,FactProjection,FactsMarket,Input
 import {PUBLIC_INPUT_KINDS,PUBLIC_TABLES} from './types';
 import {canonicalize,digest} from './canonical';
 import {JudgmentError} from './errors';
+import {datagatewaySymbol} from '@/lib/data/sources/datagateway';
+import {tickerToSecid} from '@/lib/data/sources/eastmoney';
 import {closeOnlyOf} from './kline';
 import {MacroUnavailable,observationIdOf} from './macro-api';
 import {originFor} from './origins';
@@ -43,7 +45,15 @@ export interface BuildOptions{capability?:(source:KlineSourceName,market:PriceMa
 export const ABSTAIN_CODES=['input_not_public','market_unsupported','metric_not_reproducible','unsupported_formula_version','snapshot_unclassified','target_unresolvable'] as const;
 const NOT_PUBLIC_ON_REBUILD=new Set<string>(['input_not_public','market_unsupported','metric_not_reproducible','unsupported_formula_version','snapshot_unclassified']);
 const REGIMES:readonly Regime[]=['recovery','overheat','stagflation','recession'];
-const DAY=/^\d{4}-\d{2}-\d{2}$/;
+const DAY_SHAPE=/^\d{4}-\d{2}-\d{2}$/;
+const DAY={test:(d:string)=>{if(!DAY_SHAPE.test(d))return false;const t=Date.parse(`${d}T00:00:00.000Z`);return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===d;}};
+/** The market the source would actually query for this ticker (review H-01): eastmoney resolves it from the ticker itself
+ *  (tickerToSecid, src/lib/data/sources/eastmoney.ts), datagateway validates ticker against the stated market
+ *  (datagatewaySymbol, src/lib/data/sources/datagateway.ts); other sources use eastmoney's ticker grammar. */
+function tickerMatchesMarket(source:KlineSourceName,ticker:string,market:PriceMarket):boolean{
+ if(source==='datagateway')return datagatewaySymbol(ticker,market)!==null;
+ return tickerToSecid(ticker)?.market===market;
+}
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const iso=(v:string)=>new Date(v).toISOString();
 const isoMax=(xs:string[])=>xs.reduce((m,x)=>Date.parse(x)>Date.parse(m)?x:m);
@@ -54,7 +64,7 @@ export function inputLabel(x:{kind:InputKind;ref:unknown}):string{
  const r=(x.ref??{}) as Record<string,string>;
  switch(x.kind){
   case 'financial_fact':return `financial_fact:${r.fact_id}`;
-  case 'financial_metric':return `financial_metric:${r.metric}@${r.period_start}..${r.period_end}`;
+  case 'financial_metric':return `financial_metric:${r.issuer_id}:${r.market}:${r.metric}@${r.period_start}..${r.period_end}`;
   case 'macro_observation':return `macro_observation:${r.series_id}@${r.period_end}#${r.vintage_id}`;
   case 'macro_snapshot':return `macro_snapshot:${r.snapshot_id}`;
   case 'price_bar':return `price_bar:${r.source}:${r.market}:${r.ticker}@${r.date}/${r.adjustment}`;
@@ -135,9 +145,13 @@ async function buildSnapshot(ref:{snapshot_id:string},db:JudgmentInputsDb):Promi
  const snapshot:MacroSnapshotSnapshot={snapshot_id:s.snapshot_id,region:s.region,as_of:s.as_of,methodology_version:s.methodology_version,catalog_version:s.catalog_version,observation_ids:[...s.observation_ids],primary_state:g.primary_state,secondary_state:g.secondary_state,scores:pick(g.scores),norm:pick(g.norm),coverage:g.coverage,margin_pp:g.margin_pp,growth_axis:g.growth_axis,inflation_axis:g.inflation_axis};
  return {kind:'macro_snapshot',ref:{snapshot_id:s.snapshot_id},snapshot,hash:digest(snapshot),available_at:isoMax(stamps),origin:originFor('macro_snapshot','macro_workbench',{snapshot_id:s.snapshot_id})};
 }
-async function buildBar(raw:{ticker:string;market:PriceMarket;date:string;source:KlineSourceName;adjustment:Adjustment},db:JudgmentInputsDb,opts:BuildOptions):Promise<Input>{
+async function buildBar(raw:{ticker:string;market:PriceMarket;date:string;source:KlineSourceName;adjustment:Adjustment},db:JudgmentInputsDb,observedAt:string,opts:BuildOptions):Promise<Input>{
  const ref={ticker:raw.ticker,market:raw.market,date:raw.date,source:raw.source,adjustment:raw.adjustment};const label=inputLabel({kind:'price_bar',ref});
  if(!DAY.test(ref.date))throw new JudgmentError('input_not_allowed',`${label}: date`);
+ if(!tickerMatchesMarket(ref.source,ref.ticker,ref.market))throw notPublic(`${label}: market_mismatch (${ref.source} would not query ${ref.ticker} as ${ref.market})`);
+ const closeAt=closeInstantUtc(ref.date,ref.market);
+ // H-02: a daily bar is final only after the exchange close; never freeze an unfinished one.
+ if(Date.parse(closeAt)>Date.parse(observedAt))throw new JudgmentError('input_unavailable',`${label}: bar_not_closed (close ${closeAt} > observed ${observedAt})`);
  const cap=(opts.capability??capabilityOf)(ref.source,ref.market,ref.adjustment);
  if(cap.status!=='verified')throw new JudgmentError('market_unsupported',`${label}: capability ${cap.status}`);
  const signal=opts.signal??AbortSignal.timeout(opts.klineTimeoutMs??20_000);
@@ -149,7 +163,7 @@ async function buildBar(raw:{ticker:string;market:PriceMarket;date:string;source
  const snapshot:PriceBarSnapshot=closeOnly
   ?{...ref,open:null,high:null,low:null,close:b.close,volume:null,amount:null,fields_present:['close']}
   :{...ref,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume,amount:b.amount??null,fields_present:b.amount===undefined?['open','high','low','close','volume']:['open','high','low','close','volume','amount']};
- return {kind:'price_bar',ref,snapshot,hash:digest(snapshot),available_at:closeInstantUtc(ref.date,ref.market),
+ return {kind:'price_bar',ref,snapshot,hash:digest(snapshot),available_at:closeAt,
   origin:originFor('price_bar',ref.source,{market:ref.market,ticker:ref.ticker,date:ref.date,adjustment:ref.adjustment},closeOnly?{transform:'close_only'}:{})};
 }
 async function buildTable(raw:{table:PublicTable;natural_key:string},db:JudgmentInputsDb,asOf:string):Promise<Input>{
@@ -160,9 +174,11 @@ async function buildTable(raw:{table:PublicTable;natural_key:string},db:Judgment
  if(rows.length===0)throw notPublic(`${label}: no rows visible at ${asOf}`);
  // P1-08: availability is the rows' system time (updated_at, else created_at) — valid_from is an effective date,
  // not a publication time, and the requested as_of is never a substitute.
- const stampOf=(r:Record<string,unknown>):string|null=>{const v=typeof r.updated_at==='string'?r.updated_at:typeof r.created_at==='string'?r.created_at:null;return v!==null&&Number.isFinite(Date.parse(v))?iso(v):null;};
+ // H-03: per row max(valid created_at, valid updated_at); updated_at earlier than created_at is inconsistent → unevidenced.
+ const ts=(v:unknown):number|null=>typeof v==='string'&&Number.isFinite(Date.parse(v))?Date.parse(v):null;
+ const stampOf=(r:Record<string,unknown>):string|null=>{const c=ts(r.created_at),u=ts(r.updated_at);if(c!==null&&u!==null&&u<c)return null;const m=Math.max(c??-Infinity,u??-Infinity);return Number.isFinite(m)?new Date(m).toISOString():null;};
  const stamps=rows.map(stampOf);
- if(stamps.some(s=>s===null))throw new JudgmentError('input_unavailable',`${label}: a row has no system timestamp (updated_at / created_at), so its availability at ${asOf} cannot be evidenced`);
+ if(stamps.some(s=>s===null))throw new JudgmentError('input_unavailable',`${label}: a row has no system timestamp (valid, ordered updated_at / created_at), so its availability at ${asOf} cannot be evidenced`);
  const snapshot={table:ref.table,natural_key:ref.natural_key,rows};
  return {kind:'table_rows',ref,snapshot,hash:digest(snapshot),available_at:isoMax(stamps as string[]),
   origin:originFor('table_rows',ref.table==='macro_series'?'macro_workbench':'supabase_public',{table:ref.table,natural_key:ref.natural_key})};
@@ -174,35 +190,38 @@ async function buildJudgment(ref:{judgment_id:string},db:JudgmentInputsDb):Promi
  return {kind:'judgment',ref:{judgment_id:j.judgment_id},snapshot,hash:digest(snapshot),available_at:j.registered_at,origin:originFor('judgment','judgments',{judgment_id:j.judgment_id})};
 }
 
-export async function buildInput(req:InputRequest,db:JudgmentInputsDb,asOf:string,opts:BuildOptions={}):Promise<Input>{
- if(!DAY.test(asOf))throw new RangeError(`asOf must be YYYY-MM-DD, got ${asOf}`);
+export async function buildInput(req:InputRequest,db:JudgmentInputsDb,asOf:string,observedAt:string,opts:BuildOptions={}):Promise<Input>{
+ if(!DAY.test(asOf))throw new JudgmentError('invalid_parameter',`asOf must be a real YYYY-MM-DD date, got ${asOf}`);
+ if(!Number.isFinite(Date.parse(observedAt)))throw new JudgmentError('invalid_parameter',`observedAt must be an ISO instant, got ${observedAt}`);
  if(!(PUBLIC_INPUT_KINDS as readonly string[]).includes(req.kind))throw new JudgmentError('input_not_allowed',`${req.kind} is not a public input kind`);
  switch(req.kind){
   case 'financial_fact':return buildFact(req.ref,db,asOf);
   case 'financial_metric':return buildMetric(req.ref,db,asOf);
   case 'macro_observation':return buildObservation(req.ref,db);
   case 'macro_snapshot':return buildSnapshot(req.ref,db);
-  case 'price_bar':return buildBar(req.ref,db,opts);
+  case 'price_bar':return buildBar(req.ref,db,observedAt,opts);
   case 'table_rows':return buildTable(req.ref,db,asOf);
   case 'judgment':return buildJudgment(req.ref,db);
  }
 }
-export async function buildOrAbstain(req:InputRequest,db:JudgmentInputsDb,asOf:string,opts:BuildOptions={}):Promise<Input|Abstained>{
- try{return await buildInput(req,db,asOf,opts);}
+export async function buildOrAbstain(req:InputRequest,db:JudgmentInputsDb,asOf:string,observedAt:string,opts:BuildOptions={}):Promise<Input|Abstained>{
+ try{return await buildInput(req,db,asOf,observedAt,opts);}
  catch(e){
   if(e instanceof JudgmentError&&(ABSTAIN_CODES as readonly string[]).includes(e.code))return {abstained:true,reason:e.code,missing:[inputLabel(req)]};
   // P1-08: a table_rows input whose rows carry no system timestamp is permanently unevidenced → abstain (for the other
   // kinds input_unavailable is a transient provider failure and stays an error).
-  if(e instanceof JudgmentError&&e.code==='input_unavailable'&&req.kind==='table_rows')return {abstained:true,reason:'input_unavailable',missing:[inputLabel(req)]};
+  if(e instanceof JudgmentError&&e.code==='input_unavailable'&&(req.kind==='table_rows'||(req.kind==='price_bar'&&e.message.includes('bar_not_closed'))))return {abstained:true,reason:'input_unavailable',missing:[inputLabel(req)]};
   throw e;
  }
 }
 export type RebuildResult={status:'ok'}|{status:'input_snapshot_mismatch';field:'hash'|'ref'|'snapshot'|'available_at'|'origin'}|{status:'input_not_public';code:string};
-export async function rebuildAndCompare(input:Input,db:JudgmentInputsDb,asOf:string,opts:BuildOptions={}):Promise<RebuildResult>{
+export async function rebuildAndCompare(input:Input,db:JudgmentInputsDb,asOf:string,observedAt:string,opts:BuildOptions={}):Promise<RebuildResult>{
  if(!(PUBLIC_INPUT_KINDS as readonly string[]).includes(input.kind))throw new JudgmentError('input_not_allowed',`${input.kind} is not a public input kind`);
+ // H-04: the submitted snapshot must be exactly what JSON storage would return (no holes, undefined, extra array props).
+ if(digest(JSON.parse(JSON.stringify(input.snapshot)))!==digest(input.snapshot))throw new JudgmentError('invalid_parameter','snapshot does not round-trip JSON');
  if(input.hash!==digest(input.snapshot))return {status:'input_snapshot_mismatch',field:'hash'};
  let fresh:Input;
- try{fresh=await buildInput({kind:input.kind,ref:input.ref} as InputRequest,db,asOf,opts);}
+ try{fresh=await buildInput({kind:input.kind,ref:input.ref} as InputRequest,db,asOf,observedAt,opts);}
  catch(e){if(e instanceof JudgmentError&&NOT_PUBLIC_ON_REBUILD.has(e.code))return {status:'input_not_public',code:e.code};throw e;}
  if(canonicalize(fresh.ref)!==canonicalize(input.ref))return {status:'input_snapshot_mismatch',field:'ref'};
  if(fresh.hash!==input.hash)return {status:'input_snapshot_mismatch',field:'snapshot'};

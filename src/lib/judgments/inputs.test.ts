@@ -8,11 +8,11 @@ import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {FORMULA_VERSION} from '@/lib/facts/derive';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
 import type {MetricRow} from '@/lib/facts/types';
-import {canonicalize,digest} from './canonical';
+import {canonicalize,digest,jsonClean} from './canonical';
 import {JudgmentError} from './errors';
 import {memoryJudgmentInputsDb} from './inputs-db';
-import {buildInput,buildOrAbstain,inputLabel,inputsHashOf,rebuildAndCompare,sortInputs} from './inputs';
-import type {InputRequest} from './inputs';
+import {buildInput as rawBuild,buildOrAbstain as rawAbstain,inputLabel,inputsHashOf,rebuildAndCompare as rawRebuild,sortInputs} from './inputs';
+import type {BuildOptions,InputRequest} from './inputs';
 import type {KlineRange} from './kline';
 import {fixtureMacroReadApi,observationIdOf} from './macro-api';
 import type {MacroFixture} from './macro-api';
@@ -21,6 +21,11 @@ import {closeInstantUtc} from './time';
 import type {Input,JudgmentInputsDb,JudgmentRow,KlineRangeRequest,MetricKey} from './types';
 import {AAPL_ISSUER,FIXED_NOW,aaplParse,factCandidate,filingCandidate,publishFacts,seedFactId} from './testing/facts-fixture';
 
+// observedAt is required (H-02); tests that are not about it observe long after every fixture date.
+const OBS='2030-01-01T00:00:00.000Z';
+const buildInput=(r:InputRequest,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions)=>rawBuild(r,db,asOf,OBS,opts);
+const buildOrAbstain=(r:InputRequest,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions)=>rawAbstain(r,db,asOf,OBS,opts);
+const rebuildAndCompare=(i:Input,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions)=>rawRebuild(i,db,asOf,OBS,opts);
 const code=(p:Promise<unknown>)=>p.then(()=>'ok',(e:unknown)=>e instanceof JudgmentError?e.code:`other:${String(e)}`);
 const reversed=<T extends object>(o:T)=>Object.fromEntries(Object.entries(o).reverse());
 let aapl:JudgmentInputsDb;let fy23RevenueId:string;
@@ -222,5 +227,54 @@ describe('whitelist, hashing and rebuild (spec §3.5, §6.2 step 1)',()=>{
   expect(await rebuildAndCompare({...a,ref:{...a.ref,extra:'x'} as never},db,'2026-10-16')).toEqual({status:'input_snapshot_mismatch',field:'ref'});
   expect(await rebuildAndCompare(a,memoryJudgmentInputsDb({macro:fixtureMacroReadApi({...MACRO,snapshots:[]})}),'2026-10-16')).toEqual({status:'input_not_public',code:'input_not_public'});
   expect(canonicalize(a.ref)).toBe('{"snapshot_id":"s-ok"}');
+ });
+});
+
+describe('review fixes H-01..H-04',()=>{
+ it('H-01: ticker ↔ market identity is checked before the capability lookup and the close time',async()=>{
+  const seen:string[]=[];
+  const opts={capability:(_s:unknown,m:string)=>{seen.push(m);return {status:'verified' as const};}} as unknown as BuildOptions;
+  const db=memoryJudgmentInputsDb({kline:klineOf({bars:[bar('2024-06-18',100)]})});
+  const nv={ticker:'NVDA',date:'2024-06-18',adjustment:'qfq' as const};
+  expect(await code(buildInput({kind:'price_bar',ref:{...nv,market:'A',source:'eastmoney'}},db,'2024-06-18',opts))).toBe('input_not_public');
+  expect(await code(buildInput({kind:'price_bar',ref:{...nv,market:'A',source:'datagateway'}},db,'2024-06-18',opts))).toBe('input_not_public');
+  expect(await code(buildInput({kind:'price_bar',ref:{ticker:'600519.SH',date:'2024-06-18',adjustment:'qfq',market:'US',source:'eastmoney'}},db,'2024-06-18',opts))).toBe('input_not_public');
+  expect(seen).toEqual([]);
+  const a=await buildInput({kind:'price_bar',ref:{...nv,market:'US',source:'eastmoney'}},db,'2024-06-18',opts);
+  expect(seen).toEqual(['US']);expect(a.available_at).toBe(closeInstantUtc('2024-06-18','US'));
+ });
+ it('H-02: an unfinished daily bar is never frozen (observedAt)',async()=>{
+  const db=memoryJudgmentInputsDb({kline:klineOf({bars:[bar('2026-11-06',1500)]})});
+  const req:InputRequest={kind:'price_bar',ref:{...BAR_REF,date:'2026-11-06'}};
+  const early=rawBuild(req,db,'2026-11-06','2026-11-06T02:00:00.000Z',VERIFIED);
+  expect(await code(early)).toBe('input_unavailable');
+  expect(await rawAbstain(req,db,'2026-11-06','2026-11-06T02:00:00.000Z',VERIFIED)).toMatchObject({abstained:true,reason:'input_unavailable'});
+  const a=await rawBuild(req,db,'2026-11-06','2026-11-06T07:01:00.000Z',VERIFIED);
+  expect(a.available_at).toBe(closeInstantUtc('2026-11-06','A'));
+  expect(await rawRebuild(a,db,'2026-11-06','2026-11-06T02:00:00.000Z',VERIFIED).then(()=>'ok',(e:unknown)=>e instanceof JudgmentError?e.code:'other')).toBe('input_unavailable');
+ });
+ it('H-03: table_rows availability is max(created_at, updated_at); updated_at < created_at is unevidenced',async()=>{
+  const mk=(row:object)=>memoryJudgmentInputsDb({macro:fixtureMacroReadApi({...MACRO,series_catalog:{US:[{id:'x',weight:1,...row}]}})});
+  const req:InputRequest={kind:'table_rows',ref:{table:'macro_series',natural_key:'US'}};
+  const ok=await buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z',updated_at:'2026-11-07T00:00:00.000Z'}),'2026-11-08');
+  expect(ok.available_at).toBe('2026-11-07T00:00:00.000Z');
+  expect(await code(buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z',updated_at:'2026-01-01T00:00:00.000Z'}),'2026-11-08'))).toBe('input_unavailable');
+  expect((await buildInput(req,mk({created_at:'2026-11-06T00:00:00.000Z'}),'2026-11-08')).available_at).toBe('2026-11-06T00:00:00.000Z');
+ });
+ it('H-04: sparse arrays are rejected; a snapshot must survive a JSON round trip',async()=>{
+  const holes=[1,,3] as unknown[];
+  expect(()=>canonicalize(holes)).toThrow(JudgmentError);
+  expect(()=>canonicalize({a:{b:[holes]}})).toThrow(JudgmentError);
+  expect(()=>jsonClean(holes)).toThrow(JudgmentError);
+  const db=memoryJudgmentInputsDb({macro:fixtureMacroReadApi(MACRO)});
+  const a=await buildInput({kind:'macro_snapshot',ref:{snapshot_id:'s-ok'}},db,'2026-10-16');
+  if(a.kind!=='macro_snapshot')throw new Error('kind');
+  const wrapped={...a,snapshot:{...a.snapshot,observation_ids:Object.assign([...a.snapshot.observation_ids],{extra:1})}};
+  expect(await code(rebuildAndCompare(wrapped as Input,db,'2026-10-16'))).toBe('invalid_parameter');
+ });
+ it('minor: financial_metric label carries issuer and market; asOf must be a real date',async()=>{
+  const l=inputLabel({kind:'financial_metric',ref:{issuer_id:'I',market:'US',metric:'ttm_revenue',period_start:'a',period_end:'b'}});
+  expect(l).toContain('I');expect(l).toContain('US');
+  expect(await code(buildInput({kind:'judgment',ref:{judgment_id:'x'}},memoryJudgmentInputsDb(),'2026-02-31'))).toBe('invalid_parameter');
  });
 });

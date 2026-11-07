@@ -77,3 +77,10 @@
 - G-01：已结算 price_return 的 `realized.to` 缺失 / 不可解析 → 不再退回 ceil(n×1.52) 估计，样本排除并计入 `metrics.n_invalid_endpoint`；G-02：分箱改为边界比较（Python 预言机同步，既有 20 个用例输出不变）；G-03：混淆矩阵两层用无原型对象；G-04：interval `scenarios` 保留并在 `metrics.scenarios` 做逐情景 probability 评估（up ⇔ condition.predicate 成立，无数值谓词时 realized ≥ 0；不进 interval 状态）；条目 6：`metrics.n_unusable_value`。
 - 预言机：每个用例的 metrics 增加常量 `n_invalid_endpoint=0`、`n_unusable_value=0`（编码里没有此类行）；新增 7 个门控用例（技能≤0、技能 null、重叠剔除后留出不足、留出 20/19、ECE=ece_max、interval 宽度比>1）。变异检验：删除 `hsk>0`、`he===null`、`ratio<=1`、`≤`→`<` 各使至少 1 个测试失败。
 - 规格偏差（Task 15 校准，interval 情景）：`up` 情景一律取 realized ≥ 0（§9.4 保证 value_up > 0 > value_down），不用判断自身 condition 的谓词——interval 判断自身的谓词是 `between [low,high]`，不是情景事件；情景事件是绑定的 thesis_win_rate condition（仅以 scenario_event_hash 识别），interval 行无法求值。`metrics.scenarios.event = 'realized_nonnegative'`；情景只报告，不进任何门控。
+
+## Task 8 review fixes（输入构造器，H-01..H-04）
+- H-01：price_bar 先校验 ticker↔market（eastmoney 用 `tickerToSecid`，datagateway 用 `datagatewaySymbol`），不符 → `input_not_public`（message `market_mismatch`），再查能力与收盘时刻。
+- H-02：`buildInput/buildOrAbstain/rebuildAndCompare` 新增必填位置参数 `observedAt`（第 4 位，opts 后移）；收盘时刻 > observedAt → `input_unavailable`（`bar_not_closed`），`buildOrAbstain` 对 price_bar 的该情形弃权。Task 10 须传 `db.serverTime()` 并走 `buildOrAbstain`。
+- H-03：table_rows 每行 max(created_at, updated_at)；updated_at < created_at → `input_unavailable`。
+- H-04：`canonicalize/digest/jsonClean` 拒绝稀疏数组与带额外属性的数组（`invalid_parameter`）；`rebuildAndCompare` 要求快照 JSON 往返后摘要不变。
+- 次要：financial_metric 标签含 issuer_id 与 market；`asOf` 校验真实日期（`invalid_parameter`，原为 RangeError）。

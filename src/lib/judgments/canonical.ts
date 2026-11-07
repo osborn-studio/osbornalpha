@@ -7,17 +7,29 @@
 // jsonClean removes undefined object members (canonicalize refuses them, JSON storage drops them),
 // so digests of objects with optional fields match what the database stores.
 import {canonicalize as jcs,digest as jcsDigest,sha256 as jcsSha256} from '../research/ingest/pa-v1/json.js';
+import {JudgmentError} from './errors';
 import type {InputKind} from './types';
 
-export const canonicalize=(v:unknown):string=>jcs(v);
-export const digest=(v:unknown):string=>jcsDigest(v);
+/** Arrays with holes or non-index own properties do not survive JSON storage and would hash differently from what is stored (review H-04). */
+function assertDense(v:unknown):void{
+ if(Array.isArray(v)){
+  if(Object.keys(v).length!==v.length)throw new JudgmentError('invalid_parameter','sparse array or array with extra properties');
+  for(let i=0;i<v.length;i++){if(!(i in v))throw new JudgmentError('invalid_parameter',`sparse array hole at index ${i}`);assertDense(v[i]);}
+ }else if(v!==null&&typeof v==='object')for(const x of Object.values(v as Record<string,unknown>))assertDense(x);
+}
+export const canonicalize=(v:unknown):string=>{assertDense(v);return jcs(v);};
+export const digest=(v:unknown):string=>{assertDense(v);return jcsDigest(v);};
 export const sha256=(bytes:string|Uint8Array):string=>jcsSha256(bytes);
 
 export function jsonClean<T>(v:T):T{
- if(Array.isArray(v))return v.map(x=>jsonClean(x)) as T;
+ assertDense(v);
+ return jsonCleanDense(v);
+}
+function jsonCleanDense<T>(v:T):T{
+ if(Array.isArray(v))return v.map(x=>jsonCleanDense(x)) as T;
  if(v!==null&&typeof v==='object'){
   const out:Record<string,unknown>={};
-  for(const [k,x] of Object.entries(v as Record<string,unknown>))if(x!==undefined)Object.defineProperty(out,k,{value:jsonClean(x),enumerable:true,writable:true,configurable:true});
+  for(const [k,x] of Object.entries(v as Record<string,unknown>))if(x!==undefined)Object.defineProperty(out,k,{value:jsonCleanDense(x),enumerable:true,writable:true,configurable:true});
   return out as T;
  }
  return v;
