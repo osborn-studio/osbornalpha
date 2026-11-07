@@ -341,7 +341,7 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
 
 ### 13.7 生产启用记录 2026-11-07（P1+P2，main `86a77ec1`）
 
-由生产启用会话执行；底座部分与部署细节见 `data-foundation.md` §10。时间 UTC。P3+P4（#110，迁移 `20261115090000_macro_strategy.sql`）**不在 main**，未应用、未部署。
+由生产启用会话执行；底座部分与部署细节见 `data-foundation.md` §10。时间 UTC。P3+P4 的迁移与部署见 `data-foundation.md` §10.7a（经 #111 中继进入 main 后已应用并部署，开关未开）。
 
 1. **迁移**（§13.1）：`20261114090000_macro_workbench` 与其前置的 8 个底座/行业迁移一起，先在生产 `begin…rollback` 演练，再单独一个事务 + 历史行执行，成功。§13.1 的 7 项核对全部符合期望（12 表、全部 RLS、无写授权、SELECT 授权按设计、`macro-raw` 私有 52428800 四种 MIME、`macro_publish_state` US/CN 0 0、anon 只能执行 3 个公开函数）。anon PostgREST：`macro_regime_results`/`macro_publish_state`/`macro_ingest_runs` 401，`rpc/macro_write_observations` 404。偏差：历史行 `statements` 存了文件原文而不是 `array[]::text[]`（与 2026-10 以前的行一致）。
 2. **环境**（§13.2）：`CRON_SECRET` 已存在；`MACRO_JUDGMENTS_ENABLED` 未设（判断层关闭，保持）；`MACRO_INGEST_SECRET` **未设**——按指挥要求不由会话生成或写入密钥，列为 owner 步骤（下面第 5 条）。

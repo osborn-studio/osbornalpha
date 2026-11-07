@@ -456,7 +456,7 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 
 ## 10. 生产启用记录 2026-11-07
 
-执行：生产启用会话（Opus 5.5），main `86a77ec1`（含 #100/#102/#104/#106/#107/#108/#109；**不含 #110**，它被合并进了已合并的基线分支 `claude/macro-workbench-bbde80`，正由中继 PR 带入 main）。托管库 `stock-monitor`（`mzfcaabhuwtfvsvadvsv`，PG 17.6，`postgres` 非超级用户）。所有 SQL 走 Management API（令牌取自钥匙串，只在 shell 变量中）；Vercel 环境拉到仓库外的临时文件，未打印任何密钥。时间均为 UTC。
+执行：生产启用会话（Opus 5.5），main `86a77ec1`（含 #100/#102/#104/#106/#107/#108/#109；#110 当时被合并进了已合并的基线分支，经中继 #111 与 #112 进入 main 后在 10.7a 处理，现行生产为 `029909d8`）。托管库 `stock-monitor`（`mzfcaabhuwtfvsvadvsv`，PG 17.6，`postgres` 非超级用户）。所有 SQL 走 Management API（令牌取自钥匙串，只在 shell 变量中）；Vercel 环境拉到仓库外的临时文件，未打印任何密钥。时间均为 UTC。
 
 ### 10.1 盘点（07:05 前）
 
@@ -541,6 +541,15 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
 - 修正（不改代码、不改项目环境）：同一提交重新部署，带**部署级**运行时变量：`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)` → **`stock-monitor-dxnq1om1q-gilosbornhellos-projects.vercel.app`**（当前生产，sha `86a77ec10611d52c81929386584c7ccd639a9a96`）。`docs/VERCEL_DATAGATEWAY_DEPLOYMENT.md` §5 的部署命令已同步改为带 `--env`；**以后每次部署都必须带它**，否则上述路径 503。
 - 部署后无令牌访问：`/api/cron/{macro-sync,facts-sync,filing-calendar,reconcile,industry-sync}` → 401，`/api/macro/overview` → 401，`/intel/macro` → 307（登录）。
 
+### 10.7a 宏观 P3+P4（#111 中继 + #112 WP-S6 进入 main 之后，08:1x UTC）
+
+按 `docs/runbooks/macro-strategy.md` §8 执行到"开关之前"为止。
+- **迁移** `20261115090000_macro_strategy.sql`：sha256 与锁文件相符；生产 `begin…rollback` 演练 `rehearsal_ok`；然后一个事务执行文件 + 历史行（`statements` 存原文，同 10.2 偏差 2）→ applied。§8.1 第 2 条核对：6 张表、全部 RLS、无写授权；SELECT：`macro_strategy_manifests`/`macro_review_results`/`macro_review_current` 三角色，`macro_explanations` authenticated+service_role，`macro_review_attempts`/`macro_explanation_runs` 仅 service_role（与迁移一致）；8 个 RPC 均 svc=true、anon/auth=false；anon 可执行的 `macro_*` 函数仍只有 P1 的 3 个。
+- **部署**：`origin/main` `029909d8c9660b5ec4c3ba861ae58c7a2b4463d9`，`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=<sha>` → **`stock-monitor-rag88xybd-gilosbornhellos-projects.vercel.app`**（当前生产，osbornalpha.com，15 个 cron，新增 `/api/cron/macro-review` `0 6 3 * *`）。无令牌：`/api/cron/macro-review` 401、`/api/macro/strategy/transmission` 401、`/intel/macro/transmission` 307。带令牌 `macro-review?preview=1` → 404 `strategy_disabled`（开关未开，符合预期）。
+- **§8.1 第 7 条**：带令牌真实运行 `macro-sync` → 批次 `e4178cd6-470e-4ef4-ada5-036e0a7a21af` success，fetched 24565、inserted 3272、duplicates 21293、quarantined/failed 0；US 快照 revision 2（`693b2539-783c-4844-bf65-e2598f23e9a5`），目录版本 `macro-catalog/30bcaa2a33c5`，`macro_series` 41。
+- **§8.2 数据核对**（全部符合）：US 一个 active；`US_FED_TARGET_D` n=3272、2000-01-01..2008-12-15，`UPPER`/`LOWER` 各 6535、2008-12-16..2026-11-06；切换证据 D 2008-12-15 = `1`、UPPER 2008-12-16 = `0.25`、LOWER = `0`；宏观未结隔离 0；`macro.fred` fresh；P3 表 0/0。差异：手册 §2 第 3 条说首轮会存 1982–1999 的 DFEDTAR，实际只存了 2000-01-01 起（采集窗口从 2000 年开始），条数仍满足 > 2000。
+- **未做（阻塞于 owner）**：§8.1 第 3 条 `MACRO_INGEST_SECRET` 未设、第 6 条 CN 快照未发布 → 按手册"遇到第一个不满足即停"，**`MACRO_STRATEGY_ENABLED` 未开**，§8.3–§8.5 未执行；`MACRO_JUDGMENTS_ENABLED` 未设。
+
 ### 10.8 回滚
 
 迁移不回滚（宏观迁移禁止 drop；事实层按 8.10 / 9.10）。写入可逆性：发行人与证券行可按 §6 删除（尚无引用方以外的依赖时）；事实层按 8.10。代码回滚：`vercel rollback` 到 `stock-monitor-8pypzqiyl`（2026-10-19）会让新路由消失，但数据库对象保留无害。
@@ -561,6 +570,11 @@ git worktree add --detach "$D" origin/main
 mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/"
 (cd "$D" && vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)); echo "deploy exit=$?"
 git worktree remove "$D"      # 只删本次建的工作树；不加 --force
+```
+
+宏观 P3+P4 开关（在 CN 快照发布之后；`macro-strategy.md` §8.3–§8.5）：
+```bash
+vercel env add MACRO_STRATEGY_ENABLED production      # 输入 1；然后按第 3 条重新部署，再跑 §8.4 预览与 §8.5 冒烟
 ```
 
 另：A 股装载与研究实体链接是否 `--apply`（10.6）；计划三 §9.2 的首轮脚本（fill-identifiers、backfill-windows、link-ah、enrich-acceptance、filer-categories、calendar-sync、reconcile）；`/admin/dq` 16 个事实隔离项；黄金集抄录（8.11-6）；`stocks_universe` 是否纳入纽交所。宏观的 owner 步骤见 `docs/runbooks/macro-sync.md` §13.7。
