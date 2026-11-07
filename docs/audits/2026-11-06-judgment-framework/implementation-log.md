@@ -54,3 +54,7 @@
 6. `apply_quarantine_override / reject_quarantined_settlement`：项 `table_name` 必须是 `judgment_settlements`，且队列 `incident.quarantine_id = p_quarantine_id`，否则 `stale`。
 7. freeze：`frozen_at`（语句时间戳）同时约束成员的 `registered_at <= frozen_at` 与冻结结算的 `settled_at <= frozen_at`（测试用同一把代际锁让冻结等待，期间登记的行不进成员）。
 8. 竞态测试的 `pause(200)` 全换成 `waitBlocked(pid)`；`max()` 全限定为 `pg_catalog.max`（含 `sync_methodology`）；RLS 用例加 `authenticated` 角色调用。
+
+### Task 3 复审第 2 轮修复（Codex D-01）
+
+`judgment_envelope_of` 只信任 `p_j.judgment_id`：改为 plpgsql，先校验视图（`latest`/`as_known`，`as_known` 要求 cutoff），再在调用者 RLS 下按 id 读取已存行，所有返回字段、join 与 as_known 谓词都用该已存行；伪造 `registered_at` 或替换 `methodology_id/version` 的复合值无效，不可读或不存在 → NULL。新增用例（anon 与 authenticated，三种伪造）先红（旧函数返回伪造行）后绿；`judgments.integration` 40/40（2 次），`test:migrations` PASS，lint 干净。

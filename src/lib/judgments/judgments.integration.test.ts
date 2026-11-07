@@ -1135,6 +1135,25 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   expect(await call('anon','latest',null)).toBeNull();
  });
 
+ it('judgment_envelope_of trusts only the judgment id: a forged registered_at or substituted methodology fields change nothing, and bad views are refused (D-01)',async()=>{
+  const row=methodologyRow();const m=String(row.methodology_id);await sync({...row,publishable:true});const b=await batch();
+  const r=judgmentRow(m,b,{subjectType:'macro_region',subjectKey:'CN'});await register(r);const j=String(r.row.judgment_id);
+  const other=await syncNew();                                                              // a second methodology the forger substitutes
+  const future=new Date(Date.now()+3_600_000).toISOString();
+  const pastCut='2000-01-01T00:00:00.000Z';
+  const forged:Record<string,unknown>[]=[{registered_at:'1999-01-01T00:00:00.000Z'},{methodology_id:other},{methodology_id:other,methodology_version:'v9',registered_at:'1999-01-01T00:00:00.000Z'}];
+  const call=(role:string,patch:Record<string,unknown>,view:string,cutoff:string|null)=>asRole(admin,role,async c=>(await c.query(
+   `select (e).judgment.judgment_id id,(e).judgment.registered_at ra,(e).judgment.methodology_id mid from (select public.judgment_envelope_of(jsonb_populate_record(null::public.judgments,(select to_jsonb(x) from public.judgments x where judgment_id=$1)||$2::jsonb),$3,$4::timestamptz) e) t`,[j,JSON.stringify(patch),view,cutoff])).rows[0] as {id:string|null;ra:Date|null;mid:string|null});
+  for(const role of ['anon','authenticated'])for(const patch of forged){
+   expect({role,patch,r:(await call(role,patch,'as_known',pastCut)).id}).toEqual({role,patch,r:null});       // registered after the cutoff whatever the caller claims
+   const ok=await call(role,patch,'as_known',future);
+   expect({role,patch,id:ok.id,mid:ok.mid}).toEqual({role,patch,id:j,mid:m});                              // the stored row comes back, not the forged one
+   expect(ok.ra!.getFullYear()).toBeGreaterThan(2000);
+  }
+  expect((await call('anon',{judgment_id:randomUUID()},'latest',null)).id).toBeNull();
+  for(const [view,cut] of [['sometimes',null],['as_known',null]] as const)expect(await fails(call('anon',{},view,cut))).toMatchObject({code:'22023'});
+ });
+
  it('calibration_valid under the latest view ignores the supplied cutoff (C-03)',async()=>{
   const m=await syncNew();const b=await batch();
   const r=judgmentRow(m,b,{subjectType:'issuer',subjectKey:randomUUID()});await register(r);

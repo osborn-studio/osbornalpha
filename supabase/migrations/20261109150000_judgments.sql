@@ -406,29 +406,37 @@ language sql stable security invoker set search_path = '' as $$ select pg_catalo
 -- One envelope for a judgment row under a view: latest settlement, latest scope='all' calibration
 -- with its validity, and the methodology state (latest event, or the last event <= cutoff).
 create or replace function public.judgment_envelope_of(p_j public.judgments, p_view text, p_cutoff timestamptz)
-returns public.judgment_envelope language sql stable security invoker set search_path = '' as $$
-  select p_j,
-         (select s from public.judgment_settlements s
-           where s.judgment_id = p_j.judgment_id and (p_view = 'latest' or s.settled_at <= p_cutoff)
-           order by s.seq desc limit 1),
+returns public.judgment_envelope language plpgsql stable security invoker set search_path = '' as $$
+declare r public.judgment_envelope;
+begin
+  if p_view is null or p_view not in ('latest','as_known') or (p_view = 'as_known' and p_cutoff is null) then
+    raise exception 'invalid_parameter: view' using errcode = '22023';
+  end if;
+  -- Review C-02 / D-01: only p_j.judgment_id is trusted. The persisted row is loaded under the caller's RLS and used for
+  -- every returned field, join and predicate (as_known: registered_at <= cutoff and a methodology event <= cutoff);
+  -- a forged or unreadable row yields NULL.
+  select pj, (select s from public.judgment_settlements s
+               where s.judgment_id = pj.judgment_id and (p_view = 'latest' or s.settled_at <= p_cutoff)
+               order by s.seq desc limit 1),
          k.c,
          coalesce((k.c).validity_revision = v.revision and (k.c).valid_until > case when p_view = 'latest' then pg_catalog.now() else p_cutoff end, false),
          (select e from public.judgment_methodology_events e
-           where e.methodology_id = p_j.methodology_id and e.version = p_j.methodology_version
+           where e.methodology_id = pj.methodology_id and e.version = pj.methodology_version
              and (p_view = 'latest' or e.occurred_at <= p_cutoff)
            order by e.occurred_at desc, e.seq desc limit 1)
-  from (select (select c from public.judgment_calibrations c
-                 where c.methodology_id = p_j.methodology_id and c.methodology_version = p_j.methodology_version
+  into r
+  from public.judgments pj
+  cross join lateral (select (select c from public.judgment_calibrations c
+                 where c.methodology_id = pj.methodology_id and c.methodology_version = pj.methodology_version
                    and c.scope_type = 'all' and c.scope_key = '' and (p_view = 'latest' or c.computed_at <= p_cutoff)
                  order by c.computed_at desc, c.calibration_id limit 1) as c) k
-  left join public.judgment_calibration_validity v on v.methodology_id = p_j.methodology_id and v.version = p_j.methodology_version
-  -- Review C-02: the row is passed in by the caller, so re-check it under the caller's RLS and, for as_known, the same
-  -- registered_at / methodology-event predicates the list functions apply; otherwise the result is NULL.
-  where exists (select 1 from public.judgments x where x.judgment_id = p_j.judgment_id)
-    and (p_view = 'latest' or (p_j.registered_at <= p_cutoff and exists (
+  left join public.judgment_calibration_validity v on v.methodology_id = pj.methodology_id and v.version = pj.methodology_version
+  where pj.judgment_id = p_j.judgment_id
+    and (p_view = 'latest' or (pj.registered_at <= p_cutoff and exists (
       select 1 from public.judgment_methodology_events ev
-      where ev.methodology_id = p_j.methodology_id and ev.version = p_j.methodology_version and ev.occurred_at <= p_cutoff)))
-$$;
+      where ev.methodology_id = pj.methodology_id and ev.version = pj.methodology_version and ev.occurred_at <= p_cutoff)));
+  return r;
+end $$;
 
 -- §10 / §12.4: one card per (judgment_type, methodology_id, version); issuer subjects include the
 -- issuers merged into p_subject_key (merged_into chain, depth <= 8). as_known: registered_at <=
