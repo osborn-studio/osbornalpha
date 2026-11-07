@@ -66,7 +66,7 @@ def lsum(xs):
     return t
 
 def mean(xs): return None if not xs else lsum(xs) / len(xs)
-def bin_of(p): return min(9, math.floor(p * 10))
+def bin_of(p): return max(i for i in range(10) if i == 0 or p >= i / 10)   # boundary comparisons, not floor(p*10): 0.8999999999999999*10 == 9.0 (G-02)
 
 def ece(pairs):
     if not pairs: return None
@@ -228,6 +228,7 @@ def evaluate(kind, entries, opts):
         if n < thr: state = 'insufficient'
         elif abs(metrics['coverage_gap']) <= emax and ratio is not None and ratio <= 1: state = 'calibrated'
         else: state = 'failed'
+    metrics['n_invalid_endpoint'] = 0; metrics['n_unusable_value'] = 0   # the compact encoding has no invalid endpoints / unusable values
     return {'state': state, **counts, 'metrics': metrics, 'reliability': rel, 'isotonic_segments': iso_segs,
             'selected': sorted(s['id'] for s in ind)}
 
@@ -318,6 +319,28 @@ case('score_ties', 'score', [seq(1, 'industry:sw:2021:801010', 30, lambda i: ((i
 derive('score_insufficient', 'score_ties', [], O(100), 'the same cohort under threshold_n = 100: insufficient')
 case('score_binary', 'score', [seq(1, 'industry:sw:2021:801020', 12, lambda i: i * 5, lambda i: 1 if i >= 6 else 0)], O(5),
      'binary realized metric: tertile hit rates with Wilson')
+
+# --- gate-pinning cases (plan review G-05): new inputs only, same algorithms ---
+def alt(a, b): return lambda i: a if i % 2 == 0 else b
+HY = lambda i: 1 if i % 2 else 0
+case('gate_skill_not_positive', 'probability', [seq(1, 'issuer:S1', 100, lambda i: 0.5, HY)], O(),
+     'n = threshold, holdout 30 >= 20, holdout ECE 0 <= 0.10 but constant p = base rate gives skill exactly 0 -> failed (skill > 0 is part of the gate)')
+case('gate_skill_null', 'probability', [seq(1, 'issuer:S1', 100, lambda i: 0.95, lambda i: HY(i) if i < 70 else 1)], O(),
+     'holdout all hits: climatology 0, brier_skill_holdout null while holdout ECE 0.05 <= 0.10 -> failed, not calibrated')
+case('gate_holdout_small_after_drop', 'probability',
+     [[1, 'issuer:B', 0, 250, 's', 0, 0.7, 1], seq(2, 'issuer:A', 100, A8, Y8, step=3)], O(),
+     '101 independent samples but the 31-sample holdout loses 15 to the boundary overlap drop: 16 < 20 -> holdout metrics null -> insufficient')
+case('gate_holdout_20', 'probability', [seq(1, 'issuer:S1', 64, A8, Y8)], O(60),
+     'n = 64: train 44, holdout exactly 20 = HOLDOUT_MIN -> holdout metrics computed, calibrated')
+derive('gate_holdout_19', 'gate_holdout_20', [64], O(60), 'n = 63: train 44, holdout 19 < 20 -> holdout metrics null -> insufficient')
+K = lambda i: i // 2
+case('gate_ece_equals_max', 'probability',
+     [seq(1, 'issuer:S1', 106, alt(0.25, 0.75), lambda i: (1 if K(i) % 8 == 0 else 0) if i % 2 == 0 else (0 if K(i) % 8 == 0 else 1))], O(100, 0.125),
+     'holdout (32): p 0.25 hit rate 0.125, p 0.75 hit rate 0.875 -> ECE exactly 0.125 = ece_max (binary-exact) and skill 0.5 -> calibrated (<=)')
+case('interval_wide_gap_ok', 'interval',
+     [seq(1, 'issuer:A', 15, lambda i: [RV[i] - 14, RV[i] + 14, 0.8], lambda i: RV[i] if i % 5 else RV[i] + 17),
+      seq(101, 'issuer:B', 15, lambda i: [RV[15 + i] - 14, RV[15 + i] + 14, 0.8], lambda i: RV[15 + i] if i % 5 else RV[15 + i] - 17)], O(20),
+     'coverage 0.8 = nominal (gap 0 <= ece_max) but intervals wider than the empirical quantile baseline (width_ratio > 1) -> failed')
 
 out = {'generator': 'fixtures/judgments/calibration/expected.py', 'algorithm': 'judgments-calibration/1', 'holdout_min': HOLDOUT_MIN,
        'cases': []}

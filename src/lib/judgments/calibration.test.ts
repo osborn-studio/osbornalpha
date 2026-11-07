@@ -6,7 +6,7 @@
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
-import {ALGORITHM_VERSION,HOLDOUT_MIN,addDays,averageRanks,entryOf,evaluateCohort,median,optionsOf,quantile7,selectIndependent,windowEndOf} from './calibration';
+import {ALGORITHM_VERSION,HOLDOUT_MIN,addDays,averageRanks,ece,entryOf,evaluateCohort,median,optionsOf,quantile7,selectIndependent,windowEndOf} from './calibration';
 import type {CohortEntry,Forecast} from './calibration';
 import {envelope,uuidOf} from './testing/envelopes';
 import type {Kind} from './types';
@@ -94,8 +94,99 @@ describe('calibration fixture (independent Python oracle)',()=>{
   expect(run('score_binary').state).toBe('evaluated');
  });
  it('every fixture case is exercised by a test above',()=>{
-  const used=['perfect_forecast','constant_half','constant_half_all_hits','skill_and_bins','ece_holdout','boundary_overlap','macro_daily_91','same_stock_dedup','embargo_0','embargo_2','g01_counterexample','acceptance4_99','acceptance4_100','categorical_calibrated','categorical_failed','interval_failed','interval_calibrated','score_ties','score_insufficient','score_binary'];
+  const used=['perfect_forecast','constant_half','constant_half_all_hits','skill_and_bins','ece_holdout','boundary_overlap','macro_daily_91','same_stock_dedup','embargo_0','embargo_2','g01_counterexample','acceptance4_99','acceptance4_100','categorical_calibrated','categorical_failed','interval_failed','interval_calibrated','score_ties','score_insufficient','score_binary','gate_skill_not_positive','gate_skill_null','gate_holdout_small_after_drop','gate_holdout_20','gate_holdout_19','gate_ece_equals_max','interval_wide_gap_ok'];
   expect(FIXTURE.cases.map(c=>c.name).sort()).toEqual([...used].sort());
+ });
+});
+
+describe('gates pinned by the oracle (review G-05)',()=>{
+ it('skill must be > 0: holdout ECE ok but constant p = base rate (skill 0) fails; null skill (all holdout hits) fails',()=>{
+  const a=run('gate_skill_not_positive');
+  expect(a.state).toBe('failed');
+  expect((a.metrics.temporal_split as {ece_raw_holdout:number}).ece_raw_holdout).toBeLessThanOrEqual(0.1);
+  const b=run('gate_skill_null');
+  expect(b.state).toBe('failed');
+  expect((b.metrics.temporal_split as {brier_skill_holdout:number|null}).brier_skill_holdout).toBeNull();
+ });
+ it('n at threshold but holdout < 20 after the overlap drop → insufficient (holdout metrics null)',()=>{
+  const ev=run('gate_holdout_small_after_drop');
+  expect(ev.n_independent).toBeGreaterThanOrEqual(100);
+  expect(ev.state).toBe('insufficient');
+ });
+ it('holdout exactly 20 is evaluated, 19 is not',()=>{
+  expect((run('gate_holdout_20').metrics.temporal_split as {n_holdout:number}).n_holdout).toBe(20);
+  expect(run('gate_holdout_20').state).toBe('calibrated');
+  expect(run('gate_holdout_19').state).toBe('insufficient');
+ });
+ it('holdout ECE exactly equal to ece_max passes (≤)',()=>{
+  const ev=run('gate_ece_equals_max');
+  expect((ev.metrics.temporal_split as {ece_raw_holdout:number}).ece_raw_holdout).toBe(0.125);
+  expect(ev.state).toBe('calibrated');
+ });
+ it('interval: coverage gap within ece_max but width_ratio > 1 → failed',()=>{
+  const ev=run('interval_wide_gap_ok');
+  expect(Math.abs(ev.metrics.coverage_gap as number)).toBeLessThanOrEqual(0.1);
+  expect(ev.metrics.width_ratio as number).toBeGreaterThan(1);
+  expect(ev.state).toBe('failed');
+ });
+});
+
+describe('review fixes',()=>{
+ const O={threshold_n:100,ece_max:0.1,embargo_days:0};
+ const cond=(base:string)=>({resolver:'price_return' as const,params:{ticker:'600519',market:'A' as const,adjustment:'qfq' as const,source:'eastmoney' as const,base_date:base},predicate:{op:'>' as const,rhs:0},text:{zh:'涨',en:'up'}});
+ const priceEnv=(n:number,realized:Record<string,unknown>)=>{
+  const as=addDays('2025-01-01',n*10);
+  return envelope({judgment:{n,as_of:as,condition:cond(as),target:{kind:'session_index',base_date:as,n:5}},settlement:{resolver:'price_return',outcome:n%2?'hit':'miss',realized:{value:0.02,unit:'ratio',from:as,to:null,label_policy:'first_observed',...realized} as never}});
+ };
+ it('G-01: settled price rows without a usable realized.to are not samples and are counted',()=>{
+  const entries=Array.from({length:100},(_,i)=>entryOf(priceEnv(i+1,{to:null}))!);
+  expect(entries[0].invalid_endpoint).toBe(true);
+  const ev=evaluateCohort('probability',entries,O);
+  expect(ev.n_independent).toBe(0);
+  expect(ev.state).not.toBe('calibrated');
+  expect(ev.metrics.n_invalid_endpoint).toBe(100);
+  const bad=entryOf(priceEnv(1,{to:'soon'}))!;
+  expect(bad.invalid_endpoint).toBe(true);
+  expect(entryOf(priceEnv(2,{to:'2025-02-01'}))!.invalid_endpoint).toBeFalsy();
+ });
+ it('G-02: bins use boundary comparisons — adjacent representable floats around 0.9 split bins',()=>{
+  expect(ece([{p:0.8999999999999999,y:1},{p:0.9,y:0}])).toBeCloseTo(0.5,12);
+  expect(ece([{p:1,y:1}])).toBe(0);
+ });
+ it('G-03: confusion keys that collide with Object.prototype are plain keys',()=>{
+  const mk=(id:number,sel:string,y:string):CohortEntry=>({judgment_id:uuidOf(id),subject_type:'issuer',subject_key:`k${id}`,market:null,as_of:'2026-01-01',window_end:'2026-01-02',retrospective:false,lifecycle:'settled',settlement_id:null,forecast:{kind:'categorical',selected:sel,margin_pp:null},y});
+  const ev=evaluateCohort('categorical',[mk(1,'constructor','__proto__'),mk(2,'constructor','__proto__'),mk(3,'__proto__','constructor'),mk(4,'a','a')],{...O,threshold_n:1});
+  const conf=ev.metrics.confusion as Record<string,Record<string,number>>;
+  expect(Object.keys(conf).sort()).toEqual(['__proto__','a','constructor']);
+  expect(Object.keys(conf.constructor)).toEqual(['__proto__']);
+  expect(Object.entries(conf.constructor)[0][1]).toBe(2);
+  expect(Object.entries(conf['__proto__'])[0]).toEqual(['constructor',1]);
+  expect(ev.metrics.majority_class).toBe('__proto__');
+ });
+ const iv=(id:number,up:boolean,pUp:number):CohortEntry=>({judgment_id:uuidOf(id),subject_type:'issuer',subject_key:`k${id}`,market:null,as_of:'2026-01-01',window_end:'2026-01-02',retrospective:false,lifecycle:'settled',settlement_id:null,
+  forecast:{kind:'interval',low:-1,high:1,nominal_coverage:0.8,scenarios:[{label:'up',p:pUp,value:0.05},{label:'down',p:1-pUp,value:-0.05}]},y:up?0.03:-0.03,scenario_up:up});
+ it('G-04: scenarios are preserved by entryOf and evaluated per scenario; they never change the interval state',()=>{
+  const e=entryOf(envelope({judgment:{kind:'interval',claim:{metric:'r',low:-0.1,high:0.1,unit:'ratio',nominal_coverage:0.8,scenarios:[{label:'up',p:0.7,value:0.05},{label:'down',p:0.3,value:-0.05}]},condition:{resolver:'fact_metric',params:{issuer_id:'x',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',unit:'u',input_unit:'u',basis:'b',formula_version:'v',compare:'yoy'},predicate:{op:'>',rhs:0},text:{zh:'x',en:'x'}}},settlement:{realized:{value:0.04,unit:'ratio',from:null,to:null,label_policy:'first_observed'}}}))!;
+  expect(e.forecast).toMatchObject({kind:'interval',scenarios:[{label:'up',p:0.7},{label:'down',p:0.3}]});
+  expect(e.scenario_up).toBe(true);
+  const mk=(pUp:number)=>evaluateCohort('interval',[iv(1,true,pUp),iv(2,true,pUp),iv(3,false,pUp)],{...O,threshold_n:1});
+  const a=mk(0.7),b=mk(0.3);
+  const sa=a.metrics.scenarios as Record<string,{n:number;brier:number;ece_raw:number}>,sb=b.metrics.scenarios as Record<string,{n:number;brier:number}>;
+  expect(sa.up.n).toBe(3);
+  expect(sa.up.brier).toBeCloseTo((0.09+0.09+0.49)/3,12);
+  expect(sb.up.brier).toBeCloseTo((0.49+0.49+0.09)/3,12);
+  expect(sa.up.brier).not.toBeCloseTo(sb.up.brier,6);
+  expect(sa.down.brier).toBeCloseTo(sa.up.brier,12);
+  expect(a.state).toBe(b.state);
+  expect(Object.keys(sa.up).sort()).toEqual(['brier','brier_climatology','brier_skill','ece_raw','n','reliability']);
+  expect(evaluateCohort('interval',[{...iv(1,true,0.7),forecast:{kind:'interval',low:-1,high:1,nominal_coverage:0.8}}],{...O,threshold_n:1}).metrics).not.toHaveProperty('scenarios');
+ });
+ it('item 6: settled rows with an unusable realized value are counted, not sampled',()=>{
+  const bad=entryOf(envelope({judgment:{kind:'categorical',claim:{selected:'recovery',classes:['recovery','overheat'],scores_are_not_probabilities:true}},settlement:{realized:{value:true,unit:null,from:null,to:null,label_policy:'cutoff_vintage'}}}))!;
+  expect(bad.y).toBeNull();
+  const ev=evaluateCohort('categorical',[bad],{...O,threshold_n:1});
+  expect(ev.metrics.n_unusable_value).toBe(1);
+  expect(ev.n_independent).toBe(0);
  });
 });
 

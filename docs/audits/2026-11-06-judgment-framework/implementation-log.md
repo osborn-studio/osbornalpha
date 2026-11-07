@@ -72,3 +72,7 @@
 - NVDA 另有一笔每股 0.01 美元季度股息（除息日 2024-06-11），落在事件后窗口内；其对 hfq 比率（≈ 0.01/121 ≈ 8e-5）的影响低于 2e-4 容差，未影响 hfq 判定；qfq 的侧内偏移（−0.57 常数）正是这类累积股息调整的表现，该行因此保持 unverified。
 - 夹具：fixtures/judgments/kline/eastmoney-A-600519_SH-2024-06-19.json、eastmoney-HK-00700_HK-2024-05-17.json、eastmoney-US-NVDA-2024-06-10.json。
 - 能力表：eastmoney A qfq、HK qfq、US hfq 三行 verified；其余九行 unverified。O6 待 owner：A / HK hfq、US qfq 与全部 datagateway 行未验证（datagateway 需在有配置的环境补录）；使用这些组合的价格判断在 v1 一律 void(adjustment_unsupported)。
+
+## Task 15 review fixes（校准数学，G-01..G-05）
+- G-01：已结算 price_return 的 `realized.to` 缺失 / 不可解析 → 不再退回 ceil(n×1.52) 估计，样本排除并计入 `metrics.n_invalid_endpoint`；G-02：分箱改为边界比较（Python 预言机同步，既有 20 个用例输出不变）；G-03：混淆矩阵两层用无原型对象；G-04：interval `scenarios` 保留并在 `metrics.scenarios` 做逐情景 probability 评估（up ⇔ condition.predicate 成立，无数值谓词时 realized ≥ 0；不进 interval 状态）；条目 6：`metrics.n_unusable_value`。
+- 预言机：每个用例的 metrics 增加常量 `n_invalid_endpoint=0`、`n_unusable_value=0`（编码里没有此类行）；新增 7 个门控用例（技能≤0、技能 null、重叠剔除后留出不足、留出 20/19、ECE=ece_max、interval 宽度比>1）。变异检验：删除 `hsk>0`、`he===null`、`ratio<=1`、`≤`→`<` 各使至少 1 个测试失败。

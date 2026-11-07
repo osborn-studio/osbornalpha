@@ -6,7 +6,7 @@
 // fixtures/judgments/calibration/expected.py (an independent Python oracle), never from this file.
 import {applyIsotonic,isotonicFit,wilson} from '../research/fanout/calibration';
 import type {IsotonicSegment} from '../research/fanout/calibration';
-import type {CalibrationState,Envelope,JudgmentRow,Kind,PriceMarket,ReliabilityBin,SettlementRow,Target,Claim,ProbabilityClaim,CategoricalClaim,ScoreClaim,IntervalClaim} from './types';
+import type {CalibrationState,Envelope,JudgmentRow,Kind,PriceMarket,ReliabilityBin,Scenario,SettlementRow,Target,Claim,ProbabilityClaim,CategoricalClaim,ScoreClaim,IntervalClaim} from './types';
 
 export const ALGORITHM_VERSION='judgments-calibration/1';
 /** Holdout = the last 30% by as_of: train = floor(7n/10) (integer arithmetic, no float rounding). */
@@ -20,9 +20,13 @@ export type Forecast=
  |{kind:'probability';p:number}
  |{kind:'categorical';selected:string;margin_pp:number|null}
  |{kind:'score';value:number}
- |{kind:'interval';low:number;high:number;nominal_coverage:number};
+ |{kind:'interval';low:number;high:number;nominal_coverage:number;scenarios?:Scenario[]};
 /** One active registration of the cohort (spec §8.2). y: probability 0|1, categorical realized class, score/interval realized number; null unless settled. */
-export interface CohortEntry{judgment_id:string;subject_type:string;subject_key:string;market:PriceMarket|null;as_of:string;window_end:string;retrospective:boolean;lifecycle:CohortLifecycle;settlement_id:string|null;forecast:Forecast;y:number|string|null}
+export interface CohortEntry{judgment_id:string;subject_type:string;subject_key:string;market:PriceMarket|null;as_of:string;window_end:string;retrospective:boolean;lifecycle:CohortLifecycle;settlement_id:string|null;forecast:Forecast;y:number|string|null;
+ /** Settled price_return whose frozen realized.to is missing / unparseable: not a sample (review G-01). */
+ invalid_endpoint?:boolean;
+ /** Interval scenarios: whether the realized value fell on the 'up' side (the condition predicate holds; without a numeric predicate, realized ≥ 0). */
+ scenario_up?:boolean}
 export interface EvaluatedEntry extends CohortEntry{group:string;sample:boolean;selected_for_independent:boolean}
 export interface CalibrationOptions{threshold_n:number;ece_max:number;embargo_days:number}
 export interface Evaluation{
@@ -68,24 +72,43 @@ function forecastOf(kind:Kind,claim:Claim):Forecast{
   case 'probability':return {kind,p:(claim as ProbabilityClaim).p};
   case 'categorical':{const c=claim as CategoricalClaim;return {kind,selected:c.selected,margin_pp:typeof c.margin_pp==='number'?c.margin_pp:null};}
   case 'score':return {kind,value:(claim as ScoreClaim).value};
-  case 'interval':{const c=claim as IntervalClaim;return {kind,low:c.low,high:c.high,nominal_coverage:c.nominal_coverage};}
+  case 'interval':{const c=claim as IntervalClaim;return {kind,low:c.low,high:c.high,nominal_coverage:c.nominal_coverage,...(c.scenarios?{scenarios:c.scenarios}:{})};}
  }
 }
 function realizedY(kind:Kind,s:SettlementRow):number|string|null{
- if(kind==='probability')return s.outcome==='hit'?1:0;
+ if(kind==='probability')return s.outcome==='hit'?1:s.outcome==='miss'?0:null;
  const v=s.realized?.value;
  if(kind==='categorical')return typeof v==='string'?v:s.realized?.label??null;
  if(typeof v==='boolean')return v?1:0;
  return typeof v==='number'&&Number.isFinite(v)?v:null;
 }
 const ISO_DATE=/^\d{4}-\d{2}-\d{2}$/;
+function predicateHolds(c:JudgmentRow['condition'],y:number):boolean{
+ const p=c&&'predicate' in c?c.predicate:null;
+ if(p&&typeof p.rhs!=='undefined'&&p.op!=='eq'){
+  const r=p.rhs;
+  switch(p.op){
+   case '>':return typeof r==='number'&&y>r;
+   case '>=':return typeof r==='number'&&y>=r;
+   case '<':return typeof r==='number'&&y<r;
+   case '<=':return typeof r==='number'&&y<=r;
+   case 'between':return Array.isArray(r)&&y>=r[0]&&y<=r[1];
+  }
+ }
+ return y>=0;
+}
 /** The actually settled window end (spec §8.2 第 7 稿; plan audit P1-09): a settled price_return judgment ends at its
  *  frozen end bar (realized.to, the date the resolver's evidence ends on); every other judgment — and any price
  *  settlement without a usable realized.to — uses the target-derived windowEndOf. */
-export function settledWindowEndOf(j:JudgmentRow,s:SettlementRow|null):string{
- const to=s&&s.kind==='settled'&&j.condition?.resolver==='price_return'?s.realized?.to??null:null;
- return typeof to==='string'&&ISO_DATE.test(to)?to:windowEndOf(j.target!);
+export function settledEndpointOf(j:JudgmentRow,s:SettlementRow|null):{window_end:string;valid:boolean}{
+ if(s&&s.kind==='settled'&&j.condition?.resolver==='price_return'){
+  const to=s.realized?.to;
+  // No valid frozen end bar: the scan estimate is not a substitute (review G-01) — the row is flagged and never sampled.
+  return typeof to==='string'&&ISO_DATE.test(to)&&!Number.isNaN(Date.parse(`${to}T00:00:00.000Z`))?{window_end:to,valid:true}:{window_end:windowEndOf(j.target!),valid:false};
+ }
+ return {window_end:windowEndOf(j.target!),valid:true};
 }
+export const settledWindowEndOf=(j:JudgmentRow,s:SettlementRow|null):string=>settledEndpointOf(j,s).window_end;
 /** Envelope (calibration_cohort row) → cohort entry; abstained rows are not in the cohort (null). */
 export function entryOf(e:Envelope):CohortEntry|null{
  const j=e.judgment;
@@ -93,12 +116,15 @@ export function entryOf(e:Envelope):CohortEntry|null{
  const s=e.settlement;
  const lifecycle:CohortLifecycle=!s||s.kind==='reopened'?'open':s.kind;
  const c=j.condition;
+ const y=lifecycle==='settled'&&s?realizedY(j.kind,s):null;
+ const ep=settledEndpointOf(j,s);
  return {
   judgment_id:j.judgment_id,subject_type:j.subject_type,subject_key:j.subject_key,
   market:c&&c.resolver==='price_return'?c.params.market:null,
-  as_of:j.as_of,window_end:settledWindowEndOf(j,s),retrospective:j.retrospective,lifecycle,
+  as_of:j.as_of,window_end:ep.window_end,retrospective:j.retrospective,lifecycle,
   settlement_id:s?.settlement_id??null,forecast:forecastOf(j.kind,j.claim),
-  y:lifecycle==='settled'&&s?realizedY(j.kind,s):null,
+  y,...(ep.valid?{}:{invalid_endpoint:true}),
+  ...(j.kind==='interval'&&typeof y==='number'?{scenario_up:predicateHolds(c,y)}:{}),
  };
 }
 
@@ -123,7 +149,8 @@ export function selectIndependent(samples:CohortEntry[],embargoDays:number):Set<
 
 const sum=(xs:number[])=>xs.reduce((a,b)=>a+b,0);
 const mean=(xs:number[]):number|null=>xs.length===0?null:sum(xs)/xs.length;
-const binOf=(p:number)=>Math.min(RELIABILITY_BINS-1,Math.floor(p*RELIABILITY_BINS));
+/** Largest i with p ≥ i/10 (boundary comparisons: Math.floor(p×10) misplaces 0.8999999999999999, whose product is exactly 9; p = 1 → last bin). */
+const binOf=(p:number)=>{let b=0;for(let i=1;i<RELIABILITY_BINS;i++)if(p>=i/RELIABILITY_BINS)b=i;return b;};
 interface Pair{p:number;y:number}
 const pairOf=(e:CohortEntry):Pair=>({p:(e.forecast as {p:number}).p,y:e.y as number});
 /** ECE = Σ_b (n_b/n)·|mean_p_b − hit_rate_b| over 10 equal bins; null for no pairs. */
@@ -185,8 +212,8 @@ function categorical(ind:CohortEntry[],samples:CohortEntry[],o:CalibrationOption
  for(const e of ind)freq.set(e.y as string,(freq.get(e.y as string)??0)+1);
  let maj:string|null=null;
  for(const [c,cnt] of freq)if(maj===null||cnt>freq.get(maj)!||(cnt===freq.get(maj)&&c<maj))maj=c;
- const confusion:Record<string,Record<string,number>>={};
- for(const e of ind){const row=(confusion[sel(e)]??={});row[e.y as string]=(row[e.y as string]??0)+1;}
+ const confusion:Record<string,Record<string,number>>=Object.create(null);   // null-prototype at both levels: classes may be named 'constructor' / '__proto__'
+ for(const e of ind){const row=(confusion[sel(e)]??=Object.create(null) as Record<string,number>);row[e.y as string]=(row[e.y as string]??0)+1;}
  const margin_bins=MARGIN_BINS.map(([lo,hi])=>{
   const inb=ind.filter(e=>{const m=margin(e);return m!==null&&(lo===0||m>=lo)&&(hi===100||m<hi);});
   const kb=sum(inb.map(hit)),wb=wilson(kb,inb.length);
@@ -251,6 +278,21 @@ export function median(values:number[]):number|null{
  const xs=[...values].sort((a,b)=>a-b),m=Math.floor(xs.length/2);
  return xs.length%2?xs[m]:(xs[m-1]+xs[m])/2;
 }
+/** Per-scenario probability report (spec §8.1): the 'up' scenario's p against whether the realized value fell on the up side, 'down' against the complement. */
+function scenarioReport(ind:CohortEntry[]):Record<string,unknown>|null{
+ const out:Record<string,unknown>=Object.create(null);
+ for(const label of ['up','down'] as const){
+  const pairs:Pair[]=[];
+  for(const e of ind){
+   const sc=e.forecast.kind==='interval'?e.forecast.scenarios?.find(x=>x.label===label):undefined;
+   if(sc&&typeof e.scenario_up==='boolean')pairs.push({p:sc.p,y:(label==='up')===e.scenario_up?1:0});
+  }
+  if(pairs.length===0)continue;
+  const b=brierParts(pairs);
+  out[label]={n:pairs.length,brier:b.brier,brier_climatology:b.climatology,brier_skill:b.skill,ece_raw:ece(pairs),reliability:reliabilityBins(pairs)};
+ }
+ return Object.keys(out).length?out:null;
+}
 function interval(ind:CohortEntry[],samples:CohortEntry[],o:CalibrationOptions):KindResult{
  const f=(e:CohortEntry)=>e.forecast as {low:number;high:number;nominal_coverage:number};
  const covered=(e:CohortEntry)=>f(e).low<=(e.y as number)&&(e.y as number)<=f(e).high?1:0;
@@ -266,19 +308,23 @@ function interval(ind:CohortEntry[],samples:CohortEntry[],o:CalibrationOptions):
  const gap=coverage===null||nominal===null?null:coverage-nominal;
  const metrics={n_total:samples.length,coverage,coverage_wilson:{low:w.low,high:w.high},nominal_coverage:nominal,coverage_gap:gap,width_median:wm,baseline_width_median:bm,width_ratio:ratio,correlated:{n:samples.length,coverage:mean(samples.map(covered))}};
  const state=n<o.threshold_n?'insufficient':gap!==null&&Math.abs(gap)<=o.ece_max&&ratio!==null&&ratio<=1?'calibrated':'failed';
- return {state,metrics,reliability:[],isotonic_segments:null};
+ const scenarios=scenarioReport(ind);
+ // Scenario probabilities are reported only; they never enter the interval gate (review G-04).
+ return {state,metrics:scenarios?{...metrics,scenarios}:metrics,reliability:[],isotonic_segments:null};
 }
 
 /** The whole report for one cohort (spec §8.1 + §8.2): counts, metrics, reliability, isotonic, state, entries. */
 export function evaluateCohort(kind:Kind,entries:CohortEntry[],o:CalibrationOptions):Evaluation{
  const settled=entries.filter(e=>e.lifecycle==='settled');
- const samples=settled.filter(e=>!e.retrospective&&e.y!==null);
+ const samples=settled.filter(e=>!e.retrospective&&e.y!==null&&!e.invalid_endpoint);
  const chosen=selectIndependent(samples,o.embargo_days);
  const ind=samples.filter(s=>chosen.has(s.judgment_id)).sort(byAsOf);
  const r=kind==='probability'?probability(ind,samples,o):kind==='categorical'?categorical(ind,samples,o):kind==='score'?score(ind,samples,o):interval(ind,samples,o);
  const sampleIds=new Set(samples.map(s=>s.judgment_id));
+ const counted=settled.filter(e=>!e.retrospective);
  return {
   ...r,
+  metrics:{...r.metrics,n_invalid_endpoint:counted.filter(e=>e.invalid_endpoint).length,n_unusable_value:counted.filter(e=>e.y===null).length},
   n_registered:entries.length,n_settled:settled.length,n_independent:ind.length,
   n_void:entries.filter(e=>e.lifecycle==='void').length,n_retrospective_excluded:settled.filter(e=>e.retrospective).length,
   entries:[...entries].sort((a,b)=>a.judgment_id<b.judgment_id?-1:a.judgment_id>b.judgment_id?1:0)
