@@ -128,3 +128,33 @@
 **时间戳说明。** 夹具 meta 的 `fetched_at` 是脚本取响应时 `new Date().toISOString()` 的 UTC 值：2026-11-07T01:24Z；本机当时 `date -u` 为 2026-11-07 01:31（PST 为 2026-11-06 17:31），所以正确，对应上文标题里的本地日期 2026-11-06。
 
 **保留事项。** 只核对了两只 A 股的整历史与两个报告期的全市场形状；北交所（`.BJ`）未单独抽查。
+
+## 日历冒烟（2026-11-07 UTC，Task 20，真实 SEC，无库写入）
+
+命令（均 `--no-db`，默认 SEC User-Agent `DEFAULT_USER_AGENT`——本机无 `EDGAR_USER_AGENT`；sec.gov 全部 200）：
+
+- `node --import tsx scripts/dq/filer-categories.ts --no-db --cik 320193 --cik 909832 --cik 104169`：退出码 0；`counts`：fetched 9 / inserted 9 / failed 0，`errors: []`；三家各 3 行（FY2024–FY2026）全部 `large_accelerated`（来源 `ixbrl_dei`）；`reconciliations`（`sec.filer_category`）3 条均 `passed:true`。
+- `node --import tsx scripts/dq/calendar-sync.ts --market US --no-db --cik 320193 --cik 909832 --cik 104169`：退出码 0；`errors: []`；每家 6 行。表中"差"= 本规则期末 − SEC submissions 同报告的 `reportDate`（另取 `data.sec.gov/submissions/CIK….json` 的 `recent` 列独立核对）。
+
+| 发行人 | 报告 | 规则期末（实际/估计） | SEC `reportDate` | 差（天） | 行状态 |
+|---|---|---|---|---|---|
+| AAPL | 10-K FY2026 | 2026-10-03（估计） | 2026-09-26 | +7 | filed_not_ingested |
+| AAPL | 10-Q | 2026-06-27（估计） | 2026-06-27 | 0 | filed_not_ingested |
+| AAPL | 10-Q | 2026-03-28（估计） | 2026-03-28 | 0 | filed_not_ingested |
+| AAPL | 10-Q | 2026-01-03（估计） | 2025-12-27 | +7 | filed_not_ingested |
+| AAPL | 10-K FY2025 | 2025-09-27（估计） | 2025-09-27 | 0 | filed_not_ingested |
+| AAPL | 10-Q | 2025-06-28（估计） | 2025-06-28 | 0 | filed_not_ingested |
+| COST | 10-K FY2026 | 2026-08-30（估计） | 2026-08-30 | 0 | filed_not_ingested |
+| COST | 10-Q Q3 | 2026-05-31（估计，月末基准） | 2026-05-10 | +21 | **pending**（未匹配，`estimated_due_passed=true`；SEC 已于 2026-06-03 申报） |
+| COST | 10-Q Q2 | 2026-02-22（估计） | 2026-02-15 | +7 | filed_not_ingested |
+| COST | 10-Q Q1 | 2025-11-30（估计） | 2025-11-23 | +7 | filed_not_ingested |
+| COST | 10-K FY2025 | 2025-08-31（估计） | 2025-08-31 | 0 | filed_not_ingested |
+| COST | 10-Q Q3 | 2025-05-31（估计，月末基准） | 2025-05-11 | +20 | **pending**（同上） |
+| WMT | 6 行（10-K 2026-01-31；10-Q 2025-10-31、2026-04-30、2026-07-31、2025-07-31、2026-10-31） | 全部实际月末，无估计行 | 逐期相同 | 0 | 5 行 filed_not_ingested；10-Q 2026-10-31 `pending`（法定期限 2026-12-10 未到） |
+
+结论（规格三 §14 第 5 问：±7 天是否足够）：
+- AAPL（52/53 周）与 COST 的年报：估计偏差 0–7 天，匹配成功；AAPL 的 10-K 与首季度 10-Q、COST 的 Q1/Q2 恰为 +7，处在 ±7 的边界上。
+- **COST 第三季度估计偏差 20–21 天，超出 ±7**：规则以月末（05-31）作基准，无法跟随 12/12/12/16 周的季度网格，行停在 `pending` 且标 `estimated_due_passed`，不计逾期（不产生假 overdue）。±7 天对 12/12/12/16 周型申报人不够；已作为已知限制登记（规格三 §15.2、runbook 9.8），不为此改规则。
+- WMT（月末财年末 01-31）无估计行，期限均为法定值；AAPL 的 10-K `fiscalYearEnd` 0926 与实际期末一致。
+
+对账 US pair 冒烟：`scripts/dq/reconcile.ts` 没有无库模式（它需要库里已有同步好的事实与样本清单），记"US 对账冒烟需 owner 环境（已同步的 facts.us + 样本清单），见 runbook 9.2 第 8 步"，不为此改脚本。

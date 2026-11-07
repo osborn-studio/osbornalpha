@@ -709,4 +709,73 @@ export const DQ_DATASET_INVENTORY: readonly {dataset; producer; cadence:Cadence}
 
 ## 15. 实施记录与偏差
 
-（计划三落地后补记，格式同规格一 §14。预先登记的接受限制：52/53 周申报人的期末为估计值直至收到申报，且估计行不计逾期；对账右侧不确定性只按印刷/标注精度建区间，且舍入印刷的不一致不自动隔离；换码生效日只来自人工声明，脚本只记观测界。）
+实施计划：`docs/superpowers/plans/2026-11-05-data-foundation-3-identifiers-and-reconciliation.md`；实施日志：`docs/audits/2026-11-05-data-foundation-3/implementation-log.md`；核对记录：`docs/audits/2026-11-05-data-foundation-3/verification.md`；运行手册：`docs/runbooks/data-foundation.md` 第 9 章。
+
+预先登记的接受限制：52/53 周申报人的期末为估计值直至收到申报，且估计行不计逾期；对账右侧不确定性只按印刷/标注精度建区间，且舍入印刷的不一致不自动隔离；换码生效日只来自人工声明，脚本只记观测界。
+
+本节列出实施中与正文不一致之处；未列出者无偏差。来源：实施日志各任务行、计划"接口对齐记录"#69–74（执行期指挥者裁决）、实施期遗留清单。
+
+### 15.1 数据模型与 SQL
+
+迁移一/二在合并前原地修改（锁文件 sha 随之更新）；下列函数/列为规格 §3.1 清单之外的新增或改签名。
+
+| 条款 | 偏差 | 原因 | 位置 |
+|---|---|---|---|
+| §3.1 函数清单 | 新增 `set_security_window`（持有区间与 delisting 回填）、`patch_security_provenance`、`close_security_absent`（换码关闭，标记校验）、`set_issuer_identifier`、`set_security_identifier`（守卫写 ISIN/FIGI，同一 UPDATE 按键合并 provenance）、`append_claim_evidence`、`patch_quarantine_detail`（行锁 jsonb 补丁，带 `p_expect_hook_at` CAS） | Codex 审计：读后整体替换丢并发证据/覆盖较新结果、provenance 覆盖丢失、钩子完成覆盖新 pending | 迁移一，`src/lib/db/table-client.ts::callRpc` |
+| §3.2 `resolve_facts_quarantine` | 对 `reconcile_mismatch`/`lineage_conflict` 拒绝（22023 `use_dedicated_resolver`），路由映射 409；`restore_reconciled`/`resolve_lineage_conflict` 另映射 `target_not_active`（P0001）等错误码 | 通用入口会绕过恢复哈希与谱系裁决 | 迁移二、`facts-resolver.ts`、quarantine 路由 |
+| §3.2 周期 | 迁移二新增 `settle_reconcile_cycle`、`record_cycle_freshness`、`open_reconcile_cycle(p_pair,p_cycle_id,p_started_at,p_members,p_pending)`；`pending_members` 元素为 `{issuer_id,market,source}`；`dq_reconcile_cycle:<pair>` advisory 锁必须先于任何行锁（`set_merge` 最先取，`set_dissolved` 不取） | 计划审计 Q2/R1：建周期丢并发登记、与合并死锁 | 迁移二 §12–14、接口对齐记录 #64、#66 |
+| 接口对齐 #73 | `replace_filing_expectations` 改 5 参 `(p_issuer,p_market,p_rows,p_pass_token,p_profile jsonb default null)`，旧 4 参删除；档案在令牌/租约/成员校验后同事务 upsert，TS 不再单独写档案 | 档案写入绕过日历遍栅栏（Codex 18a P2） | 迁移一 |
+| 接口对齐 #74 | 新增 `dq_reconcile_failed_counts() returns table(pair,failed)`（`distinct on (pair,natural_key)` 取最新行）与索引 `dq_reconciliations_pair_key_latest_idx`；`restorable` 实时核对每次加载至多 25 次、并发 4、按请求记忆，超限行 `restorable:false, restorable_checked:false` | 每次看板加载下载全部对账历史（Codex 19a P2） | 迁移一、`/api/admin/dq` |
+| §3.2 `fact_promote_rows` / 守卫测试 | 迁移二重放全套件用串行化咨询锁；重放事务 `deadlock_timeout=50ms`；拓扑守卫测试改用无引用方新发行人 | 并发测试死锁、测试隔离 | `*.integration.test.ts` |
+| §4.1.2 raw 桶 | `reconcile-raw` 桶与 `RawContentType` 增 `application/vnd.ms-excel`→`xls` | HKEX 两份名单是 OLE `.xls`，不是 xlsx（实测） | 迁移一、`raw-store.ts` |
+
+### 15.2 日历（F3-7）
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 |
+|---|---|---|---|---|
+| 2026-11-05 | §6.1 封面类别解析顺序 | 先判 "non-accelerated"，再 "large accelerated"，再 "accelerated filer"；不识别无连字符 "nonaccelerated"（SEC 封面均为 "Non-accelerated Filer"） | "Non-accelerated Filer" 也含 "accelerated filer"，按正文顺序会误判 | `src/lib/dq/filer-categories.ts` |
+| 2026-11-05 | §6.1 "最近 6 个已结束报告期" | 先按适用报告种类过滤再取槽：10-K/CN 以年报月为锚的季度槽；20-F/40-F 只有年报，槽距 12 个月（接口对齐 #62） | 计划审计 P6：年报-only 发行人也得 6 个已结束期 | `calendar.ts::computeExpectations`、`filingsWindowStart` |
+| 2026-11-06 | §6.1 52/53 周估计 | 下一期估计 = 上期实际 + 364 天 = c，在 {c, c+7} 中取离年度锚月月末更近者（平局取 c）；锚月经 `nearestMonthEnd` 归一；回退锚（无已收年报）同样归一；先把上游证据配到槽再选 6 个已结束槽（接口对齐 #69–71）。计划原文"出锚月再 +7"对次月月初结账者错 7 天 | 17a 质量审查与 Codex P2 | `calendar.ts` |
+| 2026-11-05 | §6.1 "最近观测到的同类实际 period_end" | 观测集合 = 已收到的 filing ∪ SEC submissions 同 form 的 `reportDate`；无观测 → 该槽月末作估计；锚月以最近一份已收年报的实际期末优先于 `fiscalYearEnd`，不一致标 `detail.fye_mismatch` | submissions 是一手来源 | `estimatePeriodEnd` |
+| 2026-11-06 | §6.1 Rule 0-3 | `SEC_HOLIDAYS` 覆盖 2021–2027（OPM 观察日）+ `SEC_CLOSURES`；表外年份 `no_rule`（`none.holiday_table_missing/1`）；`rollForward` 超出 15 天上限抛错（#72）。**2021–2025 未经 OPM 复核**（OPM 页面只列当前及后续年份），`SEC_CLOSURES` 的 2025-01-09 未证实 | 不猜日期；20-F 早期财年不应落 `no_rule` | `calendar.ts`、`verification.md` |
+| 2026-11-05 | §6.1 20-F "财年末后 4 个月" | 月末期末 → 4 个月后的月末；非月末 → 同日（超出月长取月末） | 正文未定义 | `addMonthsAnchored` |
+| 2026-11-05 | §6.1 US `upstream_lookup` | 按期间判覆盖（#65）：`最早 filingDate < period_end` 为已覆盖；未覆盖但有正证据的行保持原行，未覆盖且无证据的 `pending`/`overdue` 行改 `unknown_upstream` + `upstream_incomplete` | 一个老期间不应拖垮全部行 | `applyUpstreamCoverage` |
+| 2026-11-06 | §6.1 CN `disclosure_date` | 先以 `CN_DISCLOSURE_VERIFIED=false` 门控；2026-11-06 用真实 Tushare 响应（600519.SH、000333.SZ，TUSHARE_TOKEN 已可用）核对 `actual_date`=实际披露日、`modify_date`=预约修订时间戳、`ann_date`=预约记录日后翻 `true`。响应缺列/`data:null` → `bad_shape`，`has_more` → `unavailable`；**无排期行的 CN 槽保持 `unknown_upstream`，不按法定期限判 overdue**（取代 18b 初版的相反行为）。北交所未抽查 | 正文要求真实响应核实语义；offset 分页在并列行上不稳定 | `calendar-sync.ts`、`verification.md` |
+| 2026-11-05 | §6.2 档案 | submissions 不可用时用已存档案计算（行均 `unknown_upstream`）；无档案 → 不出行（回执 `no_profile`） | 期限规则只依赖档案与类别 | `calendar-sync.ts` |
+| 2026-11-05 | §6.2 cron | CN 日历 cron 不受 `FACTS_CN_ENABLED` 门控 | 日历只计算法定节点并如实显示不可查 | `filing-calendar/route.ts` |
+| 2026-11-05 | §7 看板行 | 日历行 `detail.display={ticker,name}` 由写入端提供 | `TableClient` 无联表 | `calendar-sync.ts`、`dashboard-blocks.ts` |
+| 2026-11-06 | 预览 | `--no-db`/预览模式的原始响应经注入的内存 raw store，不碰生产桶 | Codex 18b P2 | `calendar-sync.ts` |
+
+已知限制：（1）52/53 周申报人（Costco 12/12/12/16 周）10-Q 期末不按月末网格，日历规则对其季报期望偏差可达约 3 周，10-Q 行可能停在 `pending`，年报不受影响（2026-11-07 冒烟实测 COST 第三季度差 21 天，见 `verification.md`）；（2）`issuer_filer_categories` 无可排序列（仅 `as_of`=运行日），并发两个 filer-categories 运行时较旧快照可能覆盖同财年较新 10-K 的类别，后续项为加 `accepted_at`/`filing_date` 列与条件写。
+
+### 15.3 标识符、事实扩展、对账（F3-1…F3-6）
+
+| 条款 | 偏差 | 原因 | 位置 |
+|---|---|---|---|
+| §4.1.1 HKEX 名单 | 工作表声明的 `<dimension>` 是 `A1:R8`（实际 `A1:R17083`），以 `nodim:true` 读取；ISINs-assigned 两份 `.xls` 列名为 `HK Stock Code`/`Stocks`；占位值（`Not Available` 等）= 无 ISIN 不计拒绝；合并后 16 个 `-OLD` 并行柜台剔除（`superseded_counter`） | 实测表头 | `parseHkexList`、`mergeHkexIsins` |
+| §4.1.2 OpenFIGI | 无 API key 实测，`EXCH_MAP_VERIFIED=true`；腾讯 ISIN 另映射 `80700.HK`/`TCTZF`，适配器不选场所，调用方按待挂接 ticker 取候选；`OPENFIGI_API_KEY` 不可用，生产按 25 请求/分钟 | 决策 A 前的无 key 路径 | `openfigi.ts`、`verification.md` |
+| §4.1.5 / 规格一 §3.2 | A 股 ISIN 不由代码推导（规格一 ISIN 行已标"已撤回"） | NSIN 与证券代码无函数关系 | 规格一 §3.2 |
+| §4.2 A+H 配对 | 自动挂接只凭 HKEX ISIN；其余（LEI/名称规则）一律 claim/隔离；HKEX 名单用简称，规则 2 命中率低（5 家抽查 2 家相等） | 精度优先；`-OLD` 柜台不得自动挂接 | `link-ah.ts`、`verification.md` Task 7a |
+| §4.3.3 submissions | `fetchSubmissions` 合并分页，全进程单一 SEC pacer（`secPacer`，120 ms）也覆盖 companyfacts 与 iXBRL 对；`recent` 条数不固定（AAPL 1,004） | SEC 限速 | `shared.ts` |
+| §4.4/§4.5 受理时刻 | 不可解析项（日期不符/歧义/未找到）为信息码不计 `failed`；默认 3 年回看（`--full-history` 解除）；以 `coverFrom` = 最早待补日 − 7 天抓分页；`sec.filing_date_vs_submissions` 的记录器经 `deps.ts` 与脚本接上；**E7 实测需生产库，未跑，owner 动作** | 命令官裁决（Task 12） | `enrich-acceptance.ts` |
+| §4.5 / Task 12–14 | 对账记录（`recordReconciliation`）去重是尽力而为：并发写者可能重复记录 record-only 行，无业务影响；失败计数按对的 distinct `natural_key` 计 | 接受的并发重复 | `record.ts`、#74 |
+| §5 `fact_promote_rows` 之外的分派 | 见规格二 §15 分派例外。`restore_reconciled` 只提升一个发行人的行：reconcile_mismatch 项不跨谱系（经 `use_dedicated_resolver`/`target_not_active` 守卫；未做跨谱系场景的额外证明） | Task 8c 遗留项 | 迁移二 |
+| §5.2 US 黄金对 | 绑定 ticker 在 entry `as_of`（缺省今日）的持有人；无 `as_of` 的条目只记录不隔离；冻结条目变更 → `entry_changed`；谱系冲突延缓只针对参与事实；同键同日出现在同一目标的 US+CN 时 `lineage_key_collision`（文档化限制） | 历史条目不应按今日解析持有人 | `pair-us-gold.ts`、`pair-lineage.ts` |
+| §5.3 iXBRL 对 | 标签回退不一致 → `review_item`（不隔离）；左侧 `precision` 不保留（null）；429 → `sec_rate_limited` 运行失败；失败体入桶；`doc_url` 无查询串；字节上限在下载时强制 | Codex 15a 审计 | `pair-us-ixbrl.ts` |
+| §5.4 CN 黄金对 | 交付模式、校验器、对账对、`select-cn-sample.ts`、`gold-pdf.ts`、抄录指引；**不建黄金文件与 `gold-cn.integration.test.ts`、无 CN 对账 cron**。降级条件现仅为 owner 决策 C（`TUSHARE_TOKEN` 已可用，PR #104 的真实 Tushare 夹具已并入）；E5 未达成，不报数字 | T15 | `verification.md` F3-6 |
+| §3.2 接受/采用 | `ambiguous_value` 采用：全谱系锁与冲突检查；`readFacts` 带 `history:true`，`truncated` → `read_truncated`（#60）；`batch_mismatch` 恢复为 500 | Codex 8b/11 | `facts-resolver.ts` |
+| §7 看板失败计数 | 离开样本的键保留其最后一次失败计数（Task 19a），样本变更后需 owner 注意 | `distinct on` 最新行语义 | `dq_reconcile_failed_counts()` |
+| 性能 | `loadReconciliationsByPair`（若仍被使用）读每对的全部 `dq_reconciliations` 行；失败计数已由 SQL 聚合替代，其余消费者随表增长无界，后续改 SQL 视图/RPC | 当前量级可行 | `dashboard-blocks.ts` |
+
+### 15.4 看板（F3-8）
+
+| 日期 | 条款 | 偏差 | 原因 | 位置 |
+|---|---|---|---|---|
+| 2026-11-05 | §10 F3-3 "claims 面板" | 声明面板与其 i18n 在 Task 19b 实现（不在 Task 7） | 与其他 `/admin/dq` 面板同一画布、同一任务 | `src/app/(app)/admin/dq/panels.tsx` |
+| 2026-11-06 | §7.2 "通过且输入未变时恢复可用" | 页面按 `latest_result.passed` 启用；"输入未变"由服务器在请求时校验（409 `not_passing`） | 客户端无法计算当前输入哈希 | `dashboard-view.ts::quarantineControl` |
+| 2026-11-05 | §9.1 i18n parity 路径 | 实际为 `src/i18n/messages-parity.test.ts` | 仓库既有位置 | — |
+| 2026-11-07 | E9 | 页面按画布 7 个 artboard 落地；**未在浏览器运行**（本 worktree 无 `.env.local`/管理员会话），人工视觉验收是 owner 动作 | 环境 | Task 19b 日志 |
+
+### 15.5 未达成的退出条件
+
+见实施日志"Task 20 收尾"退出条件表：E1/E2/E4/E6/E7 需 owner 首轮运行（生产库）后取数；E5 未达成（决策 C，不报数字）；E9 人工视觉验收待 owner。

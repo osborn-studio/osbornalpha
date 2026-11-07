@@ -45,3 +45,43 @@
 | 19a /api/admin/dq 读模型扩展（日历、声明、按对账对、market） | f272c11, 3afa741 | ✅（偏差：按对 distinct natural_key 取最新行计数，执行 14c 裁决） | Approved with notes → 已修（restorable 实时核对限 25 次/并发 4/按请求记忆，超限 restorable_checked:false） | review/challenge P2 每次加载下载全部对账历史 → 迁移一新增 dq_reconcile_failed_counts() 与索引（接口对齐记录 #74，DB 用例与 test:migrations 通过）；P3 未上游行先限 100 再排序 → 查询内按应披露日排序；复审无问题。已知限制：离开样本的键保留最后一次失败计数 | 2 |
 | 18b 生产装配、cron /api/cron/filing-calendar、脚本、vercel.json、日历集成（critical）＋ CN disclosure_date 真实核对 | 46c5b70, f82be60, 363f207, 858b7dd | ✅（5 参 replaceExpectations、64 位 sha、DB 5/5） | Approved with notes → 已修 | challenge P2 预览仍上传生产桶、CN code=0 响应不验形状/has_more 致虚假 overdue → 修复（raw 注入；bad_shape/has_more → unavailable；无排期行的期间保持 unknown_upstream）；复审无问题。真实 Tushare disclosure_date（600519.SH、000333.SZ）：HTTP 200 code=0、无积分错误；actual_date 与利润表 rt1 最早 ann_date 44/44 期一致、仅排期时为 null；ann_date 为排期记录日；modify_date 为修订时间戳 → CN_DISCLOSURE_VERIFIED=true（363f207）。--no-db 网络冒烟 AAPL/COST/WMT 通过 | 2 |
 | 19b /admin/dq 页面面板与 i18n（对照 Claude Design 画布） | bbf66ae, 2af023c | ✅（布局按画布 7 个 artboard；未建画布额外项均非计划/规格要求） | Approved with notes → 已修（无障碍名与 aria-expanded、issuer_not_active 文案、未知 deadline_state 兜底、改正表单共享草稿与焦点回归） | challenge/review P2：成功恢复读错 restore_note 字段、候选/谱系行的通用 Accept 绕过所选项 → 修复（successNoticeCode/conflictCode、quarantineActions 纯函数按原因给按钮与 POST 体并单测；歧义行"采用所选/仅确认知晓/拒绝"，谱系行"按所选保留行接受/拒绝"）；复审无问题。未在浏览器中运行（本 worktree 无 .env.local/管理员会话）→ E9 owner 目检 | 2 |
+
+## Task 20 收尾（2026-11-07）
+
+### 门禁（HEAD dc0b281，含 19b 修复 2af023c）
+
+| 命令 | 结果 |
+|---|---|
+| `npm test` | 341 文件通过、30 跳过；3596 通过、384 跳过（共 3980），0 失败 |
+| `npm run typecheck` | 退出 0 |
+| `npm run lint`（`--max-warnings=0`） | 退出 0 |
+| `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db` | 末次：371 文件通过、3978 通过、2 跳过；`criticalSuites:31`、`criticalPassed:383`、`criticalSkipped:0`、`migrations:52`，无 inventory drift（PostgreSQL 17.10，隔离集群，已清理） |
+| `... npm run test:migrations` | PASS：fresh schema equals seeded upgrade；现有行保留；两个本地集群已停止 |
+
+`test:db` 本机偶发失败：同一 HEAD 上连续三次全量运行，第 1 次 `dq-extensions.integration.test.ts` "read_facts is a wrapper…"（`deadlock detected`），第 2 次 `owned-process-group.test.ts`（真实进程组终止），均与本机其他进程并发运行同时发生（`ps` 见另有 vitest/postgres 进程）；两个文件单独重跑 55/55 通过，第 3 次全量全绿。第 1 次失败的是计划自身的 critical 套件，死锁在并发负载下出现、单独重跑不复现，未在代码里修（不属本任务；若 CI 上复现请回到 Task 8 系套件查锁序）。
+
+### 真实 SEC 冒烟（无库写入，默认 UA，详见 `verification.md` "日历冒烟（2026-11-07 UTC）"）
+
+- `filer-categories.ts --no-db`（AAPL/COST/WMT）：9 行均 `large_accelerated`，`sec.filer_category` 对账 3/3 passed，failed 0。
+- `calendar-sync.ts --market US --no-db`：每家 6 行，错误 0。AAPL、COST 估计行与 SEC `reportDate` 差 0–7 天；**COST 第三季度差 20–21 天（pending，不产生 overdue）**，±7 天对 12/12/12/16 周型申报人不足；WMT 无估计行。
+- US 对账冒烟：`reconcile.ts` 无无库模式，记"需 owner 环境（已同步 facts.us + 样本清单）"，未改脚本。
+
+### 退出条件
+
+| # | 标准 | 结果 | 证据 |
+|---|---|---|---|
+| E1 | FIGI ≥ 95%、ISIN ≥ 90% | 待 owner 首轮 `fill-identifiers --apply` 后 `coverage.ts`（无 OpenFIGI key，按 25 请求/分钟） | — |
+| E2 | 可回填行 `listing_date` 100% | 待 `backfill-windows --apply` | — |
+| E3 | 换码夹具三个 asOf | 通过 | `load-sec` 单测（`npm test` 全绿）、Task 6b |
+| E4 | `us.companyfacts_vs_ixbrl` ≥ 98% | 待 owner 周期回执；离线夹具（AAPL/MSFT，全部 origin=both，例外 0）已通过 `ixbrl-pair.integration.test.ts` | `ixbrl-run-<date>.md`（待产生） |
+| E5 | `cn.tushare_vs_cninfo_pdf_gold` ≥ 95% | **未达成**，不报数字；降级仅因 owner 决策 C（`TUSHARE_TOKEN` 已可用、真实 Tushare 夹具已并入） | runbook 9.5、`verification.md` F3-6 |
+| E6 | 每个范围内发行人有最近已结束期行 | 待 owner `calendar-sync --apply` 回执（`issuers_done`、`by_deadline_state`、`upstream_unavailable`）；`calendar.integration.test.ts` 通过 | — |
+| E7 | `accepted_at` ≥ 99% | **未测量**：`enrich-acceptance --report` 需生产库（owner 动作）；逻辑与 DB 用例通过 | Task 12 |
+| E8 | `ambiguous_value` 选定 → 读接口值与 `based_on_lineage` 变化 | 通过 | `dq-extensions.integration.test.ts`（含 `resolveFactsItem` 分派） |
+| E9 | 下拉含登记表；逾期卡与日历面板按市场筛选、显示 `no_rule`/估计行 | 路由与视图单测通过；**页面未在浏览器运行**（本 worktree 无 `.env.local`/管理员会话），人工视觉验收待 owner | Task 19b 行 |
+
+### 收尾说明
+
+- 文档提交：runbook 第 9 章、规格三 §15（偏差表含接口对齐记录 #69–74 与实施期遗留清单）、规格一 §3.2 ISIN 撤回标注、规格二 §15 指向与分派例外、`verification.md` 冒烟节、本节。无代码改动。
+- 已核对遗留清单中"Task X must…"项均已落地：`use_dedicated_resolver`/`target_not_active` 映射（`facts-resolver.ts`、quarantine 路由）、`recordDateMismatch` 接线（`deps.ts`、`enrich-acceptance.ts`）、iXBRL 对使用共享 `secPacer`（`pair-us-ixbrl.ts`）、vercel.json 含 `reconcile?pair=us.companyfacts_vs_ixbrl` 02:00 条目。
+- 未能核对/未做：Task 8c 的"reconcile_mismatch 项不跨谱系"仅作为限制登记，没有另行证明；2021–2025 SEC 假日表与 `SEC_CLOSURES` 2025-01-09 仍未经 OPM/SEC 公告复核；北交所 `disclosure_date` 未抽查；E1/E2/E4/E6/E7 的生产数字与 E9 视觉验收均待 owner。
