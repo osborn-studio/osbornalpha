@@ -61,7 +61,7 @@ async function assertHistoricalBatches(db:MacroDb,built:Awaited<ReturnType<typeo
   pending=[...new Set(pending)];
  }
  const times=await db.batchFinishedAt([...new Set([...seen.values()].map(r=>r.batch_id))]);
- for(const row of seen.values()){const finished=times[row.batch_id];if(!finished||!Number.isFinite(Date.parse(finished)))throw new MacroUnavailable('historical_cutoff_unsupported');if(Date.parse(finished)>Date.parse(cutoff))throw new MacroUnavailable('historical_snapshot_race');}
+ for(const row of seen.values()){const finished=times[row.batch_id];if(!finished||!Number.isFinite(Date.parse(finished))||Date.parse(finished)>Date.parse(cutoff))throw new MacroUnavailable('historical_cutoff_unsupported');}
 }
 /** F4 macro_snapshot input available_at: the latest available_at among the snapshot's observations (null when empty). */
 export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecord,'observation_ids'>):Promise<string|null>{

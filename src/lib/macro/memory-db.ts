@@ -165,7 +165,14 @@ const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
 
  const db:MemoryMacroDb={
   setNow(iso){fixedNow=new Date(iso).toISOString();},
-  setBatchStatus(batchId,status,dataset,finishedAt){batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);if(status==='success'||status==='partial')batchFinished.set(batchId,finishedAt?new Date(finishedAt).toISOString():now());else batchFinished.delete(batchId);},
+  setBatchStatus(batchId,status,dataset,finishedAt){
+   const stamp=finishedAt===undefined?undefined:Date.parse(finishedAt);
+   if(stamp!==undefined&&!Number.isFinite(stamp))throw new Error('invalid_finished_at');
+   const receipt=batchFinished.get(batchId);
+   if(receipt){if(status!==batchStatus.get(batchId)||(stamp!==undefined&&new Date(stamp).toISOString()!==receipt))throw new Error('immutable_finished_at');return;}
+   batchStatus.set(batchId,status);if(dataset)batchDataset.set(batchId,dataset);
+   if((status==='success'||status==='partial')&&stamp!==undefined)batchFinished.set(batchId,new Date(stamp).toISOString());
+  },
   async batchFinishedAt(ids){return Object.fromEntries(ids.map(id=>[id,batchFinished.get(id)??null]));},
   addQuarantineItem(i){const id=i.id??randomUUID();items.set(id,{id,dataset:i.dataset,table_name:i.table_name??'macro_observations',natural_key:i.natural_key,reason_code:i.reason_code??'unexpected_revision',batch_id:i.batch_id,status:'open',resolved_by:null,resolved_at:null});return id;},
   quarantineItem(id){const q=items.get(id);return q?clone(q):undefined;},

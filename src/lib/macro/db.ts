@@ -124,13 +124,14 @@ export async function selectEligibleHistoryAsOf(candidates:ObservationRow[],cuto
  const batches=await loadBatches([...new Set([...found.values()].map(r=>r.batch_id))]);const cutoffMs=Date.parse(cutoff);
  const eligible=(r:ObservationRow,depth=0):boolean=>{
   if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
-  const b=batches[r.batch_id];if(!b||r.status!=='ok'||!['success','partial'].includes(b.status))return false;
-  if(!b.finished_at||!Number.isFinite(Date.parse(b.finished_at)))throw new Error('historical_cutoff_unsupported');
+  if(r.status!=='ok'||Date.parse(r.available_at)>cutoffMs)return false;
+  const b=batches[r.batch_id];if(b&&!['success','partial'].includes(b.status))return false;
+  if(!b?.finished_at||!Number.isFinite(Date.parse(b.finished_at)))throw new Error('historical_cutoff_unsupported');
   if(Date.parse(b.finished_at)>cutoffMs)return false;
   return (r.derived_from??[]).every(id=>{const ancestor=found.get(id);return !!ancestor&&eligible(ancestor,depth+1);});
  };
  const byPeriod=new Map<string,ObservationRow>();
- for(const r of candidates)if(eligible(r)){const old=byPeriod.get(r.period_end);if(!old||r.version>old.version)byPeriod.set(r.period_end,r);}
+ for(const r of [...candidates].sort((a,b)=>b.version-a.version))if(!byPeriod.has(r.period_end)&&eligible(r))byPeriod.set(r.period_end,r);
  if(byPeriod.size>maxRows)throw new MacroDbError('truncated',`eligible_history_asof:>${maxRows}`);
  return [...byPeriod.values()].sort((a,b)=>a.period_end.localeCompare(b.period_end));
 }
@@ -328,12 +329,20 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    }
   },
   async eligibleHistoryAsOf(id,o){
-   const raw=await pageAll(()=>admin.from('macro_observations').select('*').eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf).order('period_end').order('version'),1000000);
-   if(raw.length===1000000)throw new MacroDbError('truncated',`eligible_history_asof:${id}:raw_limit`);
-   const candidates=raw.map(observationFromRow);
-   return selectEligibleHistoryAsOf(candidates,o.asOf,o.maxRows,
-    async ids=>{const out:ObservationRow[]=[];for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));return out;},
-    async ids=>{const out:Record<string,{status:string;finished_at:string|null}>={};for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};return out;});
+   if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+   const loadRows=async(ids:string[])=>{const out:ObservationRow[]=[];for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));return out;};
+   const loadBatches=async(ids:string[])=>{const out:Record<string,{status:string;finished_at:string|null}>={};for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};return out;};
+   const out:ObservationRow[]=[];let group:ObservationRow[]=[];let offset=0;
+   const flush=async()=>{if(!group.length)return;out.push(...await selectEligibleHistoryAsOf(group,o.asOf,1,loadRows,loadBatches));group=[];if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history_asof:${id}:>${o.maxRows}`);};
+   for(;;){
+    const part=(await rows(admin.from('macro_observations').select('*,batch:ingest_batches!inner(status,finished_at)')
+     .eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf)
+     .in('batch.status',['success','partial']).or(`finished_at.lte.${o.asOf},finished_at.is.null`,{referencedTable:'batch'})
+     .order('period_end',{ascending:false}).order('version',{ascending:false}).range(offset,offset+READ_PAGE-1))).map(observationFromRow);
+    for(const candidate of part){if(group.length&&candidate.period_end!==group[0].period_end)await flush();group.push(candidate);}
+    if(part.length<READ_PAGE){await flush();return out.sort((a,b)=>a.period_end.localeCompare(b.period_end));}
+    offset+=READ_PAGE;
+   }
   },
   async seriesHistory(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');

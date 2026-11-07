@@ -9,10 +9,39 @@ import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
-import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,supabaseMacroDb,toMacroDbError} from './db';
+import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,selectEligibleHistoryAsOf,supabaseMacroDb,toMacroDbError} from './db';
 import {macroDbContract,nativeRow,outcome} from './db-contract';
 import {memoryMacroDb} from './memory-db';
-import type {ObservationWrite,PublishInput} from './types';
+import type {ObservationRow,ObservationWrite,PublishInput} from './types';
+
+describe('historical vintage selection',()=>{
+ const cutoff='2026-10-18T00:00:00Z';
+ const row=(version:number,batch_id:string,available_at='2026-10-15T00:00:00Z')=>({observation_id:`o${version}`,series_id:'US_UNRATE',period_end:'2026-09-30',version,batch_id,available_at,status:'ok',derived_from:[]} as unknown as ObservationRow);
+ const receipts:Record<string,{status:string;finished_at:string|null}>={a:{status:'success',finished_at:'2026-10-16T00:00:00Z'},b:{status:'success',finished_at:'2026-10-20T00:00:00Z'},missing:{status:'success',finished_at:null}};
+ const select=(candidates:ObservationRow[])=>selectEligibleHistoryAsOf(candidates,cutoff,10,async()=>[],async()=>receipts);
+ it('selects the earlier finalized version when the newer version finished after cutoff',async()=>{expect((await select([row(1,'a'),row(2,'b')])).map(r=>r.version)).toEqual([1]);});
+ it('ignores a missing receipt when availability is after cutoff or a higher proven vintage wins',async()=>{
+  expect((await select([row(1,'a'),row(2,'missing','2026-10-20T00:00:00Z')])).map(r=>r.version)).toEqual([1]);
+  expect((await select([row(1,'missing'),row(2,'a')])).map(r=>r.version)).toEqual([2]);
+ });
+ it('fails closed when the otherwise selected version has no receipt',async()=>{await expect(select([row(1,'a'),row(2,'missing')])).rejects.toThrow('historical_cutoff_unsupported');});
+ it('checks required ancestors before choosing a derived vintage',async()=>{
+  const ancestor=row(3,'b');const derived={...row(2,'a'),derived_from:[ancestor.observation_id]};
+  expect((await selectEligibleHistoryAsOf([row(1,'a'),derived],cutoff,10,async()=>[ancestor],async()=>receipts)).map(r=>r.version)).toEqual([1]);
+  await expect(selectEligibleHistoryAsOf([row(1,'a'),derived],cutoff,10,async()=>[{...ancestor,batch_id:'missing'}],async()=>receipts)).rejects.toThrow('historical_cutoff_unsupported');
+ });
+});
+
+describe('memory finalization receipts',()=>{
+ it('requires an explicit valid timestamp and keeps a terminal receipt immutable',async()=>{
+  const db=memoryMacroDb();db.setBatchStatus('b','success');expect((await db.batchFinishedAt(['b'])).b).toBeNull();
+  expect(()=>db.setBatchStatus('b','success',undefined,'not-a-date')).toThrow('invalid_finished_at');
+  db.setBatchStatus('b','success',undefined,'2026-10-16T00:00:00Z');
+  expect(()=>db.setBatchStatus('b','running')).toThrow('immutable_finished_at');
+  expect(()=>db.setBatchStatus('b','success',undefined,'2026-10-20T00:00:00Z')).toThrow('immutable_finished_at');
+  expect((await db.batchFinishedAt(['b'])).b).toBe('2026-10-16T00:00:00.000Z');
+ });
+});
 
 macroDbContract('memoryMacroDb contract',async()=>{
  const db=memoryMacroDb();
