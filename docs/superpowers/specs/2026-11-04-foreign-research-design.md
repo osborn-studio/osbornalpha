@@ -311,6 +311,7 @@ where s.public_enabled and r.status = 'published' and r.evidence_ok and r.disclo
 |---|---|---|
 | `broker_reports_public_v` | `visible_reports` | `report_id, revision, scope, institution_id, title = coalesce(title_public, title_original), title_is_rewritten = (title_public is not null), title_zh, title_en, title_is_translation, published_date, price_as_of_date, report_type, sector_as_stated, primary_target_key, available_at, code_version, published_at, supersedes_report_id, page_count, snippet_max_chars, target_price_public, summary_public` |
 | `broker_report_targets_public_v` | join | `report_id, publication_id = r.current_publication_id, target_key, ticker_as_stated, security_ticker, issuer_id, rating_raw, rating_normalized, scale_id, target_price = case when allows_public_target_price then … end`（同 `target_currency, target_horizon_months, upside_pct`）, `target_price_public = allows_public_target_price, price_at_report, price_currency, price_as_of_date, upside_formula_version`；不含 `resolution, input_hash` |
+| `broker_spread_latest_v` | 同一 visible_reports CTE + public targets | `report_id, published_date, institution_id, security_ticker, issuer_id, currency`；currency = 有公开目标价时 target_currency，否则有报告时价格时 price_currency，否则 null。按 `(security_ticker,currency,institution_id)` 取 `published_date desc, report_id desc` 最新匹配报告；reader 再筛 issuer / 时间窗口。无目标价值、证据或原始模型字段；`revoke all from public, anon, authenticated; grant select to anon, authenticated`（同节 owner/security 设置）。 |
 | `broker_report_citations_v` | `fields where status in ('confirmed','corrected','absent')` join；排除 `field in ('target_price','target_currency','target_horizon','upside_stated') and not allows_public_target_price`；排除 `field='analyst'` 除非 `exists (broker_report_analysts a join research_analysts ra … where a.field_id = fields.field_id and ra.public_display)`；排除 `field='title' and r.title_restricted` | `report_id, target_key, field, occurrence, page, value_text/num/currency/unit/date（生效值，内联 `case` 表达式）, status, extractor_kind` |
 | `broker_report_snippets_public_v` | `status='approved' and allows_public_snippets and length(text) <= snippet_max_chars` | `snippet_id, report_id, target_key, purpose, page, text, field_id` |
 | `broker_report_summaries_public_v` | `status='approved' and allows_public_summary` | `summary_id, report_id, lang, kind, model_id, registry_hash, prompt_version, input_hash, summary_md, generated_at` |
@@ -829,9 +830,11 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 
 （落地后补记，格式同规格一 §14。）
 
-**清除偏差（Commander 2026-11-06，P-R6-01..04）**：撤回立即隐藏；`purge:false` 保留产物与模型请求 / 响应，不触发删除。清除先持久化 `purge_requested_at` / `purge_requested_by`，再取租约及执行步骤；清除是尽力而为并持续每日对账。已知路径删除完成即可记录 `purged_at`，但任何未对账写入仍留在对账集合。未确认完成的 pending 写入不因超时、行龄或 worker 终止而结束，每日重复幂等删除；只有确认成功（或确认失败且未发送字节）后 `finishWrite`，且在 `finished_at` 后至少删除一次，才可 reconciled。清除后的迟到写入在落地后的下一次每日运行删除；存储失败保留任务并指数退避（上限一天）。不承诺有限完成上界；当前没有存储侧生命周期规则，owner 可日后另行添加。
+**清除偏差（Commander 2026-11-06，P-R6-01..04）**：撤回立即隐藏；`purge:false` 保留产物与模型请求 / 响应，不触发删除。撤回请求携带 purge 时，单一数据库语句 / 事务原子设置 status=withdrawn、withdrawn_at/reason 与 `purge_requested_at` / `purge_requested_by`，再取租约及执行步骤；清除是尽力而为并持续每日对账。已知路径删除完成即可记录 `purged_at`，但任何未对账写入仍留在对账集合。未确认完成的 pending 写入不因超时、行龄或 worker 终止而结束，每日重复幂等删除；只有确认成功后 `finishWrite`；purge 与每日对账均仅在 done 行的路径删除完成时间不早于 `finished_at` 时标记 reconciled，pending 仍保留。发送前围栏失败且 worker 确认尚未调用 upload/F3 时标记 abandoned（finished_at 为空，不计成功，排除对账）。F3Port 必须等全部写入 settled 才 resolve；resolve 后再次核验未撤回及持有租约，失败保持 pending。清除后的迟到写入在落地后的下一次每日运行删除；存储失败保留任务并指数退避（上限一天）。不承诺有限完成上界；当前没有存储侧生命周期规则，owner 可日后另行添加。
 
-此决定覆盖 §6.5 中对清除完成的理解：步骤成功不代表所有远端写入已停止；每日对账只选择明确请求清除的文档。实现尚未开始，SQL 与运行回归待实施验证。
+核验预算按剩余时间明确划分：不足 10 秒跳过清除，否则清除占 min(60 秒, 剩余时间的 25%)，证据核验使用其余预算。超时仅保证调用方继续前进，不取消 Supabase Storage 请求；未确认写入保持待对账。每个公开 target DTO 增加 `currency`（与 facets 和 spread 相同的生效币种规则），包括价格为空而币种列非空的情况。
+
+此决定覆盖 §1.2 与 §6.5 中对清除完成的理解：步骤成功不代表所有远端写入已停止；每日对账只选择明确请求清除的文档。实现尚未开始，SQL 与运行回归待实施验证。
 
 ---
 

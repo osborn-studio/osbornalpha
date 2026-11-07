@@ -44,7 +44,7 @@
 - **提交**：`git add <本任务 Files>`（不用 `git add -A`）后，`git commit` 单独一条命令；同一命令里不得出现任何 `-n` 记号（包括 `grep -n`、`head -n`），仓库钩子会拦截；不要 `--no-verify`。提交信息末尾：`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`。每个任务提交前在 `docs/audits/2026-11-06-foreign-research/10-implementation-log.md` 末尾追加一行 `| <任务> | <日期> | <提交 sha 前 8 位> | <测试数> | <偏差或无> |`（文件不存在则建，表头 `| 任务 | 日期 | 提交 | 测试 | 偏差 |`）。
 - **测试命令**：`npm test -- <path>`、`npm run typecheck`、`npm run lint`（`--max-warnings=0`）、`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`、同前缀 `npm run test:migrations`。
 - **集成测试先过类型检查**：A1–A5、C8 每次改完 `*.integration.test.ts` 后、跑 `test:db` 之前先 `npm run typecheck`（集成文件同样在 tsconfig 覆盖内）；类型 / 语法错误不得留给 `test:db` 去发现。
-- **桶写入协议**（P-R6-01..04）：所有模块写入先登记；`trackedUpload` 与 `trackedPortWrite` 在发起前检查未撤回及租约。仅成功或确认未发送字节才 `finishWrite`。仅有 `purge_requested_at` 的文档进入每日对账；pending 无时间上限，done 在 finished_at 后删除才 reconciled。撤回不清除时保留全部证据。
+- **桶写入协议**（P-R6-01..04）：所有模块写入先登记；`trackedUpload` 与 `trackedPortWrite` 在发起前检查未撤回及租约。仅确认成功才 `finishWrite`；发送前围栏拒绝且 worker 确认未调用 upload/F3 时 `abandonWrite`（无 finished_at，排除对账）。F3 返回后再次检查撤回与租约，失败保留 pending。仅有 `purge_requested_at` 的文档进入每日对账；pending 无时间上限，done 在 finished_at 后删除才 reconciled。撤回不清除时保留全部证据。
 - **测试库全局状态隔离**：`broker_research_settings` 是单行全局状态，`test:db` 按文件并行。凡切换 `public_enabled`、`approved_gold_corpus_hash` 或依赖其默认值的集成 describe（A1–A3、A5 的 pg 契约、C8 pipeline），在 `beforeAll` 用一条专用连接取会话级 `pg_advisory_lock(hashtext('broker_research_settings'))`，`afterAll` 复原设置行后 `pg_advisory_unlock` 并释放连接（`broker-research.integration.test.ts::lockSettings`；C8 用同一把锁）。断言仍只按本文件自己的 `institution_id / report_id` 过滤。
 - **不提交真实研报**：夹具一律合成（`src/lib/broker-research/fixtures/`：合成页文本 JSON、预期 `DocumentExtraction`、录制格式的 LLM 响应 JSON）。不抓取任何网站。
 
@@ -230,7 +230,7 @@ export interface EvalReceiptRow{
 export interface OutboxEvent{event_id:string;kind:OutboxKind;payload:Record<string,unknown>;status:'pending'|'delivered'|'failed';attempts:number;last_error:string|null;created_at:string;delivered_at:string|null}
 /** Durable bucket-write inventory (broker_storage_writes; P-R5-01..03). path = object path, or a prefix ending in '/' for port-written objects. */
 export type StorageWriter='parse'|'extract'|'summary'|'translate'|'eval'|'f3';
-export interface StorageWriteRow{write_id:string;document_id:string;path:string;writer:StorageWriter;status:'pending'|'done'|'reconciled';started_at:string;finished_at:string|null;reconciled_at:string|null;next_attempt_at:string;attempts:number;deleted_at:string|null}
+export interface StorageWriteRow{write_id:string;document_id:string;path:string;writer:StorageWriter;status:'pending'|'done'|'reconciled'|'abandoned';started_at:string;finished_at:string|null;reconciled_at:string|null;next_attempt_at:string;attempts:number;deleted_at:string|null}
 export interface PurgeStepRow{document_id:string;step:PurgeStep;status:'pending'|'done'|'failed';attempts:number;last_error:string|null;at:string}
 
 export interface MaterializeReceipt{effectiveHash:string;materializedHash:string;targets:number;basis:'candidate'|'effective'|'mixed'}
@@ -278,6 +278,7 @@ export interface BrokerResearchDb{
  findDocumentBySha(sha256:string):Promise<DocumentRow|null>;
  getDocument(documentId:string):Promise<DocumentRow|null>;
  insertDocument(row:Pick<DocumentRow,'document_id'|'sha256'|'storage_path'|'byte_size'|'licence_id'|'uploaded_by'|'original_filename'>):Promise<'inserted'|'duplicate'>;  // status='uploaded', promotion_pending=true
+ withdrawWithIntent(documentId:string,reason:string,purge:boolean,by:string):Promise<void>; // atomic withdrawal + optional durable intent, before lease/steps
  updateDocument(documentId:string,patch:Partial<Pick<DocumentRow,'promotion_pending'|'status'|'withdrawn_at'|'withdrawn_reason'|'purged_at'|'purge_requested_at'|'purge_requested_by'|'page_count'|'last_verified_at'|'verify_status'>>):Promise<void>;
  claimLease(documentId:string,token:string,ttlSeconds:number):Promise<boolean>;                         // CAS
  renewLease(documentId:string,token:string,ttlSeconds:number):Promise<'ok'|'lease_lost'|'document_withdrawn'>;   // rpc broker_document_renew_lease: fenced re-check + TTL refresh before a long holder's bucket write (P-R3-04)
@@ -354,13 +355,14 @@ export interface BrokerResearchDb{
  verifyCandidates(limit:number):Promise<DocumentRow[]>;
  // bucket-write inventory (P-R5-01..03): registered BEFORE bytes are sent; started_at = server now()
  registerWrite(row:{document_id:string;path:string;writer:StorageWriter}):Promise<string>;               // write_id
+ abandonWrite(writeId:string):Promise<void>; // pending → abandoned only with worker proof no bytes dispatched; finished_at stays null
  finishWrite(writeId:string):Promise<void>;                                                              // pending → done (finished_at = now); other states untouched
  writesFor(documentId:string):Promise<StorageWriteRow[]>;                                                 // every row of the document (purge deletes every path)
  pendingWritesFor(documentId:string):Promise<StorageWriteRow[]>;                                          // status pending, started_at asc
  /** Purge intent only, status <> reconciled, next_attempt_at <= now; ordered next_attempt_at, write_id. No age cutoff. */
  unreconciledWrites(limit:number):Promise<StorageWriteRow[]>;
  retryWrite(writeId:string,nextAttemptAt:string,attempts:number):Promise<void>;
- markReconciled(writeId:string,deletedAt:string):Promise<void>;                                                           // only done with finished_at <= deletion-start timestamp; pending remains eligible
+ markReconciled(writeId:string,deletedAt:string):Promise<void>;                                                           // only done with finished_at <= deletion-completion timestamp; pending remains eligible
  // public (anon client, views only)
  publicReports(filter:PublicReportFilter):Promise<PublicReportBundle[]>;
  spreadReports(filter:{issuerId:string;securityTicker:string;currency:string|null;from:string}):Promise<PublicReportBundle[]>;
@@ -723,6 +725,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   expect((await s.q(`select status,started_at is not null s,finished_at,reconciled_at from public.broker_storage_writes where write_id=$1`,[w]))[0]).toEqual({status:'pending',s:true,finished_at:null,reconciled_at:null});
   expect((await fails(s.q(`insert into public.broker_storage_writes(document_id,path,writer) values($1,'p','browser')`,[doc]))).message).toMatch(/broker_storage_writes_writer/);
   expect((await fails(s.q(`update public.broker_storage_writes set status='done' where write_id=$1`,[w]))).message).toMatch(/broker_storage_writes_finished/);
+  expect((await fails(s.q(`update public.broker_storage_writes set status='abandoned',finished_at=now() where write_id=$1`,[w]))).message).toMatch(/broker_storage_writes_finished/);
   expect((await fails(s.q(`update public.broker_storage_writes set status='reconciled' where write_id=$1`,[w]))).message).toMatch(/broker_storage_writes_(finished|reconciled)/);
   expect((await s.q(`select attempts, next_attempt_at is not null scheduled, deleted_at from public.broker_storage_writes where write_id=$1`,[w]))[0]).toEqual({attempts:0,scheduled:true,deleted_at:null});
   expect((await fails(s.q(`update public.broker_storage_writes set status='reconciled',finished_at=now(),reconciled_at=now() where write_id=$1`,[w]))).message).toMatch(/broker_storage_writes_deleted/);
@@ -1391,7 +1394,7 @@ create table if not exists public.broker_purge_steps (
 -- sends a byte (path = an object path, or a prefix ending in '/' for objects a port writes, e.g. F3 page images),
 -- finishes it after confirmed success; purge / cron delete registered paths only for explicit purge intent.
 -- Only explicit purge intent authorizes deletion. Uncertain pending writes are swept indefinitely;
--- completion plus a deletion started after finished_at is required to reconcile.
+-- completion plus a deletion completed after finished_at is required to reconcile.
 create table if not exists public.broker_storage_writes (
   write_id      uuid primary key default gen_random_uuid(),
   document_id   uuid not null references public.broker_report_documents(document_id) on delete restrict,
@@ -1406,13 +1409,13 @@ create table if not exists public.broker_storage_writes (
   deleted_at timestamptz,
   constraint broker_storage_writes_path check (length(path) between 1 and 512),
   constraint broker_storage_writes_writer check (writer in ('parse','extract','summary','translate','eval','f3')),
-  constraint broker_storage_writes_status check (status in ('pending','done','reconciled')),
+  constraint broker_storage_writes_status check (status in ('pending','done','reconciled','abandoned')),
   constraint broker_storage_writes_reconciled check ((status = 'reconciled') = (reconciled_at is not null)),
-  constraint broker_storage_writes_finished check (status = 'pending' or finished_at is not null),
+  constraint broker_storage_writes_finished check ((status in ('pending','abandoned') and finished_at is null) or (status in ('done','reconciled') and finished_at is not null)),
   constraint broker_storage_writes_deleted check (status <> 'reconciled' or (deleted_at is not null and deleted_at >= finished_at))
 );
 create index if not exists broker_storage_writes_status_idx on public.broker_storage_writes (status, started_at);
-create index if not exists broker_storage_writes_unreconciled_idx on public.broker_storage_writes (next_attempt_at, write_id) where status <> 'reconciled';
+create index if not exists broker_storage_writes_unreconciled_idx on public.broker_storage_writes (next_attempt_at, write_id) where status in ('pending','done');
 create index if not exists broker_storage_writes_document_idx on public.broker_storage_writes (document_id, status);
 
 create table if not exists public.broker_report_access_log (
@@ -1859,7 +1862,7 @@ export interface BrokerReportSummary { summary_id: string; report_id: string; la
 export interface BrokerReportPublication { publication_id: string; report_id: string; revision: number; snapshot: Record<string, unknown>; snapshot_hash: string; licence_version: number; rules_receipt_id: string; eval_receipt_id: string | null; published_at: string; published_by: string; unpublished_at: string | null; unpublish_reason: string | null }
 export interface BrokerReportRuleReceipt { receipt_id: string; report_id: string; rules_version: string; input_hash: string; results: Record<string, unknown>[]; code_version: string; created_at: string }
 export interface BrokerPurgeStep { document_id: string; step: 'pdf' | 'artifacts' | 'runs' | 'fields_text' | 'snippets_text' | 'summaries' | 'quarantine_payload'; status: 'pending' | 'done' | 'failed'; attempts: number; last_error: string | null; at: string }
-export interface BrokerStorageWrite { write_id: string; document_id: string; path: string; writer: 'parse' | 'extract' | 'summary' | 'translate' | 'eval' | 'f3'; status: 'pending' | 'done' | 'reconciled'; started_at: string; finished_at: string | null; reconciled_at: string | null; next_attempt_at: string; attempts: number; deleted_at: string | null }
+export interface BrokerStorageWrite { write_id: string; document_id: string; path: string; writer: 'parse' | 'extract' | 'summary' | 'translate' | 'eval' | 'f3'; status: 'pending' | 'done' | 'reconciled' | 'abandoned'; started_at: string; finished_at: string | null; reconciled_at: string | null; next_attempt_at: string; attempts: number; deleted_at: string | null }
 export interface ResearchInstitution { institution_id: string; name_en: string; name_zh: string | null; aliases: string[]; kind: string | null; rating_disclosure_url: string | null; created_at: string }
 export interface ResearchRatingScale { scale_id: string; institution_id: string; raw_label: string; normalized: 'buy' | 'overweight' | 'neutral' | 'underweight' | 'sell' | 'not_rated'; source_url: string; valid_from: string; valid_to: string | null; created_by: string; created_at: string; closed_by: string | null; closed_at: string | null }
 export interface ResearchAnalyst { analyst_id: string; institution_id: string; display_name: string; name_variants: string[]; public_display: boolean; created_at: string }
@@ -2002,7 +2005,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
  const GOLD=sha('gold-corpus');
  const TARGET_FIELDS=['ticker','rating','target_price','target_currency','price_at_report','price_currency','price_as_of_date'];
  /** A single-issuer draft through extract_commit: 3 report-level + 7 target candidates for one HK ticker. */
- const world=async(o:{licence?:Record<string,unknown>;extra?:(tk:string)=>Record<string,unknown>[];tickers?:number;tk?:string;issuer?:string;inst?:string;published?:string}={})=>{
+ const world=async(o:{licence?:Record<string,unknown>;extra?:(tk:string)=>Record<string,unknown>[];tickers?:number;tk?:string;issuer?:string;inst?:string;published?:string;prices?:{target_price:string;price_at_report:string;target_currency:string;price_currency:string}}={})=>{
   const tks:string[]=[];const issuers:string[]=[];
   for(let i=0;i<(o.tickers??1);i++){const tk=i===0&&o.tk?o.tk:`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');tks.push(tk);issuers.push(i===0&&o.issuer?o.issuer:await s.issuer());}
   const lic=await s.licence(o.licence??{});const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);
@@ -2015,10 +2018,10 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
   tks.forEach((tk,i)=>rows.push(
    cand({field:'ticker',target_key:tk,value_text:tk.replace('.',' '),resolution:{method:'parseBrokerTicker/1',resolver:'resolveIssuer',today:'2026-03-10',issuer_securities_row:{issuer_id:issuers[i],ticker:tk,valid_from:'2000-01-01',valid_to:null}}}),
    cand({field:'rating',target_key:tk,value_text:'Buy'}),
-   cand({field:'target_price',target_key:tk,value_text:'120',value_num:'120',value_unit:'price'}),
-   cand({field:'target_currency',target_key:tk,value_text:'HK$',value_currency:'HKD'}),
-   cand({field:'price_at_report',target_key:tk,value_text:'100',value_num:'100',value_unit:'price'}),
-   cand({field:'price_currency',target_key:tk,value_text:'HKD',value_currency:'HKD'}),
+   cand({field:'target_price',target_key:tk,value_text:o.prices?.target_price??'120',value_num:o.prices?.target_price??'120',value_unit:'price'}),
+   cand({field:'target_currency',target_key:tk,value_text:o.prices?.target_currency??'HK$',value_currency:o.prices?.target_currency??'HKD'}),
+   cand({field:'price_at_report',target_key:tk,value_text:o.prices?.price_at_report??'100',value_num:o.prices?.price_at_report??'100',value_unit:'price'}),
+   cand({field:'price_currency',target_key:tk,value_text:o.prices?.price_currency??'HKD',value_currency:o.prices?.price_currency??'HKD'}),
    cand({field:'price_as_of_date',target_key:tk,value_text:'4 Mar 2026',value_date:'2026-03-04'}),
    ...(o.extra?.(tk)??[])));
   const receipt=await commit(doc,token,ext,rows);
@@ -2152,7 +2155,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
  it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
   const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
   const fnOid=(role:string,oid:number)=>s.one(`select has_function_privilege($1::name,$2::int::oid,'EXECUTE') v`,[role,oid]);   // inventory: by OID (P-R4-01)
-  const rpcs=['public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
+  const rpcs=['public.broker_document_withdraw(uuid,text,boolean,uuid)','public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
   for(const sig of rpcs){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
   for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)','public.broker_llm_fence(uuid,uuid,uuid,text)']){
    for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
@@ -3296,6 +3299,19 @@ grant execute on function public.broker_quarantine_resolve(uuid, text, uuid, jso
 -- ---------------------------------------------------------------- leases, runs, outbox, purge (§4.2, §4.3, §6.5, §8.3)
 -- Claim: free or expired lease only (lease_until is null or < now()); taking over an expired lease
 -- finishes that document's running parse/extract/summary/translate runs as failed:lease_expired.
+-- Withdrawal and optional purge intent are ONE statement; row triggers/retractions share its transaction.
+create or replace function public.broker_document_withdraw(p_document uuid, p_reason text, p_purge boolean, p_by uuid)
+returns void language sql security definer set search_path = public as $$
+ update public.broker_report_documents set
+  status='withdrawn', withdrawn_at=coalesce(withdrawn_at,now()),
+  withdrawn_reason=case when status='withdrawn' then withdrawn_reason else p_reason end,
+  purge_requested_at=case when p_purge then coalesce(purge_requested_at,now()) else purge_requested_at end,
+  purge_requested_by=case when p_purge and purge_requested_at is null then p_by else purge_requested_by end
+ where document_id=p_document;
+$$;
+revoke execute on function public.broker_document_withdraw(uuid,text,boolean,uuid) from public, anon, authenticated;
+grant execute on function public.broker_document_withdraw(uuid,text,boolean,uuid) to service_role;
+
 create or replace function public.broker_document_claim_lease(p_document uuid, p_token uuid, p_ttl_seconds integer)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare d public.broker_report_documents;
@@ -3948,12 +3964,32 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   expect(await anon(`select 1 from public.broker_report_snippets_public_v where snippet_id=$1`,[sn])).toEqual([]);
  },120000);
 
+ it('spread public allowlist and grants under both roles (NEW-04)',async()=>{
+  await enable(true);
+  const r=await published({licence:{allows_public_target_price:false}});
+  for(const role of ['anon','authenticated'] as const)await asRole(role,async c=>{
+   const rows=(await c.query('select * from public.broker_spread_latest_v where report_id=$1',[r.rep])).rows;
+   expect(rows).toHaveLength(1);
+   expect(Object.keys(rows[0]).sort()).toEqual(['report_id','published_date','institution_id','security_ticker','issuer_id','currency'].sort());
+   // Exact allowlist proves no target price, evidence, raw text/model payload or path is reachable.
+   expect(rows[0].currency).toBe('HKD'); // report price remains public under this licence
+   const target=(await c.query('select target_price,target_currency,target_horizon_months,upside_pct from public.broker_report_targets_public_v where report_id=$1',[r.rep])).rows[0];
+   expect(Object.values(target)).toEqual([null,null,null,null]);
+  });
+ });
+
  it('spread page-51 regression: 10,000 newer A reports cannot hide B; lower window and visibility gates apply (P-R6-05)',async()=>{
   await enable(true);
   const tk=`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');const issuer=await s.issuer();const inst=await s.institution();
   // Use real published fixtures, not a mocked view or a client-side DISTINCT substitute.
-  for(let n=0;n<10_000;n++)await published({tk,issuer,inst,published:'2026-10-01'});
-  const b=await published({tk,issuer,published:'2026-03-01'});
+  const prices={target_price:'120',price_at_report:'100',target_currency:'HKD',price_currency:'HKD'};
+  for(let n=0;n<10_000;n++)await published({tk,issuer,inst,published:'2026-10-01',prices});
+  const b=await published({tk,issuer,published:'2026-03-01',prices});
+  const eligible=await anon(`select t.report_id from public.broker_report_targets_public_v t join public.broker_reports_public_v r using(report_id)
+   where t.security_ticker=$1 and t.issuer_id=$2 and r.published_date >= '2025-11-06'
+   and t.target_price=120 and t.price_at_report=100 and t.target_currency='HKD' and t.price_currency='HKD'
+   and (case when t.target_price is not null then t.target_currency when t.price_at_report is not null then t.price_currency else null end)='HKD'`,[tk,issuer]);
+  expect(eligible).toHaveLength(10_001);
   const rows=await anon(`select * from public.broker_spread_latest_v where security_ticker=$1 and currency='HKD' and published_date >= '2025-11-06'`,[tk]);
   expect(rows).toHaveLength(2);expect(rows.map(r=>r.report_id)).toContain(b.rep);
   expect(await anon(`select * from public.broker_spread_latest_v where report_id=$1 and published_date >= '2026-04-01'`,[b.rep])).toEqual([]);
@@ -4589,6 +4625,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
    if(!error)return 'inserted';
    const e=toBrokerResearchDbError(error);if(e.code==='duplicate_key')return 'duplicate';throw e;
   },
+  async withdrawWithIntent(id,reason,purge,by){await call('broker_document_withdraw',{p_document:id,p_reason:reason,p_purge:purge,p_by:by});},
   async updateDocument(id,patch){await run(from('broker_report_documents').update(dropUndefined(patch)).eq('document_id',id));},
   async claimLease(id,token,ttl){return (await call<unknown>('broker_document_claim_lease',{p_document:id,p_token:token,p_ttl_seconds:ttl}))===true;},
   async renewLease(id,token,ttl){return await call<'ok'|'lease_lost'|'document_withdrawn'>('broker_document_renew_lease',{p_document:id,p_token:token,p_ttl_seconds:ttl});},
@@ -4685,15 +4722,16 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
    return docs.sort(verifyOrder).slice(0,limit);
   },
   async registerWrite(row){return String((await run<R>(from('broker_storage_writes').insert(row).select('write_id').single())).write_id);},
+  async abandonWrite(id){await run(from('broker_storage_writes').update({status:'abandoned'}).eq('write_id',id).eq('status','pending'));},
   async finishWrite(id){await run(from('broker_storage_writes').update({status:'done',finished_at:new Date().toISOString()}).eq('write_id',id).eq('status','pending'));},
   async writesFor(documentId){return (await pageAll(()=>from('broker_storage_writes').select('*').eq('document_id',documentId).order('started_at').order('write_id'))).map(writeFromRow);},
   async pendingWritesFor(documentId){return (await pageAll(()=>from('broker_storage_writes').select('*').eq('document_id',documentId).eq('status','pending').order('started_at').order('write_id'))).map(writeFromRow);},
   async unreconciledWrites(limit){
    // Explicit durable intent, including incomplete purges; failures move back in the persisted retry order.
-   return (await pageAll(()=>from('broker_storage_writes').select('*,broker_report_documents!inner(purge_requested_at)').neq('status','reconciled').not('broker_report_documents.purge_requested_at','is',null).lte('next_attempt_at',new Date().toISOString()).order('next_attempt_at').order('write_id'),limit))
+   return (await pageAll(()=>from('broker_storage_writes').select('*,broker_report_documents!inner(purge_requested_at)').in('status',['pending','done']).not('broker_report_documents.purge_requested_at','is',null).lte('next_attempt_at',new Date().toISOString()).order('next_attempt_at').order('write_id'),limit))
     .map(r=>{const {broker_report_documents:_d,...x}=r;void _d;return writeFromRow(x);});
   },
-  async retryWrite(id,nextAttemptAt,attempts){await run(from('broker_storage_writes').update({next_attempt_at:nextAttemptAt,attempts}).eq('write_id',id).neq('status','reconciled'));},
+  async retryWrite(id,nextAttemptAt,attempts){await run(from('broker_storage_writes').update({next_attempt_at:nextAttemptAt,attempts}).eq('write_id',id).in('status',['pending','done']));},
   async markReconciled(id,deletedAt){await run(from('broker_storage_writes').update({status:'reconciled',reconciled_at:new Date().toISOString(),deleted_at:deletedAt}).eq('write_id',id).eq('status','done').lte('finished_at',deletedAt));},
   // ---- public: anon client, views only
   async spreadReports(f){
@@ -5164,6 +5202,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    documents.set(row.document_id,{...row,page_count:null,uploaded_at:stamp(),current_parse_run_id:null,status:'uploaded',lease_token:null,lease_until:null,promotion_pending:true,last_verified_at:null,verify_status:null,withdrawn_at:null,withdrawn_reason:null,purged_at:null,purge_requested_at:null,purge_requested_by:null});
    return 'inserted';
   },
+  async withdrawWithIntent(id,reason,purge,by){const d=req(documents,id,'document');const at=now();moveDocument(d,'withdrawn',{withdrawn_at:d.withdrawn_at??at,withdrawn_reason:d.status==='withdrawn'?d.withdrawn_reason:reason,...(purge&&!d.purge_requested_at?{purge_requested_at:at,purge_requested_by:by}:{})});},
   async updateDocument(id,patch){const d=req(documents,id,'document');const {status,...rest}=patch;moveDocument(d,status??d.status,rest);},
   async claimLease(id,token,ttl){
    if(!token||!(ttl>=1))fail('invalid_lease_args');
@@ -5492,15 +5531,21 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    return clone([...documents.values()].filter(d=>ids.has(d.document_id)).sort(verifyOrder).slice(0,limit));
   },
   async registerWrite(row){const w:StorageWriteRow={write_id:randomUUID(),...row,status:'pending',started_at:stamp(),finished_at:null,reconciled_at:null,next_attempt_at:now(),attempts:0,deleted_at:null};req(documents,row.document_id,'document');writes.set(w.write_id,w);return w.write_id;},
+  async abandonWrite(id){const w=writes.get(id);if(w?.status==='pending')w.status='abandoned';},
   async finishWrite(id){const w=writes.get(id);if(w&&w.status==='pending')Object.assign(w,{status:'done',finished_at:now()});},
   async writesFor(documentId){return clone([...writes.values()].filter(w=>w.document_id===documentId).sort((a,b)=>cmp(a.started_at,b.started_at)||cmp(a.write_id,b.write_id)));},
   async pendingWritesFor(documentId){return clone([...writes.values()].filter(w=>w.document_id===documentId&&w.status==='pending').sort((a,b)=>cmp(a.started_at,b.started_at)||cmp(a.write_id,b.write_id)));},
-  async unreconciledWrites(limit){return clone([...writes.values()].filter(w=>w.status!=='reconciled'&&documents.get(w.document_id)?.purge_requested_at!=null&&w.next_attempt_at<=now()).sort((a,b)=>cmp(a.next_attempt_at,b.next_attempt_at)||cmp(a.write_id,b.write_id)).slice(0,limit));},
-  async retryWrite(id,nextAttemptAt,attempts){const w=writes.get(id);if(w&&w.status!=='reconciled')Object.assign(w,{next_attempt_at:nextAttemptAt,attempts});},
+  async unreconciledWrites(limit){return clone([...writes.values()].filter(w=>(w.status==='pending'||w.status==='done')&&documents.get(w.document_id)?.purge_requested_at!=null&&w.next_attempt_at<=now()).sort((a,b)=>cmp(a.next_attempt_at,b.next_attempt_at)||cmp(a.write_id,b.write_id)).slice(0,limit));},
+  async retryWrite(id,nextAttemptAt,attempts){const w=writes.get(id);if(w&&(w.status==='pending'||w.status==='done'))Object.assign(w,{next_attempt_at:nextAttemptAt,attempts});},
   async markReconciled(id,deletedAt){const w=writes.get(id);if(w?.status==='done'&&w.finished_at!==null&&w.finished_at<=deletedAt)Object.assign(w,{status:'reconciled',reconciled_at:now(),deleted_at:deletedAt});},
   async spreadReports(f){
-   const rows=await this.publicReports({...f,limit:Number.MAX_SAFE_INTEGER});
-   const seen=new Set<string>();return rows.filter(b=>{const id=String(b.report.institution_id);if(seen.has(id)||b.report.institution_id==null)return false;seen.add(id);return true;});
+   const matching=visible().filter(r=>r.institution_id!==null).flatMap(r=>targetView(r).map(t=>({r,t,currency:t.target_price!=null?t.target_currency:t.price_at_report!=null?t.price_currency:null})))
+    .sort((a,b)=>cmp(String(b.r.published_date),String(a.r.published_date))||cmp(b.r.report_id,a.r.report_id));
+   const winners=new Map<string,typeof matching[number]>();
+   for(const x of matching){const key=JSON.stringify([x.t.security_ticker,x.currency,x.r.institution_id]);if(!winners.has(key))winners.set(key,x);}
+   const selected=[...winners.values()].filter(x=>x.t.issuer_id===f.issuerId&&x.t.security_ticker===f.securityTicker&&x.currency===f.currency&&String(x.r.published_date)>=f.from)
+    .sort((a,b)=>cmp(String(a.r.institution_id),String(b.r.institution_id)));
+   const out:PublicReportBundle[]=[];for(const x of selected){const b=await this.publicReport(x.r.report_id);if(b)out.push(b);}return out;
   },
   async publicReports(filter){
    let vis=visible();
@@ -5978,6 +6023,11 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    }
   });
 
+  it('initial withdrawal and requested intent are one operation (P-R6-01)',async()=>{
+   const w=await world();await db.withdrawWithIntent(w.doc,'atomic',true,by);
+   expect(await db.getDocument(w.doc)).toMatchObject({status:'withdrawn',withdrawn_at:expect.any(String),withdrawn_reason:'atomic',purge_requested_at:expect.any(String),purge_requested_by:by});
+  });
+
   it('bucket-write inventory: register before bytes, finish, per-document listing, unreconciled rows of purge-intent documents in retry order; pending cannot reconcile (P-R6-01..03)',async()=>{
    const w=await world();
    const a=await db.registerWrite({document_id:w.doc,path:`runs/${randomUUID()}.request.json`,writer:'extract'});
@@ -5987,15 +6037,21 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.pendingWritesFor(w.doc)).map(x=>x.write_id)).toEqual([b]);
    expect((await db.writesFor(w.doc)).map(x=>[x.write_id,x.status])).toEqual([[a,'done'],[b,'pending']]);
    expect((await db.unreconciledWrites(500)).some(x=>x.document_id===w.doc)).toBe(false);     // the document is not withdrawn
-   await db.updateDocument(w.doc,{status:'withdrawn',withdrawn_at:new Date().toISOString(),withdrawn_reason:'t'});
+   await db.withdrawWithIntent(w.doc,'t',false,by);
+   expect(await db.getDocument(w.doc)).toMatchObject({status:'withdrawn',withdrawn_reason:'t',purge_requested_at:null,purge_requested_by:null});
    expect((await db.unreconciledWrites(500)).some(x=>x.document_id===w.doc)).toBe(false);
-   await db.updateDocument(w.doc,{purge_requested_at:new Date().toISOString(),purge_requested_by:by});
+   await db.withdrawWithIntent(w.doc,'retry',true,by);
+   expect(await db.getDocument(w.doc)).toMatchObject({status:'withdrawn',withdrawn_reason:'t',purge_requested_at:expect.any(String),purge_requested_by:by});
    await db.markReconciled(b,new Date().toISOString()); // pending must not reconcile
    const mine=(await db.unreconciledWrites(500)).filter(x=>x.document_id===w.doc);
    expect(mine.map(x=>x.write_id).sort()).toEqual([a,b].sort());
    await db.markReconciled(a,new Date().toISOString());
    expect((await db.unreconciledWrites(500)).filter(x=>x.document_id===w.doc).map(x=>x.write_id)).toEqual([b]);
    expect((await db.writesFor(w.doc)).find(x=>x.write_id===a)).toMatchObject({status:'reconciled',reconciled_at:expect.any(String)});
+   const abandoned=await db.registerWrite({document_id:w.doc,path:`runs/${randomUUID()}.response.json`,writer:'extract'});
+   await db.abandonWrite(abandoned);await db.finishWrite(abandoned);await db.markReconciled(abandoned,new Date().toISOString());
+   expect((await db.writesFor(w.doc)).find(x=>x.write_id===abandoned)).toMatchObject({status:'abandoned',finished_at:null,reconciled_at:null});
+   expect((await db.unreconciledWrites(500)).some(x=>x.write_id===abandoned)).toBe(false);
    await db.retryWrite(b,'2099-01-01T00:00:00.000Z',3);
    expect((await db.unreconciledWrites(500)).some(x=>x.write_id===b)).toBe(false);
    expect((await db.writesFor(w.doc)).find(x=>x.write_id===b)).toMatchObject({status:'pending',attempts:3,next_attempt_at:'2099-01-01T00:00:00.000Z'});
@@ -6084,6 +6140,9 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    const facet=async(f:{securityTicker?:string;currency?:string|null;issuerId?:string})=>(await db.publicReports({institutionId:inst,...f,limit:10})).map(b=>String(b.report.report_id));
    expect(await facet({securityTicker:tk2,currency:'HKD'})).toEqual([w.rep]);
    expect(await facet({securityTicker:tk2,currency:'USD'})).toEqual([]);
+   const winners=await db.spreadReports({issuerId:iss2,securityTicker:tk2,currency:'HKD',from:'2025-01-01'});
+   expect(winners.map(b=>[b.report.institution_id,b.report.report_id])).toEqual([[inst,w.rep]]);
+   expect(await db.spreadReports({issuerId:w.iss,securityTicker:tk2,currency:'HKD',from:'2025-01-01'})).toEqual([]);
    expect(await facet({issuerId:w.iss,securityTicker:tk2})).toEqual([]);                       // X's issuer with Y's security: no single target
    await db.setPublicEnabled(false,by);
   });
@@ -6096,9 +6155,17 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
     const expected=absent.length===2?null:'HKD';
     const detail=(await db.publicReport(r.rep))!;
     expect(detail.targets[0]).toMatchObject({target_price:null,target_currency:'HKD',price_currency:'HKD'});
+    // D1 adds this assertion to the A4/A5 shared contract once public-dto/public loaders exist.
+    const {toPublicReport}=await import('./public-dto');
+    expect(toPublicReport(detail)!.targets[0].currency).toBe(expected);
+    expect(detail.report.target_facets).toContainEqual({issuer_id:r.iss,rating:'buy',security_ticker:r.tk,currency:expected});
     const f={issuerId:r.iss,securityTicker:r.tk,currency:expected,from:'2025-01-01'};
     expect((await db.publicReports({...f,limit:10})).map(b=>b.report.report_id)).toContain(r.rep);
     expect((await db.spreadReports(f)).map(b=>b.report.report_id)).toEqual([r.rep]);
+    const {publicSpread}=await import('./public-read');
+    const spread=await publicSpread({db} as never,{issuerId:r.iss,securityTicker:r.tk,currency:expected,today:'2026-11-06'});
+    expect(spread.map(x=>x.currency)).toEqual([expected]);
+    expect((await db.publicReports({...f,currency:'USD',limit:10})).map(b=>b.report.report_id)).not.toContain(r.rep);
     expect(await db.spreadReports({...f,currency:'USD'})).toEqual([]);
    }
   });
@@ -6464,6 +6531,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
    try{await insert('broker_report_documents',{...row,status:'uploaded',promotion_pending:true},'document_id');return 'inserted';}
    catch(e){if(e instanceof BrokerResearchDbError&&e.code==='duplicate_key')return 'duplicate';throw e;}
   },
+  withdrawWithIntent:(id,reason,purge,by)=>fn<void>('public.broker_document_withdraw($1,$2,$3,$4)',[id,reason,purge,by]),
   async updateDocument(id,patch){await update('broker_report_documents',patch as R,'document_id = $1',[id]);},
   claimLease:(id,token,ttl)=>fn<boolean>('public.broker_document_claim_lease($1,$2,$3)',[id,token,ttl]),
   renewLease:(id,token,ttl)=>fn<'ok'|'lease_lost'|'document_withdrawn'>('public.broker_document_renew_lease($1,$2,$3)',[id,token,ttl]),
@@ -6547,11 +6615,12 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   quarantineResolve:(id,status,by,payload)=>fn<'resolved'|'not_found'|'already_resolved'>('public.broker_quarantine_resolve($1,$2,$3,$4::jsonb)',[id,status,by,payload]),
   async verifyCandidates(limit){return (await q(`select d.* from ${rel('broker_report_documents')} d where exists (select 1 from ${rel('broker_research_reports')} r where r.document_id = d.document_id and r.status = 'published') order by d.last_verified_at asc nulls first, d.document_id limit $1`,[limit])).map(documentFromRow);},
   async registerWrite(row){return String((await insert('broker_storage_writes',row as unknown as R,'write_id')).write_id);},
+  async abandonWrite(id){await q(`update ${rel('broker_storage_writes')} set status='abandoned' where write_id=$1 and status='pending'`,[id]);},
   async finishWrite(id){await q(`update ${rel('broker_storage_writes')} set status = 'done', finished_at = now() where write_id = $1 and status = 'pending'`,[id]);},
   async writesFor(documentId){return (await q(`select * from ${rel('broker_storage_writes')} where document_id = $1 order by started_at, write_id`,[documentId])).map(writeFromRow);},
   async pendingWritesFor(documentId){return (await q(`select * from ${rel('broker_storage_writes')} where document_id = $1 and status = 'pending' order by started_at, write_id`,[documentId])).map(writeFromRow);},
-  async unreconciledWrites(limit){return (await q(`select w.* from ${rel('broker_storage_writes')} w join ${rel('broker_report_documents')} d on d.document_id = w.document_id where w.status <> 'reconciled' and d.purge_requested_at is not null and w.next_attempt_at <= now() order by w.next_attempt_at, w.write_id limit $1`,[limit])).map(writeFromRow);},
-  async retryWrite(id,nextAttemptAt,attempts){await q(`update ${rel('broker_storage_writes')} set next_attempt_at=$2, attempts=$3 where write_id=$1 and status <> 'reconciled'`,[id,nextAttemptAt,attempts]);},
+  async unreconciledWrites(limit){return (await q(`select w.* from ${rel('broker_storage_writes')} w join ${rel('broker_report_documents')} d on d.document_id = w.document_id where w.status in ('pending','done') and d.purge_requested_at is not null and w.next_attempt_at <= now() order by w.next_attempt_at, w.write_id limit $1`,[limit])).map(writeFromRow);},
+  async retryWrite(id,nextAttemptAt,attempts){await q(`update ${rel('broker_storage_writes')} set next_attempt_at=$2, attempts=$3 where write_id=$1 and status in ('pending','done')`,[id,nextAttemptAt,attempts]);},
   async markReconciled(id,deletedAt){await q(`update ${rel('broker_storage_writes')} set status = 'reconciled', reconciled_at = now(), deleted_at=$2 where write_id = $1 and status='done' and finished_at <= $2::timestamptz`,[id,deletedAt]);},
   // ---- public: views only (the admin pool reads them exactly as anon would: owner rights, no caller-dependent predicate)
   async spreadReports(f){
@@ -9328,7 +9397,7 @@ async function fence(deps:Pick<TDeps,'db'>,w:Pick<TrackedWrite,'documentId'|'lea
 }
 const stop=(r:'lease_lost'|'document_withdrawn')=>r==='document_withdrawn'?gone():conflict('lease_lost');
 /** Liveness only: rejects after `ms` without cancelling the call; the caller leaves the write row pending. */
-function withinLiveness<T>(p:Promise<T>,ms:number):Promise<T>{
+export function withinLiveness<T>(p:Promise<T>,ms:number):Promise<T>{
  let t:ReturnType<typeof setTimeout>|undefined;
  return Promise.race([p,new Promise<never>((_,reject)=>{t=setTimeout(()=>reject(new Error('upload_liveness_timeout')),ms);})]).finally(()=>clearTimeout(t));
 }
@@ -9336,7 +9405,7 @@ function withinLiveness<T>(p:Promise<T>,ms:number):Promise<T>{
 export async function trackedUpload(deps:TDeps,w:TrackedWrite):Promise<'stored'|'exists'>{
  const writeId=await deps.db.registerWrite({document_id:w.documentId,path:w.path,writer:w.writer});   // durable BEFORE any byte
  const before=await fence(deps,w);
- if(before!=='ok'){await deps.db.finishWrite(writeId);throw stop(before);}                            // nothing was sent
+ if(before!=='ok'){await deps.db.abandonWrite(writeId);throw stop(before);}                            // nothing was sent
  const result=await withinLiveness(deps.storage.upload(w.path,w.body,w.contentType),UPLOAD_TIMEOUT_MS);   // throws → row stays pending
  const after=await fence(deps,w);
  if(after!=='ok'){
@@ -9352,8 +9421,10 @@ export async function trackedUpload(deps:TDeps,w:TrackedWrite):Promise<'stored'|
 export async function trackedPortWrite<T>(deps:Pick<TDeps,'db'>,o:{documentId:string;prefix:string;writer:StorageWriter;lease:{token:string;ttlSeconds:number}},invoke:()=>Promise<T>):Promise<T>{
  const writeId=await deps.db.registerWrite({document_id:o.documentId,path:o.prefix,writer:o.writer});
  const before=await fence(deps,o);
- if(before!=='ok'){await deps.db.finishWrite(writeId);throw stop(before);} // no bytes sent
+ if(before!=='ok'){await deps.db.abandonWrite(writeId);throw stop(before);} // no bytes sent
  const result=await invoke(); // error/timeout is uncertain: leave pending, even if remote writes land later
+ const after=await fence(deps,o);
+ if(after!=='ok')throw stop(after); // dispatched: keep pending, never done/abandoned
  await deps.db.finishWrite(writeId);
  return result;
 }
@@ -9376,7 +9447,7 @@ export async function deleteRegisteredPath(storage:BrokerStorage,path:string,bud
 import {describe,expect,it,vi} from 'vitest';
 import {memoryBrokerResearchDb} from './memory-db';
 import {memoryBrokerStorage} from './storage';
-import {deleteRegisteredPath,trackedUpload} from './tracked-write';
+import {deleteRegisteredPath,trackedUpload,trackedPortWrite} from './tracked-write';
 
 async function setup(){
  const db=memoryBrokerResearchDb();const storage=memoryBrokerStorage();
@@ -9386,6 +9457,25 @@ async function setup(){
  return {db,storage,doc,sha,path:'runs/00000000-0000-4000-8000-0000000000aa.request.json'};
 }
 describe('trackedUpload (P-R5-01..03)',()=>{
+ it.each(['document_withdrawn','lease_lost'] as const)('preflight %s abandons without invoking upload/F3 (NEW-05)',async failure=>{
+  for(const port of [false,true]){
+   const {db,storage,doc,path}=await setup();
+   if(failure==='document_withdrawn')await db.withdrawWithIntent(doc,'test',false,'u');
+   const invoke=vi.fn(async()=>({}));const upload=vi.spyOn(storage,'upload');
+   const lease={token:'unheld-token',ttlSeconds:300};
+   const work=port?trackedPortWrite({db},{documentId:doc,prefix:path+'/',writer:'f3',lease},invoke)
+    :trackedUpload({db,storage},{documentId:doc,path,writer:'extract',body:'{}',contentType:'application/json',lease});
+   await expect(work).rejects.toThrow();expect(invoke).not.toHaveBeenCalled();expect(upload).not.toHaveBeenCalled();
+   expect(await db.writesFor(doc)).toMatchObject([{status:'abandoned',finished_at:null,reconciled_at:null}]);
+  }
+ });
+ it.each(['document_withdrawn','lease_lost'] as const)('F3 post-fence %s leaves pending (P-R6-04)',async failure=>{
+  const {db,doc,path}=await setup();const token='held';await db.claimLease(doc,token,300);
+  const invoke=async()=>{if(failure==='document_withdrawn')await db.withdrawWithIntent(doc,'test',true,'u');else await db.fencedUpdateDocument(doc,token,{releaseLease:true});return {};};
+  await expect(trackedPortWrite({db},{documentId:doc,prefix:path+'/',writer:'f3',lease:{token,ttlSeconds:300}},invoke)).rejects.toThrow();
+  expect(await db.writesFor(doc)).toMatchObject([{status:'pending',finished_at:null}]);
+ });
+
  it('registers the write before any byte is sent, marks it done after a fenced success',async()=>{
   const {db,storage,doc,path}=await setup();const order:string[]=[];
   const reg=db.registerWrite.bind(db);db.registerWrite=async r=>{order.push('register');return reg(r);};
@@ -10570,6 +10660,9 @@ export interface F3Page{page:number;text:string}
 export interface F3Artifact{extractor_version:string;content_sha256:string;page_count:number;ocr_used:boolean;ocr_version:string|null;pages:F3Page[]}
 export interface F3Input{bytes:Uint8Array;sha256:string;outputPrefix:string;pagesPrefix:string}
 export interface F3Authorization{licenceId:string;licenceVersion:number;purpose:'broker_research'}
+/** extractDocument resolves only after ALL artifact/page writes have settled; no detached writes after resolve.
+ * Errors/timeouts and post-return fence failures leave the registered prefix pending for reconciliation.
+ * A deliberately nonconforming late-write fake is tested as defense in depth, not an allowed production contract. */
 export interface F3Port{
  available():boolean;
  extractDocument(input:F3Input,opts:{deadline:Date;authorization:F3Authorization}):Promise<F3Artifact>;
@@ -12782,8 +12875,8 @@ type WDeps=Pick<CoreDeps,'db'|'storage'|'tables'|'now'|'newId'>;
 
 export async function withdrawDocument(deps:WDeps,documentId:string,i:{reason:string;purge:boolean},by:string):Promise<{purge:Awaited<ReturnType<typeof purgeDocument>>|null}>{
  const doc=await deps.db.getDocument(documentId);if(!doc)throw notFound('document_not_found');
+ await deps.db.withdrawWithIntent(documentId,i.reason,i.purge,by); // one atomic DB operation, also on already-withdrawn retries
  if(doc.status!=='withdrawn'){
-  await deps.db.updateDocument(documentId,{status:'withdrawn',withdrawn_at:deps.now().toISOString(),withdrawn_reason:i.reason,...(i.purge&&!doc.purge_requested_at?{purge_requested_at:deps.now().toISOString(),purge_requested_by:by}:{})});
   await deps.db.logAccess({document_id:documentId,user_id:by,action:'withdraw',detail:{reason:i.reason}});
   await auditAdmin(deps.tables,by,'broker_research.withdraw',documentId,{reason:i.reason},deps.now());
  }
@@ -12806,14 +12899,19 @@ export async function purgeDocument(deps:WDeps,documentId:string,by:string):Prom
 /** Every object the bucket may hold for a document: exact paths (PDF, parse artifacts, run request/response) that still
  * exist, plus everything under its listable prefixes (page images, gold-evaluation calls). Removes them; returns them.
  * Used by purge's final sweep and the verify cron's purged-document reconciliation (E1). */
-export async function sweepDocumentObjects(deps:Pick<CoreDeps,'db'|'storage'>,doc:DocumentRow):Promise<string[]>{
+export async function sweepDocumentObjects(deps:Pick<CoreDeps,'db'|'storage'|'now'>,doc:DocumentRow):Promise<string[]>{
  const runs=await deps.db.listRuns(doc.document_id);const parses=runs.filter(r=>r.kind==='parse');
  const exact=[doc.storage_path,...parses.map(r=>brokerPaths.artifact(doc.sha256,r.run_id)),...runs.flatMap(r=>[r.request_path,r.response_path]).filter((p):p is string=>p!==null)];
  const found:string[]=[];
  for(const p of exact)if(await deps.storage.exists(p))found.push(p);
  for(const prefix of [brokerPaths.evalPrefix(doc.sha256),...parses.map(r=>brokerPaths.pagesPrefix(doc.sha256,r.run_id))])found.push(...await deps.storage.list(prefix));
  if(found.length)await deps.storage.remove(found);
- for(const w of await deps.db.writesFor(doc.document_id))found.push(...await deleteRegisteredPath(deps.storage,w.path));   // the durable inventory (P-R5-01..03)
+ for(const w of await deps.db.writesFor(doc.document_id)){
+  if(w.status==='abandoned')continue;
+  found.push(...await deleteRegisteredPath(deps.storage,w.path));
+  const deletedAt=deps.now().toISOString();
+  if(w.status==='done'&&w.finished_at!==null&&w.finished_at<=deletedAt)await deps.db.markReconciled(w.write_id,deletedAt);
+ }   // the durable inventory (P-R5-01..03)
  return [...new Set(found)];
 }
 async function purgeSteps(deps:WDeps,doc:DocumentRow,by:string):Promise<{done:boolean;steps:PurgeStepRow[]}>{
@@ -12829,7 +12927,12 @@ async function purgeSteps(deps:WDeps,doc:DocumentRow,by:string):Promise<{done:bo
    paths.push(...await deps.storage.list(brokerPaths.evalPrefix(doc.sha256)));          // gold-evaluation calls of this document (P-R2-02)
    if(paths.length)await deps.storage.remove(paths);
    // Known paths are deleted now; uncertain remote writes remain eligible for daily reconciliation indefinitely.
-   for(const w of await deps.db.writesFor(documentId))await deleteRegisteredPath(deps.storage,w.path);
+   for(const w of await deps.db.writesFor(documentId)){
+    if(w.status==='abandoned')continue;
+    await deleteRegisteredPath(deps.storage,w.path);
+    const deletedAt=deps.now().toISOString();
+    if(w.status==='done'&&w.finished_at!==null&&w.finished_at<=deletedAt)await deps.db.markReconciled(w.write_id,deletedAt);
+   }
   },
   fields_text:async()=>{if(report)await deps.db.purgeReportText(report.report_id,'fields_text');},
   snippets_text:async()=>{if(report)await deps.db.purgeReportText(report.report_id,'snippets_text');},
@@ -13882,8 +13985,8 @@ describe('toPublicReport',()=>{
  it('emits exactly the whitelisted keys',()=>{
   const r=toPublicReport(bundle())!;
   expect(Object.keys(r).sort()).toEqual(['availableAt','codeVersion','hasSummary','institution','primaryTargetKey','publishedDate','reportId','reportType','revision','rulesVersion','scope','sectorAsStated','snippetCount','targetPricePublic','targets','title']);
-  expect(Object.keys(r.targets[0]).sort()).toEqual(['issuerId','priceAtReport','publicationId','rating','securityTicker','target','targetKey','tickerAsStated','upsideFormulaVersion','upsidePct']);
-  expect(r.targets[0]).toMatchObject({target:{price:'12.50',currency:'CNY',horizonMonths:12},priceAtReport:{value:'10',currency:'CNY',asOf:'2026-09-30'},upsidePct:'0.25',rating:{raw:'Overweight',normalized:'overweight',scaleId:'sc-1'}});   // upsidePct stays a FRACTION (0.25 = 25 %)
+  expect(Object.keys(r.targets[0]).sort()).toEqual(['currency','issuerId','priceAtReport','publicationId','rating','securityTicker','target','targetKey','tickerAsStated','upsideFormulaVersion','upsidePct']);
+  expect(r.targets[0]).toMatchObject({currency:'CNY',target:{price:'12.50',currency:'CNY',horizonMonths:12},priceAtReport:{value:'10',currency:'CNY',asOf:'2026-09-30'},upsidePct:'0.25',rating:{raw:'Overweight',normalized:'overweight',scaleId:'sc-1'}});   // upsidePct stays a FRACTION (0.25 = 25 %)
   expect(r.title).toEqual({text:'Synthetic title',isRewritten:false,zh:'合成标题',en:null,isTranslation:true,modelId:'model-t'});
   expect(r.rulesVersion).toBe('broker-rules/1');
   expect(r.institution).toEqual({id:IID,nameEn:'Synthetic Securities',nameZh:'合成证券'});
@@ -13992,6 +14095,7 @@ export interface PublicInstitutionDto{id:string;nameEn:string;nameZh:string|null
 export type PublicInstitutionRef=Pick<PublicInstitutionDto,'id'|'nameEn'|'nameZh'>;
 export interface PublicInstitutionAnalystDto{analystId:string;displayName:string;reportCount:number}
 export interface PublicTargetDto{
+ currency:string|null; // effective public currency: public target price, else report price, else null
  targetKey:string;tickerAsStated:string;securityTicker:string|null;issuerId:string|null;publicationId:string|null;
  rating:{raw:string|null;normalized:NormalizedRating|null;scaleId:string|null};
  target:{price:string;currency:string|null;horizonMonths:number|null}|null;
@@ -14037,6 +14141,7 @@ export function toPublicTarget(row:Row,targetPricePublic:boolean):PublicTargetDt
  const allowed=targetPricePublic&&row.target_price_public===true;
  const price=allowed?dec(row.target_price):null,par=dec(row.price_at_report);
  return {
+  currency:price!==null?str(row.target_currency):par!==null?str(row.price_currency):null,
   targetKey,tickerAsStated:str(row.ticker_as_stated)??targetKey,securityTicker:str(row.security_ticker),issuerId:str(row.issuer_id),publicationId:str(row.publication_id),
   rating:{raw:str(row.rating_raw),normalized:oneOf(row.rating_normalized,PUBLIC_RATINGS),scaleId:str(row.scale_id)},
   target:price===null?null:{price,currency:str(row.target_currency),horizonMonths:int(row.target_horizon_months)},
@@ -14340,11 +14445,11 @@ export async function publicHistory(deps:PublicReadDeps,q:{securityTicker:string
 export function monthsBefore(today:string,months:number):string{
  const d=new Date(`${today}T00:00:00Z`);d.setUTCMonth(d.getUTCMonth()-months);return d.toISOString().slice(0,10);
 }
-export const currencyOf=(t:PublicTargetDto):string|null=>t.target!==null?t.target.currency:t.priceAtReport!==null?t.priceAtReport.currency:null;
+export const currencyOf=(t:PublicTargetDto):string|null=>t.currency;
 export const focusTarget=(r:PublicReportDto):PublicTargetDto|null=>r.targets.find(t=>t.targetKey===r.primaryTargetKey)??r.targets[0]??null;
 const newestFirst=(a:PublicReportDto,b:PublicReportDto)=>(b.publishedDate??'').localeCompare(a.publishedDate??'')||b.reportId.localeCompare(a.reportId);
 
-export interface PublicSpreadRowDto{reportId:string;institution:PublicInstitutionRef;publishedDate:string|null;rating:{raw:string|null;normalized:NormalizedRating|null};targetPricePublic:boolean;target:{price:string;currency:string|null}|null;priceAtReport:{value:string;currency:string|null}|null;upsidePct:string|null}
+export interface PublicSpreadRowDto{currency:string|null;reportId:string;institution:PublicInstitutionRef;publishedDate:string|null;rating:{raw:string|null;normalized:NormalizedRating|null};targetPricePublic:boolean;target:{price:string;currency:string|null}|null;priceAtReport:{value:string;currency:string|null}|null;upsidePct:string|null}
 export async function publicSpread(deps:PublicReadDeps,q:{issuerId:string;securityTicker:string;currency:string|null;today:string;windowMonths?:number}):Promise<PublicSpreadRowDto[]>{
  const reports=(await deps.db.spreadReports({issuerId:q.issuerId,securityTicker:q.securityTicker,currency:q.currency,from:monthsBefore(q.today,q.windowMonths??SPREAD_WINDOW_MONTHS)})).map(toPublicReport).filter(notNull);
  const latest=new Map<string,PublicSpreadRowDto>();
@@ -14352,7 +14457,7 @@ export async function publicSpread(deps:PublicReadDeps,q:{issuerId:string;securi
   if(!r.institution||latest.has(r.institution.id))continue;
   const t=r.targets.find(x=>x.securityTicker===q.securityTicker&&currencyOf(x)===q.currency);
   if(!t)continue;
-  latest.set(r.institution.id,{reportId:r.reportId,institution:r.institution,publishedDate:r.publishedDate,rating:{raw:t.rating.raw,normalized:t.rating.normalized},targetPricePublic:r.targetPricePublic,
+  latest.set(r.institution.id,{currency:t.currency,reportId:r.reportId,institution:r.institution,publishedDate:r.publishedDate,rating:{raw:t.rating.raw,normalized:t.rating.normalized},targetPricePublic:r.targetPricePublic,
    target:t.target?{price:t.target.price,currency:t.target.currency}:null,priceAtReport:t.priceAtReport?{value:t.priceAtReport.value,currency:t.priceAtReport.currency}:null,upsidePct:t.upsidePct});
  }
  return [...latest.values()];
@@ -16046,7 +16151,7 @@ const render=(el:ReactElement)=>renderToStaticMarkup(createElement(NextIntlClien
 const RID='11111111-1111-4111-8111-111111111111';
 function report(over:Partial<PublicReportDetailDto>={}):PublicReportDetailDto{
  return {reportId:RID,revision:1,scope:'single_issuer',institution:{id:'22222222-2222-4222-8222-222222222222',nameEn:'Synthetic Securities',nameZh:null},primaryTargetKey:'600000.SH',
-  targets:[{targetKey:'600000.SH',tickerAsStated:'600000 CH',securityTicker:'600000.SH',issuerId:'iss-1',publicationId:'33333333-3333-4333-8333-333333333333',rating:{raw:'Overweight',normalized:'overweight',scaleId:'s'},
+  targets:[{currency:'CNY',targetKey:'600000.SH',tickerAsStated:'600000 CH',securityTicker:'600000.SH',issuerId:'iss-1',publicationId:'33333333-3333-4333-8333-333333333333',rating:{raw:'Overweight',normalized:'overweight',scaleId:'s'},
    target:{price:'12.34',currency:'CNY',horizonMonths:12},priceAtReport:{value:'9.87',currency:'CNY',asOf:'2026-09-30'},upsidePct:'0.2502',upsideFormulaVersion:'upside/1'}],
   title:{text:'Synthetic title',isRewritten:true,zh:null,en:null,isTranslation:false,modelId:null},publishedDate:'2026-10-01',reportType:null,sectorAsStated:null,availableAt:'2026-10-02T00:00:00+00:00',codeVersion:'abc1234',
   hasSummary:{zh:true,en:false},snippetCount:0,targetPricePublic:true,rulesVersion:'broker-rules/1',
@@ -16181,7 +16286,7 @@ import {LibraryReportsView,parseByTicker} from './LibraryReportsBlock';
 
 const zh=JSON.parse(readFileSync(resolve(process.cwd(),'messages/zh/foreign-research.json'),'utf8'));
 const r=(n:number,over:Partial<PublicReportDto>={}):PublicReportDto=>({reportId:`11111111-1111-4111-8111-${String(n).padStart(12,'0')}`,revision:1,scope:'single_issuer',institution:{id:'i',nameEn:'Synthetic Securities',nameZh:null},primaryTargetKey:'600000.SH',
- targets:[{targetKey:'600000.SH',tickerAsStated:'600000',securityTicker:'600000.SH',issuerId:'iss',publicationId:null,rating:{raw:'Buy',normalized:'buy',scaleId:null},target:{price:'10.5',currency:'CNY',horizonMonths:null},priceAtReport:null,upsidePct:null,upsideFormulaVersion:null}],
+ targets:[{currency:'CNY',targetKey:'600000.SH',tickerAsStated:'600000',securityTicker:'600000.SH',issuerId:'iss',publicationId:null,rating:{raw:'Buy',normalized:'buy',scaleId:null},target:{price:'10.5',currency:'CNY',horizonMonths:null},priceAtReport:null,upsidePct:null,upsideFormulaVersion:null}],
  title:{text:`Synthetic ${n}`,isRewritten:false,zh:null,en:null,isTranslation:false,modelId:null},publishedDate:'2026-10-01',reportType:null,sectorAsStated:null,availableAt:null,codeVersion:null,hasSummary:{zh:false,en:false},snippetCount:0,targetPricePublic:true,rulesVersion:null,...over});
 
 describe('library block',()=>{
@@ -19042,6 +19147,18 @@ describe('candidates',()=>{
 });
 
 describe('runVerify',()=>{
+ it('under 10 seconds skips cleanup inventory and still verifies evidence (NEW-03)',async()=>{
+  await setup([{id:'ok',last:null,text:'price 12.34 CNY'}]);
+  const r=await runVerify(deps(),{deadline:new Date(clock+9_000),triggeredBy:'cron',recordFreshness:false});
+  expect(db.unreconciledWrites).not.toHaveBeenCalled();expect(r.checked).toBe(1);
+ });
+ it('cleanup consumes its full quarter, leaving evidence its reserved budget (NEW-03)',async()=>{
+  await setup([{id:'ok',last:null,text:'price 12.34 CNY'}]);const start=clock;
+  vi.mocked(db.unreconciledWrites).mockImplementationOnce(async()=>{clock+=20_000;return [];});
+  const r=await runVerify(deps(),{deadline:new Date(start+80_000),triggeredBy:'cron',recordFreshness:false});
+  expect(clock).toBe(start+20_000);expect(r.checked).toBe(1);expect(clock).toBeLessThan(start+80_000);
+ });
+
  it('ok / drift / unreadable each write last_verified_at and verify_status; drift and unreadable hide and quarantine',async()=>{
   await setup([{id:'ok',last:null,text:'price 12.34 CNY'},{id:'dr',last:null,text:'price 12.3 CNY'},{id:'un',last:null}]);
   const r=await runVerify(deps(),{deadline:deadline(),triggeredBy:'cron',recordFreshness:true});
@@ -19107,6 +19224,32 @@ describe('withdrawal and port reconciliation regressions (P-R6-01/04)',()=>{
   expect(await d.db.unreconciledWrites(100)).toEqual([]);
   expect((await d.db.getDocument(doc.document_id))!.purge_requested_at).toBeNull();
  });
+ it('all seven purge steps fail but atomic withdrawal intent survives (P-R6-01)',async()=>{
+  const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);
+  vi.spyOn(d.db,'reportByDocument').mockResolvedValue({report_id:'forced-report'} as never);
+  vi.spyOn(d.storage,'remove').mockRejectedValue(new Error('delete failed'));
+  vi.spyOn(d.storage,'list').mockRejectedValue(new Error('list failed'));
+  vi.spyOn(d.db,'listRuns').mockResolvedValue([{kind:'parse',run_id:'forced-run',request_path:'runs/forced.request.json',response_path:null}] as never);
+  vi.spyOn(d.db,'purgeReportText').mockRejectedValue(new Error('text step failed'));
+  await withdrawDocument(d,doc.document_id,{reason:'all fail',purge:true},ADMIN_ID);
+  expect(await d.db.getDocument(doc.document_id)).toMatchObject({status:'withdrawn',withdrawn_reason:'all fail',withdrawn_at:expect.any(String),purge_requested_at:expect.any(String),purge_requested_by:ADMIN_ID});
+  const steps=await d.db.purgeSteps(doc.document_id);expect(steps).toHaveLength(7);expect(steps.every(x=>x.status==='failed')).toBe(true);
+ });
+ it('purge reconciles done paths after deletion but leaves pending paths eligible (NEW-02)',async()=>{
+  const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);
+  const ids:string[]=[];
+  for(const complete of [true,false]){
+   const path=`runs/${d.newId()}.response.json`;
+   const id=await d.db.registerWrite({document_id:doc.document_id,path,writer:'extract'});ids.push(id);
+   await d.storage.upload(path,'{}','application/json');if(complete)await d.db.finishWrite(id);
+  }
+  await withdrawDocument(d,doc.document_id,{reason:'purge',purge:true},ADMIN_ID);
+  const rows=await d.db.writesFor(doc.document_id),done=rows.find(x=>x.write_id===ids[0])!,pending=rows.find(x=>x.write_id===ids[1])!;
+  expect(done.status).toBe('reconciled');expect(Date.parse(done.deleted_at!)).toBeGreaterThanOrEqual(Date.parse(done.finished_at!));
+  expect(pending).toMatchObject({status:'pending',finished_at:null,reconciled_at:null});
+  for(const w of rows)expect(d.storage.objects.has(w.path)).toBe(false);
+  expect((await d.db.unreconciledWrites(100)).map(x=>x.write_id)).toContain(pending.write_id);
+ });
  it('purge intent survives lease_held before any deletion step (P-R6-01)',async()=>{
   const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);
   await d.db.claimLease(doc.document_id,d.newId(),300);
@@ -19121,6 +19264,26 @@ describe('withdrawal and port reconciliation regressions (P-R6-01/04)',()=>{
   d.f3={available:()=>true,extractDocument:async i=>{called=true;return pipelineExtraction(i.sha256);}};
   expect(await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()})).toMatchObject({status:'failed',errorCode:'document_withdrawn'});
   expect(called).toBe(false);
+ });
+ it('resolved F3 with post-fence failure: a late page survives purge only until reconciliation (P-R6-04)',async()=>{
+  const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);let prefix='';
+  d.f3={available:()=>true,extractDocument:async i=>{
+   prefix=i.pagesPrefix;
+   // Deliberately release the lease before successful resolution; post-fence must retain pending.
+   const held=(await d.db.getDocument(doc.document_id))!.lease_token!;
+   await d.db.fencedUpdateDocument(doc.document_id,held,{releaseLease:true});
+   return pipelineExtraction(i.sha256);
+  }};
+  await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  expect((await d.db.writesFor(doc.document_id)).find(w=>w.writer==='f3')).toMatchObject({status:'pending',finished_at:null});
+  // Nonconforming fake writes after resolve, then explicit withdrawal + purge deletes it.
+  await d.storage.upload(`${prefix}1.png`,new Uint8Array([1]),'image/png');
+  await withdrawDocument(d,doc.document_id,{reason:'purge',purge:true},ADMIN_ID);
+  // A still later arrival proves the pending prefix remains eligible after a completed purge.
+  await d.storage.upload(`${prefix}2.png`,new Uint8Array([2]),'image/png');
+  await runVerify(d,{deadline:new Date(d.now().getTime()+250_000),triggeredBy:'cron',recordFreshness:false});
+  expect(d.storage.objects.has(`${prefix}1.png`)).toBe(false);expect(d.storage.objects.has(`${prefix}2.png`)).toBe(false);
+  expect((await d.db.writesFor(doc.document_id)).find(w=>w.writer==='f3')).toMatchObject({status:'pending',finished_at:null});
  });
  it('F3 timeout leaves pending prefix; a late page after purge is deleted on the next daily run (P-R6-04)',async()=>{
   const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);let prefix='';
@@ -19209,7 +19372,8 @@ import type {FreshnessStatus} from '../dq/freshness';
 import type {CoreDeps} from './deps';
 import {sliceText} from './extract/locate';
 import {loadArtifact} from './parse';
-import {deleteRegisteredPath} from './tracked-write';
+import type {StorageWriteRow} from './types';
+import {deleteRegisteredPath,withinLiveness} from './tracked-write';
 import type {PageText} from './extract/locate';
 import type {DocumentRow,FieldRow} from './types';
 
@@ -19291,35 +19455,43 @@ export async function runVerify(deps:VerifyDeps,opts:VerifyOptions):Promise<Veri
  }else all=await candidates(deps);
  // Purge-intent reconciliation has a separate budget and durable retry ordering. No elapsed-time completion.
  let orphansRemoved=0,writesReconciled=0;
- if(opts.documentId===undefined){
-  const until=Math.min(opts.deadline.getTime()-10_000,deps.now().getTime()+RECONCILE_BUDGET_MS);
+ const remainingMs=Math.max(0,opts.deadline.getTime()-deps.now().getTime());
+ const cleanupMs=remainingMs<10_000?0:Math.min(RECONCILE_BUDGET_MS,remainingMs*0.25);
+ const evidenceMs=remainingMs-cleanupMs; // reserved even if cleanup consumes its entire allocation
+ const until=deps.now().getTime()+cleanupMs;
+ const cleanupCall=<T>(invoke:()=>Promise<T>):Promise<T>=>{const ms=until-deps.now().getTime();return ms>0?withinLiveness(invoke(),ms):Promise.reject(new Error('cleanup_deadline'));};
+ if(opts.documentId===undefined&&cleanupMs>0){
   const kept=new Set<string>();
   drain:for(;;){
-   const rows=(await deps.db.unreconciledWrites(RECONCILE_BATCH+kept.size)).filter(w=>!kept.has(w.write_id));
+   if(deps.now().getTime()>=until)break;
+   let rows:StorageWriteRow[];
+   try{rows=(await withinLiveness(deps.db.unreconciledWrites(RECONCILE_BATCH+kept.size),until-deps.now().getTime())).filter(w=>!kept.has(w.write_id));}
+   catch{errors.push({code:'verify_error',key:'cleanup_inventory'});break;}
    if(!rows.length)break;
    for(const w of rows){
     if(deps.now().getTime()>=until)break drain;
     kept.add(w.write_id);
     try{
-     const deletedAt=deps.now().toISOString(); // capture BEFORE deletion; concurrent finish requires another sweep
      const removed=await deleteRegisteredPath(deps.storage,w.path,{until,now:deps.now});
-     if(removed.length){orphansRemoved+=removed.length;await deps.db.logAccess({document_id:w.document_id,user_id:CRON_ACTOR,action:'orphan_cleanup',detail:{reason:'purge_requested_write',write_id:w.write_id,writer:w.writer,removed:removed.length}});}
-     if(w.status==='done'&&w.finished_at!==null&&w.finished_at<=deletedAt){await deps.db.markReconciled(w.write_id,deletedAt);writesReconciled++;}
+     const deletedAt=deps.now().toISOString(); // successful deletion COMPLETED; snapshot-pending still waits for another sweep
+     if(removed.length){orphansRemoved+=removed.length;await cleanupCall(()=>deps.db.logAccess({document_id:w.document_id,user_id:CRON_ACTOR,action:'orphan_cleanup',detail:{reason:'purge_requested_write',write_id:w.write_id,writer:w.writer,removed:removed.length}}));}
+     if(w.status==='done'&&w.finished_at!==null&&w.finished_at<=deletedAt){await cleanupCall(()=>deps.db.markReconciled(w.write_id,deletedAt));writesReconciled++;}
      // Pending rows are deliberately NOT reconciled or delayed on success: swept on every daily invocation.
     }catch{
      const attempts=w.attempts+1;
-     await deps.db.retryWrite(w.write_id,new Date(deps.now().getTime()+Math.min(86_400_000,60_000*2**Math.min(attempts-1,11))).toISOString(),attempts);
+     await cleanupCall(()=>deps.db.retryWrite(w.write_id,new Date(deps.now().getTime()+Math.min(86_400_000,60_000*2**Math.min(attempts-1,11))).toISOString(),attempts)).catch(()=>{}); // no budget: unresolved row remains due
      errors.push({code:'verify_error',key:`write:${w.write_id}`});
     }
    }
   }
  }
+ const evidenceUntil=Math.min(opts.deadline.getTime(),deps.now().getTime()+evidenceMs);
  let i=0;
  for(;i<all.length;i++){
-  if(deps.now().getTime()>=opts.deadline.getTime()){errors.push({code:'deadline_hit'});break;}
+  if(deps.now().getTime()>=evidenceUntil){errors.push({code:'deadline_hit'});break;}
   const {doc,reportId}=all[i];counts.fetched++;
   try{
-   const r=await verifyDocument(deps,doc,reportId,batchId,{restore:opts.restore===true});
+   const r=await withinLiveness(verifyDocument(deps,doc,reportId,batchId,{restore:opts.restore===true}),evidenceUntil-deps.now().getTime());
    results.push(r);
    if(r.outcome==='ok')counts.inserted++;
    else{counts.quarantined++;errors.push({code:r.outcome==='error'?'artifact_unreadable':'span_drift',key:doc.document_id});}
@@ -19921,7 +20093,7 @@ git commit -m "feat(broker-research): verify and outbox crons, F4 port, storage 
 | D2 | 两条 cron（核验、outbox）路由已交付但**未登记** `vercel.json` | §8.3、§14 FR-5 | 首篇发布前无可核验内容；F4 消费端点未上线（F4 规格 §12.3）。登记片段见 `docs/runbooks/broker-research.md` §3，owner 合并后执行 |
 | D3 | `test:storage` 只交付脚本与 npm 脚本，未运行 | §12.3 | 需要本地 Supabase 栈；FR-6 前人工门禁，回执提交到审计目录 |
 | D4 | 公开列表无筛选且 0 行 → `404 not_found`；列表页对此显示"空馆藏"态而不是 404 页 | §8.1、§9.1、§9.2 | 匿名角色无法区分"开关关闭"与"空馆藏"（视图设计如此）；详情页与机构页照规格 404 |
-| D5 | 公开响应在 §8.1 字段外多 `targets[].publicationId`、`primaryTargetKey`、`rulesVersion`、`title.modelId`、`citations[].fieldId`、`snippets[].fieldId`、`summaries.*.groundingAssertions`、机构 `reportCount/lastPublishedDate/lastAvailableAt` | §8.1 | 来源抽屉（快照 id、规则版本、译名模型）、片段↔引用关联、摘要数字出处、机构计数；均来自视图补充列，不含 `field_id` 以外的内部 id 或跨度 |
+| D5 | 公开响应在 §8.1 字段外多 `targets[].publicationId`、`targets[].currency`（生效币种） 、`primaryTargetKey`、`rulesVersion`、`title.modelId`、`citations[].fieldId`、`snippets[].fieldId`、`summaries.*.groundingAssertions`、机构 `reportCount/lastPublishedDate/lastAvailableAt` | §8.1 | 来源抽屉（快照 id、规则版本、译名模型）、片段↔引用关联、摘要数字出处、机构计数；均来自视图补充列，不含 `field_id` 以外的内部 id 或跨度 |
 | D6 | 事实区标题"事实"改为"报告所载"，评级 / 目标价 / 空间 / 历史 / 分歧标"第三方判断（未结算）"，报告时价格与方法论参数标"第三方假设 · 文件所载" | §9.3、画板 Detail | F4 规格 §3、§12.3：登记为判断前不得以事实样式展示 |
 | D7 | 机构页"馆藏样本表现"只显示 n（无命中率） | 画板 Institution | 命中率在 F4 结算后 |
 | D8 | 管理员总览的"打开对外"恒禁用，三项门禁只读；只提供"关闭对外" | §9.5 | `test:storage` 回执在线上不可核对；FR-6 由 owner 按 runbook 操作 |
@@ -20062,3 +20234,21 @@ git commit -m "docs(spec): foreign research implementation record and deviations
 | 指挥 | 管理员机构维护缺路由与页面 | 新增 Task D6 | D6 |
 
 计划审计第 1 轮（`docs/audits/2026-11-06-foreign-research/03-codex-plan-round1.md`，16 项）的逐项处置见 `docs/audits/2026-11-06-foreign-research/04-disposition-plan-round1.md`。
+
+
+### MiniMax accepted follow-up — implementation gates (2026-11-06)
+
+These cases extend the named tasks and their existing suites; they are implementation-plan requirements, not executed test results. Implement all adapter changes together. The A4/A5 contract's DTO assertions are added in D1 once `public-dto.ts` and `public-read.ts` exist; before D1 retain the database-only assertions.
+
+| ID | Plan area / mandatory regression |
+|---|---|
+| P-R6-01 (P2) | A2/A4/A5 shared contract: `withdrawWithIntent` uses one `broker_document_withdraw` statement/transaction in pg and Supabase, and one synchronous validated `moveDocument` in memory. Initial purge withdrawal atomically sets status, timestamp/reason and intent; already-withdrawn retry adds intent without replacing original withdrawal metadata or intent actor. RPC rollback leaves both unchanged. Assert Supabase makes one RPC, never two document updates. C7: separately force lease refusal, then inject failure into each of the seven purge operations (including DB text steps and final sweep); after every failed invocation status remains withdrawn and both intent fields survive. `purge:false` on a fresh document never sets intent; it must not erase earlier authorized intent. |
+| P-R6-04 / NEW-05 | C1 covers both preflight failure causes for upload and F3: no invocation, abandoned, null finished_at, excluded from pending/due reconciliation and immune to finish/reconcile. A1 rejects abandoned with finished_at and done without finished_at. F3 errors, timeouts and post-return document/lease failures remain pending. E1 deliberately violates the F3 no-detached-writes contract: successful resolve, post-fence lease loss, late page, withdrawal+purge, another late page, next reconciliation deletes it. |
+| NEW-02 | C7 seed two registered paths, one done and one pending. Purge both successfully; done becomes reconciled with deleted_at >= finished_at, pending stays pending with null finished_at/reconciled_at and remains due. Failed deletion never reconciles. Run for pg and memory using memory storage; Supabase adapter contract verifies conditional status=done and finished_at<=deletedAt update. Repeat through final sweep and daily reconciliation. |
+| NEW-03 | E1 uses 9s remaining: no cleanup inventory/storage calls, evidence runs. With 80s remaining cleanup gets 20s and evidence 60s; with 250s cleanup gets 60s and evidence 190s. Exhaust cleanup (including a hanging-call fake timer case), then prove evidence executes before the overall deadline. Cleanup DB bookkeeping (logAccess/markReconciled/retryWrite), like inventory/storage calls, must be bounded by the cleanup deadline; timeout retains unresolved rows and never consumes the evidence allocation. Liveness wrappers do not cancel the underlying operation. |
+| NEW-04 | A3 exact six-column spread allowlist under anon and authenticated, restricted target-price licence, plus existing read grants/write rejection/visibility tests. No evidence, raw model payload, storage path or target price columns. Supabase cappedAnon spread fixtures use the same six-column shape and exercise null currency. |
+| NEW-06 | A4/A5 shared multi-target fixture above: only one target matches security+currency+issuer. Extend with older/newer reports in the same institution, equal-date report IDs, and a second institution; include a newer report with only a nonmatching target. Assert exact sorted `(institution_id, report_id)` winners, no duplicates, independent of report insertion order or unrelated targets. Run identical fixture definitions through memory and pg and compare normalized sets; SQL view and Supabase view rows use the same expected winners. Selection is target-level, distinct `(security_ticker,currency,institution_id)` ordered published_date DESC/report_id DESC, then reader filters issuer/window. |
+| NEW-07 / P-R6-06 partial | D1 extension to A4/A5 contract: DTO `targets[].currency` equals matching SQL/memory facet currency and spread row currency. Cases: public target exists; target absent/report price exists; both prices null with populated currency columns; target hidden by licence. Assert correct-currency inclusion, wrong-currency exclusion, and null-currency inclusion in list and spread, identically for memory and pg. Keep nested raw currency columns; use effective currency for filtering. |
+| NEW-09 | A3 page-51 fixture explicitly passes target_price=120, price_at_report=100 and both currencies HKD for all 10,001 reports; assert every fixture satisfies the security/issuer/window/effective-currency predicate before asserting two institution winners. |
+
+NEW-08 correction to disposition 15's validation wording: removed `MAX_WRITE_SECONDS` / age-based write completion, not all occurrences of `900`; unrelated `900` values remain in migration timestamps and test data. The historical file is outside this edit's authorized scope; the precise correction is recorded in [disposition 17](../../audits/2026-11-06-foreign-research/17-disposition-mmx-plan-audit.md).
