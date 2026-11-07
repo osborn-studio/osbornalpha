@@ -3,7 +3,7 @@
 | 任务 | 提交 | Opus 复审 | Codex | 修复轮次 | 备注 |
 |---|---|---|---|---|---|
 | T5 batches deferred | 6cbfdb7c | 指挥直审 diff：符合 §7.5 | codex review：No actionable defects | 0 | 早于计划定稿执行（任务独立、稳定） |
-| T1 core pure modules | cfc07e82 + FIXSHA | Opus: SPEC PASS (code), QUALITY PASS (minors fixed) | Codex review: 1 P2 (jsonClean __proto__) fixed | 1 | executed on plan draft 3 |
+| T1 core pure modules | cfc07e82 + 16dfa3b2 | Opus: SPEC PASS (code), QUALITY PASS (minors fixed) | Codex review: 1 P2 (jsonClean __proto__) fixed | 1 | executed on plan draft 3 |
 
 ## 偏差 · Task 1
 
