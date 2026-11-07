@@ -53,7 +53,7 @@ export function judgmentDetailOf(body:unknown):F4JudgmentDetail{
 export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeoutMs?:number}={}):F4Client{
  const raw=o.baseUrl===undefined?process.env.NEXT_PUBLIC_SITE_URL??null:o.baseUrl;
  let base:string|null=null;
- if(raw){try{const u=new URL(raw);if((u.protocol==='https:'||(u.protocol==='http:'&&(u.hostname==='localhost'||u.hostname==='127.0.0.1')))&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash&&raw===u.origin+(raw.endsWith('/')?'/':''))base=u.origin;}catch{/* invalid configuration */}}
+ if(raw){try{const u=new URL(raw);if((u.protocol==='https:'||(u.protocol==='http:'&&(u.hostname==='localhost'||u.hostname==='127.0.0.1')))&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash)base=u.origin;}catch{/* invalid configuration */}}
  const doFetch=o.fetch??fetch;const timeoutMs=o.timeoutMs??F4_TIMEOUT_MS;
  async function get(path:string,params:Record<string,string>,allowNotFound:boolean):Promise<unknown|null>{
   if(!base)throw new F4Unavailable('f4_unconfigured');
