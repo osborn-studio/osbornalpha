@@ -34,6 +34,12 @@ describe('GET /api/judgments/[id]',()=>{
  it('preserves frozen input ref/snapshot and settlement evidence for the macro detail parser',async()=>{
   mocks.settlements.mockResolvedValue([settlementRow({judgment_id:ID,evidence:{observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]}})]);
   const body=await (await get(ID)).json();
+  expect(body.judgment.inputs).toHaveLength(1);
+  for(const input of body.judgment.inputs as {kind:string;ref:Record<string,unknown>;snapshot:Record<string,unknown>}[]){
+   expect(input.kind.length).toBeGreaterThan(0);
+   expect(Object.keys(input.ref).length).toBeGreaterThan(0);
+   expect(Object.keys(input.snapshot).length).toBeGreaterThan(0);
+  }
   const parsed=judgmentDetailOf(body);
   expect(parsed.inputs[0]).toMatchObject({kind:'financial_fact',ref:{fact_id:uuidOf(500007)},snapshot:{fact_id:uuidOf(500007)}});
   expect(parsed.settlements[0].evidence).toEqual({observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]});

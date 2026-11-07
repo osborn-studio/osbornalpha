@@ -15,11 +15,14 @@
 // code over memoryFactsDb + memoryTableClient and hides non-ok facts like the anon policy.
 // kline: anon default = readKlineRange (Task 7); the memory variant defaults to unsupportedKline (no network in tests).
 import type {SupabaseClient} from '@supabase/supabase-js';
+import type {Pool} from 'pg';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
+import {pgTableClient} from '@/lib/db/pg-table-client';
 import {supabaseTableClient} from '@/lib/db/table-client';
 import type {Row,TableClient} from '@/lib/db/table-client';
 import {supabaseFactsDb} from '@/lib/facts/db';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
+import {pgFactsDb} from '@/lib/facts/pg-facts-db';
 import type {FactsDb} from '@/lib/facts/types';
 import type {JudgmentInputsDb,JudgmentRow,MacroReadApi,PriceMarket,PublicTable} from './types';
 import {PUBLIC_TABLES} from './types';
@@ -137,6 +140,16 @@ function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:Ma
 export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn}
 export function anonJudgmentInputsDb(d:AnonInputsDeps):JudgmentInputsDb{
  return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))});
+}
+/** PG17 test port of the same input composition, with SQL-backed facts and table reads. */
+export function pgJudgmentInputsDb(pool:Pool,macro:MacroReadApi):JudgmentInputsDb{
+ const tables=pgTableClient(pool);
+ const paged:PagedRead=async(table,match,order)=>{
+  const rows=await tables.select(table,match);
+  const key=(r:Row)=>order.map(c=>String(r[c])).join('\u0000');
+  return rows.sort((a,b)=>key(a)<key(b)?-1:key(a)>key(b)?1:0);
+ };
+ return inputsDbOf({facts:pgFactsDb(pool),tables,paged,macro,kline:unsupportedKline});
 }
 export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn}
 /** Test double over memory stores; `judgments` are treated as publishable public rows. */
