@@ -58,4 +58,9 @@ describe('selectF4Mark',()=>{
   const detail={...DETAIL,settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'},{outcome:'miss',realized:'recession',evidence:null,settled_at:'2027-01-01T00:00:00Z'}]};
   expect(selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'})?.summary.outcome).toBe('miss');
  });
+ it('a detail of another judgment contributes no settlement outcome',()=>{
+  const detail={...DETAIL,judgment_id:'j2',settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'}]};
+  const r=selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'});
+  expect(r?.summary.outcome).toBeNull();expect(r?.mark.snapshot_match).toBe(false);
+ });
 });

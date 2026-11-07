@@ -77,6 +77,21 @@ describe('buildTransmission',()=>{
   expect(spread.inputs).toHaveLength(2);
   expect(node(v,'cn_lpr_1y').state).toBe('missing');expect(node(v,'cn_csi300').state).toBe('restricted');
  });
+ it('an asset alias follows the resolved target: restricted / missing / absent targets propagate and freeze no value',async()=>{
+  const {f}=scenario();
+  const withTarget=(edit:(d:typeof FIXTURE_CATALOG[number])=>typeof FIXTURE_CATALOG[number]|null)=>({...f,catalog:f.catalog.flatMap(d=>{if(d.id!=='CN_CGB_10Y')return [d];const e=edit(d);return e?[e]:[];})});
+  const view=async(fx:typeof f)=>{const m=(await buildTransmissionManifest(memoryStrategyPort(fx),{now:NOW,codeVersion:'test',region:'CN'}))!;return {m,v:buildTransmission(stored(m))};};
+  const restricted=await view(withTarget(d=>({...d,status:'restricted',reason:{zh:'目标受限',en:'Target restricted'}})));
+  expect(node(restricted.v,'cn_cgb10y_asset')).toMatchObject({state:'restricted',value_text:null,period_end:null,inputs:[],reason:{zh:'目标受限',en:'Target restricted'}});
+  expect(node(restricted.v,'cn_cgb_10y').state).toBe('restricted');
+  expect(restricted.m.inputs.some(i=>i.role==='node:CN_CGB_10Y:latest')).toBe(false);
+  const missing=await view(withTarget(d=>({...d,status:'missing'})));
+  expect(node(missing.v,'cn_cgb10y_asset')).toMatchObject({state:'missing',value_text:null,inputs:[]});
+  expect(node(missing.v,'cn_cgb10y_asset').reason).not.toBeNull();
+  const absent=await view(withTarget(()=>null));
+  expect(node(absent.v,'cn_cgb10y_asset')).toMatchObject({state:'missing',value_text:null,inputs:[]});
+  expect(node(absent.v,'cn_cgb10y_asset').reason?.en).toMatch(/CN_CGB_10Y/);
+ });
  it('assumption nodes carry their text and no value; unknown series ids are not_in_catalog',async()=>{
   const {f}=scenario();
   const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'US'}))!);

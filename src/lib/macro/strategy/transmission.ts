@@ -45,7 +45,8 @@ export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Dat
  const done=new Set<string>();
  const readNodeSeries=async(id:string)=>{
   const d=b.def(id);if(!d||d.status!=='active')return;
-  const target=readSeries(d);b.def(target);
+  const target=readSeries(d),td=b.def(target);
+  if(!td||td.status!=='active')return;   // an alias reads only an existing, active target
   if(done.has(target))return;done.add(target);
   await b.snapshotValue(target,NODE_PURPOSE);
  };
@@ -64,6 +65,11 @@ function observedNode(m:StrategyManifest,n:Extract<NodeDef,{kind:'observed'}>):N
  const base={id:n.id,label:d.name,unit:d.unit};
  if(d.status!=='active')return {...base,state:d.status,value_text:null,period_end:null,inputs:[],reason:d.reason??CATALOG_STATE[d.status]};
  const target=readSeries(d);
+ if(target!==d.id){   // asset alias: the resolved target's catalog existence / status decides, not the alias row's
+  const td=frozenDef(m,target);
+  if(!td)return {...base,state:'missing',value_text:null,period_end:null,inputs:[],reason:{zh:`别名目标不在目录中：${target}`,en:`Alias target not in the catalog: ${target}`}};
+  if(td.status!=='active')return {...base,state:td.status,value_text:null,period_end:null,inputs:[],reason:td.reason??CATALOG_STATE[td.status]};
+ }
  const i=latestInput(m,target);
  if(!i)return {...base,state:'missing',value_text:null,period_end:null,inputs:[],reason:readState(m,target,NODE_PURPOSE)==='truncated'?TRUNCATED:NO_OBS};
  return {...base,state:'observed',value_text:i.value_text,period_end:i.period_end,inputs:[toObsRef(i)],reason:null};

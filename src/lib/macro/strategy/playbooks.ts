@@ -33,7 +33,7 @@ export function selectF4Mark(a:{card:F4CardLite|null;detail:F4JudgmentDetail|nul
  if(!MARKABLE_LIFECYCLES.has(c.lifecycle))return null;
  const match=a.snapshotId!==null&&a.detail!==null&&a.detail.judgment_id===c.judgment_id
   &&a.detail.inputs.some(i=>i.kind==='macro_snapshot'&&i.ref.snapshot_id===a.snapshotId);
- const latest=c.lifecycle==='settled'&&a.detail?[...a.detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0]:undefined;
+ const latest=c.lifecycle==='settled'&&a.detail&&a.detail.judgment_id===c.judgment_id?[...a.detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0]:undefined;
  const outcome=latest?.outcome==='hit'||latest?.outcome==='miss'?latest.outcome:null;
  return {
   mark:{regime:match?c.selected:null,judgment_id:c.judgment_id,snapshot_match:match,as_of:c.as_of},

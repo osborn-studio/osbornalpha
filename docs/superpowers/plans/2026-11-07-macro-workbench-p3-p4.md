@@ -4082,10 +4082,10 @@ EOF
 Design decisions (spec §5.1, §5.2, §7):
 - `f4-types.ts` holds `F4CardLite` and `F4JudgmentDetail` verbatim from the skeleton's dependency-injection block, because Task 6 needs them before `f4-client.ts` (Task 11) exists. Task 11 must `import type {F4CardLite,F4JudgmentDetail} from './f4-types'` and re-export them from `f4-client.ts` instead of redeclaring.
 - `NodeDef` / `StageDef` are declared in `transmission.ts` (spec §5.1 shape; the derived node also carries a `label`, because `NodeView.label` needs one). The v1 config follows the spec node list; the CN risk stage gets one `not_in_catalog` node (the spec says "无"), so no stage is empty; the last stage has `edgeToNext:null`.
-- `buildTransmissionManifest`: active snapshot of each region, `latestCutoff`, all observed / derived node series (asset views read their `aliasOf` target, so `CN_CGB10Y` reads `CN_CGB_10Y`), catalog rows of every node and every playbook watch id, `rules: port.rules()`. Catalog rows that are not `active` are not read (their view state comes from the frozen catalog). Returns `null` when neither region has an active snapshot (page "尚无发布快照").
+- `buildTransmissionManifest`: active snapshot of each region, `latestCutoff`, all observed / derived node series (asset views read their `aliasOf` target, so `CN_CGB10Y` reads `CN_CGB_10Y`), catalog rows of every node and every playbook watch id, `rules: port.rules()`. Catalog rows that are not `active` are not read (their view state comes from the frozen catalog); an alias is read only when its resolved target exists and is `active`, and its view state follows the target (missing / restricted propagate with the target's reason; a target absent from the catalog is `missing`). Returns `null` when neither region has an active snapshot (page "尚无发布快照").
 - Spread: `value_text = subtract(a, b)` only when both latest inputs share `period_end`; otherwise `missing` with reason `两条输入数据期不同：<a>=<pa>，<b>=<pb>` / `Inputs have different periods: …`; a restricted input makes the node `restricted`.
 - Playbooks: triggers = `playbookTriggers(manifest.rules, regime)` (support > 0, support desc, rule_id asc). Cards carry only static text, rule rows and watch names (filtered to the region). `PLAYBOOK_DISCLAIMER_V1` is the "未检验 / macro_regime_asset_pair 未实现" note the UI renders under the implications (Task 13).
-- `selectF4Mark({card,detail,snapshotId})` is pure: `null` unless `methodology = macro_regime@v1` and `lifecycle ∈ {open, settled}`; `snapshot_match` only when `detail` is the same judgment and has a `macro_snapshot` input whose `ref.snapshot_id === snapshotId`; a mismatch returns `mark.regime = null` (no highlight; the UI shows "F4 判定对应较早快照 <as_of>"). The summary is number-free; `outcome` = the latest settlement's `hit` / `miss` for settled cards; `href = /intel/methods/<id>/<version>` (F4 method page). No function returns a bare `Regime` (spec §7.2).
+- `selectF4Mark({card,detail,snapshotId})` is pure: `null` unless `methodology = macro_regime@v1` and `lifecycle ∈ {open, settled}`; `snapshot_match` only when `detail` is the same judgment (a detail whose `judgment_id` differs from the card contributes neither highlight nor settlement outcome) and has a `macro_snapshot` input whose `ref.snapshot_id === snapshotId`; a mismatch returns `mark.regime = null` (no highlight; the UI shows "F4 判定对应较早快照 <as_of>"). The summary is number-free; `outcome` = the latest settlement's `hit` / `miss` for settled cards; `href = /intel/methods/<id>/<version>` (F4 method page). No function returns a bare `Regime` (spec §7.2).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4170,6 +4170,21 @@ describe('buildTransmission',()=>{
   expect(spread.inputs).toHaveLength(2);
   expect(node(v,'cn_lpr_1y').state).toBe('missing');expect(node(v,'cn_csi300').state).toBe('restricted');
  });
+ it('an asset alias follows the resolved target: restricted / missing / absent targets propagate and freeze no value',async()=>{
+  const {f}=scenario();
+  const withTarget=(edit:(d:typeof FIXTURE_CATALOG[number])=>typeof FIXTURE_CATALOG[number]|null)=>({...f,catalog:f.catalog.flatMap(d=>{if(d.id!=='CN_CGB_10Y')return [d];const e=edit(d);return e?[e]:[];})});
+  const view=async(fx:typeof f)=>{const m=(await buildTransmissionManifest(memoryStrategyPort(fx),{now:NOW,codeVersion:'test',region:'CN'}))!;return {m,v:buildTransmission(stored(m))};};
+  const restricted=await view(withTarget(d=>({...d,status:'restricted',reason:{zh:'目标受限',en:'Target restricted'}})));
+  expect(node(restricted.v,'cn_cgb10y_asset')).toMatchObject({state:'restricted',value_text:null,period_end:null,inputs:[],reason:{zh:'目标受限',en:'Target restricted'}});
+  expect(node(restricted.v,'cn_cgb_10y').state).toBe('restricted');
+  expect(restricted.m.inputs.some(i=>i.role==='node:CN_CGB_10Y:latest')).toBe(false);
+  const missing=await view(withTarget(d=>({...d,status:'missing'})));
+  expect(node(missing.v,'cn_cgb10y_asset')).toMatchObject({state:'missing',value_text:null,inputs:[]});
+  expect(node(missing.v,'cn_cgb10y_asset').reason).not.toBeNull();
+  const absent=await view(withTarget(()=>null));
+  expect(node(absent.v,'cn_cgb10y_asset')).toMatchObject({state:'missing',value_text:null,inputs:[]});
+  expect(node(absent.v,'cn_cgb10y_asset').reason?.en).toMatch(/CN_CGB_10Y/);
+ });
  it('assumption nodes carry their text and no value; unknown series ids are not_in_catalog',async()=>{
   const {f}=scenario();
   const s=stored((await buildTransmissionManifest(memoryStrategyPort(f),{now:NOW,codeVersion:'test',region:'US'}))!);
@@ -4249,6 +4264,11 @@ describe('selectF4Mark',()=>{
  it('a settled card reports the latest settlement outcome',()=>{
   const detail={...DETAIL,settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'},{outcome:'miss',realized:'recession',evidence:null,settled_at:'2027-01-01T00:00:00Z'}]};
   expect(selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'})?.summary.outcome).toBe('miss');
+ });
+ it('a detail of another judgment contributes no settlement outcome',()=>{
+  const detail={...DETAIL,judgment_id:'j2',settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'}]};
+  const r=selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'});
+  expect(r?.summary.outcome).toBeNull();expect(r?.mark.snapshot_match).toBe(false);
  });
 });
 ```
@@ -4406,7 +4426,8 @@ export async function buildTransmissionManifest(port:StrategyReadPort,o:{now:Dat
  const done=new Set<string>();
  const readNodeSeries=async(id:string)=>{
   const d=b.def(id);if(!d||d.status!=='active')return;
-  const target=readSeries(d);b.def(target);
+  const target=readSeries(d),td=b.def(target);
+  if(!td||td.status!=='active')return;   // an alias reads only an existing, active target
   if(done.has(target))return;done.add(target);
   await b.snapshotValue(target,NODE_PURPOSE);
  };
@@ -4425,6 +4446,11 @@ function observedNode(m:StrategyManifest,n:Extract<NodeDef,{kind:'observed'}>):N
  const base={id:n.id,label:d.name,unit:d.unit};
  if(d.status!=='active')return {...base,state:d.status,value_text:null,period_end:null,inputs:[],reason:d.reason??CATALOG_STATE[d.status]};
  const target=readSeries(d);
+ if(target!==d.id){   // asset alias: the resolved target's catalog existence / status decides, not the alias row's
+  const td=frozenDef(m,target);
+  if(!td)return {...base,state:'missing',value_text:null,period_end:null,inputs:[],reason:{zh:`别名目标不在目录中：${target}`,en:`Alias target not in the catalog: ${target}`}};
+  if(td.status!=='active')return {...base,state:td.status,value_text:null,period_end:null,inputs:[],reason:td.reason??CATALOG_STATE[td.status]};
+ }
  const i=latestInput(m,target);
  if(!i)return {...base,state:'missing',value_text:null,period_end:null,inputs:[],reason:readState(m,target,NODE_PURPOSE)==='truncated'?TRUNCATED:NO_OBS};
  return {...base,state:'observed',value_text:i.value_text,period_end:i.period_end,inputs:[toObsRef(i)],reason:null};
@@ -4501,7 +4527,7 @@ export function selectF4Mark(a:{card:F4CardLite|null;detail:F4JudgmentDetail|nul
  if(!MARKABLE_LIFECYCLES.has(c.lifecycle))return null;
  const match=a.snapshotId!==null&&a.detail!==null&&a.detail.judgment_id===c.judgment_id
   &&a.detail.inputs.some(i=>i.kind==='macro_snapshot'&&i.ref.snapshot_id===a.snapshotId);
- const latest=c.lifecycle==='settled'&&a.detail?[...a.detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0]:undefined;
+ const latest=c.lifecycle==='settled'&&a.detail&&a.detail.judgment_id===c.judgment_id?[...a.detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0]:undefined;
  const outcome=latest?.outcome==='hit'||latest?.outcome==='miss'?latest.outcome:null;
  return {
   mark:{regime:match?c.selected:null,judgment_id:c.judgment_id,snapshot_match:match,as_of:c.as_of},
@@ -4513,7 +4539,7 @@ export function selectF4Mark(a:{card:F4CardLite|null;detail:F4JudgmentDetail|nul
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- src/lib/macro/strategy/transmission.test.ts src/lib/macro/strategy/playbooks.test.ts`
-Expected: PASS (6 + 6 tests). The "every series id in the v1 configs exists in the fixture catalog" case names the missing id if `FIXTURE_CATALOG` (Task 2) lacks a P1 row; add the row to the fixture (copied from the P1 catalog), do not edit the v1 config.
+Expected: PASS (7 + 7 tests). The "every series id in the v1 configs exists in the fixture catalog" case names the missing id if `FIXTURE_CATALOG` (Task 2) lacks a P1 row; add the row to the fixture (copied from the P1 catalog), do not edit the v1 config.
 
 - [ ] **Step 5: Typecheck and lint**
 
