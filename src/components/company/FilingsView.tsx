@@ -19,7 +19,7 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
   const tt = useTranslations('company.filings.types');
   const ts = useTranslations('company.states');
   const tab = useTranslations('company.tabs');
-  const [source, setSource] = useState<string | null>(null);
+  const [source, setSource] = useState<{filingId:string;originalUrl:string|null} | null>(null);
   const { state, retry } = useCompanyFetch<CompanyFilingsResponse>(companyApi('filings', ticker, { asOf }));
 
   return (
@@ -60,9 +60,9 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
                         <td className="px-4">
                           <div className="flex gap-1.5">
                             <Link href={companyHref(ticker, { view: 'statements', asOf, extra: { highlight: f.filingId } }) as never} className={buttonClasses('ghost', 'sm', 'no-underline')}>{t('highlight')}</Link>
-                            {original && (USE_F3
-                              ? <Button variant="ghost" size="sm" onClick={() => setSource(f.filingId)}>{t('original')}</Button>
-                              : <a href={original} target="_blank" rel="noopener noreferrer" className={buttonClasses('ghost', 'sm', 'no-underline')}>{t('original')}<span className="sr-only"> {t('opensNew')}</span></a>)}
+                            {(original || USE_F3) && (USE_F3
+                              ? <Button variant="ghost" size="sm" onClick={() => setSource({filingId:f.filingId,originalUrl:original})}>{t('original')}</Button>
+                              : <a href={original??undefined} target="_blank" rel="noopener noreferrer" className={buttonClasses('ghost', 'sm', 'no-underline')}>{t('original')}<span className="sr-only"> {t('opensNew')}</span></a>)}
                           </div>
                         </td>
                       </tr>
@@ -76,7 +76,7 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
           <div className="px-4 pb-4 text-sm text-[var(--text-dim)]">{t('transcriptsPending')}</div>
         </section>
       )}
-      {source && <SourceDrawerAdapter filingId={source} onClose={() => setSource(null)} />}
+      {source && <SourceDrawerAdapter filingId={source.filingId} originalUrl={source.originalUrl} onClose={() => setSource(null)} />}
     </div>
   );
 }
