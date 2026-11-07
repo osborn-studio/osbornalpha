@@ -2,7 +2,7 @@
 import {describe,expect,it,vi} from 'vitest';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import type {Row,TableClient} from '@/lib/db/table-client';
+import type {Row} from '@/lib/db/table-client';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
 import {anonJudgmentInputsDb,memoryJudgmentInputsDb,normalizeTableRows} from './inputs-db';
 import {MacroUnavailable,fixtureMacroReadApi} from './macro-api';
@@ -96,7 +96,25 @@ describe('anonJudgmentInputsDb (spec §3.5: anon read paths only)',()=>{
  });
 });
 
-const capped=(t:TableClient,max:number):TableClient=>({...t,select:(table,match,o)=>t.select(table,match,{...o,limit:Math.min(o?.limit??max,max)})});
+/** Supabase stub: honours eq / order / range, caps rows per call, and (like a database) leaves ties between equal sort keys in a call-dependent order. */
+function pagedStub(rows:Record<string,Row[]>,cap:number){
+ const orders:Record<string,string[]>={};const calls={securities:0};let n=0;
+ const from=(t:string)=>{
+  const filters:[string,unknown][]=[];const ord:string[]=[];let lo=0,hi=Number.MAX_SAFE_INTEGER;
+  const b:any={select:()=>b,eq:(k:string,v:unknown)=>{filters.push([k,v]);return b;},is:(k:string,v:unknown)=>{filters.push([k,v]);return b;},
+   order:(c:string)=>{ord.push(c);return b;},range:(f:number,to:number)=>{lo=f;hi=to;return b;},
+   then:(res:(v:unknown)=>unknown,rej?:(e:unknown)=>unknown)=>{
+    orders[t]=ord;if(t==='issuer_securities')calls.securities++;n++;
+    const key=(r:Row)=>ord.map(c=>String(r[c]));
+    const sorted=(rows[t]??[]).filter(r=>filters.every(([k,v])=>r[k]===v)).map(r=>({...r}));
+    sorted.sort((x,y)=>{const a=key(x).join('\u0000'),c=key(y).join('\u0000');return a<c?-1:a>c?1:0;});
+    // ties (equal keys) come back reversed on odd calls: an incomplete ordering then loses / repeats rows across pages
+    const tied=sorted.map((r,i)=>({r,i})).sort((x,y)=>key(x.r).join()===key(y.r).join()?(n%2?y.i-x.i:x.i-y.i):x.i-y.i).map(x=>x.r);
+    return Promise.resolve({data:tied.slice(lo,Math.min(hi,lo+cap-1)+1),error:null}).then(res,rej);}};
+  return b;
+ };
+ return {client:{from} as unknown as SupabaseClient,orders,calls};
+}
 describe('review fixes (filings visibility, paging, parameters)',()=>{
  it('filingsOfIssuer drops unpublished (mapping_gen 0) filings before applying limit',async()=>{
   const f=memoryFactsDb();f.setNow(FIXED_NOW);
@@ -108,11 +126,22 @@ describe('review fixes (filings visibility, paging, parameters)',()=>{
   expect(await db.facts.filingsOfIssuer(I,'US',{limit:1})).toHaveLength(1);
   expect((await db.facts.filingsOfIssuer(I,'US',{limit:1}))[0].available_date).toBe('2024-02-01');
  });
- it('tableRows and issuerPrimarySecurity page until an empty page under a max_rows cap',async()=>{
-  const t=await tables();
-  for(let i=0;i<7;i++)await t.insert('issuer_industry_memberships',{issuer_id:I,scheme:'sw2021',version:'2021',code:`9${i}`,valid_from:'2024-01-01',valid_to:null,source:'test',provenance:{}});
-  const db=memoryJudgmentInputsDb({tables:capped(t,3)});
-  expect(await db.tableRows('issuer_industry_memberships',`${I}:sw2021:2021`)).toHaveLength(9);
+ it('anon tableRows and issuerPrimarySecurity page with a complete unique ordering (tied code / ticker across page boundaries, rows capped per call)',async()=>{
+  const mem:Row[]=[];
+  for(let i=0;i<4;i++)mem.push({issuer_id:I,scheme:'sw2021',version:'2021',code:'801010',valid_from:`20${10+i}-01-01`,valid_to:`20${11+i}-01-01`,source:'t',provenance:{}});
+  for(let i=0;i<3;i++)mem.push({issuer_id:I,scheme:'sw2021',version:'2021',code:`9${i}`,valid_from:'2024-01-01',valid_to:null,source:'t',provenance:{}});
+  const sec:Row[]=[];
+  for(let i=0;i<5;i++)sec.push({issuer_id:I,ticker:'AAA',valid_from:`20${10+i}-01-01`,valid_to:i<4?`20${11+i}-01-01`:null,is_primary:true});
+  sec.push({issuer_id:I,ticker:'ZZZ',valid_from:'2000-01-01',valid_to:'2001-01-01',is_primary:true});
+  const {client,orders,calls}=pagedStub({issuer_industry_memberships:mem,issuer_securities:sec,stocks_universe:[{ticker:'AAA',market:'US'},{ticker:'ZZZ',market:'US'}]},3);
+  const db=anonJudgmentInputsDb({anon:client});
+  const rows=await db.tableRows('issuer_industry_memberships',`${I}:sw2021:2021`);
+  expect(rows).toHaveLength(7);
+  expect(new Set(rows.map(r=>`${r.code}|${r.valid_from}`)).size).toBe(7);
+  expect(orders.issuer_industry_memberships).toEqual(['scheme','version','code','valid_from']);
   expect(await db.issuerPrimarySecurity(I,'2024-06-01')).toEqual({ticker:'AAA',market:'US'});
+  expect(await db.issuerPrimarySecurity(I,'2012-06-01')).toEqual({ticker:'AAA',market:'US'});
+  expect(orders.issuer_securities).toEqual(['ticker','valid_from']);
+  expect(calls.securities).toBeGreaterThan(1);
  });
 });

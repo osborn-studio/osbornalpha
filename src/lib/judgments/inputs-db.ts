@@ -17,7 +17,6 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {supabaseTableClient} from '@/lib/db/table-client';
-import {selectAll} from '@/lib/db/table-client';
 import type {Row,TableClient} from '@/lib/db/table-client';
 import {supabaseFactsDb} from '@/lib/facts/db';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
@@ -51,14 +50,41 @@ export function parseNaturalKey(table:PublicTable,key:string):string[]{
  if(!m)throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
  return m.slice(1);
 }
-async function publicTableRows(tables:TableClient,macro:MacroReadApi,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
+/** Complete-set read of one match in a COMPLETE unique ordering, paged until an empty page (PostgREST max_rows may be small). */
+export type PagedRead=(table:string,match:Row,order:readonly string[])=>Promise<Row[]>;
+const PAGE=1000;
+const ORDER_MEMBERSHIPS=['scheme','version','code','valid_from'] as const;
+const ORDER_SECURITIES=['ticker','valid_from'] as const;
+/** Anon path: the Supabase client directly, so every page uses the same full ordering (TableClient supports one order column only). */
+function supabasePaged(anon:SupabaseClient):PagedRead{
+ return async(table,match,order)=>{
+  const out:Row[]=[];
+  for(let from=0;;){
+   let q:any=(anon as unknown as {from:(t:string)=>any}).from(table).select('*');
+   for(const [k,v] of Object.entries(match))q=q.eq(k,v);
+   for(const c of order)q=q.order(c,{ascending:true});
+   const {data,error}=await q.range(from,from+PAGE-1);
+   if(error)throw new Error(`${table} select: ${(error as {message:string}).message}`);
+   const page=(data??[]) as Row[];
+   if(page.length===0)return out;
+   out.push(...page);from+=page.length;
+  }
+ };
+}
+/** Memory path: the memory client has no row cap, so read all matches and sort by the same full ordering locally. */
+function memoryPaged(tables:TableClient):PagedRead{
+ return async(table,match,order)=>{
+  const key=(r:Row)=>order.map(c=>String(r[c])).join('\u0000');
+  return (await tables.select(table,match)).sort((a,b)=>key(a)<key(b)?-1:key(a)>key(b)?1:0);
+ };
+}
+async function publicTableRows(tables:TableClient,paged:PagedRead,macro:MacroReadApi,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
  const parts=parseNaturalKey(table,naturalKey);
  let rows:Row[];
  if(table==='industry_classifications'){const [scheme,version,code]=parts;rows=await tables.select(table,{scheme,version,code},{limit:2});}
  else if(table==='issuer_industry_memberships'){
   const [issuer_id,scheme,version]=parts;
-  // Paged until an empty page (PostgREST max_rows may be small); order by code (valid_from breaks ties only within a code).
-  rows=await selectAll(tables,table,{issuer_id,scheme,version},'code');
+  rows=await paged(table,{issuer_id,scheme,version},ORDER_MEMBERSHIPS);
  }else rows=await macro.seriesCatalog(parts[0] as 'US'|'CN');
  return normalizeTableRows(rows);
 }
@@ -72,8 +98,8 @@ async function publicJudgmentFrom(tables:TableClient,id:string):Promise<Judgment
  const [r]=await tables.select('judgments',{judgment_id:id},{limit:1});
  return r?judgmentFromTable(r):null;
 }
-async function primarySecurityFrom(tables:TableClient,issuerId:string,on:string):Promise<{ticker:string;market:PriceMarket}|null>{
- const held=(await selectAll(tables,'issuer_securities',{issuer_id:issuerId},'ticker'))
+async function primarySecurityFrom(tables:TableClient,paged:PagedRead,issuerId:string,on:string):Promise<{ticker:string;market:PriceMarket}|null>{
+ const held=(await paged('issuer_securities',{issuer_id:issuerId},ORDER_SECURITIES))
   .filter(r=>String(r.valid_from)<=on&&(r.valid_to===null||r.valid_to===undefined||on<String(r.valid_to)));
  const out:{ticker:string;market:PriceMarket;primary:boolean}[]=[];
  for(const r of held){
@@ -96,27 +122,27 @@ export function publicFacts(db:FactsDb):JudgmentInputsDb['facts']{
   filingsOfIssuer:async(issuer,market,o)=>{const rows=(await db.filingsOfIssuer(issuer,market,{to:o.to})).filter(f=>f.mapping_gen>0);return o.limit===undefined?rows:rows.slice(0,o.limit);},
  };
 }
-function inputsDbOf(p:{facts:FactsDb;tables:TableClient;macro:MacroReadApi;kline:KlineFn}):JudgmentInputsDb{
+function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:MacroReadApi;kline:KlineFn}):JudgmentInputsDb{
  const facts=publicFacts(p.facts);
  return {
   facts,
   deriveMetricsAsOf:(issuer,market,asOf,formulaVersion)=>deriveMetricsAsOf(facts,issuer,market,asOf,formulaVersion),
   macro:p.macro,
-  tableRows:(table,key)=>publicTableRows(p.tables,p.macro,table,key),
+  tableRows:(table,key)=>publicTableRows(p.tables,p.paged,p.macro,table,key),
   publicJudgment:id=>publicJudgmentFrom(p.tables,id),
   kline:p.kline,
-  issuerPrimarySecurity:(issuer,on)=>primarySecurityFrom(p.tables,issuer,on),
+  issuerPrimarySecurity:(issuer,on)=>primarySecurityFrom(p.tables,p.paged,issuer,on),
  };
 }
 export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn}
 export function anonJudgmentInputsDb(d:AnonInputsDeps):JudgmentInputsDb{
- return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))});
+ return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))});
 }
 export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn}
 /** Test double over memory stores; `judgments` are treated as publishable public rows. */
 export function memoryJudgmentInputsDb(fx:MemoryInputsFixture={}):JudgmentInputsDb{
  const tables=fx.tables??memoryTableClient();
- const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline});
+ const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,paged:memoryPaged(tables),macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline});
  const judgments=new Map((fx.judgments??[]).map(j=>[j.judgment_id,j] as const));
  return {...base,publicJudgment:async id=>{const j=judgments.get(id);return j?structuredClone(j):base.publicJudgment(id);}};
 }

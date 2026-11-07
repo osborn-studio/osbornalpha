@@ -41,7 +41,7 @@
 - 核实记录（计划已给出，未重做）：`read_facts` 对 anon 可执行、`financial_facts` anon 仅见 `status='ok'`、`macro_series` 表不存在（规格偏差 1）。
 - 未触碰 `supabase/migrations`、`judgments.integration.test.ts`；不依赖 `memoryJudgmentsDb`。
 
-- 复审修复（T6 fix）：issuer_industry_memberships 按 `code`、issuer_securities 按 `ticker` 排序分页（TableClient 仅支持单列 orderBy，二者无单列唯一键，同键内顺序依赖数据库；已知残余）。
+- 复审修复（T6 fix）：issuer_industry_memberships 按 `code`、issuer_securities 按 `ticker` 排序分页（TableClient 仅支持单列 orderBy，二者无单列唯一键，同键内顺序依赖数据库；该残余已由下一条修复消除）。
 
 ### Task 3 复审第 1 轮修复（迁移原地改，未锁）
 
@@ -70,3 +70,4 @@
   - datagateway A/HK/US: not_configured（本机无 DataGateway 配置；未录制，未改表，保持 unverified）
 - 夹具：fixtures/judgments/kline/eastmoney-A-600519_SH-2024-06-19.json、eastmoney-HK-00700_HK-2024-05-17.json、eastmoney-US-NVDA-2024-06-10.json。
 - 能力表：eastmoney A qfq、HK qfq/hfq、US qfq/hfq 五行改为 verified；其余七行 unverified。O6 待 owner：A 股 hfq 与全部 datagateway 行未验证（datagateway 需在有配置的环境补录）；使用这些组合的价格判断在 v1 一律 void(adjustment_unsupported)。
+- 复审修复二（T6 fix 2，Codex P2）：anon 路径绕过 `TableClient`，直接用 Supabase 客户端按完整唯一排序分页（memberships：`scheme,version,code,valid_from`；securities：`ticker,valid_from`），`.range` 翻页直到空页；内存路径无行数上限，读全量后按同一排序本地排序。先红（6 ≠ 7 行）后绿；桩在并列键上逐次反转顺序、每次最多返回 3 行。
