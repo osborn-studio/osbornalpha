@@ -25,6 +25,9 @@ const MESSAGE_DOMAINS = [
   // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
   'macro',
   // /MACRO
+  // MACRO-P3
+  'macroStrategy',
+  // /MACRO-P3
   // F3 document pipeline (source drawer, spec 2026-11-04 §9.1):
   'documents',
   // F3 end
