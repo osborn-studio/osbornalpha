@@ -15,3 +15,4 @@
 - Task 6 修复：来源适配器主机白名单/重定向≤3 跳/UA 分流、巨潮与 HKEX 总数完整性（HKEX t1code 仍为 -2：40000 等代码离线无法确认）、EDGAR 列校验与 forms 追加、串行限速、Retry-After、20MB 列表上限；HKEX 英文路径在指挥步骤 b 录制真实 lang=en 页面前仍未核实（测试夹具由中文页派生）；Codex 审计：待审（2026-11-06）
 - Task 11：公共读接口（列表 asOf/versions/cursor、doc、pages+layout、file 签名链接、citations）、管理重处理、documents i18n（F3 块）；Codex 审计：待审（2026-11-06）
 - Task 12：授权上传 ingestUpload（仅 PDF、licensed/private、内容寻址、UTC+8 available_date）与持有人读取路径 readOwnedDocument（doc/pages/file/citations，先读后审计 document.read，审计失败 500、private, no-store）；Codex 审计：待审（2026-11-06）
+- Task 13：迁移二 fact_citations/filing_documents + HK 函数（publish_hk_run 含 p_expected_rev/p_zero_output、renew_hk_fact_lease、unit_currency 引用角色）；HkFactsPort（supabase/memory/pg）；约束扩展按落地名；规格二函数定义哈希不变；迁移二未锁（锁由指挥在复审后加）；Codex 审计：待审（2026-11-06）

@@ -14,7 +14,7 @@ export const criticalSuites = [
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
 ].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts')
   // F3 document pipeline (Tasks 1, 13, 18 append to this concat)
-  .concat('src/lib/documents/documents.integration.test.ts');
+  .concat('src/lib/documents/documents.integration.test.ts', 'src/lib/documents/fact-citations.integration.test.ts');
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

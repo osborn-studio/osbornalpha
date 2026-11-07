@@ -846,6 +846,10 @@ export interface DocumentSyncScope {
   updated_at: string;
   scope_confirmed_at: string; // F3 review (Task 5): retirement guard
 }
+// F3 migration two (20261108091000_fact_citations.sql): written only through bind_filing_documents /
+// insert_fact_citations (no direct writes for any role); anon/authenticated read under RLS.
+export interface FactCitationLink { fact_id: string; citation_id: string; role: 'value' | 'label' | 'period' | 'unit' | 'unit_currency'; }
+export interface FilingDocument { filing_id: string; document_id: string; created_at: string; }
 // F3 document pipeline — end
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
 // industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
@@ -975,6 +979,8 @@ export type Database = {
       extraction_candidates: { Row: ExtractionCandidate; Insert: Partial<ExtractionCandidate>; Update: Partial<ExtractionCandidate> };
       candidate_publications: { Row: CandidatePublication; Insert: Partial<CandidatePublication>; Update: Partial<CandidatePublication> };
       document_sync_scope: { Row: DocumentSyncScope; Insert: Partial<DocumentSyncScope>; Update: Partial<DocumentSyncScope> };
+      fact_citations: { Row: FactCitationLink; Insert: Partial<FactCitationLink>; Update: Partial<FactCitationLink> };
+      filing_documents: { Row: FilingDocument; Insert: Partial<FilingDocument>; Update: Partial<FilingDocument> };
       // F3 document pipeline — end
     };
     Functions: {
