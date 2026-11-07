@@ -1,0 +1,31 @@
+{
+  "public": {
+    "breadcrumb": {"research":"研究","list":"外资研报","report":"报告","institution":"机构"},
+    "entry":{"tab":"外资研报"},
+    "list":{
+      "title":"外资研报","titleEn":"Foreign broker research","intro":"私有馆藏的结构化元数据。原文不对外提供；摘要为 OsbornAlpha 独立生成。",
+      "stats":{"reports":"馆藏","institutions":"机构","lastAdded":"最近入库"},
+      "filters":{"security":"标的","securityPlaceholder":"代码","institution":"机构","all":"全部","rating":"标准化评级","published":"发布日期","from":"开始日期","to":"结束日期","summaryOnly":"只看有摘要","apply":"筛选","clear":"清除筛选"},
+      "columns":{"institution":"机构","security":"标的","title":"标题","published":"日期","rating":"评级 原文 / 标准化","target":"目标价","upside":"空间 · 派生","summary":"摘要"},
+      "hasSummary":"有 AI 摘要","summaryShort":"AI 摘要","judgment":"第三方判断（未结算）","upsideDerived":"空间 {value}（派生）","upsideNote":"空间 = 目标价 / 报告时价格 − 1（派生 · upside/1，同币种）。评级、目标价与空间是第三方判断（未结算）。不显示最新价。",
+      "prev":"上一页","next":"下一页 →","loading":"加载中","error":{"body":"报告列表加载失败。不回退到示例数据。","retry":"重试"},"empty":{"title":"尚无已发布研报","body":"研报由管理员上传并经许可确认后发布。"},"noResults":{"title":"没有符合条件的报告","unknownTicker":"没有找到这个标的","clear":"清除筛选"}
+    },
+    "title":{"translated":"译","rewritten":"改写","rewrittenNote":"公开标题为改写版本，非机构原题","translatedNote":"机器翻译的标题；原题：{original}"},
+    "target":{"notPublic":"—（许可不允许公开）","absent":"—（报告未给出）"},
+    "notFound":{"report":{"title":"找不到这份报告","body":"报告不存在，或已不再公开。"},"institution":{"title":"找不到这家机构","body":"机构不存在，或其报告已不再公开。"},"back":"返回外资研报"},
+    "drawer":{"title":"来源：{field}","close":"关闭","page":"页码","pageValue":"第 {page} 页","method":"抽取方式","availableAt":"入库 available_at","codeVersion":"代码版本","rulesVersion":"规则版本","publication":"发布快照","derived":"派生值","judgment":"第三方判断（未结算）","privateLibrary":"私有馆藏（不对外提供原文）","snippet":"片段"},
+    "provenance":{"llmConfirmed":"LLM 抽取 + 人工确认","llmCorrected":"LLM 抽取 + 人工修正","humanAdded":"人工新增","absent":"人工标注：报告未给出","unknown":"来源未标注"},
+    "facts":{"title":"报告所载","titleEn":"Stated in report · per target","hint":"点开数值 → 来源抽屉","page":"p.{page}","rows":{"rating":"评级 原文 / 标准化","target":"目标价 · 币种 · 期限","priceAtReport":"报告时价格 · 币种 · 日期","upside":"空间","method":"方法论参数"},"absentTarget":"报告未给出目标价","months":"{n} 个月","upsideFormula":"目标价 / 报告时价格 − 1，同币种","kind":{"judgment":"第三方判断（未结算）","assumption":"第三方假设 · 文件所载","derivedJudgment":"派生 · {version} · 第三方判断（未结算）"},"columns":{"field":"字段","value":"值","kind":"性质","provenance":"出处"},"noLatestPrice":"不显示最新价。报告未写明的参数不显示，不补数。"},
+    "summary":{"title":"独立摘要","titleEn":"Independent summary","none":"尚无摘要","label":"OsbornAlpha 独立摘要 · AI 生成（{model}）· 非机构原文 · 生成于 {date}","otherLanguage":"仅有另一种语言的摘要。","grounded":"数字出处"},
+    "snippets":{"title":"引用片段","titleEn":"Snippets · ≤ {n} 字","none":"无公开片段","purpose":{"rating":"评级依据","target":"目标价依据","thesis":"核心观点","risk":"风险","method":"估值方法","other":"其他"},"page":"第 {page} 页"},
+    "history":{"title":"评级与目标价历史","titleEn":"History","scope":"同机构 · 同证券 · 同币种","judgment":"第三方判断（未结算）","viewToggle":"切换图表与表格","chart":"图","table":"表","none":"暂无历史","chartLabel":"{institution} 对 {ticker} 的目标价轨迹，{n} 个报告点；数值见表格视图","stepNote":"阶梯线 = 目标价在两次报告之间不变","columns":{"range":"区间","rating":"评级","target":"目标价 {currency}","change":"变化","reportIds":"report_id（两端）","availableAt":"available_at","versions":"公式 / 代码"}},
+    "spread":{"title":"跨机构分歧","titleEn":"Cross-institution spread","scope":"{ticker} · {currency} · 各机构最近一篇 · {months} 个月窗口","judgment":"第三方判断（未结算）","viewToggle":"切换图表与表格","chart":"图","table":"表","none":"窗口内没有其他机构的报告","chartLabel":"{n} 家机构对 {ticker}（{currency}）的目标价与报告时价格；数值见表格视图","legendPrice":"报告时价格","legendTarget":"目标价","legendNote":"不画最新价","noTarget":"报告未给出目标价","targetHidden":"目标价不可公开","columns":{"institution":"机构","report":"report_id","date":"日期","rating":"评级","priceAtReport":"报告时价格","target":"目标价","upside":"空间"}},
+    "settlement":{"title":"结算（判断）","body":"F4 落地后出现：窗口收益、到期命中、pending / unsettleable 原因、方法版本、价格来源、补登记角标。"},
+    "detail":{"published":"发布 {date}","targets":"标的","analysts":"分析师","noTargets":"本报告不针对单个标的（行业 / 宏观策略）。"},
+    "preview":{"status":"{status} · 复核 {review} · 快照尚未生成或未对外","noHistory":"预览不含历史与跨机构分歧（它们只来自公开视图）。","banner":"预览 · 未对外","bannerBody":"此页用 service_role 读基表，与公开页同一组件；只有管理员可见。公开路由此时可能返回 404。","back":"返回复核"},
+    "institution":{"aliases":"别名","ratingDisclosure":"评级体系披露","stats":{"reports":"馆藏报告","securities":"覆盖证券","lastReport":"最近报告"},"reports":"报告","reportsEn":"Reports","analysts":{"title":"分析师","titleEn":"Analysts","none":"暂无公开署名的分析师","reports":"{n} 篇"},"performance":{"title":"馆藏样本表现","titleEn":"Library sample performance","badge":"判断 · F4 结算后显示","body":"基于馆藏样本 {n} 篇。F4 结算落地前不显示命中率。","sampleNote":"这是馆藏样本，不是该机构的全部报告；补登记将单独列出。"}},
+    "stock":{"title":"馆藏研报（{n}）","titleEn":"Library reports","all":"全部 →"}
+  },
+  "rating":{"buy":"买入","overweight":"增持","neutral":"中性","underweight":"减持","sell":"卖出","not_rated":"未评级","unmapped":"未映射"},
+  "fields":{"institution":"机构","analyst":"分析师","published_date":"发布日期","price_as_of_date":"价格日期","ticker":"代码","rating":"评级","target_price":"目标价","target_currency":"目标价币种","target_horizon":"目标期限","price_at_report":"报告时价格","price_currency":"价格币种","upside_stated":"自述空间","wacc":"WACC","terminal_growth":"永续增长","terminal_value_share":"终值占比","valuation_method":"估值方法","sector":"行业","title":"标题"}
+}
