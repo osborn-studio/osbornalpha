@@ -10,6 +10,11 @@ import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {canonicalJson,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
+import {pgFactsDb} from '../facts/pg-facts-db';
+import {companyDbContract} from './db-contract';
+import type {CompanyContractHarness} from './db-contract';
+import {pgCompanyDb,pgRpcClient} from './pg-company-db';
+import {readSnapshot} from './snapshot-read';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261112090000_company_research.sql';
@@ -801,5 +806,60 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await code(list(null,'revenue'))).toMatchObject({message:'invalid_read',code:'22023'});
   expect(await code(list(null,'name',0,201))).toMatchObject({message:'invalid_read'});
   expect(await code(list(null,'name',-1,10))).toMatchObject({message:'invalid_read'});
+ });
+});
+
+async function companyHarness():Promise<CompanyContractHarness&{pool:Pool}>{
+ const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+ const pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});   // a regression that blocks fails instead of hanging afterAll
+ const fx=fixtures(pool);
+ return {pool,db:pgCompanyDb(pool),facts:pgFactsDb(pool),
+  issuer:(name='ZZ Company Contract')=>fx.issuer(name),user:()=>fx.user(),
+  batch:(producer='company-digest')=>fx.batch(producer,producer==='company-digest'?'company.digest':'facts.us'),
+  close:async()=>{await pool.end();}};
+}
+
+describe.skipIf(!enabled)('pgCompanyDb on real PostgreSQL',()=>{
+ // The same scenarios memoryCompanyDb passes in db.test.ts, now against the SQL functions, grants and RLS.
+ companyDbContract('pgCompanyDb contract',companyHarness);
+
+ describe('roles and the snapshot reader',()=>{
+  let h:Awaited<ReturnType<typeof companyHarness>>;let fx:ReturnType<typeof fixtures>;
+  beforeAll(async()=>{h=await companyHarness();fx=fixtures(h.pool);});
+  afterAll(async()=>{await h?.close?.();});
+
+  it('per-user methods see only the caller\'s rows through RLS (the pg adapter has no user filter of its own)',async()=>{
+   const a=await fx.user();const b=await fx.user();const iss=await fx.issuer();const other=await fx.issuer();
+   await fx.q(`insert into public.company_watches(user_id,issuer_id,note) values($1,$2,'a-note'),($1,$3,null)`,[a,iss,other]);
+   expect(await h.db.watchesOf(b)).toEqual([]);
+   expect((await h.db.watchesOf(a)).map(w=>w.issuer_id).sort()).toEqual([iss,other].sort());
+   expect(await h.db.patchWatch(b,iss,{note:'stolen'})).toBeNull();
+   expect(await h.db.deleteWatch(b,iss)).toBe(false);
+   expect((await fx.q(`select note from public.company_watches where user_id=$1 and issuer_id=$2`,[a,iss]))[0].note).toBe('a-note');
+   expect(await h.db.upsertWatch(b,iss)).toMatchObject({created:true,row:{user_id:b,issuer_id:iss}});   // b's own row; a's row untouched
+   expect((await h.db.watchesOf(a)).length).toBe(2);
+  });
+
+  it('readSnapshot through pgRpcClient: anon gets ok facts only and the same filings as service_role, converted like PostgREST',async()=>{
+   const s=await fx.stream([{facts:[{concept:'revenue',value:'100.50'},{concept:'net_income_parent',value:'9'}]},{available:'2024-05-01',form:'10-Q',fiscalPeriod:'Q1',periodEnd:'2024-03-31',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M'}]}]);
+   await fx.q(`update public.financial_facts set status='quarantined' where fact_id=$1`,[s.factIds[0][1]]);
+   const opts={concepts:null,asOf:'2030-01-01',history:true};
+   const anon=await readSnapshot(pgRpcClient(h.pool,'anon'),s.iss,'US',opts);
+   const svc=await readSnapshot(pgRpcClient(h.pool,'service_role'),s.iss,'US',opts);
+   expect(anon).toEqual(svc);
+   expect({rev:anon.stateRev,trunc:anon.truncated,facts:anon.rows.map(r=>r.fact_id).sort(),status:[...new Set(anon.rows.map(r=>r.status))]}).toEqual({rev:1,trunc:false,facts:[s.factIds[0][0],s.factIds[1][0]].sort(),status:['ok']});
+   expect(anon.rows.find(r=>r.fact_id===s.factIds[0][0])).toMatchObject({value:'100.50',value_text:'100.50',disclosure_seq:1,is_current:true,is_revision:false});
+   expect(anon.filings.map(f=>[f.filingId,f.formType,f.factCount,f.citation,f.fiscalYear,f.linkAttempts])).toEqual([[s.filingIds[1],'10-Q',1,'edgar',2023,0],[s.filingIds[0],'10-K',1,'edgar',2023,0]]);
+   await expect(readSnapshot(pgRpcClient(h.pool,'anon'),s.iss,'US',{...opts,asOf:'not-a-date'})).rejects.toMatchObject({code:'internal'});
+  });
+
+  it('service-only reads fail for client roles: the evidence gate data never reaches anon or authenticated directly',async()=>{
+   const s=await fx.stream([{facts:[{}]}]);const b=await fx.batch();
+   const a=await h.db.beginAttempt(s.iss,'US',new Date());
+   await h.db.replaceDigest(s.iss,'US',b,a,randomUUID(),1,false,[],{filings_count:1,facts_count:1,concepts_covered:1,earliest_period_end:null,latest_period_end:null,latest_available_date:null,citation_summary:{linked:0,pending:0,edgar:1},scope_last_success_at:null,scope_last_status:null});
+   expect((await h.db.coverageOf([s.iss]))[0]).toMatchObject({issuer_id:s.iss,facts_count:1});   // anon read
+   for(const role of ['anon','authenticated'] as const)
+    expect((await fails(inTx(h.pool,{role,userId:role==='authenticated'?randomUUID():undefined},tx=>tx.c.query(`select * from public.company_digest_state where issuer_id=$1`,[s.iss])))).message).toMatch(/permission denied/);
+  });
  });
 });
