@@ -9,7 +9,7 @@ import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
 import {startBatch} from '../dq/batches';
-import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,supabaseMacroDb,toMacroDbError} from './db';
+import {HISTORY_PAGE_CONCURRENCY,IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,mergeResults,packWrites,supabaseMacroDb,toMacroDbError} from './db';
 import {macroDbContract,nativeRow,outcome} from './db-contract';
 import {memoryMacroDb} from './memory-db';
 import type {ObservationWrite,PublishInput} from './types';
@@ -186,9 +186,9 @@ describe('memoryMacroDb specifics',()=>{
 });
 
 // ---------------------------------------------------------------- supabase stubs
-type Res={data:unknown;error:{message:string}|null};
+type Res={data:unknown;error:{message:string}|null;count?:number|null};
 type Call=[string,unknown[]];
-function stub(o:{rpc?:(fn:string,args:Record<string,unknown>)=>Res;select?:(calls:Call[])=>Res}={}){
+function stub(o:{rpc?:(fn:string,args:Record<string,unknown>)=>Res;select?:(calls:Call[])=>Res|Promise<Res>}={}){
  const rpcCalls:[string,Record<string,unknown>][]=[];const queries:Call[][]=[];
  const from=(table:string)=>{
   const calls:Call[]=[['from',[table]]];queries.push(calls);
@@ -356,17 +356,47 @@ describe('supabaseMacroDb wiring',()=>{
  });
  it('pages history with .range() (≤ READ_PAGE per page), keeps the highest version per period, throws truncated beyond maxRows',async()=>{
   const all=Array.from({length:1500},(_,i)=>pgObs({period_end:`${String(1900+Math.floor(i/12)).padStart(4,'0')}-${String(1+(i%12)).padStart(2,'0')}-28`,value_text:String(i)}));
-  const anon=stub({select:calls=>{const r=calls.find(c=>c[0]==='range')![1] as [number,number];return {data:all.slice(r[0],r[1]+1),error:null};}});
+  const anon=stub({select:calls=>{const range=calls.find(c=>c[0]==='range');if(!range)return {data:null,count:all.length,error:null};const r=range[1] as [number,number];return {data:all.slice(r[0],r[1]+1),error:null};}});
   const db=supabaseMacroDb({admin:stub().client,anon:anon.client});
   const got=await db.seriesHistory('US_UNRATE',{maxRows:2000,from:'1900-01-01',to:'2100-01-01',asOf:'2026-11-06T00:00:00.000Z'});
   expect(got).toHaveLength(1500);
-  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')![1])).toEqual([[0,READ_PAGE-1],[READ_PAGE,1999]]);
+  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,READ_PAGE-1],'count',[READ_PAGE,1499]]);
   expect(anon.queries[0].slice(0,9)).toEqual([['from',['macro_observations']],['select',['*']],['eq',['series_id','US_UNRATE']],['eq',['status','ok']],['gte',['period_end','1900-01-01']],['lte',['period_end','2100-01-01']],['lte',['available_at','2026-11-06T00:00:00.000Z']],['order',['period_end',{ascending:true}]],['order',['version',{ascending:true}]]]);
+  for(const q of anon.queries.filter(q=>q.some(c=>c[0]==='range')))expect(q.slice(0,9)).toEqual(anon.queries[0].slice(0,9));
+  expect(anon.queries[1].slice(0,7)).toEqual([['from',['macro_observations']],['select',['*',{count:'exact',head:true}]],['eq',['series_id','US_UNRATE']],['eq',['status','ok']],['gte',['period_end','1900-01-01']],['lte',['period_end','2100-01-01']],['lte',['available_at','2026-11-06T00:00:00.000Z']]]);
   await expect(db.seriesHistory('US_UNRATE',{maxRows:1499})).rejects.toMatchObject({code:'truncated'});
   const v=[pgObs({period_end:'2026-08-31',version:1,value_text:'1'}),pgObs({period_end:'2026-09-30',version:1,value_text:'2'}),pgObs({period_end:'2026-09-30',version:2,value_text:'3'})].map(r=>({...r,available_at:'2026-11-02T05:30:00.000Z',ingested_at:'2026-11-02T05:30:00.000Z'}));
-  const one=supabaseMacroDb({admin:stub().client,anon:stub({select:()=>({data:v,error:null})}).client});
+  const one=supabaseMacroDb({admin:stub().client,anon:stub({select:calls=>calls.some(c=>c[0]==='range')?{data:v,error:null}:{data:null,count:v.length,error:null}}).client});
   expect((await one.seriesHistory('X',{maxRows:10})).map(x=>x.value_text)).toEqual(['1','3']);
   expect(highestPerPeriod([])).toEqual([]);
+ });
+ it('history count-null stops after a short first page and pages a longer series sequentially',async()=>{
+  const all=Array.from({length:1500},(_,i)=>pgObs({period_end:`${String(1900+Math.floor(i/12)).padStart(4,'0')}-${String(1+i%12).padStart(2,'0')}-28`}));
+  const short=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count:null,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(0,20).slice(from,to+1),error:null};}});
+  expect(await supabaseMacroDb({admin:stub().client,anon:short.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(20);
+  expect(short.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999],'count']);
+  const fallback=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count:null,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(from,to+1),error:null};}});
+  expect(await supabaseMacroDb({admin:stub().client,anon:fallback.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(1500);
+  expect(fallback.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999],'count',[1000,1999]]);
+ });
+ it.each([null,-1,1.5])('reuses page zero for unusable count %s',async count=>{
+  const all=Array.from({length:1200},(_,i)=>pgObs({period_end:`${String(1800+Math.floor(i/12)).padStart(4,'0')}-${String(i%12+1).padStart(2,'0')}-28`}));
+  const anon=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(from,to+1),error:null};}});
+  expect(await supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(1200);
+  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999],'count',[1000,1999]]);
+ });
+ it('bounds counted history fan-out and preserves every ordered page',async()=>{
+  const all=Array.from({length:15000},(_,i)=>pgObs({period_end:`${String(1800+Math.floor(i/12)).padStart(4,'0')}-${String(i%12+1).padStart(2,'0')}-28`,value_text:String(i)}));
+  let inFlight=0,maxInFlight=0;
+  const anon=stub({select:async calls=>{
+   const range=calls.find(c=>c[0]==='range');if(!range)return {data:null,count:all.length,error:null};
+   inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);await new Promise(r=>setTimeout(r,1));inFlight--;
+   const [from,to]=range[1] as [number,number];return {data:all.slice(from,to+1),error:null};
+  }});
+  const got=await supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('US_UNRATE',{maxRows:20000});
+  expect(got.map(r=>r.value_text)).toEqual(all.map(r=>r.value_text));
+  expect(maxInFlight).toBeLessThanOrEqual(HISTORY_PAGE_CONCURRENCY);
+  expect(anon.queries.filter(q=>q.some(c=>c[0]==='range')).map(q=>q.find(c=>c[0]==='range')![1])).toEqual(Array.from({length:15},(_,i)=>[i*1000,i*1000+999]));
  });
  it('chunks observationsByIds by IN_CHUNK and returns input order, ok rows only',async()=>{
   const ids=Array.from({length:IN_CHUNK*2+50},()=>randomUUID());

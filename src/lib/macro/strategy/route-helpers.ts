@@ -6,6 +6,7 @@
 // foundation check (spec §6.3 step 2). Combined routes (transmission, review detail) always answer 200 with
 // judgment_status; only /deviations answers 404 judgments_disabled / 503 judgments_unavailable. With the judgment layer
 // off no F4 client is built. Error bodies are {error:{code,message}} and never carry server messages.
+// Successful fact responses carry the memo outcome header.
 import {NextResponse} from 'next/server';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {getAdminSupabase} from '@/lib/supabase/admin';
@@ -19,6 +20,8 @@ import {judgmentsEnabled,strategyEnabled} from './flags';
 import {monthCutoff,prevMonth} from './manifest';
 import {strategyPort,type StrategyReadPort} from './port';
 export const READ_HEADERS={'Cache-Control':'private, max-age=300'};
+/** Fact-route response header; only successful responses expose a memo result. */
+export const memoHeaders=(outcome:import('./memo').MemoOutcome)=>({...READ_HEADERS,'X-Macro-Strategy-Memo':outcome});
 export const NO_STORE={'Cache-Control':'private, no-store'};
 // ---- response shapes shared with the UI (spec §8)
 export interface ReviewIndexItem{region:Region;month:string;status:ReviewStatus;generation:number;result_id:string;updated_at:string}

@@ -13,6 +13,7 @@
 // - value rule: a series in its region's snapshot → that row (source snapshot); else latestObservations asOf cutoff
 //   (source history). History windows → seriesHistory asOf cutoff; 'truncated' is recorded as a read state, never thrown.
 // Builders read only through StrategyReadPort; views read only the manifest (replay never touches the port or catalog).
+// Snapshot rows and latest values load concurrently.
 import type {FrozenSeriesDef,FrozenSnapshot,InputSource,ManifestInput,ManifestKind,ManifestRead,MacroSeriesDef,ObsRef,ObservationRow,Region,SnapshotRecord,SnapshotRole,StrategyManifest} from './contract';
 import {canonicalJson,sha256Hex} from './hash';
 import type {StrategyReadPort} from './port';
@@ -110,6 +111,8 @@ export interface ManifestBuilder{
  /** Latest value of a series (§4.5 value rule) plus the requested comparison roles from the snapshot; records one read.
   *  Region snapshot incomplete → 'truncated', null. */
  snapshotValue(seriesId:string,purpose:string,comparison?:readonly Exclude<SnapshotRole,'latest'>[]):Promise<ObservationRow|null>;
+ /** Batched snapshot values; one history lookup for every id absent from its snapshot. */
+ snapshotValues(seriesIds:readonly string[],purpose:string,comparison?:readonly Exclude<SnapshotRole,'latest'>[]):Promise<Map<string,ObservationRow|null>>;
  /** Whole history asOf cutoff (highest version per period). keepInputs=false records only the read state (event sources). null = truncated. */
  history(seriesId:string,purpose:string,tag:'month_end'|'history',opts?:{from?:string;to?:string;keepInputs?:boolean}):Promise<ObservationRow[]|null>;
  /** Freeze chosen rows of a history read (source history asOf cutoff) under '<purpose>:<series>:<tag>'. */
@@ -137,34 +140,44 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
   async useSnapshots(s,opts={}){
    snapshots={US:s.US?freezeSnapshot(s.US):null,CN:s.CN?freezeSnapshot(s.CN):null};
    if(opts.loadRows===false)return;
-   for(const r of ['US','CN'] as const){
+   await Promise.all((['US','CN'] as const).map(async r=>{
     const rec=s[r];incomplete[r]=false;
-    if(!rec){roles[r]=new Map();continue;}
+    if(!rec){roles[r]=new Map();return;}
     const ids=[...new Set([...rec.observation_ids,...rec.history_ids])];
     const rows=await port.observationsByIds(ids);
     const found=new Set(rows.map(o=>o.observation_id));
     if(ids.some(id=>!found.has(id))){incomplete[r]=true;read(rec.snapshot_id,SNAPSHOT_ROWS_PURPOSE,'missing');}
     roles[r]=snapshotRoles(rows,periodOf);
-   }
+   }));
   },
-  async snapshotValue(seriesId,purpose,comparison=[]){
-   const d=def(seriesId);
-   const snapRec=d?snapshots[d.region]:null;
-   if(d&&snapRec&&incomplete[d.region]){read(seriesId,purpose,'truncated');return null;}
-   const r=d?roles[d.region].get(seriesId):undefined;
-   if(snapRec&&r?.latest){
-    const source:InputSource={kind:'snapshot',snapshot_id:snapRec.snapshot_id};
-    put(r.latest,inputRole(purpose,seriesId,'latest'),source);
-    for(const c of comparison){const o=r[c];if(o)put(o,inputRole(purpose,seriesId,c),source);}
-    read(seriesId,purpose,'ok');return r.latest;
+  async snapshotValue(seriesId,purpose,comparison=[]){return (await this.snapshotValues([seriesId],purpose,comparison)).get(seriesId)??null;},
+  async snapshotValues(seriesIds,purpose,comparison=[]){
+   const out=new Map<string,ObservationRow|null>(),pending:string[]=[];
+   for(const seriesId of new Set(seriesIds)){
+    const d=def(seriesId),snapRec=d?snapshots[d.region]:null;
+    if(d&&snapRec&&incomplete[d.region]){read(seriesId,purpose,'truncated');out.set(seriesId,null);continue;}
+    const r=d?roles[d.region].get(seriesId):undefined;
+    if(snapRec&&r?.latest){
+     const source:InputSource={kind:'snapshot',snapshot_id:snapRec.snapshot_id};
+     put(r.latest,inputRole(purpose,seriesId,'latest'),source);
+     for(const c of comparison){const o=r[c];if(o)put(o,inputRole(purpose,seriesId,c),source);}
+     read(seriesId,purpose,'ok');out.set(seriesId,r.latest);continue;
+    }
+    pending.push(seriesId);
    }
-   let rows:ObservationRow[];
-   try{rows=await port.latestObservations([seriesId],{asOf:cutoff});}
-   catch(e){if(isTruncated(e)){read(seriesId,purpose,'truncated');return null;}throw e;}
-   const o=rows.find(x=>x.series_id===seriesId)??null;
-   if(!o){read(seriesId,purpose,'missing');return null;}
-   put(o,inputRole(purpose,seriesId,'latest'),{kind:'history',as_of:cutoff});read(seriesId,purpose,'ok');
-   return o;
+   if(pending.length){
+    let rows:ObservationRow[];
+    try{rows=await port.latestObservations(pending,{asOf:cutoff});}
+    catch(e){
+     if(!isTruncated(e))throw e;
+     if(pending.length===1){read(pending[0],purpose,'truncated');out.set(pending[0],null);return out;}
+     for(const id of pending){const one=await this.snapshotValue(id,purpose,comparison);out.set(id,one);}
+     return out;
+    }
+    const by=new Map<string,ObservationRow>();for(const o of rows)if(!by.has(o.series_id))by.set(o.series_id,o);
+    for(const id of pending){const o=by.get(id)??null;out.set(id,o);read(id,purpose,o?'ok':'missing');if(o)put(o,inputRole(purpose,id,'latest'),{kind:'history',as_of:cutoff});}
+   }
+   return out;
   },
   async history(seriesId,purpose,tag,opts={}){
    def(seriesId);
