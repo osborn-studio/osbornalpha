@@ -5,7 +5,9 @@ import {allowedUnits,unitKindOf} from '../../facts/units';
 import {SYNTHETIC_NAMES,buildPagesJson,syntheticPagesJson} from '../fixtures/hkex/_synthetic/build';
 import type {LineSpec as PageSpecLine} from '../fixtures/hkex/_synthetic/build';
 import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_LABEL_GEN,HK_RULES_VERSION,TABLE_ALGO_VERSION} from '../types';
-import type {CandidateInsert,DocClass,DocumentRow,ExtractionRow,FactCitations,FinancialFactPayload,PagesJson} from '../types';
+import type {CandidateInsert,CandidateRow,DocClass,DocumentRow,ExtractionRow,FactCitations,FinancialFactPayload,PagesJson} from '../types';
+import {citationIdsOf,runHkChecks} from './checks';
+import type {CitationCheck} from './checks';
 import {canonicalJson,generateHkCandidates,naturalKey} from './generate';
 import type {CiteInput} from './generate';
 import {cpSlice} from './locate';
@@ -146,7 +148,16 @@ describe('generateHkCandidates (spec §7.5)',()=>{
   expect(pay(eps)).toMatchObject({value:'0.1234',unit:'CNY/share',scale:'0.01'});
   expect(r.snippet(cits(eps).unit)).toBe('仙');
   expect(r.snippet(cits(eps).unit_currency!)).toBe('人民幣 人民幣\n千元 千元');
-  // the replay through runHkChecks (value_replays, scale_mismatch on a forged unit) belongs to Task 15 (checks.ts does not exist yet)
+  // replay through runHkChecks: the generated candidates pass value_replays, a payload forged to USD/share is blocked (scale_mismatch)
+  const verify=new Map<string,CitationCheck|null>();
+  for(const c of r.candidates)for(const id of citationIdsOf(c.citations as FactCitations))verify.set(id,{integrity:'ok',currentExtraction:true,snippet:r.snippet(id)});
+  const asRow=(c:CandidateInsert,over:Partial<FinancialFactPayload>={}):CandidateRow=>({candidate_id:`cand-${c.natural_key}`,document_id:'d',extraction_id:EXT_ID,...c,payload:{...c.payload,...over},checks:[],checks_passed:false,status:'candidate',decision_kind:null,decided_by:null,approval_id:null,decided_at:null,inherited_from:null,batch_id:'b',created_at:'2026-03-20T10:00:00.000Z'});
+  const replays=(c:CandidateRow)=>runHkChecks([c],{verify,priorFacts:[],enCandidates:[]})[0].checks.find(x=>x.check==='value_replays')!;
+  expect(replays(asRow(rev!)).passed).toBe(true);
+  expect(replays(asRow(eps!)).passed).toBe(true);
+  const forged=replays(asRow(eps!,{unit:'USD/share'}));
+  expect(forged).toMatchObject({passed:false,detail:{reason:'scale_mismatch',recorded:{unit:'USD/share'},evidence:{unit:'CNY/share'}}});
+  expect(replays(asRow(rev!,{scale:'1000000',value:'1000000000'})).passed).toBe(false);
  });
 
  it('committed table shape (tables/1.0 after the Task 9 review): wrapped and glued-on lines are extra col-0 cells of the row, results equal the plain shape',async()=>{
