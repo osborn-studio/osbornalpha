@@ -14,7 +14,17 @@ import {pgFactsDb} from '../facts/pg-facts-db';
 import {companyDbContract} from './db-contract';
 import type {CompanyContractHarness} from './db-contract';
 import {pgCompanyDb,pgRpcClient} from './pg-company-db';
-import {readSnapshot} from './snapshot-read';
+import {readSnapshot,snapshotReader} from './snapshot-read';
+import {pgTableClient} from '../db/pg-table-client';
+import {memorySnapshotStore} from '../facts/snapshot-store';
+import {runFactsSync} from '../facts/sync';
+import type {SyncDeps} from '../facts/sync';
+import {MAPPING_GEN} from '../facts/concepts';
+import {ProviderError,snapshotOf} from '../facts/providers/shared';
+import {companyFactsUrl,parseCompanyFacts} from '../facts/providers/edgar-companyfacts';
+import type {FactsDb} from '../facts/types';
+import {runCompanyDigest} from './digest';
+import {memorySnapshotObjectStore} from './evidence-index';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261112090000_company_research.sql';
@@ -861,5 +871,82 @@ describe.skipIf(!enabled)('pgCompanyDb on real PostgreSQL',()=>{
    for(const role of ['anon','authenticated'] as const)
     expect((await fails(inTx(h.pool,{role,userId:role==='authenticated'?randomUUID():undefined},tx=>tx.c.query(`select * from public.company_digest_state where issuer_id=$1`,[s.iss])))).message).toMatch(/permission denied/);
   });
+ });
+});
+
+// Spec §1.1 success criterion 4 on real PostgreSQL. The AAPL companyfacts fixtures are replayed through the
+// LANDED sync as a synthetic issuer (cik and accession prefix rewritten) so this suite never shares
+// filings.source_ref with sync-us.integration.test.ts. Cases run in order and share state.
+describe.skipIf(!enabled)('company digest on a replayed US fixture (§1.1 #4)',()=>{
+ const CIK='9990777';const CIK10=CIK.padStart(10,'0');
+ let pool:Pool;let facts:FactsDb;let issuer='';let revised=false;
+ const store=memorySnapshotStore();
+ const doc=()=>{
+  const raw=readFileSync(new URL(`../facts/fixtures/edgar/CIK0000320193.${revised?'revised':'trimmed'}.json`,import.meta.url),'utf8');
+  return new TextEncoder().encode(raw.replaceAll('0000320193-','0009990777-').replace(/"cik":\s*320193\b/,`"cik": ${CIK}`));
+ };
+ const sync=()=>{
+  const deps:SyncDeps={db:facts,tables:pgTableClient(pool),storage:store,
+   fetchUs:async(cik10)=>{if(cik10!==CIK10)throw new ProviderError('no_companyfacts',cik10);return snapshotOf(doc(),{source:'edgar',url:companyFactsUrl(cik10)});},
+   fetchCn:async()=>{throw new ProviderError('tushare_unavailable','not in this suite');},
+   parseUs:(s,o)=>parseCompanyFacts(s,{sinceYear:o.sinceYear}),parseCn:()=>{throw new ProviderError('parse_error','not in this suite');},
+   now:()=>new Date(),deadline:null,codeVersion:'test-company'};
+  return runFactsSync(deps,{market:'US',limit:1,issuerIds:[issuer],dryRun:false,triggeredBy:'script',mappingGen:MAPPING_GEN});
+ };
+ const digest=()=>runCompanyDigest({db:pgCompanyDb(pool),tables:pgTableClient(pool),readSnapshot:snapshotReader(pgRpcClient(pool,'service_role')),facts,reader:memorySnapshotObjectStore(store.objects),
+  now:()=>new Date(),deadline:null,codeVersion:'test-company-digest'},{mode:'full',issuerIds:[issuer],market:'US',triggeredBy:'script'});
+ const rows=async()=>(await pool.query(`select event_id,kind,natural_key,first_seen_at,retired_at,payload_hash from public.issuer_events where issuer_id=$1 and market='US' order by event_id`,[issuer])).rows as {event_id:string;kind:string;natural_key:string;first_seen_at:Date;retired_at:Date|null;payload_hash:string}[];
+ let revisedEvent:{event_id:string;first_seen_at:Date}|null=null;let revisedFactId='';
+ beforeAll(async()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  pool=new Pool({connectionString:state.adminUrl});facts=pgFactsDb(pool);
+  await pool.query(`insert into public.stocks_universe(ticker,name,market) values('ZZAPL','ZZ Apple Replay','US') on conflict (ticker) do nothing`);
+  await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,country_code,cik) values($1,'ZZ Apple Replay','US',$2) on conflict do nothing`,[randomUUID(),CIK]);
+  issuer=(await pool.query(`select issuer_id from public.issuers where cik=$1`,[CIK])).rows[0].issuer_id;
+  await pool.query(`insert into public.issuer_securities(issuer_id,ticker,share_class,is_primary,valid_from,source) values($1,'ZZAPL','common',true,'2000-01-01','test') on conflict do nothing`,[issuer]);
+  await facts.reconcileScope('US',[{issuer_id:issuer,reasons:['test'],priority:10,fetch_key:CIK10}]);
+ });
+ afterAll(async()=>{if(facts&&issuer)await facts.reconcileScope('US',[{issuer_id:issuer,reasons:[],priority:0,fetch_key:CIK10}]).catch(()=>{});await pool?.end();});
+
+ it('replay + first digest: events, coverage and verified evidence rows exist',async()=>{
+  expect((await sync()).status).toBe('success');
+  const r=await digest();
+  expect(r.status).toBe('success');expect(r.detail.evidence.indexed).toBeGreaterThan(100);
+  const ev=await rows();
+  expect(ev.filter(e=>e.kind==='filing_published').length).toBeGreaterThan(5);
+  expect(ev.every(e=>e.retired_at===null)).toBe(true);
+  expect((await pool.query(`select count(*)::int n from public.issuer_coverage where issuer_id=$1 and market='US'`,[issuer])).rows[0].n).toBe(1);
+  expect((await pool.query(`select count(*)::int n from public.company_fact_evidence e join public.financial_facts f using (fact_id) where f.issuer_id=$1`,[issuer])).rows[0].n).toBe(r.detail.evidence.indexed);
+ });
+ it('second digest: zero new, zero changed, zero retired; first_seen_at row by row unchanged',async()=>{
+  const before=await rows();
+  const r=await digest();
+  expect(r.detail.events).toMatchObject({changed:0,retired:0,revived:0});
+  expect(await rows()).toEqual(before);
+ });
+ it('a later revision filing → exactly one new fact_revised',async()=>{
+  const before=new Set((await rows()).map(e=>e.event_id));
+  revised=true;expect((await sync()).status).toBe('success');
+  await digest();
+  const added=(await rows()).filter(e=>!before.has(e.event_id));
+  const newRevised=added.filter(e=>e.kind==='fact_revised');
+  expect(newRevised).toHaveLength(1);
+  expect(newRevised[0].natural_key).toBe('revenue:2022-09-25:2023-09-30:consolidated:USD:2025-11-01');
+  revisedEvent={event_id:newRevised[0].event_id,first_seen_at:newRevised[0].first_seen_at};
+  revisedFactId=(await pool.query(`select payload->'to'->>'factId' id from public.issuer_events where event_id=$1`,[revisedEvent.event_id])).rows[0].id;
+  expect(revisedFactId).toMatch(/^[0-9a-f-]{36}$/);
+ });
+ it('quarantining the revision row retires the event (tombstone, not deleted)',async()=>{
+  await pool.query(`update public.financial_facts set status='quarantined' where fact_id=$1`,[revisedFactId]);   // ok → quarantined (lifecycle trigger allows it)
+  await pool.query(`update public.fact_sync_scope set state_rev=state_rev+1 where issuer_id=$1 and market='US'`,[issuer]);   // what an adjudication does
+  await digest();
+  const e=(await rows()).find(x=>x.event_id===revisedEvent!.event_id)!;
+  expect(e.retired_at).not.toBeNull();expect(e.first_seen_at).toEqual(revisedEvent!.first_seen_at);
+ });
+ it('promoting it back revives the event with its original first_seen_at',async()=>{
+  expect((await pool.query(`select public.promote_quarantined($1,'US',array[$2]::uuid[]) n`,[issuer,revisedFactId])).rows[0].n).toBe(1);
+  await digest();
+  const e=(await rows()).find(x=>x.event_id===revisedEvent!.event_id)!;
+  expect(e.retired_at).toBeNull();expect(e.first_seen_at).toEqual(revisedEvent!.first_seen_at);
  });
 });
