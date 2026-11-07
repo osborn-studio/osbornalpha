@@ -73,7 +73,8 @@ async function withPreMigrationDatabase(adminUrl:string,version:string,body:(db:
    }
    await body(db);
   }catch(error){failures.add(error);}
-  try{await Promise.all([db.end(),...disconnected]);}catch(error){failures.add(error);}
+  try{await db.end();}catch(error){failures.add(error);}
+  await Promise.all(disconnected);
   try{await root.query(`drop database if exists ${name}`);}catch(error){failures.add(error);}
   if(failures.size===1)throw [...failures][0];
   if(failures.size>1)throw new AggregateError(failures,'Temporary database body or cleanup failed');
@@ -129,8 +130,8 @@ beforeAll(async()=>{
 afterAll(async()=>{await admin?.end();});
 
 describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
- it.each([false,true])('waits for every temporary database client before DROP DATABASE (idle error: %s)',async idleError=>{
-  const idleFailure=new Error('controlled idle client failure');
+ it.each(['normal','idle-error','pool-end-error'])('waits for every temporary database client before DROP DATABASE (%s)',async scenario=>{
+  const failure=new Error(`controlled ${scenario}`);
   let poolEnded!:()=>void;
   const atPoolEnd=new Promise<void>(resolve=>{poolEnded=resolve;});
   const release:(()=>void)[]=[];
@@ -150,8 +151,8 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
     client.release();
    }
    const end=db.end.bind(db);
-   db.end=async()=>{await end();poolEnded();};
-   if(idleError)clients[0].emit('error',idleFailure);
+   db.end=async()=>{await end();poolEnded();if(scenario==='pool-end-error')throw failure;};
+   if(scenario==='idle-error')clients[0].emit('error',failure);
   });
   // Propagate helper failures immediately rather than hanging on the test barrier.
   const failed=run.then(()=>{throw new Error('database dropped before client disconnects');});
@@ -164,7 +165,7 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
    expect(dropStarted).toBe(false);
   }finally{
    for(const open of release)open();
-   try{if(idleError)await expect(run).rejects.toBe(idleFailure);else await run;}finally{spy.mockRestore();}
+   try{if(scenario==='normal')await run;else await expect(run).rejects.toBe(failure);}finally{spy.mockRestore();}
   }
   expect(dropStarted).toBe(true);
  },120000);
