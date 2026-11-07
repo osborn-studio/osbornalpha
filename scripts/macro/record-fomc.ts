@@ -1,13 +1,14 @@
 // scripts/macro/record-fomc.ts
 // Records the FOMC calendar (spec §6.1). Fetches the official federalreserve.gov page once, stores the exact bytes
-// under src/lib/macro/fixtures/fomc/<sha256>.html, parses every year panel with parseFomcCalendar and rewrites
-// src/lib/macro/data/fomc-meetings.json. Years on the new page replace their old entries. Years no longer on the
-// page keep their earlier entry and its own committed evidence file.
+// under src/lib/macro/fixtures/fomc/<sha256>.html, parses every year panel with parseFomcCalendar and appends a
+// new retrieval version to src/lib/macro/data/fomc-meetings.json (append-only; earlier versions are never edited, so
+// asOf reads can select them). An incomplete parse throws before anything is written; an unchanged page (same
+// sha256 as an existing version) appends nothing.
 // Run: npx tsx scripts/macro/record-fomc.ts [--dry-run]
 import {createHash} from 'node:crypto';
 import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {FOMC_SOURCE_URL,parseFomcCalendar,type FomcYear} from '../../src/lib/macro/fomc';
+import {FOMC_SOURCE_URL,parseFomcCalendar,type FomcMeeting,type FomcVersion} from '../../src/lib/macro/fomc';
 const ROOT=process.cwd();
 const FIX=join(ROOT,'src/lib/macro/fixtures/fomc');
 const DATA=join(ROOT,'src/lib/macro/data/fomc-meetings.json');
@@ -21,11 +22,12 @@ async function main(){
  const sha=createHash('sha256').update(bytes).digest('hex');
  const retrievedAt=new Date().toISOString();
  const parsed=parseFomcCalendar(Buffer.from(bytes).toString('utf8'));
- const current:FomcYear[]=existsSync(DATA)?JSON.parse(readFileSync(DATA,'utf8')):[];
- const byYear=new Map(current.map(y=>[y.year,y]));
- for(const p of parsed)byYear.set(p.year,{year:p.year,meetings:p.meetings,source_url:FOMC_SOURCE_URL,retrieved_at:retrievedAt,sha256:sha});
- const next=[...byYear.values()].sort((a,b)=>a.year-b.year);
- console.log(JSON.stringify({sha256:sha,bytes:bytes.length,years:parsed.map(p=>[p.year,p.meetings.length])}));
+ const current:FomcVersion[]=existsSync(DATA)?JSON.parse(readFileSync(DATA,'utf8')):[];
+ const years:Record<string,FomcMeeting[]>={};
+ for(const p of parsed)years[String(p.year)]=p.meetings;
+ const duplicate=current.some(v=>v.sha256===sha);
+ const next:FomcVersion[]=duplicate?current:[...current,{retrieved_at:retrievedAt,sha256:sha,source_url:FOMC_SOURCE_URL,years}];
+ console.log(JSON.stringify({sha256:sha,bytes:bytes.length,years:parsed.map(p=>[p.year,p.meetings.length]),duplicate}));
  if(dry)return;
  mkdirSync(FIX,{recursive:true});
  writeFileSync(join(FIX,`${sha}.html`),bytes);

@@ -29,7 +29,14 @@ describe('seriesExtras',()=>{
   expect(plateau.map(a=>[a.asset_id,a.start_period,a.end_period,a.change_text,a.change_kind])).toEqual([
    ['US_WTI','2024-09-30','2026-09-30','2.6845','pct'],['US_UST10Y','2024-09-30','2026-09-30','29','bp']]);
   expect(x.calendar.length).toBeGreaterThan(0);
+  expect(x.calendar.every(c=>Number.isFinite(Date.parse(c.retrieved_at)))).toBe(true);
   expect(x.eventsVersion).toBe('macro-events/1');expect(x.cyclesVersion).toBe('macro-cycles/1');
+ });
+ it('calendar follows asOf: empty before the first retrieval, populated after',async()=>{
+  const before=await seriesExtras(fake(us),catalogById('US_DFF')!,{asOf:'2020-01-01T00:00:00.000Z'});
+  expect(before.calendar).toEqual([]);
+  const after=await seriesExtras(fake(us),catalogById('US_DFF')!,{asOf:'2099-01-01T00:00:00.000Z'});
+  expect(after.calendar.length).toBeGreaterThan(0);
  });
  it('an asset view of the same series is not listed as its own asset',async()=>{
   const x=await seriesExtras(fake({...us,US_DGS10:Array.from({length:24},(_,i)=>obs(`d${i}`,new Date(Date.UTC(2020,i+1,0)).toISOString().slice(0,10),String(i)))}),catalogById('US_DGS10')!,{});

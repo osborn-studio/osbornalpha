@@ -84,15 +84,17 @@ export function seriesCycles(history:readonly MonthlyInput[]):{cycles:Cycle[];in
  }
  const segs:{dir:'up'|'down';from:number;to:number;confirmed:number;block:number}[]=[];
  const short:{dir:'up'|'down';from:number;to:number;block:number}[]=[];
+ let separated=false;                                     // an opposite-direction short run sits after the last segment
  for(const r of runs){
-  const prev=segs[segs.length-1];const inBlock=prev&&prev.block===r.block?prev:null;
+  const prev=segs[segs.length-1];const inBlock=prev&&prev.block===r.block&&!separated?prev:null;
   if(r.to-r.from+1>=MIN_RUN_MONTHS){
    if(inBlock&&inBlock.dir===r.dir)inBlock.to=r.to;      // continues a segment that absorbed a short run
-   else segs.push({dir:r.dir,from:r.from,to:r.to,confirmed:r.from+MIN_RUN_MONTHS-1,block:r.block});
-  }else if(inBlock)inBlock.to=r.to;                       // short run merges into the previous segment
+   else{segs.push({dir:r.dir,from:r.from,to:r.to,confirmed:r.from+MIN_RUN_MONTHS-1,block:r.block});separated=false;}
+  }else if(inBlock&&inBlock.dir===r.dir)inBlock.to=r.to;  // short run merges into the previous same-direction segment
   else{
+   if(prev&&prev.block===r.block)separated=true;
    const s=short[short.length-1];
-   if(s&&s.block===r.block&&s.to===r.from-1)s.to=r.to;else short.push({dir:r.dir,from:r.from,to:r.to,block:r.block});
+   if(s&&s.block===r.block&&s.dir===r.dir&&s.to===r.from-1)s.to=r.to;else short.push({dir:r.dir,from:r.from,to:r.to,block:r.block});
   }
  }
  return {

@@ -65,9 +65,10 @@ describe('seriesCycles',()=>{
    {...S,direction:'down',start:'2022-09-30',end:'2023-04-30',ongoing:true,confirmed_at:'2023-02-28'},
   ]);
  });
- it('a run shorter than 6 months merges into the previous segment',()=>{
+ it('an opposite-direction short run stays a separate insufficient segment with its own direction',()=>{
   const r=seriesCycles(monthly(Array.from({length:36},(_,i)=>i<=23?i:46-i)));
-  expect(r.cycles).toEqual([{...S,direction:'up',start:'2021-01-31',end:'2022-12-31',ongoing:true,confirmed_at:'2021-06-30'}]);
+  expect(r.cycles).toEqual([{...S,direction:'up',start:'2021-01-31',end:'2022-08-31',ongoing:false,confirmed_at:'2021-06-30'}]);
+  expect(r.insufficient).toEqual([{direction:'down',start:'2022-09-30',end:'2022-12-31'}]);
  });
  it('a missing month breaks the count: two separate segments',()=>{
   const r=seriesCycles(monthly(Array.from({length:40},(_,i)=>i===20?null:i)));

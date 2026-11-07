@@ -35,5 +35,5 @@ export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:MacroSer
    assets.forEach((a,ai)=>assetsByCycle.push({cycle_index:ci,asset_id:a.id,asset_name:a.name,...assetChangeOverCycle(histories[ai],{start:c.start,end},a.changeKind)}));
   });
  }
- return {events,calendar:def.region==='US'?fomcCalendarEvents():[],cycles,insufficient,assetsByCycle,eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
+ return {events,calendar:def.region==='US'?fomcCalendarEvents(opts.asOf):[],cycles,insufficient,assetsByCycle,eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
 }
