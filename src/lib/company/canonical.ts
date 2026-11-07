@@ -1,6 +1,6 @@
 // src/lib/company/canonical.ts
 // Canonical JSON and the server-computed identities of issuer_events (spec §4.1, §4.6 ⑤; plan Task 2).
-// Byte-identical to public.company_canonical_json(jsonb) in 20261112091000_company_research_functions.sql:
+// Byte-identical to public.company_canonical_json(jsonb) in 20261118091000_company_research_functions.sql:
 // object keys in Unicode code-point order (UTF-8 byte order; SQL collate "C"), no whitespace, strings
 // escaped exactly like JSON.stringify (== PostgreSQL to_json(text)), numbers only as safe integers.
 // Strings PostgreSQL cannot store (U+0000, lone surrogates) are refused so the two sides can never

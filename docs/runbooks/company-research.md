@@ -1,6 +1,6 @@
 # 公司研究与跟踪运行手册
 
-适用迁移：`supabase/migrations/20261112090000_company_research.sql`（表、索引、触发器、RLS、授权）、`supabase/migrations/20261112091000_company_research_functions.sql`（全部函数与授权）、`supabase/migrations/20261112092000_company_evidence_fence.sql`（证据替换的尝试/版本围栏）。前提：规格二的 `20261106090000_financial_facts.sql` 已在库中。规格：`docs/superpowers/specs/2026-11-04-company-research-design.md`（§0 优先）。代码：`src/lib/company/*`、`/api/companies/*`、`/api/admin/companies/*`、`/api/tracking/*`、`/api/cron/company-digest`、`scripts/company/*`。
+适用迁移：`supabase/migrations/20261118090000_company_research.sql`（表、索引、触发器、RLS、授权）、`supabase/migrations/20261118091000_company_research_functions.sql`（全部函数与授权）、`supabase/migrations/20261118092000_company_evidence_fence.sql`（证据替换的尝试/版本围栏）。前提：规格二的 `20261106090000_financial_facts.sql` 已在库中。规格：`docs/superpowers/specs/2026-11-04-company-research-design.md`（§0 优先）。代码：`src/lib/company/*`、`/api/companies/*`、`/api/admin/companies/*`、`/api/tracking/*`、`/api/cron/company-digest`、`scripts/company/*`。
 
 ## 1. 表与权限
 
@@ -15,10 +15,10 @@
 
 ## 2. 迁移应用顺序
 
-origin/main 已有迁移至 `20261114090000_macro_workbench.sql`。三份 company 迁移编号较旧但已经锁定，保持原编号并按文件顺序应用，不重编号、不修改锁定字节。
+合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），在本分支**未锁定**；合并到 main 时由合并者追加到 `supabase/migrations.lock.json`，之后不可再改字节。
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
-2. 按文件名顺序应用：先 `20261112090000_company_research.sql`，再 `20261112091000_company_research_functions.sql`，再 `20261112092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；已锁定在 `supabase/migrations.lock.json`，任何修改都要新迁移。
+2. 按文件名顺序应用：先 `20261118090000_company_research.sql`，再 `20261118091000_company_research_functions.sql`，再 `20261118092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；合并后锁定在 `supabase/migrations.lock.json`，之后任何修改都要新迁移。
 3. 核对：`select proname from pg_proc where proname like 'company_%' or proname in ('begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','replace_company_fact_evidence');` 列出全部函数；`select has_table_privilege('anon','public.issuer_events','select');` 为 `false`。
 
 ## 3. 首轮物化（owner，合并后）
@@ -130,7 +130,7 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 
 ## 11. 回滚
 
-三份迁移已锁定，回滚 = 经审查的新迁移。依赖清理不能直接复制执行：先清点函数签名及依赖（包括 company_read_snapshot 的返回类型依赖）。顺序：先从 `vercel.json` 删除 `/api/cron/company-digest` 并部署；再在新迁移里按依赖倒序 `drop table if exists public.company_event_reads, public.company_watches, public.issuer_events, public.issuer_coverage, public.company_digest_state, public.company_fact_evidence;`，并 `drop function if exists` 本模块全部函数（签名见计划"共享契约 / SQL 函数签名"表）。按用户数据（watch、回执）会丢失：执行前导出 `company_watches` 与 `company_event_reads`。
+三份迁移合并后锁定，回滚 = 经审查的新迁移。依赖清理不能直接复制执行：先清点函数签名及依赖（包括 company_read_snapshot 的返回类型依赖）。顺序：先从 `vercel.json` 删除 `/api/cron/company-digest` 并部署；再在新迁移里按依赖倒序 `drop table if exists public.company_event_reads, public.company_watches, public.issuer_events, public.issuer_coverage, public.company_digest_state, public.company_fact_evidence;`，并 `drop function if exists` 本模块全部函数（签名见计划"共享契约 / SQL 函数签名"表）。按用户数据（watch、回执）会丢失：执行前导出 `company_watches` 与 `company_event_reads`。
 
 ## 12. 本次验证范围（2026-11-06）
 

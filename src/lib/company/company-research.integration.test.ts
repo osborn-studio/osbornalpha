@@ -27,9 +27,9 @@ import {runCompanyDigest} from './digest';
 import {memorySnapshotObjectStore} from './evidence-index';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const TABLES_MIGRATION='supabase/migrations/20261112090000_company_research.sql';
-const FUNCTIONS_MIGRATION='supabase/migrations/20261112091000_company_research_functions.sql';
-const FENCE_MIGRATION='supabase/migrations/20261112092000_company_evidence_fence.sql';
+const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
+const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
+const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
 const TABLES=['issuer_events','issuer_coverage','company_watches','company_event_reads','company_digest_state','company_fact_evidence'];
 const SERVICE_ONLY=['issuer_events','company_digest_state','company_fact_evidence'];
 const NO_DIRECT_WRITE=['issuer_events','issuer_coverage','company_digest_state','company_fact_evidence'];

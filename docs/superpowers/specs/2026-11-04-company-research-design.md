@@ -35,7 +35,7 @@
 - **#68 抽屉序列**：抽屉一律读本模块 `GET /api/companies/[ticker]/facts?concept=&periodStart=&periodEnd=&unit=&asOf=`（`company_read_snapshot(history:true)` 按自然键取全序列，附 `evidence` 并过门槛）；`/api/facts?factIds=` 只用于精确事实引用，其 `disclosureSeq/isCurrent/isRevision` 可为 null，不转为 0/false，不据此推断序列或修订徽标。
 - **#69 票据与市场**：一律复用 `resolvePublicIssuer`（exact-first、规范化回落、当前归属与合并重定向）；`market` 取自匹配到的证券行，不取原始输入后缀；HK 证券：页头用 `/api/entities/resolve` 身份，事实区显示 F3 空状态，不回落 US。路由测试覆盖 `600519`、`SH600519`、`600519.SS`、`BRK.A`、合并证券、`ambiguous_ticker`。
 - **#70 失败幂等**：`mark_company_digest_failed` 只在 `p_attempt_id > greatest(coalesce(last_success_attempt_id,0), coalesce(last_failed_attempt_id,0))` 时推进失败状态；相同或更旧的失败返回 false，不重复增加 `consecutive_failures`、不重排退避。数据库测试加"同一失败投递两次"与"新失败 → 旧失败"。
-- **#71 迁移时间戳**：本模块迁移为 `supabase/migrations/20261112090000_company_research.sql`（表、索引、触发器、授权）与 `20261112091000_company_research_functions.sql`（全部函数）；正文中的 `20261107090000` 均读作此二者。
+- **#71 迁移时间戳**：本模块迁移为 `supabase/migrations/20261118090000_company_research.sql`（表、索引、触发器、授权）与 `20261118091000_company_research_functions.sql`（全部函数）；正文中的 `20261107090000` 均读作此二者。
 - **#72 黄金集**：`plan2.json` 当前 `ready:false`，不作为已核实真值。本模块验收数字（AAPL revenue 回放样例、AAPL 最近 10 份 filing 的 `filing_published` 列表）记录在本模块自有夹具 `src/lib/company/fixtures/manifest.json`，期望值来源字段标明"人工抄录（EDGAR filing index / 10-K 原文页）"与抄录人；尚未抄录的条目标 `pending`，对应验收断言跳过并在 PR 列为 owner 事项，**不以实现输出补期望值**；"6 家 × 2 期 × 6 科目"矩阵只有完成后才能宣称通过。
 
 ### 0.3 本稿的其他实施约定（指挥决定，2026-11-06）
@@ -101,7 +101,7 @@
 | 日历 | `GET /api/calendar/[ticker]`（Tushare `disclosure_date/forecast/dividend/share_float`，仅 A 股；无原始快照、无回放链） | 本次不显示"预计披露日"（决策 G 默认），§1.2 |
 | 设计与 i18n | `DESIGN.md`、`globals.css` tokens、`src/components/ui`；`src/i18n/request.ts::MESSAGE_DOMAINS` 枚举运行时消息域；`src/i18n/messages-parity.test.ts` 的循环硬编码四个域；受保护页面的 `/en/` 前缀被中间件重定向到无前缀路径，语言由 `NEXT_LOCALE` cookie 决定 | 新域注册到 `MESSAGE_DOMAINS` 与对等测试；e2e 切语言用 cookie |
 | 管理与 cron | `requireAdminUser()`；`authorizedCronRequest`；`vercel.json`；`TableClient`（无 rpc / 事务 / delete / join；`selectAll` 分页不是快照） | 新 `CompanyDb` 契约（§4.7） |
-| 测试门禁 | `vitest` include `src/**/*.test.ts`；`test:db` 要求含 `S4_TEST_STATE` 的文件都在 `criticalSuites`；`test:migrations` 要求新迁移晚于锁定最新（规格二占 `20261106090000`） | 新迁移 `20261112090000_company_research.sql` + `20261112091000_company_research_functions.sql`（§0 #71） |
+| 测试门禁 | `vitest` include `src/**/*.test.ts`；`test:db` 要求含 `S4_TEST_STATE` 的文件都在 `criticalSuites`；`test:migrations` 要求新迁移晚于锁定最新（规格二占 `20261106090000`） | 新迁移 `20261118090000_company_research.sql` + `20261118091000_company_research_functions.sql`（§0 #71） |
 
 ---
 
@@ -770,7 +770,7 @@ interface JudgmentCard {
 | §6 合并发行人读取 | statements / drawer / overview / packet 仍读单一发行人，不并入合并前身事实；metrics proxy 已按 lineage 读取 | 已知缺口（实施日志“合并 main 后的兼容”）；补齐需要 lineage 版同快照读函数与新迁移 |
 | §12.3 第 11 条 | 直接写 `NEXT_LOCALE=en` cookie，不驱动设置页 | 设置页 DOM 不在本模块范围 |
 | §12.0 / §0 #72 | 夹具清单三条期望值保持 `pending`，测试与 e2e 跳过并列出；"6×2×6"矩阵未宣称通过 | 期望值必须人工抄录；删除无消费者的 `aapl-recent-10-filings` / `aapl-revenue-fy2023-current`，保留四个夹具、三条期望 |
-| §4.6 / §0.1 证据写入 | 新增第三份已锁迁移 `20261112092000_company_evidence_fence.sql`，`replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 五参、尝试与版本围栏 | Task 2 Codex 挑战：证据替换无尝试/版本围栏，旧尝试可能覆盖新证据 |
+| §4.6 / §0.1 证据写入 | 新增第三份已锁迁移 `20261118092000_company_evidence_fence.sql`，`replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 五参、尝试与版本围栏 | Task 2 Codex 挑战：证据替换无尝试/版本围栏，旧尝试可能覆盖新证据 |
 | §0 #64 事件权限 | `issuer_events` 仅 service_role 可读；公共读经事件证据门槛 | 原始 payload 带财务值，不能绕过门槛 |
 | §0.1 同快照内存读 | 前后 rev 一致才返回，最多五次重试 | Task 3 挑战：并发发布可能混合状态 |
 | §5.6 证据定位 | PDF 页码、行、列均校验 | Task 6 挑战：无效 PDF 定位可公开 |

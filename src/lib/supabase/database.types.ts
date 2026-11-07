@@ -25,7 +25,7 @@
 // + 20261115090000_macro_strategy.sql (macro_strategy_manifests, macro_review_results, macro_review_current,
 //   macro_review_attempts, macro_explanation_runs, macro_explanations; the eight RPCs are not registered)
 // /MACRO-P3
-// + 20261112090000_company_research.sql (COMPANY block below)
+// + 20261118090000_company_research.sql (COMPANY block below)
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -705,7 +705,7 @@ export interface FactSyncScope {
   updated_at: string;
 }
 // COMPANY
-// 20261112090000_company_research.sql. issuer_events / company_digest_state / company_fact_evidence are
+// 20261118090000_company_research.sql. issuer_events / company_digest_state / company_fact_evidence are
 // service-role only (§0 #64); issuer_coverage is public read; company_watches / company_event_reads are
 // RLS own-rows. bigint columns arrive as JSON numbers through PostgREST (Number() them anyway).
 export interface IssuerEvent {

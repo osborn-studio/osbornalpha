@@ -1,6 +1,6 @@
 // src/lib/company/db.ts
 // CompanyDb (spec §4.7, §0 #64, §0.1): the only data access of the company module. Writes and
-// snapshot-sensitive reads are SQL functions (20261112091000_company_research_functions.sql) called
+// snapshot-sensitive reads are SQL functions (20261118091000_company_research_functions.sql) called
 // through rpc; plain reads use .from() under RLS. The functions raise with the code as the message
 // (detail in `details`/`detail`); toCompanyDbError maps the first word to CompanyDbError.code and keeps
 // the detail in the message ("<code>: <detail>"); anything else is internal. Shared normalisers make

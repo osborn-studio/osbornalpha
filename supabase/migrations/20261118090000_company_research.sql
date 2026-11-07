@@ -1,10 +1,10 @@
--- supabase/migrations/20261112090000_company_research.sql
+-- supabase/migrations/20261118090000_company_research.sql
 -- Company research and tracking (spec 2026-11-04 company research §4, §0 #64, §0.1 item 2; plan
 -- 2026-11-06 Task 1): six tables. Public/materialized tables — issuer_events (fact event timeline),
 -- issuer_coverage (counts and dates per issuer+market), company_digest_state (materialisation cursor
 -- and attempt ownership), company_fact_evidence (verified fact → raw snapshot index) — accept NO
 -- direct insert/update/delete from any role, service_role included; every write goes through the
--- security definer functions of 20261112091000_company_research_functions.sql. issuer_events,
+-- security definer functions of 20261118091000_company_research_functions.sql. issuer_events,
 -- company_digest_state and company_fact_evidence are readable by service_role only (§0 #64: routes
 -- assemble events and evidence server-side behind the evidence gate); issuer_coverage holds no
 -- financial values and is public read. Per-user tables company_watches / company_event_reads are

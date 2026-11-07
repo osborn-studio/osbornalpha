@@ -1,4 +1,4 @@
--- supabase/migrations/20261112092000_company_evidence_fence.sql
+-- supabase/migrations/20261118092000_company_evidence_fence.sql
 -- Evidence writer fence (Task 2 review): replace_company_fact_evidence now carries the digest's
 -- (attempt id, based-on state_rev) fence like replace_company_digest — stale_computation (55P03) when
 -- the facts moved, stale_attempt (P0001) when a newer attempt already succeeded. company_evidence_check

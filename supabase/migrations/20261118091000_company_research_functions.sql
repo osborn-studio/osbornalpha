@@ -1,4 +1,4 @@
--- supabase/migrations/20261112091000_company_research_functions.sql
+-- supabase/migrations/20261118091000_company_research_functions.sql
 -- Company research functions (spec 2026-11-04 company research §4.6, §4.7, §0 #64 #70, §0.1 items 2–3;
 -- plan 2026-11-06 Task 2). Writers (service_role): begin_company_digest_attempt,
 -- replace_company_digest, mark_company_digest_failed, replace_company_fact_evidence. Readers:
