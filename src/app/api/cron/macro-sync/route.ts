@@ -3,8 +3,8 @@
 // catalog mirror; one ingest batch (producer 'ts-fred', dataset 'macro.fred') over every active native FRED
 // series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; MacroDb.finalizeBatch (第 6 稿 P1-1: the
 // macro-owned finalizer, no tokens — cron batches have no run row; a fatal abort finalizes 'failed' with the actual counts, P2-4);
-// A series is fetched in full from FRED_COSD (2000-01-01, spec §4.4) until its persisted eligible data reaches back to
-// FRED_BACKFILL_DONE_BY (a failed oldest chunk therefore keeps the full window next run, T7-2); afterwards the
+// A series is fetched in full from FRED_COSD (2000-01-01, spec §4.4) or its later first period until persisted eligible data reaches
+// the series' backfill threshold (a failed oldest chunk therefore keeps the full window next run, T7-2); afterwards the
 // daily run asks for a recent window only (daily series 400 days, monthly 6 years so the BLS 5-year
 // seasonal revisions are seen) to keep the run inside maxDuration.
 // recordAttempt('macro.fred', daily, ok = status !== 'failed' and a usable native row landed). Derivation runs only when this
@@ -27,7 +27,7 @@ import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import type {IngestReceipt} from '@/lib/macro/ingest';
-import {FRED_BACKFILL_DONE_BY,FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
+import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredBackfillDoneBy,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
 import {publishRegion} from '@/lib/macro/snapshots';
@@ -52,8 +52,9 @@ async function fetchAndParse(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSigna
 
 /** Backfill is complete only when persisted eligible data reaches back to the start of the full window (T7-2). Any read
  *  failure counts as incomplete: the full window is the safe side. */
-async function backfillComplete(deps:MacroDeps,id:string):Promise<boolean>{
- try{return (await deps.db.eligibleHistory(id,{from:FRED_COSD,to:FRED_BACKFILL_DONE_BY,maxRows:500})).length>0;}
+async function backfillComplete(deps:MacroDeps,def:MacroSeriesDef,today:string):Promise<boolean>{
+ const firstPeriod=(def as {firstPeriod?:string}).firstPeriod;
+ try{return (await deps.db.eligibleHistory(def.id,{from:fredCosdFor(def.period,false,today,firstPeriod),to:fredBackfillDoneBy(firstPeriod),maxRows:500})).length>0;}
  catch{return false;}
 }
 
@@ -94,7 +95,7 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
   // backfill decision on persisted eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   for(const def of defs){
    let evidence:EvidenceInput;
-   try{evidence=await fetchEvidence(deps,def,signal,fredCosdFor(def.period,await backfillComplete(deps,def.id),today));}
+   try{evidence=await fetchEvidence(deps,def,signal,fredCosdFor(def.period,await backfillComplete(deps,def,today),today,(def as {firstPeriod?:string}).firstPeriod));}
    catch(e){failSeries(errCode(e),def.id);continue;}
    let parsed:ParsedPoint[];
    try{parsed=parseEvidence(def,evidence);}
