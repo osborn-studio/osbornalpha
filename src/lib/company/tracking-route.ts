@@ -4,6 +4,7 @@
 // every response (success and error) `Cache-Control: private, no-store`; 401 not_authenticated; mutations
 // require Content-Type application/json and a same-origin Origin (as /api/admin/dq/quarantine/[id]).
 import {NextResponse} from 'next/server';
+import type {SupabaseClient} from '@supabase/supabase-js';
 import {getServerSupabase,serverIsSupabaseConfigured} from '../supabase/server';
 import {getAdminSupabase} from '../supabase/admin';
 import {supabaseTableClient,type TableClient} from '../db/table-client';
@@ -31,7 +32,6 @@ export async function jsonObject(request:Request):Promise<Record<string,unknown>
  return b!==null&&typeof b==='object'&&!Array.isArray(b)?b as Record<string,unknown>:null;
 }
 
-import type {SupabaseClient} from '@supabase/supabase-js';
 type ServerSb=Awaited<ReturnType<typeof getServerSupabase>>;
 export interface TrackingSession{userId:string;sb:ServerSb;db:CompanyDb;tables:TableClient}
 /** The signed-in user's session-scoped clients, or null (→ 401). */
@@ -68,14 +68,17 @@ export async function resolveWatchTarget(tables:TableClient,body:Record<string,u
  if(keys.length!==1||hasId===hasTicker)return {error:trackingError('invalid_parameter:body','give exactly one of issuerId, ticker',400)};
  if(hasId){
   if(!isIssuerId(body.issuerId))return {error:trackingError('invalid_parameter:issuerId','invalid issuerId',400)};
-  const [row]=await tables.select('issuers',{issuer_id:body.issuerId},{limit:1});
+  const id=body.issuerId.toLowerCase();
+  const [row]=await tables.select('issuers',{issuer_id:id},{limit:1});
   if(!row)return {error:trackingError('unknown_issuer','issuer not found',404)};
   if(row.status==='merged'){
-   const target=typeof row.merged_into==='string'?row.merged_into:null;
-   if(!target)return {error:trackingError('unknown_issuer','issuer not found',404)};
+   const target=typeof row.merged_into==='string'?row.merged_into.toLowerCase():null;
+   if(!target||!isIssuerId(target))return {error:trackingError('unknown_issuer','issuer not found',404)};
+   const [dest]=await tables.select('issuers',{issuer_id:target},{limit:1});
+   if(!dest||dest.status==='merged')return {error:trackingError('unknown_issuer','issuer not found',404)};
    return {issuerId:target};
   }
-  return {issuerId:String(row.issuer_id)};
+  return {issuerId:id};
  }
  const ticker=body.ticker;
  if(typeof ticker!=='string'||!TICKER_RE.test(ticker))return {error:trackingError('invalid_parameter:ticker','invalid ticker',400)};

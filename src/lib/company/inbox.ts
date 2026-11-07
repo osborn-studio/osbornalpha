@@ -66,7 +66,8 @@ export async function unreadCounts(src:InboxSources,issuerIds:string[],opts:{pag
  const pageSize=opts.pageSize??200,maxScans=opts.maxScans??25;
  let cursor:string|null=null;
  for(let scan=0;scan<maxScans;scan++){
-  const page=await src.eventsOfIssuers(issuerIds,{cursor,limit:pageSize});
+  const open0=issuerIds.filter(id=>(counts.get(id)??0)<UNREAD_CAP);   // the cursor is issuer-independent: saturated issuers drop out
+  const page=await src.eventsOfIssuers(open0,{cursor,limit:pageSize});
   const open=page.rows.filter(r=>(counts.get(r.issuer_id)??UNREAD_CAP)<UNREAD_CAP);
   const read=await readSet(src,open.map(r=>r.event_id));
   for(const r of open)if(!read.has(r.event_id))counts.set(r.issuer_id,Math.min(UNREAD_CAP,(counts.get(r.issuer_id)??0)+1));

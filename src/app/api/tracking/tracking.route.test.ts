@@ -20,7 +20,7 @@ const m=vi.hoisted(()=>({
 vi.mock('@/lib/supabase/server',()=>({
  serverIsSupabaseConfigured:()=>true,
  getServerSupabase:async()=>({tag:'session',auth:{getUser:async()=>({data:{user:m.user}})},
-  from:(t:string)=>({select:()=>({limit:async()=>t==='watchlist_items'?m.watchlistTickers():{data:[],error:null}})})}),
+  from:(t:string)=>({select:()=>({order:()=>({order:()=>({range:async(a:number,b:number)=>t==='watchlist_items'?m.watchlistTickers(a,b):{data:[],error:null}})})})})}),
 }));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({tag:'admin'})}));
 vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({tag:'anon'})}));
@@ -219,5 +219,61 @@ describe('GET /api/tracking/inbox',()=>{
   m.session.readEventIds.mockImplementation(async(_u:string,ids:string[])=>new Set(ids.filter(id=>id===hex(2))));
   const body=await (await getInbox(new Request(`${ORIGIN}/api/tracking/inbox?limit=1&unreadOnly=1`))).json();
   expect(body.rows.map((r:{eventId:string})=>r.eventId)).toEqual([hex(1)]);
+ });
+});
+
+describe('review fixes',()=>{
+ const UP=A.toUpperCase();
+ it('import-watchlist pages past 1000 rows, dedupes across lists, finds a new issuer on page 2',async()=>{
+  const page1=Array.from({length:1000},(_,i)=>({ticker:i<999?'AAPL':'MSFT'}));   // duplicates across lists
+  m.watchlistTickers.mockImplementation(async(a:number)=>a===0?{data:page1,error:null}:{data:[{ticker:'msft'},{ticker:'NEWCO'}],error:null});
+  m.resolve.mockImplementation(async(_t:unknown,q:{ticker:string})=>q.ticker==='AAPL'?{issuer_id:A}:q.ticker==='NEWCO'?{issuer_id:C}:q.ticker==='MSFT'?{issuer_id:A}:null);
+  m.session.upsertWatch.mockResolvedValue({row:w(C),created:true});
+  const r=await postImport(json('POST','/api/tracking/watches/import-watchlist',{}));
+  expect(r.status).toBe(200);
+  expect(m.watchlistTickers).toHaveBeenCalledTimes(2);
+  expect(m.watchlistTickers).toHaveBeenNthCalledWith(2,1000,1999);
+  expect(m.resolve).toHaveBeenCalledTimes(3);   // AAPL, MSFT, NEWCO — deduped
+  expect((await r.json()).added).toEqual([{ticker:'NEWCO',issuerId:C}]);
+ });
+ it('uppercase issuer ids: read route and inbox filter compare in lower case',async()=>{
+  m.session.markRead.mockResolvedValue({inserted:1});
+  const r=await postRead(json('POST',`/api/tracking/watches/${UP}/read`,{eventIds:[hex(1)]}),ctx(UP));
+  expect(r.status).toBe(200);expect(m.session.markRead).toHaveBeenCalledWith(USER,A,[hex(1)]);
+  const i=await getInbox(new Request(`${ORIGIN}/api/tracking/inbox?issuerId=${UP}`));
+  expect(i.status).toBe(200);expect(m.service.eventsOfIssuers).toHaveBeenCalledWith([A],expect.anything());
+ });
+ it('a forged inner cursor that the database rejects is 400 invalid_parameter:cursor',async()=>{
+  m.service.eventsOfIssuers.mockResolvedValueOnce({rows:[ev(2,A,'2026-11-02T00:00:00Z')],nextCursor:'db-cursor-1'});
+  const first=await (await getInbox(new Request(`${ORIGIN}/api/tracking/inbox?limit=1`))).json();
+  m.service.eventsOfIssuers.mockRejectedValueOnce(new CompanyDbError('invalid_read'));
+  const r=await getInbox(new Request(`${ORIGIN}/api/tracking/inbox?limit=1&cursor=${first.nextCursor}`));
+  expect(r.status).toBe(400);expect((await r.json()).error.code).toBe('invalid_parameter:cursor');
+ });
+ it('merged issuer: redirect target must exist and not be merged',async()=>{
+  const MID='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  m.session.upsertWatch.mockResolvedValue({row:w(C),created:true});
+  m.selectIssuer.mockResolvedValueOnce([{issuer_id:A,status:'merged',merged_into:C}]).mockResolvedValueOnce([{issuer_id:C,status:'active',merged_into:null}]);
+  expect((await postWatch(json('POST','/api/tracking/watches',{issuerId:A}))).status).toBe(201);
+  expect(m.session.upsertWatch).toHaveBeenLastCalledWith(USER,C);
+  m.selectIssuer.mockResolvedValueOnce([{issuer_id:A,status:'merged',merged_into:C}]).mockResolvedValueOnce([]);
+  expect((await postWatch(json('POST','/api/tracking/watches',{issuerId:A}))).status).toBe(404);
+  m.selectIssuer.mockResolvedValueOnce([{issuer_id:A,status:'merged',merged_into:MID}]).mockResolvedValueOnce([{issuer_id:MID,status:'merged',merged_into:C}]);
+  const r=await postWatch(json('POST','/api/tracking/watches',{issuerId:A}));
+  expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('unknown_issuer');
+ });
+ it('CSRF on PATCH, read and import; unwatched inbox issuerId never reads events; 500 is private no-store',async()=>{
+  const bad=(method:string,path:string)=>new Request(`${ORIGIN}${path}`,{method,body:'{}',headers:{'content-type':'application/json',origin:'https://evil.example'}});
+  expect((await patchWatch(bad('PATCH',`/api/tracking/watches/${A}`),ctx(A))).status).toBe(403);
+  expect((await postRead(bad('POST',`/api/tracking/watches/${A}/read`),ctx(A))).status).toBe(403);
+  expect((await postImport(bad('POST','/api/tracking/watches/import-watchlist'))).status).toBe(403);
+  expect((await postImport(new Request(`${ORIGIN}/api/tracking/watches/import-watchlist`,{method:'POST',body:'{}',headers:{origin:ORIGIN}}))).status).toBe(415);
+  expect(m.session.patchWatch).not.toHaveBeenCalled();expect(m.session.markRead).not.toHaveBeenCalled();
+  const r=await getInbox(new Request(`${ORIGIN}/api/tracking/inbox?issuerId=${C}`));
+  expect(r.status).toBe(404);expect(m.service.eventsOfIssuers).not.toHaveBeenCalled();
+  vi.spyOn(console,'error').mockImplementation(()=>undefined);
+  m.session.watchesOf.mockRejectedValue(new Error('db down'));
+  const e=await getWatches();
+  expect(e.status).toBe(500);expectPrivate(e);expect((await e.json()).error.code).toBe('internal');
  });
 });

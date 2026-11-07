@@ -13,7 +13,8 @@ export async function POST(request:Request,{params}:Ctx){
  const s=await trackingSession();
  if(!s)return unauthenticated();
  const guard=mutationGuard(request);if(guard)return guard;
- const {issuerId}=await params;
+ const {issuerId:rawId}=await params;
+ const issuerId=rawId.toLowerCase();
  if(!isIssuerId(issuerId))return trackingError('invalid_parameter:issuerId','invalid issuerId',400);
  const body=await jsonObject(request);
  const ids=body?.eventIds;

@@ -143,6 +143,13 @@ describe('muted issuers and cursors',()=>{
 });
 
 describe('unreadCounts',()=>{
+ it('saturated issuers drop out of later scans: a sparse issuer behind a flood is still counted right',async()=>{
+  const events=[...Array.from({length:120},(_,i)=>ev(1000+i,A,T1)),ev(1,B,T0),ev(2,B,T0),ev(3,B,T0)];
+  const src=fakeSource(events);
+  const r=await unreadCounts(src,[A,B],{pageSize:50});
+  expect(r.counts.get(A)).toBe(UNREAD_CAP);expect(r.counts.get(B)).toBe(3);expect(r.complete).toBe(true);
+  expect(src.calls.some(c=>c.issuers.length===1&&c.issuers[0]===B)).toBe(true);   // A was dropped once saturated
+ });
  it('counts unread per issuer, stops at the cap (99+), muted issuers are simply not passed in',async()=>{
   const events=[...Array.from({length:150},(_,i)=>ev(10+i,A,T1)),ev(1,B,T0),ev(2,B,T0)];
   const src=fakeSource(events,new Set([hex(1)]));

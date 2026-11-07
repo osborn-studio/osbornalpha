@@ -7,7 +7,7 @@ import {gateEventRows} from '@/lib/company/event-dto';
 import {productionEventGateDeps} from '@/lib/company/deps';
 import {assembleInbox,decodeInboxCursor,encodeInboxCursor,inboxFingerprint,inboxIssuerIds,INBOX_DEFAULT_LIMIT,INBOX_MAX_LIMIT} from '@/lib/company/inbox';
 import {serviceCompanyDb,trackingError,trackingFailure,trackingJson,trackingSession,unauthenticated} from '@/lib/company/tracking-route';
-import {EVENT_KINDS,type EventKind} from '@/lib/company/types';
+import {CompanyDbError,EVENT_KINDS,type EventKind} from '@/lib/company/types';
 import {QueryError,UUID_RE,flagParam,intParam,listParam,readParams} from '@/lib/facts/public-route';
 
 export const dynamic='force-dynamic';
@@ -22,7 +22,7 @@ export async function GET(request:Request){
   limit=intParam(p,'limit',INBOX_DEFAULT_LIMIT,INBOX_MAX_LIMIT);
   kinds=listParam(p,'kinds',new Set(EVENT_KINDS),EVENT_KINDS.length) as EventKind[]|undefined;
   unreadOnly=flagParam(p,'unreadOnly');
-  issuerId=p.get('issuerId')??null;
+  issuerId=p.get('issuerId')?.toLowerCase()??null;
   if(issuerId!==null&&!UUID_RE.test(issuerId))throw new QueryError('issuerId');
   cursorRaw=p.get('cursor');
  }catch(e){
@@ -50,5 +50,8 @@ export async function GET(request:Request){
    nextCursor:page.nextCursor===null?null:encodeInboxCursor(page.nextCursor,fingerprint),
    evidence,
   });
- }catch(e){return trackingFailure(e,'tracking/inbox');}
+ }catch(e){
+  if(e instanceof CompanyDbError&&e.code==='invalid_read')return trackingError('invalid_parameter:cursor','invalid cursor',400);
+  return trackingFailure(e,'tracking/inbox');
+ }
 }

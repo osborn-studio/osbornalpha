@@ -10,7 +10,8 @@ export async function PATCH(request:Request,{params}:Ctx){
  const s=await trackingSession();
  if(!s)return unauthenticated();
  const guard=mutationGuard(request);if(guard)return guard;
- const {issuerId}=await params;
+ const {issuerId:rawId}=await params;
+ const issuerId=rawId.toLowerCase();
  if(!isIssuerId(issuerId))return trackingError('invalid_parameter:issuerId','invalid issuerId',400);
  const body=await jsonObject(request);
  if(!body)return trackingError('invalid_parameter:body','JSON object required',400);
@@ -37,7 +38,8 @@ export async function DELETE(request:Request,{params}:Ctx){
  const s=await trackingSession();
  if(!s)return unauthenticated();
  const guard=mutationGuard(request);if(guard)return guard;
- const {issuerId}=await params;
+ const {issuerId:rawId}=await params;
+ const issuerId=rawId.toLowerCase();
  if(!isIssuerId(issuerId))return trackingError('invalid_parameter:issuerId','invalid issuerId',400);
  try{
   if(!await s.db.deleteWatch(s.userId,issuerId))return trackingError('watch_not_found','not tracking this company',404);
