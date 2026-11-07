@@ -18,7 +18,10 @@ describe('cnSpecOf',()=>{
    evidence_path:'/dg/website/publicrelease/web/external/stream/esData',column:'制造业采购经理指数(%)',kind:'月度数据',
    path:'采购经理指数 > 制造业采购经理指数',daily_period:'LAST13',backfill:[{path:'采购经理指数 > 制造业采购经理指数',period:'2016-'}]});
   expect(cnSpecOf(def('CN_GDP_INDEX','macro_china_nbs_nation|季度数据|国民经济核算 > 国内生产总值指数 > 国内生产总值指数(上年同期=100)当季值','data.stats.gov.cn','quarter')).daily_period).toBe('LAST8');
-  expect(cnSpecOf(def('CN_CPI_INDEX','macro_china_nbs_nation|月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)','data.stats.gov.cn')).backfill!.map(b=>b.period)).toEqual(['2021-2025','2016-2020']);
+  expect(cnSpecOf(def('CN_CPI_INDEX','macro_china_nbs_nation|月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)','data.stats.gov.cn')).backfill!.map(b=>b.period)).toEqual(['2026-','2021-2025','2016-2020']);
+  const cpi=cnSeriesSpecs().find(x=>x.series_id==='CN_CPI_INDEX')!;
+  expect(cpi.backfill![0]).toEqual({path:cpi.path,period:'2026-'});
+  expect(cpi.path).toContain('(2026-)');
  });
  it('reads ChinaBond and SAFE keys',()=>{
   expect(cnSpecOf(def('CN_CGB_10Y_D','bond_china_yield|中债国债收益率曲线|10年','yield.chinabond.com.cn','day'))).toMatchObject({function:'bond_china_yield',curve:'中债国债收益率曲线',column:'10年',evidence_path:'/cbweb-pbc-web/pbc/historyQuery',window_days:45,backfill_from:'2016-01-01'});

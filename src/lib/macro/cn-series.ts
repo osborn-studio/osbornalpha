@@ -6,8 +6,8 @@
 //   currency_boc_safe|<currency column>
 // plus adapter-only parameters (NBS daily window, era leaves for history, ChinaBond windows) and the URL
 // path of the one response per call that carries the data (the evidence the TS parsers read). Exported to
-// scripts/macro/cn-series.json for the Python collector (scripts/macro/export-cn-series.ts); a Task 9 test
-// keeps the committed JSON equal to this module's output.
+// scripts/macro/cn-series.json for the Python collector (scripts/macro/export-cn-series.ts); cn-series.test.ts
+// enforces that the committed JSON equals this module's output.
 import {collectableOf} from './catalog';
 import type {MacroSeriesDef,PeriodKind} from './types';
 
@@ -30,7 +30,8 @@ export const CN_SPEC_VERSION='cn-series/1';
 const NBS_PATH='/dg/website/publicrelease/web/external/stream/esData';
 const CHINABOND_PATH='/cbweb-pbc-web/pbc/historyQuery';
 const SAFE_PATH='/AppStructured/hlw/RMBQuery.do';
-/** NBS splits some tables into era leaves; history comes from the sibling leaves (verified 2026-11-06). */
+/** NBS splits some tables into era leaves; history comes from the sibling leaves (verified 2026-11-06). The current
+ * catalog path is added in front by cnSpecOf, so a backfill reaches the present. */
 const NBS_ERA_HISTORY:Record<string,{path:string;period:string}[]>={
  CN_CPI_INDEX:[
   {path:'价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2021-2025)',period:'2021-2025'},
@@ -50,7 +51,7 @@ export function cnSpecOf(def:MacroSeriesDef):CnSeriesSpec{
   const path=segs.slice(0,-1).join(' > ');
   const quarterly=def.period==='quarter';
   return {...base,function:'macro_china_nbs_nation',evidence_path:NBS_PATH,column:strip(segs[segs.length-1]),kind:parts[1],path,
-   daily_period:quarterly?'LAST8':'LAST13',backfill:NBS_ERA_HISTORY[def.id]??[{path,period:'2016-'}]};
+   daily_period:quarterly?'LAST8':'LAST13',backfill:NBS_ERA_HISTORY[def.id]?[{path,period:'2026-'},...NBS_ERA_HISTORY[def.id]]:[{path,period:'2016-'}]};
  }
  if(parts[0]==='bond_china_yield'&&parts.length===3)return {...base,function:'bond_china_yield',evidence_path:CHINABOND_PATH,curve:parts[1],column:parts[2],window_days:45,backfill_from:'2016-01-01'};
  if(parts[0]==='currency_boc_safe'&&parts.length===2)return {...base,function:'currency_boc_safe',evidence_path:SAFE_PATH,column:parts[1]};

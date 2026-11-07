@@ -303,3 +303,63 @@ def test_dry_run_writes_bodies_and_sends_nothing(tmp_path, monkeypatch):
     chunk = json.loads((tmp_path / "chunk-000.json").read_text())
     assert chunk["batch_id"] == "DRY-RUN" and chunk["owner_token"] == "DRY-RUN" and chunk["evidence"][0]["series_id"] == "CN_PMI_MFG"
     assert json.loads((tmp_path / "finish.json").read_text()) == {"action": "finish", "batch_id": "DRY-RUN", "owner_token": "DRY-RUN", "total": 1, "series_outcomes": [{"series_id": "CN_PMI_MFG", "ok": True}]}
+
+
+# ---------------------------------------------------------------- review fixes (T8-1, T8-2, SAFE trim, ingest non-JSON)
+def test_failed_call_keeps_the_evidence_it_received(fake_transport):
+    class FakeAk:
+        @staticmethod
+        def currency_boc_safe():
+            requests.post("https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do")
+            raise ValueError("parser blew up")
+    spec = {**SAFE, "evidence_path": "/AppStructured/hlw/RMBQuery.do"}
+    r = collect.collect_series(spec, "daily", dt.date(2026, 11, 6), FakeAk)
+    assert r["error"].startswith("ValueError") and r["code"] == "collect_valueerror"
+    assert len(r["evidence"]) == 1 and len(r["captures"]) == 1 and r["claims"] == []
+    start, chunks, finish = collect.build_bodies([r], "B", "T", {"a": "1"})
+    assert len(chunks[0]["evidence"]) == 1 and chunks[0]["claims"] == []
+    assert finish["series_outcomes"] == [{"series_id": "CN_USDCNY_CP_D", "ok": False, "code": "collect_valueerror"}]
+
+
+def test_zero_usable_claims_is_an_empty_series_failure(fake_transport):
+    class FakeAk:
+        @staticmethod
+        def currency_boc_safe():
+            requests.post("https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do")
+            return pd.DataFrame({"日期": [], "美元": []})
+    spec = {**SAFE, "evidence_path": "/AppStructured/hlw/RMBQuery.do"}
+    r = collect.collect_series(spec, "daily", dt.date(2026, 11, 6), FakeAk)
+    assert r["code"] == "empty_series" and r["error"].startswith("EmptySeries")
+    assert collect.series_outcomes([r]) == [{"series_id": "CN_USDCNY_CP_D", "ok": False, "code": "empty_series"}]
+
+
+def test_safe_cutoff_uses_the_passed_today_and_trims_to_the_html_first_date():
+    today = dt.date(2026, 11, 6)
+    df = pd.DataFrame({"日期": [dt.date(2025, 1, 1), dt.date(2026, 1, 5), dt.date(2026, 11, 5)], "美元": [1.0, 2.0, 3.0]})
+    assert [c["period_label"] for c in collect.claims_from_frame(SAFE, df, today)] == ["2026-01-05", "2026-11-05"]
+    html = b"<td>\n   2026-01-05\n  </td><td>\n 2026-11-05\n</td> value=\"2026-01-01\""
+    cap = Capture("POST", "https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do", 200, "text/html", html, "2026-11-06T00:00:00.000Z")
+    assert collect._first_html_date([cap]) == "2026-01-05"
+
+
+def test_safe_series_drops_claims_before_the_first_html_date(fake_transport, monkeypatch):
+    class FakeAk:
+        @staticmethod
+        def currency_boc_safe():
+            requests.post("https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do")
+            return pd.DataFrame({"日期": [dt.date(2026, 1, 5), dt.date(2026, 11, 5)], "美元": [2.0, 3.0]})
+    monkeypatch.setattr(collect, "_first_html_date", lambda ev: "2026-06-01")
+    r = collect.collect_series({**SAFE, "evidence_path": "/AppStructured/hlw/RMBQuery.do"}, "daily", dt.date(2026, 11, 6), FakeAk)
+    assert r["error"] is None and [c["period_label"] for c in r["claims"]] == ["2026-11-05"]
+
+
+def test_http_poster_raises_ingest_error_on_a_non_json_200(monkeypatch):
+    class Res:
+        status_code, headers, text = 200, {"content-type": "text/html"}, "<html>"
+
+        def json(self):
+            raise ValueError("no json")
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Res())
+    with pytest.raises(collect.IngestHttpError) as ei:
+        collect.http_poster("https://x.test/ingest", "s")({"action": "start"})
+    assert ei.value.code == "non_json_response"

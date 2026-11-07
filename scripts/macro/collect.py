@@ -113,7 +113,7 @@ def value_text(v: Any) -> Optional[str]:
     return repr(f) if math.isfinite(f) else None
 
 
-def claims_from_frame(spec: Dict[str, Any], df: Any) -> List[Dict[str, str]]:
+def claims_from_frame(spec: Dict[str, Any], df: Any, today: Optional[_dt.date] = None) -> List[Dict[str, str]]:
     sid, fn, out = spec["series_id"], spec["function"], []
     if df is None or len(df) == 0:
         return out
@@ -135,7 +135,7 @@ def claims_from_frame(spec: Dict[str, Any], df: Any) -> List[Dict[str, str]]:
                 out.append({"series_id": sid, "period_label": str(row["日期"]), "value_text": vt})
         return out
     if fn == "currency_boc_safe":
-        cutoff = _dt.date.today() - _dt.timedelta(days=400)   # the XLSX history is not evidence: no claims for it
+        cutoff = (today or _dt.date.today()) - _dt.timedelta(days=400)   # the XLSX history is not evidence: no claims for it
         for _, row in df.iterrows():
             d = row["日期"]
             if d is None or (isinstance(d, float) and math.isnan(d)) or _dt.date.fromisoformat(str(d)) < cutoff:
@@ -205,25 +205,45 @@ def _numbers_in(body: bytes, content_type: str) -> set:
     return out
 
 
+class EmptySeries(RuntimeError):
+    """The calls succeeded but produced no usable claim for the target series."""
+
+
+def _first_html_date(evidence: List[Capture]) -> Optional[str]:
+    """Earliest date shown as a table cell in the SAFE HTML evidence (the form's own date inputs are attributes)."""
+    dates = [d for c in evidence for d in re.findall(r"^\s*(\d{4}-\d{2}-\d{2})\s*$", c.body.decode("utf-8", errors="replace"), re.M)]
+    return min(dates) if dates else None
+
+
 def collect_series(spec: Dict[str, Any], mode: str, today: _dt.date, ak: Any) -> Dict[str, Any]:
-    """Calls AKShare for one series; returns {series_id, captures, evidence, claims, error}."""
+    """Calls AKShare for one series; returns {series_id, captures, evidence, claims, error, code}. Captures are kept even
+    when a call raises after receiving bytes, so a failed series still ships its evidence (marked failed, no claims)."""
     fn = getattr(ak, spec["function"])
     caps: List[Capture] = []
     evidence: List[Capture] = []
     claims: List[Dict[str, str]] = []
     try:
         for kwargs in calls_for(spec, mode, today):
-            with recording() as got:
-                df = fn(**kwargs)
-            caps.extend(got)
-            evidence.extend(c for c in got if is_evidence(spec, c))
-            claims.extend(claims_from_frame(spec, df))
+            got: List[Capture] = []
+            try:
+                with recording() as got:
+                    df = fn(**kwargs)
+            finally:
+                caps.extend(got)
+                evidence.extend(c for c in got if is_evidence(spec, c))
+            claims.extend(claims_from_frame(spec, df, today))
         if not evidence:
             raise RuntimeError(f"no evidence response from {spec['fetch_host']}{spec['evidence_path']}")
+        if spec["function"] == "currency_boc_safe":
+            first = _first_html_date(evidence)
+            if first is not None:
+                claims = [c for c in claims if c["period_label"] >= first]
+        if not claims:
+            raise EmptySeries(f"{spec['series_id']}: no usable claims in the response")
         return {"series_id": spec["series_id"], "captures": caps, "evidence": evidence, "claims": claims, "error": None, "code": None}
     except Exception as e:  # one failing series never stops the others; its outcome is reported in finish (P2-2)
-        return {"series_id": spec["series_id"], "captures": caps, "evidence": [], "claims": [], "error": f"{type(e).__name__}: {e}"[:300],
-                "code": f"collect_{type(e).__name__}".lower()[:64]}
+        code = "empty_series" if isinstance(e, EmptySeries) else f"collect_{type(e).__name__}".lower()[:64]
+        return {"series_id": spec["series_id"], "captures": caps, "evidence": evidence, "claims": [], "error": f"{type(e).__name__}: {e}"[:300], "code": code}
 
 
 def verification(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -264,9 +284,8 @@ def series_outcomes(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def build_bodies(results: List[Dict[str, Any]], batch_id: str, owner_token: str, versions: Dict[str, str],
                  takeover: bool = False) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
-    ok = [r for r in results if not r["error"]]
-    items = [evidence_item(r["series_id"], c) for r in ok for c in r["evidence"]]
-    claims = {r["series_id"]: r["claims"] for r in ok}
+    items = [evidence_item(r["series_id"], c) for r in results for c in r["evidence"]]   # failed series keep their evidence, with no claims
+    claims = {r["series_id"]: r["claims"] for r in results if not r["error"]}
     chunks = [{**c, "owner_token": owner_token} for c in pack_chunks(batch_id, items, claims)]   # the token fences every write (P1-3)
     start: Dict[str, Any] = {"action": "start", "tool_versions": versions}
     if takeover:
@@ -308,9 +327,15 @@ def http_poster(url: str, secret: str, timeout: float = 120.0) -> Post:
             if res.status_code >= 500 and attempt < 3:
                 time.sleep(2 ** attempt)
                 continue
-            payload = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
+            is_json = res.headers.get("content-type", "").startswith("application/json")
+            try:
+                payload = res.json() if is_json else {}
+            except ValueError:
+                payload, is_json = {}, False
             if res.status_code != 200:
-                raise IngestHttpError(body["action"], res.status_code, str(payload.get("error", {}).get("code", "")))
+                raise IngestHttpError(body["action"], res.status_code, str(payload.get("error", {}).get("code", "")) if isinstance(payload, dict) else "")
+            if not is_json or not isinstance(payload, dict):
+                raise IngestHttpError(body["action"], res.status_code, "non_json_response")
             return payload
         raise RuntimeError("unreachable")
     return post
