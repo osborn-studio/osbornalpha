@@ -8,6 +8,7 @@
 import type {Abstained,Active,CategoricalClaim,Condition,Input,JudgmentInputsDb,MacroSnapshotSnapshot,Methodology,Regime,Subject,Target,WorkItem} from '@/lib/judgments/types';
 import {buildInput} from '@/lib/judgments/inputs';
 import {addMonthsPeriod} from '@/lib/judgments/time';
+import {validateMacroRegimeReplayParams} from '@/lib/judgments/resolvers/schemas';
 
 import {METHODOLOGY_VERSION} from '@/lib/macro/regime';
 export const MACRO_UPSTREAM_VERSION=METHODOLOGY_VERSION;
@@ -70,8 +71,9 @@ function condition(subject:Subject,inputs:Input[],claim:CategoricalClaim):Condit
  const s=snapshotOf(inputs);
  if(!s)throw new Error('macro_regime@v2 condition() needs the macro_snapshot input');
  const period=s.as_of.slice(0,7);const sel=claim.selected as Regime;
- return {resolver:'macro_regime_replay',
-  params:{region:s.region,reference_period:period,macro_methodology_version:MACRO_UPSTREAM_VERSION,catalog_version:s.catalog_version},
+ const params={region:s.region,reference_period:period,macro_methodology_version:MACRO_UPSTREAM_VERSION,catalog_version:s.catalog_version};
+ if(!validateMacroRegimeReplayParams(params))throw new Error('macro_regime@v2 invalid resolver params');
+ return {resolver:'macro_regime_replay',params,
   predicate:{op:'eq',rhs:sel},
   text:{zh:`${s.region} ${period} 当期象限为“${ZH[sel]}”（同一分类函数在截止 vintage 下对同一参考期重算）`,
    en:`${s.region} ${period} regime is "${sel}" (same classifier re-run for the same reference month on the cutoff vintage)`}};
@@ -85,7 +87,7 @@ export const macroRegimeV2:Methodology<CategoricalClaim>={
  doc:'docs/methodologies/macro_regime/v2.md',
  params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
  horizon:{unit:'calendar_months',n:3},
- deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/freshness.ts','src/lib/macro/db.ts','src/lib/dq/freshness.ts'],
+ deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/regime-selection.ts'],
  module:'src/lib/judgments/methodologies/macro-regime.v2.ts',
  status:'active',
  gather,resolveTarget,compute,condition,
