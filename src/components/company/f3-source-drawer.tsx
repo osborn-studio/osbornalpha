@@ -5,9 +5,11 @@ import {F3_DRAWER_FLAG} from '@/lib/company/client';
 import type {BindingResult} from '@/lib/documents/by-filing';
 import {DrawerShell} from './DrawerShell';
 import {useCompanyFetch} from './useCompanyFetch';
+import {citationCurrency,readSignedFile,selectCitation,validDetail,verifyPage} from './source-drawer-state';
+import type {HashState} from './source-drawer-state';
 
 export const F3_SOURCE_DRAWER_AVAILABLE=F3_DRAWER_FLAG;
-type Detail={document:{documentId:string;title:string;source:string;sourceRef:string;sourceVersion:number;sourceUrl:string|null;status:string;currentExtractionId:string|null;publishedAt:string;availableAt:string;availableDate:string};extractions:{rows:{extractionId:string;pageCount:number}[]}};
+type Detail={document:{documentId:string;issuerId:string;title:string;source:string;sourceRef:string;sourceVersion:number;sourceUrl:string|null;status:string;currentExtractionId:string|null;publishedAt:string;availableAt:string;availableDate:string};extractions:{rows:{extractionId:string;pageCount:number}[]}};
 type Page={documentId:string;extractionId:string;text:string;textHash:string;pageNo:number};
 type FactCitations={citations:{citationId:string;documentId:string;extractionId:string;pageNo:number}[]};
 type Citation={documentId:string;snippet:string;textHash:string;extractionId:string;pageNo:number;charStart:number;charEnd:number;integrity:'ok'|'corrupt';currentExtraction:boolean};
@@ -20,35 +22,39 @@ export function SourceDrawerAdapter({filingId,onClose,originalUrl,factId,asOf}:{
  const binding=useCompanyFetch<BindingResult>(`/api/documents/by-filing/${encodeURIComponent(filingId)}${query}`);
  const doc=binding.state.status==='ok'?binding.state.data.document:null;
  const detail=useCompanyFetch<Detail>(doc?`/api/documents/doc/${doc.documentId}`:null);
- const verifiedDetail=doc&&detail.state.status==='ok'&&detail.state.data.document.documentId===doc.documentId?detail.state.data:null;
+ const verifiedDetail=doc&&detail.state.status==='ok'&&validDetail(doc,detail.state.data.document)?detail.state.data:null;
  const linked=useCompanyFetch<FactCitations>(factId&&verifiedDetail?`/api/citations?factId=${encodeURIComponent(factId)}`:null);
- const citationRef=linked.state.status==='ok'?linked.state.data.citations.find(c=>c.documentId===doc?.documentId):null;
+ const citationChoice=doc&&linked.state.status==='ok'?selectCitation(linked.state.data.citations,doc.documentId):null;
+ const citationRef=citationChoice?.status==='ok'?citationChoice.citation:null;
  const citation=useCompanyFetch<Citation>(citationRef?`/api/citations/${citationRef.citationId}`:null);
- const citationData=citation.state.status==='ok'?citation.state.data:null;
+ const citationData=citation.state.status==='ok'&&citationRef&&citation.state.data.documentId===citationRef.documentId&&citation.state.data.extractionId===citationRef.extractionId&&citation.state.data.pageNo===citationRef.pageNo&&citationCurrency(citation.state.data,verifiedDetail?.document.currentExtractionId??null)!=='invalid'?citation.state.data:null;
  const pageNo=citationRef?.pageNo??1;
  const extraction=verifiedDetail?.document.currentExtractionId;
  const page=useCompanyFetch<Page>(verifiedDetail&&extraction&&(!factId||citationData)?`/api/documents/doc/${doc!.documentId}/pages/${pageNo}?extraction=${encodeURIComponent(citationData?.extractionId??extraction)}`:null);
  const pageData=page.state.status==='ok'?page.state.data:null;
- const [verifiedHash,setVerifiedHash]=useState<{text:string;hash:string;ok:boolean}|null>(null);
+ const pageKey=pageData?`${filingId}:${doc?.documentId}:${citationRef?.citationId??''}:${pageData.extractionId}:${pageData.pageNo}:${pageData.textHash}`:null;
+ const [hashResult,setHashResult]=useState<{key:string;page:Page;citation:Citation|null;status:HashState}|null>(null);
  useEffect(()=>{
-  if(!pageData)return;
+  if(!pageData||!pageKey)return;
   let active=true;
-  void crypto.subtle.digest('SHA-256',new TextEncoder().encode(pageData.text)).then(bytes=>{
-   if(active)setVerifiedHash({text:pageData.text,hash:pageData.textHash,ok:Array.from(new Uint8Array(bytes),x=>x.toString(16).padStart(2,'0')).join('')===pageData.textHash});
-  }).catch(()=>{if(active)setVerifiedHash({text:pageData.text,hash:pageData.textHash,ok:false});});
+  void verifyPage(pageData,factId?citationData?{...citationData,citationId:citationRef!.citationId}:null:null,async text=>{
+   const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
+   return Array.from(new Uint8Array(bytes),x=>x.toString(16).padStart(2,'0')).join('');
+  }).then(status=>{if(active)setHashResult({key:pageKey,page:pageData,citation:citationData,status});});
   return ()=>{active=false;};
- },[pageData]);
- const pageHashOk=!!(pageData&&verifiedHash?.text===pageData.text&&verifiedHash.hash===pageData.textHash&&verifiedHash.ok);
+ },[pageData,pageKey,factId,citationData,citationRef]);
+ const hashStatus:HashState=pageKey&&hashResult?.key===pageKey&&hashResult.page===pageData&&hashResult.citation===citationData?hashResult.status:'pending';
+ const pageHashOk=!!pageData&&hashStatus==='ok';
  const chars=pageData?Array.from(pageData.text):[];
- const validCitation=!!(citationData&&citationRef&&pageData&&pageHashOk&&citationData.integrity==='ok'&&citationData.documentId===doc?.documentId&&citationData.extractionId===citationRef.extractionId&&citationData.extractionId===pageData.extractionId&&citationData.pageNo===citationRef.pageNo&&citationData.pageNo===pageData.pageNo&&citationData.textHash===pageData.textHash&&pageData.documentId===doc?.documentId&&citationData.charStart>=0&&citationData.charEnd<=chars.length&&citationData.charStart<citationData.charEnd&&chars.slice(citationData.charStart,citationData.charEnd).join('')===citationData.snippet);
- const missing=binding.state.status==='ok'&&binding.state.data.reason==='not_found'||binding.state.status==='error'&&binding.state.code==='not_found';
+ const validCitation=!!(citationData&&citationRef&&pageData&&pageHashOk&&citationData.documentId===doc?.documentId&&citationData.extractionId===pageData.extractionId&&citationData.pageNo===pageData.pageNo);
+ const missing=binding.state.status==='ok'&&binding.state.data.reason==='not_found'||binding.state.status==='error'&&binding.state.code==='filing_not_found';
  const restricted=binding.state.status==='ok'&&binding.state.data.reason==='restricted'||detail.state.status==='error'&&detail.state.httpStatus===404;
- const corrupt=!!(doc&&((detail.state.status==='ok'&&!verifiedDetail)||(pageData&&verifiedHash?.text===pageData.text&&!verifiedHash.ok)||(factId&&citationData&&pageData&&verifiedHash?.text===pageData.text&&!validCitation)||(pageData&&(pageData.documentId!==doc.documentId||pageData.extractionId!==extraction&&!factId))));
- const unavailable=!!(doc&&(detail.state.status==='error'||linked.state.status==='error'||citation.state.status==='error'||page.state.status==='error'||corrupt));
+ const corrupt=!!(doc&&((detail.state.status==='ok'&&!verifiedDetail)||(citation.state.status==='ok'&&citationRef&&!citationData)||(pageData&&hashStatus==='failed')||(pageData&&(pageData.documentId!==doc.documentId||pageData.extractionId!==citationData?.extractionId&&!!factId||pageData.extractionId!==extraction&&!factId))));
+ const unavailable=!!(doc&&(detail.state.status==='error'||linked.state.status==='error'||citationChoice?.status==='ambiguous'||citation.state.status==='error'||page.state.status==='error'||corrupt));
  const fallback=(missing||restricted)&&originalUrl?pageLink(originalUrl,pageNo):null;
  const download=async()=>{
   if(!verifiedDetail)return;
-  try{const r=await fetch(`/api/documents/doc/${verifiedDetail.document.documentId}/file`,{cache:'no-store'});if(r.status===401){setDownloadState('login');return;}if(!r.ok)throw new Error('download');const body=await r.json() as {url:string};window.open(body.url,'_blank','noopener,noreferrer');}
+  try{const r=await fetch(`/api/documents/doc/${verifiedDetail.document.documentId}/file`,{cache:'no-store'});const result=await readSignedFile(r,Date.now());if(result.status==='login'){setDownloadState('login');return;}if(result.status==='failed')throw new Error('download');window.open(result.url,'_blank','noopener,noreferrer');}
   catch{setDownloadState('failed');}
  };
  return <DrawerShell label={t('title')} kicker={t('kicker')} title={verifiedDetail?.document.title??t('title')} onClose={onClose}>
@@ -72,10 +78,10 @@ export function SourceDrawerAdapter({filingId,onClose,originalUrl,factId,asOf}:{
     <h3 className="mb-2 text-xs font-semibold">{t('page',{n:pageNo})}</h3>
     <p className="max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed">{validCitation&&citationData?<><span>{chars.slice(0,citationData.charStart).join('')}</span><mark className="bg-[var(--accent-wash)] text-[var(--text)]">{citationData.snippet}</mark><span>{chars.slice(citationData.charEnd).join('')}</span></>:pageData.text}</p>
     <div className="mt-2 break-all text-[10px] text-[var(--text-dim)]">{t('textHash')}: {pageData.textHash}</div>
-    {validCitation&&citationData&&<div className="mt-1 text-xs">{t('citationState')}: {citationData.integrity} · {citationData.currentExtraction?t('current'):t('superseded')}</div>}
+    {validCitation&&citationData&&<div className="mt-1 text-xs">{t('citationState')}: {citationData.integrity} · {t(citationCurrency(citationData,extraction??null)==='current'?'current':'superseded')}</div>}
    </div>}
-   {extraction&&page.state.status==='loading'&&<p>{t('loadingPage')}</p>}
-   {factId&&linked.state.status==='ok'&&!citationRef&&<p role="status" className="text-xs text-[var(--text-dim)]">{t('citationMissing')}</p>}
+   {extraction&&(page.state.status==='loading'||pageData&&hashStatus==='pending')&&<p>{t('loadingPage')}</p>}
+   {factId&&citationChoice?.status==='missing'&&<p role="status" className="text-xs text-[var(--text-dim)]">{t('citationMissing')}</p>}
   </div>}
   {fallback&&<a href={fallback} target="_blank" rel="noopener noreferrer" className="text-sm text-[var(--accent)] underline">{t('external')}</a>}
   {verifiedDetail&&!unavailable&&<button type="button" onClick={()=>void download()} className="self-start text-sm text-[var(--accent)] underline">{t('download')}</button>}

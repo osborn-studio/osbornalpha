@@ -14,9 +14,9 @@ describe('GET /api/documents/by-filing/[filingId]',()=>{
  });
  it('returns JSON 404 for an unknown filing',async()=>{
   vi.mocked(resolveFilingDocument).mockResolvedValueOnce(null);
-  const r=await call(id);
+  const r=await call(id,'?asOf=2026-04-01');
   expect(r.status).toBe(404);
-  expect((await r.json()).error.code).toBe('not_found');
+  expect(await r.json()).toMatchObject({asOf:'2026-04-01',error:{code:'filing_not_found'}});
  });
  it('returns exact document or an ambiguous state',async()=>{
   vi.mocked(resolveFilingDocument).mockResolvedValueOnce({filingId:id,asOf:'2026-04-01',document:null,reason:'ambiguous'});
@@ -30,6 +30,12 @@ describe('GET /api/documents/by-filing/[filingId]',()=>{
   expect((await call(id,'?asOf=2026-02-30')).status).toBe(400);
   vi.mocked(resolveFilingDocument).mockResolvedValueOnce({filingId:id,asOf:'2026-04-01',document:null,reason:'not_found'});
   const r=await call(id,'?asOf=2026-04-01');
+  expect(await r.json()).toEqual({filingId:id,asOf:'2026-04-01',document:null,reason:'not_found'});
+ });
+ it('keeps an existing filing with no public document a 200 response',async()=>{
+  vi.mocked(resolveFilingDocument).mockResolvedValueOnce({filingId:id,asOf:'2026-04-01',document:null,reason:'not_found'});
+  const r=await call(id,'?asOf=2026-04-01');
+  expect(r.status).toBe(200);
   expect(await r.json()).toEqual({filingId:id,asOf:'2026-04-01',document:null,reason:'not_found'});
  });
 });

@@ -7,7 +7,7 @@
 import {NextResponse} from 'next/server';
 import {UUID_RE,errorResponse,failureResponse,paramErrorResponse} from '@/lib/facts/public-route';
 import {strictParams,auditFailedResponse,cacheHeadersFor,notFound,ownerReadDeps,publicDocs,sessionUserId} from '@/lib/documents/read-route';
-import {citationView} from '@/lib/documents/citations';
+import {citationView,readPublicCitationById} from '@/lib/documents/citations';
 import {OwnerAuditError,readOwnedDocument} from '@/lib/documents/upload';
 
 export const dynamic='force-dynamic';
@@ -19,12 +19,8 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  try{strictParams(new URL(req.url),[]);}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const {db}=publicDocs();
-  const c=await db.citationById(id);
-  const pubDoc=c?await db.documentById(c.document_id):null;
-  if(c&&pubDoc&&pubDoc.permission==='public'){
-   const view=await citationView(db,c);
-   if(view)return NextResponse.json(view,{headers:cacheHeadersFor('public',undefined,now)});
-  }
+  const view=await readPublicCitationById(db,id);
+  if(view)return NextResponse.json(view,{headers:cacheHeadersFor('public',undefined,now)});
   const userId=await sessionUserId();
   if(userId){
    const deps=ownerReadDeps();

@@ -11,7 +11,7 @@ export async function GET(req:Request,{params}:{params:Promise<{filingId:string}
  try{asOf=asOfParam(strictParams(new URL(req.url),['asOf']),utcDate(new Date()));}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const result=await resolveFilingDocument(filingId,asOf);
-  if(!result)return errorResponse('not_found','filing not found',404);
+  if(!result)return NextResponse.json({asOf,error:{code:'filing_not_found',message:'filing not found'}},{status:404,headers:{'Cache-Control':'no-store'}});
   // Anon RLS cannot disclose whether a private document exists: that case is not_found.
   return NextResponse.json(result,{headers:cacheHeadersFor(result.document?'public':'empty',asOf,new Date())});
  }catch(e){return failureResponse(e,'documents/by-filing','filing document read failed');}
