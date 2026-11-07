@@ -95,14 +95,14 @@ export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,
  // snapshot can change independently (e.g. repair/republish), changing the comparison card.
  // Resolve it as soon as activeSnapshot completes, independently of collection pagination.
  const selection=async()=>{
-  const [snap,publishState]=await Promise.all([
-   deps.db.activeSnapshot(region),
-   // Unknown publication state must bypass every cache tier; facts can still be read live.
-   deps.db.publishState(region).catch(()=>null),
-  ]);
-  return {snap,publishState,prevSnap:snap?await deps.db.previousSnapshot(region,snap.created_at):null};
+  const snap=await deps.db.activeSnapshot(region);
+  return {snap,prevSnap:snap?await deps.db.previousSnapshot(region,snap.created_at):null};
  };
- const [{snap,prevSnap,publishState},allCollection]=await Promise.all([selection(),collectionStatus(deps.tables,now)]);
+ const [{snap,prevSnap},allCollection,publishState]=await Promise.all([
+  selection(),collectionStatus(deps.tables,now),
+  // Unknown publication state must bypass every cache tier; facts can still be read live.
+  deps.db.publishState(region).catch(()=>null),
+ ]);
  const collection=allCollection.filter(c=>c.dataset===datasetOf(region));
  const load=()=>buildOverviewFacts(deps.db,region,today,opts,snap,prevSnap);
  const knownRevision=publishState&&Number.isSafeInteger(publishState.inputRevision)&&publishState.inputRevision>=0&&Number.isSafeInteger(publishState.revision)&&publishState.revision>=0;
