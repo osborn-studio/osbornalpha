@@ -5,24 +5,12 @@
 // calibration and method state alike) — no history scan, so a deep history or a small server cap can never
 // 404 a published judgment (plan audit P2-01); settlements are the full public list (paged until empty), cut
 // at the same cutoff.
-import {cardsOf,methodKey} from '@/lib/judgments/display';
+import {judgmentDetailPayload} from '@/lib/judgments/detail-payload';
 import {publicReads} from '@/lib/judgments/public-reads';
 import {UUID_RE,errorResponse,internalErrorResponse,okResponse,paramErrorResponse,readParams,viewParams} from '@/lib/judgments/route-utils';
-import type {PublicReads} from '@/lib/judgments/public-reads';
 
 export const dynamic='force-dynamic';
 const PARAMS=['view','asOf'] as const;
-
-/** The detail projection shared by the route and the PG17 macro bridge test. */
-export async function judgmentDetailPayload(r:PublicReads,id:string,v:{view:'latest'|'as_known';asOf:string|null;cutoff?:string},now:string){
- const found=await r.db.envelopeById(id,{view:v.view,cutoff:v.cutoff});
- if(!found)return null;
- const methods=await r.db.listMethodologies();
- const [card]=cardsOf([found],new Map(methods.map(m=>[methodKey(m),m])),{includeAbstained:true,now:v.cutoff??now});
- if(!card)return null;
- const settlements=(await r.settlements(id)).filter(s=>v.cutoff===undefined||s.settled_at<=v.cutoff);
- return {view:v.view,asOf:v.asOf,card,judgment:found.judgment,settlements,calibration:found.calibration?{row:found.calibration,valid:found.calibration_valid}:null};
-}
 
 export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const now=new Date();const today=now.toISOString().slice(0,10);

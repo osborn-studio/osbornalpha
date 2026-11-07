@@ -16,6 +16,7 @@ import type {ObservationRow} from '../../macro/types';
 import {GET} from '../../../app/api/judgments/[id]/route';
 import {cardLite,judgmentDetailOf} from '../../macro/strategy/f4-client';
 import {digest,inputsHash} from '../canonical';
+import {judgmentDetailPayload} from '../detail-payload';
 import {withClaimLock} from '../db-contract';
 import {formulaHashOf} from '../formula-hash';
 import {pgJudgmentInputsDb} from '../inputs-db';
@@ -174,6 +175,8 @@ describe.skipIf(!enabled)('macro ↔ F4 bridge on PG17',()=>{
    routeReads.current={db:judgments,settlements:async()=>judgments.settlementsOf([id]),judgmentLocator:async()=>null,recentSettlements:async()=>[]};
    const response=await GET(new Request(`https://alpha.example/api/judgments/${id}`),{params:Promise.resolve({id})});
    expect(response.status).toBe(200);const payload=await response.json();const detail=judgmentDetailOf(payload);const lite=cardLite(payload.card);
+   const projected=await judgmentDetailPayload(routeReads.current,id,{view:'latest',asOf:null},new Date().toISOString());
+   expect(projected).not.toBeNull();expect(projected?.judgment.inputs).toEqual(payload.judgment.inputs);
    expect(detail.selected).toBe(snapshot.regime!.primary_state);expect(lite.selected).toBe(detail.selected);
    expect(payload.judgment.inputs).toHaveLength(judgment.inputs.length);
    expect(detail.inputs.every(x=>Object.keys(x.ref).length>0&&Object.keys(x.snapshot).length>0)).toBe(true);

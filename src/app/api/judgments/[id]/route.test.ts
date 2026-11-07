@@ -2,6 +2,8 @@
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {envelope,methodologyRow,settlementRow,uuidOf} from '@/lib/judgments/testing/envelopes';
 import {judgmentDetailOf} from '@/lib/macro/strategy/f4-client';
+import {judgmentDetailPayload} from '@/lib/judgments/detail-payload';
+import {publicReads} from '@/lib/judgments/public-reads';
 
 const mocks=vi.hoisted(()=>({envelopeById:vi.fn(),historyOf:vi.fn(),listMethodologies:vi.fn(),settlements:vi.fn()}));
 vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:{envelopeById:mocks.envelopeById,historyOf:mocks.historyOf,listMethodologies:mocks.listMethodologies},settlements:mocks.settlements})}));
@@ -30,6 +32,11 @@ describe('GET /api/judgments/[id]',()=>{
   expect(body.card.display).not.toHaveProperty('percent');
   expect(mocks.envelopeById).toHaveBeenCalledWith(ID,{view:'latest',cutoff:undefined});
   expect(mocks.historyOf).not.toHaveBeenCalled();
+ });
+ it('projects the same frozen detail from the shared library helper',async()=>{
+  const payload=await judgmentDetailPayload(publicReads(),ID,{view:'latest',asOf:null},'2026-07-02T00:00:00.000Z');
+  expect(payload).toMatchObject({view:'latest',asOf:null,judgment:{judgment_id:ID},card:{judgment_id:ID},calibration:null});
+  expect(payload?.settlements).toHaveLength(2);
  });
  it('preserves frozen input ref/snapshot and settlement evidence for the macro detail parser',async()=>{
   mocks.settlements.mockResolvedValue([settlementRow({judgment_id:ID,evidence:{observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]}})]);
