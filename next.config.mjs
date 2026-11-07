@@ -10,6 +10,10 @@ const nextConfig = {
   // The reconcile cron reads the sample and gold manifests at runtime (src/lib/dq/reconcile/deps.ts); so do the
   // quarantine restore route and the admin dq dashboard (restoreInputsHashNow recomputes the current inputs hash).
   outputFileTracingIncludes: {
+    // F4
+    // Registry-selected methodology documents are read at runtime (spec §10).
+    '/api/methodologies/*/*': ['./docs/methodologies/**/*.md'],
+    // /F4
     '/api/cron/reconcile': RECONCILE_MANIFESTS,
     '/api/admin/dq/quarantine/[id]': RECONCILE_MANIFESTS,
     '/api/admin/dq': RECONCILE_MANIFESTS,

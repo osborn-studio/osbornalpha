@@ -1,0 +1,9 @@
+# mmx (MiniMax-M3) audit triage by the commander
+
+mmx has no file tools; it audits from the assembled input (spec sections, plan task text, git stat + non-JSON diff). Calibration on the first two tasks (T12r2+T14, T16) against an Opus review and a Codex audit: mmx reports many P1s that the code refutes (wrong file paths, repeated line numbers, requirements not in the spec). Rule adopted: every mmx P1/P2 is triaged by the commander against the code; only plausible ones go to Codex for fixing; an Opus review is requested only when a P1 survives triage.
+
+| Report | mmx findings | Accepted (fixed) | Rejected (reason) |
+|---|---|---|---|
+| t12r2-t14-mmx.md | 4 T12 + 23 T14 | T12-02/T12-03 (= Opus A1 / minor 3), T14-05/T14-12 batch lifecycle, T14-07 non-settlement items (verified), T14-17/T14-18 request.signal — fixed in 8fa3d819 together with the Codex audit A-01..A-04, B-01 and Opus minors | T14-01..04, T14-08..10, T14-13..16, T14-19..23: refuted by code (fromOverride validates/recomputes frozen evidence; abstentions never settle; resolver lookup is the committed one) or design decisions (macro wiring deferred to T19) |
+| t16-mmx.md | 23 (6 P1) | none as P1; Opus minors 1–3 (orphan deletion, invalid_state generation, preview 503) fixed in the T16 fix round | T16-01..06 refuted by the Opus line-by-line review (stale_revision checked before write, frozen cohort is per method by spec, entries are the full cohort, query_bounds from freeze); rest are speculative scheduler races already guarded by CAS |
+| t12r3-t14r1-mmx.md | 7 (4 P1) | — | R3-01 false (runSettle combines deps.signal with its 280 s controller, settle.ts:414); R3-02..04 false (choose_fact chosen must equal a stored candidate digest whose S04 derivation fromOverride re-derives under the cutoff); R3-05..07 minor (second release of an already released row is swallowed; clock failure skips the patch by design) |
