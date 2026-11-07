@@ -11,8 +11,8 @@
 // With nothing left to process the pass is settled by finish_calendar_pass (from persisted state only)
 // and freshness is recorded: complete → ok, complete_with_failures or a pass older than 2 days → not ok.
 // Upstream: US = SEC submissions (raw kept by the fetcher, Task 6); CN = Tushare disclosure_date via
-// tushareCallRaw, response bytes into reconcile-raw (T15). Until the disclosure_date semantics are
-// verified against a real response (CN_DISCLOSURE_VERIFIED), CN rows keep upstream_lookup='unavailable'.
+// tushareCallRaw, response bytes into reconcile-raw (T15). The disclosure_date semantics are verified against
+// real responses (CN_DISCLOSURE_VERIFIED); with the flag false CN rows would keep upstream_lookup='unavailable'.
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
@@ -30,8 +30,8 @@ import {CALENDAR_RULES_VERSION,computeExpectations,filingsWindowStart} from './c
 import type {CalendarUpstream,CnScheduleRow,ExpectationRow,FilerCategoryRow,FilingProfile,UsUpstreamEntry} from './calendar';
 import type {SubmissionsView} from './filer-categories';
 
-/** Flip only after docs/audits/2026-11-05-data-foundation-3/verification.md records a real disclosure_date response check (spec §6.1 T15). */
-export const CN_DISCLOSURE_VERIFIED=false;
+/** Verified 2026-11-06 against real disclosure_date responses (600519.SH, 000333.SZ; docs/audits/2026-11-05-data-foundation-3/verification.md "CN disclosure_date 真实响应核对"): actual_date = periodic-report disclosure date, null while only scheduled. */
+export const CN_DISCLOSURE_VERIFIED=true;
 export const DISCLOSURE_FIELDS='ts_code,ann_date,end_date,pre_date,actual_date,modify_date';
 export const MIN_MEMBER_MS=60_000;
 export const MAX_MEMBER_ATTEMPTS=3;

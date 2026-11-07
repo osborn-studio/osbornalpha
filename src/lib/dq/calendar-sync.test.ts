@@ -313,13 +313,15 @@ describe('runCalendarSync (CN)',()=>{
   expect(r.errors).toContainEqual({code:'skipped_summary',key:'schedule_unavailable',message:JSON.stringify({no_token:1})});
   expect(h.tables.rows('issuer_filing_profiles')[0]).toMatchObject({regime:'cn',fiscal_year_end:'1231',source:'cn_statutory'});
  });
- it('a real response is kept in the bucket with its sha256 but stays unavailable until the semantics are verified',async()=>{
+ it('a verified response is kept in the bucket and drives the rows: scheduled-not-filed → overdue past the statutory date with expected_date, actual_date → filed_not_ingested (semantics: verification.md)',async()=>{
   const bytes=new TextEncoder().encode('{"code":0}');
-  const h=await harness({market:'CN',members:[C],disclosure:async(ts)=>{expect(ts).toBe('600000.SH');return {bytes,sha256:'x',httpStatus:200,requestId:null,code:0,msg:'',fields:['ts_code','ann_date','end_date','pre_date','actual_date','modify_date'],items:[['600000.SH','20260701','20260930','20261028',null,null]],hasMore:false};}});
+  const h=await harness({market:'CN',members:[C],disclosure:async(ts)=>{expect(ts).toBe('600000.SH');return {bytes,sha256:'x',httpStatus:200,requestId:null,code:0,msg:'',fields:['ts_code','ann_date','end_date','pre_date','actual_date','modify_date'],items:[['600000.SH','20260930','20260930','20261030',null,null],['600000.SH','20260630','20260630','20260829','20260828','20260901']],hasMore:false};}});
   await runCalendarSync(h.deps,{market:'CN',limit:100,triggeredBy:'cron'});
   expect([...h.raw.objects.keys()].filter(k=>!k.endsWith('.meta.json'))).toHaveLength(1);   // landed raw-store also writes a .meta.json sidecar
   const rows=rowsOf(h.tables,C);
-  expect(rows.every(x=>x.upstream_lookup==='unavailable'&&x.detail.schedule_unavailable==='unverified'&&typeof x.detail.upstream_sha256==='string')).toBe(true);
+  expect(rows.every(x=>x.upstream_lookup==='ok'&&x.detail.schedule_unavailable===undefined&&typeof x.detail.upstream_sha256==='string')).toBe(true);
+  expect(rows.find(x=>x.period_end==='2026-09-30')).toMatchObject({disclosure_state:'overdue',expected_date:'2026-10-30',upstream_filed_date:null});
+  expect(rows.find(x=>x.period_end==='2026-06-30')).toMatchObject({disclosure_state:'filed_not_ingested',expected_date:'2026-08-29',upstream_filed_date:'2026-08-28',detail:expect.objectContaining({schedule_modified:true})});
  });
  it('a Tushare API error code (积分不足) is unavailable with the code as reason',async()=>{
   const h=await harness({market:'CN',members:[C],disclosure:async()=>({bytes:new Uint8Array(),sha256:'x',httpStatus:200,requestId:null,code:40203,msg:'',fields:[],items:[],hasMore:false})});
