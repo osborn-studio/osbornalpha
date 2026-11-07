@@ -108,17 +108,23 @@ export function decodeInboxCursor(raw:string,fingerprint:string):string{
 export interface FoldableEvent{eventId:string;issuerId:string;occurredOn:string;firstSeenAt:string|null}
 export interface FoldGroup<T extends FoldableEvent>{key:string;head:T;rest:T[]}
 /** §7.3 same issuer, same day: groups rows with equal (issuer, occurred_on, first-seen UTC day); group sits at its first row. */
-export function foldSameIssuerDay<T extends FoldableEvent>(rows:T[]):FoldGroup<T>[]{
+/** Calendar day (YYYY-MM-DD) of an ISO instant in the viewer's LOCAL time zone; the tracking UI uses it so "today" and same-day folds match the user's day, not UTC. */
+export function localDayOf(iso:string):string{
+ const d=new Date(iso);const p=(n:number)=>String(n).padStart(2,'0');
+ return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+const utcDayOf=(iso:string)=>new Date(iso).toISOString().slice(0,10);
+export function foldSameIssuerDay<T extends FoldableEvent>(rows:T[],dayOf:(iso:string)=>string=utcDayOf):FoldGroup<T>[]{
  const groups:FoldGroup<T>[]=[];const byKey=new Map<string,FoldGroup<T>>();
  for(const r of rows){
-  const key=`${r.issuerId}|${r.occurredOn}|${r.firstSeenAt?new Date(r.firstSeenAt).toISOString().slice(0,10):''}`;
+  const key=`${r.issuerId}|${r.occurredOn}|${r.firstSeenAt?dayOf(r.firstSeenAt):''}`;
   const g=byKey.get(key);
   if(g)g.rest.push(r);else{const n={key,head:r,rest:[]};byKey.set(key,n);groups.push(n);}
  }
  return groups;
 }
-export function firstSeenSection(firstSeenAt:string|null,today:string):'today'|'earlier'{
- return firstSeenAt!==null&&new Date(firstSeenAt).toISOString().slice(0,10)===today?'today':'earlier';
+export function firstSeenSection(firstSeenAt:string|null,today:string,dayOf:(iso:string)=>string=utcDayOf):'today'|'earlier'{
+ return firstSeenAt!==null&&dayOf(firstSeenAt)===today?'today':'earlier';
 }
 /** "Mark this page read": the UNREAD ids the client actually shows, per issuer, ≤ READ_BATCH_MAX per request. */
 export function readBatches(rows:{eventId:string;issuerId:string;read:boolean}[]):{issuerId:string;eventIds:string[]}[]{

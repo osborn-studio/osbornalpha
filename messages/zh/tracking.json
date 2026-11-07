@@ -12,7 +12,8 @@
     "subtitle": "站内收件箱；按事件首次可见时间计未读 · 无邮件/推送",
     "kanban": "看板",
     "tracking": "跟踪",
-    "count": "{count} / {limit}"
+    "count": "{count} / {limit}",
+    "table": "表格"
   },
   "watches": {
     "title": "跟踪的公司",
@@ -46,7 +47,8 @@
     "unresolved": "未解析 {count}",
     "skippedByLimit": "超出上限 {count}",
     "dismiss": "关闭",
-    "noServerWatchlist": "没有服务端自选（访客模式的自选只保存在本机）"
+    "noServerWatchlist": "没有服务端自选（访客模式的自选只保存在本机）",
+    "tickers": "（{list}）"
   },
   "filters": {
     "all": "全部",
@@ -82,7 +84,11 @@
     "facts": "事实 {count}",
     "concepts": "概念 {count}",
     "ambiguous": "多单位未列出：{concepts}",
-    "noHeadline": "—"
+    "noHeadline": "—",
+    "headlineAsOf": "截至 {date}",
+    "listSep": "、",
+    "parenOpen": "（",
+    "parenClose": "）"
   },
   "withheld": {
     "evidence_incomplete": "来源记录不完整",
@@ -91,7 +97,8 @@
   "errors": {
     "watch_limit": "最多跟踪 {limit} 家公司",
     "unknown_ticker": "未找到该代码",
-    "generic": "操作失败（{code}）"
+    "generic": "操作失败（{code}）",
+    "watch_limit_unknown": "已达跟踪数量上限"
   },
   "company": {
     "replayNoRead": "回放模式不记录已读",

@@ -73,7 +73,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
             <div className="flex gap-1 rounded-md border border-border p-1 text-xs">
               {(['all', 'CN', 'US'] as MarketFilter[]).map((m) => (
                 <button key={m} type="button" onClick={() => { setMarket(m); setPage(1); }}
-                  className={`rounded px-2 py-0.5 ${market === m ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim'}`}>
+                  className={`rounded px-2 py-0.5 ${market === m ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] font-semibold text-accent' : 'text-text-dim'}`}>
                   {m === 'all' ? t('marketAll') : m === 'CN' ? t('marketCN') : t('marketUS')}
                 </button>
               ))}

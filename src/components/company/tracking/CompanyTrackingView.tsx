@@ -14,8 +14,9 @@ import type { Market } from '@/lib/company/types';
 import { fetchCompanyEvents, fetchInbox, isWatching, markRowsRead, TrackingApiError, type WatchCard } from '@/lib/company/tracking-client';
 import { LoadGenerations, guardedLoad } from './guarded-load';
 import { InboxEventRow, type DisplayEvent } from './InboxEventRow';
-import { applyMarkResult, marketRows, shouldApply, unreadIds } from './mark-scope';
+import { markPageFlow, marketRows, shouldApply } from './mark-scope';
 import { TrackButton } from './TrackButton';
+import { subscribeWatchChanged } from './watch-sync';
 
 export interface CompanyTrackingViewProps { issuerId: string; ticker: string; market: Market; asOf: string | null }
 
@@ -30,12 +31,15 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
   const [loading, setLoading] = useState(false);
   const [gens] = useState(() => new LoadGenerations());   // 计划第 3 轮审计 R7: request generations
 
+  const [recheck, setRecheck] = useState(0);
+  // The header / inline TrackButton announce a successful add; re-check membership (→ watching flips → scope resets → the selected market's inbox reloads).
+  useEffect(() => subscribeWatchChanged(issuerId, () => setRecheck((n) => n + 1)), [issuerId]);
   useEffect(() => {
     let live = true;
-    setWatching(null);   // a new issuer must not reuse the previous issuer's watch state
     isWatching(issuerId).then((w) => { if (live) setWatching(w); }).catch(() => { if (live) setWatching(false); });
     return () => { live = false; };
-  }, [issuerId]);
+  }, [issuerId, recheck]);
+  useEffect(() => { setWatching(null); }, [issuerId]);   // a new issuer must not reuse the previous issuer's watch state
 
   // 计划第 3 轮审计 R7: a scope change invalidates every in-flight load and clears the previous scope's rows;
   // declared before the load effect so it runs first. Cleanup (unmount / next scope) invalidates as well.
@@ -75,15 +79,14 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
         {replay ? <span data-testid="replay-no-read">{t('company.replayNoRead')} · {t('company.live')}</span>
           : watching === false ? <><span>{t('company.notWatching')}</span><TrackButton issuerId={issuerId} /></> : null}
         <Button
-          variant="secondary" size="sm" className="ml-auto" disabled={!canMark}
+          variant="secondary" size="sm" className="ml-auto min-h-11 sm:min-h-0" disabled={!canMark}
           title={replay ? t('company.replayNoRead') : undefined}
           onClick={async () => {
             const g = gens.peek();   // 计划第 3 轮审计 R7: no write into a scope that changed meanwhile
-            const submitted = unreadIds(rows);
             try {
-              await markRowsRead(rows.filter((r) => submitted.has(r.eventId)));
-              if (shouldApply(g, gens.peek())) setRows((p) => applyMarkResult(p, submitted, { unreadOnly: false }));
-            } catch (e) { show(t('errors.generic', { code: e instanceof TrackingApiError ? e.code : 'internal' })); }
+              const r = await markPageFlow({ rows, unreadOnly: false, generation: () => gens.peek(), submit: markRowsRead });
+              if (r.kind === 'applied') setRows(r.apply);
+            } catch (e) { if (shouldApply(g, gens.peek())) show(t('errors.generic', { code: e instanceof TrackingApiError ? e.code : 'internal' })); }
           }}
         >
           {t('company.markRead')}
@@ -98,7 +101,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
       )}
       <div className="text-center">
         {loading && <span className="text-xs text-text-dim">{t('inbox.loading')}</span>}
-        {!loading && cursor && <Button variant="ghost" size="sm" onClick={() => load(cursor)}>{t('inbox.loadMore')}</Button>}
+        {!loading && cursor && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => load(cursor)}>{t('inbox.loadMore')}</Button>}
       </div>
     </div>
   );

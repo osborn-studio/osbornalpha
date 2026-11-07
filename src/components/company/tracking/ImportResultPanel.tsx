@@ -8,7 +8,7 @@ import type { ImportResult } from '@/lib/company/tracking-client';
 
 export function ImportResultPanel({ result, onDismiss }: { result: ImportResult; onDismiss: () => void }) {
   const t = useTranslations('tracking');
-  const tickers = (items: { ticker: string }[]) => (items.length ? `（${items.map((i) => i.ticker).join('、')}）` : '');
+  const tickers = (items: { ticker: string }[]) => (items.length ? t('import.tickers', { list: items.map((i) => i.ticker).join(t('summary.listSep')) }) : '');
   return (
     <Card className="mb-3" data-testid="import-result">
       <div className="mb-1 flex items-center justify-between">

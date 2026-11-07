@@ -419,8 +419,8 @@ export default function WatchlistPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold">{t('heading')}</h1>
             <div className="flex gap-1 rounded-md border border-border p-0.5 text-xs">
-              <span aria-current="page" className="rounded bg-accent-dim/20 px-2 py-0.5 font-semibold text-accent">{tt('page.kanban')}</span>
-              <Link href="/watchlist/tracking" className="rounded px-2 py-0.5 text-text-dim">{tt('page.tracking')}</Link>
+              <span aria-current="page" className="inline-flex min-h-11 items-center rounded bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] px-2 py-0.5 font-semibold text-accent sm:min-h-0">{viewMode === 'kanban' ? tt('page.kanban') : tt('page.table')}</span>
+              <Link href="/watchlist/tracking" className="inline-flex min-h-11 items-center rounded px-2 py-0.5 text-text-dim sm:min-h-0">{tt('page.tracking')}</Link>
             </div>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-dim">
@@ -440,14 +440,14 @@ export default function WatchlistPage() {
           <div className="flex shrink-0 overflow-hidden rounded-md border border-border text-xs">
             <button
               onClick={() => setView('kanban')}
-              className={`whitespace-nowrap px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap px-3 py-1.5 ${viewMode === 'kanban' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title={t('viewKanbanTitle')}
             >
               {t('viewKanban')}
             </button>
             <button
               onClick={() => setView('table')}
-              className={`whitespace-nowrap border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
+              className={`whitespace-nowrap border-l border-border px-3 py-1.5 ${viewMode === 'table' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] font-semibold text-accent' : 'text-text-dim hover:text-text'}`}
               title={t('viewTableTitle')}
             >
               {t('viewTable')}
@@ -463,7 +463,7 @@ export default function WatchlistPage() {
           </button>
           <button
             onClick={() => setImportOpen(true)}
-            className="whitespace-nowrap rounded-md bg-accent-dim/15 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-dim/25"
+            className="whitespace-nowrap rounded-md bg-[color-mix(in_srgb,var(--accent-dim)_15%,transparent)] px-3 py-1.5 text-xs font-semibold text-accent hover:bg-[color-mix(in_srgb,var(--accent-dim)_25%,transparent)]"
             title={t('importBatchTitle')}
           >
             {t('importBatch')}
@@ -478,7 +478,7 @@ export default function WatchlistPage() {
       </div>
 
       {!user && isSupabaseConfigured() && (
-        <div className="card-base mb-3 flex items-center justify-between bg-accent-dim/10 text-sm">
+        <div className="card-base mb-3 flex items-center justify-between bg-[color-mix(in_srgb,var(--accent-dim)_10%,transparent)] text-sm">
           <span>
             {t('guestBanner')}
             <Link href="/login" className="font-semibold">{t('guestLogin')}</Link>{t('guestSuffix')}
@@ -694,9 +694,9 @@ function KanbanColumn(props: ColumnProps) {
   const shellClass = isBeingDragged
     ? 'border-border bg-bg-card opacity-40'
     : isColumnDropTarget
-    ? 'border-accent bg-bg-card ring-2 ring-accent/40'
+    ? 'border-accent bg-bg-card ring-2 ring-[color-mix(in_srgb,var(--accent)_40%,transparent)]'
     : isDropTarget
-    ? 'border-accent bg-accent-dim/10'
+    ? 'border-accent bg-[color-mix(in_srgb,var(--accent-dim)_10%,transparent)]'
     : 'border-border bg-bg-card';
 
   return (
@@ -735,7 +735,7 @@ function KanbanColumn(props: ColumnProps) {
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
             title={t('delete')}
-            className="rounded p-1 text-text-dim hover:bg-down/10 hover:text-down"
+            className="rounded p-1 text-text-dim hover:bg-[color-mix(in_srgb,var(--down)_10%,transparent)] hover:text-down"
           >
             ×
           </button>
@@ -745,7 +745,7 @@ function KanbanColumn(props: ColumnProps) {
       {/* Body */}
       <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
         {group.tickers.length === 0 && !isAdding && (
-          <div className="rounded border border-dashed border-border/60 py-6 text-center text-[11px] text-text-muted">
+          <div className="rounded border border-dashed border-[color-mix(in_srgb,var(--border)_60%,transparent)] py-6 text-center text-[11px] text-text-muted">
             {t('dropHint')}<br />
             {t('orAddBelow')}
           </div>
@@ -831,7 +831,7 @@ function StockCard({
         isDragging
           ? 'border-accent opacity-50 shadow-lg shadow-accent/20'
           : isFailed
-          ? 'border-down/40 hover:border-down/70'
+          ? 'border-[color-mix(in_srgb,var(--down)_40%,transparent)] hover:border-[color-mix(in_srgb,var(--down)_70%,transparent)]'
           : 'border-border hover:border-accent-dim'
       }`}
       style={{
@@ -876,7 +876,7 @@ function StockCard({
             </span>
             <button
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); onRetry(); }}
-              className="rounded border border-down/40 px-1.5 py-0.5 text-[10px] text-down hover:bg-down/10"
+              className="rounded border border-[color-mix(in_srgb,var(--down)_40%,transparent)] px-1.5 py-0.5 text-[10px] text-down hover:bg-[color-mix(in_srgb,var(--down)_10%,transparent)]"
               title={t('retryTitle')}
             >
               {t('retry')}
@@ -911,7 +911,7 @@ function StockCard({
           <div className="my-1 border-t border-border" />
           <button
             onClick={() => { onRemove(); onToggleMenu(); }}
-            className="block w-full rounded px-2 py-1.5 text-left text-xs text-down hover:bg-down/10"
+            className="block w-full rounded px-2 py-1.5 text-left text-xs text-down hover:bg-[color-mix(in_srgb,var(--down)_10%,transparent)]"
           >
             {t('removeFromWatchlist')}
           </button>

@@ -12,3 +12,23 @@ export const shouldApply=(sent:number,current:number):boolean=>sent===current;
 export function applyMarkResult<T extends {eventId:string;read:boolean}>(rows:T[],submitted:Set<string>,o:{unreadOnly:boolean}):T[]{
  return o.unreadOnly?rows.filter(r=>!submitted.has(r.eventId)):rows.map(r=>submitted.has(r.eventId)?{...r,read:true}:r);
 }
+
+/** Scope fingerprint of the inbox (issuer / kind / unread-only): rows and cursor belong to exactly one scope. */
+export const scopeKey=(s:{issuer:string|null;kind:string;unreadOnly:boolean}):string=>`${s.issuer??''}|${s.kind}|${s.unreadOnly?1:0}`;
+/** Mark-read and load-more are enabled only once the CURRENT scope has loaded successfully (a failed A→B switch keeps them off). */
+export const scopeReady=(loaded:string|null,current:string):boolean=>loaded===current;
+
+export type MarkOutcome<T>={kind:'stale'}|{kind:'applied';n:number;apply:(prev:T[])=>T[]};
+/**
+ * The "mark this page read" flow. Submits the unread rows shown now; the reply is applied only to the ids it
+ * submitted and only if `generation()` still equals the value captured before sending. Rejections propagate
+ * (the caller decides with shouldApply whether to surface them).
+ */
+export async function markPageFlow<T extends {eventId:string;read:boolean}>(o:{
+ rows:T[];unreadOnly:boolean;generation:()=>number;submit:(rows:T[])=>Promise<number>;
+}):Promise<MarkOutcome<T>>{
+ const sent=o.generation(),submitted=unreadIds(o.rows);
+ const n=await o.submit(o.rows.filter(r=>submitted.has(r.eventId)));
+ if(!shouldApply(sent,o.generation()))return {kind:'stale'};
+ return {kind:'applied',n,apply:(prev)=>applyMarkResult(prev,submitted,{unreadOnly:o.unreadOnly})};
+}

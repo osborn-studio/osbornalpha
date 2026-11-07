@@ -28,14 +28,14 @@ export default function IntelPage() {
         <button
           type="button"
           onClick={() => setTab('discover')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
+          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
         >
           {t('tabs.discover')}
         </button>
         <button
           type="button"
           onClick={() => setTab('research')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-accent-dim/20 text-accent' : 'text-text-dim'}`}
+          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
         >
           {t('tabs.research')}
         </button>

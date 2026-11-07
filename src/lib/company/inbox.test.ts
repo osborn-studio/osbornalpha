@@ -169,3 +169,16 @@ describe('unreadCounts',()=>{
   expect(src.calls).toEqual([]);
  });
 });
+
+import {firstSeenSection as fss,foldSameIssuerDay as fold,localDayOf} from './inbox';
+describe('local-day helpers',()=>{
+ it('use the injected day function (viewer-local in the UI), UTC by default',()=>{
+  const iso='2026-11-02T23:30:00.000Z';
+  expect(fss(iso,'2026-11-02')).toBe('today');
+  expect(fss(iso,'2026-11-03',()=>'2026-11-03')).toBe('today');
+  const rows=[{eventId:'1',issuerId:'i',occurredOn:'d',firstSeenAt:iso},{eventId:'2',issuerId:'i',occurredOn:'d',firstSeenAt:'2026-11-03T00:30:00.000Z'}];
+  expect(fold(rows)).toHaveLength(2);
+  expect(fold(rows,()=>'same')).toHaveLength(1);
+  expect(localDayOf(iso)).toMatch(/^2026-11-0[23]$/);
+ });
+});

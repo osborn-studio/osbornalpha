@@ -26,3 +26,22 @@ describe('tracking client',()=>{
   ]);
  });
 });
+
+describe('isWatching',()=>{
+ it('200 → true; 404 watch_not_found → false; any other failure throws (fail closed)',async()=>{
+  const {isWatching}=await import('./tracking-client');
+  vi.stubGlobal('fetch',vi.fn(async()=>ok({rows:[],nextCursor:null,evidence:{}})));
+  expect(await isWatching(A)).toBe(true);
+  vi.stubGlobal('fetch',vi.fn(async()=>ok({error:{code:'watch_not_found',message:'x'}},404)));
+  expect(await isWatching(A)).toBe(false);
+  vi.stubGlobal('fetch',vi.fn(async()=>ok({error:{code:'not_found',message:'x'}},404)));
+  await expect(isWatching(A)).rejects.toMatchObject({code:'not_found',status:404});
+  vi.stubGlobal('fetch',vi.fn(async()=>ok({error:{code:'not_authenticated',message:'x'}},401)));
+  await expect(isWatching(A)).rejects.toMatchObject({code:'not_authenticated',status:401});
+ });
+ it('watch_limit carries the server-reported cap',async()=>{
+  const {addWatch}=await import('./tracking-client');
+  vi.stubGlobal('fetch',vi.fn(async()=>ok({error:{code:'watch_limit',message:'at most 200 tracked companies'}},409)));
+  await expect(addWatch({issuerId:A})).rejects.toMatchObject({code:'watch_limit',limit:200});
+ });
+});

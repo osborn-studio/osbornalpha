@@ -4,15 +4,16 @@
 // and always paired with currency + applied scale (unitCaption, as the overview does); relChange (exact
 // decimal ratio) becomes a percent through BigInt. A gated value ({kind:'withheld',reason}, under `.value` of
 // headline/from/to, or the relChange object itself) is shown as its reason only — no number leaks.
-import {SCALE_EXP,defaultScale,formatValue,unitCaption,unitKindOfUnit,type ScaleId} from '@/components/company/format';
+import {SCALES,SCALE_EXP,defaultScale,formatValue,unitCaption,unitKindOfUnit,type ScaleId} from '@/components/company/format';
 import type {PublicEvent} from './event-dto';
+import {companyHref} from './client';
 
 export type WithheldView={kind:'withheld';reason:'evidence_incomplete'|'citation_pending'};
 export interface CaptionView{unit:string;scaleId:ScaleId|null}
 export type ValueView={kind:'value';text:string;caption:CaptionView|null}|WithheldView|{kind:'missing'};
 export type EventSummary=
  |{kind:'filing_published';formType:string;fiscalYear:number|null;fiscalPeriod:string|null;factCount:number|null}
- |{kind:'period_first_seen';periodEnd:string;duration:string;conceptCount:number|null;headline:{concept:string;value:ValueView}[];ambiguousUnits:string[]}
+ |{kind:'period_first_seen';periodEnd:string;duration:string;conceptCount:number|null;headlineAsOf:string|null;headline:{concept:string;value:ValueView}[];ambiguousUnits:string[]}
  |{kind:'fact_revised';concept:string;periodEnd:string;duration:string;from:ValueView;to:ValueView;relChange:ValueView|null};
 export type EventLocale='zh'|'en';
 
@@ -42,22 +43,34 @@ function withheldOf(v:unknown):WithheldView|null{
  return o&&o.kind==='withheld'&&(o.reason==='evidence_incomplete'||o.reason==='citation_pending')?{kind:'withheld',reason:o.reason}:null;
 }
 /** A disclosed value in its unit: money is scaled like the overview (CNY+zh → 亿, other money → 百万), with a caption naming currency and scale. */
-export function valueView(v:unknown,unit:string|null,locale:EventLocale):ValueView{
+export function valueView(v:unknown,unit:string|null,locale:EventLocale,expOverride?:number):ValueView{
  const w=withheldOf(v);if(w)return w;
  const s=str(v);if(s===null)return {kind:'missing'};
  if(!unit)return {kind:'value',text:groupDigits(s),caption:null};
  const kind=unitKindOfUnit(unit);
- const exp=kind==='money'?SCALE_EXP[defaultScale(unit,locale)]:0;
+ const exp=kind!=='money'?0:expOverride??SCALE_EXP[defaultScale(unit,locale)];
  return {kind:'value',text:formatValue(s,kind,exp),caption:unitCaption(unit,exp)};
 }
-export function eventSummary(e:Pick<PublicEvent,'kind'|'payload'>,locale:EventLocale):EventSummary{
+/**
+ * Scale for a revision's from/to pair: the largest scale (not above the default for the currency/locale) at which the
+ * two displayed values differ, so a small revision is never shown as "A → A"; raw grouped digits when none does.
+ */
+export function revisionExp(from:unknown,to:unknown,unit:string|null,locale:EventLocale):number|undefined{
+ const a=str(from),b=str(to);
+ if(!unit||a===null||b===null||unitKindOfUnit(unit)!=='money')return undefined;
+ const top=SCALE_EXP[defaultScale(unit,locale)];
+ const exps=SCALES.map(s=>SCALE_EXP[s]).filter(x=>x<=top).sort((x,y)=>y-x);
+ for(const exp of exps)if(formatValue(a,'money',exp)!==formatValue(b,'money',exp))return exp;
+ return 0;
+}
+export function eventSummary(e:Pick<PublicEvent,'kind'|'payload'>&{meta?:Record<string,unknown>},locale:EventLocale):EventSummary{
  const p=e.payload;
  switch(e.kind){
   case 'filing_published':
    return {kind:'filing_published',formType:str(p.formType)??'',fiscalYear:num(p.fiscalYear),fiscalPeriod:str(p.fiscalPeriod),factCount:num(p.factCount)};
   case 'period_first_seen':{
    const h=obj(p.headline)??{};
-   return {kind:'period_first_seen',periodEnd:str(p.periodEnd)??'',duration:str(p.duration)??'',conceptCount:num(p.conceptCount),
+   return {kind:'period_first_seen',periodEnd:str(p.periodEnd)??'',duration:str(p.duration)??'',conceptCount:num(p.conceptCount),headlineAsOf:str(e.meta?.headlineAsOf),
     headline:HEADLINE_ORDER.filter(c=>obj(h[c])!==null).map(c=>{const x=obj(h[c])!;return {concept:c,value:valueView(x.value,str(x.unit),locale)};}),
     ambiguousUnits:Array.isArray(p.ambiguousUnits)?p.ambiguousUnits.filter((x):x is string=>typeof x==='string'):[]};
   }
@@ -65,8 +78,29 @@ export function eventSummary(e:Pick<PublicEvent,'kind'|'payload'>,locale:EventLo
    const unit=str(p.unit),rel=p.relChange;
    let relChange:ValueView|null=null;
    if(rel!==undefined){const w=withheldOf(rel);const pct=typeof rel==='string'?ratioToPercent(rel):null;relChange=w??(pct!==null?{kind:'value',text:pct,caption:null}:{kind:'missing'});}
+   const fv=obj(p.from)?.value,tv=obj(p.to)?.value,exp=revisionExp(fv,tv,unit,locale);
    return {kind:'fact_revised',concept:str(p.concept)??'',periodEnd:str(p.periodEnd)??'',duration:str(p.duration)??'',
-    from:valueView(obj(p.from)?.value,unit,locale),to:valueView(obj(p.to)?.value,unit,locale),relChange};
+    from:valueView(fv,unit,locale,exp),to:valueView(tv,unit,locale,exp),relChange};
   }
  }
+}
+
+/**
+ * Company-page deep link of one event (each event, folded children included, gets its own). A new-period event opens
+ * statements at its headline cutoff (meta.headlineAsOf, not occurred_on); a revision at its own occurred_on. The
+ * concept / period / unit / factId parameters let the page open the matching disclosure.
+ */
+export function eventLink(e:Pick<PublicEvent,'kind'|'occurredOn'|'payload'>&{meta?:Record<string,unknown>},ticker:string|null|undefined):string|null{
+ if(!ticker)return null;
+ if(e.kind==='filing_published')return companyHref(ticker,{view:'filings',asOf:null});
+ const p=e.payload,extra:Record<string,string|null>={periodEnd:str(p.periodEnd)};
+ let asOf=e.occurredOn;
+ if(e.kind==='period_first_seen'){
+  asOf=str(e.meta?.headlineAsOf)??e.occurredOn;
+  const h=obj(p.headline)??{},c=HEADLINE_ORDER.find(k=>obj(h[k])!==null);
+  if(c){const x=obj(h[c])!;extra.concept=c;extra.factId=str(x.factId);extra.unit=str(x.unit);}
+ }else{
+  extra.concept=str(p.concept);extra.factId=str(obj(p.to)?.factId);extra.unit=str(p.unit);
+ }
+ return companyHref(ticker,{view:'statements',asOf,extra});
 }

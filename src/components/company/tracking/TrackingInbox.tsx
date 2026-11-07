@@ -11,14 +11,14 @@ import { useTranslations } from 'next-intl';
 import { Button, Card } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import { EVENT_KINDS, type EventKind } from '@/lib/company/types';
-import { firstSeenSection, foldSameIssuerDay, INBOX_DEFAULT_LIMIT } from '@/lib/company/inbox';
+import { firstSeenSection, foldSameIssuerDay, INBOX_DEFAULT_LIMIT, localDayOf } from '@/lib/company/inbox';
 import {
   fetchInbox, fetchWatches, markRowsRead, TrackingApiError,
   type ImportResult, type InboxRowDto, type WatchesResponse,
 } from '@/lib/company/tracking-client';
 import { ImportResultPanel } from './ImportResultPanel';
 import { InboxEventRow } from './InboxEventRow';
-import { applyMarkResult, shouldApply, unreadIds } from './mark-scope';
+import { markPageFlow, scopeKey, scopeReady, shouldApply } from './mark-scope';
 import { WatchPanel, useTrackingError } from './WatchPanel';
 
 type KindFilter = 'all' | EventKind;
@@ -39,8 +39,12 @@ export function TrackingInbox() {
   const [error, setError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const seq = useRef(0);
-  const today = new Date().toISOString().slice(0, 10);
+  // "Today" and same-day folds use the viewer's LOCAL calendar day (not UTC), so a first-seen late evening stays with that evening.
+  const today = localDayOf(new Date().toISOString());
+  const scope = scopeKey({ issuer, kind, unreadOnly });
+  const ready = scopeReady(loadedScope, scope);
 
   const loadWatches = useCallback(async () => {
     try { setWatches(await fetchWatches()); } catch (e) { setError(codeOf(e)); }
@@ -48,12 +52,14 @@ export function TrackingInbox() {
   const loadInbox = useCallback(async (from: string | null) => {
     const my = ++seq.current;
     setLoading(true);
+    if (from === null) { setRows([]); setCursor(null); setLoadedScope(null); }   // rows and cursor belong to exactly one scope; a failed switch leaves them empty
     try {
       const r = await fetchInbox({ cursor: from, limit: INBOX_DEFAULT_LIMIT, kinds: kind === 'all' ? undefined : [kind], unreadOnly, issuerId: issuer });
       if (my !== seq.current) return;
       setRows((prev) => (from ? [...prev, ...r.rows] : r.rows));
       setCursor(r.nextCursor);
       setError(null);
+      if (from === null) setLoadedScope(scopeKey({ issuer, kind, unreadOnly }));
     } catch (e) {
       if (my === seq.current) setError(codeOf(e));
     } finally {
@@ -70,20 +76,19 @@ export function TrackingInbox() {
 
   const refreshAll = useCallback(() => { void loadWatches(); void loadInbox(null); }, [loadWatches, loadInbox]);
   const cards = useMemo(() => new Map((watches?.watches ?? []).map((c) => [c.issuerId, c])), [watches]);
-  const groups = useMemo(() => foldSameIssuerDay(rows), [rows]);
-  const hasUnread = rows.some((r) => !r.read);
+  const groups = useMemo(() => foldSameIssuerDay(rows, localDayOf), [rows]);
+  const hasUnread = ready && rows.some((r) => !r.read);
 
   // plan audit S3: a delayed response only touches the ids it submitted, and only in the scope that submitted them.
   const markPage = async () => {
     const generation = seq.current;
-    const submitted = unreadIds(rows);
     try {
-      const n = await markRowsRead(rows.filter((r) => submitted.has(r.eventId)));
-      if (!shouldApply(generation, seq.current)) { void loadWatches(); return; }
-      setRows((prev) => applyMarkResult(prev, submitted, { unreadOnly }));
-      show(t('inbox.markedRead', { count: n }));
+      const r = await markPageFlow({ rows, unreadOnly, generation: () => seq.current, submit: markRowsRead });
       void loadWatches();
-    } catch (e) { if (shouldApply(generation, seq.current)) show(errorText(e, watches?.limit ?? 200)); }
+      if (r.kind === 'stale') return;
+      setRows(r.apply);
+      show(t('inbox.markedRead', { count: r.n }));
+    } catch (e) { if (shouldApply(generation, seq.current)) show(errorText(e, watches?.limit ?? null)); }
   };
 
   let lastSection: string | null = null;
@@ -97,8 +102,8 @@ export function TrackingInbox() {
           <p className="text-[11px] text-text-dim">{t('page.subtitle')}</p>
         </div>
         <div className="flex gap-1 rounded-md border border-border p-1 text-sm">
-          <Link href="/watchlist" className="rounded px-3 py-1 text-text-dim">{t('page.kanban')}</Link>
-          <span aria-current="page" className="rounded bg-accent-dim/20 px-3 py-1 font-semibold text-accent">{t('page.tracking')}</span>
+          <Link href="/watchlist" className="inline-flex min-h-11 items-center rounded px-3 py-1 text-text-dim sm:min-h-0">{t('page.kanban')}</Link>
+          <span aria-current="page" className="inline-flex min-h-11 items-center rounded sm:min-h-0 bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] px-3 py-1 font-semibold text-accent">{t('page.tracking')}</span>
         </div>
       </div>
 
@@ -117,7 +122,7 @@ export function TrackingInbox() {
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="sm" aria-expanded={manageOpen} onClick={() => setManageOpen(!manageOpen)}>{t('watches.manage')}</Button>
+          <Button variant="ghost" size="sm" className="min-h-11" aria-expanded={manageOpen} onClick={() => setManageOpen(!manageOpen)}>{t('watches.manage')}</Button>
         </div>
       )}
 
@@ -130,10 +135,10 @@ export function TrackingInbox() {
 
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <div className="flex gap-1 overflow-x-auto rounded-md border border-border p-1 text-xs" role="tablist">
+            <div className="flex gap-1 overflow-x-auto rounded-md border border-border p-1 text-xs">
               {(['all', ...EVENT_KINDS] as KindFilter[]).map((k) => (
-                <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}
-                  className={`min-h-9 whitespace-nowrap rounded px-2 py-1 ${kind === k ? 'bg-accent-dim/20 font-semibold text-accent' : 'text-text-dim'}`}>
+                <button key={k} type="button" aria-pressed={kind === k} onClick={() => setKind(k)}
+                  className={`min-h-11 whitespace-nowrap sm:min-h-0 rounded px-2 py-1 ${kind === k ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] font-semibold text-accent' : 'text-text-dim'}`}>
                   {t(`filters.${k}`)}
                 </button>
               ))}
@@ -142,7 +147,7 @@ export function TrackingInbox() {
               <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               {t('filters.unreadOnly')}
             </label>
-            <Button variant="secondary" size="sm" className="ml-auto" disabled={!hasUnread || loading} onClick={markPage}>
+            <Button variant="secondary" size="sm" className="ml-auto min-h-11 sm:min-h-0" disabled={!hasUnread || loading} onClick={markPage}>
               {t('filters.markPageRead')}
             </Button>
           </div>
@@ -166,7 +171,7 @@ export function TrackingInbox() {
             <Card className="p-0">
               <ul data-testid="inbox-list">
                 {groups.map((g) => {
-                  const section = firstSeenSection(g.head.firstSeenAt, today);
+                  const section = firstSeenSection(g.head.firstSeenAt, today, localDayOf);
                   const header = section !== lastSection
                     ? <li key={`s-${g.key}`} className="bg-bg-elevated px-3 py-1 text-[11px] text-text-dim">{section === 'today' ? t('inbox.today') : t('inbox.earlier')}</li>
                     : null;
@@ -184,7 +189,7 @@ export function TrackingInbox() {
 
           <div className="mt-2 text-center">
             {loading && <span className="text-xs text-text-dim">{t('inbox.loading')}</span>}
-            {!loading && cursor && <Button variant="ghost" size="sm" onClick={() => loadInbox(cursor)}>{t('inbox.loadMore')}</Button>}
+            {!loading && cursor && ready && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => loadInbox(cursor)}>{t('inbox.loadMore')}</Button>}
           </div>
         </div>
       </div>

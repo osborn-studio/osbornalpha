@@ -16,12 +16,16 @@ export interface WatchDto{issuerId:string;note:string|null;muted:boolean;created
 export interface EventsResponse{rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;computed:'materialized'|'live';withheld:WithheldCounts}
 
 export class TrackingApiError extends Error{
- constructor(public readonly code:string,public readonly status:number){super(code);this.name='TrackingApiError';}
+ /** For watch_limit: the cap the server reported (its message reads "at most N tracked companies"). */
+ constructor(public readonly code:string,public readonly status:number,public readonly limit:number|null=null){super(code);this.name='TrackingApiError';}
 }
 async function call<T>(url:string,init?:RequestInit):Promise<T>{
  const res=await fetch(url,{...init,cache:'no-store'});
- const body=await res.json().catch(()=>null) as {error?:{code?:string}}|null;
- if(!res.ok)throw new TrackingApiError(body?.error?.code??'internal',res.status);
+ const body=await res.json().catch(()=>null) as {error?:{code?:string;message?:string}}|null;
+ if(!res.ok){
+  const m=/\b(\d+)\b/.exec(body?.error?.message??'');
+  throw new TrackingApiError(body?.error?.code??'internal',res.status,body?.error?.code==='watch_limit'&&m?Number(m[1]):null);
+ }
  return body as T;
 }
 const send=<T>(method:'POST'|'PATCH'|'DELETE',url:string,body:unknown)=>call<T>(url,{method,body:JSON.stringify(body??{}),headers:{'content-type':'application/json'}});

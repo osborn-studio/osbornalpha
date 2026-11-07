@@ -12,7 +12,8 @@
     "subtitle": "In-app inbox; unread by first-seen time · no email or push",
     "kanban": "Kanban",
     "tracking": "Tracking",
-    "count": "{count} / {limit}"
+    "count": "{count} / {limit}",
+    "table": "Table"
   },
   "watches": {
     "title": "Tracked companies",
@@ -46,7 +47,8 @@
     "unresolved": "Unresolved {count}",
     "skippedByLimit": "Over the limit {count}",
     "dismiss": "Dismiss",
-    "noServerWatchlist": "No server-side watchlist (guest watchlists live only on this device)"
+    "noServerWatchlist": "No server-side watchlist (guest watchlists live only on this device)",
+    "tickers": " ({list})"
   },
   "filters": {
     "all": "All",
@@ -82,7 +84,11 @@
     "facts": "{count} facts",
     "concepts": "{count} concepts",
     "ambiguous": "Multiple units, not listed: {concepts}",
-    "noHeadline": "—"
+    "noHeadline": "—",
+    "headlineAsOf": "as of {date}",
+    "listSep": ", ",
+    "parenOpen": " (",
+    "parenClose": ")"
   },
   "withheld": {
     "evidence_incomplete": "Source record incomplete",
@@ -91,7 +97,8 @@
   "errors": {
     "watch_limit": "You can track at most {limit} companies",
     "unknown_ticker": "Ticker not found",
-    "generic": "Action failed ({code})"
+    "generic": "Action failed ({code})",
+    "watch_limit_unknown": "Tracking limit reached"
   },
   "company": {
     "replayNoRead": "Replay mode does not record reads",

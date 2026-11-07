@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {eventSummary,groupDigits,ratioToPercent,valueView} from './event-text';
+import {eventLink,eventSummary,groupDigits,ratioToPercent,valueView} from './event-text';
 
 const CNY_100M={unit:'CNY',scaleId:'hundred_million'};
 describe('event text (no floating point)',()=>{
@@ -32,7 +32,7 @@ describe('event text (no floating point)',()=>{
    .toEqual({kind:'filing_published',formType:'10-K',fiscalYear:2025,fiscalPeriod:'FY',factCount:498});
   const p=eventSummary({kind:'period_first_seen',payload:{periodStart:'2025-01-01',periodEnd:'2025-09-30',duration:'9M',filingId:'f',conceptCount:12,
    headline:{net_income_parent:{factId:'a',value:'100000000',unit:'CNY'},revenue:{factId:'b',value:{kind:'withheld',reason:'citation_pending',factId:'b'},unit:'CNY'}},ambiguousUnits:['operating_cash_flow']}},'zh');
-  expect(p).toEqual({kind:'period_first_seen',periodEnd:'2025-09-30',duration:'9M',conceptCount:12,
+  expect(p).toEqual({kind:'period_first_seen',periodEnd:'2025-09-30',duration:'9M',conceptCount:12,headlineAsOf:null,
    headline:[{concept:'revenue',value:{kind:'withheld',reason:'citation_pending'}},{concept:'net_income_parent',value:{kind:'value',text:'1.00',caption:CNY_100M}}],ambiguousUnits:['operating_cash_flow']});
   const r=eventSummary({kind:'fact_revised',payload:{concept:'revenue',statement:'IS',periodStart:'2024-01-01',periodEnd:'2024-12-31',duration:'12M',consolidation:'consolidated',unit:'CNY',
    from:{factId:'a',value:'170899000000',filingId:'f1',availableDate:'2025-03-01'},to:{factId:'b',value:{kind:'withheld',reason:'evidence_incomplete',factId:'b'},filingId:'f2',availableDate:'2025-08-13'},relChange:{kind:'withheld',reason:'evidence_incomplete'}}},'zh');
@@ -42,5 +42,29 @@ describe('event text (no floating point)',()=>{
   const r=eventSummary({kind:'fact_revised',payload:{concept:'revenue',unit:'CNY',periodEnd:'2024-12-31',duration:'12M',
    from:{factId:'a',value:'170899000000'},to:{factId:'b',value:'170912000000'},relChange:'0.0000760000'}},'zh');
   expect(r).toMatchObject({from:{kind:'value',text:'1,708.99'},to:{kind:'value',text:'1,709.12'},relChange:{kind:'value',text:'+0.0076%'}});
+ });
+});
+
+describe('review fixes',()=>{
+ const rev=(from:string,to:string)=>({kind:'fact_revised' as const,occurredOn:'2025-08-13',payload:{concept:'revenue',unit:'CNY',periodEnd:'2024-12-31',duration:'12M',from:{factId:'a',value:from},to:{factId:'b',value:to},relChange:'0.0000001'}});
+ it('a small revision picks the largest scale at which from and to differ (fallback raw digits)',()=>{
+  const s1=eventSummary(rev('170899000000','170899400000'),'zh');
+  expect(s1).toMatchObject({from:{text:'170,899.00',caption:{scaleId:'million'}},to:{text:'170,899.40',caption:{scaleId:'million'}}});
+  const s2=eventSummary(rev('170899000000','170899000001'),'zh');
+  expect(s2).toMatchObject({from:{text:'170,899,000,000',caption:{scaleId:null}},to:{text:'170,899,000,001',caption:{scaleId:null}}});
+  const s3=eventSummary(rev('170899000000','171899000000'),'zh');
+  expect(s3).toMatchObject({from:{text:'1,708.99',caption:{scaleId:'hundred_million'}},to:{text:'1,718.99'}});
+ });
+ it('period_first_seen exposes the headline cutoff and links at it, keeping concept/period/unit/factId',()=>{
+  const e={kind:'period_first_seen' as const,occurredOn:'2025-10-25',meta:{headlineAsOf:'2025-11-03'},
+   payload:{periodEnd:'2025-09-30',duration:'9M',conceptCount:3,headline:{net_income_parent:{factId:'f9',value:'1',unit:'CNY'}},ambiguousUnits:[]}};
+  expect(eventSummary(e,'zh')).toMatchObject({headlineAsOf:'2025-11-03'});
+  const q=new URL(eventLink(e,'600519.SH')!,'http://x').searchParams;
+  expect(Object.fromEntries(q)).toEqual({view:'statements',asOf:'2025-11-03',periodEnd:'2025-09-30',concept:'net_income_parent',factId:'f9',unit:'CNY'});
+ });
+ it('every event has its own link: own ticker (market) and own cutoff',()=>{
+  expect(eventLink({kind:'filing_published',occurredOn:'2025-10-31',payload:{}},'AAPL')).toBe('/stock/AAPL?view=filings');
+  expect(eventLink(rev('1','2'),'600519.SH')).toContain('asOf=');
+  expect(eventLink(rev('1','2'),null)).toBeNull();
  });
 });

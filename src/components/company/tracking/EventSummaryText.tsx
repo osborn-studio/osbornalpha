@@ -35,7 +35,7 @@ function Value({ v }: { v: ValueView }) {
   return <span className="text-text-dim">—</span>;
 }
 
-export function EventSummaryText({ event }: { event: Pick<PublicEvent, 'kind' | 'payload'> }) {
+export function EventSummaryText({ event }: { event: Pick<PublicEvent, 'kind' | 'payload' | 'meta'> }) {
   const t = useTranslations('tracking');
   const locale: EventLocale = useLocale() === 'en' ? 'en' : 'zh';
   const label = useConceptLabel();
@@ -52,12 +52,13 @@ export function EventSummaryText({ event }: { event: Pick<PublicEvent, 'kind' | 
     return (
       <span>
         <span className="font-mono">{s.periodEnd}</span> {s.duration}
+        {s.headlineAsOf && <span className="text-text-dim"> · {t('summary.headlineAsOf', { date: s.headlineAsOf })}</span>}
         {s.headline.length === 0 && <> · {t('summary.noHeadline')}</>}
         {s.headline.map((h) => (
           <span key={h.concept}> · {label(h.concept)} <Value v={h.value} /></span>
         ))}
         {s.ambiguousUnits.length > 0 && (
-          <span className="text-text-dim"> · {t('summary.ambiguous', { concepts: s.ambiguousUnits.map(label).join('、') })}</span>
+          <span className="text-text-dim"> · {t('summary.ambiguous', { concepts: s.ambiguousUnits.map(label).join(t('summary.listSep')) })}</span>
         )}
       </span>
     );
@@ -65,7 +66,7 @@ export function EventSummaryText({ event }: { event: Pick<PublicEvent, 'kind' | 
   return (
     <span>
       <span className="font-mono">{s.periodEnd}</span> {s.duration} {label(s.concept)} <Value v={s.from} /> → <Value v={s.to} />
-      {s.relChange && <> （<Value v={s.relChange} />）</>}
+      {s.relChange && <> {t('summary.parenOpen')}<Value v={s.relChange} />{t('summary.parenClose')}</>}
     </span>
   );
 }

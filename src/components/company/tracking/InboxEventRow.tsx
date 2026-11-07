@@ -10,15 +10,10 @@ import { Tag } from '@/components/ui';
 import { isUpdated } from '@/lib/company/inbox';
 import type { PublicEvent } from '@/lib/company/event-dto';
 import type { WatchCard } from '@/lib/company/tracking-client';
+import { eventLink } from '@/lib/company/event-text';
 import { EventSummaryText } from './EventSummaryText';
 
 export type DisplayEvent = PublicEvent & { read: boolean };
-
-export function companyHref(event: Pick<PublicEvent, 'kind' | 'occurredOn' | 'market'>, ticker: string | null) {
-  if (!ticker) return null;
-  const base = `/stock/${encodeURIComponent(ticker)}`;
-  return event.kind === 'filing_published' ? `${base}?view=filings` : `${base}?view=statements&asOf=${event.occurredOn}`;
-}
 
 export function InboxEventRow({
   head, rest, card, showIssuer = true,
@@ -27,9 +22,10 @@ export function InboxEventRow({
   const [open, setOpen] = useState(false);
   const all = [head, ...rest];
   const unread = all.some((e) => !e.read);
-  const ticker = card?.primaryTicker[head.market] ?? null;
-  const href = companyHref(head, ticker);
-  const name = card ? (card.names.zh ?? card.names.en ?? ticker ?? head.issuerId) : (ticker ?? '');
+  const linkOf = (e: DisplayEvent) => eventLink(e, card?.primaryTicker[e.market] ?? null);   // each event (folded children too) links with its own market ticker and cutoff
+  const linkText = (e: DisplayEvent) => (e.kind === 'filing_published' ? t('inbox.toFilings') : t('inbox.toStatements'));
+  const href = linkOf(head);
+  const name = card ? (card.names.zh ?? card.names.en ?? card.primaryTicker[head.market] ?? head.issuerId) : '';
   const kinds = [...new Set(all.map((e) => e.kind))];
   return (
     <li className="border-b border-border px-3 py-2.5 last:border-b-0" data-testid="inbox-row" data-event-id={head.eventId} data-read={!unread}>
@@ -37,11 +33,11 @@ export function InboxEventRow({
         <span
           role="img"
           aria-label={unread ? t('inbox.unread') : t('inbox.read')}
-          className={`inline-block h-1.5 w-1.5 rounded-full ${unread ? 'bg-accent' : 'bg-text-dim/40'}`}
+          className={`inline-block h-1.5 w-1.5 rounded-full ${unread ? 'bg-accent' : 'bg-[color-mix(in_srgb,var(--text-dim)_40%,transparent)]'}`}
         />
         {showIssuer && <span className={unread ? 'font-semibold' : 'text-text-dim'}>{name}</span>}
         {kinds.map((k) => <Tag key={k} tone="neutral">{t(`filters.${k}`)}</Tag>)}
-        {all.some((e) => isUpdated(e)) && <Tag tone="accent">{t('inbox.updated')}</Tag>}
+        {all.some((e) => isUpdated(e)) && <Tag tone="neutral" className="text-[var(--warn)] border-[color-mix(in_srgb,var(--warn)_40%,transparent)]">{t('inbox.updated')}</Tag>}
         {rest.length > 0 && <span className="text-[11px] text-text-dim">{t('inbox.folded', { count: rest.length })}</span>}
         <span className="ml-auto font-mono text-[11px] text-text-dim">{t('inbox.available', { date: head.occurredOn })}</span>
       </div>
@@ -49,7 +45,7 @@ export function InboxEventRow({
         <EventSummaryText event={head} />
         {href && (
           <Link href={href as never} className="inline-flex min-h-11 shrink-0 items-center text-xs text-accent sm:min-h-0">
-            {head.kind === 'filing_published' ? t('inbox.toFilings') : t('inbox.toStatements')}
+            {linkText(head)}
           </Link>
         )}
       </div>
@@ -63,6 +59,7 @@ export function InboxEventRow({
           {rest.map((e) => (
             <li key={e.eventId} data-testid="inbox-folded-row">
               <Tag tone="neutral">{t(`filters.${e.kind}`)}</Tag> <EventSummaryText event={e} />
+              {linkOf(e) && <Link href={linkOf(e) as never} className="ml-2 inline-flex min-h-11 items-center text-xs text-accent sm:min-h-0">{linkText(e)}</Link>}
             </li>
           ))}
         </ul>

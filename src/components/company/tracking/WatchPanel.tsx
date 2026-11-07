@@ -14,9 +14,10 @@ import {
 
 export function useTrackingError() {
   const t = useTranslations('tracking');
-  return (e: unknown, limit: number) => {
+  return (e: unknown, limit: number | null) => {
     const code = e instanceof TrackingApiError ? e.code : 'internal';
-    if (code === 'watch_limit') return t('errors.watch_limit', { limit });
+    const cap = (e instanceof TrackingApiError ? e.limit : null) ?? limit;
+    if (code === 'watch_limit') return cap === null ? t('errors.watch_limit_unknown') : t('errors.watch_limit', { limit: cap });
     if (code === 'unknown_ticker') return t('errors.unknown_ticker');
     if (code === 'no_server_watchlist') return t('import.noServerWatchlist');
     return t('errors.generic', { code });
@@ -45,7 +46,7 @@ function WatchItem({ card, selected, onSelect, onChanged, limit }: {
   return (
     <li className={`rounded-md px-2 py-2 ${selected ? 'bg-bg-elevated' : ''}`} data-testid="watch-item" data-issuer-id={card.issuerId}>
       <div className="flex items-center gap-2">
-        <button type="button" aria-pressed={selected} onClick={onSelect} className="min-w-0 flex-1 text-left">
+        <button type="button" aria-pressed={selected} onClick={onSelect} className="min-h-11 min-w-0 flex-1 text-left sm:min-h-0">
           <div className="truncate text-sm font-semibold">{name}</div>
           <div className="truncate text-[11px] text-text-dim">
             {card.muted ? `${t('watches.muted')} · ${t('watches.mutedHint')}` : streamLabel(card, t)}
@@ -56,14 +57,14 @@ function WatchItem({ card, selected, onSelect, onChanged, limit }: {
         )}
       </div>
       <div className="mt-1 flex flex-wrap gap-1">
-        <Button variant="ghost" size="sm" onClick={() => run(() => patchWatch(card.issuerId, { muted: !card.muted }))}>
+        <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => run(() => patchWatch(card.issuerId, { muted: !card.muted }))}>
           {card.muted ? t('watches.unmute') : t('watches.mute')}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setEditing(!editing)}>{t('watches.note')}</Button>
+        <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => setEditing(!editing)}>{t('watches.note')}</Button>
         {confirming ? (
-          <Button variant="danger" size="sm" onClick={() => run(() => removeWatch(card.issuerId))}>{t('watches.confirmRemove')}</Button>
+          <Button variant="danger" size="sm" className="min-h-11 sm:min-h-0" onClick={() => run(() => removeWatch(card.issuerId))}>{t('watches.confirmRemove')}</Button>
         ) : (
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>{t('watches.remove')}</Button>
+          <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => setConfirming(true)}>{t('watches.remove')}</Button>
         )}
       </div>
       {card.note && !editing && <p className="mt-1 whitespace-pre-wrap text-[12px] text-text-muted">{card.note}</p>}
@@ -79,10 +80,10 @@ function WatchItem({ card, selected, onSelect, onChanged, limit }: {
             rows={3}
           />
           <div className="flex gap-1">
-            <Button size="sm" onClick={() => run(async () => { await patchWatch(card.issuerId, { note: note.trim() === '' ? null : note }); setEditing(false); })}>
+            <Button size="sm" className="min-h-11 sm:min-h-0" onClick={() => run(async () => { await patchWatch(card.issuerId, { note: note.trim() === '' ? null : note }); setEditing(false); })}>
               {t('watches.save')}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => { setNote(card.note ?? ''); setEditing(false); }}>{t('watches.cancel')}</Button>
+            <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => { setNote(card.note ?? ''); setEditing(false); }}>{t('watches.cancel')}</Button>
           </div>
         </div>
       )}
@@ -125,17 +126,17 @@ export function WatchPanel({ data, selected, onSelect, onChanged, onImported }: 
           onKeyDown={(e) => { if (e.key === 'Enter') void add(); }}
           placeholder={t('watches.addPlaceholder')}
           aria-label={t('watches.add')}
-          className="min-w-0 flex-1 rounded-md bg-bg-card px-2 py-1 text-[13px]"
+          className="min-h-11 min-w-0 flex-1 rounded-md bg-bg-card px-2 py-1 text-[13px] sm:min-h-0"
         />
-        <Button size="sm" variant="secondary" disabled={busy} onClick={add}>{t('watches.add')}</Button>
+        <Button size="sm" variant="secondary" className="min-h-11 sm:min-h-0" disabled={busy} onClick={add}>{t('watches.add')}</Button>
       </div>
-      <Button size="sm" variant="secondary" disabled={busy} onClick={doImport} className="mb-2 w-full">{t('watches.import')}</Button>
+      <Button size="sm" variant="secondary" disabled={busy} onClick={doImport} className="mb-2 w-full min-h-11 sm:min-h-0">{t('watches.import')}</Button>
       {data.count === 0 ? (
         <p className="text-[13px] text-text-dim">{t('watches.empty')}</p>
       ) : (
         <ul className="space-y-0.5">
           <li>
-            <button type="button" aria-pressed={selected === null} onClick={() => onSelect(null)} className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${selected === null ? 'bg-bg-elevated font-semibold' : 'text-text-dim'}`}>
+            <button type="button" aria-pressed={selected === null} onClick={() => onSelect(null)} className={`min-h-11 w-full rounded-md px-2 py-1.5 text-left text-sm sm:min-h-0 ${selected === null ? 'bg-bg-elevated font-semibold' : 'text-text-dim'}`}>
               {t('watches.all')}
             </button>
           </li>
