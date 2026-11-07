@@ -1,11 +1,10 @@
 'use client';
-// MacroWorkbench — /intel/macro (spec §3.1, §3.2, canvas OverviewOff): region switch, tabs 概览 · 指标 · 关联 · 方法与来源.
+// MacroWorkbench — /macro (spec §3.1, §3.2, canvas OverviewOff): region switch, tabs 概览 · 指标 · 关联 · 方法与来源.
 // The judgment slot is rendered only when the server page passes judgmentsEnabled. With the layer off, nothing on
 // the page names a regime, score, margin or coverage percentage. Collection failures show the last published
 // snapshot with its collection status; they never show zeros.
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { CORRELATION_VERSION } from '@/lib/macro/correlation';
 import { CYCLES_VERSION } from '@/lib/macro/cycles';
 import { EVENTS_VERSION } from '@/lib/macro/events';
@@ -71,7 +70,6 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
   strategyEnabled?: boolean;
 }) {
   const { t, locale } = useMacroT();
-  const router = useRouter();
   const [region, setRegion] = useState(initialRegion);
   const [tab, setTab] = useState(initialTab);
   const [preview, setPreview] = useState<string | null>(null);
@@ -82,7 +80,11 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
   const rows = useMemo(() => (env ? env.indicators.map((r) => toIndicatorView(r, locale, t)) : []), [env, locale, t]);
   const go = (r: 'US' | 'CN', tb: WorkbenchTab) => {
     setRegion(r); setTab(tb); setPreview(null); setDrawer(null);
-    router.replace(`/intel/macro?region=${r}&tab=${tb}`, { scroll: false });
+    const url = new URL(window.location.href);
+    url.pathname = url.pathname.replace(/\/intel\/macro$/, '/macro');
+    url.searchParams.set('region', r);
+    url.searchParams.set('tab', tb);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   };
   const openEvidence = (row: IndicatorView) => {
     if (row.periodEnd) setDrawer({ seriesId: row.seriesId, observationId: row.observationId, name: row.name, periodEnd: row.periodEnd, display: `${row.value}${row.unit}`, unit: row.unitKey, source: row.source });
@@ -121,13 +123,14 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
       {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
 
+      {tab === 'overview' && judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
+
       {tab === 'overview' && env && (
         <div className="space-y-3">
           <div className="grid gap-3 lg:grid-cols-2">
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
-          {judgmentsEnabled && <MacroJudgmentSlot region={region} snapshotId={env.snapshotId} />}
           <section className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>
