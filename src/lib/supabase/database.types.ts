@@ -581,7 +581,9 @@ export interface DqReconciliation {
 export type DqFreshnessStatus = 'fresh' | 'stale' | 'error' | 'missing';
 export interface DqFreshness {
   dataset: string;
+  // INDUSTRY:BEGIN — 'weekly' cadence (industry memberships / valuation datasets)
   expected_cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'event';
+  // INDUSTRY:END
   last_ok_at: string | null;
   last_attempt_at: string | null;
   consecutive_errors: number;

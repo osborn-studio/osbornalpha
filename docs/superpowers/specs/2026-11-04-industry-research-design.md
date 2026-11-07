@@ -586,7 +586,7 @@ type IndustryTableRows = InputRef<'table_rows',
 |---|---|---|
 | `load-a-share` | `30 22 * * *` | cron |
 | `facts-scope` | `45 22 * * *`（`load-a-share` 后） | cron |
-| `memberships-sic` | `0 2 * * 0` | cron |
+| `memberships-sic` | `0 2 * * *`（每日，`limit=200`；第 69 条） | cron |
 | `memberships-sw` | `0 2 * * 1` | cron（积分允许）或脚本 |
 | `marks` | `0 2 * * 6`（补齐全部缺失期望日期） | cron |
 | `official` | `20 2 * * 6` | cron |
@@ -749,7 +749,7 @@ type IndustryTableRows = InputRef<'table_rows',
 | 13 | 迁移与契约（Task 1–4） | 决定（集成） | `upsertClassifications` 对 `attributes` 也做（键序无关的）比较，不同即 `conflicts` 不覆盖；Task 7/9 把冲突一律隔离为 `classification_name_conflict`——上游只改 `is_pub` 等属性时也会以该码隔离。 |
 | 14 | 迁移与契约（Task 1–4） | 决定 | `src/lib/entities/issuers.integration.test.ts` 的 INDUSTRY 块按迁移一后的状态改断言、重放计划一迁移后接着重放迁移一（先锁 `issuers` 防死锁）；`dq_freshness` weekly 改动与计划三逐字相同、不加标记。 |
 | 15 | 采集与成分（Task 5–9） | 偏差 | 规格的 `src/lib/entities/load-a-share.ts` 落在 `src/lib/industry/load-a-share.ts`；`providers/tushare-sw.ts` 落在 `providers/tushare-industry.ts`（计划文件表）。 |
-| 16 | 采集与成分（Task 5–9） | 偏差 | 规格说分页用 `keysetAll`；`facts-scope.ts` 用已落地的 `selectAll` 按唯一列（`industry_source_memberships.id`、`issuers.issuer_id`、单一宇宙内的 `ticker`）分页，加 `scope.ts::currentSecurities`（`keysetAll` 未导出，且只允许改 INDUSTRY 块）。 |
+| 16 | 采集与成分（Task 5–9） | 偏差 | 规格说分页用 `keysetAll`；计划二的 `scope.ts::keysetAll` 保持原样（只服务计划二调用方）。工业侧使用 `src/lib/industry/keyset.ts::industryKeysetAll`（不依赖 `scope.ts`）：每页从上一页末值（含）重启，读到某页没有新行才结束，不以短页结束（服务端页大小可能小于 `MAX_PAGE`）；整页 `MAX_PAGE` 行都已见过（同值组无法推进）则抛 `scope_tie_group_overflow`，绝不静默截断。`facts-scope.ts` 与 `run-aggregation.ts` 使用它，另加 `scope.ts::currentSecurities`。 |
 | 17 | 采集与成分（Task 5–9） | 决定 | `industryCnUniverse` 经 service-role `TableClient` 直接读 `industry_source_memberships`（生产 `desiredCn` 只有 `tables` + `FactsDb`；见《跨任务接口约定》B1）。 |
 | 18 | 采集与成分（Task 5–9） | 决定 | SIC 节点平铺为 level 1（`parent_code null`，`attributes {office}`），`apply_sic_memberships` 行 level = 1。 |
 | 19 | 采集与成分（Task 5–9） | 决定（第 7 稿 K1–K3） | 夹具为 2026-11-06 的真实录制（36 份，逐字节拷贝，保留 `request`/`response_sha256`）；真实数据造不出的情形在测试内以标注的"synthetic edit of a real response"构造，不建合成夹具文件；`parent_code` 属 `industry_code` 命名空间（`index_code` 形式仍防御性接受），原值存 `attributes.parent_industry_code`。 |

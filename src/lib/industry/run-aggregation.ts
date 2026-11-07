@@ -32,7 +32,8 @@
 // equals the current state_rev (an issuer without a scope row counts as 0). code_version is not a
 // reuse key: reused rows keep the manifest's code_version inside the manifest.
 import type {TableClient} from '../db/table-client';
-import {currentSecurities,keysetAll} from '../facts/scope';
+import {currentSecurities} from '../facts/scope';
+import {industryKeysetAll as keysetAll} from './keyset';
 import type {TriggeredBy,BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';

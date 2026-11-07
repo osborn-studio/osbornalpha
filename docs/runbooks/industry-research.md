@@ -57,6 +57,8 @@
 
 公开（internal → public）只需第 1、2 步，并在 PR/实施记录写明 owner 决策 A 的依据。`official:tushare-sw_daily` 公开只影响 `/replay` 估值格的 `officialValue` 字段（官方值永不进入任何公共表或清单）。
 
+估值可见性只由 scheme 授权门控（`scheme:sw2021:2021` 等）；估值用到的 `marks:tushare-daily_basic` 的授权必须在 I-3 上线前单独复核（此前估值区恒"未启用"，不依赖它）。
+
 ## 5. 核对项与未核对事项
 
 | 项 | 状态 | 影响 |

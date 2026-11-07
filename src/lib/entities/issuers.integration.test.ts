@@ -73,6 +73,8 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  afterAll(async()=>{
   if(admin){
    // Child and link FKs are RESTRICT: children first, merged issuers before their targets.
+   // INDUSTRY:BEGIN — removed here: `delete from public.issuer_industry_memberships where issuer_id=any($1::uuid[])` (append-only since 20261111090000/20261111091000; see the guarded deletes below)
+   // INDUSTRY:END
    await admin.query(`delete from public.issuer_identifier_claims where issuer_id=any($1::uuid[])`,[issuers]);
    await admin.query(`delete from public.issuer_securities where issuer_id=any($1::uuid[])`,[issuers]);
    // INDUSTRY:BEGIN — issuer_industry_memberships is append-only since 20261111090000/20261111091000 (delete refused): issuers and
@@ -87,12 +89,14 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   }
  },30000);
 
+ // INDUSTRY:BEGIN — title changed (was 'public-read policies on four'): licence-gated reads on the industry tables (20261111090000)
  it('creates five tables with RLS, public-read policies on issuers and securities, licensed-read policies on the industry tables, none on claims, link columns, and replays',async()=>{
   const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
   expect(rows.map((r:{relname:string})=>r.relname).sort()).toEqual([...TABLES].sort());
   for(const r of rows) expect(r.relrowsecurity).toBe(true);
+  // INDUSTRY:END
+  // INDUSTRY:BEGIN — ordered by policyname too; 20261111090000: licence-gated reads and service_role policies on the two industry tables
   const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename,policyname`,[TABLES])).rows;
-  // INDUSTRY:BEGIN — 20261111090000: licence-gated reads and service_role policies on the two industry tables
   expect(policies).toEqual([
    {tablename:'industry_classifications',policyname:'industry_classifications licensed read'},{tablename:'industry_classifications',policyname:'industry_classifications service insert'},
    {tablename:'industry_classifications',policyname:'industry_classifications service read'},{tablename:'industry_classifications',policyname:'industry_classifications service update'},
@@ -101,8 +105,9 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
   // INDUSTRY:END
   const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
   expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
-  // INDUSTRY: one transaction; issuers is locked first so a concurrent apply_industry_memberships (issuers row → memberships) waits instead of deadlocking
+  // INDUSTRY:BEGIN — replaces `await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();`: one transaction; issuers is locked first so a concurrent apply_industry_memberships (issuers row → memberships) waits instead of deadlocking
   await expect(replayMigration(admin,'lock table public.issuers in access exclusive mode;\n'+readFileSync(MIGRATION,'utf8')+'\n;\n'+readFileSync(INDUSTRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
+  // INDUSTRY:END
  },60000);
 
  it('enforces named issuer constraints',async()=>{

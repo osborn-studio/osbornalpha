@@ -5,7 +5,7 @@
 // tushare_unavailable; facts-scope / aggregate without their CN flags → 403 job_disabled (owner
 // default E: they are not in vercel.json either). A missing code_version refuses the run. The HTTP
 // receipt carries codes and counts only (no error messages). Only memberships-sic is scheduled
-// (vercel.json, Sunday 02:00 UTC); everything else is a script until the owner enables it.
+// (vercel.json, daily 02:00 UTC, limit 200; spec §18 #69); everything else is a script until the owner enables it.
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';

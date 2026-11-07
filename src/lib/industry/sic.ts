@@ -18,7 +18,7 @@
 //    issuers.provenance.sec_submissions (optimistic, guarded by updated_at; rewritten only when a value changed).
 //    Skips (informational): no_cik, no_submissions (404), no_sic; sec_unavailable (429/5xx/network) is an error entry
 //    (batch partial, retried next day); quarantined: unknown_sic_code (code not in the classification table), same_day_change. Batch dataset industry.sic.memberships,
-//    freshness cadence weekly (cron 0 2 * * 0).
+//    freshness cadence weekly (cron 0 2 * * *, daily, limit 200; the weekly figure is the staleness budget, spec §18 #69).
 import type {Row,TableClient} from '../db/table-client';
 import {TableError,selectAll} from '../db/table-client';
 import type {BatchError,TriggeredBy} from '../dq/batches';

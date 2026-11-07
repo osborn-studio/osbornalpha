@@ -4,7 +4,8 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {MAX_PAGE} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
-import {keysetAll,reconcileScope} from '../facts/scope';
+import {reconcileScope} from '../facts/scope';
+import {industryKeysetAll as keysetAll} from './keyset';
 import type {FactsDb,Market} from '../facts/types';
 import {closedWindowTicker,industryCnUniverse,industryUniverseEnabled,mergeDesired} from './facts-scope';
 
@@ -121,7 +122,7 @@ describe('keyset reads and historical windows',()=>{
  });
 });
 
-describe('keysetAll',()=>{
+describe('industryKeysetAll',()=>{
  it('reads to exhaustion when the server caps pages at 300 (below MAX_PAGE), including tied boundary values',async()=>{
   const raw=memoryTableClient({t:['a','b']});
   for(let i=0;i<700;i++)await raw.insert('t',{a:`k${String(Math.floor(i/2)).padStart(4,'0')}`,b:String(i)});   // pairs share the order value

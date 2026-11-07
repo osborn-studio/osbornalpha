@@ -10,7 +10,7 @@
 // fetch_key: the current A-share ticker (landed chooseCnTicker); an issuer without one (historical member)
 // takes the ticker of its most recently CLOSED A-share window (chooseCnTicker over the rows with the largest
 // valid_to); still none → skipped.no_cn_ticker. Merged issuers are skipped (industry_issuer_merged).
-// Inputs are read to exhaustion by KEYSET paging (scope.ts::keysetAll: restart from the last key inclusive, so a row
+// Inputs are read to exhaustion by KEYSET paging (keyset.ts::industryKeysetAll: restart from the last key inclusive, so a row
 // superseded or inserted between pages cannot shift later rows out of the read): industry_source_memberships on its
 // unique `id`, the a_stock memberships on `ticker` (unique within one universe), issuers on `issuer_id`, securities
 // (open and scheduled-end rows) and each issuer's historical rows on `ticker` with the (issuer_id, ticker, valid_from) key.
@@ -19,7 +19,8 @@
 // memory harness must hold the source rows in its TableClient too.
 import type {Row,TableClient} from '../db/table-client';
 import {isCurrentSecurity} from '../entities/resolve';
-import {SCOPE_PRIORITY,chooseCnTicker,fetchKey,keysetAll} from '../facts/scope';
+import {SCOPE_PRIORITY,chooseCnTicker,fetchKey} from '../facts/scope';
+import {industryKeysetAll as keysetAll} from './keyset';
 import type {ScopeInputRow} from '../facts/scope';
 
 export const INDUSTRY_UNIVERSE_FLAG='FACTS_CN_INDUSTRY_UNIVERSE';
