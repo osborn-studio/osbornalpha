@@ -40,16 +40,16 @@ describe('directory helpers',()=>{
   expect(rows[0]).toMatchObject({issuerId:A,market:'US',primaryTicker:'AAPL',tickers:['AAPL']});
  });
  it('issuerIdsByPrefix: names (zh/en, case-insensitive prefix) ∪ current tickers, de-duplicated; stable order + range pages',async()=>{
-  const {sb,log}=fakePrefix([{issuer_id:A}],[{issuer_id:A,valid_from:'2000-01-01',valid_to:null},{issuer_id:C,valid_from:'1990-01-01',valid_to:'2000-01-01'},{issuer_id:B,valid_from:'2001-01-01',valid_to:null}]);
+  const {sb,log}=fakePrefix([{issuer_id:A}],[{issuer_id:A,ticker:'AAPL',valid_from:'2000-01-01',valid_to:null},{issuer_id:C,ticker:'AAPX',valid_from:'1990-01-01',valid_to:'2000-01-01'},{issuer_id:B,ticker:'AAPB',valid_from:'2001-01-01',valid_to:null},{issuer_id:uid(77),ticker:'0700.HK',valid_from:'2001-01-01',valid_to:null}]);
   expect((await issuerIdsByPrefix(sb,'aap','2026-11-06')).sort()).toEqual([A,B]);
   expect(log.issuers.slice(0,4)).toEqual(['select:issuer_id','or:canonical_name_zh.ilike."aap*",canonical_name_en.ilike."aap*"','order:issuer_id','range:0-999']);
-  expect(log.issuer_securities.slice(0,6)).toEqual(['select:issuer_id,valid_from,valid_to','ilike:ticker:AAP%','order:issuer_id','order:ticker','order:valid_from','range:0-999']);
-  expect(log.issuer_securities.filter(x=>x.startsWith('range:'))).toEqual(['range:0-999','range:3-1002']);   // read until an empty page
+  expect(log.issuer_securities.slice(0,6)).toEqual(['select:issuer_id,ticker,valid_from,valid_to','ilike:ticker:AAP%','order:issuer_id','order:ticker','order:valid_from','range:0-999']);
+  expect(log.issuer_securities.filter(x=>x.startsWith('range:'))).toEqual(['range:0-999','range:4-1003']);   // read until an empty page
  });
- it('pages through every candidate: a current match after 1,500 expired securities and name matches beyond row 1,000 are found (计划第 3 轮审计 R8)',async()=>{
-  const expired=Array.from({length:1500},(_,i)=>({issuer_id:uid(i),valid_from:'1990-01-01',valid_to:'2000-01-01'}));
+ it('pages through every candidate: a current public-market match after 1,500 expired securities and name matches beyond row 1,000 are found (计划第 3 轮审计 R8)',async()=>{
+  const expired=Array.from({length:1500},(_,i)=>({issuer_id:uid(i),ticker:'AAPX',valid_from:'1990-01-01',valid_to:'2000-01-01'}));
   const names=Array.from({length:1200},(_,i)=>({issuer_id:uid(10000+i)}));
-  const {sb,log}=fakePrefix(names,[...expired,{issuer_id:B,valid_from:'2001-01-01',valid_to:null}]);
+  const {sb,log}=fakePrefix(names,[...expired,{issuer_id:B,ticker:'AAPB',valid_from:'2001-01-01',valid_to:null}]);
   const ids=new Set(await issuerIdsByPrefix(sb,'aap','2026-11-06'));
   expect(ids.has(B)).toBe(true);
   expect(ids.has(uid(11199))).toBe(true);

@@ -378,7 +378,7 @@
     "sort": "排序",
     "sort_latest_available_date": "最近文件日",
     "sort_latest_period_end": "最近财期",
-    "sort_name": "名称",
+    "sort_name": "名称（按英文名，无则中文名）",
     "industryHint": "行业筛选在成分加载后出现 · 不显示评级、判断计数或任何按用户字段",
     "col": {
       "name": "名称",
@@ -410,6 +410,10 @@
       "title": "公司覆盖",
       "desc": "事实库覆盖的全部公司与数据状态（无评级）",
       "open": "打开目录 →"
-    }
+    },
+    "loading": "加载中…",
+    "invalidQ": "只能输入字母、数字、空格、. 或 -（最多 24 个字符）；未发起查询。",
+    "freshnessUnavailable": "新鲜度不可用",
+    "moreTickers": "另有代码：{list}"
   }
 }

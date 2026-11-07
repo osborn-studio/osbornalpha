@@ -31,7 +31,7 @@ export async function GET(request:Request){
  }catch(e){
   return paramErrorResponse(e)??failureResponse(e,'companies','directory unavailable');
  }
- const empty={total:0,page,pageSize,conceptsTotal:FACT_CONCEPTS.length,rows:[]};
+ const empty={total:0,conceptsTotal:FACT_CONCEPTS.length,rows:[]};
  try{
   const sb=getAnonSupabase();
   let issuerIds:string[]|undefined;
@@ -41,7 +41,7 @@ export async function GET(request:Request){
   }
   const {rows,total}=await supabaseCompanyDb(sb).listCoverage({market,issuerIds},sort,{offset:(page-1)*pageSize,limit:pageSize});
   const lites=await loadIssuerLites(sb as unknown as SelectInClient,[...new Set(rows.map(r=>r.issuer_id))]);
-  const body={total,page,pageSize,conceptsTotal:FACT_CONCEPTS.length,rows:toDirectoryRows(rows,lites,today)};
+  const body={total,conceptsTotal:FACT_CONCEPTS.length,rows:toDirectoryRows(rows,lites,today)};
   return NextResponse.json(body,{headers:successHeaders(now,undefined,rows.length===0)});
  }catch(e){
   return failureResponse(e,'companies','directory unavailable');

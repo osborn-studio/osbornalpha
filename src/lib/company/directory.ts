@@ -7,8 +7,8 @@ import {publicMarketOf} from '../facts/public-route';
 import type {IssuerLite,SecurityLite} from './tracking-issuers';
 import type {CitationSummary,CoverageRow,Market} from './types';
 
-/** Letters, digits, space, '.', '-' only: PostgREST or/ilike syntax characters never reach the filter. */
-export const DIRECTORY_Q_RE=/^[\p{L}\p{N} .\-]{1,24}$/u;
+import {DIRECTORY_Q_RE} from './directory-view';
+export {DIRECTORY_Q_RE};
 export const DIRECTORY_SORTS=['latest_available_date','latest_period_end','name'] as const;
 export type DirectorySort=typeof DIRECTORY_SORTS[number];
 export const DIRECTORY_DEFAULT_PAGE_SIZE=100;
@@ -52,11 +52,11 @@ export async function issuerIdsByPrefix(sb:PrefixClient,q:string,today:string):P
  const pat=`"${q}*"`;
  const [names,tickers]=await Promise.all([
   exhaust<{issuer_id:string}>((a,b)=>sb.from('issuers').select('issuer_id').or(`canonical_name_zh.ilike.${pat},canonical_name_en.ilike.${pat}`).order('issuer_id').range(a,b)),
-  exhaust<{issuer_id:string;valid_from:string;valid_to:string|null}>((a,b)=>sb.from('issuer_securities').select('issuer_id,valid_from,valid_to').ilike('ticker',`${q.toUpperCase()}%`).order('issuer_id').order('ticker').order('valid_from').range(a,b)),
+  exhaust<{issuer_id:string;ticker:string;valid_from:string;valid_to:string|null}>((a,b)=>sb.from('issuer_securities').select('issuer_id,ticker,valid_from,valid_to').ilike('ticker',`${q.toUpperCase()}%`).order('issuer_id').order('ticker').order('valid_from').range(a,b)),
  ]);
  const ids=new Set<string>();
  for(const r of names)ids.add(r.issuer_id);
- for(const r of tickers)if(isCurrentSecurity(r as unknown as Record<string,unknown>,today))ids.add(r.issuer_id);
+ for(const r of tickers)if(publicMarketOf(String(r.ticker).toUpperCase())!==null&&isCurrentSecurity(r as unknown as Record<string,unknown>,today))ids.add(r.issuer_id);
  return [...ids];
 }
 

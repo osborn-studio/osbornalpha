@@ -1,136 +1,172 @@
-// src/components/company/directory/CompanyDirectory.tsx
 // Coverage directory view (spec §8; artboard Directory): freshness strip (GET /api/companies/freshness),
 // prefix search, market filter, three sorts, 100 per page, table with a frozen first column on mobile.
 // Facts only: no ratings, no judgment counts, no per-user fields; last sync is stated, not colour-coded.
+// Rows, total and pagination are bound to the query key of the response that produced them (directory-view.ts).
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useEffect, useState } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button, Card, Tag } from '@/components/ui';
+import { ErrorCard } from '@/components/company/StateCallout';
+import { Seg } from '@/components/company/Seg';
 import type { DirectoryRow, DirectorySort } from '@/lib/company/directory';
+import { citationParts, displayName, qStateOf, queryKeyOf, viewOf } from '@/lib/company/directory-view';
 import { freshnessKey } from '@/lib/company/header-model';
 
-interface DirectoryResponse { total: number; page: number; pageSize: number; conceptsTotal: number; rows: DirectoryRow[] }
+interface DirectoryResponse { total: number; conceptsTotal: number; rows: DirectoryRow[] }
 interface Freshness { dataset: string; status: string | null; lastOkAt: string | null; lastAttemptAt: string | null }
 type MarketFilter = 'all' | 'CN' | 'US';
 const SORTS: DirectorySort[] = ['latest_available_date', 'latest_period_end', 'name'];
 const PAGE_SIZE = 100;
 const fmtAt = (s: string | null) => (s ? s.replace('T', ' ').slice(0, 16) : null);
+const FIELD = 'rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1.5 text-sm text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]';
 
 export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const t = useTranslations('company.directory');
   const tf = useTranslations('company.header.freshness');
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [market, setMarket] = useState<MarketFilter>('all');
   const [sort, setSort] = useState<DirectorySort>('latest_available_date');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<DirectoryResponse | null>(null);
-  const [fresh, setFresh] = useState<Freshness[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<{ key: string; data: DirectoryResponse } | null>(null);
+  const [err, setErr] = useState<{ key: string; code: string } | null>(null);
+  const [fresh, setFresh] = useState<Freshness[] | 'unavailable' | null>(null);
   const [reload, setReload] = useState(0);
-  const seq = useRef(0);
 
   useEffect(() => { const h = setTimeout(() => { setDebouncedQ(q.trim()); setPage(1); }, 250); return () => clearTimeout(h); }, [q]);
   useEffect(() => {
-    fetch('/api/companies/freshness').then((r) => (r.ok ? r.json() : null)).then((b) => setFresh(b?.datasets ?? [])).catch(() => setFresh([]));
+    let live = true;
+    fetch('/api/companies/freshness')
+      .then(async (r) => { if (!r.ok) throw new Error('freshness'); return (await r.json()) as { datasets?: Freshness[] }; })
+      .then((b) => { if (live) setFresh(Array.isArray(b.datasets) ? b.datasets : 'unavailable'); })
+      .catch(() => { if (live) setFresh('unavailable'); });
+    return () => { live = false; };
   }, []);
+
+  const qState = qStateOf(debouncedQ);
+  const key = queryKeyOf({ q: debouncedQ, market, sort, page });
   useEffect(() => {
-    const my = ++seq.current;
+    if (qState === 'invalid') return;   // invalid q: inline hint, no request
+    const ctl = new AbortController();
     const p = new URLSearchParams({ sort, page: String(page), pageSize: String(PAGE_SIZE) });
     if (market !== 'all') p.set('market', market);
     if (debouncedQ) p.set('q', debouncedQ);
-    fetch(`/api/companies?${p.toString()}`)
-      .then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b?.error?.code ?? 'internal'); return b as DirectoryResponse; })
-      .then((b) => { if (my === seq.current) { setData(b); setError(null); } })
-      .catch((e: Error) => { if (my === seq.current) setError(e.message); });
-  }, [debouncedQ, market, sort, page, reload]);
+    fetch(`/api/companies?${p.toString()}`, { signal: ctl.signal })
+      .then(async (r) => {
+        let b: unknown = null;
+        try { b = await r.json(); } catch { b = null; }   // non-JSON bodies (proxy error pages)
+        if (!r.ok) {
+          const code = (b as { error?: { code?: unknown } } | null)?.error?.code;
+          throw new Error(typeof code === 'string' ? code : `http_${r.status}`);
+        }
+        if (!b || !Array.isArray((b as DirectoryResponse).rows)) throw new Error('bad_response');
+        return b as DirectoryResponse;
+      })
+      .then((data) => { setOk({ key, data }); setErr(null); })
+      .catch((e: Error) => { if (e.name !== 'AbortError') setErr({ key, code: e.message || 'internal' }); });
+    return () => ctl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, qState, reload]);
 
+  const view = qState === 'invalid' ? ({ status: 'loading' } as const) : viewOf(key, ok, err);
+  const data = view.status === 'ready' ? view.data : null;
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const filtered = debouncedQ !== '' || market !== 'all';
+  const th = 'px-3 py-2';
+
   return (
     <>
-      <div className="mb-1 text-[11px] text-text-dim">{t('breadcrumb')}</div>
+      <div className="mb-1 text-[11px] text-[var(--text-dim)]">{t('breadcrumb')}</div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold">{t('title')}</h1>
         <div className="flex flex-wrap gap-1" data-testid="freshness-strip">
-          {fresh.map((f) => (
-            <Tag key={f.dataset} tone="neutral">{t('freshness', { dataset: f.dataset, status: tf(freshnessKey(f.status)), at: fmtAt(f.lastOkAt) ?? t('never') })}</Tag>
-          ))}
+          {fresh === 'unavailable' && <Tag tone="accent">{t('freshnessUnavailable')}</Tag>}
+          {Array.isArray(fresh) && fresh.map((f) => {
+            const k = freshnessKey(f.status);
+            return (
+              <Tag key={f.dataset} tone={k === 'fresh' || k === 'unknown' ? 'neutral' : 'accent'}>
+                {t('freshness', { dataset: f.dataset, status: tf(k), at: fmtAt(f.lastOkAt) ?? t('never') })}
+              </Tag>
+            );
+          })}
         </div>
       </div>
 
       <Card className="mb-3">
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-[11px] text-text-dim">
+          <label className="flex min-w-[200px] flex-1 flex-col gap-1 text-[11px] text-[var(--text-dim)]">
             {t('searchLabel')}
             <input value={q} maxLength={24} onChange={(e) => setQ(e.target.value)} placeholder={t('searchPlaceholder')}
-              className="rounded-md bg-bg-card px-2 py-1.5 text-sm text-text" data-testid="directory-search" />
+              aria-invalid={qState === 'invalid' || undefined} className={FIELD} data-testid="directory-search" />
           </label>
-          <div className="flex flex-col gap-1 text-[11px] text-text-dim">
+          <div className="flex flex-col gap-1 text-[11px] text-[var(--text-dim)]">
             {t('market')}
-            <div className="flex gap-1 rounded-md border border-border p-1 text-xs">
-              {(['all', 'CN', 'US'] as MarketFilter[]).map((m) => (
-                <button key={m} type="button" onClick={() => { setMarket(m); setPage(1); }}
-                  className={`rounded px-2 py-0.5 ${market === m ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] font-semibold text-accent' : 'text-text-dim'}`}>
-                  {m === 'all' ? t('marketAll') : m === 'CN' ? t('marketCN') : t('marketUS')}
-                </button>
-              ))}
-            </div>
+            <Seg label={t('market')} value={market} onChange={(m) => { setMarket(m); setPage(1); }}
+              options={[{ value: 'all', label: t('marketAll') }, { value: 'CN', label: t('marketCN') }, { value: 'US', label: t('marketUS') }]} />
           </div>
-          <label className="flex flex-col gap-1 text-[11px] text-text-dim">
+          <label className="flex flex-col gap-1 text-[11px] text-[var(--text-dim)]">
             {t('sort')}
-            <select value={sort} onChange={(e) => { setSort(e.target.value as DirectorySort); setPage(1); }} className="rounded-md bg-bg-card px-2 py-1.5 text-sm text-text">
+            <select value={sort} onChange={(e) => { setSort(e.target.value as DirectorySort); setPage(1); }} className={FIELD}>
               {SORTS.map((s) => <option key={s} value={s}>{t(`sort_${s}`)}</option>)}
             </select>
           </label>
         </div>
-        <p className="mt-2 text-[11px] text-text-dim">{t('industryHint')}</p>
+        {qState === 'invalid' && <p role="alert" className="mt-2 text-[12px]" data-testid="directory-q-hint">{t('invalidQ')}</p>}
+        <p className="mt-2 text-[11px] text-[var(--text-dim)]">{t('industryHint')}</p>
       </Card>
 
-      {error && <Card className="mb-3 text-[13px]">{t('error', { code: error })} <Button variant="ghost" size="sm" onClick={() => setReload((n) => n + 1)}>{t('retry')}</Button></Card>}
+      {qState !== 'invalid' && view.status === 'error' && (
+        <div className="mb-3"><ErrorCard message={t('error', { code: view.code })} onRetry={() => { setErr(null); setReload((n) => n + 1); }} /></div>
+      )}
+
+      {qState !== 'invalid' && view.status === 'loading' && (
+        <Card className="text-[13px] text-[var(--text-dim)]" role="status" aria-busy="true" data-testid="directory-loading">{t('loading')}</Card>
+      )}
 
       {data && data.rows.length === 0 && (
-        <Card className="text-[13px] text-text-dim" data-testid="directory-empty">
+        <Card className="text-[13px] text-[var(--text-dim)]" data-testid="directory-empty">
           {filtered ? t('noMatch') : t('empty')}
-          {!filtered && isAdmin && <> <Link href="/admin/dq" className="text-accent">{t('adminDq')}</Link></>}
+          {!filtered && isAdmin && <> <Link href="/admin/dq" className="text-[var(--accent)]">{t('adminDq')}</Link></>}
         </Card>
       )}
 
       {data && data.rows.length > 0 && (
         <Card className="overflow-x-auto p-0">
           <table className="w-full min-w-[860px] text-[13px]" data-testid="directory-table">
-            <thead className="text-left text-[11px] text-text-dim">
-              <tr className="border-b border-border">
-                <th className="sticky left-0 bg-bg-card px-3 py-2">{t('col.name')}</th>
-                <th className="px-3 py-2">{t('col.ticker')}</th>
-                <th className="px-3 py-2">{t('col.stream')}</th>
-                <th className="px-3 py-2">{t('col.latestPeriod')}</th>
-                <th className="px-3 py-2">{t('col.latestFiling')}</th>
-                <th className="px-3 py-2">{t('col.concepts')}</th>
-                <th className="px-3 py-2">{t('col.citations')}</th>
-                <th className="px-3 py-2">{t('col.lastSync')}</th>
+            <thead className="text-left text-[11px] text-[var(--text-dim)]">
+              <tr className="border-b border-[var(--border)]">
+                <th scope="col" className={`sticky left-0 bg-[var(--bg-card)] ${th}`}>{t('col.name')}</th>
+                <th scope="col" className={th}>{t('col.ticker')}</th>
+                <th scope="col" className={th}>{t('col.stream')}</th>
+                <th scope="col" className={th}>{t('col.latestPeriod')}</th>
+                <th scope="col" className={th}>{t('col.latestFiling')}</th>
+                <th scope="col" className={th}>{t('col.concepts')}</th>
+                <th scope="col" className={th}>{t('col.citations')}</th>
+                <th scope="col" className={th}>{t('col.lastSync')}</th>
               </tr>
             </thead>
             <tbody>
               {data.rows.map((r) => {
-                const name = r.names.zh ?? r.names.en ?? r.primaryTicker ?? r.issuerId;
+                const name = displayName(r, locale, sort);
+                const extra = r.tickers.slice(1);
                 return (
-                  <tr key={`${r.issuerId}:${r.market}`} className="border-b border-border last:border-b-0" data-testid="directory-row">
-                    <td className="sticky left-0 bg-bg-card px-3 py-2 font-semibold">
-                      {r.primaryTicker ? <Link href={`/stock/${encodeURIComponent(r.primaryTicker)}` as never} className="hover:text-accent">{name}</Link> : name}
-                    </td>
+                  <tr key={`${r.issuerId}:${r.market}`} className="border-b border-[var(--border)] last:border-b-0" data-testid="directory-row">
+                    <th scope="row" className="sticky left-0 bg-[var(--bg-card)] px-3 py-2 text-left font-semibold">
+                      {r.primaryTicker ? <Link href={`/stock/${encodeURIComponent(r.primaryTicker)}` as never} className="hover:text-[var(--accent)]">{name}</Link> : name}
+                    </th>
                     <td className="px-3 py-2 font-mono">
                       {r.primaryTicker ?? '—'}
-                      {r.tickers.length > 1 && <span className="ml-1 text-text-dim">+{r.tickers.length - 1}</span>}
+                      {extra.length > 0 && <span className="ml-1 text-[var(--text-dim)]" title={t('moreTickers', { list: extra.join(', ') })}>+{extra.length}</span>}
                     </td>
                     <td className="px-3 py-2">{r.market}</td>
                     <td className="px-3 py-2 font-mono">{r.latestPeriodEnd ?? '—'}</td>
                     <td className="px-3 py-2 font-mono">{r.latestAvailableDate ?? '—'}</td>
                     <td className="px-3 py-2 font-mono">{t('conceptsOf', { covered: r.conceptsCovered, total: data.conceptsTotal })}</td>
-                    <td className="px-3 py-2 text-text-muted">{t('citations', { linked: r.citationSummary.linked, pending: r.citationSummary.pending, edgar: r.citationSummary.edgar })}</td>
-                    <td className="px-3 py-2 font-mono text-text-muted">
+                    <td className="px-3 py-2 text-[var(--text-muted)]">{citationParts(r.market, r.citationSummary).map((c) => `${c.key} ${c.n}`).join(' · ')}</td>
+                    <td className="px-3 py-2 font-mono text-[var(--text-muted)]">
                       {r.scopeLastSuccessAt || r.scopeLastStatus
                         ? t('lastSync', { at: fmtAt(r.scopeLastSuccessAt) ?? t('never'), status: r.scopeLastStatus ? t(`status_${r.scopeLastStatus}`) : t('never') })
                         : t('never')}
@@ -144,7 +180,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       {data && data.total > 0 && (
-        <div className="mt-2 flex items-center justify-between text-[11px] text-text-dim">
+        <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-dim)]">
           <span>{t('footer', { total: data.total, pageSize: PAGE_SIZE })}</span>
           <div className="flex gap-1">
             <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('prev')}</Button>
@@ -152,7 +188,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
           </div>
         </div>
       )}
-      <p className="mt-2 text-[11px] text-text-dim">{t('syncNote')}</p>
+      <p className="mt-2 text-[11px] text-[var(--text-dim)]">{t('syncNote')}</p>
     </>
   );
 }

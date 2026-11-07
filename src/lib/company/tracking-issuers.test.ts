@@ -34,3 +34,26 @@ describe('tracking issuer cards',()=>{
   expect(cards[2]).toMatchObject({muted:true,note:'n',unread:null,unreadLabel:null});
  });
 });
+
+describe('loadIssuerLites pagination',()=>{
+ it('reads securities to exhaustion under a stable order (>1000 historical rows, current ones beyond page one)',async()=>{
+  const {loadIssuerLites}=await import('./tracking-issuers');
+  const ISS='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const secs=[...Array.from({length:1500},(_,i)=>({issuer_id:ISS,ticker:`OLD${String(i).padStart(4,'0')}`,is_primary:false,valid_from:'1990-01-01',valid_to:'2000-01-01'})),{issuer_id:ISS,ticker:'ZZZ',is_primary:true,valid_from:'2001-01-01',valid_to:null}];
+  const orders:string[][]=[],ranges:string[]=[];
+  const sb={from:(table:string)=>({select:()=>({in:()=>{
+   const ord:string[]=[];
+   const page={order:(c:string)=>{ord.push(c);return page;},range:async(a:number,b:number)=>{
+    if(table==='issuer_securities'){orders.push([...ord]);ranges.push(`${a}-${b}`);}
+    const rows=table==='issuers'?[{issuer_id:ISS,canonical_name_zh:null,canonical_name_en:'X'}]:secs;
+    return {data:table==='issuers'&&a>0?[]:rows.slice(a,Math.min(b+1,a+1000)),error:null};
+   }};
+   return page;
+  }})})};
+  const r=await loadIssuerLites(sb as never,[ISS]);
+  expect(r.securities).toHaveLength(1501);
+  expect(r.securities.some(s=>s.ticker==='ZZZ')).toBe(true);
+  expect(ranges).toEqual(['0-999','1000-1999','1501-2500']);
+  expect(orders[0]).toEqual(['issuer_id','ticker','valid_from']);
+ });
+});

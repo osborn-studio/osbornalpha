@@ -28,7 +28,8 @@ describe('GET /api/companies',()=>{
   expect(res.status).toBe(200);
   const body=await res.json();
   expect(m.listCoverage).toHaveBeenCalledWith({market:undefined,issuerIds:undefined},'latest_available_date',{offset:0,limit:100});
-  expect(body).toMatchObject({total:1,page:1,pageSize:100,conceptsTotal:FACT_CONCEPTS.length});
+  expect(body).toMatchObject({total:1,conceptsTotal:FACT_CONCEPTS.length});
+  expect(Object.keys(body).sort()).toEqual(['conceptsTotal','rows','total']);
   expect(body.rows[0]).toMatchObject({issuerId:A,market:'US',primaryTicker:'AAPL',names:{en:'Apple Inc.'}});
   expect(Object.keys(body.rows[0]).sort()).toEqual(['citationSummary','conceptsCovered','issuerId','latestAvailableDate','latestPeriodEnd','market','names','primaryTicker','scopeLastStatus','scopeLastSuccessAt','tickers']);
   expect(res.headers.get('cache-control')).toMatch(/^public, s-maxage=\d+, stale-while-revalidate=600$/);

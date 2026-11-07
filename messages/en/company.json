@@ -378,7 +378,7 @@
     "sort": "Sort",
     "sort_latest_available_date": "Latest filing",
     "sort_latest_period_end": "Latest period",
-    "sort_name": "Name",
+    "sort_name": "Name (English, else Chinese)",
     "industryHint": "Industry filter appears once constituents load · no ratings, judgment counts or per-user fields",
     "col": {
       "name": "Name",
@@ -410,6 +410,10 @@
       "title": "Company coverage",
       "desc": "Every company the facts store covers, with data status (no ratings)",
       "open": "Open directory →"
-    }
+    },
+    "loading": "Loading…",
+    "invalidQ": "Letters, digits, spaces, \".\" and \"-\" only (max 24 characters); no request was made.",
+    "freshnessUnavailable": "Freshness unavailable",
+    "moreTickers": "Other tickers: {list}"
   }
 }
