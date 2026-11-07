@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "000858.SZ",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "3d2558728814b51c8fd801c754005b6cea3bffa432a8d4e1386d855e14639467",
+ "request_id": "e9e9de36-e903-48da-9644-c8cba3ea1964",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "000858.SZ",
+    "000858",
+    "五粮液",
+    "四川",
+    "白酒",
+    "宜宾五粮液股份有限公司",
+    "Wuliangye Yibin Co.,Ltd",
+    "WLY",
+    "主板",
+    "SZSE",
+    "CNY",
+    "L",
+    "19980427",
+    null,
+    "S",
+    "宜宾市政府国有资产监督管理委员会",
+    "地方国企"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

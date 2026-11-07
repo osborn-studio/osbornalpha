@@ -7,9 +7,9 @@
 // by the db.ts normalisers). Errors are mapped with toFactsDbError exactly like PostgREST errors.
 import type {Pool} from 'pg';
 import {ident,typeParsers} from '../db/pg-table-client';
-import {assertAllStaged,chunk,conflictFromItem,conflictPrefix,factRowFromTable,filingArgs,filingFromTable,linkPatch,metricArgs,metricFromTable,readArgs,resultFromEnvelope,scopeFromTable,toFactsDbError} from './db';
-import type {PgErrorLike,ReadFactsEnvelope} from './db';
-import type {FactsDb} from './types';
+import {adoptFromJson,applyOutcomeFromJson,assertAllStaged,calendarFilingFromRow,chunk,conflictFromItem,conflictPrefix,countsFromJson,factRowFromTable,fenceArgs,fenceFromJson,filingArgs,filingFactFromJson,filingFromTable,lineageResultFromEnvelope,lineageRevsFrom,linkPatch,metricArgs,metricFromTable,openCycleFromJson,readArgs,readLineageArgs,restoreFromJson,resultFromEnvelope,scopeFromTable,toFactsDbError} from './db';
+import type {PgErrorLike,ReadFactsEnvelope,ReadFactsLineageEnvelope} from './db';
+import type {FactsDb,Market,ReadFactsOptions} from './types';
 
 export function pgFactsDb(pool:Pool):FactsDb{
  const run=async(text:string,values:unknown[])=>{
@@ -18,6 +18,10 @@ export function pgFactsDb(pool:Pool):FactsDb{
  };
  const fn=async<T>(call:string,values:unknown[]):Promise<T>=>(await run(`select ${call} as v`,values)).rows[0].v as T;
  const rel=(table:string)=>`${ident('public')}.${ident(table)}`;
+ const readLineage=(issuers:string[],market:Market,o:ReadFactsOptions)=>{
+  const a=readLineageArgs(issuers,market,o);
+  return fn<ReadFactsLineageEnvelope>('public.read_facts_lineage($1::uuid[],$2,$3::text[],$4::date,$5::date,$6::date,$7,$8,$9)',[a.p_issuers,a.p_market,a.p_concepts,a.p_as_of,a.p_from,a.p_to,a.p_history,a.p_limit,a.p_include_non_ok]);
+ };
  return {
   claimLease:(issuer,market,batch,ttl)=>fn<boolean>('public.claim_fact_sync_lease($1,$2,$3,$4)',[issuer,market,batch,ttl]),
   beginRun:(issuer,market,batch,gen)=>fn<string>('public.begin_sync_run($1,$2,$3,$4)',[issuer,market,batch,gen]),
@@ -72,5 +76,26 @@ export function pgFactsDb(pool:Pool):FactsDb{
   async metricsOfIssuer(issuer,market,formulaVersion){
    return (await run(`select * from ${rel('financial_metrics')} where issuer_id = $1 and market = $2 and formula_version = $3 order by metric, period_end, period_start, input_unit, basis`,[issuer,market,formulaVersion])).rows.map(metricFromTable);
   },
+  async targetOf(issuer){return ((await run(`select merged_into from ${rel('issuers')} where issuer_id = $1`,[issuer])).rows[0]?.merged_into as string|null|undefined)??issuer;},
+  async lineageOf(target){return [target,...(await run(`select issuer_id from ${rel('issuers')} where merged_into = $1 order by issuer_id`,[target])).rows.map(r=>String(r.issuer_id))];},
+  async stateRevs(issuers,market){if(issuers.length===0)return [];return lineageRevsFrom((await readLineage(issuers,market,{concepts:[],asOf:'1900-01-01'})).state_revs);},
+  async readFactsLineage(issuers,market,opts){return lineageResultFromEnvelope(await readLineage(issuers,market,opts));},
+  async readFilingFacts(filingId,includeNonOk){return ((await fn<{rows?:Record<string,unknown>[]}>('public.read_filing_facts($1,$2)',[filingId,includeNonOk])).rows??[]).map(filingFactFromJson);},
+  async replaceMetricsLineage(issuer,market,basedOn,input){return Number(await fn<number>('public.replace_financial_metrics_lineage($1,$2,$3::jsonb,$4::jsonb)',[issuer,market,JSON.stringify(basedOn),JSON.stringify(input.map(metricArgs))]));},
+  async findFilingBySourceRef(source,sourceRef){const r=(await run(`select * from ${rel('filings')} where source = $1 and source_ref = $2`,[source,sourceRef])).rows[0];return r?filingFromTable(r):null;},
+  async filingsForCalendar(issuer,market,opts){
+   return (await run(`select g.*, r.status as run_status from ${rel('filings')} g join ${rel('fact_sync_runs')} r on r.run_id = g.run_id where g.issuer_id = $1 and g.market = $2 and g.period_end >= $3::date order by g.period_end, g.available_date, g.filing_id`,[issuer,market,opts.fromPeriodEnd])).rows.map(r=>calendarFilingFromRow(r));
+  },
+  async setFilingAcceptance(filingId,acceptedAt,source){return (await fn<boolean>('public.set_filing_acceptance($1,$2::timestamptz,$3)',[filingId,acceptedAt,source]))===true;},
+  async adoptCandidate(item,index,batch,expectedRev,by){return adoptFromJson(await fn<unknown>('public.adopt_candidate($1,$2,$3,$4::bigint,$5)',[item,index,batch,expectedRev,by]));},
+  async restoreReconciled(item,batch,hash,by){return restoreFromJson(await fn<unknown>('public.restore_reconciled($1,$2,$3,$4)',[item,batch,hash,by]));},
+  async resolveLineageConflict(item,keep,batch,by){return {quarantined:Number((await fn<{quarantined:unknown}>('public.resolve_lineage_conflict($1,$2,$3,$4)',[item,keep,batch,by])).quarantined)};},
+  async claimReconcileMember(pair,cycleId,issuer,market,batch){return fenceFromJson(await fn<unknown>('public.claim_reconcile_member($1,$2,$3,$4,$5)',[pair,cycleId,issuer,market,batch]));},
+  async applyReconcileResult(fence,result){return applyOutcomeFromJson(await fn<unknown>('public.apply_reconcile_result($1::jsonb,$2::jsonb)',[JSON.stringify(fenceArgs(fence)),JSON.stringify(result)]));},
+  async completeReconcileMember(fence){return countsFromJson(await fn<unknown>('public.complete_reconcile_member($1::jsonb)',[JSON.stringify(fenceArgs(fence))]));},
+  async failReconcileMember(fence,error){await fn('public.fail_reconcile_member($1::jsonb,$2)',[JSON.stringify(fenceArgs(fence)),error]);},
+  async openReconcileCycle(i){return openCycleFromJson(await fn<unknown>('public.open_reconcile_cycle($1,$2,$3::timestamptz,$4::jsonb,$5::jsonb)',[i.pair,i.cycleId,i.startedAt,JSON.stringify(i.members),JSON.stringify(i.pending)]));},
+  async setMerge(source,target,by){return {repointed:Number((await fn<{repointed:unknown}>('public.set_merge($1,$2,$3)',[source,target,by])).repointed)};},
+  async setDissolved(issuer,by){await fn('public.set_dissolved($1,$2)',[issuer,by]);},
  };
 }

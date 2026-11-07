@@ -37,7 +37,7 @@ describe('parseSecCompanyTickersExchange',()=>{
   const json=JSON.stringify({fields:['cik','name','ticker','exchange'],data:[[320193,'Apple Inc.','AAPL','Nasdaq'],['789019','MICROSOFT CORP','MSFT','Nasdaq'],['abc','Bad','BAD','NYSE'],[1,'No ticker','','NYSE']]});
   const out=parseSecCompanyTickersExchange(json);
   expect(out.rows).toEqual([{cik:'320193',name:'Apple Inc.',ticker:'AAPL',exchange:'Nasdaq'},{cik:'789019',name:'MICROSOFT CORP',ticker:'MSFT',exchange:'Nasdaq'}]);
-  expect(out.rejected).toEqual([{index:2,reason:'invalid_cik'},{index:3,reason:'missing_ticker'}]);
+  expect(out.rejected).toEqual([{index:2,reason:'invalid_cik',ticker:'BAD'},{index:3,reason:'missing_ticker',cik:'1'}]);
  });
  it('rejects a payload without the four expected fields',()=>{
   expect(()=>parseSecCompanyTickersExchange(JSON.stringify({fields:['cik'],data:[]}))).toThrow('invalid_sec_exchange_file');

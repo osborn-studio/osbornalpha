@@ -18,6 +18,10 @@ import {pgFactsDb} from './pg-facts-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
+// Plan 3 (20261107091000) redefines fact_promote_rows, filings_limited_update, read_facts and
+// replace_financial_metrics: replaying the plan-2 file alone would expose the plan-2 versions to
+// suites running in parallel, so both files replay in one transaction.
+const EXTENSIONS='supabase/migrations/20261107091000_facts_extensions.sql';
 const TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
 
 // Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
@@ -27,7 +31,7 @@ async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
   const c=await pool.connect();
   try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
+   await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);
    return;
   }catch(e){
    await c.query('rollback').catch(()=>{});
@@ -141,7 +145,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.fact_promote_rows(uuid,text,uuid[])')).toBe(false);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
+  await expect(replayMigration(admin,`${readFileSync(MIGRATION,'utf8')}\n${readFileSync(EXTENSIONS,'utf8')}`)).resolves.toBeUndefined();
  },60000);
 
  it('enforces the candidate key (nulls not distinct), both composite foreign keys, the period checks, and keeps 20-digit values exact',async()=>{
@@ -513,6 +517,8 @@ async function pgHarness():Promise<PgHarness>{
   issuer:async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Facts Contract')`,[id]);return id;},
   batch:async()=>{const id=randomUUID();await pool.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'facts-sync','facts.us')`,[id]);return id;},
   expireLease:async(issuer,market)=>{await pool.query(`update public.fact_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1 and market=$2`,[issuer,market]);},
+  user:async()=>{const id=randomUUID();await pool.query(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@contract.test`]);return id;},
+  expireReconcileClaim:async(pair,cycleId,issuer,market)=>{await pool.query(`update public.dq_reconcile_cursor set claim_until=clock_timestamp()-interval '1 second' where pair=$1 and cycle_id=$2 and issuer_id=$3 and market=$4`,[pair,cycleId,issuer,market]);},
   close:async()=>{await pool.end();},
  };
 }

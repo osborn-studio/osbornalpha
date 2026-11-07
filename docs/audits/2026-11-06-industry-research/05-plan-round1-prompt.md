@@ -1,0 +1,9 @@
+Read-only audit of an implementation plan in this repository.
+Plan: docs/superpowers/plans/2026-11-06-industry-research.md (20 tasks; the skeleton above "### Task 1" holds conventions, file map, the shared contract src/lib/industry/types.ts, a cross-task interface reference and a list of known spec deviations). Spec: docs/superpowers/specs/2026-11-04-industry-research-design.md (7th draft). Evidence: docs/audits/2026-11-06-industry-research/{01-codex-spec-round5.md,03-tushare-verification.md,04-plan-integration-notes.md}.
+The plan will be executed by implementer agents that read only the skeleton plus one task. Find defects that would make execution fail or produce wrong results:
+1. Code that will not compile/run against the LANDED repo (check imports, signatures, column/constraint names, SQLSTATEs, Supabase/PostgREST/Next.js 15 APIs, vitest conventions) or against what earlier tasks create.
+2. SQL: correctness on PostgreSQL 17 (constraint ordering, deferrable FK, exclusion, triggers, SECURITY DEFINER + search_path, grants/revokes incl. service_role, RLS policies with real roles, locking/races, replay idempotency of migrations, hosted non-superuser constraints).
+3. Spec violations that publish wrong/unreplayable numbers, leak unlicensed data (licence gate), backdate availability, fill missing values, or break point-in-time membership (K3 window rules).
+4. Tests that cannot fail, assert the wrong thing, or are flaky on a shared test DB.
+5. Cross-task inconsistencies (names, shapes, dataset strings), missing files, task-order violations, coordination breaches (files outside the module's ownership without INDUSTRY blocks; migration timestamps other than 20261111HHMMSS).
+Do not re-litigate spec design. Output a table P1/P2/P3 with plan line refs (Task N, step), evidence (file:line), concrete fix; then a verdict: "ready for execution" or "not ready".

@@ -1,0 +1,16 @@
+{
+ "files": [
+  {
+   "path": "src/lib/facts/fixtures/gold/plan2.json",
+   "sha256": "ab66497efb2e8b9c06bc6e17f5af92850b2a1587dd29db281730e4c063ae5903",
+   "version": 1,
+   "format": "legacy_plan2"
+  },
+  {
+   "path": "src/lib/evals/fixtures/gold/facts/synthetic-us.json",
+   "sha256": "8f8e9abb10e60b0b6a3157af8792806c9efe8b8a7550332a0527a8a702cdba85",
+   "version": 1,
+   "format": "f6"
+  }
+ ]
+}

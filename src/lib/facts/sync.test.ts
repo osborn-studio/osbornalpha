@@ -79,11 +79,44 @@ describe('runFactsSync — lifecycle',()=>{
   expect((await current(db,'2024-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000000',disclosure_seq:1});
   expect((await current(db,'2025-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000001',disclosure_seq:2,is_revision:true});
  });
- it('runs idle when nothing is due: success batch, freshness ok with idle=true',async()=>{
+ it('runs idle when nothing is due and nothing is failing: success batch, ok heartbeat with idle=true',async()=>{
   const {tables,deps}=harness(FY23,{},[]);
   const r=await run(deps);
   expect(r).toMatchObject({idle:true,status:'success',issuers:[]});
+  expect(r.detail).toMatchObject({idle:true,attempted:0});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',detail:{idle:true,attempted:0}});
+ });
+ describe('idle runs and freshness (healthy quiet weeks stay fresh, a failing active issuer is never masked)',()=>{
+  let clock=NOW;
+  const at=(deps:SyncDeps,ms:number):SyncDeps=>{clock=new Date(NOW.getTime()+ms);return {...deps,now:()=>clock};};
+  it('idle + every active row healthy: an ok attempt is recorded',async()=>{
+   const {tables,deps}=harness();
+   await run(deps);
+   const first=tables.rows('dq_freshness')[0].last_ok_at;
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',consecutive_errors:0,detail:{idle:true}});
+   expect(tables.rows('dq_freshness')[0].last_ok_at).not.toBe(first);
+  });
+  it('idle + one active row whose last status is failed: dq_freshness is left untouched',async()=>{
+   const {tables,deps}=harness(FY23,{fetchUs:async()=>{throw new SyncError('sec_unavailable');}});
+   await run(deps);
+   const before=JSON.parse(JSON.stringify(tables.rows('dq_freshness')[0]));
+   expect(before).toMatchObject({consecutive_errors:1});
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')).toEqual([before]);
+  });
+  it('a retired (priority 0) failed row is ignored: the idle run records ok',async()=>{
+   const scopes=[{issuer_id:ISSUER,fetch_key:'0000320193'}];
+   const {tables,deps}=harness(FY23,{fetchUs:async()=>{throw new SyncError('sec_unavailable');}},scopes);
+   await run(deps);
+   scopes.splice(0);   // the mocked reconcile now leaves the scope alone ...
+   await deps.db.reconcileScope('US',[{issuer_id:ISSUER,reasons:['sp500'],priority:0,fetch_key:'0000320193'}]);   // ... so retire the row directly
+   const r=await run(at(deps,3_600_000));
+   expect(r.idle).toBe(true);
+   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',consecutive_errors:0});
+  });
  });
  it('publishes an empty run and reports no_rows when the source has nothing',async()=>{
   const {db,deps}=harness(parsed([],[]));
@@ -228,6 +261,15 @@ describe('runFactsSync — failures',()=>{
   expect(r.errors).toEqual([{code:'quota_exhausted',key:ISSUER},{code:'skipped_summary',key:ISSUER2,message:'{"quota_exhausted":1}'}]);
   expect(r.status).toBe('failed');
  });
+ it('keeps the allowlisted multi_page_unverified reason (api and report_type) in the persisted error; other provider messages stay code-only',async()=>{
+  const {deps}=harness(parsed([],[]),{fetchCn:async()=>{throw new SyncError('tushare_unavailable','multi_page_unverified:income:rt1');}},CN_SCOPE);
+  const r=await run(deps,{market:'CN'});
+  expect(r.issuers[0]).toMatchObject({outcome:'failed',code:'tushare_unavailable'});
+  expect(r.errors).toContainEqual({code:'tushare_unavailable',key:ISSUER,message:'multi_page_unverified:income:rt1'});
+  const {deps:d2}=harness(parsed([],[]),{fetchCn:async()=>{throw new SyncError('tushare_unavailable','api_code_2002 SECRET');}},CN_SCOPE);
+  const r2=await run(d2,{market:'CN'});
+  expect(r2.errors).toContainEqual({code:'tushare_unavailable',key:ISSUER});
+ });
  it('does not start an issuer with less than 90 s left and reports deadline_hit as information',async()=>{
   const {tables,deps}=harness(FY23,{deadline:new Date(NOW.getTime()+60_000)});
   const r=await run(deps);
@@ -306,6 +348,19 @@ describe('runFactsSync — round-1 audit cases',()=>{
   expect((await current(db)).rows).toHaveLength(2);
   const both=await run(deps,{dryRun:true,issuerIds:[ISSUER,ISSUER2],limit:1});            // limit never drops a requested issuer (round-2 #13)
   expect(both.issuers.map(i=>i.issuerId)).toEqual([ISSUER,ISSUER2]);
+ });
+ it('a set_merge placeholder scope row (fetch_key topology) is treated as missing: explicit run derives and persists the real key; dry-run plans on it; underivable → scope_unresolved',async()=>{
+  const fetchUs=vi.fn(async(_k:string)=>snap('{"facts":{}}'));
+  const {db,deps}=harness(FY23,{fetchUs},[{issuer_id:ISSUER,fetch_key:'0000320193'}]);
+  await db.reconcileScope('US',[{issuer_id:ISSUER,reasons:[],priority:0,fetch_key:'topology'},{issuer_id:ISSUER2,reasons:[],priority:0,fetch_key:'topology'}]);
+  await run(deps,{dryRun:true,issuerIds:[ISSUER]});
+  expect(fetchUs.mock.calls[0][0]).toBe('0000320193');
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'topology'});   // dry run wrote nothing
+  fetchUs.mockClear();
+  const r=await run(deps,{issuerIds:[ISSUER,ISSUER2]});
+  expect(r.issuers.map(i=>[i.issuerId,i.outcome,i.code??null])).toEqual([[ISSUER,'published',null],[ISSUER2,'failed','scope_unresolved']]);
+  expect(fetchUs.mock.calls.map(c=>c[0])).toEqual(['0000320193']);
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'0000320193',last_status:'success'});
  });
  it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a request cut by the budget counts too; a budget too low BEFORE the request counts nothing (#21)',async()=>{
   const linkCn=vi.fn(async()=>{throw new Error('cninfo 500');});
@@ -572,5 +627,48 @@ describe('runFactsSync — grouped parser evidence',()=>{
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0]).toMatchObject({document_ref:null,link_attempts:0});
   for(let i=0;i<7;i++)await run(deps,{market:'CN',issuerIds:[ISSUER]});
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);          // never reaches MAX_LINK_ATTEMPTS
+ });
+});
+describe('runFactsSync — step 9b acceptance (plan 3 §4.5)',()=>{
+ const outcome=(errors:{code:string;key?:string;message?:string}[])=>({issuerId:ISSUER,counts:{fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0},errors,mismatches:[],snapshotSha256:null});
+ it('runs after materialize for a published US issuer with the scope fetch key (10-digit CIK); its errors join the issuer receipt',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([{code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'}]));
+  const {deps}=harness(FY23,{enrichAcceptance});
+  const r=await run(deps);
+  expect(enrichAcceptance).toHaveBeenCalledWith(ISSUER,'0000320193',expect.anything());
+  expect(mocks.materialize.mock.invocationCallOrder[0]).toBeLessThan(enrichAcceptance.mock.invocationCallOrder[0]);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'});
+  expect(r.status).toBe('success');
+ });
+ it('a failing acceptance step never fails the published issuer: acceptance_failed is recorded and the batch is partial',async()=>{
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>{throw new Error('sec down');}});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'sec down'});
+  expect(r.status).toBe('partial');
+ });
+ it('counts.failed>0 from the enrichment yields a non-informational error: batch partial, issuer published, counters kept',async()=>{
+  const failedOutcome={...outcome([]),counts:{fetched:2,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:2}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>failedOutcome});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].acceptance).toMatchObject({fetched:2,failed:2});
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'{"failed":2}'});
+  expect(r.status).toBe('partial');
+ });
+ it('per-filing non-info errors already explain failed: no extra aggregate acceptance_failed',async()=>{
+  const o={...outcome([{code:'acceptance_conflict',key:'acc-1'}]),counts:{fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:1}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>o});
+  const r=await run(deps);
+  expect(r.issuers[0].errors.filter(e=>e.code==='acceptance_failed')).toEqual([]);
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_conflict',key:'acc-1'});
+  expect(r.status).toBe('partial');
+ });
+ it('is not called for CN',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([]));
+  const {deps}=harness(parsed([cnFiling()],[cnRevenue()]),{enrichAcceptance},CN_SCOPE);
+  await run(deps,{market:'CN'});
+  expect(enrichAcceptance).not.toHaveBeenCalled();
  });
 });

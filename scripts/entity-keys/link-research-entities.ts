@@ -22,12 +22,13 @@ import type {TableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError,BatchStatus} from '../../src/lib/dq/batches';
 import {recordAttempt} from '../../src/lib/dq/freshness';
-import {RESEARCH_LINK_DATASET,applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
+import {applyResearchLink,planResearchLink} from '../../src/lib/entities/link-research';
+import {DATASETS,inventoryEntry} from '../../src/lib/dq/datasets';
 import type {EntityKeyRow,EntitySecurityRow} from '../../src/lib/entities/link-research';
 import {errorMessage,loaderOutcome} from '../../src/lib/entities/load-sec';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
-const DATASET=RESEARCH_LINK_DATASET;
+const DATASET=DATASETS.entities.researchLink;
 const USAGE='usage: link-research-entities.ts [--user <uuid>] [--apply]   (user defaults to RESEARCH_OWNER_USER_ID)';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -83,7 +84,7 @@ async function apply(client:TableClient,user_id:string):Promise<0|1>{
   catch(e){console.error(`finishBatch failed: ${errorMessage(e)}`);status='failed';}
  }
  const outcome=loaderOutcome(status,counts,rejected);
- await recordAttempt(client,DATASET,{ok:outcome.ok,cadence:'event'});
+ await recordAttempt(client,DATASET,{ok:outcome.ok,cadence:inventoryEntry(DATASET).cadence});
  console.log(JSON.stringify({batchId,user:user_id,status,counts,skipped,rejected,errors:errors.slice(0,20)},null,1));
  return outcome.exitCode;
 }

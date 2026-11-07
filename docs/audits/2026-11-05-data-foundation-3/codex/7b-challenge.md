@@ -1,0 +1,5 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P3 | `src/app/api/admin/dq/claims/[id]/route.ts:66` | Amendment validation does not check the stored claim’s `op`. A valid amendment submitted against an executable claim passes validation, but the landed resolver only permits amending `evidence_only` claims (`20261107090000_identifiers_and_dq.sql:461`). It consequently returns `invalid_claim`, exposed as a generic 500 instead of the specified body-validation 400. The mocked route tests miss this incompatibility. | Reject amendments to non-`evidence_only` claims before RPC; restrict amendment operations to `attach_security`, `close_security`, and `backdate_window`. Add a regression asserting 400 and no RPC call for an amendment to an executable claim. |
+
+Verdict: fix required

@@ -1,0 +1,7 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| R1 | P1 | supabase/migrations/20261114090000_macro_workbench.sql:521 | Batch status is read **before** acquiring the run lock. A write waiting behind finalization retains `running`, then inserts into the completed batch—public rows absent from finalized counts. | Acquire run lock first, then read/lock the batch row and validate status. Add a concurrent finalize/write regression test. |
+| R2 | P2 | supabase/migrations/20261114090000_macro_workbench.sql:715 | Publication now requires `finishToken`, but Task 11’s `PublishOptions`, forwarding code, and ingest call supply only owner token. Planned CN publication always throws `fenced`. | Update the binding plan/task contracts to carry `begun.finishToken` through `publishRegion` into `publishSnapshot`. |
+| R3 | P2 | supabase/migrations/20261114090000_macro_workbench.sql:1311 | New RLS excludes running/failed batches, but memory `latestObservations`, `seriesHistory`, `versionsOf`, and `observationsByIds` still return them. Tests therefore validate behavior production rejects. | Apply equivalent batch eligibility to memory public reads; test identical results across both implementations, using eligible reads with `includeBatch` for unfinished inputs. |
+
+Verdict: fix P1/P2

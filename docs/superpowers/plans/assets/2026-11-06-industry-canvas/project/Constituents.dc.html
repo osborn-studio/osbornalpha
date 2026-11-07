@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>行业成分</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1500px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav" aria-label="主导航"><a href="#">首页</a><a href="#">自选</a><a href="#">雷达</a><a class="on" href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 18px; padding-top: 24px">
+    <div class="tiny"><a href="#">研究</a> / <a href="Main.dc.html">行业研究</a> / <a href="Detail.dc.html">食品饮料</a> / 成分</div>
+    <div style="display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap">
+      <div>
+        <h1 class="h1">食品饮料 · 成分<span class="en" style="font-size: 16px">Constituents</span></h1>
+        <div class="cap" style="margin-top: 6px">申万 2021 · 一级 · <span class="m">801120.SI</span></div>
+      </div>
+      <div class="row" style="margin-left: auto; gap: 12px">
+        <div class="field" style="width: 200px"><label for="asof">截至 As of</label><input id="asof" class="inp m focus" value="2026-11-03"></div>
+        <button class="btn" style="align-self: flex-end">今天 Today</button>
+      </div>
+    </div>
+
+    <div class="row" style="gap: 12px">
+      <span class="chip"><span class="m">124</span> 在册 members</span>
+      <span class="chip warn"><span class="m">1</span> 未解析成分（只给计数）unresolved</span>
+      <button class="sel"><span class="k">二级 L2</span>全部 All ▾</button>
+      <span class="tiny" style="margin-left: auto">日期驱动 membersAt(asOf)：纳入日 ≤ 截至 &lt; 剔除日</span>
+    </div>
+
+    <section class="card" style="padding: 4px 0">
+      <table class="t">
+        <thead><tr>
+          <th style="padding-left: 16px">代码<span class="en">Ticker</span></th><th>名称<span class="en">Name</span></th><th>纳入日<span class="en">In</span></th><th>剔除日<span class="en">Out</span></th><th>二级 / 三级<span class="en">L2 / L3</span></th><th class="n">最近年度营收<span class="en">Revenue FY2025</span></th><th class="n">最近年度归母净利<span class="en">NI parent FY2025</span></th><th style="padding-right: 16px"><span class="en">Company</span></th>
+        </tr></thead>
+        <tbody>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+            <tr>
+              <td class="m" style="padding-left: 16px">{{r.t}}</td><td>{{r.n}}</td><td class="m dim">{{r.inD}}</td><td class="m fog">—</td><td class="cap">{{r.l}}</td>
+              <td class="n"><sc-if value="{{r.ok}}" hint-placeholder-val="{{true}}"><button class="src">{{r.rev}}</button></sc-if><sc-if value="{{r.wh}}" hint-placeholder-val="{{false}}"><span class="wh">— 引用待挂接</span></sc-if></td>
+              <td class="n"><sc-if value="{{r.ok}}" hint-placeholder-val="{{true}}"><button class="src">{{r.ni}}</button></sc-if><sc-if value="{{r.wh}}" hint-placeholder-val="{{false}}"><span class="wh">— 引用待挂接</span></sc-if></td>
+              <td style="padding-right: 16px"><a href="#" style="font-size: 13px">公司页 →</a></td>
+            </tr>
+          </sc-for>
+          <tr><td class="m" style="padding-left: 16px">600059.SH</td><td>古越龙山</td><td class="m dim">2014-02-21</td><td class="m">2026-09-29</td><td class="cap">白酒Ⅱ → 非白酒</td><td class="n wh" colspan="2">已剔除：只在截至日早于 2026-09-29 时出现在“在册”</td><td style="padding-right: 16px"><a href="#" style="font-size: 13px">公司页 →</a></td></tr>
+        </tbody>
+      </table>
+      <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06)">
+        <span class="tiny">单位：亿元 CNY 1e8（缩放在抽屉里写明）· 第 1 / 2 页，每页 100</span>
+        <div class="row" style="margin-left: auto"><button class="btn sm dis">上一页</button><button class="btn sm">下一页 →</button></div>
+      </div>
+    </section>
+
+    <section class="card pad" aria-label="SIC 方案示例" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="row"><h2 class="h2">SIC 方案下的成分<span class="en">Same page, scheme = SIC</span></h2><span class="chip warn">current_only 只有当前值</span></div>
+      <p class="cap" style="margin: 0">SEC 只提供当前 SIC，没有纳入/剔除历史：纳入日一列改为“观察日”，日期选择器早于首次观察日时显示空态。SIC 方案不做聚合与估值。</p>
+      <table class="t dense">
+        <thead><tr><th>代码</th><th>名称</th><th>观察日<span class="en">First observed</span></th><th>SIC</th><th class="n">最近年度营收</th></tr></thead>
+        <tbody>
+          <tr><td class="m">NVDA</td><td>NVIDIA Corp</td><td class="m dim">观察日 2026-06-02</td><td class="m">3674</td><td class="n"><button class="src">$130.5bn</button></td></tr>
+          <tr><td class="m">AMD</td><td>Advanced Micro Devices</td><td class="m dim">观察日 2026-06-02</td><td class="m">3674</td><td class="n"><button class="src">$25.8bn</button></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var d = [["600519.SH","贵州茅台","白酒Ⅱ / 白酒Ⅲ","1,741.4","862.3"],["000858.SZ","五粮液","白酒Ⅱ / 白酒Ⅲ","891.8","318.5"],["600809.SH","山西汾酒","白酒Ⅱ / 白酒Ⅲ","360.1","122.4"],["000568.SZ","泸州老窖","白酒Ⅱ / 白酒Ⅲ","311.9","134.7"],["600887.SH","伊利股份","饮料乳品 / 乳品","1,157.8","84.5"],["603288.SH","海天味业","调味发酵品Ⅱ / 调味品","269.0","63.4"],["000895.SZ","双汇发展","食品加工 / 肉制品",null,null],["002304.SZ","洋河股份","白酒Ⅱ / 白酒Ⅲ","288.8","66.9"],["600600.SH","青岛啤酒","非白酒 / 啤酒","321.4","43.5"],["000596.SZ","古井贡酒","白酒Ⅱ / 白酒Ⅲ","235.8","55.1"]];
+    var rows = d.map(function (r) {
+      return { t: r[0], n: r[1], l: r[2], inD: "2021-07-30", ok: r[3] !== null, wh: r[3] === null, rev: r[3], ni: r[4] };
+    });
+    return { rows: rows };
+  }
+}
+</script>
+</body>
+</html>

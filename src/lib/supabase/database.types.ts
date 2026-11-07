@@ -11,6 +11,16 @@
 // + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
 //   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
 // + 20261106090000_financial_facts.sql (fact_sync_runs, filings, financial_facts, financial_metrics, fact_sync_scope)
+// + 20261107090000_identifiers_and_dq.sql (issuer_securities window methods; issuer_identifier_claims claim/1 columns;
+//   dq_reconciliations pair/kind/outcome/detail/cycle columns; dq_reconcile_cycles, dq_reconcile_cursor, dq_calendar_passes,
+//   dq_calendar_pass_members, issuer_filer_categories, dq_filing_expectations, issuer_filing_profiles; dq_freshness weekly)
+// + 20261107091000_facts_extensions.sql (filings.accepted_at/acceptance_source, financial_metrics.based_on_lineage; functions only otherwise)
+// F6 begin
+// + 20261110090000_dq_eval_runs.sql (dq_eval_runs, dq_eval_case_results)
+// F6 end
+// INDUSTRY:BEGIN
+// + 20261111090000_industry_research.sql (industry_* tables, security_marks; altered industry_classifications / issuer_industry_memberships)
+// INDUSTRY:END
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -573,12 +583,20 @@ export interface DqReconciliation {
   passed: boolean;
   batch_id: string | null;
   created_at: string;
+  pair: string;
+  kind: DqReconcileKind;
+  outcome: DqReconcileOutcome;
+  detail: Record<string, unknown>;
+  cycle_id: string | null;
+  issuer_id: string | null;
+  market: FactMarket | null;
+  attempt: number | null;
 }
 
 export type DqFreshnessStatus = 'fresh' | 'stale' | 'error' | 'missing';
 export interface DqFreshness {
   dataset: string;
-  expected_cadence: 'daily' | 'monthly' | 'quarterly' | 'event';
+  expected_cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'event';
   last_ok_at: string | null;
   last_attempt_at: string | null;
   consecutive_errors: number;
@@ -619,6 +637,8 @@ export interface Filing {
   link_attempts: number;
   mapping_gen: number;
   run_id: string;
+  accepted_at: string | null;
+  acceptance_source: 'sec_submissions' | null;
   created_at: string;
 }
 export interface FinancialFact {
@@ -659,6 +679,7 @@ export interface FinancialMetric {
   formula_version: string;
   inputs: Array<{ fact_id: string; concept: string; filing_id: string; available_date: string }>;
   based_on_rev: number;
+  based_on_lineage: Array<{ issuer_id: string; state_rev: number }>;
   as_of: string;
   computed_at: string;
 }
@@ -678,6 +699,60 @@ export interface FactSyncScope {
   last_status: 'success' | 'failed' | null;
   updated_at: string;
 }
+
+// MACRO
+// 20261114090000_macro_workbench.sql. numeric columns (value, weight, uncovered_weight) arrive as
+// JSON numbers and round in JavaScript — readers use value_text; bigint (revision,
+// input_revision, byte_length) arrives as a JSON number. All writes go through RPCs
+// (src/lib/macro/db.ts); these types serve reads.
+export type MacroRegion = 'US' | 'CN';
+export interface MacroSeriesRow {
+  id: string; region: MacroRegion; role: 'indicator' | 'asset' | 'event_source'; type: string | null;
+  name: { zh: string; en: string }; unit: string; native_frequency: 'daily' | 'monthly' | 'quarterly' | 'event';
+  period: 'day' | 'month' | 'quarter'; adjustment: 'sa' | 'nsa' | 'na'; status: 'active' | 'missing' | 'restricted';
+  reason: { zh: string; en: string } | null; source: Record<string, unknown> | null; derive: { kind: string; from: string } | null;
+  alias_of: string | null; revision_policy: 'revisable' | 'immutable'; weight: number; change_kind: 'bp' | 'pp' | 'pct' | 'points';
+  release_lag_days: number | null; definition_version: number; catalog_version: string; updated_at: string;
+}
+export interface MacroCatalogVersionRow { catalog_version: string; catalog: unknown[]; rules_version: string; created_at: string }
+export interface MacroEvidenceObjectRow { sha256: string; object_path: string; adapter: 'fred_csv' | 'akshare'; content_type: string; byte_length: number; created_at: string }
+export interface MacroRetrievalRow {
+  retrieval_id: string; sha256: string; fetch_url: string; fetch_host: string; http_status: number; fetched_at: string;
+  batch_id: string; tool_versions: Record<string, string>;
+}
+export interface MacroObservationRow {
+  observation_id: string; series_id: string; period_end: string; value: number; value_text: string; version: number;
+  available_at: string; availability_basis: 'first_seen'; ingested_at: string; status: 'ok' | 'quarantined' | 'rejected';
+  retrieval_id: string | null; locator: Record<string, unknown> | null; derived_from: string[] | null; transform: string | null;
+  code_version: string; batch_id: string;
+}
+export interface MacroSnapshotTableRow {
+  snapshot_id: string; region: MacroRegion; as_of: string; revision: number; methodology_version: string; catalog_version: string;
+  observation_ids: string[]; history_ids: string[]; catalog_counts: { verified: number; missing: number; restricted: number };
+  status: 'active' | 'superseded' | 'failed'; failure_reason: string | null; publish_key: string | null; created_at: string;
+}
+export interface MacroRegimeResultRow {
+  snapshot_id: string; region: MacroRegion; regime: Record<string, unknown> | null; contributions: unknown[];
+  rules_version: string; uncovered_weight: number;
+}
+export interface MacroPublishStateRow { region: MacroRegion; revision: number; input_revision: number; updated_at: string }
+export interface MacroIngestChunkRow {
+  batch_id: string; seq: number; total: number; state: 'processing' | 'done'; counts: Record<string, number>; native_usable: number;
+  errors: { code: string; key?: string; message?: string }[]; claim_keys: string[]; located_keys: string[];
+  received_at: string; completed_at: string | null;
+}
+export interface MacroIngestRunRow {
+  batch_id: string; dataset: string; state: 'open' | 'finishing' | 'finished' | 'aborted'; owner_token: string;
+  processing_timeout: string; finish_token: string | null; finish_progress: Record<string, unknown>;
+  created_at: string; updated_at: string;
+}
+export interface MacroQuarantineMemberRow { quarantine_id: string; observation_id: string; created_at: string }
+export interface MacroAnalysisRunRow {
+  run_id: string; user_id: string; request_id: string; kind: 'change' | 'level' | 'rolling' | 'event_window';
+  spec: Record<string, unknown>; inputs: unknown; inputs_hash: string; results: unknown | null; code_version: string;
+  method_version: string; status: 'ok' | 'failed'; error: string | null; created_at: string;
+}
+// /MACRO
 
 // Issuers (supabase/migrations/20261105091000_issuers.sql). issuers, issuer_securities,
 // industry_classifications and issuer_industry_memberships are public read; claims are service-role only.
@@ -709,23 +784,32 @@ export interface IssuerSecurity {
   is_primary: boolean;
   valid_from: string;
   valid_to: string | null;
+  valid_from_method: ValidFromMethod;
+  valid_to_method: ValidToMethod | null;
   source: string;
   provenance: Record<string, unknown>;
 }
 
-export type IssuerIdentifierType = 'lei' | 'cik' | 'usci' | 'isin' | 'figi' | 'cninfo_org_id';
+export type IssuerIdentifierType = 'lei' | 'cik' | 'usci' | 'isin' | 'figi' | 'cninfo_org_id' | 'ticker';
+export type IssuerClaimOp = 'legacy' | 'evidence_only' | 'set_identifier' | 'correct_identifier' | 'attach_security' | 'close_security' | 'backdate_window';
 export interface IssuerIdentifierClaim {
   id: string;
   issuer_id: string;
   id_type: IssuerIdentifierType;
   value: string;
   source: string;
-  confidence: number;
+  confidence: number | null;          // legacy rows only; claim/1 claims carry evidence classes, not confidence
   status: 'accepted' | 'pending' | 'rejected';
+  op: IssuerClaimOp;
+  target_key: string;
+  detail: Record<string, unknown>;    // claim/1 payload (src/lib/entities/types.ts ClaimDetail); {} on legacy rows
+  resolved_by: string | null;
+  resolved_at: string | null;
   created_at: string;
 }
 
-export type IndustryScheme = 'sw2021' | 'sw2014' | 'gics' | 'csrc' | 'custom';
+// INDUSTRY:BEGIN — 20261111090000 adds 'sic', attributes, and the membership lifecycle columns (membership_id is the key)
+export type IndustryScheme = 'sw2021' | 'sw2014' | 'gics' | 'csrc' | 'custom' | 'sic';
 export interface IndustryClassification {
   scheme: IndustryScheme;
   version: string;
@@ -734,18 +818,389 @@ export interface IndustryClassification {
   name_zh: string | null;
   name_en: string | null;
   parent_code: string | null;
+  attributes: Record<string, unknown>;
 }
 
 export interface IssuerIndustryMembership {
+  membership_id: string;
   issuer_id: string;
   scheme: IndustryScheme;
   version: string;
   code: string;
+  level: number;
   valid_from: string;
   valid_to: string | null;
+  available_date: string;
+  valid_to_available_date: string | null;
   source: string;
+  source_membership_id: string | null;
+  batch_id: string;
+  status: 'ok' | 'quarantined' | 'superseded';
+  superseded_by: string | null;
   provenance: Record<string, unknown>;
 }
+
+// 20261107090000_identifiers_and_dq.sql (plan 3 Task 1). All new tables are service-role only.
+export type ValidFromMethod = 'first_observed' | 'listing_date' | 'ticker_change' | 'curated';
+export type ValidToMethod = 'delisting' | 'ticker_change' | 'sec_file_absent' | 'curated' | 'merge_close' | 'unrecorded';
+export type DqReconcileKind = 'numeric' | 'text' | 'date';
+export type DqReconcileOutcome = 'compared' | 'left_missing' | 'left_unlinked' | 'left_ambiguous' | 'right_missing' | 'unsupported' | 'right_ambiguous' | 'incomplete_gold' | 'legacy';
+export interface DqReconcileCycle {
+  pair: string;
+  cycle_id: string;
+  started_at: string;
+  finished_at: string | null;
+  members: { issuer_id: string; market: FactMarket; expected_keys: unknown[] }[];
+  status: 'running' | 'complete' | 'complete_with_gaps';
+  expected_total: number;
+  compared_passed: number;
+  compared_failed: number;
+  not_compared: number;
+  exec_failed_members: number;
+  detail: Record<string, unknown>;
+}
+export interface DqReconcileCursor {
+  pair: string;
+  cycle_id: string;
+  issuer_id: string;
+  market: FactMarket;
+  expected: number;
+  state: 'pending' | 'claimed' | 'done' | 'failed';
+  claimed_by: string | null;
+  claim_until: string | null;
+  attempts: number;
+  last_error: string | null;
+  done_at: string | null;
+  compared_passed: number | null;
+  compared_failed: number | null;
+  not_compared: number | null;
+}
+export interface DqCalendarPass {
+  market: FactMarket;
+  pass_id: string;
+  started_at: string;
+  finished_at: string | null;
+  claimed_by: string | null;
+  claim_until: string | null;
+  status: 'running' | 'complete' | 'complete_with_failures';
+}
+export interface DqCalendarPassMember {
+  market: FactMarket;
+  pass_id: string;
+  issuer_id: string;
+  state: 'pending' | 'done' | 'failed';
+  attempts: number;
+  last_error: string | null;
+  done_at: string | null;
+}
+export interface IssuerFilerCategory {
+  issuer_id: string;
+  fiscal_year: number;
+  acceleration: 'large_accelerated' | 'accelerated' | 'non_accelerated';
+  smaller_reporting: boolean | null;
+  category_raw: string;
+  source: 'ixbrl_dei';
+  accession: string;
+  evidence_sha256: string;
+  as_of: string;
+}
+export interface DqFilingExpectation {
+  issuer_id: string;
+  market: FactMarket;
+  report_kind: '10-K' | '10-Q' | '20-F' | '40-F' | 'annual' | 'semiannual' | 'q1' | 'q3';
+  period_end: string;
+  period_end_estimated: boolean;
+  deadline_state: 'statutory' | 'estimated' | 'no_rule';
+  due_date: string | null;
+  due_rule: string;
+  expected_date: string | null;
+  upstream_lookup: 'ok' | 'unavailable' | 'not_applicable';
+  upstream_filed_date: string | null;
+  disclosure_state: 'pending' | 'overdue' | 'filed_not_ingested' | 'received' | 'received_late' | 'unknown_upstream';
+  received_filing_id: string | null;
+  received_date: string | null;
+  profile_as_of: string | null;
+  detail: Record<string, unknown>;
+  computed_at: string;
+  batch_id: string;
+}
+export interface IssuerFilingProfile {
+  issuer_id: string;
+  market: FactMarket;
+  category_raw_current: string | null;
+  regime: '10-K' | '20-F' | '40-F' | 'cn';
+  fiscal_year_end: string | null;
+  week52_pattern: boolean;
+  source: string;
+  source_sha256: string | null;
+  as_of: string;
+  updated_at: string;
+}
+
+// F6 begin
+// F6 evaluation runs (supabase/migrations/20261110090000_dq_eval_runs.sql) — service-role only.
+// Decimal comparison columns are TEXT (lossless decimal strings with format checks), never numeric;
+// summary and detail are jsonb objects.
+export type DqEvalRunStatus = 'running' | 'passed' | 'failed' | 'incomplete' | 'error';
+export interface DqEvalRun {
+  run_id: string;
+  kind: 'official_reconciliation' | 'dual_source' | 'replay_consistency' | 'reference_regression' | 'extraction_gold' | 'judgment_calibration';
+  module: string;
+  mode: 'ci' | 'report';
+  privileged: boolean;
+  artifact_class: 'public' | 'restricted';
+  set_id: string;
+  set_version: number;
+  set_sha256: string;
+  evaluator_code_version: string;
+  started_at: string;
+  finished_at: string | null;
+  status: DqEvalRunStatus;
+  summary: Record<string, unknown>;
+  report_ref: string;
+  report_sha256: string;
+  triggered_by: 'manual' | 'script' | 'ci';
+}
+
+export interface DqEvalCaseResult {
+  eval_run_id: string;
+  case_id: string;
+  result: 'fail' | 'unit_mismatch' | 'provenance_incomplete' | 'missing' | 'not_visible' | 'read_error' | 'unexplained_diff';
+  reason: string | null;
+  left_text: string | null;
+  right_text: string | null;
+  abs_diff: string | null;
+  rel_diff: string | null;
+  tolerance: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+// F6 end
+// 20261111090000_industry_research.sql. numeric columns arrive as JSON numbers and round in JavaScript —
+// readers use the *_text twins (value_text, close_text, total_share_text, market_cap_text, mcap_coverage_text).
+// bigint (generation, state_rev) arrives as a JSON number. Writes go through the SQL functions (not typed here).
+export interface IndustryDatasetLicense {
+  dataset_key: string;
+  status: 'internal' | 'public';
+  decided_by: string;
+  decided_at: string;
+  note: string | null;
+}
+export interface IndustrySourceMembership {
+  id: string;
+  scheme: 'sw2021';
+  version: '2021';
+  source: string;
+  ts_code: string;
+  name: string | null;
+  l1_code: string;
+  l2_code: string;
+  l3_code: string;
+  in_date: string;
+  out_date: string | null;
+  observed_at: string;
+  batch_id: string;
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  status: 'current' | 'superseded';
+  superseded_by: string | null;
+  issuer_id: string | null;
+  resolution: Record<string, unknown>;
+  resolution_error: Record<string, unknown> | null;
+  created_at: string;
+}
+export interface IndustryFetchEvent {
+  fetch_event_id: string;
+  job: string;
+  params: Record<string, unknown>;
+  started_at: string;
+  batch_id: string;
+  attempt: number;
+}
+export interface IndustryObservationReceipt {
+  fetch_event_id: string;
+  kind: 'marks' | 'official';
+  natural_key: string;
+  payload_hash: string;
+  outcome: 'inserted' | 'duplicate' | 'superseded_previous';
+  observation_id: string | null;
+  created_at: string;
+}
+export interface SecurityMark {
+  observation_id: string;
+  ticker: string;
+  trade_date: string;
+  fetch_event_id: string;
+  observed_at: string;
+  close: number;
+  total_share: number;
+  market_cap: number;
+  close_text: string;
+  total_share_text: string;
+  market_cap_text: string;
+  free_share: number | null;
+  free_share_text: string | null;
+  source: string;
+  upstream: 'sse' | 'szse' | 'bse';
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  batch_id: string;
+  status: 'ok' | 'quarantined' | 'superseded';
+  supersedes: string | null;
+  created_at: string;
+}
+export interface IndustryOfficialValuation {
+  observation_id: string;
+  scheme: 'sw2021';
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe' | 'pb' | 'total_mv' | 'float_mv' | 'close';
+  fetch_event_id: string;
+  value: number;
+  value_text: string;
+  observed_at: string;
+  source: string;
+  upstream: string;
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  batch_id: string;
+  status: 'ok' | 'superseded';
+  supersedes: string | null;
+  created_at: string;
+}
+export interface IndustryManifestIndex {
+  manifest_hash: string;
+  kind: 'aggregate' | 'valuation';
+  byte_length: number;
+  created_at: string;
+  object_path: string;
+  gc_claimed_at: string | null;
+  gc_claim: string | null;
+}
+export interface IndustryMetricRun {
+  run_id: string;
+  scheme: 'sw2021' | 'sic';
+  version: string;
+  level: number;
+  generation: number;
+  facts_as_of: string;
+  knowledge_date: string;
+  history_class: 'point_in_time' | 'reconstruction';
+  method_version: string;
+  config_hash: string;
+  formula_version: string;
+  code_version: string;
+  expected_grid: { codes: string[]; period_ends: string[]; metrics: string[] };
+  fingerprint_at: string;
+  reused_from_run: string | null;
+  batch_id: string;
+  status: 'building' | 'active' | 'superseded' | 'failed';
+  coverage_summary: Record<string, unknown>;
+  created_at: string;
+  activated_at: string | null;
+}
+export interface IndustryMetric {
+  run_id: string;
+  code: string;
+  metric: 'revenue_sum' | 'net_income_parent_sum' | 'gross_margin' | 'roe' | 'revenue_yoy' | 'net_income_yoy' | 'member_count';
+  period_start: string;
+  period_end: string;
+  duration: '3M' | '12M' | 'TTM' | 'INSTANT';
+  status: 'ok' | 'missing';
+  missing_reason: string | null;
+  value: number | null;
+  value_text: string | null;
+  unit: string;
+  n_members: number;
+  n_with_data: number;
+  n_unresolved: number;
+  manifest_hash: string | null;
+  updated_at: string | null;
+}
+export interface IndustryValuationRun {
+  run_id: string;
+  scheme: 'sw2021' | 'sic';
+  version: string;
+  level: number;
+  generation: number;
+  method_version: string;
+  config_hash: string;
+  formula_version: string;
+  code_version: string;
+  expected_dates: string[];
+  comparator_basis: 'ttm' | 'static' | 'unknown';
+  recompute_from: string;
+  carried_from_run: string | null;
+  fingerprint_at: string;
+  batch_id: string;
+  status: 'building' | 'published' | 'active' | 'superseded' | 'failed';
+  reconciliation: Record<string, unknown>;
+  created_at: string;
+  published_at: string | null;
+  activated_at: string | null;
+}
+export interface IndustryValuation {
+  run_id: string;
+  scheme: string;
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe_ttm' | 'pe_static' | 'pb' | 'market_cap';
+  status: 'ok' | 'missing';
+  missing_reason: string | null;
+  value: number | null;
+  value_text: string | null;
+  facts_as_of: string;
+  n_members: number | null;
+  n_with_data: number | null;
+  n_unresolved: number | null;
+  mcap_coverage: number | null;
+  mcap_coverage_text: string | null;
+  manifest_hash: string | null;
+  updated_at: string | null;
+  series_qualified: boolean;
+  published: boolean;
+}
+export interface IndustryValuationPair {
+  run_id: string;
+  scheme: string;
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe_ttm' | 'pe_static' | 'pb' | 'market_cap';
+  official_observation_id: string | null;
+  official_value: number | null;
+  rel_diff: number | null;
+  pair_status: 'within' | 'outside' | 'no_official' | 'no_computed' | 'invalid_denominator' | 'not_applicable';
+}
+export interface IndustryRunDependency {
+  run_kind: 'aggregate' | 'valuation';
+  run_id: string;
+  cell_key: string;
+  issuer_id: string;
+  state_rev: number;
+}
+export interface IndustrySyncScope {
+  issuer_id: string;
+  job: 'sic';
+  next_due_at: string;
+  lease_until: string | null;
+  lease_batch_id: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_status: 'success' | 'failed' | null;
+  updated_at: string;
+}
+export interface IndustrySecurityDelisting {
+  ts_code: string;
+  delist_date: string;
+  list_status: string;
+  observed_at: string;
+  batch_id: string;
+  raw_hash: string;
+}
+// INDUSTRY:END
 
 export type Database = {
   public: {
@@ -797,6 +1252,48 @@ export type Database = {
       financial_facts: { Row: FinancialFact; Insert: Partial<FinancialFact>; Update: Partial<FinancialFact> };
       financial_metrics: { Row: FinancialMetric; Insert: Partial<FinancialMetric>; Update: Partial<FinancialMetric> };
       fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };
+      dq_reconcile_cycles: { Row: DqReconcileCycle; Insert: Partial<DqReconcileCycle>; Update: Partial<DqReconcileCycle> };
+      dq_reconcile_cursor: { Row: DqReconcileCursor; Insert: Partial<DqReconcileCursor>; Update: Partial<DqReconcileCursor> };
+      dq_calendar_passes: { Row: DqCalendarPass; Insert: Partial<DqCalendarPass>; Update: Partial<DqCalendarPass> };
+      dq_calendar_pass_members: { Row: DqCalendarPassMember; Insert: Partial<DqCalendarPassMember>; Update: Partial<DqCalendarPassMember> };
+      issuer_filer_categories: { Row: IssuerFilerCategory; Insert: Partial<IssuerFilerCategory>; Update: Partial<IssuerFilerCategory> };
+      dq_filing_expectations: { Row: DqFilingExpectation; Insert: Partial<DqFilingExpectation>; Update: Partial<DqFilingExpectation> };
+      issuer_filing_profiles: { Row: IssuerFilingProfile; Insert: Partial<IssuerFilingProfile>; Update: Partial<IssuerFilingProfile> };
+      // F6 begin
+      dq_eval_runs: { Row: DqEvalRun; Insert: Partial<DqEvalRun>; Update: Partial<DqEvalRun> };
+      dq_eval_case_results: { Row: DqEvalCaseResult; Insert: Partial<DqEvalCaseResult>; Update: Partial<DqEvalCaseResult> };
+      // F6 end
+      // INDUSTRY:BEGIN
+      industry_dataset_licenses: { Row: IndustryDatasetLicense; Insert: Partial<IndustryDatasetLicense>; Update: Partial<IndustryDatasetLicense> };
+      industry_source_memberships: { Row: IndustrySourceMembership; Insert: Partial<IndustrySourceMembership>; Update: Partial<IndustrySourceMembership> };
+      industry_fetch_events: { Row: IndustryFetchEvent; Insert: Partial<IndustryFetchEvent>; Update: Partial<IndustryFetchEvent> };
+      industry_observation_receipts: { Row: IndustryObservationReceipt; Insert: Partial<IndustryObservationReceipt>; Update: Partial<IndustryObservationReceipt> };
+      security_marks: { Row: SecurityMark; Insert: Partial<SecurityMark>; Update: Partial<SecurityMark> };
+      industry_official_valuations: { Row: IndustryOfficialValuation; Insert: Partial<IndustryOfficialValuation>; Update: Partial<IndustryOfficialValuation> };
+      industry_manifests: { Row: IndustryManifestIndex; Insert: Partial<IndustryManifestIndex>; Update: Partial<IndustryManifestIndex> };
+      industry_metric_runs: { Row: IndustryMetricRun; Insert: Partial<IndustryMetricRun>; Update: Partial<IndustryMetricRun> };
+      industry_metrics: { Row: IndustryMetric; Insert: Partial<IndustryMetric>; Update: Partial<IndustryMetric> };
+      industry_valuation_runs: { Row: IndustryValuationRun; Insert: Partial<IndustryValuationRun>; Update: Partial<IndustryValuationRun> };
+      industry_valuations: { Row: IndustryValuation; Insert: Partial<IndustryValuation>; Update: Partial<IndustryValuation> };
+      industry_valuation_pairs: { Row: IndustryValuationPair; Insert: Partial<IndustryValuationPair>; Update: Partial<IndustryValuationPair> };
+      industry_run_dependencies: { Row: IndustryRunDependency; Insert: Partial<IndustryRunDependency>; Update: Partial<IndustryRunDependency> };
+      industry_sync_scope: { Row: IndustrySyncScope; Insert: Partial<IndustrySyncScope>; Update: Partial<IndustrySyncScope> };
+      industry_security_delistings: { Row: IndustrySecurityDelisting; Insert: Partial<IndustrySecurityDelisting>; Update: Partial<IndustrySecurityDelisting> };
+      // INDUSTRY:END
+      // MACRO
+      macro_series: { Row: MacroSeriesRow; Insert: Partial<MacroSeriesRow>; Update: Partial<MacroSeriesRow> };
+      macro_catalog_versions: { Row: MacroCatalogVersionRow; Insert: Partial<MacroCatalogVersionRow>; Update: Partial<MacroCatalogVersionRow> };
+      macro_evidence_objects: { Row: MacroEvidenceObjectRow; Insert: Partial<MacroEvidenceObjectRow>; Update: Partial<MacroEvidenceObjectRow> };
+      macro_retrievals: { Row: MacroRetrievalRow; Insert: Partial<MacroRetrievalRow>; Update: Partial<MacroRetrievalRow> };
+      macro_observations: { Row: MacroObservationRow; Insert: Partial<MacroObservationRow>; Update: Partial<MacroObservationRow> };
+      macro_snapshots: { Row: MacroSnapshotTableRow; Insert: Partial<MacroSnapshotTableRow>; Update: Partial<MacroSnapshotTableRow> };
+      macro_regime_results: { Row: MacroRegimeResultRow; Insert: Partial<MacroRegimeResultRow>; Update: Partial<MacroRegimeResultRow> };
+      macro_publish_state: { Row: MacroPublishStateRow; Insert: Partial<MacroPublishStateRow>; Update: Partial<MacroPublishStateRow> };
+      macro_ingest_chunks: { Row: MacroIngestChunkRow; Insert: Partial<MacroIngestChunkRow>; Update: Partial<MacroIngestChunkRow> };
+      macro_ingest_runs: { Row: MacroIngestRunRow; Insert: Partial<MacroIngestRunRow>; Update: Partial<MacroIngestRunRow> };
+      macro_quarantine_members: { Row: MacroQuarantineMemberRow; Insert: Partial<MacroQuarantineMemberRow>; Update: Partial<MacroQuarantineMemberRow> };
+      macro_analysis_runs: { Row: MacroAnalysisRunRow; Insert: Partial<MacroAnalysisRunRow>; Update: Partial<MacroAnalysisRunRow> };
+      // /MACRO
     };
     Functions: {
       quote_alert_window_samples: {

@@ -1,8 +1,10 @@
 // src/lib/facts/derive.test.ts
 import {describe,it,expect} from 'vitest';
 import {FactsDbError} from './types';
-import type {Duration,FactRow,FactsDb,Market,MetricRow,ReadFactsResult} from './types';
-import {FORMULA_VERSION,deriveMetrics,materialize,metricNames} from './derive';
+import type {Duration,FactRow,LineageRev,Market,MetricRow,ReadFactsLineageResult} from './types';
+import {FORMULA_VERSION,deriveLineageMetrics,deriveMetrics,materialize,metricNames} from './derive';
+import type {MaterializeDb} from './derive';
+import {memoryFactsDb} from './memory-facts-db';
 
 let n=0;
 type P=Partial<FactRow>&{concept:string;period_end:string;value:string;duration:Duration};
@@ -247,43 +249,70 @@ describe('deriveMetrics: quality review follow-ups',()=>{
  });
 });
 
-describe('materialize',()=>{
- const env=(stateRev:number,rows:FactRow[],truncated=false):ReadFactsResult=>({stateRev,rows,truncated});
- function fakeDb(envs:ReadFactsResult[],behaviour:{staleFirst?:boolean}={}){
-  let reads=0,replaces=0;const calls:{basedOnRev:number;rows:MetricRow[]}[]=[];
-  const db:Pick<FactsDb,'readFacts'|'replaceMetrics'>={
-   async readFacts(){return envs[Math.min(reads++,envs.length-1)];},
-   async replaceMetrics(_i,_m,basedOnRev,rows){replaces++;if(behaviour.staleFirst&&replaces===1)throw new FactsDbError('stale_computation');calls.push({basedOnRev,rows});return rows.length;},
+describe('materialize (lineage contract, spec §4.4 / T9)',()=>{
+ const env=(stateRevs:LineageRev[],rows:FactRow[],truncated=false):ReadFactsLineageResult=>({stateRevs,lineage:stateRevs.map(x=>x.issuer_id),rows,conflicts:[],truncated});
+ function fakeDb(envs:ReadFactsLineageResult[],o:{staleFirst?:boolean;staleAlways?:boolean;target?:string;lineage?:string[]}={}){
+  let reads=0,replaces=0;const calls:{issuer:string;basedOn:LineageRev[];rows:MetricRow[]}[]=[];const readArgs:string[][]=[];
+  const db:MaterializeDb={
+   async targetOf(i){return o.target??i;},
+   async lineageOf(t){return o.lineage??[t];},
+   async readFactsLineage(issuers){readArgs.push(issuers);return envs[Math.min(reads++,envs.length-1)];},
+   async replaceMetricsLineage(issuer,_m,basedOn,rows){replaces++;if(o.staleAlways||(o.staleFirst&&replaces===1))throw new FactsDbError('stale_computation');calls.push({issuer,basedOn,rows});return rows.length;},
   };
-  return {db,calls,reads:()=>reads};
+  return {db,calls,reads:()=>reads,readArgs};
  }
- it('reads the envelope, derives, replaces under the envelope state_rev, and retries once on stale_computation',async()=>{
+ it('reads the lineage envelope, derives, replaces under the rev vector, and retries once on stale_computation',async()=>{
   const rows=[dur('revenue','2024-01-01','2024-03-31','10'),dur('gross_profit','2024-01-01','2024-03-31','4')];
-  const {db,calls,reads}=fakeDb([env(7,rows),env(8,rows)],{staleFirst:true});
-  const r=await materialize(db,'I','US',{today:'2025-01-01'});
-  expect(r).toEqual({rows:2,stateRev:8,retried:true});   // gross_margin + q_single_revenue (the direct 3M revenue fact is itself a single quarter), round-1 #17c
+  const {db,calls,reads}=fakeDb([env([{issuer_id:'I',state_rev:7}],rows),env([{issuer_id:'I',state_rev:8}],rows)],{staleFirst:true});
+  expect(await materialize(db,'I','US',{today:'2025-01-01'})).toEqual({rows:2,stateRev:8,retried:true,target:'I',basedOn:[{issuer_id:'I',state_rev:8}]});
   expect(reads()).toBe(2);
-  expect(calls[0].basedOnRev).toBe(8);
-  expect(calls[0].rows.map(x=>x.metric)).toEqual(['gross_margin','q_single_revenue']);
-  expect(calls[0].rows[0]).toMatchObject({metric:'gross_margin',value:'0.4',based_on_rev:8,as_of:'2025-01-01'});
-  expect(calls[0].rows[1]).toMatchObject({metric:'q_single_revenue',value:'10',period_start:'2024-01-01',period_end:'2024-03-31'});
+  expect(calls[0]).toMatchObject({issuer:'I',basedOn:[{issuer_id:'I',state_rev:8}]});
+  expect(calls[0].rows.map(x=>x.metric)).toEqual(['gross_margin','q_single_revenue']);   // gross_margin + q_single_revenue (round-1 #17c)
+  expect(calls[0].rows[0]).toMatchObject({metric:'gross_margin',value:'0.4',based_on_rev:8,based_on_lineage:[{issuer_id:'I',state_rev:8}],as_of:'2025-01-01'});
+ });
+ it('a merged source materialises its target T over the whole lineage: rows of both issuers form one series for T',async()=>{
+  const lin=[{issuer_id:'S',state_rev:2},{issuer_id:'T',state_rev:5}];
+  const rows=[dur('revenue','2024-01-01','2024-03-31','10',{issuer_id:'S'}),dur('gross_profit','2024-01-01','2024-03-31','4',{issuer_id:'T'})];
+  const {db,calls,readArgs}=fakeDb([env(lin,rows)],{target:'T',lineage:['T','S']});
+  expect(await materialize(db,'S','US',{today:'2025-01-01'})).toMatchObject({target:'T',stateRev:5,basedOn:lin,retried:false});
+  expect(readArgs[0]).toEqual(['T','S']);
+  expect(calls[0].issuer).toBe('T');
+  const gm=calls[0].rows.find(x=>x.metric==='gross_margin')!;
+  expect(gm).toMatchObject({issuer_id:'T',value:'0.4',based_on_rev:5,based_on_lineage:lin});
+  expect(gm.inputs.map(i=>i.fact_id).sort()).toEqual(rows.map(x=>x.fact_id).sort());
  });
  it('gives up after the second stale_computation',async()=>{
-  const {db}=fakeDb([env(1,[])]);
-  const stale:Pick<FactsDb,'readFacts'|'replaceMetrics'>={...db,async replaceMetrics(){throw new FactsDbError('stale_computation');}};
-  await expect(materialize(stale,'I','US')).rejects.toMatchObject({code:'stale_computation'});
+  const {db}=fakeDb([env([{issuer_id:'I',state_rev:1}],[])],{staleAlways:true});
+  await expect(materialize(db,'I','US')).rejects.toMatchObject({code:'stale_computation'});
  });
- it('empty facts still replace with []; rows of another issuer are refused',async()=>{
-  const {db,calls}=fakeDb([env(5,[])]);
-  expect(await materialize(db,'I','US',{today:'2025-01-01'})).toEqual({rows:0,stateRev:5,retried:false});
-  expect(calls).toEqual([{basedOnRev:5,rows:[]}]);
-  const other=fakeDb([env(5,[dur('revenue','2024-01-01','2024-03-31','1',{issuer_id:'OTHER'})])]);
+ it('empty facts still replace with []; rows outside the lineage or market are refused',async()=>{
+  const {db,calls}=fakeDb([env([{issuer_id:'I',state_rev:5}],[])]);
+  expect(await materialize(db,'I','US',{today:'2025-01-01'})).toEqual({rows:0,stateRev:5,retried:false,target:'I',basedOn:[{issuer_id:'I',state_rev:5}]});
+  expect(calls).toEqual([{issuer:'I',basedOn:[{issuer_id:'I',state_rev:5}],rows:[]}]);
+  const other=fakeDb([env([{issuer_id:'I',state_rev:5}],[dur('revenue','2024-01-01','2024-03-31','1',{issuer_id:'OTHER'})])]);
   await expect(materialize(other.db,'I','US')).rejects.toThrow('derive_scope_mismatch');
   expect(other.calls).toEqual([]);
+  expect(()=>deriveLineageMetrics([],'I',['I'],{market:'US',asOf:'2025-01-01',basedOn:[]})).toThrow('derive_scope_mismatch');
+  expect(()=>deriveLineageMetrics([dur('revenue','2024-01-01','2024-03-31','1',{market:'CN'})],'I',['I'],{market:'US',asOf:'2025-01-01',basedOn:[]})).toThrow('derive_scope_mismatch');
  });
  it('refuses a truncated envelope with read_truncated and writes nothing',async()=>{
-  const {db,calls}=fakeDb([env(3,[],true)]);
+  const {db,calls}=fakeDb([env([{issuer_id:'I',state_rev:3}],[],true)]);
   await expect(materialize(db,'I','US')).rejects.toMatchObject({code:'read_truncated'});
   expect(calls).toEqual([]);
+ });
+ it('re-resolves the target inside the retry: a merge of T into U before the first replace makes the retry materialise U',async()=>{
+  const mem=memoryFactsDb();
+  await mem.setMerge('00000000-0000-4000-8000-00000000000a','00000000-0000-4000-8000-00000000000b','00000000-0000-4000-8000-0000000000ff');   // a→b: scopes for both exist
+  const T='00000000-0000-4000-8000-00000000000b',U='00000000-0000-4000-8000-00000000000c',A='00000000-0000-4000-8000-00000000000a';
+  mem.setTopology({[U]:{status:'active',merged_into:null}});
+  let merged=false;const replaced:string[]=[];
+  const db:MaterializeDb={targetOf:i=>mem.targetOf(i),lineageOf:t=>mem.lineageOf(t),readFactsLineage:(i,m,o)=>mem.readFactsLineage(i,m,o),
+   async replaceMetricsLineage(i,m,b,r){
+    if(!merged){merged=true;await mem.setMerge(T,U,'00000000-0000-4000-8000-0000000000ff');}   // T becomes merged into U before the first replace lands
+    replaced.push(i);return mem.replaceMetricsLineage(i,m,b,r);
+   }};
+  const res=await materialize(db,A,'US',{today:'2025-01-01'});
+  expect(res).toMatchObject({retried:true,target:U});
+  expect(replaced).toEqual([T,U]);
  });
 });

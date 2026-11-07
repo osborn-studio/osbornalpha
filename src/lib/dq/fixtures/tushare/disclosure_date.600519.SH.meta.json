@@ -1,0 +1,13 @@
+{
+ "api": "disclosure_date",
+ "params": {
+  "ts_code": "600519.SH"
+ },
+ "fields": "ts_code,ann_date,end_date,pre_date,actual_date,modify_date",
+ "sha256": "a873400c9d8cd5a762dfbb87923987c0a57d12cc03e89e3bef48f06859fbc825",
+ "fetched_at": "2026-11-07T01:24:00.011Z",
+ "http_status": 200,
+ "code": 0,
+ "msg": "",
+ "request_id": "ce3494e5-aba2-4731-a85b-1949980dccd0"
+}

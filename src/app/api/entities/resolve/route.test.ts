@@ -62,7 +62,7 @@ describe('GET /api/entities/resolve', () => {
     expect(cc).toContain('s-maxage=');
     expect(cc).toContain('stale-while-revalidate=600');
     expect(await res.json()).toEqual({ issuer_id: 'a' });
-    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'brk/b' }, { includeExpired: true, today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'brk/b' }, { includeExpired: true, asOf: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(mocks.from).not.toHaveBeenCalled();
   });
 
@@ -76,7 +76,7 @@ describe('GET /api/entities/resolve', () => {
     const res = await get('?ticker=AAPL');
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=1800, stale-while-revalidate=600');
-    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, today: '2026-11-05' });
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, asOf: '2026-11-05' });
   });
 
   it('responds no-store when the UTC date flips while resolving', async () => {
@@ -90,7 +90,7 @@ describe('GET /api/entities/resolve', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(await res.json()).toEqual({ issuer_id: 'a' });
-    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, today: '2026-11-05' });
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'AAPL' }, { includeExpired: false, asOf: '2026-11-05' });
   });
 
   it('maps resolver validation errors to 400 and anything else to a logged, opaque 500', async () => {
@@ -111,6 +111,40 @@ describe('GET /api/entities/resolve', () => {
   it('treats invalid_today from the resolver as a server error, not a client one', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.resolveIssuer.mockRejectedValueOnce(new Error('invalid_today'));
+    await expectError(await get('?ticker=AAPL'), 500, 'internal');
+  });
+
+  it('passes a historical asOf through and caches it for a fixed window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    mocks.resolveIssuer.mockResolvedValue({ issuer_id: 'a' });
+    const res = await get('?ticker=OLD&asOf=2026-11-01');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=600, s-maxage=3600');
+    expect(mocks.resolveIssuer).toHaveBeenCalledWith(expect.anything(), { ticker: 'OLD' }, { includeExpired: false, asOf: '2026-11-01' });
+  });
+
+  it('treats asOf equal to today like no asOf (bounded cache until UTC midnight)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T23:30:00Z'));
+    mocks.resolveIssuer.mockResolvedValue({ issuer_id: 'a' });
+    const res = await get('?ticker=AAPL&asOf=2026-11-05');
+    expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=1800, stale-while-revalidate=600');
+  });
+
+  it('400 invalid_parameter:asOf for malformed or future dates, 400 duplicate_parameter for two', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    await expectError(await get('?ticker=AAPL&asOf=2026-02-30'), 400, 'invalid_parameter:asOf');
+    await expectError(await get('?ticker=AAPL&asOf=20261101'), 400, 'invalid_parameter:asOf');
+    await expectError(await get('?ticker=AAPL&asOf=2026-11-06'), 400, 'invalid_parameter:asOf');
+    await expectError(await get('?ticker=AAPL&asOf=2026-11-01&asOf=2026-11-02'), 400, 'duplicate_parameter');
+    expect(mocks.resolveIssuer).not.toHaveBeenCalled();
+  });
+
+  it('treats invalid_as_of from the resolver as a server error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.resolveIssuer.mockRejectedValueOnce(new Error('invalid_as_of'));
     await expectError(await get('?ticker=AAPL'), 500, 'internal');
   });
 });

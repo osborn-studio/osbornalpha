@@ -7,11 +7,12 @@
 import {execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
-import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
+import {emptyCounts,finishBatch,isInfoError,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {RULES_VERSION} from '../dq/rules';
+import {DATASETS,inventoryEntry} from '../dq/datasets';
 import {FactsDbError} from './types';
 import type {Budget,FactCandidate,FactsDb,FilingInsert,FilingRow,Market,ParseResult,RawSnapshot,ScopeRow,Source} from './types';
 import {FACT_CONCEPTS,MAPPING_GEN,MAPPING_VERSION} from './concepts';
@@ -25,6 +26,7 @@ import type {SnapshotStore} from './snapshot-store';
 import {reconcileScope,scopeRowFor} from './scope';
 import type {ScopeInputRow} from './scope';
 import {FORMULA_VERSION,materialize} from './derive';
+import type {AcceptanceOutcome} from './providers/sec-acceptance';
 
 /** Shape of providers/tushare-statements.ts::coverageSummary entries (the adapter is injected, never imported here). */
 export interface CoverageEntry{api:string;report_type:number;years:Record<string,number>}
@@ -39,6 +41,8 @@ export interface SyncDeps{
  linkCn?:(filing:FilingRow,b:Budget)=>Promise<{document_ref:string;document_url:string}|'none'|'ambiguous'|'unlinkable'>;
  /** CN coverage summary (§6.3 coverage_summary), wired by deps.ts to coverageSummary (round-1 #12). */
  coverageCn?:(parsed:ParseResult)=>CoverageEntry[];
+ /** Step 9b (plan 3 §4.5): SEC acceptance times for a published US issuer, from the issuer's scope fetch key (10-digit CIK). Wired by deps.ts; its errors join the issuer receipt and never fail a published issuer. */
+ enrichAcceptance?:(issuer:string,cik10:string,b:Budget)=>Promise<AcceptanceOutcome>;
  now:()=>Date;deadline:Date|null;codeVersion:string|null;
 }
 /**
@@ -52,7 +56,7 @@ export interface SyncDeps{
 export interface SyncOptions{market:Market;limit:number;issuerIds?:string[];dryRun:boolean;triggeredBy:TriggeredBy;sinceYear?:number;mappingGen?:number}
 /** 'planned' is the dry-run outcome of an issuer that fetched, parsed and planned without writing. */
 export type IssuerOutcomeKind='published'|'planned'|'failed'|'skipped';
-export interface IssuerOutcome{issuerId:string;fetchKey:string;runId:string|null;outcome:IssuerOutcomeKind;code?:string;counts:BatchCounts;errors:BatchError[];warnings:Map<string,string[]>;snapshotSha256:string[]}
+export interface IssuerOutcome{issuerId:string;fetchKey:string;runId:string|null;outcome:IssuerOutcomeKind;code?:string;counts:BatchCounts;errors:BatchError[];warnings:Map<string,string[]>;snapshotSha256:string[];/** step 9b enrichment counters (US, when it ran); separate from counts */acceptance?:BatchCounts}
 export interface SyncDetail{attempted:number;published:number;failed:number;skipped:number;idle:boolean}
 /** detail is the same object recorded on dq_freshness (spec §6.1) so cron receipts and the runbook read one shape. */
 export interface SyncReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];issuers:IssuerOutcome[];idle:boolean;detail:SyncDetail}
@@ -94,6 +98,9 @@ const isDeadline=(e:unknown,budget:Budget)=>{
  */
 const PARSE_KINDS=new Set(['invalid_json_number','invalid_decimal','reserved_key','entry_shape','raw_hash_invalid','invalid_row_width','invalid_control_field','filing_not_staged','companyfacts shape','snapshot api','snapshot report_type']);
 const PARSE_FIELDS=new Set<string>([...TUSHARE_CONTROL_FIELDS,...EDGAR_NUMBER_SCHEMA.control,...EDGAR_NUMBER_SCHEMA.decimal,...FACT_CONCEPTS.map(c=>c.id)]);
+/** Fixed-token provider reasons that may be persisted with their code (no upstream text can match). */
+const ALLOWED_REASON=/^tushare_unavailable: (multi_page_unverified:(?:income|balancesheet|cashflow):rt[145])$/;
+const allowlistedReason=(e:Error):string|undefined=>ALLOWED_REASON.exec(e.message)?.[1];
 const safeParseMessage=(raw:string):string=>{
  const parts=raw.replace(/^parse_error: /,'').split(':').map(x=>x.trim());
  if(parts[0]==='json')return PARSE_KINDS.has(parts[1]??'')?`json: ${parts[1]}`:'json';
@@ -103,7 +110,7 @@ const safeParseMessage=(raw:string):string=>{
 const dbCode=(e:unknown)=>e instanceof FactsDbError?e.code:null;
 /** lease_lost, or a run another batch already abandoned (its begin_sync_run took the lease over). */
 const isLeaseLoss=(e:unknown)=>{const c=dbCode(e);return c==='lease_lost'||c==='run_abandoned';};
-const datasetOf=(m:Market)=>m==='US'?'facts.us':'facts.cn';
+const datasetOf=DATASETS.facts;
 const sourceOf=(m:Market):Source=>m==='US'?'edgar':'tushare';
 const summary=(key:string,reason:string):BatchError=>({code:'skipped_summary',key,message:JSON.stringify({[reason]:1})});
 const MAX_SKIP_REASONS=20;
@@ -283,6 +290,14 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   await renewIfNeeded();
   try{await materialize(db,issuer,market);}
   catch(e){const code=dbCode(e);if(code!=='stale_computation'&&code!=='read_truncated')throw e;return afterPublish(code,e);}   // published stays; retried on the failure schedule
+  // 9b (plan 3 §4.5): acceptance times; best-effort after publication — errors are recorded, the outcome stays published
+  if(market==='US'&&deps.enrichAcceptance&&!budget.signal.aborted&&budget.remainingMs()>0){
+   try{
+    const a=await deps.enrichAcceptance(issuer,scope.fetch_key,budget);out.errors.push(...a.errors);out.acceptance=a.counts;
+    if(a.counts.failed>0&&!a.errors.some(x=>!isInfoError(x)))out.errors.push({code:'acceptance_failed',key:issuer,message:JSON.stringify({failed:a.counts.failed})});   // only when no per-filing error already says why (those are non-informational too): the batch is partial, the issuer stays published
+   }
+   catch(e){out.errors.push({code:'acceptance_failed',key:issuer,message:errMsg(e)});}
+  }
   await releaseOnce('success');
   return out;
  }catch(e){
@@ -296,7 +311,7 @@ export async function syncIssuerFacts(deps:SyncDeps,batchId:string,input:{scope:
   }
   if(publishedRun)return afterPublish(e instanceof SyncError?e.code:dbCode(e)??'unknown',e);
   await cleanup('failed');
-  if(e instanceof SyncError)return fail(e.code,e.code==='parse_error'?safeParseMessage(e.message):undefined);
+  if(e instanceof SyncError)return fail(e.code,e.code==='parse_error'?safeParseMessage(e.message):allowlistedReason(e));
   return fail('unknown',errMsg(e));
  }
 }
@@ -353,7 +368,8 @@ async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
  // Every explicitly requested issuer gets an outcome: `limit` bounds the scheduled path only and is
  // never used to silently drop requested ids (round-2 #13).
  const ids=[...new Set(opts.issuerIds)];
- const have=new Map((await deps.db.scopeRows(opts.market,ids)).map(s=>[s.issuer_id,s]));
+ // A set_merge placeholder (fetch_key 'topology', priority 0) is not a usable schedule row: treat it as missing and derive the real key.
+ const have=new Map((await deps.db.scopeRows(opts.market,ids)).filter(s=>s.fetch_key!=='topology').map(s=>[s.issuer_id,s]));
  const today=isoDate(deps.now());const seed:ScopeInputRow[]=[];
  for(const id of ids){
   if(have.has(id))continue;
@@ -426,13 +442,17 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
   const ok=idle||published>=Math.max(1,Math.ceil(attempted/2));
   const detail:SyncDetail={attempted,published,failed,skipped,idle};
-  await recordAttempt(deps.tables,dataset,{ok,cadence:'daily',now:deps.now(),detail:{...detail}});
+  // An idle run (nothing due) is a heartbeat ONLY while no active scope row (priority > 0) of this market has
+  // last_status 'failed': a healthy quiet week stays fresh, but an issuer that fails on every retry cannot be
+  // masked by the idle runs between its attempts (spec §16 deviation: the spec says idle = always ok).
+  const failingActive=idle&&(await deps.db.scopeAll(market)).some(s=>s.priority>0&&s.last_status==='failed');
+  if(!failingActive)await recordAttempt(deps.tables,dataset,{ok,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:{...detail}});
   return {batchId,status,counts,errors,issuers,idle,detail};
  }catch(e){
   // Infrastructure failure outside an issuer: close the receipt so no running batch dangles, then rethrow.
   errors.push({code:'unknown',message:errMsg(e)});
   try{await finishBatch(deps.tables,batchId,{counts,errors},deps.now());}catch{/* left running; runbook SQL marks it failed */}
-  try{await recordAttempt(deps.tables,dataset,{ok:false,cadence:'daily',now:deps.now(),detail:{attempted,published,failed,skipped,idle,error:errMsg(e)}});}catch{/* same */}
+  try{await recordAttempt(deps.tables,dataset,{ok:false,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:{attempted,published,failed,skipped,idle,error:errMsg(e)}});}catch{/* same */}
   throw e;
  }
 }

@@ -147,6 +147,13 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
   if('reason' in c){bump(skipped,c.reason);continue;}
   out.push({issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
  }
+ // INDUSTRY:BEGIN — industry fact universe (industry spec §4.10, V3; owner decision E). Only with FACTS_CN_INDUSTRY_UNIVERSE=1;
+ // flag off → this block is skipped and desiredCn returns exactly plan 2's cohort set. Dynamic import: no load-time cycle.
+ if(process.env.FACTS_CN_INDUSTRY_UNIVERSE==='1'){
+  const {industryCnUniverse,mergeDesired}=await import('../industry/facts-scope');
+  return mergeDesired(out,await industryCnUniverse(tables,today,skipped));
+ }
+ // INDUSTRY:END
  return out;
 }
 

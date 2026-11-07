@@ -9,6 +9,12 @@ import { WizardCard } from '@/components/intel/WizardCard';
 import { WatchlistScreener } from '@/components/intel/WatchlistScreener';
 import type { Market } from '@/lib/supabase/database.types';
 import { Disclaimer } from '@/components/Disclaimer';
+// INDUSTRY:BEGIN
+import { IndustryEntryCard } from '@/components/industries/IndustryEntryCard';
+// INDUSTRY:END
+// MACRO
+import { MacroSummaryCard } from '@/components/macro/MacroSummaryCard';
+// /MACRO
 
 interface SearchResult { t: string; n: string; py: string; m: Market }
 interface Artifact { id: string; skill_id: string; ticker: string | null; title: string; content_md: string; created_at: string }
@@ -23,6 +29,9 @@ export default function IntelPage() {
     <>
       <h1 className="mb-1 text-xl font-bold">{t('page.title')}</h1>
       <p className="mb-4 text-sm text-text-dim">{t('page.subtitle')}</p>
+      {/* MACRO */}
+      <div className="mb-4"><MacroSummaryCard /></div>
+      {/* /MACRO */}
 
       <div className="mb-4 flex gap-1 rounded-md border border-border p-1 text-sm">
         <button
@@ -119,6 +128,9 @@ function ResearchTab() {
 
   return (
     <div className="space-y-3">
+      {/* INDUSTRY:BEGIN */}
+      <IndustryEntryCard />
+      {/* INDUSTRY:END */}
       <div className="card-base">
         <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input

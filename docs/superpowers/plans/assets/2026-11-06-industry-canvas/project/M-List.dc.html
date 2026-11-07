@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 行业列表</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 1760px; display: flex; flex-direction: column">
+  <div class="mtop"><span class="brand">行业研究</span><span class="en">Industries</span><button class="ibtn" style="margin-left: auto" aria-label="语言 Language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"></path></svg></button></div>
+  <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+      <button class="sel lg"><span class="k">方案</span>申万 2021 ▾</button>
+      <button class="sel lg"><span class="k">层级</span>一级 ▾</button>
+      <button class="sel lg"><span class="k">指标</span>毛利率 ▾</button>
+      <button class="sel lg"><span class="k">口径</span>年度 ▾</button>
+    </div>
+    <div class="row tiny" style="gap: 6px 10px">
+      <span>事实截至 <span class="m" style="color: #fafafa">2026-11-03</span></span>
+      <span>运行 <span class="m" style="color: #fafafa">11-01</span></span>
+      <span class="chip"><span class="dot ok"></span>fresh</span>
+      <span class="m">industry-agg/1.0</span>
+    </div>
+    <div class="seg lg" style="align-self: flex-start"><button class="on">表格 Table</button><button>热力图（近 5 年）</button></div>
+    <div class="tiny">移动端表格优先；热力图只显示最近 5 年，不横向滚动。</div>
+    <div class="card" style="padding: 0">
+      <table class="t">
+        <thead><tr><th style="padding-left: 12px">行业</th><th class="n">2025</th><th class="n">覆盖</th><th class="n" style="padding-right: 12px">同比</th></tr></thead>
+        <tbody>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="31">
+            <tr><td style="padding-left: 12px"><a href="M-Detail.dc.html" style="color: #fafafa">{{r.name}}</a></td><td class="n"><button class="src" style="min-height: 24px">{{r.v}}</button></td><td class="n m dim">{{r.cov}}</td><td class="n m dim" style="padding-right: 12px">{{r.yoy}}</td></tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </div>
+    <div class="tiny">点数字 → 底部全屏来源抽屉。</div>
+  </div>
+  <nav class="tabbar" aria-label="底部导航">
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 11l8-7 8 7v9H4z"></path></svg>首页</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4v16M12 4v10M19 4v13"></path></svg>自选</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle></svg>雷达</a>
+    <a class="on" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h9l3 3v15H6z"></path><path d="M9 10h6M9 14h6"></path></svg>研究</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"></path></svg>设置</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var inds = [["农林牧渔",14],["基础化工",21],["钢铁",9],["有色金属",11],["电子",18],["家用电器",24],["食品饮料",47],["纺织服饰",26],["轻工制造",21],["医药生物",35],["公用事业",23],["交通运输",13],["房地产",24],["商贸零售",17],["社会服务",30],["综合",18],["建筑材料",26],["建筑装饰",11],["电力设备",20],["国防军工",22],["计算机",30],["传媒",29],["通信",25],["银行",null],["非银金融",null],["汽车",17],["机械设备",24],["煤炭",30],["石油石化",15],["环保",28],["美容护理",52]];
+    var rows = inds.map(function (d, i) {
+      if (d[1] === null) return { name: d[0], v: "—", cov: "—", yoy: "—" };
+      var v = d[1] + 2.2 * Math.sin(i * 1.7 + 8.1);
+      var dy = 2.2 * Math.sin(i * 1.7 + 8.1) - 2.2 * Math.sin(i * 1.7 + 7.2);
+      return { name: d[0], v: d[0] === "综合" ? "6/9" : v.toFixed(1) + "%", cov: d[0] === "综合" ? "0.67" : (0.9 + 0.09 * Math.abs(Math.cos(i))).toFixed(2), yoy: (dy >= 0 ? "▲+" : "▼") + dy.toFixed(1) };
+    });
+    return { rows: rows };
+  }
+}
+</script>
+</body>
+</html>

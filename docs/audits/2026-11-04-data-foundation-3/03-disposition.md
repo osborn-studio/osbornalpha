@@ -124,3 +124,39 @@ R1, R2, R3 confirmed RESOLVED by Codex. On the coordinator's instruction, S1–S
 | S5 `drc_done_accounted` accepts NULL counters | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1: `expected >= 0`, counters non-negative when present, `done` requires all three `IS NOT NULL` and sum = `expected`; settlement asserts the invariant and never coalesces to zero. |
 | S6 `reconcile_review` contradicts exhaustive dispatcher | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.6 dispatch table: `reconcile_review` → generic guarded status transition (accept and reject), no promotion/materialisation; five branches enumerated; tests in §9.1. |
 | S7 calendar pass lacks frozen membership/ownership | P2 | implemented per Codex's prescribed fix (round 4), not re-audited | §3.1 `dq_calendar_passes.members/next_index/failed_members/claimed_by/claim_until/status`; §6.2 one leased worker per market/pass, `replace_filing_expectations(…, p_pass_token)` fenced, advance only after successful replacement, finish only when every frozen member completed, additions enter the next pass, failures retried and block successful completion. |
+
+## Round 5 (`06-codex-round5.md`, on the 5th draft; scope = S1–S7 verification + new defects + landed plan-2 code vs spec assumptions) — implemented in the 6th draft
+
+Codex round-5 verdict (quoted): "Verdict: not ready — S2, S3 and S7 remain partial, and the landed-code incompatibilities require the prescribed spec changes before implementation planning."
+
+S1, S4, S5, S6 confirmed RESOLVED. All T1–T15 implemented as prescribed (2026-11-05, plan-3 commander session):
+
+| # | Severity | Disposition | Where in 6th draft |
+|---|---|---|---|
+| T1 S2 conflicting binding text | P2 | ACCEPT | §3.2 `read_filing_facts` (filter to active generation + published runs, then cardinality), `adopt_candidate` (full candidate key incl. `mapping_gen`, across statuses), §5.1 outcome list `left_ambiguous`, §5.3, §5.4, §9.2 |
+| T2 S3 mutation chain | P1 | ACCEPT | §3.1 per-key atomic commit; `dq_reconciliations.cycle_id/issuer_id/market/attempt` + unique accepted-result marker; §3.2 `apply_reconcile_result(p_fence, p_result)` replaces `reconcile_quarantine` and the multi-action variant; `claim/complete/fail_reconcile_member`; counters derived from accepted keys; no superseding; §5.5, §5.6, §8, FactsDb list |
+| T3 calendar retry protocol | P2 | ACCEPT | §3.1 `dq_calendar_pass_members` with per-member state; fenced `claim_calendar_pass`/`replace_filing_expectations` (4-arg only)/`fail_calendar_member`/`finish_calendar_pass`; §6.1, §6.2 |
+| T4 dataset casing | P2 | ACCEPT | `DATASETS.facts(m)` = `facts.us`/`facts.cn`; adoption, reconciliation items |
+| T5 candidate schema | P1 | ACCEPT | §3.2 `adopt_candidate` explicit `FactCandidate` adapter; generation from anchored run; `mapping_version` from retained rows else `replay_required`; generated `run_id`/`fact_id`; `filing_not_found` |
+| T6 promotion layer | P1 | ACCEPT | §3.2 predicates in `fact_promote_rows`; `IS DISTINCT FROM true`; every entry point tested |
+| T7 non-ok window behaviour | P1 | ACCEPT | §3.2 `read_facts_lineage` preserves landed semantics |
+| T8 metrics stale guard | P1 | ACCEPT | §3.2 `based_on_lineage` through `MetricRow`/adapters/pagination; §4.4 before/after vector read, `metrics:[]` + `stale:true` |
+| T9 helper contracts | P2 | ACCEPT | `findFilingBySourceRef`, `filingsForCalendar`; extended `materialize` contract (§4.4); §6.2 input |
+| T10 dispatcher/recovery | P2 | ACCEPT | §4.6 extend `resolveFactsItem`; pending hooks for all new visibility decisions; new `materialize.ts --pending-hooks`; §9.1 |
+| T11 filings update grants | P2 | ACCEPT | §3.2 `filings` new-column paragraph; §2 row |
+| T12 upstream baseline | P2 | ACCEPT | header "上游" paragraph; §12 row |
+| T13 catalogue count | P2 | ACCEPT | header paragraph (35, `MAX_READ_CONCEPTS`, `monetary_funds`, CN `cash` missing) |
+| T14 CN document relationship | P2 | ACCEPT | §5.4 gold row `tushare_source_ref` (independently verified), `document_ref` cross-check only, type-5 own row; validator; §14-8 struck |
+| T15 evidence baseline | P2 | ACCEPT | E5; §5.1 `us.companyfacts_vs_gold` `incomplete_gold`; §5.4 CI gate creation + deploy gate; §6.1 CN `disclosure_date` raw retention, `unknown_upstream` until verified |
+
+## Round 6 (`07-codex-round6.md`, confirmation of the 6th-draft diff) — implemented in the 6th draft before commit
+
+Codex round-6 verdict (quoted): "Verdict: not ready — calendar claim preconditions, isolation-hook recovery, and the adoption conflict guard require correction". T1, T4–T9, T11–T15 RESOLVED; T2, T3, T10 PARTIAL only via U1/U2.
+
+| # | Severity | Disposition | Where |
+|---|---|---|---|
+| U1 calendar claim blocked by token precondition | P2 | ACCEPT as prescribed | §3.1: `claim_calendar_pass` own protocol (advisory xact lock per market, lock unfinished pass, create or take over idle/expired lease, return token); live-owner check only for replace/fail/finish |
+| U2 isolation-hook recovery | P2 | ACCEPT as prescribed | §5.6 `detail.issuer_id/market` persisted with the hook; §4.6 `--pending-hooks` scans resolved visibility decisions AND open `reconcile_mismatch` items, target re-resolved via `T(i)`; crash-after-commit test |
+| U3 adoption conflict guard conjunction | P1 | ACCEPT as prescribed | §3.2 `adopt_candidate`: `conflict_exists` when either a differing `ok` value or an applicable open dispute exists, checked under the scope lock; test |
+
+No further Codex round: the three fixes are the prescribed text, applied verbatim (the task brief asks for one incremental round; this second round was a confirmation of that round's diff). The plan audits re-check these sections.

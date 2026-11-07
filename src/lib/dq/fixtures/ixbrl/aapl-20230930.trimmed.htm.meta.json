@@ -1,0 +1,36 @@
+{
+ "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/aapl-20230930.htm",
+ "source_sha256": "0f18e0ee9f9e7ebf89e8d4edae8fbebe33c8c9fb4ac43a9b9e5c777e02991bc6",
+ "source_bytes": 1559043,
+ "fetched_at": "2026-11-06T14:16:00.429Z",
+ "trim_version": "ixbrl-trim/1",
+ "parser_version": "ixbrl/1",
+ "trimmed_sha256": "df0a11f52de48306524b2ebc7cc9ac6aad296164f1bb51be54541f8f70cfffcc",
+ "facts": 115,
+ "contexts": 8,
+ "units": 3,
+ "raw": {
+  "document": {
+   "path": "sec-document/0f18e0ee9f9e7ebf89e8d4edae8fbebe33c8c9fb4ac43a9b9e5c777e02991bc6.html",
+   "sha256": "0f18e0ee9f9e7ebf89e8d4edae8fbebe33c8c9fb4ac43a9b9e5c777e02991bc6",
+   "status": "stored"
+  },
+  "submissions": {
+   "path": "sec-submissions/2c9cbb2f163361bf1fd0318faadb50cdfa719104d45aa39934f29d554d3a4916.json",
+   "sha256": "2c9cbb2f163361bf1fd0318faadb50cdfa719104d45aa39934f29d554d3a4916",
+   "status": "stored"
+  }
+ },
+ "submissions": {
+  "url": "https://data.sec.gov/submissions/CIK0000320193.json",
+  "sha256": "2c9cbb2f163361bf1fd0318faadb50cdfa719104d45aa39934f29d554d3a4916",
+  "accession": "0000320193-23-000106",
+  "form": "10-K",
+  "filingDate": "2023-11-03",
+  "reportDate": "2023-09-30",
+  "primaryDocument": "aapl-20230930.htm",
+  "isInlineXBRL": true,
+  "category": "Large accelerated filer",
+  "fiscalYearEnd": "0926"
+ }
+}

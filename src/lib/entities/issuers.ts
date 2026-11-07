@@ -3,7 +3,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Row,TableClient} from '../db/table-client';
 import {isValidLei,isValidUsci,normalizeCik} from '../research/entity-keys/identifiers';
-import {fileClaim,isUnique} from './claims';
+import {buildClaimDetail,claimEvidence,fileClaim,isUnique} from './claims';
 import {HARD_IDS,matchIssuer} from './merge';
 import type {ConflictReason,MatchResult} from './merge';
 import {isBlank,normalizeHkexCode,normalizeIsin} from './normalize';
@@ -65,16 +65,30 @@ async function lookup(client:TableClient,input:IssuerIdentifiers):Promise<{candi
  return {candidates,match:matchIssuer(candidates,input)};
 }
 
+const entryOf=(prov:Record<string,unknown>|undefined,k:string)=>{const e=prov?.[k];return e&&typeof e==='object'?e as Record<string,unknown>:undefined;};
 const sourceOf=(prov:Record<string,unknown>|undefined,k:string)=>{
- const entry=prov?.[k];
- const s=entry&&typeof entry==='object'?(entry as Record<string,unknown>).source:undefined;
- return typeof s==='string'&&s?s:'unknown';
+ const s=entryOf(prov,k)?.source;
+ return typeof s==='string'&&s?s.slice(0,64):'unknown';
 };
-const claimFor=(client:TableClient,issuer_id:string,k:string,input:IssuerInput)=>
- fileClaim(client,{issuer_id,id_type:k as ClaimIdType,value:String(input[k as keyof IssuerInput]),source:sourceOf(input.provenance,k)});
+/**
+ * Files a claim/1 claim for identifier `k` against `row`: set_identifier when the row has none,
+ * correct_identifier (expected_current = the stored value) when it differs. The evidence is the
+ * incoming identifier record itself (sha256 of its canonical JSON), so replaying the same record
+ * never appends a source (spec 3 §4.2.1; Part A contract note 3).
+ */
+const claimFor=(client:TableClient,row:Row,k:string,input:IssuerInput)=>{
+ const issuer_id=String(row.issuer_id),value=String(input[k as keyof IssuerInput]);
+ const current=row[k]==null?null:String(row[k]);
+ const op=current===null?'set_identifier':'correct_identifier';
+ const record=Object.fromEntries(ENRICH_FIELDS.filter(f=>input[f]!=null).map(f=>[f,input[f]]));
+ const evidence=claimEvidence({source:sourceOf(input.provenance,k),asOf:entryOf(input.provenance,k)?.as_of,record});
+ return fileClaim(client,{issuer_id,id_type:k as ClaimIdType,value,source:evidence.source,op,
+  detail:buildClaimDetail({evidence_kind:k==='cninfo_org_id'?'provider_mapping':'hard_identifier',target:{issuer_id},
+   params:current===null?{}:{expected_current:current,new_value:value},evidence})});
+};
 /** Claims, against `row`, every incoming hard id whose value differs from what `row` stores. */
 async function claimDiffering(client:TableClient,row:Row,input:IssuerInput){
- for(const k of HARD_IDS)if(input[k]&&row[k]!==input[k])await claimFor(client,String(row.issuer_id),k,input);
+ for(const k of HARD_IDS)if(input[k]&&row[k]!==input[k])await claimFor(client,row,k,input);
 }
 const provOf=(row:Row|undefined)=>(row?.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
 const conflict=(reason:ConflictReason):UpsertIssuerResult=>({issuer_id:null,created:false,conflict:true,reason});
@@ -126,14 +140,14 @@ export async function upsertIssuerByIdentifiers(client:TableClient,raw:IssuerInp
   const want=input[f];
   if(want==null)continue;
   if(existing[f]!=null){
-   if(f==='cninfo_org_id'&&existing[f]!==want)await claimFor(client,issuer_id,f,input);
+   if(f==='cninfo_org_id'&&existing[f]!==want)await claimFor(client,existing,f,input);
    continue;
   }
   let n:number;
   try{n=await client.update('issuers',{issuer_id,status:'active',[f]:null},{[f]:want,updated_at:new Date().toISOString()});}
   catch(e){
    if(!isUnique(e)||!CLAIMABLE.includes(f))throw e;
-   await claimFor(client,issuer_id,f,input);
+   await claimFor(client,existing,f,input);
    if(HARD.includes(f))return conflict('hard_id_mismatch');
    continue;
   }
@@ -141,7 +155,7 @@ export async function upsertIssuerByIdentifiers(client:TableClient,raw:IssuerInp
   const r=await reread(client,issuer_id,input);
   if('result' in r)return r.result;
   if(r.row[f]!==want&&CLAIMABLE.includes(f)){
-   await claimFor(client,issuer_id,f,input);
+   await claimFor(client,r.row,f,input);
    if(HARD.includes(f))return conflict('hard_id_mismatch');
   }
  }
