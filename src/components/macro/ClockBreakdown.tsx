@@ -25,6 +25,11 @@ export function ClockBreakdown({
           aria-label={`${t(`judgment.clock.${regime}`)}: ${t("judgment.widget.inspect")}`}
         >
           <table>
+            <colgroup>
+              {Array.from({ length: 5 }, (_, i) => (
+                <col key={i} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 {["indicator", "value", "rule", "weight", "contribution"].map(

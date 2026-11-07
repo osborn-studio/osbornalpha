@@ -8,7 +8,8 @@ import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 async function main() {
   const scratch = process.env.OSSTACK_SCRATCH_ROOT ?? "/tmp/osstack";
-  const out = resolve(scratch, "macro-widget/preview");
+  const port = Number(process.env.PORT ?? 3119);
+  const out = resolve(scratch, `macro-widget/preview-${port}`);
   await mkdir(out, { recursive: true });
   await build({
     entryPoints: ["src/components/macro/ClockPreview.tsx"],
@@ -25,7 +26,9 @@ async function main() {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname.startsWith("/fixtures/")) {
         const region = url.pathname === "/fixtures/CN" ? "cn" : "us";
-        const root = process.env.MACRO_PREVIEW_FIXTURE_ROOT ?? "/tmp";
+        const root =
+          process.env.MACRO_PREVIEW_FIXTURE_ROOT ??
+          "/tmp/osstack/widget-full-fixtures";
         const [snapshot, cards] = await Promise.all([
           readFile(
             resolve(root, `osbornalpha-${region}-snapshot.json`),
@@ -64,8 +67,8 @@ async function main() {
       res.end(String(e));
     }
   });
-  server.listen(Number(process.env.PORT ?? 3119), "127.0.0.1", () =>
-    console.log("Local clock preview: http://127.0.0.1:3119"),
+  server.listen(port, "127.0.0.1", () =>
+    console.log(`Local clock preview: http://127.0.0.1:${port}`),
   );
 }
 main().catch((e) => {

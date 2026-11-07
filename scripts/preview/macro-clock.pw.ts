@@ -45,8 +45,8 @@ for (const region of ["US", "CN"])
         (await current) ?? "",
       );
       await expect(widget.locator(".clock-breakdown table")).toBeVisible();
-      // Captured DTOs omit observations: never invent values from the rule thresholds.
-      await expect(widget.locator(".clock-breakdown")).toContainText(
+      // Full captures supply the actual bound values and versioned readable rules.
+      await expect(widget.locator(".clock-breakdown")).not.toContainText(
         "数值未提供",
       );
       await widget.screenshot({
