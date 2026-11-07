@@ -6,9 +6,10 @@
 // cutoff vintage (resolver macro_regime_replay, label_policy cutoff_vintage, horizon 3 calendar months).
 // Active: the landed macro API reuses classifyRegime. Licenses remain unverified: publishable=false.
 import type {Abstained,Active,CategoricalClaim,Condition,Input,JudgmentInputsDb,MacroSnapshotSnapshot,Methodology,Regime,Subject,Target,WorkItem} from '@/lib/judgments/types';
-import {buildInput,buildOrAbstain} from '@/lib/judgments/inputs';
+import {buildInput} from '@/lib/judgments/inputs';
 import {addMonthsPeriod} from '@/lib/judgments/time';
 
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {METHODOLOGY_VERSION} from '@/lib/macro/regime';
 export const MACRO_UPSTREAM_VERSION=METHODOLOGY_VERSION;
 export const MACRO_REGIMES:readonly Regime[]=['recovery','overheat','stagflation','recession'];
@@ -27,21 +28,20 @@ export const marginPp=(norm:Record<Regime,number>,primary:Regime,secondary:Regim
 async function gather(item:WorkItem,db:JudgmentInputsDb):Promise<Input[]|Abstained>{
  const snapshotId=item.binding?.snapshot_id;
  if(!snapshotId)return abstain('binding_missing',['snapshot_id']);
+ const published=await db.macro.snapshot(snapshotId);
+ if(published&&published.status!=='active'&&published.status!=='superseded')return abstain('snapshot_not_published');
  const snap=await buildInput({kind:'macro_snapshot',ref:{snapshot_id:snapshotId}},db,item.asOf,item.observedAt);
  if(snap.kind!=='macro_snapshot')throw new Error(`buildInput returned ${snap.kind} for a macro_snapshot ref`);
  const s=snap.snapshot;
  if(s.region!==item.subject.key||s.as_of!==item.asOf)return abstain('binding_mismatch');
  // A foreign upstream version is not computed on; the snapshot alone is frozen so the abstention stays findable by snapshot_id.
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION)return [snap];
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==CATALOG_VERSION)return [snap];
  const inputs:Input[]=[snap];
  for(const id of s.observation_ids){
   const o=await db.macro.observation(id);   // locator lookup only; every frozen value comes from buildInput
   if(!o)return abstain('observation_missing',[id]);
   inputs.push(await buildInput({kind:'macro_observation',ref:{series_id:o.series_id,period_end:o.period_end,vintage_id:o.vintage_id}},db,item.asOf,item.observedAt));
  }
- const catalog=await buildOrAbstain({kind:'table_rows',ref:{table:'macro_series',natural_key:s.region}},db,item.asOf,item.observedAt);
- if('abstained' in catalog)return catalog;
- inputs.push(catalog);
  return inputs;
 }
 
@@ -52,12 +52,15 @@ async function resolveTarget(item:WorkItem):Promise<Target>{
 function compute(subject:Subject,inputs:Input[]):Active<CategoricalClaim>|Abstained{
  const s=snapshotOf(inputs);
  if(!s)return abstain('input_missing',['macro_snapshot']);
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION)return abstain('upstream_version_mismatch');
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==CATALOG_VERSION)return abstain('upstream_version_mismatch');
  if(s.region!==subject.key)return abstain('binding_mismatch');
- if(s.primary_state===null||s.secondary_state===null)return abstain('regime_unavailable');
+ if(!MACRO_REGIMES.every(r=>Number.isFinite(s.scores?.[r])&&Number.isFinite(s.norm?.[r])&&s.norm[r]>=0)
+  ||Math.abs(MACRO_REGIMES.reduce((sum,r)=>sum+s.norm[r],0)-1)>1e-9
+  ||s.primary_state===null||s.secondary_state===null
+  ||!MACRO_REGIMES.includes(s.primary_state)||!MACRO_REGIMES.includes(s.secondary_state)||s.primary_state===s.secondary_state
+  ||!Number.isFinite(s.margin_pp))return abstain('invalid_snapshot');
  if(s.coverage<MIN_COVERAGE)return abstain('coverage_below_threshold');
  if(inputs.filter(i=>i.kind==='macro_observation').length!==s.observation_ids.length)return abstain('observation_missing');
- if(!inputs.some(i=>i.kind==='table_rows'&&i.ref.table==='macro_series'&&i.ref.natural_key===s.region))return abstain('input_missing',['table_rows:macro_series']);
  const margin=marginPp(s.norm,s.primary_state,s.secondary_state);
  if(s.margin_pp!==null&&Math.abs(s.margin_pp-margin)>MARGIN_UNIT_TOLERANCE_PP)return abstain('margin_unit_mismatch');
  return {abstained:false,claim:{selected:s.primary_state,classes:[...MACRO_REGIMES],distribution:Object.fromEntries(MACRO_REGIMES.map(r=>[r,s.norm[r]])),
@@ -77,7 +80,7 @@ function condition(subject:Subject,inputs:Input[],claim:CategoricalClaim):Condit
 
 export const macroRegimeV1:Methodology<CategoricalClaim>={
  id:'macro_regime',version:'v1',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
- subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation','table_rows'],
+ subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],
  upstream:{macro_methodology_version:MACRO_UPSTREAM_VERSION},
  title:{zh:'宏观象限（当期 nowcast）',en:'Macro regime (current-period nowcast)'},
  doc:'docs/methodologies/macro_regime/v1.md',

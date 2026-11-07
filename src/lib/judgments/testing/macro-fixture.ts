@@ -1,11 +1,11 @@
 // src/lib/judgments/testing/macro-fixture.ts
 // Test / script helpers for macro_regime@v1 (Task 19). Loads fixtures/judgments/macro/*.json, serves them through
-// fixtureMacroReadApi (macro side) and the frozen macro_series catalog (table_rows side), syncs the methodology row into a
+// fixtureMacroReadApi (synthetic macro results), syncs the methodology row into a
 // memory JudgmentsDb with a deterministic clock and an optional draft override for gate tests —
 // and builds the golden replay fixture (spec §14.4). Production code never imports this file.
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import type {Input,JudgmentInputsDb,PublicTable,WorkItem} from '@/lib/judgments/types';
+import type {Input,JudgmentInputsDb,WorkItem} from '@/lib/judgments/types';
 import {fixtureMacroReadApi,type MacroFixture} from '@/lib/judgments/macro-api';
 import {memoryJudgmentsDb,type MemoryJudgmentsDb} from '@/lib/judgments/memory-judgments-db';
 import {formulaHashOf} from '@/lib/judgments/formula-hash';
@@ -40,7 +40,7 @@ export function macroInputsDb(fx:MacroFixture):JudgmentInputsDb{
   facts:{readFacts:notInFixture('facts.readFacts'),factsByIds:notInFixture('facts.factsByIds'),filingsOfIssuer:notInFixture('facts.filingsOfIssuer')},
   deriveMetricsAsOf:notInFixture('deriveMetricsAsOf'),
   macro:fixtureMacroReadApi(fx),
-  async tableRows(table:PublicTable,naturalKey:string){return table==='macro_series'&&(naturalKey==='US'||naturalKey==='CN')?(fx.series_catalog[naturalKey]??[]):[];},
+  tableRows:notInFixture('tableRows: catalog is versioned code'),
   async publicJudgment(){return null;},
   async kline(){return {failure:'unsupported' as const};},
   async issuerPrimarySecurity(){return null;},

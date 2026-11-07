@@ -5,6 +5,7 @@ import {existsSync,readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
 import type {CategoricalClaim,Input,JudgmentInputsDb,JudgmentRow,ResolverResult,Subject} from '@/lib/judgments/types';
 import type {MacroFixture} from '@/lib/judgments/macro-api';
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {digest} from '@/lib/judgments/canonical';
 import {formulaHashOf,importClosure} from '@/lib/judgments/formula-hash';
 import {REGISTRY,methodologyRowOf} from '@/lib/judgments/registry';
@@ -42,7 +43,7 @@ describe('macro_regime@v1 (Task 19)',()=>{
   expect(REGISTRY.filter(m=>m.id==='macro_regime')).toEqual([macroRegimeV1]);
   const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
   expect(row).toMatchObject({methodology_id:'macro_regime',version:'v1',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
-   subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation','table_rows'],doc_path:'docs/methodologies/macro_regime/v1.md',
+   subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],doc_path:'docs/methodologies/macro_regime/v1.md',
    params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage'},
    horizon:{unit:'calendar_months',n:3},upstream:{macro_methodology_version:'v1.0'},status:'active',publishable:false});
   expect(row.formula_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -60,7 +61,7 @@ describe('macro_regime@v1 (Task 19)',()=>{
   expect(ids).toHaveLength(1);
   expect(row.claim).toEqual({selected:'recovery',classes:['recovery','overheat','stagflation','recession'],
    distribution:{recovery:0.32575757575757575,overheat:0.23484848484848486,stagflation:0.2196969696969697,recession:0.2196969696969697},
-   scores_are_not_probabilities:true,margin_pp:9.090909,catalog_version:'us-catalog-2026-09-01'});
+   scores_are_not_probabilities:true,margin_pp:9.090909,catalog_version:CATALOG_VERSION});
   const claim=row.claim as CategoricalClaim;
   expect(claim.margin_pp!).toBeCloseTo((claim.distribution!.recovery-claim.distribution!.overheat)*100,5);
   expect(claim.margin_pp!).toBeGreaterThan(1);   // percentage points, not a fraction (G28)
@@ -69,15 +70,14 @@ describe('macro_regime@v1 (Task 19)',()=>{
    horizon:{unit:'calendar_months',n:3},target:{kind:'period',period:'2026-12'},label_policy:'cutoff_vintage',
    settle_after:'2027-01-01T00:00:00.000Z',settle_by:'2027-01-31T00:00:00.000Z',code_version:MACRO_CODE_VERSION});
   expect(row.condition).toEqual({resolver:'macro_regime_replay',
-   params:{region:'US',reference_period:'2026-09',macro_methodology_version:'v1.0',catalog_version:'us-catalog-2026-09-01'},
+   params:{region:'US',reference_period:'2026-09',macro_methodology_version:'v1.0',catalog_version:CATALOG_VERSION},
    predicate:{op:'eq',rhs:'recovery'},
    text:{zh:'US 2026-09 当期象限为“复苏”（同一分类函数在截止 vintage 下对同一参考期重算）',en:'US 2026-09 regime is "recovery" (same classifier re-run for the same reference month on the cutoff vintage)'}});
   const kinds=row.inputs.map(i=>i.kind);
-  expect({snapshot:kinds.filter(k=>k==='macro_snapshot').length,observations:kinds.filter(k=>k==='macro_observation').length,tables:kinds.filter(k=>k==='table_rows').length}).toEqual({snapshot:1,observations:11,tables:1});
+  expect({snapshot:kinds.filter(k=>k==='macro_snapshot').length,observations:kinds.filter(k=>k==='macro_observation').length,tables:kinds.filter(k=>k==='table_rows').length}).toEqual({snapshot:1,observations:11,tables:0});
   const snap=row.inputs.find(i=>i.kind==='macro_snapshot')!;
   expect(snap.ref).toEqual({snapshot_id:MACRO_S1});
   expect(snap.available_at).toBe('2026-09-11T12:30:00.000Z');   // max of its observations' available_at (spec §3.7), not created_at
-  expect(row.inputs.find(i=>i.kind==='table_rows')!.ref).toEqual({table:'macro_series',natural_key:'US'});
   const cpi=row.inputs.find((i):i is Extract<Input,{kind:'macro_observation'}>=>i.kind==='macro_observation'&&i.ref.series_id==='US_CPI_YOY')!;
   expect(cpi.snapshot).toMatchObject({series_id:'US_CPI_YOY',period_end:'2026-08-31',value:2.9,vintage_id:'bls-2026-09-11'});
   for(const i of row.inputs)expect(i.hash).toBe(digest(i.snapshot));
@@ -91,18 +91,63 @@ describe('macro_regime@v1 (Task 19)',()=>{
   expect(row).toMatchObject({abstained:true,abstain_reason:'margin_unit_mismatch',claim:null,condition:null,target:null,horizon:null,label_policy:null,settle_after:null,settle_by:null});
  });
 
- it('freezes the catalog: compute on the frozen inputs reproduces the claim; another catalog for the same snapshot is another judgment',async()=>{
-  const {db,row}=await registerS1();
-  expect(macroRegimeV1.compute(US,row.inputs)).toEqual({abstained:false,claim:row.claim});
-  const edited=base();
-  edited.series_catalog.US=edited.series_catalog.US!.map(r=>r.id==='US_VIX'?{...r,weight:6,definition_version:2}:r);
-  const again=await produce(macroRegimeV1,[macroWork(edited,MACRO_S1)],produceCtx(db,macroInputsDb(edited)));
-  expect(again.counts).toMatchObject({inserted:1,duplicates:0,quarantined:0});
-  const ids=await db.judgmentsBySnapshot(MACRO_S1);
-  expect(ids).toHaveLength(2);
-  const other=(await db.getJudgment(ids.find(i=>i!==row.judgment_id)!))!;
-  expect(other.inputs_hash).not.toBe(row.inputs_hash);
-  expect((other.claim as CategoricalClaim).catalog_version).toBe('us-catalog-2026-09-01');   // from the snapshot, frozen
+ it('gathers snapshot + observations alone without table catalog reads',async()=>{
+  const fx=base(),db=macroInputsDb(fx);
+  db.tableRows=async()=>{throw new Error('catalog is code, not timestamped rows');};
+  const inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),db);
+  expect(Array.isArray(inputs)).toBe(true);
+  if(!Array.isArray(inputs))throw new Error(inputs.reason);
+  expect(inputs.map(i=>i.kind)).toEqual(['macro_snapshot',...Array(11).fill('macro_observation')]);
+  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
+ });
+
+ it('catalog version mismatch abstains with the bound snapshot retained (D1)',async()=>{
+  const {res,row}=await registerS1(patchSnapshots(base(),s=>{s.catalog_version='foreign-catalog';}));
+  expect(res.counts.inserted).toBe(1);
+  expect(row).toMatchObject({abstained:true,abstain_reason:'upstream_version_mismatch'});
+  expect(row.inputs.map(i=>i.kind)).toEqual(['macro_snapshot']);
+ });
+
+ it('failed snapshots abstain snapshot_not_published',async()=>{
+  const fx=patchSnapshots(base(),s=>{s.status='failed';});
+  const inputsDb=macroInputsDb(fx);
+  expect(await macroRegimeV1.gather(macroWork(fx,MACRO_S1),inputsDb)).toEqual({abstained:true,reason:'snapshot_not_published'});
+  const db=await macroDb('active');
+  const result=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
+  expect(result.counts.inserted).toBe(1);
+  expect(await db.getJudgment(result.items[0].judgment_id!)).toMatchObject({abstained:true,abstain_reason:'snapshot_not_published',inputs:[]});
+ });
+
+ it.each(['active','superseded'] as const)('accepts %s snapshots',async status=>{
+  const {row}=await registerS1(patchSnapshots(base(),s=>{s.status=status;}));
+  expect(row.abstained).toBe(false);
+ });
+
+ it.each([
+  ['missing score',{scores:{recovery:1,overheat:1,stagflation:1}}],
+  ['infinite score',{scores:{recovery:Infinity,overheat:1,stagflation:1,recession:1}}],
+  ['missing norm',{norm:{recovery:0.5,overheat:0.3,stagflation:0.2}}],
+  ['NaN norm',{norm:{recovery:NaN,overheat:0.3,stagflation:0.2,recession:0}}],
+  ['negative norm',{norm:{recovery:0.5,overheat:0.3,stagflation:0.3,recession:-0.1}}],
+  ['norm sum',{norm:{recovery:0.5,overheat:0.3,stagflation:0.2,recession:0.1}}],
+  ['null primary',{primary_state:null}],['unknown primary',{primary_state:'unknown'}],
+  ['null secondary',{secondary_state:null}],['unknown secondary',{secondary_state:'unknown'}],
+  ['equal states',{secondary_state:'recovery'}],['null margin',{margin_pp:null}],
+  ['NaN margin',{margin_pp:NaN}],['infinite margin',{margin_pp:Infinity}],
+ ])('compute rejects invalid snapshot: %s',async(_name,patch)=>{
+  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  if(!Array.isArray(inputs))throw new Error(inputs.reason);
+  const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
+  Object.assign(snapshot.snapshot,patch);
+  expect(macroRegimeV1.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+ });
+
+ it('allows norm sum roundoff within 1e-9',async()=>{
+  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  if(!Array.isArray(inputs))throw new Error(inputs.reason);
+  const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
+  snapshot.snapshot.norm.recession+=5e-10;
+  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
  });
 
  it('macro_regime_replay on the same vintage → recovery → hit',async()=>{
@@ -111,7 +156,7 @@ describe('macro_regime@v1 (Task 19)',()=>{
   const r=await macroRegimeReplayResolver.resolve(resolveCtx(row,inputsDb));
   expect(r).toMatchObject({status:'resolved',value:'recovery',label_available_at:'2026-09-11T12:30:00.000Z'});
   if(r.status!=='resolved')throw new Error('unreachable');
-  expect(r.evidence).toMatchObject({catalog:{version:'us-catalog-2026-09-01',rules_version:'v1.0'},regime_result:{primary_state:'recovery',coverage:0.8}});
+  expect(r.evidence).toMatchObject({catalog:{version:CATALOG_VERSION,rules_version:'v1.0'},regime_result:{primary_state:'recovery',coverage:0.8}});
   expect((r.evidence.observation_refs as unknown[]).length).toBe(11);
   expect(outcomeOf(row,r)).toBe('hit');
  });
@@ -209,13 +254,6 @@ describe('macro_regime@v1 (Task 19)',()=>{
  });
 });
 
-it('unevidenced catalog abstains while retaining the bound snapshot (D1)',async()=>{
- const fx=base();for(const r of fx.series_catalog.US!)delete r.updated_at;
- const {res,row}=await registerS1(fx);
- expect(res.counts.failed).toBe(0);
- expect(row).toMatchObject({abstained:true,abstain_reason:'input_unavailable'});
- expect(row.inputs.map(i=>i.kind)).toEqual(['macro_snapshot']);
-});
 it('classification code and rule/catalog dependencies are covered by formula hash',()=>{
  const hashed=new Set([...formulaHashOf(macroRegimeV1).closure,...macroRegimeV1.deps]);
  for(const file of importClosure(process.cwd(),'src/lib/macro/read-api.ts'))expect({file,hashed:hashed.has(file)}).toEqual({file,hashed:true});

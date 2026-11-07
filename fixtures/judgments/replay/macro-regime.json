@@ -3,7 +3,7 @@
  "description": "macro_regime@v1 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
  "expect": "exact",
  "judgment": {
-  "judgment_id": "1497ba77-6ec7-853d-963e-2976f12e90c4",
+  "judgment_id": "78413ddb-ac67-8994-942f-54e90514c0fa",
   "subject_type": "macro_region",
   "subject_key": "US",
   "judgment_type": "macro_regime",
@@ -278,7 +278,7 @@
      "region": "US",
      "as_of": "2026-09-11",
      "methodology_version": "v1.0",
-     "catalog_version": "us-catalog-2026-09-01",
+     "catalog_version": "macro-catalog/ec304166c325",
      "observation_ids": [
       "US_DFF:2026-08-31:fred-2026-09-01",
       "US_DGS10:2026-05-31:fred-2026-06-01",
@@ -311,156 +311,16 @@
      "growth_axis": null,
      "inflation_axis": null
     },
-    "hash": "e3963e582a3e9841ccfa464b270f4ba91aa5df78fefd2fd4e14e691069b0322b",
+    "hash": "55969eccdd922cdd1624d6fda91521033df32b2ee3532677ae8aed017506e24b",
     "available_at": "2026-09-11T12:30:00.000Z",
     "origin": {
      "publisher": "OsbornAlpha 宏观工作台（由已发布观测派生的快照）",
      "adapter": "macro_workbench",
      "locator": "macro_snapshots:6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01"
     }
-   },
-   {
-    "kind": "table_rows",
-    "ref": {
-     "table": "macro_series",
-     "natural_key": "US"
-    },
-    "snapshot": {
-     "table": "macro_series",
-     "natural_key": "US",
-     "rows": [
-      {
-       "id": "US_DFF",
-       "region": "US",
-       "role": "indicator",
-       "type": "policy_rate",
-       "unit": "%",
-       "frequency": "daily",
-       "provider": "fred",
-       "provider_series_id": "DFF",
-       "origin": "Fed",
-       "weight": 25,
-       "change_kind": "bp",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_DGS10",
-       "region": "US",
-       "role": "indicator",
-       "type": "bond_yield",
-       "unit": "%",
-       "frequency": "daily",
-       "provider": "fred",
-       "provider_series_id": "DGS10",
-       "origin": "Treasury",
-       "weight": 15,
-       "change_kind": "bp",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_DTWEXBGS",
-       "region": "US",
-       "role": "indicator",
-       "type": "fx",
-       "unit": "index",
-       "frequency": "daily",
-       "provider": "fred",
-       "provider_series_id": "DTWEXBGS",
-       "origin": "Fed",
-       "weight": 10,
-       "change_kind": "pct",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_CPI_YOY",
-       "region": "US",
-       "role": "indicator",
-       "type": "inflation_yoy",
-       "unit": "pct_yoy",
-       "frequency": "monthly",
-       "provider": "fred",
-       "provider_series_id": "CPIAUCSL",
-       "origin": "BLS",
-       "weight": 15,
-       "change_kind": "pp",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_UNRATE",
-       "region": "US",
-       "role": "indicator",
-       "type": "labor_rate",
-       "unit": "%",
-       "frequency": "monthly",
-       "provider": "fred",
-       "provider_series_id": "UNRATE",
-       "origin": "BLS",
-       "weight": 10,
-       "change_kind": "pp",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_ISM_PMI",
-       "region": "US",
-       "role": "indicator",
-       "type": "pmi",
-       "unit": "index",
-       "frequency": "monthly",
-       "provider": "akshare",
-       "provider_series_id": "macro_usa_ism_pmi",
-       "origin": "ISM",
-       "weight": 15,
-       "change_kind": "points",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_PPI_FD_YOY",
-       "region": "US",
-       "role": "indicator",
-       "type": "inflation_yoy",
-       "unit": "pct_yoy",
-       "frequency": "monthly",
-       "provider": "fred",
-       "provider_series_id": "PPIFIS",
-       "origin": "BLS",
-       "weight": 5,
-       "change_kind": "pp",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      },
-      {
-       "id": "US_VIX",
-       "region": "US",
-       "role": "indicator",
-       "type": "risk_index",
-       "unit": "index",
-       "frequency": "daily",
-       "provider": "fred",
-       "provider_series_id": "VIXCLS",
-       "origin": "Cboe",
-       "weight": 5,
-       "change_kind": "points",
-       "definition_version": 1,
-       "updated_at": "2026-09-01T00:00:00.000Z"
-      }
-     ]
-    },
-    "hash": "45e9ffb8d1f27f09921ff1ac6c2ed9de6e89f066647ba72725869df5d9e479d0",
-    "available_at": "2026-09-01T00:00:00.000Z",
-    "origin": {
-     "publisher": "OsbornAlpha 宏观工作台（序列目录）",
-     "adapter": "macro_workbench",
-     "locator": "macro_series:US"
-    }
    }
   ],
-  "inputs_hash": "da64b2e2281ce00de6aa4d9c5572a753b9f7598bce36d832d3c4bf54a25a3375",
+  "inputs_hash": "d87a9c22b5622a49b182536c56dd41bc47834b9cf912c0f352c414abfe0e766c",
   "abstained": false,
   "claim": {
    "selected": "recovery",
@@ -478,7 +338,7 @@
    },
    "scores_are_not_probabilities": true,
    "margin_pp": 9.090909,
-   "catalog_version": "us-catalog-2026-09-01"
+   "catalog_version": "macro-catalog/ec304166c325"
   },
   "condition": {
    "resolver": "macro_regime_replay",
@@ -486,7 +346,7 @@
     "region": "US",
     "reference_period": "2026-09",
     "macro_methodology_version": "v1.0",
-    "catalog_version": "us-catalog-2026-09-01"
+    "catalog_version": "macro-catalog/ec304166c325"
    },
    "predicate": {
     "op": "eq",
