@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "600887.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "98dae7a643a618ea2ce8bbd15115403a508b588be0abcb82bc3a19578d340554",
+ "request_id": "7b54a899-e097-4c8d-83c7-d8de2f1c7460",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "600887.SH",
+    "600887",
+    "伊利股份",
+    "内蒙",
+    "乳制品",
+    "内蒙古伊利实业集团股份有限公司",
+    "Inner Mongolia Yili Industrial Group Co.,Ltd.",
+    "YLGF",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "19960312",
+    null,
+    "H",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

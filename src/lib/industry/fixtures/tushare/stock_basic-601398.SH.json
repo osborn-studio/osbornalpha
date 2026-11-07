@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "601398.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "96aea00ec3796ce7ae14717edf2e42663bca0dedb28edd191ab5956213dd5b55",
+ "request_id": "20a24034-f6da-4161-8905-bb7a70c16669",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "601398.SH",
+    "601398",
+    "工商银行",
+    "北京",
+    "银行",
+    "中国工商银行股份有限公司",
+    "Industrial and Commercial Bank of China Limited",
+    "GSYH",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20061027",
+    null,
+    "H",
+    "无实际控制人",
+    "无"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

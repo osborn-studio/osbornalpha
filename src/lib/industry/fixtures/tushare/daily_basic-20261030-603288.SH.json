@@ -1,0 +1,60 @@
+{
+ "request": {
+  "api_name": "daily_basic",
+  "params": {
+   "ts_code": "603288.SH",
+   "trade_date": "20261030"
+  },
+  "fields": "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
+ },
+ "response_sha256": "66b0adc9d58375b7b62e19ea36aadbda216e06b772b1c438ec17a15e5d4fe8a5",
+ "request_id": "96c7dd5f-dad3-4443-abe8-1b67e70af707",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "trade_date",
+   "close",
+   "turnover_rate",
+   "turnover_rate_f",
+   "volume_ratio",
+   "pe",
+   "pe_ttm",
+   "pb",
+   "ps",
+   "ps_ttm",
+   "dv_ratio",
+   "dv_ttm",
+   "total_share",
+   "float_share",
+   "free_share",
+   "total_mv",
+   "circ_mv"
+  ],
+  "items": [
+   [
+    "603288.SH",
+    "20261030",
+    34.86,
+    0.3923,
+    1.5012,
+    1.14,
+    28.9439,
+    28.6912,
+    5.176,
+    7.0557,
+    6.8372,
+    3.2074,
+    3.1529,
+    584397.3444,
+    555982.0644,
+    145295.4658,
+    20372091.2724,
+    19381534.6116
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

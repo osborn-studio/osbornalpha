@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>行业研究 状态</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 1900px; padding: 32px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-content: start">
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">loading · 骨架</div>
+    <div class="row"><div class="sk" style="width: 180px; height: 28px"></div><div class="sk" style="width: 120px; height: 28px; margin-left: auto"></div></div>
+    <div style="display: grid; grid-template-columns: 120px repeat(8, minmax(0, 1fr)); gap: 3px">
+      <div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div>
+      <div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div>
+      <div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div><div class="sk" style="height: 24px"></div>
+    </div>
+    <div class="tiny">骨架与热力图同尺寸，静态；不用转圈，不写“加载中…”。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">unlicensed · 授权待确认</div>
+    <div class="callout" style="display: flex; flex-direction: column; gap: 8px; padding: 24px">
+      <div class="h3">申万 2021 数据授权待确认 <span class="en">SW 2021 data licence pending</span></div>
+      <p style="margin: 0; max-width: 60ch">分类与成分经 Tushare 转载申万宏源研究所数据，展示条款未确认前不对外显示任何数字。可切换到 SIC 方案（美股，SEC 公开数据）。</p>
+      <div class="row"><button class="btn sm">切换到 SIC</button><a href="#" style="font-size: 13px">数据来源与授权说明 →</a></div>
+    </div>
+    <div class="row" style="border: 1px solid rgba(202,138,4,.4); background: rgba(202,138,4,.12); border-radius: 6px; padding: 8px 12px">
+      <span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span>
+      <span class="cap" style="color: #fafafa">内部预览 Internal preview · 数据集 scheme:sw2021:2021 状态 internal · 非 admin 看到上方空态</span>
+    </div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">stale · 过期</div>
+    <div class="row cap" style="gap: 14px">
+      <span class="chip warn"><span class="dot warn"></span>stale 过期 · 期望 weekly，超出 2 天宽限</span>
+      <span>显示运行 <span class="m" style="color: #fafafa">2026-10-18</span>（gen 13）</span>
+    </div>
+    <div class="cap">新聚合未完成：<span class="m">facts_scope_not_ready</span>。页面继续显示上一个 active run，并在每个格的抽屉里写明 run 日期。</div>
+    <div class="row"><div class="hc" style="width: 80px; background: rgba(202,138,4,.42)">47.3%</div><div class="hc" style="width: 80px; background: rgba(202,138,4,.18)">13.1%</div><div class="hc" style="width: 80px; background: rgba(202,138,4,.31)">30.2%</div></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">error · 读取失败</div>
+    <div class="errcard row"><span class="dot err"></span><span>拉取失败：显示上次成功响应（<span class="m">2026-11-01 03:10</span>）。Fetch failed; showing last good response.</span><button class="btn sm" style="margin-left: auto">重试 Retry</button></div>
+    <div class="cap">永不以 0 替代缺失；接口错误码按原样记录（如 <span class="m">429 rate_limited</span>、<span class="m">404 unknown_cell</span>）。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">empty · 尚未聚合</div>
+    <div class="callout" style="padding: 24px">
+      <div class="h3">尚未聚合 <span class="en">No active run yet</span></div>
+      <p style="margin: 6px 0 0">方案已授权，但还没有 active 的聚合运行。首轮运行完成后这里出现热力图。</p>
+    </div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">reconstruction · 历史重建</div>
+    <div class="row"><span class="chip warn">历史重建 Reconstruction</span><span class="cap">run 级徽标，出现在列表页头、详情页头与每个抽屉</span></div>
+    <div class="callout" style="display: flex; flex-direction: column; gap: 6px">
+      <strong style="color: #fafafa">这些格不是当时可见的数字</strong>
+      <span>历史期间用今天才拿到的成分与事实重建（knowledge_date 晚于期间）。可以比较趋势，但不能当作当时投资者看到的值。每格的可得时刻 = 本次 run 创建时刻，不回溯到期间。</span>
+      <a href="#" style="font-size: 13px">什么是历史重建？ →</a>
+    </div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">sic · 无热力图与估值</div>
+    <div class="row"><button class="sel"><span class="k">方案</span>SIC (SEC) ▾</button><span class="chip warn">current_only</span></div>
+    <table class="t dense">
+      <thead><tr><th>SIC</th><th>名称 Industry title</th><th class="n">成分</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="m">3674</td><td>Semiconductors &amp; Related Devices</td><td class="n m">62</td><td><a href="#" style="font-size: 12px">成分 →</a></td></tr>
+        <tr><td class="m">7372</td><td>Services-Prepackaged Software</td><td class="n m">148</td><td><a href="#" style="font-size: 12px">成分 →</a></td></tr>
+        <tr><td class="m">2834</td><td>Pharmaceutical Preparations</td><td class="n m">97</td><td><a href="#" style="font-size: 12px">成分 →</a></td></tr>
+      </tbody>
+    </table>
+    <div class="tiny">SIC 单层四位码，不造父级；只用于导航、成分与公司页芯片，不聚合。中文界面显示英文名 + 代码。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">detail · 估值未发布（未通过对照）</div>
+    <div class="row"><h3 class="h3">估值与分位</h3><span class="chip">未发布 not published</span></div>
+    <div class="callout" style="display: flex; flex-direction: column; gap: 6px">
+      <span>本行业最近一次估值运行未通过对照：自算值与申万发布值的差超过容差的日期占比过高，整段不发布。</span>
+      <dl class="kv" style="grid-template-columns: 140px 1fr">
+        <dt>对照对 pairs</dt><dd class="m">574</dd><dt>within</dt><dd class="m">511（89.0%）</dd><dt>发布门槛</dt><dd class="m">≥ 95%</dd><dt>对照口径</dt><dd class="m">comparator_basis = unknown</dd>
+      </dl>
+    </div>
+    <div class="tiny">不显示自算 PE/PB、不显示分位；也不改用官方值顶替。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">detail · 部分日期未发布</div>
+    <div class="row"><span class="chip ac">已发布 published</span><span class="chip">未发布日期 outside <span class="m">6.2%</span> · no_official <span class="m">0.9%</span></span></div>
+    <div class="cap">序列在未发布日期断开；分位只在已发布日期上计算，并写出 n / 期望（<span class="m">532 / 574</span>）。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">judgments · 未设判断 / 弃权</div>
+    <div class="callout"><strong style="color: #fafafa">未设判断</strong> · 方法未对该主体运行。<span class="fog">No judgment registered.</span></div>
+    <div class="callout">方法 <span class="m">industry_lifecycle@v1</span> 弃权：需要 3 段 3 年营收 CAGR，缺 2016–2018 覆盖（6/9 &lt; 0.8）。</div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

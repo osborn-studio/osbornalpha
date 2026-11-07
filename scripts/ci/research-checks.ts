@@ -17,6 +17,9 @@ export const criticalSuites = [
  .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts')
  // F6 end
 ;
+// INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
+criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts');
+// INDUSTRY:END
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

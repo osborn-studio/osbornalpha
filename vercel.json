@@ -49,6 +49,10 @@
     {
       "path": "/api/cron/filing-calendar?market=CN",
       "schedule": "10 1 * * *"
+    },
+    {
+      "path": "/api/cron/industry-sync?job=memberships-sic&limit=200",
+      "schedule": "0 2 * * *"
     }
   ]
 }
