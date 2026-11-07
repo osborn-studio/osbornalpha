@@ -15,14 +15,11 @@
 // code over memoryFactsDb + memoryTableClient and hides non-ok facts like the anon policy.
 // kline: anon default = readKlineRange (Task 7); the memory variant defaults to unsupportedKline (no network in tests).
 import type {SupabaseClient} from '@supabase/supabase-js';
-import type {Pool} from 'pg';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import {pgTableClient} from '@/lib/db/pg-table-client';
 import {supabaseTableClient} from '@/lib/db/table-client';
 import type {Row,TableClient} from '@/lib/db/table-client';
 import {supabaseFactsDb} from '@/lib/facts/db';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
-import {pgFactsDb} from '@/lib/facts/pg-facts-db';
 import type {FactsDb} from '@/lib/facts/types';
 import type {JudgmentInputsDb,JudgmentRow,MacroReadApi,PriceMarket,PublicTable} from './types';
 import {PUBLIC_TABLES} from './types';
@@ -31,6 +28,9 @@ import {JudgmentError} from './errors';
 import {deriveMetricsAsOf} from './facts-derive';
 import {unavailableMacroReadApi} from './macro-api';
 import {readKlineRange} from './kline';
+import {IndustryInputError,industryTableRowsInput,parseIndustryNaturalKey} from '@/lib/industry/judgment-input';
+import {mapIndustryInputError} from './inputs';
+import type {IndustryDb} from '@/lib/industry/types';
 
 export type KlineFn=JudgmentInputsDb['kline'];
 /** No price source wired: every request is unsupported. */
@@ -42,13 +42,18 @@ const isoKeys=(r:Row):Record<string,unknown>=>Object.fromEntries(Object.entries(
 export function normalizeTableRows(rows:Row[]):Record<string,unknown>[]{
  return rows.map(isoKeys).map(r=>({r,c:canonicalize(r)})).sort((a,b)=>a.c<b.c?-1:a.c>b.c?1:0).map(x=>x.r);
 }
-const NK:Record<PublicTable,RegExp>={
+const NK:Record<Exclude<PublicTable,'industry_metrics'>,RegExp>={
  industry_classifications:/^([^:]+):([^:]+):([^:]+)$/,
  issuer_industry_memberships:/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([^:]+):([^:]+)$/,
  macro_series:/^(US|CN)$/,
 };
 export function parseNaturalKey(table:PublicTable,key:string):string[]{
  if(!(PUBLIC_TABLES as readonly string[]).includes(table))throw new JudgmentError('input_not_allowed',`table ${table} is not a public input table`);
+ if(table==='industry_metrics'){
+  const k=parseIndustryNaturalKey(key);
+  if(!k||k.table!==table)throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
+  return [k.runId,k.code,k.date];
+ }
  const m=NK[table].exec(key);
  if(!m)throw new JudgmentError('input_not_allowed',`natural key ${key} is not valid for ${table}`);
  return m.slice(1);
@@ -81,8 +86,13 @@ function memoryPaged(tables:TableClient):PagedRead{
   return (await tables.select(table,match)).sort((a,b)=>key(a)<key(b)?-1:key(a)>key(b)?1:0);
  };
 }
-async function publicTableRows(tables:TableClient,paged:PagedRead,macro:MacroReadApi,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
+async function publicTableRows(tables:TableClient,paged:PagedRead,macro:MacroReadApi,industry:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>|undefined,table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>{
  const parts=parseNaturalKey(table,naturalKey);
+ if(table==='industry_metrics'){
+  if(!industry)throw new JudgmentError('input_unavailable','industry provider unavailable');
+  try{return (await industryTableRowsInput(industry,{table,natural_key:naturalKey})).snapshot.rows as unknown as Record<string,unknown>[];}
+  catch(e){if(e instanceof IndustryInputError)throw mapIndustryInputError(e);throw e;}
+ }
  let rows:Row[];
  if(table==='industry_classifications'){const [scheme,version,code]=parts;rows=await tables.select(table,{scheme,version,code},{limit:2});}
  else if(table==='issuer_industry_memberships'){
@@ -125,37 +135,27 @@ export function publicFacts(db:FactsDb):JudgmentInputsDb['facts']{
   filingsOfIssuer:async(issuer,market,o)=>{const rows=(await db.filingsOfIssuer(issuer,market,{to:o.to})).filter(f=>f.mapping_gen>0);return o.limit===undefined?rows:rows.slice(0,o.limit);},
  };
 }
-function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:MacroReadApi;kline:KlineFn}):JudgmentInputsDb{
+export function inputsDbOf(p:{facts:FactsDb;tables:TableClient;paged:PagedRead;macro:MacroReadApi;kline:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}):JudgmentInputsDb{
  const facts=publicFacts(p.facts);
  return {
   facts,
   deriveMetricsAsOf:(issuer,market,asOf,formulaVersion)=>deriveMetricsAsOf(facts,issuer,market,asOf,formulaVersion),
   macro:p.macro,
-  tableRows:(table,key)=>publicTableRows(p.tables,p.paged,p.macro,table,key),
+  tableRows:(table,key)=>publicTableRows(p.tables,p.paged,p.macro,p.industry,table,key),
   publicJudgment:id=>publicJudgmentFrom(p.tables,id),
   kline:p.kline,
   issuerPrimarySecurity:(issuer,on)=>primarySecurityFrom(p.tables,p.paged,issuer,on),
  };
 }
-export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn}
+export interface AnonInputsDeps{anon:SupabaseClient;macro?:MacroReadApi;kline?:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}
 export function anonJudgmentInputsDb(d:AnonInputsDeps):JudgmentInputsDb{
- return inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req))});
+ return {...inputsDbOf({facts:supabaseFactsDb(d.anon),tables:supabaseTableClient(d.anon),paged:supabasePaged(d.anon),macro:d.macro??unavailableMacroReadApi(),kline:d.kline??(req=>readKlineRange(req)),industry:d.industry}),industry:d.industry};
 }
-/** PG17 test port of the same input composition, with SQL-backed facts and table reads. */
-export function pgJudgmentInputsDb(pool:Pool,macro:MacroReadApi):JudgmentInputsDb{
- const tables=pgTableClient(pool);
- const paged:PagedRead=async(table,match,order)=>{
-  const rows=await tables.select(table,match);
-  const key=(r:Row)=>order.map(c=>String(r[c])).join('\u0000');
-  return rows.sort((a,b)=>key(a)<key(b)?-1:key(a)>key(b)?1:0);
- };
- return inputsDbOf({facts:pgFactsDb(pool),tables,paged,macro,kline:unsupportedKline});
-}
-export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn}
+export interface MemoryInputsFixture{facts?:FactsDb;tables?:TableClient;macro?:MacroReadApi;judgments?:JudgmentRow[];kline?:KlineFn;industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>}
 /** Test double over memory stores; `judgments` are treated as publishable public rows. */
 export function memoryJudgmentInputsDb(fx:MemoryInputsFixture={}):JudgmentInputsDb{
  const tables=fx.tables??memoryTableClient();
- const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,paged:memoryPaged(tables),macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline});
+ const base=inputsDbOf({facts:fx.facts??memoryFactsDb(),tables,paged:memoryPaged(tables),macro:fx.macro??unavailableMacroReadApi(),kline:fx.kline??unsupportedKline,industry:fx.industry});
  const judgments=new Map((fx.judgments??[]).map(j=>[j.judgment_id,j] as const));
- return {...base,publicJudgment:async id=>{const j=judgments.get(id);return j?structuredClone(j):base.publicJudgment(id);}};
+ return {...base,industry:fx.industry,publicJudgment:async id=>{const j=judgments.get(id);return j?structuredClone(j):base.publicJudgment(id);}};
 }

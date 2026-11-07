@@ -19,7 +19,7 @@ import {digest,inputsHash} from '../canonical';
 import {judgmentDetailPayload} from '../detail-payload';
 import {withClaimLock} from '../db-contract';
 import {formulaHashOf} from '../formula-hash';
-import {pgJudgmentInputsDb} from '../inputs-db';
+import {pgJudgmentInputsDb} from '../testing/pg-inputs-db';
 import {macroRegimeV1} from '../methodologies/macro-regime.v1';
 import {pgJudgmentsDb} from '../pg-judgments-db';
 import {produce} from '../produce';
@@ -97,7 +97,7 @@ describe.skipIf(!enabled)('macro ↔ F4 bridge on PG17',()=>{
    expect(receipt.status,receipt.status==='failed'?receipt.reason:JSON.stringify(receipt)).toBe('published');if(receipt.status!=='published')return;
    expect(receipt.regime).toBe('classified');
    const snapshot=(await api.snapshot(receipt.snapshot_id))!;expect(snapshot.observation_ids.length).toBeGreaterThan(0);
-   const judgments=pgJudgmentsDb(pool),tables=pgTableClient(pool),inputsDb=pgJudgmentInputsDb(pool,api);
+   const judgments=pgJudgmentsDb(pool),tables=pgTableClient(pool),inputsDb=pgJudgmentInputsDb(pool,{macro:api});
    // The isolated registry alias shares v1's full definition and formula hash; formulaHashOf includes id, so normalize only the alias when hashing.
    // CI has no PostgREST server, and the SQL test ports exercise the same PG functions as production.
    const method={...macroRegimeV1,id:`ztest_macro_${randomUUID().replaceAll('-','').slice(0,12)}`};
@@ -105,7 +105,7 @@ describe.skipIf(!enabled)('macro ↔ F4 bridge on PG17',()=>{
    const {batchId}=await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.produce.macro_regime'});
    const work=[{subject:{type:'macro_region' as const,key:'US'},asOf:snapshot.as_of,binding:{snapshot_id:snapshot.snapshot_id}}];
    const deps={db:judgments,inputsDb,tables,resolverOf:()=>macroRegimeReplayResolver,batchId,codeVersion:CODE};
-   const first=await produce(method,work,deps);const again=await produce(method,work,{...deps,db:pgJudgmentsDb(pool),inputsDb:pgJudgmentInputsDb(pool,macroReadApi(macroDb(),{judgments:macroJudgmentsEnabled({MACRO_JUDGMENTS_ENABLED:'1'})}))});
+   const first=await produce(method,work,deps);const again=await produce(method,work,{...deps,db:pgJudgmentsDb(pool),inputsDb:pgJudgmentInputsDb(pool,{macro:macroReadApi(macroDb(),{judgments:macroJudgmentsEnabled({MACRO_JUDGMENTS_ENABLED:'1'})})})});
    expect(first.items[0].status,JSON.stringify(first.errors)).toBe('inserted');expect(again.items[0].status,JSON.stringify(again.errors)).toBe('duplicate');
    const id=first.items[0].judgment_id!;const judgment=(await judgments.getJudgment(id))!;
    expect(again.items[0].judgment_id).toBe(id);
