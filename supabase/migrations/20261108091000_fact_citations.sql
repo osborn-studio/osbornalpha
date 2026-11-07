@@ -31,9 +31,11 @@ alter table public.fact_sync_runs add constraint fact_sync_runs_market_check che
 alter table public.filings drop constraint if exists filings_market_check;
 alter table public.filings add constraint filings_market_check check (market in ('US','CN','HK'));
 alter table public.filings drop constraint if exists filings_source_check;
-alter table public.filings add constraint filings_source_check check (source in ('edgar','tushare','hkex'));
+-- F3 review (codex Task 13 F3): market-dependent, still ONE check per column under the landed name — US/CN
+-- rows keep exactly the original domain, HK rows must come from hkex.
+alter table public.filings add constraint filings_source_check check ((market = 'HK' and source = 'hkex') or (market <> 'HK' and source in ('edgar','tushare')));
 alter table public.filings drop constraint if exists filings_origin_check;
-alter table public.filings add constraint filings_origin_check check (origin in ('sec','sse','szse','bse','hkex'));
+alter table public.filings add constraint filings_origin_check check ((market = 'HK' and origin = 'hkex') or (market <> 'HK' and origin in ('sec','sse','szse','bse')));
 alter table public.financial_facts drop constraint if exists financial_facts_market_check;
 alter table public.financial_facts add constraint financial_facts_market_check check (market in ('US','CN','HK'));
 alter table public.fact_sync_scope drop constraint if exists fact_sync_scope_market_check;
@@ -190,6 +192,15 @@ begin
     left join public.disclosure_documents d on d.document_id = fd.document_id
   ) x where x.reason is not null limit 1;
   if v_bad is not null then raise exception 'invalid_citation' using errcode = '22023', detail = v_bad; end if;
+  -- F4: at most 64 distinct period citations per fact (existing rows plus this call), so every reader pages a bounded set
+  select 'period_limit' into v_bad from (
+    select u.fact_id from (
+      select (e ->> 'fact_id')::uuid as fact_id, (e ->> 'citation_id')::uuid as citation_id from jsonb_array_elements(p_rows) e where e ->> 'role' = 'period'
+      union
+      select fc.fact_id, fc.citation_id from public.fact_citations fc
+      where fc.role = 'period' and fc.fact_id in (select (e ->> 'fact_id')::uuid from jsonb_array_elements(p_rows) e)
+    ) u group by u.fact_id having count(*) > 64 limit 1) z;
+  if v_bad is not null then raise exception 'invalid_citation' using errcode = '22023', detail = v_bad; end if;
   insert into public.fact_citations (fact_id, citation_id, role)
   select distinct (e ->> 'fact_id')::uuid, (e ->> 'citation_id')::uuid, e ->> 'role' from jsonb_array_elements(p_rows) e
   on conflict (fact_id, role, citation_id) do nothing;
@@ -227,6 +238,21 @@ begin
             and ((select fc.citation_id::text from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit') is distinct from ec.citations ->> 'unit'
                  or coalesce((select array_agg(fc.citation_id::text order by fc.citation_id) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'unit_currency'), '{}'::text[])
                     is distinct from (case when ec.citations ? 'unit_currency' then array[ec.citations ->> 'unit_currency'] else '{}'::text[] end))) then 'unit_evidence'
+        -- F2 (codex Task 13): value, label and the COMPLETE period set are exactly what the checked candidate
+        -- declared (a swapped-year citation is intact but wrong), and the fact itself is the candidate's payload
+        when coalesce((select array_agg(fc.citation_id::text order by fc.citation_id::text) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'value'), '{}'::text[])
+             is distinct from array[lk.citations ->> 'value'] then 'value_evidence'
+        when coalesce((select array_agg(fc.citation_id::text order by fc.citation_id::text) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'label'), '{}'::text[])
+             is distinct from array[lk.citations ->> 'label'] then 'label_evidence'
+        when coalesce((select array_agg(fc.citation_id::text order by fc.citation_id::text) from public.fact_citations fc where fc.fact_id = f.fact_id and fc.role = 'period'), '{}'::text[])
+             is distinct from (case when jsonb_typeof(lk.citations -> 'period') = 'array'
+                                    then (select coalesce(array_agg(distinct pe ->> 'citation_id' order by pe ->> 'citation_id'), '{}'::text[]) from jsonb_array_elements(lk.citations -> 'period') pe)
+                                    else '{}'::text[] end) then 'period_evidence'
+        when f.concept is distinct from lk.payload ->> 'concept' or f.statement is distinct from lk.payload ->> 'statement'
+             or f.period_start::text is distinct from lk.payload ->> 'period_start' or f.period_end::text is distinct from lk.payload ->> 'period_end'
+             or f.duration is distinct from lk.payload ->> 'duration' or f.unit is distinct from lk.payload ->> 'unit'
+             or f.consolidation is distinct from lk.payload ->> 'consolidation'
+             or f.value is distinct from (case when lk.payload ->> 'value' ~ '^-?[0-9]+(\.[0-9]+)?$' then (lk.payload ->> 'value')::numeric end) then 'payload'
         when not exists (select 1 from public.filing_documents fd where fd.filing_id = f.filing_id) then 'unbound_filing'
         when exists (
           select 1 from public.fact_citations fc
@@ -241,6 +267,8 @@ begin
                  or substr(p.text, c.char_start + 1, c.char_end - c.char_start) is distinct from c.snippet)) then 'citation'
         else null end as reason
     from public.financial_facts f
+    left join lateral (select ec.citations, ec.payload from public.candidate_publications cp join public.extraction_candidates ec on ec.candidate_id = cp.candidate_id
+                       where cp.run_id = p_run and cp.fact_id = f.fact_id and cp.state = 'staged' order by cp.candidate_id limit 1) lk on true
     where f.run_id = p_run and f.status in ('staged','quarantined')
   ) x where x.reason is not null order by x.fact_id limit 1;
   if v_reason is not null then

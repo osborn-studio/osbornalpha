@@ -6,7 +6,7 @@ import {describe,expect,it} from 'vitest';
 import {memoryFactsDb} from '../../facts/memory-facts-db';
 import {memoryDocumentsDb} from '../memory-documents-db';
 import {HK_EXTRACTOR_REF,HK_PUB_GEN} from '../types';
-import {HK_MARKET,evaluateHkFactRules,memoryHkFactsPort,planHkFactWrites,toFilingInsert} from './facts-port';
+import {HK_MARKET,evaluateHkFactRules,memoryHkFactsPort,planHkFactWrites,sqlError,supabaseHkFactsPort,toFilingInsert} from './facts-port';
 import {hkFactsPortContract} from './facts-port-contract';
 
 hkFactsPortContract('memoryHkFactsPort contract',async()=>{
@@ -33,5 +33,40 @@ describe('HK helpers of facts-port.ts',()=>{
   const rows=[{...base,fact_id:randomUUID(),concept:'total_assets',value:'2000'},{...base,fact_id:randomUUID(),concept:'total_liabilities',value:'800'},{...base,fact_id:randomUUID(),concept:'equity_total',value:'1000'}];
   const out=evaluateHkFactRules({newRows:rows,okRows:[],sourceRefOf:new Map([[filing.filing_id,filing.sourceRef]]),issuerId:filing.issuer_id,mappingGen:HK_PUB_GEN});
   expect(out.quarantine.map(q=>q.reason)).toEqual(['identity_bs']);
+ });
+});
+
+/** A PostgREST stand-in: select/eq/order/range/limit over fixed rows, never returning more than `cap` rows per request (max_rows). */
+function cappedClient(all:{role:string;citation_id:string}[],cap:number,seen:number[]){
+ return {from:(table:string)=>{
+  expect(table).toBe('fact_citations');
+  let offset=0,limit=Infinity;
+  const b:Record<string,unknown>={
+   select:()=>b,eq:()=>b,order:()=>b,limit:(n:number)=>{limit=n;return b;},range:(a:number,z:number)=>{offset=a;limit=z-a+1;return b;},
+   then:(ok:(v:unknown)=>unknown)=>{const page=all.slice(offset,offset+Math.min(limit,cap));seen.push(page.length);return Promise.resolve({data:page,error:null}).then(ok);},
+  };
+  return b;
+ }};
+}
+describe('supabaseHkFactsPort.citationsOfFact (F4: PostgREST row cap)',()=>{
+ const links=Array.from({length:2300},(_,i)=>({role:'period',citation_id:`c${String(i).padStart(5,'0')}`}));
+ for(const cap of [1000,100]){
+  it(`returns every link when the server caps a request at ${cap} rows`,async()=>{
+   const seen:number[]=[];
+   const port=supabaseHkFactsPort(cappedClient(links,cap,seen) as never);
+   const got=await port.citationsOfFact(randomUUID());
+   expect(got).toHaveLength(2300);
+   expect(got.map(x=>x.citation_id)).toEqual(links.map(x=>x.citation_id));
+   expect(seen.every(n=>n<=cap)).toBe(true);
+  });
+ }
+});
+describe('sqlError (carries the SQL detail like the memory port)',()=>{
+ it('uses the detail as the message for known codes and keeps unknown errors as they are',()=>{
+  const e=sqlError({message:'evidence_incomplete',code:'P0001',detail:'unit:abc'});
+  expect([e.code,e.message]).toEqual(['evidence_incomplete','unit:abc']);
+  expect(sqlError({message:'invalid_citation',code:'22023',details:'role'}).message).toBe('role');
+  expect(sqlError({message:'boom',code:'XX000',detail:'x'}).message).toBe('boom');
+  expect(sqlError({message:'stale_plan',code:'P0001'}).message).toBe('stale_plan');
  });
 });

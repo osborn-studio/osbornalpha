@@ -6,16 +6,15 @@
 import type {Pool} from 'pg';
 import {typeParsers} from '../../db/pg-table-client';
 import {pgFactsDb} from '../../facts/pg-facts-db';
-import {toDocumentsDbError} from '../db';
 import {HK_EXTRACTOR_REF} from '../types';
 import type {CitationRole} from '../types';
-import {assertExpectedRev,hkPassThrough,publicationOutcomeOf,resolveOutcomeOf} from './facts-port';
+import {assertExpectedRev,hkPassThrough,publicationOutcomeOf,resolveOutcomeOf,sqlError} from './facts-port';
 import type {HkFactsPort,HkRunStatus} from './facts-port';
 
 export function pgHkFactsPort(pool:Pool):HkFactsPort{
  const run=async(text:string,values:unknown[])=>{
   try{return await pool.query({text,values,types:typeParsers});}
-  catch(e){throw toDocumentsDbError(e as {message?:string;code?:string});}
+  catch(e){throw sqlError(e as {message?:string;code?:string;detail?:string});}
  };
  const fn=async<T>(call:string,values:unknown[]):Promise<T>=>(await run(`select ${call} as v`,values)).rows[0].v as T;
  return {

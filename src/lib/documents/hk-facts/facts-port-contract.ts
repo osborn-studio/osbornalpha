@@ -37,6 +37,8 @@ export function cpIndexOf(text:string,needle:string,from=0):number{
 /** Code of a DocumentsDbError rejection, 'facts:<code>' of a FactsDbError, 'resolved' when it did not reject. */
 export const code=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof DocumentsDbError?e.code:e instanceof FactsDbError?`facts:${e.code}`:`other:${String(e)}`);
 export const hkSourceRef=(lang:'zh'|'en'='zh')=>`2026${String(randomInt(1_000_000_000)).padStart(9,'0')}_${lang==='zh'?'c':'e'}`;
+/** '<code>/<reason>' of a DocumentsDbError whose message starts with '<reason>:' (evidence_incomplete, invalid_citation, stale_plan); the SQL ports carry the SQL detail, the memory port the same text. */
+export const reasonOf=(p:Promise<unknown>)=>p.then(()=>'resolved',e=>e instanceof DocumentsDbError?`${e.code}/${e.message.split(':')[0]}`:`other:${String(e)}`);
 const byRoleThenId=(a:{role:string;citation_id:string},b:{role:string;citation_id:string})=>a.role<b.role?-1:a.role>b.role?1:a.citation_id<b.citation_id?-1:a.citation_id>b.citation_id?1:0;
 
 export interface HkDoc{docId:string;sourceRef:string;sourceVersion:number;content:string}
@@ -112,13 +114,13 @@ export function evidenceRows(w:HkWorld,fact25:string,fact24:string):{fact_id:str
 export const sortedEvidence=(rows:{fact_id:string;citation_id:string;role:CitationRole}[],fact:string)=>rows.filter(r=>r.fact_id===fact).map(({role,citation_id})=>({role,citation_id})).sort(byRoleThenId);
 export interface HkRun{batch:string;run:string;filingId:string;fact25:FactInsert;fact24:FactInsert;bound:number}
 /** ensureHkScope → claimLease (new batch) → beginRun → stageFilings → bind → stageFacts → candidate links → evidence; nothing published. */
-export async function hkStagedRun(h:HkPortHarness,w:HkWorld,o:{bind?:boolean;link?:boolean;evidence?:boolean}={}):Promise<HkRun>{
+export async function hkStagedRun(h:HkPortHarness,w:HkWorld,o:{bind?:boolean;link?:boolean;evidence?:boolean;value25?:string}={}):Promise<HkRun>{
  await h.port.ensureHkScope(w.iss,'00268');
  const batch=await h.batch();expect(await h.port.claimLease(w.iss,batch,600)).toBe(true);
  const run=await h.port.beginRun(w.iss,batch,HK_PUB_GEN);
  const f=hkFilingRow(w);const filingId=(await h.port.stageFilings(run,[f])).get(f.sourceRef)!;
  const bound=o.bind===false?0:await h.port.bindFilingDocuments(run,[{filing_id:filingId,document_id:w.docId}]);
- const fact25=hkFact(w,filingId,'2025','1234000');const fact24=hkFact(w,filingId,'2024','1000000');
+ const fact25=hkFact(w,filingId,'2025',o.value25??'1234000');const fact24=hkFact(w,filingId,'2024','1000000');
  expect(await h.port.stageFacts(run,[fact25,fact24])).toBe(2);
  if(o.link!==false){await h.docs.stageCandidatePublication(w.cand25,HK_PUB_GEN,run,fact25.fact_id);await h.docs.stageCandidatePublication(w.cand24,HK_PUB_GEN,run,fact24.fact_id);}
  if(o.evidence!==false)expect(await h.port.insertFactCitations(run,evidenceRows(w,fact25.fact_id,fact24.fact_id))).toBe(10);
@@ -223,10 +225,10 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    const w=await hkWorld(h);const r=await hkStagedRun(h,w,{evidence:false});const rev=await stateRev(h,w.iss);
    const publish=(batch=r.batch,expected=rev)=>h.port.publishHkRun(w.iss,batch,r.run,[r.filingId],expected,[]);
    expect(await code(publish(r.batch,Number.NaN))).toBe('invalid_expected_rev');
-   expect(await code(publish())).toBe('evidence_incomplete');
+   expect(await reasonOf(publish())).toBe('evidence_incomplete/value');
    const rows=evidenceRows(w,r.fact25.fact_id,r.fact24.fact_id);
    expect(await h.port.insertFactCitations(r.run,rows.filter(x=>!(x.fact_id===r.fact24.fact_id&&x.role==='unit')))).toBe(9);
-   expect(await code(publish())).toBe('evidence_incomplete');                                    // fact24 lacks its unit
+   expect(await reasonOf(publish())).toBe('evidence_incomplete/unit');                            // fact24 lacks its unit
    expect(await h.port.insertFactCitations(r.run,rows)).toBe(1);
    expect(await code(publish(await h.batch()))).toBe('lease_lost');
    expect(await code(publish(r.batch,rev+1))).toBe('stale_plan');
@@ -236,7 +238,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(await publish()).toBe(2);
    // evidence complete but no candidate_publications link: still incomplete
    const v=await hkWorld(h);const s=await hkStagedRun(h,v,{link:false});
-   expect(await code(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete');
+   expect(await reasonOf(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete/publication');
    expect(await h.port.runStatus(s.run)).toBe('staged');
   });
 
@@ -282,12 +284,12 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
   it('R3-P1-1: the published unit evidence is exactly what the candidate declared — an undeclared unit_currency or a second unit is evidence_incomplete',async()=>{
    const w=await hkWorld(h);const r=await hkStagedRun(h,w);
    expect(await h.port.insertFactCitations(r.run,[{fact_id:r.fact25.fact_id,citation_id:w.cit.title,role:'unit_currency'}])).toBe(1);   // an amount with "currency" evidence
-   expect(await code(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]))).toBe('evidence_incomplete');
+   expect(await reasonOf(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]))).toBe('evidence_incomplete/unit_evidence');
    expect(await h.port.runStatus(r.run)).toBe('staged');
    await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
    const v=await hkWorld(h);const s=await hkStagedRun(h,v);
    expect(await h.port.insertFactCitations(s.run,[{fact_id:s.fact24.fact_id,citation_id:v.cit.title,role:'unit'}])).toBe(1);             // a second unit citation
-   expect(await code(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete');
+   expect(await reasonOf(h.port.publishHkRun(v.iss,s.batch,s.run,[s.filingId],await stateRev(h,v.iss),[]))).toBe('evidence_incomplete/unit');
    expect((await h.port.factsByIds([s.fact25.fact_id,s.fact24.fact_id])).map(f=>f.status)).toEqual(['staged','staged']);
    await h.port.abandonRun(s.run);await h.port.releaseLease(v.iss,s.batch,'failed','2030-01-01T00:00:00.000Z');
   });
@@ -323,6 +325,72 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect(r2.bound).toBe(0);                                                                      // … with its binding
    expect(await h.port.publishHkRun(w.iss,r2.batch,r2.run,[r2.filingId],await stateRev(h,w.iss),[])).toBe(2);
    expect(await h.port.finishCandidatePublications(r2.run)).toEqual({published:2,still_staged:0,abandoned:0});
+  });
+
+  it('F2: published evidence is exactly the candidate\'s — swapped-year value or period, a missing or extra period citation, a wrong label and a value mismatch each fail with their own reason',async()=>{
+   type Row={fact_id:string;citation_id:string;role:CitationRole};
+   const scenarios:{name:string;value25?:string;edit:(w:HkWorld,rows:Row[],f25:string)=>Row[];reason:string}[]=[
+    {name:'swapped value',edit:(w,rows,f)=>rows.map(x=>x.fact_id===f&&x.role==='value'?{...x,citation_id:w.cit.v24}:x),reason:'value_evidence'},
+    {name:'swapped period column',edit:(w,rows,f)=>rows.map(x=>x.fact_id===f&&x.citation_id===w.cit.col25?{...x,citation_id:w.cit.col24}:x),reason:'period_evidence'},
+    {name:'missing period column',edit:(w,rows,f)=>rows.filter(x=>!(x.fact_id===f&&x.citation_id===w.cit.col25)),reason:'period_evidence'},
+    {name:'extra period citation',edit:(w,rows,f)=>[...rows,{fact_id:f,citation_id:w.cit.col24,role:'period' as const}],reason:'period_evidence'},
+    {name:'wrong label',edit:(w,rows,f)=>rows.map(x=>x.fact_id===f&&x.role==='label'?{...x,citation_id:w.cit.unit}:x),reason:'label_evidence'},
+    {name:'value mismatch',value25:'9999',edit:(_w,rows)=>rows,reason:'payload'},
+   ];
+   for(const sc of scenarios){
+    const w=await hkWorld(h);const r=await hkStagedRun(h,w,{evidence:false,value25:sc.value25});
+    const rows=sc.edit(w,evidenceRows(w,r.fact25.fact_id,r.fact24.fact_id),r.fact25.fact_id);
+    expect({sc:sc.name,inserted:await h.port.insertFactCitations(r.run,rows)}).toEqual({sc:sc.name,inserted:rows.length});
+    expect({sc:sc.name,got:await reasonOf(h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[]))}).toEqual({sc:sc.name,got:`evidence_incomplete/${sc.reason}`});
+    expect(await h.port.runStatus(r.run)).toBe('staged');
+    await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
+   }
+  });
+
+  it('F4: a fact takes at most 64 period citations (refused at insert, stored plus new), and all of them read back',async()=>{
+   const w=await hkWorld(h);const r=await hkStagedRun(h,w,{evidence:false});
+   const cps=Array.from(HK_PAGE_TEXT);const ids:string[]=[];
+   for(let i=0;i<cps.length&&ids.length<65;i++)for(const len of [1,2]){
+    const snippet=cps.slice(i,i+len).join('');
+    if(ids.length>=65||snippet.trim()===''||i+len>cps.length)continue;
+    ids.push(await h.docs.insertCitation({document_id:w.docId,extraction_id:w.extractionId,page_no:1,char_start:i,char_end:i+len,bbox:null,snippet,text_hash:sha256(HK_PAGE_TEXT),created_by:'extractor',created_ref:HK_EXTRACTOR_REF}));
+   }
+   expect(ids).toHaveLength(65);
+   const period=(xs:string[])=>xs.map(citation_id=>({fact_id:r.fact25.fact_id,citation_id,role:'period' as const}));
+   expect(await reasonOf(h.port.insertFactCitations(r.run,period(ids)))).toBe('invalid_citation/period_limit');
+   expect(await h.port.citationsOfFact(r.fact25.fact_id)).toEqual([]);                          // all or nothing
+   expect(await h.port.insertFactCitations(r.run,period(ids.slice(0,64)))).toBe(64);
+   expect(await reasonOf(h.port.insertFactCitations(r.run,period(ids.slice(1))))).toBe('invalid_citation/period_limit');   // 63 stored ones plus the 65th
+   expect(await h.port.insertFactCitations(r.run,period(ids.slice(0,64)))).toBe(0);
+   expect(await h.port.citationsOfFact(r.fact25.fact_id)).toHaveLength(64);
+   await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
+  });
+
+  it('malformed inputs are refused the way SQL does: null/non-array rows, null or malformed ids, a malformed issuer or key',async()=>{
+   const w=await hkWorld(h);const r=await hkStagedRun(h,w,{evidence:false});
+   expect(await code(h.port.bindFilingDocuments(r.run,null as never))).toBe('invalid_input');
+   expect(await code(h.port.bindFilingDocuments(r.run,[{filing_id:null as never,document_id:w.docId}]))).toBe('invalid_input');
+   expect(await code(h.port.bindFilingDocuments(r.run,[{filing_id:'not-a-uuid',document_id:w.docId}]))).toBe('invalid_input');
+   expect(await code(h.port.insertFactCitations(r.run,null as never))).toBe('invalid_input');
+   expect(await code(h.port.insertFactCitations(r.run,[{fact_id:'not-a-uuid',citation_id:w.cit.v25,role:'value'}]))).toBe('invalid_input');
+   expect(await code(h.port.insertFactCitations(r.run,[{fact_id:r.fact25.fact_id,citation_id:'not-a-uuid',role:'value'}]))).toBe('invalid_input');
+   expect(await reasonOf(h.port.insertFactCitations(r.run,[{fact_id:null as never,citation_id:w.cit.v25,role:'value'}]))).toBe('invalid_citation/fact');
+   expect(await reasonOf(h.port.insertFactCitations(r.run,[{fact_id:r.fact25.fact_id,citation_id:null as never,role:'value'}]))).toBe('invalid_citation/citation');
+   expect(await code(h.port.ensureHkScope(w.iss,null as never))).toBe('invalid_input');
+   expect(await code(h.port.ensureHkScope('not-a-uuid','00268'))).toBe('invalid_input');
+   await h.port.abandonRun(r.run);await h.port.releaseLease(w.iss,r.batch,'failed','2030-01-01T00:00:00.000Z');
+  });
+
+  it('renewLease after the lease expired is false, does not revive it, and a later holder is unaffected',async()=>{
+   const w=await hkWorld(h);await h.port.ensureHkScope(w.iss,'00268');
+   const b=await h.batch();const other=await h.batch();
+   expect(await h.port.claimLease(w.iss,b,600)).toBe(true);
+   await h.expireHkLease(w.iss);
+   expect(await h.port.renewLease(w.iss,b,600)).toBe(false);
+   expect(await h.port.claimLease(w.iss,other,600)).toBe(true);                                  // expired: free for anyone
+   expect(await h.port.renewLease(w.iss,b,600)).toBe(false);
+   expect(await h.port.renewLease(w.iss,other,600)).toBe(true);
+   await h.port.releaseLease(w.iss,other,'success','2030-01-01T00:00:00.000Z');
   });
 
   it('promotionDue: unlinked confirmed candidates are due, rejected ones are not; limit 0 and ascending order; (d) needs a published filing',async()=>{

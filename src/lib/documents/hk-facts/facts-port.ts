@@ -23,6 +23,8 @@ import type {FactRulesInput,FactRulesResult} from '../../facts/rules';
 import {FactsDbError} from '../../facts/types';
 import type {ConflictItem,FactInsert,FactRow,FactsDb,FilingInsert,Market,Origin,ReadFactsOptions,ReadFactsResult,Source} from '../../facts/types';
 import {toDocumentsDbError} from '../db';
+import type {PgErrorLike} from '../db';
+import {canonicalDecimal} from '../../facts/json-numbers';
 import type {MemoryDocumentsDb} from '../memory-documents-db';
 import {DocumentsDbError,HK_EXTRACTOR_REF} from '../types';
 import type {CitationRole,CitationRow,DocumentRow,DocumentsDbErrorCode,PageRow} from '../types';
@@ -96,16 +98,27 @@ export function hkPassThrough(facts:FactsDb):PassThrough{
 }
 export const publicationOutcomeOf=(x:Record<string,unknown>|null):HkPublicationOutcome=>({published:Number(x?.published??0),still_staged:Number(x?.still_staged??0),abandoned:Number(x?.abandoned??0)});
 export const resolveOutcomeOf=(x:{promoted?:unknown;skipped?:unknown;chosen_fact_ids?:unknown}):HkResolveOutcome=>({promoted:Number(x.promoted),skipped:Number(x.skipped),chosenFactIds:Array.isArray(x.chosen_fact_ids)?x.chosen_fact_ids.map(String):[]});
+/** Upper bound of period citations per fact, enforced at insert in all three implementations (F4: a reader pages a bounded set). */
+export const MAX_PERIOD_CITATIONS=64;
+/** SQL error → DocumentsDbError whose message is the SQL detail ('<reason>:<fact_id>'), the text the memory port throws. */
+export function sqlError(e:PgErrorLike&{detail?:string|null}):DocumentsDbError{
+ const d=toDocumentsDbError(e);const detail=e.detail??e.details;
+ return d.code!=='unknown'&&typeof detail==='string'&&detail!==''?new DocumentsDbError(d.code,detail,d.sqlstate):d;
+}
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid=(x:unknown):x is string=>typeof x==='string'&&UUID.test(x);
+function decimalMatch(a:string,b:string):boolean{try{return canonicalDecimal(a)===canonicalDecimal(b);}catch{return false;}}
 export function assertExpectedRev(rev:number):void{if(!Number.isSafeInteger(rev)||rev<0)throw new DocumentsDbError('invalid_expected_rev');}
 
 interface RpcResult{data:unknown;error:{message?:string;code?:string|null}|null}
 // The query builder is left untyped on purpose (same as facts/db.ts): the hand-maintained Database type lacks what supabase-js inference needs.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
 
+export const CITATION_PAGE=500;
 export function supabaseHkFactsPort(admin:SupabaseClient):HkFactsPort{
  const c=admin as unknown as NarrowClient;
- const call=async<T>(fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toDocumentsDbError(error);return data as T;};
- const rows=async<T>(q:PromiseLike<RpcResult>):Promise<T[]>=>{const {data,error}=await q;if(error)throw toDocumentsDbError(error);return (data??[]) as T[];};
+ const call=async<T>(fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw sqlError(error);return data as T;};
+ const rows=async<T>(q:PromiseLike<RpcResult>):Promise<T[]>=>{const {data,error}=await q;if(error)throw sqlError(error);return (data??[]) as T[];};
  return {
   ...hkPassThrough(supabaseFactsDb(admin)),
   async runStatus(run){const [r]=await rows<{status:HkRunStatus}>(c.from('fact_sync_runs').select('status').eq('run_id',run).limit(1));return r?.status??null;},
@@ -120,8 +133,14 @@ export function supabaseHkFactsPort(admin:SupabaseClient):HkFactsPort{
   async zeroOutputDocuments(issuer,pubGen){return ((await call<string[]|null>('hk_zero_output_documents',{p_issuer:issuer,p_pub_gen:pubGen}))??[]).map(String);},
   async resolveHkFactsQuarantine(item,chosen,by){return resolveOutcomeOf(await call<Record<string,unknown>>('resolve_hk_facts_quarantine',{p_item:item,p_chosen:chosen,p_resolved_by:by}));},
   async citationsOfFact(factId){
-   // ≤ a few rows per fact (one value, label, unit + period evidence): one page is complete
-   return (await rows<{role:CitationRole;citation_id:string}>(c.from('fact_citations').select('role,citation_id').eq('fact_id',factId).order('role').order('citation_id').limit(1000))).map(r=>({role:r.role,citation_id:String(r.citation_id)}));
+   // F4: pages until exhausted (PostgREST max_rows may be below any single limit); insert_fact_citations also bounds a fact's period set
+   const out:{role:CitationRole;citation_id:string}[]=[];
+   for(let from=0;;){
+    const page=await rows<{role:CitationRole;citation_id:string}>(c.from('fact_citations').select('role,citation_id').eq('fact_id',factId).order('role').order('citation_id').range(from,from+CITATION_PAGE-1));
+    if(page.length===0)return out;   // a server-side cap below CITATION_PAGE only shortens pages: stop at the first empty one
+    out.push(...page.map(r=>({role:r.role,citation_id:String(r.citation_id)})));
+    from+=page.length;
+   }
   },
   async hkFilingOfDocument(documentId){
    const [b]=await rows<{filing_id:string}>(c.from('filing_documents').select('filing_id').eq('document_id',documentId).order('filing_id').limit(1));
@@ -179,13 +198,22 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    const n=(role:CitationRole)=>mine.filter(x=>x.role===role).length;
    const b=B.get(f.filing_id);const d=b?D.get(b.document_id):undefined;
    const link=pubs.filter(p=>p.run_id===run&&p.fact_id===f.fact_id&&p.state==='staged');
-   const declared=link.length===1?docs._raw.candidates.get(link[0].candidate_id)?.citations as {unit?:unknown;unit_currency?:unknown}|undefined:undefined;
+   const cand=link.length===1?docs._raw.candidates.get(link[0].candidate_id):undefined;
+   const declared=cand?.citations as {value?:unknown;label?:unknown;unit?:unknown;unit_currency?:unknown;period?:unknown}|undefined;
+   const pay=(cand?.payload??{}) as Record<string,unknown>;
    const ids=(role:CitationRole)=>mine.filter(x=>x.role===role).map(x=>x.citation_id).sort(cmp);
    const unitEvidenceOk=!!declared&&JSON.stringify(ids('unit'))===JSON.stringify([declared.unit])
     &&JSON.stringify(ids('unit_currency'))===JSON.stringify(typeof declared.unit_currency==='string'?[declared.unit_currency]:[]);
+   const same=(a:string[],bb:unknown[])=>JSON.stringify([...a].sort(cmp))===JSON.stringify([...bb.map(String)].sort(cmp));
+   const declaredPeriod=Array.isArray(declared?.period)?[...new Set((declared!.period as {citation_id?:unknown}[]).map(x=>String(x?.citation_id)))]:[];
+   const valueOk=typeof pay.value==='string'&&decimalMatch(f.value,pay.value);
    const reason=n('value')!==1?'value':n('label')!==1?'label':n('unit')!==1?'unit':n('period')<1?'period'
     :link.length!==1?'publication'
     :!unitEvidenceOk?'unit_evidence'
+    :!same(ids('value'),[declared?.value])?'value_evidence'
+    :!same(ids('label'),[declared?.label])?'label_evidence'
+    :!same(ids('period'),declaredPeriod)?'period_evidence'
+    :f.concept!==pay.concept||f.statement!==pay.statement||f.period_start!==pay.period_start||f.period_end!==pay.period_end||f.duration!==pay.duration||f.unit!==pay.unit||f.consolidation!==pay.consolidation||!valueOk?'payload'
     :!b?'unbound_filing'
     :mine.some(x=>{const c=C.get(x.citation_id);return !c||!d||c.document_id!==d.document_id||d.permission!=='public'||c.extraction_id!==d.current_extraction_id||!intact(c,P);})?'citation'
     :null;
@@ -201,11 +229,13 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    return facts.claimLease(issuer,HK_MARKET,batch,ttl);            // same batch, unexpired: an extension
   },
   async ensureHkScope(issuer,fetchKey){
-   if(!/^[0-9]{5}$/.test(fetchKey))throw fail('invalid_input','fetch_key');
+   if(!isUuid(issuer)||typeof fetchKey!=='string'||!/^[0-9]{5}$/.test(fetchKey))throw fail('invalid_input','fetch_key');
    if((await facts.scopeRows(HK_MARKET,[issuer])).length===0)await facts.reconcileScope(HK_MARKET,[{issuer_id:issuer,reasons:['documents'],priority:0,fetch_key:fetchKey}]);
   },
   async bindFilingDocuments(run,input){
+   if(!isUuid(run)||!Array.isArray(input))throw fail('invalid_input','rows');
    const r=runLock(run);
+   for(const x of input)if(!isUuid(x?.filing_id)||!isUuid(x?.document_id))throw fail('invalid_input','row');   // SQL: null → invalid_input 'row', malformed uuid → 22P02 → invalid_input
    const filings=new Map(facts.filings().map(g=>[g.filing_id,g]));const D=docMap();const live=liveBindings();const pending=new Map<string,string>();
    for(const x of [...input].sort((a,b)=>cmp(a.filing_id,b.filing_id)||cmp(a.document_id,b.document_id))){
     const g=filings.get(x.filing_id);
@@ -221,7 +251,9 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    return pending.size;
   },
   async insertFactCitations(run,input){
+   if(!isUuid(run)||!Array.isArray(input))throw fail('invalid_input','rows');
    runLock(run);
+   for(const x of input)if((x?.fact_id!=null&&!isUuid(x.fact_id))||(x?.citation_id!=null&&!isUuid(x.citation_id)))throw fail('invalid_input','uuid');
    const F=new Map(facts.facts().map(f=>[f.fact_id,f]));const C=new Map(docs.citations().map(c=>[c.citation_id,c]));const D=docMap();const B=liveBindings();
    for(const x of input){
     const f=F.get(x.fact_id);const c=C.get(x.citation_id);const b=f?B.get(f.filing_id):undefined;const d=b?D.get(b.document_id):undefined;
@@ -229,8 +261,14 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
      :c.document_id!==b.document_id?'document':!d||d.permission!=='public'?'permission':c.extraction_id!==d.current_extraction_id?'extraction':null;
     if(reason!==null)throw fail('invalid_citation',reason);
    }
-   const have=liveEvidence();let n=0;
-   for(const x of input){if(have.some(y=>y.fact_id===x.fact_id&&y.role===x.role&&y.citation_id===x.citation_id))continue;have.push({fact_id:x.fact_id,citation_id:x.citation_id,role:x.role});n++;}
+   const have=liveEvidence();
+   const fresh=new Map<string,{fact_id:string;citation_id:string;role:CitationRole}>();
+   for(const x of input)fresh.set(`${x.fact_id}|${x.role}|${x.citation_id}`,{fact_id:x.fact_id,citation_id:x.citation_id,role:x.role});
+   const periods=new Map<string,Set<string>>();   // F4: distinct period citations per fact, stored plus this call
+   for(const y of [...have,...fresh.values()])if(y.role==='period')periods.set(y.fact_id,(periods.get(y.fact_id)??new Set()).add(y.citation_id));
+   if([...periods.values()].some(set=>set.size>MAX_PERIOD_CITATIONS))throw fail('invalid_citation','period_limit');
+   let n=0;
+   for(const x of fresh.values()){if(have.some(y=>y.fact_id===x.fact_id&&y.role===x.role&&y.citation_id===x.citation_id))continue;have.push(x);n++;}
    return n;
   },
   async publishHkRun(issuer,batch,run,manifest,expectedRev,zeroOutput){

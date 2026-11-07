@@ -103,30 +103,63 @@ describe.skipIf(!enabled)('F3 migration two (fact_citations, filing_documents, H
    expect(rows.map(r=>r.conname)).toEqual([`${t}_market_check`]);
    expect(String(rows[0].def)).toMatch(/'US'::text, 'CN'::text, 'HK'::text/);
   }
-  const src=await only('filings',/\(source = ANY/);
-  expect(src.map(r=>r.conname)).toEqual(['filings_source_check']);expect(String(src[0].def)).toMatch(/'edgar'::text, 'tushare'::text, 'hkex'::text/);
-  const origin=await only('filings',/\(origin = ANY/);
-  expect(origin.map(r=>r.conname)).toEqual(['filings_origin_check']);expect(String(origin[0].def)).toMatch(/'bse'::text, 'hkex'::text/);
+  // F3 review (codex Task 13 F3): market-dependent, still one check per column — US/CN keep the original domains, HK must be hkex
+  const src=await only('filings',/\bsource = /);
+  expect(src.map(r=>r.conname)).toEqual(['filings_source_check']);
+  expect(String(src[0].def)).toMatch(/market = 'HK'::text\) AND \(source = 'hkex'::text/);expect(String(src[0].def)).toMatch(/'edgar'::text, 'tushare'::text\]/);expect(String(src[0].def)).not.toMatch(/'tushare'::text, 'hkex'/);
+  const origin=await only('filings',/\borigin = /);
+  expect(origin.map(r=>r.conname)).toEqual(['filings_origin_check']);
+  expect(String(origin[0].def)).toMatch(/market = 'HK'::text\) AND \(origin = 'hkex'::text/);expect(String(origin[0].def)).toMatch(/'sec'::text, 'sse'::text, 'szse'::text, 'bse'::text\]/);expect(String(origin[0].def)).not.toMatch(/'bse'::text, 'hkex'/);
   const metrics=await only('financial_metrics',market);
   expect(metrics.map(r=>r.conname)).toEqual(['financial_metrics_market_check']);expect(String(metrics[0].def)).not.toMatch(/HK/);
  });
 
- it('HK rows go through the unchanged spec-2 functions; financial_metrics refuses HK',async()=>{
+ it('HK facts published through publish_hk_run read back through the unchanged spec-2 read_facts; financial_metrics refuses HK',async()=>{
+  const w=await hkWorld(h);const r=await hkStagedRun(h,w);
+  expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[])).toBe(2);
+  const env=await one(`select public.read_facts($1,'HK',array['revenue'],'2030-01-01',null,null,true,null,false) v`,[w.iss]);
+  expect(env.rows.map((x:Record<string,unknown>)=>[x.fact_id,x.market,x.value]).sort()).toEqual([[r.fact24.fact_id,'HK','1000000'],[r.fact25.fact_id,'HK','1234000']].sort());
+  expect((await q(`select market,source,origin,mapping_gen from public.filings where filing_id=$1`,[r.filingId]))[0]).toEqual({market:'HK',source:'hkex',origin:'hkex',mapping_gen:1});
+  const e=await fails(q(`select public.replace_financial_metrics($1,'HK',1,$2::jsonb)`,[w.iss,JSON.stringify([{metric:'gross_margin',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'0.4',unit:'pure',input_unit:'CNY',basis:'us_standard',formula_version:'t',inputs:[],as_of:'2026-03-20'}])]));
+  expect(e.code).toBe('23514');expect(e.message).toMatch(/financial_metrics_market_check/);
+ });
+
+ it('F3: filings source/origin are market-aware through the unchanged stage_filings — US/CN keep their domains, HK must be hkex',async()=>{
+  const us=await h.issuer();const ub=await h.batch();const hk=await h.issuer();const hb=await h.batch();
+  await q(`select public.reconcile_fact_sync_scope('US',$1::jsonb)`,[JSON.stringify([{issuer_id:us,reasons:['t'],priority:1,fetch_key:'0000000002'}])]);
+  expect(await one(`select public.claim_fact_sync_lease($1,'US',$2,600) v`,[us,ub])).toBe(true);
+  const urun=await one(`select public.begin_sync_run($1,'US',$2,1) v`,[us,ub]);
+  await q(`select public.ensure_hk_fact_scope($1,'00268')`,[hk]);
+  expect(await one(`select public.claim_fact_sync_lease($1,'HK',$2,600) v`,[hk,hb])).toBe(true);
+  const hrun=await one(`select public.begin_sync_run($1,'HK',$2,1) v`,[hk,hb]);
+  const stage=(run:string,source:string,origin:string,form:string)=>q(`select public.stage_filings($1,$2::jsonb) v`,[run,JSON.stringify([{filing_id:randomUUID(),source,origin,form_type:form,fiscal_year:2025,fiscal_period:'FY',period_end:'2025-12-31',available_date:'2026-03-20',source_ref:randomUUID(),url:null}])]);
+  for(const [run,source,origin,form,check] of [[urun,'hkex','sec','10-K','filings_source_check'],[urun,'edgar','hkex','10-K','filings_origin_check'],[urun,'hkex','hkex','10-K','filings_(source|origin)_check'],
+   [hrun,'edgar','hkex','annual','filings_source_check'],[hrun,'hkex','sec','annual','filings_origin_check'],[hrun,'tushare','sse','annual','filings_(source|origin)_check']] as const){
+   const e=await fails(stage(run,source,origin,form));
+   expect({run:run===urun?'US':'HK',source,origin,code:e.code,check:new RegExp(check).test(e.message)}).toEqual({run:run===urun?'US':'HK',source,origin,code:'23514',check:true});
+  }
+  await expect(stage(urun,'edgar','sec','10-K')).resolves.toBeDefined();                    // the original US domain still works
+  await expect(stage(hrun,'hkex','hkex','annual')).resolves.toBeDefined();
+ });
+
+ // KNOWN RESIDUAL RISK, out of contract. spec-2's publish_sync_run is landed and not ours to change; service_role
+ // keeps EXECUTE on it and it knows nothing of HK evidence, so an HK run CAN be published through it with no
+ // citations and no revision guard. F3 code never does (publish-boundary.test.ts pins that statically) and
+ // publish_hk_run is the only supported path. Interface request to spec-2: market-aware authorization on
+ // publish_sync_run (HK runs only via the F3 function). Recorded in the PR as an accepted residual risk. The
+ // assertions below document the present behaviour; they are not a success path anyone may rely on and must be
+ // inverted when spec-2 closes the gap.
+ it('RESIDUAL RISK (interface request to spec-2): publish_sync_run does not itself refuse an HK run — it publishes it without any evidence',async()=>{
   const iss=await h.issuer();const b=await h.batch();
   await q(`select public.ensure_hk_fact_scope($1,'00268')`,[iss]);
   expect(await one(`select public.claim_fact_sync_lease($1,'HK',$2,600) v`,[iss,b])).toBe(true);
   const run=await one(`select public.begin_sync_run($1,'HK',$2,1) v`,[iss,b]);
   const fid=randomUUID();const sref=`hkex:${randomUUID()}_c:v1`;
-  const m=await one(`select public.stage_filings($1,$2::jsonb) v`,[run,JSON.stringify([{filing_id:fid,source:'hkex',origin:'hkex',form_type:'annual',fiscal_year:2025,fiscal_period:'FY',period_end:'2025-12-31',available_date:'2026-03-20',source_ref:sref,url:null}])]);
-  expect(m).toEqual({[sref]:fid});
+  await q(`select public.stage_filings($1,$2::jsonb) v`,[run,JSON.stringify([{filing_id:fid,source:'hkex',origin:'hkex',form_type:'annual',fiscal_year:2025,fiscal_period:'FY',period_end:'2025-12-31',available_date:'2026-03-20',source_ref:sref,url:null}])]);
   const fact=randomUUID();
-  expect(await one(`select public.stage_facts($1,$2::jsonb) v`,[run,JSON.stringify([{fact_id:fact,filing_id:fid,concept:'revenue',source_concept:'收益',statement:'IS',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'1234000',unit:'CNY',consolidation:'consolidated',available_date:'2026-03-20',mapping_version:'hk-facts/1/hk-facts/1.0',raw_hash:'hkex:x'}])])).toBe(1);
-  expect(await one(`select public.publish_sync_run($1,$2::uuid[],null) v`,[run,[fid]])).toBe(1);
-  const env=await one(`select public.read_facts($1,'HK',array['revenue'],'2030-01-01',null,null,true,null,false) v`,[iss]);
-  expect(env.rows.map((r:Record<string,unknown>)=>[r.fact_id,r.market,r.value])).toEqual([[fact,'HK','1234000']]);
-  expect((await q(`select market,source,origin,mapping_gen from public.filings where filing_id=$1`,[fid]))[0]).toEqual({market:'HK',source:'hkex',origin:'hkex',mapping_gen:1});
-  const e=await fails(q(`select public.replace_financial_metrics($1,'HK',1,$2::jsonb)`,[iss,JSON.stringify([{metric:'gross_margin',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'0.4',unit:'pure',input_unit:'CNY',basis:'us_standard',formula_version:'t',inputs:[],as_of:'2026-03-20'}])]));
-  expect(e.code).toBe('23514');expect(e.message).toMatch(/financial_metrics_market_check/);
+  await q(`select public.stage_facts($1,$2::jsonb) v`,[run,JSON.stringify([{fact_id:fact,filing_id:fid,concept:'revenue',source_concept:'收益',statement:'IS',period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',value:'1',unit:'CNY',consolidation:'consolidated',available_date:'2026-03-20',mapping_version:'hk-facts/1/hk-facts/1.0',raw_hash:'hkex:x'}])]);
+  await q(`select public.publish_sync_run($1,$2::uuid[],null)`,[run,[fid]]);
+  expect(await count(`select count(*) v from public.fact_citations where fact_id=$1`,[fact])).toBe(0);   // published with zero evidence: exactly what publish_hk_run exists to prevent
  });
 
  it('creates the two tables with RLS, select-only grants and guarded triggers; function privileges; replays',async()=>{
