@@ -906,4 +906,101 @@ ingestUpload(deps, {ownerUserId, bytes, filename, mime: 'application/pdf', permi
 
 ## 17. 实施记录与偏差
 
-（计划三-文档 落地后补记，格式同规格一 §14。）
+（Task 19，记录基于实施前 HEAD `e64ad7f7`，分支 `claude/document-pipeline-3cfbb4`。）已提交代码优先于计划中的代码模板；§0–§16 保留原设计，不追改历史。运行入口与未完成上线步骤见 [runbook](../../runbooks/document-pipeline.md)，逐任务提交/审计及本次门禁见 [implementation-log](../../audits/2026-11-06-document-pipeline/implementation-log.md)。以下同时记录设计澄清、审计修复导致的约束强化与明确偏差，不表示部署已验收。
+
+决定来源缩写：计划“02/04/06/08/10”为 [审计目录](../../audits/2026-11-06-document-pipeline/) 中对应 disposition 文件；01/03/05/07/09 是各轮报告、11 是第六轮 ready 复核。Task N 指同目录 taskNN-codex-review/challenge/recheck 或 taskNN-audit；报告保留当时失败结论，后续修复提交列在表中，不篡改旧报告为通过。
+
+| 规格条目 | 实施 | 原因 | 决定 / 落地证据 |
+|---|---|---|---|
+| §4.8 `request_document_extract(p_document, p_actor)` | 增加 `p_extractor_version`、`p_table_algo_version`；`DocumentsDb.requestExtract(document, actor)` 签名不变，适配器传入两个 TS 常量；文档已是 `stored` 时为无操作（不重置 attempts） | SQL 不知道 TS 常量；规格未写 `stored` 情形 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.8 `read_documents` | 增加 `p_all_versions boolean default false` | `versions=1` 与契约 `allVersions` 需要 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.8 / §4.11 读方法 | 新增只读服务函数 `documents_stored_due`、`extractions_candidates_due`、`known_source_refs`（POST 体传 ≤ 500 个 ref）、`list_candidates`、`list_candidate_publications`（`security invoker`，只授 `service_role`）；`DocumentsDb` 加 `scopeAll(source)`（含 `priority=0`，按 `issuer_id`） | 数据库时钟与跨表条件；PostgREST 8 KB 请求行上限；§6.4 退役行需要全集 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §4.8 `stage_candidate_publication` 对已撤销审批"`raise 'approval_revoked'` 且候选回 `candidate`" | 函数先**提交**回退再返回 `{outcome:'approval_revoked'}`，三个 TS 实现随后抛 `DocumentsDbError('approval_revoked')`；晋升把它当作该发行人本次运行失败：`abandonRun` + `abandonCandidatePublications`、释放租约、结局 `failed/approval_revoked`，下次重来 | 在一个 PL/pgSQL 事务里 raise 会回滚回退 | HEAD Part A；`234c037c`、`5c576f73` |
+| §4.8 `finish_document_extract` 的 `candidates_role` | 额外要求 `source='hkexnews'`（上传文档即使 `market='HK'` 也是 `none`）；页必须恰为 `1..page_count`、`char_count=length(text)`、`text_hash=sha256(utf8(text))` | §8.3 上传不产候选；完整性 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.8 `insert_candidates` "至少含 value" | `citations.value` 必须是字符串；`financial_fact` 另需 `label`/`unit` 字符串与非空 `period[]` | 证据完整性在写入时可检 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.6 候选回到 `candidate` | 同时清空 `inherited_from` | 规格未写 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.11 `approvalsFor` | 只返回未撤销的审批行；超过 `limit` 才抛 `too_many_approvals` | 规格未写 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.1 视图列 | `disclosure_documents_public` 另外不含 `extract_attempts`、`acquisition`（含 UA 等运维信息） | 公共读不需要 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.12 策略 | 九张表都有显式 `"<表> service read"` 策略（`service_role` 本身 `bypassrls`）；`document_citations` 的两条策略名 `"document_citations public read"` / `"document_citations service read"`，迁移二按名替换前者 | 与规格二一致 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §4.4 码点语义 / 测试库 | 共享 harness `scripts/s4/local-db.ts` 的 `initdb` 加 `--encoding=UTF8 --locale=C`（`// F3`） | 本机 `LC_ALL=C` 默认 `SQL_ASCII`，`length('𠀋')=4`；生产 Supabase 是 UTF8 | Task 1，`c78fd420`；HEAD Part A |
+| §4.9 `delete` 仅当 `pg_trigger_depth() > 0` | 守卫用 `pg_trigger_depth() < 2` → 拒绝 | BEFORE DELETE 触发器内直接删除时深度已是 1 | Task 13；`9cce0513`、`11126ba6` |
+| §4.9 `bind_filing_documents` | 校验 filing 后先查已有绑定（不同文档 → `binding_conflict`），再校验文档与 `source_ref`；`finish/abandon_candidate_publications` 对 `staged` 运行 → `run_pending`，对已 `abandoned`/`published` → `invalid_input`，运行不存在 → `not_found` | 否则 `binding_conflict` 不可达；规格未写的分支 | Task 13；`9cce0513`、`11126ba6` |
+| §4.11 `promotionDue` | SQL `hk_promotion_due(p_pub_gen, p_extractor_ref, p_limit)` 与 `hk_zero_output_documents(p_issuer, p_pub_gen)`；端口签名不变（传 `HK_EXTRACTOR_REF`） | 条件 (ab) 需要只在 TS 侧的常量 | 计划处置 02 P2-6；`9cce0513`、`4dc8553b` |
+| §5.1 HKEX 中英两行 | 0268 的定期报告只有一份**中英双语** PDF（`_c`），`_e` 路径返回 HTTP 200 的 HTML 错误页；`language` 仍按后缀（`_c`→`zh`）记为元数据；下载按内容嗅探（`%PDF-` 魔数），HTML 按来源允许集隔离为 `unexpected_mime`，不入库；英文对照检查 `en_cross_check` 因此对这类文件为 `unavailable` | 历史真实字节核对记录（指挥，2026-11-06）；lang=en 完整布局与 _e 行为仍由 owner 复验 | Tasks 5–7；`8fde036a`、`2fec09ea`、`14b509ec` |
+| §5.2 替换版本 `available_at = fetched_at` | 由同步核心在插入前按 `documentVersions` 判定后写入 `p_doc`；跨发行人同 ref 在 SQL 所有权校验及同步去重前拒绝为 document_ref_conflict | available_at 由调用方给；不能以联合公告为由转移全局 ref 所有权 | Tasks 5–7；`8fde036a`、`2fec09ea`、`14b509ec` |
+| §5.4 分类 | 巨潮排除词（摘要/英文/更正/已取消/补充）也用于季报，接受"一季度报告/三季度报告"；EDGAR `SCHEDULE 13D/13G` 归 `ownership`；HK 期间字段只对定期报告类解析，`fiscal_year` = 期末日年份；HK `filing_source_ref` 恒 null（filing 的 `source_ref` 含版本，由晋升生成 `hkex:<ref>:v<n>`） | 实际表单名与命名 | Tasks 5–7；`8fde036a`、`2fec09ea`、`14b509ec` |
+| §6.1 先 HEAD 再 GET | 一次 GET：`Content-Length` 超限即取消读取，否则流式读到上限即 `cancel()` | 请求数减半（HKEX 1 req/s），效果相同 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.1 `document_fetch_exhausted` payload "含三次错误" | 记 `attempts` 与最后一次 `{code,message}`；前两次在各自批次的 `errors` | 游标契约不存历史错误 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.1 `maxPerIssuer` / dry-run | 已知项（即使重新下载）不计入"新项"；dry-run 会下载待处理项正文以核对大小/MIME/哈希并预判 inserted/versioned/duplicates，但不写任何行、对象、隔离、游标、租约、批次、新鲜度 | 冒烟需要；规格只说"不上传、不建批次" | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.1 轮询窗口未走完 | 段 id `poll:<from>`，游标保存该 id，下次从同一 `from` 继续；走完才清 | 规格未定 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.1 脚本无截止 | 每次写之前若同步租约 120 s 内到期即holder-only `renew_document_sync_lease` 续租，续租失败按 `lease_lost` | 长回填 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.2 EDGAR | `files[]` 未核对（`EDGAR_FILES_VERIFIED=false`）时 `recent` 走完不置 `backfill_done`、游标重置、回执 `coverage_summary`、`next_due=now+1d`；核对后 `history` + `recent` 两段；适配器多出 `coverageGap` 与 `assetsFromIndex?`（XBRL 实例名只在抓到 `index.json` 后才知道） | EDGAR_FILES_VERIFIED 仍 false；commander 报告 2026-11-07 live files[]/index 形状已核对，真实历史夹具与开关提交仍待完成 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.2 HKEX | 每段中文、英文各搜一次（`languages` 选项可退回 `['zh']`，§15 问题 2 核对后定） | `_c/_e` 成对假设未核对 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.3 `vercel.json` 五条 | 本分支只加三条 `documents-sync`；`documents-extract`/`documents-candidates` 由 owner 在 Vercel preview 冒烟通过后按 runbook §9 加 | §7.1 / §12 降级路径 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §6.3 cron `sinceYear` | 当前年 − 10 | §1.1 成功标准 | Tasks 6–8；`2fec09ea`、`14b509ec`、`7ee68632` |
+| §7.1 `pdfjs-dist` | 固定 `4.10.38`；`getDocument` 恒带 `cMapUrl`/`cMapPacked`/`standardFontDataUrl`（`node_modules/pdfjs-dist/{cmaps,standard_fonts}/`），`next.config.mjs` 用 `outputFileTracingIncludes` 把两个目录打进 extract/candidates/reprocess 路由 | HK 报告用 CID 字体：无 CMaps 时 0268 中期报告抽出 0 个汉字，带 CMaps 23,786 个 | Tasks 9–10；`93940410`、`c617d50a`、`e7178d6f` |
+| §7.2 表头块"到上一个空行" | 到上一张表的末行或页顶，最多六行，遇宽于表体的行停止 | 文本层没有空行 | Tasks 9–10；`93940410`、`c617d50a`、`e7178d6f` |
+| §7.2 `pages.json` 行 | `LayoutLine` 增加 `items: LayoutItem[]`（每个文本项的 x 区间与码点偏移；HTML 行一个跨整行的项） | 表格列聚类与期间列按 x 对齐都需要逐项坐标 | Tasks 9–10；`93940410`、`c617d50a`、`e7178d6f` |
+| §7.3 抽取装配 | 生产装配分三处：`deps.ts`（只含采集）、`extract/deps.ts::productionExtractDeps`、`candidates/run.ts::supabaseCandidatesDeps` | 任务顺序：采集装配先于抽取与候选类型存在 | Tasks 9–10；`93940410`、`c617d50a`、`e7178d6f` |
+| §7.5-1 标题 | 标题正则容忍 `簡明`/`Condensed` 与 `中期`/`Interim`，IS 另认 `利潤表\|收益表\|Income Statement`，BS 另认 `資產負債表\|Balance Sheet`，CF 另认 `Cash Flow Statement`；仍须 `綜合/Consolidated`；同页中英双语标题任一命中即可；单独的综合收益表（标题含 `全面`/`綜合收益表`/`Comprehensive`）在存在普通损益表时不作 IS，只有它（或合并的損益及其他全面收益表）时才用 | 真实 0268 中期报告（`簡明綜合中期利潤表` + 单独的 `簡明綜合中期綜合收益表`） | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.5-2 期间列 | 表头年份/日期按 `items` 的 x 区间落到其下方的数值列（双语表头同列同记号只计一次；落空或两个不同记号争一列 → `period_unparsed`）；没有 items 的旧 `pages.json` 才退回"最右侧 k 列" | 双语表头有两行年份；附注列在左 | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.5-2 期间证据 | `citations.period` 含两条 `statement_title`（报表名称行——`consolidated` 检查读它；期间短语——期间推导依据；同一区间则一条）与 `column_header` | 规格"报表标题行"与期间推导依据都要可回溯 | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.5-3 `scale=null` | 单位/倍数不明 → 不产候选，记 `unit_ambiguous`；金额表头只有"人民幣元"时倍数为空（保守）；每股另认 `RMB cents\|人民幣分 → CNY 0.01` | 契约 `scale` 不可为 null；否则 `RMB cents` 先命中 `RMB` | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.5-4 标签 | 双语标签单元格按书写系统拆分分别匹配、概念取并集（同一概念经两种文字命中不算歧义）；两行标签按实际表格 col-0 单元格/独立行组合，仅在证据满足相邻位置时引用；歧义保持 label_ambiguous；增补真实变体（`與客戶之間的合同產生的收入`、`當期盈利╱（虧損）`、`Profit/(loss) for the period`、`所得稅沖回`、`稀釋`、`Net cash inflow/(outflow) from … activities`、`經營活動產生╱（所用）淨現金`、`Net (decrease)/increase in cash…`、`Earnings/(losses) per share`）；表内的纯标签行（如 "Profit/(loss) attributable to:"）也能开启小节；EPS 子单位可在小节标题之下的说明行；`equity_parent` 不要求小节；`net_income_parent` 只在利润归属小节；同表重复且各列原文完全相同的行视为同一披露 | 真实 HKEX 双语版式 | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.5-4 符号 | `所得稅` 在 credit/抵免/沖回 标签下按负的开支记（一律 −abs(x)；只在符号确实改变时记 `sign_flip`，计划审计 P1-3）；`net_change_in_cash` 只对"只含减少"的标签取负 | 税项抵免是负开支；"增加/(減少)" 正值即增加 | Task 14 review/challenge；`c4696527`、`2b587b9c` |
+| §7.6 缺输入恒等式 | `{blocking:false,passed:null,detail:{applicable:false,missing:[…],column_unit}}`；按完整列与金额单位计 checked/skipped/failed，receipt 另记 columns.skipped；已决定候选也参与整列检查 | 缺输入不能冒充恒等式通过；Task 15 审计修复 | Task 15 review/challenge；`f00ab001` |
+| §7.6 `comparative_consistent` | 与同 K 的当前 ok 值（`readFacts(history:false)`）比较，不区分来源 filing | 规格未定 | Task 15 review/challenge；`f00ab001` |
+| §7.7 第 2–3 步顺序 | 先为本运行全部新事实写 `fact_citations`（此时都还是 `staged`；`insert_fact_citations` 只收 staged 事实），再停放同日冲突与争议连接 | 先停放会使被停放事实无法写证据 | Task 16；`5c576f73`、`4dc8553b` |
+| §10 新信息码"加入 `INFO_CODES`" | 九码放在 `src/lib/dq/batches.ts` 的 `// F3` 块 `F3_INFO_CODES`，`isInfoError` 同时查两表；`INFO_CODES` 不动 | `src/lib/facts/rules.test.ts`（F3 不得修改）钉死了 `INFO_CODES` 的值 | Task 14，`c4696527`；HEAD D1-5 |
+| §11.3 录制夹具 | `record-fixture.ts --pages` 只存选定页（`pages_subset:true`，头部保留整份 `page_count` 与 `content_sha256`），0268 夹具只存主表页（约 0.4 MB，不提交原 PDF）；读取时展开为 `page_count` 页（未录页为空页），`validate-extraction` 只比对已录页；录制层在夹具缺失时只告警不失败；`pages_json_sha256` 是重建字节的真实哈希 | 仓库体积；CI 不联网 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
+| §11.4 召回 | "被覆盖" = 存在值相等且 `checks_passed` 的候选 | 规格未定 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
+| §12 样例 10 | 混合结果改用同日冲突构造（同一 HKEX 文件同日替换为不同值），断言形状不变 | 候选级 `identity_bs` 是阻断检查，规格二规则对同列值不会另行隔离，原样例不可达 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
+| §13 审计目录 | 实施期产物（实施日志、评测与真实字节验证报告、dry-run 回执、引用抽样）统一放 `docs/audits/2026-11-06-document-pipeline/` | 与实施日志同处 | Task 18 audit；`3759910f`、`ff8912f5`、`e64ad7f7` |
+| 测试 | 新增仅测试用 `pgDocumentsDb`、`pgHkFactsPort`（`hk-facts/pg-facts-port.ts`，因 `pg` 不得进生产代码路径）、`memoryHkFactsPort(facts, docs, {now})`（租约与 `memoryFactsDb.setNow` 同一时钟）；四个 critical 套件 | 内存实现无法表达数据库约束；固定时钟的测试不能依赖墙钟 | HEAD Part A/共享契约；Tasks 1–3，`c78fd420`、`234c037c`、`731b7252` |
+| §2/§4/§12 迁移名 | `20261108090000/20261108091000` → `20261115090000/20261115091000` | 排在 main 已锁 `20261114090000` macro 迁移之后，保持 append-only inventory | 合并 `5b046363` 后 `388ae30c` |
+| 迁移锁 | 锁推迟至最终门禁全部通过，commander 追加 SHA-256 条目；本次失败/未跑的门禁不锁 | Tasks 1–18 审计仍需修改 F3 自有 SQL，避免锁定未定稿字节 | Task 1 原 implementation-log；Task 19 用户授权边界 |
+| §4.8/§7.3 租约 | 新增 holder-only renew：`renew_document_sync_lease`、`renew_document_extract_lease`、`renew_candidates_lease`、`renew_hk_fact_lease`；拒绝过期/无主/已释放/他批次，不增加 attempts；heartbeat 120s，quiesce 有界排空 | claim 可重新获取租约，迟到心跳会复活已释放 scope；主线程必须保持续租 | 计划 02 P2-7、04 R1-P2-7、06 R3-P2-1、08 R4-P2-2；`d7895e4b` |
+| §4.8 publish_hk_run | 第六参 `p_zero_output jsonb=[{document_id,extraction_id}]`；锁文档/抽取后验证当前 primary/done 与绑定，变化报 stale_plan | 防止选择与发布间重抽取/再生使零输出计划过期 | 计划 02 P1-4；`9cce0513` |
+| §4.5/§4.9 单位证据 | `unit_currency` 独立角色，unit 恰一条且等于候选 unit 引用；unit_currency 当且仅当候选声明时存在且精确相等；金额和显式币种 EPS 禁止额外 unit_currency | 仙/cents 必须引用表币种；不能从 payload.unit 猜币种，也不能任意多加 unit | 计划 04 R2-P1-1/R2-P2-1 → 06 R3-P1-1；`9cce0513` |
+| §4.9 发布证据 | value/label/period/unit/unit_currency 引用集合和事实 concept/statement/期间/duration/unit/consolidation/value 必须等于候选声明；staged 与 quarantined 事实都检查 | 完整且有效的错误引用也可能指向另一年/另一值，完整性不等于正确关联 | Task 13 review/challenge；`11126ba6` |
+| §4.9 source/origin | HK 必须 hkex；非 HK 禁止 hkex（保留原非 HK 集合） | 单纯扩枚举会使 US/CN 伪装 HK 来源 | Task 13；`11126ba6` |
+| §4.9 period 引用 | 每事实最多 64 个不同 period citation（已有 + 本次写入合计）；读端分页 | 防止无界集合及 PostgREST 截断；不是每请求 64 | Task 13 `11126ba6`；Task 17 `394404d9` |
+| §4.8/§7.3 终态失败 | `fail_document_extract_terminal` 原子 extract_failed + 清租约 + quarantine；content_hash_mismatch 首次即终态 | 顺序 quarantine→反复 claim 可能耗尽预算而把坏对象留在可重试态 | Task 10 recheck N4；`e7178d6f` |
+| §6.3 feature flags | documentsFlag 统一三开关，精确接受 '1'/'true'，默认关闭；cron 认证后 200 skipped disabled，不装配依赖/读写库 | 安全部署顺序与 Vercel smoke 门控；原计划 403 extract_disabled 已废弃 | Tasks 8/10/16；`7ee68632`、`78c63d88`、`5c576f73` |
+| §6.1 cursor | `{segment,last_ref,settled,attempts,seq}` 替代 index/item_attempts；租约后重读 scope；poll 窗口先持久化；reset 显式，seq 单调 | 列表插入/删除不跳项，重试按 ref；open quarantine 重放重新查询，已解决项可再次处理 | 计划 02 P2-4/P2-5、08 N1；`d7895e4b`、`14b509ec` |
+| §6.4 scope | `scope_confirmed_at` + reconcile `p_snapshot_at` 防止旧快照撤销刚确认 active 的行；merged 排除；键集遍历不以短页判断完成 | 并发 reconcile 与服务端截短页不能静默退休活跃发行人 | Task 5 review/challenge；`8fde036a` |
+| §6.1 同步失败 | 保留 sqlstate，item-local validation 白名单；基础设施、FK、游标、release 失败不消耗 item attempts；所有版本分页、所有权先于哈希去重；404 refs 最多 50 个进摘要 | 防止丢证据或虚假 freshness；open quarantine 非永久 settled | Task 7 recheck N1–N4；`14b509ec`，mapper 部分在 `78c63d88`（a5c3ef52 实际不含 db.ts） |
+| §6.1 来源网络 | 按来源 host allowlists；协议/端口与每跳重定向校验（cninfo 查询主机允许 HTTP，其余 HTTPS）（最多 3）；SEC contact User-Agent 仅发 SEC 主机，其他用非联系 UA；串行 pacing、Retry-After、20 MB 列表限制 | 阻止来源 URL/重定向越界、联系方式泄漏和无界列表 | Task 6 review/challenge；`2fec09ea`；人工录制/验证脚本另有 UA 路径 |
+| §6.2 完整列表 | cninfo 校验 totals/hasMore/重复页/短页/错误 envelope；HKEX 校验 tr/total-records，不足递归拆日期，单日仍不足 hkex_truncated；t1code=-2/category='' 仍靠分类过滤 | 不把截断或布局错误当完整历史 | Task 6；`2fec09ea`；英文 lang=en 真实布局仍待 owner 核验 |
+| §5.4 classifier | cninfo 标题尾部锚定+通知排除；HKEX 方括号类别精确匹配；无 _e 后缀为 zh（含无后缀双语文件） | 防止延迟寄发/问询等通知被当主报告；保守默认主语言 | Task 5；`8fde036a` |
+| §7.1 抽取隔离 | worker thread + esbuild ESM bundle；manifest preflight worker_missing/worker_stale；prebuild/predev 与 CLI 每次重建；追踪 manifest、CMaps/fonts；堆 1024 MB、页数 1500、硬截止 terminate | 同步 pdf.js/HTML 不阻塞主线程续租；部署不能依赖运行时 tsx；setup 失败不认领 | 计划 06/08/10；Task 10 `3af98ad9`、`78c63d88`、`e7178d6f` |
+| §7.3 截止 | 网络超时覆盖响应体，带 deadline 时忽略未受限注入 admin；抽取 runner 对读/写/收尾有界，收尾 grace 30s | headers 返回不等于 body 完成；reprocess 也不能绕过 deadline | Task 10 recheck N2/N3；`e7178d6f` |
+| §7.2 pages.json | 递归 key-sorted canonical serialization；LayoutLine 带 items、cell 保留 numeric/line_index/码点偏移 | 对象构造顺序不能改变哈希；列与期间重放需坐标 | Task 9 review/recheck；`93940410`、`c617d50a` |
+| §7.2 表形状 | 模糊 wrapped label 留独立行/header；只有严格更近、≤1.2em、同标签 x、非标题/注释的延续才附着；数值合并需码点相邻及括号/符号/闭括号或极小间距 <0.15em；不是仅相邻就合并；尾部双语标签独立 cell | 防止标签附错行与完整数字跨列拼接；年份表头按锚定期间词辨认 | Task 9 recheck R1–R3；`c617d50a` |
+| §7.2 PDF/HTML | 去除重叠 fake-bold 保留真实相邻重复字；HTML break-after 在 closing tag 后，inline 不插空格，去 hidden ix:header，charset 忽略注释中的 meta；控制字/孤立 surrogate 规范化 | 真实数字与字符位置必须可重放；避免乱码与伪分页 | Task 9；`93940410`、`c617d50a` |
+| §7.5 labels/EPS | 未命中值行或多概念/重复冲突报 label_ambiguous；同概念同原文重复可折叠；负号/税抵免按 label 重放；EPS 小节自身单位优先，仙/cents 借表币种必须 unit_currency，未决/冲突 unit_ambiguous；BS 错列/交错日期保持位置证据 | 不从 payload 或全表金额倍数猜 EPS；多行/双语主表须保守匹配 | Task 14；`2b587b9c` |
+| §7.6 检查增强 | 新增 blocking value_replays/label_replays；period_known 回放 title/header 与 derivation；consolidated 标题排除 parent-company；同列 identity 金额币种一致；缺输入 applicable:false；zh/en 检查与处理顺序无关 | 有效引用不能证明语义正确；完整候选集用于身份检查、只更新未决定项，先记录 findings 再筛资格 | 计划 02 P1-2；Task 15 `f00ab001` |
+| §4.11 到期调度 | hk_promotion_due 过滤主语言公开年/中报、活跃未 merged 且有 HK key；跳过已 published run 的 quarantined 等裁决项；按 last_attempt_at asc nulls first/issuer 排序；恢复可收尾至当前代以前的 staged publication | 防止不可操作项/永久失败发行人占满 limit；初始化失败逐发行人隔离 | 计划 02 P2-6；Task 16 `4dc8553b` |
+| §7.7 同代复用 | 若同 key 既有事实的规范值或 raw_hash 不同，pub_gen_required 废弃而非复用；版本组合由测试钉住，语义版本变化必升 HK_PUB_GEN | 禁止 changed candidate 静默链接旧事实 | Task 16 review F1；`4dc8553b` |
+| §9 管理增强 | POST approvals/[id]/revoke，数据库时钟、幂等 alreadyRevoked；regenerate 空 filter 需显式 all:true；候选列表含 unit_currency；fact citations 分页 | 审批可撤销且证据完整；防误触全库再生/超过 1000 截断 | Task 17；`394404d9` |
+| §4.8 decide_candidate | SQL/内存确认都要求 primary + rule + financial_fact + checks_passed（人工确认也不可绕过） | comparison/LLM/其他类型不能作为 HK 事实来源 | Task 17；`394404d9` |
+| §9 public read | strictParams 拒绝未知/重复参数；游标 UUID 与真实时间值查询前校验；successor 查 source_version 严格大于当前、升序 limit 1；missing file → 404 | 防 500 cast 泄漏与截断后错误后继 | Task 11 `a5c3ef52`；cursor recheck 混在 `78c63d88` |
+| §8 upload/read | 同 owner/hash 权限或 license 不同 upload_conflict；filename 禁格式控制字、license 按码点；已存上传若 finishBatch 失败回 batchError，不伪报写入失败；owner page 必须匹配 extraction/document | 去重不可改变许可，持有人读取仍 fail-closed audit | Task 12；`570dbe7a` |
+| §9 HK hook repair | finalizeHkHooks 生产接 supabaseHookRepair/finalize_hk_hooks，最多 500，每批 100，预算内只局部合并 detail.hook，不扫描全部 done 项 | 通用路由误用后的修复不能覆盖并发 detail 或饿死晋升；repair 本身不提升事实 | Task 17 fix audit T17-05；`ff8912f5` |
+| §11.3/§11.4 eval | 两报告脚本默认 stdout，--apply 才写；fixture 加 doc_class；所有 gold 文档都覆盖，DB 版本须一致；missing/mixed 失败；真实字节验证另报 bytes_text_ok/gold_ok/逐条 coverage，gold 不一致非零退出；fixture eval 仅开发辅助 | 防部分语料/错误报告充当审批证据；gold ready:false 模板仍待独立抄录 | Task 18 audit 与 calibrated MiniMax re-audit；`ff8912f5`、`e64ad7f7` |
+| §11 gate | 本次仅跑 npm test/typecheck/lint；DB 两 gate、锁、build/history 由 commander 续做；不把 skipped 当 passed | 用户明确执行边界：沙箱不能 listen；失败精确计数见 implementation-log | Task 19 本次委托 |
+
+### 17.1 已知残余风险与 owner 待决
+
+- **发布旁路仍存在**：规格二 `publish_sync_run` 的 service_role 授权能直接发布 HK run 而不带 F3 证据。协作边界禁止本分支替换该函数；本分支只用 `publish_hk_run`，`src/lib/documents/hk-facts/publish-boundary.test.ts` 守住 F3 调用边界，`fact-citations.integration.test.ts` 记录绕过能力。这是 Task 13 review F1 的 accepted residual risk，需规格二 owner 增加 market-aware authorization；测试不是全数据库权限修复。
+- **§4.11(d) 零输出代激活待 owner 决策**：当前 SQL 只要求当前 primary 抽取 candidates_status=done、已有 filing.mapping_gen 小于新代；没有要求所有新候选已审核。因此新候选仍 candidate 时可激活空代、隐藏旧事实。保留 R5-13 实现；owner 决定是否接受审核空窗，或另改就绪条件；Task 19 不暗改产品语义。
+- EDGAR live 形状由 commander 报告在 2026-11-07 已确认（files[] 含 name/filingCount/filingFrom/filingTo、index 的 directory.item[]）；代码 flag 仍 false。HKEX lang=en 真实布局、_e.pdf 行为、cninfo category、三来源各三家 dry-run、preview worker/CMaps/Storage/PostgREST、独立 gold/真实字节评测、容量/许可/重核验与 5% 引用抽样仍按 runbook 完成。0268 子集夹具已提交，gold 仍 ready:false；不能据离线单测宣布上线完整。
+
+### 17.2 依赖接口请求（§16 的 PR 交接清单）
+
+1. 规格二：`.HK` 的 `/api/facts`、`/api/filings` 和 `citations=1`；HK metrics 口径、market/basis、物化及 state_rev 安全调度；Market/Source/Origin 类型扩展；`publish_sync_run` 的 market-aware 发布授权；facts.hk 通用裁决分派；US/CN filing↔document 绑定授权。
+2. F4：判断 snapshot 引用 citation_id、模块发布自行 publish_citations；F6：gold/阈值和 LLM 候选评测 harness 对齐。
+3. 计划三：HK 比较列与上期主列是同源检查，不能称第二事实源；租约合并另定。
+4. 外资研报：license.ref、许可范围、field schema、摘要规则；公司/行业页面：按 §9.1 实现来源抽屉/候选工作台（先 Claude Design）。
+
+上述请求均为交接，本次未发送外部消息，也未修改兄弟模块。

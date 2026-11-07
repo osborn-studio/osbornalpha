@@ -1,0 +1,163 @@
+
+> stock-monitor@1.0.0 test
+> vitest run
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.11 /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4
+
+node:net:2145
+      const error = new UVExceptionWithHostPort(rval, 'listen', address, port);
+                    ^
+
+Error: listen EPERM: operation not permitted /var/folders/97/wmwg4qzx02j74c3n73nh438w0000gn/T/tsx-501/81253.pipe
+    at Server.setupListenHandle [as _listen2] (node:net:2145:21)
+    at listenInCluster (node:net:2224:12)
+    at Server.listen (node:net:2361:5)
+    at file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:53:31472
+    at new Promise (<anonymous>)
+    at createIpcServer (file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:53:31450)
+    at async file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:55:500 {
+  code: 'EPERM',
+  errno: -1,
+  syscall: 'listen',
+  address: '/var/folders/97/wmwg4qzx02j74c3n73nh438w0000gn/T/tsx-501/81253.pipe',
+  port: -1
+}
+
+Node.js v26.5.0
+ ❯ src/lib/research/migration-history.test.ts (15 tests | 1 failed) 657ms
+   × CLI emits only a comparison, and rejects malformed input without echoing sensitive contents 649ms
+ ❯ src/lib/dq/datasets.test.ts (6 tests | 1 failed) 406ms
+     × finds no hard-coded dataset literal outside the registry 401ms
+ ❯ src/lib/research/fanout/calibration.test.ts (35 tests | 1 failed) 6879ms
+     × searches Q1 thresholds in near-linear time and matches the brute-force answer 6840ms
+ ❯ src/lib/data/sources/tushare-timeout.test.ts (7 tests | 1 failed) 134ms
+     × real localhost body stream is released on the owned deadline 11ms
+ ❯ src/lib/research/s6/market.test.ts (1 test | 1 skipped) 10045ms
+ ❯ src/lib/macro/replay.test.ts (13 tests | 1 failed) 89096ms
+     × derives the expected indicators; every derived row reaches a native row with a manifest sha; every native value reads back from the evidence bytes 66359ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/research/s6/market.test.ts [ src/lib/research/s6/market.test.ts ]
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ ❯ src/lib/research/s6/market.test.ts:8:1
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/dq/datasets.test.ts > DATASETS / DQ_DATASET_INVENTORY > finds no hard-coded dataset literal outside the registry
+AssertionError: expected [ 'src/lib/macro/db-contract.ts:279' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/macro/db-contract.ts:279",
++ ]
+
+ ❯ src/lib/dq/datasets.test.ts:63:16
+     61|   const hits=[...sources('src'),...sources('scripts')].filter(p=>!EXEM…
+     62|    readFileSync(p,'utf8').split('\n').flatMap((line,i)=>LITERAL.test(l…
+     63|   expect(hits).toEqual([]);
+       |                ^
+     64|  });
+     65| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  src/lib/macro/replay.test.ts > replay US evidence read-back > derives the expected indicators; every derived row reaches a native row with a manifest sha; every native value reads back from the evidence bytes
+Error: Test timed out in 60000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/lib/macro/replay.test.ts:113:2
+    111| const numEq=(a:string,b:string)=>Number(a.replace(/,/g,''))===Number(b…
+    112| describe.each(['US','CN'] as const)('replay %s evidence read-back',(re…
+    113|  it('derives the expected indicators; every derived row reaches a nati…
+       |  ^
+    114|   const {db,entries,dir}=await replayRegion(region);
+    115|   const known=new Set(entries.map(e=>e.sha256));
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  src/lib/research/migration-history.test.ts > CLI emits only a comparison, and rejects malformed input without echoing sensitive contents
+Error: Command failed: /opt/homebrew/Cellar/node/26.5.0/bin/node node_modules/tsx/dist/cli.mjs scripts/ci/check-migration-history.ts /var/folders/97/wmwg4qzx02j74c3n73nh438w0000gn/T/alpha-history-fUMAIC/input.json synthetic-project
+node:net:2145
+      const error = new UVExceptionWithHostPort(rval, 'listen', address, port);
+                    ^
+
+Error: listen EPERM: operation not permitted /var/folders/97/wmwg4qzx02j74c3n73nh438w0000gn/T/tsx-501/81253.pipe
+    at Server.setupListenHandle [as _listen2] (node:net:2145:21)
+    at listenInCluster (node:net:2224:12)
+    at Server.listen (node:net:2361:5)
+    at file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:53:31472
+    at new Promise (<anonymous>)
+    at createIpcServer (file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:53:31450)
+    at async file:///Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/document-pipeline-3cfbb4/node_modules/tsx/dist/cli.mjs:55:500 {
+  code: 'EPERM',
+  errno: -1,
+  syscall: 'listen',
+  address: '/var/folders/97/wmwg4qzx02j74c3n73nh438w0000gn/T/tsx-501/81253.pipe',
+  port: -1
+}
+
+Node.js v26.5.0
+
+ ❯ node_modules/tsx/dist/cli.mjs:53:31472
+ ❯ createIpcServer node_modules/tsx/dist/cli.mjs:53:31450
+ ❯ src/lib/research/migration-history.test.ts:42:27
+     40|  try{
+     41|   const raw=JSON.stringify({...history(),captured_at:new Date().toISOS…
+     42|   const output=JSON.parse(execFileSync(process.execPath,args,{encoding…
+       |                           ^
+     43|   expect(output.inputSha256).toBe(createHash('sha256').update(raw).dig…
+     44|   expect(output.pending).toEqual([]);expect(output.authorizesExecution…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  src/lib/data/sources/tushare-timeout.test.ts > Tushare owned fetch/body deadline synthetic acceptance > real localhost body stream is released on the owned deadline
+Error: listen EPERM: operation not permitted 127.0.0.1
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  src/lib/research/fanout/calibration.test.ts > Codex round 10 regressions > searches Q1 thresholds in near-linear time and matches the brute-force answer
+AssertionError: expected 6833 to be less than 4000
+ ❯ src/lib/research/fanout/calibration.test.ts:404:30
+    402|   const started=Date.now();
+    403|   const p=proposeThresholds(rows).find(x=>x.question_id==='Q1')!;
+    404|   expect(Date.now()-started).toBeLessThan(4000);
+       |                              ^
+    405|   expect(p.status).toBe('proposed');
+    406|   // Brute force on a small subsample must agree exactly.
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+Error: listen EPERM: operation not permitted 127.0.0.1
+ ❯ Server.setupListenHandle [as _listen2] node:net:2145:21
+ ❯ listenInCluster node:net:2224:12
+ ❯ node:net:2448:7
+ ❯ processTicksAndRejections node:internal/process/task_queues:90:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'EPERM', errno: -1, syscall: 'listen', address: '127.0.0.1' }
+This error originated in "src/lib/research/s6/market.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  6 failed | 523 passed | 39 skipped (568)
+      Tests  5 failed | 5838 passed | 594 skipped (6437)
+     Errors  1 error
+   Start at  23:56:00
+   Duration  100.69s (transform 184.25s, setup 0ms, import 288.57s, tests 265.49s, environment 227ms)
