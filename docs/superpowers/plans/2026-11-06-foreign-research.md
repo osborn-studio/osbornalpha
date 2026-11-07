@@ -345,6 +345,8 @@ export interface BrokerResearchDb{
  quarantineResolve(id:string,status:QuarantineResolution,by:string,payload:Record<string,unknown>):Promise<'resolved'|'not_found'|'already_resolved'>;
  // verify cron (spec §8.3): documents of published reports, last_verified_at asc, never-verified first
  verifyCandidates(limit:number):Promise<DocumentRow[]>;
+ // verify cron reconciliation (P-R4-04): purged documents, purged_at asc then document_id
+ listPurgedDocuments(limit:number):Promise<DocumentRow[]>;
  // public (anon client, views only)
  publicReports(filter:PublicReportFilter):Promise<PublicReportBundle[]>;
  publicReport(reportId:string):Promise<PublicReportDetail|null>;
@@ -388,7 +390,7 @@ export interface PublicReportDetail extends PublicReportBundle{citations:Record<
 13. **清除文本**：`purgeReportText(reportId,step)` 只在报告 `withdrawn` 时可用（否则 `report_not_withdrawn`）；`fields_text` 同时清 `corrected`；`summaries` 只置 `rejected`（O11：文本保留）；`quarantine_payload` 置本文档隔离项 `payload={}`。C7 的清除步骤表只经此方法与存储端口，不直写表。
 14. **页文本**：`PageText` / `sliceText(pages,page,start,end)` 只在 `extract/locate.ts`（B1）定义；F3 产物类型是 `ports/f3.ts::F3Artifact`（`pages:F3Page[]` 与 `PageText` 同形），`ports/f3.ts` 不导出切片函数。R1、复核框选、回放、核验 cron 一律 `sliceText(artifact.pages,…)`。`extract/schema.ts::DocumentExtraction` 是 LLM 抽取形状，与 F3 产物无关。
 15. **复核数据**：★ `GET /api/admin/broker-research/reports/[reportId]` 返回契约 `ReviewPayload`；D5 直接用该类型。
-16. **新增的视图列**（A3）：`broker_reports_public_v.rules_version`、`.title_model_id`、过滤列 `.issuer_ids`（uuid[]）、`.ratings`（text[]）、`.has_summary`（列表筛选在库内与键集游标一起执行，不在客户端收集 id；P-R3-05）；`broker_report_summaries_public_v.grounding_assertions`（无 `field_id`）；`research_institutions_public_v.report_count`、`.last_published_date`、`.last_available_at`（只列有可见报告的机构）；`broker_report_citations_v.field_id`（片段与引用按 `field_id` 关联）。
+16. **新增的视图列**（A3）：`broker_reports_public_v.rules_version`、`.title_model_id`、过滤列 `.target_facets`（jsonb：每个标的一个 `{issuer_id,rating}`，发行人 + 评级组合筛选在同一元素上做 `@>`；P-R4-02）、`.has_summary`（列表筛选在库内与键集游标一起执行，不在客户端收集 id；P-R3-05）；`broker_report_summaries_public_v.grounding_assertions`（无 `field_id`）；`research_institutions_public_v.report_count`、`.last_published_date`、`.last_available_at`（只列有可见报告的机构）；`broker_report_citations_v.field_id`（片段与引用按 `field_id` 关联）。
 17. **金额是十进制字符串**：outbox 载荷（`claim.target_price`、`reference_price`）与发布快照里的金额一律字符串；E1 投递不经 `Number()`。
 18. **回草稿原因**：`SnippetRow.draft_reason` / `SummaryRow.draft_reason`（`licence_version|analyst_disclosure|disclosure_inputs|summary_stale`），D4/D5 的"受影响片段 / 摘要"计数读它。
 19. **`deps.tables` 的用途**：服务只用它读写计划一的表（`dq_quarantine`、`ingest_batches`、`research_audit_log`）；本模块表的写入一律经 `BrokerResearchDb`。唯一例外是 D4 `admin-read.ts` 的总览计数与许可影响面：service-role 只读本模块表做聚合（契约没有计数方法），不写。
@@ -2087,6 +2089,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
 
  it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
   const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
+  const fnOid=(role:string,oid:number)=>s.one(`select has_function_privilege($1::name,$2::int::oid,'EXECUTE') v`,[role,oid]);   // inventory: by OID (P-R4-01)
   const rpcs=['public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
   for(const sig of rpcs){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
   for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)','public.broker_llm_fence(uuid,uuid,uuid,text)']){
@@ -2097,7 +2100,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   const all=await s.q(`select p.oid::int oid, format('%I.%I(%s)',n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)) sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 2`);
   expect(all.length).toBeGreaterThanOrEqual(40);
   for(const {sig,oid} of all)for(const role of ['public','anon','authenticated'])
-   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::int::oid and a.grantee=0 and a.privilege_type='EXECUTE') v`,[oid]):await fn(role,sig)}).toEqual({sig,role,ok:false});
+   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::int::oid and a.grantee=0 and a.privilege_type='EXECUTE') v`,[oid]):await fnOid(role,Number(oid))}).toEqual({sig,role,ok:false});   // sig is diagnostic output only
   const oids=new Set(all.map(r=>Number(r.oid)));
   for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])
    expect({trig,inInventory:oids.has(Number(await s.one(`select $1::regprocedure::oid::int v`,[trig])))}).toEqual({trig,inInventory:true});   // compared by OID, never by display text
@@ -3772,7 +3775,8 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   expect(await seen(w.rep,w.inst)).toEqual(all);
   expect(await seen(w.rep,w.inst,'authenticated')).toEqual(all);
   expect((await anon(`select rules_version,title_model_id from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({rules_version:RULES_VERSION,title_model_id:null});
-  expect((await anon(`select issuer_ids::text[] i,ratings,has_summary from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({i:[w.iss],ratings:['buy'],has_summary:true});   // P-R3-05 filter columns
+  expect((await anon(`select target_facets,has_summary from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({target_facets:[{issuer_id:w.iss,rating:'buy'}],has_summary:true});   // P-R3-05 / P-R4-02 filter columns
+  expect((await anon(`select count(*)::int n from public.broker_reports_public_v where report_id=$1 and target_facets @> $2::jsonb`,[w.rep,J([{issuer_id:w.iss,rating:'sell'}])]))[0].n).toBe(0);   // correlated: issuer ok, rating not
   expect((await anon(`select grounding_assertions g from public.broker_report_summaries_public_v where report_id=$1`,[w.rep]))[0].g)
    .toEqual([{sentence_idx:0,target_key:w.tk,field:'price_at_report',value:'100',unit:'price'}]);              // field_id never leaves the private table
   await enable(false);
@@ -3956,8 +3960,8 @@ select v.report_id, v.revision, v.current_publication_id as publication_id, v.sc
        v.uploaded_at as available_at, v.code_version, v.published_at, v.supersedes_report_id, v.page_count, v.snippet_max_chars,
        v.allows_public_target_price as target_price_public, v.allows_public_summary as summary_public, v.allows_public_snippets as snippets_public,
        -- per-report filter columns (P-R3-05): list filters run in the database with keyset pagination, never via id sets
-       coalesce((select array_agg(distinct t.issuer_id) from public.broker_report_targets t where t.report_id = v.report_id and t.issuer_id is not null), '{}'::uuid[]) as issuer_ids,
-       coalesce((select array_agg(distinct t.rating_normalized) from public.broker_report_targets t where t.report_id = v.report_id and t.rating_normalized is not null), '{}'::text[]) as ratings,
+       -- one {issuer_id, rating} object per target: a combined issuer + rating filter is one containment on ONE element (P-R4-02)
+       coalesce((select jsonb_agg(distinct jsonb_build_object('issuer_id', t.issuer_id, 'rating', t.rating_normalized)) from public.broker_report_targets t where t.report_id = v.report_id), '[]'::jsonb) as target_facets,
        (v.allows_public_summary and exists (select 1 from public.broker_report_summaries su where su.report_id = v.report_id and su.status = 'approved')) as has_summary,
        rr.rules_version, tr.model_id as title_model_id
 from visible_reports v
@@ -4196,6 +4200,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Create: `src/lib/broker-research/memory-db.ts`
 - Create: `src/lib/broker-research/db-contract.ts`
 - Create: `src/lib/broker-research/db.test.ts`
+- Create: `src/lib/broker-research/postgrest-stub.ts`（测试支撑：带服务端行数上限的 PostgREST 桩；非测试文件）
 - Modify: `docs/audits/2026-11-06-foreign-research/10-implementation-log.md`
 
 依赖：A3（SQL 全部落地，供 supabase 实现对照）、A2（`versions.ts`）。
@@ -4573,20 +4578,26 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
    for(let i=0;i<ids.length;i+=200)docs.push(...((await run<R[]|null>(from('broker_report_documents').select('*').in('document_id',ids.slice(i,i+200))))??[]).map(documentFromRow));
    return docs.sort(verifyOrder).slice(0,limit);
   },
+  async listPurgedDocuments(limit){return (await pageAll(()=>from('broker_report_documents').select('*').not('purged_at','is',null).order('purged_at').order('document_id'),limit)).map(documentFromRow);},
   // ---- public: anon client, views only
   async publicReports(filter){
    // every filter is a column predicate of broker_reports_public_v, evaluated in the database together with the keyset
    // cursor (P-R3-05): no client-side id sets, so the PostgREST row cap can never drop a matching report
-   let q=pub('broker_reports_public_v').select('*');
-   if(filter.issuerId)q=q.contains('issuer_ids',[filter.issuerId]);
-   if(filter.rating)q=q.contains('ratings',[filter.rating]);
-   if(filter.hasSummary)q=q.eq('has_summary',true);
-   if(filter.institutionId)q=q.eq('institution_id',filter.institutionId);
-   if(filter.scope)q=q.eq('scope',filter.scope);
-   if(filter.from)q=q.gte('published_date',filter.from);
-   if(filter.to)q=q.lte('published_date',filter.to);
-   if(filter.cursor)q=q.or(`published_date.lt.${filter.cursor.publishedDate},and(published_date.eq.${filter.cursor.publishedDate},report_id.lt.${filter.cursor.reportId})`);
-   const reports=(await run<R[]|null>(q.order('published_date',{ascending:false}).order('report_id',{ascending:false}).limit(filter.limit)))??[];
+   const build=()=>{
+    let q=pub('broker_reports_public_v').select('*');
+    // issuer and rating are correlated on the same target: one object with both keys, jsonb @> (P-R4-02; = pg exists, = memory)
+    if(filter.issuerId||filter.rating)q=q.contains('target_facets',JSON.stringify([{...(filter.issuerId?{issuer_id:filter.issuerId}:{}),...(filter.rating?{rating:filter.rating}:{})}]));
+    if(filter.hasSummary)q=q.eq('has_summary',true);
+    if(filter.institutionId)q=q.eq('institution_id',filter.institutionId);
+    if(filter.scope)q=q.eq('scope',filter.scope);
+    if(filter.from)q=q.gte('published_date',filter.from);
+    if(filter.to)q=q.lte('published_date',filter.to);
+    if(filter.cursor)q=q.or(`published_date.lt.${filter.cursor.publishedDate},and(published_date.eq.${filter.cursor.publishedDate},report_id.lt.${filter.cursor.reportId})`);
+    return q.order('published_date',{ascending:false}).order('report_id',{ascending:false});
+   };
+   // the parent page is filled up to filter.limit through ordered range reads (P-R4-03): a server row cap below the
+   // requested page size yields more round trips, never a short page while matching reports remain
+   const reports=await pageAll(build,filter.limit);
    if(!reports.length)return [];
    const page=reports.map(r=>String(r.report_id));
    const insts=[...new Set(reports.map(r=>r.institution_id).filter((x):x is string=>typeof x==='string'))];
@@ -4949,8 +4960,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    primary_target_key:r.primary_target_key,available_at:d.uploaded_at,code_version:r.code_version,published_at:p.published_at,supersedes_report_id:r.supersedes_report_id,page_count:d.page_count,
    snippet_max_chars:l.snippet_max_chars,target_price_public:l.allows_public_target_price,summary_public:l.allows_public_summary,snippets_public:l.allows_public_snippets,
    rules_version:ruleReceipts.find(x=>x.receipt_id===p.rules_receipt_id)?.rules_version??null,title_model_id:r.title_run_id?runs.get(r.title_run_id)?.model_id??null:null,
-   issuer_ids:[...new Set((targets.get(r.report_id)??[]).map(t=>t.issuer_id).filter((x):x is string=>x!==null))].sort(),
-   ratings:[...new Set((targets.get(r.report_id)??[]).map(t=>t.rating_normalized).filter((x):x is NormalizedRating=>x!==null))].sort(),
+   target_facets:[...new Map((targets.get(r.report_id)??[]).map(t=>[`${t.issuer_id}|${t.rating_normalized}`,{issuer_id:t.issuer_id,rating:t.rating_normalized as NormalizedRating|null}])).values()],
    has_summary:l.allows_public_summary&&[...summaries.values()].some(s=>s.report_id===r.report_id&&s.status==='approved')};};
  const targetView=(r:ReportRow)=>{const tpOk=licOf(r).allows_public_target_price;return (targets.get(r.report_id)??[]).map(t=>({report_id:t.report_id,publication_id:r.current_publication_id,target_key:t.target_key,ticker_as_stated:t.ticker_as_stated,security_ticker:t.security_ticker,issuer_id:t.issuer_id,
   rating_raw:t.rating_raw,rating_normalized:t.rating_normalized,scale_id:t.scale_id,target_price:tpOk?t.target_price:null,target_currency:tpOk?t.target_currency:null,target_horizon_months:tpOk?t.target_horizon_months:null,
@@ -5353,6 +5363,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const ids=new Set([...reports.values()].filter(r=>r.status==='published').map(r=>r.document_id));
    return clone([...documents.values()].filter(d=>ids.has(d.document_id)).sort(verifyOrder).slice(0,limit));
   },
+  async listPurgedDocuments(limit){return clone([...documents.values()].filter(d=>d.purged_at!==null).sort((a,b)=>cmp(a.purged_at!,b.purged_at!)||cmp(a.document_id,b.document_id)).slice(0,limit));},
   async publicReports(filter){
    let vis=visible();
    if(filter.hasSummary)vis=vis.filter(r=>summaryView(r).length>0);
@@ -5428,7 +5439,7 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
 import {effectiveValue} from './effective';
 import {BrokerResearchDbError} from './types';
-import type {BrokerResearchDb,CandidateFieldInput,LicenceInput,OutboxEvent,RuleResult} from './types';
+import type {BrokerResearchDb,CandidateFieldInput,LicenceInput,NormalizedRating,OutboxEvent,RuleResult} from './types';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 export interface BrokerContractHarness{
@@ -5576,6 +5587,9 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect(await db.renewLease(doc,c,300)).toBe('document_withdrawn');
    expect(await db.fencedUpdateDocument(doc,c,{releaseLease:true})).toBe('ok');
    expect(await db.renewLease(doc,c,300)).toBe('lease_lost');
+   expect((await db.listPurgedDocuments(500)).map(x=>x.document_id)).not.toContain(doc);
+   await db.updateDocument(doc,{purged_at:new Date().toISOString()});
+   expect((await db.listPurgedDocuments(500)).map(x=>x.document_id)).toContain(doc);           // the verify cron reconciles these (P-R4-04)
   });
 
   it('extractCommit: candidate-basis receipt, typed targets, lease fence, supersede on re-extraction',async()=>{
@@ -5881,6 +5895,32 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.reviewQueue({status:'pending',limit:10000})).some(r=>r.report_id===w.rep)).toBe(true);
   });
 
+  it('public reads: issuer + rating filters are correlated on ONE target — X:buy + Y:sell never matches issuer=X&rating=sell (P-R4-02)',async()=>{
+   const tk2=`${1000+Math.floor(Math.random()*8999)}.HK`;await h.stock(tk2,'HK');const iss2=await h.issuer();
+   const w=await world({extra:()=>[
+    candidate({field:'ticker',target_key:tk2,value_text:tk2.replace('.',' '),resolution:{method:'parseBrokerTicker/1',issuer_securities_row:{issuer_id:iss2,ticker:tk2,valid_from:'2000-01-01',valid_to:null}}}),
+    candidate({field:'rating',target_key:tk2,value_text:'Sell'}),
+    candidate({field:'target_price',target_key:tk2,value_text:'80',value_num:'80',value_unit:'price'}),
+    candidate({field:'target_currency',target_key:tk2,value_text:'HK$',value_currency:'HKD'}),
+    candidate({field:'price_at_report',target_key:tk2,value_text:'100',value_num:'100',value_unit:'price'}),
+    candidate({field:'price_currency',target_key:tk2,value_text:'HKD',value_currency:'HKD'}),
+    candidate({field:'price_as_of_date',target_key:tk2,value_text:'2026-03-04',value_date:'2026-03-04'})]});
+   for(const f of (await db.listFields(w.rep)).filter(x=>x.status==='extracted'||x.status==='unverified'))await db.fieldReview(f.field_id,'confirm',{},by);
+   const inst=await db.upsertInstitution({name_en:`Facet Inst ${randomUUID()}`,name_zh:null,aliases:[],kind:'broker',rating_disclosure_url:null});
+   await db.updateReportDraft(w.rep,{institution_id:inst,scope:'multi_issuer',review_status:'approved'});
+   for(const [raw_label,normalized] of [['Buy','buy'],['Sell','sell']] as const)await db.insertRatingScale({institution_id:inst,raw_label,normalized,source_url:'https://example.test/s',valid_from:'2020-01-01',created_by:by});
+   await db.materialize(w.rep);await rules(w.rep);await gold(w.digest);
+   expect(await db.publishBlockers(w.rep)).toEqual([]);
+   await db.publish(w.rep,by);await db.setPublicEnabled(true,by);
+   const ids=async(f:{issuerId?:string;rating?:NormalizedRating})=>(await db.publicReports({institutionId:inst,...f,limit:10})).map(b=>String(b.report.report_id));
+   expect(await ids({issuerId:w.iss,rating:'buy'})).toEqual([w.rep]);
+   expect(await ids({issuerId:iss2,rating:'sell'})).toEqual([w.rep]);
+   expect(await ids({issuerId:w.iss,rating:'sell'})).toEqual([]);          // X is buy, Y is sell: no single target is X + sell
+   expect(await ids({issuerId:iss2,rating:'buy'})).toEqual([]);
+   expect(await ids({issuerId:iss2})).toEqual([w.rep]);expect(await ids({rating:'sell'})).toEqual([w.rep]);
+   await db.setPublicEnabled(false,by);
+  });
+
   it('public reads: nothing while public_enabled=false; bundles, detail, history and institutions after; target price hidden when not public',async()=>{
    const r=await ready();await db.publish(r.rep,by);
    const t=await ready({licence:{allows_public_target_price:false}});await db.publish(t.rep,by);
@@ -5921,6 +5961,7 @@ import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
 import {FIELD_COLUMNS,sqlColumns,supabaseBrokerResearchDb,toBrokerResearchDbError} from './db';
+import {cappedAnon} from './postgrest-stub';
 import {brokerResearchDbContract} from './db-contract';
 import {decimalCompare,memoryBrokerResearchDb,upside1} from './memory-db';
 import {BrokerResearchDbError} from './types';
@@ -6014,8 +6055,49 @@ describe('supabaseBrokerResearchDb wiring',()=>{
   expect(s.calls).toContainEqual(['from','broker_report_fields','is','superseded_by_run_id',null]);
  });
 });
+describe('supabase public list under a PostgREST row cap (P-R3-05)',()=>{
+ it('every matching report stays reachable through keyset pagination; child rows of a page are read completely',async()=>{
+  const X='11111111-1111-4111-8111-111111111111',Y='22222222-2222-4222-8222-222222222222';
+  const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+  const reports=Array.from({length:12},(_,i)=>({report_id:id(i+1),published_date:`2026-0${1+(i%9)}-1${i%10}`,institution_id:null,scope:'single_issuer',
+   target_facets:i%3===0?[{issuer_id:Y,rating:i%2?'buy':'neutral'}]:i%5===0?[{issuer_id:X,rating:'sell'},{issuer_id:Y,rating:'buy'}]:[{issuer_id:X,rating:i%2?'buy':'neutral'}],has_summary:i%4===0}));
+  const has=(r:typeof reports[number],o:{issuer_id?:string;rating?:string})=>r.target_facets.some(t=>(o.issuer_id===undefined||t.issuer_id===o.issuer_id)&&(o.rating===undefined||t.rating===o.rating));
+  const targets=reports.flatMap(r=>[{report_id:r.report_id,target_key:'A'},{report_id:r.report_id,target_key:'B'}]);
+  const db=supabaseBrokerResearchDb({anon:cappedAnon({broker_reports_public_v:reports,broker_report_targets_public_v:targets,broker_report_summaries_public_v:[],broker_report_snippets_public_v:[]},3)});
+  const order=(xs:typeof reports)=>[...xs].sort((a,b)=>a.published_date<b.published_date?1:a.published_date>b.published_date?-1:a.report_id<b.report_id?1:-1).map(r=>r.report_id);
+  const cases:[{issuerId?:string;rating?:'buy'|'sell';hasSummary?:boolean},typeof reports][]=[
+   [{issuerId:X},reports.filter(r=>has(r,{issuer_id:X}))],[{rating:'buy'},reports.filter(r=>has(r,{rating:'buy'}))],[{hasSummary:true},reports.filter(r=>r.has_summary)],
+   [{issuerId:X,rating:'buy'},reports.filter(r=>has(r,{issuer_id:X,rating:'buy'}))],
+   [{issuerId:X,rating:'sell'},reports.filter(r=>has(r,{issuer_id:X,rating:'sell'}))]];       // the X:sell + Y:buy report matches X+sell, never X+buy via Y (P-R4-02)
+  expect(cases[3][1].some(r=>r.target_facets.length===2)).toBe(false);
+  for(const [filter,expected] of cases){
+   const seen:string[]=[];let cursor:{publishedDate:string;reportId:string}|undefined;
+   for(let guard=0;guard<20;guard++){
+    const page=await db.publicReports({...filter,limit:2,cursor});
+    if(!page.length)break;
+    for(const b of page)expect(b.targets.map(t=>t.target_key)).toEqual(['A','B']);
+    seen.push(...page.map(b=>String(b.report.report_id)));
+    const last=page.at(-1)!.report;cursor={publishedDate:String(last.published_date),reportId:String(last.report_id)};
+   }
+   expect({filter,seen}).toEqual({filter,seen:order([...expected])});
+  }
+  // a page of 5 reports has 10 target rows: more than the cap of 3, still complete
+  const big=await db.publicReports({limit:5});
+  expect(big.flatMap(b=>b.targets)).toHaveLength(10);
+ });
+});
+```
+
+测试支撑文件（非测试文件，A4 创建；D1 的加载器测试也用它）：
+
+```ts
+// src/lib/broker-research/postgrest-stub.ts
+// Test support (not a test file): a PostgREST client over in-memory view rows with a server row cap (max_rows) —
+// every response holds at most `cap` rows, like a real PostgREST max_rows. Used by db.test.ts (A4) and the public
+// loader test (D1) to prove that no read silently loses rows to the cap (P-R3-05, P-R4-03).
+import type {SupabaseClient} from '@supabase/supabase-js';
 /** PostgREST over in-memory public-view rows with a server row cap (max_rows): every response holds at most `cap` rows. */
-function cappedAnon(views:Record<string,Record<string,unknown>[]>,cap:number){
+export function cappedAnon(views:Record<string,Record<string,unknown>[]>,cap:number){
  type Row=Record<string,unknown>;type Pred=(r:Row)=>boolean;
  const from=(table:string)=>{
   const f:Pred[]=[];const ord:[string,boolean][]=[];let lo=0,hi:number|null=null,lim:number|null=null,single=false;
@@ -6023,7 +6105,9 @@ function cappedAnon(views:Record<string,Record<string,unknown>[]>,cap:number){
    select:()=>b,
    eq:(k,v)=>{f.push(r=>r[k as string]===v);return b;},
    in:(k,vs)=>{f.push(r=>(vs as unknown[]).includes(r[k as string]));return b;},
-   contains:(k,vs)=>{f.push(r=>(vs as unknown[]).every(x=>((r[k as string]??[]) as unknown[]).includes(x)));return b;},
+   contains:(k,vs)=>{   // PostgREST cs: a JSON string = jsonb @> (array of objects, each needle contained in ONE element)
+    const needles=(typeof vs==='string'?JSON.parse(vs):vs) as unknown[];
+    f.push(r=>needles.every(n=>((r[k as string]??[]) as unknown[]).some(e=>typeof n==='object'&&n!==null?Object.entries(n).every(([nk,nv])=>(e as Row)[nk]===nv):e===n)));return b;},
    gte:(k,v)=>{f.push(r=>String(r[k as string])>=String(v));return b;},
    lte:(k,v)=>{f.push(r=>String(r[k as string])<=String(v));return b;},
    or:(e)=>{const m=/^published_date\.lt\.([^,]+),and\(published_date\.eq\.([^,]+),report_id\.lt\.([^)]+)\)$/.exec(String(e))!;
@@ -6043,32 +6127,6 @@ function cappedAnon(views:Record<string,Record<string,unknown>[]>,cap:number){
  };
  return {from,rpc:async()=>({data:null,error:null})} as unknown as SupabaseClient;
 }
-
-describe('supabase public list under a PostgREST row cap (P-R3-05)',()=>{
- it('every matching report stays reachable through keyset pagination; child rows of a page are read completely',async()=>{
-  const X='11111111-1111-4111-8111-111111111111',Y='22222222-2222-4222-8222-222222222222';
-  const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
-  const reports=Array.from({length:12},(_,i)=>({report_id:id(i+1),published_date:`2026-0${1+(i%9)}-1${i%10}`,institution_id:null,scope:'single_issuer',
-   issuer_ids:i%3===0?[Y]:[X],ratings:i%2?['buy']:['neutral'],has_summary:i%4===0}));
-  const targets=reports.flatMap(r=>[{report_id:r.report_id,target_key:'A'},{report_id:r.report_id,target_key:'B'}]);
-  const db=supabaseBrokerResearchDb({anon:cappedAnon({broker_reports_public_v:reports,broker_report_targets_public_v:targets,broker_report_summaries_public_v:[],broker_report_snippets_public_v:[]},3)});
-  const order=(xs:typeof reports)=>[...xs].sort((a,b)=>a.published_date<b.published_date?1:a.published_date>b.published_date?-1:a.report_id<b.report_id?1:-1).map(r=>r.report_id);
-  for(const [filter,expected] of [[{issuerId:X},reports.filter(r=>r.issuer_ids.includes(X))],[{rating:'buy' as const},reports.filter(r=>r.ratings.includes('buy'))],[{hasSummary:true},reports.filter(r=>r.has_summary)]] as const){
-   const seen:string[]=[];let cursor:{publishedDate:string;reportId:string}|undefined;
-   for(let guard=0;guard<20;guard++){
-    const page=await db.publicReports({...filter,limit:2,cursor});
-    if(!page.length)break;
-    for(const b of page)expect(b.targets.map(t=>t.target_key)).toEqual(['A','B']);
-    seen.push(...page.map(b=>String(b.report.report_id)));
-    const last=page.at(-1)!.report;cursor={publishedDate:String(last.published_date),reportId:String(last.report_id)};
-   }
-   expect({filter,seen}).toEqual({filter,seen:order([...expected])});
-  }
-  // a page of 5 reports has 10 target rows: more than the cap of 3, still complete
-  const big=await db.publicReports({limit:5});
-  expect(big.flatMap(b=>b.targets)).toHaveLength(10);
- });
-});
 ```
 
 - [ ] **Step 10: 运行，确认失败 → 通过**
@@ -6090,7 +6148,7 @@ npm run typecheck && npm run lint
 实施记录追加 `| A4 | types/hash/effective/db(supabase)/memory-db/db-contract；单测 | <sha> |`。
 
 ```bash
-git add src/lib/broker-research/types.ts src/lib/broker-research/hash.ts src/lib/broker-research/hash.test.ts src/lib/broker-research/effective.ts src/lib/broker-research/effective.test.ts src/lib/broker-research/db.ts src/lib/broker-research/memory-db.ts src/lib/broker-research/db-contract.ts src/lib/broker-research/db.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
+git add src/lib/broker-research/postgrest-stub.ts src/lib/broker-research/types.ts src/lib/broker-research/hash.ts src/lib/broker-research/hash.test.ts src/lib/broker-research/effective.ts src/lib/broker-research/effective.test.ts src/lib/broker-research/db.ts src/lib/broker-research/memory-db.ts src/lib/broker-research/db-contract.ts src/lib/broker-research/db.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
 ```
 ```bash
 git commit -m "feat(broker-research): BrokerResearchDb contract — supabase and memory implementations, shared cases
@@ -6303,6 +6361,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   },
   quarantineResolve:(id,status,by,payload)=>fn<'resolved'|'not_found'|'already_resolved'>('public.broker_quarantine_resolve($1,$2,$3,$4::jsonb)',[id,status,by,payload]),
   async verifyCandidates(limit){return (await q(`select d.* from ${rel('broker_report_documents')} d where exists (select 1 from ${rel('broker_research_reports')} r where r.document_id = d.document_id and r.status = 'published') order by d.last_verified_at asc nulls first, d.document_id limit $1`,[limit])).map(documentFromRow);},
+  async listPurgedDocuments(limit){return (await q(`select * from ${rel('broker_report_documents')} where purged_at is not null order by purged_at, document_id limit $1`,[limit])).map(documentFromRow);},
   // ---- public: views only (the admin pool reads them exactly as anon would: owner rights, no caller-dependent predicate)
   async publicReports(filter){
    const v:unknown[]=[];const w:string[]=[];const bind=(x:unknown)=>{v.push(x);return `$${v.length}`;};
@@ -8271,6 +8330,12 @@ describe('checkDisclosure (spec §4.11)',()=>{
   expect(kinds('目标价 HK$936')).toEqual([['restricted_value:target','936','9999.HK']]);
   expect(kinds('估值 1,936')).toEqual([]);
  });
+ it('a percent-suffixed target value is still the target value: plain, spaced and full-width percent (P-R4-05)',()=>{
+  expect(kinds('Target 936%')).toEqual([['restricted_value:target','936%','9999.HK']]);
+  expect(kinds('Target 936 %')).toEqual([['restricted_value:target','936 %','9999.HK']]);
+  expect(kinds('目标 ９３６％')).toEqual([['restricted_value:target','936%','9999.HK']]);
+  expect(checkDisclosure('Target 936%',{...base,allowsPublicTargetPrice:true}).passed).toBe(true);
+ });
  it('restricted |upside| in percent and decimal writing, rounded to one decimal',()=>{
   expect(kinds('upside of 25%')).toEqual([['restricted_value:target','25%','9999.HK']]);
   expect(kinds('upside 25.0 %')).toEqual([['restricted_value:target','25.0 %','9999.HK']]);
@@ -8488,7 +8553,7 @@ export function checkDisclosure(text:string,input:DisclosureInput):DisclosureChe
    const pct=t.upside_pct===null?null:decString(decShift(decAbs(dec(t.upside_pct)),2));   // |u| × 100
    for(const k of tokens){
     const asDecimalPct=decString(decShift(dec(k.value),2));
-    const priceHit=tp!==null&&!k.percent&&(k.value===tp||round1(k.value)===round1(tp));
+    const priceHit=tp!==null&&(k.value===tp||round1(k.value)===round1(tp));   // compared after removing the percent sign (spec §4.11; P-R4-05)
     const upsideHit=pct!==null&&(k.value===pct||round1(k.value)===round1(pct)||(!k.percent&&round1(asDecimalPct)===round1(pct)));
     if(priceHit||upsideHit)hit({kind:'restricted_value:target',token:k.raw.trim(),target_key:t.target_key});
    }
@@ -8940,8 +9005,10 @@ export interface BrokerStorage{
  createSignedUploadUrl(path:string):Promise<{url:string;token:string}>;
  /** null = object does not exist. */
  download(path:string):Promise<Uint8Array|null>;
- /** Never overwrites: an existing object answers 'exists' and is left untouched. */
- upload(path:string,body:Uint8Array|string,contentType:ObjectType):Promise<'stored'|'exists'>;
+ /** Never overwrites: an existing object answers 'exists' and is left untouched. `signal`: the caller's deadline (a lease
+  * holder passes one strictly below its remaining lease); on abort the call rejects storage_failed:upload:aborted —
+  * the request may still land, so the caller deletes the path afterwards (P-R4-04). */
+ upload(path:string,body:Uint8Array|string,contentType:ObjectType,opts?:{signal?:AbortSignal}):Promise<'stored'|'exists'>;
  move(from:string,to:string):Promise<'moved'|'missing'|'target_exists'>;
  exists(path:string):Promise<boolean>;
  /** Missing objects are not an error. */
@@ -8956,6 +9023,16 @@ const statusOf=(e:SbError)=>String(e.statusCode??e.status??'');
 const isNotFound=(e:SbError)=>statusOf(e)==='404'||/not.?found/i.test(e.message);
 const isExists=(e:SbError)=>statusOf(e)==='409'||/already exists|duplicate/i.test(e.message);
 
+/** Rejects storage_failed:upload:aborted when `signal` fires first (the underlying request is not cancelled). */
+export function abortable<T>(p:PromiseLike<T>,signal?:AbortSignal):Promise<T>{
+ if(!signal)return Promise.resolve(p);
+ if(signal.aborted)return Promise.reject(new StorageError('storage_failed','upload:aborted'));
+ return new Promise<T>((resolve,reject)=>{
+  const onAbort=()=>reject(new StorageError('storage_failed','upload:aborted'));
+  signal.addEventListener('abort',onAbort,{once:true});
+  Promise.resolve(p).then(v=>{signal.removeEventListener('abort',onAbort);resolve(v);},e=>{signal.removeEventListener('abort',onAbort);reject(e);});
+ });
+}
 export function supabaseBrokerStorage(admin:SupabaseClient):BrokerStorage{
  const b=()=>admin.storage.from(BROKER_BUCKET);
  const fail=(op:string,e:SbError|null)=>new StorageError('storage_failed',`${op}:${e?.message??'no_data'}`);
@@ -8966,8 +9043,9 @@ export function supabaseBrokerStorage(admin:SupabaseClient):BrokerStorage{
    if(error){if(isNotFound(error as SbError))return null;throw fail('download',error as SbError);}
    return new Uint8Array(await data.arrayBuffer());
   },
-  async upload(path,body,contentType){
-   assertObjectPath(path);const {error}=await b().upload(path,body,{contentType,upsert:false});
+  async upload(path,body,contentType,opts){
+   assertObjectPath(path);
+   const {error}=await abortable(b().upload(path,body,{contentType,upsert:false}),opts?.signal);
    if(!error)return 'stored';if(isExists(error as SbError))return 'exists';throw fail('upload',error as SbError);
   },
   async move(from,to){
@@ -9014,8 +9092,8 @@ export function memoryBrokerStorage():MemoryBrokerStorage{
   text:(p)=>{const o=objects.get(p);return o?new TextDecoder().decode(o.bytes):undefined;},
   async createSignedUploadUrl(path){guard('createSignedUploadUrl');assertObjectPath(path);const token=`tok-${++n}`;signed.set(path,token);return {url:`memory://upload/${path}?token=${token}`,token};},
   async download(path){guard('download');assertObjectPath(path);const o=objects.get(path);return o?new Uint8Array(o.bytes):null;},
-  async upload(path,body,contentType){
-   guard('upload');assertObjectPath(path);if(objects.has(path))return 'exists';
+  async upload(path,body,contentType,opts){
+   guard('upload');assertObjectPath(path);if(opts?.signal?.aborted)throw new StorageError('storage_failed','upload:aborted');if(objects.has(path))return 'exists';
    const bytes=bytesOf(body);if(bytes.byteLength>MAX_OBJECT_BYTES)throw new StorageError('storage_failed','upload:too_large');
    objects.set(path,{bytes,contentType});return 'stored';
   },
@@ -11153,6 +11231,13 @@ describe('review services',()=>{
   expect(out.restored).toBe(false);expect(out.failures).toContain('restricted_value_in_text:title_public');
   expect((await d.db.getReport(reportId))!.disclosure_ok).toBe(false);
  });
+ it('a percent-suffixed target price in title_public blocks publication restricted_value_in_text:title_public (P-R4-05)',async()=>{
+  const doc=await seedDocument(d,(await seedLicence(d.db,{patch:{allows_public_target_price:false}})).licence_id);
+  await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  const {reportId}=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  await bindReport(d,reportId,{titlePublic:'Upgrade: 120% of fair value'},ADMIN_ID);
+  expect((await publishBlockersOf(d,reportId)).blockers).toContain('restricted_value_in_text:title_public');
+ });
  it('reviewData returns the contract ReviewPayload',async()=>{
   const {reportId}=await extracted(d);
   const {payload,log}=await reviewData(d,reportId);
@@ -12007,6 +12092,13 @@ describe('snippets',()=>{
   await expect(createSnippet(d,reportId,{purpose:'risk',targetKey:null,fieldId:null,page:3,charStart:PAGES[2].length-3,charEnd:PAGES[2].length+4},ADMIN_ID)).rejects.toMatchObject({code:'snippet_cross_page'});
   await expect(createSnippet(d,reportId,{purpose:'risk',targetKey:null,fieldId:null,...at('Risks'),text:'Rizks'},ADMIN_ID)).rejects.toMatchObject({code:'snippet_not_verbatim'});
  });
+ it('a percent-suffixed target price ("120%") is still restricted at snippet approval (P-R4-05)',async()=>{
+  const {reportId}=await ready(d,{allows_public_target_price:false});
+  const doc=(await d.db.getDocument((await d.db.getReport(reportId))!.document_id))!;
+  const id=await d.db.insertSnippet({report_id:reportId,target_key:null,purpose:'target',parse_run_id:doc.current_parse_run_id!,page:1,char_start:0,char_end:15,text:'120% fair value',field_id:null,disclosure_check:null,created_by:ADMIN_ID});
+  await expect(approveSnippet(d,id,ADMIN_ID)).rejects.toMatchObject({code:'restricted_value',status:409});
+  expect((await d.db.getSnippet(id))!.status).toBe('rejected');
+ });
  it('target price not public: a snippet carrying it is rejected restricted_value at approval (spec §14 sample 3)',async()=>{
   const {reportId}=await ready(d,{allows_public_target_price:false});
   const s=await createSnippet(d,reportId,{purpose:'target',targetKey:null,fieldId:null,...at('Price target: US$120.00')},ADMIN_ID);
@@ -12322,6 +12414,18 @@ export async function purgeDocument(deps:WDeps,documentId:string,by:string):Prom
  try{return await purgeSteps(deps,doc,by);}
  finally{await deps.db.fencedUpdateDocument(documentId,token,{releaseLease:true});}
 }
+/** Every object the bucket may hold for a document: exact paths (PDF, parse artifacts, run request/response) that still
+ * exist, plus everything under its listable prefixes (page images, gold-evaluation calls). Removes them; returns them.
+ * Used by purge's final sweep and the verify cron's purged-document reconciliation (E1). */
+export async function sweepDocumentObjects(deps:Pick<CoreDeps,'db'|'storage'>,doc:DocumentRow):Promise<string[]>{
+ const runs=await deps.db.listRuns(doc.document_id);const parses=runs.filter(r=>r.kind==='parse');
+ const exact=[doc.storage_path,...parses.map(r=>brokerPaths.artifact(doc.sha256,r.run_id)),...runs.flatMap(r=>[r.request_path,r.response_path]).filter((p):p is string=>p!==null)];
+ const found:string[]=[];
+ for(const p of exact)if(await deps.storage.exists(p))found.push(p);
+ for(const prefix of [brokerPaths.evalPrefix(doc.sha256),...parses.map(r=>brokerPaths.pagesPrefix(doc.sha256,r.run_id))])found.push(...await deps.storage.list(prefix));
+ if(found.length)await deps.storage.remove(found);
+ return found;
+}
 async function purgeSteps(deps:WDeps,doc:DocumentRow,by:string):Promise<{done:boolean;steps:PurgeStepRow[]}>{
  const documentId=doc.document_id;
  const report=await deps.db.reportByDocument(documentId);
@@ -12346,9 +12450,13 @@ async function purgeSteps(deps:WDeps,doc:DocumentRow,by:string):Promise<{done:bo
   catch(e){await deps.db.upsertPurgeStep(documentId,step,{ok:false,error:(e instanceof Error?e.message:String(e)).slice(0,500)});}
  }
  const steps=await deps.db.purgeSteps(documentId);
- const all=PURGE_STEPS.every(s=>steps.some(x=>x.step===s&&x.status==='done'));
+ let all=PURGE_STEPS.every(s=>steps.some(x=>x.step===s&&x.status==='done'));
+ // final sweep (P-R4-04): before completion is recorded, every exact path and prefix of the document is listed and
+ // emptied once more, so an object a late writer landed after its step ran cannot survive a 'done' purge
+ let swept:string[]=[];
+ if(all){try{swept=await sweepDocumentObjects(deps,doc);}catch{all=false;}}
  if(all&&!doc.purged_at)await deps.db.updateDocument(documentId,{purged_at:deps.now().toISOString()});
- await deps.db.logAccess({document_id:documentId,user_id:by,action:'purge',detail:{done:all,failed:steps.filter(s=>s.status!=='done').map(s=>s.step)}});
+ await deps.db.logAccess({document_id:documentId,user_id:by,action:'purge',detail:{done:all,failed:steps.filter(s=>s.status!=='done').map(s=>s.step),swept:swept.length}});
  if(all)await auditAdmin(deps.tables,by,'broker_research.purge',documentId,{},deps.now());
  return {done:all,steps};
 }
@@ -12588,8 +12696,10 @@ import {EXTRACT_RESPONSE} from './fixtures/pipeline';
 import {runParse} from './parse';
 import {LlmError,recordedLlmPort} from './ports/llm';
 import {brokerPaths} from './storage';
-import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence,syntheticPdf} from './testing';
-import {purgeDocument,withdrawDocument} from './withdraw';
+import {ADMIN_ID,DEADLINE,T0,memoryBrokerDeps,seedDocument,seedLicence,syntheticPdf} from './testing';
+import {purgeDocument,sweepDocumentObjects,withdrawDocument} from './withdraw';
+import {memoryTableClient} from '../db/memory-table-client';
+import {memoryBrokerResearchDb} from './memory-db';
 
 const g=(field:string,value_text:string,value_num:string|null,page=1,s=0,e=5,target_key:string|null='ZZBR',typed:Partial<EvalRow>={}):EvalRow=>({target_key,field,occurrence:1,value_text,value_num,value_currency:null,value_unit:value_num===null?null:'price',value_date:null,page,char_start:s,char_end:e,...typed});
 describe('evalStats',()=>{
@@ -12693,6 +12803,32 @@ describe('gold-evaluation calls and purge (P-R2-02)',()=>{
   expect(p.done).toBe(true);expect((await d.db.getDocument(a.document_id))!.purged_at).not.toBeNull();
   expect([...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`))).toEqual([]);
  });
+ it('an upload that outlives its lease: purge runs meanwhile, then the upload lands and the worker deletes it; a failed self-delete is caught by the purged-document sweep (P-R4-04)',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id'],research_audit_log:['id']});
+  const mdb=memoryBrokerResearchDb({tables,now:()=>T0});
+  for(const failSelfDelete of [false,true]){
+   const d=memoryBrokerDeps({tables,db:mdb});const lic=await seedLicence(d.db);const a=await seedDocument(d,lic.licence_id,syntheticPdf(`late-${failSelfDelete}`));
+   await runParse(d,a.document_id,ADMIN_ID,{deadline:DEADLINE()});
+   d.llm=recordedLlmPort([EXTRACT_RESPONSE]);
+   const upload=d.storage.upload.bind(d.storage);let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});let started=false;
+   d.storage.upload=async(path,body,type,o)=>{if(path.startsWith('eval/')&&!started){started=true;await gate;}return upload(path,body,type,o);};
+   const outcome=runGoldEval(d,[{sha256:a.sha256,fields:[],absent:[]}],{by:ADMIN_ID,dryRun:false}).then(()=>'resolved',(e:{code?:string})=>e.code);
+   for(let k=0;k<20&&!started;k++)await new Promise(r=>setTimeout(r,0));
+   expect(started).toBe(true);                                                                // the first eval upload is in flight, lease renewed
+   mdb.expireLease(a.document_id);                                                            // …and outlives the lease
+   const w=await withdrawDocument(d,a.document_id,{reason:'licence ended',purge:true},ADMIN_ID);
+   expect(w.purge?.done).toBe(true);                                                          // purge took over the expired lease and completed
+   if(failSelfDelete)d.storage.failNext('remove','down');
+   release();
+   expect(await outcome).toBe('lease_lost');                                                  // the post-upload fence check fails
+   const left=[...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`));
+   if(!failSelfDelete){expect(left).toEqual([]);continue;}                                    // the worker deleted what it wrote
+   expect(left).toHaveLength(1);                                                              // self-delete failed: the object survived
+   // the backstop: the purged-document sweep the verify cron runs daily (E1 tests the cron path end to end)
+   expect(await sweepDocumentObjects(d,(await d.db.getDocument(a.document_id))!)).toEqual(left);
+   expect([...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`))).toEqual([]);
+  }
+ });
 });
 ```
 
@@ -12781,6 +12917,27 @@ export async function authorizeGoldDoc(deps:Pick<BrokerDeps,'db'|'now'>,sha256:s
  const parseRun=await deps.db.getRun(doc.current_parse_run_id);if(!parseRun)throw conflict('document_not_parsed');
  return {doc,licence,parseRun};
 }
+/** Lease heartbeat during long waits, and the upload deadline margin: an upload must end strictly before the lease does. */
+export const HEARTBEAT_MS=60_000,UPLOAD_MARGIN_MS=60_000;
+/** Lease-fenced bucket write (P-R3-04, P-R4-04): (1) renew — a withdrawn document or a lost lease writes nothing;
+ * (2) upload with an AbortSignal deadline strictly below the lease just renewed; (3) re-check the fence — if the lease
+ * was lost meanwhile (e.g. the upload outlived it and purge ran) or the document is withdrawn, delete the object just
+ * written (also after an aborted upload, whose bytes may still land) and fail. Purge's final sweep and the daily
+ * verify-cron reconciliation remove anything a failed self-delete leaves behind. */
+export async function fencedUpload(deps:Pick<BrokerDeps,'db'|'storage'>,documentId:string,token:string,path:string,body:string):Promise<void>{
+ const before=await deps.db.renewLease(documentId,token,LEASE_SECONDS);
+ if(before==='document_withdrawn')throw gone();
+ if(before!=='ok')throw conflict('lease_lost');
+ let uploadError:unknown=null;
+ try{await deps.storage.upload(path,body,'application/json',{signal:AbortSignal.timeout(LEASE_SECONDS*1000-UPLOAD_MARGIN_MS)});}catch(e){uploadError=e;}
+ const after=await deps.db.renewLease(documentId,token,LEASE_SECONDS);
+ if(after!=='ok'||uploadError!==null){
+  await deps.storage.remove([path]).catch(()=>{});                    // self-delete; the sweeps are the backstop
+  if(after==='document_withdrawn')throw gone();
+  if(after!=='ok')throw conflict('lease_lost');
+  throw uploadError;
+ }
+}
 export interface GoldEvalResult{receiptId:string|null;authorized:AuthorizedDoc[];corpusHash:string;behaviorDigest:string;approved:boolean;stats:ReturnType<typeof evalStats>|null}
 export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dryRun:boolean;deadlineMs?:number;log?:(line:string)=>void}):Promise<GoldEvalResult>{
  const info=deps.llm.info();if(!info)throw new BrokerError('llm_unavailable',503);
@@ -12805,16 +12962,16 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
   if(!await deps.db.claimLease(a.doc.document_id,token,LEASE_SECONDS))throw conflict('lease_held',{sha256:g.sha256});
   let b:Awaited<ReturnType<typeof extractCandidates>>;
   try{
-   b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
+   // heartbeat: a long LLM wait keeps the lease alive; a failed renewal is reported after the call returns
+   let lost:'lease_lost'|'document_withdrawn'|null=null;
+   const hb=setInterval(()=>{void deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS).then(x=>{if(x!=='ok')lost=x;},()=>{lost='lease_lost';});},HEARTBEAT_MS);
+   try{b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});}
+   finally{clearInterval(hb);}
+   if(lost==='document_withdrawn')throw gone();
+   if(lost)throw conflict('lease_lost',{sha256:g.sha256});
    const evalRun=deps.newId();
-   const writes:[string,string][]=[[brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests})],
-    [brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses})]];
-   for(const [path,body] of writes){
-    const fence=await deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS);   // re-checked under the fence before EVERY upload
-    if(fence==='document_withdrawn')throw gone();
-    if(fence!=='ok')throw conflict('lease_lost',{sha256:g.sha256});
-    await deps.storage.upload(path,body,'application/json');
-   }
+   await fencedUpload(deps,a.doc.document_id,token,brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}));
+   await fencedUpload(deps,a.doc.document_id,token,brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}));
   }finally{await deps.db.fencedUpdateDocument(a.doc.document_id,token,{releaseLease:true});}
   extracted.push({sha256:g.sha256,rows:b.rows});
   o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
@@ -13575,8 +13732,10 @@ import {beforeEach,describe,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({resolveIssuer:vi.fn()}));
 vi.mock('@/lib/entities/resolve',async(orig)=>({...await orig<typeof import('@/lib/entities/resolve')>(),resolveIssuer:mocks.resolveIssuer}));
 import {memoryTableClient} from '../db/memory-table-client';
+import {supabaseBrokerResearchDb} from './db';
+import {cappedAnon} from './postgrest-stub';
 import {decodeCursor,encodeCursor,institutionPageData,listPublicInstitutions,listPublicReports,monthsBefore,publicSpread,reportPageData,resolveTicker} from './public-read';
-import type {PublicReadDeps} from './public-read';
+import type {PublicReadDeps,ReportCursor} from './public-read';
 import type {BrokerResearchDb,PublicReportBundle} from './types';
 
 const uuid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -13607,6 +13766,19 @@ describe('listPublicReports',()=>{
   expect(decodeCursor(page.nextCursor!)).toEqual({publishedDate:'2026-09-01',reportId:uuid(2)});
   publicReports.mockResolvedValue([b(3)]);
   expect((await listPublicReports(deps({publicReports}),{limit:2})).nextCursor).toBeNull();
+ });
+ it('walks nextCursor to the end through the Supabase adapter under a server row cap below the page size (P-R4-03)',async()=>{
+  const rows=Array.from({length:7},(_,i)=>b(i+1,{date:`2026-0${9-i}-01`}));
+  const anon=cappedAnon({broker_reports_public_v:rows.map(x=>({...x.report,target_facets:[],has_summary:false})),broker_report_targets_public_v:rows.flatMap(x=>x.targets),
+   broker_report_summaries_public_v:[],broker_report_snippets_public_v:[],research_institutions_public_v:[]},2);
+  const d:PublicReadDeps={db:supabaseBrokerResearchDb({anon}),tables:{} as never};
+  const seen:string[]=[];const sizes:number[]=[];let cursor:ReportCursor|undefined;
+  for(let g=0;g<10;g++){
+   const p=await listPublicReports(d,{limit:3,cursor});seen.push(...p.reports.map(r=>r.reportId));sizes.push(p.reports.length);
+   if(!p.nextCursor)break;cursor=decodeCursor(p.nextCursor)!;
+  }
+  expect(sizes).toEqual([3,3,1]);                                                              // full pages despite the cap of 2 rows per response
+  expect(seen).toEqual(rows.map((_,i)=>uuid(i+1)));
  });
 });
 
@@ -18409,8 +18581,11 @@ git commit -m "feat(broker-research): admin institutions, rating scales and anal
 import {createHash} from 'node:crypto';
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
-import {runVerify} from './verify';
+import {brokerPaths} from './storage';
+import {ADMIN_ID,memoryBrokerDeps,seedDocument,seedLicence,syntheticPdf} from './testing';
+import {CRON_ACTOR,runVerify} from './verify';
 import type {VerifyDeps} from './verify';
+import {withdrawDocument} from './withdraw';
 import type {BrokerResearchDb,DocumentRow,FieldRow} from './types';
 
 const enc=(o:unknown)=>new TextEncoder().encode(JSON.stringify(o));
@@ -18434,6 +18609,7 @@ async function setup(entries:{id:string;last:string|null;text?:string;fields?:Pa
  const order=(d:DocumentRow)=>`${d.last_verified_at===null?'0':'1'}${d.last_verified_at??''}|${d.document_id}`;   // what verifyCandidates returns (A4: SQL order)
  db={
   verifyCandidates:vi.fn(async(limit:number)=>[...docs.values()].sort((a,b)=>order(a).localeCompare(order(b))).slice(0,limit)),
+  listPurgedDocuments:vi.fn(async()=>[]),
   reportByDocument:vi.fn(async(id:string)=>docs.has(id)?{report_id:`r-${id}`,document_id:id,status:'published',evidence_ok:true}:null),
   getDocument:vi.fn(async(id:string)=>docs.get(id)??null),
   listFields:vi.fn(async(r:string)=>{if(entries.find(e=>`r-${e.id}`===r)?.throws)throw new Error('boom');return fieldsBy.get(r)??[];}),
@@ -18504,6 +18680,23 @@ describe('runVerify',()=>{
   expect(r.results[0].outcome).toBe('ok');
  });
 });
+describe('purged-document reconciliation (P-R4-04)',()=>{
+ it('the daily run deletes anything under a purged document\'s paths and logs orphan_cleanup; a clean purged document logs nothing',async()=>{
+  const d=memoryBrokerDeps();const lic=await seedLicence(d.db);
+  const a=await seedDocument(d,lic.licence_id),b=await seedDocument(d,lic.licence_id,syntheticPdf('clean'));
+  for(const x of [a,b]){await withdrawDocument(d,x.document_id,{reason:'licence ended',purge:true},ADMIN_ID);expect((await d.db.getDocument(x.document_id))!.purged_at).not.toBeNull();}
+  // a late writer landed objects after a's purge completed
+  await d.storage.upload(brokerPaths.evalRequest(a.sha256,'00000000-0000-4000-8000-0000000000aa'),'{"late":true}','application/json');
+  await d.storage.upload(brokerPaths.report(a.sha256),new TextEncoder().encode('%PDF-late'),'application/pdf');
+  const r=await runVerify(d,{deadline:new Date(d.now().getTime()+250_000),triggeredBy:'cron',recordFreshness:false});
+  expect(r.orphansRemoved).toBe(2);
+  expect([...d.storage.objects.keys()].filter(k=>k.includes(a.sha256))).toEqual([]);
+  const log=await d.db.listAccessLog({documentId:a.document_id,limit:20});
+  expect(log.find(x=>x.action==='orphan_cleanup')).toMatchObject({user_id:CRON_ACTOR,detail:{reason:'purged_document',removed:2}});
+  expect((await d.db.listAccessLog({documentId:b.document_id,limit:20})).some(x=>x.action==='orphan_cleanup')).toBe(false);
+  expect((await runVerify(d,{deadline:new Date(d.now().getTime()+250_000),triggeredBy:'cron',recordFreshness:false})).orphansRemoved).toBe(0);   // idempotent
+ });
+});
 ```
 
 - [ ] **Step 2: 运行，确认失败**
@@ -18529,15 +18722,19 @@ import type {FreshnessStatus} from '../dq/freshness';
 import type {CoreDeps} from './deps';
 import {sliceText} from './extract/locate';
 import {loadArtifact} from './parse';
+import {sweepDocumentObjects} from './withdraw';
 import type {PageText} from './extract/locate';
 import type {DocumentRow,FieldRow} from './types';
 
 export type VerifyDeps=Pick<CoreDeps,'db'|'storage'|'tables'|'now'|'codeVersion'>;
 export const VERIFY_BUDGET_MS=250_000,VERIFY_CANDIDATE_LIMIT=500;
 export const VERIFY_PRODUCER='broker-research-verify';
+export const PURGED_RECONCILE_LIMIT=200;
+/** access-log actor of cron writes (the log's user_id has no FK; spec §4.12). */
+export const CRON_ACTOR='00000000-0000-0000-0000-000000000000';
 export type VerifyOutcome='ok'|'failed'|'error';
 export interface VerifyDocResult{documentId:string;reportId:string;outcome:VerifyOutcome;driftedFieldIds:string[];quarantineItems:number}
-export interface VerifyReceipt{batchId:string;status:string;checked:number;remaining:number;results:VerifyDocResult[];freshness:FreshnessStatus|null}
+export interface VerifyReceipt{batchId:string;status:string;checked:number;remaining:number;results:VerifyDocResult[];freshness:FreshnessStatus|null;orphansRemoved:number}
 export interface VerifyOptions{deadline:Date;triggeredBy:'cron'|'manual';recordFreshness:boolean;documentId?:string;restore?:boolean}
 
 /** Documents of published reports in verification order (db.verifyCandidates: last_verified_at asc, never verified first). */
@@ -18604,6 +18801,18 @@ export async function runVerify(deps:VerifyDeps,opts:VerifyOptions):Promise<Veri
   const doc=await deps.db.getDocument(opts.documentId),r=doc?await deps.db.reportByDocument(doc.document_id):null;
   all=doc&&doc.status!=='withdrawn'&&r?.status==='published'?[{doc,reportId:r.report_id}]:[];
  }else all=await candidates(deps);
+ // purged-document reconciliation (P-R4-04): anything a late writer landed under a purged document's paths after its
+ // purge completed is deleted here and logged orphan_cleanup — the late-write window is bounded by this daily run
+ let orphansRemoved=0;
+ if(opts.documentId===undefined){
+  for(const doc of await deps.db.listPurgedDocuments(PURGED_RECONCILE_LIMIT)){
+   if(deps.now().getTime()>=opts.deadline.getTime())break;
+   try{
+    const removed=await sweepDocumentObjects(deps,doc);
+    if(removed.length){orphansRemoved+=removed.length;await deps.db.logAccess({document_id:doc.document_id,user_id:CRON_ACTOR,action:'orphan_cleanup',detail:{reason:'purged_document',removed:removed.length,paths:removed}});}
+   }catch{errors.push({code:'verify_error',key:`purged:${doc.document_id}`});}
+  }
+ }
  let i=0;
  for(;i<all.length;i++){
   if(deps.now().getTime()>=opts.deadline.getTime()){errors.push({code:'deadline_hit'});break;}
@@ -18620,7 +18829,7 @@ export async function runVerify(deps:VerifyDeps,opts:VerifyOptions):Promise<Veri
  }
  const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
  const freshness=opts.recordFreshness?await recordAttempt(deps.tables,'broker_research',{ok:status!=='failed',cadence:'daily',now:deps.now(),detail:{batch_id:batchId,checked:counts.fetched}}):null;
- return {batchId,status,checked:counts.fetched,remaining:all.length-i,results,freshness};
+ return {batchId,status,checked:counts.fetched,remaining:all.length-i,results,freshness,orphansRemoved};
 }
 ```
 
@@ -18799,7 +19008,7 @@ const AUTH={authorization:'Bearer s3cret'};
 const req=(path:string,h:Record<string,string>={})=>new Request(`https://alpha.example/api/cron/${path}`,{headers:h});
 const original=process.env.CRON_SECRET;
 beforeEach(()=>{vi.clearAllMocks();process.env.CRON_SECRET='s3cret';mocks.codeVersion.mockReturnValue('abc123');
- mocks.verify.mockResolvedValue({batchId:'b',status:'success',checked:0,remaining:0,results:[],freshness:'fresh'});
+ mocks.verify.mockResolvedValue({batchId:'b',status:'success',checked:0,remaining:0,results:[],freshness:'fresh',orphansRemoved:0});
  mocks.deliver.mockResolvedValue({skipped:'f4_disabled',taken:0,delivered:0,failed:0});mocks.f4.mockReturnValue({enabled:false});});
 afterEach(()=>{if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;});
 
@@ -19230,6 +19439,7 @@ git commit -m "feat(broker-research): verify and outbox crons, F4 port, storage 
 | R1-5 | 摘要与标题翻译的结果在一个带租约围栏的事务里写入并收尾运行（`broker_summary_commit` / `broker_title_commit`），租约丢失时什么都不写 | §6.4、§4.2 | P-R1-09（A2、C7） |
 | R1-6 | 阻断第 13 条的覆盖要求扩大为"报告一旦含 LLM 生效行，所有生效字段"（含人工行），取代 A 的"只要求 LLM 字段" | §4.4 第 13 条 | 回到规格字面（P-R1-12；替换 A 部分的对应偏差） |
 | R1-7 | 黄金集评测：每篇文档先过与 `claimForProcessing` 相同的处理授权检查再外发，记录授权的许可版本；`--dry-run` 不调用 LLM；类型化值逐分量比较 | §11.3、§4.1 | P-R1-01、P-R1-11（C8） |
+| R4-1 | 清除与迟到写入的残余窗口：持租约的写入方（黄金集评测）上传前续租、上传带低于剩余租约的截止、上传后再查围栏并在租约丢失 / 文档撤回时删除刚写的对象；清除持同一租约并在标记完成前做最终前缀清扫；每日核验 cron 对已清除文档再清扫一次并记 `orphan_cleanup`。残余：一次超出截止仍落地且自删失败的上传，最长存活到下一次核验 cron（≤ 1 天） | §6.5 清除步骤、§8.3 | 对象存储没有与数据库同事务的写入，不能做到零窗口；以每日对账为上界（P-R4-04；C7、C8、E1） |
 
 - [ ] **Step 2: 写 §17**
 
