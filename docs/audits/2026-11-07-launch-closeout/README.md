@@ -1,6 +1,21 @@
 # 美林时钟与宏观缓存发布记录（2026-11-07）
 
-## 最新生产发布与中美核心流程（98e9a819）
+## 最新生产部署与 HTTP 核验（ab11d6e3）
+
+release-main 独立会话于 2026-11-07 16:24:28 UTC 留存生产核验回执。代码提交为 `ab11d6e3b41a603169fda19df2db2d69fdad70c9`；精确 [Application checks 42390150149](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150149) 与 [Macro source fixture checks 42390150168](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150168) 均成功。生产部署 `dpl_66sLJmdeMoowiUjBVy1Pag49uXgK` 为 READY，部署地址 `https://stock-monitor-elfq9cex3-gilosbornhellos-projects.vercel.app`，生产别名检查指向同一部署；部署命令退出 0。该提交包含已合并的 #142–#153，包括 #146 鉴权切换隔离、#147 禁用态 I-3 准备、#148 F6 证据门、#150 manifest 回读优化及相应回归／CI。逐 PR 交付与剩余任务见 [任务清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
+
+脱敏机器回执与 PR 合并祖先核对见 [main-release-evidence.json](main-release-evidence.json)。release-main 对 `https://www.osbornalpha.com` 发起无 Cookie／Bearer 的只读请求：
+
+- `/api/methodologies` 与 US/CN 公开判断均 200，三者响应 `codeVersion` 精确等于上述 SHA。
+- `macro_regime@v2` 为 active/publishable，公式 hash 仍为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`。方法注册行的旧 `registrationCodeVersion` 是注册来源，不是本次运行代码版本。
+- US 为 overheat、CN 为 stagflation；两者仍 `calibration=insufficient`，不是已校准概率。
+- transmission、cycle-table、policy-response 各重复两次，共 6 个匿名请求均为 401／unauthorized、`Cache-Control: no-store`。HTTP 核验退出 0，9 项检查全部通过。
+
+**本次尚无新增父会话登录态浏览器证据。** 下方 `98e9a819` 的中美时钟／量化依据／真实来源抽屉记录仅属于该旧部署，不能作为 `ab11d6e3` 的浏览器验收。#146/#150 已部署，但未取得新版本登录态策略业务成功响应、登录／退出／账号切换、完整页面、原始下载或性能样本；匿名 401 耗时不能说明业务延迟。`dc47ba2e` 的 cycle 首次 16.114 秒仍是旧版本观察，不是新版本基准或回归结论；跨实例命中、受控冷启动与 p95/SLA 均未验证。
+
+本次 release-main 没有更改 flags／licences，也未运行 cron；没有新的 settle apply 或校准作业验证。部署不会解除 I-3 的 `deferred_i3`、公司 CN PDF／issuer 方法门槛或 F6 禁用评测及人工 gold／许可／概率方法前置条件。后续浏览器和性能验收由父会话负责，owner 决策与剩余实现按任务清单逐项闭环。
+
+## 上一阶段生产发布与中美核心流程（98e9a819）
 
 2026-11-07 23:38:41（北京时间）生产检查：提交 `98e9a819d8f8ccc73de8f69df9feac09690014f3`，精确 [CI 42386242631](https://github.com/osborn-studio/osbornalpha/actions/runs/42386242631) 成功；部署 `dpl_BddX8KCD6DnK3a6KrVjtsaVEbikV` READY，绑定 `osbornalpha.com`。不可变部署地址为 `https://stock-monitor-5ebaim1ps-gilosbornhellos-projects.vercel.app`。策略与判断开关保持启用。该提交包含 #142 新 widget、#144 集成回归、#145 公司证据门以及 #148 评测准入修复；#148 的 merge commit `7adb5429` 已经祖先关系检查确认包含。不要把后来 main 合并的 #146/#151 或未发布的 #150 算作本次生产内容。#148 不解除禁用评测的许可证、人工 gold 或概率方法前置条件。
 
@@ -93,4 +108,4 @@
 
 [首次事实层发布与回滚](initial-facts-only-release.md) 保留先前故障、临时关闭判断开关及当时写权限阻塞的历史；这些不是本次最终状态。首次登录记录见 [acceptance.md](acceptance.md)。
 
-下一步：补齐生产移动端、中文／浅色主题、控制台、退出登录／账号切换与原始文件下载验证，并由用户评价视觉目标；继续完成 cycle 首次 miss 优化的审批、部署及新浏览器样本。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次中美核心流程成功的发布证据。
+上一阶段后续清单（当前部署状态以上方 `ab11d6e3` 章节为准）：补齐生产移动端、中文／浅色主题、控制台、退出登录／账号切换与原始文件下载验证，并由用户评价视觉目标；继续完成 cycle 首次 miss 优化的审批、部署及新浏览器样本。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次中美核心流程成功的发布证据。

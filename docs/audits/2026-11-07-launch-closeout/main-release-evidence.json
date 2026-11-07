@@ -1,0 +1,275 @@
+{
+  "source": "release-main independently launched session; copied from shared scratch after deploy and HTTP verification exit 0",
+  "code_baseline": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+  "ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 42390150168,
+      "headSha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+      "name": "Macro source fixture checks",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42390150168"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 42390150149,
+      "headSha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+      "name": "Application checks",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42390150149"
+    }
+  ],
+  "deployment": {
+    "id": "dpl_66sLJmdeMoowiUjBVy1Pag49uXgK",
+    "url": "stock-monitor-elfq9cex3-gilosbornhellos-projects.vercel.app",
+    "readyState": "READY",
+    "target": "production",
+    "createdAt": 1794068531637,
+    "gitMetadata": {}
+  },
+  "production_alias_inspection": {
+    "id": "dpl_66sLJmdeMoowiUjBVy1Pag49uXgK",
+    "url": "stock-monitor-elfq9cex3-gilosbornhellos-projects.vercel.app",
+    "readyState": "READY",
+    "target": "production"
+  },
+  "http_verification": {
+    "timestamp": "2026-11-07T16:24:28.019Z",
+    "base": "https://www.osbornalpha.com",
+    "expectedSha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+    "expectedFormulaHash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+    "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+    "checks": [
+      {
+        "path": "/api/methodologies",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 1761,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "v2": {
+          "status": "active",
+          "publishable": true,
+          "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+          "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+        },
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 610,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "overheat",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 553,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "stagflation",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 369,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 672,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 336,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 318,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 345,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 325,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      }
+    ],
+    "pass": true,
+    "limitations": [
+      "No browser or authenticated-user verification performed.",
+      "Read-only current-state samples do not prove account isolation, cross-instance cache hits, expiry behavior, or latency SLOs.",
+      "No flags/licenses modified and no cron jobs invoked."
+    ]
+  },
+  "merged_pr_inventory": [
+    {
+      "pr": 142,
+      "state": "MERGED",
+      "merge_sha": "279b0e32ec9b5882e494285bdccf80f53fe589ec",
+      "ancestor_of_ab11d6e3": true,
+      "title": "feat(macro): redesign investment clock with snapshot-bound phase evidence"
+    },
+    {
+      "pr": 143,
+      "state": "MERGED",
+      "merge_sha": "bab393b68ba1ad64b2ab9d446eaec658f06df335",
+      "ancestor_of_ab11d6e3": true,
+      "title": "docs: record cache release and remaining module and widget gates"
+    },
+    {
+      "pr": 144,
+      "state": "MERGED",
+      "merge_sha": "98e9a819d8f8ccc73de8f69df9feac09690014f3",
+      "ancestor_of_ab11d6e3": true,
+      "title": "test(macro): independent integration and mobile focus regressions"
+    },
+    {
+      "pr": 145,
+      "state": "MERGED",
+      "merge_sha": "ddae7c460374ce8635e388b8b8dcd7d7b482661d",
+      "ancestor_of_ab11d6e3": true,
+      "title": "fix(company): bind issuer judgments and fact run provenance"
+    },
+    {
+      "pr": 146,
+      "state": "MERGED",
+      "merge_sha": "4682f21a08eccb252b87996ab6de89e96547c6b5",
+      "ancestor_of_ab11d6e3": true,
+      "title": "fix(macro): isolate strategy responses across auth changes and verify handler caches"
+    },
+    {
+      "pr": 147,
+      "state": "MERGED",
+      "merge_sha": "695c50e5276c6e4474f0b04ecdd1a14efe40b992",
+      "ancestor_of_ab11d6e3": true,
+      "title": "Prepare disabled industry valuation ingestion and validation contracts"
+    },
+    {
+      "pr": 148,
+      "state": "MERGED",
+      "merge_sha": "7adb54293a405d8c8a36783296e5ec904582d084",
+      "ancestor_of_ab11d6e3": true,
+      "title": "fix(evals): harden gold admission and calibration evidence contracts"
+    },
+    {
+      "pr": 149,
+      "state": "MERGED",
+      "merge_sha": "5d4e81832cd7cdaa30a38e9470c9be03c6d064a4",
+      "ancestor_of_ab11d6e3": true,
+      "title": "test(company): independently audit release provenance gates"
+    },
+    {
+      "pr": 150,
+      "state": "MERGED",
+      "merge_sha": "5501b41de82b405a4f10313c9b9702011c3b7fb7",
+      "ancestor_of_ab11d6e3": true,
+      "title": "perf(macro): avoid full manifest download after persistence"
+    },
+    {
+      "pr": 151,
+      "state": "MERGED",
+      "merge_sha": "aaec7c796af37b115b7839f9b8967f8bac4ef727",
+      "ancestor_of_ab11d6e3": true,
+      "title": "test: make settlement wave admission boundaries deterministic"
+    },
+    {
+      "pr": 152,
+      "state": "MERGED",
+      "merge_sha": "e03ad747a55ae184f77026a20e1f4a11881ceccf",
+      "ancestor_of_ab11d6e3": true,
+      "title": "test(macro): verify source previews and real destination rendering"
+    },
+    {
+      "pr": 153,
+      "state": "MERGED",
+      "merge_sha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+      "ancestor_of_ab11d6e3": true,
+      "title": "test: guard strict industry provider dates on corrected #147"
+    }
+  ],
+  "documentation_editor_limits": "No deployment or HTTP checks rerun by documentation editor; no new parent browser evidence supplied.",
+  "deployment_command_exit_code": 0,
+  "http_verification_exit_code": 0
+}
