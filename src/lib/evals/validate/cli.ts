@@ -10,6 +10,7 @@ import {goldDiffAgainst} from '../gold/diff';
 import {LEGACY_PLAN2_PATH,checkLock,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders} from '../gold/load';
 import type {GoldLock,ValidatorFinding} from '../types';
 import {redactScan,redactTargets} from '../redact';
+import {f6Handlers,manifestHandler} from './handlers';
 
 /** findings: the ValidatorFinding list of a Task-12 check (--expert/--audit/--manifest); gold/lock/diff/redact keep their own fields. */
 export interface CheckResult{ok:boolean;findings?:unknown[];[k:string]:unknown}
@@ -55,6 +56,12 @@ export const HANDLERS:ValidateHandler[]=[
   const findings=redactScan(files);
   return {ok:findings.length===0,files:files.length,findings};
  }},
+ // Task 12 (spec §8–§10): --expert <file> [--release], --audit <dir> [--release], --manifest <file> [--online].
+ // f6Handlers takes the flag's tokens (value first, then modifiers) and returns ValidatorFinding[].
+ {flag:'--expert',name:'expert',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--expert']([value!,...mods]))},
+ {flag:'--audit',name:'audit',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--audit']([value!,...mods]))},
+ // --manifest [--online]: offline the CI identity check is not performed → finding manifest_ci_unverified, ok:false, exit 1 (R2-1).
+ manifestHandler(),
 ];
 
 const flagUsage=(h:ValidateHandler)=>`[${h.flag}${h.takesValue?' <value>':''}${(h.modifiers??[]).map(m=>` [${m}]`).join('')}]`;

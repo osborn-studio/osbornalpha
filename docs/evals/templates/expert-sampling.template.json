@@ -1,0 +1,38 @@
+{
+  "_how_to": [
+    "Copy to docs/evals/<date>/expert-sampling-<module>-<n>.json and fill every field; validate with: npx tsx scripts/evals/validate.ts --expert <file> [--release]",
+    "selected_case_ids: recompute with seeded_sha256 (sha256(seed + case_id), first N companies by smallest hash, first M cases each); the validator rejects any other set",
+    "population.set_sha256 must be a sha256 listed in src/lib/evals/fixtures/gold/lock.json; evaluated_run_id is the privileged official_reconciliation run (gate pass)",
+    "every disagree (checks and basis_review) needs a follow_up whose ref is the case_id or the basis topic",
+    "release: every follow_up has closed_at and closure_ref = dq_quarantine:<uuid> | https://github.com/<owner>/<repo>/pull/<n> | gold:<set_id>@<version>",
+    "use the expert alias only; no names, e-mail addresses or report PDFs"
+  ],
+  "schema_version": 1,
+  "module": "facts",
+  "sampled_at": "2026-01-01T00:00:00Z",
+  "expert": {
+    "alias": "E1",
+    "background": "<one line: qualification relevant to the module>",
+    "independence": "<one line: why the expert is not an implementer or recorder>",
+    "contact_held_by": "owner"
+  },
+  "population": {
+    "set_id": "facts/plan3-30",
+    "set_version": 1,
+    "set_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "case_count": 0,
+    "evaluated_run_id": "00000000-0000-4000-8000-000000000000",
+    "db_state_rev": "0"
+  },
+  "selection": {
+    "method": "seeded_sha256",
+    "seed": "<seed fixed before sampling, e.g. the release_commit>",
+    "companies": 5,
+    "cases_per_company": 6,
+    "selected_case_ids": []
+  },
+  "checks": [],
+  "basis_review": [],
+  "summary": {"agree": 0, "disagree": 0, "cannot_verify": 0},
+  "follow_ups": []
+}

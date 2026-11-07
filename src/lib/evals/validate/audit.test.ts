@@ -1,0 +1,138 @@
+// src/lib/evals/validate/audit.test.ts
+// Spec §9: report/disposition parsing rules, index.json validation on synthetic directories, and the
+// REAL audit directory docs/audits/2026-11-04-evals-gold-sets (round-aware matching, Codex plan round 1 P1-9).
+import {createHash} from 'node:crypto';
+import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,relative} from 'node:path';
+import {afterEach,describe,expect,it} from 'vitest';
+import {isAccept,isOpenVerify,isOwner,markdownTables,parseDispositions,parseFindings,parseVerdict,tableCells,validateAuditDir} from './audit';
+
+const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
+const dirs:string[]=[];
+afterEach(()=>{for(const d of dirs.splice(0))rmSync(d,{recursive:true,force:true});});
+
+describe('markdown parsing',()=>{
+ it('splits table cells but not inside backtick spans',()=>{
+  expect(tableCells('| N3 x | ACCEPT | `not_visible(quarantined | superseded)` ok |')).toEqual(['N3 x','ACCEPT','`not_visible(quarantined | superseded)` ok']);
+  expect(markdownTables('text\n| a | b |\n|---|---|\n| 1 | 2 |\n\n| c |\n| d |\n')).toEqual([{header:['a','b'],rows:[['1','2']]}]);
+ });
+ it('reads finding ids from a # column, from "P1 · id" severity cells, by synthesis, and from bold paragraphs',()=>{
+  const md=[
+   '| # | Severity (P1 blocking / P2 …) | Issue |','|---|---|---|','| 1 | P1 blocking | a |','| **N2** | **P2** | b |','',
+   '| # | Status | Where |','|---|---|---|','| 1 | PARTIAL | not a findings table |','',
+   '| Severity | Section | Issue |','|---|---|---|','| P1 | §1 | c |','| P1 | §2 | d |','| P2 | §3 | e |','',
+   '| Severity | Section |','|---|---|','| **P1 · R3-1** | §4 |','',
+   '**R5-1 · P1 — Abandonment loses the disposition.**  ','**R6-1 — PARTIAL:** not a finding',
+  ].join('\n');
+  expect(parseFindings(md,3)).toEqual([
+   {id:'1',severity:'P1'},{id:'N2',severity:'P2'},{id:'R3-P1-1',severity:'P1'},{id:'R3-P1-2',severity:'P1'},{id:'R3-P2-1',severity:'P2'},
+   {id:'R3-1',severity:'P1'},{id:'R5-1',severity:'P1'},
+  ]);
+ });
+ it('reads disposition rows: first token id, "Round-1 #27" form, implemented_in column or the column after the decision',()=>{
+  const md=[
+   '| # | 决定 | 实施 / 理由 |','|---|---|---|','| 1 覆盖不足可过 | ACCEPT | §3.2 |','| N11 数值往返 | ACCEPT + OPEN-verify | §17.6 |','',
+   '| # | Decision | How |','|---|---|---|','| Round-1 #27 Tushare paging | OPEN (verify) | runbook |','| N10 / A / C | **owner** | §14 |','',
+   '| # | 级别 | 决定 | implemented_in |','|---|---|---|---|','| R5-1 | P1 | ACCEPT | 第 6 稿 §0 |','| R5-2 | P1 | ACCEPT |  |',
+  ].join('\n');
+  expect(parseDispositions(md,'03.md').map(r=>[r.id,r.decision,r.implemented_in])).toEqual([
+   ['1','ACCEPT','§3.2'],['N11','ACCEPT + OPEN-verify','§17.6'],['27','OPEN (verify)','runbook'],['N10','owner','§14'],['R5-1','ACCEPT','第 6 稿 §0'],['R5-2','ACCEPT',''],
+  ]);
+  expect([isAccept('ACCEPT WITH LIMIT'),isAccept('DECLINE'),isOpenVerify('ACCEPT + OPEN-verify'),isOpenVerify('OPEN (verify)'),isOwner('**owner** (default)'),isOwner('ACCEPT')]).toEqual([true,false,true,true,true,false]);
+ });
+ it('parses the **Verdict: …** first line',()=>{
+  expect(parseVerdict('\n**Verdict: not ready for implementation planning—x.** tail')).toBe('not ready for implementation planning—x');
+  expect(parseVerdict('**Not ready.** body')).toBeNull();
+ });
+});
+
+const TARGET='docs/superpowers/specs/x.md';
+const TARGET_BYTES='spec bytes\n';
+const REPORT='**Verdict: not ready.**\n\n| # | Severity | Issue |\n|---|---|---|\n| 1 | P1 | a |\n| 2 | P2 | b |\n| 3 | P3 | c |\n';
+const DISPO='| # | 决定 | 实施 |\n|---|---|---|\n| 1 a | ACCEPT | §1 |\n| 2 b | ACCEPT + OPEN-verify | §17 |\n| 3 c | DECLINE | minor |\n';
+function auditDir(o:{index?:Record<string,unknown>;round?:Record<string,unknown>;report?:string;dispo?:string}={}){
+ const dir=mkdtempSync(join(tmpdir(),'f6-audit-'));dirs.push(dir);
+ writeFileSync(join(dir,'00-prompt-round1.md'),'prompt');
+ writeFileSync(join(dir,'01-codex-round1.md'),o.report??REPORT);
+ writeFileSync(join(dir,'02-disposition.md'),o.dispo??DISPO);
+ const index={topic:'x',target:{path:TARGET},
+  rounds:[{n:1,target_sha256:sha(TARGET_BYTES),target_git_ref:'f'.repeat(40),prompt_file:'00-prompt-round1.md',report_file:'01-codex-round1.md',model:'gpt-6-astra',effort:'medium',verdict:'not ready',findings:{p1:1,p2:1,p3:1},...o.round}],
+  dispositions:[{file:'02-disposition.md',covers_rounds:[1]}],open:{owner:[],verify:['§17 item']},final_verdict:'x',...o.index};
+ writeFileSync(join(dir,'index.json'),JSON.stringify(index));
+ return dir;
+}
+const gitShow=(ref:string,path:string)=>ref==='f'.repeat(40)&&path===TARGET?new TextEncoder().encode(TARGET_BYTES):null;
+const codes=(dir:string,release=false)=>validateAuditDir(dir,{gitShow,release}).map(f=>f.code);
+
+describe('validateAuditDir on synthetic directories',()=>{
+ it('accepts a consistent directory',()=>expect(codes(auditDir())).toEqual([]));
+ it('reports a missing or invalid index.json',()=>{
+  const d=auditDir();writeFileSync(join(d,'index.json'),'{');expect(codes(d)).toEqual(['audit_index_invalid']);
+  rmSync(join(d,'index.json'));expect(codes(d)).toEqual(['audit_index_missing']);
+  expect(codes(auditDir({index:{rounds:[]}}))).toEqual(['audit_index_invalid']);
+ });
+ it('reports missing files',()=>{
+  expect(codes(auditDir({round:{report_file:'99.md'}}))).toContain('audit_file_missing');
+  expect(codes(auditDir({round:{prompt_file:'nope.md'}}))).toEqual(['audit_file_missing']);
+  expect(codes(auditDir({round:{prompt_file:null}}))).toEqual([]);
+  expect(codes(auditDir({index:{dispositions:[{file:'gone.md',covers_rounds:[1]}]}}))).toContain('audit_file_missing');
+ });
+ it('checks the findings counts against the report',()=>expect(codes(auditDir({round:{findings:{p1:2,p2:1,p3:1}}}))).toEqual(['audit_findings_count']));
+ it("requires unverified_target: true for 'uncommitted' rounds and verifies committed bytes",()=>{
+  expect(codes(auditDir({round:{target_git_ref:'uncommitted',target_sha256:null}}))).toEqual(['audit_unverified_target']);
+  expect(codes(auditDir({round:{target_git_ref:'uncommitted',target_sha256:null,unverified_target:true}}))).toEqual([]);
+  expect(codes(auditDir({round:{target_sha256:'0'.repeat(64)}}))).toEqual(['audit_target_mismatch']);
+  expect(codes(auditDir({round:{target_git_ref:'e'.repeat(40)}}))).toEqual(['audit_target_unreadable']);
+  expect(codes(auditDir({round:{target_git_ref:'HEAD'}}))).toEqual(['audit_target_ref']);
+ });
+ it('requires every finding id in some disposition table',()=>{
+  expect(validateAuditDir(auditDir({dispo:DISPO.replace('| 3 c | DECLINE | minor |\n','')}),{gitShow})).toEqual([{code:'audit_finding_undisposed',where:'round 1 #3',message:'no disposition row for this round and id'}]);
+ });
+ it('P1-9: dispositions are matched by (round, id): covers_rounds and Round-N qualifiers; ambiguous reuse disposes nothing',()=>{
+  const two=(dispo:string,covers:number[])=>{
+   const d=auditDir({dispo,index:{dispositions:[{file:'02-disposition.md',covers_rounds:covers}]}});
+   writeFileSync(join(d,'03-codex-round2.md'),REPORT);
+   const idx=JSON.parse(readFileSync(join(d,'index.json'),'utf8'));
+   idx.rounds.push({...idx.rounds[0],n:2,prompt_file:null,report_file:'03-codex-round2.md'});
+   writeFileSync(join(d,'index.json'),JSON.stringify(idx));
+   return validateAuditDir(d,{gitShow}).map(f=>[f.code,f.where]);
+  };
+  // round 1's table cannot close round 2's #1–#3
+  expect(two(DISPO,[1])).toEqual([['audit_finding_undisposed','round 2 #1'],['audit_finding_undisposed','round 2 #2'],['audit_finding_undisposed','round 2 #3']]);
+  // one unqualified table covering both rounds with ids repeated in both: ambiguous, nothing disposed
+  const amb=two(DISPO,[1,2]);
+  expect(amb.filter(x=>x[0]==='audit_disposition_ambiguous').length).toBe(3);
+  expect(amb.filter(x=>x[0]==='audit_finding_undisposed').length).toBe(6);
+  // explicit qualifiers resolve it
+  const q='| # | 决定 | 实施 |\n|---|---|---|\n'+[1,2].flatMap(n=>[`| Round-${n} #1 a | ACCEPT | §1 |`,`| Round-${n} #2 b | ACCEPT | §17 |`,`| Round-${n} #3 c | DECLINE | minor |`]).join('\n')+'\n';
+  expect(two(q,[1,2])).toEqual([]);
+ });
+ it('reads through deps.readFile (committed bytes) when given, never the working tree',()=>{
+  const d=auditDir();const rel=(f:string)=>relative(process.cwd(),join(d,f)).split('\\').join('/');
+  const files=new Map(['index.json','00-prompt-round1.md','01-codex-round1.md','02-disposition.md'].map(f=>[rel(f),new Uint8Array(readFileSync(join(d,f)))]));
+  rmSync(join(d,'02-disposition.md'));
+  expect(validateAuditDir(d,{gitShow,readFile:p=>files.get(p)??null})).toEqual([]);
+  expect(validateAuditDir(d,{gitShow,readFile:()=>null}).map(f=>f.code)).toEqual(['audit_index_missing']);
+ });
+ it('requires implemented_in on ACCEPT rows',()=>expect(codes(auditDir({dispo:DISPO.replace('| 1 a | ACCEPT | §1 |','| 1 a | ACCEPT |  |')}))).toEqual(['audit_accept_unimplemented']));
+ it('requires open.verify / open.owner to be non-empty when such dispositions exist',()=>{
+  expect(codes(auditDir({index:{open:{owner:[],verify:[]}}}))).toEqual(['audit_open_inconsistent']);
+  expect(codes(auditDir({dispo:DISPO+'| 9 z | OWNER | §16 |\n'}))).toEqual(['audit_open_inconsistent']);
+ });
+ it('release mode: last round committed; no P1/P2 OPEN-verify; P3 OPEN-verify is allowed',()=>{
+  expect(codes(auditDir(),true)).toEqual(['audit_release_open_verify']);
+  expect(codes(auditDir({dispo:DISPO.replace('ACCEPT + OPEN-verify','ACCEPT')}),true)).toEqual([]);
+  expect(codes(auditDir({dispo:DISPO.replace('ACCEPT + OPEN-verify','ACCEPT').replace('| 3 c | DECLINE | minor |','| 3 c | OPEN-verify | later |')}),true)).toEqual([]);
+  expect(codes(auditDir({dispo:DISPO.replace('ACCEPT + OPEN-verify','ACCEPT'),round:{target_git_ref:'uncommitted',target_sha256:null,unverified_target:true}}),true)).toEqual(['audit_release_uncommitted']);
+ });
+});
+
+describe('validateAuditDir on the real audit directories',()=>{
+ // Round 5 of the F6 spec audit targets commit 394d5141…; its bytes are read with the real `git show`
+ // (CI checks out with fetch-depth 0). These expectations pin the CURRENT state of those directories.
+ it('docs/audits/2026-11-04-evals-gold-sets is consistent; release mode reports only N11 (P1, OPEN-verify)',()=>{
+  expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets')).toEqual([]);
+  expect(validateAuditDir('docs/audits/2026-11-04-evals-gold-sets',{release:true})).toEqual([{code:'audit_release_open_verify',where:'round 2 #N11',message:'P1 finding is OPEN-verify'}]);
+ });
+});
