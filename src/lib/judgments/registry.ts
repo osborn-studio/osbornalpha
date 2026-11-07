@@ -6,7 +6,9 @@
 // to the row sync_methodology writes. No fs / typescript imports here: app code may import this file.
 import type {Methodology,MethodologyRow} from './types';
 
-export const REGISTRY:readonly Methodology[]=[];
+import {macroRegimeV1} from './methodologies/macro-regime.v1';
+
+export const REGISTRY:readonly Methodology[]=[macroRegimeV1];
 export interface MethodologyHashes{doc_sha256:string;implementation_sha256:string;deps_sha256:string;formula_hash:string}
 export type MethodologySyncRow=Omit<MethodologyRow,'created_at'|'synced_at'>;
 export function upstreamOf(m:Pick<Methodology,'upstream'>):Record<string,string>{

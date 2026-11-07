@@ -1,0 +1,518 @@
+{
+ "fixture_version": "judgment-replay/1",
+ "description": "macro_regime@v1 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
+ "expect": "exact",
+ "judgment": {
+  "judgment_id": "1497ba77-6ec7-853d-963e-2976f12e90c4",
+  "subject_type": "macro_region",
+  "subject_key": "US",
+  "judgment_type": "macro_regime",
+  "methodology_id": "macro_regime",
+  "methodology_version": "v1",
+  "kind": "categorical",
+  "producer_kind": "rule",
+  "producer_ref": {},
+  "producer_nonce": "",
+  "as_of": "2026-09-11",
+  "inputs": [
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_DGS10",
+     "period_end": "2026-05-31",
+     "vintage_id": "fred-2026-06-01"
+    },
+    "snapshot": {
+     "series_id": "US_DGS10",
+     "period_end": "2026-05-31",
+     "value": 4.62,
+     "unit": "%",
+     "vintage_id": "fred-2026-06-01",
+     "available_at": "2026-06-01T21:00:00.000Z"
+    },
+    "hash": "b0a649f06f933b1f7a4676af7e9cef145297b2e59214fccedbdf02949f6620ee",
+    "available_at": "2026-06-01T21:00:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_DGS10:2026-05-31:fred-2026-06-01"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_DTWEXBGS",
+     "period_end": "2026-05-31",
+     "vintage_id": "fred-2026-06-02"
+    },
+    "snapshot": {
+     "series_id": "US_DTWEXBGS",
+     "period_end": "2026-05-31",
+     "value": 101.1,
+     "unit": "index",
+     "vintage_id": "fred-2026-06-02",
+     "available_at": "2026-06-02T20:15:00.000Z"
+    },
+    "hash": "619d28e78076bc6f3056a37ffee8069d8f9fd7d283cd0c5e553aad50597fe95d",
+    "available_at": "2026-06-02T20:15:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_DTWEXBGS:2026-05-31:fred-2026-06-02"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_UNRATE",
+     "period_end": "2026-05-31",
+     "vintage_id": "bls-2026-06-05"
+    },
+    "snapshot": {
+     "series_id": "US_UNRATE",
+     "period_end": "2026-05-31",
+     "value": 4.1,
+     "unit": "%",
+     "vintage_id": "bls-2026-06-05",
+     "available_at": "2026-06-05T12:30:00.000Z"
+    },
+    "hash": "d8caeb1787fb87e5c30b7fb85a9ba094c961298048354b4be7aeaad416cd297f",
+    "available_at": "2026-06-05T12:30:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_UNRATE:2026-05-31:bls-2026-06-05"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_PPI_FD_YOY",
+     "period_end": "2026-07-31",
+     "vintage_id": "bls-2026-08-14"
+    },
+    "snapshot": {
+     "series_id": "US_PPI_FD_YOY",
+     "period_end": "2026-07-31",
+     "value": 2.5,
+     "unit": "pct_yoy",
+     "vintage_id": "bls-2026-08-14",
+     "available_at": "2026-08-14T12:30:00.000Z"
+    },
+    "hash": "6ae51e9244b0986acb2f76e021f483b273ae71b0ed8f0f061a66337ad7447bf2",
+    "available_at": "2026-08-14T12:30:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_PPI_FD_YOY:2026-07-31:bls-2026-08-14"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_CPI_YOY",
+     "period_end": "2026-08-31",
+     "vintage_id": "bls-2026-09-11"
+    },
+    "snapshot": {
+     "series_id": "US_CPI_YOY",
+     "period_end": "2026-08-31",
+     "value": 2.9,
+     "unit": "pct_yoy",
+     "vintage_id": "bls-2026-09-11",
+     "available_at": "2026-09-11T12:30:00.000Z"
+    },
+    "hash": "a788d7f2e79c837d8a46677d49d884714f377b2c0303850fa41fd0a8b000c2f6",
+    "available_at": "2026-09-11T12:30:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_CPI_YOY:2026-08-31:bls-2026-09-11"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_DFF",
+     "period_end": "2026-08-31",
+     "vintage_id": "fred-2026-09-01"
+    },
+    "snapshot": {
+     "series_id": "US_DFF",
+     "period_end": "2026-08-31",
+     "value": 3.75,
+     "unit": "%",
+     "vintage_id": "fred-2026-09-01",
+     "available_at": "2026-09-01T13:00:00.000Z"
+    },
+    "hash": "8830c1d8666c8427896ddf3b9a14964e54400c7aed84db1714a26c437892cdbe",
+    "available_at": "2026-09-01T13:00:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_DFF:2026-08-31:fred-2026-09-01"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_DGS10",
+     "period_end": "2026-08-31",
+     "vintage_id": "fred-2026-09-01"
+    },
+    "snapshot": {
+     "series_id": "US_DGS10",
+     "period_end": "2026-08-31",
+     "value": 4.8,
+     "unit": "%",
+     "vintage_id": "fred-2026-09-01",
+     "available_at": "2026-09-01T21:00:00.000Z"
+    },
+    "hash": "f8c72d7f0b3c6d3e6aac065fee2e46e1fec5806a4a8cfa85b6be8aa68ed7aebc",
+    "available_at": "2026-09-01T21:00:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_DGS10:2026-08-31:fred-2026-09-01"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_DTWEXBGS",
+     "period_end": "2026-08-31",
+     "vintage_id": "fred-2026-09-02"
+    },
+    "snapshot": {
+     "series_id": "US_DTWEXBGS",
+     "period_end": "2026-08-31",
+     "value": 102.45,
+     "unit": "index",
+     "vintage_id": "fred-2026-09-02",
+     "available_at": "2026-09-02T20:15:00.000Z"
+    },
+    "hash": "2cc06b621ea148b25f912ab264951c3cdf1c0dc1f8e5e618a3f4334e934145a4",
+    "available_at": "2026-09-02T20:15:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_DTWEXBGS:2026-08-31:fred-2026-09-02"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_ISM_PMI",
+     "period_end": "2026-08-31",
+     "vintage_id": "ism-2026-09-01"
+    },
+    "snapshot": {
+     "series_id": "US_ISM_PMI",
+     "period_end": "2026-08-31",
+     "value": 48.7,
+     "unit": "index",
+     "vintage_id": "ism-2026-09-01",
+     "available_at": "2026-09-01T14:00:00.000Z"
+    },
+    "hash": "b6e740ac019ca018fe8d856122a636d994df5756de1188c7de70f612f2df06f0",
+    "available_at": "2026-09-01T14:00:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_ISM_PMI:2026-08-31:ism-2026-09-01"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_UNRATE",
+     "period_end": "2026-08-31",
+     "vintage_id": "bls-2026-09-04"
+    },
+    "snapshot": {
+     "series_id": "US_UNRATE",
+     "period_end": "2026-08-31",
+     "value": 4.2,
+     "unit": "%",
+     "vintage_id": "bls-2026-09-04",
+     "available_at": "2026-09-04T12:30:00.000Z"
+    },
+    "hash": "57e595e6db8644916843b70073db29fe2c33889c33b124901ec91ed8febd20b0",
+    "available_at": "2026-09-04T12:30:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_UNRATE:2026-08-31:bls-2026-09-04"
+    }
+   },
+   {
+    "kind": "macro_observation",
+    "ref": {
+     "series_id": "US_VIX",
+     "period_end": "2026-08-31",
+     "vintage_id": "fred-2026-09-01"
+    },
+    "snapshot": {
+     "series_id": "US_VIX",
+     "period_end": "2026-08-31",
+     "value": 17.8,
+     "unit": "index",
+     "vintage_id": "fred-2026-09-01",
+     "available_at": "2026-09-01T13:00:00.000Z"
+    },
+    "hash": "8f0f492df5df9adb33e8fc37b5d148b4dc24900f8d6ce25e1f9054768bd70833",
+    "available_at": "2026-09-01T13:00:00.000Z",
+    "origin": {
+     "publisher": "宏观序列原发布方（见宏观目录 macro_series）",
+     "adapter": "macro_workbench",
+     "locator": "macro_observations:US_VIX:2026-08-31:fred-2026-09-01"
+    }
+   },
+   {
+    "kind": "macro_snapshot",
+    "ref": {
+     "snapshot_id": "6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01"
+    },
+    "snapshot": {
+     "snapshot_id": "6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01",
+     "region": "US",
+     "as_of": "2026-09-11",
+     "methodology_version": "v1.0",
+     "catalog_version": "us-catalog-2026-09-01",
+     "observation_ids": [
+      "US_DFF:2026-08-31:fred-2026-09-01",
+      "US_DGS10:2026-05-31:fred-2026-06-01",
+      "US_DGS10:2026-08-31:fred-2026-09-01",
+      "US_DTWEXBGS:2026-05-31:fred-2026-06-02",
+      "US_DTWEXBGS:2026-08-31:fred-2026-09-02",
+      "US_CPI_YOY:2026-08-31:bls-2026-09-11",
+      "US_UNRATE:2026-05-31:bls-2026-06-05",
+      "US_UNRATE:2026-08-31:bls-2026-09-04",
+      "US_ISM_PMI:2026-08-31:ism-2026-09-01",
+      "US_PPI_FD_YOY:2026-07-31:bls-2026-08-14",
+      "US_VIX:2026-08-31:fred-2026-09-01"
+     ],
+     "primary_state": "recovery",
+     "secondary_state": "overheat",
+     "scores": {
+      "recovery": 21.5,
+      "overheat": 15.5,
+      "stagflation": 14.5,
+      "recession": 14.5
+     },
+     "norm": {
+      "recovery": 0.32575757575757575,
+      "overheat": 0.23484848484848486,
+      "stagflation": 0.2196969696969697,
+      "recession": 0.2196969696969697
+     },
+     "coverage": 0.8,
+     "margin_pp": 9.090909,
+     "growth_axis": null,
+     "inflation_axis": null
+    },
+    "hash": "e3963e582a3e9841ccfa464b270f4ba91aa5df78fefd2fd4e14e691069b0322b",
+    "available_at": "2026-09-11T12:30:00.000Z",
+    "origin": {
+     "publisher": "OsbornAlpha 宏观工作台（由已发布观测派生的快照）",
+     "adapter": "macro_workbench",
+     "locator": "macro_snapshots:6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01"
+    }
+   },
+   {
+    "kind": "table_rows",
+    "ref": {
+     "table": "macro_series",
+     "natural_key": "US"
+    },
+    "snapshot": {
+     "table": "macro_series",
+     "natural_key": "US",
+     "rows": [
+      {
+       "id": "US_DFF",
+       "region": "US",
+       "role": "indicator",
+       "type": "policy_rate",
+       "unit": "%",
+       "frequency": "daily",
+       "provider": "fred",
+       "provider_series_id": "DFF",
+       "origin": "Fed",
+       "weight": 25,
+       "change_kind": "bp",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_DGS10",
+       "region": "US",
+       "role": "indicator",
+       "type": "bond_yield",
+       "unit": "%",
+       "frequency": "daily",
+       "provider": "fred",
+       "provider_series_id": "DGS10",
+       "origin": "Treasury",
+       "weight": 15,
+       "change_kind": "bp",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_DTWEXBGS",
+       "region": "US",
+       "role": "indicator",
+       "type": "fx",
+       "unit": "index",
+       "frequency": "daily",
+       "provider": "fred",
+       "provider_series_id": "DTWEXBGS",
+       "origin": "Fed",
+       "weight": 10,
+       "change_kind": "pct",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_CPI_YOY",
+       "region": "US",
+       "role": "indicator",
+       "type": "inflation_yoy",
+       "unit": "pct_yoy",
+       "frequency": "monthly",
+       "provider": "fred",
+       "provider_series_id": "CPIAUCSL",
+       "origin": "BLS",
+       "weight": 15,
+       "change_kind": "pp",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_UNRATE",
+       "region": "US",
+       "role": "indicator",
+       "type": "labor_rate",
+       "unit": "%",
+       "frequency": "monthly",
+       "provider": "fred",
+       "provider_series_id": "UNRATE",
+       "origin": "BLS",
+       "weight": 10,
+       "change_kind": "pp",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_ISM_PMI",
+       "region": "US",
+       "role": "indicator",
+       "type": "pmi",
+       "unit": "index",
+       "frequency": "monthly",
+       "provider": "akshare",
+       "provider_series_id": "macro_usa_ism_pmi",
+       "origin": "ISM",
+       "weight": 15,
+       "change_kind": "points",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_PPI_FD_YOY",
+       "region": "US",
+       "role": "indicator",
+       "type": "inflation_yoy",
+       "unit": "pct_yoy",
+       "frequency": "monthly",
+       "provider": "fred",
+       "provider_series_id": "PPIFIS",
+       "origin": "BLS",
+       "weight": 5,
+       "change_kind": "pp",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      },
+      {
+       "id": "US_VIX",
+       "region": "US",
+       "role": "indicator",
+       "type": "risk_index",
+       "unit": "index",
+       "frequency": "daily",
+       "provider": "fred",
+       "provider_series_id": "VIXCLS",
+       "origin": "Cboe",
+       "weight": 5,
+       "change_kind": "points",
+       "definition_version": 1,
+       "updated_at": "2026-09-01T00:00:00.000Z"
+      }
+     ]
+    },
+    "hash": "45e9ffb8d1f27f09921ff1ac6c2ed9de6e89f066647ba72725869df5d9e479d0",
+    "available_at": "2026-09-01T00:00:00.000Z",
+    "origin": {
+     "publisher": "OsbornAlpha 宏观工作台（序列目录）",
+     "adapter": "macro_workbench",
+     "locator": "macro_series:US"
+    }
+   }
+  ],
+  "inputs_hash": "da64b2e2281ce00de6aa4d9c5572a753b9f7598bce36d832d3c4bf54a25a3375",
+  "abstained": false,
+  "claim": {
+   "selected": "recovery",
+   "classes": [
+    "recovery",
+    "overheat",
+    "stagflation",
+    "recession"
+   ],
+   "distribution": {
+    "recovery": 0.32575757575757575,
+    "overheat": 0.23484848484848486,
+    "stagflation": 0.2196969696969697,
+    "recession": 0.2196969696969697
+   },
+   "scores_are_not_probabilities": true,
+   "margin_pp": 9.090909,
+   "catalog_version": "us-catalog-2026-09-01"
+  },
+  "condition": {
+   "resolver": "macro_regime_replay",
+   "params": {
+    "region": "US",
+    "reference_period": "2026-09",
+    "macro_methodology_version": "v1.0",
+    "catalog_version": "us-catalog-2026-09-01"
+   },
+   "predicate": {
+    "op": "eq",
+    "rhs": "recovery"
+   },
+   "text": {
+    "zh": "US 2026-09 当期象限为“复苏”（同一分类函数在截止 vintage 下对同一参考期重算）",
+    "en": "US 2026-09 regime is \"recovery\" (same classifier re-run for the same reference month on the cutoff vintage)"
+   }
+  },
+  "horizon": {
+   "unit": "calendar_months",
+   "n": 3
+  },
+  "target": {
+   "kind": "period",
+   "period": "2026-12"
+  },
+  "label_policy": "cutoff_vintage",
+  "settle_after": "2027-01-01T00:00:00.000Z",
+  "settle_by": "2027-01-31T00:00:00.000Z",
+  "abstain_reason": null,
+  "code_version": "f4-fixture-code-version",
+  "batch_id": "00000000-0000-4000-8000-0000000019b1",
+  "registered_at": "2026-09-11T23:00:00.000Z",
+  "retrospective": false,
+  "created_at": "2026-09-11T23:00:00.000Z"
+ }
+}

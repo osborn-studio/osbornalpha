@@ -1,0 +1,25 @@
+{
+ "_source": "Synthetic September 2026 data for reference period 2026-09 (released 2026-10-01 … 2026-10-15). v1.0 rules: DGS10 +30bp 3M (overheat .5 / stagflation .3), CPI 3.1 (overheat .6 / stagflation .3), ISM 49.2, PPI 2.7, VIX 19.5; DTWEXBGS +1.88% and UNRATE +0.2pp unmatched. The argmax moves recovery → overheat, i.e. the nowcast registered on 2026-09-11 is a miss on the cutoff vintage.",
+ "fixture_version": "macro-fixture/1",
+ "observations": [
+  {"observation_id":"US_DFF:2026-09-30:fred-2026-10-01","series_id":"US_DFF","period_end":"2026-09-30","vintage_id":"fred-2026-10-01","value":3.75,"unit":"%","available_at":"2026-10-01T13:00:00.000Z"},
+  {"observation_id":"US_DGS10:2026-06-30:fred-2026-07-01","series_id":"US_DGS10","period_end":"2026-06-30","vintage_id":"fred-2026-07-01","value":4.55,"unit":"%","available_at":"2026-07-01T21:00:00.000Z"},
+  {"observation_id":"US_DGS10:2026-09-30:fred-2026-10-01","series_id":"US_DGS10","period_end":"2026-09-30","vintage_id":"fred-2026-10-01","value":4.85,"unit":"%","available_at":"2026-10-01T21:00:00.000Z"},
+  {"observation_id":"US_DTWEXBGS:2026-06-30:fred-2026-07-02","series_id":"US_DTWEXBGS","period_end":"2026-06-30","vintage_id":"fred-2026-07-02","value":101,"unit":"index","available_at":"2026-07-02T20:15:00.000Z"},
+  {"observation_id":"US_DTWEXBGS:2026-09-30:fred-2026-10-02","series_id":"US_DTWEXBGS","period_end":"2026-09-30","vintage_id":"fred-2026-10-02","value":102.9,"unit":"index","available_at":"2026-10-02T20:15:00.000Z"},
+  {"observation_id":"US_CPI_YOY:2026-09-30:bls-2026-10-15","series_id":"US_CPI_YOY","period_end":"2026-09-30","vintage_id":"bls-2026-10-15","value":3.1,"unit":"pct_yoy","available_at":"2026-10-15T12:30:00.000Z"},
+  {"observation_id":"US_UNRATE:2026-06-30:bls-2026-07-03","series_id":"US_UNRATE","period_end":"2026-06-30","vintage_id":"bls-2026-07-03","value":4.1,"unit":"%","available_at":"2026-07-03T12:30:00.000Z"},
+  {"observation_id":"US_UNRATE:2026-09-30:bls-2026-10-02","series_id":"US_UNRATE","period_end":"2026-09-30","vintage_id":"bls-2026-10-02","value":4.3,"unit":"%","available_at":"2026-10-02T12:30:00.000Z"},
+  {"observation_id":"US_ISM_PMI:2026-09-30:ism-2026-10-01","series_id":"US_ISM_PMI","period_end":"2026-09-30","vintage_id":"ism-2026-10-01","value":49.2,"unit":"index","available_at":"2026-10-01T14:00:00.000Z"},
+  {"observation_id":"US_PPI_FD_YOY:2026-09-30:bls-2026-10-14","series_id":"US_PPI_FD_YOY","period_end":"2026-09-30","vintage_id":"bls-2026-10-14","value":2.7,"unit":"pct_yoy","available_at":"2026-10-14T12:30:00.000Z"},
+  {"observation_id":"US_VIX:2026-09-30:fred-2026-10-01","series_id":"US_VIX","period_end":"2026-09-30","vintage_id":"fred-2026-10-01","value":19.5,"unit":"index","available_at":"2026-10-01T13:00:00.000Z"}
+ ],
+ "snapshots": [],
+ "series_catalog": {
+  "US": [],
+  "CN": []
+ },
+ "classifications": [
+  {"region":"US","reference_period":"2026-09","macro_methodology_version":"v1.0","visible_from":"2026-10-15T12:30:00.000Z","regime":{"primary_state":"overheat","secondary_state":"stagflation","scores":{"recovery":12.5,"overheat":24.5,"stagflation":19,"recession":10},"norm":{"recovery":0.1893939393939394,"overheat":0.3712121212121212,"stagflation":0.2878787878787879,"recession":0.15151515151515152},"coverage":0.8,"margin_pp":8.333333,"growth_axis":null,"inflation_axis":null},"observation_ids":["US_DFF:2026-09-30:fred-2026-10-01","US_DGS10:2026-06-30:fred-2026-07-01","US_DGS10:2026-09-30:fred-2026-10-01","US_DTWEXBGS:2026-06-30:fred-2026-07-02","US_DTWEXBGS:2026-09-30:fred-2026-10-02","US_CPI_YOY:2026-09-30:bls-2026-10-15","US_UNRATE:2026-06-30:bls-2026-07-03","US_UNRATE:2026-09-30:bls-2026-10-02","US_ISM_PMI:2026-09-30:ism-2026-10-01","US_PPI_FD_YOY:2026-09-30:bls-2026-10-14","US_VIX:2026-09-30:fred-2026-10-01"],"catalog":{"version":"us-catalog-2026-09-01","weights":{"US_DFF":25,"US_DGS10":15,"US_DTWEXBGS":10,"US_CPI_YOY":15,"US_UNRATE":10,"US_ISM_PMI":15,"US_PPI_FD_YOY":5,"US_VIX":5},"rules_version":"v1.0"}}
+ ]
+}

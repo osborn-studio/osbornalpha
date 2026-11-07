@@ -1,0 +1,13 @@
+{
+ "_source": "Synthetic: on 2026-11-01 the ISM and CPI feeds are withdrawn for reference period 2026-09, matched weight falls to 0.55 of the catalog, and the shared classifier returns no regime (macro spec §5.3: coverage < 0.6 is not classified).",
+ "fixture_version": "macro-fixture/1",
+ "observations": [],
+ "snapshots": [],
+ "series_catalog": {
+  "US": [],
+  "CN": []
+ },
+ "classifications": [
+  {"region":"US","reference_period":"2026-09","macro_methodology_version":"v1.0","visible_from":"2026-11-01T00:00:00.000Z","regime":null,"observation_ids":[],"catalog":{"version":"us-catalog-2026-09-01","weights":{"US_DFF":25,"US_DGS10":15,"US_DTWEXBGS":10,"US_CPI_YOY":15,"US_UNRATE":10,"US_ISM_PMI":15,"US_PPI_FD_YOY":5,"US_VIX":5},"rules_version":"v1.0"}}
+ ]
+}

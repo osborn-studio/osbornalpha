@@ -15,6 +15,7 @@
 | T18 public reads / admin routes | 待指挥提交（audit log staging 被 sandbox/approval policy 阻止） | 待复审 | Codex gpt-6-astra 实施 | 0 | 红测 11 suites missing imports；历史 cutoff 回归 1 failed / 54 passed；边界回归 4 failed / 11 passed；Task 18 61 passed；影响面 488 passed / 83 DB skipped；typecheck、lint PASS；db-one sandbox EPERM |
 
 | T16 review fixes | 本提交（`fix(judgments): T16 review fixes`） | 待复审 | Codex gpt-6-astra 实施 | 1 | 红测 7 failed / 38 passed；最终 51 passed / 7 DB skipped；typecheck、lint PASS；DB harness sandbox EPERM |
+| T19 macro_regime method / real macro wiring | 本提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 红测；502 passed / 83 DB skipped；typecheck、lint、golden --check PASS；CLI dry-run 缺配置；db-one EPERM |
 
 ## 偏差 · Task 1
 
@@ -246,3 +247,17 @@
 - `npm run typecheck && npm run lint` 最终 PASS（lint --max-warnings=0）；首次 typecheck 发现 fake TableClient 行类型不兼容，已通过展开 calibration row 修正。`git diff --check` PASS。
 - PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts` → IPC listen EPERM；换 `node --import tsx` → 127.0.0.1 listen EPERM。需指挥运行 db-one。该 suite 已在 scripts/ci/research-checks.ts 既有 F4 criticalSuites.push，未新增 suite；领取仍在 withClaimLock 内。
 - 并行提交偏差：本轮先写的 calibrate / cron 回归测试及 fake tables 装配被并行提交 8fa3d819 一并收入；本轮不改写该提交历史，剩余修复与追加测试限定所授权路径。
+
+## Task 19 — macro_regime@v1（F4-5a）
+
+- 实现方法、七节公式文档、三份 macro-fixture/1 合成夹具、确定时钟的 judgment-replay/1 黄金夹具与 byte-equal --check 构造脚本；登记 REGISTRY；补偿端到端验证同日两个快照、幂等、marker 与 draft 门控。
+- 状态适配：采用 active，因为已提交 macro/read-api.ts 的 classifyAsOf 与发布管线复用 buildRegimeInput + classifyRegime；publishable=false，三类 macro_workbench origin 的许可仍 unverified。MACRO_UPSTREAM_VERSION 直接取真实 METHODOLOGY_VERSION，当前值与计划一致为 v1.0。
+- 哈希适配：regime.ts 的 import closure 包含真实规则 RULES、WEIGHTS_V1、catalog、decimal；显式 deps 加入 resolver、macro/read-api、snapshots、freshness、db、dq/freshness；测试核对真实 read-api 的整个本地 import closure 全在哈希覆盖内。无需计划中的后续 v2 晋级；尚未登记的 v1 首次即覆盖真实实现。
+- 装配适配：deps.ts 按 MACRO_JUDGMENTS_ENABLED=1/true 构造 macroReadApi(supabaseMacroDb({admin,anon}),{judgments:true})，其余保留 unavailableMacroReadApi。上游 MacroUnavailable 是不同 class/code，装配边界转换为 F4 class/reason，仅转换此错误，其他错误透传。四组 MacroReadApi / RegimeResult / MacroSnapshotRow / MacroObservationRef 双向类型测试一致，无需修改双方契约。
+- 生产限制：真实 seriesCatalog 没有 created_at/updated_at，不能证明目录输入可用时间；gather 使用 buildOrAbstain 将其转为 input_unavailable 弃权，保留可构造的绑定快照（D1），不伪造时间。当前生产目录 ISM=missing、VIX=restricted；原计划 0.8 coverage / 9.090909pp 算例仅是保留的合成夹具，不能称为当前生产分类器输出。真实 norm 舍入到 6 位，由 0.01pp 容差覆盖。上游仍按当前批次发布资格过滤，不能还原 cutoff 时的批次资格；文档明确此限制。未修改 macro/facts/entities/industry。
+- 契约适配：gather 每次构造传 item.observedAt；produce 接收现有 ProduceWork，测试 WorkItem 仅在直接 gather 时使用固定 observedAt；内存库 setNow 固定到 2026-09-11T23:00:00.000Z，黄金行直接来自登记结果，不再事后覆盖 metadata。测试辅助使用 MemoryJudgmentsDb 的共享 tables 并预建 ingest batch，满足已提交 batch_id FK。setJobState {ok,updated_at} 由既有补偿实现处理，未改 SQL / 三套 DB。
+- 规格偏差：settle_by 按契约为目标月末 + 1 天 + 30 天（本例 2027-01-31）；claim 使用 margin_pp 而非 margin；upstream_version_mismatch、binding_mismatch、目录弃权保留可构造的快照（D1），不可构造时依既有 produce 语义。测试保留 draft override 门控，不再把生产方法描述为 draft。
+- TDD：首次方法测试 1 suite failed / 0 collected（缺实现）；开关测试 2 failed / 4 passed（含类型测试）；初版方法 13 failed / 8 passed（含开关套件，主要为已提交 batch FK）；共享 tables 修正后 2 failed / 14 passed（目录弃权与未生成黄金夹具）；目录构造修复和生成后相关 9 suites / 86 tests PASS。扩大哈希闭包断言先 1 failed / 17 passed，补齐 dq/freshness 与 macro/db 后全量判断层回归 PASS。
+- 验证命令：`npm test -- src/lib/judgments src/lib/macro/read-api.test.ts` → 42 suites passed / 4 skipped，502 tests passed / 83 DB skipped；`npm run typecheck && npm run lint` → PASS（max-warnings=0）；`git diff --check` → PASS。`node --import tsx scripts/judgments/build-replay-fixture.ts macro` → 15453 bytes；同命令加 `--check` → up to date。npx tsx 入口受 sandbox IPC listen EPERM，改用 node --import tsx。
+- 同步验证：`node --import tsx scripts/judgments/sync-methodologies.ts --dry-run --only macro_regime@v1` 因缺 NEXT_PUBLIC_SUPABASE_URL / ANON_KEY 无法运行数据库读取；同一 planMethodologySync 核心的内存 dry-run 测试通过：register / problems=[] / active / publishable=false / 64-hex formula_hash 与重算相同，未写库。需指挥在配置环境补跑真实 CLI dry-run。
+- PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH node --import tsx .claude/scratch/db-one.ts src/lib/judgments/settle.integration.test.ts` → listen 127.0.0.1 EPERM，需指挥 db-one 补验；本任务未新增数据库 integration suite、未领取 due judgments，无 criticalSuites / claim lock 改动。

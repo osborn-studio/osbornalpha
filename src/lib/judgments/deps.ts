@@ -2,9 +2,8 @@
 // Production wiring of the judgment layer (plan F4 Task 14) shared by /api/cron/judgments-settle,
 // scripts/judgments/settle.ts and the /api/admin/dq/quarantine judgments branch: the anon client for public reads
 // (RLS on: public RPCs and the inputs db), the service-role client for RPC writes and the dq tables, the inputs db
-// over anon reads + the frozen-source K-line reader, and MacroReadApi = unavailableMacroReadApi() until the macro
-// workbench lands (macro_regime_replay → Unavailable(macro_unavailable); the compensation scan → skipped with
-// info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
+// over anon reads + the frozen-source K-line reader. MacroReadApi uses the real macro workbench when
+// MACRO_JUDGMENTS_ENABLED is 1/true, otherwise unavailableMacroReadApi (info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
 // `git rev-parse HEAD` (+ "-dirty"); null means "refuse to apply".
 import {execFileSync} from 'node:child_process';
 import {supabaseTableClient} from '../db/table-client';
@@ -13,9 +12,11 @@ import {getAdminSupabase} from '../supabase/admin';
 import {getAnonSupabase} from '../supabase/anon';
 import {supabaseJudgmentsDb} from './db';
 import {anonJudgmentInputsDb} from './inputs-db';
-import {unavailableMacroReadApi} from './macro-api';
+import {MacroUnavailable,unavailableMacroReadApi} from './macro-api';
+import {supabaseMacroDb} from '../macro/db';
+import {macroReadApi,MacroUnavailable as UpstreamMacroUnavailable} from '../macro/read-api';
 import type {SettleDeps} from './settle';
-import type {JudgmentsDb} from './types';
+import type {JudgmentsDb,MacroReadApi} from './types';
 
 type Exec=(cmd:string,args:string[])=>string;
 const gitExec:Exec=(c,a)=>execFileSync(c,a,{encoding:'utf8',stdio:['ignore','pipe','ignore']});
@@ -41,11 +42,27 @@ export function adminJudgmentsDb(admin:ReturnType<typeof getAdminSupabase>=getAd
 export interface ProductionJudgmentDepsOptions{codeVersion:string;actor:'cron'|'script';triggeredBy:TriggeredBy;signal?:AbortSignal;admin?:ReturnType<typeof getAdminSupabase>}
 export function productionJudgmentDeps(o:ProductionJudgmentDepsOptions):SettleDeps{
  const admin=o.admin??getAdminSupabase(),anon=getAnonSupabase();
+ const enabled=process.env.MACRO_JUDGMENTS_ENABLED==='1'||process.env.MACRO_JUDGMENTS_ENABLED==='true';
+ const macro=enabled?adaptMacroApi(macroReadApi(supabaseMacroDb({admin,anon}),{judgments:true})):unavailableMacroReadApi();
  return {
   db:supabaseJudgmentsDb({anon,admin}),
-  inputsDb:anonJudgmentInputsDb({anon,macro:unavailableMacroReadApi()}),
+  inputsDb:anonJudgmentInputsDb({anon,macro}),
   tables:supabaseTableClient(admin),
   codeVersion:o.codeVersion,actor:o.actor,triggeredBy:o.triggeredBy,
   ...(o.signal?{signal:o.signal}:{}),
+ };
+}
+
+/** The upstream module owns a distinct error class. Normalize only that signal; transient errors still propagate. */
+function adaptMacroApi(api:MacroReadApi):MacroReadApi{
+ const read=async<T>(f:()=>Promise<T>):Promise<T>=>{
+  try{return await f();}catch(e){if(e instanceof UpstreamMacroUnavailable)throw new MacroUnavailable(e.code);throw e;}
+ };
+ return {
+  observation:id=>read(()=>api.observation(id)),
+  snapshot:id=>read(()=>api.snapshot(id)),
+  snapshotsSince:(marker,limit)=>read(()=>api.snapshotsSince(marker,limit)),
+  seriesCatalog:region=>read(()=>api.seriesCatalog(region)),
+  classifyAsOf:(region,period,cutoff,version)=>read(()=>api.classifyAsOf(region,period,cutoff,version)),
  };
 }
