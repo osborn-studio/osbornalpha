@@ -912,6 +912,7 @@ describe.skipIf(!enabled)('company digest on a replayed US fixture (§1.1 #4)',(
   expect((await sync()).status).toBe('success');
   const r=await digest();
   expect(r.status).toBe('success');expect(r.detail.evidence.indexed).toBeGreaterThan(100);
+  expect(((await pool.query(`select errors from public.ingest_batches where batch_id=$1`,[r.batchId])).rows[0].errors as {code:string}[]).some(e=>e.code==='unaccounted')).toBe(false);
   const ev=await rows();
   expect(ev.filter(e=>e.kind==='filing_published').length).toBeGreaterThan(5);
   expect(ev.every(e=>e.retired_at===null)).toBe(true);

@@ -47,6 +47,8 @@ describe('company digest cron',()=>{
   const body=await r.json();
   expect(body).toMatchObject({ok:true,limit:200,receipt:{batchId:'b',status:'success',errors:[{code:'skipped_summary',key:'i:US'}]}});
   expect(JSON.stringify(body)).not.toContain('stale_attempt":1');
+  mocks.run.mockResolvedValueOnce({...receipt,errors:[{code:'digest_issuer_failed',key:'i:US',message:'cause password=x'}],streams:[{...receipt.streams[0],outcome:'failed',code:'digest_issuer_failed',message:'cause password=x'}]});
+  expect(JSON.stringify(await (await GET(req('',AUTH))).json())).not.toContain('password');
   expect(body.receipt.streams).toEqual([{issuerId:'i',market:'US',sweep:false,outcome:'changed'}]);
   await POST(req('limit=7',AUTH));expect(mocks.run).toHaveBeenLastCalledWith({tag:'deps'},{mode:'incremental',limit:7,triggeredBy:'cron'});
  });

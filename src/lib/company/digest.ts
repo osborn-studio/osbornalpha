@@ -41,8 +41,8 @@ export interface DigestOptions{mode:'incremental'|'full';issuerIds?:string[];mar
 export class DigestError extends Error{constructor(public code:'code_version_missing'|'invalid_options',message?:string){super(message??code);this.name='DigestError';}}
 export interface PlannedStream{issuerId:string;market:Market;stateRev:number;sweep:boolean;source:'incremental'|'sweep'|'full'}
 export type StreamOutcomeKind='changed'|'unchanged'|'skipped_stale'|'skipped_unknown'|'failed'|'planned';
-export interface StreamOutcome{issuerId:string;market:Market;sweep:boolean;outcome:StreamOutcomeKind;code?:string;attemptId:number|null;basedOnRev:number|null;events:number;result:ReplaceResult|null;evidence:{indexed:number;facts:number}|null;retried:boolean;markFailedError?:boolean}
-export interface DigestDetail{events:ReplaceResult;attempted:number;succeeded:number;failed:number;skippedStale:number;skippedUnknown:number;swept:number;idle:boolean;backlogFailed:number;evidence:{indexed:number;facts:number}}
+export interface StreamOutcome{issuerId:string;market:Market;sweep:boolean;outcome:StreamOutcomeKind;code?:string;attemptId:number|null;basedOnRev:number|null;events:number;result:ReplaceResult|null;evidence:{indexed:number;facts:number}|null;retried:boolean;markFailedError?:boolean;/** first 200 chars of the cause (batch errors only; the cron receipt strips it) */message?:string}
+export interface DigestDetail{events:ReplaceResult;attempted:number;succeeded:number;failed:number;skippedStale:number;skippedUnknown:number;swept:number;idle:boolean;backlogFailed:number|null;evidence:{indexed:number;facts:number}}
 export interface DigestReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];streams:StreamOutcome[];idle:boolean;detail:DigestDetail}
 
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
@@ -83,17 +83,17 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
  const cache:ParsedSnapshotCache=deps.newCache?deps.newCache():new Map();   // per stream: kept only across its own stale_computation retry
  if(!ctx.dryRun){
   try{attemptId=await deps.db.beginAttempt(p.issuerId,p.market,ctx.now);}
-  catch(e){if(dbCode(e)==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';}else out.code='digest_issuer_failed';return out;}
+  catch(e){if(dbCode(e)==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';}else{out.code='digest_issuer_failed';out.message=errMsg(e);}return out;}
   out.attemptId=attemptId;
  }
- const fail=async(code:string)=>{
-  out.outcome='failed';out.code=code;
+ const fail=async(code:string,cause?:unknown)=>{
+  out.outcome='failed';out.code=code;if(cause!==undefined)out.message=errMsg(cause);
   if(!ctx.dryRun){try{await deps.db.markDigestFailed(p.issuerId,p.market,attemptId,deps.now());}catch{out.markFailedError=true;}}
   return out;
  };
  for(let attempt=0;attempt<2;attempt++){
   let env:ReadSnapshotResult;
-  try{env=await deps.readSnapshot(p.issuerId,p.market,{concepts:null,asOf:ctx.today,history:true});}catch{return fail('digest_issuer_failed');}
+  try{env=await deps.readSnapshot(p.issuerId,p.market,{concepts:null,asOf:ctx.today,history:true});}catch(e){return fail('digest_issuer_failed',e);}
   if(env.truncated)return fail('read_truncated');
   try{
    const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache});
@@ -105,14 +105,14 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
    if(code==='stale_computation'&&attempt===0){out.retried=true;continue;}
    if(code==='stale_attempt'){out.outcome='skipped_stale';out.code='stale_attempt';return out;}
    if(code==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';return out;}
-   return fail(code==='stale_computation'?code:'evidence_index_failed');
+   return fail(code==='stale_computation'?code:'evidence_index_failed',e);
   }
   let events,coverage;
   try{
    const [scope]=await deps.facts.scopeRows(p.market,[p.issuerId]);
    events=deriveIssuerEvents({rows:env.rows,filings:env.filings,cutoff:ctx.today});
    coverage=summarizeCoverage({rows:env.rows,filings:env.filings,scope:scope??null});
-  }catch{return fail('digest_issuer_failed');}
+  }catch(e){return fail('digest_issuer_failed',e);}
   out.events=events.length;out.basedOnRev=env.stateRev;
   if(ctx.dryRun){out.outcome='planned';return out;}
   try{
@@ -123,7 +123,7 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
    if(code==='stale_computation'&&attempt===0){out.retried=true;continue;}
    if(code==='stale_attempt'){out.outcome='skipped_stale';out.code='stale_attempt';return out;}
    if(code==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';return out;}
-   return fail(code==='stale_computation'||code==='invalid_event'?code:'digest_issuer_failed');
+   return fail(code==='stale_computation'||code==='invalid_event'?code:'digest_issuer_failed',e);
   }
  }
  return fail('stale_computation');
@@ -144,7 +144,7 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
  if(!dryRun)({batchId}=await startBatch(deps.tables,{producer:DIGEST_PRODUCER,dataset:DIGEST_DATASET,
   toolVersions:{events:EVENTS_VERSION,mappingGen:String(MAPPING_GEN),formulaVersion:FORMULA_VERSION,evidenceIndex:EVIDENCE_INDEX_VERSION},codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script'}));
  const ctx:Ctx={batchId,today,now,dryRun};
- const detailOf=(backlogFailed:number):DigestDetail=>({events:{...events},attempted,succeeded,failed,skippedStale,skippedUnknown,swept,idle,backlogFailed,evidence:{...evidence}});
+ const detailOf=(backlogFailed:number|null):DigestDetail=>({events:{...events},attempted,succeeded,failed,skippedStale,skippedUnknown,swept,idle,backlogFailed,evidence:{...evidence}});
  try{
   const planned=await selectStreams(deps,opts,now);idle=planned.length===0;
   for(let i=0;i<planned.length;i++){
@@ -163,7 +163,7 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
     case 'skipped_unknown':counts.duplicates++;skippedUnknown++;errors.push({code:'skipped_summary',key,message:JSON.stringify({unknown_stream:1})});break;
     case 'planned':counts.duplicates++;break;
     default:
-     counts.failed++;failed++;errors.push({code:o.code??'digest_issuer_failed',key});
+     counts.failed++;failed++;errors.push(o.message===undefined?{code:o.code??'digest_issuer_failed',key}:{code:o.code??'digest_issuer_failed',key,message:o.message});
      if(o.markFailedError)errors.push({code:'mark_failed_error',key});
    }
   }
@@ -176,8 +176,8 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
  }catch(e){
   if(dryRun)throw e;
   errors.push({code:'unknown',message:errMsg(e)});
-  try{await finishBatch(deps.tables,batchId!,{counts,errors},deps.now());}catch{/* left running; runbook marks it failed */}
-  try{await recordAttempt(deps.tables,DIGEST_DATASET,{ok:false,cadence:'daily',now:deps.now(),detail:{...detailOf(-1),error:errMsg(e)}});}catch{/* same */}
+  try{await finishBatch(deps.tables,batchId!,{counts,errors},deps.now());}catch{/* the batch stays 'running' (finishBatch itself failed); the original error below is what matters, the runbook closes stale running batches */}
+  try{await recordAttempt(deps.tables,DIGEST_DATASET,{ok:false,cadence:'daily',now:deps.now(),detail:{...detailOf(null),error:errMsg(e)}});}catch{/* same */}
   throw e;
  }
 }

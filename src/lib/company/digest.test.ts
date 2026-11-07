@@ -149,6 +149,38 @@ describe('runCompanyDigest',()=>{
   await runCompanyDigest({...h.deps,newCache:()=>{const m=new Map();made.push(m);return m;}},{mode:'incremental'});
   expect(made).toHaveLength(2);expect(made[0]).not.toBe(made[1]);
  });
+ it('mixed batch (changed, unchanged, stale_attempt, failed) balances on the real finishBatch: partial, no unaccounted; failure causes kept',async()=>{
+  const h=harness();const d=await stream(h);await disclose(h.facts,d,'2024-02-01','4');
+  await runCompanyDigest(h.deps,{mode:'incremental',limit:4});   // d digested, not swept
+  const a=await stream(h),b=await stream(h),c=await stream(h);
+  for(const [i,id] of [a,b,c].entries())await disclose(h.facts,id,'2024-02-01',String(i+1));
+  const db:CompanyDb={...h.db,replaceDigest:async(...x)=>{
+   if(x[0]===b)throw new CompanyDbError('stale_attempt');
+   if(x[0]===c)throw new Error('boom: password=hunter2');
+   return h.db.replaceDigest(...x);}};
+  const r=await runCompanyDigest({...h.deps,db},{mode:'incremental',limit:20});
+  const by=new Map(r.streams.map(s=>[s.issuerId,s.outcome]));
+  expect([by.get(a),by.get(b),by.get(c),by.get(d)]).toEqual(['changed','skipped_stale','failed','unchanged']);
+  const k=r.counts;expect(k.fetched).toBe(4);expect(k.fetched).toBe(k.inserted+k.duplicates+k.versioned+k.quarantined+k.failed);
+  expect(r.status).toBe('partial');
+  const errs=batchRow(h).errors as {code:string;key?:string;message?:string}[];
+  expect(errs.some(e=>e.code==='unaccounted')).toBe(false);
+  expect(errs).toContainEqual({code:'digest_issuer_failed',key:`${c}:US`,message:'boom: password=hunter2'});
+ });
+ it('beginAttempt failing with a non-unknown_stream error is a failed stream with its cause (no markDigestFailed: no attempt)',async()=>{
+  const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','1');
+  const mark=vi.fn(h.db.markDigestFailed);
+  const r=await runCompanyDigest({...h.deps,db:{...h.db,markDigestFailed:mark,beginAttempt:async()=>{throw new Error('db down');}}},{mode:'incremental'});
+  expect(r.streams[0]).toMatchObject({outcome:'failed',code:'digest_issuer_failed',attemptId:null,message:'db down'});
+  expect(r.counts).toMatchObject({fetched:1,failed:1});expect(mark).not.toHaveBeenCalled();
+ });
+ it('markDigestFailed throwing adds mark_failed_error and the stream still counts as failed',async()=>{
+  const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','1');
+  const r=await runCompanyDigest({...h.deps,db:{...h.db,markDigestFailed:async()=>{throw new Error('mark down');}},readSnapshot:async(...x)=>({...(await h.deps.readSnapshot(...x)),rows:[],truncated:true})},{mode:'incremental'});
+  expect(r.streams[0]).toMatchObject({outcome:'failed',code:'read_truncated',markFailedError:true});
+  expect(r.errors).toContainEqual({code:'read_truncated',key:`${a}:US`});expect(r.errors).toContainEqual({code:'mark_failed_error',key:`${a}:US`});
+  expect(r.counts).toMatchObject({fetched:1,failed:1});
+ });
  it('stale_computation twice → failed and backed off',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
   const mark=vi.spyOn(h.db,'markDigestFailed');
@@ -189,7 +221,7 @@ describe('runCompanyDigest',()=>{
   const mark=vi.spyOn(h.db,'markDigestFailed');
   const r=await runCompanyDigest({...h.deps,db:{...h.db,markDigestFailed:mark,replaceDigest:async()=>{throw new CompanyDbError('invalid_event');}}},{mode:'incremental'});
   expect(r.streams[0]).toMatchObject({outcome:'failed',code:'invalid_event'});
-  expect(r.errors).toContainEqual({code:'invalid_event',key:`${a}:US`});
+  expect(r.errors).toContainEqual({code:'invalid_event',key:`${a}:US`,message:'invalid_event'});
   expect(mark).toHaveBeenCalledTimes(1);
  });
  it('a sweep failing on the same state_rev is recorded (failed, backoff) and makes freshness not ok',async()=>{
