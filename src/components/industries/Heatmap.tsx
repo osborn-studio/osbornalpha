@@ -10,6 +10,8 @@ import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
 import type {AggMetric,Scheme} from '@/lib/industry/types';
 import {CoverageCell} from './CoverageCell';
+import {cellText} from './cell-text';
+import type {Translate} from './cell-text';
 import {SourceButton} from './SourceDrawer';
 import {brassBackground,heatmapModel,ALPHA_MAX,ALPHA_MIN} from './heatmap-model';
 import {industryPath,nodeName} from './hrefs';
@@ -48,7 +50,7 @@ export function Heatmap({scheme,nodes,periodEnds,cells,metric,header,preview,tab
                 <span className="truncate">{name}</span><span className="hidden font-mono text-[11px] text-text-dim sm:inline">{r.node.code}</span>
               </Link>
               {r.cells.map(c=>{
-                const title=t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${metric}`)});
+                const title=t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${metric}`),value:cellText(c.cell,metric,locale,t as unknown as Translate)});
                 const base=`min-h-[28px] w-full rounded-[3px] px-0.5 text-center font-mono text-[12px] tabular-nums ${c.mobileHidden?'hidden sm:flex':'flex'} items-center justify-center`;
                 if(!c.cell)return <span key={c.periodEnd} title={title} className={`${base} border border-border text-text-dim`}><CoverageCell cell={null} metric={metric} /></span>;
                 return (

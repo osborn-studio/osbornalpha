@@ -12,7 +12,8 @@ import {fetchIndustryJudgments,judgmentCardView} from '@/lib/industry/judgment-c
 import type {JudgmentsState} from '@/lib/industry/judgment-contract';
 import {StateNotice} from './StateNotice';
 
-export function JudgmentArea({enabled,subjectKey}:{enabled:boolean;subjectKey:string|null}){
+/** `scope`: the already-localised scheme and level the page shows, named in the empty state. */
+export function JudgmentArea({enabled,subjectKey,scope}:{enabled:boolean;subjectKey:string|null;scope:{scheme:string;level:string}}){
   const t=useTranslations('industries.judgments');
   const locale=useLocale()==='en'?'en':'zh';
   const active=enabled&&subjectKey!==null;
@@ -25,8 +26,8 @@ export function JudgmentArea({enabled,subjectKey}:{enabled:boolean;subjectKey:st
   },[active,subjectKey]);
   return (
     <section className="card-base flex flex-col gap-3" aria-label={t('title')} data-judgments={state.state}>
-      <div className="flex items-center gap-2"><h2 className="text-lg font-semibold">{t('title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span></div>
-      {(state.state==='disabled'||(state.state==='ok'&&state.cards.length===0))&&<StateNotice kind="noJudgment" />}
+      <div className="flex items-center gap-2"><h2 className="text-lg font-semibold">{t('title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><a href="/intel/methods" className="ml-auto text-xs">{t('methodsLink')}</a></div>
+      {(state.state==='disabled'||(state.state==='ok'&&state.cards.length===0))&&<StateNotice kind="noJudgment"><span className="text-text-dim">{t('scope',scope)}</span></StateNotice>}
       {state.state==='loading'&&<div role="status" aria-busy="true" className="h-24 rounded-lg bg-bg-elevated"><span className="sr-only">{t('title')}</span></div>}
       {state.state==='error'&&<p role="alert" className="text-sm text-danger">{t('loadFailed')} ({state.code})</p>}
       {state.state==='ok'&&state.cards.map(c=>{

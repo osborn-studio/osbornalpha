@@ -5,14 +5,14 @@
 // bottom sheet on mobile; Esc and the backdrop close it. Aggregate cells fetch the original replay
 // (public route, or the admin route in the internal preview) and offer "recompute on current
 // evidence"; valuation cells show the official comparison value only when the route attaches it.
-import {createContext,useCallback,useContext,useEffect,useMemo,useState} from 'react';
+import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import type {CSSProperties,ReactNode} from 'react';
 import {useLocale,useTranslations} from 'next-intl';
 import {formatMetricValue,formatMoney,formatValuation} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import {HistoryClassBadge} from './HistoryClassBadge';
 import {nodeName} from './hrefs';
-import {coverageOf,diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
+import {coverageOf,diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
 import type {AggregatePayload,DrawerPayload,RecomputePayload,ReplayPayload} from './drawer-model';
 
 const DrawerContext=createContext<{open:(p:DrawerPayload)=>void}|null>(null);
@@ -21,12 +21,6 @@ export function SourceDrawerProvider({children}:{children:ReactNode}){
   const [payload,setPayload]=useState<DrawerPayload|null>(null);
   const open=useCallback((p:DrawerPayload)=>setPayload(p),[]);
   const value=useMemo(()=>({open}),[open]);
-  useEffect(()=>{
-    if(!payload)return;
-    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setPayload(null);};
-    window.addEventListener('keydown',onKey);
-    return ()=>window.removeEventListener('keydown',onKey);
-  },[payload]);
   return (<DrawerContext.Provider value={value}>{children}{payload&&<DrawerPanel payload={payload} onClose={()=>setPayload(null)} />}</DrawerContext.Provider>);
 }
 
@@ -40,12 +34,13 @@ export function SourceButton({payload,children,className,label,style}:{payload:D
   );
 }
 
-export function SourceDot({payload,cx,cy,label}:{payload:DrawerPayload;cx:number;cy:number;label:string}){
+/** A chart dot: pointer-only. The table next to every chart is the keyboard and screen-reader path, so the dot is hidden from both. */
+export function SourceDot({payload,cx,cy}:{payload:DrawerPayload;cx:number;cy:number}){
   const ctx=useContext(DrawerContext);
   return (
-    <circle cx={cx} cy={cy} r={4} role="button" tabIndex={0} aria-label={label} strokeWidth={2} data-source-button=""
+    <circle cx={cx} cy={cy} r={4} tabIndex={-1} aria-hidden="true" strokeWidth={2} data-source-button=""
       className="cursor-pointer fill-[var(--bg-elevated)] stroke-[var(--accent)]"
-      onClick={()=>ctx?.open(payload)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();ctx?.open(payload);}}} />
+      onClick={()=>ctx?.open(payload)} />
   );
 }
 
@@ -76,15 +71,25 @@ function useJson<T>(url:string|null,parse:(j:unknown)=>T|null){
 
 function DrawerPanel({payload,onClose}:{payload:DrawerPayload;onClose:()=>void}){
   const t=useTranslations('industries.drawer');
+  const dialogRef=useRef<HTMLDialogElement>(null);
+  const closeRef=useRef<HTMLButtonElement>(null);
+  // native modal: Tab is trapped, the page behind is inert, Escape fires `cancel`; focus goes to the close button and returns to the opener
+  useEffect(()=>{
+    const dialog=dialogRef.current;
+    if(!dialog)return;
+    const active=document.activeElement;
+    return presentModal(dialog,closeRef.current,active instanceof HTMLElement?active:null);
+  },[]);
   return (
-    <div className="fixed inset-0 z-50">
-      <button type="button" aria-label={t('close')} onClick={onClose} className="absolute inset-0 h-full w-full cursor-default" style={{background:'color-mix(in srgb, var(--bg) 70%, transparent)'}} />
-      <aside role="dialog" aria-modal="true" aria-label={t('title')} data-drawer-kind={payload.kind}
+    <dialog ref={dialogRef} aria-label={t('title')} data-drawer-kind={payload.kind} onCancel={e=>{e.preventDefault();onClose();}}
+      className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-dvw max-w-none border-0 bg-transparent p-0 text-text backdrop:bg-transparent">
+      <button type="button" aria-label={t('close')} tabIndex={-1} onClick={onClose} className="absolute inset-0 h-full w-full cursor-default" style={{background:'color-mix(in srgb, var(--bg) 70%, transparent)'}} />
+      <div
         className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-xl border border-border bg-bg-elevated sm:inset-y-0 sm:left-auto sm:right-0 sm:max-h-none sm:w-[440px] sm:rounded-none sm:rounded-l-lg">
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-bg-card sm:hidden" aria-hidden="true" />
         <div className="flex items-start gap-2 border-b border-border p-4">
           <div className="min-w-0 flex-1"><Heading payload={payload} /></div>
-          <button type="button" onClick={onClose} aria-label={t('close')} className="flex h-8 w-8 items-center justify-center rounded text-text-dim hover:bg-[var(--accent-wash)]">
+          <button ref={closeRef} type="button" onClick={onClose} aria-label={t('close')} className="flex h-8 w-8 items-center justify-center rounded text-text-dim hover:bg-[var(--accent-wash)]">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
@@ -94,8 +99,8 @@ function DrawerPanel({payload,onClose}:{payload:DrawerPayload;onClose:()=>void})
           {payload.kind==='fact'&&<FactBody p={payload} />}
           {payload.kind==='membership'&&<MembershipBody p={payload} />}
         </div>
-      </aside>
-    </div>
+      </div>
+    </dialog>
   );
 }
 
@@ -104,7 +109,7 @@ function Heading({payload}:{payload:DrawerPayload}){
   const locale:Locale=useLocale()==='en'?'en':'zh';
   let title='',big='';
   if(payload.kind==='aggregate'){title=`${payload.nodeName} · ${t(`metrics.${payload.cell.metric}`)} · ${payload.cell.periodEnd}`;big=payload.cell.value!==null?formatMetricValue(payload.cell.metric,payload.cell.value,locale):'—';}
-  if(payload.kind==='valuation'){title=`${payload.nodeName} · ${payload.cell.metric} · ${payload.cell.tradeDate}`;big=formatValuation(payload.cell.metric,payload.cell.value,locale);}
+  if(payload.kind==='valuation'){title=`${payload.nodeName} · ${payload.cell.metric==='pe_ttm'?t('valuation.pe'):payload.cell.metric==='pb'?t('valuation.pb'):payload.cell.metric} · ${payload.cell.tradeDate}`;big=formatValuation(payload.cell.metric,payload.cell.value,locale);}
   if(payload.kind==='fact'){title=`${payload.issuerName} · ${payload.fact.concept} · ${payload.fact.periodEnd}`;big=formatMoney(payload.fact.value,payload.fact.unit,locale);}
   if(payload.kind==='membership'){title=`${payload.ticker??''} ${payload.issuerName} ∈ ${payload.nodeName}`;big='';}
   return (

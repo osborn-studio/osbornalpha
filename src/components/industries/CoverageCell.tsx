@@ -6,12 +6,13 @@ import {useLocale,useTranslations} from 'next-intl';
 import {formatMetricValue} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
 import type {AggMetric} from '@/lib/industry/types';
+import {missingReasonOf} from './cell-text';
 
 export function CoverageCell({cell,metric}:{cell:PublicCell|null;metric:AggMetric}){
   const t=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
-  if(!cell||cell.display==='missing'){
-    const reason=t(`missing.${cell?.missingReason??'absent'}`);
+  if(!cell||cell.display==='missing'||(cell.display==='value'&&cell.value===null)){
+    const reason=t(`missing.${missingReasonOf(cell)}`);
     return (<span className="font-mono text-text-dim" title={reason}>—<span className="sr-only"> {reason}</span></span>);
   }
   if(cell.display==='unresolved'){

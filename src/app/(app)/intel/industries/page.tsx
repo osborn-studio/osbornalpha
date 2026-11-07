@@ -74,7 +74,7 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
         {v?.state==='ok'&&v.kind==='aggregate'&&(
           <>
             <RunHeaderBar header={v.header} freshness={v.freshness} extra={t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} />
-            {v.freshness==='stale'&&<StateNotice kind="stale" values={{date:v.header.factsAsOf}} />}
+            {v.freshness==='stale'&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
             {v.header.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
             <div className="flex flex-wrap items-center gap-2">
               <LinkMenu label={t('controls.metric')} current={q.metric} options={AGG_METRICS.map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
@@ -89,8 +89,8 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
               :<ListTable scheme={q.scheme} nodes={v.nodes} periodEnds={v.periodEnds} cells={v.cells} companion={v.companion} metric={v.metric} header={v.header} preview={v.preview} />}
             <ValuationSnapshot scheme={q.scheme} nodes={v.nodes} block={v.valuation} preview={v.preview} title="title" />
             <section className="card-base" aria-label={t('judgments.title')}>
-              <div className="mb-2 flex items-center gap-2"><h2 className="text-lg font-semibold">{t('judgments.title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span></div>
-              <StateNotice kind="noJudgment" />
+              <div className="mb-2 flex items-center gap-2"><h2 className="text-lg font-semibold">{t('judgments.title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><a href="/intel/methods" className="ml-auto text-xs">{t('judgments.methodsLink')}</a></div>
+              <StateNotice kind="noJudgment"><span className="text-text-dim">{t('judgments.scope',{scheme:t(`schemes.${q.scheme}`),level:t(`levels.${q.level}`)})}</span></StateNotice>
             </section>
           </>
         )}

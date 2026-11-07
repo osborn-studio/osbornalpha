@@ -78,7 +78,7 @@
     },
     "stale": {
       "title": "Stale data",
-      "body": "Expected weekly; past the 2-day grace. The page keeps showing the latest active run (facts as of {date}); each cell's drawer names the run time."
+      "body": "Expected weekly; past the 2-day grace. The page keeps showing the latest active run (facts as of {date}); that run was activated {activatedAt} (generation {generation}). Each cell's drawer names the run time."
     },
     "error": {
       "title": "Read failed",
@@ -164,7 +164,7 @@
   "heatmap": {
     "label": "Heatmap",
     "industry": "Industry",
-    "cellTitle": "{industry} · {period} · {metric}: open the source drawer",
+    "cellTitle": "{industry} · {period} · {metric}: {value} (open the source drawer)",
     "caption": "Click a cell for its source drawer; click a name for the industry detail. One brass hue: shade means level, not up or down.",
     "mobileNote": "Narrow screens show the last 5 periods; see the table for the full series."
   },
@@ -198,6 +198,8 @@
   },
   "judgments": {
     "title": "Judgments",
+    "methodsLink": "方法注册表 Methods ↗",
+    "scope": "Scope: {scheme} · {level}. No judgment is registered for this scope.",
     "uncalibrated": "Uncalibrated · effective sample {n}/{threshold}",
     "calibrated": "Calibrated",
     "evaluated": "Evaluated",
@@ -227,6 +229,7 @@
     "edgar_companyfacts": "EDGAR companyfacts"
   },
   "detail": {
+    "periodEnd": "Period end",
     "summary": "Constituent summary",
     "members": "Members",
     "unresolved": "Unresolved",

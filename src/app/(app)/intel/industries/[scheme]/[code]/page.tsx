@@ -57,7 +57,7 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
             </section>
             <RunHeaderBar header={v.header} freshness={v.freshness} />
             {v.header?.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
-            {v.freshness==='stale'&&v.header&&<StateNotice kind="stale" values={{date:v.header.factsAsOf}} />}
+            {v.freshness==='stale'&&v.header&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
             <section className="card-base flex flex-wrap items-center gap-8" aria-label={t('detail.summary')}>
               <div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.members')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.count}</div></div>
               {scheme==='sw2021'&&<div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.unresolved')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.unresolved}</div></div>}
@@ -81,7 +81,7 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
               )}
             </section>
             {scheme==='sw2021'&&<ValuationSnapshot scheme={scheme} nodes={[v.node]} block={v.valuation} preview={v.preview} title="titleDetail" />}
-            <JudgmentArea enabled={judgmentsEnabled()} subjectKey={scheme==='sw2021'?industrySubjectKey(scheme,'2021',code):null} />
+            <JudgmentArea enabled={judgmentsEnabled()} subjectKey={scheme==='sw2021'?industrySubjectKey(scheme,'2021',code):null} scope={{scheme:t(`schemes.${scheme}`),level:t(`levels.${v.node.level}`)}} />
             <details className="card-base" open>
               <summary className="cursor-pointer text-lg font-semibold">{t('detail.methods')}</summary>
               <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-y-2">

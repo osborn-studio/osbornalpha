@@ -78,7 +78,7 @@
     },
     "stale": {
       "title": "数据过期",
-      "body": "期望每周更新，已超出 2 天宽限。页面继续显示最近一个 active 运行（事实截至 {date}），并在每个格的抽屉里写明运行时刻。"
+      "body": "期望每周更新，已超出 2 天宽限。页面继续显示最近一个 active 运行（事实截至 {date}）；该运行于 {activatedAt} 生效（代次 {generation}）。每个格的抽屉里写明运行时刻。"
     },
     "error": {
       "title": "读取失败",
@@ -164,7 +164,7 @@
   "heatmap": {
     "label": "热力图",
     "industry": "行业",
-    "cellTitle": "{industry} · {period} · {metric}：打开来源抽屉",
+    "cellTitle": "{industry} · {period} · {metric}：{value}（打开来源抽屉）",
     "caption": "点击格 → 来源抽屉；点击行名 → 行业详情。单色黄铜深浅只表示高低，不表示涨跌。",
     "mobileNote": "窄屏只显示最近 5 期，完整序列见表格。"
   },
@@ -198,6 +198,8 @@
   },
   "judgments": {
     "title": "判断",
+    "methodsLink": "方法注册表 Methods ↗",
+    "scope": "范围：{scheme} · {level}。该范围下暂无已登记的判断。",
     "uncalibrated": "未校准 · 有效样本 {n}/{threshold}",
     "calibrated": "已校准",
     "evaluated": "已评估",
@@ -227,6 +229,7 @@
     "edgar_companyfacts": "EDGAR companyfacts"
   },
   "detail": {
+    "periodEnd": "期末",
     "summary": "成分摘要",
     "members": "成分数",
     "unresolved": "未解析",

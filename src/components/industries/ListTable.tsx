@@ -5,10 +5,12 @@
 // code, period and source columns collapse; values stay buttons.
 import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
-import {formatMetricValue} from '@/lib/industry/display';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
 import type {AggMetric,Scheme} from '@/lib/industry/types';
 import {CoverageCell} from './CoverageCell';
+import {cellText} from './cell-text';
+import type {Translate} from './cell-text';
+import {cellAt} from './table-model';
 import {SourceButton} from './SourceDrawer';
 import {industryPath,nodeName} from './hrefs';
 
@@ -16,7 +18,8 @@ export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header
   const t=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
   const latest=periodEnds[periodEnds.length-1];
-  const at=(list:PublicCell[],code:string)=>list.find(c=>c.code===code&&c.periodEnd===latest)??null;
+  const tr=t as unknown as Translate;
+  const label=(name:string,c:PublicCell)=>t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${c.metric}`),value:cellText(c,c.metric,locale,tr)});
   return (
     <section aria-label={t('table.label')} className="card-base" style={{padding:'4px 0'}}>
       <table className="w-full text-sm">
@@ -34,7 +37,7 @@ export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header
         </thead>
         <tbody>
           {nodes.map(n=>{
-            const c=at(cells,n.code),y=at(companion,n.code);const name=nodeName(n,locale);
+            const c=cellAt(cells,n.code,latest),y=cellAt(companion,n.code,latest);const name=nodeName(n,locale);
             const payload=c?{kind:'aggregate' as const,scheme,code:n.code,nodeName:name,cell:c,header,preview}:null;
             return (
               <tr key={n.code} className="border-t border-border">
@@ -42,11 +45,11 @@ export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header
                 <td className="hidden py-1.5 font-mono text-xs text-text-dim sm:table-cell">{n.code}</td>
                 <td className="hidden py-1.5 text-right font-mono tabular-nums sm:table-cell">{c?<>{c.nMembers} <span className="text-text-dim">({c.nUnresolved})</span></>:'—'}</td>
                 <td className="hidden py-1.5 font-mono text-xs tabular-nums text-text-dim sm:table-cell">{latest??'—'}</td>
-                <td className="py-1.5 text-right">{payload?<SourceButton payload={payload} label={`${name} ${latest}`}><CoverageCell cell={c} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
+                <td className="py-1.5 text-right">{payload?<SourceButton payload={payload} label={label(name,c!)}><CoverageCell cell={c} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
                 <td className="py-1.5 text-right font-mono text-xs tabular-nums text-text-dim">{c?`${c.nWithData}/${c.nMembers+c.nUnresolved}`:'—'}</td>
                 <td className="py-1.5 text-right">
-                  {y&&y.status==='ok'&&y.value!==null
-                    ?<SourceButton payload={{kind:'aggregate',scheme,code:n.code,nodeName:name,cell:y,header,preview}} label={`${name} ${t(`metrics.${y.metric}`)}`} className="text-xs text-text-dim">{formatMetricValue(y.metric,y.value,locale)}</SourceButton>
+                  {y
+                    ?<SourceButton payload={{kind:'aggregate',scheme,code:n.code,nodeName:name,cell:y,header,preview}} label={label(name,y)} className="text-xs text-text-dim"><CoverageCell cell={y} metric={y.metric} /></SourceButton>
                     :<span className="font-mono text-xs text-text-dim" title={t('table.yoyNotStored')}>—</span>}
                 </td>
                 <td className="hidden py-1.5 pr-4 sm:table-cell">{payload&&<SourceButton payload={payload} label={`${t('table.sourceButton')} ${name}`} className="font-sans text-xs text-text-dim">{t('table.sourceButton')}</SourceButton>}</td>

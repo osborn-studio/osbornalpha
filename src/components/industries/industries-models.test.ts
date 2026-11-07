@@ -7,7 +7,9 @@ import {ISSUER_A,RUN_ID,cellRow,manifestOf,missingCell,runRow} from '@/lib/indus
 import {publicCell,runHeader} from '@/lib/industry/read';
 import {ALPHA_MAX,ALPHA_MIN,alphaFor,brassBackground,heatmapModel} from './heatmap-model';
 import {seriesGeometry} from './series-model';
-import {diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,replayUrl,roleSummary,short} from './drawer-model';
+import {cellText,missingReasonOf} from './cell-text';
+import {cellAt} from './table-model';
+import {diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short} from './drawer-model';
 import {constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from './hrefs';
 
 const node=(code:string,nameZh:string)=>({code,level:1,nameZh,nameEn:null,parentCode:null});
@@ -102,5 +104,54 @@ describe('hrefs',()=>{
  it('SW has no English names: the English UI shows the Chinese name',()=>{
   expect(nodeName(node('801120.SI','食品饮料'),'en')).toBe('食品饮料');
   expect(nodeName({code:'3674',nameZh:null,nameEn:'Semiconductors'},'zh')).toBe('Semiconductors');
+ });
+});
+
+describe('suppressed cells in the series',()=>{
+ it('insufficient-coverage cells break the line and do not stretch the axis',()=>{
+  const mk=(pe:string,value:string,nWith:number)=>({periodEnd:pe,cell:publicCell(cellRow({period_end:pe,value,n_with_data:nWith}))});
+  const pts=[mk('2021-12-31','0.40',10),mk('2022-12-31','0.95',2),mk('2023-12-31','0.42',10)];
+  expect(pts[1].cell?.display).toBe('insufficient');
+  const g=seriesGeometry(pts,'gross_margin','zh');
+  expect(g.dots.map(d=>d.periodEnd)).toEqual(['2021-12-31','2023-12-31']);
+  expect(g.segments).toHaveLength(2);
+  const only=seriesGeometry([pts[0],pts[2]],'gross_margin','zh');
+  expect(g.yTicks).toEqual(only.yTicks);   // 0.95 is not in the axis range
+ });
+});
+
+describe('cell text and table model',()=>{
+ const t=(k:string,v?:Record<string,string|number>)=>v?`${k}:${JSON.stringify(v)}`:k;
+ it('accessible text is the value, the coverage ratio, or the missing reason',()=>{
+  expect(cellText(publicCell(cellRow({value:'0.5'})),'gross_margin','zh',t)).toBe('50.0%');
+  expect(cellText(publicCell(cellRow({value:'0.5',n_with_data:2})),'gross_margin','zh',t)).toContain('coverage.ratio');
+  expect(cellText(null,'gross_margin','zh',t)).toBe('missing.absent');
+  expect(cellText(publicCell(missingCell({})),'gross_margin','zh',t)).toBe('missing.financial_excluded');
+ });
+ it('an ok-looking cell without a value reads as empty_set, not as a bare unit',()=>{
+  const c={...publicCell(cellRow({value:'0.5'})),value:null};
+  expect(missingReasonOf(c)).toBe('empty_set');
+  expect(missingReasonOf(null)).toBe('absent');
+  expect(cellText(c,'gross_margin','zh',t)).toBe('missing.empty_set');
+ });
+ it('cellAt picks the latest-period cell of a code (value and YoY companion alike)',()=>{
+  const list=[publicCell(cellRow({period_end:'2024-12-31'})),publicCell(cellRow({period_end:'2025-12-31'}))];
+  expect(cellAt(list,list[0].code,'2025-12-31')?.periodEnd).toBe('2025-12-31');
+  expect(cellAt(list,'nope','2025-12-31')).toBeNull();
+ });
+});
+
+describe('modal drawer focus flow',()=>{
+ it('opens modally, focuses the close button, and on cleanup closes and restores focus to the opener',()=>{
+  const log:string[]=[];
+  const dialog={open:false,showModal(){this.open=true;log.push('show');},close(){this.open=false;log.push('close');}};
+  const cleanup=presentModal(dialog,{focus:()=>log.push('focus-close')},{focus:()=>log.push('focus-opener')});
+  expect(log).toEqual(['show','focus-close']);
+  cleanup();
+  expect(log).toEqual(['show','focus-close','close','focus-opener']);
+ });
+ it('tolerates an already-closed dialog and a missing opener',()=>{
+  const dialog={open:true,showModal(){throw new Error('already open');},close(){this.open=false;}};
+  expect(()=>presentModal(dialog,null,null)()).not.toThrow();
  });
 });

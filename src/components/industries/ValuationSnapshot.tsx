@@ -15,6 +15,7 @@ import {nodeName} from './hrefs';
 
 export function ValuationSnapshot({scheme,nodes,block,preview,title}:{scheme:Scheme;nodes:NodeView[];block:ValuationBlock;preview:boolean;title:'title'|'titleDetail'}){
   const t=useTranslations('industries.valuation');
+  const tc=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
   return (
     <section aria-label={t(title)} className="card-base" data-valuation-state={block.state}>
@@ -32,7 +33,7 @@ export function ValuationSnapshot({scheme,nodes,block,preview,title}:{scheme:Sch
               const pe=block.cells.find(c=>c.code===n.code&&c.metric==='pe_ttm'),pb=block.cells.find(c=>c.code===n.code&&c.metric==='pb');
               if(!pe&&!pb)return null;
               const name=nodeName(n,locale);
-              const cellBtn=(c:typeof pe)=>c?<SourceButton payload={{kind:'valuation',scheme,code:n.code,nodeName:name,runId:block.runId,cell:c,preview}} label={`${name} ${c.metric} ${c.tradeDate}`}>{formatValuation(c.metric,c.value,locale)}</SourceButton>:<span className="font-mono text-text-dim">{t('unpublished')}</span>;
+              const cellBtn=(c:typeof pe)=>c?<SourceButton payload={{kind:'valuation',scheme,code:n.code,nodeName:name,runId:block.runId,cell:c,preview}} label={tc('heatmap.cellTitle',{industry:name,period:c.tradeDate,metric:c.metric==='pb'?t('pb'):t('pe'),value:formatValuation(c.metric,c.value,locale)})}>{formatValuation(c.metric,c.value,locale)}</SourceButton>:<span className="font-mono text-text-dim">{t('unpublished')}</span>;
               return (
                 <tr key={n.code} className="border-t border-border">
                   <td className="py-1.5">{name}</td>

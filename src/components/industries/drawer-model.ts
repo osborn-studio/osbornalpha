@@ -68,3 +68,20 @@ export function diffCounts(d:ReplayDiff){
 /** Evidence link of one fact (plan-2 public route, factIds mode). */
 export const factEvidenceUrl=(ticker:string|null,factId:string)=>ticker?`/api/facts/${encodeURIComponent(ticker)}?factIds=${encodeURIComponent(factId)}`:null;
 export const short=(hash:string|null)=>hash?`${hash.slice(0,4)}…${hash.slice(-4)}`:'—';
+
+/** The slice of HTMLDialogElement the drawer uses (so the focus flow is testable without a DOM). */
+export interface ModalDialog{open:boolean;showModal():void;close():void}
+export interface Focusable{focus():void}
+/**
+ * Open the drawer as a native modal dialog (the browser traps Tab inside it, makes the page inert and
+ * turns Escape into a cancel event), move focus to the close button, and return a cleanup that closes
+ * the dialog and puts focus back on whatever opened it.
+ */
+export function presentModal(dialog:ModalDialog,closeButton:Focusable|null,opener:Focusable|null):()=>void{
+  if(!dialog.open)dialog.showModal();
+  closeButton?.focus();
+  return ()=>{
+    if(dialog.open)dialog.close();
+    opener?.focus();
+  };
+}

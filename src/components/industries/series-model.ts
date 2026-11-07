@@ -1,6 +1,6 @@
 // src/components/industries/series-model.ts
-// SVG geometry of a series chart (spec §8.3, canvas "Detail" §3): one brass line over the ok cells,
-// broken at missing cells (a gap is a gap, never a 0), a dot per ok cell (each a source-drawer
+// SVG geometry of a series chart (spec §8.3, canvas "Detail" §3): one brass line over the displayed cells,
+// broken at missing or suppressed cells (a gap is a gap, never a 0), a dot per ok cell (each a source-drawer
 // button), four y ticks and ≤ 10 x labels. Coordinates use JS numbers; every label is formatted from
 // a decimal string, and the same series is always rendered as a table next to the chart.
 import {formatMetricValue} from '@/lib/industry/display';
@@ -14,7 +14,8 @@ export interface SeriesGeometry{
  segments:string[];dots:{x:number;y:number;periodEnd:string;cell:PublicCell}[];
  yTicks:{y:number;label:string}[];xLabels:{x:number;label:string}[];
 }
-const plotted=(c:PublicCell|null):c is PublicCell=>!!c&&c.status==='ok'&&c.value!==null&&Number.isFinite(Number(c.value));
+// only cells the page shows as a value are plotted: suppressed cells (insufficient coverage, unresolved over the limit) break the line and stay out of the axis range
+const plotted=(c:PublicCell|null):c is PublicCell=>!!c&&c.status==='ok'&&c.display==='value'&&c.value!==null&&Number.isFinite(Number(c.value));
 const r1=(n:number)=>Math.round(n*10)/10;
 
 export function seriesGeometry(points:SeriesPoint[],metric:AggMetric,locale:Locale,size:{width:number;height:number}={width:780,height:300}):SeriesGeometry{

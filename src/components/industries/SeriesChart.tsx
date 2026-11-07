@@ -6,6 +6,8 @@ import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
 import type {AggMetric,Scheme} from '@/lib/industry/types';
 import {CoverageCell} from './CoverageCell';
+import {cellText} from './cell-text';
+import type {Translate} from './cell-text';
 import {SourceButton,SourceDot} from './SourceDrawer';
 import {nodeName} from './hrefs';
 import {seriesGeometry} from './series-model';
@@ -16,17 +18,18 @@ export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}
   const locale=useLocale()==='en'?'en':'zh';
   const g=seriesGeometry(points,metric,locale);
   const name=nodeName(node,locale);
+  const label=(periodEnd:string,cell:PublicCell|null)=>t('heatmap.cellTitle',{industry:name,period:periodEnd,metric:t(`metrics.${metric}`),value:cellText(cell,metric,locale,t as unknown as Translate)});
   const payload=(cell:PublicCell)=>({kind:'aggregate' as const,scheme,code:node.code,nodeName:name,cell,header,preview});
   const table=(
     <div>
       <div className="mb-1.5 text-[10px] uppercase tracking-wide text-text-dim">{t('detail.tableEquivalent')}</div>
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs text-text-dim"><th className="py-1 font-normal">period_end</th><th className="py-1 text-right font-normal">{t(`metrics.${metric}`)}</th><th className="py-1 text-right font-normal">{t('table.coverage')}</th></tr></thead>
+        <thead><tr className="text-left text-xs text-text-dim"><th className="py-1 font-normal">{t('detail.periodEnd')}</th><th className="py-1 text-right font-normal">{t(`metrics.${metric}`)}</th><th className="py-1 text-right font-normal">{t('table.coverage')}</th></tr></thead>
         <tbody>
           {[...points].reverse().map(p=>(
             <tr key={p.periodEnd} className="border-t border-border">
               <td className="py-1 font-mono text-xs tabular-nums text-text-dim">{p.periodEnd}</td>
-              <td className="py-1 text-right">{p.cell?<SourceButton payload={payload(p.cell)} label={`${name} ${p.periodEnd}`}><CoverageCell cell={p.cell} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
+              <td className="py-1 text-right">{p.cell?<SourceButton payload={payload(p.cell)} label={label(p.periodEnd,p.cell)}><CoverageCell cell={p.cell} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
               <td className="py-1 text-right font-mono text-xs tabular-nums text-text-dim">{p.cell?`${p.cell.nWithData}/${p.cell.nMembers+p.cell.nUnresolved}`:'—'}</td>
             </tr>
           ))}
@@ -47,7 +50,7 @@ export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}
             {g.xLabels.map(l=><text key={l.x} x={l.x} y={g.height-8} textAnchor="middle">{l.label}</text>)}
           </g>
           {g.segments.map(d=><path key={d} d={d} fill="none" className="stroke-[var(--accent)]" strokeWidth={2} />)}
-          {g.dots.map(d=><SourceDot key={d.periodEnd} cx={d.x} cy={d.y} label={`${name} ${d.periodEnd}`} payload={payload(d.cell)} />)}
+          {g.dots.map(d=><SourceDot key={d.periodEnd} cx={d.x} cy={d.y} payload={payload(d.cell)} />)}
         </svg>
         <figcaption className="text-xs text-text-dim">{t('detail.chartCaption')}</figcaption>
       </figure>

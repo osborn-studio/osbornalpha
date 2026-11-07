@@ -13,7 +13,7 @@ export function FreshnessChip({status}:{status:FreshnessStatus}){
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs ${TEXT[status]}`} data-freshness={status}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${DOT[status]}`} />
-      {status} · {t(status)}
+      {t(status)}
     </span>
   );
 }

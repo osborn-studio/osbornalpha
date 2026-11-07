@@ -641,6 +641,12 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 64. 决定（R3-1）：已解析成分在得知退市日 `<=` 窗口起点时（无有效区间），`correct_industry_membership_windows` 在同一事务内把这些 `ok` 行改为 `quarantined`（不插后继），聚合排除；同时记 `dq_quarantine(membership_after_delist)`。
 65. 决定（R3-2）：`apply_sic_memberships` 先 `FOR UPDATE` 锁调度行，再以 `clock_timestamp()` 校验租约归属与未过期，然后才做任何写入。
 
+**修复批次 7（UI 复审）带来的记录**
+66. 偏差（画布抽屉内容未实现）：A 类抽屉缺 Σ 值与文件链接；B 类缺逐角色差异表、隔离链接、复制哈希；C 类缺 Σ mcap、相对差、历史类别、标记输入；D 类缺成分历史与解析过程。当前抽屉按规格 §8.5 的最小内容集实现（值/覆盖/回放/输入前 5/成分来源）。
+67. 偏差（对比度）：浅色主题下 `--accent`/`--warn` 与背景对比度约 2.9:1，低于 WCAG AA 4.5:1。属 DESIGN.md 令牌问题，留给 DESIGN.md 所有者；本计划未改令牌。
+68. 偏差（Task 18）：列表页 CSV 导出未实现；移动端"表格优先"未实现（移动端仍以热力图最近 5 期为主、表格视图一键可达）。
+69. 决定（Codex task16 P1）：SIC 调度改为每天 `0 2 * * *` 且带 `limit=200`（`vercel.json`）。cron 路由已透传 `limit`（1..500），`runMembershipsSic` 默认 200，到期间隔 `NEXT_RUN_MS=7 天`，所以每天最多处理 200 个到期发行人，US 范围在数日内排空，之后每个发行人每周刷新一次；`dq_freshness` 仍为 weekly。
+
 **本轮不实施（规格自己的门，非偏差，照录）**：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 
 ---
@@ -18009,7 +18015,7 @@ Expected: `6 skipped`。
 
 | job | 运行方式（当前） | 计划频率（UTC，规格 §10） | 门（`src/lib/industry/jobs.ts::jobGate`） | 新鲜度数据集 | 入口 |
 |---|---|---|---|---|---|
-| `memberships-sic` | **cron**（`vercel.json`） | `0 2 * * 0` | 无（SEC 不需要 token） | `industry.sic.classifications`、`industry.sic.memberships`（weekly） | `/api/cron/industry-sync?job=memberships-sic` |
+| `memberships-sic` | **cron**（`vercel.json`） | `0 2 * * *`（每天；每次最多 `limit=200` 个到期发行人，到期间隔 7 天，故每个发行人每周刷新一次） | 无（SEC 不需要 token） | `industry.sic.classifications`、`industry.sic.memberships`（weekly） | `/api/cron/industry-sync?job=memberships-sic&limit=200` |
 | `load-a-share` | 脚本 | `30 22 * * *` | `TUSHARE_TOKEN` | `issuers.a_stock`（daily） | `scripts/industry/sync.ts --job load-a-share` |
 | `facts-scope` | 脚本（apply 需开关） | `45 22 * * *` | apply 需 `FACTS_CN_INDUSTRY_UNIVERSE=1`（决策 E） | — | `--job facts-scope` |
 | `memberships-sw` | 脚本 | `0 2 * * 1` | `TUSHARE_TOKEN` | `industry.sw2021.classifications`、`industry.sw2021.source`、`industry.sw2021.memberships`（均 weekly；三步各自一个批次） | `--job memberships-sw [--l1 801120.SI]...` |
