@@ -89,3 +89,19 @@
 ## 合并 main 后的兼容（2026-11-07）
 
 已知差异：报表/抽屉/概览/packet 仍按单一发行人读取（company_read_snapshot），合并前身的事实不并入；指标代理已按 lineage 读取。后续：需要 lineage 版同快照读函数（新迁移）。
+
+## 恢复与收尾（2026-11-07，工具分工：Codex gpt-6-astra 实施，MiniMax M3 审计，Opus 校准）
+
+| 项 | 提交 | 审计 | 处置 |
+|---|---|---|---|
+| 合并 main（计划三、F6、行业、宏观 P1+P2） | d84455f9 | — | 8 个冲突按双方意图合并；main 的 `IndustryRow` 接入公司页概览 |
+| 计划三读类型兼容 | 7e412fba | Opus：P1 回放未按 lineage、P2 门槛按单发行人；MiniMax：merge-compat-mmx.md | 1df1800b（lineage 版指标回放与门槛） |
+| Task 19 e2e/清单/runbook/§17 | baf6c828, 0b6ae1a8 | Opus：P1 seq 3 vs 2、P2 估值区断言空转、§17 缺行；MiniMax：task19-mmx.md | 0b6ae1a8 |
+| lineage 门槛收紧 | 536f3509 | MiniMax：fixes2-*-mmx.md（逐条处置见 fixes2-mmx-disposition.md） | — |
+| 门禁修复（数据集注册、TabBar 前缀规则） | 2ae2ae4b | — | — |
+| 再合并 main（宏观 P3）+ 迁移重编号到 20261118*（未锁定，合并顺序 F3 之后） | 78e03161, 8483d73a | — | inventory 通过 |
+| e2e 登录选择器 | f06d9885 | — | — |
+
+门禁（8483d73a 后，最新 main）：`npm run typecheck`、`npm run lint` 通过；`npm run test:migrations` PASS；`npm run test:db` 603 files / 6891 passed / 1 failed（`evals/version.test.ts` 脏树判定，受指挥临时改动 `supabase/config.toml` 影响，单独重跑 7/7 通过）；公司集成套件在 `criticalSuites` 内通过。
+e2e：`e2e/company.spec.ts` 13 个用例只做 `--list` 校验；本机 Docker Supabase 按 owner 指令停用，托管库尚未应用本模块迁移，因此未实跑——列为 owner 事项（应用 20261118* 迁移后按 runbook §6 或 `E2E_BASE_URL` 运行，报告附 PR）。浏览器目测同上未做。
+审计工具：Kimi CLI 无凭据不可用（owner 改用 MiniMax）；MiniMax 只看差异、误报多，以 Opus 校准为准。
