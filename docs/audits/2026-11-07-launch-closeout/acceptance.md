@@ -39,3 +39,14 @@ Authenticated same-origin GET results (one sample, not p95):
 Limitations: transmission US/CN report `judgment_status: unavailable`; overview F4 says `No judgment yet`. Production agent confirms empty card set and is investigating initial settle error. Judgment-chain acceptance NOT passed. Cold cycle route still misses latency target. Console retains the preexisting manifest syntax error; patch is not published due GitHub write access. Static description still says judgment layer off by default although feature flag now enables its panel. Screenshots are retained in native CUA tool outputs (no local screenshot path exposed).
 
 Read-only console snippet authored by `gpt-6.1-sol`: `read-only-smoke.js`. It does not inspect authentication material and sends only same-origin GET requests.
+
+## Final deployment retest — judgment feature disabled
+
+Production deployment `dpl_DwaboWbskuigTUh2nJEqxwwmTpR8` serves the same approved SHA `01308b44347421f061cc03cef36a0f172df41bc6` with `MACRO_JUDGMENTS_ENABLED` removed. This supersedes the earlier enabled-but-unavailable runtime state above.
+
+Authenticated Chrome reload of `/macro` succeeds: real US indicators, snapshot 2026-11-07, Collection OK, verified 6/8; the F4 judgment panel is absent. Read-only same-origin GET confirmation:
+
+- transmission US: HTTP 200, `judgment_status: disabled`.
+- transmission CN: HTTP 200, `judgment_status: disabled`.
+
+Final verdict: macro facts workbench is deployed and authenticated smoke checks pass; judgment capabilities are intentionally disabled pending query serialization and upstream-version issues. The known manifest console error and latency limitation remain as documented. No broader retest or write action was performed for this flag-only redeploy.

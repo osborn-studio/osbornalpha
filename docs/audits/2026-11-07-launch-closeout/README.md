@@ -2,7 +2,13 @@
 
 状态：**事实层已部署并通过登录态验收；判断链路未通过，不能标记整体完成。**
 
-## 已部署的版本与注册状态
+## 最终发布处置
+
+为保留可用宏观事实页面并隐藏未通过验收的判断入口，已删除生产 `MACRO_JUDGMENTS_ENABLED`，再次部署相同且 CI 通过的 `01308b44347421f061cc03cef36a0f172df41bc6`。最终部署 `dpl_DwaboWbskuigTUh2nJEqxwwmTpR8`，地址 `https://stock-monitor-oeyz3cjii-gilosbornhellos-projects.vercel.app`，READY 并 alias `osbornalpha.com`；`MACRO_STRATEGY_ENABLED` 保持启用。v2 注册许可保留，弃权记录不删除或篡改。下面首次部署和故障过程为历史证据，判断 flag=1 不是最终配置。
+
+最终登录态复测通过：`/macro` 事实正常、F4 判断区消失，中美 transmission 均 HTTP 200 且 `judgment_status=disabled`。这是事实层发布验收通过，不是判断功能完成。
+
+## 首次部署的版本与注册状态
 
 - main / production codeVersion：`01308b44347421f061cc03cef36a0f172df41bc6`（包含 #132）。
 - CI：[42375057467](https://github.com/osborn-studio/osbornalpha/actions/runs/42375057467)，success。
@@ -18,7 +24,7 @@
 
 当前阻碍：
 
-1. 真实判断补登记链路失败；根因为 Supabase `.contains(inputs, JS array)` 将 JSONB 查询编码为 PostgreSQL 数组，导致语法错误。本地修复 `4ee12c7ccb42d25197f31dd5fb24fe1b35c49ee2`（`codex/fix-judgment-json-filter`）通过 52 项定向测试、定向类型检查及 lint，方法 hash 复查不变；全量类型检查受本机缺少 pdfjs-dist 依赖阻碍，不能记录为通过。生产 cron 尚未包含此修复，flag 仍为 1。传导返回 `judgment_status: unavailable`，总览无判断卡片。该项未验收通过，正在修复。
+1. 真实判断补登记链路失败；根因为 Supabase `.contains(inputs, JS array)` 将 JSONB 查询编码为 PostgreSQL 数组，导致语法错误。本地修复 `4ee12c7ccb42d25197f31dd5fb24fe1b35c49ee2`（`codex/fix-judgment-json-filter`）通过 52 项定向测试、定向类型检查及 lint，方法 hash 复查不变；全量类型检查受本机缺少 pdfjs-dist 依赖阻碍，不能记录为通过。生产 cron 尚未包含此修复；最终已移除判断 flag 隐藏入口。传导返回 `judgment_status: unavailable`，总览无判断卡片。该项未验收通过，正在修复。
 2. cycle-table 单次登录态 GET 为 13,106 ms；这是一次样本，不是 p95，仍未达到延迟目标。
 3. `/manifest.json` 被认证中间件重定向，浏览器保留 manifest 语法错误。局部修复 `67df3c62f2f67ac5538fc898f357b2bb9a186a73` 已通过 23 项定向测试及 lint，但尚未发布。
 4. GitHub 写权限受阻：本机钥匙串取凭据错误 `-25308`，connector 写分支/树返回 403。不能把本地修复记录为生产已修复。
