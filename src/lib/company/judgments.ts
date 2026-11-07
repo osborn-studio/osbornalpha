@@ -6,7 +6,7 @@
 // Every field the card adapter reads is validated here, so a malformed body fails closed instead of crashing the render.
 export interface Bilingual{zh:string;en:string}
 /** One F4 evidence input. Only `href` and a label are rendered; the rest of F4's shape is kept untouched. */
-export interface JudgmentInput{href?:string;label?:string|Bilingual;[k:string]:unknown}
+export interface JudgmentInput{href?:string|null;label?:string|Bilingual;[k:string]:unknown}
 export interface JudgmentCardDto{
  judgment_id:string;kind:string;lifecycle:string;calibration:string;retrospective?:boolean;
  as_of:string;registered_at:string;
@@ -51,7 +51,7 @@ function normalizeCard(c:unknown):JudgmentCardDto|null{
  const inputs=c.inputs??[];
  if(!Array.isArray(inputs))return null;
  for(const i of inputs){
-  if(!obj(i)||(i.href!==undefined&&!safeHref(i.href)))return null;
+  if(!obj(i)||(i.href!==undefined&&i.href!==null&&!safeHref(i.href)))return null;   // href may be null (F4 spec §9.2): plain text then
   if(i.label!==undefined&&!str(i.label)&&!bi(i.label))return null;
  }
  return {...c,condition:cond,settlement:st,calibration_summary:cs,inputs} as unknown as JudgmentCardDto;
@@ -69,8 +69,9 @@ export function checkJudgmentsResponse(body:unknown,asOf:string|null):JudgmentsC
    const ms=Date.parse(t);
    return Number.isNaN(ms)||new Date(ms).toISOString()>cutoff;   // an unparseable timestamp cannot be shown to precede the cutoff: fail closed
   };
-  // A calibration summary must prove it was computed by the cutoff (a missing computed_at cannot); valid_until is a horizon, not a computation time.
-  const calLate=(c:JudgmentCardDto)=>c.calibration_summary!==null&&(c.calibration_summary.computed_at===undefined||late(c.calibration_summary.computed_at));
+  // computed_at is not in F4's public DTO (spec §9.2): when present it must not be after the cutoff; when absent it is accepted
+  // because F4 enforces as_known server-side. valid_until is a horizon, not a computation time, and is not compared.
+  const calLate=(c:JudgmentCardDto)=>c.calibration_summary!==null&&late(c.calibration_summary.computed_at);
   if(cards.some(c=>late(c.registered_at)||late(c.settlement?.settled_at)||calLate(c)))return {ok:false,reason:'post_cutoff'};
  }
  return {ok:true,cards};

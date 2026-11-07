@@ -35,9 +35,16 @@ describe('response contract',()=>{
  it('fails closed when only the calibration was computed after the cutoff',()=>{
   expect(checkJudgmentsResponse(fx('calibration-leak-as-known'),'2024-06-30')).toEqual({ok:false,reason:'post_cutoff'});
  });
- it('in replay a calibration summary without computed_at cannot prove it precedes the cutoff',()=>{
+ it('computed_at is not in the public DTO: absent is accepted, present and on/before the cutoff is accepted',()=>{
   const b=fx('calibration-leak-as-known');delete b.cards[0].calibration_summary.computed_at;
-  expect(checkJudgmentsResponse(b,'2024-06-30')).toEqual({ok:false,reason:'post_cutoff'});
+  expect(checkJudgmentsResponse(b,'2024-06-30').ok).toBe(true);
+  b.cards[0].calibration_summary.computed_at='2024-06-30T23:00:00Z';
+  expect(checkJudgmentsResponse(b,'2024-06-30').ok).toBe(true);
+ });
+ it('an input with href null is valid (plain text)',()=>{
+  const b=fx('latest');b.cards[0].inputs=[{label:'x',href:null}];
+  const r=checkJudgmentsResponse(b,null);
+  expect(r.ok&&r.cards[0].inputs[0].href).toBeNull();
  });
  it('rejects an as_known response to a latest request and malformed bodies',()=>{
   expect(checkJudgmentsResponse(fx('as-known-2024-06-30'),null)).toEqual({ok:false,reason:'view_mismatch'});
