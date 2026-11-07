@@ -1,6 +1,6 @@
 // src/lib/documents/lease.test.ts
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
-import {guardCalls,withLeaseHeartbeat} from './lease';
+import {BudgetExceeded,guardCalls,withinBudget,withLeaseHeartbeat} from './lease';
 
 const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
@@ -41,6 +41,7 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
   await vi.advanceTimersByTimeAsync(1_500);                                    // a beat at 1 s is still in flight when the phase ends at 1.5 s
   expect(renew).toHaveBeenCalledTimes(1);expect(done).toBe(false);
   release();await vi.advanceTimersByTimeAsync(0);
+  expect(done).toBe(true);                                                     // the result is handed back exactly when the renewal has settled
   expect(await p).toBe('x');
   await vi.advanceTimersByTimeAsync(5_000);
   expect(renew).toHaveBeenCalledTimes(1);
@@ -82,5 +83,21 @@ describe('withLeaseHeartbeat (R1-P2-7, codex plan round 2)',()=>{
   expect(renew).toHaveBeenCalledTimes(3);
   expect(signal!.aborted).toBe(true);
   await expect(withLeaseHeartbeat(renew,async()=>1,{intervalMs:0})).rejects.toMatchObject({code:'invalid_input'});
+ });
+});
+
+describe('withinBudget',()=>{
+ beforeEach(()=>{vi.useFakeTimers();});
+ afterEach(()=>{vi.useRealTimers();});
+ it('passes the result, times out a stalled promise, refuses at once without budget, and leaves no timer',async()=>{
+  expect(await withinBudget(Promise.resolve(1),1_000)).toBe(1);
+  expect(vi.getTimerCount()).toBe(0);
+  const stalled=withinBudget(new Promise<number>(()=>{}),1_000);const seen=stalled.catch(e=>e);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(await seen).toBeInstanceOf(BudgetExceeded);
+  expect(vi.getTimerCount()).toBe(0);
+  await expect(withinBudget(Promise.resolve(2),0)).rejects.toBeInstanceOf(BudgetExceeded);
+  expect(await withinBudget(Promise.resolve(3),Number.POSITIVE_INFINITY)).toBe(3);
+  await expect(withinBudget(Promise.reject(new Error('boom')),1_000)).rejects.toThrow('boom');
  });
 });

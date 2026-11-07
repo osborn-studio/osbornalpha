@@ -7,14 +7,12 @@
  * bytes and extracts them in memory — no batch, no lease, no pages.json, no rows; prints page counts.
  * --apply runs runDocumentsExtract (ingest_batches dataset documents.extract, triggered_by script)
  * and needs a code version (VERCEL_GIT_COMMIT_SHA or a git checkout, '-dirty' when the tree has
- * changes). This is the extraction path while DOCUMENTS_EXTRACT_ENABLED is off (spec §12). A missing
- * worker bundle (build/extract-worker/extract-worker.mjs) is built first (codex plan round 5).
+ * changes). This is the extraction path while DOCUMENTS_EXTRACT_ENABLED is off (spec §12). The
+ * worker bundle (build/extract-worker/extract-worker.mjs + manifest) is always rebuilt first (T10 review).
  * Exit 0 on success, 1 when the batch (or any document in a dry run) failed, 2 on bad arguments.
  */
-import {existsSync} from 'node:fs';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {productionExtractDeps} from '../../src/lib/documents/extract/deps';
-import {workerEntry} from '../../src/lib/documents/extract/isolate';
 import {runDocumentsExtract} from '../../src/lib/documents/extract/run';
 import {buildExtractWorker} from './build-extract-worker';
 
@@ -42,7 +40,8 @@ async function main(){
  const codeVersion=resolveCodeVersion({allowGit:true});
  if(args.apply&&!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
  // R5-P2-1: a fresh checkout has no worker bundle (build/ is gitignored, only prebuild/predev make it): build it first
- if(!existsSync(workerEntry())){console.error(`building the extraction worker: ${await buildExtractWorker()}`);}
+ // T10 review: ALWAYS rebuild (a bundle left from older sources would label old output with the current versions)
+ console.error(`building the extraction worker: ${await buildExtractWorker()}`);
  const receipt=await runDocumentsExtract(productionExtractDeps({deadline:null,codeVersion}),{limit:Math.max(args.limit,args.documentIds.length),documentIds:args.documentIds.length?args.documentIds:undefined,dryRun:!args.apply,triggeredBy:'script'});
  console.log(JSON.stringify({batchId:receipt.batchId,status:receipt.status,counts:receipt.counts,idle:receipt.idle,documents:receipt.documents,errors:receipt.errors},null,1));
  const failed=receipt.status==='dry_run'?receipt.documents.some(d=>d.outcome==='failed'):receipt.status==='failed'||receipt.status==='partial';

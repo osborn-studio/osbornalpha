@@ -1,8 +1,5 @@
 // src/lib/documents/extract/run.test.ts
 import {randomUUID} from 'node:crypto';
-import {existsSync,mkdtempSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
 import {describe,expect,it,vi} from 'vitest';
 import {HEARTBEAT_MS} from '../lease';
 import {memoryTableClient} from '../../db/memory-table-client';
@@ -23,7 +20,7 @@ const layoutPage=(no:number,text:string):PageLayout=>{const a=assemblePage(text?
 
 function harness(over:Partial<ExtractDeps>={}){
  const db=memoryDocumentsDb();const store=memoryObjectStore();
- const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
+ const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset'],dq_quarantine:['id']});
  const calls:string[]=[];
  const deps:ExtractDeps={db,tables,store,now:()=>new Date(),deadline:null,codeVersion:CODE,
   extractPdf:async(bytes)=>{calls.push(new TextDecoder().decode(bytes));return {pages:[layoutPage(1,'𠀋😀 綜合損益表'),layoutPage(2,'')],hasTextLayer:true};},
@@ -123,24 +120,23 @@ describe('runDocumentsExtract',()=>{
    expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_lease_batch_id:OTHER});
   }finally{vi.useRealTimers();}
  });
- it('R5-P2-1: a missing worker bundle fails the batch as worker_missing before any claim — no attempt consumed, the document stays due',async()=>{
+ for(const setup of ['worker_missing','worker_stale'] as const)it(`R5-P2-1: a ${setup} preflight fails the batch as ${setup} before any claim — no attempt consumed, the document stays due`,async()=>{
   const h=harness();
   const doc=await seedPublicDocument(h.db,enc('%PDF-needs-the-worker'),{},h.store);
   let claims=0;const claim=h.db.claimExtractLease;
-  const deps={...h.deps,db:{...h.db,claimExtractLease:async(d:string,b:string,t:number)=>{claims++;return claim(d,b,t);}},
-   preflight:()=>existsSync(join(mkdtempSync(join(tmpdir(),'f3-no-bundle-')),'extract-worker.mjs'))?null:'worker_missing'};
+  const deps={...h.deps,db:{...h.db,claimExtractLease:async(d:string,b:string,t:number)=>{claims++;return claim(d,b,t);}},preflight:()=>setup};
   const r=await run(deps);
   expect(r).toMatchObject({status:'failed',documents:[],counts:{failed:1,fetched:0}});
-  expect(r.errors).toEqual([expect.objectContaining({code:'worker_missing'})]);
+  expect(r.errors).toEqual([expect.objectContaining({code:setup})]);
   expect(claims).toBe(0);
   expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_attempts:0,extract_lease_batch_id:null});
   expect(h.calls).toEqual([]);
   const dry=await run(deps,{dryRun:true});
-  expect(dry).toMatchObject({status:'dry_run',documents:[],errors:[{code:'worker_missing',message:'setup'}]});
+  expect(dry).toMatchObject({status:'dry_run',documents:[],errors:[{code:setup,message:'setup'}]});
   expect((await run(h.deps)).documents).toEqual([expect.objectContaining({documentId:doc,outcome:'extracted'})]);   // once ready, the same document extracts
  });
  it('extract_timeout, content hash mismatch, missing object and unsupported MIME are coded failures',async()=>{
-  const {db,store,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
+  const {db,store,tables,deps}=harness({extractPdf:async()=>{throw new ExtractTimeout();}});
   const slow=await seedPublicDocument(db,enc('%PDF-slow'),{},store);
   const swapped=await seedPublicDocument(db,enc('%PDF-real'),{source_ref:'2026090300866_c'});
   store.objects().set((await db.documentById(swapped))!.storage_path,{bytes:enc('%PDF-other'),mime:'application/pdf'});   // the committed store refuses a mismatching put, so swap the stored object directly
@@ -150,7 +146,11 @@ describe('runDocumentsExtract',()=>{
   const byDoc=Object.fromEntries(r.documents.map(d=>[d.documentId,d.code]));
   expect(byDoc).toEqual({[slow]:'extract_timeout',[swapped]:'content_hash_mismatch',[missing]:'object_get_failed',[json]:'unsupported_mime'});
   expect(r.counts).toMatchObject({fetched:4,failed:4,inserted:0});
-  for(const id of [slow,swapped,missing,json])expect((await db.documentById(id))!).toMatchObject({status:'stored',extract_lease_until:null});
+  for(const id of [slow,missing,json])expect((await db.documentById(id))!).toMatchObject({status:'stored',extract_lease_until:null});
+  // T10 review: a hash mismatch is terminal on first sight (extract_failed, no retries) and parked in quarantine
+  expect((await db.documentById(swapped))!).toMatchObject({status:'extract_failed',extract_lease_until:null});
+  expect((tables as ReturnType<typeof memoryTableClient>).rows('dq_quarantine')).toEqual([expect.objectContaining({reason_code:'content_hash_mismatch',natural_key:swapped,status:'open'})]);
+  expect(await db.storedDue(10)).not.toContainEqual(expect.objectContaining({document_id:swapped}));
  });
  it('a pages.json put failure neither fails nor finishes: the lease is left to expire and the attempt stays counted',async()=>{
   const {db,store,deps}=harness();
@@ -185,7 +185,7 @@ describe('runDocumentsExtract',()=>{
   expect((await db.documentById(b))!.status).toBe('stored');
   const again=await run(deps,{documentIds:[a]});
   expect(again.errors).toContainEqual({code:'skipped_summary',key:a,message:'not_stored:extracted'});
-  expect(again.idle).toBe(true);
+  expect(again.idle).toBe(false);                                              // idle only on the storedDue path
  });
  it('deadline: under MIN_DOC_MS left, nothing is claimed and deadline_hit is reported',async()=>{
   const {db,store,deps}=harness();
@@ -216,5 +216,63 @@ describe('runDocumentsExtract',()=>{
   const json=JSON.parse(new TextDecoder().decode(store.objects().get(e.pages_json_path)!.bytes));
   const file={recorded_at:'2026-11-06T00:00:00.000Z',source_url:'https://x/y_c.pdf',source_ref:'y_c',content_sha256:sha256Hex(pdf),bytes:pdf.length,page_count:2,extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION,pages_json:json};
   expect(parseRecordedFixture(JSON.stringify(file,null,1)).pagesJsonSha256).toBe(e.pages_json_sha256);
+ });
+ it('T10 review: dry run shares the integrity check — a swapped object is content_hash_mismatch and the extractor is never called',async()=>{
+  const {db,store,deps,calls}=harness();
+  const swapped=await seedPublicDocument(db,enc('%PDF-real'),{},store);
+  store.objects().set((await db.documentById(swapped))!.storage_path,{bytes:enc('%PDF-other'),mime:'application/pdf'});
+  const r=await run(deps,{dryRun:true});
+  expect(r.documents).toEqual([{documentId:swapped,outcome:'failed',code:'content_hash_mismatch'}]);
+  expect(calls).toEqual([]);
+  expect((await db.documentById(swapped))!).toMatchObject({status:'stored',extract_attempts:0});
+ });
+ it('T10 review: anything thrown after startBatch finishes the batch as failed, records a failed freshness attempt and rethrows',async()=>{
+  const {db,tables,deps}=harness();
+  const rows=tables as ReturnType<typeof memoryTableClient>;
+  const broken=withOverride(db,{storedDue:async()=>{throw new Error('rpc down');}});
+  await expect(run({...deps,db:broken})).rejects.toThrow('rpc down');
+  expect(rows.rows('ingest_batches')[0]).toMatchObject({status:'failed'});
+  expect(rows.rows('dq_freshness')[0]).toMatchObject({dataset:'documents.extract',consecutive_errors:1});
+  // the explicit-id lookup is covered the same way
+  const lookup=withOverride(db,{documentById:async()=>{throw new Error('lookup down');}});
+  await expect(run({...deps,db:lookup},{documentIds:['00000000-0000-4000-8000-000000000001']})).rejects.toThrow('lookup down');
+  expect(rows.rows('ingest_batches')[1]).toMatchObject({status:'failed'});
+ });
+ describe('T10 review: external calls are bounded by the remaining budget',()=>{
+  const budgeted=(h:ReturnType<typeof harness>,over:Partial<ExtractDeps>={})=>{
+   const t0=Date.now();
+   return {...h.deps,now:()=>new Date(Date.now()),deadline:new Date(t0+MIN_DOC_MS+30_000),...over};   // 120 s total: the stalled call is cut at 100 s, 20 s stay for finalization
+  };
+  it('a stalled storage read ends the document as object_get_failed in time; failExtract and the batch finalization still happen',async()=>{
+   vi.useFakeTimers();
+   try{
+    const h=harness();const doc=await seedPublicDocument(h.db,enc('%PDF-stall-get'),{},h.store);
+    const stalled=withOverride<ObjectStore>(h.store,{get:()=>new Promise<Uint8Array>(()=>{})});
+    const t0=Date.now();let endedAt=Infinity;
+    const p=run(budgeted(h,{store:stalled})).then(r=>{endedAt=Date.now();return r;});
+    await vi.advanceTimersByTimeAsync(110_000);
+    const r=await p;
+    expect(endedAt-t0).toBeLessThanOrEqual(100_000+1_000);                       // cut at deadline − reserve, not at the 120 s deadline
+    expect(r.documents).toEqual([{documentId:doc,outcome:'failed',code:'object_get_failed'}]);
+    expect(r.counts).toMatchObject({fetched:1,failed:1});
+    expect(r.status).toBe('failed');
+    expect(await h.db.documentById(doc)).toMatchObject({status:'stored',extract_lease_until:null,extract_attempts:1});   // failExtract released the lease
+    expect((h.tables as ReturnType<typeof memoryTableClient>).rows('ingest_batches')[0]).toMatchObject({status:'failed'});
+   }finally{vi.useRealTimers();}
+  });
+  it('a stalled upload ends the document as object_put_failed in time and leaves the lease to expire; the batch is finalized',async()=>{
+   vi.useFakeTimers();
+   try{
+    const h=harness();const doc=await seedPublicDocument(h.db,enc('%PDF-stall-put'),{},h.store);
+    const stalled=withOverride<ObjectStore>(h.store,{put:()=>new Promise<'created'>(()=>{})});
+    const p=run(budgeted(h,{store:stalled}));
+    await vi.advanceTimersByTimeAsync(110_000);
+    const r=await p;
+    expect(r.documents).toEqual([{documentId:doc,outcome:'failed',code:'object_put_failed'}]);
+    expect(await h.db.documentById(doc)).toMatchObject({status:'stored',current_extraction_id:null,extract_attempts:1});
+    expect((await h.db.documentById(doc))!.extract_lease_until).not.toBeNull();
+    expect((h.tables as ReturnType<typeof memoryTableClient>).rows('ingest_batches')[0]).toMatchObject({status:'failed'});
+   }finally{vi.useRealTimers();}
+  });
  });
 });

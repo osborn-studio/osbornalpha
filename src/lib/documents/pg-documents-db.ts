@@ -11,7 +11,7 @@
 import type {Pool} from 'pg';
 import {typeParsers} from '../db/pg-table-client';
 import {
- CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,approvalArg,assetsArg,checkWriteRows,docArg,timestampUuidCursor,tsArg,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkApprovalsLimit,checkIds,checkLimit,chunk,citationFromRow,
+ CANDIDATE_KEYS,IN_CHUNK,PUBLICATION_KEYS,READ_DOC_KEYS,REFS_CHUNK,approvalArg,assetsArg,checkWriteRows,docArg,timestampUuidCursor,versionCursor,tsArg,approvalFromRow,assetFromRow,candidateFromRow,candidatesWhere,checkApprovalsLimit,checkIds,checkLimit,chunk,citationFromRow,
  decodeCursor,documentFromRow,extractionFromRow,lookaheadLimit,pageFromRow,pageOf,publicationFromRow,publicationsWhere,readDocumentsArgs,regenFilter,scopeFromRow,sliceRows,sqlCursor,toDocumentsDbError,
 } from './db';
 import type {Envelope,PgErrorLike} from './db';
@@ -72,7 +72,7 @@ export function pgDocumentsDb(pool:Pool):DocumentsDb{
    if(changed.rowCount===0&&!(await one(`select 1 from public.extraction_approvals where approval_id = $1`,[approvalId])))throw new DocumentsDbError('not_found');
   },
   async documentVersions(source,sourceRef,page){
-   const limit=lookaheadLimit(page.limit);const after=page.cursor?Number(decodeCursor(page.cursor)[0]):null;
+   const limit=lookaheadLimit(page.limit);const after=page.cursor?versionCursor(page.cursor):null;
    const r=await run(`select * from public.disclosure_documents where source = $1 and source_ref = $2 and ($3::int is null or source_version > $3) order by source_version limit $4`,[source,sourceRef,after,limit+1]);
    return sliceRows(r.rows,limit,documentFromRow,x=>[Number(x.source_version)]);
   },

@@ -95,6 +95,18 @@ describe('POST /api/admin/documents/[id]/reprocess',()=>{
   expect((await (await post(await oldDoc('2026090300873_c'),{stage:'extract'})).json()).run).toEqual({state:'failed',code:'extract_failed'});
   spy.mockRestore();
  });
+ it("a runner setup failure (worker_missing / worker_stale, no documents) is a 503 with that code after the document was reset, never skipped/not_due; the flag also accepts 'true'",async()=>{
+  process.env.DOCUMENTS_EXTRACT_ENABLED='true';
+  for(const code of ['worker_missing','worker_stale']){
+   const id=await seedPublicDocument(db,enc(`%PDF-${code}`),{source_ref:`setup-${code}`});await seedExtraction(db,id,['x'],{extractorVersion:'docs-extract/0.9'});
+   S.run.mockResolvedValue({batchId:'b',status:'failed',counts:{},idle:false,documents:[],errors:[{code,message:'setup'}]});
+   const res=await post(id,{stage:'extract'});
+   expect(res.status).toBe(503);
+   expect(await res.json()).toEqual({id,stage:'extract',run:{state:'failed',code},error:code});
+   expect((await db.documentById(id))!).toMatchObject({status:'stored',extract_attempts:0});   // reset by requestExtract, nothing claimed
+   expect(S.audit).toHaveBeenCalledWith(expect.anything(),'document.reprocess',id,{id,stage:'extract',run:{state:'failed',code}});
+  }
+ });
  it('an audit failure after the change is logged, not a 500',async()=>{
   S.audit.mockRejectedValue(new Error('audit down'));
   const spy=vi.spyOn(console,'error').mockImplementation(()=>{});

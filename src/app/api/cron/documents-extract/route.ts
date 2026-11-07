@@ -1,8 +1,8 @@
 // src/app/api/cron/documents-extract/route.ts
 // Extraction trigger (spec §6.3, §7.3): CRON_SECRET bearer (same check as facts-sync; missing secret
 // → 503), limit 1..100 (default 10), maxDuration 300 with a 240 s deadline handed to the core (no
-// new document under 90 s left → deadline_hit). Gated: DOCUMENTS_EXTRACT_ENABLED must be '1', else
-// 403 extract_disabled (spec §12 degradation: until the Vercel pdf.js smoke passes, extraction runs
+// new document under 90 s left → deadline_hit). Gated: DOCUMENTS_EXTRACT_ENABLED must be '1'|'true' (documentsFlag), else after auth
+// 200 {skipped:'disabled'} with no side effects (spec §12 degradation: until the Vercel pdf.js smoke passes, extraction runs
 // only through scripts/documents/extract.ts). A missing VERCEL_GIT_COMMIT_SHA refuses the run (503).
 // The HTTP receipt carries codes, keys and counts only, never error messages.
 import {timingSafeEqual} from 'node:crypto';
@@ -10,6 +10,7 @@ import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {productionExtractDeps} from '@/lib/documents/extract/deps';
 import {runDocumentsExtract} from '@/lib/documents/extract/run';
+import {documentsFlag} from '@/lib/documents/flags';
 import type {ExtractReceipt} from '@/lib/documents/extract/run';
 
 export const dynamic='force-dynamic';
@@ -31,13 +32,13 @@ async function run(request:Request):Promise<NextResponse>{
  const secret=process.env.CRON_SECRET;
  if(!secret)return err('cron_unavailable','Cron unavailable',503);
  if(!authorized(request.headers.get('authorization'),secret))return err('unauthorized','Unauthorized',401);
+ if(!documentsFlag('DOCUMENTS_EXTRACT_ENABLED'))return NextResponse.json({skipped:'disabled'},{status:200,headers:{'Cache-Control':'no-store'}});   // after auth, before any parameter work, deps or DB
  const url=new URL(request.url);
  const limits=url.searchParams.getAll('limit');
  if(limits.length>1)return err('invalid_parameter:limit','limit may be given once',400);
  let limit=DEFAULT_LIMIT;
  if(limits.length===1){const v=limits[0];if(!/^\d{1,3}$/.test(v)||Number(v)<1||Number(v)>MAX_LIMIT)return err('invalid_parameter:limit',`limit must be 1..${MAX_LIMIT}`,400);limit=Number(v);}
- if(process.env.DOCUMENTS_EXTRACT_ENABLED!=='1')return err('extract_disabled','Document extraction is not enabled (DOCUMENTS_EXTRACT_ENABLED)',403);
- const codeVersion=resolveCodeVersion({allowGit:false});
+  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const started=new Date();
  try{

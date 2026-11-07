@@ -2,7 +2,7 @@
 // Admin reprocess (spec §9): requireAdminUser, JSON content type and same-origin check as
 // /api/admin/dq/quarantine/[id]. body {stage:'extract'|'classify'}.
 // extract → requestExtract (a version for the current EXTRACTOR_VERSION/TABLE_ALGO_VERSION already
-//   exists → 409 revision_exists), then, when DOCUMENTS_EXTRACT_ENABLED=1 and a deployment SHA is
+//   exists → 409 revision_exists), then, when DOCUMENTS_EXTRACT_ENABLED is on (documentsFlag: '1'|'true') and a deployment SHA is
 //   known, one runDocumentsExtract({documentIds:[id]}) right away; otherwise the document waits in
 //   'stored' for the cron or scripts/documents/extract.ts (run.state 'skipped' with the reason).
 // classify → classify() on the stored form_type/title/source_ref (listed sources only; uploads 409
@@ -19,6 +19,7 @@ import {supabaseDocumentsDb} from '@/lib/documents/db';
 import {classify} from '@/lib/documents/classify';
 import {productionExtractDeps} from '@/lib/documents/extract/deps';
 import {runDocumentsExtract} from '@/lib/documents/extract/run';
+import {documentsFlag} from '@/lib/documents/flags';
 import {CLASSIFIER_GEN,DocumentsDbError} from '@/lib/documents/types';
 import type {DocumentRow} from '@/lib/documents/types';
 
@@ -29,14 +30,18 @@ const DEADLINE_MS=240_000;
 const H={'Cache-Control':'private, no-store'};
 const json=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:H});
 type Run={state:'extracted'|'no_text_layer'|'failed'|'skipped';code?:string;extractionId?:string};
+/** Setup failures of the extraction runner (nothing was claimed): reported as 503 with the code, never as a skip. */
+const SETUP_CODES=new Set(['worker_missing','worker_stale']);
 
 async function extractNow(admin:ReturnType<typeof getAdminSupabase>,id:string):Promise<Run>{
- if(process.env.DOCUMENTS_EXTRACT_ENABLED!=='1')return {state:'skipped',code:'extract_disabled'};
+ if(!documentsFlag('DOCUMENTS_EXTRACT_ENABLED'))return {state:'skipped',code:'extract_disabled'};
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return {state:'skipped',code:'code_version_unavailable'};
  try{
   const r=await runDocumentsExtract(productionExtractDeps({deadline:new Date(Date.now()+DEADLINE_MS),codeVersion,admin}),{limit:1,documentIds:[id],dryRun:false,triggeredBy:'manual'});
   const d=r.documents[0];
+  const setup=r.documents.length===0&&r.status==='failed'?r.errors.find(e=>SETUP_CODES.has(e.code)):undefined;
+  if(setup)return {state:'failed',code:setup.code};
   if(!d)return {state:'skipped',code:'not_due'};
   return d.outcome==='extracted'||d.outcome==='no_text_layer'?{state:d.outcome,extractionId:d.extractionId}:{state:d.outcome==='failed'?'failed':'skipped',code:d.code};
  }catch(e){
@@ -79,6 +84,8 @@ export async function POST(request:Request,{params}:{params:Promise<{id:string}>
   }
   try{await audit({supabase:admin as unknown as ResearchSupabase,userId:user.id},'document.reprocess',id,result);}
   catch(auditError){console.error('[admin/documents/reprocess] audit failed',auditError instanceof Error?auditError.message:auditError);}
+  const run=result.run as Run|undefined;
+  if(run?.state==='failed'&&run.code!==undefined&&SETUP_CODES.has(run.code))return json({...result,error:run.code},503);   // the document was reset; the runner could not start
   return json(result);
  }catch(error){
   if(error instanceof AdminUnauthenticated)return json({error:'authentication required'},401);

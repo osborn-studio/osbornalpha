@@ -36,6 +36,17 @@ async function within<T>(p:Promise<T>,ms:number):Promise<T|undefined>{
  finally{if(t!==undefined)clearTimeout(t);}
 }
 
+/** Thrown by withinBudget when the time ran out first. */
+export class BudgetExceeded extends Error{constructor(){super('deadline_exceeded');this.name='BudgetExceeded';}}
+/** p, or BudgetExceeded after ms (ms <= 0: at once; infinite: p unbounded). The timer is cleared whichever side wins; a late result of p is discarded. */
+export async function withinBudget<T>(p:Promise<T>,ms:number):Promise<T>{
+ if(ms===Number.POSITIVE_INFINITY||Number.isNaN(ms))return p;
+ if(ms<=0){p.catch(()=>{});throw new BudgetExceeded();}
+ let t:ReturnType<typeof setTimeout>|undefined;
+ try{return await Promise.race([p,new Promise<never>((_,rej)=>{t=setTimeout(()=>rej(new BudgetExceeded()),Math.min(ms,2**31-1));})]);}
+ finally{if(t!==undefined)clearTimeout(t);}
+}
+
 /** fn gets the abort signal and quiesce(): stop the beats and settle one in flight — call it right before the phase releases its own lease (R3-P2-1). */
 export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signal:AbortSignal,quiesce:()=>Promise<void>)=>Promise<T>,opts:HeartbeatOptions):Promise<T>{
  if(!Number.isInteger(opts.intervalMs)||opts.intervalMs<1)throw new DocumentsDbError('invalid_input','invalid_interval');
@@ -71,7 +82,9 @@ export async function withLeaseHeartbeat<T>(renew:()=>Promise<boolean>,fn:(signa
   if(!ac.signal.aborted)ac.abort(lost('phase finished'));
  }
 }
-/** `target` with every method call refused (lease_lost) once `signal` is aborted. */
+/** `target` with every method call refused (lease_lost) once `signal` is aborted. Shallow: it guards the
+ *  methods of `target` itself; an object such a method returns (a nested client) is handed back unguarded,
+ *  so wrap each client you pass to the phase separately. */
 export function guardCalls<T extends object>(target:T,signal:AbortSignal):T{
  return new Proxy(target,{get(t,k,r){
   const v=Reflect.get(t,k,r);

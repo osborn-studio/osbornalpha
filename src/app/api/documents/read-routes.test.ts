@@ -261,4 +261,20 @@ describe('Task 11 review fixes',()=>{
   expect(res.status).toBe(404);
   expect((await res.json()).error.code).toBe('not_found');
  });
+ it('cursors that decode but carry bad values are 400 before any query (list: real adapter validation; extraction: route validation)',async()=>{
+  const {encodeCursor,readDocumentsArgs}=await import('@/lib/documents/db');
+  // the list cursor reaches the real argument builder (what supabaseDocumentsDb runs before its rpc)
+  S.anon=withOverride<DocumentsDb>(S.anon as DocumentsDb,{readDocuments:async(i,o)=>{readDocumentsArgs(i,o);return {rows:[],nextCursor:null};}});
+  const bad=['WyJ4IiwieCJd',encodeCursor(['2026-99-01T00:00:00Z','11111111-1111-4111-8111-111111111111']),encodeCursor(['2026-03-05T02:00:00.000Z','not-a-uuid'])];
+  for(const c of bad){
+   const r=await list('00268.HK',`cursor=${encodeURIComponent(c)}`);
+   expect(r.status,c).toBe(400);
+   expect((await r.json()).error.code).toBe('invalid_parameter:cursor');
+  }
+  expect((await list('00268.HK',`cursor=${encodeURIComponent(encodeCursor(['2026-03-05T02:00:00.000Z','11111111-1111-4111-8111-111111111111']))}`)).status).toBe(200);
+  const badExt=encodeCursor(['2026-99-01T00:00:00Z','11111111-1111-4111-8111-111111111111']);
+  const r=await doc(v1,`extractionsCursor=${encodeURIComponent(badExt)}`);
+  expect(r.status).toBe(400);
+  expect((await r.json()).error.code).toBe('invalid_parameter:extractionsCursor');
+ });
 });

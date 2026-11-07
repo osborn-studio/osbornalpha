@@ -35,14 +35,18 @@ describe('documents-extract cron',()=>{
   for(const qs of ['limit=0','limit=101','limit=x','limit=1&limit=2'])expect((await GET(req(qs,AUTH))).status,qs).toBe(400);
   expect(mocks.run).not.toHaveBeenCalled();
  });
- it('is gated by DOCUMENTS_EXTRACT_ENABLED=1 (403 extract_disabled otherwise)',async()=>{
-  for(const v of [undefined,'0','true']){
+ it("is gated by DOCUMENTS_EXTRACT_ENABLED ('1' or 'true'): after auth, 200 skipped disabled, nothing touched",async()=>{
+  for(const v of [undefined,'0','TRUE','yes']){
    restore('DOCUMENTS_EXTRACT_ENABLED',v);
    const res=await GET(req('',AUTH));
-   expect(res.status).toBe(403);
-   expect((await res.json()).error.code).toBe('extract_disabled');
+   expect(res.status,String(v)).toBe(200);
+   expect(res.headers.get('cache-control')).toBe('no-store');
+   expect(await res.json()).toEqual({skipped:'disabled'});
   }
-  expect(mocks.run).not.toHaveBeenCalled();
+  expect((await GET(req('',{authorization:'Bearer nope'}))).status).toBe(401);   // auth first
+  expect(mocks.run).not.toHaveBeenCalled();expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.codeVersion).not.toHaveBeenCalled();
+  restore('DOCUMENTS_EXTRACT_ENABLED','true');
+  expect((await GET(req('',AUTH))).status).toBe(200);expect(mocks.run).toHaveBeenCalledTimes(1);
  });
  it('refuses to apply without a code version (Vercel SHA only, no git)',async()=>{
   mocks.codeVersion.mockReturnValue(null);

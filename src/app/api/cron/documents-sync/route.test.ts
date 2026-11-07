@@ -28,8 +28,8 @@ describe('documents sync cron',()=>{
   if(original===undefined)delete process.env.CRON_SECRET;else process.env.CRON_SECRET=original;
   if(originalGate===undefined)delete process.env.DOCUMENTS_SYNC_ENABLED;else process.env.DOCUMENTS_SYNC_ENABLED=originalGate;
  });
- it('is disabled unless DOCUMENTS_SYNC_ENABLED is exactly "true": after auth, 200 skipped, no deps, no code-version lookup, no run',async()=>{
-  for(const v of [undefined,'1','TRUE','false','']){
+ it('is disabled unless DOCUMENTS_SYNC_ENABLED is "1" or "true" (documentsFlag): after auth, 200 skipped, no deps, no code-version lookup, no run',async()=>{
+  for(const v of [undefined,'TRUE','false','','0']){
    if(v===undefined)delete process.env.DOCUMENTS_SYNC_ENABLED;else process.env.DOCUMENTS_SYNC_ENABLED=v;
    const res=await GET(req('source=edgar',AUTH));
    expect(res.status,String(v)).toBe(200);expect(res.headers.get('cache-control')).toBe('no-store');expect(await res.json()).toEqual({skipped:'disabled'});
@@ -38,6 +38,8 @@ describe('documents sync cron',()=>{
   expect(mocks.deps).not.toHaveBeenCalled();expect(mocks.run).not.toHaveBeenCalled();expect(mocks.codeVersion).not.toHaveBeenCalled();
   process.env.DOCUMENTS_SYNC_ENABLED='true';
   expect((await GET(req('source=edgar',AUTH))).status).toBe(200);expect(mocks.run).toHaveBeenCalledTimes(1);
+  process.env.DOCUMENTS_SYNC_ENABLED='1';
+  expect((await GET(req('source=edgar',AUTH))).status).toBe(200);expect(mocks.run).toHaveBeenCalledTimes(2);
  });
  it('keeps maxDuration 300 and the real 240 s deadline constant',async()=>{
   expect(maxDuration).toBe(300);

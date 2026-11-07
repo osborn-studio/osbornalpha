@@ -14,7 +14,8 @@ export interface ExtractJob{kind:ExtractJobKind;bytes:Uint8Array;maxPages:number
 export interface ExtractResult{pages:PageLayout[];hasTextLayer:boolean}
 export async function runExtractJob(job:ExtractJob):Promise<ExtractResult>{
  const until=Date.now()+job.softMs;
- if(job.kind==='pdf')return extractPdf(job.bytes,{remainingMs:()=>until-Date.now(),maxPages:job.maxPages},job.assets?{assets:job.assets}:{});
- if(job.kind==='html'){const pages=extractHtml(job.bytes);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
+ const budget={remainingMs:()=>until-Date.now()};
+ if(job.kind==='pdf')return extractPdf(job.bytes,{...budget,maxPages:job.maxPages},job.assets?{assets:job.assets}:{});
+ if(job.kind==='html'){const pages=extractHtml(job.bytes,budget);return {pages,hasTextLayer:pages.some(p=>p.text!=='')};}
  throw new Error('unsupported_job');
 }

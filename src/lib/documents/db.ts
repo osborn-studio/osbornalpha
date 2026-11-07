@@ -41,8 +41,14 @@ const CURSOR_TS=/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}
 const CURSOR_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function timestampUuidCursor(cursor:string):[string,string]{
  const [at,id]=decodeCursor(cursor);
- if(typeof at!=='string'||typeof id!=='string'||!CURSOR_TS.test(at)||!CURSOR_UUID.test(id))throw new DocumentsDbError('invalid_input','invalid_cursor');
+ if(typeof at!=='string'||typeof id!=='string'||!CURSOR_TS.test(at)||canonTs(at,1)===null||!CURSOR_UUID.test(id))throw new DocumentsDbError('invalid_input','invalid_cursor');
  return [at,id];
+}
+/** A source_version keyset cursor: one non-negative safe integer (checked before any query; SQL casts would answer 22P02 / 22003). */
+export function versionCursor(cursor:string):number{
+ const parts=decodeCursor(cursor);const v=parts[0];
+ if(parts.length!==1||typeof v!=='number'||!Number.isSafeInteger(v)||v<0)throw new DocumentsDbError('invalid_input','invalid_cursor');
+ return v;
 }
 const MESSAGE_CODES:readonly DocumentsDbErrorCode[]=['lease_lost','not_eligible','revision_exists','evidence_incomplete','approval_revoked','not_publishable','invalid_citation','decided','already_staged','binding_conflict','invalid_expected_rev','stale_plan','not_hk_item','run_pending','invalid_chosen','item_not_open','too_many_approvals','not_found','invalid_input','cursor_regression'];
 const INPUT_STATES=new Set(['23514','23502','23503','22023','22P02','22007','22008','22003']);
@@ -53,10 +59,10 @@ export function toDocumentsDbError(e:PgErrorLike|DocumentsDbError):DocumentsDbEr
  if(e instanceof DocumentsDbError)return e;
  const message=e.message??'';
  const head=message.split(/[\s:]/,1)[0];
- if(e.code==='55P03'||head==='lease_lost')return new DocumentsDbError('lease_lost',message||'lease_lost');
- if((MESSAGE_CODES as readonly string[]).includes(head))return new DocumentsDbError(head as DocumentsDbErrorCode,message);
- if(e.code&&INPUT_STATES.has(e.code))return new DocumentsDbError('invalid_input',message);
- return new DocumentsDbError('unknown',message||'unknown');
+ if(e.code==='55P03'||head==='lease_lost')return new DocumentsDbError('lease_lost',message||'lease_lost',e.code??undefined);
+ if((MESSAGE_CODES as readonly string[]).includes(head))return new DocumentsDbError(head as DocumentsDbErrorCode,message,e.code??undefined);
+ if(e.code&&INPUT_STATES.has(e.code))return new DocumentsDbError('invalid_input',message,e.code);
+ return new DocumentsDbError('unknown',message||'unknown',e.code??undefined);
 }
 
 /** Opaque cursor: base64url(JSON array of the sort key). */
@@ -231,10 +237,17 @@ export function pageOf<T>(env:Envelope,map:(r:Record<string,unknown>)=>T,keys:st
  return {rows:(env.rows??[]).map(map),nextCursor:nc?encodeCursor(keys.map(k=>nc[k] as string|number)):null};
 }
 /** Opaque cursor → the SQL cursor object of read_documents / list_* (keys in order). */
+/** Element values are checked by key name before any rpc: *_at must pass canonTs, *_id be a UUID, pub_gen a non-negative integer (otherwise the SQL cast fails with 22007/22008/22P02). */
+function cursorValueOk(key:string,v:string|number):boolean{
+ if(key.endsWith('_at'))return typeof v==='string'&&CURSOR_TS.test(v)&&canonTs(v,1)!==null;
+ if(key.endsWith('_id'))return typeof v==='string'&&CURSOR_UUID.test(v);
+ if(key==='pub_gen')return typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
+ return true;
+}
 export function sqlCursor(cursor:string|null|undefined,keys:string[]):Record<string,string|number>|null{
  if(!cursor)return null;
  const parts=decodeCursor(cursor);
- if(parts.length!==keys.length)throw new DocumentsDbError('invalid_input','invalid_cursor');
+ if(parts.length!==keys.length||keys.some((k,i)=>!cursorValueOk(k,parts[i])))throw new DocumentsDbError('invalid_input','invalid_cursor');
  return Object.fromEntries(keys.map((k,i)=>[k,parts[i]]));
 }
 export const READ_DOC_KEYS=['available_at','document_id'];
@@ -307,7 +320,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
   async documentVersions(source,sourceRef,page){
    const limit=lookaheadLimit(page.limit);
    let q=c.from('disclosure_documents').select('*').eq('source',source).eq('source_ref',sourceRef);
-   if(page.cursor)q=q.gt('source_version',Number(decodeCursor(page.cursor)[0]));
+   if(page.cursor)q=q.gt('source_version',versionCursor(page.cursor));
    return sliceRows(await rows(q.order('source_version').limit(limit+1)),limit,documentFromRow,r=>[Number(r.source_version)]);
   },
   async knownSourceRefs(issuer,source,refs){

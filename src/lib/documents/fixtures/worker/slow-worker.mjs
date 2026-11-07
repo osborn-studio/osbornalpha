@@ -12,6 +12,8 @@ if(workerData.mode==='slow-final-page'){
  parentPort.postMessage({ok:true,result:{pages:[],hasTextLayer:false}});
 }else if(workerData.mode==='block'){
  for(;;){/* never yields */}
+}else if(workerData.mode==='oom'){
+ const hold=[];for(;;)hold.push(new Array(1_000_000).fill(hold.length));   // grows the heap until the resource limit
 }else if(workerData.mode==='fail'){
  parentPort.postMessage({ok:false,error:{name:'Error',message:'bad xref',pages:null}});
 }else{

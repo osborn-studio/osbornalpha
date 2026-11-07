@@ -71,6 +71,12 @@ describe('cursor codec and chunking',()=>{
 });
 
 describe('toDocumentsDbError',()=>{
+ it('keeps the SQLSTATE (Task 7 recheck N1)',()=>{
+  expect(toDocumentsDbError({code:'23503',message:'fk'})).toMatchObject({code:'invalid_input',sqlstate:'23503'});
+  expect(toDocumentsDbError({code:'22023',message:'invalid_input: assets'})).toMatchObject({code:'invalid_input',sqlstate:'22023'});
+  expect(toDocumentsDbError({code:'XX000',message:'boom'})).toMatchObject({code:'unknown',sqlstate:'XX000'});
+  expect(toDocumentsDbError({message:'boom'}).sqlstate).toBeUndefined();
+ });
  it('maps SQLSTATE and the code-as-first-word convention',()=>{
   expect(toDocumentsDbError({message:'lease_lost',code:'55P03'})).toMatchObject({name:'DocumentsDbError',code:'lease_lost'});
   expect(toDocumentsDbError({message:'canceling statement due to lock timeout',code:'55P03'}).code).toBe('lease_lost');
@@ -102,7 +108,7 @@ function stub(answers:Record<string,(args:Record<string,unknown>)=>unknown>,tabl
  };
  return {db:supabaseDocumentsDb(client as unknown as SupabaseClient),calls,queries};
 }
-const pgDocRow={document_id:'d1',issuer_id:'i1',source:'hkexnews',market:'HK',source_ref:'r_c',source_version:1,supersedes_document_id:null,observed_replacement:false,form_type:null,doc_class:'annual_report',
+const pgDocRow={document_id:'11111111-1111-4111-8111-111111111111',issuer_id:'i1',source:'hkexnews',market:'HK',source_ref:'r_c',source_version:1,supersedes_document_id:null,observed_replacement:false,form_type:null,doc_class:'annual_report',
  classifier_gen:1,title:'t',language:'zh',source_url:'u',content_sha256:'a'.repeat(64),bytes:'1024',mime:'application/pdf',storage_path:'blobs/x.pdf',acquisition:{http_status:200},
  published_at:'2026-03-20 09:00:00.123456+00',published_at_precision:'instant',available_at:'2026-03-20T09:00:00.123456+00:00',available_date:'2026-03-20',fiscal_year:2025,fiscal_period:'FY',
  period_end:'2025-12-31',filing_source_ref:null,permission:'public',owner_user_id:null,license_ref:null,status:'stored',current_extraction_id:null,extract_lease_until:null,
@@ -116,12 +122,12 @@ describe('supabaseDocumentsDb wiring',()=>{
  });
  it('calls each write function with p_* arguments; requestExtract passes the current versions',async()=>{
   const {db,calls}=stub({
-   claim_document_sync_lease:()=>true,insert_document_version:()=>({outcome:'inserted',document_id:'d1'}),finish_document_extract:()=>'e1',request_document_extract:()=>null,
+   claim_document_sync_lease:()=>true,insert_document_version:()=>({outcome:'inserted',document_id:'11111111-1111-4111-8111-111111111111'}),finish_document_extract:()=>'e1',request_document_extract:()=>null,
    reconcile_document_sync_scope:()=>2,decide_candidate:()=>({status:'confirmed'}),request_candidates_regen:()=>3,publish_citations:()=>1,insert_citation:()=>'c1',
   });
   expect(await db.claimSyncLease('i','hkexnews','b',600)).toBe(true);
   const doc=docInsert();
-  expect(await db.insertDocumentVersion('i','hkexnews','b',doc,[])).toEqual({outcome:'inserted',document_id:'d1'});
+  expect(await db.insertDocumentVersion('i','hkexnews','b',doc,[])).toEqual({outcome:'inserted',document_id:'11111111-1111-4111-8111-111111111111'});
   expect(await db.finishExtract('d','b',extractionInsert(1),[pageInsert(1,'x')])).toBe('e1');
   await db.requestExtract('d','actor');
   expect(await db.reconcileScope('hkexnews',[])).toBe(2);
@@ -152,12 +158,12 @@ describe('supabaseDocumentsDb wiring',()=>{
   expect(calls.map(c=>[c.fn,(c.args.p_rows??c.args.p_refs) as unknown[]]).map(([f,r])=>[f,(r as unknown[]).length])).toEqual([['insert_candidates',WRITE_MAX],['write_candidate_checks',0],['known_source_refs',REFS_CHUNK],['known_source_refs',3]]);
  });
  it('readDocuments sends the SQL cursor object and returns an opaque next cursor; rows are normalised',async()=>{
-  const {db,calls}=stub({read_documents:()=>({rows:[pgDocRow],row_count:1,next_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'d1'}})});
+  const {db,calls}=stub({read_documents:()=>({rows:[pgDocRow],row_count:1,next_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'11111111-1111-4111-8111-111111111111'}})});
   const p=await db.readDocuments('i',{asOf:'2026-04-01',limit:1});
   expect(p.rows[0]).toMatchObject({bytes:1024,published_at:'2026-03-20T09:00:00.123456Z',available_at:'2026-03-20T09:00:00.123456Z',created_at:'2026-03-20T09:00:01.000Z'});
-  expect(decodeCursor(p.nextCursor!)).toEqual(['2026-03-20T09:00:00.123456+00:00','d1']);
+  expect(decodeCursor(p.nextCursor!)).toEqual(['2026-03-20T09:00:00.123456+00:00','11111111-1111-4111-8111-111111111111']);
   await db.readDocuments('i',{asOf:'2026-04-01',limit:1,cursor:p.nextCursor,source:'hkexnews',allVersions:true});
-  expect(calls[1].args).toEqual({p_issuer:'i',p_as_of:'2026-04-01',p_source:'hkexnews',p_doc_class:null,p_from:null,p_to:null,p_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'d1'},p_limit:1,p_all_versions:true});
+  expect(calls[1].args).toEqual({p_issuer:'i',p_as_of:'2026-04-01',p_source:'hkexnews',p_doc_class:null,p_from:null,p_to:null,p_cursor:{available_at:'2026-03-20T09:00:00.123456+00:00',document_id:'11111111-1111-4111-8111-111111111111'},p_limit:1,p_all_versions:true});
   await expect(db.readDocuments('i',{asOf:'2026-04-01',limit:1001})).rejects.toMatchObject({code:'invalid_input'});
  });
  it('approvalsFor reads unrevoked rows with limit + 1 and refuses more than the limit',async()=>{
@@ -263,5 +269,19 @@ describe('canonTs / tsSortKey',()=>{
  });
  it('the row mapper refuses an unparsable timestamp with a DocumentsDbError, never a RangeError',()=>{
   expect(()=>documentFromRow({...pgDocRow,published_at:'garbage'})).toThrowError(expect.objectContaining({code:'unknown',message:'bad_timestamp'}));
+ });
+});
+
+describe('cursor value validation (before any query)',()=>{
+ const U='11111111-1111-4111-8111-111111111111';
+ it('sqlCursor, timestampUuidCursor and versionCursor reject undecodable values with invalid_cursor',async()=>{
+  const {encodeCursor,sqlCursor,timestampUuidCursor,versionCursor,READ_DOC_KEYS,PUBLICATION_KEYS}=await import('./db');
+  for(const f of [()=>sqlCursor(encodeCursor(['x','x']),READ_DOC_KEYS),()=>sqlCursor(encodeCursor(['2026-99-01T00:00:00Z',U]),READ_DOC_KEYS),()=>sqlCursor(encodeCursor(['2026-03-05T02:00:00Z','u']),READ_DOC_KEYS),
+   ()=>sqlCursor(encodeCursor([U,-1]),PUBLICATION_KEYS),()=>sqlCursor(encodeCursor([U,1.5]),PUBLICATION_KEYS),()=>timestampUuidCursor(encodeCursor(['2026-02-30T00:00:00Z',U])),
+   ()=>versionCursor(encodeCursor(['x'])),()=>versionCursor(encodeCursor([-1])),()=>versionCursor(encodeCursor([1,2]))])
+   expect(f).toThrow(/invalid_cursor/);
+  expect(sqlCursor(encodeCursor(['2026-03-05T02:00:00.123456+00:00',U]),READ_DOC_KEYS)).toEqual({available_at:'2026-03-05T02:00:00.123456+00:00',document_id:U});
+  expect(sqlCursor(encodeCursor([U,3]),PUBLICATION_KEYS)).toEqual({candidate_id:U,pub_gen:3});
+  expect(versionCursor(encodeCursor([2]))).toBe(2);
  });
 });
