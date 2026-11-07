@@ -13,7 +13,7 @@ export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){
   const {db}=macroRouteDeps();
   const snap=await db.snapshot(id);
   if(!snap)return errorResponse('not_found','snapshot not found',404);
-  const observations=(await db.observationsByIds(snap.observation_ids)).map(publicObservation);
+  const observations=(await db.observationsByIds(snap.observation_ids)).map(r=>({...publicObservation(r),code_version:r.code_version}));
   const body:Record<string,unknown>={catalogVersion:snap.catalog_version,snapshot:snap,observations};
   if(process.env.MACRO_JUDGMENTS_ENABLED==='1'){
    const r=await db.regimeOf(id);

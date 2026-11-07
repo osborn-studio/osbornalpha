@@ -103,6 +103,21 @@ describe('overviewEnvelope',()=>{
   expect(calls.retrievalsByIds??0).toBe(0);
   expect(calls.seriesHistory??0).toBe(0);
  });
+ it('reads exactly the frozen ids (manifest, history, previous manifest) and compact derived rows carry a null retrieval_id',async()=>{
+  const {db,tables}=await setup();
+  const s1=await publish(db);const s2=await publish(db);
+  const seen:string[][]=[];
+  const spy=new Proxy(db,{get(t,k,r){const v=Reflect.get(t,k,r);if(k!=='observationsByIds')return typeof v==='function'?v.bind(t):v;return (ids:string[])=>{seen.push([...ids]);return (v as MacroDb['observationsByIds']).call(t,ids);};}}) as MacroDb;
+  await overviewEnvelope({db:spy,tables,now:()=>NOW},'US',TODAY);
+  expect([...new Set(seen[0])].sort()).toEqual([...new Set([...s2.observation_ids,...s2.history_ids,...s1.observation_ids])].sort());
+  seen.length=0;
+  const env=await overviewEnvelope({db:spy,tables,now:()=>NOW},'US',TODAY,{compact:true});
+  expect(seen).toHaveLength(1);
+  expect([...new Set(seen[0])].sort()).toEqual([...new Set([...s2.observation_ids,...s1.observation_ids])].sort());
+  const dgs=env.indicators.find(r=>r.series_id==='US_DGS10')!;
+  expect(dgs.retrieval_id).toBeNull();
+  expect(dgs.evidence).toEqual([]);
+ });
  it('a snapshot keeps its frozen history: accepting a quarantined older value later changes only newly published snapshots (第 4 稿 P1-8)',async()=>{
   const {db,deps}=await setup();
   const s1=await publish(db);

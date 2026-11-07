@@ -10,7 +10,7 @@ import type {MacroDb} from './db';
 import {canonical,compare,subtract,yoyPct} from './decimal';
 import {collectionStatus,datasetOf,releaseTimeliness} from './freshness';
 import type {CollectionStatus} from './freshness';
-import {catalogCounts,catalogItemsOf} from './snapshots';
+import {catalogItemsOf} from './snapshots';
 import type {Bilingual,CatalogCounts,ChangeKind,MacroSeriesDef,ObservationRow,Region,Timeliness} from './types';
 
 export interface IndicatorRow{
@@ -60,7 +60,7 @@ function latestTwo(rows:ObservationRow[]):Map<string,ObservationRow[]>{
 type Provenance={retrieval_ids:string[];evidence:{retrieval_id:string;sha256:string}[]};
 /** Native retrievals behind each row (derived: all ancestors), resolved level by level: one observationsByIds per
  *  derivation level and one retrievalsByIds for everything (第 4 稿 P2-3). */
-async function provenanceOf(db:MacroDb,rows:ObservationRow[]):Promise<Map<string,Provenance>>{
+export async function resolveClosure(db:Pick<MacroDb,'observationsByIds'>,rows:ObservationRow[]):Promise<Map<string,ObservationRow>>{
  const known=new Map(rows.map(r=>[r.observation_id,r]));
  let frontier=[...new Set(rows.flatMap(r=>r.derived_from??[]))].filter(id=>!known.has(id));
  for(let depth=0;frontier.length>0&&depth<MAX_DEPTH;depth++){
@@ -68,6 +68,10 @@ async function provenanceOf(db:MacroDb,rows:ObservationRow[]):Promise<Map<string
   for(const r of got)known.set(r.observation_id,r);
   frontier=[...new Set(got.flatMap(r=>r.derived_from??[]))].filter(id=>!known.has(id));
  }
+ return known;
+}
+async function provenanceOf(db:MacroDb,rows:ObservationRow[]):Promise<Map<string,Provenance>>{
+ const known=await resolveClosure(db,rows);
  const leaves=(r:ObservationRow,depth=0):string[]=>r.retrieval_id?[r.retrieval_id]:depth>=MAX_DEPTH?[]:(r.derived_from??[]).flatMap(id=>{const i=known.get(id);return i?leaves(i,depth+1):[];});
  const perRow=new Map(rows.map(r=>[r.observation_id,[...new Set(leaves(r))]]));
  const sha=new Map((await db.retrievalsByIds([...new Set([...perRow.values()].flat())])).map(x=>[x.retrieval_id,x.sha256]));
@@ -131,5 +135,5 @@ export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,
   if(timeliness==='late')note(def.id,'late',latest.period_end);
  }
  return {snapshotId:snap.snapshot_id,asOf:snap.as_of,catalogVersion:snap.catalog_version,methodologyVersion:snap.methodology_version,collection,
-  indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:snap.catalog_counts??await catalogCounts(deps.db,region)};
+  indicators:rows.filter(r=>keep(r.series_id)),changes:{counts,items:opts.compact?[]:changeItems},catalogCounts:snap.catalog_counts};
 }

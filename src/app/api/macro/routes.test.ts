@@ -106,9 +106,49 @@ describe('GET /api/macro/series/[id]',()=>{
   const asOf=await (await get('US_DGS10','?asOf=2026-10-01')).json();
   expect(asOf.observations).toEqual([]);   // seed became available 2026-11-01
  });
- it('diff transform gives exact decimal period-over-period differences',async()=>{
+ it('diff transform returns computed rows that never reuse the source evidence (T13-1)',async()=>{
   const body=await (await get('US_DGS10','?transform=diff')).json();
-  expect(body.observations.map((o:{value_text:string})=>o.value_text)).toEqual(['0.1','0.1','0.1']);
+  const obs=body.observations as {observation_id:string|null;value_text:string;retrieval_id:string|null;locator:unknown;evidence_sha256:string|null;computed:{kind:string;version:string;inputs:string[]}}[];
+  expect(obs.map(o=>o.value_text)).toEqual(['0.1','0.1','0.1']);
+  const ids=[seed.ids.get('US_DGS10|2026-07-31'),seed.ids.get('US_DGS10|2026-08-31'),seed.ids.get('US_DGS10|2026-09-30'),seed.ids.get('US_DGS10|2026-10-31')];
+  expect(ids.every(Boolean)).toBe(true);
+  obs.forEach((o,i)=>{
+   expect(o).toMatchObject({observation_id:null,retrieval_id:null,locator:null,evidence_sha256:null,computed:{kind:'diff',version:'macro-diff/1',inputs:[ids[i],ids[i+1]]}});
+  });
+  const raw=await (await get('US_DGS10')).json();
+  expect(raw.observations[0].computed).toBeUndefined();
+  expect(raw.observations[0].observation_id).toBe(ids[0]);
+ });
+ it('diff keeps the first requested period by reading one preceding observation (T13-4)',async()=>{
+  const body=await (await get('US_DGS10','?transform=diff&from=2026-10-01&to=2026-10-31')).json();
+  expect(body.observations).toHaveLength(1);
+  expect(body.observations[0]).toMatchObject({period_end:'2026-10-31',value_text:'0.1',computed:{inputs:[seed.ids.get('US_DGS10|2026-09-30'),seed.ids.get('US_DGS10|2026-10-31')]}});
+ });
+ it('derived series expose the exact native ancestor closure with evidence and code_version (T13-2)',async()=>{
+  const body=await (await get('US_DGS10')).json();
+  const anc=body.provenance.ancestors as {observation_id:string;series_id:string;retrieval_id:string;evidence_sha256:string;locator:unknown;code_version:string;version:number;value_text:string;period_end:string}[];
+  expect(anc.length).toBeGreaterThan(0);
+  const jul=anc.find(a=>a.observation_id===seed.ids.get('US_DGS10_D|2026-07-31'))!;
+  expect(jul).toMatchObject({series_id:'US_DGS10_D',period_end:'2026-07-31',value_text:'3.95',retrieval_id:seed.retrievalId,evidence_sha256:seed.sha256,locator:{kind:'csv_row'}});
+  expect(typeof jul.code_version).toBe('string');
+  expect(anc.every(a=>a.retrieval_id===seed.retrievalId)).toBe(true);
+  expect(typeof body.observations[0].code_version).toBe('string');
+  const snap=await (await snapshot(req(`/snapshots/${snapshotId}`),{params:Promise.resolve({id:snapshotId})})).json();
+  expect(typeof snap.observations[0].code_version).toBe('string');
+ });
+ it('the implicit daily window anchors to asOf, not to today (T13-3)',async()=>{
+  const run=async(today:string)=>{
+   vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date(`${today}T12:00:00Z`));
+   try{return await (await get('US_DGS10_D','?asOf=2026-11-06')).json();}finally{vi.useRealTimers();}
+  };
+  const a=await run('2026-11-06');const b=await run('2029-05-01');
+  expect(a.observations.length).toBeGreaterThan(0);
+  expect(b.observations).toEqual(a.observations);
+ });
+ it('def hides the regime weight unless the judgment layer is on',async()=>{
+  expect('weight' in (await (await get('US_DGS10')).json()).def).toBe(false);
+  vi.stubEnv('MACRO_JUDGMENTS_ENABLED','1');
+  expect(typeof (await (await get('US_DGS10')).json()).def.weight).toBe('number');
  });
  it('more than 600 points → 400 too_many_points',async()=>{
   state.deps={...depsFor(db),db:new Proxy(db,{get(t,k,r){
@@ -153,7 +193,7 @@ describe('GET /api/macro/evidence/[sha256]',()=>{
  it('returns metadata, retrievals and a 60-second signed URL',async()=>{
   const res=await get(seed.sha256);
   expect(res.status).toBe(200);
-  expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+  expect(res.headers.get('cache-control')).toBe('no-store');
   const body=await res.json();
   expect(body.evidence).toMatchObject({sha256:seed.sha256,adapter:'fred_csv',content_type:'text/csv'});
   expect(body.retrievals).toHaveLength(1);
