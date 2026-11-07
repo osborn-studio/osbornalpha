@@ -228,6 +228,30 @@
     {
       "file": "20261115090000_macro_strategy.sql",
       "sha256": "cdba5e24f85cef489c4321ff8580040666c0ff9b265b77b3051221c5588a51d0"
+    },
+    {
+      "file": "20261116090000_judgments.sql",
+      "sha256": "25e20c09678f53a8590fc3bfb887d6daf4387a294834f7ee8f9561ab46eb2269"
+    },
+    {
+      "file": "20261117090000_disclosure_documents.sql",
+      "sha256": "b012f5f037709be2a16e05525055da4cd692c287ec01bf3121df82d10bd0264c"
+    },
+    {
+      "file": "20261117091000_fact_citations.sql",
+      "sha256": "79ccfb991797a8aa681cf40a21709805e811cc922cf69c74058554603c8678a3"
+    },
+    {
+      "file": "20261118090000_company_research.sql",
+      "sha256": "43b3c5aa29d8235c193eb89ca00725e964a15cdc9686a10104ad795c11860f09"
+    },
+    {
+      "file": "20261118091000_company_research_functions.sql",
+      "sha256": "3bb3f91afa836f73a07479505aef3b41ac3df0105d386b2078104124a3209056"
+    },
+    {
+      "file": "20261118092000_company_evidence_fence.sql",
+      "sha256": "70e4ed755754c115efd16cdaab041751722e88406066aa7941daaf4d8ca9b2e1"
     }
   ]
 }
