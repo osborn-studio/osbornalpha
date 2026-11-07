@@ -1,0 +1,7 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P1 | `src/lib/entities/provenance.ts:20` | **URL credentials bypass the public-provenance guard.** Confirmed that `?%74oken=SECRET`, `?access-token=SECRET`, and `?X-Amz-Signature=SECRET` pass sanitization. `attachSecurity` then stores these URLs in anon-readable provenance, violating §3.1. | Parse URLs and inspect decoded parameter names; reject credential-bearing URLs, including signed URLs. Add bypass regression tests. |
+| 2 | P2 | `src/lib/entities/claims.ts:154` | **Concurrent resolution silently loses incoming evidence.** If review resolves the claim after the pending-row lookup but before append, SQL returns `not_found`. This result is ignored and `fileClaim` returns `false`, despite persisting none of the new evidence. Reproduced with a controlled interleaving. | Handle `not_found` explicitly: retry filing against current state or return a retryable error. Test resolution between lookup and append, including the unique-conflict path. |
+| 3 | P2 | `src/lib/entities/claims.ts:173` | **Duplicate filing discards supplementary evidence.** Both duplicate paths append only `detail.evidence`, ignoring `detail.sources`. Confirmed that filing primary evidence B with supplementary evidence C against an existing claim retains B but loses C; inserting the same payload initially would preserve both. | Append and deduplicate every incoming evidence item (`evidence` plus `sources`) through the locked RPC. Cover existing-row and insert-race paths. |
+
+Verdict: fix required

@@ -2,7 +2,8 @@
 // against the real schema (constraints, triggers, exclusion indexes). Production uses the Supabase
 // adapter (supabaseTableClient in table-client.ts); nothing in src/app or src/lib imports this.
 // Semantics mirror the Supabase adapter: null match values use `is null`, update returns the
-// matched row count, select/count honour gte/lt ranges and orderBy/desc/limit/offset.
+// matched row count, select/count honour gte/lt ranges and orderBy/desc/limit/offset; rpc calls
+// public.<fn> with named arguments (objects / arrays / booleans as jsonb).
 // date/timestamp/timestamptz values come back as the server's text (not JS Date) so they compare
 // and round-trip exactly like the strings PostgREST returns. Plain objects and arrays are sent as
 // JSON (jsonb columns); PostgreSQL array columns are not supported.
@@ -95,6 +96,11 @@ export function pgTableClient(pool:Pool,schema='public'):TableClient{
    const values:unknown[]=[];
    const res=await run('count',table,`select count(*)::int as n from ${rel(table)}${whereSql(match,opts,values)}`,values);
    return Number(res.rows[0].n);
+  },
+  async rpc(fn,args){
+   const names=Object.keys(args);
+   const text=`select ${ident(schema)}.${ident(fn)}(${names.map((k,i)=>`${ident(k)} => $${i+1}`).join(', ')}) as result`;
+   return (await run('rpc',fn,text,names.map(k=>param(args[k])))).rows[0]?.result;
   },
  };
 }

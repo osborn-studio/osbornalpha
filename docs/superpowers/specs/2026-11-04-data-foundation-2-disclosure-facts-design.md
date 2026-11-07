@@ -558,10 +558,12 @@ Codex 七轮（01/03/05/07/09/11/13）与处置（04/06/08/10/12/14）；独立 
 1. Tushare type 1 被更正后公告日是否变化；type 5 公告日；同日并存；`limit/offset/has_more`。
 2. companyfacts 多类别股本 `dei` 条目形态。
 3. 6-K 申报人的 companyfacts 覆盖。
-4. SEC `acceptanceDateTime`（计划三）。
-5. 合并后发行人的事实归属（计划三）。
+4. SEC `acceptanceDateTime`（计划三）。→ 已由规格三 §4.5 实现（`filings.accepted_at`）。
+5. 合并后发行人的事实归属（计划三）。→ 已由规格三 §4.4 实现（读时谱系、`set_merge`）。
 6. `financial_history`（公司研究规格）。
-7. 被隔离候选（无事实行的三种）的人工选定路径。
+7. 被隔离候选（无事实行的三种）的人工选定路径。→ 已由规格三 §4.6 实现（`ambiguous_value` 经 `adopt_candidate`；`odd_duration`/`missing_available_date` 仍只能确认知晓）。
+
+> **分派例外（规格三，2026-11-05）**：§7.3 "facts.* 项的接受全部经 `resolve_facts_quarantine`" 自计划三起有四个例外，分派点为 `src/lib/dq/facts-resolver.ts::resolveFactsItem`：`ambiguous_value` 带 `chosen_candidate_index` → `adopt_candidate`；`reconcile_mismatch` → `restore_reconciled`；`lineage_conflict` 带 `keep_fact_id` → `resolve_lineage_conflict`；`reconcile_review` → 只改状态。其余原因不变。`fact_promote_rows` 增加两条资格谓词（规格三 §3.2），三个提升入口都遵守。
 
 ---
 

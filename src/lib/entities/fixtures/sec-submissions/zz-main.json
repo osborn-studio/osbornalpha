@@ -1,0 +1,24 @@
+{
+ "cik": "0000999001",
+ "entityType": "operating",
+ "name": "ZZ Fixture Holdings Inc.",
+ "tickers": ["ZZFX"],
+ "exchanges": ["Nasdaq"],
+ "lei": null,
+ "category": "Non-accelerated filer<br>Smaller reporting company",
+ "fiscalYearEnd": "0630",
+ "formerNames": [{"name": "ZZ Fixture Corp", "from": "2001-02-03T00:00:00.000Z", "to": "2015-06-30T00:00:00.000Z"}],
+ "filings": {
+  "recent": {
+   "accessionNumber": ["0000999001-26-000010", "0000999001-25-000031", "0000999001-25-000007"],
+   "filingDate": ["2026-03-02", "2025-09-12", "2025-02-10"],
+   "reportDate": ["2025-12-31", "", "2024-12-31"],
+   "acceptanceDateTime": ["2026-03-02T16:05:11.000Z", "2025-09-12T09:00:00.000Z", "2025-02-10T17:30:00.000Z"],
+   "act": ["34", "34", "34"],
+   "form": ["10-Q", "25-NSE", "10-K"],
+   "primaryDocument": ["zz-20251231.htm", "xslF25X02/primary_doc.xml", "zz-20241231.htm"],
+   "isInlineXBRL": [1, 0, 1]
+  },
+  "files": [{"name": "CIK0000999001-submissions-001.json", "filingCount": 2, "filingFrom": "2001-02-03", "filingTo": "2014-12-31"}]
+ }
+}

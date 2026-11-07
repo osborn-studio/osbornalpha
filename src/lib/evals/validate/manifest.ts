@@ -60,7 +60,7 @@ export interface ManifestDeps{
  ciRun?:(owner:string,repo:string,runId:string)=>Promise<{conclusion:string|null;head_sha:string}|null>;
  /** Service-role EvalStore.getRun; undefined = no database access. */
  getRun?:(runId:string)=>Promise<EvalRunRow|null>;
- /** the dq_freshness row of a dataset ('facts.us'); undefined = no database access. */
+ /** the dq_freshness row of a dataset (DATASETS.facts('US')); undefined = no database access. */
  freshness?:(dataset:string)=>Promise<FreshnessRow|null>;
  audit?:Omit<AuditDeps,'readFile'|'release'>;
  /** F6 pair registrations (kinds/pairs.ts F6_PAIRS by default); a dual_source report's set.id is its pair id. */

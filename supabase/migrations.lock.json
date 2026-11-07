@@ -202,6 +202,14 @@
       "sha256": "62edb3eb740e4b652c66cd7bae6388287f35fe54c53afcbf27046ed9ddcf7f4d"
     },
     {
+      "file": "20261107090000_identifiers_and_dq.sql",
+      "sha256": "4cdd923cf46b5a44639c0cb99a1d598cb8bf6f59a2ba94efc4d7b06ac6c29922"
+    },
+    {
+      "file": "20261107091000_facts_extensions.sql",
+      "sha256": "cc9c4a3263f18a394f636dfbe87fb739401e407804dd5b7041161e82dbd26349"
+    },
+    {
       "file": "20261110090000_dq_eval_runs.sql",
       "sha256": "7808ea386e4547c8b0e34dc891d2bc1a2c69a2cf2f32fc675a26bf130cd1a591"
     },

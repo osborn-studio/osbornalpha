@@ -349,6 +349,19 @@ describe('runFactsSync — round-1 audit cases',()=>{
   const both=await run(deps,{dryRun:true,issuerIds:[ISSUER,ISSUER2],limit:1});            // limit never drops a requested issuer (round-2 #13)
   expect(both.issuers.map(i=>i.issuerId)).toEqual([ISSUER,ISSUER2]);
  });
+ it('a set_merge placeholder scope row (fetch_key topology) is treated as missing: explicit run derives and persists the real key; dry-run plans on it; underivable → scope_unresolved',async()=>{
+  const fetchUs=vi.fn(async(_k:string)=>snap('{"facts":{}}'));
+  const {db,deps}=harness(FY23,{fetchUs},[{issuer_id:ISSUER,fetch_key:'0000320193'}]);
+  await db.reconcileScope('US',[{issuer_id:ISSUER,reasons:[],priority:0,fetch_key:'topology'},{issuer_id:ISSUER2,reasons:[],priority:0,fetch_key:'topology'}]);
+  await run(deps,{dryRun:true,issuerIds:[ISSUER]});
+  expect(fetchUs.mock.calls[0][0]).toBe('0000320193');
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'topology'});   // dry run wrote nothing
+  fetchUs.mockClear();
+  const r=await run(deps,{issuerIds:[ISSUER,ISSUER2]});
+  expect(r.issuers.map(i=>[i.issuerId,i.outcome,i.code??null])).toEqual([[ISSUER,'published',null],[ISSUER2,'failed','scope_unresolved']]);
+  expect(fetchUs.mock.calls.map(c=>c[0])).toEqual(['0000320193']);
+  expect(db.scope().find(x=>x.issuer_id===ISSUER)).toMatchObject({fetch_key:'0000320193',last_status:'success'});
+ });
  it('a thrown cninfo request still counts as a persisted link attempt, capped at MAX_LINK_ATTEMPTS; a request cut by the budget counts too; a budget too low BEFORE the request counts nothing (#21)',async()=>{
   const linkCn=vi.fn(async()=>{throw new Error('cninfo 500');});
   const {db,deps}=harness(parsed([cnFiling()],[cnRevenue()]),{linkCn},CN_SCOPE);
@@ -614,5 +627,48 @@ describe('runFactsSync — grouped parser evidence',()=>{
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0]).toMatchObject({document_ref:null,link_attempts:0});
   for(let i=0;i<7;i++)await run(deps,{market:'CN',issuerIds:[ISSUER]});
   expect((await db.filingsOfIssuer(ISSUER,'CN',{}))[0].link_attempts).toBe(0);          // never reaches MAX_LINK_ATTEMPTS
+ });
+});
+describe('runFactsSync — step 9b acceptance (plan 3 §4.5)',()=>{
+ const outcome=(errors:{code:string;key?:string;message?:string}[])=>({issuerId:ISSUER,counts:{fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0},errors,mismatches:[],snapshotSha256:null});
+ it('runs after materialize for a published US issuer with the scope fetch key (10-digit CIK); its errors join the issuer receipt',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([{code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'}]));
+  const {deps}=harness(FY23,{enrichAcceptance});
+  const r=await run(deps);
+  expect(enrichAcceptance).toHaveBeenCalledWith(ISSUER,'0000320193',expect.anything());
+  expect(mocks.materialize.mock.invocationCallOrder[0]).toBeLessThan(enrichAcceptance.mock.invocationCallOrder[0]);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'skipped_summary',key:`${ISSUER}:acceptance`,message:'{"acceptance_not_found":1}'});
+  expect(r.status).toBe('success');
+ });
+ it('a failing acceptance step never fails the published issuer: acceptance_failed is recorded and the batch is partial',async()=>{
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>{throw new Error('sec down');}});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'sec down'});
+  expect(r.status).toBe('partial');
+ });
+ it('counts.failed>0 from the enrichment yields a non-informational error: batch partial, issuer published, counters kept',async()=>{
+  const failedOutcome={...outcome([]),counts:{fetched:2,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:2}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>failedOutcome});
+  const r=await run(deps);
+  expect(r.issuers[0].outcome).toBe('published');
+  expect(r.issuers[0].acceptance).toMatchObject({fetched:2,failed:2});
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_failed',key:ISSUER,message:'{"failed":2}'});
+  expect(r.status).toBe('partial');
+ });
+ it('per-filing non-info errors already explain failed: no extra aggregate acceptance_failed',async()=>{
+  const o={...outcome([{code:'acceptance_conflict',key:'acc-1'}]),counts:{fetched:1,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:1}};
+  const {deps}=harness(FY23,{enrichAcceptance:async()=>o});
+  const r=await run(deps);
+  expect(r.issuers[0].errors.filter(e=>e.code==='acceptance_failed')).toEqual([]);
+  expect(r.issuers[0].errors).toContainEqual({code:'acceptance_conflict',key:'acc-1'});
+  expect(r.status).toBe('partial');
+ });
+ it('is not called for CN',async()=>{
+  const enrichAcceptance=vi.fn(async()=>outcome([]));
+  const {deps}=harness(parsed([cnFiling()],[cnRevenue()]),{enrichAcceptance},CN_SCOPE);
+  await run(deps,{market:'CN'});
+  expect(enrichAcceptance).not.toHaveBeenCalled();
  });
 });

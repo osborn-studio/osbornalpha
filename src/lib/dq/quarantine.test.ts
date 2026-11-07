@@ -3,7 +3,7 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {TableError} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
 import {startBatch} from './batches';
-import {quarantine,resolveQuarantine,listOpenQuarantine} from './quarantine';
+import {patchQuarantineDetail,quarantine,resolveQuarantine,listOpenQuarantine} from './quarantine';
 
 const USER='00000000-0000-0000-0000-000000000001';
 
@@ -83,5 +83,17 @@ describe('quarantine',()=>{
   const c=memoryTableClient();
   for(const bad of [0,-1,1.5,NaN,1001])await expect(listOpenQuarantine(c,'d',bad)).rejects.toThrow('invalid_limit');
   await expect(listOpenQuarantine(c,'d',1000)).resolves.toEqual([]);
+ });
+});
+
+describe('patchQuarantineDetail (plan audit P4)',()=>{
+ it('sets only the named key through patch_quarantine_detail; an unknown item answers false',async()=>{
+  const c=memoryTableClient({dq_quarantine:['id']});
+  const {batchId}=await startBatch(c,{producer:'test',dataset:'facts.us'});
+  const id=await quarantine(c,{dataset:'facts.us',table:'financial_facts',naturalKey:'k:p4',reasonCode:'reconcile_mismatch',batchId,detail:{latest_result:{passed:true}}});
+  expect(await patchQuarantineDetail(c,id,'hook',{stage:'done',state:'done',at:'t'})).toBe(true);
+  expect(await patchQuarantineDetail(c,id,'audit_written',true)).toBe(true);
+  expect((await c.select('dq_quarantine',{id}))[0].detail).toEqual({latest_result:{passed:true},hook:{stage:'done',state:'done',at:'t'},audit_written:true});
+  expect(await patchQuarantineDetail(c,'00000000-0000-4000-8000-0000000000aa','hook',{})).toBe(false);
  });
 });

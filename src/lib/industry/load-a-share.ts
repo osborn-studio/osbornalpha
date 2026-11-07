@@ -5,14 +5,19 @@
 //     resolveOrgId itself does not pace); none → skipped_summary(no_org_id).
 //  2. match: (a) issuers.cninfo_org_id = orgId; (b) the issuer owning the CURRENT issuer_securities row of
 //     ts_code: null cninfo_org_id → backfilled (guarded update + provenance), a different one → no write,
-//     fileClaim(issuer of that security, cninfo_org_id) + skipped_summary(org_id_mismatch); (c) new issuer
+//     correct_identifier claim (claim/1) on the issuer of that security + skipped_summary(org_id_mismatch); (c) new issuer
 //     {canonical_name_zh: fullname ?? name, cninfo_org_id, status active}; a 23505 from issuers_cninfo_idx
 //     (concurrent creator) → re-read and continue as (a).
 //  3. attachSecurity(tables,{issuer_id, ticker: ts_code, share_class 'A', is_primary true, valid_from: list_date ??
-//     observed date, source 'tushare:stock_basic', provenance {list_date, exchange, list_status}}): 'duplicate' never
-//     backfills valid_from (spec 3 F3-2 owns that); 'conflict' (another issuer holds the ticker) → fileClaim(…,
-//     source 'tushare:stock_basic') + skipped_summary(claim_pending). The issuer already holds another current
-//     A-share ticker (code change) → not attached, fileClaim + skipped_summary(claim_pending).
+//     observed date, valid_from_method listing_date | first_observed, source 'tushare:stock_basic', provenance
+//     {valid_from: stock_basic row evidence}}) (plan 3: provenance passes the public whitelist, so the listing
+//     evidence lives under the valid_from key): 'duplicate' never backfills valid_from or rewrites provenance (spec 3
+//     backfill-windows owns that) — instead, when stock_basic supplies a list_date the existing row does not carry as an
+//     evidenced valid_from (method ≠ listing_date or a different date), an evidence_only claim (suggested_op
+//     backdate_window, the admin amend path) keeps that evidence; fileClaim dedupes reruns onto the pending claim; 'conflict' (another issuer holds the ticker) → attach_security claim (claim/1,
+//     id_type ticker, source 'tushare:stock_basic') + skipped_summary(claim_pending). The issuer already holds another
+//     current A-share ticker (code change) → not attached, evidence_only claim (suggested_op attach_security) +
+//     skipped_summary(claim_pending).
 //  4. list_status 'D' → skipped_summary(delisted) only (window closing is spec 3's valid_to_method='delisting'); the delist_date
 //     is persisted in industry_security_delistings (delistings.ts: first evidence kept, a changed date updates + quarantines delist_date_changed).
 //  5. receipt producer 'load-a-share', dataset 'issuers.a_stock', recordAttempt cadence daily (cron 30 22 * * *).
@@ -21,12 +26,13 @@
 // Outcome per row: inserted (security attached), duplicates (already attached), skipped (reason, informational),
 // failed (exception). Issuer creations/backfills are reported in `issuers` (not BatchCounts).
 import {randomUUID} from 'node:crypto';
-import {TableError,selectAll} from '../db/table-client';
+import {TableError,callRpc,selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
-import {fileClaim} from '../entities/claims';
+import {buildClaimDetail,claimEvidence,fileClaim} from '../entities/claims';
+import type {ClaimEvidence} from '../entities/types';
 import {attachSecurity} from '../entities/securities';
 import {isCurrentSecurity} from '../entities/resolve';
 import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
@@ -76,23 +82,45 @@ export function planAShareLoad(rows:StockBasicRow[],universe:ReadonlySet<string>
  return plan;
 }
 
-export interface AShareApplyOptions{batchId:string;observedAt:string;lookupOrgId:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>;maxLookups?:number;recheckOrgIds?:boolean}
+/** The stock_basic page that carried a ts_code: its response sha256 (raw_hash) and a locator (snapshot path when stored). */
+export interface StockBasicPageRef{sha256:string;locator:string}
+export interface AShareApplyOptions{batchId:string;observedAt:string;lookupOrgId:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>;maxLookups?:number;recheckOrgIds?:boolean;pageRefs?:ReadonlyMap<string,StockBasicPageRef>}
+
+/** ts_code → the first page carrying it (pages in fetch order L, P, D). */
+export function stockBasicPageRefs(pages:readonly TusharePage<StockBasicRow>[]):Map<string,StockBasicPageRef>{
+ const out=new Map<string,StockBasicPageRef>();
+ for(const p of pages){
+  const locator=p.snapshot?`${p.snapshot.bucket}/${p.snapshot.path}`:`tushare:${p.api}:list_status=${String(p.params.list_status??'')}:offset=${p.offset}`;
+  for(const r of p.rows){const ts=(r.ts_code??'').trim().toUpperCase();if(ts&&!out.has(ts))out.set(ts,{sha256:p.raw_hash,locator});}
+ }
+ return out;
+}
 export interface AShareApplyResult{counts:BatchCounts;errors:BatchError[];skippedSummary:Record<string,number>;rejectedSummary:Record<string,number>;issuers:{created:number;backfilled:number};lookups:number}
 
 const str=(v:unknown)=>typeof v==='string'&&v.length>0?v:null;
-const provOf=(row:Row|undefined)=>(row?.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
+/** Public-safe valid_from evidence of a newly attached row (plan 3 whitelist: the single provenance key valid_from). */
+const validFromEvidence=(c:AShareCandidate,asOf:string,observedAt:string)=>({valid_from:{source:STOCK_BASIC_SOURCE,as_of:asOf,observed_at:observedAt,
+ row:{ts_code:c.ts_code,list_date:c.list_date,exchange:c.exchange,list_status:c.list_status}}});
+/** claim/1 evidence for a stock_basic candidate row / a cninfo lookup hit (sha256 over the canonical record). */
+const stockBasicEvidence=(c:AShareCandidate,observedAt:string,ref?:StockBasicPageRef):ClaimEvidence=>ref&&/^[0-9a-f]{64}$/.test(ref.sha256)
+ ?{source:STOCK_BASIC_SOURCE,as_of:observedAt.slice(0,10),evidence_sha256:ref.sha256,locator:ref.locator,note:`ts_code=${c.ts_code}`}
+ :claimEvidence({source:STOCK_BASIC_SOURCE,asOf:observedAt,record:c,locator:`stock_basic:${c.ts_code}`});
 /**
- * Persists the stock_basic listing evidence (list_date, source, observed_at) into the provenance of an EXISTING current
- * security row without touching valid_from (spec 3 owns window reconciliation). Idempotent: unchanged evidence is not rewritten.
+ * An existing security whose valid_from is not the stock_basic list_date as an evidenced listing date: files (or, on a
+ * rerun, appends to) an evidence_only claim suggesting backdate_window. Never writes the row (spec 3 owns windows).
  */
-async function recordListingEvidence(tables:TableClient,sec:Row,c:AShareCandidate,observedAt:string):Promise<void>{
+async function suggestBackdate(tables:TableClient,row:Row,c:AShareCandidate,observedAt:string,ref?:StockBasicPageRef):Promise<void>{
  if(c.list_date===null)return;
- const prov=provOf(sec);
- const have=(prov.listing&&typeof prov.listing==='object'?prov.listing:{}) as Record<string,unknown>;
- if(have.list_date===c.list_date&&have.exchange===c.exchange&&have.list_status===c.list_status&&have.source===STOCK_BASIC_SOURCE)return;
- await tables.update('issuer_securities',{issuer_id:String(sec.issuer_id),ticker:String(sec.ticker),valid_from:String(sec.valid_from)},
-  {provenance:{...prov,listing:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,source:STOCK_BASIC_SOURCE,observed_at:observedAt}}});
+ const from=String(row.valid_from);
+ if(row.valid_from_method==='listing_date'&&from===c.list_date)return;
+ const issuerId=String(row.issuer_id);
+ await fileClaim(tables,{issuer_id:issuerId,id_type:'ticker',value:c.ts_code,source:STOCK_BASIC_SOURCE,op:'evidence_only',
+  detail:buildClaimDetail({evidence_kind:'provider_mapping',target:{issuer_id:issuerId},
+   params:{suggested_op:'backdate_window',ticker:c.ts_code,valid_from:from,current_valid_from_method:row.valid_from_method??null,list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,
+    note:c.list_date<from?'stock_basic list_date precedes valid_from':'stock_basic list_date differs from valid_from (not earlier: check the source)'},
+   evidence:stockBasicEvidence(c,observedAt,ref)})});
 }
+const cninfoEvidence=(symbol:string,hit:OrgLookup,observedAt:string):ClaimEvidence=>claimEvidence({source:CNINFO_SOURCE,asOf:observedAt,record:{symbol,...hit},locator:`topSearch:keyWord=${symbol}`});
 const isUniqueViolation=(e:unknown)=>e instanceof TableError&&e.code==='23505';
 
 async function issuerByOrgId(tables:TableClient,orgId:string):Promise<Row|null>{
@@ -119,7 +147,7 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
   try{
    const owner=await currentOwner(tables,c.ts_code,today);
    if(owner&&owner.issuer.status==='active'&&str(owner.issuer.cninfo_org_id)&&!opts.recheckOrgIds){   // fast path, no network
-    await recordListingEvidence(tables,owner.security,c,opts.observedAt);
+    await suggestBackdate(tables,owner.security,c,opts.observedAt,opts.pageRefs?.get(c.ts_code));
     counts.duplicates++;continue;
    }
    if(lookups>=maxLookups){skips.push(`lookup_deferred:${c.ts_code}`);continue;}
@@ -133,17 +161,16 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
    if(!issuer&&owner){
     const stored=str(owner.issuer.cninfo_org_id);
     if(stored&&stored!==orgId){
-     await fileClaim(tables,{issuer_id:String(owner.issuer.issuer_id),id_type:'cninfo_org_id',value:orgId,source:CNINFO_SOURCE});
+     const id=String(owner.issuer.issuer_id);
+     await fileClaim(tables,{issuer_id:id,id_type:'cninfo_org_id',value:orgId,source:CNINFO_SOURCE,op:'correct_identifier',
+      detail:buildClaimDetail({evidence_kind:'provider_mapping',target:{issuer_id:id},params:{expected_current:stored,new_value:orgId},evidence:cninfoEvidence(c.symbol,hit,opts.observedAt)})});
      skips.push(`org_id_mismatch:${c.ts_code}`);continue;
     }
-    // backfill a null cninfo_org_id; a lost race (row changed or orgId taken) re-reads by orgId
+    // backfill a null cninfo_org_id through the guarded plan-3 writer (one locked UPDATE, provenance key merged);
+    // a lost race (row changed or orgId taken: 'conflict') re-reads by orgId
     const id=String(owner.issuer.issuer_id);
-    let n=0;
-    try{
-     n=await tables.update('issuers',{issuer_id:id,status:'active',cninfo_org_id:null},
-      {cninfo_org_id:orgId,provenance:{...provOf(owner.issuer),cninfo_org_id:{source:CNINFO_SOURCE,observed_at:opts.observedAt}},updated_at:opts.observedAt});
-    }catch(e){if(!isUniqueViolation(e))throw e;}
-    if(n>0){issuers.backfilled++;issuer={...owner.issuer,cninfo_org_id:orgId};}
+    const out=await callRpc(tables,'set_issuer_identifier',{p_issuer:id,p_column:'cninfo_org_id',p_value:orgId,p_provenance:{source:CNINFO_SOURCE,observed_at:opts.observedAt}});
+    if(out==='written'){issuers.backfilled++;issuer={...owner.issuer,cninfo_org_id:orgId};}
     else{
      issuer=await issuerByOrgId(tables,orgId);
      if(!issuer){skips.push(`issuer_not_active:${c.ts_code}`);continue;}
@@ -165,21 +192,26 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
    if(issuer.status!=='active'){skips.push(`issuer_not_active:${c.ts_code}`);continue;}
    // code change: the issuer already has another current A-share ticker → never auto-attach a second one
    const other=(await tables.select('issuer_securities',{issuer_id:issuerId})).find(r=>isCurrentSecurity(r,today)&&CN_TICKER.test(String(r.ticker))&&!B_SHARE.test(String(r.ticker))&&String(r.ticker)!==c.ts_code);
+   const validFrom=c.list_date??today;
+   const validFromMethod=c.list_date?'listing_date':'first_observed';
    if(other){
-    await fileClaim(tables,{issuer_id:issuerId,id_type:'cninfo_org_id',value:orgId,source:STOCK_BASIC_SOURCE});
+    await fileClaim(tables,{issuer_id:issuerId,id_type:'ticker',value:c.ts_code,source:STOCK_BASIC_SOURCE,op:'evidence_only',
+     detail:buildClaimDetail({evidence_kind:'provider_mapping',target:{issuer_id:issuerId},
+      params:{suggested_op:'attach_security',note:`issuer holds current A-share ticker ${String(other.ticker)} (code change?)`},evidence:stockBasicEvidence(c,opts.observedAt,opts.pageRefs?.get(c.ts_code))})});
     skips.push(`claim_pending:${c.ts_code}`);continue;
    }
-   const res=await attachSecurity(tables,{issuer_id:issuerId,ticker:c.ts_code,share_class:'A',is_primary:true,valid_from:c.list_date??today,source:STOCK_BASIC_SOURCE,
-    provenance:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,
-     listing:{list_date:c.list_date,exchange:c.exchange,list_status:c.list_status,source:STOCK_BASIC_SOURCE,observed_at:opts.observedAt}}});
+   const res=await attachSecurity(tables,{issuer_id:issuerId,ticker:c.ts_code,share_class:'A',is_primary:true,valid_from:validFrom,valid_from_method:validFromMethod,
+    source:STOCK_BASIC_SOURCE,provenance:validFromEvidence(c,today,opts.observedAt)});
    if(res==='inserted')counts.inserted++;
    else if(res==='duplicate'){
     const mine=(await tables.select('issuer_securities',{issuer_id:issuerId,ticker:c.ts_code})).find(r=>isCurrentSecurity(r,today));
-    if(mine)await recordListingEvidence(tables,mine,c,opts.observedAt);
+    if(mine)await suggestBackdate(tables,mine,c,opts.observedAt,opts.pageRefs?.get(c.ts_code));
     counts.duplicates++;
    }
    else{
-    await fileClaim(tables,{issuer_id:issuerId,id_type:'cninfo_org_id',value:orgId,source:STOCK_BASIC_SOURCE});
+    await fileClaim(tables,{issuer_id:issuerId,id_type:'ticker',value:c.ts_code,source:STOCK_BASIC_SOURCE,op:'attach_security',
+     detail:buildClaimDetail({evidence_kind:'provider_mapping',target:{issuer_id:issuerId},
+      params:{share_class:'A',valid_from:validFrom,valid_from_method:validFromMethod,source:STOCK_BASIC_SOURCE,note:'ticker_held_by_other_issuer'},evidence:stockBasicEvidence(c,opts.observedAt,opts.pageRefs?.get(c.ts_code))})});
     skips.push(`claim_pending:${c.ts_code}`);
    }
   }catch(e){counts.failed++;errors.push({code:'a_share_error',key:c.ts_code,message:errorMessage(e)});}
@@ -207,11 +239,12 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
   await finishBatch(deps.tables,batchId!,{counts:{...emptyCounts(),fetched,failed:Math.max(1,candidates)},errors:[{code:e instanceof IndustryProviderError?e.code:'a_share_error',message:errorMessage(e)}]},deps.now());
   await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
  };
- let plan:AShareLoadPlan;let scan:DelistingScan={inputs:[],missing:[]};
+ let plan:AShareLoadPlan;let pageRefs=new Map<string,StockBasicPageRef>();let scan:DelistingScan={inputs:[],missing:[]};
  try{
   const pages:TusharePage<StockBasicRow>[]=[];
   for(const s of ['L','P','D'] as const)pages.push(...await fetchStockBasic(call,{listStatus:s},{sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined}));
   scan=scanDelistings(pages);
+  pageRefs=stockBasicPageRefs(pages);
   plan=planAShareLoad(pages.flatMap(p=>p.rows),await aStockUniverse(deps.tables),today);
  }catch(e){
   if(batchId)await fail(e,0,0);
@@ -224,7 +257,7 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
  await persistDelistings(deps,batchId,A_SHARE_DATASET,scan,delistErrors);
  let result:AShareApplyResult;
  try{
-  result=await applyAShareLoad(deps.tables,plan,{batchId,observedAt:now.toISOString(),lookupOrgId:opts.lookupOrgId??(symbol=>resolveOrgId(symbol,{fetch:deps.fetch})),sleep:opts.sleep,maxLookups:opts.maxLookups,recheckOrgIds:opts.recheckOrgIds});
+  result=await applyAShareLoad(deps.tables,plan,{batchId,observedAt:now.toISOString(),lookupOrgId:opts.lookupOrgId??(symbol=>resolveOrgId(symbol,{fetch:deps.fetch})),sleep:opts.sleep,maxLookups:opts.maxLookups,recheckOrgIds:opts.recheckOrgIds,pageRefs});
  }catch(e){
   await fail(e,plan.fetched,plan.candidates.length);
   throw e;
