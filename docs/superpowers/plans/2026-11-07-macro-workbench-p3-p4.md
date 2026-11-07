@@ -6877,10 +6877,10 @@ EOF
 - Create: `src/lib/macro/strategy/explain-request.test.ts`
 
 规格要点：
-- `f4-client.ts`（§9.1）：`createF4Client({baseUrl?, fetch?, timeoutMs?})`；默认 `baseUrl = process.env.NEXT_PUBLIC_SITE_URL`（未设或空 → 每次调用抛 `F4Unavailable('f4_unconfigured')`）；每次请求 `AbortSignal.timeout(3000)`、`cache:'no-store'`。任何失败（网络、超时、非 2xx、非 JSON、形状不对）→ `F4Unavailable`；详情路由返回 **JSON 的 404** → `null`（判断不存在），非 JSON 的 404（路由不存在）→ `F4Unavailable`。`F4CardLite` 只投影无数字字段（`display.value` 是象限名时作为 `selected`）。`F4Client` 与 `F4Unavailable` 逐字取自计划骨架"依赖注入"节；`F4CardLite` / `F4JudgmentDetail` 已由 Task 6 放在 `f4-types.ts`，这里 `import type` 后再导出，不重复声明。
-- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`；**只凭时间戳游标越过任何满页** → `incomplete:true`（排他游标下，页尾 `as_of` 为 T 时，页外可能还有同为 T 的卡片——哪怕页尾前一条不是 T，如 `[…, T+1, T]`——无法证明完整），继续翻页收集其余卡片（计划审计 #12、R2-3；稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项 D19，有了之后满页不再标记）。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs` 或其中有不完整项 → `evidence_incomplete`、`diffs=[]`。
-- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 先 `recoverExplanation`（完成恢复，见下），再经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于代码版本、底座与主体检查）→ `codeVersion` 为 null → 503 `code_version_unavailable`（计划审计 #9：重放不需要代码版本）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 是不可变的 `result_id`，`db.reviewResult(id)` 取结果、`db.manifest` 取其清单，再经 `reviewFactsManifest` 生成解读清单；计划审计 #5）不存在 → 404 `subject_not_found`；事实（`explanationFacts`，即清单 `body.facts`）为空 → 422 `no_facts`；解读清单 `putManifest`；模型输入只由已存清单重建（`modelInput(stored.body, locale)`，计划审计 #16）→ `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（抛错 = 结果不明，用量运行可能已提交：`recordCompletion(null, finalizePayload('failed', []))` → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → finally：`finalize(同一审计键, 该载荷)`，成功才 `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `recordCompletion(null, finalizePayload('failed', [LlmCallError.accounting]))` → `finish('failed', ['provider_error' 或成本错误码])` → finally：`finalize` → 成功才 `markFinalized` → 200 投影）→ 成功返回后**立即** `recordCompletion({content}, finalizePayload('completed', [accounting]))`（先于校验）→ 解析 + 校验 → `finish(accepted|rejected)`（拒绝也是已完成调用）→ finally：`finalize` → 成功才 `markFinalized` → 200 投影。`finish` 或校验抛错时 `finalize` 仍执行，然后错误上抛（500）；`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试，计划审计 #6–#8）；`recordCompletion` 自身失败不阻断后续步骤，`finish` 带同一载荷，行上无载荷时原子写入（计划审计 R2-2）。
-- 完成恢复（计划审计 R2-1 / R2-2）：登记的原始输出是**完成信封** `{content, provider, model, prompt_version, validator_version, accounting}`，足以在不调提供方的情况下重建 finish。`recoverExplanation(d, id)`：`runDetail` → 行为 `running` 且已登记完成 → 只凭信封与 `db.manifest(run.manifest_id)` 的冻结事实重新解析 / 校验 / 渲染并 `finish`（信封里的校验器版本 ≠ 当前 `VALIDATOR_VERSION` → `failed {validator_version_changed}`）→ 行上有载荷且未结算 → 原样 `finalize`，成功才 `markFinalized`。从不抛错（失败时行保持原状，下次重放或 GET 再试）。POST 幂等重放对该运行调用一次；`recoverUserExplanations(d, userId, limit=3)` 供 `GET /explanations` 调用（Task 12）。认领 RPC 与过期函数不放弃已登记完成的行，所以恢复总能在过期之前看到它们。
+- `f4-client.ts`（§9.1）：`createF4Client({baseUrl?, fetch?, timeoutMs?})`；默认 `baseUrl = process.env.NEXT_PUBLIC_SITE_URL`（未设或空 → 每次调用抛 `F4Unavailable('f4_unconfigured')`）；每次请求 `AbortSignal.timeout(3000)`、`cache:'no-store'`。任何失败（网络、超时、非 2xx、非 JSON、形状不对）→ `F4Unavailable`；详情响应的必填集合（`judgment.inputs`、`settlements`）缺失或非数组、任一条目非法（结算缺 `outcome` / 可解析的 `settled_at`）都按形状不对抛 `F4Unavailable`，**绝不**归一为空集合或丢弃条目（Task 11 Codex #2）；详情路由返回 **JSON 的 404** → `null`（判断不存在），非 JSON 的 404（路由不存在）→ `F4Unavailable`。`F4CardLite` 只投影无数字字段（`display.value` 是象限名时作为 `selected`）。`F4Client` 与 `F4Unavailable` 逐字取自计划骨架"依赖注入"节；`F4CardLite` / `F4JudgmentDetail` 已由 Task 6 放在 `f4-types.ts`，这里 `import type` 后再导出，不重复声明。
+- `deviations.ts`（§6.4 第 3 稿 N13）：最新卡片 → `/history?limit=500&before=<上一页最后一条的 as_of>` 分页直到空页；累计超过 5000 条 → `incomplete:true`；游标不前进 → 停止并 `incomplete:true`；**只凭时间戳游标越过任何满页** → `incomplete:true`（排他游标下，页尾 `as_of` 为 T 时，页外可能还有同为 T 的卡片——哪怕页尾前一条不是 T，如 `[…, T+1, T]`——无法证明完整），继续翻页收集其余卡片（计划审计 #12、R2-3；稳定游标 `(as_of, judgment_id)` 是给 F4 的开放项 D19，有了之后满页不再标记）。只保留 `macro_regime@v1`、`lifecycle='settled'`、最新结算 `outcome='miss'`。差异按 `(series_id, period_end)` 匹配，分类穷尽；角色 = 该观测是否为本侧该序列的最新期。证据没有 `observation_refs`、或其中任一侧（登记输入的 `macro_observation` 快照 / 结算证据）有不完整项 → `evidence_incomplete`、`diffs=[]`，不过滤丢弃（Codex #1）；枚举到的合格卡片详情返回 null → `incomplete:true`（Codex #3）。
+- `explain-request.ts`（§6.3 步骤 1–8，§9.1 判定顺序）：路由做 session（401）与 `MACRO_STRATEGY_ENABLED`（404）后调用 `handleExplainRequest(deps, userId, body)`，返回 `{status, body}`。顺序：ajv（400 `invalid_body`）→ `payload_hash = sha256(canonicalJson({subject, locale}))` → **幂等重放**（`db.runOf` 有行：哈希不同 → 409 `payload_conflict`；相同 → 先 `recoverExplanation`（完成恢复，见下），再经 `claimExplanation` 取投影，含超时 `abandoned` 处理；此步先于代码版本、底座与主体检查）→ `codeVersion` 为 null → 503 `code_version_unavailable`（计划审计 #9：重放不需要代码版本）→ 端口为 null → 503 `macro_foundation_unavailable` → 主体（快照：`buildSnapshotFactsManifest` 返回 null 即未知或 failed；复盘：主体 id 是不可变的 `result_id`，`db.reviewResult(id)` 取结果、`db.manifest` 取其清单，再经 `reviewFactsManifest` 生成解读清单；计划审计 #5）不存在 → 404 `subject_not_found`；事实（`explanationFacts`，即清单 `body.facts`）为空 → 422 `no_facts`；解读清单 `putManifest`；模型输入只由已存清单重建（`modelInput(stored.body, locale)`，计划审计 #16；**在 `claimExplanation` 之前构建**，所以提示文件或事实渲染失败不会打开用量运行，Codex #4）→ `llm.resolve()`（null → 503 `llm_not_configured`）→ 非 BYO 时 `llm.checkQuota()`（null = 失败放行；`limit === -1` 不限；`!allowed` → 429 `quota_exceeded`）→ `claimExplanation`（`existing` → 200 投影，**不计费不调用**）→ `begin`（抛错 = 结果不明，用量运行可能已提交：`recordCompletion(null, finalizePayload('failed', []))` → `finish('failed', ['usage_audit_unavailable' 或成本错误码])` → finally：`finalize(同一审计键, 该载荷)`，成功才 `markFinalized` → `costErrorStatus` 状态码，body 带投影）→ `call`（抛错 → `recordCompletion(null, finalizePayload('failed', [LlmCallError.accounting]))` → `finish('failed', ['provider_error' 或成本错误码])` → finally：`finalize` → 成功才 `markFinalized` → 200 投影）→ 成功返回后**立即** `recordCompletion({content}, finalizePayload('completed', [accounting]))`（先于校验）→ 解析 + 校验 → `finish(accepted|rejected)`（拒绝也是已完成调用）→ finally：`finalize` → 成功才 `markFinalized` → 200 投影。`finish` 或校验抛错时 `finalize` 仍执行，然后错误上抛（500）；`finalize` 抛错不改响应，`markFinalized` 不调用（运行行留 `finalize_payload` 与 `finalized=false`，运维按载荷原样重试，计划审计 #6–#8）；`recordCompletion` 自身失败不阻断后续步骤，`finish` 带同一载荷，行上无载荷时原子写入（计划审计 R2-2）。
+- 完成恢复（计划审计 R2-1 / R2-2）：登记的原始输出是**完成信封** `{content, provider, model, prompt_version, validator_version, accounting}`，足以在不调提供方的情况下重建 finish。`recoverExplanation(d, id)`：`runDetail` → 行为 `running` 且已登记完成 → 只凭信封与 `db.manifest(run.manifest_id)` 的冻结事实重新解析 / 校验 / 渲染并 `finish`（信封里的校验器版本 ≠ 当前 `VALIDATOR_VERSION` → `failed {validator_version_changed}`）→ 行上有载荷且未结算 → 原样 `finalize`，成功才 `markFinalized`。从不抛错（失败时行保持原状，下次重放或 GET 再试）。结算独立于 finish：以**首次读取**的不可变载荷在 `finally` 中结算，恢复 finish 失败或 finish 后重读失败都不跳过结算（Codex #5）。POST 幂等重放对该运行调用一次；`recoverUserExplanations(d, userId, limit=3)` 供 `GET /explanations` 调用（Task 12）。认领 RPC 与过期函数不放弃已登记完成的行，所以恢复总能在过期之前看到它们。
 - `LlmCallError(message, accounting)`：Task 12 的生产 `LlmDeps.call` 在 `runMeteredLlmCall` 抛错时用 `meteredUsageFromError(e)` 构造它（成本错误时 `message` 用成本错误码，如 `daily_cost_exhausted`）。
 - `REPLAY_MANIFEST_ID`（全零 uuid）只在重放路径传给 `claimExplanation`：该 `(user_id, request_id)` 行已存在，RPC 不会插入。
 
@@ -6963,8 +6963,23 @@ describe('projections',()=>{
   expect(lite).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v1'},selected:null});
  });
  it('judgmentDetailOf falls back to the card for selected and requires an id',()=>{
-  expect(judgmentDetailOf({card:CARD,judgment:{judgment_id:'j1',as_of:'2026-10-15'},settlements:[]}).selected).toBe('overheat');
+  expect(judgmentDetailOf({card:CARD,judgment:{judgment_id:'j1',as_of:'2026-10-15',inputs:[]},settlements:[]}).selected).toBe('overheat');
   expect(()=>judgmentDetailOf({judgment:{}})).toThrow(F4Unavailable);
+ });
+ it('judgmentDetailOf rejects malformed collections instead of normalizing them to empty / dropping entries',()=>{
+  const j={judgment_id:'j1',as_of:'2026-10-15',inputs:[]};
+  const S={outcome:'miss',realized:'recovery',evidence:null,settled_at:'2027-02-01T00:00:00Z'};
+  for(const bad of [
+   {card:CARD,judgment:j},                                         // settlements missing
+   {card:CARD,judgment:j,settlements:{}},                          // settlements not an array
+   {card:CARD,judgment:j,settlements:[S,null]},                    // invalid entry
+   {card:CARD,judgment:j,settlements:[S,{...S,settled_at:undefined}]},   // latest has no ordering field
+   {card:CARD,judgment:j,settlements:[{...S,outcome:undefined}]},
+   {card:CARD,judgment:j,settlements:[{...S,evidence:'x'}]},
+   {card:CARD,judgment:{...j,inputs:undefined},settlements:[]},
+   {card:CARD,judgment:{...j,inputs:[null]},settlements:[]},
+  ])expect(()=>judgmentDetailOf(bad)).toThrow(F4Unavailable);
+  expect(judgmentDetailOf({card:CARD,judgment:j,settlements:[S]}).settlements).toHaveLength(1);
  });
 });
 ```
@@ -7014,8 +7029,18 @@ export function judgmentDetailOf(body:unknown):F4JudgmentDetail{
  const id=str(j.judgment_id)??str(card.judgment_id);const asOf=str(j.as_of)??str(card.as_of);
  if(!id||!asOf)throw new F4Unavailable('f4_malformed:detail');
  const claim=isObj(j.claim)?j.claim:{};
- const inputs=(Array.isArray(j.inputs)?j.inputs:[]).filter(isObj).map(x=>({...x,kind:str(x.kind)??'',ref:isObj(x.ref)?x.ref:{},snapshot:isObj(x.snapshot)?x.snapshot:{}}));
- const settlements=(Array.isArray(body.settlements)?body.settlements:[]).filter(isObj).map(s=>({...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:isObj(s.evidence)?s.evidence:null,settled_at:str(s.settled_at)??''}));
+ const bad=()=>new F4Unavailable('f4_malformed:detail');
+ // Required collections are validated, never normalized: a missing / non-array collection or an invalid entry is malformed.
+ if(!Array.isArray(j.inputs)||!Array.isArray(body.settlements))throw bad();
+ const inputs=j.inputs.map(x=>{
+  if(!isObj(x)||str(x.kind)===null||(x.ref!==undefined&&!isObj(x.ref))||(x.snapshot!==undefined&&!isObj(x.snapshot)))throw bad();
+  return {...x,kind:x.kind as string,ref:isObj(x.ref)?x.ref:{},snapshot:isObj(x.snapshot)?x.snapshot:{}};
+ });
+ const settlements=body.settlements.map(s=>{
+  const settledAt=isObj(s)?str(s.settled_at):null;
+  if(!isObj(s)||!settledAt||Number.isNaN(Date.parse(settledAt))||str(s.outcome)===null||(s.settlement_id!==undefined&&str(s.settlement_id)===null)||(s.evidence!==undefined&&s.evidence!==null&&!isObj(s.evidence)))throw bad();
+  return {...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:isObj(s.evidence)?s.evidence:null,settled_at:settledAt};
+ });
  return {judgment_id:id,as_of:asOf,selected:asRegime(claim.selected)??asRegime(display.value),inputs,settlements};
 }
 export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeoutMs?:number}={}):F4Client{
@@ -7060,7 +7085,7 @@ export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeo
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/f4-client.test.ts`
-Expected: PASS，`Tests  15 passed (15)`。
+Expected: PASS，`Tests  16 passed (16)`。
 
 - [ ] **Step 5: 写 `deviations.ts` 的失败测试**
 
@@ -7103,6 +7128,11 @@ describe('deviationCase',()=>{
  });
  it('evidence without observation_refs → evidence_incomplete, no recomputation',()=>{
   expect(deviationCase('US',card('j1','2026-10-15'),detail('j1',[o('A','2026-09-30','v1')],null))).toMatchObject({evidence_state:'evidence_incomplete',diffs:[]});
+ });
+ it('a malformed registered observation → evidence_incomplete, never a silent drop that fakes newly_available',()=>{
+  const d=detail('j1',[o('A','2026-09-30','v1')],[o('A','2026-09-30','v1')]);
+  (d.inputs[1].snapshot as Record<string,unknown>).value=undefined;
+  expect(deviationCase('US',card('j1','2026-10-15'),d)).toMatchObject({evidence_state:'evidence_incomplete',diffs:[]});
  });
  it('skips hits, other methods / versions, unsettled cards',()=>{
   const d=detail('j1',[],[]);
@@ -7166,9 +7196,15 @@ describe('listDeviationCases (spec §6.4 enumeration)',()=>{
   expect(r.incomplete).toBe(true);
  });
  it('short pages (even with an as_of tie) keep the result complete',async()=>{
-  const f4=fakeF4([[card('s1','2024-01-02'),card('s2','2024-01-02')],[card('s3','2024-01-01')],[]],{});
+  const f4=fakeF4([[card('s1','2024-01-02'),card('s2','2024-01-02')],[card('s3','2024-01-01')],[]],{j0:detail('j0',[],[]),s1:detail('s1',[],[]),s2:detail('s2',[],[]),s3:detail('s3',[],[])});
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(false);
   expect(f4.before).toEqual([null,'2024-01-02','2024-01-01']);
+ });
+ it('an enumerated settled card whose detail is missing → incomplete, not silently complete',async()=>{
+  const f4=fakeF4([[card('j0','2026-10-15'),card('j1','2026-09-15')],[]],{j0:detail('j0',[],[])});
+  const r=await listDeviationCases(f4,'US');
+  expect(r.incomplete).toBe(true);
+  expect(r.cases.map(c=>c.judgment_id)).toEqual(['j0']);
  });
  it('F4Unavailable propagates',async()=>{
   const f4=fakeF4([],{});f4.latestRegimeCard=async()=>{throw new F4Unavailable();};
@@ -7197,6 +7233,7 @@ Expected: FAIL，`Failed to resolve import "./deviations"`。
 // registered inputs (macro_observation frozen projections) against the latest settlement's evidence.observation_refs,
 // matched by (series_id, period_end); classification is exhaustive (revised / unchanged / dropped / newly_available with
 // later_period / backfill / new_series). Evidence without observation_refs → evidence_incomplete; never recomputed here.
+// A malformed registered or settled observation → evidence_incomplete; an enumerated eligible card whose detail is missing → incomplete.
 // No narrative. F4Unavailable propagates to the route (→ 503 judgments_unavailable).
 import type {DeviationCase,DiffKind,NewlySubkind,Region} from './contract';
 import {asRegime,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4-client';
@@ -7239,14 +7276,15 @@ export function deviationCase(region:Region,card:F4CardLite,detail:F4JudgmentDet
  const latest=[...detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0];
  if(!latest||latest.outcome!=='miss')return null;
  const selected=detail.selected??card.selected;if(!selected)return null;
- const registered=detail.inputs.filter(i=>i.kind==='macro_observation').map(i=>frozenObs(i.snapshot)).filter((x):x is FrozenObs=>x!==null);
  const refs=latest.evidence?.observation_refs;
  const realized=asRegime(latest.realized)??(isObj(latest.realized)?asRegime(latest.realized.selected)??asRegime(latest.realized.primary_state):null);
  const base={judgment_id:detail.judgment_id,settlement_id:latest.settlement_id??null,region,as_of:detail.as_of,selected,realized};
+ // Both sides are validated without filtering: a malformed entry on either side makes the evidence incomplete (no diffs).
  if(!Array.isArray(refs))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
+ const registered=detail.inputs.filter(i=>i.kind==='macro_observation').map(i=>frozenObs(i.snapshot));
  const settled=refs.map(frozenObs);
- if(settled.some(x=>x===null))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
- return {...base,evidence_state:'complete',diffs:classifyDiffs(registered,settled as FrozenObs[])};
+ if(registered.some(x=>x===null)||settled.some(x=>x===null))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
+ return {...base,evidence_state:'complete',diffs:classifyDiffs(registered as FrozenObs[],settled as FrozenObs[])};
 }
 /** Enumerate the region's macro_regime cards to an empty history page (cap 5000), then build cases for settled misses. */
 export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cases:DeviationCase[];incomplete:boolean}>{
@@ -7266,7 +7304,8 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
  const cards=[...seen.values()].slice(0,DEVIATION_CAP).filter(c=>c.methodology.id===METHOD.id&&c.methodology.version===METHOD.version&&c.lifecycle==='settled');
  const cases:DeviationCase[]=[];
  for(const c of cards){
-  const detail=await f4.judgmentDetail(c.judgment_id);if(!detail)continue;
+  const detail=await f4.judgmentDetail(c.judgment_id);
+  if(!detail){incomplete=true;continue;}   // enumerated by history but unresolvable: outcome and evidence were never inspected
   const dc=deviationCase(region,c,detail);if(dc)cases.push(dc);
  }
  cases.sort((x,y)=>x.as_of<y.as_of?1:x.as_of>y.as_of?-1:x.judgment_id<y.judgment_id?-1:1);
@@ -7277,13 +7316,14 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/deviations.test.ts`
-Expected: PASS，`Tests  13 passed (13)`。
+Expected: PASS，`Tests  15 passed (15)`。
 
 - [ ] **Step 9: 写 `explain-request.ts` 的失败测试**（全部用假实现：`memoryStrategyDb()`、`memoryStrategyPort(fixture(...))`、假 `LlmDeps`）
 
 ```ts
 // src/lib/macro/strategy/explain-request.test.ts
 import {describe,expect,it,vi} from 'vitest';
+import * as render from './explain-render';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection} from './contract';
 import {memoryStrategyDb} from './db';
@@ -7292,6 +7332,8 @@ import {buildSnapshotFactsManifest} from './facts';
 import {memoryStrategyPort} from './port';
 import {runReview} from './review';
 import {daily,fixture,monthly,snap} from './testing/fixture';
+
+vi.mock('./explain-render',async orig=>{const m=await orig<typeof import('./explain-render')>();return {...m,renderFacts:vi.fn(m.renderFacts)};});
 
 const USER='11111111-1111-4111-8111-111111111111';
 const REQ='22222222-2222-4222-8222-222222222222';
@@ -7593,6 +7635,40 @@ describe('completion recovery without the provider (plan audit R2-1 / R2-2)',()=
  });
 });
 
+describe('preparation failure and settlement independence (Task 11 Codex #4 / #5)',()=>{
+ it('a model-input preparation failure surfaces before any claim or usage run: no begin, no call, no run row',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.mocked(render.renderFacts).mockImplementationOnce(()=>{throw new TypeError('render bug');});
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('render bug');
+  expect(f.calls.some(c=>c.startsWith('begin')||c==='call'||c.startsWith('finalize'))).toBe(false);
+  expect(await d.db.runOf(USER,REQ)).toBeNull();
+ });
+ async function stuck(){   // finish and finalize both failed once: recorded completion + unsettled payload, state running
+  const f=fakeLlm({finalizeError:new Error('down')});const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  const run=(await d.db.runOf(USER,REQ))!;
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'running',finalize_payload:PAY('completed',[{tokens:42}]),finalized:false});
+  f.state.finalizeError=undefined;f.finalized.length=0;
+  return {f,d,id:run.explanation_id};
+ }
+ it('recovery finish keeps failing: the recorded payload is still settled verbatim and marked finalized',async()=>{
+  const {f,d,id}=await stuck();
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValue(new Error('still down'));
+  await recoverUserExplanations(d,USER);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+  expect(d.db._run(id)).toMatchObject({state:'running',finalized:true});
+ });
+ it('the post-finish reread fails: the payload loaded first is still settled',async()=>{
+  const {f,d,id}=await stuck();
+  const detail=d.db.runDetail.bind(d.db);let n=0;
+  vi.spyOn(d.db,'runDetail').mockImplementation(async x=>{if(++n===2)throw new Error('read down');return detail(x);});
+  await recoverUserExplanations(d,USER);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+  expect(d.db._run(id)).toMatchObject({state:'accepted',finalized:true});
+ });
+});
+
 describe('input and subject checks',()=>{
  it.each([
   ['not an object','x'],['bad uuid',{...body(),request_id:'nope'}],['bad locale',{...body(),locale:'fr'}],
@@ -7724,16 +7800,22 @@ async function recoveredFinish(db:StrategyDb,run:RunDetail):Promise<FinishArgs>{
   :{...base,state:'rejected',validatorVersion:VALIDATOR_VERSION,validation,rendered:null,failureCodes:result.codes};
 }
 /** Completion recovery (plan audit R2-1 / R2-2). Never calls the provider and never throws: a failure leaves the row as it
- *  was for the next replay or GET. */
+ *  was for the next replay or GET. Settlement is independent of finish: the payload of the first read is immutable, so a
+ *  finish or reread failure still settles it (finally path; Task 11 Codex #5). */
 export async function recoverExplanation(d:RecoveryDeps,explanationId:string):Promise<void>{
  let run:RunDetail|null;
  try{run=await d.db.runDetail(explanationId);}catch{return;}
  if(!run)return;
- if(run.state==='running'&&hasRecordedCompletion(run.raw_output)){
-  try{await d.db.finishExplanation(await recoveredFinish(d.db,run));}catch{return;}
-  try{run=(await d.db.runDetail(explanationId))??run;}catch{return;}
+ const {explanation_id:id,usage_audit_key:key}=run;
+ let payload=run.finalize_payload;let finalized=run.finalized;
+ try{
+  if(run.state==='running'&&hasRecordedCompletion(run.raw_output)){
+   try{await d.db.finishExplanation(await recoveredFinish(d.db,run));}catch{return;}
+   try{const again=await d.db.runDetail(explanationId);if(again){payload=again.finalize_payload??payload;finalized=again.finalized;}}catch{/* settle from the first read */}
+  }
+ }finally{
+  if(payload!==null&&!finalized)await settleStored(d,id,key,payload);
  }
- if(run.finalize_payload!==null&&!run.finalized)await settleStored(d,run.explanation_id,run.usage_audit_key,run.finalize_payload);
 }
 /** GET /explanations: recover the user's running rows with a recorded completion, oldest first, at most `limit`. */
 export async function recoverUserExplanations(d:RecoveryDeps,userId:string,limit=RECOVER_PER_READ):Promise<number>{
@@ -7792,6 +7874,8 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   const quota=await d.llm.checkQuota();
   if(quota&&quota.limit!==-1&&!quota.allowed)return {status:429,body:{error:{code:'quota_exceeded',message:`${quota.used}/${quota.limit}`}}};
  }
+ // model input is built BEFORE the claim, so a preparation failure (prompt file, fact rendering) never opens a usage run
+ const input=modelInput(stored.body,body.locale);
  // step 5: claim — only 'claimed' continues to billing and the model
  let claim:Awaited<ReturnType<StrategyDb['claimExplanation']>>;
  try{claim=await d.db.claimExplanation({...claimArgs,manifestId:stored.manifest_id});}
@@ -7816,7 +7900,6 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   return err(costErrorStatus(code),code,projection);
  }
  // step 7: metered model call, then the durable completion before anything else can fail
- const input=modelInput(stored.body,body.locale);
  let content:string;let accounting:unknown;
  try{({content,accounting}=await d.llm.call(input.system,input.user));}
  catch(e){
@@ -7848,7 +7931,7 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
 - [ ] **Step 12: 运行，确认通过**
 
 Run: `npm test -- src/lib/macro/strategy/explain-request.test.ts src/lib/macro/strategy/deviations.test.ts src/lib/macro/strategy/f4-client.test.ts`
-Expected: PASS，`Tests  68 passed (68)`（explain-request 40、deviations 13、f4-client 15）。
+Expected: PASS，`Tests  74 passed (74)`（explain-request 43、deviations 15、f4-client 16）。
 
 再跑整个模块，确认 Task 9–11 与前序任务一起通过：
 

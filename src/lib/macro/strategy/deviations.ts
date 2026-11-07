@@ -10,6 +10,7 @@
 // registered inputs (macro_observation frozen projections) against the latest settlement's evidence.observation_refs,
 // matched by (series_id, period_end); classification is exhaustive (revised / unchanged / dropped / newly_available with
 // later_period / backfill / new_series). Evidence without observation_refs → evidence_incomplete; never recomputed here.
+// A malformed registered or settled observation → evidence_incomplete; an enumerated eligible card whose detail is missing → incomplete.
 // No narrative. F4Unavailable propagates to the route (→ 503 judgments_unavailable).
 import type {DeviationCase,DiffKind,NewlySubkind,Region} from './contract';
 import {asRegime,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4-client';
@@ -52,14 +53,15 @@ export function deviationCase(region:Region,card:F4CardLite,detail:F4JudgmentDet
  const latest=[...detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0];
  if(!latest||latest.outcome!=='miss')return null;
  const selected=detail.selected??card.selected;if(!selected)return null;
- const registered=detail.inputs.filter(i=>i.kind==='macro_observation').map(i=>frozenObs(i.snapshot)).filter((x):x is FrozenObs=>x!==null);
  const refs=latest.evidence?.observation_refs;
  const realized=asRegime(latest.realized)??(isObj(latest.realized)?asRegime(latest.realized.selected)??asRegime(latest.realized.primary_state):null);
  const base={judgment_id:detail.judgment_id,settlement_id:latest.settlement_id??null,region,as_of:detail.as_of,selected,realized};
+ // Both sides are validated without filtering: a malformed entry on either side makes the evidence incomplete (no diffs).
  if(!Array.isArray(refs))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
+ const registered=detail.inputs.filter(i=>i.kind==='macro_observation').map(i=>frozenObs(i.snapshot));
  const settled=refs.map(frozenObs);
- if(settled.some(x=>x===null))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
- return {...base,evidence_state:'complete',diffs:classifyDiffs(registered,settled as FrozenObs[])};
+ if(registered.some(x=>x===null)||settled.some(x=>x===null))return {...base,evidence_state:'evidence_incomplete',diffs:[]};
+ return {...base,evidence_state:'complete',diffs:classifyDiffs(registered as FrozenObs[],settled as FrozenObs[])};
 }
 /** Enumerate the region's macro_regime cards to an empty history page (cap 5000), then build cases for settled misses. */
 export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cases:DeviationCase[];incomplete:boolean}>{
@@ -79,7 +81,8 @@ export async function listDeviationCases(f4:F4Client,region:Region):Promise<{cas
  const cards=[...seen.values()].slice(0,DEVIATION_CAP).filter(c=>c.methodology.id===METHOD.id&&c.methodology.version===METHOD.version&&c.lifecycle==='settled');
  const cases:DeviationCase[]=[];
  for(const c of cards){
-  const detail=await f4.judgmentDetail(c.judgment_id);if(!detail)continue;
+  const detail=await f4.judgmentDetail(c.judgment_id);
+  if(!detail){incomplete=true;continue;}   // enumerated by history but unresolvable: outcome and evidence were never inspected
   const dc=deviationCase(region,c,detail);if(dc)cases.push(dc);
  }
  cases.sort((x,y)=>x.as_of<y.as_of?1:x.as_of>y.as_of?-1:x.judgment_id<y.judgment_id?-1:1);

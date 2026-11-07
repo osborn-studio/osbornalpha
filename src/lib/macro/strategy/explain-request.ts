@@ -87,16 +87,22 @@ async function recoveredFinish(db:StrategyDb,run:RunDetail):Promise<FinishArgs>{
   :{...base,state:'rejected',validatorVersion:VALIDATOR_VERSION,validation,rendered:null,failureCodes:result.codes};
 }
 /** Completion recovery (plan audit R2-1 / R2-2). Never calls the provider and never throws: a failure leaves the row as it
- *  was for the next replay or GET. */
+ *  was for the next replay or GET. Settlement is independent of finish: the payload of the first read is immutable, so a
+ *  finish or reread failure still settles it (finally path; Task 11 Codex #5). */
 export async function recoverExplanation(d:RecoveryDeps,explanationId:string):Promise<void>{
  let run:RunDetail|null;
  try{run=await d.db.runDetail(explanationId);}catch{return;}
  if(!run)return;
- if(run.state==='running'&&hasRecordedCompletion(run.raw_output)){
-  try{await d.db.finishExplanation(await recoveredFinish(d.db,run));}catch{return;}
-  try{run=(await d.db.runDetail(explanationId))??run;}catch{return;}
+ const {explanation_id:id,usage_audit_key:key}=run;
+ let payload=run.finalize_payload;let finalized=run.finalized;
+ try{
+  if(run.state==='running'&&hasRecordedCompletion(run.raw_output)){
+   try{await d.db.finishExplanation(await recoveredFinish(d.db,run));}catch{return;}
+   try{const again=await d.db.runDetail(explanationId);if(again){payload=again.finalize_payload??payload;finalized=again.finalized;}}catch{/* settle from the first read */}
+  }
+ }finally{
+  if(payload!==null&&!finalized)await settleStored(d,id,key,payload);
  }
- if(run.finalize_payload!==null&&!run.finalized)await settleStored(d,run.explanation_id,run.usage_audit_key,run.finalize_payload);
 }
 /** GET /explanations: recover the user's running rows with a recorded completion, oldest first, at most `limit`. */
 export async function recoverUserExplanations(d:RecoveryDeps,userId:string,limit=RECOVER_PER_READ):Promise<number>{
@@ -155,6 +161,8 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   const quota=await d.llm.checkQuota();
   if(quota&&quota.limit!==-1&&!quota.allowed)return {status:429,body:{error:{code:'quota_exceeded',message:`${quota.used}/${quota.limit}`}}};
  }
+ // model input is built BEFORE the claim, so a preparation failure (prompt file, fact rendering) never opens a usage run
+ const input=modelInput(stored.body,body.locale);
  // step 5: claim — only 'claimed' continues to billing and the model
  let claim:Awaited<ReturnType<StrategyDb['claimExplanation']>>;
  try{claim=await d.db.claimExplanation({...claimArgs,manifestId:stored.manifest_id});}
@@ -179,7 +187,6 @@ export async function handleExplainRequest(d:ExplainDeps,userId:string,raw:unkno
   return err(costErrorStatus(code),code,projection);
  }
  // step 7: metered model call, then the durable completion before anything else can fail
- const input=modelInput(stored.body,body.locale);
  let content:string;let accounting:unknown;
  try{({content,accounting}=await d.llm.call(input.system,input.user));}
  catch(e){

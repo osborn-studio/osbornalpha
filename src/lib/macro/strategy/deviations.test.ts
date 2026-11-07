@@ -37,6 +37,11 @@ describe('deviationCase',()=>{
  it('evidence without observation_refs → evidence_incomplete, no recomputation',()=>{
   expect(deviationCase('US',card('j1','2026-10-15'),detail('j1',[o('A','2026-09-30','v1')],null))).toMatchObject({evidence_state:'evidence_incomplete',diffs:[]});
  });
+ it('a malformed registered observation → evidence_incomplete, never a silent drop that fakes newly_available',()=>{
+  const d=detail('j1',[o('A','2026-09-30','v1')],[o('A','2026-09-30','v1')]);
+  (d.inputs[1].snapshot as Record<string,unknown>).value=undefined;
+  expect(deviationCase('US',card('j1','2026-10-15'),d)).toMatchObject({evidence_state:'evidence_incomplete',diffs:[]});
+ });
  it('skips hits, other methods / versions, unsettled cards',()=>{
   const d=detail('j1',[],[]);
   expect(deviationCase('US',card('j1','x'),{...d,settlements:[{...d.settlements[1],outcome:'hit'}]})).toBeNull();
@@ -99,9 +104,15 @@ describe('listDeviationCases (spec §6.4 enumeration)',()=>{
   expect(r.incomplete).toBe(true);
  });
  it('short pages (even with an as_of tie) keep the result complete',async()=>{
-  const f4=fakeF4([[card('s1','2024-01-02'),card('s2','2024-01-02')],[card('s3','2024-01-01')],[]],{});
+  const f4=fakeF4([[card('s1','2024-01-02'),card('s2','2024-01-02')],[card('s3','2024-01-01')],[]],{j0:detail('j0',[],[]),s1:detail('s1',[],[]),s2:detail('s2',[],[]),s3:detail('s3',[],[])});
   expect((await listDeviationCases(f4,'US')).incomplete).toBe(false);
   expect(f4.before).toEqual([null,'2024-01-02','2024-01-01']);
+ });
+ it('an enumerated settled card whose detail is missing → incomplete, not silently complete',async()=>{
+  const f4=fakeF4([[card('j0','2026-10-15'),card('j1','2026-09-15')],[]],{j0:detail('j0',[],[])});
+  const r=await listDeviationCases(f4,'US');
+  expect(r.incomplete).toBe(true);
+  expect(r.cases.map(c=>c.judgment_id)).toEqual(['j0']);
  });
  it('F4Unavailable propagates',async()=>{
   const f4=fakeF4([],{});f4.latestRegimeCard=async()=>{throw new F4Unavailable();};

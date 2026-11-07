@@ -74,7 +74,22 @@ describe('projections',()=>{
   expect(lite).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v1'},selected:null});
  });
  it('judgmentDetailOf falls back to the card for selected and requires an id',()=>{
-  expect(judgmentDetailOf({card:CARD,judgment:{judgment_id:'j1',as_of:'2026-10-15'},settlements:[]}).selected).toBe('overheat');
+  expect(judgmentDetailOf({card:CARD,judgment:{judgment_id:'j1',as_of:'2026-10-15',inputs:[]},settlements:[]}).selected).toBe('overheat');
   expect(()=>judgmentDetailOf({judgment:{}})).toThrow(F4Unavailable);
+ });
+ it('judgmentDetailOf rejects malformed collections instead of normalizing them to empty / dropping entries',()=>{
+  const j={judgment_id:'j1',as_of:'2026-10-15',inputs:[]};
+  const S={outcome:'miss',realized:'recovery',evidence:null,settled_at:'2027-02-01T00:00:00Z'};
+  for(const bad of [
+   {card:CARD,judgment:j},                                         // settlements missing
+   {card:CARD,judgment:j,settlements:{}},                          // settlements not an array
+   {card:CARD,judgment:j,settlements:[S,null]},                    // invalid entry
+   {card:CARD,judgment:j,settlements:[S,{...S,settled_at:undefined}]},   // latest has no ordering field
+   {card:CARD,judgment:j,settlements:[{...S,outcome:undefined}]},
+   {card:CARD,judgment:j,settlements:[{...S,evidence:'x'}]},
+   {card:CARD,judgment:{...j,inputs:undefined},settlements:[]},
+   {card:CARD,judgment:{...j,inputs:[null]},settlements:[]},
+  ])expect(()=>judgmentDetailOf(bad)).toThrow(F4Unavailable);
+  expect(judgmentDetailOf({card:CARD,judgment:j,settlements:[S]}).settlements).toHaveLength(1);
  });
 });

@@ -35,8 +35,18 @@ export function judgmentDetailOf(body:unknown):F4JudgmentDetail{
  const id=str(j.judgment_id)??str(card.judgment_id);const asOf=str(j.as_of)??str(card.as_of);
  if(!id||!asOf)throw new F4Unavailable('f4_malformed:detail');
  const claim=isObj(j.claim)?j.claim:{};
- const inputs=(Array.isArray(j.inputs)?j.inputs:[]).filter(isObj).map(x=>({...x,kind:str(x.kind)??'',ref:isObj(x.ref)?x.ref:{},snapshot:isObj(x.snapshot)?x.snapshot:{}}));
- const settlements=(Array.isArray(body.settlements)?body.settlements:[]).filter(isObj).map(s=>({...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:isObj(s.evidence)?s.evidence:null,settled_at:str(s.settled_at)??''}));
+ const bad=()=>new F4Unavailable('f4_malformed:detail');
+ // Required collections are validated, never normalized: a missing / non-array collection or an invalid entry is malformed.
+ if(!Array.isArray(j.inputs)||!Array.isArray(body.settlements))throw bad();
+ const inputs=j.inputs.map(x=>{
+  if(!isObj(x)||str(x.kind)===null||(x.ref!==undefined&&!isObj(x.ref))||(x.snapshot!==undefined&&!isObj(x.snapshot)))throw bad();
+  return {...x,kind:x.kind as string,ref:isObj(x.ref)?x.ref:{},snapshot:isObj(x.snapshot)?x.snapshot:{}};
+ });
+ const settlements=body.settlements.map(s=>{
+  const settledAt=isObj(s)?str(s.settled_at):null;
+  if(!isObj(s)||!settledAt||Number.isNaN(Date.parse(settledAt))||str(s.outcome)===null||(s.settlement_id!==undefined&&str(s.settlement_id)===null)||(s.evidence!==undefined&&s.evidence!==null&&!isObj(s.evidence)))throw bad();
+  return {...s,settlement_id:str(s.settlement_id)??undefined,outcome:str(s.outcome),realized:s.realized??null,evidence:isObj(s.evidence)?s.evidence:null,settled_at:settledAt};
+ });
  return {judgment_id:id,as_of:asOf,selected:asRegime(claim.selected)??asRegime(display.value),inputs,settlements};
 }
 export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeoutMs?:number}={}):F4Client{

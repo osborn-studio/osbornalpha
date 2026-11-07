@@ -1,5 +1,6 @@
 // src/lib/macro/strategy/explain-request.test.ts
 import {describe,expect,it,vi} from 'vitest';
+import * as render from './explain-render';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection} from './contract';
 import {memoryStrategyDb} from './db';
@@ -8,6 +9,8 @@ import {buildSnapshotFactsManifest} from './facts';
 import {memoryStrategyPort} from './port';
 import {runReview} from './review';
 import {daily,fixture,monthly,snap} from './testing/fixture';
+
+vi.mock('./explain-render',async orig=>{const m=await orig<typeof import('./explain-render')>();return {...m,renderFacts:vi.fn(m.renderFacts)};});
 
 const USER='11111111-1111-4111-8111-111111111111';
 const REQ='22222222-2222-4222-8222-222222222222';
@@ -306,6 +309,40 @@ describe('completion recovery without the provider (plan audit R2-1 / R2-2)',()=
   expect(await recoverUserExplanations(d,USER)).toBe(0);
   for(const req of [REQ,second])expect((await d.db.runOf(USER,req))!.state).toBe('accepted');
   expect(f.calls.filter(c=>c==='call')).toHaveLength(2);
+ });
+});
+
+describe('preparation failure and settlement independence (Task 11 Codex #4 / #5)',()=>{
+ it('a model-input preparation failure surfaces before any claim or usage run: no begin, no call, no run row',async()=>{
+  const f=fakeLlm();const d=deps({llm:f.llm});
+  vi.mocked(render.renderFacts).mockImplementationOnce(()=>{throw new TypeError('render bug');});
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('render bug');
+  expect(f.calls.some(c=>c.startsWith('begin')||c==='call'||c.startsWith('finalize'))).toBe(false);
+  expect(await d.db.runOf(USER,REQ)).toBeNull();
+ });
+ async function stuck(){   // finish and finalize both failed once: recorded completion + unsettled payload, state running
+  const f=fakeLlm({finalizeError:new Error('down')});const d=deps({llm:f.llm});
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValueOnce(new Error('connection reset'));
+  await expect(handleExplainRequest(d,USER,body())).rejects.toThrow('connection reset');
+  const run=(await d.db.runOf(USER,REQ))!;
+  expect(d.db._run(run.explanation_id)).toMatchObject({state:'running',finalize_payload:PAY('completed',[{tokens:42}]),finalized:false});
+  f.state.finalizeError=undefined;f.finalized.length=0;
+  return {f,d,id:run.explanation_id};
+ }
+ it('recovery finish keeps failing: the recorded payload is still settled verbatim and marked finalized',async()=>{
+  const {f,d,id}=await stuck();
+  vi.spyOn(d.db,'finishExplanation').mockRejectedValue(new Error('still down'));
+  await recoverUserExplanations(d,USER);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+  expect(d.db._run(id)).toMatchObject({state:'running',finalized:true});
+ });
+ it('the post-finish reread fails: the payload loaded first is still settled',async()=>{
+  const {f,d,id}=await stuck();
+  const detail=d.db.runDetail.bind(d.db);let n=0;
+  vi.spyOn(d.db,'runDetail').mockImplementation(async x=>{if(++n===2)throw new Error('read down');return detail(x);});
+  await recoverUserExplanations(d,USER);
+  expect(f.finalized).toEqual([PAY('completed',[{tokens:42}])]);
+  expect(d.db._run(id)).toMatchObject({state:'accepted',finalized:true});
  });
 });
 
