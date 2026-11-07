@@ -17,6 +17,10 @@ const MESSAGE_DOMAINS = [
   'admin',
   // Analyst scoring layer (spec 2026-10-17):
   'analyst',
+  // MACRO
+  // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
+  'macro',
+  // /MACRO
 ] as const;
 
 export default getRequestConfig(async () => {

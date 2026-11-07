@@ -16,6 +16,9 @@ export const criticalSuites = [
  // F6 begin
  .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts')
  // F6 end
+ // MACRO
+ .concat('src/lib/macro/macro.integration.test.ts')
+ // /MACRO
 ;
 
 export function migrationInventory(root = process.cwd()) {

@@ -63,3 +63,5 @@ research-data/
 playwright-report/
 test-results/
 .env*
+# MACRO
+scripts/macro/.venv/

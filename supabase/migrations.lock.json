@@ -204,6 +204,10 @@
     {
       "file": "20261110090000_dq_eval_runs.sql",
       "sha256": "7808ea386e4547c8b0e34dc891d2bc1a2c69a2cf2f32fc675a26bf130cd1a591"
+    },
+    {
+      "file": "20261114090000_macro_workbench.sql",
+      "sha256": "aea3f93c9d05e3fc3c93c7ea85618e744ed1ed8189a74319ecd8b62d16960835"
     }
   ]
 }
