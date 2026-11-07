@@ -72,7 +72,8 @@ describe('shared strategy fact views (installed Next)',()=>{
   const work={nextFetchId:1,pendingRevalidates:{}};
   await expect(workAsyncStorage.run(work as never,()=>factView(key(),state(),compute,memo))).rejects.toThrow('refresh down');
   await Promise.all(Object.values(work.pendingRevalidates));
-  expect(memo.stats().size).toBe(0);
+  expect(memo.stats().size).toBe(0);expect(compute).toHaveBeenCalledTimes(2);
+  expect(revalidates).toEqual([300]); // failed refresh did not replace the shared entry
   compute.mockResolvedValue({manifest_id:'persisted',generation:2});
   expect((await factView(key(),state(),compute,memo)).value.generation).toBe(2);
   log.mockRestore();
@@ -86,7 +87,11 @@ describe('shared strategy fact views (installed Next)',()=>{
   // App Router context deliberately returns stale immediately and refreshes in background.
   const work={nextFetchId:1,pendingRevalidates:{}};
   const result=await workAsyncStorage.run(work as never,()=>factView(key(),state(),compute,memo));
-  expect(result.value.generation).toBeGreaterThan(1);
+  expect(result.value.generation).toBe(2);
   await Promise.all(Object.values(work.pendingRevalidates));
+  expect(compute).toHaveBeenCalledTimes(2); // one initial build, one shared refresh
+  expect(revalidates).toEqual([300,300]);
+  expect((await factView(key(),state(),compute,new StrategyMemo())).value).toEqual(result.value);
+  expect(compute).toHaveBeenCalledTimes(2);
  });
 });
