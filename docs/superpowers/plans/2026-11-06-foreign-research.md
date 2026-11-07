@@ -43,6 +43,7 @@
 - **代码版本**：`resolveCodeVersion({allowGit})`（`src/lib/facts/deps.ts`，只 import）；路由里 `allowGit:false`，脚本 `allowGit:true`；为 null 时写 `'unknown'`。
 - **提交**：`git add <本任务 Files>`（不用 `git add -A`）后，`git commit` 单独一条命令；同一命令里不得出现任何 `-n` 记号（包括 `grep -n`、`head -n`），仓库钩子会拦截；不要 `--no-verify`。提交信息末尾：`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`。每个任务提交前在 `docs/audits/2026-11-06-foreign-research/10-implementation-log.md` 末尾追加一行 `| <任务> | <日期> | <提交 sha 前 8 位> | <测试数> | <偏差或无> |`（文件不存在则建，表头 `| 任务 | 日期 | 提交 | 测试 | 偏差 |`）。
 - **测试命令**：`npm test -- <path>`、`npm run typecheck`、`npm run lint`（`--max-warnings=0`）、`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db`、同前缀 `npm run test:migrations`。
+- **集成测试先过类型检查**：A1–A5、C8 每次改完 `*.integration.test.ts` 后、跑 `test:db` 之前先 `npm run typecheck`（集成文件同样在 tsconfig 覆盖内）；类型 / 语法错误不得留给 `test:db` 去发现。
 - **测试库全局状态隔离**：`broker_research_settings` 是单行全局状态，`test:db` 按文件并行。凡切换 `public_enabled`、`approved_gold_corpus_hash` 或依赖其默认值的集成 describe（A1–A3、A5 的 pg 契约、C8 pipeline），在 `beforeAll` 用一条专用连接取会话级 `pg_advisory_lock(hashtext('broker_research_settings'))`，`afterAll` 复原设置行后 `pg_advisory_unlock` 并释放连接（`broker-research.integration.test.ts::lockSettings`；C8 用同一把锁）。断言仍只按本文件自己的 `institution_id / report_id` 过滤。
 - **不提交真实研报**：夹具一律合成（`src/lib/broker-research/fixtures/`：合成页文本 JSON、预期 `DocumentExtraction`、录制格式的 LLM 响应 JSON）。不抓取任何网站。
 
@@ -228,7 +229,8 @@ export interface PurgeStepRow{document_id:string;step:PurgeStep;status:'pending'
 
 export interface MaterializeReceipt{effectiveHash:string;materializedHash:string;targets:number;basis:'candidate'|'effective'|'mixed'}
 export interface RuleResult{rule:string;passed:boolean;blocking:boolean;target_key:string|null;reason_code:string|null;detail:Record<string,unknown>}
-export interface DisclosureCheck{version:string;inputs_hash:string;passed:boolean;hits:{kind:'restricted_value:target'|'restricted_name';token:string;target_key?:string;analyst_id?:string}[]}
+/** db_digest = broker_report_disclosure_digest at approval (stamped by the approval triggers; a supplied value must be current). */
+export interface DisclosureCheck{version:string;inputs_hash:string;passed:boolean;db_digest?:string;hits:{kind:'restricted_value:target'|'restricted_name';token:string;target_key?:string;analyst_id?:string}[]}
 export interface GroundingAssertion{sentence_idx:number;target_key:string;field:FieldName;value:string;unit:ValueUnit;field_id:string}
 export interface GroundingResult{version:string;passed:boolean;assertions:GroundingAssertion[];failures:{sentence_idx:number;reason:string}[]}
 
@@ -241,6 +243,8 @@ export interface ReviewQueueOptions{status?:ReviewStatus;limit?:number}
 export interface PublicReportFilter{institutionId?:string;issuerId?:string;rating?:NormalizedRating;scope?:ReportScope;from?:string;to?:string;hasSummary?:boolean;limit:number;cursor?:{publishedDate:string;reportId:string}}
 /** Steps of purgeReportText (the PDF / artifacts / runs steps are storage work, spec §6.5). */
 export type PurgeTextStep=Extract<PurgeStep,'fields_text'|'snippets_text'|'summaries'|'quarantine_payload'>;
+export type TitleSurface='title_original'|'title_public'|'title_zh'|'title_en';
+export interface DisclosureRecheckInput{expected_digest:string;titles:Partial<Record<TitleSurface,DisclosureCheck>>;snippets:Record<string,DisclosureCheck>;summaries:Record<string,DisclosureCheck>}
 export type QuarantineResolution='resolved_accept'|'resolved_reject';
 /** Open dq_quarantine rows of the report's document, as shown on the review page (payload = values and pages only). */
 export interface ReviewQuarantineItem{id:string;reason_code:string;natural_key:string;payload:Record<string,unknown>;created_at:string}
@@ -297,12 +301,19 @@ export interface BrokerResearchDb{
  setSnippetStatus(snippetId:string,patch:{status:TextStatus;disclosure_check?:DisclosureCheck;approved_by?:string|null}):Promise<void>;
  getSnippet(snippetId:string):Promise<SnippetRow|null>;
  listSnippets(reportId:string):Promise<SnippetRow[]>;
+ /** rpc broker_summary_commit: lease fence + insert (status draft|rejected) + finish the run succeeded, one transaction; lost lease → BrokerResearchDbError('lease_lost'), nothing written (P-R1-09). */
+ summaryCommit(documentId:string,token:string,runId:string,row:Omit<SummaryRow,'summary_id'|'approved_by'|'approved_at'|'generated_at'|'draft_reason'|'run_id'|'kind'>):Promise<string>;
+ /** rpc broker_title_commit: lease fence + title_zh/title_en/title_run_id on the draft report + finish the run, one transaction. */
+ titleCommit(documentId:string,token:string,runId:string,titles:{title_zh:string|null;title_en:string|null}):Promise<'ok'>;
  insertSummary(row:Omit<SummaryRow,'summary_id'|'approved_by'|'approved_at'|'generated_at'|'draft_reason'>):Promise<string>;
  setSummaryStatus(summaryId:string,patch:{status:TextStatus;disclosure_check?:DisclosureCheck;approved_by?:string|null}):Promise<void>;
  getSummary(summaryId:string):Promise<SummaryRow|null>;
  listSummaries(reportId:string):Promise<SummaryRow[]>;
  // publish
  publishBlockers(reportId:string):Promise<string[]>;
+ disclosureDigest(reportId:string):Promise<string>;
+ /** rpc broker_report_disclosure_recheck (spec §4.11 重跑规则; P-R1-08): verifies expected_digest is current, applies the title policy, checks APPROVED snippets/summaries only, restores disclosure_ok=true; failures change nothing. */
+ disclosureRecheck(reportId:string,by:string,checks:DisclosureRecheckInput):Promise<{restored:boolean;failures:string[]}>;                                               // rpc broker_report_disclosure_digest (P-R1-04)
  publish(reportId:string,by:string):Promise<{publicationId:string}>;
  unpublish(reportId:string,by:string,reason:string):Promise<void>;
  getPublication(publicationId:string):Promise<PublicationRow|null>;
@@ -376,6 +387,12 @@ export interface PublicReportDetail extends PublicReportBundle{citations:Record<
 17. **金额是十进制字符串**：outbox 载荷（`claim.target_price`、`reference_price`）与发布快照里的金额一律字符串；E1 投递不经 `Number()`。
 18. **回草稿原因**：`SnippetRow.draft_reason` / `SummaryRow.draft_reason`（`licence_version|analyst_disclosure|disclosure_inputs|summary_stale`），D4/D5 的"受影响片段 / 摘要"计数读它。
 19. **`deps.tables` 的用途**：服务只用它读写计划一的表（`dq_quarantine`、`ingest_batches`、`research_audit_log`）；本模块表的写入一律经 `BrokerResearchDb`。唯一例外是 D4 `admin-read.ts` 的总览计数与许可影响面：service-role 只读本模块表做聚合（契约没有计数方法），不写。
+20. **披露输入摘要与批准绑定**（P-R1-04）：`broker_report_disclosure_digest(report)`（契约 `disclosureDigest`）覆盖许可版本 + `allows_public_target_price`、物化 targets 的 `target_price/upside_pct`、绑定分析师的披露字段。批准片段 / 摘要时，服务先读摘要值再算 `checkDisclosure`，提交 `disclosure_check.db_digest`；批准触发器拒绝过期值（`disclosure_inputs_changed` → 409），未提供时写入当前值。任何 `broker_report_analysts` 增删改都把该报告的已批准文本回 `draft`（`analyst_disclosure`）。
+21. **重跑披露检查**（P-R1-08，规格 §4.11）：`POST /api/admin/broker-research/reports/[reportId]/disclosure-recheck` → C6 `recheckDisclosure` → `db.disclosureRecheck`（SQL `broker_report_disclosure_recheck`）；复核页在 `disclosure_ok=false` 时显示该操作与失败项。
+22. **LLM 结果的围栏提交**（P-R1-09）：摘要 / 标题翻译经 `summaryCommit` / `titleCommit` 写入并收尾运行（同一事务、租约围栏），之后才释放租约；`insertSummary` 只留给测试夹具。
+23. **回放只读快照**（P-R1-10）：发布快照的每个证据行带 `value_source_text`、`value_source_sha256`、`framed`、`extracted`；`replay.ts` 不读活的证据行。
+24. **函数权限**（P-R1-05）：A1、A2 迁移末尾的 `do` 块对所有 `public.broker_%` 函数（含触发器函数）`revoke execute … from public, anon, authenticated`；新增函数一律以 `broker_` 开头。
+25. **子表写入的锁顺序**（P-R1-03）：子表守卫先 `select … for update` 父报告行，再判断状态（与 `broker_lock_draft` / `broker_report_publish` 同序：报告 → 子表）。
 
 ## 推荐执行顺序
 
@@ -501,13 +518,14 @@ function seeds(pool:Pool){
  const licence=async(o:Record<string,unknown>={},confirm=true)=>{
   const cols:Record<string,unknown>={source_label:'Test terminal',licence_kind:'terminal_subscription',holder:'Owner',terms_summary:'test terms',allows_llm_processing:true,allows_public_metadata:true,allows_public_snippets:true,allows_public_summary:true,allows_public_target_price:true,snippet_max_chars:200,valid_from:'2020-01-01',...o};
   const k=Object.keys(cols);
-  const id=await one(`insert into public.broker_report_licences(${k.join(',')}) values(${k.map((_,i)=>`$${i+1}`).join(',')}) returning licence_id v`,k.map(c=>cols[c]));
+  const id=await one(`insert into public.broker_report_licences(${k.join(',')}) values(${k.map((_,i)=>`$${i+1}`).join(',')}) returning licence_id as v`,k.map(c=>cols[c]));
+  if(typeof id!=='string'||!/^[0-9a-f-]{36}$/.test(id))throw new Error(`seed licence: expected uuid, got ${String(id)}`);
   if(confirm)await q(`update public.broker_report_licences set confirmed_by=$2,confirmed_at=now(),confirmed_version=version where licence_id=$1`,[id,user()]);
   return id as string;
  };
  const document=async(licenceId:string,o:{sha?:string;uploadedAt?:string}={})=>{
   const s=o.sha??sha(randomUUID());
-  return await one(`insert into public.broker_report_documents(document_id,sha256,storage_path,byte_size,licence_id,uploaded_by,uploaded_at,original_filename) values(gen_random_uuid(),$1,'reports/'||$1||'.pdf',1024,$2,$3,coalesce($4::timestamptz,now()),'r.pdf') returning document_id v`,[s,licenceId,user(),o.uploadedAt??null]) as string;
+  return await one(`insert into public.broker_report_documents(document_id,sha256,storage_path,byte_size,licence_id,uploaded_by,uploaded_at,original_filename) values(gen_random_uuid(),$1,'reports/'||$1||'.pdf',1024,$2,$3,coalesce($4::timestamptz,now()),'r.pdf') returning document_id as v`,[s,licenceId,user(),o.uploadedAt??null]) as string;
  };
  /** A succeeded parse run made current: uploaded → parsing → parsed. */
  const parsed=async(documentId:string)=>{
@@ -523,16 +541,16 @@ function seeds(pool:Pool){
   await q(`insert into public.broker_report_runs(run_id,document_id,kind,parse_run_id,model_id,registry_hash,prompt_version,schema_version,code_version,behavior_digest,licence_version) values($1,$2,'extract',$3,'m-test','r'||repeat('0',63),'broker-extract/1','extract-schema/1','test',$4,1)`,[run,documentId,parseRun,digest]);
   return run;
  };
- const report=async(documentId:string)=>await one(`insert into public.broker_research_reports(document_id,code_version) values($1,'test') returning report_id v`,[documentId]) as string;
+ const report=async(documentId:string)=>await one(`insert into public.broker_research_reports(document_id,code_version) values($1,'test') returning report_id as v`,[documentId]) as string;
  /** A human 'confirmed' evidence row with a span (valid under every constraint). */
  const field=async(reportId:string,parseRun:string,o:Record<string,unknown>)=>{
   const cols:Record<string,unknown>={report_id:reportId,parse_run_id:parseRun,field:'title',occurrence:1,value_text:'Title',page:1,char_start:0,char_end:5,value_source_text:'Title',extractor:`human:${randomUUID()}`,status:'confirmed',...o};
   const k=Object.keys(cols);
-  return await one(`insert into public.broker_report_fields(${k.join(',')}) values(${k.map((_,i)=>`$${i+1}`).join(',')}) returning field_id v`,k.map(c=>{const v=cols[c];return v!==null&&typeof v==='object'?JSON.stringify(v):v;})) as string;
+  return await one(`insert into public.broker_report_fields(${k.join(',')}) values(${k.map((_,i)=>`$${i+1}`).join(',')}) returning field_id as v`,k.map(c=>{const v=cols[c];return v!==null&&typeof v==='object'?JSON.stringify(v):v;})) as string;
  };
  const stock=async(ticker:string,market:'A'|'HK'|'US')=>{await q(`insert into public.stocks_universe(ticker,name,market) values($1,$1,$2::market_t) on conflict (ticker) do nothing`,[ticker,market]);};
- const issuer=async()=>await one(`insert into public.issuers(issuer_id,canonical_name_en) values(gen_random_uuid(),'ZZ Broker Test') returning issuer_id v`) as string;
- const institution=async(name=`ZZ Broker ${randomUUID()}`)=>await one(`insert into public.research_institutions(name_en) values($1) returning institution_id v`,[name]) as string;
+ const issuer=async()=>await one(`insert into public.issuers(issuer_id,canonical_name_en) values(gen_random_uuid(),'ZZ Broker Test') returning issuer_id as v`) as string;
+ const institution=async(name=`ZZ Broker ${randomUUID()}`)=>await one(`insert into public.research_institutions(name_en) values($1) returning institution_id as v`,[name]) as string;
  /** Simulates broker_report_publish at table level (A1 has no functions): receipt, publication, status flip in one transaction under the publishing setting. */
  const forcePublish=async(reportId:string,licenceVersion=1)=>{
   const c=await pool.connect();
@@ -580,7 +598,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   const h=sha(randomUUID());
   expect((await fails(s.q(`insert into public.broker_report_documents(document_id,sha256,storage_path,byte_size,licence_id,uploaded_by,original_filename) values(gen_random_uuid(),$1,'reports/other.pdf',1,$2,gen_random_uuid(),'a.pdf')`,[h,lic]))).message).toMatch(/broker_documents_storage_path/);
   const doc=await s.document(lic);
-  expect((await fails(s.document(lic,{sha:(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[doc]))[0].sha256})))).code).toBe('23505');
+  expect((await fails(s.document(lic,{sha:(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[doc]))[0].sha256}))).code).toBe('23505');
   expect((await fails(s.q(`update public.broker_report_documents set lease_token=gen_random_uuid() where document_id=$1`,[doc]))).message).toMatch(/broker_documents_lease_pair/);
   const iid=randomUUID();
   expect((await fails(s.q(`insert into public.broker_report_upload_intents(intent_id,sha256,byte_size,licence_id,original_filename,created_by,expires_at,status,staging_path) values($1,$2,1,$3,'a.pdf',gen_random_uuid(),now()+interval '2 hours','open','staging/other.pdf')`,[iid,h,lic]))).message).toMatch(/broker_intents_staging_path/);
@@ -606,8 +624,8 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   const lic=await s.licence();const doc=await s.document(lic);const pr=await s.parsed(doc);const rep=await s.report(doc);
   const ext=await s.extractRun(doc,pr);
   await s.q(`update public.broker_research_reports set summary_input_digest=$2 where report_id=$1`,[rep,sha('d')]);
-  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id v`,[rep,pr,JSON.stringify(PASS)]);
-  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by,approved_at) values($1,'zh',$2,$3,'摘要',3,'{"version":"grounding/1","passed":true,"assertions":[],"failures":[]}',$4,'approved',gen_random_uuid(),now()) returning summary_id v`,[rep,ext,sha('d'),JSON.stringify(PASS)]);
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id as v`,[rep,pr,JSON.stringify(PASS)]);
+  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by,approved_at) values($1,'zh',$2,$3,'摘要',3,'{"version":"grounding/1","passed":true,"assertions":[],"failures":[]}',$4,'approved',gen_random_uuid(),now()) returning summary_id as v`,[rep,ext,sha('d'),JSON.stringify(PASS)]);
   const before=Number(await s.one(`select count(*)::int v from public.broker_outbox where kind='licence.changed' and payload->>'licence_id'=$1`,[lic]));
   await s.q(`update public.broker_report_licences set source_label='Renamed', evidence_path='licences/'||$2||'.pdf' where licence_id=$1`,[lic,sha('evidence')]);
   expect((await s.q(`select version,confirmed_version from public.broker_report_licences where licence_id=$1`,[lic]))[0]).toEqual({version:1,confirmed_version:1});
@@ -675,6 +693,48 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   expect((await fails(s.q(`delete from public.broker_report_runs where run_id=$1`,[run]))).message).toMatch(/^append_only:/);
  });
 
+ it('child guard on every attached table: insert/update/delete compile and behave on draft and published reports (P-R1-02)',async()=>{
+  const lic=await s.licence();const doc=await s.document(lic);const pr=await s.parsed(doc);const rep=await s.report(doc);const ext=await s.extractRun(doc,pr);
+  await s.stock('ZZCG','US');const inst=await s.institution();
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'Pat Placeholder') returning analyst_id as v`,[inst]);
+  const af=await s.field(rep,pr,{field:'analyst',value_text:'Pat Placeholder',value_source_text:'Pat P',char_end:5});
+  // draft: every table accepts insert and update; targets / overrides / bindings also delete; fields / snippets / summaries are append-only
+  await s.q(`insert into public.broker_report_targets(report_id,target_key,basis,ticker_as_stated,input_hash) values($1,'ZZCG','candidate','ZZCG US',$2)`,[rep,sha('t')]);
+  await s.q(`update public.broker_report_targets set rating_raw='Buy' where report_id=$1`,[rep]);
+  await s.q(`insert into public.broker_report_target_overrides(report_id,target_key,security_ticker,set_by) values($1,'ZZCG','ZZCG',gen_random_uuid())`,[rep]);
+  await s.q(`update public.broker_report_target_overrides set note='n' where report_id=$1`,[rep]);
+  const fid=await s.field(rep,pr,{field:'sector',value_text:'Tech',value_source_text:'Tech',char_end:4});
+  await s.q(`update public.broker_report_fields set status='rejected' where field_id=$1`,[fid]);
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,4,'abcd',gen_random_uuid()) returning snippet_id as v`,[rep,pr]);
+  await s.q(`update public.broker_report_snippets set status='rejected' where snippet_id=$1`,[sn]);
+  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check) values($1,'en',$2,$3,'S',0,'{"passed":false}','{"passed":false}') returning summary_id as v`,[rep,ext,sha('i')]);
+  await s.q(`update public.broker_report_summaries set status='rejected' where summary_id=$1`,[su]);
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,af]);
+  await s.q(`update public.broker_report_analysts set role='lead' where report_id=$1`,[rep]);
+  expect((await fails(s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,fid]))).message).toMatch(/analyst_field_mismatch|duplicate key/);
+  for(const t of ['broker_report_fields','broker_report_snippets','broker_report_summaries'])
+   expect((await fails(s.q(`delete from public.${t} where report_id=$1`,[rep]))).message).toMatch(/^append_only:/);
+  await s.q(`delete from public.broker_report_analysts where report_id=$1`,[rep]);
+  await s.q(`delete from public.broker_report_target_overrides where report_id=$1`,[rep]);
+  await s.q(`delete from public.broker_report_targets where report_id=$1`,[rep]);
+  // published: every table rejects every write with published_immutable (no "record new has no field" error)
+  await s.q(`insert into public.broker_report_targets(report_id,target_key,basis,ticker_as_stated,input_hash) values($1,'ZZCG','candidate','ZZCG US',$2)`,[rep,sha('t')]);
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,af]);
+  await s.forcePublish(rep);
+  const writes:[string,unknown[]][]=[
+   [`insert into public.broker_report_targets(report_id,target_key,basis,ticker_as_stated,input_hash) values($1,'ZZCH','candidate','ZZCH US',$2)`,[rep,sha('u')]],
+   [`update public.broker_report_targets set rating_raw='Sell' where report_id=$1`,[rep]],
+   [`delete from public.broker_report_targets where report_id=$1`,[rep]],
+   [`insert into public.broker_report_target_overrides(report_id,target_key,security_ticker,set_by) values($1,'ZZCG','ZZCG',gen_random_uuid())`,[rep]],
+   [`update public.broker_report_fields set reviewed_at=now() where field_id=$1`,[fid]],
+   [`update public.broker_report_snippets set text='abce' where snippet_id=$1`,[sn]],
+   [`update public.broker_report_summaries set summary_md='T' where summary_id=$1`,[su]],
+   [`update public.broker_report_analysts set role='x' where report_id=$1`,[rep]],
+   [`delete from public.broker_report_analysts where report_id=$1`,[rep]],
+  ];
+  for(const [sql,args] of writes){const e=await fails(s.q(sql,args));expect(e.message).toMatch(/^published_immutable:/);expect(e.message).not.toMatch(/has no field/);}
+ });
+
  it('reports guard and child guards: draft-only insert, publish_direct_forbidden, published immutability, frozen children, snippets/summaries may only fall back',async()=>{
   const lic=await s.licence();const doc=await s.document(lic);const pr=await s.parsed(doc);const rep=await s.report(doc);
   expect((await fails(s.q(`insert into public.broker_research_reports(document_id,code_version,status) values($1,'t','published')`,[await s.document(lic)]))).message).toMatch(/^publish_direct_forbidden/);
@@ -682,7 +742,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   expect((await fails(s.q(`update public.broker_research_reports set revision=2 where report_id=$1`,[rep]))).message).toMatch(/^report_column_managed/);
   const fid=await s.field(rep,pr,{field:'title'});
   await s.q(`update public.broker_research_reports set summary_input_digest=$2 where report_id=$1`,[rep,sha('d')]);
-  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id v`,[rep,pr,JSON.stringify(PASS)]);
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id as v`,[rep,pr,JSON.stringify(PASS)]);
   const pub=await s.forcePublish(rep);
   expect((await s.q(`select status,current_publication_id from public.broker_research_reports where report_id=$1`,[rep]))[0]).toEqual({status:'published',current_publication_id:pub});
   expect((await fails(s.q(`update public.broker_research_reports set title_public='x' where report_id=$1`,[rep]))).message).toMatch(/^published_immutable/);
@@ -717,7 +777,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   expect((await fails(set(`status='extracted'`))).message).toMatch(/^field_transition_invalid/);
   const t=await s.field(rep,pr,{field:'title',occurrence:2});
   const inst=await s.institution();
-  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'A. Analyst') returning analyst_id v`,[inst]);
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'A. Analyst') returning analyst_id as v`,[inst]);
   expect((await fails(s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,t]))).message).toMatch(/^analyst_field_mismatch/);
   const af=await s.field(rep,pr,{field:'analyst',value_text:'A. Analyst'});
   await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,af]);
@@ -726,7 +786,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
 
  it('rating scales are close-only; analyst_disclosure_change flags reports and drafts their approved texts; append-only logs; outbox claim uniqueness',async()=>{
   const inst=await s.institution();
-  const sc=await s.one(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'Buy','buy','https://example.test/r','2020-01-01',gen_random_uuid()) returning scale_id v`,[inst]);
+  const sc=await s.one(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'Buy','buy','https://example.test/r','2020-01-01',gen_random_uuid()) returning scale_id as v`,[inst]);
   expect((await fails(s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'BUY','sell','https://example.test/r','2020-01-01',gen_random_uuid())`,[inst]))).code).toBe('23505');
   expect((await fails(s.q(`update public.research_rating_scales set normalized='sell' where scale_id=$1`,[sc]))).message).toMatch(/^scale_close_only/);
   expect((await fails(s.q(`update public.research_rating_scales set valid_to='2025-01-01' where scale_id=$1`,[sc]))).message).toMatch(/^scale_closed_by_required/);
@@ -736,20 +796,20 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   expect((await fails(s.q(`delete from public.research_rating_scales where scale_id=$1`,[sc]))).message).toMatch(/^append_only:/);
 
   const lic=await s.licence();const doc=await s.document(lic);const pr=await s.parsed(doc);const rep=await s.report(doc);
-  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'B. Analyst') returning analyst_id v`,[inst]);
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'B. Analyst') returning analyst_id as v`,[inst]);
   const af=await s.field(rep,pr,{field:'analyst',value_text:'B. Analyst'});
   await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[rep,an,af]);
-  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id v`,[rep,pr,JSON.stringify(PASS)]);
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,status,disclosure_check,approved_by,approved_at,created_by) values($1,'thesis',$2,1,0,4,'abcd','approved',$3,gen_random_uuid(),now(),gen_random_uuid()) returning snippet_id as v`,[rep,pr,JSON.stringify(PASS)]);
   await s.q(`update public.research_analysts set created_at=created_at where analyst_id=$1`,[an]);            // no disclosure input changed
   expect(await s.one(`select disclosure_ok v from public.broker_research_reports where report_id=$1`,[rep])).toBe(true);
   await s.q(`update public.research_analysts set public_display=true where analyst_id=$1`,[an]);
   expect(await s.one(`select disclosure_ok v from public.broker_research_reports where report_id=$1`,[rep])).toBe(false);
   expect((await s.q(`select status,draft_reason from public.broker_report_snippets where snippet_id=$1`,[sn]))[0]).toEqual({status:'draft',draft_reason:'analyst_disclosure'});
 
-  const log=await s.one(`insert into public.broker_report_access_log(document_id,user_id,action) values($1,gen_random_uuid(),'text_viewed') returning id v`,[doc]);
+  const log=await s.one(`insert into public.broker_report_access_log(document_id,user_id,action) values($1,gen_random_uuid(),'text_viewed') returning id as v`,[doc]);
   expect((await fails(s.q(`update public.broker_report_access_log set action='upload' where id=$1`,[log]))).message).toMatch(/^append_only:/);
   expect((await fails(s.q(`insert into public.broker_report_access_log(document_id,user_id,action) values($1,gen_random_uuid(),'ip_logged')`,[doc]))).message).toMatch(/broker_access_log_action/);
-  const ev=await s.one(`insert into public.broker_eval_receipts(corpus_kind,corpus_hash,behavior_digest,extractor_version,model_id,registry_hash,prompt_version,schema_version,code_version,n_docs,per_field,absence,precision_min,recall_min,passed,ran_by) values('synthetic',$1,$1,'f3/1','m','r','p','s','t',1,'{}','{"tp":0,"fp":0,"fn":0}',0.99,0.99,true,gen_random_uuid()) returning receipt_id v`,[sha('c')]);
+  const ev=await s.one(`insert into public.broker_eval_receipts(corpus_kind,corpus_hash,behavior_digest,extractor_version,model_id,registry_hash,prompt_version,schema_version,code_version,n_docs,per_field,absence,precision_min,recall_min,passed,ran_by) values('synthetic',$1,$1,'f3/1','m','r','p','s','t',1,'{}','{"tp":0,"fp":0,"fn":0}',0.99,0.99,true,gen_random_uuid()) returning receipt_id as v`,[sha('c')]);
   expect((await fails(s.q(`update public.broker_eval_receipts set passed=false where receipt_id=$1`,[ev]))).message).toMatch(/^append_only:/);
   expect((await fails(s.q(`insert into public.broker_eval_receipts(corpus_kind,corpus_hash,behavior_digest,extractor_version,model_id,registry_hash,prompt_version,schema_version,code_version,n_docs,per_field,absence,precision_min,recall_min,passed,ran_by) values('gold',$1,$1,'f3/1','m','r','p','s','t',30,'{}','{"tp":0,"fp":0,"fn":0}',0.5,0.99,true,gen_random_uuid())`,[sha('c')]))).message).toMatch(/broker_eval_passed_rule/);
   const key=`broker_target_price:${randomUUID()}:9988.HK`;
@@ -1406,6 +1466,7 @@ begin
   if old.document_id is not null and new.document_id is distinct from old.document_id then raise exception 'intent_document_set_once'; end if;
   if new.status <> old.status then
     if not ((old.status, new.status) in (('open','validating'),('open','expired'),('open','abandoned'),
+            ('validating','open'),   -- staging bytes not there yet: back to open, retryable intent_not_uploaded (C3)
             ('validating','validated'),('validating','abandoned'),('validating','expired'),
             ('validated','promoting'),('validated','abandoned'),('validated','expired'),
             ('promoting','committed'),('promoting','abandoned'))) then
@@ -1543,24 +1604,35 @@ begin
   if tg_op = 'DELETE' and tg_table_name in ('broker_report_fields','broker_report_snippets','broker_report_summaries') then
     raise exception 'append_only:% rows are never deleted', tg_table_name using errcode = '23514';
   end if;
-  select r.status into v_status from public.broker_research_reports r where r.report_id = v_report;
+  -- Parent row lock first (same order as broker_lock_draft / broker_report_publish: report, then children), so a
+  -- child write cannot interleave with a publication in progress: it waits, then sees 'published' (P-R1-03).
+  select r.status into v_status from public.broker_research_reports r where r.report_id = v_report for update;
   if v_status = 'published' then
-    if tg_op = 'UPDATE' and tg_table_name in ('broker_report_snippets','broker_report_summaries')
-       and new.status in ('draft','rejected') and (to_jsonb(new) - k_fall) = (to_jsonb(old) - k_fall) then
-      return new;
+    -- Table-specific columns only inside table-specific branches: PL/pgSQL resolves record fields when it
+    -- prepares an expression, so new.status must not appear in a condition evaluated for targets (P-R1-02).
+    if tg_op = 'UPDATE' and tg_table_name in ('broker_report_snippets','broker_report_summaries') then
+      if new.status in ('draft','rejected') and (to_jsonb(new) - k_fall) = (to_jsonb(old) - k_fall) then
+        return new;
+      end if;
     end if;
     raise exception 'published_immutable:%', tg_table_name;
   end if;
-  if tg_table_name = 'broker_report_fields' and tg_op = 'UPDATE' then
-    if (to_jsonb(new) - k_field) <> (to_jsonb(old) - k_field) then raise exception 'field_immutable'; end if;
-    if old.superseded_by_run_id is not null and new.superseded_by_run_id is distinct from old.superseded_by_run_id then raise exception 'field_superseded_once'; end if;
-    if new.status <> old.status and (new.status in ('extracted','absent') or (old.status = 'absent' and new.status <> 'rejected')) then
-      raise exception 'field_transition_invalid:%->%', old.status, new.status;
+  if tg_table_name = 'broker_report_fields' then
+    if tg_op = 'UPDATE' then
+      if (to_jsonb(new) - k_field) <> (to_jsonb(old) - k_field) then raise exception 'field_immutable'; end if;
+      if old.superseded_by_run_id is not null and new.superseded_by_run_id is distinct from old.superseded_by_run_id then raise exception 'field_superseded_once'; end if;
+      if new.status <> old.status then
+        if new.status in ('extracted','absent') or (old.status = 'absent' and new.status <> 'rejected') then
+          raise exception 'field_transition_invalid:%->%', old.status, new.status;
+        end if;
+      end if;
     end if;
-  end if;
-  if tg_table_name = 'broker_report_analysts' and tg_op <> 'DELETE'
-     and not exists (select 1 from public.broker_report_fields f where f.field_id = new.field_id and f.report_id = new.report_id and f.field = 'analyst') then
-    raise exception 'analyst_field_mismatch';
+  elsif tg_table_name = 'broker_report_analysts' then
+    if tg_op <> 'DELETE' then
+      if not exists (select 1 from public.broker_report_fields f where f.field_id = new.field_id and f.report_id = new.report_id and f.field = 'analyst') then
+        raise exception 'analyst_field_mismatch';
+      end if;
+    end if;
   end if;
   if tg_op = 'DELETE' then return old; end if;
   return new;
@@ -1666,6 +1738,15 @@ do $$ declare t text; begin
     else
       execute format('grant select, insert, update, delete on public.%I to service_role', t);
     end if;
+  end loop;
+end $$;
+-- ---------------------------------------------------------------- §4.13 function privileges (P-R1-05)
+-- No client role may EXECUTE any function of this module, trigger functions included (Supabase grants
+-- EXECUTE to anon/authenticated on new functions by default). Service-role grants made above stay.
+do $$ declare f regprocedure; begin
+  for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'broker\_%' loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f);
   end loop;
 end $$;
 ```
@@ -1847,7 +1928,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
  const targets=(rep:string)=>s.q(`select target_key,basis,ticker_as_stated,security_ticker,issuer_id,rating_raw,rating_normalized,scale_id,target_price::text tp,target_currency,target_horizon_months,price_at_report::text pr,price_currency,price_as_of_date::text pd,upside_pct::text up,upside_formula_version from public.broker_report_targets where report_id=$1 order by target_key`,[rep]);
  const cand=(o:Record<string,unknown>)=>({target_key:null,occurrence:1,value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',extractor:'llm:m-test@r',extractor_confidence:0.9,conflict_group:null,detail:{},status:'extracted',...o});
  const live=(rep:string,field:string,tk:string|null=null)=>s.q(`select field_id,status from public.broker_report_fields where report_id=$1 and field=$2 and target_key is not distinct from $3 and status in ('extracted','unverified') and superseded_by_run_id is null order by created_at,field_id`,[rep,field,tk]);
- const batch=async()=>await s.one(`insert into public.ingest_batches(batch_id,producer,dataset) values(gen_random_uuid(),'broker-research-extract','broker_research') returning batch_id v`) as string;
+ const batch=async()=>await s.one(`insert into public.ingest_batches(batch_id,producer,dataset) values(gen_random_uuid(),'broker-research-extract','broker_research') returning batch_id as v`) as string;
  const outbox=(kind:string,pub:string)=>s.q(`select payload from public.broker_outbox where kind=$1 and payload->'source'->>'publication_id'=$2 order by payload->>'claim_key'`,[kind,pub]);
  const GOLD=sha('gold-corpus');
  const TARGET_FIELDS=['ticker','rating','target_price','target_currency','price_at_report','price_currency','price_as_of_date'];
@@ -1879,7 +1960,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
   const r=await report(rep);
   const surfaces=['title_original','title_public','title_zh','title_en'].filter(k=>r[k]!==null);
   const def=surfaces.map(surface=>({rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface,hits:[]}}));
-  return await s.one(`insert into public.broker_report_rule_receipts(report_id,rules_version,input_hash,results,code_version) values($1,$2,$3,$4::jsonb,'test') returning receipt_id v`,[rep,RULES_VERSION,r.rules_input_hash,J(results??def)]) as string;
+  return await s.one(`insert into public.broker_report_rule_receipts(report_id,rules_version,input_hash,results,code_version) values($1,$2,$3,$4::jsonb,'test') returning receipt_id as v`,[rep,RULES_VERSION,r.rules_input_hash,J(results??def)]) as string;
  };
  const allFields=['institution','published_date','title',...TARGET_FIELDS];
  const gold=async(digest:string,o:{passed?:boolean;perField?:Record<string,unknown>;nDocs?:number;kind?:string}={})=>{
@@ -1904,11 +1985,100 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
  let unlock:(()=>Promise<void>)|undefined;
  beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // gold() sets approved_gold_corpus_hash
  afterAll(async()=>{await unlock?.();await pool?.end();});
+ it('publication and child writes serialize on the report row lock: the child write waits, then fails published_immutable (P-R1-03)',async()=>{
+  const PASSJ=J({version:DISCLOSURE_VERSION,inputs_hash:sha('i'),passed:true,hits:[]});
+  const cases:{name:string;sql:(w:World,sn:string)=>[string,unknown[]]}[]=[
+   {name:'insert snippet',sql:(w)=>[`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'risk',$2,1,0,4,'text',gen_random_uuid())`,[w.rep,w.pr]]},
+   {name:'approve snippet',sql:(_w,sn)=>[`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),approved_at=now(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,PASSJ]]},
+   {name:'update field',sql:(w)=>[`update public.broker_report_fields set reviewed_at=now() where report_id=$1 and field='title' and status='confirmed'`,[w.rep]]},
+  ];
+  for(const c of cases){
+   const w=await ready();
+   const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,4,'text',gen_random_uuid()) returning snippet_id as v`,[w.rep,w.pr]) as string;
+   const counts=()=>s.q(`select (select count(*)::int from public.broker_report_snippets where report_id=$1) n_snip,(select count(*)::int from public.broker_report_fields where report_id=$1 and status in ('confirmed','corrected','absent')) n_eff`,[w.rep]);
+   const before=await counts();
+   const a=await pool.connect(),b=await pool.connect();
+   try{
+    await a.query('begin');
+    const pub=(await a.query(`select public.broker_report_publish($1,gen_random_uuid()) v`,[w.rep])).rows[0].v as string;   // holds the report row lock
+    const bpid=(await b.query('select pg_backend_pid() p')).rows[0].p;
+    const [sql,args]=c.sql(w,sn);
+    const pending=b.query(sql,args).then(()=>'committed',(e:Error)=>e.message);
+    await new Promise(r=>setTimeout(r,300));
+    expect({c:c.name,waiting:(await s.q(`select wait_event_type from pg_stat_activity where pid=$1`,[bpid]))[0].wait_event_type}).toEqual({c:c.name,waiting:'Lock'});
+    await a.query('commit');
+    expect({c:c.name,r:await pending}).toEqual({c:c.name,r:expect.stringMatching(/^published_immutable:/)});
+    const snap=(await s.q(`select jsonb_array_length(snapshot->'fields') n from public.broker_report_publications where publication_id=$1`,[pub]))[0].n;
+    expect(await counts()).toEqual(before);expect(snap).toBe(before[0].n_eff);
+   }finally{await a.query('rollback').catch(()=>{});a.release();b.release();}
+  }
+ },120000);
+
+ it('blocker 13 coverage: once a report has an LLM row, every effective field needs coverage — a human wacc row uncovered blocks (P-R1-12)',async()=>{
+  const w=await ready();
+  await add(w.rep,{target_key:null,field:'wacc',occurrence:1,value_text:'8.5%',value_num:'0.085',value_currency:null,value_unit:'pct',value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:w.pr,status:'confirmed'});
+  await rules(w.rep);
+  expect(await blockers(w.rep)).toEqual(['eval_receipt_missing']);                            // LLM title etc. covered, human wacc not
+  await gold(w.digest,{perField:Object.fromEntries([...allFields,'wacc'].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
+  expect(await blockers(w.rep)).toEqual([]);
+ });
+
+ it('spec §14 sample 7 (second half): a report whose effective rows are all human publishes with no gold receipt and approved_gold_corpus_hash null',async()=>{
+  const lic=await s.licence();const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);const rep=await s.report(doc);const inst=await s.institution();
+  const row=(field:string,value_text:string,extra:Record<string,unknown>={})=>({target_key:null,field,occurrence:1,value_text,value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:pr,status:'confirmed',...extra});
+  for(const r of [row('institution','Test Securities'),row('published_date','2026-03-05',{value_date:'2026-03-05'}),row('title','Sector outlook'),row('sector','Internet')])await add(rep,r);
+  await s.q(`update public.broker_research_reports set institution_id=$2,scope='sector',review_status='approved' where report_id=$1`,[rep,inst]);
+  await materialize(rep);await rules(rep);
+  await s.q(`update public.broker_research_settings set approved_gold_corpus_hash=null where id=1`);
+  expect((await s.q(`select count(*)::int n from public.broker_report_fields where report_id=$1 and extractor like 'llm:%'`,[rep]))[0].n).toBe(0);
+  expect(await blockers(rep)).toEqual([]);                                                    // no eval_receipt_missing
+  const pub=await publish(rep);expect(pub).toMatch(/^[0-9a-f-]{36}$/);
+  expect((await report(rep)).status).toBe('published');
+ });
+
+ it('disclosure re-check (spec §4.11 重跑规则): licence / analyst disclosure change → disclosure_ok=false → re-check restores → republish (P-R1-08)',async()=>{
+  const titles=async(rep:string)=>{const r=await report(rep);return Object.fromEntries(['title_original','title_public','title_zh','title_en'].filter(k=>r[k]!==null).map(k=>[k,PASS]));};
+  const digest=(rep:string)=>s.one(`select public.broker_report_disclosure_digest($1) v`,[rep]);
+  const recheck=async(rep:string,o:Record<string,unknown>={})=>s.one(`select public.broker_report_disclosure_recheck($1,gen_random_uuid(),$2::jsonb) v`,[rep,J({expected_digest:await digest(rep),titles:await titles(rep),snippets:{},summaries:{},...o})]);
+  const p=await ready();await publish(p.rep);
+  await s.q(`update public.broker_report_licences set allows_public_target_price=false where licence_id=$1`,[p.lic]);
+  expect((await report(p.rep)).disclosure_ok).toBe(false);
+  expect((await fails(s.one(`select public.broker_report_disclosure_recheck($1,gen_random_uuid(),$2::jsonb) v`,[p.rep,J({expected_digest:sha('stale'),titles:{},snippets:{},summaries:{}})])))).toMatchObject({message:'disclosure_inputs_changed'});
+  expect(await recheck(p.rep,{titles:{...(await titles(p.rep)),title_original:{...PASS,passed:false}}})).toEqual({restored:false,failures:['restricted_value_in_text:title_original']});
+  expect((await report(p.rep)).disclosure_ok).toBe(false);
+  expect(await recheck(p.rep)).toEqual({restored:true,failures:[]});                       // published report: k_live allows the flag
+  expect((await report(p.rep)).disclosure_ok).toBe(true);
+  // republish under the new licence version
+  await unpublish(p.rep);
+  await s.q(`update public.broker_report_licences set confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version where licence_id=$1`,[p.lic]);
+  await materialize(p.rep);await rules(p.rep);await s.q(`update public.broker_research_reports set review_status='approved' where report_id=$1`,[p.rep]);
+  expect(await blockers(p.rep)).toEqual([]);
+  expect(await publish(p.rep)).toMatch(/^[0-9a-f-]{36}$/);
+  // analyst disclosure change on a draft → disclosure_stale → re-check restores
+  const q=await ready();
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'Rae Analyst') returning analyst_id as v`,[q.inst]) as string;
+  const af=(await add(q.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Rae Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:q.pr,status:'confirmed'})).field_id;
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[q.rep,an,af]);
+  await materialize(q.rep);await rules(q.rep);
+  await s.q(`update public.research_analysts set public_display=true where analyst_id=$1`,[an]);
+  expect((await report(q.rep)).disclosure_ok).toBe(false);
+  await materialize(q.rep);await rules(q.rep);
+  expect(await blockers(q.rep)).toEqual(['disclosure_stale']);
+  expect(await recheck(q.rep)).toEqual({restored:true,failures:[]});
+  expect(await blockers(q.rep)).toEqual([]);
+ },120000);
+
  it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
   const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
   const rpcs=['public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)'];
   for(const sig of rpcs){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
   for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)'])
+  // every migration-owned function, trigger functions included (P-R1-05): no client role holds EXECUTE
+  const all=await s.q(`select p.oid::regprocedure::text sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 1`);
+  expect(all.length).toBeGreaterThanOrEqual(40);
+  for(const {sig} of all)for(const role of ['public','anon','authenticated'])
+   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v`,[sig]):await fn(role,sig)}).toEqual({sig,role,ok:false});
+  for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])expect(all.map(r=>r.sig)).toContain(trig);
    for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
   await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
  },60000);
@@ -1972,7 +2142,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect((await targets(w.rep))[0]).toMatchObject({basis:'effective',tp:null,up:null});
   // summary invalidation: a materialize that changes nothing keeps an approved summary approved
   const d=(await report(w.rep)).summary_input_digest;
-  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by) values($1,'en',$2,$3,'Summary',1,'{"passed":true}',$4,'approved',gen_random_uuid()) returning summary_id v`,[w.rep,w.ext,d,J(PASS)]);
+  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by) values($1,'en',$2,$3,'Summary',1,'{"passed":true}',$4,'approved',gen_random_uuid()) returning summary_id as v`,[w.rep,w.ext,d,J(PASS)]);
   await materialize(w.rep);
   expect(await s.one(`select status v from public.broker_report_summaries where summary_id=$1`,[su])).toBe('approved');
   await review((await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='title' and status in ('extracted','unverified')`,[w.rep]))[0].field_id,'confirm');
@@ -2008,7 +2178,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect(rows.map(r=>r.status)).toEqual(['rejected','absent']);expect(rows[1]).toMatchObject({value_text:'ABSENT',page:3});expect(rows[1].extractor).toMatch(/^human:/);
   expect((await fails(review(randomUUID(),'confirm')))).toMatchObject({message:'field_not_found'});
   const p=await ready();
-  expect((await fails(publish(p.rep).then(()=>review((await s.q(`select field_id from public.broker_report_fields where report_id=$1 limit 1`,[p.rep]))[0].field_id,'reject'))))).toMatchObject({message:'published_immutable'});
+  expect((await fails(publish(p.rep).then(async()=>review((await s.q(`select field_id from public.broker_report_fields where report_id=$1 limit 1`,[p.rep]))[0].field_id,'reject'))))).toMatchObject({message:'published_immutable'});
  });
 
  it('field_add and target_override: human rows and resolution overrides go through the same lock + materialize',async()=>{
@@ -2116,7 +2286,10 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect(snap.report).toMatchObject({report_id:p.rep,status:'published',current_publication_id:pub,title_restricted:false});
   expect(snap.targets.map((t:{target_key:string})=>t.target_key)).toEqual([...p.tks].sort());
   expect(snap.fields.length).toBe((await s.q(`select 1 from public.broker_report_fields where report_id=$1 and status in ('confirmed','corrected','absent')`,[p.rep])).length);
-  expect(snap.fields[0]).toHaveProperty('artifact_hash');expect(snap.fields[0]).toHaveProperty('value');
+  for(const k of ['field_id','field','target_key','occurrence','status','extractor','parse_run_id','run_id','artifact_hash','page','char_start','char_end','value_source_text','value_source_sha256','framed','extracted','value'])
+   expect({k,has:snap.fields.every((f:Record<string,unknown>)=>k in f)}).toEqual({k,has:true});          // replay inputs frozen in the snapshot (P-R1-10)
+  const tf=snap.fields.find((f:Record<string,unknown>)=>f.field==='title');
+  expect(tf).toMatchObject({value_source_text:'text',value_source_sha256:sha('text'),framed:false});
   expect(snap.disclosure_inputs.licence).toMatchObject({licence_id:p.lic,version:1,allows_public_target_price:true});
   expect(snap.digests.rules_input_hash).toBe((await report(p.rep)).rules_input_hash);
   expect((await report(p.rep))).toMatchObject({status:'published',current_publication_id:pub});
@@ -2172,7 +2345,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
 
  it('approval triggers: snippets need length <= N, a passed disclosure check and an approver; summaries also need overlap <= N, grounding and input_hash = digest',async()=>{
   const w=await world({licence:{snippet_max_chars:10}});
-  const ins=(text:string,check:unknown=PASS)=>s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,'thesis',$2,1,0,$3,$4,$5::jsonb,gen_random_uuid()) returning snippet_id v`,[w.rep,w.pr,text.length,text,J(check)]) as Promise<string>;
+  const ins=(text:string,check:unknown=PASS)=>s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,'thesis',$2,1,0,$3,$4,$5::jsonb,gen_random_uuid()) returning snippet_id as v`,[w.rep,w.pr,text.length,text,J(check)]) as Promise<string>;
   const approve=(id:string,by:string|null=randomUUID())=>s.q(`update public.broker_report_snippets set status='approved',approved_by=$2 where snippet_id=$1`,[id,by]);
   expect((await fails(approve(await ins('01234567890')))).message).toMatch(/^snippet_too_long:11/);
   expect((await fails(approve(await ins('short',{...PASS,passed:false})))).message).toMatch(/^disclosure_failed/);
@@ -2183,7 +2356,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   await s.q(`update public.broker_report_snippets set status='draft' where snippet_id=$1`,[ok]);
   expect((await s.q(`select approved_by,approved_at from public.broker_report_snippets where snippet_id=$1`,[ok]))[0]).toEqual({approved_by:null,approved_at:null});
   const dg=(await report(w.rep)).summary_input_digest;
-  const sum=(o:Record<string,unknown>)=>s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check) values($1,'en',$2,$3,'S',$4,$5::jsonb,$6::jsonb) returning summary_id v`,[w.rep,w.ext,o.hash??dg,o.overlap??1,J(o.grounding??{passed:true}),J(o.check??PASS)]) as Promise<string>;
+  const sum=(o:Record<string,unknown>)=>s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check) values($1,'en',$2,$3,'S',$4,$5::jsonb,$6::jsonb) returning summary_id as v`,[w.rep,w.ext,o.hash??dg,o.overlap??1,J(o.grounding??{passed:true}),J(o.check??PASS)]) as Promise<string>;
   const app=(id:string)=>s.q(`update public.broker_report_summaries set status='approved',approved_by=gen_random_uuid() where summary_id=$1`,[id]);
   expect((await fails(app(await sum({overlap:11})))).message).toMatch(/^summary_overlap:11/);
   expect((await fails(app(await sum({grounding:{passed:false}})))).message).toMatch(/^summary_ungrounded/);
@@ -2250,12 +2423,12 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect((await fails(s.one(`select public.broker_run_finish($1,$2,'{"status":"failed"}'::jsonb) v`,[run3,b])))).toMatchObject({message:'run_finished'});
   expect(await s.one(`select public.broker_document_fenced_update($1,$2,$3::jsonb,true) v`,[doc,b,J({status:'parsed',current_parse_run_id:run3,page_count:4})])).toBe('ok');
   expect((await s.q(`select status,lease_token,page_count from public.broker_report_documents where document_id=$1`,[doc]))[0]).toEqual({status:'parsed',lease_token:null,page_count:4});
-  const ev=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id v`);
+  const ev=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id as v`);
   for(let i=0;i<9;i++)await s.q(`select public.broker_outbox_mark($1,false,'boom')`,[ev]);
   expect((await s.q(`select status,attempts from public.broker_outbox where event_id=$1`,[ev]))[0]).toEqual({status:'pending',attempts:9});
   await s.q(`select public.broker_outbox_mark($1,false,'boom')`,[ev]);
   expect((await s.q(`select status,attempts,last_error from public.broker_outbox where event_id=$1`,[ev]))[0]).toEqual({status:'failed',attempts:10,last_error:'boom'});
-  const ev2=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id v`);
+  const ev2=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id as v`);
   await s.q(`select public.broker_outbox_mark($1,true,null)`,[ev2]);
   expect((await s.q(`select status,delivered_at is not null d from public.broker_outbox where event_id=$1`,[ev2]))[0]).toEqual({status:'delivered',d:true});
   await s.q(`select public.broker_purge_step_record($1,'pdf',false,'io')`,[doc]);await s.q(`select public.broker_purge_step_record($1,'pdf',true,null)`,[doc]);
@@ -2585,7 +2758,7 @@ begin
     update public.broker_report_fields set status = 'corrected', corrected = v_corr, reviewed_by = p_by, reviewed_at = now() where field_id = p_field_id;
   elsif p_action = 'reject' then
     if f.status = 'rejected' then raise exception 'field_not_reviewable:rejected'; end if;
-    update public.broker_report_fields set status = 'rejected', reviewed_by = p_by, reviewed_at = now() where field_id = p_field_id;
+    update public.broker_report_fields set status = 'rejected', corrected = null, reviewed_by = p_by, reviewed_at = now() where field_id = p_field_id;   -- broker_fields_corrected_iff
   else
     if f.field not in ('rating','target_price','analyst','target_horizon') then raise exception 'absent_not_allowed:%', f.field; end if;
     if f.status = 'absent' then raise exception 'field_not_reviewable:absent'; end if;
@@ -2596,7 +2769,7 @@ begin
       raise exception 'effective_exists';
     end if;
     if f.status <> 'rejected' then
-      update public.broker_report_fields set status = 'rejected', reviewed_by = p_by, reviewed_at = now() where field_id = p_field_id;
+      update public.broker_report_fields set status = 'rejected', corrected = null, reviewed_by = p_by, reviewed_at = now() where field_id = p_field_id;   -- broker_fields_corrected_iff
     end if;
     insert into public.broker_report_fields (report_id, parse_run_id, target_key, field, occurrence, value_text, page, extractor, status, reviewed_by, reviewed_at, detail)
     values (f.report_id, f.parse_run_id, f.target_key, f.field, f.occurrence, 'ABSENT', v_page, 'human:' || p_by::text, 'absent', p_by, now(), jsonb_build_object('replaces', f.field_id));
@@ -2794,8 +2967,9 @@ begin
   if rr.receipt_id is null or exists (select 1 from jsonb_array_elements(rr.results) e where e ->> 'passed' = 'false' and e ->> 'blocking' = 'true') then
     b := array_append(b, 'rules_stale');
   end if;
-  -- 13 gold eval receipt per behavior digest of the effective LLM rows; coverage (tp+fn > 0) is
-  -- required for every field that has an effective LLM-extracted (non-absent) row
+  -- 13 gold eval receipt per behavior digest of the effective LLM rows. Once the report is gated (it has
+  -- any effective LLM row), coverage (tp+fn > 0) is required for EVERY field with an effective non-absent
+  -- row, whoever extracted it (spec §4.4; P-R1-12). A report with only human rows is not gated.
   if exists (select 1 from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected','absent') and f.extractor like 'llm:%') then
     if st.approved_gold_corpus_hash is null or exists (
          select 1
@@ -2804,7 +2978,7 @@ begin
          left join lateral (select * from public.broker_eval_receipts e where e.behavior_digest = g.behavior_digest order by e.ran_at desc, e.receipt_id desc limit 1) e on true
          where e.receipt_id is null
             or not (e.passed and e.corpus_kind = 'gold' and e.corpus_hash = st.approved_gold_corpus_hash and e.n_docs >= 30)
-            or exists (select 1 from (select distinct f.field from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected') and f.extractor like 'llm:%') ff
+            or exists (select 1 from (select distinct f.field from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected')) ff
                        where coalesce((e.per_field -> ff.field ->> 'tp')::int, 0) + coalesce((e.per_field -> ff.field ->> 'fn')::int, 0) = 0)) then
       b := array_append(b, 'eval_receipt_missing');
     end if;
@@ -2826,9 +3000,11 @@ begin
     end if;
   end loop;
   b := b || coalesce((select array_agg('restricted_value_in_text:snippet:' || sn.snippet_id::text order by sn.snippet_id) from public.broker_report_snippets sn
-                      where sn.report_id = p_report_id and sn.status = 'approved' and coalesce(sn.disclosure_check ->> 'passed', 'false') <> 'true'), '{}');
+                      where sn.report_id = p_report_id and sn.status = 'approved'
+                        and (coalesce(sn.disclosure_check ->> 'passed', 'false') <> 'true' or sn.disclosure_check ->> 'db_digest' is distinct from public.broker_report_disclosure_digest(p_report_id))), '{}');
   b := b || coalesce((select array_agg('restricted_value_in_text:summary:' || su.lang order by su.lang) from public.broker_report_summaries su
-                      where su.report_id = p_report_id and su.status = 'approved' and coalesce(su.disclosure_check ->> 'passed', 'false') <> 'true'), '{}');
+                      where su.report_id = p_report_id and su.status = 'approved'
+                        and (coalesce(su.disclosure_check ->> 'passed', 'false') <> 'true' or su.disclosure_check ->> 'db_digest' is distinct from public.broker_report_disclosure_digest(p_report_id))), '{}');
   -- 16
   if not r.evidence_ok then b := array_append(b, 'evidence_drift'); end if;
   if not r.disclosure_ok then b := array_append(b, 'disclosure_stale'); end if;
@@ -2884,6 +3060,11 @@ begin
     'targets', (select coalesce(jsonb_agg(to_jsonb(t) order by t.target_key collate "C"), '[]'::jsonb) from public.broker_report_targets t where t.report_id = p_report_id),
     'fields', (select coalesce(jsonb_agg(jsonb_build_object('field_id', f.field_id, 'target_key', f.target_key, 'field', f.field, 'occurrence', f.occurrence, 'status', f.status,
                  'extractor', f.extractor, 'parse_run_id', f.parse_run_id, 'run_id', f.run_id, 'artifact_hash', pr.artifact_hash, 'page', f.page, 'char_start', f.char_start, 'char_end', f.char_end,
+                 -- replay inputs frozen with the publication (P-R1-10): replay never reads live field rows
+                 'value_source_text', f.value_source_text,
+                 'value_source_sha256', case when f.value_source_text is null then null else public.broker_sha256(f.value_source_text) end,
+                 'framed', coalesce(f.detail ->> 'framed', 'false') = 'true',
+                 'extracted', jsonb_build_object('value_text', f.value_text, 'value_num', f.value_num::text, 'value_currency', f.value_currency, 'value_unit', f.value_unit, 'value_date', f.value_date::text),
                  'value', public.broker_field_effective(f.corrected, f.value_text, f.value_num, f.value_currency, f.value_unit, f.value_date))
                order by coalesce(f.target_key, '') collate "C", f.field collate "C", f.occurrence), '[]'::jsonb)
                from public.broker_report_fields f left join public.broker_report_runs pr on pr.run_id = f.parse_run_id
@@ -3152,6 +3333,13 @@ begin
       raise exception 'disclosure_failed';
     end if;
     if new.approved_by is null then raise exception 'approver_required'; end if;
+    if tg_op = 'INSERT' or old.status <> 'approved' then
+      -- bind the approval to the current disclosure inputs (P-R1-04)
+      if new.disclosure_check ? 'db_digest' and new.disclosure_check ->> 'db_digest' is distinct from public.broker_report_disclosure_digest(new.report_id) then
+        raise exception 'disclosure_inputs_changed';
+      end if;
+      new.disclosure_check := new.disclosure_check || jsonb_build_object('db_digest', public.broker_report_disclosure_digest(new.report_id));
+    end if;
     if tg_op = 'INSERT' or old.status <> 'approved' then new.approved_at := now(); new.draft_reason := null; end if;
   elsif tg_op = 'UPDATE' and old.status = 'approved' then
     new.approved_by := null; new.approved_at := null;
@@ -3177,6 +3365,13 @@ begin
     if new.disclosure_check ->> 'passed' is distinct from 'true' or new.disclosure_check ->> 'version' is distinct from 'disclosure/1' then raise exception 'disclosure_failed'; end if;
     if new.input_hash is distinct from v_digest then raise exception 'summary_stale'; end if;
     if new.approved_by is null then raise exception 'approver_required'; end if;
+    if tg_op = 'INSERT' or old.status <> 'approved' then
+      -- bind the approval to the current disclosure inputs (P-R1-04)
+      if new.disclosure_check ? 'db_digest' and new.disclosure_check ->> 'db_digest' is distinct from public.broker_report_disclosure_digest(new.report_id) then
+        raise exception 'disclosure_inputs_changed';
+      end if;
+      new.disclosure_check := new.disclosure_check || jsonb_build_object('db_digest', public.broker_report_disclosure_digest(new.report_id));
+    end if;
     if tg_op = 'INSERT' or old.status <> 'approved' then new.approved_at := now(); new.draft_reason := null; end if;
   elsif tg_op = 'UPDATE' and old.status = 'approved' then
     new.approved_by := null; new.approved_at := null;
@@ -3229,6 +3424,150 @@ end $$;
 drop trigger if exists broker_reports_after_change on public.broker_research_reports;
 create trigger broker_reports_after_change after update on public.broker_research_reports
   for each row execute function public.broker_reports_after_change();
+-- ---------------------------------------------------------------- disclosure inputs digest + binding invalidation (P-R1-04)
+-- broker_report_disclosure_digest: sha256 of everything a disclosure check reads besides the text — licence
+-- version + allows_public_target_price, materialized targets' target_key/target_price/upside_pct, bound
+-- analysts' public_display/display_name/name_variants. Approval stamps it into disclosure_check.db_digest (a
+-- supplied db_digest must equal it: disclosure_inputs_changed); blocker 15 flags approved texts whose stamp
+-- differs from the current value. Any binding change returns the report's approved texts to draft.
+create or replace function public.broker_report_disclosure_digest(p_report_id uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select public.broker_sha256(jsonb_build_object(
+    'licence_version', l.version, 'allows_public_target_price', l.allows_public_target_price,
+    'targets', coalesce((select jsonb_agg(jsonb_build_object('target_key', t.target_key, 'target_price', t.target_price::text, 'upside_pct', t.upside_pct::text) order by t.target_key collate "C")
+                         from public.broker_report_targets t where t.report_id = r.report_id), '[]'::jsonb),
+    'analysts', coalesce((select jsonb_agg(jsonb_build_object('analyst_id', a.analyst_id, 'public_display', a.public_display, 'display_name', a.display_name, 'name_variants', to_jsonb(a.name_variants)) order by a.analyst_id)
+                          from public.broker_report_analysts b join public.research_analysts a on a.analyst_id = b.analyst_id where b.report_id = r.report_id), '[]'::jsonb))::text)
+  from public.broker_research_reports r
+  join public.broker_report_documents d on d.document_id = r.document_id
+  join public.broker_report_licences l on l.licence_id = d.licence_id
+  where r.report_id = p_report_id
+$$;
+revoke execute on function public.broker_report_disclosure_digest(uuid) from public, anon, authenticated;
+grant execute on function public.broker_report_disclosure_digest(uuid) to service_role;
+
+create or replace function public.broker_report_analysts_after_change() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_report uuid := coalesce(new.report_id, old.report_id);
+begin
+  update public.broker_report_snippets set status = 'draft', draft_reason = 'analyst_disclosure' where report_id = v_report and status = 'approved';
+  update public.broker_report_summaries set status = 'draft', draft_reason = 'analyst_disclosure' where report_id = v_report and status = 'approved';
+  return null;
+end $$;
+drop trigger if exists broker_report_analysts_after_change on public.broker_report_analysts;
+create trigger broker_report_analysts_after_change after insert or update or delete on public.broker_report_analysts
+  for each row execute function public.broker_report_analysts_after_change();
+
+-- ---------------------------------------------------------------- fenced LLM result commits (§6.4; P-R1-09)
+-- The summary row / translated titles are written and their run finished in ONE transaction under the lease:
+-- a worker whose lease was taken over (token differs or lease_until passed) gets lease_lost and writes nothing.
+create or replace function public.broker_llm_fence(p_document uuid, p_token uuid, p_run uuid, p_kind text)
+returns public.broker_report_runs language plpgsql security definer set search_path = public as $$
+declare v_tok uuid; v_until timestamptz; ru public.broker_report_runs;
+begin
+  select lease_token, lease_until into v_tok, v_until from public.broker_report_documents where document_id = p_document for update;
+  if not found then raise exception 'document_not_found' using errcode = 'P0002'; end if;
+  if v_tok is distinct from p_token or v_until is null or v_until <= now() then raise exception 'lease_lost'; end if;
+  select * into ru from public.broker_report_runs where run_id = p_run for update;
+  if ru.run_id is null or ru.document_id <> p_document or ru.kind <> p_kind or ru.status <> 'running' then raise exception 'run_invalid'; end if;
+  return ru;
+end $$;
+revoke execute on function public.broker_llm_fence(uuid, uuid, uuid, text) from public, anon, authenticated;
+
+create or replace function public.broker_summary_commit(p_document uuid, p_token uuid, p_run uuid, p_row jsonb)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_report uuid := (p_row ->> 'report_id')::uuid;
+begin
+  perform public.broker_llm_fence(p_document, p_token, p_run, 'summary');
+  if not exists (select 1 from public.broker_research_reports where report_id = v_report and document_id = p_document) then raise exception 'report_mismatch'; end if;
+  if coalesce(p_row ->> 'status', 'draft') not in ('draft','rejected') then raise exception 'invalid_payload:status'; end if;
+  insert into public.broker_report_summaries (report_id, lang, kind, run_id, input_hash, summary_md, max_verbatim_overlap, numeric_grounding, disclosure_check, status)
+  values (v_report, p_row ->> 'lang', 'independent_summary', p_run, p_row ->> 'input_hash', p_row ->> 'summary_md', (p_row ->> 'max_verbatim_overlap')::int,
+          p_row -> 'numeric_grounding', p_row -> 'disclosure_check', coalesce(p_row ->> 'status', 'draft'))
+  returning summary_id into v_id;
+  update public.broker_report_runs set status = 'succeeded', detail = detail || jsonb_build_object('summary_id', v_id) where run_id = p_run;
+  return v_id;
+end $$;
+revoke execute on function public.broker_summary_commit(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.broker_summary_commit(uuid, uuid, uuid, jsonb) to service_role;
+
+create or replace function public.broker_title_commit(p_document uuid, p_token uuid, p_run uuid, p_titles jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+begin
+  perform public.broker_llm_fence(p_document, p_token, p_run, 'translate');
+  update public.broker_research_reports set title_zh = p_titles ->> 'title_zh', title_en = p_titles ->> 'title_en', title_run_id = p_run
+  where document_id = p_document and status = 'draft';
+  if not found then raise exception 'report_not_draft'; end if;
+  update public.broker_report_runs set status = 'succeeded' where run_id = p_run;
+  return 'ok';
+end $$;
+revoke execute on function public.broker_title_commit(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.broker_title_commit(uuid, uuid, uuid, jsonb) to service_role;
+
+-- ---------------------------------------------------------------- disclosure re-check (spec §4.11 重跑规则; P-R1-08)
+-- The admin "re-run disclosure check" after a licence / analyst disclosure change set disclosure_ok=false. TS
+-- computes checkDisclosure for every non-null title surface and every APPROVED snippet / summary against the
+-- current inputs and passes them with the digest it read; under the report row lock this function verifies
+-- the digest is still current (else disclosure_inputs_changed), applies the publish-time title policy
+-- (title_original may fail only when title_public passes; on a published report that also needs
+-- title_restricted=true already — otherwise restoring would change title_restricted: unpublish + republish),
+-- ignores drafts, stores the checks on the approved rows of a draft report, and sets disclosure_ok=true.
+-- Any failure changes nothing and returns {restored:false, failures}.
+create or replace function public.broker_report_disclosure_recheck(p_report_id uuid, p_by uuid, p_checks jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  r public.broker_research_reports; v_fail text[] := '{}'; v_surface text; v_text text; v_chk jsonb; v_digest text; x record;
+  v_titles jsonb := coalesce(p_checks -> 'titles', '{}'::jsonb);
+begin
+  if p_by is null then raise exception 'invalid_reviewer'; end if;
+  select * into r from public.broker_research_reports where report_id = p_report_id for update;
+  if not found then raise exception 'report_not_found' using errcode = 'P0002'; end if;
+  if r.status = 'withdrawn' then raise exception 'report_withdrawn'; end if;
+  v_digest := public.broker_report_disclosure_digest(p_report_id);
+  if p_checks ->> 'expected_digest' is distinct from v_digest then raise exception 'disclosure_inputs_changed'; end if;
+  foreach v_surface in array array['title_original','title_public','title_zh','title_en'] loop
+    v_text := case v_surface when 'title_original' then r.title_original when 'title_public' then r.title_public when 'title_zh' then r.title_zh else r.title_en end;
+    continue when v_text is null;
+    v_chk := v_titles -> v_surface;
+    continue when v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1';
+    if v_surface = 'title_original' and r.title_public is not null
+       and v_titles -> 'title_public' ->> 'passed' = 'true' and v_titles -> 'title_public' ->> 'version' = 'disclosure/1' then
+      if r.status = 'published' and not r.title_restricted then v_fail := v_fail || 'title_restricted_change_requires_republish'::text; end if;
+    else
+      v_fail := v_fail || ('restricted_value_in_text:' || v_surface);
+    end if;
+  end loop;
+  for x in select sn.snippet_id from public.broker_report_snippets sn where sn.report_id = p_report_id and sn.status = 'approved' order by sn.snippet_id loop
+    v_chk := p_checks -> 'snippets' -> x.snippet_id::text;
+    if not (v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1') then v_fail := v_fail || ('restricted_value_in_text:snippet:' || x.snippet_id::text); end if;
+  end loop;
+  for x in select su.summary_id, su.lang from public.broker_report_summaries su where su.report_id = p_report_id and su.status = 'approved' order by su.lang loop
+    v_chk := p_checks -> 'summaries' -> x.summary_id::text;
+    if not (v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1') then v_fail := v_fail || ('restricted_value_in_text:summary:' || x.lang); end if;
+  end loop;
+  if cardinality(v_fail) > 0 then return jsonb_build_object('restored', false, 'failures', to_jsonb(v_fail)); end if;
+  if r.status = 'draft' then
+    update public.broker_report_snippets sn set disclosure_check = (p_checks -> 'snippets' -> sn.snippet_id::text) || jsonb_build_object('db_digest', v_digest)
+    where sn.report_id = p_report_id and sn.status = 'approved';
+    update public.broker_report_summaries su set disclosure_check = (p_checks -> 'summaries' -> su.summary_id::text) || jsonb_build_object('db_digest', v_digest)
+    where su.report_id = p_report_id and su.status = 'approved';
+  end if;
+  update public.broker_research_reports set disclosure_ok = true where report_id = p_report_id;
+  return jsonb_build_object('restored', true, 'failures', '[]'::jsonb);
+end $$;
+revoke execute on function public.broker_report_disclosure_recheck(uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.broker_report_disclosure_recheck(uuid, uuid, jsonb) to service_role;
+
+
+-- ---------------------------------------------------------------- §4.13 function privileges (P-R1-05)
+-- No client role may EXECUTE any function of this module, trigger functions included (Supabase grants
+-- EXECUTE to anon/authenticated on new functions by default). Service-role grants made above stay.
+do $$ declare f regprocedure; begin
+  for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'broker\_%' loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f);
+  end loop;
+end $$;
 ```
 
 注：`broker_report_publish_blockers` 第 15 条的标题结果约定（`rule:'disclosure'`, `detail.surface`）必须由 B4/C6 的规则运行写入；`blocking:false`（否则第 12 条把 `title_original` 不通过误判为 `rules_stale`）。
@@ -3317,10 +3656,10 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
  const published=async(o:Parameters<typeof world>[0]={})=>{
   const w=await ready(o);
   const af=(await s.one(`select public.broker_field_add($1,$2::jsonb,$3) v`,[w.rep,J({target_key:null,field:'analyst',occurrence:1,value_text:'Ann Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:5,char_end:16,value_source_text:'Ann Analyst',parse_run_id:w.pr,status:'confirmed'}),randomUUID()])).field_id;
-  const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Ann Analyst',true) returning analyst_id v`,[w.inst]);
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Ann Analyst',true) returning analyst_id as v`,[w.inst]);
   await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,role,field_id) values($1,$2,'lead',$3)`,[w.rep,an,af]);
   await materialize(w.rep);await rules(w.rep);
-  const sn=await s.one(`insert into public.broker_report_snippets(report_id,target_key,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,$2,'thesis',$3,2,0,8,'Thesis!!',$4::jsonb,gen_random_uuid()) returning snippet_id v`,[w.rep,w.tk,w.pr,J(PASS)]);
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,target_key,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,$2,'thesis',$3,2,0,8,'Thesis!!',$4::jsonb,gen_random_uuid()) returning snippet_id as v`,[w.rep,w.tk,w.pr,J(PASS)]);
   await s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid() where snippet_id=$1`,[sn]);
   const sumRun=randomUUID();
   await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,parse_run_id,model_id,registry_hash,prompt_version,code_version,licence_version) values($1,$2,'summary',$3,'m-sum','reg1','independent-summary/1','test',1)`,[sumRun,w.doc,w.pr]);
@@ -3440,6 +3779,31 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
          is distinct from public.broker_field_effective(f.corrected,f.value_text,f.value_num,f.value_currency,f.value_unit,f.value_date)`);
   expect(mismatched).toBe(0);
  },180000);
+
+ it('binding a private analyst after a snippet naming them was approved returns it to draft; nothing with the name reaches anon (P-R1-04)',async()=>{
+  await enable(true);
+  const r=await ready();
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Quinn Hidden',false) returning analyst_id as v`,[r.inst]) as string;
+  const af=(await add(r.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Quinn Hidden',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:r.pr,status:'confirmed'})).field_id;
+  await rules(r.rep);
+  const text='Quinn Hidden sees upside';
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,$3,$4,gen_random_uuid()) returning snippet_id as v`,[r.rep,r.pr,text.length,text]) as string;
+  const before=await s.one(`select public.broker_report_disclosure_digest($1) v`,[r.rep]) as string;
+  // the analyst is not bound yet, so the TS check passes; the approval stamps the current digest
+  await s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,J({...PASS,db_digest:before})]);
+  expect((await s.q(`select status,disclosure_check->>'db_digest' d from public.broker_report_snippets where snippet_id=$1`,[sn]))[0]).toEqual({status:'approved',d:before});
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[r.rep,an,af]);
+  expect((await s.q(`select status,draft_reason from public.broker_report_snippets where snippet_id=$1`,[sn]))[0]).toEqual({status:'draft',draft_reason:'analyst_disclosure'});
+  expect(await s.one(`select public.broker_report_disclosure_digest($1) v`,[r.rep])).not.toBe(before);
+  // re-approving with the check computed against the old inputs is refused
+  expect((await fails(s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,J({...PASS,db_digest:before})]))).message).toMatch(/^disclosure_inputs_changed/);
+  await materialize(r.rep);await rules(r.rep);
+  await publish(r.rep);
+  const dump:unknown[]=[];
+  for(const v of VIEWS.filter(v=>!v.startsWith('research_')))dump.push(...await anon(`select * from public.${v} where report_id=$1`,[r.rep]));
+  expect(JSON.stringify(dump)).not.toContain('Quinn');
+  expect(await anon(`select 1 from public.broker_report_snippets_public_v where snippet_id=$1`,[sn])).toEqual([]);
+ },120000);
 
  it('rating history: lag per (institution, security, currency) ordered by (published_date, report_id); superseded predecessors excluded; per-institution partitions',async()=>{
   await enable(true);
@@ -4067,11 +4431,15 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async setSnippetStatus(id,patch){await run(from('broker_report_snippets').update(dropUndefined(patch)).eq('snippet_id',id));},
   async getSnippet(id){const r=await maybe(from('broker_report_snippets').select('*').eq('snippet_id',id));return r?snippetFromRow(r):null;},
   async listSnippets(reportId){return (await pageAll(()=>from('broker_report_snippets').select('*').eq('report_id',reportId).order('created_at').order('snippet_id'))).map(snippetFromRow);},
+  async summaryCommit(documentId,token,runId,row){return String(await call('broker_summary_commit',{p_document:documentId,p_token:token,p_run:runId,p_row:row}));},
+  async titleCommit(documentId,token,runId,titles){await call('broker_title_commit',{p_document:documentId,p_token:token,p_run:runId,p_titles:titles});return 'ok';},
   async insertSummary(row){return String((await run<R>(from('broker_report_summaries').insert(row).select('summary_id').single())).summary_id);},
   async setSummaryStatus(id,patch){await run(from('broker_report_summaries').update(dropUndefined(patch)).eq('summary_id',id));},
   async getSummary(id){const r=await maybe(from('broker_report_summaries').select('*').eq('summary_id',id));return r?summaryFromRow(r):null;},
   async listSummaries(reportId){return (await pageAll(()=>from('broker_report_summaries').select('*').eq('report_id',reportId).order('generated_at').order('summary_id'))).map(summaryFromRow);},
   async publishBlockers(id){return ((await call<string[]|null>('broker_report_publish_blockers',{p_report_id:id}))??[]).map(String);},
+  async disclosureDigest(id){return String(await call('broker_report_disclosure_digest',{p_report_id:id}));},
+  async disclosureRecheck(id,by,checks){const x=await call<R>('broker_report_disclosure_recheck',{p_report_id:id,p_by:by,p_checks:checks});return {restored:x.restored===true,failures:((x.failures??[]) as unknown[]).map(String)};},
   async publish(id,by){return {publicationId:String(await call('broker_report_publish',{p_report_id:id,p_by:by}))};},
   async unpublish(id,by,reason){await call('broker_report_unpublish',{p_report_id:id,p_by:by,p_reason:reason});},
   async getPublication(id){const r=await maybe(from('broker_report_publications').select('*').eq('publication_id',id));return r?publicationFromRow(r):null;},
@@ -4209,7 +4577,7 @@ import {analystsDistinct,bundles,publicRow,verifyOrder} from './db';
 import {effectiveValue} from './effective';
 import {canonicalJson,sha256Hex} from './hash';
 import {BrokerResearchDbError} from './types';
-import type {AccessLogInput,AnalystRow,BrokerResearchDb,CandidateFieldInput,DocumentRow,DocumentStatus,EvalReceiptRow,FieldRow,InstitutionRow,IntentRow,IntentStatus,LicenceInput,LicenceRow,MaterializeReceipt,OutboxEvent,PublicationRow,PurgeStepRow,RatingScaleRow,ReportAnalystRow,ReportRow,RuleReceiptRow,RunRow,SettingsRow,SnippetRow,SummaryRow,TargetRow,TypedValue} from './types';
+import type {AccessLogInput,AnalystRow,BrokerResearchDb,CandidateFieldInput,DisclosureCheck,DocumentRow,DocumentStatus,EvalReceiptRow,FieldRow,InstitutionRow,IntentRow,IntentStatus,LicenceInput,LicenceRow,MaterializeReceipt,OutboxEvent,PublicationRow,PurgeStepRow,RatingScaleRow,ReportAnalystRow,ReportRow,RuleReceiptRow,RunRow,SettingsRow,SnippetRow,SummaryRow,TargetRow,TypedValue} from './types';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 type R=Record<string,unknown>;
@@ -4224,7 +4592,7 @@ export interface MemoryBrokerResearchDb extends BrokerResearchDb{
 
 const EFF=new Set(['confirmed','corrected','absent']);const CAND=new Set(['extracted','unverified']);
 const MATERIAL:readonly (keyof LicenceInput)[]=['allows_llm_processing','allows_public_metadata','allows_public_snippets','allows_public_summary','allows_public_target_price','snippet_max_chars','valid_from','valid_to','terms_summary','licence_kind','holder'];
-const INTENT_MOVES=new Set(['open>validating','open>expired','open>abandoned','validating>validated','validating>abandoned','validating>expired','validated>promoting','validated>abandoned','validated>expired','promoting>committed','promoting>abandoned']);
+const INTENT_MOVES=new Set(['open>validating','open>expired','open>abandoned','validating>open','validating>validated','validating>abandoned','validating>expired','validated>promoting','validated>abandoned','validated>expired','promoting>committed','promoting>abandoned']);
 const DOC_MOVES=new Set(['uploaded>parsing','parse_failed>parsing','parsed>parsing','parsing>parsed','parsing>parse_failed']);
 /** Blocker 10 reason set (= SQL broker_report_publish_blockers §10 = rules.ts BLOCKING_REASONS; B4 asserts all three). */
 export const BLOCKING_QUARANTINE_REASONS=['upside_mismatch','currency_mismatch','date_order','nonpositive_price','unknown_rating_label','ambiguous_rating_label','ticker_issuer_conflict','unresolved_ticker'] as const;
@@ -4321,6 +4689,17 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
     analysts:bindings.filter(b=>b.report_id===rep).sort((a,b)=>cmp(a.analyst_id,b.analyst_id)).map(b=>{const a=analysts.get(b.analyst_id)!;return {analyst_id:a.analyst_id,public_display:a.public_display,display_name:a.display_name,name_variants:a.name_variants};})}};
   return {effective_hash:effHash,rules_input_hash:sha256Hex(canonicalJson(rules)),summary_input_digest:sha256Hex(`${effHash}|${art}|${r.institution_id??''}|${r.title_public??''}`)};
  };
+ /** = SQL broker_report_disclosure_digest (same inputs; value differs, relations carry over). */
+ const disclosureDigestOf=(rep:string)=>{const r=reports.get(rep)??fail('report_not_found');const l=licOf(r);
+  return sha256Hex(canonicalJson({licence_version:l.version,allows_public_target_price:l.allows_public_target_price,
+   targets:(targets.get(rep)??[]).map(t=>({target_key:t.target_key,target_price:t.target_price,upside_pct:t.upside_pct})).sort((a,b)=>cmp(a.target_key,b.target_key)),
+   analysts:bindings.filter(b=>b.report_id===rep).map(b=>analysts.get(b.analyst_id)!).sort((a,b)=>cmp(a.analyst_id,b.analyst_id)).map(a=>({analyst_id:a.analyst_id,public_display:a.public_display,display_name:a.display_name,name_variants:a.name_variants}))}));};
+ /** Approval stamp (SQL approval triggers): a supplied db_digest must be current; the stored check carries it. */
+ const stampDigest=<T extends {report_id:string;disclosure_check:DisclosureCheck|null}>(x:T)=>{
+  const cur=disclosureDigestOf(x.report_id);
+  if(x.disclosure_check?.db_digest!==undefined&&x.disclosure_check.db_digest!==cur)fail('disclosure_inputs_changed');
+  x.disclosure_check={...x.disclosure_check!,db_digest:cur};
+ };
  const discHash=(rep:string)=>canonicalJson((targets.get(rep)??[]).map(t=>({k:t.target_key,tp:t.target_price,up:t.upside_pct})));
  const materializeNow=(rep:string):MaterializeReceipt=>{
   const r=lockDraft(rep);const oldDisc=discHash(rep);
@@ -4415,7 +4794,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   const llm=effOf(rep).filter(f=>f.extractor.startsWith('llm:'));
   if(llm.length){
    const digests=[...new Set(llm.map(f=>runs.get(f.run_id??'')?.behavior_digest??''))];
-   const covered=[...new Set(llm.filter(f=>f.status!=='absent').map(f=>f.field))];
+   const covered=[...new Set(effOf(rep).filter(f=>f.status!=='absent').map(f=>f.field))];   // every effective field once gated (P-R1-12)
    const ok=settings.approved_gold_corpus_hash!==null&&digests.every(dg=>{const e=latestEval(dg);return !!e&&e.passed&&e.corpus_kind==='gold'&&e.corpus_hash===settings.approved_gold_corpus_hash&&e.n_docs>=30&&covered.every(fl=>((e.per_field[fl]?.tp??0)+(e.per_field[fl]?.fn??0))>0);});
    if(!ok)b.push('eval_receipt_missing');
   }
@@ -4425,8 +4804,8 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const res=rr?.results.find(x=>x.rule==='disclosure'&&x.detail?.surface===surface);
    if(!res||res.passed!==true)if(surface!=='title_original'||r.title_public===null)b.push(`restricted_value_in_text:${surface}`);
   }
-  b.push(...[...snippets.values()].filter(s=>s.report_id===rep&&s.status==='approved'&&s.disclosure_check?.passed!==true).map(s=>`restricted_value_in_text:snippet:${s.snippet_id}`).sort(cmp));
-  b.push(...[...summaries.values()].filter(s=>s.report_id===rep&&s.status==='approved'&&s.disclosure_check?.passed!==true).map(s=>`restricted_value_in_text:summary:${s.lang}`).sort(cmp));
+  b.push(...[...snippets.values()].filter(s=>s.report_id===rep&&s.status==='approved'&&(s.disclosure_check?.passed!==true||s.disclosure_check.db_digest!==disclosureDigestOf(rep))).map(s=>`restricted_value_in_text:snippet:${s.snippet_id}`).sort(cmp));
+  b.push(...[...summaries.values()].filter(s=>s.report_id===rep&&s.status==='approved'&&(s.disclosure_check?.passed!==true||s.disclosure_check.db_digest!==disclosureDigestOf(rep))).map(s=>`restricted_value_in_text:summary:${s.lang}`).sort(cmp));
   if(!r.evidence_ok)b.push('evidence_drift');
   if(!r.disclosure_ok)b.push('disclosure_stale');
   const groups=new Map<string,FieldRow[]>();for(const f of liveCand(rep))groups.set(idKey(f),[...(groups.get(idKey(f))??[]),f]);
@@ -4453,6 +4832,13 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   if(s.input_hash!==r.summary_input_digest)fail('summary_stale');
   if(!s.approved_by)fail('approver_required');
   if([...summaries.values()].some(x=>x.summary_id!==s.summary_id&&x.report_id===s.report_id&&x.lang===s.lang&&x.status==='approved'))fail('duplicate_key','broker_summaries_approved_uniq');
+ };
+ /** = SQL broker_llm_fence: lease held and unexpired, run of this document and kind still running. */
+ const llmFence=(documentId:string,token:string,runId:string,kind:string)=>{
+  const d=documents.get(documentId)??fail('document_not_found');
+  if(d.lease_token!==token||d.lease_until===null||d.lease_until<=now())fail('lease_lost');
+  const run=runs.get(runId);if(!run||run.document_id!==documentId||run.kind!==kind||run.status!=='running')fail('run_invalid');
+  return run;
  };
  const childWritable=(rep:string)=>{const r=reports.get(rep);if(r?.status==='published')fail('published_immutable',`child`);};
 
@@ -4660,13 +5046,13 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
     Object.assign(f,{status:'corrected',corrected:corr,reviewed_by:by,reviewed_at:now()});
    }else if(action==='reject'){
     if(f.status==='rejected')fail('field_not_reviewable','rejected');
-    Object.assign(f,{status:'rejected',reviewed_by:by,reviewed_at:now()});
+    Object.assign(f,{status:'rejected',corrected:null,reviewed_by:by,reviewed_at:now()});
    }else{
     if(!['rating','target_price','analyst','target_horizon'].includes(f.field))fail('absent_not_allowed',f.field);
     if(f.status==='absent')fail('field_not_reviewable','absent');
     const page=p.page!==undefined?Number(p.page):f.page;if(page===null||!(page>=1))fail('invalid_payload','page');
     if(effectiveExists(f,f.field_id))fail('effective_exists');
-    if(f.status!=='rejected')Object.assign(f,{status:'rejected',reviewed_by:by,reviewed_at:now()});
+    if(f.status!=='rejected')Object.assign(f,{status:'rejected',corrected:null,reviewed_by:by,reviewed_at:now()});
     newField({report_id:f.report_id,parse_run_id:f.parse_run_id,target_key:f.target_key,field:f.field,occurrence:f.occurrence,value_text:'ABSENT',page,extractor:`human:${by}`,status:'absent',reviewed_by:by,reviewed_at:now(),detail:{replaces:f.field_id}});
    }
    if(pd)f.detail={...f.detail,...clone(pd as R)};
@@ -4697,6 +5083,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const f=fields.get(row.field_id);if(!f||f.report_id!==row.report_id||f.field!=='analyst')fail('analyst_field_mismatch');
    const i=bindings.findIndex(b=>b.report_id===row.report_id&&b.analyst_id===row.analyst_id);
    if(i>=0)bindings[i]={...row};else bindings.push({...row});
+   draftTexts(row.report_id,'analyst_disclosure');                       // = SQL broker_report_analysts_after_change (P-R1-04)
   },
   async listReportAnalysts(reportId){return clone(bindings.filter(b=>b.report_id===reportId).sort((a,b)=>cmp(a.analyst_id,b.analyst_id)));},
   async insertRuleReceipt(row){const x:RuleReceiptRow={...clone(row),receipt_id:randomUUID(),created_at:stamp()};ruleReceipts.push(x);return x.receipt_id;},
@@ -4711,12 +5098,24 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const s=snippets.get(id)??fail('not_found','snippet');const r=reports.get(s.report_id)!;
    const next:SnippetRow={...s,...Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined))};
    if(r.status==='published'&&!(next.status==='draft'||next.status==='rejected'))fail('published_immutable','broker_report_snippets');
-   if(next.status==='approved'){snippetGate(next);if(s.status!=='approved')Object.assign(next,{approved_at:now(),draft_reason:null});}
+   if(next.status==='approved'){snippetGate(next);if(s.status!=='approved'){stampDigest(next);Object.assign(next,{approved_at:now(),draft_reason:null});}}
    else if(s.status==='approved')Object.assign(next,{approved_by:null,approved_at:null});
    Object.assign(s,next);
   },
   async getSnippet(id){return clone(snippets.get(id)??null);},
   async listSnippets(reportId){return clone([...snippets.values()].filter(s=>s.report_id===reportId).sort((a,b)=>cmp(a.created_at,b.created_at)||cmp(a.snippet_id,b.snippet_id)));},
+  async summaryCommit(documentId,token,runId,row){return atomic(()=>{
+   const run=llmFence(documentId,token,runId,'summary');
+   const r=reports.get(row.report_id);if(!r||r.document_id!==documentId)fail('report_mismatch');
+   if(row.status!=='draft'&&row.status!=='rejected')fail('invalid_payload','status');childWritable(row.report_id);
+   const s:SummaryRow={...clone(row),kind:'independent_summary',run_id:runId,summary_id:randomUUID(),approved_by:null,approved_at:null,generated_at:stamp(),draft_reason:null};
+   summaries.set(s.summary_id,s);Object.assign(run,{status:'succeeded',finished_at:stamp(),detail:{...run.detail,summary_id:s.summary_id}});return s.summary_id;
+  });},
+  async titleCommit(documentId,token,runId,titles){return atomic(()=>{
+   const run=llmFence(documentId,token,runId,'translate');
+   const r=[...reports.values()].find(x=>x.document_id===documentId&&x.status==='draft')??fail('report_not_draft');
+   setReport(r,{title_zh:titles.title_zh,title_en:titles.title_en,title_run_id:runId});Object.assign(run,{status:'succeeded',finished_at:stamp()});return 'ok' as const;
+  });},
   async insertSummary(row){
    childWritable(row.report_id);
    const s:SummaryRow={...clone(row),summary_id:randomUUID(),approved_by:null,approved_at:null,generated_at:stamp(),draft_reason:null};
@@ -4727,13 +5126,33 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const s=summaries.get(id)??fail('not_found','summary');const r=reports.get(s.report_id)!;
    const next:SummaryRow={...s,...Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined))};
    if(r.status==='published'&&!(next.status==='draft'||next.status==='rejected'))fail('published_immutable','broker_report_summaries');
-   if(next.status==='approved'){summaryGate(next);if(s.status!=='approved')Object.assign(next,{approved_at:now(),draft_reason:null});}
+   if(next.status==='approved'){summaryGate(next);if(s.status!=='approved'){stampDigest(next);Object.assign(next,{approved_at:now(),draft_reason:null});}}
    else if(s.status==='approved')Object.assign(next,{approved_by:null,approved_at:null});
    Object.assign(s,next);
   },
   async getSummary(id){return clone(summaries.get(id)??null);},
   async listSummaries(reportId){return clone([...summaries.values()].filter(s=>s.report_id===reportId).sort((a,b)=>cmp(a.generated_at,b.generated_at)||cmp(a.summary_id,b.summary_id)));},
   async publishBlockers(id){return blockersOf(id);},
+  async disclosureDigest(id){return disclosureDigestOf(id);},
+  async disclosureRecheck(id,by,checks){return atomic(()=>{
+   if(!by)fail('invalid_reviewer');
+   const r=reports.get(id)??fail('report_not_found');if(r.status==='withdrawn')fail('report_withdrawn');
+   const dg=disclosureDigestOf(id);if(checks.expected_digest!==dg)fail('disclosure_inputs_changed');
+   const ok=(c?:DisclosureCheck)=>c?.passed===true&&c.version===DISCLOSURE_VERSION;const f:string[]=[];
+   for(const surface of ['title_original','title_public','title_zh','title_en'] as const){
+    if(r[surface]===null||ok(checks.titles[surface]))continue;
+    if(surface==='title_original'&&r.title_public!==null&&ok(checks.titles.title_public)){if(r.status==='published'&&!r.title_restricted)f.push('title_restricted_change_requires_republish');}
+    else f.push(`restricted_value_in_text:${surface}`);
+   }
+   const sn=[...snippets.values()].filter(s=>s.report_id===id&&s.status==='approved').sort((a,b)=>cmp(a.snippet_id,b.snippet_id));
+   const su=[...summaries.values()].filter(s=>s.report_id===id&&s.status==='approved').sort((a,b)=>cmp(a.lang,b.lang));
+   for(const s of sn)if(!ok(checks.snippets[s.snippet_id]))f.push(`restricted_value_in_text:snippet:${s.snippet_id}`);
+   for(const s of su)if(!ok(checks.summaries[s.summary_id]))f.push(`restricted_value_in_text:summary:${s.lang}`);
+   if(f.length)return {restored:false,failures:f};
+   if(r.status==='draft'){for(const s of sn)s.disclosure_check={...checks.snippets[s.snippet_id],db_digest:dg};for(const s of su)s.disclosure_check={...checks.summaries[s.summary_id],db_digest:dg};}
+   setReport(r,{disclosure_ok:true});
+   return {restored:true,failures:[]};
+  });},
   async publish(id,by){return atomic(()=>{
    const r=reports.get(id)??fail('report_not_found');if(r.status!=='draft')fail('report_not_draft');
    const b=blockersOf(id);if(b.length)fail('publish_blocked',b.join(','));
@@ -4744,7 +5163,9 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const snapshot:R={publication_id:pubId,revision:r.revision,published_at:at,published_by:by,
     report:{...clone(r),status:'published',current_publication_id:pubId,title_restricted:restricted},
     document:{document_id:d.document_id,sha256:d.sha256,uploaded_at:d.uploaded_at,licence_id:d.licence_id,current_parse_run_id:d.current_parse_run_id,page_count:d.page_count},
-    targets:clone(ts),fields:effRowsJson(id).map(x=>({...x,artifact_hash:x.parse_run_id?runs.get(x.parse_run_id)?.artifact_hash??null:null})),
+    targets:clone(ts),fields:effRowsJson(id).map(x=>{const f=fields.get(x.field_id)!;return {...x,artifact_hash:x.parse_run_id?runs.get(x.parse_run_id)?.artifact_hash??null:null,
+     value_source_text:f.value_source_text,value_source_sha256:f.value_source_text===null?null:sha256Hex(f.value_source_text),framed:f.detail?.framed===true,
+     extracted:{value_text:f.value_text,value_num:f.value_num,value_currency:f.value_currency,value_unit:f.value_unit,value_date:f.value_date}};}),
     snippets:[...snippets.values()].filter(s=>s.report_id===id&&s.status==='approved').map(s=>({snippet_id:s.snippet_id,target_key:s.target_key,purpose:s.purpose,parse_run_id:s.parse_run_id,page:s.page,char_start:s.char_start,char_end:s.char_end,text:s.text,field_id:s.field_id,disclosure_check:s.disclosure_check})),
     summaries:[...summaries.values()].filter(s=>s.report_id===id&&s.status==='approved').map(s=>({summary_id:s.summary_id,lang:s.lang,run_id:s.run_id,input_hash:s.input_hash,summary_md:s.summary_md,max_verbatim_overlap:s.max_verbatim_overlap,numeric_grounding:s.numeric_grounding,disclosure_check:s.disclosure_check})),
     rating_scales:ts.map(t=>t.scale_id).filter((x):x is string=>!!x).map(x=>clone(scales.get(x))),
@@ -5021,6 +5442,9 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect(await db.transitionIntent(id,'open','validating')).toBe(false);
    expect((await db.getIntent(id))!.checkpoint_at).not.toBeNull();
    expect(await code(db.transitionIntent(id,'validating','committed'))).toBe('intent_transition_invalid');
+   expect(await db.transitionIntent(id,'validating','open')).toBe(true);                       // staging object missing: retryable (P-R1-07)
+   expect((await db.getIntent(id))!.status).toBe('open');
+   expect(await db.transitionIntent(id,'open','validating')).toBe(true);
    expect(await db.transitionIntent(id,'validating','abandoned',{error_code:'sha_mismatch'})).toBe(true);
    expect(await db.getIntent(id)).toMatchObject({status:'abandoned',error_code:'sha_mismatch'});
   });
@@ -5097,6 +5521,22 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.listFields(w.rep)).filter(f=>f.field==='target_price').map(f=>f.status).sort()).toEqual(['absent','rejected']);
    expect((await db.listTargets(w.rep))[0]).toMatchObject({basis:'effective',target_price:null});
    expect(await code(db.fieldReview(randomUUID(),'confirm',{},by))).toBe('field_not_found');
+  });
+
+  it('fieldReview: a corrected row can be rejected or marked absent; corrected is cleared (broker_fields_corrected_iff, P-R1-06)',async()=>{
+   const w=await world();
+   const pick=async(field:string)=>(await db.listFields(w.rep)).find(f=>f.field===field&&f.status==='extracted')!;
+   const rating=await pick('rating');
+   await db.fieldReview(rating.field_id,'correct',{value_text:'Overweight'},by);
+   expect((await db.listFields(w.rep)).find(f=>f.field_id===rating.field_id)).toMatchObject({status:'corrected',corrected:{value_text:'Overweight'}});
+   await db.fieldReview(rating.field_id,'reject',{},by);
+   expect((await db.listFields(w.rep)).find(f=>f.field_id===rating.field_id)).toMatchObject({status:'rejected',corrected:null});
+   const tp=await pick('target_price');
+   await db.fieldReview(tp.field_id,'correct',{value_text:'121',value_num:'121'},by);
+   await db.fieldReview(tp.field_id,'absent',{page:1},by);
+   const rows=(await db.listFields(w.rep)).filter(f=>f.field==='target_price');
+   expect(rows.find(f=>f.field_id===tp.field_id)).toMatchObject({status:'rejected',corrected:null});
+   expect(rows.find(f=>f.status==='absent')).toMatchObject({corrected:null});
   });
 
   it('insertHumanField and upsertTargetOverride go through materialize',async()=>{
@@ -5208,6 +5648,57 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.getReport(w.rep))!.disclosure_ok).toBe(false);
    expect((await db.listSnippets(w.rep)).find(s=>s.snippet_id===sn)).toMatchObject({status:'draft',draft_reason:'analyst_disclosure'});
    expect((await db.listAnalysts(inst)).map(a=>a.analyst_id)).toEqual([an]);
+  });
+
+  it('a new analyst binding drafts approved texts; approvals carry the disclosure digest and a stale supplied digest is refused (P-R1-04)',async()=>{
+   const w=await world();
+   const inst=await db.upsertInstitution({name_en:`Bind Inst ${randomUUID()}`,name_zh:null,aliases:[],kind:null,rating_disclosure_url:null});
+   const af=(await db.insertHumanField(w.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Bo',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:2,value_source_text:'Bo',parse_run_id:w.parse,status:'confirmed'},by)).fieldId;
+   const an=await db.upsertAnalyst({institution_id:inst,display_name:'Bo Private',name_variants:[],public_display:false});
+   const d0=await db.disclosureDigest(w.rep);
+   const sn=await db.insertSnippet({report_id:w.rep,target_key:null,purpose:'thesis',parse_run_id:w.parse,page:1,char_start:0,char_end:4,text:'abcd',field_id:null,disclosure_check:null,created_by:by});
+   await db.setSnippetStatus(sn,{status:'approved',approved_by:by,disclosure_check:{...PASS_CHECK,db_digest:d0}});
+   expect((await db.getSnippet(sn))!.disclosure_check).toMatchObject({db_digest:d0});
+   await db.bindAnalyst({report_id:w.rep,analyst_id:an,role:null,field_id:af});
+   expect(await db.getSnippet(sn)).toMatchObject({status:'draft',draft_reason:'analyst_disclosure'});
+   expect(await db.disclosureDigest(w.rep)).not.toBe(d0);
+   expect(await code(db.setSnippetStatus(sn,{status:'approved',approved_by:by,disclosure_check:{...PASS_CHECK,db_digest:d0}}))).toBe('disclosure_inputs_changed');
+   await db.setSnippetStatus(sn,{status:'approved',approved_by:by,disclosure_check:{...PASS_CHECK,db_digest:await db.disclosureDigest(w.rep)}});
+   expect((await db.getSnippet(sn))!.status).toBe('approved');
+  });
+
+  it('summaryCommit / titleCommit: fenced on the lease, run finished in the same write; a lost lease writes nothing (P-R1-09)',async()=>{
+   const w=await world();
+   const run=async(kind:'summary'|'translate')=>{const id=randomUUID();await db.insertRun({run_id:id,document_id:w.doc,kind,parse_run_id:w.parse,extractor_version:null,artifact_path:null,artifact_hash:null,model_id:'m-test',registry_hash:'r'.repeat(64),prompt_version:'p',schema_version:null,code_version:'t',behavior_digest:null,licence_version:1,request_path:null,response_path:null,batch_id:null});return id;};
+   const dg=(await db.getReport(w.rep))!.summary_input_digest!;
+   const row={report_id:w.rep,lang:'en' as const,input_hash:dg,summary_md:'S',max_verbatim_overlap:1,numeric_grounding:{version:'grounding/1',passed:true,assertions:[],failures:[]},disclosure_check:PASS_CHECK,status:'draft' as const};
+   const s1=await run('summary');
+   const id=await db.summaryCommit(w.doc,w.token,s1,row);
+   expect(await db.getSummary(id)).toMatchObject({run_id:s1,status:'draft'});expect(await db.getRun(s1)).toMatchObject({status:'succeeded'});
+   const t1=await run('translate');
+   expect(await db.titleCommit(w.doc,w.token,t1,{title_zh:'标题',title_en:'Title'})).toBe('ok');
+   expect(await db.getReport(w.rep)).toMatchObject({title_zh:'标题',title_en:'Title',title_run_id:t1});
+   const s2=await run('summary');const t2=await run('translate');
+   expect(await code(db.summaryCommit(w.doc,randomUUID(),s2,row))).toBe('lease_lost');               // taken over
+   await h.expireLease(w.doc);
+   expect(await code(db.summaryCommit(w.doc,w.token,s2,row))).toBe('lease_lost');                    // expired
+   expect(await code(db.titleCommit(w.doc,w.token,t2,{title_zh:'x',title_en:'y'}))).toBe('lease_lost');
+   expect((await db.listSummaries(w.rep)).map(s=>s.summary_id)).toEqual([id]);
+   expect(await db.getReport(w.rep)).toMatchObject({title_zh:'标题',title_run_id:t1});
+   expect(await db.getRun(s2)).toMatchObject({status:'running'});
+  });
+
+  it('disclosureRecheck: a licence change flags the report; current passing checks restore it; a stale digest or failing title is refused (P-R1-08)',async()=>{
+   const w=await world();
+   await db.updateLicence(w.lic.licence_id,{allows_public_target_price:false});
+   expect((await db.getReport(w.rep))!.disclosure_ok).toBe(false);
+   const r=(await db.getReport(w.rep))!;const dg=await db.disclosureDigest(w.rep);
+   const titles=Object.fromEntries((['title_original','title_public','title_zh','title_en'] as const).filter(k=>r[k]!==null).map(k=>[k,PASS_CHECK]));
+   expect(await code(db.disclosureRecheck(w.rep,by,{expected_digest:'0'.repeat(64),titles,snippets:{},summaries:{}}))).toBe('disclosure_inputs_changed');
+   expect(await db.disclosureRecheck(w.rep,by,{expected_digest:dg,titles:{...titles,title_original:{...PASS_CHECK,passed:false}},snippets:{},summaries:{}})).toEqual({restored:false,failures:['restricted_value_in_text:title_original']});
+   expect((await db.getReport(w.rep))!.disclosure_ok).toBe(false);
+   expect(await db.disclosureRecheck(w.rep,by,{expected_digest:dg,titles,snippets:{},summaries:{}})).toEqual({restored:true,failures:[]});
+   expect((await db.getReport(w.rep))!.disclosure_ok).toBe(true);
   });
 
   it('setReportFlags on draft and published; verifyCandidates order; quarantineResolve; purgeReportText after withdraw',async()=>{
@@ -5581,11 +6072,15 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   async setSnippetStatus(id,patch){await update('broker_report_snippets',patch as R,'snippet_id = $1',[id]);},
   async getSnippet(id){const r=await one(`select * from ${rel('broker_report_snippets')} where snippet_id = $1`,[id]);return r?snippetFromRow(r):null;},
   async listSnippets(reportId){return (await q(`select * from ${rel('broker_report_snippets')} where report_id = $1 order by created_at, snippet_id`,[reportId])).map(snippetFromRow);},
+  summaryCommit:async(documentId,token,runId,row)=>String(await fn('public.broker_summary_commit($1,$2,$3,$4::jsonb)',[documentId,token,runId,JSON.stringify(row)])),
+  titleCommit:async(documentId,token,runId,titles)=>{await fn('public.broker_title_commit($1,$2,$3,$4::jsonb)',[documentId,token,runId,JSON.stringify(titles)]);return 'ok' as const;},
   async insertSummary(row){return String((await insert('broker_report_summaries',row as unknown as R,'summary_id')).summary_id);},
   async setSummaryStatus(id,patch){await update('broker_report_summaries',patch as R,'summary_id = $1',[id]);},
   async getSummary(id){const r=await one(`select * from ${rel('broker_report_summaries')} where summary_id = $1`,[id]);return r?summaryFromRow(r):null;},
   async listSummaries(reportId){return (await q(`select * from ${rel('broker_report_summaries')} where report_id = $1 order by generated_at, summary_id`,[reportId])).map(summaryFromRow);},
   async publishBlockers(id){return ((await fn<string[]|null>('public.broker_report_publish_blockers($1)',[id]))??[]).map(String);},
+  async disclosureDigest(id){return String(await fn('public.broker_report_disclosure_digest($1)',[id]));},
+  async disclosureRecheck(id,by,checks){const x=await fn<R>('public.broker_report_disclosure_recheck($1,$2,$3::jsonb)',[id,by,JSON.stringify(checks)]);return {restored:x.restored===true,failures:((x.failures??[]) as unknown[]).map(String)};},
   async publish(id,by){return {publicationId:String(await fn('public.broker_report_publish($1,$2)',[id,by]))};},
   async unpublish(id,by,reason){await q(`select public.broker_report_unpublish($1,$2,$3)`,[id,by,reason]);},
   async getPublication(id){const r=await one(`select * from ${rel('broker_report_publications')} where publication_id = $1`,[id]);return r?publicationFromRow(r):null;},
@@ -5712,6 +6207,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 5. **托管实例差异**：视图依赖"迁移角色 = 表 owner，且 RLS 不对 owner 生效"；`session_replication_role=replica` 只在 A3 的一个本地测试里使用（需要超级用户）。
 6. **体量**：块 2/3 的 `ready()` 每次约 30 条语句，A3 个别用例建 5–6 个已发布报告；超时 120–180 s。设置锁让持锁的 describe 串行，`test:db` 总时长再增加。
 7. **`verifyCandidates` / `publicAnalysts` / `hasSummary`** 在 supabase 实现里先取 id 集合再在 TS 合并（`limit(5000)` / 分批 `in`），馆藏上千篇时需要改为视图或 RPC。
+8. **子表守卫的父行锁**（P-R1-03）：子表写入先锁报告行。`broker_field_review` 等 RPC 是"报告 → 子行"，而直接 `update broker_report_fields …` 先锁子行再由触发器锁报告；两者对同一行并发时 PostgreSQL 会检测死锁并中止其一（重试即可）。服务只经 RPC 写证据行，直接写只出现在测试夹具里。
+9. **已发布报告的披露恢复**（P-R1-08）：`broker_report_disclosure_recheck` 可在已发布报告上恢复 `disclosure_ok=true`（视图重新可见），但 `disclosure_ok` 变 false 时已经写过 `claim.retract`，同一 `claim_key` 不会再登记；要让 F4 重新收到 claim，必须 unpublish + publish。runbook 应写明这一点。
+10. **批准摘要值的回填**：测试夹具直接插入 `approved` 行且不带 `db_digest` 时由触发器写入当前值；之后若夹具改了 targets / 许可而未回草稿，阻断第 15 条会报 `restricted_value_in_text:*`。第一次实跑时如有既有用例因此变红，修正夹具（在改动后重新批准），不要放宽阻断。
 
 ---
 
@@ -8426,7 +8924,7 @@ export const errorJson=(code:string,status:number,extra:Record<string,unknown>={
 
 /** SQL `raise exception '<code>[:<detail>]'` codes → HTTP (plan §契约补充 "RPC 错误"). */
 export const DB_ERROR_STATUS:Readonly<Record<string,number>>={
- publish_blocked:409,published_immutable:409,publish_direct_forbidden:409,lease_lost:409,version_mismatch:409,
+ publish_blocked:409,published_immutable:409,publish_direct_forbidden:409,lease_lost:409,version_mismatch:409,disclosure_inputs_changed:409,
  hook_params_required:400,invalid_payload:400,invalid_action:400,not_found:404,
 };
 export function toErrorResponse(e:unknown,tag:string):Response{
@@ -10325,7 +10823,7 @@ git commit -m "feat(broker-research): C5 chunked LLM extraction with stored call
 - Modify: `src/lib/dq/batches.ts`（`INFO_CODES` 末尾 `// FOREIGN` 围栏追加 `'eval_receipt_absent'`）
 - Modify: `src/app/api/admin/dq/quarantine/[id]/route.ts`（`broker_research` 分支，`// FOREIGN ↓ … ↑` 围栏）
 - Modify: `src/app/api/admin/dq/quarantine/[id]/route.test.ts`（围栏内追加两个用例；共享文件清单已含该路由，测试文件随之修改，PR 中写明）
-- Create（均在 `src/app/api/admin/broker-research/` 下）：`reports/[reportId]/route.ts`（★ GET 复核数据）、`documents/[documentId]/pages/[n]/route.ts`（★ GET 页文本）、`reports/[reportId]/fields/[fieldId]/route.ts`、`reports/[reportId]/fields/route.ts`、`reports/[reportId]/fields/absent/route.ts`、`reports/[reportId]/bind/route.ts`、`reports/[reportId]/overrides/route.ts`、`reports/[reportId]/review/route.ts`、`reports/[reportId]/publish-blockers/route.ts`、`reports/[reportId]/publish/route.ts`、`reports/[reportId]/unpublish/route.ts`、`review-queue/route.ts`、`reports/review-routes.test.ts`
+- Create（均在 `src/app/api/admin/broker-research/` 下）：`reports/[reportId]/route.ts`（★ GET 复核数据）、`documents/[documentId]/pages/[n]/route.ts`（★ GET 页文本）、`reports/[reportId]/fields/[fieldId]/route.ts`、`reports/[reportId]/fields/route.ts`、`reports/[reportId]/fields/absent/route.ts`、`reports/[reportId]/bind/route.ts`、`reports/[reportId]/overrides/route.ts`、`reports/[reportId]/review/route.ts`、`reports/[reportId]/publish-blockers/route.ts`、`reports/[reportId]/publish/route.ts`、`reports/[reportId]/unpublish/route.ts`、`reports/[reportId]/disclosure-recheck/route.ts`、`review-queue/route.ts`、`reports/review-routes.test.ts`
 - Modify: `docs/audits/2026-11-06-foreign-research/10-implementation-log.md`
 
 **要点**：每个改变证据或绑定的动作 = DB RPC（物化在同一事务）→ 新开批次 `producer='broker-research-review'` → `applyRules` → `finishBatch`（`quarantined>0` → `rules_failed_summary`）。`confirm`/`correct`/`add` 先在 TS 做 R1：`slice(artifact(parse_run_id), page, start, end) === value_source_text`，否则 `400 span_not_verbatim`（UI 框选得到跨度，服务端切片得到文本）。`correct` 的类型化分量 = `toTyped(field, valueText)` 推导值被载荷显式键覆盖，并校验单位 / 币种 / 日期 / 数值形状（`400 invalid_correction:<key>`）。标题披露不在发布时另算：`applyRules` 每次都为每个非空标题面写一条 `{rule:'disclosure',blocking:false,detail:{surface,hits}}`（Part A 约定 1），阻断第 15 条与发布函数的 `title_restricted` 读回执；发布 = `materialize` → `applyRules` → `publish` RPC（阻断时 `409 publish_blocked`，原因来自 SQL）。框选确认（载荷带跨度的 `confirm`）把 `detail:{framed:true}` 随载荷交给 `broker_field_review` 合并进行的 `detail`，回放据此豁免 `candidate_missing`。批次：复核类动作各开一个 `producer='broker-research-review'` 的批次（规则与隔离需要 `batch_id`；记入规格 §17 的 producer 清单）。
@@ -10378,7 +10876,7 @@ import {runParse} from './parse';
 import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from './testing';
 import type {MemoryDeps} from './testing';
 import {toTyped} from './extract/typed';
-import {addField,bindReport,fieldAction,markAbsent,publishBlockersOf,publishReport,reviewAction,reviewData,setOverride,unpublishReport} from './review';
+import {addField,bindReport,fieldAction,markAbsent,publishBlockersOf,publishReport,recheckDisclosure,reviewAction,reviewData,setOverride,unpublishReport} from './review';
 import type {FieldRow} from './types';
 
 async function extracted(d:MemoryDeps){
@@ -10433,6 +10931,18 @@ describe('review services',()=>{
   const o=await setOverride(d,reportId,{targetKey:'ZZBR',securityTicker:'ZZBR',note:null},ADMIN_ID);
   expect(o.receipt.targets).toBeGreaterThanOrEqual(1);
  });
+ it('disclosure re-check: a licence change sets disclosure_ok=false; the re-check restores it; a failing title surface does not (P-R1-08)',async()=>{
+  const {doc,reportId}=await extracted(d);
+  await d.db.updateLicence(doc.licence_id,{allows_public_target_price:false});
+  expect((await d.db.getReport(reportId))!.disclosure_ok).toBe(false);
+  expect(await recheckDisclosure(d,reportId,ADMIN_ID)).toEqual({restored:true,failures:[]});
+  expect((await d.db.getReport(reportId))!.disclosure_ok).toBe(true);
+  await bindReport(d,reportId,{titlePublic:'Target 120.00 by mid-2027'},ADMIN_ID);         // restricted value: the target price is not public
+  await d.db.updateLicence(doc.licence_id,{terms_summary:'changed again'});
+  const out=await recheckDisclosure(d,reportId,ADMIN_ID);
+  expect(out.restored).toBe(false);expect(out.failures).toContain('restricted_value_in_text:title_public');
+  expect((await d.db.getReport(reportId))!.disclosure_ok).toBe(false);
+ });
  it('reviewData returns the contract ReviewPayload',async()=>{
   const {reportId}=await extracted(d);
   const {payload,log}=await reviewData(d,reportId);
@@ -10469,10 +10979,11 @@ import {sliceText} from './extract/locate';
 import {toTyped} from './extract/typed';
 import {isIsoDate} from './licences';
 import {artifactLoader} from './parse';
-import {applyRules} from './rules-run';
+import {checkDisclosure} from './disclosure';
+import {TITLE_SURFACES,applyRules,disclosureInputOf} from './rules-run';
 import type {RulesOutcome} from './rules-run';
 import type {BrokerDeps} from './deps';
-import type {CorrectedValue,FieldAction,FieldName,FieldRow,MaterializeReceipt,ReportRow,ReportScope,ReviewPayload,ReviewQuarantineItem,ValueUnit} from './types';
+import type {DisclosureRecheckInput,CorrectedValue,FieldAction,FieldName,FieldRow,MaterializeReceipt,ReportRow,ReportScope,ReviewPayload,ReviewQuarantineItem,ValueUnit} from './types';
 
 type RDeps=Pick<BrokerDeps,'db'|'storage'|'tables'|'codeVersion'|'now'>;
 const FIELDS:readonly FieldName[]=['institution','analyst','published_date','price_as_of_date','ticker','rating','target_price','target_currency','target_horizon','price_at_report','price_currency','upside_stated','wacc','terminal_growth','terminal_value_share','valuation_method','sector','title'];
@@ -10625,6 +11136,24 @@ export async function unpublishReport(deps:RDeps,reportId:string,reason:string,b
  await deps.db.logAccess({document_id:report.document_id,user_id:by,action:'unpublish',detail:{report_id:reportId,reason}});
  await auditAdmin(deps.tables,by,'broker_research.unpublish',reportId,{reason},deps.now());
  return reportOr404(deps,reportId);
+}
+
+/** Admin "re-run disclosure check" (spec §4.11 重跑规则; P-R1-08). Reads the disclosure digest FIRST, then computes
+ * checkDisclosure with the current inputs (licence flag, materialized targets, bound analysts) for every non-null title
+ * surface and every APPROVED snippet / summary (drafts are not checked); broker_report_disclosure_recheck verifies the
+ * digest is still current under the report lock, applies the publish-time title policy and restores disclosure_ok. */
+export async function recheckDisclosure(deps:RDeps,reportId:string,by:string):Promise<{restored:boolean;failures:string[]}>{
+ const report=await reportOr404(deps,reportId);
+ if(report.status==='withdrawn')throw conflict('report_withdrawn');
+ const expected_digest=await deps.db.disclosureDigest(reportId);
+ const input=await disclosureInputOf(deps,report);
+ const titles:DisclosureRecheckInput['titles']={};
+ for(const k of TITLE_SURFACES){const t=report[k];if(t!==null)titles[k]=checkDisclosure(t,input);}
+ const snippets=Object.fromEntries((await deps.db.listSnippets(reportId)).filter(s=>s.status==='approved'&&s.text!==null).map(s=>[s.snippet_id,checkDisclosure(s.text!,input)]));
+ const summaries=Object.fromEntries((await deps.db.listSummaries(reportId)).filter(s=>s.status==='approved').map(s=>[s.summary_id,checkDisclosure(s.summary_md,input)]));
+ const out=await deps.db.disclosureRecheck(reportId,by,{expected_digest,titles,snippets,summaries});
+ await auditAdmin(deps.tables,by,'broker_research.disclosure_recheck',reportId,{...out},deps.now());
+ return out;
 }
 
 /** ★ review payload (contract ReviewPayload): private evidence (spans, source text), runs, blockers, open quarantine items, entities. */
@@ -10956,6 +11485,19 @@ export const POST=adminPost<Ctx>('reports.unpublish',async({ctx,body,userId})=>j
 ```
 
 ```ts
+// src/app/api/admin/broker-research/reports/[reportId]/disclosure-recheck/route.ts
+// POST {}: re-run the disclosure check after a licence / analyst disclosure change (spec §4.11 重跑规则). 200
+// {restored,failures}; restored=false changes nothing; 409 disclosure_inputs_changed when the inputs moved meanwhile.
+import {adminPost,jsonNoStore,uuidParam} from '@/lib/broker-research/admin-route';
+import {brokerDeps} from '@/lib/broker-research/deps';
+import {recheckDisclosure} from '@/lib/broker-research/review';
+
+export const dynamic='force-dynamic';
+interface Ctx{params:Promise<{reportId:string}>}
+export const POST=adminPost<Ctx>('reports.disclosure_recheck',async({ctx,userId})=>jsonNoStore(await recheckDisclosure(brokerDeps(),uuidParam((await ctx.params).reportId),userId)));
+```
+
+```ts
 // src/app/api/admin/broker-research/review-queue/route.ts
 // GET ?status=&limit=: reports awaiting review (metadata only, no spans).
 import {QueryError,intParam,readParams} from '@/lib/facts/public-route';
@@ -10996,6 +11538,7 @@ import {POST as ABSENT} from './[reportId]/fields/absent/route';
 import {POST as PUBLISH} from './[reportId]/publish/route';
 import {GET as BLOCKERS} from './[reportId]/publish-blockers/route';
 import {POST as REVIEW} from './[reportId]/review/route';
+import {POST as RECHECK} from './[reportId]/disclosure-recheck/route';
 
 const B='/api/admin/broker-research/reports';
 const X='00000000-0000-4000-8000-000000000001';
@@ -11010,6 +11553,7 @@ describe('review routes',()=>{
  adminGuardCases({call:(r)=>REPORT(r,ctxOf({reportId:X})),request:()=>getReq(`${B}/${X}`),requireAdmin:mocks.requireAdmin,post:false});
  adminGuardCases({call:(r)=>FIELD(r,ctxOf({reportId:X,fieldId:X})),request:()=>jsonReq(`${B}/${X}/fields/${X}`,{action:'reject'}),requireAdmin:mocks.requireAdmin,post:true});
  adminGuardCases({call:(r)=>PUBLISH(r,ctxOf({reportId:X})),request:()=>jsonReq(`${B}/${X}/publish`,{}),requireAdmin:mocks.requireAdmin,post:true});
+ adminGuardCases({call:(r)=>RECHECK(r,ctxOf({reportId:X})),request:()=>jsonReq(`${B}/${X}/disclosure-recheck`,{}),requireAdmin:mocks.requireAdmin,post:true});
  it('★ report: logs text_viewed first; log failure 500 without fields; withdrawn 410',async()=>{
   const ok=await REPORT(getReq(`${B}/${reportId}`),ctxOf({reportId:reportId}));
   expect(ok.status).toBe(200);expect(ok.headers.get('cache-control')).toBe('no-store');
@@ -11020,6 +11564,12 @@ describe('review routes',()=>{
   expect(f.status).toBe(500);expect(await f.text()).not.toContain('value_source_text');spy.mockRestore();
   await d.db.updateDocument(documentId,{status:'withdrawn',withdrawn_at:d.now().toISOString(),withdrawn_reason:'x'});
   expect((await REPORT(getReq(`${B}/${reportId}`),ctxOf({reportId:reportId}))).status).toBe(410);
+ });
+ it('disclosure-recheck route: 200 {restored,failures}; guarded like every admin POST',async()=>{
+  await d.db.updateLicence((await d.db.getDocument(documentId))!.licence_id,{allows_public_target_price:false});
+  const r=await RECHECK(jsonReq(`${B}/${reportId}/disclosure-recheck`,{}),ctxOf({reportId}));
+  expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('no-store');
+  expect(await bodyOf<{restored:boolean;failures:string[]}>(r)).toEqual({restored:true,failures:[]});
  });
  it('★ page: text of page 1; 404 past the last page; 400 malformed',async()=>{
   const ok=await PAGE(getReq(`/api/admin/broker-research/documents/${documentId}/pages/1`),ctxOf({documentId:documentId,n:'1'}));
@@ -11163,6 +11713,24 @@ describe('independent summary',()=>{
   expect(d.storage.text(brokerPaths.response(s.run_id))).toContain('核心结论');
   expect((d.llm as ReturnType<typeof recordedLlmPort>).calls[1].system).toContain('中文');
  });
+ it('lease taken over while the LLM call is pending: no summary row, no titles, both runs failed, 409 lease_lost (P-R1-09)',async()=>{
+  const reportId=await ready(d);const documentId=(await d.db.getReport(reportId))!.document_id;
+  const base=recordedLlmPort([SUMMARY_RESPONSE,TITLE_RESPONSE]);const other='00000000-0000-4000-8000-0000000000ff';
+  for(const kind of ['summary','translate'] as const){
+   let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+   d.llm={info:()=>base.info(),complete:async(req)=>{await gate;return base.complete(req);}};
+   const p=kind==='summary'?runSummary(d,reportId,'zh',ADMIN_ID,{deadline:DEADLINE()}):translateTitle(d,reportId,ADMIN_ID,{deadline:DEADLINE()});
+   await new Promise(r=>setTimeout(r,0));                                                      // the worker is now waiting on the LLM
+   d.db.expireLease(documentId);
+   expect(await d.db.claimLease(documentId,other,300)).toBe(true);                             // another worker takes over
+   release();
+   await expect(p).rejects.toMatchObject({code:'lease_lost',status:409});
+   await d.db.fencedUpdateDocument(documentId,other,{releaseLease:true});
+  }
+  expect((await d.db.listSummaries(reportId)).filter(s=>s.lang==='zh')).toEqual([]);
+  expect((await d.db.getReport(reportId))!).toMatchObject({title_zh:null,title_run_id:null});
+  expect((await d.db.listRuns(documentId)).filter(r=>r.kind==='summary'||r.kind==='translate').map(r=>r.status)).toEqual(['failed','failed']);
+ });
  it('a summary that copies the source is rejected summary_overlap',async()=>{
   const reportId=await ready(d);await runSummary(d,reportId,'zh',ADMIN_ID,{deadline:DEADLINE()});
   const r=await runSummary(d,reportId,'en',ADMIN_ID,{deadline:DEADLINE()});
@@ -11293,6 +11861,7 @@ import {LlmError} from '../ports/llm';
 import {SUMMARY_PROMPT,TRANSLATE_PROMPT} from '../prompts';
 import {applyRules,disclosureInputOf} from '../rules-run';
 import {brokerPaths} from '../storage';
+import {BrokerResearchDbError} from '../types';
 import {SUMMARY_PROMPT_VERSION} from '../versions';
 import {CONTEXT_SHARE,estimateTokens} from '../extract/run';
 import {checkGrounding} from './grounding';
@@ -11317,7 +11886,11 @@ export function groundingInput(targets:TargetRow[],effective:FieldRow[]):Groundi
  return {targets:targets.map(t=>({target_key:t.target_key,ticker_as_stated:t.ticker_as_stated,security_ticker:t.security_ticker})),fields};
 }
 
-async function llmRun(deps:BrokerDeps,report:ReportRow,kind:'summary'|'translate',by:string,call:(runId:string)=>Promise<{system:string;user:string;content:string}>):Promise<{runId:string;content:string;batchId:string;token:string;licenceVersion:number}>{
+interface LlmRunOk{runId:string;content:string;batchId:string;token:string;documentId:string;licenceVersion:number}
+/** Lease → run → LLM call → raw request/response stored. The run stays RUNNING and the lease stays HELD: the caller
+ * persists its result with a fenced commit RPC (summaryCommit / titleCommit), which finishes the run in the same
+ * transaction, and then releases the lease (P-R1-09). Failures before that point finish the run failed here. */
+async function llmRun(deps:BrokerDeps,report:ReportRow,kind:'summary'|'translate',by:string,call:(runId:string)=>Promise<{system:string;user:string;content:string}>):Promise<LlmRunOk>{
  if(report.status==='published')throw conflict('published_immutable');
  const {doc,licence,token}=await claimForProcessing(deps,report.document_id);
  const info=deps.llm.info();
@@ -11331,16 +11904,27 @@ async function llmRun(deps:BrokerDeps,report:ReportRow,kind:'summary'|'translate
   const r=await call(runId);
   await deps.storage.upload(brokerPaths.request(runId),JSON.stringify({run_id:runId,calls:[{system:r.system,user:r.user}]}),'application/json');
   await deps.storage.upload(brokerPaths.response(runId),JSON.stringify({run_id:runId,calls:[{content:r.content,model_id:info.modelId}]}),'application/json');
-  await deps.db.finishRun(runId,token,{status:'succeeded',detail:{}});
-  await deps.db.fencedUpdateDocument(doc.document_id,token,{releaseLease:true});
   await deps.db.logAccess({document_id:doc.document_id,user_id:by,action:'summary_run',detail:{run_id:runId,kind}});
-  return {runId,content:r.content,batchId,token,licenceVersion:licence.version};
+  return {runId,content:r.content,batchId,token,documentId:doc.document_id,licenceVersion:licence.version};
  }catch(e){
   const code=e instanceof LlmError?e.code:e instanceof BrokerError?e.code:'llm_failed';
-  await deps.db.finishRun(runId,token,{status:'failed',detail:{error_code:code}});
-  await deps.db.fencedUpdateDocument(doc.document_id,token,{releaseLease:true});
-  await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[{code}]},deps.now());
-  throw new BrokerError(code,code==='llm_quota'?429:502,{runId});
+  return failRun(deps,{runId,batchId,token,documentId:doc.document_id},code,code==='llm_quota'?429:502);
+ }
+}
+/** Finishes the run failed (a lost lease is reported by finishRun itself), releases the lease, closes the batch, throws. */
+async function failRun(deps:BrokerDeps,r:{runId:string;batchId:string;token:string;documentId:string},code:string,status:number):Promise<never>{
+ await deps.db.finishRun(r.runId,r.token,{status:'failed',detail:{error_code:code}});
+ await deps.db.fencedUpdateDocument(r.documentId,r.token,{releaseLease:true});
+ await finishBatch(deps.tables,r.batchId,{counts:emptyCounts(),errors:[{code}]},deps.now());
+ throw new BrokerError(code,status,{runId:r.runId});
+}
+/** Runs a fenced commit; lease_lost → the run is finished failed by broker_run_finish's lease check, batch failed, 409. */
+async function fencedCommit<T>(deps:BrokerDeps,r:LlmRunOk,commit:()=>Promise<T>):Promise<T>{
+ try{const out=await commit();await deps.db.fencedUpdateDocument(r.documentId,r.token,{releaseLease:true});return out;}
+ catch(e){
+  if(e instanceof BrokerResearchDbError&&e.code==='lease_lost')return failRun(deps,r,'lease_lost',409);
+  if(e instanceof BrokerResearchDbError)return failRun(deps,r,e.code,500);
+  throw e;
  }
 }
 
@@ -11370,8 +11954,8 @@ export async function runSummary(deps:BrokerDeps,reportId:string,lang:Lang,by:st
  const reasons=[...(overlap>licence.snippet_max_chars?['summary_overlap']:[]),...(grounding.passed?[]:['summary_ungrounded']),
   ...[...new Set(disclosure.hits.map(h=>h.kind==='restricted_name'?'restricted_name':'restricted_value'))]];
  const status=reasons.length?'rejected':'draft';
- const summaryId=await deps.db.insertSummary({report_id:reportId,lang,kind:'independent_summary',run_id:run.runId,input_hash:report.summary_input_digest,
-  summary_md:run.content,max_verbatim_overlap:overlap,numeric_grounding:grounding,disclosure_check:disclosure,status});
+ const summaryId=await fencedCommit(deps,run,()=>deps.db.summaryCommit(run.documentId,run.token,run.runId,{report_id:reportId,lang,input_hash:report.summary_input_digest!,
+  summary_md:run.content,max_verbatim_overlap:overlap,numeric_grounding:grounding,disclosure_check:disclosure,status}));
  await finishBatch(deps.tables,run.batchId,{counts:{...emptyCounts(),fetched:1,inserted:1},errors:reasons.map(code=>({code,key:summaryId}))},deps.now());
  return {summaryId,runId:run.runId,status,reasons};
 }
@@ -11388,7 +11972,8 @@ export async function approveSummary(deps:BrokerDeps,summaryId:string,by:string)
  const doc=(await deps.db.getDocument(report.document_id))!;const licence=(await deps.db.getLicence(doc.licence_id))!;
  if(summary.max_verbatim_overlap>licence.snippet_max_chars)throw conflict('summary_overlap');
  if(!summary.numeric_grounding.passed)throw conflict('summary_ungrounded');
- const fresh=checkDisclosure(summary.summary_md,await disclosureInputOf(deps,report));
+ const digest=await deps.db.disclosureDigest(report.report_id);                 // read BEFORE the inputs: the approval trigger refuses a stale one
+ const fresh={...checkDisclosure(summary.summary_md,await disclosureInputOf(deps,report)),db_digest:digest};
  if(!fresh.passed){await deps.db.setSummaryStatus(summaryId,{status:'rejected',disclosure_check:fresh});throw conflict(fresh.hits.some(h=>h.kind==='restricted_name')?'restricted_name':'restricted_value',{hits:fresh.hits.length});}
  for(const s of await deps.db.listSummaries(report.report_id))if(s.lang===summary.lang&&s.status==='approved')await deps.db.setSummaryStatus(s.summary_id,{status:'draft',approved_by:null});
  await deps.db.setSummaryStatus(summaryId,{status:'approved',disclosure_check:fresh,approved_by:by});
@@ -11407,15 +11992,13 @@ export async function translateTitle(deps:BrokerDeps,reportId:string,by:string,_
   return {system:TRANSLATE_PROMPT,user,content:r.content};
  });
  let t:{zh?:unknown;en?:unknown};try{t=JSON.parse(run.content);}catch{t={};}
- if(typeof t.zh!=='string'||typeof t.en!=='string'||!t.zh.trim()||!t.en.trim()||t.zh.length>300||t.en.length>300){
-  await finishBatch(deps.tables,run.batchId,{counts:{...emptyCounts(),fetched:1,failed:1},errors:[{code:'llm_schema_invalid'}]},deps.now());
-  throw new BrokerError('llm_schema_invalid',502,{runId:run.runId});
- }
- await deps.db.updateReportDraft(reportId,{title_zh:t.zh.trim(),title_en:t.en.trim(),title_run_id:run.runId});
+ if(typeof t.zh!=='string'||typeof t.en!=='string'||!t.zh.trim()||!t.en.trim()||t.zh.length>300||t.en.length>300)return failRun(deps,run,'llm_schema_invalid',502);
+ const zh=t.zh.trim(),en=t.en.trim();
+ await fencedCommit(deps,run,()=>deps.db.titleCommit(run.documentId,run.token,run.runId,{title_zh:zh,title_en:en}));
  await deps.db.materialize(reportId);
  const rules=await applyRules(deps,reportId,{batchId:run.batchId});
  await finishBatch(deps.tables,run.batchId,{counts:{...emptyCounts(),fetched:1,inserted:1,quarantined:rules.quarantined},errors:rules.quarantined?[{code:'rules_failed_summary'}]:[]},deps.now());
- return {runId:run.runId,zh:t.zh.trim(),en:t.en.trim()};
+ return {runId:run.runId,zh,en};
 }
 ```
 
@@ -11469,9 +12052,10 @@ async function snippetById(deps:SDeps,snippetId:string):Promise<SnippetRow>{
 export async function approveSnippet(deps:SDeps,snippetId:string,by:string):Promise<void>{
  const s=await snippetById(deps,snippetId);
  if(s.status!=='draft'||s.text===null)throw conflict('snippet_not_draft');
+ const digest=await deps.db.disclosureDigest(s.report_id);                       // read BEFORE the inputs (P-R1-04)
  const {licence,disclosure}=await inputs(deps,s.report_id);
  if(s.text.length>licence.snippet_max_chars)throw conflict('snippet_too_long');
- const check=checkDisclosure(s.text,disclosure);
+ const check={...checkDisclosure(s.text,disclosure),db_digest:digest};
  if(!check.passed){await deps.db.setSnippetStatus(snippetId,{status:'rejected',disclosure_check:check});throw conflict(check.hits.some(h=>h.kind==='restricted_name')?'restricted_name':'restricted_value');}
  await deps.db.setSnippetStatus(snippetId,{status:'approved',disclosure_check:check,approved_by:by});
 }
@@ -11758,26 +12342,37 @@ git commit -m "feat(broker-research): C7 independent summary with three checks, 
 - Modify: `scripts/ci/research-checks.ts`（`criticalSuites` 末尾追加 C8 自己的 `// FOREIGN ↓ (C8)` … `// FOREIGN ↑` 围栏，只含本任务一条）
 - Modify: `docs/audits/2026-11-06-foreign-research/10-implementation-log.md`
 
-**评测匹配（规格 §11.3）**：同 `(target_key, field, occurrence)`；生效值相等（两边都有 `value_num` 时 `decimalEquals`，容差 0；否则 `value_text` 小写并折叠空白后相等）；页码相等；跨度重叠（未定位的候选不匹配）。`per_field[field] = {tp,fp,fn,precision,recall}`，`precision = tp/(tp+fp)`（分母 0 → null），`recall = tp/(tp+fn)`（分母 0 → null）；`absence`：标注 `absent` 且抽取无该 `(target_key,field)` → tp，标注 `absent` 但抽取有 → fp，标注有值但抽取完全没有该 `(target_key,field)` → fn。`precision_min/recall_min` = 非 null 值的最小值；`passed = precision_min ≥ 0.95 && recall_min ≥ 0.95`（任一为 null → false）。`corpus_hash = sha256Hex(canonicalJson(按 sha256 排序的 manifest.docs))`。
+**评测匹配（规格 §11.3）**：同 `(target_key, field, occurrence)`；完整类型化值相等（`value_num` 用 `decimalEquals`、容差 0，`value_currency`/`value_unit`/`value_date` 逐项相等，null 只等于 null；两边都没有任何类型化分量时才比较小写并折叠空白的 `value_text`）；页码相等；跨度重叠（未定位的候选不匹配）。`per_field[field] = {tp,fp,fn,precision,recall}`，`precision = tp/(tp+fp)`（分母 0 → null），`recall = tp/(tp+fn)`（分母 0 → null）；`absence`：标注 `absent` 且抽取无该 `(target_key,field)` → tp，标注 `absent` 但抽取有 → fp，标注有值但抽取完全没有该 `(target_key,field)` → fn。`precision_min/recall_min` = 非 null 值的最小值；`passed = precision_min ≥ 0.95 && recall_min ≥ 0.95`（任一为 null → false）。`corpus_hash = sha256Hex(canonicalJson(按 sha256 排序的 manifest.docs))`。
 
 - [ ] **Step 1: 写评测失败测试**
 
 ```ts
 // src/lib/broker-research/eval.test.ts
 import {describe,expect,it} from 'vitest';
-import {corpusHash,evalStats} from './eval';
-import type {GoldDoc} from './eval';
+import {corpusHash,evalStats,runGoldEval} from './eval';
+import type {EvalRow,GoldDoc} from './eval';
+import {EXTRACT_RESPONSE} from './fixtures/pipeline';
+import {runParse} from './parse';
+import {recordedLlmPort} from './ports/llm';
+import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from './testing';
 
-const g=(field:string,value_text:string,value_num:string|null,page=1,s=0,e=5,target_key:string|null='ZZBR')=>({target_key,field,occurrence:1,value_text,value_num,page,char_start:s,char_end:e});
+const g=(field:string,value_text:string,value_num:string|null,page=1,s=0,e=5,target_key:string|null='ZZBR',typed:Partial<EvalRow>={}):EvalRow=>({target_key,field,occurrence:1,value_text,value_num,value_currency:null,value_unit:value_num===null?null:'price',value_date:null,page,char_start:s,char_end:e,...typed});
 describe('evalStats',()=>{
  const gold:GoldDoc[]=[{sha256:'a'.repeat(64),fields:[g('target_price','120.00','120.00'),g('rating','Overweight',null,1,10,20)],absent:[{target_key:'ZZBR',field:'target_horizon'}]}];
  it('counts tp/fp/fn per field with zero numeric tolerance and span overlap',()=>{
-  const s=evalStats(gold,[{sha256:'a'.repeat(64),rows:[g('target_price','120.0','120.0',1,2,8),g('rating','overweight',null,1,30,40),g('wacc','9%','0.09',2)]}]);
+  const s=evalStats(gold,[{sha256:'a'.repeat(64),rows:[g('target_price','120.0','120.0',1,2,8),g('rating','overweight',null,1,30,40),g('wacc','9%','0.09',2,0,5,null,{value_unit:'pct'})]}]);
   expect(s.per_field.target_price).toEqual({tp:1,fp:0,fn:0,precision:1,recall:1});
   expect(s.per_field.rating).toEqual({tp:0,fp:1,fn:1,precision:0,recall:0});   // span does not overlap
   expect(s.per_field.wacc).toEqual({tp:0,fp:1,fn:0,precision:0,recall:null});
   expect(s.absence).toEqual({tp:1,fp:0,fn:0});
   expect(s.precision_min).toBe(0);expect(s.passed).toBe(false);expect(s.n_docs).toBe(1);
+ });
+ it('compares the complete typed value: same text and span but a wrong currency, date, unit or nullability is not a match (P-R1-11)',()=>{
+  const cur:GoldDoc[]=[{sha256:'c'.repeat(64),fields:[g('target_currency','US$',null,1,0,3,'ZZBR',{value_currency:'USD',value_unit:null}),g('published_date','5 Nov 2026',null,1,10,20,null,{value_date:'2026-11-05',value_unit:null}),g('upside_stated','25%','0.25',1,30,33,'ZZBR',{value_unit:'pct'}),g('target_price','120','120',1,40,43)],absent:[]}];
+  const ext=(over:Record<string,Partial<EvalRow>>)=>[{sha256:'c'.repeat(64),rows:cur[0].fields.map(r=>({...r,...(over[r.field]??{})}))}];
+  expect(evalStats(cur,ext({})).passed).toBe(true);
+  const bad=evalStats(cur,ext({target_currency:{value_currency:'HKD'},published_date:{value_date:'2026-05-11'},upside_stated:{value_unit:'ratio'},target_price:{value_num:null,value_unit:null}}));
+  for(const f of ['target_currency','published_date','upside_stated','target_price'])expect({f,s:bad.per_field[f]}).toEqual({f,s:{tp:0,fp:1,fn:1,precision:0,recall:0}});
  });
  it('passes at ≥ 0.95 on every covered field; unlocated candidates never match',()=>{
   const ok=evalStats(gold,[{sha256:'a'.repeat(64),rows:[g('target_price','120.00','120.00'),g('rating','Overweight',null,1,10,20)]}]);
@@ -11790,6 +12385,35 @@ describe('evalStats',()=>{
   expect(corpusHash([a,b])).toBe(corpusHash([b,a]));
  });
 });
+
+describe('runGoldEval authorization (P-R1-01)',()=>{
+ const setup=async(o:{licence?:Record<string,unknown>;after?:(d:ReturnType<typeof memoryBrokerDeps>,ids:{licenceId:string;documentId:string})=>Promise<void>}={})=>{
+  const d=memoryBrokerDeps();const lic=await seedLicence(d.db,{patch:o.licence});const doc=await seedDocument(d,lic.licence_id);
+  await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  await o.after?.(d,{licenceId:lic.licence_id,documentId:doc.document_id});
+  const llm=recordedLlmPort([EXTRACT_RESPONSE]);d.llm=llm;
+  return {d,llm,docs:[{sha256:doc.sha256,fields:[],absent:[]}] as GoldDoc[]};
+ };
+ const cases:[string,Parameters<typeof setup>[0],string][]=[
+  ['processing forbidden',{after:async(d,x)=>{await d.db.updateLicence(x.licenceId,{allows_llm_processing:false});await d.db.confirmLicence(x.licenceId,ADMIN_ID,(await d.db.getLicence(x.licenceId))!.version);}},'licence_forbids_processing'],
+  ['unconfirmed (material change)',{after:async(d,x)=>{await d.db.updateLicence(x.licenceId,{terms_summary:'changed'});}},'licence_forbids_processing'],
+  ['expired',{after:async(d,x)=>{await d.db.updateLicence(x.licenceId,{valid_to:'2026-01-02'});await d.db.confirmLicence(x.licenceId,ADMIN_ID,(await d.db.getLicence(x.licenceId))!.version);}},'licence_forbids_processing'],
+  ['withdrawn',{after:async(d,x)=>{await d.db.updateDocument(x.documentId,{status:'withdrawn',withdrawn_at:d.now().toISOString(),withdrawn_reason:'t'});}},'document_withdrawn'],
+ ];
+ for(const [name,o,code] of cases)it(`refuses a ${name} document before any LLM call`,async()=>{
+  const {d,llm,docs}=await setup(o);
+  await expect(runGoldEval(d,docs,{by:ADMIN_ID,dryRun:false})).rejects.toMatchObject({code});
+  expect(llm.calls).toHaveLength(0);
+ });
+ it('dry-run checks authorization and makes no LLM call; a real run records the authorized licence version per document',async()=>{
+  const {d,llm,docs}=await setup();
+  const dry=await runGoldEval(d,docs,{by:ADMIN_ID,dryRun:true});
+  expect(llm.calls).toHaveLength(0);expect(dry.receiptId).toBeNull();expect(dry.authorized).toEqual([{sha256:docs[0].sha256,licence_id:expect.any(String),licence_version:1}]);
+  const real=await runGoldEval(d,docs,{by:ADMIN_ID,dryRun:false});
+  expect(llm.calls.length).toBeGreaterThan(0);expect(real.receiptId).toMatch(/[0-9a-f-]{36}/);
+  expect(real.authorized[0].licence_version).toBe(1);
+ });
+});
 ```
 
 - [ ] **Step 2: 实现 `eval.ts`**
@@ -11797,22 +12421,40 @@ describe('evalStats',()=>{
 ```ts
 // src/lib/broker-research/eval.ts
 // Gold-set evaluation receipts (spec §4.10, §11.3, §12.4; blocker 13). evalStats() is pure: it matches extracted
-// candidate rows to annotated rows by identity, effective value (numeric tolerance 0), page and span overlap, and
-// produces per-field and absence counts. writeEvalReceipt() stores the receipt keyed by behavior_digest. Blocker 13
+// candidate rows to annotated rows by identity, the COMPLETE typed value (value_num with numeric tolerance 0, plus
+// value_currency, value_unit and value_date, nullability included; text only when no typed component exists), page
+// and span overlap. runGoldEval() applies claimForProcessing's document and processing-authorization checks to every
+// document BEFORE any external call (and again right before each document is sent), records the authorized licence
+// version per document, makes no LLM call in dry-run, and writes the receipt keyed by behavior_digest. Blocker 13
 // accepts corpus_kind='gold' only (with approved_gold_corpus_hash); 'synthetic' receipts never lift it.
 import {decimalEquals} from '../facts/json-numbers';
+import {behaviorDigest} from './behavior';
+import {BrokerError,conflict,notFound} from './errors';
+import {extractCandidates} from './extract/run';
 import {canonicalJson,sha256Hex} from './hash';
+import {processingAllowed,utcToday} from './licences';
+import {artifactLoader} from './parse';
+import {brokerPaths} from './storage';
+import {documentForAccess} from './upload';
+import {EXTRACT_PROMPT_VERSION,SCHEMA_VERSION} from './versions';
 import type {BrokerDeps} from './deps';
-import type {EvalFieldStats,EvalReceiptRow} from './types';
+import type {DocumentRow,EvalFieldStats,EvalReceiptRow,LicenceRow,RunRow,ValueUnit} from './types';
 
-export interface EvalRow{target_key:string|null;field:string;occurrence:number;value_text:string;value_num:string|null;page:number|null;char_start:number|null;char_end:number|null}
+/** One annotated or extracted evidence row: identity, the full TypedValue, page and span. */
+export interface EvalRow{target_key:string|null;field:string;occurrence:number;value_text:string;value_num:string|null;value_currency:string|null;value_unit:ValueUnit|null;value_date:string|null;page:number|null;char_start:number|null;char_end:number|null}
 export interface GoldDoc{sha256:string;fields:EvalRow[];absent:{target_key:string|null;field:string}[]}
 export interface ExtractedDoc{sha256:string;rows:EvalRow[]}
 export const EVAL_THRESHOLD=0.95,GOLD_MIN_DOCS=30;
 const id=(r:{target_key:string|null;field:string;occurrence?:number})=>`${r.target_key??''}\u0000${r.field}\u0000${r.occurrence??1}`;
 const tf=(r:{target_key:string|null;field:string})=>`${r.target_key??''}\u0000${r.field}`;
 const norm=(s:string)=>s.toLowerCase().replace(/\s+/g,' ').trim();
-const sameValue=(a:EvalRow,b:EvalRow)=>a.value_num!==null&&b.value_num!==null?decimalEquals(a.value_num,b.value_num):norm(a.value_text)===norm(b.value_text);
+const sameNum=(a:string|null,b:string|null)=>a===null||b===null?a===b:decimalEquals(a,b);
+/** Typed comparison: every component must agree (null only equals null); text decides only for untyped rows. */
+const sameValue=(a:EvalRow,b:EvalRow)=>{
+ const typed=[a.value_num,a.value_currency,a.value_unit,a.value_date,b.value_num,b.value_currency,b.value_unit,b.value_date].some(v=>v!==null);
+ if(!typed)return norm(a.value_text)===norm(b.value_text);
+ return sameNum(a.value_num,b.value_num)&&a.value_currency===b.value_currency&&a.value_unit===b.value_unit&&a.value_date===b.value_date;
+};
 const overlaps=(a:EvalRow,b:EvalRow)=>a.char_start!==null&&a.char_end!==null&&b.char_start!==null&&b.char_end!==null&&a.char_start<b.char_end&&b.char_start<a.char_end;
 const matches=(gold:EvalRow,x:EvalRow)=>sameValue(gold,x)&&gold.page===x.page&&overlaps(gold,x);
 const ratio=(n:number,d:number)=>d===0?null:n/d;
@@ -11844,6 +12486,47 @@ export async function writeEvalReceipt(deps:Pick<BrokerDeps,'db'>,r:Omit<EvalRec
  if(r.corpus_kind==='gold'&&r.n_docs<GOLD_MIN_DOCS)console.warn(`[broker-research] gold receipt with ${r.n_docs} < ${GOLD_MIN_DOCS} docs will not lift blocker 13`);
  return deps.db.insertEvalReceipt(r);
 }
+
+export interface AuthorizedDoc{sha256:string;licence_id:string;licence_version:number}
+/** claimForProcessing's preconditions without a lease (an eval writes nothing but the receipt): the document is
+ * reachable (withdrawn → 410 document_withdrawn, promotion pending → 409), parsed, and its licence authorises
+ * processing today (confirmed for the current version, inside the validity dates, allows_llm_processing). */
+export async function authorizeGoldDoc(deps:Pick<BrokerDeps,'db'|'now'>,sha256:string):Promise<{doc:DocumentRow;licence:LicenceRow;parseRun:RunRow}>{
+ const found=await deps.db.findDocumentBySha(sha256);if(!found)throw notFound('document_not_found');
+ const doc=await documentForAccess(deps,found.document_id);
+ if(doc.status!=='parsed'||!doc.current_parse_run_id)throw conflict('document_not_parsed');
+ const licence=await deps.db.getLicence(doc.licence_id);
+ if(!licence||!processingAllowed(licence,utcToday(deps.now())))throw conflict('licence_forbids_processing');
+ const parseRun=await deps.db.getRun(doc.current_parse_run_id);if(!parseRun)throw conflict('document_not_parsed');
+ return {doc,licence,parseRun};
+}
+export interface GoldEvalResult{receiptId:string|null;authorized:AuthorizedDoc[];corpusHash:string;behaviorDigest:string;approved:boolean;stats:ReturnType<typeof evalStats>|null}
+export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dryRun:boolean;deadlineMs?:number;log?:(line:string)=>void}):Promise<GoldEvalResult>{
+ const info=deps.llm.info();if(!info)throw new BrokerError('llm_unavailable',503);
+ const authorized:AuthorizedDoc[]=[];const versions=new Set<string>();
+ for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version});versions.add(a.parseRun.extractor_version??'unknown');}
+ if(versions.size>1)throw conflict('mixed_extractor_versions',{versions:[...versions]});
+ const extractorVersion=[...versions][0]??'unknown';
+ const hash=corpusHash(docs);
+ const digest=behaviorDigest({extractorVersion,modelId:info.modelId,registryHash:info.registryHash,promptVersion:EXTRACT_PROMPT_VERSION,schemaVersion:SCHEMA_VERSION});
+ const approved=(await deps.db.getSettings()).approved_gold_corpus_hash===hash;
+ if(o.dryRun)return {receiptId:null,authorized,corpusHash:hash,behaviorDigest:digest,approved,stats:null};      // no external call
+ const load=artifactLoader(deps);const extracted:ExtractedDoc[]=[];
+ for(const g of docs){
+  const a=await authorizeGoldDoc(deps,g.sha256);                                                   // re-checked right before this document is sent
+  if(a.licence.version!==authorized.find(x=>x.sha256===g.sha256)!.licence_version)throw conflict('licence_changed_during_eval');
+  const b=await extractCandidates(deps.llm,info,await load(a.parseRun.run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
+  const evalRun=deps.newId();
+  await deps.storage.upload(brokerPaths.request(evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}),'application/json');
+  await deps.storage.upload(brokerPaths.response(evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}),'application/json');
+  extracted.push({sha256:g.sha256,rows:b.rows});
+  o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
+ }
+ const stats=evalStats(docs,extracted);
+ const receiptId=await writeEvalReceipt(deps,{corpus_kind:'gold',corpus_hash:hash,behavior_digest:digest,extractor_version:extractorVersion,model_id:info.modelId,registry_hash:info.registryHash,
+  prompt_version:EXTRACT_PROMPT_VERSION,schema_version:SCHEMA_VERSION,code_version:deps.codeVersion,...stats,ran_by:o.by});
+ return {receiptId,authorized,corpusHash:hash,behaviorDigest:digest,approved,stats};
+}
 ```
 
 - [ ] **Step 3: 写 `scripts/broker-research/eval-gold.ts`**
@@ -11852,54 +12535,27 @@ export async function writeEvalReceipt(deps:Pick<BrokerDeps,'db'>,r:Omit<EvalRec
 // scripts/broker-research/eval-gold.ts
 // Gold-set runner (spec §11.3, §12.4; owner action O14 / FR-5). Usage:
 //   npx tsx scripts/broker-research/eval-gold.ts --manifest <private gold manifest.json> --by <admin uuid> [--dry-run]
-// The manifest (never committed; lives with the owner) is {docs: GoldDoc[]}: each doc's sha256 must already be uploaded
-// and parsed. For every doc the extraction core (extract/run.ts::extractCandidates) runs against the current parse
-// artifact with the production LLM port (BROKER_RESEARCH_LLM_ENABLED=1) — no DB writes besides the receipt; the raw
-// calls are kept under runs/{eval run id}.*. Prints the receipt and whether corpus_hash equals
-// settings.approved_gold_corpus_hash (the receipt lifts blocker 13 only when it does, passed=true and n_docs ≥ 30).
-import {randomUUID} from 'node:crypto';
+// The manifest (never committed; lives with the owner) is {docs: GoldDoc[]} with the full typed value of every
+// annotated row (value_text, value_num, value_currency, value_unit, value_date, page, span, target_key, occurrence).
+// eval.ts::runGoldEval refuses the whole run before any LLM call if a document is withdrawn, not parsed, or its licence
+// does not authorise processing today; --dry-run stops after those checks (no LLM call, no receipt). Prints the
+// authorized licence version of every document, the receipt and whether corpus_hash equals approved_gold_corpus_hash.
 import {readFileSync} from 'node:fs';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {brokerDeps} from '../../src/lib/broker-research/deps';
-import {behaviorDigest} from '../../src/lib/broker-research/behavior';
-import {corpusHash,evalStats,writeEvalReceipt} from '../../src/lib/broker-research/eval';
-import type {ExtractedDoc,GoldDoc} from '../../src/lib/broker-research/eval';
-import {extractCandidates} from '../../src/lib/broker-research/extract/run';
-import {artifactLoader} from '../../src/lib/broker-research/parse';
-import {brokerPaths} from '../../src/lib/broker-research/storage';
-import {EXTRACT_PROMPT_VERSION,SCHEMA_VERSION} from '../../src/lib/broker-research/versions';
+import {runGoldEval} from '../../src/lib/broker-research/eval';
+import type {GoldDoc} from '../../src/lib/broker-research/eval';
 
 const arg=(k:string)=>{const i=process.argv.indexOf(k);return i>0?process.argv[i+1]:undefined;};
 async function main(){
- const manifestPath=arg('--manifest'),by=arg('--by'),dry=process.argv.includes('--dry-run');
+ const manifestPath=arg('--manifest'),by=arg('--by'),dryRun=process.argv.includes('--dry-run');
  if(!manifestPath||!by)throw new Error('usage: --manifest <file> --by <uuid> [--dry-run]');
  const docs=(JSON.parse(readFileSync(manifestPath,'utf8')) as {docs:GoldDoc[]}).docs;
  const deps={...brokerDeps(),codeVersion:resolveCodeVersion({allowGit:true})??'unknown'};
- const info=deps.llm.info();if(!info)throw new Error('llm_unavailable: set BROKER_RESEARCH_LLM_ENABLED=1 and a platform LLM');
- const load=artifactLoader(deps);const extracted:ExtractedDoc[]=[];const versions=new Set<string>();
- for(const g of docs){
-  const doc=await deps.db.findDocumentBySha(g.sha256);
-  if(!doc?.current_parse_run_id)throw new Error(`not parsed: ${g.sha256}`);
-  const run=(await deps.db.getRun(doc.current_parse_run_id))!;versions.add(run.extractor_version??'unknown');
-  const b=await extractCandidates(deps.llm,info,await load(run.run_id),{deadline:new Date(Date.now()+600_000),now:()=>new Date()});
-  const evalRun=randomUUID();
-  await deps.storage.upload(brokerPaths.request(evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,calls:b.requests}),'application/json');
-  await deps.storage.upload(brokerPaths.response(evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}),'application/json');
-  extracted.push({sha256:g.sha256,rows:b.rows});
-  console.log(`${g.sha256.slice(0,12)} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
- }
- if(versions.size!==1)throw new Error(`mixed extractor versions: ${[...versions].join(',')}`);
- const [extractorVersion]=[...versions];
- const stats=evalStats(docs,extracted),hash=corpusHash(docs);
- const digest=behaviorDigest({extractorVersion,modelId:info.modelId,registryHash:info.registryHash,promptVersion:EXTRACT_PROMPT_VERSION,schemaVersion:SCHEMA_VERSION});
- const settings=await deps.db.getSettings();
- console.log(JSON.stringify({corpus_hash:hash,approved:settings.approved_gold_corpus_hash===hash,behavior_digest:digest,...stats},null,1));
- if(dry)return;
- const id=await writeEvalReceipt(deps,{corpus_kind:'gold',corpus_hash:hash,behavior_digest:digest,extractor_version:extractorVersion,model_id:info.modelId,registry_hash:info.registryHash,
-  prompt_version:EXTRACT_PROMPT_VERSION,schema_version:SCHEMA_VERSION,code_version:deps.codeVersion,...stats,ran_by:by});
- console.log(`receipt ${id}`);
+ const r=await runGoldEval(deps,docs,{by,dryRun,log:line=>console.log(line)});
+ console.log(JSON.stringify(r,null,1));
 }
-main().catch(e=>{console.error(e instanceof Error?e.message:e);process.exit(1);});
+main().catch(e=>{console.error(e instanceof Error?`${(e as {code?:string}).code??''} ${e.message}`:e);process.exit(1);});
 ```
 
 - [ ] **Step 4: 写回放失败测试与实现**
@@ -11910,51 +12566,74 @@ import {describe,expect,it} from 'vitest';
 import {replayFromSnapshot} from './replay';
 import {effectiveValue} from './effective';
 import {runExtract} from './extract/run';
+import {sha256Hex} from './hash';
 import {runParse} from './parse';
 import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from './testing';
 import type {FieldRow,PublicationRow} from './types';
 
-/** Snapshot rows in the shape broker_report_publish writes (A2): spans + artifact_hash + effective value, no source text. */
+/** Snapshot rows in the shape broker_report_publish writes (A2): spans, artifact_hash, frozen source text + its hash,
+ * framing provenance, the extracted and the effective value. */
 const snap=(f:FieldRow,artifactHash:string|null,status=f.status)=>({field_id:f.field_id,target_key:f.target_key,field:f.field,occurrence:f.occurrence,status,extractor:f.extractor,
- parse_run_id:f.parse_run_id,run_id:f.run_id,artifact_hash:artifactHash,page:f.page,char_start:f.char_start,char_end:f.char_end,value:effectiveValue(f)});
+ parse_run_id:f.parse_run_id,run_id:f.run_id,artifact_hash:artifactHash,page:f.page,char_start:f.char_start,char_end:f.char_end,
+ value_source_text:f.value_source_text,value_source_sha256:f.value_source_text===null?null:sha256Hex(f.value_source_text),framed:f.detail.framed===true,
+ extracted:{value_text:f.value_text,value_num:f.value_num,value_currency:f.value_currency,value_unit:f.value_unit,value_date:f.value_date},value:effectiveValue(f)});
+async function extracted(){
+ const d=memoryBrokerDeps();const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);
+ await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+ const ex=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+ const run=(await d.db.getRun(ex.runId))!;const parse=(await d.db.getRun(run.parse_run_id!))!;
+ const rows=(await d.db.listFields(ex.reportId)).filter(f=>f.status==='extracted');
+ const pub={publication_id:'p',report_id:ex.reportId,snapshot:{report:{report_id:ex.reportId},fields:rows.map(f=>snap(f,parse.artifact_hash,'confirmed'))},snapshot_hash:'h'} as unknown as PublicationRow;
+ return {d,ex,parse,rows,pub};
+}
 describe('replayFromSnapshot',()=>{
  it('rebuilds candidates from stored responses and verifies every span against the artifact; flags a shifted span',async()=>{
-  const d=memoryBrokerDeps();const doc=await seedDocument(d,(await seedLicence(d.db)).licence_id);
-  await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
-  const ex=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
-  const run=(await d.db.getRun(ex.runId))!;const parse=(await d.db.getRun(run.parse_run_id!))!;
-  const rows=(await d.db.listFields(ex.reportId)).filter(f=>f.status==='extracted');
-  const pub={publication_id:'p',report_id:ex.reportId,snapshot:{report:{report_id:ex.reportId},fields:rows.map(f=>snap(f,parse.artifact_hash,'confirmed'))},snapshot_hash:'h'} as unknown as PublicationRow;
+  const {d,ex,parse,rows,pub}=await extracted();
   const ok=await replayFromSnapshot(d,pub);
   expect(ok.mismatches).toEqual([]);expect(ok.ok).toBe(true);expect(ok.checked).toBe(rows.length);
   const shifted={...snap(rows[0],parse.artifact_hash,'confirmed'),char_start:rows[0].char_start!+1};
   const r=await replayFromSnapshot(d,{...pub,snapshot:{report:{report_id:ex.reportId},fields:[shifted]}} as unknown as PublicationRow);
   expect(r.ok).toBe(false);expect(r.mismatches[0]).toMatchObject({field_id:rows[0].field_id,check:'span_verbatim'});
+  const tampered={...snap(rows[0],parse.artifact_hash,'confirmed'),value_source_sha256:'0'.repeat(64)};
+  expect((await replayFromSnapshot(d,{...pub,snapshot:{report:{report_id:ex.reportId},fields:[tampered]}} as unknown as PublicationRow)).mismatches[0]).toMatchObject({check:'snapshot_source'});
+ });
+ it('replays an old publication from its snapshot only: editing the same field afterwards (new span, framed) changes nothing (P-R1-10)',async()=>{
+  const {d,ex,rows,pub}=await extracted();
+  const before=await replayFromSnapshot(d,pub);expect(before.ok).toBe(true);
+  // the next revision edits the same live row: different span + framing provenance (allowed on a draft)
+  const f=rows.find(x=>x.char_start!==null&&x.char_end!==null&&x.char_end-x.char_start>1)!;
+  await d.db.fieldReview(f.field_id,'confirm',{page:f.page,char_start:f.char_start!,char_end:f.char_end!-1,value_source_text:f.value_source_text!.slice(0,-1),detail:{framed:true}},ADMIN_ID);
+  expect((await d.db.listFields(ex.reportId)).find(x=>x.field_id===f.field_id)).toMatchObject({char_end:f.char_end!-1,detail:expect.objectContaining({framed:true})});
+  const after=await replayFromSnapshot(d,pub);
+  expect(after).toEqual(before);
  });
 });
 ```
 
 ```ts
 // src/lib/broker-research/replay.ts
-// Publication replay without DB writes (spec §5.5, constraint 2): for every evidence row of a publication snapshot —
-// (1) the parse artifact named by parse_run_id still hashes to the snapshot's artifact_hash; (2) slicing it at
-// (page, char_start, char_end) gives the row's value_source_text (read from the immutable field row; the snapshot
-// carries spans and the effective value, not the source text); (3) for LLM rows, the stored
+// Publication replay without DB writes (spec §4.8 / §5.5, constraint 2). It reads ONLY the immutable publication
+// snapshot, the immutable run rows and the bucket — never live field rows, whose span / source text / detail may be
+// edited after an unpublish (P-R1-10). For every evidence row of the snapshot: (0) the frozen value_source_text matches
+// its frozen sha256; (1) the parse artifact named by parse_run_id still hashes to the snapshot's artifact_hash;
+// (2) slicing it at (page, char_start, char_end) gives the frozen value_source_text; (3) for LLM rows, the stored
 // runs/{run_id}.response.json re-validated, re-merged and re-located (B1/B3) reproduces a candidate with the same
-// identity and span — rows confirmed with a framed span (detail.framed, C6) are exempt from (3) — and the run's
-// behavior_digest recomputes from its recorded versions. Reads only snapshot + immutable rows + bucket.
+// identity and span and the snapshot's extracted value — rows whose snapshot says framed=true are exempt from (3) —
+// and the run's behavior_digest recomputes from its recorded versions.
 import {behaviorDigest} from './behavior';
 import {sliceText} from './extract/locate';
 import {buildCandidateRows,mergeChunks} from './extract/merge';
 import type {ChunkExtraction} from './extract/merge';
 import {validateExtraction} from './extract/schema';
+import {sha256Hex} from './hash';
 import {artifactLoader} from './parse';
 import type {F3Artifact} from './ports/f3';
 import type {BrokerDeps} from './deps';
-import type {CandidateFieldInput,FieldRow,PublicationRow,RunRow,TypedValue} from './types';
+import type {CandidateFieldInput,PublicationRow,RunRow,TypedValue} from './types';
 
-interface SnapField{field_id:string;field:string;target_key:string|null;occurrence:number;status:string;extractor:string;parse_run_id:string|null;run_id:string|null;artifact_hash:string|null;page:number|null;char_start:number|null;char_end:number|null;value:TypedValue}
-export interface ReplayMismatch{field_id:string;check:'field_missing'|'artifact_hash'|'span_verbatim'|'candidate_missing'|'candidate_value'|'behavior_digest'|'response_unreadable';detail?:string}
+interface SnapField{field_id:string;field:string;target_key:string|null;occurrence:number;status:string;extractor:string;parse_run_id:string|null;run_id:string|null;artifact_hash:string|null;
+ page:number|null;char_start:number|null;char_end:number|null;value_source_text:string|null;value_source_sha256:string|null;framed:boolean;extracted:TypedValue;value:TypedValue}
+export interface ReplayMismatch{field_id:string;check:'snapshot_source'|'artifact_hash'|'span_verbatim'|'candidate_missing'|'candidate_value'|'behavior_digest'|'response_unreadable';detail?:string}
 type RDeps=Pick<BrokerDeps,'db'|'storage'>;
 
 async function candidatesOf(deps:RDeps,run:RunRow,artifact:F3Artifact,extractor:string):Promise<CandidateFieldInput[]|null>{
@@ -11967,31 +12646,28 @@ async function candidatesOf(deps:RDeps,run:RunRow,artifact:F3Artifact,extractor:
  return buildCandidateRows(merge,{pages:artifact.pages,extractor});
 }
 export async function replayFromSnapshot(deps:RDeps,pub:PublicationRow):Promise<{publicationId:string;ok:boolean;checked:number;mismatches:ReplayMismatch[]}>{
- const snapshot=pub.snapshot as {report?:{report_id?:string};fields?:SnapField[]};
+ const snapshot=pub.snapshot as {fields?:SnapField[]};
  const fields=snapshot.fields??[];const load=artifactLoader(deps);const mismatches:ReplayMismatch[]=[];
- const reportId=snapshot.report?.report_id??pub.report_id;
- const rows=new Map<string,FieldRow>((await deps.db.listFields(reportId,{includeSuperseded:true})).map(f=>[f.field_id,f]));
  const runCache=new Map<string,Promise<CandidateFieldInput[]|null>>();
  for(const f of fields){
   if(f.status==='absent'||f.parse_run_id===null||f.page===null||f.char_start===null||f.char_end===null)continue;
-  const row=rows.get(f.field_id);
-  if(!row){mismatches.push({field_id:f.field_id,check:'field_missing'});continue;}
+  if(f.value_source_text===null||f.value_source_sha256===null||sha256Hex(f.value_source_text)!==f.value_source_sha256){mismatches.push({field_id:f.field_id,check:'snapshot_source'});continue;}
   const parse=await deps.db.getRun(f.parse_run_id);
   if(!parse||parse.artifact_hash!==f.artifact_hash){mismatches.push({field_id:f.field_id,check:'artifact_hash'});continue;}
   const artifact=await load(f.parse_run_id).catch(()=>null);
   if(!artifact){mismatches.push({field_id:f.field_id,check:'artifact_hash',detail:'unreadable'});continue;}
-  if(sliceText(artifact.pages,f.page,f.char_start,f.char_end)!==row.value_source_text){mismatches.push({field_id:f.field_id,check:'span_verbatim'});continue;}
+  if(sliceText(artifact.pages,f.page,f.char_start,f.char_end)!==f.value_source_text){mismatches.push({field_id:f.field_id,check:'span_verbatim'});continue;}
   if(!f.extractor.startsWith('llm:')||!f.run_id)continue;
   const run=await deps.db.getRun(f.run_id);
   if(!run){mismatches.push({field_id:f.field_id,check:'response_unreadable'});continue;}
   const digest=behaviorDigest({extractorVersion:run.extractor_version??'unknown',modelId:run.model_id??'',registryHash:run.registry_hash??'',promptVersion:run.prompt_version??'',schemaVersion:run.schema_version??''});
   if(digest!==run.behavior_digest)mismatches.push({field_id:f.field_id,check:'behavior_digest'});
-  if(row.detail.framed===true)continue;   // human-framed span (C6): the candidate never had this span
+  if(f.framed)continue;   // human-framed span (snapshot provenance): the candidate never had this span
   let p=runCache.get(run.run_id);if(!p){p=candidatesOf(deps,run,artifact,f.extractor);runCache.set(run.run_id,p);}
   const cands=await p;if(!cands){mismatches.push({field_id:f.field_id,check:'response_unreadable'});continue;}
   const c=cands.find(x=>x.target_key===f.target_key&&x.field===f.field&&x.occurrence===f.occurrence&&x.char_start===f.char_start&&x.char_end===f.char_end);
   if(!c){mismatches.push({field_id:f.field_id,check:'candidate_missing'});continue;}
-  if(f.status==='confirmed'&&c.value_text!==f.value.value_text)mismatches.push({field_id:f.field_id,check:'candidate_value'});
+  if(c.value_text!==f.extracted.value_text)mismatches.push({field_id:f.field_id,check:'candidate_value'});
  }
  return {publicationId:pub.publication_id,ok:mismatches.length===0,checked:fields.filter(f=>f.status!=='absent'&&f.char_start!==null).length,mismatches};
 }
@@ -12001,7 +12677,7 @@ export async function replayPublication(deps:RDeps,publicationId:string){
 }
 ```
 
-回放用例只取 `extracted` 行做快照；框选确认的行（`detail.framed=true`，C6 经 `broker_field_review` 合并进 `detail`）只做 (1)(2) 与摘要重算，不要求候选重现。快照形状以 A2 `broker_report_publish` 为准（跨度 + `artifact_hash` + 生效值 `value`，不含原文），原文从不可变的证据行读取。
+回放只读快照：A2 `broker_report_publish` 把每个证据行的 `value_source_text`、`value_source_sha256`、`framed`、`extracted`（抽取值）与生效值 `value` 一并冻结进快照；取消发布后同一行的跨度 / 原文 / `detail` 再被编辑，旧发布的回放结果不变（用例 2）。框选确认的行（快照 `framed=true`）只做 (0)(1)(2) 与摘要重算，不要求候选重现。
 
 ```ts
 // scripts/broker-research/replay.ts
@@ -12178,6 +12854,12 @@ describe.skipIf(!enabled)('broker research pipeline (critical, real PostgreSQL)'
    await c.query('rollback');}finally{c.release();}
   // settings are restored to their prior values in afterAll (under the advisory lock)
  });
+ it('after unpublish the same field is edited; replaying the old publication is unchanged (snapshot-only replay, P-R1-10)',async()=>{
+  const before=await replayPublication(deps,publicationId);
+  const tp=live(await deps.db.listFields(reportId)).find(f=>f.field==='target_price')!;
+  await deps.db.fieldReview(tp.field_id,'correct',{value_text:'121.00',value_num:'121.00',page:tp.page,char_start:tp.char_start,char_end:tp.char_end!-1,value_source_text:tp.value_source_text!.slice(0,-1)},ADMIN_ID);
+  expect(await replayPublication(deps,publicationId)).toEqual(before);
+ });
 });
 ```
 
@@ -12246,6 +12928,7 @@ git commit -m "feat(broker-research): C8 eval receipts, replay, gold runner, cri
 | GET | `reports/[reportId]/publish-blockers` | — | `{blockers:string[],reviewReady:boolean}` | 404 |
 | POST | `reports/[reportId]/publish` | `{}` | `{publicationId}` | 409 `publish_blocked`（`error.reasons`）/`published_immutable`/`report_withdrawn` |
 | POST | `reports/[reportId]/unpublish` | `{reason:string(≤500)}` | `{report:ReportRow}` | 409 `not_published` |
+| POST | `reports/[reportId]/disclosure-recheck` | `{}` | `{restored:boolean,failures:string[]}`（`restored=false` 时不改任何东西） | 404、409 `disclosure_inputs_changed` / `report_withdrawn` |
 | POST | `reports/[reportId]/summary` | `{lang:'zh'\|'en'}` | 201 `{summaryId,runId,status:'draft'\|'rejected',reasons:string[]}` | 409 `materialize_stale`/`document_not_parsed`/`lease_held`/`licence_forbids_processing`/`published_immutable`、429 `llm_quota`、502 `llm_failed`、503 `llm_unavailable` |
 | POST | `reports/[reportId]/translate` | `{}` | `{runId,zh,en}` | 409 `report_incomplete:title`/`lease_held`、502 `llm_schema_invalid`/`llm_failed`、503 |
 | POST | `reports/[reportId]/snippets` | `{purpose,targetKey?,fieldId?:uuid\|null,page,charStart,charEnd,text?}` | 201 `{snippetId,passed:boolean}` | 400 `snippet_page`/`snippet_span`/`snippet_cross_page`/`snippet_too_long`（`error.max`）/`snippet_not_verbatim`、409 `published_immutable`/`document_not_parsed`、410 |
@@ -14525,6 +15208,12 @@ import {describe,expect,it} from 'vitest';
 
 const ROOT=join(process.cwd(),'src/app/(app)/intel/foreign-research');
 const files=(d:string):string[]=>readdirSync(d).flatMap(f=>{const p=join(d,f);return statSync(p).isDirectory()?files(p):[p];});
+/** Module specifiers of the real import / export-from / dynamic import() declarations (comments and string bodies elsewhere ignored). */
+const importsOf=(src:string)=>{
+ const code=src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:])\/\/.*$/gm,'$1');
+ return [...code.matchAll(/(?:^|[;\n])\s*(?:import|export)\s[^'"`;]*?from\s*['"]([^'"]+)['"]|(?:^|[;\n])\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)].map(m=>m[1]??m[2]??m[3]);
+};
+const MOCK=/^@\/lib\/data\/mock(?:$|\/)|(?:^|\/)lib\/data\/mock$/;
 
 describe('foreign-research pages',()=>{
  for(const rel of ['page.tsx','[reportId]/page.tsx','institutions/[institutionId]/page.tsx'])
@@ -14532,7 +15221,16 @@ describe('foreign-research pages',()=>{
    const src=readFileSync(join(ROOT,rel),'utf8');
    expect(src.includes("'use client'")).toBe(false);expect(src).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
   });
- it('never imports mock data',()=>{for(const f of files(ROOT).filter(f=>/\.tsx?$/.test(f)))expect(readFileSync(f,'utf8'),f).not.toContain('@/lib/data/mock');});
+ it('never imports mock data (import declarations of non-test sources; P-R1-16)',()=>{
+  const sources=files(ROOT).filter(f=>/\.tsx?$/.test(f)&&!/\.test\.tsx?$/.test(f));
+  expect(sources.length).toBeGreaterThan(0);
+  for(const f of sources)expect({f,mock:importsOf(readFileSync(f,'utf8')).filter(s=>MOCK.test(s))}).toEqual({f,mock:[]});
+ });
+ it('the import scan detects a real forbidden import and ignores comments and strings',()=>{
+  expect(importsOf(`import { getStockOrStub } from '@/lib/data/mock';`).filter(s=>MOCK.test(s))).toEqual(['@/lib/data/mock']);
+  expect(importsOf(`const m = await import("@/lib/data/mock");`).filter(s=>MOCK.test(s))).toEqual(['@/lib/data/mock']);
+  expect(importsOf(`// import x from '@/lib/data/mock'\nconst s = "@/lib/data/mock";\nimport {a} from '@/lib/data/other';`).filter(s=>MOCK.test(s))).toEqual([]);
+ });
 });
 ```
 
@@ -16456,11 +17154,19 @@ export function ReviewClient({reportId}:{reportId:string}){
  const tabInit=useRef(false);
  useEffect(()=>{if(data&&!tabInit.current){tabInit.current=true;if(data.targets.length>0)setTab({kind:'target',key:data.targets[0].target_key});}},[data]);   // first load: open the first target tab
 
+ const [recheckFailures,setRecheckFailures]=useState<string[]>([]);
  async function post(path:string,body:unknown):Promise<boolean>{
   setBusy(true);setCode(null);
   const r=await adminJson('POST',path,body);
   setBusy(false);if(!r.ok)setCode(r.code);
   await load();return r.ok;
+ }
+ /** spec §4.11 重跑规则 (P-R1-08): shown while disclosure_ok=false; failures are listed, nothing changes until they are fixed. */
+ async function recheckDisclosure(){
+  setBusy(true);setCode(null);
+  const r=await adminJson<{restored:boolean;failures:string[]}>('POST',`/reports/${reportId}/disclosure-recheck`,{});
+  setBusy(false);if(!r.ok)setCode(r.code);else setRecheckFailures(r.data.restored?[]:r.data.failures);
+  await load();
  }
  if(loadCode)return <div className={CALLOUT}>{loadCode==='document_withdrawn'?t('withdrawn'):errText(loadCode)}</div>;
  if(!data)return <div className={`${CARD} ${TINY}`} aria-busy="true">{t('loading')}</div>;
@@ -16515,6 +17221,9 @@ export function ReviewClient({reportId}:{reportId:string}){
      {([['reviewReady',cols.reviewReady],['publishReady',cols.publishReady]] as const).map(([k,list])=>(
       <div key={k}><div className="mb-1.5 text-[11px] text-text-dim">{t(`blockers.${k}`)}</div>
        <ul className="flex flex-col gap-1.5 text-xs">{list.length===0?<li className="flex items-center gap-2"><span className={DOT('ok')}/>{t('blockers.none')}</li>:list.map(b=><li key={b} className="flex items-start gap-2"><span className={`${DOT('err')} mt-1`}/><span className="break-all">{blockerLabel(b)}</span></li>)}</ul></div>))}
+     {!report.disclosure_ok?<div className="flex flex-col gap-2 border-t border-border pt-3"><p className="text-xs text-text-dim">{t('disclosureRecheck.note')}</p>
+      <button type="button" className={BTN} disabled={busy} onClick={()=>void recheckDisclosure()}>{t('disclosureRecheck.submit')}</button>
+      {recheckFailures.length?<ul className="flex flex-col gap-1 text-xs" aria-label={t('disclosureRecheck.failures')}>{recheckFailures.map(f=><li key={f} className="flex items-start gap-2"><span className={`${DOT('err')} mt-1`}/><span className="font-mono">{f}</span></li>)}</ul>:null}</div>:null}
      {published?<UnpublishBox onUnpublish={reason=>void post(`/reports/${reportId}/unpublish`,{reason})} busy={busy}/>:<>
       <button type="button" className={BTN} disabled={busy||cols.reviewReady.length>0||report.review_status==='approved'} onClick={()=>void post(`/reports/${reportId}/review`,{action:'approve'})}>{t('actions.markReviewed')}</button>
       <button type="button" className={BTN_PRIMARY} disabled={cols.publishReady.length>0} onClick={()=>setPublishOpen(true)}>{cols.publishReady.length?t('actions.publishBlocked',{n:cols.publishReady.length}):t('actions.publish')}</button></>}
@@ -16895,7 +17604,8 @@ zh：
         "eval_receipt_missing": "含 LLM 字段但缺少有效黄金集回执", "summary_stale": "已批准摘要的输入已变化", "restricted_value_in_text": "受限值或受限姓名出现在：{arg}",
         "evidence_drift": "核验发现证据漂移", "disclosure_stale": "披露输入变化，需重跑披露检查", "conflict_unresolved": "候选冲突未解决：{arg}"
       },
-      "unpublish": {"reason": "取消发布原因", "submit": "取消发布", "note": "取消发布后公开路由 404，revision +1；快照保留用于审计。"}
+      "unpublish": {"reason": "取消发布原因", "submit": "取消发布", "note": "取消发布后公开路由 404，revision +1；快照保留用于审计。"},
+      "disclosureRecheck": {"note": "许可或分析师披露信息已变化（disclosure_ok=false）。用当前输入重跑标题与已批准片段 / 摘要的披露检查；全部通过才恢复。", "submit": "重跑披露检查", "failures": "未通过项"}
     },
     "publish": {
       "title": "发布这份报告？", "doneTitle": "已发布", "checking": "检查阻断项…", "blockers": "阻断（{n}）", "willBePublic": "将公开",
@@ -16972,7 +17682,8 @@ en：
         "eval_receipt_missing": "LLM fields without a valid gold receipt", "summary_stale": "Inputs of an approved summary changed", "restricted_value_in_text": "Restricted value or name in: {arg}",
         "evidence_drift": "Verification found evidence drift", "disclosure_stale": "Disclosure inputs changed; re-run the disclosure check", "conflict_unresolved": "Unresolved candidate conflict: {arg}"
       },
-      "unpublish": {"reason": "Reason for unpublishing", "submit": "Unpublish", "note": "After unpublishing public routes 404 and the revision goes up by one; the snapshot is kept for audit."}
+      "unpublish": {"reason": "Reason for unpublishing", "submit": "Unpublish", "note": "After unpublishing public routes 404 and the revision goes up by one; the snapshot is kept for audit."},
+      "disclosureRecheck": {"note": "The licence or an analyst's disclosure changed (disclosure_ok=false). Re-run the disclosure check of the titles and approved snippets / summaries with the current inputs; it is restored only if everything passes.", "submit": "Re-run disclosure check", "failures": "Failed checks"}
     },
     "publish": {
       "title": "Publish this report?", "doneTitle": "Published", "checking": "Checking blockers…", "blockers": "Blockers ({n})", "willBePublic": "Will be public",
@@ -17374,6 +18085,7 @@ git commit -m "feat(broker-research): admin institutions, rating scales and anal
 
 ```ts
 // src/lib/broker-research/verify.test.ts
+import {createHash} from 'node:crypto';
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {runVerify} from './verify';
@@ -17387,13 +18099,15 @@ const doc=(id:string,last:string|null):DocumentRow=>({document_id:id,sha256:`sha
 const field=(report:string,o:Partial<FieldRow>={}):FieldRow=>({field_id:`f-${report}`,report_id:report,parse_run_id:`pr-${report.slice(2)}`,run_id:'x',superseded_by_run_id:null,target_key:'T',field:'target_price',occurrence:1,page:1,char_start:6,char_end:11,value_source_text:'12.34',
  extractor:'llm:m@r',extractor_confidence:null,status:'confirmed',corrected:null,conflict_group:null,detail:{},reviewed_by:null,reviewed_at:null,created_at:'',value_text:'12.34',value_num:'12.34',value_currency:'CNY',value_unit:'price',value_date:null,...o});
 
-let tables:ReturnType<typeof memoryTableClient>,docs:Map<string,DocumentRow>,db:BrokerResearchDb,artifacts:Record<string,Uint8Array|undefined>,clock:number;
-async function setup(entries:{id:string;last:string|null;text?:string;fields?:Partial<FieldRow>[];throws?:boolean}[]){
- tables=memoryTableClient({dq_freshness:['dataset']});docs=new Map();artifacts={};clock=Date.parse('2026-11-06T02:00:00Z');
+let tables:ReturnType<typeof memoryTableClient>,docs:Map<string,DocumentRow>,db:BrokerResearchDb,artifacts:Record<string,Uint8Array|undefined>,hashes:Record<string,string>,clock:number;
+const sha=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
+/** tamper: the stored artifact is changed OUTSIDE the cited span after its hash was recorded (P-R1-13). */
+async function setup(entries:{id:string;last:string|null;text?:string;fields?:Partial<FieldRow>[];throws?:boolean;tamper?:boolean}[]){
+ tables=memoryTableClient({dq_freshness:['dataset']});docs=new Map();artifacts={};hashes={};clock=Date.parse('2026-11-06T02:00:00Z');
  const fieldsBy=new Map<string,FieldRow[]>();
  for(const e of entries){
   docs.set(e.id,doc(e.id,e.last));
-  if(e.text!==undefined)artifacts[`a-${e.id}`]=artifactOf(e.text);
+  if(e.text!==undefined){const b=artifactOf(e.text);hashes[`a-${e.id}`]=sha(b);artifacts[`a-${e.id}`]=e.tamper?artifactOf(`${e.text} (edited later)`):b;}
   fieldsBy.set(`r-${e.id}`,(e.fields??[{}]).map(o=>field(`r-${e.id}`,o)));
  }
  const order=(d:DocumentRow)=>`${d.last_verified_at===null?'0':'1'}${d.last_verified_at??''}|${d.document_id}`;   // what verifyCandidates returns (A4: SQL order)
@@ -17402,7 +18116,7 @@ async function setup(entries:{id:string;last:string|null;text?:string;fields?:Pa
   reportByDocument:vi.fn(async(id:string)=>docs.has(id)?{report_id:`r-${id}`,document_id:id,status:'published',evidence_ok:true}:null),
   getDocument:vi.fn(async(id:string)=>docs.get(id)??null),
   listFields:vi.fn(async(r:string)=>{if(entries.find(e=>`r-${e.id}`===r)?.throws)throw new Error('boom');return fieldsBy.get(r)??[];}),
-  getRun:vi.fn(async(id:string)=>({run_id:id,artifact_path:`a-${id.slice(3)}`})),
+  getRun:vi.fn(async(id:string)=>({run_id:id,kind:'parse',status:'succeeded',artifact_path:`a-${id.slice(3)}`,artifact_hash:hashes[`a-${id.slice(3)}`]??null})),
   updateDocument:vi.fn(async(id:string,p:Partial<DocumentRow>)=>{docs.set(id,{...docs.get(id)!,...p});}),
   setReportFlags:vi.fn(async()=>{}),
   getReport:vi.fn(async(id:string)=>({report_id:id,evidence_ok:false})),
@@ -17456,6 +18170,13 @@ describe('runVerify',()=>{
   expect(r.results.map(x=>x.documentId)).toEqual(['b']);expect(db.setReportFlags).toHaveBeenCalledWith('r-b',{evidence_ok:true});
   expect(tables.rows('dq_freshness')).toEqual([]);expect(r.freshness).toBeNull();
  });
+ it('an artifact changed outside the cited span fails its recorded hash: error, hidden, quarantined, and a manual re-run does not restore (P-R1-13)',async()=>{
+  await setup([{id:'t',last:null,text:'price 12.34 CNY',tamper:true}]);
+  const r=await runVerify(deps(),{deadline:deadline(),triggeredBy:'manual',recordFreshness:false,documentId:'t',restore:true});
+  expect(r.results[0].outcome).toBe('error');
+  expect(db.setReportFlags).toHaveBeenCalledWith('r-t',{evidence_ok:false});expect(db.setReportFlags).not.toHaveBeenCalledWith('r-t',{evidence_ok:true});
+  expect(tables.rows('dq_quarantine').map(x=>x.reason_code)).toEqual(['artifact_unreadable']);
+ });
  it('ignores candidate and absent rows',async()=>{
   await setup([{id:'a',last:null,text:'nothing here',fields:[{status:'extracted'},{status:'absent',page:1,char_start:null,char_end:null,value_source_text:null}]}]);
   const r=await runVerify(deps(),{deadline:deadline(),triggeredBy:'cron',recordFreshness:false});
@@ -17486,6 +18207,7 @@ import {recordAttempt} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import type {CoreDeps} from './deps';
 import {sliceText} from './extract/locate';
+import {loadArtifact} from './parse';
 import type {PageText} from './extract/locate';
 import type {DocumentRow,FieldRow} from './types';
 
@@ -17508,12 +18230,13 @@ async function candidates(deps:VerifyDeps):Promise<{doc:DocumentRow;reportId:str
  return out;
 }
 
-/** The parse artifact (F3Artifact JSON written by C4 parse.ts) as PageText, or null when missing / unreadable / malformed. */
-async function readArtifact(deps:VerifyDeps,path:string|null|undefined):Promise<PageText|null>{
- if(!path)return null;
+/** The parse artifact through C4's loadArtifact: the COMPLETE stored bytes must hash to the run's recorded
+ * artifact_hash (immutable-artifact provenance) before any span is checked or visibility restored; missing, changed
+ * anywhere (also outside the cited spans) or malformed → null → outcome 'error' (P-R1-13). */
+async function readArtifact(deps:VerifyDeps,parseRunId:string):Promise<PageText|null>{
  try{
-  const bytes=await deps.storage.download(path);if(!bytes)return null;
-  const pages=(JSON.parse(new TextDecoder().decode(bytes)) as {pages?:unknown}).pages;
+  const run=await deps.db.getRun(parseRunId);if(!run)return null;
+  const pages=(await loadArtifact(deps,run)).pages as unknown;
   return Array.isArray(pages)&&pages.every(p=>p&&typeof (p as {page?:unknown}).page==='number'&&typeof (p as {text?:unknown}).text==='string')?pages as PageText:null;
  }catch{return null;}
 }
@@ -17525,7 +18248,7 @@ export async function verifyDocument(deps:VerifyDeps,doc:DocumentRow,reportId:st
  let unreadable=false;const drifted:FieldRow[]=[];
  for(const f of fields){
   const runId=f.parse_run_id!;
-  if(!artifacts.has(runId))artifacts.set(runId,await readArtifact(deps,(await deps.db.getRun(runId))?.artifact_path));
+  if(!artifacts.has(runId))artifacts.set(runId,await readArtifact(deps,runId));
   const art=artifacts.get(runId);
   if(art===null||art===undefined){unreadable=true;continue;}
   if(sliceText(art,f.page!,f.char_start!,f.char_end!)!==f.value_source_text)drifted.push(f);
@@ -18149,7 +18872,7 @@ git commit -m "feat(broker-research): verify and outbox crons, F4 port, storage 
 |---|---|---|---|
 | A1 | 阻断第 11 条 `materialize_stale` 比较"已存的 `effective_hash/rules_input_hash/summary_input_digest` vs 实时重算（`broker_report_live_digests`）"，不是 `materialized_hash <> effective_hash` | §4.4 第 11 条 | 两列由物化同时写入，字面条件恒为假；按意图实施（A2） |
 | A2 | 阻断第 7 条 `field_pending` 不计已有生效行的身份 `(target_key,field,occurrence)`，也不计已取代候选 | §4.4 第 7 条 | 生效行已覆盖该身份，候选只是历史（A2） |
-| A3 | 阻断第 13 条的字段覆盖只要求"有 LLM 生效行的字段"（不含人工行与 `absent`）；评测阻断只认 `corpus_kind='gold'` | §4.4 第 13 条 | 人工行不依赖模型行为（A2） |
+| A3 | 评测阻断只认 `corpus_kind='gold'`；只有含 LLM 生效行的报告受阻断，此时覆盖要求是全部生效字段（见 R1-6）；全人工报告不受评测阻断 | §4.4 第 13 条 | 人工报告不依赖模型行为（A2） |
 | A4 | `unpublish` 把 `review_status` 置回 `in_review`（并 `revision+1`） | §6.5 | 重新编辑后必须重新复核（A2） |
 | A5 | 阻断第 15 条：非空标题面"未检查"也按不通过阻断（`title_original` 只在 `title_public` 为空时阻断） | §4.4 第 15 条 | 保守失败（A2） |
 | A6 | 标题披露结果存于规则回执：每个非空标题面一条 `{rule:'disclosure',blocking:false,detail:{surface,hits}}`（C5 `applyRules` 写），发布函数据此写 `title_restricted`；不新增报告列，`publish(reportId,by)` 签名不变 | §4.4 第 15 条、§5.5 | SQL 无法跑 TS 的披露检查；回执与 `rules_input_hash` 绑定（A2、C5） |
@@ -18179,6 +18902,13 @@ git commit -m "feat(broker-research): verify and outbox crons, F4 port, storage 
 | D14 | `/api/consensus/[ticker]` 删除 mock 回退后，非 A 股与无 Tushare 覆盖一律 `source:'none'`；`/stock` 的 Tushare 共识卡保留 | §9.4 | 与规格一致；记录以便核对 |
 | D15 | 三级文字色用既有 `--text-muted`（`#52525b`），未采用画布的 `#8b8b94` | 画布约定 | 偏差待 owner 确认，未新增 token |
 | D16 | 管理员 API 动态段统一命名 `[licenceId]` / `[documentId]` / `[reportId]` / `[snippetId]` / `[summaryId]` / `[fieldId]` / `[publicationId]` / `[institutionId]` / `[scaleId]`（规格 §8.2 写 `[id]`） | §8.2 | Next 不允许同级不同 slug 名；路径值不变 |
+| R1-1 | 片段 / 摘要批准绑定当前披露输入：批准触发器写 `disclosure_check.db_digest = broker_report_disclosure_digest(report)`，提供的过期摘要值 → `disclosure_inputs_changed`；分析师绑定的任何增删改把已批准文本回 `draft`（`analyst_disclosure`）；阻断第 15 条也检查摘要值 | §4.4 第 15 条、§4.7、§4.9 | 规格只在分析师行变化时回草稿；新绑定同样改变披露输入（Codex 计划审计 P-R1-04；A2、C7） |
+| R1-2 | 管理员"重跑披露检查"实现为 `broker_report_disclosure_recheck`（TS 计算检查，SQL 在行锁下核对输入摘要并恢复 `disclosure_ok`）+ 路由 `reports/[reportId]/disclosure-recheck`；已发布报告恢复后不会重新登记已撤回的 claim（需要 unpublish + publish 才有新 `publication_id`） | §4.11 重跑规则、§10.2 | 规格只描述了规则，没有落点（P-R1-08；A2、C6、D5） |
+| R1-3 | 发布快照的每个证据行另外冻结 `value_source_text`、`value_source_sha256`、`framed`、`extracted`；回放只读快照，不读活的证据行 | §4.8、§5.5 | 取消发布后证据行仍可编辑，回放必须与之无关（P-R1-10；A2、C8） |
+| R1-4 | 意向允许 `validating → open`（暂存对象尚未上传：可重试的 `intent_not_uploaded`） | §6.1 状态表 | 规格的状态表没有这条回退边，C3 的恢复路径需要它（P-R1-07；A1） |
+| R1-5 | 摘要与标题翻译的结果在一个带租约围栏的事务里写入并收尾运行（`broker_summary_commit` / `broker_title_commit`），租约丢失时什么都不写 | §6.4、§4.2 | P-R1-09（A2、C7） |
+| R1-6 | 阻断第 13 条的覆盖要求扩大为"报告一旦含 LLM 生效行，所有生效字段"（含人工行），取代 A 的"只要求 LLM 字段" | §4.4 第 13 条 | 回到规格字面（P-R1-12；替换 A 部分的对应偏差） |
+| R1-7 | 黄金集评测：每篇文档先过与 `claimForProcessing` 相同的处理授权检查再外发，记录授权的许可版本；`--dry-run` 不调用 LLM；类型化值逐分量比较 | §11.3、§4.1 | P-R1-01、P-R1-11（C8） |
 
 - [ ] **Step 2: 写 §17**
 
@@ -18296,3 +19026,5 @@ git commit -m "docs(spec): foreign research implementation record and deviations
 | D-9 | `setReportFlags` | 采纳（草稿与已发布均可，`reports_guard` k_live） | 共享契约、A4/A5、E1 |
 | D-10 | 动态段命名 | 统一为 `[documentId]`/`[reportId]`/`[snippetId]`/`[summaryId]`/`[licenceId]`/`[fieldId]`/`[publicationId]` | 文件结构、C、D、E1 |
 | 指挥 | 管理员机构维护缺路由与页面 | 新增 Task D6 | D6 |
+
+计划审计第 1 轮（`docs/audits/2026-11-06-foreign-research/03-codex-plan-round1.md`，16 项）的逐项处置见 `docs/audits/2026-11-06-foreign-research/04-disposition-plan-round1.md`。
