@@ -8,8 +8,22 @@ vi.mock('@supabase/ssr',()=>({createServerClient:(...a:unknown[])=>{mocks.create
 import {middleware} from './middleware';
 
 const req=(path:string)=>new NextRequest(`https://alpha.example${path}`,{headers:{cookie:'sb-x-auth-token=abc'}});
-describe('middleware /api/companies',()=>{
+describe('middleware auth gate',()=>{
  beforeEach(()=>{vi.clearAllMocks();vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://proj.supabase.co');vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY','anon');mocks.getUser.mockResolvedValue({data:{user:null}});});
+ it.each(['/manifest.json','/manifest.json?v=1'])('%s is public without a session lookup',async path=>{
+  const res=await middleware(new NextRequest(`https://alpha.example${path}`));
+  expect(res.status).toBe(200);
+  expect(res.headers.get('x-middleware-next')).toBe('1');
+  expect(res.headers.get('location')).toBeNull();
+  expect(mocks.create).not.toHaveBeenCalled();
+  expect(res.headers.get('set-cookie')).toBeNull();
+ });
+ it.each(['/macro','/manifest.json/private','/manifest.json.bak','/private.json'])('%s still requires authentication',async path=>{
+  const res=await middleware(new NextRequest(`https://alpha.example${path}`));
+  expect(mocks.getUser).toHaveBeenCalledTimes(1);
+  expect(res.status).toBe(307);
+  expect(res.headers.get('location')).toBe(`https://alpha.example/login?next=${encodeURIComponent(path)}`);
+ });
  it.each(['/api/companies','/api/companies/AAPL/statements','/en/api/companies/AAPL/facts'])('%s: no client, no getUser, no Set-Cookie',async path=>{
   const res=await middleware(req(path));
   expect(mocks.create).not.toHaveBeenCalled();expect(mocks.getUser).not.toHaveBeenCalled();
