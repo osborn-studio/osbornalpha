@@ -16,7 +16,7 @@
 | 9 | CLI、F6 世界、合成黄金、facts 集成测试 | f6c81d5, 5bb6e6a, 6f9f420, e42992a | 需改 → ✅（子集写库） | ✅ | 挑战 3×P2（子集写库、--out 路径、setup 不匹配丢证据）→ 全修 | 1 | 8/8→11/11 真实 PG |
 | 10 | 投影、账本、replay kind | 2296893, 939865f, c3d1683 | 需改 → ✅（账本批准人校验） | 需改 → ✅ | 挑战 **P1** 不合格指标输入仍 identical；P2 state_rev 绑定、TTM、日期；复审 P2 quarter 归一 → 全修 | 2 | |
 | 11 | record-replay、frozen 夹具、CI 报告、路由等价 | da8a299, 3becbb1, 4b89d83, c88cced, 383b3ca | ✅ | ✅（池错误监听） | review P2 / 挑战 **P1** 模块错标；3×P2（setup 迁移、CI 先写报告、explained_diff）→ 全修 | 2 | 12 案例两库复现一致 |
-| 12 | 专家/审计/清单校验器、codex-audit、模板 | 7834b46, …（见下） | 需改（见修复） | ✅ | 挑战 3×**P1**（审计漏解析、空白处置、无证据 agree）+ 2×P2；review 2×P2 | 进行中 | |
+| 12 | 专家/审计/清单校验器、codex-audit、模板 | 7834b46, 0eedb46, 3fb3894, 999636a | 需改 → ✅（prepared_at 回填、回放槽位、dual_source 类别） | ✅ | 挑战 3×**P1**（审计漏解析、空白处置、无证据 agree）+ 2×P2；review 3×P2 → 全修；终审无缺陷 | 3 | |
 | 13 | 管理只读 API | 9b48556, b46e014 | ✅ | ✅ | 挑战 2×P2（截断标志、长定位）→ 修 | 1 | UI 待画布 |
 | 14 | dual_source、reference、registry、reduce | 573feac, a39de12, 171f341 | 需改 → ✅（对登记归 F6、resume 拦截） | ✅ | review P2；挑战 4×P2（单位、账本 run_id、阈值、读错）→ 全修 | 1 | |
 | 15 | extraction、calibration（未启用） | b46e014（被并入）、142b2a8 | 需改 → ✅（不可解析无标注文档） | ✅ | review P2 / 挑战 3×P2（日期、缺失文档）→ 全修 | 1 | 提交归属见 §18.1 #23 |
@@ -56,3 +56,16 @@
 - kinds/extraction.ts: two-step matching (lexicographically first maximum matching over same-page, IoU ≥ 0.5, equal-value edges; greedy classification of the rest), FP_citation, P/R with integer 95% gate, zero support skipped, unparseable → read_error. Fixtures: adversarial (max matching beats greedy; wrong page; zero predictions), crossed two-page (2 TP), all-parsed TP=0 (gate fail).
 - kinds/calibration.ts: eligibility, revision chain (last eligible), exact Brier, 10-bucket reliability (endpoint in bucket 9), no eligible → incomplete.
 - kinds/registry.ts: extraction_gold (D8: license decision pending), judgment_calibration (prerequisite: F4 settledForecasts) → kind_not_enabled, exit 2.
+
+## 全量门禁（2026-11-06，合并 origin/main `4ce87b1`（计划二 A 股 #104）之后）
+
+| 命令 | 结果 |
+|---|---|
+| `npm test` | 344 files passed / 26 skipped；3572 passed / 260 skipped |
+| `npm run typecheck`、`npm run lint` | 通过 |
+| `LC_ALL=C … npm run test:db` | 370 files、3830 passed、2 skipped；F6 两个 critical 套件 11/11 + 11/11；退出码 1 仅因 `s4/anchor-store.test.ts` 的 FileHandle GC 未处理错误（计划二门禁记录同类，非 F6） |
+| `LC_ALL=C … npm run test:migrations` | PASS（fresh = seeded upgrade） |
+| `validate.ts --gold --lock --redact --gold-diff <merge-base>` | exit 0；集：`synthetic-us.json`（f6）、`plan2.json`（legacy_plan2，50 条，锁已随 #104 重钉 `ab66497e…`） |
+| `validate.ts --audit docs/audits/2026-11-04-evals-gold-sets` | exit 0（`--release` → 唯一发现 N11 OPEN-verify） |
+
+合并 main 时处理：`criticalSuites` 冲突保留 `sync-cn` 与 F6 块；`lock.json` 中 plan2.json 的 sha 更新；`legacy-plan2.test.ts` 改为从真实文件推导断言（3def064）。
