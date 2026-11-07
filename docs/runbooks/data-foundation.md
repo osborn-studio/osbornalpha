@@ -453,3 +453,114 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 - 代码：回退提交即可；cron 先从 `vercel.json` 删除对应项并部署，再回退代码。
 - 数据：可清空的只有可从一手来源重算的派生表——`dq_filing_expectations`、`issuer_filing_profiles`、`issuer_filer_categories`、`dq_calendar_*`（重跑 filer-categories 与 calendar-sync 即恢复）。**不要**删除对账证据：`dq_reconciliations`、`dq_reconcile_cycles`/成员与游标等 `dq_reconcile_*` 状态、`reconcile-raw` 桶中的对象——原始字节无法单独重建已记录的比较、冻结成员与结论；且未结的 `reconcile_mismatch` 隔离项以 `detail.latest_result.reconciliation_id` 指向这些行，删除后 `inputsHashNow()` 抛 `no_latest_result`，事实将无法恢复。需要停用对账时：从 `vercel.json` 删 reconcile cron 并部署，保留表与函数；若必须处置某个对账对，先在 `/admin/dq` 逐项处理（恢复/拒绝）其未结隔离项，再另写迁移归档，不直接删除。
 - 迁移二的函数改包装（`read_facts`、`replace_financial_metrics`）签名不变，回退代码不需要回退迁移；确需回退迁移时新写迁移恢复计划二的函数体，不改已锁文件。
+
+## 10. 生产启用记录 2026-11-07
+
+执行：生产启用会话（Opus 5.5），main `86a77ec1`（含 #100/#102/#104/#106/#107/#108/#109；**不含 #110**，它被合并进了已合并的基线分支 `claude/macro-workbench-bbde80`，正由中继 PR 带入 main）。托管库 `stock-monitor`（`mzfcaabhuwtfvsvadvsv`，PG 17.6，`postgres` 非超级用户）。所有 SQL 走 Management API（令牌取自钥匙串，只在 shell 变量中）；Vercel 环境拉到仓库外的临时文件，未打印任何密钥。时间均为 UTC。
+
+### 10.1 盘点（07:05 前）
+
+- `schema_migrations` 最新为 `20261018150000`；仓库中**全部** 9 个数据底座/行业/宏观迁移未应用：`20261105090000`、`20261105091000`、`20261106090000`、`20261107090000`、`20261107091000`、`20261110090000`、`20261111090000`、`20261111091000`、`20261114090000`（仓库其余迁移与生产一致，无"生产有而仓库无"）。
+- 桶只有 `security-snapshots`；`btree_gist` 可用（1.7）但未安装；`pg_trgm` 在 `public`。
+- 默认权限：`postgres` 在 `public` 的新表/函数/序列默认授 anon/authenticated/service_role（`pg_default_acl`）——迁移里的显式 revoke 是必需的。
+- 9 个文件的 sha256 与 `supabase/migrations.lock.json` 逐一相符。
+
+### 10.2 应用迁移
+
+方法：先把一批迁移拼成 `begin; … rollback;` 在生产**演练**（两次，均 `rehearsal_ok`，演练后对象数不变），再逐个文件以 `begin; <文件原文>; insert into supabase_migrations.schema_migrations(version,name,statements) values (<v>,<name>,array[<文件原文>]); commit;` 一个请求一个事务执行。全部 9 个成功，无部分失败，无需修正 SQL。
+
+| 迁移 | 结果 |
+|---|---|
+| `20261105090000_dq_foundation` … `20261110090000_dq_eval_runs`（4 个，第一轮） | applied |
+| `20261107090000_identifiers_and_dq`、`20261107091000_facts_extensions`、`20261111090000_industry_research`、`20261111091000_industry_research_functions`、`20261114090000_macro_workbench`（5 个，第二轮） | applied |
+
+偏差（均为记录，无需改迁移）：
+1. 计划三的两个迁移版本号（`20261107…`）**早于**已应用的 `20261110090000`：历史表现在不是单调追加。以后若有人用 `supabase db push`，需 `--include-all`；Management API 路径不受影响。
+2. 历史行的 `statements` 存整份文件原文（与 2026-10 以前的行一致）；宏观手册 §13.1 的示例写 `array[]::text[]`，两者都不影响 `db push` 的版本比对。
+3. `btree_gist` 由迁移装进 `public`（与现有 `pg_trgm` 一致），其 `gbt_*` 支持函数对 anon 可执行——扩展内部函数，无数据面，未处理。
+4. 计划一的三个触发器函数与计划二的两个触发器函数保留默认 EXECUTE（anon 可执行）；触发器函数不能被直接调用，PostgREST 也不暴露，未处理。
+
+迁移后核对（全部通过）：
+- 计划二：全部客户端函数 svc=true、anon/auth=false；内部助手（`fact_scope_lock` 等）三角色均 false；只有 `read_facts`、`fact_state_rev`（及计划三的 `read_facts_lineage`）对 anon 可执行。
+- 表：`ingest_batches`/`dq_*`/`issuer_identifier_claims`/`fact_sync_*`/`dq_eval_runs` anon 无 SELECT；`issuers`/`issuer_securities`/`filings`/`financial_facts`/`financial_metrics` anon 只读；所有表 RLS 开、anon 无 INSERT/TRUNCATE。
+- 计划三 §9.1：未关闭方法缺失 0、`op='legacy'` 声明 0（迁移前 0 行）、`based_on_lineage` 为空的指标 0。
+- 宏观 §13.1：12 张 `macro_*` 表全部 RLS；无任何角色有写授权；SELECT 授权与设计一致（`macro_regime_results`、`macro_publish_state` 仅 service_role）；`macro_publish_state` = US 0 0 / CN 0 0；非触发器函数中 anon 可执行的只有 `macro_latest_observations`、`macro_snapshots_since`、`macro_batch_eligible`。
+- 行业：anon 可执行 `industry_dataset_is_public`/`industry_freshness`/`industry_metric_run_visible`/`industry_valuation_run_visible`，与迁移的显式 grant 一致。
+- 桶：`disclosure-raw`（私有，52428800，json）、`reconcile-raw`、`industry-manifests`、`macro-raw` 均私有。
+
+### 10.3 PostgREST（anon key）
+
+- `rpc/read_facts` → 200 `{"rows":[],"row_count":0,"state_rev":0,"truncated":false}`；`rpc/fact_state_rev` → 200 `0`。
+- `fact_sync_scope`、`fact_sync_runs`、`ingest_batches`、`dq_quarantine`、`dq_eval_runs`、`dq_reconcile_cycles`、`macro_regime_results`、`macro_publish_state`、`macro_ingest_runs` → 401 `42501 permission denied`。
+- `filings`、`financial_facts`、`financial_metrics`、`issuers`、`issuer_securities`、`macro_series`、`macro_snapshots` → 200（迁移后为空）。
+- `rpc/publish_sync_run` → 401；`POST issuers` → 401；`rpc/macro_write_observations` → 404（不暴露）。
+
+### 10.4 发行人
+
+```bash
+curl -sS -A "<DEFAULT_USER_AGENT>" -o <临时目录>/company_tickers_exchange.json https://www.sec.gov/files/company_tickers_exchange.json   # 07:0x, 522049 B, sha256 224330f2…6522, 10409 行
+node --env-file=<仓库外> --import tsx scripts/entity-keys/load-sec-issuers.ts <file>                     # dry-run: universe 905, issuers 880, securities 888, skipped 9521, rejected 0
+node --env-file=<仓库外> --import tsx scripts/entity-keys/load-sec-issuers.ts <file> --as-of 2026-11-07 --apply --fetched-at <下载时刻>
+```
+
+- 第一次 `--apply` 被我加的 500 s 超时杀掉（写入是逐行往返，太平洋往返 ~0.6 s/行）：856 个发行人已写、证券 0、批次 `24a69f92…` 卡在 `running`。确认进程已不在后按 8.9 标为 `failed`（`orphaned_running`）。
+- 重跑（无超时，~22 分钟）：批次 `2c891a94-0bc1-47bf-ab58-4e60d75cd617` **success**，inserted 912（24 个新发行人 + 888 证券行），duplicates 856，quarantined 0，failed 0，skipped `not_in_universe` 9521。`entities.sec` 新鲜度 fresh。
+- **发现**：生产 `stocks_universe` 的 US 部分只有 905 个**纳斯达克**票据（`nasdaq_top500` + `us_china`）；LLY、JPM、V、XOM、CRM、SNOW、NOW 等纽交所票据不在其中，因此不建发行人、不进事实范围。这是宇宙表的范围问题，不是加载器问题。
+- `link-research-entities.ts`（dry-run，`RESEARCH_OWNER_USER_ID` 的范围）：keys 21、issuers 21、securities 14；7 个跳过均为 `ticker_not_in_universe`（NCNO、SNOW、BR、CRM、NOW、FDS、INTA）。**未 `--apply`**（简报只要求 dry-run）。
+
+### 10.5 美股事实
+
+```bash
+node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --issuer AAPL --issuer MSFT --issuer NVDA        # dry-run
+node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --limit 20 --apply
+node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --issuer AAPL --apply                             # 验收样例用
+```
+
+- dry-run（13 s）：AAPL 3000、MSFT 3033、NVDA 2902 行计划写入，0 隔离。
+- 第一次 `--limit 20 --apply`：对账建了 801 行 scope（priority 10），但本次**空转**（attempted 0，批次 `a1cde420…` success/idle）。原因：新 scope 行的 `next_due_at` 取数据库 `now()`，而到期查询用脚本进程的 `deps.now()`；本机时钟比 `time.apple.com` 慢约 1.0 s、比数据库慢约 1.7 s，所以同一次运行里刚建的行"尚未到期"（这是观察到的本机结果；代码对任何"进程时钟落后数据库"的环境都可能如此，Vercel 上未单独验证）。无数据影响，下一次运行即到期；若 cron 首轮也空转，下一轮会处理。
+- 第二次 `--limit 20 --apply`：批次 `0c97e95e-b5e4-4a07-ab24-862aa80deb1b` **partial**：attempted 20、published 13、failed 7；inserted 28027、quarantined 45、failed 7。
+- **7 个失败全是 `parse_error`（缺陷）**：YMM、HLP、JLHL、WYHG、ACCL、MASK、HXHX（`us_china` 宇宙里的外国私人发行人）。SEC companyfacts 对这些 CIK 返回 `"cik":"0001838413"`（补零**字符串**），AAPL 等返回数字；`src/lib/facts/providers/edgar-companyfacts.ts::decodeCompanyFacts` 要求 `typeof d.cik==='number'`，于是抛 `companyfacts shape: cik/facts`。需要代码修复（接受数字串并与请求的 CIK 比对）+ Codex 审计，另行 PR；修复前这些发行人每天重试一次、每次失败。
+- AAPL 显式运行：批次 `f8a43446-3899-44c8-bda2-60d3fb05e0ed` success，3000 行。
+- 运行后：`financial_facts` 31072（`ok` 31027），已发布 filing 560，`financial_metrics` 7033，`fact_sync_runs` published 14 / abandoned 7（失败运行先标后删，符合设计）；`facts.us` 新鲜度 fresh。未结隔离：`facts.us/same_day_conflict` 14、`facts.us/identity_gp` 2，在 `/admin/dq` 处置（8.12）。
+- 验收样例（8.11-4），生产 `GET https://osbornalpha.com/api/facts/AAPL?concepts=revenue&asOf=2024-06-30` → 200：55 行；FY2023（期末 2023-09-30，12M）`value=383285000000`、`availableDate=2023-11-03`、`disclosureSeq=1`、`isCurrent=true`、`sourceConcept=us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax`。不带 `asOf`：70 行，最新 FY 期末 2026-09-26 = 478834000000（2026-11-03 披露）。（这只是与 SEC companyfacts 一致；黄金集未抄录，不等于一手文件核实。）
+- **首个生产 cron**（`/api/cron/facts-sync?market=US`，08:05，在修正后的部署上）：批次 `f9301f5d-c19f-4ae5-9275-a6b3c46042e3` partial（08:05:27–08:06:38），fetched 37339、inserted 37230、quarantined 109、failed 4（4 个 `parse_error`，同上 CIK 字符串缺陷）+ `rule_warning_summary`；`facts.us` 新鲜度仍 fresh（published ≥ attempted/2）。cron 路径端到端可用。
+- `/admin/dq` 数据：路由需要管理员登录 cookie，本会话没有；用 service key 直接读同样的表核对，结果即上面的批次、新鲜度与隔离数。
+
+### 10.6 A 股
+
+- 本地 CN dry-run（`node --env-file=<仓库外，含 TUSHARE_TOKEN>`）：`sync.ts --market CN --issuer 600519.SH --issuer 000333.SZ` → 退出码 2 `unknown ticker: 600519.SH`。生产里**还没有 A 股发行人**：它们由行业作业 `load-a-share` 装载。其 dry-run（`scripts/industry/sync.ts --job load-a-share`）：candidates 5578、skipped.delisted 342、skipped.not_in_universe 1、rejected_ts_code 1。未 `--apply`（不在本次简报内，需 owner/指挥确认）。
+- CN 事实范围 = `research_entity_keys.in_scope` 且已挂接发行人（`issuer_id`），因此还要先跑 `link-research-entities.ts --apply`。在这两步之前，CN cron 运行只会空转。
+- Vercel `TUSHARE_TOKEN`：**已存在**（production，56 字符）；本会话未设置、未改动。
+
+### 10.7 Vercel
+
+- 团队套餐 **Pro**（每 4 小时的 cron 允许）。部署前生产版本是 2026-10-19 的 CLI 部署（`fc42b06`）。
+- 环境：`CRON_SECRET` 存在；`TUSHARE_TOKEN` 存在；`EDGAR_USER_AGENT` **缺失**（代码回退 `DEFAULT_USER_AGENT`，SEC 可用，但应设真实联系方式）；`MACRO_INGEST_SECRET` 缺失；`MACRO_JUDGMENTS_ENABLED` 未设（保持关闭）；`FACTS_CN_ENABLED` 未设（缺省开启）。
+- 部署 1（迁移核对之后）：`vercel deploy --prod --yes`，从 `~/Developer/CodeX/.worktrees/OsbornAlpha/deploy` 的 `origin/main` detached 检出 → `stock-monitor-43m78oi4m-gilosbornhellos-projects.vercel.app`，别名 osbornalpha.com，14 个 cron。
+- **发现：CLI 部署时 `VERCEL_GIT_COMMIT_SHA` 为空**。项目没有 Git 连接，`autoExposeSystemEnvs=true` 但 Git 系统变量不填；部署元数据里有 `gitCommitSha`，运行时没有。结果：`macro-sync` 真实运行 503 `code_version_unavailable`。代码里要求它的是五个 cron 路由的真实运行（`facts-sync`、`filing-calendar`、`reconcile`、`macro-sync`、`industry-sync`；`macro-sync?preview=1` 除外）与 `POST /api/macro/ingest`（非 cron）；这些路径在不带该变量的 CLI 部署上返回 503。其他 cron 路由不读它。
+- 修正（不改代码、不改项目环境）：同一提交重新部署，带**部署级**运行时变量：`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)` → **`stock-monitor-dxnq1om1q-gilosbornhellos-projects.vercel.app`**（当前生产，sha `86a77ec10611d52c81929386584c7ccd639a9a96`）。`docs/VERCEL_DATAGATEWAY_DEPLOYMENT.md` §5 的部署命令已同步改为带 `--env`；**以后每次部署都必须带它**，否则上述路径 503。
+- 部署后无令牌访问：`/api/cron/{macro-sync,facts-sync,filing-calendar,reconcile,industry-sync}` → 401，`/api/macro/overview` → 401，`/intel/macro` → 307（登录）。
+
+### 10.8 回滚
+
+迁移不回滚（宏观迁移禁止 drop；事实层按 8.10 / 9.10）。写入可逆性：发行人与证券行可按 §6 删除（尚无引用方以外的依赖时）；事实层按 8.10。代码回滚：`vercel rollback` 到 `stock-monitor-8pypzqiyl`（2026-10-19）会让新路由消失，但数据库对象保留无害。
+
+### 10.9 owner 待办（准确命令）
+
+```bash
+# 1) SEC 联系方式（值为真实姓名+邮箱）
+vercel env add EDGAR_USER_AGENT production
+# 2) TUSHARE_TOKEN：已存在；如需更换
+vercel env rm TUSHARE_TOKEN production && vercel env add TUSHARE_TOKEN production
+# 3) 改环境变量后重新部署（必须带 --env，见 10.7）
+#    在主检出仓库根执行；目录已存在就停下（不要删除别人的工作树）
+git fetch origin main
+D=~/Developer/CodeX/.worktrees/OsbornAlpha/deploy
+[ -e "$D" ] && echo "STOP: $D already exists"
+git worktree add --detach "$D" origin/main
+mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/"
+(cd "$D" && vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)); echo "deploy exit=$?"
+git worktree remove "$D"      # 只删本次建的工作树；不加 --force
+```
+
+另：A 股装载与研究实体链接是否 `--apply`（10.6）；计划三 §9.2 的首轮脚本（fill-identifiers、backfill-windows、link-ah、enrich-acceptance、filer-categories、calendar-sync、reconcile）；`/admin/dq` 16 个事实隔离项；黄金集抄录（8.11-6）；`stocks_universe` 是否纳入纽交所。宏观的 owner 步骤见 `docs/runbooks/macro-sync.md` §13.7。

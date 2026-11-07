@@ -231,7 +231,7 @@ D=~/Developer/CodeX/.worktrees/OsbornAlpha/deploy          # 外置 SSD 上的�
 mkdir -p "$(dirname "$D")"
 git worktree add --detach "$D" origin/main
 mkdir -p "$D/.vercel" && cp .vercel/project.json "$D/.vercel/project.json"
-( cd "$D" && vercel deploy --prod --yes )
+( cd "$D" && vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD) )   # 必须带 --env：见 data-foundation.md §10.7
 git worktree remove --force "$D" && git worktree prune
 ```
 
@@ -335,6 +335,30 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
 4. 判断层始终是关的（`MACRO_JUDGMENTS_ENABLED` 不设），无需回滚。
 
 任何回滚都在 `docs/audits/` 记录原因、时间与执行的命令。
+
+### 13.7 生产启用记录 2026-11-07（P1+P2，main `86a77ec1`）
+
+由生产启用会话执行；底座部分与部署细节见 `data-foundation.md` §10。时间 UTC。P3+P4（#110，迁移 `20261115090000_macro_strategy.sql`）**不在 main**，未应用、未部署。
+
+1. **迁移**（§13.1）：`20261114090000_macro_workbench` 与其前置的 8 个底座/行业迁移一起，先在生产 `begin…rollback` 演练，再单独一个事务 + 历史行执行，成功。§13.1 的 7 项核对全部符合期望（12 表、全部 RLS、无写授权、SELECT 授权按设计、`macro-raw` 私有 52428800 四种 MIME、`macro_publish_state` US/CN 0 0、anon 只能执行 3 个公开函数）。anon PostgREST：`macro_regime_results`/`macro_publish_state`/`macro_ingest_runs` 401，`rpc/macro_write_observations` 404。偏差：历史行 `statements` 存了文件原文而不是 `array[]::text[]`（与 2026-10 以前的行一致）。
+2. **环境**（§13.2）：`CRON_SECRET` 已存在；`MACRO_JUDGMENTS_ENABLED` 未设（判断层关闭，保持）；`MACRO_INGEST_SECRET` **未设**——按指挥要求不由会话生成或写入密钥，列为 owner 步骤（下面第 5 条）。
+3. **部署**：当前生产 `stock-monitor-dxnq1om1q-gilosbornhellos-projects.vercel.app` → osbornalpha.com。第一次部署（`stock-monitor-43m78oi4m`）上 `macro-sync` 真实运行返回 503 `code_version_unavailable`：CLI 部署时 `VERCEL_GIT_COMMIT_SHA` 为空；以 `--env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)` 重新部署后正常。§13.2 的部署命令已改为带 `--env`。
+4. **FRED**（§13.3）：
+   - preview：`ok:true`，`catalogVersion macro-catalog/ec304166c325`，fetched 42009；9 个序列全部 `points>0`、无 error（US_FEDFUNDS_EFF_D 9806 点至 2026-11-05、US_UNRATE 321 点至 2026-10-31、US_CPI_INDEX 320 点至 2026-09-30 等）。
+   - 真实运行（07:25，手动以 `CRON_SECRET` 触发；批次 `triggered_by` 记为 `cron`）：HTTP 200，批次 `2b060c08-9a6e-48c1-b9c5-de4895d9fd41` **success**，fetched/inserted 43723（原生 42009 + 派生 1714），duplicates/quarantined/failed 0，`errors []`；`publish = published US revision 1`，snapshot `53ad1ad1-2180-4e58-9565-ea3893cd8ab4`，observation_count 18，`uncovered_weight 40`，`hook skipped`。
+   - 库侧：`macro_series` 40、US 快照 1 个 active（as_of 2026-11-07）、`macro_publish_state` US 1/54、CN 0/0、`dq_freshness macro.fred` fresh。anon 读 `macro_observations`：`US_UNRATE` 2026-10-31 = `4.1`、2026-09-30 = `4.2`。本机访问 FRED CSV 超时，未能逐字符比对（证据对象 SHA-256 已入 `macro_evidence_objects`）。
+   - **文档与代码不一致（记录，不改）**：§2 说 `MACRO_JUDGMENTS_ENABLED=1` 时才"在发布时计算并存储判定"；实际 `snapshots.ts` 总是计算 regime 并写 `macro_regime_results`（现有 1 行），开关只控制钩子与读取。该表只授 service_role，未经开关不会被读出或暴露。
+5. **AKShare / CN**（§13.4）：本会话在本机按文档的降级路径只做了 dry-run：`uv venv -p 3.12` + `requirements.txt`（akshare 1.20.35），`pytest scripts/macro -q` 25 passed；`collect.py --mode backfill --dry-run <临时目录>` 3 分 25 秒，退出码 0，8 个序列全部 ok（CN_CPI_INDEX evidence 3/claims 129、CN_PPI_INDEX 1/129、CN_PMI_MFG 1/130、CN_GDP_INDEX 1/43、CN_M2_YOY 1/129、CN_EXPORT_YOY 1/129、CN_CGB_10Y_D 11/2711、CN_USDCNY_CP_D 1/203），写出 start + 4 块 + finish 请求体，未 POST。CN 快照因此**尚未发布**（`macro_publish_state` CN 0/0），`/intel/macro` 的 CN 区当前无数据。owner 步骤：
+   ```bash
+   openssl rand -hex 32 | tee >(pbcopy) | vercel env add MACRO_INGEST_SECRET production
+   # 然后按 data-foundation.md §10.9 第 3 条重新部署（带 --env VERCEL_GIT_COMMIT_SHA）
+   security add-generic-password -a "$USER" -s osbornalpha-macro-ingest -w "$(pbpaste)" && pbcopy </dev/null
+   export MACRO_INGEST_URL=https://osbornalpha.com/api/macro/ingest
+   export MACRO_INGEST_SECRET=$(security find-generic-password -s osbornalpha-macro-ingest -w)
+   scripts/macro/.venv/bin/python scripts/macro/collect.py --mode backfill ; echo "exit=$?" ; unset MACRO_INGEST_SECRET
+   # 成功后按 §13.4 安装 launchd 日常任务
+   ```
+6. **页面**（§13.5）：`/intel/macro` 未登录 → 307 登录页；本会话没有生产账号会话，也不代为登录，**页面渲染与"无判断层 UI"检查留给 owner**（§13.5 第 1–4 条）。`/api/macro/overview` 未登录 → 401（符合）。
 
 ## 14. 已知限制与设计取舍（实施 Task 18 时核实）
 

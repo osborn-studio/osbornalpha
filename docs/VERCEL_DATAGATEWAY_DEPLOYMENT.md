@@ -117,7 +117,7 @@ git worktree add --detach ../osbornalpha-deploy origin/main
 mkdir -p ../osbornalpha-deploy/.vercel
 cp .vercel/project.json ../osbornalpha-deploy/.vercel/project.json
 cd ../osbornalpha-deploy
-vercel deploy --prod --yes
+vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)   # 必须：CLI 部署时 Vercel 不填 VERCEL_GIT_COMMIT_SHA，缺它时 facts-sync、filing-calendar、reconcile、macro-sync、industry-sync 的真实运行与 macro ingest 返回 503 code_version_unavailable
 cd - && git worktree remove --force ../osbornalpha-deploy
 ```
 
