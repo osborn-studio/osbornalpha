@@ -281,6 +281,8 @@ export interface JudgmentsDb{
  latestCards(subject:Subject,opts:{types?:JudgmentType[];view:CardView;cutoff?:string}):Promise<Envelope[]>;
  historyOf(subject:Subject,type:JudgmentType,methodology:{id:string;version:string},opts:{view:CardView;cutoff?:string;before?:string;limit:number}):Promise<Envelope[]>;
  claimDue(limit:number,leaseSeconds:number):Promise<QueueRow[]>;
+ /** Token-fenced release (§5.4). last_detail.incident (plan audit R3-01) is never written here: the locked row's open incident is
+  *  carried over unchanged and a patch incident is ignored, so a transient pending / unavailable / error attempt cannot end it. */
  releaseLease(judgmentId:string,leaseToken:string,patch:QueuePatch):Promise<void>;
  queueRow(judgmentId:string):Promise<QueueRow|null>;
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
@@ -288,14 +290,17 @@ export interface JudgmentsDb{
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
  /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
   *  dq_quarantine item ('judgments' / 'judgment_settlements' / judgment_id / reasonCode) with payload, writes last_status
-  *  'inconsistent' + last_detail ∪ {quarantine_id} (quarantined_at kept while the incident is unresolved, Q1-01) + next_attempt_at,
+  *  'inconsistent' + last_detail = patch.last_detail with incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}
+  *  (an open incident's quarantined_at is kept, Q1-01 / R3-01) + next_attempt_at,
   *  clears the lease; attempts unchanged. A lost lease writes nothing. */
  quarantineSettlement(judgmentId:string,leaseToken:string,reasonCode:string,payload:Record<string,unknown>,patch:QueuePatch,batchId:string):Promise<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>;
- /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. override.evidence_hash /
-  *  override.cutoff are the identity the hook read: both must equal the locked queue last_detail AND the locked item payload (Q1-03). */
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's open incident (last_detail.incident, whatever
+  *  the last attempt status, R3-01). override.evidence_hash / override.cutoff are the identity the hook read: both must equal the locked
+  *  queue last_detail.incident AND the locked item payload (Q1-03); no open incident → 'stale'. */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
  /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
-  *  evidence_hash / cutoff the hook read; any difference from the locked queue last_detail or item payload → 'stale' (Q1-03). */
+  *  evidence_hash / cutoff the hook read; no open incident, or any difference from the locked queue last_detail.incident (R3-01) or the
+  *  item payload → 'stale' (Q1-03). The void closes the queue and so ends the incident. */
  rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
  /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
  envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
@@ -690,6 +695,8 @@ export interface JudgmentsDb{
  latestCards(subject:Subject,opts:{types?:JudgmentType[];view:CardView;cutoff?:string}):Promise<Envelope[]>;
  historyOf(subject:Subject,type:JudgmentType,methodology:{id:string;version:string},opts:{view:CardView;cutoff?:string;before?:string;limit:number}):Promise<Envelope[]>;
  claimDue(limit:number,leaseSeconds:number):Promise<QueueRow[]>;
+ /** Token-fenced release (§5.4). last_detail.incident (plan audit R3-01) is never written here: the locked row's open incident is
+  *  carried over unchanged and a patch incident is ignored, so a transient pending / unavailable / error attempt cannot end it. */
  releaseLease(judgmentId:string,leaseToken:string,patch:QueuePatch):Promise<void>;
  queueRow(judgmentId:string):Promise<QueueRow|null>;
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
@@ -697,14 +704,17 @@ export interface JudgmentsDb{
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
  /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
   *  dq_quarantine item ('judgments' / 'judgment_settlements' / judgment_id / reasonCode) with payload, writes last_status
-  *  'inconsistent' + last_detail ∪ {quarantine_id} (quarantined_at kept while the incident is unresolved, Q1-01) + next_attempt_at,
+  *  'inconsistent' + last_detail = patch.last_detail with incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}
+  *  (an open incident's quarantined_at is kept, Q1-01 / R3-01) + next_attempt_at,
   *  clears the lease; attempts unchanged. A lost lease writes nothing. */
  quarantineSettlement(judgmentId:string,leaseToken:string,reasonCode:string,payload:Record<string,unknown>,patch:QueuePatch,batchId:string):Promise<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>;
- /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. override.evidence_hash /
-  *  override.cutoff are the identity the hook read: both must equal the locked queue last_detail AND the locked item payload (Q1-03). */
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's open incident (last_detail.incident, whatever
+  *  the last attempt status, R3-01). override.evidence_hash / override.cutoff are the identity the hook read: both must equal the locked
+  *  queue last_detail.incident AND the locked item payload (Q1-03); no open incident → 'stale'. */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
  /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
-  *  evidence_hash / cutoff the hook read; any difference from the locked queue last_detail or item payload → 'stale' (Q1-03). */
+  *  evidence_hash / cutoff the hook read; no open incident, or any difference from the locked queue last_detail.incident (R3-01) or the
+  *  item payload → 'stale' (Q1-03). The void closes the queue and so ends the incident. */
  rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
  /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
  envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
@@ -2511,12 +2521,13 @@ public.judgment_append_settlement_internal(uuid, uuid, text, jsonb) returns json
 - `append_settlement` 的判定顺序：request_key 查找（命中即按上面规则返回，不查租约）→ 判断存在 → 锁队列行 → **锁内再查一次 request_key**（并发同键请求在等锁期间提交）→ 队列已 `closed_at` 且 `actor ∈ {cron, script}` → `already_final` → 租约校验（`p_lease_token` 为 null 时要求 `actor = admin:<uuid>`）→ 序号与转移（触发器）→ 插入 → 更新队列 → `withdrawn/reopened` 时 validity +1。规格把租约校验写在 `already_final` 之前；但先到者结算会清空租约，若先查租约，§14.2 要求的"后到者 `already_final`、不是错误"就变成 `lease_lost`。本计划按 §14.2 的可观察行为排序。
 - 结算转移不合法时 RPC 抛 23514 `settlement_sequence: …`（触发器原样），弃权判断（无队列行）同样 `settlement_sequence`；判断不存在 `unknown_judgment`（P0002）。
 - `release_lease` 只按 token 判定租约（不看 `leased_until` 是否过期）：过期后被别人重新领取时 token 已换，fencing 照样成立；没人重领时允许原 worker 收尾。
+- **未解决的隔离事件 `last_detail.incident`**（计划审计第三轮 R3-01）：`{quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}`，只由 `quarantine_settlement` 写（`quarantine_id / reason_code / evidence_hash / cutoff` 取本次隔离，`quarantined_at` 在已有事件时保留旧值）；`release_lease` **从不写它**——锁住的行有事件就原样并入新 `last_detail`，`p_patch.last_detail.incident` 一律丢弃（`pending / unavailable / error` 等过渡状态不结束事件，复核截止不随之重置）；`judgment_append_settlement_internal` 的终态写入（`settled / void / withdrawn`，含拒绝的 `void`）删除它，`reopened` 把 `last_detail` 置 `{}`。`apply_quarantine_override / reject_quarantined_settlement` 按事件存在与否、不按 `last_status` 判断可否裁决。
 - `judgment_history` 的 keyset 顺序为 `as_of desc, registered_at desc, judgment_id desc`（三列同向才能用行比较做 keyset；`latest_judgment_cards` 仍按规格 `judgment_id` 升序作末位）。`judgment_history` 不做合并发行人展开（§12.4 只对 `latest_judgment_cards` 规定）。
 - `repair_stale_batches` 只接受 `^judgments\.[a-z0-9_.]{1,54}$` 的单个数据集（精确匹配）且 `p_older_than ≥ 1 minute`；`errors` 追加 `{code:'stale_running', message}`。
 - `set_job_state` 写 `updated_at = greatest(date_trunc('milliseconds', clock_timestamp()), 旧值 + 1 ms)`：毫秒精度让 ISO 字符串往返后仍能精确比较；严格递增避免同一毫秒内两次更新让陈旧的 `expected_updated_at` 误中（ABA）。
-- **`apply_quarantine_override` 原子化**（计划审计 P1-04）：先锁队列行、再锁隔离项；返回 `text` 而不是抛错：项不存在 / 不属于该判断 / 已裁决 → `'item_not_open'`；队列已 `closed_at` → `'closed'`；队列 `last_status ≠ 'inconsistent'`、`last_detail.evidence_hash ≠ override.evidence_hash` 或 `last_detail.cutoff ≠ override.cutoff`、隔离项 `payload.evidence_hash ≠ override.evidence_hash` 或 `payload.cutoff ≠ override.cutoff` → `'stale'`（都不写任何行；`override.evidence_hash / cutoff` 就是钩子读到的证据身份，计划审计 Q1-03 要求它同时等于锁住的队列与锁住的项）；否则写 `override`、`next_attempt_at = now()`、**清空 `leased_until / lease_token`**（在途 worker 之后的 `release_lease` / `append_settlement` 得到 `lease_lost`，不能覆盖已接受的裁决）、翻转隔离项、写审计 → `'applied'`。队列行不存在仍抛 `unknown_judgment`（P0002），参数不合法仍抛 22023。
-- **`reject_quarantined_settlement`**（计划审计 P1-05，新增服务写 RPC）：一个事务内先按 `request_key` 重放检查（命中 → `already_applied` / `request_key_conflict`，不看隔离项），再锁队列行、锁隔离项、锁内再查一次 `request_key`；项未开 → `item_not_open`；队列已关闭、不是 `inconsistent`，或钩子读到的 `p_expected.evidence_hash / cutoff` 与锁住的队列 `last_detail.evidence_hash / cutoff` **或**锁住的项 `payload.evidence_hash / cutoff` 任一不等 → `stale`（计划审计 Q1-03：钩子读到 A 之后 worker 把队列与项都刷新成 B，旧请求不再被接受）；否则经 `judgment_append_settlement_internal`（与 `append_settlement` 同一段逻辑，admin 行为人、无租约）追加 `void`，把项置 `resolved_reject`，写 `research_audit_log`（`action='dq.quarantine_resolve'`，`detail ∪ {judgment_id, decision:'reject', seq}`），返回 `{seq, status:'applied'}`。`p_row.kind` 必须是 `void`、`actor` 必须是 `admin:<uuid>`。
-- **`quarantine_settlement`**（计划审计 Q1-02，新增服务写 RPC）：结算发布不一致的唯一写路径，替代 TS 侧 `quarantine()` + 刷新 payload + `release_lease` 三次写。一个事务内先锁队列行（不存在 → `unknown_judgment` P0002），租约 token 不等（含已关闭、已被吊销、已被新 worker 换新）→ 返回 `{status:'lease_lost', quarantine_id:null}` 且**什么都不写**；否则按 `quarantine()` 的语义 upsert 未结项（`dataset='judgments'`、`table_name='judgment_settlements'`、`natural_key = judgment_id`、`reason_code`；同键同原因的 open 项由 `dq_quarantine_open_key_uniq` 部分唯一索引保证至多一条：`insert … on conflict (dataset, table_name, natural_key, reason_code) where status = 'open' do update set payload = excluded.payload`，复用的项保留原 `id / batch_id / created_at / detail`），再写队列 `last_status='inconsistent'`、`last_detail = p_patch.last_detail ∪ {quarantine_id}`、`next_attempt_at = greatest(p_patch.next_attempt_at, now())`、`attempts` 不变、清空租约。`quarantined_at`（计划审计 Q1-01）：锁住的队列行已是 `inconsistent` 且带 `quarantined_at` → 保留旧值（同一未解决事件的复核期从第一次隔离起算），否则用 `p_patch.last_detail.quarantined_at`。参数：`p_patch.last_status` 必须是 `inconsistent`、`attempts_increment` 必须是 0，`p_payload` 必须带 64 位十六进制 `evidence_hash` 与 `cutoff`，且等于 `p_patch.last_detail` 的同名字段 → 否则 22023。于是过期 worker 在新 worker 之后刷新 → `lease_lost`、无写入；刷新与释放之间不再有崩溃窗口。
+- **`apply_quarantine_override` 原子化**（计划审计 P1-04）：先锁队列行、再锁隔离项；返回 `text` 而不是抛错：项不存在 / 不属于该判断 / 已裁决 → `'item_not_open'`；队列已 `closed_at` → `'closed'`；队列无未解决事件（`last_detail.incident` 不存在，R3-01；不看 `last_status`）、`last_detail.incident.evidence_hash ≠ override.evidence_hash` 或 `last_detail.incident.cutoff ≠ override.cutoff`、隔离项 `payload.evidence_hash ≠ override.evidence_hash` 或 `payload.cutoff ≠ override.cutoff` → `'stale'`（都不写任何行；`override.evidence_hash / cutoff` 就是钩子读到的证据身份，计划审计 Q1-03 要求它同时等于锁住的队列与锁住的项）；否则写 `override`、`next_attempt_at = now()`、**清空 `leased_until / lease_token`**（在途 worker 之后的 `release_lease` / `append_settlement` 得到 `lease_lost`，不能覆盖已接受的裁决）、翻转隔离项、写审计 → `'applied'`。队列行不存在仍抛 `unknown_judgment`（P0002），参数不合法仍抛 22023。
+- **`reject_quarantined_settlement`**（计划审计 P1-05，新增服务写 RPC）：一个事务内先按 `request_key` 重放检查（命中 → `already_applied` / `request_key_conflict`，不看隔离项），再锁队列行、锁隔离项、锁内再查一次 `request_key`；项未开 → `item_not_open`；队列已关闭、无未解决事件（`last_detail.incident` 不存在，R3-01），或钩子读到的 `p_expected.evidence_hash / cutoff` 与锁住的队列 `last_detail.incident.evidence_hash / cutoff` **或**锁住的项 `payload.evidence_hash / cutoff` 任一不等 → `stale`（计划审计 Q1-03：钩子读到 A 之后 worker 把队列与项都刷新成 B，旧请求不再被接受）；否则经 `judgment_append_settlement_internal`（与 `append_settlement` 同一段逻辑，admin 行为人、无租约）追加 `void`，把项置 `resolved_reject`，写 `research_audit_log`（`action='dq.quarantine_resolve'`，`detail ∪ {judgment_id, decision:'reject', seq}`），返回 `{seq, status:'applied'}`。`p_row.kind` 必须是 `void`、`actor` 必须是 `admin:<uuid>`。
+- **`quarantine_settlement`**（计划审计 Q1-02，新增服务写 RPC）：结算发布不一致的唯一写路径，替代 TS 侧 `quarantine()` + 刷新 payload + `release_lease` 三次写。一个事务内先锁队列行（不存在 → `unknown_judgment` P0002），租约 token 不等（含已关闭、已被吊销、已被新 worker 换新）→ 返回 `{status:'lease_lost', quarantine_id:null}` 且**什么都不写**；否则按 `quarantine()` 的语义 upsert 未结项（`dataset='judgments'`、`table_name='judgment_settlements'`、`natural_key = judgment_id`、`reason_code`；同键同原因的 open 项由 `dq_quarantine_open_key_uniq` 部分唯一索引保证至多一条：`insert … on conflict (dataset, table_name, natural_key, reason_code) where status = 'open' do update set payload = excluded.payload`，复用的项保留原 `id / batch_id / created_at / detail`），再写队列 `last_status='inconsistent'`、`last_detail = p_patch.last_detail`（顶层是本次尝试的 `reason_code / evidence_hash / cutoff`）并把 `incident` 换成 `{quarantine_id: 本项 id, reason_code: p_reason_code, evidence_hash / cutoff: p_payload 的值, quarantined_at}`、`next_attempt_at = greatest(p_patch.next_attempt_at, now())`、`attempts` 不变、清空租约。`quarantined_at`（计划审计 Q1-01 → R3-01）：锁住的队列行已有未解决事件（`last_detail.incident.quarantined_at`，**不看 `last_status`**——中间夹着 `error / pending / unavailable` 也一样）→ 保留旧值（同一未解决事件的复核期从第一次隔离起算），否则用 `p_patch.last_detail.incident.quarantined_at`。参数：`p_patch.last_status` 必须是 `inconsistent`、`attempts_increment` 必须是 0，`p_payload` 必须带 64 位十六进制 `evidence_hash` 与 `cutoff`，且等于 `p_patch.last_detail` 与 `p_patch.last_detail.incident` 的同名字段，`incident.quarantined_at` 必须是字符串 → 否则 22023。于是过期 worker 在新 worker 之后刷新 → `lease_lost`、无写入；刷新与释放之间不再有崩溃窗口。
 - `append_settlement` 的函数体移到内部函数 `judgment_append_settlement_internal`（无客户端授权、非 definer；只被两个 definer 函数调用），`append_settlement` 只转调，行为不变。
 - **校准成员冻结**（计划审计 P1-10，规格第 7 稿 §5.5b/§5.6/§8.3）：`freeze_calibration_cohort` 用**一条** `insert … select` 把窗口内（按 `as_of`）全部非弃权登记连同该语句快照下的最新结算 id 写入 `judgment_calibration_cohort_members`（`ord = row_number() over (order by judgment_id)`），返回 `{status:'frozen', frozen_at: statement_timestamp(), n}`。**代际先认领**（计划审计 Q1-05）：函数第一条写是 `insert into judgment_job_state(job, state) values ('cohort:' || generation, {frozen_at, n:null, methodology, version, window}) on conflict (job) do nothing`；认领失败（该代际已冻结过，**含 0 成员的代际**；或并发的另一冻结已认领——唯一键让后到者等先到者提交）→ 不插成员，返回 `{status:'already_frozen', frozen_at, n}`（取自已存的标记）；认领成功 → 一条 `insert … select` 插成员，再把标记的 `n` 写成实际行数。标记键 `cohort:<generation>` 只由这两个 SQL 函数写 / 删，不经 TS 的 `jobKey`（它与 `produce:` / `calibrate:` / `calibrate_round` 命名空间不相交，`parseJobKey` 拒绝它；TS 不读它）。在快照之前开始、之后提交的事务**一致地**不在成员内（不会在游标之后"补进来"）。`calibration_cohort_members` 只读冻结集（keyset `judgment_id > p_after`）；结算取冻结时的 `settlement_id`，之后的结算不改变已冻结代际的内容。`clear_calibration_generation` 删除整代成员与 `cohort:<generation>` 标记，返回删除的成员行数（之后同一代际可重新冻结）。公共 `calibration_cohort` 保持时间戳截止语义，只给校准页用。
 - **`judgment_envelope_by_id`**（计划审计 P2-01，公共读 invoker）：按 id 取一条信封，`latest` / `as_known` 语义同 `judgment_history`（`as_known` 要求 `registered_at ≤ cutoff` 且方法有 `≤ cutoff` 的事件）；RLS 照常生效，未发布 → 空。
@@ -3010,20 +3021,24 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   expect(await fails(set(null,[]))).toMatchObject({code:'22023'});
  });
 
- // A judgment whose queue row is 'inconsistent' for evidence hash `hash`, with an open item carrying the same
- // hash and cutoff (what settle.ts writes). Runs under the claim lock; the row is parked in 2099 afterwards.
- const quarantined=async(m:string,b:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>{
-  const r=judgmentRow(m,b,{target:DUE});await register(r);const j=String(r.row.judgment_id);
-  const item=randomUUID();
-  await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,$4::jsonb)`,[item,j,b,JSON.stringify({evidence_hash:hash,cutoff,judgment_id:j})]);
-  const t=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
-  await release(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
-  return {j,item};
- };
- /** The settle worker's single quarantine write (Q1-02); patchOf builds settle.ts's inconsistent patch (parked in 2099 by default). */
+ /** The settle worker's single quarantine write (Q1-02); patchOf builds settle.ts's inconsistent patch (parked in 2099 by default):
+  *  top level = this attempt, incident = the open incident it raises (R3-01; quarantine_settlement adds quarantine_id). */
  const qs=(j:string,token:string,payload:Record<string,unknown>,patch:Record<string,unknown>,b:string,reason='settlement_basis_mismatch')=>
   one(`select public.quarantine_settlement($1,$2,$3,$4::jsonb,$5::jsonb,$6) v`,[j,token,reason,JSON.stringify(payload),JSON.stringify(patch),b]) as Promise<{status:string;quarantine_id:string|null}>;
- const patchOf=(hash:string,cutoff:string,extra:Record<string,unknown>={},next='2099-06-01T00:00:00.000Z')=>({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantined_at:cutoff,...extra},next_attempt_at:next,attempts_increment:0});
+ const patchOf=(hash:string,cutoff:string,extra:Record<string,unknown>={},next='2099-06-01T00:00:00.000Z')=>{
+  const attempt={reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,...extra};
+  return {last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at:cutoff}},next_attempt_at:next,attempts_increment:0};
+ };
+ // A judgment whose queue holds an open incident (last_detail.incident, R3-01) for evidence hash `hash`, with an open item
+ // carrying the same hash and cutoff — published exactly as settle.ts does it: ONE quarantine_settlement under the claimed
+ // lease (Q1-02). Runs under the claim lock; the row is parked in 2099 afterwards.
+ const quarantined=async(m:string,b:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>{
+  const r=judgmentRow(m,b,{target:DUE});await register(r);const j=String(r.row.judgment_id);
+  const t=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+  const res=await qs(j,t,{evidence_hash:hash,cutoff,judgment_id:j},patchOf(hash,cutoff),b);
+  expect(res.status).toBe('quarantined');
+  return {j,item:String(res.quarantine_id)};
+ };
  const adminUser=async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@judgments.test`]);return id;};
  const overrideOf=(by:string,hash=H('e'),cutoff='2026-03-02T04:00:00.000Z')=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{bars:[]}},evidence_hash:hash,resolved_by:by,at:new Date().toISOString(),cutoff});
  type Conn={query:(text:string,values?:unknown[])=>Promise<{rows:any[]}>};
@@ -3046,21 +3061,21 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect(await applyQ(j,override,item)).toBe('applied');
    const qr=await queueOf(j);
    expect(qr.override).toEqual(override);expect(qr.next_attempt_at.getTime()).toBeGreaterThanOrEqual(Date.parse(before));
-   expect({l:qr.leased_until,t:qr.lease_token,s:qr.last_status,h:qr.last_detail.evidence_hash}).toEqual({l:null,t:null,s:'inconsistent',h:H('e')});
+   expect({l:qr.leased_until,t:qr.lease_token,s:qr.last_status,h:qr.last_detail.incident.evidence_hash}).toEqual({l:null,t:null,s:'inconsistent',h:H('e')});
    expect(await fails(release(j,worker,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0}))).toMatchObject({code:'55P03',message:'lease_lost'});
    expect(await fails(appendOp(j,worker,`${b}:${j}:1`,sRow(b)))).toMatchObject({code:'55P03',message:'lease_lost'});
-   expect((await queueOf(j)).last_detail.evidence_hash).toBe(H('e'));                       // the accepted inconsistency survives
+   expect((await queueOf(j)).last_detail.incident.evidence_hash).toBe(H('e'));              // the accepted incident survives
    expect((await q(`select status,resolved_by,detail->'override' o from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({status:'resolved_accept',resolved_by:by,o:override});
    expect(await q(`select user_id,actor,action,object_type,object_id,detail->>'route' route,detail->>'judgment_id' jid from public.research_audit_log where object_id=$1`,[item])).toEqual([{user_id:by,actor:'user',action:'dq.quarantine_resolve',object_type:'dq',object_id:item,route:'test',jid:j}]);
    expect(await applyQ(j,override,item)).toBe('applied');                                   // replay: no-op, no second audit row
    expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[item])).toHaveLength(1);
    expect(await applyQ(j,{...override,at:new Date(Date.now()+5).toISOString()},item)).toBe('item_not_open');
    const mine=(await claim()).find(x=>x.judgment_id===j)!;await park(j,String(mine.lease_token));
-   // stale: the queue moved to another inconsistency (new evidence hash) after the item was raised → nothing written
+   // stale: the worker published another inconsistency (new evidence hash) after the hook read the item → nothing written
    const s1=await quarantined(m,b);
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s1.j]);
    const t1=String((await claim()).find(x=>x.judgment_id===s1.j)!.lease_token);
-   await release(s1.j,t1,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),quarantine_id:s1.item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+   expect(await qs(s1.j,t1,{evidence_hash:H('f'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:s1.j},patchOf(H('f'),'2026-03-02T04:00:00.000Z'),b)).toEqual({status:'quarantined',quarantine_id:s1.item});
    expect(await applyQ(s1.j,overrideOf(by),s1.item)).toBe('stale');
    expect((await queueOf(s1.j)).override).toBeNull();
    expect((await q(`select status from public.dq_quarantine where id=$1`,[s1.item]))[0].status).toBe('open');
@@ -3068,15 +3083,23 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const s2=await quarantined(m,b);
    expect(await applyQ(s2.j,overrideOf(by,H('e'),'2026-01-01T00:00:00.000Z'),s2.item)).toBe('stale');
    expect((await queueOf(s2.j)).override).toBeNull();
-   // stale (Q1-03): item matches the override, but the locked queue's last_detail names another cutoff
-   await q(`update public.judgment_settle_queue set last_detail=last_detail||jsonb_build_object('cutoff','2026-01-01T00:00:00.000Z') where judgment_id=$1`,[s2.j]);
+   // stale (Q1-03): item matches the override, but the locked queue's incident names another cutoff
+   await q(`update public.judgment_settle_queue set last_detail=jsonb_set(last_detail,'{incident,cutoff}','"2026-01-01T00:00:00.000Z"'::jsonb) where judgment_id=$1`,[s2.j]);
    expect(await applyQ(s2.j,overrideOf(by),s2.item)).toBe('stale');
    expect((await q(`select status from public.dq_quarantine where id=$1`,[s2.item]))[0].status).toBe('open');
-   // stale: the queue is no longer inconsistent
-   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s2.j]);
-   const t2=String((await claim()).find(x=>x.judgment_id===s2.j)!.lease_token);
-   await park(s2.j,t2);
-   expect(await applyQ(s2.j,overrideOf(by),s2.item)).toBe('stale');
+   // stale: the queue holds no open incident (an item for a row never published through quarantine_settlement)
+   const bare=judgmentRow(m,b,{target:DUE});await register(bare);const bj=String(bare.row.judgment_id);
+   const bareItem=randomUUID();
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_basis_mismatch',$3,$4::jsonb)`,[bareItem,bj,b,JSON.stringify({evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:bj})]);
+   expect(await applyQ(bj,overrideOf(by),bareItem)).toBe('stale');
+   await park(bj,String((await claim()).find(x=>x.judgment_id===bj)!.lease_token));
+   // R3-01: a transient attempt status (a pending park) keeps the open incident, so the acceptance still applies
+   const s4=await quarantined(m,b);
+   await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s4.j]);
+   await park(s4.j,String((await claim()).find(x=>x.judgment_id===s4.j)!.lease_token));
+   expect(await queueOf(s4.j)).toMatchObject({last_status:'pending',last_detail:{incident:{quarantine_id:s4.item,evidence_hash:H('e')}}});
+   expect(await applyQ(s4.j,overrideOf(by),s4.item)).toBe('applied');
+   await park(s4.j,String((await claim()).find(x=>x.judgment_id===s4.j)!.lease_token));
    // closed: the judgment was settled meanwhile
    const s3=await quarantined(m,b);
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s3.j]);
@@ -3101,16 +3124,17 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect(await q(`select seq,kind,reason,actor,request_key from public.judgment_settlements where judgment_id=$1`,[j])).toEqual([{seq:1,kind:'void',reason:'quarantine_rejected',actor:`admin:${by}`,request_key:key}]);
    expect((await q(`select status,resolved_by,(detail->>'rejected_settlement_seq')::int s from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({status:'resolved_reject',resolved_by:by,s:1});
    expect((await queueOf(j)).closed_at).not.toBeNull();
+   expect((await queueOf(j)).last_detail.incident).toBeUndefined();                        // R3-01: the void ends the incident
    expect(await q(`select detail->>'decision' d,(detail->>'seq')::int s from public.research_audit_log where object_id=$1`,[item])).toEqual([{d:'reject',s:1}]);
    expect(await rejectQ(j,item,key,row)).toEqual({seq:1,status:'already_applied'});         // lost response retried
    expect(await rejectQ(j,item,key,{...row,reason:'other'})).toEqual({seq:1,status:'request_key_conflict'});
    expect(await q(`select 1 from public.research_audit_log where object_id=$1`,[item])).toHaveLength(1);
    expect(await rejectQ(j,item,`adm:${randomUUID()}`,row)).toEqual({seq:1,status:'item_not_open'});
-   // stale: the queue's inconsistency is not the item's → nothing written
+   // stale: the worker refreshed queue and item to another inconsistency after the hook read (e) → nothing written
    const s=await quarantined(m,b,H('e'));
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[s.j]);
    const t=String((await claim()).find(x=>x.judgment_id===s.j)!.lease_token);
-   await release(s.j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+   expect(await qs(s.j,t,{evidence_hash:H('f'),cutoff:EXP.cutoff,judgment_id:s.j},patchOf(H('f'),EXP.cutoff),b)).toEqual({status:'quarantined',quarantine_id:s.item});
    expect(await rejectQ(s.j,s.item,`adm:${randomUUID()}`,row)).toEqual({seq:0,status:'stale'});
    expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[s.j])).toHaveLength(0);
    expect((await q(`select status from public.dq_quarantine where id=$1`,[s.item]))[0].status).toBe('open');
@@ -3138,7 +3162,8 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect((await q(`select dataset,table_name,natural_key,reason_code,status,batch_id,payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0])
     .toEqual({dataset:'judgments',table_name:'judgment_settlements',natural_key:j,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b,h:H('e'),c:c1});
    const q1=await queueOf(j);
-   expect(q1).toMatchObject({last_status:'inconsistent',leased_until:null,lease_token:null,last_detail:{evidence_hash:H('e'),cutoff:c1,quarantined_at:c1,quarantine_id:item}});
+   expect(q1).toMatchObject({last_status:'inconsistent',leased_until:null,lease_token:null,
+    last_detail:{evidence_hash:H('e'),cutoff:c1,incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:c1}}});
    expect(q1.next_attempt_at.toISOString()).toBe('2099-06-01T00:00:00.000Z');
    // Worker A claims and stalls past its lease; worker B claims (new token) and publishes another inconsistency.
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);
@@ -3151,7 +3176,8 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    expect(await qs(j,tA,{evidence_hash:H('d'),cutoff:c2,judgment_id:j},patchOf(H('d'),c2),b)).toEqual({status:'lease_lost',quarantine_id:null});
    expect((await q(`select payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({h:H('f'),c:c2});
    // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
-   expect((await queueOf(j)).last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,quarantined_at:c1,quarantine_id:item});
+   expect((await queueOf(j)).last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,
+    incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,quarantined_at:c1}});
    expect((await q(`select attempts from public.judgment_settle_queue where judgment_id=$1`,[j]))[0].attempts).toBe(0);
    expect((await q(`select count(*)::int n from public.dq_quarantine where natural_key=$1 and status='open'`,[j]))[0].n).toBe(1);
    // Another reason code opens its own item (the open key includes reason_code, exactly like quarantine()).
@@ -3160,25 +3186,56 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const gapPatch=patchOf(H('9'),c2,{reason_code:'settlement_benchmark_gap'});
    const gap=await qs(j,t3,{evidence_hash:H('9'),cutoff:c2,judgment_id:j},gapPatch,b,'settlement_benchmark_gap');
    expect(gap.status).toBe('quarantined');expect(gap.quarantine_id).not.toBe(item);
+   // The incident now names the gap item and its evidence; its first quarantine time is still c1 (one unresolved incident).
+   expect((await queueOf(j)).last_detail.incident).toEqual({quarantine_id:gap.quarantine_id,reason_code:'settlement_benchmark_gap',evidence_hash:H('9'),cutoff:c2,quarantined_at:c1});
    // Parameters are checked before any lock or write.
    const ok={evidence_hash:H('9'),cutoff:c2,judgment_id:j};
-   for(const [payload,patch] of [[ok,{...gapPatch,last_status:'pending'}],[ok,{...gapPatch,attempts_increment:1}],[{cutoff:c2},gapPatch],[{...ok,cutoff:c1},gapPatch]] as const)
+   const noIncident={...gapPatch,last_detail:{reason_code:'settlement_benchmark_gap',evidence_hash:H('9'),cutoff:c2}};
+   for(const [payload,patch] of [[ok,{...gapPatch,last_status:'pending'}],[ok,{...gapPatch,attempts_increment:1}],[{cutoff:c2},gapPatch],[{...ok,cutoff:c1},gapPatch],[ok,noIncident]] as const)
     expect(await fails(qs(j,randomUUID(),payload,patch,b,'settlement_benchmark_gap'))).toMatchObject({code:'22023'});
    expect(await fails(qs(randomUUID(),randomUUID(),ok,gapPatch,b))).toMatchObject({code:'P0002',message:'unknown_judgment'});
+  });
+ });
+
+ it('release_lease carries an open incident through transient statuses and drops a patch incident; the same inconsistency keeps the first quarantined_at; a final settlement clears it (R3-01)',async()=>{
+  const m=await syncNew();const b=await batch();
+  await withClaimLock(async()=>{
+   const c1='2026-03-02T04:00:00.000Z';
+   const {j,item}=await quarantined(m,b,H('e'),c1);
+   const inc0=(await queueOf(j)).last_detail.incident;
+   expect(inc0).toEqual({quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:c1});
+   const again=async()=>{await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);return String((await claim()).find(x=>x.judgment_id===j)!.lease_token);};
+   const transient:Record<string,unknown>[]=[
+    {last_status:'error',last_detail:{code:'resolver_failed',message:'boom'},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:1},
+    {last_status:'pending',last_detail:{reason:'awaiting_bars'},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0},
+    {last_status:'unavailable',last_detail:{failure:'timeout',incident:{quarantined_at:'2099-01-01T00:00:00.000Z'}},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:1},   // a patch incident is dropped
+   ];
+   for(const patch of transient){
+    await release(j,await again(),patch);
+    const qr=await queueOf(j);
+    expect({s:qr.last_status,d:qr.last_detail}).toEqual({s:patch.last_status,d:{...(patch.last_detail as Record<string,unknown>),incident:inc0}});
+   }
+   // The same inconsistency after error / pending / unavailable: the incident's first quarantined_at (the review deadline) survives.
+   const c2='2026-03-09T04:00:00.000Z';
+   expect(await qs(j,await again(),{evidence_hash:H('e'),cutoff:c2,judgment_id:j},patchOf(H('e'),c2),b)).toEqual({status:'quarantined',quarantine_id:item});
+   expect((await queueOf(j)).last_detail.incident).toEqual({...inc0,cutoff:c2});
+   // A final settlement ends the incident.
+   expect(await appendOp(j,await again(),`${b}:${j}:1`,sRow(b))).toEqual({seq:1,status:'applied'});
+   expect((await queueOf(j)).last_detail.incident).toBeUndefined();
   });
  });
 
  it('races on two connections: acceptance vs a worker release, acceptance vs rejection — the queue lock serialises them and the loser writes nothing (P1-04, P1-05)',async()=>{
   const m=await syncNew();const b=await batch();const by=await adminUser();
   await withClaimLock(async()=>{
-   // 1. A worker's release (new inconsistency) is in flight when the admin accepts the old one.
+   // 1. A worker's quarantine_settlement (new inconsistency) is in flight when the admin accepts the old one.
    const a=await quarantined(m,b);
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[a.j]);
    const t=String((await claim()).find(x=>x.judgment_id===a.j)!.lease_token);
    const w=await admin.connect();
    try{
     await w.query('begin');
-    await w.query(`select public.release_lease($1,$2,$3::jsonb)`,[a.j,t,JSON.stringify({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('f')},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0})]);
+    await w.query(`select public.quarantine_settlement($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,[a.j,t,'settlement_basis_mismatch',JSON.stringify({evidence_hash:H('f'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:a.j}),JSON.stringify(patchOf(H('f'),'2026-03-02T04:00:00.000Z')),b]);
     const accepting=applyQ(a.j,overrideOf(by),a.item);                                      // blocks on the queue row lock
     await pause(200);
     await w.query('commit');
@@ -3693,10 +3750,12 @@ begin
   returning q.*;
 end $$;
 
--- §5.4: fencing by token; next_attempt_at is never set before now().
+-- §5.4: fencing by token; next_attempt_at is never set before now(). Plan audit R3-01: last_detail.incident is never
+-- written here — the locked row's open incident is carried over unchanged (a transient pending / unavailable / error
+-- attempt does not end it, so the review deadline cannot restart) and a patch incident is dropped.
 create or replace function public.release_lease(p_judgment_id uuid, p_lease_token uuid, p_patch jsonb) returns void
 language plpgsql security definer set search_path = '' as $$
-declare v_q public.judgment_settle_queue;
+declare v_q public.judgment_settle_queue; v_detail jsonb;
 begin
   if p_patch is null or pg_catalog.jsonb_typeof(p_patch) <> 'object'
      or coalesce(p_patch ->> 'last_status', '') not in ('pending','unavailable','inconsistent','error')
@@ -3709,8 +3768,12 @@ begin
   if not found or v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token then
     raise exception 'lease_lost' using errcode = '55P03';
   end if;
+  v_detail := (p_patch -> 'last_detail') - 'incident';
+  if pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') = 'object' then
+    v_detail := v_detail || pg_catalog.jsonb_build_object('incident', v_q.last_detail -> 'incident');
+  end if;
   update public.judgment_settle_queue x
-  set last_status = p_patch ->> 'last_status', last_detail = p_patch -> 'last_detail',
+  set last_status = p_patch ->> 'last_status', last_detail = v_detail,
       next_attempt_at = greatest((p_patch ->> 'next_attempt_at')::timestamptz, pg_catalog.now()),
       attempts = x.attempts + (p_patch ->> 'attempts_increment')::integer,
       leased_until = null, lease_token = null, updated_at = pg_catalog.now()
@@ -3777,8 +3840,9 @@ begin
         leased_until = null, lease_token = null, updated_at = pg_catalog.now()
     where x.judgment_id = p_judgment_id;
   else
+    -- R3-01: a final settlement (including a rejection's void) ends the open incident.
     update public.judgment_settle_queue x
-    set closed_at = pg_catalog.now(), leased_until = null, lease_token = null, updated_at = pg_catalog.now()
+    set closed_at = pg_catalog.now(), last_detail = x.last_detail - 'incident', leased_until = null, lease_token = null, updated_at = pg_catalog.now()
     where x.judgment_id = p_judgment_id;
   end if;
   if v_kind in ('withdrawn','reopened') then
@@ -3797,11 +3861,12 @@ $$;
 -- lease (a stale / revoked / replaced worker gets lease_lost and NOTHING is written), upsert the open item with
 -- quarantine()'s semantics (one OPEN item per dataset/table/natural_key/reason_code via dq_quarantine_open_key_uniq;
 -- a reused item keeps id, batch_id, created_at and detail, its payload is refreshed), then publish the queue state
--- (last_detail ∪ quarantine_id; quarantined_at of a still-unresolved incident is kept, plan audit Q1-01), never in the
--- past, attempts unchanged, lease cleared. Item and queue therefore always name the same evidence.
+-- (last_detail with incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}, plan audit R3-01; the
+-- quarantined_at of an open incident is kept whatever the last attempt status, Q1-01), never in the past, attempts
+-- unchanged, lease cleared. Item and queue therefore always name the same evidence.
 create or replace function public.quarantine_settlement(p_judgment_id uuid, p_lease_token uuid, p_reason_code text, p_payload jsonb, p_patch jsonb, p_batch_id uuid) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare v_q public.judgment_settle_queue; v_id uuid; v_detail jsonb := p_patch -> 'last_detail';
+declare v_q public.judgment_settle_queue; v_id uuid; v_detail jsonb := p_patch -> 'last_detail'; v_at jsonb;
 begin
   if p_judgment_id is null or p_batch_id is null or coalesce(p_reason_code, '') = '' or pg_catalog.length(p_reason_code) > 64
      or p_payload is null or pg_catalog.jsonb_typeof(p_payload) <> 'object'
@@ -3810,7 +3875,11 @@ begin
      or (p_patch ->> 'last_status') is distinct from 'inconsistent' or (p_patch ->> 'attempts_increment') is distinct from '0'
      or (p_patch ->> 'next_attempt_at') is null
      or (v_detail ->> 'evidence_hash') is distinct from (p_payload ->> 'evidence_hash')
-     or (v_detail ->> 'cutoff') is distinct from (p_payload ->> 'cutoff') then
+     or (v_detail ->> 'cutoff') is distinct from (p_payload ->> 'cutoff')
+     or pg_catalog.jsonb_typeof(v_detail -> 'incident') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_detail -> 'incident' -> 'quarantined_at') is distinct from 'string'
+     or (v_detail -> 'incident' ->> 'evidence_hash') is distinct from (p_payload ->> 'evidence_hash')
+     or (v_detail -> 'incident' ->> 'cutoff') is distinct from (p_payload ->> 'cutoff') then
     raise exception 'invalid_parameter: quarantine_settlement' using errcode = '22023';
   end if;
   select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
@@ -3823,11 +3892,15 @@ begin
   on conflict (dataset, table_name, natural_key, reason_code) where status = 'open'
   do update set payload = excluded.payload
   returning x.id into v_id;
-  if v_q.last_status = 'inconsistent' and pg_catalog.jsonb_typeof(v_q.last_detail -> 'quarantined_at') = 'string' then
-    v_detail := v_detail || pg_catalog.jsonb_build_object('quarantined_at', v_q.last_detail -> 'quarantined_at');
+  v_at := v_detail -> 'incident' -> 'quarantined_at';
+  if pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident' -> 'quarantined_at') = 'string' then
+    v_at := v_q.last_detail -> 'incident' -> 'quarantined_at';                 -- the open incident's first quarantine (R3-01)
   end if;
   update public.judgment_settle_queue x
-  set last_status = 'inconsistent', last_detail = v_detail || pg_catalog.jsonb_build_object('quarantine_id', v_id::text),
+  set last_status = 'inconsistent',
+      last_detail = (v_detail - 'incident') || pg_catalog.jsonb_build_object('incident', pg_catalog.jsonb_build_object(
+        'quarantine_id', v_id::text, 'reason_code', p_reason_code, 'evidence_hash', p_payload -> 'evidence_hash',
+        'cutoff', p_payload -> 'cutoff', 'quarantined_at', v_at)),
       next_attempt_at = greatest((p_patch ->> 'next_attempt_at')::timestamptz, pg_catalog.now()),
       leased_until = null, lease_token = null, updated_at = pg_catalog.now()
   where x.judgment_id = p_judgment_id;
@@ -3835,8 +3908,9 @@ begin
 end $$;
 
 -- §7.6 / plan audit P1-04: the quarantine hook's acceptance, one transaction, locks queue row THEN item. It is
--- usable only for the inconsistency it was raised for: the queue must be open, still 'inconsistent' with
--- last_detail.evidence_hash / cutoff = override.evidence_hash / cutoff (the identity the hook read, Q1-03), and the
+-- usable only for the inconsistency it was raised for: the queue must be open with an open incident whose
+-- last_detail.incident.evidence_hash / cutoff = override.evidence_hash / cutoff (the identity the hook read, Q1-03;
+-- the incident, not last_status, decides — a transient attempt in between does not end it, R3-01), and the
 -- item open with the same evidence_hash and cutoff;
 -- otherwise a status is returned and NOTHING is written. Applying sets the override, schedules now and REVOKES
 -- any lease (an in-flight worker then gets lease_lost instead of overwriting last_status / last_detail), flips
@@ -3864,9 +3938,9 @@ begin
     return 'item_not_open';
   end if;
   if v_q.closed_at is not null then return 'closed'; end if;
-  if v_q.last_status is distinct from 'inconsistent'
-     or (v_q.last_detail ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
-     or (v_q.last_detail ->> 'cutoff') is distinct from (p_override ->> 'cutoff')
+  if pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+     or (v_q.last_detail -> 'incident' ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
+     or (v_q.last_detail -> 'incident' ->> 'cutoff') is distinct from (p_override ->> 'cutoff')
      or (v_i.payload ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
      or (v_i.payload ->> 'cutoff') is distinct from (p_override ->> 'cutoff') then
     return 'stale';
@@ -3884,9 +3958,10 @@ begin
 end $$;
 
 -- §7.6 / plan audit P1-05: the quarantine hook's rejection, ONE transaction: replay check on the request key →
--- lock queue row THEN item → replay check again → validate (item open; queue open and inconsistent; the evidence
--- identity the hook read, p_expected = {evidence_hash, cutoff}, equals BOTH the locked queue last_detail and the
--- locked item payload — plan audit Q1-03) → the void through the single append implementation → item
+-- lock queue row THEN item → replay check again → validate (item open; queue open with an open incident, R3-01; the
+-- evidence identity the hook read, p_expected = {evidence_hash, cutoff}, equals BOTH the locked queue
+-- last_detail.incident and the locked item payload — plan audit Q1-03) → the void through the single append
+-- implementation (which closes the queue and so ends the incident) → item
 -- resolved_reject → audit row. A crash can no longer leave a void with an open item, a concurrent acceptance cannot
 -- interleave, and a worker refresh between the hook's read and this call makes the request stale.
 create or replace function public.reject_quarantined_settlement(p_judgment_id uuid, p_quarantine_id uuid, p_expected jsonb, p_request_key text, p_row jsonb, p_audit jsonb) returns jsonb
@@ -3921,9 +3996,9 @@ begin
   if v_i.id is null or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text or v_i.status <> 'open' then
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'item_not_open');
   end if;
-  if v_q.closed_at is not null or v_q.last_status is distinct from 'inconsistent'
-     or (v_q.last_detail ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
-     or (v_q.last_detail ->> 'cutoff') is distinct from (p_expected ->> 'cutoff')
+  if v_q.closed_at is not null or pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+     or (v_q.last_detail -> 'incident' ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
+     or (v_q.last_detail -> 'incident' ->> 'cutoff') is distinct from (p_expected ->> 'cutoff')
      or (v_i.payload ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
      or (v_i.payload ->> 'cutoff') is distinct from (p_expected ->> 'cutoff') then
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'stale');
@@ -4105,7 +4180,7 @@ end $$;
 - [ ] **Step 4: 运行，确认通过**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（30 tests：Task 2 的 7 个 + Task 3 的 23 个）。
+Expected: PASS（31 tests：Task 2 的 7 个 + Task 3 的 24 个）。
 
 - [ ] **Step 5: 迁移彩排**
 
@@ -4143,6 +4218,7 @@ git commit -m "feat(judgments): F4 Task 3 judgments migration II (every spec 5.6
 - Create: `src/lib/judgments/memory-judgments-db.ts`
 - Create: `src/lib/judgments/db-contract.ts`（非测试文件：契约用例 + 夹具工厂 + 领取锁）
 - Create: `src/lib/judgments/pg-judgments-db.ts`（仅测试用）
+- Modify: `src/lib/judgments/types.ts`：只同步 `JudgmentsDb` 四处 JSDoc（`releaseLease / quarantineSettlement / applyQuarantineOverride / rejectQuarantinedSettlement` 的 `last_detail.incident` 说明，计划审计第三轮 R3-01）与骨架 §共享契约 逐字一致；Task 1 已提交的文件不改任何类型
 - Test: `src/lib/judgments/db.test.ts`（内存契约 + 内存专属 + supabase 桩）
 - Test: `src/lib/judgments/judgments-db.integration.test.ts`（pg 契约 + 两连接池并发；critical）
 - Modify: `scripts/ci/research-checks.ts`：Task 2 的 `// F4` 围栏内 `.concat(...)` 追加 `'src/lib/judgments/judgments-db.integration.test.ts'`
@@ -4201,7 +4277,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb;
 - `queueList` 过滤器的精确定义（规格只给名字）：`due` = 未关闭且 `next_attempt_at ≤ now` 且租约空闲 / 过期；`backoff` = 未关闭且 `next_attempt_at > now` 且租约空闲 / 过期；`leased` = 未关闭且 `leased_until ≥ now`；`all` = 全部（含已关闭）；按 `judgment_id` 升序 keyset，`limit` 1..500。
 - `latestCalibration` 的 `valid` 用 `serverTime()` 判过期（与 SQL `calibration_valid` 同式：`validity_revision = 当前 revision 且 valid_until > now`）。
 - `pgJudgmentsDb` 的"其余走 admin"在事务内 `set local role service_role` 执行（不是超级用户直连），所以 pg 契约同时证明 service_role 的授权恰好够用。
-- 计划审计第二轮：`quarantineSettlement`（Q1-02）在内存实现里是一次串行操作（租约校验 → 按 `quarantine()` 语义复用 / 新建 open 项并刷新 payload → 发布队列状态，保留未解决事件的 `quarantined_at`）；`rejectQuarantinedSettlement` 的 `expected` 与 `applyQuarantineOverride` 的 `override.evidence_hash / cutoff` 同时对比队列 `last_detail` 与项 `payload`（Q1-03）；`freezeCalibrationCohort` 在内存实现里也写 `cohort:<generation>` 标记到 job-state 表，`clearCalibrationGeneration` 一并删除（Q1-05）。`db.test.ts` 的 supabase 桩用例按 `rpc-inventory.ts` 断言 admin 客户端只调服务 RPC、anon 只调公共 RPC（Q1-06）。
+- 计划审计第二轮：`quarantineSettlement`（Q1-02）在内存实现里是一次串行操作（租约校验 → 按 `quarantine()` 语义复用 / 新建 open 项并刷新 payload → 发布队列状态，保留未解决事件的 `quarantined_at`）；`rejectQuarantinedSettlement` 的 `expected` 与 `applyQuarantineOverride` 的 `override.evidence_hash / cutoff` 同时对比队列 `last_detail.incident`（第三轮 R3-01）与项 `payload`（Q1-03）；`freezeCalibrationCohort` 在内存实现里也写 `cohort:<generation>` 标记到 job-state 表，`clearCalibrationGeneration` 一并删除（Q1-05）。`db.test.ts` 的 supabase 桩用例按 `rpc-inventory.ts` 断言 admin 客户端只调服务 RPC、anon 只调公共 RPC（Q1-06）。
 
 - [ ] **Step 1: 写共用契约 `db-contract.ts`（非测试文件）与两个测试文件（先失败）**
 
@@ -4584,8 +4660,11 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
   });
 
   const CUT='2026-03-02T04:00:00.000Z';
-  /** settle.ts's inconsistent patch (Q1-02), parked in 2099. */
-  const incPatch=(hash:string,cutoff:string,quarantined_at=cutoff,reason='settlement_basis_mismatch'):QueuePatch=>({last_status:'inconsistent',last_detail:{reason_code:reason,evidence_hash:hash,cutoff,quarantined_at},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+  /** settle.ts's inconsistent patch (Q1-02), parked in 2099: top level = this attempt, incident = the open incident it raises (R3-01). */
+  const incPatch=(hash:string,cutoff:string,quarantined_at=cutoff,reason='settlement_basis_mismatch'):QueuePatch=>{
+   const attempt={reason_code:reason,evidence_hash:hash,cutoff};
+   return {last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at}},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0};
+  };
   /** A judgment whose queue is 'inconsistent' for `hash` with an open item of the same hash and cutoff, published the way settle.ts does
    *  it: ONE quarantineSettlement under the claimed lease (Q1-02). Call inside exclusiveClaims. */
   const inconsistent=async(m:MethodologySync,b:string,hash=H('e'),cutoff=CUT)=>{
@@ -4637,10 +4716,10 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    const m=await synced();const b=await h.batch();const by=await h.adminUser();
    await h.exclusiveClaims(async()=>{
     const j=await registered(m,b,{target:DUE});
-    const itemId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:j.id}});
     const first=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
-    // inconsistent, and due again at once (next_attempt_at in the past is clamped to now)
-    await db.releaseLease(j.id,first.lease_token!,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantine_id:itemId},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0});
+    // inconsistent (ONE quarantineSettlement, as settle.ts publishes it), and due again at once (a past next_attempt_at is clamped to now)
+    const pub=await db.quarantineSettlement(j.id,first.lease_token!,'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id},{...incPatch(H('e'),CUT),next_attempt_at:'2000-01-01T00:00:00.000Z'},b);
+    const itemId=pub.quarantine_id!;
     const worker=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!;
     expect(await db.applyQuarantineOverride(j.id,overrideOf(by),itemId,{})).toBe('applied');
     expect((await db.queueRow(j.id))!).toMatchObject({lease_token:null,leased_until:null,last_status:'inconsistent'});
@@ -4691,7 +4770,8 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     const t1=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!;
     const first=await pubOf(j.id,t1,H('e'),CUT,'2000-01-01T00:00:00.000Z');
     expect(first.status).toBe('quarantined');const itemId=first.quarantine_id!;
-    expect((await db.queueRow(j.id))!).toMatchObject({last_status:'inconsistent',lease_token:null,leased_until:null,attempts:0,last_detail:{evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT,quarantine_id:itemId}});
+    expect((await db.queueRow(j.id))!).toMatchObject({last_status:'inconsistent',lease_token:null,leased_until:null,attempts:0,
+     last_detail:{evidence_hash:H('e'),cutoff:CUT,incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT}}});
     const [item]=await h.tables.select('dq_quarantine',{id:itemId});
     expect(item).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:j.id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b});
     const read=item.payload as {evidence_hash:string;cutoff:string};                           // what the hook reads
@@ -4705,7 +4785,8 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     expect(await pubOf(j.id,a.lease_token!,H('d'),C2)).toEqual({status:'lease_lost',quarantine_id:null});
     expect((await h.tables.select('dq_quarantine',{id:itemId}))[0].payload).toMatchObject({evidence_hash:H('f'),cutoff:C2});
     // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
-    expect((await db.queueRow(j.id))!.last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,quarantined_at:CUT,quarantine_id:itemId});
+    expect((await db.queueRow(j.id))!.last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,
+     incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,quarantined_at:CUT}});
     expect(await h.tables.select('dq_quarantine',{natural_key:j.id,status:'open'})).toHaveLength(1);
     // Q1-03: the hook read (e, CUT) before B's refresh → both verdicts are stale and write nothing.
     expect(await db.rejectQuarantinedSettlement(j.id,itemId,read,`adm:${randomUUID()}`,rejectRow(b,by),{})).toEqual({seq:0,status:'stale'});
@@ -4717,6 +4798,37 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},{...incPatch(H('e'),CUT),last_status:'pending'},b))).toBe('invalid_parameter');
    expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:'2026-01-01T00:00:00.000Z'},incPatch(H('e'),CUT),b))).toBe('invalid_parameter');
    expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},{...incPatch(H('e'),CUT),attempts_increment:1},b))).toBe('invalid_parameter');
+   expect(await code(db.quarantineSettlement(jid,randomUUID(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT},{...incPatch(H('e'),CUT),last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT}},b))).toBe('invalid_parameter');   // no incident
+  });
+
+  it('releaseLease carries the open incident through error / pending / unavailable and drops a patch incident; the same inconsistency keeps quarantined_at; the incident stays rejectable and the void clears it (R3-01)',async()=>{
+   const m=await synced();const b=await h.batch();const by=await h.adminUser();
+   await h.exclusiveClaims(async()=>{
+    const j=await registered(m,b,{target:DUE});
+    const claim=async()=>(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!;
+    const PAST='2000-01-01T00:00:00.000Z';                                                     // clamped to now → due again at once
+    const pub=await db.quarantineSettlement(j.id,await claim(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id},{...incPatch(H('e'),CUT),next_attempt_at:PAST},b);
+    const inc0={quarantine_id:pub.quarantine_id!,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT};
+    expect((await db.queueRow(j.id))!.last_detail.incident).toEqual(inc0);
+    const transient:QueuePatch[]=[
+     {last_status:'error',last_detail:{code:'resolver_failed',message:'boom'},next_attempt_at:PAST,attempts_increment:1},
+     {last_status:'pending',last_detail:{reason:'awaiting_bars'},next_attempt_at:PAST,attempts_increment:0},
+     {last_status:'unavailable',last_detail:{failure:'timeout',incident:{quarantined_at:'2099-01-01T00:00:00.000Z'}},next_attempt_at:PAST,attempts_increment:1},   // dropped
+    ];
+    for(const p of transient){
+     await db.releaseLease(j.id,await claim(),p);
+     const qr=(await db.queueRow(j.id))!;
+     expect({s:qr.last_status,d:qr.last_detail}).toEqual({s:p.last_status,d:{...p.last_detail,incident:inc0}});
+    }
+    const C2='2026-03-09T04:00:00.000Z';
+    expect(await db.quarantineSettlement(j.id,await claim(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:C2,judgment_id:j.id},{...incPatch(H('e'),C2),next_attempt_at:PAST},b))
+     .toEqual({status:'quarantined',quarantine_id:inc0.quarantine_id});
+    expect((await db.queueRow(j.id))!.last_detail.incident).toEqual({...inc0,cutoff:C2});           // first quarantine time kept
+    await db.releaseLease(j.id,await claim(),{last_status:'error',last_detail:{code:'resolver_failed',message:'again'},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:1});
+    expect(await db.rejectQuarantinedSettlement(j.id,inc0.quarantine_id,{evidence_hash:H('e'),cutoff:C2},`adm:${randomUUID()}`,rejectRow(b,by),{})).toMatchObject({status:'applied'});
+    const closed=(await db.queueRow(j.id))!;
+    expect(closed.closed_at).not.toBeNull();expect(closed.last_detail.incident).toBeUndefined();
+   });
   });
 
   it('envelopeById: the history view semantics by id, publishable-gated; null for unknown ids (P2-01)',async()=>{
@@ -5013,7 +5125,6 @@ import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
 import {startBatch} from '../dq/batches';
-import {quarantine} from '../dq/quarantine';
 import {judgmentFixture,judgmentsDbContract,methodologyFixture,settlementFixture,withClaimLock} from './db-contract';
 import type {JudgmentsContractHarness} from './db-contract';
 import {jobKey} from './job-keys';
@@ -5082,9 +5193,10 @@ describe.skipIf(!enabled)('pgJudgmentsDb on real PostgreSQL',()=>{
     for(let round=0;round<3;round++){
      const f=judgmentFixture(m,b,{target:{kind:'date',date:'2026-01-10'}});await d1.registerJudgment(f.row,f.queue);const j=f.row.judgment_id;
      const H='e'.repeat(64),cutoff='2026-03-02T04:00:00.000Z';
-     const item=await quarantine(tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j,reasonCode:'settlement_basis_mismatch',batchId:b,payload:{evidence_hash:H,cutoff,judgment_id:j}});
      const t=(await d1.claimDue(100,600)).find(r=>r.judgment_id===j)!.lease_token!;
-     await d1.releaseLease(j,t,{last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:H,cutoff,quarantine_id:item},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0});
+     const attempt={reason_code:'settlement_basis_mismatch',evidence_hash:H,cutoff};
+     const item=(await d1.quarantineSettlement(j,t,'settlement_basis_mismatch',{evidence_hash:H,cutoff,judgment_id:j},
+      {last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at:cutoff}},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0},b)).quarantine_id!;
      const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:H,evidence:{}},evidence_hash:H,resolved_by:by,at:new Date().toISOString(),cutoff};
      const row=settlementFixture(b,{kind:'void',outcome:null,realized:null,reason:'quarantine_rejected',actor:`admin:${by}`});
      const [acc,rej]=await Promise.all([d1.applyQuarantineOverride(j,override,item,{}),d2.rejectQuarantinedSettlement(j,item,{evidence_hash:H,cutoff},`adm:${randomUUID()}`,row,{})]);
@@ -5420,6 +5532,8 @@ const clone=<T>(v:T):T=>structuredClone(v);
 const same=(a:unknown,b:unknown)=>canonicalize(jsonClean(a??null))===canonicalize(jsonClean(b??null));
 function fail(code:JudgmentErrorCode,message?:string):never{throw new JudgmentError(code,message);}
 const isObj=(v:unknown):v is Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+/** last_detail without the open-incident sub-object (plan audit R3-01). */
+const withoutIncident=(d:Record<string,unknown>)=>Object.fromEntries(Object.entries(d).filter(([k])=>k!=='incident'));
 const mk=(id:string,version:string)=>`${id}@${version}`;
 const cardOrder=(a:JudgmentRow,b:JudgmentRow)=>cmp(b.as_of,a.as_of)||ms(b.registered_at)-ms(a.registered_at)||cmp(a.judgment_id,b.judgment_id);
 const historyOrder=(a:JudgmentRow,b:JudgmentRow)=>cmp(b.as_of,a.as_of)||ms(b.registered_at)-ms(a.registered_at)||cmp(b.judgment_id,a.judgment_id);
@@ -5502,7 +5616,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   const at=now();const id=randomUUID();
   settlements.push(jsonClean({settlement_id:id,judgment_id:judgmentId,seq:seq+1,kind:row.kind,outcome:row.outcome,realized:row.realized,evidence:row.evidence??{},resolver:row.resolver,resolver_version:row.resolver_version,reason:row.reason,actor:row.actor,settled_at:at,request_key:requestKey,request_digest:digest,code_version:row.code_version,batch_id:row.batch_id}) as SettlementRow);
   if(row.kind==='reopened')Object.assign(q,{closed_at:null,next_attempt_at:at,attempts:0,last_status:null,last_detail:{},leased_until:null,lease_token:null,updated_at:at});
-  else Object.assign(q,{closed_at:at,leased_until:null,lease_token:null,updated_at:at});
+  else Object.assign(q,{closed_at:at,last_detail:withoutIncident(q.last_detail),leased_until:null,lease_token:null,updated_at:at});   // R3-01: a final settlement ends the incident
   if(row.kind==='withdrawn'||row.kind==='reopened'){
    const v=validity.get(mk(j.methodology_id,j.methodology_version));
    if(v)Object.assign(v,{revision:v.revision+1,bumped_at:at,reason:`${row.kind}:${id}`});
@@ -5591,7 +5705,9 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const q=queue.get(judgmentId);
    if(!q||q.lease_token===null||q.lease_token!==leaseToken)fail('lease_lost');
    const at=now();
-   Object.assign(q!,{last_status:patch.last_status,last_detail:clone(patch.last_detail),next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),attempts:q!.attempts+patch.attempts_increment,leased_until:null,lease_token:null,updated_at:at});
+   // R3-01: the locked row's open incident is carried over unchanged; a patch incident is dropped (= SQL release_lease).
+   const carried=isObj(q!.last_detail.incident)?{incident:clone(q!.last_detail.incident)}:{};
+   Object.assign(q!,{last_status:patch.last_status,last_detail:{...withoutIncident(clone(patch.last_detail)),...carried},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),attempts:q!.attempts+patch.attempts_increment,leased_until:null,lease_token:null,updated_at:at});
   },
   async queueRow(id){const q=queue.get(id);return q?clone(q):null;},
   async queueList(o){
@@ -5606,12 +5722,15 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
   async settlementsOf(ids){const want=new Set(ids);return clone(settlements.filter(s=>want.has(s.judgment_id)).sort(bySettlementOrder));},
   appendSettlement:(judgmentId,leaseToken,requestKey,row)=>appendCore(judgmentId,leaseToken,requestKey,row),
   /** quarantine_settlement (Q1-02): one serialised operation — lease check, quarantine()-style upsert of the open item
-   *  (same key + reason reused, payload refreshed), queue publish keeping an unresolved incident's quarantined_at (Q1-01). */
+   *  (same key + reason reused, payload refreshed), queue publish with last_detail.incident (R3-01) keeping an open incident's
+   *  quarantined_at whatever the last attempt status (Q1-01). */
   async quarantineSettlement(judgmentId,leaseToken,reasonCode,payload,patch,batchId){
    const d=(isObj(patch)&&isObj(patch.last_detail)?patch.last_detail:null) as Record<string,unknown>|null;
+   const pi=d!==null&&isObj(d.incident)?d.incident:null;   // the incident settle.ts proposes (R3-01)
    if(!isObj(payload)||typeof payload.evidence_hash!=='string'||!HEX64.test(payload.evidence_hash)||typeof payload.cutoff!=='string'
     ||typeof reasonCode!=='string'||reasonCode===''||reasonCode.length>64||typeof batchId!=='string'||!isObj(patch)||patch.last_status!=='inconsistent'||patch.attempts_increment!==0
-    ||typeof patch.next_attempt_at!=='string'||!Number.isFinite(ms(patch.next_attempt_at))||d===null||d.evidence_hash!==payload.evidence_hash||d.cutoff!==payload.cutoff)fail('invalid_parameter','quarantine_settlement');
+    ||typeof patch.next_attempt_at!=='string'||!Number.isFinite(ms(patch.next_attempt_at))||d===null||d.evidence_hash!==payload.evidence_hash||d.cutoff!==payload.cutoff
+    ||pi===null||typeof pi.quarantined_at!=='string'||pi.evidence_hash!==payload.evidence_hash||pi.cutoff!==payload.cutoff)fail('invalid_parameter','quarantine_settlement');
    const q=queue.get(judgmentId);
    if(!q)return fail('unknown_judgment');
    if(q.lease_token===null||q.lease_token!==leaseToken)return {status:'lease_lost',quarantine_id:null};
@@ -5621,8 +5740,10 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    let id:string;
    if(open){id=String(open.id);await tables.update('dq_quarantine',{id,status:'open'},{payload:clone(payload)});}
    else{id=randomUUID();await tables.insert('dq_quarantine',{id,...key,detail:{},payload:clone(payload),batch_id:batchId,status:'open',resolved_by:null,resolved_at:null,created_at:at});}
-   const kept=q.last_status==='inconsistent'&&typeof q.last_detail.quarantined_at==='string'?{quarantined_at:q.last_detail.quarantined_at}:{};
-   Object.assign(q,{last_status:'inconsistent',last_detail:{...clone(d!),...kept,quarantine_id:id},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),leased_until:null,lease_token:null,updated_at:at});
+   const prior=q.last_detail.incident;   // R3-01: an open incident keeps its first quarantine time, whatever the last attempt status
+   const incident={quarantine_id:id,reason_code:reasonCode,evidence_hash:String(payload.evidence_hash),cutoff:String(payload.cutoff),
+    quarantined_at:isObj(prior)&&typeof prior.quarantined_at==='string'?prior.quarantined_at:String(pi!.quarantined_at)};
+   Object.assign(q,{last_status:'inconsistent',last_detail:{...withoutIncident(clone(d!)),incident},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),leased_until:null,lease_token:null,updated_at:at});
    return {status:'quarantined',quarantine_id:id};
   },
   async applyQuarantineOverride(judgmentId,override,quarantineId,audit){
@@ -5636,7 +5757,8 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(item.status!=='open')return item.status==='resolved_accept'&&same(q.override,override)?'applied':'item_not_open';
    if(q.closed_at!==null)return 'closed';
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
-   if(q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==override.evidence_hash||q.last_detail.cutoff!==override.cutoff||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
+   const inc=q.last_detail.incident;   // R3-01: the open incident decides, not last_status
+   if(!isObj(inc)||inc.evidence_hash!==override.evidence_hash||inc.cutoff!==override.cutoff||payload.evidence_hash!==override.evidence_hash||payload.cutoff!==override.cutoff)return 'stale';
    const at=now();
    Object.assign(q,{override:clone(override),next_attempt_at:at,leased_until:null,lease_token:null,updated_at:at});   // the lease is revoked (P1-04)
    await tables.update('dq_quarantine',{id:quarantineId,status:'open'},{status:'resolved_accept',resolved_by:override.resolved_by,resolved_at:at,detail:{...(item.detail as Record<string,unknown>??{}),override}});
@@ -5656,7 +5778,8 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return {seq,status:'item_not_open'};
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
    // Q1-03: the identity the hook read must still be the locked queue's AND the locked item's.
-   if(q.closed_at!==null||q.last_status!=='inconsistent'||q.last_detail.evidence_hash!==expected.evidence_hash||q.last_detail.cutoff!==expected.cutoff
+   const inc=q.last_detail.incident;   // R3-01: the open incident decides, not last_status
+   if(q.closed_at!==null||!isObj(inc)||inc.evidence_hash!==expected.evidence_hash||inc.cutoff!==expected.cutoff
     ||payload.evidence_hash!==expected.evidence_hash||payload.cutoff!==expected.cutoff)return {seq,status:'stale'};
    const res=await appendCore(judgmentId,null,requestKey,row);
    if(res.status!=='applied')return res;
@@ -5891,7 +6014,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
 - [ ] **Step 6: 运行单元测试，确认通过**
 
 Run: `npm test -- src/lib/judgments/db.test.ts`
-Expected: PASS（内存契约 18 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
+Expected: PASS（内存契约 19 个用例 + 内存专属 3 个 + 转移表 1 个 + supabase 桩 4 个）。
 
 - [ ] **Step 7: pg 集成测试进 `criticalSuites`，运行**
 
@@ -5904,7 +6027,7 @@ Expected: PASS（内存契约 18 个用例 + 内存专属 3 个 + 转移表 1 �
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts src/lib/judgments/judgments.integration.test.ts`
-Expected: PASS（pg 契约 18 个 + 并发 5 个；同时跑 Task 2/3 的 30 个，证明领取锁让两个文件并行时互不领走对方的行）。
+Expected: PASS（pg 契约 19 个 + 并发 5 个；同时跑 Task 2/3 的 31 个，证明领取锁让两个文件并行时互不领走对方的行）。
 
 Run: `npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.verifyCriticalSuiteInventory();console.log('inventory ok')})"`
 Expected: `inventory ok`。
@@ -11067,8 +11190,10 @@ export function planOf(q:QueueRow,now:string):SettlePlan;          // P1-03: cut
 export function backoff(kind:'pending'|'unavailable'|'inconsistent'|'error',x:{now:string;attempts:number;settleBy:string;estimatedAt?:string|null}):string;
 export function predicateHolds(p:Condition['predicate'],v:number|string|boolean):boolean;
 export const REVIEW_WINDOW_DAYS=7;
-export function reviewDeadline(q:QueueRow):string;   // max(settle_by, last_detail.quarantined_at + REVIEW_WINDOW_DAYS); quarantined_at = first quarantine of the unresolved incident; expired ⇔ now >= deadline (Q1-01)
-export const isUnresolvedInconsistency:(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>boolean;
+export interface QueueIncident{quarantine_id:string;reason_code:string;evidence_hash:string;cutoff:string;quarantined_at:string}   // last_detail.incident (R3-01)
+export function incidentOf(q:Pick<QueueRow,'last_detail'>):QueueIncident|null;   // the open incident, whatever last_status
+export function reviewDeadline(q:QueueRow):string;   // max(settle_by, last_detail.incident.quarantined_at + REVIEW_WINDOW_DAYS); quarantined_at = first quarantine of the open incident; expired ⇔ now >= deadline (Q1-01, R3-01)
+export const isUnresolvedInconsistency:(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>boolean;   // open incident (any last_status) ∧ now >= deadline ∧ no usable / discarded override
 export function decide(x:DecideInput):Decision;
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
 export interface SettleOutcome{item:SettleItem;counter:keyof BatchCounts|null;summary:{kind:'pending'|'unavailable'|'voided';reason:string}|null;errors:BatchError[]}
@@ -11083,7 +11208,8 @@ export function runSettle(deps:SettleDeps,opts?:SettleOptions):Promise<SettleRec
 - **`planOf` 与 `cutoff_vintage`**（规格第 7 稿 §7.2，计划审计 P1-03）：`cutoff_vintage` 在 `now < settle_by` 时**不调用 resolver**（也不用 override），直接 `defer` 到 `settle_by`；之后 `cutoff = settle_by`，队列 override 只在 `override.cutoff = settle_by` 时使用，否则丢弃并重新解析一次（重新解析仍不一致且已过 `settle_by` → `void(unresolved_inconsistency)`，不再开新的复核窗口）。override 只匹配它被接受时的那次不一致（`reason_code` 与 `evidence_hash` 都相同，P1-04）。**已知后果（交 owner）**：`cutoff_vintage` 的解析只在 `settle_by` 当时及之后发生，于是它的 `Inconsistent` 在下一次运行（`now > settle_by`）就会 `void(unresolved_inconsistency)`，管理员几乎没有复核窗口；v1 唯一的 `cutoff_vintage` resolver（`macro_regime_replay`）不返回 `Inconsistent`，所以 v1 不受影响；将来把 `cutoff_vintage` 与会返回 `Inconsistent` 的 resolver 组合的方法，需要在规格里另定复核窗口。
 - **截止可得性**（计划审计 P1-07）：`Resolved` 还要求 `label_available_at ≤ cutoff`；否则 `defer(label_after_cutoff)`，按 `pending` 公式退避到标签时刻（`first_observed` 的 `cutoff = now`；`cutoff_vintage` 的 `cutoff = settle_by` 已被"晚于 `settle_by` → `void(no_data:late)`"覆盖）。
 - **隔离发布 = 一次 `quarantineSettlement`**（计划审计 P1-04 → Q1-02）：不再 `quarantine()` + 刷新 payload + `releaseLease` 三次写；Task 3 的 `quarantine_settlement` 在一个事务里锁队列、校验租约、按 `quarantine()` 语义复用 / 新建 open 项并把 payload 刷新为本次不一致（含 `cutoff`）、发布队列状态。过期 worker 在替代者之后刷新 → `lease_lost`（计 `deferred`，什么都不写）；两次写之间崩溃的窗口不存在。`settle.ts` 不再 import `quarantine()`，也不直接写 `dq_quarantine`。
-- **复核期从第一次隔离起算**（计划审计 Q1-01，指挥决策）：队列已是 `inconsistent` 时再次隔离（同一或不同证据）保留 `last_detail.quarantined_at`；只有 override 结算、拒绝作废或 `reopened` 清掉状态后才开始新事件。`reviewDeadline = max(settle_by, quarantined_at + 7 天)`，到期判定含边界（`now >= deadline`），`inconsistent` 退避 `min(deadline, now + 7 天)` 恰好落在截止、绝不晚于它。
+- **复核期从第一次隔离起算**（计划审计 Q1-01，指挥决策）：队列已有未解决事件时再次隔离（同一或不同证据）保留 `last_detail.incident.quarantined_at`；只有 override 结算（终态结算）、拒绝作废或 `reopened` 清掉事件后才开始新事件。
+- **未解决事件独立于尝试状态**（计划审计第三轮 R3-01）：事件存在 `last_detail.incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}`，不靠 `last_status === 'inconsistent'` 推断；`decide()` 的每个 `defer` 补丁（`pending / unavailable / label_after_cutoff / cutoff_vintage`）与 `failed()` 的 `error` 补丁都经 `carryIncident` 原样带上当前队列行的事件（Task 3 的 `release_lease` 在锁内再并一次，两边都保证），且这些过渡退避不越过事件的复核截止（截止仍在将来时夹紧到截止）；`planOf` 的 override 匹配、`reviewDeadline`、`isUnresolvedInconsistency`、作废证据里的 `reason_code / quarantine_id` 都读 `incident`。于是 `error / pending / unavailable` 夹在两次相同不一致之间，复核截止不变、到原截止即作废。applied override 本身不清事件（它要靠事件匹配），由它产生的终态结算清掉。`reviewDeadline = max(settle_by, quarantined_at + 7 天)`，到期判定含边界（`now >= deadline`），`inconsistent` 退避 `min(deadline, now + 7 天)` 恰好落在截止、绝不晚于它。
 - **退避不越过 `settle_by`**：`pending / unavailable / error` 的 §5.4 公式结果若晚于 `settle_by`（且 `settle_by` 仍在将来），夹紧到 `settle_by`，使 `cutoff_vintage` 的截止重取与 `void(no_data)` 准时发生；`inconsistent` 本来就是 `min(settle_by, now + 7 天)`。任何结果最后再 `max(·, now)`（"不设成过去的时刻"）。`unavailable` 的 `attempts` 取本次之后的值（第一次失败退 1 天）。
 - **resolver 抛错**：队列 `last_status='error'`、`attempts + 1`、按 `unavailable` 公式退避；计 `failed`，`errors` 加非信息码 `resolver_failed`（全部抛错 → 批次 `failed`，连续两次 → `dq_freshness` `error`，验收样例 6）。
 - **`lease_lost` 计入 `deferred`**：该条由别的 worker 持有、会被它处理，计数器需要一个"有去向"的格子（`accounted()` 计 `deferred`），否则全是 `lease_lost` 的运行会被判 `unaccounted`；信息码 `lease_lost` 带 `key`。
@@ -11321,7 +11447,7 @@ import type {CompensationReport} from './compensate';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {priceReturnResolverWith} from './resolvers/price';
-import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,REVIEW_WINDOW_DAYS,STALE_BATCH_SECONDS,backoff,decide,isUnresolvedInconsistency,planOf,predicateHolds,reviewDeadline,runSettle,settleNow} from './settle';
+import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,REVIEW_WINDOW_DAYS,STALE_BATCH_SECONDS,backoff,decide,incidentOf,isUnresolvedInconsistency,planOf,predicateHolds,reviewDeadline,runSettle,settleNow,settleOne} from './settle';
 import type {SettleDeps} from './settle';
 import {TEST_CODE_VERSION,fixtureKline,loadKlineFixture,priceJudgment,stubInputsDb,stubResolver,testMethodologyRow,truncateFixture,verifiedCapability,withOverrides} from './testing/fixtures';
 import type {KlineFixture,PriceJudgmentSpec} from './testing/fixtures';
@@ -11407,12 +11533,14 @@ describe('settle state machine (spec §7.2)',()=>{
  });
  it('planOf: cutoff per policy, early defer, override matched on reason_code + evidence_hash, wrong-cutoff override discarded (P1-03, P1-04)',()=>{
   const o=(cutoff:string,hash='e'.repeat(64)):QuarantineOverride=>({reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:hash,evidence:{}},evidence_hash:hash,resolved_by:ADMIN,at:T0,cutoff});
+  const attempt={reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0};
   const row=(over:Partial<QueueRow>):QueueRow=>({judgment_id:'j',settle_after:'2026-02-16T00:00:00.000Z',settle_by:SETTLE_BY,label_policy:'first_observed',next_attempt_at:T0,attempts:0,last_status:'inconsistent',
-   last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64)},leased_until:null,lease_token:null,override:null,closed_at:null,updated_at:T0,...over});
+   last_detail:{...attempt,incident:{...attempt,quarantine_id:'00000000-0000-4000-8000-0000000000aa',quarantined_at:T0}},leased_until:null,lease_token:null,override:null,closed_at:null,updated_at:T0,...over});
   expect(planOf(row({}),T0)).toEqual({cutoff:T0,early:false,viaOverride:false,overrideDiscarded:false});
   expect(planOf(row({override:o('2026-01-01T00:00:00.000Z')}),T0)).toMatchObject({viaOverride:true});            // first_observed: cutoff not compared
   expect(planOf(row({override:o(T0,'f'.repeat(64))}),T0)).toMatchObject({viaOverride:false,overrideDiscarded:false}); // another inconsistency
-  expect(planOf(row({override:o(T0),last_status:'pending'}),T0).viaOverride).toBe(false);
+  expect(planOf(row({override:o(T0),last_status:'pending'}),T0).viaOverride).toBe(true);                         // R3-01: a transient status keeps the open incident
+  expect(planOf(row({override:o(T0),last_detail:attempt}),T0).viaOverride).toBe(false);                            // no open incident → no match
   const v=(over:Partial<QueueRow>)=>row({label_policy:'cutoff_vintage',...over});
   expect(planOf(v({override:o(SETTLE_BY)}),T0)).toEqual({cutoff:SETTLE_BY,early:true,viaOverride:false,overrideDiscarded:false});
   expect(planOf(v({override:o(SETTLE_BY)}),AFTER)).toEqual({cutoff:SETTLE_BY,early:false,viaOverride:true,overrideDiscarded:false});
@@ -11468,7 +11596,8 @@ describe('settle state machine (spec §7.2)',()=>{
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:r.batchId,
    payload:{registered_bar:{close:107},refetched_bar:{close:106},source:'eastmoney',evidence:{bars:[1,2,3]},evidence_hash:'e'.repeat(64),judgment_id:id,cutoff:T0}});
-  expect(await h.queue(id)).toMatchObject({last_status:'inconsistent',next_attempt_at:at(T0,7*DAY_MS),last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantine_id:items[0].id}});
+  expect(await h.queue(id)).toMatchObject({last_status:'inconsistent',next_attempt_at:at(T0,7*DAY_MS),last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,
+   incident:{quarantine_id:items[0].id,reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0}}});
   expect(await h.settlements(id)).toEqual([]);
   h.db.setNow(at(T0,7*DAY_MS));
   const again:ResolverResult={...INC,evidence:{bars:[4,5,6]},evidence_hash:'d'.repeat(64)} as ResolverResult;
@@ -11478,7 +11607,7 @@ describe('settle state machine (spec §7.2)',()=>{
   // P1-04: the reused open item now carries THIS inconsistency, matching the queue
   expect(after[0].payload).toMatchObject({evidence:{bars:[4,5,6]},evidence_hash:'d'.repeat(64),cutoff:at(T0,7*DAY_MS)});
   // Q1-01: same unresolved incident → quarantined_at stays T0; deadline max(settle_by, T0 + 7 d) = settle_by; backoff min(deadline, now + 7 d)
-  expect(await h.queue(id)).toMatchObject({last_detail:{evidence_hash:'d'.repeat(64),quarantined_at:T0},next_attempt_at:at(T0,14*DAY_MS)});
+  expect(await h.queue(id)).toMatchObject({last_detail:{evidence_hash:'d'.repeat(64),incident:{evidence_hash:'d'.repeat(64),quarantined_at:T0,quarantine_id:items[0].id}},next_attempt_at:at(T0,14*DAY_MS)});
  });
  it('a quarantine is ONE quarantineSettlement call under the claimed lease — settle.ts writes no item and no separate release; lease_lost there is deferred (Q1-02)',async()=>{
   const h=await harness();const id=await h.register();
@@ -11492,7 +11621,8 @@ describe('settle state machine (spec §7.2)',()=>{
   expect({jid,reason,batch}).toEqual({jid:id,reason:'settlement_basis_mismatch',batch:r.batchId});
   expect(typeof token).toBe('string');
   expect(payload).toMatchObject({evidence_hash:'e'.repeat(64),cutoff:T0,judgment_id:id,evidence:{bars:[1,2,3]}});
-  expect(patch).toEqual({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0},next_attempt_at:at(T0,7*DAY_MS),attempts_increment:0});
+  expect(patch).toEqual({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,
+   incident:{reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0}},next_attempt_at:at(T0,7*DAY_MS),attempts_increment:0});
   expect(release).not.toHaveBeenCalled();
   expect(h.tables.rows('dq_quarantine')).toEqual([]);                                         // nothing written outside the one RPC: no crash window
   const h2=await harness();await h2.register();
@@ -11535,18 +11665,18 @@ describe('settle state machine (spec §7.2)',()=>{
   expect(await h.settlements(id)).toEqual([]);          // quarantined, not voided
   const deadline=at(AFTER,REVIEW_WINDOW_DAYS*DAY_MS);
   const q1=(await h.queue(id))!;
-  expect(q1).toMatchObject({last_status:'inconsistent',next_attempt_at:deadline,last_detail:{quarantined_at:AFTER}});
+  expect(q1).toMatchObject({last_status:'inconsistent',next_attempt_at:deadline,last_detail:{incident:{quarantined_at:AFTER}}});
   expect(reviewDeadline(q1)).toBe(deadline);
   // Repeats inside the window — identical evidence or another inconsistency — keep quarantined_at and the deadline.
   const j=(await h.db.getJudgment(id))!;const meta={name:'price_return' as const,version:'stub/1'};
   const day6=at(AFTER,6*DAY_MS);
   for(const r of [INC,{...INC,evidence:{bars:[9]},evidence_hash:'d'.repeat(64)} as ResolverResult]){
    const d=decide({judgment:j,queue:q1,resolver:meta,result:r,now:day6,cutoff:day6,viaOverride:false});
-   expect(d).toMatchObject({action:'quarantine',patch:{last_detail:{quarantined_at:AFTER,cutoff:day6},next_attempt_at:deadline}});
+   expect(d).toMatchObject({action:'quarantine',patch:{last_detail:{cutoff:day6,incident:{quarantined_at:AFTER,cutoff:day6}},next_attempt_at:deadline}});
   }
-  // A new incident (the queue left 'inconsistent', e.g. after a reopen) starts a fresh window.
+  // A new incident (no open incident any more, e.g. after a reopen) starts a fresh window.
   expect(decide({judgment:j,queue:{...q1,last_status:null,last_detail:{}},resolver:meta,result:INC,now:day6,cutoff:day6,viaOverride:false}))
-   .toMatchObject({action:'quarantine',patch:{last_detail:{quarantined_at:day6},next_attempt_at:at(day6,7*DAY_MS)}});
+   .toMatchObject({action:'quarantine',patch:{last_detail:{incident:{quarantined_at:day6}},next_attempt_at:at(day6,7*DAY_MS)}});
   // The boundary is inclusive: 1 ms before → still reviewable; at the deadline → unresolved.
   const none={viaOverride:false,overrideDiscarded:false};
   expect(isUnresolvedInconsistency(q1,at(deadline,-1),none)).toBe(false);
@@ -11557,6 +11687,54 @@ describe('settle state machine (spec §7.2)',()=>{
   await runSettle(h.deps(stubResolver(resolve)));
   expect(resolve).not.toHaveBeenCalled();
   expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'unresolved_inconsistency'});
+ });
+ it('an open incident survives transient attempt statuses: inconsistency → error → pending → unavailable → the same inconsistency keeps the first quarantined_at and the original deadline; the void happens exactly at it (R3-01)',async()=>{
+  const h=await harness();const id=await h.register();
+  await runSettle(h.deps(stubResolver(scripted(INC))));                                     // T0: first quarantine
+  const [item]=h.tables.rows('dq_quarantine');
+  const inc0={quarantine_id:item.id,reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0};
+  const q0=(await h.queue(id))!;
+  expect(q0.last_detail.incident).toEqual(inc0);
+  const deadline=reviewDeadline(q0);
+  expect(deadline).toBe(SETTLE_BY);                                                          // max(settle_by, T0 + 7 d)
+  // T0 + 7 d: the resolver throws → error; the incident is carried, attempts + 1, backoff 1 d (before the deadline).
+  h.db.setNow(at(T0,7*DAY_MS));
+  await runSettle(h.deps(stubResolver(vi.fn(async(_ctx:ResolveContext):Promise<ResolverResult>=>{throw new Error('provider down');}))));
+  expect(await h.queue(id)).toMatchObject({last_status:'error',attempts:1,next_attempt_at:at(T0,8*DAY_MS),last_detail:{code:'resolver_failed',incident:inc0}});
+  // T0 + 8 d: pending → the incident is carried.
+  h.db.setNow(at(T0,8*DAY_MS));
+  await runSettle(h.deps(stubResolver(scripted({status:'pending',reason:'awaiting_bars',estimated_at:at(T0,9*DAY_MS)}))));
+  expect(await h.queue(id)).toMatchObject({last_status:'pending',next_attempt_at:at(T0,9*DAY_MS),last_detail:{reason:'awaiting_bars',incident:inc0}});
+  // T0 + 9 d: unavailable → the incident is carried (attempts 2 → 2 d).
+  h.db.setNow(at(T0,9*DAY_MS));
+  await runSettle(h.deps(stubResolver(scripted({status:'unavailable',failure:'rate_limited'}))));
+  expect(await h.queue(id)).toMatchObject({last_status:'unavailable',attempts:2,next_attempt_at:at(T0,11*DAY_MS),last_detail:{failure:'rate_limited',incident:inc0}});
+  expect(reviewDeadline((await h.queue(id))!)).toBe(deadline);
+  // T0 + 11 d: the same inconsistency → same item, quarantined_at still T0 (not T0 + 11 d, which would move the deadline to T0 + 18 d).
+  h.db.setNow(at(T0,11*DAY_MS));
+  await runSettle(h.deps(stubResolver(scripted(INC))));
+  const q5=(await h.queue(id))!;
+  expect(q5).toMatchObject({last_status:'inconsistent',next_attempt_at:deadline,last_detail:{incident:{...inc0,cutoff:at(T0,11*DAY_MS)}}});
+  expect(reviewDeadline(q5)).toBe(deadline);
+  expect(h.tables.rows('dq_quarantine')).toHaveLength(1);
+  // A transient status at the deadline is still an unresolved incident (pure check), and an error backoff past a later
+  // deadline is clamped to it.
+  const errored={...q5,last_status:'error' as const,last_detail:{code:'resolver_failed',message:'x',incident:incidentOf(q5)}};
+  expect(isUnresolvedInconsistency(errored,deadline,{viaOverride:false,overrideDiscarded:false})).toBe(true);
+  expect(isUnresolvedInconsistency(errored,at(deadline,-1),{viaOverride:false,overrideDiscarded:false})).toBe(false);
+  const late={...q5,settle_by:at(T0,-30*DAY_MS),attempts:5,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa'};   // deadline = T0 + 7 d, ahead of now = T0 + 6 d
+  const release=vi.fn<JudgmentsDb['releaseLease']>(async()=>undefined);
+  const j=(await h.db.getJudgment(id))!;
+  await settleOne({deps:h.deps(stubResolver(vi.fn(async():Promise<ResolverResult>=>{throw new Error('boom');})),{db:withOverrides<JudgmentsDb>(h.db,{releaseLease:release})}),batchId:null,now:at(T0,6*DAY_MS),signal:new AbortController().signal,preview:false},
+   {...late,last_detail:{...late.last_detail,incident:{...inc0}}},j,0);
+  expect(release).toHaveBeenCalledWith(id,late.lease_token,{last_status:'error',last_detail:{code:'resolver_failed',message:'boom',incident:inc0},next_attempt_at:at(T0,7*DAY_MS),attempts_increment:1});
+  // The cron run at exactly the original deadline voids without reading.
+  h.db.setNow(deadline);
+  const resolve=scripted(INC);
+  await runSettle(h.deps(stubResolver(resolve)));
+  expect(resolve).not.toHaveBeenCalled();
+  expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'unresolved_inconsistency',evidence:{reason_code:'settlement_basis_mismatch',quarantine_id:item.id}});
+  expect((await h.queue(id))!.last_detail.incident).toBeUndefined();                        // the final settlement ends the incident
  });
 });
 
@@ -11759,8 +11937,9 @@ Expected: FAIL —— `Failed to resolve import "./settle"`。
 // dq_quarantine item with the full evidence and the inconsistent queue state in one transaction, plan audit Q1-02). A
 // queued override matching the queued inconsistency (reason_code + evidence_hash; for cutoff_vintage also override.cutoff
 // = settle_by) settles from resolver.fromOverride (no reads); cutoff_vintage rows never resolve before settle_by
-// (planOf, P1-03); a row still inconsistent at its review deadline (max(settle_by, first quarantined_at + 7 d),
-// inclusive; Q1-01) voids as unresolved_inconsistency. Counters (§7.5): fetched
+// (planOf, P1-03); a row whose open incident (last_detail.incident, whatever the last attempt status; R3-01) reaches
+// its review deadline (max(settle_by, first quarantined_at + 7 d), inclusive; Q1-01) voids as unresolved_inconsistency;
+// every defer / error patch carries that incident forward unchanged. Counters (§7.5): fetched
 // claimed, inserted settled, versioned void, duplicates already_final, quarantined, failed resolver errors, deferred
 // pending / unavailable / lease_lost. preview=true lists the due queue without claiming and reports the decisions.
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
@@ -11818,8 +11997,9 @@ export function planOf(q:QueueRow,now:string):SettlePlan{
  const vintage=q.label_policy==='cutoff_vintage';
  const cutoff=vintage?q.settle_by:now;
  const early=vintage&&now<q.settle_by;
- const o=q.override;
- const matches=o!==null&&q.last_status==='inconsistent'&&q.last_detail.reason_code===o.reason_code&&q.last_detail.evidence_hash===o.evidence_hash;
+ const o=q.override,inc=incidentOf(q);
+ // R3-01: matched against the open incident, not last_status — a transient attempt in between keeps an accepted override usable.
+ const matches=o!==null&&inc!==null&&inc.reason_code===o.reason_code&&inc.evidence_hash===o.evidence_hash;
  const sameCutoff=!vintage||(o!==null&&o.cutoff===cutoff);
  return {cutoff,early,viaOverride:!early&&matches&&sameCutoff,overrideDiscarded:!early&&matches&&!sameCutoff};
 }
@@ -11846,22 +12026,47 @@ export function predicateHolds(p:Condition['predicate'],v:number|string|boolean)
 /** Commander decision (plan audit round 1 follow-up): a quarantined inconsistency always gets an admin review window of
  *  REVIEW_WINDOW_DAYS after it was quarantined, even when quarantined at or near settle_by (cutoff_vintage resolves only at
  *  settle_by). The settlement cutoff is unchanged; only the void deadline moves. Spec 7th draft §5.4/§7.2.
- *  Plan audit Q1-01: quarantined_at is the FIRST quarantine of the unresolved incident (a repeat while the queue is still
- *  inconsistent keeps it; only an override / reject / reopen clearing the state starts a new incident), so the deadline
- *  cannot move; expiry is inclusive (now >= deadline) and the inconsistent backoff lands exactly on the deadline. */
+ *  Plan audit Q1-01: quarantined_at is the FIRST quarantine of the unresolved incident (a repeat while the incident is open
+ *  keeps it; only a final settlement — an override's or any other —, a reject or a reopen clearing it starts a new
+ *  incident), so the deadline cannot move; expiry is inclusive (now >= deadline) and the inconsistent backoff lands exactly
+ *  on the deadline. Plan audit R3-01: the incident lives in last_detail.incident, independent of the attempt status, so a
+ *  transient error / pending / unavailable attempt between two quarantines does not restart the window either. */
 export const REVIEW_WINDOW_DAYS=7;
+/** The open quarantine incident (spec §5.4, plan audit R3-01): written only by quarantine_settlement, carried unchanged through
+ *  every later patch (carryIncident here, release_lease in SQL), cleared by a final settlement, a reject's void or a reopen. */
+export interface QueueIncident{quarantine_id:string;reason_code:string;evidence_hash:string;cutoff:string;quarantined_at:string}
+export function incidentOf(q:Pick<QueueRow,'last_detail'>):QueueIncident|null{
+ const i=q.last_detail.incident;
+ return i!==null&&typeof i==='object'&&!Array.isArray(i)&&typeof (i as {quarantined_at?:unknown}).quarantined_at==='string'?i as QueueIncident:null;
+}
 export function reviewDeadline(q:QueueRow):string{
- const at=typeof q.last_detail.quarantined_at==='string'?Date.parse(q.last_detail.quarantined_at):Number.NaN;
+ const inc=incidentOf(q);
+ const at=inc?Date.parse(inc.quarantined_at):Number.NaN;
  const win=Number.isFinite(at)?at+REVIEW_WINDOW_DAYS*DAY_MS:Number.NEGATIVE_INFINITY;
  return new Date(Math.max(Date.parse(q.settle_by),win)).toISOString();
 }
-/** A row still inconsistent past its review deadline with no usable override voids without a read; a discarded (wrong-cutoff) override re-resolves once instead. */
-export const isUnresolvedInconsistency=(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>!plan.viaOverride&&!plan.overrideDiscarded&&q.last_status==='inconsistent'&&now>=reviewDeadline(q);
+/** A row whose open incident is past its review deadline with no usable override voids without a read (whatever the last
+ *  attempt status, R3-01); a discarded (wrong-cutoff) override re-resolves once instead. */
+export const isUnresolvedInconsistency=(q:QueueRow,now:string,plan:Pick<SettlePlan,'viaOverride'|'overrideDiscarded'>)=>!plan.viaOverride&&!plan.overrideDiscarded&&incidentOf(q)!==null&&now>=reviewDeadline(q);
+/** R3-01: a defer / error patch carries the open incident unchanged, and its backoff never passes the incident's review
+ *  deadline while that deadline is still ahead (so the void happens at the original deadline). */
+function carryIncident(q:QueueRow,patch:QueuePatch,now:string):QueuePatch{
+ const inc=incidentOf(q);
+ if(!inc)return patch;
+ const deadline=reviewDeadline(q);
+ const next=Date.parse(deadline)>Date.parse(now)&&Date.parse(patch.next_attempt_at)>Date.parse(deadline)?deadline:patch.next_attempt_at;
+ return {...patch,last_detail:{...patch.last_detail,incident:inc},next_attempt_at:next};
+}
 
 /** The §7.2 table as a pure function; result=null when the resolver was not called (cutoff_vintage before settle_by, or
- *  the unresolved-inconsistency row). */
+ *  the unresolved-inconsistency row). Every defer patch carries the open incident forward (R3-01). */
 export function decide(x:DecideInput):Decision{
+ const d=decideAttempt(x);
+ return d.action==='defer'?{...d,patch:carryIncident(x.queue,d.patch,x.now)}:d;
+}
+function decideAttempt(x:DecideInput):Decision{
  const {judgment:j,queue:q,result:r,now}=x,settleBy=q.settle_by;
+ const open=incidentOf(q);
  const meta={resolver:x.resolver.name,resolver_version:x.resolver.version};
  const voided=(reason:string,evidence:Record<string,unknown>):Decision=>({action:'append',row:{kind:'void',outcome:null,realized:null,evidence:{...evidence,observed_at:now},reason,...meta}});
  // P1-03: cutoff_vintage never settles (nor even resolves) before settle_by, whether or not an override is queued.
@@ -11869,7 +12074,7 @@ export function decide(x:DecideInput):Decision{
   return {action:'defer',summary:'pending',reason:'cutoff_vintage',patch:{last_status:'pending',last_detail:{reason:'cutoff_vintage',estimated_at:settleBy},next_attempt_at:settleBy,attempts_increment:0}};
  const plan={viaOverride:x.viaOverride,overrideDiscarded:x.overrideDiscarded===true};
  if(r===null||isUnresolvedInconsistency(q,now,plan))
-  return voided('unresolved_inconsistency',{reason_code:q.last_detail.reason_code??null,quarantine_id:q.last_detail.quarantine_id??null,settle_by:settleBy});
+  return voided('unresolved_inconsistency',{reason_code:open?.reason_code??null,quarantine_id:open?.quarantine_id??null,settle_by:settleBy});
  if(r.status==='resolved'){
   if(r.label_available_at>settleBy)return voided('no_data:late',{label_available_at:r.label_available_at,settle_by:settleBy});
   // P1-07: the label must also be available by the observation cutoff (now for first_observed, settle_by for
@@ -11895,14 +12100,16 @@ export function decide(x:DecideInput):Decision{
  }
  // A re-resolution after a discarded (wrong-cutoff) override that is inconsistent again past settle_by gets no new review window.
  if(x.overrideDiscarded===true&&now>=reviewDeadline(q))
-  return voided('unresolved_inconsistency',{reason_code:r.reason_code,quarantine_id:q.last_detail.quarantine_id??null,settle_by:settleBy,override_discarded:true});
+  return voided('unresolved_inconsistency',{reason_code:r.reason_code,quarantine_id:open?.quarantine_id??null,settle_by:settleBy,override_discarded:true});
  // cutoff in the payload and last_detail: an acceptance is bound to the cutoff this evidence was resolved at (P1-03).
- // Q1-01: a repeat inside the unresolved incident keeps the first quarantined_at, so the deadline never moves; the
- // backoff is min(deadline, now + 7 d) — exactly the deadline at the latest.
- const quarantinedAt=q.last_status==='inconsistent'&&typeof q.last_detail.quarantined_at==='string'?q.last_detail.quarantined_at:now;
- const deadline=reviewDeadline({...q,last_detail:{...q.last_detail,quarantined_at:quarantinedAt}});
+ // Q1-01 / R3-01: a repeat while the incident is open (whatever the last attempt status) keeps its first quarantined_at, so
+ // the deadline never moves; the backoff is min(deadline, now + 7 d) — exactly the deadline at the latest.
+ // quarantine_settlement adds quarantine_id and re-checks the kept quarantined_at under the row lock.
+ const quarantinedAt=open?open.quarantined_at:now;
+ const deadline=reviewDeadline({...q,last_detail:{incident:{quarantined_at:quarantinedAt}}});
+ const attempt={reason_code:r.reason_code,evidence_hash:r.evidence_hash,cutoff:x.cutoff};
  return {action:'quarantine',reasonCode:r.reason_code,payload:{...r.detail,evidence:r.evidence,evidence_hash:r.evidence_hash,judgment_id:j.judgment_id,cutoff:x.cutoff},
-  patch:{last_status:'inconsistent',last_detail:{reason_code:r.reason_code,evidence_hash:r.evidence_hash,cutoff:x.cutoff,quarantined_at:quarantinedAt},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:deadline}),attempts_increment:0}};
+  patch:{last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at:quarantinedAt}},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:deadline}),attempts_increment:0}};
 }
 
 export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
@@ -11916,8 +12123,9 @@ async function failed(ctx:SettleContext,q:QueueRow,code:string,message:string):P
  const error:BatchError={code,key:q.judgment_id,message};
  if(ctx.preview)return {item:item(q.judgment_id,'failed',code),counter:null,summary:null,errors:[error]};
  try{
-  await ctx.deps.db.releaseLease(q.judgment_id,q.lease_token!,{last_status:'error',last_detail:{code,message},
-   next_attempt_at:backoff('error',{now:ctx.now,attempts:q.attempts+1,settleBy:q.settle_by}),attempts_increment:1});
+  // R3-01: an error attempt keeps the open incident (and its review deadline) unchanged.
+  await ctx.deps.db.releaseLease(q.judgment_id,q.lease_token!,carryIncident(q,{last_status:'error',last_detail:{code,message},
+   next_attempt_at:backoff('error',{now:ctx.now,attempts:q.attempts+1,settleBy:q.settle_by}),attempts_increment:1},ctx.now));
  }catch(e){if(!isLeaseLost(e))throw e;}
  return {item:item(q.judgment_id,'failed',code),counter:'failed',summary:null,errors:[error]};
 }
@@ -12092,7 +12300,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
 - [ ] **Step 8: 运行，确认通过**
 
 Run: `npm test -- src/lib/judgments/settle.test.ts src/lib/judgments/compensate.test.ts`
-Expected: PASS（`settle.test.ts` 29 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at` 并清空租约、不改 `last_status / last_detail`（规格 §5.6，计划审计 P1-04）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
+Expected: PASS（`settle.test.ts` 30 项、`compensate.test.ts` 7 项）。override 用例依赖 Task 4 的 `applyQuarantineOverride` 只写 `override / next_attempt_at` 并清空租约、不改 `last_status / last_detail`（规格 §5.6，计划审计 P1-04）；若内存实现改了它们，按规格修 Task 4 的内存实现，不改本用例。
 
 - [ ] **Step 9: 类型检查与 lint**
 
@@ -12868,7 +13076,8 @@ describe('resolveJudgmentsItem',()=>{
   const {batchId}=await startBatch(t,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:SHA});
   const {insert,queue}=priceJudgment({baseDate:'2026-01-12',registeredClose:107,batchId});await mdb.registerJudgment(insert,queue);
   const id=insert.judgment_id;
-  const patch=(hash:string,cutoff:string)=>({last_status:'inconsistent' as const,last_detail:{reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff,quarantined_at:cutoff},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0 as const});
+  const patch=(hash:string,cutoff:string)=>{const attempt={reason_code:'settlement_basis_mismatch',evidence_hash:hash,cutoff};
+   return {last_status:'inconsistent' as const,last_detail:{...attempt,incident:{...attempt,quarantined_at:cutoff}},next_attempt_at:'2000-01-01T00:00:00.000Z',attempts_increment:0 as const};};
   const lease=async()=>(await mdb.claimDue(10,600)).find(q=>q.judgment_id===id)!.lease_token!;
   const first=await mdb.quarantineSettlement(id,await lease(),'settlement_basis_mismatch',{evidence:EVIDENCE,evidence_hash:H,cutoff:CUTOFF,judgment_id:id},patch(H,CUTOFF),batchId);
   const read=(await t.select('dq_quarantine',{id:first.quarantine_id!},{limit:1}))[0];          // the route loads the item: (H, CUTOFF)
@@ -13526,14 +13735,14 @@ describe.skipIf(!enabled)('F4 settlement core on real PostgreSQL',()=>{
   const [item]=await tables.select('dq_quarantine',{dataset:'judgments',natural_key:id},{limit:1});
   expect(item).toMatchObject({table_name:'judgment_settlements',reason_code:'settlement_basis_mismatch',status:'open',batch_id:r.batchId});
   expect((item.payload as {evidence_hash:string}).evidence_hash).toMatch(/^[0-9a-f]{64}$/);
-  expect(await db.queueRow(id)).toMatchObject({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',quarantine_id:item.id}});
+  expect(await db.queueRow(id)).toMatchObject({last_status:'inconsistent',last_detail:{reason_code:'settlement_basis_mismatch',incident:{quarantine_id:item.id,reason_code:'settlement_basis_mismatch'}}});
   // Q1-02: item and queue were published by ONE quarantine_settlement transaction, so they name the same evidence
   const p0=item.payload as {evidence_hash:string;cutoff:string};
-  expect((await db.queueRow(id))!.last_detail).toMatchObject({evidence_hash:p0.evidence_hash,cutoff:p0.cutoff});
+  expect((await db.queueRow(id))!.last_detail).toMatchObject({evidence_hash:p0.evidence_hash,cutoff:p0.cutoff,incident:{evidence_hash:p0.evidence_hash,cutoff:p0.cutoff}});
   await settle();
   expect(await history(id)).toEqual([]);   // inside the 7-day review window (REVIEW_WINDOW_DAYS): not voided yet
   // Simulate the review window elapsing (owner connection; the table has no client write grants).
-  await pool.query(`update public.judgment_settle_queue set next_attempt_at=now(), last_detail=last_detail||jsonb_build_object('quarantined_at',to_char((now()-interval '8 days') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) where judgment_id=$1`,[id]);
+  await pool.query(`update public.judgment_settle_queue set next_attempt_at=now(), last_detail=jsonb_set(last_detail,'{incident,quarantined_at}',to_jsonb(to_char((now()-interval '8 days') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))) where judgment_id=$1`,[id]);
   await settle();
   expect(await history(id)).toEqual([[1,'void','unresolved_inconsistency']]);
   expect((await tables.select('dq_quarantine',{id:item.id as string},{limit:1}))[0].status).toBe('open');
@@ -14996,7 +15205,10 @@ describe('runCalibrate',()=>{
   let now=T0,failing=0;
   // every page upload of the 'all' unit burns 30 s of the 55 s budget and then fails (its generation stays open)
   const store:CohortStore={put:async(path,bytes,o)=>{if(path.includes('.all/')){failing++;now+=30_000;throw new Error('storage down');}return inner.put(path,bytes,o);},get:p=>inner.get(p),remove:p=>inner.remove(p)};
-  const run=()=>{now=T0;return runCalibrate(deps(f.db,store,{methods:[{id:m.methodology_id,version:'v1'}],deadline:new Date(T0+55_000),now:()=>new Date(now)}));};
+  // Plan audit R3-02: ONE uuid sequence for this fixture across all runs (deps() would restart its own counter each run, so
+  // run 2's market unit would draw the generation uuid the failed 'all' unit still holds → generation_reused).
+  let u=0;const uuid=()=>`cccccccc-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`;
+  const run=()=>{now=T0;return runCalibrate(deps(f.db,store,{methods:[{id:m.methodology_id,version:'v1'}],deadline:new Date(T0+55_000),now:()=>new Date(now),uuid}));};
   const [all,market]=unitsOf(m).map(u=>u.job);
   const r1=await run();
   expect(r1.units.map(u=>[u.scope.scope_type,u.outcome])).toEqual([['all','failed'],['market','paused']]);   // the failure spent the budget
@@ -22415,7 +22627,7 @@ Expected: 第一行 ≥ 21（每个任务至少一个提交）；没有任何 `M
 | `judgment_methodology_events` | 全部行 | 只读；只经 `sync_methodology` 追加 | 方法状态事件史（`as_known` 查询用） |
 | `judgments` | 仅 `publishable` 方法的行 | 只读；只经 `register_judgment` | 只追加；没有状态列 |
 | `judgment_settlements` | 仅 `publishable` 方法的行 | 只读；只经 `append_settlement` | 只追加；`settlement_sequence` 触发器管转移 |
-| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / quarantine_settlement / apply_quarantine_override / reject_quarantined_settlement` | 可变调度状态（不是证据）；`last_detail.quarantined_at` = 未解决不一致事件的第一次隔离时刻 |
+| `judgment_settle_queue` | 无 | 只读；只经 `register_judgment / claim_due_judgments / release_lease / append_settlement / quarantine_settlement / apply_quarantine_override / reject_quarantined_settlement` | 可变调度状态（不是证据）；`last_detail.incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}` = 未解决的隔离事件（`quarantined_at` 为第一次隔离时刻；过渡状态 `error / pending / unavailable` 原样保留，终态结算 / 拒绝 / `reopened` 清除） |
 | `judgment_calibrations` | 仅 `publishable` 方法的行 | 只读；只经 `insert_calibration` | 只追加；`fingerprint` 唯一 |
 | `judgment_calibration_validity` | 全部行 | 只读；`append_settlement`（撤回 / 重开 +1）、`sync_methodology`（首次 = 1） | 校准失效修订号 |
 | `judgment_job_state` | 无 | 只读；只经 `set_job_state`（乐观锁）；`cohort:<generation>` 标记只经 `freeze_calibration_cohort` 写、`clear_calibration_generation` 删 | 补偿 marker、校准续跑状态、校准轮次游标 `calibrate_round = {round, outcomes}`、冻结代际认领标记 `cohort:<generation> = {frozen_at, n, methodology, version, window}` |
@@ -22845,6 +23057,13 @@ git commit -m "docs(judgments): runbook, spec §19 implementation record, lock t
 - Q1-05 空代际也不可复用：`freeze_calibration_cohort` 先 `insert … on conflict do nothing` 认领 `judgment_job_state['cohort:<generation>'] = {frozen_at, n, methodology, version, window}`，认领失败返回 `{status:'already_frozen', frozen_at, n}` 且不插成员；`clear_calibration_generation` 同删标记；契约返回 `{status:'frozen'|'already_frozen',frozen_at,n}`（两份）、三实现、Task 16 假库与 `stepUnit`（`already_frozen` → `CalibrateError('generation_reused')`，不清别人的代际）；用例：空代际复用、两连接并发冻结同一代际（后到者等待后 `already_frozen`、成员只插一次）、清空后可再冻结；运行手册孤儿代际查询改按标记；规格 §5.6 两行 → 改骨架、1、3、4、16、22、规格
 - Q1-06 文档与清单单一来源：Task 3 新建 `src/lib/judgments/rpc-inventory.ts`（`PUBLIC_RPCS / SERVICE_RPCS / INTERNAL_FUNCTIONS` 名字 → 签名），Task 3 权限用例的 READS / WRITES / INTERNAL / SIG 由它推导，Task 4 supabase 桩用例断言 admin 只调服务 RPC、anon 只调公共 RPC，Task 22 新建 `rpc-inventory.test.ts` 断言运行手册 §1（按组）与 §8 回滚列全；运行手册 §1 改为完整清单与返回状态契约（`apply_quarantine_override` / `reject_quarantined_settlement` / `quarantine_settlement` / `freeze_calibration_cohort` 返回状态、不抛），§8 回滚补全部函数与第九张表（先删 `judgment_calibration_cohort_members`），桶路径改 `cohorts/<cohort_sha256>.json`；附录 Part A / Part C 的 `item_not_open` 抛错说法改为返回状态 → 改骨架文件表、3、4、22、附录
 - 已核对：skeleton 与 Task 1 `types.ts` 两块逐字一致（脚本比对）；全部 ```ts 块语法解析与改前同一组既有片段告警、无新增；`release_lease` 仍只给延期 / 错误路径；`quarantine()` 只剩 Task 10 登记冲突与测试夹具使用
+
+### 计划审计第三轮修复
+
+2026-11-06，按 `docs/audits/2026-11-06-judgment-framework-plan/03-codex-plan-round3.md`；一行一条：ID → 修复 → 改动的任务。
+- R3-01 未解决隔离事件不随过渡状态丢失：事件存 `last_detail.incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}`，只由 `quarantine_settlement` 写（本次的 id / 原因 / 证据 / 截止 + 已有事件的 `quarantined_at`，不再看 `last_status`）；`release_lease` 从不写它（锁内并入旧事件、丢弃补丁里的 `incident`），内存实现同；`judgment_append_settlement_internal` 终态写入删除它（含拒绝的 `void`），`reopened` 置 `{}`；`apply_quarantine_override / reject_quarantined_settlement` 以事件存在 + `incident.evidence_hash / cutoff` 判 `stale`、不看 `last_status`（SQL 与内存）；`settle.ts` 新增导出 `QueueIncident / incidentOf`，`decide()` 的全部 `defer` 补丁与 `failed()` 的 `error` 补丁经 `carryIncident` 带上事件且过渡退避不越过仍在将来的复核截止，`planOf` 匹配、`reviewDeadline`、`isUnresolvedInconsistency`（事件存在且 `now >= deadline`）、作废证据都读 `incident`；applied override 不清事件（匹配靠它），由其终态结算清；用例：SQL / 契约"`error → pending → unavailable` 保留事件、补丁事件被丢弃、同一不一致保留 `quarantined_at`、终态 / 拒绝清除"，`settle.test` "不一致 → error → pending → unavailable → 同一不一致保留原截止、到原截止作废、`error` 退避夹紧到截止"，接受用例改"过渡状态后仍可接受 / 无事件 → `stale`"，夹具与竞争用例改走 `quarantine_settlement`（pg 双池用例删 `quarantine()` import），离线集成改 `jsonb_set` 事件时刻；契约 JSDoc 四处（两份逐字一致，Task 4 同步已提交的 `types.ts` 注释，不改类型）；运行手册 §1；规格 §5.4 一句 → 改骨架、1（注释）、3、4、12、14、22、规格
+- R3-02 饿死用例的 uuid 序列不随 `deps()` 重置：该用例在夹具内建一条 `uuid` 序列、每次 `run()` 传入，第二次运行的 market 单元不会抽到失败的 `all` 单元仍持有的代际 uuid；显式复用用例保留固定 uuid → 改 16
+- 已核对：skeleton 与 Task 1 `types.ts` 两块逐字一致；全文再无从顶层 `last_detail.quarantined_at / quarantine_id` 或 `last_status === 'inconsistent'` 推断事件的读点（Task 21 admin 页面不读这些字段）；`settle.test.ts` 计数改 30、Task 3 改 24（合计 31）、Task 4 契约改 19
 
 
 ---
