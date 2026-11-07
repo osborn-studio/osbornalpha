@@ -30,7 +30,9 @@ import {endOfUtcDay} from './time';
 export type ResolverLookup=(name:ResolverName)=>Pick<Resolver,'name'|'version'|'validateParams'|'labelAvailableAt'>|null;
 export interface RegisterActor{actor:'cron'|'script'|'admin'|'test';dryRun?:boolean}
 export interface RegisterInput{binding?:Record<string,string>;methodology:Methodology;subject:Subject;asOf:string;producerRef:ProducerRef;inputs:Input[];outcome:Active<Claim>|Abstained;condition:Condition|null;target:Target|null;codeVersion:string;batchId:string}
-export interface RegisterDeps{db:JudgmentsDb;inputsDb:JudgmentInputsDb;tables:TableClient;resolverOf:ResolverLookup;build?:BuildOptions}
+/** signal (plan audit T2-01): cooperative cancellation — checked immediately before the register RPC; an abort there throws RegisterDeferred and nothing is written. */
+export interface RegisterDeps{db:JudgmentsDb;inputsDb:JudgmentInputsDb;tables:TableClient;resolverOf:ResolverLookup;build?:BuildOptions;signal?:AbortSignal}
+export class RegisterDeferred extends Error{constructor(){super('aborted before the register RPC; nothing written');this.name='RegisterDeferred';}}
 export interface RegisterResult{judgment_id:string;duplicate:boolean;abstained:boolean;dry_run:boolean;row:JudgmentInsert;registered_at:string|null;retrospective:boolean|null;quarantined:boolean}
 export const PAYLOAD_FIELDS=['judgment_id','subject_type','subject_key','judgment_type','methodology_id','methodology_version','kind','producer_kind','producer_ref','producer_nonce','as_of','inputs','inputs_hash','abstained','abstain_reason','claim','condition','horizon','target','label_policy','settle_after','settle_by'] as const satisfies readonly (keyof JudgmentRow)[];
 export function normalizedPayload(row:Partial<JudgmentRow>|JudgmentInsert):Record<string,unknown>{
@@ -140,6 +142,7 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
  const existing=await db.getJudgment(judgment_id);
  if(existing)return settle(existing);
  if(dry)return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:true,row,registered_at:null,retrospective:null,quarantined:false};
+ if(deps.signal?.aborted)throw new RegisterDeferred();
  try{
   const r=await db.registerJudgment(row,row.abstained?null:{settle_after:row.settle_after!,settle_by:row.settle_by!,label_policy:row.label_policy!});
   return {judgment_id,duplicate:false,abstained:row.abstained,dry_run:false,row,registered_at:r.registered_at,retrospective:r.retrospective,quarantined:false};

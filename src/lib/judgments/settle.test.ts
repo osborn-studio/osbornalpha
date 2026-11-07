@@ -525,6 +525,15 @@ describe('settleNow is lease-fenced (T-01)',()=>{
   await expect(settleNow(h.deps(stubResolver(async()=>{throw new Error('provider down');})),c,{actor:`admin:${ADMIN}`,requestKey:'adm:err-0001'})).rejects.toThrow('provider down');
   expect(await h.queue(c)).toMatchObject({last_status:'error',attempts:1,leased_until:null,lease_token:null});
  });
+ it('T2-04: startBatch (or anything else) failing AFTER a successful claim still releases the owned lease',async()=>{
+  const h=await harness();const id=await h.register();
+  const tables={...h.tables,insert:async(t:string,r:Record<string,unknown>)=>{if(t==='ingest_batches')throw new Error('batch store down');return h.tables.insert(t,r);}} as typeof h.tables;
+  await expect(settleNow(h.deps(stubResolver(scripted(resolved())),{tables}),id,{actor:`admin:${ADMIN}`,requestKey:'adm:t204-001'})).rejects.toThrow('batch store down');
+  expect(await h.queue(id)).toMatchObject({leased_until:null,lease_token:null,closed_at:null});
+  const h2=await harness();const id2=await h2.register();
+  await expect(settleNow(h2.deps(stubResolver(scripted(resolved())),{db:withOverrides<JudgmentsDb>(h2.db,{serverTime:async()=>{throw new Error('clock down');}})}),id2,{actor:`admin:${ADMIN}`,requestKey:'adm:t204-002'})).rejects.toThrow('clock down');
+  expect(await h2.queue(id2)).toMatchObject({leased_until:null,lease_token:null});
+ });
  it('a settlement_sequence from a settled queue is a duplicate after re-reading the queue; with the queue still open it is released and rethrown (review minor 1)',async()=>{
   const h=await harness();const id=await h.register();
   const seqErr=()=>new JudgmentError('settlement_sequence','settlement_sequence: settled -> settled by admin');

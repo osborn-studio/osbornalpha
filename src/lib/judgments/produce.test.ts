@@ -86,13 +86,23 @@ describe('produce (spec §6.4)',()=>{
   expect(r.errors[0]).toMatchObject({code:'idempotency_conflict',key:'US'});
   expect(tables.rows('dq_quarantine')).toHaveLength(1);
  });
- it('an aborted signal stops before the next item: deadline_hit, the rest skipped and not fetched',async()=>{
-  const {deps}=await setup();const ac=new AbortController();
-  const slow:Methodology<CategoricalClaim>={...fixtureRegimeMethod,gather:async(w,db)=>{const g=await fixtureRegimeMethod.gather(w,db);ac.abort();return g;}};
+ it('T2-01: an abort fired during gather means NO registration for that item (deferred, info deadline_hit), the rest are skipped, and the counts stay consistent with the batch',async()=>{
+  let spy!:ReturnType<typeof spyRegister>;const {deps,db}=await setup(t=>(spy=spyRegister(withSubjects(memoryJudgmentsDb({tables:t})))).db);const ac=new AbortController();
+  const slow:Methodology<CategoricalClaim>={...fixtureRegimeMethod,gather:async(w,d)=>{const g=await fixtureRegimeMethod.gather(w,d);ac.abort();return g;}};
   const r=await produce(slow,[item('s-a'),item('s-b'),item('s-none')],{...deps,signal:ac.signal});
+  expect(spy.calls()).toBe(0);
+  expect(r.counts).toMatchObject({fetched:1,inserted:0,failed:0,deferred:1});
+  expect(r.items.map(i=>i.status)).toEqual(['deferred','skipped','skipped']);
+  expect(r.errors).toEqual([{code:'deadline_hit',key:'US',message:'aborted before the register RPC; nothing written'},{code:'deadline_hit',message:'2 work items not processed'}]);
+  expect(batchStatusFromCounts(r.counts,r.errors)).toBe('success');
+  expect(await db.getJudgment(r.items[0].judgment_id??'00000000-0000-4000-8000-000000000000')).toBeNull();
+ });
+ it('an aborted signal between items stops before the next one: the finished item stays, the rest are skipped and not fetched',async()=>{
+  const {deps}=await setup();const ac=new AbortController();
+  const r=await produce(fixtureRegimeMethod,[item('s-a'),item('s-b')],{...deps,signal:ac.signal,db:new Proxy(deps.db,{get:(x,k,rc)=>k==='registerJudgment'?async(...a:unknown[])=>{const v=await (x.registerJudgment as (...b:unknown[])=>Promise<unknown>)(...a);ac.abort();return v;}:Reflect.get(x,k,rc)})});
   expect(r.counts).toMatchObject({fetched:1,inserted:1});
-  expect(r.items.map(i=>i.status)).toEqual(['inserted','skipped','skipped']);
-  expect(r.errors).toEqual([{code:'deadline_hit',message:'2 work items not processed'}]);
+  expect(r.items.map(i=>i.status)).toEqual(['inserted','skipped']);
+  expect(r.errors).toEqual([{code:'deadline_hit',message:'1 work items not processed'}]);
  });
  it('observedAt: produce sets it once per item from db.serverTime() (overriding a caller value); bindingInputs uses it',async()=>{
   const seen:string[]=[];const NOW='2026-11-06T01:02:03.004Z';

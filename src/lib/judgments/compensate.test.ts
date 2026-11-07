@@ -165,19 +165,37 @@ describe('compensateMacro hardening (T-03, T-04, T-07)',()=>{
   expect(r).toMatchObject({status:'done',produced:2});expect(r.errors.map(e=>e.code)).not.toContain('compensation_skipped');
   const st=(await s.mem.jobState(KEY))!.state;expect(st.failing).toBeUndefined();expect(st.skipped).toBeUndefined();
  });
- it('T-03: a hung snapshot read or produce cannot hold the scan past the abort signal; an abort is not a produce failure (no stall count)',async()=>{
+ it('T2-01/T2-03: a hung snapshot read stops at the abort; produce is NOT raced — it is awaited and cooperates through deps.signal, and its deferred result is a stop, not a stall count',async()=>{
   const s=setup([snap(1)]);
   const ctl=new AbortController();
   const hung=compensateMacro(s.deps({signal:ctl.signal,inputsDb:stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:()=>new Promise(()=>undefined)}})}));
   setTimeout(()=>ctl.abort(),5);
   expect(await hung).toMatchObject({status:'stopped',reason:'deadline'});
-  const ctl2=new AbortController();
-  s.produce.mockImplementationOnce(()=>new Promise(()=>undefined));
+  const ctl2=new AbortController();let got:AbortSignal|undefined;let settled=false;
+  s.produce.mockImplementationOnce(async(_m,_w,d)=>{got=d.signal;await new Promise<void>(r=>d.signal!.addEventListener('abort',()=>r(),{once:true}));await new Promise(r=>setTimeout(r,20));settled=true;
+   return {counts:{...emptyCounts(),fetched:1,deferred:1},errors:[{code:'deadline_hit',key:'US'}]};});
   const p=compensateMacro(s.deps({signal:ctl2.signal}));
   setTimeout(()=>ctl2.abort(),5);
   const r=await p;
-  expect(r).toMatchObject({status:'stopped',reason:'deadline',stoppedAt:sid(1)});
+  expect(settled).toBe(true);                                   // the in-flight produce item was awaited to its end
+  expect(got).toBeDefined();expect(got!.aborted).toBe(true);
+  expect(r).toMatchObject({status:'stopped',reason:'deadline',stoppedAt:sid(1),produced:0});
   expect(r.errors.map(e=>e.code)).toContain('deadline_hit');
   expect((await s.mem.jobState(KEY))?.state.failing).toBeUndefined();
+  expect(s.tables.rows('ingest_batches')[0]).toMatchObject({status:'success'});   // the produce batch is finished with its counts
+ });
+ it('T2-03: compensation has its OWN budget signal — an un-aborted parent still stops at deadlineAt, for snapshotsSince, judgmentsBySnapshot and produce',async()=>{
+  const soon=()=>Date.now()+30;
+  const a=setup([snap(1)]);
+  const t0=Date.now();
+  const r1=await compensateMacro(a.deps({deadlineAt:soon(),inputsDb:stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:()=>new Promise(()=>undefined)}})}));
+  expect(r1).toMatchObject({status:'stopped',reason:'deadline'});expect(Date.now()-t0).toBeLessThan(2000);
+  const b=setup([snap(1)]);
+  const hungDb=withOverrides<JudgmentsDb>(b.db,{judgmentsBySnapshot:()=>new Promise<string[]>(()=>undefined)});
+  expect(await compensateMacro(b.deps({db:hungDb,deadlineAt:soon()}))).toMatchObject({status:'stopped',reason:'deadline',stoppedAt:sid(1)});
+  const c=setup([snap(1)]);let seen:AbortSignal|undefined;
+  c.produce.mockImplementationOnce(async(_m,_w,d)=>{seen=d.signal;await new Promise<void>(r=>d.signal!.addEventListener('abort',()=>r(),{once:true}));return {counts:{...emptyCounts(),fetched:1,deferred:1},errors:[]};});
+  const r3=await compensateMacro(c.deps({deadlineAt:soon()}));
+  expect(seen!.aborted).toBe(true);expect(r3).toMatchObject({status:'stopped',reason:'deadline'});
  });
 });

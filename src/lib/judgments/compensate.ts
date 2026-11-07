@@ -9,8 +9,9 @@
 // does not sort strictly after the stored one by (created_at, snapshot_id) (marker_regression, non-info). A produce failure
 // stops the scan WITHOUT advancing and counts in job state `failing` {snapshot_id, attempts}; on the 3rd consecutive failing
 // run the snapshot is recorded in `skipped` [{snapshot_id, created_at, reason, attempts}], the marker moves past it and the
-// scan goes on, reporting a NON-info compensation_skipped (plan decision T-07). An abort is never a produce failure. Reads and
-// produce are raced against the run's AbortSignal (T-03). The macro module not landed (MacroUnavailable) → skipped with info
+// scan goes on, reporting a NON-info compensation_skipped (plan decision T-07). An abort is never a produce failure. Reads are
+// raced against a signal that combines the run's with the scan's OWN budget (T2-03); produce is NOT raced (T2-01): a mutating item is
+// awaited and cancels cooperatively through deps.signal (checked right before its register RPC), a deferred result being a stop, not a failure. The macro module not landed (MacroUnavailable) → skipped with info
 // macro_unavailable; macro_regime@v1 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
 // (dataset judgments.produce.macro_regime); the settle receipt gets the scan's errors. Budget: deadlineAt (default start + 60 s).
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
@@ -55,8 +56,15 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
  const report:CompensationReport={status:'done',reason:null,scanned:0,produced:0,existing:0,skippedFailed:0,skippedStalled:0,stoppedAt:null,batchId:null,errors:[]};
  const m=deps.methodology!==undefined?deps.methodology:REGISTRY.find(x=>x.id===MACRO_METHOD.id&&x.version===MACRO_METHOD.version)??null;
  if(!m)return {...report,status:'skipped',reason:'methodology_missing'};
+ const mm:Methodology=m;
  const key=jobKey('produce',m.id,m.version);
  const clock=deps.clock??Date.now,deadlineAt=deps.deadlineAt??clock()+COMPENSATION_BUDGET_MS;
+ // T2-03: the scan's own budget signal, combined with the parent's, applies to every wait below (reads) and is handed to produce.
+ const own=new AbortController();
+ const timer=setTimeout(()=>own.abort(new Error('compensation_budget')),Math.max(0,deadlineAt-clock()));
+ const signal=AbortSignal.any([deps.signal,own.signal]);
+ try{return await scan();}finally{clearTimeout(timer);}
+ async function scan():Promise<CompensationReport>{
  const stored=await deps.db.jobState(key);
  let doc:Record<string,unknown>=stored?stored.state:{};
  let rev:string|null=stored?stored.updated_at:null;
@@ -64,7 +72,7 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
  const stop=(reason:string,at:string)=>{report.status='stopped';report.reason=reason;report.stoppedAt=at;};
  const deadline=(at:string)=>{stop('deadline',at);report.errors.push({code:'deadline_hit',key:at,message:'compensation scan stopped at its budget'});};
  let snaps:MacroSnapshotRow[];
- try{snaps=await raceAbort(deps.inputsDb.macro.snapshotsSince(marker,SNAPSHOT_PAGE),deps.signal,'snapshotsSince');}
+ try{snaps=await raceAbort(deps.inputsDb.macro.snapshotsSince(marker,SNAPSHOT_PAGE),signal,'snapshotsSince');}
  catch(e){
   if(e instanceof MacroUnavailable)return {...report,status:'skipped',reason:'macro_unavailable',errors:[{code:'macro_unavailable',message:'macro read API unavailable; compensation scan skipped'}]};
   if(e instanceof AbortedError){deadline(marker?.snapshot_id??'start');return report;}
@@ -83,7 +91,7 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
  const counts=emptyCounts(),produceErrors:BatchError[]=[];
  try{
   for(const s of snaps){
-   if(deps.signal.aborted||clock()>=deadlineAt){deadline(s.snapshot_id);break;}
+   if(signal.aborted||clock()>=deadlineAt){deadline(s.snapshot_id);break;}
    if(!afterMarker(s,marker)){
     stop('marker_regression',s.snapshot_id);
     report.errors.push({code:'marker_regression',key:s.snapshot_id,message:`snapshot ${s.snapshot_id} (${s.created_at}) does not sort after the marker ${marker?.snapshot_id} (${marker?.created_at})`});
@@ -93,24 +101,23 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
    let finished=true;
    let present:string[]|null=[];
    if(s.status!=='failed'){
-    present=await raceAbort(deps.db.judgmentsBySnapshot(s.snapshot_id),deps.signal,'judgmentsBySnapshot').catch(e=>{if(e instanceof AbortedError)return null;throw e;});
+    present=await raceAbort(deps.db.judgmentsBySnapshot(s.snapshot_id),signal,'judgmentsBySnapshot').catch(e=>{if(e instanceof AbortedError)return null;throw e;});
     if(present===null){report.scanned--;deadline(s.snapshot_id);break;}
    }
    if(s.status==='failed')report.skippedFailed++;
    else if(present.length>0)report.existing++;
    else{
-    if(!report.batchId)report.batchId=(await startBatch(deps.tables,{producer:'ts-judgments',dataset:`judgments.produce.${m.id}`,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy})).batchId;
+    if(!report.batchId)report.batchId=(await startBatch(deps.tables,{producer:'ts-judgments',dataset:`judgments.produce.${mm.id}`,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy})).batchId;
     let ok=false,aborted=false;
     try{
-     const r=await raceAbort(run(m,[{subject:{type:'macro_region',key:s.region},asOf:s.as_of,binding:{snapshot_id:s.snapshot_id}}],{db:deps.db,inputsDb:deps.inputsDb,tables:deps.tables,resolverOf:deps.resolverOf??defaultResolverOf,batchId:report.batchId,codeVersion:deps.codeVersion,signal:deps.signal,actor:'cron'}),deps.signal,'produce');
-     for(const k of Object.keys(counts) as (keyof BatchCounts)[])counts[k]+=r.counts[k]??0;
+     // T2-01: awaited, never raced — the in-flight item finishes (or defers cooperatively on `signal`) and the batch counts stay true.
+     const r=await run(mm,[{subject:{type:'macro_region',key:s.region},asOf:s.as_of,binding:{snapshot_id:s.snapshot_id}}],{db:deps.db,inputsDb:deps.inputsDb,tables:deps.tables,resolverOf:deps.resolverOf??defaultResolverOf,batchId:report.batchId,codeVersion:deps.codeVersion,signal,actor:'cron'});
+     for(const k of [...new Set([...Object.keys(counts),...Object.keys(r.counts)])] as (keyof BatchCounts)[])counts[k]=(counts[k]??0)+(r.counts[k]??0);
      produceErrors.push(...r.errors);
-     // D1: a duplicate is done too — an abstention whose binding snapshot could not be built has inputs = [] and is
-     // invisible to judgmentsBySnapshot, so every later scan re-produces it and gets `duplicate`; the marker advances.
-     ok=r.counts.failed===0&&r.counts.quarantined===0&&r.counts.inserted+r.counts.duplicates>0;
+     aborted=(r.counts.deferred??0)>0;
+     ok=!aborted&&r.counts.failed===0&&r.counts.quarantined===0&&r.counts.inserted+r.counts.duplicates>0;
     }catch(e){
-     if(e instanceof AbortedError)aborted=true;
-     else{counts.failed++;produceErrors.push({code:'produce_failed',key:s.snapshot_id,message:messageOf(e)});}
+     {counts.failed++;produceErrors.push({code:'produce_failed',key:s.snapshot_id,message:messageOf(e)});}
     }
     if(aborted){report.scanned--;deadline(s.snapshot_id);break;}
     if(!ok){
@@ -139,4 +146,5 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
   if(report.batchId)await finishBatch(deps.tables,report.batchId,{counts,errors:produceErrors});
  }
  return report;
+}
 }

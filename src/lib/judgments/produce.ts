@@ -7,18 +7,18 @@
 // caller's batch (dataset judgments.produce.<methodology_id>, plan conventions): fetched = items
 // attempted; inserted = new rows (abstentions included); duplicates; quarantined (idempotency_conflict);
 // failed (everything else); errors carry {code, key: subject_key, message incl. the binding} and one
-// informational abstained_summary {reason: count}. An aborted signal stops before the next item
+// informational abstained_summary {reason: count}. An aborted signal stops before the next item and is checked right before each register RPC (the item is then 'deferred', nothing written)
 // (deadline_hit, the rest 'skipped' and not counted as fetched). The caller starts / finishes the batch.
 import type {BatchCounts,BatchError} from '@/lib/dq/batches';
 import {emptyCounts} from '@/lib/dq/batches';
 import type {Abstained,Active,Claim,Condition,Input,Methodology,ProducerRef,Target,WorkItem} from './types';
 import {JudgmentError} from './errors';
 import {ABSTAIN_CODES,buildOrAbstain} from './inputs';
-import {IdempotencyConflict,registerJudgment} from './register';
+import {IdempotencyConflict,RegisterDeferred,registerJudgment} from './register';
 import type {RegisterActor,RegisterDeps} from './register';
 
 export interface ProduceDeps extends RegisterDeps{batchId:string;codeVersion:string;signal?:AbortSignal;dryRun?:boolean;producerRef?:ProducerRef;actor?:RegisterActor['actor']}
-export type ProduceItemStatus='inserted'|'duplicate'|'quarantined'|'failed'|'skipped'|'planned_insert'|'planned_abstain';
+export type ProduceItemStatus='inserted'|'duplicate'|'quarantined'|'failed'|'skipped'|'planned_insert'|'planned_abstain'|'deferred';
 export interface ProduceItemResult{key:string;as_of:string;binding:Record<string,string>|null;status:ProduceItemStatus;judgment_id:string|null;abstained:boolean;code:string|null}
 /** `planned` = dry-run items that would have been written (they are not in counts.inserted). */
 export type ProduceWork=Omit<WorkItem,'observedAt'>;
@@ -72,6 +72,12 @@ export async function produce(m:Methodology,work:readonly ProduceWork[],deps:Pro
    else{counts.inserted++;if(r.abstained&&r.row.abstain_reason!==null)abstained.set(r.row.abstain_reason,(abstained.get(r.row.abstain_reason)??0)+1);}
    items.push({key,as_of:w0.asOf,binding,status,judgment_id:r.judgment_id,abstained:r.abstained,code:null});
   }catch(err){
+   if(err instanceof RegisterDeferred){   // T2-01: aborted before the register RPC — nothing written, counted deferred (info deadline_hit)
+    counts.deferred=(counts.deferred??0)+1;
+    errors.push({code:'deadline_hit',key,message:err.message});
+    items.push({key,as_of:w0.asOf,binding,status:'deferred',judgment_id:null,abstained:false,code:'deadline_hit'});
+    continue;
+   }
    const code=err instanceof JudgmentError?err.code:'produce_error';
    const quarantined=err instanceof IdempotencyConflict&&err.quarantined;
    if(quarantined)counts.quarantined++;else counts.failed++;
