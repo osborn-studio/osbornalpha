@@ -18,3 +18,5 @@
 实施顺序（总纲）：计划二 → 计划三 → F3 → F4 → F6 → 行业 → 公司 → 外资研报；宏观工作台在 F4 后对齐。
 
 约定："已按 Codex 原方案实现，未复审"表示该稿把审计报告中带具体修法的条目逐字落实，但没有再跑一轮；写实施计划前各做一轮增量审计（提示词限定"新引入缺陷 + 终审结论"）。
+
+追加（2026-11-07）：宏观工作台 P3+P4（传导、历史、复盘、解读）`2026-11-07-macro-workbench-p3-p4-design.md` 第 3 稿；Codex 第二轮 "not ready"，N1–N14 已按 Codex 原方案实现、未复审（两轮上限），审计 `docs/audits/2026-11-07-macro-p3-p4/`；计划 `2026-11-07-macro-workbench-p3-p4.md`；画布 https://claude.ai/artifact/2s8t4QpQGAGCXWZNfQ2TUW；依赖 P1+P2 与 F4（WP-S6 接线）。
