@@ -83,6 +83,13 @@ describe('manifestBuilder',()=>{
  const unrate=obs('US_UNRATE','2026-09-30','4.1',{availableAt:'2026-10-05T12:00:00Z'});
  const lateUnrate=obs('US_UNRATE','2026-10-31','4.2',{availableAt:'2026-11-06T12:00:00Z'});
  const f=fixture({snapshots:[us],observations:[...cpi,unrate,lateUnrate,...monthly('US_DGS10','2026-07',['4.2','4.3','4.1'])]});
+ it('batched snapshot values freeze the same reads and inputs as single values',async()=>{
+  const ids=['US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY'];
+  const make=async(batch:boolean)=>{const b=manifestBuilder(memoryStrategyPort(f),us.created_at);await b.useSnapshots({US:us,CN:null});if(batch)await b.snapshotValues(ids,'node',['prev']);else for(const id of ids)await b.snapshotValue(id,'node',['prev']);return b.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'});};
+  const batched=await make(true),single=await make(false);
+  expect(batched.reads).toEqual(single.reads);expect(batched.inputs).toEqual(single.inputs);expect(manifestHash(batched)).toBe(manifestHash(single));
+  expect(readState(batched,'US_PPI_FD_YOY','node')).toBe('missing');
+ });
  it('takes snapshot rows first (source snapshot) and falls back to latestObservations asOf cutoff (source history)',async()=>{
   const b=manifestBuilder(memoryStrategyPort(f),us.created_at);
   await b.useSnapshots({US:us,CN:null});
@@ -119,6 +126,31 @@ describe('manifestBuilder',()=>{
   expect(readState(m,'US_DGS10','node')).toBe('truncated');expect(m.inputs).toEqual([]);
   const down=manifestBuilder(override(memoryStrategyPort(f),{latestObservations:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');
   await expect(down.snapshotValue('US_DGS10','node')).rejects.toThrow('connection reset');   // unavailable infrastructure is not incomplete evidence
+ });
+ it('uses the first returned row when latestObservations repeats a series',async()=>{
+  const base=memoryStrategyPort(f),first=obs('US_UNRATE','2026-09-30','1'),second=obs('US_UNRATE','2026-10-31','2');
+  const port=override(base,{latestObservations:async()=>[first,second]});
+  const b=manifestBuilder(port,us.created_at);
+  expect((await b.snapshotValues(['US_UNRATE'],'node')).get('US_UNRATE')?.observation_id).toBe(first.observation_id);
+  expect(inputsWithRole(b.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'}),inputRole('node','US_UNRATE','latest'))[0].observation_id).toBe(first.observation_id);
+ });
+ it('batched truncated fallback matches per-id reads and keeps other ids when one truncates',async()=>{
+  const base=memoryStrategyPort(f),ids=['US_UNRATE','US_DGS10','US_WTI'];
+  const run=async(specific=false)=>{
+   const port=override(base,{latestObservations:async(batch,o)=>{
+    if(batch.length>1||specific&&batch[0]==='US_DGS10')throw new Error('truncated');
+    return base.latestObservations(batch,o);
+   }});
+   const b=manifestBuilder(port,us.created_at);const values=await b.snapshotValues(ids,'node');
+   return {values,manifest:b.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'})};
+  };
+  const batched=await run(),single=manifestBuilder(base,us.created_at);
+  for(const id of ids)await single.snapshotValue(id,'node');
+  const expected=single.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(batched.manifest.reads).toEqual(expected.reads);expect(batched.manifest.inputs).toEqual(expected.inputs);
+  expect(manifestHash(batched.manifest)).toBe(manifestHash(expected));
+  const partial=await run(true);expect(readState(partial.manifest,'US_DGS10','node')).toBe('truncated');
+  expect(readState(partial.manifest,'US_UNRATE','node')).toBe('ok');expect(readState(partial.manifest,'US_WTI','node')).toBe('missing');
  });
  it('history: an ordinary port error propagates and records no read state',async()=>{
   const down=manifestBuilder(override(memoryStrategyPort(f),{seriesHistory:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');

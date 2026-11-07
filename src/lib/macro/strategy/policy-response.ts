@@ -16,6 +16,7 @@
 // the window N and the complete dimension definitions in params ({window, dims}); buildPolicyResponse reads both from the
 // manifest and nothing else (no caller override), so each N and each dimension set is its own manifest identity.
 // pct change_text is the exact ratio '<end>/<base>' (rounded once at display).
+// Event and dimension histories load concurrently.
 import {VERSIONS} from './contract';
 import {canonicalJson} from './hash';
 import type {Bilingual,Cell,EndpointRef,EventRow,ExclusionReason,ObsRef,PolicyResponseView,ResponseDim,StoredManifest,StrategyManifest,StrategyPolicyEvent} from './contract';
@@ -51,18 +52,20 @@ export function dimsParam(m:StrategyManifest):readonly ResponseDimDef[]{
  if(!Array.isArray(v)||v.some(d=>!d||typeof d!=='object'||typeof d.id!=='string'||(d.unit!=='pct'&&d.unit!=='bp')||!['series','spread','not_in_catalog'].includes(d.kind)))throw new Error('invalid_manifest_params:dims');
  return v as ResponseDimDef[];
 }
-export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;window:1|3|6;dims?:readonly ResponseDimDef[]}):Promise<StrategyManifest>{
+export async function buildPolicyResponseManifest(port:StrategyReadPort,o:{now:Date;codeVersion:string;window:1|3|6;dims?:readonly ResponseDimDef[];snapshots?:{US:import('./contract').SnapshotRecord|null;CN:import('./contract').SnapshotRecord|null}}):Promise<StrategyManifest>{
  const dims=o.dims??RESPONSE_DIMS_V1;
- const snapshots={US:await port.activeSnapshot('US'),CN:await port.activeSnapshot('CN')};
+ const pair=o.snapshots?null:await Promise.all([port.activeSnapshot('US'),port.activeSnapshot('CN')]);
+ const snapshots=o.snapshots??{US:pair![0],CN:pair![1]};
  const b=manifestBuilder(port,latestCutoff(snapshots,o.now));
  await b.useSnapshots(snapshots,{loadRows:false});
- const {events,gaps}=await readPolicyEvents(b);
  const done=new Set<string>();
+ const histories:Promise<unknown>[]=[];
  for(const d of dims)for(const id of dimSeries(d)){
   const def=b.def(id);
   if(!def||def.status!=='active'||done.has(id))continue;
-  done.add(id);await b.history(id,DIM_PURPOSE,'month_end');
+  done.add(id);histories.push(b.history(id,DIM_PURPOSE,'month_end'));
  }
+ const [{events,gaps}]=await Promise.all([readPolicyEvents(b),...histories]);
  return b.build({kind:'policy_response',params:{window:o.window,dims:canonicalJson(dims)},methodVersion:VERSIONS.response,codeVersion:o.codeVersion,extra:{events,gaps}});
 }
 
