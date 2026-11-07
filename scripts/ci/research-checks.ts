@@ -18,7 +18,7 @@ export const criticalSuites = [
  // F6 end
 ;
 // INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
-criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts');
+criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts', 'src/lib/industry/judgments-bridge.integration.test.ts');
 // INDUSTRY:END
 // MACRO
 criticalSuites.push('src/lib/macro/macro.integration.test.ts', 'src/lib/macro/read-api-asof.integration.test.ts');

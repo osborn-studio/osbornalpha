@@ -4,6 +4,7 @@
 // memoryJudgmentsDb (memory-judgments-db.ts, unit tests), pgJudgmentsDb (pg-judgments-db.ts, integration tests).
 import type {KlineSourceName,SourceKlineSeries} from '@/lib/data/kline/types';
 import type {FactRow,MetricRow,ReadFactsResult,FilingRow} from '@/lib/facts/types';
+import type {IndustryDb} from '@/lib/industry/types';
 
 // ── markets (spec §3.3 S06) ──
 export type FactsMarket='US'|'CN';
@@ -70,7 +71,7 @@ export interface MetricSnapshot extends MetricKey{value_text:string;unit:string;
 export interface MacroObservationSnapshot{series_id:string;period_end:string;value:number;unit:string;vintage_id:string;available_at:string}
 export interface MacroSnapshotSnapshot{snapshot_id:string;region:'US'|'CN';as_of:string;methodology_version:string;catalog_version:string;observation_ids:string[];primary_state:Regime|null;secondary_state:Regime|null;scores:Record<Regime,number>;norm:Record<Regime,number>;coverage:number;margin_pp:number|null;growth_axis:number|null;inflation_axis:number|null}
 export interface PriceBarSnapshot{ticker:string;market:PriceMarket;date:string;source:KlineSourceName;adjustment:Adjustment;open:number|null;high:number|null;low:number|null;close:number;volume:number|null;amount:number|null;fields_present:string[]}
-export const PUBLIC_TABLES=['issuer_industry_memberships','industry_classifications','macro_series'] as const;
+export const PUBLIC_TABLES=['issuer_industry_memberships','industry_classifications','macro_series','industry_metrics'] as const;
 export type PublicTable=typeof PUBLIC_TABLES[number];
 export type Input=
  |InputRef<'financial_fact',{fact_id:string},FactProjection>
@@ -203,6 +204,7 @@ export interface JudgmentInputsDb{
  deriveMetricsAsOf(issuer:string,market:FactsMarket,asOf:string,formulaVersion:string):Promise<DeriveAsOfResult>;
  macro:MacroReadApi;
  tableRows(table:PublicTable,naturalKey:string):Promise<Record<string,unknown>[]>;
+ industry?:Pick<IndustryDb,'metricRun'|'metricRowsOfRun'>;
  /** Public judgment lookup (anon; publishable only). */
  publicJudgment(id:string):Promise<JudgmentRow|null>;
  kline(req:KlineRangeRequest):Promise<SourceKlineSeries|KlineFailure>;
