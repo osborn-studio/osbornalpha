@@ -2,6 +2,8 @@
 
 Target: `e0b82b25d3f63cc45ac808aadc0de63541504e32`.
 
+Historical scope: the later `dc47ba2e` authenticated 18-GET measurement is recorded separately in [cache-authenticated-cua.json](cache-authenticated-cua.json) and the [release record](README.md). Do not treat that later run as validation of this earlier target or as full page/logout acceptance.
+
 ## Method
 
 Existing signed-in Chrome session, native CUA. No cookie/token/storage extraction; no explanation generation or financial actions. API script authored with Codex CLI `gpt-6.1-sol` (`corrected.js`), reviewed before execution.
