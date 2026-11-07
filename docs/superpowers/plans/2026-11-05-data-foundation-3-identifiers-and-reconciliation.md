@@ -432,6 +432,7 @@ export function rollForward(iso:string):string;   // Rule 0-3 顺延；SEC_HOLID
 | 71 | 估计期末 ≥ today 会把已有上游证据的期间挤出 6 槽（Codex 17a P2） | 先把上游证据（submissions `reportDate`、filings）配到槽，再选 6 个已结束槽：配上的实际期末 < today 即视为已结束，保留估计元数据。 |
 | 72 | 20-F 早期财年因假日表起于 2024 落 `no_rule` | `SEC_HOLIDAYS` 向前补到 2021；`rollForward` 超出搜索上限抛错而非静默停止。 |
 | 73 | 档案写入绕过日历遍栅栏（Codex 18a P2） | 执行期指挥者裁决：`replace_filing_expectations` 改为 5 参 `(p_issuer, p_market, p_rows, p_pass_token, p_profile jsonb default null)`，旧 4 参删除；`p_profile` 在令牌/租约/成员校验之后同事务 upsert `issuer_filing_profiles`，null 保持已存档案。迁移一原地修改、锁文件 sha 更新。TS 端不再单独 upsert 档案。C5 表中该行以此为准。 |
+| 74 | 按对账对的失败计数每次看板加载下载全部历史（Codex 19a P2） | 执行期指挥者裁决：迁移一新增 `dq_reconcile_failed_counts() returns table(pair text, failed bigint)`（`distinct on (pair, natural_key)` 按 `created_at desc, id desc` 取最新行，`passed=false` 计数；stable security definer；仅 service_role）与索引 `dq_reconciliations_pair_key_latest_idx`。`restorable` 实时核对每次加载至多 25 次、并发 4、按请求记忆；超限行 `restorable:false, restorable_checked:false`，19b 据此区分"未核对"与 `inputs_changed`。 |
 
 ---
 
