@@ -1,0 +1,4 @@
+Round 2 (final) incremental review of the implementation plan docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md (draft 2). Round 1 findings: docs/audits/2026-11-07-macro-p3-p4/06-codex-plan-round1.md; dispositions in spec docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md §0.2 "第 4 稿（计划审计回写）". Additional change: usage_audit_key = explanation_id::text (src/lib/billing/quota.ts begin/finalize use a uuid idempotency key).
+1. Table: round-1 finding #1-#16 → RESOLVED / PARTIAL / NOT RESOLVED with reason.
+2. Only NEW or still-blocking defects (P1/P2/P3) with concrete fixes — focus on the new RPCs (macro_record_completion, macro_expire_explanations), finalize retry correctness vs src/lib/billing/quota.ts + metered-llm.ts, manifest params/replay, and anything that would make a task fail as written.
+Verdict line: "ready to execute", "ready with P2 fixes" or "not ready".

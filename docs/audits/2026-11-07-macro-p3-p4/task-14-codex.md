@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | scripts/macro/strategy-reconcile.ts:48 | **Unresolved rows can permanently block later settlements.** Every invocation selects the oldest `limit` unfinalized rows. Conflicts remain unfinalized, so a batch filled with conflicts is selected forever; newer pending settlements are never reached. Reproduced with `limit=1`: two passes inspect the same conflict and never finalize the next row. | Add stable keyset pagination or a resumable cursor over `(claimed_at, explanation_id)`. Test progress past a full batch of conflicts and persistent failures. |
+| 2 | P2 | src/lib/macro/strategy/reconcile.ts:57; scripts/macro/strategy-reconcile.ts:64 | **A lookup failure loses receipts for already-applied changes.** `usageEvent()` errors escape the loop, while the CLI prints receipts only after the entire call returns. If a later lookup fails, earlier rows may already be marked finalized but produce no receipt and disappear from subsequent runs. Reproduced with a successful first mark followed by a lookup exception. | Catch lookup errors per row and report `lookup_failed`; emit receipts as each row completes. Test that earlier receipts survive a later lookup failure and remaining rows are processed. |
+
+fix required
