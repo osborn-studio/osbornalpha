@@ -70,11 +70,23 @@ describe('readKlineRange (spec §5.7, §7.4)',()=>{
    return {source:'datagateway' as const,adjustment:adjustment as 'qfq',volumeUnit:'shares' as const,bars:HISTORY.filter(b=>b.time>=o.startDate!&&b.time<=o.endDate!)};
   });
   const r=ok(await readKlineRange(req({source:'datagateway',market:'US',ticker:'NVDA',from:'2023-01-03',to:'2024-06-28'}),{datagateway:dg as unknown as Dg}));
-  expect(calls).toEqual([{startDate:'2023-01-02',endDate:'2024-01-01'},{startDate:'2024-01-02',endDate:'2024-06-29'}]);
+  expect(calls).toEqual([{startDate:'2023-01-02',endDate:'2024-01-01'},{startDate:'2023-12-31',endDate:'2024-06-29'}]);   // successive windows overlap by two days
   expect(r.close_only).toBe(true);expect(closeOnlyOf(r)).toBe(true);
   expect(r.bars[0].time).toBe('2023-01-03');expect(r.bars.at(-1)!.time).toBe('2024-06-28');
   const none=vi.fn(async()=>null);
   expect(await readKlineRange(req({source:'datagateway'}),{datagateway:none as unknown as Dg})).toEqual({failure:'unsupported'});
+ });
+ it('exclusive-end providers: page boundaries drop no session (eastmoney end=, datagateway endDate)',async()=>{
+  const want=(from:string,to:string)=>HISTORY.filter(b=>b.time>=from&&b.time<=to).map(b=>b.time);
+  const emx=vi.fn(async(_t:string,_p:string,limit:number,o:{endDate?:string}={})=>{
+   const bars=HISTORY.filter(b=>o.endDate===undefined||b.time<o.endDate).slice(-Math.min(limit,40));   // exclusive end, 40-bar pages
+   return bars.length?{source:'eastmoney' as const,bars,adjustment:'qfq' as const,volumeUnit:'shares' as const}:null;
+  });
+  const r=ok(await readKlineRange(req({from:'2023-06-01',to:'2024-02-29'}),{eastmoney:emx as unknown as Em}));
+  expect(r.bars.map(b=>b.time)).toEqual(want('2023-06-01','2024-02-29'));
+  const dgx=vi.fn(async(_t:string,_m:string,_l:number,adjustment:string,o:{startDate?:string;endDate?:string}={})=>({source:'datagateway' as const,adjustment:adjustment as 'qfq',volumeUnit:'shares' as const,bars:HISTORY.filter(b=>b.time>=o.startDate!&&b.time<o.endDate!)}));   // exclusive end
+  const d=ok(await readKlineRange(req({source:'datagateway',market:'US',ticker:'NVDA',from:'2023-01-03',to:'2024-12-30'}),{datagateway:dgx as unknown as Dg}));
+  expect(d.bars.map(b=>b.time)).toEqual(want('2023-01-03','2024-12-30'));
  });
  it('failures: other sources unsupported, provider kinds pass through, aborts are timeouts, empty windows are empty',async()=>{
   expect(await readKlineRange(req({source:'sina'}))).toEqual({failure:'unsupported'});

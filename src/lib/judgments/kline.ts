@@ -6,7 +6,7 @@
 // adjustment must be qfq or hfq (none is never allowed, audit F08). Eastmoney pages backwards (the
 // latest `lmt` bars up to end=, then end = first bar − 1 day) until the window start is covered, a
 // page brings nothing older, or MAX_PAGES (→ protocol); DataGateway requests 365-day windows
-// forwards. Requests overshoot the window by one day on each side, so the provider's inclusive or
+// forwards, successive windows overlapping by two days and Eastmoney pages by one (exclusive-end providers). Requests overshoot the window by one day on each side, so the provider's inclusive or
 // exclusive end semantics cannot drop a boundary bar; the result is filtered to [from, to].
 // Validation: YYYY-MM-DD times, each page sorted ascending with no duplicate date, overlapping pages
 // must agree bar for bar, close finite > 0, the series adjustment equals the request; nothing is
@@ -67,19 +67,21 @@ export async function readKlineRange(req:KlineRangeRequest,deps:KlineRangeDeps={
     const page_=sortedPage(s.bars);merge(bars,page_);
     const first=page_[0].time;
     if(first<=req.from||(prevFirst!==null&&first>=prevFirst))break;
-    prevFirst=first;end=addDaysIso(first,-1);
+    prevFirst=first;end=first;   // overlap by one day: an exclusive end must not drop the session before the page
    }
   }else{
    const dg=deps.datagateway??fetchDatagatewayDailyKline;
    const stop=addDaysIso(req.to,1);
-   for(let start=addDaysIso(req.from,-1),page=0;start<=stop;start=addDaysIso(start,DATAGATEWAY_WINDOW_DAYS),page++){
+   for(let start=addDaysIso(req.from,-1),page=0;start<=stop;start=addDaysIso(start,DATAGATEWAY_WINDOW_DAYS-2),page++){
     if(page>=MAX_PAGES)return {failure:'protocol'};
     if(req.signal.aborted)return {failure:'timeout'};
     const windowEnd=addDaysIso(start,DATAGATEWAY_WINDOW_DAYS-1);
     const s=await dg(req.ticker,req.market,DATAGATEWAY_WINDOW_DAYS,req.adjustment,{signal:req.signal,startDate:start,endDate:windowEnd<stop?windowEnd:stop,onCloseOnly:()=>{closeOnly=true;}});
+    const last=windowEnd>=stop;
     if(!s)return {failure:'unsupported'};
     if(s.adjustment!==req.adjustment)return {failure:'invalid_data'};
     merge(bars,sortedPage(s.bars));
+    if(last)break;   // windows overlap by two days (exclusive start or end), deduped by time
    }
   }
  }catch(e){return failureOf(e,req.signal);}

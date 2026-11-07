@@ -61,13 +61,14 @@
 
 ## Task 7 — 复权能力验证（spec §7.4）
 
-- 运行：`node --import tsx scripts/judgments/verify-adjustment.ts`（无 `.env.local`，DataGateway 未配置），2026-11-07（UTC 录制日期），代码为 Task 7 提交前的工作树。
+- 运行：`node --import tsx scripts/judgments/verify-adjustment.ts`（无 `.env.local`，DataGateway 未配置），2026-11-07（UTC 录制日期）。
 - 事件核对（逐一对照一手文件，均一致，未改 `ADJUST_EVENTS`）：600519.SH 2024-06-19 每股 30.876 元——巨潮下载的上交所披露公告 PDF（static.cninfo.com.cn/finalpage/2024-06-12/1220324741.PDF）列"A 股每股现金红利 30.876 元（含税）"，除权（息）日 2024/6/19；00700.HK 2024-05-17 每股 3.4 港元——披露易公告 PDF（hkexnews.hk/listedco/listconews/sehk/2024/0320/2024032000532_c.pdf）列"除淨日 2024年5月17日"；NVDA 2024-06-10 十拆一——nvidianews.nvidia.com 2024-05-22 新闻稿含 ten-for-one forward stock split 与 June 10, 2024 起按拆股后价格交易。
-- 结果：
-  - eastmoney A qfq: verified(difference, 观测 30.88 / 期望 30.876)；hfq: inconclusive（观测 1.02345，期望 1.02071，两种模型均不符）→ 保持 unverified
-  - eastmoney HK qfq: verified(ratio, 1.00975 / 1.00864)；hfq: verified(ratio, 1.00707 / 1.00864)
-  - eastmoney US qfq: verified(ratio, 10.0025 / 10)；hfq: verified(ratio, 9.99992 / 10)
+- 判定器修订（复审 c16f409d）：模型只有在**事件两侧各自为常数**（比率模型：因子 adj/none 的侧内相对极差 ≤ 2e-4；差值模型：adj−none 的侧内极差 ≤ 0.02，即两位小数报价的两次舍入）**且**带符号的跳变与公告相符（比率相对误差 ≤ 2e-4；差值与每股红利之差 ≤ 0.02，反向 −D 不通过）时才被接受；两模型都评估，取偏差/容差最小者。原先 0.002 的容差只能区分噪声，东方财富 hfq（"乘数 × 原价 + 跳变偏移"）被误判为通过。夹具内 `verdicts` 用新判定器重判（未重新联网录制）。
+- 结果（新判定器的实际输出）：
+  - eastmoney A qfq: verified(difference, 30.88 / 30.876)；hfq: inconclusive（侧内比率极差 3.5e-3 / 2.6e-3）
+  - eastmoney HK qfq: verified(difference, 3.4 / 3.4)（先前误标 ratio）；hfq: inconclusive（侧内极差 5.0e-3 / 2.6e-3，跳变误差 1.6e-3）
+  - eastmoney US qfq: inconclusive（侧内比率极差 3.1e-4 / 4.4e-4 > 2e-4；拆股后侧为差值型偏移 −0.57，即"乘数 × 原价 + 偏移"）；hfq: verified(ratio, 9.99992 / 10，侧内极差 8.1e-5 / 1.1e-4)
   - datagateway A/HK/US: not_configured（本机无 DataGateway 配置；未录制，未改表，保持 unverified）
+- NVDA 另有一笔每股 0.01 美元季度股息（除息日 2024-06-11），落在事件后窗口内；其对 hfq 比率（≈ 0.01/121 ≈ 8e-5）的影响低于 2e-4 容差，未影响 hfq 判定；qfq 的侧内偏移（−0.57 常数）正是这类累积股息调整的表现，该行因此保持 unverified。
 - 夹具：fixtures/judgments/kline/eastmoney-A-600519_SH-2024-06-19.json、eastmoney-HK-00700_HK-2024-05-17.json、eastmoney-US-NVDA-2024-06-10.json。
-- 能力表：eastmoney A qfq、HK qfq/hfq、US qfq/hfq 五行改为 verified；其余七行 unverified。O6 待 owner：A 股 hfq 与全部 datagateway 行未验证（datagateway 需在有配置的环境补录）；使用这些组合的价格判断在 v1 一律 void(adjustment_unsupported)。
-- 复审修复二（T6 fix 2，Codex P2）：anon 路径绕过 `TableClient`，直接用 Supabase 客户端按完整唯一排序分页（memberships：`scheme,version,code,valid_from`；securities：`ticker,valid_from`），`.range` 翻页直到空页；内存路径无行数上限，读全量后按同一排序本地排序。先红（6 ≠ 7 行）后绿；桩在并列键上逐次反转顺序、每次最多返回 3 行。
+- 能力表：eastmoney A qfq、HK qfq、US hfq 三行 verified；其余九行 unverified。O6 待 owner：A / HK hfq、US qfq 与全部 datagateway 行未验证（datagateway 需在有配置的环境补录）；使用这些组合的价格判断在 v1 一律 void(adjustment_unsupported)。

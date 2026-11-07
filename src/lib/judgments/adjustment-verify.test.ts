@@ -35,6 +35,20 @@ describe('judgeAdjustment (spec §7.4 verification program)',()=>{
   expect(judgeAdjustment(DIV,series(raw),series(raw.map((c,i)=>i<5?c*0.9:c))).status).toBe('inconclusive');
   expect(judgeAdjustment(DIV,series(raw).slice(3),series(qfq).slice(3)).status).toBe('inconclusive');
  });
+ it('the adjustment must be a constant on each side: multiplier × raw + jumping offset (Eastmoney hfq) is inconclusive',()=>{
+  const aff=raw.map((c,i)=>1.05*c+50+(i<5?0:30.876));
+  expect(judgeAdjustment(DIV,series(raw),series(aff)).status).toBe('inconclusive');
+ });
+ it('the sign of the dividend jump is preserved: a reversed additive adjustment (jump −D) does not verify',()=>{
+  const rev=raw.map((c,i)=>c+(i<5?30.876:0));
+  expect(judgeAdjustment(DIV,series(raw),series(rev)).status).toBe('inconclusive');
+  expect(judgeAdjustment(DIV,series(raw),series(raw.map((c,i)=>c-(i<5?30.876:0))))).toMatchObject({status:'verified',model:'difference'});
+ });
+ it('an exact difference adjustment is labelled difference even when the ratio model nearly fits',()=>{
+  const flat=[397,397.2,396.8,397,397,395,395.2,394.8,395,395];
+  const v=judgeAdjustment({...DIV,cash_per_share:3.4},series(flat),series(flat.map((c,i)=>i<5?Math.round((c-3.4)*100)/100:c)));
+  expect(v).toMatchObject({status:'verified',model:'difference'});
+ });
  it('maps verdicts to capability statuses; events and fixture paths are well formed',()=>{
   expect(capabilityStatusOf({status:'verified',model:'ratio',observed:1,expected:1,detail:''})).toBe('verified');
   expect(capabilityStatusOf({status:'unsupported',model:null,observed:null,expected:null,detail:''})).toBe('unsupported');

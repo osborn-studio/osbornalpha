@@ -1118,17 +1118,17 @@
  "verdicts": {
   "qfq": {
    "status": "verified",
-   "model": "ratio",
-   "observed": 1.009748,
-   "expected": 1.008638,
-   "detail": "factor jump within 0.002"
+   "model": "difference",
+   "observed": 3.4,
+   "expected": 3.4,
+   "detail": "difference: within-side range 0.0000/0.0000, jump error 0.0000 (tolerance 0.02)"
   },
   "hfq": {
-   "status": "verified",
-   "model": "ratio",
+   "status": "inconclusive",
+   "model": null,
    "observed": 1.007068,
    "expected": 1.008638,
-   "detail": "factor jump within 0.002"
+   "detail": "no model is constant on each side with the announced jump; closest ratio: within-side spread 4.99e-3/2.61e-3, jump error 1.56e-3 (tolerance 0.0002)"
   }
  }
 }

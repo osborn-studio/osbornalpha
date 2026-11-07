@@ -1229,14 +1229,14 @@
    "model": "difference",
    "observed": 30.88,
    "expected": 30.876,
-   "detail": "offset jump equals the cash dividend"
+   "detail": "difference: within-side range 0.0000/0.0000, jump error 0.0040 (tolerance 0.02)"
   },
   "hfq": {
    "status": "inconclusive",
    "model": null,
    "observed": 1.023451,
    "expected": 1.020713,
-   "detail": "neither the ratio nor the difference model matches the announced action"
+   "detail": "no model is constant on each side with the announced jump; closest ratio: within-side spread 3.47e-3/2.56e-3, jump error 2.68e-3 (tolerance 0.0002)"
   }
  }
 }
