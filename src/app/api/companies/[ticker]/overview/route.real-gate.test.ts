@@ -38,4 +38,21 @@ describe('GET /api/companies/[ticker]/overview (real evidence gate)',()=>{
   expect(text).not.toContain('0.4413');
   expect(body.latest.facts.net_income_parent).toMatchObject({kind:'fact',value:'96995000000'});
  });
+ it('recentEvents hides a withheld headline value (materialized)',async()=>{
+  mocks.deps.noEvidence.add(HEADLINE_FACT);
+  const text=await (await get()).text();
+  expect(JSON.parse(text).recentEvents[0].payload.headline.revenue.value).toEqual({kind:'withheld',reason:'evidence_incomplete',factId:HEADLINE_FACT});
+  expect(text).not.toContain('89498000000');
+ });
+ it('asOf (live events from the snapshot): a withheld fact appears nowhere, neither in latest nor in the derived events',async()=>{
+  mocks.deps.noEvidence.add(rev.fact_id);mocks.deps.noEvidence.add(head.fact_id);
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:6,rows:[rev,gp,ni,head],filings:[summary()]}));
+  const res=await GET(new Request('https://alpha.example/api/companies/AAPL/overview?asOf=2024-06-30'),{params:Promise.resolve({ticker:'AAPL'})});
+  const text=await res.text();const body=JSON.parse(text);
+  expect(body.eventsComputed).toBe('live');
+  expect(fn(mocks.deps.company.eventsOfIssuer)).not.toHaveBeenCalled();
+  expect(body.latest.facts.revenue.kind).toBe('withheld');
+  expect(text).not.toContain('383285000000');
+  expect(text).not.toContain('89498000000');
+ });
 });

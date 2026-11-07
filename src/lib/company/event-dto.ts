@@ -9,6 +9,7 @@ import type {FactRow,Market} from '@/lib/facts/types';
 import type {EventGateDeps} from './deps';
 import {applyGate,eventFactIds,gateEventPayload} from './evidence-gate';
 import type {Eligibility} from './evidence-gate';
+import {inGateScope} from './fact-scope';
 import {filingSummaryOf} from './snapshot-read';
 import type {EventInput,EventKind,EventRow,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,WithheldCounts} from './types';
 
@@ -33,7 +34,7 @@ export function toPublicEvent(item:GateEventItem,elig:Map<string,Eligibility>,fi
  * from `known` (same snapshot) else factsByIds (kept only when they belong to the stream and are ok);
  * filings from `filings` else filingsOfIssuer (published only); one evidenceOf; pdf.locate only for CN.
  */
-export async function gateEvents(items:GateEventItem[],deps:EventGateDeps,opts:{admin:boolean;known?:readonly FactRow[];filings?:readonly FilingSummary[]}):Promise<GatedEvents>{
+export async function gateEvents(items:GateEventItem[],deps:EventGateDeps,opts:{admin:boolean;asOf?:string;known?:readonly FactRow[];filings?:readonly FilingSummary[]}):Promise<GatedEvents>{
  const evidence:Record<string,EvidenceDto>={};const withheld:WithheldCounts={evidenceIncomplete:0,citationPending:0};
  const elig=new Map<string,Eligibility>();const filingsOf=new Map<string,Map<string,FilingSummary>>();
  const groups=new Map<string,GateEventItem[]>();
@@ -42,12 +43,12 @@ export async function gateEvents(items:GateEventItem[],deps:EventGateDeps,opts:{
   const {issuerId,market}=group[0];
   const ids=[...new Set(group.flatMap(x=>eventFactIds(x.e)))].sort();
   const facts=new Map<string,FactRow>();
-  for(const r of opts.known??[])if(r.issuer_id===issuerId&&r.market===market&&r.status==='ok')facts.set(r.fact_id,r);
+  for(const r of opts.known??[])if(inGateScope(r,issuerId,market,opts.asOf))facts.set(r.fact_id,r);
   const missing=ids.filter(id=>!facts.has(id));
-  if(missing.length>0)for(const r of await deps.facts.factsByIds(missing))if(r.issuer_id===issuerId&&r.market===market&&r.status==='ok')facts.set(r.fact_id,r);
+  if(missing.length>0)for(const r of await deps.facts.factsByIds(missing))if(inGateScope(r,issuerId,market,opts.asOf))facts.set(r.fact_id,r);
   const filings=new Map<string,FilingSummary>((opts.filings??[]).map(f=>[f.filingId,f]));
   if(group.some(x=>x.e.filing_id!==null&&!filings.has(x.e.filing_id))||[...facts.values()].some(r=>!filings.has(r.filing_id)))
-   for(const f of await deps.facts.filingsOfIssuer(issuerId,market,{}))if(f.mapping_gen>0&&!filings.has(f.filing_id))filings.set(f.filing_id,filingSummaryOf(f,0));
+   for(const f of await deps.facts.filingsOfIssuer(issuerId,market,{}))if(f.mapping_gen>0&&(!opts.asOf||f.available_date<=opts.asOf)&&!filings.has(f.filing_id))filings.set(f.filing_id,filingSummaryOf(f,0));
   filingsOf.set(k,filings);
   const present=ids.filter(id=>facts.has(id));
   const [records,pdf]=present.length>0

@@ -95,7 +95,8 @@ export type KitDeps=ReturnType<typeof makeDeps>;
 export const REAL_SHA='a'.repeat(64);
 export const realLocator=(factId:string)=>`real/${factId}`;
 export const realFact=(p:Partial<FactRow>={}):FactRow=>{const f=fact(p);return {...f,raw_hash:rawHashOf(REAL_SHA,realLocator(f.fact_id))};};
-export const realRecord=(f:FactRow):EvidenceRecord=>record(f.fact_id,{raw_hash:f.raw_hash,snapshot_sha256:REAL_SHA,hash_locator:realLocator(f.fact_id)});
+export const realRecord=(f:FactRow):EvidenceRecord=>record(f.fact_id,{raw_hash:f.raw_hash,snapshot_sha256:REAL_SHA,hash_locator:realLocator(f.fact_id),
+ ...(f.market==='CN'?{source:'tushare' as const,api:'income',url:null,params:{ts_code:'600519.SH'},snapshot_path:`tushare/${f.issuer_id}/${REAL_SHA}.json`}:{})});
 /** evidenceOf answers with a consistent record for each of `facts` except those in deps.noEvidence. */
 export function realEvidence(deps:KitDeps,facts:FactRow[]):void{
  const by=new Map(facts.map(f=>[f.fact_id,f]));

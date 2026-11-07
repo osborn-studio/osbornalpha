@@ -296,59 +296,6 @@ export function useBatchQuotes(
   return { ...state, refetch: () => setBump((b) => b + 1) };
 }
 
-// ─── Financials ───
-export interface YearlyFinancial {
-  year: number;
-  revenue_yi: number | null;
-  total_revenue_yi: number | null;
-  net_income_yi: number | null;
-  eps_basic: number | null;
-  total_assets_yi: number | null;
-  total_liab_yi: number | null;
-  equity_yi: number | null;
-  op_cashflow_yi: number | null;
-  free_cashflow_yi: number | null;
-}
-export interface FinancialState {
-  yearly: YearlyFinancial[];
-  latest_indicator: any;
-  source: string | null;
-  loading: boolean;
-  error: string | null;
-}
-
-export function useFinancials(ticker: string | null): FinancialState {
-  const [state, setState] = useState<FinancialState>({
-    yearly: [], latest_indicator: null, source: null,
-    loading: !!ticker, error: null,
-  });
-
-  useEffect(() => {
-    if (!ticker) { setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: null }); return; }
-    let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
-    fetch(`/api/financials/${encodeURIComponent(ticker)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        setState({
-          yearly: data.yearly || [],
-          latest_indicator: data.latest_indicator || null,
-          source: data.source,
-          loading: false,
-          error: data.error || null,
-        });
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setState({ yearly: [], latest_indicator: null, source: null, loading: false, error: err?.message || '获取失败' });
-      });
-    return () => { cancelled = true; };
-  }, [ticker]);
-
-  return state;
-}
-
 // ─── Holders ───
 export interface HolderRow {
   ts_code: string;

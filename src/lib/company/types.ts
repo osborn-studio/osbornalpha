@@ -57,7 +57,7 @@ export interface EvidenceDto{
 export type WithheldReason='evidence_incomplete'|'citation_pending';
 export interface WithheldCell{kind:'withheld';reason:WithheldReason;factId:string}
 export interface FactCell{kind:'fact';factId:string;value:string;unit:string;availableDate:string;filingId:string;disclosureSeq:number;isRevision:boolean;mappingGen:number;rawHash:string;runId:string;otherUnits:boolean}
-export interface DerivedCell{kind:'derived';metric:string;value:string;unit:string;inputUnit:string;basis:string;formulaVersion:string;inputs:{factId:string;concept:string;filingId:string;availableDate:string}[];rule?:'a'|'b'}
+export interface DerivedCell{kind:'derived';metric:string;value:string;unit:string;inputUnit:string;basis:string;formulaVersion:string;inputs:{factId:string;concept:string;filingId:string;availableDate:string;quarter?:[string,string];ytdRule?:'a'|'b'}[];rule?:'a'|'b'}
 /** Grid cell (spec §5.3). null = no visible fact in the row's primary unit for this period (periods with only other-unit facts are listed in statements-grid GridResult.otherUnitOnly → "—" + U). `otherUnits` drives the U badge on a value cell. */
 export type Cell=FactCell|DerivedCell|WithheldCell|null;
 export interface WithheldCounts{evidenceIncomplete:number;citationPending:number}

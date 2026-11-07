@@ -1,7 +1,7 @@
 // src/lib/company/statements-grid.test.ts
 import {beforeEach,describe,expect,it} from 'vitest';
 import type {FactRow} from '@/lib/facts/types';
-import {badgesOf,buildStatementsGrid,gridReadConcepts,periodKeyOf,primaryUnitOf,statementConcepts} from './statements-grid';
+import {badgesOf,buildStatementsGrid,derivedCellOf,gridReadConcepts,periodKeyOf,primaryUnitOf,statementConcepts} from './statements-grid';
 import type {GridResult} from './statements-grid';
 import {factRow,filingSummary,resetBuilders,sequenced} from './test-builders';
 import type {FactCell,FilingSummary,ReadSnapshotResult} from './types';
@@ -186,5 +186,20 @@ describe('review fixes (Task 7)',()=>{
   const rows=[factRow(f,{period_start:'2023-12-31',period_end:'2023-12-31',duration:'3M',value:'1'}),factRow(f,{period_start:null,period_end:'2023-12-31',duration:'INSTANT',value:'2'}),factRow(f,{concept:'net_income_parent',period_start:'2023-12-31',period_end:'2023-12-31',duration:'6M',value:'3'})];
   const g=ok(buildStatementsGrid(snap(rows,[f]),opts()));
   expect(g.periods.map(p=>p.duration)).toEqual(['3M','6M','INSTANT']);
+ });
+});
+
+describe('derivedCellOf lineage',()=>{
+ it('keeps per-input quarter/ytdRule (a fact reused across quarters stays twice); mixed rules omit the cell rule; a shared rule is kept',()=>{
+  const inp=(id:string,q:[string,string],r:'same_filing'|'never_revised')=>({fact_id:id,concept:'revenue',filing_id:'F',available_date:'2024-01-01',quarter:q,ytd_rule:r});
+  const mixed=derivedCellOf({issuer_id:'i',market:'US',metric:'ttm_revenue',period_start:'2023-01-01',period_end:'2023-12-31',duration:'TTM' as never,value:'1',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:'v',based_on_rev:1,as_of:'2024-01-01',
+   inputs:[inp('A',['2023-01-01','2023-03-31'],'same_filing'),inp('A',['2023-04-01','2023-06-30'],'never_revised'),{fact_id:'B',concept:'revenue',filing_id:'F',available_date:'2024-01-01'}]});
+  expect(mixed.inputs).toEqual([
+   {factId:'A',concept:'revenue',filingId:'F',availableDate:'2024-01-01',quarter:['2023-01-01','2023-03-31'],ytdRule:'a'},
+   {factId:'A',concept:'revenue',filingId:'F',availableDate:'2024-01-01',quarter:['2023-04-01','2023-06-30'],ytdRule:'b'},
+   {factId:'B',concept:'revenue',filingId:'F',availableDate:'2024-01-01'}]);
+  expect('rule' in mixed).toBe(false);
+  const same=derivedCellOf({issuer_id:'i',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',value:'1',unit:'USD',input_unit:'USD',basis:'x',formula_version:'v',based_on_rev:1,as_of:'a',inputs:[inp('A',['a','b'],'never_revised'),{fact_id:'B',concept:'c',filing_id:'F',available_date:'d'}]});
+  expect(same.rule).toBe('b');
  });
 });

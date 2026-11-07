@@ -29,6 +29,14 @@ describe('snapshot download (§0.1 item 2\'\', §6.4)',()=>{
   expect(mocks.deps.signSnapshot).toHaveBeenCalledTimes(2);
   expect(mocks.deps.signSnapshot).toHaveBeenCalledWith(record(EDGAR).snapshot_path,60);
  });
+ it('an uppercase fact id is lowercased before the lookup, public and admin',async()=>{
+  const up=EDGAR.toUpperCase();
+  expect((await req(GET,up)).status).toBe(302);
+  expect((await req(ADMIN_GET,up)).status).toBe(302);
+  expect(mocks.deps.company.evidenceOf).toHaveBeenNthCalledWith(1,[EDGAR]);
+  expect(mocks.deps.company.evidenceOf).toHaveBeenNthCalledWith(2,[EDGAR]);
+  expect(mocks.deps.audit).toHaveBeenCalledWith('u-admin','facts.snapshot.download',EDGAR,expect.anything());
+ });
  it('Tushare → 403 not_redistributable; unknown → 404; bad id → 400; all no-store; public never audits',async()=>{
   const t=await req(GET,TS);expect(t.status).toBe(403);expect((await t.json()).error.code).toBe('not_redistributable');
   const n=await req(GET,NONE);expect(n.status).toBe(404);expect((await n.json()).error.code).toBe('not_found');

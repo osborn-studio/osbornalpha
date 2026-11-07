@@ -46,11 +46,13 @@ export const factCellOf=(r:FactRow,otherUnits=false):FactCell=>{
  if(r.disclosure_seq===undefined||r.is_revision===undefined)throw new Error(`grid_sequence_missing:${r.fact_id}`);
  return {kind:'fact',factId:r.fact_id,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq,isRevision:r.is_revision,mappingGen:r.mapping_gen,rawHash:r.raw_hash,runId:r.run_id,otherUnits};
 };
+const YTD_RULE={same_filing:'a',never_revised:'b'} as const;
+/** Per-input lineage is kept (quarter, ytdRule); the cell-level `rule` is set only when every input that has a rule shares it. */
 export const derivedCellOf=(m:MetricRow):DerivedCell=>{
- const rules=new Set(m.inputs.map(i=>i.ytd_rule).filter(Boolean));
- const rule=rules.has('same_filing')?'a' as const:rules.has('never_revised')?'b' as const:null;
- return {kind:'derived',metric:m.metric,value:m.value,unit:m.unit,inputUnit:m.input_unit,basis:m.basis,formulaVersion:m.formula_version,
-  inputs:m.inputs.map(i=>({factId:i.fact_id,concept:i.concept,filingId:i.filing_id,availableDate:i.available_date})),...(rule?{rule}:{})};
+ const inputs=m.inputs.map(i=>({factId:i.fact_id,concept:i.concept,filingId:i.filing_id,availableDate:i.available_date,...(i.quarter?{quarter:i.quarter}:{}),...(i.ytd_rule?{ytdRule:YTD_RULE[i.ytd_rule]}:{})}));
+ const rules=new Set(inputs.map(i=>i.ytdRule).filter(Boolean));
+ const rule=rules.size===1?[...rules][0]:undefined;
+ return {kind:'derived',metric:m.metric,value:m.value,unit:m.unit,inputUnit:m.input_unit,basis:m.basis,formulaVersion:m.formula_version,inputs,...(rule?{rule}:{})};
 };
 interface Entry{period:PeriodCol;unit:string;cell:FactCell|DerivedCell;mappingGen:number|null}
 

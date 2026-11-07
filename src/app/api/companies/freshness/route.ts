@@ -13,7 +13,7 @@ export async function GET(){
  try{
   const rows=await freshnessOf(productionReadDeps().freshnessTables(),new Date());
   const by=new Map(rows.map(r=>[String(r.dataset),r]));
-  const datasets=DATASETS.map(d=>{const r=by.get(d);return {dataset:d,status:r?r.status:'missing',lastOkAt:(r?.last_ok_at as string|null|undefined)??null,lastAttemptAt:(r?.last_attempt_at as string|null|undefined)??null};});
+  const datasets=DATASETS.map(d=>{const r=by.get(d);return {dataset:d,status:r?r.status:null,lastOkAt:(r?.last_ok_at as string|null|undefined)??null,lastAttemptAt:(r?.last_attempt_at as string|null|undefined)??null};});
   return NextResponse.json({datasets},{headers:{'Cache-Control':'public, max-age=60'}});
  }catch(e){return failureResponse(e,'companies/freshness','freshness read failed');}
 }

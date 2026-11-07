@@ -19,6 +19,7 @@ import {productionReadDeps} from './deps';
 import type {ReadDeps} from './deps';
 import {applyGate,gateCell as gateCellByEligibility} from './evidence-gate';
 import type {Eligibility} from './evidence-gate';
+import {inGateScope} from './fact-scope';
 import {filingSummaryOf} from './snapshot-read';
 import type {Cell,EvidenceDto,EvidenceRecord,FilingSummary,PdfLocator,WithheldCell,WithheldCounts,WithheldReason} from './types';
 
@@ -90,9 +91,9 @@ export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicI
  const {deps,issuer}=ctx;
  const ids=[...new Set(factIds)];
  const byId=new Map<string,FactRow>();
- for(const r of known)byId.set(r.fact_id,r);
+ for(const r of known)if(inGateScope(r,issuer.issuerId,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
  const unknown=ids.filter(id=>!byId.has(id));
- if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(r.issuer_id===issuer.issuerId&&r.market===issuer.market&&r.status==='ok'&&(!ctx.asOf||r.available_date<=ctx.asOf))byId.set(r.fact_id,r);
+ if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(inGateScope(r,issuer.issuerId,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
  const filingMap=new Map<string,FilingSummary>(filings.map(f=>[f.filingId,f]));
  if(facts.some(r=>!filingMap.has(r.filing_id)))

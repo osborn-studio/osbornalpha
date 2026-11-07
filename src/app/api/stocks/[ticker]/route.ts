@@ -9,5 +9,6 @@ export async function GET(_request: Request, { params }: Ctx) {
   const stock = getStockOrStub(decoded);
   if (!stock) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({ source: 'mock', stock });
-  // TODO v0.2: query Supabase (stocks_universe + financial_history) and merge with live API
+  // Disclosure facts for a company are served by /api/companies/[ticker]/overview (company-research spec §6.1);
+  // financial_history stays unread (decision C keeps the table, §0.1 item 7).
 }

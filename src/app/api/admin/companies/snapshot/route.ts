@@ -8,9 +8,10 @@ import {UUID_RE,errorResponse,failureResponse,paramErrorResponse,readParams} fro
 export const dynamic='force-dynamic';
 export async function GET(req:Request){
  const user=await adminGate();if(user instanceof Response)return privateResponse(user);
- let fact:string|undefined;
- try{fact=readParams(new URL(req.url),['fact']).get('fact');}catch(e){const r=paramErrorResponse(e);if(r)return privateResponse(r);throw e;}
- if(!fact||!UUID_RE.test(fact))return privateResponse(errorResponse('invalid_parameter:fact','invalid fact id',400));
+ let raw:string|undefined;
+ try{raw=readParams(new URL(req.url),['fact']).get('fact');}catch(e){const r=paramErrorResponse(e);if(r)return privateResponse(r);throw e;}
+ if(!raw||!UUID_RE.test(raw))return privateResponse(errorResponse('invalid_parameter:fact','invalid fact id',400));
+ const fact=raw.toLowerCase();
  try{
   const deps=productionReadDeps();
   const rec=(await deps.company.evidenceOf([fact])).get(fact);

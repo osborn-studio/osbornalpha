@@ -9,9 +9,10 @@ import {UUID_RE,errorResponse,failureResponse,paramErrorResponse,readParams} fro
 export const dynamic='force-dynamic';
 const SIGNED_URL_SECONDS=60;
 export async function GET(req:Request){
- let fact:string|undefined;
- try{fact=readParams(new URL(req.url),['fact']).get('fact');}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
- if(!fact||!UUID_RE.test(fact))return errorResponse('invalid_parameter:fact','invalid fact id',400);
+ let raw:string|undefined;
+ try{raw=readParams(new URL(req.url),['fact']).get('fact');}catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
+ if(!raw||!UUID_RE.test(raw))return errorResponse('invalid_parameter:fact','invalid fact id',400);
+ const fact=raw.toLowerCase();
  try{
   const deps=productionReadDeps();
   const rec=(await deps.company.evidenceOf([fact])).get(fact);

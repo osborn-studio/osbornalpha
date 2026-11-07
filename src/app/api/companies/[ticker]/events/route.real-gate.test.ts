@@ -5,7 +5,7 @@ import type {KitDeps} from '@/lib/company/route-test-kit';
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps}));
 vi.mock('@/lib/company/deps',()=>({productionReadDeps:()=>mocks.deps}));
 import {GET} from './route';
-import {HEADLINE_FACT,eventRow,filingRow,makeDeps,realEvidence,realFact,seededTables} from '@/lib/company/route-test-kit';
+import {HEADLINE_FACT,emptySnapshot,eventRow,filingRow,summary,makeDeps,realEvidence,realFact,seededTables} from '@/lib/company/route-test-kit';
 
 const fn=(x:unknown)=>x as ReturnType<typeof vi.fn>;
 describe('GET /api/companies/[ticker]/events (real evidence gate)',()=>{
@@ -37,5 +37,16 @@ describe('GET /api/companies/[ticker]/events (real evidence gate)',()=>{
   expect(body.rows[1].payload.relChange).toEqual({kind:'withheld',reason:'evidence_incomplete'});
   for(const v of ['89498000000','111222333444','"3.5"'])expect(text).not.toContain(v);
   expect(body.withheld.evidenceIncomplete).toBe(2);
+ });
+ it('asOf (live): events derived from the snapshot never carry a withheld value; control shows it',async()=>{
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:5,rows:[head],filings:[summary()]}));
+  const url='https://alpha.example/api/companies/AAPL/events?asOf=2024-06-30';
+  const ok=await (await GET(new Request(url),{params:Promise.resolve({ticker:'AAPL'})})).text();
+  expect(JSON.parse(ok).computed).toBe('live');
+  expect(ok).toContain('89498000000');
+  mocks.deps.noEvidence.add(HEADLINE_FACT);
+  const text=await (await GET(new Request(url),{params:Promise.resolve({ticker:'AAPL'})})).text();
+  expect(JSON.parse(text).rows.length).toBeGreaterThan(0);
+  expect(text).not.toContain('89498000000');
  });
 });

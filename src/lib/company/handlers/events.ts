@@ -54,7 +54,7 @@ export const eventsHandler:Handler=async(ctx)=>{
   const page=pageLive(all,{since,until,kinds,cursor,limit});
   items=page.rows.map(x=>({e:x.input,eventId:x.eventId}));nextCursor=page.nextCursor;known=snap.rows;filings=snap.filings;stateRev=snap.stateRev;
  }
- const gated=await gateEvents(items.map(x=>({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market})),deps,{admin:ctx.admin,known,filings});
+ const gated=await gateEvents(items.map(x=>({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market})),deps,{admin:ctx.admin,asOf:ctx.asOfGiven?asOf:undefined,known,filings});
  const rows=gated.events;
  const body:EventsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,computed:ctx.asOfGiven?'live':'materialized',stateRev,rows,nextCursor,evidence:gated.evidence,withheld:gated.withheld};
  return {body,empty:rows.length===0};

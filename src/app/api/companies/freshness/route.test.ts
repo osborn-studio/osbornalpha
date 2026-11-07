@@ -19,7 +19,7 @@ describe('GET /api/companies/freshness',()=>{
   const body=await res.json();
   expect(body.datasets.map((d:{dataset:string})=>d.dataset)).toEqual(['facts.us','facts.cn','company.events']);
   expect(body.datasets[0]).toEqual({dataset:'facts.us',status:'fresh',lastOkAt:expect.any(String),lastAttemptAt:expect.any(String)});
-  expect(body.datasets[1]).toEqual({dataset:'facts.cn',status:'missing',lastOkAt:null,lastAttemptAt:null});
+  expect(body.datasets[1]).toEqual({dataset:'facts.cn',status:null,lastOkAt:null,lastAttemptAt:null});
   expect(body.datasets[2].status).toBe('stale');          // stored 'fresh' is recomputed with now
   expect(JSON.stringify(body)).not.toContain('secret');
   expect(res.headers.get('cache-control')).toBe('public, max-age=60');
