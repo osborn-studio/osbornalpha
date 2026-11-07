@@ -251,3 +251,62 @@ test("ROOT 1440 viewport / 544px quadrant regression: every contribution digit f
     .locator(".clock-breakdown")
     .screenshot({ path: `${out}/screenshots/regression-after-US-en-544.png` });
 });
+
+for (const locale of ["en", "zh"])
+  for (const width of [320, 390]) {
+    test(`mobile navigation genuine Tab bounds ${locale} ${width}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/macro?region=US&locale=${locale}`);
+      await expect(page.locator(".clock-driver").first()).toBeVisible();
+      const nav = page.getByRole("navigation", {
+        name: locale === "en" ? "Workbench sections" : "工作台分区",
+      });
+      const controls = nav.locator("button,a");
+      await expect(controls).toHaveCount(7);
+      await controls.first().focus();
+      const measurements = [];
+      for (let i = 0; i < 7; i++) {
+        if (i > 0) await page.keyboard.press("Tab");
+        await expect(controls.nth(i)).toBeFocused();
+        const bounds = await controls.nth(i).evaluate((el) => {
+          const r = el.getBoundingClientRect(),
+            n = el.closest("nav")!.getBoundingClientRect();
+          return {
+            label: el.textContent,
+            left: r.left,
+            right: r.right,
+            top: r.top,
+            bottom: r.bottom,
+            navLeft: n.left,
+            navRight: n.right,
+            navTop: n.top,
+            navBottom: n.bottom,
+            viewport: innerWidth,
+            scrollLeft: el.closest("nav")!.scrollLeft,
+          };
+        });
+        expect(bounds.left).toBeGreaterThanOrEqual(
+          Math.max(0, bounds.navLeft) - 0.1,
+        );
+        expect(bounds.right, JSON.stringify(bounds)).toBeLessThanOrEqual(
+          Math.min(bounds.viewport, bounds.navRight) + 0.1,
+        );
+        expect(bounds.top).toBeGreaterThanOrEqual(bounds.navTop - 0.1);
+        expect(bounds.bottom).toBeLessThanOrEqual(bounds.navBottom + 0.1);
+        expect(bounds.scrollLeft).toBe(0);
+        measurements.push(bounds);
+      }
+      await mkdir("/tmp/osstack/osbornalpha-independent-sessions/widget-nav", {
+        recursive: true,
+      });
+      await writeFile(
+        `/tmp/osstack/osbornalpha-independent-sessions/widget-nav/${locale}-${width}.json`,
+        JSON.stringify(measurements, null, 2),
+      );
+      await nav.screenshot({
+        path: `/tmp/osstack/osbornalpha-independent-sessions/widget-nav/${locale}-${width}.png`,
+      });
+    });
+  }

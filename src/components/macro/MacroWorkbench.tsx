@@ -113,7 +113,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
         )}
       </div>
 
-      <nav aria-label={t('tabs.label')} className="flex gap-1 overflow-x-auto whitespace-nowrap border-b border-border">
+      <nav aria-label={t('tabs.label')} className="flex flex-wrap gap-1 whitespace-nowrap border-b border-border">
         {TABS.map((tb) => <button key={tb} type="button" aria-current={tab === tb ? 'page' : undefined} onClick={() => go(region, tb)} className={tabBtn(tab === tb)}>{t(`tabs.${tb}`)}</button>)}
         {/* MACRO-P3 */}
         {strategyLinkTabs(strategyEnabled).map((l) => <Link key={l.key} href={l.href} className={tabBtn(false)}>{t(`tabs.${l.key}`)}</Link>)}
