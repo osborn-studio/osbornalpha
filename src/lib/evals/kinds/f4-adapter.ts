@@ -3,9 +3,9 @@
 import {REGISTRY} from '@/lib/judgments/registry';
 import type {Methodology} from '@/lib/judgments/types';
 
-export function calibrationAvailability(methodologies:readonly Pick<Methodology,'kind'>[]=REGISTRY):{status:'unavailable';reason:'no_probability_methodology'}{
+export function calibrationAvailability(methodologies:readonly Pick<Methodology,'kind'>[]=REGISTRY):{status:'unavailable';reason:'no_probability_methodology'|'probability_export_unavailable'}{
  // A future probability method still needs a settled, visible, calibration-eligible export and
  // owner thresholds before this adapter can return data. Never fabricate p from category scores.
- if(methodologies.some(m=>m.kind==='probability'))throw new Error('probability_export_not_implemented');
+ if(methodologies.some(m=>m.kind==='probability'))return {status:'unavailable',reason:'probability_export_unavailable'};
  return {status:'unavailable',reason:'no_probability_methodology'};
 }
