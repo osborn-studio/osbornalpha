@@ -13,7 +13,7 @@
 // the same inputs — values differ from SQL, only equal/unequal relations carry over; (2) decimal
 // strings are kept as given (PostgreSQL would print '0120' as '120'): pass canonical decimals;
 // (3) a claim's subject.market comes from the ticker suffix (.HK → HK, .SH/.SZ/.BJ → A, else US),
-// not from stocks_universe; (4) no foreign keys and only the check constraints named in the code;
+// not from stocks_universe; (4) only the upload intent document foreign key and check constraints named in the code;
 // (5) no row locks — calls are serialised by the event loop.
 import {randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
@@ -380,13 +380,14 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    return clone(l);
   },
   async confirmLicence(id,by,version){const l=licences.get(id)??fail('not_found','licence');if(l.version!==version)return 'version_mismatch';Object.assign(l,{confirmed_by:by,confirmed_at:now(),confirmed_version:version,updated_at:now()});return 'confirmed';},
-  async insertIntent(row){if(intents.has(row.intent_id))fail('duplicate_key');if(row.staging_path!==`staging/${row.intent_id}.pdf`)fail('constraint_violation','broker_intents_staging_path');intents.set(row.intent_id,{...clone(row),created_at:stamp(),checkpoint_at:null,error_code:null});},
+  async insertIntent(row){if(intents.has(row.intent_id))fail('duplicate_key');if(row.staging_path!==`staging/${row.intent_id}.pdf`)fail('constraint_violation','broker_intents_staging_path');if(row.document_id!==null&&!documents.has(row.document_id))fail('constraint_violation','broker_report_upload_intents_document_id_fkey');intents.set(row.intent_id,{...clone(row),created_at:stamp(),checkpoint_at:null,error_code:null});},
   async getIntent(id){return clone(intents.get(id)??null);},
   async transitionIntent(id,from,to,patch){
    const i=intents.get(id);if(!i||i.status!==from)return false;
    if(to!==from&&!INTENT_MOVES.has(`${from}>${to}`))fail('intent_transition_invalid',`${from}->${to}`);
    if(patch?.document_id!==undefined&&i.document_id!==null&&patch.document_id!==i.document_id)fail('intent_document_set_once');
    const next={...i,...patch,status:to as IntentStatus};
+   if(next.document_id!==null&&!documents.has(next.document_id))fail('constraint_violation','broker_report_upload_intents_document_id_fkey');
    if(next.status==='committed'&&next.document_id===null)fail('constraint_violation','broker_intents_committed_document');
    Object.assign(i,next,to!==from?{checkpoint_at:now()}:{});return true;
   },

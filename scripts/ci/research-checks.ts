@@ -26,6 +26,9 @@ criticalSuites.push('src/lib/macro/macro.integration.test.ts');
 // FOREIGN ↓
 criticalSuites.push('src/lib/broker-research/broker-research.integration.test.ts');
 // FOREIGN ↑
+// FOREIGN ↓ (C8)
+criticalSuites.push('src/lib/broker-research/pipeline.integration.test.ts');
+// FOREIGN ↑
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

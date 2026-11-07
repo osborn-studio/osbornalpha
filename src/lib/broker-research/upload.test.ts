@@ -1,4 +1,5 @@
 // Resumable upload, promotion recovery, cleanup, and signed read service tests (spec §6.1, §8.2).
+import {randomUUID} from 'node:crypto';
 import {beforeEach,describe,expect,it} from 'vitest';
 import {brokerPaths} from './storage';
 import {ADMIN_ID,OTHER_ADMIN,memoryCoreDeps,seedLicence,sha256,syntheticPdf} from './testing';
@@ -24,6 +25,15 @@ describe('upload state machine',()=>{
  it('second upload of the same bytes is 409 duplicate_document with the id',async()=>{
   const c=await commitIntent(d,(await upload()).intentId,ADMIN_ID);
   await expect(createIntent(d,input(l),ADMIN_ID)).rejects.toMatchObject({code:'duplicate_document',status:409,extra:{documentId:c.documentId}});
+ });
+ it('rejects an intent document reference until the document row exists',async()=>{
+  const missing=randomUUID();
+  await expect(d.db.insertIntent({intent_id:missing,sha256:sha256(pdf),byte_size:pdf.byteLength,licence_id:l.licence_id,original_filename:'r.pdf',created_by:ADMIN_ID,expires_at:new Date(Date.now()+INTENT_TTL_MS).toISOString(),status:'open',staging_path:brokerPaths.staging(missing),document_id:missing})).rejects.toMatchObject({code:'constraint_violation',detail:'broker_report_upload_intents_document_id_fkey'});
+  const i=await upload();
+  await d.db.transitionIntent(i.intentId,'open','validating');
+  await d.db.transitionIntent(i.intentId,'validating','validated');
+  await expect(d.db.transitionIntent(i.intentId,'validated','promoting',{document_id:i.intentId})).rejects.toMatchObject({code:'constraint_violation',detail:'broker_report_upload_intents_document_id_fkey'});
+  expect((await d.db.getIntent(i.intentId))!.status).toBe('validated');
  });
  it('a race: two intents for the same bytes, loser abandoned and staging removed',async()=>{
   const a=await upload(),b=await upload();const ca=await commitIntent(d,a.intentId,ADMIN_ID);
@@ -70,8 +80,8 @@ describe('upload state machine',()=>{
  });
  it('crash after move counts as promoted',async()=>{
   const i=await upload();await d.db.transitionIntent(i.intentId,'open','validating');await d.db.transitionIntent(i.intentId,'validating','validated');
-  await d.db.transitionIntent(i.intentId,'validated','promoting',{document_id:i.intentId});
   await d.db.insertDocument({document_id:i.intentId,sha256:sha256(pdf),storage_path:brokerPaths.report(sha256(pdf)),byte_size:pdf.byteLength,licence_id:l.licence_id,uploaded_by:ADMIN_ID,original_filename:'r.pdf'});
+  await d.db.transitionIntent(i.intentId,'validated','promoting',{document_id:i.intentId});
   await d.storage.move(brokerPaths.staging(i.intentId),brokerPaths.report(sha256(pdf)));
   expect((await commitIntent(d,i.intentId,ADMIN_ID)).status).toBe('committed');
   expect((await d.db.getDocument(i.intentId))!.promotion_pending).toBe(false);

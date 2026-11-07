@@ -84,7 +84,16 @@ export async function commitIntent(deps:UploadDeps,intentId:string,by:string):Pr
     i=await reload(deps,intentId);break;
    }
    case 'validated':{
-    if(!await deps.db.transitionIntent(intentId,'validated','promoting',{document_id:i.document_id??intentId}))throw busy();
+    const docId=i.document_id??intentId;
+    if(!await deps.db.getDocument(docId)){
+     const inserted=await deps.db.insertDocument({document_id:docId,sha256:i.sha256,storage_path:brokerPaths.report(i.sha256),byte_size:i.byte_size,licence_id:i.licence_id,uploaded_by:i.created_by,original_filename:i.original_filename});
+     if(inserted==='duplicate'){
+      const other=await deps.db.findDocumentBySha(i.sha256);
+      if(other&&other.document_id!==docId){await abandon(deps,i,'validated','duplicate_document');throw conflict('duplicate_document',{documentId:other.document_id});}
+     }
+     if(!await deps.db.getDocument(docId))throw new BrokerError('document_insert_lost',500);
+    }
+    if(!await deps.db.transitionIntent(intentId,'validated','promoting',{document_id:docId}))throw busy();
     i=await reload(deps,intentId);break;
    }
    case 'promoting':{await promote(deps,i,by);i=await reload(deps,intentId);break;}
