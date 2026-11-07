@@ -22,6 +22,7 @@ import {summarize} from '../summary';
 import {evaluateExtraction,extractionSummaryContext,matchGroup,overlap,valuesEqual} from './extraction';
 import type {BBox,ExtractionGold,ExtractionLabel,ExtractionOutput,PredictedField} from './extraction';
 
+const GOLD={format:'f6' as const,ready:true,pending:0,provenance_gaps:0};
 const D1='a'.repeat(64),D2='b'.repeat(64),D3='c'.repeat(64),D4='d'.repeat(64);
 let n=0;
 const label=(doc:string,field:string,value:string,page:number,bbox:BBox,value_type:ExtractionLabel['value_type']='decimal'):ExtractionLabel=>({label_id:`l${++n}`,document_sha256:doc,field,occurrence:n,value_type,value,locator:{page,bbox},recorded_by:'owner',reviewed_by:'expert-1'});
@@ -74,6 +75,41 @@ describe('matchGroup',()=>{
  });
 });
 
+describe('tie-breaks and robustness',()=>{
+ const idOf=(ls:ExtractionLabel[],ps:PredictedField[],[l,p]:[number,number])=>JSON.stringify([ls[l].value,ls[l].locator,ps[p].value,ps[p].page,ps[p].bbox]);
+ it('2x2 with every edge eligible: the higher-IoU pairing wins, whatever the prediction order',()=>{
+  const La=label(D1,'f','1',1,[0,0,10,10]),Lb=label(D1,'f','1',1,[0,2,10,12]);
+  const Pa=pred('f','1',1,[0,0,10,10]),Pb=pred('f','1',1,[0,2,10,12]);
+  expect(matchGroup([La,Lb],[Pa,Pb]).tp).toEqual([[0,0],[1,1]]);
+  expect(matchGroup([La,Lb],[Pb,Pa]).tp).toEqual([[0,1],[1,0]]);
+ });
+ it('step 2: an equal-value cross-page prediction is the citation, the different-value same-box one is only a FP',()=>{
+  const L=label(D1,'f','5',1,[0,0,10,10]);
+  const Pq=pred('f','5',2,[300,300,310,310]),Pr=pred('f','6',1,[0,0,10,10]);
+  expect(matchGroup([L],[Pq,Pr])).toEqual({tp:[],citation:[[0,0]],mismatch:[],unpairedPredictions:[1],unpairedLabels:[]});
+  expect(matchGroup([L],[Pr,Pq])).toEqual({tp:[],citation:[[0,1]],mismatch:[],unpairedPredictions:[0],unpairedLabels:[]});
+ });
+ it('permuted inputs give the same pairs (by identity), not just the same counts',()=>{
+  const ls=[L1,L2,L3,L4],ps=[P1,P2,P3,P4,P5];
+  const ids=(l:ExtractionLabel[],p:PredictedField[])=>{const m=matchGroup(l,p);return [m.tp,m.citation,m.mismatch].map(g=>g.map(x=>idOf(l,p,x)).sort());};
+  const base=ids(ls,ps);
+  expect(ids([L4,L3,L2,L1],[P5,P4,P3,P2,P1])).toEqual(base);
+  expect(ids([L2,L4,L1,L3],[P3,P1,P5,P2,P4])).toEqual(base);
+ });
+ it('invalid boxes sort after valid ones in step 2 and never match in step 1; non-string values are unequal, not a TypeError',()=>{
+  const L=label(D1,'f','5',1,[0,0,10,10]);
+  const bad=pred('f','6',1,[9,9,1,1]),good=pred('f','6',1,[300,300,310,310]);
+  expect(matchGroup([L],[bad,good]).mismatch).toEqual([[0,1]]);
+  expect(valuesEqual('decimal','1',5 as unknown as string)).toBe(false);
+  expect(valuesEqual('text','a',null as unknown as string)).toBe(false);
+  expect(matchGroup([L],[pred('f',5 as unknown as string,1,[0,0,10,10])]).mismatch).toEqual([[0,0]]);
+ });
+ it('invalid dates never throw: unequal when predicted',()=>{
+  expect(valuesEqual('date','2025-13-01','2025-13-01')).toBe(false);
+  expect(valuesEqual('date','2025-02-30','2025-02-30')).toBe(false);
+ });
+});
+
 describe('evaluateExtraction',()=>{
  it('adversarial fixture: per-field TP/FP/FP_citation/FN, P/R, zero support skipped; gate fail',()=>{
   const r=evaluateExtraction(adversarial,adversarialOut);
@@ -86,19 +122,19 @@ describe('evaluateExtraction',()=>{
    ['net_income',{result:'fail',reason:'value'}],['revenue',{result:'fail',reason:'value'}]]);
   const rev=r.cases.find(c=>c.case_id==='revenue')!;
   expect(rev.detail).toMatchObject({tp:2,fp:3,fp_citation:1,fn:2,support:4,precision:'0.4',recall:'0.5'});
-  const s=summarize(r.cases,extractionSummaryContext());
+  const s=summarize(r.cases,extractionSummaryContext(GOLD));
   expect(s).toMatchObject({correctness:{pass:2,fail:2},coverage:{skipped:1},gate:'fail'});
  });
  it('crossed two-page fixture → 2 TP, field passes, gate pass',()=>{
   const r=evaluateExtraction(crossed,crossedOut);
   expect(r.fields.total_assets).toMatchObject({tp:2,fp:0,fn:0,precision:'1',recall:'1',passed:true});
-  expect(summarize(r.cases,extractionSummaryContext()).gate).toBe('pass');
+  expect(summarize(r.cases,extractionSummaryContext(GOLD)).gate).toBe('pass');
  });
  it('every document parsed but TP = 0 → gate fail (not incomplete)',()=>{
   const g:ExtractionGold={documents:[doc(D3,1)],labels:[label(D3,'revenue','10',1,[0,0,10,10])]};
   const r=evaluateExtraction(g,[{document_sha256:D3,status:'parsed',fields:[pred('revenue','11',1,[0,0,10,10])]}]);
   expect(r.fields.revenue).toMatchObject({tp:0,fp:1,fn:1,passed:false});
-  const s=summarize(r.cases,extractionSummaryContext());
+  const s=summarize(r.cases,extractionSummaryContext(GOLD));
   expect(s.execution.read_error).toBe(0);
   expect(s.gate).toBe('fail');
  });
@@ -106,10 +142,24 @@ describe('evaluateExtraction',()=>{
   const g:ExtractionGold={documents:[doc(D3,1),doc(D4,1)],labels:[label(D3,'revenue','10',1,[0,0,10,10]),label(D4,'cash','5',1,[0,0,10,10])]};
   const r=evaluateExtraction(g,[{document_sha256:D3,status:'unparseable',error:'pdf_encrypted'}]);
   expect(r.cases.map(c=>[c.case_id,c.outcome])).toEqual([['cash',{result:'read_error',reason:'read_failed'}],['revenue',{result:'read_error',reason:'read_failed'}]]);
-  expect(summarize(r.cases,extractionSummaryContext()).gate).toBe('incomplete');
+  expect(summarize(r.cases,extractionSummaryContext(GOLD)).gate).toBe('incomplete');
+ });
+ it('a broken document with no labels still makes every field a read_error listing all broken documents → incomplete',()=>{
+  const g:ExtractionGold={documents:[doc(D3,1),doc(D4,1)],labels:[label(D3,'revenue','10',1,[0,0,10,10])]};
+  const r=evaluateExtraction(g,[{document_sha256:D3,status:'parsed',fields:[pred('revenue','10',1,[0,0,10,10]),pred('extra','1',1,[0,0,1,1])]},{document_sha256:D4,status:'unparseable',error:'pdf_encrypted'}]);
+  expect(r.cases.map(c=>[c.case_id,c.outcome,c.detail])).toEqual([['extra',{result:'read_error',reason:'read_failed'},{documents:[D4]}],['revenue',{result:'read_error',reason:'read_failed'},{documents:[D4]}]]);
+  expect(summarize(r.cases,extractionSummaryContext(GOLD)).gate).toBe('incomplete');
+  const missing=evaluateExtraction(g,[{document_sha256:D3,status:'parsed',fields:[]}]);   // D4 has no output at all
+  expect(missing.cases.every(c=>c.outcome.result==='read_error')).toBe(true);
+ });
+ it('the summary gold block comes from the caller',()=>{
+  const g={format:'legacy_plan2' as const,ready:false,pending:2,provenance_gaps:1};
+  expect(extractionSummaryContext(g).gold).toEqual(g);
  });
  it('invalid gold is gold_invalid',()=>{
+  expect(()=>evaluateExtraction({documents:[doc(D3,1)],labels:[label(D3,'fy','2025-13-01',1,[0,0,1,1],'date')]},[])).toThrow(EvalError);   // invalid gold date
   const bad=(g:ExtractionGold)=>{try{evaluateExtraction(g,[]);return 'ok';}catch(e){return e instanceof EvalError?e.code:'other';}};
+  expect(bad({documents:[doc(D3,1)],labels:[label(D3,'fy','2025-13-01',1,[0,0,1,1],'date')]})).toBe('gold_invalid');
   expect(bad({documents:[doc(D3,1)],labels:[label(D3,'revenue','1',2,[0,0,1,1])]})).toBe('gold_invalid');   // page > page_count
   expect(bad({documents:[doc(D3,1)],labels:[label(D3,'revenue','1',1,[5,0,1,1])]})).toBe('gold_invalid');   // x0 ≥ x1
   expect(bad({documents:[doc(D3,1)],labels:[label(D4,'revenue','1',1,[0,0,1,1])]})).toBe('gold_invalid');   // unknown document

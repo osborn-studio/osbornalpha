@@ -37,7 +37,7 @@ describe('KIND_REGISTRY',()=>{
  },240000);
  it('Task 15: extraction_gold and judgment_calibration are registered, disabled, with their reasons; every EvalKind has exactly one entry',()=>{
   expect(kindEntry('extraction_gold')).toEqual({kind:'extraction_gold',enabled:false,reason:'D8: license decision pending'});
-  expect(kindEntry('judgment_calibration')).toEqual({kind:'judgment_calibration',enabled:false,reason:'prerequisite: F4 settledForecasts'});
+  expect(kindEntry('judgment_calibration')).toEqual({kind:'judgment_calibration',enabled:false,reason:'prerequisite: F4 settledForecasts and thresholds'});
   const all:EvalKind[]=['official_reconciliation','dual_source','replay_consistency','reference_regression','extraction_gold','judgment_calibration'];
   expect(KIND_REGISTRY.map(e=>e.kind).sort()).toEqual([...all].sort());
  });

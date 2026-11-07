@@ -37,6 +37,30 @@ describe('evaluateCalibration',()=>{
   expect(r.eligible).toBe(2);
   expect(r.cases.filter(c=>c.outcome.result==='skipped').every(c=>c.outcome.result==='skipped'&&c.outcome.reason==='ineligible')).toBe(true);
  });
+ it('strict dates and timestamps: calendar round-trip, ISO-8601 with Z or an explicit offset',()=>{
+  const r=evaluateCalibration([
+   f('ok-offset','0.5',1,{registered_at:'2025-01-01T08:00:00+08:00'}),
+   f('feb30','0.5',1,{},{evidence_available_date:'2025-02-30'}),
+   f('zoneless','0.5',1,{registered_at:'2025-01-01T00:00:00'}),
+   f('dateonly','0.5',1,{registered_at:'2025-01-01'}),
+   f('hor','0.5',1,{horizon_end:'2025-06-31T00:00:00Z'}),
+   f('settled','0.5',1,{},{settled_at:'2025-07-02T00:00:00'}),
+  ]);
+  expect(Object.fromEntries(r.ineligible.map(x=>[x.case_id,x.reason]))).toEqual({feb30:'timestamp_invalid',zoneless:'timestamp_invalid',dateonly:'timestamp_invalid',hor:'timestamp_invalid',settled:'timestamp_invalid'});
+  expect(r.eligible).toBe(1);
+ });
+ it('thresholds are F4\'s: without them the result and its summary are incomplete even with eligible samples',()=>{
+  const none=evaluateCalibration([f('a','0.8',1)]);
+  expect(none).toMatchObject({eligible:1,gate:'incomplete',detail:{reason:'thresholds_pending_f4'}});
+  expect(summarizeCalibration(none).gate).toBe('incomplete');
+  const given=evaluateCalibration([f('a','0.8',1)],TH);
+  expect(given.gate).toBeNull();
+  expect(summarizeCalibration(given).gate).toBe('pass');
+ });
+ it('a revision whose parent is a duplicated settlement is revision_parent_ineligible',()=>{
+  const r=evaluateCalibration([f('d','0.5',1),f('d','0.6',0),f('kid','0.7',1,{revision_of:'d'})]);
+  expect(Object.fromEntries(r.ineligible.map(x=>[x.case_id,x.reason]))).toEqual({d:'multiple_settlements','d#2':'multiple_settlements',kid:'revision_parent_ineligible'});
+ });
  it('revision chain: the last eligible registration counts, earlier ones are superseded, an ineligible later revision is ignored',()=>{
   const r=evaluateCalibration([
    f('v1','0.6',1),

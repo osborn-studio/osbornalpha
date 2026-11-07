@@ -8,7 +8,7 @@
 // forecast_id) counts, earlier eligible ones are superseded_in_chain. Eligible → pass (population),
 // ineligible → skipped(ineligible). Output: Brier = mean (p − outcome)² and a 10-bucket reliability table
 // ([0,0.1) … [0.9,1.0], p = 1 in the last bucket), both exact on BigInt, as 10-place truncated text. No
-// eligible sample → population 0 → incomplete. Population = the ELIGIBLE forecasts only (§3.3 calibration row, Codex
+// eligible sample → population 0 → incomplete; no thresholds (F4 supplies them) → incomplete too. Population = the ELIGIBLE forecasts only (§3.3 calibration row, Codex
 // plan round 1 P2-5): ineligible ones stay in cases[] as skipped(ineligible) and are counted in coverage.skipped,
 // outside the population, the same way whether 0, some or all forecasts are eligible. Thresholds are F4's.
 import type {CaseReport,Summary,SummaryContext,Thresholds} from '../types';
@@ -17,29 +17,38 @@ import {ratioText} from './ratio';
 
 export interface Settlement{outcome:0|1;settled_at:string;evidence_ref:string;evidence_available_date:string}
 export interface SettledForecast{forecast_id:string;forecast_sha256:string;methodology_version:string;claim:string;p:string;registered_at:string;input_snapshot_sha256:string;horizon_end:string;revision_of:string|null;settlement:Settlement}
-export type IneligibleReason='p_invalid'|'p_out_of_range'|'outcome_invalid'|'timestamp_invalid'|'evidence_too_soon'|'settled_before_horizon'|'multiple_settlements'|'revision_parent_missing'|'revision_cycle'|'superseded_in_chain';
+export type IneligibleReason='p_invalid'|'p_out_of_range'|'outcome_invalid'|'timestamp_invalid'|'evidence_too_soon'|'settled_before_horizon'|'multiple_settlements'|'revision_parent_missing'|'revision_parent_ineligible'|'revision_cycle'|'superseded_in_chain';
 export interface ReliabilityBucket{index:number;lower:string;upper:string;n:number;mean_p:string|null;observed_rate:string|null}
-export interface CalibrationResult{cases:CaseReport[];eligible:number;brier:string|null;reliability:ReliabilityBucket[];ineligible:{case_id:string;forecast_id:string;reason:IneligibleReason}[]}
+export interface CalibrationResult{gate:'incomplete'|null;detail:{reason:'thresholds_pending_f4'}|null;thresholds:Thresholds|null;cases:CaseReport[];eligible:number;brier:string|null;reliability:ReliabilityBucket[];ineligible:{case_id:string;forecast_id:string;reason:IneligibleReason}[]}
 
 const DAY_MS=86_400_000;
 interface Dec{n:bigint;s:number}
 const parseP=(p:string):Dec|null=>{if(typeof p!=='string'||!/^\d+(\.\d+)?$/.test(p))return null;const [i,f='']=p.split('.');return {n:BigInt(i+f),s:f.length};};
-const ms=(v:string)=>Date.parse(v);
-const dayMs=(v:string)=>/^\d{4}-\d{2}-\d{2}$/.test(v)?Date.parse(`${v}T00:00:00Z`):Number.NaN;
+const dayMs=(v:unknown):number=>{
+ if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v))return Number.NaN;
+ const t=Date.parse(`${v}T00:00:00Z`);
+ return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===v?t:Number.NaN;
+};
+/** ISO-8601 date-time with seconds optional, and Z or an explicit offset; the calendar date must round-trip. */
+const ms=(v:unknown):number=>{
+ if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(v))return Number.NaN;
+ if(Number.isNaN(dayMs(v.slice(0,10))))return Number.NaN;
+ return Date.parse(v);
+};
 
 function recordReason(f:SettledForecast):IneligibleReason|null{
  const p=parseP(f.p);
  if(!p)return 'p_invalid';
  if(p.n>10n**BigInt(p.s))return 'p_out_of_range';
  if(f.settlement.outcome!==0&&f.settlement.outcome!==1)return 'outcome_invalid';
- const reg=ms(f.registered_at),ev=dayMs(f.settlement.evidence_available_date),settled=ms(f.settlement.settled_at),horizon=ms(f.horizon_end);
+ const reg=ms(f.registered_at),ev=dayMs(f.settlement.evidence_available_date),settled=ms(f.settlement.settled_at),horizon=Number.isNaN(dayMs(f.horizon_end))?ms(f.horizon_end):dayMs(f.horizon_end);   // horizon_end: a calendar date or a timestamp
  if([reg,ev,settled,horizon].some(Number.isNaN))return 'timestamp_invalid';
  if(reg+DAY_MS>ev)return 'evidence_too_soon';
  if(settled<horizon)return 'settled_before_horizon';
  return null;
 }
 
-export function evaluateCalibration(forecasts:SettledForecast[]):CalibrationResult{
+export function evaluateCalibration(forecasts:SettledForecast[],thresholds?:Thresholds):CalibrationResult{
  const count=new Map<string,number>();
  for(const f of forecasts)count.set(f.forecast_id,(count.get(f.forecast_id)??0)+1);
  const reason=new Map<SettledForecast,IneligibleReason>();
@@ -54,7 +63,7 @@ export function evaluateCalibration(forecasts:SettledForecast[]):CalibrationResu
   let cur=f;const seen=new Set([f.forecast_id]);let bad:IneligibleReason|null=null;
   while(cur.revision_of!==null){
    const parent=byId.get(cur.revision_of);
-   if(!parent){bad='revision_parent_missing';break;}
+   if(!parent){bad=count.has(cur.revision_of)?'revision_parent_ineligible':'revision_parent_missing';break;}
    if(seen.has(parent.forecast_id)){bad='revision_cycle';break;}
    seen.add(parent.forecast_id);cur=parent;
   }
@@ -90,14 +99,15 @@ export function evaluateCalibration(forecasts:SettledForecast[]):CalibrationResu
  const bound=(i:number)=>i===0?'0':i===10?'1':`0.${i}`;
  const reliability=buckets.map((b,i):ReliabilityBucket=>({index:i,lower:bound(i),upper:bound(i+1),n:b.n,
   mean_p:b.n===0?null:ratioText(b.sumP,BigInt(b.n)*one),observed_rate:b.n===0?null:ratioText(b.sumO,BigInt(b.n))}));
- return {cases,eligible:eligible.length,brier,reliability,ineligible};
+ return {gate:thresholds?null:'incomplete',detail:thresholds?null:{reason:'thresholds_pending_f4'},thresholds:thresholds??null,cases,eligible:eligible.length,brier,reliability,ineligible};
 }
 
 export const calibrationSummaryContext=(thresholds:Thresholds):SummaryContext=>({thresholds,gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},subset:false,evidenceClass:'truth'});
 /** Population = eligible forecasts; every ineligible one adds to coverage.skipped outside the population (P2-5). No eligible → incomplete. */
-export function summarizeCalibration(r:CalibrationResult,thresholds:Thresholds):Summary{
+export function summarizeCalibration(r:CalibrationResult,thresholds:Thresholds|null=r.thresholds):Summary{
  const eligible=r.cases.filter(c=>!(c.outcome.result==='skipped'&&c.outcome.reason==='ineligible'));
- const {gate:_gate,...s}=summarize(eligible,calibrationSummaryContext(thresholds));
+ const {gate:_gate,...s}=summarize(eligible,calibrationSummaryContext(thresholds??{max_fail:0,min_coverage_optional:'0.95'}));
  const base={...s,coverage:{...s.coverage,skipped:s.coverage.skipped+(r.cases.length-eligible.length)}};
- return {...base,gate:gateOf(base)};
+ // Thresholds are F4's: until supplied no gate is decided, whatever the sample (detail.reason thresholds_pending_f4).
+ return {...base,gate:thresholds?gateOf(base):'incomplete'};
 }

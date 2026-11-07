@@ -14,12 +14,12 @@
 //     prediction → FP; unpaired label → FN.
 // Per field across documents: P = TP/(TP+FP) (0 when there are no predictions and support > 0), R =
 // TP/(TP+FN); pass ⇔ P ≥ 0.95 and R ≥ 0.95 (integer comparison 100·TP ≥ 95·den). Support 0 →
-// skipped(zero_support). A field with labels in a document whose output is unparseable or missing →
-// read_error(read_failed) for the whole field. A prediction with invalid geometry never matches in step 1.
+// skipped(zero_support). If ANY declared gold document (labelled or not) is unparseable or missing,
+// every field → read_error(read_failed) listing all broken documents (→ incomplete). A prediction with invalid geometry never matches in step 1.
 // Outputs for documents outside the gold set are ignored.
 import {compareWithinTolerance} from '../compare';
 import {EvalError} from '../errors';
-import type {CaseOutcome,CaseReport,SummaryContext} from '../types';
+import type {CaseOutcome,CaseReport,Summary,SummaryContext} from '../types';
 import {ratioText} from './ratio';
 
 export type ExtractionValueType='text'|'decimal'|'date'|'enum';
@@ -48,9 +48,10 @@ const iouCmp=(x:Overlap,y:Overlap)=>x.inter*y.union-y.inter*x.union;
 const bboxCmp=(a:BBox,b:BBox)=>a[0]-b[0]||a[1]-b[1]||a[2]-b[2]||a[3]-b[3];
 const validBox=(b:unknown):b is BBox=>Array.isArray(b)&&b.length===4&&b.every(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0)&&b[0]<b[2]&&b[1]<b[3];
 const normText=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim();
-const isIsoDate=(s:string)=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s;
+const isIsoDate=(s:unknown):s is string=>{if(typeof s!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const t=Date.parse(`${s}T00:00:00Z`);return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===s;};
 
 export function valuesEqual(type:ExtractionValueType,a:string,b:string):boolean{
+ if(typeof a!=='string'||typeof b!=='string')return false;
  switch(type){
   case 'decimal':try{return compareWithinTolerance(a.trim(),b.trim(),'0').passed;}catch{return false;}
   case 'date':{const x=a.trim(),y=b.trim();return isIsoDate(x)&&isIsoDate(y)&&x===y;}
@@ -100,7 +101,7 @@ export function matchGroup(labels:ExtractionLabel[],preds:PredictedField[]):Grou
   const o:Overlap=L.locator.page===P.page&&validBox(P.bbox)?overlap(L.locator.bbox,P.bbox):{inter:0,union:1};
   return {l,p,o,eq:valuesEqual(L.value_type,L.value,P.value)};
  }));
- pairs.sort((x,y)=>Number(y.eq)-Number(x.eq)||iouCmp(y.o,x.o)||bboxCmp(labels[x.l].locator.bbox,labels[y.l].locator.bbox)||(validBox(preds[x.p].bbox)&&validBox(preds[y.p].bbox)?bboxCmp(preds[x.p].bbox,preds[y.p].bbox):0)||x.l-y.l||x.p-y.p);
+ pairs.sort((x,y)=>Number(y.eq)-Number(x.eq)||iouCmp(y.o,x.o)||Number(!validBox(preds[x.p].bbox))-Number(!validBox(preds[y.p].bbox))||bboxCmp(labels[x.l].locator.bbox,labels[y.l].locator.bbox)||(validBox(preds[x.p].bbox)&&validBox(preds[y.p].bbox)?bboxCmp(preds[x.p].bbox,preds[y.p].bbox):0)||x.l-y.l||x.p-y.p);
  const doneL=new Set<number>(),doneP=new Set<number>();const citation:[number,number][]=[],mismatch:[number,number][]=[];
  for(const q of pairs){
   if(doneL.has(q.l)||doneP.has(q.p))continue;
@@ -123,6 +124,7 @@ function validateGold(g:ExtractionGold):Map<string,ExtractionDocumentSpec>{
   const d=docs.get(l.document_sha256);if(!d)bad(`label ${l.label_id}: unknown document`);
   if(!l.field||!Number.isSafeInteger(l.occurrence)||l.occurrence<1||!VALUE_TYPES.has(l.value_type)||typeof l.value!=='string')bad(`label ${l.label_id}: field/occurrence/value`);
   if(!Number.isSafeInteger(l.locator.page)||l.locator.page<1||l.locator.page>d!.page_count||!validBox(l.locator.bbox))bad(`label ${l.label_id}: locator`);
+  if(l.value_type==='date'&&!isIsoDate(l.value))bad(`label ${l.label_id}: date value`);
   if(!l.recorded_by||!l.reviewed_by)bad(`label ${l.label_id}: recorded_by/reviewed_by`);
  }
  return docs;
@@ -135,13 +137,13 @@ export function evaluateExtraction(gold:ExtractionGold,outputs:ExtractionOutput[
  const parsedFields=(sha:string):PredictedField[]=>{const o=out.get(sha);return o&&o.status==='parsed'?o.fields:[];};
  const fieldNames=new Set<string>(gold.labels.map(l=>l.field));
  for(const sha of docs.keys())for(const p of parsedFields(sha))fieldNames.add(p.field);
+ const brokenDocs=[...docs.keys()].filter(sha=>out.get(sha)?.status!=='parsed').sort(cmp);
  const cases:CaseReport[]=[];const fields:Record<string,FieldMetrics>={};
  const rep=(field:string,outcome:CaseOutcome,detail:Record<string,unknown>):CaseReport=>({case_id:field,required:true,outcome,left:null,right:null,abs_diff:null,rel_diff:null,tolerance:'0',provenance:null,detail});
  for(const field of [...fieldNames].sort(cmp)){
   const labels=gold.labels.filter(l=>l.field===field);
   const labelDocs=[...new Set(labels.map(l=>l.document_sha256))].sort(cmp);
-  const broken=labelDocs.filter(sha=>out.get(sha)?.status!=='parsed');
-  if(broken.length>0){cases.push(rep(field,{result:'read_error',reason:'read_failed'},{documents:broken}));continue;}
+  if(brokenDocs.length>0){cases.push(rep(field,{result:'read_error',reason:'read_failed'},{documents:brokenDocs}));continue;}
   const predDocs=[...docs.keys()].filter(sha=>parsedFields(sha).some(p=>p.field===field));
   const predictions=predDocs.reduce((n,sha)=>n+parsedFields(sha).filter(p=>p.field===field).length,0);
   if(labels.length===0){cases.push(rep(field,{result:'skipped',reason:'zero_support'},{support:0,predictions}));continue;}
@@ -162,4 +164,5 @@ export function evaluateExtraction(gold:ExtractionGold,outputs:ExtractionOutput[
  return {cases,fields};
 }
 
-export const extractionSummaryContext=():SummaryContext=>({thresholds:{max_fail:0,min_coverage_optional:'0.95'},gold:{format:'f6',ready:true,pending:0,provenance_gaps:0},subset:false,evidenceClass:'truth'});
+/** The gold block comes from the caller (goldBlockOf(set)); thresholds are the §11.1 field gate (max_fail 0). */
+export const extractionSummaryContext=(gold:Summary['gold']):SummaryContext=>({thresholds:{max_fail:0,min_coverage_optional:'0.95'},gold,subset:false,evidenceClass:'truth'});
