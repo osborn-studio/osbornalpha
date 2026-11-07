@@ -192,14 +192,14 @@ describe('review fixes (Task 7)',()=>{
 describe('derivedCellOf lineage',()=>{
  it('keeps per-input quarter/ytdRule (a fact reused across quarters stays twice); mixed rules omit the cell rule; a shared rule is kept',()=>{
   const inp=(id:string,q:[string,string],r:'same_filing'|'never_revised')=>({fact_id:id,concept:'revenue',filing_id:'F',available_date:'2024-01-01',quarter:q,ytd_rule:r});
-  const mixed=derivedCellOf({issuer_id:'i',market:'US',metric:'ttm_revenue',period_start:'2023-01-01',period_end:'2023-12-31',duration:'TTM' as never,value:'1',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:'v',based_on_rev:1,as_of:'2024-01-01',
+  const mixed=derivedCellOf({issuer_id:'i',market:'US',metric:'ttm_revenue',period_start:'2023-01-01',period_end:'2023-12-31',duration:'TTM' as never,value:'1',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:'v',based_on_rev:1,based_on_lineage:[{issuer_id:'i',state_rev:1}],as_of:'2024-01-01',
    inputs:[inp('A',['2023-01-01','2023-03-31'],'same_filing'),inp('A',['2023-04-01','2023-06-30'],'never_revised'),{fact_id:'B',concept:'revenue',filing_id:'F',available_date:'2024-01-01'}]});
   expect(mixed.inputs).toEqual([
    {factId:'A',concept:'revenue',filingId:'F',availableDate:'2024-01-01',quarter:['2023-01-01','2023-03-31'],ytdRule:'a'},
    {factId:'A',concept:'revenue',filingId:'F',availableDate:'2024-01-01',quarter:['2023-04-01','2023-06-30'],ytdRule:'b'},
    {factId:'B',concept:'revenue',filingId:'F',availableDate:'2024-01-01'}]);
   expect('rule' in mixed).toBe(false);
-  const same=derivedCellOf({issuer_id:'i',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',value:'1',unit:'USD',input_unit:'USD',basis:'x',formula_version:'v',based_on_rev:1,as_of:'a',inputs:[inp('A',['a','b'],'never_revised'),{fact_id:'B',concept:'c',filing_id:'F',available_date:'d'}]});
+  const same=derivedCellOf({issuer_id:'i',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',value:'1',unit:'USD',input_unit:'USD',basis:'x',formula_version:'v',based_on_rev:1,based_on_lineage:[{issuer_id:'i',state_rev:1}],as_of:'a',inputs:[inp('A',['a','b'],'never_revised'),{fact_id:'B',concept:'c',filing_id:'F',available_date:'d'}]});
   expect(same.rule).toBe('b');
  });
 });

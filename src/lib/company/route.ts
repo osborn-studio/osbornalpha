@@ -11,7 +11,7 @@
 // withheld as a whole). Events use the same applyGate through event-dto.ts gateEvents.
 import {NextResponse} from 'next/server';
 import {AdminForbidden,AdminUnauthenticated,requireAdminUser} from '@/lib/admin/auth';
-import {TICKER_RE,asOfParam,decodeTicker,errorResponse,failureResponse,paramErrorResponse,readParams,resolvePublicIssuer,successHeaders,utcDate} from '@/lib/facts/public-route';
+import {TICKER_RE,asOfParam,decodeTicker,errorResponse,failureResponse,paramErrorResponse,readParams,resolvePublicIssuer,successHeaders,tickerAsOfParam,utcDate} from '@/lib/facts/public-route';
 import type {PublicIssuer} from '@/lib/facts/public-route';
 import {inferCoreMarket} from '@/lib/securities/ticker';
 import type {FactRow,FilingRow} from '@/lib/facts/types';
@@ -49,13 +49,13 @@ export function companyRoute(spec:{tag:string;mode:Mode;params:readonly string[]
   if(spec.mode==='admin'){const a=await adminGate();if(a instanceof Response)return finish(a);userId=a;}
   const {ticker:raw}=await params;const ticker=decodeTicker(raw);
   if(ticker===null||!TICKER_RE.test(ticker))return finish(errorResponse('invalid_parameter:ticker','invalid ticker',400));
-  let p:Map<string,string>,asOf:string,asOfGiven:boolean;
-  try{p=readParams(new URL(req.url),spec.params);asOfGiven=p.has('asOf');asOf=spec.params.includes('asOf')?asOfParam(p,today):today;}
+  let p:Map<string,string>,asOf:string,asOfGiven:boolean,tickerAsOf:string;
+  try{p=readParams(new URL(req.url),[...spec.params,'tickerAsOf']);tickerAsOf=tickerAsOfParam(p,today);asOfGiven=p.has('asOf');asOf=spec.params.includes('asOf')?asOfParam(p,today):today;}
   catch(e){const r=paramErrorResponse(e);if(r)return finish(r);throw e;}
   if(inferCoreMarket(ticker.trim())==='HK')return finish(errorResponse('market_not_served','HK disclosure facts await the document pipeline (F3)',404));
   try{
    const deps=productionReadDeps();
-   const issuer=await resolvePublicIssuer(deps.tables,ticker,today);
+   const issuer=await resolvePublicIssuer(deps.tables,ticker,today,tickerAsOf);
    if(!issuer)return finish(errorResponse('unknown_ticker','no issuer for ticker',404));
    const out=await spec.handler({mode:spec.mode,admin:spec.mode==='admin',now,today,asOf,asOfGiven,issuer,params:p,deps,userId},req);
    if(out instanceof Response)return finish(out);

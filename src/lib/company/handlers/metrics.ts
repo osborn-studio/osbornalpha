@@ -1,10 +1,12 @@
 // src/lib/company/handlers/metrics.ts
 // GET /api/companies/[ticker]/metrics — the page's metrics proxy (spec §5.4, §6.1, §0 #67). Without asOf:
-// fact_state_rev → metricsOfIssuer → fact_state_rev, every row's based_on_rev must equal both reads,
+// lineage + stateRevs → metricsOfIssuer → lineage + stateRevs; membership and the complete
+// revision vector must stay fixed, and every row's based_on_lineage must equal that vector,
 // otherwise (or metrics_unstable) {metrics: [], stale: true} with STALE_CACHE_CONTROL; current rows use
 // FRESH_METRICS_CACHE_CONTROL (both from the landed /api/facts/[ticker]/metrics). computedAt of
 // materialized rows is selected from financial_metrics (MetricRow lacks it). With asOf: live deriveMetrics
 // on one history snapshot (computedAtKind 'live'). Any ineligible input fact withholds the whole row.
+import {lineageRevsEqual} from '@/lib/facts/db';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {DERIVE_CONCEPTS,FORMULA_VERSION,deriveMetrics,metricNames} from '@/lib/facts/derive';
 import {FRESH_METRICS_CACHE_CONTROL,QueryError,STALE_CACHE_CONTROL,dateParam,intParam,listParam} from '@/lib/facts/public-route';
@@ -34,11 +36,16 @@ export const metricsHandler:Handler=async(ctx)=>{
  let rows:MetricRow[]=[],truncated=false,stale=false,known:FactRow[]=[],filings:FilingSummary[]=[];
  let computedAt:(m:MetricRow)=>string|null;
  if(!ctx.asOfGiven){
-  const rev=await deps.stateRev(issuer.issuerId,issuer.market);
+  const lineage=await deps.facts.lineageOf(issuer.issuerId);
+  const before=await deps.facts.stateRevs(lineage,issuer.market);
   try{rows=await deps.facts.metricsOfIssuer(issuer.issuerId,issuer.market,FORMULA_VERSION);}
   catch(e){if(e instanceof FactsDbError&&e.message==='metrics_unstable'){rows=[];stale=true;}else throw e;}
-  const after=stale?rev:await deps.stateRev(issuer.issuerId,issuer.market);   // always re-read, even for an empty result (§0 #67)
-  if(stale||after!==rev||rows.some(m=>m.based_on_rev!==rev)){rows=[];stale=true;}
+  if(!stale){
+   // Match the landed route: membership/revisions are checked even when no rows were read.
+   const lineageAfter=await deps.facts.lineageOf(issuer.issuerId);
+   const after=await deps.facts.stateRevs(lineageAfter,issuer.market);
+   if(lineageAfter.join(',')!==lineage.join(',')||!lineageRevsEqual(before,after)||rows.some(m=>!lineageRevsEqual(m.based_on_lineage,before))){rows=[];stale=true;}
+  }
   const at=rows.length>0?await deps.metricsComputedAt(issuer.issuerId,issuer.market,FORMULA_VERSION):new Map();
   computedAt=m=>{const x=at.get(metricKey(m));return x&&x.basedOnRev===m.based_on_rev?x.computedAt:null;};
  }else{

@@ -14,7 +14,7 @@ import {CN,US,cnSummary,emptySnapshot,fact,makeDeps,seededTables,summary,FIL_CN_
 
 const get=(t:string,qs='')=>GET(new Request(`https://alpha.example/api/companies/${t}/packet?${qs}`),{params:Promise.resolve({ticker:t})});
 const fn=(x:unknown)=>x as ReturnType<typeof vi.fn>;
-const metric=(p:Partial<MetricRow>):MetricRow=>({issuer_id:US,market:'US',metric:'roe',period_start:'2022-09-25',period_end:'2023-09-30',duration:'TTM',value:'0.25',unit:'ratio',input_unit:'USD',basis:'pure',formula_version:'f1',inputs:[],based_on_rev:1,as_of:'2024-01-01',...p});
+const metric=(p:Partial<MetricRow>):MetricRow=>({issuer_id:US,market:'US',metric:'roe',period_start:'2022-09-25',period_end:'2023-09-30',duration:'TTM',value:'0.25',unit:'ratio',input_unit:'USD',basis:'pure',formula_version:'f1',inputs:[],based_on_rev:1,based_on_lineage:[{issuer_id:p.issuer_id??US,state_rev:p.based_on_rev??1}],as_of:'2024-01-01',...p});
 
 describe('packet metrics, clipping, fallback',()=>{
  beforeEach(async()=>{vi.clearAllMocks();mocks.metrics=null;mocks.deps=makeDeps(await seededTables());});

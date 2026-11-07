@@ -4,7 +4,7 @@ import {displayNames,securityChips,padCik,streamOptions,securityMarket,datasetOf
 import type {ResolvedIssuer} from '@/lib/entities/resolve';
 import type {CoverageRow} from './types';
 
-const sec=(ticker:string,is_primary=false)=>({ticker,isin:null,figi:null,share_class:'common',is_primary,valid_from:'2000-01-01',valid_to:null});
+const sec=(ticker:string,is_primary=false)=>({ticker,isin:null,figi:null,share_class:'common',is_primary,valid_from:'2000-01-01',valid_to:null,valid_from_method:null,valid_to_method:null});
 const issuer=(secs:ReturnType<typeof sec>[]):ResolvedIssuer=>({issuer_id:'i1',status:'active',names:{zh:'百济神州',en:'BeOne Medicines'},identifiers:{cik:'1651308',lei:null,usci:null},securities:secs});
 const cov=(market:'US'|'CN'):CoverageRow=>({issuer_id:'i1',market,filings_count:1,facts_count:1,concepts_covered:1,earliest_period_end:null,latest_period_end:'2025-09-30',latest_available_date:'2025-11-06',citation_summary:{linked:0,pending:0,edgar:0},scope_last_success_at:null,scope_last_status:null,based_on_rev:1,rebuilt_at:'x',rebuild_id:'r',rebuild_batch_id:'b'});
 

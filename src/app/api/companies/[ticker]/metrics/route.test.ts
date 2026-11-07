@@ -12,7 +12,7 @@ import {GET as ADMIN_GET} from '../../../admin/companies/[ticker]/metrics/route'
 import {DERIVE_CONCEPTS,FORMULA_VERSION} from '@/lib/facts/derive';
 import {FactsDbError} from '@/lib/facts/types';
 import {metricKey} from '@/lib/company/metrics-computed-at';
-import {US,emptySnapshot,fact,filingRow,makeDeps,metricRow,seededTables,summary} from '@/lib/company/route-test-kit';
+import {US,OLD,emptySnapshot,fact,filingRow,makeDeps,metricRow,seededTables,summary} from '@/lib/company/route-test-kit';
 
 const get=(h:typeof GET,ticker:string,qs:string)=>h(new Request(`https://alpha.example/api/companies/${ticker}/metrics?${qs}`),{params:Promise.resolve({ticker})});
 const fn=(x:unknown)=>x as ReturnType<typeof vi.fn>;
@@ -23,6 +23,7 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
  beforeEach(async()=>{
   vi.clearAllMocks();mocks.deps=makeDeps(await seededTables());mocks.requireAdmin.mockResolvedValue({id:'u'});
   fn(mocks.deps.stateRev).mockResolvedValue(3);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue([{issuer_id:US,state_rev:3}]);
   fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([m]);
   fn(mocks.deps.facts.factsByIds).mockResolvedValue([gp,rev]);
   fn(mocks.deps.facts.filingsOfIssuer).mockResolvedValue([filingRow()]);
@@ -34,7 +35,7 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   expect(body).toMatchObject({market:'US',asOf:null,formulaVersion:FORMULA_VERSION,stale:false,truncated:false,withheld:{evidenceIncomplete:0,citationPending:0}});
   expect(body.metrics[0]).toMatchObject({metric:'gross_margin',basedOnRev:3,computedAt:'2026-11-06T02:00:00Z',computedAtKind:'materialized',cell:{kind:'derived',value:'0.4413'}});
   expect(Object.keys(body.evidence).sort()).toEqual([gp.fact_id,rev.fact_id].sort());
-  expect(mocks.deps.stateRev).toHaveBeenCalledTimes(2);
+  expect(mocks.deps.facts.stateRevs).toHaveBeenCalledTimes(2);
   expect(mocks.deps.facts.metricsOfIssuer).toHaveBeenCalledWith(US,'US',FORMULA_VERSION);
   expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
  });
@@ -46,14 +47,35 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   expect(body.withheld.evidenceIncomplete).toBe(1);
  });
  it('stale: based_on_rev behind, rev moving, or metrics_unstable → {metrics:[], stale:true}, s-maxage 30',async()=>{
-  fn(mocks.deps.stateRev).mockResolvedValue(4);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue([{issuer_id:US,state_rev:4}]);
   const a=await get(GET,'AAPL','');expect(await a.json()).toMatchObject({stale:true,metrics:[]});expect(a.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');
-  fn(mocks.deps.stateRev).mockResolvedValueOnce(3).mockResolvedValue(4);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValueOnce([{issuer_id:US,state_rev:3}]).mockResolvedValue([{issuer_id:US,state_rev:4}]);
   expect(await (await get(GET,'AAPL','')).json()).toMatchObject({stale:true,metrics:[]});
-  fn(mocks.deps.stateRev).mockResolvedValueOnce(3).mockResolvedValue(4);fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValueOnce([]);   // empty result while the rev moves is still stale (§0 #67, plan audit P8)
+  fn(mocks.deps.facts.stateRevs).mockResolvedValueOnce([{issuer_id:US,state_rev:3}]).mockResolvedValue([{issuer_id:US,state_rev:4}]);fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValueOnce([]);   // empty result while the rev moves is still stale (§0 #67, plan audit P8)
   {const e=await get(GET,'AAPL','');expect(await e.json()).toMatchObject({stale:true,metrics:[]});expect(e.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');}
-  fn(mocks.deps.stateRev).mockResolvedValue(3);fn(mocks.deps.facts.metricsOfIssuer).mockRejectedValue(new FactsDbError('unknown','metrics_unstable'));
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue([{issuer_id:US,state_rev:3}]);fn(mocks.deps.facts.metricsOfIssuer).mockRejectedValue(new FactsDbError('unknown','metrics_unstable'));
   expect(await (await get(GET,'AAPL','')).json()).toMatchObject({stale:true,metrics:[]});
+ });
+ it.each(['row vector','member rev','membership','empty membership'])('stale when %s changes while the target rev stays fixed',async(kind)=>{
+  const before=[{issuer_id:US,state_rev:3},{issuer_id:OLD,state_rev:7}];
+  fn(mocks.deps.facts.lineageOf).mockResolvedValue([US,OLD]);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue(before);
+  fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([{...m,based_on_lineage:before}]);
+  if(kind==='row vector')fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([m]);
+  if(kind==='member rev')fn(mocks.deps.facts.stateRevs).mockResolvedValueOnce(before).mockResolvedValue([{issuer_id:US,state_rev:3},{issuer_id:OLD,state_rev:8}]);
+  if(kind.includes('membership'))fn(mocks.deps.facts.lineageOf).mockResolvedValueOnce([US,OLD]).mockResolvedValue([US]);
+  if(kind==='empty membership')fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([]);
+  const res=await get(GET,'AAPL','');
+  expect(await res.json()).toMatchObject({stale:true,metrics:[]});
+  expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=30');
+ });
+ it('fresh when the complete lineage vector matches regardless of vector order',async()=>{
+  const vector=[{issuer_id:US,state_rev:3},{issuer_id:OLD,state_rev:7}];
+  fn(mocks.deps.facts.lineageOf).mockResolvedValue([US,OLD]);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue(vector);
+  fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([{...m,based_on_lineage:[...vector].reverse()}]);
+  const res=await get(GET,'AAPL','');
+  expect(await res.json()).toMatchObject({stale:false,metrics:[{metric:'gross_margin'}]});
  });
  it('asOf: live derive on one history snapshot (computedAtKind live), truncated passed through',async()=>{
   const cor=fact({concept:'cost_of_revenue',value:'214137000000',value_text:'214137000000'});
