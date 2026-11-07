@@ -14,6 +14,8 @@
 | T12 r3 / T14 r1 review fixes | 待指挥提交（sandbox 禁止 git index.lock） | 待复审 | Codex gpt-6-astra 实施 | T12: 3 / T14: 1 | 红测 15 + 6 失败；影响面 216 passed / 76 DB skipped；PostgreSQL sandbox EPERM，待指挥 db-one |
 | T18 public reads / admin routes | 待指挥提交（audit log staging 被 sandbox/approval policy 阻止） | 待复审 | Codex gpt-6-astra 实施 | 0 | 红测 11 suites missing imports；历史 cutoff 回归 1 failed / 54 passed；边界回归 4 failed / 11 passed；Task 18 61 passed；影响面 488 passed / 83 DB skipped；typecheck、lint PASS；db-one sandbox EPERM |
 
+| T16 review fixes | 本提交（`fix(judgments): T16 review fixes`） | 待复审 | Codex gpt-6-astra 实施 | 1 | 红测 7 failed / 38 passed；最终 51 passed / 7 DB skipped；typecheck、lint PASS；DB harness sandbox EPERM |
+
 ## 偏差 · Task 1
 
 - `uuidV8` 放在 `src/lib/judgments/uuid-v8.ts`，而非规格 §2.4 的 `pa-v1/uuid-v8.ts`（计划审计 P2-03）。
@@ -230,3 +232,17 @@
 - `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/judgments-db.integration.test.ts` → sandbox IPC listen EPERM；未启动 PostgreSQL。需指挥运行 db-one 验证真实 DB/RLS。队列 counts 沿计划为最多 500 条的摘要；非精确总量。
 
 - 提交阻塞：Task 18 的 26 个代码/测试/config 文件已通过 `git add` 暂存；仅暂存本任务日志补丁的 `git apply --cached` 被 index.lock EPERM 阻止，`git add -p` 的交互输入又被自动审批以 approval required / AskForApproval=Never 拒绝。未绕过 hook，未运行不含必需日志的 commit。日志同时含并行 T12/T14 未提交内容，需指挥选择性暂存本任务段落后提交。
+
+
+## T16 review fixes — generation cleanup / preview
+
+- stale_revision、invalid_state 与 cohort_object_invalid reset 复用成功路径的 CAS 后清理：只删除 manifest 列出的当前 unit / generation 下合法 partial 路径；保留其他 unit state 引用、任何 calibration.cohort_path 引用、最终 cohorts 对象与未列出的孤儿对象。CAS 失败不清成员或对象。
+- corrupted state 只有持有 UUID generation 且不存在其他 unit state 的同 generation 引用才清理成员；缺失 / 非 UUID / 共享 generation 或引用读取失败时保留成员和对象，记录已有信息码 job_state_conflict，message 为 generation_cleanup_skipped。不改 INFO_CODES / JUDGMENT_INFO_CODES。
+- preview=1 不解析或要求 codeVersion；生产装配沿用必填 string 契约，preview 传空串且只调用只读 previewCalibrate。写入运行仍缺版本即 503。
+- scope 语义说明：每个 scope unit 冻结整个 method cohort，再在分页中按 scope 过滤；query_bounds.n 统计 method cohort，不是 scope-filtered n_registered。
+- 契约适配：StepContext 新增现有 service-role TableClient，runCalibrate 和单元 / pg 测试装配同步；用 selectAll 按唯一键读取所有持久化 unit states 与 calibration paths，避免公共 listMethodologies 的发布门控遗漏未发布 / retired 单元。StepOutcome 增加可选 cleanupSkipped 供 runUnit 记录信息。setJobState 仍读 {ok, updated_at}.ok；保留 committed calibration metrics / 冻结 RPC，不改 SQL 或三种 JudgmentsDb 实现。当前 committed 迁移为 20261116090000_judgments.sql，未使用旧计划 / 提示中的时间戳。
+- 安全边界：引用扫描不是跨存储事务；依赖正常 writer 只分配 fresh UUID generation / immutable attempt path、不会收养旧引用的现有约束。扫描失败保留数据供孤儿维护；清理扫描量随历史 calibration 数增长。
+- TDD：`npm test -- src/lib/judgments/calibrate.test.ts src/app/api/cron/judgments-calibrate/route.test.ts` 首轮 7 failed / 38 passed，修复后 45 passed。最终 `npm test -- src/lib/judgments/calibrate.test.ts src/lib/judgments/cohort-store.test.ts src/lib/judgments/calibrate.integration.test.ts src/app/api/cron/judgments-calibrate/route.test.ts` → 51 passed / 7 DB skipped（含追加读取失败 / 短页引用保护测试）。
+- `npm run typecheck && npm run lint` 最终 PASS（lint --max-warnings=0）；首次 typecheck 发现 fake TableClient 行类型不兼容，已通过展开 calibration row 修正。`git diff --check` PASS。
+- PostgreSQL：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/judgments/calibrate.integration.test.ts` → IPC listen EPERM；换 `node --import tsx` → 127.0.0.1 listen EPERM。需指挥运行 db-one。该 suite 已在 scripts/ci/research-checks.ts 既有 F4 criticalSuites.push，未新增 suite；领取仍在 withClaimLock 内。
+- 并行提交偏差：本轮先写的 calibrate / cron 回归测试及 fake tables 装配被并行提交 8fa3d819 一并收入；本轮不改写该提交历史，剩余修复与追加测试限定所授权路径。

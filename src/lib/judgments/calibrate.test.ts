@@ -30,7 +30,7 @@ function fakeDb(rows:MethodologyRow[],envelopes:Envelope[]){
  const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
  const select=tables.select.bind(tables);
  tables.select=async(table,match,opts)=>{
-  const rows=table==='judgment_job_state'?[...jobs].map(([job,v])=>({job,...v})):table==='judgment_calibrations'?calibrations:null;
+  const rows=table==='judgment_job_state'?[...jobs].map(([job,v])=>({job,...v})):table==='judgment_calibrations'?calibrations.map(row=>({...row})):null;
   return rows?rows.slice(opts?.offset??0,(opts?.offset??0)+(opts?.limit??1000)):select(table,match,opts);
  };
  const db={
@@ -429,6 +429,25 @@ describe('T16 review cleanup',()=>{
   expect(f.frozen.has(generation)).toBe(true);expect(store.objects.has(path)).toBe(true);
   if(fault==='not_uuid')expect(f.frozen.has('not-a-uuid')).toBe(true);
   expect(stateOf(f)).toEqual({});
+ });
+ it('failed reference reads retain members and objects and report skipped cleanup',async()=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const st=stateOf(f)!,path=st.manifest[0].path;delete f.jobs.get(unitAll.job)!.state.cutoff;
+  ctx.tables={...ctx.tables,select:async()=>{throw new Error('read unavailable');}};
+  let steps=0;const r=await runUnit(ctx,unitAll,()=>steps++>0);
+  expect(r.infos).toContainEqual(expect.objectContaining({code:'job_state_conflict',message:expect.stringContaining('generation_cleanup_skipped')}));
+  expect(f.frozen.has(st.generation)).toBe(true);expect(store.objects.has(path)).toBe(true);
+ });
+ it('success cleanup respects references beyond a short service-role response page',async()=>{
+  const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');
+  await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);await stepUnit(ctx,unitAll);
+  const path=stateOf(f)!.manifest[0].path;
+  f.jobs.set('calibrate:retired_method@v9:all:',{state:{manifest:[{path}]},updated_at:'old'});
+  const select=ctx.tables.select.bind(ctx.tables);
+  ctx.tables={...ctx.tables,select:async(t,m,o)=>(await select(t,m,o)).slice(0,1)};
+  expect(await stepUnit(ctx,unitAll)).toMatchObject({kind:'finalized',status:'inserted',cleared:true});
+  expect(store.objects.has(path)).toBe(true);expect(f.frozen.size).toBe(0);
  });
  it('a lost reset CAS keeps the generation and partials',async()=>{
   const f=fakeDb([METHOD],cohort(3)),store=memoryCohortStore(),ctx=ctxOf(f.db,store,'abababab');

@@ -17,6 +17,7 @@
 // cohort file, and calls insert_calibration: inserted | duplicate → CAS-clear the unit (R05),
 // stale_revision → clear and restart with a new generation (acceptance example 10).
 import {randomUUID} from 'node:crypto';
+import {selectAll} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
@@ -51,16 +52,16 @@ export interface CalibrateDeps{
  codeVersion:string;deadline:Date|null;triggeredBy?:TriggeredBy;
  now?:()=>Date;uuid?:()=>string;pageSize?:number;
 }
-export interface StepContext{db:JudgmentsDb;store:CohortStore;codeVersion:string;batchId:string;uuid:()=>string;pageSize:number}
+export interface StepContext{db:JudgmentsDb;tables:TableClient;store:CohortStore;codeVersion:string;batchId:string;uuid:()=>string;pageSize:number}
 export type StepOutcome=
  |{kind:'started';generation:string}
  |{kind:'paged';path:string;count:number}
  |{kind:'paging_done'}
  |{kind:'page_lost';path:string}
  |{kind:'conflict'}
- |{kind:'finalized';status:'inserted'|'duplicate';calibration_id:string;cleared:boolean}
- |{kind:'stale';cleared:boolean}
- |{kind:'reset';reason:'invalid_state'|'cohort_object_invalid';cleared:boolean};
+ |{kind:'finalized';status:'inserted'|'duplicate';calibration_id:string;cleared:boolean;cleanupSkipped?:true}
+ |{kind:'stale';cleared:boolean;cleanupSkipped?:true}
+ |{kind:'reset';reason:'invalid_state'|'cohort_object_invalid';cleared:boolean;cleanupSkipped?:true};
 
 export class CalibrateError extends Error{constructor(readonly code:string,detail?:string){super(detail?`${code}: ${detail}`:code);this.name='CalibrateError';}}
 
@@ -95,11 +96,36 @@ function isUnitState(s:Record<string,unknown>):s is Record<string,unknown>&UnitS
   Array.isArray(s.manifest)&&(s.manifest as unknown[]).every(m=>{const e=m as Record<string,unknown>;return !!e&&(e.start_after===null||str(e.start_after))&&str(e.end_after)&&str(e.path)&&str(e.sha256)&&Number.isSafeInteger(e.count);});
 }
 
-/** Clears a unit's state; when the CAS wins, also drops the generation's frozen members (best effort). */
-async function clearUnit(ctx:StepContext,unit:Unit,updatedAt:string,generation:unknown):Promise<boolean>{
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** CAS first; then verify ownership through service-role reads, including retired/unpublished units.
+ * Normal writers always allocate fresh generations and immutable paths; they never adopt old references.
+ * A failed reference scan conservatively leaves cleanup to the orphan maintenance procedure. */
+async function clearUnit(ctx:StepContext,unit:Unit,updatedAt:string,st:Record<string,unknown>):Promise<{cleared:boolean;cleanupSkipped?:true}>{
  const {ok:cleared}=await ctx.db.setJobState(unit.job,updatedAt,{});
- if(cleared&&typeof generation==='string')await ctx.db.clearCalibrationGeneration(generation).catch(()=>0);
- return cleared;
+ if(!cleared)return {cleared};
+ const generation=st.generation;
+ if(typeof generation!=='string'||!UUID.test(generation))return {cleared,cleanupSkipped:true};
+ try{
+  const jobs=await selectAll(ctx.tables,'judgment_job_state',{},'job');
+  const states=jobs.filter(j=>typeof j.job==='string'&&j.job.startsWith('calibrate:')).map(j=>j.state);
+  if(states.some(s=>s&&typeof s==='object'&&typeof (s as Record<string,unknown>).generation==='string'&&
+   ((s as Record<string,unknown>).generation as string).toLowerCase()===generation.toLowerCase()))return {cleared,cleanupSkipped:true};
+  const calibrations=await selectAll(ctx.tables,'judgment_calibrations',{},'calibration_id');
+  const referenced=new Set<string>();
+  const collect=(v:unknown):void=>{
+   if(typeof v==='string')referenced.add(v);
+   else if(v&&typeof v==='object')for(const x of Object.values(v))collect(x);
+  };
+  states.forEach(collect);
+  for(const row of calibrations)collect(row.cohort_path);
+  await ctx.db.clearCalibrationGeneration(generation);
+  const prefix=`partial/${unitPath(unit)}/${generation}/`;
+  for(const entry of Array.isArray(st.manifest)?st.manifest:[]){
+   const path=entry&&typeof entry==='object'?(entry as Record<string,unknown>).path:null;
+   if(typeof path==='string'&&isCohortPath(path)&&path.startsWith(prefix)&&!referenced.has(path))await ctx.store.remove(path).catch(()=>{});
+  }
+  return {cleared};
+ }catch{return {cleared,cleanupSkipped:true};}
 }
 
 /** One action on one unit: start | page | mark paging done | finalize. Re-reads the committed state every call. */
@@ -123,7 +149,7 @@ export async function stepUnit(ctx:StepContext,unit:Unit):Promise<StepOutcome>{
   await ctx.db.clearCalibrationGeneration(generation).catch(()=>0);
   return {kind:'conflict'};
  }
- if(!isUnitState(st))return {kind:'reset',reason:'invalid_state',cleared:await clearUnit(ctx,unit,cur!.updated_at,(st as {generation?:unknown}).generation)};
+ if(!isUnitState(st))return {kind:'reset',reason:'invalid_state',...await clearUnit(ctx,unit,cur!.updated_at,st)};
  return st.done?finalize(ctx,unit,st,cur!.updated_at):page(ctx,unit,st,cur!.updated_at);
 }
 
@@ -169,7 +195,7 @@ async function readManifest(ctx:StepContext,unit:Unit,st:UnitState):Promise<Coho
 async function finalize(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string):Promise<StepOutcome>{
  const m=unit.methodology,q=st.query_bounds;
  const entries=await readManifest(ctx,unit,st);
- if(entries===null)return {kind:'reset',reason:'cohort_object_invalid',cleared:await clearUnit(ctx,unit,updatedAt,st.generation)};
+ if(entries===null)return {kind:'reset',reason:'cohort_object_invalid',...await clearUnit(ctx,unit,updatedAt,st as unknown as Record<string,unknown>)};
  const opts=optionsOf(m.params);
  const ev=evaluateCohort(m.kind,entries,opts);
  const cohortBytes=enc.encode(canonicalize({algorithm_version:ALGORITHM_VERSION,methodology_id:m.methodology_id,methodology_version:m.version,scope_type:unit.scope.scope_type,scope_key:unit.scope.scope_key,query_bounds:q,entries:ev.entries}));
@@ -188,10 +214,9 @@ async function finalize(ctx:StepContext,unit:Unit,st:UnitState,updatedAt:string)
   algorithm_version:ALGORITHM_VERSION,code_version:ctx.codeVersion,computed_at,batch_id:ctx.batchId,
  };
  const status=await ctx.db.insertCalibration(row,st.expected_revision);
- const cleared=await clearUnit(ctx,unit,updatedAt,st.generation);
- if(status==='stale_revision')return {kind:'stale',cleared};
- if(cleared)for(const e of st.manifest)await ctx.store.remove(e.path).catch(()=>{});   // unreferenced now; the cohort file stays
- return {kind:'finalized',status,calibration_id,cleared};
+ const cleanup=await clearUnit(ctx,unit,updatedAt,st as unknown as Record<string,unknown>);
+ if(status==='stale_revision')return {kind:'stale',...cleanup};
+ return {kind:'finalized',status,calibration_id,...cleanup};
 }
 
 /** Steps one unit until it finalizes, loses to another worker, or runs out of budget. One restart after stale_revision. */
@@ -200,6 +225,7 @@ export async function runUnit(ctx:StepContext,unit:Unit,outOfBudget:()=>boolean)
  for(let i=0;i<MAX_STEPS;i++){
   if(outOfBudget()){infos.push({code:'deadline_hit',key:unit.job});return {outcome:'paused',pages,infos};}
   const r=await stepUnit(ctx,unit);
+  if('cleanupSkipped' in r&&r.cleanupSkipped)infos.push({code:'job_state_conflict',key:unit.job,message:'generation_cleanup_skipped: ownership or references could not be verified'});
   switch(r.kind){
    case 'started':case 'paging_done':break;
    case 'paged':pages++;break;
@@ -284,7 +310,7 @@ export async function runCalibrate(deps:CalibrateDeps):Promise<CalibrateReceipt>
  const outOfBudget=()=>deps.deadline!==null&&deps.deadline.getTime()-now().getTime()<RESERVE_MS;
  await deps.db.repairStaleBatches(CALIBRATE_DATASET,STALE_BATCH_SECONDS);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:CALIBRATE_DATASET,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy??'script'});
- const ctx:StepContext={db:deps.db,store:deps.store,codeVersion:deps.codeVersion,batchId,uuid:deps.uuid??randomUUID,pageSize:deps.pageSize??PAGE_SIZE};
+ const ctx:StepContext={db:deps.db,tables:deps.tables,store:deps.store,codeVersion:deps.codeVersion,batchId,uuid:deps.uuid??randomUUID,pageSize:deps.pageSize??PAGE_SIZE};
  // Task 5: deferred is optional and absent from emptyCounts(); judgment-layer receipts always carry it.
  const counts:Required<BatchCounts>={...emptyCounts(),deferred:0};const errors:BatchError[]=[];const units:UnitReceipt[]=[];
  let status:BatchStatus='failed';

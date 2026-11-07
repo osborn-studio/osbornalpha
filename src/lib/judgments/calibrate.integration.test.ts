@@ -101,7 +101,7 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
   for(let i=0;i<settled;i++)await settle(ids[i],i%2?'miss':'hit');
   return {subject,ids};
  }
- const ctxOf=async(store:CohortStore,prefix:string,over:Partial<StepContext>={}):Promise<StepContext>=>{let u=0;return {db,store,codeVersion:'abcdef1',batchId:await batch(),uuid:()=>`${prefix}-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`,pageSize:2,...over};};
+ const ctxOf=async(store:CohortStore,prefix:string,over:Partial<StepContext>={}):Promise<StepContext>=>{let u=0;return {db,tables:pgTableClient(pool),store,codeVersion:'abcdef1',batchId:await batch(),uuid:()=>`${prefix}-aaaa-4aaa-8aaa-${String(++u).padStart(12,'0')}`,pageSize:2,...over};};
  const allUnit=(m:MethodologyRow)=>unitsOf(m)[0];
  const stateOf=async(u:Unit)=>((await db.jobState(u.job))?.state??{}) as unknown as UnitState|Record<string,never>;
  const rowsOf=(m:MethodologyRow)=>q(`select calibration_id,scope_type,n_registered,n_settled,validity_revision,fingerprint,cohort_sha256,cohort_path from public.judgment_calibrations where methodology_id=$1 order by computed_at`,[m.methodology_id]);
