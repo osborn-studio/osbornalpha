@@ -5,6 +5,7 @@
 | T5 batches deferred | 6cbfdb7c | 指挥直审 diff：符合 §7.5 | codex review：No actionable defects | 0 | 早于计划定稿执行（任务独立、稳定） |
 | T1 core pure modules | cfc07e82 + 16dfa3b2 | Opus: SPEC PASS (code), QUALITY PASS (minors fixed) | Codex review: 1 P2 (jsonClean __proto__) fixed | 1 | executed on plan draft 3 |
 | T2 migration I | 本提交（`feat(judgments): F4 Task 2`） | 待复审 | 待审 | 0 | judgments.integration 7/7；test:migrations PASS；executed on plan draft 3 |
+| T3 migration II | 本提交（`feat(judgments): F4 Task 3`） | 待复审 | 待审 | 0 | judgments.integration 31/31（连跑 3 次稳定）；test:migrations PASS；typecheck、lint 干净；executed on plan draft 4 |
 
 ## 偏差 · Task 1
 
@@ -24,3 +25,9 @@
 
 - 无偏离计划文本：迁移、集成测试、`database.types.ts` 三处 `// F4` 围栏、`criticalSuites` 围栏均按计划原样落地（计划已列的规格偏差——命名表约束 `judgment_calibrations_state_by_kind`、`judgments_active_has_inputs` 的 `case` 写法、`service read` 策略、`before truncate` 触发器、第九表无只追加触发器、触发器函数撤销 EXECUTE——照计划实现）。
 - 先移走迁移确认测试 7/7 失败，再放回确认 7/7 通过；`test:migrations`（`LC_ALL=C`）PASS；`verifyCriticalSuiteInventory` 打印 `inventory ok`；`typecheck`、`lint` 干净。
+
+## 偏差 · Task 3
+
+- 无偏离计划文本：`rpc-inventory.ts`、迁移函数段（`judgment_envelope` 类型、6 个内部函数、7 个公共读 RPC、15 个服务写 RPC、授权块）与 24 个集成用例均按计划原样落地，迁移与测试在 PostgreSQL 17 上首次即通过，未做任何 SQL 修补。
+- 计划 Step 2 预计 Task 3 先失败 21 个用例，实际为 24 个（计划 Step 4 的 24 个 = 全部新用例）；先失败（24 failed / 7 passed）、追加 SQL 后 31 passed。
+- 未改 `migrations.lock.json`（Task 22 锁）；无其他文件改动。
