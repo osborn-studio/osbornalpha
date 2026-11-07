@@ -74,7 +74,7 @@ export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeo
    const body=await get('/api/judgments',p,false);
    if(!isObj(body)||!Array.isArray(body.cards))throw new F4Unavailable('f4_malformed:list');
    const candidates=body.cards.filter(c=>isObj(c)&&c.judgment_type==='macro_regime');
-   const card=candidates.find(c=>isObj(c.methodology)&&c.methodology.id==='macro_regime'&&c.methodology.version==='v2')??candidates.find(c=>!isObj(c.methodology))??null;
+   const card=candidates.find(c=>isObj(c.methodology)&&c.methodology.id==='macro_regime'&&c.methodology.version==='v2')??null;
    return card?cardLite(card):null;
   },
   async judgmentDetail(id){

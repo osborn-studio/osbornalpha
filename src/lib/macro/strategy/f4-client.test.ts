@@ -24,6 +24,16 @@ describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure �
   expect(await c.latestRegimeCard('CN',{asOf:'2026-10-31'})).toBeNull();
   expect(urls[0].searchParams.get('view')).toBe('as_known');expect(urls[0].searchParams.get('asOf')).toBe('2026-10-31');
  });
+ it('returns null when the only regime card uses v1 or has no methodology',async()=>{
+  for(const cards of [[{...CARD,methodology:{...CARD.methodology,version:'v1'}}],[{...CARD,methodology:undefined}]]){
+   expect(await client(()=>json({cards})).c.latestRegimeCard('US')).toBeNull();
+  }
+ });
+ it('selects the v2 regime card after a v1 card',async()=>{
+  const v2={...CARD,judgment_id:'j2'};
+  const {c}=client(()=>json({cards:[{...CARD,methodology:{...CARD.methodology,version:'v1'}},v2]}));
+  expect((await c.latestRegimeCard('US'))?.judgment_id).toBe('j2');
+ });
  it('judgmentDetail: JSON 404 → null; HTML 404 (route absent) → F4Unavailable',async()=>{
   expect(await client(()=>json({error:{code:'not_found'}},404)).c.judgmentDetail('j9')).toBeNull();
   await expect(client(()=>new Response('<html>',{status:404,headers:{'content-type':'text/html'}})).c.judgmentDetail('j9')).rejects.toBeInstanceOf(F4Unavailable);
@@ -50,7 +60,7 @@ describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure �
   ['network error',()=>client(()=>{throw new TypeError('fetch failed');}).c],
   ['non-JSON 200',()=>client(()=>new Response('ok',{status:200,headers:{'content-type':'text/plain'}})).c],
   ['malformed list',()=>client(()=>json({nope:true})).c],
-  ['malformed card',()=>client(()=>json({cards:[{judgment_type:'macro_regime'}]})).c],
+  ['malformed card',()=>client(()=>json({cards:[{judgment_type:'macro_regime',methodology:{id:'macro_regime',version:'v2'}}]})).c],
  ])('%s → F4Unavailable',async(_,make)=>{
   await expect(make().latestRegimeCard('US')).rejects.toBeInstanceOf(F4Unavailable);
  });
