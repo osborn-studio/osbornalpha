@@ -830,6 +830,25 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect(await rows(s,'2026-08-31')).toEqual([]);
  });
 
+ it('finalize vs write (R1): a write / evidence call that started before finalize commits waits on the batch row, then fails batch_not_running and inserts nothing',async()=>{
+  const {s,b}=await seeded();
+  const r=await retrieval(b,T3);
+  const fin=await admin.connect();
+  try{
+   await fin.query('begin');
+   await fin.query(`select public.macro_finalize_batch($1,null,null,'success',$2::jsonb,'[]'::jsonb,now())`,[b,JSON.stringify(ZERO)]);   // holds the batch row FOR UPDATE
+   let settled=false;
+   const w=fails(write(b,[native(s,'2026-10-31','4.4',r,T3)])).finally(()=>{settled=true;});
+   const e=fails(retrieval(b,T3)).finally(()=>{});
+   await new Promise(res=>setTimeout(res,600));
+   expect(settled).toBe(false);                                                                           // blocked behind finalize, not validated against a stale 'running'
+   await fin.query('commit');
+   expect((await w).message).toBe('batch_not_running');
+   expect((await e).message).toBe('batch_not_running');
+  }finally{await fin.query('rollback').catch(()=>{});fin.release();}
+  expect(await rows(s,'2026-10-31')).toEqual([]);
+ });
+
  it('macro_finalize_batch bumps input_revision of every region the batch wrote, in the same transaction (review A3): a publisher that read before finalization is stale',async()=>{
   const {ds,b,t,ft}=await finishingRun();void ds;
   const us=sid(),cn=sid('C');const v=await catalog([def(us),def(cn,{region:'CN'})]);

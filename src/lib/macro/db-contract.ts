@@ -8,7 +8,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
-import type {MacroSeriesDef,ObservationWrite,PublishInput,Region} from './types';
+import type {MacroSeriesDef,ObservationRow,ObservationWrite,PublishInput,Region} from './types';
 
 export interface MacroContractHarness{
  db:MacroDb;
@@ -21,6 +21,8 @@ export interface MacroContractHarness{
  quarantineStatus(id:string):Promise<string|null>;
  /** A user id the resolver may act as (an auth.users row for SQL). */
  resolver():Promise<string>;
+ /** ok versions of (series, period) of ANY batch, ascending (service-level read; db.versionsOf is public: finished batches only). */
+ peek(series:string,period:string):Promise<ObservationRow[]>;
  close?():Promise<void>;
 }
 export const T1='2026-11-01T05:30:00.000Z',T2='2026-11-02T05:30:00.000Z',T3='2026-11-03T05:30:00.000Z';
@@ -101,19 +103,19 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const s=sid();await catalog([testDef(s)]);const b=await h.batch();
    const us0=await db.publishState('US');const cn0=await db.publishState('CN');
    expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.1',await retrieval(b,T1),T1)])).toEqual({...zero,inserted:1});
-   const [v1]=await db.versionsOf(s,'2026-08-31');
+   const [v1]=await h.peek(s,'2026-08-31');
    expect(v1).toMatchObject({series_id:s,period_end:'2026-08-31',value_text:'4.1',version:1,status:'ok',available_at:T1,availability_basis:'first_seen',derived_from:null,transform:null,code_version:'c',batch_id:b,locator:{kind:'csv_row',line:2,column:1}});
    expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
    expect((await db.publishState('CN')).inputRevision).toBe(cn0.inputRevision);
    expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.1',await retrieval(b,T2),T2)])).toEqual({...zero,duplicates:1});
    expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
    expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-08-31','4.2',await retrieval(b,T3),T3)])).toEqual({...zero,versioned:1});
-   expect((await db.versionsOf(s,'2026-08-31')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[2,'4.2']]);
+   expect((await h.peek(s,'2026-08-31')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[2,'4.2']]);
    expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+2);
    expect(await db.writeObservations(b,'c',[])).toEqual(zero);
    const rh=await retrieval(b,T3);                                                                // html_cell locator (Task 9 HTML tables)
    expect((await db.writeObservations(b,'c',[{...nativeRow(s,'2026-07-31','2.04',rh,T3),locator:{kind:'html_cell',table:1,row:3,cell:13}}])).inserted).toBe(1);
-   expect((await db.versionsOf(s,'2026-07-31'))[0].locator).toEqual({kind:'html_cell',table:1,row:3,cell:13});
+   expect((await h.peek(s,'2026-07-31'))[0].locator).toEqual({kind:'html_cell',table:1,row:3,cell:13});
    expect(await outcome(db.writeObservations(b,'c',[{...nativeRow(s,'2026-06-30','1',rh,T3),locator:{kind:'xlsx_cell'} as never}]))).toBe('rpc_failed:invalid_row');
   });
 
@@ -126,14 +128,14 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const c2=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
    expect(c2).toEqual(c1);                                                                        // same observation_id: the existing quarantined row
    expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);   // same quarantined value: no new row
-   expect((await db.versionsOf(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);   // quarantined rows are never read
+   expect((await h.peek(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);   // quarantined rows are never read
    expect((await db.latestObservations([s]))[0].value_text).toBe('4.1');
    const r=await retrieval(b,T3);
    const c3=await db.writeObservations(b,'c',[nativeRow(s,'2026-10-31','5',r,T3),nativeRow(s,'2026-10-31','5.1',r,T3),nativeRow(s,'2026-10-31','5',r,T3)]);
    expect(c3).toEqual({...zero,quarantined:1,conflicts:[
     {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5',current_value_text:null,observation_id:null},
     {series_id:s,period_end:'2026-10-31',reason:'conflicting_rows',value_text:'5.1',current_value_text:null,observation_id:null}]});
-   expect(await db.versionsOf(s,'2026-10-31')).toEqual([]);
+   expect(await h.peek(s,'2026-10-31')).toEqual([]);
    expect((await db.publishState('US')).inputRevision).toBe(us0.inputRevision+1);
   });
 
@@ -146,7 +148,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[randomUUID()],T2)])).toEqual({...zero,conflicts:[{series_id:d,period_end:'2026-09-30',reason:'missing_input',value_text:'4.1',current_value_text:null,observation_id:null}]});
    expect(await outcome(db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[id],T3)]))).toBe('rpc_failed:invalid_available_at');
    expect(await db.writeObservations(b,'c',[derivedRow(d,'2026-09-30','4.1',[id],T2)])).toEqual({...zero,inserted:1});
-   expect((await db.versionsOf(d,'2026-09-30'))[0]).toMatchObject({value_text:'4.1',retrieval_id:null,locator:null,derived_from:[id],transform:'month_end@1',available_at:T2});
+   expect((await h.peek(d,'2026-09-30'))[0]).toMatchObject({value_text:'4.1',retrieval_id:null,locator:null,derived_from:[id],transform:'month_end@1',available_at:T2});
    const r=await retrieval(b,T3);
    const good=nativeRow(s,'2026-05-31','1',r,T3);
    expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(s,'2026-04-30','1',r,T2)]))).toBe('rpc_failed:invalid_available_at');
@@ -154,7 +156,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(s,'2026-04-30','-0',r,T3)]))).toBe('rpc_failed:invalid_value_text');
    expect(await outcome(db.writeObservations(b,'c',[good,nativeRow(d,'2026-04-30','1',r,T3)]))).toBe('rpc_failed:invalid_row');
    expect(await outcome(db.writeObservations(b,'c',[good,{...derivedRow(d,'2026-04-30','1',[id],T2),transform:'yoy_from_index@1'}]))).toBe('rpc_failed:invalid_row');
-   expect(await db.versionsOf(s,'2026-05-31')).toEqual([]);                                     // all-or-nothing
+   expect(await h.peek(s,'2026-05-31')).toEqual([]);                                     // all-or-nothing
   });
 
   it('reads: latest (asOf, periodEndLte), history (range, asOf, highest version, truncated), versionsOf, observationsByIds — ok rows only',async()=>{
@@ -164,6 +166,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','5.5',await retrieval(b,T3),T3)]);
    await db.writeObservations(b,'c',[nativeRow(s2,'2026-09-30','9',r1,T1)]);
    await db.writeObservations(b,'c',[nativeRow(s2,'2026-09-30','8',await retrieval(b,T3),T3,false)]);   // quarantined
+   await h.finish(b,'success');   // public reads only see finished success/partial batches
    const latest=await db.latestObservations([s,s2]);
    expect(latest.map(x=>[x.series_id,x.period_end,x.value_text,x.version]).sort()).toEqual([[s,'2026-09-30','5.5',2],[s2,'2026-09-30','9',1]].sort());
    expect((await db.latestObservations([s],{asOf:T2}))[0]).toMatchObject({period_end:'2026-09-30',value_text:'5',version:1});
@@ -185,7 +188,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const {s,v,b,id}=await seeded();
    const cn=sid('C');await catalog([testDef(cn,{region:'CN'})]);
    await db.writeObservations(b,'c',[nativeRow(cn,'2026-09-30','1',await retrieval(b,T2),T2)]);
-   const cnId=(await db.versionsOf(cn,'2026-09-30'))[0].observation_id;
+   const cnId=(await h.peek(cn,'2026-09-30'))[0].observation_id;
    let st=await db.publishState('US');
    for(const bad of [[cnId],[randomUUID()],[id,id]])expect(await outcome(db.publishSnapshot(input('US',st,v,bad)))).toBe('invalid_manifest:invalid_manifest');
    expect(await outcome(db.publishSnapshot(input('US',st,'macro-catalog/000000000000',[id])))).toBe('invalid_manifest:invalid_manifest');
@@ -244,7 +247,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    await db.resolveConflict(a,'accept',by,rb);
    expect(await h.quarantineStatus(a)).toBe('resolved_accept');
    expect((await db.quarantineMembers(a)).map(m=>[m.value_text,m.status])).toEqual([['4.5','rejected'],['4.6','ok']]);
-   expect((await db.versionsOf(s,'2026-09-30')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[3,'4.6']]);
+   expect((await h.peek(s,'2026-09-30')).map(x=>[x.version,x.value_text])).toEqual([[1,'4.1'],[3,'4.6']]);
    expect((await db.latestObservations([s]))[0].value_text).toBe('4.6');
    expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision+1);
    expect(await outcome(db.resolveConflict(a,'accept',by,rb))).toBe('already_resolved:already_resolved');
@@ -265,7 +268,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    await db.resolveConflict(rj,'reject',by);
    expect(await h.quarantineStatus(rj)).toBe('resolved_reject');
    expect((await db.quarantineMembers(rj)).map(m=>m.status)).toEqual(['rejected']);
-   expect((await db.versionsOf(o.s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
+   expect((await h.peek(o.s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
    expect((await db.publishState('US')).inputRevision).toBe(st1.inputRevision);
    for(const reasonCode of ['rule_failed:macro.range','adapter_mismatch']){
     const none=await item(o.s,reasonCode,'2026-08-31');
@@ -276,11 +279,35 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await outcome(db.resolveConflict(await item(o.s,'x','2026-07-31','facts.us'),'accept',by,ro))).toBe('rpc_failed:invalid_item');
   });
 
+  it('public reads (RLS parity): rows of running / failed batches are invisible to latestObservations / seriesHistory / versionsOf / observationsByIds',async()=>{
+   const s=sid();await catalog([testDef(s)]);
+   const open=await h.batch();
+   await db.writeObservations(open,'c',[nativeRow(s,'2026-09-30','1',await retrieval(open,T1),T1)]);
+   const pending=await db.latestEligible([s],{includeBatch:open});   // the explicit eligible read sees the open batch
+   const ids=pending.map(x=>x.observation_id);
+   expect(ids.length).toBe(1);
+   expect(await db.latestObservations([s])).toEqual([]);
+   expect(await db.seriesHistory(s,{maxRows:10})).toEqual([]);
+   expect(await db.versionsOf(s,'2026-09-30')).toEqual([]);
+   expect(await db.observationsByIds(ids)).toEqual([]);
+   await h.finish(open,'failed');
+   expect(await db.latestObservations([s])).toEqual([]);
+   expect(await db.seriesHistory(s,{maxRows:10})).toEqual([]);
+   expect(await db.versionsOf(s,'2026-09-30')).toEqual([]);
+   const ok=await h.batch();
+   await db.writeObservations(ok,'c',[nativeRow(s,'2026-08-31','2',await retrieval(ok,T2),T2)]);
+   expect(await db.latestObservations([s])).toEqual([]);
+   await h.finish(ok,'partial');
+   expect((await db.latestObservations([s])).map(x=>x.period_end)).toEqual(['2026-08-31']);
+   expect((await db.seriesHistory(s,{maxRows:10})).map(x=>x.period_end)).toEqual(['2026-08-31']);
+   expect((await db.versionsOf(s,'2026-08-31')).length).toBe(1);
+  });
+
   it('eligibility: running / failed batches stay out of latestEligible / eligibleHistory / publish; includeBatch admits the open batch',async()=>{
    const {s,v,id}=await seeded();
    const open=await h.batch();
    await db.writeObservations(open,'c',[nativeRow(s,'2026-10-31','4.4',await retrieval(open,T3),T3)]);
-   const pending=(await db.versionsOf(s,'2026-10-31'))[0].observation_id;
+   const pending=(await h.peek(s,'2026-10-31'))[0].observation_id;
    expect((await db.latestEligible([s])).map(x=>x.observation_id)).toEqual([id]);
    expect((await db.latestEligible([s],{includeBatch:open})).map(x=>x.observation_id)).toEqual([pending]);
    expect((await db.eligibleHistory(s,{maxRows:10})).map(x=>x.period_end)).toEqual(['2026-09-30']);
@@ -336,7 +363,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    await db.linkQuarantine(q,[rej]);await db.resolveConflict(q,'reject',await h.resolver());
    const st0=await db.publishState('US');
    expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.2',await retrieval(b,T3),T3)])).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.2',current_value_text:'4.1',observation_id:rej}]});
-   expect((await db.versionsOf(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
+   expect((await h.peek(s,'2026-09-30')).map(x=>x.value_text)).toEqual(['4.1']);
    expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision);
   });
 
@@ -452,7 +479,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await outcome(retrieval(ghost,T1))).toBe('rpc_failed:invalid_batch');
    const failed=await h.batch();await h.finish(failed,'failed');
    expect(await outcome(db.writeObservations(failed,'c',[]))).toBe('rpc_failed:batch_not_running');
-   expect(await db.versionsOf(s,'2026-08-31')).toEqual([]);
+   expect(await h.peek(s,'2026-08-31')).toEqual([]);
   });
 
   it('claimIngest validates its batch (invalid_batch): unknown, another dataset, finished; an aborted run is never resurrected',async()=>{
@@ -505,7 +532,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
   it('partial batches are publishable; a derived chain deeper than 8 raises ancestry_too_deep (review R4)',async()=>{
    const s=sid();const v=await catalog([testDef(s)]);const b=await h.batch();
    await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.1',await retrieval(b,T2),T2)]);
-   const id=(await db.versionsOf(s,'2026-09-30'))[0].observation_id;
+   const id=(await h.peek(s,'2026-09-30'))[0].observation_id;
    expect(await outcome(db.publishSnapshot(input('US',await db.publishState('US'),v,[id])))).toBe('invalid_manifest:invalid_manifest');   // still running
    await h.finish(b,'partial');
    expect((await db.publishSnapshot(input('US',await db.publishState('US'),v,[id]))).replayed).toBe(false);
@@ -514,7 +541,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const d=await h.batch();const ids:string[]=[];let prev=id;
    for(let i=0;i<9;i++){
     expect((await db.writeObservations(d,'c',[derivedRow(chain[i],'2026-09-30','4.1',[prev],T2)])).inserted).toBe(1);
-    prev=(await db.versionsOf(chain[i],'2026-09-30'))[0]?.observation_id;ids.push(prev);
+    prev=(await h.peek(chain[i],'2026-09-30'))[0]?.observation_id;ids.push(prev);
    }
    expect(await outcome(db.writeObservations(d,'c',[derivedRow(chain[9],'2026-09-30','4.1',[prev],T2)]))).toBe('rpc_failed:ancestry_too_deep');
    await h.finish(d,'success');

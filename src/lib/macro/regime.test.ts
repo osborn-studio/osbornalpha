@@ -158,6 +158,12 @@ describe('classifyRegime',()=>{
   const r=classifyRegime({region:'US',series:{...US.series,CN_PMI_MFG:{latest:o('2026-10-31','60')},US_DGS10_D:{latest:o('2026-11-03','4.3')}}});
   expect(r).toEqual(classifyRegime(US));
  });
+ it('ignores a restricted series even when the caller supplies it with a matching value (second guard)',()=>{
+  expect(catalogById('US_VIX')?.status).toBe('restricted');
+  const r=classifyRegime({region:'US',series:{...US.series,US_VIX:{latest:o('2026-10-31','40'),prev:o('2026-09-30','15'),prev3m:o('2026-07-31','15')}}});
+  expect(r).toEqual(classifyRegime(US));
+  expect(r.contributions.some(c=>c.series_id==='US_VIX')).toBe(false);
+ });
  it('is deterministic',()=>{expect(classifyRegime(CN)).toEqual(classifyRegime(CN));});
 });
 

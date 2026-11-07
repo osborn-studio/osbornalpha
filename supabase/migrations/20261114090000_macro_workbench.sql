@@ -417,7 +417,7 @@ returns uuid language plpgsql security definer set search_path = public as $$
 declare o public.macro_evidence_objects; v_id uuid := gen_random_uuid(); v_bstatus text;
 begin
   perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open','finishing']);
-  select status into v_bstatus from public.ingest_batches where batch_id = p_batch_id;
+  select status into v_bstatus from public.ingest_batches where batch_id = p_batch_id for share;   -- run lock first, then batch row: blocks behind macro_finalize_batch (for update)
   if not found then raise exception 'invalid_batch' using errcode = '22023'; end if;
   if v_bstatus <> 'running' then raise exception 'batch_not_running' using errcode = 'P0001'; end if;
   if p_fetched_at is null or p_fetched_at <> date_trunc('milliseconds', p_fetched_at) then
@@ -518,9 +518,9 @@ declare
 begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'invalid_rows' using errcode = '22023'; end if;
   if p_code_version is null or length(p_code_version) not between 1 and 128 then raise exception 'invalid_code_version' using errcode = '22023'; end if;
-  select status into v_bstatus from public.ingest_batches where batch_id = p_batch;
+  perform public.macro_assert_owner(p_batch, p_owner_token, array['open','finishing']);   -- run row before batch row before region rows
+  select status into v_bstatus from public.ingest_batches where batch_id = p_batch for share;   -- blocks behind macro_finalize_batch (for update)
   if not found then raise exception 'invalid_batch' using errcode = '22023'; end if;
-  perform public.macro_assert_owner(p_batch, p_owner_token, array['open','finishing']);   -- run row before region rows
   if v_bstatus <> 'running' then raise exception 'batch_not_running' using errcode = 'P0001'; end if;
 
   -- validate every row before any write

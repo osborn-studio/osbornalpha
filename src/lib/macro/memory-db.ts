@@ -104,7 +104,9 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  };
  const runKey=(batchId:string|null|undefined)=>batchId?`run:${batchId}`:null;
 
- // ---- publication eligibility (SQL macro_ineligible_ids)
+ // ---- public reads (SQL RLS "macro_observations public read": status ok AND batch success/partial; no includeBatch)
+const publicRow=(o:ObservationRow)=>o.status==='ok'&&batchOk(o.batch_id,null);
+// ---- publication eligibility (SQL macro_ineligible_ids)
  const batchOk=(b:string,include?:string|null)=>b===include||['success','partial'].includes(batchStatus.get(b)??'success');
  const byId=(id:string)=>observations.find(o=>o.observation_id===id);
  // SQL walks every ancestor to depth 8 and raises ancestry_too_deep (review R4) when a node at depth 8 still has ancestors
@@ -380,7 +382,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
   async latestObservations(ids,opts){
    const want=new Set(ids);const best=new Map<string,ObservationRow>();
    for(const o of observations){
-    if(!want.has(o.series_id)||o.status!=='ok')continue;
+    if(!want.has(o.series_id)||!publicRow(o))continue;
     if(opts?.asOf&&msOf(o.available_at)>msOf(opts.asOf))continue;
     if(opts?.periodEndLte&&o.period_end>opts.periodEndLte)continue;
     const b=best.get(o.series_id);
@@ -408,13 +410,13 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
   },
   async seriesHistory(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw rpc('invalid_max_rows');
-   const got=observations.filter(x=>x.series_id===id&&x.status==='ok'&&(!o.from||x.period_end>=o.from)&&(!o.to||x.period_end<=o.to)&&(!o.asOf||msOf(x.available_at)<=msOf(o.asOf)))
+   const got=observations.filter(x=>x.series_id===id&&publicRow(x)&&(!o.from||x.period_end>=o.from)&&(!o.to||x.period_end<=o.to)&&(!o.asOf||msOf(x.available_at)<=msOf(o.asOf)))
     .sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:a.version-b.version);
    if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
    return highestPerPeriod(got).map(clone);
   },
-  async versionsOf(id,periodEnd){return observations.filter(o=>o.series_id===id&&o.period_end===periodEnd&&o.status==='ok').sort((a,b)=>a.version-b.version).map(clone);},
-  async observationsByIds(ids){return [...new Set(ids)].flatMap(id=>{const o=observations.find(x=>x.observation_id===id&&x.status==='ok');return o?[clone(o)]:[];});},
+  async versionsOf(id,periodEnd){return observations.filter(o=>o.series_id===id&&o.period_end===periodEnd&&publicRow(o)).sort((a,b)=>a.version-b.version).map(clone);},
+  async observationsByIds(ids){return [...new Set(ids)].flatMap(id=>{const o=observations.find(x=>x.observation_id===id&&publicRow(x));return o?[clone(o)]:[];});},
   async publishState(region){const s=state[region];if(!s)throw new MacroDbError('not_found',`publish_state:${region}`);return {...s};},
 
   async linkQuarantine(quarantineId,observationIds,fence){

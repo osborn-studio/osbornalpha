@@ -119,7 +119,7 @@ export function classifyRegime(input:RegimeInput):RegimeOutput{
  let matched=0;const growth={num:0,w:0},inflation={num:0,w:0};
  for(const [id,weight] of Object.entries(weights)){
   const s=input.series[id];const def=catalogById(id);
-  if(!s||!def||!def.type||weight<=0)continue;
+  if(!s||!def||def.status!=='active'||!def.type||weight<=0)continue;   // second guard: a restricted / missing series never scores
   const c=comparisons(def.type,s);if(!c)continue;
   const hit=matchRule(def.type,c.v,c.d3,c.d1);if(!hit)continue;
   matched+=weight;

@@ -20,7 +20,8 @@ macroDbContract('memoryMacroDb contract',async()=>{
   batch:async(dataset)=>{const id=randomUUID();db.setBatchStatus(id,'running',dataset);return id;},
   finish:async(id,status='success')=>{db.setBatchStatus(id,status);},
   addQuarantine:async i=>db.addQuarantineItem({dataset:i.dataset,natural_key:i.naturalKey,batch_id:i.batchId,reason_code:i.reasonCode}),
-  quarantineStatus:async id=>db.quarantineItem(id)?.status??null};
+  quarantineStatus:async id=>db.quarantineItem(id)?.status??null,
+  peek:async(series,period)=>db.allObservations().filter(o=>o.series_id===series&&o.period_end===period&&o.status==='ok').sort((a,b)=>a.version-b.version)};
 });
 
 describe('memoryMacroDb specifics',()=>{
@@ -31,7 +32,7 @@ describe('memoryMacroDb specifics',()=>{
   const b=randomUUID();db.setBatchStatus(b,'running');const sha='a'.repeat(64);
   const r=await db.putRetrieval({sha256:sha,object_path:`fred_csv/${sha}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:1},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-06T05:00:00.000Z',batch_id:b,tool_versions:{}});
   await db.writeObservations(b,'c',[nativeRow('X_A','2026-09-30','1',r,'2026-11-06T05:00:00.000Z')]);
-  expect((await db.versionsOf('X_A','2026-09-30'))[0].ingested_at).toBe('2026-11-06T05:30:00.000Z');
+  expect((db.allObservations().filter(o=>o.series_id==='X_A'&&o.period_end==='2026-09-30'))[0].ingested_at).toBe('2026-11-06T05:30:00.000Z');
   db.setNow('2026-11-06T06:00:00.000Z');
   const res=await db.writeObservations(b,'c',[nativeRow('X_A','2026-09-30','2',r,'2026-11-06T05:00:00.000Z',false)]);
   expect(db.allObservations().map(o=>o.status)).toEqual(['ok','quarantined']);
