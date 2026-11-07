@@ -6,7 +6,8 @@ import {computeAggregateCell} from './aggregate';
 import type {IssuerFacts} from './aggregate';
 import {buildAggregateManifest,encodeManifest} from './manifest';
 import type {BuildManifestInput} from './manifest';
-import {replayFromManifest} from './replay';
+import {filterManifest} from './read';
+import {replayCell,replayFromManifest} from './replay';
 import type {AggregateManifest,ManifestMember} from './types';
 
 const A='00000000-0000-4000-8000-00000000000a',B='00000000-0000-4000-8000-00000000000b',C='00000000-0000-4000-8000-00000000000c';
@@ -91,5 +92,35 @@ describe('replayFromManifest',()=>{
   expect(r.reproduced).toBe(true);
   expect(r.cells.find(c=>c.metric==='gross_margin')).toMatchObject({status:'missing',missing_reason:'financial_excluded'});
   expect(()=>replayFromManifest({...m,schema:'industry-manifest/1' as never})).toThrow('unsupported_manifest');
+ });
+});
+
+describe('replayCell (single-cell payload)',()=>{
+ const CELLS=[['revenue_sum','12M','2024-01-01'],['roe','TTM','2024-01-01'],['revenue_yoy','12M','2024-01-01'],['gross_margin','12M','2024-01-01'],['member_count','INSTANT','2024-12-31']] as const;
+ it('the per-cell filtered payload validates on its own (the full-grid validator rejects it)',()=>{
+  const {manifest}=build();
+  for(const [metric,duration,period_start] of CELLS){
+   const payload=filterManifest(manifest,metric,{duration,period_start});
+   expect(replayFromManifest(payload).reproduced).toBe(false);   // grid incomplete: ingestion validation unchanged
+   const r=replayCell(payload,{metric,duration,period_start});
+   expect(r.mismatches).toEqual([]);expect(r.reproduced).toBe(true);
+   expect(r.cell).toEqual(manifest.cells.find(c=>c.metric===metric&&c.duration===duration&&c.period_start===period_start));
+  }
+ });
+ it('a tampered input of the requested cell is detected; a tamper of another cell is not this cell’s problem',()=>{
+  const {manifest}=build();
+  const key={metric:'revenue_sum' as const,duration:'12M' as const,period_start:'2024-01-01'};
+  const payload=structuredClone(filterManifest(manifest,key.metric,key));
+  payload.facts.find(f=>f.issuer_id===A)!.value_text='1';
+  expect(replayCell(payload,key)).toMatchObject({reproduced:false,mismatches:['revenue_sum:12M:2024-01-01']});
+  const other=structuredClone(manifest);
+  other.facts.find(f=>f.concept==='equity_parent')!.value_text='1';
+  expect(replayCell(other,key)).toMatchObject({mismatches:[],reproduced:true});
+ });
+ it('an off-grid or absent cell is reported, never silently reproduced',()=>{
+  const {manifest}=build();
+  expect(replayCell(manifest,{metric:'roe',duration:'3M',period_start:'2024-01-01'})).toMatchObject({cell:null,reproduced:false,mismatches:['unexpected_cell:roe:3M:2024-01-01']});
+  const t=structuredClone(manifest);t.cells=t.cells.filter(c=>c.metric!=='roe');
+  expect(replayCell(t,{metric:'roe',duration:'TTM',period_start:'2024-01-01'})).toMatchObject({cell:null,reproduced:false,mismatches:['missing_cell:roe:TTM:2024-01-01']});
  });
 });

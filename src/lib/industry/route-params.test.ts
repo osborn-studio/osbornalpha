@@ -43,6 +43,9 @@ describe('replay rate limiter',()=>{
  it('client IP from the first X-Forwarded-For hop',()=>{
   expect(clientIp(new Request('https://x/',{headers:{'x-forwarded-for':'9.9.9.9, 10.0.0.1'}}))).toBe('9.9.9.9');
   expect(clientIp(new Request('https://x/',{headers:{'x-real-ip':'8.8.8.8'}}))).toBe('8.8.8.8');
+  // platform-set headers win over a client-supplied X-Forwarded-For
+  expect(clientIp(new Request('https://x/',{headers:{'x-forwarded-for':'6.6.6.6','x-real-ip':'8.8.8.8'}}))).toBe('8.8.8.8');
+  expect(clientIp(new Request('https://x/',{headers:{'x-forwarded-for':'6.6.6.6','x-real-ip':'8.8.8.8','x-vercel-forwarded-for':'7.7.7.7, 1.1.1.1'}}))).toBe('7.7.7.7');
   expect(clientIp(new Request('https://x/'))).toBe('unknown');
  });
 });

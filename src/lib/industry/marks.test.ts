@@ -10,6 +10,8 @@ import {planMarkRows,runMarks,upstreamOf} from './marks';
 import type {DailyBasicFetch,DailyBasicRow,MarksDeps} from './marks';
 import {IndustryDbError} from './types';
 import type {IndustryDb} from './types';
+import {supabaseIndustryDb} from './db';
+import type {SupabaseClient} from '@supabase/supabase-js';
 
 const DATE='2026-10-30';
 /** Test loader: the ten recorded daily_basic rows of 2026-10-30 through the Task 5 adapter (lossless decimals). */
@@ -154,6 +156,36 @@ describe('runMarks',()=>{
   expect(bad.batchStatus).toBe('failed');
   const payload={...db,applyObservations:(async()=>{throw new IndustryDbError('fetch_event_payload_changed');}) as IndustryDb['applyObservations']} as IndustryDb;
   expect((await runMarks(deps(()=>loadFixture(),{db:payload}),{tradeDates:[DATE]})).dates[0]).toMatchObject({error:'fetch_event_payload_changed',attempts:1});
+ });
+ it('adapter-backed: a transport failure wrapped by the production adapter as IndustryDbError(unknown) is retried with the same event; a domain code from the RPC is final',async()=>{
+  const calls:string[]=[];let failApply=1;let domain=false;
+  const client={rpc:async(fn:string)=>{
+   calls.push(fn);
+   if(fn==='begin_industry_fetch_event')return {data:'11111111-1111-4111-8111-111111111111',error:null};
+   if(fn==='retry_industry_fetch_event')return {data:true,error:null};
+   if(fn==='apply_observations'){
+    if(domain)return {data:null,error:{message:'lease_lost: gone'}};
+    if(failApply-->0)return {data:null,error:{message:'fetch failed'}};
+    return {data:{inserted:9,duplicates:0,superseded:0},error:null};
+   }
+   return {data:null,error:null};
+  }};
+  const adapter=supabaseIndustryDb(client as unknown as SupabaseClient);
+  const r=await runMarks(deps(()=>loadFixture(),{db:adapter}),{tradeDates:[DATE]});
+  expect(calls.filter(c=>c==='apply_observations')).toHaveLength(2);
+  expect(calls).toContain('retry_industry_fetch_event');
+  expect(r.dates[0]).toMatchObject({attempts:2,result:{inserted:9}});expect(r.dates[0].error).toBeUndefined();
+  domain=true;calls.length=0;
+  const d=await runMarks(deps(()=>loadFixture(),{db:adapter}),{tradeDates:[DATE]});
+  expect(calls.filter(c=>c==='apply_observations')).toHaveLength(1);
+  expect(d.dates[0].error).toBe('lease_lost');
+ });
+ it('a quarantine write failing after a chunk committed keeps that chunk in the receipt and the counters',async()=>{
+  const failing=new Proxy(tables,{get:(t,k)=>typeof (t as never)[k]==='function'?(...a:unknown[])=>{if(a[0]==='dq_quarantine'&&k!=='select')throw new Error('quarantine down');return ((t as never)[k] as (...x:unknown[])=>unknown)(...a);}:(t as never)[k]}) as TableClient;
+  const r=await runMarks(deps(()=>loadFixture(RULE_CASES),{tables:failing}),{tradeDates:[DATE]});
+  expect(r.errors.some(e=>e.code==='marks_failed')).toBe(true);
+  expect(r.dates[0].result).toEqual({inserted:8,duplicates:0,superseded:0});
+  expect(r.counts.inserted).toBe(8);
  });
  it('empty days are skipped_summary(no_rows); quota stops the job; no code version → rejected',async()=>{
   const r=await runMarks(deps(()=>({trade_date:DATE,rows:[],pages:1})),{tradeDates:[DATE,'2026-10-23']});

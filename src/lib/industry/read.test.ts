@@ -10,11 +10,14 @@ vi.mock('./memberships',()=>({
   return m.status==='ok'&&m.available_date<=knownBy&&m.valid_from<=on&&(eff===null||eff>on);
  },
 }));
-vi.mock('./replay',()=>({replayFromManifest:vi.fn((m:AggregateManifest)=>({cells:m.cells}))}));
+vi.mock('./replay',()=>({
+ replayFromManifest:vi.fn((m:AggregateManifest)=>({cells:m.cells})),
+ replayCell:vi.fn((m:AggregateManifest,k:{metric:string;duration:string;period_start:string})=>({cell:m.cells.find(c=>c.metric===k.metric&&c.duration===k.duration&&c.period_start===k.period_start)??null,reproduced:true,mismatches:[]})),
+}));
 
-import {replayFromManifest} from './replay';
+import {replayCell,replayFromManifest} from './replay';
 import {ISSUER_A,ISSUER_B,RUN_ID,cellRow,classRow,factRow,manifestOf,membershipRow,missingCell,readDepsOf,runRow,stubIndustryDb,valuationRow,valuationRunRow} from './fixture-rows';
-import {adminReplayView,constituentsView,filterManifest,industryDetailView,industryListView,issuerIndustriesView,manifestDiff,replayView,valuationReplayView} from './read';
+import {adminReplayView,constituentsView,filterManifest,industryDetailView,industryListView,isEmptyDiff,issuerIndustriesView,manifestDiff,replayView,valuationReplayView} from './read';
 import type {ReplayDeps} from './read';
 
 const TREE=[classRow({code:'801120.SI',name_zh:'食品饮料'}),classRow({code:'801080.SI',name_zh:'电子'}),classRow({code:'801124.SI',level:2,name_zh:'食品加工',parent_code:'801120.SI'}),classRow({code:'850111.SI',level:3,name_zh:'白酒Ⅲ',parent_code:'801124.SI'}),
@@ -197,13 +200,14 @@ describe('replayView (spec §9 authorization order and per-cell filtering)',()=>
   expect(v.manifest.facts.map(f=>f.concept).sort()).toEqual(['cost_of_revenue','revenue_operating']);
   expect(v.manifest.cells.map(c=>c.metric)).toEqual(['gross_margin']);
   expect(v.replay).toHaveLength(1);
+  expect(replayCell).toHaveBeenLastCalledWith(v.manifest,expect.objectContaining({metric:'gross_margin',duration:'12M'}));   // exactly the returned payload is validated
   expect(v.header.runId).toBe(RUN_ID);
  });
  it('original: reproduced=false when the replayed value differs (canonical decimal compare; 0.4780 equals 0.478)',async()=>{
-  vi.mocked(replayFromManifest).mockReturnValueOnce({cells:[{metric:'gross_margin',duration:'12M',period_start:'2025-01-01',status:'ok',value_text:'0.4780',n_members:10,n_with_data:9,n_unresolved:0,unit:'ratio'}],reproduced:true,mismatches:[]});
+  vi.mocked(replayCell).mockReturnValueOnce({reproduced:true,mismatches:[],cell:{metric:'gross_margin',duration:'12M',period_start:'2025-01-01',status:'ok',value_text:'0.4780',n_members:10,n_with_data:9,n_unresolved:0,unit:'ratio'}});
   const same=await replayView(deps(),q);
   expect(same.state==='ok'&&same.mode==='original'&&same.reproduced).toBe(true);
-  vi.mocked(replayFromManifest).mockReturnValueOnce({cells:[{metric:'gross_margin',duration:'12M',period_start:'2025-01-01',status:'ok',value_text:'0.476',n_members:10,n_with_data:9,n_unresolved:0,unit:'ratio'}],reproduced:true,mismatches:[]});
+  vi.mocked(replayCell).mockReturnValueOnce({reproduced:true,mismatches:[],cell:{metric:'gross_margin',duration:'12M',period_start:'2025-01-01',status:'ok',value_text:'0.476',n_members:10,n_with_data:9,n_unresolved:0,unit:'ratio'}});
   const diff=await replayView(deps(),q);
   expect(diff.state==='ok'&&diff.mode==='original'&&diff.reproduced).toBe(false);
  });
@@ -212,12 +216,12 @@ describe('replayView (spec §9 authorization order and per-cell filtering)',()=>
   expect(match.state==='ok'&&match.mode==='recompute'&&match.result).toBe('match');
   const later=manifestOf();
   later.member_state_revs=[{issuer_id:ISSUER_A,state_rev:5}];
-  later.facts=[...later.facts,{...later.facts[1],fact_id:'f-cost-2',value_text:'50'}];
+  later.facts=[later.facts[0],{...later.facts[1],fact_id:'f-cost-2',value_text:'50'},later.facts[2]];   // a revised cost fact supersedes f-cost
   later.cells=[{...later.cells[0],value_text:'0.5'},later.cells[1]];
   const r=await replayView(deps({recompute:vi.fn(async()=>later)}),{...q,mode:'recompute'});
   if(r.state!=='ok'||r.mode!=='recompute')throw new Error(r.state);
   expect(r.result).toBe('changed');
-  expect(r.diff.facts).toEqual({added:['f-cost-2'],removed:[]});
+  expect(r.diff.facts).toEqual({added:['f-cost-2'],removed:['f-cost']});
   expect(r.diff.stateRevs).toEqual([{issuerId:ISSUER_A,from:4,to:5}]);
   expect(r.diff.cells.map(c=>[c.metric,c.stored?.value_text,c.recomputed?.value_text])).toEqual([['gross_margin','0.478','0.5']]);
  });
@@ -246,6 +250,7 @@ describe('adminReplayView',()=>{
   expect(v.cells.map(c=>[c.metric,c.reproduced])).toEqual([['gross_margin',true],['revenue_sum',true],['member_count',null]]);
   expect(v.unresolved).toHaveLength(1);
   expect(v.focus?.reproduced).toBe(true);
+  expect(replayCell).toHaveBeenCalledWith(expect.objectContaining({cells:[expect.objectContaining({metric:'gross_margin'})]}),expect.objectContaining({metric:'gross_margin'}));   // the focus payload itself is validated
   expect(v.focus?.manifest.roles.map(r=>r.metric)).toEqual(['gross_margin']);
   expect(await adminReplayView({db,manifests:{get:async()=>manifestOf()}},{runId:'00000000-0000-4000-8000-000000000000',code:'801120.SI',periodEnd:'2025-12-31',metric:null,duration:null})).toEqual({state:'unknown_run'});
  });
@@ -253,17 +258,39 @@ describe('adminReplayView',()=>{
 
 describe('filterManifest / manifestDiff',()=>{
  it('keeps facts cited by the metric’s derived rows',()=>{
-  const m=manifestOf({derived:[{issuer_id:ISSUER_A,metric:'ttm_net_income_parent',period_start:'2025-01-01',period_end:'2025-12-31',duration:'TTM',value:'9',unit:'CNY',basis:'cn',formula_version:'facts-derive/1.0',inputs:[{fact_id:'f-rev',concept:'net_income_parent',filing_id:'g1',available_date:'2026-04-03'}]}],
+  const eq=(id:string,end:string)=>({issuer_id:ISSUER_A,concept:'equity_parent',period_start:null,period_end:end,duration:'INSTANT',fact_id:id,value_text:'5',unit:'CNY',consolidation:'consolidated',available_date:'2026-04-03',mapping_gen:1,filing_id:'g1',source_ref:null,raw_hash:'h',citation:'pending' as const});
+  const m=manifestOf({facts:[...manifestOf().facts,eq('f-eq0','2024-12-31'),eq('f-eq1','2025-12-31')],
+   roles:[{issuer_id:ISSUER_A,metric:'roe',duration:'TTM',role:'included'}],
+   derived:[{issuer_id:ISSUER_A,metric:'ttm_net_income_parent',period_start:'2025-01-01',period_end:'2025-12-31',duration:'TTM',value:'9',unit:'CNY',basis:'cn',formula_version:'facts-derive/1.0',inputs:[{fact_id:'f-rev',concept:'net_income_parent',filing_id:'g1',available_date:'2026-04-03'}]}],
    cells:[{metric:'roe',duration:'TTM',period_start:'2025-01-01',status:'ok',value_text:'0.2',n_members:1,n_with_data:1,n_unresolved:0,unit:'ratio'}]});
   const f=filterManifest(m,'roe',{duration:'TTM',period_start:'2025-01-01'});
   expect(f.derived).toHaveLength(1);
-  expect(f.facts.map(x=>x.fact_id)).toEqual(['f-rev']);
+  expect(f.facts.map(x=>x.fact_id).sort()).toEqual(['f-eq0','f-eq1','f-rev']);   // the two equity points + the fact the TTM row cites; nothing else
   expect(f.cells).toHaveLength(1);
+ });
+ it('filters by the requested cell’s own inputs: annual revenue_sum has no prior-year fact and no quarterly derived row',()=>{
+  const base=manifestOf().facts[2];
+  const prior={...base,fact_id:'f-rev-2024',period_start:'2024-01-01',period_end:'2024-12-31',value_text:'90'};
+  const q4={issuer_id:ISSUER_A,metric:'q_single_revenue',period_start:'2025-10-01',period_end:'2025-12-31',duration:'3M',value:'30',unit:'CNY',basis:'cn',formula_version:'facts-derive/1.0',inputs:[{fact_id:'f-rev',concept:'revenue',filing_id:'g1',available_date:'2026-04-03'}]};
+  const m=manifestOf({facts:[...manifestOf().facts,prior],derived:[q4],
+   roles:[{issuer_id:ISSUER_A,metric:'revenue_sum',duration:'12M',role:'included'},{issuer_id:ISSUER_A,metric:'revenue_sum',duration:'3M',role:'included'}],
+   cells:[...manifestOf().cells,{metric:'revenue_sum',duration:'3M',period_start:'2025-10-01',status:'ok',value_text:'30',n_members:10,n_with_data:9,n_unresolved:0,unit:'CNY'}]});
+  const annual=filterManifest(m,'revenue_sum',{duration:'12M',period_start:'2025-01-01'});
+  expect(annual.facts.map(x=>x.fact_id)).toEqual(['f-rev']);expect(annual.derived).toEqual([]);expect(annual.roles).toHaveLength(1);
+  const quarter=filterManifest(m,'revenue_sum',{duration:'3M',period_start:'2025-10-01'});
+  expect(quarter.derived.map(d=>d.metric)).toEqual(['q_single_revenue']);expect(quarter.facts.map(x=>x.fact_id)).toEqual(['f-rev']);   // cited by the derived row only
  });
  it('identical manifests have an empty diff; a removed member is reported',()=>{
   const a=manifestOf();
-  expect(manifestDiff(a,manifestOf()).members).toEqual({added:[],removed:[]});
+  expect(manifestDiff(a,manifestOf()).members).toEqual({added:[],removed:[],modified:[]});
   const b=manifestOf({members:[]});
   expect(manifestDiff(a,b).members.removed).toEqual([`${ISSUER_A}:2021-07-30::`]);
+ });
+ it('evidence changes with identical dates and results are reported as modified members, not a match',()=>{
+  const a=manifestOf();
+  const b=manifestOf({members:[{...a.members[0],source_membership_id:'ffffffff-ffff-4fff-8fff-ffffffffff99',raw_hash:'deadbeef',locator:{page:2,row:3},resolution_method:'ticker_history' as never,available_date:'2021-08-01'}]});
+  const d=manifestDiff(a,b);
+  expect(d.members).toEqual({added:[],removed:[],modified:[`${ISSUER_A}:2021-07-30::`]});
+  expect(isEmptyDiff(d)).toBe(false);
  });
 });

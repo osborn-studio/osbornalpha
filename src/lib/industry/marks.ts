@@ -107,6 +107,8 @@ export function planMarkRows(fetch:DailyBasicFetch,universe:ReadonlySet<string>)
  return plan;
 }
 
+/** A domain-typed IndustryDbError is permanent; 'unknown' (the adapter's wrapper for transport/permission failures) and plain errors are retryable. */
+const isPermanent=(e:unknown)=>e instanceof IndustryDbError&&e.code!=='unknown';
 const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,300);
 const add=(a:ObservationResult,b:ObservationResult):ObservationResult=>({inserted:a.inserted+b.inserted,duplicates:a.duplicates+b.duplicates,superseded:a.superseded+b.superseded});
 
@@ -152,10 +154,16 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
     const chunk=plan.rows.slice(i,i+APPLY_CHUNK);
     for(let attempt=1;;attempt++){
      out.attempts++;
-     try{result=add(result,await db.applyObservations('marks',eventId,chunk));break;}
+     try{
+      const part=await db.applyObservations('marks',eventId,chunk);
+      // account for the committed chunk NOW: the quarantine writes below are independently fallible
+      result=add(result,part);out.result=result;
+      counts.inserted+=part.inserted;counts.versioned+=part.superseded;counts.duplicates+=part.duplicates;
+      break;
+     }
      catch(e){
-      // only transport-like failures are retried; a typed IndustryDbError (payload changed, lease, validation…) is final
-      if(e instanceof IndustryDbError||attempt>=maxAttempts){failDate(i,e instanceof IndustryDbError?e.code:'apply_failed',e);break;}
+      // permanent domain errors (payload changed, lease, overlap…) are final; transport failures arrive as IndustryDbError('unknown') from the adapter and are retried
+      if(isPermanent(e)||attempt>=maxAttempts){failDate(i,e instanceof IndustryDbError?e.code:'apply_failed',e);break;}
       try{await db.retryFetchEvent(eventId);}   // same event, attempt + 1: the retry carries the same fetched payload
       catch(re){failDate(i,'retry_failed',re);break;}
      }
@@ -170,7 +178,6 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
     }
    }
    out.result=result;
-   counts.inserted+=result.inserted;counts.versioned+=result.superseded;counts.duplicates+=result.duplicates;
    // validation failures count in the freshness decision: a day whose rows were all rejected landed nothing
    if(ok&&plan.rejected.length>0&&result.inserted+result.duplicates+result.superseded===0)hardFailures++;
   }

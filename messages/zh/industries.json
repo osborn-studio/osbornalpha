@@ -310,7 +310,7 @@
     "recompute": "按当前证据重算",
     "recomputeMatch": "match：按当前证据重算与原清单一致。",
     "recomputeChanged": "changed：当前证据与原清单不同。迟到披露、隔离处置、映射升级、成分纠正都会如此，这是正常现象。",
-    "diffCounts": "成分 +{ma}/−{mr} · 未解析 +{ua}/−{ur} · 事实 +{fa}/−{fr} · 状态版本变化 {revs}",
+    "diffCounts": "成分 +{ma}/−{mr} ~{mm} · 未解析 +{ua}/−{ur} · 事实 +{fa}/−{fr} · 状态版本变化 {revs}",
     "inputsTop": "输入（前 {n} / {total}）",
     "issuer": "发行人",
     "concept": "概念",

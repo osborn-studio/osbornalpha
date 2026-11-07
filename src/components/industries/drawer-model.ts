@@ -63,7 +63,7 @@ export function inputRows(m:AggregateManifest,limit:number):{rows:InputRow[];tot
  return {rows:all.slice(0,limit),total:all.length};
 }
 export function diffCounts(d:ReplayDiff){
- return {ma:d.members.added.length,mr:d.members.removed.length,ua:d.unresolved.added.length,ur:d.unresolved.removed.length,fa:d.facts.added.length,fr:d.facts.removed.length,revs:d.stateRevs.length};
+ return {ma:d.members.added.length,mr:d.members.removed.length,mm:d.members.modified.length,ua:d.unresolved.added.length,ur:d.unresolved.removed.length,fa:d.facts.added.length,fr:d.facts.removed.length,revs:d.stateRevs.length};
 }
 /** Evidence link of one fact (plan-2 public route, factIds mode). */
 export const factEvidenceUrl=(ticker:string|null,factId:string)=>ticker?`/api/facts/${encodeURIComponent(ticker)}?factIds=${encodeURIComponent(factId)}`:null;

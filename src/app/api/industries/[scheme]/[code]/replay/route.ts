@@ -5,7 +5,7 @@
 // per-cell filtered manifest, replayFromManifest's cell and `reproduced`; mode=recompute returns
 // match|changed with the diff against current evidence. Valuation cells (tradeDate): the published row
 // and, only when the official dataset is public, officialValue (deferred I-3: no valuation replay yet).
-// Success: Cache-Control public, max-age=3600.
+// Success: Cache-Control public, max-age=3600 (mode=recompute: no-store, it reflects current evidence).
 import {NextResponse} from 'next/server';
 import {QueryError,dateParam,errorResponse,paramErrorResponse,readParams} from '@/lib/facts/public-route';
 import {replayDeps,valuationReplayDeps} from '@/lib/industry/public-deps';
@@ -17,6 +17,8 @@ import type {ValuationMetric} from '@/lib/industry/read';
 export const dynamic='force-dynamic';
 const PARAMS=['runId','metric','duration','periodEnd','tradeDate','mode'] as const;
 const CACHE={'Cache-Control':'public, max-age=3600'};
+// mode=recompute reads current evidence: never cached
+const NO_STORE={'Cache-Control':'no-store'};
 type Parsed={scheme:Scheme;code:string;runId:string;mode:'original'|'recompute'}&({kind:'aggregate';metric:AggMetric;duration:AggDuration|null;periodEnd:string}|{kind:'valuation';metric:ValuationMetric;tradeDate:string});
 
 export async function GET(req:Request,{params}:{params:Promise<{scheme:string;code:string}>}){
@@ -51,7 +53,7 @@ export async function GET(req:Request,{params}:{params:Promise<{scheme:string;co
   if(v.state==='unknown_run')return errorResponse('unknown_run','no visible run',404);
   if(v.state==='unknown_cell')return errorResponse('unknown_cell','no replayable cell',404);
   if(v.state==='ambiguous_duration')return errorResponse('invalid_parameter:duration','several durations match; pass duration',400);
-  return NextResponse.json({methodVersion:v.header.methodVersion,runId:v.header.runId,factsAsOf:v.header.factsAsOf,historyClass:v.header.historyClass,...v},{headers:CACHE});
+  return NextResponse.json({methodVersion:v.header.methodVersion,runId:v.header.runId,factsAsOf:v.header.factsAsOf,historyClass:v.header.historyClass,...v},{headers:v.mode==='recompute'?NO_STORE:CACHE});
  }catch(e){
   console.error('[industries/replay]',e instanceof Error?e.message:e);
   return errorResponse('internal','replay failed',500);

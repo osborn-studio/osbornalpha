@@ -84,7 +84,7 @@ describe('drawer model',()=>{
   const inputs=inputRows(m,2);
   expect(inputs.total).toBe(3);
   expect(inputs.rows.map(r=>[r.ticker,r.concept])).toEqual([['600519.SH','cost_of_revenue'],['600519.SH','revenue']]);
-  expect(diffCounts({members:{added:['x'],removed:[]},unresolved:{added:[],removed:['y']},facts:{added:['f1','f2'],removed:[]},stateRevs:[{issuerId:'i',from:1,to:2}],cells:[]})).toEqual({ma:1,mr:0,ua:0,ur:1,fa:2,fr:0,revs:1});
+  expect(diffCounts({members:{added:['x'],removed:[],modified:['z']},unresolved:{added:[],removed:['y']},facts:{added:['f1','f2'],removed:[]},stateRevs:[{issuerId:'i',from:1,to:2}],cells:[]})).toEqual({ma:1,mr:0,mm:1,ua:0,ur:1,fa:2,fr:0,revs:1});
   expect(factEvidenceUrl('600519.SH','f')).toBe('/api/facts/600519.SH?factIds=f');
   expect(factEvidenceUrl(null,'f')).toBeNull();
   expect(short('e'.repeat(64))).toBe('eeee…eeee');

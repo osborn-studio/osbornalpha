@@ -15,8 +15,11 @@ import {cellDisplay} from './display';
 import type {CellDisplay} from './display';
 import {schemeDatasetKey} from './licenses';
 import {isMemberAt} from './memberships';
-import {CONFIG_HASH,METHOD_CONFIG,METHOD_VERSION} from './method';
-import {replayFromManifest} from './replay';
+import {CONFIG_HASH,METHOD_CONFIG,METHOD_VERSION,cellSpecs} from './method';
+import {InputIndex,pickInputs} from './aggregate';
+import type {PoolDerived,PoolFact} from './aggregate';
+import {canonicalJson} from './canonical-json';
+import {replayCell,replayFromManifest} from './replay';
 import type {AggDuration,AggMetric,AggregateManifest,CellStatus,ClassificationRow,DatasetKey,FreshnessRow,HistoryClass,IndustryDb,ManifestCell,ManifestStore,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,MissingReason,Scheme,SchemeVersion,ValuationCellRow} from './types';
 
 export const SCHEME_VERSION:Record<Scheme,SchemeVersion>={sw2021:'2021',sic:'sec-current'};
@@ -26,16 +29,6 @@ export const AGG_DURATIONS:readonly AggDuration[]=['12M','3M','TTM','INSTANT'];
 export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_sum:['12M','3M'],net_income_parent_sum:['12M','3M'],gross_margin:['12M'],roe:['TTM'],revenue_yoy:['12M','3M'],net_income_yoy:['12M','3M'],member_count:['INSTANT']};
 /** The stored YoY metric shown next to a sum in the table view (no page-side arithmetic). */
 export const YOY_COMPANION:Partial<Record<AggMetric,AggMetric>>={revenue_sum:'revenue_yoy',net_income_parent_sum:'net_income_yoy'};
-/** Spec §5.2 inputs per metric: plan-2 concepts and derived metric names (replay filtering, spec §9). */
-export const METRIC_INPUTS:Record<AggMetric,{facts:readonly string[];derived:readonly string[]}>={
- revenue_sum:{facts:['revenue'],derived:['q_single_revenue']},
- net_income_parent_sum:{facts:['net_income_parent'],derived:['q_single_net_income_parent']},
- gross_margin:{facts:['revenue_operating','cost_of_revenue'],derived:[]},
- roe:{facts:['equity_parent'],derived:['ttm_net_income_parent']},
- revenue_yoy:{facts:['revenue'],derived:['q_single_revenue']},
- net_income_yoy:{facts:['net_income_parent'],derived:['q_single_net_income_parent']},
- member_count:{facts:[],derived:[]},
-};
 /** dq_freshness datasets written by the jobs (Task 12 aggregate, Task 7 SW memberships, Task 9 SIC). */
 export const AGG_FRESHNESS:Record<Scheme,string>={sw2021:'industry.agg.sw2021',sic:'industry.sic.memberships'};
 export const MEMBERSHIP_FRESHNESS:Record<Scheme,string>={sw2021:'industry.sw2021.memberships',sic:'industry.sic.memberships'};
@@ -286,7 +279,7 @@ export interface ReplayDeps{
  now:Date;
 }
 export interface ReplayDiff{
- members:{added:string[];removed:string[]};unresolved:{added:string[];removed:string[]};facts:{added:string[];removed:string[]};
+ members:{added:string[];removed:string[];modified:string[]};unresolved:{added:string[];removed:string[]};facts:{added:string[];removed:string[]};
  stateRevs:{issuerId:string;from:number|null;to:number|null}[];
  cells:{metric:AggMetric;duration:AggDuration;periodStart:string;stored:ManifestCell|null;recomputed:ManifestCell|null}[];
 }
@@ -304,25 +297,43 @@ export function reproduces(c:ManifestCell|undefined,row:MetricCellRow):boolean{
 const sameCell=(c:ManifestCell,metric:AggMetric,duration:AggDuration,periodStart:string)=>c.metric===metric&&c.duration===duration&&c.period_start===periodStart;
 
 /**
- * Spec §9 per-cell filtering: members / unresolved / member_state_revs in full; facts and derived only for
- * the metric (its input concepts, its derived metrics and the facts those derived rows cite); roles only for
- * the metric and the cell's duration (ManifestRole carries duration, plan contract change);
- * cells only the requested one.
+ * Spec §9 per-cell filtering: members / unresolved / member_state_revs in full; roles only for the metric and
+ * the cell's duration (ManifestRole carries duration); cells only the requested one; facts and derived only the
+ * inputs the requested cell actually used: for every included role the exact rows pickInputs selects (metric,
+ * duration and periods of THIS cell, so a 2025 annual revenue_sum does not carry the prior-year revenue only
+ * YoY needs, and an annual cell carries no quarterly derived rows), plus the facts those derived rows cite.
  */
 export function filterManifest(m:AggregateManifest,metric:AggMetric,cell:{duration:AggDuration;period_start:string}):AggregateManifest{
- const inputs=METRIC_INPUTS[metric];
- const derived=m.derived.filter(d=>inputs.derived.includes(d.metric));
- const cited=new Set(derived.flatMap(d=>d.inputs.map(i=>i.fact_id)));
- return {...m,facts:m.facts.filter(f=>inputs.facts.includes(f.concept)||cited.has(f.fact_id)),derived,roles:m.roles.filter(r=>r.metric===metric&&r.duration===cell.duration),cells:m.cells.filter(c=>sameCell(c,metric,cell.duration,cell.period_start))};
+ type F=PoolFact&{src:AggregateManifest['facts'][number]};type D=PoolDerived&{src:AggregateManifest['derived'][number]};
+ const facts:F[]=m.facts.map(f=>({issuer_id:f.issuer_id,concept:f.concept,period_start:f.period_start,period_end:f.period_end,duration:f.duration,unit:f.unit,value:f.value_text,src:f}));
+ const derivedPool:D[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value,src:d}));
+ const idx=new InputIndex(facts,derivedPool);
+ const roles=m.roles.filter(r=>r.metric===metric&&r.duration===cell.duration);
+ const spec=cellSpecs(m.period_end).find(s=>s.metric===metric&&s.duration===cell.duration&&s.period_start===cell.period_start);
+ const usedFacts=new Set<AggregateManifest['facts'][number]>(),usedDerived=new Set<AggregateManifest['derived'][number]>();
+ if(spec&&metric!=='member_count')for(const r of roles){
+  if(r.role!=='included')continue;
+  const p=pickInputs(spec,r.issuer_id,idx);
+  if(!p.ok)continue;
+  for(const f of p.facts)usedFacts.add(f.src);
+  for(const d of p.derived)usedDerived.add(d.src);
+ }
+ const cited=new Set([...usedDerived].flatMap(d=>d.inputs.map(i=>i.fact_id)));
+ return {...m,facts:m.facts.filter(f=>usedFacts.has(f)||cited.has(f.fact_id)),derived:m.derived.filter(d=>usedDerived.has(d)),roles,cells:m.cells.filter(c=>sameCell(c,metric,cell.duration,cell.period_start))};
 }
 function setDiff(a:string[],b:string[]){const A=new Set(a),B=new Set(b);return {added:[...B].filter(x=>!A.has(x)).sort(cmp),removed:[...A].filter(x=>!B.has(x)).sort(cmp)};}
+/** Members keyed as before (issuer, window), compared by the complete evidence-bearing record. */
+function memberDiff(a:AggregateManifest['members'],b:AggregateManifest['members']){
+ const key=(x:AggregateManifest['members'][number])=>`${x.issuer_id}:${x.valid_from}:${x.valid_to??''}:${x.valid_to_available_date??''}`;
+ const A=new Map(a.map(x=>[key(x),canonicalJson(x)])),B=new Map(b.map(x=>[key(x),canonicalJson(x)]));
+ return {...setDiff([...A.keys()],[...B.keys()]),modified:[...A.keys()].filter(k=>B.has(k)&&A.get(k)!==B.get(k)).sort(cmp)};
+}
 function sameManifestCell(a:ManifestCell,b:ManifestCell):boolean{
  return a.status===b.status&&(a.missing_reason??null)===(b.missing_reason??null)&&a.n_members===b.n_members&&a.n_with_data===b.n_with_data&&a.n_unresolved===b.n_unresolved&&a.unit===b.unit
   &&((a.value_text===undefined&&b.value_text===undefined)||(a.value_text!==undefined&&b.value_text!==undefined&&sameDecimal(a.value_text,b.value_text)));
 }
 /** What changed between the frozen manifest and a recompute on current evidence (spec §5.5 'changed'). */
 export function manifestDiff(stored:AggregateManifest,now:AggregateManifest):ReplayDiff{
- const memberKey=(x:AggregateManifest['members'][number])=>`${x.issuer_id}:${x.valid_from}:${x.valid_to??''}:${x.valid_to_available_date??''}`;
  const unresolvedKey=(x:ManifestUnresolved)=>`${x.ts_code}:${x.in_date}:${x.out_date??''}:${x.source_membership_id}`;
  const revA=new Map(stored.member_state_revs.map(r=>[r.issuer_id,r.state_rev])),revB=new Map(now.member_state_revs.map(r=>[r.issuer_id,r.state_rev]));
  const stateRevs=[...new Set([...revA.keys(),...revB.keys()])].sort(cmp).filter(i=>revA.get(i)!==revB.get(i)).map(i=>({issuerId:i,from:revA.get(i)??null,to:revB.get(i)??null}));
@@ -334,9 +345,9 @@ export function manifestDiff(stored:AggregateManifest,now:AggregateManifest):Rep
   const ref=(a??b)!;
   return [{metric:ref.metric,duration:ref.duration,periodStart:ref.period_start,stored:a,recomputed:b}];
  });
- return {members:setDiff(stored.members.map(memberKey),now.members.map(memberKey)),unresolved:setDiff(stored.unresolved.map(unresolvedKey),now.unresolved.map(unresolvedKey)),facts:setDiff(stored.facts.map(f=>f.fact_id),now.facts.map(f=>f.fact_id)),stateRevs,cells};
+ return {members:memberDiff(stored.members,now.members),unresolved:setDiff(stored.unresolved.map(unresolvedKey),now.unresolved.map(unresolvedKey)),facts:setDiff(stored.facts.map(f=>f.fact_id),now.facts.map(f=>f.fact_id)),stateRevs,cells};
 }
-export const isEmptyDiff=(d:ReplayDiff)=>d.members.added.length+d.members.removed.length+d.unresolved.added.length+d.unresolved.removed.length+d.facts.added.length+d.facts.removed.length+d.stateRevs.length+d.cells.length===0;
+export const isEmptyDiff=(d:ReplayDiff)=>d.members.added.length+d.members.removed.length+d.members.modified.length+d.unresolved.added.length+d.unresolved.removed.length+d.facts.added.length+d.facts.removed.length+d.stateRevs.length+d.cells.length===0;
 
 /** Spec §9 authorization order: dataset public → run visible (active, same scheme/version) → cell exists and is ok; only then the private manifest. */
 export async function replayView(deps:ReplayDeps,q:ReplayQuery):Promise<ReplayResult>{
@@ -355,8 +366,10 @@ export async function replayView(deps:ReplayDeps,q:ReplayQuery):Promise<ReplayRe
  const base={header:runHeader(run),freshness:effectiveFreshness(fresh,AGG_FRESHNESS[q.scheme],deps.now),cell:publicCell(cell),manifestHash:cell.manifest_hash};
  const original=filterManifest(stored,q.metric,cell);
  if(q.mode==='original'){
-  const replay=replayFromManifest(stored).cells.filter(c=>sameCell(c,q.metric,cell.duration,cell.period_start));
-  return {state:'ok',mode:'original',...base,manifest:original,replay,reproduced:reproduces(replay[0],cell)};
+  // validate the exact single-cell payload returned, not the full grid
+  const rc=replayCell(original,{metric:q.metric,duration:cell.duration,period_start:cell.period_start});
+  const replay=rc.cell?[rc.cell]:[];
+  return {state:'ok',mode:'original',...base,manifest:original,replay,reproduced:rc.reproduced&&reproduces(rc.cell??undefined,cell)};
  }
  const recomputed=await deps.recompute({scheme:q.scheme,version:q.version,level:run.level,code:q.code,periodEnd:q.periodEnd,factsAsOf:run.facts_as_of,knowledgeDate:run.knowledge_date,historyClass:run.history_class});
  const diff=manifestDiff(original,filterManifest(recomputed,q.metric,cell));
@@ -408,8 +421,9 @@ export async function adminReplayView(deps:AdminReplayDeps,q:{runId:string;code:
  let focus:ReplayFocus|null=null;
  const pick=q.metric?rows.filter(r=>r.metric===q.metric&&(q.duration===null||r.duration===q.duration)):[];
  if(pick.length===1&&pick[0].status==='ok'&&pick[0].manifest_hash&&manifest&&replay){
-  const c=pick[0];const rc=replay.filter(x=>sameCell(x,c.metric,c.duration,c.period_start));
-  focus={cell:publicCell(c),manifestHash:c.manifest_hash!,manifest:filterManifest(manifest,c.metric,c),replay:rc,reproduced:reproduces(rc[0],c)};
+  const c=pick[0];const fm=filterManifest(manifest,c.metric,c);
+  const rc=replayCell(fm,{metric:c.metric,duration:c.duration,period_start:c.period_start});
+  focus={cell:publicCell(c),manifestHash:c.manifest_hash!,manifest:fm,replay:rc.cell?[rc.cell]:[],reproduced:rc.reproduced&&reproduces(rc.cell??undefined,c)};
  }
  return {state:'ok',run,cells,manifestHashes,manifest,replay,unresolved,focus};
 }

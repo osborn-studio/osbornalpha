@@ -4,7 +4,7 @@ import {beforeEach,describe,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({replay:vi.fn(),valuation:vi.fn(),get:vi.fn(),recompute:vi.fn(),official:vi.fn()}));
 vi.mock('@/lib/industry/public-deps',()=>({replayDeps:mocks.replay,valuationReplayDeps:mocks.valuation}));
 vi.mock('@/lib/industry/memberships',()=>({isMemberAt:()=>true}));
-vi.mock('@/lib/industry/replay',()=>({replayFromManifest:(m:{cells:unknown[]})=>({cells:m.cells})}));
+vi.mock('@/lib/industry/replay',()=>({replayFromManifest:(m:{cells:unknown[]})=>({cells:m.cells}),replayCell:(m:{cells:{metric:string;duration:string;period_start:string}[]},k:{metric:string;duration:string;period_start:string})=>({cell:m.cells.find(c=>c.metric===k.metric&&c.duration===k.duration&&c.period_start===k.period_start)??null,reproduced:true,mismatches:[]})}));
 
 import {RUN_ID,cellRow,manifestOf,missingCell,runRow,stubIndustryDb,valuationRow,valuationRunRow} from '@/lib/industry/fixture-rows';
 import {replayLimiter} from '@/lib/industry/route-params';
@@ -36,7 +36,9 @@ describe('GET /api/industries/[scheme]/[code]/replay',()=>{
   expect(res.headers.get('cache-control')).toBe('public, max-age=3600');
  });
  it('recompute: match|changed',async()=>{
-  const body=await (await get(`runId=${RUN_ID}&metric=gross_margin&periodEnd=2025-12-31&mode=recompute`)).json();
+  const res=await get(`runId=${RUN_ID}&metric=gross_margin&periodEnd=2025-12-31&mode=recompute`);
+  expect(res.headers.get('cache-control')).toBe('no-store');   // current evidence is never cached
+  const body=await res.json();
   expect(body).toMatchObject({mode:'recompute',result:'match'});
   expect(mocks.recompute).toHaveBeenCalledWith(expect.objectContaining({code:'801120.SI',periodEnd:'2025-12-31',factsAsOf:'2026-11-03',knowledgeDate:'2026-11-03',historyClass:'reconstruction',level:1}));
  });

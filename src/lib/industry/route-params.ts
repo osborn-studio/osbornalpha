@@ -103,9 +103,15 @@ export function createRateLimiter(limit:number,windowMs:number,maxKeys=10_000):R
 }
 /** Spec §9: /replay is limited to 10 requests per IP per minute. */
 export const replayLimiter=createRateLimiter(10,60_000);
-/** First X-Forwarded-For hop (Vercel sets it), else X-Real-IP, else one shared 'unknown' bucket. */
+/**
+ * Rate-limit key. Trust assumption: the app is served behind Vercel's edge, which overwrites
+ * x-vercel-forwarded-for and x-real-ip with the connecting address, so those two cannot be spoofed by a
+ * client; a client-supplied X-Forwarded-For can (the platform only appends to it), so it is read only as the
+ * first-hop fallback for non-Vercel hosting, and a spoofed value then merely buckets that client separately.
+ */
 export function clientIp(req:Request):string{
- const first=req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
- if(first)return first;
- return req.headers.get('x-real-ip')?.trim()||'unknown';
+ const h=req.headers;
+ const trusted=h.get('x-vercel-forwarded-for')?.split(',')[0]?.trim()||h.get('x-real-ip')?.trim();
+ if(trusted)return trusted;
+ return h.get('x-forwarded-for')?.split(',')[0]?.trim()||'unknown';
 }

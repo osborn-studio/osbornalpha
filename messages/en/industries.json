@@ -310,7 +310,7 @@
     "recompute": "Recompute on current evidence",
     "recomputeMatch": "match: a recompute on current evidence equals the recorded manifest.",
     "recomputeChanged": "changed: current evidence differs from the recorded manifest. Late filings, quarantine decisions, mapping upgrades and membership corrections all do this; it is expected.",
-    "diffCounts": "members +{ma}/−{mr} · unresolved +{ua}/−{ur} · facts +{fa}/−{fr} · state revisions changed {revs}",
+    "diffCounts": "members +{ma}/−{mr} ~{mm} · unresolved +{ua}/−{ur} · facts +{fa}/−{fr} · state revisions changed {revs}",
     "inputsTop": "Inputs (first {n} of {total})",
     "issuer": "Issuer",
     "concept": "Concept",
