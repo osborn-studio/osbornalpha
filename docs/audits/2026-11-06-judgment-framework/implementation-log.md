@@ -6,6 +6,7 @@
 | T1 core pure modules | cfc07e82 + 16dfa3b2 | Opus: SPEC PASS (code), QUALITY PASS (minors fixed) | Codex review: 1 P2 (jsonClean __proto__) fixed | 1 | executed on plan draft 3 |
 | T2 migration I | 本提交（`feat(judgments): F4 Task 2`） | 待复审 | 待审 | 0 | judgments.integration 7/7；test:migrations PASS；executed on plan draft 3 |
 | T3 migration II | 本提交（`feat(judgments): F4 Task 3`） | 待复审 | 待审 | 0 | judgments.integration 31/31（连跑 3 次稳定）；test:migrations PASS；typecheck、lint 干净；executed on plan draft 4 |
+| T6 origins / facts-derive / macro-api / inputs-db | 本提交（`feat(judgments): origin table, deriveMetricsAsOf`） | 待复审 | 待审 | 0 | 4 测试文件 17/17；typecheck、lint 干净；executed on plan draft 4 |
 
 ## 偏差 · Task 1
 
@@ -31,3 +32,10 @@
 - 无偏离计划文本：`rpc-inventory.ts`、迁移函数段（`judgment_envelope` 类型、6 个内部函数、7 个公共读 RPC、15 个服务写 RPC、授权块）与 24 个集成用例均按计划原样落地，迁移与测试在 PostgreSQL 17 上首次即通过，未做任何 SQL 修补。
 - 计划 Step 2 预计 Task 3 先失败 21 个用例，实际为 24 个（计划 Step 4 的 24 个 = 全部新用例）；先失败（24 failed / 7 passed）、追加 SQL 后 31 passed。
 - 未改 `migrations.lock.json`（Task 22 锁）；无其他文件改动。
+
+## 偏差 · Task 6
+
+- 无偏离计划文本：`origins.ts`、`facts-derive.ts`、`macro-api.ts`、`inputs-db.ts`、`testing/facts-fixture.ts` 与四个测试文件均逐字取自计划代码块，未做任何修补；4 文件 17 个用例首次通过（计划预估约 19，实际 17），`typecheck`、`lint` 干净。
+- 过程偏差：测试与实现同批落地，未单独执行计划 Step 3 的"先失败"运行。
+- 核实记录（计划已给出，未重做）：`read_facts` 对 anon 可执行、`financial_facts` anon 仅见 `status='ok'`、`macro_series` 表不存在（规格偏差 1）。
+- 未触碰 `supabase/migrations`、`judgments.integration.test.ts`；不依赖 `memoryJudgmentsDb`。
