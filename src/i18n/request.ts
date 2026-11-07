@@ -17,6 +17,9 @@ const MESSAGE_DOMAINS = [
   'admin',
   // Analyst scoring layer (spec 2026-10-17):
   'analyst',
+  // F3 document pipeline (source drawer, spec 2026-11-04 §9.1):
+  'documents',
+  // F3 end
 ] as const;
 
 export default getRequestConfig(async () => {

@@ -1,0 +1,33 @@
+// src/app/api/documents/doc/[id]/pages/[n]/route.ts
+// One page of one extraction (spec §9): `extraction` (default: the document's current extraction;
+// must belong to the document), `layout=1` adds lines and tables from pages.json (read from the
+// private bucket by the server and hash-checked). Public documents only here (owner branch: Task 12).
+import {NextResponse} from 'next/server';
+import {QueryError,UUID_RE,errorResponse,failureResponse,flagParam,paramErrorResponse,readParams} from '@/lib/facts/public-route';
+import {cacheHeadersFor,notFound,pageDetail,publicDocs,serviceStore} from '@/lib/documents/read-route';
+
+export const dynamic='force-dynamic';
+
+export async function GET(req:Request,{params}:{params:Promise<{id:string;n:string}>}){
+ const now=new Date();
+ const {id,n}=await params;
+ if(!UUID_RE.test(id))return errorResponse('invalid_parameter:id','invalid id',400);
+ if(!/^\d{1,6}$/.test(n)||Number(n)<1)return errorResponse('invalid_parameter:n','invalid page number',400);
+ const pageNo=Number(n);
+ let extraction:string|null,layout:boolean;
+ try{
+  const p=readParams(new URL(req.url),['extraction','layout']);
+  extraction=p.get('extraction')??null;
+  if(extraction!==null&&!UUID_RE.test(extraction))throw new QueryError('extraction');
+  layout=flagParam(p,'layout');
+ }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
+ try{
+  const {db}=publicDocs();
+  const row=await db.documentById(id);
+  if(row&&row.permission==='public'){
+   const body=await pageDetail(db,serviceStore(),row,pageNo,extraction,layout);
+   return body?NextResponse.json(body,{headers:cacheHeadersFor('public',undefined,now)}):notFound();
+  }
+  return notFound();   // owner branch: Task 12
+ }catch(e){return failureResponse(e,'documents/page','page read failed');}
+}

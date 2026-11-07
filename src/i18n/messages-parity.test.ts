@@ -7,7 +7,7 @@ function keys(value: unknown, prefix = ''): string[] {
   return Object.entries(value).flatMap(([key, child]) => keys(child, prefix ? `${prefix}.${key}` : key));
 }
 
-type Domain = 'common' | 'components' | 'portfolio' | 'analyst';
+type Domain = 'common' | 'components' | 'portfolio' | 'analyst' | 'documents'; // F3: + documents
 
 function messageKeys(locale: 'en' | 'zh', file: Domain) {
   const path = resolve(process.cwd(), 'messages', locale, `${file}.json`);
@@ -25,13 +25,13 @@ function placeholders(value: string): string[] {
 
 describe('usage notice translations', () => {
   it('keeps Chinese and English keys in parity', () => {
-    for (const file of ['common', 'components', 'portfolio', 'analyst'] as const) {
+    for (const file of ['common', 'components', 'portfolio', 'analyst', 'documents'] as const) { // F3: + documents
       expect(messageKeys('zh', file)).toEqual(messageKeys('en', file));
     }
   });
 
   it('keeps quota and daily-usage interpolation parameters in parity', () => {
-    for (const [file, name] of [['common', 'quota'], ['components', 'usageToday']] as const) {
+    for (const [file, name] of [['common', 'quota'], ['components', 'usageToday'], ['documents', 'drawer']] as const) { // F3: + documents.drawer
       const en = section('en', file, name);
       const zh = section('zh', file, name);
       for (const key of Object.keys(en)) {
