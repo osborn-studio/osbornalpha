@@ -1,43 +1,27 @@
-// TODO(P5): replace MOCK_DATA with live macro source
+// MACRO
+// Today macro glance (spec §3.5, canvas TodayGlance2): reads the published overview (region=all, compact). No mock
+// rows: SSE/HSI/Nasdaq/DXY have no official source with confirmed rights; US10Y comes from the macro catalog
+// (US_DGS10). Missing values read 缺失; a fetch failure reads unavailable; never zeros.
 'use client';
 
-import { useTranslations } from 'next-intl';
+import Link from 'next/link';
 import { Panel } from '@/components/ui';
-import { MOCK_DATA } from '@/lib/data/mock';
-import { formatPct, changeClass } from '@/lib/utils';
-
-function MacroLine({
-  label, v, pct, suffix = '', raw, chgClass,
-}: { label: string; v: number; pct?: number; suffix?: string; raw?: string; chgClass?: string }) {
-  return (
-    <div className="grid grid-cols-[60px_1fr_auto] items-center gap-2">
-      <span className="text-text-dim">{label}</span>
-      <span className="text-right font-mono tabular-nums">{v.toLocaleString()}{suffix}</span>
-      <span className={`font-mono tabular-nums ${pct !== undefined ? changeClass(pct) : chgClass || ''}`}>
-        {raw !== undefined ? raw : (pct !== undefined ? formatPct(pct) : '')}
-      </span>
-    </div>
-  );
-}
+import { MacroKeyRows } from '@/components/macro/MacroKeyRows';
+import { useMacroOverview } from '@/components/macro/use-macro-overview';
+import { useMacroT } from '@/components/macro/use-macro-t';
+import { glanceRows } from '@/components/macro/view-model';
 
 export function MacroGlance() {
-  const t = useTranslations('today');
-  const { macro } = MOCK_DATA;
+  const { t, locale } = useMacroT();
+  const state = useMacroOverview('region=all&compact=1');
+  const groups = state.status === 'ok' ? glanceRows(state.data, locale) : [];
   return (
-    <Panel title={t('macro.title')}>
-      <div className="space-y-1 text-[11px]">
-        <MacroLine label={t('macro.sse')} v={macro.sse_index.value} pct={macro.sse_index.change_pct} />
-        <MacroLine label={t('macro.hsi')} v={macro.hsi_index.value} pct={macro.hsi_index.change_pct} />
-        <MacroLine label={t('macro.nasdaq')} v={macro.nasdaq.value} pct={macro.nasdaq.change_pct} />
-        <MacroLine
-          label={t('macro.us10y')}
-          v={macro.us_10y.value}
-          suffix="%"
-          raw={`${macro.us_10y.change_bp > 0 ? '+' : ''}${macro.us_10y.change_bp}bp`}
-          chgClass={changeClass(macro.us_10y.change_bp)}
-        />
-        <MacroLine label={t('macro.dxy')} v={macro.dxy.value} pct={macro.dxy.change_pct} />
-      </div>
+    <Panel title={t('glance.title')}>
+      {state.status === 'loading' && <div className="text-[11px] text-text-dim">{t('states.loading')}</div>}
+      {(state.status === 'error' || (state.status === 'ok' && groups.length === 0)) && <div className="text-[11px] text-text-dim">{t('glance.unavailable')}</div>}
+      {groups.length > 0 && <MacroKeyRows groups={groups} t={t} />}
+      <Link href="/intel/macro" className="mt-2 inline-block text-[11px] text-accent">{t('glance.enter')}</Link>
     </Panel>
   );
 }
+// /MACRO
