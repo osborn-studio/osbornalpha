@@ -21,7 +21,7 @@ import {F4_FUNCTIONS,INTERNAL_FUNCTION_NAMES,PUBLIC_RPC_NAMES,SERVICE_RPC_NAMES}
 import type {Horizon,SettlementInsert,Target} from './types';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const MIGRATION='supabase/migrations/20261115090000_judgments.sql';
+const MIGRATION='supabase/migrations/20261116090000_judgments.sql';
 const TABLES=['judgment_methodologies','judgment_methodology_events','judgments','judgment_settlements','judgment_settle_queue','judgment_calibrations','judgment_calibration_validity','judgment_job_state','judgment_calibration_cohort_members'];
 const OPEN_READ=['judgment_methodologies','judgment_methodology_events','judgment_calibration_validity'];
 const GATED=['judgments','judgment_settlements','judgment_calibrations'];

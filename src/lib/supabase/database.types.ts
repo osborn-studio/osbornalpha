@@ -22,7 +22,7 @@
 // + 20261111090000_industry_research.sql (industry_* tables, security_marks; altered industry_classifications / issuer_industry_memberships)
 // INDUSTRY:END
 // F4
-// + 20261115090000_judgments.sql (judgment_methodologies, judgment_methodology_events, judgments, judgment_settlements,
+// + 20261116090000_judgments.sql (judgment_methodologies, judgment_methodology_events, judgments, judgment_settlements,
 //   judgment_settle_queue, judgment_calibrations, judgment_calibration_validity, judgment_job_state,
 //   judgment_calibration_cohort_members; RPCs not typed here)
 // /F4
@@ -1210,7 +1210,7 @@ export interface IndustrySecurityDelisting {
   raw_hash: string;
 }
 // INDUSTRY:END
-// F4 — judgment framework tables (supabase/migrations/20261115090000_judgments.sql). Row = the shared
+// F4 — judgment framework tables (supabase/migrations/20261116090000_judgments.sql). Row = the shared
 // contract shape (src/lib/judgments/types.ts). No role has direct insert/update grants (every write is an
 // RPC), so Insert/Update exist only for type completeness; the RPCs are not registered under Functions
 // (repo convention: callers narrow with RpcFn from src/lib/judgments/db.ts).

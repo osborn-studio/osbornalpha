@@ -4,7 +4,7 @@
 // EXCHANGE_TZ private and is not changed; time.test.ts asserts both agree through exchangeDate().
 // closeInstantUtc converts the local close with Intl, so DST comes from the platform tz database.
 // settleWindowOf is the TS twin of the SQL helpers public.judgments_settle_after /
-// public.judgments_grace_days in 20261115090000_judgments.sql (plan 契约补充 结算窗口算术):
+// public.judgments_grace_days in 20261116090000_judgments.sql (plan 契约补充 结算窗口算术):
 // session_index → base_date + n days; date → the date; period → first day of the next month;
 // fiscal_period → period_end + 1; settle_by = settle_after + grace_days. Change both together.
 import {JudgmentError} from './errors';

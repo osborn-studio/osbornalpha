@@ -1,4 +1,4 @@
--- supabase/migrations/20261115090000_judgments.sql
+-- supabase/migrations/20261116090000_judgments.sql
 -- F4 (judgment framework spec §5): the public judgment table family. Eight tables —
 -- judgment_methodologies (code mirror; limited update) + judgment_methodology_events (append-only
 -- status history, audit N3), judgments (append-only content-addressed registrations),
