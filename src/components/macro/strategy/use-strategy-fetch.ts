@@ -9,7 +9,7 @@ export function useStrategyFetch<T>(url:string|null):{state:LoadState<T>;reload:
   if(!url)return;
   let cancelled=false;
   setState({kind:'loading'});
-  fetch(url,{credentials:'same-origin'})
+  fetch(url,{credentials:'same-origin',cache:'no-store'})
    .then(async r=>{const body:unknown=await r.json().catch(()=>null);if(!cancelled)setState(loadStateOf<T>(r.status,body));})
    .catch(()=>{if(!cancelled)setState({kind:'error',code:'network'});});
   return ()=>{cancelled=true;};

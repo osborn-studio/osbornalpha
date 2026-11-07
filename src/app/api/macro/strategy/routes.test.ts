@@ -200,7 +200,7 @@ describe('fact routes',()=>{
   expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
  });
  it.each(FACT_ROUTES.slice(0,3))('%s reuses persisted facts after a cold process memo, gates warm cache, and retries errors',async(_name,call)=>{
-  const first=await call();expect(first.status).toBe(200);const expected=await first.json();
+  const first=await call();expect(first.status).toBe(200);expect(first.headers.get('cache-control')).toBe('private, no-store');const expected=await first.json();
   strategyMemo.clear();
   expect(await (await call()).json()).toEqual(expected);
   expect(m.trManifest.mock.calls.length+m.prManifest.mock.calls.length+m.ctManifest.mock.calls.length).toBe(1);
@@ -245,7 +245,7 @@ describe('fact routes',()=>{
  });
  it('transmission, judgment layer off: one stored manifest feeds flow and playbooks; judgment_status disabled, no f4 field, F4 never built',async()=>{
   const r=await transmission(get('/transmission?region=US'));
-  expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('private, max-age=300');
+  expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('private, no-store');
   const out=await json(r);
   expect(out).toEqual({transmission:TV,playbooks:PB,judgment_status:'disabled'});
   expect('f4' in out).toBe(false);
@@ -290,7 +290,7 @@ describe('fact routes',()=>{
   expect(m.prManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',window:6,snapshots:{US:FROZEN_US,CN:null}});
   expect(m.buildPolicyResponse.mock.calls[0]).toEqual([expect.objectContaining({body:body('policy_response')})]);
   r=await cycleTable(get('/cycle-table?boundary=month_end'));
-  expect(r.headers.get('cache-control')).toBe('private, max-age=300');
+  expect(r.headers.get('cache-control')).toBe('private, no-store');
   expect(m.ctManifest).toHaveBeenCalledWith(PORT,{now:expect.any(Date),codeVersion:'abc123',boundary:'month_end',snapshots:{US:FROZEN_US,CN:null}});
   expect(m.buildCycleTable.mock.calls[0]).toEqual([expect.objectContaining({body:body('cycle_table')})]);
  });

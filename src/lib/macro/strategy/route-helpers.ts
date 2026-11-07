@@ -19,7 +19,8 @@ import {createF4Client,type F4Client} from './f4-client';
 import {judgmentsEnabled,strategyEnabled} from './flags';
 import {monthCutoff,prevMonth} from './manifest';
 import {strategyPort,type StrategyReadPort} from './port';
-export const READ_HEADERS={'Cache-Control':'private, max-age=300'};
+// Auth and judgments are request-scoped even when the underlying facts are shared.
+export const READ_HEADERS={'Cache-Control':'private, no-store'};
 /** Fact-route response header; only successful responses expose a memo result. */
 export const memoHeaders=(outcome:import('./memo').MemoOutcome)=>({...READ_HEADERS,'X-Macro-Strategy-Memo':outcome});
 export const NO_STORE={'Cache-Control':'private, no-store'};

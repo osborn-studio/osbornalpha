@@ -62,9 +62,12 @@ export async function factView<T extends {manifest_id:string}>(key:string,state:
   return {expiresAt:started+FACT_VIEW_TTL_SECONDS*1000,value};
  };
  const load=async()=>{
-  const cached=await unstable_cache(build,[identity],{revalidate:FACT_VIEW_TTL_SECONDS})();
+  // Next's stale callback and our foreground fallback must share success AND failure.
+  let fresh:Promise<FactEnvelope<T>>|undefined;
+  const buildOnce=()=>fresh??=build();
+  const cached=await unstable_cache(buildOnce,[identity],{revalidate:FACT_VIEW_TTL_SECONDS})();
   // Do not serve stale data even if Next background refresh fails. Errors propagate and retry.
-  return cached.expiresAt>Date.now()?cached:await build();
+  return cached.expiresAt>Date.now()?cached:await buildOnce();
  };
  let result=await memo.getOrCompute(identity,load);
  if(result.value.expiresAt<=Date.now()){
