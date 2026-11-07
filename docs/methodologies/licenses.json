@@ -1,0 +1,74 @@
+{
+  "financial_fact×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_fact×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×edgar": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "financial_metric×tushare": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_observation×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "macro_snapshot×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "price_bar×datagateway": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×supabase_public": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "table_rows×macro_workbench": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "judgment×judgments": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  },
+  "legacy_fill×eastmoney": {
+    "status": "unverified",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "evidence": null
+  }
+}
