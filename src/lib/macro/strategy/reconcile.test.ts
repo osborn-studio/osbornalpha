@@ -9,20 +9,25 @@ vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn()}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({rpc:m.rpc})}));
 
 import {finalizeUsageRun,type RecordUsageMeta} from '@/lib/billing/quota';
-import {classifyUsageEvent,expectedUsageColumns,reconcileSettlements,type ReconcileClient,type UnsettledRun,type UsageEventRow} from './reconcile';
+import {classifyUsageEvent,expectedUsageColumns,reconcileSettlements,type ReconcileClient,type RunCursor,type UnsettledRun,type UsageEventRow} from './reconcile';
 
 const PAYLOAD={status:'completed',provider:'deepseek',model:'deepseek-chat',inputTokens:120,cacheHitInputTokens:20,cacheMissInputTokens:100,outputTokens:80,costMicrormb:900,
  pricingVersion:'p1',usdCnyMicros:7_100_000,usageEstimated:false,byo:false};
 const row=(o:Partial<UsageEventRow>={}):UsageEventRow=>({status:'completed',provider:'deepseek',model:'deepseek-chat',input_tokens:120,cache_hit_input_tokens:20,cache_miss_input_tokens:100,
  output_tokens:80,cost_micrormb:'900',pricing_version:'p1',usd_cny_micros:'7100000',usage_estimated:false,byo:false,...o});
-const run=(id:string,payload:Record<string,unknown>=PAYLOAD):UnsettledRun=>({explanation_id:id,user_id:'u1',usage_audit_key:id,state:'accepted',finalize_payload:payload});
+const run=(id:string,payload:Record<string,unknown>=PAYLOAD):UnsettledRun=>({claimed_at:'2026-11-01T00:00:00Z',explanation_id:id,user_id:'u1',usage_audit_key:id,state:'accepted',finalize_payload:payload});
 const meta=(p:Record<string,unknown>)=>p as unknown as RecordUsageMeta;
 
-function fakeClient(runs:UnsettledRun[],events:Record<string,UsageEventRow>){
+/** Keyset over (claimed_at, explanation_id) among unfinalized rows, as the script's query does. */
+function after(runs:UnsettledRun[],limit:number,cur:RunCursor|null):UnsettledRun[]{
+ const key=(r:{claimed_at:string;explanation_id:string})=>`${r.claimed_at}|${r.explanation_id}`;
+ return [...runs].sort((a,b)=>key(a)<key(b)?-1:1).filter(r=>!cur||key(r)>key(cur)).slice(0,limit);
+}
+function fakeClient(runs:UnsettledRun[],events:Record<string,UsageEventRow>,failLookup:string[]=[]){
  const marked:string[]=[];const finalized:{key:string;payload:Record<string,unknown>}[]=[];
  const c:ReconcileClient={
-  unsettledRuns:async limit=>runs.slice(0,limit),
-  usageEvent:async key=>events[key]??null,
+  unsettledRuns:async(limit,cur)=>after(runs.filter(r=>!marked.includes(r.explanation_id)),limit,cur),
+  usageEvent:async key=>{if(failLookup.includes(key))throw new Error('lookup boom');return events[key]??null;},
   finalize:async(userId,key,payload)=>{finalized.push({key,payload});await finalizeUsageRun(userId,key,'perspectives',meta(payload));},
   markFinalized:async id=>{marked.push(id);},
  };
@@ -67,17 +72,46 @@ describe('reconcileSettlements',()=>{
   m.rpc.mockResolvedValue({data:[{id:'x',status:'completed'}],error:null});
   const f=fakeClient([run('absent'),run('settled'),run('pending'),run('conflict')],{settled:row(),pending:row({status:'pending'}),conflict:row({status:'failed',usage_estimated:true})});
   const out=await reconcileSettlements(f.c,{apply:true,limit:10});
-  expect(out.map(l=>[l.explanation_id,l.class,l.action])).toEqual([['absent','absent','marked'],['settled','settled','marked'],['pending','pending','finalized_and_marked'],['conflict','conflict','left_for_review']]);
+  expect(out.map(l=>[l.explanation_id,l.class,l.action])).toEqual([['absent','absent','marked'],['conflict','conflict','left_for_review'],['pending','pending','finalized_and_marked'],['settled','settled','marked']]);   // keyset order: claimed_at tie → explanation_id
   expect(f.finalized).toEqual([{key:'pending',payload:PAYLOAD}]);
   expect(m.rpc).toHaveBeenCalledTimes(1);
   expect(m.rpc).toHaveBeenCalledWith('finalize_usage_run',expect.objectContaining({p_idempotency_key:'pending',p_user_id:'u1',p_feature:'perspectives',p_cost_micrormb:900,
    p_pricing_version:'p1',p_usd_cny_micros:7_100_000,p_status:'completed'}));
-  expect(f.marked).toEqual(['absent','settled','pending']);
+  expect(f.marked).toEqual(['absent','pending','settled']);
  });
- it('a pending row whose finalize still fails stays unmarked with the wrapper code; the limit bounds the batch',async()=>{
+ it('a pending row whose finalize still fails stays unmarked with the wrapper code',async()=>{
   m.rpc.mockResolvedValue({data:null,error:{code:'08006',message:'connection failure'}});
-  const f=fakeClient([run('p1'),run('p2')],{p1:row({status:'pending'}),p2:row({status:'pending'})});
-  expect(await reconcileSettlements(f.c,{apply:true,limit:1})).toEqual([{explanation_id:'p1',usage_audit_key:'p1',state:'accepted',class:'pending',action:'finalize_failed',error:'usage_audit_unavailable'}]);
+  const f=fakeClient([run('p1')],{p1:row({status:'pending'})});
+  expect(await reconcileSettlements(f.c,{apply:true,limit:5})).toEqual([{explanation_id:'p1',usage_audit_key:'p1',state:'accepted',class:'pending',action:'finalize_failed',error:'usage_audit_unavailable'}]);
   expect(f.marked).toEqual([]);
+ });
+ it('progress past a full batch of conflicts: limit is the page size, later rows are still reached',async()=>{
+  const conflict=row({status:'failed',usage_estimated:true});
+  const runs=[run('c1'),run('c2'),run('c3'),run('z-absent'),run('z-settled')];
+  const f=fakeClient(runs,{c1:conflict,c2:conflict,c3:conflict,'z-settled':row()});
+  const out=await reconcileSettlements(f.c,{apply:true,limit:2});
+  expect(out.map(l=>[l.explanation_id,l.action])).toEqual([['c1','left_for_review'],['c2','left_for_review'],['c3','left_for_review'],['z-absent','marked'],['z-settled','marked']]);
+  expect(f.marked).toEqual(['z-absent','z-settled']);
+  // a second invocation sees the same conflicts first and still terminates
+  expect((await reconcileSettlements(f.c,{apply:true,limit:1})).map(l=>l.action)).toEqual(['left_for_review','left_for_review','left_for_review']);
+ });
+ it('keyset ties on claimed_at are broken by explanation_id (no row skipped or repeated across page edges)',async()=>{
+  const f=fakeClient([run('b'),run('a'),run('c')],{});
+  expect((await reconcileSettlements(f.c,{apply:false,limit:1})).map(l=>l.explanation_id)).toEqual(['a','b','c']);
+ });
+ it('receipts survive a later lookup failure; the failing row is lookup_failed and the rest are still processed',async()=>{
+  const f=fakeClient([run('a'),run('b'),run('c')],{},['b']);
+  const seen:string[]=[];
+  const out=await reconcileSettlements(f.c,{apply:true,limit:10},l=>{seen.push(`${l.explanation_id}:${l.action}`);});
+  expect(seen).toEqual(['a:marked','b:lookup_failed','c:marked']);
+  expect(out[1]).toMatchObject({class:'unknown',action:'lookup_failed',error:'lookup boom'});
+  expect(f.marked).toEqual(['a','c']);
+ });
+ it('lines are emitted before a later page fails',async()=>{
+  const f=fakeClient([run('a'),run('b')],{});
+  const c:ReconcileClient={...f.c,unsettledRuns:async(l,cur)=>{if(cur)throw new Error('page 2 down');return f.c.unsettledRuns(l,cur);}};
+  const seen:string[]=[];
+  await expect(reconcileSettlements(c,{apply:true,limit:1},l=>{seen.push(l.explanation_id);})).rejects.toThrow('page 2 down');
+  expect(seen).toEqual(['a']);
  });
 });

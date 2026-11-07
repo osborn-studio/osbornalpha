@@ -11745,7 +11745,7 @@ Design decisions (spec §3.1, §9.1, §12, §13):
 - Each page is a thin server component: `strategyEnabled()` off → `notFound()` (spec §9.1 "子路由 404"); `strategyPort()` null → `<DependencyState kind="foundation" />` ("宏观数据底座未就绪") before anything loads; otherwise the client screen from `StrategyScreens.tsx`. The month page also turns an invalid region or month into `notFound()`. The `(app)` layout already requires a signed-in user. Pages read flags only through `flags.ts`; the judgment layer state reaches the UI only through the APIs' `judgment_status` / 404 `judgments_disabled`.
 - `forbidden-terms.test.ts` scans the production text surfaces of spec §12 (N11): the strategy library (non-test `.ts`, minus `explain-validate.ts` whose constants hold the list, minus the test-only `testing/` helpers), its `data/**` and `prompts/**`, the strategy components, the `macroStrategy` messages, plus the strategy routes, the cron route and the four pages. It uses the validator's `FORBIDDEN_TERMS` (Chinese terms as substrings, English terms on word boundaries, case-insensitive), a superset of 概率 / 置信 / 胜率 / probability / confidence, so the test file itself never spells those words. Each surface also has a minimum file count, so a moved directory cannot pass by scanning nothing.
 - The runbook covers spec §13: the capability matrix, WP-S6 wiring steps, review recompute, explanation failure codes, completion recovery and settlement reconcile, catalog additions, and the verification gate with the known local flakes.
-- Settlement reconcile (plan audit R2-4): `finalizeUsageRun` (`src/lib/billing/quota.ts`) throws only `usage_audit_invariant` (SQLSTATE 55000, `usage run finalize conflict`) or `usage_audit_unavailable` (everything else, including P0002 `usage run not found` after three attempts), so its error cannot classify a run. `reconcile.ts` reads `usage_events` by `idempotency_key` (= `usage_audit_key`) and classifies absent / pending / settled / conflict; `scripts/macro/strategy-reconcile.ts` is the thin CLI (dry run by default, `--apply`). The unit test drives the real wrapper over a stubbed admin rpc, so the runbook's statements about its errors are tested, not assumed.
+- Settlement reconcile (plan audit R2-4): `finalizeUsageRun` (`src/lib/billing/quota.ts`) throws only `usage_audit_invariant` (SQLSTATE 55000, `usage run finalize conflict`) or `usage_audit_unavailable` (everything else, including P0002 `usage run not found` after three attempts), so its error cannot classify a run. `reconcile.ts` reads `usage_events` by `idempotency_key` (= `usage_audit_key`) and classifies absent / pending / settled / conflict; `scripts/macro/strategy-reconcile.ts` is the thin CLI (dry run by default, `--apply`). The sweep walks the whole backlog in pages of `--limit` rows by keyset over `(claimed_at, explanation_id)`, so conflicts never block later rows; a failed `usage_events` lookup is a per-row `lookup_failed` line and the sweep continues; every line is printed as its row completes (Codex audit fixes). The unit test drives the real wrapper over a stubbed admin rpc, so the runbook's statements about its errors are tested, not assumed.
 
 - [ ] **Step 1: Write the failing page and vocabulary tests**
 
@@ -11844,20 +11844,25 @@ vi.mock('@/lib/supabase/server',()=>({getServerSupabase:vi.fn()}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({rpc:m.rpc})}));
 
 import {finalizeUsageRun,type RecordUsageMeta} from '@/lib/billing/quota';
-import {classifyUsageEvent,expectedUsageColumns,reconcileSettlements,type ReconcileClient,type UnsettledRun,type UsageEventRow} from './reconcile';
+import {classifyUsageEvent,expectedUsageColumns,reconcileSettlements,type ReconcileClient,type RunCursor,type UnsettledRun,type UsageEventRow} from './reconcile';
 
 const PAYLOAD={status:'completed',provider:'deepseek',model:'deepseek-chat',inputTokens:120,cacheHitInputTokens:20,cacheMissInputTokens:100,outputTokens:80,costMicrormb:900,
  pricingVersion:'p1',usdCnyMicros:7_100_000,usageEstimated:false,byo:false};
 const row=(o:Partial<UsageEventRow>={}):UsageEventRow=>({status:'completed',provider:'deepseek',model:'deepseek-chat',input_tokens:120,cache_hit_input_tokens:20,cache_miss_input_tokens:100,
  output_tokens:80,cost_micrormb:'900',pricing_version:'p1',usd_cny_micros:'7100000',usage_estimated:false,byo:false,...o});
-const run=(id:string,payload:Record<string,unknown>=PAYLOAD):UnsettledRun=>({explanation_id:id,user_id:'u1',usage_audit_key:id,state:'accepted',finalize_payload:payload});
+const run=(id:string,payload:Record<string,unknown>=PAYLOAD):UnsettledRun=>({claimed_at:'2026-11-01T00:00:00Z',explanation_id:id,user_id:'u1',usage_audit_key:id,state:'accepted',finalize_payload:payload});
 const meta=(p:Record<string,unknown>)=>p as unknown as RecordUsageMeta;
 
-function fakeClient(runs:UnsettledRun[],events:Record<string,UsageEventRow>){
+/** Keyset over (claimed_at, explanation_id) among unfinalized rows, as the script's query does. */
+function after(runs:UnsettledRun[],limit:number,cur:RunCursor|null):UnsettledRun[]{
+ const key=(r:{claimed_at:string;explanation_id:string})=>`${r.claimed_at}|${r.explanation_id}`;
+ return [...runs].sort((a,b)=>key(a)<key(b)?-1:1).filter(r=>!cur||key(r)>key(cur)).slice(0,limit);
+}
+function fakeClient(runs:UnsettledRun[],events:Record<string,UsageEventRow>,failLookup:string[]=[]){
  const marked:string[]=[];const finalized:{key:string;payload:Record<string,unknown>}[]=[];
  const c:ReconcileClient={
-  unsettledRuns:async limit=>runs.slice(0,limit),
-  usageEvent:async key=>events[key]??null,
+  unsettledRuns:async(limit,cur)=>after(runs.filter(r=>!marked.includes(r.explanation_id)),limit,cur),
+  usageEvent:async key=>{if(failLookup.includes(key))throw new Error('lookup boom');return events[key]??null;},
   finalize:async(userId,key,payload)=>{finalized.push({key,payload});await finalizeUsageRun(userId,key,'perspectives',meta(payload));},
   markFinalized:async id=>{marked.push(id);},
  };
@@ -11902,18 +11907,47 @@ describe('reconcileSettlements',()=>{
   m.rpc.mockResolvedValue({data:[{id:'x',status:'completed'}],error:null});
   const f=fakeClient([run('absent'),run('settled'),run('pending'),run('conflict')],{settled:row(),pending:row({status:'pending'}),conflict:row({status:'failed',usage_estimated:true})});
   const out=await reconcileSettlements(f.c,{apply:true,limit:10});
-  expect(out.map(l=>[l.explanation_id,l.class,l.action])).toEqual([['absent','absent','marked'],['settled','settled','marked'],['pending','pending','finalized_and_marked'],['conflict','conflict','left_for_review']]);
+  expect(out.map(l=>[l.explanation_id,l.class,l.action])).toEqual([['absent','absent','marked'],['conflict','conflict','left_for_review'],['pending','pending','finalized_and_marked'],['settled','settled','marked']]);   // keyset order: claimed_at tie → explanation_id
   expect(f.finalized).toEqual([{key:'pending',payload:PAYLOAD}]);
   expect(m.rpc).toHaveBeenCalledTimes(1);
   expect(m.rpc).toHaveBeenCalledWith('finalize_usage_run',expect.objectContaining({p_idempotency_key:'pending',p_user_id:'u1',p_feature:'perspectives',p_cost_micrormb:900,
    p_pricing_version:'p1',p_usd_cny_micros:7_100_000,p_status:'completed'}));
-  expect(f.marked).toEqual(['absent','settled','pending']);
+  expect(f.marked).toEqual(['absent','pending','settled']);
  });
- it('a pending row whose finalize still fails stays unmarked with the wrapper code; the limit bounds the batch',async()=>{
+ it('a pending row whose finalize still fails stays unmarked with the wrapper code',async()=>{
   m.rpc.mockResolvedValue({data:null,error:{code:'08006',message:'connection failure'}});
-  const f=fakeClient([run('p1'),run('p2')],{p1:row({status:'pending'}),p2:row({status:'pending'})});
-  expect(await reconcileSettlements(f.c,{apply:true,limit:1})).toEqual([{explanation_id:'p1',usage_audit_key:'p1',state:'accepted',class:'pending',action:'finalize_failed',error:'usage_audit_unavailable'}]);
+  const f=fakeClient([run('p1')],{p1:row({status:'pending'})});
+  expect(await reconcileSettlements(f.c,{apply:true,limit:5})).toEqual([{explanation_id:'p1',usage_audit_key:'p1',state:'accepted',class:'pending',action:'finalize_failed',error:'usage_audit_unavailable'}]);
   expect(f.marked).toEqual([]);
+ });
+ it('progress past a full batch of conflicts: limit is the page size, later rows are still reached',async()=>{
+  const conflict=row({status:'failed',usage_estimated:true});
+  const runs=[run('c1'),run('c2'),run('c3'),run('z-absent'),run('z-settled')];
+  const f=fakeClient(runs,{c1:conflict,c2:conflict,c3:conflict,'z-settled':row()});
+  const out=await reconcileSettlements(f.c,{apply:true,limit:2});
+  expect(out.map(l=>[l.explanation_id,l.action])).toEqual([['c1','left_for_review'],['c2','left_for_review'],['c3','left_for_review'],['z-absent','marked'],['z-settled','marked']]);
+  expect(f.marked).toEqual(['z-absent','z-settled']);
+  // a second invocation sees the same conflicts first and still terminates
+  expect((await reconcileSettlements(f.c,{apply:true,limit:1})).map(l=>l.action)).toEqual(['left_for_review','left_for_review','left_for_review']);
+ });
+ it('keyset ties on claimed_at are broken by explanation_id (no row skipped or repeated across page edges)',async()=>{
+  const f=fakeClient([run('b'),run('a'),run('c')],{});
+  expect((await reconcileSettlements(f.c,{apply:false,limit:1})).map(l=>l.explanation_id)).toEqual(['a','b','c']);
+ });
+ it('receipts survive a later lookup failure; the failing row is lookup_failed and the rest are still processed',async()=>{
+  const f=fakeClient([run('a'),run('b'),run('c')],{},['b']);
+  const seen:string[]=[];
+  const out=await reconcileSettlements(f.c,{apply:true,limit:10},l=>{seen.push(`${l.explanation_id}:${l.action}`);});
+  expect(seen).toEqual(['a:marked','b:lookup_failed','c:marked']);
+  expect(out[1]).toMatchObject({class:'unknown',action:'lookup_failed',error:'lookup boom'});
+  expect(f.marked).toEqual(['a','c']);
+ });
+ it('lines are emitted before a later page fails',async()=>{
+  const f=fakeClient([run('a'),run('b')],{});
+  const c:ReconcileClient={...f.c,unsettledRuns:async(l,cur)=>{if(cur)throw new Error('page 2 down');return f.c.unsettledRuns(l,cur);}};
+  const seen:string[]=[];
+  await expect(reconcileSettlements(c,{apply:true,limit:1},l=>{seen.push(l.explanation_id);})).rejects.toThrow('page 2 down');
+  expect(seen).toEqual(['a']);
  });
 });
 ```
@@ -12028,27 +12062,31 @@ Create `src/lib/macro/strategy/reconcile.ts`:
 //   pending  finalizeUsageRun(the stored payload, verbatim) → markFinalized on success
 //   settled  terminal row equal to the stored payload (an earlier finalize succeeded, the mark was lost) → markFinalized
 //   conflict terminal row that differs (for example failed by fail_stale_usage_runs) → left unfinalized for a person
+// A lookup error on one row is reported as lookup_failed and the sweep continues. The sweep walks the whole backlog in pages of
+// `limit` rows by keyset over (claimed_at, explanation_id), so conflicts and failures never block later rows, and each line is
+// handed to `onLine` as soon as its row completes (a later failure cannot lose earlier receipts).
 // The stored payload is never recomputed from current pricing or FX, and the model is never called. A dry run reads only.
 // expectedUsageColumns mirrors finalizeUsageRun's argument mapping (defaults, integer bounding, derived cache misses).
 
-export interface UnsettledRun{explanation_id:string;user_id:string;usage_audit_key:string;state:string;finalize_payload:Record<string,unknown>}
+export interface UnsettledRun{claimed_at:string;explanation_id:string;user_id:string;usage_audit_key:string;state:string;finalize_payload:Record<string,unknown>}
 /** usage_events columns compared with the stored payload (bigint columns may arrive as strings). */
 export interface UsageEventRow{status:string;provider:string|null;model:string|null;input_tokens:number|string|null;cache_hit_input_tokens:number|string|null;
  cache_miss_input_tokens:number|string|null;output_tokens:number|string|null;cost_micrormb:number|string|null;pricing_version:string|null;
  usd_cny_micros:number|string|null;usage_estimated:boolean|null;byo:boolean|null}
 export const USAGE_EVENT_COLUMNS='status,provider,model,input_tokens,cache_hit_input_tokens,cache_miss_input_tokens,output_tokens,cost_micrormb,pricing_version,usd_cny_micros,usage_estimated,byo';
 export interface ReconcileClient{
- /** macro_explanation_runs with finalize_payload set and finalized = false, oldest claim first. */
- unsettledRuns(limit:number):Promise<UnsettledRun[]>;
+ /** macro_explanation_runs with finalize_payload set and finalized = false, ordered by (claimed_at, explanation_id), strictly after the cursor. */
+ unsettledRuns(limit:number,after:RunCursor|null):Promise<UnsettledRun[]>;
  /** usage_events row whose idempotency_key equals the key, or null. */
  usageEvent(idempotencyKey:string):Promise<UsageEventRow|null>;
  /** finalizeUsageRun(userId, key, 'perspectives', payload) with the payload verbatim. */
  finalize(userId:string,idempotencyKey:string,payload:Record<string,unknown>):Promise<void>;
  markFinalized(explanationId:string):Promise<void>;
 }
+export interface RunCursor{claimed_at:string;explanation_id:string}
 export type UsageEventClass='absent'|'pending'|'settled'|'conflict';
-export type ReconcileAction='dry_run'|'marked'|'finalized_and_marked'|'finalize_failed'|'mark_failed'|'left_for_review';
-export interface ReconcileLine{explanation_id:string;usage_audit_key:string;state:string;class:UsageEventClass;action:ReconcileAction;error?:string}
+export type ReconcileAction='dry_run'|'marked'|'finalized_and_marked'|'finalize_failed'|'mark_failed'|'left_for_review'|'lookup_failed';
+export interface ReconcileLine{explanation_id:string;usage_audit_key:string;state:string;class:UsageEventClass|'unknown';action:ReconcileAction;error?:string}
 
 const bounded=(v:unknown):number=>typeof v==='number'&&Number.isFinite(v)?Math.min(Math.max(0,Math.trunc(v)),Number.MAX_SAFE_INTEGER):0;
 const num=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
@@ -12070,22 +12108,31 @@ export function classifyUsageEvent(ev:UsageEventRow|null,payload:Record<string,u
  return Object.keys(want).every(k=>want[k]===got[k])?'settled':'conflict';
 }
 const message=(e:unknown)=>e instanceof Error?e.message:String(e);
-/** One line per unsettled run. apply=false reads only; apply=true finalizes pending rows and marks what is settled. */
-export async function reconcileSettlements(c:ReconcileClient,o:{apply:boolean;limit:number}):Promise<ReconcileLine[]>{
+/** One line per unsettled run, emitted through onLine as each completes. apply=false reads only; apply=true finalizes pending rows and marks what is settled. */
+export async function reconcileSettlements(c:ReconcileClient,o:{apply:boolean;limit:number},onLine:(l:ReconcileLine)=>void=()=>{}):Promise<ReconcileLine[]>{
  const out:ReconcileLine[]=[];
- for(const run of await c.unsettledRuns(o.limit)){
-  const cls=classifyUsageEvent(await c.usageEvent(run.usage_audit_key),run.finalize_payload);
-  const line={explanation_id:run.explanation_id,usage_audit_key:run.usage_audit_key,state:run.state,class:cls};
-  if(!o.apply){out.push({...line,action:'dry_run'});continue;}
-  if(cls==='conflict'){out.push({...line,action:'left_for_review'});continue;}
-  if(cls==='pending'){
-   try{await c.finalize(run.user_id,run.usage_audit_key,run.finalize_payload);}
-   catch(e){out.push({...line,action:'finalize_failed',error:message(e)});continue;}
+ const emit=(l:ReconcileLine)=>{out.push(l);onLine(l);};
+ let after:RunCursor|null=null;
+ for(;;){
+  const page=await c.unsettledRuns(o.limit,after);
+  for(const run of page){
+   const base={explanation_id:run.explanation_id,usage_audit_key:run.usage_audit_key,state:run.state};
+   let cls:UsageEventClass;
+   try{cls=classifyUsageEvent(await c.usageEvent(run.usage_audit_key),run.finalize_payload);}
+   catch(e){emit({...base,class:'unknown',action:'lookup_failed',error:message(e)});continue;}
+   const line={...base,class:cls};
+   if(!o.apply){emit({...line,action:'dry_run'});continue;}
+   if(cls==='conflict'){emit({...line,action:'left_for_review'});continue;}
+   if(cls==='pending'){
+    try{await c.finalize(run.user_id,run.usage_audit_key,run.finalize_payload);}
+    catch(e){emit({...line,action:'finalize_failed',error:message(e)});continue;}
+   }
+   try{await c.markFinalized(run.explanation_id);emit({...line,action:cls==='pending'?'finalized_and_marked':'marked'});}
+   catch(e){emit({...line,action:'mark_failed',error:message(e)});}
   }
-  try{await c.markFinalized(run.explanation_id);out.push({...line,action:cls==='pending'?'finalized_and_marked':'marked'});}
-  catch(e){out.push({...line,action:'mark_failed',error:message(e)});}
+  if(page.length<o.limit)return out;
+  const last=page[page.length-1];after={claimed_at:last.claimed_at,explanation_id:last.explanation_id};
  }
- return out;
 }
 ```
 
@@ -12098,11 +12145,13 @@ Create `scripts/macro/strategy-reconcile.ts`:
  *
  *   node --env-file=.env.local --import tsx scripts/macro/strategy-reconcile.ts [--limit n] [--apply]
  *
- * Lists macro_explanation_runs with finalize_payload set and finalized = false (oldest claim first, default 100), reads
+ * Walks macro_explanation_runs with finalize_payload set and finalized = false in pages of --limit rows (default 100) by keyset over
+ * (claimed_at, explanation_id), so unresolved rows never block later ones, reads
  * the usage_events row whose idempotency_key is the run's usage_audit_key, and prints one JSON line per run:
- * {explanation_id, usage_audit_key, state, class: absent|pending|settled|conflict, action}. --apply finalizes pending rows
+ * {explanation_id, usage_audit_key, state, class: absent|pending|settled|conflict|unknown, action}. --apply finalizes pending rows
  * with the stored payload verbatim through finalizeUsageRun and marks absent / settled / newly finalized rows with
- * macro_mark_finalized; conflict rows are left for a person (runbook §4). Service role only; it never calls a model and
+ * macro_mark_finalized; conflict rows are left for a person (runbook §4); a failed usage_events lookup is reported as lookup_failed and the sweep continues. Each line is
+ * printed as its row completes. Service role only; it never calls a model and
  * never recomputes pricing or FX. Exit 0 when every line is dry_run / marked / finalized_and_marked, 1 when any run still
  * needs attention, 2 on bad arguments. tsx does NOT load .env.local: use node --env-file as above (never commit that file).
  */
@@ -12116,6 +12165,7 @@ type Result<T>={data:T|null;error:{message:string}|null};
 interface Query<T>{
  eq(column:string,value:unknown):Query<T>;
  not(column:string,operator:string,value:unknown):Query<T>;
+ or(filters:string):Query<T>;
  order(column:string,options:{ascending:boolean}):Query<T>;
  limit(n:number):PromiseLike<Result<T[]>>;
  maybeSingle():PromiseLike<Result<T>>;
@@ -12137,9 +12187,11 @@ function client():ReconcileClient{
  const admin=getAdminSupabase();const tables=admin as unknown as AdminTables;
  const db=supabaseStrategyDb({admin,anon:getAnonSupabase()});
  return {
-  async unsettledRuns(limit){
-   const {data,error}=await tables.from<UnsettledRun>('macro_explanation_runs').select('explanation_id,user_id,usage_audit_key,state,finalize_payload')
-    .eq('finalized',false).not('finalize_payload','is',null).order('claimed_at',{ascending:true}).limit(limit);
+  async unsettledRuns(limit,after){
+   const base=tables.from<UnsettledRun>('macro_explanation_runs').select('claimed_at,explanation_id,user_id,usage_audit_key,state,finalize_payload')
+    .eq('finalized',false).not('finalize_payload','is',null);
+   const q=after?base.or(`claimed_at.gt."${after.claimed_at}",and(claimed_at.eq."${after.claimed_at}",explanation_id.gt."${after.explanation_id}")`):base;
+   const {data,error}=await q.order('claimed_at',{ascending:true}).order('explanation_id',{ascending:true}).limit(limit);
    if(error)throw new Error(error.message);
    return data??[];
   },
@@ -12155,9 +12207,9 @@ function client():ReconcileClient{
 async function main(){
  const args=parseArgs(process.argv.slice(2));
  if(!args){process.stderr.write(`${USAGE}\n`);process.exitCode=2;return;}
- const lines=await reconcileSettlements(client(),args);
- for(const l of lines)process.stdout.write(`${JSON.stringify(l)}\n`);
- process.exitCode=lines.every(l=>DONE.has(l.action))?0:1;
+ let attention=false;
+ try{await reconcileSettlements(client(),args,l=>{process.stdout.write(`${JSON.stringify(l)}\n`);if(!DONE.has(l.action))attention=true;});}
+ finally{process.exitCode=attention?1:process.exitCode;}
 }
 main().catch(e=>{process.stderr.write(`${e instanceof Error?e.message:String(e)}\n`);process.exitCode=1;});
 ```
@@ -12222,7 +12274,7 @@ Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact
 - Durable completion: right after the provider returns (or throws, or `beginUsageRun` fails) the request stores the raw output and the exact `finalizeUsageRun` body (`finalize_payload`: status, provider, model, tokens, cost, pricing version, FX, `usageEstimated`, `byo`) with `macro_record_completion`, before validation and finish. A successful provider call is stored as a completion envelope `{content, provider, model, prompt_version, validator_version, accounting}`. `macro_finish_explanation` carries the same payload and stores it when none is recorded (never overwriting one). `finalizeUsageRun` then runs in a finally path even when finish fails; `macro_mark_finalized` is called only after it succeeded.
 - Completion recovery (no second model call): a run still `running` with a recorded envelope (finish failed after the provider answered) is never abandoned. The next POST with the same `request_id`, or the user's next `GET /explanations` (at most three such runs per read), validates and renders the stored output against the manifest's frozen facts and finishes it as `accepted` / `rejected`; if `VALIDATOR_VERSION` changed since the call it finishes `failed` with `validator_version_changed`. The same step finalizes a recorded, unsettled payload verbatim. List rows waiting for it: `select explanation_id, user_id, claimed_at from public.macro_explanation_runs where state = 'running' and jsonb_typeof(raw_output) = 'object' order by claimed_at;` — a row that stays there means its manifest read or finish keeps failing; check the function logs.
 - Settlement reconcile: every run with a recorded payload and `finalized = false`, in any state (final, still `running` after a failed finish, or `abandoned` with a late completion). Do **not** classify a run from a `finalizeUsageRun` error: the wrapper (`src/lib/billing/quota.ts`) retries three times and then throws only `usage_audit_invariant` (SQLSTATE 55000, `usage run finalize conflict`) or `usage_audit_unavailable` (everything else — `usage run not found` (P0002) and a transient outage look the same). Look the usage run up by its key instead. Run the script with the service-role environment:
-  - `node --env-file=.env.local --import tsx scripts/macro/strategy-reconcile.ts` (dry run: one JSON line per run with its class), then the same with `--apply` (`--limit n`, default 100, max 1000).
+  - `node --env-file=.env.local --import tsx scripts/macro/strategy-reconcile.ts` (dry run: one JSON line per run with its class), then the same with `--apply` (`--limit n` is the page size, default 100, max 1000; the sweep walks the whole backlog page by page by keyset over `(claimed_at, explanation_id)`, so `conflict` rows never block later rows; each line is printed as soon as its row completes).
   - It reads `usage_events` where `idempotency_key = usage_audit_key` and acts per class:
 
 | Class | `usage_events` row | `--apply` does | Why |
@@ -12232,7 +12284,8 @@ Until P1+P2 and F4 are on `main`, `strategyPort()` returns `null` and every fact
 | `settled` | terminal and equal to the stored payload | `macro_mark_finalized` | an earlier finalize succeeded and only the mark was lost |
 | `conflict` | terminal and different (for example `failed` with `usage_estimated = true` from `fail_stale_usage_runs`) | nothing (`left_for_review`) | decide by hand with billing; never edit the stored payload |
 
-  - Exit 0 when every line is `dry_run` / `marked` / `finalized_and_marked`; 1 when any run still needs attention. Manual equivalent of the lookup: `select status, provider, model, input_tokens, output_tokens, cost_micrormb, pricing_version, usd_cny_micros, usage_estimated, byo, finalized_at from public.usage_events where idempotency_key = '<usage_audit_key>';`
+  - A failed `usage_events` read for one row prints `class: unknown, action: lookup_failed` with the error and the sweep carries on; rerun later for that row.
+  - Exit 0 when every line is `dry_run` / `marked` / `finalized_and_marked`; 1 when any run still needs attention (`left_for_review`, `finalize_failed`, `mark_failed`, `lookup_failed`). Manual equivalent of the lookup: `select status, provider, model, input_tokens, output_tokens, cost_micrormb, pricing_version, usd_cny_micros, usage_estimated, byo, finalized_at from public.usage_events where idempotency_key = '<usage_audit_key>';`
   - Never recompute the payload from current pricing or FX and never rerun the model; `finalize_usage_run` is idempotent for identical arguments, so repeating a settled payload is safe.
 - Runs with `finalize_payload` null: since `macro_finish_explanation` stores the payload too, this happens only when both `macro_record_completion` and finish failed. The run expires to `abandoned` (it has no recorded output) and its usage run stays `pending` until `fail_stale_usage_runs` marks it failed. List them with `select explanation_id, usage_audit_key, state from public.macro_explanation_runs where finalize_payload is null and finalized = false and state = 'abandoned';`, look each key up in `usage_events` as above and settle by hand with billing; `macro_mark_finalized` refuses them.
 - Failure codes shown to users:
@@ -12277,7 +12330,7 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `npm test -- "src/app/(app)/intel/macro/transmission/strategy-pages.test.ts" src/lib/macro/strategy/forbidden-terms.test.ts src/lib/macro/strategy/reconcile.test.ts`
-Expected: PASS, `Tests  17 passed (17)` (pages 6, vocabulary 6, reconcile 5).
+Expected: PASS, `Tests  21 passed (21)` (pages 6, vocabulary 6, reconcile 9).
 
 - [ ] **Step 6: Typecheck and lint**
 

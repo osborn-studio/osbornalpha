@@ -8,27 +8,31 @@
 //   pending  finalizeUsageRun(the stored payload, verbatim) → markFinalized on success
 //   settled  terminal row equal to the stored payload (an earlier finalize succeeded, the mark was lost) → markFinalized
 //   conflict terminal row that differs (for example failed by fail_stale_usage_runs) → left unfinalized for a person
+// A lookup error on one row is reported as lookup_failed and the sweep continues. The sweep walks the whole backlog in pages of
+// `limit` rows by keyset over (claimed_at, explanation_id), so conflicts and failures never block later rows, and each line is
+// handed to `onLine` as soon as its row completes (a later failure cannot lose earlier receipts).
 // The stored payload is never recomputed from current pricing or FX, and the model is never called. A dry run reads only.
 // expectedUsageColumns mirrors finalizeUsageRun's argument mapping (defaults, integer bounding, derived cache misses).
 
-export interface UnsettledRun{explanation_id:string;user_id:string;usage_audit_key:string;state:string;finalize_payload:Record<string,unknown>}
+export interface UnsettledRun{claimed_at:string;explanation_id:string;user_id:string;usage_audit_key:string;state:string;finalize_payload:Record<string,unknown>}
 /** usage_events columns compared with the stored payload (bigint columns may arrive as strings). */
 export interface UsageEventRow{status:string;provider:string|null;model:string|null;input_tokens:number|string|null;cache_hit_input_tokens:number|string|null;
  cache_miss_input_tokens:number|string|null;output_tokens:number|string|null;cost_micrormb:number|string|null;pricing_version:string|null;
  usd_cny_micros:number|string|null;usage_estimated:boolean|null;byo:boolean|null}
 export const USAGE_EVENT_COLUMNS='status,provider,model,input_tokens,cache_hit_input_tokens,cache_miss_input_tokens,output_tokens,cost_micrormb,pricing_version,usd_cny_micros,usage_estimated,byo';
 export interface ReconcileClient{
- /** macro_explanation_runs with finalize_payload set and finalized = false, oldest claim first. */
- unsettledRuns(limit:number):Promise<UnsettledRun[]>;
+ /** macro_explanation_runs with finalize_payload set and finalized = false, ordered by (claimed_at, explanation_id), strictly after the cursor. */
+ unsettledRuns(limit:number,after:RunCursor|null):Promise<UnsettledRun[]>;
  /** usage_events row whose idempotency_key equals the key, or null. */
  usageEvent(idempotencyKey:string):Promise<UsageEventRow|null>;
  /** finalizeUsageRun(userId, key, 'perspectives', payload) with the payload verbatim. */
  finalize(userId:string,idempotencyKey:string,payload:Record<string,unknown>):Promise<void>;
  markFinalized(explanationId:string):Promise<void>;
 }
+export interface RunCursor{claimed_at:string;explanation_id:string}
 export type UsageEventClass='absent'|'pending'|'settled'|'conflict';
-export type ReconcileAction='dry_run'|'marked'|'finalized_and_marked'|'finalize_failed'|'mark_failed'|'left_for_review';
-export interface ReconcileLine{explanation_id:string;usage_audit_key:string;state:string;class:UsageEventClass;action:ReconcileAction;error?:string}
+export type ReconcileAction='dry_run'|'marked'|'finalized_and_marked'|'finalize_failed'|'mark_failed'|'left_for_review'|'lookup_failed';
+export interface ReconcileLine{explanation_id:string;usage_audit_key:string;state:string;class:UsageEventClass|'unknown';action:ReconcileAction;error?:string}
 
 const bounded=(v:unknown):number=>typeof v==='number'&&Number.isFinite(v)?Math.min(Math.max(0,Math.trunc(v)),Number.MAX_SAFE_INTEGER):0;
 const num=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
@@ -50,20 +54,29 @@ export function classifyUsageEvent(ev:UsageEventRow|null,payload:Record<string,u
  return Object.keys(want).every(k=>want[k]===got[k])?'settled':'conflict';
 }
 const message=(e:unknown)=>e instanceof Error?e.message:String(e);
-/** One line per unsettled run. apply=false reads only; apply=true finalizes pending rows and marks what is settled. */
-export async function reconcileSettlements(c:ReconcileClient,o:{apply:boolean;limit:number}):Promise<ReconcileLine[]>{
+/** One line per unsettled run, emitted through onLine as each completes. apply=false reads only; apply=true finalizes pending rows and marks what is settled. */
+export async function reconcileSettlements(c:ReconcileClient,o:{apply:boolean;limit:number},onLine:(l:ReconcileLine)=>void=()=>{}):Promise<ReconcileLine[]>{
  const out:ReconcileLine[]=[];
- for(const run of await c.unsettledRuns(o.limit)){
-  const cls=classifyUsageEvent(await c.usageEvent(run.usage_audit_key),run.finalize_payload);
-  const line={explanation_id:run.explanation_id,usage_audit_key:run.usage_audit_key,state:run.state,class:cls};
-  if(!o.apply){out.push({...line,action:'dry_run'});continue;}
-  if(cls==='conflict'){out.push({...line,action:'left_for_review'});continue;}
-  if(cls==='pending'){
-   try{await c.finalize(run.user_id,run.usage_audit_key,run.finalize_payload);}
-   catch(e){out.push({...line,action:'finalize_failed',error:message(e)});continue;}
+ const emit=(l:ReconcileLine)=>{out.push(l);onLine(l);};
+ let after:RunCursor|null=null;
+ for(;;){
+  const page=await c.unsettledRuns(o.limit,after);
+  for(const run of page){
+   const base={explanation_id:run.explanation_id,usage_audit_key:run.usage_audit_key,state:run.state};
+   let cls:UsageEventClass;
+   try{cls=classifyUsageEvent(await c.usageEvent(run.usage_audit_key),run.finalize_payload);}
+   catch(e){emit({...base,class:'unknown',action:'lookup_failed',error:message(e)});continue;}
+   const line={...base,class:cls};
+   if(!o.apply){emit({...line,action:'dry_run'});continue;}
+   if(cls==='conflict'){emit({...line,action:'left_for_review'});continue;}
+   if(cls==='pending'){
+    try{await c.finalize(run.user_id,run.usage_audit_key,run.finalize_payload);}
+    catch(e){emit({...line,action:'finalize_failed',error:message(e)});continue;}
+   }
+   try{await c.markFinalized(run.explanation_id);emit({...line,action:cls==='pending'?'finalized_and_marked':'marked'});}
+   catch(e){emit({...line,action:'mark_failed',error:message(e)});}
   }
-  try{await c.markFinalized(run.explanation_id);out.push({...line,action:cls==='pending'?'finalized_and_marked':'marked'});}
-  catch(e){out.push({...line,action:'mark_failed',error:message(e)});}
+  if(page.length<o.limit)return out;
+  const last=page[page.length-1];after={claimed_at:last.claimed_at,explanation_id:last.explanation_id};
  }
- return out;
 }
