@@ -57,6 +57,9 @@ export async function middleware(request: NextRequest) {
     });
   }
 
+  // Public static web manifest: browsers fetch it without a session.
+  if (rawPathname === '/manifest.json') return NextResponse.next({ request });
+
   const isEnPrefixed = EN_PREFIX.test(rawPathname);
   const pathname = isEnPrefixed ? stripEnPrefix(rawPathname) : rawPathname;
 
