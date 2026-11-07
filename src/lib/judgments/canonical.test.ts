@@ -45,6 +45,14 @@ describe('canonical',()=>{
  });
 });
 
+describe('jsonClean own __proto__',()=>{
+ it('keeps an own __proto__ member so digests see the difference',()=>{
+  const a=jsonClean(JSON.parse('{"__proto__":1,"x":2}')),b=jsonClean(JSON.parse('{"__proto__":2,"x":2}'));
+  expect(Object.prototype.hasOwnProperty.call(a,'__proto__')).toBe(true);
+  expect(digest(a)).not.toBe(digest(b));
+ });
+});
+
 describe('errors',()=>{
  it('covers every spec §13 code and every plan code',()=>{
   const spec13=['methodology_unavailable','subject_missing','subject_inactive','subject_type_not_public','input_not_allowed','input_snapshot_mismatch','input_not_public','input_origin_unknown','lease_lost','stale_revision','request_key_conflict','job_state_conflict','formula_hash_drift','lookahead','idempotency_conflict','invalid_claim','invalid_condition','code_version_missing','input_hash_mismatch','invalid_parameter','unknown_judgment','unknown_methodology','settlement_sequence','resolution_not_applicable'];

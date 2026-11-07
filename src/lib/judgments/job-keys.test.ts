@@ -41,6 +41,6 @@ describe('jobKey',()=>{
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'market',scope_key:''}))).toBe('invalid_parameter');
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'planet' as never,scope_key:'x'}))).toBe('invalid_parameter');
   expect(code(()=>jobKey('calibrate','m','v1',{scope_type:'market',scope_key:'港'.repeat(60)}))).toBe('invalid_parameter');   // 60 × 9 encoded chars > 512
-  for(const k of ['produce:m','produce:m@v1:all:','calibrate:m@v1','calibrate:m@v1:all','other:m@v1','produce:m@v1%ZZ','calibrate_round:x','calibrate_round@v1'])expect({k,c:code(()=>parseJobKey(k))}).toEqual({k,c:'invalid_parameter'});
+  for(const k of ['produce:m','produce:m@v1:all:','calibrate:m@v1','calibrate:m@v1:all','other:m@v1','produce:m@v1%ZZ','calibrate_round:x','calibrate_round@v1','calibrate:m@v1:all:x','produce:%6D@v1',`produce:${'a'.repeat(600)}@v1`])expect({k,c:code(()=>parseJobKey(k))}).toEqual({k,c:'invalid_parameter'});
  });
 });

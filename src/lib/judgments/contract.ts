@@ -8,6 +8,7 @@
 import {uuidV8} from './uuid-v8';
 import {digest} from './canonical';
 import {JudgmentError} from './errors';
+import {isIsoDate} from './time';
 import {PUBLIC_SUBJECT_TYPES} from './types';
 import type {Abstained,Claim,Horizon,Kind,ProducerKind,ProducerRef,Subject,SubjectType} from './types';
 
@@ -148,7 +149,9 @@ export function producerNonceOf(kind:ProducerKind,ref:ProducerRef):string{
 }
 
 export function isRetrospective(x:{as_of:string;registered_at:string;settle_after:string|null;label_available_at:string|null}):boolean{
- const at=Date.parse(x.registered_at);
+ if(!isIsoDate(x.as_of))fail('invalid_parameter','as_of');
+ const at=typeof x.registered_at==='string'?Date.parse(x.registered_at):Number.NaN;
+ if(!Number.isFinite(at))fail('invalid_parameter','registered_at');
  return x.as_of<new Date(at).toISOString().slice(0,10)
   ||(x.settle_after!==null&&Date.parse(x.settle_after)<=at)
   ||(x.label_available_at!==null&&Date.parse(x.label_available_at)<=at);

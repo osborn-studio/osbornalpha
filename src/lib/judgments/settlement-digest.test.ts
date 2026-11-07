@@ -20,6 +20,8 @@ describe('operationDigest',()=>{
  it('changes with every other semantic field and with the judgment id',()=>{
   const base=operationDigest(J,ROW);
   const variants:SettlementInsert[]=[{...ROW,kind:'void',outcome:null,realized:null,reason:'no_data'},{...ROW,outcome:'miss'},{...ROW,realized:{...ROW.realized!,value:0.13}},{...ROW,evidence:{}},{...ROW,resolver:'fact_metric'},{...ROW,reason:'x'},{...ROW,actor:'script'}];
+  const w={...ROW,kind:'void' as const,outcome:null,realized:null,reason:'x'};
+  expect(operationDigest(J,{...w,kind:'withdrawn'})).not.toBe(operationDigest(J,w));
   for(const v of variants)expect(operationDigest(J,v)).not.toBe(base);
   expect(operationDigest('1d5b6a9e-7f00-8a00-8000-000000000001',ROW)).not.toBe(base);
  });

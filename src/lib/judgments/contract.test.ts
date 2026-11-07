@@ -114,5 +114,7 @@ describe('judgmentIdOf, producerNonceOf, isRetrospective',()=>{
   expect(isRetrospective({...base,label_available_at:'2026-11-06T02:59:59.999Z'})).toBe(true);
   expect(isRetrospective({...base,label_available_at:'2026-11-06T03:00:00.001Z'})).toBe(false);
   expect(isRetrospective({...base,registered_at:'2026-11-06T23:59:59.999Z'})).toBe(false);   // UTC date of registered_at
+  expect(code(()=>isRetrospective({...base,as_of:'2026-02-30'}))).toBe('invalid_parameter');
+  expect(code(()=>isRetrospective({...base,registered_at:'garbage'}))).toBe('invalid_parameter');
  });
 });

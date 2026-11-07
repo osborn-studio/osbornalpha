@@ -35,6 +35,12 @@ export function jobKey(kind:'produce'|'calibrate'|'calibrate_round',methodologyI
 export type ParsedJobKey={kind:'produce';methodologyId:string;version:string}|{kind:'calibrate';methodologyId:string;version:string;scope:CalibrationScope}|{kind:'calibrate_round'};
 const PARSE=/^(produce|calibrate):([^@:]+)@([^@:]+)(?::(all|market|subject_type):([^@:]*))?$/;
 export function parseJobKey(key:string):ParsedJobKey{
+ const p=parseLoose(key);
+ const back=p.kind==='produce'?jobKey('produce',p.methodologyId,p.version):p.kind==='calibrate'?jobKey('calibrate',p.methodologyId,p.version,p.scope):jobKey('calibrate_round');
+ if(back!==key)bad('not_canonical');
+ return p;
+}
+function parseLoose(key:string):ParsedJobKey{
  if(key==='calibrate_round')return {kind:'calibrate_round'};
  const m=PARSE.exec(key);
  if(!m||(m[1]==='produce')!==(m[4]===undefined))return bad('malformed');

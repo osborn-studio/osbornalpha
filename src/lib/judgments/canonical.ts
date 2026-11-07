@@ -17,7 +17,7 @@ export function jsonClean<T>(v:T):T{
  if(Array.isArray(v))return v.map(x=>jsonClean(x)) as T;
  if(v!==null&&typeof v==='object'){
   const out:Record<string,unknown>={};
-  for(const [k,x] of Object.entries(v as Record<string,unknown>))if(x!==undefined)out[k]=jsonClean(x);
+  for(const [k,x] of Object.entries(v as Record<string,unknown>))if(x!==undefined)Object.defineProperty(out,k,{value:jsonClean(x),enumerable:true,writable:true,configurable:true});
   return out as T;
  }
  return v;
