@@ -613,3 +613,15 @@ vercel env add MACRO_STRATEGY_ENABLED production      # 输入 1；然后按第 
   - 运行后：`issuer_coverage` 37、未退役 `issuer_events` 7170、`company_fact_evidence` 68257、`company_digest_state` 37 行全部 success；`company.events` 新鲜度 fresh。其余发行人随美股事实同步由每小时 cron 增量覆盖。
 - **线上核对**（无会话）：`GET /api/companies?limit=3` 200（total 37）；`/api/companies/AAPL/overview` 200；`/api/companies/AAPL/statements?statement=IS` 200（`basis:"disclosed"`，最新期 FY 2025-09-28..2026-09-26）；`/api/companies/AAPL/events` 200（`computed:"materialized"`）；`/api/companies/freshness` 200；`/api/tracking/inbox` 401 `not_authenticated`；`/stock/AAPL`、`/intel/companies` 307（登录，决策 H）。公司 e2e（`e2e/company.spec.ts`）设计上只对 localhost 运行，生产未跑；登录后页面的视觉核对需要 owner 会话。
 - **未做（owner）**：夹具清单 3 条与事件黄金集抄录、专家抽样（手册 §9）；`NEXT_PUBLIC_COMPANY_F3_DRAWER` / `NEXT_PUBLIC_COMPANY_JUDGMENTS` 保持关闭。
+
+### 11.3 F4 判断层（#117，main `78e9c4d7`，09:4x–09:58）
+
+按 `docs/runbooks/judgments.md` §2 执行；宏观相关的开关与 owner 步骤由指挥会话负责，本会话未动。
+
+- **迁移** `20261116090000_judgments`（sha256 `25e20c09…`）：版本号**早于**已应用的 `20261117*`/`20261118*`（F4 晚于 F3/公司合并），历史表再次非单调追加（同 §10.2 偏差 1；Management API 路径不受影响，`supabase db push` 需 `--include-all`）。演练 `rehearsal_ok`（9 张 `judgment*` 表、桶 `public=false`；演练前后 public 关系 532、函数 487、桶 6 不变）→ 一个事务 + 历史行 → applied。
+- **核对**（与手册 §1–§2 一致）：9 表全部 RLS；anon/authenticated 无写；service_role 对表无直接 INSERT；`judgment_settle_queue`、`judgment_job_state`、`judgment_calibration_cohort_members` anon 不可读，其余 6 表公共读经 RLS（按 `publishable` 门控）。anon 可执行的 F4 函数**恰为** 7 个公共读 RPC（`judgments_server_time`、`judgment_envelope_of`、`latest_judgment_cards`、`judgment_history`、`calibration_cohort`、`methodology_state_at`、`judgment_envelope_by_id`）；17 个服务 RPC 仅 service_role；6 个内部函数三角色均不可执行。桶 `judgments-calibration` 私有、52428800。
+- **注册表**：`sync-methodologies.ts --dry-run` → `macro_regime@v1` register、problems 空、`formula_hash 3478e0d2…`、27 个闭包文件；应用 → synced 1。库中 `macro_regime v1 active publishable=false`。
+- **部署**：`78e9c4d7fcedfbd38e35868319f3fff131431aa6` → **`stock-monitor-9ifofnoil-gilosbornhellos-projects.vercel.app`**（osbornalpha.com；新增 `judgments-settle` `0 3 * * *`、`judgments-calibrate` `0 4 * * 1`）。环境沿用指挥已设的宏观变量。偏差：部署目录 `~/Developer/CodeX/.worktrees/OsbornAlpha/deploy` 已被移除，`cd` 失败，`git checkout --detach origin/main` 与 `vercel deploy` 落在本会话工作树上执行；当时该工作树已置于 `origin/main`（跟踪文件与 `78e9c4d7` 完全一致），额外被上传的被忽略文件只有 `reports/migration-rehearsal.json`（本机迁移演练报告，无密钥）与 `tsconfig.tsbuildinfo`，无 `.env*`。以后部署脚本先检查目录存在再 `cd`（`cd "$D" || exit 1`）。
+- **线上核对**：两个 cron 无令牌 401；带令牌 `judgments-settle?preview=1` → `ok`、idle、0 项；`judgments-calibrate?preview=1` → `ok`，`calibrate:macro_regime@v1:*` 单元 idle、`current_revision 1`。`/api/methodologies` 200（`codeVersion 78e9c4d7…`，含 `macro_regime v1`）；`/api/judgments` 无 `subject_type` → 400 `invalid_parameter:subject_type`（参数校验生效）。
+- **首轮载入**：F4 没有独立的首轮脚本；判断由宏观登记（`MACRO_JUDGMENTS_ENABLED`，指挥/owner 决定）和每日结算 cron 产生。未开启 `MACRO_JUDGMENTS_ENABLED`。
+- **未做（owner）**：发布准入（`docs/methodologies/licenses.json` 许可确认后 `--publishable`）、复权验证录制（手册 §4）、O1–O7 决策、`recommendation_call@v1` 私有路径评审。
