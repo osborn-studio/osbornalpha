@@ -6,6 +6,9 @@
 // error becomes {ok:false,error}. A handler may be async. Exit 0 when every selected check is ok, 1 when
 // any selected check fails, 2 for usage errors (spec §3.2: 2 = refused before running).
 import {EvalError} from '../errors';
+import {REGISTRY} from '@/lib/judgments/registry';
+import {calibrationAvailability} from '../kinds/f4-adapter';
+import {KIND_REGISTRY} from '../kinds/registry';
 import {goldDiffAgainst} from '../gold/diff';
 import {LEGACY_PLAN2_PATH,checkLock,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders} from '../gold/load';
 import type {GoldLock,ValidatorFinding} from '../types';
@@ -62,6 +65,11 @@ export const HANDLERS:ValidateHandler[]=[
  {flag:'--audit',name:'audit',takesValue:true,modifiers:['--release'],run:async(root,value,mods)=>findingsCheck(await f6Handlers(root)['--audit']([value!,...mods]))},
  // --manifest [--online]: offline the CI identity check is not performed → finding manifest_ci_unverified, ok:false, exit 1 (R2-1).
  manifestHandler(),
+ // A successful inventory is not a passed eval or a licence/threshold approval.
+ {flag:'--availability',name:'availability',takesValue:false,run(){
+  return {ok:true,scope:'diagnostic_only',kinds:KIND_REGISTRY.map(k=>({...k})),
+   methodologies:REGISTRY.map(m=>({id:m.id,version:m.version,kind:m.kind})),calibration:calibrationAvailability()};
+ }},
 ];
 
 const flagUsage=(h:ValidateHandler)=>`[${h.flag}${h.takesValue?' <value>':''}${(h.modifiers??[]).map(m=>` [${m}]`).join('')}]`;
