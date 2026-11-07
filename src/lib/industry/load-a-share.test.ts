@@ -21,6 +21,8 @@ const noSleep=async()=>{};
 const tablesFor=()=>memoryTableClient({issuers:['issuer_id'],issuer_securities:['issuer_id','ticker','valid_from'],issuer_identifier_claims:['id'],ingest_batches:['batch_id'],dq_freshness:['dataset']});
 const sb=(over:Partial<StockBasicRow>):StockBasicRow=>({ts_code:'600519.SH',symbol:'600519',name:'贵州茅台',fullname:'贵州茅台酒股份有限公司',exchange:'SSE',list_status:'L',list_date:'20010827',delist_date:null,...over});
 const unusedManifests:ManifestStore={put:async()=>{throw new Error('unused');},get:async()=>{throw new Error('unused');},remove:async()=>{throw new Error('unused');}};
+const PAGE_SHA='d'.repeat(64);
+const PAGE_REFS=new Map([['600519.SH',{sha256:PAGE_SHA,locator:'disclosure-raw/tushare/x/'+PAGE_SHA+'.json'}]]);
 const opts=(over={})=>({batchId:BATCH,observedAt:NOW,lookupOrgId:lookup,sleep:noSleep,...over});
 
 describe('planAShareLoad',()=>{
@@ -138,8 +140,15 @@ describe('applyAShareLoad',()=>{
 describe('listing-date evidence, delisting and merged owners',()=>{
  const sec=(issuer:string,ticker:string,prov:Record<string,unknown>={})=>({issuer_id:issuer,ticker,isin:null,share_class:'A',is_primary:true,valid_from:'2026-01-05',valid_to:null,source:'seed',provenance:prov});
  // plan 3: issuer_securities.provenance is whitelisted (isin/figi/valid_from/valid_to/pending_change) and an evidenced
- // valid_from is written only by set_security_window (backfill-windows), so existing rows are left untouched here.
- it('fast path: an existing security is a duplicate and is not rewritten (valid_from and provenance untouched)',async()=>{
+ // valid_from is written only by set_security_window, so existing rows are never written here; the stock_basic
+ // list_date is retained as an evidence_only claim suggesting backdate_window (filed once, reruns dedupe onto it).
+ const backdateClaims=(t:ReturnType<typeof tablesFor>)=>t.rows('issuer_identifier_claims').map(c=>[c.issuer_id,c.id_type,c.value,c.op,c.status,c.source]);
+ const expectBackdateClaim=(t:ReturnType<typeof tablesFor>,evidence:Record<string,unknown>)=>{
+  expect(backdateClaims(t)).toEqual([['i-1','ticker','600519.SH','evidence_only','pending','tushare:stock_basic']]);
+  expect(t.rows('issuer_identifier_claims')[0].detail).toMatchObject({schema:'claim/1',evidence_kind:'provider_mapping',target:{issuer_id:'i-1'},
+   params:{suggested_op:'backdate_window',ticker:'600519.SH',valid_from:'2026-01-05',list_date:'2001-08-27',exchange:'SSE',list_status:'L'},evidence});
+ };
+ it('fast path: an existing security is a duplicate and is not rewritten; the list_date is kept as a backdate_window evidence claim',async()=>{
   const t=tablesFor();
   await t.insert('issuers',{issuer_id:'i-1',canonical_name_zh:'茅台',cninfo_org_id:'gssz0600519',status:'active',provenance:{}});
   await t.insert('issuer_securities',sec('i-1','600519.SH',{keep:1}));
@@ -149,16 +158,34 @@ describe('listing-date evidence, delisting and merged owners',()=>{
   const row=t.rows('issuer_securities')[0];
   expect(row.valid_from).toBe('2026-01-05');
   expect(row.provenance).toEqual({keep:1});
-  const upd=vi.spyOn(t,'update');
+  expectBackdateClaim(t,{source:'tushare:stock_basic',as_of:TODAY,evidence_sha256:expect.stringMatching(/^[0-9a-f]{64}$/),locator:'stock_basic:600519.SH'});
+  const upd=vi.spyOn(t,'update');const ins=vi.spyOn(t,'insert');
   await applyAShareLoad(t,plan,opts({observedAt:'2026-11-07T22:30:00.000Z'}));
-  expect(upd).not.toHaveBeenCalled();
+  expect(upd).not.toHaveBeenCalled();expect(ins).not.toHaveBeenCalled();   // unchanged rerun: no row write, no second claim
+  expect(t.rows('issuer_identifier_claims')).toHaveLength(1);
+  expect((t.rows('issuer_identifier_claims')[0].detail as {sources:unknown[]}).sources).toHaveLength(0);
+  expect(t.rows('issuer_securities')).toEqual([sec('i-1','600519.SH',{keep:1})]);
  });
- it('attachSecurity duplicate (recheck path) leaves the existing row untouched',async()=>{
+ it('no claim when the row already carries the stock_basic list_date as its evidenced listing date',async()=>{
+  const t=tablesFor();
+  await t.insert('issuers',{issuer_id:'i-1',canonical_name_zh:'茅台',cninfo_org_id:'gssz0600519',status:'active',provenance:{}});
+  await t.insert('issuer_securities',{...sec('i-1','600519.SH'),valid_from:'2001-08-27',valid_from_method:'listing_date'});
+  await applyAShareLoad(t,planAShareLoad([sb({})],UNIVERSE,TODAY),opts());
+  expect(t.rows('issuer_identifier_claims')).toEqual([]);
+ });
+ it('attachSecurity duplicate (recheck path) leaves the row untouched and keeps the page evidence in a backdate_window claim',async()=>{
   const t=tablesFor();
   await t.insert('issuers',{issuer_id:'i-1',canonical_name_zh:'茅台',cninfo_org_id:'gssz0600519',status:'active',provenance:{}});
   await t.insert('issuer_securities',sec('i-1','600519.SH'));
-  const r=await applyAShareLoad(t,planAShareLoad([sb({})],UNIVERSE,TODAY),opts({recheckOrgIds:true}));
+  const plan=planAShareLoad([sb({})],UNIVERSE,TODAY);
+  const r=await applyAShareLoad(t,plan,opts({recheckOrgIds:true,pageRefs:PAGE_REFS}));
   expect(r.counts).toMatchObject({duplicates:1,inserted:0});
+  expect(t.rows('issuer_securities')).toEqual([sec('i-1','600519.SH')]);
+  expectBackdateClaim(t,{source:'tushare:stock_basic',as_of:TODAY,evidence_sha256:PAGE_SHA,locator:`disclosure-raw/tushare/x/${PAGE_SHA}.json`,note:'ts_code=600519.SH'});
+  const r2=await applyAShareLoad(t,plan,opts({recheckOrgIds:true,pageRefs:PAGE_REFS,observedAt:'2026-11-07T22:30:00.000Z'}));
+  expect(r2.counts).toMatchObject({duplicates:1,inserted:0});
+  expect(t.rows('issuer_identifier_claims')).toHaveLength(1);   // rerun: same pending claim, same page evidence not re-appended
+  expect((t.rows('issuer_identifier_claims')[0].detail as {sources:unknown[]}).sources).toHaveLength(0);
   expect(t.rows('issuer_securities')).toEqual([sec('i-1','600519.SH')]);
  });
  it('a merged owner is not a fast-path duplicate: it goes through the full path and is skipped with a reason',async()=>{
