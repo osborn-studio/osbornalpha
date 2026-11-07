@@ -11,6 +11,7 @@ import type {CompensationReport} from './compensate';
 import {JudgmentError} from './errors';
 import {memoryJudgmentsDb} from './memory-judgments-db';
 import {priceReturnResolverWith} from './resolvers/price';
+import {MAX_FETCH_MS} from './resolvers';
 import {BATCH_SIZE,DAY_MS,LEASE_SECONDS,REVIEW_WINDOW_DAYS,STALE_BATCH_SECONDS,backoff,decide,incidentOf,isUnresolvedInconsistency,planOf,predicateHolds,reviewDeadline,runSettle,settleNow,settleOne} from './settle';
 import type {SettleDeps} from './settle';
 import {TEST_CODE_VERSION,fixtureKline,loadKlineFixture,priceJudgment,stubInputsDb,stubResolver,testMethodologyRow,truncateFixture,verifiedCapability,withOverrides} from './testing/fixtures';
@@ -351,7 +352,7 @@ describe('settle mechanics',()=>{
   let inflight=0,peak=0;
   const resolve=async()=>{inflight++;peak=Math.max(peak,inflight);await new Promise(r=>setTimeout(r,5));inflight--;return resolved();};
   const claim=vi.spyOn(h.db,'claimDue');
-  const r=await runSettle(h.deps(stubResolver(resolve)));
+  const r=await runSettle(h.deps(stubResolver(resolve),{maxFetchMs:1_000}));
   expect(claim.mock.calls).toEqual([[BATCH_SIZE,LEASE_SECONDS],[BATCH_SIZE,LEASE_SECONDS],[BATCH_SIZE,LEASE_SECONDS]]);
   expect(r.counts).toMatchObject({fetched:25,inserted:25});
   expect(r.detail.batches).toBe(2);
@@ -360,22 +361,32 @@ describe('settle mechanics',()=>{
  it('stops claiming at start + 200 s (deadline_hit, info) and claims nothing when the batch worst case + 30 s exceeds the budget',async()=>{
   const h=await harness();for(let i=0;i<25;i++)await h.register();
   let ms=0;
-  const r=await runSettle(h.deps(stubResolver(async()=>{ms=201_000;return resolved();}),{clock:()=>ms}));
+  const r=await runSettle(h.deps(stubResolver(async()=>{ms=201_000;return resolved();}),{clock:()=>ms,maxFetchMs:1_000}));
   expect(r).toMatchObject({status:'success',counts:{fetched:20},detail:{deadline_hit:true,batches:1}});
   expect(r.errors).toContainEqual(expect.objectContaining({code:'deadline_hit'}));
+  // T-05 / review minor 4: admission is strict (waves × maxFetchMs < remaining − 30 s) and the claim is SIZED to the waves that fit.
   const h2=await harness();await h2.register();
   const claim=vi.spyOn(h2.db,'claimDue');
-  const slow=await runSettle(h2.deps(stubResolver(scripted(resolved())),{maxFetchMs:51_000}));   // ceil(20/4) × 51 s + 30 s = 285 s > 280 s
+  const slow=await runSettle(h2.deps(stubResolver(scripted(resolved())),{maxFetchMs:250_000}));   // (280 − 30) s / 250 s is not > 1 wave: exactly the boundary admits nothing
   expect(claim).not.toHaveBeenCalled();
   expect(slow).toMatchObject({status:'success',idle:true,counts:{fetched:0},detail:{deadline_hit:true}});
-  const ok=await runSettle(h2.deps(stubResolver(scripted(resolved())),{maxFetchMs:49_000}));      // 5 × 49 s + 30 s = 275 s < 280 s
+  const ok=await runSettle(h2.deps(stubResolver(scripted(resolved())),{maxFetchMs:49_000}));      // 4 × 49 s + 30 s = 226 s < 280 s
   expect(ok.counts.fetched).toBe(1);
+ });
+ it('T-05: claims are sized to the waves that fit — maxFetchMs 51 s → 4 waves × 4 = 16 rows, 62.5 s → exactly 4 waves is not strictly less → 3 waves = 12, 249.999 s → 1 wave = 4; the default is the real MAX_FETCH_MS',async()=>{
+  for(const [maxFetchMs,limit] of [[51_000,16],[62_500,12],[249_999,4],[undefined,Math.min(BATCH_SIZE,4*(Math.ceil(250_000/MAX_FETCH_MS)-1))]] as const){
+   const h=await harness();await h.register();
+   const claim=vi.spyOn(h.db,'claimDue');
+   await runSettle(h.deps(stubResolver(scripted(resolved())),maxFetchMs===undefined?{}:{maxFetchMs}));
+   expect({maxFetchMs,first:claim.mock.calls[0]}).toEqual({maxFetchMs,first:[limit,LEASE_SECONDS]});
+  }
+  expect(MAX_FETCH_MS).toBe(60_000);
  });
  it('hands one AbortSignal (external abort or the 280 s deadline) to every resolver and stops claiming once it fires',async()=>{
   const h=await harness();for(let i=0;i<25;i++)await h.register();
   const ctl=new AbortController();const seen:boolean[]=[];
   const resolve=async(ctx:ResolveContext)=>{ctl.abort();seen.push(ctx.signal.aborted);return {status:'unavailable',failure:'timeout'} as ResolverResult;};
-  const r=await runSettle(h.deps(stubResolver(resolve),{signal:ctl.signal}));
+  const r=await runSettle(h.deps(stubResolver(resolve),{signal:ctl.signal,maxFetchMs:1_000}));
   expect(seen.every(Boolean)).toBe(true);
   expect(r.counts.fetched).toBe(20);expect(r.detail.deadline_hit).toBe(true);
  });
@@ -460,7 +471,7 @@ describe('acceptance 3 with the real price_return resolver',()=>{
 });
 
 describe('settleNow (admin "settle one now", spec §9.5; used by Task 18)',()=>{
- it('appends as admin:<uuid> with a null lease in its own manual batch; a closed queue, a leased row, a defer and a non-admin actor write nothing',async()=>{
+ it('appends as admin:<uuid> with a null lease in its own manual batch; a closed queue, a leased row and a non-admin actor write nothing; a defer is released under the manual lease',async()=>{
   const h=await harness();const id=await h.register();
   const r=await settleNow(h.deps(stubResolver(scripted(resolved()))),id,{actor:`admin:${ADMIN}`,requestKey:'admin:req-1'});
   expect(r).toMatchObject({outcome:'settled',seq:1,reason:null});
@@ -472,9 +483,139 @@ describe('settleNow (admin "settle one now", spec §9.5; used by Task 18)',()=>{
   const pending=await h.register({predicate:{op:'>',rhs:0.2}});
   expect(await settleNow(h.deps(stubResolver(scripted({status:'pending',reason:'not_reported'}))),pending,{actor:`admin:${ADMIN}`,requestKey:'admin:req-2'})).toMatchObject({outcome:'deferred',reason:'not_reported'});
   expect(await h.settlements(pending)).toEqual([]);
-  await h.db.claimDue(10,LEASE_SECONDS);
+  expect(await h.queue(pending)).toMatchObject({last_status:'pending',last_detail:{reason:'not_reported'},leased_until:null,lease_token:null});   // T-01: the defer was written under the manual claim and released
+  await h.db.claimOne(pending,LEASE_SECONDS);
   expect(await settleNow(h.deps(stubResolver(scripted(resolved()))),pending,{actor:`admin:${ADMIN}`,requestKey:'admin:req-3'})).toMatchObject({outcome:'leased'});
   await expect(settleNow(h.deps(stubResolver(scripted(resolved()))),pending,{actor:'cron',requestKey:'k'})).rejects.toMatchObject({code:'invalid_parameter'});
   await expect(settleNow(h.deps(stubResolver(scripted(resolved()))),'00000000-0000-4000-8000-0000000000ff',{actor:`admin:${ADMIN}`,requestKey:'k'})).rejects.toMatchObject({code:'unknown_judgment'});
+ });
+});
+
+const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+
+describe('settleNow is lease-fenced (T-01)',()=>{
+ it('a cron claim and a manual attempt never both write: the manual attempt holds a real lease, so cron cannot claim it; once that lease is lost, the late manual append is lease_lost and exactly one settlement exists',async()=>{
+  const h=await harness();const id=await h.register();
+  let go!:()=>void;const gate=new Promise<void>(r=>{go=r;});let started=false;
+  const manual=settleNow(h.deps(stubResolver(async()=>{started=true;await gate;return resolved();})),id,{actor:`admin:${ADMIN}`,requestKey:'adm:race-0001'});
+  while(!started)await sleep(1);
+  expect(await h.queue(id)).toMatchObject({lease_token:expect.any(String)});
+  expect((await runSettle(h.deps(stubResolver(scripted(resolved()))))).idle).toBe(true);        // the live manual lease blocks the cron
+  h.db.expireLease(id);                                                                          // the manual attempt stalled past its lease
+  const cron=await runSettle(h.deps(stubResolver(scripted(resolved()))));
+  expect(cron.counts.inserted).toBe(1);
+  go();
+  expect(await manual).toMatchObject({outcome:'leased',reason:'lease_lost',seq:null});
+  const all=await h.settlements(id);
+  expect(all).toHaveLength(1);expect(all[0].actor).toBe('cron');
+ });
+ it('settled / void append under the manual claim as admin:<uuid>; defer releases the lease; a quarantine decision is published under it; a thrown resolver releases it and rethrows',async()=>{
+  const h=await harness();
+  const a=await h.register();
+  const r=await settleNow(h.deps(stubResolver(scripted(resolved()))),a,{actor:`admin:${ADMIN}`,requestKey:'adm:ok-00001'});
+  expect(r).toMatchObject({outcome:'settled',seq:1});
+  expect((await h.settlements(a))[0]).toMatchObject({actor:`admin:${ADMIN}`,request_key:'adm:ok-00001'});
+  expect(await h.queue(a)).toMatchObject({lease_token:null,leased_until:null});
+  const b=await h.register({predicate:{op:'>',rhs:0.3}});
+  const q=await settleNow(h.deps(stubResolver(scripted(INC))),b,{actor:`admin:${ADMIN}`,requestKey:'adm:inc-0001'});
+  expect(q).toMatchObject({outcome:'quarantined',reason:'settlement_basis_mismatch',seq:null});
+  expect(h.tables.rows('dq_quarantine').filter(x=>x.natural_key===b)).toHaveLength(1);
+  expect(await h.queue(b)).toMatchObject({last_status:'inconsistent',leased_until:null,lease_token:null,last_detail:{incident:{evidence_hash:'e'.repeat(64)}}});
+  const c=await h.register({predicate:{op:'>',rhs:0.4}});
+  await expect(settleNow(h.deps(stubResolver(async()=>{throw new Error('provider down');})),c,{actor:`admin:${ADMIN}`,requestKey:'adm:err-0001'})).rejects.toThrow('provider down');
+  expect(await h.queue(c)).toMatchObject({last_status:'error',attempts:1,leased_until:null,lease_token:null});
+ });
+ it('a settlement_sequence from a settled queue is a duplicate after re-reading the queue; with the queue still open it is released and rethrown (review minor 1)',async()=>{
+  const h=await harness();const id=await h.register();
+  const seqErr=()=>new JudgmentError('settlement_sequence','settlement_sequence: settled -> settled by admin');
+  const closedLater=withOverrides<JudgmentsDb>(h.db,{appendSettlement:async()=>{throw seqErr();},queueRow:async(x:string)=>{const r=await h.db.queueRow(x);return r?{...r,closed_at:T0}:r;}});
+  expect(await settleNow(h.deps(stubResolver(scripted(resolved())),{db:closedLater}),id,{actor:`admin:${ADMIN}`,requestKey:'adm:seq-0001'})).toMatchObject({outcome:'duplicate',seq:null});
+  const h2=await harness();const id2=await h2.register();
+  const open=withOverrides<JudgmentsDb>(h2.db,{appendSettlement:async()=>{throw seqErr();}});
+  await expect(settleNow(h2.deps(stubResolver(scripted(resolved())),{db:open}),id2,{actor:`admin:${ADMIN}`,requestKey:'adm:seq-0002'})).rejects.toMatchObject({code:'settlement_sequence'});
+  expect(await h2.queue(id2)).toMatchObject({leased_until:null,lease_token:null});
+ });
+});
+
+describe('runSettle accounting and deadline (T-02, T-03, T-06)',()=>{
+ it('T-02: a row that throws is accounted failed as it finishes while the others complete — first append commits, second throws → inserted 1, failed 1, status partial; the batch is finished only after every worker',async()=>{
+  const h=await harness();const a=await h.register();const b=await h.register({predicate:{op:'>',rhs:0.1}});
+  const real=h.db.appendSettlement.bind(h.db);
+  const db=withOverrides<JudgmentsDb>(h.db,{appendSettlement:async(id,t,k,row)=>{if(id===a)throw new Error('db down');return real(id,t,k,row);}});
+  const resolve=async(ctx:ResolveContext)=>{if(ctx.judgment.judgment_id===b)await sleep(30);return resolved();};   // b is still running when a's append throws
+  const r=await runSettle(h.deps(stubResolver(resolve),{db}));
+  expect(r).toMatchObject({status:'partial',counts:{fetched:2,inserted:1,failed:1}});
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'settle_row_failed',key:a,message:'db down'}));
+  expect(await h.settlements(b)).toHaveLength(1);expect(await h.settlements(a)).toEqual([]);
+  expect(await h.queue(a)).toMatchObject({last_status:'error',attempts:1,leased_until:null,lease_token:null});
+  const [batch]=await h.tables.select('ingest_batches',{batch_id:r.batchId!},{limit:1});
+  expect(batch).toMatchObject({status:'partial'});
+ });
+ it('T-03: a resolver that ignores the signal and resolves after the abort writes nothing — the lease is released, the row counts deferred with info deadline_hit',async()=>{
+  const h=await harness();const id=await h.register();
+  const ctl=new AbortController();
+  const r=await runSettle(h.deps(stubResolver(async()=>{ctl.abort();await sleep(20);return resolved();}),{signal:ctl.signal}));
+  expect(await h.settlements(id)).toEqual([]);
+  expect(r.counts).toMatchObject({fetched:1,deferred:1,inserted:0,failed:0});
+  expect(r.errors).toContainEqual(expect.objectContaining({code:'deadline_hit',key:id}));
+  expect(r.status).toBe('success');
+  expect(await h.queue(id)).toMatchObject({leased_until:null,lease_token:null,closed_at:null,attempts:0});
+ });
+ it('T-03: a resolver that never returns cannot block the run past the abort',async()=>{
+  const h=await harness();const id=await h.register();
+  const ctl=new AbortController();setTimeout(()=>ctl.abort(),15);
+  const r=await runSettle(h.deps(stubResolver(()=>new Promise<ResolverResult>(()=>undefined)),{signal:ctl.signal}));
+  expect(r.counts).toMatchObject({fetched:1,deferred:1});expect(await h.settlements(id)).toEqual([]);
+  expect(await h.queue(id)).toMatchObject({leased_until:null});
+ });
+ it('T-03: a lease with less than 30 s left is not written under — released untouched, deferred, deadline_hit',async()=>{
+  const h=await harness();const id=await h.register();
+  const claim=h.db.claimDue.bind(h.db);
+  const db=withOverrides<JudgmentsDb>(h.db,{claimDue:async(l:number,s:number)=>(await claim(l,s)).map(x=>({...x,leased_until:at(T0,29_000)}))});
+  const r=await runSettle(h.deps(stubResolver(scripted(resolved())),{db}));
+  expect(await h.settlements(id)).toEqual([]);
+  expect(r.counts).toMatchObject({deferred:1,inserted:0});expect(r.errors).toContainEqual(expect.objectContaining({code:'deadline_hit',key:id}));
+  expect(await h.queue(id)).toMatchObject({leased_until:null,lease_token:null});
+  const h2=await harness();const id2=await h2.register();
+  const claim2=h2.db.claimDue.bind(h2.db);
+  const db2=withOverrides<JudgmentsDb>(h2.db,{claimDue:async(l:number,s:number)=>(await claim2(l,s)).map(x=>({...x,leased_until:at(T0,31_000)}))});
+  expect((await runSettle(h2.deps(stubResolver(scripted(resolved())),{db:db2}))).counts.inserted).toBe(1);   // ≥ 30 s left: writes
+ });
+ it('T-06: a NEW incident is stamped by the database at the write, not the worker\'s pre-resolution instant; a repeat keeps it',async()=>{
+  const h=await harness();const id=await h.register();
+  await runSettle(h.deps(stubResolver(scripted(INC))),{now:'2026-03-02T03:00:00.000Z'});          // the worker decided at 03:00; the database clock says T0
+  expect((await h.queue(id))!.last_detail.incident).toMatchObject({quarantined_at:T0});
+  h.db.setNow(at(T0,DAY_MS));
+  await runSettle(h.deps(stubResolver(scripted(INC))));
+  expect((await h.queue(id))!.last_detail.incident).toMatchObject({quarantined_at:T0});
+ });
+});
+
+describe('cutoff_vintage corners (review minor)',()=>{
+ it('a label after settle_by is void(no_data:late) under cutoff_vintage too',async()=>{
+  const h=await harness(AFTER);const id=await h.register({labelPolicy:'cutoff_vintage'});
+  await runSettle(h.deps(stubResolver(scripted(resolved({label_available_at:'2026-03-18T00:00:00.001Z'})))));
+  expect((await h.settlements(id))[0]).toMatchObject({kind:'void',reason:'no_data:late',evidence:{settle_by:SETTLE_BY}});
+ });
+ it('a discarded (wrong-cutoff) override re-resolves ONCE through the resolver: a clean result settles, an inconsistent one past the review deadline voids with override_discarded and no new window',async()=>{
+  const h=await harness(AFTER);
+  const inc={quarantine_id:'00000000-0000-4000-8000-0000000000aa',reason_code:'settlement_basis_mismatch',evidence_hash:'e'.repeat(64),cutoff:T0,quarantined_at:T0};
+  const override:QuarantineOverride={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:'e'.repeat(64),evidence:{}},evidence_hash:'e'.repeat(64),resolved_by:ADMIN,at:T0,cutoff:T0};   // cutoff T0 ≠ settle_by
+  const run=async(result:ResolverResult)=>{
+   const id=await h.register({labelPolicy:'cutoff_vintage',predicate:{op:'>',rhs:Math.random()*0.04}});
+   const [claimed]=(await h.db.claimDue(100,LEASE_SECONDS)).filter(x=>x.judgment_id===id);
+   const q={...claimed,override,last_status:'inconsistent' as const,last_detail:{...inc,incident:inc}};
+   const resolve=scripted(result);const fromOverride=vi.fn(()=>resolved());
+   const j=await h.db.getJudgment(id);
+   const out=await settleOne({deps:h.deps(stubResolver(resolve,{fromOverride})),batchId:h.batchId,now:AFTER,signal:new AbortController().signal,preview:false},q,j,0);
+   return {id,out,resolve,fromOverride};
+  };
+  const clean=await run(resolved());
+  expect(clean.resolve).toHaveBeenCalledTimes(1);expect(clean.fromOverride).not.toHaveBeenCalled();
+  expect(clean.out.item).toMatchObject({action:'settled'});
+  const dirty=await run(INC);
+  expect(dirty.resolve).toHaveBeenCalledTimes(1);expect(dirty.fromOverride).not.toHaveBeenCalled();
+  expect(dirty.out.item).toMatchObject({action:'void',reason:'unresolved_inconsistency'});
+  expect((await h.settlements(dirty.id))[0]).toMatchObject({kind:'void',evidence:{override_discarded:true,quarantine_id:inc.quarantine_id}});
  });
 });

@@ -18,6 +18,7 @@ export const SERVICE_RPCS={
  sync_methodology:'(jsonb,text,text)',
  register_judgment:'(jsonb,jsonb)',
  claim_due_judgments:'(integer,integer)',
+ claim_judgment:'(uuid,integer)',
  release_lease:'(uuid,uuid,jsonb)',
  append_settlement:'(uuid,uuid,text,jsonb)',
  quarantine_settlement:'(uuid,uuid,text,jsonb,jsonb,uuid)',

@@ -56,6 +56,10 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
   async latestCards(subject,o){return (await pub(srf('latest_judgment_cards','$1,$2,$3::text[],$4,$5::timestamptz'),[subject.type,subject.key,o.types??null,o.view,o.cutoff??null])).map(x=>envelopeFromRpc(x as Row));},
   async historyOf(subject,type,m,o){return (await pub(srf('judgment_history','$1,$2,$3,$4,$5,$6,$7::timestamptz,$8::uuid,$9'),[subject.type,subject.key,type,m.id,m.version,o.view,o.cutoff??null,o.before??null,o.limit])).map(x=>envelopeFromRpc(x as Row));},
   async claimDue(limit,leaseSeconds){return (((await first(svc(`select public.claim_due_judgments($1,$2) v`,[limit,leaseSeconds])))??[]) as Row[]).map(queueFromTable).sort(byQueueOrder);},   // one jsonb array (E-03)
+  async claimOne(judgmentId,leaseSeconds){
+   const r=await first(svc(`select public.claim_judgment($1::uuid,$2) v`,[judgmentId,leaseSeconds])) as {status:'claimed'|'leased'|'closed';lease_token?:string;row?:Row};
+   return r.status==='claimed'?{status:'claimed',lease_token:String(r.lease_token),row:queueFromTable(r.row as Row)}:{status:r.status};
+  },
   async releaseLease(judgmentId,leaseToken,patch){await svc(`select public.release_lease($1::uuid,$2::uuid,$3::jsonb) v`,[judgmentId,leaseToken,JSON.stringify(patch)]);},
   async queueRow(id){const r=await first(svc(`select to_jsonb(q) v from public.judgment_settle_queue q where q.judgment_id=$1::uuid`,[id]));return r?queueFromTable(r as Row):null;},
   async queueList(o){
@@ -107,7 +111,7 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
    return r&&r.event_id!==null&&r.event_id!==undefined?eventFromTable(r):null;
   },
   async jobState(job){const r=await first(svc(`select jsonb_build_object('state',t.state,'updated_at',t.updated_at) v from public.judgment_job_state t where t.job=$1`,[job])) as Row|undefined;return r?{state:r.state as Record<string,unknown>,updated_at:isoTs(r.updated_at)}:null;},
-  async setJobState(job,expectedUpdatedAt,state){return (await first(svc(`select public.set_job_state($1,$2::timestamptz,$3::jsonb) v`,[job,expectedUpdatedAt,JSON.stringify(state)])))===true;},
+  async setJobState(job,expectedUpdatedAt,state){const r=await first(svc(`select public.set_job_state($1,$2::timestamptz,$3::jsonb) v`,[job,expectedUpdatedAt,JSON.stringify(state)])) as {ok:boolean;updated_at:string|null};return {ok:r.ok===true,updated_at:r.updated_at?isoTs(r.updated_at):null};},
   async repairStaleBatches(dataset,olderThanSeconds){return Number(await first(svc(`select public.repair_stale_batches($1,$2::interval) v`,[dataset,`${olderThanSeconds} seconds`])));},
  };
 }

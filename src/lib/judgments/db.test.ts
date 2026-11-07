@@ -149,7 +149,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const a=stub({judgments_server_time:TS});
   const Q=(id:string,next:string)=>({judgment_id:id,settle_after:TS,settle_by:TS,label_policy:'first_observed',next_attempt_at:next,attempts:0,last_status:null,last_detail:{},leased_until:TS,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',override:null,closed_at:null,updated_at:TS});
   const s=stub({register_judgment:{judgment_id:J,registered_at:TS,retrospective:true},append_settlement:{seq:2,status:'applied'},claim_due_judgments:[Q('b',TS),Q('a',TS),Q('c','2026-01-01T00:00:00+00:00')],release_lease:null,
-   calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:true,repair_stale_batches:2,apply_quarantine_override:'stale',
+   calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:{ok:true,updated_at:'2026-11-06T03:00:00.123456+00:00'},claim_judgment:{status:'claimed',lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',row:Q('a',TS)},repair_stale_batches:2,apply_quarantine_override:'stale',
    reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7,
    quarantine_settlement:{status:'quarantined',quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb'}},{judgment_settle_queue:[]});
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
@@ -163,7 +163,8 @@ describe('supabaseJudgmentsDb wiring',()=>{
   expect(await db.syncMethodology(m,'script','why')).toEqual({changed:false,seq:3});
   const cal=calibrationFixture(m,'0b0e1d8e-0000-4000-8000-000000000001',4);
   expect(await db.insertCalibration(cal,4)).toBe('stale_revision');
-  expect(await db.setJobState('produce:m@v1',null,{x:1})).toBe(true);
+  expect(await db.setJobState('produce:m@v1',null,{x:1})).toEqual({ok:true,updated_at:'2026-11-06T03:00:00.123Z'});
+  expect(await db.claimOne('a',600)).toMatchObject({status:'claimed',lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',row:{judgment_id:'a'}});
   expect(await db.repairStaleBatches('judgments.settle',900)).toBe(2);
   const override={reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched' as const,evidence_hash:'e'.repeat(64),evidence:{}},evidence_hash:'e'.repeat(64),resolved_by:J,at:TS,cutoff:TS};
   expect(await db.applyQuarantineOverride(J,override,'0b0e1d8e-0000-4000-8000-0000000000bb',{route:'x'})).toBe('stale');
@@ -184,6 +185,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'sync_methodology',args:{p_row:m,p_actor:'script',p_reason:'why'}},
    {fn:'insert_calibration',args:{p_row:cal,p_expected_revision:4}},
    {fn:'set_job_state',args:{p_job:'produce:m@v1',p_expected_updated_at:null,p_state:{x:1}}},
+   {fn:'claim_judgment',args:{p_judgment_id:'a',p_lease_seconds:600}},
    {fn:'repair_stale_batches',args:{p_dataset:'judgments.settle',p_older_than:'900 seconds'}},
    {fn:'apply_quarantine_override',args:{p_judgment_id:J,p_override:override,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_audit:{route:'x'}}},
    {fn:'reject_quarantined_settlement',args:{p_judgment_id:J,p_quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb',p_expected:{evidence_hash:'e'.repeat(64),cutoff:TS},p_request_key:'adm:key-0002',p_row:{...voidRow,request_digest:operationDigest(J,voidRow)},p_audit:{route:'x'}}},

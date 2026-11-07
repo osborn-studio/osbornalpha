@@ -151,3 +151,15 @@
 - S2-03：`registeredBase` 还要求快照的 ticker / market / date / source / adjustment 与 ref 及条件一致且 close 有限 > 0；否则正常路径 `base_input_missing`，override 路径 `override_mismatch`。
 - S2-04：`operandAvailable(op, cutoff)`（as_of = factsAsOfDate(cutoff)，每行 endOfUtcDay(available_date) ≤ cutoff）由 override 路径与正常路径共用；正常路径的已结算算子与 ambiguous 候选（含 counterpart）违反 → `Unavailable(data_after_cutoff)`。
 - 红测：`npm test -- src/lib/judgments/resolvers` 4 failed / 48 passed；实现后 52 passed，typecheck（resolvers 范围）与 lint 干净。
+
+## Task 12 复审（Opus + Codex，T-01..T-08）
+- T-01：新增 RPC `claim_judgment(uuid,int)`（service 专用，锁队列行；开放且无存活租约才发租约，否则 leased / closed）与 `JudgmentsDb.claimOne`（supabase / memory / pg 三实现、rpc-inventory、权限测试、契约竞态测试）。`settleNow` 先 claimOne，决定（append / defer / quarantine）都带该令牌写入，结算行 actor 仍为 `admin:<uuid>`；租约丢失 → `leased`；`settlement_sequence` 在队列已关闭时 → `duplicate`。新增 outcome `quarantined`（`quarantine_pending` 保留在联合类型里）。
+- T-02：每行完成即计数，行内异常 → `failed`（`settle_row_failed`，租约归还）；`finishBatch` 只在所有 worker 结束后调用。
+- T-03：写入前检查 signal 与租约剩余 ≥ 30 s，否则原样归还、计 `deferred` + 信息码 `deadline_hit`；resolver 与补偿扫描的取数 / produce 与 AbortSignal 竞速（新文件 `abort.ts`，有界等待）。
+- T-04：`setJobState` 返回 `{ok, updated_at}`（迁移里 `set_job_state` 改为返回 jsonb，先 drop 再 create）；补偿扫描持有自己写入的版本，且拒绝不严格递增的 marker（`marker_regression`，非信息码）。
+- T-05：`PRICE_MAX_FETCH_MS` = 4 × 15 s = 60 s（基准窗口、向后页、向前页、基准序列）；结算准入改为严格 `waves × maxFetchMs < 剩余 − 30 s`，并按可容纳的波数缩小领取量（60 s 的默认值下一批 16 行，而不是 20——否则永远不会领取）。
+- T-06：新事件的 `quarantined_at` 在 `quarantine_settlement` 内由数据库时钟盖章（SQL `clock_timestamp()`，内存 `now()`），重复隔离保留首次。
+- T-07（指挥决策）：同一快照连续 3 次补偿运行 produce 失败 → 记入作业状态 `skipped[]`、marker 越过、扫描继续，并报告非信息码 `compensation_skipped`（`failing` 计数器同在作业状态）。
+- T-08：补 discarded-override 与 cutoff_vintage 迟到作废测试。
+- 红测：compensate 6 failed / 6 passed；settle + resolvers/index 10 failed / 39 passed；实现后全部通过。
+- 备注：`freeze: only registrations at or before frozen_at …` 在本地偶发失败（与本次改动无关的时序用例，重跑通过）。

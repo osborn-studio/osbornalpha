@@ -350,18 +350,59 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect((await db.latestCalibration(m.methodology_id,'v1',{scope_type:'all',scope_key:''}))!.valid).toBe(true);
   });
 
-  it('jobState / setJobState: insert once, optimistic update on the exact updated_at, strictly increasing',async()=>{
+  it('jobState / setJobState: insert once, optimistic update on the exact updated_at, strictly increasing, returns the revision just written (T-04)',async()=>{
    const job=jobKey('calibrate',`ztest_${randomUUID().replaceAll('-','').slice(0,16)}`,'v1',{scope_type:'market',scope_key:'港股'});
    expect(await db.jobState(job)).toBeNull();
-   expect(await db.setJobState(job,null,{page:0})).toBe(true);
-   expect(await db.setJobState(job,null,{page:1})).toBe(false);
-   const s1=(await db.jobState(job))!;expect(s1.state).toEqual({page:0});
-   expect(await db.setJobState(job,'2000-01-01T00:00:00.000Z',{page:1})).toBe(false);
-   expect(await db.setJobState(job,s1.updated_at,{page:1})).toBe(true);
+   const w0=await db.setJobState(job,null,{page:0});
+   expect(w0).toMatchObject({ok:true});expect(w0.updated_at).toEqual(expect.any(String));
+   expect(await db.setJobState(job,null,{page:1})).toEqual({ok:false,updated_at:null});
+   const s1=(await db.jobState(job))!;expect(s1.state).toEqual({page:0});expect(s1.updated_at).toBe(w0.updated_at);
+   expect(await db.setJobState(job,'2000-01-01T00:00:00.000Z',{page:1})).toEqual({ok:false,updated_at:null});
+   const w1=await db.setJobState(job,s1.updated_at,{page:1});expect(w1.ok).toBe(true);
    const s2=(await db.jobState(job))!;expect(s2.state).toEqual({page:1});expect(Date.parse(s2.updated_at)).toBeGreaterThan(Date.parse(s1.updated_at));
-   expect(await db.setJobState(job,s1.updated_at,{page:2})).toBe(false);
-   expect(await db.setJobState(job,s2.updated_at,{page:2})).toBe(true);
+   expect(w1.updated_at).toBe(s2.updated_at);                                               // the writer owns that revision: chaining on it works
+   expect((await db.setJobState(job,s1.updated_at,{page:2})).ok).toBe(false);
+   expect((await db.setJobState(job,w1.updated_at,{page:2})).ok).toBe(true);
    expect(await code(db.setJobState(job,null,[] as never))).toBe('invalid_parameter');
+  });
+
+  it('claimOne (T-01): claims an open unleased row whatever its next_attempt_at; a live lease -> leased; an expired lease is claimable; closed / absent -> closed; the claim token fences append and release; a cron claim and a manual claim never both win',async()=>{
+   const m=await synced();const b=await h.batch();
+   await h.exclusiveClaims(async()=>{
+    const j=await registered(m,b,{target:DUE});
+    await db.releaseLease(j.id,(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!,PARK);   // parked in 2099: not due
+    expect((await db.claimDue(100,600)).some(r=>r.judgment_id===j.id)).toBe(false);
+    expect(await code(db.claimOne(j.id,0))).toBe('invalid_parameter');
+    const c=await db.claimOne(j.id,600);
+    expect(c.status).toBe('claimed');if(c.status!=='claimed')return;
+    expect(c.lease_token).toMatch(UUID);expect(c.row).toMatchObject({judgment_id:j.id,lease_token:c.lease_token});
+    expect(Date.parse(c.row.leased_until!)).toBeGreaterThan(Date.now()+590_000);
+    expect(await db.claimOne(j.id,600)).toEqual({status:'leased'});
+    await db.releaseLease(j.id,c.lease_token,PARK);
+    // A cron claim racing a manual claim on the same row: exactly one side holds the lease.
+    const ids=await Promise.all([db.claimOne(j.id,600),db.claimOne(j.id,600)]);
+    expect(ids.filter(x=>x.status==='claimed')).toHaveLength(1);expect(ids.filter(x=>x.status==='leased')).toHaveLength(1);
+    const winner=ids.find(x=>x.status==='claimed') as Extract<typeof ids[number],{status:'claimed'}>;
+    const loser=randomUUID();
+    expect(await code(db.releaseLease(j.id,loser,PARK))).toBe('lease_lost');
+    expect(await code(db.appendSettlement(j.id,loser,`${b}:${j.id}:1`,settlementFixture(b)))).toBe('lease_lost');
+    // The manual attempt appends under its token as an admin actor (the settlement row names the admin, the lease fences it).
+    const A=`admin:${randomUUID()}`;
+    expect(await db.appendSettlement(j.id,winner.lease_token,`adm:${randomUUID()}`,settlementFixture(b,{actor:A}))).toEqual({seq:1,status:'applied'});
+    expect((await db.settlementsOf([j.id]))[0]).toMatchObject({actor:A});
+    expect(await db.claimOne(j.id,600)).toEqual({status:'closed'});
+    expect(await db.claimOne(randomUUID(),600)).toEqual({status:'closed'});
+    // An expired lease is claimable (the stalled holder is fenced out).
+    const k=await registered(m,b,{target:DUE});
+    const first=await db.claimOne(k.id,1);await pause(1150);
+    const second=await db.claimOne(k.id,600);
+    expect(second.status).toBe('claimed');
+    if(first.status==='claimed'&&second.status==='claimed'){
+     expect(second.lease_token).not.toBe(first.lease_token);
+     expect(await code(db.releaseLease(k.id,first.lease_token,PARK))).toBe('lease_lost');
+     await db.releaseLease(k.id,second.lease_token,PARK);
+    }
+   });
   });
 
   it('repairStaleBatches: fails running batches of the named judgments.* dataset older than the threshold',async()=>{
@@ -487,10 +528,14 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     const j=await registered(m,b,{target:DUE});jid=j.id;
     // First publication; due again at once (a past next_attempt_at is clamped to now).
     const t1=(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!;
+    const before=await db.serverTime();
     const first=await pubOf(j.id,t1,H('e'),CUT,'2000-01-01T00:00:00.000Z');
     expect(first.status).toBe('quarantined');const itemId=first.quarantine_id!;
+    // T-06: a NEW incident's quarantined_at is stamped by the database at the write, not the worker's proposed instant (CUT, months earlier).
+    const at=String((await db.queueRow(j.id))!.last_detail.incident ? ((await db.queueRow(j.id))!.last_detail.incident as {quarantined_at:string}).quarantined_at : '');
+    expect(at).not.toBe(CUT);expect(Date.parse(at)).toBeGreaterThanOrEqual(Date.parse(before)-1);expect(Date.parse(at)).toBeLessThanOrEqual(Date.parse(await db.serverTime())+1);
     expect((await db.queueRow(j.id))!).toMatchObject({last_status:'inconsistent',lease_token:null,leased_until:null,attempts:0,
-     last_detail:{evidence_hash:H('e'),cutoff:CUT,incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT}}});
+     last_detail:{evidence_hash:H('e'),cutoff:CUT,incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:at}}});
     const [item]=await h.tables.select('dq_quarantine',{id:itemId});
     expect(item).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:j.id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b});
     const read=item.payload as {evidence_hash:string;cutoff:string};                           // what the hook reads
@@ -505,7 +550,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     expect((await h.tables.select('dq_quarantine',{id:itemId}))[0].payload).toMatchObject({evidence_hash:H('f'),cutoff:C2});
     // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
     expect((await db.queueRow(j.id))!.last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,
-     incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,quarantined_at:CUT}});
+     incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:C2,quarantined_at:at}});
     expect(await h.tables.select('dq_quarantine',{natural_key:j.id,status:'open'})).toHaveLength(1);
     // Q1-03: the hook read (e, CUT) before B's refresh → both verdicts are stale and write nothing.
     expect(await db.rejectQuarantinedSettlement(j.id,itemId,read,`adm:${randomUUID()}`,rejectRow(b,by),{})).toEqual({seq:0,status:'stale'});
@@ -527,7 +572,8 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     const claim=async()=>(await db.claimDue(100,600)).find(r=>r.judgment_id===j.id)!.lease_token!;
     const PAST='2000-01-01T00:00:00.000Z';                                                     // clamped to now → due again at once
     const pub=await db.quarantineSettlement(j.id,await claim(),'settlement_basis_mismatch',{evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id},{...incPatch(H('e'),CUT),next_attempt_at:PAST},b);
-    const inc0={quarantine_id:pub.quarantine_id!,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:CUT};
+    const stamped=((await db.queueRow(j.id))!.last_detail.incident as {quarantined_at:string}).quarantined_at;
+    const inc0={quarantine_id:pub.quarantine_id!,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:stamped};
     expect((await db.queueRow(j.id))!.last_detail.incident).toEqual(inc0);
     const transient:QueuePatch[]=[
      {last_status:'error',last_detail:{code:'resolver_failed',message:'boom'},next_attempt_at:PAST,attempts_increment:1},

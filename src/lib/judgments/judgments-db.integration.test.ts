@@ -99,10 +99,10 @@ describe.skipIf(!enabled)('pgJudgmentsDb on real PostgreSQL',()=>{
   it('setJobState racing on one expectation: exactly one writer wins',async()=>{
    const {d1,d2}=await setup();
    const job=jobKey('produce',`ztest_${randomUUID().replaceAll('-','').slice(0,16)}`,'v1');
-   expect(await d1.setJobState(job,null,{marker:0})).toBe(true);
+   expect((await d1.setJobState(job,null,{marker:0})).ok).toBe(true);
    const s=(await d1.jobState(job))!;
    const out=await Promise.all([d1.setJobState(job,s.updated_at,{marker:1}),d2.setJobState(job,s.updated_at,{marker:2})]);
-   expect(out.filter(Boolean)).toHaveLength(1);
+   expect(out.filter(x=>x.ok)).toHaveLength(1);
   });
  });
 });

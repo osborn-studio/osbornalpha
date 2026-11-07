@@ -130,6 +130,11 @@ export interface JudgmentsDb{
  latestCards(subject:Subject,opts:{types?:JudgmentType[];view:CardView;cutoff?:string}):Promise<Envelope[]>;
  historyOf(subject:Subject,type:JudgmentType,methodology:{id:string;version:string},opts:{view:CardView;cutoff?:string;before?:string;limit:number}):Promise<Envelope[]>;
  claimDue(limit:number,leaseSeconds:number):Promise<QueueRow[]>;
+ /** Plan audit T-01: leases ONE queue row for the admin "settle one now" attempt (claim_judgment locks the row): open and not live-leased
+  *  (a lease past leased_until counts as free) → {status:'claimed', lease_token, row} whatever next_attempt_at; a live lease → 'leased';
+  *  a closed (or absent) queue → 'closed'. The caller then appends / quarantines / releases WITH that token, so a concurrent cron claim
+  *  makes exactly one side lease_lost / leased. */
+ claimOne(judgmentId:string,leaseSeconds:number):Promise<{status:'claimed';lease_token:string;row:QueueRow}|{status:'leased'|'closed'}>;
  /** Token-fenced release (§5.4). last_detail.incident (plan audit R3-01) is never written here: the locked row's open incident is
   *  carried over unchanged and a patch incident is ignored, so a transient pending / unavailable / error attempt cannot end it. */
  releaseLease(judgmentId:string,leaseToken:string,patch:QueuePatch):Promise<void>;
@@ -170,7 +175,8 @@ export interface JudgmentsDb{
  listMethodologies(status?:MethodologyStatus):Promise<MethodologyRow[]>;
  methodologyStateAt(id:string,version:string,cutoff:string):Promise<MethodologyEvent|null>;
  jobState(job:string):Promise<{state:Record<string,unknown>;updated_at:string}|null>;
- setJobState(job:string,expectedUpdatedAt:string|null,state:Record<string,unknown>):Promise<boolean>;
+ /** Optimistic lock on updated_at; ok=false when the expectation failed. updated_at = the revision just written (plan audit T-04), so a writer keeps ownership of it. */
+ setJobState(job:string,expectedUpdatedAt:string|null,state:Record<string,unknown>):Promise<{ok:boolean;updated_at:string|null}>;
  repairStaleBatches(dataset:string,olderThanSeconds:number):Promise<number>;
 }
 

@@ -240,6 +240,15 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    for(const q of due){q.leased_until=new Date(t+leaseSeconds*1000).toISOString();q.lease_token=randomUUID();q.updated_at=at;}
    return clone(due);
   },
+  async claimOne(judgmentId,leaseSeconds){
+   if(!Number.isInteger(leaseSeconds)||leaseSeconds<1||leaseSeconds>3600)fail('invalid_parameter','lease_seconds');
+   const q=queue.get(judgmentId);
+   if(!q||q.closed_at!==null)return {status:'closed'};
+   const at=now();const t=ms(at);
+   if(leaseLive(q,t))return {status:'leased'};
+   Object.assign(q,{leased_until:new Date(t+leaseSeconds*1000).toISOString(),lease_token:randomUUID(),updated_at:at});
+   return {status:'claimed',lease_token:q.lease_token!,row:clone(q)};
+  },
   async releaseLease(judgmentId,leaseToken,patch){
    if(!isObj(patch)||!QUEUE_STATUSES.includes(patch.last_status)||!isObj(patch.last_detail)||typeof patch.next_attempt_at!=='string'||!Number.isFinite(ms(patch.next_attempt_at))||(patch.attempts_increment!==0&&patch.attempts_increment!==1))fail('invalid_parameter','patch');
    const q=queue.get(judgmentId);
@@ -282,7 +291,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    else{id=randomUUID();await tables.insert('dq_quarantine',{id,...key,detail:{},payload:clone(payload),batch_id:batchId,status:'open',resolved_by:null,resolved_at:null,created_at:at});}
    const prior=q.last_detail.incident;   // R3-01: an open incident keeps its first quarantine time, whatever the last attempt status
    const incident={quarantine_id:id,reason_code:reasonCode,evidence_hash:String(payload.evidence_hash),cutoff:String(payload.cutoff),
-    quarantined_at:isObj(prior)&&typeof prior.quarantined_at==='string'?prior.quarantined_at:String(pi!.quarantined_at)};
+    quarantined_at:isObj(prior)&&typeof prior.quarantined_at==='string'?prior.quarantined_at:at};   // T-06: a NEW incident is stamped here, never the worker's earlier instant
    Object.assign(q,{last_status:'inconsistent',last_detail:{...withoutIncident(clone(d!)),incident},next_attempt_at:new Date(Math.max(ms(patch.next_attempt_at),ms(at))).toISOString(),leased_until:null,lease_token:null,updated_at:at});
    return {status:'quarantined',quarantine_id:id};
   }),
@@ -405,10 +414,11 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(!isObj(state))fail('invalid_parameter','job_state');
    if(typeof job!=='string'||job.length<1||job.length>512)fail('unknown','judgment_job_state_job_check');
    const t=ms(now());const r=jobs.get(job);
-   if(expectedUpdatedAt===null){if(r)return false;jobs.set(job,{state:clone(state),updated_at:new Date(t).toISOString()});return true;}
-   if(!r||ms(r.updated_at)!==ms(expectedUpdatedAt))return false;
-   jobs.set(job,{state:clone(state),updated_at:new Date(Math.max(t,ms(r.updated_at)+1)).toISOString()});
-   return true;
+   if(expectedUpdatedAt===null){if(r)return {ok:false,updated_at:null};const at=new Date(t).toISOString();jobs.set(job,{state:clone(state),updated_at:at});return {ok:true,updated_at:at};}
+   if(!r||ms(r.updated_at)!==ms(expectedUpdatedAt))return {ok:false,updated_at:null};
+   const at=new Date(Math.max(t,ms(r.updated_at)+1)).toISOString();
+   jobs.set(job,{state:clone(state),updated_at:at});
+   return {ok:true,updated_at:at};
   },
   async repairStaleBatches(dataset,olderThanSeconds){
    if(typeof dataset!=='string'||!/^judgments\.[a-z0-9_.]{1,54}$/.test(dataset)||!Number.isFinite(olderThanSeconds)||olderThanSeconds<60)fail('invalid_parameter','repair_stale_batches');

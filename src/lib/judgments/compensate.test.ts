@@ -6,7 +6,7 @@
 // methodology skip the scan.
 import {describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import {emptyCounts} from '@/lib/dq/batches';
+import {emptyCounts,isInfoError} from '@/lib/dq/batches';
 import {compensateMacro} from './compensate';
 import type {CompensateDeps,ProduceFn} from './compensate';
 import {jobKey} from './job-keys';
@@ -32,7 +32,8 @@ function setup(snaps:MacroSnapshotRow[],existing:string[]=[]){
  const inputsDb=stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:since}});
  const produce=vi.fn<ProduceFn>(ok);
  const deps=(over:Partial<CompensateDeps>={}):CompensateDeps=>({db,inputsDb,tables,codeVersion:'test-code-version',triggeredBy:'cron',signal:new AbortController().signal,methodology:METHOD,produce,...over});
- const marker=async()=>(await mem.jobState(KEY))?.state??null;
+ // the marker fields only (the job state also carries the stall counter and the skipped list, T-07)
+ const marker=async()=>{const st=(await mem.jobState(KEY))?.state;return st&&typeof st.marker_snapshot_id==='string'?{marker_created_at:st.marker_created_at,marker_snapshot_id:st.marker_snapshot_id}:null;};
  return {mem,db,tables,since,produce,deps,marker};
 }
 
@@ -79,7 +80,7 @@ describe('compensateMacro (settle step 0)',()=>{
  });
  it('a lost optimistic lock reports job_state_conflict and stops',async()=>{
   const s=setup([snap(1),snap(2)]);
-  const db=withOverrides<JudgmentsDb>(s.db,{setJobState:async()=>false});
+  const db=withOverrides<JudgmentsDb>(s.db,{setJobState:async()=>({ok:false,updated_at:null})});
   const r=await compensateMacro(s.deps({db}));
   expect(r).toMatchObject({status:'stopped',reason:'job_state_conflict',stoppedAt:sid(1),produced:1,errors:[{code:'job_state_conflict',key:KEY}]});
  });
@@ -103,5 +104,80 @@ describe('compensateMacro (settle step 0)',()=>{
   expect(await s.marker()).toEqual({marker_created_at:'2026-10-01T06:00:00.000Z',marker_snapshot_id:sid(1)});
   const ctl=new AbortController();ctl.abort();
   expect((await compensateMacro(s.deps({signal:ctl.signal}))).reason).toBe('deadline');
+ });
+});
+
+describe('compensateMacro hardening (T-03, T-04, T-07)',()=>{
+ it('T-04: marker writes are strictly monotonic — a snapshot that sorts before the stored marker (S3 then S2) stops the scan and is neither produced nor written',async()=>{
+  const s=setup([snap(3),snap(2)]);
+  const feed=vi.fn(async()=>[snap(3),snap(2)]);
+  const r=await compensateMacro(s.deps({inputsDb:stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:feed}})}));
+  expect(r).toMatchObject({status:'stopped',reason:'marker_regression',stoppedAt:sid(2),produced:1});
+  expect(r.errors).toEqual([expect.objectContaining({code:'marker_regression',key:sid(2)})]);
+  expect(isInfoError(r.errors[0])).toBe(false);
+  expect(s.produce).toHaveBeenCalledTimes(1);
+  expect(await s.marker()).toEqual({marker_created_at:'2026-10-03T06:00:00.000Z',marker_snapshot_id:sid(3)});
+  // equal created_at: ordered by snapshot_id
+  const t=setup([]);
+  const twin=(id:string,c:string):MacroSnapshotRow=>({...snap(1),snapshot_id:id,created_at:c});
+  const r2=await compensateMacro(t.deps({inputsDb:stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:async()=>[twin(sid(9),'2026-10-01T06:00:00.000Z'),twin(sid(5),'2026-10-01T06:00:00.000Z')]}})}));
+  expect(r2).toMatchObject({reason:'marker_regression',stoppedAt:sid(5)});
+ });
+ it('T-04: the scan keeps ownership of the revision it wrote — a foreign write in between makes its next write a conflict instead of being overwritten',async()=>{
+  const s=setup([snap(1),snap(2)]);
+  let n=0;
+  const db=withOverrides<JudgmentsDb>(s.db,{setJobState:async(job,exp,state)=>{
+   const r=await s.db.setJobState(job,exp,state);
+   if(++n===1)await s.db.setJobState(job,r.updated_at,{marker_created_at:'2026-10-09T00:00:00.000Z',marker_snapshot_id:sid(9)});   // another writer
+   return r;
+  }});
+  const r=await compensateMacro(s.deps({db}));
+  expect(r).toMatchObject({status:'stopped',reason:'job_state_conflict',produced:2});
+  expect(r.errors).toContainEqual({code:'job_state_conflict',key:KEY});
+  expect((await s.mem.jobState(KEY))!.state).toMatchObject({marker_snapshot_id:sid(9)});   // the foreign write survives
+ });
+ it('T-07: a snapshot whose produce fails on 3 consecutive runs is recorded in skipped, the marker moves past it, the scan continues, and a NON-info compensation_skipped is reported',async()=>{
+  const s=setup([snap(1),snap(2),snap(3)]);
+  s.produce.mockImplementation(async(_m,work)=>work[0].binding?.snapshot_id===sid(2)?bad(METHOD,[],{} as never):ok(METHOD,[],{} as never));
+  const r1=await compensateMacro(s.deps());
+  expect(r1).toMatchObject({status:'stopped',reason:'produce_failed',stoppedAt:sid(2)});
+  expect((await s.mem.jobState(KEY))!.state).toMatchObject({failing:{snapshot_id:sid(2),attempts:1}});
+  const r2=await compensateMacro(s.deps());
+  expect(r2).toMatchObject({status:'stopped',reason:'produce_failed'});
+  expect((await s.mem.jobState(KEY))!.state).toMatchObject({failing:{snapshot_id:sid(2),attempts:2}});
+  const r3=await compensateMacro(s.deps());
+  expect(r3).toMatchObject({status:'done',reason:null,stoppedAt:null});
+  const skip=r3.errors.find(e=>e.code==='compensation_skipped')!;
+  expect(skip).toMatchObject({key:sid(2)});expect(isInfoError(skip)).toBe(false);
+  const st=(await s.mem.jobState(KEY))!.state;
+  expect(st).toMatchObject({marker_snapshot_id:sid(3),skipped:[{snapshot_id:sid(2),created_at:'2026-10-02T06:00:00.000Z',reason:'produce_failed',attempts:3}]});
+  expect(st.failing).toBeUndefined();
+  expect(s.produce.mock.calls.map(c=>c[1][0].binding?.snapshot_id)).toEqual([sid(1),sid(2),sid(2),sid(2),sid(3)]);   // S1 once, S2 three times, S3 after the skip
+  expect(await compensateMacro(s.deps())).toMatchObject({status:'done',scanned:0});
+ });
+ it('T-07: the stall counter is per snapshot and consecutive — a success (or a duplicate) clears it; a different snapshot restarts at 1',async()=>{
+  const s=setup([snap(1),snap(2)]);
+  s.produce.mockImplementationOnce(bad).mockImplementationOnce(bad);
+  await compensateMacro(s.deps());await compensateMacro(s.deps());
+  expect((await s.mem.jobState(KEY))!.state).toMatchObject({failing:{snapshot_id:sid(1),attempts:2}});
+  s.produce.mockImplementationOnce(async()=>({counts:{...emptyCounts(),fetched:1,duplicates:1},errors:[]}));   // third run: duplicate = done
+  const r=await compensateMacro(s.deps());
+  expect(r).toMatchObject({status:'done',produced:2});expect(r.errors.map(e=>e.code)).not.toContain('compensation_skipped');
+  const st=(await s.mem.jobState(KEY))!.state;expect(st.failing).toBeUndefined();expect(st.skipped).toBeUndefined();
+ });
+ it('T-03: a hung snapshot read or produce cannot hold the scan past the abort signal; an abort is not a produce failure (no stall count)',async()=>{
+  const s=setup([snap(1)]);
+  const ctl=new AbortController();
+  const hung=compensateMacro(s.deps({signal:ctl.signal,inputsDb:stubInputsDb({macro:{...stubInputsDb().macro,snapshotsSince:()=>new Promise(()=>undefined)}})}));
+  setTimeout(()=>ctl.abort(),5);
+  expect(await hung).toMatchObject({status:'stopped',reason:'deadline'});
+  const ctl2=new AbortController();
+  s.produce.mockImplementationOnce(()=>new Promise(()=>undefined));
+  const p=compensateMacro(s.deps({signal:ctl2.signal}));
+  setTimeout(()=>ctl2.abort(),5);
+  const r=await p;
+  expect(r).toMatchObject({status:'stopped',reason:'deadline',stoppedAt:sid(1)});
+  expect(r.errors.map(e=>e.code)).toContain('deadline_hit');
+  expect((await s.mem.jobState(KEY))?.state.failing).toBeUndefined();
  });
 });

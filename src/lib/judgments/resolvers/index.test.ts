@@ -49,7 +49,7 @@ describe('resolver params and registry',()=>{
  it('RESOLVERS: names match keys, versions are distinct, MAX_FETCH_MS is the slowest resolver',()=>{
   for(const [k,r] of Object.entries(RESOLVERS))expect(r.name).toBe(k);
   expect(new Set(Object.values(RESOLVERS).map(r=>r.version)).size).toBe(3);
-  expect(MAX_FETCH_MS).toBe(PRICE_MAX_FETCH_MS);expect(MAX_FETCH_MS).toBe(30_000);
+  expect(MAX_FETCH_MS).toBe(PRICE_MAX_FETCH_MS);expect(MAX_FETCH_MS).toBe(60_000);   // T-05: 4 sequential provider reads (base window, back page, forward page, benchmark) × the 15 s per-read bound
  });
  it('resolverFor: public resolvers by name; recommendation_hit, industry_aggregate and unknown names are invalid_condition',()=>{
   expect(resolverFor('price_return')).toBe(priceReturnResolver);

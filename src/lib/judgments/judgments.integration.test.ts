@@ -699,14 +699,16 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
 
  it('set_job_state: insert-once with null, optimistic update on the exact updated_at, millisecond precision, strictly increasing updated_at',async()=>{
   const job=`calibrate:${mid()}@v1:market:${encodeURIComponent('港股')}`;
-  const set=(exp:string|null,state:unknown)=>one(`select public.set_job_state($1,$2::timestamptz,$3::jsonb) v`,[job,exp,JSON.stringify(state)]);
+  const call=(exp:string|null,state:unknown)=>one(`select public.set_job_state($1,$2::timestamptz,$3::jsonb) v`,[job,exp,JSON.stringify(state)]) as Promise<{ok:boolean;updated_at:string|null}>;
+  const set=async(exp:string|null,state:unknown)=>(await call(exp,state)).ok;
   const read=async()=>(await q(`select state,to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') u,(extract(microseconds from updated_at)::bigint % 1000)::int sub from public.judgment_job_state where job=$1`,[job]))[0];
   expect(await set(null,{page:0})).toBe(true);
-  expect(await set(null,{page:9})).toBe(false);
+  expect(await call(null,{page:9})).toEqual({ok:false,updated_at:null});
   const r1=await read();expect(r1).toMatchObject({state:{page:0},sub:0});
   expect(await set('2000-01-01T00:00:00.000Z',{page:1})).toBe(false);
-  expect(await set(r1.u,{page:1})).toBe(true);
+  const w=await call(r1.u,{page:1});expect(w.ok).toBe(true);
   const r2=await read();expect(r2.state).toEqual({page:1});expect(Date.parse(r2.u)).toBeGreaterThan(Date.parse(r1.u));
+  expect(Date.parse(w.updated_at!)).toBe(Date.parse(r2.u));                                  // the returned revision is the one just written (T-04)
   expect(await set(r1.u,{page:2})).toBe(false);                                             // stale expectation
   expect(await set(r2.u,{page:2})).toBe(true);
   const r3=await read();expect(await set(r3.u,{page:3})).toBe(true);
@@ -855,8 +857,12 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
    expect((await q(`select dataset,table_name,natural_key,reason_code,status,batch_id,payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0])
     .toEqual({dataset:'judgments',table_name:'judgment_settlements',natural_key:j,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b,h:H('e'),c:c1});
    const q1=await queueOf(j);
+   // T-06: a NEW incident is stamped with the database clock inside quarantine_settlement (never the worker's proposed c1, months earlier).
+   const stamp=(q1.last_detail.incident as {quarantined_at:string}).quarantined_at;
+   expect(stamp).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);expect(stamp).not.toBe(c1);
+   expect(Math.abs(Date.parse(stamp)-Date.now())).toBeLessThan(60_000);
    expect(q1).toMatchObject({last_status:'inconsistent',leased_until:null,lease_token:null,
-    last_detail:{evidence_hash:H('e'),cutoff:c1,incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:c1}}});
+    last_detail:{evidence_hash:H('e'),cutoff:c1,incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:stamp}}});
    expect(q1.next_attempt_at.toISOString()).toBe('2099-06-01T00:00:00.000Z');
    // Worker A claims and stalls past its lease; worker B claims (new token) and publishes another inconsistency.
    await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);
@@ -870,7 +876,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
    expect((await q(`select payload->>'evidence_hash' h,payload->>'cutoff' c from public.dq_quarantine where id=$1`,[item]))[0]).toEqual({h:H('f'),c:c2});
    // Q1-01: the incident is still unresolved, so the first quarantined_at survives B's publish.
    expect((await queueOf(j)).last_detail).toEqual({reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,
-    incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,quarantined_at:c1}});
+    incident:{quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('f'),cutoff:c2,quarantined_at:stamp}});
    expect((await q(`select attempts from public.judgment_settle_queue where judgment_id=$1`,[j]))[0].attempts).toBe(0);
    expect((await q(`select count(*)::int n from public.dq_quarantine where natural_key=$1 and status='open'`,[j]))[0].n).toBe(1);
    // Another reason code opens its own item (the open key includes reason_code, exactly like quarantine()).
@@ -880,7 +886,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
    const gap=await qs(j,t3,{evidence_hash:H('9'),cutoff:c2,judgment_id:j},gapPatch,b,'settlement_benchmark_gap');
    expect(gap.status).toBe('quarantined');expect(gap.quarantine_id).not.toBe(item);
    // The incident now names the gap item and its evidence; its first quarantine time is still c1 (one unresolved incident).
-   expect((await queueOf(j)).last_detail.incident).toEqual({quarantine_id:gap.quarantine_id,reason_code:'settlement_benchmark_gap',evidence_hash:H('9'),cutoff:c2,quarantined_at:c1});
+   expect((await queueOf(j)).last_detail.incident).toEqual({quarantine_id:gap.quarantine_id,reason_code:'settlement_benchmark_gap',evidence_hash:H('9'),cutoff:c2,quarantined_at:stamp});
    // Parameters are checked before any lock or write.
    const ok={evidence_hash:H('9'),cutoff:c2,judgment_id:j};
    const noIncident={...gapPatch,last_detail:{reason_code:'settlement_benchmark_gap',evidence_hash:H('9'),cutoff:c2}};
@@ -896,7 +902,7 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
    const c1='2026-03-02T04:00:00.000Z';
    const {j,item}=await quarantined(m,b,H('e'),c1);
    const inc0=(await queueOf(j)).last_detail.incident;
-   expect(inc0).toEqual({quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:c1});
+   expect(inc0).toEqual({quarantine_id:item,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:c1,quarantined_at:expect.stringMatching(/Z$/)});
    const again=async()=>{await q(`update public.judgment_settle_queue set next_attempt_at=now() where judgment_id=$1`,[j]);return String((await claim()).find(x=>x.judgment_id===j)!.lease_token);};
    const transient:Record<string,unknown>[]=[
     {last_status:'error',last_detail:{code:'resolver_failed',message:'boom'},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:1},

@@ -2,7 +2,7 @@
 // Settlement cron core (spec §7.1, §7.2, §5.4, §7.5). runSettle: repair_stale_batches('judgments.settle', 15 min)
 // → step 0 compensation (compensateMacro; its info codes join this receipt) → startBatch(judgments.settle) → claim
 // batches of 20 (600 s lease) while the budget allows: stop at start + 200 s, or when the remaining budget is under
-// the batch worst case (ceil(20 / 4) × max resolver maxFetchMs) + 30 s, or once the run signal fired → each batch
+// too little budget for even one wave (waves × max resolver maxFetchMs < remaining − 30 s, strictly; claims are sized to the waves that fit), or once the run signal fired → each batch
 // sorted by resolver and settled ≤ 4 at a time → finishBatch → recordAttempt('judgments.settle', daily). One
 // AbortSignal (external abort ∪ the 280 s deadline) reaches every resolver / provider call.
 // settleOne applies the §7.2 state machine through the pure decide(): exactly one of settle / void (append_settlement
@@ -20,11 +20,12 @@ import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
+import {AbortedError,raceAbort} from './abort';
 import {COMPENSATION_BUDGET_MS,compensateMacro} from './compensate';
 import type {CompensateDeps,CompensationReport} from './compensate';
 import {JudgmentError} from './errors';
 import {MAX_FETCH_MS,resolverFor as defaultResolverFor} from './resolvers';
-import type {Condition,JudgmentInputsDb,JudgmentRow,JudgmentsDb,QueuePatch,QueueRow,Realized,Resolver,ResolverResult,SettlementInsert} from './types';
+import type {Condition,JudgmentInputsDb,JudgmentRow,JudgmentsDb,QueuePatch,QueueRow,Realized,ResolveContext,Resolver,ResolverResult,SettlementInsert} from './types';
 
 export const SETTLE_DATASET='judgments.settle';
 export const PRODUCER='ts-judgments';
@@ -186,7 +187,8 @@ function decideAttempt(x:DecideInput):Decision{
   patch:{last_status:'inconsistent',last_detail:{...attempt,incident:{...attempt,quarantined_at:quarantinedAt}},next_attempt_at:backoff('inconsistent',{now,attempts:q.attempts,settleBy:deadline}),attempts_increment:0}};
 }
 
-export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean}
+/** clock0: deps.clock() when `now` was read, so the lease left at a later write is judged against now + the time elapsed since (T-03). */
+export interface SettleContext{deps:SettleDeps;batchId:string|null;now:string;signal:AbortSignal;preview:boolean;clock0?:number}
 export interface SettleOutcome{item:SettleItem;counter:keyof BatchCounts|null;summary:{kind:'pending'|'unavailable'|'voided';reason:string}|null;errors:BatchError[]}
 const isLeaseLost=(e:unknown)=>e instanceof JudgmentError&&e.code==='lease_lost';
 const messageOf=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,500);
@@ -207,11 +209,29 @@ function planned(id:string,d:Decision):SettleItem{
  if(d.action==='append')return item(id,d.row.kind==='settled'?'settled':'void',d.row.reason);
  return d.action==='defer'?item(id,'deferred',d.reason):item(id,'quarantined',d.reasonCode);
 }
+const isSequenceError=(e:unknown)=>e instanceof JudgmentError&&e.code==='settlement_sequence';
+/** A settlement_sequence from append means another writer already moved the judgment on; when the queue is closed that is a duplicate (review minor 1). */
+async function closedAfterSequence(db:JudgmentsDb,id:string):Promise<boolean>{return (await db.queueRow(id))?.closed_at!=null;}
+/** Time left on the claimed lease at this instant, judged on the database clock read at batch start plus the time elapsed since (T-03); null = no lease deadline known. */
+function leaseLeftMs(ctx:SettleContext,q:QueueRow):number|null{
+ if(q.leased_until===null)return null;
+ const elapsed=ctx.clock0===undefined?0:Math.max(0,(ctx.deps.clock??Date.now)()-ctx.clock0);
+ return Date.parse(q.leased_until)-(Date.parse(ctx.now)+elapsed);
+}
+/** T-03: the run is over (abort / deadline) or the lease is about to be: write nothing, hand the row back untouched (the cron picks it up next run). */
+async function deadlineOutcome(ctx:SettleContext,q:QueueRow):Promise<SettleOutcome>{
+ if(!ctx.preview)await releaseUntouched(ctx.deps.db,q).catch(()=>undefined);
+ return {item:item(q.judgment_id,'deferred','deadline_hit'),counter:'deferred',summary:null,errors:[{code:'deadline_hit',key:q.judgment_id}]};
+}
 async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,latestSeq:number):Promise<SettleOutcome>{
  const {db}=ctx.deps,id=j.judgment_id;
+ const left=leaseLeftMs(ctx,q);
+ if(ctx.signal.aborted||(left!==null&&left<TAIL_MS))return deadlineOutcome(ctx,q);
  try{
   if(d.action==='append'){
-   const res=await db.appendSettlement(id,q.lease_token,`${ctx.batchId}:${id}:${latestSeq+1}`,{...d.row,actor:ctx.deps.actor,code_version:ctx.deps.codeVersion,batch_id:ctx.batchId!});
+   let res:{seq:number;status:string};
+   try{res=await db.appendSettlement(id,q.lease_token,`${ctx.batchId}:${id}:${latestSeq+1}`,{...d.row,actor:ctx.deps.actor,code_version:ctx.deps.codeVersion,batch_id:ctx.batchId!});}
+   catch(e){if(isSequenceError(e)&&await closedAfterSequence(db,id))return {item:item(id,'duplicate'),counter:'duplicates',summary:null,errors:[]};throw e;}
    if(res.status==='already_final')return {item:item(id,'duplicate',null,res.seq),counter:'duplicates',summary:null,errors:[]};
    if(res.status==='request_key_conflict')return {item:item(id,'conflict',null,res.seq),counter:'failed',summary:null,errors:[{code:'request_key_conflict',key:id}]};
    if(d.row.kind==='settled')return {item:item(id,'settled',null,res.seq),counter:'inserted',summary:null,errors:[]};
@@ -223,7 +243,7 @@ async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,lates
   }
   // Q1-02: ONE lease-checked RPC upserts the open item (quarantine() semantics: same key + reason reused, payload refreshed
   // to THIS inconsistency) and publishes the queue state; a stale worker gets lease_lost and writes nothing, and there is
-  // no second write to crash before.
+  // no second write to crash before. T-06: the database stamps a NEW incident's quarantined_at at that write.
   const r=await db.quarantineSettlement(id,q.lease_token!,d.reasonCode,d.payload,d.patch,ctx.batchId!);
   if(r.status==='lease_lost')return leaseLost(id);
   return {item:item(id,'quarantined',d.reasonCode),counter:'quarantined',summary:null,errors:[{code:d.reasonCode,key:id}]};
@@ -231,6 +251,12 @@ async function apply(ctx:SettleContext,j:JudgmentRow,q:QueueRow,d:Decision,lates
   if(isLeaseLost(e))return leaseLost(id);
   throw e;
  }
+}
+
+/** The resolver call, raced against the run's signal and a bound (T-03). Abort → AbortedError; a hung provider → BoundedWaitTimeout. */
+const RESOLVE_SLACK_MS=5_000;
+function resolveBounded(resolver:Resolver,ctx:ResolveContext,signal:AbortSignal):Promise<ResolverResult>{
+ return raceAbort(Promise.resolve().then(()=>resolver.resolve(ctx)),signal,`resolve:${resolver.name}`,resolver.maxFetchMs+RESOLVE_SLACK_MS);
 }
 
 /** One claimed queue row through the §7.2 machine. */
@@ -243,66 +269,114 @@ export async function settleOne(ctx:SettleContext,q:QueueRow,j:JudgmentRow|null,
  if(!plan.early&&!isUnresolvedInconsistency(q,ctx.now,plan)){
   try{
    result=plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
-    :await resolver.resolve({judgment:j,cutoff:plan.cutoff,now:ctx.now,inputsDb:ctx.deps.inputsDb,signal:ctx.signal});
-  }catch(e){return failed(ctx,q,'resolver_failed',messageOf(e));}
+    :await resolveBounded(resolver,{judgment:j,cutoff:plan.cutoff,now:ctx.now,inputsDb:ctx.deps.inputsDb,signal:ctx.signal},ctx.signal);
+  }catch(e){
+   if(e instanceof AbortedError||ctx.signal.aborted)return deadlineOutcome(ctx,q);
+   return failed(ctx,q,'resolver_failed',messageOf(e));
+  }
  }
  const d=decide({judgment:j,queue:q,resolver,result,now:ctx.now,cutoff:plan.cutoff,viaOverride:plan.viaOverride,overrideDiscarded:plan.overrideDiscarded});
  if(ctx.preview)return {item:planned(j.judgment_id,d),counter:null,summary:null,errors:[]};
  return apply(ctx,j,q,d,latestSeq);
 }
 
-export type SettleNowOutcome='settled'|'void'|'duplicate'|'conflict'|'deferred'|'quarantine_pending'|'leased'|'closed';
+export type SettleNowOutcome='settled'|'void'|'duplicate'|'conflict'|'deferred'|'quarantined'|'quarantine_pending'|'leased'|'closed';
 export interface SettleNowResult{outcome:SettleNowOutcome;seq:number|null;reason:string|null;batchId:string|null}
 const ADMIN_ACTOR_RE=/^admin:[0-9a-f-]{36}$/;
-/** Admin "settle one now" (spec §9.5): the same resolver + decide() as the cron, without a lease. Only an append decision
- *  writes (actor admin:<uuid>, null lease token, the caller's request_key, its own manual judgments.settle batch); a leased
- *  row, a closed queue, a defer or a quarantine decision writes nothing (the cron owns lease-bound queue changes). */
+/** Admin "settle one now" (spec §9.5, plan audit T-01): FENCED by a real lease — claimOne locks the queue row and leases it (a cron
+ *  holding it → 'leased', a closed / abstained queue → 'closed'), then the same resolver + decide() as the cron run and the decision is
+ *  written WITH that lease token: append (actor admin:<uuid>, the caller's request_key, its own manual judgments.settle batch), defer
+ *  (release_lease), quarantine (quarantine_settlement). A cron claim after the manual lease expired makes the late manual write
+ *  lease_lost → 'leased'; both can never write. Every exit releases the lease it still holds. */
 export async function settleNow(deps:SettleDeps,judgmentId:string,o:{actor:string;requestKey:string}):Promise<SettleNowResult>{
  if(!ADMIN_ACTOR_RE.test(o.actor))throw new JudgmentError('invalid_parameter',`settleNow needs an admin actor, got ${o.actor}`);
  const j=await deps.db.getJudgment(judgmentId);
  if(!j)throw new JudgmentError('unknown_judgment',judgmentId);
- const q=await deps.db.queueRow(judgmentId);
- const none=(outcome:SettleNowOutcome,reason:string|null):SettleNowResult=>({outcome,seq:null,reason,batchId:null});
- if(j.abstained||!j.condition||!q||q.closed_at!==null)return none('closed',j.abstained?'abstained':'queue_closed');
+ const none=(outcome:SettleNowOutcome,reason:string|null,batchId:string|null=null,seq:number|null=null):SettleNowResult=>({outcome,seq,reason,batchId});
+ if(j.abstained||!j.condition)return none('closed','abstained');
+ const claim=await deps.db.claimOne(judgmentId,LEASE_SECONDS);
+ if(claim.status!=='claimed')return claim.status==='leased'?none('leased','lease_held'):none('closed','queue_closed');
+ const q=claim.row;
+ const clock=deps.clock??Date.now;
  const now=await deps.db.serverTime();
- if(q.leased_until!==null&&q.leased_until>now)return none('leased','lease_held');
- const resolver=(deps.resolverFor??defaultResolverFor)(j.condition.resolver);
- const plan=planOf(q,now);
- const result=plan.early||isUnresolvedInconsistency(q,now,plan)?null
-  :plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
-  :await resolver.resolve({judgment:j,cutoff:plan.cutoff,now,inputsDb:deps.inputsDb,signal:deps.signal??new AbortController().signal});
- const d=decide({judgment:j,queue:q,resolver,result,now,cutoff:plan.cutoff,viaOverride:plan.viaOverride,overrideDiscarded:plan.overrideDiscarded});
- if(d.action==='defer')return none('deferred',d.reason);
- if(d.action==='quarantine')return none('quarantine_pending',d.reasonCode);
+ const signal=deps.signal??new AbortController().signal;
  const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:SETTLE_DATASET,codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const ctx:SettleContext={deps,batchId,now,signal,preview:false,clock0:clock()};
  const counts:Required<BatchCounts>={...emptyCounts(),fetched:1,deferred:0};
+ const errors:BatchError[]=[];
+ const done=async(r:SettleNowResult):Promise<SettleNowResult>=>{await finishBatch(deps.tables,batchId,{counts,errors});return r;};
  try{
-  const res=await deps.db.appendSettlement(judgmentId,null,o.requestKey,{...d.row,actor:o.actor,code_version:deps.codeVersion,batch_id:batchId});
-  const errors:BatchError[]=res.status==='request_key_conflict'?[{code:'request_key_conflict',key:judgmentId}]:[];
-  const outcome:SettleNowOutcome=res.status==='already_final'?'duplicate':res.status==='request_key_conflict'?'conflict':d.row.kind==='settled'?'settled':'void';
-  if(outcome==='duplicate')counts.duplicates=1;else if(outcome==='conflict')counts.failed=1;else if(outcome==='settled')counts.inserted=1;else counts.versioned=1;
-  await finishBatch(deps.tables,batchId,{counts,errors});
-  return {outcome,seq:res.seq,reason:d.row.reason,batchId};
+  const resolver=(deps.resolverFor??defaultResolverFor)(j.condition.resolver);
+  const plan=planOf(q,now);
+  const result=plan.early||isUnresolvedInconsistency(q,now,plan)?null
+   :plan.viaOverride&&q.override?resolver.fromOverride(j,q.override)
+   :await resolveBounded(resolver,{judgment:j,cutoff:plan.cutoff,now,inputsDb:deps.inputsDb,signal},signal);
+  const d=decide({judgment:j,queue:q,resolver,result,now,cutoff:plan.cutoff,viaOverride:plan.viaOverride,overrideDiscarded:plan.overrideDiscarded});
+  const left=leaseLeftMs(ctx,q);
+  if(signal.aborted||(left!==null&&left<TAIL_MS)){await releaseUntouched(deps.db,q);counts.deferred=1;errors.push({code:'deadline_hit',key:judgmentId});return await done(none('deferred','deadline_hit',batchId));}
+  try{
+   if(d.action==='defer'){
+    await deps.db.releaseLease(judgmentId,q.lease_token!,d.patch);
+    counts.deferred=1;
+    return await done(none('deferred',d.reason,batchId));
+   }
+   if(d.action==='quarantine'){
+    const r=await deps.db.quarantineSettlement(judgmentId,q.lease_token!,d.reasonCode,d.payload,d.patch,batchId);
+    if(r.status==='lease_lost'){counts.deferred=1;errors.push({code:'lease_lost',key:judgmentId});return await done(none('leased','lease_lost',batchId));}
+    counts.quarantined=1;errors.push({code:d.reasonCode,key:judgmentId});
+    return await done(none('quarantined',d.reasonCode,batchId));
+   }
+   let res:{seq:number;status:string};
+   try{res=await deps.db.appendSettlement(judgmentId,q.lease_token,o.requestKey,{...d.row,actor:o.actor,code_version:deps.codeVersion,batch_id:batchId});}
+   catch(e){
+    if(isSequenceError(e)&&await closedAfterSequence(deps.db,judgmentId)){counts.duplicates=1;return await done(none('duplicate',null,batchId));}
+    throw e;
+   }
+   if(res.status==='already_final'||res.status==='already_applied'){
+    if(res.status==='already_applied')await releaseUntouched(deps.db,q);   // a replay of the caller's request_key wrote nothing, so the lease is still ours
+    counts.duplicates=1;return await done(none('duplicate',null,batchId,res.seq));
+   }
+   if(res.status==='request_key_conflict'){await releaseUntouched(deps.db,q);counts.failed=1;errors.push({code:'request_key_conflict',key:judgmentId});return await done(none('conflict',null,batchId,res.seq));}
+   if(d.row.kind==='settled')counts.inserted=1;else counts.versioned=1;
+   return await done({outcome:d.row.kind==='settled'?'settled':'void',seq:res.seq,reason:d.row.reason,batchId});
+  }catch(e){
+   if(isLeaseLost(e)){counts.deferred=1;errors.push({code:'lease_lost',key:judgmentId});return await done(none('leased','lease_lost',batchId));}
+   throw e;
+  }
  }catch(e){
+  // The lease is still ours on every other failure: hand it back (error attempt, open incident carried), then fail the batch and rethrow.
+  if(e instanceof AbortedError){await releaseUntouched(deps.db,q).catch(()=>undefined);counts.deferred=1;errors.push({code:'deadline_hit',key:judgmentId});return await done(none('deferred','deadline_hit',batchId));}
+  await failed(ctx,q,'settle_now_failed',messageOf(e)).catch(()=>undefined);
   counts.failed=1;
-  await finishBatch(deps.tables,batchId,{counts,errors:[{code:'append_failed',key:judgmentId,message:messageOf(e)}]}).catch(()=>undefined);
+  await finishBatch(deps.tables,batchId,{counts:{...counts,deferred:0},errors:[{code:'settle_now_failed',key:judgmentId,message:messageOf(e)}]}).catch(()=>undefined);
   throw e;
  }
 }
 
-async function mapLimit<T,R>(xs:T[],n:number,f:(x:T)=>Promise<R>):Promise<R[]>{
- const out=new Array<R>(xs.length);let next=0;
- await Promise.all(Array.from({length:Math.min(n,xs.length)},async()=>{for(;;){const k=next++;if(k>=xs.length)return;out[k]=await f(xs[k]);}}));
- return out;
+async function mapLimit<T>(xs:T[],n:number,f:(x:T)=>Promise<void>):Promise<void>{
+ let next=0;
+ await Promise.all(Array.from({length:Math.min(n,xs.length)},async()=>{for(;;){const k=next++;if(k>=xs.length)return;await f(xs[k]);}}));
 }
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
-async function processRows(ctx:SettleContext,rows:QueueRow[]):Promise<SettleOutcome[]>{
+/** T-02: f never rejects — a row that throws becomes a `failed` outcome (its lease handed back) and is reported through onOutcome as soon as
+ *  it finishes; Promise.all therefore only resolves after EVERY worker is done, so the caller never finalizes the batch under running workers. */
+async function crashed(ctx:SettleContext,q:QueueRow,e:unknown):Promise<SettleOutcome>{
+ const message=messageOf(e);
+ try{return await failed(ctx,q,'settle_row_failed',message);}
+ catch{return {item:item(q.judgment_id,'failed','settle_row_failed'),counter:ctx.preview?null:'failed',summary:null,errors:[{code:'settle_row_failed',key:q.judgment_id,message}]};}
+}
+async function processRows(ctx:SettleContext,rows:QueueRow[],onOutcome:(o:SettleOutcome)=>void):Promise<void>{
  const ids=rows.map(r=>r.judgment_id);
  const [judgments,settlements]=await Promise.all([Promise.all(ids.map(id=>ctx.deps.db.getJudgment(id))),ctx.deps.db.settlementsOf(ids)]);
  const latest=new Map<string,number>();
  for(const s of settlements)latest.set(s.judgment_id,Math.max(latest.get(s.judgment_id)??0,s.seq));
  const work=rows.map((q,i)=>({q,j:judgments[i]})).sort((a,b)=>cmp(a.j?.condition?.resolver??'',b.j?.condition?.resolver??'')||cmp(a.q.judgment_id,b.q.judgment_id));
- return mapLimit(work,CONCURRENCY,w=>settleOne(ctx,w.q,w.j,latest.get(w.q.judgment_id)??0));
+ await mapLimit(work,CONCURRENCY,async w=>{
+  let o:SettleOutcome;
+  try{o=await settleOne(ctx,w.q,w.j,latest.get(w.q.judgment_id)??0);}
+  catch(e){o=await crashed(ctx,w.q,e);}
+  onOutcome(o);
+ });
 }
 async function releaseUntouched(db:JudgmentsDb,r:QueueRow):Promise<void>{
  try{await db.releaseLease(r.judgment_id,r.lease_token!,{last_status:r.last_status??'pending',last_detail:r.last_detail,next_attempt_at:r.next_attempt_at,attempts_increment:0});}
@@ -330,7 +404,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
    const rows=await deps.db.queueList({filter:'due',limit:BATCH_SIZE});
    counts.fetched=rows.length;
    const now=opts.now??await deps.db.serverTime();
-   for(const o of await processRows({deps,batchId:null,now,signal,preview:true},rows)){items.push(o.item);errors.push(...o.errors);}
+   await processRows({deps,batchId:null,now,signal,preview:true,clock0:clock()},rows,o=>{items.push(o.item);errors.push(...o.errors);});
    return receipt('preview');
   }
   detail.repaired=await deps.db.repairStaleBatches(SETTLE_DATASET,STALE_BATCH_SECONDS);
@@ -340,18 +414,21 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
    errors.push(...detail.compensation.errors);
   }
   ({batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:SETTLE_DATASET,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy}));
-  const worst=Math.ceil(BATCH_SIZE/CONCURRENCY)*(deps.maxFetchMs??MAX_FETCH_MS);
+  const perRow=deps.maxFetchMs??MAX_FETCH_MS;
   const processed=new Set<string>();
   for(;;){
    const elapsed=clock()-t0;
-   if(signal.aborted||elapsed>=STOP_CLAIM_MS||deadlineMs-elapsed<worst+TAIL_MS){detail.deadline_hit=true;break;}
-   const rows=await deps.db.claimDue(BATCH_SIZE,LEASE_SECONDS);
+   // T-05: strict admission and a SIZED claim. A wave of CONCURRENCY rows needs up to perRow ms; claim only as many waves as satisfy
+   // waves × perRow < remaining − TAIL (strictly less), never more than BATCH_SIZE rows.
+   const waves=Math.ceil((deadlineMs-elapsed-TAIL_MS)/perRow)-1;
+   if(signal.aborted||elapsed>=STOP_CLAIM_MS||waves<1){detail.deadline_hit=true;break;}
+   const rows=await deps.db.claimDue(Math.min(BATCH_SIZE,waves*CONCURRENCY),LEASE_SECONDS);
    const fresh=rows.filter(r=>!processed.has(r.judgment_id));
    for(const r of rows)if(processed.has(r.judgment_id))await releaseUntouched(deps.db,r);
    if(fresh.length===0)break;
    detail.batches++;counts.fetched+=fresh.length;
    const now=opts.now??await deps.db.serverTime();
-   for(const o of await processRows({deps,batchId,now,signal,preview:false},fresh)){processed.add(o.item.judgment_id);absorb(o);}
+   await processRows({deps,batchId,now,signal,preview:false,clock0:clock()},fresh,o=>{processed.add(o.item.judgment_id);absorb(o);});
   }
   if(detail.deadline_hit)errors.push({code:'deadline_hit',message:`claiming stopped after ${detail.batches} batch(es)`});
   for(const k of ['pending','unavailable','voided'] as const)

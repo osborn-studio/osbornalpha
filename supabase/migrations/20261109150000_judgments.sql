@@ -689,6 +689,25 @@ begin
   return v_out;
 end $$;
 
+-- Plan audit T-01: the admin "settle one now" fence. Locks ONE queue row; an open row whose lease is free or expired is
+-- leased (fresh token) whatever its next_attempt_at; a live lease -> 'leased', a closed (or absent) queue -> 'closed'.
+create or replace function public.claim_judgment(p_judgment_id uuid, p_lease_seconds integer)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_q public.judgment_settle_queue;
+begin
+  if p_judgment_id is null then raise exception 'invalid_parameter: judgment_id' using errcode = '22023'; end if;
+  if p_lease_seconds is null or p_lease_seconds < 1 or p_lease_seconds > 3600 then raise exception 'invalid_parameter: lease_seconds' using errcode = '22023'; end if;
+  select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
+  if not found or v_q.closed_at is not null then return pg_catalog.jsonb_build_object('status', 'closed'); end if;
+  if v_q.lease_token is not null and v_q.leased_until is not null and v_q.leased_until > pg_catalog.clock_timestamp() then
+    return pg_catalog.jsonb_build_object('status', 'leased');
+  end if;
+  update public.judgment_settle_queue x
+  set leased_until = pg_catalog.now() + pg_catalog.make_interval(secs => p_lease_seconds), lease_token = pg_catalog.gen_random_uuid(), updated_at = pg_catalog.now()
+  where x.judgment_id = p_judgment_id returning x.* into v_q;
+  return pg_catalog.jsonb_build_object('status', 'claimed', 'lease_token', v_q.lease_token, 'row', pg_catalog.to_jsonb(v_q));
+end $$;
+
 -- §5.4: fencing by token; next_attempt_at is never set before now(). Plan audit R3-01: last_detail.incident is never
 -- written here — the locked row's open incident is carried over unchanged (a transient pending / unavailable / error
 -- attempt does not end it, so the review deadline cannot restart) and a patch incident is dropped.
@@ -833,7 +852,9 @@ begin
   on conflict (dataset, table_name, natural_key, reason_code) where status = 'open'
   do update set payload = excluded.payload
   returning x.id into v_id;
-  v_at := v_detail -> 'incident' -> 'quarantined_at';
+  -- Plan audit T-06: a NEW incident is stamped here, with the database clock at the moment of the write (never the worker's
+  -- pre-resolution instant, which can be minutes older); an open incident keeps its first quarantine time (R3-01).
+  v_at := pg_catalog.to_jsonb(pg_catalog.to_char(pg_catalog.clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
   if pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident' -> 'quarantined_at') = 'string' then
     v_at := v_q.last_detail -> 'incident' -> 'quarantined_at';                 -- the open incident's first quarantine (R3-01)
   end if;
@@ -1047,21 +1068,25 @@ begin
 end $$;
 
 -- §5.5b: optimistic lock on updated_at (millisecond precision, strictly increasing).
-create or replace function public.set_job_state(p_job text, p_expected_updated_at timestamptz, p_state jsonb) returns boolean
+-- Plan audit T-04: returns {ok, updated_at} so the writer keeps ownership of the revision it just wrote (a re-read could name
+-- another writer's). The return type changed from boolean, so the old definition is dropped first.
+drop function if exists public.set_job_state(text, timestamptz, jsonb);
+create function public.set_job_state(p_job text, p_expected_updated_at timestamptz, p_state jsonb) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare n integer; v_now timestamptz := pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp());
+declare v_now timestamptz := pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp()); v_at timestamptz;
 begin
   if p_job is null or p_state is null or pg_catalog.jsonb_typeof(p_state) <> 'object' then
     raise exception 'invalid_parameter: job_state' using errcode = '22023';
   end if;
   if p_expected_updated_at is null then
-    insert into public.judgment_job_state (job, state, updated_at) values (p_job, p_state, v_now) on conflict (job) do nothing;
+    insert into public.judgment_job_state (job, state, updated_at) values (p_job, p_state, v_now) on conflict (job) do nothing
+    returning updated_at into v_at;
   else
     update public.judgment_job_state x set state = p_state, updated_at = greatest(v_now, x.updated_at + interval '1 millisecond')
-    where x.job = p_job and x.updated_at = p_expected_updated_at;
+    where x.job = p_job and x.updated_at = p_expected_updated_at
+    returning x.updated_at into v_at;
   end if;
-  get diagnostics n = row_count;
-  return n = 1;
+  return pg_catalog.jsonb_build_object('ok', v_at is not null, 'updated_at', v_at);
 end $$;
 
 -- §7.1 / audit G26: running batches of ONE judgments.* dataset older than p_older_than → failed.
@@ -1099,6 +1124,7 @@ do $$ declare f text; begin
     'public.sync_methodology(jsonb, text, text)',
     'public.register_judgment(jsonb, jsonb)',
     'public.claim_due_judgments(integer, integer)',
+    'public.claim_judgment(uuid, integer)',
     'public.release_lease(uuid, uuid, jsonb)',
     'public.append_settlement(uuid, uuid, text, jsonb)',
     'public.quarantine_settlement(uuid, uuid, text, jsonb, jsonb, uuid)',

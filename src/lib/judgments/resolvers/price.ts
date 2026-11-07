@@ -26,8 +26,10 @@ export const PRICE_RESOLVER_VERSION='price_return/1';
 /** Policy constant (plan 1 identity tolerance): same source, same basis should agree almost exactly (spec §7.4). */
 export const BASIS_TOLERANCE=0.005;
 export const PRE_BASE_BARS=5;
-/** Main + benchmark series, each bounded by the slowest provider path: Eastmoney US multi-prefix tries (3 × 5 s) vs DataGateway 7 s (spec §7.1). */
-export const PRICE_MAX_FETCH_MS=2*15_000;
+/** Worst case of ONE resolve (spec §7.1, plan audit T-05): up to four sequential provider reads — the base window, the backward page, the forward page and the
+ *  benchmark series — each bounded by the slowest provider path (Eastmoney US multi-prefix tries 3 × 5 s vs DataGateway 7 s). */
+export const PROVIDER_READ_MS=15_000;
+export const PRICE_MAX_FETCH_MS=4*PROVIDER_READ_MS;
 const SESSION_DAYS=1.52,LEAD_DAYS=10,TAIL_DAYS=10,DATE_TAIL_DAYS=20,BACK_PAGE_DAYS=20,NEAR_BASE_DAYS=5,RECENT_BASE_DAYS=30;
 const FULL_FIELDS=['open','high','low','close','volume'];
 

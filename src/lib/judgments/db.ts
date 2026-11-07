@@ -177,6 +177,10 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
   },
   historyOf:(subject,type,m,o)=>envelopes(anon,'judgment_history',{p_subject_type:subject.type,p_subject_key:subject.key,p_type:type,p_methodology:m.id,p_version:m.version,p_view:o.view,p_cutoff:o.cutoff??null,p_before:o.before??null,p_limit:o.limit}),
   async claimDue(limit,leaseSeconds){return ((await call<Row[]|null>(admin,'claim_due_judgments',{p_limit:limit,p_lease_seconds:leaseSeconds}))??[]).map(queueFromTable).sort(byQueueOrder);},
+  async claimOne(judgmentId,leaseSeconds){
+   const r=await call<{status:'claimed'|'leased'|'closed';lease_token?:string;row?:Row}>(admin,'claim_judgment',{p_judgment_id:judgmentId,p_lease_seconds:leaseSeconds});
+   return r.status==='claimed'?{status:'claimed',lease_token:String(r.lease_token),row:queueFromTable(r.row as Row)}:{status:r.status};
+  },
   async releaseLease(judgmentId,leaseToken,patch){await call(admin,'release_lease',{p_judgment_id:judgmentId,p_lease_token:leaseToken,p_patch:patch});},
   async queueRow(id){const [r]=await rows(admin.from('judgment_settle_queue').select('*').eq('judgment_id',id).limit(1));return r?queueFromTable(r):null;},
   async queueList(o){
@@ -240,7 +244,7 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
    return present(x,'event_id')?eventFromTable(x):null;
   },
   async jobState(job){const [r]=await rows(admin.from('judgment_job_state').select('state,updated_at').eq('job',job).limit(1));return r?{state:json(r.state,{}),updated_at:isoTs(r.updated_at)}:null;},
-  async setJobState(job,expectedUpdatedAt,state){return (await call<unknown>(admin,'set_job_state',{p_job:job,p_expected_updated_at:expectedUpdatedAt,p_state:state}))===true;},
+  async setJobState(job,expectedUpdatedAt,state){const r=await call<{ok:boolean;updated_at:string|null}>(admin,'set_job_state',{p_job:job,p_expected_updated_at:expectedUpdatedAt,p_state:state});return {ok:r.ok===true,updated_at:r.updated_at?isoTs(r.updated_at):null};},
   async repairStaleBatches(dataset,olderThanSeconds){return Number(await call<unknown>(admin,'repair_stale_batches',{p_dataset:dataset,p_older_than:`${olderThanSeconds} seconds`}));},
  };
 }
