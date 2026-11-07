@@ -35,9 +35,15 @@ export function documentIdentityOk(d:Record<string,unknown>):boolean{
  return (id||url)&&typeof d.sha256==='string'&&SHA256.test(d.sha256)&&nonEmpty(d.locator);
 }
 export function checkEvidenceOk(c:ExpertRecord['checks'][number],expectMissing:boolean):boolean{
- if((c.absent===true)!==expectMissing)return false;
- if(expectMissing){if(c.our_value!==null||c.document_value!==null)return false;}
- else if(c.our_value===null||c.document_value===null||!DECIMAL.test(c.our_value)||!DECIMAL.test(c.document_value))return false;
+ const dec=(v:string|null)=>v!==null&&DECIMAL.test(v);
+ if(expectMissing&&c.verdict==='disagree'){
+  // the expert found a value in the document where the gold says missing: a decimal document_value, our_value null or decimal, not absent
+  if(c.absent===true||!dec(c.document_value)||(c.our_value!==null&&!dec(c.our_value)))return false;
+ }else if(expectMissing){
+  if(c.absent!==true||c.our_value!==null||c.document_value!==null)return false;
+ }else{
+  if(c.absent===true||!dec(c.our_value)||!dec(c.document_value))return false;
+ }
  return documentIdentityOk(c.document);
 }
 export const companyKeyOf=(c:Pick<GoldCase,'subject'>):string|null=>c.subject.cik??c.subject.ticker??null;

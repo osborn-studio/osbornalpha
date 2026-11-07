@@ -122,6 +122,15 @@ describe('validateExpertRecord',()=>{
   const mk=(f:(c:ExpertRecord['checks'][number])=>void)=>{const r=record({population:{...record().population,case_count:8},selection:{...record().selection,selected_case_ids:sel},checks:sel.map(case_id=>({case_id,our_value:'1000000',document_value:'1000000',document:DOC,verdict:'agree' as const,note:''}))});f(r.checks.find(c=>c.case_id===T)!);return r;};
     expect(validateExpertRecord(mk(c=>{c.our_value=null;c.document_value=null;(c as {absent?:boolean}).absent=true;}),set,{}).map(f=>f.code)).toEqual([]);
   expect(validateExpertRecord(mk(()=>{}),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
+  // disagree on an expected-absent case: the expert found a value in the document → decimal document_value, our_value null, absent:false
+  const dis=(f:(c:ExpertRecord['checks'][number])=>void)=>mk(c=>{c.verdict='disagree';f(c);});
+  const withFollowUp=(r:ExpertRecord)=>({...r,summary:{agree:3,disagree:1,cannot_verify:0},follow_ups:[{ref:T,action:'fix',owner:'owner',due:'2026-12-01',closed_at:null,closure_ref:null}]});
+  expect(validateExpertRecord(withFollowUp(dis(c=>{c.our_value=null;c.document_value='42.5';})),set,{}).map(f=>f.code)).toEqual([]);
+  expect(validateExpertRecord(withFollowUp(dis(c=>{c.our_value=null;c.document_value=null;(c as {absent?:boolean}).absent=true;})),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
+  expect(validateExpertRecord(withFollowUp(dis(c=>{c.our_value=null;c.document_value='n/a';})),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
+  expect(validateExpertRecord(withFollowUp(dis(c=>{c.our_value=null;c.document_value='42.5';c.document={page:1};})),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
+  // agree on an expected-absent case keeps the absent:true + both null rule
+  expect(validateExpertRecord(mk(c=>{c.our_value=null;c.document_value='42.5';}),set,{}).map(f=>f.code)).toEqual(['expert_check_evidence','expert_coverage']);
  });
  it('P2: verifyExpertRun fails closed without a store and requires a passed privileged official run of the same set',async()=>{
   const row=(o:Partial<EvalRunRow>={}):EvalRunRow=>({run_id:RUN,kind:'official_reconciliation',module:'facts',mode:'report',privileged:true,artifact_class:'public',set_id:SET.set_id,set_version:2,set_sha256:SET.sha256,evaluator_code_version:'c'.repeat(40),started_at:'x',finished_at:'y',status:'passed',summary:{} as never,report_ref:'r',report_sha256:'0'.repeat(64),triggered_by:'script',...o});
