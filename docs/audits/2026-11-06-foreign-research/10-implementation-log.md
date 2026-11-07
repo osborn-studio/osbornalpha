@@ -20,3 +20,5 @@
 | B3 | 分块合并 merge（冲突组、不自动选择）+ 候选行组装 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B3-mmx.md (batch triage pending) |
 | B4 | 2026-11-07 | pending commander commit | 32/32 unit tests PASS; typecheck/lint PASS | Plan implementation required no compile or behavior fixes; test file adds responsibility comment and groups assertions into 32 cases; no git mutation |
 | B4 | 规则 R1–R10 + 隔离项 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B4-mmx.md (batch triage pending) |
+| B5 | 2026-11-07 | pending commander commit | 25/25 B5 unit tests PASS; broker-research 186 passed / 68 integration skipped; typecheck/lint PASS | Plan logic implemented with existing B1 decimal and currency exports; test-file responsibility comments; no git mutation; commit SHA deferred to commander |
+| B5 | 内容级披露检查 disclosure + 摘要逐字重叠 overlap + 数值落地 grounding | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B5-mmx.md (batch triage pending) |
