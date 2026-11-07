@@ -9,7 +9,6 @@ import type {Abstained,Active,CategoricalClaim,Condition,Input,JudgmentInputsDb,
 import {buildInput} from '@/lib/judgments/inputs';
 import {addMonthsPeriod} from '@/lib/judgments/time';
 
-import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {METHODOLOGY_VERSION} from '@/lib/macro/regime';
 export const MACRO_UPSTREAM_VERSION=METHODOLOGY_VERSION;
 export const MACRO_REGIMES:readonly Regime[]=['recovery','overheat','stagflation','recession'];
@@ -35,7 +34,7 @@ async function gather(item:WorkItem,db:JudgmentInputsDb):Promise<Input[]|Abstain
  const s=snap.snapshot;
  if(s.region!==item.subject.key||s.as_of!==item.asOf)return abstain('binding_mismatch');
  // A foreign upstream version is not computed on; the snapshot alone is frozen so the abstention stays findable by snapshot_id.
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==CATALOG_VERSION)return [snap];
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV1.params.catalog_version)return [snap];
  const inputs:Input[]=[snap];
  for(const id of s.observation_ids){
   const o=await db.macro.observation(id);   // locator lookup only; every frozen value comes from buildInput
@@ -52,7 +51,7 @@ async function resolveTarget(item:WorkItem):Promise<Target>{
 function compute(subject:Subject,inputs:Input[]):Active<CategoricalClaim>|Abstained{
  const s=snapshotOf(inputs);
  if(!s)return abstain('input_missing',['macro_snapshot']);
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==CATALOG_VERSION)return abstain('upstream_version_mismatch');
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV1.params.catalog_version)return abstain('upstream_version_mismatch');
  if(s.region!==subject.key)return abstain('binding_mismatch');
  if(!MACRO_REGIMES.every(r=>Number.isFinite(s.scores?.[r])&&Number.isFinite(s.norm?.[r])&&s.norm[r]>=0)
   ||Math.abs(MACRO_REGIMES.reduce((sum,r)=>sum+s.norm[r],0)-1)>5e-6
@@ -84,7 +83,7 @@ export const macroRegimeV1:Methodology<CategoricalClaim>={
  upstream:{macro_methodology_version:MACRO_UPSTREAM_VERSION},
  title:{zh:'宏观象限（当期 nowcast）',en:'Macro regime (current-period nowcast)'},
  doc:'docs/methodologies/macro_regime/v1.md',
- params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage'},
+ params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
  horizon:{unit:'calendar_months',n:3},
  deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/freshness.ts','src/lib/macro/db.ts','src/lib/dq/freshness.ts'],
  module:'src/lib/judgments/methodologies/macro-regime.v1.ts',

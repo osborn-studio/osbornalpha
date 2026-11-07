@@ -44,11 +44,12 @@ describe('macro_regime@v1 (Task 19)',()=>{
   const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
   expect(row).toMatchObject({methodology_id:'macro_regime',version:'v1',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
    subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],doc_path:'docs/methodologies/macro_regime/v1.md',
-   params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage'},
+   params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
    horizon:{unit:'calendar_months',n:3},upstream:{macro_methodology_version:'v1.0'},status:'active',publishable:false});
   expect(row.formula_hash).toMatch(/^[0-9a-f]{64}$/);
   expect(methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:'another-code-version'}).formula_hash).toBe(row.formula_hash);
   expect(MACRO_UPSTREAM_VERSION).toBe('v1.0');
+  expect(macroRegimeV1.params.catalog_version).toBe('macro-catalog/30bcaa2a33c5');
   expect(MACRO_REGIMES).toEqual(['recovery','overheat','stagflation','recession']);
   for(const p of [macroRegimeV1.module,...macroRegimeV1.deps])expect({p,exists:existsSync(p)}).toEqual({p,exists:true});
   const doc=readFileSync(macroRegimeV1.doc,'utf8');
@@ -106,6 +107,7 @@ describe('macro_regime@v1 (Task 19)',()=>{
   expect(res.counts.inserted).toBe(1);
   expect(row).toMatchObject({abstained:true,abstain_reason:'upstream_version_mismatch'});
   expect(row.inputs.map(i=>i.kind)).toEqual(['macro_snapshot']);
+  expect((row.inputs[0] as Extract<Input,{kind:'macro_snapshot'}>).snapshot.catalog_version).toBe('foreign-catalog');
  });
 
  it('failed snapshots abstain snapshot_not_published',async()=>{

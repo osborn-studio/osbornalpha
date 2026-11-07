@@ -3,7 +3,7 @@
  "description": "macro_regime@v1 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
  "expect": "exact",
  "judgment": {
-  "judgment_id": "78413ddb-ac67-8994-942f-54e90514c0fa",
+  "judgment_id": "1c97e59e-5b02-8c65-b36a-4308477d00e9",
   "subject_type": "macro_region",
   "subject_key": "US",
   "judgment_type": "macro_regime",
@@ -278,7 +278,7 @@
      "region": "US",
      "as_of": "2026-09-11",
      "methodology_version": "v1.0",
-     "catalog_version": "macro-catalog/ec304166c325",
+     "catalog_version": "macro-catalog/30bcaa2a33c5",
      "observation_ids": [
       "US_DFF:2026-08-31:fred-2026-09-01",
       "US_DGS10:2026-05-31:fred-2026-06-01",
@@ -311,7 +311,7 @@
      "growth_axis": null,
      "inflation_axis": null
     },
-    "hash": "55969eccdd922cdd1624d6fda91521033df32b2ee3532677ae8aed017506e24b",
+    "hash": "7fd7bd104d4d35dac96bf0a3ec80415de2e85ecd17590cd4ba083a921236da7f",
     "available_at": "2026-09-11T12:30:00.000Z",
     "origin": {
      "publisher": "OsbornAlpha 宏观工作台（由已发布观测派生的快照）",
@@ -320,7 +320,7 @@
     }
    }
   ],
-  "inputs_hash": "d87a9c22b5622a49b182536c56dd41bc47834b9cf912c0f352c414abfe0e766c",
+  "inputs_hash": "a3db9c77c95c7a7c9c3c1b19a840a60e5d43af946d25ee877480759a3aa6ae3a",
   "abstained": false,
   "claim": {
    "selected": "recovery",
@@ -338,7 +338,7 @@
    },
    "scores_are_not_probabilities": true,
    "margin_pp": 9.090909,
-   "catalog_version": "macro-catalog/ec304166c325"
+   "catalog_version": "macro-catalog/30bcaa2a33c5"
   },
   "condition": {
    "resolver": "macro_regime_replay",
@@ -346,7 +346,7 @@
     "region": "US",
     "reference_period": "2026-09",
     "macro_methodology_version": "v1.0",
-    "catalog_version": "macro-catalog/ec304166c325"
+    "catalog_version": "macro-catalog/30bcaa2a33c5"
    },
    "predicate": {
     "op": "eq",
