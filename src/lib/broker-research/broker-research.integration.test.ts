@@ -8,9 +8,10 @@ import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const M1='supabase/migrations/20261117090000_broker_research.sql';
+const M1='supabase/migrations/20261119090000_broker_research.sql';
 const TABLES=['broker_research_settings','broker_report_licences','broker_report_upload_intents','broker_report_documents','broker_report_runs','broker_research_reports','broker_report_targets','broker_report_target_overrides','broker_report_fields','broker_report_snippets','broker_report_summaries','broker_report_publications','broker_report_rule_receipts','broker_purge_steps','research_institutions','research_rating_scales','research_analysts','broker_report_analysts','broker_report_access_log','broker_eval_receipts','broker_outbox','broker_storage_writes'];
 
 // Same replay policy as facts.integration.test.ts (not exported there).
@@ -371,5 +372,586 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
   const e=await s.one(`select event_id v from public.broker_outbox where payload->>'claim_key'=$1 and kind='claim.register'`,[key]);
   expect((await fails(s.q(`update public.broker_outbox set payload='{}' where event_id=$1`,[e]))).message).toMatch(/^append_only:/);
   await s.q(`update public.broker_outbox set attempts=1,last_error='x' where event_id=$1`,[e]);
+ });
+});
+
+// ---- shared by blocks 2–4 (A2 writes these; A3/A5 reuse them). Each block's beforeAll rebinds
+// the pool; describes run sequentially within this file, so the module-level bindings are safe.
+const M2='supabase/migrations/20261119091000_broker_research_functions.sql';
+let pool:Pool;let s:ReturnType<typeof seeds>;
+const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});s=seeds(pool);};
+ const J=(v:unknown)=>JSON.stringify(v);
+ const lease=async(doc:string,token=randomUUID(),ttl=300)=>{expect(await s.one(`select public.broker_document_claim_lease($1,$2,$3) v`,[doc,token,ttl])).toBe(true);return token;};
+ const commit=(doc:string,token:string,run:string,rows:unknown[])=>s.one(`select public.broker_extract_commit($1,$2,$3,$4::jsonb) v`,[doc,token,run,J(rows)]);
+ const review=(f:string,action:string,payload:Record<string,unknown>={},by=randomUUID())=>s.one(`select public.broker_field_review($1,$2,$3::jsonb,$4) v`,[f,action,J(payload),by]);
+ const add=(rep:string,row:Record<string,unknown>,by=randomUUID())=>s.one(`select public.broker_field_add($1,$2::jsonb,$3) v`,[rep,J(row),by]);
+ const materialize=(rep:string)=>s.one(`select public.broker_report_materialize($1) v`,[rep]);
+ const blockers=async(rep:string)=>(await s.one(`select public.broker_report_publish_blockers($1) v`,[rep])) as string[];
+ const publish=(rep:string,by=randomUUID())=>s.one(`select public.broker_report_publish($1,$2) v`,[rep,by]) as Promise<string>;
+ const unpublish=(rep:string,reason='test',by=randomUUID())=>s.q(`select public.broker_report_unpublish($1,$2,$3)`,[rep,by,reason]);
+ const report=async(rep:string)=>(await s.q(`select r.*,r.published_date::text as published_date,r.price_as_of_date::text as price_as_of_date from public.broker_research_reports r where report_id=$1`,[rep]))[0];
+ const targets=(rep:string)=>s.q(`select target_key,basis,ticker_as_stated,security_ticker,issuer_id,rating_raw,rating_normalized,scale_id,target_price::text tp,target_currency,target_horizon_months,price_at_report::text pr,price_currency,price_as_of_date::text pd,upside_pct::text up,upside_formula_version from public.broker_report_targets where report_id=$1 order by target_key`,[rep]);
+ const cand=(o:Record<string,unknown>)=>({target_key:null,occurrence:1,value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',extractor:'llm:m-test@r',extractor_confidence:0.9,conflict_group:null,detail:{},status:'extracted',...o});
+ const live=(rep:string,field:string,tk:string|null=null)=>s.q(`select field_id,status from public.broker_report_fields where report_id=$1 and field=$2 and target_key is not distinct from $3 and status in ('extracted','unverified') and superseded_by_run_id is null order by created_at,field_id`,[rep,field,tk]);
+ const batch=async()=>await s.one(`insert into public.ingest_batches(batch_id,producer,dataset) values(gen_random_uuid(),'broker-research-extract','broker_research') returning batch_id as v`) as string;
+ const outbox=(kind:string,pub:string)=>s.q(`select payload from public.broker_outbox where kind=$1 and payload->'source'->>'publication_id'=$2 order by payload->>'claim_key'`,[kind,pub]);
+ const GOLD=sha('gold-corpus');
+ const TARGET_FIELDS=['ticker','rating','target_price','target_currency','price_at_report','price_currency','price_as_of_date'];
+ /** A single-issuer draft through extract_commit: 3 report-level + 7 target candidates for one HK ticker. */
+ const world=async(o:{licence?:Record<string,unknown>;extra?:(tk:string)=>Record<string,unknown>[];tickers?:number;tk?:string;issuer?:string;inst?:string;published?:string;prices?:{target_price:string;price_at_report:string;target_currency:string;price_currency:string}}={})=>{
+  const tks:string[]=[];const issuers:string[]=[];
+  for(let i=0;i<(o.tickers??1);i++){const tk=i===0&&o.tk?o.tk:`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');tks.push(tk);issuers.push(i===0&&o.issuer?o.issuer:await s.issuer());}
+  const lic=await s.licence(o.licence??{});const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);
+  const rep=await s.report(doc);const digest=sha(randomUUID());const ext=await s.extractRun(doc,pr,digest);const token=await lease(doc);
+  const rows:Record<string,unknown>[]=[
+   cand({field:'institution',value_text:'Test Securities'}),
+   cand({field:'published_date',value_text:o.published??'2026-03-05',value_date:o.published??'2026-03-05'}),
+   cand({field:'title',value_text:'Alibaba: Upgrade',detail:{lang:'en'}}),
+  ];
+  tks.forEach((tk,i)=>rows.push(
+   cand({field:'ticker',target_key:tk,value_text:tk.replace('.',' '),resolution:{method:'parseBrokerTicker/1',resolver:'resolveIssuer',today:'2026-03-10',issuer_securities_row:{issuer_id:issuers[i],ticker:tk,valid_from:'2000-01-01',valid_to:null}}}),
+   cand({field:'rating',target_key:tk,value_text:'Buy'}),
+   cand({field:'target_price',target_key:tk,value_text:o.prices?.target_price??'120',value_num:o.prices?.target_price??'120',value_unit:'price'}),
+   cand({field:'target_currency',target_key:tk,value_text:o.prices?.target_currency??'HK$',value_currency:o.prices?.target_currency??'HKD'}),
+   cand({field:'price_at_report',target_key:tk,value_text:o.prices?.price_at_report??'100',value_num:o.prices?.price_at_report??'100',value_unit:'price'}),
+   cand({field:'price_currency',target_key:tk,value_text:o.prices?.price_currency??'HKD',value_currency:o.prices?.price_currency??'HKD'}),
+   cand({field:'price_as_of_date',target_key:tk,value_text:'4 Mar 2026',value_date:'2026-03-04'}),
+   ...(o.extra?.(tk)??[])));
+  const receipt=await commit(doc,token,ext,rows);
+  return {tk:tks[0],tks,iss:issuers[0],issuers,lic,doc,pr,rep,ext,token,digest,inst:o.inst??await s.institution(),receipt};
+ };
+ type World=Awaited<ReturnType<typeof world>>;
+ const rules=async(rep:string,results?:unknown[])=>{
+  const r=await report(rep);
+  const surfaces=['title_original','title_public','title_zh','title_en'].filter(k=>r[k]!==null);
+  const def=surfaces.map(surface=>({rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface,hits:[]}}));
+  return await s.one(`insert into public.broker_report_rule_receipts(report_id,rules_version,input_hash,results,code_version) values($1,$2,$3,$4::jsonb,'test') returning receipt_id as v`,[rep,RULES_VERSION,r.rules_input_hash,J(results??def)]) as string;
+ };
+ const allFields=['institution','published_date','title',...TARGET_FIELDS];
+ const gold=async(digest:string,o:{passed?:boolean;perField?:Record<string,unknown>;nDocs?:number;kind?:string}={})=>{
+  await s.q(`update public.broker_research_settings set approved_gold_corpus_hash=$1 where id=1`,[GOLD]);
+  const pf=o.perField??Object.fromEntries(allFields.map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]));
+  const ok=o.passed??true;
+  await s.q(`insert into public.broker_eval_receipts(corpus_kind,corpus_hash,behavior_digest,extractor_version,model_id,registry_hash,prompt_version,schema_version,code_version,n_docs,per_field,absence,precision_min,recall_min,passed,ran_by,ran_at) values($1,$2,$3,'f3/1','m-test','r','p','s','t',$4,$5::jsonb,'{"tp":0,"fp":0,"fn":0}',$6,$6,$7,gen_random_uuid(),clock_timestamp())`,[o.kind??'gold',GOLD,digest,o.nDocs??30,J(pf),ok?1:0.5,ok]);
+ };
+ /** A newer matching gold receipt that also covers `extra` fields (e.g. 'analyst' once a fixture adds a human analyst row):
+  * blocker 13 covers every effective field of a gated report (P-R1-12), so readiness fixtures must cover what they add (P-R3-03). */
+ const goldCovering=(digest:string,extra:string[])=>gold(digest,{perField:Object.fromEntries([...allFields,...extra].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
+ /** world → every candidate confirmed, institution/scope bound, scale row, rules receipt, review approved, gold receipt: blockers []. */
+ const ready=async(o:Parameters<typeof world>[0]={}):Promise<World>=>{
+  const w=await world(o);
+  for(const f of await s.q(`select field_id from public.broker_report_fields where report_id=$1 and status in ('extracted','unverified') and superseded_by_run_id is null`,[w.rep]))await review(f.field_id,'confirm');
+  await s.q(`update public.broker_research_reports set institution_id=$2,scope=$3,review_status='approved' where report_id=$1`,[w.rep,w.inst,w.tks.length>1?'multi_issuer':'single_issuer']);
+  await s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'Buy','buy','https://example.test/scale','2020-01-01',gen_random_uuid()) on conflict (institution_id, lower(btrim(raw_label)), valid_from) do nothing`,[w.inst]);
+  await materialize(w.rep);await rules(w.rep);await gold(w.digest);
+  expect(await blockers(w.rep)).toEqual([]);
+  return w;
+ };
+
+
+describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed triggers',()=>{
+ let unlock:(()=>Promise<void>)|undefined;
+ beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // gold() sets approved_gold_corpus_hash
+ afterAll(async()=>{await unlock?.();await pool?.end();});
+ it('publication and child writes serialize on the report row lock: the child write waits, then fails published_immutable (P-R1-03)',async()=>{
+  const PASSJ=J({version:DISCLOSURE_VERSION,inputs_hash:sha('i'),passed:true,hits:[]});
+  const cases:{name:string;sql:(w:World,sn:string)=>[string,unknown[]]}[]=[
+   {name:'insert snippet',sql:(w)=>[`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'risk',$2,1,0,4,'text',gen_random_uuid())`,[w.rep,w.pr]]},
+   {name:'approve snippet',sql:(_w,sn)=>[`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),approved_at=now(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,PASSJ]]},
+   {name:'update field',sql:(w)=>[`update public.broker_report_fields set reviewed_at=now() where report_id=$1 and field='title' and status='confirmed'`,[w.rep]]},
+  ];
+  for(const c of cases){
+   const w=await ready();
+   const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,4,'text',gen_random_uuid()) returning snippet_id as v`,[w.rep,w.pr]) as string;
+   const counts=()=>s.q(`select (select count(*)::int from public.broker_report_snippets where report_id=$1) n_snip,(select count(*)::int from public.broker_report_fields where report_id=$1 and status in ('confirmed','corrected','absent')) n_eff`,[w.rep]);
+   const before=await counts();
+   const a=await pool.connect(),b=await pool.connect();
+   try{
+    await a.query('begin');
+    const pub=(await a.query(`select public.broker_report_publish($1,gen_random_uuid()) v`,[w.rep])).rows[0].v as string;   // holds the report row lock
+    const bpid=(await b.query('select pg_backend_pid() p')).rows[0].p;
+    const [sql,args]=c.sql(w,sn);
+    const pending=b.query(sql,args).then(()=>'committed',(e:Error)=>e.message);
+    await new Promise(r=>setTimeout(r,300));
+    expect({c:c.name,waiting:(await s.q(`select wait_event_type from pg_stat_activity where pid=$1`,[bpid]))[0].wait_event_type}).toEqual({c:c.name,waiting:'Lock'});
+    await a.query('commit');
+    expect({c:c.name,r:await pending}).toEqual({c:c.name,r:expect.stringMatching(/^published_immutable:/)});
+    const snap=(await s.q(`select jsonb_array_length(snapshot->'fields') n from public.broker_report_publications where publication_id=$1`,[pub]))[0].n;
+    expect(await counts()).toEqual(before);expect(snap).toBe(before[0].n_eff);
+   }finally{await a.query('rollback').catch(()=>{});a.release();b.release();}
+  }
+ },120000);
+
+ it('blocker 13 coverage: once a report has an LLM row, every effective field needs coverage — a human wacc row uncovered blocks (P-R1-12)',async()=>{
+  const w=await ready();
+  await add(w.rep,{target_key:null,field:'wacc',occurrence:1,value_text:'8.5%',value_num:'0.085',value_currency:null,value_unit:'pct',value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:w.pr,status:'confirmed'});
+  await rules(w.rep);
+  expect(await blockers(w.rep)).toEqual(['eval_receipt_missing']);                            // LLM title etc. covered, human wacc not
+  await gold(w.digest,{perField:Object.fromEntries([...allFields,'wacc'].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
+  expect(await blockers(w.rep)).toEqual([]);
+ });
+
+ it('blocker 13 coverage includes absent fields: an uncovered absent(target_horizon) blocks (P-R1-12, round 2)',async()=>{
+  const w=await ready();
+  await add(w.rep,{target_key:w.tk,field:'target_horizon',occurrence:1,value_text:'ABSENT',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:null,char_end:null,value_source_text:null,parse_run_id:w.pr,status:'absent'});
+  await rules(w.rep);
+  expect(await blockers(w.rep)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest,{perField:Object.fromEntries([...allFields,'target_horizon'].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
+  expect(await blockers(w.rep)).toEqual([]);
+ });
+
+ it('spec §14 sample 7 (second half): a report whose effective rows are all human publishes with no gold receipt and approved_gold_corpus_hash null',async()=>{
+  const lic=await s.licence();const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);const rep=await s.report(doc);const inst=await s.institution();
+  const row=(field:string,value_text:string,extra:Record<string,unknown>={})=>({target_key:null,field,occurrence:1,value_text,value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:pr,status:'confirmed',...extra});
+  for(const r of [row('institution','Test Securities'),row('published_date','2026-03-05',{value_date:'2026-03-05'}),row('title','Sector outlook'),row('sector','Internet')])await add(rep,r);
+  await s.q(`update public.broker_research_reports set institution_id=$2,scope='sector',review_status='approved' where report_id=$1`,[rep,inst]);
+  await materialize(rep);await rules(rep);
+  await s.q(`update public.broker_research_settings set approved_gold_corpus_hash=null where id=1`);
+  expect((await s.q(`select count(*)::int n from public.broker_report_fields where report_id=$1 and extractor like 'llm:%'`,[rep]))[0].n).toBe(0);
+  expect(await blockers(rep)).toEqual([]);                                                    // no eval_receipt_missing
+  const pub=await publish(rep);expect(pub).toMatch(/^[0-9a-f-]{36}$/);
+  expect((await report(rep)).status).toBe('published');
+ });
+
+ it('disclosure re-check (spec §4.11 重跑规则): licence / analyst disclosure change → disclosure_ok=false → re-check restores → republish (P-R1-08)',async()=>{
+  const titles=async(rep:string)=>{const r=await report(rep);return Object.fromEntries(['title_original','title_public','title_zh','title_en'].filter(k=>r[k]!==null).map(k=>[k,PASS]));};
+  const digest=(rep:string)=>s.one(`select public.broker_report_disclosure_digest($1) v`,[rep]);
+  const recheck=async(rep:string,o:Record<string,unknown>={})=>s.one(`select public.broker_report_disclosure_recheck($1,gen_random_uuid(),$2::jsonb) v`,[rep,J({expected_digest:await digest(rep),titles:await titles(rep),snippets:{},summaries:{},...o})]);
+  const p=await ready();await publish(p.rep);
+  await s.q(`update public.broker_report_licences set allows_public_target_price=false where licence_id=$1`,[p.lic]);
+  expect((await report(p.rep)).disclosure_ok).toBe(false);
+  expect((await fails(s.one(`select public.broker_report_disclosure_recheck($1,gen_random_uuid(),$2::jsonb) v`,[p.rep,J({expected_digest:sha('stale'),titles:{},snippets:{},summaries:{}})])))).toMatchObject({message:'disclosure_inputs_changed'});
+  expect(await recheck(p.rep,{titles:{...(await titles(p.rep)),title_original:{...PASS,passed:false}}})).toEqual({restored:false,failures:['restricted_value_in_text:title_original']});
+  expect((await report(p.rep)).disclosure_ok).toBe(false);
+  expect(await recheck(p.rep)).toEqual({restored:true,failures:[]});                       // published report: k_live allows the flag
+  expect((await report(p.rep)).disclosure_ok).toBe(true);
+  // republish under the new licence version
+  await unpublish(p.rep);
+  await s.q(`update public.broker_report_licences set confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version where licence_id=$1`,[p.lic]);
+  await materialize(p.rep);await rules(p.rep);await s.q(`update public.broker_research_reports set review_status='approved' where report_id=$1`,[p.rep]);
+  expect(await blockers(p.rep)).toEqual([]);
+  expect(await publish(p.rep)).toMatch(/^[0-9a-f-]{36}$/);
+  // analyst disclosure change on a draft → disclosure_stale → re-check restores
+  const q=await ready();
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'Rae Analyst') returning analyst_id as v`,[q.inst]) as string;
+  const af=(await add(q.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Rae Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:q.pr,status:'confirmed'})).field_id;
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[q.rep,an,af]);
+  await materialize(q.rep);await rules(q.rep);await goldCovering(q.digest,['analyst']);         // P-R3-03
+  await s.q(`update public.research_analysts set public_display=true where analyst_id=$1`,[an]);
+  expect((await report(q.rep)).disclosure_ok).toBe(false);
+  await materialize(q.rep);await rules(q.rep);
+  expect(await blockers(q.rep)).toEqual(['disclosure_stale']);
+  expect(await recheck(q.rep)).toEqual({restored:true,failures:[]});
+  expect(await blockers(q.rep)).toEqual([]);
+ },120000);
+
+ it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
+  const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
+  const fnOid=(role:string,oid:number)=>s.one(`select has_function_privilege($1::name,$2::int::oid,'EXECUTE') v`,[role,oid]);   // inventory: by OID (P-R4-01)
+  const rpcs=['public.broker_document_withdraw(uuid,text,boolean,uuid)','public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
+  for(const sig of rpcs){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
+  for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)','public.broker_llm_fence(uuid,uuid,uuid,text)']){
+   for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+  }
+  // every migration-owned function, trigger functions included (P-R1-05): no client role holds EXECUTE
+  // qualified names built from catalog columns (regprocedure::text drops 'public.' when public is on the search path; P-R3-02)
+  const all=await s.q(`select p.oid::int oid, format('%I.%I(%s)',n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)) sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 2`);
+  expect(all.length).toBeGreaterThanOrEqual(40);
+  for(const {sig,oid} of all)for(const role of ['public','anon','authenticated'])
+   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::int::oid and a.grantee=0 and a.privilege_type='EXECUTE') v`,[oid]):await fnOid(role,Number(oid))}).toEqual({sig,role,ok:false});   // sig is diagnostic output only
+  const oids=new Set(all.map(r=>Number(r.oid)));
+  for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])
+   expect({trig,inInventory:oids.has(Number(await s.one(`select $1::regprocedure::oid::int v`,[trig])))}).toEqual({trig,inInventory:true});   // compared by OID, never by display text
+  await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
+ },60000);
+
+ it('broker_field_effective: a present corrected key wins (explicit null clears), a missing key inherits',async()=>{
+  const v=await s.one(`select public.broker_field_effective('{"value_text":"121","value_currency":null}'::jsonb,'120',120.50,'HKD','price','2026-01-01') v`);
+  expect(v).toEqual({value_text:'121',value_num:'120.50',value_currency:null,value_unit:'price',value_date:'2026-01-01'});
+  expect(await s.one(`select public.broker_field_effective(null,'x',null,null,null,null) v`)).toEqual({value_text:'x',value_num:null,value_currency:null,value_unit:null,value_date:null});
+ });
+
+ it('extract_commit: rejects an older parse run without inserting field rows (A2-08)',async()=>{
+  const doc=await s.document(await s.licence());
+  const olderParse=await s.parsed(doc);
+  const currentParse=await s.parsed(doc);
+  const rep=await s.report(doc);
+  const ext=await s.extractRun(doc,olderParse);
+  const token=await lease(doc);
+  expect(currentParse).not.toBe(olderParse);
+  expect(await s.one(`select current_parse_run_id v from public.broker_report_documents where document_id=$1`,[doc])).toBe(currentParse);
+  expect(await s.one(`select count(*)::int v from public.broker_report_fields where report_id=$1`,[rep])).toBe(0);
+  expect(await fails(commit(doc,token,ext,[cand({field:'title',value_text:'Stale title'})]))).toMatchObject({message:'stale_parse_run'});
+  expect(await s.one(`select count(*)::int v from public.broker_report_fields where report_id=$1`,[rep])).toBe(0);
+ });
+
+ it('extract_commit: lease fence, row validation, supersedes earlier candidates, keeps resolution, candidate-basis materialize',async()=>{
+  const w=await world();
+  expect(w.receipt).toMatchObject({targets:1,basis:'candidate'});
+  expect(w.receipt.effectiveHash).toMatch(/^[0-9a-f]{64}$/);expect(w.receipt.materializedHash).toBe(w.receipt.effectiveHash);
+  const [t]=await targets(w.rep);
+  expect(t).toMatchObject({target_key:w.tk,basis:'candidate',security_ticker:w.tk,issuer_id:w.iss,rating_raw:'Buy',tp:'120',target_currency:'HKD',pr:'100',price_currency:'HKD',pd:'2026-03-04',up:'0.200000',upside_formula_version:UPSIDE_FORMULA_VERSION});
+  expect((await report(w.rep))).toMatchObject({title_original:'Alibaba: Upgrade',title_lang:'en',published_date:'2026-03-05',price_as_of_date:'2026-03-04'});
+  const ext2=await s.extractRun(w.doc,w.pr,w.digest);
+  expect((await fails(commit(w.doc,randomUUID(),ext2,[])))).toMatchObject({message:'lease_lost',code:'55P03'});
+  expect((await fails(commit(w.doc,w.token,ext2,[cand({field:'title',value_text:'x',status:'confirmed'})])))).toMatchObject({message:'invalid_rows:status'});
+  expect((await fails(s.one(`select public.broker_extract_commit($1,$2,$3,'{}'::jsonb) v`,[w.doc,w.token,ext2])))).toMatchObject({message:'invalid_rows'});
+  expect((await fails(commit(w.doc,w.token,w.pr,[])))).toMatchObject({message:'run_invalid'});
+  const before=(await s.q(`select count(*)::int n from public.broker_report_fields where report_id=$1`,[w.rep]))[0].n;
+  await commit(w.doc,w.token,ext2,[cand({field:'title',value_text:'Alibaba: Upgrade (2)'})]);
+  expect((await s.q(`select count(*)::int n from public.broker_report_fields where report_id=$1`,[w.rep]))[0].n).toBe(before+1);       // nothing deleted
+  expect((await s.q(`select count(*)::int n from public.broker_report_fields where report_id=$1 and superseded_by_run_id=$2`,[w.rep,ext2]))[0].n).toBe(before);
+  expect((await report(w.rep)).title_original).toBe('Alibaba: Upgrade (2)');
+  expect(await targets(w.rep)).toEqual([]);                                                  // the old ticker candidate is superseded
+  await s.q(`update public.broker_report_documents set lease_until=now()-interval '1 second' where document_id=$1`,[w.doc]);
+  expect((await fails(commit(w.doc,w.token,ext2,[])))).toMatchObject({message:'lease_lost'});        // token equal but expired
+ });
+
+ it('materialize: effective basis only when every required field is effective; upside rules; absent target price; exact-one scale; summaries invalidated only by a digest change',async()=>{
+  const w=await world();
+  for(const f of TARGET_FIELDS.filter(f=>f!=='price_as_of_date'))await review((await live(w.rep,f,w.tk))[0].field_id,'confirm');
+  expect((await targets(w.rep))[0].basis).toBe('candidate');
+  const r=await review((await live(w.rep,'price_as_of_date',w.tk))[0].field_id,'confirm');
+  expect(r).toMatchObject({targets:1,basis:'effective'});
+  await s.q(`update public.broker_research_reports set institution_id=$2 where report_id=$1`,[w.rep,w.inst]);
+  await s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'BUY','buy','https://example.test/s','2020-01-01',gen_random_uuid())`,[w.inst]);
+  await materialize(w.rep);
+  expect((await targets(w.rep))[0]).toMatchObject({rating_normalized:'buy'});
+  const rt=(await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='rating' and status='confirmed'`,[w.rep]))[0].field_id;
+  await review(rt,'correct',{value_text:' Buy '});                                             // key = lower(btrim(label)), same as rules.ts ratingKey
+  expect((await targets(w.rep))[0]).toMatchObject({rating_raw:' Buy ',rating_normalized:'buy'});
+  await review(rt,'correct',{value_text:'Buy'});
+  await s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'buy','overweight','https://example.test/s','2026-01-01',gen_random_uuid())`,[w.inst]);
+  await materialize(w.rep);
+  expect((await targets(w.rep))[0]).toMatchObject({rating_normalized:null,scale_id:null});     // two rows valid on 2026-03-05 → none chosen
+  // correct the price currency to USD → no upside
+  const pc=(await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='price_currency' and status='confirmed'`,[w.rep]))[0].field_id;
+  await review(pc,'correct',{value_text:'USD',value_currency:'USD'});
+  expect((await targets(w.rep))[0]).toMatchObject({price_currency:'USD',up:null,upside_formula_version:null});
+  await review(pc,'correct',{value_text:'HKD',value_currency:'HKD'});
+  const tp=(await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='target_price' and status='confirmed'`,[w.rep]))[0].field_id;
+  await review(tp,'correct',{value_text:'133.335',value_num:'133.335'});
+  expect((await targets(w.rep))[0].up).toBe('0.333350');
+  await review(tp,'correct',{value_text:'99.99995',value_num:'99.99995'});
+  expect((await targets(w.rep))[0].up).toBe('-0.000001');                                     // round half away from zero at 6 places
+  await review(tp,'absent',{page:1});
+  expect((await targets(w.rep))[0]).toMatchObject({basis:'effective',tp:null,up:null});
+  // summary invalidation: a materialize that changes nothing keeps an approved summary approved
+  const d=(await report(w.rep)).summary_input_digest;
+  const su=await s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by) values($1,'en',$2,$3,'Summary',1,'{"passed":true}',$4,'approved',gen_random_uuid()) returning summary_id as v`,[w.rep,w.ext,d,J(PASS)]);
+  await materialize(w.rep);
+  expect(await s.one(`select status v from public.broker_report_summaries where summary_id=$1`,[su])).toBe('approved');
+  await review((await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='title' and status in ('extracted','unverified')`,[w.rep]))[0].field_id,'confirm');
+  expect((await s.q(`select status,draft_reason from public.broker_report_summaries where summary_id=$1`,[su]))[0]).toEqual({status:'draft',draft_reason:'summary_stale'});
+ });
+
+ it('field_review: identity siblings rejected on confirm, typed corrections with span, invalid payload rolls back, effective_exists, absent action, published_immutable',async()=>{
+  const w=await world({extra:tk=>[cand({field:'rating',target_key:tk,value_text:'Overweight',conflict_group:'g1'})]});
+  const ratings=await s.q(`select field_id,value_text from public.broker_report_fields where report_id=$1 and field='rating' order by value_text`,[w.rep]);
+  expect(ratings.map(r=>r.value_text)).toEqual(['Buy','Overweight']);
+  expect((await targets(w.rep))[0].rating_raw).toBeNull();                                    // conflicting candidates: none chosen
+  expect((await fails(review(ratings[1].field_id,'confirm',{detail:'x'})))).toMatchObject({message:'invalid_payload:detail'});
+  await review(ratings[1].field_id,'confirm',{detail:{framed:true}});
+  expect((await s.q(`select status,detail->>'framed' fr from public.broker_report_fields where field_id=$1`,[ratings[1].field_id]))[0]).toEqual({status:'confirmed',fr:'true'});   // payload.detail merged
+  expect((await s.q(`select status from public.broker_report_fields where field_id=$1`,[ratings[0].field_id]))[0].status).toBe('rejected');
+  expect((await targets(w.rep))[0].rating_raw).toBe('Overweight');
+  const title=(await live(w.rep,'title'))[0].field_id;
+  const snap=async()=>(await s.q(`select status,corrected,page,char_start from public.broker_report_fields where field_id=$1`,[title]))[0];
+  const was=await snap();
+  expect((await fails(review(title,'correct',{value_text:'X',value_date:'2026-02-30'})))).toMatchObject({message:'invalid_payload:value_date'});
+  expect((await fails(review(title,'correct',{value_text:'X',char_start:3})))).toMatchObject({message:'invalid_payload:span'});
+  expect((await fails(review(title,'correct',{value_num:'1'})))).toMatchObject({message:'invalid_payload:corrected'});
+  expect((await fails(review(title,'shout')))).toMatchObject({message:'invalid_action:shout'});
+  expect(await snap()).toEqual(was);                                                           // atomic: nothing changed
+  await review(title,'correct',{value_text:'Alibaba: Upgrade to Buy',value_num:null,page:2,char_start:10,char_end:33,value_source_text:'Alibaba: Upgrade to Buy'});
+  expect(await snap()).toEqual({status:'corrected',corrected:{value_text:'Alibaba: Upgrade to Buy',value_num:null},page:2,char_start:10});
+  expect((await report(w.rep)).title_original).toBe('Alibaba: Upgrade to Buy');
+  expect((await fails(add(w.rep,{target_key:null,field:'title',occurrence:1,value_text:'T',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:1,value_source_text:'T',parse_run_id:w.pr,status:'confirmed'})))).toMatchObject({message:'effective_exists'});
+  const tp=(await live(w.rep,'target_price',w.tk))[0].field_id;
+  expect((await fails(review((await live(w.rep,'institution'))[0].field_id,'absent',{page:1})))).toMatchObject({message:'absent_not_allowed:institution'});
+  await review(tp,'absent',{page:3});
+  const rows=await s.q(`select status,value_text,page,extractor from public.broker_report_fields where report_id=$1 and field='target_price' order by created_at`,[w.rep]);
+  expect(rows.map(r=>r.status)).toEqual(['rejected','absent']);expect(rows[1]).toMatchObject({value_text:'ABSENT',page:3});expect(rows[1].extractor).toMatch(/^human:/);
+  expect((await fails(review(randomUUID(),'confirm')))).toMatchObject({message:'field_not_found'});
+  const p=await ready();
+  expect((await fails(publish(p.rep).then(async()=>review((await s.q(`select field_id from public.broker_report_fields where report_id=$1 limit 1`,[p.rep]))[0].field_id,'reject'))))).toMatchObject({message:'published_immutable'});
+ });
+
+ it('field_add and target_override: human rows and resolution overrides go through the same lock + materialize',async()=>{
+  const w=await world();
+  const out=await add(w.rep,{target_key:null,field:'sector',occurrence:1,value_text:'Internet',value_num:null,value_currency:null,value_unit:null,value_date:null,page:2,char_start:0,char_end:8,value_source_text:'Internet',parse_run_id:w.pr,status:'confirmed'});
+  expect(out.field_id).toMatch(/^[0-9a-f-]{36}$/);expect(out.receipt).toMatchObject({targets:1});
+  expect((await report(w.rep)).sector_as_stated).toBe('Internet');
+  expect((await fails(add(w.rep,{target_key:null,field:'sector',occurrence:2,value_text:'x',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:1,value_source_text:'x',parse_run_id:randomUUID(),status:'confirmed'})))).toMatchObject({message:'invalid_payload:parse_run_id'});
+  expect((await fails(add(w.rep,{target_key:null,field:'sector',occurrence:2,value_text:'x',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:1,value_source_text:'x',parse_run_id:w.pr,status:'extracted'})))).toMatchObject({message:'invalid_payload:status'});
+  await s.stock('BABA','US');const other=await s.issuer();
+  const rc=await s.one(`select public.broker_target_override($1,$2,'BABA',$3,$4,'manual') v`,[w.rep,w.tk,other,randomUUID()]);
+  expect(rc).toMatchObject({targets:1});
+  const [t]=await targets(w.rep);expect(t).toMatchObject({security_ticker:'BABA',issuer_id:other});
+  expect((await s.q(`select resolution from public.broker_report_targets where report_id=$1`,[w.rep]))[0].resolution.override_id).toMatch(/^[0-9a-f-]{36}$/);
+  await s.one(`select public.broker_target_override($1,$2,$3,$4,$5,null) v`,[w.rep,w.tk,w.tk,w.iss,randomUUID()]);     // idempotent upsert on (report, target_key)
+  expect((await s.q(`select count(*)::int n from public.broker_report_target_overrides where report_id=$1`,[w.rep]))[0].n).toBe(1);
+ });
+
+ it('publish_blockers: a fresh extraction lists the expected reasons in spec order',async()=>{
+  const w=await world();
+  expect(await blockers(w.rep)).toEqual(['review_not_approved','report_incomplete:scope','report_incomplete:institution_id',
+   'required_field_missing:institution','required_field_missing:published_date','required_field_missing:title',
+   'field_pending:institution','field_pending:published_date','field_pending:title','rules_stale','restricted_value_in_text:title_original']);
+ });
+
+ it('publish_blockers: every reason flips on and off against a ready report',async()=>{
+  const w=await ready();const R=w.rep;const set=(sql:string,v:unknown[]=[])=>s.q(`update public.broker_research_reports set ${sql} where report_id=$1`,[R,...v]);
+  await set(`review_status='in_review'`);expect(await blockers(R)).toEqual(['review_not_approved']);await set(`review_status='approved'`);
+  await s.q(`update public.broker_report_documents set status='parsing' where document_id=$1`,[w.doc]);expect(await blockers(R)).toEqual(['document_not_parsed']);
+  await s.q(`update public.broker_report_documents set status='parsed' where document_id=$1`,[w.doc]);
+  const b=await batch();const qid=randomUUID();const docSha=(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[w.doc]))[0].sha256;
+  await s.q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'broker_research','broker_research_reports',$2,'upside_mismatch',$3,'{}')`,[qid,`${docSha}:upside_identity:${w.tk}`,b]);
+  await s.q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values(gen_random_uuid(),'broker_research','broker_research_reports',$1,'possible_version',$2,'{}')`,[`${docSha}:possible_version:-`,b]);
+  expect(await blockers(R)).toEqual(['quarantine_open:upside_mismatch']);                     // possible_version is not blocking
+  expect(await s.one(`select public.broker_quarantine_resolve($1,'resolved_accept',$2,'{}'::jsonb) v`,[qid,randomUUID()])).toBe('resolved');
+  expect(await blockers(R)).toEqual([]);
+  await set(`title_public='Alibaba: rewritten',title_public_by=gen_random_uuid()`);
+  expect(await blockers(R)).toEqual(['materialize_stale','restricted_value_in_text:title_public']);
+  await materialize(R);expect(await blockers(R)).toEqual(['rules_stale','restricted_value_in_text:title_public']);
+  await rules(R);expect(await blockers(R)).toEqual([]);
+  await rules(R,[{rule:'R2',passed:false,blocking:true,target_key:w.tk,reason_code:'upside_mismatch',detail:{}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_original'}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_public'}}]);
+  expect(await blockers(R)).toEqual(['rules_stale']);
+  await rules(R);expect(await blockers(R)).toEqual([]);                                       // newest matching receipt wins
+  await gold(w.digest,{passed:false});expect(await blockers(R)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest,{perField:{title:{tp:1,fp:0,fn:0}}});expect(await blockers(R)).toEqual(['eval_receipt_missing']);   // a report field without coverage
+  await gold(w.digest,{kind:'synthetic'});expect(await blockers(R)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest,{nDocs:29});expect(await blockers(R)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest);expect(await blockers(R)).toEqual([]);
+  await s.q(`update public.broker_research_settings set approved_gold_corpus_hash=null where id=1`);expect(await blockers(R)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest);
+  const dg=(await report(R)).summary_input_digest;
+  await s.q(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by) values($1,'zh',$2,$3,'摘要',1,'{"passed":true}',$4,'approved',gen_random_uuid())`,[R,w.ext,dg,J(PASS)]);
+  expect(await blockers(R)).toEqual([]);
+  await set(`summary_input_digest=$2`,[sha('other')]);expect(await blockers(R)).toEqual(['materialize_stale','summary_stale']);
+  await materialize(R);expect(await blockers(R)).toEqual([]);                                 // digest back to the live value: the summary stays approved
+  await rules(R,[{rule:'disclosure',passed:false,blocking:false,target_key:null,reason_code:'restricted_value',detail:{surface:'title_original'}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_public'}}]);
+  expect(await blockers(R)).toEqual([]);                                                       // title_original fails but title_public replaces it
+  await set(`title_public=null,title_public_by=null`);await materialize(R);
+  await rules(R,[{rule:'disclosure',passed:false,blocking:false,target_key:null,reason_code:'restricted_value',detail:{surface:'title_original'}}]);
+  expect(await blockers(R)).toEqual(['restricted_value_in_text:title_original']);
+  await rules(R);
+  await set(`evidence_ok=false`);expect(await blockers(R)).toEqual(['evidence_drift']);await set(`evidence_ok=true`);
+  await set(`disclosure_ok=false`);expect(await blockers(R)).toEqual(['disclosure_stale']);await set(`disclosure_ok=true`);
+  await s.q(`update public.broker_report_licences set allows_public_metadata=false where licence_id=$1`,[w.lic]);
+  expect(await blockers(R)).toEqual(expect.arrayContaining(['licence_unconfirmed','licence_no_public_metadata','materialize_stale','disclosure_stale']));
+  const w2=await ready();
+  await s.q(`update public.broker_report_licences set valid_to='2021-01-01' where licence_id=$1`,[w2.lic]);
+  await s.q(`update public.broker_report_licences set confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version where licence_id=$1`,[w2.lic]);
+  expect(await blockers(w2.rep)).toContain('licence_unconfirmed');                             // confirmed but expired
+ },120000);
+
+ it('publish_blockers: conflicts, pending fields, unresolved targets, cardinality, scope-specific required fields',async()=>{
+  const w=await world({extra:tk=>[cand({field:'rating',target_key:tk,value_text:'Hold',conflict_group:'g'})]});
+  for(const f of await s.q(`select field_id,field from public.broker_report_fields where report_id=$1 and status in ('extracted','unverified') and field<>'rating'`,[w.rep]))await review(f.field_id,'confirm');
+  await s.q(`update public.broker_research_reports set institution_id=$2,scope='single_issuer',review_status='approved' where report_id=$1`,[w.rep,w.inst]);
+  await materialize(w.rep);await rules(w.rep);await gold(w.digest);
+  expect(await blockers(w.rep)).toEqual([`required_field_missing:rating:${w.tk}`,'field_pending:rating',`target_unresolved:${w.tk}`,`conflict_unresolved:rating:${w.tk}`]);
+  await s.q(`update public.broker_research_reports set scope='multi_issuer' where report_id=$1`,[w.rep]);await materialize(w.rep);await rules(w.rep);
+  expect(await blockers(w.rep)).toContain('target_cardinality');
+  await s.q(`update public.broker_research_reports set scope='sector' where report_id=$1`,[w.rep]);await materialize(w.rep);await rules(w.rep);
+  expect(await blockers(w.rep)).toEqual(expect.arrayContaining(['required_field_missing:sector','target_cardinality']));
+  const m=await ready({tickers:2});
+  expect(await blockers(m.rep)).toEqual([]);                                                   // multi_issuer with two issuers
+  const u=await world();
+  await s.q(`update public.broker_report_fields set detail='{}' where report_id=$1 and field='ticker'`,[u.rep]);   // detail is mutable on drafts: the resolution snapshot is removed
+  for(const f of await s.q(`select field_id from public.broker_report_fields where report_id=$1 and status in ('extracted','unverified')`,[u.rep]))await review(f.field_id,'confirm');
+  await s.q(`update public.broker_research_reports set institution_id=$2,scope='single_issuer',review_status='approved' where report_id=$1`,[u.rep,u.inst]);
+  await materialize(u.rep);await rules(u.rep);await gold(u.digest);
+  expect(await blockers(u.rep)).toEqual(expect.arrayContaining([`target_unresolved:${u.tk}`,'target_cardinality']));
+ },120000);
+
+ it('publish: blocked publish raises publish_blocked:<reasons> and writes nothing; success writes an immutable snapshot hashed in SQL, flips status, registers one claim per target with a price',async()=>{
+  const w=await world();
+  const e=await fails(publish(w.rep));expect(e.message).toMatch(/^publish_blocked:review_not_approved,/);
+  expect(await s.one(`select count(*)::int v from public.broker_report_publications where report_id=$1`,[w.rep])).toBe(0);
+  const p=await ready({tickers:2});
+  const tp=(await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='target_price' and target_key=$2 and status='confirmed'`,[p.rep,p.tks[1]]))[0].field_id;
+  await review(tp,'absent',{page:1});await materialize(p.rep);await rules(p.rep);
+  expect(await blockers(p.rep)).toEqual([]);
+  const by=randomUUID();const pub=await publish(p.rep,by);
+  const row=(await s.q(`select *,encode(sha256(convert_to(snapshot::text,'UTF8')),'hex') recomputed from public.broker_report_publications where publication_id=$1`,[pub]))[0];
+  expect(row.snapshot_hash).toBe(row.recomputed);expect(row).toMatchObject({report_id:p.rep,revision:1,licence_version:1,published_by:by,unpublished_at:null});
+  expect(row.rules_receipt_id).toMatch(/^[0-9a-f-]{36}$/);expect(row.eval_receipt_id).toMatch(/^[0-9a-f-]{36}$/);
+  const snap=row.snapshot;
+  expect(snap.report).toMatchObject({report_id:p.rep,status:'published',current_publication_id:pub,title_restricted:false});
+  expect(snap.targets.map((t:{target_key:string})=>t.target_key)).toEqual([...p.tks].sort());
+  expect(snap.targets.find((t:{target_key:string})=>t.target_key===p.tks[0])).toMatchObject({target_price:'120',price_at_report:'100',upside_pct:'0.200000'});
+  expect(snap.targets.find((t:{target_key:string})=>t.target_key===p.tks[1]).target_price).toBeNull();
+  expect(snap.fields.length).toBe((await s.q(`select 1 from public.broker_report_fields where report_id=$1 and status in ('confirmed','corrected','absent')`,[p.rep])).length);
+  for(const k of ['field_id','field','target_key','occurrence','status','extractor','parse_run_id','run_id','artifact_hash','page','char_start','char_end','value_source_text','value_source_sha256','framed','extracted','value'])
+   expect({k,has:snap.fields.every((f:Record<string,unknown>)=>k in f)}).toEqual({k,has:true});          // replay inputs frozen in the snapshot (P-R1-10)
+  const tf=snap.fields.find((f:Record<string,unknown>)=>f.field==='title');
+  expect(tf).toMatchObject({value_source_text:'text',value_source_sha256:sha('text'),framed:false});
+  expect(snap.disclosure_inputs.licence).toMatchObject({licence_id:p.lic,version:1,allows_public_target_price:true});
+  expect(snap.digests.rules_input_hash).toBe((await report(p.rep)).rules_input_hash);
+  expect((await report(p.rep))).toMatchObject({status:'published',current_publication_id:pub});
+  const regs=await outbox('claim.register',pub);
+  expect(regs).toHaveLength(1);                                                                 // the absent-price target registers nothing
+  const c=regs[0].payload;
+  expect(c).toMatchObject({kind:'claim.register',claim_seq:1,claim_type:'broker_target_price',methodology_version:CLAIM_METHODOLOGY_VERSION,
+   claim_key:`broker_target_price:${pub}:${p.tks[0]}`,subject:{security_ticker:p.tks[0],issuer_id:p.issuers[0],market:'HK',currency:'HKD'},claimant:{kind:'institution',id:p.inst},
+   claim:{direction:1,target_price:'120',currency:'HKD',horizon_months:null,reference_price:'100',reference_currency:'HKD',reference_date:'2026-03-04'},
+   stated_at:'2026-03-05',source:{report_id:p.rep,publication_id:pub,snapshot_hash:row.snapshot_hash},visibility_ref:{view:'broker_report_targets_public_v',report_id:p.rep,target_key:p.tks[0]}});
+  expect(c.event_id).toBe((await s.q(`select event_id from public.broker_outbox where payload->>'claim_key'=$1`,[c.claim_key]))[0].event_id);
+  expect((await fails(s.q(`update public.broker_report_publications set snapshot='{}' where publication_id=$1`,[pub]))).message).toMatch(/^append_only:/);
+  expect((await fails(publish(p.rep)))).toMatchObject({message:'report_not_draft'});
+  expect(await s.one(`select current_setting('broker.publishing',true) v`)).not.toBe(p.rep);
+ },120000);
+
+ it('publication snapshots and outbox preserve decimal amounts beyond JavaScript number precision',async()=>{
+  const amount='12345678901234567890.123456789';
+  const w=await ready({prices:{target_price:amount,price_at_report:'100',target_currency:'HKD',price_currency:'HKD'}});
+  const pub=await publish(w.rep);
+  const snap=await s.one(`select snapshot v from public.broker_report_publications where publication_id=$1`,[pub]);
+  expect(snap.targets[0]).toMatchObject({target_price:amount,price_at_report:'100'});
+  expect(typeof snap.targets[0].upside_pct).toBe('string');
+  expect(snap.fields.find((f:{field:string})=>f.field==='target_price').value.value_num).toBe(amount);
+  expect((await outbox('claim.register',pub))[0].payload.claim.target_price).toBe(amount);
+ });
+
+ it('publish with a restricted original title writes title_restricted=true; unpublish bumps revision, closes the snapshot once, reopens review, retracts once; republish is a new claim',async()=>{
+  const w=await ready();
+  await s.q(`update public.broker_research_reports set title_public='Rewritten title',title_public_by=gen_random_uuid() where report_id=$1`,[w.rep]);await materialize(w.rep);
+  await rules(w.rep,[{rule:'disclosure',passed:false,blocking:false,target_key:null,reason_code:'restricted_value',detail:{surface:'title_original'}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_public'}}]);
+  const pub=await publish(w.rep);
+  expect((await report(w.rep)).title_restricted).toBe(true);
+  expect((await fails(s.q(`select public.broker_report_unpublish($1,$2,'')`,[w.rep,randomUUID()])))).toMatchObject({message:'reason_required'});
+  await unpublish(w.rep,'owner asked');
+  expect(await report(w.rep)).toMatchObject({status:'draft',revision:2,current_publication_id:null,review_status:'in_review'});
+  expect((await s.q(`select unpublish_reason from public.broker_report_publications where publication_id=$1`,[pub]))[0].unpublish_reason).toBe('owner asked');
+  const ret=await outbox('claim.retract',pub);
+  expect(ret.map(x=>x.payload)).toEqual([expect.objectContaining({kind:'claim.retract',claim_seq:2,claim_key:`broker_target_price:${pub}:${w.tk}`,reason:'unpublish'})]);
+  expect((await fails(unpublish(w.rep)))).toMatchObject({message:'report_not_published'});
+  await s.q(`update public.broker_research_reports set review_status='approved' where report_id=$1`,[w.rep]);
+  expect(await blockers(w.rep)).toEqual([]);
+  const pub2=await publish(w.rep);expect(pub2).not.toBe(pub);
+  expect((await s.q(`select revision from public.broker_report_publications where publication_id=$1`,[pub2]))[0].revision).toBe(2);
+  expect(await outbox('claim.register',pub2)).toHaveLength(1);
+ },120000);
+
+ it('retract triggers: disclosure_ok/evidence_ok false on a published report retract once; document withdraw withdraws the report, closes the snapshot, keeps one retract',async()=>{
+  const w=await ready();const pub=await publish(w.rep);
+  await s.q(`update public.broker_research_reports set disclosure_ok=false where report_id=$1`,[w.rep]);
+  expect((await outbox('claim.retract',pub)).map(x=>x.payload.reason)).toEqual(['disclosure_ok']);
+  await s.q(`update public.broker_research_reports set disclosure_ok=true where report_id=$1`,[w.rep]);
+  await s.q(`update public.broker_research_reports set evidence_ok=false where report_id=$1`,[w.rep]);
+  expect(await outbox('claim.retract',pub)).toHaveLength(1);                                  // (claim_key, claim_seq) unique: one retract per claim
+  await s.q(`update public.broker_report_documents set status='withdrawn',withdrawn_at=now(),withdrawn_reason='licence revoked' where document_id=$1`,[w.doc]);
+  expect((await report(w.rep)).status).toBe('withdrawn');
+  expect((await s.q(`select unpublish_reason from public.broker_report_publications where publication_id=$1`,[pub]))[0].unpublish_reason).toBe('withdrawn:licence revoked');
+  expect(await outbox('claim.retract',pub)).toHaveLength(1);
+  expect((await fails(materialize(w.rep)))).toMatchObject({message:'report_withdrawn'});
+  const d=await ready();
+  await s.q(`update public.broker_report_documents set status='withdrawn',withdrawn_at=now(),withdrawn_reason='dup' where document_id=$1`,[d.doc]);
+  expect((await report(d.rep)).status).toBe('withdrawn');                                      // draft → withdrawn, no claim existed
+ },120000);
+
+ it('approval triggers: snippets need length <= N, a passed disclosure check and an approver; summaries also need overlap <= N, grounding and input_hash = digest',async()=>{
+  const w=await world({licence:{snippet_max_chars:10}});
+  const ins=(text:string,check:unknown=PASS)=>s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,'thesis',$2,1,0,$3,$4,$5::jsonb,gen_random_uuid()) returning snippet_id as v`,[w.rep,w.pr,text.length,text,J(check)]) as Promise<string>;
+  const approve=(id:string,by:string|null=randomUUID())=>s.q(`update public.broker_report_snippets set status='approved',approved_by=$2 where snippet_id=$1`,[id,by]);
+  expect((await fails(approve(await ins('01234567890')))).message).toMatch(/^snippet_too_long:11/);
+  expect((await fails(approve(await ins('short',{...PASS,passed:false})))).message).toMatch(/^disclosure_failed/);
+  expect((await fails(approve(await ins('short',{...PASS,version:'disclosure/0'})))).message).toMatch(/^disclosure_failed/);
+  expect((await fails(approve(await ins('short'),null))).message).toMatch(/^approver_required/);
+  const ok=await ins('short');await approve(ok);
+  expect(await s.one(`select approved_at is not null v from public.broker_report_snippets where snippet_id=$1`,[ok])).toBe(true);
+  await s.q(`update public.broker_report_snippets set status='draft' where snippet_id=$1`,[ok]);
+  expect((await s.q(`select approved_by,approved_at from public.broker_report_snippets where snippet_id=$1`,[ok]))[0]).toEqual({approved_by:null,approved_at:null});
+  const dg=(await report(w.rep)).summary_input_digest;
+  const sum=(o:Record<string,unknown>)=>s.one(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check) values($1,'en',$2,$3,'S',$4,$5::jsonb,$6::jsonb) returning summary_id as v`,[w.rep,w.ext,o.hash??dg,o.overlap??1,J(o.grounding??{passed:true}),J(o.check??PASS)]) as Promise<string>;
+  const app=(id:string)=>s.q(`update public.broker_report_summaries set status='approved',approved_by=gen_random_uuid() where summary_id=$1`,[id]);
+  expect((await fails(app(await sum({overlap:11})))).message).toMatch(/^summary_overlap:11/);
+  expect((await fails(app(await sum({grounding:{passed:false}})))).message).toMatch(/^summary_ungrounded/);
+  expect((await fails(app(await sum({check:{...PASS,passed:false}})))).message).toMatch(/^disclosure_failed/);
+  expect((await fails(app(await sum({hash:sha('stale')})))).message).toMatch(/^summary_stale/);
+  const a=await sum({});await app(a);
+  expect((await fails(app(await sum({})))).code).toBe('23505');                               // one approved summary per (report, lang)
+  expect(DISCLOSURE_VERSION).toBe('disclosure/1');
+ });
+
+ it('quarantine_resolve: already_resolved and not_found are results; hook_params_required rolls back; ticker override, rating scale, possible_version and reject hooks; published_immutable',async()=>{
+  const w=await world();const b=await batch();const docSha=(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[w.doc]))[0].sha256;
+  const item=async(reason:string,payload:Record<string,unknown>={})=>{const id=randomUUID();await s.q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'broker_research','broker_research_reports',$2,$3,$4,$5::jsonb)`,[id,`${docSha}:${reason}:${w.tk}:${id}`,reason,b,J(payload)]);return id;};
+  const resolve=(id:string,status:string,p:Record<string,unknown>={})=>s.one(`select public.broker_quarantine_resolve($1,$2,$3,$4::jsonb) v`,[id,status,randomUUID(),J(p)]);
+  expect(await resolve(randomUUID(),'resolved_accept')).toBe('not_found');
+  const t=await item('unresolved_ticker');
+  expect((await fails(resolve(t,'resolved_accept',{target_key:w.tk})))).toMatchObject({message:'hook_params_required'});
+  expect((await s.q(`select status from public.dq_quarantine where id=$1`,[t]))[0].status).toBe('open');      // rolled back
+  await s.stock('9999.HK','HK');const iss2=await s.issuer();
+  expect(await resolve(t,'resolved_accept',{target_key:w.tk,security_ticker:'9999.HK',issuer_id:iss2})).toBe('resolved');
+  expect((await targets(w.rep))[0]).toMatchObject({security_ticker:'9999.HK',issuer_id:iss2});
+  expect(await resolve(t,'resolved_accept',{target_key:w.tk,security_ticker:'9999.HK'})).toBe('already_resolved');
+  expect((await s.q(`select status,resolved_by is not null r from public.dq_quarantine where id=$1`,[t]))[0]).toEqual({status:'resolved_accept',r:true});
+  const sc=await item('unknown_rating_label',{rating_raw:'Buy'});
+  expect((await fails(resolve(sc,'resolved_accept',{normalized:'buy',source_url:'https://example.test/s',valid_from:'2020-01-01'})))).toMatchObject({message:'hook_params_required'});   // no institution bound yet
+  await s.q(`update public.broker_research_reports set institution_id=$2 where report_id=$1`,[w.rep,w.inst]);
+  expect(await resolve(sc,'resolved_accept',{normalized:'buy',source_url:'https://example.test/s',valid_from:'2020-01-01'})).toBe('resolved');
+  expect((await targets(w.rep))[0].rating_normalized).toBe('buy');
+  const prev=await world();
+  const pv=await item('possible_version');
+  expect(await resolve(pv,'resolved_accept',{supersedes_report_id:prev.rep})).toBe('resolved');
+  expect((await report(w.rep)).supersedes_report_id).toBe(prev.rep);
+  expect(await resolve(await item('date_order'),'resolved_reject')).toBe('resolved');
+  expect((await report(w.rep)).review_status).toBe('rejected');
+  expect((await fails(resolve(await item('upside_mismatch'),'resolved_maybe')))).toMatchObject({message:'invalid_status'});
+  const p=await ready();await publish(p.rep);
+  const pSha=(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[p.doc]))[0].sha256;
+  const pid=randomUUID();await s.q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'broker_research','broker_research_reports',$2,'span_drift',$3,'{}')`,[pid,`${pSha}:span_verbatim:-`,b]);
+  expect((await fails(resolve(pid,'resolved_accept')))).toMatchObject({message:'published_immutable'});
+ },120000);
+
+ it('leases, fenced updates, run finish, outbox mark and purge steps',async()=>{
+  const lic=await s.licence();const doc=await s.document(lic);
+  const claim=(t:string,ttl=300)=>s.one(`select public.broker_document_claim_lease($1,$2,$3) v`,[doc,t,ttl]);
+  expect(await s.one(`select public.broker_document_fenced_update($1,null,'{"status":"parsing"}'::jsonb,false) v`,[doc])).toBe('lease_lost');
+  expect(await s.one(`select status v from public.broker_report_documents where document_id=$1`,[doc])).toBe('uploaded');
+  const noLeaseRun=randomUUID();
+  await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,code_version,licence_version) values($1,$2,'parse','t',1)`,[noLeaseRun,doc]);
+  expect(await s.one(`select public.broker_run_finish($1,null,'{"status":"failed"}'::jsonb) v`,[noLeaseRun])).toBe('lease_lost');
+  expect(await s.one(`select detail->>'error_code' v from public.broker_report_runs where run_id=$1`,[noLeaseRun])).toBe('lease_lost');
+  const a=randomUUID(),b=randomUUID();
+  expect(await claim(a)).toBe(true);expect(await claim(b)).toBe(false);
+  expect(await s.one(`select public.broker_document_fenced_update($1,$2,'{"status":"parsing"}'::jsonb,false) v`,[doc,b])).toBe('lease_lost');
+  expect(await s.one(`select public.broker_document_fenced_update($1,$2,'{"status":"parsing"}'::jsonb,false) v`,[doc,a])).toBe('ok');
+  expect((await fails(s.one(`select public.broker_document_fenced_update($1,$2,'{"withdrawn_at":"x"}'::jsonb,false) v`,[doc,a])))).toMatchObject({message:'invalid_patch'});
+  const run=randomUUID();await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,extractor_version,code_version,licence_version) values($1,$2,'parse','f3/1','t',1)`,[run,doc]);
+  await s.q(`update public.broker_report_documents set lease_until=now()-interval '1 second' where document_id=$1`,[doc]);
+  expect(await claim(b)).toBe(true);                                                           // expired → taken over
+  expect((await s.q(`select status,detail->>'error_code' e from public.broker_report_runs where run_id=$1`,[run]))[0]).toEqual({status:'failed',e:'lease_expired'});
+  const run2=randomUUID();await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,extractor_version,code_version,licence_version) values($1,$2,'parse','f3/1','t',1)`,[run2,doc]);
+  expect(await s.one(`select public.broker_run_finish($1,$2,'{"status":"succeeded"}'::jsonb) v`,[run2,a])).toBe('lease_lost');
+  expect((await s.q(`select status,detail->>'error_code' e,(detail->>'lease_lost')::boolean l from public.broker_report_runs where run_id=$1`,[run2]))[0]).toEqual({status:'failed',e:'lease_lost',l:true});
+  const run4=randomUUID();await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,extractor_version,code_version,licence_version) values($1,$2,'parse','f3/1','t',1)`,[run4,doc]);
+  expect((await fails(s.one(`select public.broker_run_finish($1,$2,'{"status":"failed","extractor_version":"f3/2"}'::jsonb) v`,[run4,b])))).toMatchObject({message:'extractor_version_immutable'});
+  await s.one(`select public.broker_run_finish($1,$2,'{"status":"failed"}'::jsonb) v`,[run4,b]);
+  const run3=randomUUID();await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,code_version,licence_version) values($1,$2,'parse','t',1)`,[run3,doc]);   // parse version learnt from F3 at finish
+  const s3=(await s.q(`select sha256 from public.broker_report_documents where document_id=$1`,[doc]))[0].sha256;
+  expect(await s.one(`select public.broker_run_finish($1,$2,$3::jsonb) v`,[run3,b,J({status:'succeeded',extractor_version:'f3/1',artifact_path:`reports/${s3}.extract.${run3}.json`,artifact_hash:sha('a'),detail:{chunks:1}})])).toBe('ok');
+  expect(await s.one(`select extractor_version v from public.broker_report_runs where run_id=$1`,[run3])).toBe('f3/1');
+  expect((await fails(s.one(`select public.broker_run_finish($1,$2,'{"status":"failed"}'::jsonb) v`,[run3,b])))).toMatchObject({message:'run_finished'});
+  expect(await s.one(`select public.broker_document_fenced_update($1,$2,$3::jsonb,true) v`,[doc,b,J({status:'parsed',current_parse_run_id:run3,page_count:4})])).toBe('ok');
+  expect((await s.q(`select status,lease_token,page_count from public.broker_report_documents where document_id=$1`,[doc]))[0]).toEqual({status:'parsed',lease_token:null,page_count:4});
+  const ev=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id as v`);
+  for(let i=0;i<9;i++)await s.q(`select public.broker_outbox_mark($1,false,'boom')`,[ev]);
+  expect((await s.q(`select status,attempts from public.broker_outbox where event_id=$1`,[ev]))[0]).toEqual({status:'pending',attempts:9});
+  await s.q(`select public.broker_outbox_mark($1,false,'boom')`,[ev]);
+  expect((await s.q(`select status,attempts,last_error from public.broker_outbox where event_id=$1`,[ev]))[0]).toEqual({status:'failed',attempts:10,last_error:'boom'});
+  const ev2=await s.one(`insert into public.broker_outbox(kind,payload) values('licence.changed','{}') returning event_id as v`);
+  await s.q(`select public.broker_outbox_mark($1,true,null)`,[ev2]);
+  expect((await s.q(`select status,delivered_at is not null d from public.broker_outbox where event_id=$1`,[ev2]))[0]).toEqual({status:'delivered',d:true});
+  await s.q(`select public.broker_purge_step_record($1,'pdf',false,'io')`,[doc]);await s.q(`select public.broker_purge_step_record($1,'pdf',true,null)`,[doc]);
+  expect((await s.q(`select status,attempts,last_error from public.broker_purge_steps where document_id=$1`,[doc]))[0]).toEqual({status:'done',attempts:2,last_error:null});
+ });
+
+ it('SQL version strings equal the TS constants',async()=>{
+  const fn=await s.one(`select string_agg(pg_get_functiondef(p.oid),' ') v from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('broker_report_materialize','broker_report_live_digests','broker_report_publish_blockers','broker_report_publish','broker_snippets_approval')`);
+  expect(fn).toContain(`'${UPSIDE_FORMULA_VERSION}'`);expect(fn).toContain(`'${RULES_VERSION}'`);expect(fn).toContain(`'${CLAIM_METHODOLOGY_VERSION}'`);expect(fn).toContain(`'${DISCLOSURE_VERSION}'`);
  });
 });

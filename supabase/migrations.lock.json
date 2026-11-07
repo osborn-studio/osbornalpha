@@ -224,10 +224,6 @@
     {
       "file": "20261114090000_macro_workbench.sql",
       "sha256": "aea3f93c9d05e3fc3c93c7ea85618e744ed1ed8189a74319ecd8b62d16960835"
-    },
-    {
-      "file": "20261117090000_broker_research.sql",
-      "sha256": "1bc3242c0257328064fe166d6ab919d26b6db9b2a25f449d50ab558085de5821"
     }
   ]
 }

@@ -1202,7 +1202,7 @@ export interface IndustrySecurityDelisting {
 }
 // INDUSTRY:END
 
-// FOREIGN ↓ broker research (supabase/migrations/20261117090000_broker_research.sql). Service-role
+// FOREIGN ↓ broker research (supabase/migrations/20261119090000_broker_research.sql). Service-role
 // only; numeric columns are typed string (adapters select them ::text, spec 契约补充).
 export interface BrokerResearchSettings { id: 1; public_enabled: boolean; approved_gold_corpus_hash: string | null; approved_gold_corpus_by: string | null; approved_gold_corpus_at: string | null; updated_by: string | null; updated_at: string }
 export interface BrokerReportLicence { licence_id: string; version: number; source_label: string; licence_kind: 'terminal_subscription' | 'direct_from_broker' | 'owner_authored' | 'other'; holder: string; terms_summary: string; evidence_path: string | null; allows_llm_processing: boolean; allows_public_metadata: boolean; allows_public_snippets: boolean; allows_public_summary: boolean; allows_public_target_price: boolean; snippet_max_chars: number; valid_from: string; valid_to: string | null; confirmed_by: string | null; confirmed_at: string | null; confirmed_version: number | null; created_at: string; updated_at: string }

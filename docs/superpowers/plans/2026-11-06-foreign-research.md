@@ -28,8 +28,8 @@
 ## 仓库约定（动手前必读）
 
 - **工作树**：`/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/foreign-research-f63683`，分支 `claude/foreign-research-f63683`。不要 `cd` 到主检出；不要用裸 `git stash`（栈与其他工作树共享）。
-- **并行兄弟模块**（plan 3、F3、F4、F6、行业、公司、A 股启用）同时在别的工作树开发。本模块**只拥有**：`src/lib/broker-research/**`、`src/app/(app)/intel/foreign-research/**`、`src/app/(app)/admin/broker-research/**`、`src/app/api/broker-research/**`、`src/app/api/admin/broker-research/**`、`src/app/api/cron/broker-research-*/**`、`scripts/broker-research/**`、`messages/{zh,en}/foreign-research.json`、`supabase/migrations/20261117*_broker_research*.sql`、`docs/audits/2026-11-06-foreign-research/**`。对共享文件的修改**必须**包在注释围栏里，便于合并：TS/JS 用 `// FOREIGN ↓` … `// FOREIGN ↑`，JSON 无法注释时把新增项追加在数组 / 对象末尾并在任务里写明。共享文件清单（只允许这些）：`supabase/migrations.lock.json`（末尾追加）、`src/lib/supabase/database.types.ts`、`scripts/ci/research-checks.ts`（`criticalSuites` 追加）、`src/lib/dq/batches.ts`（`INFO_CODES` 追加 `eval_receipt_absent`）、`src/i18n/request.ts`（`MESSAGE_DOMAINS` 追加 `'foreign-research'`）、`src/app/api/admin/dq/quarantine/[id]/route.ts` 及其 `route.test.ts`（`broker_research` 分支与两个用例）、`src/app/(app)/stock/[ticker]/page.tsx`（mock 块移除 + 馆藏块）、`src/app/api/consensus/[ticker]/route.ts`（mock 分支；D3 新建同目录 `route.test.ts`）、`src/app/(app)/intel/page.tsx`（入口）、`package.json`（`test:storage` 脚本）、`docs/runbooks/`（新文件 `broker-research.md`，不改既有文件）。
-- **迁移**：只用 `supabase/migrations/20261117HHMMSS_*`。本计划三个文件：`20261117090000_broker_research.sql`（表、约束、索引、桶、表权限、表级触发器）、`20261117091000_broker_research_functions.sql`（全部 SQL 函数与依赖函数的触发器）、`20261117092000_broker_research_views.sql`（公开视图与视图权限）。可重放（`create table if not exists`、`create or replace function`、`drop trigger if exists` 后 `create trigger`、`create or replace view`、`insert … on conflict`）。每个迁移完成时把 `{file, sha256}`（文件字节 hex）**追加**到 `supabase/migrations.lock.json` 末尾；已锁文件不可再改（后续任务需要改动就在**同一任务尚未锁定前**改，或新增迁移文件 `20261117093000_*` 起）。`migrationInventory` 要求未锁迁移晚于已锁最新（2026-11-07 合并 main 后为 `20261114090000_macro_workbench.sql`；`20261115*` 已被 F3 / 宏观占用，`20261116*` 被 F4 占用，故本模块改用 `20261117*`）。
+- **并行兄弟模块**（plan 3、F3、F4、F6、行业、公司、A 股启用）同时在别的工作树开发。本模块**只拥有**：`src/lib/broker-research/**`、`src/app/(app)/intel/foreign-research/**`、`src/app/(app)/admin/broker-research/**`、`src/app/api/broker-research/**`、`src/app/api/admin/broker-research/**`、`src/app/api/cron/broker-research-*/**`、`scripts/broker-research/**`、`messages/{zh,en}/foreign-research.json`、`supabase/migrations/20261119*_broker_research*.sql`、`docs/audits/2026-11-06-foreign-research/**`。对共享文件的修改**必须**包在注释围栏里，便于合并：TS/JS 用 `// FOREIGN ↓` … `// FOREIGN ↑`，JSON 无法注释时把新增项追加在数组 / 对象末尾并在任务里写明。共享文件清单（只允许这些）：`supabase/migrations.lock.json`（末尾追加）、`src/lib/supabase/database.types.ts`、`scripts/ci/research-checks.ts`（`criticalSuites` 追加）、`src/lib/dq/batches.ts`（`INFO_CODES` 追加 `eval_receipt_absent`）、`src/i18n/request.ts`（`MESSAGE_DOMAINS` 追加 `'foreign-research'`）、`src/app/api/admin/dq/quarantine/[id]/route.ts` 及其 `route.test.ts`（`broker_research` 分支与两个用例）、`src/app/(app)/stock/[ticker]/page.tsx`（mock 块移除 + 馆藏块）、`src/app/api/consensus/[ticker]/route.ts`（mock 分支；D3 新建同目录 `route.test.ts`）、`src/app/(app)/intel/page.tsx`（入口）、`package.json`（`test:storage` 脚本）、`docs/runbooks/`（新文件 `broker-research.md`，不改既有文件）。
+- **迁移**：只用 `supabase/migrations/20261119HHMMSS_*`。本计划三个文件：`20261119090000_broker_research.sql`（表、约束、索引、桶、表权限、表级触发器）、`20261119091000_broker_research_functions.sql`（全部 SQL 函数与依赖函数的触发器）、`20261119092000_broker_research_views.sql`（公开视图与视图权限）。可重放（`create table if not exists`、`create or replace function`、`drop trigger if exists` 后 `create trigger`、`create or replace view`、`insert … on conflict`）。每个迁移完成时把 `{file, sha256}`（文件字节 hex）**追加**到 `supabase/migrations.lock.json` 末尾；已锁文件不可再改（后续任务需要改动就在**同一任务尚未锁定前**改，或新增迁移文件 `20261119093000_*` 起）。`migrationInventory` 要求未锁迁移晚于已锁最新（2026-11-07：main 锁到 `20261115090000`；owner 定的合并顺序为 #112 宏观 → F4 `20261116*` → F3 `20261117*` → 公司 `20261118*` → 本模块最后，故本模块只用 `20261119*`）。**owner 2026-11-07 指令覆盖下文"每个迁移完成时追加锁"的约定：本模块迁移在合并前一律不锁**；合并时由 commander 追加三条锁并重跑 `test:migrations`。
 - **本地 harness**：`test:db`（`scripts/ci/research-db.ts`）起本地 PostgreSQL 17，按序执行全部迁移再跑 vitest。集成测试读 `process.env.S4_TEST_STATE` 的 `adminUrl`，`describe.skipIf(!enabled)`。**任何包含字符串 `S4_TEST_STATE` 的 `.test.ts` 必须加进 `criticalSuites`**（否则 `Database suite inventory drift`）。本地只有 `storage.buckets(id,name,public,file_size_limit,allowed_mime_types)` 桩表：迁移只能 `insert into storage.buckets … on conflict (id) do update`，不得引用 `storage.objects`。角色 `anon`、`authenticated`、`service_role` 存在；角色断言用 `has_table_privilege` / `has_function_privilege` 与 `set local role anon` 后真实查询（参照 `src/lib/facts/facts.integration.test.ts` 第 120–145 行）。单文件跑法：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts <file>`（`db-one.ts` 内容见 `docs/superpowers/plans/2026-11-04-HANDOFF-data-foundation-2-execution.md` §5，未提交，丢了就重建）。`LC_ALL=C` 只给 `test:db`/`test:migrations`，不要导出给 `npm test`。
 - **托管实例**：`postgres` 非超级用户；`security definer` 函数内 `set search_path = public`；不要 `alter … owner to`。Supabase 默认给 `anon/authenticated` 新函数 EXECUTE：每个函数后 `revoke execute on function … from public, anon, authenticated; grant execute … to service_role`。视图 owner 是迁移角色，`with (security_invoker=false, security_barrier=true)`；视图内**不调用任何本模块函数**（许可谓词、生效值选择器都内联为 SQL 表达式）。
 - **类型**：`src/lib/supabase/database.types.ts` 手工维护（新增 22 张表的 `Row/Insert/Update` 放在 `// FOREIGN ↓ … ↑` 围栏里）；RPC 不登记到 `Functions`，调用用 `(client.rpc as never as RpcFn)(...)` 窄类型办法（见 `src/lib/supabase/admin.ts` 注释与 `src/lib/facts/db.ts`）。
@@ -51,9 +51,9 @@
 ## 文件结构
 
 ```
-supabase/migrations/20261117090000_broker_research.sql            22 表 + 约束/索引 + 桶 + 表权限 + 表级触发器（A1）
-supabase/migrations/20261117091000_broker_research_functions.sql  函数 + 函数型触发器（A2）
-supabase/migrations/20261117092000_broker_research_views.sql      10 个公开视图（含 broker_spread_latest_v）+ 视图权限（A3）
+supabase/migrations/20261119090000_broker_research.sql            22 表 + 约束/索引 + 桶 + 表权限 + 表级触发器（A1）
+supabase/migrations/20261119091000_broker_research_functions.sql  函数 + 函数型触发器（A2）
+supabase/migrations/20261119092000_broker_research_views.sql      10 个公开视图（含 broker_spread_latest_v）+ 视图权限（A3）
 supabase/migrations.lock.json                                      追加 3 条（A1、A2、A3 各一）
 src/lib/supabase/database.types.ts                                 + 22 表类型（// FOREIGN 围栏；A1）
 scripts/ci/research-checks.ts                                      criticalSuites：A1 一个围栏（integration）、C8 一个围栏（pipeline）
@@ -477,7 +477,7 @@ Part A 的设计决定（后续 Part 依赖，执行者不得自行改动）：
 ### Task A1: 迁移一 —— 22 张表、约束、索引、桶、表权限、表级触发器
 
 **Files:**
-- Create: `supabase/migrations/20261117090000_broker_research.sql`
+- Create: `supabase/migrations/20261119090000_broker_research.sql`
 - Create: `src/lib/broker-research/broker-research.integration.test.ts`（块 1）
 - Modify: `supabase/migrations.lock.json`（末尾追加一条）
 - Modify: `scripts/ci/research-checks.ts`（`criticalSuites` 追加）
@@ -503,7 +503,7 @@ import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const M1='supabase/migrations/20261117090000_broker_research.sql';
+const M1='supabase/migrations/20261119090000_broker_research.sql';
 const TABLES=['broker_research_settings','broker_report_licences','broker_report_upload_intents','broker_report_documents','broker_report_runs','broker_research_reports','broker_report_targets','broker_report_target_overrides','broker_report_fields','broker_report_snippets','broker_report_summaries','broker_report_publications','broker_report_rule_receipts','broker_purge_steps','research_institutions','research_rating_scales','research_analysts','broker_report_analysts','broker_report_access_log','broker_eval_receipts','broker_outbox','broker_storage_writes'];
 
 // Same replay policy as facts.integration.test.ts (not exported there).
@@ -872,18 +872,18 @@ LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/
 
 Expected: FAIL —— 第一个用例 `relname` 列表为空（表不存在），其余用例 `relation "public.broker_report_licences" does not exist`。
 
-- [ ] **Step 3: 写迁移 `supabase/migrations/20261117090000_broker_research.sql`**
+- [ ] **Step 3: 写迁移 `supabase/migrations/20261119090000_broker_research.sql`**
 
 ```sql
--- supabase/migrations/20261117090000_broker_research.sql
+-- supabase/migrations/20261119090000_broker_research.sql
 -- FR-0 (foreign broker research spec §4): the private research library. 22 tables, their
 -- constraints and indexes, the private bucket `broker-research`, table privileges (every base table
--- is service_role only; public reads go through the §4.11 views of 20261117092000), and the
+-- is service_role only; public reads go through the §4.11 views of 20261119092000), and the
 -- TABLE-LEVEL triggers: licence_material_change (before + after), document / intent / run
 -- lifecycles, broker_reports_guard, child-table guards, close-only rating scales,
 -- analyst_disclosure_change, insert-only publications (unpublished_at once), append-only receipts
 -- and logs, outbox immutability. Triggers that need the module's SQL functions (approval checks,
--- withdraw cascade, claim.retract) live in 20261117091000_broker_research_functions.sql.
+-- withdraw cascade, claim.retract) live in 20261119091000_broker_research_functions.sql.
 -- Trigger errors carry the code as the message prefix (`<code>[:<detail>]`, SQLSTATE P0001 or
 -- 23514 for append_only:*), which the TS adapters map to BrokerResearchDbError(code).
 -- Hosted `postgres` is not a superuser: no `alter … owner`, `set search_path = public`.
@@ -1846,7 +1846,7 @@ Expected: PASS（块 1 九个用例）。若 `published_immutable|null value` �
 `src/lib/supabase/database.types.ts`：在 `export type Database` 之前追加接口，在 `Tables` 对象末尾（`fact_sync_scope` 之后）追加 21 条登记，都包在围栏里：
 
 ```ts
-// FOREIGN ↓ broker research (supabase/migrations/20261117090000_broker_research.sql). Service-role
+// FOREIGN ↓ broker research (supabase/migrations/20261119090000_broker_research.sql). Service-role
 // only; numeric columns are typed string (adapters select them ::text, spec 契约补充).
 export interface BrokerResearchSettings { id: 1; public_enabled: boolean; approved_gold_corpus_hash: string | null; approved_gold_corpus_by: string | null; approved_gold_corpus_at: string | null; updated_by: string | null; updated_at: string }
 export interface BrokerReportLicence { licence_id: string; version: number; source_label: string; licence_kind: 'terminal_subscription' | 'direct_from_broker' | 'owner_authored' | 'other'; holder: string; terms_summary: string; evidence_path: string | null; allows_llm_processing: boolean; allows_public_metadata: boolean; allows_public_snippets: boolean; allows_public_summary: boolean; allows_public_target_price: boolean; snippet_max_chars: number; valid_from: string; valid_to: string | null; confirmed_by: string | null; confirmed_at: string | null; confirmed_version: number | null; created_at: string; updated_at: string }
@@ -1915,7 +1915,7 @@ Expected: 全绿（`test:migrations` 的 fresh/seeded 对比也覆盖新表；`v
 - [ ] **Step 7: 锁定迁移**（测试全绿之后；锁定后此文件不可再改）
 
 ```bash
-node -e "const fs=require('fs'),c=require('crypto');const f='20261117090000_broker_research.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+node -e "const fs=require('fs'),c=require('crypto');const f='20261119090000_broker_research.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
 npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.migrationInventory();console.log('inventory ok')})"
 ```
 
@@ -1923,10 +1923,10 @@ Expected: `inventory ok`；`git diff supabase/migrations.lock.json` 只在数组
 
 - [ ] **Step 8: 实施记录 + 提交**
 
-`docs/audits/2026-11-06-foreign-research/10-implementation-log.md` 追加一行：`| A1 | 20261117090000_broker_research.sql 锁定；22 表 + 表级触发器；集成块 1 | <sha 待填> |`。
+`docs/audits/2026-11-06-foreign-research/10-implementation-log.md` 追加一行：`| A1 | 20261119090000_broker_research.sql 锁定；22 表 + 表级触发器；集成块 1 | <sha 待填> |`。
 
 ```bash
-git add supabase/migrations/20261117090000_broker_research.sql supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts scripts/ci/research-checks.ts src/lib/supabase/database.types.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
+git add supabase/migrations/20261119090000_broker_research.sql supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts scripts/ci/research-checks.ts src/lib/supabase/database.types.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
 ```
 ```bash
 git commit -m "feat(broker-research): FR-0 migration 1 — 22 tables, bucket, grants, table triggers
@@ -1938,7 +1938,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task A2: 迁移二 —— 全部 SQL 函数与函数型触发器
 
 **Files:**
-- Create: `supabase/migrations/20261117091000_broker_research_functions.sql`
+- Create: `supabase/migrations/20261119091000_broker_research_functions.sql`
 - Create: `src/lib/broker-research/versions.ts`（版本常量；B/C 只 import）
 - Modify: `src/lib/broker-research/broker-research.integration.test.ts`（追加块 2）
 - Modify: `supabase/migrations.lock.json`（末尾追加一条）
@@ -1984,7 +1984,7 @@ import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMUL
 ```ts
 // ---- shared by blocks 2–4 (A2 writes these; A3/A5 reuse them). Each block's beforeAll rebinds
 // the pool; describes run sequentially within this file, so the module-level bindings are safe.
-const M2='supabase/migrations/20261117091000_broker_research_functions.sql';
+const M2='supabase/migrations/20261119091000_broker_research_functions.sql';
 let pool:Pool;let s:ReturnType<typeof seeds>;
 const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});s=seeds(pool);};
  const J=(v:unknown)=>JSON.stringify(v);
@@ -2541,10 +2541,10 @@ LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/
 
 Expected: 块 1 PASS；块 2 FAIL，报 `function public.broker_document_claim_lease(uuid, uuid, integer) does not exist`。
 
-- [ ] **Step 3: 写迁移 `supabase/migrations/20261117091000_broker_research_functions.sql`**
+- [ ] **Step 3: 写迁移 `supabase/migrations/20261119091000_broker_research_functions.sql`**
 
 ```sql
--- supabase/migrations/20261117091000_broker_research_functions.sql
+-- supabase/migrations/20261119091000_broker_research_functions.sql
 -- FR-0 (spec §4.4–§4.8, §6.2, §6.3, §6.5, §7.3, §10.2): every SQL function of the broker research
 -- module and the triggers that depend on them. Hashes are computed HERE only (plan 契约补充):
 -- broker_report_live_digests recomputes effective_hash / rules_input_hash / summary_input_digest
@@ -3746,16 +3746,16 @@ npm run typecheck && npm run lint
 - [ ] **Step 6: 锁定迁移**
 
 ```bash
-node -e "const fs=require('fs'),c=require('crypto');const f='20261117091000_broker_research_functions.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+node -e "const fs=require('fs'),c=require('crypto');const f='20261119091000_broker_research_functions.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
 npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.migrationInventory();console.log('inventory ok')})"
 ```
 
 - [ ] **Step 7: 实施记录 + 提交**
 
-追加 `| A2 | 20261117091000_broker_research_functions.sql 锁定；物化/复核/阻断/发布/撤回/钩子/租约；集成块 2 | <sha> |`。
+追加 `| A2 | 20261119091000_broker_research_functions.sql 锁定；物化/复核/阻断/发布/撤回/钩子/租约；集成块 2 | <sha> |`。
 
 ```bash
-git add supabase/migrations/20261117091000_broker_research_functions.sql src/lib/broker-research/versions.ts supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
+git add supabase/migrations/20261119091000_broker_research_functions.sql src/lib/broker-research/versions.ts supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
 ```
 ```bash
 git commit -m "feat(broker-research): FR-0 migration 2 — materialize, review, blockers, publish, hooks, leases
@@ -3768,7 +3768,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task A3: 迁移三 —— 10 个公开视图与视图权限（含机构最新分歧视图）
 
 **Files:**
-- Create: `supabase/migrations/20261117092000_broker_research_views.sql`（含 broker_spread_latest_v 与统一 currency facet）
+- Create: `supabase/migrations/20261119092000_broker_research_views.sql`（含 broker_spread_latest_v 与统一 currency facet）
 - Modify: `src/lib/broker-research/broker-research.integration.test.ts`（追加块 3）
 - Modify: `supabase/migrations.lock.json`
 - Modify: `docs/audits/2026-11-06-foreign-research/10-implementation-log.md`
@@ -3781,7 +3781,7 @@ P-R6-05/06：本任务即创建 broker_spread_latest_v、授权与角色测试�
 
 ```ts
 describe.skipIf(!enabled)('A3 public views under the real anon and authenticated roles',()=>{
- const M3='supabase/migrations/20261117092000_broker_research_views.sql';
+ const M3='supabase/migrations/20261119092000_broker_research_views.sql';
  const VIEWS=['broker_reports_public_v','broker_report_targets_public_v','broker_report_citations_v','broker_report_snippets_public_v','broker_report_summaries_public_v','broker_analysts_public_v','broker_rating_history_v','broker_spread_latest_v','research_institutions_public_v','research_rating_scales_public_v'];
  let unlock:(()=>Promise<void>)|undefined;
  beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // toggles public_enabled; ready() sets the gold hash
@@ -4037,12 +4037,12 @@ LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/
 
 Expected: 块 1、2 PASS；块 3 FAIL（`relation "public.broker_reports_public_v" does not exist`）。
 
-- [ ] **Step 3: 写迁移 `supabase/migrations/20261117092000_broker_research_views.sql`**
+- [ ] **Step 3: 写迁移 `supabase/migrations/20261119092000_broker_research_views.sql`**
 
 每个视图内联同一段 `visible_reports` CTE（规格 §4.11 原文 + 取 `published_at` 的发布行联接；`join … p.licence_version = l.version` 与规格的 `exists (…)` 等价，因为 `publication_id` 唯一）。视图不调用任何函数；生效值选择器以 `case` 内联。
 
 ```sql
--- supabase/migrations/20261117092000_broker_research_views.sql
+-- supabase/migrations/20261119092000_broker_research_views.sql
 -- FR-0 (spec §4.11, §4.13): the only public read path. Nine views owned by the migration role,
 -- security_invoker=false + security_barrier=true, so anon/authenticated read through them with
 -- the owner's rights while every base table stays service_role-only. No view calls a function
@@ -4312,14 +4312,14 @@ Expected: 块 1–3 全 PASS。
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:db
 LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npm run test:migrations
 npm run typecheck && npm run lint
-node -e "const fs=require('fs'),c=require('crypto');const f='20261117092000_broker_research_views.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+node -e "const fs=require('fs'),c=require('crypto');const f='20261119092000_broker_research_views.sql';const p='supabase/migrations.lock.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.migrations.some(m=>m.file===f))throw new Error('already locked');j.migrations.push({file:f,sha256:c.createHash('sha256').update(fs.readFileSync('supabase/migrations/'+f)).digest('hex')});fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
 npx tsx -e "import('./scripts/ci/research-checks.ts').then(m=>{m.migrationInventory();console.log('inventory ok')})"
 ```
 
-实施记录追加 `| A3 | 20261117092000_broker_research_views.sql 锁定；10 视图；集成块 3（真实角色） | <sha> |`。
+实施记录追加 `| A3 | 20261119092000_broker_research_views.sql 锁定；10 视图；集成块 3（真实角色） | <sha> |`。
 
 ```bash
-git add supabase/migrations/20261117092000_broker_research_views.sql supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
+git add supabase/migrations/20261119092000_broker_research_views.sql supabase/migrations.lock.json src/lib/broker-research/broker-research.integration.test.ts docs/audits/2026-11-06-foreign-research/10-implementation-log.md
 ```
 ```bash
 git commit -m "feat(broker-research): FR-0 migration 3 — public views with inlined visibility predicate
@@ -4459,7 +4459,7 @@ Expected: PASS。
 ```ts
 // src/lib/broker-research/db.ts
 // BrokerResearchDb over Supabase (spec §4.14, plan §共享契约). Private methods use the service-role
-// client (tables + RPCs of 20261117091000); public methods use the anon client and read only the
+// client (tables + RPCs of 20261119091000); public methods use the anon client and read only the
 // §4.11 views. Every write that needs a lock, a lease, server time, an attempts counter or a hash
 // is an RPC; plain CRUD goes through .from() (the A1 triggers still guard it). numeric columns are
 // selected `::text` so decimals never pass through JS numbers; timestamps are normalised to
@@ -8175,7 +8175,7 @@ describe('evaluateRules — happy path',()=>{
   expect(RULES_PARAMS).toEqual({upsideTolerance:'0.005',versionWindowDays:7,versionJaccard:{num:4,den:5}});
  });
  it('BLOCKING_REASONS equals the SQL blocker-10 set and the memory implementation set',()=>{
-  const sql=readFileSync(new URL('../../../supabase/migrations/20261117091000_broker_research_functions.sql',import.meta.url),'utf8');
+  const sql=readFileSync(new URL('../../../supabase/migrations/20261119091000_broker_research_functions.sql',import.meta.url),'utf8');
   const m=/q\.reason_code in \(([^)]*)\)/.exec(sql);
   expect(m).not.toBeNull();
   const sqlSet=m![1].split(',').map(x=>x.trim().replace(/^'|'$/g,'')).sort();
@@ -8184,7 +8184,7 @@ describe('evaluateRules — happy path',()=>{
  });
  it('rating label key = SQL lower(btrim(label)) (A2 materialize scale selection)',()=>{
   expect(ratingKey('  Overweight ')).toBe('overweight');
-  const sql=readFileSync(new URL('../../../supabase/migrations/20261117091000_broker_research_functions.sql',import.meta.url),'utf8');
+  const sql=readFileSync(new URL('../../../supabase/migrations/20261119091000_broker_research_functions.sql',import.meta.url),'utf8');
   expect(sql).toContain('lower(btrim(s.raw_label)) = lower(btrim(v.rating_raw))');
  });
 });
@@ -20137,7 +20137,7 @@ git commit -m "feat(broker-research): verify and outbox crons, F4 port, storage 
 
 **门禁结果**（<日期>）：`npm run typecheck` ✓；`npm run lint` ✓；`npm test` ✓（<n> 文件 / <m> 用例）；`test:db` ✓；`test:migrations` ✓；`research-checks` ✓；`test:storage` 未运行（FR-6 前人工门禁）。
 
-**合并后 owner 事项**：生产迁移三份（`20261117090000/091000/092000`）与建桶；D1 许可确认；O14 黄金集批准与 `eval-gold.ts` 回执；本地栈 `npm run test:storage` 回执；首篇发布后登记核验 cron，F4 上线后登记 outbox cron（runbook §3）；FR-6 开关（runbook §2）。
+**合并后 owner 事项**：生产迁移三份（`20261119090000/091000/092000`）与建桶；D1 许可确认；O14 黄金集批准与 `eval-gold.ts` 回执；本地栈 `npm run test:storage` 回执；首篇发布后登记核验 cron，F4 上线后登记 outbox cron（runbook §3）；FR-6 开关（runbook §2）。
 ```
 
 - [ ] **Step 3: 全量门禁（逐条运行，全部通过才写 §17 的结果行）**

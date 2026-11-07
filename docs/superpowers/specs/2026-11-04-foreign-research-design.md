@@ -69,7 +69,7 @@
 | 11. LLM | `resolvePlatformLlm()` 只解析配置；注册表快照 `src/lib/llm/registry/{models,providers}.json`；`ajv@8.20.0`；**没有** PDF 解析依赖 | 原始请求 / 响应由本模块留存（§4.3） |
 | 12. cron | `vercel.json` 七个 cron（含计划二的 `/api/cron/facts-sync?market=US`，新增时保留）；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
 | 13. 测试门禁 | `criticalSuites` 精确清单；`scripts/ci/research-db.ts` 起隔离 PostgreSQL；`scripts/s4/local-db.ts` 只建 `storage.buckets` 桩表 | SQL 集成套件进 critical；存储 HTTP 套件另设 `test:storage` |
-| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261117090000_broker_research.sql`（本模块只用 `20261117HHMMSS_*`；锁文件只追加） |
+| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261119090000_broker_research.sql`（本模块只用 `20261119HHMMSS_*`；锁文件只追加） |
 | 15. i18n | `messages/{zh,en}/*.json` + parity 测试 | 新增 `intel.foreignResearch.*`、`admin.brokerResearch.*` |
 | 16. 对方页面 | `REPORT.md` 第 58 行；总纲 §3.1：301 篇一页纸（机构、行业、评级、中英标题、当前价 / 目标价 / 空间、报告定位、核心结论、方法论、风险、代码与日期、分类计数）；交互未验证 | 只作功能参考；§3 逐项分类；不导入任何数据 |
 
@@ -98,7 +98,7 @@
 
 ## 4. 数据模型
 
-迁移 `supabase/migrations/20261117090000_broker_research.sql`（如需拆分，同日 `20261117HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
+迁移 `supabase/migrations/20261119090000_broker_research.sql`（如需拆分，同日 `20261119HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
 
 表清单（21 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`broker_purge_steps`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
 
