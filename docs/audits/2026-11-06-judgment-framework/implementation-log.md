@@ -163,3 +163,13 @@
 - T-08：补 discarded-override 与 cutoff_vintage 迟到作废测试。
 - 红测：compensate 6 failed / 6 passed；settle + resolvers/index 10 failed / 39 passed；实现后全部通过。
 - 备注：`freeze: only registrations at or before frozen_at …` 在本地偶发失败（与本次改动无关的时序用例，重跑通过）。
+
+## 暂停记录（2026-11-06，owner 指示：预算紧，优先数据底座 PR 与宏观工作台）
+
+分支 `claude/judgment-framework-50f9e1`，暂停时 HEAD 见 `git log`。暂停时状态：typecheck、lint、`src/lib/judgments` + `src/lib/dq` + admin dq / cron 单测全绿；db-one 跑 `judgments.integration`、`judgments-db.integration`、`settle.integration` 75/75 通过；关键套件清单一致。迁移 `20261109150000_judgments.sql` **未锁**（Task 22 锁）。
+
+- **已完成（实施 + Opus 复审 + codex review + Codex 对抗挑战，修复闭环）**：T1、T2、T3、T4、T5、T6、T7、T8、T9、T10、T11、T13、T15、T17。
+- **已实施、复审未闭环**：T12（两轮挑战修复已提交；第二轮修复 `473ea9a9` 未再经 Codex 复核；T2-02 作为文档化风险接受）；T14（`58b4d8a4`，实施者中断前未出报告，指挥已验证门禁；**未做** Opus 复审与 Codex 审计）。
+- **未开始**：T16 校准任务与 cron、T18 读接口与 admin 路由、T19 `macro_regime@v1`、T20 私有适配器与 `/analyst`、T21 UI（按画布）、T22 运行手册 / 规格 §19 / 锁迁移 / 全量门禁。
+- **恢复时**：先对 T12 第二轮与 T14 做 Opus 复审 + Codex 挑战；再按计划执行顺序 16 → 18 → 19 → 20 → 21 → 22。计划 `docs/superpowers/plans/2026-11-06-judgment-framework.md`（Codex 计划审计第四轮 ready）；实施期对计划的偏差均记在本日志各任务节（含 `WorkItem.observedAt` 契约变更、`claim_judgment` RPC、`setJobState` 返回 `{ok, updated_at}`、`claim_due_judgments` 返回 jsonb 数组、隔离复核期 incident 子对象、补偿 3 次失败跳过规则）。
+- **复权能力（东方财富）**：verified 仅 A qfq、HK qfq、US hfq；DataGateway 本机未配置，全部 unverified。
