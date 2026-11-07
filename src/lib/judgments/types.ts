@@ -130,6 +130,8 @@ export interface JudgmentsDb{
  latestCards(subject:Subject,opts:{types?:JudgmentType[];view:CardView;cutoff?:string}):Promise<Envelope[]>;
  historyOf(subject:Subject,type:JudgmentType,methodology:{id:string;version:string},opts:{view:CardView;cutoff?:string;before?:string;limit:number}):Promise<Envelope[]>;
  claimDue(limit:number,leaseSeconds:number):Promise<QueueRow[]>;
+ /** Token-fenced release (§5.4). last_detail.incident (plan audit R3-01) is never written here: the locked row's open incident is
+  *  carried over unchanged and a patch incident is ignored, so a transient pending / unavailable / error attempt cannot end it. */
  releaseLease(judgmentId:string,leaseToken:string,patch:QueuePatch):Promise<void>;
  queueRow(judgmentId:string):Promise<QueueRow|null>;
  queueList(opts:{filter:'due'|'backoff'|'leased'|'all';limit:number;after?:string}):Promise<QueueRow[]>;
@@ -137,14 +139,17 @@ export interface JudgmentsDb{
  appendSettlement(judgmentId:string,leaseToken:string|null,requestKey:string,row:SettlementInsert):Promise<{seq:number;status:AppendStatus}>;
  /** Lease-checked quarantine publish (plan audit Q1-02): ONE transaction locks the queue row, checks the lease, upserts the open
   *  dq_quarantine item ('judgments' / 'judgment_settlements' / judgment_id / reasonCode) with payload, writes last_status
-  *  'inconsistent' + last_detail ∪ {quarantine_id} (quarantined_at kept while the incident is unresolved, Q1-01) + next_attempt_at,
+  *  'inconsistent' + last_detail = patch.last_detail with incident = {quarantine_id, reason_code, evidence_hash, cutoff, quarantined_at}
+  *  (an open incident's quarantined_at is kept, Q1-01 / R3-01) + next_attempt_at,
   *  clears the lease; attempts unchanged. A lost lease writes nothing. */
  quarantineSettlement(judgmentId:string,leaseToken:string,reasonCode:string,payload:Record<string,unknown>,patch:QueuePatch,batchId:string):Promise<{status:'quarantined'|'lease_lost';quarantine_id:string|null}>;
- /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's current inconsistency. override.evidence_hash /
-  *  override.cutoff are the identity the hook read: both must equal the locked queue last_detail AND the locked item payload (Q1-03). */
+ /** Atomic acceptance (plan audit P1-04): locks queue then item; only for the open queue's open incident (last_detail.incident, whatever
+  *  the last attempt status, R3-01). override.evidence_hash / override.cutoff are the identity the hook read: both must equal the locked
+  *  queue last_detail.incident AND the locked item payload (Q1-03); no open incident → 'stale'. */
  applyQuarantineOverride(judgmentId:string,override:QuarantineOverride,quarantineId:string,audit:Record<string,unknown>):Promise<'applied'|'stale'|'closed'|'item_not_open'>;
  /** Atomic rejection (plan audit P1-05): void + item resolved_reject + audit in one transaction; replay-safe on requestKey. expected = the
-  *  evidence_hash / cutoff the hook read; any difference from the locked queue last_detail or item payload → 'stale' (Q1-03). */
+  *  evidence_hash / cutoff the hook read; no open incident, or any difference from the locked queue last_detail.incident (R3-01) or the
+  *  item payload → 'stale' (Q1-03). The void closes the queue and so ends the incident. */
  rejectQuarantinedSettlement(judgmentId:string,quarantineId:string,expected:{evidence_hash:string;cutoff:string},requestKey:string,row:SettlementInsert,audit:Record<string,unknown>):Promise<{seq:number;status:AppendStatus|'stale'|'item_not_open'}>;
  /** Public envelope by id (plan audit P2-01; RLS-gated, judgment_history view semantics). */
  envelopeById(id:string,opts:{view:CardView;cutoff?:string}):Promise<Envelope|null>;
