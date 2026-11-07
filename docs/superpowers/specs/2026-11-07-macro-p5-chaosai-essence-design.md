@@ -1,7 +1,7 @@
 # 宏观工作台 P5 · ChaosAI 精华吸收（美林时钟卡片 · 图表组织 · 数据缺口）设计规格
 
-日期：2026-11-07。第 1 稿；第 2 稿（§0.1）；第 3 稿（§0.2）；**第 4 稿**（处置第三轮 Codex T-C1–T-C10、mmx T-M1–T-M61，§0.3；本稿为**完整规范文本**，不引用早稿）
-状态：第 4 稿，待第四轮审计（`docs/audits/2026-11-07-macro-p5/`）
+日期：2026-11-07。第 1 稿；第 2 稿（§0.1）；第 3 稿（§0.2）；第 4 稿（§0.3，完整规范文本）；**第 5 稿**（处置第四轮 Codex N1–N6、mmx #62–#87，§0.4）
+状态：第 5 稿，待第五轮审计（`docs/audits/2026-11-07-macro-p5/`）
 前置：`docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（P1+P2 第 6 稿；其 §3.2 已含本规格 §2.4 的"第 7 稿修订"）、`docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md`（P3+P4 第 3 稿）、F4 `docs/superpowers/specs/2026-11-04-judgment-framework-design.md`
 研究输入：`docs/research/chaosai-integration-2026-11-04/MACRO_STRATEGY_DEEP_DIVE.md`、`docs/research/chaosai-macro-2026-11-07/handoff-chatgpt-2026-11-07.md`
 总纲（硬约束）：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §5。
@@ -57,6 +57,39 @@
 | T-M37（新目录字段入库） | 说明：`firstPeriod` 是代码字段，不进 `macro_series` 镜像（镜像列固定）；D1 不改镜像 RPC | §5.2 |
 | T-M39（norm 重算输入） | 接受：从存储 r6 贡献重建（T-C1） | §3.4 |
 | T-M40–T-M49、T-M52、T-M54、T-M56、T-M59、T-M60 | 接受，逐条写入 | 各节 |
+
+### 0.4 第 5 稿处置（第四轮：Codex `11-spec-round4-codex.md` N1–N6；mmx `12-spec-round4-mmx.md` #62–#87）
+
+| 来源 | 处置 | 落点 |
+|---|---|---|
+| N1 / #62 / #64（方法清单是未校验的第二表示） | 接受：D1 起 `method_manifest` 为**唯一**渲染来源，并加不变式 9（清单校验：版本、行集合 = `regionWeights` 键、denominator、角色与观测 id ∈ manifest、matched 行与 `rec.contributions` 逐格相等、未匹配行 `rule_id/support/contribution` 皆 null）；P5-B 阶段（无清单）按 §3.3 规则从 `rec.contributions` 投影；两条路径互斥，由 `method_manifest` 是否存在决定；清单只改一处的破坏用例 | §3.4、§5.2 |
+| N2 / #70（retire SQL 不可执行） | 接受：给出可执行、幂等的 `DO $$` 块（锁行、从 `judgment_methodology_events` 取 `max(seq)`、已 retired 则跳过） | §5.7 |
+| N3（`rules_version` 在 `RegimeRecord`） | 接受：门槛拆为快照版本（读快照后）与规则版本（读判定记录后，`record_missing` 优先） | §3.2、§3.3 |
+| N4（`republish_macro_snapshot` 丢清单） | 接受：D1 迁移同时改 republish RPC 复制 `method_manifest` | §5.2、§5.8 |
+| N5 / #87（事件身份） | 接受：派生事件身份 = `kind|region|series_id|effective_date` | §4.2 |
+| N6（cutoff 使 `inputs_hash` 必变） | 接受：新增 `data_hash`（只哈希序列定义、观测 id/值、事件输入；`analysis-spec.ts::dataHash`）；"输入已更新"按 `data_hash` 比较 | §4.4 |
+| #63（规则 label 来自当前代码） | 说明：label 是规则表版本 1.0 的一部分，与 `support` 同源同版本；清单冻结 `rule_id` + `rules_version`，label 查表受 `rules_version` 门槛保护；文本不是数字 —— 接受为已记录设计 | §3.3 |
+| #65（不变式 5 重建） | 不接受：发布端 `scores` 是未舍入贡献之和再 r6，存储只有 r6 贡献；重建差异已由容差（2e-6 / 1e-4）覆盖并以两份真实 fixture 验证（T-C1 的处置） | §3.4 |
+| #66（不变式 8 对未匹配行） | 接受（已限定"只对 `C` 中的行"） | §3.4 |
+| #67（D1 后版本门槛） | 说明：目录哈希 A ≠ 旧值即足以拒绝旧快照；清单带 `version:'macro-method-manifest/1'` | §3.3 |
+| #68 / T-M16（v2 闭包） | 接受为设计：闭包随 live 文件变化而变 = 需要新版本；这正是 C6 的强制；写入 v2.md | §5.7 |
+| #69 / T-M17（上线窗口） | 接受：顺序改为 **sync（以合并提交注册 v2，v1 仍 active）→ 部署 → 迁移（retire v1）**；窗口内新旧方法同时 active，旧代码产 v1、新代码产 v2，均合法 | §5.7 |
+| #71（retrievals adapter 列） | 说明：`macro_retrievals` 无 adapter 列（迁移 `:90` 的 CHECK 在 `macro_evidence_objects`）；迁移测试覆盖 | §5.8 |
+| #72（adapter 与 parser 绑定） | 接受：`parserFor` 返回 `{parse, adapter}`，ingest 断言 `parser.adapter === 推导 adapter`，否则 `evidence_adapter_mismatch` | §5.3 |
+| #73（协议/重定向） | 接受：只允许 `https:`，`redirect:'error'`，证据 host = `url.host` | §5.3 |
+| #74（解析值绑定序列/期） | 说明：现有链路 `ParsedPoint{seriesId, periodEnd, valueText, locator}` 由 parser 产出，claims 只交叉校验（`ingest.ts:5-6`）；新 parser 同样产出 `ParsedPoint`，`periodEnd` = 报价日/操作日/统计期月末 | §5.3 |
+| #75 / T-M37（`firstPeriod` 不入镜像） | 说明：`macro_series` 镜像列固定、`upsertCatalog` 只写既有列；`firstPeriod` 只用于 `fredCosdFor`；六行按既有列入镜像 | §5.2 |
+| #76 / #77（memo 键与 `computed_at`） | 接受（已改：值 = 整个地区响应；`computed_at` 顶层） | §4.4 |
+| #78（失败后 `regime_status`） | 接受（已改：对账失败 → `unknown`） | §3.3 |
+| #79（非有限值） | 接受（已改：归 `not_matched`，原样显示） | §3.3 |
+| #80（相邻定义） | 接受（已改：已存储报价相邻） | §5.3 |
+| #81（F4 超时） | 接受：列表超时则不发详情；总预算 6 s | §3.2 |
+| #82（状态计数） | 接受：改为"11 个卡级状态 + 2 个传输态" | §3.6 |
+| #83（memo 头语义） | 接受（已改） | §4.4 |
+| #84 / T-M29（weekly 下一期） | 接受：下一期 = 上一 period_end + 7 天；逾期判定 = 下一期 + lag + 3 天；非 7 天间隔的源周（节假日）由宽限吸收 | §5.2 |
+| #85 / T-M56（v1 判断作废） | 说明：`unavailable` 结果由 `judgments-settle` cron 在 `settle_by` 后记 `void`（F4 规格 §7）；已结算判断不受影响 | §5.7 |
+| #86（约束正则） | 接受：替换后 `assert` 新约束存在且旧约束计数为 0 | §5.8 |
+| T-M6 / T-M14 / T-M28 / T-M30 / T-M31 / T-M35 / T-M36 / T-M54 | T-M6：单状态结果 = 上游方法弃权，时钟显示 `f4_ineligible`（已定）；T-M14：D1 后角色来自清单（已定）；T-M28/30：D0a 前置（已定）；T-M31：月行值 = 该周平均原值，不再聚合（已定）；T-M35/54：AFRE 表标识与冲突规则补全 | §5.4 |
 
 ---
 
@@ -145,7 +178,7 @@ P1 §3.2 的第 7 稿修订已写入 P1 文件（内容同本节）。卡片内�
 
 ### 3.2 路由 `GET /api/macro/snapshots/[id]/clock`
 
-`requireSessionUser` → `UUID_RE` → `macroJudgmentsEnabled()` 否 → 404 `judgments_disabled` → `snap = db.snapshot(id)` 无 → 404 `not_found` → `snap.region ∉ {US,CN}` → `integrity_error` → `active = db.activeSnapshot(snap.region)`；`active?.snapshot_id !== id || snap.status !== 'active'` → `snapshot_not_active` → 版本门槛 → `obs = db.observationsByIds(snap.observation_ids)`（长度不等或任一序列同期多版本 → `integrity_error`）→ `rec = db.regimeOf(id)` → 存储对账 → F4（`clock-f4.ts`：列表、详情各 3 s 超时，总 ≤ 6 s；`NEXT_PUBLIC_SITE_URL` 缺失 → unavailable）→ 不变式 7 → `okJson(view)`，`Cache-Control: private, no-store`。读取：1 快照 + 1 活动快照 + 1 观测批读 + 1 判定 + 2 F4 HTTP；路由 `maxDuration` 不改（默认 Vercel 限制足够）。
+`requireSessionUser` → `UUID_RE` → `macroJudgmentsEnabled()` 否 → 404 `judgments_disabled` → `snap = db.snapshot(id)` 无 → 404 `not_found` → `snap.region ∉ {US,CN}` → `integrity_error` → `active = db.activeSnapshot(snap.region)`；`active?.snapshot_id !== id || snap.status !== 'active'` → `snapshot_not_active` → **快照版本门槛**（`catalog_version`、`methodology_version`）→ `obs = db.observationsByIds(snap.observation_ids)`（长度不等或任一序列同期多版本 → `integrity_error`）→ `rec = db.regimeOf(id)` 无 → `record_missing` → **规则版本门槛**（`rec.rules_version === RULES_VERSION`，否则 `version_unsupported`）→ 存储对账（含不变式 9，若 `rec.method_manifest` 存在）→ F4（`clock-f4.ts`：列表 3 s；列表超时/失败则不发详情；详情 3 s；总 ≤ 6 s；`NEXT_PUBLIC_SITE_URL` 缺失 → unavailable）→ 不变式 7 → `okJson(view)`，`Cache-Control: private, no-store`。读取：1 快照 + 1 活动快照 + 1 观测批读 + 1 判定 + 2 F4 HTTP；路由 `maxDuration` 不改（默认 Vercel 限制足够）。
 
 ### 3.3 `ClockView`（`src/lib/macro/clock-view.ts`，`macro-clock-view/1`，服务端纯函数）
 
@@ -171,11 +204,11 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 ```
 
 **优先级（唯一；编号 = 测试名 `clock.status.<n>`）**：
-1 `snapshot_not_active`（路由）→ 2 `version_unsupported` → 3 `integrity_error` → 4 `record_missing`（`regimeOf` null）→ 5 存储对账：不变式 1、2、4、8；`rec.regime` 非 null 再 3、5、6；任一失败 → `reconcile_failed`（在 F4 之前，总会执行并记录）→ 6 F4：`f4_unavailable` / `f4_none` / `f4_earlier` / `f4_ineligible`（lifecycle ∉ {open, settled}，含 abstained、pending_fill、void、withdrawn；`abstain_reason` 原样作代码）→ 7 不变式 7（含 F4 合格但 `rec.regime===null`）→ `f4_mismatch` → 8 `ok`。
-`regime_status`：`rec` 无 → `unknown`；`rec.regime` 非 null → `classified`；否则由存储 `uncovered_weight` 与 `denominator`（`Σ regionWeights`）内部计算 `(denominator−uncovered)/denominator < 0.6` → `coverage_below_threshold`，否则 `zero_score`；只暴露枚举。
+1 `snapshot_not_active`（路由）→ 2 `version_unsupported`（快照两版本）→ 3 `integrity_error` → 4 `record_missing`（`regimeOf` null）→ 2' `version_unsupported`（`rec.rules_version`）→ 5 存储对账：不变式 1、2、4、8，清单存在时再 9；`rec.regime` 非 null 再 3、5、6；任一失败 → `reconcile_failed`（在 F4 之前，总会执行并记录）→ 6 F4：`f4_unavailable` / `f4_none` / `f4_earlier` / `f4_ineligible`（lifecycle ∉ {open, settled}，含 abstained、pending_fill、void、withdrawn；`abstain_reason` 原样作代码）→ 7 不变式 7（含 F4 合格但 `rec.regime===null`）→ `f4_mismatch` → 8 `ok`。
+`regime_status`：`rec` 无或存储对账失败 → `unknown`；`rec.regime` 非 null → `classified`；否则由存储 `uncovered_weight` 与 `denominator`（`Σ regionWeights`）内部计算 `(denominator−uncovered)/denominator < 0.6` → `coverage_below_threshold`，否则 `zero_score`；只暴露枚举。
 
 **行规则**（`rows` = `regionWeights(region)` 的键，顺序同 `WEIGHTS_V1`）：
-- 状态：目录 `missing` → `missing`；`restricted` → `restricted`（二者 `latest=null`、`comparisons=[]`、`inputs_present` 全 false）；在 `contributions` → `matched`；manifest 有该序列观测 → `not_matched`；否则 `no_data`。
+- 状态：目录 `missing` → `missing`；`restricted` → `restricted`（二者 `latest=null`、`comparisons=[]`、`inputs_present` 全 false）；在 `contributions` → `matched`；manifest 有该序列观测 → `not_matched`（含 `value_text` 非有限数的情形：引擎同样不命中；行文案不区分，`value_text` 原样显示）；否则 `no_data`。
 - `latest`：matched = `contribution.observation_id` 的观测（不变式 1 保证它是该序列 manifest 最新）；not_matched = 该序列 manifest 中 period_end 最大者。
 - `comparisons`：该序列 manifest 中其余观测，period_end 升序；`roles`：`period_end === shiftMonthEnd(latest.period_end, −3)` → 含 `'prev3m'`；`period_end` 为其余观测中最大者 → 含 `'prev'`；一条观测可同时两角色；若某观测两角色都不是 → `integrity_error`（manifest 每序列 ≤ 3 条的契约被破坏）。
 - `inputs_present.prev/prev3m` = 对应角色是否存在。
@@ -199,9 +232,10 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 | 5 | （regime 非 null）重建发布端运算：`S'[q] = Σ_C contribution[q]`（r6 贡献之和），`N'[q] = S'[q]/Σ S'`（不舍入）；`|r6(N'[q]) − norm[q]| ≤ 2e-6`；`pickStates(N')` 的 primary/secondary === 存储；`|r6(100×(N'[p]−(N'[s]??0))) − margin_pp| ≤ 1e-4` | reconcile_failed |
 | 6 | （regime 非 null）axes 用 `C` 的 `support`/`weight` 按 `regime.ts` 顺序重算（无命中 → null），r6 后精确相等 | reconcile_failed |
 | 7 | F4 详情 `claim.selected === primary_state`；`|claim.distribution[q] − norm[q]| ≤ 1e-6`；`claim.catalog_version === snapshot.catalog_version`；`|claim.margin_pp − r6(100×(norm[p]−(norm[s]??0)))| ≤ 1e-6`（F4 的 `marginPp` 用存储 r6 norm）；`rec.regime` 非 null | f4_mismatch |
-| 8 | `rule_id` ∈ `RULES[row.type]`；`support` 逐象限 === 规则表（缺省 0） | reconcile_failed |
+| 8 | （只对 `C` 中的行）`rule_id` ∈ `RULES[row.type]`；`support` 逐象限 === 规则表（缺省 0） | reconcile_failed |
+| 9 | （`rec.method_manifest` 存在时）`manifest.version==='macro-method-manifest/1'`；`manifest.rules_version/catalog_version/weights_version` 与快照/记录一致；`manifest.rows[].series_id` 集合 === keys(W) 且唯一；`manifest.denominator === D`；每行 `weight === W[id]`；`latest/prev/prev3m_observation_id` ∈ manifest 观测且 `series_id` 相同，角色与 §3.3 日期规则一致；`matched` 行与 `C` 一一对应且 `rule_id/support/contribution` 逐格相等；非 matched 行三者皆 null；状态与目录一致 | reconcile_failed |
 
-执行顺序 1,2,4,8 →（regime 非 null）3,5,6 → F4 → 7。失败：`diagnostics[]{code:'invariant_<n>', ids}`，差值 `console.error('[macro-clock] reconcile', {snapshot_id, invariant, delta, …})`。现有 F4 fixture（US `us-2026-09-11.json` 的 margin `11.023622`，CN `28.333333`）必须作为 `ok` 端到端用例通过。
+执行顺序 1,2,4,8,（9）→（regime 非 null）3,5,6 → F4 → 7。清单存在时 `rows` **只**从清单渲染（观测值仍从 manifest 观测读取）；破坏用例：只改清单的一个贡献格 / 一个 `latest_observation_id`，`rec` 与 F4 不变 → `reconcile_failed`。失败：`diagnostics[]{code:'invariant_<n>', ids}`，差值 `console.error('[macro-clock] reconcile', {snapshot_id, invariant, delta, …})`。现有 F4 fixture（US `us-2026-09-11.json` 的 margin `11.023622`，CN `28.333333`）必须作为 `ok` 端到端用例通过。
 
 ### 3.5 UI（画布 §7；文案 `judgment.clock.*`）
 
@@ -216,7 +250,7 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 - 禁词：`judgment.clock.*` 不含 概率|置信度|可靠度|预测|probabilit|confidence|reliab|forecast（豁免 `notProbability`）；运行时字符串只有本模块 i18n、目录 `name`、规则 `label`、枚举代码；`catalog.test.ts` 与 `regime.rules-boundary.test.ts` 对 `name`/`label` 做同一禁词扫描。
 - 窄屏：象限 2×2；分解表行卡。
 
-### 3.6 状态矩阵（13 个卡级状态；互斥）
+### 3.6 状态矩阵（11 个卡级状态 + 2 个传输态 + 开关关；互斥）
 
 | 编号 | 状态 | 触发 | UI | 测试 |
 |---|---|---|---|---|
@@ -256,7 +290,7 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 
 ### 4.2 标记层与事件列表
 
-`MacroLineChart.layers?:{derived?:boolean;calendar?:boolean}`（默认 derived on、calendar off）；`markersOf(events, calendar, firstPeriod, layers)`：事件身份 = 派生 `effective_date`（`derivePolicyEvents` 每日至多一条：按日比较，`events.ts:30-36`）、日历 `start|end`；仅去身份相同者；同日派生 + 日历各一。两个 `aria-pressed` pill。"事件（最近 6 条）"：按 `effective_date` desc，同日 derived 先于 calendar，再按身份键；`|change_bp| ≥ 25` 才带文字。
+`MacroLineChart.layers?:{derived?:boolean;calendar?:boolean}`（默认 derived on、calendar off）；`markersOf(events, calendar, firstPeriod, layers)`：事件身份 = 派生 `kind|region|series_id|effective_date`（US 目标区间事件 `series_id` 固定；CN 报价事件按期限序列区分，同日 1Y 与 5Y 各一条）、日历 `start|end`；仅去身份相同者；同日派生 + 日历各一。两个 `aria-pressed` pill。"事件（最近 6 条）"：按 `effective_date` desc，同日 derived 先于 calendar，再按身份键；`|change_bp| ≥ 25` 才带文字。
 
 ### 4.3 资产条形
 
@@ -269,8 +303,8 @@ export interface QuadrantView{regime:Regime;score:number;norm:number;rank:'prima
 - **路由** `GET /api/macro/analyses/presets?region=`：`requireSessionUser` → region 校验 → `resolveCodeVersion({allowGit:false})` 失败 → 503 `code_version_unavailable` → `db.activeSnapshot(region)` 无 → `{cards:[], reason:'no_published_snapshot'}` → `cutoff = snapshot.created_at`；每预设 `request_id = uuidv5('6f0c3d0e-9a2b-4c8e-8d4f-1b2c3d4e5f60', preset_id)` → `prepareAnalysis(…,{history:'eligible_as_of'})`。
 - **预设规范**（`correlation-presets.ts`，`PRESETS_VERSION='macro-presets/1'`）：p1 US change `US_DFF×US_UST10Y` 0 10y；p2 US change `US_CPI_YOY×US_UST10Y` 0 10y；p3 US change `US_CPI_YOY×US_WTI` −1 10y；p4 US change `US_DTWEXBGS×US_WTI` 0 10y；p5 US rolling `US_UNRATE×US_UST10Y` 0 all；p6 US event_window `US_DFF×US_UST10Y` ±6 all（额外两条事件源读取）；p7 CN change `CN_PMI_MFG×CN_CGB10Y` 0 10y；p8 CN level `CN_CPI_YOY×CN_CGB10Y` 0 10y。
 - **响应**：`{region, snapshot_id, cutoff, computed_at(首次计算 UTC，memo 命中返回原值), code_version, method_version:CORRELATION_VERSION, presets_version, catalog_version, cards:PresetCard[]}`；`PresetCard={preset_id, run_id:null, request_id, kind, spec, inputs, inputs_hash, results|null, error|null, status:'ok'|'failed', method_version, code_version, created_at:computed_at}`（与 `RunJson` 同名字段；`CorrelationResult` `preset` 模式）。
-- **memo**：LRU 32、单飞，键 `region|snapshot_id|CATALOG_VERSION|CORRELATION_VERSION|PRESETS_VERSION|code_version`；头 `X-Macro-Presets-Memo`。限制：cutoff 后隔离裁决可改变 eligible 集合 → `inputs_hash` 揭示；不声称跨实例恒等；多实例冷启动成本 = 每实例一次（≤ 6 组 × ≤ 4 次读取）。
-- 按钮"重新计算并保存" → POST（计配额、现时 cutoff、`as_of` 历史）；`inputs_hash` 不同 → 提示 `correlation.preset.inputsChanged`。
+- **memo**：LRU 32、单飞，键 `region|snapshot_id|CATALOG_VERSION|CORRELATION_VERSION|PRESETS_VERSION|code_version` → 值 = 该地区**整个响应**（全部预设卡 + `computed_at`）；头 `X-Macro-Presets-Memo: hit|miss` 描述整个响应；`computed_at` 为响应顶层字段（首次计算的 UTC ISO 时刻；hit 返回原值）。限制：cutoff 后隔离裁决可改变 eligible 集合 → `inputs_hash` 揭示；不声称跨实例恒等；多实例冷启动成本 = 每实例一次（≤ 6 组 × ≤ 4 次读取）。
+- `analysis-spec.ts` 新增 `dataHash(inputs)`：只哈希 `indicator/asset` 的 `series_id, source_series_id, change_kind, observations[]{observation_id, period_end, value_text}` 与 `events[]`（不含 `cutoff`、`catalog_version`）；`PresetCard` 与 `RunJson` 都带 `data_hash`。按钮"重新计算并保存" → POST（计配额、现时 cutoff、`as_of` 历史）；`data_hash` 不同 → 提示 `correlation.preset.inputsChanged`（"数据已更新"）；仅 `inputs_hash` 不同 → 不提示（cutoff 差异）。测试：相同观测不同 cutoff → `data_hash` 相等；一次修订 → 不等。
 - 失败预设成卡。
 - 基准 `scripts/macro/bench-presets.ts`：参数 `--base`、`--region`、`--runs 3`；冷 = 新进程 + 空 memo，热 = 同进程；固定样本 DB（`seed.ts`，记录其 snapshot_id 与 catalog 版本）；禁用 HTTP 缓存（`cache:'no-store'`）；输出全部样本与中位数；结果写 `pr-c2-acceptance.md`。
 - 测试：预设路由结果 === 直接调用 `prepareAnalysis(spec, cutoff, 'eligible_as_of')`；无 run/无 RPC；memo 头与 `computed_at` 稳定；无快照；401；503；p6 事件读取；失败卡；POST 现有测试不变。
@@ -332,6 +366,7 @@ D1 后 `clock-view.ts` 优先读清单（行、权重、状态、角色、suppor
 | US_WTREGEN_W | WTREGEN | indicator/null | usd_mn | weekly/day（周三） | na | pct | revisable | 1 | 0 | — | [D0a] |
 | US_WTREGEN | — | indicator/null | usd_mn | monthly/month | na | pct | revisable | undefined | 0 | month_end | — |
 
+- 迁移同时改 `republish_macro_snapshot`：复制 `method_manifest`（null 则 null）；测试 publish → supersede → republish 后清单相等。
 - 名称：WALCL "联储总资产（周三水平）" / 月行 "联储总资产（月内最后一次周三观测）"；WTREGEN "财政部一般账户（周平均，以周三标记）" / 月行 "财政部一般账户（月内最后一次周平均观测，值为该周平均）"；RRPONTSYD 口径逐字取 FRED 序列页。
 - **weekly 规则**：`NativeFrequency` + `'weekly'`；`releaseTimeliness`：weekly 的下一期 = 上一 period_end + 7 天，截止 = 下一期 + `releaseLagDays` + 3 天宽限（节假日由宽限吸收）；`catalog.test.ts` 不变式改为"daily/event/month_end 行 lag undefined；weekly 原生行 lag 必填；monthly/quarterly 原生按既有表"。
 - `fredCosdFor(period, backfilled, today, firstPeriod?)`：未回填 → `max(FRED_COSD, firstPeriod)`；已回填 → 400 天窗口。
@@ -343,14 +378,14 @@ D1 后 `clock-view.ts` 优先读清单（行、权重、状态、角色、suppor
 
 ### 5.3 LPR（D0b → D2 → D5）
 
-- `official_http`：`types.ts::Adapter`；迁移 `macro_evidence_objects.adapter` CHECK；`ingest.ts::DATASET_OF.official_http='macro.akshare'`；`ingest/route.ts`：每证据项 adapter = `catalogById(series_id)?.source?.adapter`（无 → `unknown_series`），按 adapter 分组分别 `ingestEvidence`，解析失败证据保留其 adapter；content-type → parser：`application/json` → `json_pointer`、`text/html` → `html_cell`，其他 → `evidence_not_allowed`；host 比较沿用 `url.host === spec.fetch_host`（含端口；官方站无端口）；`cn-series.ts` function `http_json`/`http_html`（`cn-series/2`，`cnSeriesSpecs` = akshare ∪ official_http）；`collect.py` `requests.get` 经 `recording()`；主机白名单 + `www.chinamoney.org.cn`、`www.pbc.gov.cn`。
+- `official_http`：`types.ts::Adapter`；迁移 `macro_evidence_objects.adapter` CHECK（`macro_retrievals` 无 adapter 列）；`ingest.ts::DATASET_OF.official_http='macro.akshare'`；`ingest/route.ts`：每证据项 adapter = `catalogById(series_id)?.source?.adapter`（无 → `unknown_series`），`parserFor(series_id)` 返回 `{parse, adapter}` 且必须等于推导 adapter（否则 `evidence_adapter_mismatch`），按 adapter 分组分别 `ingestEvidence`，解析失败证据保留其 adapter；content-type → 定位器：`application/json` → `json_pointer`、`text/html` → `html_cell`，其他 → `evidence_not_allowed`；URL 必须 `https:`，采集器 `redirect:'error'`，证据 host = `url.host`，比较沿用 `url.host === spec.fetch_host`；parser 产出 `ParsedPoint{seriesId, periodEnd, valueText, locator}`（`periodEnd` = 报价日 / 操作日 / 统计期月末），claims 只作交叉校验（既有链路）；`cn-series.ts` function `http_json`/`http_html`（`cn-series/2`，`cnSeriesSpecs` = akshare ∪ official_http）；`collect.py` `requests.get` 经 `recording()`；主机白名单 + `www.chinamoney.org.cn`、`www.pbc.gov.cn`。
 - 目录（D5）：`CN_LPR_1Y_Q`、`CN_LPR_5Y_Q`（event_source，policy_rate，event/day，period_end = 报价日，weight 0，immutable）；`CN_LPR_1Y`（active，weight 10）、`CN_LPR_5Y`（weight 0）：monthly，`month_end` from `_Q`。**完成见证**：某月的月度行只在后续月份出现观测后产生（`derive.ts`），`available_at` 取见证；状态 `awaiting_witness`（§5.2）。
 - parser `chinamoney.ts`：行键 = (报价日, 期限)；同键相同值 → 计数；不同值 → `parse_failed:conflicting_rows`（拒绝整页）；表头精确匹配"1年"/"5年以上"；fixture 原始字节。
-- 事件 `deriveRateQuoteEvents(quotes)`：同一序列（同期限）按报价日升序相邻比较，差 ≠ 0 → `{kind:'policy_rate_change', region:'CN', series_id, effective_date:报价日, from, to, change_bp, evidence:[prev,cur], source:'derived'}`；首条无事件；不变无事件；`macro-events/2`；`PolicyEvent` 可辨识联合；消费者更新；US 不变。
+- 事件 `deriveRateQuoteEvents(quotes)`：同一序列（同期限）按**已存储报价日**升序相邻比较（缺报价月不插值，事件的 `from` 即上一条存储报价），差 ≠ 0 → `{kind:'policy_rate_change', region:'CN', series_id, effective_date:报价日, from, to, change_bp, evidence:[prev,cur], source:'derived'}`；首条无事件；不变无事件；`macro-events/2`；`PolicyEvent` 可辨识联合；消费者更新；US 不变。
 
 ### 5.4 社融（D0c → D3 → D5）
 
-只采官方"同比增长（%）"列（表标题"社会融资规模存量统计表"，行"社会融资规模存量"，列标题含"同比"）；行键 = 统计期（年月）；同期多页 → 按页面发布日期升序，后者新版本；同日两页或同页同期重复 → 拒绝；无同比列 → missing。
+只采官方"同比增长（%）"列（页面标题匹配 `^\d{4}年\d{1,2}月社会融资规模存量统计表`，表内行首单元格 === "社会融资规模存量"，列标题单元格匹配 `同比` 且单位行含 `%`；单位 `pct`）；行键 = 统计期（标题年月 → 月末）；一页一期；同期多页 → 按页面发布日期（列表页日期）升序，后者为新版本（`revisable`）；同一发布日期两页或同页同期两行 → `parse_failed:conflicting_rows`；无同比列 → missing。
 
 ### 5.5 MLF（D0d → D4 → D5）
 
@@ -380,8 +415,19 @@ D1 后 `clock-view.ts` 优先读清单（行、权重、状态、角色、suppor
 
 - v2：`macro-regime.common.ts` 工厂 `macroRegimeMethod({version, catalogVersion, doc})`；`macro-regime.v2.ts` pin 字面量（合并前算出）；`deps` 逐字 = v1 列表；`module` 指向 v2；测试：字面量 === 运行时 `CATALOG_VERSION`、新快照不弃权、旧快照弃权、`methodology-sync` 计划 = register v2 无 drift。
 - `REGISTRY=[macroRegimeV2]`；v1 模块文件不改；`macro-regime.v1.test.ts` **迁移**：注册表断言改为 `[macroRegimeV2]`（移到 `registry.test.ts`）；历史回放用例改用隔离 fixture（固定目录版本 `30bcaa2a33c5`、历史 formula_hash 字面量、golden 结果），不再引用运行时 `CATALOG_VERSION`。
-- v1 retire：迁移 `20261121090000` 内 `update public.judgment_methodologies set status='retired' where methodology_id='macro_regime' and version='v1'` + `insert into public.judgment_methodology_events(event_id, methodology_id, version, seq, event, status, publishable, formula_hash, code_version, actor, …其余非空列按表定义) select gen_random_uuid(), 'macro_regime','v1', coalesce(max(seq),0)+1, 'status_changed','retired', publishable, formula_hash, code_version, 'script', … from public.judgment_methodologies where …`（列清单在实现时按 `\d` 核实）；v1 判断由解析器 `catalog_version_mismatch` → unavailable → `settle_by` 作废（已有 cron `judgments-settle`）。
-- 生产顺序：迁移（retire v1）→ 以合并提交运行 `sync-methodologies.ts`（register v2）→ 部署 → 首次发布目录 A 快照 → produce v2。窗口内旧代码按 v1 产出 → DB 行 `retired` → 跳过（runbook 记录）。
+- v1 retire（迁移 `20261121090000`，幂等）：
+```sql
+do $$ declare m record; s int; begin
+ select * into m from public.judgment_methodologies where methodology_id='macro_regime' and version='v1' for update;
+ if not found or m.status='retired' then return; end if;
+ select coalesce(max(seq),0)+1 into s from public.judgment_methodology_events where methodology_id='macro_regime' and version='v1';
+ update public.judgment_methodologies set status='retired' where methodology_id='macro_regime' and version='v1';
+ insert into public.judgment_methodology_events(event_id, methodology_id, version, seq, event, status, publishable, formula_hash, code_version, actor /* + 表定义的其余非空列：occurred_at=now(), reason='P5 D1: catalog v2 supersedes' */)
+ values (gen_random_uuid(), 'macro_regime', 'v1', s, 'status_changed', 'retired', m.publishable, m.formula_hash, m.code_version, 'script');
+end $$;
+```
+（其余非空列按 `20261116090000_judgments.sql:50-60` 的表定义逐列补齐；迁移测试对已有 ≥ 2 条事件的 v1 行执行两次，第二次无变化。）v1 判断由解析器 `catalog_version_mismatch` → unavailable → `judgments-settle` cron 在 `settle_by` 后记 `void`（F4 规格 §7）；已结算判断不受影响。
+- 生产顺序：以合并提交运行 `sync-methodologies.ts`（register v2；v1 仍 active，无 drift 因 v1 已不在注册表）→ 部署 → 迁移（retire v1）→ 首次发布目录 A 快照 → produce v2。窗口内新旧方法同时 active：旧代码产 v1、新代码产 v2，均合法；sync 失败则不部署。
 
 ### 5.8 PR 矩阵与迁移
 
@@ -440,7 +486,7 @@ WP-D：`catalog.ts`、`types.ts`、`snapshots.ts`、`freshness.ts`、`views.ts`�
 | 贡献算术 | §3.4 八条 | `clock-view.test.ts`（含两份真实 F4 fixture 成功 + 全部破坏用例） |
 | 快照一致 | 单一响应；活动快照；版本门槛；F4 同快照 | 路由与 `clock-f4` 测试 |
 | 规则类型 | fx/GDP 边界 | `regime.rules-boundary.test.ts` |
-| 缺失语义 | 13 卡级 + 5 行级状态，无零 | 状态测试 + ClockStates 画板 |
+| 缺失语义 | 11 卡级 + 2 传输 + 5 行级状态，无零 | 状态测试 + ClockStates 画板 |
 | 覆盖率 | 分母含应计权重；<60% 不硬判 | 不变式 4；`regime_status` 用例 |
 | 概率语义 | 禁词；categorical 无 percent；不渲染 F4 自由文本 | 文案与组件测试 |
 | 数据对齐 | parser 行键/重复/拒绝；weekly 月内最后观测；LPR/MLF 完成见证 | parser/derive 测试 |

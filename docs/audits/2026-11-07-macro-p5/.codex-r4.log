@@ -8784,3 +8784,962 @@ src/lib/macro/types.ts
 src/lib/research/ingest/pa-v1/json.js
 src/lib/supabase/database.types.ts
 
+codex
+I found new gaps in the manifest checks and migration: the clock can prefer manifest fields that the eight invariants never validate, and the retirement SQL reads `seq` from a table without that column. I’m also checking rollback preservation and whether the preset’s “inputs changed” message can distinguish changed observations from a changed cutoff.
+exec
+/bin/zsh -lc "cat src/lib/macro/quality.ts; sed -n '1,120p' src/lib/macro/catalog.ts; cat src/lib/macro/catalog.test.ts" in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+// src/lib/macro/quality.ts
+// Macro validation thresholds (spec §4.4 "规则校验", §0.2 M8), version macro-rules/1. Wraps the shared
+// dq rules (rangeRule / jumpRule / unitRule; never modified here). This is the ONLY place where an
+// observation's value_text becomes a JS number (the other is regime.ts input): Number() on the
+// canonical decimal text, used only to compare against thresholds — the stored value stays the text.
+// Profile choice: "上年同月=100" indices, CNY per 100 USD and USD/bbl by unit; PMI by type (NBS PMI
+// carries unit 'index'); other index levels (base-period indices) by unit; 'pct' by type.
+// Jump limits exist only where a large relative move signals a unit/scale error rather than a real
+// event (rates, yields, fx fixings, index levels, PMI); yoy rates, unemployment and oil prices have
+// range checks only, so a real crisis value (UNRATE 14.8, WTI −36.98) is never quarantined.
+import {jumpRule,rangeRule,unitRule} from '../dq/rules';
+import type {RuleResult} from '../dq/rules';
+import type {MacroSeriesDef,SeriesType} from './types';
+
+export const MACRO_RULES_VERSION='macro-rules/1';
+export const KNOWN_UNITS=['pct','index','index_1982_84_100','index_2009_11_100','index_prev_year_100','cny_per_100usd','usd_per_bbl'] as const;
+export interface QualityProfile{min:number;max:number;maxRelJump:number|null}
+const BY_UNIT:Record<string,QualityProfile>={
+ index_prev_year_100:{min:50,max:200,maxRelJump:0.3},
+ cny_per_100usd:{min:400,max:1000,maxRelJump:0.1},
+ usd_per_bbl:{min:-100,max:1000,maxRelJump:null},
+};
+const PMI:QualityProfile={min:0,max:100,maxRelJump:0.5};
+const INDEX_LEVEL:QualityProfile={min:0,max:100000,maxRelJump:0.5};
+const INDEX_UNITS=new Set(['index','index_1982_84_100','index_2009_11_100']);
+const PCT_BY_TYPE:Record<SeriesType,QualityProfile>={
+ policy_rate:{min:-5,max:30,maxRelJump:3},
+ bond_yield:{min:-5,max:30,maxRelJump:1},
+ pmi:{min:0,max:100,maxRelJump:0.5},
+ inflation_yoy:{min:-50,max:100,maxRelJump:null},
+ liquidity_yoy:{min:-50,max:100,maxRelJump:null},
+ growth_yoy:{min:-100,max:500,maxRelJump:null},   // CN exports yoy reached +154.9% (2021-02)
+ labor_rate:{min:0,max:100,maxRelJump:null},
+ risk_index:{min:0,max:200,maxRelJump:null},
+ fx:{min:-50,max:100,maxRelJump:null},
+ asset_price:{min:-100,max:1000,maxRelJump:null},
+};
+/** pct with no type (event sources: fed target bounds) is rate-like. */
+const PCT_UNTYPED:QualityProfile={min:-5,max:30,maxRelJump:null};
+
+export function profileOf(def:Pick<MacroSeriesDef,'unit'|'type'>):QualityProfile|null{
+ if(Object.hasOwn(BY_UNIT,def.unit))return BY_UNIT[def.unit];
+ if(def.type==='pmi'&&(def.unit==='index'||def.unit==='pct'))return PMI;
+ if(INDEX_UNITS.has(def.unit))return INDEX_LEVEL;
+ if(def.unit==='pct')return def.type?PCT_BY_TYPE[def.type]:PCT_UNTYPED;
+ return null;
+}
+
+const CANONICAL=/^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
+const num=(t:string|null)=>t===null?null:Number(t);
+/** Validates one native point against its series profile. prevValueText = the previous accepted value of the same series (or null). */
+export function validatePoint(def:Pick<MacroSeriesDef,'unit'|'type'>,valueText:string,prevValueText:string|null):{passed:boolean;failed:RuleResult[];version:string}{
+ const results:RuleResult[]=[unitRule('macro.unit',def.unit,KNOWN_UNITS)];
+ if(!CANONICAL.test(valueText)){
+  results.push({ruleId:'macro.canonical',passed:false,detail:{reason:'not_canonical'}});
+  const failed=results.filter(r=>!r.passed);
+  return {passed:false,failed,version:MACRO_RULES_VERSION};
+ }
+ const p=profileOf(def);
+ const v=num(valueText);
+ if(p){
+  results.push(rangeRule('macro.range',v,p.min,p.max));
+  if(p.maxRelJump!==null)results.push(jumpRule('macro.jump',v,num(prevValueText),p.maxRelJump));
+ }
+ const failed=results.filter(r=>!r.passed);
+ return {passed:failed.length===0,failed,version:MACRO_RULES_VERSION};
+}
+// src/lib/macro/catalog.ts
+// The macro series catalog as code (spec §4.2; §0.2 M1–M5, M14, M15). Every row is either an
+// active official source (fetch host, original publisher, relay `via`, series key, rights,
+// attribution) or explicitly missing/restricted with a bilingual reason. Native daily ids are
+// separate from their derived month-end ids; derived rows carry their input's source and status;
+// asset "views" (aliasOf) reuse another series' observations. Weights are the v1.0 judgment
+// weights (Task 10 WEIGHTS_V1 must equal them). CATALOG_VERSION = 'macro-catalog/' + first 12 hex
+// of SHA-256 over the key-sorted canonical JSON; pure TS so client components may import this file.
+import type {Adapter,Bilingual,MacroSeriesDef,Region,Rights,SeriesSource} from './types';
+
+// ---------------------------------------------------------------- publishers
+const FED:Bilingual={zh:'美国联邦储备委员会',en:'Board of Governors of the Federal Reserve System'};
+const BLS:Bilingual={zh:'美国劳工统计局',en:'U.S. Bureau of Labor Statistics'};
+const EIA:Bilingual={zh:'美国能源信息署',en:'U.S. Energy Information Administration'};
+const CBOE:Bilingual={zh:'芝加哥期权交易所',en:'Cboe Global Markets'};
+const SPDJI:Bilingual={zh:'标普道琼斯指数公司',en:'S&P Dow Jones Indices LLC'};
+const NASDAQ:Bilingual={zh:'纳斯达克',en:'Nasdaq, Inc.'};
+const NBS:Bilingual={zh:'国家统计局',en:'National Bureau of Statistics of China'};
+const PBOC:Bilingual={zh:'中国人民银行',en:"People's Bank of China"};
+const GACC:Bilingual={zh:'海关总署',en:'General Administration of Customs of China'};
+const CCDC:Bilingual={zh:'中央国债登记结算有限责任公司',en:'China Central Depository & Clearing Co., Ltd.'};
+const SAFE:Bilingual={zh:'国家外汇管理局',en:'State Administration of Foreign Exchange'};
+const CSI:Bilingual={zh:'中证指数有限公司',en:'China Securities Index Co., Ltd.'};
+const VIA_FRED:Bilingual={zh:'FRED（圣路易斯联储）',en:'FRED (Federal Reserve Bank of St. Louis)'};
+
+const fred=(code:string,publisher:Bilingual,rights:Rights='public_domain'):SeriesSource=>({
+ adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher,via:VIA_FRED,seriesKey:code,rights,
+ attribution:{zh:`来源：${publisher.zh}，经 FRED（圣路易斯联储）`,en:`Source: ${publisher.en}, retrieved from FRED, Federal Reserve Bank of St. Louis`},
+});
+/** NBS national data via AKShare macro_china_nbs_nation; publisher = original agency, via = NBS when it relays. */
+const nbs=(key:string,publisher:Bilingual=NBS):SeriesSource=>({
+ adapter:'akshare',fetchHost:'data.stats.gov.cn',publisher,...(publisher===NBS?{}:{via:NBS}),seriesKey:`macro_china_nbs_nation|${key}`,rights:'official_open',
+ attribution:publisher===NBS?{zh:'来源：国家统计局',en:'Source: National Bureau of Statistics of China'}:{zh:`来源：${publisher.zh}，经国家统计局`,en:`Source: ${publisher.en}, via National Bureau of Statistics of China`},
+});
+const akshare=(fetchHost:string,seriesKey:string,publisher:Bilingual,rights:Rights):SeriesSource=>({
+ adapter:'akshare',fetchHost,publisher,seriesKey,rights,attribution:{zh:`来源：${publisher.zh}`,en:`Source: ${publisher.en}`},
+});
+const R_THIRD_PARTY:Bilingual={zh:'第三方版权数据，再分发权利未经 owner 确认，暂不采集',en:'Third-party copyrighted data; redistribution rights not confirmed by the owner, not collected'};
+
+// ---------------------------------------------------------------- source constants (shared by native, derived and alias rows)
+const S_DFF=fred('DFF',FED),S_DGS10=fred('DGS10',FED),S_DTWEX=fred('DTWEXBGS',FED),S_CPI=fred('CPIAUCSL',BLS),S_PPI=fred('PPIFIS',BLS),
+ S_VIX=fred('VIXCLS',CBOE,'third_party'),S_WTI=fred('DCOILWTICO',EIA);
+// NBS keys verified end to end against AKShare 1.20.35 and the live NBS tree on 2026-11-06 (plan Part B "已核实的上游事实").
+// CPI is split into era leaves: the key names the current (2026-) leaf; cn-series.ts (Task 8) backfills from the sibling
+// (2021-2025) and (2016-2020) leaves. A new era leaf (≈2031) means a new key and a new CATALOG_VERSION (runbook §10).
+const S_CN_CPI=nbs('月度数据|价格指数 > 居民消费价格分类指数(上年同月=100) > 全国居民消费价格分类指数(上年同月=100)(2026-) > 居民消费价格指数(上年同月=100)');
+const S_CN_PPI=nbs('月度数据|价格指数 > 工业生产者出厂价格分类指数 > 工业生产者出厂价格指数(上年同月=100) > 工业生产者出厂价格指数(上年同月=100)');
+const S_CN_GDP=nbs('季度数据|国民经济核算 > 国内生产总值指数 > 国内生产总值指数(上年同期=100)当季值');
+const S_CGB=akshare('yield.chinabond.com.cn','bond_china_yield|中债国债收益率曲线|10年',CCDC,'official_open');
+// SAFE: only the RMBQuery.do HTML is evidence (the bucket takes no XLSX and there is no xlsx locator), so CN_USDCNY_CP_D
+// history starts at the first date in that HTML (2026-01-05 when recorded); older history in SAFE's XLSX is NOT parsed
+// and stays missing (runbook §10). Active rows carry no `reason`, so this note lives here, not in the catalog data.
+const S_USDCNY=akshare('www.safe.gov.cn','currency_boc_safe|美元',SAFE,'official_open');
+
+const CATALOG:MacroSeriesDef[]=[
+ // ---------------------------------------------------------------- US
+ {id:'US_FEDFUNDS_EFF_D',region:'US',role:'indicator',type:'policy_rate',name:{zh:'联邦基金有效利率（日）',en:'Effective federal funds rate (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DFF,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_DFF',region:'US',role:'indicator',type:'policy_rate',name:{zh:'联邦基金有效利率（月末）',en:'Effective federal funds rate (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DFF,derive:{kind:'month_end',from:'US_FEDFUNDS_EFF_D'},revisionPolicy:'immutable',weight:25,changeKind:'bp',definitionVersion:1},
+ {id:'US_FED_TARGET_UPPER_D',region:'US',role:'event_source',type:'policy_rate',name:{zh:'联邦基金目标区间上限',en:'Federal funds target range upper limit'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:fred('DFEDTARU',FED),revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_FED_TARGET_LOWER_D',region:'US',role:'event_source',type:'policy_rate',name:{zh:'联邦基金目标区间下限',en:'Federal funds target range lower limit'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:fred('DFEDTARL',FED),revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ // MACRO-P3 (WP-S6, spec 2026-11-07 §4.2): the single Fed funds target before the range existed; FRED DFEDTAR ends 2008-12-15. Event source for policy events (§5.4); never enters the regime.
+ {id:'US_FED_TARGET_D',region:'US',role:'event_source',type:'policy_rate',name:{zh:'联邦基金目标利率（单一目标，止于 2008-12-15）',en:'Federal funds target rate (single target, through 2008-12-15)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:fred('DFEDTAR',FED),revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ // /MACRO-P3
+ {id:'US_DGS10_D',region:'US',role:'indicator',type:'bond_yield',name:{zh:'美国 10 年期国债收益率（日）',en:'U.S. 10-year Treasury yield (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DGS10,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_DGS10',region:'US',role:'indicator',type:'bond_yield',name:{zh:'美国 10 年期国债收益率（月末）',en:'U.S. 10-year Treasury yield (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DGS10,derive:{kind:'month_end',from:'US_DGS10_D'},revisionPolicy:'immutable',weight:15,changeKind:'bp',definitionVersion:1},
+ {id:'US_DTWEXBGS_D',region:'US',role:'indicator',type:'fx',name:{zh:'美元名义广义指数（日）',en:'Nominal broad U.S. dollar index (daily)'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_DTWEX,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_DTWEXBGS',region:'US',role:'indicator',type:'fx',name:{zh:'美元名义广义指数（月末）',en:'Nominal broad U.S. dollar index (month end)'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DTWEX,derive:{kind:'month_end',from:'US_DTWEXBGS_D'},revisionPolicy:'immutable',weight:10,changeKind:'pct',definitionVersion:1},
+ {id:'US_CPI_INDEX',region:'US',role:'indicator',type:null,name:{zh:'美国 CPI 指数（城市全体消费者，季调）',en:'U.S. CPI for all urban consumers (index, SA)'},unit:'index_1982_84_100',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_CPI,revisionPolicy:'revisable',weight:0,changeKind:'pct',releaseLagDays:15,definitionVersion:1},
+ {id:'US_CPI_YOY',region:'US',role:'indicator',type:'inflation_yoy',name:{zh:'美国 CPI 同比',en:'U.S. CPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_CPI,derive:{kind:'yoy_from_index',from:'US_CPI_INDEX'},revisionPolicy:'revisable',weight:15,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'US_UNRATE',region:'US',role:'indicator',type:'labor_rate',name:{zh:'美国失业率',en:'U.S. unemployment rate'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:fred('UNRATE',BLS),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:7,definitionVersion:1},
+ {id:'US_PPI_FD_INDEX',region:'US',role:'indicator',type:null,name:{zh:'美国 PPI 最终需求指数（季调）',en:'U.S. PPI final demand (index, SA)'},unit:'index_2009_11_100',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_PPI,revisionPolicy:'revisable',weight:0,changeKind:'pct',releaseLagDays:15,definitionVersion:1},
+ {id:'US_PPI_FD_YOY',region:'US',role:'indicator',type:'inflation_yoy',name:{zh:'美国 PPI 最终需求同比',en:'U.S. PPI final demand, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:S_PPI,derive:{kind:'yoy_from_index',from:'US_PPI_FD_INDEX'},revisionPolicy:'revisable',weight:5,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'US_ISM_PMI',region:'US',role:'indicator',type:'pmi',name:{zh:'ISM 制造业 PMI',en:'ISM manufacturing PMI'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'missing',reason:{zh:'FRED 已于 2016 年移除 ISM 数据；没有可采集的原始来源与再分发权利',en:'FRED removed ISM data in 2016; no collectable original source or redistribution rights'},source:null,revisionPolicy:'revisable',weight:15,changeKind:'points',definitionVersion:1},
+ {id:'US_VIX_D',region:'US',role:'indicator',type:'risk_index',name:{zh:'VIX 波动率指数（日）',en:'Cboe Volatility Index (daily)'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:S_VIX,revisionPolicy:'immutable',weight:0,changeKind:'points',definitionVersion:1},
+ {id:'US_VIX',region:'US',role:'indicator',type:'risk_index',name:{zh:'VIX 波动率指数（月末）',en:'Cboe Volatility Index (month end)'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:S_VIX,derive:{kind:'month_end',from:'US_VIX_D'},revisionPolicy:'immutable',weight:5,changeKind:'points',definitionVersion:1},
+ {id:'US_WTI_D',region:'US',role:'asset',type:'asset_price',name:{zh:'WTI 原油现货价格（日）',en:'WTI crude oil spot price (daily)'},unit:'usd_per_bbl',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_WTI,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_WTI',region:'US',role:'asset',type:'asset_price',name:{zh:'WTI 原油现货价格（月末）',en:'WTI crude oil spot price (month end)'},unit:'usd_per_bbl',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_WTI,derive:{kind:'month_end',from:'US_WTI_D'},revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_UST10Y',region:'US',role:'asset',type:'asset_price',name:{zh:'美国 10 年期国债（资产视角）',en:'U.S. 10-year Treasury (asset view)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_DGS10,aliasOf:'US_DGS10',revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'US_SP500',region:'US',role:'asset',type:'asset_price',name:{zh:'标普 500 指数',en:'S&P 500'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('SP500',SPDJI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_NASDAQCOM',region:'US',role:'asset',type:'asset_price',name:{zh:'纳斯达克综合指数',en:'Nasdaq Composite'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('NASDAQCOM',NASDAQ,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'US_DJIA',region:'US',role:'asset',type:'asset_price',name:{zh:'道琼斯工业平均指数',en:'Dow Jones Industrial Average'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:R_THIRD_PARTY,source:fred('DJIA',SPDJI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ // ---------------------------------------------------------------- CN
+ {id:'CN_CPI_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'居民消费价格指数（上年同月=100）',en:'CPI (same month last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_CPI,revisionPolicy:'immutable',weight:0,changeKind:'points',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_CPI_YOY',region:'CN',role:'indicator',type:'inflation_yoy',name:{zh:'中国 CPI 同比',en:'China CPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_CPI,derive:{kind:'index_minus_100',from:'CN_CPI_INDEX'},revisionPolicy:'immutable',weight:10,changeKind:'pp',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_PPI_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'工业生产者出厂价格指数（上年同月=100）',en:'PPI (same month last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_PPI,revisionPolicy:'immutable',weight:0,changeKind:'points',releaseLagDays:12,definitionVersion:1},
+ {id:'CN_PPI_YOY',region:'CN',role:'indicator',type:'inflation_yoy',name:{zh:'中国 PPI 同比',en:'China PPI, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:S_CN_PPI,derive:{kind:'index_minus_100',from:'CN_PPI_INDEX'},revisionPolicy:'immutable',weight:15,changeKind:'pp',releaseLagDays:12,definitionVersion:1},
+ // NBS publishes PMI already seasonally adjusted (NBS PMI explanatory notes), hence 'sa'.
+ {id:'CN_PMI_MFG',region:'CN',role:'indicator',type:'pmi',name:{zh:'制造业采购经理指数',en:'Manufacturing PMI'},unit:'index',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:nbs('月度数据|采购经理指数 > 制造业采购经理指数 > 制造业采购经理指数(%)'),revisionPolicy:'immutable',weight:15,changeKind:'points',releaseLagDays:1,definitionVersion:1},
+ {id:'CN_GDP_INDEX',region:'CN',role:'indicator',type:null,name:{zh:'国内生产总值指数（当季，上年同期=100）',en:'GDP index (quarter, same quarter last year = 100)'},unit:'index_prev_year_100',nativeFrequency:'quarterly',period:'quarter',adjustment:'nsa',status:'active',source:S_CN_GDP,revisionPolicy:'revisable',weight:0,changeKind:'points',releaseLagDays:20,definitionVersion:1},
+ {id:'CN_GDP_YOY',region:'CN',role:'indicator',type:'growth_yoy',name:{zh:'中国 GDP 当季同比',en:'China GDP, quarter year over year'},unit:'pct',nativeFrequency:'quarterly',period:'quarter',adjustment:'nsa',status:'active',source:S_CN_GDP,derive:{kind:'index_minus_100',from:'CN_GDP_INDEX'},revisionPolicy:'revisable',weight:5,changeKind:'pp',releaseLagDays:20,definitionVersion:1},
+ {id:'CN_M2_YOY',region:'CN',role:'indicator',type:'liquidity_yoy',name:{zh:'M2 同比增长',en:'M2, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:nbs('月度数据|金融 > 货币供应量 > 货币和准货币(M2)供应量_同比增长(%)',PBOC),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:15,definitionVersion:1},
+ {id:'CN_EXPORT_YOY',region:'CN',role:'indicator',type:'growth_yoy',name:{zh:'出口额同比（美元计）',en:'Exports, year over year (USD)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'active',source:nbs('月度数据|对外经济 > 货物进出口总额 > 出口总值同比增长(%)',GACC),revisionPolicy:'revisable',weight:10,changeKind:'pp',releaseLagDays:10,definitionVersion:1},
+ {id:'CN_CGB_10Y_D',region:'CN',role:'indicator',type:'bond_yield',name:{zh:'中债 10 年期国债收益率（日）',en:'ChinaBond 10-year government bond yield (daily)'},unit:'pct',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_CGB,revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'CN_CGB_10Y',region:'CN',role:'indicator',type:'bond_yield',name:{zh:'中债 10 年期国债收益率（月末）',en:'ChinaBond 10-year government bond yield (month end)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_CGB,derive:{kind:'month_end',from:'CN_CGB_10Y_D'},revisionPolicy:'immutable',weight:15,changeKind:'bp',definitionVersion:1},
+ {id:'CN_USDCNY_CP_D',region:'CN',role:'indicator',type:'fx',name:{zh:'人民币汇率中间价 美元（日）',en:'RMB central parity, USD (daily)'},unit:'cny_per_100usd',nativeFrequency:'daily',period:'day',adjustment:'na',status:'active',source:S_USDCNY,revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+ {id:'CN_USDCNY_CP',region:'CN',role:'indicator',type:'fx',name:{zh:'人民币汇率中间价 美元（月末）',en:'RMB central parity, USD (month end)'},unit:'cny_per_100usd',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_USDCNY,derive:{kind:'month_end',from:'CN_USDCNY_CP_D'},revisionPolicy:'immutable',weight:5,changeKind:'pct',definitionVersion:1},
+ {id:'CN_LPR_1Y',region:'CN',role:'indicator',type:'policy_rate',name:{zh:'1 年期贷款市场报价利率',en:'1-year loan prime rate'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'missing',reason:{zh:'AKShare 仅有东方财富转载，无已核实的官方接口（全国银行间同业拆借中心）',en:'AKShare only offers a third-party relay; no verified official interface (CFETS)'},source:null,revisionPolicy:'immutable',weight:10,changeKind:'bp',definitionVersion:1},
+ {id:'CN_MLF_1Y',region:'CN',role:'indicator',type:'policy_rate',name:{zh:'1 年期中期借贷便利利率',en:'1-year MLF rate'},unit:'pct',nativeFrequency:'event',period:'day',adjustment:'na',status:'missing',reason:{zh:'无已核实的官方接口（中国人民银行）',en:"No verified official interface (People's Bank of China)"},source:null,revisionPolicy:'immutable',weight:10,changeKind:'bp',definitionVersion:1},
+ {id:'CN_AFRE_STOCK_YOY',region:'CN',role:'indicator',type:'liquidity_yoy',name:{zh:'社会融资规模存量同比',en:'Aggregate financing stock, year over year'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'nsa',status:'missing',reason:{zh:'AKShare 只有商务部转载的增量口径，口径不同，不得替代存量同比',en:'AKShare only has a relayed flow measure; a different definition cannot stand in for the stock growth rate'},source:null,revisionPolicy:'revisable',weight:20,changeKind:'pp',definitionVersion:1},
+ {id:'CN_CGB10Y',region:'CN',role:'asset',type:'asset_price',name:{zh:'中国 10 年期国债（资产视角）',en:'China 10-year government bond (asset view)'},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'na',status:'active',source:S_CGB,aliasOf:'CN_CGB_10Y',revisionPolicy:'immutable',weight:0,changeKind:'bp',definitionVersion:1},
+ {id:'CN_CSI300',region:'CN',role:'asset',type:'asset_price',name:{zh:'沪深 300 指数',en:'CSI 300 Index'},unit:'index',nativeFrequency:'daily',period:'day',adjustment:'na',status:'restricted',reason:{zh:'中证指数公司数据，再分发权利未确认，暂不采集',en:'China Securities Index data; redistribution rights not confirmed, not collected'},source:akshare('www.csindex.com.cn','stock_zh_index_hist_csindex|000300',CSI,'third_party'),revisionPolicy:'immutable',weight:0,changeKind:'pct',definitionVersion:1},
+];
+
+function deepFreeze<T>(v:T):T{
+ if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const k of Object.keys(v as object))deepFreeze((v as Record<string,unknown>)[k]);}
+ return v;
+}
+// Shared source constants appear in several rows; freezing them once is fine (they are never mutated).
+export const MACRO_CATALOG:readonly MacroSeriesDef[]=deepFreeze(CATALOG);
+
+// ---------------------------------------------------------------- canonical JSON + SHA-256 (pure TS)
+/** JSON with object keys sorted (UTF-16 code unit order), undefined members dropped, arrays in order. */
+export function canonicalJson(v:unknown):string{
+ if(v===null||typeof v==='boolean'||typeof v==='string')return JSON.stringify(v);
+ if(typeof v==='number'){if(!Number.isFinite(v))throw new Error('canonical_json_unsupported:number');return JSON.stringify(v);}
+ if(Array.isArray(v))return `[${v.map(canonicalJson).join(',')}]`;
+ if(typeof v==='object'){const o=v as Record<string,unknown>;return `{${Object.keys(o).filter(k=>o[k]!==undefined).sort().map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;}
+ throw new Error(`canonical_json_unsupported:${typeof v}`);
+}
+const K=new Uint32Array([
+// src/lib/macro/catalog.test.ts
+// Catalog invariants (spec §4.2, §0.2 M1–M5, M14, M15) and the content-derived CATALOG_VERSION.
+import {createHash} from 'node:crypto';
+import {describe,expect,it} from 'vitest';
+import {CATALOG_VERSION,MACRO_CATALOG,canonicalJson,catalogById,collectableOf,indicatorsOf,regimeInputsOf,sha256HexSync} from './catalog';
+import {REGIMES} from './judgment-contract';
+
+const BANNED=/yfinance|yahoo|eastmoney|jin10|sina|10jqka|xueqiu/i;
+const AKSHARE_HOSTS=new Set(['data.stats.gov.cn','yield.chinabond.com.cn','www.safe.gov.cn']);
+const weightOf=(region:'US'|'CN')=>MACRO_CATALOG.filter(d=>d.region===region&&d.role==='indicator').reduce((s,d)=>s+d.weight,0);
+
+describe('MACRO_CATALOG invariants',()=>{
+ it('has unique ids of the stored form and bilingual names',()=>{
+  const ids=MACRO_CATALOG.map(d=>d.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for(const d of MACRO_CATALOG){expect(d.id).toMatch(/^[A-Z][A-Z0-9_]{0,63}$/);expect(d.name.zh.length).toBeGreaterThan(0);expect(d.name.en.length).toBeGreaterThan(0);expect(d.definitionVersion).toBeGreaterThanOrEqual(1);}
+ });
+ it('never names a banned host or vendor anywhere',()=>{
+  expect(JSON.stringify(MACRO_CATALOG)).not.toMatch(BANNED);
+ });
+ it('active akshare series fetch only from verified official hosts; FRED series from fred.stlouisfed.org',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status!=='active'||!d.source)continue;
+   if(d.source.adapter==='akshare')expect({id:d.id,host:d.source.fetchHost,ok:AKSHARE_HOSTS.has(d.source.fetchHost)}).toEqual({id:d.id,host:d.source.fetchHost,ok:true});
+   else expect(d.source.fetchHost).toBe('fred.stlouisfed.org');
+  }
+ });
+ it('missing ⇒ source null + reason; restricted ⇒ third_party rights + reason; active ⇒ source and no reason',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.status==='missing'){expect(d.source).toBeNull();expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='restricted'){expect(d.source?.rights).toBe('third_party');expect(d.reason?.zh&&d.reason.en).toBeTruthy();}
+   if(d.status==='active'){expect(d.source).not.toBeNull();expect(d.reason).toBeUndefined();expect(d.source!.rights).not.toBe('third_party');}
+  }
+ });
+ it('FRED rows record the original publisher via FRED; NBS-relayed rows record the original agency via NBS',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.source?.adapter==='fred_csv'){expect(d.source.via?.en).toMatch(/FRED/);expect(d.source.publisher.en).not.toMatch(/FRED/);}
+  }
+  expect(catalogById('CN_M2_YOY')!.source).toMatchObject({publisher:{en:"People's Bank of China"},via:{en:'National Bureau of Statistics of China'}});
+  expect(catalogById('CN_EXPORT_YOY')!.source).toMatchObject({publisher:{en:'General Administration of Customs of China'},via:{en:'National Bureau of Statistics of China'}});
+ });
+ it('derived and alias series point at an existing series of the same region; derived series carry their input source',()=>{
+  for(const d of MACRO_CATALOG){
+   if(d.derive){const from=catalogById(d.derive.from);expect({id:d.id,from:from?.id,region:from?.region}).toEqual({id:d.id,from:d.derive.from,region:d.region});expect(from!.derive).toBeUndefined();expect(d.source).toEqual(from!.source);expect(d.status).toBe(from!.status);}
+   if(d.aliasOf){const to=catalogById(d.aliasOf);expect(to?.region).toBe(d.region);expect(d.source).toEqual(to!.source);expect(d.derive).toBeUndefined();expect(d.weight).toBe(0);}
+  }
+  expect(catalogById('US_CPI_YOY')!.derive).toEqual({kind:'yoy_from_index',from:'US_CPI_INDEX'});
+  expect(catalogById('CN_CPI_YOY')!.derive).toEqual({kind:'index_minus_100',from:'CN_CPI_INDEX'});
+  expect(catalogById('US_DGS10')!.derive).toEqual({kind:'month_end',from:'US_DGS10_D'});
+  expect(catalogById('US_UST10Y')).toMatchObject({role:'asset',aliasOf:'US_DGS10',changeKind:'bp'});
+  expect(catalogById('CN_CGB10Y')).toMatchObject({role:'asset',aliasOf:'CN_CGB_10Y',changeKind:'bp'});
+ });
+ it('daily and event native ids carry weight 0; assets carry weight 0',()=>{
+  for(const d of MACRO_CATALOG){
+   if(!d.derive&&(d.nativeFrequency==='daily'||d.nativeFrequency==='event')&&d.status==='active')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+   if(!d.derive&&d.nativeFrequency==='daily')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+   if(d.role!=='indicator')expect({id:d.id,w:d.weight}).toEqual({id:d.id,w:0});
+  }
+ });
+ it('weights per spec §4.2 (US 100, CN 125 including missing/restricted rows)',()=>{
+  const w=(id:string)=>catalogById(id)!.weight;
+  expect([w('US_DFF'),w('US_DGS10'),w('US_DTWEXBGS'),w('US_CPI_YOY'),w('US_UNRATE'),w('US_PPI_FD_YOY'),w('US_ISM_PMI'),w('US_VIX')]).toEqual([25,15,10,15,10,5,15,5]);
+  expect([w('CN_CPI_YOY'),w('CN_PPI_YOY'),w('CN_PMI_MFG'),w('CN_GDP_YOY'),w('CN_M2_YOY'),w('CN_EXPORT_YOY'),w('CN_CGB_10Y'),w('CN_USDCNY_CP'),w('CN_LPR_1Y'),w('CN_MLF_1Y'),w('CN_AFRE_STOCK_YOY')]).toEqual([10,15,15,5,10,10,15,5,10,10,20]);
+  expect(weightOf('US')).toBe(100);expect(weightOf('CN')).toBe(125);
+ });
+ it('adjustment, release lags and statuses per spec §4.2 / §0.2 M15',()=>{
+  for(const id of ['US_CPI_INDEX','US_CPI_YOY','US_UNRATE','US_PPI_FD_INDEX','US_PPI_FD_YOY'])expect(catalogById(id)!.adjustment).toBe('sa');
+  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||(d.derive?.kind==='month_end'))expect({id:d.id,a:d.adjustment}).toEqual({id:d.id,a:'na'});
+  for(const id of ['CN_CPI_INDEX','CN_PPI_INDEX','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY'])expect(catalogById(id)!.adjustment).toBe('nsa');
+  const lag=(id:string)=>catalogById(id)!.releaseLagDays;
+  expect([lag('US_CPI_YOY'),lag('US_UNRATE'),lag('US_PPI_FD_YOY'),lag('CN_CPI_YOY'),lag('CN_PPI_YOY'),lag('CN_PMI_MFG'),lag('CN_GDP_YOY'),lag('CN_M2_YOY'),lag('CN_EXPORT_YOY')]).toEqual([15,7,15,12,12,1,20,15,10]);
+  for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||d.nativeFrequency==='event'||d.derive?.kind==='month_end')expect({id:d.id,lag:d.releaseLagDays}).toEqual({id:d.id,lag:undefined});
+  expect(MACRO_CATALOG.filter(d=>d.status==='missing').map(d=>d.id).sort()).toEqual(['CN_AFRE_STOCK_YOY','CN_LPR_1Y','CN_MLF_1Y','US_ISM_PMI']);
+  expect(MACRO_CATALOG.filter(d=>d.status==='restricted').map(d=>d.id).sort()).toEqual(['CN_CSI300','US_DJIA','US_NASDAQCOM','US_SP500','US_VIX','US_VIX_D']);
+  expect(catalogById('CN_USDCNY_CP_D')!.unit).toBe('cny_per_100usd');
+ });
+});
+
+describe('MACRO-P3 catalog addition (WP-S6)',()=>{
+ it('US_FED_TARGET_D: FRED DFEDTAR, event_source, immutable, weight 0, daily, never a regime input',()=>{
+  expect(catalogById('US_FED_TARGET_D')).toMatchObject({region:'US',role:'event_source',type:'policy_rate',unit:'pct',nativeFrequency:'daily',period:'day',status:'active',revisionPolicy:'immutable',weight:0,changeKind:'bp',
+   source:{adapter:'fred_csv',seriesKey:'DFEDTAR',fetchHost:'fred.stlouisfed.org',rights:'public_domain',publisher:{en:'Board of Governors of the Federal Reserve System'}}});
+  expect(regimeInputsOf('US').map(d=>d.id)).not.toContain('US_FED_TARGET_D');
+  expect(indicatorsOf('US').map(d=>d.id)).not.toContain('US_FED_TARGET_D');
+ });
+});
+
+describe('catalog helpers',()=>{
+ it('indicatorsOf lists display indicators (no derive inputs, no event sources); regimeInputsOf keeps active weighted monthly/quarterly ones',()=>{
+  expect(indicatorsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
+  expect(indicatorsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP','CN_LPR_1Y','CN_MLF_1Y','CN_AFRE_STOCK_YOY']);
+  expect(regimeInputsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY']);
+  expect(regimeInputsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP']);
+  for(const r of ['US','CN'] as const)for(const d of regimeInputsOf(r))expect(d.nativeFrequency).not.toBe('daily');
+ });
+ it('collectableOf lists active native (own-evidence) series per adapter',()=>{
+  expect(collectableOf('fred_csv').map(d=>d.source!.seriesKey)).toEqual(['DFF','DFEDTARU','DFEDTARL','DFEDTAR','DGS10','DTWEXBGS','CPIAUCSL','UNRATE','PPIFIS','DCOILWTICO']);
+  expect(collectableOf('akshare').map(d=>d.id)).toEqual(['CN_CPI_INDEX','CN_PPI_INDEX','CN_PMI_MFG','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y_D','CN_USDCNY_CP_D']);
+  for(const d of [...collectableOf('fred_csv'),...collectableOf('akshare')]){expect(d.derive).toBeUndefined();expect(d.aliasOf).toBeUndefined();}
+ });
+ it('catalogById answers undefined for unknown ids; the catalog is deeply frozen',()=>{
+  expect(catalogById('NOPE')).toBeUndefined();
+  expect(Object.isFrozen(MACRO_CATALOG)).toBe(true);
+  expect(Object.isFrozen(catalogById('US_UNRATE')!.source)).toBe(true);
+  expect(Object.isFrozen(catalogById('US_UNRATE')!.source!.publisher)).toBe(true);
+ });
+});
+
+describe('CATALOG_VERSION',()=>{
+ it('pure-TS SHA-256 equals node:crypto',()=>{
+  for(const s of ['','abc','中文 ✓','a'.repeat(55),'a'.repeat(56),'a'.repeat(64),'b'.repeat(1000)])expect(sha256HexSync(s)).toBe(createHash('sha256').update(s,'utf8').digest('hex'));
+ });
+ it('canonicalJson sorts keys, drops undefined, keeps array order, refuses non-finite numbers',()=>{
+  expect(canonicalJson({b:1,a:[3,{d:undefined,c:'x'}],e:null})).toBe('{"a":[3,{"c":"x"}],"b":1,"e":null}');
+  expect(()=>canonicalJson({a:Number.NaN})).toThrow('canonical_json_unsupported');
+ });
+ it('is macro-catalog/ + 12 hex of the canonical catalog JSON, stable across evaluations',()=>{
+  expect(CATALOG_VERSION).toMatch(/^macro-catalog\/[0-9a-f]{12}$/);
+  expect(CATALOG_VERSION).toBe(`macro-catalog/${createHash('sha256').update(canonicalJson(MACRO_CATALOG)).digest('hex').slice(0,12)}`);
+  expect(canonicalJson(JSON.parse(JSON.stringify(MACRO_CATALOG)))).toBe(canonicalJson(MACRO_CATALOG));   // what macro_upsert_catalog stores hashes the same
+ });
+});
+
+describe('judgment contract mirror',()=>{
+ it('keeps the F4 regime tie-break order',()=>{expect(REGIMES).toEqual(['recovery','overheat','stagflation','recession']);});
+});
+
+exec
+/bin/zsh -lc 'cat src/lib/macro/regime.test.ts src/components/macro/macro-messages.test.ts; cat src/components/macro/strategy/strategy-view-model.ts' in /Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f
+ succeeded in 0ms:
+// src/lib/macro/regime.test.ts
+import {describe,expect,it} from 'vitest';
+import {MACRO_CATALOG,catalogById,regimeInputsOf} from './catalog';
+import {METHODOLOGY_VERSION,RULES,RULES_VERSION,WEIGHTS_V1,classifyRegime,matchRule,pickStates,regionWeights} from './regime';
+import type {RegimeInput} from './regime';
+import type {SeriesType} from './types';
+
+let n=0;
+const o=(period_end:string,value_text:string)=>({observation_id:`obs-${++n}`,period_end,value_text});
+
+// US fixture — hand-computed (weights from WEIGHTS_V1; denominator Σ US = 25+15+10+15+10+5+15+5 = 100)
+//  US_DFF      25  v=4.33, Δ=0 → policy.2_5to4_5 {rec .3, ov .2, st .1, recess .1} → 7.5 / 5 / 2.5 / 2.5
+//  US_DGS10    15  4.25 − 3.95 = 0.30 ≥ 0.25 → bond.d3m.ge25bp {ov .5, st .3} → ov 7.5, st 4.5
+//  US_DTWEXBGS 10  (126.5/122 − 1)×100 = 3.6885 ≥ 2 → fx.chg3m.ge2 {ov .4, st .3} → ov 4, st 3
+//  US_CPI_YOY  15  2.9 → infl.2to3 {rec .4, ov .3, st .1, recess .1} → 6 / 4.5 / 1.5 / 1.5
+//  US_UNRATE   10  4.1 − 3.8 = 0.3 (decimal; float gives 0.2999…) → labor.d3m.ge0_3 {st .4, recess .5} → st 4, recess 5
+//  US_PPI_FD_YOY 5 3.4 → infl.3to4 {ov .6, st .3} → ov 3, st 1.5
+//  scores: rec 7.5+6 = 13.5; ov 5+7.5+4+4.5+3 = 24; st 2.5+4.5+3+1.5+4+1.5 = 17; recess 2.5+1.5+5 = 9; Σ = 63.5
+//  norm: 13.5/63.5 = 0.212598, 24/63.5 = 0.377953, 17/63.5 = 0.267717, 9/63.5 = 0.141732
+//  primary overheat, secondary stagflation, margin_pp = 100×(24−17)/63.5 = 11.023622
+//  coverage = 80/100 = 0.8; uncovered = 20 (ISM 15 missing + VIX 5 restricted)
+//  growth_axis: only UNRATE → 10×(0+0−.4−.5)/10 = −0.9
+//  inflation_axis: CPI 15×(.3+.1−.4−.1) = −1.5; PPI 5×(.6+.3) = 4.5; (−1.5+4.5)/20 = 0.15
+const US:RegimeInput={region:'US',series:{
+ US_DFF:{latest:o('2026-10-31','4.33'),prev:o('2026-09-30','4.33'),prev3m:o('2026-07-31','4.33')},
+ US_DGS10:{latest:o('2026-10-31','4.25'),prev:o('2026-09-30','4.15'),prev3m:o('2026-07-31','3.95')},
+ US_DTWEXBGS:{latest:o('2026-10-31','126.5'),prev:o('2026-09-30','125'),prev3m:o('2026-07-31','122')},
+ US_CPI_YOY:{latest:o('2026-09-30','2.9'),prev:o('2026-08-31','2.6'),prev3m:o('2026-06-30','2.7')},
+ US_UNRATE:{latest:o('2026-09-30','4.1'),prev:o('2026-08-31','4'),prev3m:o('2026-06-30','3.8')},
+ US_PPI_FD_YOY:{latest:o('2026-09-30','3.4'),prev:o('2026-08-31','3.1')},
+}};
+
+// CN fixture — hand-computed (denominator Σ CN = 10+15+15+5+10+10+15+5+10+10+20 = 125)
+//  CN_CPI_YOY 10  0.3 → infl.lt1 {rec .1, recess .7} → 1 / 7
+//  CN_PPI_YOY 15  −2.3 → infl.lt1 → 1.5 / 10.5
+//  CN_PMI_MFG 15  49.8 → pmi.47to50 {rec .1, st .4, recess .4} → 1.5 / 6 / 6
+//  CN_GDP_YOY  5  v=4.8, Δ = 4.8−5.2 < 0 → no rule matches (4.5 ≤ v and Δ < 0) → uncovered
+//  CN_M2_YOY  10  8.4, Δ = −0.4 → liq.ge8.down {rec .2, ov .4, st .2} → 2 / 4 / 2
+//  CN_EXPORT_YOY 10  8.3, Δ = +5.9 → growth.ge5.up {rec .5, ov .3} → 5 / 3
+//  CN_CGB_10Y 15  1.75 − 2.05 = −0.30 ≤ −0.25 → bond.d3m.le-25bp {rec .2, recess .5} → 3 / 7.5
+//  CN_USDCNY_CP 5  (712.68/718.5 − 1)×100 = −0.8100 → between ±2 → no rule → uncovered
+//  matched = 10+15+15+10+10+15 = 75 → coverage 75/125 = 0.6 (boundary: NOT < 0.6, so classified)
+//  scores: rec 1+1.5+1.5+2+5+3 = 14; ov 4+3 = 7; st 6+2 = 8; recess 7+10.5+6+7.5 = 31; Σ = 60
+//  norm: .233333 / .116667 / .133333 / .516667; primary recession, secondary recovery, margin 100×17/60 = 28.333333
+//  growth_axis: PMI 15×(.1−.4−.4) = −10.5; EXPORT 10×(.5+.3) = 8; (−2.5)/25 = −0.1
+//  inflation_axis: CPI 10×(−.1−.7) = −8; PPI 15×(−.8) = −12; −20/25 = −0.8; uncovered = 125−75 = 50
+const CN:RegimeInput={region:'CN',series:{
+ CN_CPI_YOY:{latest:o('2026-09-30','0.3'),prev:o('2026-08-31','-0.4')},
+ CN_PPI_YOY:{latest:o('2026-09-30','-2.3'),prev:o('2026-08-31','-2.9')},
+ CN_PMI_MFG:{latest:o('2026-10-31','49.8'),prev:o('2026-09-30','49.8')},
+ CN_GDP_YOY:{latest:o('2026-09-30','4.8'),prev:o('2026-06-30','5.2'),prev3m:o('2026-06-30','5.2')},
+ CN_M2_YOY:{latest:o('2026-09-30','8.4'),prev:o('2026-08-31','8.8')},
+ CN_EXPORT_YOY:{latest:o('2026-09-30','8.3'),prev:o('2026-08-31','2.4')},
+ CN_CGB_10Y:{latest:o('2026-10-31','1.75'),prev:o('2026-09-30','1.86'),prev3m:o('2026-07-31','2.05')},
+ CN_USDCNY_CP:{latest:o('2026-10-31','712.68'),prev:o('2026-09-30','711.2'),prev3m:o('2026-07-31','718.5')},
+}};
+
+describe('versions and weights',()=>{
+ it('pins the methodology and rules versions',()=>{
+  expect(METHODOLOGY_VERSION).toBe('v1.0');
+  expect(RULES_VERSION).toBe('macro-regime-rules/1.0');
+ });
+ it('WEIGHTS_V1 equals the catalog weight of every indicator (spec §0.2 M14)',()=>{
+  for(const def of MACRO_CATALOG.filter(d=>d.role==='indicator'))expect([def.id,def.weight]).toEqual([def.id,WEIGHTS_V1[def.id]??0]);
+  for(const id of Object.keys(WEIGHTS_V1)){
+   const def=catalogById(id);
+   expect(def,id).toBeDefined();
+   expect(def!.role).toBe('indicator');
+   expect(def!.type).not.toBeNull();
+  }
+ });
+ it('includes missing/restricted items in the denominator; regime inputs are exactly the weighted active items',()=>{
+  expect(Object.values(regionWeights('US')).reduce((a,b)=>a+b,0)).toBe(100);
+  expect(Object.values(regionWeights('CN')).reduce((a,b)=>a+b,0)).toBe(125);
+  for(const region of ['US','CN'] as const){
+   const active=Object.keys(regionWeights(region)).filter(id=>catalogById(id)!.status==='active').sort();
+   expect(regimeInputsOf(region).map(d=>d.id).sort()).toEqual(active);
+  }
+ });
+});
+
+describe('matchRule boundaries (spec §5.2)',()=>{
+ const cases:[SeriesType,number,number|null,number|null,string|null][]=[
+  ['policy_rate',2.49,null,null,'policy.lt2_5'],['policy_rate',2.5,null,null,'policy.2_5to4_5'],['policy_rate',4.49,null,null,'policy.2_5to4_5'],
+  ['policy_rate',4.5,null,0,'policy.ge4_5.up'],['policy_rate',4.5,null,-0.25,'policy.ge4_5.down'],['policy_rate',4.5,null,null,null],
+  ['bond_yield',4,0.25,null,'bond.d3m.ge25bp'],['bond_yield',4,0.2499,null,'bond.d3m.other'],['bond_yield',4,-0.25,null,'bond.d3m.le-25bp'],
+  ['bond_yield',4,-0.2499,null,'bond.d3m.other'],['bond_yield',4,null,0.5,null],
+  ['fx',100,2,null,'fx.chg3m.ge2'],['fx',100,1.99,null,null],['fx',100,-2,null,'fx.chg3m.le-2'],['fx',100,-1.99,null,null],['fx',7.12,null,null,null],
+  ['inflation_yoy',0.99,null,null,'infl.lt1'],['inflation_yoy',1,null,null,'infl.1to2'],['inflation_yoy',1.99,null,null,'infl.1to2'],
+  ['inflation_yoy',2,null,null,'infl.2to3'],['inflation_yoy',3,null,null,'infl.2to3'],['inflation_yoy',3.01,null,null,'infl.3to4'],
+  ['inflation_yoy',4,null,null,'infl.3to4'],['inflation_yoy',4.01,null,null,'infl.gt4'],
+  ['pmi',55,null,null,'pmi.ge55'],['pmi',54.99,null,null,'pmi.50to55'],['pmi',50,null,null,'pmi.50to55'],['pmi',49.99,null,null,'pmi.47to50'],
+  ['pmi',47,null,null,'pmi.47to50'],['pmi',46.99,null,null,'pmi.lt47'],
+  ['labor_rate',4,0.3,null,'labor.d3m.ge0_3'],['labor_rate',4,0.29,null,null],['labor_rate',4,-0.1,null,'labor.d3m.le-0_1'],['labor_rate',4,-0.09,null,null],['labor_rate',4,null,null,null],
+  ['growth_yoy',5,null,0,'growth.ge5.up'],['growth_yoy',5,null,-0.1,null],['growth_yoy',5,null,null,null],['growth_yoy',4.49,null,null,'growth.lt4_5'],['growth_yoy',4.5,null,1,null],
+  ['liquidity_yoy',8,null,0,'liq.ge8.up'],['liquidity_yoy',8,null,-0.1,'liq.ge8.down'],['liquidity_yoy',8,null,null,null],['liquidity_yoy',7.99,null,null,'liq.lt8'],
+  ['risk_index',14.99,null,null,'risk.lt15'],['risk_index',15,null,null,'risk.15to25'],['risk_index',24.99,null,null,'risk.15to25'],['risk_index',25,null,null,'risk.ge25'],
+  ['asset_price',100,1,1,null],
+ ];
+ it.each(cases)('%s v=%s d3=%s d1=%s → %s',(type,v,d3,d1,expected)=>{
+  expect(matchRule(type,v,d3,d1)?.id??null).toBe(expected);
+ });
+ it('rule ids are unique and every rule has bilingual labels',()=>{
+  const all=Object.values(RULES).flat();
+  expect(new Set(all.map(r=>r.id)).size).toBe(all.length);
+  for(const r of all){expect(r.label.zh.length).toBeGreaterThan(0);expect(r.label.en.length).toBeGreaterThan(0);}
+ });
+});
+
+describe('type isolation',()=>{
+ it('an fx level of 7.12 never matches a policy_rate rule',()=>{
+  expect(RULES.fx.every(r=>!r.id.startsWith('policy.'))).toBe(true);
+  expect(matchRule('fx',7.12,null,null)).toBeNull();
+  expect(matchRule('policy_rate',7.12,null,0)?.id).toBe('policy.ge4_5.up');   // same number, own type only
+  const r=classifyRegime({region:'CN',series:{CN_USDCNY_CP:{latest:o('2026-10-31','7.12')}}});
+  expect(r.contributions).toEqual([]);
+  expect(r.regime).toBeNull();
+ });
+});
+
+describe('classifyRegime',()=>{
+ it('US fixture matches the hand-computed result',()=>{
+  const r=classifyRegime(US);
+  expect(r.regime).toEqual({primary_state:'overheat',secondary_state:'stagflation',
+   scores:{recovery:13.5,overheat:24,stagflation:17,recession:9},
+   norm:{recovery:0.212598,overheat:0.377953,stagflation:0.267717,recession:0.141732},
+   coverage:0.8,margin_pp:11.023622,growth_axis:-0.9,inflation_axis:0.15});
+  expect(r.uncoveredWeight).toBe(20);
+  expect(r.contributions.map(c=>c.rule_id)).toEqual(['policy.2_5to4_5','bond.d3m.ge25bp','fx.chg3m.ge2','infl.2to3','labor.d3m.ge0_3','infl.3to4']);
+  const unrate=r.contributions.find(c=>c.series_id==='US_UNRATE')!;
+  expect(unrate).toEqual({series_id:'US_UNRATE',observation_id:US.series.US_UNRATE.latest.observation_id,rule_id:'labor.d3m.ge0_3',weight:10,
+   support:{stagflation:0.4,recession:0.5},contribution:{recovery:0,overheat:0,stagflation:4,recession:5}});
+ });
+ it('CN fixture matches the hand-computed result (coverage exactly 0.6 is classified)',()=>{
+  const r=classifyRegime(CN);
+  expect(r.regime).toEqual({primary_state:'recession',secondary_state:'recovery',
+   scores:{recovery:14,overheat:7,stagflation:8,recession:31},
+   norm:{recovery:0.233333,overheat:0.116667,stagflation:0.133333,recession:0.516667},
+   coverage:0.6,margin_pp:28.333333,growth_axis:-0.1,inflation_axis:-0.8});
+  expect(r.uncoveredWeight).toBe(50);
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('CN_GDP_YOY');
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('CN_USDCNY_CP');
+ });
+ it('coverage < 0.6 → regime null, contributions and uncovered weight still reported',()=>{
+  const {CN_CGB_10Y:_drop,...rest}=CN.series;
+  const r=classifyRegime({region:'CN',series:rest});   // matched 60/125 = 0.48
+  expect(r.regime).toBeNull();
+  expect(r.contributions).toHaveLength(5);
+  expect(r.uncoveredWeight).toBe(65);
+ });
+ it('a missing comparison period means the rule does not match (no neutral fill)',()=>{
+  const r=classifyRegime({region:'US',series:{...US.series,US_DGS10:{latest:o('2026-10-31','4.25'),prev:o('2026-09-30','4.15')}}});
+  expect(r.contributions.map(c=>c.series_id)).not.toContain('US_DGS10');
+  expect(r.uncoveredWeight).toBe(35);
+  expect(r.regime!.coverage).toBe(0.65);
+ });
+ it('ignores series of the other region and ids outside WEIGHTS_V1',()=>{
+  const r=classifyRegime({region:'US',series:{...US.series,CN_PMI_MFG:{latest:o('2026-10-31','60')},US_DGS10_D:{latest:o('2026-11-03','4.3')}}});
+  expect(r).toEqual(classifyRegime(US));
+ });
+ it('ignores a restricted series even when the caller supplies it with a matching value (second guard)',()=>{
+  expect(catalogById('US_VIX')?.status).toBe('restricted');
+  const r=classifyRegime({region:'US',series:{...US.series,US_VIX:{latest:o('2026-10-31','40'),prev:o('2026-09-30','15'),prev3m:o('2026-07-31','15')}}});
+  expect(r).toEqual(classifyRegime(US));
+  expect(r.contributions.some(c=>c.series_id==='US_VIX')).toBe(false);
+ });
+ it('is deterministic',()=>{expect(classifyRegime(CN)).toEqual(classifyRegime(CN));});
+});
+
+describe('pickStates tie order (recovery < overheat < stagflation < recession)',()=>{
+ it('all equal → recovery then overheat',()=>{
+  expect(pickStates({recovery:0.25,overheat:0.25,stagflation:0.25,recession:0.25})).toEqual({primary:'recovery',secondary:'overheat'});
+ });
+ it('tie for first between overheat and stagflation → overheat primary, stagflation secondary',()=>{
+  expect(pickStates({recovery:0,overheat:0.5,stagflation:0.5,recession:0})).toEqual({primary:'overheat',secondary:'stagflation'});
+ });
+ it('only one nonzero → secondary null',()=>{
+  expect(pickStates({recovery:0,overheat:0,stagflation:0,recession:1})).toEqual({primary:'recession',secondary:null});
+ });
+});
+// macro i18n domain (spec §10): zh/en key and placeholder parity, registration, judgment-off vocabulary.
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {describe,expect,it} from 'vitest';
+const load=(l:'zh'|'en')=>JSON.parse(readFileSync(resolve(process.cwd(),'messages',l,'macro.json'),'utf8'));
+function flat(v:unknown,p=''):[string,string][]{
+ if(typeof v==='string')return [[p,v]];
+ if(typeof v!=='object'||v===null||Array.isArray(v))throw new Error(`non-string message at ${p}`);
+ return Object.entries(v).flatMap(([k,c])=>flat(c,p?`${p}.${k}`:k));
+}
+const ph=(s:string)=>[...s.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]).sort();
+describe('macro messages',()=>{
+ it('zh and en have the same keys',()=>{
+  expect(flat(load('zh')).map(([k])=>k).sort()).toEqual(flat(load('en')).map(([k])=>k).sort());
+ });
+ it('placeholders match per key',()=>{
+  const en=new Map(flat(load('en')));
+  for(const [k,v] of flat(load('zh')))expect([k,ph(v)]).toEqual([k,ph(en.get(k)!)]);
+ });
+ it('copy outside the judgment slot never uses judgment vocabulary',()=>{
+  for(const [k,v] of flat(load('zh')).filter(([k])=>!k.startsWith('judgment.')))expect([k,/象限|得分|margin|概率|置信度/.test(v)]).toEqual([k,false]);
+  for(const [k,v] of flat(load('en')).filter(([k])=>!k.startsWith('judgment.')))expect([k,/quadrant|score|margin|probabilit|confidence/i.test(v)]).toEqual([k,false]);
+ });
+ it('is registered in MESSAGE_DOMAINS inside a MACRO block',()=>{
+  expect(readFileSync(resolve(process.cwd(),'src/i18n/request.ts'),'utf8')).toMatch(/\/\/ MACRO[\s\S]*'macro'[\s\S]*\/\/ \/MACRO/);
+ });
+});
+// src/components/macro/strategy/strategy-view-model.ts
+// Pure view helpers for the macro strategy UI (spec §3, §8, §9.1). vitest runs in node and cannot import .tsx, so every
+// decision a component makes lives here and the .tsx files stay thin renderers. Display rounding happens only here
+// (spec §5.3, §5.6): views carry exact value_text, the exact pct ratio '<end>/<base>' in change_text and full-precision *_raw
+// numbers; a pct change is rounded once, from the exact ratio (formatPctRatio). No F4 number is ever formatted.
+import type {Bilingual,Boundary,Cell,CycleCell,CycleTableView,DeviationCase,DiffKind,Episode,EventRow,ExplanationProjection,F4Mark,F4Summary,Fact,JudgmentStatus,
+ NodeView,ObsRef,PlaybookView,PolicyResponseView,Regime,Region,RenderedExplanation,ResponseDim,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
+import {roundPctRatio} from '@/lib/macro/strategy/numeric';
+import type {ReviewIndexItem} from '@/lib/macro/strategy/route-helpers';
+export type Locale='zh'|'en';
+export type StrategyT=(key:string,values?:Record<string,string|number>)=>string;
+export const MISSING='—';
+export const MINUS='−';
+// ---- API urls and load states (spec §8, §9.1)
+export const strategyApi={
+ transmission:(r:Region)=>`/api/macro/strategy/transmission?region=${r}`,
+ policyResponse:(w:1|3|6)=>`/api/macro/strategy/policy-response?window=${w}`,
+ cycleTable:(b:Boundary)=>`/api/macro/strategy/cycle-table?boundary=${b}`,
+ reviews:(r:Region)=>`/api/macro/strategy/reviews?region=${r}`,
+ review:(r:Region,month:string)=>`/api/macro/strategy/reviews/${r}/${month}`,
+ deviations:(r:Region)=>`/api/macro/strategy/deviations?region=${r}`,
+ explanations:(kind:'snapshot'|'review',id:string)=>`/api/macro/strategy/explanations?subject_kind=${kind}&subject_id=${encodeURIComponent(id)}`,
+ manifest:(id:string)=>`/api/macro/strategy/manifests/${id}`,
+};
+export type LoadState<T>={kind:'loading'}|{kind:'ok';data:T}|{kind:'disabled'}|{kind:'foundation'}|{kind:'no_snapshot'}|{kind:'not_found'}|{kind:'judgments_disabled'}|{kind:'judgments_unavailable'}|{kind:'error';code:string};
+export function errorCode(body:unknown):string|null{
+ if(typeof body!=='object'||body===null)return null;
+ const e=(body as {error?:unknown}).error;
+ return typeof e==='object'&&e!==null&&typeof (e as {code?:unknown}).code==='string'?(e as {code:string}).code:null;
+}
+export function loadStateOf<T>(status:number,body:unknown):LoadState<T>{
+ if(status>=200&&status<300)return {kind:'ok',data:body as T};
+ const code=errorCode(body);
+ if(status===404&&code==='strategy_disabled')return {kind:'disabled'};
+ if(status===503&&code==='macro_foundation_unavailable')return {kind:'foundation'};
+ if(status===404&&code==='no_published_snapshot')return {kind:'no_snapshot'};
+ if(status===404&&code==='judgments_disabled')return {kind:'judgments_disabled'};
+ if(status===503&&code==='judgments_unavailable')return {kind:'judgments_unavailable'};
+ if(status===404)return {kind:'not_found'};
+ return {kind:'error',code:code??`http_${status}`};
+}
+// ---- decimal display (string arithmetic: no float drift on value_text)
+/** Round a decimal string half away from zero to dp places; anything else → MISSING. */
+export function roundDecimalText(text:string,dp:number):string{
+ const m=/^(-)?(\d+)(?:\.(\d+))?$/.exec(text.trim());
+ if(!m)return MISSING;
+ const frac=m[3]??'';
+ let n=BigInt(m[2]+frac.padEnd(dp,'0').slice(0,dp));
+ if(frac.length>dp&&Number(frac[dp])>=5)n+=1n;
+ const s=n.toString().padStart(dp+1,'0');
+ const out=dp>0?`${s.slice(0,-dp)}.${s.slice(-dp)}`:s;
+ return m[1]&&n!==0n?`-${out}`:out;
+}
+/** Source precision kept up to 2 decimals. */
+export function formatValueText(text:string):string{
+ const frac=/\.(\d+)$/.exec(text)?.[1]??'';
+ return frac.length>2?roundDecimalText(text,2):text;
+}
+const signed=(t:string):string=>t===MISSING?t:t.startsWith('-')?`${MINUS}${t.slice(1)}`:/^0(\.0+)?$/.test(t)?t:`+${t}`;
+/** Full-precision float → display: pct to 0.1 %, bp to 1 bp (spec §5.3). */
+export function formatRaw(raw:number|null,unit:'pct'|'bp'):string{
+ if(raw===null||!Number.isFinite(raw))return MISSING;
+ return `${signed(roundDecimalText(raw.toFixed(10),unit==='pct'?1:0))}${unit==='pct'?'%':' bp'}`;
+}
+/** Exact pct ratio '<end>/<base>' → display to 0.1 %, rounded once (no pre-rounded value in between). */
+export function formatPctRatio(ratio:string):string{
+ let r:string;try{r=roundPctRatio(ratio,1);}catch{return MISSING;}
+ return `${signed(r)}%`;
+}
+/** Exact bp decimal string → display to 1 bp. */
+export function formatBpText(text:string):string{const r=roundDecimalText(text,0);return r===MISSING?r:`${signed(r)} bp`;}
+export type Tone='up'|'down'|'flat'|'missing';
+export const toneOfText=(display:string):Tone=>display===MISSING?'missing':display.startsWith('+')?'up':display.startsWith(MINUS)?'down':'flat';
+/** Three wash levels by share of the column's largest magnitude (spec §3.3: three light tints + sign). */
+export function toneLevel(raw:number|null,maxAbs:number):1|2|3{
+ if(raw===null||!(maxAbs>0))return 1;
+ const r=Math.abs(raw)/maxAbs;
+ return r>2/3?3:r>1/3?2:1;
+}
+const TONE_CLASSES:Record<'up'|'down',readonly [string,string,string]>={
+ up:['bg-[color-mix(in_srgb,var(--up)_6%,transparent)]','bg-[color-mix(in_srgb,var(--up)_10%,transparent)]','bg-[color-mix(in_srgb,var(--up)_16%,transparent)]'],
+ down:['bg-[color-mix(in_srgb,var(--down)_6%,transparent)]','bg-[color-mix(in_srgb,var(--down)_10%,transparent)]','bg-[color-mix(in_srgb,var(--down)_16%,transparent)]'],
+};
+export function toneClass(tone:Tone,level:1|2|3):string{
+ if(tone==='up'||tone==='down')return TONE_CLASSES[tone][level-1];
+ return tone==='missing'?'text-text-dim':'';
+}
+export const unitSuffix=(unit:string):string=>unit==='pct'?'%':unit==='pp'?' pp':unit==='bp'?' bp':'';
+export function formatInstant(iso:string):string{
+ const d=new Date(iso);
+ return Number.isNaN(d.getTime())?MISSING:`${d.toISOString().slice(0,10)} ${d.toISOString().slice(11,16)} UTC`;
+}
+export const shortId=(id:string):string=>id.length>12?`${id.slice(0,8)}…`:id;
+// ---- transmission (spec §3.3, §5.1)
+export interface NodeDisplay{id:string;badgeKey:string;label:string;value:string|null;unit:string;period:string|null;reason:string|null;formula:string|null;dashed:boolean;drill:boolean;seriesId:string|null}
+export function nodeDisplay(n:NodeView,l:Locale):NodeDisplay{
+ const pair=n.inputs.length===2;
+ return {id:n.id,badgeKey:`state.${n.state}`,label:n.label[l],value:n.value_text===null?null:formatValueText(n.value_text),unit:unitSuffix(n.unit??''),
+  period:n.period_end,reason:n.reason?n.reason[l]:null,
+  formula:n.state==='derived'&&pair&&n.value_text!==null?`${n.inputs[0].value_text} ${MINUS} ${n.inputs[1].value_text} = ${n.value_text}`:null,
+  dashed:n.state!=='observed'&&n.state!=='derived',drill:pair,seriesId:n.state==='observed'&&n.inputs.length>0?n.inputs[0].series_id:null};
+}
+/** The requested region has a snapshot in the manifest (the other region may have one when this one has none). */
+export const hasSnapshot=(v:TransmissionView):boolean=>v.snapshots[v.region]!==null;
+export function flowRows(v:TransmissionView,l:Locale):{key:string;stage:string;node:string;stateKey:string;value:string;period:string;reason:string}[]{
+ return v.stages.flatMap(s=>s.nodes.map(n=>{const d=nodeDisplay(n,l);
+  return {key:`${s.stage}:${n.id}`,stage:s.label[l],node:d.label,stateKey:d.badgeKey,value:d.value===null?MISSING:`${d.value}${d.unit}`,period:n.period_end??MISSING,reason:d.reason??''};}));
+}
+// ---- playbooks (spec §5.2): static framework; a card is marked only for an F4 card on the manifest's snapshot
+export interface PlaybookCard{regime:Regime;title:string;triggers:string[];mechanism:string[];favored:string[];disfavored:string[];watch:{id:string;name:string}[];marked:boolean}
+export const supportText=(n:number):string=>Number.isInteger(n)?n.toFixed(1):String(n);
+export function playbookCards(p:PlaybookView[],l:Locale,f4:{mark:F4Mark}|null):PlaybookCard[]{
+ return p.map(b=>({regime:b.regime,title:b.title[l],triggers:b.triggers.map(t=>`${t.type} · ${t.condition[l]} · ${supportText(t.support)}`),
+  mechanism:b.mechanism.map(x=>x[l]),favored:b.implications.favored.map(x=>x[l]),disfavored:b.implications.disfavored.map(x=>x[l]),
+  watch:b.watch.map(w=>({id:w.series_id,name:w.name[l]})),marked:f4!==null&&f4.mark.snapshot_match&&f4.mark.regime===b.regime}));
+}
+export type PlaybookNotice={key:'playbook.offNote'}|{key:'dependency.judgmentsUnavailable'}|{key:'playbook.earlier';date:string}|null;
+export function playbookNotice(status:JudgmentStatus,f4:{mark:F4Mark}|null):PlaybookNotice{
+ if(status==='disabled')return {key:'playbook.offNote'};
+ if(status==='unavailable'||f4===null)return {key:'dependency.judgmentsUnavailable'};
+ return f4.mark.snapshot_match?null:{key:'playbook.earlier',date:f4.mark.as_of.slice(0,10)};
+}
+const CALIBRATION_STATES:readonly string[]=['insufficient_sample','uncalibrated','calibrated','stale'];
+export function f4SummaryDisplay(s:F4Summary,t:StrategyT):{category:string;lifecycle:string;calibration:string;method:string;asOf:string;href:string|null}{
+ const lifecycle=s.lifecycle==='open'?t('f4.lifecycle.open')
+  :s.lifecycle==='settled'?(s.outcome?t(`f4.lifecycle.settled_${s.outcome}`):t('f4.lifecycle.settled'))
+  :t('f4.lifecycle.other',{value:s.lifecycle});
+ const cal=CALIBRATION_STATES.includes(s.calibration)?t(`f4.calibrationState.${s.calibration}`):s.calibration;
+ return {category:s.selected?t(`regime.${s.selected}`):MISSING,lifecycle,calibration:t('f4.calibration',{value:cal}),
+  method:t('f4.method',{id:s.methodology.id,version:s.methodology.version}),asOf:t('f4.asOf',{date:s.as_of.slice(0,10)}),href:s.href};
+}
+// ---- policy response matrix (spec §3.3, §5.3)
+export interface CellDisplay{main:string;sub:string|null;tone:Tone;drill:boolean;raw:number|null}
+export const cellEvents=(c:Cell):EventRow[]=>c.status==='stats'||c.status==='events_only'||c.status==='insufficient'?c.events:[];
+export function matrixCell(c:Cell,l:Locale,t:StrategyT):CellDisplay{
+ switch(c.status){
+  case 'stats':{const main=formatRaw(c.median_raw,c.unit);
+   return {main,sub:t('matrix.quartiles',{q1:formatRaw(c.q1_raw,c.unit),q3:formatRaw(c.q3_raw,c.unit),n:c.n}),tone:toneOfText(main),drill:true,raw:c.median_raw};}
+  case 'events_only':return {main:t('matrix.n',{n:c.n}),sub:t('matrix.fewEvents'),tone:'flat',drill:true,raw:null};
+  case 'insufficient':return {main:MISSING,sub:t('matrix.insufficient'),tone:'missing',drill:c.events.length>0,raw:null};
+  default:return {main:t(`state.${c.status}`),sub:c.reason[l],tone:'missing',drill:false,raw:null};
+ }
+}
+const NO_CELL:Cell={status:'missing',reason:{zh:'无数据',en:'No data'}};
+export const cellOf=(row:{cells:Record<string,Cell>},dimId:string):Cell=>row.cells[dimId]??NO_CELL;
+/** Largest |median| per dimension: the wash scale of that column. */
+export function matrixScale(v:PolicyResponseView):Record<string,number>{
+ const out:Record<string,number>={};
+ for(const d of v.dims)out[d.id]=v.rows.reduce((m,r)=>{const c=cellOf(r,d.id);return c.status==='stats'?Math.max(m,Math.abs(c.median_raw)):m;},0);
+ return out;
+}
+/** A row whose every cell is missing for one reason renders as one spanning cell (the QE / QT row). */
+export function uniformReason(row:{cells:Record<string,Cell>},dims:ResponseDim[],l:Locale):string|null{
+ const cells=dims.map(d=>cellOf(row,d.id));
+ if(cells.length===0||cells.some(c=>c.status!=='missing'))return null;
+ const first=(cells[0] as {reason:Bilingual}).reason;
+ return cells.every(c=>(c as {reason:Bilingual}).reason.zh===first.zh)?first[l]:null;
+}
+export interface EventDisplay{key:string;date:string;changeBp:string;base:string;end:string;change:string;selected:boolean;exclusionKey:string|null}
+export function eventRows(events:EventRow[],unit:'pct'|'bp'):EventDisplay[]{
+ const end=(e:EventRow['base'])=>e?`${e.period_end.slice(0,7)} · ${formatValueText(e.value_text)}`:MISSING;
+ return events.map(e=>({key:e.effective_date,date:e.effective_date,changeBp:formatBpText(e.change_bp),base:end(e.base),end:end(e.end),
+  change:e.change_text===null?formatRaw(e.change_raw,unit):unit==='bp'?formatBpText(e.change_text):formatPctRatio(e.change_text),selected:e.selected,exclusionKey:e.exclusion?`matrix.exclusion.${e.exclusion}`:null}));
+}
+export function coverageText(d:ResponseDim,t:StrategyT):string{
+ return d.coverage.from&&d.coverage.to?t('matrix.coverage',{from:d.coverage.from.slice(0,7),to:d.coverage.to.slice(0,7)}):t('matrix.noCoverage');
+}
+export const dimLabel=(d:ResponseDim,l:Locale):string=>`${d.label[l]} ${d.unit==='pct'?'%':'bp'}`;
+/** Mobile (< 640px) fallback: one group per column, one line per policy row (spec §3.7). */
+export function matrixGroups(v:PolicyResponseView,l:Locale,t:StrategyT):{id:string;label:string;coverage:string;rows:{direction:'hike'|'cut'|'qe_qt';cell:CellDisplay;source:Cell}[]}[]{
+ // `source` is the Cell itself so the mobile list opens the same per-event drawer as the desktop table (n < 5 included).
+ return v.dims.map(d=>({id:d.id,label:dimLabel(d,l),coverage:coverageText(d,t),rows:v.rows.map(r=>{const source=cellOf(r,d.id);return {direction:r.direction,cell:matrixCell(source,l,t),source};})}));
+}
+/** The matrix's own manifest, cutoff and version (spec §3.2): the page header links the transmission manifest, not this one. */
+export function matrixMeta(v:PolicyResponseView,t:StrategyT):{href:string;manifest:string;fullId:string;cutoff:string;version:string}{
+ return {href:strategyApi.manifest(v.manifest_id),manifest:t('meta.manifest',{id:shortId(v.manifest_id)}),fullId:v.manifest_id,cutoff:t('meta.cutoff',{time:formatInstant(v.cutoff)}),version:v.version};
+}
+/** Per-event frozen inputs of both endpoints (spread endpoints carry two observations each): dates, values, versions, sources. */
+export function eventEvidence(events:EventRow[]):{key:string;date:string;base:ObsRef[];end:ObsRef[]}[]{
+ return events.map(e=>({key:e.effective_date,date:e.effective_date,base:e.base?.inputs??[],end:e.end?.inputs??[]}));
+}
+// ---- policy action episodes × assets (spec §3.4, §5.5)
+export function cycleCell(c:CycleCell,t:StrategyT):CellDisplay&{refs:ObsRef[]}{
+ if(c.status==='ok'){
+  const main=c.change_kind==='bp'?formatBpText(c.change_text):formatPctRatio(c.change_text);
+  return {main,sub:`${formatValueText(c.from.value_text)} (${c.from.period_end}) → ${formatValueText(c.to.value_text)} (${c.to.period_end})`,tone:toneOfText(main),drill:true,
+   raw:c.change_kind==='bp'?Number(c.change_text):c.change_raw,refs:[c.from,c.to]};
+ }
+ if(c.status==='missing')return {main:t('state.missing'),sub:t(`history.missing.${c.reason}`),tone:'missing',drill:false,raw:null,refs:[]};
+ return {main:t('state.restricted'),sub:null,tone:'missing',drill:false,raw:null,refs:[]};
+}
+const CYCLE_MISSING:CycleCell={status:'missing',reason:'out_of_coverage'};
+export const cycleCellOf=(v:CycleTableView,e:Episode,columnId:string):CycleCell=>v.cells[String(e.index)]?.[columnId]??CYCLE_MISSING;
+export function episodeView(e:Episode,t:StrategyT):{key:string;direction:string;dates:string;line:string;flags:string[]}{
+ return {key:`${e.direction}:${e.start}`,direction:t(`history.direction.${e.direction}`),dates:`${e.start} → ${e.end}`,
+  line:t('history.episodeLine',{from:e.upper_from,to:e.upper_to,bp:formatBpText(e.cumulative_bp),n:e.events}),
+  flags:[e.left_censored?'history.flag.leftCensored':null,e.ongoing?'history.flag.ongoing':null,e.gap_after?'history.flag.gapAfter':null].filter((k):k is string=>k!==null)};
+}
+/** type-7 quantile of an ascending array (spec §5.6). */
+export function quantile7(sorted:number[],p:number):number{
+ const h=(sorted.length-1)*p,lo=Math.floor(h);
+ return lo+1<sorted.length?sorted[lo]+(h-lo)*(sorted[lo+1]-sorted[lo]):sorted[lo];
+}
+export function cycleScale(v:CycleTableView,columnId:string):number{
+ return v.episodes.reduce((m,e)=>{const c=cycleCellOf(v,e,columnId);if(c.status!=='ok')return m;const r=c.change_kind==='bp'?Number(c.change_text):c.change_raw;return r!==null&&Number.isFinite(r)?Math.max(m,Math.abs(r)):m;},0);
+}
+/** Column medians for the small chart (display only; each column on its own scale). */
+export function columnMedians(v:CycleTableView):{id:string;label:Bilingual;kind:'pct'|'bp';n:number;median:number|null;scaleMax:number}[]{
+ return v.columns.map(c=>{
+  const vals=v.episodes.map(e=>cycleCellOf(v,e,c.id)).flatMap(x=>x.status!=='ok'?[]:[x.change_kind==='bp'?Number(x.change_text):x.change_raw])
+   .filter((x):x is number=>x!==null&&Number.isFinite(x)).sort((a,b)=>a-b);
+  return {id:c.id,label:c.label,kind:c.change_kind,n:vals.length,median:vals.length?quantile7(vals,0.5):null,scaleMax:vals.reduce((m,x)=>Math.max(m,Math.abs(x)),0)};
+ });
+}
+/** Horizontal bar from a centre line at `half`: x is the bar's left edge in [0, 2·half]. */
+export function barGeometry(median:number|null,scaleMax:number,half:number):{x:number;width:number}{
+ if(median===null||!(scaleMax>0))return {x:half,width:0};
+ const width=Math.min(1,Math.abs(median)/scaleMax)*half;
+ return {x:median<0?half-width:half,width};
+}
+/** Empty episode list: an explicit truncation notice when the event history read was truncated, else "no episodes". */
+export function episodesEmptyKey(v:CycleTableView):string|null{
+ if(v.episodes.length>0)return null;
+ return v.gaps.some(g=>g.kind==='history_truncated')?'history.eventsTruncated':'history.noEpisodes';
+}
+export interface CycleGroupRow{key:string;episode:string;line:string;flags:string[];cell:CellDisplay;refs:ObsRef[];drillTitle:string}
+/** Mobile (< 640px) list per column: keeps the episode line, its left-censored / ongoing / gap flags and the endpoint drill. */
+export function cycleGroups(v:CycleTableView,t:StrategyT,l:Locale):{id:string;label:string;rows:CycleGroupRow[]}[]{
+ return v.columns.map(c=>({id:c.id,label:c.label[l],rows:v.episodes.map(e=>{
+  const ev=episodeView(e,t),cell=cycleCell(cycleCellOf(v,e,c.id),t),episode=`${ev.direction} ${ev.dates}`;
+  return {key:ev.key,episode,line:ev.line,flags:ev.flags,cell,refs:cell.refs,drillTitle:t('history.cellTitle',{episode,column:c.label[l]})};})}));
+}
+// ---- monthly review (spec §3.5, §6.2)
+export const REVIEW_SECTIONS=['releases','revisions','timeliness','policy_events','episode_changes','asset_moves','coverage'] as const;
+export type ReviewSectionKey=typeof REVIEW_SECTIONS[number];
+export function reviewSections(f:ReviewFacts,render:(fact:Fact)=>string):{key:ReviewSectionKey;titleKey:string;items:{factId:string;text:string;seriesId:string|null}[];emptyKey:string|null}[]{
+ return REVIEW_SECTIONS.map(key=>{
+  const gap=f.baseline_missing&&(key==='releases'||key==='revisions');
+  const items=gap?[]:f[key].map(fact=>({factId:fact.fact_id,text:render(fact),seriesId:fact.series_id??null}));
+  return {key,titleKey:`review.section.${key}`,items,emptyKey:gap?'review.baselineMissing':items.length===0?'review.empty':null};
+ });
+}
+/** Closed months, newest first (the current UTC month is never listed). */
+export function closedMonths(now:Date,n:number):string[]{
+ const out:string[]=[];
+ for(let i=1;i<=n;i++){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-i,1));out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`);}
+ return out;
+}
+export interface IndexCell{status:'ok'|'insufficient'|'none';updatedAt:string|null;generation:number|null}
+export function reviewGrid(months:string[],us:ReviewIndexItem[],cn:ReviewIndexItem[]):{month:string;US:IndexCell;CN:IndexCell}[]{
+ const cell=(list:ReviewIndexItem[],m:string):IndexCell=>{const i=list.find(x=>x.month===m);return i?{status:i.status,updatedAt:i.updated_at,generation:i.generation}:{status:'none',updatedAt:null,generation:null};};
+ return months.map(m=>({month:m,US:cell(us,m),CN:cell(cn,m)}));
+}
+// ---- explanation panel (spec §3.6, §6.3)
+export type PanelState='none'|'running'|'accepted'|'rejected'|'failed';
+export function panelState(p:ExplanationProjection|null):PanelState{
+ if(!p)return 'none';
+ return p.state==='abandoned'?'failed':p.state;
+}
+/** Newest projection in the page locale (the list arrives newest first). */
+export const latestFor=(items:ExplanationProjection[],l:Locale):ExplanationProjection|null=>items.find(p=>p.locale===l)??null;
+/** Citation into the explanation's own frozen manifest (its explain_facts manifest, spec §3.6): the fact_id is the stable key in manifest.facts. */
+export const factCitation=(manifestId:string,factId:string):string=>`${strategyApi.manifest(manifestId)}#fact=${encodeURIComponent(factId)}`;
+export function renderedSections(r:RenderedExplanation,manifestId:string):{facts:{n:number;factId:string;text:string;href:string}[];hypotheses:{text:string;refs:number[];factIds:string[]}[];counterpoints:{text:string;refs:number[];factIds:string[]}[]}{
+ const index=new Map(r.facts.map((f,i)=>[f.fact_id,i+1]));
+ const refs=(ids:string[])=>ids.map(id=>index.get(id)).filter((n):n is number=>n!==undefined);
+ const known=(ids:string[])=>ids.filter(id=>index.has(id));
+ return {facts:r.facts.map((f,i)=>({n:i+1,factId:f.fact_id,text:f.text,href:factCitation(manifestId,f.fact_id)})),
+  hypotheses:r.hypotheses.map(h=>({text:h.text,refs:refs(h.fact_ids),factIds:known(h.fact_ids)})),counterpoints:r.counterpoints.map(c=>({text:c.text,refs:refs(c.fact_ids),factIds:known(c.fact_ids)}))};
+}
+export function headerLine(p:ExplanationProjection,t:StrategyT):string{
+ return t('explain.header',{subject:t(`explain.subject.${p.subject_kind}`,{id:shortId(p.subject_id)}),manifest:shortId(p.manifest_id),
+  model:p.provider&&p.model?`${p.provider}/${p.model}`:MISSING,prompt:p.prompt_version,validator:p.validator_version});
+}
+/** Failure codes of Task 10 (validator) and Task 11 (run lifecycle and the perspectives cost errors). */
+export const KNOWN_FAILURES:readonly string[]=['parse','schema','unknown_fact','numeral','forbidden_term','regime_term','abandoned','provider_error','validator_version_changed',
+ 'usage_audit_unavailable','usage_audit_invariant','daily_cost_exhausted','pricing_unavailable','budget_unavailable','budget_invariant_violation'];
+export const failureLabel=(code:string,t:StrategyT):string=>KNOWN_FAILURES.includes(code)?t(`explain.failure.${code}`):code;
+/** Today's remaining runs of the shared 'perspectives' quota from GET /api/usage/today; limit -1 = unlimited. */
+export function remainingToday(body:unknown):{kind:'unlimited'}|{kind:'count';n:number}|null{
+ const p=(body as {usage?:{perspectives?:{used?:unknown;limit?:unknown}}}|null)?.usage?.perspectives;
+ if(!p||typeof p.used!=='number'||typeof p.limit!=='number')return null;
+ return p.limit===-1?{kind:'unlimited'}:{kind:'count',n:Math.max(0,p.limit-p.used)};
+}
+/** A request id is reused only to retry after an ambiguous outcome (pending); otherwise every submit is a new request. */
+export const nextRequestId=(pending:string|null,gen:()=>string):string=>pending??gen();
+/** A held request id: bound to the subject and locale it was minted for (a different payload under the same id would be a 409). */
+export interface PendingRequest{key:string;id:string}
+export const explainPendingKey=(subject:{kind:string;id:string},locale:Locale):string=>`${subject.kind}:${subject.id}:${locale}`;
+export const pendingFor=(pending:PendingRequest|null,subject:{kind:string;id:string},locale:Locale):string|null=>pending&&pending.key===explainPendingKey(subject,locale)?pending.id:null;
+const REFUSED_CODES:readonly string[]=['quota_exceeded','llm_not_configured','no_facts','subject_not_found','payload_conflict','invalid_body','unauthorized'];
+export type ExplainOutcome=
+ |{kind:'done';projection:ExplanationProjection}
+ |{kind:'run_failed';projection:ExplanationProjection;code:string}   // the server finished the run as failed (its projection came back)
+ |{kind:'refused';code:string}                                       // definitively not started (4xx / known code): a new request is right
+ |{kind:'ambiguous';code:string};                                    // 5xx / gateway / network / unreadable: the run may have completed server-side
+/** status null = the fetch itself threw. Only an ambiguous outcome keeps the idempotency key (spec §6.3). */
+export function explainOutcome(status:number|null,body:unknown):ExplainOutcome{
+ if(status===null)return {kind:'ambiguous',code:'network'};
+ if(status>=200&&status<300){
+  const p=(body as {explanation_id?:unknown}|null)?.explanation_id;
+  return typeof p==='string'?{kind:'done',projection:body as ExplanationProjection}:{kind:'ambiguous',code:'unreadable'};
+ }
+ const code=errorCode(body)??`http_${status}`;
+ const failed=projectionOfError(body);
+ if(failed)return {kind:'run_failed',projection:failed,code};
+ if(REFUSED_CODES.includes(code)||(status>=400&&status<500&&status!==408))return {kind:'refused',code};
+ return {kind:'ambiguous',code};
+}
+export async function submitExplanation(deps:{fetch:typeof fetch;gen:()=>string},pending:PendingRequest|null,subject:{kind:'snapshot'|'review';id:string},locale:Locale):Promise<{pending:PendingRequest|null;outcome:ExplainOutcome}>{
+ const id=nextRequestId(pendingFor(pending,subject,locale),deps.gen);
+ const held:PendingRequest={key:explainPendingKey(subject,locale),id};
+ let outcome:ExplainOutcome;
+ try{
+  const r=await deps.fetch('/api/macro/strategy/explanations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({request_id:id,subject,locale})});
+  const body:unknown=await r.json().catch(()=>undefined);
+  outcome=explainOutcome(r.status,body===undefined?null:body);
+ }catch{outcome=explainOutcome(null,null);}
+ return {pending:outcome.kind==='ambiguous'?held:null,outcome};
+}
+export type PanelPhase=PanelState|'loading'|'readError';
+/** Phase, button state and reload offer of the panel: nothing is "not generated" until the existing-run lookup has succeeded. */
+export function explainControls(i:{busy:boolean;listKind:LoadState<unknown>['kind'];hasCurrent:boolean;projection:ExplanationProjection|null;pending:boolean}):{phase:PanelPhase;canGenerate:boolean;showGenerate:boolean;showReload:boolean}{
+ const phase:PanelPhase=i.busy?'running':i.hasCurrent||i.listKind==='ok'?panelState(i.projection):i.listKind==='loading'?'loading':'readError';
+ const lookupFailed=phase==='readError',lookingUp=phase==='loading';
+ return {phase,showGenerate:phase!=='running',showReload:lookupFailed,
+  canGenerate:!i.busy&&phase!=='running'&&(i.pending||(!lookupFailed&&!lookingUp))};
+}
+export const generateLabelKey=(state:PanelState,error:string|null,held:boolean):string=>held?'explain.retry':state==='none'&&!error?'explain.generate':'explain.regenerate';
+const EXPLAIN_ERRORS:Record<string,string>={quota_exceeded:'explain.quota',llm_not_configured:'explain.noModel',no_facts:'explain.noFacts',subject_not_found:'explain.noSubject'};
+export function explainErrorText(code:string,t:StrategyT):string{
+ if(code==='payload_conflict')return t('explain.conflict',{code});
+ return EXPLAIN_ERRORS[code]?t(EXPLAIN_ERRORS[code]):t('explain.error',{code});
+}
+/** A failed POST may still carry the run's projection ({error, explanation}: usage-run failures, spec §6.3 step 6). */
+export function projectionOfError(body:unknown):ExplanationProjection|null{
+ const p=(body as {explanation?:unknown}|null)?.explanation;
+ return typeof p==='object'&&p!==null&&typeof (p as {explanation_id?:unknown}).explanation_id==='string'?p as ExplanationProjection:null;
+}
+// ---- deviation cases (spec §6.4): input differences only, unchanged rows folded by default
+const KIND_ORDER:Record<DiffKind,number>={revised:0,dropped:1,newly_available:2,unchanged:3};
+const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
+export function deviationRows(c:DeviationCase,showUnchanged:boolean):{hiddenUnchanged:number;rows:{key:string;series:string;period:string;roleKey:string;kindKey:string;subkindKey:string|null;registered:string;settled:string}[]}{
+ const all=[...c.diffs].sort((a,b)=>KIND_ORDER[a.kind]-KIND_ORDER[b.kind]||cmp(a.series_id,b.series_id)||cmp(a.period_end,b.period_end));
+ const visible=showUnchanged?all:all.filter(d=>d.kind!=='unchanged');
+ const side=(s:{vintage_id:string;value:number}|null)=>s?`${s.vintage_id} · ${s.value}`:MISSING;
+ return {hiddenUnchanged:all.length-visible.length,rows:visible.map(d=>({key:`${d.series_id}:${d.period_end}:${d.role}`,series:d.series_id,period:d.period_end,roleKey:`deviation.role.${d.role}`,
+  kindKey:`deviation.kind.${d.kind}`,subkindKey:d.subkind?`deviation.subkind.${d.subkind}`:null,registered:side(d.registered),settled:side(d.settled)}))};
+}
+
+codex
+Reviewed **Draft 4** as the authoritative text; the request’s references to Draft 2 are stale.
+
+Round-3 dispositions:
+
+- **T-C1 — closed:** Publisher-margin and F4-margin reconciliation now use their respective arithmetic and tolerances; both existing fixtures must pass.
+- **T-C2 — closed:** Contribution IDs must identify the frozen latest observation; duplicate-period versions are rejected.
+- **T-C3 — closed:** The constraint lookup now distinguishes the adapter enum CHECK from `macro_evidence_path`.
+- **T-C4 — closed:** Historical v1 tests are explicitly isolated from the production registry and current catalog/hash.
+- **T-C5 — closed with documented limitation:** Expanded history is labelled separately from snapshot values; batch-eligibility differences are explicitly deferred.
+- **T-C6 — closed:** POST retains `seriesHistory`; presets use historical eligibility. The false equivalence claim is removed.
+- **T-C7 — closed:** Comparison availability is represented separately as factual metadata without reevaluating predicates.
+- **T-C8 — closed:** D1 now includes `awaiting_witness`; the pre-D1 limitation is explicit.
+- **T-C9 — closed:** Detail lifecycle is authoritative, with list/detail identity, method and snapshot checks.
+- **T-C10 — closed:** The inherited sections and acceptance table are restored; D0a metadata verification is an explicit prerequisite.
+
+Earlier P1 dispositions checked against code:
+
+- **Closed:** R-C1, R-C2, R-C3, R-C4, R-C5, R-C8, R-C13.
+- **Closed with documented limitation:** R-C6.
+
+These are design closures, not claims that the proposed implementation exists.
+
+**D1:** Flag-gated reading of stored regime/contributions is permitted by P1’s server-read contract. Display additionally requires the same-snapshot, publishable F4 card and reconciliation. P1 §3.2’s explicit amendment now permits labelled rule shares while categorical `display.percent` remains null; this does not violate the owner’s publication condition.
+
+**Presets:** P1 explicitly amends “预填表单，不预存运行” to permit on-demand computation without stored runs or quota charges. This is a fixed-preset exception, not an arbitrary-analysis bypass. Database/computation costs remain; process-local memoization does not eliminate cold-instance costs.
+
+Only **new defects** follow.
+
+| # | Severity P1/P2/P3 | Section | Defect | Concrete fix |
+|---|---|---|---|---|
+| N1 | P1 | §3.3–§3.4, §5.2, §8 | **The new method manifest introduces an unchecked second representation of the displayed calculation.** D1 instructs the clock to prefer `method_manifest` for rows, weights, roles, support and contributions. All eight invariants still validate `rec.contributions`, current weights and `rec.regime`; none binds the preferred manifest fields to those validated values. Changing only a manifest contribution or latest-observation ID can therefore leave reconciliation passing while the table or evidence disagrees with the card. The database CHECK validates only that the manifest is an object. | Define mandatory manifest validation: version identity, complete/unique row membership, denominator, observation roles and IDs, and exact correspondence of matched rows to `rec.contributions`. Render exclusively from the validated representation. Add corruption tests that modify only the manifest while leaving the legacy result and F4 claim intact. |
+| N2 | P1 | §5.7–§5.8 | **The specified retirement event SQL cannot execute against the baseline schema.** It selects `coalesce(max(seq),0)+1` from `judgment_methodologies`, which has no `seq` column. Sequence numbers live in `judgment_methodology_events`. Simply changing the source table also leaves the ungrouped metadata selections unresolved. This blocks the migration before the proposed deployment sequence can complete. | Supply executable SQL: lock the methodology row, read its metadata, compute the next sequence from its event rows, update status and insert the event atomically with `occurred_at`. Define replay/no-op behavior and test against a registered v1 with multiple existing events. |
+| N3 | P2 | §3.2–§3.3 | **The prescribed version gate requires data that has not been read.** The route checks all three versions before fetching observations and `regimeOf`. `SnapshotRecord` contains catalog and methodology versions, but no `rules_version`; that field belongs to `RegimeRecord`. An implementer must either invent a source, skip the rule-version check, or violate the required precedence/read sequence. | Read the regime record before checking its rules version. Specify precedence when the record is absent, and distinguish snapshot-version checks from the record’s rules-version check. Test missing record and wrong rules version independently. |
+| N4 | P2 | §5.2, §5.8 | **Rollback publication drops the new frozen method manifest.** The spec updates the publish RPC but omits `republish_macro_snapshot`. Its existing explicit INSERT copies only regime, contributions, rules version and uncovered weight. Republishing a D1 snapshot therefore creates an active snapshot with `method_manifest=null`, silently losing the new frozen row/role contract. | Extend republish to copy `method_manifest` unchanged. Specify whether a post-D1 record without a manifest is rejected or supported through an explicit legacy path. Test publish → supersede → republish and verify manifest equality and clock output. |
+| N5 | P2 | §4.2, §5.3 | **Date-only event identity collapses distinct CN policy changes.** §4.2 deduplicates derived events by `effective_date`, justified by the current US event generator. §5.3 adds events per LPR series/tenor; 1Y and 5Y changes on the same date are distinct events with different values and evidence. The specified shared identity rule can discard one. | Define derived-event identity using kind, region, series/tenor and effective date; keep calendar identity separate. Specify which CN events each detail page receives. Test simultaneous 1Y/5Y changes with different magnitudes and preserve both evidence chains. |
+| N6 | P2 | §4.4 | **“Inputs changed” fires even when every observation is unchanged.** `freezeInputs` includes `cutoff`, and `inputsHash` hashes the entire frozen object. Presets use `snapshot.created_at`; saving uses the current time. Their hashes therefore differ solely because the cutoff changed, so the proposed comparison cannot establish that underlying data changed. | Preserve the full receipt hash for replay, but compare a separate canonical data identity containing series definitions, observation IDs/values and event inputs. Distinguish “cutoff changed” from “data changed”; test identical observations under different cutoffs and an actual revision. |
+
+not ready
+tokens used
+130,051
+Reviewed **Draft 4** as the authoritative text; the request’s references to Draft 2 are stale.
+
+Round-3 dispositions:
+
+- **T-C1 — closed:** Publisher-margin and F4-margin reconciliation now use their respective arithmetic and tolerances; both existing fixtures must pass.
+- **T-C2 — closed:** Contribution IDs must identify the frozen latest observation; duplicate-period versions are rejected.
+- **T-C3 — closed:** The constraint lookup now distinguishes the adapter enum CHECK from `macro_evidence_path`.
+- **T-C4 — closed:** Historical v1 tests are explicitly isolated from the production registry and current catalog/hash.
+- **T-C5 — closed with documented limitation:** Expanded history is labelled separately from snapshot values; batch-eligibility differences are explicitly deferred.
+- **T-C6 — closed:** POST retains `seriesHistory`; presets use historical eligibility. The false equivalence claim is removed.
+- **T-C7 — closed:** Comparison availability is represented separately as factual metadata without reevaluating predicates.
+- **T-C8 — closed:** D1 now includes `awaiting_witness`; the pre-D1 limitation is explicit.
+- **T-C9 — closed:** Detail lifecycle is authoritative, with list/detail identity, method and snapshot checks.
+- **T-C10 — closed:** The inherited sections and acceptance table are restored; D0a metadata verification is an explicit prerequisite.
+
+Earlier P1 dispositions checked against code:
+
+- **Closed:** R-C1, R-C2, R-C3, R-C4, R-C5, R-C8, R-C13.
+- **Closed with documented limitation:** R-C6.
+
+These are design closures, not claims that the proposed implementation exists.
+
+**D1:** Flag-gated reading of stored regime/contributions is permitted by P1’s server-read contract. Display additionally requires the same-snapshot, publishable F4 card and reconciliation. P1 §3.2’s explicit amendment now permits labelled rule shares while categorical `display.percent` remains null; this does not violate the owner’s publication condition.
+
+**Presets:** P1 explicitly amends “预填表单，不预存运行” to permit on-demand computation without stored runs or quota charges. This is a fixed-preset exception, not an arbitrary-analysis bypass. Database/computation costs remain; process-local memoization does not eliminate cold-instance costs.
+
+Only **new defects** follow.
+
+| # | Severity P1/P2/P3 | Section | Defect | Concrete fix |
+|---|---|---|---|---|
+| N1 | P1 | §3.3–§3.4, §5.2, §8 | **The new method manifest introduces an unchecked second representation of the displayed calculation.** D1 instructs the clock to prefer `method_manifest` for rows, weights, roles, support and contributions. All eight invariants still validate `rec.contributions`, current weights and `rec.regime`; none binds the preferred manifest fields to those validated values. Changing only a manifest contribution or latest-observation ID can therefore leave reconciliation passing while the table or evidence disagrees with the card. The database CHECK validates only that the manifest is an object. | Define mandatory manifest validation: version identity, complete/unique row membership, denominator, observation roles and IDs, and exact correspondence of matched rows to `rec.contributions`. Render exclusively from the validated representation. Add corruption tests that modify only the manifest while leaving the legacy result and F4 claim intact. |
+| N2 | P1 | §5.7–§5.8 | **The specified retirement event SQL cannot execute against the baseline schema.** It selects `coalesce(max(seq),0)+1` from `judgment_methodologies`, which has no `seq` column. Sequence numbers live in `judgment_methodology_events`. Simply changing the source table also leaves the ungrouped metadata selections unresolved. This blocks the migration before the proposed deployment sequence can complete. | Supply executable SQL: lock the methodology row, read its metadata, compute the next sequence from its event rows, update status and insert the event atomically with `occurred_at`. Define replay/no-op behavior and test against a registered v1 with multiple existing events. |
+| N3 | P2 | §3.2–§3.3 | **The prescribed version gate requires data that has not been read.** The route checks all three versions before fetching observations and `regimeOf`. `SnapshotRecord` contains catalog and methodology versions, but no `rules_version`; that field belongs to `RegimeRecord`. An implementer must either invent a source, skip the rule-version check, or violate the required precedence/read sequence. | Read the regime record before checking its rules version. Specify precedence when the record is absent, and distinguish snapshot-version checks from the record’s rules-version check. Test missing record and wrong rules version independently. |
+| N4 | P2 | §5.2, §5.8 | **Rollback publication drops the new frozen method manifest.** The spec updates the publish RPC but omits `republish_macro_snapshot`. Its existing explicit INSERT copies only regime, contributions, rules version and uncovered weight. Republishing a D1 snapshot therefore creates an active snapshot with `method_manifest=null`, silently losing the new frozen row/role contract. | Extend republish to copy `method_manifest` unchanged. Specify whether a post-D1 record without a manifest is rejected or supported through an explicit legacy path. Test publish → supersede → republish and verify manifest equality and clock output. |
+| N5 | P2 | §4.2, §5.3 | **Date-only event identity collapses distinct CN policy changes.** §4.2 deduplicates derived events by `effective_date`, justified by the current US event generator. §5.3 adds events per LPR series/tenor; 1Y and 5Y changes on the same date are distinct events with different values and evidence. The specified shared identity rule can discard one. | Define derived-event identity using kind, region, series/tenor and effective date; keep calendar identity separate. Specify which CN events each detail page receives. Test simultaneous 1Y/5Y changes with different magnitudes and preserve both evidence chains. |
+| N6 | P2 | §4.4 | **“Inputs changed” fires even when every observation is unchanged.** `freezeInputs` includes `cutoff`, and `inputsHash` hashes the entire frozen object. Presets use `snapshot.created_at`; saving uses the current time. Their hashes therefore differ solely because the cutoff changed, so the proposed comparison cannot establish that underlying data changed. | Preserve the full receipt hash for replay, but compare a separate canonical data identity containing series definitions, observation IDs/values and event inputs. Distinguish “cutoff changed” from “data changed”; test identical observations under different cutoffs and an actual revision. |
+
+not ready
+exit=0
