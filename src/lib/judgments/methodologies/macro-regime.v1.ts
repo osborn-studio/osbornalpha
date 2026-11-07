@@ -85,7 +85,7 @@ export const macroRegimeV1:Methodology<CategoricalClaim>={
  doc:'docs/methodologies/macro_regime/v1.md',
  params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
  horizon:{unit:'calendar_months',n:3},
- deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/freshness.ts','src/lib/macro/db.ts','src/lib/dq/freshness.ts'],
+ deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/read-api.ts','src/lib/macro/flags.ts','src/lib/macro/snapshots.ts','src/lib/macro/freshness.ts','src/lib/macro/db.ts','src/lib/dq/freshness.ts'],
  module:'src/lib/judgments/methodologies/macro-regime.v1.ts',
  status:'active',
  gather,resolveTarget,compute,condition,

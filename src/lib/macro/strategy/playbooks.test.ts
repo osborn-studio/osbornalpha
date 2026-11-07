@@ -13,7 +13,7 @@ const RULES:RulesView={rulesVersion:'r/1',rows:[
  {rule_id:'bond_yield.1',type:'bond_yield',condition:{zh:'收益率上行',en:'Yields rising'},support:{overheat:0.5}},
 ]};
 const CARD:F4CardLite={judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-11-03',methodology:{id:'macro_regime',version:'v1'},selected:'overheat'};
-const DETAIL:F4JudgmentDetail={judgment_id:'j1',as_of:'2026-11-03',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'snap:US:1'},snapshot:{}}],settlements:[]};
+const DETAIL:F4JudgmentDetail={judgment_id:'j1',as_of:'2026-11-03',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'snap:US:1'},snapshot:{snapshot_id:'snap:US:1'}}],settlements:[]};
 
 describe('playbookTriggers',()=>{
  it('keeps rows with support > 0 for the regime, ordered by support desc then rule_id asc',()=>{
@@ -55,11 +55,11 @@ describe('selectF4Mark',()=>{
   expect(selectF4Mark({card:null,detail:null,snapshotId:'snap:US:1'})).toBeNull();
  });
  it('a settled card reports the latest settlement outcome',()=>{
-  const detail={...DETAIL,settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'},{outcome:'miss',realized:'recession',evidence:null,settled_at:'2027-01-01T00:00:00Z'}]};
+  const detail={...DETAIL,settlements:[{outcome:'hit',realized:'overheat',evidence:{note:'x'},settled_at:'2026-12-01T00:00:00Z'},{outcome:'miss',realized:'recession',evidence:{note:'x'},settled_at:'2027-01-01T00:00:00Z'}]};
   expect(selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'})?.summary.outcome).toBe('miss');
  });
  it('a detail of another judgment contributes no settlement outcome',()=>{
-  const detail={...DETAIL,judgment_id:'j2',settlements:[{outcome:'hit',realized:'overheat',evidence:null,settled_at:'2026-12-01T00:00:00Z'}]};
+  const detail={...DETAIL,judgment_id:'j2',settlements:[{outcome:'hit',realized:'overheat',evidence:{note:'x'},settled_at:'2026-12-01T00:00:00Z'}]};
   const r=selectF4Mark({card:{...CARD,lifecycle:'settled'},detail,snapshotId:'snap:US:1'});
   expect(r?.summary.outcome).toBeNull();expect(r?.mark.snapshot_match).toBe(false);
  });
