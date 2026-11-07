@@ -50,3 +50,4 @@
 
 - 浏览器检查（Step 8）、概览延迟 p95（Step 7.3）、路由 `?preview=1` 的 HTTP 层实测：未做，指挥官清单见 `21-live-checks.md`。
 - 计划里的日志路径 `10-implementation-log.md` 实际为本文件（`20-implementation-log.md`）。
+| 18 | 30b11ef | (runbook/gate task; Codex round below) | pending | — |
