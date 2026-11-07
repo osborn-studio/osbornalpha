@@ -206,7 +206,7 @@ export interface CompanyDb{
  markDigestFailed(issuer:string,market:Market,attemptId:number,now:Date):Promise<boolean>;
  backlog():Promise<{failedStreams:number}>;
  digestState(issuer:string,market:Market):Promise<DigestStateRow|null>;
- replaceEvidence(issuer:string,market:Market,rows:EvidenceIndexRow[]):Promise<{upserted:number;deleted:number}>;
+ replaceEvidence(issuer:string,market:Market,attemptId:number,basedOnRev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number;deleted:number}>;   // evidence fence: stale_computation / stale_attempt like replaceDigest
  // reads behind the evidence gate (service_role; routes assemble + gate server-side, §0 #64)
  eventsOfIssuer(issuer:string,market:Market,opts:{since?:string;until?:string;kinds?:EventKind[];cursor?:string|null;limit:number}):Promise<{rows:EventRow[];nextCursor:string|null}>;
  eventsOfIssuers(issuers:string[],opts:{kinds?:EventKind[];cursor?:string|null;limit:number}):Promise<{rows:EventRow[];nextCursor:string|null}>;
@@ -231,7 +231,7 @@ export interface CompanyDb{
 | `begin_company_digest_attempt(p_issuer uuid, p_market text, p_now timestamptz) → bigint` | plpgsql definer | service_role | §4.6 |
 | `replace_company_digest(p_issuer uuid, p_market text, p_batch uuid, p_attempt_id bigint, p_rebuild_id uuid, p_based_on_rev bigint, p_sweep boolean, p_events jsonb, p_coverage jsonb) → jsonb` | plpgsql definer | service_role | §4.6 ①–⑨ |
 | `mark_company_digest_failed(p_issuer uuid, p_market text, p_attempt_id bigint, p_now timestamptz) → boolean` | plpgsql definer | service_role | §4.6 + §0 #70 |
-| `replace_company_fact_evidence(p_issuer uuid, p_market text, p_rows jsonb) → jsonb {upserted, deleted}` | plpgsql definer | service_role | §0.1 item 2：每行 `fact_id` 必须属于该流；整流替换（不在 p_rows 中的旧行删除） |
+| `replace_company_fact_evidence(p_issuer uuid, p_market text, p_attempt_id bigint, p_based_on_rev bigint, p_rows jsonb) → jsonb {upserted, deleted}`（Task 2 Codex 挑战 #1：证据替换须带尝试与版本围栏，迁移 `20261112092000_company_evidence_fence.sql`）：行锁后 `state_rev ≠ p_based_on_rev` → `stale_computation`，`p_attempt_id < last_success_attempt_id` → `stale_attempt` | plpgsql definer | service_role | §0.1 item 2：每行 `fact_id` 必须属于该流；整流替换（不在 p_rows 中的旧行删除） |
 | `company_fact_evidence(p_fact_ids uuid[]) → jsonb` | sql/plpgsql definer stable | anon, authenticated, service_role | §0.1 item 2：≤100；只 ok + published run + 当前代；白名单字段 |
 | `company_read_snapshot(p_issuer uuid, p_market text, p_concepts text[], p_as_of date, p_from date, p_to date, p_history boolean, p_limit int) → jsonb {facts: <read_facts 信封>, filings: [...]}` | sql **invoker** stable | anon, authenticated, service_role | §0.1 item 3 |
 | `company_digest_due(p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_sweep_due(p_older_than timestamptz, p_now timestamptz, p_limit int, p_market text default null) → jsonb`、`company_digest_backlog() → int` | sql definer stable | service_role | §4.7（`fact_sync_scope` 对 service_role 只读，left join 需一条语句）；`company_sweep_due` 只选 `state_rev > 0` |
@@ -1051,7 +1051,7 @@ git commit -m "feat(company): event, coverage, watch, receipt, digest-state and 
 | `begin_company_digest_attempt(p_issuer uuid, p_market text, p_now timestamptz) → bigint` | plpgsql definer | service_role |
 | `replace_company_digest(p_issuer uuid, p_market text, p_batch uuid, p_attempt_id bigint, p_rebuild_id uuid, p_based_on_rev bigint, p_sweep boolean, p_events jsonb, p_coverage jsonb) → jsonb {upserted, changed, retired, revived}` | plpgsql definer | service_role |
 | `mark_company_digest_failed(p_issuer uuid, p_market text, p_attempt_id bigint, p_now timestamptz) → boolean` | plpgsql definer | service_role |
-| `replace_company_fact_evidence(p_issuer uuid, p_market text, p_rows jsonb) → jsonb {upserted, deleted}` | plpgsql definer | service_role |
+| `replace_company_fact_evidence(p_issuer uuid, p_market text, p_attempt_id bigint, p_based_on_rev bigint, p_rows jsonb) → jsonb {upserted, deleted}`（Task 2 Codex 挑战 #1：证据替换须带尝试与版本围栏，迁移 `20261112092000_company_evidence_fence.sql`）：行锁后 `state_rev ≠ p_based_on_rev` → `stale_computation`，`p_attempt_id < last_success_attempt_id` → `stale_attempt` | plpgsql definer | service_role |
 | `company_fact_evidence(p_fact_ids uuid[]) → jsonb {<fact_id>: EvidenceRecord}` | plpgsql definer stable | anon, authenticated, service_role |
 | `company_read_snapshot(p_issuer uuid, p_market text, p_concepts text[], p_as_of date, p_from date, p_to date, p_history boolean, p_limit int) → jsonb {facts, filings}` | **sql invoker** stable | anon, authenticated, service_role |
 | `company_list_coverage(p_market text, p_issuer_ids uuid[], p_sort text, p_offset int, p_limit int) → jsonb {rows, total}` | plpgsql invoker stable | anon, authenticated, service_role |
@@ -2513,7 +2513,7 @@ export interface CompanyDb{
  markDigestFailed(issuer:string,market:Market,attemptId:number,now:Date):Promise<boolean>;
  backlog():Promise<{failedStreams:number}>;
  digestState(issuer:string,market:Market):Promise<DigestStateRow|null>;
- replaceEvidence(issuer:string,market:Market,rows:EvidenceIndexRow[]):Promise<{upserted:number;deleted:number}>;
+ replaceEvidence(issuer:string,market:Market,attemptId:number,basedOnRev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number;deleted:number}>;   // evidence fence: stale_computation / stale_attempt like replaceDigest
  // reads behind the evidence gate (service_role; routes assemble + gate server-side, §0 #64)
  eventsOfIssuer(issuer:string,market:Market,opts:{since?:string;until?:string;kinds?:EventKind[];cursor?:string|null;limit:number}):Promise<{rows:EventRow[];nextCursor:string|null}>;
  eventsOfIssuers(issuers:string[],opts:{kinds?:EventKind[];cursor?:string|null;limit:number}):Promise<{rows:EventRow[];nextCursor:string|null}>;
@@ -2722,6 +2722,7 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    expect(await sweep(new Date(Date.now()+3600_000))).toEqual([...[s1.iss,s2.iss].sort(),s3.iss]);
   });
 
+  // Evidence fence: every replaceEvidence call below passes (attemptId, basedOnRev) = (await db.beginAttempt(iss,'US',now), <the stream's current state_rev from the harness>) — add a small `ev(rows)` helper that does this; add one case where a wrong basedOnRev → stale_computation and one where an older attemptId after a newer replaceDigest success → stale_attempt.
   it('replaceEvidence verifies rows and replaces the stream; evidenceOf batches by 100 and returns visible facts only',async()=>{
    const {iss,fb}=await ready();
    const sha='a'.repeat(64);const loc=(i:number)=>`us-gaap/Revenues/USD/${i}`;const rh=(i:number)=>sha256Utf8(`${sha}\n${loc(i)}`);
@@ -3203,7 +3204,7 @@ export function supabaseCompanyDb(client:SupabaseClient):CompanyDb{
   async markDigestFailed(issuer,market,attemptId,now){return (await call('mark_company_digest_failed',{p_issuer:issuer,p_market:market,p_attempt_id:attemptId,p_now:now.toISOString()}))===true;},
   async backlog(){return {failedStreams:Number(await call('company_digest_backlog',{}))};},
   async digestState(issuer,market){const [r]=await rows(c.from('company_digest_state').select('*').eq('issuer_id',issuer).eq('market',market).limit(1));return r?digestStateFromRow(r):null;},
-  async replaceEvidence(issuer,market,input){const x=obj(await call('replace_company_fact_evidence',{p_issuer:issuer,p_market:market,p_rows:input}));return {upserted:Number(x.upserted),deleted:Number(x.deleted)};},
+  async replaceEvidence(issuer,market,attemptId,basedOnRev,input){const x=obj(await call('replace_company_fact_evidence',{p_issuer:issuer,p_market:market,p_attempt_id:attemptId,p_based_on_rev:basedOnRev,p_rows:input}));return {upserted:Number(x.upserted),deleted:Number(x.deleted)};},
   async eventsOfIssuer(issuer,market,o){
    checkEventsQuery(o);
    const cur=o.cursor?decodeIssuerCursor(o.cursor):null;
@@ -3568,8 +3569,10 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
   },
   async backlog(){return {failedStreams:[...states.values()].filter(s=>s.last_status==='failed').length};},
   async digestState(issuer,market){const s=states.get(sk(issuer,market));return s?clone(s):null;},
-  async replaceEvidence(issuer,market,rows){
-   if(!scopeOf(issuer,market))throw noStream();
+  async replaceEvidence(issuer,market,attemptId,basedOnRev,rows){
+   const sc=scopeOf(issuer,market);if(!sc)throw noStream();
+   if(basedOnRev!==sc.state_rev)throw new CompanyDbError('stale_computation','stale_computation');   // evidence fence
+   if(attemptId<(states.get(sk(issuer,market))?.last_success_attempt_id??0))throw new CompanyDbError('stale_attempt','stale_attempt');
    const wire=JSON.parse(JSON.stringify(rows)) as unknown;
    if(!Array.isArray(wire))evd('rows: array expected');
    const x=ctx(issuer,market);
@@ -3903,8 +3906,8 @@ export function pgCompanyDb(pool:Pool):CompanyDb{
   async markDigestFailed(issuer,market,attemptId,now){return (await fn('service_role','public.mark_company_digest_failed($1,$2,$3,$4::timestamptz)',[issuer,market,attemptId,now.toISOString()]))===true;},
   async backlog(){return {failedStreams:Number(await fn('service_role','public.company_digest_backlog()',[]))};},
   async digestState(issuer,market){const [r]=await svc(c=>q(c,`select * from public.company_digest_state where issuer_id = $1 and market = $2`,[issuer,market]));return r?digestStateFromRow(r):null;},
-  async replaceEvidence(issuer,market,rows){
-   const x=await fn<{upserted:unknown;deleted:unknown}>('service_role','public.replace_company_fact_evidence($1,$2,$3::jsonb)',[issuer,market,JSON.stringify(rows)]);
+  async replaceEvidence(issuer,market,attemptId,basedOnRev,rows){
+   const x=await fn<{upserted:unknown;deleted:unknown}>('service_role','public.replace_company_fact_evidence($1,$2,$3,$4,$5::jsonb)',[issuer,market,attemptId,basedOnRev,JSON.stringify(rows)]);
    return {upserted:Number(x.upserted),deleted:Number(x.deleted)};
   },
   async eventsOfIssuer(issuer,market,o){
@@ -4627,7 +4630,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 A. **快照读取器** `SnapshotObjectStore {list(prefix), get(path), meta(path)}`：`list` 返回 `prefix` 下**数据对象**的完整路径（只匹配 `<64 hex>.json`，排除 `.meta.json`），升序；`get` 返回字节或 `null`（对象不存在）；`meta` 读 `metaPath(path)` 的 sidecar JSON（不存在或不是 JSON → `null`）。两个实现：`memorySnapshotObjectStore(objects)`（包 `memorySnapshotStore().objects`）与 `supabaseSnapshotObjectStore(admin)`（`admin.storage.from(SNAPSHOT_BUCKET)`：`list(folder,{limit:1000,offset,sortBy:{column:'name',order:'asc'}})` 翻页到不足 1000；`download(path)`；不存在 → `null`；其他错误抛 `snapshot_list_failed` / `snapshot_download_failed`，只带固定码，不带响应内容）。
 
-B. **构建器** `buildEvidenceIndex({reader}, {issuerId, market, rows, filings, cache?})` → `{rows: EvidenceIndexRow[], stats}`，供 `CompanyDb.replaceEvidence(issuer, market, rows)`（整流替换）。步骤：
+B. **构建器** `buildEvidenceIndex({reader}, {issuerId, market, rows, filings, cache?})` → `{rows: EvidenceIndexRow[], stats}`，供 `CompanyDb.replaceEvidence(issuer, market, attemptId, basedOnRev, rows)`（整流替换，带尝试与版本围栏）。步骤：
  1. `source = US ? 'edgar' : 'tushare'`；列出 `${source}/${issuerId}/` 下全部对象。
  2. 每个对象：字节缺失 → `missingObject`；sidecar 缺失 → `missingSidecar`；`sha256(bytes)` ≠ 文件名中的哈希，或 sidecar 带 `sha256` 且不等，或 sidecar `source` ≠ 本流来源 → `hashMismatch`；以上都不写行。
  3. 用**已落地解析器**重新解析（只读 import）：EDGAR `parseCompanyFacts(snapshot, {sinceYear: 1900})`；Tushare **逐个快照** `parseTushareStatements([snapshot], {sinceYear: 1900})`（指挥决定：同一次抓取的多页里同一行不会重复出现，逐页解析得到的候选是同步时候选的超集；匹配靠全键，超集无害；而跨抓取批次合并解析会让同组只留第一页的 raw_hash，丢掉后来快照的关联）。`sinceYear: 1900` 保证不跳过任何期间。解析抛错 → `parseFailed`。候选集合 = `candidates ∪ ambiguous[*].candidates ∪ oddDuration`（都带运行时 `locator`）。
@@ -6180,9 +6183,15 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
   if(env.truncated)return fail('read_truncated');
   try{
    const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache:ctx.cache});
-   if(!ctx.dryRun)await deps.db.replaceEvidence(p.issuerId,p.market,built.rows);
+   if(!ctx.dryRun)await deps.db.replaceEvidence(p.issuerId,p.market,attemptId,env.stateRev,built.rows);   // evidence fence
    out.evidence={indexed:built.rows.length,facts:built.stats.facts};
-  }catch{return fail('evidence_index_failed');}
+  }catch(e){
+   const code=dbCode(e);
+   if(code==='stale_computation'&&attempt===0){out.retried=true;continue;}
+   if(code==='stale_attempt'){out.outcome='skipped_stale';out.code='stale_attempt';return out;}
+   if(code==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';return out;}
+   return fail(code==='stale_computation'?code:'evidence_index_failed');
+  }
   let events,coverage;
   try{
    const [scope]=await deps.facts.scopeRows(p.market,[p.issuerId]);
