@@ -1,0 +1,21 @@
+## Findings
+
+Read-only audit; tests were not executed. Line references are to the implementation plan.
+
+| # | P1/P2/P3 | Task/Step | defect | concrete fix (exact text/code to change) |
+|---|---|---|---|---|
+| P1 — R1 | P1 | Task 14, Step 6 | **RESOLVED.** Lines 8948–8950 install the snapshot mock using the same CN fact IDs registered for PDF eligibility. | None. |
+| P2 — R2 | P1 | Task 12, Steps 5–6 | **RESOLVED.** The expected scaled difference is `+0.13`; the explanatory arithmetic agrees. | None. |
+| P3 — R3 | P1 | Task 12, Steps 6/9 | **RESOLVED.** The drawer uses server-provided deltas, explicitly renders withheld revisions, and tests eligible → withheld → eligible. | None. |
+| P4 — R4 | P2 | Task 15, Step 2 | **RESOLVED.** `sectionOf` builds a sorted union of retained statement periods. | None. |
+| P5 — R5 | P2 | Tasks 10/13 | **RESOLVED.** The handler accepts `periods`, retains all metrics within selected periods, and the UI sends its selection. | None. |
+| P6 — R6 | P1 | Tasks 10/13 | **RESOLVED.** Top-level `inputUnit`/`basis` survive withholding and participate in grid identity and labels. | None. |
+| P7 — R7 | P1 | Task 17, company tracking | **RESOLVED.** Request generations invalidate superseded loads and scope changes; deferred-response tests cover current/replay ordering. | None. |
+| P8 — R8 | P2 | Task 18, directory lookup | **RESOLVED.** Both candidate queries paginate to exhaustion before coverage intersection; tests cover matches beyond 1,000 rows. | None. |
+| **S1** | **P1** | Task 19, runbook §2; lines 17200–17203 | **The deployment instructions omit the required third migration.** They explicitly apply only `090000` and `091000`. Tasks 3/4/8 call the five-argument evidence writer, but `091000` defines only the three-argument function. The five-argument replacement exists in the landed, locked `20261112092000_company_evidence_fence.sql`. Following this runbook on a fresh target makes evidence replacement—and therefore every digest stream—fail. The name-only verification query misses this. | Replace step 2 with: “Apply `20261112090000_company_research.sql`, then `20261112091000_company_research_functions.sql`, then `20261112092000_company_evidence_fence.sql`; all three are locked.” Add verification: `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` Expected: `true`. Update remaining deployment descriptions that say “two migrations.” |
+| **S2** | **P2** | Task 17, `CompanyTrackingView`; lines 15914–15920 | **Watching a company changes its timeline from market-specific to mixed-market.** The watched/current branch returns every event from `fetchInbox({issuerId,...})`; that endpoint filters only by issuer. The unwatched/replay branch filters by `market`. For an issuer with US and CN streams, selecting either stream while watching displays both, and “mark read” includes the other stream. | In the watched branch replace `return { rows: r.rows, nextCursor: r.nextCursor };` with `return { rows: r.rows.filter(e => e.market === market), nextCursor: r.nextCursor };`. Preserve the underlying cursor even for an empty filtered page. Add a dual-market watched-company test asserting displayed and marked IDs belong only to the selected market. |
+| **S3** | **P2** | Task 17, Step 8, `TrackingInbox.markPage`; approximately lines 15613–15621 | **A delayed mark-read response marks rows that were never submitted.** Start marking page A, then change the issuer/filter or load another page before the mutation resolves. The callback executes `prev.map(...read:true)` against the new rows. Their database receipts remain absent, but the UI reports them read and can disable further marking. Under `unreadOnly`, the old callback also clears the new scope and invokes the old filter’s loader. | Capture `const generation=seq.current; const submitted=new Set(rows.filter(r=>!r.read).map(r=>r.eventId));` before awaiting. After completion, update rows/reload only when `generation===seq.current`; mark or remove only IDs in `submitted`. Clear rows/cursor when filter scope changes and disable mark-read while that scope loads. Add deferred mutation tests covering filter changes and pagination before completion. |
+
+## Verdict
+
+**not ready** — blocking ids: **S1, S2, S3**.

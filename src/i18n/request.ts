@@ -28,6 +28,12 @@ const MESSAGE_DOMAINS = [
   // MACRO-P3
   'macroStrategy',
   // /MACRO-P3
+  // F3 document pipeline (source drawer, spec 2026-11-04 §9.1):
+  'documents',
+  // F3 end
+  // COMPANY — company research module (plan 2026-11-06 Task 11)
+  'company', 'tracking',
+  // /COMPANY
   // F4
   // Judgment framework (spec 2026-11-04 §9.5):
   'judgments',

@@ -1,0 +1,1592 @@
+{
+ "extractor_version": "docs-extract/1.0",
+ "table_algo_version": "tables/1.0",
+ "code_version": "synthetic",
+ "content_sha256": "99266acaa04ba49ceb7f3c5825788645a1716cda39bc6efb465cce46132647d0",
+ "has_text_layer": true,
+ "pages": [
+  {
+   "page_no": 2,
+   "width": 595,
+   "height": 842,
+   "text": "Consolidated Statement of Profit or Loss\nFor the six months ended 30 June 2025\nNotes 2025 2024\nHK$'000 HK$'000\nRevenue 4 500,000 450,000\nCost of sales (300,000) (280,000)\nGross profit 200,000 170,000\nIncome tax expense (20,000) (18,000)\nProfit for the period 90,000 80,000\nProfit for the period attributable to:\nOwners of the Company 85,000 76,000\nNon-controlling interests 5,000 4,000\nEarnings per share (HK cents)\nBasic 12.34 10.50\nDiluted 12.30 10.45",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 290,
+     "text": "Consolidated Statement of Profit or Loss",
+     "char_start": 0,
+     "char_end": 40,
+     "items": [
+      {
+       "text": "Consolidated Statement of Profit or Loss",
+       "x0": 50,
+       "x1": 290,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 40
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 50,
+     "x1": 272,
+     "text": "For the six months ended 30 June 2025",
+     "char_start": 41,
+     "char_end": 78,
+     "items": [
+      {
+       "text": "For the six months ended 30 June 2025",
+       "x0": 50,
+       "x1": 272,
+       "y": 786,
+       "h": 10,
+       "char_start": 41,
+       "char_end": 78
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 290,
+     "x1": 500,
+     "text": "Notes 2025 2024",
+     "char_start": 79,
+     "char_end": 94,
+     "items": [
+      {
+       "text": "Notes",
+       "x0": 290,
+       "x1": 320,
+       "y": 772,
+       "h": 10,
+       "char_start": 79,
+       "char_end": 84
+      },
+      {
+       "text": "2025",
+       "x0": 396,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 85,
+       "char_end": 89
+      },
+      {
+       "text": "2024",
+       "x0": 476,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 90,
+       "char_end": 94
+      }
+     ]
+    },
+    {
+     "index": 3,
+     "y": 758,
+     "x0": 378,
+     "x1": 500,
+     "text": "HK$'000 HK$'000",
+     "char_start": 95,
+     "char_end": 110,
+     "items": [
+      {
+       "text": "HK$'000",
+       "x0": 378,
+       "x1": 420,
+       "y": 758,
+       "h": 10,
+       "char_start": 95,
+       "char_end": 102
+      },
+      {
+       "text": "HK$'000",
+       "x0": 458,
+       "x1": 500,
+       "y": 758,
+       "h": 10,
+       "char_start": 103,
+       "char_end": 110
+      }
+     ]
+    },
+    {
+     "index": 4,
+     "y": 744,
+     "x0": 50,
+     "x1": 500,
+     "text": "Revenue 4 500,000 450,000",
+     "char_start": 111,
+     "char_end": 136,
+     "items": [
+      {
+       "text": "Revenue",
+       "x0": 50,
+       "x1": 92,
+       "y": 744,
+       "h": 10,
+       "char_start": 111,
+       "char_end": 118
+      },
+      {
+       "text": "4",
+       "x0": 314,
+       "x1": 320,
+       "y": 744,
+       "h": 10,
+       "char_start": 119,
+       "char_end": 120
+      },
+      {
+       "text": "500,000",
+       "x0": 378,
+       "x1": 420,
+       "y": 744,
+       "h": 10,
+       "char_start": 121,
+       "char_end": 128
+      },
+      {
+       "text": "450,000",
+       "x0": 458,
+       "x1": 500,
+       "y": 744,
+       "h": 10,
+       "char_start": 129,
+       "char_end": 136
+      }
+     ]
+    },
+    {
+     "index": 5,
+     "y": 730,
+     "x0": 50,
+     "x1": 500,
+     "text": "Cost of sales (300,000) (280,000)",
+     "char_start": 137,
+     "char_end": 170,
+     "items": [
+      {
+       "text": "Cost of sales",
+       "x0": 50,
+       "x1": 128,
+       "y": 730,
+       "h": 10,
+       "char_start": 137,
+       "char_end": 150
+      },
+      {
+       "text": "(300,000)",
+       "x0": 366,
+       "x1": 420,
+       "y": 730,
+       "h": 10,
+       "char_start": 151,
+       "char_end": 160
+      },
+      {
+       "text": "(280,000)",
+       "x0": 446,
+       "x1": 500,
+       "y": 730,
+       "h": 10,
+       "char_start": 161,
+       "char_end": 170
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "y": 716,
+     "x0": 50,
+     "x1": 500,
+     "text": "Gross profit 200,000 170,000",
+     "char_start": 171,
+     "char_end": 199,
+     "items": [
+      {
+       "text": "Gross profit",
+       "x0": 50,
+       "x1": 122,
+       "y": 716,
+       "h": 10,
+       "char_start": 171,
+       "char_end": 183
+      },
+      {
+       "text": "200,000",
+       "x0": 378,
+       "x1": 420,
+       "y": 716,
+       "h": 10,
+       "char_start": 184,
+       "char_end": 191
+      },
+      {
+       "text": "170,000",
+       "x0": 458,
+       "x1": 500,
+       "y": 716,
+       "h": 10,
+       "char_start": 192,
+       "char_end": 199
+      }
+     ]
+    },
+    {
+     "index": 7,
+     "y": 702,
+     "x0": 50,
+     "x1": 500,
+     "text": "Income tax expense (20,000) (18,000)",
+     "char_start": 200,
+     "char_end": 236,
+     "items": [
+      {
+       "text": "Income tax expense",
+       "x0": 50,
+       "x1": 158,
+       "y": 702,
+       "h": 10,
+       "char_start": 200,
+       "char_end": 218
+      },
+      {
+       "text": "(20,000)",
+       "x0": 372,
+       "x1": 420,
+       "y": 702,
+       "h": 10,
+       "char_start": 219,
+       "char_end": 227
+      },
+      {
+       "text": "(18,000)",
+       "x0": 452,
+       "x1": 500,
+       "y": 702,
+       "h": 10,
+       "char_start": 228,
+       "char_end": 236
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "y": 688,
+     "x0": 50,
+     "x1": 500,
+     "text": "Profit for the period 90,000 80,000",
+     "char_start": 237,
+     "char_end": 272,
+     "items": [
+      {
+       "text": "Profit for the period",
+       "x0": 50,
+       "x1": 176,
+       "y": 688,
+       "h": 10,
+       "char_start": 237,
+       "char_end": 258
+      },
+      {
+       "text": "90,000",
+       "x0": 384,
+       "x1": 420,
+       "y": 688,
+       "h": 10,
+       "char_start": 259,
+       "char_end": 265
+      },
+      {
+       "text": "80,000",
+       "x0": 464,
+       "x1": 500,
+       "y": 688,
+       "h": 10,
+       "char_start": 266,
+       "char_end": 272
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "y": 674,
+     "x0": 50,
+     "x1": 278,
+     "text": "Profit for the period attributable to:",
+     "char_start": 273,
+     "char_end": 311,
+     "items": [
+      {
+       "text": "Profit for the period attributable to:",
+       "x0": 50,
+       "x1": 278,
+       "y": 674,
+       "h": 10,
+       "char_start": 273,
+       "char_end": 311
+      }
+     ]
+    },
+    {
+     "index": 10,
+     "y": 660,
+     "x0": 50,
+     "x1": 500,
+     "text": "Owners of the Company 85,000 76,000",
+     "char_start": 312,
+     "char_end": 347,
+     "items": [
+      {
+       "text": "Owners of the Company",
+       "x0": 50,
+       "x1": 176,
+       "y": 660,
+       "h": 10,
+       "char_start": 312,
+       "char_end": 333
+      },
+      {
+       "text": "85,000",
+       "x0": 384,
+       "x1": 420,
+       "y": 660,
+       "h": 10,
+       "char_start": 334,
+       "char_end": 340
+      },
+      {
+       "text": "76,000",
+       "x0": 464,
+       "x1": 500,
+       "y": 660,
+       "h": 10,
+       "char_start": 341,
+       "char_end": 347
+      }
+     ]
+    },
+    {
+     "index": 11,
+     "y": 646,
+     "x0": 50,
+     "x1": 500,
+     "text": "Non-controlling interests 5,000 4,000",
+     "char_start": 348,
+     "char_end": 385,
+     "items": [
+      {
+       "text": "Non-controlling interests",
+       "x0": 50,
+       "x1": 200,
+       "y": 646,
+       "h": 10,
+       "char_start": 348,
+       "char_end": 373
+      },
+      {
+       "text": "5,000",
+       "x0": 390,
+       "x1": 420,
+       "y": 646,
+       "h": 10,
+       "char_start": 374,
+       "char_end": 379
+      },
+      {
+       "text": "4,000",
+       "x0": 470,
+       "x1": 500,
+       "y": 646,
+       "h": 10,
+       "char_start": 380,
+       "char_end": 385
+      }
+     ]
+    },
+    {
+     "index": 12,
+     "y": 632,
+     "x0": 50,
+     "x1": 224,
+     "text": "Earnings per share (HK cents)",
+     "char_start": 386,
+     "char_end": 415,
+     "items": [
+      {
+       "text": "Earnings per share (HK cents)",
+       "x0": 50,
+       "x1": 224,
+       "y": 632,
+       "h": 10,
+       "char_start": 386,
+       "char_end": 415
+      }
+     ]
+    },
+    {
+     "index": 13,
+     "y": 618,
+     "x0": 50,
+     "x1": 500,
+     "text": "Basic 12.34 10.50",
+     "char_start": 416,
+     "char_end": 433,
+     "items": [
+      {
+       "text": "Basic",
+       "x0": 50,
+       "x1": 80,
+       "y": 618,
+       "h": 10,
+       "char_start": 416,
+       "char_end": 421
+      },
+      {
+       "text": "12.34",
+       "x0": 390,
+       "x1": 420,
+       "y": 618,
+       "h": 10,
+       "char_start": 422,
+       "char_end": 427
+      },
+      {
+       "text": "10.50",
+       "x0": 470,
+       "x1": 500,
+       "y": 618,
+       "h": 10,
+       "char_start": 428,
+       "char_end": 433
+      }
+     ]
+    },
+    {
+     "index": 14,
+     "y": 604,
+     "x0": 50,
+     "x1": 500,
+     "text": "Diluted 12.30 10.45",
+     "char_start": 434,
+     "char_end": 453,
+     "items": [
+      {
+       "text": "Diluted",
+       "x0": 50,
+       "x1": 92,
+       "y": 604,
+       "h": 10,
+       "char_start": 434,
+       "char_end": 441
+      },
+      {
+       "text": "12.30",
+       "x0": 390,
+       "x1": 420,
+       "y": 604,
+       "h": 10,
+       "char_start": 442,
+       "char_end": 447
+      },
+      {
+       "text": "10.45",
+       "x0": 470,
+       "x1": 500,
+       "y": 604,
+       "h": 10,
+       "char_start": 448,
+       "char_end": 453
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 290,
+       "text": "Consolidated Statement of Profit or Loss",
+       "char_start": 0,
+       "char_end": 40,
+       "items": [
+        {
+         "text": "Consolidated Statement of Profit or Loss",
+         "x0": 50,
+         "x1": 290,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 40
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 50,
+       "x1": 272,
+       "text": "For the six months ended 30 June 2025",
+       "char_start": 41,
+       "char_end": 78,
+       "items": [
+        {
+         "text": "For the six months ended 30 June 2025",
+         "x0": 50,
+         "x1": 272,
+         "y": 786,
+         "h": 10,
+         "char_start": 41,
+         "char_end": 78
+        }
+       ]
+      },
+      {
+       "index": 2,
+       "y": 772,
+       "x0": 290,
+       "x1": 500,
+       "text": "Notes 2025 2024",
+       "char_start": 79,
+       "char_end": 94,
+       "items": [
+        {
+         "text": "Notes",
+         "x0": 290,
+         "x1": 320,
+         "y": 772,
+         "h": 10,
+         "char_start": 79,
+         "char_end": 84
+        },
+        {
+         "text": "2025",
+         "x0": 396,
+         "x1": 420,
+         "y": 772,
+         "h": 10,
+         "char_start": 85,
+         "char_end": 89
+        },
+        {
+         "text": "2024",
+         "x0": 476,
+         "x1": 500,
+         "y": 772,
+         "h": 10,
+         "char_start": 90,
+         "char_end": 94
+        }
+       ]
+      },
+      {
+       "index": 3,
+       "y": 758,
+       "x0": 378,
+       "x1": 500,
+       "text": "HK$'000 HK$'000",
+       "char_start": 95,
+       "char_end": 110,
+       "items": [
+        {
+         "text": "HK$'000",
+         "x0": 378,
+         "x1": 420,
+         "y": 758,
+         "h": 10,
+         "char_start": 95,
+         "char_end": 102
+        },
+        {
+         "text": "HK$'000",
+         "x0": 458,
+         "x1": 500,
+         "y": 758,
+         "h": 10,
+         "char_start": 103,
+         "char_end": 110
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "Revenue",
+       "bbox": {
+        "x0": 50,
+        "y0": 744,
+        "x1": 92,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 111,
+       "char_end": 118,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "4",
+       "bbox": {
+        "x0": 314,
+        "y0": 744,
+        "x1": 320,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 119,
+       "char_end": 120,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "500,000",
+       "bbox": {
+        "x0": 378,
+        "y0": 744,
+        "x1": 420,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 121,
+       "char_end": 128,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 3,
+       "text": "450,000",
+       "bbox": {
+        "x0": 458,
+        "y0": 744,
+        "x1": 500,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 129,
+       "char_end": 136,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "Cost of sales",
+       "bbox": {
+        "x0": 50,
+        "y0": 730,
+        "x1": 128,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 137,
+       "char_end": 150,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "(300,000)",
+       "bbox": {
+        "x0": 366,
+        "y0": 730,
+        "x1": 420,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 151,
+       "char_end": 160,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 3,
+       "text": "(280,000)",
+       "bbox": {
+        "x0": 446,
+        "y0": 730,
+        "x1": 500,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 161,
+       "char_end": 170,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 0,
+       "text": "Gross profit",
+       "bbox": {
+        "x0": 50,
+        "y0": 716,
+        "x1": 122,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 171,
+       "char_end": 183,
+       "numeric": false
+      },
+      {
+       "row": 2,
+       "col": 2,
+       "text": "200,000",
+       "bbox": {
+        "x0": 378,
+        "y0": 716,
+        "x1": 420,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 184,
+       "char_end": 191,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 3,
+       "text": "170,000",
+       "bbox": {
+        "x0": 458,
+        "y0": 716,
+        "x1": 500,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 192,
+       "char_end": 199,
+       "numeric": true
+      },
+      {
+       "row": 3,
+       "col": 0,
+       "text": "Income tax expense",
+       "bbox": {
+        "x0": 50,
+        "y0": 702,
+        "x1": 158,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 200,
+       "char_end": 218,
+       "numeric": false
+      },
+      {
+       "row": 3,
+       "col": 2,
+       "text": "(20,000)",
+       "bbox": {
+        "x0": 372,
+        "y0": 702,
+        "x1": 420,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 219,
+       "char_end": 227,
+       "numeric": true
+      },
+      {
+       "row": 3,
+       "col": 3,
+       "text": "(18,000)",
+       "bbox": {
+        "x0": 452,
+        "y0": 702,
+        "x1": 500,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 228,
+       "char_end": 236,
+       "numeric": true
+      },
+      {
+       "row": 4,
+       "col": 0,
+       "text": "Profit for the period",
+       "bbox": {
+        "x0": 50,
+        "y0": 688,
+        "x1": 176,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 237,
+       "char_end": 258,
+       "numeric": false
+      },
+      {
+       "row": 4,
+       "col": 2,
+       "text": "90,000",
+       "bbox": {
+        "x0": 384,
+        "y0": 688,
+        "x1": 420,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 259,
+       "char_end": 265,
+       "numeric": true
+      },
+      {
+       "row": 4,
+       "col": 3,
+       "text": "80,000",
+       "bbox": {
+        "x0": 464,
+        "y0": 688,
+        "x1": 500,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 266,
+       "char_end": 272,
+       "numeric": true
+      }
+     ],
+     "row_count": 5,
+     "col_count": 4,
+     "col_x0": [
+      50,
+      314,
+      366,
+      446
+     ]
+    },
+    {
+     "header_lines": [
+      {
+       "index": 9,
+       "y": 674,
+       "x0": 50,
+       "x1": 278,
+       "text": "Profit for the period attributable to:",
+       "char_start": 273,
+       "char_end": 311,
+       "items": [
+        {
+         "text": "Profit for the period attributable to:",
+         "x0": 50,
+         "x1": 278,
+         "y": 674,
+         "h": 10,
+         "char_start": 273,
+         "char_end": 311
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "Owners of the Company",
+       "bbox": {
+        "x0": 50,
+        "y0": 660,
+        "x1": 176,
+        "y1": 670
+       },
+       "line_index": 10,
+       "char_start": 312,
+       "char_end": 333,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "85,000",
+       "bbox": {
+        "x0": 384,
+        "y0": 660,
+        "x1": 420,
+        "y1": 670
+       },
+       "line_index": 10,
+       "char_start": 334,
+       "char_end": 340,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "76,000",
+       "bbox": {
+        "x0": 464,
+        "y0": 660,
+        "x1": 500,
+        "y1": 670
+       },
+       "line_index": 10,
+       "char_start": 341,
+       "char_end": 347,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "Non-controlling interests",
+       "bbox": {
+        "x0": 50,
+        "y0": 646,
+        "x1": 200,
+        "y1": 656
+       },
+       "line_index": 11,
+       "char_start": 348,
+       "char_end": 373,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 1,
+       "text": "5,000",
+       "bbox": {
+        "x0": 390,
+        "y0": 646,
+        "x1": 420,
+        "y1": 656
+       },
+       "line_index": 11,
+       "char_start": 374,
+       "char_end": 379,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "4,000",
+       "bbox": {
+        "x0": 470,
+        "y0": 646,
+        "x1": 500,
+        "y1": 656
+       },
+       "line_index": 11,
+       "char_start": 380,
+       "char_end": 385,
+       "numeric": true
+      }
+     ],
+     "row_count": 2,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      384,
+      464
+     ]
+    },
+    {
+     "header_lines": [
+      {
+       "index": 12,
+       "y": 632,
+       "x0": 50,
+       "x1": 224,
+       "text": "Earnings per share (HK cents)",
+       "char_start": 386,
+       "char_end": 415,
+       "items": [
+        {
+         "text": "Earnings per share (HK cents)",
+         "x0": 50,
+         "x1": 224,
+         "y": 632,
+         "h": 10,
+         "char_start": 386,
+         "char_end": 415
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "Basic",
+       "bbox": {
+        "x0": 50,
+        "y0": 618,
+        "x1": 80,
+        "y1": 628
+       },
+       "line_index": 13,
+       "char_start": 416,
+       "char_end": 421,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "12.34",
+       "bbox": {
+        "x0": 390,
+        "y0": 618,
+        "x1": 420,
+        "y1": 628
+       },
+       "line_index": 13,
+       "char_start": 422,
+       "char_end": 427,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "10.50",
+       "bbox": {
+        "x0": 470,
+        "y0": 618,
+        "x1": 500,
+        "y1": 628
+       },
+       "line_index": 13,
+       "char_start": 428,
+       "char_end": 433,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "Diluted",
+       "bbox": {
+        "x0": 50,
+        "y0": 604,
+        "x1": 92,
+        "y1": 614
+       },
+       "line_index": 14,
+       "char_start": 434,
+       "char_end": 441,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 1,
+       "text": "12.30",
+       "bbox": {
+        "x0": 390,
+        "y0": 604,
+        "x1": 420,
+        "y1": 614
+       },
+       "line_index": 14,
+       "char_start": 442,
+       "char_end": 447,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "10.45",
+       "bbox": {
+        "x0": 470,
+        "y0": 604,
+        "x1": 500,
+        "y1": 614
+       },
+       "line_index": 14,
+       "char_start": 448,
+       "char_end": 453,
+       "numeric": true
+      }
+     ],
+     "row_count": 2,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      390,
+      470
+     ]
+    }
+   ]
+  },
+  {
+   "page_no": 3,
+   "width": 595,
+   "height": 842,
+   "text": "Consolidated Statement of Financial Position\nAs at 30 June 2025\n30 June 2025 31 December 2024\nHK$'000 HK$'000\nTotal assets 3,000,000 2,900,000\nTotal liabilities 1,000,000 950,000\nTotal equity 2,000,000 1,950,000",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 314,
+     "text": "Consolidated Statement of Financial Position",
+     "char_start": 0,
+     "char_end": 44,
+     "items": [
+      {
+       "text": "Consolidated Statement of Financial Position",
+       "x0": 50,
+       "x1": 314,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 44
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 50,
+     "x1": 158,
+     "text": "As at 30 June 2025",
+     "char_start": 45,
+     "char_end": 63,
+     "items": [
+      {
+       "text": "As at 30 June 2025",
+       "x0": 50,
+       "x1": 158,
+       "y": 786,
+       "h": 10,
+       "char_start": 45,
+       "char_end": 63
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 348,
+     "x1": 500,
+     "text": "30 June 2025 31 December 2024",
+     "char_start": 64,
+     "char_end": 93,
+     "items": [
+      {
+       "text": "30 June 2025",
+       "x0": 348,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 64,
+       "char_end": 76
+      },
+      {
+       "text": "31 December 2024",
+       "x0": 404,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 77,
+       "char_end": 93
+      }
+     ]
+    },
+    {
+     "index": 3,
+     "y": 758,
+     "x0": 378,
+     "x1": 500,
+     "text": "HK$'000 HK$'000",
+     "char_start": 94,
+     "char_end": 109,
+     "items": [
+      {
+       "text": "HK$'000",
+       "x0": 378,
+       "x1": 420,
+       "y": 758,
+       "h": 10,
+       "char_start": 94,
+       "char_end": 101
+      },
+      {
+       "text": "HK$'000",
+       "x0": 458,
+       "x1": 500,
+       "y": 758,
+       "h": 10,
+       "char_start": 102,
+       "char_end": 109
+      }
+     ]
+    },
+    {
+     "index": 4,
+     "y": 744,
+     "x0": 50,
+     "x1": 500,
+     "text": "Total assets 3,000,000 2,900,000",
+     "char_start": 110,
+     "char_end": 142,
+     "items": [
+      {
+       "text": "Total assets",
+       "x0": 50,
+       "x1": 122,
+       "y": 744,
+       "h": 10,
+       "char_start": 110,
+       "char_end": 122
+      },
+      {
+       "text": "3,000,000",
+       "x0": 366,
+       "x1": 420,
+       "y": 744,
+       "h": 10,
+       "char_start": 123,
+       "char_end": 132
+      },
+      {
+       "text": "2,900,000",
+       "x0": 446,
+       "x1": 500,
+       "y": 744,
+       "h": 10,
+       "char_start": 133,
+       "char_end": 142
+      }
+     ]
+    },
+    {
+     "index": 5,
+     "y": 730,
+     "x0": 50,
+     "x1": 500,
+     "text": "Total liabilities 1,000,000 950,000",
+     "char_start": 143,
+     "char_end": 178,
+     "items": [
+      {
+       "text": "Total liabilities",
+       "x0": 50,
+       "x1": 152,
+       "y": 730,
+       "h": 10,
+       "char_start": 143,
+       "char_end": 160
+      },
+      {
+       "text": "1,000,000",
+       "x0": 366,
+       "x1": 420,
+       "y": 730,
+       "h": 10,
+       "char_start": 161,
+       "char_end": 170
+      },
+      {
+       "text": "950,000",
+       "x0": 458,
+       "x1": 500,
+       "y": 730,
+       "h": 10,
+       "char_start": 171,
+       "char_end": 178
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "y": 716,
+     "x0": 50,
+     "x1": 500,
+     "text": "Total equity 2,000,000 1,950,000",
+     "char_start": 179,
+     "char_end": 211,
+     "items": [
+      {
+       "text": "Total equity",
+       "x0": 50,
+       "x1": 122,
+       "y": 716,
+       "h": 10,
+       "char_start": 179,
+       "char_end": 191
+      },
+      {
+       "text": "2,000,000",
+       "x0": 366,
+       "x1": 420,
+       "y": 716,
+       "h": 10,
+       "char_start": 192,
+       "char_end": 201
+      },
+      {
+       "text": "1,950,000",
+       "x0": 446,
+       "x1": 500,
+       "y": 716,
+       "h": 10,
+       "char_start": 202,
+       "char_end": 211
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 314,
+       "text": "Consolidated Statement of Financial Position",
+       "char_start": 0,
+       "char_end": 44,
+       "items": [
+        {
+         "text": "Consolidated Statement of Financial Position",
+         "x0": 50,
+         "x1": 314,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 44
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 50,
+       "x1": 158,
+       "text": "As at 30 June 2025",
+       "char_start": 45,
+       "char_end": 63,
+       "items": [
+        {
+         "text": "As at 30 June 2025",
+         "x0": 50,
+         "x1": 158,
+         "y": 786,
+         "h": 10,
+         "char_start": 45,
+         "char_end": 63
+        }
+       ]
+      },
+      {
+       "index": 2,
+       "y": 772,
+       "x0": 348,
+       "x1": 500,
+       "text": "30 June 2025 31 December 2024",
+       "char_start": 64,
+       "char_end": 93,
+       "items": [
+        {
+         "text": "30 June 2025",
+         "x0": 348,
+         "x1": 420,
+         "y": 772,
+         "h": 10,
+         "char_start": 64,
+         "char_end": 76
+        },
+        {
+         "text": "31 December 2024",
+         "x0": 404,
+         "x1": 500,
+         "y": 772,
+         "h": 10,
+         "char_start": 77,
+         "char_end": 93
+        }
+       ]
+      },
+      {
+       "index": 3,
+       "y": 758,
+       "x0": 378,
+       "x1": 500,
+       "text": "HK$'000 HK$'000",
+       "char_start": 94,
+       "char_end": 109,
+       "items": [
+        {
+         "text": "HK$'000",
+         "x0": 378,
+         "x1": 420,
+         "y": 758,
+         "h": 10,
+         "char_start": 94,
+         "char_end": 101
+        },
+        {
+         "text": "HK$'000",
+         "x0": 458,
+         "x1": 500,
+         "y": 758,
+         "h": 10,
+         "char_start": 102,
+         "char_end": 109
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "Total assets",
+       "bbox": {
+        "x0": 50,
+        "y0": 744,
+        "x1": 122,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 110,
+       "char_end": 122,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "3,000,000",
+       "bbox": {
+        "x0": 366,
+        "y0": 744,
+        "x1": 420,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 123,
+       "char_end": 132,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "2,900,000",
+       "bbox": {
+        "x0": 446,
+        "y0": 744,
+        "x1": 500,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 133,
+       "char_end": 142,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "Total liabilities",
+       "bbox": {
+        "x0": 50,
+        "y0": 730,
+        "x1": 152,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 143,
+       "char_end": 160,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 1,
+       "text": "1,000,000",
+       "bbox": {
+        "x0": 366,
+        "y0": 730,
+        "x1": 420,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 161,
+       "char_end": 170,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "950,000",
+       "bbox": {
+        "x0": 458,
+        "y0": 730,
+        "x1": 500,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 171,
+       "char_end": 178,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 0,
+       "text": "Total equity",
+       "bbox": {
+        "x0": 50,
+        "y0": 716,
+        "x1": 122,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 179,
+       "char_end": 191,
+       "numeric": false
+      },
+      {
+       "row": 2,
+       "col": 1,
+       "text": "2,000,000",
+       "bbox": {
+        "x0": 366,
+        "y0": 716,
+        "x1": 420,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 192,
+       "char_end": 201,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 2,
+       "text": "1,950,000",
+       "bbox": {
+        "x0": 446,
+        "y0": 716,
+        "x1": 500,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 202,
+       "char_end": 211,
+       "numeric": true
+      }
+     ],
+     "row_count": 3,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      366,
+      446
+     ]
+    }
+   ]
+  }
+ ]
+}

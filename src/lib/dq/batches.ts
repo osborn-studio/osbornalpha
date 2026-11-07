@@ -66,12 +66,18 @@ function capErrors(errors:BatchError[]):BatchError[]{
  * it makes the batch partial, or failed when nothing landed.
  */
 export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary'] as const;
+// F3 document pipeline (spec §10): informational codes of the HK candidate generator, the
+// comparative / en-zh checks and the LLM boundary. Kept outside INFO_CODES, whose exact value is
+// pinned by src/lib/facts/rules.test.ts (not editable by F3); isInfoError consults both lists.
+export const F3_INFO_CODES=['locate_ambiguous','period_unparsed','unit_ambiguous','label_ambiguous','not_consolidated','restated_comparative','en_zh_mismatch','extractor_disagreement','llm_uncited'] as const;
+export type F3InfoCode=typeof F3_INFO_CODES[number];
+// end F3
 // F4 — judgment-layer information codes (judgment framework spec §7.5, §13): settle/calibrate/produce
 // summaries and benign races. A separate tuple because src/lib/facts/rules.test.ts pins INFO_CODES and
 // F4 may not edit src/lib/facts/*; isInfoError treats both tuples alike.
 export const JUDGMENT_INFO_CODES=['pending_summary','unavailable_summary','voided_summary','abstained_summary','lease_lost','stale_revision','job_state_conflict','macro_unavailable','quarantine_reject_stale','quarantine_reject_item_not_open'] as const;
-export const ALL_INFO_CODES:readonly string[]=[...INFO_CODES,...JUDGMENT_INFO_CODES];
-export type InfoCode=typeof INFO_CODES[number]|typeof JUDGMENT_INFO_CODES[number];
+export const ALL_INFO_CODES:readonly string[]=[...INFO_CODES,...JUDGMENT_INFO_CODES,...F3_INFO_CODES];
+export type InfoCode=typeof INFO_CODES[number]|typeof JUDGMENT_INFO_CODES[number]|typeof F3_INFO_CODES[number];
 export const isInfoError=(e:BatchError)=>ALL_INFO_CODES.includes(e.code);
 // /F4
 

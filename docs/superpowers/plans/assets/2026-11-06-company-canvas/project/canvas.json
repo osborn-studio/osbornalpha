@@ -1,0 +1,31 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-04T18:40:00Z"},
+  "title": "公司研究与跟踪 Company Research",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1440, "h": 1700, "title": "公司页 · 报表视图 Statements", "expand": "fill"},
+    "Replay.dc.html": {"x": 1520, "y": 0, "w": 1440, "h": 1350, "title": "回放态 asOf replay", "expand": "fill"},
+    "Metrics.dc.html": {"x": 3040, "y": 0, "w": 1440, "h": 2000, "title": "指标视图 + 估值模型区 Metrics & valuation model", "expand": "fill"},
+    "Filings.dc.html": {"x": 4560, "y": 0, "w": 1440, "h": 1300, "title": "文件视图 Filings", "expand": "fill"},
+    "Overview.dc.html": {"x": 0, "y": 2420, "w": 1440, "h": 1600, "title": "概览 · 双披露流 Overview (dual stream)", "expand": "fill"},
+    "Drawer.dc.html": {"x": 1520, "y": 2420, "w": 1920, "h": 1500, "title": "披露历史抽屉 / 公式抽屉 / 概念说明"},
+    "States.dc.html": {"x": 3520, "y": 2420, "w": 1440, "h": 2200, "title": "缺失与特殊状态 Missing & special states"},
+    "Tracking.dc.html": {"x": 0, "y": 5040, "w": 1440, "h": 1650, "title": "跟踪收件箱 /watchlist/tracking", "expand": "fill"},
+    "Directory.dc.html": {"x": 1520, "y": 5040, "w": 1440, "h": 1350, "title": "覆盖目录 /intel/companies", "expand": "fill"},
+    "M-Company.dc.html": {"x": 0, "y": 7110, "w": 390, "h": 1500, "title": "移动 · 公司页 Mobile company"},
+    "M-Drawer.dc.html": {"x": 470, "y": 7110, "w": 390, "h": 1400, "title": "移动 · 披露历史 Mobile drawer"},
+    "M-Tracking.dc.html": {"x": 940, "y": 7110, "w": 390, "h": 1300, "title": "移动 · 收件箱 Mobile inbox"}
+  },
+  "order": ["Main.dc.html", "Replay.dc.html", "Metrics.dc.html", "Filings.dc.html", "Overview.dc.html", "Drawer.dc.html", "States.dc.html", "Tracking.dc.html", "Directory.dc.html", "M-Company.dc.html", "M-Drawer.dc.html", "M-Tracking.dc.html"],
+  "notes": {
+    "t1": {"x": 0, "y": -300, "text": "公司页 /stock/[ticker] — 事实视图", "kind": "title1", "maxW": 6000},
+    "t2": {"x": 0, "y": 2120, "text": "概览、抽屉与状态 Overview, drawers, states", "kind": "title1", "maxW": 4960},
+    "t3": {"x": 0, "y": 4740, "text": "跟踪与目录 Tracking & directory", "kind": "title1", "maxW": 2960},
+    "t4": {"x": 0, "y": 6810, "text": "移动 Mobile (390)", "kind": "title1", "maxW": 1330},
+    "s1": {"x": -620, "y": 0, "w": 520, "size": "m", "fill": "gray", "text": "规格 Spec: docs/superpowers/specs/2026-11-04-company-research-design.md（第 5 稿）\n\n该规格没有单列“待设计清单”；本画布的屏来自 §5 公司页（页头、报表、指标与估值模型区、文件、披露历史抽屉、缺失态、概览、移动端、回放矩阵）、§7.3 与 C3 跟踪收件箱、§8 覆盖目录。\n\n约定\n• 所有数值均为版式示意，不是事实。\n• 公共端点上证据不完整的值在服务端置空（withheld），前端只显示原因与计数。\n• 行情行与 K 线按决策 J 默认不显示；PE/PB/ROE/股息率任何情况下不显示。\n• 判断视图按 F4 JudgmentCard 渲染，见判断层画布。"},
+    "s2": {"x": -620, "y": 900, "w": 520, "size": "m", "fill": "gray", "text": "Token 偏差：三级文字用 #8b8b94 代替 #52525b（对比度）。徽标 R / n / ! / U 用描边小方块，! 只在 admin 路由出现。"}
+  },
+  "designSystems": []
+}

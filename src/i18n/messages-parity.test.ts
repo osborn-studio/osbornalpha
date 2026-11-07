@@ -7,7 +7,7 @@ function keys(value: unknown, prefix = ''): string[] {
   return Object.entries(value).flatMap(([key, child]) => keys(child, prefix ? `${prefix}.${key}` : key));
 }
 
-type Domain = 'common' | 'components' | 'portfolio' | 'analyst';
+type Domain = 'common' | 'components' | 'portfolio' | 'analyst' | 'documents'; // F3: + documents
 
 function messageKeys(locale: 'en' | 'zh', file: Domain) {
   const path = resolve(process.cwd(), 'messages', locale, `${file}.json`);
@@ -25,13 +25,13 @@ function placeholders(value: string): string[] {
 
 describe('usage notice translations', () => {
   it('keeps Chinese and English keys in parity', () => {
-    for (const file of ['common', 'components', 'portfolio', 'analyst'] as const) {
+    for (const file of ['common', 'components', 'portfolio', 'analyst', 'documents'] as const) { // F3: + documents
       expect(messageKeys('zh', file)).toEqual(messageKeys('en', file));
     }
   });
 
   it('keeps quota and daily-usage interpolation parameters in parity', () => {
-    for (const [file, name] of [['common', 'quota'], ['components', 'usageToday']] as const) {
+    for (const [file, name] of [['common', 'quota'], ['components', 'usageToday'], ['documents', 'drawer']] as const) { // F3: + documents.drawer
       const en = section('en', file, name);
       const zh = section('zh', file, name);
       for (const key of Object.keys(en)) {
@@ -61,3 +61,20 @@ describe('industries translations', () => {
   });
 });
 // INDUSTRY:END
+// COMPANY — company research module domains (plan 2026-11-06 Task 11)
+describe('company module translations', () => {
+  const read = (locale: 'en' | 'zh', file: 'company' | 'tracking') =>
+    JSON.parse(readFileSync(resolve(process.cwd(), 'messages', locale, `${file}.json`), 'utf8')) as unknown;
+  const leaves = (value: unknown, prefix = ''): [string, string][] =>
+    typeof value === 'string' ? [[prefix, value]]
+      : Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => leaves(v, prefix ? `${prefix}.${k}` : k));
+  for (const file of ['company', 'tracking'] as const) {
+    it(`${file}: zh and en keys and placeholders are in parity`, () => {
+      const zh = new Map(leaves(read('zh', file)));
+      const en = new Map(leaves(read('en', file)));
+      expect([...zh.keys()].sort()).toEqual([...en.keys()].sort());
+      for (const [key, value] of en) expect(placeholders(zh.get(key) ?? '')).toEqual(placeholders(value));
+    });
+  }
+});
+// /COMPANY

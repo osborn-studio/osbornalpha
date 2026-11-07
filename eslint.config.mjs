@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
       "research-books/**",
       "test-results/**",
       "tmp/**",
+      "build/**",   // F3: the generated extraction worker bundle (npm run prebuild), never linted
     ],
   ),
   {

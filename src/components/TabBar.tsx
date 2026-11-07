@@ -109,9 +109,7 @@ export function TabBar() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {TABS.map((t) => {
-        const active =
-          (t.href === '/today' && pathname === '/today') ||
-          (t.href !== '/today' && pathname.startsWith(t.href));
+        const active = (t.href === '/today' && pathname === '/today') || (t.href !== '/today' && pathname.startsWith(t.href));
         return (
           <Link
             key={t.id}
