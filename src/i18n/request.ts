@@ -21,6 +21,9 @@ const MESSAGE_DOMAINS = [
   // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
   'macro',
   // /MACRO
+  // MACRO-P3
+  'macroStrategy',
+  // /MACRO-P3
 ] as const;
 
 export default getRequestConfig(async () => {
