@@ -78,3 +78,41 @@ real independently reviewed labels and authenticated document provenance. CN
 production gold still needs real Tushare/CN replay evidence. Other disabled kinds
 retain their registry prerequisites. No production report, manifest approval,
 source verification, production write or activation is claimed here.
+
+## Register reviewed human gold in the integrity lock
+
+After a human has completed transcription and the required independent review,
+register the exact candidate bytes with:
+
+```sh
+PATH=/opt/homebrew/opt/node@22/bin:$PATH npx tsx scripts/evals/lock-gold.ts \
+  src/lib/evals/fixtures/gold/facts/reviewed-us.json
+```
+
+This is an explicit local write to `lock.json`, replacing or appending just the
+candidate's entry and preserving unrelated entry values. It reuses the admission
+contract, refusing synthetic, legacy, restricted, empty and invalid candidates.
+The candidate must be under the F6 gold directory; the original
+`src/lib/facts/fixtures/gold/plan2.json` path is also supported **after** its owner
+migrates it to F6. Changed locked bytes require a strictly higher version and the
+schema-required history, including legacy migrations and formatting changes.
+Identical entries leave the lock unchanged. Exit codes: 0 updated/unchanged,
+1 refused, 2 invalid CLI arguments.
+
+The command acquires `lock.json.pending` exclusively, validates one snapshot of
+each input, stages a complete replacement, and checks that candidate, recorder and
+lock bytes still match before atomic rename. Symlinked inputs are refused. A
+second cooperating writer fails closed. If a process crashes and leaves
+`lock.json.pending`, first establish that no updater is running and inspect the
+staged file before an operator removes it and retries. Do not edit inputs while
+running this command; arbitrary concurrent editors cannot be locked out by this
+local tool. Atomic replacement protects against partial lock writes; power-loss
+durability is filesystem-dependent.
+
+The output says `scope=integrity_lock_only` and retains admission's `not_verified`
+list. It does not establish source accuracy, authenticate recorder identities or
+independent PR approval, grant licensing, or accept gold for release. Submit the
+candidate, history and lock diff through independent human PR review; retain
+`--gold-diff` CI and authenticated release-manifest checks. No acceptance flags,
+values, recorder identities, licences or disabled evaluation kinds are changed.
+The current repository candidates remain blocked; the updater does not fill them.
