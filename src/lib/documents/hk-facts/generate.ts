@@ -25,7 +25,7 @@ import {columnPeriod,headerColumns,mapColumns,titlePeriod} from './period';
 import type {ColumnPeriod,ColumnRef} from './period';
 import {detectAmountUnit,detectEpsUnit} from './scale';
 import type {Scale} from './scale';
-import {applySign,cellValue} from './values';
+import {applySign,cellValue,signWords} from './values';
 
 type Bbox={x0:number;y0:number;x1:number;y1:number};
 export interface CiteInput{page_no:number;char_start:number;char_end:number;bbox?:Bbox|null}
@@ -34,7 +34,7 @@ export type HkInfoCode='locate_ambiguous'|'period_unparsed'|'unit_ambiguous'|'la
 type Note=(code:HkInfoCode,detail:string)=>void;
 interface Range{page_no:number;char_start:number;char_end:number;bbox:Bbox|null}
 interface Draft{payload:FinancialFactPayload;value:Range;label:Range;unit:Range;unitCurrency:Range|null;titleLine:Range;title:Range;header:Range}
-interface RowHit{concept:string;page:PageLayout;cells:LayoutCell[];label:Range;labelText:string;columns:Map<number,ColumnRef>;sectionLines:{page_no:number;line:LayoutLine}[]}
+interface RowHit{concept:string;page:PageLayout;cells:LayoutCell[];label:Range;labelText:string;columns:Map<number,ColumnRef>;sectionLines:{page_no:number;line:LayoutLine}[];extraSources:{page_no:number;text:string;char_start:number}[]}
 
 const EPS=new Set(['eps_basic','eps_diluted']);
 const sha256=(s:string)=>createHash('sha256').update(s,'utf8').digest('hex');
@@ -97,39 +97,63 @@ function draftsOf(st:LocatedStatement,annual:boolean,note:Note):Draft[]{
    const prev=pending.filter((x,k,a)=>x.index===line.index-(a.length-k));pending=[];
    const labelCells=cells.filter(c=>!c.numeric).sort((x,y)=>x.char_start-y.char_start);
    if(!t||labelCells.length===0)continue;
-   // The row's label is read from the label cells on the numbers' own line (leading col 0, plus a trailing
-   // bilingual label cell). A wrapped label is several col-0 cells of one row on other lines (tables/1.0 as
-   // committed: the continuation keeps its own line_index), but the cells around a row may also be
-   // neighbouring headings the table builder glued on ("(expressed in RMB cents per share)"), so the main
-   // label is tried alone first and the continuations only when it names no concept.
-   const leading=labelCells.filter(c=>c.col===0),trailing=labelCells.filter(c=>c.col!==0);
+   // Label evidence (plan F3 Task 14 review). Every label cell on the numbers' own line is read together:
+   // the leading label (col 0) and any trailing bilingual cell. The CITED label is the leading label,
+   // preceded where needed by label-only text directly above (contiguous, no numbers); trailing cells and
+   // lines below the row are never cited (the range would contain the numbers), so they only test the
+   // reading: if the leading label plus a trailing cell or a continuation (above or below) names another
+   // concept, none, or changes the sign (credit / 沖回 / decrease-only), the row is label_ambiguous and
+   // yields no candidate. Continuation lines are label-only lines at the label's x, not headings, not
+   // colon lines and not the EPS section's own unit lines; header lines never qualify (other x).
+   const leading=labelCells.filter(c=>c.col===0).map(partOf),trailing=labelCells.filter(c=>c.col!==0).map(partOf);
    const rowNo=cells.find(c=>c.numeric)!.row;
-   const sameRow=t.cells.filter(c=>c.row===rowNo&&!c.numeric&&c.line_index!==line.index).sort((x,y)=>x.line_index-y.line_index);
-   const above=sameRow.filter(c=>c.line_index<line.index),below=sameRow.filter(c=>c.line_index>line.index);
-   const main=[...leading,...trailing];
-   const attempts:Part[][]=[leading.map(partOf)];
-   if(trailing.length>0)attempts.push(main.map(partOf));
-   for(let n=1;n<=above.length;n++)attempts.push([...above.slice(-n),...main].map(partOf));
-   for(let n=1;n<=below.length;n++)attempts.push([...main,...below.slice(0,n)].map(partOf));
-   // A two-line label that arrives as separate label-only rows (tables/1.0 keeps a wrapped line as its own row unless the neighbour is clearly nearer): the label-only line(s) directly above, or the one directly below, joined with this row's label; only a combination that names a known label is used.
-   for(let n=1;n<=prev.length;n++){
-    const ps=prev.slice(-n).filter(x=>!above.some(c=>c.line_index===x.index));
-    if(ps.length===n)attempts.push([...ps.map(x=>({text:x.text,char_start:x.char_start,char_end:x.char_end})),...leading.map(partOf)]);
+   const lineAt=new Map(page.lines.map(l=>[l.index,l]));
+   const epsHeading=(idx:number)=>section==='eps'&&sectionLines.some(x=>x.page_no===page.page_no&&x.line.index===idx);
+   type Cont=Part&{idx:number};
+   const usable=(c:Cont)=>{
+    const l=lineAt.get(c.idx);const x0=(c.bbox!==null&&c.bbox!==undefined?c.bbox.x0:l?.x0)??line.x0;
+    return !epsHeading(c.idx)&&!/[:：]\s*$/.test(c.text)&&headingSection(c.text,null)===undefined&&Math.abs(x0-line.x0)<=Math.max(12,2*(line.items[0]?.h??0));
+   };
+   const byIdx=new Map<number,Cont>();
+   for(const c of t.cells)if(c.row===rowNo&&!c.numeric&&c.line_index!==line.index)byIdx.set(c.line_index,{...partOf(c),idx:c.line_index});
+   for(const x of prev)if(!byIdx.has(x.index))byIdx.set(x.index,{text:x.text,char_start:x.char_start,char_end:x.char_end,idx:x.index});
+   for(const dk of [1,2]){const n=sortedLines[pos+dk];if(n!==undefined&&n.index===line.index+dk&&isTextOnly(n)&&!byIdx.has(n.index))byIdx.set(n.index,{text:n.text,char_start:n.char_start,char_end:n.char_end,idx:n.index});}
+   const textOf=(ps:Part[])=>ps.map(x=>x.text).join(' ');
+   const conceptsOf=(ps:Part[])=>ps.length===0?[]:matchConcepts(textOf(ps),S,section);
+   // a label-only line below that is the first half of the NEXT row's two-line label belongs to that row
+   const claimedByNext=(c:Cont)=>{
+    const nl=lineAt.get(c.idx+1);if(nl===undefined)return false;
+    const nt=tableOfLine.get(nl.index);if(nt===undefined)return false;
+    const nc=nt.cells.filter(x=>x.line_index===nl.index);
+    if(!nc.some(x=>x.numeric))return false;
+    return conceptsOf([c,...nc.filter(x=>!x.numeric&&x.col===0).map(partOf)]).length>0;
+   };
+   // a line below that starts a new label (capital letter / digit) is a heading or the next label, not a continuation
+   const startsLabel=(x:string)=>/^[\p{Lu}\d]/u.test(x);
+   const chain=(dir:1|-1):Cont[]=>{const out:Cont[]=[];for(let k=1;k<=2;k++){const c=byIdx.get(line.index+dir*k);if(c===undefined||!usable(c)||(dir===1&&(claimedByNext(c)||startsLabel(c.text))))break;out.push(c);}return out;};
+   const above=chain(-1).reverse(),below=chain(1);
+   lastLabel=textOf(leading.length>0?leading:trailing);
+   let base:Part[]|null=null;let found:string[]=[];
+   const alone=conceptsOf(leading);
+   if(alone.length>0){base=leading;found=alone;}
+   else if(leading.length>0){for(let n=1;n<=above.length&&base===null;n++){const ps=[...above.slice(-n),...leading];const f=conceptsOf(ps);if(f.length>0){base=ps;found=f;}}}
+   const mainAll=[...leading,...trailing];
+   if(base===null){
+    // a concept appears only through uncitable text (trailing cell, line below): refuse rather than guess
+    const probes=[mainAll,[...mainAll,...below],[...above,...mainAll],[...above,...mainAll,...below]];
+    if(probes.some(ps=>conceptsOf(ps).length>0))note('label_ambiguous',`${S}:row:${normalizeLabel(textOf(mainAll))}`);
+    continue;
    }
-   const next=sortedLines[pos+1];
-   if(next!==undefined&&next.index===line.index+1&&isTextOnly(next)&&!below.some(c=>c.line_index===next.index))attempts.push([...main.map(partOf),{text:next.text,char_start:next.char_start,char_end:next.char_end}]);
-   const first=attempts[0].length>0?attempts[0]:main.map(partOf);
-   lastLabel=first.map(x=>x.text).join(' ');
-   let concepts:string[]=[];let used=first;
-   for(const parts of attempts){
-    if(parts.length===0)continue;
-    const found=matchConcepts(parts.map(x=>x.text).join(' '),S,section);
-    if(found.length>0){concepts=found;used=parts;break;}
-   }
-   const labelText=used.map(x=>x.text).join(' ');
-   const label:Range={page_no:page.page_no,char_start:Math.min(...used.map(x=>x.char_start)),char_end:Math.max(...used.map(x=>x.char_end)),bbox:used.length===1&&used[0].bbox!==undefined?used[0].bbox:null};
-   if(concepts.length>1){note('label_ambiguous',`${S}:row:${normalizeLabel(labelText)}`);continue;}
-   if(concepts.length===1)hits.push({concept:concepts[0],page,cells,label,labelText:normalizeLabel(labelText),columns:columnsOf.get(t)??new Map(),sectionLines:section==='eps'?[...sectionLines]:[]});
+   const sign=signWords(textOf(base));
+   const exts:Part[][]=[];
+   if(trailing.length>0)exts.push([...base,...trailing]);
+   for(let n=1;n<=below.length;n++)exts.push([...base,...below.slice(0,n)]);
+   if(base===leading&&!startsLabel(textOf(leading)))for(let n=1;n<=above.length;n++)exts.push([...above.slice(-n),...base]);
+   const agrees=found.length===1&&exts.every(e=>{const f=conceptsOf(e);return f.length===1&&f[0]===found[0]&&signWords(textOf(e))===sign;});
+   const labelText=textOf(base);
+   if(!agrees){note('label_ambiguous',`${S}:row:${normalizeLabel(labelText)}`);continue;}
+   const label:Range={page_no:page.page_no,char_start:Math.min(...base.map(x=>x.char_start)),char_end:Math.max(...base.map(x=>x.char_end)),bbox:base.length===1&&base[0].bbox!==undefined?base[0].bbox:null};
+   hits.push({concept:found[0],page,cells,label,labelText:normalizeLabel(labelText),columns:columnsOf.get(t)??new Map(),sectionLines:section==='eps'?[...sectionLines]:[],extraSources:trailing.map(x=>({page_no:page.page_no,text:x.text,char_start:x.char_start}))});
   }
  }
  // one row per concept and statement: identical repeats (same text in every mapped column) collapse, others are ambiguous
@@ -144,12 +168,12 @@ function draftsOf(st:LocatedStatement,annual:boolean,note:Note):Draft[]{
   if(EPS.has(concept)){
    const text=new Map(st.pages.map(p=>[p.page_no,p.text]));
    const sources=[{page_no:r.label.page_no,text:cpSlice(text.get(r.label.page_no)??'',r.label.char_start,r.label.char_end),char_start:r.label.char_start},
-    ...r.sectionLines.map(x=>({page_no:x.page_no,text:x.line.text,char_start:x.line.char_start}))];
+    ...r.extraSources,...r.sectionLines.map(x=>({page_no:x.page_no,text:x.line.text,char_start:x.line.char_start}))];
    const eps=detectEpsUnit(sources,amount.ok?amount.currency:null);
    if(!eps.ok){note('unit_ambiguous',`${S}:${concept}:${eps.reason}`);continue;}
    unit=eps.unit;scale=eps.scale;unitRange={...eps.cite,bbox:null};
    // R2-P1-1: 仙 / cents names no currency — the table's amount-unit evidence is cited as well
-   if(eps.inherited){if(!amount.ok)continue;unitCurrency={...amount.cite,bbox:null};}
+   if(eps.inherited){if(eps.currencyCite)unitCurrency={...eps.currencyCite,bbox:null};else{if(!amount.ok)continue;unitCurrency={...amount.cite,bbox:null};}}
   }else{
    if(!amount.ok)continue;
    unit=amount.currency;scale=amount.scale;unitRange={...amount.cite,bbox:null};

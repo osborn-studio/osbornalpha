@@ -129,12 +129,16 @@ export function spanOf(line:LayoutLine,start:number,end:number):{x0:number;x1:nu
 /** The table's own header tokens placed on its numeric columns by x (see header); null without tokens; 'unmappable' when a token sits over no column, two different tokens share a column, or there are fewer numeric columns than tokens. */
 export function headerColumns(statement:StatementKind,table:LayoutTable,page_no:number):ColumnRef[]|'unmappable'|null{
  type Token={kind:'year'|'date';year:number;date:string|null;text:string;start:number;end:number};
+ type Placed={line:LayoutLine;t:Token};
  let best:{line:LayoutLine;tokens:Token[]}|null=null;
+ let dateLines:{line:LayoutLine;tokens:Token[]}[]=[];
  if(statement==='BS'){
   for(const line of table.header_lines){
    if(PERIOD_PHRASE.test(line.text))continue;
    const tokens:Token[]=findDates(line.text).map(d=>({kind:'date',year:Number(d.iso.split('-')[0]),date:d.iso,text:d.text,start:d.start,end:d.end}));
-   if(tokens.length>0&&(best===null||tokens.length>=best.tokens.length))best={line,tokens};
+   if(tokens.length===0)continue;
+   dateLines.push({line,tokens});
+   if(best===null||tokens.length>=best.tokens.length)best={line,tokens};
   }
  }
  if(best===null){
@@ -145,12 +149,16 @@ export function headerColumns(statement:StatementKind,table:LayoutTable,page_no:
  }
  if(best===null)return null;
  const cols=numericColumns(table);
- if(cols.length<best.tokens.length)return 'unmappable';
- const line=best.line;
- const ref=(t:Token,anchor:number):ColumnRef=>({anchor,kind:t.kind,year:t.year,date:t.date,text:t.text,page_no,start:line.char_start+t.start,end:line.char_start+t.end});
- if(line.items.length===0){const right=cols.slice(cols.length-best.tokens.length);return best.tokens.map((t,i)=>ref(t,right[i].anchor));}   // no positions: rightmost rule
+ // balance-sheet dates may sit on different header lines (staggered over their columns): every positioned
+ // date token of every line is placed by x; equivalent tokens (bilingual repeats) share a column
+ const merged=dateLines.length>1&&dateLines.every(d=>d.line.items.length>0);
+ const placed:Placed[]=merged?dateLines.flatMap(d=>d.tokens.map(t=>({line:d.line,t}))):best.tokens.map(t=>({line:best!.line,t}));
+ const distinct=new Set(placed.map(p=>`${p.t.kind}:${p.t.year}:${p.t.date??''}`)).size;
+ if(cols.length<(merged?distinct:best.tokens.length))return 'unmappable';
+ const ref=(t:Token,line:LayoutLine,anchor:number):ColumnRef=>({anchor,kind:t.kind,year:t.year,date:t.date,text:t.text,page_no,start:line.char_start+t.start,end:line.char_start+t.end});
+ if(!merged&&best.line.items.length===0){const right=cols.slice(cols.length-best.tokens.length);return best.tokens.map((t,i)=>ref(t,best!.line,right[i].anchor));}   // no positions: rightmost rule
  const out:ColumnRef[]=[];const used=new Map<number,Token>();
- for(const t of best.tokens){
+ for(const {line,t} of placed){
   const span=spanOf(line,t.start,t.end);if(span===null)return 'unmappable';
   const mid=(span.x0+span.x1)/2;const centre=(c:NumericColumn)=>(c.x0+c.anchor)/2;let pick:NumericColumn|null=null;
   for(const c of cols){
@@ -160,7 +168,7 @@ export function headerColumns(statement:StatementKind,table:LayoutTable,page_no:
   if(pick===null)return 'unmappable';
   const prev=used.get(pick.col);
   if(prev!==undefined){if(prev.kind===t.kind&&prev.year===t.year&&prev.date===t.date)continue;return 'unmappable';}
-  used.set(pick.col,t);out.push(ref(t,pick.anchor));
+  used.set(pick.col,t);out.push(ref(t,line,pick.anchor));
  }
  return out.sort((x,y)=>x.anchor-y.anchor);
 }

@@ -20,6 +20,8 @@ export function cellValue(text:string,scale:Scale):CellValue{
 }
 const ABS_IF_NEGATIVE=new Set(['cost_of_revenue','income_tax']);
 const DECREASE=/減少|减少|decrease/i,INCREASE=/增加|increase/i,CREDIT=/credit|抵免|沖回|冲回/i;
+/** The words in a label that change the sign rule (credit / decrease-only); two spellings of one label must agree on it. */
+export const signWords=(label:string)=>`${CREDIT.test(label)?'credit':''}|${DECREASE.test(label)&&!INCREASE.test(label)?'decrease':''}`;
 export function applySign(concept:string,value:string,label:string):{value:string;sign_flip:boolean}{
  const negative=value.startsWith('-');
  if(concept==='income_tax'&&CREDIT.test(label)){const v=negative||value==='0'?value:negate(value);return {value:v,sign_flip:v!==value};}

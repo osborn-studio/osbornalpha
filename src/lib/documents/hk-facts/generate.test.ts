@@ -32,7 +32,9 @@ async function run(name:string|PagesJson,docClass:DocClass='annual_report',langu
  const cite=async(i:CiteInput)=>{calls.push(i);const k=`${i.page_no}:${i.char_start}:${i.char_end}`;if(!ids.has(k))ids.set(k,`cit-${ids.size+1}`);return ids.get(k)!;};
  const snippet=(id:string)=>{const k=[...ids].find(([,v])=>v===id)?.[0];if(!k)throw new Error(`unknown citation ${id}`);const [p,s,e]=k.split(':').map(Number);return cpSlice(json.pages.find(x=>x.page_no===p)!.text,s,e);};
  const out=await generateHkCandidates(json,{document:docRow(docClass,language),extraction:extRow(),cite});
- return {...out,calls,snippet,by:new Map(out.candidates.map(c=>[c.natural_key,c]))};
+ const where=(id:string)=>{const k=[...ids].find(([,v])=>v===id)?.[0];if(!k)throw new Error(`unknown citation ${id}`);const [page_no,start,end]=k.split(':').map(Number);const lines=json.pages.find(x=>x.page_no===page_no)!.lines;
+  const at=(o:number)=>lines.find(l=>l.char_start<=o&&o<l.char_end)?.index??null;return {page_no,line_start:at(start),line_end:at(end-1)};};
+ return {...out,calls,snippet,where,by:new Map(out.candidates.map(c=>[c.natural_key,c]))};
 }
 const pay=(c:CandidateInsert|undefined)=>c!.payload as FinancialFactPayload;
 const cits=(c:CandidateInsert|undefined)=>c!.citations as FactCitations;
@@ -150,9 +152,9 @@ describe('generateHkCandidates (spec §7.5)',()=>{
   expect(r.snippet(cits(eps).unit_currency!)).toBe('人民幣 人民幣\n千元 千元');
   // replay through runHkChecks: the generated candidates pass value_replays, a payload forged to USD/share is blocked (scale_mismatch)
   const verify=new Map<string,CitationCheck|null>();
-  for(const c of r.candidates)for(const id of citationIdsOf(c.citations as FactCitations))verify.set(id,{integrity:'ok',currentExtraction:true,snippet:r.snippet(id)});
+  for(const c of r.candidates)for(const id of citationIdsOf(c.citations as FactCitations))verify.set(id,{integrity:'ok',currentExtraction:true,snippet:r.snippet(id),...r.where(id)});
   const asRow=(c:CandidateInsert,over:Partial<FinancialFactPayload>={}):CandidateRow=>({candidate_id:`cand-${c.natural_key}`,document_id:'d',extraction_id:EXT_ID,...c,payload:{...c.payload,...over},checks:[],checks_passed:false,status:'candidate',decision_kind:null,decided_by:null,approval_id:null,decided_at:null,inherited_from:null,batch_id:'b',created_at:'2026-03-20T10:00:00.000Z'});
-  const replays=(c:CandidateRow)=>runHkChecks([c],{verify,priorFacts:[],enCandidates:[]})[0].checks.find(x=>x.check==='value_replays')!;
+  const replays=(c:CandidateRow)=>runHkChecks([c],{verify,priorFacts:[],enCandidates:[],annual:true})[0].checks.find(x=>x.check==='value_replays')!;
   expect(replays(asRow(rev!)).passed).toBe(true);
   expect(replays(asRow(eps!)).passed).toBe(true);
   const forged=replays(asRow(eps!,{unit:'USD/share'}));
@@ -185,17 +187,91 @@ describe('generateHkCandidates (spec §7.5)',()=>{
   expect(b.snippet(cits(b.by.get('eps_basic:2025-01-01:2025-06-30:6M:CNY/share')).label)).toBe('– Basic －基本');   // the glued heading lines do not leak into the label
  });
 
- it('a two-line label arriving as two rows (Task 9 final shape): the label-only line below or above joins the value row only when the combination names a known label, and every line is cited',async()=>{
-  const cf=(lines:PageSpecLine[])=>buildPagesJson('two-line',[{page_no:1,lines:['Consolidated Statement of Cash Flows','For the year ended 31 December 2025',{header:['2025','2024']},{header:["RMB'000","RMB'000"]},...lines]}]);
-  const below=await run(cf([{label:'Net cash inflow/(outflow) from',values:['10','20']},'operating activities',{label:'Net cash used in financing activities',values:['(5)','(6)']},'Some unrelated note']),'annual_report','en');
-  const op=below.by.get('operating_cash_flow:2025-01-01:2025-12-31:12M:CNY');
+ const stmt=(kind:'IS'|'BS'|'CF',lines:PageSpecLine[],unit="RMB'000")=>buildPagesJson('probe',[{page_no:1,lines:kind==='IS'?['Consolidated Statement of Profit or Loss','For the year ended 31 December 2025',{header:['2025','2024']},{header:[unit,unit]},...lines]
+  :kind==='BS'?['Consolidated Statement of Financial Position','As at 31 December 2025',{header:['2025','2024']},{header:[unit,unit]},...lines]
+  :['Consolidated Statement of Cash Flows','For the year ended 31 December 2025',{header:['2025','2024']},{header:[unit,unit]},...lines]}]);
+ /** Appends a trailing label cell (a bilingual translation after the numbers) to the LAST line of the single page. */
+ const withTrailing=(json:PagesJson,text:string):PagesJson=>{
+  const pg=json.pages[0];const l=pg.lines[pg.lines.length-1];const n=Array.from(text).length;const start=l.char_end+1;
+  const t=pg.tables[pg.tables.length-1];const row=Math.max(...t.cells.map(c=>c.row));
+  const line={...l,text:`${l.text} ${text}`,char_end:start+n,items:[...l.items,{text,x0:600,x1:630,y:l.y,h:10,char_start:start,char_end:start+n}]};
+  const cell={row,col:t.col_count,text,bbox:{x0:600,y0:l.y,x1:630,y1:l.y+10},line_index:l.index,char_start:start,char_end:start+n,numeric:false};
+  return {...json,pages:[{...pg,text:`${pg.text} ${text}`,lines:[...pg.lines.slice(0,-1),line],tables:[...pg.tables.slice(0,-1),{...t,cells:[...t.cells,cell]}]}]};
+ };
+ it('a trailing bilingual cell is read with the leading label: a different concept or a sign word makes the row label_ambiguous; an agreeing translation is not cited',async()=>{
+  const is=(last:PageSpecLine)=>stmt('IS',[{label:'Revenue',values:['1,000','900']},last]);
+  const conflict=await run(withTrailing(is({label:'Gross profit',values:['100','90']}),'收益'),'annual_report','en');
+  expect(conflict.by.has('gross_profit:2025-01-01:2025-12-31:12M:CNY')).toBe(false);
+  expect(conflict.by.has('revenue:2025-01-01:2025-12-31:12M:CNY')).toBe(true);
+  expect(conflict.info).toEqual([{code:'label_ambiguous',key:EXT_ID,message:'IS:row:Gross profit'}]);
+  const agree=await run(withTrailing(is({label:'Gross profit',values:['100','90']}),'毛利'),'annual_report','en');
+  expect(agree.info).toEqual([]);
+  expect(agree.snippet(cits(agree.by.get('gross_profit:2025-01-01:2025-12-31:12M:CNY')).label)).toBe('Gross profit');
+  const sign=await run(withTrailing(is({label:'Income tax',values:['10','20']}),'所得稅沖回'),'annual_report','en');
+  expect([...sign.by.keys()].some(k=>k.startsWith('income_tax'))).toBe(false);
+  expect(sign.info).toEqual([{code:'label_ambiguous',key:EXT_ID,message:'IS:row:Income tax'}]);
+ });
+ it('a continuation that changes the meaning blocks the candidate (below: never cited; above: contiguous label text only)',async()=>{
+  const tax=await run(stmt('IS',[{label:'Revenue',values:['1,000','900']},{label:'Income tax',values:['10','20']},'credit']),'annual_report','en');
+  expect([...tax.by.keys()].some(k=>k.startsWith('income_tax'))).toBe(false);          // would have been +10000
+  expect(tax.info).toEqual([{code:'label_ambiguous',key:EXT_ID,message:'IS:row:Income tax'}]);
+  const eq=await run(stmt('BS',[{label:'Total assets',values:['300','280']},{label:'Total equity',values:['100','90']},'and liabilities']),'annual_report','en');
+  expect([...eq.by.keys()].some(k=>k.startsWith('equity_total'))).toBe(false);
+  expect(eq.by.has('total_assets::2025-12-31:INSTANT:CNY')).toBe(true);
+  const low=await run(stmt('IS',[{label:'Gross profit',values:['5','4']},'unrelated text',{label:'Revenue',values:['1,000','900']}]),'annual_report','en');
+  expect(low.by.has('gross_profit:2025-01-01:2025-12-31:12M:CNY')).toBe(false);          // lower-case text directly below reads as a continuation that names nothing: not clean
+  expect(low.info).toEqual([{code:'label_ambiguous',key:EXT_ID,message:'IS:row:Gross profit'}]);
+  expect(low.by.has('revenue:2025-01-01:2025-12-31:12M:CNY')).toBe(true);                 // Revenue starts a label: the text above it is not its continuation
+  // a capitalised line is a heading or the next label, never attached to a row by proximity: nothing blocked, nothing cited from it
+  const cap=await run(stmt('IS',[{label:'Gross profit',values:['5','4']},'Unrelated heading',{label:'Revenue',values:['1,000','900']}]),'annual_report','en');
+  expect(cap.info).toEqual([]);
+  expect(cap.snippet(cits(cap.by.get('revenue:2025-01-01:2025-12-31:12M:CNY')).label)).toBe('Revenue');
+ });
+ it('a two-line label (label-only line directly above) is cited as one contiguous range without numbers; below-only text never makes a label',async()=>{
+  const above=await run(stmt('CF',['Net cash inflow/(outflow) from',{label:'operating activities',values:['10','20']},{label:'Net cash used in financing activities',values:['(5)','(6)']}]),'annual_report','en');
+  const op=above.by.get('operating_cash_flow:2025-01-01:2025-12-31:12M:CNY');
   expect(pay(op)).toMatchObject({value:'10000'});
-  expect(below.snippet(cits(op).label)).toContain('Net cash inflow/(outflow) from');
-  expect(below.snippet(cits(op).label)).toContain('\noperating activities');
-  expect(below.by.has('financing_cash_flow:2025-01-01:2025-12-31:12M:CNY')).toBe(true);
-  const above=await run(cf(['Net cash inflow/(outflow) from',{label:'operating activities',values:['10','20']},'Unrelated heading',{label:'Foo bar',values:['1','2']}]),'annual_report','en');
-  expect(above.snippet(cits(above.by.get('operating_cash_flow:2025-01-01:2025-12-31:12M:CNY')).label)).toBe('Net cash inflow/(outflow) from\noperating activities');
-  expect([...above.by.keys()].filter(k=>!k.startsWith('operating_cash_flow'))).toEqual([]);   // no attachment by proximity alone
+  expect(above.snippet(cits(op).label)).toBe('Net cash inflow/(outflow) from\noperating activities');
+  expect(above.info).toEqual([]);
+  const below=await run(stmt('CF',[{label:'Net cash inflow/(outflow) from',values:['10','20']},'operating activities',{label:'Net cash used in financing activities',values:['(5)','(6)']}]),'annual_report','en');
+  expect([...below.by.keys()].some(k=>k.startsWith('operating_cash_flow'))).toBe(false);   // the label exists only through text below the numbers
+  expect(below.by.has('financing_cash_flow:2025-01-01:2025-12-31:12M:CNY')).toBe(true);   // a capitalised label starts afresh: the orphan line above is not its continuation
+  expect(below.info).toEqual([{code:'label_ambiguous',key:EXT_ID,message:'CF:row:Net cash inflow/(outflow) from'}]);
+ });
+ it('EPS currency and sub-unit are resolved across all the evidence lines (T14-02, T14-04, T14-05)',async()=>{
+  const eps=(head:PageSpecLine[],unit="HK$'000")=>stmt('IS',[{label:'Revenue',values:['1,000','900']},...head,{label:'Basic',values:['12','10']}],unit);
+  const key='eps_basic:2025-01-01:2025-12-31:12M:';
+  const adj=await run(eps(['Earnings per share (RMB)','(cents)']),'annual_report','en');
+  expect(pay(adj.by.get(`${key}CNY/share`))).toMatchObject({value:'0.12',unit:'CNY/share',scale:'0.01'});
+  expect(adj.snippet(cits(adj.by.get(`${key}CNY/share`)).unit)).toBe('RMB)\n(cents');          // one range over both lines
+  expect(cits(adj.by.get(`${key}CNY/share`)).unit_currency).toBeUndefined();
+  const far=await run(eps(['Earnings per share (RMB)','a line between','(cents)']),'annual_report','en');
+  expect(pay(far.by.get(`${key}CNY/share`))).toMatchObject({value:'0.12'});
+  expect(far.snippet(cits(far.by.get(`${key}CNY/share`)).unit)).toBe('cents');
+  expect(far.snippet(cits(far.by.get(`${key}CNY/share`)).unit_currency!)).toBe('RMB');
+  const us=await run(eps(['Earnings per share (US cents)'],"RMB'000"),'annual_report','en');
+  expect(pay(us.by.get(`${key}USD/share`))).toMatchObject({value:'0.12',unit:'USD/share'});
+  expect(us.snippet(cits(us.by.get(`${key}USD/share`)).unit)).toBe('US cents');
+  expect(cits(us.by.get(`${key}USD/share`)).unit_currency).toBeUndefined();
+  expect([...us.by.keys()].some(k=>k.endsWith('CNY/share'))).toBe(false);
+  const bare=await run(eps(['每股盈利（分）'],'人民幣千元'),'annual_report','en');
+  expect(pay(bare.by.get(`${key}CNY/share`))).toMatchObject({value:'0.12',scale:'0.01'});
+  expect(bare.snippet(cits(bare.by.get(`${key}CNY/share`)).unit)).toBe('（分）');
+  expect(bare.snippet(cits(bare.by.get(`${key}CNY/share`)).unit_currency!)).toContain('人民幣千元');
+  const eur=await run(eps(['Earnings per share (EUR cents)']),'annual_report','en');
+  expect([...eur.by.keys()].some(k=>k.startsWith('eps_'))).toBe(false);
+  expect(eur.info).toEqual([{code:'unit_ambiguous',key:EXT_ID,message:'IS:eps_basic:eps_qualifier:EUR'}]);
+  const mixed=await run(eps(['Earnings per share (HK cents, RMB)']),'annual_report','en');
+  expect([...mixed.by.keys()].some(k=>k.startsWith('eps_'))).toBe(false);
+  expect(mixed.info).toEqual([{code:'unit_ambiguous',key:EXT_ID,message:'IS:eps_basic:eps_currencies:CNY,HKD'}]);
+ });
+ it('balance-sheet dates staggered over two header lines are all placed (Codex review P2)',async()=>{
+  const json=buildPagesJson('stagger',[{page_no:1,lines:['Consolidated Statement of Financial Position','As at 31 December 2025',{header:['31 December 2025','']},{header:['','31 December 2024']},{header:["RMB'000","RMB'000"]},
+   {label:'Total assets',values:['3,000','2,900']},{label:'Total liabilities',values:['1,000','950']}]}]);
+  const r=await run(json,'annual_report','en');
+  expect(r.info).toEqual([]);
+  expect([...r.by.keys()].sort()).toEqual(['total_assets::2024-12-31:INSTANT:CNY','total_assets::2025-12-31:INSTANT:CNY','total_liabilities::2024-12-31:INSTANT:CNY','total_liabilities::2025-12-31:INSTANT:CNY']);
+  expect(pay(r.by.get('total_assets::2024-12-31:INSTANT:CNY'))).toMatchObject({value:'2900000',period_derivation:{rule:'column_date',column_text:'31 December 2024'}});
  });
  it('tax credit labels (P1-3): positive, parenthesised and zero amounts all become −|x|; sign_flip only when the printed sign changes',async()=>{
   const isPage=(page_no:number,tax:[string,string])=>({page_no,lines:['Consolidated Statement of Profit or Loss','For the year ended 31 December 2025',{header:['2025','2024'] as [string,string]},{header:["RMB'000","RMB'000"] as [string,string]},

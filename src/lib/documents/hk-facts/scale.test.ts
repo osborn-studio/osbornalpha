@@ -39,5 +39,12 @@ describe('per-share sub-unit (eps never inherits the table multiplier)',()=>{
   expect(detectEpsUnit([s('Basic (RMB)')],null)).toMatchObject({ok:true,unit:'CNY/share',scale:'1'});
   expect(detectEpsUnit([s('基本（港元）')],null)).toMatchObject({ok:true,unit:'HKD/share',scale:'1'});
   expect(detectEpsUnit([s('基本'),s('每股盈利')],'HKD')).toEqual({ok:false,reason:'eps_no_subunit'});
+  // resolved across all the evidence (Task 14 review T14-02/04/05)
+  expect(detectEpsUnit([s('Earnings per share (RMB)',0),s('(cents)',25)],'HKD')).toMatchObject({ok:true,unit:'CNY/share',scale:'0.01',inherited:false});
+  expect(detectEpsUnit([s('Earnings per share (RMB)',0),s('x',25),s('(cents)',27)],'HKD')).toMatchObject({ok:true,unit:'CNY/share',scale:'0.01',inherited:true,currencyCite:{char_start:20,char_end:23}});
+  expect(detectEpsUnit([s('Earnings per share (US cents)')],'CNY')).toMatchObject({ok:true,unit:'USD/share',scale:'0.01',inherited:false});
+  expect(detectEpsUnit([s('每股盈利（分）')],'CNY')).toMatchObject({ok:true,unit:'CNY/share',scale:'0.01',inherited:true});
+  expect(detectEpsUnit([s('EPS (EUR cents)')],'CNY')).toEqual({ok:false,reason:'eps_qualifier:EUR'});
+  expect(detectEpsUnit([s('(HK cents) (RMB)')],'CNY')).toEqual({ok:false,reason:'eps_currencies:CNY,HKD'});
  });
 });
