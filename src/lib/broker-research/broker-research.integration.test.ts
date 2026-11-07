@@ -7,6 +7,7 @@
 import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
+import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
@@ -398,7 +399,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
  const GOLD=sha('gold-corpus');
  const TARGET_FIELDS=['ticker','rating','target_price','target_currency','price_at_report','price_currency','price_as_of_date'];
  /** A single-issuer draft through extract_commit: 3 report-level + 7 target candidates for one HK ticker. */
- const world=async(o:{licence?:Record<string,unknown>;extra?:(tk:string)=>Record<string,unknown>[];tickers?:number;tk?:string;issuer?:string;inst?:string;published?:string;prices?:{target_price:string;price_at_report:string;target_currency:string;price_currency:string}}={})=>{
+ const world=async(o:{licence?:Record<string,unknown>;extra?:(tk:string)=>Record<string,unknown>[];tickers?:number;tk?:string;issuer?:string;inst?:string;published?:string;prices?:{target_price:string;price_at_report:string;target_currency:string;price_currency:string};ratingOnly?:boolean}={})=>{
   const tks:string[]=[];const issuers:string[]=[];
   for(let i=0;i<(o.tickers??1);i++){const tk=i===0&&o.tk?o.tk:`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');tks.push(tk);issuers.push(i===0&&o.issuer?o.issuer:await s.issuer());}
   const lic=await s.licence(o.licence??{});const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);
@@ -417,7 +418,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
    cand({field:'price_currency',target_key:tk,value_text:o.prices?.price_currency??'HKD',value_currency:o.prices?.price_currency??'HKD'}),
    cand({field:'price_as_of_date',target_key:tk,value_text:'4 Mar 2026',value_date:'2026-03-04'}),
    ...(o.extra?.(tk)??[])));
-  const receipt=await commit(doc,token,ext,rows);
+  const receipt=await commit(doc,token,ext,o.ratingOnly?rows.filter(row=>!['price_at_report','price_currency','target_currency'].includes(row.field as string)):rows);
   return {tk:tks[0],tks,iss:issuers[0],issuers,lic,doc,pr,rep,ext,token,digest,inst:o.inst??await s.institution(),receipt};
  };
  type World=Awaited<ReturnType<typeof world>>;
@@ -440,7 +441,7 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
  /** world → every candidate confirmed, institution/scope bound, scale row, rules receipt, review approved, gold receipt: blockers []. */
  const ready=async(o:Parameters<typeof world>[0]={}):Promise<World>=>{
   const w=await world(o);
-  for(const f of await s.q(`select field_id from public.broker_report_fields where report_id=$1 and status in ('extracted','unverified') and superseded_by_run_id is null`,[w.rep]))await review(f.field_id,'confirm');
+  for(const f of await s.q(`select field_id,field from public.broker_report_fields where report_id=$1 and status in ('extracted','unverified') and superseded_by_run_id is null`,[w.rep]))await review(f.field_id,o.ratingOnly&&f.field==='target_price'?'absent':'confirm',o.ratingOnly&&f.field==='target_price'?{page:1}:{});
   await s.q(`update public.broker_research_reports set institution_id=$2,scope=$3,review_status='approved' where report_id=$1`,[w.rep,w.inst,w.tks.length>1?'multi_issuer':'single_issuer']);
   await s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'Buy','buy','https://example.test/scale','2020-01-01',gen_random_uuid()) on conflict (institution_id, lower(btrim(raw_label)), valid_from) do nothing`,[w.inst]);
   await materialize(w.rep);await rules(w.rep);await gold(w.digest);
@@ -954,4 +955,266 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   const fn=await s.one(`select string_agg(pg_get_functiondef(p.oid),' ') v from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('broker_report_materialize','broker_report_live_digests','broker_report_publish_blockers','broker_report_publish','broker_snippets_approval')`);
   expect(fn).toContain(`'${UPSIDE_FORMULA_VERSION}'`);expect(fn).toContain(`'${RULES_VERSION}'`);expect(fn).toContain(`'${CLAIM_METHODOLOGY_VERSION}'`);expect(fn).toContain(`'${DISCLOSURE_VERSION}'`);
  });
+});
+
+describe.skipIf(!enabled)('A3 public views under the real anon and authenticated roles',()=>{
+ const M3='supabase/migrations/20261119092000_broker_research_views.sql';
+ const VIEWS=['broker_reports_public_v','broker_report_targets_public_v','broker_report_citations_v','broker_report_snippets_public_v','broker_report_summaries_public_v','broker_analysts_public_v','broker_rating_history_v','broker_spread_latest_v','research_institutions_public_v','research_rating_scales_public_v'];
+ let unlock:(()=>Promise<void>)|undefined;
+ beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // toggles public_enabled; ready() sets the gold hash
+ afterAll(async()=>{await unlock?.();await pool?.end();});
+ const asRole=async<T>(role:'anon'|'authenticated',fn:(c:PoolClient)=>Promise<T>):Promise<T>=>{
+  const c=await pool.connect();
+  try{await c.query('begin');await c.query(`set local role ${role}`);return await fn(c);}
+  finally{await c.query('rollback').catch(()=>{});c.release();}
+ };
+ const anon=async(sql:string,v:unknown[]=[])=>asRole('anon',async c=>(await c.query(sql,v)).rows as Record<string,any>[]);
+ const enable=(on:boolean)=>s.q(`update public.broker_research_settings set public_enabled=$1 where id=1`,[on]);
+ /** Rows per view for one report (institution/scale views by its institution). */
+ const seen=async(rep:string,inst:string,role:'anon'|'authenticated'='anon')=>asRole(role,async c=>{
+  const n=async(sql:string,v:unknown[])=>Number((await c.query(sql,v)).rows[0].n);
+  return {
+   reports:await n(`select count(*) n from public.broker_reports_public_v where report_id=$1`,[rep]),
+   targets:await n(`select count(*) n from public.broker_report_targets_public_v where report_id=$1`,[rep]),
+   citations:await n(`select count(*) n from public.broker_report_citations_v where report_id=$1`,[rep]),
+   snippets:await n(`select count(*) n from public.broker_report_snippets_public_v where report_id=$1`,[rep]),
+   summaries:await n(`select count(*) n from public.broker_report_summaries_public_v where report_id=$1`,[rep]),
+   analysts:await n(`select count(*) n from public.broker_analysts_public_v where report_id=$1`,[rep]),
+   history:await n(`select count(*) n from public.broker_rating_history_v where report_id=$1`,[rep]),
+   spread:await n(`select count(*) n from public.broker_spread_latest_v where report_id=$1`,[rep]),
+   institutions:await n(`select count(*) n from public.research_institutions_public_v where institution_id=$1`,[inst]),
+   scales:await n(`select count(*) n from public.research_rating_scales_public_v where institution_id=$1`,[inst]),
+  };
+ });
+ const NONE={reports:0,targets:0,citations:0,snippets:0,summaries:0,analysts:0,history:0,spread:0,institutions:0,scales:0};
+ /** A published report with one approved snippet, one approved zh summary and a public analyst. */
+ const published=async(o:Parameters<typeof world>[0]={})=>{
+  const w=await ready(o);
+  const af=(await s.one(`select public.broker_field_add($1,$2::jsonb,$3) v`,[w.rep,J({target_key:null,field:'analyst',occurrence:1,value_text:'Ann Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:5,char_end:16,value_source_text:'Ann Analyst',parse_run_id:w.pr,status:'confirmed'}),randomUUID()])).field_id;
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Ann Analyst',true) returning analyst_id as v`,[w.inst]);
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,role,field_id) values($1,$2,'lead',$3)`,[w.rep,an,af]);
+  await materialize(w.rep);await rules(w.rep);await goldCovering(w.digest,['analyst']);          // the analyst row is now an effective field (P-R3-03)
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,target_key,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,$2,'thesis',$3,2,0,8,'Thesis!!',$4::jsonb,gen_random_uuid()) returning snippet_id as v`,[w.rep,w.tk,w.pr,J(PASS)]);
+  await s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid() where snippet_id=$1`,[sn]);
+  const sumRun=randomUUID();
+  await s.q(`insert into public.broker_report_runs(run_id,document_id,kind,parse_run_id,model_id,registry_hash,prompt_version,code_version,licence_version) values($1,$2,'summary',$3,'m-sum','reg1','independent-summary/1','test',1)`,[sumRun,w.doc,w.pr]);
+  const dg=(await report(w.rep)).summary_input_digest;
+  await s.q(`insert into public.broker_report_summaries(report_id,lang,run_id,input_hash,summary_md,max_verbatim_overlap,numeric_grounding,disclosure_check,status,approved_by) values($1,'zh',$2,$3,'独立摘要',1,$4::jsonb,$5::jsonb,'approved',gen_random_uuid())`,[w.rep,sumRun,dg,J({version:'grounding/1',passed:true,assertions:[{sentence_idx:0,target_key:w.tk,field:'price_at_report',value:'100',unit:'price',field_id:randomUUID()}],failures:[]}),J(PASS)]);
+  expect(await blockers(w.rep)).toEqual([]);
+  const pub=await publish(w.rep);
+  return {...w,pub,analyst:an,analystField:af,snippet:sn};
+ };
+
+ it('ten views: owner rights, security_invoker=false, security_barrier=true; select-only for both roles; base tables and RPCs unreachable; replays',async()=>{
+  const rows=await s.q(`select c.relname,c.reloptions from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='v' and c.relname=any($1)`,[VIEWS]);
+  expect(rows.map(r=>r.relname).sort()).toEqual([...VIEWS].sort());
+  for(const r of rows)expect({v:r.relname,o:[...r.reloptions].sort()}).toEqual({v:r.relname,o:['security_barrier=true','security_invoker=false']});
+  const priv=(role:string,t:string,p:string)=>s.one(`select has_table_privilege($1,'public.'||$2,$3) v`,[role,t,p]);
+  for(const role of ['anon','authenticated','service_role'])for(const v of VIEWS){
+   expect({role,v,ok:await priv(role,v,'SELECT')}).toEqual({role,v,ok:true});
+   for(const p of ['INSERT','UPDATE','DELETE','TRUNCATE'])expect({role,v,p,ok:await priv(role,v,p)}).toEqual({role,v,p,ok:false});
+  }
+  for(const role of ['anon','authenticated'] as const){
+   for(const v of VIEWS)await asRole(role,c=>c.query(`select count(*) from public.${v}`));
+   for(const v of VIEWS){
+    const column=await s.one(`select attname v from pg_attribute where attrelid=$1::regclass and attnum=1 and not attisdropped`,[`public.${v}`]) as string;
+    for(const sql of [`insert into public.${v} default values`,`update public.${v} set ${column}=${column}`,`delete from public.${v}`]){
+     const code=(await fails(asRole(role,c=>c.query(sql)))).code;
+     expect(['42501','55000']).toContain(code);
+    }
+   }
+   for(const t of TABLES)expect({role,t,code:(await fails(asRole(role,c=>c.query(`select 1 from public.${t} limit 1`)))).code}).toEqual({role,t,code:'42501'});
+   expect((await fails(asRole(role,c=>c.query(`select public.broker_report_publish_blockers(gen_random_uuid())`))))).toMatchObject({code:'42501'});
+   expect((await fails(asRole(role,c=>c.query(`select public.broker_report_publish(gen_random_uuid(),gen_random_uuid())`))))).toMatchObject({code:'42501'});
+   expect((await fails(asRole(role,c=>c.query(`select public.broker_field_effective(null,'x',null,null,null,null)`))))).toMatchObject({code:'42501'});
+  }
+  await expect(replayMigration(pool,readFileSync(M3,'utf8'))).resolves.toBeUndefined();
+ },120000);
+
+ it('visibility: the published report is in every view for both roles; public_enabled=false empties every view',async()=>{
+  const w=await published();
+  await enable(true);
+  const all={reports:1,targets:1,citations:11,snippets:1,summaries:1,analysts:1,history:1,spread:1,institutions:1,scales:1};
+  expect(await seen(w.rep,w.inst)).toEqual(all);
+  expect(await seen(w.rep,w.inst,'authenticated')).toEqual(all);
+  expect((await anon(`select rules_version,title_model_id from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({rules_version:RULES_VERSION,title_model_id:null});
+  expect((await anon(`select target_facets,has_summary from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({target_facets:[{issuer_id:w.iss,rating:'buy',security_ticker:w.tk,currency:'HKD'}],has_summary:true});   // P-R3-05 / P-R4-02 filter columns
+  expect((await anon(`select count(*)::int n from public.broker_reports_public_v where report_id=$1 and target_facets @> $2::jsonb`,[w.rep,J([{issuer_id:w.iss,rating:'sell'}])]))[0].n).toBe(0);   // correlated: issuer ok, rating not
+  expect((await anon(`select grounding_assertions g from public.broker_report_summaries_public_v where report_id=$1`,[w.rep]))[0].g)
+   .toEqual([{sentence_idx:0,target_key:w.tk,field:'price_at_report',value:'100',unit:'price'}]);              // field_id never leaves the private table
+  await enable(false);
+  for(const v of VIEWS)expect({v,n:Number((await anon(`select count(*) n from public.${v}`))[0].n)}).toEqual({v,n:0});
+ },120000);
+
+ it('visibility CTE: every condition flipped hides the report from every view',async()=>{
+  await enable(true);
+  const w=await published();const R=w.rep;
+  const flip=async(on:string,off:string,table='broker_research_reports',key='report_id',id=R)=>{
+   await s.q(`update public.${table} set ${on} where ${key}=$1`,[id]);
+   expect({on,v:await seen(R,w.inst)}).toEqual({on,v:NONE});
+   await s.q(`update public.${table} set ${off} where ${key}=$1`,[id]);
+   expect((await seen(R,w.inst)).reports).toBe(1);
+  };
+  await flip(`evidence_ok=false`,`evidence_ok=true`);
+  await flip(`disclosure_ok=false`,`disclosure_ok=true`);
+  await flip(`confirmed_by=null,confirmed_at=null,confirmed_version=null`,`confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version`,'broker_report_licences','licence_id',w.lic);
+  // a material change bumps the version: hidden, and still hidden after re-confirmation (snapshot licence_version 1 ≠ 2)
+  await s.q(`update public.broker_report_licences set terms_summary='new terms' where licence_id=$1`,[w.lic]);
+  expect(await seen(R,w.inst)).toEqual(NONE);
+  await s.q(`update public.broker_report_licences set confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version where licence_id=$1`,[w.lic]);
+  await s.q(`update public.broker_research_reports set disclosure_ok=true where report_id=$1`,[R]);
+  expect(await seen(R,w.inst)).toEqual(NONE);
+  const v2=await published();
+  await s.q(`update public.broker_report_licences set allows_public_metadata=false where licence_id=$1`,[v2.lic]);
+  expect(await seen(v2.rep,v2.inst)).toEqual(NONE);
+  const v3=await published();
+  await s.q(`update public.broker_report_licences set valid_from=current_date+1 where licence_id=$1`,[v3.lic]);
+  await s.q(`update public.broker_report_licences set confirmed_by=gen_random_uuid(),confirmed_at=now(),confirmed_version=version where licence_id=$1`,[v3.lic]);
+  expect(await seen(v3.rep,v3.inst)).toEqual(NONE);
+  const v4=await published();
+  await unpublish(v4.rep,'test');
+  expect(await seen(v4.rep,v4.inst)).toEqual(NONE);
+  const v5=await published();
+  await s.q(`update public.broker_report_documents set status='withdrawn',withdrawn_at=now(),withdrawn_reason='t' where document_id=$1`,[v5.doc]);
+  expect(await seen(v5.rep,v5.inst)).toEqual(NONE);
+ },180000);
+
+ it('target price not public: no target value, upside or target citation reaches any view (value-level, real anon role)',async()=>{
+  await enable(true);
+  const w=await published({licence:{allows_public_target_price:false}});
+  const [t]=await anon(`select target_price,target_currency,target_horizon_months,upside_pct,target_price_public,price_at_report::text pr from public.broker_report_targets_public_v where report_id=$1`,[w.rep]);
+  expect(t).toEqual({target_price:null,target_currency:null,target_horizon_months:null,upside_pct:null,target_price_public:false,pr:'100'});
+  expect((await anon(`select field from public.broker_report_citations_v where report_id=$1 order by field`,[w.rep])).map(r=>r.field))
+   .toEqual(['analyst','institution','price_as_of_date','price_at_report','price_currency','published_date','rating','ticker','title']);
+  const dump:unknown[]=[];
+  for(const v of VIEWS.filter(v=>!v.startsWith('research_')))dump.push(...await anon(`select * from public.${v} where report_id=$1`,[w.rep]));
+  const leaves=(x:unknown):unknown[]=>x!==null&&typeof x==='object'?Object.values(x as object).flatMap(leaves):[x];
+  const values=dump.flatMap(leaves).map(String);
+  for(const bad of ['120','0.200000','0.2','HK$'])expect({bad,hit:values.includes(bad)}).toEqual({bad,hit:false});
+  expect((await anon(`select target_price_public from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0].target_price_public).toBe(false);
+ },120000);
+
+ it('snippets over the current N disappear; analysts need public_display; restricted titles drop the title citation; citations carry the SQL effective value',async()=>{
+  await enable(true);
+  const w=await published();
+  // defense in depth: shrink N without the licence trigger (as if a row slipped through) → the 8-char snippet is filtered by the view
+  const c=await pool.connect();
+  try{await c.query('begin');await c.query(`set local session_replication_role=replica`);await c.query(`update public.broker_report_licences set snippet_max_chars=5 where licence_id=$1`,[w.lic]);await c.query('commit');}
+  finally{c.release();}
+  expect(await seen(w.rep,w.inst)).toMatchObject({reports:1,snippets:0});
+  await s.q(`update public.research_analysts set public_display=false where analyst_id=$1`,[w.analyst]);
+  await s.q(`update public.broker_research_reports set disclosure_ok=true where report_id=$1`,[w.rep]);     // admin re-ran the disclosure check
+  expect(await seen(w.rep,w.inst)).toMatchObject({reports:1,analysts:0});
+  expect((await anon(`select field from public.broker_report_citations_v where report_id=$1 and field='analyst'`,[w.rep]))).toEqual([]);
+  // restricted title: title_public shown and marked rewritten, no 'title' citation
+  const r=await ready();
+  await s.q(`update public.broker_research_reports set title_public='Rewritten',title_public_by=gen_random_uuid() where report_id=$1`,[r.rep]);await materialize(r.rep);
+  await rules(r.rep,[{rule:'disclosure',passed:false,blocking:false,target_key:null,reason_code:'restricted_value',detail:{surface:'title_original'}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_public'}}]);
+  const pr=(await s.q(`select field_id from public.broker_report_fields where report_id=$1 and field='price_at_report' and status='confirmed'`,[r.rep]))[0].field_id;
+  await review(pr,'correct',{value_text:'HK$100.0',value_num:'100.0',value_unit:null});await rules(r.rep,[{rule:'disclosure',passed:false,blocking:false,target_key:null,reason_code:'restricted_value',detail:{surface:'title_original'}},{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_public'}}]);
+  await publish(r.rep);
+  expect((await anon(`select title,title_is_rewritten from public.broker_reports_public_v where report_id=$1`,[r.rep]))[0]).toEqual({title:'Rewritten',title_is_rewritten:true});
+  expect(await anon(`select 1 from public.broker_report_citations_v where report_id=$1 and field='title'`,[r.rep])).toEqual([]);
+  expect((await anon(`select value_text,value_num::text n,value_unit from public.broker_report_citations_v where report_id=$1 and field='price_at_report'`,[r.rep]))[0]).toEqual({value_text:'HK$100.0',n:'100.0',value_unit:null});
+  const mismatched=await s.one(`select count(*)::int v from public.broker_report_citations_v c join public.broker_report_fields f on f.report_id=c.report_id and f.field=c.field and f.target_key is not distinct from c.target_key and f.occurrence=c.occurrence and f.status in ('confirmed','corrected','absent')
+   where jsonb_build_object('value_text',c.value_text,'value_num',c.value_num::text,'value_currency',c.value_currency,'value_unit',c.value_unit,'value_date',c.value_date::text)
+         is distinct from public.broker_field_effective(f.corrected,f.value_text,f.value_num,f.value_currency,f.value_unit,f.value_date)`);
+  expect(mismatched).toBe(0);
+ },180000);
+
+ it('binding a private analyst after a snippet naming them was approved returns it to draft; nothing with the name reaches anon (P-R1-04)',async()=>{
+  await enable(true);
+  const r=await ready();
+  const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Quinn Hidden',false) returning analyst_id as v`,[r.inst]) as string;
+  const af=(await add(r.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Quinn Hidden',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:r.pr,status:'confirmed'})).field_id;
+  await rules(r.rep);await goldCovering(r.digest,['analyst']);                                   // P-R3-03
+  const text='Quinn Hidden sees upside';
+  const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,$3,$4,gen_random_uuid()) returning snippet_id as v`,[r.rep,r.pr,text.length,text]) as string;
+  const before=await s.one(`select public.broker_report_disclosure_digest($1) v`,[r.rep]) as string;
+  // the analyst is not bound yet, so the TS check passes; the approval stamps the current digest
+  await s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,J({...PASS,db_digest:before})]);
+  expect((await s.q(`select status,disclosure_check->>'db_digest' d from public.broker_report_snippets where snippet_id=$1`,[sn]))[0]).toEqual({status:'approved',d:before});
+  await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[r.rep,an,af]);
+  expect((await s.q(`select status,draft_reason from public.broker_report_snippets where snippet_id=$1`,[sn]))[0]).toEqual({status:'draft',draft_reason:'analyst_disclosure'});
+  expect(await s.one(`select public.broker_report_disclosure_digest($1) v`,[r.rep])).not.toBe(before);
+  // re-approving with the check computed against the old inputs is refused
+  expect((await fails(s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid(),disclosure_check=$2::jsonb where snippet_id=$1`,[sn,J({...PASS,db_digest:before})]))).message).toMatch(/^disclosure_inputs_changed/);
+  await materialize(r.rep);await rules(r.rep);
+  await publish(r.rep);
+  const dump:unknown[]=[];
+  for(const v of VIEWS.filter(v=>!v.startsWith('research_')))dump.push(...await anon(`select * from public.${v} where report_id=$1`,[r.rep]));
+  expect(JSON.stringify(dump)).not.toContain('Quinn');
+  expect(await anon(`select 1 from public.broker_report_snippets_public_v where snippet_id=$1`,[sn])).toEqual([]);
+ },120000);
+
+ it('spread public allowlist and grants under both roles (NEW-04)',async()=>{
+  await enable(true);
+  const r=await published({licence:{allows_public_target_price:false}});
+  for(const role of ['anon','authenticated'] as const)await asRole(role,async c=>{
+   const rows=(await c.query('select * from public.broker_spread_latest_v where report_id=$1',[r.rep])).rows;
+   expect(rows).toHaveLength(1);
+   expect(Object.keys(rows[0]).sort()).toEqual(['report_id','published_date','institution_id','security_ticker','issuer_id','currency'].sort());
+   // Exact allowlist proves no target price, evidence, raw text/model payload or path is reachable.
+   expect(rows[0].currency).toBe('HKD'); // report price remains public under this licence
+   const target=(await c.query('select target_price,target_currency,target_horizon_months,upside_pct from public.broker_report_targets_public_v where report_id=$1',[r.rep])).rows[0];
+   expect(Object.values(target)).toEqual([null,null,null,null]);
+  });
+ });
+
+ it('spread excludes a rating-only target with no public target or report price',async()=>{
+  await enable(true);
+  const r=await ready({ratingOnly:true});
+  await publish(r.rep);
+  expect(await anon(`select report_id from public.broker_reports_public_v where report_id=$1`,[r.rep])).toEqual([{report_id:r.rep}]);
+  expect(await anon(`select target_price,price_at_report,rating_normalized from public.broker_report_targets_public_v where report_id=$1`,[r.rep]))
+   .toEqual([expect.objectContaining({target_price:null,price_at_report:null,rating_normalized:'buy'})]);
+  expect(await anon(`select report_id from public.broker_spread_latest_v where report_id=$1`,[r.rep])).toEqual([]);
+ });
+
+ it('spread page-51 regression: 10,000 newer A reports cannot hide B; lower window and visibility gates apply (P-R6-05)',async()=>{
+  await enable(true);
+  const tk=`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');const issuer=await s.issuer();const inst=await s.institution();
+  // Use real published fixtures, not a mocked view or a client-side DISTINCT substitute.
+  const prices={target_price:'120',price_at_report:'100',target_currency:'HKD',price_currency:'HKD'};
+  for(let n=0;n<10_000;n++)await published({tk,issuer,inst,published:'2026-10-01',prices});
+  const b=await published({tk,issuer,published:'2026-03-01',prices});
+  const eligible=await anon(`select t.report_id from public.broker_report_targets_public_v t join public.broker_reports_public_v r using(report_id)
+   where t.security_ticker=$1 and t.issuer_id=$2 and r.published_date >= '2025-11-06'
+   and t.target_price=120 and t.price_at_report=100 and t.target_currency='HKD' and t.price_currency='HKD'
+   and (case when t.target_price is not null then t.target_currency when t.price_at_report is not null then t.price_currency else null end)='HKD'`,[tk,issuer]);
+  expect(eligible).toHaveLength(10_001);
+  const rows=await anon(`select * from public.broker_spread_latest_v where security_ticker=$1 and currency='HKD' and published_date >= '2025-11-06'`,[tk]);
+  expect(rows).toHaveLength(2);expect(rows.map(r=>r.report_id)).toContain(b.rep);
+  expect(await anon(`select * from public.broker_spread_latest_v where report_id=$1 and published_date >= '2026-04-01'`,[b.rep])).toEqual([]);
+  await enable(false);expect(await anon(`select * from public.broker_spread_latest_v where security_ticker=$1`,[tk])).toEqual([]);
+ },6_000_000);
+
+ it('rating history: lag per (institution, security, currency) ordered by (published_date, report_id); superseded predecessors excluded; per-institution partitions',async()=>{
+  await enable(true);
+  const tk=`${1000+Math.floor(Math.random()*8999)}.HK`;await s.stock(tk,'HK');const iss=await s.issuer();const inst=await s.institution();
+  const a=await published({tk,issuer:iss,inst,published:'2026-01-05'});
+  const b=await ready({tk,issuer:iss,inst,published:'2026-02-05'});await publish(b.rep);
+  const c=await ready({tk,issuer:iss,inst,published:'2026-03-05'});
+  await s.q(`update public.broker_research_reports set supersedes_report_id=$2 where report_id=$1`,[c.rep,b.rep]);await materialize(c.rep);await rules(c.rep);
+  await publish(c.rep);
+  const other=await published({tk,issuer:iss,published:'2026-02-10'});                         // another institution
+  const h=await anon(`select report_id,prev_report_id,published_date::text d,prev_published_date::text pd,target_price::text tp,prev_target_price::text ptp,target_currency from public.broker_rating_history_v where security_ticker=$1 and institution_id=$2 order by published_date`,[tk,inst]);
+  expect(h).toEqual([{report_id:a.rep,prev_report_id:null,d:'2026-01-05',pd:null,tp:'120',ptp:null,target_currency:'HKD'},
+                     {report_id:c.rep,prev_report_id:a.rep,d:'2026-03-05',pd:'2026-01-05',tp:'120',ptp:'120',target_currency:'HKD'}]);
+  expect((await anon(`select prev_report_id from public.broker_rating_history_v where report_id=$1`,[other.rep]))).toEqual([{prev_report_id:null}]);
+ },180000);
+
+ it('institutions and rating scales appear only for an institution with a visible report, and only while public_enabled',async()=>{
+  await enable(true);
+  const inst=await s.institution();
+  await s.q(`insert into public.research_rating_scales(institution_id,raw_label,normalized,source_url,valid_from,created_by) values($1,'Buy','buy','https://example.test/s','2020-01-01',gen_random_uuid())`,[inst]);
+  expect(await anon(`select 1 from public.research_institutions_public_v where institution_id=$1`,[inst])).toEqual([]);
+  expect(await anon(`select 1 from public.research_rating_scales_public_v where institution_id=$1`,[inst])).toEqual([]);
+  const w=await published({inst});
+  expect((await anon(`select name_en,report_count,last_published_date::text d,last_available_at is not null a from public.research_institutions_public_v where institution_id=$1`,[inst])))
+   .toEqual([{name_en:expect.any(String),report_count:1,d:'2026-03-05',a:true}]);
+  expect((await anon(`select raw_label,normalized from public.research_rating_scales_public_v where institution_id=$1`,[inst]))).toEqual([{raw_label:'Buy',normalized:'buy'}]);
+  await enable(false);
+  expect(await seen(w.rep,inst)).toEqual(NONE);
+ },120000);
 });
