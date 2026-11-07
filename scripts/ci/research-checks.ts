@@ -23,6 +23,9 @@ criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/in
 // MACRO
 criticalSuites.push('src/lib/macro/macro.integration.test.ts');
 // /MACRO
+// FOREIGN ↓
+criticalSuites.push('src/lib/broker-research/broker-research.integration.test.ts');
+// FOREIGN ↑
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');
