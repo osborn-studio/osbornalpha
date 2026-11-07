@@ -158,5 +158,58 @@
     "settlement_sequence": "This settlement transition is not allowed",
     "request_key_conflict": "The request conflicts with an earlier one",
     "load": "Failed to load"
+  },
+  "analyst": {
+    "band": {
+      "low": "Low",
+      "mid": "Mid",
+      "high": "High"
+    },
+    "uncalibrated": "uncalibrated",
+    "showRegistered": "Registered",
+    "hideRegistered": "Hide",
+    "toggleAria": "Confidence {band} (uncalibrated): show or hide the registered value",
+    "registeredLabel": "Registered value (uncalibrated)",
+    "registeredNote": "the entered confidence ÷ 100; not calibrated, kept for the record",
+    "lifecycleLabel": "Status",
+    "lifecycle": {
+      "abstained": "Abstained",
+      "open": "Open",
+      "settled": "Settled",
+      "void": "Void",
+      "withdrawn": "Withdrawn",
+      "pending_fill": "Awaiting fill"
+    },
+    "outcome": {
+      "hit": "Hit",
+      "miss": "Miss"
+    },
+    "abstainLabel": "Abstained because",
+    "abstain": {
+      "no_confidence": "no confidence entered",
+      "no_direction": "a hold call has no direction",
+      "market_unsupported": "market outside A-share / HK / US"
+    },
+    "conditionLabel": "Condition",
+    "targetLabel": "Target",
+    "target": "session {n} after base date {base}",
+    "settleBy": "settle by {date}",
+    "selfAssessment": {
+      "title": "Self-assessment (not auditable)",
+      "empty": "No settled calls count towards the self-assessment yet.",
+      "settled": "Settled",
+      "independent": "Independent",
+      "hitRate": "Hit rate (interval)",
+      "brier": "Brier",
+      "brierSkill": "Brier skill",
+      "bandTable": "Hits by confidence band",
+      "columns": {
+        "band": "Band",
+        "n": "n",
+        "hits": "Hits",
+        "rate": "Hit rate"
+      },
+      "note": "Self-assessed from owner-writable score records: visible only to you, never part of public calibration, and it never turns confidence into a percentage. Intervals are Wilson 95%."
+    }
   }
 }

@@ -158,5 +158,58 @@
     "settlement_sequence": "该结算转移不允许",
     "request_key_conflict": "请求与之前的请求冲突",
     "load": "加载失败"
+  },
+  "analyst": {
+    "band": {
+      "low": "低",
+      "mid": "中",
+      "high": "高"
+    },
+    "uncalibrated": "未校准",
+    "showRegistered": "登记值",
+    "hideRegistered": "收起",
+    "toggleAria": "信心 {band}（未校准）：显示或收起登记值",
+    "registeredLabel": "登记值（未校准）",
+    "registeredNote": "即填写的信心 ÷ 100；未经校准，只作记录",
+    "lifecycleLabel": "状态",
+    "lifecycle": {
+      "abstained": "弃权",
+      "open": "进行中",
+      "settled": "已结算",
+      "void": "作废",
+      "withdrawn": "已撤回",
+      "pending_fill": "待定价"
+    },
+    "outcome": {
+      "hit": "命中",
+      "miss": "未命中"
+    },
+    "abstainLabel": "弃权原因",
+    "abstain": {
+      "no_confidence": "未填写信心",
+      "no_direction": "持有建议没有方向",
+      "market_unsupported": "该市场不在 A 股 / 港股 / 美股之内"
+    },
+    "conditionLabel": "条件",
+    "targetLabel": "目标",
+    "target": "基准日 {base} 后第 {n} 个交易日",
+    "settleBy": "最迟结算 {date}",
+    "selfAssessment": {
+      "title": "自评（不可审计）",
+      "empty": "还没有可计入自评的已结算建议。",
+      "settled": "已结算",
+      "independent": "独立样本",
+      "hitRate": "命中率（区间）",
+      "brier": "Brier",
+      "brierSkill": "Brier skill",
+      "bandTable": "按信心档位的命中情况",
+      "columns": {
+        "band": "档位",
+        "n": "n",
+        "hits": "命中",
+        "rate": "命中率"
+      },
+      "note": "自评基于可被改写的评分记录：只给自己看，不进入公共校准，也不会把信心显示为百分比。区间为 Wilson 95%。"
+    }
   }
 }
