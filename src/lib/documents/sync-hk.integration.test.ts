@@ -315,6 +315,12 @@ describe('HK recorded gold extraction coverage',()=>{
   gold.entries[1].value='missing';
   await expect(assertRecordedGold(gold,load)).rejects.toThrow('must stay missing');
   gold.entries[1].concept='capital_expenditure';
+  const fixture=load(hashes[1]);
+  const {candidates,results}=await offlineHkCandidates(fixture.pages,recordedOfflineDoc(fixture.header,hashes[1]));
+  const passed=new Set(results.filter(r=>r.checks_passed).map(r=>r.candidate_id));
+  expect(candidates.filter(c=>passed.has(c.candidate_id)&&c.natural_key===goldNaturalKey(gold.entries[1]))).toEqual([]);
   await expect(assertRecordedGold(gold,load)).resolves.toBeUndefined();
+  gold.entries[1].value='123'; // Deliberately differs from revenue: a wildcard match must fail too.
+  await expect(assertRecordedGold(gold,load)).rejects.toThrow(hashes[1]);
  });
 });

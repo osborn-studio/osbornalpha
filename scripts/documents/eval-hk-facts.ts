@@ -12,11 +12,12 @@
  * Output: {extractor_ref, extractor_version, table_algo_version, code_version, gold_sha256, concepts,
  * precision, recall, counts, mismatches[]} to stdout; --apply also writes --out (default
  * docs/audits/2026-11-06-document-pipeline/eval-hk-facts-<date>.json).
- * Exit 0 when evaluated, 1 when nothing is scorable or versions are mixed, 2 on bad arguments.
+ * Exit 0 when evaluated, 1 when gold documents are missing, nothing is scorable, or versions are mixed, 2 on bad arguments.
  */
 import {createHash} from 'node:crypto';
-import {existsSync,mkdirSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,realpathSync,mkdirSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {allPages} from '../../src/lib/documents/candidates/run';
 import {supabaseDocumentsDb} from '../../src/lib/documents/db';
 import {isPendingGold,loadRecordedFixture,recordedOfflineDoc,offlineHkCandidates,scoredRows,scoreHkFacts} from '../../src/lib/documents/hk-facts/eval';
@@ -40,12 +41,6 @@ function parseArgs(argv:string[]):Args{
  }
  return a;
 }
-const uniform=(vs:HkEvalVersions[]):HkEvalVersions=>{
- const keys=new Set(vs.map(v=>JSON.stringify(v)));
- if(keys.size!==1){console.error(`mixed or missing versions across gold documents: ${[...keys].join(' | ')||'-'}`);process.exit(1);}
- return vs[0];
-};
-
 async function fromFixtures(dir:string,shas:string[]){
  const byHash=new Map<string,{file:string;raw:unknown}>();
  if(existsSync(dir))for(const f of readdirSync(dir).filter(n=>n.endsWith('.pages.json'))){const raw=JSON.parse(readFileSync(join(dir,f),'utf8'));try{byHash.set(loadRecordedFixture(raw).header.content_sha256,{file:f,raw});}catch{/* skip */}}
@@ -81,15 +76,24 @@ export async function main(argv:string[]=process.argv.slice(2)){
  const goldBytes=readFileSync(args.gold);
  const gold=JSON.parse(goldBytes.toString('utf8')) as HkGoldFile;
  const shas=[...new Set(gold.entries.filter(e=>!isPendingGold(e)).map(e=>e.source.document_sha256))].sort();
- if(shas.length===0){console.error('no recorded gold entries: nothing to score');process.exit(1);}
+ if(shas.length===0){console.error('no recorded gold entries: nothing to score');return 1;}
  const got=args.source==='db'?await fromDb(shas):await fromFixtures(args.fixtures,shas);
- if(got.versions.length===0){console.error(`no document found for any gold hash (missing: ${got.missing.join(', ')})`);process.exit(1);}
- const report={...scoreHkFacts(gold,createHash('sha256').update(goldBytes).digest('hex'),got.rows,uniform(got.versions)),source:args.source,missing_documents:got.missing,generated_at:new Date().toISOString()};
+ if(got.missing.length>0){
+  console.error(JSON.stringify({error:'missing_gold_documents',missing_documents:got.missing}));
+  return 1;
+ }
+ const versionKeys=['extractor_ref','extractor_version','table_algo_version','code_version'] as const;
+ if(got.versions.length===0||versionKeys.some(key=>new Set(got.versions.map(v=>v[key])).size!==1||got.versions.some(v=>!v[key]))){
+  console.error(JSON.stringify({error:'mixed_versions',documents:shas,versions:got.versions}));
+  return 1;
+ }
+ const report={...scoreHkFacts(gold,createHash('sha256').update(goldBytes).digest('hex'),got.rows,got.versions[0]),source:args.source,missing_documents:got.missing,generated_at:new Date().toISOString()};
  if(args.apply){
   mkdirSync(dirname(args.out),{recursive:true});
   writeFileSync(args.out,`${JSON.stringify(report,null,1)}\n`);
  }
  console.log(JSON.stringify(report,null,1));
+ return 0;
 }
 
-if(process.argv[1]?.endsWith('eval-hk-facts.ts'))main().catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exit(1);});
+if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url)))main().then(code=>{process.exitCode=code;}).catch(e=>{console.error(e instanceof Error?e.stack??e.message:e);process.exit(1);});
