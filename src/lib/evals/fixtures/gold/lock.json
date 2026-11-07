@@ -2,7 +2,7 @@
  "files": [
   {
    "path": "src/lib/facts/fixtures/gold/plan2.json",
-   "sha256": "e67701908c4792d0d5906190391cf662fb4ae4f1ae9098976e41da63bcac0a04",
+   "sha256": "ab66497efb2e8b9c06bc6e17f5af92850b2a1587dd29db281730e4c063ae5903",
    "version": 1,
    "format": "legacy_plan2"
   },

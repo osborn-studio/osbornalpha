@@ -148,7 +148,7 @@ drop table if exists public.ingest_batches;
 
 规格：`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（第 8 稿；落地偏差见其 §16）。迁移 `supabase/migrations/20261106090000_financial_facts.sql`。代码 `src/lib/facts/`、`scripts/facts/`、`src/app/api/cron/facts-sync/route.ts`、公共读路由 `src/app/api/facts/[ticker]`（含 `/metrics`）与 `src/app/api/filings/[ticker]`。实施记录：`docs/audits/2026-11-04-data-foundation-2/16-implementation-log.md`。
 
-**当前状态（降级）**：美股链路完整（采集、发布、派生、读路由、cron）。A 股链路代码与合成夹具齐备，但**没有 `TUSHARE_TOKEN`、没有真实 A 股夹具、没有 `sync-cn` 集成测试**，因此 CN cron 关闭（`vercel.json` 只登记 `market=US`，路由对 `market=CN` 在 `FACTS_CN_ENABLED` 未设为 `1` 时返回 403 `cn_disabled`）；黄金断言未录入，黄金门禁目前只告警（见 8.11-6）。
+**当前状态（2026-11-06）**：美股与 A 股链路均启用。A 股已用真实 Tushare 核对（8.7）、真实夹具与 `sync-cn.integration.test.ts` 进 CI，CN 缺省开启（`FACTS_CN_ENABLED=0` 为关闭开关：路由对 `market=CN` 返回 403 `cn_disabled`，`sync.ts --market CN --apply` 退出码 2），`vercel.json` 登记 `market=US`（`5 */4 * * *`）与 `market=CN`（`35 */4 * * *`），Vercel 需配置 `TUSHARE_TOKEN`。黄金断言未录入，黄金门禁目前只告警；`required.CN` 在 owner 抄录 CN 黄金模板（值 + 巨潮 PDF 页码）后置 true（见 8.11-6）。
 
 ### 8.1 表与权限
 
@@ -218,30 +218,29 @@ EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层
 
 ### 8.7 Tushare `report_type` 1/4/5 核对记录（规格 §6.3 / §15 第 1 条）
 
-完整记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`（本表是它的摘要；两处同步更新）。**降级状态**：本机无 `TUSHARE_TOKEN`，未发起任何 Tushare 请求；CN cron 关闭，`FACTS_CN_ENABLED` 不设。
+完整记录：`docs/audits/2026-11-04-data-foundation-2/17-tushare-verification.md`（本表是它的摘要；两处同步更新）。**2026-11-06 用真实 token 核对 Tushare 接口响应的行为**（不等于一手文件核实；与巨潮原文的对照由黄金集抄录完成，8.11-6；分页实验为未归档探针观察，复现方法见完整记录）；真实夹具 600519.SH、000333.SZ、600036.SH、000858.SZ（修订对）已录制（`--since-year 2016`，每家 9 页，全部单页）。
 
 | 项 | 观察（公司 / 期末 / 原文行） | 结论 |
 |---|---|---|
-| `limit=2000` / `offset` / `has_more` 的真实分页行为 | 未核对（无 token） | `has_more=true` 一律续页（短页也续）、`has_more=false` 即停；`has_more=true` 的空页或 `fields+items` 哈希与上页相同 → `tushare_unavailable: paging_not_advancing`；最多 200 页；满页且 `has_more=false` 计入 `skipped.page_full_no_more`。核对前不得宣称覆盖完整 |
-| type 1 被更正后 `ann_date` / `f_ann_date` 是否变化 | 未核对 | 合成夹具假设更正后 `f_ann_date` = 更正公告日 |
-| type 5 的公告日取哪一列 | 未核对 | 合成夹具假设 = 原始公告日（`f_ann_date ?? ann_date`） |
-| 同一 `end_date` 下 1 与 5 同日并存是否出现 | 未核对 | 出现时按 §5.3：不同 filing → `same_day_conflict`，同 filing → `ambiguous_value` |
-| `update_flag` 语义 | 据 Tushare 文档（未与真实响应比对）：`1` = 最新版本 | 政策：同日、同键、值不同的行保持 `ambiguous_value` 隔离，不按 `update_flag` 自动择一，待真实数据核对后再放宽 |
-| `is_calc=1` 行的处理 | 规格：跳过 | 计入 `skipped.is_calc` |
-| `balancesheet.total_share` 单位 | 据文档：股 | 按"股"存储（`shares`）；未与真实响应比对 |
-| `report_type` 1/4/5 语义、权限 ≥2000 积分、每次一个 `ts_code` | 据文档 | 适配器每个 `ts_code × api × report_type` 单独请求 |
-| `balancesheet.money_cap` 口径 | 目录 `monetary_funds`（货币资金，含受限资金），CN 不映射 `cash` | 未与原文核对金额 |
-| 数值小数/科学计数法、`report_type` 数字或字符串 | 未核对 | 两种形态都接受；所有值列按 `tushareFieldsFor(api)` 无损解码为十进制字符串 |
-| 真实 Tushare 夹具 | 未录制 | `_synthetic/` 仅供单测；黄金断言与 `sync-cn.integration.test.ts` 等待真实夹具 |
-| 巨潮夹具 `600519.SH-2024-annual.json` | 已录制 | `cninfo-link.test.ts` 全部用例运行 |
+| `limit` / `offset` / `has_more` 分页 | 600519.SH income rt1：`has_more` 末页前 true、末页 false；`offset` 生效、越界返回空页；但页间排序在同 `end_date` 的 `update_flag` 0/1 并列行上不稳定（limit=10 逐页取完缺 2 行、重 2 行） | 已观察，**多页不保证完整** → 适配器单页强制：`has_more=true` 即 `tushare_unavailable: multi_page_unverified`；四个已录夹具的所有流均为单页（单页最大 77 行 ≪ 2000）；生产流未全量证明，超过 2000 行即失败而不拼接，错误形如 `tushare_unavailable` + `multi_page_unverified:<api>:rt<n>` |
+| `start_date` 过滤列 | 返回了 `end_date=19981231`、`ann_date=20010726` 的行 | 按公告日过滤；解析按期末年份另计 `before_since_year` |
+| type 1 被更正后 `ann_date` / `f_ann_date` | 000858.SZ 2025-06-30：原行（`20250828`/`20250828`，52770984383.52）保留；新增 `ann_date=20250828`、`f_ann_date=20260430`、23509972048.65 | 已核对（Tushare 响应）：`ann_date` 不变、`f_ann_date` = 更正日、旧行不删；`available_date = f_ann_date ?? ann_date` 正确。巨潮挂接：同一 `ts_code:end_date` 下，某个 rt1 filing 当且仅当存在日期段更早（且合法）的另一个 rt1 filing 时才视为更正版；与 rt5 无关 |
+| type 5 的公告日 | 000858.SZ rt5 2025-06-30：`20250828`/`20250828`，52770984383.52 | 已核对（Tushare 响应）：原始公告日 + 原始值 |
+| 1 与 5 同日并存 | 000858.SZ 2025-06-30：rt1 原行与 rt5 同日同值 | 出现；不同 filing、同值 → 不构成同日冲突；同日不同值未观察到 |
+| `update_flag` | 更正前后两行 rt1 都是 `update_flag=1`；000333.SZ 6 处、600036.SH 12 处同 filing 0/1 两行不同值（多为 `total_share`） | 不能用来挑最新；同 filing 同键不同值继续 `ambiguous_value` 隔离 |
+| `is_calc=1` | 规格：跳过 | 计入 `skipped.is_calc` |
+| `total_share` 单位 | 600519.SH 2026-09-30 = `1250081601.0` | 数量级与"股"相符；原文核对待黄金集抄录 |
+| 控制列 / 数值形态 | 控制列是字符串（`"1"`）；值列普通十进制（含 `.0`），无科学计数法 | 两种形态都接受；无损解码 |
+| `money_cap` 口径 | 目录 `monetary_funds`，CN 不映射 `cash` | 金额待黄金集抄录时对照年报 |
+| 巨潮夹具 `600519.SH-2024-annual.json` | `available_date=2025-04-03` = Tushare FY2024 年报 `f_ann_date` | 已录制，`sync-cn.integration.test.ts` 回放挂接 |
 
-核对后把"未核对/未录制"改为"已核对（日期，夹具 sha256 前 8 位）+ 观察"。
+结论：核对通过（分页完整性限单页）。`sync-cn.integration.test.ts` 进入 `criticalSuites`；`FACTS_CN_ENABLED` 缺省开启（设为 `0` 关闭 CN）；`facts-sync?market=CN` 进入 `vercel.json`。
 
 ### 8.8 运行同步与物化
 
-环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（仅 CN）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED=1`（CN `--apply` 与 CN cron 的开关，缺省关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
+环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（CN 必需；Vercel 必须配置，否则 CN cron 每次失败）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED`（缺省开启 CN；设为 `0` 关闭 CN `--apply` 与 CN cron 的开关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
 
-`sync.ts` 参数：`--market US|CN`（必填）、`--issuer <ticker>`（可重复）、`--cik <cik>`（仅 `--no-db`，可重复）、`--limit n`（1..1000，默认 25；cron 路由另限 1..200）、`--since-year y`（1990..当年；缺省 = 当前 UTC 年 − 10）、`--apply`、`--no-db`。退出码 2（用法/前置错误，未做任何事）：未知参数或缺值、`--market` 非 US/CN、`--limit` 越界、`--since-year` 越界、`--no-db` 的组合不合法（需 `--market US` + `--cik`，排斥 `--apply/--issuer`）、非 `--no-db` 却给了 `--cik`、`--market CN --apply` 而 `FACTS_CN_ENABLED` 不是 `1`、`--apply` 取不到代码版本、`--issuer` 给了未知票据。退出码 1：运行出错或有发行人 `outcome:'failed'`（含 `scope_unresolved`）。
+`sync.ts` 参数：`--market US|CN`（必填）、`--issuer <ticker>`（可重复）、`--cik <cik>`（仅 `--no-db`，可重复）、`--limit n`（1..1000，默认 25；cron 路由另限 1..200）、`--since-year y`（1990..当年；缺省 = 当前 UTC 年 − 10）、`--apply`、`--no-db`。退出码 2（用法/前置错误，未做任何事）：未知参数或缺值、`--market` 非 US/CN、`--limit` 越界、`--since-year` 越界、`--no-db` 的组合不合法（需 `--market US` + `--cik`，排斥 `--apply/--issuer`）、非 `--no-db` 却给了 `--cik`、`--market CN --apply` 而 `FACTS_CN_ENABLED=0`、`--apply` 取不到代码版本、`--issuer` 给了未知票据。退出码 1：运行出错或有发行人 `outcome:'failed'`（含 `scope_unresolved`）。
 
 ```bash
 # 美股 dry-run（读库、抓 SEC、不写）
@@ -255,7 +254,7 @@ node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US
 node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --all
 ```
 
-cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`（常量时间比较），`maxDuration=300`，截止 240 s，默认 `limit=25`，范围 1..200，参数重复 → 400；`vercel.json` 只登记 `market=US`（`5 */4 * * *`）。**每 4 小时的 cron 需要 Vercel Pro**（Hobby 只允许每天一次），见 8.11-1。CN 只在 `FACTS_CN_ENABLED=1` 且 A 股夹具与黄金断言进入 CI 后加入。HTTP 回执只含码与计数（不含错误消息、warnings、快照哈希）：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors:[{code,key?}], idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors}]}}`；脚本输出完整的 `SyncReceipt`（含 `runId`、`warnings`、`snapshotSha256`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。抓取器抛出的、不在解析白名单内的错误，其消息只存前 200 字符，且抓取器不得把响应体放进消息。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
+cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`（常量时间比较），`maxDuration=300`，截止 240 s，默认 `limit=25`，范围 1..200，参数重复 → 400；`vercel.json` 登记 `market=US`（`5 */4 * * *`）与 `market=CN`（`35 */4 * * *`，错开 30 分钟）。**每 4 小时的 cron 需要 Vercel Pro**（Hobby 只允许每天一次），见 8.11-1。`FACTS_CN_ENABLED=0` 时 CN 路由返回 403 `cn_disabled`（关闭开关）。HTTP 回执只含码与计数（`market=CN` 且无 `TUSHARE_TOKEN` → 503 `tushare_unconfigured`，在取依赖与建批次之前；批次失败时仍是 HTTP 200 + `ok:false` 的失败回执，看 `receipt.errors`；失败发行人 1 天后重试，成功后 7 天；**空转（无到期发行人）仅当该市场没有 `priority > 0` 且 `last_status='failed'` 的 scope 行时才记 ok 心跳**（健康的安静一周保持 fresh）；有失败中的活跃发行人时空转不写 `dq_freshness`，失败不会被空转掩盖；Tushare 请求间隔 400 ms，即 150 次/分钟；非 parse 类 SyncError 只存错误码，唯一例外是白名单原因 `multi_page_unverified:<api>:rt<n>`，存为该条错误的 message）（不含错误消息、warnings、快照哈希）：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors:[{code,key?}], idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors}]}}`；脚本输出完整的 `SyncReceipt`（含 `runId`、`warnings`、`snapshotSha256`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。抓取器抛出的、不在解析白名单内的错误，其消息只存前 200 字符，且抓取器不得把响应体放进消息。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
 
 ### 8.9 悬空 `running` 批次
 
@@ -321,11 +320,11 @@ select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where
 
 ### 8.11 owner 步骤
 
-1. Vercel 环境：`EDGAR_USER_AGENT`（真实联系方式）、`CRON_SECRET`；CN 之前再加 `TUSHARE_TOKEN` 与 `FACTS_CN_ENABLED=1`。**部署前的阻塞项——确认 Vercel 套餐**：`vercel.json` 的 `5 */4 * * *` 是每日多次的 cron，Hobby 套餐会拒绝含它的部署，需要 Pro（规格 §14）。套餐未确认或为 Hobby 时**不要部署**这份 `vercel.json`：先改成每日一次，或由外部调度器调用该路由。
+1. Vercel 环境：`EDGAR_USER_AGENT`（真实联系方式）、`CRON_SECRET`；另加 `TUSHARE_TOKEN`（CN cron 必需；缺失则 CN 每次运行失败）。CN 缺省开启，如需暂停设 `FACTS_CN_ENABLED=0`。两条 cron（US `5 */4 * * *`、CN `35 */4 * * *`）都是每日多次。**部署前的阻塞项——确认 Vercel 套餐**：`vercel.json` 的 `5 */4 * * *` 是每日多次的 cron，Hobby 套餐会拒绝含它的部署，需要 Pro（规格 §14）。套餐未确认或为 Hobby 时**不要部署**这份 `vercel.json`：先改成每日一次，或由外部调度器调用该路由。
 2. 生产迁移 `20261106090000_financial_facts.sql`（按 `alpha-production-deploy-and-hosted-db` 记忆的 Management API 方式；非超级用户，不 `alter function … owner`）。
 3. `scripts/facts/sync.ts --market US --limit 20 --apply` 首轮；查看 `/admin/dq` 的 `facts.us` 新鲜度与隔离项；必要时 `materialize.ts --market US --all`。
 4. `GET /api/facts/AAPL?concepts=revenue&asOf=2024-06-30` 核对验收样例 1（期末 2023-09-30 的 2023-11-03 披露行，`disclosureSeq=1`）。
-5. CN：提供 `TUSHARE_TOKEN` 给录制环境 → 完成 8.7 核对 → 真实夹具与 `sync-cn.integration.test.ts` 进 CI → 把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true → 设 `FACTS_CN_ENABLED=1` → 把 `facts-sync?market=CN` 加入 `vercel.json`。
+5. CN：（已完成于 2026-11-06）真实 `TUSHARE_TOKEN` 核对（8.7）、真实夹具与 `sync-cn.integration.test.ts` 进 CI、`FACTS_CN_ENABLED` 缺省开启、`facts-sync?market=CN` 进 `vercel.json`。**剩余 owner 动作**：在 Vercel 配置 `TUSHARE_TOKEN`；按 8.11-6 抄录 CN 黄金模板（值 + 巨潮 PDF 页码）后把 `fixtures/gold/plan2.json` 的 `required.CN` 置 true。
 6. **黄金集抄录**（由实施者之外的人完成；当前"`test:db` 绿" ≠ "黄金已核实"）：`gold/plan2.json` 目前 `ready:false`，`sync-us.integration.test.ts` 的黄金用例在此状态下**只打印告警、不失败**（计划原设计为红灯，指挥决定改为告警；已录入的非 `<pending>` 条目仍会被回放断言）。步骤：(a) 6 家发行人 × 2 个期间 × 6 个科目，逐条从一手文件（10-K / 年报 PDF）抄 `value`（规范十进制字符串）、`source.page_or_row`、`source.url`，填 `recorded_by`（姓名）与 `recorded_at`（ISO）；(b) 每个被断言的发行人必须有录制夹具并被回放套件采集（美股：`record-fixture.ts --edgar <cik>` 并把 `{ticker,cik,name}` 加进 `sync-us.integration.test.ts` 的 `FIXTURE_ISSUERS`——预置与采集都从它派生，只改这一处；A 股：`--tushare` 并把 ts_code 加进 `sync-cn.integration.test.ts` 的发行人表）；(c) 跑 `npm run test:db` 逐条回放 `read_facts(asOf = as_of)`；(d) 全部抄录完毕后把顶层 `ready` 置 true——此后套件强制：`required.US`（AAPL 与 MSFT 各至少一条已录入）、不得有任何 `<pending>`、≥ 6 家且每家 ≥ 2 期、**每期** ≥ 6 科目。**在 `ready:true` 且全绿之前，不得宣称事实库数值已对照一手文件核实。**
 
 ### 8.12 隔离项处置（`/admin/dq`）
