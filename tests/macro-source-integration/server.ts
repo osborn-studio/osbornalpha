@@ -23,9 +23,10 @@ const stubs = path.join(harness, 'browser-stubs');
 const stubPaths: Record<string, string> = {
   'next/navigation': 'navigation.ts', 'next/link': 'link.tsx', 'next-intl/server': 'intl-server.ts',
   '@/lib/macro/strategy/flags': 'strategy-flags.ts', '@/lib/macro/strategy/port': 'strategy-port.ts',
+  '@/lib/supabase/client': 'supabase-client.ts',
 };
 const plugin: Plugin = { name: 'authorized-fixture-boundaries', setup(builder) {
-  builder.onResolve({ filter: /^(next\/navigation|next\/link|next-intl\/server|@\/lib\/macro\/strategy\/(flags|port))$/ }, args => ({ path: path.join(stubs, stubPaths[args.path]) }));
+  builder.onResolve({ filter: /^(next\/navigation|next\/link|next-intl\/server|@\/lib\/macro\/strategy\/(flags|port)|@\/lib\/supabase\/client)$/ }, args => ({ path: path.join(stubs, stubPaths[args.path]) }));
 } };
 interface RegisteredResponse { method?: string; status?: number; headers?: Record<string, string>; body?: string; json?: unknown }
 const responses = new Map<string, RegisteredResponse>();
@@ -51,8 +52,8 @@ function queryOf(url: URL) {
 async function sourceTarget(name: string): Promise<DrawerTarget> {
   // Session 1 owns all source payloads. Never invent a second evidence fixture here.
   const mod = await import(pathToFileURL(path.join(harness, 'fixtures.ts')).href);
-  const fixture = mod.fixtures?.[name] ?? mod.resolveFixture?.(name);
-  const target = fixture?.drawerTarget ?? mod.drawerTarget;
+  const fixture = mod.resolveFixture(name);
+  const target = fixture.drawerTarget;
   if (!target) throw new Error(`No Session 1 drawerTarget for case ${name}`);
   return target;
 }

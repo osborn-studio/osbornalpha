@@ -7,6 +7,7 @@ export default defineConfig({
   testDir: '.',
   testMatch: /.*\.pw\.ts/,
   fullyParallel: false,
+  forbidOnly: Boolean(process.env.CI),
   workers: 1,
   retries: 0,
   timeout: 30_000,

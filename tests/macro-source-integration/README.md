@@ -1,6 +1,8 @@
 # Macro source integration harness
 
-Reusable, **synthetic local fixture tests**, with no live provider, Supabase, private storage, cookies, or production requests. Run from the repository root with the existing read-only `node_modules` link and Node 22. No dependency installation is needed.
+Reusable, **synthetic local fixture tests**, with no live provider, Supabase, private storage, cookies, or production requests. Run from the repository root with Node 22 and dependencies matching `package-lock.json` (`npm ci` in a fresh checkout, or a read-only link to an exact scratch installation).
+
+The dedicated **Macro source fixture checks** workflow runs all four targeted configurations below on PRs and main, installs headless Chromium, and uploads browser evidence. The existing Application checks workflow retains repository lint/typecheck and its product checks. The root Vitest configuration alone does not discover this harness. Historical scratch-only mutation controls are audit evidence, not steps in the dedicated workflow.
 
 ## Run targeted checks
 
@@ -27,6 +29,8 @@ All generated output belongs under `/tmp/osstack/macro-source-integration` by de
 | `source.pw.ts` | Real rendered `SourceDrawer`, captured observation selection, revision/proof display, real anchor navigation | Fixture API and local raw-content responses |
 | `destinations.pw.ts` | Actual macro detail/history/transmission/review page functions and their client components | Framework navigation/Link/translation boundaries, capability gates, API responses |
 | `server.ts`, `browser.tsx`, `browser-stubs/` | Actual page-function SSR and hydration with real React/Intl/components | Local server dispatch, simulated routing, strategy enabled/port available |
+
+The browser Supabase client is an inert fixture boundary: it emits no auth callbacks and its unsubscribe is a no-op. The real `useStrategyFetch` still performs the registered API fetches, but these browser checks do not cover auth transitions, subscription cleanup, or session storage. No real Supabase client or environment credentials are loaded. Production hook tests own auth-transition behavior.
 
 The independent handler audit computes SHA-256 from exact CSV bytes stored by `memoryEvidenceStore`. It writes two raw revisions and two derived revisions into `memoryMacroDb`, then exercises the actual route exports. It checks authentication, malformed and absent hashes, metadata and receipts, the 60-second signing contract, sanitized failures, captured versus newest lineage, and missing observation/receipt/evidence behavior. An additional bridge test validates the registered browser evidence fixtures through the real memory DB/store and GET contract. Derived fixture rows are explicitly written; these tests do not verify the ingestion calculation or SQL/RLS implementation.
 

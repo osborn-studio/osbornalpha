@@ -1,3 +1,31 @@
+# Current integration closeout — 2026-11-07
+
+Merged `origin/main` `aaec7c796af37b115b7839f9b8967f8bac4ef727` safely into the existing PR152 branch (integration merge `12357a04de6b17f724c63213733bfec8dba66b71`). PR142 and PR144 are now in that baseline. Production/widget files have no PR diff against this main revision.
+
+The first current-integration run passed 42 non-browser checks and 10/13 browser checks. Three strategy destination tests failed with `process is not defined`: latest main's real strategy fetch hook imports the browser Supabase auth client, which the standalone bundle had not isolated. The harness now stubs that auth boundary explicitly while retaining the actual hook, page functions, client components, API request assertions, meaningful rendered-content assertions and zero-page-error assertion. The stub emits no auth callbacks; transitions, cleanup and session storage remain untested here. No product check was weakened.
+
+Fresh verification with Node22, exact `npm ci` dependencies installed in `/tmp/osstack/source-tests-closeout/deps`, headless Chromium and one worker: **55 targeted checks pass** (26 handler, 15 transport, one lineage, 13 browser including two registry checks). Scoped TypeScript, root ESLint and root TypeScript pass. A first root typecheck against a stale shared dependency tree lacked the lockfile's `pdfjs-dist`; the exact scratch installation resolved that environment failure without editing product code or shared dependencies. Commands, exit codes and timings are in `/tmp/osstack/source-tests-closeout/verification.json`; raw logs and browser attachments are alongside it. No local full suite was run.
+
+The existing Application checks workflow did not discover any of these 55 tests. New `.github/workflows/macro-source-integration.yml` runs their four explicit configurations, installs Chromium before transport tests, runs scoped static checks and uploads browser evidence. Application checks and branch protection are unchanged. This is synthetic fixture CI, not deployed E2E. Historical scratch-only mutation controls below are separate audit evidence and are not claimed as workflow steps. The source target resolver now requires the named scenario's target; Playwright rejects focused tests in CI.
+
+Five new independent read-only `gpt-6.1-sol` CLI audits completed (raw JSONL and recovered detailed reports under `/tmp/osstack/source-tests-closeout`):
+
+| Audit | Scope | Session ID |
+| --- | --- | --- |
+| 1 | Actual handlers and identity | `01a1b6a1-2f5e-7dc3-b604-e155e35c7c94` |
+| 2 | Source preview navigation/provenance | `01a1b6a1-2fa2-75c3-a666-ceeaea9a3da1` |
+| 3 | Destination rendering/integration | `01a1b6a1-2f85-7b50-ac15-026d972043b4` |
+| 4 | Harness/transport/portability | `01a1b6a1-2f89-7bb3-859e-0395adcc1732` |
+| 5 | CI discovery/failures | `01a1b6a1-2f79-7df0-9d94-5ecb8b062d37` |
+
+The destination audit independently identified the auth-boundary regression; the CI audit identified the discovery gap. Other audits established no additional substantive defect. These sessions inspected code; fresh execution belongs to the coordinating session. MiniMax-M2.5 returned real final text (`stop_reason: end_turn`) in `mmx-response.json` / `mmx-audit.md`. Its initial verdict required current root checks, explicit auth limitations, fail-fast target resolution and clearer separation of historical mutation evidence; those are addressed. Its proposed fixed-count CI guard and committing historical mutation tools were not adopted: the actual current run establishes 55 passes with no skips, the normal runners remain authoritative as test counts evolve, and historical controls are explicitly outside workflow claims. Follow-up MiniMax-M2.5 closure returned `stop_reason: end_turn`, **Approved for closure within the declared synthetic test-harness scope**, with no remaining actionable defects (`mmx-closure-response.json`, `mmx-closure-audit.md`). Final browser rerun remains 13/13, and scoped TypeScript/lint pass after the target-resolution and focused-test safeguards.
+
+The source checks navigate real SHA anchors to exact synthetic metadata, then navigate the returned local download URL and compare exact bytes/digest. Positive destination checks execute/render actual pages and meaningful content; href-only, redirect-only and 404-only outcomes cannot satisfy them. Browser fixtures and actual GET-handler memory tests remain complementary layers, not browser-to-real-handler E2E. Framework routing/capability/auth boundaries and redirects are modeled. No production Next runtime, provider authenticity, cookies, SQL/RLS, real signing expiry, widget click-target integration or native Chrome coverage is claimed. Full detail and historical negative controls follow.
+
+---
+
+## Historical initial delivery (prior baseline; superseded by current verification above)
+
 # Macro source and destination verification findings
 
 Verified baseline: fetched `origin/main` `dc47ba2eb0768971f7362750bf504a90ceb68026` (rechecked before publication). PR142 was inspected read-only at `fb692b4c2b1d0ac976dd0a8f45f03dedd25021a3`; the audited drawer, view model, evidence/versions handlers and macro destination page functions match that baseline. All repository changes are confined to `tests/macro-source-integration`.
