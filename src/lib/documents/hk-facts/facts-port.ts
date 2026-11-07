@@ -177,13 +177,15 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
  const docMap=()=>new Map<string,DocumentRow>(docs.documents().map(d=>[d.document_id,d]));
  const intact=(c:CitationRow,pages:PageRow[])=>{const p=pages.find(x=>x.extraction_id===c.extraction_id&&x.page_no===c.page_no);return !!p&&p.text_hash===c.text_hash&&cpSlice(p.text,c.char_start,c.char_end)===c.snippet;};
  const eligibleDoc=(d:DocumentRow)=>d.source==='hkexnews'&&d.language==='zh'&&d.permission==='public'&&d.issuer_id!==null&&d.current_extraction_id!==null;
+ /** promotion filters (Task 16 review F2): annual / interim reports only, as runHkFactsSync. */
+ const periodic=(d:DocumentRow)=>d.doc_class==='annual_report'||d.doc_class==='interim_report';
  const ZERO_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  /** promotionDue condition (d): document id → issuer id. */
  const zeroOutput=(pubGen:number)=>{
   const out=new Map<string,string>();const ext=new Map(docs.extractions().map(e=>[e.extraction_id,e]));const filings=new Map(facts.filings().map(g=>[g.filing_id,g]));
   const live=[...liveBindings().values()];
   for(const d of docs.documents()){
-   if(!eligibleDoc(d))continue;
+   if(!eligibleDoc(d)||!periodic(d))continue;
    const e=ext.get(d.current_extraction_id!);
    if(!e||e.candidates_role!=='primary'||e.candidates_status!=='done')continue;
    if(live.some(b=>{const g=b.document_id===d.document_id?filings.get(b.filing_id):undefined;return !!g&&g.mapping_gen>=1&&g.mapping_gen<pubGen;}))out.set(d.document_id,d.issuer_id!);
@@ -317,9 +319,11 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
   },
   async promotionDue(pubGen,limit){
    const D=docMap();const ext=new Map(docs.extractions().map(e=>[e.extraction_id,e]));const pubs=docs.publications();const due=new Set<string>();
+   const issuers=new Map((await facts.tables.select('issuers',{},{limit:1000})).map(r=>[String(r.issuer_id),r]));
+   const usable=(iss:string|null|undefined)=>{const r=iss?issuers.get(iss):undefined;return !!r&&r.status!=='merged'&&typeof r.hkex_stock_code_primary==='string'&&r.hkex_stock_code_primary!=='';};
    for(const c of docs.candidates()){
     const d=D.get(c.document_id);
-    if(!d||!eligibleDoc(d)||d.current_extraction_id!==c.extraction_id||!ext.has(c.extraction_id))continue;
+    if(!d||!eligibleDoc(d)||!periodic(d)||!usable(d.issuer_id)||d.current_extraction_id!==c.extraction_id||!ext.has(c.extraction_id))continue;
     if(c.kind!=='financial_fact'||c.extractor_kind!=='rule'||c.extractor_ref!==HK_EXTRACTOR_REF||!c.checks_passed||(c.status!=='confirmed'&&c.status!=='promoted'))continue;
     if(!pubs.some(p=>p.candidate_id===c.candidate_id&&p.pub_gen===pubGen&&(p.state==='staged'||p.state==='published')))due.add(d.issuer_id!);   // (ab)
    }
@@ -328,10 +332,12 @@ export function memoryHkFactsPort(facts:MemoryFactsDb,docs:MemoryDocumentsDb,opt
    for(const p of pubs){
     if(p.pub_gen!==pubGen||p.state!=='staged')continue;
     if(runOf(p.run_id)?.status==='published'&&factStatus.get(p.fact_id)==='quarantined')continue;   // waits on the owner's decision: recovery cannot act (P2-6)
-    const c=byCandidate.get(p.candidate_id);const iss=c?D.get(c.document_id)?.issuer_id:null;if(iss)due.add(iss);   // (c)
+    const c=byCandidate.get(p.candidate_id);const d=c?D.get(c.document_id):undefined;if(d&&eligibleDoc(d)&&periodic(d)&&usable(d.issuer_id))due.add(d.issuer_id!);   // (c)
    }
-   for(const iss of zeroOutput(pubGen).values())due.add(iss);                                                                                                // (d)
-   return [...due].sort(cmp).slice(0,Math.min(Math.max(limit,0),1000)).map(issuerId=>({issuerId}));
+   for(const iss of zeroOutput(pubGen).values())if(usable(iss))due.add(iss);                                                                                                // (d)
+   const attempt=new Map(facts.scope().filter(x=>x.market===HK_MARKET).map(x=>[x.issuer_id,x.last_attempt_at]));
+   const rank=(i:string)=>attempt.get(i)??'';                                                  // never attempted first, then the oldest attempt
+   return [...due].sort((a,b)=>cmp(rank(a),rank(b))||cmp(a,b)).slice(0,Math.min(Math.max(limit,0),1000)).map(issuerId=>({issuerId}));
   },
   async zeroOutputDocuments(issuer,pubGen){return [...zeroOutput(pubGen).entries()].filter(([,iss])=>iss===issuer).map(([doc])=>doc).sort(cmp);},
   async resolveHkFactsQuarantine(item,chosen,resolvedBy){

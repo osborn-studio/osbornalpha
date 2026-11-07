@@ -62,7 +62,7 @@ async function pgHkHarness():Promise<PgHkHarness>{
  const pool=new Pool({connectionString:state.adminUrl,statement_timeout:8000});   // a regression that blocks fails cleanly instead of hanging afterAll
  return {
   pool,port:pgHkFactsPort(pool),docs:pgDocumentsDb(pool),tables:pgTableClient(pool),
-  issuer:async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ HK Port Test')`,[id]);return id;},
+  issuer:async()=>{const id=randomUUID();await pool.query(`insert into public.issuers(issuer_id,canonical_name_en,hkex_stock_code_primary) values($1,'ZZ HK Port Test',lpad((floor(random()*90000)+10000)::int::text,5,'0'))`,[id]);return id;},
   batch:async()=>{const id=randomUUID();await pool.query(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'documents-candidates','documents.candidates')`,[id]);return id;},
   user:async()=>{const id=randomUUID();await pool.query(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@example.invalid`]);return id;},
   expireHkLease:async iss=>{await pool.query(`update public.fact_sync_scope set lease_until=now()-interval '1 second' where issuer_id=$1 and market='HK'`,[iss]);},

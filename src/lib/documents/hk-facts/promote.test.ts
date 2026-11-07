@@ -2,7 +2,7 @@
 import {describe,expect,it,vi} from 'vitest';
 import {HEARTBEAT_MS} from '../lease';
 import type {Market} from '../../facts/types';
-import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_PUB_GEN,TABLE_ALGO_VERSION} from '../types';
+import {EXTRACTOR_VERSION,HK_EXTRACTOR_REF,HK_LABEL_GEN,HK_PUB_GEN,HK_RULES_VERSION,TABLE_ALGO_VERSION} from '../types';
 import type {CitationRole} from '../types';
 import {hkFilingSourceRef,hkRawHash,runHkFactsSync} from './promote';
 import type {PromoteDeps} from './promote';
@@ -53,7 +53,8 @@ describe('runHkFactsSync',()=>{
   await confirm(h,[ids.get(naturalKeyOf(FY25[0]))!]);
   await h.docs.decideCandidate(ids.get(naturalKeyOf(FY25[1]))!,{kind:'human',decided_by:ADMIN,status:'rejected'});
   const en=await seedHkExtraction(h,{sourceRef:'2026032500002_e',language:'en',facts:[FY25[2]]});
-  await confirm(h,(await seedHkCandidates(h,en)).values());
+  // comparison-role (English) candidates can no longer be confirmed at all (decideCandidate: not_eligible) — they can never enter the active set
+  await expect(confirm(h,(await seedHkCandidates(h,en)).values())).rejects.toMatchObject({code:'not_eligible'});
   const o=await run(h);
   expect(o).toMatchObject({outcome:'published',staged:1});
   expect(okFacts(h).map(f=>f.concept)).toEqual(['revenue']);
@@ -360,5 +361,114 @@ describe('runHkFactsSync',()=>{
   expect((await h.port.promotionDue(HK_PUB_GEN,1)).map(x=>x.issuerId)).toEqual([ISSUER]);   // batch 3: the decision changed, the link is actionable again
   expect(await runFor(ISSUER)).toMatchObject({outcome:'skipped',code:'nothing_to_publish'});
   expect(await h.port.promotionDue(HK_PUB_GEN,10)).toEqual([]);
+ });
+});
+
+describe('runHkFactsSync — review fixes (Task 16)',()=>{
+ it('F1: a re-extracted, changed candidate never reuses the old fact: pub_gen_required, nothing marked promoted',async()=>{
+  const h=hkHarness();
+  const ex=await seedHkExtraction(h,{sourceRef:'2026032500020_c',facts:[FY25[0]],extractorVersion:'docs-extract/0.9'});await confirm(h,(await seedHkCandidates(h,ex)).values());
+  expect((await run(h)).outcome).toBe('published');
+  await h.docs.requestExtract(ex.document.document_id,ADMIN);
+  const ex2=await seedExtraction(h,ex.document.document_id,[{...FY25[0],value:'7000000'}]);
+  const [changed]=(await seedHkCandidates(h,ex2)).values();
+  await confirm(h,[changed]);
+  const o=await run(h);
+  expect(o).toMatchObject({outcome:'failed',code:'pub_gen_required'});
+  expect(o.errors.map(e=>e.code)).toContain('pub_gen_required');
+  expect((await h.docs.candidateById(changed))!.status).toBe('confirmed');
+  expect(okFacts(h).map(f=>f.value)).toEqual(['6256000']);
+  expect(h.docs.publications().filter(p=>p.candidate_id===changed&&p.state!=='abandoned')).toEqual([]);
+  expect(h.facts.runs().filter(r=>r.status==='staged')).toEqual([]);
+  expect(h.facts.scope().find(s=>s.issuer_id===ISSUER)).toMatchObject({lease_batch_id:null,last_status:'failed'});
+ });
+ it('the duplicate branch: an abandoned link of an unchanged candidate re-stages onto the existing fact',async()=>{
+  const h=hkHarness();await confirmedDoc(h,[FY25[0]],'2026032500021_c');
+  expect((await run(h)).outcome).toBe('published');
+  const before=okFacts(h).map(f=>f.fact_id);
+  for(const p of h.docs._raw.publications.values())p.state='abandoned';
+  const o=await run(h);
+  expect(o.outcome).toBe('published');
+  expect(okFacts(h).map(f=>f.fact_id)).toEqual(before);
+  expect(h.docs.publications().filter(p=>p.state==='published')).toHaveLength(1);
+ });
+ it('HK_PUB_GEN is pinned to the extraction semantics',()=>{
+  // CHANGING ANY OF THESE VALUES (rules, label table, extractor, table algorithm) REQUIRES BUMPING HK_PUB_GEN:
+  // promotion reuses published facts by key, so only a new generation may carry changed values.
+  expect({HK_PUB_GEN,HK_RULES_VERSION,HK_LABEL_GEN,EXTRACTOR_VERSION,TABLE_ALGO_VERSION}).toEqual({HK_PUB_GEN:1,HK_RULES_VERSION:'hk-facts/1.0',HK_LABEL_GEN:1,EXTRACTOR_VERSION:'docs-extract/1.0',TABLE_ALGO_VERSION:'tables/1.0'});
+ });
+ it('a merged issuer is skipped as issuer_merged, writing nothing',async()=>{
+  const h=hkHarness();await confirmedDoc(h);
+  await h.tables.update('issuers',{issuer_id:ISSUER},{status:'merged'});
+  expect(await run(h)).toMatchObject({outcome:'skipped',code:'issuer_merged'});
+  expect(h.facts.runs()).toEqual([]);expect(h.docs.publications()).toEqual([]);
+  expect(await h.port.promotionDue(HK_PUB_GEN,10)).toEqual([]);
+ });
+ it('an ineligible zero-output document is reported and skipped',async()=>{
+  const h=hkHarness();
+  const en=await seedHkExtraction(h,{sourceRef:'2026032500022_e',language:'en',facts:[FY25[0]]});
+  const o=await run(h,{port:{...h.port,zeroOutputDocuments:async()=>[en.document.document_id]}});
+  expect(o).toMatchObject({outcome:'skipped',code:'nothing_to_publish'});
+  expect(o.errors.some(e=>e.message?.includes('ineligible_document'))).toBe(true);
+ });
+ it('the doc_class filter: a confirmed candidate of a non-periodic document is neither due nor staged',async()=>{
+  const h=hkHarness();const {ex}=await confirmedDoc(h);
+  h.docs._raw.documents.get(ex.document.document_id)!.doc_class='results_announcement';
+  expect(await h.port.promotionDue(HK_PUB_GEN,10)).toEqual([]);
+  expect(await run(h)).toMatchObject({outcome:'skipped',code:'nothing_to_publish'});
+  expect(okFacts(h)).toEqual([]);
+ });
+ it('due: an issuer without a stock code is not due',async()=>{
+  const B='00000000-0000-4000-8000-0000000000a2';
+  const h=hkHarness({issuers:[{issuer_id:ISSUER,code:null},{issuer_id:B,code:'00700'}]});
+  const a=await seedHkExtraction(h,{sourceRef:'2026032500023_c',facts:[FY25[0]]});await confirm(h,(await seedHkCandidates(h,a)).values());
+  const b=await seedHkExtraction(h,{issuerId:B,sourceRef:'2026032600024_c',facts:[FY25[0]]});await confirm(h,(await seedHkCandidates(h,b)).values());
+  expect((await h.port.promotionDue(HK_PUB_GEN,10)).map(x=>x.issuerId)).toEqual([B]);
+ });
+ it('F2: across limit-1 batches a permanently failing first issuer does not starve a healthy later one',async()=>{
+  const B='00000000-0000-4000-8000-0000000000a2';
+  const h=hkHarness({issuers:[{issuer_id:ISSUER,code:'00268'},{issuer_id:B,code:'00700'}]});
+  const a=await seedHkExtraction(h,{sourceRef:'2026032500025_c',facts:[FY25[0]]});await confirm(h,(await seedHkCandidates(h,a)).values());
+  const b=await seedHkExtraction(h,{issuerId:B,sourceRef:'2026032600026_c',facts:[FY25[0]]});await confirm(h,(await seedHkCandidates(h,b)).values());
+  const broken={...h.port,publishHkRun:async(...x:Parameters<typeof h.port.publishHkRun>)=>{if(x[0]===ISSUER)throw new Error('boom');return h.port.publishHkRun(...x);}};
+  const batch=async()=>{const due=await h.port.promotionDue(HK_PUB_GEN,1);return {due:due.map(d=>d.issuerId),out:await runHkFactsSync({...candidatesDepsOf(h),port:broken},{issuerIds:due.map(d=>d.issuerId),batchId:await h.batch(),triggeredBy:'script'})};};
+  const one=await batch();
+  expect(one.due).toEqual([ISSUER]);expect(one.out[0]).toMatchObject({outcome:'failed',code:'publish_failed'});
+  const two=await batch();
+  expect(two.due).toEqual([B]);expect(two.out[0].outcome).toBe('published');
+ });
+ it('an issuer whose initialization throws fails alone: the loop continues and earlier outcomes stay',async()=>{
+  const B='00000000-0000-4000-8000-0000000000a2';
+  const h=hkHarness({issuers:[{issuer_id:ISSUER,code:'00268'},{issuer_id:B,code:'00700'}]});
+  await confirmedDoc(h);
+  const port={...h.port,ensureHkScope:async(i:string,k:string)=>{if(i===B)throw new Error('db down');return h.port.ensureHkScope(i,k);}};
+  const out=await runHkFactsSync({...candidatesDepsOf(h),port},{issuerIds:[ISSUER,B],batchId:await h.batch(),triggeredBy:'script'});
+  expect(out.map(o=>[o.issuerId,o.outcome])).toEqual([[ISSUER,'published'],[B,'failed']]);
+  expect(out[1].code).toBe('issuer_init_failed');
+ });
+ it('lease refused after publishHkRun committed: reported as published with a lease_lost error',async()=>{
+  vi.useFakeTimers();
+  try{
+   const h=hkHarness();await confirmedDoc(h);
+   let committed=false;
+   const port={...h.port,
+    publishHkRun:async(...a:Parameters<typeof h.port.publishHkRun>)=>{const r=await h.port.publishHkRun(...a);committed=true;return r;},
+    finishCandidatePublications:async(r:string)=>{await new Promise(res=>setTimeout(res,3*HEARTBEAT_MS));return h.port.finishCandidatePublications(r);},
+    renewLease:async(i:string,b:string,t:number)=>{if(!committed)return h.port.renewLease(i,b,t);return false;}};
+   const p=run(h,{port});
+   await vi.advanceTimersByTimeAsync(3*HEARTBEAT_MS+1);
+   const o=await p;
+   expect(o.outcome).toBe('published');
+   expect(o.errors.map(e=>e.code)).toContain('lease_lost');
+  }finally{vi.useRealTimers();}
+ });
+ it('step 0a settles staged links of an older generation',async()=>{
+  const h=hkHarness();await confirmedDoc(h);
+  const crashed=await run(h,{port:{...h.port,finishCandidatePublications:dead}});
+  expect(crashed.outcome).toBe('published');
+  expect(h.docs.publications().every(p=>p.state==='staged')).toBe(true);
+  const next=HK_PUB_GEN+1;
+  await run(h,{},next);
+  expect(h.docs.publications().filter(p=>p.pub_gen===HK_PUB_GEN).every(p=>p.state==='published')).toBe(true);
  });
 });

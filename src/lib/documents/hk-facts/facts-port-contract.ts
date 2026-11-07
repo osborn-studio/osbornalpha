@@ -393,13 +393,18 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    await h.port.releaseLease(w.iss,other,'success','2030-01-01T00:00:00.000Z');
   });
 
-  it('promotionDue: unlinked confirmed candidates are due, rejected ones are not; limit 0 and ascending order; (d) needs a published filing',async()=>{
+  it('promotionDue: unlinked confirmed candidates are due, rejected ones are not; limit 0 and 1; (d) needs a published filing',async()=>{
    const w=await hkWorld(h);
    expect(await dueIds(h,HK_PUB_GEN)).toContain(w.iss);
    expect(await h.port.promotionDue(HK_PUB_GEN,0)).toEqual([]);
-   const all=await dueIds(h,HK_PUB_GEN);
-   expect(all).toEqual([...all].sort());
+   expect(await h.port.promotionDue(HK_PUB_GEN,1)).toHaveLength(1);
    expect(await h.port.zeroOutputDocuments(w.iss,HK_PUB_GEN+1)).toEqual([]);                     // never bound to a filing
+   // fairness (Task 16 F2): an issuer whose last attempt failed is due after one never attempted
+   const v=await hkWorld(h);const failer=await h.batch();
+   await h.port.ensureHkScope(w.iss,'00268');expect(await h.port.claimLease(w.iss,failer,600)).toBe(true);
+   await h.port.releaseLease(w.iss,failer,'failed','2030-01-01T00:00:00.000Z');
+   const order=await dueIds(h,HK_PUB_GEN);
+   expect(order.indexOf(v.iss)).toBeGreaterThanOrEqual(0);expect(order.indexOf(v.iss)).toBeLessThan(order.indexOf(w.iss));
    for(const id of [w.cand25,w.cand24]){
     await h.docs.decideCandidate(id,{kind:'human',decided_by:w.user,status:'candidate'});
     await h.docs.decideCandidate(id,{kind:'human',decided_by:w.user,status:'rejected'});

@@ -452,7 +452,10 @@ end $$;
 revoke execute on function public.resolve_hk_facts_quarantine(uuid, uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.resolve_hk_facts_quarantine(uuid, uuid[], uuid) to service_role;
 
--- §4.11 promotionDue, at most p_limit (≤ 1000) issuers ascending, due by any of:
+-- §4.11 promotionDue, at most p_limit (≤ 1000) issuers, due by any of (all conditions only count annual /
+-- interim reports of issuers that are not merged and have an HKEX stock code, exactly the filters of
+-- runHkFactsSync; ordered by the HK scope's last attempt, never-attempted first, then issuer_id, so an
+-- issuer whose promotion keeps failing rotates behind healthy ones — Task 16 review F2):
 -- (ab) an active candidate — financial_fact, rule, extractor_ref = p_extractor_ref, checks_passed,
 --      confirmed|promoted, on the current extraction of a public Chinese HKEXnews document — without a
 --      staged|published link under p_pub_gen;
@@ -466,7 +469,9 @@ create or replace function public.hk_promotion_due(p_pub_gen int, p_extractor_re
 returns uuid[] language sql stable security definer set search_path = public as $$
   with docs as (
     select d.document_id, d.issuer_id, d.current_extraction_id from public.disclosure_documents d
+    join public.issuers i on i.issuer_id = d.issuer_id and i.status <> 'merged' and i.hkex_stock_code_primary is not null
     where d.source = 'hkexnews' and d.language = 'zh' and d.permission = 'public' and d.issuer_id is not null and d.current_extraction_id is not null
+      and d.doc_class in ('annual_report','interim_report')
   ), ab as (
     select docs.issuer_id from docs
     join public.extraction_candidates c on c.extraction_id = docs.current_extraction_id and c.document_id = docs.document_id
@@ -477,9 +482,11 @@ returns uuid[] language sql stable security definer set search_path = public as 
     select d.issuer_id from public.candidate_publications cp
     join public.extraction_candidates c on c.candidate_id = cp.candidate_id
     join public.disclosure_documents d on d.document_id = c.document_id
+    join public.issuers i on i.issuer_id = d.issuer_id and i.status <> 'merged' and i.hkex_stock_code_primary is not null
     left join public.fact_sync_runs r on r.run_id = cp.run_id
     left join public.financial_facts f on f.fact_id = cp.fact_id
     where cp.pub_gen = p_pub_gen and cp.state = 'staged' and d.issuer_id is not null
+      and d.source = 'hkexnews' and d.language = 'zh' and d.permission = 'public' and d.doc_class in ('annual_report','interim_report')
       and not (coalesce(r.status, '') = 'published' and coalesce(f.status, '') = 'quarantined')
   ), zero as (
     select docs.issuer_id from docs
@@ -488,10 +495,12 @@ returns uuid[] language sql stable security definer set search_path = public as 
     join public.filings g on g.filing_id = fd.filing_id
     where e.candidates_role = 'primary' and e.candidates_status = 'done' and g.mapping_gen >= 1 and g.mapping_gen < p_pub_gen
   )
-  select coalesce(array_agg(u.issuer_id order by u.issuer_id), '{}'::uuid[]) from (
-    select issuer_id from ab union select issuer_id from staged union select issuer_id from zero
-    order by issuer_id limit least(greatest(coalesce(p_limit, 0), 0), 1000)
-  ) u
+  select coalesce(array_agg(x.issuer_id order by x.last_attempt_at asc nulls first, x.issuer_id), '{}'::uuid[]) from (
+    select u.issuer_id, s.last_attempt_at from (
+      select issuer_id from ab union select issuer_id from staged union select issuer_id from zero
+    ) u left join public.fact_sync_scope s on s.issuer_id = u.issuer_id and s.market = 'HK'
+    order by s.last_attempt_at asc nulls first, u.issuer_id limit least(greatest(coalesce(p_limit, 0), 0), 1000)
+  ) x
 $$;
 revoke execute on function public.hk_promotion_due(int, text, int) from public, anon, authenticated;
 grant execute on function public.hk_promotion_due(int, text, int) to service_role;
@@ -505,6 +514,7 @@ returns uuid[] language sql stable security definer set search_path = public as 
   join public.filing_documents fd on fd.document_id = d.document_id
   join public.filings g on g.filing_id = fd.filing_id
   where d.issuer_id = p_issuer and d.source = 'hkexnews' and d.language = 'zh' and d.permission = 'public'
+    and d.doc_class in ('annual_report','interim_report')
     and e.candidates_role = 'primary' and e.candidates_status = 'done' and g.mapping_gen >= 1 and g.mapping_gen < p_pub_gen
 $$;
 revoke execute on function public.hk_zero_output_documents(uuid, int) from public, anon, authenticated;

@@ -82,6 +82,18 @@ const sourceConceptOf=(snippet:string,concept:string)=>{const s=cpSlice(snippet.
 const keyOfPayload=(p:FinancialFactPayload)=>({concept:p.concept,period_start:p.period_start,period_end:p.period_end,consolidation:'consolidated',unit:p.unit});
 const byId=(a:CandidateRow,b:CandidateRow)=>a.candidate_id<b.candidate_id?-1:a.candidate_id>b.candidate_id?1:0;
 
+/** The active candidate set of one issuer (spec §7.7): confirmed|promoted rule candidates of the current extraction of an eligible document. Shared with promote-hk.ts --dry-run. */
+export async function activeCandidates(db:DocumentsDb,issuer:string,docOf:(id:string)=>Promise<DocumentRow|null>):Promise<CandidateRow[]>{
+ const pool=[...await allPages(cursor=>db.candidatesOf({issuerId:issuer,status:'confirmed'},{cursor,limit:1000})),...await allPages(cursor=>db.candidatesOf({issuerId:issuer,status:'promoted'},{cursor,limit:1000}))];
+ const active:CandidateRow[]=[];
+ for(const c of pool){
+  if(c.kind!=='financial_fact'||c.extractor_kind!=='rule'||!c.checks_passed||c.extractor_ref!==HK_EXTRACTOR_REF)continue;
+  const d=await docOf(c.document_id);
+  if(d&&eligibleDocument(d,issuer)&&d.current_extraction_id===c.extraction_id)active.push(c);
+ }
+ return active;
+}
+
 export async function runHkFactsSync(deps:PromoteDeps,opts:PromoteOptions):Promise<HkIssuerOutcome[]>{
  const out:HkIssuerOutcome[]=[];const ids=[...new Set(opts.issuerIds)];const pubGen=opts.pubGen??HK_PUB_GEN;
  for(let i=0;i<ids.length;i++){
@@ -89,7 +101,11 @@ export async function runHkFactsSync(deps:PromoteDeps,opts:PromoteOptions):Promi
    for(const id of ids.slice(i))out.push({issuerId:id,runId:null,outcome:'skipped',code:'deadline_hit',counts:emptyCounts(),errors:[{code:'deadline_hit',key:id}],staged:0});
    break;
   }
-  out.push(await promoteIssuer(deps,opts.batchId,ids[i],pubGen));
+  try{out.push(await promoteIssuer(deps,opts.batchId,ids[i],pubGen));}
+  catch(e){   // issuer lookup, ensureHkScope or claimLease threw: this issuer fails, the loop and earlier outcomes stay (Task 16 review)
+   const code=isLeaseLoss(e)?'lease_lost':'issuer_init_failed';
+   out.push({issuerId:ids[i],runId:null,outcome:'failed',code,counts:{...emptyCounts(),failed:1},errors:[{code,key:ids[i],message:errMsg(e)}],staged:0});
+  }
  }
  return out;
 }
@@ -106,19 +122,20 @@ async function promoteIssuer(deps:PromoteDeps,batchId:string,issuer:string,pubGe
  if(!await port.claimLease(issuer,batchId,PROMOTE_LEASE_TTL_S))return skip('leased');
  // R1-P2-7 round 2: the issuer's whole promotion runs under the lease heartbeat (same-batch claimLease
  // every HEARTBEAT_MS) with guarded clients; a refused renewal → lease_lost at once, no further write
+ const live:HkIssuerOutcome={issuerId:issuer,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],staged:0};   // the claimed phase's own outcome object: readable after a heartbeat abort
  try{
   return await withLeaseHeartbeat(()=>port.renewLease(issuer,batchId,PROMOTE_LEASE_TTL_S),
-   (signal,quiesce)=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen,quiesce),
+   (signal,quiesce)=>promoteClaimed({...deps,db:guardCalls(deps.db,signal),port:guardCalls(port,signal),tables:guardCalls(tables,signal)},batchId,issuer,pubGen,quiesce,live),
    {intervalMs:HEARTBEAT_MS,remainingMs:()=>remaining(deps),reserveMs:FINAL_RESERVE_MS});
  }catch(e){
   if(!isLeaseLoss(e))throw e;
+  if(live.outcome==='published'){live.errors.push({code:'lease_lost',key:issuer,message:'heartbeat after publish'});return live;}   // the run committed: report it as published
   return {issuerId:issuer,runId:null,outcome:'failed',code:'lease_lost',counts:{...emptyCounts(),failed:1},errors:[{code:'lease_lost',key:issuer,message:'heartbeat'}],staged:0};
  }
 }
 
-async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubGen:number,quiesce:()=>Promise<void>=async()=>{}):Promise<HkIssuerOutcome>{
+async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubGen:number,quiesce:()=>Promise<void>=async()=>{},o:HkIssuerOutcome={issuerId:issuer,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],staged:0}):Promise<HkIssuerOutcome>{
  const {db,port,tables}=deps;
- const o:HkIssuerOutcome={issuerId:issuer,runId:null,outcome:'skipped',counts:emptyCounts(),errors:[],staged:0};
  const skip=(reason:string)=>{o.outcome='skipped';o.code=reason;o.errors.push({code:'skipped_summary',key:issuer,message:JSON.stringify({[reason]:1})});return o;};
  let leaseHeld=true,released=false,published=false,abandoned=false;let runId:string|null=null;
  const nowIso=()=>deps.now().toISOString();
@@ -142,7 +159,9 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
  try{
   // ---- 0a: settle staged publications of this generation (no abandonRun on foreign runs)
   const leftover:string[]=[];
-  const staged=await allPages(cursor=>db.publicationsOf({issuerId:issuer,pubGen,state:'staged'},{cursor,limit:1000}));
+  // every generation up to ours: a staged link of an older generation (crash before a bump) must not stay staged for ever
+  const staged:PublicationRow[]=[];
+  for(let g=1;g<=pubGen;g++)staged.push(...await allPages(cursor=>db.publicationsOf({issuerId:issuer,pubGen:g,state:'staged'},{cursor,limit:1000})));
   for(const run of [...new Set(staged.map(p=>p.run_id))].sort()){
    const status=await port.runStatus(run);
    if(status==='published')await port.finishCandidatePublications(run);
@@ -160,13 +179,7 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
   // ---- 2: active set, what to stage, filings
   const docCache=new Map<string,DocumentRow|null>();
   const docOf=async(id:string)=>{if(!docCache.has(id))docCache.set(id,await db.documentById(id));return docCache.get(id)??null;};
-  const pool=[...await allPages(cursor=>db.candidatesOf({issuerId:issuer,status:'confirmed'},{cursor,limit:1000})),...await allPages(cursor=>db.candidatesOf({issuerId:issuer,status:'promoted'},{cursor,limit:1000}))];
-  const active:CandidateRow[]=[];
-  for(const c of pool){
-   if(c.kind!=='financial_fact'||c.extractor_kind!=='rule'||!c.checks_passed||c.extractor_ref!==HK_EXTRACTOR_REF)continue;
-   const d=await docOf(c.document_id);
-   if(d&&eligibleDocument(d,issuer)&&d.current_extraction_id===c.extraction_id)active.push(c);
-  }
+  const active=await activeCandidates(db,issuer,docOf);
   const pubs=new Map<string,PublicationRow>();
   const activeIds=active.map(c=>c.candidate_id);
   for(let i=0;i<activeIds.length;i+=100){
@@ -211,13 +224,22 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
   if(plan.ambiguous.length>0)return await stop('plan_inconsistent',`ambiguous:${plan.ambiguous.length}`);
   // fact_id per candidate (R5-1): new rows first, then the snapshot, by candidate key
   const newByKey=new Map(plan.inserts.map(r=>[candidateKey({concept:r.concept,period_start:r.period_start,period_end:r.period_end,consolidation:r.consolidation,unit:r.unit},r.filing_id,pubGen),r.fact_id]));
-  const oldByKey=new Map(read.rows.map(r=>[candidateKey({concept:r.concept,period_start:r.period_start,period_end:r.period_end,consolidation:r.consolidation,unit:r.unit},r.filing_id,r.mapping_gen),r.fact_id]));
+  const oldByKey=new Map(read.rows.map(r=>[candidateKey({concept:r.concept,period_start:r.period_start,period_end:r.period_end,consolidation:r.consolidation,unit:r.unit},r.filing_id,r.mapping_gen),r]));
+  const rawOf=new Map(factCands.map(f=>[`${f.filingRef}|${f.concept}|${f.periodStart??''}|${f.periodEnd}|${f.unit}`,f]));
   const factOf=new Map<string,string>();
   for(const c of toStage){
    const ck=candidateKey(keyOfPayload(c.payload as FinancialFactPayload),filingOfDoc(c.document_id),pubGen);
-   const id=newByKey.get(ck)??oldByKey.get(ck);
-   if(id===undefined)return await stop('plan_inconsistent',`unresolved:${c.candidate_id}`);
-   factOf.set(c.candidate_id,id);
+   const fresh=newByKey.get(ck);
+   if(fresh!==undefined){factOf.set(c.candidate_id,fresh);continue;}
+   const old=oldByKey.get(ck);
+   if(old===undefined)return await stop('plan_inconsistent',`unresolved:${c.candidate_id}`);
+   // Never reuse a fact that differs (Task 16 F1): same key, but another value or other evidence means a changed
+   // candidate — it can only publish under a new publication generation (HK_PUB_GEN bump), never silently as the old fact.
+   const p=c.payload as FinancialFactPayload;
+   const want=rawOf.get(`${refOfDoc.get(c.document_id)}|${p.concept}|${p.period_start??''}|${p.period_end}|${p.unit}`);
+   const same=(old.status==='ok'||old.status==='quarantined')&&want!==undefined&&canonicalDecimal(old.value)===want.value&&old.raw_hash===want.rawHash;
+   if(!same)return await stop('pub_gen_required',`${p.concept}:${p.period_end}:${c.candidate_id}`);
+   factOf.set(c.candidate_id,old.fact_id);
   }
   if(plan.inserts.length>0){
    const n=await port.stageFacts(runId,plan.inserts);

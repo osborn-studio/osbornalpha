@@ -15,8 +15,9 @@ import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError} from '../../src/lib/dq/batches';
 import {allPages,supabaseCandidatesDeps} from '../../src/lib/documents/candidates/run';
-import {runHkFactsSync} from '../../src/lib/documents/hk-facts/promote';
+import {activeCandidates,runHkFactsSync} from '../../src/lib/documents/hk-facts/promote';
 import {HK_PUB_GEN} from '../../src/lib/documents/types';
+import type {DocumentRow} from '../../src/lib/documents/types';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import {getAdminSupabase} from '../../src/lib/supabase/admin';
@@ -63,7 +64,8 @@ async function main(){
  if(!args.apply){
   const report=[];
   for(const id of issuerIds){
-   const active=[...await allPages(c=>deps.db.candidatesOf({issuerId:id,status:'confirmed'},{cursor:c,limit:1000})),...await allPages(c=>deps.db.candidatesOf({issuerId:id,status:'promoted'},{cursor:c,limit:1000}))].filter(c=>c.kind==='financial_fact'&&c.extractor_kind==='rule');
+   const docs=new Map<string,DocumentRow|null>();   // the very filter runHkFactsSync stages from (checks, extractor_ref, eligible current-extraction document)
+   const active=await activeCandidates(deps.db,id,async d=>{if(!docs.has(d))docs.set(d,await deps.db.documentById(d));return docs.get(d)??null;});
    const staged=await allPages(c=>deps.db.publicationsOf({issuerId:id,pubGen:args.pubGen,state:'staged'},{cursor:c,limit:1000}));
    report.push({issuerId:id,active:active.length,confirmed:active.filter(c=>c.status==='confirmed').length,stagedPublications:staged.length});
   }
@@ -71,10 +73,15 @@ async function main(){
   process.exit(0);
  }
  const {batchId}=await startBatch(tables,{producer:'documents-candidates',dataset:'documents.candidates',toolVersions:{hk_pub_gen:String(args.pubGen),trigger:'promote-hk'},codeVersion:codeVersion as string,triggeredBy:'script'});
- const outcomes=await runHkFactsSync(deps,{issuerIds,batchId,triggeredBy:'script',pubGen:args.pubGen});
+ let outcomes:Awaited<ReturnType<typeof runHkFactsSync>>=[];
  const counts=emptyCounts();const errors:BatchError[]=[];
- for(const o of outcomes){for(const k of ['fetched','inserted','duplicates','versioned','quarantined','failed'] as const)counts[k]+=o.counts[k];errors.push(...o.errors);}
- const status=await finishBatch(tables,batchId,{counts,errors});
+ let status;
+ try{outcomes=await runHkFactsSync(deps,{issuerIds,batchId,triggeredBy:'script',pubGen:args.pubGen});}
+ catch(e){errors.push({code:'unknown',message:(e instanceof Error?e.message:String(e)).slice(0,200)});throw e;}
+ finally{   // the batch row never dangles in 'running'
+  for(const o of outcomes){for(const k of ['fetched','inserted','duplicates','versioned','quarantined','failed'] as const)counts[k]+=o.counts[k];errors.push(...o.errors);}
+  status=await finishBatch(tables,batchId,{counts,errors});
+ }
  console.log(JSON.stringify({mode:'apply',batchId,status,pubGen:args.pubGen,counts,issuers:outcomes},null,1));
  process.exit(outcomes.some(o=>o.outcome==='failed')?1:0);
 }

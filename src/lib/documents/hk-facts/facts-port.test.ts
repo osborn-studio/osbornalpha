@@ -12,7 +12,7 @@ import {hkFactsPortContract} from './facts-port-contract';
 hkFactsPortContract('memoryHkFactsPort contract',async()=>{
  const facts=memoryFactsDb();const docs=memoryDocumentsDb();
  return {port:memoryHkFactsPort(facts,docs),docs,tables:facts.tables,
-  issuer:async()=>randomUUID(),batch:async()=>randomUUID(),user:async()=>randomUUID(),
+  issuer:async()=>{const id=randomUUID();await facts.tables.insert('issuers',{issuer_id:id,hkex_stock_code_primary:'00268',status:'active'});return id;},batch:async()=>randomUUID(),user:async()=>randomUUID(),
   expireHkLease:async iss=>{facts.expireLease(iss,HK_MARKET);}};
 });
 
