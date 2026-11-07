@@ -25,6 +25,7 @@ const SAMPLES:[Fact,string,string][]=[
  [fact('asset_missing',{series:'US_WTI',base_month:'2026-09',month:'2026-10',reason:'out_of_coverage'}),'WTI 原油 2026-09 至 2026-10 无法比较：月末观测不全。','WTI crude 2026-09 to 2026-10 not comparable: month-end observations incomplete.'],
  [fact('coverage',{verified:v('1234','count'),missing:v('4','count'),restricted:v('5','count')}),'快照目录计数：已核实 1,234，缺失 4，受限 5。','Snapshot catalog counts: verified 1,234, missing 4, restricted 5.'],
  [fact('events_truncated',{date:'2026-11-03',sources:'US_FED_TARGET_UPPER_D'}),'截至 2026-11-03，政策事件序列读取被截断（US_FED_TARGET_UPPER_D），本节无法列出。','As of 2026-11-03, the policy event history read was truncated (US_FED_TARGET_UPPER_D); this section cannot be listed.'],
+ [fact('baseline_unavailable',{series:'US_CPI_YOY',state:'truncated'}),'美国 CPI 同比 的基线数据读取被截断，无法判断其为新发布或修订。','US CPI YoY baseline data unavailable (read truncated); release and revision could not be determined.'],
  [fact('catalog_unavailable',{series:'US_ISM_PMI',status:'missing'}),'US_ISM_PMI 目录状态：缺失。','US_ISM_PMI catalog status: missing.'],
 ];
 

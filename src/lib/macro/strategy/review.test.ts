@@ -113,6 +113,26 @@ describe('reviewFromManifest — seven sections (spec §6.2)',()=>{
   const {facts}=reviewFromManifest(await buildReviewManifest(port([thin,CUR_SNAP]),'US','2026-10','c'));
   expect(byId(facts.releases).get('rel:US_CPI_YOY')?.template).toBe('release_first');
  });
+ it('an incomplete baseline read (unresolved snapshot id) yields no release_first / revision, only explicit baseline_unavailable facts',async()=>{
+  const broken=snap('US','2026-09-14T06:00:00Z',[...BASE_ROWS.map(o=>o.observation_id),'obs:not-in-store']);
+  const m=await buildReviewManifest(port([broken,CUR_SNAP]),'US','2026-10','c');
+  expect(m.reads).toContainEqual({series_id:'US_CPI_YOY',purpose:'review_base',state:'truncated'});
+  const {facts}=reviewFromManifest(m);
+  expect(facts.releases).toEqual([]);expect(facts.revisions).toEqual([]);
+  const gap=byId(facts.coverage).get('cov:base:US_CPI_YOY');
+  expect(gap).toMatchObject({kind:'coverage',template:'baseline_unavailable',slots:{series:'US_CPI_YOY',state:'truncated'},series_id:'US_CPI_YOY',source_inputs:['review:US_CPI_YOY:latest']});
+  expect(ids(facts.coverage)).toEqual(expect.arrayContaining(['cov:base:US_UNRATE','cov:counts']));
+  expect(facts.baseline_missing).toBe(false);
+ });
+ it('every emitted source_inputs entry is a manifest input role (event and episode facts included)',async()=>{
+  const m=await buildReviewManifest(port(),'US','2026-10','c');
+  const roles=new Set(m.inputs.map(i=>i.role));
+  const f=reviewFromManifest(m).facts;
+  const all=[...f.releases,...f.revisions,...f.timeliness,...f.policy_events,...f.episode_changes,...f.asset_moves,...f.coverage];
+  expect(f.policy_events.length+f.episode_changes.length).toBeGreaterThan(0);
+  for(const fact of all)for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
+  expect(byId(f.policy_events).get('evt:2026-10-28')?.source_inputs).toEqual(['events:US_FED_TARGET_LOWER_D:evidence','events:US_FED_TARGET_UPPER_D:evidence']);
+ });
  it('non-positive base on a pct asset → asset_missing(non_positive_base)',async()=>{
   const m=await buildReviewManifest(port(),'US','2026-10','c');
   const bad={...m,inputs:m.inputs.map(i=>i.role==='asset_base:US_WTI:month_end'?{...i,value_text:'-5'}:i)};

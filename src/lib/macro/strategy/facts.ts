@@ -34,11 +34,22 @@ export function typedChange(kind:ChangeKind,from:string,to:string):{value_text:s
  const d=subtract(to,from);
  return kind==='bp'?{value_text:toBp(d),unit:'bp'}:{value_text:d,unit:kind};
 }
-export function eventFact(e:StrategyPolicyEvent):Fact{
+/** Manifest input ROLES ('events:<series>:evidence') of the given evidence observation ids (spec §6.1: source_inputs are
+ *  roles, never observation ids). An id with no frozen evidence row is a builder bug and fails loudly. */
+export function evidenceRoles(m:Pick<StrategyManifest,'inputs'>,ids:readonly string[]):string[]{
+ const roles=new Set<string>();
+ for(const id of new Set(ids)){
+  const hit=m.inputs.filter(i=>i.observation_id===id&&i.role.endsWith(':evidence'));
+  if(!hit.length)throw new Error(`unresolved_evidence:${id}`);
+  for(const i of hit)roles.add(i.role);
+ }
+ return [...roles].sort();
+}
+export function eventFact(e:StrategyPolicyEvent,m:Pick<StrategyManifest,'inputs'>):Fact{
  return {fact_id:`evt:${e.effective_date}`,kind:'policy_event',template:'policy_event',
   slots:{date:e.effective_date,upper_from:{value_text:e.upper_from,unit:'pct'},upper_to:{value_text:e.upper_to,unit:'pct'},
    lower_from:{value_text:e.lower_from,unit:'pct'},lower_to:{value_text:e.lower_to,unit:'pct'},change:{value_text:e.change_bp,unit:'bp'}},
-  period_end:e.effective_date,source_inputs:[...e.evidence]};
+  period_end:e.effective_date,source_inputs:evidenceRoles(m,e.evidence)};
 }
 /** null = unknown or failed snapshot (the caller answers 404). */
 export async function buildSnapshotFactsManifest(port:StrategyReadPort,snapshotId:string,codeVersion:string):Promise<StrategyManifest|null>{
@@ -68,7 +79,7 @@ export function snapshotFacts(m:StrategyManifest):Fact[]{
   slots:{a:SPREAD.a,b:SPREAD.b,period:a.period_end,a_value:{value_text:a.value_text,unit:'pct'},b_value:{value_text:b.value_text,unit:'pct'},value:{value_text:subtract(a.value_text,b.value_text),unit:'pp_level'}},
   period_end:a.period_end,source_inputs:[a.role,b.role]});
  const events=[...(m.events??[])].sort((x,y)=>x.effective_date<y.effective_date?-1:x.effective_date>y.effective_date?1:0);
- const last=events[events.length-1];if(last)out.push(eventFact(last));
+ const last=events[events.length-1];if(last)out.push(eventFact(last,m));
  return out;
 }
 /** Review explanation manifest: the stored review manifest's frozen content re-keyed as 'explain_facts' for that immutable

@@ -15,8 +15,8 @@ import type {Episode,Fact,FrozenSeriesDef,ManifestInput,ManifestRead,Region,Revi
 import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
-import {eventFact,levelIndicators} from './facts';
-import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,utcDate} from './manifest';
+import {eventFact,evidenceRoles,levelIndicators} from './facts';
+import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,readState,utcDate} from './manifest';
 import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -66,11 +66,11 @@ export async function buildReviewManifest(port:StrategyReadPort,region:Region,mo
 }
 
 const episodeKey=(e:Pick<Episode,'direction'|'start'>)=>`${e.direction}:${e.start}`;
-function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyPolicyEvent[]):Fact{
+function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyPolicyEvent[],m:StrategyManifest):Fact{
  const evidence=events.filter(x=>x.effective_date>=e.start&&x.effective_date<=e.end).flatMap(x=>[...x.evidence]);
  return {fact_id:`ep:${episodeKey(e)}:${change}`,kind:'episode',template:change==='opened'?'episode_opened':'episode_ended',
   slots:{direction:e.direction,start:e.start,end:e.end,events:{value_text:String(e.events),unit:'count'},upper_from:{value_text:e.upper_from,unit:'pct'},upper_to:{value_text:e.upper_to,unit:'pct'},cumulative:{value_text:e.cumulative_bp,unit:'bp'}},
-  period_end:e.end,source_inputs:[...new Set(evidence)]};
+  period_end:e.end,source_inputs:evidenceRoles(m,evidence)};
 }
 /** Pure: the seven sections from the manifest alone. status = 'insufficient' when the month has no snapshot (reason no_snapshot). */
 export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;facts:ReviewFacts}{
@@ -79,11 +79,17 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const cur=m.snapshots[region];const base=m.baseline[region];
  const snapIn=(purpose:string,id:string)=>m.inputs.find(i=>i.role===inputRole(purpose,id,'latest')&&i.source.kind==='snapshot')??null;
  const indicators=levelIndicators(m.catalog,region).filter(d=>d.status==='active');
- const releases:Fact[]=[];const revisions:Fact[]=[];
+ const releases:Fact[]=[];const revisions:Fact[]=[];const baselineGaps:Fact[]=[];
  if(cur&&base)for(const d of indicators){
   const l=snapIn(REVIEW_PURPOSE,d.id);const b=snapIn(BASELINE_PURPOSE,d.id);if(!l)continue;
   const value={value_text:l.value_text,unit:d.unit};
-  if(!b)releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release_first',slots:{series:d.id,period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[l.role]});
+  if(!b){
+   // A truncated (or never recorded) baseline read proves nothing about the baseline: no release_first / revision is produced
+   // and the evidence gap is an explicit coverage fact. 'ok' (read outside the snapshot) and 'missing' stay confirmed absences.
+   const state=readState(m,d.id,BASELINE_PURPOSE);
+   if(state==='truncated'||state===null){baselineGaps.push({fact_id:`cov:base:${d.id}`,kind:'coverage',template:'baseline_unavailable',slots:{series:d.id,state:state??'not_read'},series_id:d.id,source_inputs:[l.role]});continue;}
+   releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release_first',slots:{series:d.id,period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[l.role]});
+  }
   else if(l.period_end>b.period_end)releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release',slots:{series:d.id,prev_period:b.period_end,prev_value:{value_text:b.value_text,unit:d.unit},period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[b.role,l.role]});
   else if(l.period_end===b.period_end&&l.version>b.version)revisions.push({fact_id:`rev:${d.id}`,kind:'revision',template:'revision',slots:{series:d.id,period:l.period_end,from:{value_text:b.value_text,unit:d.unit},to:value},series_id:d.id,period_end:l.period_end,source_inputs:[b.role,l.role]});
  }
@@ -99,7 +105,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const gaps=m.gaps??[];
  const truncated=gaps.find(g=>g.kind==='history_truncated');
  const truncatedFact=(section:'evt'|'ep'):Fact=>({fact_id:`${section}:truncated`,kind:'coverage',template:'events_truncated',slots:{date:truncated!.near,sources:truncated!.reason},source_inputs:[]});
- const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
+ const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(e=>eventFact(e,m));
  const cutDate=utcDate(m.cutoff);const baseDate=utcDate(m.baseline.cutoff);
  const episode_changes:Fact[]=[];
  if(truncated)episode_changes.push(truncatedFact('ep'));
@@ -107,8 +113,8 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
   const atCut=policyEpisodes(events,gaps,cutDate);const atBase=new Map(policyEpisodes(events.filter(e=>e.effective_date<=baseDate),gaps,baseDate).map(e=>[episodeKey(e),e]));
   for(const e of atCut){
    const prior=atBase.get(episodeKey(e));
-   if(!prior)episode_changes.push(episodeFact(e,'opened',events));
-   else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events));
+   if(!prior)episode_changes.push(episodeFact(e,'opened',events,m));
+   else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events,m));
   }
  }
  const asset_moves:Fact[]=[];
@@ -132,6 +138,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
   for(const d of m.catalog)if(d.region===region&&d.role!=='event_source'&&(d.status==='missing'||d.status==='restricted'))
    coverage.push({fact_id:`cov:${d.id}`,kind:'coverage',template:'catalog_unavailable',slots:{series:d.id,status:d.status},series_id:d.id,source_inputs:[]});
  }
+ coverage.push(...baselineGaps);
  return {status:cur?'ok':'insufficient',facts:{region,month,cutoff:m.cutoff,baseline_cutoff:m.baseline.cutoff,snapshot_id:cur?.snapshot_id??null,baseline_snapshot_id:base?.snapshot_id??null,baseline_missing:!base,
   releases,revisions,timeliness,policy_events,episode_changes,asset_moves,coverage}};
 }

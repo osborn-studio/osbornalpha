@@ -17,6 +17,7 @@ type Slots=Fact['slots'];
 const UNIT_SUFFIX:Record<string,Bilingual>={usd_per_bbl:{zh:' 美元/桶',en:' USD/bbl'},cny_per_100usd:{zh:' 元/100 美元',en:' CNY per 100 USD'}};
 const DIRECTION:Record<string,Bilingual>={hike:{zh:'加息',en:'hike'},cut:{zh:'降息',en:'cut'}};
 const STATUS:Record<string,Bilingual>={missing:{zh:'缺失',en:'missing'},restricted:{zh:'受限',en:'restricted'}};
+const READ_STATE:Record<string,Bilingual>={truncated:{zh:'读取被截断',en:'read truncated'},not_read:{zh:'未读取',en:'not read'}};
 const REASON:Record<string,Bilingual>={out_of_coverage:{zh:'月末观测不全',en:'month-end observations incomplete'},non_positive_base:{zh:'基期值非正',en:'non-positive base value'}};
 
 function groupThousands(text:string):string{
@@ -74,6 +75,7 @@ export const TEMPLATES:Record<string,Record<Locale,Renderer>>={
  asset_missing:{zh:c=>`${c.name('series')} ${c.str('base_month')} 至 ${c.str('month')} 无法比较：${c.word(REASON,'reason')}。`,en:c=>`${c.name('series')} ${c.str('base_month')} to ${c.str('month')} not comparable: ${c.word(REASON,'reason')}.`},
  coverage:{zh:c=>`快照目录计数：已核实 ${c.num('verified')}，缺失 ${c.num('missing')}，受限 ${c.num('restricted')}。`,en:c=>`Snapshot catalog counts: verified ${c.num('verified')}, missing ${c.num('missing')}, restricted ${c.num('restricted')}.`},
  events_truncated:{zh:c=>`截至 ${c.str('date')}，政策事件序列读取被截断（${c.str('sources')}），本节无法列出。`,en:c=>`As of ${c.str('date')}, the policy event history read was truncated (${c.str('sources')}); this section cannot be listed.`},
+ baseline_unavailable:{zh:c=>`${c.name('series')} 的基线数据${c.word(READ_STATE,'state')}，无法判断其为新发布或修订。`,en:c=>`${c.name('series')} baseline data unavailable (${c.word(READ_STATE,'state')}); release and revision could not be determined.`},
  catalog_unavailable:{zh:c=>`${c.name('series')} 目录状态：${c.word(STATUS,'status')}。`,en:c=>`${c.name('series')} catalog status: ${c.word(STATUS,'status')}.`},
 };
 export const TEMPLATE_IDS=Object.keys(TEMPLATES);

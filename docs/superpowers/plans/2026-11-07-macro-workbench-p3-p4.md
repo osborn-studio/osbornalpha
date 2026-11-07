@@ -5624,6 +5624,12 @@ describe('buildSnapshotFactsManifest + snapshotFacts (spec §4.5 快照解读的
   expect(m.facts).toEqual(snapshotFacts(m));                                   // the model's fact list is frozen in the manifest
   expect(explanationFacts(m)).toBe(m.facts);
  });
+ it('every source_inputs entry of the snapshot facts (policy event included) resolves to a manifest input role',async()=>{
+  const m=await build();const roles=new Set(m.inputs.map(i=>i.role));
+  expect(m.facts?.some(x=>x.kind==='policy_event')).toBe(true);
+  for(const fact of m.facts??[])for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
+  expect(m.facts?.find(x=>x.kind==='policy_event')?.source_inputs.every(r=>r.endsWith(':evidence'))).toBe(true);
+ });
  it('unknown or failed snapshot → null',async()=>{
   expect(await buildSnapshotFactsManifest(setup(),'snap:US:nope','c')).toBeNull();
   const failed=snap('US','2026-10-16T06:00:00Z',[],{status:'failed'});
@@ -5728,11 +5734,22 @@ export function typedChange(kind:ChangeKind,from:string,to:string):{value_text:s
  const d=subtract(to,from);
  return kind==='bp'?{value_text:toBp(d),unit:'bp'}:{value_text:d,unit:kind};
 }
-export function eventFact(e:StrategyPolicyEvent):Fact{
+/** Manifest input ROLES ('events:<series>:evidence') of the given evidence observation ids (spec §6.1: source_inputs are
+ *  roles, never observation ids). An id with no frozen evidence row is a builder bug and fails loudly. */
+export function evidenceRoles(m:Pick<StrategyManifest,'inputs'>,ids:readonly string[]):string[]{
+ const roles=new Set<string>();
+ for(const id of new Set(ids)){
+  const hit=m.inputs.filter(i=>i.observation_id===id&&i.role.endsWith(':evidence'));
+  if(!hit.length)throw new Error(`unresolved_evidence:${id}`);
+  for(const i of hit)roles.add(i.role);
+ }
+ return [...roles].sort();
+}
+export function eventFact(e:StrategyPolicyEvent,m:Pick<StrategyManifest,'inputs'>):Fact{
  return {fact_id:`evt:${e.effective_date}`,kind:'policy_event',template:'policy_event',
   slots:{date:e.effective_date,upper_from:{value_text:e.upper_from,unit:'pct'},upper_to:{value_text:e.upper_to,unit:'pct'},
    lower_from:{value_text:e.lower_from,unit:'pct'},lower_to:{value_text:e.lower_to,unit:'pct'},change:{value_text:e.change_bp,unit:'bp'}},
-  period_end:e.effective_date,source_inputs:[...e.evidence]};
+  period_end:e.effective_date,source_inputs:evidenceRoles(m,e.evidence)};
 }
 /** null = unknown or failed snapshot (the caller answers 404). */
 export async function buildSnapshotFactsManifest(port:StrategyReadPort,snapshotId:string,codeVersion:string):Promise<StrategyManifest|null>{
@@ -5762,7 +5779,7 @@ export function snapshotFacts(m:StrategyManifest):Fact[]{
   slots:{a:SPREAD.a,b:SPREAD.b,period:a.period_end,a_value:{value_text:a.value_text,unit:'pct'},b_value:{value_text:b.value_text,unit:'pct'},value:{value_text:subtract(a.value_text,b.value_text),unit:'pp_level'}},
   period_end:a.period_end,source_inputs:[a.role,b.role]});
  const events=[...(m.events??[])].sort((x,y)=>x.effective_date<y.effective_date?-1:x.effective_date>y.effective_date?1:0);
- const last=events[events.length-1];if(last)out.push(eventFact(last));
+ const last=events[events.length-1];if(last)out.push(eventFact(last,m));
  return out;
 }
 /** Review explanation manifest: the stored review manifest's frozen content re-keyed as 'explain_facts' for that immutable
@@ -5906,6 +5923,26 @@ describe('reviewFromManifest — seven sections (spec §6.2)',()=>{
   const {facts}=reviewFromManifest(await buildReviewManifest(port([thin,CUR_SNAP]),'US','2026-10','c'));
   expect(byId(facts.releases).get('rel:US_CPI_YOY')?.template).toBe('release_first');
  });
+ it('an incomplete baseline read (unresolved snapshot id) yields no release_first / revision, only explicit baseline_unavailable facts',async()=>{
+  const broken=snap('US','2026-09-14T06:00:00Z',[...BASE_ROWS.map(o=>o.observation_id),'obs:not-in-store']);
+  const m=await buildReviewManifest(port([broken,CUR_SNAP]),'US','2026-10','c');
+  expect(m.reads).toContainEqual({series_id:'US_CPI_YOY',purpose:'review_base',state:'truncated'});
+  const {facts}=reviewFromManifest(m);
+  expect(facts.releases).toEqual([]);expect(facts.revisions).toEqual([]);
+  const gap=byId(facts.coverage).get('cov:base:US_CPI_YOY');
+  expect(gap).toMatchObject({kind:'coverage',template:'baseline_unavailable',slots:{series:'US_CPI_YOY',state:'truncated'},series_id:'US_CPI_YOY',source_inputs:['review:US_CPI_YOY:latest']});
+  expect(ids(facts.coverage)).toEqual(expect.arrayContaining(['cov:base:US_UNRATE','cov:counts']));
+  expect(facts.baseline_missing).toBe(false);
+ });
+ it('every emitted source_inputs entry is a manifest input role (event and episode facts included)',async()=>{
+  const m=await buildReviewManifest(port(),'US','2026-10','c');
+  const roles=new Set(m.inputs.map(i=>i.role));
+  const f=reviewFromManifest(m).facts;
+  const all=[...f.releases,...f.revisions,...f.timeliness,...f.policy_events,...f.episode_changes,...f.asset_moves,...f.coverage];
+  expect(f.policy_events.length+f.episode_changes.length).toBeGreaterThan(0);
+  for(const fact of all)for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
+  expect(byId(f.policy_events).get('evt:2026-10-28')?.source_inputs).toEqual(['events:US_FED_TARGET_LOWER_D:evidence','events:US_FED_TARGET_UPPER_D:evidence']);
+ });
  it('non-positive base on a pct asset → asset_missing(non_positive_base)',async()=>{
   const m=await buildReviewManifest(port(),'US','2026-10','c');
   const bad={...m,inputs:m.inputs.map(i=>i.role==='asset_base:US_WTI:month_end'?{...i,value_text:'-5'}:i)};
@@ -5976,8 +6013,8 @@ import type {Episode,Fact,FrozenSeriesDef,ManifestInput,ManifestRead,Region,Revi
 import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
-import {eventFact,levelIndicators} from './facts';
-import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,utcDate} from './manifest';
+import {eventFact,evidenceRoles,levelIndicators} from './facts';
+import {inputRole,inputsWithRole,manifestBuilder,manifestHash,monthCutoff,monthEnd,monthOf,prevMonth,readState,utcDate} from './manifest';
 import {pctRatio,sign,subtract,toBp} from './numeric';
 import {readPolicyEvents} from './policy-events';
 import type {StrategyReadPort} from './port';
@@ -6027,11 +6064,11 @@ export async function buildReviewManifest(port:StrategyReadPort,region:Region,mo
 }
 
 const episodeKey=(e:Pick<Episode,'direction'|'start'>)=>`${e.direction}:${e.start}`;
-function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyPolicyEvent[]):Fact{
+function episodeFact(e:Episode,change:'opened'|'ended',events:readonly StrategyPolicyEvent[],m:StrategyManifest):Fact{
  const evidence=events.filter(x=>x.effective_date>=e.start&&x.effective_date<=e.end).flatMap(x=>[...x.evidence]);
  return {fact_id:`ep:${episodeKey(e)}:${change}`,kind:'episode',template:change==='opened'?'episode_opened':'episode_ended',
   slots:{direction:e.direction,start:e.start,end:e.end,events:{value_text:String(e.events),unit:'count'},upper_from:{value_text:e.upper_from,unit:'pct'},upper_to:{value_text:e.upper_to,unit:'pct'},cumulative:{value_text:e.cumulative_bp,unit:'bp'}},
-  period_end:e.end,source_inputs:[...new Set(evidence)]};
+  period_end:e.end,source_inputs:evidenceRoles(m,evidence)};
 }
 /** Pure: the seven sections from the manifest alone. status = 'insufficient' when the month has no snapshot (reason no_snapshot). */
 export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;facts:ReviewFacts}{
@@ -6040,11 +6077,17 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const cur=m.snapshots[region];const base=m.baseline[region];
  const snapIn=(purpose:string,id:string)=>m.inputs.find(i=>i.role===inputRole(purpose,id,'latest')&&i.source.kind==='snapshot')??null;
  const indicators=levelIndicators(m.catalog,region).filter(d=>d.status==='active');
- const releases:Fact[]=[];const revisions:Fact[]=[];
+ const releases:Fact[]=[];const revisions:Fact[]=[];const baselineGaps:Fact[]=[];
  if(cur&&base)for(const d of indicators){
   const l=snapIn(REVIEW_PURPOSE,d.id);const b=snapIn(BASELINE_PURPOSE,d.id);if(!l)continue;
   const value={value_text:l.value_text,unit:d.unit};
-  if(!b)releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release_first',slots:{series:d.id,period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[l.role]});
+  if(!b){
+   // A truncated (or never recorded) baseline read proves nothing about the baseline: no release_first / revision is produced
+   // and the evidence gap is an explicit coverage fact. 'ok' (read outside the snapshot) and 'missing' stay confirmed absences.
+   const state=readState(m,d.id,BASELINE_PURPOSE);
+   if(state==='truncated'||state===null){baselineGaps.push({fact_id:`cov:base:${d.id}`,kind:'coverage',template:'baseline_unavailable',slots:{series:d.id,state:state??'not_read'},series_id:d.id,source_inputs:[l.role]});continue;}
+   releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release_first',slots:{series:d.id,period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[l.role]});
+  }
   else if(l.period_end>b.period_end)releases.push({fact_id:`rel:${d.id}`,kind:'release',template:'release',slots:{series:d.id,prev_period:b.period_end,prev_value:{value_text:b.value_text,unit:d.unit},period:l.period_end,value},series_id:d.id,period_end:l.period_end,source_inputs:[b.role,l.role]});
   else if(l.period_end===b.period_end&&l.version>b.version)revisions.push({fact_id:`rev:${d.id}`,kind:'revision',template:'revision',slots:{series:d.id,period:l.period_end,from:{value_text:b.value_text,unit:d.unit},to:value},series_id:d.id,period_end:l.period_end,source_inputs:[b.role,l.role]});
  }
@@ -6060,7 +6103,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
  const gaps=m.gaps??[];
  const truncated=gaps.find(g=>g.kind==='history_truncated');
  const truncatedFact=(section:'evt'|'ep'):Fact=>({fact_id:`${section}:truncated`,kind:'coverage',template:'events_truncated',slots:{date:truncated!.near,sources:truncated!.reason},source_inputs:[]});
- const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(eventFact);
+ const policy_events=truncated?[truncatedFact('evt')]:events.filter(e=>monthOf(e.effective_date)===month).map(e=>eventFact(e,m));
  const cutDate=utcDate(m.cutoff);const baseDate=utcDate(m.baseline.cutoff);
  const episode_changes:Fact[]=[];
  if(truncated)episode_changes.push(truncatedFact('ep'));
@@ -6068,8 +6111,8 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
   const atCut=policyEpisodes(events,gaps,cutDate);const atBase=new Map(policyEpisodes(events.filter(e=>e.effective_date<=baseDate),gaps,baseDate).map(e=>[episodeKey(e),e]));
   for(const e of atCut){
    const prior=atBase.get(episodeKey(e));
-   if(!prior)episode_changes.push(episodeFact(e,'opened',events));
-   else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events));
+   if(!prior)episode_changes.push(episodeFact(e,'opened',events,m));
+   else if(prior.ongoing&&!e.ongoing)episode_changes.push(episodeFact(e,'ended',events,m));
   }
  }
  const asset_moves:Fact[]=[];
@@ -6093,6 +6136,7 @@ export function reviewFromManifest(m:StrategyManifest):{status:ReviewStatus;fact
   for(const d of m.catalog)if(d.region===region&&d.role!=='event_source'&&(d.status==='missing'||d.status==='restricted'))
    coverage.push({fact_id:`cov:${d.id}`,kind:'coverage',template:'catalog_unavailable',slots:{series:d.id,status:d.status},series_id:d.id,source_inputs:[]});
  }
+ coverage.push(...baselineGaps);
  return {status:cur?'ok':'insufficient',facts:{region,month,cutoff:m.cutoff,baseline_cutoff:m.baseline.cutoff,snapshot_id:cur?.snapshot_id??null,baseline_snapshot_id:base?.snapshot_id??null,baseline_missing:!base,
   releases,revisions,timeliness,policy_events,episode_changes,asset_moves,coverage}};
 }
@@ -6178,6 +6222,11 @@ describe('replay review US 2026-10 (spec §6.2, §12: the view reads the committ
  });
  it('reviewFromManifest(committed manifest) deep-equals the committed expected facts',()=>{
   expect(JSON.parse(JSON.stringify(reviewFromManifest(fx().manifest)))).toEqual(fx().expected);
+ });
+ it('every committed fact source_inputs entry resolves to a role of the committed manifest',()=>{
+  const roles=new Set(fx().manifest.inputs.map(i=>i.role));const f=fx().expected.facts;
+  const all=[...f.releases,...f.revisions,...f.timeliness,...f.policy_events,...f.episode_changes,...f.asset_moves,...f.coverage];
+  for(const fact of all)for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
  });
  it('the builder still produces the committed manifest (same hash) from the scenario',async()=>{
   expect(manifestHash(await buildReview()),'builder output changed: re-record with MACRO_REPLAY_RECORD=1 only if the change is intended').toBe(fx().manifest_hash);
@@ -6482,6 +6531,7 @@ const SAMPLES:[Fact,string,string][]=[
  [fact('asset_missing',{series:'US_WTI',base_month:'2026-09',month:'2026-10',reason:'out_of_coverage'}),'WTI 原油 2026-09 至 2026-10 无法比较：月末观测不全。','WTI crude 2026-09 to 2026-10 not comparable: month-end observations incomplete.'],
  [fact('coverage',{verified:v('1234','count'),missing:v('4','count'),restricted:v('5','count')}),'快照目录计数：已核实 1,234，缺失 4，受限 5。','Snapshot catalog counts: verified 1,234, missing 4, restricted 5.'],
  [fact('events_truncated',{date:'2026-11-03',sources:'US_FED_TARGET_UPPER_D'}),'截至 2026-11-03，政策事件序列读取被截断（US_FED_TARGET_UPPER_D），本节无法列出。','As of 2026-11-03, the policy event history read was truncated (US_FED_TARGET_UPPER_D); this section cannot be listed.'],
+ [fact('baseline_unavailable',{series:'US_CPI_YOY',state:'truncated'}),'美国 CPI 同比 的基线数据读取被截断，无法判断其为新发布或修订。','US CPI YoY baseline data unavailable (read truncated); release and revision could not be determined.'],
  [fact('catalog_unavailable',{series:'US_ISM_PMI',status:'missing'}),'US_ISM_PMI 目录状态：缺失。','US_ISM_PMI catalog status: missing.'],
 ];
 
@@ -6576,6 +6626,7 @@ type Slots=Fact['slots'];
 const UNIT_SUFFIX:Record<string,Bilingual>={usd_per_bbl:{zh:' 美元/桶',en:' USD/bbl'},cny_per_100usd:{zh:' 元/100 美元',en:' CNY per 100 USD'}};
 const DIRECTION:Record<string,Bilingual>={hike:{zh:'加息',en:'hike'},cut:{zh:'降息',en:'cut'}};
 const STATUS:Record<string,Bilingual>={missing:{zh:'缺失',en:'missing'},restricted:{zh:'受限',en:'restricted'}};
+const READ_STATE:Record<string,Bilingual>={truncated:{zh:'读取被截断',en:'read truncated'},not_read:{zh:'未读取',en:'not read'}};
 const REASON:Record<string,Bilingual>={out_of_coverage:{zh:'月末观测不全',en:'month-end observations incomplete'},non_positive_base:{zh:'基期值非正',en:'non-positive base value'}};
 
 function groupThousands(text:string):string{
@@ -6633,6 +6684,7 @@ export const TEMPLATES:Record<string,Record<Locale,Renderer>>={
  asset_missing:{zh:c=>`${c.name('series')} ${c.str('base_month')} 至 ${c.str('month')} 无法比较：${c.word(REASON,'reason')}。`,en:c=>`${c.name('series')} ${c.str('base_month')} to ${c.str('month')} not comparable: ${c.word(REASON,'reason')}.`},
  coverage:{zh:c=>`快照目录计数：已核实 ${c.num('verified')}，缺失 ${c.num('missing')}，受限 ${c.num('restricted')}。`,en:c=>`Snapshot catalog counts: verified ${c.num('verified')}, missing ${c.num('missing')}, restricted ${c.num('restricted')}.`},
  events_truncated:{zh:c=>`截至 ${c.str('date')}，政策事件序列读取被截断（${c.str('sources')}），本节无法列出。`,en:c=>`As of ${c.str('date')}, the policy event history read was truncated (${c.str('sources')}); this section cannot be listed.`},
+ baseline_unavailable:{zh:c=>`${c.name('series')} 的基线数据${c.word(READ_STATE,'state')}，无法判断其为新发布或修订。`,en:c=>`${c.name('series')} baseline data unavailable (${c.word(READ_STATE,'state')}); release and revision could not be determined.`},
  catalog_unavailable:{zh:c=>`${c.name('series')} 目录状态：${c.word(STATUS,'status')}。`,en:c=>`${c.name('series')} catalog status: ${c.word(STATUS,'status')}.`},
 };
 export const TEMPLATE_IDS=Object.keys(TEMPLATES);

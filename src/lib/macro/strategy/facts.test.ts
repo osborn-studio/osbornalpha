@@ -48,6 +48,12 @@ describe('buildSnapshotFactsManifest + snapshotFacts (spec §4.5 快照解读的
   expect(m.facts).toEqual(snapshotFacts(m));                                   // the model's fact list is frozen in the manifest
   expect(explanationFacts(m)).toBe(m.facts);
  });
+ it('every source_inputs entry of the snapshot facts (policy event included) resolves to a manifest input role',async()=>{
+  const m=await build();const roles=new Set(m.inputs.map(i=>i.role));
+  expect(m.facts?.some(x=>x.kind==='policy_event')).toBe(true);
+  for(const fact of m.facts??[])for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
+  expect(m.facts?.find(x=>x.kind==='policy_event')?.source_inputs.every(r=>r.endsWith(':evidence'))).toBe(true);
+ });
  it('unknown or failed snapshot → null',async()=>{
   expect(await buildSnapshotFactsManifest(setup(),'snap:US:nope','c')).toBeNull();
   const failed=snap('US','2026-10-16T06:00:00Z',[],{status:'failed'});

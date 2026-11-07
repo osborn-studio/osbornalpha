@@ -175,6 +175,11 @@ describe('replay review US 2026-10 (spec §6.2, §12: the view reads the committ
  it('reviewFromManifest(committed manifest) deep-equals the committed expected facts',()=>{
   expect(JSON.parse(JSON.stringify(reviewFromManifest(fx().manifest)))).toEqual(fx().expected);
  });
+ it('every committed fact source_inputs entry resolves to a role of the committed manifest',()=>{
+  const roles=new Set(fx().manifest.inputs.map(i=>i.role));const f=fx().expected.facts;
+  const all=[...f.releases,...f.revisions,...f.timeliness,...f.policy_events,...f.episode_changes,...f.asset_moves,...f.coverage];
+  for(const fact of all)for(const r of fact.source_inputs)expect(roles.has(r),`${fact.fact_id}:${r}`).toBe(true);
+ });
  it('the builder still produces the committed manifest (same hash) from the scenario',async()=>{
   expect(manifestHash(await buildReview()),'builder output changed: re-record with MACRO_REPLAY_RECORD=1 only if the change is intended').toBe(fx().manifest_hash);
  });
