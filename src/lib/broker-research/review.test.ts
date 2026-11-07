@@ -35,6 +35,10 @@ describe('review services',()=>{
   const a=await markAbsent(d,reportId,{field:'analyst',targetKey:null,page:1},ADMIN_ID);
   expect((await d.db.listFields(reportId)).find(f=>f.field_id===a.fieldId)).toMatchObject({status:'absent',value_text:'ABSENT',extractor:`human:${ADMIN_ID}`});
  });
+ it('rejects an absent observation on a nonexistent parse page',async()=>{
+  const {reportId}=await extracted(d);
+  await expect(markAbsent(d,reportId,{field:'analyst',targetKey:null,page:9999},ADMIN_ID)).rejects.toMatchObject({code:'page_not_found',status:404});
+ });
  it('binds metadata, materializes and records title disclosure results',async()=>{
   const {reportId}=await extracted(d);const inst=await d.db.upsertInstitution({name_en:'Synthetic Broker Research Ltd',name_zh:null,aliases:[],kind:'broker',rating_disclosure_url:null});
   const b=await bindReport(d,reportId,{institutionId:inst,scope:'single_issuer',titlePublic:'Initiation'},ADMIN_ID);

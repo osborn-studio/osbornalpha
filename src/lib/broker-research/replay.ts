@@ -30,9 +30,18 @@ const candidateValueMatches=(c:CandidateFieldInput,v:TypedValue)=>c.value_text==
 async function candidatesOf(deps:RDeps,run:RunRow,artifact:F3Artifact,extractor:string):Promise<CandidateFieldInput[]|null>{
  const bytes=run.response_path?await deps.storage.download(run.response_path):null;
  if(!bytes)return null;
- const calls=(JSON.parse(new TextDecoder().decode(bytes)) as {calls:{chunk:number;content:string|null}[]}).calls;
+ const envelope:unknown=JSON.parse(new TextDecoder().decode(bytes));
+ if(!envelope||typeof envelope!=='object'||!('calls' in envelope)||!Array.isArray(envelope.calls))return null;
+ const calls=envelope.calls as {chunk:number;content:string|null}[];
  const last=new Map<number,ChunkExtraction['extraction']>();
- for(const c of calls){if(c.content===null)continue;let v:unknown;try{v=JSON.parse(c.content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{continue;}const r=validateExtraction(v);if(r.ok)last.set(c.chunk,r.value);}
+ const invalid=new Set<number>();
+ for(const c of calls){
+  if(!c||!Number.isSafeInteger(c.chunk)||c.chunk<0||!(c.content===null||typeof c.content==='string'))return null;
+  if(c.content===null){invalid.add(c.chunk);continue;}
+  let v:unknown;try{v=JSON.parse(c.content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{invalid.add(c.chunk);continue;}
+  const r=validateExtraction(v);if(r.ok){last.set(c.chunk,r.value);invalid.delete(c.chunk);}else invalid.add(c.chunk);
+ }
+ if(invalid.size)return null;
  const merge=mergeChunks([...last.entries()].sort(([a],[b])=>a-b).map(([chunk,extraction])=>({chunk,extraction})));
  return buildCandidateRows(merge,{pages:artifact.pages,extractor});
 }

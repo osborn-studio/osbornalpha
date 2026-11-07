@@ -77,6 +77,16 @@ describe('runExtract',()=>{
   d.llm={info:()=>null,complete:async()=>{throw new LlmError('llm_unavailable');}};
   await expect(runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()})).rejects.toMatchObject({code:'llm_unavailable',status:503});
  });
+ it('stops further model calls after licence authorization is revoked mid-run',async()=>{
+  const doc=await parsedDoc(d),base=recordedLlmPort([EXTRACT_RESPONSE,EXTRACT_RESPONSE,EXTRACT_RESPONSE]);let calls=0;
+  d.llm={info:()=>({...base.info()!,contextTokens:1000}),complete:async req=>{
+   calls++;if(calls===1)await d.db.updateLicence(doc.licence_id,{allows_llm_processing:false});
+   return base.complete(req);
+  }};
+  const r=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  expect(r).toMatchObject({status:'failed',errorCode:'licence_forbids_processing'});
+  expect(calls).toBe(1);
+ });
  it('supersedes old candidate rows on repeat',async()=>{
   d=memoryBrokerDeps({llm:recordedLlmPort([EXTRACT_RESPONSE,EXTRACT_RESPONSE])});const doc=await parsedDoc(d);
   const a=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()}),b=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});

@@ -126,4 +126,15 @@ describe('upload state machine',()=>{
   const s=await signedReadUrl(d,i.intentId,ADMIN_ID);
   expect(s.payload).toMatchObject({expiresIn:600});expect(s.log).toMatchObject({action:'signed_url_issued',document_id:i.intentId});
  });
+ it('durably logs before creating a private signed read URL',async()=>{
+  const i=await upload();await commitIntent(d,i.intentId,ADMIN_ID);
+  const calls:string[]=[];const log=d.db.logAccess.bind(d.db),sign=d.storage.createSignedUrl.bind(d.storage);
+  d.db.logAccess=async row=>{calls.push('log');await log(row);};
+  d.storage.createSignedUrl=async(path,seconds)=>{calls.push('sign');return sign(path,seconds);};
+  await signedReadUrl(d,i.intentId,ADMIN_ID);
+  expect(calls).toEqual(['log','sign']);
+  calls.length=0;d.db.logAccess=async()=>{throw new Error('offline');};
+  await expect(signedReadUrl(d,i.intentId,ADMIN_ID)).rejects.toMatchObject({code:'access_log_failed'});
+  expect(calls).toEqual([]);
+ });
 });

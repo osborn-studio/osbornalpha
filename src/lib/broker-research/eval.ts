@@ -64,6 +64,12 @@ export async function authorizeGoldDoc(deps:Pick<BrokerDeps,'db'|'now'>,sha256:s
 export const HEARTBEAT_MS=60_000;
 export interface GoldEvalResult{receiptId:string|null;authorized:AuthorizedDoc[];corpusHash:string;behaviorDigest:string;approved:boolean;stats:ReturnType<typeof evalStats>|null}
 export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dryRun:boolean;deadlineMs?:number;log?:(line:string)=>void}):Promise<GoldEvalResult>{
+ const seen=new Set<string>();
+ for(const g of docs){
+  if(!/^[0-9a-f]{64}$/.test(g.sha256)||seen.has(g.sha256)||!Array.isArray(g.fields)||!Array.isArray(g.absent))throw new BrokerError('invalid_gold_manifest',400);
+  seen.add(g.sha256);
+ }
+ if(!docs.length)throw new BrokerError('invalid_gold_manifest',400);
  const info=deps.llm.info();if(!info)throw new BrokerError('llm_unavailable',503);
  const authorized:AuthorizedDoc[]=[];const versions=new Set<string>();
  for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,parse_run_id:a.parseRun.run_id,artifact_hash:a.parseRun.artifact_hash,extractor_version:a.parseRun.extractor_version});versions.add(a.parseRun.extractor_version??'unknown');}

@@ -22,6 +22,7 @@ export class StorageError extends Error{
  constructor(readonly code:'storage_failed'|'storage_invalid_path'|'storage_not_found',message?:string){super(message??code);this.name='StorageError';}
 }
 export function assertObjectPath(p:string):void{if(typeof p!=='string'||!PATH_RE.test(p))throw new StorageError('storage_invalid_path',String(p).slice(0,120));}
+function assertStagingPath(p:string):void{assertObjectPath(p);if(!p.startsWith('staging/'))throw new StorageError('storage_invalid_path',p);}
 function assertPrefix(p:string):void{if(typeof p!=='string'||!PREFIX_RE.test(p))throw new StorageError('storage_invalid_path',String(p).slice(0,120));}
 export interface BrokerStorage{
  createSignedUploadUrl(path:string):Promise<{url:string;token:string}>;
@@ -41,9 +42,9 @@ export function supabaseBrokerStorage(admin:SupabaseClient):BrokerStorage{
  const b=()=>admin.storage.from(BROKER_BUCKET);
  const fail=(op:string,e:SbError|null)=>new StorageError('storage_failed',`${op}:${e?.message??'no_data'}`);
  return {
-  async createSignedUploadUrl(path){assertObjectPath(path);const {data,error}=await b().createSignedUploadUrl(path);if(error||!data)throw fail('signed_upload',error as SbError|null);return {url:data.signedUrl,token:data.token};},
+  async createSignedUploadUrl(path){assertStagingPath(path);const {data,error}=await b().createSignedUploadUrl(path);if(error||!data)throw fail('signed_upload',error as SbError|null);return {url:data.signedUrl,token:data.token};},
   async download(path){assertObjectPath(path);const {data,error}=await b().download(path);if(error){if(isNotFound(error as SbError))return null;throw fail('download',error as SbError);}return new Uint8Array(await data.arrayBuffer());},
-  async upload(path,body,contentType){assertObjectPath(path);const {error}=await b().upload(path,body,{contentType,upsert:false});if(!error)return 'stored';if(isExists(error as SbError))return 'exists';throw fail('upload',error as SbError);},
+  async upload(path,body,contentType){assertObjectPath(path);if((typeof body==='string'?new TextEncoder().encode(body).byteLength:body.byteLength)>MAX_OBJECT_BYTES)throw new StorageError('storage_failed','upload:too_large');const {error}=await b().upload(path,body,{contentType,upsert:false});if(!error)return 'stored';if(isExists(error as SbError))return 'exists';throw fail('upload',error as SbError);},
   async move(from,to){assertObjectPath(from);assertObjectPath(to);const {error}=await b().move(from,to);if(!error)return 'moved';if(isExists(error as SbError))return 'target_exists';if(isNotFound(error as SbError))return 'missing';throw fail('move',error as SbError);},
   async exists(path){assertObjectPath(path);const {data,error}=await b().exists(path);if(error&&!isNotFound(error as SbError))throw fail('exists',error as SbError);return data===true;},
   async remove(paths){paths.forEach(assertObjectPath);if(!paths.length)return;const {error}=await b().remove(paths);if(error)throw fail('remove',error as SbError);},
@@ -67,10 +68,10 @@ export function memoryBrokerStorage():MemoryBrokerStorage{
  const guard=(op:string)=>{const m=failures.get(op);if(m!==undefined){failures.delete(op);throw new StorageError('storage_failed',`${op}:${m}`);}};
  const bytesOf=(b:Uint8Array|string)=>typeof b==='string'?new TextEncoder().encode(b):new Uint8Array(b);
  return {objects,
-  putSigned(path,token,bytes){assertObjectPath(path);if(signed.get(path)!==token||objects.has(path)||bytes.byteLength>MAX_OBJECT_BYTES)return 'rejected';objects.set(path,{bytes:new Uint8Array(bytes),contentType:'application/pdf'});signed.delete(path);return 'stored';},
+  putSigned(path,token,bytes){assertStagingPath(path);if(signed.get(path)!==token||objects.has(path)||bytes.byteLength>MAX_OBJECT_BYTES)return 'rejected';objects.set(path,{bytes:new Uint8Array(bytes),contentType:'application/pdf'});signed.delete(path);return 'stored';},
   failNext(op,message='injected'){failures.set(op,message);},
   read:(p)=>{const o=objects.get(p);return o?new Uint8Array(o.bytes):undefined;},text:(p)=>{const o=objects.get(p);return o?new TextDecoder().decode(o.bytes):undefined;},
-  async createSignedUploadUrl(path){guard('createSignedUploadUrl');assertObjectPath(path);const token=`tok-${++n}`;signed.set(path,token);return {url:`memory://upload/${path}?token=${token}`,token};},
+  async createSignedUploadUrl(path){guard('createSignedUploadUrl');assertStagingPath(path);const token=`tok-${++n}`;signed.set(path,token);return {url:`memory://upload/${path}?token=${token}`,token};},
   async download(path){guard('download');assertObjectPath(path);const o=objects.get(path);return o?new Uint8Array(o.bytes):null;},
   async upload(path,body,contentType){guard('upload');assertObjectPath(path);if(objects.has(path))return 'exists';const bytes=bytesOf(body);if(bytes.byteLength>MAX_OBJECT_BYTES)throw new StorageError('storage_failed','upload:too_large');objects.set(path,{bytes,contentType});return 'stored';},
   async move(from,to){guard('move');assertObjectPath(from);assertObjectPath(to);const o=objects.get(from);if(!o)return 'missing';if(objects.has(to))return 'target_exists';objects.set(to,o);objects.delete(from);return 'moved';},

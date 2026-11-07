@@ -51,6 +51,19 @@ describe('replayFromSnapshot',()=>{
   expect(result.mismatches).toContainEqual({field_id:rows[0].field_id,check:'response_unreadable'});
   expect(ex.reportId).toBe(pub.report_id);
  });
+ it('does not silently skip a malformed stored call during replay',async()=>{
+  const {d,rows,pub}=await extracted();const run=(await d.db.getRun(rows[0].run_id!))!;
+  const raw=JSON.parse(d.storage.text(run.response_path!)!) as {calls:{content:string|null}[]};
+  raw.calls.push({content:'not json'});
+  d.storage.objects.set(run.response_path!,{bytes:new TextEncoder().encode(JSON.stringify(raw)),contentType:'application/json'});
+  const result=await replayFromSnapshot(d,pub);
+  expect(result.mismatches).toContainEqual({field_id:rows[0].field_id,check:'response_unreadable'});
+ });
+ it('reports a malformed response envelope as unreadable',async()=>{
+  const {d,rows,pub}=await extracted();const run=(await d.db.getRun(rows[0].run_id!))!;
+  d.storage.objects.set(run.response_path!,{bytes:new TextEncoder().encode('{"calls":{}}'),contentType:'application/json'});
+  expect((await replayFromSnapshot(d,pub)).mismatches).toContainEqual({field_id:rows[0].field_id,check:'response_unreadable'});
+ });
  it('replays an old publication from its snapshot only: editing the same field afterwards (new span, framed) changes nothing (P-R1-10)',async()=>{
   const {d,ex,rows,pub}=await extracted();
   const before=await replayFromSnapshot(d,pub);expect(before.ok).toBe(true);

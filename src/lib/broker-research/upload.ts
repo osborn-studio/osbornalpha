@@ -151,6 +151,8 @@ export async function documentForAccess(deps:Pick<CoreDeps,'db'>,documentId:stri
 }
 export async function signedReadUrl(deps:UploadDeps,documentId:string,by:string):Promise<{payload:{url:string;expiresIn:number};log:AccessLogInput}>{
  const doc=await documentForAccess(deps,documentId);
+ const log:AccessLogInput={document_id:documentId,user_id:by,action:'signed_url_issued',detail:{expires_in:SIGNED_READ_SECONDS}};
+ try{await deps.db.logAccess(log);}catch{throw new BrokerError('access_log_failed',500);}
  const url=await deps.storage.createSignedUrl(doc.storage_path,SIGNED_READ_SECONDS);
- return {payload:{url,expiresIn:SIGNED_READ_SECONDS},log:{document_id:documentId,user_id:by,action:'signed_url_issued',detail:{expires_in:SIGNED_READ_SECONDS}}};
+ return {payload:{url,expiresIn:SIGNED_READ_SECONDS},log};
 }

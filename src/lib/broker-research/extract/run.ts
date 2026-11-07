@@ -3,6 +3,7 @@ import {finishBatch,startBatch,emptyCounts} from '../../dq/batches';
 import type {BatchCounts,BatchError} from '../../dq/batches';
 import {behaviorDigest} from '../behavior';
 import {BrokerError,conflict} from '../errors';
+import {processingAllowed,utcToday} from '../licences';
 import {LEASE_SECONDS,artifactLoader,claimForProcessing,failUnavailable} from '../parse';
 import type {F3Artifact,F3Page} from '../ports/f3';
 import {LlmError} from '../ports/llm';
@@ -41,13 +42,14 @@ export class ExtractFailure extends Error{constructor(readonly code:string,reado
 export const extractorOf=(info:LlmInfo)=>`llm:${info.modelId}@${info.registryHash}`;
 export const statedTickers=(m:MergeResult)=>m.targets.flatMap(t=>t.tickers_as_stated.map(s=>({tickerAsStated:s,exchangeHint:t.exchange_hint})));
 /** DB-free extraction core shared with evaluation and replay. */
-export async function extractCandidates(llm:LlmPort,info:LlmInfo,artifact:F3Artifact,o:{deadline:Date;now:()=>Date}):Promise<CandidateBatch>{
+export async function extractCandidates(llm:LlmPort,info:LlmInfo,artifact:F3Artifact,o:{deadline:Date;now:()=>Date;beforeCall?:()=>Promise<void>}):Promise<CandidateBatch>{
  const schemaText=JSON.stringify(EXTRACT_SCHEMA),chunks=chunkPages(artifact.pages,info.contextTokens,estimateTokens(EXTRACT_PROMPT+schemaText)+MAX_OUTPUT_TOKENS);
  const requests:CallRecord[]=[],responses:ResponseRecord[]=[],parsed:ChunkExtraction[]=[];let retries=0;
  for(const [ci,pages] of chunks.entries()){
   let feedback='',ok:DocumentExtraction|null=null;
   for(let attempt=1;attempt<=1+SCHEMA_RETRIES&&!ok;attempt++){
    if(o.deadline.getTime()-o.now().getTime()<MIN_CALL_BUDGET_MS)throw new ExtractFailure('extract_deadline',requests,responses);
+   try{await o.beforeCall?.();}catch(e){throw new ExtractFailure(e instanceof BrokerError?e.code:'lease_lost',requests,responses);}
    const user=`JSON Schema:\n${schemaText}\n\nReport chunk ${ci+1}/${chunks.length}:\n${pages.map(p=>header(p)+p.text).join('\n')}${feedback}`;
    requests.push({chunk:ci,attempt,system:EXTRACT_PROMPT,user,max_tokens:MAX_OUTPUT_TOKENS});
    let content:string;
@@ -98,7 +100,14 @@ export async function runExtract(deps:BrokerDeps,documentId:string,by:string,opt
   return {runId,reportId:report.report_id,status:'failed',errorCode:code,counts,batchStatus};
  };
  let batch:CandidateBatch,artifact:F3Artifact;
- try{artifact=await artifactLoader(deps)(parseRun.run_id);batch=await extractCandidates(deps.llm,info,artifact,{deadline:opts.deadline,now:deps.now});}
+ try{artifact=await artifactLoader(deps)(parseRun.run_id);batch=await extractCandidates(deps.llm,info,artifact,{deadline:opts.deadline,now:deps.now,beforeCall:async()=>{
+  const current=await deps.db.getDocument(documentId);
+  if(!current||current.status==='withdrawn')throw new BrokerError('document_withdrawn',410);
+  const renewal=await deps.db.renewLease(documentId,token,LEASE_SECONDS);
+  if(renewal!=='ok')throw conflict('lease_lost');
+  const currentLicence=await deps.db.getLicence(doc.licence_id);
+  if(!currentLicence||currentLicence.version!==licence.version||!processingAllowed(currentLicence,utcToday(deps.now())))throw conflict('licence_forbids_processing');
+ }});}
  catch(e){if(e instanceof ExtractFailure)return fail(e.code,e.requests,e.responses);if(e instanceof BrokerError)return fail(e.code);throw e;}
  const stored=await storeCalls(deps,documentId,token,runId,batch.requests,batch.responses);
  if(stored!=='ok')return fail(stored==='document_withdrawn'?'lease_lost':stored,batch.requests,batch.responses,true);

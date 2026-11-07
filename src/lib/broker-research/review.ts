@@ -81,6 +81,7 @@ export async function addField(deps:RDeps,reportId:string,i:AddInput,by:string):
 export async function markAbsent(deps:RDeps,reportId:string,i:{field:FieldName;targetKey:string|null;page:number},by:string):Promise<{fieldId:string;receipt:MaterializeReceipt;rules:RulesOutcome}>{
  if(!ABSENT_FIELDS.includes(i.field))throw inv('field');if(!Number.isSafeInteger(i.page)||i.page<1)throw inv('page');
  const report=await reportOr404(deps,reportId),runId=await currentParseRun(deps,report);
+ if(!(await artifactLoader(deps)(runId)).pages.some(p=>p.page===i.page))throw notFound('page_not_found');
  const r=await deps.db.insertHumanField(reportId,{target_key:i.targetKey,field:i.field,occurrence:1,page:i.page,char_start:null,char_end:null,value_source_text:null,value_text:'ABSENT',value_num:null,value_currency:null,value_unit:null,value_date:null,parse_run_id:runId,status:'absent'},by);
  return {...r,rules:await afterChange(deps,reportId)};
 }

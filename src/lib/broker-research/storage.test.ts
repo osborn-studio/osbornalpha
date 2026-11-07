@@ -1,7 +1,7 @@
 // Storage port contract for the private broker research bucket (spec §4.12).
 import {describe,expect,it,vi} from 'vitest';
 import type {SupabaseClient} from '@supabase/supabase-js';
-import {BROKER_BUCKET,StorageError,brokerPaths,memoryBrokerStorage,supabaseBrokerStorage} from './storage';
+import {BROKER_BUCKET,MAX_OBJECT_BYTES,StorageError,brokerPaths,memoryBrokerStorage,supabaseBrokerStorage} from './storage';
 
 const SHA='a'.repeat(64),ID='00000000-0000-4000-8000-000000000001';
 const pdf=new TextEncoder().encode('%PDF-1.7 synthetic');
@@ -48,6 +48,19 @@ describe('memoryBrokerStorage',()=>{
 
 describe('supabaseBrokerStorage',()=>{
  const client=(api:Record<string,unknown>)=>({storage:{from:vi.fn((b:string)=>{expect(b).toBe(BROKER_BUCKET);return api;})}}) as unknown as SupabaseClient;
+ it('issues browser upload tokens only for staging PDFs',async()=>{
+  const issue=vi.fn(async()=>({data:{signedUrl:'https://example.invalid',token:'t'},error:null}));
+  const s=supabaseBrokerStorage(client({createSignedUploadUrl:issue}));
+  await expect(s.createSignedUploadUrl(brokerPaths.report(SHA))).rejects.toMatchObject({code:'storage_invalid_path'});
+  await expect(s.createSignedUploadUrl(brokerPaths.request(ID))).rejects.toMatchObject({code:'storage_invalid_path'});
+  await s.createSignedUploadUrl(brokerPaths.staging(ID));
+  expect(issue).toHaveBeenCalledTimes(1);
+ });
+ it('rejects an oversized production upload before dispatch',async()=>{
+  const upload=vi.fn(async()=>({data:{},error:null}));const s=supabaseBrokerStorage(client({upload}));
+  await expect(s.upload(brokerPaths.report(SHA),new Uint8Array(MAX_OBJECT_BYTES+1),'application/pdf')).rejects.toMatchObject({code:'storage_failed'});
+  expect(upload).not.toHaveBeenCalled();
+ });
  it('maps not-found download to null and 409 upload to exists',async()=>{
   const s=supabaseBrokerStorage(client({download:async()=>({data:null,error:{message:'Object not found',statusCode:'404'}}),upload:async()=>({data:null,error:{message:'The resource already exists',statusCode:'409'}})}));
   expect(await s.download(brokerPaths.report(SHA))).toBeNull();expect(await s.upload(brokerPaths.report(SHA),pdf,'application/pdf')).toBe('exists');
