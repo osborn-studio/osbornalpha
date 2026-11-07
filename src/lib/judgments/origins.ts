@@ -48,7 +48,8 @@ export function originFor(kind:InputKind,adapter:string,vars:Record<string,strin
  }
  return {publisher:t.publisher,adapter:t.adapter,locator:render(t.locator,vars,key),...(transform!==undefined?{transform}:{})};
 }
-/** True iff `origin` could have been produced by originFor for this kind (key, publisher, locator / transform shape, no extra keys). */
+/** Template variables match loosely (`.+`): exact locator equality is enforced by Task 8's rebuildAndCompare.
+ * True iff `origin` could have been produced by originFor for this kind (key, publisher, locator / transform shape, no extra keys). */
 export function originKnown(kind:InputKind,origin:Origin):boolean{
  if(!origin||typeof origin!=='object'||Object.keys(origin).some(k=>!ORIGIN_KEYS.has(k)))return false;
  const t=ORIGINS[originKey(kind,origin.adapter)];

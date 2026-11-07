@@ -37,4 +37,11 @@ describe('deriveMetricsAsOf (spec §12.2 S03: composed like GET /api/facts/[tick
   expect(e).toBeInstanceOf(JudgmentError);expect(e.code).toBe('read_truncated');
   await expect(deriveMetricsAsOf(db,ISSUER,'US','2024/08/01',FORMULA_VERSION)).rejects.toThrow(/YYYY-MM-DD/);
  });
+ it('real-date check and JudgmentError for scope mismatch',async()=>{
+  const db=await seeded();
+  await expect(deriveMetricsAsOf(db,ISSUER,'US','2024-13-45',FORMULA_VERSION)).rejects.toMatchObject({code:'invalid_parameter'});
+  await expect(deriveMetricsAsOf(db,ISSUER,'US','2024-02-30',FORMULA_VERSION)).rejects.toMatchObject({code:'invalid_parameter'});
+  const other:Pick<FactsDb,'readFacts'>={readFacts:async()=>({stateRev:1,truncated:false,rows:[{issuer_id:'x',market:'US'} as never]})};
+  await expect(deriveMetricsAsOf(other,ISSUER,'US','2024-08-01',FORMULA_VERSION)).rejects.toMatchObject({code:'invalid_parameter'});
+ });
 });

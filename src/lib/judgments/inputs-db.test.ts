@@ -2,7 +2,7 @@
 import {describe,expect,it,vi} from 'vitest';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import type {Row} from '@/lib/db/table-client';
+import type {Row,TableClient} from '@/lib/db/table-client';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
 import {anonJudgmentInputsDb,memoryJudgmentInputsDb,normalizeTableRows} from './inputs-db';
 import {MacroUnavailable,fixtureMacroReadApi} from './macro-api';
@@ -93,5 +93,26 @@ describe('anonJudgmentInputsDb (spec §3.5: anon read paths only)',()=>{
   expect([j.registered_at,j.created_at,j.as_of]).toEqual(['2026-11-02T03:04:05.123Z','2026-11-02T03:04:05.123Z','2026-11-01']);
   expect(await db.kline({ticker:'AAPL',market:'US',adjustment:'qfq',source:'sina',from:'2024-01-02',to:'2024-01-03',signal:AbortSignal.timeout(1000)})).toEqual({failure:'unsupported'});
   await expect(db.macro.snapshot('x')).rejects.toBeInstanceOf(MacroUnavailable);
+ });
+});
+
+const capped=(t:TableClient,max:number):TableClient=>({...t,select:(table,match,o)=>t.select(table,match,{...o,limit:Math.min(o?.limit??max,max)})});
+describe('review fixes (filings visibility, paging, parameters)',()=>{
+ it('filingsOfIssuer drops unpublished (mapping_gen 0) filings before applying limit',async()=>{
+  const f=memoryFactsDb();f.setNow(FIXED_NOW);
+  await publishFacts(f,{issuer:I,market:'US',filings:[filingCandidate({sourceRef:'a',availableDate:'2024-01-01',periodEnd:'2023-12-31'}),filingCandidate({sourceRef:'b',availableDate:'2024-02-01',periodEnd:'2023-12-31'})],facts:[]});
+  await publishFacts(f,{issuer:I,market:'US',filings:[filingCandidate({sourceRef:'c',availableDate:'2024-09-01',periodEnd:'2024-06-30'})],facts:[],publish:false});
+  const db=memoryJudgmentInputsDb({facts:f});
+  const all=await db.facts.filingsOfIssuer(I,'US',{});
+  expect(all.every(x=>x.mapping_gen>0)).toBe(true);expect(all).toHaveLength(2);
+  expect(await db.facts.filingsOfIssuer(I,'US',{limit:1})).toHaveLength(1);
+  expect((await db.facts.filingsOfIssuer(I,'US',{limit:1}))[0].available_date).toBe('2024-02-01');
+ });
+ it('tableRows and issuerPrimarySecurity page until an empty page under a max_rows cap',async()=>{
+  const t=await tables();
+  for(let i=0;i<7;i++)await t.insert('issuer_industry_memberships',{issuer_id:I,scheme:'sw2021',version:'2021',code:`9${i}`,valid_from:'2024-01-01',valid_to:null,source:'test',provenance:{}});
+  const db=memoryJudgmentInputsDb({tables:capped(t,3)});
+  expect(await db.tableRows('issuer_industry_memberships',`${I}:sw2021:2021`)).toHaveLength(9);
+  expect(await db.issuerPrimarySecurity(I,'2024-06-01')).toEqual({ticker:'AAA',market:'US'});
  });
 });

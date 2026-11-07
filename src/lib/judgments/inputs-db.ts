@@ -17,6 +17,7 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {supabaseTableClient} from '@/lib/db/table-client';
+import {selectAll} from '@/lib/db/table-client';
 import type {Row,TableClient} from '@/lib/db/table-client';
 import {supabaseFactsDb} from '@/lib/facts/db';
 import {memoryFactsDb} from '@/lib/facts/memory-facts-db';
@@ -31,7 +32,6 @@ import {unavailableMacroReadApi} from './macro-api';
 export type KlineFn=JudgmentInputsDb['kline'];
 /** No price source wired: every request is unsupported. */
 export const unsupportedKline:KlineFn=async()=>({failure:'unsupported'});
-const PAGE=1000;
 const PRICE_MARKETS:readonly PriceMarket[]=['A','HK','US'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const iso=(v:unknown)=>new Date(String(v)).toISOString();
@@ -56,8 +56,8 @@ async function publicTableRows(tables:TableClient,macro:MacroReadApi,table:Publi
  if(table==='industry_classifications'){const [scheme,version,code]=parts;rows=await tables.select(table,{scheme,version,code},{limit:2});}
  else if(table==='issuer_industry_memberships'){
   const [issuer_id,scheme,version]=parts;
-  rows=await tables.select(table,{issuer_id,scheme,version},{orderBy:'valid_from',limit:PAGE});
-  if(rows.length>=PAGE)throw new Error(`table_rows_overflow:${table}:${naturalKey}`);
+  // Paged until an empty page (PostgREST max_rows may be small); order by code (valid_from breaks ties only within a code).
+  rows=await selectAll(tables,table,{issuer_id,scheme,version},'code');
  }else rows=await macro.seriesCatalog(parts[0] as 'US'|'CN');
  return normalizeTableRows(rows);
 }
@@ -72,7 +72,7 @@ async function publicJudgmentFrom(tables:TableClient,id:string):Promise<Judgment
  return r?judgmentFromTable(r):null;
 }
 async function primarySecurityFrom(tables:TableClient,issuerId:string,on:string):Promise<{ticker:string;market:PriceMarket}|null>{
- const held=(await tables.select('issuer_securities',{issuer_id:issuerId},{orderBy:'valid_from',limit:PAGE}))
+ const held=(await selectAll(tables,'issuer_securities',{issuer_id:issuerId},'ticker'))
   .filter(r=>String(r.valid_from)<=on&&(r.valid_to===null||r.valid_to===undefined||on<String(r.valid_to)));
  const out:{ticker:string;market:PriceMarket;primary:boolean}[]=[];
  for(const r of held){
@@ -88,8 +88,11 @@ async function primarySecurityFrom(tables:TableClient,issuerId:string,on:string)
 export function publicFacts(db:FactsDb):JudgmentInputsDb['facts']{
  return {
   readFacts:(issuer,market,o)=>db.readFacts(issuer,market,{concepts:o.concepts,asOf:o.asOf,history:o.history}),
+  // Returns ok facts of ANY mapping generation; used only by --reconcile (replay of frozen fact ids), never to discover inputs.
   factsByIds:async ids=>(await db.factsByIds(ids)).filter(r=>r.status==='ok'),
-  filingsOfIssuer:(issuer,market,o)=>db.filingsOfIssuer(issuer,market,{to:o.to,limit:o.limit}),
+  // The anon policy on filings is using(true): unpublished filings (mapping_gen<=0) are visible, so drop them BEFORE limit
+  // (complete-set read, then slice: gen-0 rows never consume limit slots).
+  filingsOfIssuer:async(issuer,market,o)=>{const rows=(await db.filingsOfIssuer(issuer,market,{to:o.to})).filter(f=>f.mapping_gen>0);return o.limit===undefined?rows:rows.slice(0,o.limit);},
  };
 }
 function inputsDbOf(p:{facts:FactsDb;tables:TableClient;macro:MacroReadApi;kline:KlineFn}):JudgmentInputsDb{

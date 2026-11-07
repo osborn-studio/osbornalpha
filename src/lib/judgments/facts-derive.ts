@@ -12,11 +12,12 @@ import type {FactsDb} from '@/lib/facts/types';
 import type {DeriveAsOfResult,FactsMarket} from './types';
 import {JudgmentError} from './errors';
 
+const isRealDate=(d:string)=>{const t=Date.parse(`${d}T00:00:00.000Z`);return Number.isFinite(t)&&new Date(t).toISOString().slice(0,10)===d;};
 export async function deriveMetricsAsOf(facts:Pick<FactsDb,'readFacts'>,issuer:string,market:FactsMarket,asOf:string,formulaVersion:string):Promise<DeriveAsOfResult>{
  if(formulaVersion!==FORMULA_VERSION)throw new JudgmentError('unsupported_formula_version',`${formulaVersion} (derivable: ${FORMULA_VERSION})`);
- if(!/^\d{4}-\d{2}-\d{2}$/.test(asOf))throw new RangeError(`asOf must be YYYY-MM-DD, got ${asOf}`);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(asOf)||!isRealDate(asOf))throw new JudgmentError('invalid_parameter',`asOf must be a real YYYY-MM-DD date, got ${asOf}`);
  const envelope=await facts.readFacts(issuer,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
  if(envelope.truncated)throw new JudgmentError('read_truncated',`read_facts truncated for ${issuer}/${market}@${asOf}`);
- if(envelope.rows.some(r=>r.issuer_id!==issuer||r.market!==market))throw new Error(`derive_scope_mismatch:${issuer}/${market}`);
+ if(envelope.rows.some(r=>r.issuer_id!==issuer||r.market!==market))throw new JudgmentError('invalid_parameter',`derive_scope_mismatch:${issuer}/${market}`);
  return {metrics:deriveMetrics(envelope.rows,{market,asOf,basedOnRev:envelope.stateRev}),envelope};
 }
