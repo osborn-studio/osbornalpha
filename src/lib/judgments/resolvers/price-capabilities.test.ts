@@ -10,7 +10,7 @@ import {capabilityStatusOf,judgeFixture} from '../adjustment-verify';
 import type {KlineAdjustFixture} from '../adjustment-verify';
 
 const DIR='fixtures/judgments/kline';
-const fixtures=existsSync(DIR)?readdirSync(DIR).filter(f=>f.endsWith('.json')&&!f.startsWith('synthetic-')).sort().map(f=>({path:`${DIR}/${f}`,fx:JSON.parse(readFileSync(`${DIR}/${f}`,'utf8')) as KlineAdjustFixture})):[];
+const fixtures=existsSync(DIR)?readdirSync(DIR).filter(f=>f.endsWith('.json')).sort().map(f=>({path:`${DIR}/${f}`,fx:JSON.parse(readFileSync(`${DIR}/${f}`,'utf8')) as KlineAdjustFixture})):[];
 describe('PRICE_CAPABILITIES (spec §7.4)',()=>{
  it('is frozen, has one row per (eastmoney|datagateway) × (A|HK|US) × (qfq|hfq), and never lists none',()=>{
   expect(Object.isFrozen(PRICE_CAPABILITIES)).toBe(true);

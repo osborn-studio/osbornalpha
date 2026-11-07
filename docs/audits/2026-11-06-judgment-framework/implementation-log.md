@@ -129,3 +129,4 @@
 - R-05：`IdempotencyConflict`（带 `quarantined` 标志）；仅真正写了隔离行才计 `quarantined`，上游 gather 抛出的 `idempotency_conflict` 计 failed。`RegisterResult.quarantined` 恒为 false（冲突走抛出）。
 - 备注：`db.test.ts`「calibrationCohortInternal paging…」偶发失败（Task 4 内存 db，与本任务无关，重跑通过）。
 - 测试修复：契约 R03 用例的两个校准行显式给严格递增的 `computed_at`（原为同毫秒时 `latestCalibration` 按随机 `calibration_id` 打破平局，约 1/6 概率取到旧行）；其余用例不会对同一 scope 成功插入多行。
+- Task 13：fixtures/judgments/replay/synthetic-fact-metric.json 已生成（judgment_id 69ae3937-54c2-8bc6-becb-2dc9850e0873），待核对：fixtures/judgments/replay/synthetic-fact-metric.json（需实施者之外的人，规格 §16）。
