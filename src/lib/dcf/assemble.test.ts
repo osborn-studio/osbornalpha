@@ -74,6 +74,7 @@ describe('assembleAssumptions (spec §9.1)',()=>{
  it('prompt omits grossMarginPct when the fact exists and states ratios are decimal shares of revenue',async()=>{
   const a=vi.fn<LlmFill>(async()=>null);await assembleAssumptions('AAPL','US',fullSeed(),{},a);
   expect(a.mock.calls[0][0]).not.toContain('"grossMarginPct":0');expect(a.mock.calls[0][0]).toContain('小数份额');
+  expect(a.mock.calls[0][0]).toContain('taxRate 是 EBIT 的有效税率');
   const s=fullSeed();delete s.seed.grossMarginPct;const b=vi.fn<LlmFill>(async()=>null);await assembleAssumptions('AAPL','US',s,{},b);
   expect(b.mock.calls[0][0]).toContain('"grossMarginPct":0');
  });

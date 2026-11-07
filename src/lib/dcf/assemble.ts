@@ -101,7 +101,7 @@ function extractPrompt(ticker:string,meta:{currency:string;currencyUnit:string;d
  return [
   `为 ${ticker} 估计 DCF 的收入增速与成本结构比率。金额单位：${meta.currencyUnit} ${meta.currency}（原值 ÷ ${meta.divisor}）。`,
   `已披露事实（不要修改、不要返回）：基期收入 ${seed.seed.baseRevenue??'未知'}${hasGm?`；毛利率 ${seed.seed.grossMarginPct}`:''}。`,
-  '只返回 JSON，仅含这些键；所有比率是占收入的小数份额（0.15 表示 15%），cagr 为年复合增速小数：',
+  '只返回 JSON，仅含这些键；成本类比率（sgaPct、rdPct、sbcPct、daPct、capexPct、wcPctOfRev、grossMarginPct）是占收入的小数份额（0.15 表示 15%）；taxRate 是 EBIT 的有效税率（小数）；cagr 为年复合增速小数：',
   `{"revenueLines":[{"cagr":0}],${hasGm?'':'"grossMarginPct":0,'}"sgaPct":0,"rdPct":0,"sbcPct":0,"daPct":0,"capexPct":0,"wcPctOfRev":0,"taxRate":0}`,
  ].join('\n');
 }
