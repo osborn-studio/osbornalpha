@@ -29,6 +29,10 @@ export function focusStatement(f:FocusTarget|null):StatementKind{
  const s=f?.concept?conceptById(f.concept)?.statement:undefined;
  return s==='BS'||s==='CF'||s==='IS'?s:s?'BS':'IS';
 }
+/** Navigation identity of a focus: its four parts plus the replay date. */
+export const focusSignature=(f:FocusTarget|null,asOf:string|null)=>f?`${focusKey(f)}@${asOf??''}`:null;
+/** A NEW non-null signature re-syncs the statement tab (once); the same one never overrides a manual tab change. */
+export const shouldSyncFocus=(prev:string|null,next:string|null)=>next!==null&&next!==prev;
 export const focusKey=(f:FocusTarget)=>`${f.concept??''}|${f.periodEnd??''}|${f.unit??''}|${f.factId??''}`;
 /** The drawer to open for `f` against a loaded grid; null when the grid is another statement or nothing matches. */
 export function resolveFocusOpen(f:FocusTarget,r:StatementsResponse,scaleExp:number):DrawerTarget|null{

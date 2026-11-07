@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {parseFocus,focusStatement,focusKey,resolveFocusOpen} from './focus-target';
+import {focusSignature,shouldSyncFocus,parseFocus,focusStatement,focusKey,resolveFocusOpen} from './focus-target';
 import type {StatementsResponse} from '@/lib/company/client';
 
 const ID='123e4567-e89b-42d3-a456-426614174000';
@@ -45,4 +45,17 @@ describe('resolveFocusOpen',()=>{
   expect(resolveFocusOpen(f,{...grid('IS'),truncated:true},6)).toBeNull();
  });
  it('keys a navigation by all four parts',()=>{expect(focusKey(f)).toBe('revenue|2024-12-31|USD|');});
+});
+
+describe('focus change while mounted',()=>{
+ it('a new signature syncs the tab once; the same one or no focus never does',()=>{
+  const a=parseFocus({concept:'revenue',periodEnd:'2024-12-31'}),b=parseFocus({concept:'cash',periodEnd:'2024-12-31'});
+  const sa=focusSignature(a,null),sb=focusSignature(b,null);
+  expect(sa).not.toBe(sb);
+  expect(shouldSyncFocus(sa,sa)).toBe(false);   // manual tab changes are not overridden
+  expect(shouldSyncFocus(sa,sb)).toBe(true);
+  expect(shouldSyncFocus(sa,focusSignature(a,'2024-06-30'))).toBe(true);   // asOf is part of the key
+  expect(shouldSyncFocus(sa,null)).toBe(false);
+  expect(shouldSyncFocus(null,sb)).toBe(true);
+ });
 });

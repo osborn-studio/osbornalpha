@@ -15,7 +15,7 @@ import { ConceptPopover } from './ConceptPopover';
 import { MiniBars } from './MiniBars';
 import { Callout, ErrorCard, LoadingGrid, TruncatedCard } from './StateCallout';
 import { SCALES, SCALE_EXP, defaultScale, type ScaleId } from './format';
-import { focusKey, focusStatement, resolveFocusOpen, type FocusTarget } from './focus-target';
+import { focusSignature, focusStatement, shouldSyncFocus, resolveFocusOpen, type FocusTarget } from './focus-target';
 import { otherUnitCellOpensHistory, barSeries, cellView, gridEmptyState, moneyCurrency, statementsCsv, type Badge } from './statements-model';
 
 const PERIODS = [8, 20, 40] as const;
@@ -84,7 +84,14 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
 
   // Event deep link: open the matching disclosure once per navigation, after the grid of its statement loads.
   const openedFor = useRef<string | null>(null);
-  const focusSig = focus ? `${focusKey(focus)}@${asOf ?? ''}` : null;
+  const focusSig = focusSignature(focus, asOf);
+  const syncedSig = useRef(focusSig);
+  useEffect(() => {
+    if (!focus || !shouldSyncFocus(syncedSig.current, focusSig)) return;
+    syncedSig.current = focusSig;
+    setStatement(focusStatement(focus));
+    if (focusStatement(focus) === 'BS') setBasis((b) => (b === 'quarterly' ? 'disclosed' : b));
+  }, [focus, focusSig]);
   useEffect(() => {
     if (!focus || !focusSig || openedFor.current === focusSig || !data) return;
     const target = resolveFocusOpen(focus, data, exp);
