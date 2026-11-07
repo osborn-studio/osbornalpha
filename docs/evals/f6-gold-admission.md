@@ -116,3 +116,19 @@ candidate, history and lock diff through independent human PR review; retain
 `--gold-diff` CI and authenticated release-manifest checks. No acceptance flags,
 values, recorder identities, licences or disabled evaluation kinds are changed.
 The current repository candidates remain blocked; the updater does not fill them.
+
+## Runner lock preflight
+
+The official reconciliation CLI validates the entire lock file before comparing
+its candidate entry and opening runner dependencies. Duplicate paths, unknown
+fields, malformed entries and invalid JSON are refused with `gold_invalid`
+(exit 2), including corruption in an unrelated entry. A matching first entry
+cannot bypass those checks. Candidate bytes that differ from a valid lock still
+produce `gold_lock_mismatch` (exit 2).
+
+The registration lifecycle tests use isolated, clearly marked synthetic contract
+fixtures with test recorder/reviewer metadata. They exercise required-review
+refusals, exact-byte registration, a matching CI run, idempotence, version/history
+changes, stale-byte refusal and overlapping registrations. These checks verify
+machinery only; they do not establish actual human transcription, independent
+human review, source authenticity or production gold acceptance.
