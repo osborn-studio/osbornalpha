@@ -70,6 +70,16 @@ describe('parseDqQuery',()=>{
  });
 });
 
+describe('parseDqQuery market',()=>{
+ const q=(s:string)=>parseDqQuery(new URLSearchParams(s));
+ it('accepts market US|CN once and rejects anything else',()=>{
+  expect(q('market=US')).toEqual({ok:true,query:{dataset:undefined,page:1,pageSize:50,market:'US'}});
+  expect(q('market=CN&dataset=facts.cn')).toEqual({ok:true,query:{dataset:'facts.cn',page:1,pageSize:50,market:'CN'}});
+  expect(q('market=')).toEqual({ok:true,query:{dataset:undefined,page:1,pageSize:50}});
+  for(const s of ['market=HK','market=us','market=US&market=CN'])expect(q(s)).toEqual({ok:false,error:'invalid_market'});
+ });
+});
+
 describe('loadDqDashboard',()=>{
  const stub=(counts:(table:string,match:Row)=>number)=>{
   const calls:{op:string;table:string;match:Row;opts?:SelectOptions}[]=[];
@@ -111,5 +121,32 @@ describe('loadDqDashboard',()=>{
   const out=await loadDqDashboard(client,{page:1,pageSize:50},new Date('2026-11-04T12:00:00Z'));
   expect(out.summary.openQuarantineTotal).toBe(9);
   expect(out.quarantine.total).toBe(9);
+ });
+ it('adds the calendar, claims and per-pair blocks; the calendar rows follow the market filter',async()=>{
+  const {client,calls}=stub(()=>0);
+  const out=await loadDqDashboard(client,{page:1,pageSize:50,market:'CN'},new Date('2026-11-04T12:00:00Z'));
+  expect(out.calendar).toMatchObject({overdueByMarket:{US:0,CN:0},rows:[],noRuleRows:[]});
+  expect(out.claims).toEqual({rows:[],total:0,securitiesByIssuer:{}});
+  expect(Object.keys(out.reconciliationsByPair)).toHaveLength(7);
+  const calSelects=calls.filter(c=>c.op==='select'&&c.table==='dq_filing_expectations');
+  expect(calSelects.length).toBeGreaterThan(0);
+  expect(calSelects.every(c=>c.match.market==='CN')).toBe(true);
+  const calCounts=calls.filter(c=>c.op==='count'&&c.table==='dq_filing_expectations').map(c=>c.match.market);
+  expect(new Set(calCounts)).toEqual(new Set(['US','CN']));
+ });
+
+ it('computes restorable on the server for reconcile_mismatch rows only',async()=>{
+  const mk=(id:string,reason:string):Row=>({id,dataset:'reconcile.x',status:'open',reason_code:reason,detail:{latest_result:{passed:true,inputs_hash:'h'}}});
+  const rows=[mk('q1','reconcile_mismatch'),mk('q2','reconcile_mismatch'),mk('q3','same_day_conflict')];
+  const {client}=stub(()=>0);
+  const c2:TableClient={...client,select:async(table)=>table==='dq_quarantine'?rows:[]};
+  const now=new Date('2026-11-04T12:00:00Z');
+  const withHash=await loadDqDashboard(c2,{page:1,pageSize:50},now,{inputsHashNow:async item=>item.id==='q1'?'h':'x'});
+  expect(withHash.quarantine.rows.map(r=>r.restorable)).toEqual([true,false,undefined]);
+  expect('restorable' in withHash.quarantine.rows[2]).toBe(false);
+  const without=await loadDqDashboard(c2,{page:1,pageSize:50},now);
+  expect(without.quarantine.rows.map(r=>r.restorable)).toEqual([false,false,undefined]);
+  const unavailable=await loadDqDashboard(c2,{page:1,pageSize:50},now,{inputsHashNow:async()=>({unavailable:'inputs_unavailable'})});
+  expect(unavailable.quarantine.rows[0].restorable).toBe(false);
  });
 });

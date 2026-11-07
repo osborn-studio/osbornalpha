@@ -2,7 +2,11 @@
 // TableClient (stubbable in tests); the rest is pure shaping and query validation.
 import type {Row,TableClient} from '../db/table-client';
 import {DQ_DATASET_INVENTORY} from './datasets';
+import type {Market} from '../facts/types';
 import {freshnessOf} from './freshness';
+import {loadCalendarBlock,loadClaimsBlock,loadReconciliationsByPair} from './dashboard-blocks';
+import type {CalendarBlock,ClaimsBlock,ReconciliationsByPair} from './dashboard-blocks';
+import type {InputsHashNow} from './facts-resolver';
 
 export interface DqSummaryInput{
  batches:{dataset:string;status:string}[];
@@ -50,7 +54,7 @@ export const DQ_DEFAULT_PAGE_SIZE=50;
 export const DQ_MAX_PAGE_SIZE=200;
 // Used only as an equality filter (parameterised by PostgREST); the DB enforces length 1..64.
 const DATASET_RE=/^[^\x00-\x1f\x7f]{1,64}$/u;
-export type DqQuery={dataset?:string;page:number;pageSize:number};
+export type DqQuery={dataset?:string;page:number;pageSize:number;market?:Market};
 
 const positiveInt=(raw:string|null,fallback:number):number|null=>{
  if(raw===null)return fallback;
@@ -66,7 +70,11 @@ export function parseDqQuery(params:URLSearchParams):{ok:true;query:DqQuery}|{ok
  if(pageSize===null||pageSize>DQ_MAX_PAGE_SIZE)return {ok:false,error:'invalid_page_size'};
  const rawDataset=params.get('dataset');
  if(rawDataset!==null&&rawDataset!==''&&!DATASET_RE.test(rawDataset))return {ok:false,error:'invalid_dataset'};
- return {ok:true,query:{dataset:rawDataset?rawDataset:undefined,page,pageSize}};
+ const markets=params.getAll('market');
+ const rawMarket=markets[0]??null;
+ if(markets.length>1||(rawMarket!==null&&rawMarket!==''&&rawMarket!=='US'&&rawMarket!=='CN'))return {ok:false,error:'invalid_market'};
+ const market=rawMarket==='US'||rawMarket==='CN'?rawMarket:undefined;
+ return {ok:true,query:{dataset:rawDataset?rawDataset:undefined,page,pageSize,...(market?{market}:{})}};
 }
 
 export const DQ_RECENT_BATCHES=50;
@@ -80,6 +88,9 @@ export interface DqDashboard{
  freshness:Awaited<ReturnType<typeof freshnessOf>>;
  quarantine:{rows:Row[];page:number;pageSize:number;total:number};
  reconciliations:Row[];
+ calendar:CalendarBlock;
+ claims:ClaimsBlock;
+ reconciliationsByPair:ReconciliationsByPair;
  /** Dataset filter options: the registry plus every dataset this response loaded (spec 3 §6.3, E9). */
  datasets:string[];
  refreshedAt:string;
@@ -93,12 +104,19 @@ export function dashboardDatasets(loaded:Iterable<unknown>,selected?:string):str
  return [...out].sort();
 }
 
+/** Server-side restore eligibility of a reconcile_mismatch item (spec §7.2): passing latest_result AND its inputs_hash equals the CURRENT inputs hash (same function as the restore route; an {unavailable} answer is never equal → false). */
+export async function restorableOf(row:Row,hashNow?:InputsHashNow):Promise<boolean>{
+ const latest=((row.detail??{}) as {latest_result?:{passed?:unknown;inputs_hash?:unknown}}).latest_result;
+ if(!hashNow||latest?.passed!==true||typeof latest.inputs_hash!=='string')return false;
+ try{return (await hashNow(row))===latest.inputs_hash;}catch{return false;}
+}
+
 /**
  * All dashboard reads. The open-quarantine KPI is a global count; the pager total is a
  * separate count filtered by the selected dataset, so filtering never changes the KPI.
  */
-export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date):Promise<DqDashboard>{
- const {dataset,page,pageSize}=query;
+export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date,opts:{inputsHashNow?:InputsHashNow}={}):Promise<DqDashboard>{
+ const {dataset,page,pageSize,market}=query;
  const openMatch:Row={status:'open'};
  const pageMatch:Row=dataset?{status:'open',dataset}:openMatch;
  const [batches,freshness,openQuarantineTotal,quarantineTotal,quarantineRows,failedReconciliationsTotal,reconciliations]=
@@ -111,6 +129,7 @@ export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date)
    client.count('dq_reconciliations',{passed:false}),
    client.select('dq_reconciliations',{passed:false},{orderBy:'created_at',desc:true,limit:DQ_RECENT_RECONCILIATIONS}),
   ]);
+ const [calendar,claims,reconciliationsByPair]=await Promise.all([loadCalendarBlock(client,market,now),loadClaimsBlock(client),loadReconciliationsByPair(client)]);
  const batches24h=within(batches,'started_at',now,DAY_MS);
  const summary=summarizeDq({
   batches:batches24h.map(b=>({dataset:String(b.dataset),status:String(b.status)})),
@@ -125,8 +144,9 @@ export async function loadDqDashboard(client:TableClient,query:DqQuery,now:Date)
   batches24hTruncated:batches.length===DQ_RECENT_BATCHES&&batches24h.length===DQ_RECENT_BATCHES,
   batches,
   freshness,
-  quarantine:{rows:quarantineRows,page,pageSize,total:quarantineTotal??openQuarantineTotal},
+  quarantine:{rows:await Promise.all(quarantineRows.map(async r=>r.reason_code==='reconcile_mismatch'?{...r,restorable:await restorableOf(r,opts.inputsHashNow)}:r)),page,pageSize,total:quarantineTotal??openQuarantineTotal},
   reconciliations,
+  calendar,claims,reconciliationsByPair,
   datasets:dashboardDatasets([...batches,...freshness,...quarantineRows].map(r=>r.dataset),dataset),
   refreshedAt:now.toISOString(),
  };
