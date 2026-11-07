@@ -305,6 +305,10 @@ export interface BrokerResearchDb{
  summaryCommit(documentId:string,token:string,runId:string,row:Omit<SummaryRow,'summary_id'|'approved_by'|'approved_at'|'generated_at'|'draft_reason'|'run_id'|'kind'>):Promise<string>;
  /** rpc broker_title_commit: lease fence + title_zh/title_en/title_run_id on the draft report + finish the run, one transaction. */
  titleCommit(documentId:string,token:string,runId:string,titles:{title_zh:string|null;title_en:string|null}):Promise<'ok'>;
+ /** rpc broker_extract_set_scope: under the lease, scope := the merged scope if the draft has none, then materialize (P-R2-04). */
+ extractSetScope(documentId:string,token:string,runId:string,scope:ReportScope):Promise<MaterializeReceipt>;
+ /** rpc broker_extract_finalize: under the lease, finish the extract run succeeded (detail merged) and release the lease, one transaction. */
+ extractFinalize(documentId:string,token:string,runId:string,detail:Record<string,unknown>):Promise<'ok'>;
  insertSummary(row:Omit<SummaryRow,'summary_id'|'approved_by'|'approved_at'|'generated_at'|'draft_reason'>):Promise<string>;
  setSummaryStatus(summaryId:string,patch:{status:TextStatus;disclosure_check?:DisclosureCheck;approved_by?:string|null}):Promise<void>;
  getSummary(summaryId:string):Promise<SummaryRow|null>;
@@ -2023,6 +2027,15 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect(await blockers(w.rep)).toEqual([]);
  });
 
+ it('blocker 13 coverage includes absent fields: an uncovered absent(target_horizon) blocks (P-R1-12, round 2)',async()=>{
+  const w=await ready();
+  await add(w.rep,{target_key:w.tk,field:'target_horizon',occurrence:1,value_text:'ABSENT',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:null,char_end:null,value_source_text:null,parse_run_id:w.pr,status:'absent'});
+  await rules(w.rep);
+  expect(await blockers(w.rep)).toEqual(['eval_receipt_missing']);
+  await gold(w.digest,{perField:Object.fromEntries([...allFields,'target_horizon'].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
+  expect(await blockers(w.rep)).toEqual([]);
+ });
+
  it('spec §14 sample 7 (second half): a report whose effective rows are all human publishes with no gold receipt and approved_gold_corpus_hash null',async()=>{
   const lic=await s.licence();const doc=await s.document(lic,{uploadedAt:'2026-03-10T00:00:00Z'});const pr=await s.parsed(doc);const rep=await s.report(doc);const inst=await s.institution();
   const row=(field:string,value_text:string,extra:Record<string,unknown>={})=>({target_key:null,field,occurrence:1,value_text,value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:pr,status:'confirmed',...extra});
@@ -2070,16 +2083,17 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
 
  it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
   const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
-  const rpcs=['public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)'];
+  const rpcs=['public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
   for(const sig of rpcs){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
-  for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)'])
+  for(const sig of ['public.broker_sha256(text)','public.broker_lock_draft(uuid)','public.broker_report_picks(uuid)','public.broker_report_effective_rows(uuid)','public.broker_report_live_digests(uuid)','public.broker_outbox_retract(uuid,text)','public.broker_llm_fence(uuid,uuid,uuid,text)']){
+   for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
+  }
   // every migration-owned function, trigger functions included (P-R1-05): no client role holds EXECUTE
   const all=await s.q(`select p.oid::regprocedure::text sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 1`);
   expect(all.length).toBeGreaterThanOrEqual(40);
   for(const {sig} of all)for(const role of ['public','anon','authenticated'])
    expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v`,[sig]):await fn(role,sig)}).toEqual({sig,role,ok:false});
   for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])expect(all.map(r=>r.sig)).toContain(trig);
-   for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
   await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
  },60000);
 
@@ -2968,7 +2982,7 @@ begin
     b := array_append(b, 'rules_stale');
   end if;
   -- 13 gold eval receipt per behavior digest of the effective LLM rows. Once the report is gated (it has
-  -- any effective LLM row), coverage (tp+fn > 0) is required for EVERY field with an effective non-absent
+  -- any effective LLM row), coverage (tp+fn > 0) is required for EVERY field with an effective row (absent included)
   -- row, whoever extracted it (spec §4.4; P-R1-12). A report with only human rows is not gated.
   if exists (select 1 from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected','absent') and f.extractor like 'llm:%') then
     if st.approved_gold_corpus_hash is null or exists (
@@ -2978,7 +2992,7 @@ begin
          left join lateral (select * from public.broker_eval_receipts e where e.behavior_digest = g.behavior_digest order by e.ran_at desc, e.receipt_id desc limit 1) e on true
          where e.receipt_id is null
             or not (e.passed and e.corpus_kind = 'gold' and e.corpus_hash = st.approved_gold_corpus_hash and e.n_docs >= 30)
-            or exists (select 1 from (select distinct f.field from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected')) ff
+            or exists (select 1 from (select distinct f.field from public.broker_report_fields f where f.report_id = p_report_id and f.status in ('confirmed','corrected','absent')) ff
                        where coalesce((e.per_field -> ff.field ->> 'tp')::int, 0) + coalesce((e.per_field -> ff.field ->> 'fn')::int, 0) = 0)) then
       b := array_append(b, 'eval_receipt_missing');
     end if;
@@ -3504,6 +3518,34 @@ end $$;
 revoke execute on function public.broker_title_commit(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.broker_title_commit(uuid, uuid, uuid, jsonb) to service_role;
 
+-- Extraction tail under the lease (P-R2-04): the scope chosen by the merge is written (only while the report has
+-- none) and re-materialized under the fence; the run is finished succeeded and the lease released in one
+-- transaction. A worker whose lease was taken over gets lease_lost from either call and writes nothing.
+create or replace function public.broker_extract_set_scope(p_document uuid, p_token uuid, p_run uuid, p_scope text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_report uuid;
+begin
+  perform public.broker_llm_fence(p_document, p_token, p_run, 'extract');
+  if p_scope is null or p_scope not in ('single_issuer','multi_issuer','sector','macro_strategy') then raise exception 'invalid_payload:scope'; end if;
+  select report_id into v_report from public.broker_research_reports where document_id = p_document and status = 'draft';
+  if v_report is null then raise exception 'report_not_draft'; end if;
+  update public.broker_research_reports set scope = p_scope where report_id = v_report and scope is null;
+  return public.broker_report_materialize(v_report);
+end $$;
+revoke execute on function public.broker_extract_set_scope(uuid, uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.broker_extract_set_scope(uuid, uuid, uuid, text) to service_role;
+
+create or replace function public.broker_extract_finalize(p_document uuid, p_token uuid, p_run uuid, p_detail jsonb)
+returns text language plpgsql security definer set search_path = public as $$
+begin
+  perform public.broker_llm_fence(p_document, p_token, p_run, 'extract');
+  update public.broker_report_runs set status = 'succeeded', detail = detail || coalesce(case when jsonb_typeof(p_detail) = 'object' then p_detail end, '{}'::jsonb) where run_id = p_run;
+  update public.broker_report_documents set lease_token = null, lease_until = null where document_id = p_document;
+  return 'ok';
+end $$;
+revoke execute on function public.broker_extract_finalize(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.broker_extract_finalize(uuid, uuid, uuid, jsonb) to service_role;
+
 -- ---------------------------------------------------------------- disclosure re-check (spec §4.11 重跑规则; P-R1-08)
 -- The admin "re-run disclosure check" after a licence / analyst disclosure change set disclosure_ok=false. TS
 -- computes checkDisclosure for every non-null title surface and every APPROVED snippet / summary against the
@@ -3529,9 +3571,9 @@ begin
     v_text := case v_surface when 'title_original' then r.title_original when 'title_public' then r.title_public when 'title_zh' then r.title_zh else r.title_en end;
     continue when v_text is null;
     v_chk := v_titles -> v_surface;
-    continue when v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1';
+    continue when coalesce(v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1', false);
     if v_surface = 'title_original' and r.title_public is not null
-       and v_titles -> 'title_public' ->> 'passed' = 'true' and v_titles -> 'title_public' ->> 'version' = 'disclosure/1' then
+       and coalesce(v_titles -> 'title_public' ->> 'passed' = 'true' and v_titles -> 'title_public' ->> 'version' = 'disclosure/1', false) then
       if r.status = 'published' and not r.title_restricted then v_fail := v_fail || 'title_restricted_change_requires_republish'::text; end if;
     else
       v_fail := v_fail || ('restricted_value_in_text:' || v_surface);
@@ -3539,11 +3581,11 @@ begin
   end loop;
   for x in select sn.snippet_id from public.broker_report_snippets sn where sn.report_id = p_report_id and sn.status = 'approved' order by sn.snippet_id loop
     v_chk := p_checks -> 'snippets' -> x.snippet_id::text;
-    if not (v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1') then v_fail := v_fail || ('restricted_value_in_text:snippet:' || x.snippet_id::text); end if;
+    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then   -- a missing check (NULL) fails (P-R2-01) v_fail := v_fail || ('restricted_value_in_text:snippet:' || x.snippet_id::text); end if;
   end loop;
   for x in select su.summary_id, su.lang from public.broker_report_summaries su where su.report_id = p_report_id and su.status = 'approved' order by su.lang loop
     v_chk := p_checks -> 'summaries' -> x.summary_id::text;
-    if not (v_chk ->> 'passed' = 'true' and v_chk ->> 'version' = 'disclosure/1') then v_fail := v_fail || ('restricted_value_in_text:summary:' || x.lang); end if;
+    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then   -- a missing check (NULL) fails (P-R2-01) v_fail := v_fail || ('restricted_value_in_text:summary:' || x.lang); end if;
   end loop;
   if cardinality(v_fail) > 0 then return jsonb_build_object('restored', false, 'failures', to_jsonb(v_fail)); end if;
   if r.status = 'draft' then
@@ -4433,6 +4475,8 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async listSnippets(reportId){return (await pageAll(()=>from('broker_report_snippets').select('*').eq('report_id',reportId).order('created_at').order('snippet_id'))).map(snippetFromRow);},
   async summaryCommit(documentId,token,runId,row){return String(await call('broker_summary_commit',{p_document:documentId,p_token:token,p_run:runId,p_row:row}));},
   async titleCommit(documentId,token,runId,titles){await call('broker_title_commit',{p_document:documentId,p_token:token,p_run:runId,p_titles:titles});return 'ok';},
+  async extractSetScope(documentId,token,runId,scope){return receiptFrom(await call('broker_extract_set_scope',{p_document:documentId,p_token:token,p_run:runId,p_scope:scope}));},
+  async extractFinalize(documentId,token,runId,detail){await call('broker_extract_finalize',{p_document:documentId,p_token:token,p_run:runId,p_detail:detail});return 'ok';},
   async insertSummary(row){return String((await run<R>(from('broker_report_summaries').insert(row).select('summary_id').single())).summary_id);},
   async setSummaryStatus(id,patch){await run(from('broker_report_summaries').update(dropUndefined(patch)).eq('summary_id',id));},
   async getSummary(id){const r=await maybe(from('broker_report_summaries').select('*').eq('summary_id',id));return r?summaryFromRow(r):null;},
@@ -4666,14 +4710,14 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
  const lockDraft=(rep:string)=>{const r=reports.get(rep)??fail('report_not_found');if(r.status==='published')fail('published_immutable');if(r.status==='withdrawn')fail('report_withdrawn');return r;};
 
  // ---------------------------------------------------------------- materialize (§6.3; mirrors SQL)
- type Pick={f:FieldRow;isEff:boolean;v:TypedValue};
- const picks=(rep:string):Pick[]=>{
+ type FieldPick={f:FieldRow;isEff:boolean;v:TypedValue};
+ const picks=(rep:string):FieldPick[]=>{
   const effKeys=new Set(effOf(rep).map(idKey));
   const cand=liveCand(rep).filter(f=>!effKeys.has(idKey(f)));
   const n=new Map<string,number>();for(const c of cand)n.set(idKey(c),(n.get(idKey(c))??0)+1);
   return [...effOf(rep).map(f=>({f,isEff:true,v:effectiveValue(f)})),...cand.filter(c=>n.get(idKey(c))===1).map(f=>({f,isEff:false,v:effectiveValue({...f,corrected:null})}))];
  };
- const firstBy=(ps:Pick[])=>{const m=new Map<string,Pick>();for(const p of [...ps].sort((a,b)=>Number(b.isEff)-Number(a.isEff)||a.f.occurrence-b.f.occurrence))if(!m.has(p.f.field))m.set(p.f.field,p);return m;};
+ const firstBy=(ps:FieldPick[])=>{const m=new Map<string,FieldPick>();for(const p of [...ps].sort((a,b)=>Number(b.isEff)-Number(a.isEff)||a.f.occurrence-b.f.occurrence))if(!m.has(p.f.field))m.set(p.f.field,p);return m;};
  const effRowsJson=(rep:string)=>effOf(rep).map(f=>({field_id:f.field_id,target_key:f.target_key,field:f.field,occurrence:f.occurrence,status:f.status,extractor:f.extractor,parse_run_id:f.parse_run_id,run_id:f.run_id,page:f.page,char_start:f.char_start,char_end:f.char_end,value:effectiveValue(f)}));
  const liveDigests=(rep:string)=>{
   const r=reports.get(rep)!;const d=docOf(r);const l=licOf(r);
@@ -4776,7 +4820,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    for(const field of ['ticker','rating','target_price'])reqs.push({tk:t.target_key,field,ord:2});
    if(eff.some(p=>p.f.target_key===t.target_key&&p.f.field==='target_price'&&p.f.status!=='absent'))for(const field of ['target_currency','price_at_report','price_currency','price_as_of_date'])reqs.push({tk:t.target_key,field,ord:2});
   }
-  const hasValue=(p:Pick,field:string)=>p.f.status==='absent'||({published_date:p.v.value_date,price_as_of_date:p.v.value_date,target_price:p.v.value_num,price_at_report:p.v.value_num,target_currency:p.v.value_currency,price_currency:p.v.value_currency} as R)[field]!==null;
+  const hasValue=(p:FieldPick,field:string)=>p.f.status==='absent'||({published_date:p.v.value_date,price_as_of_date:p.v.value_date,target_price:p.v.value_num,price_at_report:p.v.value_num,target_currency:p.v.value_currency,price_currency:p.v.value_currency} as R)[field]!==null;
   b.push(...reqs.filter(q=>!eff.some(p=>p.f.target_key===q.tk&&p.f.field===q.field&&hasValue(p,q.field)))
    .sort((x,y)=>x.ord-y.ord||cmp(x.tk??'',y.tk??'')||cmp(x.field,y.field)).map(q=>`required_field_missing:${q.field}${q.tk?`:${q.tk}`:''}`));
   const required=new Set(['institution','published_date','title',...(r.scope==='sector'||r.scope==='macro_strategy'?['sector']:[]),...(tScope?['ticker','rating','target_price','target_currency','price_at_report','price_currency','price_as_of_date']:[])]);
@@ -4794,7 +4838,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   const llm=effOf(rep).filter(f=>f.extractor.startsWith('llm:'));
   if(llm.length){
    const digests=[...new Set(llm.map(f=>runs.get(f.run_id??'')?.behavior_digest??''))];
-   const covered=[...new Set(effOf(rep).filter(f=>f.status!=='absent').map(f=>f.field))];   // every effective field once gated (P-R1-12)
+   const covered=[...new Set(effOf(rep).map(f=>f.field))];   // every effective field, absent included, once gated (P-R1-12, P-R2 recheck)
    const ok=settings.approved_gold_corpus_hash!==null&&digests.every(dg=>{const e=latestEval(dg);return !!e&&e.passed&&e.corpus_kind==='gold'&&e.corpus_hash===settings.approved_gold_corpus_hash&&e.n_docs>=30&&covered.every(fl=>((e.per_field[fl]?.tp??0)+(e.per_field[fl]?.fn??0))>0);});
    if(!ok)b.push('eval_receipt_missing');
   }
@@ -5116,6 +5160,18 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const r=[...reports.values()].find(x=>x.document_id===documentId&&x.status==='draft')??fail('report_not_draft');
    setReport(r,{title_zh:titles.title_zh,title_en:titles.title_en,title_run_id:runId});Object.assign(run,{status:'succeeded',finished_at:stamp()});return 'ok' as const;
   });},
+  async extractSetScope(documentId,token,runId,scope){return atomic(()=>{
+   llmFence(documentId,token,runId,'extract');
+   if(!['single_issuer','multi_issuer','sector','macro_strategy'].includes(scope))fail('invalid_payload','scope');
+   const r=[...reports.values()].find(x=>x.document_id===documentId&&x.status==='draft')??fail('report_not_draft');
+   if(r.scope===null)setReport(r,{scope});
+   return materializeNow(r.report_id);
+  });},
+  async extractFinalize(documentId,token,runId,detail){
+   const run=llmFence(documentId,token,runId,'extract');const d=documents.get(documentId)!;
+   Object.assign(run,{status:'succeeded',finished_at:stamp(),detail:{...run.detail,...detail}});Object.assign(d,{lease_token:null,lease_until:null});
+   return 'ok' as const;
+  },
   async insertSummary(row){
    childWritable(row.report_id);
    const s:SummaryRow={...clone(row),summary_id:randomUUID(),approved_by:null,approved_at:null,generated_at:stamp(),draft_reason:null};
@@ -5701,6 +5757,27 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.getReport(w.rep))!.disclosure_ok).toBe(true);
   });
 
+  it('disclosureRecheck: an approved snippet or summary without a supplied check fails on draft and published reports; nothing changes (P-R2-01)',async()=>{
+   const r=await ready();
+   const sn=await db.insertSnippet({report_id:r.rep,target_key:null,purpose:'thesis',parse_run_id:r.parse,page:1,char_start:0,char_end:4,text:'abcd',field_id:null,disclosure_check:null,created_by:by});
+   await db.setSnippetStatus(sn,{status:'approved',approved_by:by,disclosure_check:PASS_CHECK});
+   const dg0=(await db.getReport(r.rep))!.summary_input_digest!;
+   const su=await db.insertSummary({report_id:r.rep,lang:'en',kind:'independent_summary',run_id:r.ext,input_hash:dg0,summary_md:'S',max_verbatim_overlap:1,numeric_grounding:{version:'grounding/1',passed:true,assertions:[],failures:[]},disclosure_check:PASS_CHECK,status:'draft'});
+   await db.setSummaryStatus(su,{status:'approved',approved_by:by,disclosure_check:PASS_CHECK});
+   const titlesOf=async()=>{const x=(await db.getReport(r.rep))!;return Object.fromEntries((['title_original','title_public','title_zh','title_en'] as const).filter(k=>x[k]!==null).map(k=>[k,PASS_CHECK]));};
+   const attempt=async(o:{snippets:Record<string,typeof PASS_CHECK>;summaries:Record<string,typeof PASS_CHECK>})=>db.disclosureRecheck(r.rep,by,{expected_digest:await db.disclosureDigest(r.rep),titles:await titlesOf(),...o});
+   for(const phase of ['draft','published'] as const){
+    if(phase==='published'){await db.materialize(r.rep);await rules(r.rep);await db.publish(r.rep,by);}
+    await db.setReportFlags(r.rep,{disclosure_ok:false});
+    const before=JSON.stringify([await db.getSnippet(sn),await db.getSummary(su)]);
+    expect(await attempt({snippets:{},summaries:{[su]:PASS_CHECK}})).toEqual({restored:false,failures:[`restricted_value_in_text:snippet:${sn}`]});
+    expect(await attempt({snippets:{[sn]:PASS_CHECK},summaries:{}})).toEqual({restored:false,failures:['restricted_value_in_text:summary:en']});
+    expect((await db.getReport(r.rep))!.disclosure_ok).toBe(false);
+    expect(JSON.stringify([await db.getSnippet(sn),await db.getSummary(su)])).toBe(before);
+    expect(await attempt({snippets:{[sn]:PASS_CHECK},summaries:{[su]:PASS_CHECK}})).toEqual({restored:true,failures:[]});
+   }
+  });
+
   it('setReportFlags on draft and published; verifyCandidates order; quarantineResolve; purgeReportText after withdraw',async()=>{
    const w=await world();
    await db.setReportFlags(w.rep,{evidence_ok:false});expect((await db.getReport(w.rep))!.evidence_ok).toBe(false);await db.setReportFlags(w.rep,{evidence_ok:true});
@@ -5936,7 +6013,7 @@ import {brokerResearchDbContract} from './db-contract';
 import type {BrokerContractHarness} from './db-contract';
 import {effectiveValue} from './effective';
 import {pgBrokerResearchDb} from './pg-db';
-import type {OutboxEvent} from './types';
+import type {CorrectedValue,OutboxEvent} from './types';
 ```
 
 文件末尾追加：
@@ -5964,7 +6041,7 @@ describe.skipIf(!enabled)('A5 pgBrokerResearchDb',()=>{
   beforeAll(async()=>{h=await pgHarness({lock:false});p=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
   afterAll(async()=>{await h?.close?.();await p?.end();});
   it('agrees for null, partial, explicit-null and full corrections read back through pgBrokerResearchDb',async()=>{
-   const shapes=[null,{value_text:'121'},{value_text:'121',value_num:null},{value_text:'x',value_num:'99.50',value_currency:'USD',value_unit:'price',value_date:'2026-01-02'},{value_text:'y',value_currency:null,value_date:null}];
+   const shapes:(CorrectedValue|null)[]=[null,{value_text:'121'},{value_text:'121',value_num:null},{value_text:'x',value_num:'99.50',value_currency:'USD',value_unit:'price',value_date:'2026-01-02'},{value_text:'y',value_currency:null,value_date:null}];
    for(const corrected of shapes){
     const sql=(await p.query(`select public.broker_field_effective($1::jsonb,'120',120.50,'HKD','price','2026-03-04') v`,[corrected===null?null:JSON.stringify(corrected)])).rows[0].v;
     const ts=effectiveValue({corrected,value_text:'120',value_num:'120.50',value_currency:'HKD',value_unit:'price',value_date:'2026-03-04'});
@@ -6074,6 +6151,8 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   async listSnippets(reportId){return (await q(`select * from ${rel('broker_report_snippets')} where report_id = $1 order by created_at, snippet_id`,[reportId])).map(snippetFromRow);},
   summaryCommit:async(documentId,token,runId,row)=>String(await fn('public.broker_summary_commit($1,$2,$3,$4::jsonb)',[documentId,token,runId,JSON.stringify(row)])),
   titleCommit:async(documentId,token,runId,titles)=>{await fn('public.broker_title_commit($1,$2,$3,$4::jsonb)',[documentId,token,runId,JSON.stringify(titles)]);return 'ok' as const;},
+  extractSetScope:async(documentId,token,runId,scope)=>receiptFrom(await fn('public.broker_extract_set_scope($1,$2,$3,$4)',[documentId,token,runId,scope])),
+  extractFinalize:async(documentId,token,runId,detail)=>{await fn('public.broker_extract_finalize($1,$2,$3,$4::jsonb)',[documentId,token,runId,JSON.stringify(detail)]);return 'ok' as const;},
   async insertSummary(row){return String((await insert('broker_report_summaries',row as unknown as R,'summary_id')).summary_id);},
   async setSummaryStatus(id,patch){await update('broker_report_summaries',patch as R,'summary_id = $1',[id]);},
   async getSummary(id){const r=await one(`select * from ${rel('broker_report_summaries')} where summary_id = $1`,[id]);return r?summaryFromRow(r):null;},
@@ -6210,6 +6289,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 8. **子表守卫的父行锁**（P-R1-03）：子表写入先锁报告行。`broker_field_review` 等 RPC 是"报告 → 子行"，而直接 `update broker_report_fields …` 先锁子行再由触发器锁报告；两者对同一行并发时 PostgreSQL 会检测死锁并中止其一（重试即可）。服务只经 RPC 写证据行，直接写只出现在测试夹具里。
 9. **已发布报告的披露恢复**（P-R1-08）：`broker_report_disclosure_recheck` 可在已发布报告上恢复 `disclosure_ok=true`（视图重新可见），但 `disclosure_ok` 变 false 时已经写过 `claim.retract`，同一 `claim_key` 不会再登记；要让 F4 重新收到 claim，必须 unpublish + publish。runbook 应写明这一点。
 10. **批准摘要值的回填**：测试夹具直接插入 `approved` 行且不带 `db_digest` 时由触发器写入当前值；之后若夹具改了 targets / 许可而未回草稿，阻断第 15 条会报 `restricted_value_in_text:*`。第一次实跑时如有既有用例因此变红，修正夹具（在改动后重新批准），不要放宽阻断。
+11. **抽取尾段的围栏**（P-R2-04）：`extractSetScope` 与 `extractFinalize` 在租约下执行；但两者之间的 `applyRules`（规则回执、隔离项）不在围栏内。租约在此期间被接管时，旧 worker 已写的回执与隔离项保留：回执只追加、并绑定当时的 `rules_input_hash`，新 worker 重跑后会写出更新的回执。
 
 ---
 
@@ -8729,8 +8809,8 @@ export const MAX_OBJECT_BYTES=52428800;
 export const SIGNED_READ_SECONDS=600;
 export type ObjectType='application/pdf'|'application/json'|'image/png';
 const U='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',S='[0-9a-f]{64}';
-const PATH_RE=new RegExp(`^(staging/${U}\\.pdf|reports/${S}\\.pdf|reports/${S}\\.extract\\.${U}\\.json|reports/${S}\\.pages\\.${U}/[1-9][0-9]{0,4}\\.png|runs/${U}\\.(request|response)\\.json|licences/${S}\\.pdf)$`);
-const PREFIX_RE=new RegExp(`^(staging/|reports/${S}\\.pages\\.${U}/)$`);
+const PATH_RE=new RegExp(`^(staging/${U}\\.pdf|reports/${S}\\.pdf|reports/${S}\\.extract\\.${U}\\.json|reports/${S}\\.pages\\.${U}/[1-9][0-9]{0,4}\\.png|runs/${U}\\.(request|response)\\.json|eval/${S}/${U}\\.(request|response)\\.json|licences/${S}\\.pdf)$`);
+const PREFIX_RE=new RegExp(`^(staging/|reports/${S}\\.pages\\.${U}/|eval/${S}/)$`);
 export const brokerPaths={
  staging:(intentId:string)=>`staging/${intentId}.pdf`,
  report:(sha:string)=>`reports/${sha}.pdf`,
@@ -8739,6 +8819,10 @@ export const brokerPaths={
  pagesPrefix:(sha:string,runId:string)=>`reports/${sha}.pages.${runId}/`,
  request:(runId:string)=>`runs/${runId}.request.json`,
  response:(runId:string)=>`runs/${runId}.response.json`,
+ /** Gold-evaluation calls live under the evaluated document's sha (P-R2-02): the prefix IS the per-document inventory purge removes. */
+ evalRequest:(sha:string,evalRunId:string)=>`eval/${sha}/${evalRunId}.request.json`,
+ evalResponse:(sha:string,evalRunId:string)=>`eval/${sha}/${evalRunId}.response.json`,
+ evalPrefix:(sha:string)=>`eval/${sha}/`,
 };
 export class StorageError extends Error{
  constructor(readonly code:'storage_failed'|'storage_invalid_path'|'storage_not_found',message?:string){super(message??code);this.name='StorageError';}
@@ -10500,7 +10584,9 @@ import {LlmError,recordedLlmPort} from '../ports/llm';
 import {EXTRACT_OBJECT,EXTRACT_RESPONSE,PAGES} from '../fixtures/pipeline';
 import {runParse} from '../parse';
 import {brokerPaths} from '../storage';
-import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from '../testing';
+import {memoryTableClient} from '../../db/memory-table-client';
+import {memoryBrokerResearchDb} from '../memory-db';
+import {ADMIN_ID,DEADLINE,T0,memoryBrokerDeps,seedDocument,seedLicence} from '../testing';
 import type {MemoryDeps} from '../testing';
 import {CHUNK_PAGES,chunkPages,runExtract} from './run';
 import {toTyped} from './typed';
@@ -10585,6 +10671,19 @@ describe('runExtract',()=>{
   expect(all.filter(f=>f.run_id===a.runId).every(f=>f.superseded_by_run_id===b.runId)).toBe(true);
   expect(all.filter(f=>f.run_id===b.runId)).toHaveLength(all.filter(f=>f.run_id===a.runId).length);
  });
+ it('lease taken over after the candidate commit: lease_lost, run failed, no scope written, the new holder keeps the lease (P-R2-04)',async()=>{
+  const tables=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id'],research_audit_log:['id']});
+  const mdb=memoryBrokerResearchDb({tables,now:()=>T0});d=memoryBrokerDeps({tables,db:mdb});
+  const doc=await parsedDoc(d);const other='00000000-0000-4000-8000-0000000000fe';
+  const commit=mdb.extractCommit.bind(mdb);
+  mdb.extractCommit=async(...a:Parameters<typeof commit>)=>{const r=await commit(...a);mdb.expireLease(doc.document_id);expect(await mdb.claimLease(doc.document_id,other,300)).toBe(true);return r;};
+  const r=await runExtract(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  expect(r).toMatchObject({status:'failed',errorCode:'lease_lost'});
+  expect((await d.db.getRun(r.runId))!.status).toBe('failed');
+  expect((await d.db.getReport(r.reportId))!.scope).toBeNull();                               // the stale worker wrote no scope
+  expect((await d.db.getDocument(doc.document_id))!.lease_token).toBe(other);
+  expect(rows(d,'ingest_batches').find(b=>b.producer==='broker-research-extract')).toMatchObject({status:'failed'});
+ });
  it('the fixture object is what the recorded response encodes',()=>{expect(JSON.parse(EXTRACT_RESPONSE)).toEqual(EXTRACT_OBJECT);});
 });
 ```
@@ -10620,6 +10719,7 @@ import type {ChunkExtraction,MergeResult} from './merge';
 import {EXTRACT_SCHEMA,validateExtraction} from './schema';
 import type {DocumentExtraction} from './schema';
 import type {BrokerDeps} from '../deps';
+import {BrokerResearchDbError} from '../types';
 import type {CandidateFieldInput,MaterializeReceipt} from '../types';
 
 export const CHUNK_PAGES=8,CONTEXT_SHARE=0.6,MAX_OUTPUT_TOKENS=4000,SCHEMA_RETRIES=1,CALL_TIMEOUT_MS=90_000,MIN_CALL_BUDGET_MS=30_000;
@@ -10717,7 +10817,12 @@ export async function runExtract(deps:BrokerDeps,documentId:string,by:string,opt
  let receipt:MaterializeReceipt;
  try{receipt=await deps.db.extractCommit(documentId,token,runId,rows);}
  catch(e){if((e as {code?:string}).code==='lease_lost'||(e as {code?:string}).code==='published_immutable')return fail((e as {code:string}).code);throw e;}
- if(batch.merge.scope&&!report.scope){await deps.db.updateReportDraft(report.report_id,{scope:batch.merge.scope});receipt=await deps.db.materialize(report.report_id);}
+ const lost=(e:unknown)=>e instanceof BrokerResearchDbError&&(e.code==='lease_lost'||e.code==='run_invalid');
+ // every report write after the candidate commit is fenced on the lease (P-R2-04)
+ if(batch.merge.scope&&!report.scope){
+  try{receipt=await deps.db.extractSetScope(documentId,token,runId,batch.merge.scope);}
+  catch(e){if(lost(e))return fail('lease_lost');throw e;}
+ }
  let rules:RulesOutcome;
  try{rules=await applyRules(deps,report.report_id,{batchId});}
  catch(e){
@@ -10732,8 +10837,8 @@ export async function runExtract(deps:BrokerDeps,documentId:string,by:string,opt
  if(rules.warnings>0)errors.push({code:'rule_warning_summary',message:`${rules.warnings} warning(s)`});
  if(!await deps.db.latestEvalReceipt(digest))errors.push({code:'eval_receipt_absent',key:digest});
  const counts:BatchCounts={fetched:rows.length,inserted:rows.length-batch.unverified,duplicates:0,versioned:0,quarantined:rules.quarantined,failed:0};
- await deps.db.finishRun(runId,token,{status:'succeeded',detail:{chunks:batch.chunks,retries:batch.retries,candidates:rows.length,unverified:batch.unverified,rule_receipt_id:rules.receiptId}});
- await deps.db.fencedUpdateDocument(documentId,token,{releaseLease:true});
+ try{await deps.db.extractFinalize(documentId,token,runId,{chunks:batch.chunks,retries:batch.retries,candidates:rows.length,unverified:batch.unverified,rule_receipt_id:rules.receiptId});}
+ catch(e){if(lost(e))return fail('lease_lost');throw e;}      // the stale worker stops: run failed, batch failed, 409
  const batchStatus=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
  await deps.db.logAccess({document_id:documentId,user_id:by,action:'extract_run',detail:{run_id:runId,status:'succeeded',candidates:rows.length}});
  return {runId,reportId:report.report_id,status:'succeeded',counts,batchStatus,receipt,ruleReceiptId:rules.receiptId};
@@ -11690,7 +11795,10 @@ import {EXTRACT_RESPONSE,PAGES,SUMMARY_RESPONSE,TITLE_RESPONSE} from '../fixture
 import {runParse} from '../parse';
 import {recordedLlmPort} from '../ports/llm';
 import {brokerPaths} from '../storage';
-import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from '../testing';
+import {memoryTableClient} from '../../db/memory-table-client';
+import {memoryBrokerResearchDb} from '../memory-db';
+import type {MemoryBrokerResearchDb} from '../memory-db';
+import {ADMIN_ID,DEADLINE,T0,memoryBrokerDeps,seedDocument,seedLicence} from '../testing';
 import type {MemoryDeps} from '../testing';
 import {approveSummary,rejectSummary,runSummary,translateTitle} from './run';
 
@@ -11714,6 +11822,10 @@ describe('independent summary',()=>{
   expect((d.llm as ReturnType<typeof recordedLlmPort>).calls[1].system).toContain('中文');
  });
  it('lease taken over while the LLM call is pending: no summary row, no titles, both runs failed, 409 lease_lost (P-R1-09)',async()=>{
+  // an explicitly typed memory DB: expireLease lives on MemoryBrokerResearchDb, not on the BrokerResearchDb of MemoryDeps (P-R2-08)
+  const tables=memoryTableClient({dq_quarantine:['id'],ingest_batches:['batch_id'],research_audit_log:['id']});
+  const mdb:MemoryBrokerResearchDb=memoryBrokerResearchDb({tables,now:()=>T0});
+  d=memoryBrokerDeps({tables,db:mdb,llm:recordedLlmPort([EXTRACT_RESPONSE])});
   const reportId=await ready(d);const documentId=(await d.db.getReport(reportId))!.document_id;
   const base=recordedLlmPort([SUMMARY_RESPONSE,TITLE_RESPONSE]);const other='00000000-0000-4000-8000-0000000000ff';
   for(const kind of ['summary','translate'] as const){
@@ -11721,7 +11833,7 @@ describe('independent summary',()=>{
    d.llm={info:()=>base.info(),complete:async(req)=>{await gate;return base.complete(req);}};
    const p=kind==='summary'?runSummary(d,reportId,'zh',ADMIN_ID,{deadline:DEADLINE()}):translateTitle(d,reportId,ADMIN_ID,{deadline:DEADLINE()});
    await new Promise(r=>setTimeout(r,0));                                                      // the worker is now waiting on the LLM
-   d.db.expireLease(documentId);
+   mdb.expireLease(documentId);
    expect(await d.db.claimLease(documentId,other,300)).toBe(true);                             // another worker takes over
    release();
    await expect(p).rejects.toMatchObject({code:'lease_lost',status:409});
@@ -12101,7 +12213,11 @@ export async function purgeDocument(deps:WDeps,documentId:string,by:string):Prom
  const exec:Record<PurgeStep,()=>Promise<void>>={
   pdf:()=>deps.storage.remove([doc.storage_path]),
   artifacts:async()=>{for(const r of runs.filter(x=>x.kind==='parse')){await deps.storage.remove([brokerPaths.artifact(doc.sha256,r.run_id)]);const pages=await deps.storage.list(brokerPaths.pagesPrefix(doc.sha256,r.run_id));if(pages.length)await deps.storage.remove(pages);}},
-  runs:async()=>{const paths=runs.flatMap(r=>[r.request_path,r.response_path]).filter((p):p is string=>p!==null);if(paths.length)await deps.storage.remove(paths);},
+  runs:async()=>{
+   const paths=runs.flatMap(r=>[r.request_path,r.response_path]).filter((p):p is string=>p!==null);
+   paths.push(...await deps.storage.list(brokerPaths.evalPrefix(doc.sha256)));          // gold-evaluation calls of this document (P-R2-02)
+   if(paths.length)await deps.storage.remove(paths);
+  },
   fields_text:async()=>{if(report)await deps.db.purgeReportText(report.report_id,'fields_text');},
   snippets_text:async()=>{if(report)await deps.db.purgeReportText(report.report_id,'snippets_text');},
   summaries:async()=>{if(report)await deps.db.purgeReportText(report.report_id,'summaries');},
@@ -12348,13 +12464,15 @@ git commit -m "feat(broker-research): C7 independent summary with three checks, 
 
 ```ts
 // src/lib/broker-research/eval.test.ts
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {corpusHash,evalStats,runGoldEval} from './eval';
 import type {EvalRow,GoldDoc} from './eval';
 import {EXTRACT_RESPONSE} from './fixtures/pipeline';
 import {runParse} from './parse';
-import {recordedLlmPort} from './ports/llm';
-import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence} from './testing';
+import {LlmError,recordedLlmPort} from './ports/llm';
+import {brokerPaths} from './storage';
+import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence,syntheticPdf} from './testing';
+import {withdrawDocument} from './withdraw';
 
 const g=(field:string,value_text:string,value_num:string|null,page=1,s=0,e=5,target_key:string|null='ZZBR',typed:Partial<EvalRow>={}):EvalRow=>({target_key,field,occurrence:1,value_text,value_num,value_currency:null,value_unit:value_num===null?null:'price',value_date:null,page,char_start:s,char_end:e,...typed});
 describe('evalStats',()=>{
@@ -12408,10 +12526,35 @@ describe('runGoldEval authorization (P-R1-01)',()=>{
  it('dry-run checks authorization and makes no LLM call; a real run records the authorized licence version per document',async()=>{
   const {d,llm,docs}=await setup();
   const dry=await runGoldEval(d,docs,{by:ADMIN_ID,dryRun:true});
-  expect(llm.calls).toHaveLength(0);expect(dry.receiptId).toBeNull();expect(dry.authorized).toEqual([{sha256:docs[0].sha256,licence_id:expect.any(String),licence_version:1}]);
+  expect(llm.calls).toHaveLength(0);expect(dry.receiptId).toBeNull();expect(dry.authorized).toEqual([{sha256:docs[0].sha256,licence_id:expect.any(String),licence_version:1,parse_run_id:expect.any(String),artifact_hash:expect.stringMatching(/^[0-9a-f]{64}$/),extractor_version:expect.any(String)}]);
   const real=await runGoldEval(d,docs,{by:ADMIN_ID,dryRun:false});
   expect(llm.calls.length).toBeGreaterThan(0);expect(real.receiptId).toMatch(/[0-9a-f-]{36}/);
   expect(real.authorized[0].licence_version).toBe(1);
+ });
+ it('a reparse between preflight and extraction is refused: no receipt labelled with the old parser (P-R2-03)',async()=>{
+  const d=memoryBrokerDeps();const lic=await seedLicence(d.db);
+  const a=await seedDocument(d,lic.licence_id),b=await seedDocument(d,lic.licence_id,syntheticPdf('second'));
+  for(const x of [a,b])await runParse(d,x.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  const base=recordedLlmPort([EXTRACT_RESPONSE,EXTRACT_RESPONSE]);let reparsed=false;
+  d.llm={info:()=>base.info(),complete:async(req)=>{if(!reparsed){reparsed=true;await runParse(d,b.document_id,ADMIN_ID,{deadline:DEADLINE()});}return base.complete(req);}};
+  const insert=vi.spyOn(d.db,'insertEvalReceipt');
+  await expect(runGoldEval(d,[{sha256:a.sha256,fields:[],absent:[]},{sha256:b.sha256,fields:[],absent:[]}],{by:ADMIN_ID,dryRun:false})).rejects.toMatchObject({code:'parse_run_changed_during_eval'});
+  expect(insert).not.toHaveBeenCalled();
+  expect(base.calls).toHaveLength(1);                                                         // b never reached the LLM
+ });
+});
+describe('gold-evaluation calls and purge (P-R2-02)',()=>{
+ it('the calls are stored under the document, and purge removes them, also after a partial evaluation failure',async()=>{
+  const d=memoryBrokerDeps();const lic=await seedLicence(d.db);
+  const a=await seedDocument(d,lic.licence_id),b=await seedDocument(d,lic.licence_id,syntheticPdf('second'));
+  for(const x of [a,b])await runParse(d,x.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  d.llm=recordedLlmPort([EXTRACT_RESPONSE,new LlmError('llm_failed')]);                        // a succeeds, b fails mid-run
+  await expect(runGoldEval(d,[{sha256:a.sha256,fields:[],absent:[]},{sha256:b.sha256,fields:[],absent:[]}],{by:ADMIN_ID,dryRun:false})).rejects.toBeTruthy();
+  expect(await d.storage.list(brokerPaths.evalPrefix(a.sha256))).toHaveLength(2);           // request + response of a
+  const out=await withdrawDocument(d,a.document_id,{reason:'licence ended',purge:true},ADMIN_ID);
+  expect(out.purge?.done).toBe(true);
+  expect(await d.storage.list(brokerPaths.evalPrefix(a.sha256))).toEqual([]);
+  expect([...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`))).toEqual([]);
  });
 });
 ```
@@ -12487,7 +12630,8 @@ export async function writeEvalReceipt(deps:Pick<BrokerDeps,'db'>,r:Omit<EvalRec
  return deps.db.insertEvalReceipt(r);
 }
 
-export interface AuthorizedDoc{sha256:string;licence_id:string;licence_version:number}
+/** What a gold run is allowed to evaluate, pinned at preflight (P-R2-03): the licence version AND the exact parse run. */
+export interface AuthorizedDoc{sha256:string;licence_id:string;licence_version:number;parse_run_id:string;artifact_hash:string|null;extractor_version:string|null}
 /** claimForProcessing's preconditions without a lease (an eval writes nothing but the receipt): the document is
  * reachable (withdrawn → 410 document_withdrawn, promotion pending → 409), parsed, and its licence authorises
  * processing today (confirmed for the current version, inside the validity dates, allows_llm_processing). */
@@ -12504,7 +12648,7 @@ export interface GoldEvalResult{receiptId:string|null;authorized:AuthorizedDoc[]
 export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dryRun:boolean;deadlineMs?:number;log?:(line:string)=>void}):Promise<GoldEvalResult>{
  const info=deps.llm.info();if(!info)throw new BrokerError('llm_unavailable',503);
  const authorized:AuthorizedDoc[]=[];const versions=new Set<string>();
- for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version});versions.add(a.parseRun.extractor_version??'unknown');}
+ for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,parse_run_id:a.parseRun.run_id,artifact_hash:a.parseRun.artifact_hash,extractor_version:a.parseRun.extractor_version});versions.add(a.parseRun.extractor_version??'unknown');}
  if(versions.size>1)throw conflict('mixed_extractor_versions',{versions:[...versions]});
  const extractorVersion=[...versions][0]??'unknown';
  const hash=corpusHash(docs);
@@ -12514,11 +12658,14 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
  const load=artifactLoader(deps);const extracted:ExtractedDoc[]=[];
  for(const g of docs){
   const a=await authorizeGoldDoc(deps,g.sha256);                                                   // re-checked right before this document is sent
-  if(a.licence.version!==authorized.find(x=>x.sha256===g.sha256)!.licence_version)throw conflict('licence_changed_during_eval');
-  const b=await extractCandidates(deps.llm,info,await load(a.parseRun.run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
+  const pin=authorized.find(x=>x.sha256===g.sha256)!;
+  if(a.licence.version!==pin.licence_version)throw conflict('licence_changed_during_eval');
+  // the receipt's extractor_version / behavior_digest describe the pinned parse runs: a reparse in between is refused
+  if(a.parseRun.run_id!==pin.parse_run_id||a.parseRun.artifact_hash!==pin.artifact_hash||a.parseRun.extractor_version!==pin.extractor_version)throw conflict('parse_run_changed_during_eval',{sha256:g.sha256});
+  const b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
   const evalRun=deps.newId();
-  await deps.storage.upload(brokerPaths.request(evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}),'application/json');
-  await deps.storage.upload(brokerPaths.response(evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}),'application/json');
+  await deps.storage.upload(brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}),'application/json');
+  await deps.storage.upload(brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}),'application/json');
   extracted.push({sha256:g.sha256,rows:b.rows});
   o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
  }
@@ -13275,6 +13422,7 @@ Expected: PASS（8 个用例）
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({resolveIssuer:vi.fn()}));
 vi.mock('@/lib/entities/resolve',async(orig)=>({...await orig<typeof import('@/lib/entities/resolve')>(),resolveIssuer:mocks.resolveIssuer}));
+import {memoryTableClient} from '../db/memory-table-client';
 import {decodeCursor,encodeCursor,institutionPageData,listPublicInstitutions,listPublicReports,monthsBefore,publicSpread,reportPageData,resolveTicker} from './public-read';
 import type {PublicReadDeps} from './public-read';
 import type {BrokerResearchDb,PublicReportBundle} from './types';
@@ -13330,6 +13478,16 @@ describe('resolveTicker',()=>{
   expect(await resolveTicker({} as never,'9988','2026-11-06')).toEqual({issuerId:'iss-1',securityTicker:'09988.HK'});
   expect(mocks.resolveIssuer).toHaveBeenLastCalledWith({},{ticker:'9988'},{today:'2026-11-06'});
  });
+ it('merged issuer: OLD keeps its own security (read from the source rows), never the destination primary listing (P-R2-05)',async()=>{
+  const tables=memoryTableClient({issuer_securities:['ticker','valid_from']});
+  await tables.insert('issuer_securities',{issuer_id:'iss-old',ticker:'OLDCO',valid_from:'2000-01-01',valid_to:null});
+  await tables.insert('issuer_securities',{issuer_id:'iss-new',ticker:'NEWCO',valid_from:'2000-01-01',valid_to:null});
+  mocks.resolveIssuer.mockResolvedValue({issuer_id:'iss-new',redirected_from:'iss-old',securities:[{ticker:'NEWCO',is_primary:true}]});
+  expect(await resolveTicker(tables,'oldco','2026-11-06')).toEqual({issuerId:'iss-new',securityTicker:'OLDCO'});
+  await tables.update('issuer_securities',{ticker:'OLDCO'},{valid_to:'2026-01-01'});              // the old line is no longer current
+  expect(await resolveTicker(tables,'oldco','2026-11-06')).toBeNull();                          // not NEWCO
+  expect(await resolveTicker(tables,'ghost','2026-11-06')).toBeNull();
+ });
 });
 
 describe('spread, report page, institution page',()=>{
@@ -13378,7 +13536,7 @@ Expected: FAIL（模块不存在）
 import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
-import {resolveIssuer} from '../entities/resolve';
+import {isCurrentSecurity,resolveIssuer} from '../entities/resolve';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {supabaseBrokerResearchDb} from './db';
 import type {BrokerResearchDb,NormalizedRating,PublicReportBundle,ReportScope} from './types';
@@ -13423,14 +13581,25 @@ export async function listPublicInstitutions(deps:PublicReadDeps):Promise<{insti
  return {institutions,totals:{reports:institutions.reduce((n,i)=>n+i.reportCount,0),institutions:institutions.length,lastAvailableAt:last}};
 }
 
-/** Universe ticker → issuer (today's owner) and the security row the caller meant (exact, then normalised, then primary). */
+/** Universe ticker → issuer (today's owner) and EXACTLY the security that resolved the request (exact form, then the
+ * normalised form). A merged issuer: resolveIssuer returns the destination's securities, so the requested OLD ticker is
+ * read from the source issuer_securities rows with the landed current-security predicate (same as facts'
+ * resolvePublicIssuer). Never substitutes a primary / first listing: no matching current row → null (P-R2-05). */
 export async function resolveTicker(tables:TableClient,raw:string,today:string):Promise<{issuerId:string;securityTicker:string}|null>{
  const given=raw.trim().toUpperCase().replace(/\//g,'.');
  const r=await resolveIssuer(tables,{ticker:given},{today});
  if(!r)return null;
  const core=inferCoreMarket(given),norm=core?normalizeSecurityTicker(given,core):null;
- const sec=r.securities.find(s=>s.ticker.toUpperCase()===given)??(norm?r.securities.find(s=>s.ticker.toUpperCase()===norm):undefined)??r.securities.find(s=>s.is_primary)??r.securities[0];
- return {issuerId:r.issuer_id,securityTicker:sec?.ticker??norm??given};
+ let ticker=(r.securities.find(s=>s.ticker.toUpperCase()===given)??(norm?r.securities.find(s=>s.ticker.toUpperCase()===norm):undefined))?.ticker;
+ if(ticker===undefined){
+  for(const t of norm&&norm!==given?[given,norm]:[given]){
+   const rows=await tables.select('issuer_securities',{ticker:t});
+   if(rows.length===0)continue;
+   if(rows.some(x=>isCurrentSecurity(x,today)))ticker=t;
+   break;
+  }
+ }
+ return ticker===undefined?null:{issuerId:r.issuer_id,securityTicker:ticker};
 }
 
 export async function getPublicReport(deps:PublicReadDeps,reportId:string):Promise<PublicReportDetailDto|null>{
@@ -13568,9 +13737,9 @@ describe('GET /reports/[reportId]',()=>{
 
 describe('GET /institutions',()=>{
  it('404 when none are public, 200 with totals otherwise',async()=>{
-  await expectError(await instGET(req('/institutions')),404,'not_found');
+  await expectError(await instGET(),404,'not_found');
   mocks.db.publicInstitutions.mockResolvedValue([{institution_id:'22222222-2222-4222-8222-222222222222',name_en:'Inst',report_count:3}]);
-  const res=await instGET(req('/institutions'));
+  const res=await instGET();
   expect(res.status).toBe(200);expect((await res.json()).totals).toMatchObject({institutions:1,reports:3});
   expect(mocks.db.publicReports).not.toHaveBeenCalled();   // counts come from the view, no paging
  });
@@ -15145,7 +15314,7 @@ import {ReportsTable} from './ReportsTable';
 import {NotFoundCallout} from './NotFoundCallout';
 
 const zh=JSON.parse(readFileSync(resolve(process.cwd(),'messages/zh/foreign-research.json'),'utf8'));
-const render=(el:ReactElement)=>renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'zh',messages:{'foreign-research':zh}},el));
+const render=(el:ReactElement)=>renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'zh',messages:{'foreign-research':zh},children:el}));
 const RID='11111111-1111-4111-8111-111111111111';
 function report(over:Partial<PublicReportDetailDto>={}):PublicReportDetailDto{
  return {reportId:RID,revision:1,scope:'single_issuer',institution:{id:'22222222-2222-4222-8222-222222222222',nameEn:'Synthetic Securities',nameZh:null},primaryTargetKey:'600000.SH',
@@ -15289,7 +15458,7 @@ const r=(n:number,over:Partial<PublicReportDto>={}):PublicReportDto=>({reportId:
 
 describe('library block',()=>{
  it('renders heading with count, rows and the filtered list link',()=>{
-  const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'zh',messages:{'foreign-research':zh}},createElement(LibraryReportsView,{ticker:'600000.SH',reports:[r(1),r(2,{targetPricePublic:false})],count:2})));
+  const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'zh',messages:{'foreign-research':zh},children:createElement(LibraryReportsView,{ticker:'600000.SH',reports:[r(1),r(2,{targetPricePublic:false})],count:2})}));
   expect(html).toContain('馆藏研报（2）');expect(html).toContain('/intel/foreign-research?ticker=600000.SH');
   expect(html).toContain('CNY 10.5');expect(html).toContain('—（许可不允许公开）');expect(html).toContain('买入');
  });
@@ -15308,7 +15477,7 @@ describe('library block',()=>{
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({configured:vi.fn(),fetch:vi.fn()}));
 vi.mock('@/lib/data/sources/tushare-cached',async()=>{
- class TushareError extends Error{}
+ class TushareError extends Error{constructor(public code:number,msg:string){super(msg);}}   // same shape as the landed class (code, message)
  return {isTushareConfigured:mocks.configured,fetchTushareReportRc:mocks.fetch,TushareError};
 });
 import {GET} from './route';
@@ -15326,7 +15495,7 @@ describe('GET /api/consensus/[ticker] without the mock fallback (spec §9.4)',()
  });
  it('falls to none (not mock) on a Tushare error or zero usable reports',async()=>{
   mocks.configured.mockReturnValue(true);
-  mocks.fetch.mockRejectedValueOnce(new TushareError('quota'));
+  mocks.fetch.mockRejectedValueOnce(new TushareError(40203,'quota'));
   expect((await (await call('600519.SH')).json()).source).toBe('none');
   mocks.fetch.mockResolvedValueOnce([]);
   expect((await (await call('600519.SH')).json()).source).toBe('none');
@@ -17768,7 +17937,7 @@ describe('institution maintenance routes',()=>{
  let d:MemoryCore;let inst:string;
  beforeEach(async()=>{vi.clearAllMocks();d=memoryCoreDeps();mocks.deps=d;mocks.requireAdmin.mockResolvedValue({id:ADMIN_ID});
   inst=await d.db.upsertInstitution({name_en:'Synthetic Securities',name_zh:null,aliases:[],kind:'broker',rating_disclosure_url:null});});
- const ctx=(o:Record<string,string>={})=>ctxOf({institutionId:inst,...o});
+ const ctx=<O extends Record<string,string>>(o:O={} as O)=>ctxOf({institutionId:inst,...o});   // keeps the caller's keys (scaleId) in the inferred params type
  adminGuardCases({call:(r)=>LIST(r,{}),request:()=>getReq(B),requireAdmin:mocks.requireAdmin,post:false});
  adminGuardCases({call:(r)=>UPSERT(r,{}),request:()=>jsonReq(B,{name_en:'X'}),requireAdmin:mocks.requireAdmin,post:true});
  adminGuardCases({call:(r)=>SCALE(r,ctx()),request:()=>jsonReq(`${B}/${inst}/scales`,SCALE_BODY),requireAdmin:mocks.requireAdmin,post:true});
