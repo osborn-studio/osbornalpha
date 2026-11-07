@@ -100,3 +100,17 @@ describe('the legacy plan2 set is discovered independently of lock.json',()=>{
   expect(unlocked.output.checks.lock).toMatchObject({ok:false,errors:[{path:LEGACY_PLAN2_PATH,code:'gold_lock_mismatch'}]});
  });
 });
+
+describe('gold admission CLI',()=>{
+ it('keeps schema diagnostics successful while rejecting legacy and synthetic evidence admission',async()=>{
+  for(const path of [LEGACY_PLAN2_PATH,`${GOLD_DIR}/facts/synthetic-us.json`]){
+   const r=await runValidate(['--gold','--lock','--gold-admission',path]);
+   expect(r.exitCode).toBe(1);
+   expect(r.output.checks).toMatchObject({gold:{ok:true},lock:{ok:true},gold_admission:{ok:false,scope:'dataset_contract_only'}});
+  }
+ });
+ it('requires a path and fails closed on unreadable candidate data',async()=>{
+  expect((await runValidate(['--gold-admission'])).exitCode).toBe(2);
+  expect(await runValidate(['--gold-admission','missing.json'])).toMatchObject({exitCode:1,output:{checks:{gold_admission:{ok:false,error:{code:'gold_invalid'}}}}});
+ });
+});

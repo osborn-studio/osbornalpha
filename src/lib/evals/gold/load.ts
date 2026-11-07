@@ -9,7 +9,7 @@ import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
 import type {EvalModule,GoldFormat,GoldLock,GoldSet,RecordersFile} from '../types';
 import {parseLegacyPlan2} from './legacy-plan2';
-import {EVAL_MODULES,parseGoldSetF6} from './schema';
+import {EVAL_MODULES,isProvenanceDate,parseGoldSetF6} from './schema';
 
 export const GOLD_DIR='src/lib/evals/fixtures/gold';
 export const RECORDERS_PATH=`${GOLD_DIR}/recorders.json`;
@@ -76,7 +76,7 @@ export function parseRecorders(raw:unknown,path:string=RECORDERS_PATH):Recorders
   else ids.add(r.id);
   if(typeof r.role!=='string'||r.role==='')errors.push(`${at}.role: required`);
   if(!Array.isArray(r.modules)||r.modules.length===0||!r.modules.every(m=>EVAL_MODULES.includes(m as EvalModule)))errors.push(`${at}.modules: non_empty_subset_of_modules`);
-  if(typeof r.added_at!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(r.added_at))errors.push(`${at}.added_at: date`);
+  if(typeof r.added_at!=='string'||(r.added_at.length!==10||!isProvenanceDate(r.added_at)))errors.push(`${at}.added_at: date`);
   if(typeof r.approved_by!=='string'||r.approved_by==='')errors.push(`${at}.approved_by: required`);
  }
  if(errors.length>0)throw new EvalError('gold_invalid',`${path}: ${errors.length} rule violation(s)`,{path,errors});
