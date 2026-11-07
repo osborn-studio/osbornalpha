@@ -15,7 +15,7 @@
 
 ## 2. 迁移应用顺序
 
-合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），在本分支**未锁定**；合并到 main 时由合并者追加到 `supabase/migrations.lock.json`，之后不可再改字节。
+合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），已随 #121 写入 `supabase/migrations.lock.json`；#126 进一步锁定 by-filing RPC 迁移，已锁定文件不可再改字节。下列部署命令为复跑说明。
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
 2. 按文件名顺序应用：先 `20261118090000_company_research.sql`，再 `20261118091000_company_research_functions.sql`，再 `20261118092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；合并后锁定在 `supabase/migrations.lock.json`，之后任何修改都要新迁移。

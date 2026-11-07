@@ -1,6 +1,6 @@
 # 判断层（F4）运行手册
 
-依据：[规格](../superpowers/specs/2026-11-04-judgment-framework-design.md)、[实施记录](../audits/2026-11-06-judgment-framework/implementation-log.md)。迁移为 `supabase/migrations/20261116090000_judgments.sql`。**合并前保持未锁**：不得修改 `supabase/migrations.lock.json`。合并顺序为 macro #112、再 F4；合并者确认最终 SQL 后运行 `shasum -a 256 supabase/migrations/20261116090000_judgments.sql`，把 `{file,sha256}` 追加到锁文件。锁定后该 SQL 永不再改，后续修复另建迁移。
+依据：[规格](../superpowers/specs/2026-11-04-judgment-framework-design.md)、[实施记录](../audits/2026-11-06-judgment-framework/implementation-log.md)。迁移为 `supabase/migrations/20261116090000_judgments.sql`。迁移已随 #121 在主分支锁定；`supabase/migrations.lock.json` 为哈希依据。锁定 SQL 不再修改，后续修复另建迁移。下文部署步骤是复跑说明，不代表本次已执行。
 
 ## 1. 表、函数与权限
 
@@ -13,6 +13,8 @@
 内部函数：`judgments_settle_after_date`、`judgments_grace_days`、`judgment_operation_payload`、`judgment_settlement_payload`、`judgment_replay_status`、`judgment_append_settlement_internal`。触发器函数随表删除。RPC 签名以 inventory 和迁移为准；`claim_due_judgments` 返回 jsonb 数组，`set_job_state` 返回 `{ok,updated_at}`。
 
 ## 2. 部署顺序
+
+2026-11-07 上线核对：生产 v1 判断数为 0，v2 原先未注册；#132 后已登记 v2 并设 `publishable=true`，公式哈希为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`，#136 合并后仍无 drift。首次部署曾因真实补登记错误关闭判断开关；#133 修复 JSONB containment，后续扫描完成，旧 superseded 快照的 `upstream_version_mismatch` 保留为正确弃权，当前中美有效快照判断正常。#133–#136 精确提交 `e0b82b25` 已部署，`MACRO_JUDGMENTS_ENABLED=1`、`NEXT_PUBLIC_SITE_URL=https://www.osbornalpha.com`，线上 settle preview/apply 和 calibrate preview 均成功。当前结论及限制见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)。以下 `publishable=false` 指初始代码默认值，不是此次生产状态。
 
 `macro_regime@v2` 的公式哈希覆盖方法实现、结算 resolver、`regime-selection.ts` 的历史 vintage 资格与输入构造规则，以及其导入闭包中的分类规则、目录和日期计算。`db.ts`、`snapshots.ts`、`read-api.ts` 只负责查询、分页、缓存、并行读取和错误映射，不纳入公式哈希；这些 I/O 优化不改变分类或结算输入，因此不应造成方法漂移。注册前仍须核对冻结输入快照与结算证据。
 
