@@ -954,7 +954,60 @@ interface JudgmentCard {
 
 ## 19. 实施记录与偏差
 
-（实施后补记。）
+实施依据：[22 任务计划](../plans/2026-11-06-judgment-framework.md)、[逐任务实施记录](../../audits/2026-11-06-judgment-framework/implementation-log.md)、[运行手册](../../runbooks/judgments.md)。以下以 2026-11-07 已提交代码为准。F4 迁移历经 `20261109150000` → `20261115090000` → `20261116090000_judgments.sql`；最后一版**在 PR 合并前保持未锁**。先合并 macro #112，再合并 F4；合并者对最终 SQL 执行 `shasum -a 256`，将 `{file,sha256}` 追加 `migrations.lock.json`，此后 SQL 不可改。
+
+### 19.1 实施偏差与处置
+
+| 日期 | 任务 | 规格条款 | 偏差 | 原因 | 处置 |
+|---|---|---|---|---|---|
+| 2026-11-06 | T1 | §2.4、§13 | `uuidV8` 在 judgments 模块；主体键沿用 `subject_missing`；补充错误码、严格 claim / interval / jobKey 校验 | F4 模块边界与契约完整性 | 接受；错误码见代码 |
+| 2026-11-06 | T1 | §3.2、§7 | period 的 `settle_after` 为下月 1 日；新增校准轮次 key、隔离 override / 冻结成员契约 | 与 SQL 结算窗口及续跑一致 | 接受 |
+| 2026-11-06 | T2–T3 | §5.6 | 九表、RLS、服务角色只经 RPC 写；`judgment_envelope_of` 保留公共 EXECUTE 并自行重查 RLS / as_known | invoker 读 RPC 调用依赖它；复审发现复合参数伪造风险 | 复审修复并有真实角色测试 |
+| 2026-11-07 | T4 | §5.6 | `claim_due_judgments` 返回一个 jsonb 数组；`freeze` 时间为毫秒精度；内存事务回滚语义加强 | PostgREST 与 DB 实现一致；并发冻结 | memory / pg / Supabase 同步，契约测试 |
+| 2026-11-06 | T5 | §7.5 | 信息码另置 `JUDGMENT_INFO_CODES`，原 `INFO_CODES` 不改；deferred 计数可选 | 保持事实模块契约 | 接受，`ALL_INFO_CODES` 识别 |
+| 2026-11-06 | T6、T8 | §3.7、§6 | 价格输入必须观测时刻已收盘；table_rows 时间戳更严格；WorkItem 的 `observedAt` 必填 | 杜绝前瞻输入 | `produce` 从 DB serverTime 注入，入口用 `ProduceWork` |
+| 2026-11-07 | T7 | §7.4、§17 O6 | 仅 eastmoney A qfq、HK qfq、US hfq 验证；DataGateway 全部 unverified | 录制事件与严格跨事件判定，DataGateway 未配置 | 其余组合 `adjustment_unsupported`；待 owner 补录 |
+| 2026-11-06 | T9 | §3.5、§4.1 | D3：`licenses.json` 在哈希闭包外；`--publishable` 需来源许可与 owner 确认 | 许可变更不能令公式哈希漂移 | 接受；撤证自动取消发布计划 |
+| 2026-11-07 | T10、T19 | §6.4、§11.1 | D1：可构造的绑定弃权保留快照输入；`produce()` 接收 `ProduceWork` | 同日多快照仍可按 ID 幂等查找 | 接受 |
+| 2026-11-07 | T11 | §7.4 | 合成 K 线夹具移至 `kline-synthetic/`；override 冻结证据、基准 bars、可用时间与退市规则更严格 | 避免被复权夹具扫描误读，防止失真结算 | 接受；真实能力表仍门控 |
+| 2026-11-07 | T12、T14 | §7.1、§9.5 | 新增 `claim_judgment` / `claimOne`；`settleNow` 领取租约，结果含 `quarantined`；`setJobState` 返回 `{ok,updated_at}` | 手动结算也须租约栅栏；补偿 CAS 需新版本 | 三 DB 实现和 SQL 同步 |
+| 2026-11-07 | T12、T14 | §7.1、§7.5 | 隔离详情放 `last_detail.incident`；首次隔离起七天复核；三次补偿失败后 skipped + 非信息码；新增 closed quarantine RPC | 隔离状态可跨暂时失败保留且不无限延期 | 接受；人工复核 skipped |
+| 2026-11-07 | T12 | §7.1 | T2-02：280 秒 deadline 不约束已发出的数据库等待 | DB 写无法安全取消 | 接受风险；写仍受租约栅栏保护 |
+| 2026-11-07 | T13 | §6.4 | 回放先冻结判定再 reconcile；`--check` 字节比较 | 可选上游 / 时钟失败不能改审计结论 | 接受 |
+| 2026-11-07 | T15 | §8.1 | `n_invalid_endpoint` / `n_unusable_value` 计入指标；情景为 `{status:'unavailable',reason:'bound_event_not_evaluable'}`，无 Brier/ECE | 绑定事件当前无法由冻结证据求值 | 接受；有求值能力后另立版本 |
+| 2026-11-07 | T16 | §8.4 | 校准 cohort 内容寻址，冻结成员、代际 marker、CAS 续跑；孤儿对象不自动删除 | 崩溃恢复与审计可重放 | 接受；runbook §7 人工清理 |
+| 2026-11-07 | T17–T18 | §1.1、§9、§10 | D2：内存 `percent=null`，JSON 省略该键；显示函数必须显式传 `now`；as_known 用 cutoff | 避免假精度与过期校准；历史视图按当时钟 | 接受，路由与组件测试覆盖 |
+| 2026-11-07 | T19 | §11.1 | `macro_regime@v1` 为 `active`、`publishable=false`，真实 `MacroReadApi` 由 `MACRO_JUDGMENTS_ENABLED` 控制；目录 `table_rows` 输入删除 | macro #112 已落地分类器，目录行无可信可用时间 | 接受；目录不可证则弃权 |
+| 2026-11-07 | T19、T22 | §11.1、§3.2 | `margin_pp` 代替 `margin`；settle_by 为目标月末后下月首日 + 30 天；norm 总和容差由 1e-9 改 5e-6 | 与结算契约和宏观分类器六位舍入一致 | 红测验证 1.000002 通过、1.00001 拒绝；黄金夹具字节不变 |
+| 2026-11-07 | T20 | §11.2 | D7：`pending_fill.condition=null`；私有适配器加 ctx 作批量发行人反查，状态优先级和独立抽样按现有 callDirection / market:ticker | 私有卡不是公共可结算判断 | 接受；percent JSON 省略 |
+| 2026-11-07 | T21 | §9.5、§9.6 | 画布 17 项按实际 categorical / nowcast / 阈值 / 可用 API / CSS 变量调整；视图测试使用纯逻辑与源码守卫 | 画布含示意数值，仓库缺 TSX 渲染测试设施 | 待 owner 过目；浏览器验收待可访问环境 |
+| 2026-11-07 | T22 | §5、§19 | 迁移 `20261116090000_judgments.sql` 保持未锁；原计划 Task 22 锁迁移步骤延期至合并者 | macro #112 必须先合并，最后 SQL 锁应反映合并版本 | 合并者按 runbook §2 执行，锁后永不改 |
+
+工具与审查：T16–T22 及修复轮次由 Codex 实施；Codex / Opus 审计后有 mmx（MiniMax-M3）复核，由 commander 按 [`mmx-triage.md`](../../audits/2026-11-06-judgment-framework/mmx-triage.md) 分流。逐任务过程差异、失败计数与复审细节见实施记录。
+
+### 19.2 §15 验收样例 → 测试
+
+| 样例 | 测试文件 · 用例标题 | 覆盖 |
+|---|---|---|
+| 1 重复宏观生产 | `methodologies/macro-regime.v1.test.ts` · `acceptance example 1: the same snapshot produced twice → second run duplicates=1 and the row count is unchanged` | 覆盖 |
+| 2 篡改宏观冻结观测 | `replay.test.ts` · `tampering a frozen projection → input_hash_mismatch naming the input (exit 2)`（遍历 macro fixture）；`methodologies/macro-regime.v1.test.ts` · 黄金夹具观测摘要用例 | 覆盖 |
+| 3 第五根 bar | `settle.test.ts` · `session_index n=5 with only 4 later bars → deferred(pending) and backoff; once the 5th bar prints → settled with ≥ 11 evidence bars` | 覆盖 |
+| 4 99 / 100、ECE | `calibration.test.ts` · `acceptance example 4: 99 independent → insufficient, 100 → calibrated; open/void/withdrawn/retrospective are counted, not sampled`；`G01 counterexample: raw holdout ECE 0.12, isotonic-mapped ≈ 0 → failed (the gate tests raw p)`；`display.test.ts` · `probability calibrated: percent = round(p × 100), summary carried (acceptance example 4)` | 覆盖 |
+| 5 withdraw / reopen | `settle.integration.test.ts` · `acceptance 5: settled(1) → withdrawn(2) → reopened(3) → settled(4); each admin transition bumps validity.revision; a withdrawn judgment is not claimed`；`display.test.ts` · `an invalidated report (withdrawal bumped the revision) shows insufficient and no percent (acceptance examples 5 and 10)` | 覆盖；DB 待 runner |
+| 6 断网、失败、新鲜度、修复 | `settle.test.ts` · `acceptance 6: offline run, everything deferred(unavailable) → batch success with info codes, no settlement, freshness ok`、`acceptance 6: a resolver that throws fails the batch; two failed runs in a row → dq_freshness error`、`repairs stale judgments.settle batches (15 min) before claiming` | 覆盖 |
+| 7 禁止直接写 / RPC 原子登记 | `judgments.integration.test.ts` · `RLS with real roles: anon/authenticated read publishable rows only and never the queue or job state; no role writes directly (acceptance 7, denial half)`、`register_judgment: judgment and queue row in one transaction as service_role, server registered_at, the three retrospective rules, abstained without queue, 23505 unchanged (acceptance 7, RPC half)` | 覆盖；DB 待 runner |
+| 8 publishable 门控 | `judgments.integration.test.ts` · `publishable toggles anon visibility of judgments, settlements and calibrations immediately (acceptance 8, direct select)`、`public RPCs run under RLS: anon sees a methodology only while publishable via latest cards, history and calibration_cohort; calibration_cohort_internal is complete for service_role (acceptance 8, RPC half; R04)` | 覆盖；DB 待 runner |
+| 9 as_known 重同步 | `judgments.integration.test.ts` · `as_known: registered_at and the methodology event history decide what was known; a resync does not rewrite history (acceptance 9)`；`src/app/api/judgments/route.test.ts` · `view=as_known&asOf= passes cutoff = asOf end of UTC day; asOf alone implies as_known` | 覆盖；DB 待 runner |
+| 10 运行中撤回 | `calibrate.test.ts` · `stale_revision: a withdrawal during the run discards the report, clears, and recalculates with a new generation (acceptance example 10)`；`judgments.integration.test.ts` · `insert_calibration: inserted, duplicate fingerprint, stale_revision when the row or the expectation lags a withdrawal (acceptance 10, SQL half)`；`display.test.ts` · `an invalidated report (withdrawal bumped the revision) shows insufficient and no percent (acceptance examples 5 and 10)` | 覆盖；DB 待 runner |
+
+### 19.3 门禁结果
+
+| 日期 | 命令 | 结果 |
+|---|---|---|
+| 2026-11-07 | `npm test -- src/lib/judgments/methodologies/macro-regime.v1.test.ts` | 红 1 failed / 36 passed；修正后 37 passed；macro replay `--check` byte-equal |
+| 2026-11-07 | `npm test -- src/lib/judgments/rpc-inventory.test.ts` | 红 1 suite 未收集（缺 runbook）；完成后 2 passed |
+| 2026-11-07 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run build` | 默认 `npm test` 两次因无关 s4 FileHandle 清理异常 / s4 与 gold 5 秒超时退出 1；单文件重跑 8/8、22/22 通过。`npm test -- --maxWorkers=2` 533 suites / 5904 tests 通过，40 suites / 589 tests 跳过（数据库环境未启用）；typecheck、lint（零警告）、build 通过 |
+| 2026-11-07 | PostgreSQL `test:db` / `test:migrations` | 本任务按指挥要求不运行；commander 用 db-one runner 验证 |
 
 ---
 

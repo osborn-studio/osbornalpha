@@ -19,6 +19,7 @@
 | T20 recommendation private adapter / analyst UI | 待指挥提交（sandbox 禁止 git index.lock） | 待复审 | Codex gpt-6-astra 实施 | 0 | 首次红测 4 suites missing modules；108 passed / 5 DB skipped；typecheck、lint PASS；db-one sandbox EPERM |
 | T19 macro_regime method / real macro wiring | 本提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 红测；502 passed / 83 DB skipped；typecheck、lint、golden --check PASS；CLI dry-run 缺配置；db-one EPERM |
 | T21 judgment UI / methods / admin | 待提交 | 待复审 | Codex gpt-6-astra 实施 | 0 | TDD 首轮 5 failed + 1 suite missing；契约/交互回归 4 failed → 45 passed；typecheck、lint PASS；浏览器 host unavailable |
+| T22 runbook / spec §19 / norm tolerance | 本提交 | 待复审 | Codex gpt-6-sol 实施 | 0 | 宏观容差红 1/36 → 37/37；runbook inventory 红 1 suite → 2/2；全量 5904 pass（maxWorkers=2）；typecheck/lint/build PASS；迁移按指挥要求未锁，DB 待 commander runner |
 
 ## 偏差 · Task 1
 
@@ -294,3 +295,14 @@
 - 验证：`npm run typecheck && npm run lint` 最终 PASS（max-warnings=0）；中间 typecheck 发现重写 effect 遗留两行语法错误，已修；lint 曾报 ref cleanup 警告，已用稳定 invalidate callback 修复。`git diff --check` PASS。`npm run build` 仅运行一次，完整 PASS（42 static pages；三个新页面均列为 ƒ dynamic）。构建后仅将 HTTP codeVersion 类型放宽为 string|null，与 route-utils 实际返回一致，随后再次 typecheck/lint。
 - 浏览器核对受阻：`npm run dev` 可启动（随后停止）；cua 创建 localhost 方法页返回 browser access host unavailable，curl localhost / 127.0.0.1 均返回连接失败（exit 7）。因此未声称已完成视觉、390px 和键盘浏览器验收；需指挥在可访问浏览器与登录/数据库配置环境补验。使用源码守卫、纯逻辑测试、typecheck 与 build 覆盖当前可运行验证。
 - 工作树已有 Task 20 implementation-log 修改，原样保留；期间出现的 t19-mmx.md / t20-mmx.md 非本任务文件，未修改。
+
+
+## Task 22 — 运行手册、实施偏差与收尾（F4-6）
+
+- 2026-11-07：`docs/runbooks/judgments.md` 写部署、权限/RPC、许可证发布、复权验证、校准孤儿清理、回滚及 §17 owner 事项；`rpc-inventory.test.ts` 逐组核对 §1 与 §8；规格 §19 逐项记录实施偏差、§15 十例测试映射和门禁。
+- 指挥覆盖旧计划 Step 6：最终迁移为 `20261116090000_judgments.sql`（旧名 `20261109150000` → `20261115090000` → 当前）；保持未锁，`migrations.lock.json` 未改。合并顺序 macro #112 → F4；合并者计算 `shasum -a 256` 后追加 `{file,sha256}`，锁后不再改 SQL。旧计划的仓库外 Claude 会话笔记在本 sandbox 非可写路径，未更新；交接内容已写在本节和 runbook。
+- 正确性修复：宏观分类器 norm 四类各舍入 6 位，`macroRegimeV1.compute` 的归一总和容差由 1e-9 改为 5e-6；红测 1 failed / 36 passed，绿测 37 passed。1.000002 接受、1.00001 拒绝。`node --import tsx scripts/judgments/build-replay-fixture.ts macro --check` byte-equal，未重生成夹具。`formula_hash` 会因方法实现变化而更新；尚未公开发布，部署前同步需核对 drift。
+- 已提交契约适配：`macro_regime@v1` 是 active / publishable=false，真实 MacroReadApi 由 MACRO_JUDGMENTS_ENABLED 控制；目录 table_rows 已去除；RPC inventory 含 claim_judgment、resolve_closed_judgment_quarantine；手动结算经 claimOne；队列隔离在 last_detail.incident；setJobState 返回 `{ok,updated_at}`、claim_due_judgments 为 jsonb 数组；WorkItem.observedAt、ProduceWork、display now 均按当前代码。`licenses.json` 在哈希闭包外，JSON percent=null 省略、pending_fill.condition=null、scenario 指标 unavailable、复权仅 eastmoney A/HK qfq 和 US hfq verified、DataGateway unverified、补偿连续三次失败跳过及 T2-02 DB 等待风险均已写 §19 和 runbook。
+- TDD：runbook 清单测试初跑 1 suite 无法收集（文档未创建），完成后 2 passed；宏观回归如上。`npm run typecheck`、`npm run lint`（max-warnings=0）、`npm run build`、`git diff --check` 均 PASS。
+- `npm test` 默认并发首跑 5904 passed / 589 skipped 但 s4 FileHandle GC unhandled error 退出 1；再跑 s4 8/8 通过。第二次默认并发 5901 passed / 3 timed out（s4 两项、gold diff 一项），两文件分别单跑 8/8、22/22 通过。`npm test -- --maxWorkers=2` 最终 533 suites / 5904 tests passed，40 suites / 589 DB tests skipped。未改无关测试。
+- 按指挥要求未运行 `test:db`；本 sandbox 既有 db-one 运行记录为 IPC / 127.0.0.1 listen EPERM，commander 需在可启动 PostgreSQL 的环境执行 db-one 与迁移检查。未新增含 `S4_TEST_STATE` 的测试，无 `criticalSuites` 改动；本任务不领取 due judgments。

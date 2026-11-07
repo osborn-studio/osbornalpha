@@ -150,6 +150,17 @@ describe('macro_regime@v1 (Task 19)',()=>{
   expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
  });
 
+ it('accepts six-decimal classifier norms summing to 1.000002 but rejects 1.00001',async()=>{
+  const fx=base(),inputs=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  if(!Array.isArray(inputs))throw new Error(inputs.reason);
+  const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
+  snapshot.snapshot.norm={recovery:0.325758,overheat:0.234849,stagflation:0.219697,recession:0.219698};
+  expect(Object.values(snapshot.snapshot.norm).reduce((a,b)=>a+b,0)).toBeCloseTo(1.000002,6);
+  expect(macroRegimeV1.compute(US,inputs).abstained).toBe(false);
+  snapshot.snapshot.norm.recession=0.219706;
+  expect(macroRegimeV1.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+ });
+
  it('macro_regime_replay on the same vintage → recovery → hit',async()=>{
   const {row,inputsDb}=await registerS1();
   expect(macroRegimeReplayResolver.validateParams(row.condition!.params)).toBe(true);

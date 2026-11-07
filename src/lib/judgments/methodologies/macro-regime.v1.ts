@@ -55,7 +55,7 @@ function compute(subject:Subject,inputs:Input[]):Active<CategoricalClaim>|Abstai
  if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==CATALOG_VERSION)return abstain('upstream_version_mismatch');
  if(s.region!==subject.key)return abstain('binding_mismatch');
  if(!MACRO_REGIMES.every(r=>Number.isFinite(s.scores?.[r])&&Number.isFinite(s.norm?.[r])&&s.norm[r]>=0)
-  ||Math.abs(MACRO_REGIMES.reduce((sum,r)=>sum+s.norm[r],0)-1)>1e-9
+  ||Math.abs(MACRO_REGIMES.reduce((sum,r)=>sum+s.norm[r],0)-1)>5e-6
   ||s.primary_state===null||s.secondary_state===null
   ||!MACRO_REGIMES.includes(s.primary_state)||!MACRO_REGIMES.includes(s.secondary_state)||s.primary_state===s.secondary_state
   ||!Number.isFinite(s.margin_pp))return abstain('invalid_snapshot');
