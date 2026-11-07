@@ -1,5 +1,7 @@
 # Macro strategy (P3 + P4) runbook
 
+最新生产验收见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)：事实页面已上线，判断链路与性能未通过。
+
 路径 2026-11-07 起为 `/macro`（旧路径 `/intel/macro/*` 308 永久重定向）
 
 Spec: `docs/superpowers/specs/2026-11-07-macro-workbench-p3-p4-design.md` (draft 5). Plan: `docs/superpowers/plans/2026-11-07-macro-workbench-p3-p4.md`.
