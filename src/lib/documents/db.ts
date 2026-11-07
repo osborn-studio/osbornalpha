@@ -327,6 +327,7 @@ export function supabaseDocumentsDb(client:SupabaseClient):DocumentsDb{
    return out;
   },
   async readDocuments(issuer,opts){return pageOf(await call<Envelope>('read_documents',readDocumentsArgs(issuer,opts)),documentFromRow,READ_DOC_KEYS);},
+  async documentsByFiling(f,asOf){const r=await call<{filing_found:boolean;rows:Record<string,unknown>[]}>('read_documents_by_filing',{p_filing:f.filingId,p_as_of:asOf});return {filingFound:r.filing_found,rows:r.rows.map(documentFromRow)};},
   async documentById(id){const r=await maybe(c.from('disclosure_documents').select('*').eq('document_id',id).maybeSingle());return r?documentFromRow(r):null;},
   async documentsByIds(ids){
    if(checkIds(ids).length===0)return [];

@@ -47,8 +47,9 @@ export async function fetchCompanyJson<T>(url:string,signal?:AbortSignal):Promis
 }
 export const isWithheld=(x:unknown):x is WithheldCell=>typeof x==='object'&&x!==null&&(x as {kind?:unknown}).kind==='withheld';
 export const flagOn=(v:string|undefined)=>v==='1'||v==='true';
+export const f3DrawerFlagOn=(v:string|undefined)=>v===undefined||flagOn(v);
 // NEXT_PUBLIC_* must be referenced literally to be inlined into the client bundle.
-export const F3_DRAWER_FLAG=flagOn(process.env.NEXT_PUBLIC_COMPANY_F3_DRAWER);
+export const F3_DRAWER_FLAG=f3DrawerFlagOn(process.env.NEXT_PUBLIC_COMPANY_F3_DRAWER);
 export const JUDGMENTS_FLAG=flagOn(process.env.NEXT_PUBLIC_COMPANY_JUDGMENTS);
 
 // ---- client view of the route DTOs (Task 9/10; see part D "依赖的跨组接口") ----

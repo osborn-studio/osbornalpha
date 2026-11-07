@@ -123,7 +123,7 @@ async function supersededBy(db:DocumentsDb,row:DocumentRow):Promise<string|null>
 /** GET /api/documents/doc/[id] body for a row already visible to the caller through db. */
 export async function docDetail(db:DocumentsDb,row:DocumentRow,extractionsCursor:string|null){
  const [assets,extractions,next]=await Promise.all([db.assetsOf(row.document_id),db.extractionsOf(row.document_id,{cursor:extractionsCursor,limit:EXTRACTIONS_PAGE}),supersededBy(db,row)]);
- return {extractorVersion:EXTRACTOR_VERSION,classifierGen:CLASSIFIER_GEN,document:publicDocumentView(row),assets:assets.map(assetView),
+ return {extractorVersion:EXTRACTOR_VERSION,classifierGen:CLASSIFIER_GEN,document:{...publicDocumentView(row),issuerId:row.issuer_id},assets:assets.map(assetView),
   extractions:{rows:extractions.rows.map(extractionView),nextCursor:extractions.nextCursor},supersedes:row.supersedes_document_id,supersededBy:next};
 }
 

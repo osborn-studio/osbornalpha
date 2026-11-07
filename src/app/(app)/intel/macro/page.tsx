@@ -2,6 +2,7 @@
 // correlation options from the catalog; data loads client-side from /api/macro/*.
 import { MacroWorkbench, type WorkbenchTab } from '@/components/macro/MacroWorkbench';
 import { correlationOptions } from '@/lib/macro/workbench-options';
+import { macroJudgmentsEnabled } from '@/lib/macro/flags';
 // MACRO-P3
 import { strategyEnabled } from '@/lib/macro/strategy/flags';
 // /MACRO-P3
@@ -14,7 +15,7 @@ export default async function MacroPage({ searchParams }: { searchParams: Promis
   const sp = await searchParams;
   const region = sp.region === 'CN' ? 'CN' : 'US';
   const tab = TABS.find((x) => x === sp.tab) ?? 'overview';
-  const judgmentsEnabled = process.env.MACRO_JUDGMENTS_ENABLED === '1';
+  const judgmentsEnabled = macroJudgmentsEnabled();
   // MACRO-P3
   const strategyOn = strategyEnabled();
   // /MACRO-P3

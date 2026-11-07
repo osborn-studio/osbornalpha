@@ -9,7 +9,7 @@ import {US_FIXTURE,seedCatalog,seedPoints,yoyPoints} from './testing/seed';
 
 const TODAY='2026-11-06';
 async function setup(){
- const db=memoryMacroDb();await seedCatalog(db);
+ const db=memoryMacroDb();db.setNow('2026-10-16T00:00:00.000Z');await seedCatalog(db);
  const seed=await seedPoints(db,US_FIXTURE,{fetchedAt:'2026-10-15T05:30:00.000Z'});
  return {db,seed,api:macroReadApi(db,{judgments:true})};
 }
@@ -126,7 +126,10 @@ describe('classifyAsOf',()=>{
  });
  it('uses the vintage visible at cutoff (available_at ≤ cutoff, highest version within the period)',async()=>{
   const {db,api}=await setup();
-  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-20T05:30:00.000Z'});   // index revision → yoy v2 (both revisable)
+  db.setBatchStatus('revision','running');
+  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-16T05:30:00.000Z',batchId:'revision'});   // available before cutoff, finalized after
+  db.setBatchStatus('revision','success',undefined,'2026-10-20T05:30:00.000Z');
+  expect((await db.batchFinishedAt(['revision'])).revision).toBe('2026-10-20T05:30:00.000Z');
   const before=await api.classifyAsOf('US','2026-10','2026-10-18T00:00:00Z','v1.0');
   const cpiBefore=before.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')!;
   expect(cpiBefore).toMatchObject({value:2.9,vintage_id:'1'});
@@ -134,6 +137,11 @@ describe('classifyAsOf',()=>{
   expect(after.observation_refs.find(r=>r.series_id==='US_CPI_YOY'&&r.period_end==='2026-09-30')).toMatchObject({value:4.2,vintage_id:'2'});
   expect(before.regime!.primary_state).toBe('overheat');
   expect(after.regime).not.toEqual(before.regime);   // CPI 4.2 hits infl.gt4 instead of infl.2to3
+ });
+ it('fails closed when a candidate batch has no provable receipt',async()=>{
+  const {db}=await setup();
+  const fake={...db,batchFinishedAt:async(ids:string[])=>Object.fromEntries(ids.map(id=>[id,null]))};
+  await expect(macroReadApi(fake,{judgments:true}).classifyAsOf('US','2026-10','2026-10-18T00:00:00Z','v1.0')).rejects.toMatchObject({code:'historical_cutoff_unsupported'});
  });
  it('caps period_end at the last day of referencePeriod',async()=>{
   const {api}=await setup();
