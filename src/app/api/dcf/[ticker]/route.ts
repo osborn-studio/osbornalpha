@@ -1,5 +1,5 @@
 // src/app/api/dcf/[ticker]/route.ts
-// DCF over disclosure facts (spec §9.1, §0 #65). No self-call to /api/financials: the seed comes from ONE
+// DCF over disclosure facts (spec §9.1, §0 #65). No self-call to the legacy financials route: the seed comes from ONE
 // company_read_snapshot envelope read server-side, gated (public rules, admin:false). GET → the equity-bridge
 // panel seed (no LLM, no engine). POST {overrides} → assemble (defaults < LLM < facts < user) and run;
 // an incomplete bridge → 200 {status:'unavailable', code:'dcf_bridge_missing'} without a valuation.

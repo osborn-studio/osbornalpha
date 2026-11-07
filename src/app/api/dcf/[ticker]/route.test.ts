@@ -24,7 +24,7 @@ describe('/api/dcf/[ticker] (spec §9.1, §0 #65)',()=>{
   vi.clearAllMocks();tables=await seededTables();mocks.deps=makeDeps(tables);mocks.llm.mockResolvedValue(null);
   fn(mocks.deps.snapshot).mockImplementation(async(issuer:string)=>issuer===US?emptySnapshot({stateRev:3,rows:usRows(),filings:[summary()]}):emptySnapshot({stateRev:4,rows:cnRows(),filings:[linked]}));
  });
- it('never self-calls /api/financials; one seed snapshot of SEED_CONCEPTS with history',async()=>{
+ it('never self-calls the legacy financials route; one seed snapshot of SEED_CONCEPTS with history',async()=>{
   const spy=vi.spyOn(globalThis,'fetch');
   await GET(new Request('https://alpha.example/api/dcf/AAPL'),ctx('AAPL'));
   expect(spy).not.toHaveBeenCalled();spy.mockRestore();

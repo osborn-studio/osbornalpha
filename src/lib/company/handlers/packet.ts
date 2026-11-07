@@ -11,7 +11,7 @@ import {intParam} from '@/lib/facts/public-route';
 import type {Market,MetricRow} from '@/lib/facts/types';
 import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
 import type {Gated,Handler} from '../route';
-import {buildStatementsGrid,periodKeyOf} from '../statements-grid';
+import {buildStatementsGrid,derivedCellOf,periodKeyOf} from '../statements-grid';
 import type {Basis,Cell,PeriodCol,StatementKind,WithheldCounts,WithheldReason} from '../types';
 
 export const PACKET_PARAMS=['annualPeriods','recentPeriods'] as const;
@@ -21,7 +21,8 @@ const STATEMENTS:StatementKind[]=['IS','BS','CF'];
 export type PacketValue={value:string;factId:string;availableDate:string}|{withheld:WithheldReason;factId:string};
 export interface PacketRow{concept:string;unit:string|null;values:Record<string,PacketValue>}
 export interface PacketSection{periods:PeriodCol[];IS:PacketRow[];BS:PacketRow[];CF:PacketRow[]}
-export type PacketMetric={metric:string;periodKey:string;unit:string;basis:string;factIds:string[];availableDate:string}&({value:string}|{withheld:WithheldReason});
+export interface PacketInput{factId:string;availableDate:string;quarter?:[string,string];ytdRule?:'a'|'b'}
+export type PacketMetric={metric:string;periodKey:string;unit:string;basis:string;factIds:string[];availableDate:string}&({value:string;inputUnit:string;inputs:PacketInput[]}|{withheld:WithheldReason;factId:string});
 export interface PacketDto{
  issuerId:string;ticker:string;market:Market;asOf:string;truncated:boolean;
  provenance:{mappingGen:number;formulaVersion:string;stateRev:number};
@@ -54,13 +55,15 @@ function sectionOf(b:Built['sections']['annual'],n:number,g:Gated):PacketSection
  out.periods=[...periodsByKey.values()].sort(colOrder);
  return out;
 }
+// Lineage comes from the grid's derivedCellOf and the shared gateCell (zero inputs / any ineligible input → withheld).
 function metricsOf(ms:MetricRow[],ends:Set<string>,g:Gated):PacketMetric[]{
  return ms.filter(m=>(PACKET_METRICS as readonly string[]).includes(m.metric)&&ends.has(m.period_end)).map(m=>{
-  const factIds=m.inputs.map(i=>i.fact_id);
-  const availableDate=m.inputs.reduce((d,i)=>i.available_date>d?i.available_date:d,'');
-  const bad=factIds.map(id=>g.reasonOf(id)).filter((r):r is WithheldReason=>r!==null);
+  const d=derivedCellOf(m),gated=gateCell(d,g);
+  const factIds=d.inputs.map(i=>i.factId);
+  const availableDate=d.inputs.reduce((x,i)=>i.availableDate>x?i.availableDate:x,'');
   const base={metric:m.metric,periodKey:periodKeyOf(m),unit:m.unit,basis:m.basis,factIds,availableDate};
-  return bad.length?{...base,withheld:bad.includes('evidence_incomplete')?'evidence_incomplete':bad[0]}:{...base,value:m.value};
+  if(gated&&gated.kind==='withheld')return {...base,withheld:gated.reason,factId:gated.factId};
+  return {...base,value:d.value,inputUnit:d.inputUnit,inputs:d.inputs.map(i=>({factId:i.factId,availableDate:i.availableDate,...(i.quarter?{quarter:i.quarter}:{}),...(i.ytdRule?{ytdRule:i.ytdRule}:{})}))};
  });
 }
 export const packetHandler:Handler=async(ctx)=>{
@@ -81,10 +84,12 @@ export const packetHandler:Handler=async(ctx)=>{
   const metrics=metricsOf(built.metrics,ends,g);
   const all=[...annual.IS,...annual.BS,...annual.CF,...recent.IS,...recent.BS,...recent.CF].flatMap(row=>Object.values(row.values));
   const withheld=countWithheld([...all,...metrics].filter(v=>'withheld' in v).map(v=>({kind:'withheld',reason:(v as {withheld:WithheldReason}).withheld})));
-  return {...head,annual,recent,metrics,clipped:{annual:annualN-a,recent:recentN-r},withheld};
+  return {...head,annual,recent,metrics,clipped:{annual:a0-a,recent:r0-r},withheld};
  };
- let a=annualN,r=recentN,body=make(a,r);
+ const maxOf=(k:'annual'|'recent')=>Math.max(0,...STATEMENTS.map(s=>built.sections[k][s].periods.length));
+ const a0=Math.min(annualN,maxOf('annual')),r0=Math.min(recentN,maxOf('recent'));
+ let a=a0,r=r0,body=make(a,r);
  while(bytes(body)>PACKET_MAX_BYTES&&(a>1||r>1)){if(r>1&&(r>=a||a===1))r--;else a--;body=make(a,r);}
- if(bytes(body)>PACKET_MAX_BYTES)body={...head,annual:emptySection(),recent:emptySection(),metrics:[],clipped:{annual:annualN,recent:recentN},withheld:body.withheld};
+ if(bytes(body)>PACKET_MAX_BYTES)body={...head,annual:emptySection(),recent:emptySection(),metrics:[],clipped:{annual:a0,recent:r0},withheld:{evidenceIncomplete:0,citationPending:0}};
  return {body,empty:body.annual.periods.length===0&&body.recent.periods.length===0};
 };
