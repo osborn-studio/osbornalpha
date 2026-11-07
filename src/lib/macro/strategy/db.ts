@@ -337,8 +337,9 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
     finalize_payload:r.finalize_payload,finalized:r.finalized});
   },
   async recoverableRuns(userId,limit){
-   return [...runs.values()].filter(r=>r.user_id===userId&&r.state==='running'&&hasRecordedCompletion(r.raw_output))
-    .sort((a,b)=>a.claimed_at-b.claimed_at||(a.explanation_id<b.explanation_id?-1:1)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>r.explanation_id);
+   return [...runs.values()].filter(r=>r.user_id===userId&&r.state==='running')   // same order and scan cap as production: oldest RECOVERY_SCAN running rows, then the recorded ones
+    .sort((a,b)=>a.claimed_at-b.claimed_at||(a.explanation_id<b.explanation_id?-1:1)).slice(0,RECOVERY_SCAN)
+    .filter(r=>hasRecordedCompletion(r.raw_output)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>r.explanation_id);
   },
   async explanationsOf(_client,subjectKind,subjectId,limit){
    if(sessionUser===null)return [];

@@ -2,7 +2,9 @@
 import {describe,expect,it} from 'vitest';
 import {VERSIONS} from './contract';
 import type {EventInput,StrategyPolicyEvent} from './contract';
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {inputRole,manifestBuilder,readState} from './manifest';
+import {subtract,toBp} from './numeric';
 import {EVENTS_PURPOSE,mergePolicyEvents,readPolicyEvents,US_TARGET_LOWER_ID,US_TARGET_SINGLE_ID,US_TARGET_UPPER_ID} from './policy-events';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
 import {daily,fedTargetFixture,fixture} from './testing/fixture';
@@ -32,6 +34,11 @@ describe('mergePolicyEvents',()=>{
   const r=mergePolicyEvents(derive,[row('s','2008-12-15','1')],[row('u','2008-12-16','1')],[row('l','2008-12-16','0.75')]);
   expect(r.events.map(e=>[e.basis,e.upper_to,e.lower_to,e.change_bp])).toEqual([['single_to_range','1','0.75','0']]);
   expect(r.gaps).toEqual([]);
+ });
+ it('a verified switch with s = u = l is still a transition event, with change_bp 0 and no gap',()=>{
+  const r=mergePolicyEvents(derive,[row('s','2008-12-15','1')],[row('u','2008-12-16','1.0')],[row('l','2008-12-16','1')]);
+  expect(r.gaps).toEqual([]);
+  expect(r.events).toEqual([{kind:'policy_target_change',region:'US',effective_date:'2008-12-16',upper_from:'1',upper_to:'1',lower_from:'1',lower_to:'1',change_bp:'0',source:'derived',evidence:['s','u','s','l'],version:VERSIONS.events,basis:'single_to_range'}]);
  });
  it.each([
   ['upper starts a day late',SINGLE,[row('u1','2008-12-17','0.25')],LOWER,'upper_first_not_2008-12-16'],
@@ -73,12 +80,26 @@ describe('readPolicyEvents',()=>{
   for(const e of r.events)for(const id of e.evidence)expect(byId.has(id),`${e.effective_date} evidence ${id}`).toBe(true);
   for(const e of r.events){   // each event re-derives from its frozen evidence rows alone
    const [uf,ut,lf,lt]=e.evidence.map(id=>byId.get(id)!.value_text);
-   expect([uf,ut,lf,lt].map(Number)).toEqual([e.upper_from,e.upper_to,e.lower_from,e.lower_to].map(Number));
+   expect([uf,ut,lf,lt].map(canonicalDecimal)).toEqual([e.upper_from,e.upper_to,e.lower_from,e.lower_to]);   // exact canonical endpoints, no Number()
+   const du=subtract(ut,uf),dl=subtract(lt,lf);
+   expect(e.change_bp).toBe(toBp(e.basis==='range'&&du==='0'?dl:du));   // recomputed exactly from the frozen rows (P2: the lower move only when the upper did not move)
   }
   const tuple=m.inputs.filter(i=>i.period_end==='2008-12-15'||i.period_end==='2008-12-16').map(i=>i.role).sort();
   expect(tuple).toEqual([inputRole(EVENTS_PURPOSE,US_TARGET_SINGLE_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_LOWER_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_UPPER_ID,'evidence')].sort());
   expect(m.inputs.every(i=>i.role.endsWith(':evidence')&&i.source.kind==='history')).toBe(true);
   expect(m.inputs.length).toBe(new Set(r.events.flatMap(e=>[...e.evidence])).size);   // the tuple rows are evidence of the switch event here
+ });
+ it('an unverified transition still retains the transition tuple rows, and emits a gap instead of an event',async()=>{
+  const obs=[...daily(US_TARGET_SINGLE_ID,[['2008-12-12','1.5'],['2008-12-15','1']]),...daily(US_TARGET_UPPER_ID,[['2008-12-17','0.25']]),...daily(US_TARGET_LOWER_ID,[['2008-12-17','0']])];
+  const b=manifestBuilder(memoryStrategyPort(fixture({observations:obs})),'2026-11-03T00:00:00Z');
+  const r=await readPolicyEvents(b);
+  expect(r.events.some(e=>e.basis==='single_to_range')).toBe(false);
+  expect(r.gaps).toEqual([expect.objectContaining({kind:'transition_unverified',near:'2008-12-16'})]);
+  const m=b.build({kind:'cycle_table',params:{boundary:'event_day'},methodVersion:'m/1',codeVersion:'test'});
+  const byRole=(id:string)=>m.inputs.filter(i=>i.role===inputRole(EVENTS_PURPOSE,id,'evidence')).map(i=>i.period_end);
+  expect(byRole(US_TARGET_SINGLE_ID)).toEqual(['2008-12-12','2008-12-15']);   // the last single-target row is kept although no event uses it for the switch
+  expect(byRole(US_TARGET_UPPER_ID)).toEqual(['2008-12-17']);
+  expect(byRole(US_TARGET_LOWER_ID)).toEqual(['2008-12-17']);
  });
  it('a truncated source gives no events, a history_truncated gap and a truncated read state',async()=>{
   const obs=daily('US_FED_TARGET_D',[['2008-12-15','1']]);

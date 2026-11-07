@@ -5,7 +5,7 @@
 //   upper = lower = the single target, evidence [prev, cur, prev, cur], basis 'single_target';
 // - the switch: exactly three dated observations — the single target's last row on 2008-12-15 and the first upper and
 //   lower rows on 2008-12-16 — give one 'single_to_range' event, every value read from those rows (no constants),
-//   change_bp = toBp(u − s) from the UPPER bound always (spec §5.4; an unchanged upper with a moved lower is a 0 bp event
+//   change_bp = toBp(u − s) from the UPPER bound always (spec §5.4; an unchanged upper with a moved lower, or s = u = l, is a 0 bp event
 //   that episodes and the matrix skip), evidence [s, u, s, l]. Anything else → no event and an explicit gap
 //   {kind:'transition_unverified', near:'2008-12-16'}.
 // Inputs must be strictly ascending (P2 assertAscending). Same inputs → same output. Event-source histories are recorded
@@ -51,12 +51,10 @@ export function mergePolicyEvents(derive:Derive,single:readonly EventInput[],upp
   if(!l)reasons.push('lower_missing');else if(l.period_end!==TRANSITION_RANGE_DATE)reasons.push(`lower_first_not_${TRANSITION_RANGE_DATE}`);
   if(reasons.length)gaps.push({kind:'transition_unverified',reason:reasons.join(';'),near:TRANSITION_RANGE_DATE});
   else{
-   const du=subtract(u.value_text,s.value_text),dl=subtract(l.value_text,s.value_text);
-   if(sign(du)!==0||sign(dl)!==0){
-    const from=canonicalDecimal(s.value_text);
-    events.push({kind:'policy_target_change',region:'US',effective_date:TRANSITION_RANGE_DATE,upper_from:from,upper_to:canonicalDecimal(u.value_text),lower_from:from,lower_to:canonicalDecimal(l.value_text),
-     change_bp:toBp(du),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
-   }
+   const du=subtract(u.value_text,s.value_text);
+   const from=canonicalDecimal(s.value_text);   // a correctly dated transition is always an event, also when s = u = l (change_bp '0')
+   events.push({kind:'policy_target_change',region:'US',effective_date:TRANSITION_RANGE_DATE,upper_from:from,upper_to:canonicalDecimal(u.value_text),lower_from:from,lower_to:canonicalDecimal(l.value_text),
+    change_bp:toBp(du),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
   }
  }
  for(const e of derive(upper,lower))events.push({...e,basis:'range'});

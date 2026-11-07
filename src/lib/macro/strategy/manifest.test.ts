@@ -112,6 +112,29 @@ describe('manifestBuilder',()=>{
   expect(m.inputs.some(i=>i.role.startsWith('events:'))).toBe(false);
   expect(readState(t.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBe('truncated');
  });
+ it('latestObservations: a truncated read records truncated without inputs; an ordinary port error propagates',async()=>{
+  const t=manifestBuilder(override(memoryStrategyPort(f),{latestObservations:async()=>{throw new Error('truncated');}}),'2026-11-03T06:02:00Z');
+  expect(await t.snapshotValue('US_DGS10','node')).toBeNull();
+  const m=t.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(readState(m,'US_DGS10','node')).toBe('truncated');expect(m.inputs).toEqual([]);
+  const down=manifestBuilder(override(memoryStrategyPort(f),{latestObservations:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');
+  await expect(down.snapshotValue('US_DGS10','node')).rejects.toThrow('connection reset');   // unavailable infrastructure is not incomplete evidence
+ });
+ it('history: an ordinary port error propagates and records no read state',async()=>{
+  const down=manifestBuilder(override(memoryStrategyPort(f),{seriesHistory:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');
+  await expect(down.history('US_DGS10','dim','month_end')).rejects.toThrow('connection reset');
+  expect(readState(down.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBeNull();
+ });
+ it('useSnapshots({loadRows:false}) freezes the snapshot records without fetching observations',async()=>{
+  let fetched=0;
+  const port=override(memoryStrategyPort(f),{observationsByIds:async()=>{fetched++;return [];}});
+  const b=manifestBuilder(port,us.created_at);
+  await b.useSnapshots({US:us,CN:null},{loadRows:false});
+  expect(fetched).toBe(0);
+  const m=b.build({kind:'explain_facts',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(m.snapshots.US?.snapshot_id).toBe(us.snapshot_id);expect(m.snapshots.CN).toBeNull();
+  expect(m.reads).toEqual([]);expect(m.inputs).toEqual([]);
+ });
  it('an unresolved snapshot id makes the region incomplete: no promotion of the comparison row, no history fallback',async()=>{
   // the latest CPI row of the snapshot is gone (quarantined): only the 2026-08 comparison row resolves
   const gone=fixture({snapshots:[us],observations:[{...cpi[1],status:'quarantined'},cpi[0],unrate]});

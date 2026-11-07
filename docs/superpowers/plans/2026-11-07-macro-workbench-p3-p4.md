@@ -2278,6 +2278,13 @@ describe('canonicalJson',()=>{
   expect(()=>canonicalJson({a:Number.POSITIVE_INFINITY})).toThrow(/canonical_json_unsupported/);
   expect(()=>canonicalJson({a:()=>1})).toThrow('canonical_json_unsupported:function');
  });
+ it('rejects sparse arrays, so a stored body (holes become null) always reproduces its hash',()=>{
+  expect(()=>canonicalJson(Array(1))).toThrow('canonical_json_unsupported:sparse_array');
+  expect(()=>canonicalJson({a:[1,,3]})).toThrow('canonical_json_unsupported:sparse_array');
+  expect(()=>canonicalJson([undefined])).toThrow('canonical_json_unsupported:undefined');   // an undefined element would store as null
+  const body={a:[1,null,3]};
+  expect(sha256Hex(canonicalJson(JSON.parse(JSON.stringify(body))))).toBe(sha256Hex(canonicalJson(body)));
+ });
 });
 describe('sha256Hex',()=>{
  it('matches the FIPS 180-4 test vector',()=>{
@@ -2350,6 +2357,8 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    const a=await db.putManifest(body);
    expect(a.manifest_hash).toBe(sha256Hex(canonicalJson(body)));
    expect(a.body).toEqual(body);
+   expect(sha256Hex(canonicalJson(a.body))).toBe(a.manifest_hash);                  // storage round-trip: the stored body reproduces its hash
+   expect(await code(db.putManifest({...body,params:{salt:Array(1) as unknown as string}}))).not.toBe('resolved');   // a sparse array would store as [null] under another hash
    const reordered=Object.fromEntries(Object.entries(body).reverse()) as unknown as typeof body;   // same content, other key order
    expect((await db.putManifest(reordered)).manifest_id).toBe(a.manifest_id);
    const b=await db.putManifest({...body,cutoff:'2026-11-02T00:00:00.000Z'});
@@ -2527,6 +2536,15 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    await db.recordCompletion({explanationId:b.out.explanation_id,rawOutput:{content:'y'},finalizePayload:PAYLOAD});
    await finish(b.out.explanation_id,'accepted',{content:'y'},{finalizePayload:{...PAYLOAD,pricingVersion:'p2'}});
    expect((await db.runDetail(b.out.explanation_id))!.finalize_payload).toEqual(PAYLOAD);
+  });
+
+  it('recoverableRuns scans only the oldest 50 running rows before it looks for recorded completions',async()=>{
+   const user=randomUUID();
+   const manifestId=(await db.putManifest(testManifest('explain_facts'))).manifest_id;
+   for(let i=0;i<50;i++){const c=await claim({user,manifestId});await h.ageClaim(c.out.explanation_id,0);}   // 50 older rows without a completion
+   const late=await claim({user,manifestId});
+   await db.recordCompletion({explanationId:late.out.explanation_id,rawOutput:{content:'late'},finalizePayload:PAYLOAD});
+   expect(await db.recoverableRuns(user,10)).toEqual([]);                           // the 51st running row is beyond the scan cap
   });
 
   it('a running row with a recorded raw output is never abandoned; runDetail and recoverableRuns expose it for recovery',async()=>{
@@ -2734,11 +2752,14 @@ Create `src/lib/macro/strategy/hash.ts` (Task 4's `manifest.ts` imports and re-e
 // because StrategyDb.putManifest needs it before manifest.ts exists; manifest.ts re-exports both.
 import {createHash} from 'node:crypto';
 
-/** JSON with object keys sorted (UTF-16 code unit order), undefined members dropped, arrays in order, finite numbers only. */
+/** JSON with object keys sorted (UTF-16 code unit order), undefined members dropped, arrays in order (sparse arrays rejected), finite numbers only. */
 export function canonicalJson(v:unknown):string{
  if(v===null||typeof v==='boolean'||typeof v==='string')return JSON.stringify(v);
  if(typeof v==='number'){if(!Number.isFinite(v))throw new Error('canonical_json_unsupported:number');return JSON.stringify(v);}
- if(Array.isArray(v))return `[${v.map(canonicalJson).join(',')}]`;
+ if(Array.isArray(v)){   // holes would hash as absent but store as null: reject (Array.prototype.map skips them)
+  for(let i=0;i<v.length;i++)if(!(i in v))throw new Error('canonical_json_unsupported:sparse_array');
+  return `[${v.map(canonicalJson).join(',')}]`;
+ }
  if(typeof v==='object'){const o=v as Record<string,unknown>;return `{${Object.keys(o).filter(k=>o[k]!==undefined).sort().map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;}
  throw new Error(`canonical_json_unsupported:${typeof v}`);
 }
@@ -3087,8 +3108,9 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
     finalize_payload:r.finalize_payload,finalized:r.finalized});
   },
   async recoverableRuns(userId,limit){
-   return [...runs.values()].filter(r=>r.user_id===userId&&r.state==='running'&&hasRecordedCompletion(r.raw_output))
-    .sort((a,b)=>a.claimed_at-b.claimed_at||(a.explanation_id<b.explanation_id?-1:1)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>r.explanation_id);
+   return [...runs.values()].filter(r=>r.user_id===userId&&r.state==='running')   // same order and scan cap as production: oldest RECOVERY_SCAN running rows, then the recorded ones
+    .sort((a,b)=>a.claimed_at-b.claimed_at||(a.explanation_id<b.explanation_id?-1:1)).slice(0,RECOVERY_SCAN)
+    .filter(r=>hasRecordedCompletion(r.raw_output)).slice(0,Math.max(0,Math.trunc(limit))).map(r=>r.explanation_id);
   },
   async explanationsOf(_client,subjectKind,subjectId,limit){
    if(sessionUser===null)return [];
@@ -3103,7 +3125,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
 - [ ] **Step 4: Run the unit tests**
 
 Run: `npm test -- src/lib/macro/strategy/hash.test.ts src/lib/macro/strategy/db.test.ts`
-Expected: PASS — `Tests  30 passed (30)` (hash 3; db 27 = 17 memory contract cases + 8 wiring + 2 memory specifics).
+Expected: PASS — `Tests  32 passed (32)` (hash 4; db 28 = 18 memory contract cases + 8 wiring + 2 memory specifics).
 
 - [ ] **Step 5: Run the same contract on real PostgreSQL**
 
@@ -3182,10 +3204,10 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  41 passed (41)` (24 migration cases + 17 pg contract cases).
+Expected: PASS — `Tests  42 passed (42)` (24 migration cases + 18 pg contract cases).
 
 Run: `npm test -- src/lib/macro/strategy`
-Expected: PASS for the unit files; `strategy.integration.test.ts` shows 41 skipped (no `S4_TEST_STATE`).
+Expected: PASS for the unit files; `strategy.integration.test.ts` shows 42 skipped (no `S4_TEST_STATE`).
 
 - [ ] **Step 6: Typecheck and lint**
 
@@ -3288,6 +3310,25 @@ describe('percentage change',()=>{
   expect(()=>pctRatio('1','-2')).toThrow('non_positive_base');
   expect(()=>roundPctRatio('1/0',1)).toThrow('non_positive_base');
   expect(()=>roundPctRatio('0.05',1)).toThrow(/invalid_pct_ratio/);
+ });
+});
+describe('numeric range guards',()=>{
+ const tiny=`0.${'0'.repeat(323)}1`,huge=`1${'0'.repeat(309)}`;
+ it('pctChange rejects operands that underflow or overflow Number, and non-finite results',()=>{
+  expect(()=>pctChange(tiny,tiny)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange('1',tiny)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange(huge,'1')).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange('1',huge)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange(`1${'0'.repeat(308)}`,'0.1')).toThrow('unsupported_numeric_range');   // finite operands, infinite quotient
+  expect(pctChange('0','1')).toBe(-100);
+  expect(pctRatio(tiny,tiny)).toBe(`${tiny}/${tiny}`);                         // the exact companion stays exact
+  expect(roundPctRatio(pctRatio(tiny,tiny),1)).toBe('0.0');
+ });
+ it('quartiles / median / quantile7 reject non-finite values',()=>{
+  expect(()=>quartiles([1,Number.NaN,3])).toThrow('unsupported_numeric_range');
+  expect(()=>median([1,Number.POSITIVE_INFINITY])).toThrow('unsupported_numeric_range');
+  expect(()=>quantile7([1,Number.NEGATIVE_INFINITY],0.5)).toThrow('unsupported_numeric_range');
+  expect(()=>quantile7([1,2],Number.NaN)).toThrow('unsupported_numeric_range');
  });
 });
 describe('type-7 quartiles',()=>{
@@ -3421,6 +3462,29 @@ describe('manifestBuilder',()=>{
   expect(m.inputs.some(i=>i.role.startsWith('events:'))).toBe(false);
   expect(readState(t.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBe('truncated');
  });
+ it('latestObservations: a truncated read records truncated without inputs; an ordinary port error propagates',async()=>{
+  const t=manifestBuilder(override(memoryStrategyPort(f),{latestObservations:async()=>{throw new Error('truncated');}}),'2026-11-03T06:02:00Z');
+  expect(await t.snapshotValue('US_DGS10','node')).toBeNull();
+  const m=t.build({kind:'transmission',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(readState(m,'US_DGS10','node')).toBe('truncated');expect(m.inputs).toEqual([]);
+  const down=manifestBuilder(override(memoryStrategyPort(f),{latestObservations:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');
+  await expect(down.snapshotValue('US_DGS10','node')).rejects.toThrow('connection reset');   // unavailable infrastructure is not incomplete evidence
+ });
+ it('history: an ordinary port error propagates and records no read state',async()=>{
+  const down=manifestBuilder(override(memoryStrategyPort(f),{seriesHistory:async()=>{throw new Error('connection reset');}}),'2026-11-03T06:02:00Z');
+  await expect(down.history('US_DGS10','dim','month_end')).rejects.toThrow('connection reset');
+  expect(readState(down.build({kind:'policy_response',params:{},methodVersion:'m/1',codeVersion:'test'}),'US_DGS10','dim')).toBeNull();
+ });
+ it('useSnapshots({loadRows:false}) freezes the snapshot records without fetching observations',async()=>{
+  let fetched=0;
+  const port=override(memoryStrategyPort(f),{observationsByIds:async()=>{fetched++;return [];}});
+  const b=manifestBuilder(port,us.created_at);
+  await b.useSnapshots({US:us,CN:null},{loadRows:false});
+  expect(fetched).toBe(0);
+  const m=b.build({kind:'explain_facts',params:{},methodVersion:'m/1',codeVersion:'test'});
+  expect(m.snapshots.US?.snapshot_id).toBe(us.snapshot_id);expect(m.snapshots.CN).toBeNull();
+  expect(m.reads).toEqual([]);expect(m.inputs).toEqual([]);
+ });
  it('an unresolved snapshot id makes the region incomplete: no promotion of the comparison row, no history fallback',async()=>{
   // the latest CPI row of the snapshot is gone (quarantined): only the 2026-08 comparison row resolves
   const gone=fixture({snapshots:[us],observations:[{...cpi[1],status:'quarantined'},cpi[0],unrate]});
@@ -3492,10 +3556,15 @@ export function add(a:string,b:string):string{const [x,y,s]=align(scaled(a),scal
 export const sign=(v:string):-1|0|1=>{const c=canonicalDecimal(v);return c==='0'?0:c.startsWith('-')?-1:1;};
 /** Exact decimal × 100 (percentage points → basis points), same as P2 events.ts toBp. */
 export const toBp=(delta:string):string=>canonicalDecimal(`${canonicalDecimal(delta)}e2`);
-/** Simple % change (end/base − 1) × 100 as a full-precision double: the one float step §5.6 allows. base ≤ 0 → throws non_positive_base. */
+/** Simple % change (end/base − 1) × 100 as a full-precision double: the one float step §5.6 allows. base ≤ 0 → throws non_positive_base;
+ *  operands or a result outside the double range → throws unsupported_numeric_range. */
 export function pctChange(end:string,base:string):number{
  if(sign(base)<=0)throw new Error('non_positive_base');
- return (Number(canonicalDecimal(end))/Number(canonicalDecimal(base))-1)*100;
+ const e=Number(canonicalDecimal(end)),b=Number(canonicalDecimal(base));
+ if(!Number.isFinite(e)||!Number.isFinite(b)||b<=0)throw new Error('unsupported_numeric_range');   // underflow to 0 / overflow to Infinity
+ const r=(e/b-1)*100;
+ if(!Number.isFinite(r))throw new Error('unsupported_numeric_range');
+ return r;
 }
 /** Exact form of the same change: the ratio text '<end>/<base>' (canonical decimals). base ≤ 0 → throws non_positive_base. */
 export function pctRatio(end:string,base:string):string{
@@ -3517,12 +3586,14 @@ export function roundPctRatio(ratio:string,dp:number):string{
 /** Type-7 quantile of an ascending, non-empty array: h=(n−1)p, q=x[⌊h⌋]+(h−⌊h⌋)(x[⌊h⌋+1]−x[⌊h⌋]). */
 export function quantile7(sorted:readonly number[],p:number):number{
  if(sorted.length===0)throw new Error('quantile_empty');
+ if(!Number.isFinite(p)||sorted.some(v=>!Number.isFinite(v)))throw new Error('unsupported_numeric_range');
  for(let i=1;i<sorted.length;i++)if(sorted[i]<sorted[i-1])throw new Error('quantile_unsorted');
  const h=(sorted.length-1)*p;const lo=Math.floor(h);
  if(lo+1>=sorted.length)return sorted[lo];
  return sorted[lo]+(h-lo)*(sorted[lo+1]-sorted[lo]);
 }
 export function quartiles(values:readonly number[]):{q1:number;median:number;q3:number}{
+ if(values.some(v=>!Number.isFinite(v)))throw new Error('unsupported_numeric_range');
  const s=[...values].sort((a,b)=>a-b);
  return {q1:quantile7(s,0.25),median:quantile7(s,0.5),q3:quantile7(s,0.75)};
 }
@@ -3724,7 +3795,7 @@ export function manifestBuilder(port:StrategyReadPort,cutoff:string):ManifestBui
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- src/lib/macro/strategy/numeric.test.ts src/lib/macro/strategy/manifest.test.ts`
-Expected: PASS (9 + 13 tests).
+Expected: PASS (11 + 16 tests).
 
 - [ ] **Step 5: Typecheck and lint**
 
@@ -3760,9 +3831,9 @@ EOF
 Design decisions (spec §5.4, N9):
 - From 2008-12-16 the P2 derivation (`port.derivePolicyEvents`) is used unchanged; each result gets `basis:'range'` and keeps its own `version`.
 - Single-target era: neighbouring `US_FED_TARGET_D` rows with different values (decimal compare) → event on the later date, `upper = lower = single target`, `change_bp = toBp(cur − prev)`, `evidence=[prev,cur,prev,cur]`, `version = VERSIONS.events`, `basis:'single_target'`.
-- The switch is attempted when the single-target input is non-empty or the range input starts on/before 2008-12-16. It needs exactly: last single-target row dated `2008-12-15`, first upper and first lower rows dated `2008-12-16`. Then one `single_to_range` event on 2008-12-16 with `upper_from = lower_from = s`, `upper_to = u`, `lower_to = l`, `change_bp = toBp(u − s)` (the lower move when the upper did not move, mirroring P2), `evidence=[s,u,s,l]`. Otherwise no event and one gap `{kind:'transition_unverified', reason:<all failing checks joined by ';'>, near:'2008-12-16'}`. A range history that starts after 2008-12-16 with no single-target rows needs no switch (the data simply starts later).
+- The switch is attempted when the single-target input is non-empty or the range input starts on/before 2008-12-16. It needs exactly: last single-target row dated `2008-12-15`, first upper and first lower rows dated `2008-12-16`. Then one `single_to_range` event on 2008-12-16 with `upper_from = lower_from = s`, `upper_to = u`, `lower_to = l`, `change_bp = toBp(u − s)` (the lower move when the upper did not move, mirroring P2), `evidence=[s,u,s,l]`; the event is emitted unconditionally once the three dates verify, also when `s = u = l` (`change_bp:'0'`; no value-change condition, Codex Task 5 #1). Otherwise no event and one gap `{kind:'transition_unverified', reason:<all failing checks joined by ';'>, near:'2008-12-16'}`. A range history that starts after 2008-12-16 with no single-target rows needs no switch (the data simply starts later).
 - `readPolicyEvents(builder)` reads the three histories with purpose `events` and `keepInputs:false`, then freezes (builder `keep`, tag `evidence`) every evidence row of every merged event plus the transition tuple, so each event re-derives and verifies from the manifest alone (plan audit #4); any truncated read → `{events:[],gaps:[{kind:'history_truncated',reason:<truncated series ids>,near:<cutoff date>}]}` (the Task 7 view turns that into missing cells, the Task 8 view and the Task 9 review show the truncation explicitly).
-- The switch event's `change_bp` is always `toBp(u − s)` from the upper bound (spec §5.4; plan audit #13): an unchanged upper with a moved lower is a 0 bp event, which episodes and the matrix skip.
+- The switch event's `change_bp` is always `toBp(u − s)` from the upper bound (spec §5.4; plan audit #13): an unchanged upper with a moved lower, or `s = u = l`, is a 0 bp event, which episodes and the matrix skip (Task 7/8 filter `sign(change_bp)!==0` before direction logic).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3772,7 +3843,9 @@ Design decisions (spec §5.4, N9):
 import {describe,expect,it} from 'vitest';
 import {VERSIONS} from './contract';
 import type {EventInput,StrategyPolicyEvent} from './contract';
+import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {inputRole,manifestBuilder,readState} from './manifest';
+import {subtract,toBp} from './numeric';
 import {EVENTS_PURPOSE,mergePolicyEvents,readPolicyEvents,US_TARGET_LOWER_ID,US_TARGET_SINGLE_ID,US_TARGET_UPPER_ID} from './policy-events';
 import {memoryStrategyPort,type StrategyReadPort} from './port';
 import {daily,fedTargetFixture,fixture} from './testing/fixture';
@@ -3802,6 +3875,11 @@ describe('mergePolicyEvents',()=>{
   const r=mergePolicyEvents(derive,[row('s','2008-12-15','1')],[row('u','2008-12-16','1')],[row('l','2008-12-16','0.75')]);
   expect(r.events.map(e=>[e.basis,e.upper_to,e.lower_to,e.change_bp])).toEqual([['single_to_range','1','0.75','0']]);
   expect(r.gaps).toEqual([]);
+ });
+ it('a verified switch with s = u = l is still a transition event, with change_bp 0 and no gap',()=>{
+  const r=mergePolicyEvents(derive,[row('s','2008-12-15','1')],[row('u','2008-12-16','1.0')],[row('l','2008-12-16','1')]);
+  expect(r.gaps).toEqual([]);
+  expect(r.events).toEqual([{kind:'policy_target_change',region:'US',effective_date:'2008-12-16',upper_from:'1',upper_to:'1',lower_from:'1',lower_to:'1',change_bp:'0',source:'derived',evidence:['s','u','s','l'],version:VERSIONS.events,basis:'single_to_range'}]);
  });
  it.each([
   ['upper starts a day late',SINGLE,[row('u1','2008-12-17','0.25')],LOWER,'upper_first_not_2008-12-16'],
@@ -3843,12 +3921,26 @@ describe('readPolicyEvents',()=>{
   for(const e of r.events)for(const id of e.evidence)expect(byId.has(id),`${e.effective_date} evidence ${id}`).toBe(true);
   for(const e of r.events){   // each event re-derives from its frozen evidence rows alone
    const [uf,ut,lf,lt]=e.evidence.map(id=>byId.get(id)!.value_text);
-   expect([uf,ut,lf,lt].map(Number)).toEqual([e.upper_from,e.upper_to,e.lower_from,e.lower_to].map(Number));
+   expect([uf,ut,lf,lt].map(canonicalDecimal)).toEqual([e.upper_from,e.upper_to,e.lower_from,e.lower_to]);   // exact canonical endpoints, no Number()
+   const du=subtract(ut,uf),dl=subtract(lt,lf);
+   expect(e.change_bp).toBe(toBp(e.basis==='range'&&du==='0'?dl:du));   // recomputed exactly from the frozen rows (P2: the lower move only when the upper did not move)
   }
   const tuple=m.inputs.filter(i=>i.period_end==='2008-12-15'||i.period_end==='2008-12-16').map(i=>i.role).sort();
   expect(tuple).toEqual([inputRole(EVENTS_PURPOSE,US_TARGET_SINGLE_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_LOWER_ID,'evidence'),inputRole(EVENTS_PURPOSE,US_TARGET_UPPER_ID,'evidence')].sort());
   expect(m.inputs.every(i=>i.role.endsWith(':evidence')&&i.source.kind==='history')).toBe(true);
   expect(m.inputs.length).toBe(new Set(r.events.flatMap(e=>[...e.evidence])).size);   // the tuple rows are evidence of the switch event here
+ });
+ it('an unverified transition still retains the transition tuple rows, and emits a gap instead of an event',async()=>{
+  const obs=[...daily(US_TARGET_SINGLE_ID,[['2008-12-12','1.5'],['2008-12-15','1']]),...daily(US_TARGET_UPPER_ID,[['2008-12-17','0.25']]),...daily(US_TARGET_LOWER_ID,[['2008-12-17','0']])];
+  const b=manifestBuilder(memoryStrategyPort(fixture({observations:obs})),'2026-11-03T00:00:00Z');
+  const r=await readPolicyEvents(b);
+  expect(r.events.some(e=>e.basis==='single_to_range')).toBe(false);
+  expect(r.gaps).toEqual([expect.objectContaining({kind:'transition_unverified',near:'2008-12-16'})]);
+  const m=b.build({kind:'cycle_table',params:{boundary:'event_day'},methodVersion:'m/1',codeVersion:'test'});
+  const byRole=(id:string)=>m.inputs.filter(i=>i.role===inputRole(EVENTS_PURPOSE,id,'evidence')).map(i=>i.period_end);
+  expect(byRole(US_TARGET_SINGLE_ID)).toEqual(['2008-12-12','2008-12-15']);   // the last single-target row is kept although no event uses it for the switch
+  expect(byRole(US_TARGET_UPPER_ID)).toEqual(['2008-12-17']);
+  expect(byRole(US_TARGET_LOWER_ID)).toEqual(['2008-12-17']);
  });
  it('a truncated source gives no events, a history_truncated gap and a truncated read state',async()=>{
   const obs=daily('US_FED_TARGET_D',[['2008-12-15','1']]);
@@ -3876,7 +3968,7 @@ Expected: FAIL — `Failed to resolve import "./policy-events"`.
 //   upper = lower = the single target, evidence [prev, cur, prev, cur], basis 'single_target';
 // - the switch: exactly three dated observations — the single target's last row on 2008-12-15 and the first upper and
 //   lower rows on 2008-12-16 — give one 'single_to_range' event, every value read from those rows (no constants),
-//   change_bp = toBp(u − s) from the UPPER bound always (spec §5.4; an unchanged upper with a moved lower is a 0 bp event
+//   change_bp = toBp(u − s) from the UPPER bound always (spec §5.4; an unchanged upper with a moved lower, or s = u = l, is a 0 bp event
 //   that episodes and the matrix skip), evidence [s, u, s, l]. Anything else → no event and an explicit gap
 //   {kind:'transition_unverified', near:'2008-12-16'}.
 // Inputs must be strictly ascending (P2 assertAscending). Same inputs → same output. Event-source histories are recorded
@@ -3922,12 +4014,10 @@ export function mergePolicyEvents(derive:Derive,single:readonly EventInput[],upp
   if(!l)reasons.push('lower_missing');else if(l.period_end!==TRANSITION_RANGE_DATE)reasons.push(`lower_first_not_${TRANSITION_RANGE_DATE}`);
   if(reasons.length)gaps.push({kind:'transition_unverified',reason:reasons.join(';'),near:TRANSITION_RANGE_DATE});
   else{
-   const du=subtract(u.value_text,s.value_text),dl=subtract(l.value_text,s.value_text);
-   if(sign(du)!==0||sign(dl)!==0){
-    const from=canonicalDecimal(s.value_text);
-    events.push({kind:'policy_target_change',region:'US',effective_date:TRANSITION_RANGE_DATE,upper_from:from,upper_to:canonicalDecimal(u.value_text),lower_from:from,lower_to:canonicalDecimal(l.value_text),
-     change_bp:toBp(du),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
-   }
+   const du=subtract(u.value_text,s.value_text);
+   const from=canonicalDecimal(s.value_text);   // a correctly dated transition is always an event, also when s = u = l (change_bp '0')
+   events.push({kind:'policy_target_change',region:'US',effective_date:TRANSITION_RANGE_DATE,upper_from:from,upper_to:canonicalDecimal(u.value_text),lower_from:from,lower_to:canonicalDecimal(l.value_text),
+    change_bp:toBp(du),source:'derived',evidence:[s.observation_id,u.observation_id,s.observation_id,l.observation_id],version:VERSIONS.events,basis:'single_to_range'});
   }
  }
  for(const e of derive(upper,lower))events.push({...e,basis:'range'});
@@ -3956,7 +4046,7 @@ export async function readPolicyEvents(b:ManifestBuilder):Promise<{events:Strate
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- src/lib/macro/strategy/policy-events.test.ts`
-Expected: PASS (12 tests). If `readPolicyEvents … Fed fixture` fails, check that `fedTargetFixture()` (Task 2) has its last `US_FED_TARGET_D` row on 2008-12-15 and its first upper / lower rows on 2008-12-16 as the skeleton states; fix the fixture, not this test.
+Expected: PASS (14 tests). If `readPolicyEvents … Fed fixture` fails, check that `fedTargetFixture()` (Task 2) has its last `US_FED_TARGET_D` row on 2008-12-15 and its first upper / lower rows on 2008-12-16 as the skeleton states; fix the fixture, not this test.
 
 - [ ] **Step 5: Typecheck and lint**
 

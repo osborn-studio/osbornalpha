@@ -58,6 +58,8 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    const a=await db.putManifest(body);
    expect(a.manifest_hash).toBe(sha256Hex(canonicalJson(body)));
    expect(a.body).toEqual(body);
+   expect(sha256Hex(canonicalJson(a.body))).toBe(a.manifest_hash);                  // storage round-trip: the stored body reproduces its hash
+   expect(await code(db.putManifest({...body,params:{salt:Array(1) as unknown as string}}))).not.toBe('resolved');   // a sparse array would store as [null] under another hash
    const reordered=Object.fromEntries(Object.entries(body).reverse()) as unknown as typeof body;   // same content, other key order
    expect((await db.putManifest(reordered)).manifest_id).toBe(a.manifest_id);
    const b=await db.putManifest({...body,cutoff:'2026-11-02T00:00:00.000Z'});
@@ -235,6 +237,15 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    await db.recordCompletion({explanationId:b.out.explanation_id,rawOutput:{content:'y'},finalizePayload:PAYLOAD});
    await finish(b.out.explanation_id,'accepted',{content:'y'},{finalizePayload:{...PAYLOAD,pricingVersion:'p2'}});
    expect((await db.runDetail(b.out.explanation_id))!.finalize_payload).toEqual(PAYLOAD);
+  });
+
+  it('recoverableRuns scans only the oldest 50 running rows before it looks for recorded completions',async()=>{
+   const user=randomUUID();
+   const manifestId=(await db.putManifest(testManifest('explain_facts'))).manifest_id;
+   for(let i=0;i<50;i++){const c=await claim({user,manifestId});await h.ageClaim(c.out.explanation_id,0);}   // 50 older rows without a completion
+   const late=await claim({user,manifestId});
+   await db.recordCompletion({explanationId:late.out.explanation_id,rawOutput:{content:'late'},finalizePayload:PAYLOAD});
+   expect(await db.recoverableRuns(user,10)).toEqual([]);                           // the 51st running row is beyond the scan cap
   });
 
   it('a running row with a recorded raw output is never abandoned; runDetail and recoverableRuns expose it for recovery',async()=>{

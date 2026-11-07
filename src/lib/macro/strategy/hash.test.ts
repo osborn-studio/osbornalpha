@@ -14,6 +14,13 @@ describe('canonicalJson',()=>{
   expect(()=>canonicalJson({a:Number.POSITIVE_INFINITY})).toThrow(/canonical_json_unsupported/);
   expect(()=>canonicalJson({a:()=>1})).toThrow('canonical_json_unsupported:function');
  });
+ it('rejects sparse arrays, so a stored body (holes become null) always reproduces its hash',()=>{
+  expect(()=>canonicalJson(Array(1))).toThrow('canonical_json_unsupported:sparse_array');
+  expect(()=>canonicalJson({a:[1,,3]})).toThrow('canonical_json_unsupported:sparse_array');
+  expect(()=>canonicalJson([undefined])).toThrow('canonical_json_unsupported:undefined');   // an undefined element would store as null
+  const body={a:[1,null,3]};
+  expect(sha256Hex(canonicalJson(JSON.parse(JSON.stringify(body))))).toBe(sha256Hex(canonicalJson(body)));
+ });
 });
 describe('sha256Hex',()=>{
  it('matches the FIPS 180-4 test vector',()=>{

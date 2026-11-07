@@ -27,10 +27,15 @@ export function add(a:string,b:string):string{const [x,y,s]=align(scaled(a),scal
 export const sign=(v:string):-1|0|1=>{const c=canonicalDecimal(v);return c==='0'?0:c.startsWith('-')?-1:1;};
 /** Exact decimal × 100 (percentage points → basis points), same as P2 events.ts toBp. */
 export const toBp=(delta:string):string=>canonicalDecimal(`${canonicalDecimal(delta)}e2`);
-/** Simple % change (end/base − 1) × 100 as a full-precision double: the one float step §5.6 allows. base ≤ 0 → throws non_positive_base. */
+/** Simple % change (end/base − 1) × 100 as a full-precision double: the one float step §5.6 allows. base ≤ 0 → throws non_positive_base;
+ *  operands or a result outside the double range → throws unsupported_numeric_range. */
 export function pctChange(end:string,base:string):number{
  if(sign(base)<=0)throw new Error('non_positive_base');
- return (Number(canonicalDecimal(end))/Number(canonicalDecimal(base))-1)*100;
+ const e=Number(canonicalDecimal(end)),b=Number(canonicalDecimal(base));
+ if(!Number.isFinite(e)||!Number.isFinite(b)||b<=0)throw new Error('unsupported_numeric_range');   // underflow to 0 / overflow to Infinity
+ const r=(e/b-1)*100;
+ if(!Number.isFinite(r))throw new Error('unsupported_numeric_range');
+ return r;
 }
 /** Exact form of the same change: the ratio text '<end>/<base>' (canonical decimals). base ≤ 0 → throws non_positive_base. */
 export function pctRatio(end:string,base:string):string{
@@ -52,12 +57,14 @@ export function roundPctRatio(ratio:string,dp:number):string{
 /** Type-7 quantile of an ascending, non-empty array: h=(n−1)p, q=x[⌊h⌋]+(h−⌊h⌋)(x[⌊h⌋+1]−x[⌊h⌋]). */
 export function quantile7(sorted:readonly number[],p:number):number{
  if(sorted.length===0)throw new Error('quantile_empty');
+ if(!Number.isFinite(p)||sorted.some(v=>!Number.isFinite(v)))throw new Error('unsupported_numeric_range');
  for(let i=1;i<sorted.length;i++)if(sorted[i]<sorted[i-1])throw new Error('quantile_unsorted');
  const h=(sorted.length-1)*p;const lo=Math.floor(h);
  if(lo+1>=sorted.length)return sorted[lo];
  return sorted[lo]+(h-lo)*(sorted[lo+1]-sorted[lo]);
 }
 export function quartiles(values:readonly number[]):{q1:number;median:number;q3:number}{
+ if(values.some(v=>!Number.isFinite(v)))throw new Error('unsupported_numeric_range');
  const s=[...values].sort((a,b)=>a-b);
  return {q1:quantile7(s,0.25),median:quantile7(s,0.5),q3:quantile7(s,0.75)};
 }

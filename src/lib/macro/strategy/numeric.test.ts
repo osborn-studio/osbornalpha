@@ -44,6 +44,25 @@ describe('percentage change',()=>{
   expect(()=>roundPctRatio('0.05',1)).toThrow(/invalid_pct_ratio/);
  });
 });
+describe('numeric range guards',()=>{
+ const tiny=`0.${'0'.repeat(323)}1`,huge=`1${'0'.repeat(309)}`;
+ it('pctChange rejects operands that underflow or overflow Number, and non-finite results',()=>{
+  expect(()=>pctChange(tiny,tiny)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange('1',tiny)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange(huge,'1')).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange('1',huge)).toThrow('unsupported_numeric_range');
+  expect(()=>pctChange(`1${'0'.repeat(308)}`,'0.1')).toThrow('unsupported_numeric_range');   // finite operands, infinite quotient
+  expect(pctChange('0','1')).toBe(-100);
+  expect(pctRatio(tiny,tiny)).toBe(`${tiny}/${tiny}`);                         // the exact companion stays exact
+  expect(roundPctRatio(pctRatio(tiny,tiny),1)).toBe('0.0');
+ });
+ it('quartiles / median / quantile7 reject non-finite values',()=>{
+  expect(()=>quartiles([1,Number.NaN,3])).toThrow('unsupported_numeric_range');
+  expect(()=>median([1,Number.POSITIVE_INFINITY])).toThrow('unsupported_numeric_range');
+  expect(()=>quantile7([1,Number.NEGATIVE_INFINITY],0.5)).toThrow('unsupported_numeric_range');
+  expect(()=>quantile7([1,2],Number.NaN)).toThrow('unsupported_numeric_range');
+ });
+});
 describe('type-7 quartiles',()=>{
  it('matches the linear-interpolation definition',()=>{
   expect(quartiles([1,2,3,4,5])).toEqual({q1:2,median:3,q3:4});
