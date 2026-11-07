@@ -1,0 +1,15 @@
+{
+ "scope":"single_issuer",
+ "institution":{"value":"Synthetic Broker Ltd","page":1,"quote":"Synthetic Broker Ltd","confidence":0.95},
+ "analysts":[{"value":"Jane Roe","page":1,"quote":"Jane Roe","confidence":0.95},{"value":"李明","page":1,"quote":"李明","confidence":0.95}],
+ "published_date":{"value":"5 November 2026","page":1,"quote":"5 November 2026","confidence":0.95},
+ "title":{"value":"Northwind Holdings: Initiate at Overweight","page":1,"quote":"Northwind Holdings: Initiate at Overweight","confidence":0.95},
+ "sector":{"value":"Internet 🚀 platforms","page":2,"quote":"Internet 🚀 platforms","confidence":0.95},
+ "valuation_method":{"value":"DCF","page":2,"quote":"DCF","confidence":0.95},
+ "wacc":{"value":"9.5%","page":2,"quote":"9.5%","confidence":0.95},
+ "terminal_growth":{"value":"3.0%","page":2,"quote":"3.0%","confidence":0.95},
+ "targets":[
+  {"ticker":{"value":"NWND US","page":1,"quote":"NWND US","confidence":0.95},"rating":{"value":"Overweight","page":1,"quote":"Overweight","confidence":0.95},"target_price":{"value":"US$120.00","page":1,"quote":"US$120.00","confidence":0.95},"target_currency":{"value":"USD","page":1,"quote":"US$","confidence":0.95},"target_horizon_months":{"value":"12-month","page":2,"quote":"12-month","confidence":0.95},"price_at_report":{"value":"US$96.00","page":2,"quote":"US$96.00","confidence":0.95},"price_currency":{"value":"USD","page":2,"quote":"US$","confidence":0.95},"price_as_of_date":{"value":"4 Nov 2026","page":2,"quote":"4 Nov 2026","confidence":0.95},"upside_stated":{"value":"25.0%","page":2,"quote":"25.0%","confidence":0.95}},
+  {"ticker":{"value":"9999 HK","page":1,"quote":"9999 HK","confidence":0.95},"exchange_hint":"HKEX","target_price":{"value":"HK$936.00","page":2,"quote":"HK$936.00","confidence":0.95},"target_currency":{"value":"HKD","page":2,"quote":"HK$","confidence":0.95},"price_at_report":{"value":"HK$748.80","page":2,"quote":"HK$748.80","confidence":0.95},"price_currency":{"value":"HKD","page":2,"quote":"HK$","confidence":0.95},"price_as_of_date":{"value":"2026-11-04","page":2,"quote":"2026-11-04","confidence":0.95}}
+ ]
+}
