@@ -8004,7 +8004,7 @@ The worktree has no installed `node_modules` of its own. If `npm test` cannot fi
 - Create: `src/app/api/macro/strategy/deviations/route.ts`
 - Create: `src/app/api/macro/strategy/explanations/route.ts`
 - Create: `src/app/api/cron/macro-review/route.ts`
-- Create: `src/app/api/macro/strategy/routes.test.ts`
+- Create: `src/app/api/macro/strategy/routes.test.ts`, `src/app/api/macro/strategy/explanations.integration.test.ts`
 - Modify: `vercel.json` (append one cron entry; JSON, so no fence)
 
 Design decisions (spec §8, §9.1, §6.2, §6.3):
@@ -8013,7 +8013,7 @@ Design decisions (spec §8, §9.1, §6.2, §6.3):
 - **Manifests** (Part B, "One manifest per kind"): each fact route builds the manifest body of its kind with `{now:new Date(), codeVersion, region | window | boundary}` (the parameter is frozen into `params`, plan audit #3), stores it with `putManifest` (idempotent by hash), then calls the pure view builder with the stored manifest only (it reads the parameter from `body.params`). The F4 mark uses `stored.body.snapshots[region]?.snapshot_id ?? null`. `buildTransmissionManifest` returning `null` → 404 `no_published_snapshot` (the page shows "尚无发布快照"). The process LRU of spec §4.5 is not built here (已知偏差与开放项 D1).
 - **Code version**: `resolveCodeVersion({allowGit:false})`. When it is null the manifest-writing routes (transmission, policy-response, cycle-table) and the cron answer 503 `code_version_unavailable`, as `/api/cron/facts-sync` does; explanations POST passes `codeVersion: null` into the handler, which answers 503 only after its idempotent replay (plan audit #9), instead of freezing `'unknown'` into manifest identities (已知偏差与开放项 D2).
 - **Review detail** returns `{result, manifest_id, generation, names, judgment_status, f4?}`. `names` is the review manifest's frozen catalog `{id, name}` list, so the UI can call `renderFact(fact, locale, namesFrom(names))`. The judgment section reads `latestRegimeCard(region, {asOf: reviewAsOfDate(month)})` (the review cutoff date, the 3rd of the next month; F4 `view=as_known`), then `judgmentDetail`, and keeps only `selectF4Mark({card, detail, snapshotId: null}).summary`: number-free and never stored.
-- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion: codeVersionOrNull()}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → first `recoverUserExplanations({db, llm: productionLlmDeps(userId)}, userId)` (Task 11: at most three of the caller's running rows with a recorded completion are finished from the stored output and settled, never sent to the provider again; plan audit R2-1), then `db.expireExplanations(userId)` (admin RPC `macro_expire_explanations`: the caller's runs left `running` for more than five minutes without a recorded completion become abandoned → projection failed, plan audit #14), then `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are immutable review result ids (uuid; 已知偏差与开放项 D3).
+- **Explanations**: `POST` → `handleExplainRequest({db, port, llm: productionLlmDeps(userId), now, codeVersion: codeVersionOrNull()}, userId, body)`. A non-JSON body is 400 `invalid_body` before the handler. A `'not authenticated'` throw (from `checkQuota`) is 401. `GET ?subject_kind&subject_id` → first `recoverUserExplanations({db, llm: productionLlmDeps(userId)}, userId)` (Task 11: at most three of the caller's running rows with a recorded completion are finished from the stored output and settled, never sent to the provider again; plan audit R2-1), then `db.expireExplanations(userId)` (admin RPC `macro_expire_explanations`: the caller's runs left `running` for more than five minutes without a recorded completion become abandoned → projection failed, plan audit #14), then `{items}`, the caller's own projections through the session client (RLS), newest 20, `private, no-store`. Review subject ids are immutable review result ids (uuid; 已知偏差与开放项 D3), canonicalized to lowercase in one place: the POST route runs `canonicalExplainBody(body)` (route-helpers) before `handleExplainRequest`, so the payload hash, the stored `subject_id` (a text column) and GET's `subjectIdOf` lowercase lookup agree whatever case the client sent (Codex round 1 #1; the migration is unreleased on this branch, so no mixed-case rows exist).
 - **Production `LlmDeps`** (`llm-deps.ts`) makes the perspectives route's calls in the same order. It uses `resolveLlm()` (the perspectives route's call; `resolveUserLlm()` would only ever return BYO keys), `checkQuota('perspectives')`, the same limiter choice built right before `beginUsageRun(userId, key, 'perspectives', {provider, model, pricingVersion, usdCnyMicros, byo})`, then one `limiter.runWithBudgetRetry(() => runMeteredLlmCall({feature:'perspectives', provider, userId, budgetExempt, maxOutputTokens, call: () => chatResolved(...)}))`, `meteredUsageFromError` on failure, and `finalizeUsageRun` with the field mapping of the route's `finalizeAccounting` minus `ticker`. That body is built once by `finalizePayload(status, accounting)` (aggregate + the pricing version and FX in force at completion, JSON-safe) and stored on the run row; `finalize(key, payload)` sends a payload verbatim, so a retry after a pricing / FX change replays what the request computed (plan audit #8). `budgetExempt` is true when the quota answered `limit === -1`. A failed call throws `LlmCallError(e.message, meteredUsageFromError(e) ?? null)`, so a cost error code such as `daily_cost_exhausted` stays the message.
 - **Cron**: `GET /api/cron/macro-review` with `authorizedCronRequest(header, CRON_SECRET)`. The default month is the newest closed month — a month is closed once its review cutoff (`monthCutoff`, the 3rd of the next month 00:00:00Z) has passed, so the run on the 3rd at 06:00 UTC targets the previous month — both regions in order US, CN. `?month=YYYY-MM` must be a closed month ≥ 2000-01; `?preview` accepts only `1`. The receipt keeps `runReview`'s fields but replaces a failed unit's `error` message with `code:'review_failed'` (codes only over HTTP, as facts-sync does); any failed unit makes the response 500.
 - Errors are `{error:{code,message}}` with `Cache-Control: no-store`. Reads send `private, max-age=300`; explanations send `private, no-store`.
@@ -8260,7 +8260,7 @@ vi.mock('@/lib/macro/strategy/f4-client',()=>({createF4Client:m.createF4Client,F
 vi.mock('@/lib/macro/strategy/llm-deps',()=>({productionLlmDeps:(userId:string)=>({tag:'llm',userId})}));
 
 import {GET as cron} from '@/app/api/cron/macro-review/route';
-import {ParamError,isClosedMonth,lastClosedMonth,monthOf,readParams,reviewAsOfDate,subjectIdOf,windowOf} from '@/lib/macro/strategy/route-helpers';
+import {ParamError,canonicalExplainBody,isClosedMonth,lastClosedMonth,monthOf,readParams,reviewAsOfDate,subjectIdOf,windowOf} from '@/lib/macro/strategy/route-helpers';
 import {GET as cycleTable} from './cycle-table/route';
 import {GET as deviations} from './deviations/route';
 import {GET as listExplanations,POST as postExplanation} from './explanations/route';
@@ -8615,6 +8615,13 @@ describe('route helpers',()=>{
   expect(subjectIdOf('review',RID.toUpperCase())).toBe(RID);expect(()=>subjectIdOf('review','CN:2026-09')).toThrow(ParamError);
   expect(()=>subjectIdOf('snapshot','a b')).toThrow(ParamError);expect(()=>subjectIdOf('review','US:2026-13')).toThrow(ParamError);expect(()=>subjectIdOf('review',undefined)).toThrow(ParamError);
  });
+ it('canonicalExplainBody lowercases only a review UUID subject and leaves every other shape untouched',()=>{
+  const UP='ABCDEF01-2345-4ABC-8DEF-0123456789AB';
+  expect(canonicalExplainBody({request_id:REQ,subject:{kind:'review',id:UP},locale:'zh'})).toEqual({request_id:REQ,subject:{kind:'review',id:UP.toLowerCase()},locale:'zh'});
+  const snap={request_id:REQ,subject:{kind:'snapshot',id:'Snap:US:X'},locale:'zh'};expect(canonicalExplainBody(snap)).toBe(snap);
+  const odd={request_id:REQ,subject:{kind:'review',id:'CN:2026-09'},locale:'zh'};expect(canonicalExplainBody(odd)).toBe(odd);
+  for(const v of [null,'x',[1],{subject:null},{subject:[]},{subject:{kind:'review',id:5}}])expect(canonicalExplainBody(v)).toBe(v);
+ });
 });
 ```
 
@@ -8685,6 +8692,17 @@ export function subjectIdOf(kind:'snapshot'|'review',v:string|undefined):string{
  if(kind==='review')return uuidOf(v,'subject_id');
  if(/^[A-Za-z0-9:._-]{1,200}$/.test(v))return v;
  throw new ParamError('subject_id');
+}
+/** POST body → body with the review subject UUID in canonical (lowercase) form, so the payload hash, the stored subject_id
+ *  and GET's lookup agree whatever case the client sent (PostgreSQL uuid compares case-insensitively, the text column does
+ *  not). Any other shape is returned untouched for the handler's own validation. */
+export function canonicalExplainBody(raw:unknown):unknown{
+ if(typeof raw!=='object'||raw===null||Array.isArray(raw))return raw;
+ const subject=(raw as {subject?:unknown}).subject;
+ if(typeof subject!=='object'||subject===null||Array.isArray(subject))return raw;
+ const {kind,id}=subject as {kind?:unknown;id?:unknown};
+ if(kind!=='review'||typeof id!=='string'||!UUID_RE.test(id))return raw;
+ return {...(raw as object),subject:{...(subject as object),id:id.toLowerCase()}};
 }
 // ---- months (UTC; the review cutoff rule is manifest.ts monthCutoff, spec §6.2)
 /** The F4 as-known date of a review (spec §6.2): the date of its cutoff, the 3rd of the next month. */
@@ -8941,7 +8959,7 @@ Create `src/app/api/macro/strategy/explanations/route.ts`:
 // handleExplainRequest (Task 11), which validates the body, replays an existing (user, request_id) run before the code
 // version, foundation and subject checks (a replay needs no code version), and runs the metered call through
 // productionLlmDeps. Responses are projections (or {error, explanation?}), private, no-store. Review subjects are
-// immutable review result ids. GET ?subject_kind=snapshot|review&subject_id= → first recoverUserExplanations (at most
+// immutable review result ids, canonicalized to lowercase before the handler (hash, storage) exactly as GET's uuidOf does. GET ?subject_kind=snapshot|review&subject_id= → first recoverUserExplanations (at most
 // three of the caller's running rows whose provider output is recorded are finished from that output and settled — the
 // provider is never called again; plan audit R2-1), then macro_expire_explanations(user) (admin; a run left running for
 // more than five minutes without a recorded completion becomes abandoned → failed, so a reload never shows a dead run as
@@ -8950,7 +8968,7 @@ import {NextResponse} from 'next/server';
 import {handleExplainRequest,recoverUserExplanations} from '@/lib/macro/strategy/explain-request';
 import {productionLlmDeps} from '@/lib/macro/strategy/llm-deps';
 import {strategyPort} from '@/lib/macro/strategy/port';
-import {NO_STORE,codeVersionOrNull,errorResponse,failureResponse,readGate,readParams,sessionGate,strategyDb,subjectIdOf,subjectKindOf} from '@/lib/macro/strategy/route-helpers';
+import {NO_STORE,canonicalExplainBody,codeVersionOrNull,errorResponse,failureResponse,readGate,readParams,sessionGate,strategyDb,subjectIdOf,subjectKindOf} from '@/lib/macro/strategy/route-helpers';
 
 export const dynamic='force-dynamic';
 export const maxDuration=60;
@@ -8975,7 +8993,7 @@ export async function POST(req:Request){
  let body:unknown;
  try{body=await req.json();}catch{return errorResponse('invalid_body','body must be JSON',400);}
  try{
-  const r=await handleExplainRequest({db:strategyDb(g.session),port:strategyPort(),llm:productionLlmDeps(g.userId),now:()=>new Date(),codeVersion:codeVersionOrNull()},g.userId,body);
+  const r=await handleExplainRequest({db:strategyDb(g.session),port:strategyPort(),llm:productionLlmDeps(g.userId),now:()=>new Date(),codeVersion:codeVersionOrNull()},g.userId,canonicalExplainBody(body));
   return NextResponse.json(r.body,{status:r.status,headers:NO_STORE});
  }catch(e){
   if(e instanceof Error&&e.message==='not authenticated')return errorResponse('unauthorized','sign in required',401);
@@ -8983,6 +9001,164 @@ export async function POST(req:Request){
  }
 }
 ```
+
+- [ ] **Step 9a: Integration test for the explanation routes (real handler + real production LlmDeps)**
+
+Create `src/app/api/macro/strategy/explanations.integration.test.ts`. Only the lowest layers are faked: the provider (`chatResolved`), the billing transport (`getAdminSupabase().rpc` for `begin_usage_run` / `finalize_usage_run`, the profile / usage reads of `checkQuota`, the cost reservation) and storage (memory `StrategyDb` behind a failure-injecting proxy). It covers a validation rejection billed as completed, a finish failure followed by a POST replay with no second provider call, a 409 payload conflict, a 429 quota stop, and the uppercase review UUID POST→GET regression (Task 12 Codex round 1 #1 and #2).
+
+```ts
+// POST/GET /api/macro/strategy/explanations through the real route, real handleExplainRequest, real productionLlmDeps
+// (limiter, metering, quota.ts). Only the lowest layers are faked: the provider (chatResolved), the billing transport
+// (admin rpc begin_usage_run / finalize_usage_run, the profile / usage reads checkQuota makes, the cost reservation) and
+// storage (memory StrategyDb with injected failures). Plan Task 12 Codex round 1 (#1 subject case, #2 integration paths).
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {StrategyDbError,memoryStrategyDb,type StrategyDb} from '@/lib/macro/strategy/db';
+import {memoryStrategyPort} from '@/lib/macro/strategy/port';
+import {runReview} from '@/lib/macro/strategy/review';
+import {daily,fixture,monthly,snap} from '@/lib/macro/strategy/testing/fixture';
+
+const m=vi.hoisted(()=>({user:vi.fn(),chat:vi.fn(),rpc:vi.fn(),used:{n:0},db:null as unknown,port:null as unknown}));
+vi.mock('@/lib/supabase/server',()=>({getServerSupabase:async()=>({auth:{getUser:m.user},from:(table:string)=>
+ table==='profiles'
+  ?{select:()=>({eq:()=>({maybeSingle:async()=>({data:{plan:'free',role:null,plan_expires_at:null},error:null})})})}
+  :{select:()=>{const q:Record<string,unknown>={};for(const f of ['eq','gte']){q[f]=()=>q;}q.lt=async()=>({count:m.used.n,error:null});return q;}}})}));
+vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({rpc:m.rpc})}));
+vi.mock('@/lib/supabase/anon',()=>({getAnonSupabase:()=>({})}));
+vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:()=>'abc123'}));
+vi.mock('@/lib/macro/strategy/port',async(orig)=>({...await orig<typeof import('@/lib/macro/strategy/port')>(),strategyPort:()=>m.port}));
+vi.mock('@/lib/macro/strategy/db',async(orig)=>({...await orig<typeof import('@/lib/macro/strategy/db')>(),supabaseStrategyDb:()=>m.db}));
+vi.mock('@/lib/llm/resolve',()=>({resolveLlm:async()=>({provider:'deepseek',model:'deepseek-v4-flash',protocol:'openai',source:'env',baseUrl:'https://provider.invalid',apiKey:'k'})}));
+vi.mock('@/lib/data/sources/llm',()=>({chatResolved:m.chat}));
+vi.mock('@/lib/billing/cost-budget',async(orig)=>({...await orig<typeof import('@/lib/billing/cost-budget')>(),
+ getBudgetConfig:()=>({dailyLimitMicrormb:8_800_000,usdCnyMicros:7_200_000,reservationTtlSeconds:60}),
+ reserveCostBudget:async()=>({reservationId:'r1',reservedMicrormb:1000,markIncurred:async()=>{},finalizeIncurred:async()=>{},settle:async()=>({costMicrormb:300,usageEstimated:false}),release:async()=>{}})}));
+
+import {GET as listExplanations,POST as postExplanation} from './explanations/route';
+
+const USER='11111111-1111-4111-8111-111111111111',REQ='22222222-2222-4222-8222-222222222222';
+const ROWS=[...monthly('US_CPI_YOY','2026-08',['2.7','2.9']),...monthly('US_UNRATE','2026-09',['4.3'])];
+const SNAP=snap('US','2026-10-15T06:00:00Z',ROWS.map(o=>o.observation_id));
+const EVENTS=[...daily('US_FED_TARGET_UPPER_D',[['2025-12-11','3.75'],['2026-09-18','4']]),...daily('US_FED_TARGET_LOWER_D',[['2025-12-11','3.5'],['2026-09-18','3.75']])];
+const VALID=JSON.stringify({points:[{fact_ids:['cov:counts'],hypothesis:'覆盖不全可能削弱该月读数的代表性'}]});
+const INVALID=JSON.stringify({points:[{fact_ids:['no:such:fact'],hypothesis:'一个引用了不存在事实的假设'}]});
+const USAGE={inputTokens:100,cacheHitInputTokens:10,cacheMissInputTokens:90,outputTokens:50,estimated:false};
+const U='https://alpha.example/api/macro/strategy/explanations';
+const post=(body:unknown)=>new Request(U,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+const get=(id:string)=>new Request(`${U}?subject_kind=review&subject_id=${id}`);
+const bodyOf=(rid:string,o:{locale?:'zh'|'en'}={})=>({request_id:REQ,subject:{kind:'review',id:rid},locale:o.locale??'zh'});
+
+type MemDb=ReturnType<typeof memoryStrategyDb>;
+/** Memory StrategyDb whose named methods throw once per queued failure (an rpc failure after the database state is unchanged). */
+function failing(db:MemDb,queue:Partial<Record<keyof StrategyDb,number>>):MemDb{
+ return new Proxy(db,{get(t,k){
+  const v=Reflect.get(t,k) as unknown;
+  if(typeof v!=='function')return v;
+  return (...a:unknown[])=>{
+   const left=queue[k as keyof StrategyDb]??0;
+   if(left>0){queue[k as keyof StrategyDb]=left-1;return Promise.reject(new StrategyDbError('rpc_failed',`injected:${String(k)}`));}
+   return (v as (...x:unknown[])=>unknown).apply(t,a);
+  };
+ }});
+}
+const rpcCalls=(fn:string)=>m.rpc.mock.calls.filter(c=>c[0]===fn).map(c=>c[1] as Record<string,unknown>);
+let mem:MemDb,rid:string;
+
+beforeEach(async()=>{
+ vi.clearAllMocks();
+ process.env.MACRO_STRATEGY_ENABLED='1';m.used.n=0;
+ m.user.mockResolvedValue({data:{user:{id:USER}},error:null});
+ m.rpc.mockResolvedValue({data:null,error:null});
+ m.chat.mockResolvedValue({content:VALID,usage:USAGE});
+ mem=memoryStrategyDb();mem._userId(USER);m.db=mem;
+ m.port=memoryStrategyPort(fixture({snapshots:[SNAP],observations:[...ROWS,...EVENTS]}));
+ rid=(await runReview({port:m.port as never,db:mem,codeVersion:'abc123'},'US','2026-10',{preview:false})).result_id!;
+});
+afterEach(()=>{delete process.env.MACRO_STRATEGY_ENABLED;});
+
+describe('POST /explanations — real handler + production LlmDeps over a fake provider and billing transport',()=>{
+ it('validation rejection is a completed call: 200 rejected, billed completed, evidence persisted, one provider call',async()=>{
+  m.chat.mockResolvedValue({content:INVALID,usage:USAGE});
+  const r=await postExplanation(post(bodyOf(rid)));
+  expect(r.status).toBe(200);
+  const p=await r.json() as {explanation_id:string;state:string;failure_codes:string[]};
+  expect(p.state).toBe('rejected');expect(p.failure_codes.length).toBeGreaterThan(0);
+  expect(m.chat).toHaveBeenCalledTimes(1);
+  expect(rpcCalls('begin_usage_run')).toHaveLength(1);
+  const fin=rpcCalls('finalize_usage_run');
+  expect(fin).toHaveLength(1);
+  expect(fin[0]).toMatchObject({p_idempotency_key:p.explanation_id,p_user_id:USER,p_feature:'perspectives',p_status:'completed',p_byo:false,
+   p_input_tokens:100,p_output_tokens:50,p_cost_micrormb:300,p_usage_estimated:false});
+  const run=mem._run(p.explanation_id);
+  expect(run).toMatchObject({state:'rejected',finalized:true,raw_output:{content:INVALID,provider:'deepseek'},finalize_payload:{status:'completed',costMicrormb:300}});
+ });
+
+ it('finish failure: the call is still settled once; a POST replay finishes from the recorded output without a second provider call',async()=>{
+  m.db=failing(mem,{finishExplanation:1});
+  const first=await postExplanation(post(bodyOf(rid)));
+  expect(first.status).toBe(500);
+  expect(((await first.json()) as {error:{code:string}}).error.code).toBe('strategy_failed');
+  const claimed=await mem.runOf(USER,REQ);
+  expect(claimed).not.toBeNull();
+  const id=claimed!.explanation_id;
+  expect(mem._run(id)).toMatchObject({state:'running',finalized:true,raw_output:{content:VALID},finalize_payload:{status:'completed',costMicrormb:300}});
+  expect(rpcCalls('finalize_usage_run')).toHaveLength(1);
+  const replay=await postExplanation(post(bodyOf(rid)));
+  expect(replay.status).toBe(200);
+  expect(await replay.json()).toMatchObject({explanation_id:id,state:'accepted'});
+  expect(mem._run(id)).toMatchObject({state:'accepted',finalized:true});
+  expect(m.chat).toHaveBeenCalledTimes(1);                       // the provider was never called again
+  expect(rpcCalls('begin_usage_run')).toHaveLength(1);
+  expect(rpcCalls('finalize_usage_run')).toHaveLength(1);        // settled once, replay settles nothing new
+  expect(rpcCalls('finalize_usage_run')[0].p_status).toBe('completed');
+ });
+
+ it('the same request id with a different payload is 409 payload_conflict and starts no second run',async()=>{
+  expect((await postExplanation(post(bodyOf(rid)))).status).toBe(200);
+  const r=await postExplanation(post(bodyOf(rid,{locale:'en'})));
+  expect(r.status).toBe(409);
+  expect(((await r.json()) as {error:{code:string}}).error.code).toBe('payload_conflict');
+  expect(m.chat).toHaveBeenCalledTimes(1);
+  expect(rpcCalls('begin_usage_run')).toHaveLength(1);
+  expect(rpcCalls('finalize_usage_run')).toHaveLength(1);
+ });
+
+ it('platform quota exhausted is 429 quota_exceeded before any claim, usage run or provider call',async()=>{
+  m.used.n=5;                                                    // free plan perspectives limit
+  const r=await postExplanation(post(bodyOf(rid)));
+  expect(r.status).toBe(429);
+  expect(await r.json()).toEqual({error:{code:'quota_exceeded',message:'5/5'}});
+  expect(m.chat).not.toHaveBeenCalled();
+  expect(m.rpc).not.toHaveBeenCalled();
+  expect(await mem.runOf(USER,REQ)).toBeNull();
+ });
+});
+
+describe('review subject UUID case (Codex #1)',()=>{
+ it('POST with an uppercase UUID stores the lowercase subject; GET finds it with either spelling',async()=>{
+  const upper=rid.toUpperCase();
+  expect(upper).not.toBe(rid);
+  const r=await postExplanation(post(bodyOf(upper)));
+  expect(r.status).toBe(200);
+  const p=await r.json() as {explanation_id:string;subject_id:string};
+  expect(p.subject_id).toBe(rid);
+  for(const id of [upper,rid]){
+   const list=await listExplanations(get(id));
+   expect(list.status).toBe(200);
+   expect(((await list.json()) as {items:{explanation_id:string}[]}).items.map(i=>i.explanation_id)).toEqual([p.explanation_id]);
+  }
+  expect(m.chat).toHaveBeenCalledTimes(1);
+ });
+ it('a replay with the other spelling of the UUID is the same payload (200, no conflict, no second call)',async()=>{
+  expect((await postExplanation(post(bodyOf(rid.toUpperCase())))).status).toBe(200);
+  const replay=await postExplanation(post(bodyOf(rid)));
+  expect(replay.status).toBe(200);
+  expect(m.chat).toHaveBeenCalledTimes(1);
+ });
+});
+```
+
+Run: `npm test -- src/app/api/macro/strategy/explanations.integration.test.ts`
+Expected: PASS, `Tests  6 passed (6)`. Without `canonicalExplainBody` in the POST route the two "review subject UUID case" tests fail.
 
 - [ ] **Step 9: Implement the review cron and register it in `vercel.json`**
 
@@ -9063,8 +9239,8 @@ If a sibling session has appended entries after the facts-sync CN entry in the m
 
 - [ ] **Step 10: Run the tests to verify they pass**
 
-Run: `npm test -- src/app/api/macro/strategy/routes.test.ts src/lib/macro/strategy/llm-deps.test.ts`
-Expected: PASS, `Tests  85 passed (85)` (routes 76, llm-deps 9).
+Run: `npm test -- src/app/api/macro/strategy src/lib/macro/strategy/llm-deps.test.ts`
+Expected: PASS, `Tests  92 passed (92)` (routes 77, explanations integration 6, llm-deps 9).
 
 Run: `npm test -- src/lib/macro/strategy`
 Expected: PASS; no earlier task's suite fails.

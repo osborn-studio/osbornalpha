@@ -28,7 +28,7 @@ vi.mock('@/lib/macro/strategy/f4-client',()=>({createF4Client:m.createF4Client,F
 vi.mock('@/lib/macro/strategy/llm-deps',()=>({productionLlmDeps:(userId:string)=>({tag:'llm',userId})}));
 
 import {GET as cron} from '@/app/api/cron/macro-review/route';
-import {ParamError,isClosedMonth,lastClosedMonth,monthOf,readParams,reviewAsOfDate,subjectIdOf,windowOf} from '@/lib/macro/strategy/route-helpers';
+import {ParamError,canonicalExplainBody,isClosedMonth,lastClosedMonth,monthOf,readParams,reviewAsOfDate,subjectIdOf,windowOf} from '@/lib/macro/strategy/route-helpers';
 import {GET as cycleTable} from './cycle-table/route';
 import {GET as deviations} from './deviations/route';
 import {GET as listExplanations,POST as postExplanation} from './explanations/route';
@@ -382,5 +382,12 @@ describe('route helpers',()=>{
   expect(subjectIdOf('snapshot','snap:US:2026-11-03T06:02:00Z')).toBe('snap:US:2026-11-03T06:02:00Z');
   expect(subjectIdOf('review',RID.toUpperCase())).toBe(RID);expect(()=>subjectIdOf('review','CN:2026-09')).toThrow(ParamError);
   expect(()=>subjectIdOf('snapshot','a b')).toThrow(ParamError);expect(()=>subjectIdOf('review','US:2026-13')).toThrow(ParamError);expect(()=>subjectIdOf('review',undefined)).toThrow(ParamError);
+ });
+ it('canonicalExplainBody lowercases only a review UUID subject and leaves every other shape untouched',()=>{
+  const UP='ABCDEF01-2345-4ABC-8DEF-0123456789AB';
+  expect(canonicalExplainBody({request_id:REQ,subject:{kind:'review',id:UP},locale:'zh'})).toEqual({request_id:REQ,subject:{kind:'review',id:UP.toLowerCase()},locale:'zh'});
+  const snap={request_id:REQ,subject:{kind:'snapshot',id:'Snap:US:X'},locale:'zh'};expect(canonicalExplainBody(snap)).toBe(snap);
+  const odd={request_id:REQ,subject:{kind:'review',id:'CN:2026-09'},locale:'zh'};expect(canonicalExplainBody(odd)).toBe(odd);
+  for(const v of [null,'x',[1],{subject:null},{subject:[]},{subject:{kind:'review',id:5}}])expect(canonicalExplainBody(v)).toBe(v);
  });
 });

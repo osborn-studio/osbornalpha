@@ -56,6 +56,17 @@ export function subjectIdOf(kind:'snapshot'|'review',v:string|undefined):string{
  if(/^[A-Za-z0-9:._-]{1,200}$/.test(v))return v;
  throw new ParamError('subject_id');
 }
+/** POST body → body with the review subject UUID in canonical (lowercase) form, so the payload hash, the stored subject_id
+ *  and GET's lookup agree whatever case the client sent (PostgreSQL uuid compares case-insensitively, the text column does
+ *  not). Any other shape is returned untouched for the handler's own validation. */
+export function canonicalExplainBody(raw:unknown):unknown{
+ if(typeof raw!=='object'||raw===null||Array.isArray(raw))return raw;
+ const subject=(raw as {subject?:unknown}).subject;
+ if(typeof subject!=='object'||subject===null||Array.isArray(subject))return raw;
+ const {kind,id}=subject as {kind?:unknown;id?:unknown};
+ if(kind!=='review'||typeof id!=='string'||!UUID_RE.test(id))return raw;
+ return {...(raw as object),subject:{...(subject as object),id:id.toLowerCase()}};
+}
 // ---- months (UTC; the review cutoff rule is manifest.ts monthCutoff, spec §6.2)
 /** The F4 as-known date of a review (spec §6.2): the date of its cutoff, the 3rd of the next month. */
 export const reviewAsOfDate=(month:string):string=>monthCutoff(month).slice(0,10);
