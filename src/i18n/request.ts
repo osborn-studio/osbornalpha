@@ -10,7 +10,7 @@ import { resolveLocale } from '@/lib/i18n/locale';
 const MESSAGE_DOMAINS = [
   'common', 'landing', 'auth', 'errors', 'settings',
   // G1b domains (pre-registered for the parallel extraction fan-out):
-  'today', 'portfolio', 'intel', 'tools', 'market', 'components',
+  'portfolio', 'intel', 'tools', 'market', 'components',
   // G1d domains (pre-registered, same fan-out pattern):
   'briefs', 'radar', 'watchlist',
   // Internal operations dashboard:

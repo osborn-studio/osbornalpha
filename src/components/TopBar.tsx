@@ -13,7 +13,7 @@ export function TopBar() {
   const tCommon = useTranslations('common.footer');
   return (
     <header className="sticky top-0 z-50 flex items-center gap-3 border-b border-border bg-bg-elevated px-4 py-3">
-      <Link href="/today" className="text-lg font-bold text-text">
+      <Link href="/macro" className="text-lg font-bold text-text">
         osborn<span className="text-accent">alpha</span>
       </Link>
       <SearchInput />

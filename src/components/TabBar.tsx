@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { ReactElement } from 'react';
+import { isTabActive } from './tab-active';
 
 interface TabDef {
   id: string;
-  navKey: 'today' | 'watchlist' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
+  navKey: 'macro' | 'watchlist' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => ReactElement;
@@ -23,13 +24,13 @@ const stroke = {
 
 const TABS: TabDef[] = [
   {
-    id: 'home', navKey: 'today', href: '/today',
-    // Sunrise glyph — circle + horizon line + rays
+    id: 'macro', navKey: 'macro', href: '/macro',
+    // Globe glyph
     Icon: ({ className }) => (
       <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
-        <circle cx="12" cy="14" r="4" />
-        <path d="M3 18h18" />
-        <path d="M12 4v2M5 8l1.4 1.4M19 8l-1.4 1.4" />
+        <circle cx="12" cy="12" r="8" />
+        <ellipse cx="12" cy="12" rx="3.5" ry="8" />
+        <path d="M4 12h16" />
       </svg>
     ),
   },
@@ -109,7 +110,7 @@ export function TabBar() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {TABS.map((t) => {
-        const active = (t.href === '/today' && pathname === '/today') || (t.href !== '/today' && pathname.startsWith(t.href));
+        const active = isTabActive(pathname, t.href);
         return (
           <Link
             key={t.id}

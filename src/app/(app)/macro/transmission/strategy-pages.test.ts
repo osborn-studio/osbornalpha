@@ -5,7 +5,7 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 const read=(p:string)=>readFileSync(join(process.cwd(),p),'utf8');
-const BASE='src/app/(app)/intel/macro';
+const BASE='src/app/(app)/macro';
 const PAGES=['transmission/page.tsx','history/page.tsx','review/page.tsx','review/[region]/[month]/page.tsx'];
 describe('macro strategy pages',()=>{
  for(const p of PAGES)it(`${p}: force-dynamic server page with the capability gates`,()=>{
