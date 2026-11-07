@@ -10,6 +10,8 @@ import type {MemoryMacroDb} from '../memory-db';
 import {SEED_FETCHED_AT,seedCatalog,seedPoints} from '../testing/seed';
 import type {Region} from '../types';
 import {FIXTURE_RULES} from './testing/fixture';
+import {memoryStrategyPort} from './port';
+import {fixture} from './testing/fixture';
 import {macroDbStrategyPort} from './wiring';
 
 const input=(region:Region,rev:number,inputRev:number,asOf='2026-11-06')=>({region,expectedRevision:rev,expectedInputRevision:inputRev,asOf,methodologyVersion:'m',catalogVersion:CATALOG_VERSION,
@@ -87,6 +89,22 @@ describe('macroDbStrategyPort observations',()=>{
   expect((await port.seriesHistory('US_UNRATE',{asOf:SEED_FETCHED_AT,maxRows:10})).map(o=>o.value_text)).toEqual(['4','4.1','4.2','4.3']);
   expect((await port.seriesHistory('US_UNRATE',{from:'2026-07-01',to:'2026-08-31',asOf:'2026-11-06T00:00:00Z',maxRows:10})).map(o=>o.period_end)).toEqual(['2026-07-31','2026-08-31']);
   await expect(port.seriesHistory('US_UNRATE',{asOf:'2026-11-06T00:00:00Z',maxRows:2})).rejects.toThrow('truncated');
+ });
+});
+
+describe('seriesHistory maxRows counts periods after the highest-version dedup (parity with memoryStrategyPort)',()=>{
+ it('two periods, one revised, maxRows 2: returns both rows like the reference; maxRows 1 truncates',async()=>{
+  const db=await world();const port=macroDbStrategyPort(db);
+  const first=await seedPoints(db,[{series_id:'US_UNRATE',period_end:'2026-08-31',value_text:'4'},{series_id:'US_UNRATE',period_end:'2026-09-30',value_text:'4.1'}]);
+  await seedPoints(db,[{series_id:'US_UNRATE',period_end:'2026-09-30',value_text:'4.2'}],{fetchedAt:'2026-11-05T05:30:00.000Z'});
+  void first;
+  const asOf='2026-11-06T00:00:00Z';
+  const got=await port.seriesHistory('US_UNRATE',{asOf,maxRows:2});
+  expect(got.map(o=>[o.period_end,o.value_text,o.version])).toEqual([['2026-08-31','4',1],['2026-09-30','4.2',2]]);
+  const ref=memoryStrategyPort(fixture({observations:got.map(o=>({...o}))}));
+  expect((await ref.seriesHistory('US_UNRATE',{asOf,maxRows:2})).map(o=>o.observation_id)).toEqual(got.map(o=>o.observation_id));
+  await expect(port.seriesHistory('US_UNRATE',{asOf,maxRows:1})).rejects.toThrow('truncated');
+  await expect(ref.seriesHistory('US_UNRATE',{asOf,maxRows:1})).rejects.toThrow('truncated');
  });
 });
 

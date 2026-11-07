@@ -18,6 +18,10 @@ export const SNAPSHOT_PAGE=200;
 /** Pages read by one snapshotUpTo before it gives up: 200 x 200 = 40 000 snapshots, far beyond a daily cadence for decades. */
 export const SNAPSHOT_MAX_PAGES=200;
 
+/** seriesHistory internal read caps = maxRows x these (versions per period are few), bounded by the ceiling. */
+const HISTORY_CAP_MULTIPLIERS=[1,4,16] as const;
+const HISTORY_CAP_CEILING=100_000;
+
 export interface WiringOptions{pageSize?:number;maxPages?:number}
 
 const ms=(t:string)=>{const v=Date.parse(t);if(!Number.isFinite(v))throw new Error(`invalid_timestamp:${t}`);return v;};
@@ -69,7 +73,18 @@ export function macroDbStrategyPort(db:MacroDb,opts:WiringOptions={}):StrategyRe
    return [...new Set(seriesIds)].flatMap(id=>{const o=by.get(id);return o?[toObservation(o)]:[];});
   },
   async seriesHistory(seriesId,{from,to,asOf,maxRows}){
-   return (await normalizeTruncated(db.seriesHistory(seriesId,{from,to,asOf,maxRows}))).map(toObservation);
+   // MacroDb counts every visible version against its cap, the port contract counts periods after the highest-version dedup:
+   // read with growing internal caps, dedup (MacroDb already returns one row per period) and compare to maxRows ourselves.
+   // Still 'truncated' when even the largest cap truncates, since completeness cannot be proven then.
+   for(const mult of HISTORY_CAP_MULTIPLIERS){
+    const cap=Math.min(maxRows*mult,Math.max(maxRows,HISTORY_CAP_CEILING));
+    let rows:P1ObservationRow[];
+    try{rows=await db.seriesHistory(seriesId,{from,to,asOf,maxRows:cap});}
+    catch(e){if(e instanceof MacroDbError&&e.code==='truncated'&&cap<Math.max(maxRows,HISTORY_CAP_CEILING))continue;throw e instanceof MacroDbError&&e.code==='truncated'?new Error('truncated'):e;}
+    if(rows.length>maxRows)throw new Error('truncated');
+    return rows.map(toObservation);
+   }
+   throw new Error('truncated');
   },
   catalog:()=>MACRO_CATALOG,
   catalogVersion:()=>CATALOG_VERSION,

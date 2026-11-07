@@ -142,7 +142,7 @@ BASE=https://osbornalpha.com
    ```
    If a grant differs, do not edit the migration: add the missing `revoke execute … from public, anon, authenticated` on production and record it in `docs/audits/`.
 3. **`MACRO_INGEST_SECRET` set** in Vercel production (macro-sync §13.2; unset means ingest answers 503 and the owner's AKShare run cannot upload). `vercel env ls production | grep -E 'MACRO_INGEST_SECRET|CRON_SECRET'` lists both.
-4. **`CRON_SECRET` present** (a missing one makes every cron answer 503 `cron_unavailable`, including the review cron).
+4. **`CRON_SECRET` present** (with it unset `/api/cron/macro-review` answers 401 `unauthorized`, because the bearer check can never pass; no 503 is returned, so a 401 on a correct bearer means the secret is missing in the deployment).
 5. **`VERCEL_GIT_COMMIT_SHA` present in the deployment.** It is set only by deploying from a git checkout: use the clean `origin/main` worktree method of macro-sync §13.2 (`vercel deploy --prod --yes` from `git worktree add --detach "$D" origin/main`). Without it, manifest-writing routes and the review cron answer 503 `code_version_unavailable`.
 6. **The first `macro-sync` run published an active US snapshot** and the owner ran AKShare and published a CN snapshot (macro-sync §13.3 and §13.4). The CN snapshot is the owner's step on the owner's Mac; the strategy pages degrade without it (a region with no snapshot shows its nodes missing) but the transmission route answers 404 `no_published_snapshot` only when neither region has one.
 7. **`US_FED_TARGET_D` (DFEDTAR), `US_FED_TARGET_UPPER_D` and `US_FED_TARGET_LOWER_D` are loaded.** They come from the same macro-sync run once the WP-S6 code is deployed (the catalog gained `US_FED_TARGET_D`, so a deployment that predates WP-S6 never fetched it: rerun `GET $BASE/api/cron/macro-sync` with the bearer after the deploy and read a `success` receipt).
@@ -186,10 +186,12 @@ Then run 8.4 (the cron answers 404 `strategy_disabled` before this step, so the 
 ### 8.4 Review cron preview (`&preview=1`, zero writes) — after 8.3, first thing after the deploy
 
 ```bash
-M=$(date -u -v-1m +%Y-%m)   # newest closed month; the cron picks it itself, an explicit month before its cutoff is a 400
-curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?month=$M&preview=1" | jq .
+# no `month`: the server picks the newest closed month (a month is closed once the 3rd of the next month 00:00:00Z has passed,
+# so on the 1st-2nd of a month the previous month is NOT closed yet and an explicit month=<previous> is a 400)
+R=$(curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?preview=1"); echo "$R" | jq .
+M=$(echo "$R" | jq -r .month); echo "server-selected month: $M"   # reuse exactly this month for the real run below
 ```
-Expect HTTP 200, `ok: true`, `preview: true`, one receipt per region with `outcome: 'preview'`, a `status` of `ok` (or `insufficient` for a region with no snapshot at that month's cutoff, which is a data gap, not a failure) and a 64-hex `manifest_hash`. A 503 `code_version_unavailable` means 8.1 item 5 failed; a 503 `macro_foundation_unavailable` means the Supabase environment is missing in the deployment. Only after the preview is clean (and the 8.5 smoke checks pass), publish the first review for real (one unit at a time): `curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?month=$M&region=US" | jq .` then `region=CN`; receipts `advanced`, rerun gives `replayed`.
+Expect HTTP 200, `ok: true`, `preview: true`, one receipt per region with `outcome: 'preview'`, a `status` of `ok` (or `insufficient` for a region with no snapshot at that month's cutoff, which is a data gap, not a failure) and a 64-hex `manifest_hash`. A 503 `code_version_unavailable` means 8.1 item 5 failed; a 503 `macro_foundation_unavailable` means the Supabase environment is missing in the deployment. Only after the preview is clean (and the 8.5 smoke checks pass), publish the first review for real (one unit at a time): `curl -sS -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/macro-review?month=$M&region=US" | jq .` (with the `month` read from the preview receipt, not a locally computed one) then `region=CN`; receipts `advanced`, rerun gives `replayed`.
 
 ### 8.5 Smoke checks (flag on, `MACRO_JUDGMENTS_ENABLED` still unset)
 
