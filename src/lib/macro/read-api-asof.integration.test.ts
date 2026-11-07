@@ -58,12 +58,14 @@ describe.skipIf(!enabled)('classifyAsOf batch visibility (PG17)',()=>{
   const late=await api.classifyAsOf('US','2026-10',after,'v1.0');
   expect(early.observation_refs).toEqual([expect.objectContaining({series_id:series,value:4.1,vintage_id:'1'})]);
   expect(late.observation_refs).toEqual([expect.objectContaining({series_id:series,value:4.2,vintage_id:'2'})]);
-  const unproved=await seed('4.3',null,'2026-10-22T00:00:00Z');
-  expect((await pg.query('select finished_at from public.ingest_batches where batch_id=$1',[unproved])).rows[0].finished_at).toBeNull();
+  const running=await seed('4.3',null,'2026-10-22T00:00:00Z');
+  expect((await pg.query('select status,finished_at from public.ingest_batches where batch_id=$1',[running])).rows[0]).toMatchObject({status:'running',finished_at:null});
   expect((await api.classifyAsOf('US','2026-10',before,'v1.0')).observation_refs).toEqual(early.observation_refs);
   expect((await api.classifyAsOf('US','2026-10',after,'v1.0')).observation_refs).toEqual(late.observation_refs);
-  expect((await receipts([unproved]))[unproved].finished_at).toBeNull();
-  const nullRow=observationFromRow((await pg.query('select * from public.macro_observations where batch_id=$1',[unproved])).rows[0]);
-  await expect(selectEligibleHistoryAsOf([nullRow],after,1,observations,receipts)).rejects.toThrow('historical_cutoff_unsupported');
+  expect((await receipts([running]))[running]).toMatchObject({status:'running',finished_at:null});
+  const runningRow=observationFromRow((await pg.query('select * from public.macro_observations where batch_id=$1',[running])).rows[0]);
+  await expect(selectEligibleHistoryAsOf([runningRow],after,1,observations,receipts)).resolves.toEqual([]);
+  // ingest_batches_running_iff_unfinished forbids a terminal status with NULL finished_at in PG;
+  // db.test.ts covers the terminal but unprovable receipt and historical_cutoff_unsupported path.
  });
 });
