@@ -412,7 +412,7 @@ returns public.judgment_envelope language sql stable security invoker set search
            where s.judgment_id = p_j.judgment_id and (p_view = 'latest' or s.settled_at <= p_cutoff)
            order by s.seq desc limit 1),
          k.c,
-         coalesce((k.c).validity_revision = v.revision and (k.c).valid_until > coalesce(p_cutoff, pg_catalog.now()), false),
+         coalesce((k.c).validity_revision = v.revision and (k.c).valid_until > case when p_view = 'latest' then pg_catalog.now() else p_cutoff end, false),
          (select e from public.judgment_methodology_events e
            where e.methodology_id = p_j.methodology_id and e.version = p_j.methodology_version
              and (p_view = 'latest' or e.occurred_at <= p_cutoff)
@@ -422,6 +422,12 @@ returns public.judgment_envelope language sql stable security invoker set search
                    and c.scope_type = 'all' and c.scope_key = '' and (p_view = 'latest' or c.computed_at <= p_cutoff)
                  order by c.computed_at desc, c.calibration_id limit 1) as c) k
   left join public.judgment_calibration_validity v on v.methodology_id = p_j.methodology_id and v.version = p_j.methodology_version
+  -- Review C-02: the row is passed in by the caller, so re-check it under the caller's RLS and, for as_known, the same
+  -- registered_at / methodology-event predicates the list functions apply; otherwise the result is NULL.
+  where exists (select 1 from public.judgments x where x.judgment_id = p_j.judgment_id)
+    and (p_view = 'latest' or (p_j.registered_at <= p_cutoff and exists (
+      select 1 from public.judgment_methodology_events ev
+      where ev.methodology_id = p_j.methodology_id and ev.version = p_j.methodology_version and ev.occurred_at <= p_cutoff)))
 $$;
 
 -- §10 / §12.4: one card per (judgment_type, methodology_id, version); issuer subjects include the
@@ -565,7 +571,7 @@ begin
   if (pg_catalog.to_jsonb(v_new) - v_meta) is distinct from (pg_catalog.to_jsonb(v_old) - v_meta) then
     raise exception 'formula_hash_drift: %@% stored %', v_new.methodology_id, v_new.version, v_old.formula_hash using errcode = 'P0001';
   end if;
-  select coalesce(max(e.seq), 0) into v_seq from public.judgment_methodology_events e
+  select coalesce(pg_catalog.max(e.seq), 0) into v_seq from public.judgment_methodology_events e
   where e.methodology_id = v_new.methodology_id and e.version = v_new.version;
   if v_new.status is distinct from v_old.status then
     v_seq := v_seq + 1; v_changed := true;
@@ -684,7 +690,8 @@ begin
     raise exception 'invalid_parameter: patch' using errcode = '22023';
   end if;
   select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
-  if not found or v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token then
+  if not found or v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token
+     or v_q.leased_until is null or v_q.leased_until <= pg_catalog.clock_timestamp() then
     raise exception 'lease_lost' using errcode = '55P03';
   end if;
   v_detail := (p_patch -> 'last_detail') - 'incident';
@@ -733,13 +740,13 @@ begin
   end if;
   select s.* into v_hit from public.judgment_settlements s where s.request_key = p_request_key;
   if found then return public.judgment_replay_status(v_hit, p_judgment_id, v_digest, v_payload); end if;
-  select coalesce(max(s.seq), 0) into v_seq from public.judgment_settlements s where s.judgment_id = p_judgment_id;
+  select coalesce(pg_catalog.max(s.seq), 0) into v_seq from public.judgment_settlements s where s.judgment_id = p_judgment_id;
   if v_q.closed_at is not null and v_actor in ('cron','script') then
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'already_final');
   end if;
   if p_lease_token is null then
     if v_actor !~ '^admin:[0-9a-f-]{36}$' then raise exception 'lease_lost' using errcode = '55P03'; end if;
-  elsif v_q.lease_token is distinct from p_lease_token then
+  elsif v_q.lease_token is distinct from p_lease_token or v_q.leased_until is null or v_q.leased_until <= pg_catalog.clock_timestamp() then
     raise exception 'lease_lost' using errcode = '55P03';
   end if;
   begin
@@ -755,7 +762,7 @@ begin
   end;
   if v_kind = 'reopened' then
     update public.judgment_settle_queue x
-    set closed_at = null, next_attempt_at = pg_catalog.now(), attempts = 0, last_status = null, last_detail = '{}'::jsonb,
+    set closed_at = null, next_attempt_at = pg_catalog.now(), attempts = 0, last_status = null, last_detail = '{}'::jsonb, override = null,
         leased_until = null, lease_token = null, updated_at = pg_catalog.now()
     where x.judgment_id = p_judgment_id;
   else
@@ -803,7 +810,8 @@ begin
   end if;
   select x.* into v_q from public.judgment_settle_queue x where x.judgment_id = p_judgment_id for update;
   if not found then raise exception 'unknown_judgment' using errcode = 'P0002'; end if;
-  if v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token then
+  if v_q.lease_token is null or v_q.lease_token is distinct from p_lease_token
+     or v_q.leased_until is null or v_q.leased_until <= pg_catalog.clock_timestamp() then
     return pg_catalog.jsonb_build_object('status', 'lease_lost', 'quarantine_id', null);
   end if;
   insert into public.dq_quarantine as x (id, dataset, table_name, natural_key, reason_code, detail, payload, batch_id, status, resolved_by, resolved_at, created_at)
@@ -857,7 +865,9 @@ begin
     return 'item_not_open';
   end if;
   if v_q.closed_at is not null then return 'closed'; end if;
-  if pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+  if v_i.table_name <> 'judgment_settlements'
+     or pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+     or (v_q.last_detail -> 'incident' ->> 'quarantine_id') is distinct from p_quarantine_id::text
      or (v_q.last_detail -> 'incident' ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
      or (v_q.last_detail -> 'incident' ->> 'cutoff') is distinct from (p_override ->> 'cutoff')
      or (v_i.payload ->> 'evidence_hash') is distinct from (p_override ->> 'evidence_hash')
@@ -911,11 +921,13 @@ begin
   select x.* into v_i from public.dq_quarantine x where x.id = p_quarantine_id for update;
   select s.* into v_hit from public.judgment_settlements s where s.request_key = p_request_key;
   if found then return public.judgment_replay_status(v_hit, p_judgment_id, v_digest, v_payload); end if;
-  select coalesce(max(s.seq), 0) into v_seq from public.judgment_settlements s where s.judgment_id = p_judgment_id;
+  select coalesce(pg_catalog.max(s.seq), 0) into v_seq from public.judgment_settlements s where s.judgment_id = p_judgment_id;
   if v_i.id is null or v_i.dataset <> 'judgments' or v_i.natural_key <> p_judgment_id::text or v_i.status <> 'open' then
     return pg_catalog.jsonb_build_object('seq', v_seq, 'status', 'item_not_open');
   end if;
-  if v_q.closed_at is not null or pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+  if v_q.closed_at is not null or v_i.table_name <> 'judgment_settlements'
+     or pg_catalog.jsonb_typeof(v_q.last_detail -> 'incident') is distinct from 'object'
+     or (v_q.last_detail -> 'incident' ->> 'quarantine_id') is distinct from p_quarantine_id::text
      or (v_q.last_detail -> 'incident' ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
      or (v_q.last_detail -> 'incident' ->> 'cutoff') is distinct from (p_expected ->> 'cutoff')
      or (v_i.payload ->> 'evidence_hash') is distinct from (p_expected ->> 'evidence_hash')
@@ -948,6 +960,8 @@ begin
     raise exception 'invalid_parameter: window' using errcode = '22023';
   end if;
   v_job := 'cohort:' || p_generation::text;
+  -- Review C-04: freeze and clear of one generation serialise on this lock (taken first in both), held to commit.
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(v_job, 0));
   insert into public.judgment_job_state (job, state, updated_at)
   values (v_job, pg_catalog.jsonb_build_object('frozen_at', v_at, 'n', null, 'methodology', p_methodology, 'version', p_version,
           'window', pg_catalog.jsonb_build_object('from', p_window_from, 'to', p_window_to)), pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp()))
@@ -959,11 +973,11 @@ begin
   end if;
   insert into public.judgment_calibration_cohort_members (generation, judgment_id, settlement_id, ord)
   select p_generation, j.judgment_id,
-         (select s.settlement_id from public.judgment_settlements s where s.judgment_id = j.judgment_id order by s.seq desc limit 1),
+         (select s.settlement_id from public.judgment_settlements s where s.judgment_id = j.judgment_id and s.settled_at <= v_at order by s.seq desc limit 1),
          pg_catalog.row_number() over (order by j.judgment_id)
   from public.judgments j
   where j.methodology_id = p_methodology and j.methodology_version = p_version and not j.abstained
-    and j.as_of between p_window_from and p_window_to;
+    and j.as_of between p_window_from and p_window_to and j.registered_at <= v_at;   -- review minor 7: frozen_at bounds registrations and settlements
   get diagnostics n = row_count;
   update public.judgment_job_state s set state = s.state || pg_catalog.jsonb_build_object('n', n) where s.job = v_job;
   return pg_catalog.jsonb_build_object('status', 'frozen', 'frozen_at', v_at, 'n', n);
@@ -991,6 +1005,7 @@ language plpgsql security definer set search_path = '' as $$
 declare n integer;
 begin
   if p_generation is null then raise exception 'invalid_parameter: generation' using errcode = '22023'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('cohort:' || p_generation::text, 0));   -- review C-04: same lock as freeze
   delete from public.judgment_calibration_cohort_members c where c.generation = p_generation;
   get diagnostics n = row_count;
   delete from public.judgment_job_state s where s.job = 'cohort:' || p_generation::text;   -- Q1-05: the claim goes with the members

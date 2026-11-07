@@ -911,9 +911,10 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const w=await admin.connect();
    try{
     await w.query('begin');
+    const wpid=Number((await w.query('select pg_backend_pid() p')).rows[0].p);
     await w.query(`select public.quarantine_settlement($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,[a.j,t,'settlement_basis_mismatch',JSON.stringify({evidence_hash:H('f'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:a.j}),JSON.stringify(patchOf(H('f'),'2026-03-02T04:00:00.000Z')),b]);
     const accepting=applyQ(a.j,overrideOf(by),a.item);                                      // blocks on the queue row lock
-    await pause(200);
+    await waitBlocked(wpid);
     await w.query('commit');
     expect(await accepting).toBe('stale');
    }finally{w.release();}
@@ -923,9 +924,10 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const c=await admin.connect();
    try{
     await c.query('begin');
+    const cpid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
     expect(await rejectQ(r.j,r.item,`adm:${randomUUID()}`,voidRow(b,by),c)).toMatchObject({status:'applied'});
     const accepting=applyQ(r.j,overrideOf(by),r.item);
-    await pause(200);
+    await waitBlocked(cpid);
     await c.query('commit');
     expect(await accepting).toBe('item_not_open');
    }finally{c.release();}
@@ -936,9 +938,10 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
    const e=await admin.connect();
    try{
     await e.query('begin');
+    const epid=Number((await e.query('select pg_backend_pid() p')).rows[0].p);
     expect(await applyQ(x.j,overrideOf(by),x.item,e)).toBe('applied');
     const rejecting=rejectQ(x.j,x.item,`adm:${randomUUID()}`,voidRow(b,by));
-    await pause(200);
+    await waitBlocked(epid);
     await e.query('commit');
     expect(await rejecting).toEqual({seq:0,status:'item_not_open'});
    }finally{e.release();}
@@ -1029,9 +1032,10 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   const c=await admin.connect();
   try{
    await c.query('begin');
+   const cpid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
    const first=(await c.query(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m])).rows[0].v as {status:string;frozen_at:string;n:number};
    const second=one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m]);   // blocks on the marker's primary key
-   await pause(200);
+   await waitBlocked(cpid);
    await c.query('commit');
    expect(first).toMatchObject({status:'frozen',n:2});
    expect(await second).toEqual({status:'already_frozen',frozen_at:first.frozen_at,n:2});
@@ -1074,5 +1078,145 @@ describe.skipIf(!enabled)('F4 judgments functions (Task 3)',()=>{
   await register(judgmentRow(m,b,{inputs:[{...input,ref:{snapshot_id:randomUUID()}}]}));
   const found=await q(`select judgment_id from public.judgments where inputs @> $1::jsonb order by judgment_id`,[JSON.stringify([{kind:'macro_snapshot',ref:{snapshot_id:snap}}])]);
   expect(found.map(r=>r.judgment_id)).toEqual([String(a.row.judgment_id),String(ab.row.judgment_id)].sort());
+ });
+
+ // ---- review round 1 (coordinator items 1–8) ----
+ it('reopened clears the accepted override: settled via override → withdrawn → reopened → override null, and the same inconsistency is quarantined again',async()=>{
+  const m=await syncNew();const b=await batch();const by=await adminUser();const A=`admin:${by}`;
+  await withClaimLock(async()=>{
+   const {j,item}=await quarantined(m,b);
+   expect(await applyQ(j,overrideOf(by),item)).toBe('applied');
+   expect((await queueOf(j)).override).not.toBeNull();
+   const t=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   expect(await appendOp(j,t,`${b}:${j}:1`,sRow(b))).toEqual({seq:1,status:'applied'});
+   expect(await appendOp(j,null,`adm:${randomUUID()}`,sRow(b,{kind:'withdrawn',outcome:null,realized:null,reason:'bad',actor:A}))).toEqual({seq:2,status:'applied'});
+   expect(await appendOp(j,null,`adm:${randomUUID()}`,sRow(b,{kind:'reopened',outcome:null,realized:null,reason:'again',actor:A}))).toEqual({seq:3,status:'applied'});
+   expect((await queueOf(j)).override).toBeNull();
+   const t2=String((await claim()).find(x=>x.judgment_id===j)!.lease_token);
+   const c='2026-03-02T04:00:00.000Z';
+   const res=await qs(j,t2,{evidence_hash:H('e'),cutoff:c,judgment_id:j},patchOf(H('e'),c),b);
+   expect(res.status).toBe('quarantined');expect(res.quarantine_id).not.toBe(item);
+   expect((await queueOf(j)).override).toBeNull();
+  });
+ });
+
+ it('an EXPIRED lease is lease_lost for release_lease, append_settlement and quarantine_settlement even when the token matches; nothing is written (C-01)',async()=>{
+  const m=await syncNew();const b=await batch();
+  await withClaimLock(async()=>{
+   const js:string[]=[];
+   for(let i=0;i<3;i++){const r=judgmentRow(m,b,{target:DUE});await register(r);js.push(String(r.row.judgment_id));}
+   const mine=(await claim(100,1)).filter(x=>js.includes(x.judgment_id));
+   expect(mine).toHaveLength(3);
+   const tok=(id:string)=>String(mine.find(x=>x.judgment_id===id)!.lease_token);
+   await pause(2000);
+   const patch={last_status:'pending',last_detail:{},next_attempt_at:'2099-06-01T00:00:00.000Z',attempts_increment:0};
+   expect(await fails(release(js[0],tok(js[0]),patch))).toMatchObject({code:'55P03',message:'lease_lost'});
+   expect(await fails(appendOp(js[1],tok(js[1]),`${b}:${js[1]}:1`,sRow(b)))).toMatchObject({code:'55P03',message:'lease_lost'});
+   const c='2026-03-02T04:00:00.000Z';
+   expect(await qs(js[2],tok(js[2]),{evidence_hash:H('e'),cutoff:c,judgment_id:js[2]},patchOf(H('e'),c),b)).toEqual({status:'lease_lost',quarantine_id:null});
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=any($1::uuid[])`,[js])).toHaveLength(0);
+   expect(await q(`select 1 from public.dq_quarantine where natural_key=$1`,[js[2]])).toHaveLength(0);
+   for(const j of js)expect(await queueOf(j)).toMatchObject({last_status:null,closed_at:null});
+   for(const x of (await claim()).filter(y=>js.includes(y.judgment_id)))await park(x.judgment_id,String(x.lease_token));   // expired leases are claimable again
+  });
+ });
+
+ it('judgment_envelope_of is not a bypass: under as_known it applies registered_at / methodology-event predicates, and an unpublishable row yields nothing (C-02)',async()=>{
+  const row=methodologyRow();const m=String(row.methodology_id);await sync({...row,publishable:true});const b=await batch();
+  const r=judgmentRow(m,b,{subjectType:'macro_region',subjectKey:'CN'});await register(r);const j=String(r.row.judgment_id);
+  const json=JSON.stringify((await q(`select to_jsonb(x) v from public.judgments x where judgment_id=$1`,[j]))[0].v);
+  const call=(role:string,view:string,cutoff:string|null)=>asRole(admin,role,async c=>(await c.query(`select ((public.judgment_envelope_of(jsonb_populate_record(null::public.judgments,$1::jsonb),$2,$3::timestamptz)).judgment).judgment_id id`,[json,view,cutoff])).rows[0].id as string|null);
+  for(const role of ['anon','authenticated']){
+   expect(await call(role,'latest',null)).toBe(j);
+   expect(await call(role,'as_known','2000-01-01T00:00:00.000Z')).toBeNull();
+   expect(await call(role,'as_known',new Date(Date.now()+60_000).toISOString())).toBe(j);
+  }
+  await sync({...row,publishable:false});
+  expect(await call('anon','latest',null)).toBeNull();
+ });
+
+ it('calibration_valid under the latest view ignores the supplied cutoff (C-03)',async()=>{
+  const m=await syncNew();const b=await batch();
+  const r=judgmentRow(m,b,{subjectType:'issuer',subjectKey:randomUUID()});await register(r);
+  expect(await one(`select public.insert_calibration($1::jsonb,1) v`,[JSON.stringify({...calibrationCols(m,b),valid_until:'2020-01-01T00:00:00.000Z'})])).toBe('inserted');
+  const cv=(cutoff:string|null)=>q(`select e.calibration_valid cv from public.latest_judgment_cards('issuer',$1,null,'latest',$2::timestamptz) e`,[r.row.subject_key,cutoff]);
+  expect(await cv(null)).toEqual([{cv:false}]);
+  expect(await cv('1900-01-01T00:00:00.000Z')).toEqual([{cv:false}]);
+ });
+
+ it('freeze and clear of one generation serialise on a per-generation lock, in either order (C-04)',async()=>{
+  const m=await syncNew();const b=await batch();
+  for(const d of ['2025-03-01','2025-06-01'])await register(judgmentRow(m,b,{asOf:d}));
+  const frz=(g:string)=>`select public.freeze_calibration_cohort('${g}','${m}','v1','2025-01-01','2025-12-31') v`;
+  // freeze in flight, clear waits and then removes what the freeze wrote
+  const g1=randomUUID();const c=await admin.connect();
+  try{
+   await c.query('begin');
+   const pid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
+   expect((await c.query(frz(g1))).rows[0].v).toMatchObject({status:'frozen',n:2});
+   const clearing=one(`select public.clear_calibration_generation($1) v`,[g1]);
+   await waitBlocked(pid);
+   await c.query('commit');
+   expect(await clearing).toBe(2);
+  }finally{await c.query('rollback').catch(()=>{});c.release();}
+  expect(Number(await one(`select count(*)::int v from public.judgment_calibration_cohort_members where generation=$1`,[g1]))).toBe(0);
+  expect(await q(`select 1 from public.judgment_job_state where job=$1`,[`cohort:${g1}`])).toHaveLength(0);
+  // clear in flight, freeze waits and then freezes anew
+  const g2=randomUUID();expect(await one(frz(g2))).toMatchObject({status:'frozen',n:2});
+  const d=await admin.connect();
+  try{
+   await d.query('begin');
+   const pid=Number((await d.query('select pg_backend_pid() p')).rows[0].p);
+   expect((await d.query(`select public.clear_calibration_generation($1) v`,[g2])).rows[0].v).toBe(2);
+   const freezing=one(frz(g2));
+   await waitBlocked(pid);
+   await d.query('commit');
+   expect(await freezing).toMatchObject({status:'frozen',n:2});
+  }finally{await d.query('rollback').catch(()=>{});d.release();}
+  expect(await one(`select public.clear_calibration_generation($1) v`,[g2])).toBe(2);
+ });
+
+ it('freeze: only registrations at or before frozen_at and settlements at or before it are frozen (minor 7)',async()=>{
+  const m=await syncNew();const b=await batch();
+  await register(judgmentRow(m,b,{asOf:'2025-03-01'}));
+  const gen=randomUUID();const c=await admin.connect();
+  try{
+   await c.query('begin');
+   const pid=Number((await c.query('select pg_backend_pid() p')).rows[0].p);
+   await c.query(`select pg_advisory_xact_lock(pg_catalog.hashtextextended('cohort:'||$1::text,0))`,[gen]);   // the generation lock (C-04)
+   const freezing=one(`select public.freeze_calibration_cohort($1,$2,'v1','2025-01-01','2025-12-31') v`,[gen,m]);
+   await waitBlocked(pid);
+   await register(judgmentRow(m,b,{asOf:'2025-04-01'}));                               // registered_at is later than the freeze call, committed before its snapshot
+   await c.query('commit');
+   expect(await freezing).toMatchObject({status:'frozen',n:1});
+  }finally{await c.query('rollback').catch(()=>{});c.release();}
+  expect(Number(await one(`select count(*)::int v from public.judgment_calibration_cohort_members where generation=$1`,[gen]))).toBe(1);
+ });
+
+ it('apply / reject require the item to be a judgment_settlements item and to be the queue incident\'s own quarantine_id, else stale (minor 6)',async()=>{
+  const m=await syncNew();const b=await batch();const by=await adminUser();
+  await withClaimLock(async()=>{
+   const {j}=await quarantined(m,b);
+   const payload=JSON.stringify({evidence_hash:H('e'),cutoff:'2026-03-02T04:00:00.000Z',judgment_id:j});
+   const wrongTable=randomUUID(),otherReason=randomUUID();
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgments',$2,'settlement_basis_mismatch',$3,$4::jsonb)`,[wrongTable,j,b,payload]);
+   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'judgments','judgment_settlements',$2,'settlement_benchmark_gap',$3,$4::jsonb)`,[otherReason,j,b,payload]);
+   for(const id of [wrongTable,otherReason]){
+    expect(await applyQ(j,overrideOf(by),id)).toBe('stale');
+    expect(await rejectQ(j,id,`adm:${randomUUID()}`,voidRow(b,by))).toEqual({seq:0,status:'stale'});
+    expect((await q(`select status from public.dq_quarantine where id=$1`,[id]))[0].status).toBe('open');
+   }
+   expect((await queueOf(j)).override).toBeNull();
+   expect(await q(`select 1 from public.judgment_settlements where judgment_id=$1`,[j])).toHaveLength(0);
+  });
+ });
+
+ it('the public RPCs also run for the authenticated role under RLS (minor 8)',async()=>{
+  const row=methodologyRow();const m=String(row.methodology_id);await sync({...row,publishable:true});const b=await batch();
+  await register(judgmentRow(m,b,{subjectType:'macro_region',subjectKey:'HK'}));
+  const view=()=>asRole(admin,'authenticated',async c=>(await c.query(`select 1 from public.latest_judgment_cards('macro_region','HK',null,'latest',null) e where (e.judgment).methodology_id=$1`,[m])).rows.length);
+  expect(await view()).toBe(1);
+  await sync({...row,publishable:false});
+  expect(await view()).toBe(0);
  });
 });

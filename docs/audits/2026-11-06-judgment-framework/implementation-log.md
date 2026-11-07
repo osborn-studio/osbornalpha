@@ -5,7 +5,7 @@
 | T5 batches deferred | 6cbfdb7c | 指挥直审 diff：符合 §7.5 | codex review：No actionable defects | 0 | 早于计划定稿执行（任务独立、稳定） |
 | T1 core pure modules | cfc07e82 + 16dfa3b2 | Opus: SPEC PASS (code), QUALITY PASS (minors fixed) | Codex review: 1 P2 (jsonClean __proto__) fixed | 1 | executed on plan draft 3 |
 | T2 migration I | 本提交（`feat(judgments): F4 Task 2`） | 待复审 | 待审 | 0 | judgments.integration 7/7；test:migrations PASS；executed on plan draft 3 |
-| T3 migration II | 本提交（`feat(judgments): F4 Task 3`） | 待复审 | 待审 | 0 | judgments.integration 31/31（连跑 3 次稳定）；test:migrations PASS；typecheck、lint 干净；executed on plan draft 4 |
+| T3 migration II | 本提交（`feat(judgments): F4 Task 3`） | 待复审 | 待审 | 0 | judgments.integration 31/31（连跑 3 次稳定）；test:migrations PASS；typecheck、lint 干净；executed on plan draft 4；复审修复提交 `fix(judgments): F4 Task 3 review round 1`（39/39） |
 | T6 origins / facts-derive / macro-api / inputs-db | 本提交（`feat(judgments): origin table, deriveMetricsAsOf`） | 待复审 | 待审 | 0 | 4 测试文件 17/17；typecheck、lint 干净；executed on plan draft 4；复审修复提交 见 T6 fix 行 |
 | T6 fix | 本提交（`fix(judgments): Task 6 review`） | 待复审 | 待审 | 1 | filings 过滤未发布(mapping_gen<=0)先于 limit；tableRows / issuer_securities 用 selectAll 分页（max_rows 上限桩）；asOf 真实日期 + JudgmentError(invalid_parameter)；注释补充；先红 3 失败后绿 |
 
@@ -42,3 +42,15 @@
 - 未触碰 `supabase/migrations`、`judgments.integration.test.ts`；不依赖 `memoryJudgmentsDb`。
 
 - 复审修复（T6 fix）：issuer_industry_memberships 按 `code`、issuer_securities 按 `ticker` 排序分页（TableClient 仅支持单列 orderBy，二者无单列唯一键，同键内顺序依赖数据库；已知残余）。
+
+### Task 3 复审第 1 轮修复（迁移原地改，未锁）
+
+每项先加失败测试（红：7 个失败 / 32 通过；第 8 项的 authenticated 用例本就通过），再修复；之后 `judgments.integration` 39/39（连跑 2 次）、`test:migrations` PASS、typecheck、lint 干净。
+1. `judgment_append_settlement_internal` 的 `reopened` 分支同时置 `override = null`。
+2. C-01：`release_lease`、`append_settlement`（令牌路径）、`quarantine_settlement` 在队列锁下要求令牌相符且 `leased_until > clock_timestamp()`，否则 `lease_lost`；管理员空令牌路径与 request_key 重放路径不变。
+3. C-02（**偏离协调者首选**）：未撤销 `judgment_envelope_of` 的 EXECUTE——`latest_judgment_cards / judgment_history / judgment_envelope_by_id` 是 security invoker，以调用者角色调它，撤销会令 anon 全部读失败。改为同一谓词方案：函数内按调用者 RLS 复查该行存在，`as_known` 要求 `registered_at <= cutoff` 且有 `<= cutoff` 的方法事件，否则返回 NULL；`rpc-inventory.ts` 不变。
+4. C-03：`latest` 视图的 `calibration_valid` 用 `now()`，忽略传入 cutoff。
+5. C-04：`freeze_calibration_cohort` 与 `clear_calibration_generation` 先取同一把 `pg_advisory_xact_lock(hashtextextended('cohort:<generation>', 0))`；两种顺序的并发测试用 `waitBlocked`。
+6. `apply_quarantine_override / reject_quarantined_settlement`：项 `table_name` 必须是 `judgment_settlements`，且队列 `incident.quarantine_id = p_quarantine_id`，否则 `stale`。
+7. freeze：`frozen_at`（语句时间戳）同时约束成员的 `registered_at <= frozen_at` 与冻结结算的 `settled_at <= frozen_at`（测试用同一把代际锁让冻结等待，期间登记的行不进成员）。
+8. 竞态测试的 `pause(200)` 全换成 `waitBlocked(pid)`；`max()` 全限定为 `pg_catalog.max`（含 `sync_methodology`）；RLS 用例加 `authenticated` 角色调用。
