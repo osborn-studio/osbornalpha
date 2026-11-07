@@ -98,3 +98,29 @@
 - 2021–2025（审查 D4 把表扩到 2021）：OPM 页面不含这些年份，**未能联网复核**，取自规划时核对与实施者对 5 U.S.C. 6103 观察日规则的推算：2021 为 12 项（含首次的 Juneteenth 观察日 06-18，及 2022 元旦周六的观察日 2021-12-31）、2022 为 10 项（元旦已观察在 2021-12-31；Juneteenth 周日→06-20；圣诞周日→12-26）、2023 为 11 项（元旦周日→01-02；老兵节周六→11-10）、2024 与 2025 各 11 项。
 - EDGAR 额外关闭日（SEC 公告：到期申报顺延至下一个运营营业日）：2026-11-06 用默认 SEC User-Agent（`DEFAULT_USER_AGENT`，`src/lib/research/ingest/collectors/shared.ts`）各抓取一次，均 HTTP 200。`edgar-closed-24-25-december-2024`：EDGAR 于 2024-12-24 与 12-25 关闭，"Filings required to be made on Tuesday, December 24 and Wednesday, December 25 will be considered timely if filed on December 26, 2024"，与 `SEC_CLOSURES[2024]` 一致。`edgar-will-be-closed-december-24-2025-through-december-26-2025`：2025-12-24 与 12-26（及 12-25）关闭，12-29 恢复，与 `SEC_CLOSURES[2025]` 一致。2025-01-09（卡特总统国丧日）无单独链接，**未复核**（取自规划时核对）。此前同日首次抓取（描述性 User-Agent、无邮箱）两页均 403，已被本次结果取代。
 - 维护：`src/lib/dq/calendar.ts::SEC_HOLIDAYS/SEC_CLOSURES` 每年 12 月补次年；临时关闭按 SEC 公告补入 `SEC_CLOSURES`；表外年份的期限行为 `no_rule`（`none.holiday_table_missing/1`），不猜；`rollForward` 在 15 天内找不到营业日则抛错。
+
+## CN disclosure_date 真实响应核对 (2026-11-06)
+
+目的：规格 §6.1 T15 要求 `CN_DISCLOSURE_VERIFIED` 翻 `true` 之前用真实响应核对 `disclosure_date` 的语义。owner 提供了 `TUSHARE_TOKEN`（`~/.config/osbornalpha/secrets.env`，不入库、不打印、不进夹具），本次取代计划的"无 token 降级"步骤。
+
+**请求与夹具。** 经已落地的 `tushareCallRaw('disclosure_date', {ts_code}, DISCLOSURE_FIELDS)`（`DISCLOSURE_FIELDS='ts_code,ann_date,end_date,pre_date,actual_date,modify_date'`）各取一次，字节原样存为 `src/lib/dq/fixtures/tushare/disclosure_date.<ts_code>.json`，旁带 `.meta.json`（api、params、fields、sha256、fetched_at、http_status、code、msg、request_id；无 token，已对夹具全文检索 token 值：0 处命中）。
+
+| ts_code | 行数 | sha256 | fetched_at |
+|---|---|---|---|
+| 600519.SH | 101（2001-06-30 … 2026-09-30，每个季末一行，无重复 end_date） | `a873400c9d8cd5a762dfbb87923987c0a57d12cc03e89e3bef48f06859fbc825` | 2026-11-07T01:24Z |
+| 000333.SZ | 53（2013-09-30 … 2026-09-30） | `f69c95b7db4dd242c1af2c3b7b08c99293aa3e9157ebba342893739fe0872a51` | 2026-11-07T01:24Z |
+
+**权限/积分。** 两次均 HTTP 200、`code=0`、`msg=""`；没有积分或权限错误。返回字段与 `DISCLOSURE_FIELDS` 完全一致、顺序一致。单个 ts_code 一次返回全部历史（`has_more=false`），日期均为 `YYYYMMDD` 字符串，缺失为 JSON `null`。
+
+**字段语义（实测）。**
+
+- `end_date`：报告期末，恒为 0331/0630/0930/1231。与 `CnScheduleRow.end_date` 一致。
+- `actual_date`：**该期定期报告的实际披露日**。与计划二夹具 `src/lib/facts/fixtures/tushare/<ts_code>.*.income.rt1.p1.json` 的 `ann_date`（利润表原始披露公告日）逐期比对：夹具覆盖的 44 期里 600519.SH 44/44、000333.SZ 44/44 相等（其余期间早于夹具 `start_date=20160101`，无法比对），同样 44/44 也等于 `f_ann_date`；零不一致。该比对固化为单测 `src/lib/dq/disclosure-fixtures.test.ts`。
+- `pre_date`：交易所预约披露日。两只样本里 `pre_date` 与 `actual_date` 在每一行都相同（提前或推迟披露的情形在样本外出现，见下）。
+- `ann_date`：**不是**报告披露日，而是预约披露记录的公告日（不晚于 `actual_date`；很多行等于 `end_date`，如 000333.SZ 26/53 行；也有早到数周的，如 600519.SH 20251231 期 `ann_date=20251225`）。`computeExpectations` 只用它给同一 `end_date` 的多行排序，不用作披露日。
+- `modify_date`：预约披露日被修改时的记录日期，绝大多数行为 `null`（两只样本各 2 行非空）；非空时该日期可晚于 `actual_date`（000333.SZ 2013 年报：`pre/actual=20140329`、`modify=20140403`），所以它是修订记录的时间戳，不是披露日。`computeExpectations` 只据其非空打 `detail.schedule_modified`，与实测一致。
+- 全市场补充探测（`end_date` 参数、不带 `ts_code`，不存夹具）核对 `actual_date` 在未披露时的取值：`end_date=20260930` 返回 5587 行，其中 `actual_date=null` 6 行（均有 `pre_date`，如 `pre_date=20261029`）、`actual_date≠pre_date` 16 行（提前/推迟披露，如 `pre=20261023 actual=20261017`）、`modify_date` 非空 13 行；`end_date=20260630` 5561 行，null 11、不等 5、modify 19；没有任何 `actual_date` 晚于核对日 2026-11-06 的行；`end_date=20261231`（尚未到期的期间）0 行。结论：已披露 → `actual_date` 为实际披露日；已预约未披露 → `actual_date=null` 且 `pre_date` 为预约日，正是 `computeExpectations` 的用法（`actual_date` 非空 → `filed_not_ingested`，否则 `expected_date=pre_date`）。
+
+**结论。** 语义与计划一致：`actual_date` = 定期报告实际披露日，`end_date` = 报告期末，`modify_date` = 预约日修订记录，`ann_date` = 预约记录公告日。`parseDisclosureDate` 解析两份夹具全部行。据此 `CN_DISCLOSURE_VERIFIED` 翻 `true`（独立提交）。
+
+**保留事项（不阻塞翻开关）。** (1) Tushare 对尚无预约记录的期间不返回行（`end_date=20261231` 为 0 行；记录在期末当日即出现，`ann_date=end_date`），所以"上游成功但该期无行"= 暂无预约，日历按法定期限给 `pending`/`overdue`，若 Tushare 回填滞后可能把一个期限已过但行未到的期间标 `overdue`；这是 CN 数据延迟的固有风险，已由 `detail.schedule_*` 之外的行级 `upstream_sha256` 留证。(2) 只核对了两只 A 股的整历史与两个报告期的全市场形状；北交所（`.BJ`）未单独抽查。
