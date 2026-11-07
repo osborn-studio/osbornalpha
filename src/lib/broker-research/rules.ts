@@ -72,8 +72,9 @@ export function evaluateRules(input:RulesInput):RulesOutput{
   if(f.status==='absent')continue;
   const d={field_id:f.field_id,field:f.field,page:f.page};
   if(f.page===null||f.char_start===null||f.char_end===null||f.value_source_text===null||f.parse_run_id===null){
+   if(f.status==='unverified'){push('span_verbatim',f.target_key,true,null,{...d,skipped:'row_unverified'});continue;}
    push('span_verbatim',f.target_key,false,'span_missing',d);
-   if(f.status!=='unverified')unverified.push(f.field_id);
+   unverified.push(f.field_id);
    continue;
   }
   const art=input.artifacts.get(f.parse_run_id);

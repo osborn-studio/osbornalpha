@@ -11,3 +11,12 @@ describe('toTyped — spec §5.3 table, one block per row',()=>{
  it('row 6: other fields keep the original string only',()=>{for(const f of ['institution','analyst','ticker','rating','valuation_method','sector','title'] as const)expect(toTyped(f,' Overweight 120 ')).toEqual(v(' Overweight 120 '));});
 });
 describe('CURRENCY_MARKS (currency-marks/1)',()=>{it('maps only CNY/HKD/USD marks and excludes ambiguous ones',()=>{expect(new Set(Object.values(CURRENCY_MARKS))).toEqual(new Set(['CNY','HKD','USD']));for(const k of ['$','¥','元'])expect(CURRENCY_MARKS[k]).toBeUndefined();expect(Object.isFrozen(CURRENCY_MARKS)).toBe(true);});it('finds marks longest-first and case-insensitively',()=>{expect(currencyMarksIn('target price HK$936')).toEqual(new Set(['HKD']));expect(currencyMarksIn('Rmb')).toEqual(new Set(['CNY']));expect(currencyMarksIn('US$ and HKD')).toEqual(new Set(['USD','HKD']));expect(currencyMarksIn('$120')).toEqual(new Set());});});
+
+it('B1-02: rejects compound prices as untyped',()=>{
+ for(const s of ['120-130','120/130','120 130','120-130 USD'])expect(toTyped('target_price',s)).toMatchObject({failure:'not_a_number',value:{value_num:null}});
+});
+it('B1-03: recognizes listed marks but ignores embedded tokens and altered page marks',()=>{
+ for(const s of ['Rmb','RMB','CN¥'])expect(currencyMarksIn(s)).toEqual(new Set(['CNY']));
+ expect(currencyMarksIn('PREUSDPOST')).toEqual(new Set());
+ expect(toTyped('target_currency','USD','ＵＳ＄')).toMatchObject({failure:'currency_mark_mismatch'});
+});

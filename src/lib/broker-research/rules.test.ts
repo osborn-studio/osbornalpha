@@ -62,6 +62,15 @@ describe('evaluateRules — happy path',()=>{
 });
 
 describe('R1 span_verbatim',()=>{
+ it('B4-01: skips already unverified rows without spans but blocks confirmed rows',()=>{
+  const pending=field({field:'rating',status:'unverified'}),confirmed=field({field:'rating',status:'confirmed'});
+  const out=evaluateRules(input({fields:[pending,confirmed]}));
+  expect(res(out,'span_verbatim')).toEqual(expect.arrayContaining([
+   expect.objectContaining({passed:true,detail:expect.objectContaining({skipped:'row_unverified',field_id:pending.field_id})}),
+   expect.objectContaining({passed:false,reason_code:'span_missing',detail:expect.objectContaining({field_id:confirmed.field_id})}),
+  ]));
+  expect(out.unverifiedFieldIds).toEqual([confirmed.field_id]);
+ });
  it('uses UTF-16 offsets after an astral char',()=>{
   const f=field({field:'rating',value_text:'x',page:2,char_start:16,char_end:17,value_source_text:'x'});
   expect(PAGES[1].text.slice(16,17)).toBe('x');
@@ -83,7 +92,7 @@ describe('R1 span_verbatim',()=>{
   const rej=field({field:'rating',status:'rejected',page:1,char_start:0,char_end:1,value_source_text:'nope'});
   const abs=field({field:'target_horizon',status:'absent',value_text:'ABSENT',page:1,extractor:'human:u'});
   const out=evaluateRules(input({fields:[noSpan,noArt,range,sup,rej,abs]}));
-  expect(res(out,'span_verbatim').map(r=>[r.detail.field_id,r.reason_code])).toEqual([[noSpan.field_id,'span_missing'],[noArt.field_id,'artifact_unavailable'],[range.field_id,'span_mismatch']]);
+  expect(res(out,'span_verbatim').map(r=>[r.detail.field_id,r.reason_code])).toEqual([[noSpan.field_id,null],[noArt.field_id,'artifact_unavailable'],[range.field_id,'span_mismatch']]);
   expect(out.unverifiedFieldIds).toEqual([noArt.field_id,range.field_id]);
  });
 });
