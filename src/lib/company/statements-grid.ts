@@ -15,7 +15,7 @@ import type {Basis,Cell,DerivedCell,FactCell,FilingSummary,GridRow,PeriodCol,Rea
 export const GRID_PERIOD_CHOICES=[8,20,40] as const;
 export type GridPeriods=typeof GRID_PERIOD_CHOICES[number];
 export interface GridOptions{statement:StatementKind;basis:Basis;periods:GridPeriods;market:Market;asOf:string}
-export interface GridResult{ok:true;statement:StatementKind;basis:Basis;stateRev:number;mappingGen:number|null;periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;factIds:string[];otherUnitOnly:Record<string,string[]>}
+export interface GridResult{ok:true;statement:StatementKind;basis:Basis;stateRev:number;mappingGen:number|null;periods:PeriodCol[];rows:GridRow[];filings:Record<string,FilingSummary>;factIds:string[];otherUnitOnly:Record<string,string[]>;otherUnitsAlso:Record<string,string[]>}
 export type GridOutcome=GridResult|{ok:false;error:'read_truncated'|'invalid_basis'};
 export type Badge='R'|'n'|'!'|'U';
 
@@ -59,7 +59,16 @@ export function buildStatementsGrid(snapshot:ReadSnapshotResult,opts:GridOptions
  if(opts.basis==='quarterly'&&opts.statement==='BS')return {ok:false,error:'invalid_basis'};
  const concepts=gridReadConcepts(opts.statement,opts.basis,opts.market);
  const wanted=new Set(concepts);
+ if(opts.basis!=='quarterly'){
+  for(const r of snapshot.rows)if(r.status==='ok'&&(r.disclosure_seq===undefined||r.is_current===undefined))throw new Error(`grid_sequence_missing:${r.fact_id}`);
+ }
  const rows=snapshot.rows.filter(r=>r.status==='ok'&&r.consolidation==='consolidated'&&r.market===opts.market);
+ if(opts.basis==='quarterly'){
+  // history envelope required: a natural key whose earliest visible row is not disclosure 1 means superseded rows were dropped
+  const minSeq=new Map<string,number>();
+  for(const r of rows){if(r.disclosure_seq===undefined)continue;const k=`${r.concept}:${r.period_start??''}:${r.period_end}:${r.consolidation}:${r.unit}`;minSeq.set(k,Math.min(minSeq.get(k)??Infinity,r.disclosure_seq));}
+  for(const [k,v] of minSeq)if(v>1)throw new Error(`grid_history_required:${k}`);
+ }
  const byConcept=new Map<string,Entry[]>();
  const push=(c:string,e:Entry)=>{const l=byConcept.get(c)??[];l.push(e);byConcept.set(c,l);};
  if(opts.basis==='quarterly'){
@@ -79,7 +88,7 @@ export function buildStatementsGrid(snapshot:ReadSnapshotResult,opts:GridOptions
  for(const es of byConcept.values())for(const e of es)cols.set(e.period.key,e.period);
  const periods=[...cols.values()].sort(colOrder).slice(0,opts.periods);
  const filingById=new Map(snapshot.filings.map(f=>[f.filingId,f]));
- const filings:Record<string,FilingSummary>={};const factIds=new Set<string>();const otherUnitOnly:Record<string,string[]>={};
+ const filings:Record<string,FilingSummary>={};const factIds=new Set<string>();const otherUnitOnly:Record<string,string[]>={};const otherUnitsAlso:Record<string,string[]>={};
  let mappingGen:number|null=null;
  const addFiling=(id:string)=>{const f=filingById.get(id);if(f)filings[id]=f;};
  const out:GridRow[]=[];
@@ -94,20 +103,22 @@ export function buildStatementsGrid(snapshot:ReadSnapshotResult,opts:GridOptions
    if(!main){cells[p.key]=null;if(others)(otherUnitOnly[c]??=[]).push(p.key);continue;}
    const cell=main.cell.kind==='fact'?{...main.cell,otherUnits:others}:main.cell;
    cells[p.key]=cell;
+   if(others)(otherUnitsAlso[c]??=[]).push(p.key);
    if(main.mappingGen!==null)mappingGen=Math.max(mappingGen??0,main.mappingGen);
    if(cell.kind==='fact'){factIds.add(cell.factId);addFiling(cell.filingId);}
    else for(const i of cell.inputs){factIds.add(i.factId);addFiling(i.filingId);}
   }
-  const sourceConcepts=[...new Set(snapshot.rows.filter(r=>r.concept===c).map(r=>r.source_concept))].sort();
+  const sourceConcepts=[...new Set(rows.filter(r=>r.concept===c).map(r=>r.source_concept))].sort();
   out.push({concept:c,unit:primary,unitKind:def?.unitKind??'money',sourceConcepts,notes:def?.notes??null,cells});
  }
  if(opts.basis==='quarterly'){
   for(const r of rows)if(factIds.has(r.fact_id))mappingGen=Math.max(mappingGen??0,r.mapping_gen);
  }
- return {ok:true,statement:opts.statement,basis:opts.basis,stateRev:snapshot.stateRev,mappingGen,periods,rows:out,filings,factIds:[...factIds].sort(),otherUnitOnly};
+ return {ok:true,statement:opts.statement,basis:opts.basis,stateRev:snapshot.stateRev,mappingGen,periods,rows:out,filings,factIds:[...factIds].sort(),otherUnitOnly,otherUnitsAlso};
 }
 
-export function badgesOf(cell:Cell,filings:Record<string,FilingSummary>,otherUnitOnly:Record<string,string[]>,concept:string,periodKey:string):Badge[]{
+/** badgesOf(cell, grid.filings, grid.otherUnitOnly, concept, periodKey, grid.otherUnitsAlso?) — pass otherUnitsAlso so derived (quarterly) cells get U. */
+export function badgesOf(cell:Cell,filings:Record<string,FilingSummary>,otherUnitOnly:Record<string,string[]>,concept:string,periodKey:string,otherUnitsAlso:Record<string,string[]>={}):Badge[]{
  const out:Badge[]=[];
  if(cell?.kind==='fact'){
   if(cell.isRevision)out.push('R');else if(cell.disclosureSeq>1)out.push('n');
@@ -116,6 +127,7 @@ export function badgesOf(cell:Cell,filings:Record<string,FilingSummary>,otherUni
  }else if(cell?.kind==='derived'){
   if(cell.inputs.some(i=>filings[i.filingId]?.citation==='pending'))out.push('!');
  }
+ if(cell!==null&&!out.includes('U')&&otherUnitsAlso[concept]?.includes(periodKey))out.push('U');
  if(cell===null&&otherUnitOnly[concept]?.includes(periodKey))out.push('U');
  return out;
 }

@@ -120,3 +120,71 @@ describe('buildStatementsGrid',()=>{
   expect(()=>buildStatementsGrid({stateRev:1,rows:[{...raw,is_current:true}],truncated:false,filings:[f]},opts())).toThrow(/grid_sequence_missing/);
  });
 });
+
+describe('review fixes (Task 7)',()=>{
+ const Q2='2024-04-01:2024-06-30:3M',Q1='2024-01-01:2024-03-31:3M';
+ it('quarterly: U on a derived cell whose period also has other-unit values; other-unit-only period is null and listed; disclosed unchanged',()=>{
+  const f=filingSummary({availableDate:'2024-05-01',formType:'10-Q'}),f2=filingSummary({availableDate:'2024-08-01',formType:'10-Q'});
+  const q=(fl:FilingSummary,s:string,e:string,unit:string,v:string)=>factRow(fl,{period_start:s,period_end:e,duration:'3M',unit,value:v});
+  const rows=[q(f,'2024-01-01','2024-03-31','USD','10'),q(f,'2024-01-01','2024-03-31','EUR','9'),q(f2,'2024-04-01','2024-06-30','USD','11'),q(f2,'2024-07-01','2024-09-30','EUR','5'),q(f2,'2023-10-01','2023-12-31','USD','8')];
+  const g=ok(buildStatementsGrid(snap(rows,[f,f2]),opts({basis:'quarterly'})));
+  expect(g.rows[0].unit).toBe('USD');
+  const c=cellOf(g,'revenue',Q1)??null;
+  expect(c).toMatchObject({kind:'derived',value:'10'});
+  expect(g.otherUnitsAlso).toEqual({revenue:[Q1]});
+  expect(badgesOf(c,g.filings,g.otherUnitOnly,'revenue',Q1,g.otherUnitsAlso)).toEqual(['U']);
+  expect(badgesOf(cellOf(g,'revenue',Q2)??null,g.filings,g.otherUnitOnly,'revenue',Q2,g.otherUnitsAlso)).toEqual([]);
+  expect(cellOf(g,'revenue','2024-07-01:2024-09-30:3M')).toBeNull();
+  expect(g.otherUnitOnly).toEqual({revenue:['2024-07-01:2024-09-30:3M']});
+  const d=ok(buildStatementsGrid(snap(rows,[f,f2]),opts()));
+  expect(d.otherUnitsAlso).toEqual({revenue:[Q1]});
+  expect(badgesOf(cellOf(d,'revenue',Q1)??null,d.filings,d.otherUnitOnly,'revenue',Q1)).toEqual(['U']);
+ });
+ it('non-quarterly: ok row without sequence fields throws even if it would be filtered; quarterly on a non-history envelope throws grid_history_required',()=>{
+  const f=filingSummary();const raw=factRow(f,{market:'CN',unit:'CNY'});
+  expect(()=>buildStatementsGrid({stateRev:1,rows:[raw],truncated:false,filings:[f]},opts())).toThrow(/grid_sequence_missing/);
+  const a=filingSummary({availableDate:'2024-05-01'}),b=filingSummary({availableDate:'2024-06-01'});
+  const rs=[factRow(a,{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M',value:'1'}),factRow(b,{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M',value:'2'})];
+  const cur=sequenced(rs,[a,b],AS_OF).filter(r=>r.is_current);
+  expect(()=>buildStatementsGrid({stateRev:1,rows:cur,truncated:false,filings:[a,b]},opts({basis:'quarterly'}))).toThrow(/grid_history_required/);
+  expect(buildStatementsGrid(snap(rs,[a,b]),opts({basis:'quarterly'})).ok).toBe(true);
+ });
+ it('sourceConcepts come from this stream only (market, consolidated, ok)',()=>{
+  const f=filingSummary();
+  const rows=[factRow(f,{value:'1'}),factRow(f,{market:'CN',unit:'CNY',source_concept:'income.total_revenue'}),factRow(f,{consolidation:'parent',source_concept:'us-gaap:Other'} as never)];
+  const g=ok(buildStatementsGrid(snap(rows,[f]),opts()));
+  expect(g.rows[0].sourceConcepts).toEqual(['us-gaap:Revenues']);
+  expect(g.factIds).toEqual([rows[0].fact_id]);
+ });
+ it('quarterly rule a: 6M and 3M from the same 10-Q',()=>{
+  const q1=filingSummary({availableDate:'2024-05-01',formType:'10-Q'}),h1=filingSummary({availableDate:'2024-08-01',formType:'10-Q'});
+  const rows=[factRow(q1,{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M',value:'10'}),
+   factRow(h1,{period_start:'2024-01-01',period_end:'2024-06-30',duration:'6M',value:'25'}),
+   factRow(h1,{period_start:'2024-04-01',period_end:'2024-06-30',duration:'3M',value:'15'})];
+  const g=ok(buildStatementsGrid(snap(rows,[q1,h1]),opts({basis:'quarterly'})));
+  expect(cellOf(g,'revenue',Q2)).toMatchObject({kind:'derived',value:'15'});
+  const c=cellOf(g,'revenue',Q2);
+  expect(c&&'rule' in c).toBe(false);
+ });
+ it('annual excludes 3M/6M/9M; wrong-market and non-consolidated rows dropped',()=>{
+  const f=filingSummary();
+  const per=(d:'3M'|'6M'|'9M',e:string,s:string)=>factRow(f,{duration:d,period_start:s,period_end:e});
+  const rows=[factRow(f,{value:'1'}),per('3M','2023-03-31','2023-01-01'),per('6M','2023-06-30','2023-01-01'),per('9M','2023-09-30','2023-01-01'),
+   factRow(f,{market:'CN',unit:'CNY',period_end:'2022-12-31',period_start:'2022-01-01'}),factRow(f,{consolidation:'parent',period_end:'2021-12-31',period_start:'2021-01-01'} as never)];
+  const g=ok(buildStatementsGrid(snap(rows,[f]),opts({basis:'annual'})));
+  expect(g.periods.map(p=>p.key)).toEqual(['2023-01-01:2023-12-31:12M']);
+  const all=ok(buildStatementsGrid(snap(rows,[f]),opts()));
+  expect(all.periods).toHaveLength(4);
+ });
+ it('truncated with non-empty rows yields no partial rows',()=>{
+  const f=filingSummary();const rows=[factRow(f)];
+  const r=buildStatementsGrid(snap(rows,[f],{truncated:true}),opts());
+  expect(r).toEqual({ok:false,error:'read_truncated'});
+ });
+ it('duration order when start and end are equal: INSTANT is last',()=>{
+  const f=filingSummary();
+  const rows=[factRow(f,{period_start:'2023-12-31',period_end:'2023-12-31',duration:'3M',value:'1'}),factRow(f,{period_start:null,period_end:'2023-12-31',duration:'INSTANT',value:'2'}),factRow(f,{concept:'net_income_parent',period_start:'2023-12-31',period_end:'2023-12-31',duration:'6M',value:'3'})];
+  const g=ok(buildStatementsGrid(snap(rows,[f]),opts()));
+  expect(g.periods.map(p=>p.duration)).toEqual(['3M','6M','INSTANT']);
+ });
+});
