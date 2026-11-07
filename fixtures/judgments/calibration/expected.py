@@ -325,6 +325,8 @@ def alt(a, b): return lambda i: a if i % 2 == 0 else b
 HY = lambda i: 1 if i % 2 else 0
 case('gate_skill_not_positive', 'probability', [seq(1, 'issuer:S1', 100, lambda i: 0.5, HY)], O(),
      'n = threshold, holdout 30 >= 20, holdout ECE 0 <= 0.10 but constant p = base rate gives skill exactly 0 -> failed (skill > 0 is part of the gate)')
+case('gate_skill_negative', 'probability', [seq(1, 'issuer:S1', 100, lambda i: 0.5, lambda i: HY(i) if i < 70 else (1 if i - 70 < 14 else 0))], O(),
+     'holdout ECE 0.033 <= 0.10 but constant p = 0.5 against a 14/30 holdout base rate: brier_skill_holdout < 0 -> failed')
 case('gate_skill_null', 'probability', [seq(1, 'issuer:S1', 100, lambda i: 0.95, lambda i: HY(i) if i < 70 else 1)], O(),
      'holdout all hits: climatology 0, brier_skill_holdout null while holdout ECE 0.05 <= 0.10 -> failed, not calibrated')
 case('gate_holdout_small_after_drop', 'probability',

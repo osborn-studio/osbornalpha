@@ -23,10 +23,9 @@ export type Forecast=
  |{kind:'interval';low:number;high:number;nominal_coverage:number;scenarios?:Scenario[]};
 /** One active registration of the cohort (spec §8.2). y: probability 0|1, categorical realized class, score/interval realized number; null unless settled. */
 export interface CohortEntry{judgment_id:string;subject_type:string;subject_key:string;market:PriceMarket|null;as_of:string;window_end:string;retrospective:boolean;lifecycle:CohortLifecycle;settlement_id:string|null;forecast:Forecast;y:number|string|null;
- /** Settled price_return whose frozen realized.to is missing / unparseable: not a sample (review G-01). */
+ /** Settled price_return whose frozen realized.to is missing, not a real date, or before as_of: not a sample (review G-01). */
  invalid_endpoint?:boolean;
- /** Interval scenarios: 'up' side = realized ≥ 0 (see entryOf). */
- scenario_up?:boolean}
+}
 export interface EvaluatedEntry extends CohortEntry{group:string;sample:boolean;selected_for_independent:boolean}
 export interface CalibrationOptions{threshold_n:number;ece_max:number;embargo_days:number}
 export interface Evaluation{
@@ -90,7 +89,10 @@ export function settledEndpointOf(j:JudgmentRow,s:SettlementRow|null):{window_en
  if(s&&s.kind==='settled'&&j.condition?.resolver==='price_return'){
   const to=s.realized?.to;
   // No valid frozen end bar: the scan estimate is not a substitute (review G-01) — the row is flagged and never sampled.
-  return typeof to==='string'&&ISO_DATE.test(to)&&!Number.isNaN(Date.parse(`${to}T00:00:00.000Z`))?{window_end:to,valid:true}:{window_end:windowEndOf(j.target!),valid:false};
+  const base=j.condition.params.base_date;
+  // A real calendar date (round trip rejects 2025-02-30) that is not before the judgment's as_of / base date.
+  const ok=typeof to==='string'&&ISO_DATE.test(to)&&!Number.isNaN(Date.parse(`${to}T00:00:00.000Z`))&&new Date(`${to}T00:00:00.000Z`).toISOString().slice(0,10)===to&&to>=j.as_of&&to>=base;
+  return ok?{window_end:to as string,valid:true}:{window_end:windowEndOf(j.target!),valid:false};
  }
  return {window_end:windowEndOf(j.target!),valid:true};
 }
@@ -110,10 +112,6 @@ export function entryOf(e:Envelope):CohortEntry|null{
   as_of:j.as_of,window_end:ep.window_end,retrospective:j.retrospective,lifecycle,
   settlement_id:s?.settlement_id??null,forecast:forecastOf(j.kind,j.claim),
   y,...(ep.valid?{}:{invalid_endpoint:true}),
-  // Scenario side (spec §9.4 deviation): the scenarios describe the BOUND thesis_win_rate condition (scenario_event_hash), which an
-  // interval row cannot evaluate, and its own predicate is the interval's `between [low,high]` — not the scenario event. §9.4
-  // guarantees value_up > 0 > value_down, so 'up' ⇔ realized ≥ 0. Report-only; never gates.
-  ...(j.kind==='interval'&&typeof y==='number'?{scenario_up:y>=0}:{}),
  };
 }
 
@@ -267,21 +265,13 @@ export function median(values:number[]):number|null{
  const xs=[...values].sort((a,b)=>a-b),m=Math.floor(xs.length/2);
  return xs.length%2?xs[m]:(xs[m-1]+xs[m])/2;
 }
-/** Per-scenario probability report (spec §8.1): the 'up' scenario's p against whether the realized value was ≥ 0, 'down' against the complement. */
-function scenarioReport(ind:CohortEntry[]):Record<string,unknown>|null{
- const out:Record<string,unknown>=Object.create(null);
- out.event='realized_nonnegative';
- for(const label of ['up','down'] as const){
-  const pairs:Pair[]=[];
-  for(const e of ind){
-   const sc=e.forecast.kind==='interval'?e.forecast.scenarios?.find(x=>x.label===label):undefined;
-   if(sc&&typeof e.scenario_up==='boolean')pairs.push({p:sc.p,y:(label==='up')===e.scenario_up?1:0});
-  }
-  if(pairs.length===0)continue;
-  const b=brierParts(pairs);
-  out[label]={n:pairs.length,brier:b.brier,brier_climatology:b.climatology,brier_skill:b.skill,ece_raw:ece(pairs),reliability:reliabilityBins(pairs)};
- }
- return Object.keys(out).length>1?out:null;
+/** Scenario probabilities forecast the BOUND thesis_win_rate condition (scenario_event_hash), which an interval row cannot evaluate,
+ *  and scoring them against the return sign would report a wrong number (review G2-01/G2-02). v1 therefore reports them as
+ *  unavailable (spec §8.1 per-scenario evaluation is deferred to the company-research spec); they never enter any gate. */
+function scenarioReport(ind:CohortEntry[]):{status:'unavailable';reason:'bound_event_not_evaluable';labels:string[]}|null{
+ const labels=new Set<string>();
+ for(const e of ind)if(e.forecast.kind==='interval')for(const sc of e.forecast.scenarios??[])labels.add(sc.label);
+ return labels.size===0?null:{status:'unavailable',reason:'bound_event_not_evaluable',labels:[...labels].sort()};
 }
 function interval(ind:CohortEntry[],samples:CohortEntry[],o:CalibrationOptions):KindResult{
  const f=(e:CohortEntry)=>e.forecast as {low:number;high:number;nominal_coverage:number};

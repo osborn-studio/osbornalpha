@@ -94,7 +94,7 @@ describe('calibration fixture (independent Python oracle)',()=>{
   expect(run('score_binary').state).toBe('evaluated');
  });
  it('every fixture case is exercised by a test above',()=>{
-  const used=['perfect_forecast','constant_half','constant_half_all_hits','skill_and_bins','ece_holdout','boundary_overlap','macro_daily_91','same_stock_dedup','embargo_0','embargo_2','g01_counterexample','acceptance4_99','acceptance4_100','categorical_calibrated','categorical_failed','interval_failed','interval_calibrated','score_ties','score_insufficient','score_binary','gate_skill_not_positive','gate_skill_null','gate_holdout_small_after_drop','gate_holdout_20','gate_holdout_19','gate_ece_equals_max','interval_wide_gap_ok'];
+  const used=['perfect_forecast','constant_half','constant_half_all_hits','skill_and_bins','ece_holdout','boundary_overlap','macro_daily_91','same_stock_dedup','embargo_0','embargo_2','g01_counterexample','acceptance4_99','acceptance4_100','categorical_calibrated','categorical_failed','interval_failed','interval_calibrated','score_ties','score_insufficient','score_binary','gate_skill_not_positive','gate_skill_null','gate_skill_negative','gate_holdout_small_after_drop','gate_holdout_20','gate_holdout_19','gate_ece_equals_max','interval_wide_gap_ok'];
   expect(FIXTURE.cases.map(c=>c.name).sort()).toEqual([...used].sort());
  });
 });
@@ -107,6 +107,12 @@ describe('gates pinned by the oracle (review G-05)',()=>{
   const b=run('gate_skill_null');
   expect(b.state).toBe('failed');
   expect((b.metrics.temporal_split as {brier_skill_holdout:number|null}).brier_skill_holdout).toBeNull();
+ });
+ it('negative holdout skill with a passing holdout ECE → failed',()=>{
+  const ev=run('gate_skill_negative');
+  const t=ev.metrics.temporal_split as {ece_raw_holdout:number;brier_skill_holdout:number};
+  expect(t.ece_raw_holdout).toBeLessThanOrEqual(0.1);expect(t.brier_skill_holdout).toBeLessThan(0);
+  expect(ev.state).toBe('failed');
  });
  it('n at threshold but holdout < 20 after the overlap drop → insufficient (holdout metrics null)',()=>{
   const ev=run('gate_holdout_small_after_drop');
@@ -149,6 +155,18 @@ describe('review fixes',()=>{
   expect(bad.invalid_endpoint).toBe(true);
   expect(entryOf(priceEnv(2,{to:'2025-02-01'}))!.invalid_endpoint).toBeFalsy();
  });
+ it('G-01 residual: impossible calendar dates and endpoints before as_of are invalid',()=>{
+  expect(entryOf(priceEnv(1,{to:'2025-02-30'}))!.invalid_endpoint).toBe(true);
+  expect(entryOf(priceEnv(1,{to:'2025-13-01'}))!.invalid_endpoint).toBe(true);
+  expect(entryOf(priceEnv(1,{to:'2024-12-31'}))!.invalid_endpoint).toBe(true);   // before as_of 2025-01-11
+  expect(entryOf(priceEnv(1,{to:'2025-01-11'}))!.invalid_endpoint).toBeFalsy();  // same day is allowed
+  const entries=Array.from({length:100},(_,i)=>{
+   const as=addDays('2025-01-01',i),hit=i%2===0;
+   return entryOf(envelope({judgment:{n:i+1,as_of:as,claim:{p:hit?1:0,event:{zh:'x',en:'x'}},condition:cond(as),target:{kind:'session_index',base_date:as,n:5}},settlement:{resolver:'price_return',outcome:'hit',realized:{value:0.02,unit:'ratio',from:as,to:'2023-12-31',label_policy:'first_observed'}}}))!;
+  });
+  const ev=evaluateCohort('probability',entries,O);
+  expect(ev.n_independent).toBe(0);expect(ev.state).not.toBe('calibrated');expect(ev.metrics.n_invalid_endpoint).toBe(100);
+ });
  it('G-02: bins use boundary comparisons — adjacent representable floats around 0.9 split bins',()=>{
   expect(ece([{p:0.8999999999999999,y:1},{p:0.9,y:0}])).toBeCloseTo(0.5,12);
   expect(ece([{p:1,y:1}])).toBe(0);
@@ -163,24 +181,18 @@ describe('review fixes',()=>{
   expect(Object.entries(conf['__proto__'])[0]).toEqual(['constructor',1]);
   expect(ev.metrics.majority_class).toBe('__proto__');
  });
- const iv=(id:number,up:boolean,pUp:number):CohortEntry=>({judgment_id:uuidOf(id),subject_type:'issuer',subject_key:`k${id}`,market:null,as_of:'2026-01-01',window_end:'2026-01-02',retrospective:false,lifecycle:'settled',settlement_id:null,
-  forecast:{kind:'interval',low:-1,high:1,nominal_coverage:0.8,scenarios:[{label:'up',p:pUp,value:0.05},{label:'down',p:1-pUp,value:-0.05}]},y:up?0.03:-0.03,scenario_up:up});
- it('G-04: scenarios are preserved by entryOf and evaluated per scenario; they never change the interval state',()=>{
-  const e=entryOf(envelope({judgment:{kind:'interval',claim:{metric:'r',low:-0.1,high:0.1,unit:'ratio',nominal_coverage:0.8,scenarios:[{label:'up',p:0.7,value:0.05},{label:'down',p:0.3,value:-0.05}]},condition:{resolver:'fact_metric',params:{issuer_id:'x',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',unit:'u',input_unit:'u',basis:'b',formula_version:'v',compare:'yoy'},predicate:{op:'>',rhs:0.1},text:{zh:'x',en:'x'}}},settlement:{realized:{value:0.04,unit:'ratio',from:null,to:null,label_policy:'first_observed'}}}))!;
+ it('G-04: scenarios are preserved by entryOf but not scored (the bound event is not evaluable); they never touch the interval state',()=>{
+  const env=(withSc:boolean)=>entryOf(envelope({judgment:{kind:'interval',claim:{metric:'r',low:-0.1,high:0.1,unit:'ratio',nominal_coverage:0.8,...(withSc?{scenarios:[{label:'up',p:0.7,value:0.05},{label:'down',p:0.3,value:-0.05}]}:{})}},settlement:{realized:{value:0.04,unit:'ratio',from:null,to:null,label_policy:'first_observed'}}}))!;
+  const e=env(true);
   expect(e.forecast).toMatchObject({kind:'interval',scenarios:[{label:'up',p:0.7},{label:'down',p:0.3}]});
-  expect(e.scenario_up).toBe(true);   // realized ≥ 0, whatever the judgment's own predicate says (0.04 > 0.1 is false)
-  const mk=(pUp:number)=>evaluateCohort('interval',[iv(1,true,pUp),iv(2,true,pUp),iv(3,false,pUp)],{...O,threshold_n:1});
-  const a=mk(0.7),b=mk(0.3);
-  const sa=a.metrics.scenarios as Record<string,{n:number;brier:number;ece_raw:number}>,sb=b.metrics.scenarios as Record<string,{n:number;brier:number}>;
-  expect((a.metrics.scenarios as {event:string}).event).toBe('realized_nonnegative');
-  expect(sa.up.n).toBe(3);
-  expect(sa.up.brier).toBeCloseTo((0.09+0.09+0.49)/3,12);
-  expect(sb.up.brier).toBeCloseTo((0.49+0.49+0.09)/3,12);
-  expect(sa.up.brier).not.toBeCloseTo(sb.up.brier,6);
-  expect(sa.down.brier).toBeCloseTo(sa.up.brier,12);
+  const swapped:CohortEntry={...e,judgment_id:uuidOf(2),subject_key:'k2',forecast:{...(e.forecast as object),scenarios:[{label:'up',p:0.3,value:0.05},{label:'down',p:0.7,value:-0.05}]} as Forecast};
+  const a=evaluateCohort('interval',[e],{...O,threshold_n:1}),b=evaluateCohort('interval',[swapped],{...O,threshold_n:1});
+  expect(a.metrics.scenarios).toEqual({status:'unavailable',reason:'bound_event_not_evaluable',labels:['down','up']});
+  expect(b.metrics.scenarios).toEqual(a.metrics.scenarios);
   expect(a.state).toBe(b.state);
-  expect(Object.keys(sa.up).sort()).toEqual(['brier','brier_climatology','brier_skill','ece_raw','n','reliability']);
-  expect(evaluateCohort('interval',[{...iv(1,true,0.7),forecast:{kind:'interval',low:-1,high:1,nominal_coverage:0.8}}],{...O,threshold_n:1}).metrics).not.toHaveProperty('scenarios');
+  const none=evaluateCohort('interval',[env(false)],{...O,threshold_n:1});
+  expect(none.metrics).not.toHaveProperty('scenarios');
+  expect(JSON.stringify(a.metrics.scenarios)).not.toMatch(/brier|ece/);
  });
  it('item 6: settled rows with an unusable realized value are counted, not sampled',()=>{
   const bad=entryOf(envelope({judgment:{kind:'categorical',claim:{selected:'recovery',classes:['recovery','overheat'],scores_are_not_probabilities:true}},settlement:{realized:{value:true,unit:null,from:null,to:null,label_policy:'cutoff_vintage'}}}))!;
