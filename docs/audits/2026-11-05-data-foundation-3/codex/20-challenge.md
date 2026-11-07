@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P1 | docs/runbooks/data-foundation.md:454 | Rollback instructions authorize deleting reconciliation evidence and cycle state. Raw blobs alone cannot reconstruct the recorded comparisons, frozen membership, or outcomes. Existing quarantine items also retain `latest_result.reconciliation_id`; deleting its row makes `inputsHashNow()` throw `no_latest_result` (`src/lib/dq/reconcile/pairs.ts:37–40`), blocking restoration while affected facts remain quarantined. | Preserve reconciliation rows and cycle evidence during rollback. Document a coordinated rollback that accounts for existing quarantines and retained SQL functions; remove the blanket permission to clear these tables. |
+| 2 | P2 | docs/runbooks/data-foundation.md:364 | “All scripts default to dry-run; only `--apply` writes” is false for the listed `materialize.ts --pending-hooks` command. It immediately calls `runPendingHooks()`, updating materialized metrics and hook state without `--apply`. An operator following the stated preview guarantee can unintentionally mutate production data. | Explicitly identify materialization as an immediate write operation with no dry-run mode. Limit the `--apply` guarantee to scripts that implement it. |
+
+Verdict: fix required

@@ -85,3 +85,8 @@
 - 文档提交：runbook 第 9 章、规格三 §15（偏差表含接口对齐记录 #69–74 与实施期遗留清单）、规格一 §3.2 ISIN 撤回标注、规格二 §15 指向与分派例外、`verification.md` 冒烟节、本节。无代码改动。
 - 已核对遗留清单中"Task X must…"项均已落地：`use_dedicated_resolver`/`target_not_active` 映射（`facts-resolver.ts`、quarantine 路由）、`recordDateMismatch` 接线（`deps.ts`、`enrich-acceptance.ts`）、iXBRL 对使用共享 `secPacer`（`pair-us-ixbrl.ts`）、vercel.json 含 `reconcile?pair=us.companyfacts_vs_ixbrl` 02:00 条目。
 - 未能核对/未做：Task 8c 的"reconcile_mismatch 项不跨谱系"仅作为限制登记，没有另行证明；2021–2025 SEC 假日表与 `SEC_CLOSURES` 2025-01-09 仍未经 OPM/SEC 公告复核；北交所 `disclosure_date` 未抽查；E1/E2/E4/E6/E7 的生产数字与 E9 视觉验收均待 owner。
+
+## 指挥者终审（2026-11-06）
+
+- Task 20 文档（505d74f）Codex：challenge P1 回滚允许清空对账证据、P2 materialize 无 dry-run、calendar `--issuer` 不能与 `--apply` 同用 → 指挥者修订 runbook（e7f943d），复审无问题。
+- 门禁复跑（HEAD 含 19b、Task 20）：`test:db` 连续两次 371 文件 / 3978 通过 / 2 跳过；第一次另有 1 个未处理错误来自既有 S4 `anchor-store.test.ts`（FileHandle 被 GC 关闭，计划三未触及），第二次 exit 0。Task 20 前两次运行中出现的 `dq-extensions` 死锁与 `owned-process-group.test.ts` 失败在其后 4 次全量运行中未再出现，记为本机并发负载下的偶发项。
