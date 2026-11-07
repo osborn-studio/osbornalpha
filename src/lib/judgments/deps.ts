@@ -15,6 +15,7 @@ import {anonJudgmentInputsDb} from './inputs-db';
 import {MacroUnavailable,unavailableMacroReadApi} from './macro-api';
 import {supabaseMacroDb} from '../macro/db';
 import {macroReadApi,MacroUnavailable as UpstreamMacroUnavailable} from '../macro/read-api';
+import {supabaseIndustryDb} from '../industry/db';
 import type {SettleDeps} from './settle';
 import type {JudgmentsDb,MacroReadApi} from './types';
 
@@ -46,7 +47,7 @@ export function productionJudgmentDeps(o:ProductionJudgmentDepsOptions):SettleDe
  const macro=enabled?adaptMacroApi(macroReadApi(supabaseMacroDb({admin,anon}),{judgments:true})):unavailableMacroReadApi();
  return {
   db:supabaseJudgmentsDb({anon,admin}),
-  inputsDb:anonJudgmentInputsDb({anon,macro}),
+  inputsDb:anonJudgmentInputsDb({anon,macro,industry:supabaseIndustryDb(anon)}),
   tables:supabaseTableClient(admin),
   codeVersion:o.codeVersion,actor:o.actor,triggeredBy:o.triggeredBy,
   ...(o.signal?{signal:o.signal}:{}),

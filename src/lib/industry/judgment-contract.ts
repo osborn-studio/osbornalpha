@@ -1,38 +1,28 @@
 // src/lib/industry/judgment-contract.ts
-// Local copy of the F4 display contract (docs/superpowers/specs/2026-11-04-judgment-framework-design.md
-// §3.1 Subject, §9.1 lifecycle/calibration, §9.2 JudgmentCard, §10 GET /api/judgments) until F4 lands
-// and exports it; then replace these declarations with `import type … from '@/lib/judgments/contract'`.
+// Industry consumer of F4's public card and list route.
 // The industry page renders judgments only through this card (spec §7.2) and only when
 // INDUSTRY_JUDGMENTS_ENABLED=1 (server flag; default off → "no judgment", no request). Owner decision
 // D default: an uncalibrated card shows its category label, a badge and the falsifiable condition —
 // never a percent, a score, a band or a colour grade.
-export type Subject=
- |{type:'issuer';key:string}|{type:'industry';key:string}|{type:'macro_region';key:'US'|'CN'}
- |{type:'macro_series';key:string}|{type:'security';key:string}|{type:'document';key:string};
-export type Kind='probability'|'categorical'|'score'|'interval';
-export type Lifecycle='abstained'|'open'|'settled'|'void'|'withdrawn'|'pending_fill';
-export type CalibrationState='insufficient'|'failed'|'calibrated'|'evaluated'|'self_assessed';
-export interface Localized{zh:string;en:string}
-export interface JudgmentCard{
- judgment_id:string;subject:Subject;judgment_type:string;kind:Kind;
- lifecycle:Lifecycle;calibration:CalibrationState;retrospective:boolean;
- as_of:string;registered_at:string;
- methodology:{id:string;version:string;title:Localized;href:string};
- display:{
-  headline:Localized;
-  percent:number|null;
-  value:number|string|[number,number]|null;
-  scale?:{min:number;max:number};dims?:{id:string;label:string;value:number|null;coverage:boolean}[];
-  band?:'low'|'mid'|'high';
-  nominal_coverage?:number;
- };
- condition:{text:Localized;horizon:unknown;target:unknown;label_policy:string;settle_after:string;settle_by:string}|null;
- settlement:{kind:string;outcome:string;realized:unknown;settled_at:string;evidence_summary:unknown}|null;
- calibration_summary:{n_independent:number;n_total:number;threshold_n:number;brier:number|null;brier_skill:number|null;ece_raw_holdout:number|null;valid_until:string|null;hit_rate:{rate:number;low:number;high:number}|null;href:string}|null;
- inputs:{kind:string;ref:unknown;available_at:string;origin:unknown;href:string|null}[];
- abstain_reason?:string;missing?:string[];
+import type {JudgmentCard,Lifecycle,Subject} from '@/lib/judgments/types';
+export type {JudgmentCard} from '@/lib/judgments/types';
+export interface JudgmentsResponse{subject:Subject;asOf:string|null;view:'latest'|'as_known';cards:JudgmentCard[]}
+const obj=(v:unknown):v is Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+const str=(v:unknown):v is string=>typeof v==='string';
+const bilingual=(v:unknown)=>obj(v)&&str(v.zh)&&str(v.en);
+const oneOf=(v:unknown,values:readonly string[])=>str(v)&&values.includes(v);
+function cardOf(v:unknown,key:string):v is JudgmentCard{
+ if(!obj(v)||!obj(v.subject)||v.subject.type!=='industry'||v.subject.key!==key||!str(v.judgment_id)||!str(v.judgment_type)||!oneOf(v.kind,['probability','categorical','score','interval'])||!oneOf(v.lifecycle,['abstained','open','settled','void','withdrawn','pending_fill'])||!oneOf(v.calibration,['insufficient','failed','calibrated','evaluated','self_assessed'])||typeof v.retrospective!=='boolean'||!str(v.as_of)||!str(v.registered_at))return false;
+ if(!obj(v.methodology)||!str(v.methodology.id)||!str(v.methodology.version)||!str(v.methodology.href)||!bilingual(v.methodology.title)||!obj(v.display)||!bilingual(v.display.headline)||!('value' in v.display)||!Array.isArray(v.inputs))return false;
+ if('percent' in v.display&&v.display.percent!==null&&(typeof v.display.percent!=='number'||!Number.isFinite(v.display.percent)))return false;
+ if(v.condition!==null&&(!obj(v.condition)||!bilingual(v.condition.text)||!str(v.condition.settle_by)))return false;
+ if(v.settlement!==null&&(!obj(v.settlement)||!str(v.settlement.outcome)||!str(v.settlement.settled_at)))return false;
+ if(v.calibration_summary!==null&&(!obj(v.calibration_summary)||typeof v.calibration_summary.n_independent!=='number'||typeof v.calibration_summary.threshold_n!=='number'))return false;
+ return v.inputs.every(i=>obj(i)&&str(i.kind)&&str(i.available_at)&&('ref' in i)&&(i.href===null||str(i.href)));
 }
-export interface JudgmentsResponse{subject:Subject;asOf:string;view:string;cards:JudgmentCard[]}
+function responseOf(v:unknown,key:string):v is JudgmentsResponse{
+ return obj(v)&&obj(v.subject)&&v.subject.type==='industry'&&v.subject.key===key&&(v.asOf===null||str(v.asOf))&&oneOf(v.view,['latest','as_known'])&&((v.view==='latest'&&v.asOf===null)||(v.view==='as_known'&&str(v.asOf)))&&Array.isArray(v.cards)&&v.cards.every(c=>cardOf(c,key));
+}
 
 /** F4 §3.1 industry subject key: `${scheme}:${version}:${code}`. */
 export const industrySubjectKey=(scheme:string,version:string,code:string)=>`${scheme}:${version}:${code}`;
@@ -46,8 +36,8 @@ export async function fetchIndustryJudgments(subjectKey:string,opts:{enabled:boo
  try{
   const r=await (opts.fetch??fetch)(judgmentsUrl(subjectKey),{signal:opts.signal});
   if(!r.ok)return {state:'error',code:`http_${r.status}`};
-  const body=await r.json() as Partial<JudgmentsResponse>;
-  return Array.isArray(body.cards)?{state:'ok',cards:body.cards}:{state:'error',code:'malformed'};
+  const body:unknown=await r.json();
+  return responseOf(body,subjectKey)?{state:'ok',cards:body.cards}:{state:'error',code:'malformed'};
  }catch(e){
   return {state:'error',code:(e as {name?:string}).name==='AbortError'?'aborted':'network'};
  }
@@ -79,7 +69,7 @@ export interface CardView{
  condition:string|null;abstainReason:string|null;lifecycle:Lifecycle;retrospective:boolean;
  footer:{method:string;asOf:string;settleBy:string|null;target:string|null;horizon:string|null};
  inputs:{kind:string;ref:string;availableAt:string;href:string|null}[];
- settlement:{outcome:string;realized:string|null;settledAt:string}|null;
+ settlement:{outcome:string|null;realized:string|null;settledAt:string}|null;
 }
 const plain=(v:unknown):string|null=>{
  if(v===null||v===undefined)return null;
@@ -95,7 +85,7 @@ export function judgmentCardView(card:JudgmentCard,locale:'zh'|'en'):CardView{
  const badge:CardView['badge']=calibrated?{kind:'calibrated'}:card.calibration==='evaluated'?{kind:'evaluated'}:card.calibration==='self_assessed'?{kind:'self_assessed'}:card.calibration==='failed'?{kind:'failed',ece:s?.ece_raw_holdout??null}:{kind:'uncalibrated',n:s?.n_independent??0,threshold:s?.threshold_n??0};
  return {
   title:card.methodology.title[locale],headline:card.display.headline[locale],badge,
-  percent:card.kind==='probability'&&calibrated&&card.display.percent!==null?card.display.percent:null,
+  percent:card.kind==='probability'&&calibrated&&typeof card.display.percent==='number'?card.display.percent:null,
   condition:card.condition?.text[locale]??null,abstainReason:card.lifecycle==='abstained'?card.abstain_reason??null:null,
   lifecycle:card.lifecycle,retrospective:card.retrospective,
   footer:{method:`${card.methodology.id}@${card.methodology.version}`,asOf:card.as_of,settleBy:card.condition?.settle_by??null,target:plain(card.condition?.target),horizon:plain(card.condition?.horizon)},

@@ -18,6 +18,8 @@ import {fixtureMacroReadApi,observationIdOf} from './macro-api';
 import type {MacroFixture} from './macro-api';
 import {originKnown} from './origins';
 import {closeInstantUtc} from './time';
+import {RUN_ID,cellRow,runRow,stubIndustryDb} from '@/lib/industry/fixture-rows';
+import {metricsNaturalKey,valuationsNaturalKey,industryTableRowsInput} from '@/lib/industry/judgment-input';
 import type {Input,JudgmentInputsDb,JudgmentRow,KlineRangeRequest,MetricKey} from './types';
 import {AAPL_ISSUER,FIXED_NOW,aaplParse,factCandidate,filingCandidate,publishFacts,seedFactId} from './testing/facts-fixture';
 
@@ -27,6 +29,24 @@ const buildInput=(r:InputRequest,db:JudgmentInputsDb,asOf:string,opts?:BuildOpti
 const buildOrAbstain=(r:InputRequest,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions)=>rawAbstain(r,db,asOf,OBS,opts);
 const rebuildAndCompare=(i:Input,db:JudgmentInputsDb,asOf:string,opts?:BuildOptions)=>rawRebuild(i,db,asOf,OBS,opts);
 const code=(p:Promise<unknown>)=>p.then(()=>'ok',(e:unknown)=>e instanceof JudgmentError?e.code:`other:${String(e)}`);
+describe('industry table input bridge',()=>{
+ const nk=metricsNaturalKey(RUN_ID,'801120.SI','2025-12-31');
+ it('freezes the shipped adapter snapshot and hash',async()=>{
+  const industry=stubIndustryDb({runs:[runRow()],cells:[cellRow()]});
+  const db={...memoryJudgmentInputsDb(),industry};
+  const input=await rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:nk}},db,'2026-11-04',OBS);
+  const adapted=await industryTableRowsInput(industry,{table:'industry_metrics',natural_key:nk});
+  expect(input).toEqual({...adapted,origin:{publisher:adapted.origin.publisher,adapter:adapted.origin.adapter,locator:adapted.origin.locator,transform:adapted.origin.transform}});
+  expect(originKnown('table_rows',input.origin)).toBe(true);
+  expect(await rawRebuild(input,db,'2026-11-04',OBS)).toEqual({status:'ok'});
+ });
+ it('rejects valuations and malformed metric keys before reading rows',async()=>{
+  const db={...memoryJudgmentInputsDb(),industry:stubIndustryDb({runs:[runRow()],cells:[cellRow()]})};
+  expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_valuations' as 'industry_metrics',natural_key:valuationsNaturalKey(RUN_ID,'801120.SI','2025-12-31')}},db,'2026-11-04',OBS))).toBe('input_not_allowed');
+  expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:'industry_metrics:bad:801120.SI:2025-12-31'}},db,'2026-11-04',OBS))).toBe('input_not_allowed');
+  expect(await code(rawBuild({kind:'table_rows',ref:{table:'industry_metrics',natural_key:metricsNaturalKey(RUN_ID,'801120.SI','2025-02-30')}},db,'2026-11-04',OBS))).toBe('input_not_allowed');
+ });
+});
 const reversed=<T extends object>(o:T)=>Object.fromEntries(Object.entries(o).reverse());
 let aapl:JudgmentInputsDb;let fy23RevenueId:string;
 beforeAll(async()=>{

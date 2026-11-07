@@ -31,7 +31,7 @@ export function parseIndustryNaturalKey(nk:string):{table:IndustryTable;runId:st
  const parts=nk.split(':');
  if(parts.length!==4)return null;
  const [table,runId,code,date]=parts;
- if((table!=='industry_metrics'&&table!=='industry_valuations')||!UUID.test(runId)||!/^[A-Za-z0-9.\-]{1,32}$/.test(code)||!DATE.test(date))return null;
+ if((table!=='industry_metrics'&&table!=='industry_valuations')||!UUID.test(runId)||!/^[A-Za-z0-9.\-]{1,32}$/.test(code)||!DATE.test(date)||Number.isNaN(Date.parse(`${date}T00:00:00Z`))||new Date(`${date}T00:00:00Z`).toISOString().slice(0,10)!==date)return null;
  return {table,runId,code,date};
 }
 /** F4 §3.7: a table_rows input is available at the end of its rows' updated_at UTC day. */

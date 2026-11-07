@@ -8,14 +8,14 @@ import {fetchIndustryJudgments,industrySubjectKey,judgmentCardView,judgmentsEnab
 import type {JudgmentCard} from './judgment-contract';
 import {IndustryInputError,endOfUtcDay,industryTableRowsInput,metricsNaturalKey,parseIndustryNaturalKey,valuationsNaturalKey} from './judgment-input';
 
-const card=(p:Partial<JudgmentCard>={}):JudgmentCard=>({
+const card=(p:Record<string,unknown>={}):JudgmentCard=>({
  judgment_id:'j1',subject:{type:'industry',key:'sw2021:2021:801120.SI'},judgment_type:'industry_lifecycle_stage',kind:'categorical',
- lifecycle:'open',calibration:'insufficient',retrospective:false,as_of:'2026-11-01',registered_at:'2026-11-01T04:00:00Z',
+ lifecycle:'open',outcome:null,calibration:'insufficient',retrospective:false,as_of:'2026-11-01',registered_at:'2026-11-01T04:00:00Z',
  methodology:{id:'industry_lifecycle',version:'v1',title:{zh:'生命周期阶段',en:'Lifecycle stage'},href:'/intel/methods/industry_lifecycle/v1'},
  display:{headline:{zh:'成熟期',en:'Mature'},percent:null,value:'mature',band:'mid'},
  condition:{text:{zh:'若 2027 年报期营收 3 年 CAGR > 8% 则判断不成立',en:'Fails if the 3-year revenue CAGR at FY2027 exceeds 8%'},horizon:{},target:{},label_policy:'first_observed',settle_after:'2028-01-01',settle_by:'2028-05-01'},
  settlement:null,calibration_summary:{n_independent:0,n_total:0,threshold_n:30,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:null,hit_rate:null,href:'#'},inputs:[],...p,
-});
+} as unknown as JudgmentCard);
 
 describe('judgment contract (F4 §9 + owner decision D)',()=>{
  it('subject key, flag, URL',()=>{
@@ -55,7 +55,7 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
   expect(judgmentsViewState(true,'B',null)).toEqual({state:'loading'});
  });
  it('startJudgmentsLoad: no request while disabled or without a subject; tags the result with its subject; aborted loads are dropped',async()=>{
-  const f=vi.fn(async()=>new Response(JSON.stringify({cards:[card()]}),{status:200}));
+  const f=vi.fn(async()=>new Response(JSON.stringify({subject:{type:'industry',key:'A'},asOf:null,view:'latest',cards:[card({subject:{type:'industry',key:'A'}})]}),{status:200}));
   const got=vi.fn();
   startJudgmentsLoad({enabled:false,subjectKey:'A',onResult:got,fetch:f})();
   startJudgmentsLoad({enabled:true,subjectKey:null,onResult:got,fetch:f})();
@@ -70,12 +70,14 @@ describe('judgment contract (F4 §9 + owner decision D)',()=>{
   expect(got).not.toHaveBeenCalled();
  });
  it('fetch: never requests while disabled; ok / error otherwise',async()=>{
-  const f=vi.fn(async()=>new Response(JSON.stringify({cards:[card()]}),{status:200}));
+  const f=vi.fn(async()=>new Response(JSON.stringify({subject:{type:'industry',key:'k'},asOf:null,view:'latest',cards:[card({subject:{type:'industry',key:'k'}})]}),{status:200}));
   expect(await fetchIndustryJudgments('k',{enabled:false,fetch:f})).toEqual({state:'disabled'});
   expect(f).not.toHaveBeenCalled();
   expect(await fetchIndustryJudgments('k',{enabled:true,fetch:f})).toMatchObject({state:'ok',cards:[{judgment_id:'j1'}]});
   expect(await fetchIndustryJudgments('k',{enabled:true,fetch:vi.fn(async()=>new Response('{}',{status:404}))})).toEqual({state:'error',code:'http_404'});
   expect(await fetchIndustryJudgments('k',{enabled:true,fetch:vi.fn(async()=>new Response('{}',{status:200}))})).toEqual({state:'error',code:'malformed'});
+  for(const body of [{cards:[card()]},{subject:{type:'industry',key:'other'},asOf:null,view:'latest',cards:[]},{subject:{type:'industry',key:'k'},asOf:null,view:'latest',cards:[{}]},{subject:{type:'industry',key:'k'},asOf:null,view:'other',cards:[]}])
+   expect(await fetchIndustryJudgments('k',{enabled:true,fetch:vi.fn(async()=>new Response(JSON.stringify(body),{status:200}))})).toEqual({state:'error',code:'malformed'});
  });
 });
 
@@ -87,7 +89,7 @@ describe('F4 table_rows input adapter (spec §7.1)',()=>{
   expect(nk).toBe(`industry_metrics:${RUN_ID}:801120.SI:2025-12-31`);
   expect(parseIndustryNaturalKey(nk)).toEqual({table:'industry_metrics',runId:RUN_ID,code:'801120.SI',date:'2025-12-31'});
   expect(parseIndustryNaturalKey(valuationsNaturalKey(RUN_ID,'801120.SI','2026-10-30'))?.table).toBe('industry_valuations');
-  for(const bad of ['industry_metrics:x:801120.SI:2025-12-31',`industry_metrics:${RUN_ID}:801120.SI`,`other:${RUN_ID}:801120.SI:2025-12-31`,`industry_metrics:${RUN_ID}:a:b:2025-12-31`])expect(parseIndustryNaturalKey(bad)).toBeNull();
+  for(const bad of ['industry_metrics:x:801120.SI:2025-12-31',`industry_metrics:${RUN_ID}:801120.SI`,`other:${RUN_ID}:801120.SI:2025-12-31`,`industry_metrics:${RUN_ID}:a:b:2025-12-31`,`industry_metrics:${RUN_ID}:801120.SI:2025-02-30`])expect(parseIndustryNaturalKey(bad)).toBeNull();
  });
  it('snapshot = ok rows ordered by (metric, period_start, duration); hash = digest(snapshot); available_at = updated_at end of UTC day',async()=>{
   const input=await industryTableRowsInput(db,{table:'industry_metrics',natural_key:nk});

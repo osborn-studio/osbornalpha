@@ -35,6 +35,7 @@ import {originFor} from './origins';
 import {capabilityOf} from './resolvers/price-capabilities';
 import type {CapabilityStatus} from './resolvers/price-capabilities';
 import {addDaysIso,closeInstantUtc,endOfUtcDay} from './time';
+import {industryTableRowsInput,IndustryInputError,parseIndustryNaturalKey} from '@/lib/industry/judgment-input';
 export {inputsHash as inputsHashOf} from './canonical';
 
 export type PublicInputKind=typeof PUBLIC_INPUT_KINDS[number];
@@ -169,6 +170,14 @@ async function buildBar(raw:{ticker:string;market:PriceMarket;date:string;source
 async function buildTable(raw:{table:PublicTable;natural_key:string},db:JudgmentInputsDb,asOf:string):Promise<Input>{
  const ref={table:raw.table,natural_key:raw.natural_key};const label=inputLabel({kind:'table_rows',ref});
  if(!(PUBLIC_TABLES as readonly string[]).includes(ref.table))throw new JudgmentError('input_not_allowed',label);
+ if(ref.table==='industry_metrics'){
+  if(parseIndustryNaturalKey(ref.natural_key)?.table!=='industry_metrics')throw new JudgmentError('input_not_allowed',`${label}: natural key`);
+  if(!db.industry)throw new JudgmentError('input_unavailable',`${label}: industry provider unavailable`);
+  try{
+   const input=await industryTableRowsInput(db.industry,{table:'industry_metrics',natural_key:ref.natural_key});
+   return {...input,ref:{table:'industry_metrics',natural_key:ref.natural_key},snapshot:{...input.snapshot,table:'industry_metrics',rows:input.snapshot.rows as unknown as Record<string,unknown>[]},origin:{publisher:input.origin.publisher,adapter:input.origin.adapter,locator:input.origin.locator,transform:input.origin.transform}};
+  }catch(e){if(e instanceof IndustryInputError)throw new JudgmentError(e.code==='invalid_natural_key'||e.code==='unsupported_deferred_i3'?'input_not_allowed':e.code==='input_ambiguous_manifest'?'input_unavailable':e.code,e.message);throw e;}
+ }
  const all=await viaMacro(()=>db.tableRows(ref.table,ref.natural_key));
  const rows=all.filter(r=>typeof r.valid_from!=='string'||r.valid_from<=asOf);
  if(rows.length===0)throw notPublic(`${label}: no rows visible at ${asOf}`);
