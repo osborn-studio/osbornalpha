@@ -251,6 +251,8 @@ export function validateAuditDir(dir:string,deps:AuditDeps={}):ValidatorFinding[
   for(const [n,list] of byRound)for(const f of list){
    if(f.severity==='P3')continue;
    const mine=rowsFor(n,f.id);
+   // latest disposition wins (rows are in index.dispositions / document order): a P1/P2 whose latest row is PARTIAL is not closed
+   if(mine.length>0&&decisionKind(mine[mine.length-1].decision)==='partial')out.push(finding('audit_release_partial',`round ${n} #${f.id}`,`${f.severity} finding's latest disposition is PARTIAL`));
    if(mine.some(r=>isOpenVerify(r.decision)))out.push(finding('audit_release_open_verify',`round ${n} #${f.id}`,`${f.severity} finding is OPEN-verify`));
    if(mine.some(r=>isAccept(r.decision)&&!r.implemented_in))out.push(finding('audit_release_unimplemented',`round ${n} #${f.id}`,`${f.severity} ACCEPT without implemented_in`));
   }

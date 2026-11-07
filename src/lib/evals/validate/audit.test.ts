@@ -186,3 +186,17 @@ describe('P1 disposition decisions are validated against the supported states',(
   expect(codes(auditDir({dispo:DISPO.replace('DECLINE','maybe')}))).toEqual(expect.arrayContaining(['audit_decision_unknown']));
  });
 });
+
+describe('release: a P1/P2 finding whose latest disposition is PARTIAL blocks (latest row wins)',()=>{
+ const rel=(dispo:string)=>validateAuditDir(auditDir({dispo:dispo.replace('ACCEPT + OPEN-verify','ACCEPT')}),{gitShow,release:true}).map(f=>`${f.code} ${f.where}`);
+ it('PARTIAL on a P1/P2 blocks release; on P3 it does not; not a finding outside release',()=>{
+  expect(rel(DISPO.replace('| 1 a | ACCEPT | §1 |','| 1 a | PARTIAL | §1 |'))).toEqual(['audit_release_partial round 1 #1']);
+  expect(rel(DISPO.replace('| 3 c | DECLINE | minor |','| 3 c | PARTIAL | minor |'))).toEqual([]);
+  expect(codes(auditDir({dispo:DISPO.replace('| 1 a | ACCEPT | §1 |','| 1 a | PARTIAL | §1 |')}))).toEqual([]);
+ });
+ it('a later row for the same finding supersedes an earlier PARTIAL (and a later PARTIAL supersedes an earlier ACCEPT)',()=>{
+  const later=(d:string)=>DISPO+`| 1 a again | ${d} | §9 |\n`;
+  expect(rel(later('ACCEPT').replace('| 1 a | ACCEPT | §1 |','| 1 a | PARTIAL | §1 |'))).toEqual([]);
+  expect(rel(later('PARTIAL'))).toEqual(['audit_release_partial round 1 #1']);
+ });
+});
