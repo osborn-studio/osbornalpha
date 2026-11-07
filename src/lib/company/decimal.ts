@@ -4,6 +4,7 @@
 // Rounding is half away from zero everywhere (same rule as facts derive.ts). Task 5 creates the
 // parse/sub/relChange part; Task 7 appends the display formatting helpers below the marker.
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
+import {unitKindOf} from '@/lib/facts/units';
 
 export interface Dec{n:bigint;s:number}
 export const pow10=(k:number)=>10n**BigInt(k);
@@ -36,3 +37,26 @@ export function decimalRelChange(from:string,to:string):string|null{
  return decToString({n:q,s:REL_CHANGE_SCALE});
 }
 // ---- display formatting (Task 7) ----
+export type DisplayScale='raw'|'thousand'|'million'|'hundred_million';
+const DIVISORS:Record<DisplayScale,bigint>={raw:1n,thousand:1000n,million:1_000_000n,hundred_million:100_000_000n};
+export const divisorOf=(scale:DisplayScale):bigint=>DIVISORS[scale];
+/** Default display scale (spec §5.3): CNY + zh → 亿, other money → 百万, non-money units unscaled. */
+export function scaleFor(unit:string,locale:'zh'|'en'):DisplayScale{
+ if(unitKindOf(unit)!=='money')return 'raw';
+ return unit==='CNY'&&locale==='zh'?'hundred_million':'million';
+}
+/** valueText ÷ divisor, half away from zero, exactly fractionDigits places; string/BigInt only. */
+export function formatDecimalText(valueText:string,divisor:bigint,fractionDigits:number):string{
+ if(divisor<=0n)throw new RangeError('divisor must be positive');
+ if(!Number.isInteger(fractionDigits)||fractionDigits<0||fractionDigits>12)throw new RangeError('fractionDigits must be 0..12');
+ const d=parseDecimal(valueText);
+ const q=roundDiv(d.n*pow10(fractionDigits),pow10(d.s)*divisor);
+ const neg=q<0n;const digits=(neg?-q:q).toString().padStart(fractionDigits+1,'0');
+ const body=fractionDigits>0?`${digits.slice(0,-fractionDigits)}.${digits.slice(-fractionDigits)}`:digits;
+ return neg?`-${body}`:body;
+}
+export function groupThousands(text:string):string{
+ const neg=text.startsWith('-');const [i,f]=(neg?text.slice(1):text).split('.');
+ const g=i.replace(/\B(?=(\d{3})+(?!\d))/g,',');
+ return `${neg?'-':''}${g}${f!==undefined?`.${f}`:''}`;
+}
