@@ -26,6 +26,7 @@ import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {computeFreshness} from '../dq/freshness';
 import type {Cadence} from '../dq/freshness';
+import {F4_CLAIM_LOCK} from '../judgments/db-contract';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261114090000_macro_workbench.sql';
@@ -85,6 +86,7 @@ const T1='2026-11-01T05:30:00.000Z',T2='2026-11-02T05:30:00.000Z',T3='2026-11-03
 
 describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  let admin:Pool;
+ let publishStateLock:PoolClient|undefined;
  const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const sid=(p='T')=>`${p}_${randomBytes(5).toString('hex').toUpperCase()}`;
@@ -164,8 +166,14 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  beforeAll(async()=>{
   const st=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:st.adminUrl});
+  const lock=await admin.connect();publishStateLock=lock;
+  try{await lock.query('select pg_advisory_lock($1)',[F4_CLAIM_LOCK]);}
+  catch(e){lock.release();publishStateLock=undefined;throw e;}
+ },180000);
+ afterAll(async()=>{
+  try{if(publishStateLock)await publishStateLock.query('select pg_advisory_unlock($1)',[F4_CLAIM_LOCK]);}
+  finally{publishStateLock?.release();await admin?.end();}
  });
- afterAll(async()=>{await admin?.end();});
 
  it('creates twelve RLS tables, the private macro-raw bucket, seeded publish state, select-only grants, service-only RPCs, and replays twice',async()=>{
   const t=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES]);
