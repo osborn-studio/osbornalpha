@@ -12,7 +12,7 @@ import {GET as ADMIN_GET} from '../../../admin/companies/[ticker]/metrics/route'
 import {DERIVE_CONCEPTS,FORMULA_VERSION} from '@/lib/facts/derive';
 import {FactsDbError} from '@/lib/facts/types';
 import {metricKey} from '@/lib/company/metrics-computed-at';
-import {US,OLD,emptySnapshot,fact,filingRow,makeDeps,metricRow,seededTables,summary} from '@/lib/company/route-test-kit';
+import {US,OLD,fact,filingRow,makeDeps,metricRow,seededTables} from '@/lib/company/route-test-kit';
 
 const get=(h:typeof GET,ticker:string,qs:string)=>h(new Request(`https://alpha.example/api/companies/${ticker}/metrics?${qs}`),{params:Promise.resolve({ticker})});
 const fn=(x:unknown)=>x as ReturnType<typeof vi.fn>;
@@ -27,7 +27,7 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([m]);
   fn(mocks.deps.facts.factsByIds).mockResolvedValue([gp,rev]);
   fn(mocks.deps.facts.filingsOfIssuer).mockResolvedValue([filingRow()]);
-  fn(mocks.deps.metricsComputedAt).mockResolvedValue(new Map([[metricKey(m),{computedAt:'2026-11-06T02:00:00Z',basedOnRev:3}]]));
+  fn(mocks.deps.metricsComputedAt).mockResolvedValue(new Map([[metricKey(m),{computedAt:'2026-11-06T02:00:00Z',basedOnRev:3,basedOnLineage:m.based_on_lineage}]]));
  });
  it('materialized: rev → metricsOfIssuer → rev; computedAt from financial_metrics; gated cell; fresh cache ≤ 60',async()=>{
   const res=await get(GET,'AAPL','metrics=gross_margin');
@@ -77,15 +77,34 @@ describe('GET /api/companies/[ticker]/metrics (proxy, §0 #67)',()=>{
   const res=await get(GET,'AAPL','');
   expect(await res.json()).toMatchObject({stale:false,metrics:[{metric:'gross_margin'}]});
  });
+ it('computedAt requires the complete lineage vector even when target revision matches',async()=>{
+  const vector=[{issuer_id:US,state_rev:3},{issuer_id:OLD,state_rev:7}];
+  fn(mocks.deps.facts.lineageOf).mockResolvedValue([US,OLD]);
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue(vector);
+  fn(mocks.deps.facts.metricsOfIssuer).mockResolvedValue([{...m,based_on_lineage:vector}]);
+  expect((await (await get(GET,'AAPL','')).json()).metrics[0].computedAt).toBeNull();
+  fn(mocks.deps.metricsComputedAt).mockResolvedValue(new Map([[metricKey(m),{computedAt:'2026-11-06T02:00:00Z',basedOnRev:3,basedOnLineage:[...vector].reverse()}]]));
+  expect((await (await get(GET,'AAPL','')).json()).metrics[0].computedAt).toBe('2026-11-06T02:00:00Z');
+ });
+ it('conflicts and resolution mirror landed metadata; conflict read stays within freshness bracket',async()=>{
+  fn(mocks.deps.facts.readFactsLineage).mockImplementation(async()=>{
+   fn(mocks.deps.facts.stateRevs).mockResolvedValue([{issuer_id:US,state_rev:4}]);
+   return {rows:[],stateRevs:[],lineage:[US],truncated:false,conflicts:[{key:{concept:'revenue'},available_date:'2024-01-01',fact_ids:['a','b']}]};
+  });
+  expect(await (await get(GET,'AAPL','')).json()).toMatchObject({stale:true,conflicts:[],metrics:[]});
+  fn(mocks.deps.facts.stateRevs).mockResolvedValue([{issuer_id:US,state_rev:3}]);
+  fn(mocks.deps.facts.readFactsLineage).mockResolvedValue({rows:[],stateRevs:[],lineage:[US],truncated:false,conflicts:[{key:{concept:'revenue'},available_date:'2024-01-01',fact_ids:['a','b']}]});
+  expect(await (await get(GET,'AAPL','tickerAsOf=2024-06-30')).json()).toMatchObject({lineage:[US],resolution:{tickerAsOf:'2024-06-30',validFromMethod:'curated'},conflicts:[{key:{concept:'revenue'},availableDate:'2024-01-01',factIds:['a','b']}]});
+ });
  it('asOf: live derive on one history snapshot (computedAtKind live), truncated passed through',async()=>{
   const cor=fact({concept:'cost_of_revenue',value:'214137000000',value_text:'214137000000'});
-  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:9,rows:[rev,cor],filings:[summary()]}));
+  fn(mocks.deps.facts.readFactsLineage).mockResolvedValue({stateRevs:[{issuer_id:US,state_rev:9}],lineage:[US],rows:[rev,cor],conflicts:[],truncated:false});
   const res=await get(GET,'AAPL','asOf=2024-06-30&metrics=gross_margin');
   const body=await res.json();
-  expect(mocks.deps.snapshot).toHaveBeenCalledWith(US,'US',{concepts:[...DERIVE_CONCEPTS.US],asOf:'2024-06-30',history:true});
+  expect(mocks.deps.facts.readFactsLineage).toHaveBeenCalledWith([US],'US',{concepts:[...DERIVE_CONCEPTS.US],asOf:'2024-06-30',history:true});
   expect(body.metrics[0]).toMatchObject({metric:'gross_margin',basedOnRev:9,computedAtKind:'live',cell:{kind:'derived'}});
   expect(mocks.deps.facts.metricsOfIssuer).not.toHaveBeenCalled();
-  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({truncated:true}));
+  fn(mocks.deps.facts.readFactsLineage).mockResolvedValue({stateRevs:[],lineage:[US],rows:[],conflicts:[],truncated:true});
   const t=await get(GET,'AAPL','asOf=2024-06-30');
   expect(await t.json()).toMatchObject({truncated:true,metrics:[]});expect(t.headers.get('cache-control')).toBe('no-store');
  });

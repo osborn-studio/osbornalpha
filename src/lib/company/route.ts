@@ -84,24 +84,29 @@ export interface Gated{
 }
 /**
  * The one evidence gate (§5.6, §0 #63): rows not in `known` are read with factsByIds and kept only when they
- * belong to this (issuer, market); filings not in `filings` come from filingsOfIssuer (published only);
+ * belong to this (lineage members, market); filings not in `filings` come from filingsOfIssuer (published only);
  * evidence via the service_role company_fact_evidence read; CN PDF locators via the injected source.
  */
-export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer;asOf?:string},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
+export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer;asOf?:string;lineage?:ReadonlySet<string>},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
  const {deps,issuer}=ctx;
+ const members=ctx.lineage??new Set([issuer.issuerId]);
  const ids=[...new Set(factIds)];
  const byId=new Map<string,FactRow>();
- for(const r of known)if(inGateScope(r,issuer.issuerId,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
+ for(const r of known)if(inGateScope(r,members,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
  const unknown=ids.filter(id=>!byId.has(id));
- if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(inGateScope(r,issuer.issuerId,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
+ if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(inGateScope(r,members,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
  const filingMap=new Map<string,FilingSummary>(filings.map(f=>[f.filingId,f]));
  if(facts.some(r=>!filingMap.has(r.filing_id)))
-  for(const f of await deps.facts.filingsOfIssuer(issuer.issuerId,issuer.market,{}))if(f.mapping_gen>0&&(!ctx.asOf||f.available_date<=ctx.asOf)&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
- const present=facts.map(r=>r.fact_id);
- const [records,pdf]=present.length>0
-  ?await Promise.all([deps.company.evidenceOf(present),issuer.market==='CN'?deps.pdf.locate(issuer.issuerId,issuer.market,present):Promise.resolve(new Map<string,PdfLocator>())])
-  :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()];
+  for(const f of (await Promise.all([...members].map(id=>deps.facts.filingsOfIssuer(id,issuer.market,{})))).flat())if(f.mapping_gen>0&&(!ctx.asOf||f.available_date<=ctx.asOf)&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
+ const perMember=await Promise.all([...members].map(async member=>{
+  const present=facts.filter(r=>r.issuer_id===member).map(r=>r.fact_id);
+  return present.length>0
+   ?Promise.all([deps.company.evidenceOf(present),issuer.market==='CN'?deps.pdf.locate(member,issuer.market,present):Promise.resolve(new Map<string,PdfLocator>())])
+   :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()] as const;
+ }));
+ const records=new Map(perMember.flatMap(([records])=>[...records]));
+ const pdf=new Map(perMember.flatMap(([,pdf])=>[...pdf]));
  const g=applyGate({factIds:ids,facts:new Map(facts.map(r=>[r.fact_id,r])),filings:filingMap,records,pdf,market:issuer.market,admin:ctx.admin});
  const reasonOf=(id:string):WithheldReason|null=>{const e=g.eligibility.get(id);return !e?'evidence_incomplete':e.ok?null:e.reason;};
  return {evidence:g.evidence,eligibility:g.eligibility,filings:filingMap,reasonOf,fact:id=>byId.get(id),withheld:id=>{const r=reasonOf(id);return r?{kind:'withheld',reason:r,factId:id}:null;}};

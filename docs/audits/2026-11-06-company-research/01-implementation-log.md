@@ -85,3 +85,7 @@
 - TDD：新 manifest 首跑失败（无 TS reader，解析到 JSON，loadManifest 不是函数）；reader/schema 后哈希断言失败（3 个 pending hash）；hash CLI 首跑失败（脚本尚不存在）；seed 首跑失败（脚本尚不存在）；实现后定向 3 files / **7 passed、5 skipped、0 failed**。5 skipped 全是人工抄录期望。
 - 验证：`node --import tsx scripts/company/manifest-hash.ts --write` 更新 3 个 hash（第 4 个原有 hash 已匹配）；check 模式 **4/4 匹配**。`npm run typecheck && npm run lint` 最终 **2/2 命令通过**（首轮 typecheck 通过、lint 因模板 unused disable 一条 warning 失败，修后通过）。`npm test -- src/lib/company src/components/company src/i18n scripts`：**41 passed / 1 skipped files；327 passed / 45 skipped / 0 failed tests**（40 DB 用例无 harness 自动跳过 + 5 pending）。`git diff --check` 通过。
 - 未运行：全量 npm test、test:db、test:migrations、Supabase start/reset、seed 实库写入、Playwright、浏览器目视；未生成报告，未声称全量门禁完成。没有改只读依赖或锁定迁移，没有 stash、改历史、跳过 hooks。
+
+## 合并 main 后的兼容（2026-11-07）
+
+已知差异：报表/抽屉/概览/packet 仍按单一发行人读取（company_read_snapshot），合并前身的事实不并入；指标代理已按 lineage 读取。后续：需要 lineage 版同快照读函数（新迁移）。

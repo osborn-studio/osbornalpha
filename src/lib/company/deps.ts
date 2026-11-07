@@ -35,7 +35,7 @@ export function productionDigestDeps(opts:ProductionDigestOptions):DigestDeps{
 /** Everything a composed read route needs (spec §6, §0 #64). Public data via anon; events/evidence via service_role. */
 export interface ReadDeps{
  tables:TableClient;                                                         // anon: issuers, issuer_securities
- facts:Pick<FactsDb,'readFacts'|'factsByIds'|'filingsOfIssuer'|'metricsOfIssuer'|'lineageOf'|'stateRevs'>;   // anon
+ facts:Pick<FactsDb,'readFactsLineage'|'readFacts'|'factsByIds'|'filingsOfIssuer'|'metricsOfIssuer'|'lineageOf'|'stateRevs'>;   // anon
  stateRev(issuer:string,market:Market):Promise<number>;                     // anon fact_state_rev
  snapshot(issuer:string,market:Market,opts:ReadSnapshotOptions):Promise<ReadSnapshotResult>;   // anon company_read_snapshot
  company:CompanyDb;                                                          // service_role: eventsOfIssuer(s), evidenceOf

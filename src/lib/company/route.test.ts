@@ -1,5 +1,5 @@
 // src/lib/company/route.test.ts
-import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {Cell,DerivedCell,FactCell} from './types';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as import('./route-test-kit').KitDeps,requireAdmin:vi.fn()}));
@@ -8,12 +8,14 @@ vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidenc
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
 import {buildGated,companyRoute,countWithheld,gateCell} from './route';
-import {CN,FIL_CN_LINKED,US,BRKA,secRow,cnFact,cnSummary,fact,makeDeps,seededTables,summary} from './route-test-kit';
+import {CN,OLD,FIL_CN_LINKED,US,BRKA,secRow,cnFact,cnSummary,fact,makeDeps,seededTables,summary} from './route-test-kit';
 
 const ok={issuerId:US,ticker:'AAPL',market:'US' as const,tickerAsOf:'2024-06-30',validFromMethod:'curated'};
 const call=(mode:'public'|'admin',ticker:string,qs='')=>companyRoute({tag:'t',mode,params:['asOf','x'],handler:async(ctx)=>({body:{issuer:ctx.issuer,asOf:ctx.asOf,admin:ctx.admin,userId:ctx.userId},empty:false})})(new Request(`https://alpha.example/x/${ticker}?${qs}`),{params:Promise.resolve({ticker})});
 
 describe('companyRoute',()=>{
+ beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-06T12:00:00Z'));});
+ afterEach(()=>vi.useRealTimers());
  beforeEach(async()=>{vi.clearAllMocks();mocks.deps=makeDeps(await seededTables());mocks.requireAdmin.mockResolvedValue({id:'u-admin'});});
  it('§0 #69 ticker cases over the real resolveIssuer',async()=>{
   for(const t of ['600519','SH600519','600519.SS','600519.SH'])expect((await (await call('public',t)).json()).issuer).toEqual({issuerId:CN,ticker:'600519.SH',market:'CN',tickerAsOf:new Date().toISOString().slice(0,10),validFromMethod:'curated'});
@@ -85,6 +87,15 @@ describe('buildGated / gateCell',()=>{
   const g=await buildGated({deps:mocks.deps,admin:false,issuer:ok},[a.fact_id,foreign.fact_id],[],[]);
   expect(g.reasonOf(a.fact_id)).toBeNull();expect(g.reasonOf(foreign.fact_id)).toBe('evidence_incomplete');
   expect(g.fact(a.fact_id)).toEqual(a);
+ });
+ it('CN predecessor locators and evidence are looked up for each owning member',async()=>{
+  const old=cnFact({issuer_id:OLD,filing_id:FIL_CN_LINKED}),current=cnFact({filing_id:FIL_CN_LINKED});
+  mocks.deps.pdfFor.add(old.fact_id);mocks.deps.pdfFor.add(current.fact_id);
+  const g=await buildGated({deps:mocks.deps,admin:false,issuer:{...ok,issuerId:CN,market:'CN'},lineage:new Set([CN,OLD])},[old.fact_id,current.fact_id],[old,current],[cnSummary({filingId:FIL_CN_LINKED,citation:'linked',documentUrl:'https://static.cninfo.com.cn/x.PDF'})]);
+  expect(g.reasonOf(old.fact_id)).toBeNull();
+  expect(mocks.deps.pdf.locate).toHaveBeenCalledWith(OLD,'CN',[old.fact_id]);
+  expect(mocks.deps.pdf.locate).toHaveBeenCalledWith(CN,'CN',[current.fact_id]);
+  expect(mocks.deps.company.evidenceOf).toHaveBeenCalledWith([old.fact_id]);
  });
  it('gateCell: fact → withheld; derived → withheld if any input fails (evidence_incomplete wins); counts',async()=>{
   const a=fact(),b=fact({concept:'cost_of_revenue'});mocks.deps.noEvidence.add(b.fact_id);
