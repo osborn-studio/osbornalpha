@@ -276,7 +276,10 @@ it('classification code and rule/catalog dependencies are covered by formula has
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{
  const {planMethodologySync,planExitCode,validateLicenseTable,licenseProblems}=await import('../methodology-sync');
  const {memoryJudgmentsDb}=await import('../memory-judgments-db');
- const licenses=validateLicenseTable(JSON.parse(readFileSync('docs/methodologies/licenses.json','utf8')));
+ // The repo licence table is owner-maintained state (macro keys were confirmed on 2026-11-07); this test pins the
+ // unverified case explicitly so the plan/problems assertions do not depend on the current owner confirmations.
+ const repo=validateLicenseTable(JSON.parse(readFileSync('docs/methodologies/licenses.json','utf8')));
+ const licenses=validateLicenseTable(Object.fromEntries(Object.entries(repo).map(([k])=>[k,{status:'unverified',confirmed_by:null,confirmed_at:null,evidence:null}])));
  const db=memoryJudgmentsDb();
  const plan=await planMethodologySync([macroRegimeV1],db,{repoRoot:process.cwd(),codeVersion:MACRO_CODE_VERSION,licenses});
  expect(planExitCode(plan)).toBe(0);
