@@ -1,42 +1,181 @@
-import type { ClockMetadata } from './judgment-view';
-import type { Regime } from '@/lib/macro/judgment-contract';
-import type { MacroT } from './use-macro-t';
+"use client";
+import { useState } from "react";
+import type { ClockMetadata, JudgmentCard } from "./judgment-view";
+import type { Regime } from "@/lib/macro/judgment-contract";
+import type { MacroT } from "./use-macro-t";
+import { CLOCK_ORDER, type ClockRow } from "./clock-model";
+import { ClockFramework } from "./ClockFramework";
+import { ClockPhasePanel } from "./ClockPhasePanel";
+import "./investment-clock.css";
 
-/** The axes describe the four categories; no coordinates or scores are computed from facts. */
-export function MacroRegimeClock({ selected, reason, metadata, metadataLoading, t }: { selected: Regime | null; reason: string | null; metadata: ClockMetadata | null; metadataLoading: boolean; t: MacroT }) {
-  return (
-    <figure className="space-y-3 rounded-md border border-border bg-bg-elevated p-4">
-      <figcaption className="flex flex-wrap items-baseline gap-2">
-        <h3 className="text-sm font-semibold">{t('judgment.clock.title')}</h3>
-        <span role="status" className={selected ? 'text-sm text-accent' : 'text-xs text-text-dim'}>
-          {selected ? `${t('judgment.clock.current')}: ${t(`judgment.clock.${selected}`)}` : reason}
-        </span>
-      </figcaption>
-      <div role="status" className="space-y-1 rounded border border-warn p-3 text-sm text-warn">
-        {metadata ? <>
-          <p className="font-semibold">{t('judgment.clock.coverage', {value: Math.round(metadata.coverage * 100)})}</p>
-          <p>{t('judgment.clock.uncovered', {value: metadata.uncoveredWeight})}</p>
-          {(metadata.growth_axis === null || metadata.inflation_axis === null) && <p className="font-semibold">{t('judgment.clock.missingAxis', {axes: [metadata.growth_axis === null ? t('judgment.clock.growth') : '', metadata.inflation_axis === null ? t('judgment.clock.inflation') : ''].filter(Boolean).join(' / ')})}</p>}
-          {metadata.margin_pp === 0 && <p className="font-semibold">{t('judgment.clock.tie', {primary: t(`judgment.clock.${metadata.primary_state}`), secondary: metadata.secondary_state ? t(`judgment.clock.${metadata.secondary_state}`) : t('judgment.clock.secondaryUnavailable')})}</p>}
-        </> : <p>{t(metadataLoading ? 'judgment.clock.metadataLoading' : 'judgment.clock.metadataUnavailable')}</p>}
-      </div>
-      <div className="mx-auto max-w-lg space-y-2">
-        <div className="text-center text-xs text-text-dim">{t('judgment.clock.growthUp')} ↑</div>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border">
-          {(['recovery', 'overheat', 'recession', 'stagflation'] as const).map(regime => (
-            <div key={regime} className={`flex min-h-28 flex-col justify-center gap-2 p-4 ${selected === regime ? 'bg-[var(--accent-wash)] text-accent ring-1 ring-inset ring-accent' : 'bg-bg-elevated text-text-dim'}`}>
-              <span className="text-sm font-semibold">{t(`judgment.clock.${regime}`)}</span>
-              <span className="text-[11px]">{t(`judgment.clock.${regime}Axes`)}</span>
-              {selected === regime && <span className="text-xs font-medium">● {t('judgment.clock.current')}</span>}
-            </div>
+export interface MacroRegimeClockProps {
+  selected: Regime | null;
+  reason: string | null;
+  metadata: ClockMetadata | null;
+  metadataLoading: boolean;
+  t: MacroT;
+  region?: "US" | "CN";
+  locale?: "zh" | "en";
+  date?: string;
+  rows?: ClockRow[];
+  card?: JudgmentCard | null;
+  loading?: boolean;
+  onRefresh?: () => void;
+  onEvidence?: (row: ClockRow) => void;
+}
+/** Current classification is supplied by clockFrom. Inspection is independent local UI state. */
+export function MacroRegimeClock({
+  selected,
+  reason,
+  metadata,
+  metadataLoading,
+  t,
+  region = "US",
+  locale = "zh",
+  date,
+  rows = [],
+  card,
+  loading = false,
+  onRefresh,
+  onEvidence,
+}: MacroRegimeClockProps) {
+  const [inspected, setInspected] = useState<Regime | null>(null);
+  const w = (key: string, values?: Record<string, string | number>) =>
+    t(`judgment.widget.${key}`, values);
+  if (loading)
+    return (
+      <section
+        className="investment-clock clock-skeleton"
+        aria-busy="true"
+        aria-label={w("loading")}
+      >
+        <div className="clock-skeleton-heading" />
+        <div className="clock-grid">
+          {CLOCK_ORDER.map((r) => (
+            <div key={r} className="clock-skeleton-panel" />
           ))}
         </div>
-        <div className="text-center text-xs text-text-dim">↓ {t('judgment.clock.growthDown')}</div>
-        <div className="flex justify-between gap-3 border-t border-border pt-2 text-xs text-text-dim">
-          <span>← {t('judgment.clock.inflationDown')}</span><span>{t('judgment.clock.inflationUp')} →</span>
+      </section>
+    );
+  return (
+    <section
+      id="investment-clock"
+      aria-label={w("title")}
+      className="investment-clock"
+    >
+      <header className="clock-header">
+        <div>
+          <p className="clock-eyebrow">{w("eyebrow")}</p>
+          <h2>{w("title")}</h2>
+          <p className="clock-small">
+            {date
+              ? w("snapshot", { region: t(`region.${region}`), date })
+              : w("noSnapshot")}
+          </p>
+        </div>
+        <div className="clock-header-actions">
+          <span className="clock-current-label" role="status">
+            {selected
+              ? `${t("judgment.clock.current")} · ${t(`judgment.clock.${selected}`)}`
+              : w("unknown")}
+          </span>
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="clock-text-button"
+            >
+              ↻ {w("refresh")}
+            </button>
+          )}
+        </div>
+      </header>
+      <div className="clock-context">
+        <details className="clock-coverage">
+          <summary>
+            {metadata
+              ? w("coverage", { value: Math.round(metadata.coverage * 100) })
+              : t(
+                  metadataLoading
+                    ? "judgment.clock.metadataLoading"
+                    : "judgment.clock.metadataUnavailable",
+                )}{" "}
+            <span aria-hidden="true">⌄</span>
+          </summary>
+          <p>{w("coverageNote")}</p>
+          {metadata && (
+            <p>
+              {t("judgment.clock.uncovered", {
+                value: metadata.uncoveredWeight,
+              })}
+            </p>
+          )}
+        </details>
+        <div className="clock-limitations" role="status">
+          {reason && <span>{reason}</span>}
+          {metadata &&
+            (metadata.growth_axis === null ||
+              metadata.inflation_axis === null) && (
+              <span>
+                {t("judgment.clock.missingAxis", {
+                  axes: [
+                    metadata.growth_axis === null
+                      ? t("judgment.clock.growth")
+                      : "",
+                    metadata.inflation_axis === null
+                      ? t("judgment.clock.inflation")
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" / "),
+                })}
+              </span>
+            )}
+          {metadata?.margin_pp === 0 && (
+            <span>
+              {t("judgment.clock.tie", {
+                primary: t(`judgment.clock.${metadata.primary_state}`),
+                secondary: metadata.secondary_state
+                  ? t(`judgment.clock.${metadata.secondary_state}`)
+                  : t("judgment.clock.secondaryUnavailable"),
+              })}
+            </span>
+          )}
         </div>
       </div>
-      <p className="text-[11px] text-text-dim">{t('judgment.clock.note')}</p>
-    </figure>
+      <div className="clock-grid-wrap">
+        <div className="clock-grid">
+          {CLOCK_ORDER.map((regime, index) => (
+            <ClockPhasePanel
+              key={regime}
+              regime={regime}
+              index={index}
+              current={selected === regime}
+              expanded={inspected === regime}
+              rows={rows}
+              t={t}
+              locale={locale}
+              metadataLoading={metadataLoading}
+              onToggle={() =>
+                setInspected(inspected === regime ? null : regime)
+              }
+              onClose={() => setInspected(null)}
+              onEvidence={onEvidence}
+            />
+          ))}
+        </div>
+        <div
+          className="clock-cycle"
+          role="img"
+          aria-label={`${w("cycle")}: ${CLOCK_ORDER.map((r) => t(`judgment.clock.${r}`)).join(" → ")}`}
+        >
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M16 18 A22 22 0 0 1 50 21 M48 14 L51 22 L43 22 M48 46 A22 22 0 0 1 14 43 M16 50 L13 42 L21 42" />
+          </svg>
+          <span>{w("cycle")}</span>
+        </div>
+      </div>
+      <ClockFramework t={t} card={card} />
+    </section>
   );
 }
