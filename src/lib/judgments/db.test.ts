@@ -4,7 +4,7 @@
 // (anon vs admin) each method uses, RPC names and argument names, request_digest from
 // operationDigest, row normalisation, error mapping.
 import {randomUUID} from 'node:crypto';
-import type {SupabaseClient} from '@supabase/supabase-js';
+import {createClient,type SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
@@ -111,6 +111,32 @@ const EVENT={event_id:'0b0e1d8e-0000-4000-8000-000000000002',methodology_id:'zte
 const NULL_EVENT={event_id:null,methodology_id:null,version:null,seq:null,event:null,status:null,publishable:null,formula_hash:null,code_version:null,actor:null,reason:null,occurred_at:null};
 
 describe('supabaseJudgmentsDb wiring',()=>{
+ it('judgmentsBySnapshot sends JSON containment through the real PostgREST serializer on every page',async()=>{
+  const requests:URL[]=[];
+  // Short pages simulate a PostgREST max_rows cap below READ_PAGE.
+  const pages=[[{judgment_id:'judgment-a'}],[{judgment_id:'judgment-b'}],[]];
+  const admin=createClient('https://judgments.test','test-key',{
+   auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+   global:{fetch:async(input)=>{
+    requests.push(new URL(String(input)));
+    return new Response(JSON.stringify(pages.shift()??[]),{status:200,headers:{'Content-Type':'application/json'}});
+   }},
+  });
+  const anon=stub();
+  const db=supabaseJudgmentsDb({anon:anon.client,admin});
+  expect(await db.judgmentsBySnapshot('11111111-1111-4111-8111-111111111111')).toEqual(['judgment-a','judgment-b']);
+  expect(requests).toHaveLength(3);
+  for(const url of requests){
+   expect(url.origin).toBe('https://judgments.test');
+   expect(url.pathname).toBe('/rest/v1/judgments');
+   expect(url.searchParams.get('select')).toBe('judgment_id');
+   expect(url.searchParams.get('inputs')).toBe('cs.[{"kind":"macro_snapshot","ref":{"snapshot_id":"11111111-1111-4111-8111-111111111111"}}]');
+   expect(url.searchParams.get('order')).toBe('judgment_id.asc');
+   expect(url.searchParams.get('limit')).toBe('1000');
+  }
+  expect(requests.map(url=>url.searchParams.get('offset'))).toEqual(['0','1','2']);
+  expect(anon.reads).toEqual([]);
+ });
  it('normalises an envelope: ISO millisecond timestamps, null composites, numeric strings',()=>{
   const e=envelopeFromRpc({judgment:JUDGMENT,settlement:null,calibration:null,calibration_valid:false,methodology_state:EVENT});
   expect(e.judgment.registered_at).toBe('2026-11-06T03:00:00.123Z');

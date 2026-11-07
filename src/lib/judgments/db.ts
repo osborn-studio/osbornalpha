@@ -164,7 +164,8 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
   }),
   async getJudgment(id){const [r]=await rows(admin.from('judgments').select('*').eq('judgment_id',id).limit(1));return r?judgmentFromTable(r):null;},
   async judgmentsBySnapshot(snapshotId){
-   return (await pageAll(()=>admin.from('judgments').select('judgment_id').contains('inputs',[{kind:'macro_snapshot',ref:{snapshot_id:snapshotId}}]).order('judgment_id'))).map(r=>String(r.judgment_id));
+   // Pass JSON text: PostgREST's client serializes JS arrays as PostgreSQL arrays, not jsonb.
+   return (await pageAll(()=>admin.from('judgments').select('judgment_id').contains('inputs',JSON.stringify([{kind:'macro_snapshot',ref:{snapshot_id:snapshotId}}])).order('judgment_id'))).map(r=>String(r.judgment_id));
   },
   async registerJudgment(row,queue){
    const r=await call<{registered_at:string;retrospective:boolean}>(admin,'register_judgment',{p_row:row,p_queue:queue});
