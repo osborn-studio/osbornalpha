@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {typeLabel,fiscalLabel,citationBadge,originalHref,LINK_FAILED_ATTEMPTS} from './filings-model';
+import {formTypeLabel,typeLabel,fiscalLabel,citationBadge,originalHref,LINK_FAILED_ATTEMPTS} from './filings-model';
 import type {FilingSummary} from '@/lib/company/types';
 
 const f=(o:Partial<FilingSummary>):FilingSummary=>({filingId:'g',formType:'annual',fiscalYear:2024,fiscalPeriod:'FY',periodEnd:'2024-12-31',availableDate:'2025-04-03',sourceRef:'r',source:'tushare',url:null,documentUrl:null,citation:'pending',linkAttempts:0,factCount:418,mappingGen:1,...o});
@@ -9,6 +9,7 @@ describe('filings model',()=>{
   expect(typeLabel(f({formType:'restatement'}),'CN')).toEqual({key:'restatement'});
   expect(typeLabel(f({formType:'weird' as FilingSummary['formType']}),'CN')).toEqual({key:'other'});
   expect(typeLabel(f({formType:'10-K',source:'edgar'}),'US')).toEqual({text:'10-K'});
+  expect(formTypeLabel('mystery','CN')).toEqual({key:'other'});
   expect(fiscalLabel(f({fiscalYear:2025,fiscalPeriod:'Q3'}))).toBe('2025 Q3');
   expect(fiscalLabel(f({fiscalYear:null,fiscalPeriod:null}))).toBe('—');
  });

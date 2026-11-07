@@ -51,3 +51,12 @@ export function formatValue(t:string,kind:UnitKind,exp:number):string{
 }
 export const signed=(s:string)=>/^\d/.test(s)&&!/^0(\.0+)?%?$/.test(s)?`+${s}`:s;
 export const divisorLabel=(exp:number)=>`1e${exp}`;
+/** What to print next to a displayed value so the scale and currency are never implicit: ratios need none,
+ * money carries its unit and the applied scale (null when raw), other units are shown unscaled. */
+export function unitCaption(unit:string,exp:number):{unit:string;scaleId:ScaleId|null}|null{
+ const kind=unitKindOfUnit(unit);
+ if(kind==='ratio')return null;
+ if(kind!=='money')return {unit,scaleId:null};
+ const scaleId=SCALES.find(s=>SCALE_EXP[s]===exp&&exp!==0)??null;
+ return {unit,scaleId};
+}

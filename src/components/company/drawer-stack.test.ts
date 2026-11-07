@@ -23,4 +23,10 @@ describe('drawer stack',()=>{
   s=stackReducer(s,{type:'open',target:'a'});const a=s.entries[0].id;s=stackReducer(s,{type:'close'});s=stackReducer(s,{type:'open',target:'b'});
   expect(s.entries[0].id).not.toBe(a);
  });
+ it('reset empties the stack (access mode changed) and is a no-op when already empty',()=>{
+  let s=emptyStack<string>();expect(stackReducer(s,{type:'reset'})).toBe(s);
+  s=stackReducer(s,{type:'open',target:'a'});s=stackReducer(s,{type:'open',target:'b'});
+  const r=stackReducer(s,{type:'reset'});
+  expect(r.entries).toEqual([]);expect(r.returnFocusTo).toBeNull();expect(r.nextId).toBe(s.nextId);
+ });
 });

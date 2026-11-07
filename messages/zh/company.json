@@ -248,6 +248,7 @@
     "citeFailed": "挂接失败，待人工（{n} 次）",
     "highlight": "在报表中高亮",
     "original": "原文 ↗",
+    "opensNew": "（在新窗口打开）",
     "transcripts": "纪要与其他",
     "transcriptsPending": "待文档管道（F3）。",
     "empty": "尚无已发布的披露文件。",
@@ -304,6 +305,10 @@
     "method": "方法 {id}@{version} · 截至 {asOf}",
     "condition": "条件：{text}",
     "historyN": "历史样本 n={n}",
+    "methodLink": "方法页 ↗",
+    "calibrationLink": "校准记录 ↗",
+    "inputs": "证据输入",
+    "inputFallback": "输入 {n}",
     "retrospective": "补登记"
   },
   "tracking": {

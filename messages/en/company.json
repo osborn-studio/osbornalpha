@@ -248,6 +248,7 @@
     "citeFailed": "Linking failed, needs manual review ({n} attempts)",
     "highlight": "Highlight in statements",
     "original": "Original ↗",
+    "opensNew": "(opens in a new window)",
     "transcripts": "Transcripts & other",
     "transcriptsPending": "Pending the document pipeline (F3).",
     "empty": "No published filings yet.",
@@ -304,6 +305,10 @@
     "method": "Method {id}@{version} · as of {asOf}",
     "condition": "Condition: {text}",
     "historyN": "History n={n}",
+    "methodLink": "Method page ↗",
+    "calibrationLink": "Calibration record ↗",
+    "inputs": "Evidence inputs",
+    "inputFallback": "Input {n}",
     "retrospective": "Registered retrospectively"
   },
   "tracking": {

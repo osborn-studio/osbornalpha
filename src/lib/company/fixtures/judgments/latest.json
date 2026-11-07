@@ -69,9 +69,18 @@
           "low": 0.5,
           "high": 0.71
         },
-        "href": "/intel/methods/thesis-win/1.0.0"
+        "href": "/intel/methods/thesis-win/1.0.0",
+        "computed_at": "2025-03-02T00:00:00Z"
       },
-      "inputs": []
+      "inputs": [
+        {
+          "label": {
+            "zh": "营业收入同比 FY2024",
+            "en": "Operating revenue YoY FY2024"
+          },
+          "href": "/stock/600519.SH?view=metrics&asOf=2025-03-01"
+        }
+      ]
     }
   ]
 }

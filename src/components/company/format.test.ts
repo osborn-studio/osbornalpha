@@ -1,6 +1,6 @@
 // src/components/company/format.test.ts
 import {describe,it,expect} from 'vitest';
-import {SCALE_EXP,defaultScale,unitKindOfUnit,shiftDecimal,roundDecimal,groupNumber,formatScaled,formatPercent,formatValue,signed} from './format';
+import {SCALE_EXP,defaultScale,unitKindOfUnit,shiftDecimal,roundDecimal,groupNumber,formatScaled,formatPercent,formatValue,signed,unitCaption} from './format';
 
 describe('decimal display helpers (no floating point)',()=>{
  it('shifts the decimal point exactly, including 20-digit integers and negatives',()=>{
@@ -40,5 +40,13 @@ describe('decimal display helpers (no floating point)',()=>{
   expect(formatValue('68.64','per_share',8)).toBe('68.64');
   expect(formatValue('1256197800','shares',8)).toBe('1,256,197,800');
   expect(formatValue('0.918612','ratio',8)).toBe('91.86%');
+ });
+ it('unitCaption names currency and applied scale for money, unit only for the rest, nothing for ratios',()=>{
+  expect(unitCaption('CNY',8)).toEqual({unit:'CNY',scaleId:'hundred_million'});
+  expect(unitCaption('USD',6)).toEqual({unit:'USD',scaleId:'million'});
+  expect(unitCaption('USD',0)).toEqual({unit:'USD',scaleId:null});
+  expect(unitCaption('shares',8)).toEqual({unit:'shares',scaleId:null});
+  expect(unitCaption('CNY/shares',6)).toEqual({unit:'CNY/shares',scaleId:null});
+  expect(unitCaption('pure',8)).toBeNull();
  });
 });

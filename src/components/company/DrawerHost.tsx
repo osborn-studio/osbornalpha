@@ -30,6 +30,8 @@ export function DrawerHost({ ticker, asOf, admin, children }: { ticker: string; 
     dispatch({ type: 'open', target: t });
   }, []);
   const close = useCallback(() => dispatch({ type: 'close' }), []);
+  // A drawer opened under one access mode (public / admin) must not survive a switch to the other.
+  useEffect(() => { dispatch({ type: 'reset' }); }, [admin]);
   useEffect(() => {
     if (stack.returnFocusTo === null) return;
     const el = openers.current.get(stack.returnFocusTo);

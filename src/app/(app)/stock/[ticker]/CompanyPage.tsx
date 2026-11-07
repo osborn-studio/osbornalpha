@@ -8,7 +8,7 @@ import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { Disclaimer } from '@/components/Disclaimer';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
-import { REPLAY_UNSUPPORTED, type ViewId } from '@/lib/company/client';
+import { JUDGMENTS_FLAG, REPLAY_UNSUPPORTED, type ViewId } from '@/lib/company/client';
 import type { CompanyPageData } from '@/lib/company/page-data';
 import { CompanyHeader } from '@/components/company/CompanyHeader';
 import { ViewTabs } from '@/components/company/ViewTabs';
@@ -77,6 +77,8 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
 
   // ---- Task 13: final fact-view routing (spec §5.1, §5.7, §5.10). ----
   function renderFactView() {
+    // F4 flag on but no issuer (quote-only security): there is no subject to ask F4 about, so show the fact-state callout, not "F4 not live".
+    if (view === 'judgments' && JUDGMENTS_FLAG && !issuer) return <FactStateCallout state="no_issuer" isAdmin={isAdmin} />;
     if (view === 'judgments') return <JudgmentsView issuerId={issuer?.issuer_id ?? null} asOf={asOf} />;
     if (data.factState !== 'ok' || !data.market) {
       const callout = <FactStateCallout state={data.factState === 'ok' ? 'no_facts' : data.factState as 'no_issuer' | 'no_facts' | 'hk_pending'} isAdmin={isAdmin} />;
@@ -95,7 +97,7 @@ function CompanyShell({ data, view, asOf, highlight, isAdmin, locale }: CompanyP
       <CompanyHeader data={data} view={view} asOf={asOf} locale={locale} />
       {asOf && <ReplayBar ticker={ticker} view={view} asOf={asOf} extra={extra} />}
       <ViewTabs ticker={ticker} view={view} asOf={asOf} right={asOf ? undefined : <ReplayOpener ticker={ticker} view={view} />} />
-      <DrawerHost ticker={ticker} asOf={asOf} admin={isAdmin && adminView}>
+      <DrawerHost ticker={ticker} asOf={asOf} admin={isAdmin && adminView && view === 'statements'}>
         <div>{renderBody()}</div>
       </DrawerHost>
       <Disclaimer />

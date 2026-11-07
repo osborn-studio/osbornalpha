@@ -4,10 +4,11 @@ import type {FilingSummary,Market} from '@/lib/company/types';
 
 export const LINK_FAILED_ATTEMPTS=5;
 const CN_TYPES=new Set(['annual','semiannual','q1','q3','restatement']);
-export function typeLabel(f:FilingSummary,market:Market):{key:string}|{text:string}{
- if(market==='US')return {text:f.formType};
- return {key:CN_TYPES.has(f.formType)?f.formType:'other'};
+export function formTypeLabel(formType:string,market:Market):{key:string}|{text:string}{
+ if(market==='US')return {text:formType};
+ return {key:CN_TYPES.has(formType)?formType:'other'};
 }
+export const typeLabel=(f:FilingSummary,market:Market)=>formTypeLabel(f.formType,market);
 export function fiscalLabel(f:FilingSummary):string{return [f.fiscalYear??'',f.fiscalPeriod??''].join(' ').trim()||'—';}
 export type CitationBadge={kind:'edgar'|'linked';href:string|null}|{kind:'pending'}|{kind:'failed';attempts:number};
 export function citationBadge(f:FilingSummary):CitationBadge{

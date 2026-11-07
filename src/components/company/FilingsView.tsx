@@ -1,9 +1,9 @@
 'use client';
 // Filings view (plan 2026-11-06 Task 13; spec §5.5, §10.3; canvas Filings).
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { Button } from '@/components/ui';
+import { Button, buttonClasses } from '@/components/ui';
 import { F3_DRAWER_FLAG, companyApi, companyHref, type CompanyFilingsResponse } from '@/lib/company/client';
 import type { Market } from '@/lib/company/types';
 import { useCompanyFetch } from './useCompanyFetch';
@@ -19,7 +19,6 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
   const tt = useTranslations('company.filings.types');
   const ts = useTranslations('company.states');
   const tab = useTranslations('company.tabs');
-  const router = useRouter();
   const [source, setSource] = useState<string | null>(null);
   const { state, retry } = useCompanyFetch<CompanyFilingsResponse>(companyApi('filings', ticker, { asOf }));
 
@@ -52,7 +51,7 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
                         <td className="text-xs text-[var(--text-dim)]">{f.source === 'edgar' ? t('sourceEdgar') : t('sourceTushare')}</td>
                         <td>
                           {(badge.kind === 'edgar' || badge.kind === 'linked') && (badge.href
-                            ? <a href={badge.href} target="_blank" rel="noopener noreferrer" className={`${chip} border-[var(--border-active)] text-[var(--accent)]`}>{badge.kind === 'edgar' ? t('citeEdgar') : t('citeLinked')}</a>
+                            ? <a href={badge.href} target="_blank" rel="noopener noreferrer" className={`${chip} border-[var(--border-active)] text-[var(--accent)]`}>{badge.kind === 'edgar' ? t('citeEdgar') : t('citeLinked')}<span className="sr-only"> {t('opensNew')}</span></a>
                             : <span className={`${chip} border-[var(--border)]`}>{badge.kind}</span>)}
                           {badge.kind === 'pending' && <span className={`${chip} border-[var(--border)] text-[var(--text-dim)]`}>{t('citePending')}</span>}
                           {badge.kind === 'failed' && <span className={`${chip} border-[var(--warn)] text-[var(--warn)]`}>{t('citeFailed', { n: badge.attempts })}</span>}
@@ -60,10 +59,10 @@ export function FilingsView({ ticker, market, asOf }: { ticker: string; market: 
                         <td className="num text-right">{f.factCount}</td>
                         <td className="px-4">
                           <div className="flex gap-1.5">
-                            <Button variant="ghost" size="sm" onClick={() => router.push(companyHref(ticker, { view: 'statements', asOf, extra: { highlight: f.filingId } }) as never)}>{t('highlight')}</Button>
+                            <Link href={companyHref(ticker, { view: 'statements', asOf, extra: { highlight: f.filingId } }) as never} className={buttonClasses('ghost', 'sm', 'no-underline')}>{t('highlight')}</Link>
                             {original && (USE_F3
                               ? <Button variant="ghost" size="sm" onClick={() => setSource(f.filingId)}>{t('original')}</Button>
-                              : <a href={original} target="_blank" rel="noopener noreferrer" className="inline-flex items-center px-2.5 py-1 text-xs">{t('original')}</a>)}
+                              : <a href={original} target="_blank" rel="noopener noreferrer" className={buttonClasses('ghost', 'sm', 'no-underline')}>{t('original')}<span className="sr-only"> {t('opensNew')}</span></a>)}
                           </div>
                         </td>
                       </tr>

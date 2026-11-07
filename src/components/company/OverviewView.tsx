@@ -9,9 +9,20 @@ import type { Cell, Market } from '@/lib/company/types';
 import { useCompanyFetch } from './useCompanyFetch';
 import { useDrawers } from './DrawerHost';
 import { Callout, ErrorCard, LoadingGrid, TruncatedCard } from './StateCallout';
-import { SCALE_EXP, defaultScale, formatPercent, formatScaled, formatValue, signed, unitKindOfUnit } from './format';
+import { SCALE_EXP, defaultScale, formatPercent, formatValue, signed, unitCaption, unitKindOfUnit, type ScaleId } from './format';
+import { formTypeLabel } from './filings-model';
 import { eventView, quickItems, type ValueRef } from './overview-model';
 import { periodKeyParts } from './statements-model';
+
+const SCALE_KEYS: Record<ScaleId, string> = { raw: 'scaleRaw', thousand: 'scaleThousand', million: 'scaleMillion', hundred_million: 'scaleHundredMillion' };
+
+/** Currency and applied scale printed next to a value (e.g. "100M · CNY"): never implicit. */
+function UnitCaption({ unit, exp }: { unit: string; exp: number }) {
+  const tst = useTranslations('company.statements');
+  const c = unitCaption(unit, unitKindOfUnit(unit) === 'money' ? exp : 0);
+  if (!c) return null;
+  return <span className="ml-1 text-[11px] text-[var(--text-dim)]" data-testid="unit-caption">{c.scaleId ? `${tst(SCALE_KEYS[c.scaleId])} · ` : ''}{c.unit}</span>;
+}
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]';
 
@@ -29,10 +40,13 @@ function ValueButton({ refv, concept, unit: unitHint, currency, exp }: { refv: V
   }
   const unit = refv.unit ?? unitHint ?? currency;
   return (
-    <button type="button" onClick={() => drawers.open({ kind: 'historyByFact', factId: refv.factId, scaleExp: unitKindOfUnit(unit) === 'money' ? exp : 0 })}
-      className={`num underline decoration-dotted underline-offset-4 hover:text-[var(--accent)] ${FOCUS}`}>
-      {formatValue(refv.value, unitKindOfUnit(unit), exp)}
-    </button>
+    <>
+      <button type="button" onClick={() => drawers.open({ kind: 'historyByFact', factId: refv.factId, scaleExp: unitKindOfUnit(unit) === 'money' ? exp : 0 })}
+        className={`num underline decoration-dotted underline-offset-4 hover:text-[var(--accent)] ${FOCUS}`}>
+        {formatValue(refv.value, unitKindOfUnit(unit), exp)}
+      </button>
+      <UnitCaption unit={unit} exp={exp} />
+    </>
   );
 }
 
@@ -49,14 +63,24 @@ function QuickValue({ cell, k, periodKey, stateRev, exp, label }: { cell: Cell |
   const cls = `num text-xl underline decoration-dotted underline-offset-4 hover:text-[var(--accent)] ${FOCUS}`;
   if (cell.kind === 'derived') {
     // Neutral colour with an explicit sign for YoY: no up/down colours (spec §5.8).
-    const text = cell.unit === 'pure' ? (k === 'revenue_yoy' ? signed(formatPercent(cell.value)) : formatPercent(cell.value)) : formatScaled(cell.value, exp);
-    return <button type="button" className={cls} onClick={() => drawers.open({ kind: 'formula', metric: cell.metric, cell, periodLabel: `${parts.periodEnd} ${dur(parts.duration)}`, computedAt: null, computedAtKind: 'live', basedOnRev: stateRev, scaleExp: exp })}>{text}</button>;
+    const text = cell.unit === 'pure' ? (k === 'revenue_yoy' ? signed(formatPercent(cell.value)) : formatPercent(cell.value)) : formatValue(cell.value, unitKindOfUnit(cell.unit), exp);
+    return (
+      <span>
+        <button type="button" className={cls} onClick={() => drawers.open({ kind: 'formula', metric: cell.metric, cell, periodLabel: `${parts.periodEnd} ${dur(parts.duration)}`, computedAt: null, computedAtKind: 'live', basedOnRev: stateRev, scaleExp: exp })}>{text}</button>
+        <UnitCaption unit={cell.unit} exp={exp} />
+      </span>
+    );
   }
+  const kind = unitKindOfUnit(cell.unit);
+  const shown = kind === 'money' ? exp : 0;
   return (
-    <button type="button" className={cls}
-      onClick={() => drawers.open({ kind: 'history', key: { concept: k, periodStart: parts.periodStart, periodEnd: parts.periodEnd, unit: cell.unit }, duration: parts.duration, otherUnits: cell.otherUnits, scaleExp: exp })}>
-      {formatScaled(cell.value, exp)}
-    </button>
+    <span>
+      <button type="button" className={cls}
+        onClick={() => drawers.open({ kind: 'history', key: { concept: k, periodStart: parts.periodStart, periodEnd: parts.periodEnd, unit: cell.unit }, duration: parts.duration, otherUnits: cell.otherUnits, scaleExp: shown })}>
+        {formatValue(cell.value, kind, shown)}
+      </button>
+      <UnitCaption unit={cell.unit} exp={exp} />
+    </span>
   );
 }
 
@@ -73,6 +97,7 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
   const currency = market === 'CN' ? 'CNY' : 'USD';
   const exp = SCALE_EXP[defaultScale(currency, locale)];
   const dur = (d: string) => (td.has(d) ? td(d) : d);
+  const formLabel = (form: string) => { const l = formTypeLabel(form, market); return 'text' in l ? l.text : tt(l.key); };
   const conceptName = (c: string) => (tc.has(c) ? tc(c) : c);
 
   return (
@@ -120,7 +145,7 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
                           <td className="num w-[110px] py-2 text-[var(--text-dim)]">{v.occurredOn}</td>
                           <td className="whitespace-nowrap pr-2"><Tag>{t(v.chip)}</Tag>{v.updated && <span className="ml-1 text-[10px] text-[var(--text-dim)]">{t('updated')}</span>}</td>
                           <td>
-                            {v.filing && t('filingLine', { form: market === 'CN' && tt.has(v.filing.form) ? tt(v.filing.form) : v.filing.form, fiscal: v.filing.fiscal, n: String(v.filing.factCount) })}
+                            {v.filing && t('filingLine', { form: formLabel(v.filing.form), fiscal: v.filing.fiscal, n: String(v.filing.factCount) })}
                             {v.period && (<>{t('periodLine', { period: v.period.periodEnd, duration: dur(v.period.duration) })}{v.period.headline && <> · {conceptName(v.period.headline.concept)} <ValueButton refv={v.period.headline.ref} concept={v.period.headline.concept} currency={currency} exp={exp} /></>}</>)}
                             {v.revised && (<>
                               {v.revised.periodEnd} {conceptName(v.revised.concept)}{' '}
