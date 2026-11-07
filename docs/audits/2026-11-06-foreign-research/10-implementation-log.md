@@ -26,3 +26,5 @@
 | C1 | 存储端口、错误、审计、管理员路由助手、测试装配 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see C1-mmx.md (batch triage pending) |
 | C2 | 2026-11-07 | pending commander commit | 30/30 unit tests PASS (2 files); typecheck/lint PASS | Plan behavior and routes implemented without compile or behavior corrections; service helper `text` named `valueText` to avoid ambiguity; no DB integration tests in C2; no git mutation |
 | C2 | 许可与设置服务 + 路由 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see C2-mmx.md (batch triage pending) |
+| C3 | 2026-11-07 | pending commander commit | 33/33 unit tests PASS (2 files); typecheck/lint PASS; no DB integration suite | Resumable upload, promotion_lost recovery, orphan cleanup, and logged signed URL; added current confirmed-licence checks at intent and commit; abandoned validation errors replay as 409 per state table; purged promotion_lost documents cannot be replaced; no git mutation |
+| C3 | 上传意向 / 提交状态机（含 promotion_lost 恢复）+ 孤儿清理 + ★ 签名读 URL | Codex gpt-6-sol | gates OK (pipeline) | mmx: see C3-mmx.md (batch triage pending) |
