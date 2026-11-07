@@ -19,3 +19,11 @@
 | 15 | Task 15 packet + agent financials 工具 + 删 useFinancials + consensus mock 关闭 | 6d658f0a（与 Task 10 修复同一提交，并发暂存）, b7588ba4 | ✅ | 修后通过（clipped 只计真正裁掉的期、回退清零 withheld、零输入指标置空、§9.5 grep 干净） | 挑战: P2 packet 指标丢输入谱系 → 复用 derivedCellOf + gateCell；修复复审无缺陷 | 1 | 248 单测 |
 | 11 | Task 11 i18n 两域 + 服务端 page + CompanyPage 外壳 + 旧视图迁出 + 决策 E/J | 62e2a7fb, dd7afa6a, 26956a4d | ✅（404 判定改为与 page-data 同一规范化 + 市场后缀） | 修后通过（ReplayBar 失焦/回车/应用按钮、最小日期、可取消；无硬编码文案） | review: P2 AI 结果切页签丢失 → 提升到外壳、P2 freshness null；挑战: P2 抓取结果未绑定 URL（回放日期变化时短暂显示越界文件）、移动端标签错位、错误无重试；修复复审: P2 Cancel 上回车误应用 → 修 | 2 | 191 单测 |
 | 12 | Task 12 报表视图 + 披露历史抽屉 + 公式抽屉 + 概念说明 + CSV + 迷你柱 | 6fa7d5b3, 281447b0, f0f039d1 | ✅（抽屉 scale 指数按单位取 0 修正） | 修后通过（抽屉栈纯 reducer + inert/焦点归还、portal 浮层、移动端卡片、可访问性细项） | review: P2 抽屉不随 admin 视图、截断显示为空；挑战: P2 其他单位行不可达证据、"— U" 格不可点、公式抽屉缺缩放说明、叠放抽屉焦点丢失；修复复审: P2 单季派生 "— U" 无直接事实 → 单季口径下不可点并提示 | 2 | 37 单测（components/company + i18n）；无浏览器验证（Task 19 e2e） |
+
+## Task 16 跟踪 API
+
+- 路由：`/api/tracking/watches`（GET/POST）、`/watches/[issuerId]`（PATCH/DELETE）、`/watches/[issuerId]/read`、`/watches/import-watchlist`、`/inbox`；全部 `private, no-store`，未登录 401 `not_authenticated`，变更类校验 JSON Content-Type 与同源 Origin。
+- `issuer_events` 只经 service_role `CompanyDb` 读取，发行人集合 = 用户 watch（未静音；或显式 `issuerId`）。
+- 偏差（指挥决定）：`watch_not_found` 404；新建 201；收件箱 `issuerId` 参数；未读计数为扫描式（25×200 上限，超出给下界 `n+`）；HK 发行人可跟踪（`resolveIssuer`）。
+- 实施偏差：路由测试里 `vi.mock('@/lib/company/db')` 改为展开 `importOriginal`，否则 `MAX_COMPANY_WATCHES` 缺失导致 500。
+- 规格 §17 待记：未读计数无 SQL 计数函数（迁移已锁）。
