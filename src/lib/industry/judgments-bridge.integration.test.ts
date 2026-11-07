@@ -44,7 +44,7 @@ describe.skipIf(!enabled)('PG17 judgments → industry bridge',()=>{
  it('freezes active anon rows with the shipped adapter hash and rejects deferred valuations',async()=>{
   const industry=pgIndustryDb(anon);
   // CI has no PostgREST/Next server; real-SQL adapters implement the production interfaces under PG RLS.
-  const db=pgJudgmentInputsDb(anon,industry);
+  const db=pgJudgmentInputsDb(anon,{industry});
   const ref={table:'industry_metrics' as const,natural_key:metricsNaturalKey(runId,code,period)};
   const actual=await buildInput({kind:'table_rows',ref},db,'2099-01-01','2099-01-01T23:59:59.999Z');
   const adapted=await industryTableRowsInput(industry,ref);

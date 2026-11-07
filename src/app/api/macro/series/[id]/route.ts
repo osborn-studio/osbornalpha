@@ -6,6 +6,7 @@ import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from '@/lib/macro/catalog';
 import {CYCLES_VERSION} from '@/lib/macro/cycles';
 import {MacroDbError} from '@/lib/macro/db';
 import {EVENTS_VERSION} from '@/lib/macro/events';
+import {macroJudgmentsEnabled} from '@/lib/macro/flags';
 import {subtract} from '@/lib/macro/decimal';
 import {ParamError,asOfParam,dateParam,enumParam,errorResponse,failureResponse,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser,shaOfRetrievals} from '@/lib/macro/route-helpers';
 import {seriesExtras} from '@/lib/macro/series-extras';
@@ -43,7 +44,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
   transform:source.derive?`${source.derive.kind}@1`:null,derived_from_series:source.derive?.from??null};
  // Task 14: detail extras (spec §3.3, §6). Inactive series have no observations, so their extras are empty.
  const empty={cycles:[],insufficient:[],events:[],calendar:[],assetsByCycle:[],eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
- const exposed=process.env.MACRO_JUDGMENTS_ENABLED==='1'?def:(({weight:_w,...rest})=>rest)(def);
+ const exposed=macroJudgmentsEnabled()?def:(({weight:_w,...rest})=>rest)(def);
  const base={catalogVersion:CATALOG_VERSION,def:exposed,seriesRead:source.id,transform:q.transform,provenance};
  if(source.status!=='active')return okJson({...base,...empty,provenance:{...provenance,ancestors:[]},observations:[]});
  try{

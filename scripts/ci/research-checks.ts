@@ -35,6 +35,7 @@ criticalSuites.push('src/lib/company/company-research.integration.test.ts', 'src
 // /COMPANY
 // F4
 criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
+criticalSuites.push('src/lib/judgments/integration/macro-bridge.integration.test.ts');
 // /F4
 
 export function migrationInventory(root = process.cwd()) {

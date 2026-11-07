@@ -3,7 +3,7 @@
 // scripts/judgments/settle.ts and the /api/admin/dq/quarantine judgments branch: the anon client for public reads
 // (RLS on: public RPCs and the inputs db), the service-role client for RPC writes and the dq tables, the inputs db
 // over anon reads + the frozen-source K-line reader. MacroReadApi uses the real macro workbench when
-// MACRO_JUDGMENTS_ENABLED is 1/true, otherwise unavailableMacroReadApi (info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
+// MACRO_JUDGMENTS_ENABLED is '1' only, otherwise unavailableMacroReadApi (info macro_unavailable). code_version = VERCEL_GIT_COMMIT_SHA (40 hex); scripts may fall back to
 // `git rev-parse HEAD` (+ "-dirty"); null means "refuse to apply".
 import {execFileSync} from 'node:child_process';
 import {supabaseTableClient} from '../db/table-client';
@@ -15,6 +15,7 @@ import {anonJudgmentInputsDb} from './inputs-db';
 import {MacroUnavailable,unavailableMacroReadApi} from './macro-api';
 import {supabaseMacroDb} from '../macro/db';
 import {macroReadApi,MacroUnavailable as UpstreamMacroUnavailable} from '../macro/read-api';
+import {macroJudgmentsEnabled} from '../macro/flags';
 import {supabaseIndustryDb} from '../industry/db';
 import type {SettleDeps} from './settle';
 import type {JudgmentsDb,MacroReadApi} from './types';
@@ -43,7 +44,7 @@ export function adminJudgmentsDb(admin:ReturnType<typeof getAdminSupabase>=getAd
 export interface ProductionJudgmentDepsOptions{codeVersion:string;actor:'cron'|'script';triggeredBy:TriggeredBy;signal?:AbortSignal;admin?:ReturnType<typeof getAdminSupabase>}
 export function productionJudgmentDeps(o:ProductionJudgmentDepsOptions):SettleDeps{
  const admin=o.admin??getAdminSupabase(),anon=getAnonSupabase();
- const enabled=process.env.MACRO_JUDGMENTS_ENABLED==='1'||process.env.MACRO_JUDGMENTS_ENABLED==='true';
+ const enabled=macroJudgmentsEnabled();
  const macro=enabled?adaptMacroApi(macroReadApi(supabaseMacroDb({admin,anon}),{judgments:true})):unavailableMacroReadApi();
  return {
   db:supabaseJudgmentsDb({anon,admin}),
