@@ -25,6 +25,9 @@ const MESSAGE_DOMAINS = [
   // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
   'macro',
   // /MACRO
+  // MACRO-P3
+  'macroStrategy',
+  // /MACRO-P3
   // COMPANY — company research module (plan 2026-11-06 Task 11)
   'company', 'tracking',
   // /COMPANY

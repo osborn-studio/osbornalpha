@@ -23,6 +23,9 @@ criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/in
 // MACRO
 criticalSuites.push('src/lib/macro/macro.integration.test.ts');
 // /MACRO
+// MACRO-P3
+criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
+// /MACRO-P3
 // COMPANY
 criticalSuites.push('src/lib/company/company-research.integration.test.ts');
 // /COMPANY

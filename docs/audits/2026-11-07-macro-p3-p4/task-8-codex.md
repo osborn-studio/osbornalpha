@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/macro/strategy/cycle-table.ts:126` | Column overrides are external calculation inputs that are never frozen. Verified that the same manifest produces one column with `['US_UST10Y']`, but nine when replayed from the manifest alone. This violates §4.5’s replay contract; fixtures test only defaults. | Remove both column overrides to enforce Task 8’s fixed list, or freeze ordered column IDs and read them exclusively from the manifest. Add a regression test. |
+| 2 | P2 | `src/lib/macro/strategy/cycle-table.ts:130` | Slicing the cutoff preserves its local calendar date instead of its UTC date. Verified that equivalent timestamps `2025-12-19T00:30:00+08:00` and `2025-12-18T16:30:00Z` produce different `ongoing` flags. The same date also controls month-closure eligibility. Offset timestamps are untested. | Normalize through `new Date(m.cutoff).toISOString().slice(0,10)`. Test equivalent offset timestamps around the 12-month and month-end boundaries. |
+
+fix required
