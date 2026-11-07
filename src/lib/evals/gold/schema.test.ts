@@ -235,7 +235,7 @@ describe('review round 2: INSTANT metrics and CN bases',()=>{
 
 // These builders are synthetic contract examples, never admitted human labels.
 describe('provenance admission boundaries',()=>{
- it.each(['2026-02-30','2025-02-29','2026-11-07T25:00:00Z','2026-11-07T00:00:00+25:00'])('rejects impossible recording/review dates: %s',date=>{
+ it.each(['2024-13-01','2024-01-00','2026-02-30','2025-02-29','2026-11-07T25:00:00Z','2026-11-07T00:00:00+25:00'])('rejects impossible recording/review dates: %s',date=>{
   expect(errorsOf(s=>{s.cases[0].recorded_at=date;})).toContain('cases[0].recorded_at: date_or_timestamp_required');
   expect(errorsOf(s=>{s.cases[0].reviewed_at=date;})).toContain('cases[0].reviewed_at: required_with_reviewed_by');
  });
