@@ -31,6 +31,10 @@
       "schedule": "5 */4 * * *"
     },
     {
+      "path": "/api/cron/facts-sync?market=CN",
+      "schedule": "35 */4 * * *"
+    },
+    {
       "path": "/api/cron/industry-sync?job=memberships-sic&limit=200",
       "schedule": "0 2 * * *"
     }

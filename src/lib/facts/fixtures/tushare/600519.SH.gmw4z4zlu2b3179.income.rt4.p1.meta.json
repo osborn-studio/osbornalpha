@@ -1,0 +1,14 @@
+{
+ "recorded_at": "2026-11-06T12:52:05.693Z",
+ "sha256": "a62e537c2c42beae2a0d61e2e5ed45e88f81630ee7f635a8c0b69892211d7668",
+ "http_status": 200,
+ "has_more": false,
+ "params": {
+  "ts_code": "600519.SH",
+  "start_date": "20160101",
+  "report_type": "4",
+  "limit": 2000,
+  "offset": 0
+ },
+ "fields": "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,total_revenue,revenue,oper_cost,operate_profit,n_income,n_income_attr_p,basic_eps,diluted_eps,rd_exp,sell_exp,admin_exp,fin_exp_int_exp,int_exp,income_tax"
+}

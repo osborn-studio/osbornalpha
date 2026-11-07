@@ -103,3 +103,24 @@ Codex 第二轮最终判语（针对第 2 稿）："**Verdict: not ready for imp
 - DECLINE：0。
 - OWNER 决策：§16 D1–D8。
 - OPEN-verify：§17 1–8。
+
+## 第五轮（06，增量：第 5 稿 vs 已落地计划一/二与在途计划三；全部在第 6 稿实施，2026-11-06）
+
+判语："**Verdict: not ready for implementation planning—the R4 edits close their targeted defects, but the draft still conflicts with landed plan-2 evidence contracts and plan-3 storage ownership.**" R4-1、R4-2：CLOSED。
+
+| # | 级别 | 决定 | implemented_in |
+|---|---|---|---|
+| R5-1 | P1 | ACCEPT | 第 6 稿 §0 R5-1、§1.1、§3.2 规则 1、§4.1、§4.6、§11.2 |
+| R5-2 | P1 | ACCEPT | 第 6 稿 §0 R5-2、§4.1、§5.3.1 |
+| R5-3 | P1 | ACCEPT | 第 6 稿 §0 R5-3、§6.1–6.3（`dq_eval_case_results`）、§12 |
+| R5-4 | P1 | ACCEPT | 第 6 稿 §0 R5-4、§6.2 |
+| R5-5 | P1 | ACCEPT | 第 6 稿 §0 R5-5、§5.1.4 |
+| R5-6 | P2 | ACCEPT | 第 6 稿 §0 R5-6、§5.1.4、§5.6 |
+| R5-7 | P2 | ACCEPT | 第 6 稿 §0 R5-7、§5.3.1、§5.6 |
+| R5-8 | P2 | ACCEPT | 第 6 稿 §0 R5-8 |
+| R5-9 | P2 | ACCEPT | 第 6 稿 §0 R5-9、§5.3.2、§11.2 |
+| R5-10 | P2 | ACCEPT | 第 6 稿 §0 R5-10、§5.2、§11.1 |
+| R5-11 | P2 | ACCEPT | 第 6 稿 §0 R5-11、§12 |
+| R5-12 | P2 | ACCEPT | 第 6 稿 §0 R5-12、§1.1、§15.1 |
+
+第 6 稿未再送审（任务约定一轮增量）；计划的 Codex 审计会再覆盖这些契约。

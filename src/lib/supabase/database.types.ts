@@ -11,6 +11,9 @@
 // + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
 //   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
 // + 20261106090000_financial_facts.sql (fact_sync_runs, filings, financial_facts, financial_metrics, fact_sync_scope)
+// F6 begin
+// + 20261110090000_dq_eval_runs.sql (dq_eval_runs, dq_eval_case_results)
+// F6 end
 // INDUSTRY:BEGIN
 // + 20261111090000_industry_research.sql (industry_* tables, security_marks; altered industry_classifications / issuer_industry_memberships)
 // INDUSTRY:END
@@ -762,6 +765,45 @@ export interface IssuerIndustryMembership {
   provenance: Record<string, unknown>;
 }
 
+// F6 begin
+// F6 evaluation runs (supabase/migrations/20261110090000_dq_eval_runs.sql) — service-role only.
+// Decimal comparison columns are TEXT (lossless decimal strings with format checks), never numeric;
+// summary and detail are jsonb objects.
+export type DqEvalRunStatus = 'running' | 'passed' | 'failed' | 'incomplete' | 'error';
+export interface DqEvalRun {
+  run_id: string;
+  kind: 'official_reconciliation' | 'dual_source' | 'replay_consistency' | 'reference_regression' | 'extraction_gold' | 'judgment_calibration';
+  module: string;
+  mode: 'ci' | 'report';
+  privileged: boolean;
+  artifact_class: 'public' | 'restricted';
+  set_id: string;
+  set_version: number;
+  set_sha256: string;
+  evaluator_code_version: string;
+  started_at: string;
+  finished_at: string | null;
+  status: DqEvalRunStatus;
+  summary: Record<string, unknown>;
+  report_ref: string;
+  report_sha256: string;
+  triggered_by: 'manual' | 'script' | 'ci';
+}
+
+export interface DqEvalCaseResult {
+  eval_run_id: string;
+  case_id: string;
+  result: 'fail' | 'unit_mismatch' | 'provenance_incomplete' | 'missing' | 'not_visible' | 'read_error' | 'unexplained_diff';
+  reason: string | null;
+  left_text: string | null;
+  right_text: string | null;
+  abs_diff: string | null;
+  rel_diff: string | null;
+  tolerance: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+// F6 end
 // 20261111090000_industry_research.sql. numeric columns arrive as JSON numbers and round in JavaScript —
 // readers use the *_text twins (value_text, close_text, total_share_text, market_cap_text, mcap_coverage_text).
 // bigint (generation, state_rev) arrives as a JSON number. Writes go through the SQL functions (not typed here).
@@ -1038,6 +1080,10 @@ export type Database = {
       financial_facts: { Row: FinancialFact; Insert: Partial<FinancialFact>; Update: Partial<FinancialFact> };
       financial_metrics: { Row: FinancialMetric; Insert: Partial<FinancialMetric>; Update: Partial<FinancialMetric> };
       fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };
+      // F6 begin
+      dq_eval_runs: { Row: DqEvalRun; Insert: Partial<DqEvalRun>; Update: Partial<DqEvalRun> };
+      dq_eval_case_results: { Row: DqEvalCaseResult; Insert: Partial<DqEvalCaseResult>; Update: Partial<DqEvalCaseResult> };
+      // F6 end
       // INDUSTRY:BEGIN
       industry_dataset_licenses: { Row: IndustryDatasetLicense; Insert: Partial<IndustryDatasetLicense>; Update: Partial<IndustryDatasetLicense> };
       industry_source_memberships: { Row: IndustrySourceMembership; Insert: Partial<IndustrySourceMembership>; Update: Partial<IndustrySourceMembership> };

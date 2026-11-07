@@ -1,0 +1,40 @@
+{
+ "initial_state": "empty_after_migrations",
+ "issuer_seed": {
+  "path": "src/lib/evals/fixtures/issuers/f6-seed.json",
+  "sha256": "b30a06375da6e8357c1c6ce0064d6a9bc50db1bed1f070198408c150faea8ea6"
+ },
+ "fixture_manifest": [
+  {
+   "path": "src/lib/evals/fixtures/edgar/CIK0009990601.json",
+   "sha256": "3f14640fef80c0cf2b884dd299fc79325fda8122a8c5a67943b025fcd0170926"
+  },
+  {
+   "path": "src/lib/evals/fixtures/edgar/CIK0009990602.json",
+   "sha256": "3c38d61d68e385c21eb49aefd14a40ed4d18deadb8613d707b8f19becb5172fa"
+  },
+  {
+   "path": "src/lib/evals/fixtures/edgar/CIK0009990603.json",
+   "sha256": "69192ffc39a5c7b26426ebc5204c47fc4db3ab856cd5c804761e818013708c94"
+  },
+  {
+   "path": "src/lib/evals/fixtures/edgar/CIK0009990603.amended.json",
+   "sha256": "be0e6f032e3840ea16a82f758329e5426ff123d37ddbf033e52d73fdca54d641"
+  },
+  {
+   "path": "src/lib/evals/fixtures/edgar/CIK0009990603.conflict.json",
+   "sha256": "6d8c2ba05ba063effcbfbb13cdffcf52b96ce12cb9e253adf381cc061a176471"
+  }
+ ],
+ "sync_order": [
+  "CIK0009990601.json",
+  "CIK0009990602.json",
+  "CIK0009990603.json"
+ ],
+ "today": "2026-11-20",
+ "mapping_gen": 1,
+ "formula_version": "facts-derive/1.0",
+ "quarantine_resolutions": [],
+ "config_sha256": "ad477c8edf90ae4e34eba0cb699f0535da8cb81438a81b2a71fdde74f2d70c51",
+ "setup_sha256": "49d6b5845a453fbb4df147014da4a3fed0f5e93e6f989994e6fb08fa4f8dcc56"
+}

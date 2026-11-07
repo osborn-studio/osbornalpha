@@ -32,16 +32,21 @@ async function cnIssuer(tables:TableClient,issuerId:string,today:string):Promise
  const c=chooseCnTicker(current);
  return {ts_code:'ticker' in c?c.ticker:'',cninfo_org_id:typeof issuer?.cninfo_org_id==='string'?issuer.cninfo_org_id:null};
 }
-/** A type-1 filing is "corrected" when a type-5 filing exists for the same ts_code:end_date (spec §6.3: match 更正 titles). */
-const correctedKeys=(filings:FilingRow[])=>new Set(filings.filter(f=>f.source_ref.split(':')[2]==='5').map(f=>f.source_ref.split(':').slice(0,2).join(':')));
+/** A type-1 filing is "corrected" (spec §6.3: match 更正 titles) iff another type-1 filing exists for the same ts_code:end_date with an EARLIER date segment: the earliest rt1 date is the original publication. Real Tushare keeps the original rt1 row after a correction and adds a later-dated one, so the rt5 rows are not consulted. A malformed date segment is never corrected and never counts as earlier. */
+const DATE8=/^\d{8}$/;
+function correctedRefs(filings:FilingRow[]):(ref:string)=>boolean{
+ const earliest=new Map<string,string>();
+ for(const f of filings){const [code,end,rt,date]=f.source_ref.split(':');if(rt!=='1'||!DATE8.test(date??''))continue;const k=`${code}:${end}`;const cur=earliest.get(k);if(cur===undefined||date<cur)earliest.set(k,date);}
+ return ref=>{const [code,end,rt,date]=ref.split(':');if(rt!=='1'||!DATE8.test(date??''))return false;const first=earliest.get(`${code}:${end}`);return first!==undefined&&date>first;};
+}
 
 export interface LinkerOptions{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;today?:string}
 export function cninfoLinker(tables:TableClient,db:Pick<FactsDb,'filingsOfIssuer'>,opts:LinkerOptions={}):NonNullable<SyncDeps['linkCn']>{
- const cache=new Map<string,Promise<{issuer:LinkIssuer;corrected:Set<string>}>>();
+ const cache=new Map<string,Promise<{issuer:LinkIssuer;corrected:(ref:string)=>boolean}>>();
  const context=(issuerId:string)=>{
   let p=cache.get(issuerId);
   if(!p){
-   p=Promise.all([cnIssuer(tables,issuerId,opts.today??new Date().toISOString().slice(0,10)),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedKeys(filings)}));
+   p=Promise.all([cnIssuer(tables,issuerId,opts.today??new Date().toISOString().slice(0,10)),db.filingsOfIssuer(issuerId,'CN',{})]).then(([issuer,filings])=>({issuer,corrected:correctedRefs(filings)}));
    cache.set(issuerId,p);
    p.catch(()=>{if(cache.get(issuerId)===p)cache.delete(issuerId);});   // a failed lookup is not cached
   }
@@ -50,8 +55,7 @@ export function cninfoLinker(tables:TableClient,db:Pick<FactsDb,'filingsOfIssuer
  return async(filing:FilingRow,b:Budget)=>{
   const {issuer,corrected}=await context(filing.issuer_id);
   if(!/^\d{6}\.(SH|SZ)$/.test(issuer.ts_code))return 'unlinkable';   // no usable A-share listing (none, ambiguous, BJ): no request is possible, no attempt consumed
-  const key=filing.source_ref.split(':').slice(0,2).join(':');
-  return linkCninfoFiling({form_type:filing.form_type,fiscal_year:filing.fiscal_year,period_end:filing.period_end,available_date:filing.available_date,corrected:filing.source_ref.split(':')[2]==='1'&&corrected.has(key)},issuer,{budget:b,fetch:opts.fetch,userAgent:opts.userAgent,minIntervalMs:opts.minIntervalMs});
+  return linkCninfoFiling({form_type:filing.form_type,fiscal_year:filing.fiscal_year,period_end:filing.period_end,available_date:filing.available_date,corrected:corrected(filing.source_ref)},issuer,{budget:b,fetch:opts.fetch,userAgent:opts.userAgent,minIntervalMs:opts.minIntervalMs});
  };
 }
 
