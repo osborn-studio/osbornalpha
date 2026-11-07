@@ -1,6 +1,7 @@
 // src/app/api/judgments/[id]/route.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {envelope,methodologyRow,settlementRow,uuidOf} from '@/lib/judgments/testing/envelopes';
+import {judgmentDetailOf} from '@/lib/macro/strategy/f4-client';
 
 const mocks=vi.hoisted(()=>({envelopeById:vi.fn(),historyOf:vi.fn(),listMethodologies:vi.fn(),settlements:vi.fn()}));
 vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:{envelopeById:mocks.envelopeById,historyOf:mocks.historyOf,listMethodologies:mocks.listMethodologies},settlements:mocks.settlements})}));
@@ -29,6 +30,13 @@ describe('GET /api/judgments/[id]',()=>{
   expect(body.card.display).not.toHaveProperty('percent');
   expect(mocks.envelopeById).toHaveBeenCalledWith(ID,{view:'latest',cutoff:undefined});
   expect(mocks.historyOf).not.toHaveBeenCalled();
+ });
+ it('preserves frozen input ref/snapshot and settlement evidence for the macro detail parser',async()=>{
+  mocks.settlements.mockResolvedValue([settlementRow({judgment_id:ID,evidence:{observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]}})]);
+  const body=await (await get(ID)).json();
+  const parsed=judgmentDetailOf(body);
+  expect(parsed.inputs[0]).toMatchObject({kind:'financial_fact',ref:{fact_id:uuidOf(500007)},snapshot:{fact_id:uuidOf(500007)}});
+  expect(parsed.settlements[0].evidence).toEqual({observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]});
  });
  it('as_known cuts settlements at the cutoff and asks envelopeById for the same view',async()=>{
   const body=await (await get(ID,'view=as_known&asOf=2026-06-30')).json();

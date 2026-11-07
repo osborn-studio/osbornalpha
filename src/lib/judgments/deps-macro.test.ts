@@ -8,12 +8,12 @@ vi.mock('../supabase/anon',()=>({getAnonSupabase:()=>m.anon}));
 vi.mock('../macro/db',()=>({supabaseMacroDb:m.db}));
 afterEach(()=>{vi.unstubAllEnvs();vi.clearAllMocks();});
 const deps=()=>productionJudgmentDeps({codeVersion:'test',actor:'script',triggeredBy:'manual'});
-it.each([undefined,'0','false'])('flag %s keeps the unavailable API',async flag=>{
+it.each([undefined,'','0','false','true'])('flag %s keeps the unavailable API',async flag=>{
  vi.stubEnv('MACRO_JUDGMENTS_ENABLED',flag);
  await expect(deps().inputsDb.macro.snapshotsSince(null,1)).rejects.toBeInstanceOf(MacroUnavailable);
  expect(m.db).not.toHaveBeenCalled();
 });
-it.each(['1','true'])('flag %s enables stored regimes using the real API and admin/anon clients',async flag=>{
+it.each(['1'])('flag %s enables stored regimes using the real API and admin/anon clients',async flag=>{
  vi.stubEnv('MACRO_JUDGMENTS_ENABLED',flag);
  const regime={primary_state:'recovery'};
  m.db.mockReturnValue({snapshot:async()=>({snapshot_id:'s1',observation_ids:[]}),regimeOf:async()=>({regime})});
