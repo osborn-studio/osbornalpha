@@ -24,16 +24,16 @@
     "evidence": null
   },
   "macro_observation×macro_workbench": {
-    "status": "unverified",
-    "confirmed_by": null,
-    "confirmed_at": null,
-    "evidence": null
+    "status": "confirmed",
+    "confirmed_by": "osborn (gilosbornhello, owner)",
+    "confirmed_at": "2026-11-07T12:00:27Z",
+    "evidence": "Owner confirmed on 2026-11-07 (session message: 确认) the redistribution terms of every weighted, active macro_regime@v2 input: US via FRED relay under St. Louis Fed FRED terms (https://fred.stlouisfed.org/legal/) — Federal Reserve Board series US_DFF, US_DGS10, US_DTWEXBGS and BLS series US_CPI_YOY, US_UNRATE, US_PPI_FD_YOY (public domain, https://www.bls.gov/bls/linksite.htm); CN official open data — NBS data.stats.gov.cn (CN_CPI, CN_PPI, CN_PMI, CN_GDP, plus PBoC M2 and Customs exports as relayed by NBS), CCDC/ChinaBond (CN_CGB_10Y, https://www.chinabond.com.cn), SAFE central parity (CN_USDCNY_CP, https://www.safe.gov.cn). Not covered: US_VIX (restricted, third party) and the missing series US_ISM_PMI, CN_LPR_1Y, CN_MLF_1Y, CN_AFRE_STOCK_YOY — re-confirm when activated."
   },
   "macro_snapshot×macro_workbench": {
-    "status": "unverified",
-    "confirmed_by": null,
-    "confirmed_at": null,
-    "evidence": null
+    "status": "confirmed",
+    "confirmed_by": "osborn (gilosbornhello, owner)",
+    "confirmed_at": "2026-11-07T12:00:27Z",
+    "evidence": "Owner confirmed on 2026-11-07 (session message: 确认) the redistribution terms of every weighted, active macro_regime@v2 input: US via FRED relay under St. Louis Fed FRED terms (https://fred.stlouisfed.org/legal/) — Federal Reserve Board series US_DFF, US_DGS10, US_DTWEXBGS and BLS series US_CPI_YOY, US_UNRATE, US_PPI_FD_YOY (public domain, https://www.bls.gov/bls/linksite.htm); CN official open data — NBS data.stats.gov.cn (CN_CPI, CN_PPI, CN_PMI, CN_GDP, plus PBoC M2 and Customs exports as relayed by NBS), CCDC/ChinaBond (CN_CGB_10Y, https://www.chinabond.com.cn), SAFE central parity (CN_USDCNY_CP, https://www.safe.gov.cn). Not covered: US_VIX (restricted, third party) and the missing series US_ISM_PMI, CN_LPR_1Y, CN_MLF_1Y, CN_AFRE_STOCK_YOY — re-confirm when activated."
   },
   "price_bar×eastmoney": {
     "status": "unverified",
