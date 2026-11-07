@@ -112,6 +112,13 @@ describe('runMarks',()=>{
   expect(cur[0]).toMatchObject({close:'1392.05',total_share:'1250081601',fetch_event_id:events[2],upstream:'sse',status:'ok'});
   expect(r2.counts).toMatchObject({versioned:1,duplicates:2,inserted:0});
   expect(rowsOf(tables,'dq_quarantine').filter(x=>x.reason_code==='mark_revised').map(x=>x.natural_key)).toEqual([`600519.SH:${DATE}`]);   // one open item per key (reused)
+  const item=rowsOf(tables,'dq_quarantine').find(x=>x.reason_code==='mark_revised')!;
+  const detail=item.detail as Record<string,unknown>;
+  expect(Object.keys(detail).sort()).toEqual(['current','fetch_event_id','previous']);
+  // the open item is reused: it keeps the first revision's evidence (A→B, the second fetch event)
+  expect(detail.fetch_event_id).toBe(events[1]);
+  expect(typeof detail.previous).toBe('string');expect(typeof detail.current).toBe('string');expect(detail.previous).not.toBe(detail.current);
+  expect(detail.current).not.toBe(cur[0].observation_id);
  });
  it('a free_share revision alone is a new observation (content = close, total_share, free_share)',async()=>{
   await runMarks(deps(A),{tradeDates:[DATE]});

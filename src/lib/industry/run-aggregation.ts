@@ -31,6 +31,8 @@
 // current ones (canonical JSON, statuses and windows included) and every member_state_revs entry
 // equals the current state_rev (an issuer without a scope row counts as 0). code_version is not a
 // reuse key: reused rows keep the manifest's code_version inside the manifest.
+import type {TableClient} from '../db/table-client';
+import {currentSecurities,keysetAll} from '../facts/scope';
 import type {TriggeredBy,BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -52,7 +54,7 @@ import type {AggregateManifest,HistoryClass,IndustryDb,IndustryDeps,ManifestMemb
 export interface AggregationOptions{
  scheme:Extract<Scheme,'sw2021'>;version:Extract<SchemeVersion,'2021'>;level:number;factsAsOf:string;
  historyStart?:string;
- /** Restricts the run to these classification codes (scripts, tests); default every code at `level`. */
+ /** Codes whose groups are always recomputed; every other group is reused when possible, else recomputed. The published grid is always every code at `level` (a filtered run never shrinks the active dataset). */
  codes?:string[];
  triggeredBy?:TriggeredBy;
 }
@@ -72,7 +74,7 @@ const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const errCode=(e:unknown)=>e instanceof AggregationError||e instanceof IndustryDbError?e.code:'compute_failed';
 const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,300);
 
-interface Group{code:string;period_end:string;key:string;members:ManifestMember[];memberRows:MembershipRow[];unresolved:ManifestUnresolved[];financial:boolean;duplicateRows:boolean}
+interface Group{code:string;period_end:string;key:string;members:ManifestMember[];memberRows:MembershipRow[];unresolved:ManifestUnresolved[];financial:boolean}
 interface Reuse{hash:string;manifest:AggregateManifest}
 
 function memberOf(row:MembershipRow,src:SourceMembershipRow|undefined):ManifestMember{
@@ -86,13 +88,27 @@ const sortUnresolved=(xs:ManifestUnresolved[])=>[...xs].sort((a,b)=>cmp(a.ts_cod
 /** One (code, period_end) group: point-in-time members (one row per issuer, latest valid_from) and unresolved records (spec §4.6, §5.2). */
 async function loadGroup(db:Pick<IndustryDb,'membershipCandidates'|'unresolvedOf'>,q:{scheme:Scheme;version:SchemeVersion;level:number;code:string;periodEnd:string;knownBy:string},financial:boolean,sources:ReadonlyMap<string,SourceMembershipRow>):Promise<Group>{
  const mq={scheme:q.scheme,version:q.version,code:q.code,level:q.level,on:q.periodEnd,knownBy:q.knownBy};
- const rows=membersAtPure(await db.membershipCandidates({scheme:q.scheme,version:q.version,code:q.code,level:q.level,on:q.periodEnd}),mq);
- const byIssuer=new Map<string,MembershipRow>();
- for(const r of [...rows].sort((a,b)=>cmp(b.valid_from,a.valid_from)))if(!byIssuer.has(r.issuer_id))byIssuer.set(r.issuer_id,r);
- const memberRows=[...byIssuer.values()];
- return {code:q.code,period_end:q.periodEnd,key:cellKey(q.code,q.periodEnd),financial,memberRows,duplicateRows:byIssuer.size!==rows.length,
+ // one row per issuer per (code, date) is a database invariant (exclusion constraint), so no per-issuer dedup here
+ const memberRows=membersAtPure(await db.membershipCandidates({scheme:q.scheme,version:q.version,code:q.code,level:q.level,on:q.periodEnd}),mq);
+ return {code:q.code,period_end:q.periodEnd,key:cellKey(q.code,q.periodEnd),financial,memberRows,
   members:sortMembers(memberRows.map(r=>memberOf(r,r.source_membership_id===null?undefined:sources.get(r.source_membership_id)))),
   unresolved:sortUnresolved(await db.unresolvedOf({code:q.code,level:q.level,on:q.periodEnd,knownBy:q.knownBy}))};
+}
+/**
+ * The readiness denominator (spec §4.10): the industry facts universe, independent of the run grid = issuers resolved from
+ * CURRENT source memberships (historical members included) ∪ issuers owning an active `a_stock` ticker ∪ the run's own members,
+ * minus merged issuers. An issuer without a scope row (or without last_success_at) counts as unready.
+ */
+async function factsUniverse(tables:TableClient,db:Pick<IndustryDb,'currentSourceMemberships'>,today:string,runMembers:string[]):Promise<string[]>{
+ const ids=new Set<string>(runMembers);
+ for(const s of await db.currentSourceMemberships({}))if(s.issuer_id)ids.add(s.issuer_id);
+ const owner=new Map<string,string>();
+ for(const s of await currentSecurities(tables,today))if(typeof s.issuer_id==='string'&&s.issuer_id)owner.set(String(s.ticker).trim().toUpperCase().replace(/\//g,'.'),s.issuer_id);
+ for(const m of await keysetAll(tables,'security_universe_memberships',{universe:'a_stock',is_active:true},{},'ticker',['ticker'])){
+  const id=owner.get(String(m.ticker).trim().toUpperCase().replace(/\//g,'.'));if(id)ids.add(id);
+ }
+ for(const i of await keysetAll(tables,'issuers',{status:'merged'},{},'issuer_id',['issuer_id']))ids.delete(String(i.issuer_id));
+ return [...ids].sort(cmp);
 }
 /** One issuer's envelope (V6: the caller guarantees at most one read per issuer per run) and its derived metrics. */
 async function readIssuerFacts(facts:Pick<FactsDb,'readFacts'>,id:string,asOf:string):Promise<IssuerFacts>{
@@ -155,16 +171,20 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
  try{
   // ---- 1. grid, members, history class ----
   const tree=await db.classificationTree(opts.scheme,opts.version);
-  const codes=tree.filter(r=>r.level===opts.level&&(opts.codes===undefined||opts.codes.includes(r.code))).map(r=>r.code).sort(cmp);
-  if(codes.length===0)throw new AggregationError('no_classifications');
-  const grid=expectedGrid(codes,historyStart,opts.factsAsOf);
+  const codes=tree.filter(r=>r.level===opts.level).map(r=>r.code).sort(cmp);
+  if(codes.length===0||(opts.codes!==undefined&&!opts.codes.some(c=>codes.includes(c))))throw new AggregationError('no_classifications');
+  const forced=new Set(opts.codes??[]);
+  // activation replaces the whole active level, so the grid is the full publication grid: every code at the level and
+  // at least the active run's history (a shortened historyStart never drops active periods)
+  const prev=await db.activeMetricRun(opts.scheme,opts.version,opts.level);
+  const prevStart=prev?.expected_grid.period_ends[0];
+  const grid=expectedGrid(codes,prevStart!==undefined&&prevStart<historyStart?prevStart:historyStart,opts.factsAsOf);
   const sources=new Map((await db.currentSourceMemberships({})).map(s=>[s.id,s]));
   const groups:Group[]=[];
   for(const code of grid.codes){
    const financial=isFinancialNode(code,tree);
    for(const pe of grid.period_ends){
     const g=await loadGroup(db,{scheme:opts.scheme,version:opts.version,level:opts.level,code,periodEnd:pe,knownBy:opts.factsAsOf},financial,sources);
-    if(g.duplicateRows)errors.push({code:'skipped_summary',key:g.key,message:'duplicate_member_rows'});
     groups.push(g);
    }
   }
@@ -175,13 +195,13 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
   const scope=await facts.scopeAll('CN');const fingerprintAt=deps.now().toISOString();
   const scopeOf=new Map<string,ScopeRow>(scope.map(s=>[s.issuer_id,s]));
   const revOf=(id:string)=>scopeOf.get(id)?.state_rev??0;
-  const prev=await db.activeMetricRun(opts.scheme,opts.version,opts.level);
   const reuse=new Map<string,Reuse>();
   if(prev){
    const prevRows=new Map<string,MetricCellRow[]>();
    for(const r of await db.metricRowsOfRun(prev.run_id,{codes:grid.codes,periodEnds:grid.period_ends})){const k=cellKey(r.code,r.period_end);const l=prevRows.get(k);if(l)l.push(r);else prevRows.set(k,[r]);}
    const loaded=new Map<string,AggregateManifest|null>();
    for(const g of groups){
+    if(forced.has(g.code))continue;
     const hash=reusable(prev,{facts_as_of:opts.factsAsOf,history_class:historyClass},prevRows.get(g.key));
     if(hash===null)continue;
     if(!loaded.has(hash))loaded.set(hash,await manifests.get(hash).catch(()=>null));
@@ -199,7 +219,7 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
    reused_from_run:reuse.size>0&&prev?prev.run_id:null,batch_id:batchId});
   runId=run.runId;receipt.runId=run.runId;receipt.generation=run.generation;
   // ---- 3. readiness gate ----
-  const universe=[...new Set(allMembers.map(r=>r.issuer_id))].sort(cmp);
+  const universe=await factsUniverse(tables,db,deps.now().toISOString().slice(0,10),allMembers.map(r=>r.issuer_id));
   const readyN=universe.filter(id=>scopeOf.get(id)?.last_success_at!=null).length;
   const ready=universe.length>0&&readyN*100>=READINESS_MIN_PERCENT*universe.length;
   if(!ready){
@@ -234,6 +254,7 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
     if(r){
      for(const c of r.manifest.cells)staged.push(rowOf(g.code,g.period_end,c,r.hash));
      for(const x of r.manifest.member_state_revs)dependencies.push({cell_key:g.key,issuer_id:x.issuer_id,state_rev:x.state_rev});
+     for(const x of r.manifest.roles)if(x.reason==='read_truncated')truncated.add(x.issuer_id);
      counts.duplicates+=r.manifest.cells.length;continue;
     }
     const ids=g.members.map(x=>x.issuer_id);
@@ -242,7 +263,13 @@ export async function runIndustryAggregation(deps:IndustryDeps,opts:AggregationO
     const {manifest,memberStateRevs}=await computeGroup({scheme:opts.scheme,version:opts.version,code:g.code,level:opts.level,period_end:g.period_end,facts_as_of:opts.factsAsOf,knowledge_date:opts.factsAsOf,
       history_class:historyClass,method_version:METHOD_VERSION,config_hash:CONFIG_HASH,formula_version:FORMULA_VERSION,code_version:codeVersion},g,issuers,filingsOf);
     const check=(hooks.replay??replayFromManifest)(manifest);
-    const bad=new Set(check.mismatches);
+    const cellIds=new Set(manifest.cells.map(c=>`${c.metric}:${c.duration}:${c.period_start}`));
+    const bad=new Set<string>();
+    for(const m of check.mismatches){
+     const id=m.startsWith('unexpected_cell:')?m.slice('unexpected_cell:'.length):m;
+     if(cellIds.has(id))bad.add(id);
+     else throw new AggregationError('manifest_mismatch',`${g.key}:${m}`.slice(0,200));   // not attributable to a stored cell (e.g. missing_cell:): the manifest cannot be trusted
+    }
     let hash:string|null=null;
     if(manifest.cells.some(c=>c.status==='ok'&&!bad.has(`${c.metric}:${c.duration}:${c.period_start}`))){
      try{hash=(await manifests.put('aggregate',encodeManifest(manifest).canonical)).hash;}

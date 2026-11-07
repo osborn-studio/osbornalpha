@@ -97,11 +97,12 @@ export async function syncSicScope(deps:Pick<IndustryDeps,'tables'|'facts'|'now'
    catch(e){if(!(e instanceof TableError&&e.code==='23505'))throw e;}   // a concurrent worker inserted it: keep its row and lease
    continue;
   }
-  if(isRetired(r)&&await deps.tables.update('industry_sync_scope',{issuer_id:id,job:'sic',updated_at:r.updated_at as string},{next_due_at:now,updated_at:now})===1)reactivated++;
+  if(isRetired(r)&&await deps.tables.update('industry_sync_scope',{issuer_id:id,job:'sic',updated_at:r.updated_at as string,lease_batch_id:(r.lease_batch_id as string|null)??null},{next_due_at:now,updated_at:now})===1)reactivated++;
  }
  for(const [id,r] of have){
   if(active.has(id)||isRetired(r)||!leaseFree(r,at))continue;
-  if(await deps.tables.update('industry_sync_scope',{issuer_id:id,job:'sic',updated_at:r.updated_at as string},{next_due_at:RETIRED_DUE,updated_at:now})===1)retired++;
+  // compare-and-swap on (updated_at, lease_batch_id) as read: a claim between the read and this write changes lease_batch_id even when updated_at ties
+  if(await deps.tables.update('industry_sync_scope',{issuer_id:id,job:'sic',updated_at:r.updated_at as string,lease_batch_id:(r.lease_batch_id as string|null)??null},{next_due_at:RETIRED_DUE,updated_at:now})===1)retired++;
  }
  return {added,retired,reactivated,active};
 }
@@ -146,10 +147,10 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
   try{
    const [issuer]=await deps.tables.select('issuers',{issuer_id:issuerId},{limit:1});
    const cik=issuer&&typeof issuer.cik==='string'?issuer.cik:null;
-   if(!issuer||!cik){skips.push('no_cik');}
+   if(!issuer||!cik){skips.push('no_cik');ok=true;}   // informational skip: the row is finished successfully (next week), not 'failed'
    else{
     const sub=await fetchSubmissionsSic(cik,{fetch:deps.fetch,userAgent:opts.userAgent,now:deps.now});
-    if(sub.kind==='not_found')skips.push('no_submissions');
+    if(sub.kind==='not_found'){skips.push('no_submissions');ok=true;}
     else if(sub.kind==='unavailable'){counts.fetched++;errors.push({code:'sec_unavailable',key:issuerId,message:`status_${sub.status??'network'}`});retryMs=RETRY_UNAVAILABLE_MS;}
     else{
      const p=sub.parsed;

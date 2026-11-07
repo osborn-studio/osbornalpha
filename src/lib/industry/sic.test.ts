@@ -63,6 +63,20 @@ describe('syncSicScope',()=>{
   expect(await syncSicScope(deps)).toMatchObject({reactivated:1});
   expect(tables.rows('industry_sync_scope').find(x=>x.issuer_id===RETIRED)!.next_due_at).toBe(DAY1);
  });
+ it('a claim that lands between the read and the retire wins: an out-of-scope row leased in that window is not retired', async()=>{
+  const {tables,deps}=await setup();
+  const LEFT='b0000000-0000-4000-8000-0000000000aa';
+  await tables.insert('industry_sync_scope',{issuer_id:LEFT,job:'sic',next_due_at:'2026-01-01T00:00:00.000Z',lease_until:null,lease_batch_id:null,last_attempt_at:null,last_success_at:null,last_status:null,updated_at:DAY1});
+  let raced=false;
+  const racing={...tables,update:async(t:string,m:Record<string,unknown>,patch:Record<string,unknown>)=>{
+   if(!raced&&patch.next_due_at===RETIRED_DUE&&m.issuer_id===LEFT){raced=true;const row=(await tables.select('industry_sync_scope',{issuer_id:LEFT,job:'sic'}))[0];expect(await claimSicScopeRow(tables,row,'racer',new Date(DAY1))).toBe(true);}   // same updated_at (clock tie), new lease_batch_id
+   return tables.update(t,m,patch);
+  }} as typeof tables;
+  const r=await syncSicScope({...deps,tables:racing});
+  expect(raced).toBe(true);
+  expect(r.retired).toBe(0);
+  expect(tables.rows('industry_sync_scope').find(x=>x.issuer_id===LEFT)).toMatchObject({lease_batch_id:'racer',next_due_at:'2026-01-01T00:00:00.000Z'});
+ });
 });
 
 describe('runMembershipsSic',()=>{
@@ -84,6 +98,8 @@ describe('runMembershipsSic',()=>{
   expect(tables.rows('dq_quarantine').map(q=>[q.reason_code,q.natural_key])).toEqual([['unknown_sic_code',`sic:${ODD}:9999`]]);
   const scope=tables.rows('industry_sync_scope').find(s=>s.issuer_id===AAPL)!;
   expect(scope).toMatchObject({last_status:'success',last_success_at:DAY1,next_due_at:'2026-11-15T02:00:00.000Z',lease_until:null,lease_batch_id:null});
+  // informational skips finish the scope row successfully (not 'failed')
+  for(const id of [GONE,NOCIK])expect(tables.rows('industry_sync_scope').find(x=>x.issuer_id===id)).toMatchObject({last_status:'success',last_success_at:DAY1,next_due_at:'2026-11-15T02:00:00.000Z',lease_batch_id:null});
   expect(tables.rows('dq_freshness').find(f=>f.dataset==='industry.sic.memberships')).toMatchObject({expected_cadence:'weekly'});
   // same day again: nothing is due
   expect((await runMembershipsSic(deps,{sleep:noSleep})).processed).toBe(0);

@@ -66,7 +66,7 @@ async function publish(facts:MemoryFactsDb,tables:TableClient,key:Key,reports:Re
 let tables:TableClient;let facts:MemoryFactsDb;let db:IndustryDb;let manifests:ManifestStore&{objects:Map<string,Uint8Array>};let deps:IndustryDeps;
 const OPTS:AggregationOptions={scheme:'sw2021',version:'2021',level:1,factsAsOf:'2025-05-15',historyStart:'2024-06-30'};
 const sourceIds=new Map<string,string>();
-async function seedMemberships(){
+async function seedMemberships(availability:'effective_date_assumed'|'evidenced'='effective_date_assumed',method:'today'|'as_of'='today'){
  const {batchId}=await startBatch(tables,{producer:'test-industry',dataset:'industry.test'});
  // issuer rows, in case the memory implementation checks them like the SQL function's issuer lock
  for(const k of Object.keys(ISSUERS) as Key[])await tables.insert('issuers',{issuer_id:ISSUERS[k],canonical_name_zh:k,status:'active',cninfo_org_id:null,provenance:{}});
@@ -76,8 +76,8 @@ async function seedMemberships(){
  for(const m of MEMBERS){
   const src=current.find(s=>s.ts_code===m.ts)!;sourceIds.set(m.ts,src.id);
   if(m.key===null)continue;
-  const prov={availability:'effective_date_assumed' as const,source_membership_id:src.id,raw_hash:src.raw_hash,locator:src.locator};
-  await db.applyMemberships(batchId,ISSUERS[m.key],'sw2021','2021',[[m.l1,1],[L23[m.l1][0],2],[L23[m.l1][1],3]].map(([code,level])=>({code:code as string,level:level as number,valid_from:m.in,valid_to:null,available_date:m.in,valid_to_available_date:null,source:'tushare:index_member_all',provenance:prov})),[src.id],{method:'today',resolved_at:'2025-05-01T00:00:00.000Z'});
+  const prov={availability,source_membership_id:src.id,raw_hash:src.raw_hash,locator:src.locator};
+  await db.applyMemberships(batchId,ISSUERS[m.key],'sw2021','2021',[[m.l1,1],[L23[m.l1][0],2],[L23[m.l1][1],3]].map(([code,level])=>({code:code as string,level:level as number,valid_from:m.in,valid_to:null,available_date:m.in,valid_to_available_date:null,source:'tushare:index_member_all',provenance:prov})),[src.id],{method,resolved_at:'2025-05-01T00:00:00.000Z',...(method==='as_of'?{as_of:'2025-05-01'}:{})});
  }
 }
 beforeEach(async()=>{
@@ -217,5 +217,78 @@ describe('runIndustryAggregation',()=>{
   const upload={...manifests,put:async()=>{throw new Error('storage down');}};
   const u=await runIndustryAggregation({...deps,manifests:upload},{...OPTS,factsAsOf:'2025-05-16'});
   expect(u).toMatchObject({status:'failed',code:'manifest_upload_failed'});
+ });
+ it('a filtered run (codes) recomputes only those groups and never shrinks the active level or history', async()=>{
+  const r1=await runIndustryAggregation(deps,OPTS);
+  const r2=await runIndustryAggregation(deps,{...OPTS,codes:[FOOD],historyStart:'2024-12-31'});
+  expect(r2).toMatchObject({status:'active',groups:8,reusedGroups:4});
+  expect((await db.metricRun(r2.runId!))?.expected_grid).toEqual((await db.metricRun(r1.runId!))?.expected_grid);
+  const codesOf=async(run:string)=>[...new Set((await rowsOf(run)).map(x=>x.code))].sort();
+  expect(await codesOf(r2.runId!)).toEqual([FOOD,BANK].sort());
+  expect((await rowsOf(r2.runId!)).some(x=>x.period_end==='2024-06-30')).toBe(true);
+  expect((await db.activeMetricRun('sw2021','2021',1))?.run_id).toBe(r2.runId);
+  // a code filter that matches nothing is rejected
+  expect(await runIndustryAggregation(deps,{...OPTS,codes:['999999.SI']})).toMatchObject({status:'failed',code:'no_classifications'});
+ });
+ it('the readiness denominator is the whole facts universe: an unsynced a_stock issuer outside the grid blocks activation', async()=>{
+  const extra='10000000-0000-4000-8000-0000000000ff';
+  await tables.insert('issuers',{issuer_id:extra,canonical_name_zh:'X',status:'active',cninfo_org_id:null,provenance:{}});
+  await tables.insert('issuer_securities',{issuer_id:extra,ticker:'688888.SH',isin:null,figi:null,share_class:null,is_primary:true,valid_from:'2020-01-01',valid_to:null});
+  await tables.insert('security_universe_memberships',{universe:'a_stock',ticker:'688888.SH',is_active:true});
+  const r=await runIndustryAggregation(deps,OPTS);
+  expect(r).toMatchObject({status:'failed',code:'facts_scope_not_ready'});
+  expect((await db.metricRun(r.runId!))?.coverage_summary).toMatchObject({facts_scope_ready:false,universe:6,ready:5});
+ });
+ it('a reused group keeps its truncated issuers in the run coverage summary', async()=>{
+  const trunc={...facts,readFacts:async(i:string,m:'CN'|'US',o:Parameters<MemoryFactsDb['readFacts']>[2])=>{const e=await facts.readFacts(i,m,o);return i===ISSUERS.F2?{...e,rows:[],truncated:true}:e;}};
+  await runIndustryAggregation({...deps,facts:trunc},OPTS);
+  const r2=await runIndustryAggregation(deps,OPTS);
+  expect(r2).toMatchObject({reusedGroups:8,truncatedIssuers:[ISSUERS.F2]});
+  expect((await db.metricRun(r2.runId!))?.coverage_summary).toMatchObject({read_truncated:[ISSUERS.F2],read_truncated_count:1});
+ });
+ it('reuse is blocked when the unresolved records or the members change although every state_rev is unchanged', async()=>{
+  await runIndustryAggregation(deps,OPTS);
+  const {batchId}=await startBatch(tables,{producer:'test-industry',dataset:'industry.test2'});
+  await db.upsertSourceMemberships(batchId,[{source:'tushare:index_member_all',ts_code:'600998.SH',name:null,l1_code:FOOD,l2_code:L23[FOOD][0],l3_code:L23[FOOD][1],in_date:'2021-12-13',out_date:null,observed_at:'2025-05-02T00:00:00.000Z',raw_hash:'raw:600998',locator:{api:'index_member_all',ts_code:'600998.SH'}}]);
+  const r2=await runIndustryAggregation(deps,OPTS);
+  expect(r2).toMatchObject({status:'active',reusedGroups:4});            // the four food groups gained an unresolved record
+  const src=(await db.currentSourceMemberships({})).find(s=>s.ts_code===TICKER.F3)!;
+  const prov={availability:'effective_date_assumed' as const,source_membership_id:src.id,raw_hash:src.raw_hash,locator:src.locator};
+  await db.applyMemberships(batchId,ISSUERS.F3,'sw2021','2021',[[FOOD,1],[L23[FOOD][0],2],[L23[FOOD][1],3]].map(([code,level])=>({code:code as string,level:level as number,valid_from:'2024-07-01',valid_to:'2025-01-31',available_date:'2024-07-01',valid_to_available_date:'2025-02-01',source:'tushare:index_member_all',provenance:prov})),[src.id],{method:'today',resolved_at:'2025-05-03T00:00:00.000Z'});
+  const r3=await runIndustryAggregation(deps,OPTS);
+  expect(r3).toMatchObject({status:'active',reusedGroups:5});            // F3's window (valid_to, part of the manifest members) changed in the three food groups it belongs to
+  expect((await val(r3.runId!,FOOD,'member_count','INSTANT','2025-03-31')).value).toBe('2');
+ });
+ it('history_class is point_in_time only when every member row is evidenced and its source resolved as_of', async()=>{
+  tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset'],dq_quarantine:['id'],issuers:['issuer_id']});
+  facts=memoryFactsDb(tables);db=memoryIndustryDb({tables});manifests=memoryManifestStore(db);
+  deps={...deps,tables,db,facts,manifests};
+  await seedMemberships('evidenced','as_of');
+  for(const k of Object.keys(ISSUERS) as Key[])await publish(facts,tables,k,REPORTS[k]);
+  const r=await runIndustryAggregation(deps,OPTS);
+  expect(r).toMatchObject({status:'active',historyClass:'point_in_time'});
+  expect((await db.metricRun(r.runId!))?.history_class).toBe('point_in_time');
+ });
+ it('self-check: an unmatched mismatch (missing_cell:) fails the run with manifest_mismatch; unexpected_cell: quarantines that cell', async()=>{
+  const bad=await runIndustryAggregation(deps,OPTS,{replay:m=>({...replayFromManifest(m),reproduced:false,mismatches:['missing_cell:revenue_sum:3M:2099-01-01']})});
+  expect(bad).toMatchObject({status:'failed',code:'manifest_mismatch'});
+  expect((await db.metricRun(bad.runId!))?.status).toBe('failed');
+  expect(await db.activeMetricRun('sw2021','2021',1)).toBeNull();
+  const odd=await runIndustryAggregation(deps,OPTS,{replay:m=>{const x=replayFromManifest(m);return m.code===FOOD&&m.period_end==='2024-12-31'?{...x,reproduced:false,mismatches:['unexpected_cell:revenue_sum:12M:2024-01-01']}:x;}});
+  expect(odd).toMatchObject({status:'active',manifestMismatches:1});
+  expect(await val(odd.runId!,FOOD,'revenue_sum','12M','2024-12-31')).toMatchObject({status:'missing',missing_reason:'manifest_mismatch'});
+ });
+ it('maps incomplete_run and dependencies_incomplete refusals, and a staging error, to a failed run', async()=>{
+  for(const code of ['incomplete_run','dependencies_incomplete'] as const){
+   const refuse={...db,activateMetricRun:async()=>{throw new IndustryDbError(code);}} as IndustryDb;
+   const r=await runIndustryAggregation({...deps,db:refuse},OPTS);
+   expect(r).toMatchObject({status:'failed',code});
+   expect((await db.metricRun(r.runId!))?.status).toBe('failed');
+  }
+  const stage={...db,stageMetricRows:async()=>{throw new Error('staging down');}} as IndustryDb;
+  const s=await runIndustryAggregation({...deps,db:stage},OPTS);
+  expect(s).toMatchObject({status:'failed',code:'compute_failed',batchStatus:'failed'});
+  expect((await db.metricRun(s.runId!))?.status).toBe('failed');
+  expect(await db.activeMetricRun('sw2021','2021',1)).toBeNull();
  });
 });
