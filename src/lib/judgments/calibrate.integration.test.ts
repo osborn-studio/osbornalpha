@@ -59,7 +59,10 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
  }
  /** One active probability judgment of `m` on `subject` at `asOf` (producer_nonce '' — ids differ by as_of / subject). */
  async function register(m:MethodologyRow,subject:string,asOf:string):Promise<string>{
-  const {row,queue}=await rowFor(m,subject,asOf);const judgment_id=row.judgment_id;
+  return registerRow(await rowFor(m,subject,asOf));
+ }
+ async function registerRow({row,queue}:Awaited<ReturnType<typeof rowFor>>):Promise<string>{
+  const judgment_id=row.judgment_id;
   // D6 / Task 4 rule: a due row is registered under the claim lock and parked (next_attempt_at far future) before the
   // lock is released, so no other suite's claimDue ever sees it; settle() makes it due again under the lock.
   await withClaimLock(pool,async()=>{
@@ -188,18 +191,24 @@ describe.skipIf(!enabled)('F4 calibration job on real PostgreSQL',()=>{
 
  it('R03: registrations after the cutoff on both sides of the cursor, and a settlement after it, stay out of the cohort',async()=>{
   const m=await method(false);
-  const {subject,ids}=await cohort(m,4,2);
+  const subject=await issuer();
+  // Prepare valid content-derived IDs first: the middle four form the frozen cohort,
+  // leaving one guaranteed late registration on each side of its page cursor.
+  const candidates=[];
+  for(let i=0;i<6;i++)candidates.push(await rowFor(m,subject,addDays(today(),-200+3*i)));
+  candidates.sort((a,b)=>a.row.judgment_id<b.row.judgment_id?-1:1);
+  expect(new Set(candidates.map(x=>x.row.judgment_id)).size).toBe(6);
+  const ids=[];
+  for(const row of candidates.slice(1,5))ids.push(await registerRow(row));
+  await settle(ids[0],'hit');await settle(ids[1],'miss');
   const store=memoryCohortStore();const u=allUnit(m);
   const ctx=await ctxOf(store,'cccccccc');
   expect((await stepUnit(ctx,u)).kind).toBe('started');
   expect((await stepUnit(ctx,u)).kind).toBe('paged');
   const after=(await stateOf(u) as UnitState).after!;
-  const sides={lt:0,gt:0};
-  for(let i=0;i<60&&(sides.lt===0||sides.gt===0);i++){
-   const id=await register(m,subject,addDays(today(),-100-i));   // inside the window, registered after the cutoff
-   if(id<after)sides.lt++;else sides.gt++;
-  }
-  expect(sides.lt).toBeGreaterThan(0);expect(sides.gt).toBeGreaterThan(0);
+  expect(after).toBe(ids[1]);
+  const low=await registerRow(candidates[0]),high=await registerRow(candidates[5]);
+  expect(low<after).toBe(true);expect(high>after).toBe(true);
   await settle(ids[3],'hit');                                       // settled after the cutoff
   expect(await finish(ctx,u)).toMatchObject({kind:'finalized',status:'inserted'});
   expect((await rowsOf(m))[0]).toMatchObject({n_registered:4,n_settled:2});
