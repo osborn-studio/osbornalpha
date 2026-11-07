@@ -208,6 +208,10 @@
     {
       "file": "20261107091000_facts_extensions.sql",
       "sha256": "cc9c4a3263f18a394f636dfbe87fb739401e407804dd5b7041161e82dbd26349"
+    },
+    {
+      "file": "20261110090000_dq_eval_runs.sql",
+      "sha256": "7808ea386e4547c8b0e34dc891d2bc1a2c69a2cf2f32fc675a26bf130cd1a591"
     }
   ]
 }

@@ -15,6 +15,9 @@
 //   dq_reconciliations pair/kind/outcome/detail/cycle columns; dq_reconcile_cycles, dq_reconcile_cursor, dq_calendar_passes,
 //   dq_calendar_pass_members, issuer_filer_categories, dq_filing_expectations, issuer_filing_profiles; dq_freshness weekly)
 // + 20261107091000_facts_extensions.sql (filings.accepted_at/acceptance_source, financial_metrics.based_on_lineage; functions only otherwise)
+// F6 begin
+// + 20261110090000_dq_eval_runs.sql (dq_eval_runs, dq_eval_case_results)
+// F6 end
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -867,6 +870,46 @@ export interface IssuerFilingProfile {
   updated_at: string;
 }
 
+// F6 begin
+// F6 evaluation runs (supabase/migrations/20261110090000_dq_eval_runs.sql) — service-role only.
+// Decimal comparison columns are TEXT (lossless decimal strings with format checks), never numeric;
+// summary and detail are jsonb objects.
+export type DqEvalRunStatus = 'running' | 'passed' | 'failed' | 'incomplete' | 'error';
+export interface DqEvalRun {
+  run_id: string;
+  kind: 'official_reconciliation' | 'dual_source' | 'replay_consistency' | 'reference_regression' | 'extraction_gold' | 'judgment_calibration';
+  module: string;
+  mode: 'ci' | 'report';
+  privileged: boolean;
+  artifact_class: 'public' | 'restricted';
+  set_id: string;
+  set_version: number;
+  set_sha256: string;
+  evaluator_code_version: string;
+  started_at: string;
+  finished_at: string | null;
+  status: DqEvalRunStatus;
+  summary: Record<string, unknown>;
+  report_ref: string;
+  report_sha256: string;
+  triggered_by: 'manual' | 'script' | 'ci';
+}
+
+export interface DqEvalCaseResult {
+  eval_run_id: string;
+  case_id: string;
+  result: 'fail' | 'unit_mismatch' | 'provenance_incomplete' | 'missing' | 'not_visible' | 'read_error' | 'unexplained_diff';
+  reason: string | null;
+  left_text: string | null;
+  right_text: string | null;
+  abs_diff: string | null;
+  rel_diff: string | null;
+  tolerance: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+// F6 end
+
 export type Database = {
   public: {
     Tables: {
@@ -924,6 +967,10 @@ export type Database = {
       issuer_filer_categories: { Row: IssuerFilerCategory; Insert: Partial<IssuerFilerCategory>; Update: Partial<IssuerFilerCategory> };
       dq_filing_expectations: { Row: DqFilingExpectation; Insert: Partial<DqFilingExpectation>; Update: Partial<DqFilingExpectation> };
       issuer_filing_profiles: { Row: IssuerFilingProfile; Insert: Partial<IssuerFilingProfile>; Update: Partial<IssuerFilingProfile> };
+      // F6 begin
+      dq_eval_runs: { Row: DqEvalRun; Insert: Partial<DqEvalRun>; Update: Partial<DqEvalRun> };
+      dq_eval_case_results: { Row: DqEvalCaseResult; Insert: Partial<DqEvalCaseResult>; Update: Partial<DqEvalCaseResult> };
+      // F6 end
     };
     Functions: {
       quote_alert_window_samples: {

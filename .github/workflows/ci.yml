@@ -16,6 +16,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # F6 begin
+          fetch-depth: 0
+          # F6 end
       - uses: actions/setup-node@v4
         with:
           node-version-file: package.json
@@ -23,6 +27,54 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      # F6 begin
+      - name: F6 gold sets, lock, diff and redaction (spec §4.4, §4.5, §7.3)
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          BASE=""
+          NOTE=""
+          case "$EVENT_NAME" in
+            pull_request)
+              if ! BASE="$(git merge-base "origin/$BASE_REF" HEAD)"; then
+                echo "### F6 validate" >> "$GITHUB_STEP_SUMMARY"
+                echo "gold-diff cannot run: no merge-base with origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi;;
+            push)
+              if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                NOTE="gold-diff skipped: push without a previous commit (event.before is all zeros)"
+              elif ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                NOTE="gold-diff skipped: event.before $BEFORE is not in the fetched history (force push)"
+              else
+                BASE="$BEFORE"
+              fi;;
+            workflow_dispatch)
+              MB="$(git merge-base origin/main HEAD)"
+              if [ "$MB" = "$(git rev-parse HEAD)" ]; then
+                NOTE="gold-diff skipped: dispatched on main (merge-base equals HEAD)"
+              else
+                BASE="$MB"
+              fi;;
+            *)
+              NOTE="gold-diff skipped: event $EVENT_NAME has no base";;
+          esac
+          ARGS=(--gold --lock --redact)
+          if [ -n "$BASE" ]; then ARGS+=(--gold-diff "$BASE"); fi
+          {
+            echo "### F6 validate"
+            if [ -n "$NOTE" ]; then echo "$NOTE"; fi
+            echo '```json'
+          } >> "$GITHUB_STEP_SUMMARY"
+          STATUS=0
+          npx tsx scripts/evals/validate.ts "${ARGS[@]}" | tee -a "$GITHUB_STEP_SUMMARY" || STATUS=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
+      # F6 end
       - name: Install PostgreSQL 17 binaries
         run: |
           sudo apt-get update
@@ -36,6 +88,24 @@ jobs:
         run: npm run test:db
         env:
           S4_POSTGRES_BIN: /usr/lib/postgresql/17/bin
+      # F6 begin
+      - name: F6 frozen replay report digest (spec §10)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=()
+          for f in reports/evals/*.json; do
+            if grep -q '"kind":"replay_consistency"' "$f" && grep -q '"mode":"ci"' "$f" && grep -q '"id":"replay/facts.frozen"' "$f"; then found+=("$f"); fi
+          done
+          echo "### F6 frozen replay report" >> "$GITHUB_STEP_SUMMARY"
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "no frozen replay report under reports/evals/" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          { echo '```'; sha256sum "${found[@]}"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # F6 end
       - name: Fresh and seeded migration rehearsal
         run: npm run test:migrations
         env:
@@ -72,6 +142,9 @@ jobs:
           path: |
             reports/research-db-summary.json
             reports/migration-rehearsal.json
+            # F6 begin
+            reports/evals/**
+            # F6 end
       - name: Next-resolved patched image runtime
         run: node scripts/ci/sharp-runtime-smoke.mjs
       - run: npm run build
