@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 5 稿：Codex 增量审计 M1–M26、确认轮 §0.2、计划审计 `06-codex-plan-round1.md` P1-1…P2-4 与二轮 `08-codex-plan-round2.md` P1-1…P2-3 已处置；§0.2 的规则覆盖正文中与之冲突的旧表述，第 5 稿表优先于第 4 稿表）：宏观目录、原始字节存证与定位、无损十进制观测（FRED 公开 CSV + AKShare 官方主机适配器）、共用 DQ 批次/隔离/新鲜度、事务发布的事实快照、F4 契约的判定结果与 `MacroReadApi`、工作台 UI（判断层默认关闭）、派生事件与周期、冻结输入的关联分析。
+**Goal:** 落地规格 `docs/superpowers/specs/2026-11-04-macro-workbench-design.md`（第 6 稿：Codex 增量审计 M1–M26、确认轮 §0.2、计划审计 `06-codex-plan-round1.md` P1-1…P2-4、二轮 `08-codex-plan-round2.md` P1-1…P2-3 与三轮 `10-codex-plan-round3.md` P1-1…P2-4 已处置；§0.2 的规则覆盖正文中与之冲突的旧表述，第 6 稿表优先于第 5 稿表，第 5 稿表优先于第 4 稿表）：宏观目录、原始字节存证与定位、无损十进制观测（FRED 公开 CSV + AKShare 官方主机适配器）、共用 DQ 批次/隔离/新鲜度、事务发布的事实快照、F4 契约的判定结果与 `MacroReadApi`、工作台 UI（判断层默认关闭）、派生事件与周期、冻结输入的关联分析。
 
-**Architecture:** 一个迁移 `20261114090000_macro_workbench.sql` 建十二表、私有桶 `macro-raw`、写入/发布/隔离裁决/ingest 租约（所有者令牌栅栏、独占可续 finish）/分析几类 `security definer` RPC 与 RLS（发布资格：观测 ok + 批次 success/partial + 派生祖先递归合格，`macro_ineligible_ids`）；`src/lib/macro/db.ts` 的 `MacroDb` 契约有 Supabase（rpc + anon 读）与内存两个实现；采集编排 `ingest.ts` 只依赖注入的 `MacroDb`、`EvidenceStore`、`TableClient`（DQ）；数值只由 TS 解析器从存证字节中取出（Python/AKShare 只抓取、录制原始响应并给出交叉核对值）；判定、事件、周期、相关全是纯函数。
+**Architecture:** 一个迁移 `20261114090000_macro_workbench.sql` 建十二表、私有桶 `macro-raw`、写入/发布/隔离裁决/ingest 租约（所有者令牌栅栏、独占可续 finish）/分析几类 `security definer` RPC 与 RLS（发布资格：观测 ok + 批次 success/partial + 派生祖先递归合格，`macro_ineligible_ids`）；`src/lib/macro/db.ts` 的 `MacroDb` 契约有 Supabase（rpc + anon 读；判定结果 `macro_regime_results` 只经 admin 读，第 6 稿 P1-2）与内存两个实现；AKShare finish 与 cron 的批次结束、AKShare finish 的新鲜度写入是宏观自有的栅栏 RPC（`macro_finalize_batch` / `macro_record_freshness`，与检查点同事务，第 6 稿 P1-1）；采集编排 `ingest.ts` 只依赖注入的 `MacroDb`、`EvidenceStore`、`TableClient`（DQ）；数值只由 TS 解析器从存证字节中取出（Python/AKShare 只抓取、录制原始响应并给出交叉核对值）；判定、事件、周期、相关全是纯函数。
 
 **Tech Stack:** Next.js 15 App Router、TypeScript、Supabase（PostgreSQL 17 + PostgREST + Storage）、vitest、`pg`（集成测试）、`tsx` 脚本、Python 3.12 + AKShare（只在本机 uv 虚拟环境，非 Vercel 依赖）、`lightweight-charts`（已有）、next-intl。
+
+**F4 接口说明（第 6 稿 P1-2）：** `macro_regime_results` 只授 service_role（anon/authenticated 无 SELECT），判定只在服务端、`MACRO_JUDGMENTS_ENABLED === '1'` 时经 `MacroReadApi` / 路由读出。F4 计划里为宏观快照构建输入的 anon 路径（anon 直读 `macro_snapshots` / `macro_regime_results`）必须改用服务端 `macroReadApi(db)`（`src/lib/macro/read-api.ts`，db = `supabaseMacroDb({admin, anon})`），不得直读宏观表。
 
 实施分工（owner 规则）：Opus 5.5 指挥与复审，Sonnet 5.5 子代理逐任务写代码（TDD），每个任务经 Opus 规格复审、质量复审与 Codex（gpt-6-astra，medium）审计；记录在 `docs/audits/2026-11-06-macro-workbench/10-implementation-log.md`。
 
@@ -23,11 +25,11 @@
 - **迁移**：可重放（`create table if not exists`、`create or replace function`、`drop policy if exists` 后 `create policy`、`insert … on conflict`）；`supabase/migrations.lock.json` 追加 `{file, sha256}`（文件字节 hex；`shasum -a 256`）；已锁文件不可再改，所以迁移在 Task 1 一次写全，之后的任务**不得修改迁移**（发现问题回到 Task 1 的修复轮，在锁之前改）。`scripts/ci/research-checks.ts::migrationInventory` 要求未锁迁移晚于已锁最新（`20261106090000`）。
 - **本地 harness** 只建了 `storage.buckets(id,name,public,file_size_limit,allowed_mime_types)`：迁移只能 `insert into storage.buckets … on conflict (id) do update`，不能引用 `storage.objects`。PostgREST `max_rows=1000`：返回多行的读取要分页或用 jsonb 信封。
 - **托管实例** `postgres` 不是超级用户：`security definer` 函数 `set search_path = public`；不 `alter … owner`。Supabase 默认给 anon/authenticated 新函数 EXECUTE：每个函数后 `revoke execute on function … from public, anon, authenticated;` 再按需 `grant`。
-- **权限模式**：十二表先 `revoke all … from public, anon, authenticated, service_role`；`macro_series`、`macro_catalog_versions`、`macro_evidence_objects`、`macro_retrievals`、`macro_snapshots`、`macro_regime_results` grant select 给 anon、authenticated、service_role；`macro_observations` grant select 给 anon、authenticated、service_role，RLS policy `status = 'ok'`（service_role 绕过 RLS）；`macro_analysis_runs` grant select 给 authenticated（RLS `user_id = auth.uid()`）与 service_role；`macro_publish_state`、`macro_ingest_chunks`、`macro_ingest_runs`、`macro_quarantine_members` 只 service_role select。**没有角色有直接 insert/update/delete**：写只经 RPC。
+- **权限模式**：十二表先 `revoke all … from public, anon, authenticated, service_role`；`macro_series`、`macro_catalog_versions`、`macro_evidence_objects`、`macro_retrievals`、`macro_snapshots` grant select 给 anon、authenticated、service_role；`macro_observations` grant select 给 anon、authenticated、service_role，RLS policy `status = 'ok'`（service_role 绕过 RLS）；`macro_analysis_runs` grant select 给 authenticated（RLS `user_id = auth.uid()`）与 service_role；`macro_publish_state`、`macro_ingest_chunks`、`macro_ingest_runs`、`macro_quarantine_members`、`macro_regime_results`（第 6 稿 P1-2：判定结果不对公开 anon key 暴露，判断层关闭时也不可直读）只 service_role select。**没有角色有直接 insert/update/delete**：写只经 RPC。
 - **数据库测试**：`process.env.S4_TEST_STATE` → `adminUrl`，`describe.skipIf(!enabled)`。任何含字符串 `S4_TEST_STATE` 的 `.test.ts` 必须加进 `scripts/ci/research-checks.ts::criticalSuites`（`// MACRO` 块）。单文件对空库：`LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts <file>`（`db-one.ts` 内容见 `docs/superpowers/plans/2026-11-04-HANDOFF-data-foundation-2-execution.md` §5，未提交，丢了按原文重建）；重放迁移助手 `replayMigration` 从 `src/lib/facts/facts.integration.test.ts` 复制（未导出）。`LC_ALL=C` 只给 `test:db`/`test:migrations`/`db-one`，不要导出给 `npm test`。
 - **客户端**：服务端写 `getAdminSupabase()`（`src/lib/supabase/admin.ts`）；公开读 `getAnonSupabase()`（`src/lib/supabase/anon.ts`）；登录用户 `getServerSupabase()`（`src/lib/supabase/server.ts`，`auth.getUser()` 无用户 → 401）；DQ 用 `TableClient`（`src/lib/db/table-client.ts`，计划一的 `supabaseTableClient`）。新 RPC 不登记进 `Database['public']['Functions']`，按 `src/lib/supabase/admin.ts` 注释的窄类型办法调用。
 - **cron 鉴权**：`authorizedCronRequest(req.headers.get('authorization'), process.env.CRON_SECRET)`（`src/lib/observability/cron-auth.ts`）。**ingest 鉴权**：`MACRO_INGEST_SECRET`，Bearer，`crypto.timingSafeEqual`，未配置即 503 拒绝。
-- **代码版本**：`resolveCodeVersion()`（`src/lib/facts/deps.ts`）。**十进制**：`canonicalDecimal` / `decimalEquals`（`src/lib/facts/json-numbers.ts`）。**DQ**：`startBatch/finishBatch/emptyCounts`（`src/lib/dq/batches.ts`）、`quarantine()`（`src/lib/dq/quarantine.ts`）、`recordAttempt/freshnessOf`（`src/lib/dq/freshness.ts`）、`rangeRule/jumpRule/unitRule`（`src/lib/dq/rules.ts`）——只调用，不修改这些文件。
+- **代码版本**：`resolveCodeVersion()`（`src/lib/facts/deps.ts`）。**十进制**：`canonicalDecimal` / `decimalEquals`（`src/lib/facts/json-numbers.ts`）。**DQ**：`startBatch/finishBatch/emptyCounts`（`src/lib/dq/batches.ts`）、`quarantine()`（`src/lib/dq/quarantine.ts`）、`recordAttempt/freshnessOf`（`src/lib/dq/freshness.ts`）、`rangeRule/jumpRule/unitRule`（`src/lib/dq/rules.ts`）——只调用，不修改这些文件。**宏观自有的栅栏副作用（第 6 稿 P1-1/P2-4）**：AKShare finish 与 cron 不调用 `finishBatch`，改用 `MacroDb.finalizeBatch`（SQL `macro_finalize_batch`：run 行锁下校验所有者 + finish 令牌，只在 `status='running'` 时写 status/counts/errors/finished_at，列语义同 `finishBatch`；状态由 TS 的 `batchStatusFromCounts` 算出后传入，错误在 TS 按同样上限截断——`ingest.ts::batchFinalizeInput`）；AKShare finish 不调用 `recordAttempt`，改用 `MacroDb.recordFreshness`（SQL `macro_record_freshness`：同一把锁下 upsert `dq_freshness`，语义同 `recordAttempt` / `computeFreshness`，并在同一事务写 `freshness_recorded` 检查点）。`startBatch`、`start` 动作里结束被作废/被拒批次的 `finishBatch`、cron 的 `recordAttempt('macro.fred')`（cron 无 run 行，单写者由 Vercel cron 保证）照旧调用共用代码。`quarantine()` 仍是共用助手：被栅栏挡下的旧 worker 可能已经在 `dq_quarantine` 里留下一个 open 条目（`quarantine()` 不带令牌），但它之后的 `linkQuarantine` 被 `fenced`，条目没有成员——无成员的 open 条目无害（只能拒绝或被下一次同键冲突复用并链接），所以不为它加栅栏。
 - **i18n**：新域 `macro` 注册到 `src/i18n/request.ts` 的 `MESSAGE_DOMAINS`（`// MACRO` 块）；`messages/zh/macro.json` 与 `messages/en/macro.json` 键集合与占位符一致。现有 `src/i18n/messages-parity.test.ts` 只校验固定域列表、不含 `macro`，所以 Task 16 新增专用测试 `src/components/macro/macro-messages.test.ts`（键集合、占位符、判断层词汇、MACRO 块注册），不改共享测试。
 - **数值转换边界（§0.2 M8）**：`value_text` 只在三处变成浮点数：`quality.ts`（规则检查）、`regime.ts`（判定输入）、`correlation.ts`（相关分析本质上是浮点运算；变化量先按十进制精确算出，每个值只 `Number()` 一次）。`read-api.ts` 的 `MacroObservationRef.value` 是 F4 契约要求的形状（`Number(value_text)`），不参与本模块计算。UI 图表只为画图转数字，打印的数字一律来自 `value_text`。
 - **UI**：遵守 `DESIGN.md` 与 `src/app/globals.css` tokens（无紫色、无渐变文字、无发光、圆角 ≤ 6px、数字 `font-mono tabular-nums`、数据密度 `[data-density="data"]`）；视觉依据为宏观 Claude Design 画布 `https://claude.ai/artifact/StRedLKWSN4EVb26GSg7KH`（判断层关闭的概览、证据抽屉、Today 卡画板在第 2 稿补充；UI 任务开工前读画布）。每张图表有表格视图。
@@ -75,7 +77,7 @@ src/lib/macro/regime.ts            RULES、RULES_VERSION、METHODOLOGY_VERSION�
 src/lib/macro/freshness.ts         releaseTimeliness、collectionStatus、datasetOf（Task 11）
 src/lib/macro/snapshots.ts         buildRegimeInput / publishRegion / catalogCounts / catalogItemsOf（Task 11）
 src/lib/macro/testing/seed.ts      测试用种子（seedCatalog、seedRetrieval、seedPoints、yoyPoints、US_FIXTURE；只写原生输入，派生经 deriveAndWrite；仅测试 import；Task 11）
-src/lib/macro/read-api.ts          macroReadApi(db)（Task 12）
+src/lib/macro/read-api.ts          macroReadApi(db, {judgments})（判定受 MACRO_JUDGMENTS_ENABLED 控制，第 6 稿 P1-2；Task 12）
 src/lib/macro/replay.test.ts       证据 → 观测离线重放（Task 12；Task 13 追加概览追溯用例）
 src/lib/macro/views.ts             overviewEnvelope、IndicatorRow / ChangeItem / Changes / Envelope、COMPACT_KEYS、changeOf（Task 13）
 src/lib/macro/route-helpers.ts     requireSessionUser、参数解析、错误响应、shaOfRetrievals、macroRouteDeps（Task 13）
@@ -183,8 +185,11 @@ export interface ChunkCounts{fetched:number;inserted:number;duplicates:number;ve
 /** Same shape as dq/batches BatchError (kept structural so types.ts imports nothing from dq). */
 export interface ChunkError{code:string;key?:string;message?:string}
 /** macro_ingest_chunks row (第 4 稿 P1-6/P2-1): claimed as processing, completed once with counts, errors and claim/location keys.
- *  Chunk counts are NATIVE outcomes only (chunks carry evidence); derived counts live in FinishProgress.derived (第 5 稿 P2-2). */
-export interface ChunkRecord{seq:number;total:number;state:'processing'|'done';counts:ChunkCounts;errors:ChunkError[];claim_keys:string[];located_keys:string[]}
+ *  Chunk counts are NATIVE outcomes only (chunks carry evidence); derived counts live in FinishProgress.derived (第 5 稿 P2-2).
+ *  native_usable (第 6 稿 P2-1): native rows that are usable data = inserted + versioned + duplicates EXCLUDING previously_rejected
+ *  (the RPC counts a rejected redelivery under duplicates); kept apart from the six DQ counters, which stay unchanged. Derivation,
+ *  publication and freshness ok gate on Σ native_usable > 0. */
+export interface ChunkRecord{seq:number;total:number;state:'processing'|'done';counts:ChunkCounts;native_usable:number;errors:ChunkError[];claim_keys:string[];located_keys:string[]}
 /** aborted (第 5 稿 P1-3): a takeover fenced this run; every later mutation carrying its owner token raises `fenced`. */
 export type IngestRunState='open'|'finishing'|'finished'|'aborted';
 /** The lease answer of macro_claim_ingest (第 5 稿 P1-3/P2-1). ownerToken only when claimed. aborted = batch ids of this
@@ -193,21 +198,32 @@ export interface IngestClaim{status:'claimed'|'busy';ownerToken:string|null;abor
 /** Exclusive finish (第 5 稿 P1-4): beginFinish hands the owner a fresh finishToken (rotated on every resume, which fences an
  *  older concurrent finisher of the same owner at its next checkpoint); every recordFinishStep presents both tokens. */
 export interface FinishFence{ownerToken:string;finishToken:string}
-export type FinishStep='derived'|'batch_finished'|'freshness_started'|'freshness_recorded'|'published'|'publish_attempt'|'receipt';
-/** macro_ingest_runs.finish_progress (第 4 稿 P2-4; 第 5 稿 P1-4/P1-5/P2-2): every finish step that already happened, so a
- *  retried finish resumes. freshness_started is written BEFORE recordAttempt and freshness_recorded after it; a retry that
- *  finds only freshness_started skips recordAttempt (one lost attempt record is preferred to a double-counted error).
+/** Steps recorded through macro_record_finish_step. freshness_recorded is NOT one of them (第 6 稿 P1-1): only
+ *  macro_record_freshness writes it, in the same transaction as the dq_freshness upsert. */
+export type FinishStep='derived'|'batch_finished'|'published'|'publish_attempt'|'receipt';
+/** macro_ingest_runs.finish_progress (第 4 稿 P2-4; 第 5 稿 P1-4/P1-5/P2-2; 第 6 稿 P1-1): every finish step that already happened,
+ *  so a retried finish resumes. freshness_recorded is written atomically with the freshness side effect (status = the stored
+ *  dq_freshness status), so a retry either sees it and skips, or repeats a write that never committed — never a double count.
  *  publish_attempt appends to attempts[] (retryable publication failures; the run stays finishing). */
 export interface FinishProgress{
  derived?:{counts:ChunkCounts;errors:ChunkError[]}|{skipped:'no_native_outcomes'};
  batch_finished?:{status:string;date:string};
- freshness_started?:{ok:boolean};
- freshness_recorded?:{ok:boolean;skipped?:'started_without_record'};
+ freshness_recorded?:{ok:boolean;status:string};
  published?:Record<string,unknown>;
  attempts?:{at:string;status:string;reason:string|null}[];
  receipt?:Record<string,unknown>;
  aborted?:{by:string;reason:'max_age'|'stalled_chunk'};
 }
+/** ingest_batches statuses a finalizer may write (第 6 稿 P1-1/P2-4); 'running' is only ever read back. Structural twin of
+ *  dq/batches BatchStatus (types.ts imports nothing from dq). */
+export type FinalStatus='success'|'partial'|'failed'|'rejected';
+/** MacroDb.finalizeBatch input: status computed in TS (batchStatusFromCounts, or an explicit 'failed' for a fatal abort), the six
+ *  counters, errors already capped like finishBatch (≤ 100 + one `truncated`, messages ≤ 500), finishedAt ISO (SQL keeps it ≥ started_at). */
+export interface FinalizeInput{status:FinalStatus;counts:ChunkCounts;errors:ChunkError[];finishedAt:string}
+/** finalized=false: the batch was no longer running (an earlier attempt finished it); status is the stored one, read back. */
+export interface FinalizeResult{status:FinalStatus|'running';finalized:boolean}
+/** MacroDb.recordFreshness input (第 6 稿 P1-1): same semantics as dq/freshness recordAttempt. dataset must be the run's dataset. */
+export interface FreshnessWrite{dataset:string;ok:boolean;cadence:'daily'|'monthly'|'quarterly'|'event';now:string;detail:Record<string,unknown>}
 /** One member of a dq_quarantine item (macro_quarantine_members ⨝ macro_observations; 第 4 稿 P1-4). */
 export interface QuarantineMember{observation_id:string;series_id:string;period_end:string;value_text:string;version:number;status:ObservationStatus}
 export type Timeliness='current'|'late'|'missing'|'n/a';
@@ -270,8 +286,9 @@ export interface MacroDb{
  /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. Wrong token or
   *  an aborted run ⇒ fenced. service */
  claimChunk(batchId:string,seq:number,total:number,ownerToken:string):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
- /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets (owner-fenced). service */
- completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
+ /** RPC macro_complete_chunk: processing → done with counts, nativeUsable (第 6 稿 P2-1: usable native rows, previously_rejected
+  *  excluded; 0 ≤ nativeUsable ≤ inserted+versioned+duplicates), sanitized errors and claim/location key sets (owner-fenced). service */
+ completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;nativeUsable:number;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
  chunksOf(batchId:string):Promise<import('./types').ChunkRecord[]>;                                              // service, seq order
  ingestRun(batchId:string):Promise<{dataset:string;state:import('./types').IngestRunState;progress:import('./types').FinishProgress}|null>;   // service
  /** RPC macro_begin_finish (第 5 稿 P1-4): only the token owner; open → finishing once every chunk 0..total−1 is done; a
@@ -279,8 +296,18 @@ export interface MacroDb{
   *  the stored progress; another owner or an aborted run ⇒ fenced. service */
  beginFinish(batchId:string,total:number,ownerToken:string):Promise<{status:'incomplete';missing:number[]}|{status:'finishing';progress:import('./types').FinishProgress;finishToken:string}|{status:'finished';progress:import('./types').FinishProgress}>;
  /** RPC macro_record_finish_step: merges one step into finish_progress (publish_attempt appends to attempts[]); 'receipt'
-  *  finishes the run. Both tokens must match the run (else fenced). service */
+  *  finishes the run. Both tokens must match the run, checked before any state error (else fenced, 第 6 稿 P1-1). service */
  recordFinishStep(batchId:string,step:import('./types').FinishStep,data:Record<string,unknown>,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
+ /** RPC macro_finalize_batch (第 6 稿 P1-1/P2-4): under the run lock (fence = owner + finish token of the AKShare finish; null for
+  *  cron, whose batch has no run row — a batch WITH a run refuses a null fence) writes ingest_batches status/counts/errors/
+  *  finished_at (≥ started_at) only while status='running'; otherwise returns the stored status with finalized:false (an
+  *  earlier attempt finished it). Token mismatch / aborted run ⇒ fenced; unknown batch ⇒ not_found. service */
+ finalizeBatch(batchId:string,input:import('./types').FinalizeInput,fence:import('./types').FinishFence|null):Promise<import('./types').FinalizeResult>;
+ /** RPC macro_record_freshness (第 6 稿 P1-1): under the run lock, both tokens checked first (fenced), run finishing
+  *  (run_not_finishing), dataset = the run's dataset; upserts dq_freshness with recordAttempt / computeFreshness semantics and
+  *  writes the freshness_recorded checkpoint in the same transaction. Already recorded for this run ⇒ returns the progress
+  *  unchanged (no second write). Returns the progress. service */
+ recordFreshness(batchId:string,input:import('./types').FreshnessWrite,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
  /** RPC macro_write_observations. ownerToken as putRetrieval (第 5 稿 P1-3). service */
  writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[],ownerToken?:string|null):Promise<import('./types').WriteResult>;
  /** Latest period per series, highest ok version within it; asOf ⇒ only rows with available_at ≤ asOf. anon. */
@@ -297,8 +324,11 @@ export interface MacroDb{
  versionsOf(seriesId:string,periodEnd:string):Promise<import('./types').ObservationRow[]>;
  observationsByIds(ids:string[]):Promise<import('./types').ObservationRow[]>;                                    // anon; ok only
  publishState(region:import('./types').Region):Promise<{revision:number;inputRevision:number}>;                   // service
- /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds quarantined/rejected
-  *  rows of the item's natural key; a closed item ⇒ quarantine_closed. batchId + ownerToken fence the AKShare path (第 5 稿 P1-3). service */
+ /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3; 第 6 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds
+  *  quarantined/rejected rows of the item's natural key. A closed item: if every given row is a member of THIS item and is now
+  *  ok or rejected (the item's recorded resolution disposed of it), linking is already complete ⇒ returns 0; otherwise (a row
+  *  still quarantined) ⇒ quarantine_closed and the caller re-parks. Callers link one observation per call. batchId + ownerToken
+  *  fence the AKShare path (第 5 稿 P1-3). service */
  linkQuarantine(quarantineId:string,observationIds:string[],fence?:{batchId:string;ownerToken:string|null}):Promise<number>;
  /** Members of one item with their current status, version ascending. service */
  quarantineMembers(quarantineId:string):Promise<import('./types').QuarantineMember[]>;
@@ -318,11 +348,13 @@ export interface MacroDb{
  snapshotsSince(marker:{created_at:string;snapshot_id:string}|null,limit:number):Promise<import('./types').SnapshotRecord[]>;   // anon; active+superseded only
  /** The newest non-failed snapshot of the region created strictly before beforeCreatedAt ("changes since the previous snapshot"). anon. */
  previousSnapshot(region:import('./types').Region,beforeCreatedAt:string):Promise<import('./types').SnapshotRecord|null>;
- regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;                                       // anon
+ /** macro_regime_results is service-only (第 6 稿 P1-2): read through the admin client; callers expose it only server-side
+  *  behind MACRO_JUDGMENTS_ENABLED. service */
+ regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;
 }
 ```
 
-`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效）；`memoryMacroDb()`（无参数，不要求 `ingest_batches` 行）在内存里实现同样语义（含 `stale_publisher`、隔离/拒绝行不可读、版本规则、发布资格、隔离成员、ingest 租约与分块认领）。内存库没有 `ingest_batches` 表：批次状态由 `setBatchStatus(batchId, status)` 声明，**从未声明的批次按 `success` 处理**（等同 SQL 中批次已正常结束；只建模发布前状态的单测无需登记批次），建模未结束/失败批次的测试显式声明 `running` / `failed`；共用契约的 harness 用 `batch()` 建 `running` 批次、`finish(batchId,status)` 结束它，两种实现语义一致。路由与视图的全部数据库读取都经 `MacroDb`（`previousSnapshot`、`retrievalsOf`、`retrievalsByIds` 也在这里），`route-helpers.ts` 不写临时 anon 查询。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 只授 service_role，Task 15 路由经 `requireSessionUser()` 取得已验证的会话用户后，用 admin 客户端 rpc 并传 `p_user_id`；读单个运行走登录用户的 server 客户端（RLS `user_id = auth.uid()`）。
+`supabaseMacroDb({admin, anon})` 写走 admin（rpc），读走 anon（RLS 生效），`regimeOf` 例外走 admin（第 6 稿 P1-2）；`memoryMacroDb(opts?: {tables?: TableClient})`（可无参数调用，不要求 `ingest_batches` 行）在内存里实现同样语义（含 `stale_publisher`、隔离/拒绝行不可读、版本规则、发布资格、隔离成员、ingest 租约与分块认领）。内存库没有 `ingest_batches` 表：批次状态由 `setBatchStatus(batchId, status)` 声明，**从未声明的批次按 `success` 处理**（等同 SQL 中批次已正常结束；只建模发布前状态的单测无需登记批次），建模未结束/失败批次的测试显式声明 `running` / `failed`；`claimIngest` 取得租约时把该批次声明为 `running`（SQL 只允许 running 批次取租约）。`finalizeBatch` / `recordFreshness`（第 6 稿 P1-1）需要传入的 `tables`（DQ 的 `TableClient`，路由测试里与路由共用同一个 `memoryTableClient`）：令牌校验后写 `tables` 的 `ingest_batches` / `dq_freshness`（新鲜度用落地的 `recordAttempt`，与 SQL 平价测试同一语义），`finalizeBatch` 同时 `setBatchStatus` 为写入的状态，于是发布资格立即反映结束状态；没传 `tables` → `rpc_failed:memory_tables_required`；共用契约的 harness 用 `batch()` 建 `running` 批次、`finish(batchId,status)` 结束它，两种实现语义一致。路由与视图的全部数据库读取都经 `MacroDb`（`previousSnapshot`、`retrievalsOf`、`retrievalsByIds` 也在这里），`route-helpers.ts` 不写临时 anon 查询。分析运行不在 `MacroDb` 里：`create_macro_analysis_run` 只授 service_role，Task 15 路由经 `requireSessionUser()` 取得已验证的会话用户后，用 admin 客户端 rpc 并传 `p_user_id`；读单个运行走登录用户的 server 客户端（RLS `user_id = auth.uid()`）。
 
 Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated/service_role，RLS 生效）：`macro_latest_observations(p_series_ids text[], p_as_of timestamptz, p_period_end_lte date) returns setof macro_observations`（每序列最新期内最高 ok 版本，至多一行/序列）、`macro_snapshots_since(p_created_at timestamptz, p_snapshot_id uuid, p_limit int) returns setof macro_snapshots`（按 `(created_at, snapshot_id)` 键集分页，`p_limit` 夹在 1..1000）。发布资格读函数（`security definer`，只授 service_role，因为 `ingest_batches` 只有 service 可读）：`macro_latest_eligible_observations(p_series_ids, p_as_of, p_period_end_lte, p_include_batch)` 与 `macro_eligible_history(p_series_id, p_from, p_to, p_as_of, p_include_batch, p_after, p_limit)`（每期最高合格版本、按 `period_end` 升序、`p_after` 键集分页、每页 ≤ 1000）；二者都经 `macro_ineligible_ids(p_ids uuid[], p_include_batch uuid)`（见下文"发布资格"）。写目录走 service RPC `macro_upsert_catalog(p_catalog_version, p_rules_version, p_defs jsonb)`：同一版本号已存在且目录 JSON 不同 → `catalog_version_conflict`（一个版本号永远只指一个目录）。
 
@@ -357,7 +389,7 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 
 ### 隔离裁决（SQL `macro_link_quarantine` + `macro_resolve_conflict`；Task 1 / Task 6 / Task 18；第 4 稿 P1-4）
 
-成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[], p_batch_id, p_owner_token)`：先所有者校验（第 5 稿 P1-3），再 **`select … from dq_quarantine where id = … for update`**（与裁决同一把行锁，第 5 稿 P2-3）：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）、仍为 `open`（否则 `quarantine_closed`）；每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。`quarantine_closed`：裁决在 `quarantine()` 与链接之间关闭了条目——Task 6 再调一次 `quarantine()`（旧条目已非 open，于是新建 open 条目）并重试链接一次；仍失败则整块失败（`IngestAbort('quarantine_link_failed')`，不 `completeChunk`），绝不留下未绑定的被隔离行。
+成员表 `macro_quarantine_members(quarantine_id, observation_id)`（主键二者，只追加，只 service 可读）。Task 6 在 `quarantine()` 返回（可能复用的）条目 id 后，立即对 conflict 的 `observation_id` 调 `macro_link_quarantine(p_quarantine_id, p_observation_ids uuid[], p_batch_id, p_owner_token)`：先所有者校验（第 5 稿 P1-3），再 **`select … from dq_quarantine where id = … for update`**（与裁决同一把行锁，第 5 稿 P2-3）：条目必须存在（`not_found`）、`dataset` 以 `macro.` 开头且 `table_name='macro_observations'`（`invalid_item`）；条目已关闭时**原子地检查确切成员（第 6 稿 P2-3）**：给定的每个观测都已是**本条目**成员且现为 `ok` 或 `rejected`（本条目的裁决已处置它：并发接受 / 拒绝了复用的成员）→ 链接视为已完成，返回 0；否则（有观测仍是 `quarantined`）→ `quarantine_closed`；条目 open 时每个观测必须是 `quarantined` 或 `rejected` 且 `series_id|period_end` 等于条目的 `natural_key`（`invalid_member`）；重复链接无副作用；返回新增成员数。调用方每次只链接一个观测（Task 6）。`quarantine_closed`（行仍被隔离，裁决在 `quarantine()` 与链接之间关闭了条目）——Task 6 再调一次 `quarantine()`（旧条目已非 open，于是新建 open 条目）并重试链接一次；仍失败则整块失败（`IngestAbort('quarantine_link_failed')`，不 `completeChunk`），绝不留下未绑定的被隔离行。
 
 `macro_resolve_conflict(p_quarantine_id uuid, p_decision text, p_resolved_by uuid, p_observation_id uuid default null)`，只授 service_role。锁 `dq_quarantine` 行（`for update`），不存在 → `not_found`，`dataset`/`table_name`/`natural_key` 不合 → `invalid_item`，非 `open` → `already_resolved`。
 - `accept`：`reason_code` 为 `adapter_mismatch` 或 `rule_failed:%` → `reject_only`（这两类值从未写入，SQL 强制只能拒绝）；`p_observation_id` 为空 → `observation_required`；它必须是该条目的成员（`not_member`）、当前 `quarantined`（`not_quarantined`；被拒绝的行永不复活），且其批次不是 `failed`/`rejected`（`member_ineligible`，第 5 稿 P1-6：接受失败批次的行只会得到一个永不合格的 ok 行；成功批次的重交付是同一条目下另一个成员）→ 该行 `ok`；该条目其余仍为 `quarantined` 的成员全部 `rejected`；区域 `input_revision+1`。
@@ -365,28 +397,30 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 - 两种决定都把 `dq_quarantine` 置 `resolved_accept`/`resolved_reject`、`resolved_by`、`resolved_at=now()`，插入 `research_audit_log`（action `dq.quarantine_resolve`，object_type `dq`，detail 含 `decision`、`observation_id`、`rejected` 数）。一个事务。返回 `{status, observation_id, rejected}`。
 - 观测状态只允许 `quarantined → ok` 与 `quarantined → rejected`（触发器）。`rejected` 行对 anon 不可见、永不合格；同值再交付（无论 `available_at` 多新）不会再插入（写入规则第 3 步，`previously_rejected`，第 5 稿 P1-2），conflict 的 `observation_id` 指向那条 rejected 行，不建新条目。
 
-### ingest 租约、所有者令牌、分块与独占可续完成（SQL `macro_claim_ingest` / `macro_assert_owner` / `macro_claim_chunk` / `macro_complete_chunk` / `macro_begin_finish` / `macro_record_finish_step`；Task 1 / Task 3 / Task 6 / Task 8 / Task 9 / Task 11；第 4 稿 P1-6、P2-1、P2-4；第 5 稿 P1-3、P1-4、P1-5、P2-1）
+### ingest 租约、所有者令牌、分块与独占可续完成（SQL `macro_claim_ingest` / `macro_assert_owner` / `macro_claim_chunk` / `macro_complete_chunk` / `macro_begin_finish` / `macro_record_finish_step` / `macro_finalize_batch` / `macro_record_freshness`；Task 1 / Task 3 / Task 6 / Task 7 / Task 8 / Task 9 / Task 11；第 4 稿 P1-6、P2-1、P2-4；第 5 稿 P1-3、P1-4、P1-5、P2-1；第 6 稿 P1-1、P2-1、P2-4）
 
-一个统一机制：**每次 ingest 写入都由 run 的所有者令牌栅栏保护，接管在同一事务里作废旧所有者；finish 由所有者独占、按步骤检查点幂等。**
+一个统一机制：**每次 ingest 写入都由 run 的所有者令牌栅栏保护，接管在同一事务里作废旧所有者；finish 由所有者独占、按步骤检查点幂等；finish 的不可重放副作用（批次结束、新鲜度）在宏观 RPC 里与令牌校验同事务完成——栅栏挡的是副作用本身，不只是检查点（第 6 稿 P1-1）。**
 
 - `macro_ingest_runs(batch_id pk → ingest_batches, dataset, state 'open'|'finishing'|'finished'|'aborted', owner_token uuid not null, processing_timeout interval not null default '10 minutes', finish_token uuid, finish_progress jsonb, created_at, updated_at)`，部分唯一索引 `(dataset) where state in ('open','finishing')` = 单写者租约。触发器：身份列（`batch_id, dataset, owner_token, processing_timeout, created_at`）不可改；状态只走 `open → finishing → finished`、`open|finishing → aborted`；`finished` / `aborted` 冻结。
 - **所有者校验** `macro_assert_owner(p_batch_id, p_owner_token, p_states text[]) returns macro_ingest_runs`（service-only 辅助，每个变更 RPC 开头调用；锁序恒为 run 行 → 其他行）：`p_batch_id` 为空 → 不校验（只有测试与 Task 18 的无批次链接）；`select … from macro_ingest_runs where batch_id = p_batch_id for update`；无 run 行 → 令牌必须为空（FRED cron：单写者由 Vercel cron 保证，批次没有 run 行），否则 `fenced`；有 run 行 → 令牌必须非空且等于 `owner_token`、`state = any(p_states)`，否则 `fenced`。所以一个 AKShare 批次永远不能被不带令牌的调用写入。
-- **带令牌的变更 RPC**：`macro_put_retrieval(…, p_owner_token)`、`macro_write_observations(…, p_owner_token)`、`macro_link_quarantine(…, p_batch_id, p_owner_token)`（状态 open/finishing：finish 内的派生也写入与链接）；`macro_claim_chunk(…, p_owner_token)`、`macro_complete_chunk(…, p_owner_token)`（open）；`macro_begin_finish(…, p_owner_token)`；`macro_record_finish_step(…, p_owner_token, p_finish_token)`；`publish_macro_snapshot(…, p_publish_key, p_batch_id, p_owner_token)`（finish 调用时）。被接管后仍在运行的旧 worker 的**每一个**变更都得到 `fenced`（MacroDbError 契约码，路由回 409 `fenced`）。
+- **带令牌的变更 RPC**：`macro_put_retrieval(…, p_owner_token)`、`macro_write_observations(…, p_owner_token)`、`macro_link_quarantine(…, p_batch_id, p_owner_token)`（状态 open/finishing：finish 内的派生也写入与链接）；`macro_claim_chunk(…, p_owner_token)`、`macro_complete_chunk(…, p_owner_token)`（open）；`macro_begin_finish(…, p_owner_token)`；`macro_record_finish_step(…, p_owner_token, p_finish_token)`、`macro_finalize_batch(p_batch_id, p_owner_token, p_finish_token, …)`、`macro_record_freshness(p_batch_id, p_owner_token, p_finish_token, …)`（finishing）；`publish_macro_snapshot(…, p_publish_key, p_batch_id, p_owner_token)`（finish 调用时）。**令牌不符永远先于任何终态错误判定**（第 6 稿 P1-1）：持旧 `finish_token` 的调用在 run 已 `finished` 之后仍得到 `fenced`，而不是 `run_not_finishing`。被接管后仍在运行的旧 worker 的**每一个**变更都得到 `fenced`（MacroDbError 契约码，路由回 409 `fenced`）。
 - `macro_claim_ingest(p_batch_id, p_dataset, p_max_age, p_processing_timeout, p_takeover)`：批次必须存在、同 dataset、`running`（`invalid_batch`）；按 dataset 取 advisory 锁；在同一事务里把该 dataset 中 ① `created_at < now() − p_max_age`（2 h）的 live run，以及 ② 当 `p_takeover = true` 时，任何有一块 `processing` 且 `received_at < now() − 该 run 的 processing_timeout`（10 min）的 live run，置 `aborted` 并在 progress 合并 `{aborted:{by: p_batch_id, reason: 'max_age'|'stalled_chunk'}}`；仍有 live run → `{status:'busy', holder, aborted}`（调用方把自己的批次以 `rejected` 结束并回 409 `batch_running`）；否则插入 run（`open`、新 `owner_token = gen_random_uuid()`、`processing_timeout = p_processing_timeout`）→ `{status:'claimed', owner_token, aborted}`。`aborted` = 该 dataset **所有**仍处于 `running` 批次的 aborted run 的 batch_id（不只本次新作废的）：调用方对每个用 `finishBatch(…failed, errors:[{code:'aborted'}])` 结束，只忽略 `batch_not_running`（已被别处结束 = 幂等），其他错误照常抛出；下一次 `start` 会再次列出仍在 running 的，自愈。Vercel 函数 `maxDuration`（300 s）< `processing_timeout`（600 s），所以健康的块永远不会被当作停滞。
-- `macro_ingest_chunks` 列 `state 'processing'|'done'`、`errors`、`claim_keys`、`located_keys`、`received_at`、`completed_at`；只允许 `processing → done`（触发器）。
+- `macro_ingest_chunks` 列 `state 'processing'|'done'`、`counts`、`native_usable`（第 6 稿 P2-1）、`errors`、`claim_keys`、`located_keys`、`received_at`、`completed_at`；只允许 `processing → done`（触发器）。
 - `macro_claim_chunk(p_batch_id, p_seq, p_total, p_owner_token)`：run 必须存在（`batch_not_claimed`）；令牌不符或 run `aborted` → `fenced`；`(batch, seq)` 已有行 → 返回存储的行 `{status: state, chunk}`（**不再处理**：processing → 路由 409 `chunk_in_progress`；done → 存储的回执）；run 非 `open` → `batch_not_open`；`total` 与已有块不一致 → `chunk_total_mismatch`；插入 processing 行 → `{status:'claimed'}`。
-- `macro_complete_chunk(p_batch_id, p_seq, p_counts, p_errors, p_claim_keys, p_located_keys, p_owner_token)`：所有者校验（open）后，只对 processing 行（否则 `chunk_not_processing`）写入计数（六个非负整数，**只含原生结果**）、错误（`{code,key?,message?}` 数组，≤ 500 条）与两组键并置 `done`。
+- `macro_complete_chunk(p_batch_id, p_seq, p_counts, p_native_usable, p_errors, p_claim_keys, p_located_keys, p_owner_token)`：所有者校验（open）后，只对 processing 行（否则 `chunk_not_processing`）写入计数（六个非负整数，**只含原生结果**）、`native_usable`（第 6 稿 P2-1：可用的原生行 = inserted + versioned + duplicates，**不含** `previously_rejected`；`0 ≤ native_usable ≤ inserted+versioned+duplicates`，否则 `invalid_chunk`）、错误（`{code,key?,message?}` 数组，≤ 500 条）与两组键并置 `done`。
 - **崩溃块的恢复（第 5 稿 P2-1）**：块在 `claimChunk` 之后、`completeChunk` 之前崩溃（观测可能已部分写入）就永远停在 `processing`。采集器在 `chunk_in_progress` 重试用尽、或任一响应为 `fenced` 时，**整次采集重来**：`start {takeover:true}` 取得新批次与新令牌（旧 run 若停滞超过 10 分钟即被作废，否则回 409 `batch_running` 并被轮询），然后把内存中的全部结果按新批次重新分块发送；**从不**在旧批次里补发部分块。旧批次以 `failed` 结束、其行永不合格；新批次里同值的重交付不是旧行的 duplicate（写入规则第 4 步只看合格或本批次的行），所以新批次完整成立。
 - **独占 finish（第 5 稿 P1-4）** `macro_begin_finish(p_batch_id, p_total, p_owner_token)`（`p_total` 0..10000）：锁 run；不存在 → `batch_not_claimed`；令牌不符或 `aborted` → `fenced`；`finished` → `{status:'finished', progress}`（回放回执）；`open` 且任一 seq 缺失/未完成或 total 不一致 → `{status:'incomplete', missing}`；`open` 且完整 → 置 `finishing`；`open → finishing` 与 `finishing`（同一所有者重试 = 续做）都生成新的 `finish_token` 并返回 `{status:'finishing', progress, finish_token}`。轮换令牌使同一所有者的较早的并发 finish 在其下一个检查点得到 `fenced`；另一个令牌的调用者永远 `fenced`。
-- `macro_record_finish_step(p_batch_id, p_step, p_data, p_owner_token, p_finish_token)`：`p_step ∈ derived | batch_finished | freshness_started | freshness_recorded | published | publish_attempt | receipt`；所有者与 `finish_token` 都必须相符（`fenced`），run 必须 `finishing`（`run_not_finishing`）；`publish_attempt` 追加到 `finish_progress.attempts`（≤ 20 条），其余合并；`receipt` 同时把 run 置 `finished`（释放租约）。
+- `macro_record_finish_step(p_batch_id, p_step, p_data, p_owner_token, p_finish_token)`：`p_step ∈ derived | batch_finished | published | publish_attempt | receipt`（`freshness_recorded` 只由 `macro_record_freshness` 写，第 6 稿 P1-1；其他 → `invalid_step`）；所有者与 `finish_token` 都必须相符、`aborted` → `fenced`（先于状态判定），run 必须 `finishing`（`run_not_finishing`）；`publish_attempt` 追加到 `finish_progress.attempts`（≤ 20 条），其余合并；`receipt` 同时把 run 置 `finished`（释放租约）。
+- **栅栏批次结束（第 6 稿 P1-1/P2-4）** `macro_finalize_batch(p_batch_id, p_owner_token, p_finish_token, p_status, p_counts, p_errors, p_finished_at)`：校验输入（`p_status ∈ success|partial|failed|rejected`；六计数对象同块校验；错误数组 ≤ 101 条、元素为带字符串 `code` 的对象；`p_finished_at` 非空）→ `select … from macro_ingest_runs where batch_id = p_batch_id for update`：有 run 行 → 两个令牌都必须相符、run 非 `aborted`（否则 `fenced`），且 `finishing`（`run_not_finishing`）；无 run 行（cron）→ 两个令牌必须都为空（否则 `fenced`）→ `select … from ingest_batches … for update`（不存在 → `not_found`）：`status <> 'running'` → 返回 `{status: 存储的状态, finalized:false}`（另一尝试已结束它：读回，绝不第二次结束）；否则写 `status, counts, errors, finished_at = greatest(p_finished_at, started_at)`（同 `finishBatch` 的列语义与 DQ 不变式）→ `{status, finalized:true}`。锁序 run 行 → 批次行。状态与错误截断在 TS 里算（`ingest.ts::batchFinalizeInput`：`batchStatusFromCounts` + `unaccounted` 前置错误 + 与 `finishBatch` 相同的 100 条 / 500 字上限与 `truncated` 标记），致命中止传显式 `'failed'`。
+- **栅栏新鲜度（第 6 稿 P1-1）** `macro_record_freshness(p_batch_id, p_owner_token, p_finish_token, p_dataset, p_ok, p_cadence, p_now, p_detail)`：校验输入 → 锁 run 行（不存在 → `batch_not_claimed`）→ **先**比令牌（任一不符或 `aborted` → `fenced`），再判 `finishing`（`run_not_finishing`）与 `p_dataset = run.dataset`（`invalid_dataset`）→ 已有 `freshness_recorded` → 原样返回 progress（不写第二次）→ 取 `dq_freshness:<dataset>` advisory 锁并读现有行 → `consecutive_errors = p_ok ? 0 : 旧值+1`、`last_ok_at = p_ok ? p_now : 旧值`、状态按 `computeFreshness`（`consecutive_errors ≥ 2` → error；无 `last_ok_at` → missing；`event` → fresh；`p_now − last_ok_at ≤ 窗口+宽限`（daily 1+2 天、monthly 31+3、quarterly 92+3，毫秒比较）→ fresh，否则 stale）→ upsert（`expected_cadence, last_ok_at, last_attempt_at = p_now, consecutive_errors, status, detail, updated_at = p_now`）→ 同一事务把 `freshness_recorded {ok, status}` 合并进 progress 并返回。平价测试（Task 1）逐例比对 SQL 状态与 `computeFreshness`。
 - **finish 步骤的幂等（按 `(batch_id, step)`）**：
-  - `derived`：派生按本质幂等（重试写出的都是 duplicate）；**本次采集没有任何原生 inserted/versioned/duplicates 结果**（块计数之和）→ 不派生，记 `{skipped:'no_native_outcomes'}`（第 5 稿 P2-2，见下）。
-  - `batch_finished`：`finishBatch` 抛 `batch_not_running`（另一次尝试已结束该批次但没留下检查点）→ 重读 `ingest_batches.status` 并记下它，绝不第二次结束。
-  - 新鲜度：**先**记 `freshness_started {ok}`，再 `recordAttempt`，再记 `freshness_recorded {ok}`；重试时若只有 `freshness_started` → **跳过** `recordAttempt`，记 `freshness_recorded {ok, skipped:'started_without_record'}`。理由：`src/lib/dq/freshness.ts::recordAttempt` 是读后 upsert、不幂等，重做会让 `consecutive_errors` 多加一次（两次即 `error`）；宁可丢一次尝试记录（下一次采集会写），也不重复计数。
+  - `derived`：派生按本质幂等（重试写出的都是 duplicate）；**本次采集没有任何可用原生结果**（`Σ native_usable = 0`，第 6 稿 P2-1）→ 不派生，记 `{skipped:'no_native_outcomes'}`（第 5 稿 P2-2，见下）。
+  - `batch_finished`：`finalizeBatch(…, fence)`；`finalized:false`（另一次尝试已结束该批次但没留下检查点）→ 记下读回的状态，绝不第二次结束；被接管的旧 finisher 得到 `fenced`，不改 `ingest_batches`（第 6 稿 P1-1）。
+  - 新鲜度：`recordFreshness(…, fence)` 一次调用完成 upsert 与 `freshness_recorded` 检查点（同事务，第 6 稿 P1-1）；崩溃或瞬时失败时事务回滚，重试再写一次，不会重复计数也不会丢记录；进度里已有 `freshness_recorded` → 跳过。旧 finisher 的调用在令牌校验处 `fenced`，不碰 `dq_freshness`（第 5 稿的 `freshness_started` 跳过逻辑已删除）。
   - `published`：`publishRegion(…, {publishKey:'ingest:'+batch_id, fence})`，SQL 键幂等保证崩溃于发布之后的重试回放同一快照；`published` 检查点只在成功（含 replayed）或**有意的终局跳过**（批次 `failed`、`no_native_outcomes`）之后写；可重试的失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误、记录失败快照的其他错误）→ 记 `publish_attempt {at, status, reason}`，run 保持 `finishing`，路由回 503 `publish_pending`，采集器以同一令牌重试 finish。
   - `receipt`：最后写，结束 run。
-- **全部来源失败（第 5 稿 P2-2）**：finish 时 `native = Σ 块计数`（只有原生结果）。`native.inserted + native.versioned + native.duplicates = 0` → 跳过派生与发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），追加批次错误 `{code:'no_native_outcomes'}`（非 INFO），`recordAttempt({ok:false})`。没有任何行落地时批次因此是 `failed`；唯一例外是只有隔离行落地（`quarantined > 0`）时，共用 `batchStatusFromCounts` 给出 `partial`——`src/lib/dq/batches.ts` 不改，所以接受这一例外，但新鲜度仍记 `ok:false`、仍不发布。回执分开报告 `native_counts` 与 `derived_counts`，`counts` 是两者与失败序列之和（交给 `finishBatch`）。cron（Task 7）用同一规则。
-- 批次级未定位 claim（第 4 稿 P2-1）：finish 时 `⋃claim_keys − ⋃located_keys`（跨全部块去重）的数量 n > 0 → 一条 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`，与全部已存块错误一起交给 `finishBatch`。
+- **全部来源失败（第 5 稿 P2-2；第 6 稿 P2-1）**：finish 时 `native = Σ 块计数`（只有原生结果）、`nativeUsable = Σ native_usable`。`nativeUsable = 0` → 跳过派生与发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），追加批次错误 `{code:'no_native_outcomes'}`（非 INFO），新鲜度 `ok:false`。所以**只有被拒值重交付**（`previously_rejected` 计在 `duplicates` 里，但不是可用数据）的一次采集同样不派生、不发布、新鲜度 `ok:false`。没有任何行落地时批次因此是 `failed`；只有隔离行或只有被拒重交付落地时，共用 `batchStatusFromCounts` 给出 `partial`——`src/lib/dq/batches.ts` 不改，所以接受这一例外，但新鲜度仍记 `ok:false`、仍不发布。回执分开报告 `native_counts`、`native_usable` 与 `derived_counts`，`counts` 是计数与失败序列之和（交给 `finalizeBatch`）。cron（Task 7）用同一规则（`ingestEvidence` 回执的 `usable` 之和）。
+- 批次级未定位 claim（第 4 稿 P2-1）：finish 时 `⋃claim_keys − ⋃located_keys`（跨全部块去重）的数量 n > 0 → 一条 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`，与全部已存块错误一起交给 `finalizeBatch`。
 
 ### 分析运行配额（SQL `create_macro_analysis_run`；Task 1 / Task 15）
 
@@ -395,10 +429,10 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 ### 跨任务约定
 
 - 观测 id、快照 id、运行 id 都是 uuid（字符串）。日期一律 ISO `YYYY-MM-DD`；时间 ISO UTC。
-- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`stale_delivery`、`adapter_mismatch`、`rule_failed:<ruleId>`。重复冲突无妨：RPC 每次都报告冲突，`quarantine()` 复用同 `(dataset, table_name, natural_key, reason_code)` 的 open 条目（Task 6 有测试），复用条目保留第一次的 payload，所以条目与观测的对应**只**看 `macro_quarantine_members`（Task 6 每次 `quarantine()` 后立即 `linkQuarantine`；`quarantine_closed` → 再 `quarantine()` 一次并重试链接一次，仍失败则整块失败）。`previously_rejected` 不是隔离原因：信息性 conflict，不建条目、不计错误（第 5 稿 P1-2）。`adapter_mismatch` 与 `rule_failed:*` 的值从未写入，没有被隔离的观测行，**只能拒绝**：SQL 对接受抛 `reject_only`（Task 18 脚本在调用前也拒绝，runbook §7 写明）。
+- `ingest_batches`：FRED `producer 'ts-fred'`、`dataset 'macro.fred'`；AKShare `producer 'py-akshare'`、`dataset 'macro.akshare'`；派生写入记在触发它的批次里。`dq_quarantine.dataset` 同批次 dataset，`table_name 'macro_observations'`，`natural_key '<series_id>|<period_end>'`，`reason_code` ∈ `unexpected_revision`、`conflicting_rows`、`stale_delivery`、`adapter_mismatch`、`rule_failed:<ruleId>`。重复冲突无妨：RPC 每次都报告冲突，`quarantine()` 复用同 `(dataset, table_name, natural_key, reason_code)` 的 open 条目（Task 6 有测试），复用条目保留第一次的 payload，所以条目与观测的对应**只**看 `macro_quarantine_members`（Task 6 每次 `quarantine()` 后立即 `linkQuarantine`；已关闭条目的确切成员已被处置 → 链接返回 0，视为完成；`quarantine_closed`（行仍被隔离）→ 再 `quarantine()` 一次并重试链接一次，仍失败则整块失败；第 6 稿 P2-3）。`previously_rejected` 不是隔离原因：信息性 conflict，不建条目、不计错误（第 5 稿 P1-2）。`adapter_mismatch` 与 `rule_failed:*` 的值从未写入，没有被隔离的观测行，**只能拒绝**：SQL 对接受抛 `reject_only`（Task 18 脚本在调用前也拒绝，runbook §7 写明）。
 - AKShare 交叉核对值（claim）周期不在 TS 解析出的原始点里 → **不隔离**、跳过。每块存下 `claim_keys` 与 `located_keys`；finish 按整批去重计算 `⋃claim_keys − ⋃located_keys`，n > 0 时向 `finishBatch` 交一条批次错误 `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}`（`skipped_summary` 是 `src/lib/dq/batches.ts` 已有的 INFO 码，不改该文件；Python 每块重复带同一序列的 claims，所以按块求和会重复计数，第 4 稿 P2-1）。
 - `macro_catalog_versions.rules_version` = `MACRO_RULES_VERSION`（`quality.ts` 的 DQ 规则版本，cron、ingest `start`、测试 seed 一致）；判定规则版本 `RULES_VERSION = 'macro-regime-rules/1.0'` 存在每个快照的 `macro_regime_results.rules_version`。
-- ingest 协议（§0.2 M24；第 4 稿 P1-6/P2-1/P2-2/P2-4；第 5 稿 P1-3/P1-4/P1-5/P2-1/P2-2）：`POST /api/macro/ingest` body `{action:'start', tool_versions, takeover?:true}` → `startBatch` 后 `claimIngest(…,{maxAgeMs:2h, processingTimeoutMs:10min, takeover})` 原子取租约 → `{batch_id, owner_token}`（租约被占 → 自己的批次以 `rejected` 结束，409 `batch_running`；被作废 run 的仍在 running 的批次以 `failed` 结束）；`{action:'chunk', batch_id, owner_token, seq, total, evidence[], claims[]}` → `claimChunk` 认领后才处理（重复块返回存储的回执 `duplicate`，处理中 → 409 `chunk_in_progress`，绝不二次写入），每个写入都带令牌，处理完 `completeChunk` 存计数、错误与 claim/定位键；`{action:'finish', batch_id, owner_token, total, series_outcomes:[{series_id, ok, code?}]}`（`total` 可为 0）→ `beginFinish` 取得 `finish_token`，按 `finish_progress` 可续执行：CN 派生（`derived`，无原生结果则跳过）→ 汇总（原生块计数 + 派生计数 + 每个失败序列 `failed+1` 与错误 `{code, key: series_id}` + 全部块错误 + 批次级未定位 claim 摘要 + 必要时 `no_native_outcomes`）→ `finishBatch`（`batch_finished`）→ `freshness_started` → `recordAttempt('macro.akshare',{ok: status!=='failed' && 有原生结果, detail:{batch_id, batch_status, failed_series}})` → `freshness_recorded` → `publishRegion('CN',{publishKey:'ingest:'+batch_id, fence})`（`published`，Task 11；可重试失败 → `publish_attempt` + 503 `publish_pending`）→ 回执（`receipt`，run 结束）。任一步 `fenced` → 409 `fenced`，采集器整次重来（新批次）。重试的 finish 跳过已完成步骤，已结束则原样返回存储的回执。cron 只发布 US（键 `'cron:'+batch_id`）。批次状态为 `failed` 或无原生结果时 cron / ingest 都**不发布**（回执 `publish:{status:'skipped',reason:'batch_failed'|'no_native_outcomes'}`），上一个 active 快照继续服务。
+- ingest 协议（§0.2 M24；第 4 稿 P1-6/P2-1/P2-2/P2-4；第 5 稿 P1-3/P1-4/P1-5/P2-1/P2-2）：`POST /api/macro/ingest` body `{action:'start', tool_versions, takeover?:true}` → `startBatch` 后 `claimIngest(…,{maxAgeMs:2h, processingTimeoutMs:10min, takeover})` 原子取租约 → `{batch_id, owner_token}`（租约被占 → 自己的批次以 `rejected` 结束，409 `batch_running`；被作废 run 的仍在 running 的批次以 `failed` 结束）；`{action:'chunk', batch_id, owner_token, seq, total, evidence[], claims[]}` → `claimChunk` 认领后才处理（重复块返回存储的回执 `duplicate`，处理中 → 409 `chunk_in_progress`，绝不二次写入），每个写入都带令牌，处理完 `completeChunk` 存计数、错误与 claim/定位键；`{action:'finish', batch_id, owner_token, total, series_outcomes:[{series_id, ok, code?}]}`（`total` 可为 0）→ `beginFinish` 取得 `finish_token`，按 `finish_progress` 可续执行：CN 派生（`derived`，无原生结果则跳过）→ 汇总（原生块计数 + 派生计数 + 每个失败序列 `failed+1` 与错误 `{code, key: series_id}` + 全部块错误 + 批次级未定位 claim 摘要 + 必要时 `no_native_outcomes`）→ `finalizeBatch`（栅栏，`batch_finished`；第 6 稿 P1-1）→ `recordFreshness('macro.akshare',{ok: status!=='failed' && Σ native_usable > 0, detail:{batch_id, batch_status, failed_series}})`（栅栏，与 `freshness_recorded` 同事务）→ `publishRegion('CN',{publishKey:'ingest:'+batch_id, fence})`（`published`，Task 11；可重试失败 → `publish_attempt` + 503 `publish_pending`）→ 回执（`receipt`，run 结束）。任一步 `fenced` → 409 `fenced`，采集器整次重来（新批次）。重试的 finish 跳过已完成步骤，已结束则原样返回存储的回执。cron 只发布 US（键 `'cron:'+batch_id`）。批次状态为 `failed` 或无原生结果时 cron / ingest 都**不发布**（回执 `publish:{status:'skipped',reason:'batch_failed'|'no_native_outcomes'}`），上一个 active 快照继续服务。
 - 判定权重属于方法：`regime.ts` 导出 `WEIGHTS_V1: Record<string, number>`；`catalog.ts` 中每个 `role='indicator'` 的 `weight` 必须等于 `WEIGHTS_V1[id] ?? 0`（Task 10 测试）；覆盖率分母 = 该区域 `WEIGHTS_V1` 之和（含 missing/restricted 项）。
 - 同比：`(cur/prev − 1) × 100`，十进制，half-even 四舍五入到 4 位小数后 canonical（`decimal.ts::yoyPct`）；`index_minus_100`、`month_end` 精确。派生行 `transform` = `'<kind>@1'`。
 - 发布及时性（§0.2 M11）：下一期 = 最新期 + 1 个周期，截止 = 下一期期末 + `releaseLagDays` + 3 天，今天 > 截止 → `late`；无观测 → `missing`；`event` 或无 `releaseLagDays` → `n/a`（即使无观测）。**数据有无是另一个字段**：概览行 `presence: 'present'|'missing'`（第 4 稿 P1-3），"本期变化"的 `missing` 计数按 `presence` 而非及时性。
@@ -411,7 +445,7 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 - 会话：所有 `/api/macro/*` 读路由与分析路由都用 `route-helpers.ts::requireSessionUser()`（返回 `{ok:true,user:{id}}` 或 `{ok:false,response}`，401 体 `{error:{code:'unauthenticated'}}`）；ingest 与 cron 用各自的 Bearer 秘钥。
 - `available_at`：原生 = 证据 `fetchedAt`；派生 = 输入 `available_at` 的最大值。`availability_basis` 恒为 `'first_seen'`。
 - 判定只读 `role='indicator'`、`status='active'` 的派生月度 / 原生月度 / 季度序列（日频原生 ID 不进判定；`catalog.ts` 导出 `regimeInputsOf(region)`）。
-- 页面 / API 不在判断层关闭时返回任何判定字段：`MACRO_JUDGMENTS_ENABLED !== '1'` ⇒ `snapshots/[id]` 不含 `regime`/`contributions`。
+- 页面 / API 不在判断层关闭时返回任何判定字段：`MACRO_JUDGMENTS_ENABLED !== '1'` ⇒ `snapshots/[id]` 不含 `regime`/`contributions`。判定数据只在服务端读（第 6 稿 P1-2）：`macro_regime_results` 只授 service_role，`MacroDb.regimeOf` 走 admin；`macroReadApi(db, {judgments})`（默认 `process.env.MACRO_JUDGMENTS_ENABLED === '1'`）关闭时 `snapshot` / `snapshotsSince` 的 `regime` 恒为 `null` 且不调用 `regimeOf`；F4 为宏观快照构建输入时经服务端 `MacroReadApi`，不 anon 直读宏观表。
 
 ## 规格覆盖
 
@@ -474,12 +508,18 @@ Task 1 迁移里的读辅助函数（`security invoker`，授 anon/authenticated
 | 第 5 稿 P1-1 `eligibleHistory` 的 `const part:ObservationRow[]` 显式注解 | 3 |
 | 第 5 稿 P1-2 拒绝值终局（`previously_rejected`，选择动作之前判定） | 1、2、3、6 |
 | 第 5 稿 P1-3 所有者令牌栅栏（`macro_assert_owner`，每个 ingest 变更 RPC，接管 → `aborted`） | 1、2、3、6、8、9、11 |
-| 第 5 稿 P1-4 独占 finish（`finish_token`）、按步骤幂等（`freshness_started`、`publish_key`） | 1、2、3、9、11 |
+| 第 5 稿 P1-4 独占 finish（`finish_token`）、按步骤幂等（`publish_key`；`freshness_started` 已由第 6 稿 P1-1 的同事务新鲜度取代） | 1、2、3、9、11 |
 | 第 5 稿 P1-5 可重试的发布失败留在 finishing（`publish_attempt`，503 `publish_pending`） | 1、3、9、11 |
 | 第 5 稿 P1-6 隔离行只复用合格或本批次的；`member_ineligible` | 1、3、18 |
 | 第 5 稿 P2-1 停滞块：`start {takeover:true}` 作废旧 run，整次采集换新批次重来 | 1、3、8、9 |
 | 第 5 稿 P2-2 无原生结果：跳过派生与发布、批次失败、`ok:false`（ingest 与 cron） | 7、9、11 |
 | 第 5 稿 P2-3 链接锁 `dq_quarantine` 行，`quarantine_closed` → 重建条目重试一次，失败则块失败 | 1、3、6 |
+| 第 6 稿 P1-1 栅栏副作用：`macro_record_freshness`（upsert + `freshness_recorded` 同事务、令牌先于终态判定、与 `computeFreshness` 平价）、`macro_finalize_batch`（AKShare finish 与 cron 代替 `finishBatch`）；删除 `freshness_started` 跳过逻辑；屏障测试 | 1、2、3、6、7、9、11、18 |
+| 第 6 稿 P1-2 `macro_regime_results` 只授 service_role；`regimeOf` 走 admin；`MacroReadApi` 判定受 `MACRO_JUDGMENTS_ENABLED` 控制；F4 接口说明 | 1、3、12、13 |
+| 第 6 稿 P2-1 `native_usable`（不含 `previously_rejected`）与六计数分开；派生 / 发布 / 新鲜度按它判定 | 1、2、3、6、7、9 |
+| 第 6 稿 P2-2 发布键回放时回执取自持久化的快照与判定 | 11 |
+| 第 6 稿 P2-3 已关闭条目：确切成员已被本条目处置 → 链接完成；仍隔离 → 新条目重绑 | 1、3、6、18 |
+| 第 6 稿 P2-4 cron 致命中止（派生期 `quarantine_link_failed`）以显式 `failed` 经 `macro_finalize_batch` 结束，计数如实 | 1、6、7 |
 
 ## 执行顺序
 
@@ -546,7 +586,11 @@ Create `src/lib/macro/macro.integration.test.ts`:
 // and resumable finish progress, and the analysis-run quota. 第 5 稿: owner-token fencing of every ingest
 // mutation after a takeover (P1-3/P2-1), exclusive finish with rotating finish tokens and publish-key replay
 // (P1-4/P1-5), rejected-value finality (P1-2), quarantine reuse only from eligible/current batches and
-// member_ineligible (P1-6), link-vs-resolve on the item row lock with two connections (P2-3).
+// member_ineligible (P1-6), link-vs-resolve on the item row lock with two connections (P2-3). 第 6 稿: fenced finish side
+// effects — macro_record_freshness (parity with computeFreshness, checkpoint in the same transaction, token mismatch before any
+// terminal-state error) and macro_finalize_batch (AKShare finish and cron; a fatal abort finishes failed and its rows stay
+// ineligible), with a barrier test (P1-1/P2-4); macro_regime_results service-only (P1-2); native_usable on chunks (P2-1); a
+// closed item whose exact member was concurrently accepted / rejected completes the link (P2-3).
 // Rows are never cleaned up (append-only by design; test:db creates a fresh database per run);
 // every test uses its own series ids. Publish state rows (US/CN) are shared, so publish tests
 // always read the current state right before publishing.
@@ -555,12 +599,14 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {computeFreshness} from '../dq/freshness';
+import type {Cadence} from '../dq/freshness';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261114090000_macro_workbench.sql';
 const TABLES=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots','macro_regime_results','macro_publish_state','macro_ingest_chunks','macro_ingest_runs','macro_quarantine_members','macro_analysis_runs'];
-const SERVICE_READ=['macro_publish_state','macro_ingest_chunks','macro_ingest_runs','macro_quarantine_members'];
-const PUBLIC_READ=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots','macro_regime_results'];
+const SERVICE_READ=['macro_publish_state','macro_ingest_chunks','macro_ingest_runs','macro_quarantine_members','macro_regime_results'];   // regime results: 第 6 稿 P1-2
+const PUBLIC_READ=['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_observations','macro_snapshots'];
 const SERVICE_RPCS=[
  'public.macro_upsert_catalog(text,text,jsonb)',
  'public.macro_put_retrieval(text,text,text,text,bigint,text,text,int,timestamptz,uuid,jsonb,uuid)',
@@ -573,9 +619,11 @@ const SERVICE_RPCS=[
  'public.macro_assert_owner(uuid,uuid,text[])',
  'public.macro_claim_ingest(uuid,text,interval,interval,boolean)',
  'public.macro_claim_chunk(uuid,int,int,uuid)',
- 'public.macro_complete_chunk(uuid,int,jsonb,jsonb,jsonb,jsonb,uuid)',
+ 'public.macro_complete_chunk(uuid,int,jsonb,int,jsonb,jsonb,jsonb,uuid)',
  'public.macro_begin_finish(uuid,int,uuid)',
  'public.macro_record_finish_step(uuid,text,jsonb,uuid,uuid)',
+ 'public.macro_finalize_batch(uuid,uuid,uuid,text,jsonb,jsonb,timestamptz)',
+ 'public.macro_record_freshness(uuid,uuid,uuid,text,boolean,text,timestamptz,jsonb)',
  'public.macro_ineligible_ids(uuid[],uuid)',
  'public.macro_manifest_ok(text,uuid[])',
  'public.macro_latest_eligible_observations(text[],timestamptz,date,uuid)',
@@ -672,6 +720,20 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  /** An open dq_quarantine item for series|period (macro.fred, macro_observations). */
  const qItem=async(series:string,b:string,reason='unexpected_revision',period='2026-09-30')=>{const id=randomUUID();await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id) values($1,'macro.fred','macro_observations',$2,$3,$4)`,[id,`${series}|${period}`,reason,b]);return id;};
  const dataset=()=>`macro.t${randomBytes(4).toString('hex')}`;
+ const ZERO={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
+ /** A claimed run of a fresh dataset already 'finishing' (total 0, no chunks): dataset, batch, owner token, finish token. */
+ const finishingRun=async()=>{
+  const ds=dataset();const b=await batch(ds);const t=(await claim(ds,b)).owner_token!;
+  const ft=(await one(`select public.macro_begin_finish($1,0,$2) v`,[b,t])).finish_token as string;
+  return {ds,b,t,ft};
+ };
+ /** macro_finalize_batch (第 6 稿 P1-1/P2-4); both tokens null = the cron path (a batch without a run row). */
+ const finalize=(b:string,status:string,o:{t?:string|null;ft?:string|null;counts?:unknown;errors?:unknown[];at?:string}={})=>
+  one(`select public.macro_finalize_batch($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7) v`,[b,o.t??null,o.ft??null,status,JSON.stringify(o.counts??ZERO),JSON.stringify(o.errors??[]),o.at??new Date().toISOString()]) as Promise<{status:string;finalized:boolean}>;
+ /** macro_record_freshness (第 6 稿 P1-1). */
+ const freshness=(b:string,t:string,ft:string,ds:string,ok:boolean,now:string,o:{cadence?:string;detail?:unknown}={})=>
+  one(`select public.macro_record_freshness($1,$2,$3,$4,$5,$6,$7,$8::jsonb) v`,[b,t,ft,ds,ok,o.cadence??'daily',now,JSON.stringify(o.detail??{})]) as Promise<Record<string,unknown>>;
+ const freshRow=async(ds:string)=>(await q(`select expected_cadence,last_ok_at,last_attempt_at,consecutive_errors,status,detail from public.dq_freshness where dataset=$1`,[ds]))[0];
 
  beforeAll(async()=>{
   const st=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
@@ -893,13 +955,15 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect(await q(`select status,resolved_by from public.dq_quarantine where id=$1`,[qa])).toEqual([{status:'resolved_accept',resolved_by:resolver}]);
   expect(await q(`select user_id,action,object_type,object_id,detail->>'decision' decision,detail->>'observation_id' obs from public.research_audit_log where object_id=$1`,[qa])).toEqual([{user_id:resolver,action:'dq.quarantine_resolve',object_type:'dq',object_id:qa,decision:'accept',obs:rb}]);
   expect((await fails(resolve(qa,'accept',rb))).message).toBe('already_resolved');
-  expect((await fails(link(qa,[ra]))).message).toBe('quarantine_closed');                         // the item row is locked and closed (第 5 稿 P2-3)
+  expect(await link(qa,[ra])).toBe(0);                                                              // closed, but its exact member was disposed by this item: complete (第 6 稿 P2-3)
   await asRole('anon',async c=>{expect((await c.query(`select value_text from public.macro_observations where series_id=$1 order by version`,[s])).rows).toEqual([{value_text:'4.1'},{value_text:'4.6'}]);});
   // the rejected value re-delivered is not inserted again: previously_rejected (counted as a duplicate, 第 5 稿 P1-2) points at the
   // rejected row; even a hand-made item binding it can only reject it
   const again=await write(b,[native(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
   expect(again).toEqual({inserted:0,duplicates:1,versioned:0,quarantined:0,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});
   expect(await rows(s,'2026-09-30')).toHaveLength(3);
+  const rc=(await write(b,[native(s,'2026-09-30','4.7',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+  expect((await fails(link(qa,[rc]))).message).toBe('quarantine_closed');                          // a row still quarantined: closed item (第 5 稿 P2-3)
   const qb=await item(s);await link(qb,[ra]);
   expect((await fails(resolve(qb,'accept',ra))).message).toBe('not_quarantined');                 // reject-then-accept elsewhere cannot resurrect
   expect(await resolve(qb,'reject')).toEqual({status:'resolved_reject',observation_id:null,rejected:0});
@@ -1011,7 +1075,7 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   const ds=dataset();const b=await batch(ds);const cl=await claim(ds,b);expect(cl.status).toBe('claimed');const t=cl.owner_token!;
   const c={fetched:3,inserted:2,duplicates:1,versioned:0,quarantined:0,failed:0};
   const cc=(seq:number,total:number,batchId=b,token:string=t)=>one(`select public.macro_claim_chunk($1,$2,$3,$4) v`,[batchId,seq,total,token]);
-  const done=(seq:number,counts:unknown=c,errors:unknown[]=[],ck:string[]=[],lk:string[]=[])=>one(`select public.macro_complete_chunk($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7) v`,[b,seq,JSON.stringify(counts),JSON.stringify(errors),JSON.stringify(ck),JSON.stringify(lk),t]);
+  const done=(seq:number,counts:unknown=c,errors:unknown[]=[],ck:string[]=[],lk:string[]=[],usable=3)=>one(`select public.macro_complete_chunk($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8) v`,[b,seq,JSON.stringify(counts),usable,JSON.stringify(errors),JSON.stringify(ck),JSON.stringify(lk),t]);
   const begin=(total:number,batchId=b,token:string=t)=>one(`select public.macro_begin_finish($1,$2,$3) v`,[batchId,total,token]) as Promise<{status:string;missing?:number[];progress?:Record<string,unknown>;finish_token?:string}>;
   const step=(name:string,data:unknown,ft:string)=>one(`select public.macro_record_finish_step($1,$2,$3::jsonb,$4,$5) v`,[b,name,JSON.stringify(data),t,ft]) as Promise<Record<string,unknown>>;
   const both=await Promise.all([cc(0,2),cc(0,2)]);
@@ -1021,8 +1085,10 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect((await fails(cc(0,1,randomUUID()))).message).toBe('batch_not_claimed');
   expect((await fails(cc(1,2,b,randomUUID()))).message).toBe('fenced');                                // another token
   expect(await begin(2)).toEqual({status:'incomplete',missing:[0,1]});
-  const stored=await done(0,c,[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],['CN_A|2026-09-30','CN_A|2026-10-31'],['CN_A|2026-09-30']);
-  expect(stored).toMatchObject({seq:0,total:2,state:'done',counts:c,errors:[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],claim_keys:['CN_A|2026-09-30','CN_A|2026-10-31'],located_keys:['CN_A|2026-09-30']});
+  expect((await fails(done(0,c,[],[],[],4))).message).toBe('invalid_chunk');                         // native_usable ≤ inserted+versioned+duplicates (第 6 稿 P2-1)
+  expect((await fails(done(0,c,[],[],[],-1))).message).toBe('invalid_chunk');
+  const stored=await done(0,c,[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],['CN_A|2026-09-30','CN_A|2026-10-31'],['CN_A|2026-09-30'],2);   // one duplicate was a previously_rejected redelivery
+  expect(stored).toMatchObject({seq:0,total:2,state:'done',counts:c,native_usable:2,errors:[{code:'evidence_not_allowed',key:'CN_PMI_MFG'}],claim_keys:['CN_A|2026-09-30','CN_A|2026-10-31'],located_keys:['CN_A|2026-09-30']});
   expect((await fails(done(0))).message).toBe('chunk_not_processing');
   expect(await cc(0,2)).toMatchObject({status:'done',chunk:{seq:0,counts:c}});                      // a retry gets the stored receipt, nothing re-runs
   expect((await cc(1,2)).status).toBe('claimed');
@@ -1039,12 +1105,15 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   const ft=f2.finish_token!;
   await step('batch_finished',{status:'success',date:'2026-11-06'},ft);
   expect((await fails(step('nope',{},ft))).message).toBe('invalid_step');
-  await step('freshness_started',{ok:true},ft);
-  expect(await step('freshness_recorded',{ok:true},ft)).toMatchObject({freshness_started:{ok:true},freshness_recorded:{ok:true}});
+  for(const gone of ['freshness_started','freshness_recorded'])expect((await fails(step(gone,{ok:true},ft))).message).toBe('invalid_step');   // only macro_record_freshness writes it (第 6 稿 P1-1)
+  expect(await freshness(b,t,ft,ds,true,T2)).toMatchObject({batch_finished:{status:'success'},freshness_recorded:{ok:true,status:'fresh'}});
   const receipt={batch_id:b,status:'success'};
   await step('receipt',receipt,ft);
-  expect(await begin(2)).toMatchObject({status:'finished',progress:{receipt,derived:{counts:c},batch_finished:{status:'success'}}});
-  expect((await fails(step('published',{},ft))).message).toBe('run_not_finishing');
+  expect(await begin(2)).toMatchObject({status:'finished',progress:{receipt,derived:{counts:c},batch_finished:{status:'success'},freshness_recorded:{ok:true}}});
+  expect((await fails(step('published',{},ft))).message).toBe('run_not_finishing');                   // the current token on a finished run
+  expect((await fails(step('published',{},f1.finish_token!))).message).toBe('fenced');                 // an obsolete token is fenced before any state error (第 6 稿 P1-1)
+  expect((await fails(freshness(b,t,f1.finish_token!,ds,false,T3))).message).toBe('fenced');
+  expect((await q(`select native_usable from public.macro_ingest_chunks where batch_id=$1 order by seq`,[b])).map(x=>x.native_usable)).toEqual([2,3]);
   expect(await q(`select seq,state,claim_keys,located_keys from public.macro_ingest_chunks where batch_id=$1 order by seq`,[b])).toEqual([
    {seq:0,state:'done',claim_keys:['CN_A|2026-09-30','CN_A|2026-10-31'],located_keys:['CN_A|2026-09-30']},
    {seq:1,state:'done',claim_keys:['CN_A|2026-10-31'],located_keys:[]}]);
@@ -1078,9 +1147,11 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
    ['write',()=>write(old,[native(s,'2026-10-31','4.2',r1,T2)],t1)],
    ['link',()=>q(`select public.macro_link_quarantine($1,$2::uuid[],$3,$4)`,[randomUUID(),ids,old,t1])],
    ['claim_chunk',()=>q(`select public.macro_claim_chunk($1,0,1,$2)`,[old,t1])],
-   ['complete_chunk',()=>q(`select public.macro_complete_chunk($1,0,$2::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$3)`,[old,zeroCounts,t1])],
+   ['complete_chunk',()=>q(`select public.macro_complete_chunk($1,0,$2::jsonb,1,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$3)`,[old,zeroCounts,t1])],
    ['begin_finish',()=>q(`select public.macro_begin_finish($1,1,$2)`,[old,t1])],
    ['record_finish_step',()=>q(`select public.macro_record_finish_step($1,'derived','{}'::jsonb,$2,$3)`,[old,t1,randomUUID()])],
+   ['finalize_batch',()=>finalize(old,'success',{t:t1,ft:randomUUID()})],                                // 第 6 稿 P1-1
+   ['record_freshness',()=>freshness(old,t1,randomUUID(),ds,true,T3)],
    ['publish',()=>publish('US',st.r,st.i,v,[],[],{key:`ingest:${old}`,batch:old,token:t1})],
   ];
   for(const [name,call] of attempts)expect({name,code:(await fails(call())).message}).toEqual({name,code:'fenced'});
@@ -1120,6 +1191,110 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   await step('receipt',{status:'success'},ft);
   expect(await begin(t)).toMatchObject({status:'finished',progress:{published:{snapshot_id:p1.snapshot_id}}});
  });
+
+ it('macro_record_freshness (第 6 稿 P1-1): the stored status equals computeFreshness for every case; errors, last_ok_at and the freshness_recorded checkpoint commit together; a repeat for the same run writes nothing',async()=>{
+  const DAY=86_400_000;const NOW=Date.parse('2026-11-06T05:30:00.000Z');const at=(ms:number)=>new Date(ms).toISOString();
+  // [cadence, the previous dq_freshness row (consecutive errors, last ok this long before NOW; null = never ok) or none, ok]
+  const cases:[Cadence,{errors:number;okAgo:number|null}|null,boolean][]=[
+   ['daily',null,true],['daily',null,false],['daily',{errors:0,okAgo:3*DAY},false],['daily',{errors:0,okAgo:3*DAY+1},false],
+   ['daily',{errors:1,okAgo:DAY},false],['daily',{errors:5,okAgo:DAY},true],['daily',{errors:0,okAgo:null},false],
+   ['monthly',{errors:0,okAgo:34*DAY},false],['monthly',{errors:0,okAgo:34*DAY+1},false],['quarterly',{errors:0,okAgo:95*DAY},false],
+   ['quarterly',{errors:1,okAgo:96*DAY},false],['event',{errors:0,okAgo:400*DAY},false],['event',null,false],['event',{errors:1,okAgo:DAY},false],
+  ];
+  for(const [cadence,prev,ok] of cases){
+   const {ds,b,t,ft}=await finishingRun();
+   if(prev)await q(`insert into public.dq_freshness(dataset,expected_cadence,last_ok_at,consecutive_errors,status) values($1,$2,$3,$4,$5)`,
+    [ds,cadence,prev.okAgo===null?null:at(NOW-prev.okAgo),prev.errors,prev.okAgo===null?'missing':'stale']);
+   const progress=await freshness(b,t,ft,ds,ok,at(NOW),{cadence,detail:{batch_id:b}});
+   const consecutiveErrors=ok?0:(prev?.errors??0)+1;
+   const lastOk=ok?new Date(NOW):prev?.okAgo==null?null:new Date(NOW-prev.okAgo);
+   const expected=computeFreshness({cadence,lastOkAt:lastOk,consecutiveErrors,now:new Date(NOW)});
+   const row=await freshRow(ds);
+   expect({cadence,prev,ok,status:row.status,errors:row.consecutive_errors}).toEqual({cadence,prev,ok,status:expected,errors:consecutiveErrors});
+   expect(row.last_ok_at===null?null:new Date(row.last_ok_at).toISOString()).toBe(lastOk?.toISOString()??null);
+   expect([row.expected_cadence,new Date(row.last_attempt_at).toISOString(),row.detail]).toEqual([cadence,at(NOW),{batch_id:b}]);
+   expect(progress.freshness_recorded).toEqual({ok,status:expected});
+   expect(await freshness(b,t,ft,ds,!ok,at(NOW+DAY))).toEqual(progress);                             // already recorded for this run: nothing written
+   expect((await freshRow(ds)).consecutive_errors).toBe(consecutiveErrors);
+  }
+  const {ds,b,t,ft}=await finishingRun();
+  expect((await fails(freshness(b,t,ft,'macro.other',true,T2))).message).toBe('invalid_dataset');       // only the run's own dataset
+  expect((await fails(freshness(b,t,ft,ds,true,T2,{cadence:'hourly'}))).message).toBe('invalid_freshness');
+  expect((await fails(freshness(randomUUID(),t,ft,ds,true,T2))).message).toBe('batch_not_claimed');
+  expect(await freshRow(ds)).toBeUndefined();
+ });
+
+ it('macro_finalize_batch (第 6 稿 P1-1/P2-4): native writes then a derivation link failure → the cron finalizes FAILED with the actual counts and the rows stay ineligible; a second finalize reads the status back; tokens must match the run (or be null without one)',async()=>{
+  const s=sid();await catalog([def(s)]);
+  const b=await batch();const r=await retrieval(b,T2);
+  expect((await write(b,[native(s,'2026-09-30','4.1',r,T2)])).inserted).toBe(1);                       // native writes landed …
+  const counts={fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0};
+  const errors=[{code:'quarantine_link_failed',key:`${s}|2026-09-30`},{code:'sync_crashed'}];
+  // … then deriveAndWrite threw IngestAbort('quarantine_link_failed'): explicit failed, not the partial batchStatusFromCounts would give
+  expect(await finalize(b,'failed',{counts,errors,at:T1})).toEqual({status:'failed',finalized:true});
+  expect(await q(`select status,counts,errors,finished_at>=started_at clamped from public.ingest_batches where batch_id=$1`,[b])).toEqual([{status:'failed',counts,errors,clamped:true}]);   // T1 < started_at: clamped
+  expect(await q(`select observation_id from public.macro_latest_eligible_observations($1::text[],null,null,null)`,[[s]])).toEqual([]);
+  expect(await q(`select observation_id from public.macro_eligible_history($1,null,null,null,null,null,1000)`,[s])).toEqual([]);
+  expect(await finalize(b,'success',{counts})).toEqual({status:'failed',finalized:false});             // never finished twice
+  expect((await q(`select status from public.ingest_batches where batch_id=$1`,[b]))[0].status).toBe('failed');
+  expect((await fails(finalize(b,'success',{t:randomUUID(),ft:randomUUID()}))).message).toBe('fenced');   // a token on a run-less batch
+  expect((await fails(finalize(randomUUID(),'success'))).message).toBe('not_found');
+  expect((await fails(finalize(await batch(),'running'))).message).toBe('invalid_finalize');
+  expect((await fails(finalize(await batch(),'success',{counts:{...ZERO,fetched:-1}}))).message).toBe('invalid_finalize');
+  expect((await fails(finalize(await batch(),'success',{errors:Array.from({length:102},()=>({code:'x'}))}))).message).toBe('invalid_finalize');
+  const {b:rb,t,ft}=await finishingRun();
+  expect((await fails(finalize(rb,'success'))).message).toBe('fenced');                                 // a run batch never takes a token-less finalize
+  expect((await fails(finalize(rb,'success',{t,ft:randomUUID()}))).message).toBe('fenced');
+  expect(await finalize(rb,'success',{t,ft})).toEqual({status:'success',finalized:true});
+ });
+
+ it('barrier (第 6 稿 P1-1): finisher A pauses, B takes the finish over and completes, the next collection records freshness; A wakes up and every finalize / freshness / step call is fenced, changing neither ingest_batches nor dq_freshness',async()=>{
+  const ds=dataset();const b=await batch(ds);const t=(await claim(ds,b)).owner_token!;
+  const begin=()=>one(`select public.macro_begin_finish($1,0,$2) v`,[b,t]) as Promise<{finish_token:string}>;
+  const ftA=(await begin()).finish_token;                                                                // A begins … and pauses before its side effects
+  const ftB=(await begin()).finish_token;                                                                // B (the same owner retrying) rotates the finish token
+  expect(await finalize(b,'success',{t,ft:ftB,counts:{...ZERO,fetched:1,inserted:1}})).toEqual({status:'success',finalized:true});
+  await freshness(b,t,ftB,ds,true,T2);
+  await one(`select public.macro_record_finish_step($1,'receipt','{}'::jsonb,$2,$3) v`,[b,t,ftB]);    // B finishes: lease released
+  const next=await batch(ds);const tn=(await claim(ds,next)).owner_token!;
+  const ftn=(await one(`select public.macro_begin_finish($1,0,$2) v`,[next,tn])).finish_token as string;
+  await freshness(next,tn,ftn,ds,false,T3);                                                              // the next collection records a failed attempt
+  const batchBefore=await q(`select status,counts,errors,finished_at from public.ingest_batches where batch_id=$1`,[b]);
+  const freshBefore=await freshRow(ds);
+  expect(freshBefore).toMatchObject({consecutive_errors:1,status:'fresh'});                             // last ok T2, one error at T3
+  const late:[string,()=>Promise<unknown>][]=[
+   ['finalize',()=>finalize(b,'failed',{t,ft:ftA,counts:{...ZERO,fetched:9,failed:9}})],
+   ['freshness',()=>freshness(b,t,ftA,ds,false,'2026-11-04T05:30:00.000Z')],
+   ['step',()=>one(`select public.macro_record_finish_step($1,'published','{}'::jsonb,$2,$3) v`,[b,t,ftA])],
+  ];
+  for(const [name,call] of late)expect({name,code:(await fails(call())).message}).toEqual({name,code:'fenced'});   // fenced, not run_not_finishing
+  expect(await q(`select status,counts,errors,finished_at from public.ingest_batches where batch_id=$1`,[b])).toEqual(batchBefore);
+  expect(await freshRow(ds)).toEqual(freshBefore);
+ });
+
+ for(const decision of ['accept','reject'] as const){
+  it(`link vs a concurrent ${decision} of a reused member (第 6 稿 P2-3): the link waits on the item row lock, finds its exact member disposed by this item's resolution and completes (0)`,async()=>{
+   const {s,b}=await seeded({revisionPolicy:'immutable'});
+   const obs=(await write(b,[native(s,'2026-09-30','4.9',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+   const qid=await qItem(s,b);
+   expect(await one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[obs]])).toBe(1);       // an earlier delivery bound it
+   expect((await write(b,[native(s,'2026-09-30','4.9',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id).toBe(obs);   // the redelivery reuses it
+   const by=await user();const resolver=await admin.connect();
+   try{
+    await resolver.query('begin');
+    await resolver.query(`select public.macro_resolve_conflict($1,$2,$3,$4)`,[qid,decision,by,decision==='accept'?obs:null]);   // holds the item row lock
+    const linking=one(`select public.macro_link_quarantine($1,$2::uuid[]) v`,[qid,[obs]]);
+    const waiting=()=>one(`select count(*)::int v from pg_stat_activity where wait_event_type='Lock' and query like '%macro_link_quarantine%' and pid<>pg_backend_pid()`);
+    for(let i=0;i<100&&(await waiting())<1;i++)await new Promise(r=>setTimeout(r,20));
+    expect(await waiting()).toBe(1);
+    await resolver.query('commit');
+    expect(await linking).toBe(0);                                                                       // linking already complete: no abort, no empty item
+   }finally{await resolver.query('rollback').catch(()=>{});resolver.release();}
+   expect(await one(`select status v from public.macro_observations where observation_id=$1`,[obs])).toBe(decision==='accept'?'ok':'rejected');
+   const still=(await write(b,[native(s,'2026-09-30','5.1',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+   expect((await fails(q(`select public.macro_link_quarantine($1,$2::uuid[])`,[qid,[still]]))).message).toBe('quarantine_closed');   // a row still quarantined needs a new item
+  });
+ }
 
  it('rejected values are final (第 5 稿 P1-2): 4.1 ok → 4.2 rejected → a NEWER 4.2 redelivery stays rejected and inserts nothing',async()=>{
   const {s,b}=await seeded();                                                                          // revisable; 4.1 available at T2
@@ -1233,17 +1408,24 @@ Create `supabase/migrations/20261114090000_macro_workbench.sql`:
 -- allowed state; a batch without a run row (FRED cron, single writer by Vercel cron) must pass a null token. A
 -- takeover (macro_claim_ingest) sets the old run 'aborted' in the same transaction, so a paused old worker can never
 -- write again.
+-- Fenced finish side effects (第 6 稿 P1-1/P2-4): macro_finalize_batch (ingest_batches status/counts/errors/finished_at, the
+-- AKShare finish and the cron, replacing finishBatch there) and macro_record_freshness (dq_freshness upsert with the
+-- recordAttempt / computeFreshness semantics plus the freshness_recorded checkpoint, one transaction) validate the owner AND
+-- finish token under the run row lock before writing, so a finisher whose finish token was rotated can never overwrite a
+-- later collection's batch or freshness. Every token mismatch is checked before any terminal-state error and raises fenced.
+-- macro_regime_results is service-only (第 6 稿 P1-2): judgments are never readable with the public anon key.
 -- Lock discipline (always run row → other rows): macro_write_observations locks the run row, then the touched
 -- regions' macro_publish_state rows (ordered by region); publish locks the run row (finish path), then its region
 -- row; republish locks the region row; the resolver locks the dq_quarantine row, then the region row; the linker
--- locks the run row, then the dq_quarantine row (第 5 稿 P2-3). Each bumps input_revision / revision under the lock,
+-- locks the run row, then the dq_quarantine row (第 5 稿 P2-3); macro_finalize_batch locks the run row, then the
+-- ingest_batches row; macro_record_freshness locks the run row, then takes the dq_freshness:<dataset> advisory lock. The write / publish / resolve paths bump input_revision / revision under the lock,
 -- so a publisher that read stale state fails with stale_publisher. Ingest: macro_claim_ingest takes a per-dataset
 -- advisory lock (the partial unique index on live runs is the backstop); chunk claims, completions, begin-finish and
 -- finish steps lock the run row for update.
 -- Errors carry the code as the message: stale_publisher, invalid_manifest, quota_exceeded,
 -- already_resolved, reject_only, not_quarantined, member_ineligible, fenced, quarantine_closed, chunk_total_mismatch,
 -- chunk_not_processing, batch_not_open, run_not_finishing, evidence_mismatch, catalog_version_conflict (P0001);
--- not_found, not_member, batch_not_claimed (P0002); invalid_* / observation_required /
+-- not_found, not_member, batch_not_claimed (P0002); invalid_* (incl. invalid_finalize, invalid_freshness, invalid_dataset) / observation_required /
 -- observation_not_allowed (22023). Triggers refuse with 23514, prefix `append_only:`.
 -- Timestamps written by this migration are truncated to milliseconds so JS ISO strings round-trip.
 -- The hosted `postgres` role is not a superuser: functions keep the migration role as owner,
@@ -1413,6 +1595,7 @@ create table if not exists public.macro_ingest_chunks (
   total        int not null check (total between 1 and 10000),
   state        text not null default 'processing' check (state in ('processing','done')),
   counts       jsonb not null default '{"fetched":0,"inserted":0,"duplicates":0,"versioned":0,"quarantined":0,"failed":0}' check (jsonb_typeof(counts) = 'object'),
+  native_usable int not null default 0 check (native_usable >= 0),   -- 第 6 稿 P2-1: usable native rows (previously_rejected excluded)
   errors       jsonb not null default '[]' check (jsonb_typeof(errors) = 'array'),
   claim_keys   jsonb not null default '[]' check (jsonb_typeof(claim_keys) = 'array'),
   located_keys jsonb not null default '[]' check (jsonb_typeof(located_keys) = 'array'),
@@ -1972,8 +2155,11 @@ grant execute on function public.record_failed_macro_snapshot(text, date, text, 
 -- Binds stored quarantined/rejected rows of the item's natural key to an OPEN macro item (Task 6 calls it right
 -- after quarantine() returned the possibly reused item id). Owner-fenced (p_batch_id + p_owner_token, 第 5 稿 P1-3), then
 -- the dq_quarantine row is locked FOR UPDATE like macro_resolve_conflict does (第 5 稿 P2-3): a resolution that wins the
--- lock leaves the item closed and this call raises quarantine_closed (Task 6 re-parks and retries once). Re-linking is
--- a no-op; returns the rows added.
+-- lock leaves the item closed. On a closed item the exact rows are inspected under that lock (第 6 稿 P2-3): when every given
+-- row is a member of THIS item and is now ok or rejected (the item's recorded resolution disposed of it — a concurrent accept
+-- or reject of a reused member), linking is already complete and 0 is returned; otherwise (a row still quarantined) this
+-- call raises quarantine_closed (Task 6 re-parks into a new open item and retries once). Callers link one row per call.
+-- Re-linking is a no-op; returns the rows added.
 create or replace function public.macro_link_quarantine(p_quarantine_id uuid, p_observation_ids uuid[], p_batch_id uuid default null, p_owner_token uuid default null)
 returns int language plpgsql security definer set search_path = public as $$
 declare q public.dq_quarantine; n int;
@@ -1982,7 +2168,17 @@ begin
   select * into q from public.dq_quarantine where id = p_quarantine_id for update;
   if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
   if q.dataset not like 'macro.%' or q.table_name <> 'macro_observations' then raise exception 'invalid_item' using errcode = '22023'; end if;
-  if q.status <> 'open' then raise exception 'quarantine_closed' using errcode = 'P0001'; end if;
+  if q.status <> 'open' then
+    if p_observation_ids is not null and cardinality(p_observation_ids) > 0 and array_position(p_observation_ids, null) is null
+       and not exists (select 1 from unnest(p_observation_ids) as t(i)
+                        where not exists (select 1 from public.macro_quarantine_members m
+                                            join public.macro_observations o on o.observation_id = m.observation_id
+                                           where m.quarantine_id = p_quarantine_id and m.observation_id = t.i
+                                             and o.status in ('ok','rejected'))) then
+      return 0;                                                                   -- disposed by this item's resolution: complete
+    end if;
+    raise exception 'quarantine_closed' using errcode = 'P0001';
+  end if;
   if p_observation_ids is null or cardinality(p_observation_ids) = 0 or array_position(p_observation_ids, null) is not null
      or exists (select 1 from unnest(p_observation_ids) as t(i)
                  where not exists (select 1 from public.macro_observations o
@@ -2129,10 +2325,11 @@ end $$;
 revoke execute on function public.macro_claim_chunk(uuid, int, int, uuid) from public, anon, authenticated;
 grant execute on function public.macro_claim_chunk(uuid, int, int, uuid) to service_role;
 
--- Completes a processing chunk exactly once (owner-fenced, run open) with its NATIVE counts, sanitized errors
+-- Completes a processing chunk exactly once (owner-fenced, run open) with its NATIVE counts, native_usable (第 6 稿 P2-1:
+-- usable native rows, previously_rejected excluded; 0 ≤ native_usable ≤ inserted+versioned+duplicates), sanitized errors
 -- ({code,key?,message?}, ≤ 500) and the claim / location key sets the finish step needs for the batch-wide
 -- unlocated-claims summary (P2-1).
-create or replace function public.macro_complete_chunk(p_batch_id uuid, p_seq int, p_counts jsonb, p_errors jsonb, p_claim_keys jsonb, p_located_keys jsonb, p_owner_token uuid)
+create or replace function public.macro_complete_chunk(p_batch_id uuid, p_seq int, p_counts jsonb, p_native_usable int, p_errors jsonb, p_claim_keys jsonb, p_located_keys jsonb, p_owner_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare c public.macro_ingest_chunks;
 begin
@@ -2141,6 +2338,8 @@ begin
      or (select count(*) from jsonb_object_keys(p_counts)) <> 6
      or exists (select 1 from jsonb_each(p_counts) where jsonb_typeof(value) <> 'number'
                   or (value #>> '{}')::numeric < 0 or (value #>> '{}')::numeric <> trunc((value #>> '{}')::numeric))
+     or p_native_usable is null or p_native_usable < 0
+     or p_native_usable > (p_counts->>'inserted')::numeric + (p_counts->>'versioned')::numeric + (p_counts->>'duplicates')::numeric
      or p_errors is null or jsonb_typeof(p_errors) <> 'array' or jsonb_array_length(p_errors) > 500
      or exists (select 1 from jsonb_array_elements(p_errors) e where jsonb_typeof(e) <> 'object' or jsonb_typeof(e->'code') is distinct from 'string')
      or p_claim_keys is null or jsonb_typeof(p_claim_keys) <> 'array' or exists (select 1 from jsonb_array_elements(p_claim_keys) k where jsonb_typeof(k) <> 'string')
@@ -2149,15 +2348,15 @@ begin
   end if;
   perform public.macro_assert_owner(p_batch_id, p_owner_token, array['open']);
   update public.macro_ingest_chunks
-     set state = 'done', counts = p_counts, errors = p_errors, claim_keys = p_claim_keys, located_keys = p_located_keys,
+     set state = 'done', counts = p_counts, native_usable = p_native_usable, errors = p_errors, claim_keys = p_claim_keys, located_keys = p_located_keys,
          completed_at = date_trunc('milliseconds', now())
    where batch_id = p_batch_id and seq = p_seq and state = 'processing'
   returning * into c;
   if not found then raise exception 'chunk_not_processing' using errcode = 'P0001'; end if;
   return to_jsonb(c) - 'batch_id' - 'received_at' - 'completed_at';
 end $$;
-revoke execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb, uuid) from public, anon, authenticated;
-grant execute on function public.macro_complete_chunk(uuid, int, jsonb, jsonb, jsonb, jsonb, uuid) to service_role;
+revoke execute on function public.macro_complete_chunk(uuid, int, jsonb, int, jsonb, jsonb, jsonb, uuid) from public, anon, authenticated;
+grant execute on function public.macro_complete_chunk(uuid, int, jsonb, int, jsonb, jsonb, jsonb, uuid) to service_role;
 
 -- Exclusive finish (第 5 稿 P1-4). Only the token owner (another token or an aborted run → fenced). open → finishing once
 -- every chunk 0..p_total−1 is done with that total (p_total 0 = a run with no chunks); a finishing run resumes. Both hand
@@ -2185,23 +2384,26 @@ end $$;
 revoke execute on function public.macro_begin_finish(uuid, int, uuid) from public, anon, authenticated;
 grant execute on function public.macro_begin_finish(uuid, int, uuid) to service_role;
 
--- Records one completed finish step (derived | batch_finished | freshness_started | freshness_recorded | published |
--- publish_attempt | receipt). Owner token and the CURRENT finish token must match (else fenced); the run must be
--- finishing (run_not_finishing). publish_attempt appends p_data to finish_progress.attempts (at most 20 kept); every other
+-- Records one completed finish step (derived | batch_finished | published | publish_attempt | receipt; freshness_recorded
+-- is written only by macro_record_freshness, 第 6 稿 P1-1). Owner token and the CURRENT finish token must match and the run
+-- must not be aborted (else fenced) — checked BEFORE the state, so an obsolete token after completion is fenced too; the run
+-- must be finishing (run_not_finishing). publish_attempt appends p_data to finish_progress.attempts (at most 20 kept); every other
 -- step is merged under its name; 'receipt' also finishes the run (and so releases the dataset lease). Returns the progress.
 create or replace function public.macro_record_finish_step(p_batch_id uuid, p_step text, p_data jsonb, p_owner_token uuid, p_finish_token uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r public.macro_ingest_runs; v jsonb; v_att jsonb;
 begin
-  if p_step is null or p_step not in ('derived','batch_finished','freshness_started','freshness_recorded','published','publish_attempt','receipt')
+  if p_step is null or p_step not in ('derived','batch_finished','published','publish_attempt','receipt')
      or p_data is null or jsonb_typeof(p_data) <> 'object' then
     raise exception 'invalid_step' using errcode = '22023';
   end if;
   select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
   if not found then raise exception 'batch_not_claimed' using errcode = 'P0002'; end if;
-  if p_owner_token is null or r.owner_token <> p_owner_token or r.state = 'aborted' then raise exception 'fenced' using errcode = 'P0001'; end if;
+  if p_owner_token is null or r.owner_token <> p_owner_token or p_finish_token is null or r.finish_token is distinct from p_finish_token
+     or r.state = 'aborted' then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
   if r.state <> 'finishing' then raise exception 'run_not_finishing' using errcode = 'P0001'; end if;
-  if p_finish_token is null or r.finish_token is distinct from p_finish_token then raise exception 'fenced' using errcode = 'P0001'; end if;
   if p_step = 'publish_attempt' then
     v_att := case when jsonb_typeof(r.finish_progress->'attempts') = 'array' then r.finish_progress->'attempts' else '[]'::jsonb end;
     v := r.finish_progress || jsonb_build_object('attempts', case when jsonb_array_length(v_att) >= 20 then v_att else v_att || jsonb_build_array(p_data) end);
@@ -2217,6 +2419,97 @@ begin
 end $$;
 revoke execute on function public.macro_record_finish_step(uuid, text, jsonb, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.macro_record_finish_step(uuid, text, jsonb, uuid, uuid) to service_role;
+
+-- Fenced batch finalization (第 6 稿 P1-1/P2-4), used by the AKShare finish and the cron instead of dq finishBatch. With a run
+-- row (AKShare): owner + finish token must match and the run must not be aborted (fenced, checked first), and it must be
+-- finishing (run_not_finishing). Without a run row (cron): both tokens must be null (fenced otherwise). The batch row is then
+-- locked: a batch no longer running returns its stored status with finalized:false (an earlier attempt finished it, never
+-- twice); else status/counts/errors/finished_at are written with finishBatch's column semantics (finished_at ≥ started_at, the
+-- DQ invariant). Status and the capped errors are computed in TS (ingest.ts::batchFinalizeInput) and passed in; a fatal abort
+-- passes 'failed' explicitly.
+create or replace function public.macro_finalize_batch(p_batch_id uuid, p_owner_token uuid, p_finish_token uuid, p_status text, p_counts jsonb, p_errors jsonb, p_finished_at timestamptz)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r public.macro_ingest_runs; b public.ingest_batches;
+begin
+  if p_batch_id is null or p_status is null or p_status not in ('success','partial','failed','rejected') or p_finished_at is null
+     or p_counts is null or jsonb_typeof(p_counts) <> 'object'
+     or not (p_counts ?& array['fetched','inserted','duplicates','versioned','quarantined','failed'])
+     or (select count(*) from jsonb_object_keys(p_counts)) <> 6
+     or exists (select 1 from jsonb_each(p_counts) where jsonb_typeof(value) <> 'number'
+                  or (value #>> '{}')::numeric < 0 or (value #>> '{}')::numeric <> trunc((value #>> '{}')::numeric))
+     or p_errors is null or jsonb_typeof(p_errors) <> 'array' or jsonb_array_length(p_errors) > 101
+     or exists (select 1 from jsonb_array_elements(p_errors) e where jsonb_typeof(e) <> 'object' or jsonb_typeof(e->'code') is distinct from 'string') then
+    raise exception 'invalid_finalize' using errcode = '22023';
+  end if;
+  select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
+  if found then
+    if p_owner_token is null or r.owner_token <> p_owner_token or p_finish_token is null or r.finish_token is distinct from p_finish_token
+       or r.state = 'aborted' then
+      raise exception 'fenced' using errcode = 'P0001';
+    end if;
+    if r.state <> 'finishing' then raise exception 'run_not_finishing' using errcode = 'P0001'; end if;
+  elsif p_owner_token is not null or p_finish_token is not null then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
+  select * into b from public.ingest_batches where batch_id = p_batch_id for update;
+  if not found then raise exception 'not_found' using errcode = 'P0002'; end if;
+  if b.status <> 'running' then return jsonb_build_object('status', b.status, 'finalized', false); end if;
+  update public.ingest_batches
+     set status = p_status, counts = p_counts, errors = p_errors, finished_at = greatest(p_finished_at, b.started_at)
+   where batch_id = p_batch_id;
+  return jsonb_build_object('status', p_status, 'finalized', true);
+end $$;
+revoke execute on function public.macro_finalize_batch(uuid, uuid, uuid, text, jsonb, jsonb, timestamptz) from public, anon, authenticated;
+grant execute on function public.macro_finalize_batch(uuid, uuid, uuid, text, jsonb, jsonb, timestamptz) to service_role;
+
+-- Fenced freshness attempt (第 6 稿 P1-1), used by the AKShare finish instead of dq recordAttempt. Under the run row lock: both
+-- tokens are compared FIRST (mismatch or aborted → fenced), then finishing (run_not_finishing) and p_dataset = the run's
+-- dataset (invalid_dataset). A run that already recorded freshness returns its progress unchanged (never a second attempt).
+-- Otherwise, under the dq_freshness:<dataset> advisory lock, the same semantics as src/lib/dq/freshness.ts recordAttempt +
+-- computeFreshness: consecutive_errors = ok ? 0 : previous + 1; last_ok_at = ok ? now : previous; status = error when
+-- consecutive_errors ≥ 2, missing without last_ok_at, fresh for 'event', else fresh iff now − last_ok_at ≤ window + grace in
+-- milliseconds (daily 1 d + 2 d, monthly 31 d + 3 d, quarterly 92 d + 3 d), stale otherwise. The upsert and the
+-- freshness_recorded {ok, status} checkpoint commit together. Returns the progress.
+create or replace function public.macro_record_freshness(p_batch_id uuid, p_owner_token uuid, p_finish_token uuid, p_dataset text, p_ok boolean, p_cadence text, p_now timestamptz, p_detail jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r public.macro_ingest_runs; f public.dq_freshness; v_errors int; v_last_ok timestamptz; v_status text; v_limit_ms numeric; v jsonb;
+begin
+  if p_batch_id is null or p_dataset is null or length(p_dataset) not between 1 and 64 or p_ok is null or p_now is null
+     or p_cadence is null or p_cadence not in ('daily','monthly','quarterly','event')
+     or p_detail is null or jsonb_typeof(p_detail) <> 'object' then
+    raise exception 'invalid_freshness' using errcode = '22023';
+  end if;
+  select * into r from public.macro_ingest_runs where batch_id = p_batch_id for update;
+  if not found then raise exception 'batch_not_claimed' using errcode = 'P0002'; end if;
+  if p_owner_token is null or r.owner_token <> p_owner_token or p_finish_token is null or r.finish_token is distinct from p_finish_token
+     or r.state = 'aborted' then
+    raise exception 'fenced' using errcode = 'P0001';
+  end if;
+  if r.state <> 'finishing' then raise exception 'run_not_finishing' using errcode = 'P0001'; end if;
+  if p_dataset <> r.dataset then raise exception 'invalid_dataset' using errcode = '22023'; end if;
+  if r.finish_progress ? 'freshness_recorded' then return r.finish_progress; end if;
+  perform pg_advisory_xact_lock(hashtextextended('dq_freshness:' || p_dataset, 0));
+  select * into f from public.dq_freshness where dataset = p_dataset for update;
+  v_errors := case when p_ok then 0 else coalesce(f.consecutive_errors, 0) + 1 end;
+  v_last_ok := case when p_ok then p_now else f.last_ok_at end;
+  v_limit_ms := case p_cadence when 'daily' then 3 when 'monthly' then 34 when 'quarterly' then 95 end * 86400000::numeric;
+  v_status := case
+    when v_errors >= 2 then 'error'
+    when v_last_ok is null then 'missing'
+    when p_cadence = 'event' then 'fresh'
+    when extract(epoch from (p_now - v_last_ok)) * 1000 <= v_limit_ms then 'fresh'
+    else 'stale' end;
+  insert into public.dq_freshness(dataset, expected_cadence, last_ok_at, last_attempt_at, consecutive_errors, status, detail, updated_at)
+  values (p_dataset, p_cadence, v_last_ok, p_now, v_errors, v_status, p_detail, p_now)
+  on conflict (dataset) do update
+     set expected_cadence = excluded.expected_cadence, last_ok_at = excluded.last_ok_at, last_attempt_at = excluded.last_attempt_at,
+         consecutive_errors = excluded.consecutive_errors, status = excluded.status, detail = excluded.detail, updated_at = excluded.updated_at;
+  v := r.finish_progress || jsonb_build_object('freshness_recorded', jsonb_build_object('ok', p_ok, 'status', v_status));
+  update public.macro_ingest_runs set finish_progress = v, updated_at = date_trunc('milliseconds', now()) where batch_id = p_batch_id;
+  return v;
+end $$;
+revoke execute on function public.macro_record_freshness(uuid, uuid, uuid, text, boolean, text, timestamptz, jsonb) from public, anon, authenticated;
+grant execute on function public.macro_record_freshness(uuid, uuid, uuid, text, boolean, text, timestamptz, jsonb) to service_role;
 
 -- ---------------------------------------------------------------- analysis run + quota (plan "分析运行配额"; spec §2, §0.2 M22, N1)
 -- The caller (route) passes the verified session user. Per-user advisory lock first, then: an
@@ -2328,12 +2621,13 @@ do $$ declare t text; begin
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
   end loop;
-  foreach t in array array['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_snapshots','macro_regime_results'] loop
+  foreach t in array array['macro_series','macro_catalog_versions','macro_evidence_objects','macro_retrievals','macro_snapshots'] loop
     execute format('grant select on public.%I to anon, authenticated, service_role', t);
     execute format('drop policy if exists "%s public read" on public.%I', t, t);
     execute format('create policy "%s public read" on public.%I for select using (true)', t, t);
   end loop;
-  foreach t in array array['macro_publish_state','macro_ingest_chunks','macro_ingest_runs','macro_quarantine_members'] loop
+  -- macro_regime_results is service-only (第 6 稿 P1-2): judgments never leave the server through the public anon key.
+  foreach t in array array['macro_publish_state','macro_ingest_chunks','macro_ingest_runs','macro_quarantine_members','macro_regime_results'] loop
     execute format('grant select on public.%I to service_role', t);
     execute format('drop policy if exists "%s service read" on public.%I', t, t);
     execute format('create policy "%s service read" on public.%I for select to service_role using (true)', t, t);
@@ -2406,7 +2700,7 @@ export interface MacroRegimeResultRow {
 }
 export interface MacroPublishStateRow { region: MacroRegion; revision: number; input_revision: number; updated_at: string }
 export interface MacroIngestChunkRow {
-  batch_id: string; seq: number; total: number; state: 'processing' | 'done'; counts: Record<string, number>;
+  batch_id: string; seq: number; total: number; state: 'processing' | 'done'; counts: Record<string, number>; native_usable: number;
   errors: { code: string; key?: string; message?: string }[]; claim_keys: string[]; located_keys: string[];
   received_at: string; completed_at: string | null;
 }
@@ -2944,10 +3238,10 @@ EOF
 
 Semantics source: the Task 1 SQL functions. `memoryMacroDb` must return the **same counts, conflicts, error codes and messages** for the same inputs. Error messages are mapped as follows:
 - An SQL exception whose message is a contract code (`stale_publisher`, `invalid_manifest`, `quota_exceeded`, `not_found`, `already_resolved`, `reject_only`, `fenced`, `quarantine_closed`) becomes `MacroDbError(code)`. `fenced` (第 5 稿 P1-3/P1-4) and `quarantine_closed` (P2-3) are contract codes because callers branch on them: `fenced` aborts the request, `quarantine_closed` triggers one re-park.
-- Every other SQL exception becomes `MacroDbError('rpc_failed', <message>)`. Examples: `invalid_value_text`, `invalid_row`, `invalid_series`, `invalid_available_at`, `invalid_retrieval`, `evidence_mismatch`, `catalog_version_conflict`, `chunk_total_mismatch`, `chunk_not_processing`, `batch_not_claimed`, `batch_not_open`, `run_not_finishing`, `invalid_step`, `invalid_chunk`, `invalid_claim`, `invalid_decision`, `invalid_item`, `invalid_member`, `observation_required`, `observation_not_allowed`, `not_member`, `not_quarantined`, `member_ineligible`, and constraint-violation texts naming the constraint, such as `macro_retrievals_host`.
+- Every other SQL exception becomes `MacroDbError('rpc_failed', <message>)`. Examples: `invalid_value_text`, `invalid_row`, `invalid_series`, `invalid_available_at`, `invalid_retrieval`, `evidence_mismatch`, `catalog_version_conflict`, `chunk_total_mismatch`, `chunk_not_processing`, `batch_not_claimed`, `batch_not_open`, `run_not_finishing`, `invalid_step`, `invalid_chunk`, `invalid_claim`, `invalid_decision`, `invalid_item`, `invalid_member`, `observation_required`, `observation_not_allowed`, `not_member`, `not_quarantined`, `member_ineligible`, `invalid_finalize`, `invalid_freshness`, `invalid_dataset` (第 6 稿), memory-only `memory_tables_required`, and constraint-violation texts naming the constraint, such as `macro_retrievals_host`.
 - Memory throws exactly the same `MacroDbError`s. For constraint violations, its message contains the constraint name.
 
-Read paths go through anon, so they are ok-only; the eligibility reads (`latestEligible`, `eligibleHistory`), publish state, chunks, runs and quarantine members are service reads on the admin client. `eligibleHistory` pages `macro_eligible_history` by `p_after` = the last period of the previous page (≤ 1000 periods per page) and throws `truncated` when more than `maxRows` periods exist. `latestObservations` / `latestEligible` return rows in **unspecified order**: callers index them by `series_id`. `seriesHistory`'s `maxRows` counts the raw rows fetched, older versions included. More raw rows than that ⇒ `truncated`. `snapshotsSince` clamps `limit` to 1..1000. `previousSnapshot(region, beforeCreatedAt)` (newest non-failed snapshot strictly before, used by Task 13's "changes"), `retrievalsOf(sha256)` and `retrievalsByIds(ids)` (evidence drawer and series route) are plain anon selects on tables anon can already read: no migration change. The memory clock is strictly increasing on the real clock, so two snapshots written in the same millisecond still order.
+Read paths go through anon, so they are ok-only; the eligibility reads (`latestEligible`, `eligibleHistory`), publish state, chunks, runs, quarantine members and `regimeOf` (`macro_regime_results` is service-only, 第 6 稿 P1-2) are service reads on the admin client. `finalizeBatch` / `recordFreshness` (第 6 稿 P1-1) are admin RPCs; the memory twin writes the `TableClient` passed as `memoryMacroDb({tables})` (the landed `recordAttempt` computes the freshness row, so memory and the SQL parity test share one semantics). `eligibleHistory` pages `macro_eligible_history` by `p_after` = the last period of the previous page (≤ 1000 periods per page) and throws `truncated` when more than `maxRows` periods exist. `latestObservations` / `latestEligible` return rows in **unspecified order**: callers index them by `series_id`. `seriesHistory`'s `maxRows` counts the raw rows fetched, older versions included. More raw rows than that ⇒ `truncated`. `snapshotsSince` clamps `limit` to 1..1000. `previousSnapshot(region, beforeCreatedAt)` (newest non-failed snapshot strictly before, used by Task 13's "changes"), `retrievalsOf(sha256)` and `retrievalsByIds(ids)` (evidence drawer and series route) are plain anon selects on tables anon can already read: no migration change. The memory clock is strictly increasing on the real clock, so two snapshots written in the same millisecond still order.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3199,7 +3493,9 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect((await db.latestObservations([s]))[0].value_text).toBe('4.6');
    expect((await db.publishState('US')).inputRevision).toBe(st0.inputRevision+1);
    expect(await outcome(db.resolveConflict(a,'accept',by,rb))).toBe('already_resolved:already_resolved');
-   expect(await outcome(db.linkQuarantine(a,[ra]))).toBe('quarantine_closed:quarantine_closed');   // a closed item takes no members (第 5 稿 P2-3)
+   expect(await db.linkQuarantine(a,[ra])).toBe(0);                                                // closed: its exact member was disposed by this item → complete (第 6 稿 P2-3)
+   const rc=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.7',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
+   expect(await outcome(db.linkQuarantine(a,[rc]))).toBe('quarantine_closed:quarantine_closed');   // a row still quarantined needs a new item (第 5 稿 P2-3)
    const again=await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)]);
    expect(again).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.5',current_value_text:'4.6',observation_id:ra}]});   // never inserted again (第 5 稿 P1-2)
    const a2=await item(s);await db.linkQuarantine(a2,[ra]);
@@ -3322,13 +3618,14 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    expect(await outcome(db.claimChunk(b1,0,3,t))).toBe('rpc_failed:chunk_total_mismatch');
    expect(await outcome(db.claimChunk(b1,2,2,t))).toBe('rpc_failed:invalid_chunk');
    expect(await outcome(db.claimChunk(randomUUID(),0,1,t))).toBe('rpc_failed:batch_not_claimed');
-   const done=await db.completeChunk(b1,1,{counts:c,errors:[{code:'parse_failed',key:'CN_A'}],claimKeys:['CN_A|2026-09-30'],locatedKeys:[]},t);
-   expect(done).toEqual({seq:1,total:2,state:'done',counts:c,errors:[{code:'parse_failed',key:'CN_A'}],claim_keys:['CN_A|2026-09-30'],located_keys:[]});
-   expect(await outcome(db.completeChunk(b1,1,{counts:c,errors:[],claimKeys:[],locatedKeys:[]},t))).toBe('rpc_failed:chunk_not_processing');
+   expect(await outcome(db.completeChunk(b1,1,{counts:c,nativeUsable:4,errors:[],claimKeys:[],locatedKeys:[]},t))).toBe('rpc_failed:invalid_chunk');   // > inserted+versioned+duplicates (第 6 稿 P2-1)
+   const done=await db.completeChunk(b1,1,{counts:c,nativeUsable:2,errors:[{code:'parse_failed',key:'CN_A'}],claimKeys:['CN_A|2026-09-30'],locatedKeys:[]},t);
+   expect(done).toEqual({seq:1,total:2,state:'done',counts:c,native_usable:2,errors:[{code:'parse_failed',key:'CN_A'}],claim_keys:['CN_A|2026-09-30'],located_keys:[]});
+   expect(await outcome(db.completeChunk(b1,1,{counts:c,nativeUsable:3,errors:[],claimKeys:[],locatedKeys:[]},t))).toBe('rpc_failed:chunk_not_processing');
    expect(await db.claimChunk(b1,1,2,t)).toEqual({status:'done',chunk:done});                      // the stored receipt
    expect(await db.beginFinish(b1,2,t)).toEqual({status:'incomplete',missing:[0]});
    await db.claimChunk(b1,0,2,t);
-   const zeroth=await db.completeChunk(b1,0,{counts:{...c,fetched:1},errors:[],claimKeys:[],locatedKeys:['CN_A|2026-09-30']},t);
+   const zeroth=await db.completeChunk(b1,0,{counts:{...c,fetched:1},nativeUsable:3,errors:[],claimKeys:[],locatedKeys:['CN_A|2026-09-30']},t);
    expect(await db.chunksOf(b1)).toEqual([zeroth,done]);
    expect(await outcome(db.beginFinish(b1,2,randomUUID()))).toBe('fenced:fenced');                   // only the owner finishes
    const f1=await db.beginFinish(b1,2,t);
@@ -3347,6 +3644,8 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    await db.recordFinishStep(b1,'receipt',{status:'success'},fence);
    expect(await db.beginFinish(b1,2,t)).toMatchObject({status:'finished',progress:{derived:{counts:c,errors:[]},receipt:{status:'success'}}});
    expect(await outcome(db.recordFinishStep(b1,'published',{},fence))).toBe('rpc_failed:run_not_finishing');
+   expect(await outcome(db.recordFinishStep(b1,'published',{},{ownerToken:t,finishToken:f1.finishToken}))).toBe('fenced:fenced');   // an obsolete token: fenced before any state error (第 6 稿 P1-1)
+   expect(await outcome(db.recordFinishStep(b1,'freshness_recorded' as never,{},fence))).toBe('rpc_failed:invalid_step');          // only recordFreshness writes it
    expect(await db.claimIngest(await h.batch(ds),ds,LEASE)).toMatchObject({status:'claimed'});   // the finished run released the lease
    expect(await db.ingestRun(randomUUID())).toBeNull();
   });
@@ -3372,7 +3671,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
     ['writeObservations',()=>db.writeObservations(old,'c',[nativeRow(s,'2026-10-31','4.2',r1,T2)],t1)],
     ['linkQuarantine',()=>db.linkQuarantine(randomUUID(),[randomUUID()],{batchId:old,ownerToken:t1})],
     ['claimChunk',()=>db.claimChunk(old,0,1,t1)],
-    ['completeChunk',()=>db.completeChunk(old,0,{counts:zeroCounts,errors:[],claimKeys:[],locatedKeys:[]},t1)],
+    ['completeChunk',()=>db.completeChunk(old,0,{counts:zeroCounts,nativeUsable:0,errors:[],claimKeys:[],locatedKeys:[]},t1)],
     ['beginFinish',()=>db.beginFinish(old,1,t1)],
     ['recordFinishStep',()=>db.recordFinishStep(old,'derived',{},{ownerToken:t1,finishToken:randomUUID()})],
     ['publishSnapshot',()=>db.publishSnapshot({...input('US',st,v,[]),publishKey:`ingest:${old}`,batchId:old,ownerToken:t1})],
@@ -3401,8 +3700,10 @@ Create `src/lib/macro/db.test.ts`:
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {describe,expect,it} from 'vitest';
+import {memoryTableClient} from '../db/memory-table-client';
+import {startBatch} from '../dq/batches';
 import {IN_CHUNK,MacroDbError,READ_PAGE,WRITE_CHUNK,highestPerPeriod,packWrites,supabaseMacroDb,toMacroDbError} from './db';
-import {macroDbContract,nativeRow} from './db-contract';
+import {macroDbContract,nativeRow,outcome} from './db-contract';
 import {memoryMacroDb} from './memory-db';
 import type {ObservationWrite,PublishInput} from './types';
 
@@ -3446,6 +3747,36 @@ describe('memoryMacroDb specifics',()=>{
   db.setBatchStatus(running,'partial');
   expect((await db.latestEligible(['X_B']))[0].period_end).toBe('2026-09-30');
  });
+ it('finalizeBatch / recordFreshness (第 6 稿 P1-1/P2-4): need the DQ TableClient; tokens are checked first; finalize writes once and moves eligibility; freshness has recordAttempt semantics and is recorded once per run',async()=>{
+  const ZERO={fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0};
+  const fin=(status:'success'|'failed',finishedAt='2026-11-06T05:31:00.000Z')=>({status,counts:ZERO,errors:status==='failed'?[{code:'sync_crashed'}]:[],finishedAt});
+  expect(await outcome(memoryMacroDb().finalizeBatch(randomUUID(),fin('success'),null))).toBe('rpc_failed:memory_tables_required');
+  const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
+  const db=memoryMacroDb({tables});
+  const {batchId:cron}=await startBatch(tables,{producer:'ts-fred',dataset:'macro.fred',triggeredBy:'cron'});
+  expect(await db.finalizeBatch(cron,fin('failed','2000-01-01T00:00:00.000Z'),null)).toEqual({status:'failed',finalized:true});   // cron: no run, no tokens
+  const row=tables.rows('ingest_batches')[0];
+  expect(row).toMatchObject({status:'failed',errors:[{code:'sync_crashed'}]});
+  expect(Date.parse(String(row.finished_at))).toBeGreaterThanOrEqual(Date.parse(String(row.started_at)));   // clamped like finishBatch
+  expect(await db.finalizeBatch(cron,fin('success'),null)).toEqual({status:'failed',finalized:false});        // read back, never twice
+  expect(await outcome(db.finalizeBatch(cron,fin('success'),{ownerToken:'x',finishToken:'y'}))).toBe('fenced:fenced');
+  const {batchId:b}=await startBatch(tables,{producer:'py-akshare',dataset:'macro.akshare'});
+  const t=(await db.claimIngest(b,'macro.akshare',{maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:false})).ownerToken!;
+  const f1=await db.beginFinish(b,0,t),f2=await db.beginFinish(b,0,t);
+  if(f1.status!=='finishing'||f2.status!=='finishing')throw new Error('unreachable');
+  const old={ownerToken:t,finishToken:f1.finishToken},cur={ownerToken:t,finishToken:f2.finishToken};
+  const fw={dataset:'macro.akshare',ok:false,cadence:'daily' as const,now:'2026-11-06T05:31:00.000Z',detail:{batch_id:b}};
+  for(const call of [()=>db.finalizeBatch(b,fin('success'),old),()=>db.finalizeBatch(b,fin('success'),null),()=>db.recordFreshness(b,fw,old)])expect(await outcome(call())).toBe('fenced:fenced');
+  expect(await outcome(db.recordFreshness(b,{...fw,dataset:'macro.fred'},cur))).toBe('rpc_failed:invalid_dataset');
+  expect(tables.rows('dq_freshness')).toEqual([]);
+  expect(tables.rows('ingest_batches').find(x=>x.batch_id===b)).toMatchObject({status:'running'});
+  expect(await db.finalizeBatch(b,fin('success'),cur)).toEqual({status:'success',finalized:true});
+  expect(await db.recordFreshness(b,fw,cur)).toMatchObject({freshness_recorded:{ok:false,status:'missing'}});
+  expect(await db.recordFreshness(b,{...fw,ok:true},cur)).toMatchObject({freshness_recorded:{ok:false,status:'missing'}});   // once per run
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',consecutive_errors:1,status:'missing',detail:{batch_id:b}})]);
+  await db.recordFinishStep(b,'receipt',{},cur);
+  expect(await outcome(db.recordFreshness(b,fw,old))).toBe('fenced:fenced');                                     // obsolete token after finish: fenced, not run_not_finishing
+ });
  it('returns copies: mutating a read row does not change stored state',async()=>{
   const db=memoryMacroDb();
   expect(await db.publishState('US')).toEqual({revision:0,inputRevision:0});
@@ -3472,13 +3803,16 @@ function stub(o:{rpc?:(fn:string,args:Record<string,unknown>)=>Res;select?:(call
 }
 const pgObs=(o:Record<string,unknown>={})=>({observation_id:randomUUID(),series_id:'US_UNRATE',period_end:'2026-09-30',value:4.1,value_text:'4.1',version:1,available_at:'2026-11-02T05:30:00+00:00',availability_basis:'first_seen',ingested_at:'2026-11-02T05:30:01.123+00:00',status:'ok',retrieval_id:randomUUID(),locator:{kind:'csv_row',line:2,column:1},derived_from:null,transform:null,code_version:'abc',batch_id:randomUUID(),...o});
 const publishInput:PublishInput={region:'US',expectedRevision:3,expectedInputRevision:7,asOf:'2026-11-06',methodologyVersion:'macro-method/1.0',catalogVersion:'macro-catalog/abcdefabcdef',observationIds:['o1'],historyIds:['o0','o1'],catalogCounts:{verified:5,missing:2,restricted:1},regime:null,contributions:[],rulesVersion:'macro-rules/1',uncoveredWeight:20};
-const chunkRow={seq:0,total:1,state:'done',counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0},errors:[{code:'x',key:'CN_A'}],claim_keys:['CN_A|2026-09-30'],located_keys:[]};
+const chunkRow={seq:0,total:1,state:'done',counts:{fetched:1,inserted:1,duplicates:0,versioned:0,quarantined:0,failed:0},native_usable:1,errors:[{code:'x',key:'CN_A'}],claim_keys:['CN_A|2026-09-30'],located_keys:[]};
+const finalizeInput={status:'success' as const,counts:chunkRow.counts,errors:[],finishedAt:'2026-11-06T05:31:00.000Z'};
+const freshnessInput={dataset:'macro.akshare',ok:true,cadence:'daily' as const,now:'2026-11-06T05:31:00.000Z',detail:{batch_id:'b1'}};
 
 describe('supabaseMacroDb wiring',()=>{
  it('maps every write to its service RPC with exact argument names, on the admin client only',async()=>{
   const data:Record<string,unknown>={macro_put_retrieval:'id-1',record_failed_macro_snapshot:'id-1',publish_macro_snapshot:{snapshot_id:'s1',revision:'4',replayed:false},republish_macro_snapshot:{snapshot_id:'s2',revision:'5',source_snapshot_id:'s1'},
    macro_write_observations:{inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]},macro_claim_ingest:{status:'claimed',owner_token:'tok-1',aborted:[]},macro_claim_chunk:{status:'done',chunk:chunkRow},
-   macro_complete_chunk:chunkRow,macro_begin_finish:{status:'finishing',progress:{},finish_token:'fin-1'},macro_record_finish_step:{derived:{counts:chunkRow.counts,errors:[]}},macro_link_quarantine:1};
+   macro_complete_chunk:chunkRow,macro_begin_finish:{status:'finishing',progress:{},finish_token:'fin-1'},macro_record_finish_step:{derived:{counts:chunkRow.counts,errors:[]}},macro_link_quarantine:1,
+   macro_finalize_batch:{status:'success',finalized:true},macro_record_freshness:{freshness_recorded:{ok:true,status:'fresh'}}};
   const admin=stub({rpc:fn=>({data:data[fn]??null,error:null})});
   const anon=stub();
   const db=supabaseMacroDb({admin:admin.client,anon:anon.client});
@@ -3486,9 +3820,12 @@ describe('supabaseMacroDb wiring',()=>{
   expect(await db.putRetrieval({sha256:'a'.repeat(64),object_path:`fred_csv/${'a'.repeat(64)}.csv`,adapter:'fred_csv',content_type:'text/csv',byte_length:10},{fetch_url:'https://fred.stlouisfed.org/x',fetch_host:'fred.stlouisfed.org',http_status:200,fetched_at:'2026-11-01T05:30:00.000Z',batch_id:'b1',tool_versions:{node:'22'}},'tok-1')).toBe('id-1');
   expect(await db.claimIngest('b1','macro.akshare',{maxAgeMs:7_200_000,processingTimeoutMs:600_000,takeover:true})).toEqual({status:'claimed',ownerToken:'tok-1',aborted:[],holder:null});
   expect(await db.claimChunk('b1',0,1,'tok-1')).toEqual({status:'done',chunk:chunkRow});
-  expect(await db.completeChunk('b1',0,{counts:chunkRow.counts,errors:chunkRow.errors,claimKeys:chunkRow.claim_keys,locatedKeys:[]},'tok-1')).toEqual(chunkRow);
+  expect(await db.completeChunk('b1',0,{counts:chunkRow.counts,nativeUsable:1,errors:chunkRow.errors,claimKeys:chunkRow.claim_keys,locatedKeys:[]},'tok-1')).toEqual(chunkRow);
   expect(await db.beginFinish('b1',1,'tok-1')).toEqual({status:'finishing',progress:{},finishToken:'fin-1'});
   expect(await db.recordFinishStep('b1','derived',{counts:chunkRow.counts,errors:[]},{ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({derived:{counts:chunkRow.counts,errors:[]}});
+  expect(await db.finalizeBatch('b1',finalizeInput,{ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({status:'success',finalized:true});
+  expect(await db.finalizeBatch('b2',finalizeInput,null)).toEqual({status:'success',finalized:true});                          // cron: no run, no tokens
+  expect(await db.recordFreshness('b1',freshnessInput,{ownerToken:'tok-1',finishToken:'fin-1'})).toEqual({freshness_recorded:{ok:true,status:'fresh'}});
   expect(await db.writeObservations('b1','code',[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],'tok-1')).toEqual({inserted:1,duplicates:0,versioned:0,quarantined:0,conflicts:[]});
   expect(await db.publishSnapshot({...publishInput,publishKey:'ingest:b1',batchId:'b1',ownerToken:'tok-1'})).toEqual({snapshot_id:'s1',revision:4,replayed:false});
   expect(await db.republishSnapshot('s1',4,7)).toEqual({snapshot_id:'s2',revision:5});
@@ -3502,9 +3839,12 @@ describe('supabaseMacroDb wiring',()=>{
    ['macro_put_retrieval',{p_sha256:'a'.repeat(64),p_object_path:`fred_csv/${'a'.repeat(64)}.csv`,p_adapter:'fred_csv',p_content_type:'text/csv',p_byte_length:10,p_fetch_url:'https://fred.stlouisfed.org/x',p_fetch_host:'fred.stlouisfed.org',p_http_status:200,p_fetched_at:'2026-11-01T05:30:00.000Z',p_batch_id:'b1',p_tool_versions:{node:'22'},p_owner_token:'tok-1'}],
    ['macro_claim_ingest',{p_batch_id:'b1',p_dataset:'macro.akshare',p_max_age:'7200000 milliseconds',p_processing_timeout:'600000 milliseconds',p_takeover:true}],
    ['macro_claim_chunk',{p_batch_id:'b1',p_seq:0,p_total:1,p_owner_token:'tok-1'}],
-   ['macro_complete_chunk',{p_batch_id:'b1',p_seq:0,p_counts:chunkRow.counts,p_errors:chunkRow.errors,p_claim_keys:chunkRow.claim_keys,p_located_keys:[],p_owner_token:'tok-1'}],
+   ['macro_complete_chunk',{p_batch_id:'b1',p_seq:0,p_counts:chunkRow.counts,p_native_usable:1,p_errors:chunkRow.errors,p_claim_keys:chunkRow.claim_keys,p_located_keys:[],p_owner_token:'tok-1'}],
    ['macro_begin_finish',{p_batch_id:'b1',p_total:1,p_owner_token:'tok-1'}],
    ['macro_record_finish_step',{p_batch_id:'b1',p_step:'derived',p_data:{counts:chunkRow.counts,errors:[]},p_owner_token:'tok-1',p_finish_token:'fin-1'}],
+   ['macro_finalize_batch',{p_batch_id:'b1',p_owner_token:'tok-1',p_finish_token:'fin-1',p_status:'success',p_counts:chunkRow.counts,p_errors:[],p_finished_at:'2026-11-06T05:31:00.000Z'}],
+   ['macro_finalize_batch',{p_batch_id:'b2',p_owner_token:null,p_finish_token:null,p_status:'success',p_counts:chunkRow.counts,p_errors:[],p_finished_at:'2026-11-06T05:31:00.000Z'}],
+   ['macro_record_freshness',{p_batch_id:'b1',p_owner_token:'tok-1',p_finish_token:'fin-1',p_dataset:'macro.akshare',p_ok:true,p_cadence:'daily',p_now:'2026-11-06T05:31:00.000Z',p_detail:{batch_id:'b1'}}],
    ['macro_write_observations',{p_batch:'b1',p_code_version:'code',p_rows:[nativeRow('US_UNRATE','2026-09-30','4.1','r1','2026-11-01T05:30:00.000Z')],p_owner_token:'tok-1'}],
    ['publish_macro_snapshot',{p_region:'US',p_expected_revision:3,p_expected_input_revision:7,p_as_of:'2026-11-06',p_methodology_version:'macro-method/1.0',p_catalog_version:'macro-catalog/abcdefabcdef',p_observation_ids:['o1'],p_history_ids:['o0','o1'],p_catalog_counts:{verified:5,missing:2,restricted:1},p_regime:null,p_contributions:[],p_rules_version:'macro-rules/1',p_uncovered_weight:20,p_publish_key:'ingest:b1',p_batch_id:'b1',p_owner_token:'tok-1'}],
    ['republish_macro_snapshot',{p_snapshot_id:'s1',p_expected_revision:4,p_expected_input_revision:7}],
@@ -3535,9 +3875,9 @@ describe('supabaseMacroDb wiring',()=>{
   await expect(db.eligibleHistory('US_UNRATE',{maxRows:1499})).rejects.toMatchObject({code:'truncated'});
   expect(anon.rpcCalls).toEqual([]);
  });
- it('reads through anon (RLS): latest and since via invoker RPCs, single rows via select; publish state and chunks via admin',async()=>{
+ it('reads through anon (RLS): latest and since via invoker RPCs, single rows via select; publish state, chunks and judgments (service-only, 第 6 稿 P1-2) via admin',async()=>{
   const row=pgObs();
-  const admin=stub({select:calls=>({data:calls[0][1][0]==='macro_publish_state'?{revision:'5',input_revision:'9'}:[{batch_id:'b1',received_at:'2026-11-06T05:30:00+00:00',completed_at:null,...chunkRow}],error:null})});
+  const admin=stub({select:calls=>({data:calls[0][1][0]==='macro_publish_state'?{revision:'5',input_revision:'9'}:calls[0][1][0]==='macro_regime_results'?null:[{batch_id:'b1',received_at:'2026-11-06T05:30:00+00:00',completed_at:null,...chunkRow}],error:null})});
   const anon=stub({rpc:fn=>({data:fn==='macro_latest_observations'?[row]:[],error:null}),select:()=>({data:null,error:null})});
   const db=supabaseMacroDb({admin:admin.client,anon:anon.client});
   const [o]=await db.latestObservations(['US_UNRATE'],{asOf:'2026-11-03T00:00:00.000Z'});
@@ -3556,6 +3896,9 @@ describe('supabaseMacroDb wiring',()=>{
   expect(await db.publishState('CN')).toEqual({revision:5,inputRevision:9});
   expect(admin.queries.at(-1)).toEqual([['from',['macro_publish_state']],['select',['revision,input_revision']],['eq',['region','CN']],['maybeSingle',[]]]);
   expect(await db.chunksOf('b1')).toEqual([chunkRow]);
+  expect(await db.regimeOf('s1')).toBeNull();
+  expect(admin.queries.at(-1)).toEqual([['from',['macro_regime_results']],['select',['*']],['eq',['snapshot_id','s1']],['maybeSingle',[]]]);
+  expect(anon.queries.some(c=>c[0][1][0]==='macro_regime_results')).toBe(false);                      // never through the anon key
   expect(admin.rpcCalls).toEqual([]);
  });
  it('maps Postgres messages to MacroDbError codes',async()=>{
@@ -3699,15 +4042,16 @@ Create `src/lib/macro/db.ts`:
 // MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4…P2-4): the only way macro
 // code touches the database. supabaseMacroDb writes through the service-role client's RPCs (no role has table
 // writes) and reads through the anon client, so RLS applies (ok observations only); publish state, chunk
-// receipts, ingest runs, quarantine members and the publication-eligible reads (latestEligible /
-// eligibleHistory: ingest_batches is service-only) go through the admin client. memory-db.ts implements the
+// receipts, ingest runs, quarantine members, judgments (regimeOf: macro_regime_results is service-only, 第 6 稿 P1-2) and the
+// publication-eligible reads (latestEligible / eligibleHistory: ingest_batches is service-only) go through the admin client.
+// finalizeBatch / recordFreshness (第 6 稿 P1-1) are the fenced finish side effects (macro_finalize_batch / macro_record_freshness). memory-db.ts implements the
 // same semantics and db-contract.ts pins both. Postgres messages that are contract codes (stale_publisher,
 // invalid_manifest, quota_exceeded, not_found, already_resolved, reject_only, fenced, quarantine_closed) become
 // MacroDbError codes; any other failure is rpc_failed with the original message (invalid_value_text, member_ineligible, chunk_total_mismatch,
 // chunk_not_processing, not_quarantined, evidence_mismatch, catalog_version_conflict, constraint texts, …). The new RPCs are not in
 // Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
 import type {SupabaseClient} from '@supabase/supabase-js';
-import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
+import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
 
 export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
@@ -3733,8 +4077,9 @@ export interface MacroDb{
  /** RPC macro_claim_chunk: inserts (batch, seq) as processing; a repeat returns the stored row without claiming. Wrong token or
   *  an aborted run ⇒ fenced. service */
  claimChunk(batchId:string,seq:number,total:number,ownerToken:string):Promise<{status:'claimed'}|{status:'processing'|'done';chunk:import('./types').ChunkRecord}>;
- /** RPC macro_complete_chunk: processing → done with counts, sanitized errors and claim/location key sets (owner-fenced). service */
- completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
+ /** RPC macro_complete_chunk: processing → done with counts, nativeUsable (第 6 稿 P2-1: usable native rows, previously_rejected
+  *  excluded; 0 ≤ nativeUsable ≤ inserted+versioned+duplicates), sanitized errors and claim/location key sets (owner-fenced). service */
+ completeChunk(batchId:string,seq:number,result:{counts:import('./types').ChunkCounts;nativeUsable:number;errors:import('./types').ChunkError[];claimKeys:string[];locatedKeys:string[]},ownerToken:string):Promise<import('./types').ChunkRecord>;
  chunksOf(batchId:string):Promise<import('./types').ChunkRecord[]>;                                              // service, seq order
  ingestRun(batchId:string):Promise<{dataset:string;state:import('./types').IngestRunState;progress:import('./types').FinishProgress}|null>;   // service
  /** RPC macro_begin_finish (第 5 稿 P1-4): only the token owner; open → finishing once every chunk 0..total−1 is done; a
@@ -3742,8 +4087,18 @@ export interface MacroDb{
   *  the stored progress; another owner or an aborted run ⇒ fenced. service */
  beginFinish(batchId:string,total:number,ownerToken:string):Promise<{status:'incomplete';missing:number[]}|{status:'finishing';progress:import('./types').FinishProgress;finishToken:string}|{status:'finished';progress:import('./types').FinishProgress}>;
  /** RPC macro_record_finish_step: merges one step into finish_progress (publish_attempt appends to attempts[]); 'receipt'
-  *  finishes the run. Both tokens must match the run (else fenced). service */
+  *  finishes the run. Both tokens must match the run, checked before any state error (else fenced, 第 6 稿 P1-1). service */
  recordFinishStep(batchId:string,step:import('./types').FinishStep,data:Record<string,unknown>,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
+ /** RPC macro_finalize_batch (第 6 稿 P1-1/P2-4): under the run lock (fence = owner + finish token of the AKShare finish; null for
+  *  cron, whose batch has no run row — a batch WITH a run refuses a null fence) writes ingest_batches status/counts/errors/
+  *  finished_at (≥ started_at) only while status='running'; otherwise returns the stored status with finalized:false (an
+  *  earlier attempt finished it). Token mismatch / aborted run ⇒ fenced; unknown batch ⇒ not_found. service */
+ finalizeBatch(batchId:string,input:import('./types').FinalizeInput,fence:import('./types').FinishFence|null):Promise<import('./types').FinalizeResult>;
+ /** RPC macro_record_freshness (第 6 稿 P1-1): under the run lock, both tokens checked first (fenced), run finishing
+  *  (run_not_finishing), dataset = the run's dataset; upserts dq_freshness with recordAttempt / computeFreshness semantics and
+  *  writes the freshness_recorded checkpoint in the same transaction. Already recorded for this run ⇒ returns the progress
+  *  unchanged (no second write). Returns the progress. service */
+ recordFreshness(batchId:string,input:import('./types').FreshnessWrite,fence:import('./types').FinishFence):Promise<import('./types').FinishProgress>;
  /** RPC macro_write_observations. ownerToken as putRetrieval (第 5 稿 P1-3). service */
  writeObservations(batchId:string,codeVersion:string,rows:import('./types').ObservationWrite[],ownerToken?:string|null):Promise<import('./types').WriteResult>;
  /** Latest period per series, highest ok version within it; asOf ⇒ only rows with available_at ≤ asOf. anon. */
@@ -3760,8 +4115,11 @@ export interface MacroDb{
  versionsOf(seriesId:string,periodEnd:string):Promise<import('./types').ObservationRow[]>;
  observationsByIds(ids:string[]):Promise<import('./types').ObservationRow[]>;                                    // anon; ok only
  publishState(region:import('./types').Region):Promise<{revision:number;inputRevision:number}>;                   // service
- /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds quarantined/rejected
-  *  rows of the item's natural key; a closed item ⇒ quarantine_closed. batchId + ownerToken fence the AKShare path (第 5 稿 P1-3). service */
+ /** RPC macro_link_quarantine (第 4 稿 P1-4; 第 5 稿 P2-3; 第 6 稿 P2-3): locks the dq_quarantine row FOR UPDATE and binds
+  *  quarantined/rejected rows of the item's natural key. A closed item: if every given row is a member of THIS item and is now
+  *  ok or rejected (the item's recorded resolution disposed of it), linking is already complete ⇒ returns 0; otherwise (a row
+  *  still quarantined) ⇒ quarantine_closed and the caller re-parks. Callers link one observation per call. batchId + ownerToken
+  *  fence the AKShare path (第 5 稿 P1-3). service */
  linkQuarantine(quarantineId:string,observationIds:string[],fence?:{batchId:string;ownerToken:string|null}):Promise<number>;
  /** Members of one item with their current status, version ascending. service */
  quarantineMembers(quarantineId:string):Promise<import('./types').QuarantineMember[]>;
@@ -3781,7 +4139,9 @@ export interface MacroDb{
  snapshotsSince(marker:{created_at:string;snapshot_id:string}|null,limit:number):Promise<import('./types').SnapshotRecord[]>;   // anon; active+superseded only
  /** The newest non-failed snapshot of the region created strictly before beforeCreatedAt ("changes since the previous snapshot"). anon. */
  previousSnapshot(region:import('./types').Region,beforeCreatedAt:string):Promise<import('./types').SnapshotRecord|null>;
- regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;                                       // anon
+ /** macro_regime_results is service-only (第 6 稿 P1-2): read through the admin client; callers expose it only server-side
+  *  behind MACRO_JUDGMENTS_ENABLED. service */
+ regimeOf(snapshotId:string):Promise<import('./types').RegimeRecord|null>;
 }
 
 export const READ_PAGE=1000;      // PostgREST max_rows
@@ -3824,7 +4184,7 @@ const countsOf=(v:unknown):ChunkCounts=>{const c=(v??{}) as Record<string,unknow
 const errorsOf=(v:unknown):ChunkError[]=>(Array.isArray(v)?v:[]).map(e=>{const o=(e??{}) as Record<string,unknown>;return {code:String(o.code),...(o.key!==undefined?{key:String(o.key)}:{}),...(o.message!==undefined?{message:String(o.message)}:{})};});
 const stringsOf=(v:unknown):string[]=>(Array.isArray(v)?v:[]).map(String);
 export function chunkFromRow(r:Record<string,unknown>):ChunkRecord{
- return {seq:Number(r.seq),total:Number(r.total),state:r.state==='done'?'done':'processing',counts:countsOf(r.counts),errors:errorsOf(r.errors),claim_keys:stringsOf(r.claim_keys),located_keys:stringsOf(r.located_keys)};
+ return {seq:Number(r.seq),total:Number(r.total),state:r.state==='done'?'done':'processing',counts:countsOf(r.counts),native_usable:Number(r.native_usable??0),errors:errorsOf(r.errors),claim_keys:stringsOf(r.claim_keys),located_keys:stringsOf(r.located_keys)};
 }
 const progressOf=(v:unknown):FinishProgress=>(v&&typeof v==='object'&&!Array.isArray(v)?v:{}) as FinishProgress;
 
@@ -3913,7 +4273,7 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    throw new MacroDbError('rpc_failed',`unexpected_chunk_result:${String(r?.status)}`);
   },
   async completeChunk(batchId,seq,res,ownerToken){
-   return chunkFromRow(await call<Record<string,unknown>>(admin,'macro_complete_chunk',{p_batch_id:batchId,p_seq:seq,p_counts:res.counts,p_errors:res.errors,p_claim_keys:res.claimKeys,p_located_keys:res.locatedKeys,p_owner_token:ownerToken}));
+   return chunkFromRow(await call<Record<string,unknown>>(admin,'macro_complete_chunk',{p_batch_id:batchId,p_seq:seq,p_counts:res.counts,p_native_usable:res.nativeUsable,p_errors:res.errors,p_claim_keys:res.claimKeys,p_located_keys:res.locatedKeys,p_owner_token:ownerToken}));
   },
   async chunksOf(batchId){
    const got=await pageAll(()=>admin.from('macro_ingest_chunks').select('*').eq('batch_id',batchId).order('seq',{ascending:true}) as Query,Number.MAX_SAFE_INTEGER);
@@ -3932,6 +4292,16 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
   },
   async recordFinishStep(batchId,step,data,fence){
    return progressOf(await call(admin,'macro_record_finish_step',{p_batch_id:batchId,p_step:step,p_data:data,p_owner_token:fence.ownerToken,p_finish_token:fence.finishToken}));
+  },
+  async finalizeBatch(batchId,input,fence){
+   const r=await call<{status?:string;finalized?:boolean}>(admin,'macro_finalize_batch',{p_batch_id:batchId,p_owner_token:fence?.ownerToken??null,p_finish_token:fence?.finishToken??null,
+    p_status:input.status,p_counts:input.counts,p_errors:input.errors,p_finished_at:input.finishedAt});
+   if(!r||typeof r.status!=='string'||typeof r.finalized!=='boolean')throw new MacroDbError('rpc_failed','unexpected_finalize_result');
+   return {status:r.status as FinalizeResult['status'],finalized:r.finalized};
+  },
+  async recordFreshness(batchId,input,fence){
+   return progressOf(await call(admin,'macro_record_freshness',{p_batch_id:batchId,p_owner_token:fence.ownerToken,p_finish_token:fence.finishToken,
+    p_dataset:input.dataset,p_ok:input.ok,p_cadence:input.cadence,p_now:input.now,p_detail:input.detail}));
   },
   async writeObservations(batchId,codeVersion,input,ownerToken){
    const parts:WriteResult[]=[];
@@ -4018,7 +4388,8 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
     .order('created_at',{ascending:false}).order('snapshot_id',{ascending:false}).limit(1).maybeSingle());
    return r?snapshotFromRow(r):null;
   },
-  async regimeOf(id){const r=await maybe(anon.from('macro_regime_results').select('*').eq('snapshot_id',id).maybeSingle());return r?regimeFromRow(r):null;},
+  // service-only table (第 6 稿 P1-2): never through the anon key
+  async regimeOf(id){const r=await maybe(admin.from('macro_regime_results').select('*').eq('snapshot_id',id).maybeSingle());return r?regimeFromRow(r):null;},
  };
 }
 ```
@@ -4037,21 +4408,27 @@ Create `src/lib/macro/memory-db.ts`:
 // write validates the whole call first and commits atomically (one SQL call). Reads return copies.
 // 第 5 稿: owner-token fence on every ingest mutation (assertOwner = SQL macro_assert_owner), takeover → 'aborted',
 // rotating finish tokens, publish-key replay, previously_rejected before any action, quarantine reuse only from
-// eligible / current batches, member_ineligible, quarantine_closed on a closed item.
+// eligible / current batches, member_ineligible, quarantine_closed on a closed item. 第 6 稿: finalizeBatch / recordFreshness
+// write the injected DQ TableClient (opts.tables) after the same token checks as the SQL; native_usable on chunks; a closed
+// item whose exact member this item disposed of completes the link (0); claimIngest declares its batch running.
 // There is no ingest_batches table here: setBatchStatus declares a batch's status and a batch never
 // declared counts as success (= SQL after finishBatch). For unit tests and the shared contract.
 import {randomUUID} from 'node:crypto';
+import {recordAttempt} from '../dq/freshness';
+import type {TableClient} from '../db/table-client';
 import {canonicalJson} from './catalog';
 import {MacroDbError,highestPerPeriod} from './db';
 import type {MacroDb} from './db';
-import type {ChunkCounts,ChunkRecord,EvidenceObject,FinishProgress,IngestRunState,MacroSeriesDef,ObservationRow,ObservationWrite,QuarantineMember,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
+import type {ChunkCounts,ChunkRecord,EvidenceObject,FinalizeResult,FinishFence,FinishProgress,IngestRunState,MacroSeriesDef,ObservationRow,ObservationWrite,QuarantineMember,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
 
 const VALUE=/^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERIES_ID=/^[A-Z][A-Z0-9_]{0,63}$/;
 const NATURAL_KEY=/^[A-Z][A-Z0-9_]{0,63}\|\d{4}-\d{2}-\d{2}$/;
 const CHUNK_KEYS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
-const FINISH_STEPS=['derived','batch_finished','freshness_started','freshness_recorded','published','publish_attempt','receipt'] as const;
+const FINISH_STEPS=['derived','batch_finished','published','publish_attempt','receipt'] as const;   // freshness_recorded: recordFreshness only (第 6 稿 P1-1)
+const FINAL_STATUSES=['success','partial','failed','rejected'] as const;
+const CADENCES=['daily','monthly','quarterly','event'] as const;
 const MAX_ATTEMPTS=20;
 const DATASET=/^macro\.[a-z0-9_]{1,32}$/;
 const rpc=(m:string)=>new MacroDbError('rpc_failed',m);
@@ -4075,7 +4452,9 @@ export interface MemoryMacroDb extends MacroDb{
  allObservations():ObservationRow[];
 }
 
-export function memoryMacroDb():MemoryMacroDb{
+/** opts.tables: the DQ TableClient finalizeBatch / recordFreshness write (ingest_batches, dq_freshness) — route tests pass the same
+ *  memoryTableClient the route uses; without it those two methods throw rpc_failed:memory_tables_required. */
+export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  let fixedNow:string|null=null;let lastMs=0;
  // Real-clock timestamps are strictly increasing (SQL now() has µs resolution; two writes in one ms must still order),
  // so previousSnapshot / snapshotsSince see insertion order. setNow pins the clock exactly (tests).
@@ -4098,6 +4477,7 @@ export function memoryMacroDb():MemoryMacroDb{
  const members=new Map<string,Set<string>>();
  const audit:AuditRow[]=[];
  const zeroCounts=():ChunkCounts=>({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0});
+ const needTables=():TableClient=>{if(!opts.tables)throw rpc('memory_tables_required');return opts.tables;};
 
  // ---- publication eligibility (SQL macro_ineligible_ids)
  const batchOk=(b:string,include?:string|null)=>b===include||['success','partial'].includes(batchStatus.get(b)??'success');
@@ -4114,6 +4494,15 @@ export function memoryMacroDb():MemoryMacroDb{
   const run=runs.get(batchId);
   if(!run){if(token!=null)throw fenced();return;}
   if(token==null||run.ownerToken!==token||!states.includes(run.state))throw fenced();
+ };
+ // ---- finish fence (SQL record_finish_step / finalize_batch / record_freshness, 第 6 稿 P1-1): both tokens and 'aborted' are
+ // checked BEFORE the state, so an obsolete finish token is fenced even after the run finished
+ const finishingRun=(batchId:string,fence:FinishFence|null|undefined)=>{
+  const run=runs.get(batchId);
+  if(!run)throw rpc('batch_not_claimed');
+  if(!fence?.ownerToken||run.ownerToken!==fence.ownerToken||!fence.finishToken||run.finishToken!==fence.finishToken||run.state==='aborted')throw fenced();
+  if(run.state!=='finishing')throw rpc('run_not_finishing');
+  return run;
  };
 
  const validateRow=(r:ObservationWrite)=>{
@@ -4189,6 +4578,7 @@ export function memoryMacroDb():MemoryMacroDb{
    if(holder)return {status:'busy',ownerToken:null,aborted,holder:holder[0]};
    const ownerToken=randomUUID();
    runs.set(batchId,{dataset,state:'open',progress:{},createdMs:nowMs,ownerToken,processingTimeoutMs:o.processingTimeoutMs,finishToken:null});
+   batchStatus.set(batchId,'running');                                                                 // SQL: only a running batch claims
    return {status:'claimed',ownerToken,aborted,holder:null};
   },
   async claimChunk(batchId,seq,total,ownerToken){
@@ -4202,19 +4592,20 @@ export function memoryMacroDb():MemoryMacroDb{
    if(run.state!=='open')throw rpc('batch_not_open');
    const first=m.values().next().value;
    if(first&&first.total!==total)throw rpc('chunk_total_mismatch');
-   m.set(seq,{seq,total,state:'processing',counts:zeroCounts(),errors:[],claim_keys:[],located_keys:[]});chunks.set(batchId,m);
+   m.set(seq,{seq,total,state:'processing',counts:zeroCounts(),native_usable:0,errors:[],claim_keys:[],located_keys:[]});chunks.set(batchId,m);
    chunkReceivedMs.set(`${batchId}|${seq}`,msOf(now()));
    return {status:'claimed'};
   },
   async completeChunk(batchId,seq,res,ownerToken){
    const c=res.counts as unknown as Record<string,unknown>;
    if(!c||typeof c!=='object'||Object.keys(c).length!==6||!CHUNK_KEYS.every(k=>Number.isSafeInteger(c[k])&&(c[k] as number)>=0))throw rpc('invalid_chunk');
+   if(!Number.isSafeInteger(res.nativeUsable)||res.nativeUsable<0||res.nativeUsable>res.counts.inserted+res.counts.versioned+res.counts.duplicates)throw rpc('invalid_chunk');   // 第 6 稿 P2-1
    if(!Array.isArray(res.errors)||res.errors.length>500||res.errors.some(e=>!e||typeof e.code!=='string'))throw rpc('invalid_chunk');
    if(!Array.isArray(res.claimKeys)||!Array.isArray(res.locatedKeys)||[...res.claimKeys,...res.locatedKeys].some(k=>typeof k!=='string'))throw rpc('invalid_chunk');
    assertOwner(batchId,ownerToken,['open']);
    const row=chunks.get(batchId)?.get(seq);
    if(!row||row.state!=='processing')throw rpc('chunk_not_processing');
-   Object.assign(row,{state:'done',counts:clone(res.counts),errors:clone(res.errors),claim_keys:[...res.claimKeys],located_keys:[...res.locatedKeys]});
+   Object.assign(row,{state:'done',counts:clone(res.counts),native_usable:res.nativeUsable,errors:clone(res.errors),claim_keys:[...res.claimKeys],located_keys:[...res.locatedKeys]});
    return clone(row);
   },
   async chunksOf(batchId){return [...(chunks.get(batchId)??new Map<number,ChunkRecord>()).values()].sort((a,b)=>a.seq-b.seq).map(clone);},
@@ -4235,17 +4626,42 @@ export function memoryMacroDb():MemoryMacroDb{
   },
   async recordFinishStep(batchId,step,data,fence){
    if(!(FINISH_STEPS as readonly string[]).includes(step)||!data||typeof data!=='object'||Array.isArray(data))throw rpc('invalid_step');
-   const run=runs.get(batchId);
-   if(!run)throw rpc('batch_not_claimed');
-   if(!fence?.ownerToken||run.ownerToken!==fence.ownerToken||run.state==='aborted')throw fenced();
-   if(run.state!=='finishing')throw rpc('run_not_finishing');
-   if(!fence.finishToken||run.finishToken!==fence.finishToken)throw fenced();
+   const run=finishingRun(batchId,fence);
    if(step==='publish_attempt'){
     const attempts=[...(run.progress.attempts??[])];
     if(attempts.length<MAX_ATTEMPTS)attempts.push(clone(data) as NonNullable<FinishProgress['attempts']>[number]);
     run.progress={...run.progress,attempts};
    }else run.progress={...run.progress,[step]:clone(data)};
    if(step==='receipt')run.state='finished';
+   return clone(run.progress);
+  },
+  async finalizeBatch(batchId,input,fence){
+   const tables=needTables();
+   const c=input?.counts as unknown as Record<string,unknown>;
+   if(!input||!(FINAL_STATUSES as readonly string[]).includes(input.status)||!Number.isFinite(msOf(input.finishedAt))
+      ||!c||typeof c!=='object'||Object.keys(c).length!==6||!CHUNK_KEYS.every(k=>Number.isSafeInteger(c[k])&&(c[k] as number)>=0)
+      ||!Array.isArray(input.errors)||input.errors.length>101||input.errors.some(e=>!e||typeof e.code!=='string'))throw rpc('invalid_finalize');
+   if(runs.has(batchId))finishingRun(batchId,fence);                                                     // owner + finish token, finishing
+   else if(fence)throw fenced();                                                                         // cron: a run-less batch takes no tokens
+   const [b]=await tables.select('ingest_batches',{batch_id:batchId},{limit:1});
+   if(!b)throw new MacroDbError('not_found');
+   if(b.status!=='running')return {status:String(b.status) as FinalizeResult['status'],finalized:false};
+   const finishedAt=new Date(Math.max(msOf(input.finishedAt),msOf(String(b.started_at)))).toISOString();
+   await tables.update('ingest_batches',{batch_id:batchId,status:'running'},{status:input.status,counts:clone(input.counts),errors:clone(input.errors),finished_at:finishedAt});
+   batchStatus.set(batchId,input.status);                                                                // eligibility follows the written status
+   return {status:input.status,finalized:true};
+  },
+  async recordFreshness(batchId,input,fence){
+   const tables=needTables();
+   if(!input||typeof input.dataset!=='string'||input.dataset.length<1||input.dataset.length>64||typeof input.ok!=='boolean'
+      ||!(CADENCES as readonly string[]).includes(input.cadence)||!Number.isFinite(msOf(input.now))||!input.detail||typeof input.detail!=='object'||Array.isArray(input.detail))throw rpc('invalid_freshness');
+   const run=runs.get(batchId);
+   if(!run)throw rpc('batch_not_claimed');
+   finishingRun(batchId,fence);
+   if(input.dataset!==run.dataset)throw rpc('invalid_dataset');
+   if(run.progress.freshness_recorded)return clone(run.progress);                                        // once per run
+   const status=await recordAttempt(tables,input.dataset,{ok:input.ok,cadence:input.cadence,now:new Date(input.now),detail:clone(input.detail)});
+   run.progress={...run.progress,freshness_recorded:{ok:input.ok,status}};
    return clone(run.progress);
   },
 
@@ -4358,7 +4774,12 @@ export function memoryMacroDb():MemoryMacroDb{
    const q=items.get(quarantineId);
    if(!q)throw new MacroDbError('not_found');
    if(!q.dataset.startsWith('macro.')||q.table_name!=='macro_observations')throw rpc('invalid_item');
-   if(q.status!=='open')throw new MacroDbError('quarantine_closed');
+   if(q.status!=='open'){
+    // 第 6 稿 P2-3: every row already a member of THIS item and disposed (ok / rejected) by its resolution → link complete
+    const mine=members.get(quarantineId)??new Set<string>();
+    if(Array.isArray(observationIds)&&observationIds.length>0&&observationIds.every(id=>mine.has(id)&&['ok','rejected'].includes(byId(id)?.status??'')))return 0;
+    throw new MacroDbError('quarantine_closed');
+   }
    if(!Array.isArray(observationIds)||observationIds.length===0||observationIds.some(id=>{const o=byId(id);return !o||(o.status!=='quarantined'&&o.status!=='rejected')||`${o.series_id}|${o.period_end}`!==q.natural_key;}))throw rpc('invalid_member');
    const m=members.get(quarantineId)??new Set<string>();let added=0;
    for(const id of observationIds)if(!m.has(id)){m.add(id);added++;}
@@ -5269,8 +5690,10 @@ Semantics fixed here (the routes rely on them):
 - Rule failure → one `dq_quarantine` row per failed rule (`rule_failed:macro.range|macro.jump|macro.unit`), counted once as `quarantined`; the jump rule compares with the previous **accepted** value of the same series in the same retrieval.
 - Claims: a claim for the same `(series_id, period_end)` that is not decimal-equal → `adapter_mismatch` (detail `{value_text, claim_value_texts}`), not written. A point without a claim is written unchecked; a claim without a point is ignored here (the ingest route reports it as informational).
 - Repeated conflicts are fine: re-delivering an already-quarantined value makes the RPC report the conflict again (and count `quarantined`), and `quarantine()` (`src/lib/dq/quarantine.ts`) **reuses** the open item with the same `(dataset, table_name, natural_key, reason_code)`, so no duplicate queue items appear (tested below). Do not add a second dedup layer.
-- Write conflicts `unexpected_revision`, `conflicting_rows`, `stale_delivery` → `dq_quarantine` with `dataset` (`macro.fred` / `macro.akshare`), `table_name 'macro_observations'`, `natural_key '<series_id>|<period_end>'`, detail `{value_text, current_value_text}`; the RPC's own `quarantined` count is used (not double-counted). Right after `quarantine()` returns the (possibly reused) item id, a conflict that carries an `observation_id` is bound to that item with `db.linkQuarantine(itemId,[observation_id],{batchId,ownerToken})` (第 4 稿 P1-4). **Link failures are never swallowed (第 5 稿 P2-3):** `quarantine_closed` (a resolution closed the item between `quarantine()` and the link) → `quarantine()` again (it now opens a NEW item) and one more link; any other link failure, a second failure, or a failed `quarantine()` for a conflict that has a stored row → `throw new IngestAbort('quarantine_link_failed')`, so the ingest route never completes that chunk (the collector's stall path restarts the collection) and cron closes its batch failed. `missing_evidence` / `missing_input` → `failed` + error.
+- Write conflicts `unexpected_revision`, `conflicting_rows`, `stale_delivery` → `dq_quarantine` with `dataset` (`macro.fred` / `macro.akshare`), `table_name 'macro_observations'`, `natural_key '<series_id>|<period_end>'`, detail `{value_text, current_value_text}`; the RPC's own `quarantined` count is used (not double-counted). Right after `quarantine()` returns the (possibly reused) item id, a conflict that carries an `observation_id` is bound to that item with `db.linkQuarantine(itemId,[observation_id],{batchId,ownerToken})` (第 4 稿 P1-4). **Link failures are never swallowed (第 5 稿 P2-3):** a closed item whose exact member (the reused row) this item's resolution already accepted or rejected answers `0` — the link is complete, nothing more to do (第 6 稿 P2-3: no abort, no empty item); `quarantine_closed` (the row is still quarantined but a resolution closed the item between `quarantine()` and the link) → `quarantine()` again (it now opens a NEW item) and one more link; any other link failure, a second failure, or a failed `quarantine()` for a conflict that has a stored row → `throw new IngestAbort('quarantine_link_failed')`, so the ingest route never completes that chunk (the collector's stall path restarts the collection) and cron closes its batch failed. `missing_evidence` / `missing_input` → `failed` + error.
 - `previously_rejected` (第 5 稿 P1-2) is informational: the RPC already counted it under `duplicates`; no quarantine item, no error.
+- **Usable native rows (第 6 稿 P2-1).** `IngestReceipt.usable` = `inserted + versioned + duplicates` of the write results minus the `previously_rejected` conflicts (a rejected redelivery is counted as a duplicate by the RPC, but it is not data). The six counters stay exactly as before; the ingest route stores `usable` as the chunk's `native_usable`, and cron sums it. Derivation, publication and the freshness `ok` gate on it.
+- **Batch finalization input (第 6 稿 P1-1/P2-4).** `batchFinalizeInput(result, now, force?)` builds the `FinalizeInput` that `finishBatch` would have written — status from the landed `batchStatusFromCounts` (or `force`, `'failed'` for a fatal abort), the `UNACCOUNTED_ERROR` that `finishBatch` prepends, errors capped exactly like its private `capErrors` (first 100, messages ≤ 500 characters, one `{code:'truncated',message:'<n> more'}`) — so `MacroDb.finalizeBatch` stores the same columns. `src/lib/dq/batches.ts` is only imported.
 - **Owner fence (第 5 稿 P1-3).** `ingestEvidence({…, ownerToken})` and `deriveAndWrite(deps, region, batchId, ownerToken)` pass the run's token to every `putRetrieval` / `writeObservations` / `linkQuarantine` (cron passes nothing: its batch has no run). A `fenced` MacroDbError from any of them throws `IngestAbort('fenced')` at once — it is a protocol abort, never a counted failure, and nothing after it runs.
 - `deriveAndWrite` recomputes the **complete** eligible history of every derived series on every run (第 4 稿 P1-7): inputs are read in full with `db.eligibleHistory(input, {includeBatch: batchId, maxRows: DERIVE_MAX_ROWS})` (paged), so a revision of an old input period (FRED re-sends six years) reaches that period's derived row and, for yoy, period + 12. Unchanged rows come back as duplicates, which are cheap.
 - A thrown `writeObservations` → that call's rows `failed`, error `write_<MacroDbError.code>` or `write_failed`; the function never throws for data problems (only `IngestAbort` for `fenced` / `quarantine_link_failed`).
@@ -5285,7 +5708,8 @@ import {beforeEach,describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {CATALOG_VERSION,MACRO_CATALOG} from './catalog';
 import {MacroDbError} from './db';
-import {chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
+import {UNACCOUNTED_ERROR,batchStatusFromCounts} from '../dq/batches';
+import {MAX_BATCH_ERRORS,batchFinalizeInput,chunkWrites,deriveAndWrite,derivedOf,ingestEvidence} from './ingest';
 import type {IngestDeps} from './ingest';
 import {memoryMacroDb} from './memory-db';
 import {parseFredCsv} from './parsers/fred-csv';
@@ -5341,6 +5765,7 @@ describe('ingestEvidence',()=>{
   const r=fred('DGS10','US_DGS10_D','day','2026-10-01,4.10\n2026-10-02,\n2026-10-05,4.123456789012345678\n');
   const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[r]});
   expect(rec.counts).toEqual({fetched:2,inserted:2,duplicates:0,versioned:0,quarantined:0,failed:0});
+  expect(rec.usable).toBe(2);
   expect(rec.errors).toEqual([]);expect(rec.retrievalIds).toHaveLength(1);
   expect(ev.puts.map(e=>e.sha256)).toEqual([r.evidence.sha256]);
   const ret=await db.retrieval(rec.retrievalIds[0]);
@@ -5432,6 +5857,7 @@ describe('ingestEvidence',()=>{
   await resolveBoth(String(tables.rows('dq_quarantine')[0].id),'reject');
   const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
   expect(rec.counts).toEqual({fetched:1,inserted:0,duplicates:1,versioned:0,quarantined:0,failed:0});
+  expect(rec.usable).toBe(0);                                                                     // a duplicate counter, but not usable data (第 6 稿 P2-1)
   expect(rec.errors).toEqual([]);
   expect(tables.rows('dq_quarantine')).toHaveLength(1);                                           // no new item for a final value
   expect(db.allObservations().filter(o=>o.series_id==='US_DGS10_D').map(o=>o.status)).toEqual(['ok','rejected']);
@@ -5453,6 +5879,23 @@ describe('ingestEvidence',()=>{
   await expect(ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]}))
    .rejects.toMatchObject({name:'IngestAbort',code:'quarantine_link_failed',key:'US_DGS10_D|2026-10-01'});
  });
+ for(const decision of ['accept','reject'] as const){
+  it(`a concurrent ${decision} of the reused member between quarantine() and the link completes the link: no abort, no new empty item (第 6 稿 P2-3)`,async()=>{
+   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});   // quarantined and linked
+   const itemId=String(tables.rows('dq_quarantine')[0].id);
+   const [member]=await db.quarantineMembers(itemId);
+   const link=db.linkQuarantine.bind(db);let raced=false;
+   db.linkQuarantine=async(id,ids,fence)=>{
+    if(!raced){raced=true;await resolveBoth(id,decision,decision==='accept'?member.observation_id:undefined);}   // the admin decides right before our link
+    return link(id,ids,fence);
+   };
+   const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});   // the redelivery reuses that row
+   expect(rec.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
+   expect(tables.rows('dq_quarantine').map(r=>String(r.status))).toEqual([decision==='accept'?'resolved_accept':'resolved_reject']);   // no new item
+   expect((await db.quarantineMembers(itemId)).map(m=>[m.value_text,m.status])).toEqual([['4.15',decision==='accept'?'ok':'rejected']]);
+  });
+ }
  it('stops with IngestAbort(fenced) when the run was taken over: nothing is written, nothing is counted (第 5 稿 P1-3)',async()=>{
   const old='33333333-3333-4333-8333-333333333333',next='44444444-4444-4444-8444-444444444444';
   db.setBatchStatus(old,'running');db.setBatchStatus(next,'running');
@@ -5477,6 +5920,21 @@ describe('ingestEvidence',()=>{
   const rec=await ingestEvidence(broken,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n2026-10-02,4.2\n')]});
   expect(rec.counts).toMatchObject({fetched:2,inserted:0,failed:2});
   expect(rec.errors).toEqual([{code:'write_failed',key:'US_DGS10_D'}]);
+ });
+});
+
+describe('batchFinalizeInput (第 6 稿 P1-1/P2-4)',()=>{
+ const NOW=new Date('2026-11-06T05:31:00.000Z');
+ const c=(o:Partial<Record<'fetched'|'inserted'|'duplicates'|'versioned'|'quarantined'|'failed',number>>)=>({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0,...o});
+ it('computes the status finishBatch would, or the forced one; prepends unaccounted; caps errors like finishBatch',()=>{
+  for(const [counts,errors] of [[c({fetched:2,inserted:2}),[]],[c({fetched:2,inserted:1,failed:1}),[]],[c({fetched:1,failed:1}),[]],[c({fetched:1,quarantined:1}),[{code:'no_native_outcomes'}]],[c({}),[{code:'skipped_summary'}]]] as const)
+   expect(batchFinalizeInput({counts,errors:[...errors]},NOW).status).toBe(batchStatusFromCounts(counts,[...errors]));
+  expect(batchFinalizeInput({counts:c({fetched:3,inserted:3}),errors:[{code:'quarantine_link_failed'}]},NOW,'failed')).toMatchObject({status:'failed',counts:{inserted:3}});   // never partial after a fatal abort
+  expect(batchFinalizeInput({counts:c({fetched:2}),errors:[]},NOW)).toEqual({status:'failed',counts:c({fetched:2}),errors:[UNACCOUNTED_ERROR],finishedAt:NOW.toISOString()});
+  const many=Array.from({length:MAX_BATCH_ERRORS+5},(_,i)=>({code:'x',key:String(i),message:'m'.repeat(600)}));
+  const capped=batchFinalizeInput({counts:c({fetched:1,inserted:1}),errors:many},NOW).errors;
+  expect(capped).toHaveLength(MAX_BATCH_ERRORS+1);expect(capped[0].message).toHaveLength(500);expect(capped.at(-1)).toEqual({code:'truncated',message:'5 more'});
+  expect(()=>batchFinalizeInput({counts:c({}),errors:[]},new Date(NaN))).toThrow('invalid_now');
  });
 });
 
@@ -5557,7 +6015,11 @@ Expected: FAIL (`Cannot find module './ingest'`)
 // Values stay decimal text end to end; Number() happens only inside quality.ts.
 // 第 5 稿: every MacroDb mutation carries the run's owner token (null for cron); `fenced` and an unbindable quarantined row
 // throw IngestAbort (protocol aborts, never counted); previously_rejected conflicts are informational.
+// 第 6 稿: receipts carry `usable` (written rows minus previously_rejected, P2-1); batchFinalizeInput mirrors finishBatch's status
+// and error cap for MacroDb.finalizeBatch (P1-1/P2-4). quarantine() stays the shared, unfenced helper: an open item a fenced
+// worker parked has no members (its link is fenced) and is harmless.
 import {quarantine} from '../dq/quarantine';
+import {UNACCOUNTED_ERROR,batchStatusFromCounts} from '../dq/batches';
 import type {BatchError} from '../dq/batches';
 import type {TableClient} from '../db/table-client';
 import {MACRO_CATALOG,catalogById} from './catalog';
@@ -5567,13 +6029,14 @@ import {canonical,equals} from './decimal';
 import {deriveSeries} from './derive';
 import type {EvidenceStore} from './evidence';
 import {validatePoint} from './quality';
-import type {Adapter,ChunkCounts,EvidenceInput,MacroSeriesDef,ObservationRow,ObservationWrite,ParsedPoint,Region,WriteConflictReason,WriteResult} from './types';
+import type {Adapter,ChunkCounts,EvidenceInput,FinalStatus,FinalizeInput,MacroSeriesDef,ObservationRow,ObservationWrite,ParsedPoint,Region,WriteConflictReason,WriteResult} from './types';
 
 export interface IngestDeps{db:MacroDb;evidence:Pick<EvidenceStore,'put'>;tables:TableClient;codeVersion:string;now:()=>Date}
 /** An adapter's own reading of one value (AKShare DataFrame), already mapped to period_end; cross-check only. */
 export interface Claim{series_id:string;period_end:string;value_text:string}
 export interface RetrievalInput{evidence:EvidenceInput;parsed:ParsedPoint[];claims?:Claim[]}
-export interface IngestReceipt{counts:ChunkCounts;errors:BatchError[];retrievalIds:string[]}
+/** usable (第 6 稿 P2-1): inserted + versioned + duplicates minus previously_rejected — rows that are data; counts stay the six DQ counters. */
+export interface IngestReceipt{counts:ChunkCounts;usable:number;errors:BatchError[];retrievalIds:string[]}
 /** A protocol abort that must stop the request, never a counted data failure (第 5 稿): `fenced` — the run's owner token was
  *  superseded by a takeover (P1-3); `quarantine_link_failed` — a stored quarantined row could not be bound to an open item
  *  (P2-3). The ingest route answers 409 fenced / 500 without completing the chunk; cron closes its batch failed. */
@@ -5597,6 +6060,26 @@ export function addCounts(a:ChunkCounts,b:ChunkCounts):ChunkCounts{
 }
 const keyOf=(seriesId:string,periodEnd:string)=>`${seriesId}|${periodEnd}`;
 
+/** finishBatch's limits (src/lib/dq/batches.ts, private capErrors): macro_finalize_batch stores errors as given, so they are capped here. */
+export const MAX_BATCH_ERRORS=100,MAX_ERROR_MESSAGE=500;
+export function capBatchErrors(errors:readonly BatchError[]):BatchError[]{
+ const kept=errors.slice(0,MAX_BATCH_ERRORS).map(e=>e.message!==undefined&&e.message.length>MAX_ERROR_MESSAGE?{...e,message:e.message.slice(0,MAX_ERROR_MESSAGE)}:e);
+ return errors.length>MAX_BATCH_ERRORS?[...kept,{code:'truncated',message:`${errors.length-MAX_BATCH_ERRORS} more`}]:kept;
+}
+/**
+ * The FinalizeInput finishBatch would write (第 6 稿 P1-1/P2-4): status from batchStatusFromCounts unless `force` (a fatal
+ * abort passes 'failed', so native rows already written never make the batch 'partial'), the unaccounted marker finishBatch
+ * prepends, errors capped like finishBatch. Throws invalid_now / invalid_counts like finishBatch.
+ */
+export function batchFinalizeInput(result:{counts:ChunkCounts;errors:BatchError[];rejected?:boolean},now:Date,force?:FinalStatus):FinalizeInput{
+ const computed=batchStatusFromCounts(result.counts,result.errors,{rejected:result.rejected});
+ if(!(now instanceof Date)||!Number.isFinite(now.getTime()))throw new Error('invalid_now');
+ if(computed==='running')throw new Error('invalid_status');
+ const c=result.counts;
+ const unaccounted=!result.rejected&&c.fetched>0&&c.inserted+c.duplicates+c.versioned+c.quarantined+c.failed===0;
+ return {status:force??computed,counts:{...c},errors:capBatchErrors(unaccounted?[UNACCOUNTED_ERROR,...result.errors]:result.errors),finishedAt:now.toISOString()};
+}
+
 /**
  * Splits rows into calls of about `size` rows without ever separating one (series_id, period_end) group,
  * so a duplicated period in one evidence is always judged inside one RPC call (conflicting_rows).
@@ -5613,7 +6096,7 @@ export function chunkWrites<T extends {series_id:string;period_end:string}>(rows
  return out;
 }
 
-interface Ctx{deps:IngestDeps;dataset:string;batchId:string;ownerToken:string|null;counts:ChunkCounts;errors:BatchError[]}
+interface Ctx{deps:IngestDeps;dataset:string;batchId:string;ownerToken:string|null;counts:ChunkCounts;usable:number;errors:BatchError[]}
 
 /** quarantine() that never aborts the batch: a failed insert into dq_quarantine is a failed row. Returns the (possibly
  *  reused) item id when parked, else null. */
@@ -5626,9 +6109,10 @@ async function park(ctx:Ctx,naturalKey:string,reasonCode:string,detail:Record<st
  }
 }
 /** Binds the stored quarantined row to its dq_quarantine item (macro_link_quarantine; 第 4 稿 P1-4, 第 5 稿 P2-3). The SQL
- *  locks the item row; quarantine_closed = a resolution closed it after quarantine() returned it → park again (quarantine()
- *  now opens a NEW item, the old one is no longer open) and link once more. Anything else, or a second failure, aborts: a
- *  quarantined row must never stay unbound. */
+ *  locks the item row. A closed item whose exact member (this row) its resolution already accepted / rejected returns 0: the
+ *  link is complete (第 6 稿 P2-3). quarantine_closed = the row is still quarantined but a resolution closed the item after
+ *  quarantine() returned it → park again (quarantine() now opens a NEW item, the old one is no longer open) and link once
+ *  more. Anything else, or a second failure, aborts: a quarantined row must never stay unbound. */
 async function link(ctx:Ctx,itemId:string,observationId:string,naturalKey:string,repark:()=>Promise<string|null>):Promise<void>{
  const fence={batchId:ctx.batchId,ownerToken:ctx.ownerToken};
  try{await ctx.deps.db.linkQuarantine(itemId,[observationId],fence);return;}
@@ -5653,6 +6137,7 @@ async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
    continue;
   }
   ctx.counts.inserted+=res.inserted;ctx.counts.duplicates+=res.duplicates;ctx.counts.versioned+=res.versioned;ctx.counts.quarantined+=res.quarantined;
+  ctx.usable+=res.inserted+res.duplicates+res.versioned-res.conflicts.filter(c=>c.reason==='previously_rejected').length;   // 第 6 稿 P2-1
   for(const c of res.conflicts){
    const key=keyOf(c.series_id,c.period_end);
    if(c.reason==='previously_rejected')continue;   // informational: the RPC counted it as a duplicate; a rejected value is final (第 5 稿 P1-2)
@@ -5677,7 +6162,7 @@ const collectable=(def:MacroSeriesDef|undefined,adapter:Adapter):def is MacroSer
 
 /** ownerToken: the AKShare run's token (第 5 稿 P1-3); omitted / null for cron (its batch has no run row). */
 export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapter:Adapter;retrievals:RetrievalInput[];ownerToken?:string|null}):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,ownerToken:input.ownerToken??null,counts:emptyChunkCounts(),errors:[]};
+ const ctx:Ctx={deps,dataset:DATASET_OF[input.adapter],batchId:input.batchId,ownerToken:input.ownerToken??null,counts:emptyChunkCounts(),usable:0,errors:[]};
  const retrievalIds:string[]=[];
  for(const r of input.retrievals){
   const e=r.evidence,n=r.parsed.length;
@@ -5729,7 +6214,7 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
   }
   await writeAll(ctx,writes);
  }
- return {counts:ctx.counts,errors:ctx.errors,retrievalIds};
+ return {counts:ctx.counts,usable:ctx.usable,errors:ctx.errors,retrievalIds};
 }
 
 /** Derived series of a region whose input is native come first, so a derived input is written before its dependants. */
@@ -5745,7 +6230,7 @@ export function derivedOf(region:Region):MacroSeriesDef[]{
  * back must reach its derived period and, for yoy, period + 12; unchanged rows return as duplicates.
  */
 export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:string,ownerToken:string|null=null):Promise<IngestReceipt>{
- const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,ownerToken,counts:emptyChunkCounts(),errors:[]};
+ const ctx:Ctx={deps,dataset:DATASET_OF_REGION[region],batchId,ownerToken,counts:emptyChunkCounts(),usable:0,errors:[]};
  const now=deps.now();
  for(const def of derivedOf(region)){
   const input=catalogById(def.derive!.from);
@@ -5759,13 +6244,13 @@ export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:strin
   ctx.counts.fetched+=writes.length;
   await writeAll(ctx,writes);
  }
- return {counts:ctx.counts,errors:ctx.errors,retrievalIds:[]};
+ return {counts:ctx.counts,usable:ctx.usable,errors:ctx.errors,retrievalIds:[]};
 }
 ```
 
 Implementer checks (stop and report NEEDS_CONTEXT rather than editing Task 3 files):
 - `EvidenceStore.put` resolves to `{objectPath, status:'stored'|'exists'}` (plan shared contract, Task 3); `ingest.ts` types the dependency as `Pick<EvidenceStore,'put'>`.
-- `memoryMacroDb()` must take no arguments, and `upsertCatalog` must be enough to make the catalog's series writable (the SQL RPC rejects unknown series and native rows for derived series). Undeclared batches count as `success` in memory (Task 3), so `BATCH` needs no registration; the abandoned-batch case declares its batch with `db.setBatchStatus`.
+- `memoryMacroDb()` must be callable without arguments (its optional `{tables}` only serves `finalizeBatch` / `recordFreshness`), and `upsertCatalog` must be enough to make the catalog's series writable (the SQL RPC rejects unknown series and native rows for derived series). Undeclared batches count as `success` in memory (Task 3), so `BATCH` needs no registration; the abandoned-batch case declares its batch with `db.setBatchStatus`.
 - The memory MacroDb keeps its own quarantine items; `mirrorQuarantine` in the test registers every `dq_quarantine` row the TableClient inserts (same id, via `addQuarantineItem({id,…})`), and `resolveBoth` closes both sides, exactly as the single Postgres table behaves. Without the mirror every link would answer `not_found` and now abort.
 
 - [ ] **Step 4: Run tests, typecheck, lint**
@@ -5810,6 +6295,7 @@ Design notes:
 - `fetchFredCsv` retries timeouts, network errors, 429 and 5xx three times (1 s, 2 s, 4 s; injectable `sleep`), refuses any other 4xx at once, and refuses a final URL whose host is not `fred.stlouisfed.org`. The evidence carries the **server's** `Content-Type` (FRED says `application/csv`).
 - First run per series backfills from `2000-01-01` (spec §4.4). Once a series has observations, `fredCosdFor` asks for 400 days (daily) or 6 years (monthly; BLS revises seasonal factors 5 years back) so a daily run of ~9 series stays well inside `maxDuration` (a full-history daily run would push ~50 000 rows through the write RPC every day). `deriveAndWrite` (Task 6) likewise re-derives only a recent window once a derived series has rows. Preview always uses `2000-01-01` because it must not read the database either.
 - `?preview=1` never touches `deps.db`, `deps.evidence` or `deps.tables` (the test replaces them with proxies that throw on any property access) and needs no code version.
+- **Batch finalization (第 6 稿 P1-1/P2-4).** The cron closes its batch with `deps.db.finalizeBatch(batchId, batchFinalizeInput(…), null)` (no run row, so no tokens), not `finishBatch`. A fatal abort — `IngestAbort('quarantine_link_failed')` thrown by `deriveAndWrite` after the native writes, or any crash — finalizes with an explicit `'failed'` and the actual counts (`batchFinalizeInput(…, 'failed')`), so already written native rows never make the batch `partial` or publication-eligible. The derivation / freshness gate is `Σ rec.usable > 0` (第 6 稿 P2-1: a rejected redelivery is a duplicate counter, not data). Freshness stays `recordAttempt('macro.fred')` (single writer, no run).
 - Only `GET`/`POST`/`dynamic`/`maxDuration` are exported from `route.ts` (Next.js rejects other exports from route files), which is why `fredCosdFor` lives in `providers/fred.ts`.
 - `deps.ts` assumes Task 3 exports `supabaseMacroDb({admin,anon})` (skeleton) and `supabaseEvidenceStore(admin:SupabaseClient)`. If `supabaseEvidenceStore` takes other arguments, change only that line and say so in the commit body.
 
@@ -5935,7 +6421,7 @@ beforeEach(()=>{
   const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
   return failCodes.has(code)?new Response('down',{status:503}):new Response(csvFor(code),{status:200,headers:{'content-type':'application/csv'}});
  }) as typeof globalThis.fetch;
- deps={db:memoryMacroDb(),evidence,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z'),fetch,sleep:async()=>{}};
+ deps={db:memoryMacroDb({tables}),evidence,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z'),fetch,sleep:async()=>{}};   // tables: finalizeBatch (第 6 稿)
  mocks.deps.mockImplementation(()=>deps);
  mocks.codeVersion.mockReturnValue('a'.repeat(40));
 });
@@ -5970,7 +6456,7 @@ describe('macro-sync cron',()=>{
   const dgs=body.series.find((s:{series_id:string})=>s.series_id==='US_DGS10_D');
   expect(dgs).toMatchObject({points:2,first:'2026-09-30',last:'2026-10-01',sample:[{period_end:'2026-09-30',value_text:'4.1'},{period_end:'2026-10-01',value_text:'4.2'}]});
  });
- it('runs one macro.fred batch: evidence, observations, US derivation, finishBatch and freshness',async()=>{
+ it('runs one macro.fred batch: evidence, observations, US derivation, finalizeBatch and freshness',async()=>{
   const res=await GET(req());
   expect(res.status).toBe(200);
   const body=await res.json();
@@ -6015,6 +6501,22 @@ describe('macro-sync cron',()=>{
   expect(body.native_counts).toMatchObject({inserted:0,duplicates:0,versioned:0});
   expect(body.derived_counts).toEqual({fetched:0,inserted:0,duplicates:0,versioned:0,quarantined:0,failed:0});   // derivation skipped
   expect(body.errors).toContainEqual({code:'no_native_outcomes'});
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
+ });
+ it('a fatal derivation abort after native writes (quarantine_link_failed) finalizes the batch FAILED with the actual counts; its rows stay ineligible (第 6 稿 P2-4)',async()=>{
+  const mem=deps.db as ReturnType<typeof memoryMacroDb>;
+  const write=mem.writeObservations.bind(mem);
+  // derived rows come back as a stored quarantined conflict whose item cannot be bound (the memory db never saw the item) → IngestAbort
+  mem.writeObservations=async(b,c,rows,t)=>rows.some(r=>'derived_from' in r)
+   ?{inserted:0,duplicates:0,versioned:0,quarantined:1,conflicts:[{series_id:rows[0].series_id,period_end:rows[0].period_end,reason:'unexpected_revision',value_text:rows[0].value_text,current_value_text:null,observation_id:'00000000-0000-4000-8000-0000000000ab'}]}
+   :write(b,c,rows,t);
+  const res=await GET(req());
+  expect(res.status).toBe(500);expect((await res.json()).error.code).toBe('sync_failed');
+  const [batch]=tables.rows('ingest_batches');
+  expect(batch).toMatchObject({status:'failed',counts:{inserted:2*FRED.length,failed:0}});           // the native writes, as they happened — not 'partial'
+  expect(batch.errors).toContainEqual(expect.objectContaining({code:'quarantine_link_failed'}));
+  expect(await deps.db.latestEligible(['US_DGS10_D'])).toEqual([]);                                // a failed batch's rows never publish
+  expect((await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).length).toBe(2);                  // written (ok) but ineligible
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.fred',consecutive_errors:1});
  });
  it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
@@ -6140,12 +6642,14 @@ export function productionMacroDeps(opts:{codeVersion:string}):MacroDeps{
 // src/app/api/cron/macro-sync/route.ts
 // Daily US macro sync (spec §4.4 steps 1–4, §8): CRON_SECRET bearer via authorizedCronRequest; upsert the
 // catalog mirror; one ingest batch (producer 'ts-fred', dataset 'macro.fred') over every active native FRED
-// series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; finishBatch;
+// series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; MacroDb.finalizeBatch (第 6 稿 P1-1: the
+// macro-owned finalizer, no tokens — cron batches have no run row; a fatal abort finalizes 'failed' with the actual counts, P2-4);
 // A series with no stored observation is backfilled from FRED_COSD (2000-01-01, spec §4.4); afterwards the
 // daily run asks for a recent window only (daily series 400 days, monthly 6 years so the BLS 5-year
 // seasonal revisions are seen) to keep the run inside maxDuration.
-// recordAttempt('macro.fred', daily, ok = status !== 'failed' and a native outcome landed). Derivation runs only when this
-// run produced at least one native inserted/versioned/duplicate outcome (第 5 稿 P2-2): otherwise re-derived old history
+// recordAttempt('macro.fred', daily, ok = status !== 'failed' and a usable native row landed). Derivation runs only when this
+// run produced at least one usable native row (Σ ingestEvidence usable: inserted/versioned/duplicates minus previously_rejected;
+// 第 5 稿 P2-2, 第 6 稿 P2-1): otherwise re-derived old history
 // would come back as duplicates and turn an all-failed run into 'partial'; instead the batch gets {code:'no_native_outcomes'}
 // and finishes failed. The receipt reports native_counts and derived_counts separately. Only US is published here (CN publishes
 // after ingest finish). ?preview=1 fetches and parses only and returns counts and samples: ZERO database
@@ -6153,7 +6657,7 @@ export function productionMacroDeps(opts:{codeVersion:string}):MacroDeps{
 // code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
 // keys and counts only, never messages.
 import {NextResponse} from 'next/server';
-import {startBatch,finishBatch} from '@/lib/dq/batches';
+import {startBatch} from '@/lib/dq/batches';
 import type {BatchError} from '@/lib/dq/batches';
 import {recordAttempt} from '@/lib/dq/freshness';
 import {resolveCodeVersion} from '@/lib/facts/deps';
@@ -6161,7 +6665,7 @@ import {authorizedCronRequest} from '@/lib/observability/cron-auth';
 import {CATALOG_VERSION,MACRO_CATALOG,collectableOf} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
-import {addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import {IngestAbort,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
@@ -6200,7 +6704,7 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
   toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
- let native=emptyChunkCounts(),derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
+ let native=emptyChunkCounts(),nativeUsable=0,derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
  try{
   // backfill decision on eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   const stored=new Set((await deps.db.latestEligible(defs.map(d=>d.id))).map(o=>o.series_id));
@@ -6209,25 +6713,27 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
    try{retrieval=await fetchAndParse(deps,def,signal,fredCosdFor(def.period,stored.has(def.id),today));}
    catch(e){errors.push({code:errCode(e),key:def.id});continue;}
    const rec=await ingestEvidence(deps,{batchId,adapter:'fred_csv',retrievals:[retrieval]});   // no owner token: cron batches have no run
-   native=addCounts(native,rec.counts);errors.push(...rec.errors);
+   native=addCounts(native,rec.counts);nativeUsable+=rec.usable;errors.push(...rec.errors);
   }
   counts=native;
-  if(native.inserted+native.versioned+native.duplicates>0){
+  if(nativeUsable>0){                                                                               // 第 6 稿 P2-1
    const derived=await deriveAndWrite(deps,'US',batchId);
    derivedCounts=derived.counts;counts=addCounts(native,derived.counts);errors.push(...derived.errors);
   }else errors.push({code:'no_native_outcomes'});                                                   // 第 5 稿 P2-2
  }catch(e){
-  // Unexpected crash: close the batch as failed so it never stays 'running', then rethrow.
-  errors.push({code:'sync_crashed'});
-  await finishBatch(deps.tables,batchId,{counts,errors}).catch(()=>undefined);
+  // Fatal abort (第 6 稿 P2-4): an unbindable quarantined row during derivation (IngestAbort quarantine_link_failed) or any crash.
+  // Finalize FAILED explicitly with the actual counts — batchStatusFromCounts would say 'partial' once native rows landed, leaving
+  // them publication-eligible — so the batch never stays 'running' and its rows never publish; then rethrow.
+  errors.push(e instanceof IngestAbort?(e.key===undefined?{code:e.code}:{code:e.code,key:e.key}):{code:'sync_crashed'});
+  await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now(),'failed'),null).catch(()=>undefined);
   await recordAttempt(deps.tables,'macro.fred',{ok:false,cadence:'daily'}).catch(()=>undefined);
   throw e;
  }
- const batchStatus=await finishBatch(deps.tables,batchId,{counts,errors});
- const nativeLanded=native.inserted+native.versioned+native.duplicates>0;
+ const {status:batchStatus}=await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now()),null);   // no run row: no tokens
+ const nativeLanded=nativeUsable>0;
  await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed'&&nativeLanded,cadence:'daily'});
  // TASK 11: publishRegion(region)
- return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,native_counts:native,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
+ return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
 }
 
 async function run(request:Request):Promise<NextResponse>{
@@ -6279,7 +6785,8 @@ git commit -F - <<'EOF'
 feat(macro): FRED fetcher with retries, macro-sync cron with zero-write preview
 
 One macro.fred batch per run: catalog mirror, fetch → evidence → parse →
-ingest per FRED series, US derivation, finishBatch and recordAttempt.
+ingest per FRED series, US derivation, macro finalizeBatch (a fatal abort
+finalizes failed) and recordAttempt.
 Backfill from 2000-01-01 once, then a recent window. Scheduled 05:30 UTC.
 Publishing is left to Task 11 at the marked line.
 
@@ -7422,9 +7929,9 @@ Design notes:
 - **Schema: hand-written, not ajv.** `ajv@8.20.0` is in `package.json`, but these three bodies are small and fixed. Explicit checks give stable error codes (`invalid_body:evidence[0].sha256`) with no schema compilation on a cold start. Unknown keys are rejected everywhere.
 - **Evidence acceptance.** Every item's bytes must hash to its `sha256`, or the whole chunk gets a 400 before anything is written. An item is parsed only if its host equals the series' official host, its path equals the spec's `evidence_path`, its status is 200, and its `fetched_at` is at most 5 min in the future and at most 24 h old. `fetched_at` becomes `available_at`, so it must be plausible. A failing item counts one `failed` with an error code. Parser failures count `failed` with `parse_<code>`.
 - **Claims** are mapped with `claimPeriodEnd` (`2026年9月`, `2026年第三季度`, `YYYY-MM-DD`) and handed to `ingestEvidence`, which compares them by decimal equality. Claims that match no parsed point (SAFE dates covered only by the XLSX, or a label that does not map) are **not** quarantined (no raw value exists to hold). Each chunk stores its `claim_keys` (`<series>|<period_end>`, or `<series>|?<label>` when the label does not map) and `located_keys` (`<series>|<period_end>` of every parsed point); `finish` computes the batch-wide distinct `⋃claim_keys − ⋃located_keys` and, when n > 0, adds one informational batch error `{code:'skipped_summary', key:'unlocated_claims', message:'<n> claims without a located raw value'}` (`skipped_summary` is an existing INFO code in `src/lib/dq/batches.ts`; do not edit that file). Python repeats a series' claims in every chunk that carries its evidence, so per-chunk counts would over-count (第 4 稿 P2-1).
-- **Idempotency and single processing (第 4 稿 P1-6).** `chunk` first verifies every hash, then `claimChunk` inserts `(batch, seq)` as `processing`; only the claiming request ingests. A repeat of a `done` chunk returns its stored receipt (`status:'duplicate'`, stored counts and errors) without touching anything; a repeat of a `processing` chunk gets 409 `chunk_in_progress` (the collector retries, then restarts the collection, see below). After ingestion `completeChunk` stores counts, sanitized errors and the two key sets. Every stored chunk error reaches `finishBatch` (P2-1).
+- **Idempotency and single processing (第 4 稿 P1-6).** `chunk` first verifies every hash, then `claimChunk` inserts `(batch, seq)` as `processing`; only the claiming request ingests. A repeat of a `done` chunk returns its stored receipt (`status:'duplicate'`, stored counts and errors) without touching anything; a repeat of a `processing` chunk gets 409 `chunk_in_progress` (the collector retries, then restarts the collection, see below). After ingestion `completeChunk` stores counts, sanitized errors and the two key sets. Every stored chunk error reaches `finalizeBatch` (P2-1).
 - **One writer per dataset, owner token (第 4 稿 P1-6; 第 5 稿 P1-3/P2-1).** `start` calls `startBatch`, then `claimIngest(batchId,'macro.akshare',{maxAgeMs:2 h, processingTimeoutMs:10 min, takeover: body.takeover===true})` and answers `{batch_id, owner_token}`. Aborted runs whose batch still runs are finished `failed` (error `aborted`; `batch_not_running` = already finished elsewhere, ignored; any other error is logged and the batch is listed again by the next `start`, so the sweep heals). If another live run holds the lease, the new batch is finished `rejected` (error `concurrent_batch`) and the route answers 409 `batch_running` with the holder's id. Two concurrent starts therefore produce exactly one claim (the advisory lock + partial unique index in SQL). `chunk` and `finish` carry `owner_token`; every MacroDb mutation passes it; `fenced` (an `IngestAbort` or MacroDbError) → 409 `fenced`, and a chunk/finish on a batch whose run is `aborted` → 409 `fenced`, so the collector restarts the whole collection under a new batch. `IngestAbort('quarantine_link_failed')` → 500 without `completeChunk` (the chunk stays `processing`; the stall path restarts). The route's `maxDuration` (300 s) is below the 10-minute processing timeout, so a live request is never mistaken for a stall.
-- **Exclusive, resumable finish (第 4 稿 P2-2, P2-4; 第 5 稿 P1-4/P1-5/P2-2).** `finish` carries `series_outcomes` from the collector. `beginFinish(batch,total,owner_token)` hands the owner a fresh `finishToken` (another owner → 409 `fenced`; a concurrent finish of the same owner is fenced at its next step); each step is recorded with `{ownerToken, finishToken}`: `derived` (skipped as `{skipped:'no_native_outcomes'}` when the chunks carry no native inserted/versioned/duplicate outcome) → `batch_finished` (`finishOnce`: a `batch_not_running` from `finishBatch` reads the stored status back) → `freshness_started` → `recordAttempt` → `freshness_recorded` (a retry that finds only `freshness_started` skips the attempt: one lost record beats a double-counted error) → Task 11's `published` → `receipt` (ends the run, releases the lease). A retried finish skips completed steps; a finished run returns the stored receipt. `batchRow` accepts a finished `ingest_batches` row for `finish` when its run is no longer `open`. Counts = native chunk counts + derived counts + `failed += 1` per failed series; the receipt also reports `native_counts` and `derived_counts`; errors = all stored chunk errors + the unlocated summary + derived errors + `{code, key: series_id}` per failed series + `{code:'no_native_outcomes'}` when nothing native landed. `recordAttempt` gets `ok = status !== 'failed' && nativeLanded` and `detail:{batch_id, batch_status, failed_series}`.
+- **Exclusive, resumable finish (第 4 稿 P2-2, P2-4; 第 5 稿 P1-4/P1-5/P2-2).** `finish` carries `series_outcomes` from the collector. `beginFinish(batch,total,owner_token)` hands the owner a fresh `finishToken` (another owner → 409 `fenced`; a concurrent finish of the same owner is fenced at its next step); each step is recorded with `{ownerToken, finishToken}`: `derived` (skipped as `{skipped:'no_native_outcomes'}` when `Σ native_usable = 0`, 第 6 稿 P2-1) → `batch_finished` (`deps.db.finalizeBatch(batch, batchFinalizeInput(…), fence)`: the macro-owned fenced finalizer, 第 6 稿 P1-1; `finalized:false` = an earlier attempt finished it, the stored status is read back) → freshness (`deps.db.recordFreshness(batch, {dataset:'macro.akshare', ok, cadence:'daily', now, detail}, fence)`: the `dq_freshness` upsert and the `freshness_recorded` checkpoint commit in one transaction under the finish token — a retry either sees the checkpoint or repeats a write that never committed; the 第 5 稿 `freshness_started` skip is gone) → Task 11's `published` → `receipt` (ends the run, releases the lease). A finisher whose finish token was rotated is `fenced` at its finalize / freshness call and changes neither `ingest_batches` nor `dq_freshness`. A retried finish skips completed steps; a finished run returns the stored receipt. `batchRow` accepts a finished `ingest_batches` row for `finish` when its run is no longer `open`. Counts = native chunk counts + derived counts + `failed += 1` per failed series; the receipt also reports `native_counts` and `derived_counts`; errors = all stored chunk errors + the unlocated summary + derived errors + `{code, key: series_id}` per failed series + `{code:'no_native_outcomes'}` when no usable native row landed (`Σ native_usable = 0`; a chunk of only previously_rejected redeliveries counts duplicates but zero usable rows, 第 6 稿 P2-1). `recordFreshness` gets `ok = status !== 'failed' && Σ native_usable > 0` and `detail:{batch_id, batch_status, failed_series}`. Each chunk stores `native_usable = rec.usable` from `ingestEvidence`.
 - **Retrieval tool_versions** = the batch's `tool_versions` (AKShare, pandas, Python, collector, ingest route, catalog, rules) plus `parser` (`nbs-esdata/1` | `chinabond-history/1` | `safe-rmbquery/1`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -7687,7 +8194,7 @@ function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:E
 let deps:MacroDeps,mem:ReturnType<typeof memoryMacroDb>,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>,clock:Date;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.MACRO_INGEST_SECRET=SECRET;clock=RECORDED;tokens.clear();
- tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();mem=memoryMacroDb();
+ tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();mem=memoryMacroDb({tables});   // tables: finalizeBatch / recordFreshness (第 6 稿)
  deps={db:mem,evidence,tables,codeVersion:'b'.repeat(40),now:()=>clock,fetch:(()=>{throw new Error('no fetch in ingest');}) as unknown as typeof fetch,sleep:async()=>{}};
  mocks.deps.mockImplementation(()=>deps);mocks.codeVersion.mockReturnValue('b'.repeat(40));
 });
@@ -7877,34 +8384,42 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(body).toMatchObject({status:'failed',counts:{fetched:0,failed:1}});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1});
  });
- it('finish resumes after recordAttempt itself failed: derivation and finishBatch never run twice; the attempt is not retried (one lost record beats a double count, 第 5 稿 P1-4)',async()=>{
+ it('a failed freshness write commits nothing: derivation and finalize never run twice and the retry records exactly one attempt (第 6 稿 P1-1)',async()=>{
   const id=await startBatch();
   await post(chunkBody(id));
   const upsert=tables.upsert.bind(tables);let broken=true;
   tables.upsert=async(t,r,c)=>{if(t==='dq_freshness'&&broken){broken=false;throw new Error('freshness down');}return upsert(t,r,c);};
   const first=await post(finishBody(id,1,OK));
   expect(first.status).toBe(500);
-  expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'success'});                    // finishBatch already happened
-  expect(await mem.ingestRun(id)).toMatchObject({state:'finishing',progress:{derived:expect.any(Object),batch_finished:{status:'success'},freshness_started:{ok:true}}});
+  expect(tables.rows('ingest_batches')[0]).toMatchObject({status:'success'});                    // finalizeBatch already happened
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finishing',progress:{derived:expect.any(Object),batch_finished:{status:'success'}}});
+  expect((await mem.ingestRun(id))!.progress.freshness_recorded).toBeUndefined();                  // no checkpoint without the write
   const derivedRows=(await history('CN_CPI_YOY')).length;
   const second=await post(finishBody(id,1,OK));
   expect(second.status).toBe(200);
   expect(await second.json()).toMatchObject({batch_id:id,status:'success'});
   expect((await history('CN_CPI_YOY')).length).toBe(derivedRows);
-  expect(tables.rows('dq_freshness')).toHaveLength(0);                                            // started without a record ⇒ skipped, never repeated
-  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{freshness_recorded:{ok:true,skipped:'started_without_record'}}});
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',consecutive_errors:0,status:'fresh'})]);   // recorded once, not lost
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{freshness_recorded:{ok:true,status:'fresh'}}});
  });
- for(const crashAt of ['derived','batch_finished','freshness_recorded'] as const){
-  it(`crash right after the side effect of '${crashAt}', before its checkpoint: the retry completes and repeats nothing (第 5 稿 P1-4)`,async()=>{
+ for(const crashAt of ['derived','batch_finished','freshness'] as const){
+  it(`crash right after the side effect of '${crashAt}', before the response: the retry completes and repeats nothing (第 5 稿 P1-4, 第 6 稿 P1-1)`,async()=>{
    const id=await startBatch();await post(chunkBody(id));
-   const record=mem.recordFinishStep.bind(mem);let armed=true;
-   mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name===crashAt){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+   let armed=true;
+   if(crashAt==='freshness'){
+    // the freshness transaction committed (upsert + checkpoint), then the lambda died before answering
+    const fresh=mem.recordFreshness.bind(mem);
+    mem.recordFreshness=async(b,input,fence)=>{const r=await fresh(b,input,fence);if(armed){armed=false;throw new Error('lambda killed');}return r;};
+   }else{
+    const record=mem.recordFinishStep.bind(mem);
+    mem.recordFinishStep=async(b,name,data,fence)=>{if(armed&&name===crashAt){armed=false;throw new Error('lambda killed');}return record(b,name,data,fence);};
+   }
    expect((await post(finishBody(id,1,OK))).status).toBe(500);
    const derivedRows=(await history('CN_CPI_YOY')).length;
    const second=await post(finishBody(id,1,OK));
    expect(second.status).toBe(200);expect(await second.json()).toMatchObject({batch_id:id,status:'success'});
    expect((await history('CN_CPI_YOY')).length).toBe(derivedRows);                                // re-derivation wrote duplicates only
-   expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'success'});   // finished once (finishOnce read it back)
+   expect(tables.rows('ingest_batches').find(b=>b.batch_id===id)).toMatchObject({status:'success'});   // finished once (finalizeBatch read it back)
    expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.akshare',consecutive_errors:0})]);   // one attempt, never two
    expect(await mem.ingestRun(id)).toMatchObject({state:'finished'});
   });
@@ -7954,6 +8469,26 @@ describe('POST /api/macro/ingest — protocol',()=>{
   expect(body.errors).toContainEqual({code:'no_native_outcomes'});
   expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{derived:{skipped:'no_native_outcomes'}}});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({consecutive_errors:1,detail:{batch_status:'failed'}});
+ });
+ it('a rejected-only redelivery after a populated run is not usable data: no derivation, no_native_outcomes, freshness ok:false (第 6 稿 P2-1)',async()=>{
+  const first=await startBatch();await post(chunkBody(first));
+  expect((await (await post(finishBody(first,1,OK))).json()).status).toBe('success');
+  const derivedBefore=(await history('CN_CPI_YOY')).length;
+  // every value of the next collection was rejected earlier: the RPC inserts nothing and reports previously_rejected under
+  // duplicates (that write rule is pinned in Task 1 / Task 3; here the route's gate is under test)
+  const write=mem.writeObservations.bind(mem);
+  mem.writeObservations=async(b,c,rows,t)=>rows.some(r=>'derived_from' in r)?write(b,c,rows,t):{inserted:0,duplicates:rows.length,versioned:0,quarantined:0,
+   conflicts:rows.map(r=>({series_id:r.series_id,period_end:r.period_end,reason:'previously_rejected' as const,value_text:r.value_text,current_value_text:null,observation_id:'00000000-0000-4000-8000-0000000000cd'}))};
+  const id=await startBatch();
+  const chunk=await (await post(chunkBody(id))).json();
+  expect(chunk.counts.duplicates).toBe(chunk.counts.fetched);expect(chunk.counts.inserted).toBe(0);
+  expect((await mem.chunksOf(id))[0].native_usable).toBe(0);                                        // duplicates, but zero usable rows
+  const body=await (await post(finishBody(id,1,OK))).json();
+  expect(body).toMatchObject({status:'partial',native_usable:0,derived_counts:{fetched:0,inserted:0,duplicates:0}});   // shared DQ rule: duplicates landed → partial
+  expect(body.errors).toContainEqual({code:'no_native_outcomes'});
+  expect(await mem.ingestRun(id)).toMatchObject({state:'finished',progress:{derived:{skipped:'no_native_outcomes'},freshness_recorded:{ok:false}}});
+  expect((await history('CN_CPI_YOY')).length).toBe(derivedBefore);                                  // no re-derivation from old history
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'macro.akshare',consecutive_errors:1,detail:{batch_id:id,batch_status:'partial'}});
  });
 });
 ```
@@ -8315,18 +8850,18 @@ export function parseIngestBody(v:unknown):SchemaResult{
 //           compared by decimal equality inside ingestEvidence. completeChunk stores counts, sanitized errors and the
 //           claim / location key sets.
 //  finish → beginFinish (owner only; all chunks done, else 409) hands out a finish token; resumable and exclusive via
-//           finish_progress: CN derivation (N3; skipped when no native outcome landed) → finishOnce with native chunk +
-//           derived counts, failed series (series_outcomes), every stored error, the batch-wide unlocated-claims summary
-//           and no_native_outcomes → freshness_started → recordAttempt('macro.akshare', daily, ok = status !== 'failed'
-//           && native landed) → freshness_recorded → the Task 11 publish point → stored receipt (run finished, lease
-//           released). A retry skips completed steps (and never repeats recordAttempt); a finished run returns its stored
-//           receipt. Only this route publishes CN.
+//           finish_progress: CN derivation (N3; skipped when no usable native row landed, Σ native_usable = 0) →
+//           MacroDb.finalizeBatch (fenced by owner + finish token, 第 6 稿 P1-1) with native chunk + derived counts, failed
+//           series (series_outcomes), every stored error, the batch-wide unlocated-claims summary and no_native_outcomes →
+//           MacroDb.recordFreshness('macro.akshare', daily, ok = status !== 'failed' && usable native rows; the upsert and the
+//           freshness_recorded checkpoint in one fenced transaction) → the Task 11 publish point → stored receipt (run
+//           finished, lease released). A retry skips completed steps; a finished run returns its stored receipt. Only this
+//           route publishes CN.
 // Responses carry codes, keys and counts only.
 import {createHash} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {emptyCounts,finishBatch,startBatch} from '@/lib/dq/batches';
 import type {BatchError,BatchStatus} from '@/lib/dq/batches';
-import {recordAttempt} from '@/lib/dq/freshness';
 import type {Row} from '@/lib/db/table-client';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {authorizedCronRequest} from '@/lib/observability/cron-auth';
@@ -8334,7 +8869,7 @@ import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {MacroDbError} from '@/lib/macro/db';
-import {IngestAbort,addCounts,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
+import {IngestAbort,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import type {Claim,RetrievalInput} from '@/lib/macro/ingest';
 import {MAX_BODY_BYTES,parseIngestBody} from '@/lib/macro/ingest-schema';
 import type {IngestBody,SeriesOutcome} from '@/lib/macro/ingest-schema';
@@ -8369,17 +8904,8 @@ async function batchRow(deps:MacroDeps,batchId:string,opts:{finishing?:boolean}=
  }
  return b;
 }
+/** start's sweep of aborted / refused batches still uses the shared finishBatch; batch_not_running = finished elsewhere. */
 const notRunning=(e:unknown)=>e instanceof Error&&e.message==='batch_not_running';
-/** finishBatch exactly once (第 5 稿 P1-4): a batch an earlier attempt (or a fenced concurrent finisher) already finished is read
- *  back, never finished again. */
-async function finishOnce(deps:MacroDeps,batchId:string,result:{counts:ChunkCounts;errors:BatchError[]}):Promise<BatchStatus>{
- try{return await finishBatch(deps.tables,batchId,result);}
- catch(e){
-  if(!notRunning(e))throw e;
-  const [row]=await deps.tables.select('ingest_batches',{batch_id:batchId},{limit:1});
-  return String(row?.status) as BatchStatus;
- }
-}
 
 async function start(deps:MacroDeps,body:Extract<IngestBody,{action:'start'}>){
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
@@ -8436,16 +8962,19 @@ async function chunk(deps:MacroDeps,body:Extract<IngestBody,{action:'chunk'}>){
  counts=addCounts(counts,rec.counts);errors.push(...rec.errors);
  // Claim identities: the batch-wide unlocated summary is computed at finish from these sets (P2-1), never per chunk.
  const claimKeys=[...new Set(body.claims.map(c=>{const p=parserFor(c.series_id),pe=p?claimPeriodEnd(c.period_label,p.spec.period):null;return pe?`${c.series_id}|${pe}`:`${c.series_id}|?${c.period_label}`;}))].sort();
- const stored=await deps.db.completeChunk(body.batch_id,body.seq,{counts,errors:storedErrors(errors),claimKeys,locatedKeys:[...located].sort()},body.owner_token);
+ // native_usable (第 6 稿 P2-1): rows that are data — previously_rejected redeliveries count as duplicates but not as usable
+ const stored=await deps.db.completeChunk(body.batch_id,body.seq,{counts,nativeUsable:rec.usable,errors:storedErrors(errors),claimKeys,locatedKeys:[...located].sort()},body.owner_token);
  return json({status:'accepted',batch_id:body.batch_id,seq:body.seq,counts:stored.counts,errors:publicErrors(errors)});
 }
 
 /** Native outcomes of THIS collection = the chunk counts (chunks carry evidence only; 第 5 稿 P2-2). */
 const nativeOf=(chunks:ChunkRecord[])=>chunks.reduce((acc,c)=>addCounts(acc,c.counts),emptyChunkCounts());
-const landed=(c:ChunkCounts)=>c.inserted+c.versioned+c.duplicates>0;
-/** Batch totals for finishBatch: native chunks + derivation + failed series; every stored error plus the distinct unlocated-claims
- *  summary, and no_native_outcomes (non-INFO) when nothing native landed, so such a batch can never look partial (第 5 稿 P2-2). */
-function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:ChunkError[]},outcomes:SeriesOutcome[]):{counts:ChunkCounts;errors:BatchError[];failedSeries:string[]}{
+/** Usable native rows (第 6 稿 P2-1): the derivation / publication / freshness gate. Not the duplicates counter — it includes
+ *  previously_rejected redeliveries. */
+const usableOf=(chunks:ChunkRecord[])=>chunks.reduce((n,c)=>n+c.native_usable,0);
+/** Batch totals for finalizeBatch: native chunks + derivation + failed series; every stored error plus the distinct unlocated-claims
+ *  summary, and no_native_outcomes (non-INFO) when no usable native row landed (第 5 稿 P2-2, 第 6 稿 P2-1). */
+function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:ChunkError[]},outcomes:SeriesOutcome[],nativeUsable:number):{counts:ChunkCounts;errors:BatchError[];failedSeries:string[]}{
  const native=nativeOf(chunks);
  let counts=addCounts(native,derived.counts);
  const failed=outcomes.filter(o=>!o.ok);
@@ -8458,7 +8987,7 @@ function summarise(chunks:ChunkRecord[],derived:{counts:ChunkCounts;errors:Chunk
  if(unlocated>0)errors.push({code:'skipped_summary',key:'unlocated_claims',message:`${unlocated} claims without a located raw value`});
  errors.push(...derived.errors);
  for(const o of failed)errors.push({code:o.code??'collect_failed',key:o.series_id});
- if(!landed(native))errors.push({code:'no_native_outcomes'});
+ if(nativeUsable===0)errors.push({code:'no_native_outcomes'});
  return {counts,errors,failedSeries:failed.map(o=>o.series_id)};
 }
 
@@ -8473,7 +9002,7 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
  const step=(name:FinishStep,data:Record<string,unknown>)=>deps.db.recordFinishStep(body.batch_id,name,data,fence);
  let p:FinishProgress=begun.progress;
  const chunks=await deps.db.chunksOf(body.batch_id);
- const native=nativeOf(chunks);const nativeLanded=landed(native);
+ const native=nativeOf(chunks);const nativeUsable=usableOf(chunks);const nativeLanded=nativeUsable>0;   // 第 6 稿 P2-1
  if(!p.derived){
   // idempotent by nature: a retry after a crash past deriveAndWrite writes duplicates only
   if(nativeLanded){
@@ -8482,27 +9011,24 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
   }else p=await step('derived',{skipped:'no_native_outcomes'});                                       // 第 5 稿 P2-2
  }
  const derived='counts' in p.derived!?p.derived!:{counts:emptyChunkCounts(),errors:[]};
- const {counts,errors,failedSeries}=summarise(chunks,derived,body.series_outcomes);
+ const {counts,errors,failedSeries}=summarise(chunks,derived,body.series_outcomes,nativeUsable);
  if(!p.batch_finished){
-  const status=await finishOnce(deps,body.batch_id,{counts,errors});
-  p=await step('batch_finished',{status,date:deps.now().toISOString().slice(0,10)});
+  // fenced side effect (第 6 稿 P1-1): written only under the current finish token and only while the batch runs; finalized:false =
+  // an earlier attempt of this run finished it — the stored status is read back, never finished twice
+  const fin=await deps.db.finalizeBatch(body.batch_id,batchFinalizeInput({counts,errors},deps.now()),fence);
+  p=await step('batch_finished',{status:fin.status,date:deps.now().toISOString().slice(0,10)});
  }
  const batchStatus=p.batch_finished!.status as BatchStatus;
  const today=p.batch_finished!.date;
  const ok=batchStatus!=='failed'&&nativeLanded;
  if(!p.freshness_recorded){
-  if(!p.freshness_started){
-   p=await step('freshness_started',{ok});                                                            // checkpoint BEFORE the side effect
-   await recordAttempt(deps.tables,DATASET,{ok,cadence:'daily',detail:{batch_id:body.batch_id,batch_status:batchStatus,failed_series:failedSeries}});
-   p=await step('freshness_recorded',{ok});
-  }else{
-   // started but not recorded: recordAttempt may or may not have run; it is not idempotent (consecutive_errors), so skip it —
-   // one lost attempt record (the next collection writes one) is preferred to a double-counted error (第 5 稿 P1-4)
-   p=await step('freshness_recorded',{ok,skipped:'started_without_record'});
-  }
+  // the dq_freshness upsert and the freshness_recorded checkpoint commit together under the finish token (第 6 稿 P1-1): a crash
+  // either loses both (the retry writes once) or keeps both (the retry skips) — never a double count, never a lost attempt
+  p=await deps.db.recordFreshness(body.batch_id,{dataset:DATASET,ok,cadence:'daily',now:deps.now().toISOString(),
+   detail:{batch_id:body.batch_id,batch_status:batchStatus,failed_series:failedSeries}},fence);
  }
  // TASK 11: publishRegion(region)
- const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,native_counts:native,derived_counts:derived.counts,errors:publicErrors(errors)};
+ const receipt={batch_id:body.batch_id,status:batchStatus,date:today,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derived.counts,errors:publicErrors(errors)};
  await step('receipt',receipt);
  return json(receipt);
 }
@@ -8563,7 +9089,8 @@ parsed from recorded official bytes; claims compared by decimal equality.
 The route verifies bearer, size, sha256, official host/path and fetched_at,
 takes a single-writer lease, claims each (batch, seq) once (repeats get the
 stored receipt), and finish resumes from its recorded progress: derive CN,
-finishBatch with failed series and stored errors, record freshness. CN publishing is left to Task 11 at the marked line.
+finalizeBatch (fenced) with failed series and stored errors, recordFreshness (fenced, checkpoint in the same transaction).
+CN publishing is left to Task 11 at the marked line.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -8935,7 +9462,7 @@ EOF
 - Create: `src/lib/macro/testing/seed.ts` (test-only seeding helper that goes through the public `MacroDb` contract and Task 6's `deriveAndWrite`; reused by Tasks 12–13)
 - Modify: `src/app/api/cron/macro-sync/route.ts` (Part B Task 7). Replace the marker `// TASK 11: publishRegion(region)` with the US publish call.
 - Modify: `src/app/api/macro/ingest/route.ts` (Part B Task 9). Replace the marker `// TASK 11: publishRegion(region)` in the `finish` branch with the CN publish call.
-- Modify: `src/app/api/cron/macro-sync/route.test.ts` and `src/app/api/macro/ingest/route.test.ts` (Part B). Add the cases listed in Step 4 (one cron case; six ingest cases).
+- Modify: `src/app/api/cron/macro-sync/route.test.ts` and `src/app/api/macro/ingest/route.test.ts` (Part B). Add the cases listed in Step 4 (one cron case; seven ingest cases).
 - Test: `src/lib/macro/freshness.test.ts`, `src/lib/macro/snapshots.test.ts`
 
 Spec: §4.4 steps 4–5, §4.5, §5.3 (manifest, publish regardless of coverage), §11, and §0.2 M7/M11/M16/N3. Rules in this task:
@@ -8944,7 +9471,7 @@ Spec: §4.4 steps 4–5, §4.5, §5.3 (manifest, publish regardless of coverage)
 - **Frozen history (第 4 稿 P1-8).** `history_ids` = per regime input, the last `SPARK_POINTS` (24) eligible observations up to and including the latest period (window: 24 months, 72 for quarterly series), passed as `PublishInput.historyIds`. The overview's sparklines read exactly these ids, so a later accepted quarantine or revision never changes an already published snapshot.
 - **Seeds (第 4 稿 P1-2).** `testing/seed.ts` writes **native** inputs only (`US_FEDFUNDS_EFF_D`, `US_DGS10_D`, `US_DTWEXBGS_D`, `US_CPI_INDEX`, `US_PPI_FD_INDEX`, `US_UNRATE`, …) and produces derived rows through Task 6's `deriveAndWrite` (the real derive path), exactly as cron and ingest do. `yoyPoints(indexId, [[periodEnd, yoy]])` builds the two index points (base 100 one year earlier, `100 + yoy`) whose derived yoy equals `yoy` exactly. A derived row's provenance is its ancestors' retrievals.
 - **Retry.** `stale_publisher` is retried once, starting over from a fresh read of the publish state. A second `stale_publisher` gives up with a receipt and records no failure row: another publisher won, and the active snapshot is current. Any other error records a failed snapshot and leaves the active one untouched.
-- **Idempotency and fencing (第 5 稿 P1-3/P1-4/P1-5).** `publishRegion(deps, region, today, {publishKey, fence})`: cron passes `publishKey:'cron:'+batchId`; ingest finish passes `publishKey:'ingest:'+batchId` and `fence:{batchId, ownerToken}`. A key that already published returns the stored snapshot (`replayed:true`, hook `skipped`) — so a finish that crashed after the publish but before its `published` checkpoint never publishes twice. `fenced` is a protocol abort: `publishRegion` rethrows it (no failed snapshot, no receipt). In ingest finish, only `published` (incl. replayed) and the intentional skips (`batch_failed`, `no_native_outcomes`) are checkpointed as `published`; `stale` / `failed` receipts are retryable — recorded as `publish_attempt`, the run stays `finishing`, the route answers 503 `publish_pending` and the collector retries `finish` with the same owner token.
+- **Idempotency and fencing (第 5 稿 P1-3/P1-4/P1-5).** `publishRegion(deps, region, today, {publishKey, fence})`: cron passes `publishKey:'cron:'+batchId`; ingest finish passes `publishKey:'ingest:'+batchId` and `fence:{batchId, ownerToken}`. A key that already published returns the stored snapshot (`replayed:true`, hook `skipped`) — so a finish that crashed after the publish but before its `published` checkpoint never publishes twice. **The replay receipt is built from the persisted snapshot (第 6 稿 P2-2):** `publishRegion` loads the returned snapshot (`db.snapshot`) and its stored regime (`db.regimeOf`, admin) and reports `observation_count = snapshot.observation_ids.length`, `regime` / `uncovered_weight` from the stored regime row — never from the inputs it just rebuilt, which may have changed since. `fenced` is a protocol abort: `publishRegion` rethrows it (no failed snapshot, no receipt). In ingest finish, only `published` (incl. replayed) and the intentional skips (`batch_failed`, `no_native_outcomes`) are checkpointed as `published`; `stale` / `failed` receipts are retryable — recorded as `publish_attempt`, the run stays `finishing`, the route answers 503 `publish_pending` and the collector retries `finish` with the same owner token.
 - **Judgment hook.** Runs only when `MACRO_JUDGMENTS_ENABLED === '1'`. Its failure never fails the publish.
 
 - [ ] **Step 1: Write the failing tests**
@@ -9161,6 +9688,21 @@ describe('publishRegion',()=>{
   expect(hook).not.toHaveBeenCalled();
   expect((await db.publishState('US')).revision).toBe(first.revision);
  });
+ it('a replay receipt describes the returned snapshot from its persisted fields, not inputs that changed since (第 6 稿 P2-2)',async()=>{
+  const db=memoryMacroDb();await seedCatalog(db);
+  const key='ingest:22222222-2222-4222-8222-222222222222';
+  const first=await publishRegion({db,env:{}},'US',TODAY,{publishKey:key});                      // no inputs yet: an empty, valid snapshot
+  if(first.status!=='published')throw new Error('setup');
+  expect(first).toMatchObject({observation_count:0,regime:'null'});
+  await seedPoints(db,US_FIXTURE);                                                                 // inputs arrive after the publish (Codex repro)
+  expect((await buildRegimeInput(db,'US')).observations.length).toBeGreaterThan(0);                // a rebuild would now report the new inputs
+  const again=await publishRegion({db,env:{}},'US',TODAY,{publishKey:key});
+  expect(again).toEqual({...first,replayed:true});                                                // same snapshot, same counts, regime and weight
+  const snap=(await db.snapshot(first.snapshot_id))!;const stored=(await db.regimeOf(first.snapshot_id))!;
+  if(again.status!=='published')throw new Error('unreachable');
+  expect(again.observation_count).toBe(snap.observation_ids.length);
+  expect([again.regime,again.uncovered_weight]).toEqual([stored.regime?'classified':'null',stored.uncovered_weight]);
+ });
  it('fenced is a protocol abort: it propagates and records no failed snapshot (第 5 稿 P1-3)',async()=>{
   const {db}=await seeded();
   const recordFailed=vi.fn(db.recordFailedSnapshot.bind(db));
@@ -9190,7 +9732,7 @@ Run: `npm test -- src/lib/macro/freshness.test.ts src/lib/macro/snapshots.test.t
 Expected: FAIL (`Cannot find module './freshness'`, `Cannot find module './snapshots'`)
 - [ ] **Step 3: Implement**
 
-`memoryMacroDb()` (Task 3) takes no arguments and does not require an `ingest_batches` row; batches never declared with `setBatchStatus` count as `success`, so `SEED_BATCH` rows are publication-eligible, and a test that models an unfinished batch declares it (`db.setBatchStatus(id,'running')`). `macro_catalog_versions.rules_version` records the DQ rules version (`MACRO_RULES_VERSION`, Task 5), as the cron and ingest routes do; the regime rules version is stored per snapshot in `macro_regime_results.rules_version`.
+`memoryMacroDb()` (Task 3) is callable without arguments (`{tables}` is needed only by `finalizeBatch` / `recordFreshness`, i.e. the route tests) and does not require an `ingest_batches` row; batches never declared with `setBatchStatus` count as `success`, so `SEED_BATCH` rows are publication-eligible, and a test that models an unfinished batch declares it (`db.setBatchStatus(id,'running')`). `macro_catalog_versions.rules_version` records the DQ rules version (`MACRO_RULES_VERSION`, Task 5), as the cron and ingest routes do; the regime rules version is stored per snapshot in `macro_regime_results.rules_version`.
 ```ts
 // src/lib/macro/testing/seed.ts
 // Test-only seeding over the public MacroDb contract (no backdoor into memory state). Shared by the
@@ -9326,7 +9868,8 @@ export async function collectionStatus(tables:TableClient,now=new Date()):Promis
 // (history_ids); it is published regardless of coverage (regime=null only means "no classification").
 // Optimistic: (revision, input_revision) is read first; stale_publisher → one retry from scratch, then give
 // up. Other failures record a failed snapshot; active is untouched. 第 5 稿: an optional publish key makes a repeated
-// publish replay the stored snapshot (replayed:true); the ingest finish adds its owner fence, and `fenced` propagates.
+// publish replay the stored snapshot (replayed:true) — its receipt is read back from the persisted snapshot and regime row
+// (第 6 稿 P2-2); the ingest finish adds its owner fence, and `fenced` propagates.
 import {CATALOG_VERSION,catalogById,regimeInputsOf} from './catalog';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
@@ -9423,10 +9966,18 @@ export async function publishRegion(deps:PublishDeps,region:Region,today:string,
      catalogCounts:counts,regime:cls.regime,contributions:cls.contributions,rulesVersion:RULES_VERSION,uncoveredWeight:cls.uncoveredWeight,
      publishKey:opts.publishKey,batchId:opts.fence?.batchId,ownerToken:opts.fence?.ownerToken,
     });
-    // a replay means an earlier attempt published (and ran or lost its hook); F4's produce is never re-triggered from a replay
-    const hook=res.replayed?'skipped' as const:await runHook(deps,env,res.snapshot_id);
+    if(res.replayed){
+     // An earlier attempt published under this key (and ran or lost its hook; F4's produce is never re-triggered from a replay).
+     // The receipt describes THAT snapshot from its persisted fields (第 6 稿 P2-2), not the inputs rebuilt above, which may differ.
+     const snap=await deps.db.snapshot(res.snapshot_id);
+     if(!snap)throw new MacroDbError('rpc_failed',`replayed_snapshot_missing:${res.snapshot_id}`);
+     const stored=await deps.db.regimeOf(res.snapshot_id);                                             // admin read (service-only table)
+     return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:snap.observation_ids.length,
+      regime:stored?.regime?'classified':'null',uncovered_weight:stored?stored.uncovered_weight:0,attempts,hook:'skipped',replayed:true};
+    }
+    const hook=await runHook(deps,env,res.snapshot_id);
     return {status:'published',region,snapshot_id:res.snapshot_id,revision:res.revision,observation_count:built.observations.length,
-     regime:cls.regime?'classified':'null',uncovered_weight:cls.uncoveredWeight,attempts,hook,replayed:res.replayed};
+     regime:cls.regime?'classified':'null',uncovered_weight:cls.uncoveredWeight,attempts,hook,replayed:false};
    }catch(e){
     if(e instanceof MacroDbError&&e.code==='stale_publisher'){if(attempts<2)continue;return {status:'stale',region,attempts};}
     throw e;
@@ -9444,7 +9995,7 @@ export async function publishRegion(deps:PublishDeps,region:Region,today:string,
 ```
 - [ ] **Step 4: Wire the two integration points**
 
-Open `src/app/api/cron/macro-sync/route.ts`. Find the line `// TASK 11: publishRegion(region)`. It sits after FRED derivation, on the non-preview path. The preview path must never reach it: if it does, stop and report NEEDS_CONTEXT. Replace the marker with the snippet below. In the snippet, `deps.db` is the route's `MacroDb`, `today` is the run's `YYYY-MM-DD`, `batchStatus` is the `finishBatch` result, `nativeLanded` is the Task 7 flag (a native inserted/versioned/duplicate outcome landed) and `batchId` the run's batch. If the route uses other names for these values, use its names, and change nothing else in the route.
+Open `src/app/api/cron/macro-sync/route.ts`. Find the line `// TASK 11: publishRegion(region)`. It sits after FRED derivation, on the non-preview path. The preview path must never reach it: if it does, stop and report NEEDS_CONTEXT. Replace the marker with the snippet below. In the snippet, `deps.db` is the route's `MacroDb`, `today` is the run's `YYYY-MM-DD`, `batchStatus` is the `finalizeBatch` result's status, `nativeLanded` is the Task 7 flag (`Σ usable > 0`: a usable native row landed, previously_rejected excluded — 第 6 稿 P2-1) and `batchId` the run's batch. If the route uses other names for these values, use its names, and change nothing else in the route.
 ```ts
  // Task 11 (spec §4.4 step 4–5; 第 5 稿 P1-4/P2-2): publish US only, keyed by the batch; a failed FRED batch or a run without any
  // native outcome leaves the last active snapshot serving.
@@ -9494,6 +10045,7 @@ In the ingest test file (helpers `startBatch` / `chunkBody` / `finishBody` / `OK
 4. A retryable publication failure stays in `finishing` (第 5 稿 P1-5): `publishMock.mockResolvedValueOnce({status:'stale',region:'CN',attempts:2})`; the first `finish` answers 503 `publish_pending`; `mem.ingestRun(id)` is `{state:'finishing'}` with `progress.attempts` of length 1 (`status:'stale'`) and no `published`; the second `finish` (mock back to published) answers 200 with `publish.status==='published'`; `publishMock` was called twice and freshness has exactly one row.
 5. A finish of a batch without native outcomes (all series failed, `total` 0) answers `publish:{status:'skipped',region:'CN',reason:'no_native_outcomes'}` and never calls `publishMock`.
 6. A `fenced` publish (`publishMock.mockRejectedValueOnce(new MacroDbError('fenced'))`) answers 409 `fenced` and records no `published` step.
+7. A rejected-only redelivery after a populated run (第 6 稿 P2-1; the same `writeObservations` wrapper as Task 9's case) answers `publish:{status:'skipped',region:'CN',reason:'no_native_outcomes'}` and never calls `publishMock` for that batch.
 - [ ] **Step 5: Run tests, typecheck, lint**
 Run: `npm test -- src/lib/macro/freshness.test.ts src/lib/macro/snapshots.test.ts src/app/api/cron/macro-sync src/app/api/macro/ingest && npm run typecheck && npm run lint`
 Expected: PASS
@@ -9517,7 +10069,7 @@ EOF
 
 This task implements the F4 contract (F4 plan shared contract §"macro read interface"; F4 spec §11.1, §12.1; macro spec §5.4) exactly as `src/lib/macro/judgment-contract.ts` mirrors it:
 - `observation`: `vintage_id = String(version)` and `value = Number(value_text)`. This `Number()` is F4's contract shape, not a computation boundary (the three computation boundaries are `quality.ts`, `regime.ts`, `correlation.ts`; see 仓库约定). `unit` comes from the catalog. Only ok rows are returned: `observationsByIds` is ok-only.
-- `snapshot`: carries `regime` from `regimeOf`, which may be null.
+- `snapshot`: carries `regime` from `regimeOf`, which may be null — **only when judgments are enabled** (第 6 稿 P1-2): `macroReadApi(db, {judgments})` defaults `judgments` to `process.env.MACRO_JUDGMENTS_ENABLED === '1'`; disabled → `regime: null` and `regimeOf` is never called. `regimeOf` reads the service-only `macro_regime_results` through the admin client, so this module is server-only (F4's macro-snapshot input builder calls it server-side instead of reading macro tables with the anon key).
 - `snapshotsSince`: strict `(created_at, snapshot_id)` cursor, `1 ≤ limit ≤ 200`, `active` and `superseded` only.
 - `seriesCatalog(region)`: catalog rows with `weight = WEIGHTS_V1`, `definition_version` and `catalog_version`.
 - `classifyAsOf`: rejects any version other than `v1.0` with `Error('methodology_mismatch')`. It calls the same `buildRegimeInput` and `classifyRegime` as publishing, with `periodEndLte` = the last day of `referencePeriod` and `asOf` = `cutoff`.
@@ -9544,7 +10096,7 @@ const TODAY='2026-11-06';
 async function setup(){
  const db=memoryMacroDb();await seedCatalog(db);
  const seed=await seedPoints(db,US_FIXTURE,{fetchedAt:'2026-10-15T05:30:00.000Z'});
- return {db,seed,api:macroReadApi(db)};
+ return {db,seed,api:macroReadApi(db,{judgments:true})};
 }
 
 describe('observation',()=>{
@@ -9574,6 +10126,20 @@ describe('snapshot / snapshotsSince',()=>{
   await expect(api.snapshotsSince(null,0)).rejects.toThrow('invalid_limit');
   await expect(api.snapshotsSince(null,201)).rejects.toThrow('invalid_limit');
   await expect(api.snapshotsSince(null,1.5)).rejects.toThrow('invalid_limit');
+ });
+ it('judgments off (第 6 稿 P1-2): regime is null and the service-only regime table is never read',async()=>{
+  const {db}=await setup();
+  const pub=await publishRegion({db,env:{}},'US',TODAY);
+  if(pub.status!=='published')throw new Error('setup');
+  let reads=0;const regimeOf=db.regimeOf.bind(db);db.regimeOf=async id=>{reads++;return regimeOf(id);};
+  const off=macroReadApi(db,{judgments:false});
+  expect((await off.snapshot(pub.snapshot_id))!.regime).toBeNull();
+  expect((await off.snapshotsSince(null,200)).every(r=>r.regime===null)).toBe(true);
+  expect(reads).toBe(0);
+  const prev=process.env.MACRO_JUDGMENTS_ENABLED;delete process.env.MACRO_JUDGMENTS_ENABLED;
+  try{expect((await macroReadApi(db).snapshot(pub.snapshot_id))!.regime).toBeNull();}                 // default follows the flag (unset = off)
+  finally{if(prev!==undefined)process.env.MACRO_JUDGMENTS_ENABLED=prev;}
+  expect(reads).toBe(0);
  });
  it('failed snapshots are never listed',async()=>{
   const {db,api}=await setup();
@@ -9805,7 +10371,9 @@ Expected: FAIL (`Cannot find module './read-api'`). `replay.test.ts` may already
 // src/lib/macro/read-api.ts
 // MacroReadApi (F4 plan shared contract; F4 spec §11.1/§12.1; macro spec §5.4) over MacroDb's anon
 // read paths (quarantined rows are never visible). classifyAsOf reuses the publishing pipeline's
-// buildRegimeInput + classifyRegime: there is exactly one classification function.
+// buildRegimeInput + classifyRegime: there is exactly one classification function. Server-only: stored judgments come from
+// the service-only macro_regime_results (admin) and only when judgments are enabled (第 6 稿 P1-2); F4 builds its macro
+// snapshot inputs through this API, never with anon table reads.
 import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
 import {monthEnd} from './freshness';
@@ -9821,8 +10389,8 @@ const CUTOFF_RE=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2
 function toRef(r:ObservationRow):MacroObservationRef{
  return {series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit:catalogById(r.series_id)?.unit??'',available_at:r.available_at};
 }
-async function toRow(db:MacroDb,s:SnapshotRecord):Promise<MacroSnapshotRow>{
- const regime=(await db.regimeOf(s.snapshot_id))?.regime??null;
+async function toRow(db:MacroDb,s:SnapshotRecord,judgments:boolean):Promise<MacroSnapshotRow>{
+ const regime=judgments?(await db.regimeOf(s.snapshot_id))?.regime??null:null;   // flag off: no judgment read at all
  return {snapshot_id:s.snapshot_id,region:s.region,as_of:s.as_of,methodology_version:s.methodology_version,catalog_version:s.catalog_version,
   observation_ids:[...s.observation_ids],regime,created_at:s.created_at,status:s.status};
 }
@@ -9834,7 +10402,9 @@ export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecor
  for(const r of rows)if(best===null||Date.parse(r.available_at)>Date.parse(best))best=r.available_at;
  return best;
 }
-export function macroReadApi(db:MacroDb):MacroReadApi{
+/** judgments: whether stored regimes are read (default MACRO_JUDGMENTS_ENABLED === '1'; 第 6 稿 P1-2). */
+export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadApi{
+ const judgments=opts.judgments??process.env.MACRO_JUDGMENTS_ENABLED==='1';
  return {
   async observation(observationId){
    const [row]=await db.observationsByIds([observationId]);
@@ -9842,13 +10412,13 @@ export function macroReadApi(db:MacroDb):MacroReadApi{
   },
   async snapshot(snapshotId){
    const s=await db.snapshot(snapshotId);
-   return s?toRow(db,s):null;
+   return s?toRow(db,s,judgments):null;
   },
   async snapshotsSince(marker,limit){
    if(!Number.isInteger(limit)||limit<1||limit>MAX_SNAPSHOTS_PAGE)throw new Error('invalid_limit');
    const recs=(await db.snapshotsSince(marker,limit)).filter(s=>s.status==='active'||s.status==='superseded');
    const out:MacroSnapshotRow[]=[];
-   for(const s of recs)out.push(await toRow(db,s));
+   for(const s of recs)out.push(await toRow(db,s,judgments));
    return out;
   },
   async seriesCatalog(region){
@@ -10582,7 +11152,8 @@ Next.js App Router route files may export only route handlers and config. That i
 ```ts
 // src/app/api/macro/snapshots/[id]/route.ts
 // GET /api/macro/snapshots/[id] (spec §8): full snapshot (manifest + catalog counts). Regime and
-// contributions only when MACRO_JUDGMENTS_ENABLED === '1' (spec §3.2, plan cross-task convention).
+// contributions only when MACRO_JUDGMENTS_ENABLED === '1' (spec §3.2, plan cross-task convention); db.regimeOf reads the
+// service-only macro_regime_results through the admin client, server-side only (第 6 稿 P1-2).
 import {UUID_RE,errorResponse,failureResponse,macroRouteDeps,okJson,publicObservation,requireSessionUser} from '@/lib/macro/route-helpers';
 
 export const dynamic='force-dynamic';
@@ -14721,8 +15292,9 @@ launchctl print gui/$(id -u)/com.osbornalpha.macro-collect | head -40 # 状态�
 - `start` 返回 409 `batch_running`：上一次还没结束或卡住（409 的那次批次被记为 `rejected`）。超过 2 小时的 live run 在下一次 `start` 时被作废（`state='aborted'`，progress `{aborted:{by,reason:'max_age'}}`，其批次以 `failed`、错误 `aborted` 结束）。
 - 块回 409 `chunk_in_progress`：同一块正被另一请求处理；采集器退避重试 4 次。若仍是 processing（请求崩溃于写入之后、`completeChunk` 之前），采集器**整次重来**：`start {takeover:true}`——旧 run 有一块 processing 超过 10 分钟（`processing_timeout`）时被作废（`reason:'stalled_chunk'`），否则回 409 并被轮询（每 60 秒，最多 15 次）——然后把内存中的全部结果按新批次重新分块发送，**从不**补发旧批次的剩余块。Vercel `maxDuration`（300 秒）小于处理超时，健康请求不会被误判。
 - 任何响应为 409 `fenced`：这个批次已被接管，旧 worker 的每一次写入（retrieval、观测、隔离链接、块、finish、发布）都被数据库拒绝；采集器同样整次重来一次（不轮询）；仍 `fenced` 则退出码 1（另一采集器持有租约）。
-- `finish` 可安全重试，而且独占：只有令牌所有者能开始（其他令牌 → `fenced`）；每次开始都换新的 `finish_token`，同一所有者的并发 finish 中较早的那个在下一步得到 `fenced`。已完成的步骤（派生、`finishBatch`、新鲜度、发布）不会重做：`finishBatch` 已结束则读回状态；新鲜度先记 `freshness_started` 再 `recordAttempt`，只见到 `freshness_started` 的重试跳过这次尝试记录（宁可少记一次也不重复计错误）；发布按 `publish_key = 'ingest:<batch_id>'` 幂等，崩溃于发布之后的重试回放同一快照。可重试的发布失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误）→ 503 `publish_pending`，`finish_progress.attempts` 记下诊断，run 保持 `finishing`，采集器以同一令牌重试；一直失败则该 run 在下一次采集（> 2 小时）时被作废——批次此前已 `success`，其数据合格，下一次成功的采集会发布。已结束的批次原样返回存储的回执。
-- 全部来源失败（本次没有任何原生 inserted/versioned/duplicate 结果）：不派生、不发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），批次 `failed`（只有隔离行落地时为 `partial`，共用 DQ 规则），`dq_freshness` 记一次失败。cron（FRED）同一规则。
+- `finish` 可安全重试，而且独占：只有令牌所有者能开始（其他令牌 → `fenced`）；每次开始都换新的 `finish_token`，同一所有者的并发 finish 中较早的那个在下一步得到 `fenced`。已完成的步骤（派生、批次结束、新鲜度、发布）不会重做：批次结束走宏观 RPC `macro_finalize_batch`（校验所有者 + finish 令牌，只在批次仍 running 时写，已结束则读回状态）；新鲜度走 `macro_record_freshness`（`dq_freshness` 写入与 `freshness_recorded` 检查点同一事务，崩溃时要么都在、要么都不在，重试不会重复计错误也不会丢记录；第 6 稿 P1-1）。被换掉 finish 令牌的旧 finisher 在这两步得到 `fenced`，改不了批次与新鲜度；发布按 `publish_key = 'ingest:<batch_id>'` 幂等，崩溃于发布之后的重试回放同一快照。可重试的发布失败（再试一次后仍 `stale_publisher`、瞬时 rpc 错误）→ 503 `publish_pending`，`finish_progress.attempts` 记下诊断，run 保持 `finishing`，采集器以同一令牌重试；一直失败则该 run 在下一次采集（> 2 小时）时被作废——批次此前已 `success`，其数据合格，下一次成功的采集会发布。已结束的批次原样返回存储的回执。
+- 全部来源失败或只有被拒值重交付（本次没有任何可用原生行：`Σ native_usable = 0`，`previously_rejected` 虽计入 duplicates 但不算可用，第 6 稿 P2-1）：不派生、不发布（`publish:{status:'skipped',reason:'no_native_outcomes'}`），批次 `failed`（只有隔离行或被拒重交付落地时为 `partial`，共用 DQ 规则），`dq_freshness` 记一次失败。cron（FRED）同一规则。cron 在派生期遇到无法绑定的隔离行（`quarantine_link_failed`）等致命中止时，以显式 `failed` 与实际计数结束批次（`macro_finalize_batch`，第 6 稿 P2-4），已写的原生行永不进入发布。
+- 查看块的可用行：`select seq, counts, native_usable from macro_ingest_chunks where batch_id = '<batch>' order by seq;`。
 - 查看：`select batch_id,state,owner_token,finish_progress from macro_ingest_runs order by created_at desc limit 5;`（`finish_progress.aborted` 说明谁、为何作废了它；`attempts` 是发布重试的诊断）。
 
 ## 5. 采集状态与发布及时性
@@ -14748,7 +15320,8 @@ node --env-file=.env.local --import tsx scripts/macro/resolve-quarantine.ts --re
 - `--by` 必须是 `profiles.role='admin'` 的用户 id（脚本先检查）。退出码：0 成功；2 非管理员；3 被 SQL 拒绝（`already_resolved`、`not_found`、`reject_only`、`not_member`、`not_quarantined`、`member_ineligible`）。
 - 接受：必须用 `--observation` 指定要接受的成员；它转为 `ok`（版本号更高即最新），该条目其余成员转为 `rejected`，`input_revision+1`，写 `research_audit_log`。拒绝：全部成员转为 `rejected` + 审计。`rejected` 永久不可恢复、永不进入发布；同值再交付（无论多新）不会再插入，只得到信息性的 `previously_rejected`（不建新条目，第 5 稿 P1-2）。
 - 同一条目可能有两个同值成员：失败批次留下的隔离行，与后来成功批次重交付时新插入的隔离行（第 5 稿 P1-6：失败批次的行不被复用）。**接受成功批次那一个**；接受失败批次的成员会被 SQL 以 `member_ineligible` 拒绝（它永远不可能进入发布）。成员所属批次的状态：`select o.observation_id, o.version, b.status from macro_observations o join ingest_batches b using (batch_id) where o.observation_id = any('{<ids>}');`。
-- 裁决与采集并发时，采集侧的链接会锁住同一条目行：若裁决先关闭了条目，采集侧得到 `quarantine_closed`，自动新建一个 open 条目并重新链接（第 5 稿 P2-3），所以裁决之后出现的新冲突值会出现在新条目下，而不会挂到已关闭的条目上。
+- 裁决与采集并发时，采集侧的链接会锁住同一条目行：若裁决先关闭了条目，采集侧检查它要链接的确切行——该行已是本条目成员且已被这次裁决接受 / 拒绝 → 链接即完成（第 6 稿 P2-3，不中止、不建空条目）；该行仍是 `quarantined`（裁决之后出现的新冲突值）→ 得到 `quarantine_closed`，自动新建一个 open 条目并重新链接（第 5 稿 P2-3），所以新冲突值出现在新条目下，而不会挂到已关闭的条目上。
+- 被接管的旧 worker 可能在 `dq_quarantine` 里留下一个**没有成员**的 open 条目（`quarantine()` 是共用助手、不带令牌，但它随后的链接被 `fenced`）。它无害：下一次同键冲突会复用并链接它；否则直接 `--reject`。
 - 已发布快照不改；下一次发布（cron 或 ingest finish）反映裁决。需要立即反映时按 §3 手动触发。
 - 原因码：`unexpected_revision`（不可修订序列出新值）、`conflicting_rows`（同一证据内矛盾）、`stale_delivery`（迟到交付）、`adapter_mismatch`（TS 解析值 ≠ AKShare 值）、`rule_failed:<id>`（范围/单位/跳变）。`adapter_mismatch` 与 `rule_failed:*` **只能拒绝**：这两类值从未写入（没有成员），SQL 对接受抛 `reject_only`，脚本在调用前也拒绝（列表里标 `[reject-only]`）。处理办法：查上游与解析器，修好后下一次采集会正常写入，再拒绝旧条目。`conflicting_rows` 同样没有存储行（没有成员），接受得到 `not_member`；`stale_delivery` 与 `unexpected_revision` 可接受。
 
@@ -14800,7 +15373,7 @@ select public.republish_macro_snapshot('<要恢复的 snapshot_id>', <revision>,
 
 ## 12. 判断层开关
 
-`MACRO_JUDGMENTS_ENABLED=1` 只在 F4 判断层上线后设置。关闭时页面与 API 不出现象限 / 得分 / margin；开启但 F4 `/api/judgments` 不可用时，槽位显示“判断层暂不可用”，不回退到宏观自算数字。
+`MACRO_JUDGMENTS_ENABLED=1` 只在 F4 判断层上线后设置。`macro_regime_results` 只授 service_role（第 6 稿 P1-2）：判定从不经公开 anon key 可读，只在服务端、开关打开时经 `MacroReadApi` / 路由读出。关闭时页面与 API 不出现象限 / 得分 / margin；开启但 F4 `/api/judgments` 不可用时，槽位显示“判断层暂不可用”，不回退到宏观自算数字。
 ````
 
 - [ ] **Step 5: Run the CLI test, typecheck, lint**
