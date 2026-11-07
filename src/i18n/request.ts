@@ -17,6 +17,10 @@ const MESSAGE_DOMAINS = [
   'admin',
   // Analyst scoring layer (spec 2026-10-17):
   'analyst',
+  // F4
+  // Judgment framework (spec 2026-11-04 §9.5):
+  'judgments',
+  // /F4
 ] as const;
 
 export default getRequestConfig(async () => {
