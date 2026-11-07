@@ -589,7 +589,7 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 23. 决定：同比的上年同期 = 期间起止各移一年的精确匹配（不用计划二 derive 的 350–380 天窗口）；同集合 = 当期与上年同期都有值的成员。
 24. 决定：`roe` 分母 Σ(期初+期末)/2 ≤ 0 → `missing(zero_denominator)`（与计划二个股 ROE 非正平均权益不出值一致）。
 25. 决定：`unresolved_over_limit` 只在 `n_members=0` 且 `n_unresolved>0` 时使用；显示阈值从不改变 `status`（§5.2）。
-26. 偏差：就绪门分母 = 本 run 网格中全部 (code, period_end) 的成员发行人并集（规格写"全部来源记录解析发行人 ∪ a_stock"）：只衡量本次聚合实际依赖的发行人，且不受并行测试数据影响。
+26. 已废止（修复批 5）：就绪门分母现为全宇宙（`factsUniverse`），不再是本 run 网格的成员并集；见 76、75。
 27. 决定：状态指纹用 `FactsDb.scopeAll('CN')`（一次读取同时给 `state_rev` 与 `last_success_at`）；`fingerprint_at` 是该读取的客户端时刻（仅编排元数据，U4）；`IndustryDb.stateFingerprint` 未被编排使用。
 28. 决定：清单只在该组至少一个格 `ok` 时上传（全 `missing` 的组没有行引用它）。
 29. 决定（集成）：`mark_revised` 隔离由 `apply_observations` 在同一事务内写（Task 2 SQL / Task 3 内存）；`marks.ts` 不预读当前观测、不重复写。
@@ -646,7 +646,13 @@ export async function runMarks(deps:MarksDeps,opts:MarksOptions):Promise<MarksRe
 67. 偏差（对比度）：浅色主题下 `--accent`/`--warn` 与背景对比度约 2.9:1，低于 WCAG AA 4.5:1。属 DESIGN.md 令牌问题，留给 DESIGN.md 所有者；本计划未改令牌。
 68. 偏差（Task 18）：列表页 CSV 导出未实现；移动端"表格优先"未实现（移动端仍以热力图最近 5 期为主、表格视图一键可达）。
 69. 决定（Codex task16 P1）：SIC 调度改为每天 `0 2 * * *` 且带 `limit=200`（`vercel.json`）。cron 路由已透传 `limit`（1..500），`runMembershipsSic` 默认 200，到期间隔 `NEXT_RUN_MS=7 天`，所以每天最多处理 200 个到期发行人，US 范围在数日内排空，之后每个发行人每周刷新一次；`dq_freshness` 仍为 weekly。
-70. 偏差（Task 19，Codex task19 / 批 9）：成分页（constituents）未提供 L2 过滤（规格 §8.4 的层级筛选）；当前只按日期与分页浏览该节点成分，L2 路径列仅作展示。
+70. 决定（第 7 稿 K4）：新表 `industry_security_delistings`（`stock_basic list_status='D'` 遍写入，保留页面证据，日期变化隔离 `delist_date_changed`，仅 service_role）；`n_unresolved` 排除 `delist_date <= on` 的 ts_code；`load-a-share` 的 D 行仍只记 `skipped_summary(delisted)`，不建发行人。
+71. 偏差（Task 19，Codex task19 / 批 9）：成分页（constituents）未提供 L2 过滤（规格 §8.4 的层级筛选）；当前只按日期与分页浏览该节点成分，L2 路径列仅作展示。
+72. 偏差（修复批 8）：`reconcileDelistings` 遇到已解析记录且无可用退市日的 D 行，记为错误/隔离，但其 `ok` 行保持开放（谱系隔离 `quarantineMembershipLineage` 只处理未解析的取代记录）。
+73. 决定（修复批 8）：许可操作者（`actor`）必须是 `auth.users` 的 id；审计日志在同一事务内写入（`set_industry_dataset_license`）。
+74. 决定（Task 14）：`sync.integration.test.ts` 的 `REUSE_OPTS`（不带 `codes`）用于复用类用例，因为 `codes` 现在只选择重算的组，发布网格恒为该层级全部代码（见 76）；首个 run 与更正用例仍用带 `codes` 的 `OPTS`。
+75. 决定（修复批 9）：`AggregationDeps.factsUniverse?` 可注入就绪门分母（生产缺省为数据库全局计算 `factsUniverse()`）；与其他套件共库的测试注入自己的发行人集合。
+76. 偏差（修复批 5）：发布网格恒为该层级全部代码（全网格发布）；`codes` 只选择重算哪些组，且就绪门分母是全宇宙；因此废止原第 26 条。
 
 **本轮不实施（规格自己的门，非偏差，照录）**：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
 
@@ -10881,7 +10887,7 @@ git commit -m "feat(industry): security marks ingest via apply_observations (one
 
 要点：
 - 夹具：两个 SW2021 **三级测试节点**（`T14.L3.FOOD` 挂在 `801120.SI` 食品饮料下、`T14.L3.BANK` 挂在 `801780.SI` 银行下）× 4 个期末（2024-06-30…2025-03-31），5 个发行人 + 1 条未解析来源记录；全部代码/股票代码/机构号/发行人 id 只属于本套件。
-- `test:db` 在同一个库上并行跑各测试文件，`activeMetricRun` 按 (scheme, version, level) 全局唯一：本套件用 **level 3** 并用 `codes` 过滤，Task 1–4 的测试不得在版本 `'2021'` 的 level 3 建 metric run（见骨架《跨任务接口约定》A12）。
+- `test:db` 在同一个库上并行跑各测试文件，`activeMetricRun` 按 (scheme, version, level) 全局唯一：本套件用 **level 3**；首个 run 与更正类用例用 `codes` 选择重算（`OPTS`），复用类用例不带 `codes`（`REUSE_OPTS`，见偏差 74），Task 1–4 的测试不得在版本 `'2021'` 的 level 3 建 metric run（见骨架《跨任务接口约定》A12）。
 - 成分经 `IndustryDb` 契约播种（`upsertSourceMemberships` → `currentSourceMemberships` → `applyMemberships`，与 Task 7/8 编排调用同一组 RPC）；CN 事实经计划二写路径发布（同 `sync-us.integration.test.ts` 的做法：真实 `fact_sync_scope`、租约、run、发布、`state_rev+1`、`last_success_at`）。
 - 用例按顺序共享状态：首个 run → 只凭清单字节回放（"删库"：把清单对象拷出存储后只用这些字节）→ 注入更晚的更正披露 → 状态不变的再跑全部复用 → `out_date` 更正取代旧归属 → 标记 A→B→A 与 V7。
 
@@ -11245,7 +11251,7 @@ Expected: `inventory ok`（否则抛 `Database suite inventory drift`）。
 - [ ] **Step 4: 单独对空库运行**
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/industry/sync.integration.test.ts`
-Expected: `Tests 6 passed`。（`db-one.ts` 不提交；丢失时按交接文档 §5 原文重建。）
+Expected: `Tests 7 passed`（含 SIC 租约两连接用例）。（`db-one.ts` 不提交；丢失时按交接文档 §5 原文重建。）
 
 若失败在 Task 2–4 的函数语义（例如 `applyMemberships` 返回计数、`upsertSourceMemberships` 的 `changed`、`applyObservations` 的计数含义、`metricRowsOfRun.value` 的文本形式），以本计划骨架《跨任务接口约定》为准修 `pg-industry-db.ts`/迁移函数（Task 2/4 的文件），记入实施记录；不要放宽本测试的断言。
 

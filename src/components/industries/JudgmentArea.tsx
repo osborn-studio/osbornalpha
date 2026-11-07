@@ -24,7 +24,7 @@ export function JudgmentArea({enabled,subjectKey,scope}:{enabled:boolean;subject
   const state=judgmentsViewState(enabled,subjectKey,loaded);
   return (
     <section className="card-base flex flex-col gap-3" aria-label={t('title')} data-judgments={state.state}>
-      <div className="flex items-center gap-2"><h2 className="text-lg font-semibold">{t('title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><a href="/intel/methods" className="ml-auto text-xs">{t('methodsLink')}</a></div>
+      <div className="flex items-center gap-2"><h2 className="text-lg font-semibold">{t('title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><span className="ml-auto text-xs text-text-dim">{t('methodsLink')}</span></div>
       {(state.state==='disabled'||(state.state==='ok'&&state.cards.length===0))&&<StateNotice kind="noJudgment"><span className="text-text-dim">{t('scope',scope)}</span></StateNotice>}
       {state.state==='loading'&&<div role="status" aria-busy="true" className="h-24 rounded-lg bg-bg-elevated"><span className="sr-only">{t('title')}</span></div>}
       {state.state==='error'&&<p role="alert" className="text-sm text-danger">{t('loadFailed')} ({state.code})</p>}

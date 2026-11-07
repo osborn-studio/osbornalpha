@@ -89,7 +89,7 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
               :<ListTable scheme={q.scheme} nodes={v.nodes} periodEnds={v.periodEnds} cells={v.cells} companion={v.companion} metric={v.metric} header={v.header} preview={v.preview} />}
             <ValuationSnapshot scheme={q.scheme} nodes={v.nodes} block={v.valuation} preview={v.preview} title="title" />
             <section className="card-base" aria-label={t('judgments.title')}>
-              <div className="mb-2 flex items-center gap-2"><h2 className="text-lg font-semibold">{t('judgments.title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><a href="/intel/methods" className="ml-auto text-xs">{t('judgments.methodsLink')}</a></div>
+              <div className="mb-2 flex items-center gap-2"><h2 className="text-lg font-semibold">{t('judgments.title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><span className="ml-auto text-xs text-text-dim">{t('judgments.methodsLink')}</span></div>
               <StateNotice kind="noJudgment"><span className="text-text-dim">{t('judgments.scope',{scheme:t(`schemes.${q.scheme}`),level:t(`levels.${q.level}`)})}</span></StateNotice>
             </section>
           </>

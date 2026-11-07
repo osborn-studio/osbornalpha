@@ -198,7 +198,7 @@
   },
   "judgments": {
     "title": "Judgments",
-    "methodsLink": "方法注册表 Methods ↗",
+    "methodsLink": "Methods registry (with F4)",
     "scope": "Scope: {scheme} · {level}. No judgment is registered for this scope.",
     "uncalibrated": "Uncalibrated · effective sample {n}/{threshold}",
     "calibrated": "Calibrated",

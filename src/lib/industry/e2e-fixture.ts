@@ -2,8 +2,8 @@
 // E2E fixture mode (spec §13.5): with INDUSTRY_E2E_FIXTURES=1 outside production, public-deps.ts
 // serves these synthetic read dependencies instead of Supabase, so Playwright can drive the three
 // routes, the drawer, the table view, the reconstruction badge and the unlicensed state on a dev
-// server with no database. The cookie `industry_e2e=unlicensed` flips the SW licence. NODE_ENV is
-// 'production' on every Vercel build, so this path can never serve a deployed page.
+// server with no database and no Supabase credentials (fixtureMode below). The cookie `industry_e2e=unlicensed` flips the SW licence. NODE_ENV is
+// 'production' on every Vercel build and VERCEL is set there, so this path can never serve a deployed page.
 // Consistency (Codex plan audit round 1 #8): every displayed cell comes from a manifest COMPUTED by the
 // real pipeline (computeAggregateCell → buildAggregateManifest, synthetic facts), one manifest per
 // (code, period_end) group with its own members, values and counts, so the drawer's original replay
@@ -19,7 +19,9 @@ import type {IssuerCard,ReadDb,ReadDeps,ReplayDeps,ValuationReplayDeps} from './
 import type {AggregateManifest,ManifestMember,MetricCellRow} from './types';
 
 export const E2E_COOKIE='industry_e2e';
-export const fixtureMode=(env:Record<string,string|undefined>=process.env)=>env.INDUSTRY_E2E_FIXTURES==='1'&&env.NODE_ENV!=='production';
+/** Fails closed (Codex task20 P2): only an isolated local test server — flag on, not production, not Vercel, no Supabase credentials. */
+export const fixtureMode=(env:Record<string,string|undefined>=process.env)=>env.INDUSTRY_E2E_FIXTURES==='1'&&env.NODE_ENV!=='production'&&!env.VERCEL
+ &&!env.NEXT_PUBLIC_SUPABASE_URL&&!env.SUPABASE_SERVICE_ROLE_KEY;
 /** The one cell whose stored value disagrees with its manifest (E2E checks the "not reproduced" drawer). */
 export const E2E_TAMPERED={code:'801080.SI',periodEnd:'2025-12-31',metric:'gross_margin' as const,storedValue:'0.25'};
 

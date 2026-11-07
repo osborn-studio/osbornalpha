@@ -71,7 +71,7 @@
 
 ## 6. E2E（规格 §13.5）
 
-数据库无关的夹具模式：`INDUSTRY_E2E_FIXTURES=1` 且非生产（`NODE_ENV!=='production'`）时 `src/lib/industry/public-deps.ts` 返回 `src/lib/industry/e2e-fixture.ts` 的合成依赖；cookie `industry_e2e=unlicensed` 切换申万授权态。
+数据库无关的夹具模式：`INDUSTRY_E2E_FIXTURES=1`、非生产（`NODE_ENV!=='production'`）、非 Vercel（`VERCEL` 未设）且未配置 Supabase 凭据（`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY` 均未设）时 `src/lib/industry/public-deps.ts` 返回 `src/lib/industry/e2e-fixture.ts` 的合成依赖；cookie `industry_e2e=unlicensed` 切换申万授权态。
 
 ```bash
 # 不能带 Supabase 环境变量（(app) 布局在未配置 Supabase 时放行）；不要用 3000 以外被占用的端口
@@ -97,7 +97,11 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 
 1. `GET /api/admin/industries/replay?runId=&code=&periodEnd=` 取完整清单与逐格 `reproduced`。
 2. 若清单不可读（桶对象缺失）：确认 `industry_manifests` 索引行仍在，GC 是否误删（`gc_industry_manifest_candidates` 只列未被引用的哈希）。
-3. 若值不同：`replayFromManifest` 与 `computeAggregateCell` 不一致是代码缺陷——冻结该 run（不重新激活），开缺陷单，修复后以新 run 覆盖。
+3. 若值不同：`replayFromManifest` 与 `computeAggregateCell` 不一致是代码缺陷。已激活的坏 run 不能被"冻结"（激活 run 只能被取代），按下列步骤撤下并替换，**不要直接改表**：
+   1. 立即撤下：`POST /api/admin/industries/licenses`，body `{"dataset_key":"scheme:sw2021:2021","status":"internal","note":"<原因>"}`（admin 会话，同源 JSON）；写审计日志并自动 `revalidateTag('industries')`，公共读立即变为 `unlicensed`。
+   2. 保留证据：该 run 与其清单原样保留，不删除、不改状态。
+   3. 开缺陷单、修复代码，运行经验证的替代聚合并激活，确认新 run 的回放 `reproduced`。
+   4. 复原：再次 `POST /api/admin/industries/licenses`，`status:'public'`。
 
 ## 9. 黄金集待办（规格 §13.4，需 owner 抄录）
 

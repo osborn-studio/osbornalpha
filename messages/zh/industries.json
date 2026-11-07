@@ -198,7 +198,7 @@
   },
   "judgments": {
     "title": "判断",
-    "methodsLink": "方法注册表 Methods ↗",
+    "methodsLink": "方法注册表（F4 上线后可用）",
     "scope": "范围：{scheme} · {level}。该范围下暂无已登记的判断。",
     "uncalibrated": "未校准 · 有效样本 {n}/{threshold}",
     "calibrated": "已校准",
