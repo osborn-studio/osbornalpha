@@ -54,6 +54,7 @@ export function makeDeps(tables:TableClient,opts:{noEvidence?:Set<string>;pdfFor
   noEvidence,pdfFor,tables,
   // Single-member lineage fixture; merged-member tests explicitly supply the full vector.
   facts:{readFactsLineage:vi.fn(async()=>({stateRevs:[],lineage:[],rows:[],conflicts:[],truncated:false})),lineageOf:vi.fn(async(issuer:string)=>[issuer]),stateRevs:vi.fn(async(issuers:string[])=>issuers.map(issuer_id=>({issuer_id,state_rev:3}))),readFacts:vi.fn(),factsByIds:vi.fn(async()=>[]),filingsOfIssuer:vi.fn(async()=>[]),metricsOfIssuer:vi.fn(async()=>[])},
+  lineageFilings:vi.fn(async function(this:ReadDeps,lineage:readonly string[],market:Market,opts={}){return (await Promise.all(lineage.map(id=>this.facts.filingsOfIssuer(id,market,opts)))).flat().filter(f=>f.mapping_gen>0);}),
   stateRev:vi.fn(async()=>1),
   snapshot:vi.fn(async()=>emptySnapshot()),
   company,

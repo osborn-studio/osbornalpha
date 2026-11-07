@@ -9,14 +9,14 @@
 import {lineageRevsEqual} from '@/lib/facts/db';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {DERIVE_CONCEPTS,FORMULA_VERSION,deriveLineageMetrics,metricNames} from '@/lib/facts/derive';
-import {FRESH_METRICS_CACHE_CONTROL,QueryError,STALE_CACHE_CONTROL,dateParam,intParam,listParam,lineageFilings,publicConflict,publicResolution} from '@/lib/facts/public-route';
+import {FRESH_METRICS_CACHE_CONTROL,QueryError,STALE_CACHE_CONTROL,dateParam,intParam,listParam,publicConflict,publicResolution} from '@/lib/facts/public-route';
 import {FactsDbError} from '@/lib/facts/types';
-import type {FactsDb,FactRow,LineageConflict,MetricDuration,MetricRow} from '@/lib/facts/types';
+import type {FactRow,LineageConflict,MetricDuration,MetricRow} from '@/lib/facts/types';
 import {metricKey} from '../metrics-computed-at';
 import {buildGated,countWithheld,gateCell,gateFilingOf} from '../route';
-import type {Handler} from '../route';
+import type {GateFiling,Handler} from '../route';
 import {derivedCellOf} from '../statements-grid';
-import type {DerivedCell,EvidenceDto,FilingSummary,WithheldCell,WithheldCounts} from '../types';
+import type {DerivedCell,EvidenceDto,WithheldCell,WithheldCounts} from '../types';
 
 // 计划第 3 轮审计 R5: company-only `periods` (8|20|40) keeps ALL metric rows of the newest N period keys;
 // the landed row `limit` applies only when `periods` is absent (it would otherwise eat later metric names).
@@ -35,7 +35,7 @@ export const metricsHandler:Handler=async(ctx)=>{
  const wanted=listParam(p,'metrics',new Set(names),names.length);
  const lineage=await deps.facts.lineageOf(issuer.issuerId);
  let conflicts:LineageConflict[]=[];
- let rows:MetricRow[]=[],truncated=false,stale=false,known:FactRow[]=[],filings:FilingSummary[]=[];
+ let rows:MetricRow[]=[],truncated=false,stale=false,known:FactRow[]=[],filings:GateFiling[]=[];
  let computedAt:(m:MetricRow)=>string|null;
  if(!ctx.asOfGiven){
   const before=await deps.facts.stateRevs(lineage,issuer.market);
@@ -54,7 +54,7 @@ export const metricsHandler:Handler=async(ctx)=>{
  }else{
   const snap=await deps.facts.readFactsLineage(lineage,issuer.market,{concepts:[...DERIVE_CONCEPTS[issuer.market]],asOf,history:true});
   truncated=snap.truncated;known=snap.rows;conflicts=snap.conflicts;
-  filings=(await lineageFilings(deps.facts as FactsDb,lineage,issuer.market)).map(gateFilingOf);
+  filings=(await deps.lineageFilings(lineage,issuer.market)).filter(f=>f.available_date<=asOf).map(gateFilingOf);
   rows=truncated?[]:deriveLineageMetrics(snap.rows,issuer.issuerId,lineage,{market:issuer.market,asOf,basedOn:snap.stateRevs});
   const at=ctx.now.toISOString();computedAt=()=>at;
  }
@@ -67,7 +67,7 @@ export const metricsHandler:Handler=async(ctx)=>{
   const keep=new Set([...cols.entries()].sort((a,b)=>b[1].localeCompare(a[1])||a[0].localeCompare(b[0])).slice(0,Number(periodsRaw)).map(([k])=>k));
   rows=rows.filter(m=>keep.has(keyOf(m)));
  }else rows=rows.slice(0,limit);
- const g=await buildGated({...ctx,lineage:new Set(lineage)},rows.flatMap(m=>m.inputs.map(i=>i.fact_id)),known,filings);
+ const g=await buildGated({...ctx,asOf:ctx.asOfGiven?asOf:ctx.today,lineage:new Set(lineage)},rows.flatMap(m=>m.inputs.map(i=>i.fact_id)),known,filings);
  const metrics:MetricDto[]=rows.map(m=>({metric:m.metric,periodStart:m.period_start,periodEnd:m.period_end,duration:m.duration,inputUnit:m.input_unit,basis:m.basis,basedOnRev:m.based_on_rev,basedOnLineage:m.based_on_lineage,computedAt:computedAt(m),computedAtKind:ctx.asOfGiven?'live':'materialized',cell:gateCell(derivedCellOf(m),g) as DerivedCell|WithheldCell}));
  const body:MetricsDto={lineage,resolution:publicResolution(issuer),conflicts:conflicts.map(publicConflict),issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,mappingGen:MAPPING_GEN,formulaVersion:FORMULA_VERSION,truncated,stale,metrics,evidence:g.evidence,withheld:countWithheld(metrics.map(x=>x.cell))};
  const cacheControl=stale?STALE_CACHE_CONTROL:!ctx.asOfGiven&&metrics.length>0?FRESH_METRICS_CACHE_CONTROL:undefined;

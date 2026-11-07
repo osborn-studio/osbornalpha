@@ -7,8 +7,8 @@ vi.mock('./deps',()=>({productionReadDeps:()=>mocks.deps}));
 vi.mock('./evidence-gate',async(orig)=>({...(await orig<typeof import('./evidence-gate')>()),applyGate:(await import('./route-test-kit')).fakeApplyGate}));
 vi.mock('@/lib/admin/auth',()=>{class AdminUnauthenticated extends Error{}class AdminForbidden extends Error{}return {AdminUnauthenticated,AdminForbidden,requireAdminUser:mocks.requireAdmin};});
 
-import {buildGated,companyRoute,countWithheld,gateCell} from './route';
-import {CN,OLD,FIL_CN_LINKED,US,BRKA,secRow,cnFact,cnSummary,fact,makeDeps,seededTables,summary} from './route-test-kit';
+import {buildGated,gateFilingOf,companyRoute,countWithheld,gateCell} from './route';
+import {CN,OLD,FIL_CN_LINKED,US,BRKA,secRow,filingRow,cnFact,cnSummary,fact,makeDeps,seededTables,summary} from './route-test-kit';
 
 const ok={issuerId:US,ticker:'AAPL',market:'US' as const,tickerAsOf:'2024-06-30',validFromMethod:'curated'};
 const call=(mode:'public'|'admin',ticker:string,qs='')=>companyRoute({tag:'t',mode,params:['asOf','x'],handler:async(ctx)=>({body:{issuer:ctx.issuer,asOf:ctx.asOf,admin:ctx.admin,userId:ctx.userId},empty:false})})(new Request(`https://alpha.example/x/${ticker}?${qs}`),{params:Promise.resolve({ticker})});
@@ -88,10 +88,32 @@ describe('buildGated / gateCell',()=>{
   expect(g.reasonOf(a.fact_id)).toBeNull();expect(g.reasonOf(foreign.fact_id)).toBe('evidence_incomplete');
   expect(g.fact(a.fact_id)).toEqual(a);
  });
+ it.each(['known','fallback'])('asOf excludes future facts and filings from %s inputs',async(source)=>{
+  const futureFact=fact({available_date:'2024-07-01'});
+  const futureFilingFact=fact({filing_id:'future-filing'});
+  const valid=fact();
+  const rows=[futureFact,futureFilingFact,valid];
+  const filings=[gateFilingOf(filingRow()),gateFilingOf(filingRow({filing_id:'future-filing',available_date:'2024-07-01'}))];
+  vi.mocked(mocks.deps.facts.factsByIds).mockResolvedValue(rows);
+  vi.mocked(mocks.deps.facts.filingsOfIssuer).mockResolvedValue([filingRow(),filingRow({filing_id:'future-filing',available_date:'2024-07-01'})]);
+  const g=await buildGated({deps:mocks.deps,admin:false,issuer:ok,asOf:'2024-06-30',lineage:new Set([US])},rows.map(f=>f.fact_id),source==='known'?rows:[],source==='known'?filings:[]);
+  expect(g.reasonOf(futureFact.fact_id)).toBe('evidence_incomplete');
+  expect(g.reasonOf(futureFilingFact.fact_id)).toBe('evidence_incomplete');
+  expect(g.reasonOf(valid.fact_id)).toBeNull();
+  expect(Object.keys(g.evidence)).toEqual([valid.fact_id]);
+  expect(g.filings.has('future-filing')).toBe(false);
+ });
+ it.each(['known','fallback'])('filing market must match the fact in %s inputs',async(source)=>{
+  const f=fact();const wrong=filingRow({market:'CN'});
+  vi.mocked(mocks.deps.facts.filingsOfIssuer).mockResolvedValue([wrong]);
+  const g=await buildGated({deps:mocks.deps,admin:false,issuer:ok,lineage:new Set([US])},[f.fact_id],[f],source==='known'?[gateFilingOf(wrong)]:[]);
+  expect(g.reasonOf(f.fact_id)).toBe('evidence_incomplete');
+  expect(g.evidence).toEqual({});
+ });
  it('CN predecessor locators and evidence are looked up for each owning member',async()=>{
-  const old=cnFact({issuer_id:OLD,filing_id:FIL_CN_LINKED}),current=cnFact({filing_id:FIL_CN_LINKED});
+  const old=cnFact({issuer_id:OLD,filing_id:'old-filing'}),current=cnFact({filing_id:FIL_CN_LINKED});
   mocks.deps.pdfFor.add(old.fact_id);mocks.deps.pdfFor.add(current.fact_id);
-  const g=await buildGated({deps:mocks.deps,admin:false,issuer:{...ok,issuerId:CN,market:'CN'},lineage:new Set([CN,OLD])},[old.fact_id,current.fact_id],[old,current],[cnSummary({filingId:FIL_CN_LINKED,citation:'linked',documentUrl:'https://static.cninfo.com.cn/x.PDF'})]);
+  const g=await buildGated({deps:mocks.deps,admin:false,issuer:{...ok,issuerId:CN,market:'CN'},lineage:new Set([CN,OLD])},[old.fact_id,current.fact_id],[old,current],[old,current].map(f=>gateFilingOf(filingRow({issuer_id:f.issuer_id,market:'CN',filing_id:f.filing_id,document_ref:'doc',document_url:'https://static.cninfo.com.cn/x.PDF'}))));
   expect(g.reasonOf(old.fact_id)).toBeNull();
   expect(mocks.deps.pdf.locate).toHaveBeenCalledWith(OLD,'CN',[old.fact_id]);
   expect(mocks.deps.pdf.locate).toHaveBeenCalledWith(CN,'CN',[current.fact_id]);

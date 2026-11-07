@@ -13,7 +13,7 @@ import {supabaseSnapshotObjectStore} from './evidence-index';
 import {readSnapshot} from './snapshot-read';
 import {getAnonSupabase} from '../supabase/anon';
 import type {TableClient} from '../db/table-client';
-import {publicClients} from '../facts/public-route';
+import {lineageFilings,publicClients} from '../facts/public-route';
 import {SNAPSHOT_BUCKET} from '../facts/snapshot-store';
 import type {FactsDb,Market} from '../facts/types';
 import {audit} from '../research/store';
@@ -36,6 +36,7 @@ export function productionDigestDeps(opts:ProductionDigestOptions):DigestDeps{
 export interface ReadDeps{
  tables:TableClient;                                                         // anon: issuers, issuer_securities
  facts:Pick<FactsDb,'readFactsLineage'|'readFacts'|'factsByIds'|'filingsOfIssuer'|'metricsOfIssuer'|'lineageOf'|'stateRevs'>;   // anon
+ lineageFilings(lineage:readonly string[],market:Market,opts?:{from?:string;to?:string}):ReturnType<typeof lineageFilings>; // anon published member filings
  stateRev(issuer:string,market:Market):Promise<number>;                     // anon fact_state_rev
  snapshot(issuer:string,market:Market,opts:ReadSnapshotOptions):Promise<ReadSnapshotResult>;   // anon company_read_snapshot
  company:CompanyDb;                                                          // service_role: eventsOfIssuer(s), evidenceOf
@@ -55,7 +56,7 @@ export function productionReadDeps():ReadDeps{
  const adminClient=()=>admin??=(getAdminSupabase() as unknown as SupabaseClient);
  let service:CompanyDb|null=null;
  return {
-  tables,facts:db,stateRev,
+  tables,facts:db,stateRev,lineageFilings:(lineage,market,opts)=>lineageFilings(db,lineage,market,opts),
   snapshot:(issuer,market,opts)=>readSnapshot(anon,issuer,market,opts),
   get company(){return service??=supabaseCompanyDb(adminClient());},
   publicCompany:supabaseCompanyDb(anon),

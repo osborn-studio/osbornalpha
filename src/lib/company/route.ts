@@ -70,7 +70,8 @@ export function companyRoute(spec:{tag:string;mode:Mode;params:readonly string[]
 }
 
 /** A published filings row as the gate's FilingSummary (factCount unknown here → 0; the gate never reads it). */
-export const gateFilingOf=(f:FilingRow):FilingSummary=>filingSummaryOf(f,0);
+export type GateFiling=FilingSummary&{issuerId:string;market:FilingRow['market']};
+export const gateFilingOf=(f:FilingRow):GateFiling=>({...filingSummaryOf(f,0),issuerId:f.issuer_id,market:f.market});
 export interface Gated{
  evidence:Record<string,EvidenceDto>;
  /** Task 6 Eligibility per requested id (feed to gateEventPayload / metricWithheldReason). */
@@ -87,7 +88,7 @@ export interface Gated{
  * belong to this (lineage members, market); filings not in `filings` come from filingsOfIssuer (published only);
  * evidence via the service_role company_fact_evidence read; CN PDF locators via the injected source.
  */
-export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer;asOf?:string;lineage?:ReadonlySet<string>},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly FilingSummary[]):Promise<Gated>{
+export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicIssuer;asOf?:string;lineage?:ReadonlySet<string>},factIds:Iterable<string>,known:readonly FactRow[],filings:readonly (FilingSummary&Partial<Pick<GateFiling,'issuerId'|'market'>>)[]):Promise<Gated>{
  const {deps,issuer}=ctx;
  const members=ctx.lineage??new Set([issuer.issuerId]);
  const ids=[...new Set(factIds)];
@@ -96,18 +97,28 @@ export async function buildGated(ctx:{deps:ReadDeps;admin:boolean;issuer:PublicI
  const unknown=ids.filter(id=>!byId.has(id));
  if(unknown.length>0)for(const r of await deps.facts.factsByIds(unknown))if(inGateScope(r,members,issuer.market,ctx.asOf))byId.set(r.fact_id,r);
  const facts=ids.map(id=>byId.get(id)).filter((r):r is FactRow=>r!==undefined);
- const filingMap=new Map<string,FilingSummary>(filings.map(f=>[f.filingId,f]));
+ // Single-issuer snapshot summaries inherit the RPC's issuer/market scope. Lineage callers must
+ // supply explicit ownership from raw filings; never infer a predecessor's owner from the fact.
+ const filingMap=new Map<string,GateFiling>();
+ for(const f of filings){
+  const issuerId=f.issuerId??(!ctx.lineage?issuer.issuerId:undefined);
+  const market=f.market??(!ctx.lineage?issuer.market:undefined);
+  if(issuerId&&market===issuer.market&&members.has(issuerId)&&(!ctx.asOf||f.availableDate<=ctx.asOf))filingMap.set(f.filingId,{...f,issuerId,market});
+ }
  if(facts.some(r=>!filingMap.has(r.filing_id)))
-  for(const f of (await Promise.all([...members].map(id=>deps.facts.filingsOfIssuer(id,issuer.market,{})))).flat())if(f.mapping_gen>0&&(!ctx.asOf||f.available_date<=ctx.asOf)&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
+  for(const f of (await Promise.all([...members].map(id=>deps.facts.filingsOfIssuer(id,issuer.market,{})))).flat())if(members.has(f.issuer_id)&&f.market===issuer.market&&f.mapping_gen>0&&(!ctx.asOf||f.available_date<=ctx.asOf)&&!filingMap.has(f.filing_id))filingMap.set(f.filing_id,gateFilingOf(f));
+ // Ownership is per fact, not merely membership in the same merged lineage.
+ for(const f of facts){const filing=filingMap.get(f.filing_id);if(!filing||filing.issuerId!==f.issuer_id||filing.market!==f.market)byId.delete(f.fact_id);}
+ const eligibleFacts=facts.filter(f=>byId.has(f.fact_id));
  const perMember=await Promise.all([...members].map(async member=>{
-  const present=facts.filter(r=>r.issuer_id===member).map(r=>r.fact_id);
+  const present=eligibleFacts.filter(r=>r.issuer_id===member).map(r=>r.fact_id);
   return present.length>0
    ?Promise.all([deps.company.evidenceOf(present),issuer.market==='CN'?deps.pdf.locate(member,issuer.market,present):Promise.resolve(new Map<string,PdfLocator>())])
    :[new Map<string,EvidenceRecord>(),new Map<string,PdfLocator>()] as const;
  }));
  const records=new Map(perMember.flatMap(([records])=>[...records]));
  const pdf=new Map(perMember.flatMap(([,pdf])=>[...pdf]));
- const g=applyGate({factIds:ids,facts:new Map(facts.map(r=>[r.fact_id,r])),filings:filingMap,records,pdf,market:issuer.market,admin:ctx.admin});
+ const g=applyGate({factIds:ids,facts:new Map(eligibleFacts.map(r=>[r.fact_id,r])),filings:filingMap,records,pdf,market:issuer.market,admin:ctx.admin});
  const reasonOf=(id:string):WithheldReason|null=>{const e=g.eligibility.get(id);return !e?'evidence_incomplete':e.ok?null:e.reason;};
  return {evidence:g.evidence,eligibility:g.eligibility,filings:filingMap,reasonOf,fact:id=>byId.get(id),withheld:id=>{const r=reasonOf(id);return r?{kind:'withheld',reason:r,factId:id}:null;}};
 }
