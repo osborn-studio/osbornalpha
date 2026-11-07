@@ -740,3 +740,38 @@ A 股部分随真实 CN 夹具与 CN 回放进入（§15.1）。宏观三表（`
 ## 18. 实施记录与偏差
 
 （F6 落地后补记，格式同规格一 §14。实施记录：`docs/audits/2026-11-06-evals-gold-sets/`。）
+
+### 18.1 第 6 稿实施（计划 `docs/superpowers/plans/2026-11-06-evals-and-gold-sets.md`，2026-11）
+
+交付（§15.1 可构建子集）：契约与校验（Task 1–4、12）、存储（Task 5–6）、facts 适配器与官方对账（Task 7–9）、回放（Task 10–11，含 `run.ts --kind replay_consistency`）、管理只读 API（Task 13）、`dual_source`/`reference_regression`/`extraction_gold`/`judgment_calibration` 纯逻辑并在 `kinds/registry.ts` 登记为未启用（Task 14–15）。
+
+偏差（均由集成决定，实施时以此为准）：
+1. `--redact` 只扫 F6 自有路径（`src/lib/evals/fixtures/**`、`docs/evals/**`、`docs/audits/2026-11-06-evals-gold-sets/**`），不扫整个 `docs/audits/**`（§4.5、§7.3）：其他模块的审计文件原样引用 Codex 输出（邮箱、查询串），F6 不得改它们。
+2. 发布清单的 `lock.json` 校验只对黄金集类证据（official、dual_source）；回放与对照报告按其夹具文件的提交字节认证（`manifest_fixture`），因为锁只收 `GoldFormat` 黄金集（§10 "共同规则"）。
+3. `validate.ts` 退出码：0 通过、1 检查失败、2 用法错误（与 §3.2 一致：2 只表示运行前拒绝）。
+4. `Summary.coverage` 增 `evaluated_optional`（§3.2 规则 3 需要它，gate 才能只凭摘要重算）。
+5. `ProvenanceCheck` 增可选 `inputs`；facts 适配器把每个输入事实的来源链放在 `FactProvenance.input_chains`，官方对账写入 `CaseReport.detail.inputs`（§5.1.4）。
+6. frozen 建库（`replay/setup.ts`）不写 `dq_freshness`：`runFactsSync` 总会记录 `facts.us`，固定时钟会给共享库留下陈旧行，所以同步依赖的 `tables` 丢弃对 `dq_freshness` 的写（`withoutFreshness`）。
+7. `--http` 冒烟本期不建（`run.ts` 以 `kind_not_enabled` 拒绝），§5.3.2 的路由等价由 `route-equivalence.test.ts` 保证。
+8. 回放 frozen 经 `run.ts` 运行需要 `S4_TEST_STATE`（内存世界的投影不保证与录制库字节一致）。
+9. §3.2 规则 1 增：`coverage.evaluated = 0` → `incomplete`（全部 skipped 的总体不能 pass）；`reference_regression` 系统侧无值 → `missing`（覆盖率），只有样本侧无值才 `skipped(unavailable)`，`ReferenceResult` 因此多一个 `missing` 键（§5.4 键集合的偏差）。calibration 的总体只含 eligible 预测（Codex 计划第 1 轮 P1-1、P2-5）。
+10. 黄金集头部新增必填 `review_required`；`facts/plan3*`（30 家）必须为 true，且每案 `reviewed_by ≠ recorded_by`（§4.6，P2-3）。
+11. 发布清单新增 `evidence_commit`（= 或晚于 `release_commit`），证据用 `git show <evidence_commit>:<path>` 读、发布输入在 `release_commit` 读；CI 运行须属 origin 仓库，`--online` 再查 conclusion=success 与 head_sha，不带 `--online` 是阻断发现 `manifest_ci_unverified`（第 2 轮 R2-1）；新鲜度在 `prepared_at` 用 `computeFreshness` 重算；总体、阈值与 gold 块从已认证夹具经 `reduce.ts::reduceForKind` 重算（P1-2、P1-3、P1-4、P2-2）。
+12. `evaluator_code_version`：检出内只信 `git rev-parse HEAD` 与 `git status --porcelain --untracked-files=normal`，忽略 `VERCEL_GIT_COMMIT_SHA`；`record-replay.ts` 拒绝脏树（P1-7）。官方对账的 `verified.{artifacts,sources}` 由实际完成的检查推出，缺失期望也校验来源字节（P1-8）。
+13. frozen 建库在每次新建并迁移的隔离库里进行（`create database f6_frozen_…` + 迁移，建完即删；第 2 轮 R2-2 取代第 1 轮的 CIK 登记与同 setup 跳过检查）、每个案例的 setup 先重算再分组（P2-1、P1-6）；`--supersede` 必须是同一 `ObservedDiff` 的账本命中（P1-5）；审计处置按（轮次, 编号）匹配（P1-9）；CI 的 critical frozen 测试写出真实报告并在 job summary 公布 sha256（P1-10）。
+
+复审轮次带来的追加偏差（实施期 Opus 复审与 Codex review/挑战，逐条见 `docs/audits/2026-11-06-evals-gold-sets/tasks/`）：
+14. 回放账本 `parseLedger(raw, policy)`：`approved_by` 必须是覆盖该模块、且不在 `module_implementers` 里的 recorder（去空白、忽略大小写比较），`approval_ref` 必须是 GitHub PR（review）URL，`approved_at ≥ added_at`；编码代理永远不能批准账本（§5.3.3、D6 的强化）。
+15. 非特权 live 回放命中账本 → `explained_diff`（§5.3.2 字面为 `unexplained_diff(no_hints)`）：命中仍要求含 anon 可读 `state_rev` 的完整元组；live 的 `state_rev` 取自投影本身的 `read_facts` 信封（`projectWithRev`），多读不一致重试一次后 `read_error`。
+16. 双源的对登记归 F6 所有（`kinds/pairs.ts`，本期为空），`PairSource` 只供观测；证据类别只由 F6 登记的 `independence` 推出，绝不取自报告或上游（§5.5、R5-10 的强化）。
+17. `reference_regression`：单位不一致直接 `beyond_unexplained(unit_mismatch)`；账本须 `our_run_id` 等于本次观测的非空 run_id；阈值固定 `REFERENCE_THRESHOLDS`；`ReferenceResult` 再增 `read_error` 键（逐案读取/解析失败保留为 read_error）。
+18. `judgment_calibration` 在 F4 提供阈值前恒 `incomplete`（`thresholds_pending_f4`）；时间戳必须带时区。`extraction_gold`：任一声明文档缺失或不可解析（含无标注文档）→ 全部字段 `read_error`。
+19. facts 适配器：公共读取器只经 filings 判定市场（`fact_sync_scope` 仅 service_role），特权读取器另用 scope；`cninfo_announcement` 挂接多份且无一匹配目标期间时报 `filing_ambiguous`；来源链按 `(rawHash, concept)` 选候选并自检 `rawHashOf(sha, locator)`。
+20. 官方对账：特权运行在接受 `expected_absent` 前先查非可见行（隔离/旧代 → `not_visible`）；比较原语接受 ≤ 512 字符的十进制（与 `canonicalDecimal` 一致）。
+21. `run.ts`：`--case/--limit` 子集运行即使带 `--write-db` 也不入库；基线 setup 不匹配产出全 `read_error(setup_mismatch)` 的报告（退出 3），不抛异常；`--resume` 也受 kind 注册表拦截。
+22. 发布清单：`prepared_at` 须不早于所引用运行的 `finished_at`、不晚于校验时钟，且 `dq_freshness.last_ok_at` 晚于 `prepared_at` 时判为无法认证；回放槽位按夹具 `mode` 与 `module` 认证；审计报告里未被解析的 P1/P2 与空白处置一律阻断（fail closed）；专家核对缺数值或文件身份即计 `cannot_verify`。
+23. 提交归属：Task 15 的首版文件因并行暂存被 Task 13 的修复提交 `b46e014` 一并提交，后续修复在 `142b2a8`；内容按计划原样。
+
+未完成（owner 事项，§16）：生产特权 `report` 与其 `dq_eval_runs` 行、`facts.live.json` 录制与首次 live 运行、首份发布清单与专家记录、CODEOWNERS（D2）。
+
+后续事项（不在本计划）：重建 `docs/audits/2026-11-04-data-foundation-2/index.json`（属计划二目录，Codex 计划第 1 轮 P2-4 延后）。
