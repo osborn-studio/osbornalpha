@@ -25,7 +25,7 @@ export type Forecast=
 export interface CohortEntry{judgment_id:string;subject_type:string;subject_key:string;market:PriceMarket|null;as_of:string;window_end:string;retrospective:boolean;lifecycle:CohortLifecycle;settlement_id:string|null;forecast:Forecast;y:number|string|null;
  /** Settled price_return whose frozen realized.to is missing / unparseable: not a sample (review G-01). */
  invalid_endpoint?:boolean;
- /** Interval scenarios: whether the realized value fell on the 'up' side (the condition predicate holds; without a numeric predicate, realized ≥ 0). */
+ /** Interval scenarios: 'up' side = realized ≥ 0 (see entryOf). */
  scenario_up?:boolean}
 export interface EvaluatedEntry extends CohortEntry{group:string;sample:boolean;selected_for_independent:boolean}
 export interface CalibrationOptions{threshold_n:number;ece_max:number;embargo_days:number}
@@ -83,20 +83,6 @@ function realizedY(kind:Kind,s:SettlementRow):number|string|null{
  return typeof v==='number'&&Number.isFinite(v)?v:null;
 }
 const ISO_DATE=/^\d{4}-\d{2}-\d{2}$/;
-function predicateHolds(c:JudgmentRow['condition'],y:number):boolean{
- const p=c&&'predicate' in c?c.predicate:null;
- if(p&&typeof p.rhs!=='undefined'&&p.op!=='eq'){
-  const r=p.rhs;
-  switch(p.op){
-   case '>':return typeof r==='number'&&y>r;
-   case '>=':return typeof r==='number'&&y>=r;
-   case '<':return typeof r==='number'&&y<r;
-   case '<=':return typeof r==='number'&&y<=r;
-   case 'between':return Array.isArray(r)&&y>=r[0]&&y<=r[1];
-  }
- }
- return y>=0;
-}
 /** The actually settled window end (spec §8.2 第 7 稿; plan audit P1-09): a settled price_return judgment ends at its
  *  frozen end bar (realized.to, the date the resolver's evidence ends on); every other judgment — and any price
  *  settlement without a usable realized.to — uses the target-derived windowEndOf. */
@@ -124,7 +110,10 @@ export function entryOf(e:Envelope):CohortEntry|null{
   as_of:j.as_of,window_end:ep.window_end,retrospective:j.retrospective,lifecycle,
   settlement_id:s?.settlement_id??null,forecast:forecastOf(j.kind,j.claim),
   y,...(ep.valid?{}:{invalid_endpoint:true}),
-  ...(j.kind==='interval'&&typeof y==='number'?{scenario_up:predicateHolds(c,y)}:{}),
+  // Scenario side (spec §9.4 deviation): the scenarios describe the BOUND thesis_win_rate condition (scenario_event_hash), which an
+  // interval row cannot evaluate, and its own predicate is the interval's `between [low,high]` — not the scenario event. §9.4
+  // guarantees value_up > 0 > value_down, so 'up' ⇔ realized ≥ 0. Report-only; never gates.
+  ...(j.kind==='interval'&&typeof y==='number'?{scenario_up:y>=0}:{}),
  };
 }
 
@@ -278,9 +267,10 @@ export function median(values:number[]):number|null{
  const xs=[...values].sort((a,b)=>a-b),m=Math.floor(xs.length/2);
  return xs.length%2?xs[m]:(xs[m-1]+xs[m])/2;
 }
-/** Per-scenario probability report (spec §8.1): the 'up' scenario's p against whether the realized value fell on the up side, 'down' against the complement. */
+/** Per-scenario probability report (spec §8.1): the 'up' scenario's p against whether the realized value was ≥ 0, 'down' against the complement. */
 function scenarioReport(ind:CohortEntry[]):Record<string,unknown>|null{
  const out:Record<string,unknown>=Object.create(null);
+ out.event='realized_nonnegative';
  for(const label of ['up','down'] as const){
   const pairs:Pair[]=[];
   for(const e of ind){
@@ -291,7 +281,7 @@ function scenarioReport(ind:CohortEntry[]):Record<string,unknown>|null{
   const b=brierParts(pairs);
   out[label]={n:pairs.length,brier:b.brier,brier_climatology:b.climatology,brier_skill:b.skill,ece_raw:ece(pairs),reliability:reliabilityBins(pairs)};
  }
- return Object.keys(out).length?out:null;
+ return Object.keys(out).length>1?out:null;
 }
 function interval(ind:CohortEntry[],samples:CohortEntry[],o:CalibrationOptions):KindResult{
  const f=(e:CohortEntry)=>e.forecast as {low:number;high:number;nominal_coverage:number};

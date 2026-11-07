@@ -166,12 +166,13 @@ describe('review fixes',()=>{
  const iv=(id:number,up:boolean,pUp:number):CohortEntry=>({judgment_id:uuidOf(id),subject_type:'issuer',subject_key:`k${id}`,market:null,as_of:'2026-01-01',window_end:'2026-01-02',retrospective:false,lifecycle:'settled',settlement_id:null,
   forecast:{kind:'interval',low:-1,high:1,nominal_coverage:0.8,scenarios:[{label:'up',p:pUp,value:0.05},{label:'down',p:1-pUp,value:-0.05}]},y:up?0.03:-0.03,scenario_up:up});
  it('G-04: scenarios are preserved by entryOf and evaluated per scenario; they never change the interval state',()=>{
-  const e=entryOf(envelope({judgment:{kind:'interval',claim:{metric:'r',low:-0.1,high:0.1,unit:'ratio',nominal_coverage:0.8,scenarios:[{label:'up',p:0.7,value:0.05},{label:'down',p:0.3,value:-0.05}]},condition:{resolver:'fact_metric',params:{issuer_id:'x',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',unit:'u',input_unit:'u',basis:'b',formula_version:'v',compare:'yoy'},predicate:{op:'>',rhs:0},text:{zh:'x',en:'x'}}},settlement:{realized:{value:0.04,unit:'ratio',from:null,to:null,label_policy:'first_observed'}}}))!;
+  const e=entryOf(envelope({judgment:{kind:'interval',claim:{metric:'r',low:-0.1,high:0.1,unit:'ratio',nominal_coverage:0.8,scenarios:[{label:'up',p:0.7,value:0.05},{label:'down',p:0.3,value:-0.05}]},condition:{resolver:'fact_metric',params:{issuer_id:'x',market:'US',metric:'m',period_start:'a',period_end:'b',duration:'3M',unit:'u',input_unit:'u',basis:'b',formula_version:'v',compare:'yoy'},predicate:{op:'>',rhs:0.1},text:{zh:'x',en:'x'}}},settlement:{realized:{value:0.04,unit:'ratio',from:null,to:null,label_policy:'first_observed'}}}))!;
   expect(e.forecast).toMatchObject({kind:'interval',scenarios:[{label:'up',p:0.7},{label:'down',p:0.3}]});
-  expect(e.scenario_up).toBe(true);
+  expect(e.scenario_up).toBe(true);   // realized ≥ 0, whatever the judgment's own predicate says (0.04 > 0.1 is false)
   const mk=(pUp:number)=>evaluateCohort('interval',[iv(1,true,pUp),iv(2,true,pUp),iv(3,false,pUp)],{...O,threshold_n:1});
   const a=mk(0.7),b=mk(0.3);
   const sa=a.metrics.scenarios as Record<string,{n:number;brier:number;ece_raw:number}>,sb=b.metrics.scenarios as Record<string,{n:number;brier:number}>;
+  expect((a.metrics.scenarios as {event:string}).event).toBe('realized_nonnegative');
   expect(sa.up.n).toBe(3);
   expect(sa.up.brier).toBeCloseTo((0.09+0.09+0.49)/3,12);
   expect(sb.up.brier).toBeCloseTo((0.49+0.49+0.09)/3,12);
