@@ -121,7 +121,7 @@ export default async function LandingPage() {
             </Link>
           </span>
           {authed ? (
-            <Link href="/today" className="rounded-lg bg-accent px-4 py-2 font-medium text-bg transition-opacity hover:opacity-90">{t('nav.enterWorkbench')}</Link>
+            <Link href="/macro" className="rounded-lg bg-accent px-4 py-2 font-medium text-bg transition-opacity hover:opacity-90">{t('nav.enterWorkbench')}</Link>
           ) : (
             <>
               <Link href="/login" className="rounded-lg px-4 py-2 text-text-dim transition-colors hover:text-text">{t('nav.login')}</Link>
@@ -146,7 +146,7 @@ export default async function LandingPage() {
           </p>
           <div className="oa-reveal mt-8 flex flex-wrap items-center gap-3" style={{ animationDelay: '280ms' }}>
             {authed ? (
-              <Link href="/today" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">{t('hero.ctaEnter')}</Link>
+              <Link href="/macro" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">{t('hero.ctaEnter')}</Link>
             ) : (
               <>
                 <Link href="/register" className="rounded-xl bg-accent px-6 py-3 font-medium text-bg transition-opacity hover:opacity-90">{t('hero.ctaRegister')}</Link>

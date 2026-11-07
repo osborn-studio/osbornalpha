@@ -6,7 +6,7 @@ import { isScannerPath } from '@/lib/security/scanner-paths';
  * Auth gate. The product is NOT publicly browsable — only the marketing landing
  * (`/`) and the auth pages are public; everything else requires a Supabase
  * session. Unauthenticated requests to protected paths are redirected to /login;
- * authenticated users hitting /login or /register are sent to /today.
+ * authenticated users hitting /login or /register are sent to /macro.
  * When Supabase env vars are absent (local dev), the gate is disabled so the app
  * still runs. The (app)/layout.tsx server guard is the belt-and-suspenders backup.
  */
@@ -96,7 +96,7 @@ export async function middleware(request: NextRequest) {
   // Note: `pathname` here is already the stripped (unprefixed) path, so the
   // `next` query param never carries an /en prefix into /login.
   if (user && (pathname === '/login' || pathname === '/register')) {
-    return NextResponse.redirect(new URL('/today', request.url));
+    return NextResponse.redirect(new URL('/macro', request.url));
   }
   if (!user && !isPublic(pathname)) {
     const url = new URL('/login', request.url);

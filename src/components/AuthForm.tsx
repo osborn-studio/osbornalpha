@@ -57,7 +57,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       }
       trackEvent('login_succeeded', { provider: 'email' });
       show(t('toasts.loginSuccess'));
-      window.location.href = '/today';
+      window.location.href = '/macro';
     } else {
       const { error } = await sb.auth.signUp({
         email,

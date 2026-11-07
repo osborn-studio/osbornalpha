@@ -27,7 +27,7 @@ async function login(page: Page) {
   await page.locator('input[type="email"]').fill(process.env.E2E_EMAIL!);
   await page.locator('input[type="password"]').fill(process.env.E2E_PASSWORD!);
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await page.waitForURL('**/today');
+  await page.waitForURL('**/macro');
 }
 type GridCell = { kind: string; value?: string; availableDate?: string; disclosureSeq?: number; isRevision?: boolean } | null;
 type Grid = { rows: { concept: string; cells: Record<string, GridCell> }[] };

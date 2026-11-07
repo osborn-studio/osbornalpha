@@ -23,7 +23,7 @@ describe('workbench wiring (structural)',()=>{
   expect(src).not.toContain('MACRO_STRATEGY_ENABLED');   // the flag is read server-side only
  });
  it('only the server page reads the flag, through the strategy flag helper',()=>{
-  const page=read('src/app/(app)/intel/macro/page.tsx');
+  const page=read('src/app/(app)/macro/page.tsx');
   expect(page).toMatch(/\/\/ MACRO-P3[\s\S]*strategyEnabled\(\)[\s\S]*\/\/ \/MACRO-P3/);
   expect(page).toContain('strategyEnabled=');
  });
