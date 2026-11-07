@@ -4,9 +4,9 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {TushareError} from '../data/sources/tushare';
 import type {TushareRaw} from '../data/sources/tushare';
 import type {Budget,CalendarFiling,Market} from '../facts/types';
-import {memoryRawStore} from './raw-store';
+import {RawStoreError,memoryRawStore} from './raw-store';
 import type {ExpectationRow} from './calendar';
-import {CalendarPassError,applyUpstreamCoverage,expectationArgs,parseDisclosureDate,previewCalendar,profileFromSubmissions,runCalendarSync,toCalendarPassError} from './calendar-sync';
+import {CalendarPassError,applyUpstreamCoverage,expectationArgs,parseDisclosureDate,previewCalendar,profileFromSubmissions,runCalendarSync,supabaseCalendarPassDb,toCalendarPassError} from './calendar-sync';
 import type {CalendarPassDb,CalendarPassToken,CalendarSyncDeps} from './calendar-sync';
 import type {SubmissionsView} from './filer-categories';
 
@@ -32,9 +32,11 @@ function memoryPasses(tables:ReturnType<typeof memoryTableClient>,scope:()=>stri
    for(const issuer_id of scope())await tables.insert('dq_calendar_pass_members',{market,pass_id,issuer_id,state:'pending',attempts:0});
    return {market,pass_id,batch_id:batch};
   },
-  async replaceExpectations(issuer,market,rows,t){
+  async replaceExpectations(issuer,market,rows,t,profile){
    fence(t);const m=await member(t,issuer);
    if(!m||!(m.state==='pending'||(m.state==='failed'&&Number(m.attempts)<3)))throw new CalendarPassError('member_not_claimable');
+   // the profile is written in the same fenced call (SQL: replace_filing_expectations.p_profile), never before the fence check
+   if(profile)await tables.upsert('issuer_filing_profiles',{...profile,issuer_id:issuer,market},'issuer_id,market');
    for(const r of tables.rows('dq_filing_expectations').filter(r=>r.issuer_id===issuer&&r.market===market))await tables.update('dq_filing_expectations',{issuer_id:issuer,market,report_kind:r.report_kind,period_end:r.period_end},{deleted:true});
    for(const r of rows)await tables.insert('dq_filing_expectations',{...r,batch_id:t.batch_id});
    await tables.update('dq_calendar_pass_members',{market:t.market,pass_id:t.pass_id,issuer_id:issuer},{state:'done'});
@@ -191,6 +193,102 @@ describe('runCalendarSync (US)',()=>{
  });
 });
 
+describe('review fixes (Task 18a)',()=>{
+ const batchStatuses=(h:Awaited<ReturnType<typeof harness>>)=>h.tables.rows('ingest_batches').map(b=>b.status);
+ it('a claim failure finishes the batch (not left running) and rethrows',async()=>{
+  const h=await harness();
+  h.deps.passes={...h.passes,claimPass:async()=>{throw new Error('rpc down');}};
+  await expect(runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'})).rejects.toThrow('rpc down');
+  expect(batchStatuses(h)).toEqual(['failed']);
+  expect(h.tables.rows('ingest_batches')[0].errors).toContainEqual(expect.objectContaining({code:'run_aborted'}));
+ });
+ it('a failure after the pass settled (freshness write) still finishes the batch; the pass stays settled',async()=>{
+  const h=await harness();
+  const real=h.tables;
+  h.deps.tables={...real,upsert:(async(t:string,...a:unknown[])=>{if(t==='dq_freshness')throw new Error('storage down');return (real.upsert as (...x:unknown[])=>unknown)(t,...a);}) as typeof real.upsert} as typeof real;
+  await expect(runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'})).rejects.toThrow('storage down');
+  expect(batchStatuses(h)).toEqual(['partial']);   // rows landed before the abort
+  expect(h.passes.passes[0]).toMatchObject({finished:true,status:'complete'});
+ });
+ it('a failMember storage error (non-fence) finishes the batch and leaves the pass resumable',async()=>{
+  const h=await harness();
+  h.deps.db={filingsForCalendar:async()=>{throw new Error('boom');}};
+  h.deps.passes={...h.passes,failMember:async()=>{throw new CalendarPassError('unknown','db gone');}};
+  await expect(runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'})).rejects.toThrow('db gone');
+  expect(batchStatuses(h)).toEqual(['failed']);
+  expect(h.passes.passes[0].finished).toBe(false);
+ });
+ it('a stale worker never writes a profile: the profile travels in the fenced replace call',async()=>{
+  const h=await harness({members:[A]});
+  const real=h.passes.replaceExpectations;
+  h.passes.replaceExpectations=async(...a)=>{h.passes.expire();return real(...a);};
+  await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
+  expect(h.tables.rows('issuer_filing_profiles')).toHaveLength(0);
+  expect(h.tables.rows('dq_filing_expectations')).toHaveLength(0);
+ });
+ it('a reused stored profile (SEC unavailable) is not rewritten: null profile is passed',async()=>{
+  const h=await harness({members:[A],submissions:async()=>{throw new Error('sec_unavailable');}});
+  await h.tables.upsert('issuer_filing_profiles',{issuer_id:A,market:'US',category_raw_current:null,regime:'10-K',fiscal_year_end:'1231',week52_pattern:false,source:'sec_submissions',source_sha256:'old',as_of:'2026-10-01'},'issuer_id,market');
+  const seen:unknown[]=[];const real=h.passes.replaceExpectations;
+  h.passes.replaceExpectations=async(i,m,r,t,p)=>{seen.push(p);return real(i,m,r,t,p);};
+  await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
+  expect(seen).toEqual([null]);
+  expect(h.tables.rows('issuer_filing_profiles')[0].as_of).toBe('2026-10-01');
+ });
+ it('positive-evidence rows cite the page that holds the entry; the page manifest is kept in the row detail',async()=>{
+  const PAGE='CIK0000000001-submissions-001.json';
+  const v=view();
+  const entries=v.entries.slice(0,2).map((e,i)=>({...e,page:i===0?'recent':PAGE,pageSha256:i===0?'sub-sha':'page-sha'}));
+  const pages=[{name:'recent',sha256:'sub-sha'},{name:PAGE,sha256:'page-sha'}];
+  const h=await harness({members:[A],submissions:async()=>({...v,entries,pages})});
+  await runCalendarSync(h.deps,{market:'US',limit:100,triggeredBy:'cron'});
+  const rows=rowsOf(h.tables,A);
+  const old=rows.find(x=>x.period_end==='2025-12-31')!;
+  expect(old).toMatchObject({disclosure_state:'filed_not_ingested'});
+  expect(old.detail).toMatchObject({upstream_sha256:'page-sha',upstream_page:PAGE,upstream_pages:pages});
+  const recent=rows.find(x=>x.period_end==='2026-06-30')!;
+  expect(recent.detail).toMatchObject({upstream_sha256:'sub-sha',upstream_page:'recent',upstream_pages:pages});
+  expect(rows.find(x=>x.disclosure_state==='pending')!.detail).toMatchObject({upstream_sha256:'sub-sha',upstream_pages:pages});
+ });
+ it('a CN raw-store failure is a real error: member failed (retryable), raw_upload_failed, never success',async()=>{
+  const h=await harness({market:'CN',members:[C],disclosure:async()=>({bytes:new Uint8Array([1]),sha256:'x',httpStatus:200,requestId:null,code:0,msg:'',fields:[],items:[],hasMore:false})});
+  h.deps.raw={...h.raw,put:async()=>{throw new RawStoreError('raw_upload_failed','503');}};
+  const r=await runCalendarSync(h.deps,{market:'CN',limit:100,triggeredBy:'cron'});
+  expect(r.errors).toContainEqual({code:'raw_upload_failed',key:C,message:'raw_upload_failed: 503'});
+  expect(r.status).not.toBe('success');
+  expect(r).toMatchObject({passStatus:'running',counts:{failed:1,inserted:0}});
+  expect(h.tables.rows('dq_calendar_pass_members')[0]).toMatchObject({state:'failed',attempts:1});
+  expect(h.tables.rows('dq_filing_expectations')).toHaveLength(0);
+  expect(h.tables.rows('dq_freshness')).toHaveLength(0);
+ });
+});
+
+describe('supabaseCalendarPassDb',()=>{
+ it('maps each port method to its RPC with the C5 argument names; row payload drops issuer_id/market; errors map to pass codes',async()=>{
+  const calls:{fn:string;args:Record<string,unknown>}[]=[];
+  let fail:string|null=null;
+  const client={rpc:async(fn:string,args:Record<string,unknown>)=>{calls.push({fn,args});return fail?{data:null,error:{message:fail}}:{data:fn==='replace_filing_expectations'?'2':fn==='finish_calendar_pass'?'complete':fn==='claim_calendar_pass'?{market:'US',pass_id:'p',batch_id:'b'}:null,error:null};}};
+  const db=supabaseCalendarPassDb(client as never);
+  const tok={market:'US' as const,pass_id:'p',batch_id:'b'};
+  expect(await db.claimPass('US','b')).toEqual(tok);
+  const row={issuer_id:A,market:'US',report_kind:'10-K',period_end:'2025-12-31'} as unknown as ExpectationRow;
+  const profile={issuer_id:A,market:'US' as const,category_raw_current:null,regime:'10-K' as const,fiscal_year_end:'1231',week52_pattern:false,source:'sec_submissions',source_sha256:null,as_of:'2026-11-05'};
+  expect(await db.replaceExpectations(A,'US',[row],tok,profile)).toBe(2);
+  expect(await db.replaceExpectations(A,'US',[row],tok,null)).toBe(2);
+  await db.failMember(tok,A,'x'.repeat(900));
+  expect(await db.finishPass(tok)).toBe('complete');
+  const {issuer_id:_i,market:_m,...p}=profile;
+  expect(calls.map(c=>c.fn)).toEqual(['claim_calendar_pass','replace_filing_expectations','replace_filing_expectations','fail_calendar_member','finish_calendar_pass']);
+  expect(calls[0].args).toEqual({p_market:'US',p_batch:'b'});
+  expect(calls[1].args).toEqual({p_issuer:A,p_market:'US',p_rows:[{report_kind:'10-K',period_end:'2025-12-31'}],p_pass_token:tok,p_profile:p});
+  expect(calls[2].args.p_profile).toBeNull();
+  expect(calls[3].args).toEqual({p_pass_token:tok,p_issuer:A,p_error:'x'.repeat(500)});
+  expect(calls[4].args).toEqual({p_pass_token:tok});
+  fail='fence_failed';
+  await expect(db.finishPass(tok)).rejects.toMatchObject({code:'fence_failed'});
+ });
+});
+
 describe('runCalendarSync (CN)',()=>{
  it('without TUSHARE_TOKEN every unreceived row is unknown_upstream and the reason is summarised',async()=>{
   const h=await harness({market:'CN',members:[C]});
@@ -243,6 +341,10 @@ describe('helpers',()=>{
  it('parses disclosure_date rows by field name, dates to ISO',()=>{
   expect(parseDisclosureDate({fields:['ts_code','ann_date','end_date','pre_date','actual_date','modify_date'],items:[['600519.SH','20260115','20251231','20260403','20260403',null],['600519.SH',null,'bad',null,null,null]]}))
    .toEqual([{end_date:'2025-12-31',ann_date:'2026-01-15',pre_date:'2026-04-03',actual_date:'2026-04-03',modify_date:null}]);
+ });
+ it('fiscal_year_end must be a real calendar day (leap-year calendar): 0231/0431/0631 → null, 0229 kept',()=>{
+  for(const bad of ['0231','0431','0631','0931','1131','0230','0000','0100'])expect(profileFromSubmissions(A,view({fiscalYearEnd:bad}),'2026-11-05')?.fiscal_year_end).toBeNull();
+  for(const ok of ['0229','0131','0430','1231'])expect(profileFromSubmissions(A,view({fiscalYearEnd:ok}),'2026-11-05')?.fiscal_year_end).toBe(ok);
  });
  it('profile: regime from the latest annual form, 52/53-week detection, no annual form → null',()=>{
   expect(profileFromSubmissions(A,view(),'2026-11-05')).toMatchObject({regime:'10-K',fiscal_year_end:'1231',week52_pattern:false});

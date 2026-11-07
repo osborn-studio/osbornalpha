@@ -121,8 +121,15 @@ describe('syncFilerCategories',()=>{
    filings:[{accessionNumber:'a',filingDate:'2025-08-01',reportDate:'',acceptanceDateTime:null,form:'10-K',primaryDocument:'a.htm',isInlineXBRL:true,page:'main'},
     {accessionNumber:'b',filingDate:'2025-05-01',reportDate:null,acceptanceDateTime:null,form:'10-Q',primaryDocument:null,isInlineXBRL:null,page:'main'}]};
   expect(submissionsView({cik:'1',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'main',sha256:'s',path:'sec-submissions/s.json'},pages:[],parsed,complete:true}))
-   .toEqual({cik10:'0000000001',sha256:'s',category:'Accelerated filer',fiscalYearEnd:'0630',entries:[{accessionNumber:'a',filingDate:'2025-08-01',reportDate:null,form:'10-K',primaryDocument:'a.htm',isInlineXBRL:true},
-    {accessionNumber:'b',filingDate:'2025-05-01',reportDate:null,form:'10-Q',primaryDocument:'',isInlineXBRL:false}]});
+   .toEqual({cik10:'0000000001',sha256:'s',category:'Accelerated filer',fiscalYearEnd:'0630',pages:[{name:'recent',sha256:'s'}],entries:[{accessionNumber:'a',filingDate:'2025-08-01',reportDate:null,form:'10-K',primaryDocument:'a.htm',isInlineXBRL:true,page:'main',pageSha256:'s'},
+    {accessionNumber:'b',filingDate:'2025-05-01',reportDate:null,form:'10-Q',primaryDocument:'',isInlineXBRL:false,page:'main',pageSha256:'s'}]});
+ });
+ it('submissionsView carries each entry\'s page name and sha256 (historical pages cite their own bytes) and a page manifest',()=>{
+  const f=(accessionNumber:string,page:string)=>({accessionNumber,filingDate:'2020-01-01',reportDate:'2019-12-31',acceptanceDateTime:null,form:'10-K',primaryDocument:'k.htm',isInlineXBRL:true,page});
+  const parsed={cik:'1',name:'X',category:null,fiscalYearEnd:'1231',tickers:[],tickerPositions:[],exchanges:[],formerNames:[],files:[],filings:[f('a','recent'),f('b','CIK0000000001-submissions-001.json'),f('c','missing-page.json')]};
+  const v=submissionsView({cik:'1',fetchedAt:'2026-11-05T00:00:00.000Z',main:{name:'CIK0000000001.json',sha256:'m',path:'x'},pages:[{name:'CIK0000000001-submissions-001.json',sha256:'p1',path:'y'}],parsed,complete:true});
+  expect(v.pages).toEqual([{name:'recent',sha256:'m'},{name:'CIK0000000001-submissions-001.json',sha256:'p1'}]);
+  expect(v.entries.map(e=>[e.page,e.pageSha256])).toEqual([['recent','m'],['CIK0000000001-submissions-001.json','p1'],['missing-page.json',null]]);
  });
 });
 

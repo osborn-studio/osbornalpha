@@ -708,7 +708,7 @@ describe.skipIf(!enabled)('plan 3 migration one: resolve_identifier_claim',()=>{
  });
 
  it('grants the functions to service_role only, keeps the helpers private and has one replace_filing_expectations signature',async()=>{
-  const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
+  const FNS=['public.resolve_identifier_claim(uuid,text,uuid,jsonb)','public.replace_filing_expectations(uuid,text,jsonb,jsonb,jsonb)','public.claim_calendar_pass(text,uuid)','public.fail_calendar_member(jsonb,uuid,text)','public.finish_calendar_pass(jsonb)',
    'public.append_claim_evidence(uuid,text,text,text,text,jsonb)','public.patch_quarantine_detail(uuid,text,jsonb,text)','public.set_security_identifier(uuid,text,date,text,text,jsonb)','public.set_issuer_identifier(uuid,text,text,jsonb)','public.set_security_window(uuid,text,date,text,date,jsonb)','public.patch_security_provenance(uuid,text,date,jsonb,text[])','public.close_security_absent(uuid,text,date,date,text,jsonb)'];
   const HELPERS=['public.claim_text_is_date(text)','public.claim_keys_within(jsonb,text[])','public.claim_evidence_ok(jsonb)','public.identifier_claim_target_key(text,jsonb)','public.identifier_claim_problem(text,text,text,uuid,jsonb)','public.dq_calendar_lock_pass(jsonb)','public.claim_provenance_safe(jsonb,integer)'];
   for(const fn of [...FNS,...HELPERS])for(const role of ['anon','authenticated','service_role']){
@@ -864,6 +864,36 @@ describe.skipIf(!enabled)('plan 3 migration one: calendar pass functions',()=>{
    expect(await replace(tok2,i,[expRow({report_kind:'semiannual',period_end:'2026-06-30',due_date:'2026-08-31',due_rule:'cn.semiannual.2m'})])).toBe(1);
    expect(await q(`select period_end::text from public.dq_filing_expectations where issuer_id=$1`,[i])).toEqual([{period_end:'2026-06-30'}]);
    await drain(tok2);await finish(tok2);
+  });
+ },60000);
+
+ it('replace_filing_expectations writes the issuer profile in the same fenced transaction (stale token → profile unchanged)',async()=>{
+  await withCalendarLock(admin,async()=>{
+   const i=await issuer();await scopeRow(i);
+   const b=await batch();
+   const tok=(await claimPass(b))!;
+   const profile=(over:Record<string,unknown>={})=>({category_raw_current:'Large accelerated filer',regime:'cn',fiscal_year_end:'1231',week52_pattern:false,source:'cn_statutory',source_sha256:null,as_of:'2026-11-05',...over});
+   const withProfile=async(t:unknown,iss:string,p:unknown,rows:unknown=[])=>(await q(`select public.replace_filing_expectations($1,$2,$3::jsonb,$4::jsonb,$5::jsonb) v`,[iss,CAL,JSON.stringify(rows),JSON.stringify(t),p===null?null:JSON.stringify(p)]))[0].v as number;
+   const stored=()=>q(`select regime,fiscal_year_end,source,as_of::text from public.issuer_filing_profiles where issuer_id=$1 and market=$2`,[i,CAL]);
+   // a token for another batch fails the fence: nothing is written, not even the profile
+   expect((await fails(withProfile({...tok,batch_id:randomUUID()},i,profile()))).message).toBe('fence_failed');
+   expect(await stored()).toEqual([]);
+   // invalid profile (check violation / another issuer) → invalid_rows, nothing written, member still pending
+   expect((await fails(withProfile(tok,i,profile({regime:'bogus'})))).message).toBe('invalid_rows');
+   expect((await fails(withProfile(tok,i,{...profile(),issuer_id:randomUUID()}))).message).toBe('invalid_rows');
+   expect(await stored()).toEqual([]);
+   expect(await member(tok.pass_id,i)).toMatchObject({state:'pending'});
+   // valid → rows and profile in one go
+   expect(await withProfile(tok,i,profile(),[expRow()])).toBe(1);
+   expect(await stored()).toEqual([{regime:'cn',fiscal_year_end:'1231',source:'cn_statutory',as_of:'2026-11-05'}]);
+   await drain(tok);expect(await finish(tok)).toBe('complete');
+   // next pass: a null profile leaves the stored one untouched; a finished (stale) token cannot change it
+   const tok2=(await claimPass(b))!;
+   expect(await withProfile(tok2,i,null)).toBe(0);
+   expect(await stored()).toEqual([{regime:'cn',fiscal_year_end:'1231',source:'cn_statutory',as_of:'2026-11-05'}]);
+   await drain(tok2);await finish(tok2);
+   expect((await fails(withProfile(tok2,i,profile({fiscal_year_end:'0630'})))).message).toBe('fence_failed');   // pass finished
+   expect(await stored()).toEqual([{regime:'cn',fiscal_year_end:'1231',source:'cn_statutory',as_of:'2026-11-05'}]);
   });
  },60000);
 

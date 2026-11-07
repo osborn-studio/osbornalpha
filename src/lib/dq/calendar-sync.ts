@@ -4,8 +4,9 @@
 // market's pass (claim_calendar_pass: a new pass freezes its members; an expired lease is taken over;
 // a lease held by another worker → this run does nothing, skipped_summary(pass_claimed)). Within the
 // budget it processes pending members, then failed members with attempts < 3, in issuer_id order:
-// profile write (issuer_filing_profiles), inputs (profile + issuer_filer_categories + filingsForCalendar
-// + upstream list) → computeExpectations → replace_filing_expectations (atomic replace + member done).
+// inputs (profile + issuer_filer_categories + filingsForCalendar + upstream list) → computeExpectations →
+// replace_filing_expectations (atomic: rows replaced + the issuer profile upserted under the same fence + member done;
+// a stale worker therefore writes neither rows nor profile).
 // A member whose inputs fail → fail_calendar_member. Any fence_failed stops this worker at once.
 // With nothing left to process the pass is settled by finish_calendar_pass (from persisted state only)
 // and freshness is recorded: complete → ok, complete_with_failures or a pass older than 2 days → not ok.
@@ -23,6 +24,7 @@ import {emptyCounts,finishBatch,startBatch} from './batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from './batches';
 import {recordAttempt} from './freshness';
 import {DATASETS} from './datasets';
+import {RawStoreError} from './raw-store';
 import type {RawStore} from './raw-store';
 import {CALENDAR_RULES_VERSION,computeExpectations,filingsWindowStart} from './calendar';
 import type {CalendarUpstream,CnScheduleRow,ExpectationRow,FilerCategoryRow,FilingProfile,UsUpstreamEntry} from './calendar';
@@ -47,18 +49,21 @@ export function toCalendarPassError(e:{message?:string}):CalendarPassError{
 }
 export interface CalendarPassDb{
  claimPass(market:Market,batchId:string):Promise<CalendarPassToken|null>;
- replaceExpectations(issuer:string,market:Market,rows:ExpectationRow[],token:CalendarPassToken):Promise<number>;
+ /** `profile` is upserted in the same fenced transaction (replace_filing_expectations.p_profile); null leaves the stored profile untouched. */
+ replaceExpectations(issuer:string,market:Market,rows:ExpectationRow[],token:CalendarPassToken,profile:FilingProfile|null):Promise<number>;
  failMember(token:CalendarPassToken,issuer:string,error:string):Promise<void>;
  finishPass(token:CalendarPassToken):Promise<'complete'|'complete_with_failures'>;
 }
 /** p_rows payload: every dq_filing_expectations column except issuer_id/market (the function's own args) and computed_at/batch_id (set by the function from now() and the token). */
 export const expectationArgs=(rows:ExpectationRow[])=>rows.map(({issuer_id:_i,market:_m,...r})=>r);
+/** p_profile payload: the issuer_filing_profiles columns except issuer_id/market (the function's own args). */
+export const profileArgs=(p:FilingProfile|null)=>p?(({issuer_id:_i,market:_m,...r})=>r)(p):null;
 export function supabaseCalendarPassDb(client:SupabaseClient):CalendarPassDb{
  const c=client as unknown as {rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<{data:unknown;error:{message?:string}|null}>};
  const call=async<T>(fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toCalendarPassError(error);return data as T;};
  return {
   claimPass:(market,batch)=>call<CalendarPassToken|null>('claim_calendar_pass',{p_market:market,p_batch:batch}),
-  replaceExpectations:(issuer,market,rows,token)=>call<number>('replace_filing_expectations',{p_issuer:issuer,p_market:market,p_rows:expectationArgs(rows),p_pass_token:token}).then(Number),
+  replaceExpectations:(issuer,market,rows,token,profile)=>call<number>('replace_filing_expectations',{p_issuer:issuer,p_market:market,p_rows:expectationArgs(rows),p_pass_token:token,p_profile:profileArgs(profile)}).then(Number),
   failMember:async(token,issuer,error)=>{await call('fail_calendar_member',{p_pass_token:token,p_issuer:issuer,p_error:error.slice(0,500)});},
   finishPass:(token)=>call<'complete'|'complete_with_failures'>('finish_calendar_pass',{p_pass_token:token}),
  };
@@ -82,11 +87,17 @@ const ymd=(s:unknown)=>typeof s==='string'&&/^\d{8}$/.test(s)?`${s.slice(0,4)}-$
 const bump=(m:Record<string,number>,k:string)=>{m[k]=(m[k]??0)+1;};
 const errText=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,200);
 
+/** MMDD against a leap-year calendar (0229 allowed; 0231 / 0431 are not days). */
+const validMmdd=(s:string|null):s is string=>{
+ if(s===null||!/^\d{4}$/.test(s))return false;
+ const m=+s.slice(0,2),d=+s.slice(2);
+ return m>=1&&m<=12&&d>=1&&d<=new Date(Date.UTC(2000,m,0)).getUTCDate();   // 2000 is a leap year
+};
 /** Profile from SEC submissions: regime = latest original annual form; week52 when the fiscal year end is not a month end or a recent annual period end is not one. */
 export function profileFromSubmissions(issuerId:string,v:SubmissionsView,today:string):FilingProfile|null{
  const annual=v.entries.filter(e=>e.form==='10-K'||e.form==='20-F'||e.form==='40-F').sort((a,b)=>b.filingDate.localeCompare(a.filingDate));
  if(annual.length===0)return null;
- const fye=v.fiscalYearEnd!==null&&/^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$/.test(v.fiscalYearEnd)?v.fiscalYearEnd:null;
+ const fye=validMmdd(v.fiscalYearEnd)?v.fiscalYearEnd:null;
  const lastDay=(mm:number)=>new Date(Date.UTC(2001,mm,0)).getUTCDate();   // 2001: Feb 28 (29 checked below)
  const fyeIsMonthEnd=fye===null||+fye.slice(2)===lastDay(+fye.slice(0,2))||fye==='0229';
  const reportEndsOff=annual.slice(0,3).some(e=>{if(!e.reportDate)return false;const d=new Date(`${e.reportDate}T00:00:00Z`);return new Date(d.getTime()+86_400_000).getUTCDate()!==1;});
@@ -124,7 +135,7 @@ export function applyUpstreamCoverage(rows:ExpectationRow[],entries:readonly UsU
  });
 }
 
-interface MemberResult{rows:ExpectationRow[];upstreamUnavailable:boolean;noProfile:boolean;noFye:boolean;noCategory:boolean;errors:BatchError[];scheduleReason?:string}
+interface MemberResult{profile:FilingProfile|null;rows:ExpectationRow[];upstreamUnavailable:boolean;noProfile:boolean;noFye:boolean;noCategory:boolean;errors:BatchError[];scheduleReason?:string}
 async function display(tables:TableClient,issuerId:string,scope:Row|undefined,market:Market,today:string):Promise<{ticker:string|null;name:string|null}>{
  const [issuer]=await tables.select('issuers',{issuer_id:issuerId},{limit:1});
  let ticker:string|null=market==='CN'?(scope?.fetch_key==null?null:String(scope.fetch_key)):null;
@@ -133,52 +144,79 @@ async function display(tables:TableClient,issuerId:string,scope:Row|undefined,ma
  return {ticker,name};
 }
 
-async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string,today:string,nowIso:string,write=true):Promise<MemberResult>{
+async function computeMember(deps:CalendarSyncDeps,market:Market,issuerId:string,today:string):Promise<MemberResult>{
  const [scope]=await deps.tables.select('fact_sync_scope',{issuer_id:issuerId,market},{limit:1});
  const fetchKey=scope?.fetch_key==null?'':String(scope.fetch_key);
  const errors:BatchError[]=[];
  let profile:FilingProfile|null=null;let upstream:CalendarUpstream;let scheduleReason:string|undefined;
+ let fresh:FilingProfile|null=null;   // written with the fenced replace call only when computed from a live fetch (stored profile reuse → null)
+ let view:SubmissionsView|null=null;
  if(market==='US'){
-  let view:SubmissionsView|null=null;
   try{if(!/^\d{10}$/.test(fetchKey))throw new Error('no_cik');view=await deps.submissions(fetchKey,deps.budget);}
   catch(e){errors.push({code:'sec_unavailable',key:issuerId,message:errText(e)});}
   if(view){
    profile=profileFromSubmissions(issuerId,view,today);
-   if(profile&&write)await deps.tables.upsert('issuer_filing_profiles',{...profile,updated_at:nowIso},'issuer_id,market');
+   fresh=profile;
    upstream={lookup:'ok',us:view.entries.map(e=>({form:e.form,reportDate:e.reportDate,filingDate:e.filingDate,accessionNumber:e.accessionNumber})),sha256:view.sha256};
   }else upstream={lookup:'unavailable'};
   if(!profile){const [stored]=await deps.tables.select('issuer_filing_profiles',{issuer_id:issuerId,market},{limit:1});if(stored)profile=profileFromRow(stored);}
  }else{
-  profile=cnProfile(issuerId,today);
-  if(write)await deps.tables.upsert('issuer_filing_profiles',{...profile,updated_at:nowIso},'issuer_id,market');
+  profile=fresh=cnProfile(issuerId,today);
   upstream={lookup:'unavailable'};
   try{
    if(!/^\d{6}\.(SH|SZ|BJ)$/.test(fetchKey))throw new Error('no_ts_code');
    const raw=await deps.disclosureDate(fetchKey,deps.budget);
    if(raw.code!==0)scheduleReason=`api_code_${raw.code}`;
    else{
-    const stored=await deps.raw.put({kind:'tushare-disclosure',bytes:raw.bytes,contentType:'application/json',meta:{api:'disclosure_date',ts_code:fetchKey}},deps.budget);
+    // a storage failure is a real error (member failed, retryable), not an informational upstream gap
+    const stored=await deps.raw.put({kind:'tushare-disclosure',bytes:raw.bytes,contentType:'application/json',meta:{api:'disclosure_date',ts_code:fetchKey}},deps.budget).catch((e:unknown)=>{throw e instanceof RawStoreError?e:new RawStoreError('raw_upload_failed',errText(e));});
     if(CN_DISCLOSURE_VERIFIED)upstream={lookup:'ok',cn:parseDisclosureDate(raw),sha256:stored.sha256};
     else{upstream={lookup:'unavailable',sha256:stored.sha256};scheduleReason='unverified';}
    }
-  }catch(e){scheduleReason=e instanceof TushareError&&e.code===-1?'no_token':e instanceof Error&&(e.message==='no_ts_code')?'no_ts_code':'error';}
+  }catch(e){if(e instanceof RawStoreError)throw e;scheduleReason=e instanceof TushareError&&e.code===-1?'no_token':e instanceof Error&&(e.message==='no_ts_code')?'no_ts_code':'error';}
  }
- if(!profile)return {rows:[],upstreamUnavailable:upstream.lookup==='unavailable',noProfile:true,noFye:false,noCategory:false,errors,scheduleReason};
+ if(!profile)return {profile:null,rows:[],upstreamUnavailable:upstream.lookup==='unavailable',noProfile:true,noFye:false,noCategory:false,errors,scheduleReason};
  const categories=market==='US'?(await selectAll(deps.tables,'issuer_filer_categories',{issuer_id:issuerId},'fiscal_year')).map(categoryFromRow):[];
  const filings=await deps.db.filingsForCalendar(issuerId,market,{fromPeriodEnd:filingsWindowStart(today)});
  let rows=computeExpectations({profile,categories,filings,upstream,today});
  // US: coverage is per expected period (plan audit Q1); positive evidence is never discarded.
  if(upstream.lookup==='ok'&&market==='US')rows=applyUpstreamCoverage(rows,upstream.us??[]);
  const shown=await display(deps.tables,issuerId,scope,market,today);
- rows=rows.map(r=>({...r,detail:{...r.detail,display:shown,...(upstream.sha256?{upstream_sha256:upstream.sha256}:{}),...(scheduleReason?{schedule_unavailable:scheduleReason}:{})}}));
- return {rows,upstreamUnavailable:rows.some(r=>r.upstream_lookup==='unavailable'),noProfile:false,noFye:profile.fiscal_year_end===null,noCategory:rows.some(r=>r.detail.no_category===true),errors,scheduleReason};
+ // US: a positive-evidence row cites the submissions page that holds its entry (historical pages have their own bytes); the manifest lists every page used
+ const pageOf=new Map((view?.entries??[]).map(e=>[e.accessionNumber,e]));
+ const manifest=view?(view.pages??[{name:'recent',sha256:view.sha256}]):null;
+ rows=rows.map(r=>{
+  const hit=typeof r.detail.upstream_accession==='string'?pageOf.get(r.detail.upstream_accession):undefined;
+  const cite=hit&&hit.pageSha256?{upstream_sha256:hit.pageSha256,upstream_page:hit.page}:upstream.sha256?{upstream_sha256:upstream.sha256,...(manifest?{upstream_page:manifest[0]?.name??'recent'}:{})}:{};
+  return {...r,detail:{...r.detail,display:shown,...cite,...(manifest?{upstream_pages:manifest}:{}),...(scheduleReason?{schedule_unavailable:scheduleReason}:{})}};
+ });
+ return {profile:fresh,rows,upstreamUnavailable:rows.some(r=>r.upstream_lookup==='unavailable'),noProfile:false,noFye:profile.fiscal_year_end===null,noCategory:rows.some(r=>r.detail.no_category===true),errors,scheduleReason};
 }
 
+/**
+ * Any throw after startBatch (claim RPC, member-list read, failMember/finishPass storage errors, freshness
+ * write) must not leave the batch 'running': the error is recorded as run_aborted, the batch is finished
+ * (best effort: the storage that failed may be the batch table itself) and the error rethrown. The pass is
+ * never finished on an infrastructure error — it stays leased/resumable and the next run takes it over.
+ */
 export async function runCalendarSync(deps:CalendarSyncDeps,opts:CalendarSyncOptions):Promise<CalendarReceipt>{
+ const aborted:{counts:BatchCounts;errors:BatchError[];batchId:string|null}={counts:emptyCounts(),errors:[],batchId:null};
+ try{return await runCalendarSyncInner(deps,opts,aborted);}
+ catch(e){
+  if(aborted.batchId){
+   aborted.errors.push({code:'run_aborted',message:errText(e)});
+   try{await finishBatch(deps.tables,aborted.batchId,{counts:aborted.counts,errors:aborted.errors},deps.now());}catch{/* batch already finished or storage down: the original error wins */}
+  }
+  throw e;
+ }
+}
+async function runCalendarSyncInner(deps:CalendarSyncDeps,opts:CalendarSyncOptions,shared:{counts:BatchCounts;errors:BatchError[];batchId:string|null}):Promise<CalendarReceipt>{
  const {market}=opts;
- const counts=emptyCounts();const errors:BatchError[]=[];const schedule:Record<string,number>={};
+
+ const {counts,errors}=shared;const schedule:Record<string,number>={};
  const detail:CalendarDetail={pass_id:null,issuers_done:0,issuers_failed:0,rows:0,by_deadline_state:{},by_disclosure_state:{},upstream_unavailable:0,no_fiscal_year_end:0,no_category:0,no_profile:0};
  const {batchId}=await startBatch(deps.tables,{producer:'filing-calendar',dataset:DATASETS.calendar(market),toolVersions:{rules:CALENDAR_RULES_VERSION,market},codeVersion:deps.codeVersion??undefined,triggeredBy:opts.triggeredBy});
+ shared.batchId=batchId;
  const finish=async(passId:string|null,passStatus:CalendarReceipt['passStatus']):Promise<CalendarReceipt>=>{
   if(Object.keys(schedule).length)errors.push({code:'skipped_summary',key:'schedule_unavailable',message:JSON.stringify(schedule)});
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
@@ -195,14 +233,14 @@ export async function runCalendarSync(deps:CalendarSyncDeps,opts:CalendarSyncOpt
   if(deps.budget.remainingMs()<MIN_MEMBER_MS){errors.push({code:'deadline_hit',message:JSON.stringify({not_started:todo.length-i})});break;}
   counts.fetched++;
   let result:MemberResult;
-  try{result=await computeMember(deps,market,issuer,today,now.toISOString());}
+  try{result=await computeMember(deps,market,issuer,today);}
   catch(e){
-   counts.failed++;detail.issuers_failed++;errors.push({code:'member_failed',key:issuer,message:errText(e)});
+   counts.failed++;detail.issuers_failed++;errors.push({code:e instanceof RawStoreError?'raw_upload_failed':'member_failed',key:issuer,message:errText(e)});
    try{await deps.passes.failMember(token,issuer,errText(e));}
    catch(f){if(f instanceof CalendarPassError&&f.code==='fence_failed'){fenced=true;errors.push({code:'fence_failed',key:issuer});break;}throw f;}
    continue;
   }
-  try{await deps.passes.replaceExpectations(issuer,market,result.rows,token);}
+  try{await deps.passes.replaceExpectations(issuer,market,result.rows,token,result.profile);}
   catch(e){
    if(e instanceof CalendarPassError&&e.code==='fence_failed'){fenced=true;errors.push({code:'fence_failed',key:issuer});break;}
    counts.failed++;detail.issuers_failed++;errors.push({code:'member_failed',key:issuer,message:errText(e)});
@@ -238,7 +276,7 @@ export async function previewCalendar(deps:CalendarSyncDeps,opts:{market:Market;
  const scope=(await selectAll(deps.tables,'fact_sync_scope',{market:opts.market},'issuer_id')).filter(r=>opts.issuerIds?opts.issuerIds.includes(String(r.issuer_id)):Number(r.priority)>0);
  const out:{issuerId:string;rows:ExpectationRow[];errors:BatchError[]}[]=[];
  for(const r of scope.slice(0,opts.issuerIds?undefined:opts.limit)){
-  const m=await computeMember(deps,opts.market,String(r.issuer_id),iso(now),now.toISOString(),false);
+  const m=await computeMember(deps,opts.market,String(r.issuer_id),iso(now));
   out.push({issuerId:String(r.issuer_id),rows:m.rows,errors:m.errors});
  }
  return out;

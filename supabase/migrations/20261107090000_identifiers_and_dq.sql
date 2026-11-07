@@ -630,10 +630,14 @@ end $$;
 revoke execute on function public.claim_calendar_pass(text, uuid) from public, anon, authenticated;
 grant execute on function public.claim_calendar_pass(text, uuid) to service_role;
 
--- The only signature (no 3-arg overload). The member must belong to the pass and be pending, or
--- failed with attempts < 3; its rows for (issuer, market) are replaced atomically and it becomes done.
--- Rows carry the ExpectationRow columns (src/lib/dq/calendar.ts); computed_at and batch_id are set here.
-create or replace function public.replace_filing_expectations(p_issuer uuid, p_market text, p_rows jsonb, p_pass_token jsonb)
+-- The only signature (the 4-arg draft is dropped so named calls cannot be ambiguous). The member must
+-- belong to the pass and be pending, or failed with attempts < 3; its rows for (issuer, market) are
+-- replaced atomically and it becomes done. Rows carry the ExpectationRow columns (src/lib/dq/calendar.ts);
+-- computed_at and batch_id are set here. p_profile (Task 18a review): the issuer's issuer_filing_profiles
+-- row is upserted in the same transaction, only after the token/lease/member checks pass, so a stale
+-- worker can never write a profile; null leaves the stored profile untouched.
+drop function if exists public.replace_filing_expectations(uuid, text, jsonb, jsonb);
+create or replace function public.replace_filing_expectations(p_issuer uuid, p_market text, p_rows jsonb, p_pass_token jsonb, p_profile jsonb default null)
 returns int language plpgsql security definer set search_path = public as $$
 declare p public.dq_calendar_passes; m public.dq_calendar_pass_members; n int;
 begin
@@ -661,6 +665,20 @@ begin
       (x ->> 'profile_as_of')::date, coalesce(x -> 'detail', '{}'::jsonb), clock_timestamp(), p.claimed_by
     from jsonb_array_elements(p_rows) x;
     get diagnostics n = row_count;
+    if p_profile is not null then
+      if jsonb_typeof(p_profile) <> 'object'
+         or (p_profile ? 'issuer_id' and p_profile ->> 'issuer_id' is distinct from p_issuer::text)
+         or (p_profile ? 'market' and p_profile ->> 'market' is distinct from p_market) then
+        raise exception 'invalid_rows' using errcode = '22023';
+      end if;
+      insert into public.issuer_filing_profiles(issuer_id, market, category_raw_current, regime, fiscal_year_end, week52_pattern, source, source_sha256, as_of, updated_at)
+      values (p_issuer, p_market, p_profile ->> 'category_raw_current', p_profile ->> 'regime', p_profile ->> 'fiscal_year_end',
+              coalesce((p_profile ->> 'week52_pattern')::boolean, false), p_profile ->> 'source', p_profile ->> 'source_sha256',
+              (p_profile ->> 'as_of')::date, clock_timestamp())
+      on conflict (issuer_id, market) do update set category_raw_current = excluded.category_raw_current, regime = excluded.regime,
+        fiscal_year_end = excluded.fiscal_year_end, week52_pattern = excluded.week52_pattern, source = excluded.source,
+        source_sha256 = excluded.source_sha256, as_of = excluded.as_of, updated_at = excluded.updated_at;
+    end if;
   exception when check_violation or not_null_violation or unique_violation or foreign_key_violation
               or invalid_text_representation or invalid_datetime_format or datetime_field_overflow or invalid_parameter_value then
     raise exception 'invalid_rows' using errcode = '22023';
@@ -670,8 +688,8 @@ begin
   update public.dq_calendar_passes set claim_until = clock_timestamp() + interval '10 minutes' where market = p.market and pass_id = p.pass_id;
   return n;
 end $$;
-revoke execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb) from public, anon, authenticated;
-grant execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb) to service_role;
+revoke execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb, jsonb) from public, anon, authenticated;
+grant execute on function public.replace_filing_expectations(uuid, text, jsonb, jsonb, jsonb) to service_role;
 
 create or replace function public.fail_calendar_member(p_pass_token jsonb, p_issuer uuid, p_error text)
 returns void language plpgsql security definer set search_path = public as $$

@@ -25,13 +25,20 @@ import {DEFAULT_USER_AGENT} from '../research/ingest/collectors/shared';
 import type {SubmissionsSnapshot} from '../entities/identifiers/sec-submissions';
 
 /** The submissions fields the calendar and this module read. Built only by submissionsView (one adaptation point to Task 6's snapshot). */
-export interface SubmissionsEntryView{accessionNumber:string;filingDate:string;reportDate:string|null;form:string;primaryDocument:string;isInlineXBRL:boolean}
-export interface SubmissionsView{cik10:string;sha256:string;category:string|null;fiscalYearEnd:string|null;entries:SubmissionsEntryView[]}
+export interface SubmissionsEntryView{accessionNumber:string;filingDate:string;reportDate:string|null;form:string;primaryDocument:string;isInlineXBRL:boolean;
+ /** the submissions page (name) holding this entry and that page's sha256 (null: page not among the fetched documents) — evidence must cite these bytes, not the main document's */
+ page?:string;pageSha256?:string|null}
+export interface SubmissionsView{cik10:string;sha256:string;category:string|null;fiscalYearEnd:string|null;entries:SubmissionsEntryView[];
+ /** manifest of the fetched documents ('recent' = main document) */
+ pages?:{name:string;sha256:string}[]}
 // Task 6a shape (Part B): SubmissionsSnapshot{cik, fetchedAt, main:StoredDoc, pages, parsed:ParsedSubmissions, complete};
 // parsed.filings already merges recent with the fetched files[] pages; primaryDocument / isInlineXBRL may be null.
 export function submissionsView(s:SubmissionsSnapshot):SubmissionsView{
- return {cik10:s.cik.padStart(10,'0'),sha256:s.main.sha256,category:s.parsed.category,fiscalYearEnd:s.parsed.fiscalYearEnd,
-  entries:s.parsed.filings.map(e=>({accessionNumber:e.accessionNumber,filingDate:e.filingDate,reportDate:e.reportDate||null,form:e.form,primaryDocument:e.primaryDocument??'',isInlineXBRL:e.isInlineXBRL===true}))};
+ const pages=[{name:'recent',sha256:s.main.sha256},...s.pages.map(p=>({name:p.name,sha256:p.sha256}))];
+ // the parser tags main-document entries 'recent' (submissionsEvidenceClaims.shaOf); 'main' and the document's own name are accepted too
+ const shaOf=(page:string)=>page==='recent'||page==='main'||page===s.main.name?s.main.sha256:s.pages.find(p=>p.name===page)?.sha256??null;
+ return {cik10:s.cik.padStart(10,'0'),sha256:s.main.sha256,category:s.parsed.category,fiscalYearEnd:s.parsed.fiscalYearEnd,pages,
+  entries:s.parsed.filings.map(e=>({accessionNumber:e.accessionNumber,filingDate:e.filingDate,reportDate:e.reportDate||null,form:e.form,primaryDocument:e.primaryDocument??'',isInlineXBRL:e.isInlineXBRL===true,page:e.page,pageSha256:shaOf(e.page)}))};
 }
 
 /**
