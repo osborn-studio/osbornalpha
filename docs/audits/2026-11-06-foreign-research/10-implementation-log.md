@@ -24,3 +24,5 @@
 | B5 | 内容级披露检查 disclosure + 摘要逐字重叠 overlap + 数值落地 grounding | Codex gpt-6-sol | gates OK (pipeline) | mmx: see B5-mmx.md (batch triage pending) |
 | C1 | 2026-11-07 | pending commander commit | 26/26 unit tests PASS (3 files); typecheck/lint PASS | Added private storage port, durable tracked-write fences, admin route helpers and test wiring; consolidated one tracked-write test title and strengthened memory signed-upload path validation/token consumption; no DB integration suite in C1; no git mutation |
 | C1 | 存储端口、错误、审计、管理员路由助手、测试装配 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see C1-mmx.md (batch triage pending) |
+| C2 | 2026-11-07 | pending commander commit | 30/30 unit tests PASS (2 files); typecheck/lint PASS | Plan behavior and routes implemented without compile or behavior corrections; service helper `text` named `valueText` to avoid ambiguity; no DB integration tests in C2; no git mutation |
+| C2 | 许可与设置服务 + 路由 | Codex gpt-6-sol | gates OK (pipeline) | mmx: see C2-mmx.md (batch triage pending) |
