@@ -14,7 +14,7 @@ export const criticalSuites = [
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
 ].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts')
   // F4
-  .concat('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts')
+  .concat('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts')
   // /F4
   ;
 
