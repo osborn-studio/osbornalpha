@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>入口与组件</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 1250px; padding: 32px; display: flex; flex-direction: column; gap: 24px">
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px">
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+      <div class="lbl-state">/intel · “研究”页签入口卡</div>
+      <div class="tabs"><button>情报 Intel</button><button class="on">研究 Research</button></div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+        <a href="Main.dc.html" class="card pad" style="background: #141417; display: flex; flex-direction: column; gap: 6px; color: #fafafa; text-decoration: none">
+          <div class="row"><span class="h3">行业研究</span><span class="en">Industry research</span><span style="margin-left: auto" class="ac">→</span></div>
+          <span class="cap">申万 2021 · SIC · 行业聚合事实与估值分位</span>
+          <span class="tiny">事实截至 <span class="m">2026-11-03</span> · <span class="dot ok"></span> fresh</span>
+        </a>
+        <a href="#" class="card pad" style="background: #141417; display: flex; flex-direction: column; gap: 6px; color: #fafafa; text-decoration: none">
+          <div class="row"><span class="h3">公司覆盖</span><span class="en">Company coverage</span><span style="margin-left: auto" class="ac">→</span></div>
+          <span class="cap">披露事实目录（公司研究模块）</span>
+          <span class="tiny">两个 tab 的结构不变，只增加卡片</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+      <div class="lbl-state">/stock/[ticker] · 概览 “所属行业”行</div>
+      <div class="row" style="padding: 12px; border: 1px solid rgba(255,255,255,.06); border-radius: 6px">
+        <span class="ml">所属行业 Industry</span>
+        <a class="chip" href="Detail.dc.html" style="text-decoration: none">申万 2021 · 食品饮料 › 白酒Ⅱ › 白酒Ⅲ</a>
+        <span class="tiny" style="margin-left: auto">自 <span class="m">2021-07-30</span></span>
+      </div>
+      <div class="row" style="padding: 12px; border: 1px solid rgba(255,255,255,.06); border-radius: 6px">
+        <span class="ml">所属行业 Industry</span>
+        <a class="chip" href="#" style="text-decoration: none">SIC 3674 · Semiconductors &amp; Related Devices</a>
+        <span class="chip warn">current_only</span>
+      </div>
+      <div class="row" style="padding: 12px; border: 1px solid rgba(255,255,255,.06); border-radius: 6px">
+        <span class="ml">所属行业 Industry</span>
+        <span class="cap">申万 2021：数据授权待确认（不显示分类）</span>
+      </div>
+    </section>
+  </div>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 18px">
+    <div class="lbl-state">组件 Components</div>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px">
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div class="h3">覆盖徽标 Coverage</div>
+        <div class="row"><span class="chip m">118/125</span><span class="tiny">≥ 0.8，格内只显示值</span></div>
+        <div class="row"><span class="m" style="border: 1px dashed rgba(255,255,255,.25); border-radius: 3px; padding: 2px 6px; font-size: 12px">6/9</span><span class="tiny">覆盖不足，替代值格</span></div>
+        <div class="row"><span class="m" style="border: 1px dashed rgba(234,179,8,.5); color: #eab308; border-radius: 3px; padding: 2px 6px; font-size: 12px">3 未解析</span><span class="tiny">未解析 &gt; 5%</span></div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div class="h3">新鲜度 Freshness</div>
+        <span class="chip"><span class="dot ok"></span>fresh 新鲜</span>
+        <span class="chip warn"><span class="dot warn"></span>stale 过期</span>
+        <span class="chip err"><span class="dot err"></span>error 失败</span>
+        <span class="chip warn">历史重建 Reconstruction</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div class="h3">方案 / 层级切换 Scheme &amp; level</div>
+        <button class="sel" style="align-self: flex-start"><span class="k">方案</span>申万 2021 ▾</button>
+        <div class="card" style="background: #141417; padding: 6px; display: flex; flex-direction: column; width: 220px">
+          <button class="btn ghost sm" style="justify-content: flex-start; color: #ca8a04; background: rgba(202,138,4,.12)">申万 2021 · A 股</button>
+          <button class="btn ghost sm" style="justify-content: flex-start">SIC · 美股（SEC）</button>
+        </div>
+        <div class="seg"><button class="on">一级</button><button>二级</button><button>三级</button></div>
+        <span class="tiny">SIC 方案下层级切换隐藏（单层）。</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div class="h3">分位条 Percentile bar</div>
+        <div class="row" style="flex-wrap: nowrap"><div class="bar" style="width: 140px"><i style="width: 38%"></i></div><span class="m" style="font-size: 12px">38.2%</span><span class="hash">572/574</span></div>
+        <div class="row" style="flex-wrap: nowrap"><div class="bar" style="width: 140px"><i style="width: 91%"></i></div><span class="m" style="font-size: 12px">91.0%</span><span class="hash">574/574</span></div>
+        <div class="row" style="flex-wrap: nowrap"><div class="bar" style="width: 140px; border: 1px dashed rgba(255,255,255,.2); background: transparent"></div><span class="wh">— 未发布</span></div>
+        <span class="tiny">单色黄铜；分位是统计，不是“高估/低估”判断。</span>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1250}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+ "recorded_at": "2026-11-06T12:52:21.036Z",
+ "sha256": "ff69a925c8d8d6434079e4f55bc995feda8494c9040f63d57451c0dc832741e4",
+ "http_status": 200,
+ "has_more": false,
+ "params": {
+  "ts_code": "600036.SH",
+  "start_date": "20160101",
+  "report_type": "4",
+  "limit": 2000,
+  "offset": 0
+ },
+ "fields": "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,total_assets,total_liab,total_hldr_eqy_exc_min_int,total_hldr_eqy_inc_min_int,money_cap,st_borr,lt_borr,bond_payable,total_share"
+}

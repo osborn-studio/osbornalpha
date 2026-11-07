@@ -11,6 +11,12 @@
 // + migrations up to 20261105091000_issuers.sql (issuers, issuer_securities, issuer_identifier_claims,
 //   industry_classifications, issuer_industry_memberships; research_entity_* link columns are not typed here)
 // + 20261106090000_financial_facts.sql (fact_sync_runs, filings, financial_facts, financial_metrics, fact_sync_scope)
+// F6 begin
+// + 20261110090000_dq_eval_runs.sql (dq_eval_runs, dq_eval_case_results)
+// F6 end
+// INDUSTRY:BEGIN
+// + 20261111090000_industry_research.sql (industry_* tables, security_marks; altered industry_classifications / issuer_industry_memberships)
+// INDUSTRY:END
 // Regenerate with: npm run supabase:types (after supabase link)
 
 export type Market = 'A' | 'HK' | 'US' | 'JP' | 'KR' | 'TW';
@@ -578,7 +584,9 @@ export interface DqReconciliation {
 export type DqFreshnessStatus = 'fresh' | 'stale' | 'error' | 'missing';
 export interface DqFreshness {
   dataset: string;
-  expected_cadence: 'daily' | 'monthly' | 'quarterly' | 'event';
+  // INDUSTRY:BEGIN — 'weekly' cadence (industry memberships / valuation datasets)
+  expected_cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'event';
+  // INDUSTRY:END
   last_ok_at: string | null;
   last_attempt_at: string | null;
   consecutive_errors: number;
@@ -779,7 +787,8 @@ export interface IssuerIdentifierClaim {
   created_at: string;
 }
 
-export type IndustryScheme = 'sw2021' | 'sw2014' | 'gics' | 'csrc' | 'custom';
+// INDUSTRY:BEGIN — 20261111090000 adds 'sic', attributes, and the membership lifecycle columns (membership_id is the key)
+export type IndustryScheme = 'sw2021' | 'sw2014' | 'gics' | 'csrc' | 'custom' | 'sic';
 export interface IndustryClassification {
   scheme: IndustryScheme;
   version: string;
@@ -788,18 +797,292 @@ export interface IndustryClassification {
   name_zh: string | null;
   name_en: string | null;
   parent_code: string | null;
+  attributes: Record<string, unknown>;
 }
 
 export interface IssuerIndustryMembership {
+  membership_id: string;
   issuer_id: string;
   scheme: IndustryScheme;
   version: string;
   code: string;
+  level: number;
   valid_from: string;
   valid_to: string | null;
+  available_date: string;
+  valid_to_available_date: string | null;
   source: string;
+  source_membership_id: string | null;
+  batch_id: string;
+  status: 'ok' | 'quarantined' | 'superseded';
+  superseded_by: string | null;
   provenance: Record<string, unknown>;
 }
+
+// F6 begin
+// F6 evaluation runs (supabase/migrations/20261110090000_dq_eval_runs.sql) — service-role only.
+// Decimal comparison columns are TEXT (lossless decimal strings with format checks), never numeric;
+// summary and detail are jsonb objects.
+export type DqEvalRunStatus = 'running' | 'passed' | 'failed' | 'incomplete' | 'error';
+export interface DqEvalRun {
+  run_id: string;
+  kind: 'official_reconciliation' | 'dual_source' | 'replay_consistency' | 'reference_regression' | 'extraction_gold' | 'judgment_calibration';
+  module: string;
+  mode: 'ci' | 'report';
+  privileged: boolean;
+  artifact_class: 'public' | 'restricted';
+  set_id: string;
+  set_version: number;
+  set_sha256: string;
+  evaluator_code_version: string;
+  started_at: string;
+  finished_at: string | null;
+  status: DqEvalRunStatus;
+  summary: Record<string, unknown>;
+  report_ref: string;
+  report_sha256: string;
+  triggered_by: 'manual' | 'script' | 'ci';
+}
+
+export interface DqEvalCaseResult {
+  eval_run_id: string;
+  case_id: string;
+  result: 'fail' | 'unit_mismatch' | 'provenance_incomplete' | 'missing' | 'not_visible' | 'read_error' | 'unexplained_diff';
+  reason: string | null;
+  left_text: string | null;
+  right_text: string | null;
+  abs_diff: string | null;
+  rel_diff: string | null;
+  tolerance: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+// F6 end
+// 20261111090000_industry_research.sql. numeric columns arrive as JSON numbers and round in JavaScript —
+// readers use the *_text twins (value_text, close_text, total_share_text, market_cap_text, mcap_coverage_text).
+// bigint (generation, state_rev) arrives as a JSON number. Writes go through the SQL functions (not typed here).
+export interface IndustryDatasetLicense {
+  dataset_key: string;
+  status: 'internal' | 'public';
+  decided_by: string;
+  decided_at: string;
+  note: string | null;
+}
+export interface IndustrySourceMembership {
+  id: string;
+  scheme: 'sw2021';
+  version: '2021';
+  source: string;
+  ts_code: string;
+  name: string | null;
+  l1_code: string;
+  l2_code: string;
+  l3_code: string;
+  in_date: string;
+  out_date: string | null;
+  observed_at: string;
+  batch_id: string;
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  status: 'current' | 'superseded';
+  superseded_by: string | null;
+  issuer_id: string | null;
+  resolution: Record<string, unknown>;
+  resolution_error: Record<string, unknown> | null;
+  created_at: string;
+}
+export interface IndustryFetchEvent {
+  fetch_event_id: string;
+  job: string;
+  params: Record<string, unknown>;
+  started_at: string;
+  batch_id: string;
+  attempt: number;
+}
+export interface IndustryObservationReceipt {
+  fetch_event_id: string;
+  kind: 'marks' | 'official';
+  natural_key: string;
+  payload_hash: string;
+  outcome: 'inserted' | 'duplicate' | 'superseded_previous';
+  observation_id: string | null;
+  created_at: string;
+}
+export interface SecurityMark {
+  observation_id: string;
+  ticker: string;
+  trade_date: string;
+  fetch_event_id: string;
+  observed_at: string;
+  close: number;
+  total_share: number;
+  market_cap: number;
+  close_text: string;
+  total_share_text: string;
+  market_cap_text: string;
+  free_share: number | null;
+  free_share_text: string | null;
+  source: string;
+  upstream: 'sse' | 'szse' | 'bse';
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  batch_id: string;
+  status: 'ok' | 'quarantined' | 'superseded';
+  supersedes: string | null;
+  created_at: string;
+}
+export interface IndustryOfficialValuation {
+  observation_id: string;
+  scheme: 'sw2021';
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe' | 'pb' | 'total_mv' | 'float_mv' | 'close';
+  fetch_event_id: string;
+  value: number;
+  value_text: string;
+  observed_at: string;
+  source: string;
+  upstream: string;
+  raw_hash: string;
+  locator: Record<string, unknown>;
+  batch_id: string;
+  status: 'ok' | 'superseded';
+  supersedes: string | null;
+  created_at: string;
+}
+export interface IndustryManifestIndex {
+  manifest_hash: string;
+  kind: 'aggregate' | 'valuation';
+  byte_length: number;
+  created_at: string;
+  object_path: string;
+  gc_claimed_at: string | null;
+  gc_claim: string | null;
+}
+export interface IndustryMetricRun {
+  run_id: string;
+  scheme: 'sw2021' | 'sic';
+  version: string;
+  level: number;
+  generation: number;
+  facts_as_of: string;
+  knowledge_date: string;
+  history_class: 'point_in_time' | 'reconstruction';
+  method_version: string;
+  config_hash: string;
+  formula_version: string;
+  code_version: string;
+  expected_grid: { codes: string[]; period_ends: string[]; metrics: string[] };
+  fingerprint_at: string;
+  reused_from_run: string | null;
+  batch_id: string;
+  status: 'building' | 'active' | 'superseded' | 'failed';
+  coverage_summary: Record<string, unknown>;
+  created_at: string;
+  activated_at: string | null;
+}
+export interface IndustryMetric {
+  run_id: string;
+  code: string;
+  metric: 'revenue_sum' | 'net_income_parent_sum' | 'gross_margin' | 'roe' | 'revenue_yoy' | 'net_income_yoy' | 'member_count';
+  period_start: string;
+  period_end: string;
+  duration: '3M' | '12M' | 'TTM' | 'INSTANT';
+  status: 'ok' | 'missing';
+  missing_reason: string | null;
+  value: number | null;
+  value_text: string | null;
+  unit: string;
+  n_members: number;
+  n_with_data: number;
+  n_unresolved: number;
+  manifest_hash: string | null;
+  updated_at: string | null;
+}
+export interface IndustryValuationRun {
+  run_id: string;
+  scheme: 'sw2021' | 'sic';
+  version: string;
+  level: number;
+  generation: number;
+  method_version: string;
+  config_hash: string;
+  formula_version: string;
+  code_version: string;
+  expected_dates: string[];
+  comparator_basis: 'ttm' | 'static' | 'unknown';
+  recompute_from: string;
+  carried_from_run: string | null;
+  fingerprint_at: string;
+  batch_id: string;
+  status: 'building' | 'published' | 'active' | 'superseded' | 'failed';
+  reconciliation: Record<string, unknown>;
+  created_at: string;
+  published_at: string | null;
+  activated_at: string | null;
+}
+export interface IndustryValuation {
+  run_id: string;
+  scheme: string;
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe_ttm' | 'pe_static' | 'pb' | 'market_cap';
+  status: 'ok' | 'missing';
+  missing_reason: string | null;
+  value: number | null;
+  value_text: string | null;
+  facts_as_of: string;
+  n_members: number | null;
+  n_with_data: number | null;
+  n_unresolved: number | null;
+  mcap_coverage: number | null;
+  mcap_coverage_text: string | null;
+  manifest_hash: string | null;
+  updated_at: string | null;
+  series_qualified: boolean;
+  published: boolean;
+}
+export interface IndustryValuationPair {
+  run_id: string;
+  scheme: string;
+  version: string;
+  code: string;
+  trade_date: string;
+  metric: 'pe_ttm' | 'pe_static' | 'pb' | 'market_cap';
+  official_observation_id: string | null;
+  official_value: number | null;
+  rel_diff: number | null;
+  pair_status: 'within' | 'outside' | 'no_official' | 'no_computed' | 'invalid_denominator' | 'not_applicable';
+}
+export interface IndustryRunDependency {
+  run_kind: 'aggregate' | 'valuation';
+  run_id: string;
+  cell_key: string;
+  issuer_id: string;
+  state_rev: number;
+}
+export interface IndustrySyncScope {
+  issuer_id: string;
+  job: 'sic';
+  next_due_at: string;
+  lease_until: string | null;
+  lease_batch_id: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_status: 'success' | 'failed' | null;
+  updated_at: string;
+}
+export interface IndustrySecurityDelisting {
+  ts_code: string;
+  delist_date: string;
+  list_status: string;
+  observed_at: string;
+  batch_id: string;
+  raw_hash: string;
+}
+// INDUSTRY:END
 
 export type Database = {
   public: {
@@ -851,6 +1134,27 @@ export type Database = {
       financial_facts: { Row: FinancialFact; Insert: Partial<FinancialFact>; Update: Partial<FinancialFact> };
       financial_metrics: { Row: FinancialMetric; Insert: Partial<FinancialMetric>; Update: Partial<FinancialMetric> };
       fact_sync_scope: { Row: FactSyncScope; Insert: Partial<FactSyncScope>; Update: Partial<FactSyncScope> };
+      // F6 begin
+      dq_eval_runs: { Row: DqEvalRun; Insert: Partial<DqEvalRun>; Update: Partial<DqEvalRun> };
+      dq_eval_case_results: { Row: DqEvalCaseResult; Insert: Partial<DqEvalCaseResult>; Update: Partial<DqEvalCaseResult> };
+      // F6 end
+      // INDUSTRY:BEGIN
+      industry_dataset_licenses: { Row: IndustryDatasetLicense; Insert: Partial<IndustryDatasetLicense>; Update: Partial<IndustryDatasetLicense> };
+      industry_source_memberships: { Row: IndustrySourceMembership; Insert: Partial<IndustrySourceMembership>; Update: Partial<IndustrySourceMembership> };
+      industry_fetch_events: { Row: IndustryFetchEvent; Insert: Partial<IndustryFetchEvent>; Update: Partial<IndustryFetchEvent> };
+      industry_observation_receipts: { Row: IndustryObservationReceipt; Insert: Partial<IndustryObservationReceipt>; Update: Partial<IndustryObservationReceipt> };
+      security_marks: { Row: SecurityMark; Insert: Partial<SecurityMark>; Update: Partial<SecurityMark> };
+      industry_official_valuations: { Row: IndustryOfficialValuation; Insert: Partial<IndustryOfficialValuation>; Update: Partial<IndustryOfficialValuation> };
+      industry_manifests: { Row: IndustryManifestIndex; Insert: Partial<IndustryManifestIndex>; Update: Partial<IndustryManifestIndex> };
+      industry_metric_runs: { Row: IndustryMetricRun; Insert: Partial<IndustryMetricRun>; Update: Partial<IndustryMetricRun> };
+      industry_metrics: { Row: IndustryMetric; Insert: Partial<IndustryMetric>; Update: Partial<IndustryMetric> };
+      industry_valuation_runs: { Row: IndustryValuationRun; Insert: Partial<IndustryValuationRun>; Update: Partial<IndustryValuationRun> };
+      industry_valuations: { Row: IndustryValuation; Insert: Partial<IndustryValuation>; Update: Partial<IndustryValuation> };
+      industry_valuation_pairs: { Row: IndustryValuationPair; Insert: Partial<IndustryValuationPair>; Update: Partial<IndustryValuationPair> };
+      industry_run_dependencies: { Row: IndustryRunDependency; Insert: Partial<IndustryRunDependency>; Update: Partial<IndustryRunDependency> };
+      industry_sync_scope: { Row: IndustrySyncScope; Insert: Partial<IndustrySyncScope>; Update: Partial<IndustrySyncScope> };
+      industry_security_delistings: { Row: IndustrySecurityDelisting; Insert: Partial<IndustrySecurityDelisting>; Update: Partial<IndustrySecurityDelisting> };
+      // INDUSTRY:END
       // MACRO
       macro_series: { Row: MacroSeriesRow; Insert: Partial<MacroSeriesRow>; Update: Partial<MacroSeriesRow> };
       macro_catalog_versions: { Row: MacroCatalogVersionRow; Insert: Partial<MacroCatalogVersionRow>; Update: Partial<MacroCatalogVersionRow> };

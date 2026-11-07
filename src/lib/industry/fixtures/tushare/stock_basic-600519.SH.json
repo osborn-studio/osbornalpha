@@ -1,0 +1,58 @@
+{
+ "request": {
+  "api_name": "stock_basic",
+  "params": {
+   "ts_code": "600519.SH",
+   "list_status": "L"
+  },
+  "fields": "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs,act_name,act_ent_type"
+ },
+ "response_sha256": "6eac364d64598079b19c45feb7355ca7306fb269ce21fd99e4b2b5b6965814f9",
+ "request_id": "edc0aab2-5403-4184-b67b-c3d4c10cf365",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "symbol",
+   "name",
+   "area",
+   "industry",
+   "fullname",
+   "enname",
+   "cnspell",
+   "market",
+   "exchange",
+   "curr_type",
+   "list_status",
+   "list_date",
+   "delist_date",
+   "is_hs",
+   "act_name",
+   "act_ent_type"
+  ],
+  "items": [
+   [
+    "600519.SH",
+    "600519",
+    "贵州茅台",
+    "贵州",
+    "白酒",
+    "贵州茅台酒股份有限公司",
+    "Kweichow Moutai Co.,Ltd.",
+    "GZMT",
+    "主板",
+    "SSE",
+    "CNY",
+    "L",
+    "20010827",
+    null,
+    "H",
+    "贵州省人民政府国有资产监督管理委员会",
+    "地方国企"
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

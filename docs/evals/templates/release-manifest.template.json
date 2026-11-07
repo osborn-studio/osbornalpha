@@ -1,0 +1,29 @@
+{
+  "_how_to": [
+    "Copy to docs/evals/<date>/<module>-release-manifest.json; validate with: npx tsx scripts/evals/validate.ts --manifest <file> [--online] (needs SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL; --online also needs an authenticated gh CLI)",
+    "release_commit = the released code (gold sets, lock.json and replay/reference fixtures are read there); evidence_commit = the commit that holds the committed evidence files (equal to or a descendant of release_commit); every path is repo-relative and read with git show, never from the working tree",
+    "every evidence item must come from evaluator_code_version == release_commit with dirty=false; non-waivable: official_reconciliation, replay_frozen, expert_sampling, model_audit",
+    "not_applicable is allowed only for dual_source, reference_regression and replay_live, approved_by owner",
+    "gold_approval 'process' (no CODEOWNERS + branch protection, spec §16 D2) requires the gold_approval waiver below; 'enforced' needs none"
+  ],
+  "schema_version": 1,
+  "module": "facts",
+  "release_commit": "0000000000000000000000000000000000000000",
+  "evidence_commit": "0000000000000000000000000000000000000000",
+  "prepared_by": "owner",
+  "prepared_at": "2026-01-01T00:00:00Z",
+  "scope": {"markets": ["US"], "universes": ["sp500"], "data_state_rev_min": "0"},
+  "gold_approval": "process",
+  "evidence": {
+    "official_reconciliation": {"run_id": "00000000-0000-4000-8000-000000000000", "report": "docs/evals/<date>/facts-official_reconciliation-<run8>.json"},
+    "replay_frozen": {"ci_run_url": "https://github.com/osborn-studio/OsbornAlpha/actions/runs/0", "report": "docs/evals/<date>/facts-replay_frozen-<run8>.json", "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "ci_check": "manual"},
+    "replay_live": {"not_applicable": {"reason": "first release: no production live replay recording yet", "approved_by": "owner", "at": "2026-01-01T00:00:00Z"}},
+    "dual_source": {"not_applicable": {"reason": "no independent second source for this module yet", "approved_by": "owner", "at": "2026-01-01T00:00:00Z"}},
+    "reference_regression": {"not_applicable": {"reason": "no reference samples for this module", "approved_by": "owner", "at": "2026-01-01T00:00:00Z"}},
+    "expert_sampling": {"file": "docs/evals/<date>/expert-sampling-facts-1.json"},
+    "model_audit": {"dir": "docs/audits/<date>-<topic>"}
+  },
+  "waivers": [
+    {"item": "gold_approval", "reason": "no CODEOWNERS or branch protection yet (spec §16 D2)", "approved_by": "owner", "at": "2026-01-01T00:00:00Z"}
+  ]
+}

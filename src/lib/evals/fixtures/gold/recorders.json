@@ -1,0 +1,6 @@
+{
+ "version": 1,
+ "recorders": [
+  {"id": "owner", "role": "owner", "modules": ["facts", "metrics", "macro"], "added_at": "2026-11-06", "approved_by": "owner"}
+ ]
+}
