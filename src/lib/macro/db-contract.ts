@@ -6,6 +6,7 @@
 // case uses its own series ids; publish state is shared, so cases read it right before publishing.
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {DATASETS} from '@/lib/dq/datasets';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
 import type {MacroSeriesDef,ObservationRow,ObservationWrite,PublishInput,Region} from './types';
@@ -276,7 +277,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
     await db.resolveConflict(none,'reject',by);
    }
    expect(await outcome(db.resolveConflict(randomUUID(),'accept',by,ro))).toBe('not_found:not_found');
-   expect(await outcome(db.resolveConflict(await item(o.s,'x','2026-07-31','facts.us'),'accept',by,ro))).toBe('rpc_failed:invalid_item');
+   expect(await outcome(db.resolveConflict(await item(o.s,'x','2026-07-31',DATASETS.facts('US')),'accept',by,ro))).toBe('rpc_failed:invalid_item');
   });
 
   it('public reads (RLS parity): rows of running / failed batches are invisible to latestObservations / seriesHistory / versionsOf / observationsByIds',async()=>{
