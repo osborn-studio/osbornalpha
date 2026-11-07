@@ -16,7 +16,7 @@
 // × 92), module / doc / deps exist, and no deps entry is already in the import closure (deps lists only
 // what the import graph cannot see). Node-only (uses formula-hash.ts).
 import {existsSync} from 'node:fs';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import type {Horizon,JudgmentsDb,Methodology,MethodologyRow} from './types';
 import {PUBLIC_INPUT_KINDS,PUBLIC_PRODUCER_KINDS,PUBLIC_SUBJECT_TYPES} from './types';
 import {canonicalize} from './canonical';
@@ -61,8 +61,10 @@ export function horizonCalendarDays(h:Horizon):number{
   case 'calendar_days':return h.n;
   case 'calendar_months':return h.n*31;
   case 'fiscal_quarters':return h.n*92;
+  default:return Number.NaN;
  }
 }
+const sameFile=(root:string,a:string,b:string)=>resolve(root,a)===resolve(root,b);
 export function validateMethodology(m:Methodology,repoRoot:string,closure:readonly string[]=[]):string[]{
  const p:string[]=[];
  if(!/^[a-z][a-z0-9_]{1,63}$/.test(m.id))p.push('id_pattern');
@@ -75,13 +77,17 @@ export function validateMethodology(m:Methodology,repoRoot:string,closure:readon
  for(const mk of m.markets??[])if(!['A','HK','US'].includes(mk))p.push(`market:${mk}`);
  try{labelPolicyOf(m.params);}catch{p.push('label_policy');}
  try{graceDaysOf(m.params,m.horizon);}catch{p.push('grace_days');}
- if(!Number.isInteger(m.horizon.n)||m.horizon.n<0)p.push('horizon_n');
+ const unitOk=(['trading_sessions','calendar_days','calendar_months','fiscal_quarters'] as const).includes(m.horizon.unit);
+ // n is a positive integer; calendar_months alone allows 0 (the as_of month, target.ts)
+ const horizonOk=unitOk&&Number.isInteger(m.horizon.n)&&Number.isFinite(m.horizon.n)&&m.horizon.n>=(m.horizon.unit==='calendar_months'?0:1)&&Number.isFinite(horizonCalendarDays(m.horizon));
+ if(!horizonOk)p.push('invalid_horizon');
  const wy=m.params.window_years??3;
  if(typeof wy!=='number'||!(wy>0))p.push('window_years');
- else if(wy*365<3*horizonCalendarDays(m.horizon))p.push(`window_years_too_short:${wy}y<3x${horizonCalendarDays(m.horizon)}d`);
+ else if(horizonOk&&wy*365<3*horizonCalendarDays(m.horizon))p.push(`window_years_too_short:${wy}y<3x${horizonCalendarDays(m.horizon)}d`);
  if(!existsSync(join(repoRoot,m.module)))p.push(`module_missing:${m.module}`);
  if(!existsSync(join(repoRoot,m.doc)))p.push(`doc_missing:${m.doc}`);
- for(const d of m.deps){if(!existsSync(join(repoRoot,d)))p.push(`dep_missing:${d}`);if(closure.includes(d))p.push(`dep_in_import_closure:${d}`);if(d===LICENSES_PATH)p.push('licenses_in_deps');}
+ for(const d of m.deps){if(!existsSync(join(repoRoot,d)))p.push(`dep_missing:${d}`);if(closure.includes(d))p.push(`dep_in_import_closure:${d}`);if(sameFile(repoRoot,d,LICENSES_PATH)){p.push('licenses_in_deps');if(!p.includes('licenses_in_closure'))p.push('licenses_in_closure');}}
+ if(closure.some(c=>sameFile(repoRoot,c,LICENSES_PATH))&&!p.includes('licenses_in_closure'))p.push('licenses_in_closure');
  return p;
 }
 export async function planMethodologySync(registry:readonly Methodology[],db:Pick<JudgmentsDb,'methodology'>,o:SyncOptions,hash:(m:Methodology,root:string)=>FormulaHashes=formulaHashOf):Promise<SyncPlanItem[]>{
@@ -96,14 +102,20 @@ export async function planMethodologySync(registry:readonly Methodology[],db:Pic
   if(publish&&unpublish)problems.push('publish_and_unpublish');
   const confirmation=(o.ownerConfirmation??'').trim();
   if(publish&&confirmation.length<10)problems.push('owner_confirmation_required');
-  else if(publish)problems.push(...licenseProblems(m,o.licenses??{}));   // reported once the confirmation text is present
+  const existing=await db.methodology(m.id,m.version);
+  const wantPublishable=publish?true:unpublish?false:(existing?.publishable??false);
+  const unlicensed=wantPublishable?licenseProblems(m,o.licenses??{}):[];
+  let withdrawn=false;
+  if(unlicensed.length>0){
+   if(publish){if(confirmation.length>=10)problems.push(...unlicensed);}   // reported once the confirmation text is present
+   else withdrawn=true;                                                    // already published, licence no longer confirmed
+  }
   let h:FormulaHashes|null=null;
   try{h=hash(m,o.repoRoot);}catch(e){problems.push(`hash:${e instanceof Error?e.message:String(e)}`);}
   problems.push(...validateMethodology(m,o.repoRoot,h?.closure??[]));
-  const existing=await db.methodology(m.id,m.version);
-  const publishable=publish?true:unpublish?false:(existing?.publishable??false);
+  const publishable=withdrawn?false:wantPublishable;
   const row=h?methodologyRowOf(m,h,{publishable,code_version:o.codeVersion}):null;
-  const reason=publish?`owner_confirmed:${confirmation}`:unpublish?'unpublished_by_script':null;
+  const reason=publish?`owner_confirmed:${confirmation}`:unpublish?'unpublished_by_script':withdrawn?'license_withdrawn':null;
   let action:SyncAction;
   if(problems.length>0||!row)action='invalid';
   else if(!existing)action='register';

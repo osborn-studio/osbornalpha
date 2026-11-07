@@ -22,11 +22,26 @@ import {upstreamOf} from './registry';
 import type {MethodologyHashes} from './registry';
 
 export interface FormulaHashes extends MethodologyHashes{closure:string[]}
-const EXT=['.ts','.tsx','.d.ts','.js','.mjs','.json'];
+const EXT=['.ts','.tsx','.js','.mjs','.json','.d.ts'];   // .d.ts last: a declaration file never shadows runtime code (Codex M-02)
 const INDEX=['index.ts','index.tsx','index.js'];
 const isFile=(p:string)=>existsSync(p)&&statSync(p).isFile();
 const posix=(root:string,abs:string)=>relative(root,abs).split(sep).join('/');
 export const fileSha256=(repoRoot:string,path:string)=>createHash('sha256').update(readFileSync(join(repoRoot,path))).digest('hex');
+/** import(expr) / require(expr) whose argument is not a string literal: the dependency would escape the closure (Codex M-01). */
+export function hasNonLiteralLoad(source:string,fileName='x.ts'):boolean{
+ const sf=ts.createSourceFile(fileName,source,ts.ScriptTarget.Latest,true);
+ let found=false;
+ const visit=(n:ts.Node):void=>{
+  if(found)return;
+  if(ts.isCallExpression(n)&&(n.expression.kind===ts.SyntaxKind.ImportKeyword||(ts.isIdentifier(n.expression)&&n.expression.text==='require'))){
+   const a=n.arguments[0];
+   if(!a||!(ts.isStringLiteral(a)||ts.isNoSubstitutionTemplateLiteral(a))){found=true;return;}
+  }
+  ts.forEachChild(n,visit);
+ };
+ visit(sf);
+ return found;
+}
 export function importSpecifiers(source:string):string[]{return ts.preProcessFile(source,true,true).importedFiles.map(f=>f.fileName);}
 export function resolveImport(repoRoot:string,fromAbs:string,spec:string):string|null{
  let base:string;
@@ -34,7 +49,7 @@ export function resolveImport(repoRoot:string,fromAbs:string,spec:string):string
  else if(spec==='.'||spec==='..'||spec.startsWith('./')||spec.startsWith('../'))base=resolve(dirname(fromAbs),spec);
  else return null;
  if(isFile(base))return base;
- if(/\.m?js$/.test(base)){const t=base.replace(/\.m?js$/,'.ts');if(isFile(t))return t;}
+ if(/\.m?js$/.test(base)){for(const x of ['.ts','.tsx']){const t=base.replace(/\.m?js$/,x);if(isFile(t))return t;}}
  for(const e of EXT)if(isFile(base+e))return base+e;
  for(const i of INDEX)if(isFile(join(base,i)))return join(base,i);
  throw new Error(`formula_hash_unresolved_import:${posix(repoRoot,fromAbs)}:${spec}`);
@@ -46,9 +61,14 @@ export function importClosure(repoRoot:string,entry:string):string[]{
  while(stack.length>0){
   const file=stack.pop()!;
   if(file.endsWith('.json'))continue;
-  for(const spec of importSpecifiers(readFileSync(file,'utf8'))){
+  const text=readFileSync(file,'utf8');
+  if(hasNonLiteralLoad(text,file))throw new Error(`nonliteral_import:${posix(root,file)}`);
+  for(const spec of importSpecifiers(text)){
    const dep=resolveImport(root,file,spec);
    if(dep&&!seen.has(dep)){seen.add(dep);stack.push(dep);}
+   // an executable's sibling declaration file is hashed too (it is the type surface importers may rely on)
+   const decl=dep&&!dep.endsWith('.d.ts')&&!dep.endsWith('.json')?dep.replace(/\.[^./\\]+$/,'.d.ts'):null;
+   if(decl&&!seen.has(decl)&&isFile(decl)){seen.add(decl);stack.push(decl);}
   }
  }
  return [...seen].map(f=>posix(root,f)).sort();

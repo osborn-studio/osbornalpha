@@ -114,3 +114,8 @@
 - E-04：内存实现的 `quarantineSettlement / applyQuarantineOverride / rejectQuarantinedSettlement` 经 `atomic()`：快照内存表，失败时还原并撤销已写的 `dq_quarantine` 更新；审计插入放在最后。故障注入用例在 `db.test.ts`（pg 无法注入）。
 - E-05：内存 `insertCalibration` 对 `calibration_id` 重复抛 `duplicate_key`。E-07：`toJudgmentError` 的 `detail = {sqlstate, details, hint}`。
 - 契约新增：latest 视图 calibration_valid 以 now 判（cutoff < valid_until ≤ now → false）；apply / reject 对错误 quarantine_id / table_name 均 stale；`calibration_id` 唯一；过期租约用例改为一次领取一次等待。
+
+## Task 9 review fixes (Codex M-01..M-05)
+- M-01：`formula-hash.ts` 对闭包内任一文件的非字面量 `import(expr)` / `require(expr)` 抛 `nonliteral_import:<file>`（TS AST 扫描）。M-02：`.d.ts` 排在解析顺序最后，不遮蔽 `.js/.mjs/.ts/.tsx`；`.js` 说明符也可解析到 `.tsx`；可执行文件的同名 `.d.ts` 一并入闭包。
+- M-03：`validateMethodology` 以规范化绝对路径比较，`licenses.json` 出现在闭包或 deps → `licenses_in_closure`（deps 另保留 `licenses_in_deps`）。M-04：结果行将为 publishable 时即核对许可；已发布方法的许可不再全部 confirmed → 计划置 `publishable=false`，原因 `license_withdrawn`，不静默保留。
+- M-05：`invalid_horizon`（单位须为四种之一，n 为有限整数且 ≥1；`calendar_months` 允许 0，因 `defaultResolveTarget` 以 n=0 表示 as_of 当月）。

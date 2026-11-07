@@ -74,3 +74,26 @@ describe('formula_hash (spec §4.1, audit G20)',()=>{
   expect(()=>formulaHashOf(method({doc:'docs/none.md'}),root)).toThrow(/formula_hash_missing_doc/);
  });
 });
+
+describe('formula_hash review fixes (Codex M-01, M-02)',()=>{
+ it('M-01: non-literal import() / require() in a closure file is a hard error; literal ones stay fine',()=>{
+  put('src/lib/nl/dyn.ts',"const p='./impl';\nexport const f=()=>import(p);\n");
+  expect(()=>importClosure(root,'src/lib/nl/dyn.ts')).toThrow(/nonliteral_import:src\/lib\/nl\/dyn\.ts/);
+  put('src/lib/nl/req.ts',"declare const require:(s:string)=>unknown;\nconst q='./x';\nexport const r=require(q);\n");
+  expect(()=>importClosure(root,'src/lib/nl/req.ts')).toThrow(/nonliteral_import:src\/lib\/nl\/req\.ts/);
+  put('src/lib/nl/ok.ts',"declare const require:(s:string)=>unknown;\nexport const a=()=>import('./b');export const r=require('./b');\n");
+  put('src/lib/nl/b.ts','export const b=1;\n');
+  expect(importClosure(root,'src/lib/nl/ok.ts')).toEqual(['src/lib/nl/b.ts','src/lib/nl/ok.ts']);
+ });
+ it('M-02: a .d.ts never shadows runtime code (helper.d.ts + helper.js, helper.js → helper.tsx)',()=>{
+  put('src/lib/dts/entry.ts',"import {h} from './helper';\nimport {t} from './tsx.js';\nexport const e=[h,t];\n");
+  put('src/lib/dts/helper.d.ts','export declare const h:number;\n');
+  put('src/lib/dts/helper.js','export const h=1;\n');
+  put('src/lib/dts/tsx.tsx','export const t=2;\n');
+  const c=importClosure(root,'src/lib/dts/entry.ts');
+  expect(c).toEqual(['src/lib/dts/entry.ts','src/lib/dts/helper.d.ts','src/lib/dts/helper.js','src/lib/dts/tsx.tsx']);
+  const h0=implementationSha256(root,'src/lib/dts/entry.ts').sha256;
+  put('src/lib/dts/helper.js','export const h=9;\n');
+  expect(implementationSha256(root,'src/lib/dts/entry.ts').sha256).not.toBe(h0);
+ });
+});

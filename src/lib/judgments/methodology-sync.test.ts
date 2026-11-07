@@ -50,7 +50,7 @@ describe('planMethodologySync / applyMethodologySync (spec §4.1, §5.1b)',()=>{
   expect(ok[0]).toMatchObject({action:'update',reason:'owner_confirmed:owner 2026-11-20: all inputs licensed'});
   expect(ok[0].row!.publishable).toBe(true);
   await applyMethodologySync(ok,db);
-  const kept=await planMethodologySync([method()],db,opts());
+  const kept=await planMethodologySync([method()],db,opts({licenses:confirmed}));
   expect(kept[0]).toMatchObject({action:'resync'});expect(kept[0].row!.publishable).toBe(true);
   const off=await planMethodologySync([method()],db,opts({unpublish:new Set(['sync_test@v1'])}));
   expect(off[0]).toMatchObject({action:'update',reason:'unpublished_by_script'});expect(off[0].row!.publishable).toBe(false);
@@ -77,5 +77,32 @@ describe('planMethodologySync / applyMethodologySync (spec §4.1, §5.1b)',()=>{
   expect(validateMethodology(method({deps:['src/lib/m/method.ts','data/none.json'],doc:'docs/none.md'}),root,['src/lib/m/method.ts'])).toEqual(expect.arrayContaining(['dep_in_import_closure:src/lib/m/method.ts','dep_missing:data/none.json','doc_missing:docs/none.md']));
   expect(horizonCalendarDays({unit:'trading_sessions',n:60})).toBe(92);
   expect(horizonCalendarDays({unit:'calendar_months',n:3})).toBe(93);
+ });
+});
+
+describe('methodology sync review fixes (Codex M-03..M-05)',()=>{
+ it('M-03: licenses.json in the import closure or deps (any spelling) is refused',()=>{
+  expect(validateMethodology(method({deps:['docs/../docs/./methodologies/licenses.json']}),process.cwd())).toContain('licenses_in_closure');
+  expect(validateMethodology(method({deps:[]}),process.cwd(),['docs/methodologies/./licenses.json'])).toContain('licenses_in_closure');
+  expect(validateMethodology(method({deps:[]}),process.cwd(),['src/lib/judgments/origins.ts'])).not.toContain('licenses_in_closure');
+ });
+ it('M-04: an already publishable method whose licence is no longer confirmed is unpublished (license_withdrawn)',async()=>{
+  const db=memoryJudgmentsDb();
+  const confirmed:LicenseTable={'macro_snapshot×macro_workbench':{status:'confirmed',confirmed_by:'owner',confirmed_at:'2026-11-20',evidence:'c'}};
+  await applyMethodologySync(await planMethodologySync([method()],db,opts()),db);
+  await applyMethodologySync(await planMethodologySync([method()],db,opts({publish:new Set(['sync_test@v1']),ownerConfirmation:'owner 2026-11-20: licensed',licenses:confirmed})),db);
+  expect((await db.methodology('sync_test','v1'))?.publishable).toBe(true);
+  const withdrawn=await planMethodologySync([method()],db,opts({licenses:{}}));
+  expect(withdrawn[0]).toMatchObject({action:'update',reason:'license_withdrawn',problems:[]});
+  expect(withdrawn[0].row!.publishable).toBe(false);
+  await applyMethodologySync(withdrawn,db);
+  expect((await db.methodology('sync_test','v1'))?.publishable).toBe(false);
+  expect((await planMethodologySync([method()],db,opts({licenses:confirmed})))[0].row!.publishable).toBe(false);   // not silently re-published
+ });
+ it('M-05: unknown horizon unit or non-positive / non-integer n is invalid_horizon',()=>{
+  for(const horizon of [{unit:'weeks',n:3},{unit:'calendar_days',n:0},{unit:'calendar_days',n:1.5},{unit:'calendar_days',n:Number.NaN},{unit:'calendar_days',n:Number.POSITIVE_INFINITY}])
+   expect(validateMethodology(method({horizon:horizon as never}),root)).toContain('invalid_horizon');
+  expect(validateMethodology(method({horizon:{unit:'calendar_months',n:0}}),root)).not.toContain('invalid_horizon');
+  expect(horizonCalendarDays({unit:'weeks',n:3} as never)).toBeNaN();
  });
 });
