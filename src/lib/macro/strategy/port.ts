@@ -64,9 +64,17 @@ function memoryDerivePolicyEvents(upper:readonly EventInput[],lower:readonly Eve
  return out;
 }
 const DAY=86400000,GRACE_DAYS=3;
-const dateMs=(d:string)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(d))throw new Error(`invalid_date:${d}`);return ms(`${d}T00:00:00Z`);};
+const ISO_DATE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/** Strict like P1 freshness.ts parseDate: shape, then a round trip so impossible dates (2026-02-31) throw invalid_date. */
+const dateMs=(d:string)=>{
+ if(!ISO_DATE.test(d))throw new Error(`invalid_date:${d}`);
+ const t=Date.parse(`${d}T00:00:00Z`);
+ if(!Number.isFinite(t)||new Date(t).toISOString().slice(0,10)!==d)throw new Error(`invalid_date:${d}`);
+ return t;
+};
 function nextPeriodEnd(period:MacroSeriesDef['period'],periodEnd:string):string{
- if(period==='day')return new Date(dateMs(periodEnd)+DAY).toISOString().slice(0,10);
+ const t=dateMs(periodEnd);   // validates every period, not only 'day'
+ if(period==='day')return new Date(t+DAY).toISOString().slice(0,10);
  const idx=Number(periodEnd.slice(0,4))*12+Number(periodEnd.slice(5,7))-1+(period==='month'?1:3);
  return new Date(Date.UTC(Math.floor(idx/12),idx%12+1,0)).toISOString().slice(0,10);
 }

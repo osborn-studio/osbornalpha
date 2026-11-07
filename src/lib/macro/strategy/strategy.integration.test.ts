@@ -15,7 +15,12 @@
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
+import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {ident} from '../../db/pg-table-client';
+import {strategyDbOver} from './db';
+import type {ReadRole,SelectSpec,StrategyTransport} from './db';
+import {strategyDbContract} from './db-contract';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261115090000_macro_strategy.sql';
@@ -431,4 +436,53 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(await fails(put('transmission',newHash(),noKind))).toMatchObject({code:'23514'});
   expect(await fails(put('transmission',newHash(),{...noKind,kind:null as unknown as string}))).toMatchObject({code:'23514'});
  });
+});
+
+// ---------------------------------------------------------------- Task 3: the shared StrategyDb contract over node-postgres
+// strategyDbOver(pgTransport) runs the same mapping code as supabaseStrategyDb; the transport executes each RPC as
+// service_role and each select under the requested role (session = authenticated with request.jwt.claim.sub), so the
+// contract also exercises the grants and the projection RLS.
+const JSONB_ARGS=new Set(['p_body','p_facts','p_error','p_raw_output','p_validation','p_rendered','p_accounting','p_finalize_payload']);
+function pgTransport(pool:Pool,sessionUser:()=>string|null):StrategyTransport{
+ const inRole=async<T>(role:ReadRole,body:(c:PoolClient)=>Promise<T>):Promise<T>=>{
+  const c=await pool.connect();
+  try{
+   await c.query('begin');
+   const sub=role==='session'?sessionUser():null;
+   if(sub)await c.query(`select set_config('request.jwt.claim.sub',$1,true)`,[sub]);
+   await c.query(`set local role ${role==='admin'?'service_role':role==='anon'?'anon':'authenticated'}`);
+   const out=await body(c);
+   await c.query('commit');
+   return out;
+  }catch(e){await c.query('rollback').catch(()=>{});throw e;}
+  finally{c.release();}
+ };
+ return {
+  rpc:(fn,args)=>inRole('admin',async c=>{
+   const keys=Object.keys(args);
+   const values=keys.map(k=>JSONB_ARGS.has(k)&&args[k]!==null&&args[k]!==undefined?JSON.stringify(args[k]):args[k]??null);
+   return (await c.query(`select public.${ident(fn)}(${keys.map((k,i)=>`${ident(k)} => $${i+1}`).join(', ')}) as v`,values)).rows[0].v as unknown;
+  }),
+  select:(role,spec:SelectSpec)=>inRole(role,async c=>{
+   const values:unknown[]=[];const where:string[]=[];
+   for(const [k,v] of Object.entries(spec.eq)){values.push(v);where.push(`${ident(k)} = $${values.length}`);}
+   if(spec.in){values.push(spec.in.values);where.push(`${ident(spec.in.column)}::text = any($${values.length}::text[])`);}
+   const order=spec.order.length?` order by ${spec.order.map(o=>`${ident(o.column)} ${o.ascending?'asc':'desc'}`).join(', ')}`:'';
+   return (await c.query(`select * from public.${ident(spec.table)}${where.length?` where ${where.join(' and ')}`:''}${order} limit ${Number(spec.limit)}`,values)).rows as Record<string,unknown>[];
+  }),
+ };
+}
+
+describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
+ strategyDbContract('pg StrategyDb contract',async()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  const pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});
+  let sub:string|null=null;
+  return {
+   db:strategyDbOver(pgTransport(pool,()=>sub)),
+   asUser:id=>{sub=id;},
+   ageClaim:async(id,minutes)=>{await pool.query(`update public.macro_explanation_runs set claimed_at=claimed_at-make_interval(mins=>$2) where explanation_id=$1`,[id,minutes]);},
+   close:()=>pool.end(),
+  };
+ },6000+Math.floor(Math.random()*2000));
 });

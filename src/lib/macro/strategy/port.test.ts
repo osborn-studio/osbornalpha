@@ -92,4 +92,14 @@ describe('memoryStrategyPort.timeliness (P1 releaseTimeliness)',()=>{
   expect(port.timeliness(def('US_DGS10'),'2026-09-30','2027-01-01')).toBe('n/a');
   expect(port.timeliness(def('CN_MLF_1Y'),'2026-09-17','2027-01-01')).toBe('n/a');
  });
+ it('rejects impossible or malformed dates like releaseTimeliness (round-trip validation)',()=>{
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-02-31','2026-11-18')).toThrow(/invalid_date/);   // monthly branch
+  expect(()=>port.timeliness(def('CN_GDP_YOY'),'2026-06-31','2026-10-23')).toThrow(/invalid_date/);   // quarterly branch
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-13-01','2026-11-18')).toThrow(/invalid_date/);
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-09-30','2026-02-30')).toThrow(/invalid_date/);   // today
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-9-30','2026-11-18')).toThrow(/invalid_date/);
+  expect(port.timeliness(def('US_CPI_YOY'),'2024-02-29','2024-04-03')).toBe('current');               // real leap day still fine
+  expect(port.timeliness(def('US_DGS10'),'2026-02-31','2027-01-01')).toBe('n/a');                      // n/a / missing answered before parsing
+  expect(port.timeliness(def('US_UNRATE'),null,'2026-11-06')).toBe('missing');
+ });
 });

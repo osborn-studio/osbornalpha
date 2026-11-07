@@ -249,7 +249,7 @@ export function fixture(over?:Partial<StrategyFixture>):StrategyFixture;   // de
 ### `StrategyDb`（Task 3，`db.ts`）
 
 ```ts
-export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
+export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'cutoff_mismatch'|'invalid_argument'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
 export interface StrategyDb{
  putManifest(body:StrategyManifest):Promise<StoredManifest>;   // computes manifest_hash = sha256Hex(canonicalJson(body)); RPC macro_put_manifest; idempotent by hash
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
@@ -1807,7 +1807,16 @@ describe('memoryStrategyPort.timeliness (P1 releaseTimeliness)',()=>{
   expect(port.timeliness(def('US_DGS10'),'2026-09-30','2027-01-01')).toBe('n/a');
   expect(port.timeliness(def('CN_MLF_1Y'),'2026-09-17','2027-01-01')).toBe('n/a');
  });
-});
+ it('rejects impossible or malformed dates like releaseTimeliness (round-trip validation)',()=>{
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-02-31','2026-11-18')).toThrow(/invalid_date/);   // monthly branch
+  expect(()=>port.timeliness(def('CN_GDP_YOY'),'2026-06-31','2026-10-23')).toThrow(/invalid_date/);   // quarterly branch
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-13-01','2026-11-18')).toThrow(/invalid_date/);
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-09-30','2026-02-30')).toThrow(/invalid_date/);   // today
+  expect(()=>port.timeliness(def('US_CPI_YOY'),'2026-9-30','2026-11-18')).toThrow(/invalid_date/);
+  expect(port.timeliness(def('US_CPI_YOY'),'2024-02-29','2024-04-03')).toBe('current');               // real leap day still fine
+  expect(port.timeliness(def('US_DGS10'),'2026-02-31','2027-01-01')).toBe('n/a');                      // n/a / missing answered before parsing
+  expect(port.timeliness(def('US_UNRATE'),null,'2026-11-06')).toBe('missing');
+ });
 ```
 
 Create `src/lib/macro/strategy/flags.test.ts`:
@@ -2107,9 +2116,17 @@ function memoryDerivePolicyEvents(upper:readonly EventInput[],lower:readonly Eve
  return out;
 }
 const DAY=86400000,GRACE_DAYS=3;
-const dateMs=(d:string)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(d))throw new Error(`invalid_date:${d}`);return ms(`${d}T00:00:00Z`);};
+const ISO_DATE=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/** Strict like P1 freshness.ts parseDate: shape, then a round trip so impossible dates (2026-02-31) throw invalid_date. */
+const dateMs=(d:string)=>{
+ if(!ISO_DATE.test(d))throw new Error(`invalid_date:${d}`);
+ const t=Date.parse(`${d}T00:00:00Z`);
+ if(!Number.isFinite(t)||new Date(t).toISOString().slice(0,10)!==d)throw new Error(`invalid_date:${d}`);
+ return t;
+};
 function nextPeriodEnd(period:MacroSeriesDef['period'],periodEnd:string):string{
- if(period==='day')return new Date(dateMs(periodEnd)+DAY).toISOString().slice(0,10);
+ const t=dateMs(periodEnd);   // validates every period, not only 'day'
+ if(period==='day')return new Date(t+DAY).toISOString().slice(0,10);
  const idx=Number(periodEnd.slice(0,4))*12+Number(periodEnd.slice(5,7))-1+(period==='month'?1:3);
  return new Date(Date.UTC(Math.floor(idx/12),idx%12+1,0)).toISOString().slice(0,10);
 }
@@ -2193,7 +2210,7 @@ export function judgmentStatus(env:FlagEnv,f4Read:'ok'|'failed'|'not_attempted')
 - [ ] **Step 7: Run tests, typecheck, lint**
 
 Run: `npm test -- src/lib/macro/strategy/testing/fixture.test.ts src/lib/macro/strategy/port.test.ts src/lib/macro/strategy/flags.test.ts`
-Expected: PASS — `Tests  25 passed (25)` (fixture 10, port 12, flags 3).
+Expected: PASS — `Tests  26 passed (26)` (fixture 10, port 13, flags 3).
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0.
@@ -2237,6 +2254,7 @@ Notes for the implementer:
 - `memoryStrategyDb` 逐条复刻 SQL 规则（同一份契约用例约束）；`_userId(id)` 设定 `explanationsOf` 的 RLS 身份，未设 → 空列表（等同 `auth.uid()` 为 null）；`_run(id)` 只给测试看运行行（`state`、`raw_output`、`finalize_payload`、`finalized`、`late_output`）。
 - 计划审计回写：`reviewResult(id)`（anon 读 `macro_review_results`，非 uuid → null 不查询）、`recordCompletion`（`macro_record_completion`）、`expireExplanations(userId)`（`macro_expire_explanations`，非 uuid → 0 不调用）；`markFinalized` 需要已登记的结算载荷（任何状态）。
 - 第二轮回写（R2-1 / R2-2）：`finishExplanation` 多传 `finalizePayload`（`p_finalize_payload`；行上无载荷时写入，已有不覆盖）；`runDetail(id)`（admin 读 `macro_explanation_runs` 一行，非 uuid → null）与 `recoverableRuns(userId, limit)`（admin 读该用户 `running` 行，按 `claimed_at` 升序最多扫 50 行，只留 `raw_output` 为 JSON 对象的，即已登记完成）；"已登记完成"的判定 `hasRecordedCompletion(raw)` 与 SQL 的 `jsonb_typeof(raw_output) = 'object'` 一致，内存实现的认领放弃与过期同样跳过这些行。
+- Task 1 审计回写：SQL 现会抛 `cutoff_mismatch`（`macro_publish_review` 的 `p_cutoff` 与清单存储的 cutoff 不同；`publishReview` 必须传清单自己的 cutoff）与 `invalid_argument`（期望代数为 null），`StrategyDbError.code` 联合类型与 `toStrategyDbError` 随之增加这两个码；`record_completion` 先查状态（终态行即使值相同也 `invalid_transition`）；`finish` 对已登记完成的 running 行只接受同一 `raw_output`；`finalize_payload` 缺 status / 非对象 → `rpc_failed`（CHECK）。内存实现逐条复刻，契约用例各有对应（3 个新用例）。
 - 契约用例的月份：内存用 5000 年起、pg 用 6000–7999 年中随机一年起，互不冲突，也不与 Task 1 用例（3000–4999）冲突。
 
 - [ ] **Step 1: Write the shared contract cases and the failing unit tests**
@@ -2374,6 +2392,19 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(await db.reviewCurrent('US',m)).toBeNull();
   });
 
+  it('publishReview: the cutoff must equal the manifest cutoff (cutoff_mismatch) and the expected generation must be a number (invalid_argument); nothing is stored',async()=>{
+   const m=month();const r=await db.putManifest(testManifest('review',{cutoff:'2026-11-03T00:00:00.000Z'}));
+   const base={region:'US' as const,month:m,expectedGeneration:0,cutoff:'2026-11-03T00:00:00.000Z',status:'ok' as const,manifestId:r.manifest_id,manifestHash:r.manifest_hash,facts:testFacts(m),methodVersion:'macro-review/1',codeVersion:'test-code'};
+   expect(await code(db.publishReview({...base,cutoff:'2026-11-04T00:00:00.000Z'}))).toBe('cutoff_mismatch');   // later than the frozen evidence
+   expect(await code(db.publishReview({...base,cutoff:'2026-11-02T00:00:00.000Z'}))).toBe('cutoff_mismatch');   // earlier too
+   expect(await code(db.publishReview({...base,expectedGeneration:null as unknown as number}))).toBe('invalid_argument');
+   expect(await code(db.publishReview({...base,expectedGeneration:undefined as unknown as number}))).toBe('invalid_argument');
+   expect(await db.reviewCurrent('US',m)).toBeNull();
+   expect(await db.reviewIndex('US',1000).then(x=>x.filter(i=>i.month===m))).toEqual([]);
+   expect(await db.publishReview(base)).toMatchObject({outcome:'advanced',generation:1});   // the matching cutoff still publishes (same instant, other spelling)
+   expect(await db.publishReview({...base,expectedGeneration:1,cutoff:'2026-11-03T08:00:00+08:00'})).toMatchObject({outcome:'replayed',generation:1});
+  });
+
   it('reviewIndex: newest month first, limited, with status and generation; recordReviewAttempt accepts failed',async()=>{
    const m1=month(),m2=month();
    await review(m1,{expected:0});await review(m2,{expected:0});
@@ -2428,6 +2459,21 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(await code(finish(randomUUID(),'failed',null))).toBe('not_found');
   });
 
+  it('finishExplanation: a running row with a recorded completion only accepts the recorded raw output (null included); the record stays untouched',async()=>{
+   const a=await claim();
+   await db.recordCompletion({explanationId:a.out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD});
+   expect(await code(finish(a.out.explanation_id,'failed',{content:'other'}))).toBe('invalid_transition');
+   expect(await code(finish(a.out.explanation_id,'failed',null))).toBe('invalid_transition');
+   expect(await db.runDetail(a.out.explanation_id)).toMatchObject({state:'running',raw_output:{content:'x'},finalize_payload:PAYLOAD});
+   expect(await finish(a.out.explanation_id,'accepted',{content:'x'})).toMatchObject({state:'accepted'});
+   const b=await claim();   // provider threw: recorded raw output is null
+   await db.recordCompletion({explanationId:b.out.explanation_id,rawOutput:null,finalizePayload:{...PAYLOAD,status:'failed'}});
+   expect(await code(finish(b.out.explanation_id,'failed',{content:'late'}))).toBe('invalid_transition');
+   expect(await finish(b.out.explanation_id,'failed',null,{failureCodes:['provider_error']})).toMatchObject({state:'failed',failure_codes:['provider_error']});
+   const c=await claim();   // without a recorded completion the finish supplies the output
+   expect(await finish(c.out.explanation_id,'rejected',{content:'z'})).toMatchObject({state:'rejected'});
+  });
+
   it('finishExplanation: rejected and failed keep failure codes and no rendered body',async()=>{
    const r=await claim();
    expect(await finish(r.out.explanation_id,'rejected','raw text 3%',{failureCodes:['numeral','forbidden_term']})).toMatchObject({state:'rejected',rendered:null,failure_codes:['numeral','forbidden_term']});
@@ -2443,9 +2489,19 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'y'},finalizePayload:PAYLOAD}))).toBe('invalid_transition');
    expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:{...PAYLOAD,status:'failed'}}))).toBe('invalid_transition');
    expect(await finish(out.explanation_id,'accepted',{content:'x'})).toMatchObject({state:'accepted'});
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:PAYLOAD}))).toBe('invalid_transition');   // a terminal row rejects even identical values
    const done=await claim();await finish(done.out.explanation_id,'failed',null);
    expect(await code(db.recordCompletion({explanationId:done.out.explanation_id,rawOutput:null,finalizePayload:PAYLOAD}))).toBe('invalid_transition');
    expect(await code(db.recordCompletion({explanationId:randomUUID(),rawOutput:null,finalizePayload:PAYLOAD}))).toBe('not_found');
+  });
+
+  it('recordCompletion: a missing, non-object or status-less finalize payload is refused and nothing is recorded',async()=>{
+   const {out}=await claim();
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:null as unknown as Record<string,unknown>}))).toBe('invalid_transition');
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:{provider:'p'}}))).toBe('rpc_failed');          // no status
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:{status:'unknown'}}))).toBe('rpc_failed');
+   expect(await code(db.recordCompletion({explanationId:out.explanation_id,rawOutput:{content:'x'},finalizePayload:[{status:'completed'}] as unknown as Record<string,unknown>}))).toBe('rpc_failed');
+   expect(await db.runDetail(out.explanation_id)).toMatchObject({state:'running',raw_output:null,finalize_payload:null});
   });
 
   it('markFinalized: needs a recorded finalize payload, then any state (running after a failed finish, final); idempotent; unknown → not_found',async()=>{
@@ -2590,8 +2646,16 @@ describe('supabaseStrategyDb wiring',()=>{
   await expect(db.claimExplanation({userId:'u',requestId:'r',payloadHash:'a'.repeat(64),subjectKind:'review',subjectId:'s',locale:'en',manifestId:'m'})).rejects.toMatchObject({name:'StrategyDbError',code:'payload_conflict'});
   expect(toStrategyDbError({message:'invalid_transition'}).code).toBe('invalid_transition');
   expect(toStrategyDbError({message:'not_found'}).code).toBe('not_found');
+  expect(toStrategyDbError({message:'cutoff_mismatch'}).code).toBe('cutoff_mismatch');
+  expect(toStrategyDbError({message:'invalid_argument'}).code).toBe('invalid_argument');
   expect(toStrategyDbError(new Error('connection reset'))).toMatchObject({code:'rpc_failed',message:'connection reset'});
   const e=new StrategyDbError('stale_generation');expect(toStrategyDbError(e)).toBe(e);
+ });
+ it('publishReview sends a missing expected generation as null so the RPC raises invalid_argument, and maps it',async()=>{
+  const admin=stub(()=>({data:null,error:{message:'invalid_argument',code:'P0001'}}));
+  const db=supabaseStrategyDb({admin:admin.client,anon:stub(()=>({data:null,error:null})).client});
+  await expect(db.publishReview({region:'US',month:'2026-10',expectedGeneration:undefined as unknown as number,cutoff:'2026-11-03T00:00:00.000Z',status:'ok',manifestId:'m',manifestHash:'h',facts:{} as never,methodVersion:'v',codeVersion:'c'})).rejects.toMatchObject({code:'invalid_argument'});
+  expect(admin.calls[0]).toMatchObject(['rpc','macro_publish_review',{p_expected_generation:null,p_cutoff:'2026-11-03T00:00:00.000Z'}]);
  });
  it('explanationsOf needs the session client; it filters by subject and orders newest first',async()=>{
   const db=supabaseStrategyDb({admin:stub(()=>({data:null,error:null})).client,anon:stub(()=>({data:null,error:null})).client});
@@ -2688,7 +2752,7 @@ Create `src/lib/macro/strategy/db.ts`:
 // StrategyDb (spec §4.4, plan 2026-11-07 Task 3): the only storage access of the strategy module. Writes are the eight
 // service-role RPCs of 20261115090000_macro_strategy.sql; reads are table selects under the caller's role (anon for
 // manifests and reviews, admin for run lookups, the user's session for the RLS projection). The SQL raises with the
-// code as the message (not_found, payload_conflict, invalid_transition); toStrategyDbError maps those, everything
+// code as the message (not_found, payload_conflict, invalid_transition, cutoff_mismatch, invalid_argument); toStrategyDbError maps those, everything
 // else is rpc_failed. strategyDbOver(transport) holds all mapping logic so the same code runs over Supabase
 // (supabaseStrategyDb) and, in the integration test, over node-postgres. memoryStrategyDb reproduces the SQL rules for
 // unit tests; db-contract.ts runs the same cases against both. New RPCs are not registered in database.types.ts
@@ -2706,7 +2770,7 @@ export const hasRecordedCompletion=(raw:unknown):boolean=>typeof raw==='object'&
 /** Running rows scanned per recoverableRuns call. */
 export const RECOVERY_SCAN=50;
 
-export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
+export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'cutoff_mismatch'|'invalid_argument'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
 export interface StrategyDb{
  putManifest(body:StrategyManifest):Promise<StoredManifest>;   // computes manifest_hash = sha256Hex(canonicalJson(body)); RPC macro_put_manifest; idempotent by hash
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
@@ -2749,7 +2813,7 @@ export interface StrategyTransport{
 /** Rows per select (PostgREST max_rows = 1000). */
 export const MAX_SELECT=1000;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CODES=['stale_generation','payload_conflict','invalid_transition','not_found'] as const;
+const CODES=['stale_generation','payload_conflict','invalid_transition','not_found','cutoff_mismatch','invalid_argument'] as const;
 export function toStrategyDbError(e:unknown):StrategyDbError{
  if(e instanceof StrategyDbError)return e;
  const message=typeof e==='object'&&e!==null&&typeof (e as {message?:unknown}).message==='string'?(e as {message:string}).message:String(e);
@@ -2809,7 +2873,7 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
    });
   },
   async publishReview(a){
-   const x=await rpc('macro_publish_review',{p_region:a.region,p_month:a.month,p_expected_generation:a.expectedGeneration,p_cutoff:a.cutoff,p_status:a.status,p_manifest_id:a.manifestId,
+   const x=await rpc('macro_publish_review',{p_region:a.region,p_month:a.month,p_expected_generation:a.expectedGeneration??null,p_cutoff:a.cutoff,p_status:a.status,p_manifest_id:a.manifestId,
     p_manifest_hash:a.manifestHash,p_facts:a.facts,p_method_version:a.methodVersion,p_code_version:a.codeVersion}) as {result_id:string;generation:number|string;outcome:'advanced'|'replayed'|'stale'};
    return {result_id:String(x.result_id),generation:Number(x.generation),outcome:x.outcome};
   },
@@ -2926,8 +2990,11 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
     .map(c=>({month:c.month,status:results.get(c.result_id)!.status,generation:c.generation,result_id:c.result_id,updated_at:c.updated_at}));
   },
   async publishReview(a){
+   if(a.expectedGeneration===null||a.expectedGeneration===undefined)throw new StrategyDbError('invalid_argument');
    const m=manifests.get(a.manifestId);
    if(!m||m.manifest_hash!==a.manifestHash||m.body.kind!=='review')throw new StrategyDbError('not_found');
+   // the pointer's cutoff always is its frozen evidence's cutoff: compare instants, not spellings
+   if(Date.parse(m.body.cutoff)!==Date.parse(a.cutoff))throw new StrategyDbError('cutoff_mismatch');
    const key=`${a.region}|${a.month}|${a.manifestHash}`;let resultId=resultByKey.get(key);
    if(!resultId){
     resultId=randomUUID();resultByKey.set(key,resultId);
@@ -2968,14 +3035,15 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    return {outcome:'claimed',explanation_id:eid,usage_audit_key:key,projection:projection(eid)};
   },
   async recordCompletion(a){
+   if(a.finalizePayload===null||a.finalizePayload===undefined)throw new StrategyDbError('invalid_transition');   // checked before the row lookup, like the SQL
    const r=runs.get(a.explanationId);
    if(!r)throw new StrategyDbError('not_found');
    const raw=clone(a.rawOutput??null);
+   if(r.state!=='running'&&r.state!=='abandoned')throw new StrategyDbError('invalid_transition');   // state first, like the SQL
    if(r.finalize_payload!==null){
     if(canonicalJson(r.finalize_payload)!==canonicalJson(a.finalizePayload)||canonicalJson(r.raw_output)!==canonicalJson(raw))throw new StrategyDbError('invalid_transition');
     return;
    }
-   if(r.state!=='running'&&r.state!=='abandoned')throw new StrategyDbError('invalid_transition');
    if(a.finalizePayload.status!=='completed'&&a.finalizePayload.status!=='failed')throw new StrategyDbError('rpc_failed','macro_explanation_runs_finalize_payload');
    r.raw_output=raw;r.finalize_payload=clone(a.finalizePayload);
   },
@@ -2984,6 +3052,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
    if(!r)throw new StrategyDbError('not_found');
    const raw=clone(a.rawOutput??null);
    if(r.state==='running'){
+    if(r.finalize_payload!==null&&canonicalJson(r.raw_output)!==canonicalJson(raw))throw new StrategyDbError('invalid_transition');   // a recorded completion is evidence
     if(a.state==='accepted'&&a.rendered===null)throw new StrategyDbError('rpc_failed','macro_explanations_rendered');
     const fill=payloadFill(r,a.finalizePayload);
     const t=now().toISOString();r.state=a.state;r.raw_output=raw;r.accounting=clone(a.accounting??null);if(fill)r.finalize_payload=fill;
@@ -3034,7 +3103,7 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
 - [ ] **Step 4: Run the unit tests**
 
 Run: `npm test -- src/lib/macro/strategy/hash.test.ts src/lib/macro/strategy/db.test.ts`
-Expected: PASS — `Tests  26 passed (26)` (hash 3; db 23 = 14 memory contract cases + 7 wiring + 2 memory specifics).
+Expected: PASS — `Tests  30 passed (30)` (hash 3; db 27 = 17 memory contract cases + 8 wiring + 2 memory specifics).
 
 - [ ] **Step 5: Run the same contract on real PostgreSQL**
 
@@ -3113,10 +3182,10 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 ```
 
 Run: `LC_ALL=C PATH=/opt/homebrew/opt/postgresql@17/bin:$PATH npx tsx .claude/scratch/db-one.ts src/lib/macro/strategy/strategy.integration.test.ts`
-Expected: PASS — `Tests  38 passed (38)` (24 migration cases + 14 pg contract cases).
+Expected: PASS — `Tests  41 passed (41)` (24 migration cases + 17 pg contract cases).
 
 Run: `npm test -- src/lib/macro/strategy`
-Expected: PASS for the unit files; `strategy.integration.test.ts` shows 38 skipped (no `S4_TEST_STATE`).
+Expected: PASS for the unit files; `strategy.integration.test.ts` shows 41 skipped (no `S4_TEST_STATE`).
 
 - [ ] **Step 6: Typecheck and lint**
 
