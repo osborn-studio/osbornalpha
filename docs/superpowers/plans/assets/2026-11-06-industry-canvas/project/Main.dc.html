@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>行业列表 热力图</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f23ca7d98205e917d88538ec66c0b288">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 2150px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav" aria-label="主导航"><a href="#">首页</a><a href="#">自选</a><a href="#">雷达</a><a class="on" href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto" aria-label="语言 Language"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 20px; padding-top: 24px">
+    <div class="tiny"><a href="#">研究 Research</a> / 行业研究 Industry research</div>
+    <div style="display: flex; align-items: flex-end; gap: 24px; flex-wrap: wrap">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h1 class="h1">行业研究<span class="en" style="font-size: 16px">Industry research</span></h1>
+        <p class="cap" style="margin: 0; max-width: 65ch">行业聚合事实来自成分发行人的一手披露，整体法汇总。Aggregated facts from members' primary filings, summed (aggregate method).</p>
+      </div>
+      <div class="row" style="margin-left: auto">
+        <button class="sel"><span class="k">方案 Scheme</span>申万 2021 SW 2021 ▾</button>
+        <div class="seg" aria-label="层级 Level"><button class="on">一级 L1</button><button>二级 L2</button><button>三级 L3</button></div>
+      </div>
+    </div>
+
+    <div class="card pad" style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px">
+      <span class="row cap"><span class="ml">事实截至 Facts as of</span><span class="m" style="color: #fafafa">2026-11-03</span></span>
+      <span class="row cap"><span class="ml">聚合运行 Run</span><span class="m" style="color: #fafafa">2026-11-01 03:10</span><span class="hash">gen 14</span></span>
+      <span class="chip"><span class="dot ok"></span>fresh 新鲜</span>
+      <span class="row cap"><span class="ml">方法 Method</span><a class="m" href="#">industry-agg/1.0</a></span>
+      <span class="chip sq">时点成分 Point-in-time</span>
+      <span class="tiny" style="margin-left: auto">31 行业 · 期望网格 31 × 10 × 6</span>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+      <button class="sel"><span class="k">指标 Metric</span>毛利率 Gross margin ▾</button>
+      <button class="sel"><span class="k">口径 Basis</span>年度 Annual (12M) ▾</button>
+      <div class="seg" aria-label="显示 View"><button class="on">热力图 Heatmap</button><button>表格 Table</button></div>
+      <div class="row tiny" style="margin-left: auto; gap: 14px">
+        <span class="row" style="gap: 6px">低 <span style="display: inline-flex; gap: 2px"><i style="width: 18px; height: 12px; background: rgba(202,138,4,.12); border-radius: 2px"></i><i style="width: 18px; height: 12px; background: rgba(202,138,4,.24); border-radius: 2px"></i><i style="width: 18px; height: 12px; background: rgba(202,138,4,.36); border-radius: 2px"></i><i style="width: 18px; height: 12px; background: rgba(202,138,4,.48); border-radius: 2px"></i><i style="width: 18px; height: 12px; background: rgba(202,138,4,.6); border-radius: 2px"></i></span> 高</span>
+        <span class="row" style="gap: 6px"><span class="m" style="border: 1px dashed rgba(255,255,255,.25); border-radius: 3px; padding: 0 5px">6/9</span>覆盖不足 coverage &lt; 0.8</span>
+        <span class="row" style="gap: 6px"><span class="m" style="border: 1px dashed rgba(234,179,8,.5); border-radius: 3px; padding: 0 5px">3 未解析</span>未解析 &gt; 5%</span>
+        <span class="row" style="gap: 6px"><span class="m">—</span>缺失（悬停看原因）</span>
+      </div>
+    </div>
+
+    <section class="card pad" aria-label="热力图 Heatmap" style="padding: 16px 16px 12px">
+      <div style="display: grid; grid-template-columns: 196px repeat(10, minmax(0, 1fr)); gap: 3px; align-items: center">
+        <div class="ml" style="padding-left: 4px">行业 Industry</div>
+        <sc-for list="{{years}}" as="y" hint-placeholder-count="10">
+          <div class="ml m" style="text-align: center">{{y}}</div>
+        </sc-for>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; margin-top: 6px">
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="31">
+          <div style="display: grid; grid-template-columns: 196px repeat(10, minmax(0, 1fr)); gap: 3px; align-items: center">
+            <a href="Detail.dc.html" style="display: flex; align-items: baseline; gap: 8px; padding-left: 4px; color: #fafafa; font-size: 13px">{{r.name}}<span class="hash">{{r.code}}</span></a>
+            <sc-for list="{{r.cells}}" as="c" hint-placeholder-count="10">
+              <button class="hc" title="{{c.title}}" aria-label="{{c.title}}" style="background: {{c.bg}}; color: {{c.fg}}; border: {{c.bd}}">{{c.t}}</button>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+      <div class="tiny" style="margin-top: 12px">点击格 → 来源抽屉；点击行名 → 行业详情。Click a cell for its source drawer; click a name for detail. 银行、非银金融毛利率按方法排除（financial_excluded）。</div>
+    </section>
+
+    <section class="card pad" aria-label="估值快照 Valuation snapshot">
+      <div class="row" style="margin-bottom: 10px">
+        <h2 class="h2">估值快照<span class="en">Valuation snapshot</span></h2>
+        <span class="chip sq">仅已发布格 published only</span>
+        <span class="tiny" style="margin-left: auto">标记日 Mark date <span class="m">2026-10-31</span> · 分位窗口 11 年 · 自算整体法，与申万发布值对照</span>
+      </div>
+      <table class="t">
+        <thead><tr>
+          <th>行业<span class="en">Industry</span></th><th class="n">PE<span class="en">self-computed</span></th><th style="width: 200px">分位<span class="en">Percentile (n / expected)</span></th><th class="n">PB</th><th style="width: 200px">分位<span class="en">Percentile</span></th><th class="n">市值覆盖<span class="en">Mcap coverage</span></th><th>对照<span class="en">vs official</span></th><th>日期<span class="en">Date</span></th>
+        </tr></thead>
+        <tbody>
+          <sc-for list="{{val}}" as="v" hint-placeholder-count="8">
+            <tr>
+              <td>{{v.name}}</td>
+              <td class="n"><button class="src">{{v.pe}}</button></td>
+              <td><div class="row" style="flex-wrap: nowrap"><div class="bar" style="width: 96px"><i style="width: {{v.pePctW}}"></i></div><button class="src" style="font-size: 12px">{{v.pePct}}</button><span class="hash">{{v.peN}}</span></div></td>
+              <td class="n"><button class="src">{{v.pb}}</button></td>
+              <td><div class="row" style="flex-wrap: nowrap"><div class="bar" style="width: 96px"><i style="width: {{v.pbPctW}}"></i></div><button class="src" style="font-size: 12px">{{v.pbPct}}</button></div></td>
+              <td class="n m">{{v.cov}}</td>
+              <td><span class="chip">{{v.chk}}</span></td>
+              <td class="m dim">2026-10-31</td>
+            </tr>
+          </sc-for>
+          <tr><td>银行</td><td class="n wh" colspan="4">— 该日未发布：对照超差（valuation_mismatch），不显示自算值</td><td class="n m">97.1%</td><td><span class="chip warn">超差 outside</span></td><td class="m dim">2026-10-31</td></tr>
+        </tbody>
+      </table>
+      <div class="row" style="margin-top: 10px"><button class="btn sm">展开其余 22 个行业 Show 22 more</button><span class="tiny">分位只在已发布日期序列上计算；n = 已发布日数 / 期望日数。</span></div>
+    </section>
+
+    <section class="card pad" aria-label="判断 Judgments" style="display: flex; gap: 16px; align-items: flex-start">
+      <div style="flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px">
+        <div class="row"><h2 class="h2">判断<span class="en">Judgments</span></h2><span class="chip sq">F4</span></div>
+        <div class="dim" style="font-size: 14px">未设判断 <span class="fog">No judgment registered for SW 2021 L1</span></div>
+        <p class="cap" style="margin: 0; max-width: 72ch">生命周期阶段、景气、高估/低估是判断，不是事实。它们只在 F4 登记、带可证伪条件并可结算后出现在这里，未校准时只显示类别与徽标。</p>
+      </div>
+      <a class="btn sm" href="#">方法注册表 Methods ↗</a>
+    </section>
+
+    <footer class="card" style="padding: 12px 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center">
+      <span class="ml">来源 Sources</span>
+      <span class="chip">SEC submissions</span><span class="chip">Tushare → 申万宏源研究所</span><span class="chip">Tushare → 交易所</span><span class="chip">EDGAR companyfacts</span><span class="chip">Tushare 三表 → 巨潮</span>
+      <a href="#" style="margin-left: auto; font-size: 13px">方法与来源 Methods &amp; sources →</a>
+    </footer>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2150}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var inds = [["农林牧渔","801010",14],["基础化工","801030",21],["钢铁","801040",9],["有色金属","801050",11],["电子","801080",18],["家用电器","801110",24],["食品饮料","801120",47],["纺织服饰","801130",26],["轻工制造","801140",21],["医药生物","801150",35],["公用事业","801160",23],["交通运输","801170",13],["房地产","801180",24],["商贸零售","801200",17],["社会服务","801210",30],["综合","801230",18],["建筑材料","801710",26],["建筑装饰","801720",11],["电力设备","801730",20],["国防军工","801740",22],["计算机","801750",30],["传媒","801760",29],["通信","801770",25],["银行","801780",null],["非银金融","801790",null],["汽车","801880",17],["机械设备","801890",24],["煤炭","801950",30],["石油石化","801960",15],["环保","801970",28],["美容护理","801980",52]];
+    var years = [2016,2017,2018,2019,2020,2021,2022,2023,2024,2025];
+    var none = "1px solid rgba(255,255,255,.06)";
+    var rows = inds.map(function (d, i) {
+      var cells = years.map(function (y, j) {
+        if (d[2] === null) return { t: "—", bg: "transparent", fg: "#8b8b94", bd: none, title: d[0] + " " + y + "：方法排除（financial_excluded）" };
+        if (d[0] === "综合" && j < 3) return { t: "6/9", bg: "transparent", fg: "#a1a1aa", bd: "1px dashed rgba(255,255,255,.25)", title: d[0] + " " + y + "：覆盖不足 6/9（< 0.8），值在接口仍返回" };
+        if (d[0] === "电力设备" && j === 0) return { t: "3 未解析", bg: "transparent", fg: "#eab308", bd: "1px dashed rgba(234,179,8,.5)", title: d[0] + " " + y + "：3 个成分未解析（> 5%）" };
+        if (d[0] === "美容护理" && j < 2) return { t: "—", bg: "transparent", fg: "#8b8b94", bd: none, title: d[0] + " " + y + "：无成分（empty_set）" };
+        var v = d[2] + 2.2 * Math.sin(i * 1.7 + j * 0.9) + (j - 5) * 0.15 * ((i % 3) - 1);
+        var a = 0.12 + 0.48 * Math.max(0, Math.min(1, (v - 5) / 50));
+        return { t: v.toFixed(1) + "%", bg: "rgba(202,138,4," + a.toFixed(2) + ")", fg: "#fafafa", bd: "0", title: d[0] + " " + y + "-12-31 毛利率 " + v.toFixed(2) + "%（示意）" };
+      });
+      return { name: d[0], code: d[1] + ".SI", cells: cells };
+    });
+    var vs = [["食品饮料","24.8","38.2","2.9%","4.91","22.6"],["电子","41.3","61.0","2.4%","3.62","55.1"],["医药生物","27.5","19.4","1.7%","2.88","12.3"],["电力设备","22.1","27.9","3.8%","2.47","20.4"],["计算机","58.6","72.5","3.1%","3.74","48.0"],["有色金属","16.2","44.0","2.2%","2.21","61.7"],["家用电器","14.9","35.7","1.9%","2.86","46.2"],["煤炭","9.4","30.1","2.5%","1.31","40.9"]];
+    var val = vs.map(function (r) {
+      return { name: r[0], pe: r[1], pePct: r[2] + "%", pePctW: r[2] + "%", peN: "572/574", pb: r[4], pbPct: r[5] + "%", pbPctW: r[5] + "%", cov: (100 - parseFloat(r[3])).toFixed(1) + "%", chk: "✓ within" };
+    });
+    return { years: years, rows: rows, val: val };
+  }
+}
+</script>
+</body>
+</html>

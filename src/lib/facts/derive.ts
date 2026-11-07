@@ -11,9 +11,11 @@
 // zero to RATIO_SCALE places; INSTANT metrics carry period_start = period_end (column is not null).
 // Differenced quarters are order-independent: a direct 3M fact wins; conflicting differences = no quarter. ROE with a
 // non-positive average equity is missing. as_of is the UTC date for every market.
-// materialize() reads the envelope, refuses truncated reads (read_truncated), and replaces the
-// issuer's metrics under the envelope's state_rev with one retry on stale_computation.
-import type {Duration,FactRow,FactsDb,Market,MetricDuration,MetricRow} from './types';
+// materialize() follows the plan-3 lineage contract (spec §4.4, T9): target T = targetOf(issuer); the
+// current lineage of T; read_facts_lineage (truncated → read_truncated); every row must belong to the
+// lineage and market; derive for T; replace_financial_metrics_lineage under the envelope's rev
+// vector, one retry on stale_computation (a rev or the lineage moved).
+import type {Duration,FactRow,FactsDb,LineageRev,Market,MetricDuration,MetricRow} from './types';
 import {FactsDbError} from './types';
 import {canonicalDecimal} from './json-numbers';
 import {classifyDuration} from './classify';
@@ -33,7 +35,7 @@ const FIXED_METRICS=['gross_margin','net_margin','fcf','borrowings_total','reven
 export function metricNames(market:Market):string[]{
  return [...FIXED_METRICS,...Q_SINGLE_CONCEPTS[market].flatMap(c=>[`q_single_${c}`,`ttm_${c}`])];
 }
-export interface DeriveOptions{market:Market;asOf:string;basedOnRev?:number}
+export interface DeriveOptions{market:Market;asOf:string;basedOnRev?:number;/** complete lineage vector the rows derive from; default [{issuer_id, basedOnRev}] */basedOn?:LineageRev[]}
 
 // ---- exact decimal arithmetic (value = n / 10^s) ----
 interface Dec{n:bigint;s:number}
@@ -100,7 +102,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  let rows=allRows.filter(r=>r.consolidation==='consolidated');
  if(rows.length===0)return [];
  // as_of is a UTC calendar date for every market (accepted, spec §8).
- const {market,asOf}=opts;const issuerId=rows[0].issuer_id;const basedOnRev=opts.basedOnRev??0;
+ const {market,asOf}=opts;const issuerId=rows[0].issuer_id;const basedOnRev=opts.basedOnRev??0;const basedOn=opts.basedOn??[{issuer_id:issuerId,state_rev:basedOnRev}];
  const facts=currentFacts(rows);
  const of=(concept:string)=>facts.get(concept)??[];
  const unique=<T>(xs:T[])=>xs.length===1?xs[0]:null;
@@ -113,7 +115,7 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  const emit=(metric:string,start:string,end:string,duration:MetricDuration,value:Dec,unit:string,inputUnit:string,basis:string,inputs:Input[])=>{
   const seen=new Set<string>();
   out.push({issuer_id:issuerId,market,metric,period_start:start,period_end:end,duration,value:decToString(value),unit,input_unit:inputUnit,basis,formula_version:FORMULA_VERSION,
-   inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,as_of:asOf});
+   inputs:inputs.filter(i=>{const k=`${i.fact_id}|${i.quarter?.join('~')??''}`;return !seen.has(k)&&!!seen.add(k);}),based_on_rev:basedOnRev,based_on_lineage:basedOn.map(x=>({...x})),as_of:asOf});
  };
  const ratio=(metric:string,ref:Cur&{row:{period_start:string}},num:Dec,den:Dec,basis:string,inputs:Cur[])=>{
   const v=div(num,den);if(v)emit(metric,ref.row.period_start,ref.row.period_end,ref.row.duration,v,'pure',ref.row.unit,basis,inputs.map(x=>inputOf(x)));
@@ -210,17 +212,34 @@ export function deriveMetrics(allRows:FactRow[],opts:DeriveOptions):MetricRow[]{
  return out.sort((a,b)=>cmpStr(key(a),key(b)));
 }
 
-export type MaterializeDb=Pick<FactsDb,'readFacts'|'replaceMetrics'>;
-export interface MaterializeResult{rows:number;stateRev:number;retried:boolean}
-/** as_of = today; the envelope's state_rev guards replace_financial_metrics; stale_computation → re-read and recompute once. */
+export type MaterializeDb=Pick<FactsDb,'targetOf'|'lineageOf'|'readFactsLineage'|'replaceMetricsLineage'>;
+export interface MaterializeResult{rows:number;stateRev:number;retried:boolean;target:string;basedOn:LineageRev[]}
+/**
+ * Rows of a lineage derived for its target T: every row must belong to the lineage and the market
+ * (replaces plan 2's "rows of this issuer only"); issuer ids are relabelled to T so the
+ * single-issuer derivation applies — the recorded issuer stays traceable through inputs[].fact_id.
+ * based_on_rev = T's rev in basedOn; based_on_lineage = basedOn.
+ */
+export function deriveLineageMetrics(rows:FactRow[],target:string,lineage:readonly string[],opts:{market:Market;asOf:string;basedOn:LineageRev[]}):MetricRow[]{
+ const members=new Set(lineage);
+ if(!members.has(target)||rows.some(r=>!members.has(r.issuer_id)||r.market!==opts.market))throw new Error(`derive_scope_mismatch:${target}/${opts.market}`);
+ const own=opts.basedOn.find(x=>x.issuer_id===target);
+ if(!own)throw new Error(`derive_scope_mismatch:${target}/basedOn`);   // the vector must carry the target's rev
+ const basedOnRev=own.state_rev;
+ return deriveMetrics(rows.map(r=>r.issuer_id===target?r:{...r,issuer_id:target}),{market:opts.market,asOf:opts.asOf,basedOnRev,basedOn:opts.basedOn});
+}
+/** as_of = today; materialises T(issuer) over its current lineage (see the header). */
 export async function materialize(db:MaterializeDb,issuer:string,market:Market,opts:{today?:string}={}):Promise<MaterializeResult>{
  const asOf=opts.today??new Date().toISOString().slice(0,10);
  for(let attempt=0;;attempt++){
-  const env=await db.readFacts(issuer,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
-  if(env.truncated)throw new FactsDbError('read_truncated',`read_facts truncated for ${issuer}/${market}`);
-  if(env.rows.some(r=>r.issuer_id!==issuer||r.market!==market))throw new Error(`derive_scope_mismatch:${issuer}/${market}`);
-  const rows=deriveMetrics(env.rows,{market,asOf,basedOnRev:env.stateRev});
-  try{const n=await db.replaceMetrics(issuer,market,env.stateRev,rows);return {rows:n,stateRev:env.stateRev,retried:attempt>0};}
+  // the target is resolved inside each attempt: a merge that makes the first replace stale moves T, and the retry must follow it
+  const target=await db.targetOf(issuer);
+  const lineage=await db.lineageOf(target);
+  const env=await db.readFactsLineage(lineage,market,{concepts:[...DERIVE_CONCEPTS[market]],asOf,history:true});
+  if(env.truncated)throw new FactsDbError('read_truncated',`read_facts_lineage truncated for ${target}/${market}`);
+  const rows=deriveLineageMetrics(env.rows,target,lineage,{market,asOf,basedOn:env.stateRevs});
+  const stateRev=env.stateRevs.find(x=>x.issuer_id===target)?.state_rev??0;
+  try{const n=await db.replaceMetricsLineage(target,market,env.stateRevs,rows);return {rows:n,stateRev,retried:attempt>0,target,basedOn:env.stateRevs};}
   catch(e){if(attempt===0&&e instanceof FactsDbError&&e.code==='stale_computation')continue;throw e;}
  }
 }

@@ -5,6 +5,11 @@
 // strict parameter parsing (repeated parameter → 400 invalid_parameter:<name>), error bodies
 // {error:{code,message}} with no-store, cache headers (past asOf → long shared cache; otherwise
 // bounded by the next UTC midnight like the resolve route), and the public row shapes.
+// Plan 3 (spec §4.3.5, §4.4): tickerAsOf (default today, future → 400) picks the ticker's owner at
+// that date; the answer names the lineage target T (issuerId), its lineage, the cross-issuer
+// conflicts withheld from current values, each row's recordedIssuerId and each filing's acceptedAt.
+// Note: a past asOf answer is cached for 1h (s-maxage=3600) and can change after a LATER merge (the
+// lineage grows); that cache bounds the staleness.
 import {NextResponse} from 'next/server';
 import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';
@@ -12,7 +17,7 @@ import type {TableClient} from '../db/table-client';
 import {isCurrentSecurity,resolveIssuer,successCacheControl} from '../entities/resolve';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {supabaseFactsDb} from './db';
-import type {FactRow,FactsDb,FilingRow,Market} from './types';
+import type {FactRow,FactsDb,FilingRow,LineageConflict,Market} from './types';
 
 export const TICKER_RE=/^[A-Za-z0-9.\/\-]{1,24}$/;
 export const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,6 +52,11 @@ export function asOfParam(p:Map<string,string>,today:string):string{
  const v=dateParam(p,'asOf');if(v===undefined)return today;
  if(v>today)throw new QueryError('asOf');return v;
 }
+/** tickerAsOf defaults to today and may not be in the future. */
+export function tickerAsOfParam(p:Map<string,string>,today:string):string{
+ const v=dateParam(p,'tickerAsOf');if(v===undefined)return today;
+ if(v>today)throw new QueryError('tickerAsOf');return v;
+}
 export function flagParam(p:Map<string,string>,name:string):boolean{
  const v=p.get(name);if(v===undefined)return false;
  if(v!=='1')throw new QueryError(name);return true;
@@ -55,7 +65,7 @@ export function flagParam(p:Map<string,string>,name:string):boolean{
 export const errorResponse=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:{'Cache-Control':'no-store'}});
 export const paramErrorResponse=(e:unknown)=>e instanceof QueryError?errorResponse(e.message,`invalid ${e.param}`,400):null;
 
-export interface PublicIssuer{issuerId:string;ticker:string;market:Market}
+export interface PublicIssuer{issuerId:string;ticker:string;market:Market;tickerAsOf:string;validFromMethod:string|null}
 /** Percent-decoded path segment, or null when malformed. */
 export function decodeTicker(raw:string):string|null{try{return decodeURIComponent(raw);}catch{return null;}}
 /** US forms (incl. dotted share classes such as BRK.A) and CN .SH/.SZ/.BJ are public; anything else (HK, ...) is not. */
@@ -64,33 +74,36 @@ export function publicMarketOf(ticker:string):Market|null{
  return inferCoreMarket(ticker)==='US'?'US':null;
 }
 /**
- * Ticker → issuer by today's ownership (one merge hop is followed by resolveIssuer). resolveIssuer
- * matches the exact upper-cased ticker first and falls back to the normalised one (so BRK.A is never
- * BRK, and 600519 / SH600519 / 600519.SS find 600519.SH). Market and echoed ticker come from the
- * issuer's security row that matches one of those two forms (exact first; for a merged issuer, the source row read directly); none matching, or a
- * market the facts layer does not serve (HK), is null (→ 404 unknown_ticker).
- * Throws Error('ambiguous_owner') through.
+ * Ticker → issuer by ownership AT tickerAsOf (default today; one merge hop is followed by
+ * resolveIssuer, so issuerId is the lineage target). resolveIssuer matches the exact upper-cased
+ * ticker first and falls back to the normalised one (so BRK.A is never BRK, and 600519 / SH600519 /
+ * 600519.SS find 600519.SH). Market, echoed ticker and validFromMethod come from the security row
+ * that matches one of those two forms (exact first; for a merged issuer, the source row read
+ * directly, current at tickerAsOf); none matching, or a market the facts layer does not serve (HK),
+ * is null (→ 404 unknown_ticker). Throws Error('ambiguous_owner') through.
  */
-export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string):Promise<PublicIssuer|null>{
+export async function resolvePublicIssuer(tables:TableClient,rawTicker:string,today:string,tickerAsOf:string=today):Promise<PublicIssuer|null>{
  const given=rawTicker.trim().toUpperCase().replace(/\//g,'.');
- const r=await resolveIssuer(tables,{ticker:given},{today});
+ const r=await resolveIssuer(tables,{ticker:given},{asOf:tickerAsOf});
  if(!r)return null;
  const core=inferCoreMarket(given);
  const normalised=core?normalizeSecurityTicker(given,core):null;
- let ticker=(r.securities.find(x=>x.ticker.toUpperCase()===given)??(normalised?r.securities.find(x=>x.ticker.toUpperCase()===normalised):undefined))?.ticker;
+ const sec=r.securities.find(x=>x.ticker.toUpperCase()===given)??(normalised?r.securities.find(x=>x.ticker.toUpperCase()===normalised):undefined);
+ let ticker=sec?.ticker;let validFromMethod:string|null=sec?.valid_from_method??null;
  if(ticker===undefined){
   // Merged issuer: resolveIssuer returned the TARGET's securities. Read the source row directly
   // (exact ticker first; the first form with any rows is authoritative, like the resolver).
   for(const t of normalised&&normalised!==given?[given,normalised]:[given]){
    const rows=await tables.select('issuer_securities',{ticker:t});
    if(rows.length===0)continue;
-   if(rows.some(x=>isCurrentSecurity(x,today)))ticker=t;
+   const cur=rows.find(x=>isCurrentSecurity(x,tickerAsOf));
+   if(cur){ticker=t;validFromMethod=typeof cur.valid_from_method==='string'?cur.valid_from_method:null;}
    break;
   }
  }
  if(ticker===undefined)return null;
  const market=publicMarketOf(ticker);
- return market?{issuerId:r.issuer_id,ticker,market}:null;
+ return market?{issuerId:r.issuer_id,ticker,market,tickerAsOf,validFromMethod}:null;
 }
 /** Failure → response: ambiguous ownership is the caller's 409, everything else a logged, code-only 500. */
 export function failureResponse(e:unknown,tag:string,internalMessage:string){
@@ -125,5 +138,12 @@ export const FRESH_METRICS_CACHE_CONTROL='public, max-age=0, s-maxage=60';
 
 export type Citation='edgar'|'linked'|'pending';
 export const citationOf=(f:FilingRow):Citation=>f.market==='US'?'edgar':f.document_ref?'linked':'pending';
-export const publicFiling=(f:FilingRow)=>({filingId:f.filing_id,formType:f.form_type,periodEnd:f.period_end,availableDate:f.available_date,sourceRef:f.source_ref,url:f.url,documentRef:f.document_ref,documentUrl:f.document_url,citation:citationOf(f)});
-export const publicFact=(r:FactRow)=>({factId:r.fact_id,concept:r.concept,sourceConcept:r.source_concept,statement:r.statement,periodStart:r.period_start,periodEnd:r.period_end,duration:r.duration,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,mappingGen:r.mapping_gen,rawHash:r.raw_hash});
+export const publicFiling=(f:FilingRow)=>({filingId:f.filing_id,formType:f.form_type,periodEnd:f.period_end,availableDate:f.available_date,sourceRef:f.source_ref,url:f.url,documentRef:f.document_ref,documentUrl:f.document_url,citation:citationOf(f),acceptedAt:f.accepted_at??null,recordedIssuerId:f.issuer_id});
+export const publicFact=(r:FactRow)=>({factId:r.fact_id,concept:r.concept,sourceConcept:r.source_concept,statement:r.statement,periodStart:r.period_start,periodEnd:r.period_end,duration:r.duration,value:r.value_text,unit:r.unit,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,mappingGen:r.mapping_gen,rawHash:r.raw_hash,recordedIssuerId:r.issuer_id});
+export const publicConflict=(c:LineageConflict)=>({key:c.key,availableDate:c.available_date,factIds:c.fact_ids});
+export const publicResolution=(i:PublicIssuer)=>({tickerAsOf:i.tickerAsOf,issuerId:i.issuerId,validFromMethod:i.validFromMethod});
+/** Published filings of every lineage member (spec §4.4), newest available_date first, then filing_id (the order filingsOfIssuer gives one issuer). */
+export async function lineageFilings(db:FactsDb,lineage:readonly string[],market:Market,opts:{from?:string;to?:string}={}):Promise<FilingRow[]>{
+ const all=(await Promise.all(lineage.map(i=>db.filingsOfIssuer(i,market,opts)))).flat().filter(isPublished);
+ return all.sort((a,b)=>a.available_date<b.available_date?1:a.available_date>b.available_date?-1:a.filing_id<b.filing_id?-1:a.filing_id>b.filing_id?1:0);
+}

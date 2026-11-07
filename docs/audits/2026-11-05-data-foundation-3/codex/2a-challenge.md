@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/dq/raw-store.ts:26` | Sidecar paths discard the extension. Identical bytes stored as `hkex/<sha>.zip` and `.xlsx` collide at `<sha>.meta.json`. Reproduced: Supabase reports the second object stored but retains the first object’s MIME/provenance; the memory implementation instead overwrites the first sidecar. This falsifies metadata and makes tests diverge from production. | Include the complete object filename in the sidecar address, or reject conflicting variants. Test both implementations for cross-extension collisions and immutable metadata. |
+| 2 | P2 | `src/lib/dq/raw-store.ts:54` | Credential filtering examines undecoded string values only. Reproduced: `meta.url='https://example.test/?%61pi_key=SECRET'` passes and persists the credential; a direct `meta.api_key='SECRET'` also passes. Secrets can enter immutable evidence despite the intended credential guard. | Reject credential-bearing metadata keys and inspect URL parameters through a URL parser that decodes parameter names. Add regression tests asserting rejection before either upload. |
+
+Verdict: fix required

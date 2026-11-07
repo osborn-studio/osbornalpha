@@ -6,6 +6,7 @@ import {
 } from '@/lib/admin/auth';
 import { supabaseTableClient } from '@/lib/db/table-client';
 import { loadDqDashboard, parseDqQuery } from '@/lib/dq/dashboard';
+import { restoreInputsHashNow } from '@/lib/dq/reconcile/deps';
 import { getAdminSupabase } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
@@ -15,8 +16,11 @@ export async function GET(request: Request) {
     await requireAdminUser();
     const parsed = parseDqQuery(new URL(request.url).searchParams);
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
-    const client = supabaseTableClient(getAdminSupabase());
-    return NextResponse.json(await loadDqDashboard(client, parsed.query, new Date()));
+    const admin = getAdminSupabase();
+    const client = supabaseTableClient(admin);
+    return NextResponse.json(
+      await loadDqDashboard(client, parsed.query, new Date(), { inputsHashNow: restoreInputsHashNow(admin) }),
+    );
   } catch (error) {
     if (error instanceof AdminUnauthenticated) {
       return NextResponse.json({ error: 'authentication required' }, { status: 401 });

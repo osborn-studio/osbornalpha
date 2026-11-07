@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
-import {loadDqDashboard,parseDqQuery,summarizeDq,within} from './dashboard';
+import {RESTORABLE_CHECK_MAX,RESTORABLE_CONCURRENCY,dashboardDatasets,loadDqDashboard,parseDqQuery,summarizeDq,restorableOf,withRestorable,within} from './dashboard';
+import {DQ_DATASET_NAMES} from './datasets';
 import type {Row,SelectOptions,TableClient} from '../db/table-client';
 
 describe('summarizeDq',()=>{
@@ -18,6 +19,13 @@ describe('summarizeDq',()=>{
    openQuarantineTotal:14,
    failedReconciliationsTotal:3,
   });
+ });
+});
+
+describe('dashboardDatasets',()=>{
+ it('is the registry plus every loaded dataset and the selection, unique and sorted',()=>{
+  expect(dashboardDatasets(['macro.cpi','facts.us',null,'',42],'zz.selected')).toEqual([...new Set([...DQ_DATASET_NAMES,'macro.cpi','zz.selected'])].sort());
+  expect(dashboardDatasets([])).toEqual([...DQ_DATASET_NAMES].sort());
  });
 });
 
@@ -62,6 +70,16 @@ describe('parseDqQuery',()=>{
  });
 });
 
+describe('parseDqQuery market',()=>{
+ const q=(s:string)=>parseDqQuery(new URLSearchParams(s));
+ it('accepts market US|CN once and rejects anything else',()=>{
+  expect(q('market=US')).toEqual({ok:true,query:{dataset:undefined,page:1,pageSize:50,market:'US'}});
+  expect(q('market=CN&dataset=facts.cn')).toEqual({ok:true,query:{dataset:'facts.cn',page:1,pageSize:50,market:'CN'}});
+  expect(q('market=')).toEqual({ok:true,query:{dataset:undefined,page:1,pageSize:50}});
+  for(const s of ['market=HK','market=us','market=US&market=CN'])expect(q(s)).toEqual({ok:false,error:'invalid_market'});
+ });
+});
+
 describe('loadDqDashboard',()=>{
  const stub=(counts:(table:string,match:Row)=>number)=>{
   const calls:{op:string;table:string;match:Row;opts?:SelectOptions}[]=[];
@@ -69,6 +87,7 @@ describe('loadDqDashboard',()=>{
    insert:async()=>{throw new Error('read only');},
    update:async()=>{throw new Error('read only');},
    upsert:async()=>{throw new Error('read only');},
+   rpc:async(fn)=>{if(fn!=='dq_reconcile_failed_counts')throw new Error('read only');return [];},
    count:async(table,match)=>{calls.push({op:'count',table,match});return counts(table,match);},
    select:async(table,match,opts)=>{
     calls.push({op:'select',table,match,opts});
@@ -94,6 +113,8 @@ describe('loadDqDashboard',()=>{
   const page=calls.find(c=>c.op==='select'&&c.table==='dq_quarantine');
   expect(page?.match).toEqual({status:'open',dataset:'facts.us'});
   expect(page?.opts).toMatchObject({limit:50,offset:50,orderBy:'created_at',desc:true});
+  expect(out.datasets).toEqual(expect.arrayContaining(['entities.sec','dq.calendar.cn','reconcile.facts.lineage_same_day','facts.us']));
+  expect(out.datasets).toEqual([...out.datasets].sort());
  });
 
  it('without a dataset filter both totals come from the same global count',async()=>{
@@ -101,5 +122,69 @@ describe('loadDqDashboard',()=>{
   const out=await loadDqDashboard(client,{page:1,pageSize:50},new Date('2026-11-04T12:00:00Z'));
   expect(out.summary.openQuarantineTotal).toBe(9);
   expect(out.quarantine.total).toBe(9);
+ });
+ it('adds the calendar, claims and per-pair blocks; the calendar rows follow the market filter',async()=>{
+  const {client,calls}=stub(()=>0);
+  const out=await loadDqDashboard(client,{page:1,pageSize:50,market:'CN'},new Date('2026-11-04T12:00:00Z'));
+  expect(out.calendar).toMatchObject({overdueByMarket:{US:0,CN:0},rows:[],noRuleRows:[]});
+  expect(out.claims).toEqual({rows:[],total:0,securitiesByIssuer:{}});
+  expect(Object.keys(out.reconciliationsByPair)).toHaveLength(7);
+  const calSelects=calls.filter(c=>c.op==='select'&&c.table==='dq_filing_expectations');
+  expect(calSelects.length).toBeGreaterThan(0);
+  expect(calSelects.every(c=>c.match.market==='CN')).toBe(true);
+  const calCounts=calls.filter(c=>c.op==='count'&&c.table==='dq_filing_expectations').map(c=>c.match.market);
+  expect(new Set(calCounts)).toEqual(new Set(['US','CN']));
+ });
+
+ it('computes restorable on the server for reconcile_mismatch rows only',async()=>{
+  const mk=(id:string,reason:string):Row=>({id,dataset:'reconcile.x',status:'open',reason_code:reason,detail:{latest_result:{passed:true,inputs_hash:'h'}}});
+  const rows=[mk('q1','reconcile_mismatch'),mk('q2','reconcile_mismatch'),mk('q3','same_day_conflict')];
+  const {client}=stub(()=>0);
+  const c2:TableClient={...client,select:async(table)=>table==='dq_quarantine'?rows:[]};
+  const now=new Date('2026-11-04T12:00:00Z');
+  const withHash=await loadDqDashboard(c2,{page:1,pageSize:50},now,{inputsHashNow:async item=>item.id==='q1'?'h':'x'});
+  expect(withHash.quarantine.rows.map(r=>r.restorable)).toEqual([true,false,undefined]);
+  expect(withHash.quarantine.rows.map(r=>r.restorable_checked)).toEqual([true,true,undefined]);
+  expect('restorable' in withHash.quarantine.rows[2]).toBe(false);
+  const without=await loadDqDashboard(c2,{page:1,pageSize:50},now);
+  expect(without.quarantine.rows.map(r=>r.restorable)).toEqual([false,false,undefined]);
+  expect(without.quarantine.rows.map(r=>r.restorable_checked)).toEqual([false,false,undefined]);
+  const unavailable=await loadDqDashboard(c2,{page:1,pageSize:50},now,{inputsHashNow:async()=>({unavailable:'inputs_unavailable'})});
+  expect(unavailable.quarantine.rows[0].restorable).toBe(false);
+ });
+});
+
+describe('withRestorable (bounded restore checks)',()=>{
+ const mk=(i:number,over:Row={}):Row=>({id:`q${i}`,dataset:'reconcile.x',natural_key:`k${i}`,reason_code:'reconcile_mismatch',detail:{latest_result:{passed:true,inputs_hash:'h'}},...over});
+ it('checks at most RESTORABLE_CHECK_MAX rows, the rest are unchecked and not restorable',async()=>{
+  const rows=Array.from({length:RESTORABLE_CHECK_MAX+5},(_,i)=>mk(i));
+  let calls=0;
+  const out=await withRestorable(rows,async()=>{calls++;return 'h';});
+  expect(calls).toBe(RESTORABLE_CHECK_MAX);
+  expect(out.slice(0,RESTORABLE_CHECK_MAX).every(r=>r.restorable===true&&r.restorable_checked===true)).toBe(true);
+  expect(out.slice(RESTORABLE_CHECK_MAX).every(r=>r.restorable===false&&r.restorable_checked===false)).toBe(true);
+ });
+ it('rows that cannot be restorable from the stored result do not use the check budget',async()=>{
+  const dead=Array.from({length:30},(_,i)=>mk(100+i,{detail:{latest_result:{passed:false,inputs_hash:'h'}}}));
+  let calls=0;
+  const out=await withRestorable([...dead,mk(1)],async()=>{calls++;return 'h';});
+  expect(calls).toBe(1);
+  expect(out[30]).toMatchObject({restorable:true,restorable_checked:true});
+  expect(out[0]).toMatchObject({restorable:false,restorable_checked:true});
+ });
+ it('memoises per (dataset, natural_key) and runs at most RESTORABLE_CONCURRENCY at once',async()=>{
+  const rows=[mk(1),mk(1,{id:'dupe'}),mk(2),mk(3),mk(4),mk(5),mk(6),mk(7)];
+  const seen:string[]=[];let active=0,peak=0;
+  const out=await withRestorable(rows,async item=>{seen.push(String(item.natural_key));active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,5));active--;return 'h';});
+  expect(seen.filter(k=>k==='k1')).toHaveLength(1);
+  expect(out.every(r=>r.restorable===true)).toBe(true);
+  expect(peak).toBeGreaterThan(1);expect(peak).toBeLessThanOrEqual(RESTORABLE_CONCURRENCY);
+ });
+ it('a throwing hash function, and a failed latest_result whose hash matches, are not restorable',async()=>{
+  expect(await restorableOf(mk(1),async()=>{throw new Error('boom');})).toBe(false);
+  expect((await withRestorable([mk(1)],async()=>{throw new Error('boom');}))[0]).toMatchObject({restorable:false,restorable_checked:true});
+  const failed=mk(2,{detail:{latest_result:{passed:false,inputs_hash:'h'}}});
+  expect(await restorableOf(failed,async()=>'h')).toBe(false);
+  expect((await withRestorable([failed],async()=>'h'))[0].restorable).toBe(false);
  });
 });

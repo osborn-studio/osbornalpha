@@ -1,0 +1,14 @@
+{
+ "recorded_at": "2026-11-06T12:52:14.729Z",
+ "sha256": "0e114d57cf6721eef6731d8e657bce312cdcc1951e97fd3aa44cc7dbc2035489",
+ "http_status": 200,
+ "has_more": false,
+ "params": {
+  "ts_code": "000333.SZ",
+  "start_date": "20160101",
+  "report_type": "4",
+  "limit": 2000,
+  "offset": 0
+ },
+ "fields": "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,total_assets,total_liab,total_hldr_eqy_exc_min_int,total_hldr_eqy_inc_min_int,money_cap,st_borr,lt_borr,bond_payable,total_share"
+}

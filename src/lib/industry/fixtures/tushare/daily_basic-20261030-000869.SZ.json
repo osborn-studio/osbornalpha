@@ -1,0 +1,60 @@
+{
+ "request": {
+  "api_name": "daily_basic",
+  "params": {
+   "ts_code": "000869.SZ",
+   "trade_date": "20261030"
+  },
+  "fields": "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv"
+ },
+ "response_sha256": "86bb6908de638750d8c31e31200ba7d2f2533e735a9949c26240c7e399d33967",
+ "request_id": "71d5f222-762e-4b61-a0d4-76ac4a55e1ef",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "ts_code",
+   "trade_date",
+   "close",
+   "turnover_rate",
+   "turnover_rate_f",
+   "volume_ratio",
+   "pe",
+   "pe_ttm",
+   "pb",
+   "ps",
+   "ps_ttm",
+   "dv_ratio",
+   "dv_ttm",
+   "total_share",
+   "float_share",
+   "free_share",
+   "total_mv",
+   "circ_mv"
+  ],
+  "items": [
+   [
+    "000869.SZ",
+    "20261030",
+    16.91,
+    0.4974,
+    2.0655,
+    0.68,
+    152.5834,
+    309.0315,
+    1.0656,
+    3.6397,
+    3.4794,
+    2.3766,
+    1.4784,
+    64328.0128,
+    45505.562,
+    10958.1764,
+    1087786.6964,
+    769499.0534
+   ]
+  ],
+  "has_more": false,
+  "count": 0
+ }
+}

@@ -1,0 +1,7 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P1 | `src/lib/entities/cninfo-org-id.ts:59–60` | **Concurrent updates lose evidence.** The update replaces the entire provenance object using the snapshot captured by `cninfoTargets`. Reproduced: a concurrent LEI update survives, but its provenance disappears after CNINFO filling. The null/status guards do not protect other provenance keys. | Atomically merge only `cninfo_org_id` provenance in SQL while performing the guarded identifier update. Add an interleaving regression test. |
+| 2 | P2 | `src/lib/entities/cninfo-org-id.ts:43–49` | **Unsuccessful lookups discard raw evidence.** A no-hit response exits before storage; HTTP/parsing errors likewise retain only an error message. Reproduced: a no-hit lookup stores zero objects. Reported missing results cannot be replayed or distinguished from upstream response changes. | Capture and store every received response in apply mode before interpreting it, and reference its hash in lookup outcomes/errors. Preserve dry-run’s zero-write behavior. |
+| 3 | P2 | `scripts/entity-keys/fill-identifiers.ts:85` | **Filesystem modification time is asserted as the GLEIF download date.** Copying, extracting, restoring, or touching the CSV can change this value independently of downloading it, producing false acquisition metadata in the immutable evidence sidecar. | Accept an explicit download timestamp or verified download receipt. If unavailable, leave it unknown; record filesystem mtime separately if useful. |
+
+Verdict: fix required

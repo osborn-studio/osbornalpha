@@ -1,0 +1,34 @@
+{
+ "request": {
+  "api_name": "index_member_all",
+  "params": {
+   "l1_code": "801780.SI",
+   "is_new": "N",
+   "limit": 2000,
+   "offset": 0
+  },
+  "fields": "l1_code,l1_name,l2_code,l2_name,l3_code,l3_name,ts_code,name,in_date,out_date,is_new"
+ },
+ "response_sha256": "2ab266a1388eccfbf956131101abb3574826df2ea4feb1100ef81e247da18c84",
+ "request_id": "048ec5e1-53e0-4436-845c-a5b7ddcdd04b",
+ "code": 0,
+ "msg": "",
+ "data": {
+  "fields": [
+   "l1_code",
+   "l1_name",
+   "l2_code",
+   "l2_name",
+   "l3_code",
+   "l3_name",
+   "ts_code",
+   "name",
+   "in_date",
+   "out_date",
+   "is_new"
+  ],
+  "items": [],
+  "has_more": false,
+  "count": 0
+ }
+}

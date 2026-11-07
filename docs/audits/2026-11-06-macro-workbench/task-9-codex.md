@@ -1,0 +1,7 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T9-1 | P2 | src/app/api/macro/ingest/route.ts:114 | Parser failure discards valid, hash-verified official evidence before storage. The completed chunk retains only an error code; the failed response cannot be investigated or replayed. | Persist accepted bytes and retrieval metadata before parsing; retain the retrieval ID with parser failures. |
+| T9-2 | P2 | src/app/api/macro/ingest/route.ts:191 | Derivation writes and its checkpoint are separate. A crash between them makes retry report committed inserts/version revisions as duplicates, losing the actual batch outcome counts. | Persist derivation outcomes atomically with writes, keyed by batch and derivation operation; replay those outcomes when resuming. |
+| T9-3 | P2 | src/app/api/macro/ingest/route.ts:195 | Resumed finish recomputes counts/errors from the new request’s `series_outcomes`, even after batch finalization. Changed retry payloads can produce receipts and freshness details inconsistent with persisted batch failures. | Freeze and validate finish inputs on first finish; use persisted outcomes on every retry and reject conflicting payloads. |
+
+Verdict: fix P1/P2

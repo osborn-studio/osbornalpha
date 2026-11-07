@@ -11,6 +11,12 @@ import { Pool, type PoolConfig } from 'pg';
  * pool.end() resolves before the server has processed each Terminate, so a cluster stopped
  * synchronously right afterwards can still deliver FATAL 57P01 to a half-closed client.
  * Report only the SQLSTATE: no message, host or credentials reach the log. */
+/** Schemas the migrations expect from Supabase (auth, storage.buckets); roles are created separately because they are cluster-wide. */
+export const SCHEMA_BOOTSTRAP_SQL = `create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
+  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+  create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;
+  create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`;
+
 export function ownedPool(config: PoolConfig): Pool {
   const pool = new Pool(config);
   pool.on('error', error => { console.error('owned pool idle client error', { code: (error as { code?: string }).code ?? 'unknown' }); });
@@ -65,11 +71,7 @@ export async function startLocalDatabase(options: { rehearsalDefaultTableGrants?
   const runtimeUrl = `postgres://s4_app:${appPassword}@127.0.0.1:${port}/postgres`;
   started = true;
   admin = ownedPool({ connectionString:adminUrl, connectionTimeoutMillis: 5000, statement_timeout: 30000 });
-    await admin.query(`create role postgres nologin superuser; create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
-      create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
-      create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
-      create function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role',true) $$;
-      create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`);
+    await admin.query(`create role postgres nologin superuser; create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;\n${SCHEMA_BOOTSTRAP_SQL}`);
     if (options.rehearsalDefaultTableGrants) {
       await admin.query('grant usage on schema public to anon, authenticated, service_role; alter default privileges for role s4_admin in schema public grant all on tables to anon, authenticated, service_role;');
     }

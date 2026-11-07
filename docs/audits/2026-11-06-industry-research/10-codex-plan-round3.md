@@ -1,0 +1,15 @@
+Read-only audit; no files changed or tests executed. Statuses assess the proposed plan.
+
+References below are line numbers in [the plan](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/industry-research-fa303d/docs/superpowers/plans/2026-11-06-industry-research.md).
+
+| Finding | Priority | Status | Evidence and required fix |
+|---|---|---|---|
+| **R2-1 — GC reclaim race** | P1 | **RESOLVED** | New registrations receive distinct object paths (**3693–3704**); collectors retain the claimed path and token (**3709–3750**); storage deletion targets that exact path (**9637–9655**). The reclaim → re-upload → stale-delete test checks that the new object survives (**9458–9478**). No additional defect found in this fix. |
+| **R2-2 — delist conflicts remain eligible** | P1 | **PARTIAL** | Ordinary truncation now atomically supersedes the old rows and inserts corrected successors (**3114–3153**), with a two-run regression (**7574–7602**). **A delisting on or before an already-resolved window’s start still fails correction and leaves the old rows `ok`.** See R3-1 below. |
+| **R2-3 — unfenced SIC writes** | P2 | **PARTIAL** | Scope ownership is checked under a transaction-held row lock before membership/provenance writes (**3174–3183**); takeover rejection is covered at **8257–8270**. This resolves writes after takeover, but the expiry check uses transaction-start time. See R3-2 below. |
+| **R3-1 — empty/negative corrected windows fail open** | **P1** | **OPEN** | **7772–7788** sends `targetsFor` directly to correction without the `in_date >= delist_date` guard used for unresolved records at **7701–7702**. Example: an existing closed window `[2021-07-30, 2022-01-01)` later receives delisting `2021-04-12`. The replacement is invalid; the transaction rolls back, and reconciliation only creates a quarantine record. Aggregation still reads the unchanged `ok` membership (**10172–10180**). **Fix:** atomically mark the affected memberships `quarantined` when no valid interval remains, or block affected publication until resolved. Add two-run tests for delisting both before and exactly on `valid_from`, asserting exclusion from aggregation. |
+| **R3-2 — lease expiry can pass after a lock wait** | **P2** | **OPEN** | **3174–3178** first waits for the issuer lock, then checks `lease_until > now()`. A transaction beginning before expiry can acquire the lock after expiry and still write if takeover has not occurred. PostgreSQL’s `now()` remains fixed at transaction start. **Fix:** acquire the scope row lock, then separately validate ownership and `lease_until > clock_timestamp()` before any mutation. Add a two-connection test that holds the issuer lock across expiry and asserts `lease_lost` with no membership or provenance changes. [PostgreSQL timing semantics](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT) |
+
+No separate P3 findings. R3-1 is the remaining P1 blocker within the requested scope.
+
+**not ready**

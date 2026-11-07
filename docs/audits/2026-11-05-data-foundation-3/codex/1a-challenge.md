@@ -1,0 +1,6 @@
+| # | Severity P1/P2/P3 | File:line | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/entities/securities.ts:52` | New `source='curated'` rows omit `valid_from_method`, so PostgreSQL labels their manually supplied historical start dates `first_observed`. The landed research-link writer uses this path. Equivalent pre-migration rows receive `curated`, and migration replay deliberately cannot repair subsequent rows. | Set `valid_from_method` to `curated` for curated inputs, otherwise `first_observed`. Test a curated insertion after migration and verify replay preserves its method. |
+| 2 | P2 | `supabase/migrations/20261107090000_identifiers_and_dq.sql:226` | `dfe_received_iff` allows partially populated receipt evidence for non-received states. For example, `pending`, `upstream_lookup='unavailable'`, a non-null `received_filing_id`, and null `received_date` passes **both** receipt and upstream constraints, bypassing required `unknown_upstream`. This gap is inherited from the plan; the “every combination” tests miss it. | Require receipt ID/date to be jointly null or jointly non-null, alongside the existing state equivalence. Add rejection tests for both partial combinations, including unavailable upstream. |
+
+Verdict: fix required

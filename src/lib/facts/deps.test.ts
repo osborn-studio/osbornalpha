@@ -1,10 +1,17 @@
 // src/lib/facts/deps.test.ts
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {memoryRawStore} from '../dq/raw-store';
 import {cninfoLinker,productionSyncDeps,resolveCodeVersion} from './deps';
 import {coverageSummary,parseTushareStatements} from './providers/tushare-statements';
 import {loadTushareFixtures} from './providers/tushare-fixtures';
 import type {Budget,FactsDb,FilingRow} from './types';
+
+// Per-test overrides for the production wiring's Supabase-backed collaborators (null = the real factory).
+const over=vi.hoisted(()=>({facts:null as unknown,tables:null as unknown,raw:null as unknown}));
+vi.mock('./db',async importOriginal=>{const o=await importOriginal<typeof import('./db')>();return {...o,supabaseFactsDb:((sb:never)=>over.facts??o.supabaseFactsDb(sb)) as typeof o.supabaseFactsDb};});
+vi.mock('../db/table-client',async importOriginal=>{const o=await importOriginal<typeof import('../db/table-client')>();return {...o,supabaseTableClient:((sb:never)=>over.tables??o.supabaseTableClient(sb)) as typeof o.supabaseTableClient};});
+vi.mock('../dq/raw-store',async importOriginal=>{const o=await importOriginal<typeof import('../dq/raw-store')>();return {...o,supabaseRawStore:((sb:never)=>over.raw??o.supabaseRawStore(sb)) as typeof o.supabaseRawStore};});
 
 const SHA='c'.repeat(40);
 const original=process.env.VERCEL_GIT_COMMIT_SHA;
@@ -24,7 +31,7 @@ describe('resolveCodeVersion',()=>{
 
 describe('cninfoLinker',()=>{
  const budget=():Budget=>({remainingMs:()=>300_000,signal:new AbortController().signal});
- const filing=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:'g',issuer_id:'I',market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2024,fiscal_period:'FY',period_end:'2024-12-31',available_date:'2025-04-03',source_ref:'600519.SH:20241231:1:20250403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2025-04-03T00:00:00Z',...p});
+ const filing=(p:Partial<FilingRow>={}):FilingRow=>({filing_id:'g',issuer_id:'I',market:'CN',source:'tushare',origin:'sse',form_type:'annual',fiscal_year:2024,fiscal_period:'FY',period_end:'2024-12-31',available_date:'2025-04-03',source_ref:'600519.SH:20241231:1:20250403',url:null,document_ref:null,document_url:null,link_attempts:0,mapping_gen:1,run_id:'r',created_at:'2025-04-03T00:00:00Z',accepted_at:null,acceptance_source:null,...p});
  const fakeDb=(filings:FilingRow[])=>({filingsOfIssuer:async()=>filings}) as unknown as Pick<FactsDb,'filingsOfIssuer'>;
  async function tablesWithMoutai(){
   const tables=memoryTableClient({issuers:['issuer_id']});
@@ -33,15 +40,46 @@ describe('cninfoLinker',()=>{
   await tables.insert('issuer_securities',{issuer_id:'I',ticker:'600519.OLD',is_primary:true,valid_from:'1990-01-01',valid_to:'2001-08-26'});
   return tables;
  }
- it('resolves ts_code and org id once per issuer, queries cninfo with the collector body, and flags a type-1 filing with a type-5 sibling as corrected',async()=>{
+ it('resolves ts_code and org id once per issuer, queries cninfo with the collector body, and flags a type-1 filing with an earlier type-1 sibling as corrected',async()=>{
   const bodies:string[]=[];
   const fetch=vi.fn(async(_input:RequestInfo|URL,init?:RequestInit)=>{bodies.push(String(init?.body));return new Response(JSON.stringify({announcements:[{announcementId:'2',announcementTitle:'贵州茅台：关于2024年年度报告的更正公告',adjunctUrl:'finalpage/2025-04-03/2.PDF'}],hasMore:false}),{status:200});});
-  const db=fakeDb([filing(),filing({filing_id:'h',source_ref:'600519.SH:20241231:5:20250301',available_date:'2025-03-01'})]);
+  const db=fakeDb([filing(),filing({filing_id:'h',source_ref:'600519.SH:20241231:1:20250301',available_date:'2025-03-01'})]);
   const link=cninfoLinker(await tablesWithMoutai(),db,{fetch,minIntervalMs:0});
   expect(await link(filing(),budget())).toEqual({document_ref:'2',document_url:'https://static.cninfo.com.cn/finalpage/2025-04-03/2.PDF'});   // corrected → a 更正 title is the match
   expect(bodies[0]).toContain('stock=600519%2C9900000227');expect(bodies[0]).toContain('column=sse');expect(bodies[0]).toContain('seDate=2025-03-31%7E2025-04-06');
   expect(await link(filing({filing_id:'q',form_type:'q1',period_end:'2024-03-31',source_ref:'600519.SH:20240331:1:20240426',available_date:'2024-04-26'}),budget())).toBe('none');   // not corrected → 更正 title excluded
   expect(fetch).toHaveBeenCalledTimes(2);   // issuer context is cached: only the two hisAnnouncement queries
+ });
+ describe('correction classifier (earliest rt1 date is the original publication)',()=>{
+  const row=(ref:string,avail?:string)=>{const d=ref.split(':')[3];return filing({filing_id:ref,fiscal_year:2025,fiscal_period:'H1',form_type:'semiannual',period_end:'2025-06-30',source_ref:ref,available_date:avail??`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`});};
+  async function flags(rows:FilingRow[]){
+   const tables=memoryTableClient({issuers:['issuer_id']});
+   await tables.insert('issuers',{issuer_id:'I',cninfo_org_id:'9900000227',status:'active'});
+   await tables.insert('issuer_securities',{issuer_id:'I',ticker:'000858.SZ',is_primary:true,valid_from:'1998-04-27',valid_to:null});
+   // both an ordinary and a 更正 announcement come back: only the corrected flag decides which one matches
+   const fetch=vi.fn(async()=>new Response(JSON.stringify({announcements:[{announcementId:'9',announcementTitle:'五粮液：2025年半年度报告',adjunctUrl:'finalpage/2025-08-28/9.PDF'},{announcementId:'8',announcementTitle:'五粮液：关于2025年半年度报告的更正公告',adjunctUrl:'finalpage/2026-04-30/8.PDF'}],hasMore:false}),{status:200}));
+   const link=cninfoLinker(tables,fakeDb(rows),{fetch,minIntervalMs:0,today:'2026-11-06'});
+   const out:Record<string,string|undefined>={};
+   for(const r of rows){const x=await link(r,budget());out[r.source_ref]=typeof x==='object'?x.document_ref:x;}
+   return out;
+  }
+  it('000858.SZ shape: original rt1 is not corrected, the later rt1 is; rt5 is irrelevant',async()=>{
+   const o=row('000858.SZ:20250630:1:20250828'),c=row('000858.SZ:20250630:1:20260430'),r5=row('000858.SZ:20250630:5:20250828');
+   const f=await flags([o,c,r5]);
+   expect(f[o.source_ref]).toBe('9');expect(f[c.source_ref]).toBe('8');
+  });
+  it('two corrections D0<D1<D2: D1 and D2 are corrected, D0 is not',async()=>{
+   const d0=row('000858.SZ:20250630:1:20250828'),d1=row('000858.SZ:20250630:1:20260430'),d2=row('000858.SZ:20250630:1:20260630');
+   const f=await flags([d2,d0,d1]);
+   expect(f[d0.source_ref]).toBe('9');expect(f[d1.source_ref]).toBe('8');expect(f[d2.source_ref]).toBe('8');
+  });
+  it('rt5 present only for a later correction does not mark the single rt1 as corrected; a lone rt1 and malformed dates are not corrected',async()=>{
+   const only=row('000858.SZ:20250630:1:20250828'),r5=row('000858.SZ:20250630:5:20260430');
+   expect((await flags([only,r5]))[only.source_ref]).toBe('9');
+   const bad=row('000858.SZ:20250630:1:2025082','2025-08-28'),ok=row('000858.SZ:20250630:1:20260430');
+   const f=await flags([bad,ok]);
+   expect(f[bad.source_ref]).toBe('9');expect(f[ok.source_ref]).toBe('9');   // no valid earlier date → nothing is corrected
+  });
  });
  it("answers 'unlinkable' (no attempt consumed) without touching the network when the issuer has no current A-share listing",async()=>{
   const tables=memoryTableClient({issuers:['issuer_id']});
@@ -90,7 +128,7 @@ describe('productionSyncDeps',()=>{
   process.env.NEXT_PUBLIC_SUPABASE_URL='https://example.supabase.co';process.env.SUPABASE_SERVICE_ROLE_KEY='service-role-test-key';   // createClient never connects at construction
   try{
    const deps=productionSyncDeps({deadline:null,codeVersion:'c'.repeat(40)});
-   for(const k of ['fetchUs','fetchCn','parseUs','parseCn','linkCn','coverageCn','now'] as const)expect(typeof deps[k],k).toBe('function');
+   for(const k of ['fetchUs','fetchCn','parseUs','parseCn','linkCn','coverageCn','enrichAcceptance','now'] as const)expect(typeof deps[k],k).toBe('function');
    expect(deps.coverageCn).toBe(coverageSummary);
    const parsed=parseTushareStatements(loadTushareFixtures('600519.SH'),{sinceYear:2014});
    expect(deps.coverageCn!(parsed)).toEqual(coverageSummary(parsed));
@@ -103,3 +141,30 @@ describe('productionSyncDeps',()=>{
  });
 });
 
+
+describe('productionSyncDeps step 9b date-mismatch recording (plan 3 Task 14c)',()=>{
+ afterEach(()=>{over.facts=null;over.tables=null;over.raw=null;vi.unstubAllGlobals();});
+ it('writes a sec.filing_date_vs_submissions row (cycle-less, no batch) when the submissions filingDate differs from available_date',async()=>{
+  const tables=memoryTableClient({});
+  const availableDate=new Date(Date.now()-10*86_400_000).toISOString().slice(0,10);
+  const filing={filing_id:'F1',issuer_id:'I',market:'US',source:'edgar',source_ref:'0000320193-26-000001',available_date:availableDate,accepted_at:null} as unknown as FilingRow;
+  const setAcceptance=vi.fn(async()=>true);
+  over.facts={filingsOfIssuer:async()=>[filing],setFilingAcceptance:setAcceptance};over.tables=tables;over.raw=memoryRawStore();
+  const main={cik:'320193',name:'Apple',tickers:[],exchanges:[],filings:{recent:{accessionNumber:[filing.source_ref],filingDate:['2020-01-02'],form:['10-K'],acceptanceDateTime:['2020-01-02T06:00:00.000Z']},files:[]}};
+  const fetchStub=vi.fn(async()=>new Response(JSON.stringify(main),{status:200,headers:{'content-type':'application/json'}}));
+  vi.stubGlobal('fetch',fetchStub);
+  const deps=productionSyncDeps({deadline:null,codeVersion:SHA,admin:{} as never});
+  const budget:Budget={remainingMs:()=>300_000,signal:new AbortController().signal};
+  const out=await deps.enrichAcceptance!('I','0000320193',budget);
+  expect(fetchStub).toHaveBeenCalledTimes(1);
+  expect(out.mismatches).toHaveLength(1);
+  expect(setAcceptance).not.toHaveBeenCalled();   // a mismatching filing is not stamped
+  const rows=await tables.select('dq_reconciliations',{pair:'sec.filing_date_vs_submissions'});
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({dataset:'reconcile.sec.filing_date_vs_submissions',kind:'date',outcome:'compared',passed:false,batch_id:null,cycle_id:null,issuer_id:null,natural_key:`320193:${filing.source_ref}`});
+  expect(rows[0].detail).toMatchObject({left_text:availableDate,right_text:'2020-01-02'});
+  // a second run over the same evidence adds no row (recorder dedupe)
+  await productionSyncDeps({deadline:null,codeVersion:SHA,admin:{} as never}).enrichAcceptance!('I','0000320193',budget);
+  expect(await tables.select('dq_reconciliations',{pair:'sec.filing_date_vs_submissions'})).toHaveLength(1);
+ });
+});

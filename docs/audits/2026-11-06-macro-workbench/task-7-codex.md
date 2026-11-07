@@ -1,0 +1,7 @@
+| id | P1/P2/P3 | file:line | defect | concrete fix |
+|---|---|---|---|---|
+| T7-1 | P2 | src/app/api/cron/macro-sync/route.ts:44 | Parsing precedes evidence storage. A malformed CSV throws and discards the fetched bytes and retrieval metadata; only an error code survives, preventing investigation/replay (§4.4). | Persist bytes and retrieval before parsing on real runs; retain the retrieval ID with parse failures. Keep preview write-free. |
+| T7-2 | P2 | src/app/api/cron/macro-sync/route.ts:80 | Any eligible observation marks backfill complete. If an initial 1,000-row write chunk fails but later chunks succeed, the batch becomes partial; subsequent runs use the recent window and never recover older missing periods. | Track successful full-backfill completion per series; retain the full window until all chunks complete without write failures. |
+| T7-3 | P2 | src/app/api/cron/macro-sync/route.ts:84 | Fetch/parse failures append errors without incrementing `failed`. Even an all-provider-failed run reports `failed:0`, violating §§4.4/11 and understating persisted DQ failures. | Increment native and aggregate failure counters once per failed series; assert persisted counts for partial and all-failed runs. |
+
+Verdict: fix P1/P2

@@ -3,6 +3,7 @@ import {memoryTableClient} from '../db/memory-table-client';
 import {TableError} from '../db/table-client';
 import type {Row} from '../db/table-client';
 import {upsertIssuerByIdentifiers} from './issuers';
+import {ProvenanceError} from './provenance';
 import {attachSecurity} from './securities';
 import type {IssuerInput} from './types';
 
@@ -53,9 +54,12 @@ describe('upsertIssuerByIdentifiers',()=>{
  it('treats a 23505 on claim insert as an already-filed claim',async()=>{
   const c=client();
   await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_APPLE,canonical_name_en:'Apple'});
-  const base=c.insert.bind(c);
+  expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});   // the winner's pending claim
+  const base=c.insert.bind(c),select=c.select.bind(c);let blind=true;
+  c.select=async(t,m,o)=>{if(t==='issuer_identifier_claims'&&blind){blind=false;return [];}return select(t,m,o);};
   c.insert=async(t,row)=>{if(t==='issuer_identifier_claims')throw dupErr(t);return base(t,row);};
   expect(await upsertIssuerByIdentifiers(c,{cik:'320193',lei:LEI_OTHER})).toMatchObject({conflict:true});
+  expect(c.rows('issuer_identifier_claims')).toHaveLength(1);
  });
  it('rejects invalid identifiers before touching the database',async()=>{
   const c=memoryTableClient();
@@ -236,7 +240,10 @@ describe('upsertIssuerByIdentifiers',()=>{
 });
 
 describe('attachSecurity',()=>{
- const sec={issuer_id:'a',ticker:'AAPL',share_class:'common' as const,is_primary:true,valid_from:'2000-01-01',source:'sec'};
+ const EV={kind:'provider_mapping' as const,evidence:{source:'sec',as_of:'2026-11-05',evidence_sha256:'e'.repeat(64)}};
+ const sec={issuer_id:'a',ticker:'AAPL',share_class:'common' as const,is_primary:true,valid_from:'2000-01-01',source:'sec',claimEvidence:EV};
+ const closed=(valid_to:string)=>({valid_to,valid_to_method:'unrecorded' as const});
+ const claimKeys=(c:ReturnType<typeof client>)=>c.rows('issuer_identifier_claims').map(r=>({issuer_id:r.issuer_id,op:r.op,id_type:r.id_type,value:r.value,target_key:r.target_key}));
  const raceInsert=(c:ReturnType<typeof client>,owner:string,code='23505')=>{
   const base=c.insert.bind(c);let raced=false;
   c.insert=async(t,row)=>{if(t==='issuer_securities'&&!raced){raced=true;await base(t,{...row,issuer_id:owner,valid_from:'1999-01-01'});throw dupErr(t,code);}return base(t,row);};
@@ -260,42 +267,50 @@ describe('attachSecurity',()=>{
   await attachSecurity(c,sec);
   expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2026-11-05'})).toBe('conflict');
   expect(c.rows('issuer_securities')).toHaveLength(1);
+  expect(c.rows('issuer_identifier_claims')).toEqual([]);                    // no ISIN, nothing to claim
  });
  it('allows a new owner once the previous interval is closed',async()=>{
   const c=client();
-  await attachSecurity(c,{...sec,valid_to:'2010-01-01'});
+  await attachSecurity(c,{...sec,...closed('2010-01-01')});
   expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2010-01-01'})).toBe('inserted');
  });
  it('inserts closed history that ends before the open owner starts',async()=>{
   const c=client();
   expect(await attachSecurity(c,{...sec,valid_from:'2010-01-01'})).toBe('inserted');
-  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2000-01-01',valid_to:'2005-01-01'})).toBe('inserted');
-  expect(await attachSecurity(c,{...sec,issuer_id:'c',valid_from:'2005-01-01',valid_to:'2010-01-01'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2000-01-01',...closed('2005-01-01')})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,issuer_id:'c',valid_from:'2005-01-01',...closed('2010-01-01')})).toBe('inserted');
   expect(c.rows('issuer_securities')).toHaveLength(3);
  });
- it('reports conflict without an ISIN claim when a closed window overlaps another issuer',async()=>{
+ it('reports conflict without a claim when a closed window overlaps another issuer',async()=>{
   const c=client();
   await attachSecurity(c,{...sec,valid_from:'2010-01-01'});
-  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2005-01-01',valid_to:'2012-01-01'})).toBe('conflict');
+  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2005-01-01',...closed('2012-01-01')})).toBe('conflict');
   expect(c.rows('issuer_securities')).toHaveLength(1);
   expect(c.rows('issuer_identifier_claims')).toEqual([]);
  });
  it('reports duplicate when a closed interval is replayed',async()=>{
   const c=client();
-  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('inserted');
-  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('duplicate');
+  expect(await attachSecurity(c,{...sec,...closed('2010-01-01')})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,...closed('2010-01-01')})).toBe('duplicate');
   expect(c.rows('issuer_securities')).toHaveLength(1);
  });
- it('reports conflict when a replay changes valid_to or the ISIN, claiming only a differing ISIN',async()=>{
+ it('reports conflict when a replay changes valid_to or the ISIN, claiming only a differing ISIN on that row',async()=>{
   const c=client();
-  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01',isin:'US0378331005'})).toBe('inserted');
-  expect(await attachSecurity(c,{...sec,valid_to:'2011-01-01'})).toBe('conflict');
-  expect(await attachSecurity(c,{...sec,valid_to:null})).toBe('conflict');
+  expect(await attachSecurity(c,{...sec,...closed('2010-01-01'),isin:'US0378331005'})).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,...closed('2011-01-01')})).toBe('conflict');
+  expect(await attachSecurity(c,sec)).toBe('conflict');                       // the open replay of a closed row
   expect(c.rows('issuer_identifier_claims')).toEqual([]);
-  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01'})).toBe('duplicate');
-  expect(await attachSecurity(c,{...sec,valid_to:'2010-01-01',isin:'US5949181045'})).toBe('conflict');
-  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US5949181045'}]);
+  expect(await attachSecurity(c,{...sec,...closed('2010-01-01')})).toBe('duplicate');
+  expect(await attachSecurity(c,{...sec,...closed('2010-01-01'),isin:'US5949181045'})).toBe('conflict');
+  expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'correct_identifier',id_type:'isin',value:'US5949181045',target_key:'correct_identifier:a|AAPL|2000-01-01'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({evidence_kind:'provider_mapping',params:{expected_current:'US0378331005',new_value:'US5949181045'},evidence:EV.evidence});
   expect(c.rows('issuer_securities')).toEqual([expect.objectContaining({valid_to:'2010-01-01',isin:'US0378331005'})]);
+ });
+ it('files set_identifier when the same row has no ISIN yet',async()=>{
+  const c=client();
+  expect(await attachSecurity(c,sec)).toBe('inserted');
+  expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
+  expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'set_identifier',id_type:'isin',value:'US0378331005',target_key:'set_identifier:a|AAPL|2000-01-01'}]);
  });
  it('validates and upper-cases the ISIN',async()=>{
   const c=client();
@@ -303,11 +318,21 @@ describe('attachSecurity',()=>{
   expect(await attachSecurity(c,{...sec,isin:' us0378331005 '})).toBe('inserted');
   expect(c.rows('issuer_securities')[0].isin).toBe('US0378331005');
  });
- it('files one ISIN claim on a repeated ownership conflict',async()=>{
+ it('files one attach_security claim on a repeated ownership conflict',async()=>{
   const c=client();
   await attachSecurity(c,sec);
   for(let i=0;i<2;i++)expect(await attachSecurity(c,{...sec,issuer_id:'b',isin:'US0378331005'})).toBe('conflict');
-  expect(c.rows('issuer_identifier_claims')).toEqual([expect.objectContaining({issuer_id:'b',id_type:'isin',value:'US0378331005'})]);
+  expect(claimKeys(c)).toEqual([{issuer_id:'b',op:'attach_security',id_type:'ticker',value:'AAPL',target_key:'attach_security:b'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({target:{issuer_id:'b'},params:{share_class:'common',valid_from:'2000-01-01',valid_from_method:'first_observed',source:'sec',isin:'US0378331005'}});
+ });
+ it('files no claim without claimEvidence, and no attach claim for a closed incoming window',async()=>{
+  const c=client();
+  await attachSecurity(c,{...sec,valid_from:'2010-01-01'});
+  const {claimEvidence:_ev,...bare}=sec;
+  expect(await attachSecurity(c,{...bare,issuer_id:'b',isin:'US0378331005'})).toBe('conflict');
+  expect(await attachSecurity(c,{...bare,valid_from:'2010-01-01',isin:'US5949181045'})).toBe('conflict');
+  expect(await attachSecurity(c,{...sec,issuer_id:'b',valid_from:'2005-01-01',...closed('2012-01-01'),isin:'US0378331005'})).toBe('conflict');
+  expect(c.rows('issuer_identifier_claims')).toEqual([]);
  });
  it('classifies a raced insert by re-reading the overlapping rows',async()=>{
   const same=client();raceInsert(same,'a');
@@ -321,10 +346,10 @@ describe('attachSecurity',()=>{
  });
  it('reports duplicate when a concurrent identical closed replay wins the insert',async()=>{
   const c=client();
-  const closed={...sec,valid_to:'2010-01-01'};
+  const row={...sec,...closed('2010-01-01')};
   const base=c.insert.bind(c);let raced=false;
-  c.insert=async(t,row)=>{if(t==='issuer_securities'&&!raced){raced=true;await base(t,row);throw dupErr(t);}return base(t,row);};
-  expect(await attachSecurity(c,closed)).toBe('duplicate');
+  c.insert=async(t,r)=>{if(t==='issuer_securities'&&!raced){raced=true;await base(t,r);throw dupErr(t);}return base(t,r);};
+  expect(await attachSecurity(c,row)).toBe('duplicate');
   expect(c.rows('issuer_securities')).toHaveLength(1);
  });
  it('treats an unexplained 23505 as a replay race but rethrows an unexplained 23P01',async()=>{
@@ -334,19 +359,21 @@ describe('attachSecurity',()=>{
   c.insert=async(t)=>{throw dupErr(t,'23P01','conflicting key value violates exclusion constraint');};
   await expect(attachSecurity(c,sec)).rejects.toBeInstanceOf(TableError);
  });
- it('reports conflict and claims the ISIN when another ticker already carries it',async()=>{
+ it('reports conflict and files attach_security when another ticker already carries the ISIN',async()=>{
   const c=client();
   const base=c.insert.bind(c);
   c.insert=async(t,row)=>{if(t==='issuer_securities')throw dupErr(t,'23505','duplicate key value violates unique constraint "issuer_securities_isin_idx"');return base(t,row);};
   expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
-  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US0378331005'}]);
+  expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'attach_security',id_type:'ticker',value:'AAPL',target_key:'attach_security:a'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({params:{isin:'US0378331005',note:'isin_held_by_other_ticker'}});
  });
- it('reports conflict and claims the ISIN when an ISIN exclusion violation (23P01) names issuer_securities_isin_no_overlap',async()=>{
+ it('does the same when the ISIN exclusion (23P01) names issuer_securities_isin_no_overlap',async()=>{
   const c=client();
   const base=c.insert.bind(c);
   c.insert=async(t,row)=>{if(t==='issuer_securities')throw new TableError('insert','issuer_securities','conflicting key value violates exclusion constraint "issuer_securities_isin_no_overlap"','23P01');return base(t,row);};
   expect(await attachSecurity(c,{...sec,isin:'US0378331005'})).toBe('conflict');
-  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US0378331005'}]);
+  expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'attach_security',id_type:'ticker',value:'AAPL',target_key:'attach_security:a'}]);
+  expect(c.rows('issuer_identifier_claims')[0].detail).toMatchObject({params:{isin:'US0378331005',note:'isin_held_by_other_ticker'}});
   expect(c.rows('issuer_securities')).toEqual([]);
  });
  it('compares the ISIN against same-issuer overlapping rows with a different valid_from',async()=>{
@@ -356,8 +383,38 @@ describe('attachSecurity',()=>{
   expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05'})).toBe('duplicate');
   expect(c.rows('issuer_identifier_claims')).toEqual([]);
   expect(await attachSecurity(c,{...sec,valid_from:'2026-11-05',isin:'US5949181045'})).toBe('conflict');
-  expect(claims(c)).toEqual([{issuer_id:'a',id_type:'isin',value:'US5949181045'}]);
+  expect(claimKeys(c)).toEqual([{issuer_id:'a',op:'correct_identifier',id_type:'isin',value:'US5949181045',target_key:'correct_identifier:a|AAPL|2000-01-01'}]);
   expect(c.rows('issuer_securities')).toHaveLength(1);
+ });
+ it('writes the window methods: first_observed by default, curated for a curated source, the given one otherwise',async()=>{
+  const c=client();
+  await attachSecurity(c,sec);
+  await attachSecurity(c,{...sec,ticker:'MSFT',source:'curated'});
+  await attachSecurity(c,{...sec,ticker:'GOOG',valid_from_method:'listing_date',...closed('2020-01-01')});
+  expect(c.rows('issuer_securities').map(r=>[r.ticker,r.valid_from_method,r.valid_to_method])).toEqual([['AAPL','first_observed',null],['MSFT','curated',null],['GOOG','listing_date','unrecorded']]);
+ });
+ it('refuses a closed window without its method, a method on an open window and unknown methods, before any write',async()=>{
+  const c=client();
+  await expect(attachSecurity(c,{...sec,valid_to:'2010-01-01'})).rejects.toThrow('invalid_security:valid_to_method');
+  await expect(attachSecurity(c,{...sec,valid_to_method:'delisting'})).rejects.toThrow('invalid_security:valid_to_method');
+  await expect(attachSecurity(c,{...sec,...closed('2010-01-01'),valid_to_method:'vanished' as never})).rejects.toThrow('invalid_security:valid_to_method');
+  await expect(attachSecurity(c,{...sec,valid_from_method:'guessed' as never})).rejects.toThrow('invalid_security:valid_from_method');
+  expect(c.rows('issuer_securities')).toEqual([]);
+ });
+ it('rejects userinfo URLs (extra slashes, protocol-relative, control characters) in provenance before any insert',async()=>{
+  const c=client();
+  for(const u of ['https:////bob:pw@example.com/f.csv','//bob:pw@example.com/f.csv','https://bo\tb:pw@example.com/f.csv'])
+   await expect(attachSecurity(c,{...sec,provenance:{valid_from:{source:'x',locator:u}}})).rejects.toThrow('provenance_rejected:url_credentials');
+  expect(c.rows('issuer_securities')).toEqual([]);
+ });
+ it('passes provenance through the public whitelist before any write',async()=>{
+  const c=client();
+  await expect(attachSecurity(c,{...sec,provenance:{exchange:'Nasdaq'}})).rejects.toBeInstanceOf(ProvenanceError);
+  await expect(attachSecurity(c,{...sec,provenance:{valid_from:{source:'x',user_id:'u'}}})).rejects.toThrow('provenance_rejected:secret_key');
+  expect(c.rows('issuer_securities')).toEqual([]);
+  const prov={valid_from:{source:'sec_company_tickers_exchange',as_of:'2026-11-05',row:{exchange:'Nasdaq'}}};
+  await attachSecurity(c,{...sec,provenance:prov});
+  expect(c.rows('issuer_securities')[0].provenance).toEqual(prov);
  });
  it('maps the inactive-issuer trigger (SQLSTATE 23514) to issuer_not_active and rethrows other check violations',async()=>{
   const c=client();

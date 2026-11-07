@@ -49,10 +49,10 @@ describe('planSecLoad',()=>{
    {cik:'1067983',canonical_name_en:'Berkshire',provenance:{cik:prov,canonical_name_en:prov}},
   ]);
   expect(plan.securities).toEqual([
-   {cik:'320193',ticker:'AAPL',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{exchange:'Nasdaq'}},
-   {cik:'1652044',ticker:'GOOG',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{exchange:'Nasdaq'}},
-   {cik:'1652044',ticker:'GOOGL',share_class:'unknown',is_primary:false,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{exchange:'Nasdaq'}},
-   {cik:'1067983',ticker:'BRK.B',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{exchange:'NYSE'}},
+   {cik:'320193',ticker:'AAPL',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{valid_from:{...prov,row:{exchange:'Nasdaq'}}}},
+   {cik:'1652044',ticker:'GOOG',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{valid_from:{...prov,row:{exchange:'Nasdaq'}}}},
+   {cik:'1652044',ticker:'GOOGL',share_class:'unknown',is_primary:false,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{valid_from:{...prov,row:{exchange:'Nasdaq'}}}},
+   {cik:'1067983',ticker:'BRK.B',share_class:'unknown',is_primary:true,valid_from:AS_OF,source:'sec_company_tickers_exchange',provenance:{valid_from:{...prov,row:{exchange:'NYSE'}}}},
   ]);
  });
 
