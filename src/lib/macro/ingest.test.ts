@@ -42,8 +42,7 @@ function mirrorQuarantine(t:ReturnType<typeof memoryTableClient>,m:ReturnType<ty
 const ADMIN='00000000-0000-4000-8000-0000000000aa';
 /** An admin resolution, as Task 18 does it: the MacroDb item and the dq_quarantine row both close. */
 const resolveBoth=async(id:string,decision:'accept'|'reject',observationId?:string)=>{
- if(decision==='accept')db.setBatchStatus(BATCH,'success');   // commit 213f9da: accept needs a finished success/partial batch
- try{await db.resolveConflict(id,decision,ADMIN,observationId);}finally{db.setBatchStatus(BATCH,'running');}
+ await db.resolveConflict(id,decision,ADMIN,observationId);   // accept needs the member's batch finished (success/partial): callers finish it first
  await tables.update('dq_quarantine',{id},{status:decision==='accept'?'resolved_accept':'resolved_reject',resolved_by:ADMIN,resolved_at:'2026-11-06T06:00:00.000Z'});
 };
 
@@ -54,7 +53,9 @@ beforeEach(async()=>{
  await db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,'macro-regime-rules/1.0');
  db.setBatchStatus(BATCH,'running');   // commit 213f9da: writes need a declared, running batch
 });
-const history=(id:string)=>db.seriesHistory(id,{maxRows:1000});
+// Eligible read that also admits the still-running batch under test (public reads hide unfinished batches).
+const history=(id:string,batch:string=BATCH)=>db.eligibleHistory(id,{includeBatch:batch,maxRows:1000});
+const B2='55555555-5555-4555-8555-555555555555';
 // Row values are `unknown` (TableClient Row): stringify before comparing / sorting (第 4 稿 P1-1).
 const quarantined=()=>tables.rows('dq_quarantine').map(r=>({dataset:String(r.dataset),table:String(r.table_name),key:String(r.natural_key),reason:String(r.reason_code),batch:String(r.batch_id)}));
 
@@ -134,18 +135,20 @@ describe('ingestEvidence',()=>{
   expect(tables.rows('dq_quarantine')[0].detail).toEqual({value_text:'4.15',current_value_text:'4.1'});
   const itemId=String(tables.rows('dq_quarantine')[0].id);
   expect((await db.quarantineMembers(itemId)).map(m=>[m.value_text,m.status])).toEqual([['4.15','quarantined']]);   // bound to the stored row
+  db.setBatchStatus(BATCH,'success');db.setBatchStatus(B2,'running');   // BATCH finished; the later redeliveries come from a new running batch
   // Re-delivery of the same conflicting value: the RPC reports the conflict again (no new row), and quarantine()
   // reuses the OPEN item with the same (dataset, table, natural_key, reason_code) — still exactly one item.
-  const again=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
+  const again=await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
   expect(again.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
   expect(tables.rows('dq_quarantine')).toHaveLength(1);
   expect(db.allObservations().filter(o=>o.series_id==='US_DGS10_D'&&o.status==='quarantined')).toHaveLength(1);
   // A second, different conflicting value reuses the same open item (first payload kept): the members table binds both
   // values, so accepting the later one cannot silently promote the first (第 4 稿 P1-4).
-  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-09T05:30:00.000Z'})]});
+  await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-09T05:30:00.000Z'})]});
   expect(tables.rows('dq_quarantine')).toHaveLength(1);
   const members=await db.quarantineMembers(itemId);
   expect(members.map(m=>m.value_text)).toEqual(['4.15','4.2']);
+  db.setBatchStatus(B2,'success');   // accepting a member needs its batch finished
   await resolveBoth(itemId,'accept',members[1].observation_id);
   expect((await db.quarantineMembers(itemId)).map(m=>[m.value_text,m.status])).toEqual([['4.15','rejected'],['4.2','ok']]);
  });
@@ -153,7 +156,8 @@ describe('ingestEvidence',()=>{
   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
   await resolveBoth(String(tables.rows('dq_quarantine')[0].id),'reject');
-  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
+  db.setBatchStatus(BATCH,'success');db.setBatchStatus(B2,'running');
+  const rec=await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});
   expect(rec.counts).toEqual({fetched:1,inserted:0,duplicates:1,versioned:0,quarantined:0,failed:0});
   expect(rec.usable).toBe(0);                                                                     // a duplicate counter, but not usable data (第 6 稿 P2-1)
   expect(rec.errors).toEqual([]);
@@ -162,19 +166,20 @@ describe('ingestEvidence',()=>{
  });
  it('an item closed between quarantine() and the link is re-parked as a NEW open item and linked; a link that keeps failing aborts (第 5 稿 P2-3)',async()=>{
   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
+  db.setBatchStatus(BATCH,'success');db.setBatchStatus(B2,'running');   // the seed value is finished data; B2 is the concurrent ingest
   const link=db.linkQuarantine.bind(db);let raced=false;
   db.linkQuarantine=async(id,ids,fence)=>{
    if(!raced){raced=true;await resolveBoth(id,'reject');}                                           // an admin closes the item right before our link
    return link(id,ids,fence);
   };
-  const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
+  const rec=await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
   expect(rec.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
   const items=tables.rows('dq_quarantine');
   expect(items.map(r=>String(r.status)).sort()).toEqual(['open','resolved_reject']);
   const open=String(items.find(r=>r.status==='open')!.id);
   expect((await db.quarantineMembers(open)).map(m=>[m.value_text,m.status])).toEqual([['4.15','quarantined']]);   // never left unbound
   db.linkQuarantine=async()=>{throw new MacroDbError('rpc_failed','link down');};
-  await expect(ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]}))
+  await expect(ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.2\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]}))
    .rejects.toMatchObject({name:'IngestAbort',code:'quarantine_link_failed',key:'US_DGS10_D|2026-10-01'});
  });
  for(const decision of ['accept','reject'] as const){
@@ -183,12 +188,13 @@ describe('ingestEvidence',()=>{
    await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});   // quarantined and linked
    const itemId=String(tables.rows('dq_quarantine')[0].id);
    const [member]=await db.quarantineMembers(itemId);
+   db.setBatchStatus(BATCH,'success');db.setBatchStatus(B2,'running');   // the quarantined row's batch is finished; B2 redelivers concurrently
    const link=db.linkQuarantine.bind(db);let raced=false;
    db.linkQuarantine=async(id,ids,fence)=>{
     if(!raced){raced=true;await resolveBoth(id,decision,decision==='accept'?member.observation_id:undefined);}   // the admin decides right before our link
     return link(id,ids,fence);
    };
-   const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});   // the redelivery reuses that row
+   const rec=await ingestEvidence(deps,{batchId:B2,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.15\n',{fetchedAt:'2026-11-08T05:30:00.000Z'})]});   // the redelivery reuses that row
    expect(rec.counts).toMatchObject({fetched:1,quarantined:1,failed:0});
    expect(tables.rows('dq_quarantine').map(r=>String(r.status))).toEqual([decision==='accept'?'resolved_accept':'resolved_reject']);   // no new item
    expect((await db.quarantineMembers(itemId)).map(m=>[m.value_text,m.status])).toEqual([['4.15',decision==='accept'?'ok':'rejected']]);
@@ -211,6 +217,21 @@ describe('ingestEvidence',()=>{
   expect((await history('US_DGS10_D')).map(o=>o.period_end)).toEqual(['2026-10-02']);
   expect(quarantined()).toEqual([{dataset:'macro.fred',table:'macro_observations',key:'US_DGS10_D|2026-10-01',reason:'conflicting_rows',batch:BATCH}]);
  });
+ it('quarantines a same-period conflict as a whole before quality filtering, whatever the input order (T6-1)',async()=>{
+  const outcomes=[];
+  for(const rows of ['2026-10-01,4\n2026-10-01,10\n2026-10-02,4.1\n','2026-10-01,10\n2026-10-01,4\n2026-10-02,4.1\n']){
+   const b=BATCH;
+   const rec=await ingestEvidence(deps,{batchId:b,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day',rows,{fetchedAt:outcomes.length?'2026-11-07T05:30:00.000Z':undefined})]});
+   outcomes.push({counts:rec.counts,periods:(await history('US_DGS10_D',b)).map(o=>[o.period_end,o.value_text])});
+  }
+  expect(outcomes[0].periods).toEqual([['2026-10-02','4.1']]);                                   // neither 4 nor 10 written; 4.1 is not judged against 4
+  expect(outcomes[0].counts).toMatchObject({fetched:3,inserted:1,quarantined:1,failed:0});
+  expect(outcomes[1].counts).toMatchObject({fetched:3,quarantined:1,failed:0,inserted:0,duplicates:1});
+  expect(outcomes[1].periods).toEqual(outcomes[0].periods);
+  expect(db.allObservations().filter(o=>o.period_end==='2026-10-01')).toEqual([]);
+  expect(quarantined().filter(q=>q.key==='US_DGS10_D|2026-10-01')).toHaveLength(1);              // second order reuses the one open item
+  expect(tables.rows('dq_quarantine')[0].reason_code).toBe('conflicting_rows');
+ });
  it('counts a failed write call as failed rows instead of throwing',async()=>{
   // Proxy keeps memoryMacroDb's own methods bound whatever its implementation style (object or class).
   const failing=new Proxy(db,{get:(t,k)=>k==='writeObservations'?async()=>{throw new Error('rpc down');}:typeof Reflect.get(t,k)==='function'?Reflect.get(t,k).bind(t):Reflect.get(t,k)});
@@ -220,7 +241,6 @@ describe('ingestEvidence',()=>{
   expect(rec.errors).toEqual([{code:'write_failed',key:'US_DGS10_D'}]);
  });
  it('a native abort after committed writes carries the committed outcomes as partial counts (四轮 P2-2)',async()=>{
-  const B2='55555555-5555-4555-8555-555555555555';
   db.setBatchStatus(B2,'running');
   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.1\n')]});
   db.setBatchStatus(BATCH,'success');   // 213f9da: the earlier batch must be finished for its row to be the current value of B2's conflict
@@ -272,16 +292,20 @@ describe('deriveAndWrite',()=>{
  });
  it('writes month_end and yoy rows inside the triggering batch with derived_from and transform',async()=>{
   await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[
-   fred('DGS10','US_DGS10_D','day','2026-09-29,4.3\n2026-09-30,4.35\n2026-10-01,4.4\n2026-11-02,4.5\n'),
+   fred('DGS10','US_DGS10_D','day','2026-09-29,4.3\n2026-09-30,4.35\n2026-11-02,4.5\n'),
    fred('CPIAUCSL','US_CPI_INDEX','month','2025-09-01,324.368\n2026-09-01,336.298\n2025-10-01,\n2026-10-01,337.1\n'),
   ]});
+  // the month-end witness (first row of the next month) is fetched later: the derived row waits for it
+  await ingestEvidence(deps,{batchId:BATCH,adapter:'fred_csv',retrievals:[fred('DGS10','US_DGS10_D','day','2026-10-01,4.4\n',{fetchedAt:'2026-11-07T05:30:00.000Z'})]});
   const rec=await deriveAndWrite(deps,'US',BATCH);
   expect(rec.errors).toEqual([]);
   const dgs=await history('US_DGS10');
   expect(dgs.map(o=>[o.period_end,o.value_text,o.transform])).toEqual([['2026-09-30','4.35','month_end@1'],['2026-10-31','4.4','month_end@1']]);   // November is the current month
   const input=(await history('US_DGS10_D')).find(o=>o.period_end==='2026-09-30')!;
   const witness=(await history('US_DGS10_D')).find(o=>o.period_end==='2026-10-01')!;
-  expect(dgs[0].derived_from).toEqual([input.observation_id,witness.observation_id]);   // df4a85e: next-month completion witness is an inputexpect(dgs[0].available_at).toBe(input.available_at);
+  expect(dgs[0].derived_from).toEqual([input.observation_id,witness.observation_id]);   // df4a85e: next-month completion witness is an input
+  expect(witness.available_at).toBe('2026-11-07T05:30:00.000Z');
+  expect(dgs[0].available_at).toBe(witness.available_at);                                // the derived row is available only once its witness is
   expect(dgs[0].batch_id).toBe(BATCH);expect(dgs[0].retrieval_id).toBeNull();
   const cpi=await history('US_CPI_YOY');
   expect(cpi.map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','3.6779']]);   // 2026-10 has no 2025-10 base (shutdown gap)

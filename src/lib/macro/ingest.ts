@@ -202,9 +202,21 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
   for(const [seriesId,points] of bySeries){
    const def=catalogById(seriesId);
    if(!collectable(def,input.adapter)){ctx.counts.failed+=points.length;ctx.errors.push({code:'unknown_series',key:seriesId});continue;}
+   // 第 7 稿 T6-1: distinct canonical values for one period across ALL points, judged before quality / claim filtering —
+   // the whole group is quarantined (conflicting_rows), none of it is written or used as the jump baseline.
+   const seen=new Map<string,Set<string>>();
+   for(const p of points){let c:string;try{c=canonical(p.valueText);}catch{continue;}seen.set(p.periodEnd,(seen.get(p.periodEnd)??new Set<string>()).add(c));}
+   const conflicting=new Set<string>();
+   for(const [periodEnd,vals] of seen){
+    if(vals.size<2)continue;
+    conflicting.add(periodEnd);
+    const valueTexts=[...vals].sort();
+    if(await park(ctx,keyOf(seriesId,periodEnd),'conflicting_rows',{value_texts:valueTexts},{value_texts:valueTexts})!==null)ctx.counts.quarantined+=1;else ctx.counts.failed+=1;
+   }
    let prev:string|null=null;
    for(const p of [...points].sort((a,b)=>a.periodEnd<b.periodEnd?-1:a.periodEnd>b.periodEnd?1:0)){
     const key=keyOf(seriesId,p.periodEnd);
+    if(conflicting.has(p.periodEnd))continue;
     let value:string;
     try{value=canonical(p.valueText);}catch{ctx.counts.failed+=1;ctx.errors.push({code:'invalid_value',key});continue;}
     const payload={value_text:value,retrieval_id:retrievalId,locator:p.locator};
