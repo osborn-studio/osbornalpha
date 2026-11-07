@@ -273,6 +273,7 @@ export interface BrokerResearchDb{
  insertDocument(row:Pick<DocumentRow,'document_id'|'sha256'|'storage_path'|'byte_size'|'licence_id'|'uploaded_by'|'original_filename'>):Promise<'inserted'|'duplicate'>;  // status='uploaded', promotion_pending=true
  updateDocument(documentId:string,patch:Partial<Pick<DocumentRow,'promotion_pending'|'status'|'withdrawn_at'|'withdrawn_reason'|'purged_at'|'page_count'|'last_verified_at'|'verify_status'>>):Promise<void>;
  claimLease(documentId:string,token:string,ttlSeconds:number):Promise<boolean>;                         // CAS
+ renewLease(documentId:string,token:string,ttlSeconds:number):Promise<'ok'|'lease_lost'|'document_withdrawn'>;   // rpc broker_document_renew_lease: fenced re-check + TTL refresh before a long holder's bucket write (P-R3-04)
  fencedUpdateDocument(documentId:string,token:string,patch:Partial<Pick<DocumentRow,'status'|'current_parse_run_id'|'page_count'>>&{releaseLease?:boolean}):Promise<'ok'|'lease_lost'>;
  // runs
  insertRun(row:Omit<RunRow,'started_at'|'finished_at'|'status'|'detail'>&{detail?:Record<string,unknown>}):Promise<void>;
@@ -387,7 +388,7 @@ export interface PublicReportDetail extends PublicReportBundle{citations:Record<
 13. **清除文本**：`purgeReportText(reportId,step)` 只在报告 `withdrawn` 时可用（否则 `report_not_withdrawn`）；`fields_text` 同时清 `corrected`；`summaries` 只置 `rejected`（O11：文本保留）；`quarantine_payload` 置本文档隔离项 `payload={}`。C7 的清除步骤表只经此方法与存储端口，不直写表。
 14. **页文本**：`PageText` / `sliceText(pages,page,start,end)` 只在 `extract/locate.ts`（B1）定义；F3 产物类型是 `ports/f3.ts::F3Artifact`（`pages:F3Page[]` 与 `PageText` 同形），`ports/f3.ts` 不导出切片函数。R1、复核框选、回放、核验 cron 一律 `sliceText(artifact.pages,…)`。`extract/schema.ts::DocumentExtraction` 是 LLM 抽取形状，与 F3 产物无关。
 15. **复核数据**：★ `GET /api/admin/broker-research/reports/[reportId]` 返回契约 `ReviewPayload`；D5 直接用该类型。
-16. **新增的视图列**（A3）：`broker_reports_public_v.rules_version`、`.title_model_id`；`broker_report_summaries_public_v.grounding_assertions`（无 `field_id`）；`research_institutions_public_v.report_count`、`.last_published_date`、`.last_available_at`（只列有可见报告的机构）；`broker_report_citations_v.field_id`（片段与引用按 `field_id` 关联）。
+16. **新增的视图列**（A3）：`broker_reports_public_v.rules_version`、`.title_model_id`、过滤列 `.issuer_ids`（uuid[]）、`.ratings`（text[]）、`.has_summary`（列表筛选在库内与键集游标一起执行，不在客户端收集 id；P-R3-05）；`broker_report_summaries_public_v.grounding_assertions`（无 `field_id`）；`research_institutions_public_v.report_count`、`.last_published_date`、`.last_available_at`（只列有可见报告的机构）；`broker_report_citations_v.field_id`（片段与引用按 `field_id` 关联）。
 17. **金额是十进制字符串**：outbox 载荷（`claim.target_price`、`reference_price`）与发布快照里的金额一律字符串；E1 投递不经 `Number()`。
 18. **回草稿原因**：`SnippetRow.draft_reason` / `SummaryRow.draft_reason`（`licence_version|analyst_disclosure|disclosure_inputs|summary_stale`），D4/D5 的"受影响片段 / 摘要"计数读它。
 19. **`deps.tables` 的用途**：服务只用它读写计划一的表（`dq_quarantine`、`ingest_batches`、`research_audit_log`）；本模块表的写入一律经 `BrokerResearchDb`。唯一例外是 D4 `admin-read.ts` 的总览计数与许可影响面：service-role 只读本模块表做聚合（契约没有计数方法），不写。
@@ -1973,6 +1974,9 @@ const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.
   const ok=o.passed??true;
   await s.q(`insert into public.broker_eval_receipts(corpus_kind,corpus_hash,behavior_digest,extractor_version,model_id,registry_hash,prompt_version,schema_version,code_version,n_docs,per_field,absence,precision_min,recall_min,passed,ran_by,ran_at) values($1,$2,$3,'f3/1','m-test','r','p','s','t',$4,$5::jsonb,'{"tp":0,"fp":0,"fn":0}',$6,$6,$7,gen_random_uuid(),clock_timestamp())`,[o.kind??'gold',GOLD,digest,o.nDocs??30,J(pf),ok?1:0.5,ok]);
  };
+ /** A newer matching gold receipt that also covers `extra` fields (e.g. 'analyst' once a fixture adds a human analyst row):
+  * blocker 13 covers every effective field of a gated report (P-R1-12), so readiness fixtures must cover what they add (P-R3-03). */
+ const goldCovering=(digest:string,extra:string[])=>gold(digest,{perField:Object.fromEntries([...allFields,...extra].map(f=>[f,{tp:5,fp:0,fn:0,precision:1,recall:1}]))});
  /** world → every candidate confirmed, institution/scope bound, scale row, rules receipt, review approved, gold receipt: blockers []. */
  const ready=async(o:Parameters<typeof world>[0]={}):Promise<World>=>{
   const w=await world(o);
@@ -2072,7 +2076,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   const an=await s.one(`insert into public.research_analysts(institution_id,display_name) values($1,'Rae Analyst') returning analyst_id as v`,[q.inst]) as string;
   const af=(await add(q.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Rae Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:q.pr,status:'confirmed'})).field_id;
   await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,field_id) values($1,$2,$3)`,[q.rep,an,af]);
-  await materialize(q.rep);await rules(q.rep);
+  await materialize(q.rep);await rules(q.rep);await goldCovering(q.digest,['analyst']);         // P-R3-03
   await s.q(`update public.research_analysts set public_display=true where analyst_id=$1`,[an]);
   expect((await report(q.rep)).disclosure_ok).toBe(false);
   await materialize(q.rep);await rules(q.rep);
@@ -2089,11 +2093,14 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
    for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
   }
   // every migration-owned function, trigger functions included (P-R1-05): no client role holds EXECUTE
-  const all=await s.q(`select p.oid::regprocedure::text sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 1`);
+  // qualified names built from catalog columns (regprocedure::text drops 'public.' when public is on the search path; P-R3-02)
+  const all=await s.q(`select p.oid::int oid, format('%I.%I(%s)',n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)) sig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'broker\\_%' order by 2`);
   expect(all.length).toBeGreaterThanOrEqual(40);
-  for(const {sig} of all)for(const role of ['public','anon','authenticated'])
-   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v`,[sig]):await fn(role,sig)}).toEqual({sig,role,ok:false});
-  for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])expect(all.map(r=>r.sig)).toContain(trig);
+  for(const {sig,oid} of all)for(const role of ['public','anon','authenticated'])
+   expect({sig,role,ok:role==='public'?await s.one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::int::oid and a.grantee=0 and a.privilege_type='EXECUTE') v`,[oid]):await fn(role,sig)}).toEqual({sig,role,ok:false});
+  const oids=new Set(all.map(r=>Number(r.oid)));
+  for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])
+   expect({trig,inInventory:oids.has(Number(await s.one(`select $1::regprocedure::oid::int v`,[trig])))}).toEqual({trig,inInventory:true});   // compared by OID, never by display text
   await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
  },60000);
 
@@ -3242,6 +3249,25 @@ end $$;
 revoke execute on function public.broker_document_claim_lease(uuid, uuid, integer) from public, anon, authenticated;
 grant execute on function public.broker_document_claim_lease(uuid, uuid, integer) to service_role;
 
+-- Renew a held lease (P-R3-04): token equal AND unexpired → lease_until := now() + ttl, 'ok'; a withdrawn document
+-- answers 'document_withdrawn' (lease kept for the holder to release); anything else 'lease_lost'. Long-running
+-- holders (gold evaluation) call it right before every bucket write, so a write happens only under a live lease
+-- on a not-withdrawn document — and purge, which claims the same lease, cannot interleave.
+create or replace function public.broker_document_renew_lease(p_document uuid, p_token uuid, p_ttl_seconds integer)
+returns text language plpgsql security definer set search_path = public as $$
+declare d public.broker_report_documents;
+begin
+  if p_token is null or p_ttl_seconds is null or p_ttl_seconds < 1 then raise exception 'invalid_lease_args' using errcode = '22023'; end if;
+  select * into d from public.broker_report_documents where document_id = p_document for update;
+  if not found then raise exception 'document_not_found' using errcode = 'P0002'; end if;
+  if d.lease_token is distinct from p_token or d.lease_until is null or d.lease_until <= now() then return 'lease_lost'; end if;
+  if d.status = 'withdrawn' then return 'document_withdrawn'; end if;
+  update public.broker_report_documents set lease_until = now() + make_interval(secs => p_ttl_seconds) where document_id = p_document;
+  return 'ok';
+end $$;
+revoke execute on function public.broker_document_renew_lease(uuid, uuid, integer) from public, anon, authenticated;
+grant execute on function public.broker_document_renew_lease(uuid, uuid, integer) to service_role;
+
 -- Fenced write: token equality only (an expired but not yet overwritten lease may still finish).
 create or replace function public.broker_document_fenced_update(p_document uuid, p_token uuid, p_patch jsonb, p_release boolean)
 returns text language plpgsql security definer set search_path = public as $$
@@ -3581,11 +3607,17 @@ begin
   end loop;
   for x in select sn.snippet_id from public.broker_report_snippets sn where sn.report_id = p_report_id and sn.status = 'approved' order by sn.snippet_id loop
     v_chk := p_checks -> 'snippets' -> x.snippet_id::text;
-    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then   -- a missing check (NULL) fails (P-R2-01) v_fail := v_fail || ('restricted_value_in_text:snippet:' || x.snippet_id::text); end if;
+    -- a missing check (NULL) fails (P-R2-01)
+    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then
+      v_fail := v_fail || ('restricted_value_in_text:snippet:' || x.snippet_id::text);
+    end if;
   end loop;
   for x in select su.summary_id, su.lang from public.broker_report_summaries su where su.report_id = p_report_id and su.status = 'approved' order by su.lang loop
     v_chk := p_checks -> 'summaries' -> x.summary_id::text;
-    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then   -- a missing check (NULL) fails (P-R2-01) v_fail := v_fail || ('restricted_value_in_text:summary:' || x.lang); end if;
+    -- a missing check (NULL) fails (P-R2-01)
+    if v_chk ->> 'passed' is distinct from 'true' or v_chk ->> 'version' is distinct from 'disclosure/1' then
+      v_fail := v_fail || ('restricted_value_in_text:summary:' || x.lang);
+    end if;
   end loop;
   if cardinality(v_fail) > 0 then return jsonb_build_object('restored', false, 'failures', to_jsonb(v_fail)); end if;
   if r.status = 'draft' then
@@ -3700,7 +3732,7 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   const af=(await s.one(`select public.broker_field_add($1,$2::jsonb,$3) v`,[w.rep,J({target_key:null,field:'analyst',occurrence:1,value_text:'Ann Analyst',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:5,char_end:16,value_source_text:'Ann Analyst',parse_run_id:w.pr,status:'confirmed'}),randomUUID()])).field_id;
   const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Ann Analyst',true) returning analyst_id as v`,[w.inst]);
   await s.q(`insert into public.broker_report_analysts(report_id,analyst_id,role,field_id) values($1,$2,'lead',$3)`,[w.rep,an,af]);
-  await materialize(w.rep);await rules(w.rep);
+  await materialize(w.rep);await rules(w.rep);await goldCovering(w.digest,['analyst']);          // the analyst row is now an effective field (P-R3-03)
   const sn=await s.one(`insert into public.broker_report_snippets(report_id,target_key,purpose,parse_run_id,page,char_start,char_end,text,disclosure_check,created_by) values($1,$2,'thesis',$3,2,0,8,'Thesis!!',$4::jsonb,gen_random_uuid()) returning snippet_id as v`,[w.rep,w.tk,w.pr,J(PASS)]);
   await s.q(`update public.broker_report_snippets set status='approved',approved_by=gen_random_uuid() where snippet_id=$1`,[sn]);
   const sumRun=randomUUID();
@@ -3740,6 +3772,7 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   expect(await seen(w.rep,w.inst)).toEqual(all);
   expect(await seen(w.rep,w.inst,'authenticated')).toEqual(all);
   expect((await anon(`select rules_version,title_model_id from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({rules_version:RULES_VERSION,title_model_id:null});
+  expect((await anon(`select issuer_ids::text[] i,ratings,has_summary from public.broker_reports_public_v where report_id=$1`,[w.rep]))[0]).toEqual({i:[w.iss],ratings:['buy'],has_summary:true});   // P-R3-05 filter columns
   expect((await anon(`select grounding_assertions g from public.broker_report_summaries_public_v where report_id=$1`,[w.rep]))[0].g)
    .toEqual([{sentence_idx:0,target_key:w.tk,field:'price_at_report',value:'100',unit:'price'}]);              // field_id never leaves the private table
   await enable(false);
@@ -3827,7 +3860,7 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   const r=await ready();
   const an=await s.one(`insert into public.research_analysts(institution_id,display_name,public_display) values($1,'Quinn Hidden',false) returning analyst_id as v`,[r.inst]) as string;
   const af=(await add(r.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Quinn Hidden',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:4,value_source_text:'text',parse_run_id:r.pr,status:'confirmed'})).field_id;
-  await rules(r.rep);
+  await rules(r.rep);await goldCovering(r.digest,['analyst']);                                   // P-R3-03
   const text='Quinn Hidden sees upside';
   const sn=await s.one(`insert into public.broker_report_snippets(report_id,purpose,parse_run_id,page,char_start,char_end,text,created_by) values($1,'thesis',$2,1,0,$3,$4,gen_random_uuid()) returning snippet_id as v`,[r.rep,r.pr,text.length,text]) as string;
   const before=await s.one(`select public.broker_report_disclosure_digest($1) v`,[r.rep]) as string;
@@ -3922,6 +3955,10 @@ select v.report_id, v.revision, v.current_publication_id as publication_id, v.sc
        v.published_date, v.price_as_of_date, v.report_type, v.sector_as_stated, v.primary_target_key,
        v.uploaded_at as available_at, v.code_version, v.published_at, v.supersedes_report_id, v.page_count, v.snippet_max_chars,
        v.allows_public_target_price as target_price_public, v.allows_public_summary as summary_public, v.allows_public_snippets as snippets_public,
+       -- per-report filter columns (P-R3-05): list filters run in the database with keyset pagination, never via id sets
+       coalesce((select array_agg(distinct t.issuer_id) from public.broker_report_targets t where t.report_id = v.report_id and t.issuer_id is not null), '{}'::uuid[]) as issuer_ids,
+       coalesce((select array_agg(distinct t.rating_normalized) from public.broker_report_targets t where t.report_id = v.report_id and t.rating_normalized is not null), '{}'::text[]) as ratings,
+       (v.allows_public_summary and exists (select 1 from public.broker_report_summaries su where su.report_id = v.report_id and su.status = 'approved')) as has_summary,
        rr.rules_version, tr.model_id as title_model_id
 from visible_reports v
 join public.broker_report_publications pp on pp.publication_id = v.current_publication_id
@@ -4403,11 +4440,12 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
  /** Complete-set read in a fixed order (PostgREST max_rows truncates silently). */
  const pageAll=async(make:()=>Builder,limit?:number):Promise<R[]>=>{
   const out:R[]=[];
-  for(let start=0;;start+=READ_PAGE){
+  for(let start=0;;){
    const size=limit===undefined?READ_PAGE:Math.min(READ_PAGE,limit-out.length);
    if(size<=0)return out;
    const part=(await run<R[]|null>(make().range(start,start+size-1)))??[];
-   out.push(...part);if(part.length<size)return out;
+   if(part.length===0)return out;
+   out.push(...part);start+=part.length;   // a server row cap below READ_PAGE shortens a page but never ends the read (P-R3-05)
   }
  };
  const maybe=async(q:Builder)=>(await run<R|null>(q.maybeSingle()));
@@ -4442,6 +4480,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   },
   async updateDocument(id,patch){await run(from('broker_report_documents').update(dropUndefined(patch)).eq('document_id',id));},
   async claimLease(id,token,ttl){return (await call<unknown>('broker_document_claim_lease',{p_document:id,p_token:token,p_ttl_seconds:ttl}))===true;},
+  async renewLease(id,token,ttl){return await call<'ok'|'lease_lost'|'document_withdrawn'>('broker_document_renew_lease',{p_document:id,p_token:token,p_ttl_seconds:ttl});},
   async fencedUpdateDocument(id,token,patch){const a=fencedArgs(patch);return await call<'ok'|'lease_lost'>('broker_document_fenced_update',{p_document:id,p_token:token,p_patch:a.patch,p_release:a.release});},
   async insertRun(row){await run(from('broker_report_runs').insert({...row,detail:row.detail??{}}));},
   async finishRun(runId,token,patch){return await call<'ok'|'lease_lost'>('broker_run_finish',{p_run:runId,p_token:token,p_patch:dropUndefined(patch)});},
@@ -4536,35 +4575,27 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   },
   // ---- public: anon client, views only
   async publicReports(filter){
-   let ids:string[]|null=null;
-   if(filter.issuerId||filter.rating){
-    let q=pub('broker_report_targets_public_v').select('report_id');
-    if(filter.issuerId)q=q.eq('issuer_id',filter.issuerId);
-    if(filter.rating)q=q.eq('rating_normalized',filter.rating);
-    ids=[...new Set(((await run<R[]|null>(q.limit(5000)))??[]).map(r=>String(r.report_id)))];
-    if(!ids.length)return [];
-   }
-   if(filter.hasSummary){
-    const withSummary=new Set(((await run<R[]|null>(pub('broker_report_summaries_public_v').select('report_id').limit(5000)))??[]).map(r=>String(r.report_id)));
-    ids=ids===null?[...withSummary]:ids.filter(x=>withSummary.has(x));
-    if(!ids.length)return [];
-   }
+   // every filter is a column predicate of broker_reports_public_v, evaluated in the database together with the keyset
+   // cursor (P-R3-05): no client-side id sets, so the PostgREST row cap can never drop a matching report
    let q=pub('broker_reports_public_v').select('*');
+   if(filter.issuerId)q=q.contains('issuer_ids',[filter.issuerId]);
+   if(filter.rating)q=q.contains('ratings',[filter.rating]);
+   if(filter.hasSummary)q=q.eq('has_summary',true);
    if(filter.institutionId)q=q.eq('institution_id',filter.institutionId);
    if(filter.scope)q=q.eq('scope',filter.scope);
    if(filter.from)q=q.gte('published_date',filter.from);
    if(filter.to)q=q.lte('published_date',filter.to);
-   if(ids)q=q.in('report_id',ids);
    if(filter.cursor)q=q.or(`published_date.lt.${filter.cursor.publishedDate},and(published_date.eq.${filter.cursor.publishedDate},report_id.lt.${filter.cursor.reportId})`);
    const reports=(await run<R[]|null>(q.order('published_date',{ascending:false}).order('report_id',{ascending:false}).limit(filter.limit)))??[];
    if(!reports.length)return [];
    const page=reports.map(r=>String(r.report_id));
    const insts=[...new Set(reports.map(r=>r.institution_id).filter((x):x is string=>typeof x==='string'))];
+   // child rows of the page can exceed the row cap (e.g. 200 multi-issuer reports): read them completely, in a fixed order
    const [targets,summaries,snippets,institutions]=await Promise.all([
-    run<R[]|null>(pub('broker_report_targets_public_v').select(PUBLIC_TARGET_COLUMNS).in('report_id',page)),
-    run<R[]|null>(pub('broker_report_summaries_public_v').select('report_id,lang').in('report_id',page)),
-    run<R[]|null>(pub('broker_report_snippets_public_v').select('report_id').in('report_id',page)),
-    insts.length?run<R[]|null>(pub('research_institutions_public_v').select('*').in('institution_id',insts)):Promise.resolve([] as R[]),
+    pageAll(()=>pub('broker_report_targets_public_v').select(PUBLIC_TARGET_COLUMNS).in('report_id',page).order('report_id').order('target_key')),
+    pageAll(()=>pub('broker_report_summaries_public_v').select('report_id,lang').in('report_id',page).order('report_id').order('lang')),
+    pageAll(()=>pub('broker_report_snippets_public_v').select('report_id,snippet_id').in('report_id',page).order('report_id').order('snippet_id')),
+    insts.length?pageAll(()=>pub('research_institutions_public_v').select('*').in('institution_id',insts).order('institution_id')):Promise.resolve([] as R[]),
    ]);
    return bundles(reports,targets??[],summaries??[],snippets??[],institutions??[]);
   },
@@ -4621,7 +4652,7 @@ import {analystsDistinct,bundles,publicRow,verifyOrder} from './db';
 import {effectiveValue} from './effective';
 import {canonicalJson,sha256Hex} from './hash';
 import {BrokerResearchDbError} from './types';
-import type {AccessLogInput,AnalystRow,BrokerResearchDb,CandidateFieldInput,DisclosureCheck,DocumentRow,DocumentStatus,EvalReceiptRow,FieldRow,InstitutionRow,IntentRow,IntentStatus,LicenceInput,LicenceRow,MaterializeReceipt,OutboxEvent,PublicationRow,PurgeStepRow,RatingScaleRow,ReportAnalystRow,ReportRow,RuleReceiptRow,RunRow,SettingsRow,SnippetRow,SummaryRow,TargetRow,TypedValue} from './types';
+import type {AccessLogInput,AnalystRow,BrokerResearchDb,CandidateFieldInput,DisclosureCheck,DocumentRow,DocumentStatus,EvalReceiptRow,FieldRow,InstitutionRow,IntentRow,IntentStatus,LicenceInput,LicenceRow,MaterializeReceipt,NormalizedRating,OutboxEvent,PublicationRow,PurgeStepRow,RatingScaleRow,ReportAnalystRow,ReportRow,RuleReceiptRow,RunRow,SettingsRow,SnippetRow,SummaryRow,TargetRow,TypedValue} from './types';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 type R=Record<string,unknown>;
@@ -4917,7 +4948,10 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    title_zh:r.title_zh,title_en:r.title_en,title_is_translation:r.title_run_id!==null,published_date:r.published_date,price_as_of_date:r.price_as_of_date,report_type:r.report_type,sector_as_stated:r.sector_as_stated,
    primary_target_key:r.primary_target_key,available_at:d.uploaded_at,code_version:r.code_version,published_at:p.published_at,supersedes_report_id:r.supersedes_report_id,page_count:d.page_count,
    snippet_max_chars:l.snippet_max_chars,target_price_public:l.allows_public_target_price,summary_public:l.allows_public_summary,snippets_public:l.allows_public_snippets,
-   rules_version:ruleReceipts.find(x=>x.receipt_id===p.rules_receipt_id)?.rules_version??null,title_model_id:r.title_run_id?runs.get(r.title_run_id)?.model_id??null:null};};
+   rules_version:ruleReceipts.find(x=>x.receipt_id===p.rules_receipt_id)?.rules_version??null,title_model_id:r.title_run_id?runs.get(r.title_run_id)?.model_id??null:null,
+   issuer_ids:[...new Set((targets.get(r.report_id)??[]).map(t=>t.issuer_id).filter((x):x is string=>x!==null))].sort(),
+   ratings:[...new Set((targets.get(r.report_id)??[]).map(t=>t.rating_normalized).filter((x):x is NormalizedRating=>x!==null))].sort(),
+   has_summary:l.allows_public_summary&&[...summaries.values()].some(s=>s.report_id===r.report_id&&s.status==='approved')};};
  const targetView=(r:ReportRow)=>{const tpOk=licOf(r).allows_public_target_price;return (targets.get(r.report_id)??[]).map(t=>({report_id:t.report_id,publication_id:r.current_publication_id,target_key:t.target_key,ticker_as_stated:t.ticker_as_stated,security_ticker:t.security_ticker,issuer_id:t.issuer_id,
   rating_raw:t.rating_raw,rating_normalized:t.rating_normalized,scale_id:t.scale_id,target_price:tpOk?t.target_price:null,target_currency:tpOk?t.target_currency:null,target_horizon_months:tpOk?t.target_horizon_months:null,
   upside_pct:tpOk?t.upside_pct:null,target_price_public:tpOk,price_at_report:t.price_at_report,price_currency:t.price_currency,price_as_of_date:t.price_as_of_date,upside_formula_version:tpOk?t.upside_formula_version:null}) as R);};
@@ -4999,6 +5033,13 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    if(d.lease_until!==null&&d.lease_until>=now())return false;
    if(d.lease_token!==null)for(const r of runs.values())if(r.document_id===id&&r.status==='running'&&r.kind!=='verify')Object.assign(r,{status:'failed',finished_at:now(),detail:{...r.detail,error_code:'lease_expired'}});
    Object.assign(d,{lease_token:token,lease_until:plusSec(ttl)});return true;
+  },
+  async renewLease(id,token,ttl){
+   if(!token||!(ttl>=1))fail('invalid_lease_args');
+   const d=req(documents,id,'document');
+   if(d.lease_token!==token||d.lease_until===null||d.lease_until<=now())return 'lease_lost';
+   if(d.status==='withdrawn')return 'document_withdrawn';
+   d.lease_until=plusSec(ttl);return 'ok';
   },
   async fencedUpdateDocument(id,token,patch){
    const d=req(documents,id,'document');if(d.lease_token!==token)return 'lease_lost';
@@ -5527,6 +5568,14 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect(await db.fencedUpdateDocument(doc,b,{status:'parsing',releaseLease:true})).toBe('ok');
    expect(await db.getDocument(doc)).toMatchObject({status:'parsing',lease_token:null,lease_until:null});
    expect((await db.listRuns(doc)).map(r=>r.run_id)).toEqual([r1,r2]);
+   // renewLease (P-R3-04): only the live holder renews; a withdrawn document answers document_withdrawn and keeps the lease for release
+   const c=randomUUID();expect(await db.claimLease(doc,c,300)).toBe(true);
+   expect(await db.renewLease(doc,randomUUID(),300)).toBe('lease_lost');
+   expect(await db.renewLease(doc,c,300)).toBe('ok');
+   await db.updateDocument(doc,{status:'withdrawn',withdrawn_at:new Date().toISOString(),withdrawn_reason:'t'});
+   expect(await db.renewLease(doc,c,300)).toBe('document_withdrawn');
+   expect(await db.fencedUpdateDocument(doc,c,{releaseLease:true})).toBe('ok');
+   expect(await db.renewLease(doc,c,300)).toBe('lease_lost');
   });
 
   it('extractCommit: candidate-basis receipt, typed targets, lease fence, supersede on re-extraction',async()=>{
@@ -5965,6 +6014,61 @@ describe('supabaseBrokerResearchDb wiring',()=>{
   expect(s.calls).toContainEqual(['from','broker_report_fields','is','superseded_by_run_id',null]);
  });
 });
+/** PostgREST over in-memory public-view rows with a server row cap (max_rows): every response holds at most `cap` rows. */
+function cappedAnon(views:Record<string,Record<string,unknown>[]>,cap:number){
+ type Row=Record<string,unknown>;type Pred=(r:Row)=>boolean;
+ const from=(table:string)=>{
+  const f:Pred[]=[];const ord:[string,boolean][]=[];let lo=0,hi:number|null=null,lim:number|null=null,single=false;
+  const b:Record<string,(...a:unknown[])=>unknown>={
+   select:()=>b,
+   eq:(k,v)=>{f.push(r=>r[k as string]===v);return b;},
+   in:(k,vs)=>{f.push(r=>(vs as unknown[]).includes(r[k as string]));return b;},
+   contains:(k,vs)=>{f.push(r=>(vs as unknown[]).every(x=>((r[k as string]??[]) as unknown[]).includes(x)));return b;},
+   gte:(k,v)=>{f.push(r=>String(r[k as string])>=String(v));return b;},
+   lte:(k,v)=>{f.push(r=>String(r[k as string])<=String(v));return b;},
+   or:(e)=>{const m=/^published_date\.lt\.([^,]+),and\(published_date\.eq\.([^,]+),report_id\.lt\.([^)]+)\)$/.exec(String(e))!;
+    f.push(r=>String(r.published_date)<m[1]||(String(r.published_date)===m[2]&&String(r.report_id)<m[3]));return b;},
+   order:(k,o)=>{ord.push([k as string,(o as {ascending?:boolean}|undefined)?.ascending!==false]);return b;},
+   range:(a,z)=>{lo=a as number;hi=z as number;return b;},
+   limit:(n)=>{lim=n as number;return b;},
+   maybeSingle:()=>{single=true;return b;},
+   then:(res,rej)=>{
+    const rows=(views[table]??[]).filter(r=>f.every(p=>p(r))).sort((x,y)=>{for(const [k,asc] of ord){const a=String(x[k]),c=String(y[k]);if(a!==c)return (a<c?-1:1)*(asc?1:-1);}return 0;});
+    const end=hi!==null?hi+1:lim!==null?lo+lim:rows.length;
+    const out=rows.slice(lo,Math.min(end,lo+cap));
+    return Promise.resolve({data:single?out[0]??null:out,error:null}).then(res as never,rej as never);
+   },
+  };
+  return b;
+ };
+ return {from,rpc:async()=>({data:null,error:null})} as unknown as SupabaseClient;
+}
+
+describe('supabase public list under a PostgREST row cap (P-R3-05)',()=>{
+ it('every matching report stays reachable through keyset pagination; child rows of a page are read completely',async()=>{
+  const X='11111111-1111-4111-8111-111111111111',Y='22222222-2222-4222-8222-222222222222';
+  const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+  const reports=Array.from({length:12},(_,i)=>({report_id:id(i+1),published_date:`2026-0${1+(i%9)}-1${i%10}`,institution_id:null,scope:'single_issuer',
+   issuer_ids:i%3===0?[Y]:[X],ratings:i%2?['buy']:['neutral'],has_summary:i%4===0}));
+  const targets=reports.flatMap(r=>[{report_id:r.report_id,target_key:'A'},{report_id:r.report_id,target_key:'B'}]);
+  const db=supabaseBrokerResearchDb({anon:cappedAnon({broker_reports_public_v:reports,broker_report_targets_public_v:targets,broker_report_summaries_public_v:[],broker_report_snippets_public_v:[]},3)});
+  const order=(xs:typeof reports)=>[...xs].sort((a,b)=>a.published_date<b.published_date?1:a.published_date>b.published_date?-1:a.report_id<b.report_id?1:-1).map(r=>r.report_id);
+  for(const [filter,expected] of [[{issuerId:X},reports.filter(r=>r.issuer_ids.includes(X))],[{rating:'buy' as const},reports.filter(r=>r.ratings.includes('buy'))],[{hasSummary:true},reports.filter(r=>r.has_summary)]] as const){
+   const seen:string[]=[];let cursor:{publishedDate:string;reportId:string}|undefined;
+   for(let guard=0;guard<20;guard++){
+    const page=await db.publicReports({...filter,limit:2,cursor});
+    if(!page.length)break;
+    for(const b of page)expect(b.targets.map(t=>t.target_key)).toEqual(['A','B']);
+    seen.push(...page.map(b=>String(b.report.report_id)));
+    const last=page.at(-1)!.report;cursor={publishedDate:String(last.published_date),reportId:String(last.report_id)};
+   }
+   expect({filter,seen}).toEqual({filter,seen:order([...expected])});
+  }
+  // a page of 5 reports has 10 target rows: more than the cap of 3, still complete
+  const big=await db.publicReports({limit:5});
+  expect(big.flatMap(b=>b.targets)).toHaveLength(10);
+ });
+});
 ```
 
 - [ ] **Step 10: 运行，确认失败 → 通过**
@@ -6119,6 +6223,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   },
   async updateDocument(id,patch){await update('broker_report_documents',patch as R,'document_id = $1',[id]);},
   claimLease:(id,token,ttl)=>fn<boolean>('public.broker_document_claim_lease($1,$2,$3)',[id,token,ttl]),
+  renewLease:(id,token,ttl)=>fn<'ok'|'lease_lost'|'document_withdrawn'>('public.broker_document_renew_lease($1,$2,$3)',[id,token,ttl]),
   async fencedUpdateDocument(id,token,patch){const a=fencedArgs(patch);return fn<'ok'|'lease_lost'>('public.broker_document_fenced_update($1,$2,$3::jsonb,$4)',[id,token,a.patch,a.release]);},
   async insertRun(row){await insert('broker_report_runs',{...row,detail:row.detail??{}},'run_id');},
   finishRun:(id,token,patch)=>fn<'ok'|'lease_lost'>('public.broker_run_finish($1,$2,$3::jsonb)',[id,token,dropUndefined(patch as R)]),
@@ -12186,13 +12291,14 @@ export async function rejectSnippet(deps:SDeps,snippetId:string,_by:string):Prom
 // fields/snippets/summaries/quarantine payloads are BrokerResearchDb.purgeReportText (contract); O11 default: summary
 // text is kept, status → rejected.
 import {auditAdmin} from './audit';
-import {conflict,notFound} from './errors';
+import {BrokerError,conflict,notFound} from './errors';
+import {LEASE_SECONDS} from './parse';
 import {brokerPaths} from './storage';
 import type {CoreDeps} from './deps';
-import type {PurgeStep,PurgeStepRow} from './types';
+import type {DocumentRow,PurgeStep,PurgeStepRow} from './types';
 
 export const PURGE_STEPS:readonly PurgeStep[]=['pdf','artifacts','runs','fields_text','snippets_text','summaries','quarantine_payload'];
-type WDeps=Pick<CoreDeps,'db'|'storage'|'tables'|'now'>;
+type WDeps=Pick<CoreDeps,'db'|'storage'|'tables'|'now'|'newId'>;
 
 export async function withdrawDocument(deps:WDeps,documentId:string,i:{reason:string;purge:boolean},by:string):Promise<{purge:Awaited<ReturnType<typeof purgeDocument>>|null}>{
  const doc=await deps.db.getDocument(documentId);if(!doc)throw notFound('document_not_found');
@@ -12201,12 +12307,23 @@ export async function withdrawDocument(deps:WDeps,documentId:string,i:{reason:st
   await deps.db.logAccess({document_id:documentId,user_id:by,action:'withdraw',detail:{reason:i.reason}});
   await auditAdmin(deps.tables,by,'broker_research.withdraw',documentId,{reason:i.reason},deps.now());
  }
- return {purge:i.purge?await purgeDocument(deps,documentId,by):null};
+ if(!i.purge)return {purge:null};
+ try{return {purge:await purgeDocument(deps,documentId,by)};}
+ catch(e){if(e instanceof BrokerError&&e.code==='lease_held')return {purge:null};throw e;}   // a writer holds the lease: retry purge later (409 from the purge route)
 }
 
 export async function purgeDocument(deps:WDeps,documentId:string,by:string):Promise<{done:boolean;steps:PurgeStepRow[]}>{
  const doc=await deps.db.getDocument(documentId);if(!doc)throw notFound('document_not_found');
  if(doc.status!=='withdrawn')throw conflict('document_not_withdrawn');
+ // barrier (P-R3-04): purge holds the document lease for all its steps, so no processing or gold-evaluation writer
+ // (they all hold the same lease and re-check under it before writing) can upload while purge runs or after it completes
+ const token=deps.newId();
+ if(!await deps.db.claimLease(documentId,token,LEASE_SECONDS))throw conflict('lease_held');
+ try{return await purgeSteps(deps,doc,by);}
+ finally{await deps.db.fencedUpdateDocument(documentId,token,{releaseLease:true});}
+}
+async function purgeSteps(deps:WDeps,doc:DocumentRow,by:string):Promise<{done:boolean;steps:PurgeStepRow[]}>{
+ const documentId=doc.document_id;
  const report=await deps.db.reportByDocument(documentId);
  const done=new Set((await deps.db.purgeSteps(documentId)).filter(s=>s.status==='done').map(s=>s.step));
  const runs=await deps.db.listRuns(documentId);
@@ -12472,7 +12589,7 @@ import {runParse} from './parse';
 import {LlmError,recordedLlmPort} from './ports/llm';
 import {brokerPaths} from './storage';
 import {ADMIN_ID,DEADLINE,memoryBrokerDeps,seedDocument,seedLicence,syntheticPdf} from './testing';
-import {withdrawDocument} from './withdraw';
+import {purgeDocument,withdrawDocument} from './withdraw';
 
 const g=(field:string,value_text:string,value_num:string|null,page=1,s=0,e=5,target_key:string|null='ZZBR',typed:Partial<EvalRow>={}):EvalRow=>({target_key,field,occurrence:1,value_text,value_num,value_currency:null,value_unit:value_num===null?null:'price',value_date:null,page,char_start:s,char_end:e,...typed});
 describe('evalStats',()=>{
@@ -12556,6 +12673,26 @@ describe('gold-evaluation calls and purge (P-R2-02)',()=>{
   expect(await d.storage.list(brokerPaths.evalPrefix(a.sha256))).toEqual([]);
   expect([...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`))).toEqual([]);
  });
+ it('withdraw + purge while the evaluation LLM call is pending: purge is refused lease_held, the evaluation stops on withdrawn and writes nothing, purge then completes (P-R3-04)',async()=>{
+  const d=memoryBrokerDeps();const lic=await seedLicence(d.db);const a=await seedDocument(d,lic.licence_id);
+  await runParse(d,a.document_id,ADMIN_ID,{deadline:DEADLINE()});
+  const base=recordedLlmPort([EXTRACT_RESPONSE]);let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+  d.llm={info:()=>base.info(),complete:async(req)=>{await gate;return base.complete(req);}};
+  const run=runGoldEval(d,[{sha256:a.sha256,fields:[],absent:[]}],{by:ADMIN_ID,dryRun:false});
+  const outcome=run.then(()=>'resolved',(e:{code?:string})=>e.code);
+  await new Promise(r=>setTimeout(r,0));                                                      // the evaluation holds the lease, waiting on the LLM
+  expect((await withdrawDocument(d,a.document_id,{reason:'licence ended',purge:true},ADMIN_ID)).purge).toBeNull();
+  await expect(purgeDocument(d,a.document_id,ADMIN_ID)).rejects.toMatchObject({code:'lease_held',status:409});
+  expect((await d.db.getDocument(a.document_id))!.purged_at).toBeNull();
+  expect((await d.db.purgeSteps(a.document_id)).filter(s=>s.status==='done')).toEqual([]);   // nothing was marked done
+  release();
+  expect(await outcome).toBe('document_withdrawn');                                           // re-checked under the fence before the upload
+  expect(await d.storage.list(brokerPaths.evalPrefix(a.sha256))).toEqual([]);
+  expect((await d.db.getDocument(a.document_id))!.lease_token).toBeNull();                    // released
+  const p=await purgeDocument(d,a.document_id,ADMIN_ID);
+  expect(p.done).toBe(true);expect((await d.db.getDocument(a.document_id))!.purged_at).not.toBeNull();
+  expect([...d.storage.objects.keys()].filter(k=>k.startsWith(`eval/${a.sha256}/`))).toEqual([]);
+ });
 });
 ```
 
@@ -12572,11 +12709,11 @@ describe('gold-evaluation calls and purge (P-R2-02)',()=>{
 // accepts corpus_kind='gold' only (with approved_gold_corpus_hash); 'synthetic' receipts never lift it.
 import {decimalEquals} from '../facts/json-numbers';
 import {behaviorDigest} from './behavior';
-import {BrokerError,conflict,notFound} from './errors';
+import {BrokerError,conflict,gone,notFound} from './errors';
 import {extractCandidates} from './extract/run';
 import {canonicalJson,sha256Hex} from './hash';
 import {processingAllowed,utcToday} from './licences';
-import {artifactLoader} from './parse';
+import {LEASE_SECONDS,artifactLoader} from './parse';
 import {brokerPaths} from './storage';
 import {documentForAccess} from './upload';
 import {EXTRACT_PROMPT_VERSION,SCHEMA_VERSION} from './versions';
@@ -12662,10 +12799,23 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
   if(a.licence.version!==pin.licence_version)throw conflict('licence_changed_during_eval');
   // the receipt's extractor_version / behavior_digest describe the pinned parse runs: a reparse in between is refused
   if(a.parseRun.run_id!==pin.parse_run_id||a.parseRun.artifact_hash!==pin.artifact_hash||a.parseRun.extractor_version!==pin.extractor_version)throw conflict('parse_run_changed_during_eval',{sha256:g.sha256});
-  const b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
-  const evalRun=deps.newId();
-  await deps.storage.upload(brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}),'application/json');
-  await deps.storage.upload(brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}),'application/json');
+  // the document lease is the barrier against withdraw/purge (P-R3-04): held for this document's extraction and its
+  // bucket writes; purge claims the same lease and answers 409 lease_held while an evaluation holds it
+  const token=deps.newId();
+  if(!await deps.db.claimLease(a.doc.document_id,token,LEASE_SECONDS))throw conflict('lease_held',{sha256:g.sha256});
+  let b:Awaited<ReturnType<typeof extractCandidates>>;
+  try{
+   b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});
+   const evalRun=deps.newId();
+   const writes:[string,string][]=[[brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests})],
+    [brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses})]];
+   for(const [path,body] of writes){
+    const fence=await deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS);   // re-checked under the fence before EVERY upload
+    if(fence==='document_withdrawn')throw gone();
+    if(fence!=='ok')throw conflict('lease_lost',{sha256:g.sha256});
+    await deps.storage.upload(path,body,'application/json');
+   }
+  }finally{await deps.db.fencedUpdateDocument(a.doc.document_id,token,{releaseLease:true});}
   extracted.push({sha256:g.sha256,rows:b.rows});
   o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
  }
@@ -12961,7 +13111,9 @@ describe.skipIf(!enabled)('broker research pipeline (critical, real PostgreSQL)'
   const effective=live(await deps.db.listFields(reportId)).filter(f=>f.extractor.startsWith('llm:'));
   const run=(await deps.db.getRun(effective[0].run_id!))!;   // all effective LLM rows come from the first extract run (same digest as the re-extract)
   expect(new Set(effective.map(f=>f.run_id)).size).toBe(1);
-  const per_field=Object.fromEntries([...new Set(effective.map(f=>f.field))].sort().map(f=>[f,{tp:30,fp:0,fn:0,precision:1,recall:1}]));
+  // blocker 13 covers EVERY effective field of a gated report, human rows and absent rows included (P-R1-12, P-R3-03)
+  const covered=live(await deps.db.listFields(reportId)).filter(f=>f.status==='confirmed'||f.status==='corrected'||f.status==='absent');
+  const per_field=Object.fromEntries([...new Set(covered.map(f=>f.field))].sort().map(f=>[f,{tp:30,fp:0,fn:0,precision:1,recall:1}]));
   const corpus=sha256(new TextEncoder().encode(`pipeline-gold-${randomUUID()}`));
   await deps.db.insertEvalReceipt({corpus_kind:'gold',corpus_hash:corpus,behavior_digest:run.behavior_digest!,extractor_version:run.extractor_version!,model_id:run.model_id!,registry_hash:run.registry_hash!,
    prompt_version:run.prompt_version!,schema_version:run.schema_version!,code_version:'pipeline-test',n_docs:30,per_field,absence:{tp:0,fp:0,fn:0},precision_min:1,recall_min:1,passed:true,ran_by:ADMIN_ID});
@@ -13063,8 +13215,8 @@ git commit -m "feat(broker-research): C8 eval receipts, replay, gold runner, cri
 | POST | `documents/[documentId]/parse` | `{}` | `{runId,status:'succeeded',batchStatus}` | 409 `licence_forbids_processing`/`lease_held`/`promotion_pending`/`lease_lost`、410、502 `<f3 code>`（`error.runId,batchStatus`）、503 `f3_unavailable` |
 | POST | `documents/[documentId]/extract` | `{}` | `ExtractResult` = `{runId,reportId,status:'succeeded',counts,batchStatus,receipt,ruleReceiptId}` | 409 `document_not_parsed`/`licence_forbids_processing`/`lease_held`/`lease_lost`、410、502 `llm_schema_invalid`/`llm_quota`/`llm_failed`/`extract_deadline`/`storage_failed`（`error.runId,batchStatus`）、503 `llm_unavailable`、500（规则阶段异常：运行 failed、批次非信息码 `rules_error`） |
 | ★ GET | `documents/[documentId]/pages/[n]` | — | `{documentId,parseRunId,page,text,pageCount}` | 400 `invalid_parameter:n`、404 `page_not_found`、409 `document_not_parsed`、410 |
-| POST | `documents/[documentId]/withdraw` | `{reason:string(≤500),purge?:boolean}` | `{purge:{done:boolean,steps:PurgeStepRow[]}\|null}` | 404 |
-| POST | `documents/[documentId]/purge` | `{}` | `{done:boolean,steps:PurgeStepRow[]}` | 404、409 `document_not_withdrawn` |
+| POST | `documents/[documentId]/withdraw` | `{reason:string(≤500),purge?:boolean}` | `{purge:{done:boolean,steps:PurgeStepRow[]}\|null}`（`purge:true` 但文档租约被占用时为 `null`，稍后重试 purge） | 404 |
+| POST | `documents/[documentId]/purge` | `{}` | `{done:boolean,steps:PurgeStepRow[]}` | 404、409 `document_not_withdrawn` / `lease_held`（解析、抽取、摘要或黄金集评测正持有文档租约） |
 | ★ GET | `reports/[reportId]` | — | `ReviewPayload`（契约） | 404 `report_not_found`、410 |
 | POST | `reports/[reportId]/fields/[fieldId]` | `{action:'confirm'\|'correct'\|'reject'\|'absent',payload?:object}`；confirm `payload={page?,charStart?,charEnd?}`（给跨度 = 框选）；correct `payload={valueText,valueNum?,valueCurrency?,valueUnit?,valueDate?,page?,charStart?,charEnd?}`；absent `payload={page}`；reject `{}` | `{receipt:MaterializeReceipt,rules:RulesOutcome}` | 400 `span_required`/`span_not_verbatim`/`span_out_of_range`/`invalid_correction:<key>`/`invalid_parameter:field`、404 `field_not_found`、409 `published_immutable`/`effective_exists` |
 | POST | `reports/[reportId]/fields` | `{field,targetKey?:string\|null,occurrence?:number,valueText,page,charStart,charEnd}` | 201 `{fieldId,receipt,rules}` | 400 `span_not_verbatim`/`span_required`、409 |
