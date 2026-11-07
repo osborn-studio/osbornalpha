@@ -5,7 +5,7 @@
 // accept_refetched override path.
 import {describe,expect,it} from 'vitest';
 import {digest} from '../canonical';
-import type {JudgmentRow,KlineRangeRequest,ResolveContext} from '../types';
+import type {JudgmentRow,KlineRangeRequest,QuarantineOverride,ResolveContext} from '../types';
 import {fixtureKline,loadKlineFixture,priceJudgment,stubInputsDb,truncateFixture,unverifiedCapability,verifiedCapability} from '../testing/fixtures';
 import type {KlineFixture,PriceJudgmentSpec} from '../testing/fixtures';
 import {PRICE_RESOLVER_VERSION,priceReturnResolverWith} from './price';
@@ -15,9 +15,10 @@ const ZZA=loadKlineFixture('synthetic-us-zza.json'),ZZB=loadKlineFixture('synthe
 const NOW='2026-03-02T04:00:00.000Z';
 const resolver=priceReturnResolverWith({capabilityOf:verifiedCapability});
 const judgment=(s:Partial<PriceJudgmentSpec>={})=>priceJudgment({baseDate:'2026-01-12',registeredClose:106,batchId:'00000000-0000-4000-8000-000000000001',...s}).row;
-function run(j:JudgmentRow,fixtures:KlineFixture[],o:{now?:string;primary?:{ticker:string;market:'US'|'A'|'HK'}|null}={}){
+type Sec={ticker:string;market:'US'|'A'|'HK'}|null;
+function run(j:JudgmentRow,fixtures:KlineFixture[],o:{now?:string;primary?:Sec|((on:string)=>Sec)}={}){
  const calls:KlineRangeRequest[]=[];
- const inputsDb=stubInputsDb({kline:fixtureKline(fixtures,calls),issuerPrimarySecurity:async()=>o.primary===undefined?{ticker:'ZZA',market:'US'}:o.primary});
+ const inputsDb=stubInputsDb({kline:fixtureKline(fixtures,calls),issuerPrimarySecurity:async (_i,on)=>o.primary===undefined?{ticker:'ZZA',market:'US'}:typeof o.primary==='function'?o.primary(on):o.primary});
  const now=o.now??NOW;
  const ctx:ResolveContext={judgment:j,cutoff:now,now,inputsDb,signal:new AbortController().signal};
  return {calls,result:resolver.resolve(ctx)};
@@ -45,12 +46,49 @@ describe('price_return resolver',()=>{
   expect(calls.map(c=>[c.from,c.to])).toEqual([['2026-01-02','2026-01-30'],['2026-01-31','2026-02-17']]);
  });
  it('fewer than 5 bars before base: one backward page of 20 days',async()=>{
-  const {calls,result}=run(judgment({baseDate:'2026-01-07',registeredClose:103}),[ZZA]);
+  const pre=['2025-12-08','2025-12-09','2025-12-10','2025-12-11','2025-12-12','2025-12-15','2025-12-16'].map(time=>({time,open:95,high:96,low:94,close:95,volume:1000}));
+  const ext:KlineFixture={...ZZA,bars:[...pre,...ZZA.bars]};
+  const {calls,result}=run(judgment({baseDate:'2026-01-05',registeredClose:101}),[ext]);
   const r=await result;
-  expect(r.status).toBe('resolved');
-  expect(calls.map(c=>[c.from,c.to])).toEqual([['2025-12-28','2026-01-25'],['2025-12-08','2025-12-27']]);
   if(r.status!=='resolved')throw new Error(JSON.stringify(r));
-  expect((r.evidence as unknown as Ev).from).toBe('2025-12-08');   // explicit unsafe boundary: evidence is Record<string,unknown>
+  expect(calls.map(c=>[c.from,c.to])).toEqual([['2025-12-26','2026-01-23'],['2025-12-06','2025-12-25']]);
+  expect(r.value).toBe(106/101-1);
+  const ev=r.evidence as unknown as Ev;
+  expect(ev.from).toBe('2025-12-06');
+  expect(ev.bars).toHaveLength(11);
+ });
+ it('S-04: fewer than 5 pre-base bars after paging: Pending while the base is recent, Unavailable(insufficient_history) once it is not',async()=>{
+  const young:KlineFixture={...ZZA,bars:ZZA.bars.filter(b=>b.time>='2026-01-05')};
+  const j=judgment({baseDate:'2026-01-07',registeredClose:103});
+  expect((await run(j,[young],{now:'2026-01-20T22:00:00.000Z'}).result).status).toBe('pending');
+  expect(await run(j,[young]).result).toEqual({status:'unavailable',failure:'insufficient_history'});
+ });
+ it('S-05: duplicate or descending bar dates from any kline implementation → Unavailable(invalid_data)',async()=>{
+  const dup:KlineFixture={...ZZA,bars:[...ZZA.bars,{...ZZA.bars[3]}]};
+  expect(await run(judgment(),[dup]).result).toEqual({status:'unavailable',failure:'invalid_data'});
+  const desc:KlineFixture={...ZZA,bars:[...ZZA.bars].reverse()};
+  expect(await run(judgment(),[desc]).result).toEqual({status:'unavailable',failure:'invalid_data'});
+  const gap=judgment({benchmark:{ticker:'ZZB',market:'US'}});
+  expect(await run(gap,[ZZA,{...ZZB,bars:[...ZZB.bars,{...ZZB.bars[3]}]}]).result).toEqual({status:'unavailable',failure:'invalid_data'});
+ });
+ it('S-03: the base input must be ONE registered price_bar of the same ticker, market, date, source AND adjustment — never a fallback',async()=>{
+  const j=judgment();
+  const bar=j.inputs[0] as Extract<JudgmentRow['inputs'][number],{kind:'price_bar'}>;
+  const hfq={...bar,ref:{...bar.ref,adjustment:'hfq' as const},snapshot:{...bar.snapshot,adjustment:'hfq' as const}};
+  const src={...bar,ref:{...bar.ref,source:'sina' as const},snapshot:{...bar.snapshot,source:'sina' as const}};
+  for(const inputs of [[hfq],[src],[],[bar,{...bar,hash:'x'}]])
+   expect({n:inputs.length,r:await run({...j,inputs},[ZZA]).result}).toEqual({n:inputs.length,r:{status:'unavailable',failure:'base_input_missing'}});
+  expect((await run(j,[ZZA]).result).status).toBe('resolved');
+ });
+ it('S-06: delisting is judged on the frozen ticker: the primary security at the target date is no longer it, or none',async()=>{
+  const short=truncateFixture(ZZA,'2026-01-16');
+  const oldNew=(on:string):Sec=>on<'2026-01-15'?{ticker:'ZZA',market:'US'}:{ticker:'ZZANEW',market:'US'};
+  expect(await run(judgment(),[short],{primary:oldNew}).result).toEqual({status:'unavailable',failure:'delisted'});
+  expect(await run(judgment(),[short],{primary:on=>on<'2026-01-15'?{ticker:'ZZA',market:'US'}:null}).result).toEqual({status:'unavailable',failure:'delisted'});
+  // the frozen ticker was never the primary (dual listing): its absence of bars is not a delisting
+  expect((await run(judgment(),[short],{primary:{ticker:'OTHER',market:'US'}}).result).status).toBe('pending');
+  expect((await run(judgment(),[short],{primary:{ticker:'ZZA',market:'US'}}).result).status).toBe('pending');
+  expect((await run(judgment(),[ZZA],{primary:oldNew}).result).status).toBe('resolved');
  });
  it('a bar is eligible only once its session closed at the cutoff: intraday and midnight cutoffs never take the unfinished end bar (P1-07)',async()=>{
   // 2026-01-20 is the 5th session after base; the US close that day is 21:00Z (EST).
@@ -109,14 +147,9 @@ describe('price_return resolver',()=>{
   const j=judgment();
   const ctx=(benchOnly:boolean):ResolveContext=>({judgment:benchOnly?judgment({benchmark:{ticker:'ZZB',market:'HK'}}):j,cutoff:NOW,now:NOW,inputsDb:stubInputsDb({kline:fixtureKline([ZZA,ZZB],calls)}),signal:new AbortController().signal});
   expect(await priceReturnResolverWith({capabilityOf:unverifiedCapability}).resolve(ctx(false))).toEqual({status:'unavailable',failure:'adjustment_unsupported'});
-  const hkUnverified=priceReturnResolverWith({capabilityOf:((_s:unknown,m:unknown)=>m==='HK'?null:{status:'verified',evidence:'fixtures/judgments/kline/synthetic-us-zzb.json',verified_at:'2026-11-06'}) as unknown as CapabilityLookup});
+  const hkUnverified=priceReturnResolverWith({capabilityOf:((_s:unknown,m:unknown)=>m==='HK'?null:{status:'verified',evidence:'fixtures/judgments/kline-synthetic/synthetic-us-zzb.json',verified_at:'2026-11-06'}) as unknown as CapabilityLookup});
   expect(await hkUnverified.resolve(ctx(true))).toEqual({status:'unavailable',failure:'adjustment_unsupported'});
   expect(calls).toHaveLength(0);
- });
- it('end bar missing and the issuer has no primary security any more → Unavailable(delisted)',async()=>{
-  const short=truncateFixture(ZZA,'2026-01-16');
-  expect(await run(judgment(),[short],{primary:null}).result).toEqual({status:'unavailable',failure:'delisted'});
-  expect((await run(judgment(),[ZZA],{primary:null}).result).status).toBe('resolved');   // a settleable judgment is never voided by a later delisting
  });
  it('DataGateway close-only: evidence keeps close only (others null, fields_present [close]) and origin.transform close_only',async()=>{
   const j=judgment({ticker:'ZZ0001',market:'A',source:'datagateway',registeredClose:10.5,closeOnly:true});
@@ -145,5 +178,49 @@ describe('price_return resolver',()=>{
   expect(codeOf(()=>resolver.fromOverride(j,{...override,resolution:{...override.resolution,evidence:{...inc.evidence,bars:[]}}}))).toBe('override_mismatch');
   expect(codeOf(()=>resolver.fromOverride(j,{...override,resolution:{kind:'choose_fact',chosen:{}}}))).toBe('override_mismatch');
   expect(resolver.version).toBe(PRICE_RESOLVER_VERSION);
+ });
+ it('S-01: fromOverride never trusts a stored result; it validates the frozen evidence and recomputes r',async()=>{
+  const j=judgment({registeredClose:107});
+  const inc=await run(j,[ZZA]).result;
+  if(inc.status!=='inconsistent')throw new Error(inc.status);
+  const codeOf=(f:()=>unknown)=>{try{f();}catch(e){return (e as {code?:string}).code;}return 'no_throw';};
+  const mk=(ev:Record<string,unknown>,over:Partial<QuarantineOverride>={}):QuarantineOverride=>{const h=digest(ev);return {reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:h,evidence:ev},evidence_hash:h,resolved_by:'9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',at:NOW,cutoff:NOW,...over};};
+  const ev=inc.evidence as Record<string,unknown>&{bars:{close:number}[];result:Record<string,unknown>};
+  expect(resolver.fromOverride(j,mk(ev))).toMatchObject({status:'resolved',value:111/106-1});
+  // the counterexample: a forged result, re-hashed so the hash binds the forgery
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,result:{...ev.result,value:0.9}})))).toBe('override_mismatch');
+  // forged bars with a consistent bars_sha256 and a result matching the forged bars are still caught by the bar checks (end beyond cutoff / identity)
+  expect(codeOf(()=>resolver.fromOverride(j,mk(ev,{evidence_hash:'0'.repeat(64)})))).toBe('override_mismatch');                 // outer hash differs
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,bars:ev.bars.map((b,i)=>i===10?{...b,close:222}:b)})))).toBe('override_mismatch'); // bars_sha256 stale
+  const forgedBars=ev.bars.map((b,i)=>i===10?{...b,close:222}:b);
+  const f2={...ev,bars:forgedBars,bars_sha256:digest(forgedBars)};
+  expect(codeOf(()=>resolver.fromOverride(j,mk(f2)))).toBe('override_mismatch');                                               // stored result no longer matches the recomputation
+  const f3={...f2,result:{...ev.result,value:222/106-1,r:222/106-1}};
+  const forged=resolver.fromOverride(j,mk(f3));                                                                                  // internally consistent bars: the value is the RECOMPUTED one
+  expect(forged).toMatchObject({status:'resolved',value:222/106-1});
+  for(const bad of [{ticker:'ZZB'},{market:'HK'},{source:'sina'},{adjustment:'hfq'},{base_date:'2026-01-13'}])
+   expect({bad,c:codeOf(()=>resolver.fromOverride(j,mk({...ev,...bad})))}).toEqual({bad,c:'override_mismatch'});
+  const dupBars=[...ev.bars,ev.bars[10]];
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,bars:dupBars,bars_sha256:digest(dupBars)})))).toBe('override_mismatch');
+  const noBase=ev.bars.filter((_,i)=>i!==5);
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,bars:noBase,bars_sha256:digest(noBase)})))).toBe('override_mismatch');
+  const short=ev.bars.slice(2);
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,bars:short,bars_sha256:digest(short)})))).toBe('override_mismatch');        // fewer than 5 pre-base bars
+  expect(codeOf(()=>resolver.fromOverride(j,mk(ev,{cutoff:'2026-01-20T20:59:59.999Z'})))).toBe('override_mismatch');                // end bar not closed at the override cutoff
+  expect(codeOf(()=>priceReturnResolverWith({capabilityOf:unverifiedCapability}).fromOverride(j,mk(ev)))).toBe('override_mismatch');
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,registered_bar:{...(ev.registered_bar as object),close:1}})))).toBe('override_mismatch');
+ });
+ it('S-01 benchmark: benchmark bars must sit on the same dates and replay r_rel',async()=>{
+  const j=judgment({registeredClose:107,benchmark:{ticker:'ZZB',market:'US'}});
+  const inc=await run(j,[ZZA,ZZB]).result;
+  if(inc.status!=='inconsistent')throw new Error(inc.status);
+  const ev=inc.evidence as Record<string,unknown>&{benchmark_bars:{date:string}[]};
+  const mk=(e:Record<string,unknown>):QuarantineOverride=>{const h=digest(e);return {reason_code:'settlement_basis_mismatch',resolution:{kind:'accept_refetched',evidence_hash:h,evidence:e},evidence_hash:h,resolved_by:'r',at:NOW,cutoff:NOW};};
+  expect(resolver.fromOverride(j,mk(ev))).toMatchObject({status:'resolved'});
+  const moved=ev.benchmark_bars.slice(1);
+  const codeOf=(f:()=>unknown)=>{try{f();}catch(e){return (e as {code?:string}).code;}return 'no_throw';};
+  expect(codeOf(()=>resolver.fromOverride(j,mk({...ev,benchmark_bars:moved,benchmark_bars_sha256:digest(moved)})))).toBe('override_mismatch');
+  const {benchmark_bars:_b,benchmark_bars_sha256:_h,...noBench}=ev;
+  expect(codeOf(()=>resolver.fromOverride(j,mk(noBench)))).toBe('override_mismatch');
  });
 });

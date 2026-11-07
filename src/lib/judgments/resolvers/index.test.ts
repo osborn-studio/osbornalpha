@@ -8,6 +8,7 @@ import {MAX_FETCH_MS,RESOLVERS,resolverFor} from './index';
 import {factMetricResolver} from './facts';
 import {macroRegimeReplayResolver} from './macro';
 import {PRICE_MAX_FETCH_MS,priceReturnResolver} from './price';
+import {validatePriceReturnParams} from './schemas';
 
 const PRICE={ticker:'ZZA',market:'US',adjustment:'qfq',source:'eastmoney',base_date:'2026-01-12'};
 const FACT={issuer_id:'11111111-1111-4111-8111-111111111111',market:'US',metric:'q_single_revenue',period_start:'2025-07-01',period_end:'2025-09-30',duration:'3M',unit:'USD',input_unit:'USD',basis:'us_standard',formula_version:FORMULA_VERSION,compare:'value'};
@@ -55,5 +56,14 @@ describe('resolver params and registry',()=>{
   expect(resolverFor('fact_metric')).toBe(factMetricResolver);
   expect(resolverFor('macro_regime_replay')).toBe(macroRegimeReplayResolver);
   for(const name of ['recommendation_hit','industry_aggregate','nope'])expect({name,code:codeOf(()=>resolverFor(name))}).toEqual({name,code:'invalid_condition'});
+ });
+ it('S-07: dates share the supported-year check (no year 0000 / 0999), for base_date, fact periods and the macro reference period',()=>{
+  expect(priceReturnResolver.validateParams({...PRICE,base_date:'0000-01-12'})).toBe(false);
+  expect(priceReturnResolver.validateParams({...PRICE,base_date:'0999-12-31'})).toBe(false);
+  expect(factMetricResolver.validateParams({...FACT,period_start:'0000-07-01'})).toBe(false);
+  expect(factMetricResolver.validateParams({...FACT,period_end:'0000-09-30'})).toBe(false);
+  expect(macroRegimeReplayResolver.validateParams({...MACRO,reference_period:'0000-06'})).toBe(false);
+  expect(macroRegimeReplayResolver.validateParams({...MACRO,reference_period:'0999-06'})).toBe(false);
+  expect(validatePriceReturnParams({...PRICE,base_date:'0000-01-12'})).toBe(false);
  });
 });

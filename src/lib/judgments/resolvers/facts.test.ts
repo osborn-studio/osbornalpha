@@ -175,4 +175,35 @@ describe('fact_metric resolver',()=>{
   for(const k of ['value','run_id','source_concept','statement','mapping_version','raw_hash'])expect(k in d).toBe(false);
   expect(d).toMatchObject({fact_id:env.rows[0].fact_id,value_text:env.rows[0].value_text,disclosure_seq:1,is_current:true,is_revision:false});
  });
+ it('S-02: fromOverride requires every operand derived at factsAsOfDate(override.cutoff) from rows available by then (both yoy sides)',async()=>{
+  const {params,derive}=await setup();
+  const codeOf=(f:()=>unknown)=>{try{f();}catch(e){return (e as {code?:string}).code;}return 'no_throw';};
+  const mk=(chosen:FactCandidate,cutoff:string):QuarantineOverride=>({reason_code:'settlement_ambiguous_fact',resolution:{kind:'choose_fact',chosen:chosen as unknown as Record<string,unknown>},evidence_hash:'h',resolved_by:'r',at:NOW,cutoff});
+  const p=params();
+  const r=await factMetricResolver.resolve(ctxOf(p,edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2025-09-30'))!,value:'1001'}])));
+  if(r.status!=='inconsistent')throw new Error(r.status);
+  const c0=(r.detail.candidates as FactCandidate[])[0];
+  expect(factMetricResolver.fromOverride(judgmentOf(p),mk(c0,NOW)).status).toBe('resolved');
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),mk(c0,'2025-11-05T00:00:00.000Z')))).toBe('override_mismatch');   // frozen as_of is not the cutoff's derive date
+  // consistent as_of but a row published after the override cutoff
+  const early='2025-10-30T00:00:00.000Z';
+  const rows=c0.derivation.rows;
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(p),mk({...c0,derivation:{...c0.derivation,as_of:factsAsOfDate(early),rows}},early)))).toBe('override_mismatch');
+  // yoy counterpart carries the same duty
+  const py=params({compare:'yoy'});
+  const ry=await factMetricResolver.resolve(ctxOf(py,edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2024-09-30'))!,value:'801'}])));
+  if(ry.status!=='inconsistent')throw new Error(ry.status);
+  const pc=(ry.detail.candidates as FactCandidate[])[0];
+  expect(factMetricResolver.fromOverride(judgmentOf(py),mk(pc,NOW)).status).toBe('resolved');
+  expect(codeOf(()=>factMetricResolver.fromOverride(judgmentOf(py),mk({...pc,counterpart:{...pc.counterpart!,derivation:{...pc.counterpart!.derivation,as_of:'2025-10-29'}}},NOW)))).toBe('override_mismatch');
+ });
+ it('prior_zero only when every candidate prior is zero; a zero prior next to a non-zero one is left out of the candidates',async()=>{
+  const {params,derive}=await setup();
+  const zeroPlus=edited(derive,ms=>[...ms,{...ms.find(m=>isQ(m,'2024-09-30'))!,value:'0'}]);
+  const r=await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),zeroPlus));
+  if(r.status!=='inconsistent')throw new Error(JSON.stringify(r));
+  expect((r.detail.candidates as FactCandidate[]).map(c=>[c.role,c.value_text,c.realized_value])).toEqual([['prior','800',0.25]]);
+  const allZero=edited(derive,ms=>ms.map(m=>isQ(m,'2024-09-30')?{...m,value:'0'}:m));
+  expect(await factMetricResolver.resolve(ctxOf(params({compare:'yoy'}),allZero))).toEqual({status:'unavailable',failure:'prior_zero'});
+ });
 });

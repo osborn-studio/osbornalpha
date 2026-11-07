@@ -130,3 +130,16 @@
 - 备注：`db.test.ts`「calibrationCohortInternal paging…」偶发失败（Task 4 内存 db，与本任务无关，重跑通过）。
 - 测试修复：契约 R03 用例的两个校准行显式给严格递增的 `computed_at`（原为同毫秒时 `latestCalibration` 按随机 `calibration_id` 打破平局，约 1/6 概率取到旧行）；其余用例不会对同一 scope 成功插入多行。
 - Task 13：fixtures/judgments/replay/synthetic-fact-metric.json 已生成（judgment_id 69ae3937-54c2-8bc6-becb-2dc9850e0873），待核对：fixtures/judgments/replay/synthetic-fact-metric.json（需实施者之外的人，规格 §16）。
+
+## Task 11 resolvers (price_return / fact_metric / macro_regime_replay) 与复审修复
+- 偏差：计划的合成 K 线夹具放在 `fixtures/judgments/kline/` 会被 Task 7 的 `price-capabilities.test.ts`（遍历该目录的每个 json 作复权夹具）误读；改放 `fixtures/judgments/kline-synthetic/`，`loadKlineFixture` 与证据路径同步，Task 7 测试不改。
+- 其余计划代码原样落地（`inputs.ts` 的 `derivationRowsFor / factRowOfDerivation` 可直接引用；`readKlineRange` 的分页重叠不影响夹具型测试；价格测试用注入的 `verifiedCapability`）。
+- S-01：`price_return.fromOverride` 不再信任存储的 `result`：`digest(evidence)` 与 override / 隔离事件的 `evidence_hash` 三者一致；证据的 ticker / market / source / adjustment / base_date 与条件一致；能力表 verified（含基准）；登记基准 bar 的快照摘要一致；bars 日期唯一升序且 `bars_sha256` 匹配；基准 bar 存在且之前 ≥5 根；末根即终点 bar（session_index 为 base+n，date 为首根 ≥ target.date）；基准 bars 与主 bars 同日期对齐且摘要匹配；两个市场终点收盘时刻 ≤ `override.cutoff`；由冻结 bars 重算 r / r_b / value / label，与存储结果不等 → `override_mismatch`，结算值取重算值。
+- S-02：`fact_metric.fromOverride` 要求每个算子（含 yoy 两侧）`derivation.as_of === factsAsOfDate(override.cutoff)`，且每行 `endOfUtcDay(available_date) ≤ override.cutoff`。
+- S-03：`registeredBase` 要求唯一的、与条件 ticker / market / date / source / adjustment 全部一致的登记 price_bar；缺失或冲突 → `Unavailable(base_input_missing)`，不回退。
+- S-04：分页后基准前仍不足 5 根：基准日在 `now` 前 30 天内 → `Pending(insufficient_history)`，否则 `Unavailable(insufficient_history)`（30 天是本任务选定的"近期"阈值）。原"分页"用例改用含 2025-12 前置 bar 的扩展夹具。
+- S-05：任何注入的 kline 实现返回重复或非升序日期 → `Unavailable(invalid_data)`（主序列与基准序列）。
+- S-06：退市判定改为冻结 ticker：基准日该 ticker 是发行人主证券，且终点日主证券是别的票或无 → `delisted`；冻结 ticker 本来就不是主证券（双重上市）不据此判退市。仅用现有 `issuerPrimarySecurity(issuer, on)`，未改 `inputs-db.ts` / `types.ts`；限制：看不到非主证券持仓窗口。
+- S-07：`schemas.ts` 的三个 `validate*Params` 内含 `isIsoDate`（year ≥ 1000）检查：`base_date`、`period_start/end`、`reference_period`（`0000-xx` 被拒）。
+- 次要：`prior_zero` 仅当所有候选上年值为零；零上年与非零上年并存时，零值候选不进入 `ambiguous_fact` 候选列表。
+- 红测：先写测试，`npm test -- src/lib/judgments/resolvers` 9 failed / 39 passed；实现后 48 passed。typecheck 的 resolvers 范围内无错误，lint 干净。

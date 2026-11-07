@@ -117,9 +117,10 @@ export const factMetricResolver:Resolver={
   const prior=res.metrics.filter(m=>isPrior(m,p));
   if(prior.length===0)return unavailable('prior_missing');
   if(cur.length>1&&prior.length>1)return unavailable('ambiguous_both');
-  if(prior.some(m=>Number(m.value)===0))return unavailable('prior_zero');
-  if(cur.length>1)return ambiguous(cur,'current',m=>yoy(m,prior[0]),prior[0]);
-  if(prior.length>1)return ambiguous(prior,'prior',m=>yoy(cur[0],m),cur[0]);
+  const usable=prior.filter(m=>Number(m.value)!==0);   // a zero prior cannot be a yoy denominator: only when ALL candidates are zero is the metric unavailable
+  if(usable.length===0)return unavailable('prior_zero');
+  if(cur.length>1)return ambiguous(cur,'current',m=>yoy(m,usable[0]),usable[0]);
+  if(prior.length>1)return ambiguous(usable,'prior',m=>yoy(cur[0],m),cur[0]);
   return resolved([cur[0],prior[0]],yoy(cur[0],prior[0]));
  },
  fromOverride(j:JudgmentRow,o:QuarantineOverride):ResolverResult{
@@ -133,6 +134,12 @@ export const factMetricResolver:Resolver={
   const p=c.params;
   // Recompute, never trust: every operand must be reproduced by deriveMetrics from its own frozen rows (P1-06).
   const ops:FactOperand[]=[ch,...(ch.counterpart?[ch.counterpart]:[])];
+  // S-02: every operand must have been derived at the derive date of THIS override's cutoff, from rows already available at it.
+  const asOfAt=factsAsOfDate(o.cutoff);
+  for(const x of ops){
+   if(x.derivation.as_of!==asOfAt)throw new JudgmentError('override_mismatch','derivation_as_of');
+   if(x.derivation.rows.some(r=>typeof r.available_date!=='string'||!isRealDate(r.available_date)||endOfUtcDay(r.available_date)>o.cutoff))throw new JudgmentError('override_mismatch','row_after_cutoff');
+  }
   if(!ops.every(operandReproduces))throw new JudgmentError('override_mismatch','derivation_does_not_reproduce');
   const cur=ops.filter(x=>x.role==='current'),pr=ops.filter(x=>x.role==='prior');
   if(cur.length!==1||!isCurrent(cur[0].key,p))throw new JudgmentError('override_mismatch','current_key');

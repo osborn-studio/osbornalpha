@@ -20,7 +20,7 @@ import {JudgmentError} from '../errors';
 import {addDaysIso,closeInstantUtc} from '../time';
 import type {Input,JudgmentRow,KlineFailure,PriceMarket,PriceReturnParams,QuarantineOverride,Resolver,ResolverResult,ResolveContext,Target} from '../types';
 import {capabilityOf} from './price-capabilities';
-import {isRealDate,validatePriceReturnParams} from './schemas';
+import {validatePriceReturnParams} from './schemas';
 
 export const PRICE_RESOLVER_VERSION='price_return/1';
 /** Policy constant (plan 1 identity tolerance): same source, same basis should agree almost exactly (spec §7.4). */
@@ -28,7 +28,7 @@ export const BASIS_TOLERANCE=0.005;
 export const PRE_BASE_BARS=5;
 /** Main + benchmark series, each bounded by the slowest provider path: Eastmoney US multi-prefix tries (3 × 5 s) vs DataGateway 7 s (spec §7.1). */
 export const PRICE_MAX_FETCH_MS=2*15_000;
-const SESSION_DAYS=1.52,LEAD_DAYS=10,TAIL_DAYS=10,DATE_TAIL_DAYS=20,BACK_PAGE_DAYS=20,NEAR_BASE_DAYS=5;
+const SESSION_DAYS=1.52,LEAD_DAYS=10,TAIL_DAYS=10,DATE_TAIL_DAYS=20,BACK_PAGE_DAYS=20,NEAR_BASE_DAYS=5,RECENT_BASE_DAYS=30;
 const FULL_FIELDS=['open','high','low','close','volume'];
 
 export type CapabilityLookup=typeof capabilityOf;
@@ -43,7 +43,7 @@ const merge=(a:SourceKlineBar[],b:SourceKlineBar[])=>{const m=new Map<string,Sou
 const maxIso=(xs:string[])=>xs.reduce((m,x)=>x>m?x:m);
 const unavailable=(failure:string):ResolverResult=>({status:'unavailable',failure});
 const inconsistent=(reason_code:InconsistentCode,detail:Record<string,unknown>,evidence:Record<string,unknown>):ResolverResult=>({status:'inconsistent',reason_code,detail,evidence,evidence_hash:digest(evidence)});
-const validate=(p:unknown):p is PriceReturnParams=>validatePriceReturnParams(p)&&isRealDate(p.base_date);
+const validate=(p:unknown):p is PriceReturnParams=>validatePriceReturnParams(p);
 
 /** Read window (spec §7.3); null for target kinds price_return does not settle. */
 export function priceWindow(p:PriceReturnParams,t:Target):{from:string;to:string}|null{
@@ -54,13 +54,26 @@ export function priceWindow(p:PriceReturnParams,t:Target):{from:string;to:string
 }
 /** The registered price_bar input of the base date (spec §7.4 basis check); null when the judgment froze none. */
 export function registeredBase(j:JudgmentRow,p:PriceReturnParams):PriceBarInput|null{
- return j.inputs.find((i):i is PriceBarInput=>i.kind==='price_bar'&&i.ref.ticker===p.ticker&&i.ref.market===p.market&&i.ref.date===p.base_date)??null;
+ const hits=j.inputs.filter((i):i is PriceBarInput=>i.kind==='price_bar'&&i.ref.ticker===p.ticker&&i.ref.market===p.market&&i.ref.date===p.base_date&&i.ref.source===p.source&&i.ref.adjustment===p.adjustment);
+ return hits.length===1?hits[0]:null;   // S-03: exactly one registered base of the condition's own source and adjustment; never a fallback
 }
 /** DataGateway's close-only branch synthesises open=high=low=close and volume=0. */
 const closeOnlyBar=(source:KlineSourceName,b:SourceKlineBar)=>source==='datagateway'&&b.volume===0&&b.open===b.close&&b.high===b.close&&b.low===b.close;
 export function evidenceBar(b:SourceKlineBar,closeOnly:boolean):EvidenceBar{
  if(closeOnly)return {date:b.time,open:null,high:null,low:null,close:b.close,volume:null,amount:null,fields_present:['close']};
  return {date:b.time,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume,amount:b.amount??null,fields_present:b.amount===undefined?FULL_FIELDS:[...FULL_FIELDS,'amount']};
+}
+
+/** S-06 / spec §12.4: the frozen ticker was the issuer's primary security at the base date, and at the target date the issuer's
+ *  primary is another ticker or none (valid_to <= target end; OLD -> NEW listing change). A frozen ticker that was never primary
+ *  (dual listing) is never judged delisted from the primary alone. */
+async function frozenTickerDelisted(ctx:ResolveContext,p:PriceReturnParams,t:Target):Promise<boolean>{
+ const j=ctx.judgment;
+ const end=t.kind==='session_index'?addDaysIso(p.base_date,t.n):t.kind==='date'?t.date:null;
+ if(end===null)return false;
+ const at=(s:{ticker:string;market:PriceMarket}|null)=>s!==null&&s.ticker===p.ticker&&s.market===p.market;
+ if(!at(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,p.base_date)))return false;
+ return !at(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,end));
 }
 
 export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Resolver{
@@ -80,19 +93,22 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   const capMain=opts.capabilityOf(p.source,p.market,p.adjustment);
   const capBench=p.benchmark?opts.capabilityOf(p.source,p.benchmark.market,p.adjustment):null;
   if(capMain?.status!=='verified'||(p.benchmark&&capBench?.status!=='verified'))return unavailable('adjustment_unsupported');
+  const registered=registeredBase(j,p);
+  if(!registered)return unavailable('base_input_missing');
   // P1-07: only bars whose session has closed at the cutoff are eligible (both markets when there is a benchmark).
   const closedBy=(date:string)=>closeInstantUtc(date,p.market)<=ctx.cutoff&&(!p.benchmark||closeInstantUtc(date,p.benchmark.market)<=ctx.cutoff);
   const read=async(ticker:string,market:PriceMarket,from:string,to:string):Promise<SourceKlineBar[]|KlineFailure>=>{
    const r=await ctx.inputsDb.kline({ticker,market,adjustment:p.adjustment,source:p.source,from,to,signal:ctx.signal});
-   return isFailure(r)?r:[...r.bars].filter(b=>closedBy(b.time)).sort(byTime);
+   if(isFailure(r))return r;
+   for(let i=0;i<r.bars.length;i++)if(typeof r.bars[i].time!=='string'||(i>0&&!(r.bars[i-1].time<r.bars[i].time)))return {failure:'invalid_data'};   // S-05: unique, strictly ascending
+   return r.bars.filter(b=>closedBy(b.time));
   };
   let from=w.from,to=w.to;
   const first=await read(p.ticker,p.market,from,to);
   if(!Array.isArray(first))return unavailable(first.failure);
   let bars=first;
   if(bars.length===0)return unavailable('empty');
-  const registered=registeredBase(j,p);
-  const regCloseOnly=registered!==null&&registered.snapshot.fields_present.length===1&&registered.snapshot.fields_present[0]==='close';
+  const regCloseOnly=registered.snapshot.fields_present.length===1&&registered.snapshot.fields_present[0]==='close';
   const closeOnly=(b:SourceKlineBar)=>regCloseOnly||closeOnlyBar(p.source,b);
   let baseIdx=bars.findIndex(b=>b.time===p.base_date);
   if(baseIdx<0){
@@ -106,6 +122,10 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
    if(!Array.isArray(back))return unavailable(back.failure);
    from=backFrom;bars=merge(back,bars);baseIdx=bars.findIndex(b=>b.time===p.base_date);
   }
+  if(baseIdx<PRE_BASE_BARS){
+   // S-04: the evidence needs PRE_BASE_BARS bars before the base (n + 6 in all); a young listing may still be catching up at the provider.
+   return ctx.now.slice(0,10)<=addDaysIso(p.base_date,RECENT_BASE_DAYS)?{status:'pending',reason:'insufficient_history'}:unavailable('insufficient_history');
+  }
   const endIdxOf=()=>t.kind==='session_index'?(baseIdx+t.n<bars.length?baseIdx+t.n:-1):t.kind==='date'?bars.findIndex(b=>b.time>=t.date):-1;
   let endIdx=endIdxOf();
   if(endIdx<0&&t.kind==='session_index'){
@@ -115,7 +135,7 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
    to=nextTo;bars=merge(bars,fwd);endIdx=endIdxOf();
   }
   if(endIdx<0){
-   if(j.subject_type==='issuer'&&(await ctx.inputsDb.issuerPrimarySecurity(j.subject_key,ctx.now.slice(0,10)))===null)return unavailable('delisted');
+   if(j.subject_type==='issuer'&&await frozenTickerDelisted(ctx,p,t))return unavailable('delisted');
    if(t.kind==='date'&&ctx.now.slice(0,10)>to)return unavailable('empty');
    const est=labelAvailableAt(p,t);
    return est?{status:'pending',reason:'awaiting_bars',estimated_at:est}:{status:'pending',reason:'awaiting_bars'};
@@ -152,14 +172,58 @@ export function priceReturnResolverWith(opts:{capabilityOf:CapabilityLookup}):Re
   return {status:'resolved',value,unit:'ratio',from:p.base_date,to:endBar.time,label_available_at:label,evidence};
  }
  function fromOverride(j:JudgmentRow,o:QuarantineOverride):ResolverResult{
-  if(j.condition?.resolver!=='price_return'||o.reason_code!=='settlement_basis_mismatch'||o.resolution.kind!=='accept_refetched')
+  const bad=(why:string)=>new JudgmentError('override_mismatch',`price_return ${why}`);
+  const c=j.condition,t=j.target;
+  if(c?.resolver!=='price_return'||!t||!validate(c.params)||o.reason_code!=='settlement_basis_mismatch'||o.resolution.kind!=='accept_refetched')
    throw new JudgmentError('override_mismatch',`price_return cannot apply ${o.resolution.kind} for ${o.reason_code}`);
-  const ev=o.resolution.evidence;
-  if(digest(ev)!==o.resolution.evidence_hash)throw new JudgmentError('override_mismatch','evidence_hash');
-  const r=ev.result as Partial<PriceResult>|undefined;
-  if(!r||typeof r.value!=='number'||!Number.isFinite(r.value)||typeof r.from!=='string'||typeof r.to!=='string'||typeof r.label_available_at!=='string')throw new JudgmentError('override_mismatch','evidence_result');
-  return {status:'resolved',value:r.value,unit:'ratio',from:r.from,to:r.to,label_available_at:r.label_available_at,
-   evidence:{...ev,override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at,cutoff:o.cutoff}}};
+  const p=c.params,ev=o.resolution.evidence;
+  // The hash binds the override to the quarantined evidence and to the incident's hash (S-01); nothing in the evidence is trusted afterwards.
+  if(digest(ev)!==o.resolution.evidence_hash||o.evidence_hash!==o.resolution.evidence_hash)throw bad('evidence_hash');
+  if(ev.ticker!==p.ticker||ev.market!==p.market||ev.source!==p.source||ev.adjustment!==p.adjustment||ev.base_date!==p.base_date)throw bad('identity');
+  const capMain=opts.capabilityOf(p.source,p.market,p.adjustment);
+  const capBench=p.benchmark?opts.capabilityOf(p.source,p.benchmark.market,p.adjustment):null;
+  if(capMain?.status!=='verified'||(p.benchmark&&capBench?.status!=='verified'))throw bad('capability');
+  const registered=registeredBase(j,p);
+  if(!registered||digest(ev.registered_bar)!==digest(registered.snapshot))throw bad('registered_bar');
+  const barsOk=(x:unknown):x is EvidenceBar[]=>Array.isArray(x)&&x.every(b=>!!b&&typeof b==='object'&&typeof (b as EvidenceBar).date==='string'&&typeof (b as EvidenceBar).close==='number'&&Number.isFinite((b as EvidenceBar).close))
+   &&x.every((b,i)=>i===0||(x[i-1] as EvidenceBar).date<(b as EvidenceBar).date);
+  const bars=ev.bars;
+  if(!barsOk(bars)||digest(bars)!==ev.bars_sha256)throw bad('bars');
+  const baseIdx=bars.findIndex(b=>b.date===p.base_date);
+  if(baseIdx<PRE_BASE_BARS)throw bad('base_or_history');   // base present and >= 5 bars before it (n + 6 in all)
+  const endIdx=bars.length-1;
+  const end=bars[endIdx];
+  if(t.kind==='session_index'){if(t.base_date!==p.base_date||endIdx!==baseIdx+t.n)throw bad('end_index');}
+  else if(t.kind==='date'){const first=bars.findIndex(b=>b.date>=t.date);if(first!==endIdx||first<=baseIdx)throw bad('end_date');}
+  else throw bad('target');
+  if(ev.end_date!==end.date)throw bad('end_date');
+  const main=bars[baseIdx];
+  if(!(main.close>0))throw bad('base_close');
+  let rb:number|null=null;
+  let label=closeInstantUtc(end.date,p.market);
+  const closes=[closeInstantUtc(end.date,p.market)];
+  if(p.benchmark){
+   const bb=ev.benchmark_bars;
+   if(JSON.stringify(ev.benchmark)!==JSON.stringify(p.benchmark)||!barsOk(bb)||digest(bb)!==ev.benchmark_bars_sha256)throw bad('benchmark_bars');
+   // aligned on the very same dates as the main window (P1: a benchmark bar missing for any date is a gap, never settled)
+   const mainRange=bars.slice(Math.max(0,baseIdx-PRE_BASE_BARS)).map(b=>b.date);
+   if(bb.length!==mainRange.length||bb.some((b,i)=>b.date!==mainRange[i]))throw bad('benchmark_alignment');
+   const b0=bb[bb.findIndex(b=>b.date===p.base_date)],b1=bb[bb.length-1];
+   if(!(b0.close>0))throw bad('benchmark_base_close');
+   rb=b1.close/b0.close-1;
+   closes.push(closeInstantUtc(end.date,p.benchmark.market));
+   label=closes.reduce((m,x)=>x>m?x:m);
+  }
+  if(label>o.cutoff)throw bad('end_not_closed_at_cutoff');
+  const r=end.close/main.close-1;
+  const value=rb===null?r:(1+r)/(1+rb)-1;
+  if(!Number.isFinite(value))throw bad('value');
+  // Recompute, never trust: the stored result must equal the replay of the frozen bars.
+  const stored=ev.result as Partial<PriceResult>|undefined;
+  if(!stored||stored.value!==value||stored.r!==r||stored.r_benchmark!==rb||stored.from!==p.base_date||stored.to!==end.date||stored.label_available_at!==label)throw bad('result');
+  const result:PriceResult={value,r,r_benchmark:rb,from:p.base_date,to:end.date,label_available_at:label};
+  return {status:'resolved',value,unit:'ratio',from:p.base_date,to:end.date,label_available_at:label,
+   evidence:{...ev,result,override:{reason_code:o.reason_code,evidence_hash:o.evidence_hash,resolved_by:o.resolved_by,at:o.at,cutoff:o.cutoff}}};
  }
  return {name:'price_return',version:PRICE_RESOLVER_VERSION,validateParams:validate,labelAvailableAt,maxFetchMs:PRICE_MAX_FETCH_MS,resolve,fromOverride};
 }

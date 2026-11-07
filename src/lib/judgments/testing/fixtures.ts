@@ -24,7 +24,7 @@ import {addDaysIso,closeInstantUtc} from '../time';
 import type {Adjustment,Condition,Input,JudgmentInputsDb,JudgmentInsert,JudgmentRow,KlineRangeRequest,LabelPolicy,MethodologyRow,NumPredicate,PriceBarSnapshot,PriceMarket,Resolver,Target} from '../types';
 
 export interface KlineFixture{meta:{synthetic:true;ticker:string;market:PriceMarket;source:KlineSourceName;adjustment:Adjustment;note:string};bars:SourceKlineBar[]}
-export const loadKlineFixture=(name:string):KlineFixture=>JSON.parse(readFileSync(join(process.cwd(),'fixtures/judgments/kline',name),'utf8')) as KlineFixture;
+export const loadKlineFixture=(name:string):KlineFixture=>JSON.parse(readFileSync(join(process.cwd(),'fixtures/judgments/kline-synthetic',name),'utf8')) as KlineFixture;
 /** The fixture as it looked before `lastDate`'s later sessions printed. */
 export const truncateFixture=(f:KlineFixture,lastDate:string):KlineFixture=>({...f,bars:f.bars.filter(b=>b.time<=lastDate)});
 
@@ -109,5 +109,5 @@ export function stubResolver(resolve:Resolver['resolve'],over:Partial<Resolver>=
  return {name:'price_return',version:'stub/1',validateParams:()=>true,labelAvailableAt:()=>null,maxFetchMs:1_000,resolve,
   fromOverride:()=>{throw new Error('stub resolver has no override path');},...over};
 }
-export const verifiedCapability=(()=>({status:'verified',evidence:'fixtures/judgments/kline/synthetic-us-zza.json',verified_at:'2026-11-06'})) as unknown as CapabilityLookup;
+export const verifiedCapability=(()=>({status:'verified',evidence:'fixtures/judgments/kline-synthetic/synthetic-us-zza.json',verified_at:'2026-11-06'})) as unknown as CapabilityLookup;
 export const unverifiedCapability=(()=>({status:'unverified',evidence:null,verified_at:null})) as unknown as CapabilityLookup;
