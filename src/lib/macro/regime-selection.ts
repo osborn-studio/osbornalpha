@@ -31,21 +31,25 @@ export function nextPeriodEnd(period:PeriodKind,periodEnd:string):string{
 export async function selectEligibleHistoryAsOf(candidates:ObservationRow[],cutoff:string,maxRows:number,
  loadRows:(ids:string[])=>Promise<ObservationRow[]>,loadBatches:(ids:string[])=>Promise<Record<string,{status:string;finished_at:string|null}>>):Promise<ObservationRow[]>{
  if(!Number.isInteger(maxRows)||maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+ const cutoffMs=Date.parse(cutoff);if(!Number.isFinite(cutoffMs))throw new Error('historical_cutoff_unsupported');
  const found=new Map(candidates.map(r=>[r.observation_id,r]));let pending=[...new Set(candidates.flatMap(r=>r.derived_from??[]))];
  for(let depth=1;pending.length;depth++){
   if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
   pending=pending.filter(id=>!found.has(id));if(!pending.length)break;
-  const got=await loadRows(pending);for(const row of got)found.set(row.observation_id,row);
+  const got=await loadRows(pending);const loaded=new Set(got.map(r=>r.observation_id));
+  if(pending.some(id=>!loaded.has(id)))throw new Error('historical_cutoff_unsupported');
+  for(const row of got)found.set(row.observation_id,row);
   pending=[...new Set(got.flatMap(r=>r.derived_from??[]))];
  }
- const batches=await loadBatches([...new Set([...found.values()].map(r=>r.batch_id))]);const cutoffMs=Date.parse(cutoff);
+ for(const row of found.values())if(!Number.isFinite(Date.parse(row.available_at)))throw new Error('historical_cutoff_unsupported');
+ const batches=await loadBatches([...new Set([...found.values()].map(r=>r.batch_id))]);
  const eligible=(r:ObservationRow,depth=0):boolean=>{
   if(depth>8)throw new MacroDbError('rpc_failed','ancestry_too_deep');
   if(r.status!=='ok'||Date.parse(r.available_at)>cutoffMs)return false;
   const b=batches[r.batch_id];if(b&&!['success','partial'].includes(b.status))return false;
   if(!b?.finished_at||!Number.isFinite(Date.parse(b.finished_at)))throw new Error('historical_cutoff_unsupported');
   if(Date.parse(b.finished_at)>cutoffMs)return false;
-  return (r.derived_from??[]).every(id=>{const ancestor=found.get(id);return !!ancestor&&eligible(ancestor,depth+1);});
+  return (r.derived_from??[]).every(id=>eligible(found.get(id)!,depth+1));
  };
  const byPeriod=new Map<string,ObservationRow>();
  for(const r of [...candidates].sort((a,b)=>b.version-a.version))if(!byPeriod.has(r.period_end)&&eligible(r))byPeriod.set(r.period_end,r);
@@ -90,14 +94,19 @@ export async function buildRegimeInputFromRows(region:Region,opts:{asOf?:string;
 }
 
 export async function verifyHistoricalBatches(built:BuiltRegimeInput,cutoff:string,loadRows:(ids:string[])=>Promise<ObservationRow[]>,loadBatches:(ids:string[])=>Promise<Record<string,string|null>>):Promise<void>{
+ const cutoffMs=Date.parse(cutoff);if(!Number.isFinite(cutoffMs))throw new Error('historical_cutoff_unsupported');
  const seen=new Map<string,ObservationRow>();
  let pending=[...new Set([...built.observations.map(r=>r.observation_id),...built.historyIds])];
  while(pending.length){
-  const rows=await loadRows(pending);if(rows.length!==pending.length)throw new Error('historical_cutoff_unsupported');
+  const rows=await loadRows(pending);const loaded=new Set(rows.map(r=>r.observation_id));
+  if(pending.some(id=>!loaded.has(id)))throw new Error('historical_cutoff_unsupported');
   pending=[];
   for(const row of rows){seen.set(row.observation_id,row);for(const id of row.derived_from??[])if(!seen.has(id))pending.push(id);}
   pending=[...new Set(pending)];
  }
  const times=await loadBatches([...new Set([...seen.values()].map(r=>r.batch_id))]);
- for(const row of seen.values()){const finished=times[row.batch_id];if(!finished||!Number.isFinite(Date.parse(finished))||Date.parse(finished)>Date.parse(cutoff))throw new Error('historical_cutoff_unsupported');}
+ for(const row of seen.values()){
+  const available=Date.parse(row.available_at),finished=times[row.batch_id];
+  if(!Number.isFinite(available)||available>cutoffMs||!finished||!Number.isFinite(Date.parse(finished))||Date.parse(finished)>cutoffMs)throw new Error('historical_cutoff_unsupported');
+ }
 }

@@ -7,7 +7,7 @@ import type {CategoricalClaim,Input,JudgmentInputsDb,JudgmentRow,ResolverResult,
 import type {MacroFixture} from '@/lib/judgments/macro-api';
 import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {digest} from '@/lib/judgments/canonical';
-import {formulaHashOf,importClosure} from '@/lib/judgments/formula-hash';
+import {formulaHashOf,importClosure,importSpecifiers} from '@/lib/judgments/formula-hash';
 import {REGISTRY,methodologyRowOf} from '@/lib/judgments/registry';
 import {produce} from '@/lib/judgments/produce';
 import {parseReplayFixture} from '@/lib/judgments/replay';
@@ -276,6 +276,23 @@ it('regime selection, classifier and resolver closures are hashed without I/O sh
  for(const file of ['src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/db.ts'])expect(hashed.has(file),file).toBe(false);
 });
 
+it('pins the exact seven-file regime-selection import closure without I/O imports',()=>{
+ const closure=importClosure(process.cwd(),'src/lib/macro/regime-selection.ts');
+ expect(closure).toEqual([
+  'src/lib/facts/json-numbers.ts',
+  'src/lib/macro/catalog.ts',
+  'src/lib/macro/decimal.ts',
+  'src/lib/macro/judgment-contract.ts',
+  'src/lib/macro/regime-selection.ts',
+  'src/lib/macro/regime.ts',
+  'src/lib/macro/types.ts',
+ ]);
+ for(const file of closure){
+  expect(['db.ts','read-api.ts','snapshots.ts','freshness.ts'].includes(file.split('/').at(-1)!),file).toBe(false);
+  expect(importSpecifiers(readFileSync(file,'utf8')).filter(spec=>spec.startsWith('@supabase/')||spec==='pg'||spec.startsWith('pg/')||spec.startsWith('next/')),file).toEqual([]);
+ }
+});
+
 it('I/O shells import selection functions from regime-selection',()=>{
  for(const [file,name] of [['db.ts','selectEligibleHistoryAsOf'],['snapshots.ts','buildRegimeInputFromRows'],['read-api.ts','verifyHistoricalBatches']])
   expect(readFileSync(`src/lib/macro/${file}`,'utf8')).toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['\"]\\./regime-selection['\"]`));
@@ -317,7 +334,7 @@ it('pins the v2 selection-only hashed file list and formula_hash',()=>{
   'src/lib/research/ingest/pa-v1/json.js',
   'src/lib/supabase/database.types.ts',
  ]);
- expect(hash.formula_hash).toBe('2b75151695718e1ac713b39176dd58ba3d522fb613201c7bfeaff080ce4d7b87');
+ expect(hash.formula_hash).toBe('dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba');
 });
 
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{

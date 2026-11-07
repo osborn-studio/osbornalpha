@@ -16,6 +16,8 @@
 
 `macro_regime@v2` 的公式哈希覆盖方法实现、结算 resolver、`regime-selection.ts` 的历史 vintage 资格与输入构造规则，以及其导入闭包中的分类规则、目录和日期计算。`db.ts`、`snapshots.ts`、`read-api.ts` 只负责查询、分页、缓存、并行读取和错误映射，不纳入公式哈希；这些 I/O 优化不改变分类或结算输入，因此不应造成方法漂移。注册前仍须核对冻结输入快照与结算证据。
 
+F4 共享输入构造器 `src/lib/judgments/inputs.ts` 及其导入闭包（包括 kline、eastmoney 和 datagateway 来源）按设计进入每个方法的公式哈希，因为它冻结判断输入。因此修改这些文件会使所有方法漂移；缩小该闭包属于 F4 框架变更，不能作为单个宏观方法的哈希调整。
+
 1. 合并 macro #112 后，再合并 F4。由合并者锁定最终迁移并核对 SHA。用生产迁移流程执行 `20261116090000_judgments.sql`，登记 `supabase_migrations.schema_migrations` 对应版本；先确认私有桶 `judgments-calibration` 已建且 `public=false`。
 2. 核对 SQL 授权：anon 对 `judgments` 无 INSERT、对 `register_judgment(jsonb,jsonb)` 无 EXECUTE；service_role 对表无直接 INSERT、可执行登记 RPC；anon 可执行 `judgments_server_time()`。检查九表、RLS、桶。
 3. 在配置生产库的环境运行 `node --env-file=.env.local --import tsx scripts/judgments/sync-methodologies.ts --dry-run`，审阅每个 action / problems / hash；无 drift 后同命令去掉 `--dry-run` 应用。`formula_hash_drift` 必须升方法版本，不能覆盖旧版。
