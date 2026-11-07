@@ -7,7 +7,7 @@ import type {CategoricalClaim,Input,JudgmentInputsDb,JudgmentRow,ResolverResult,
 import type {MacroFixture} from '@/lib/judgments/macro-api';
 import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import {digest} from '@/lib/judgments/canonical';
-import {formulaHashOf,importClosure} from '@/lib/judgments/formula-hash';
+import {formulaHashOf,importClosure,importSpecifiers} from '@/lib/judgments/formula-hash';
 import {REGISTRY,methodologyRowOf} from '@/lib/judgments/registry';
 import {produce} from '@/lib/judgments/produce';
 import {parseReplayFixture} from '@/lib/judgments/replay';
@@ -268,20 +268,43 @@ describe('macro_regime@v2 (Task 19)',()=>{
  });
 });
 
-it('classification code and rule/catalog dependencies are covered by formula hash',()=>{
+it('regime selection, classifier and resolver closures are hashed without I/O shells',()=>{
  const hashed=new Set([...formulaHashOf(macroRegimeV2).closure,...macroRegimeV2.deps]);
  expect(macroRegimeV2.deps).not.toContain('src/lib/macro/flags.ts');
- for(const file of importClosure(process.cwd(),'src/lib/macro/read-api.ts').filter(file=>file!=='src/lib/macro/flags.ts'))expect({file,hashed:hashed.has(file)}).toEqual({file,hashed:true});
+ for(const entry of ['src/lib/macro/regime-selection.ts','src/lib/macro/regime.ts','src/lib/judgments/resolvers/macro.ts'])
+  for(const file of importClosure(process.cwd(),entry))expect({file,hashed:hashed.has(file)}).toEqual({file,hashed:true});
+ for(const file of ['src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/db.ts'])expect(hashed.has(file),file).toBe(false);
 });
 
-it('pins the v2 hashed file list and formula_hash after the #120 input selection change',()=>{
+it('pins the exact seven-file regime-selection import closure without I/O imports',()=>{
+ const closure=importClosure(process.cwd(),'src/lib/macro/regime-selection.ts');
+ expect(closure).toEqual([
+  'src/lib/facts/json-numbers.ts',
+  'src/lib/macro/catalog.ts',
+  'src/lib/macro/decimal.ts',
+  'src/lib/macro/judgment-contract.ts',
+  'src/lib/macro/regime-selection.ts',
+  'src/lib/macro/regime.ts',
+  'src/lib/macro/types.ts',
+ ]);
+ for(const file of closure){
+  expect(['db.ts','read-api.ts','snapshots.ts','freshness.ts'].includes(file.split('/').at(-1)!),file).toBe(false);
+  expect(importSpecifiers(readFileSync(file,'utf8')).filter(spec=>spec.startsWith('@supabase/')||spec==='pg'||spec.startsWith('pg/')||spec.startsWith('next/')),file).toEqual([]);
+ }
+});
+
+it('I/O shells import selection functions from regime-selection',()=>{
+ for(const [file,name] of [['db.ts','selectEligibleHistoryAsOf'],['snapshots.ts','buildRegimeInputFromRows'],['read-api.ts','verifyHistoricalBatches']])
+  expect(readFileSync(`src/lib/macro/${file}`,'utf8')).toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['\"]\\./regime-selection['\"]`));
+});
+
+it('pins the v2 selection-only hashed file list and formula_hash',()=>{
  const hash=formulaHashOf(macroRegimeV2);
- expect([...hash.closure,...macroRegimeV2.deps].sort()).toEqual([
+ expect([...new Set([...hash.closure,...macroRegimeV2.deps])].sort()).toEqual([
   'src/lib/data/kline/types.ts',
   'src/lib/data/sources/datagateway.ts',
   'src/lib/data/sources/eastmoney.ts',
   'src/lib/db/table-client.ts',
-  'src/lib/dq/freshness.ts',
   'src/lib/dq/raw-store.ts',
   'src/lib/dq/reconcile/types.ts',
   'src/lib/facts/classify.ts',
@@ -299,21 +322,19 @@ it('pins the v2 hashed file list and formula_hash after the #120 input selection
   'src/lib/judgments/origins.ts',
   'src/lib/judgments/resolvers/macro.ts',
   'src/lib/judgments/resolvers/price-capabilities.ts',
+  'src/lib/judgments/resolvers/schemas.ts',
   'src/lib/judgments/time.ts',
   'src/lib/judgments/types.ts',
   'src/lib/macro/catalog.ts',
-  'src/lib/macro/db.ts',
   'src/lib/macro/decimal.ts',
-  'src/lib/macro/freshness.ts',
   'src/lib/macro/judgment-contract.ts',
-  'src/lib/macro/read-api.ts',
+  'src/lib/macro/regime-selection.ts',
   'src/lib/macro/regime.ts',
-  'src/lib/macro/snapshots.ts',
   'src/lib/macro/types.ts',
   'src/lib/research/ingest/pa-v1/json.js',
   'src/lib/supabase/database.types.ts',
  ]);
- expect(hash.formula_hash).toBe('a4aea922437e1d8378d0316c7e0809504dd0130815cd1ab224f6c2e827cb8cb9');
+ expect(hash.formula_hash).toBe('dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba');
 });
 
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{
