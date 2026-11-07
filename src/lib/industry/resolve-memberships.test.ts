@@ -2,6 +2,8 @@
 import {describe,it,expect} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
+import {memorySnapshotStore} from '../facts/snapshot-store';
+import {industrySnapshotPath} from './providers/tushare-industry';
 import {runClassificationsSw} from './classifications';
 import {countUnresolved,membersAt} from './memberships';
 import {memoryIndustryDb} from './memory-industry-db';
@@ -289,5 +291,51 @@ describe('runResolveMemberships (real recordings)',()=>{
   expect(rec.resolution_error).toMatchObject({code:'membership_overlap',at:NOW});
   expect(tables.rows('dq_quarantine').map(q=>[q.dataset,q.table_name,q.natural_key,q.reason_code])).toEqual([['industry.sw2021.memberships','issuer_industry_memberships',`sw2021:2021:${ISSUER['600519.SH']}`,'membership_overlap']]);
   expect(JSON.parse(String(r.errors[0].message))).toEqual({no_issuer:217,apply_failed:1});
+ });
+ it('Codex task16 P2: the stock_basic(D) pages are stored before delisting decisions; provenance.delisting.raw_hash names the stored page',async()=>{
+  const {db,deps}=await setup();const store=memorySnapshotStore();
+  const r=await runResolveMemberships(deps,{snapshots:{store}});
+  expect(r.status).toBe('success');
+  const del=(await db.delistings()).find(d=>d.ts_code==='002770.SZ')!;
+  expect(store.objects.has(industrySnapshotPath('stock_basic',del.raw_hash))).toBe(true);
+  expect((await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'})).map(m=>(m.provenance.delisting as {raw_hash:string}|undefined)?.raw_hash)).toEqual(Array(3).fill(del.raw_hash));
+ });
+ it('Codex task16 P2: a page that cannot be stored changes no delisting (error recorded, batch not clean); stored pages are unaffected',async()=>{
+  const {db,deps}=await setup();
+  const failing={put:async()=>{throw new Error('bucket down');}};
+  const r=await runResolveMemberships(deps,{snapshots:{store:failing}});
+  expect(await db.delistings()).toEqual([]);   // the only D page failed → no delisting row, no window closed
+  expect(r.errors.some(e=>e.code==='delisting_snapshot_error'&&String(e.message).includes('bucket down'))).toBe(true);
+  expect(r.status).not.toBe('success');
+  expect((await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'})).map(m=>m.valid_to)).toEqual([null,null,null]);
+  expect(r.records.applied).toBeGreaterThan(0);
+ });
+ it('Codex batch3 P1: delistings that cannot be persisted abort the application (non-info error, nothing resolved from stale dates)',async()=>{
+  const base=memoryIndustryDb();
+  const db:IndustryDb={...base,upsertDelistings:async()=>{throw new Error('db down');}};
+  const {deps}=await setup(fixtureTushareCall(),db);
+  const r=await runResolveMemberships(deps,{});
+  expect(r.errors.map(e=>e.code)).toEqual(expect.arrayContaining(['delisting_write_error','delistings_not_persisted']));
+  expect(r.records.applied).toBe(0);expect(r.counts.failed).toBeGreaterThan(0);expect(r.status).not.toBe('success');
+  expect((await db.currentSourceMemberships({})).filter(x=>x.issuer_id!==null)).toEqual([]);
+ });
+ it('Codex batch3 P2: a D row without a usable delist_date is checked against already-resolved records too (delist_date_missing error + quarantine item, closure withheld)',async()=>{
+  const listed:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code');return {...r,items:r.items.filter(it=>it[ts]!=='002770.SZ')};
+  };
+  const {tables,db,deps}=await setup(listed);
+  await runResolveMemberships(deps,{});
+  const nodate:TushareCall=async(api,params,fields)=>{
+   const r=await fixtureTushareCall()(api,params,fields);if(api!=='stock_basic')return r;
+   const ts=r.fields.indexOf('ts_code'),dl=r.fields.indexOf('delist_date');
+   return {...r,items:r.items.map(it=>it[ts]==='002770.SZ'?it.map((v,i)=>i===dl?null:v):it)};
+  };
+  const r=await runResolveMemberships({...deps,tushare:nodate},{});
+  expect(r.errors).toContainEqual({code:'delist_date_missing',key:'002770.SZ'});
+  expect(r.records.delistMissing).toBeGreaterThanOrEqual(1);
+  expect(r.status).not.toBe('success');
+  expect(tables.rows('dq_quarantine').filter(q=>q.reason_code==='delist_date_missing').length).toBeGreaterThanOrEqual(1);
+  expect((await db.membershipsOfIssuer(ISSUER['002770.SZ'],{scheme:'sw2021'})).map(m=>m.valid_to)).toEqual([null,null,null]);   // no closure from a guess
  });
 });

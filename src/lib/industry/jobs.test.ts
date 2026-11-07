@@ -58,6 +58,11 @@ describe('runIndustryJob (adapts each runner of Tasks 5–13 to a RunnerReceipt)
   expect(put).toHaveBeenCalledTimes(1);
   expect(put.mock.calls[0][1]).toMatch(/^tushare\/[0-9a-f-]{36}\/[0-9a-f]{64}\.json$/);
  });
+ it('memberships-sw apply: the resolver gets the snapshot capture too (stock_basic D evidence)',async()=>{
+  const snapshots={put:vi.fn()};
+  await runIndustryJob('memberships-sw',{...deps,snapshots} as unknown as IndustryJobDeps,{dryRun:false,triggeredBy:'script'});
+  expect(runners.resolve).toHaveBeenCalledWith(expect.anything(),{triggeredBy:'script',today:undefined,snapshots:{store:snapshots}});
+ });
  it('memberships-sw: classifications → source → resolution on apply; only the source plan on a dry run',async()=>{
   const r=await runIndustryJob('memberships-sw',deps,{dryRun:false,triggeredBy:'script',l1Codes:['801120.SI']});
   expect(runners.sw).toHaveBeenCalledWith(deps,{apply:true,l1Codes:['801120.SI'],triggeredBy:'script'});

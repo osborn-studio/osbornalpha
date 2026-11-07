@@ -20,7 +20,9 @@
 // ambiguous_owner (e.g. a database error) are failures: resolution_error {code:'resolve_error', detail: message}, counts.failed
 // and a non-info batch error (batch partial/failed, freshness not fresh). The whole body after startBatch is guarded so
 // finishBatch / recordAttempt are always reached.
-// Delisting dates (K4) are read from industry_security_delistings after the stock_basic(D) pass of this run has been persisted
+// A failed delisting write aborts the run (delistings_not_persisted). A 'D' row without a date is also reported for already-resolved records (their rows are left untouched).
+// With options.snapshots the stock_basic(D) pages are stored before any delisting is decided; a page whose storage fails is dropped (delisting_snapshot_error, non-info) and
+// changes no delisting. Delisting dates (K4) are read from industry_security_delistings after the stock_basic(D) pass of this run has been persisted
 // (delistings.ts); a 'D' row without a usable delist_date is NOT "no delisting": its records are not applied
 // (resolution_error + quarantine delist_date_missing, non-info error). Delisting evidence (delist_date, raw_hash, batch_id,
 // observed_at) is carried into provenance.delisting of every row whose window end the delisting determines — on insert, on
@@ -34,6 +36,7 @@ import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {resolveIssuer} from '../entities/resolve';
+import type {SnapshotCapture} from './providers/tushare-industry';
 import {defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import type {DelistingRow,IndustryDeps,MembershipTarget,SourceMembershipRow} from './types';
@@ -216,7 +219,7 @@ export async function reconcileDelistings(deps:Pick<IndustryDeps,'tables'|'db'|'
  }
 }
 
-export interface RunResolveOptions{triggeredBy?:TriggeredBy;today?:string}
+export interface RunResolveOptions{triggeredBy?:TriggeredBy;today?:string;/** stores every stock_basic(D) page (same plan-2 path scheme as tushare-industry); apply mode only */snapshots?:SnapshotCapture}
 export interface RunResolveResult{status:BatchStatus;batchId:string;counts:BatchCounts;errors:BatchError[];records:ApplyResolutionsResult['records'];exitCode:0|1}
 
 /** Job step after runMembershipsSw: resolve every unresolved current record, apply per issuer, weekly freshness. */
@@ -232,8 +235,18 @@ export async function runResolveMemberships(deps:IndustryDeps,opts:RunResolveOpt
   // K3/K4: delisting dates bound every window. The stock_basic(D) pass is persisted first (evidence kept); the resolver then works from the
   // stored rows, so already-resolved records are reconciled against later delistings too (Codex plan audit round 1 #3).
   const call=deps.tushare??defaultTushareCall({fetch:deps.fetch});
-  const scan=scanDelistings(await fetchStockBasic(call,{listStatus:'D'},{now:deps.now}));
-  await persistDelistings(deps,batchId,SW_MEMBERSHIPS_DATASET,scan,pre);
+  // Evidence first (Codex task16 P2): a page is stored BEFORE its delisting rows are decided on; a page whose storage fails changes no
+  // delisting (error recorded, batch not clean). persisted raw_hash = the stored page's sha256 (path: industrySnapshotPath('stock_basic', raw_hash)).
+  const failedPages=new Map<string,string>();
+  const capture:SnapshotCapture|undefined=opts.snapshots&&{...opts.snapshots,store:{put:async(snap,path,budget)=>{
+   try{return await opts.snapshots!.store.put(snap,path,budget);}
+   catch(e){failedPages.set(snap.sha256,errorMessage(e).slice(0,300));return 'exists' as const;}
+  }}};
+  const dPages=await fetchStockBasic(call,{listStatus:'D'},{now:deps.now,...(capture?{snapshots:capture}:{})});
+  for(const p of dPages)if(failedPages.has(p.raw_hash))pre.push({code:'delisting_snapshot_error',key:`stock_basic:D:page${p.page}`,message:failedPages.get(p.raw_hash)});
+  const scan=scanDelistings(dPages.filter(p=>!failedPages.has(p.raw_hash)));
+  // never resolve against stale/empty stored dates: a failed write aborts the application (delisting_write_error already in `pre`)
+  if(!await persistDelistings(deps,batchId,SW_MEMBERSHIPS_DATASET,scan,pre))throw Object.assign(new Error('delistings_not_persisted'),{code:'delistings_not_persisted'});
   const blocked=new Set(scan.missing);   // 'D' without a usable delist_date: never "no delisting"
   const delist=new Map<string,string>();const evidence=new Map<string,DelistingEvidence>();
   for(const r of await deps.db.delistings()){
@@ -250,6 +263,16 @@ export async function runResolveMemberships(deps:IndustryDeps,opts:RunResolveOpt
   }
   result=await applyResolutions(deps,batchId,resolveSourceMemberships(sources,resolved,delist,{evidence,blocked}),{today});
   await reconcileDelistings(deps,batchId,delist,result,evidence);
+  // 'D' without a usable date also concerns records resolved in earlier runs: their open windows must not be treated as "not delisted"
+  // silently — reported (non-info error) and put in dq_quarantine; their ok rows stay untouched (no closure from a guess)
+  if(blocked.size>0){
+   const flagged=new Set((await deps.db.currentSourceMemberships({})).filter(s=>s.issuer_id!==null&&blocked.has(s.ts_code)).map(s=>s.ts_code));
+   for(const ts of [...flagged].sort()){
+    await quarantine(deps.tables,{dataset:SW_MEMBERSHIPS_DATASET,table:'issuer_industry_memberships',naturalKey:`sw2021:2021:${ts}:delist_date_missing`,reasonCode:'delist_date_missing',
+     detail:{ts_code:ts,resolved:true},payload:{ts_code:ts},batchId});
+    result.counts.quarantined++;result.records.delistMissing++;result.errors.push({code:'delist_date_missing',key:ts});
+   }
+  }
  }catch(e){
   const code=typeof (e as {code?:unknown}).code==='string'?(e as {code:string}).code:'resolve_run_error';
   result??={counts:emptyCounts(),errors:[],skippedSummary:{},records:{...noRecords}};

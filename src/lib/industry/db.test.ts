@@ -24,7 +24,7 @@ industryDbContract('memoryIndustryDb contract',async()=>{
  const db=memoryIndustryDb({tables,facts:{scopeAll:async()=>[...scope].map(([i,r])=>scopeRow(i,r))}});
  let offset=0;
  const make=async(table:string,key:string,value:string)=>{await tables.insert(table,{[key]:value});return value;};
- return {db,tables:db.tables,issuer:()=>make('issuers','issuer_id',randomUUID()),batch:()=>make('ingest_batches','batch_id',randomUUID()),ticker:()=>make('stocks_universe','ticker',`ZZ${hex(4).toUpperCase()}`),
+ return {db,tables:db.tables,actor:async()=>randomUUID(),issuer:()=>make('issuers','issuer_id',randomUUID()),batch:()=>make('ingest_batches','batch_id',randomUUID()),ticker:()=>make('stocks_universe','ticker',`ZZ${hex(4).toUpperCase()}`),
   version:async()=>{const v=`t${hex(4)}`;db.seedLicense(`scheme:sw2021:${v}`,'internal');return v;},
   factScope:async(i,rev)=>{scope.set(i,rev);},
   ageManifest:async(_hash,seconds)=>{offset+=seconds*1000;db.setNow(new Date(Date.now()+offset).toISOString());}};

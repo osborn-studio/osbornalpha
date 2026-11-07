@@ -203,6 +203,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   async setDatasetLicense(key,status,by){
    if(status!=='internal'&&status!=='public')unknown('invalid_status');
    if(!by||!by.trim())unknown('invalid_decided_by');
+   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(by))unknown('invalid_actor');   // SQL: the audit row's user_id is p_by::uuid
    if(!st.licences.has(key))unknown('invalid_dataset_key');
    st.licences.set(key,status);
   },

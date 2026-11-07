@@ -252,13 +252,20 @@ $$;
 revoke execute on function public.industry_candidate_members(text, text, int, text, date, date) from public, anon, authenticated, service_role;
 
 -- ================================================================ licences and freshness
+-- The licence switch and its audit row (research_audit_log, action 'industry.license_set') are ONE transaction: a failing
+-- audit insert (p_by must be an auth.users id) rolls the switch back, so no publication decision exists without its audit.
 create or replace function public.set_industry_dataset_license(p_key text, p_status text, p_by text, p_note text)
 returns void language plpgsql security definer set search_path = pg_catalog, public as $$
+declare v_from text;
 begin
   if p_status is null or p_status not in ('internal','public') then raise exception 'invalid_status' using errcode = '22023'; end if;
   if p_by is null or length(btrim(p_by)) = 0 then raise exception 'invalid_decided_by' using errcode = '22023'; end if;
-  update public.industry_dataset_licenses set status = p_status, decided_by = p_by, decided_at = now(), note = p_note where dataset_key = p_key;
+  select status into v_from from public.industry_dataset_licenses where dataset_key = p_key for update;
   if not found then raise exception 'invalid_dataset_key' using errcode = '22023'; end if;
+  update public.industry_dataset_licenses set status = p_status, decided_by = p_by, decided_at = now(), note = p_note where dataset_key = p_key;
+  insert into public.research_audit_log (user_id, actor, action, object_type, object_id, detail)
+  values (p_by::uuid, p_by, 'industry.license_set', 'industry', null,
+          jsonb_build_object('object_ref', p_key, 'from', v_from, 'to', p_status, 'note', p_note));
 end $$;
 revoke execute on function public.set_industry_dataset_license(text, text, text, text) from public, anon, authenticated;
 grant execute on function public.set_industry_dataset_license(text, text, text, text) to service_role;

@@ -153,6 +153,19 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   expect(await one(`select has_function_privilege('anon','public.apply_observations(text,uuid,jsonb)','EXECUTE') v`)).toBe(false);
  },60000);
 
+ it('set_industry_dataset_license records its audit row in the same transaction: a failing audit insert rolls the switch back',async()=>{
+  const v=await version();const key=`scheme:sw2021:${v}`;
+  const user=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[user,`${user}@example.test`]);
+  await q(`select public.set_industry_dataset_license($1,'public',$2,'owner decision')`,[key,user]);
+  expect(await one(`select status v from public.industry_dataset_licenses where dataset_key=$1`,[key])).toBe('public');
+  const [row]=await q(`select user_id,actor,action,object_type,object_id,detail from public.research_audit_log where detail->>'object_ref'=$1`,[key]);
+  expect(row).toMatchObject({user_id:user,actor:user,action:'industry.license_set',object_type:'industry',object_id:null,detail:{object_ref:key,from:'internal',to:'public',note:'owner decision'}});
+  // an actor without an auth user (and a non-uuid actor) makes the audit insert fail → the switch is not committed
+  await expect(q(`select public.set_industry_dataset_license($1,'internal',$2,null)`,[key,randomUUID()])).rejects.toThrow();
+  await expect(q(`select public.set_industry_dataset_license($1,'internal','svc',null)`,[key])).rejects.toThrow();
+  expect(await one(`select status v from public.industry_dataset_licenses where dataset_key=$1`,[key])).toBe('public');
+  expect(await q(`select 1 from public.research_audit_log where detail->>'object_ref'=$1`,[key])).toHaveLength(1);
+ });
  it('industry_freshness returns only {dataset, status, last_ok_at} of industry.* rows; the fingerprint carries state_rev per issuer',async()=>{
   const d=`industry.fn-${hex(3)}`;
   await q(`insert into public.dq_freshness(dataset,expected_cadence,status,last_ok_at,consecutive_errors,detail) values($1,'weekly','fresh',now(),0,'{"secret":1}'),($2,'daily','missing',null,0,'{}')`,[d,`other.fn-${hex(3)}`]);
@@ -183,7 +196,8 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
    const [rec]=(await c.query(`select id from public.industry_source_memberships where l1_code=$1`,[s.l1_code])).rows;
    expect(await apply(b,iss,v,three(rec.id),[rec.id],c)).toMatchObject({inserted:3});
    expect(await one(`select public.record_industry_source_resolution_error($1::uuid[],'{"code":"x"}'::jsonb) v`,[[rec.id]],c)).toBe(0);   // already resolved
-   await c.query(`select public.set_industry_dataset_license($1,'internal','svc',null)`,[`scheme:sw2021:${v}`]);
+   const svcUser=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[svcUser,`${svcUser}@example.test`]);
+   await c.query(`select public.set_industry_dataset_license($1,'internal',$2,null)`,[`scheme:sw2021:${v}`,svcUser]);
    const e=await begin(b,c);
    expect(await observe(e,[markRow(t,'2')],'marks',c)).toEqual({inserted:1,duplicates:0,superseded:0});
    expect(await one(`select public.retry_industry_fetch_event($1) v`,[e],c)).toBe(2);
@@ -721,6 +735,7 @@ async function pgHarness():Promise<IndustryContractHarness>{
  const q=(text:string,values:unknown[]=[])=>pool.query(text,values);
  return {
   db:pgIndustryDb(pool),tables:pgTableClient(pool),
+  actor:async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@example.test`]);return id;},
   issuer:async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_zh) values($1,'行业契约测试')`,[id]);return id;},
   batch:async()=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'industry-test','industry.test')`,[id]);return id;},
   ticker:async()=>{const t=`ZZ${hex(4).toUpperCase()}`;await q(`insert into public.stocks_universe(ticker,name,market) values($1,'Industry Contract','A')`,[t]);return t;},

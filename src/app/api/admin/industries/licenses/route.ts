@@ -2,17 +2,16 @@
 // POST /api/admin/industries/licenses {dataset_key, status, note} (spec §4.8, §9): the only licence
 // switch. requireAdminUser(); JSON only; a browser-sent Origin must be ours (same defence as
 // /api/admin/dq). The write goes through set_industry_dataset_license (IndustryDb.setDatasetLicense;
-// service_role has no direct DML on industry_dataset_licenses), then research_audit_log, then
-// revalidateTag('industries') so cached classification trees follow the switch (runbook: switch to
-// internal FIRST, then revalidate; CDN residue ≤ one UTC day is accepted by spec §4.8). The licence is
-// already committed when the audit runs, so an audit failure is logged instead of answering 500.
+// service_role has no direct DML on industry_dataset_licenses). The SQL function writes the research_audit_log row
+// ('industry.license_set') in the SAME transaction, so a failing audit rolls the switch back (answer 500); only after
+// the commit does the route revalidateTag('industries') so cached classification trees follow the switch (runbook:
+// switch to internal FIRST, then revalidate; CDN residue ≤ one UTC day is accepted by spec §4.8).
 import {revalidateTag} from 'next/cache';
 import {NextResponse} from 'next/server';
 import {AdminForbidden,AdminUnauthenticated,requireAdminUser} from '@/lib/admin/auth';
 import {supabaseIndustryDb} from '@/lib/industry/db';
 import {DATASET_KEYS,isLicensedStatus} from '@/lib/industry/licenses';
 import type {DatasetKey} from '@/lib/industry/types';
-import {audit,type ResearchSupabase} from '@/lib/research/store';
 import {getAdminSupabase} from '@/lib/supabase/admin';
 import {forgetViews} from '@/lib/industry/stale-views';
 
@@ -34,11 +33,6 @@ export async function POST(request:Request){
   const key=b.dataset_key as DatasetKey,status=b.status,note=typeof b.note==='string'?b.note:null;
   const admin=getAdminSupabase();
   await supabaseIndustryDb(admin).setDatasetLicense(key,status,user.id,note);
-  try{
-   await audit({supabase:admin as unknown as ResearchSupabase,userId:user.id},'industry.license_set',key,{dataset_key:key,status,note});
-  }catch(auditError){
-   console.error('[admin/industries] audit failed',auditError instanceof Error?auditError.message:auditError);
-  }
   revalidateTag('industries');
   forgetViews(key);   // this instance's stale page views of the dataset (page-data.ts re-checks the licence on every other instance)
   return NextResponse.json({dataset_key:key,status},{headers:NO_STORE});

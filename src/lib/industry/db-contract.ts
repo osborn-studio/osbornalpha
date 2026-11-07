@@ -19,6 +19,8 @@ import type {
 
 export interface IndustryContractHarness{
  db:IndustryDb;tables:TableClient;
+ /** An existing admin user id (auth.users) — the licence switch records its audit row under it. */
+ actor():Promise<string>;
  issuer():Promise<string>;batch():Promise<string>;
  /** A stocks_universe ticker no other test uses. */
  ticker():Promise<string>;
@@ -84,11 +86,13 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await db.isDatasetPublic('scheme:sic:sec-current')).toBe(true);
    const v=await h.version();const key=`scheme:sw2021:${v}` as DatasetKey;
    expect(await db.isDatasetPublic(key)).toBe(false);
-   await db.setDatasetLicense(key,'public','contract',null);expect(await db.isDatasetPublic(key)).toBe(true);
-   await db.setDatasetLicense(key,'internal','contract','back');expect(await db.isDatasetPublic(key)).toBe(false);
-   expect(await code(db.setDatasetLicense(`scheme:nope:${hex(3)}` as DatasetKey,'public','contract',null))).toBe('unknown');
-   expect(await code(db.setDatasetLicense(key,'open' as LicenseStatus,'contract',null))).toBe('unknown');
+   const who=await h.actor();
+   await db.setDatasetLicense(key,'public',who,null);expect(await db.isDatasetPublic(key)).toBe(true);
+   await db.setDatasetLicense(key,'internal',who,'back');expect(await db.isDatasetPublic(key)).toBe(false);
+   expect(await code(db.setDatasetLicense(`scheme:nope:${hex(3)}` as DatasetKey,'public',who,null))).toBe('unknown');
+   expect(await code(db.setDatasetLicense(key,'open' as LicenseStatus,who,null))).toBe('unknown');
    expect(await code(db.setDatasetLicense(key,'public','',null))).toBe('unknown');
+   expect(await code(db.setDatasetLicense(key,'public','not-a-user',null))).toBe('unknown');   // the audit row needs a real actor
    expect(await db.isDatasetPublic(key)).toBe(false);
   });
 
@@ -400,7 +404,7 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await code(db.setMetricRunCoverage(r1.runId,{}))).toBe('run_not_building');
    expect(await code(db.failRun('aggregate',r1.runId,'x'))).toBe('illegal_transition');
    expect(await db.metricRunVisible(r1.runId)).toBe(false);                                     // licence internal
-   await db.setDatasetLicense(`scheme:sw2021:${v}` as DatasetKey,'public','contract',null);
+   await db.setDatasetLicense(`scheme:sw2021:${v}` as DatasetKey,'public',await h.actor(),null);
    expect(await db.metricRunVisible(r1.runId)).toBe(true);
    expect(await db.metricRunVisible(r2.runId)).toBe(false);                                     // building
    // r2 regresses one issuer of one cell → dependency_regression; restaged → activates and supersedes r1
@@ -424,7 +428,7 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    expect(await db.metricRun(r3.runId)).toMatchObject({status:'failed',coverage_summary:{failure_reason:'obsolete_run'}});
    expect(await code(db.failRun('aggregate',r3.runId,'again'))).toBe('illegal_transition');
    expect(await code(db.activateMetricRun(randomUUID()))).toBe('unknown');
-   await db.setDatasetLicense(`scheme:sw2021:${v}` as DatasetKey,'internal','contract',null);
+   await db.setDatasetLicense(`scheme:sw2021:${v}` as DatasetKey,'internal',await h.actor(),null);
   });
 
   it('marks: free_share is part of the content — a free_share revision is a new observation; null is allowed',async()=>{

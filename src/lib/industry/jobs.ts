@@ -102,7 +102,7 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
    const steps:{name:string;receipt:RunnerReceipt}[]=[{name:'classifications',receipt:batchReceipt(await runClassificationsSw(deps,{triggeredBy,...captureOf(deps)}))}];
    if(!stepFailed(steps[0].receipt)){
     steps.push({name:'source',receipt:batchReceipt(await runMembershipsSw(deps,{apply:true,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}))});
-    steps.push({name:'memberships',receipt:batchReceipt(await runResolveMemberships(deps,{triggeredBy,today:opts.today}))});
+    steps.push({name:'memberships',receipt:batchReceipt(await runResolveMemberships(deps,{triggeredBy,today:opts.today,...captureOf(deps)}))});
    }
    return {job,receipt:combineReceipts(steps)};
   }

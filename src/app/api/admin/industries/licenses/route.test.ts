@@ -1,7 +1,7 @@
 // src/app/api/admin/industries/licenses/route.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 
-const mocks=vi.hoisted(()=>({requireAdmin:vi.fn(),setLicense:vi.fn(),insert:vi.fn(),from:vi.fn(),revalidate:vi.fn()}));
+const mocks=vi.hoisted(()=>({requireAdmin:vi.fn(),setLicense:vi.fn(),from:vi.fn(),revalidate:vi.fn()}));
 vi.mock('@/lib/admin/auth',async(importOriginal)=>({...await importOriginal<typeof import('@/lib/admin/auth')>(),requireAdminUser:mocks.requireAdmin}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:()=>({from:mocks.from})}));
 vi.mock('@/lib/industry/db',()=>({supabaseIndustryDb:()=>({setDatasetLicense:mocks.setLicense})}));
@@ -21,26 +21,22 @@ describe('POST /api/admin/industries/licenses',()=>{
   vi.clearAllMocks();
   mocks.requireAdmin.mockResolvedValue({id:ADMIN});
   mocks.setLicense.mockResolvedValue(undefined);
-  mocks.insert.mockResolvedValue({error:null});
-  mocks.from.mockReturnValue({insert:mocks.insert});
  });
- it('writes through setDatasetLicense, audits, then revalidates the industries tag',async()=>{
+ it('writes through setDatasetLicense (the SQL function audits atomically), then revalidates the industries tag',async()=>{
   const res=await post({dataset_key:'scheme:sw2021:2021',status:'public',note:'owner decision A 2026-11-10'},{'content-type':'application/json','origin':'https://alpha.example'});
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({dataset_key:'scheme:sw2021:2021',status:'public'});
   expect(mocks.setLicense).toHaveBeenCalledWith('scheme:sw2021:2021','public',ADMIN,'owner decision A 2026-11-10');
-  expect(mocks.from).toHaveBeenCalledWith('research_audit_log');
-  expect(mocks.insert.mock.calls[0][0]).toMatchObject({user_id:ADMIN,action:'industry.license_set',object_type:'industry',object_id:null,detail:{dataset_key:'scheme:sw2021:2021',status:'public',object_ref:'scheme:sw2021:2021'}});
+  expect(mocks.from).not.toHaveBeenCalled();   // no separate audit write
   expect(mocks.revalidate).toHaveBeenCalledWith('industries');
   expect(mocks.setLicense.mock.invocationCallOrder[0]).toBeLessThan(mocks.revalidate.mock.invocationCallOrder[0]);
   expect(forget).toHaveBeenCalledWith('scheme:sw2021:2021');
  });
- it('an audit failure after the committed switch is logged, still 200 and still revalidated',async()=>{
-  mocks.insert.mockResolvedValue({error:{message:'audit down'}});
+ it('a failed switch (including its atomic audit) answers 500 and neither revalidates nor forgets views',async()=>{
+  mocks.setLicense.mockRejectedValueOnce(new Error('audit insert failed'));
   const spy=vi.spyOn(console,'error').mockImplementation(()=>{});
-  expect((await post({dataset_key:'marks:tushare-daily_basic',status:'internal'})).status).toBe(200);
-  expect(spy).toHaveBeenCalledWith('[admin/industries] audit failed','audit down');
-  expect(mocks.revalidate).toHaveBeenCalledWith('industries');
+  expect((await post({dataset_key:'marks:tushare-daily_basic',status:'internal'})).status).toBe(500);
+  expect(mocks.revalidate).not.toHaveBeenCalled();expect(forget).not.toHaveBeenCalled();
   spy.mockRestore();
  });
  it('validates the body, media type and origin before writing',async()=>{
