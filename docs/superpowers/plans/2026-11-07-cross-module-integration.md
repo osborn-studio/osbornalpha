@@ -26,6 +26,8 @@ Per task: Codex prompt in `.claude/scratch/integ/<task>-prompt.md` → commit �
 
 ## Remaining release tasks
 
+Wave188 follow-up: the latest merged delivery and pending production/migration/desktop gates are recorded in [the wave188 release record](../../audits/2026-11-08-wave188-release.md). The `a43f2499` deployment evidence below is historical; it does not establish deployment or acceptance of #177–188.
+
 Reconciled against deployed code at `a43f2499a85df0b652d996579ac225a8710a2a84` (release final-state check 2026-11-08 14:10:49 Asia/Shanghai). PRs [#142](https://github.com/osborn-studio/osbornalpha/pull/142)–[#174](https://github.com/osborn-studio/osbornalpha/pull/174) are all merged; each merge commit was checked as an ancestor of this exact baseline. See [wave174 portable evidence](../../audits/2026-11-07-launch-closeout/wave174-release-evidence.json). “Merged” means code is on main; “deployed” requires an exact production SHA; “verified” applies only to the named check and revision. Owner/licensor decisions and missing source evidence are dependency blockers; absent pipeline/DTO/runner/SQL work is remaining implementation, and browser/operations checks are unverified. These states may coexist. The original execution table above remains historical.
 
 | Merged PR | Delivered boundary | What remains outside that evidence |

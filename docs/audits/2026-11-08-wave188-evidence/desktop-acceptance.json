@@ -1,0 +1,45 @@
+{
+  "recorded_at": "2026-11-08T16:03:38.438972+00:00",
+  "deployment": "dpl_67Baof7ufD3rTEsdg52cWTZtZsY4",
+  "runtime_sha": "16cb2972e6300153faead266feedcd7ca393c618",
+  "logged_in": true,
+  "industry": {
+    "intel_research_distinct_US_SIC_and_CN_SW_links": true,
+    "sic_list_loaded": true,
+    "detail": "sic/1000 METAL MINING",
+    "constituents": "1 member AUGO",
+    "company_link": "/stock/AUGO",
+    "company_destination_loaded": true,
+    "AUGO_no_facts_message_honest": true,
+    "SW_real_classifications": 0,
+    "valuation_activated": false
+  },
+  "company": {
+    "AAL_header_latest_period": "2026-09-30",
+    "AAL_overview_loaded": true,
+    "AAPL_refresh": "failed_evidence_statement_timeout",
+    "NOAH_backend_recovery": "changed;59events;709evidence",
+    "real_predecessor_sample_available": false,
+    "AAL_source_drawer": {
+      "passed": true,
+      "display": "46982.00 million USD",
+      "raw": "46982000000 USD",
+      "accession": "0000006201-26-000065",
+      "form": "10-Q",
+      "source": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000006201.json",
+      "locator": "/facts/us-gaap/RevenueFromContractWithCustomerExcludingAssessedTax/units/USD/130"
+    },
+    "NOAH_browser": {
+      "loaded": true,
+      "name": "NOAH HOLDINGS LTD",
+      "latest_period": "2025-12-31",
+      "latest_filing": "2026-04-29",
+      "overview_and_recent_events_visible": true
+    }
+  },
+  "limits": [
+    "Source evidence rendered; original snapshot bytes not downloaded in this wave",
+    "Not full industry valuation or CN facts acceptance",
+    "Known facts delta comparability P2 under independent CLI repair"
+  ]
+}
