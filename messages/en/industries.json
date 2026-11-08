@@ -98,7 +98,7 @@
     },
     "empty": {
       "title": "No active run yet",
-      "body": "The scheme is licensed but has no active aggregate run. The heatmap appears once the first run completes. Aggregates are L1 only: the L2 and L3 selectors offer navigation and constituents, not aggregated cells."
+      "body": "No active aggregate run is available. Browse available classifications and constituents below; the heatmap appears once the first run completes. Aggregates are L1 only: L2 and L3 offer navigation and constituents."
     },
     "reconstruction": {
       "title": "Reconstruction: these cells are not what was visible at the time",
