@@ -10,8 +10,9 @@ import {memoryStrategyDb,type StrategyDb} from '@/lib/macro/strategy/db';
 import type {F4CardLite} from '@/lib/macro/strategy/f4-client';
 import {strategyMemo} from '@/lib/macro/strategy/memo';
 
+const cacheFailure=vi.hoisted(()=>({error:null as Error|null}));
 const shared=vi.hoisted(()=>new Map<string,unknown>());
-vi.mock('next/cache',()=>({unstable_cache:(cb:()=>Promise<unknown>,parts:string[])=>async()=>{const key=JSON.stringify(parts);if(shared.has(key))return structuredClone(shared.get(key));const value=await cb();shared.set(key,structuredClone(value));return value;}}));
+vi.mock('next/cache',()=>({unstable_cache:(cb:()=>Promise<unknown>,parts:string[])=>async()=>{if(cacheFailure.error)throw cacheFailure.error;const key=JSON.stringify(parts);if(shared.has(key))return structuredClone(shared.get(key));const value=await cb();shared.set(key,structuredClone(value));return value;}}));
 
 const m=vi.hoisted(()=>({user:vi.fn(),port:vi.fn(),db:null as unknown,code:vi.fn(),trManifest:vi.fn(),buildTransmission:vi.fn(),buildPlaybooks:vi.fn(),selectF4Mark:vi.fn(),
  prManifest:vi.fn(),buildPolicyResponse:vi.fn(),ctManifest:vi.fn(),buildCycleTable:vi.fn(),runReview:vi.fn(),handle:vi.fn(),recover:vi.fn(),listDeviationCases:vi.fn(),createF4Client:vi.fn(),card:vi.fn(),detail:vi.fn()}));
@@ -85,7 +86,7 @@ const ENV_KEYS=['MACRO_STRATEGY_ENABLED','MACRO_JUDGMENTS_ENABLED','CRON_SECRET'
 const saved=Object.fromEntries(ENV_KEYS.map(k=>[k,process.env[k]]));
 
 beforeEach(()=>{
- vi.clearAllMocks();
+ vi.clearAllMocks();cacheFailure.error=null;
  shared.clear();strategyMemo.clear();PORT.activeSnapshot.mockImplementation(async(r:string)=>r==='US'?FROZEN_US:null);PORT.publishState.mockResolvedValue({revision:1,input_revision:1});PORT.catalogVersion.mockReturnValue('cat/1');
  process.env.MACRO_STRATEGY_ENABLED='1';delete process.env.MACRO_JUDGMENTS_ENABLED;process.env.CRON_SECRET='cron-secret';
  m.user.mockResolvedValue({data:{user:{id:USER}},error:null});
@@ -451,5 +452,66 @@ describe('route helpers',()=>{
   const snap={request_id:REQ,subject:{kind:'snapshot',id:'Snap:US:X'},locale:'zh'};expect(canonicalExplainBody(snap)).toBe(snap);
   const odd={request_id:REQ,subject:{kind:'review',id:'CN:2026-09'},locale:'zh'};expect(canonicalExplainBody(odd)).toBe(odd);
   for(const v of [null,'x',[1],{subject:null},{subject:[]},{subject:{kind:'review',id:5}}])expect(canonicalExplainBody(v)).toBe(v);
+ });
+});
+
+// Production returned generic 500s with empty runtime logs. Only fixed stage names may leave the route.
+describe('cycle-table failure diagnostics',()=>{
+ it.each(['read_state','build_manifest','persist_manifest','evaluate_view','fact_cache'] as const)('records %s without private exception content and lets the next request retry',async(stage)=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const secret=new Error('private provider URL, credential, user and frozen evidence');
+  try{
+   if(stage==='read_state')PORT.publishState.mockRejectedValueOnce(secret);
+   if(stage==='build_manifest')m.ctManifest.mockRejectedValueOnce(secret);
+   if(stage==='persist_manifest')vi.spyOn(db,'putManifest').mockRejectedValueOnce(secret);
+   if(stage==='evaluate_view')m.buildCycleTable.mockImplementationOnce(()=>{throw secret;});
+   if(stage==='fact_cache')cacheFailure.error=secret;
+   const failed=await cycleTable(get('/cycle-table?boundary=event_day'));
+   expect(failed.status).toBe(500);
+   expect(await failed.json()).toEqual({error:{code:'strategy_failed',message:'macro strategy request failed'}});
+   expect(failed.headers.get('cache-control')).toBe('no-store');
+   expect(failed.headers.get('X-Macro-Strategy-Memo')).toBeNull();
+   expect(log.mock.calls).toEqual([['[macro-cycle-table]',{stage}]]);
+   cacheFailure.error=null;
+   const retried=await cycleTable(get('/cycle-table?boundary=event_day'));
+   expect(retried.status).toBe(200);expect(retried.headers.get('X-Macro-Strategy-Memo')).toBe('miss');
+   expect(retried.headers.get('cache-control')).toBe('private, no-store');
+   expect(log).toHaveBeenCalledTimes(1);
+  }finally{log.mockRestore();}
+ });
+ it('records unexpected read-gate failures without logging the exception',async()=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  try{
+   m.port.mockImplementationOnce(()=>{throw new Error('private gate exception');});
+   const failed=await cycleTable(get('/cycle-table?boundary=event_day'));
+   expect(failed.status).toBe(500);expect(await codeOf(failed)).toBe('strategy_failed');
+   expect(log.mock.calls).toEqual([['[macro-cycle-table]',{stage:'read_gate'}]]);
+  }finally{log.mockRestore();}
+ });
+ it('propagates the original fixed failure stage to every coalesced waiter, then retries',async()=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  let reject!:(error:Error)=>void;
+  const pending=new Promise<never>((_resolve,no)=>{reject=no;});
+  const put=vi.spyOn(db,'putManifest').mockReturnValueOnce(pending);
+  try{
+   const both=Promise.all([cycleTable(get('/cycle-table')),cycleTable(get('/cycle-table'))]);
+   await vi.waitFor(()=>expect(put).toHaveBeenCalledTimes(1));
+   reject(new Error('private coalesced persistence exception'));
+   expect((await both).map(r=>r.status)).toEqual([500,500]);
+   expect(log.mock.calls).toEqual(Array.from({length:2},()=>['[macro-cycle-table]',{stage:'persist_manifest'}]));
+   expect((await cycleTable(get('/cycle-table'))).status).toBe(200);
+   expect(put).toHaveBeenCalledTimes(2);
+   expect((await cycleTable(get('/cycle-table'))).headers.get('X-Macro-Strategy-Memo')).toBe('hit');
+   expect(log).toHaveBeenCalledTimes(2);
+  }finally{log.mockRestore();}
+ });
+ it('does not log expected parameter or authentication refusals',async()=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  try{
+   expect((await cycleTable(get('/cycle-table?boundary=private-invalid-value'))).status).toBe(400);
+   m.user.mockResolvedValueOnce({data:{user:null},error:null});
+   expect((await cycleTable(get('/cycle-table?boundary=event_day'))).status).toBe(401);
+   expect(log).not.toHaveBeenCalled();
+  }finally{log.mockRestore();}
  });
 });

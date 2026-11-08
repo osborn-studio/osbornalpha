@@ -529,3 +529,47 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
   };
  },6000+Math.floor(Math.random()*2000));
 });
+
+// Incident regression: production timed out on one 22,451-input manifest. These synthetic inputs
+// exercise the full JSONB path without committing production evidence or claiming production parity.
+describe.skipIf(!enabled)('large manifest persistence on real PostgreSQL',()=>{
+ let pool:Pool;
+ beforeAll(()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});
+ });
+ afterAll(async()=>{await pool?.end();});
+ it('round-trips every input, replays concurrently and detects a conflict in the last input',async()=>{
+  const body=testManifest('cycle_table');
+  body.inputs=Array.from({length:22451},(_,i)=>({series_id:'US_DGS10_D',role:'col:US_DGS10_D:history',
+   observation_id:randomUUID(),period_end:'2026-11-01',value_text:`${i}.00000000001`,version:1,
+   available_at:body.cutoff,source:{kind:'history' as const,as_of:body.cutoff}}));
+  const canonical=canonicalJson(body),hash=sha256Hex(canonical);
+  expect(Buffer.byteLength(canonical)).toBeGreaterThan(6_000_000);
+  const direct=pgTransport(pool,()=>null);
+  // PostgREST 14.5's typed lateral JSON record boundary, rather than seven independently
+  // bound pg arguments. The real HTTP gateway is a separate incident benchmark.
+  const db=strategyDbOver({...direct,rpc:async(fn,args)=>{
+   expect(fn).toBe('macro_put_manifest');
+   const c=await pool.connect();
+   try{
+    await c.query('begin; set local role service_role');
+    const result=await c.query(`select public.macro_put_manifest(p_kind,p_body,p_manifest_hash,p_cutoff,
+     p_method_version,p_code_version,p_catalog_version) v from (select $1::json json_data) payload,
+     lateral (select * from json_to_record(payload.json_data) as _(p_kind text,p_body jsonb,
+      p_manifest_hash text,p_cutoff timestamptz,p_method_version text,p_code_version text,p_catalog_version text) limit 1) typed`,[JSON.stringify(args)]);
+    await c.query('commit');return result.rows[0].v;
+   }catch(e){await c.query('rollback');throw e;}finally{c.release();}
+  }});
+  const [first,second]=await Promise.all([db.putManifest(body),db.putManifest(body)]);
+  expect(first).toEqual(second);expect(first.manifest_hash).toBe(hash);
+  const read=await db.manifest(first.manifest_id);
+  expect(read?.body.inputs).toHaveLength(22451);
+  expect(canonicalJson(read!.body)).toBe(canonical);expect(sha256Hex(canonicalJson(read!.body))).toBe(hash);
+  const changed=structuredClone(body);changed.inputs.at(-1)!.value_text='999999999.00000000001';
+  await expect(direct.rpc('macro_put_manifest',{p_kind:body.kind,p_body:changed,p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version})).rejects.toMatchObject({message:'payload_conflict'});
+  expect(canonicalJson((await db.manifest(first.manifest_id))!.body)).toBe(canonical);
+  expect((await pool.query('select count(*)::int n from public.macro_strategy_manifests where manifest_hash=$1',[hash])).rows[0].n).toBe(1);
+ },30000);
+});
