@@ -9,17 +9,17 @@
 | 数据底座三（F1b 标识符 + F5 对账与日历新鲜度） | `2026-11-04-data-foundation-3-identifiers-and-reconciliation-design.md` | 6 | 第五轮（增量 + 落地代码核对）T1–T15、第六轮确认 U1–U3 均按规定修法落实 | `2026-11-04-data-foundation-3/`（01–07 + 03 处置） | PR #108 已合并；后续数据覆盖与人工核对见运行手册 |
 | F3 披露文档管道 | `2026-11-04-document-pipeline-design.md` | 6 | 第五轮（增量 + 落地代码核对）"not ready"；R5-1–13 已按原方案实现 | `2026-11-04-document-pipeline/` | PR #114 已合并；公司来源抽屉集成 #118、RPC 迁移锁定 #126 |
 | F4 判断层框架 | `2026-11-04-judgment-framework-design.md` | 5 | 第四轮 "not ready"；R01–R06 已按原方案实现，未复审 | `2026-11-04-judgment-framework/` | PR #117 已合并；宏观 v2 修复 #129、#132，许可 #131；生产注册与开关另行验收 |
-| F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 6 | 第 6 稿已按计划 `2026-11-06-evals-and-gold-sets.md` 实施，见 §18.1 | `2026-11-04-evals-gold-sets/` | PR #106、#127、#137、#148 已合并；#148 加强 gold 准入及校准证据结构校验，不认证来源真伪或人工准确性；extraction_gold / judgment_calibration 仍禁用，许可、人工 gold、概率方法／导出／阈值／runner 未闭环 |
-| 行业研究 | `2026-11-04-industry-research-design.md` | 5 | 第四轮 "not ready"；U1–U6 已按原方案实现，未复审 | `2026-11-04-industry-research/` | PR #107、#123、#141、#147、#153 已合并；#147 仅禁用态 I-3 输入准备，#153 为独立日期入口回归；official / valuation 仍 deferred_i3；H／PB 口径、SQL 比较／舍入、授权、gold、发布激活和行业方法仍待闭环 |
-| 公司研究与跟踪 | `2026-11-04-company-research-design.md` | 5 | 第四轮 "not ready"；#40/#57–#60 已按原方案实现，未复审 | `2026-11-04-company-research/` | PR #115、#118、#124、#140、#145、#149 已合并；#145 绑定请求 issuer 与 fact/run 来源，#149 为独立 HTTP 证据门回归；来源抽屉默认开，公司判断默认关；CN PDF 定位、issuer 方法、独立黄金集及运维验收仍待闭环 |
+| F6 评测与黄金集 | `2026-11-04-evals-and-gold-sets-design.md` | 6 | 第 6 稿已按计划 `2026-11-06-evals-and-gold-sets.md` 实施，见 §18.1 | `2026-11-04-evals-gold-sets/` | PR #106、#127、#137、#148、#157 已合并；#157 增加已审核 gold 的原子 integrity-lock 登记工具，不代替人工审核；#148 加强 gold 准入及校准证据结构校验，不认证来源真伪或人工准确性；extraction_gold / judgment_calibration 仍禁用，许可、人工 gold、概率方法／导出／阈值／runner 未闭环 |
+| 行业研究 | `2026-11-04-industry-research-design.md` | 5 | 第四轮 "not ready"；U1–U6 已按原方案实现，未复审 | `2026-11-04-industry-research/` | PR #107、#123、#141、#147、#153、#154 已合并；#154 修正 SQL 1% 边界的除法舍入误判，既有 pairs 不回写；#147 仅禁用态 I-3 输入准备，#153 为独立日期入口回归；official / valuation 仍 deferred_i3；H／PB 与 SQL comparator 映射口径、授权、gold、发布激活和行业方法仍待闭环 |
+| 公司研究与跟踪 | `2026-11-04-company-research-design.md` | 5 | 第四轮 "not ready"；#40/#57–#60 已按原方案实现，未复审 | `2026-11-04-company-research/` | PR #115、#118、#124、#140、#145、#149、#156 已合并；#156 可离线核对所给 EDGAR 字节与当前解析／映射的一致性，不认证来源或人工财务真值；#145 绑定请求 issuer 与 fact/run 来源，#149 为独立 HTTP 证据门回归；来源抽屉默认开，公司判断默认关；CN PDF 定位、issuer 方法、独立黄金集及运维验收仍待闭环 |
 | 外资研报 | `2026-11-04-foreign-research-design.md` | 4 | 第四轮 "READY WITH P2 FIXES"；三条 P2 已实现 | `2026-11-04-foreign-research/` | 依赖 F3/F4；owner 决策 D1–D7；画布 |
 | 宏观工作台（P1+P2） | `2026-11-04-macro-workbench-design.md` | 2 | 2026-11-06 增量轮 "not ready"（M1–M26 全部接受并落实） | `2026-11-06-macro-workbench/` | PR #109 已合并；P3/P4 经 #111、#112 接入；#119 生产事实验证，#128 性能优化，#130 入口改为 /macro |
 
 美林时钟发布增量：#133 JSONB 查询修复、#134 manifest、#135 四象限与证据约束、#136 跨实例纯事实缓存已合并。最新上线状态及尚未达成的性能预算见 [上线闭环记录](../../audits/2026-11-07-launch-closeout/README.md)；仅事实页面验收不代表时钟上线，合并和本地测试也不代替生产登录态验证。
 
-后续 #138 合并过期共享缓存的重建 promise，并让策略客户端／响应绕过浏览器 HTTP 缓存。#142–#153 全部已合并，代码基线为 `ab11d6e3b41a603169fda19df2db2d69fdad70c9`。#146 增加策略客户端鉴权切换隔离；#150 去掉持久化后的完整 manifest 回读；#143/#144/#149/#151–#153 包含测试或记录闭环，不能作为额外产品能力。逐 PR 范围及未完成任务见 [跨模块发布任务清单](../plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
+后续 #138 合并过期共享缓存的重建 promise，并让策略客户端／响应绕过浏览器 HTTP 缓存。#142–#158 全部已合并，代码基线为 `3f14ec4a075f8bc200681929e887ceff92892d5e`。#146 隔离策略客户端鉴权切换；#150 去掉持久化后的完整 manifest 回读；#155 将周期历史预处理降为每列一次，本地合成 CPU benchmark 不代表生产延迟。#154 修复 SQL 精确 1% 比较；#156 增加离线 EDGAR replay；#157 增加审核后 gold 完整性锁登记；#158 记录上一发布阶段。这些增量不启用 I-3、公司判断或 F6 禁用评测。逐 PR 范围及未完成任务见 [跨模块发布任务清单](../plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
 
-最新生产 `ab11d6e3` 已由 release-main 留存 READY 部署、精确 CI 与公开方法／判断及匿名鉴权核验；#146/#150 已部署，但没有新版本登录态或性能验收。生产证据与浏览器验收按精确部署 SHA 分别记录在 [发布记录](../../audits/2026-11-07-launch-closeout/README.md)。`98e9a819` 的中美登录态时钟、量化依据与真实来源抽屉核心流程是该旧部署的已验证结果；新合并代码、合成测试与匿名检查不能继承为新部署登录态验收。用户审美认可、完整生产移动端／退出登录／账号切换、原始文件下载及新性能样本仍需独立证据；#150 的模拟响应字节下降不证明生产延迟或 p95 达标。
+本轮 release158 回执为 `deployed=false`：`3f14ec4a` 的 CI 与 #154 生产迁移状态权威核对仍是发布门槛（是否需应用尚未知）；公开 HTTP 复查仍返回旧生产 `ab11d6e3`。此前 `ab11d6e3` 的 READY 部署和公开 HTTP 检查、`98e9a819` 的中美登录态核心流程、`dc47ba2e` 的性能样本均仅属于各自旧部署。生产证据按精确部署 SHA 记录在 [发布记录](../../audits/2026-11-07-launch-closeout/README.md)。不能把旧登录态验收或 #155 本地 CPU benchmark 作为本轮生产验收；用户审美、完整生产移动端／退出登录／账号切换、原始下载及新性能样本仍需独立证据。
 
 上表审计栏保留设计阶段历史结论，不代表当前代码仍未实施。合并不等于生产启用；生产证据以部署记录和登录态验收为准。
 

@@ -1,6 +1,28 @@
 # 美林时钟与宏观缓存发布记录（2026-11-07）
 
-## 最新生产部署与 HTTP 核验（ab11d6e3）
+## 本轮代码与发布阻塞（3f14ec4a）
+
+#154–#158 均已合并，代码基线为 `3f14ec4a075f8bc200681929e887ceff92892d5e`。release158 的 2026-11-07 16:41:22 UTC 回执为 `deployed=false`、`pass=false`、`waiting_ci_and_migration_access`，不是新部署成功。精确 Application CI [42392239511](https://github.com/osborn-studio/osbornalpha/actions/runs/42392239511) 当时仍在运行；fixture CI [42392239520](https://github.com/osborn-studio/osbornalpha/actions/runs/42392239520) 成功。
+
+生产发布前还需权威检查 #154 所含的 `20261120093000_industry_exact_pair_tolerance.sql`。release 会话缺 Supabase management access token 和生产数据库连接凭据，不能检查迁移状态，故是否仍需应用替换函数未知；已有服务角色 HTTP 访问不等于具备迁移能力。#157 无迁移。本轮未因此改变 flags、licences 或启用 I-3。
+
+16:42:04 UTC 的 9 项只读公开／匿名 HTTP 复查通过，但三份公开响应的 `codeVersion` 仍为旧生产 `ab11d6e3`；这是旧部署仍可用的证据，不能验收 `3f14ec4a`。v2 active/publishable、公式 hash 不变；US overheat、CN stagflation，均 `calibration=insufficient`。三类策略端点各两次匿名请求均 401/no-store。原始脱敏回执、旧生产复查和 #154–158 合并祖先核对见 [wave158-release-evidence.json](wave158-release-evidence.json)。
+
+本轮没有新增当前 SHA 登录态或生产性能证据。`98e9a819` 的中美时钟与来源抽屉、`dc47ba2e` 的策略耗时仍是下方各自历史结果。#155 的 4.98–11.05× 是本地合成 CPU benchmark，不是完整请求或生产 p95。逐 PR 边界与未闭环的 owner／实现／验收任务见 [剩余清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
+
+### 本轮独立操作检查（不等于候选部署验收）
+
+公司 operations 会话以 `3f14ec4a` 的 CLI 对旧生产返回的三个真实 AAPL fact 执行 replay，均 exit 0；稳定下载与 SEC 直接下载的 3,859,564 字节一致，SHA-256 为 `f085735b4d08fb116ade18d24247ffabe11df8eb52eae6556b165831f15ef1ad`。17 个修改输入拒绝、3 个用法／读取错误及 65 个已有测试通过。修改输入是对抗测试，不是真实财务 gold。该检查只证明所给字节、DTO 与当前解析／映射一致，不认证保存的元数据、历史 asOf 或人工真值，也不是新部署 HTTP 验收。
+
+同会话对 CNInfo 600570 2024 年报原始 PDF 完成 222 页文本／表格提取：物理第 72 页合并利润表存在值相同但概念不同的收入行，第 74 页为母公司表。未取得已存 Tushare fact 与具体 PDF 单元格的审核绑定，`emptyPdfLocatorSource` 仍有效。后续需独立 R1/R2 gold，以及事实、发行人、filing／source、PDF hash、提取版本、当前 raw/value 的持久化、失效和冲突弃权契约；提取坐标不等于真实 locator 已闭环。
+
+行业 readiness 会话在当前基线复查后未找到可绕过 H／PB 决策的已批准实现切片，未重复 #147/#154；456 个选定非 DB 测试通过，未跑 PostgreSQL 集成、生产数据或许可验收。研究所得公开 provider 文档不构成实际账号 entitlement 或合同授权；owner 需选择现有供应链书面权限、另行设计的授权替代产品，或继续禁用。逐项方法、证据及发布条件仍按 [剩余清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks) 执行。公司和行业最终 MiniMax-M2.5 审计均已返回实际 `end_turn`，分别支持该操作结论／report-only 范围无阻塞发现；不代表模块或发布批准。本节来自独立任务报告，文档编辑者未重跑其命令。
+
+F6 operations 发现 runner 的默认 CLI 路径以类型 cast 接受 JSON，绕过验证后的 `loadLock`，会对部分重复路径／未知字段／其他损坏项产出通过报告。修复及真实 CLI 回归已提交 [PR #159](https://github.com/osborn-studio/osbornalpha/pull/159)，仍未合并，不在本轮候选中。该会话报告 799 个非 DB F6 测试通过，实际进程并发及版本／拒绝生命周期通过，MiniMax-M2.5 最终 `end_turn` 为 PASS。全部新增生命周期数据是合成测试，未接受真实人工 gold，也未启用 calibration。
+
+宏观会话补充了 fixture-backed GET 路径测量，经过真实适配器／builder／hash／持久化确认／Next cache 接线与完整响应体读取；缓存清空 39 次 HTTP、暖路径 4 次，三个 boundary 的完整 manifest／响应身份保持一致。它使用模拟 HTTP／DB／Next 后端及显式 fixture session，缓存清空是同进程 reset，不是受控生产冷启动；不测真实 PostgreSQL／RLS／登录、TLS、跨实例缓存或生产 p95。MiniMax-M2.5 复审返回实际 `end_turn`、无阻塞发现；benchmark 已提交 [PR #160](https://github.com/osborn-studio/osbornalpha/pull/160)，仍未合并，最终 focused tests 为 111 通过。该候选中无此新增 benchmark 交付。
+
+## 上一生产部署与 HTTP 核验（ab11d6e3）
 
 release-main 独立会话于 2026-11-07 16:24:28 UTC 留存生产核验回执。代码提交为 `ab11d6e3b41a603169fda19df2db2d69fdad70c9`；精确 [Application checks 42390150149](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150149) 与 [Macro source fixture checks 42390150168](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150168) 均成功。生产部署 `dpl_66sLJmdeMoowiUjBVy1Pag49uXgK` 为 READY，部署地址 `https://stock-monitor-elfq9cex3-gilosbornhellos-projects.vercel.app`，生产别名检查指向同一部署；部署命令退出 0。该提交包含已合并的 #142–#153，包括 #146 鉴权切换隔离、#147 禁用态 I-3 准备、#148 F6 证据门、#150 manifest 回读优化及相应回归／CI。逐 PR 交付与剩余任务见 [任务清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
 
