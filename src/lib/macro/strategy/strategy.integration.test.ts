@@ -170,6 +170,64 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
    .toEqual([{kind:'transmission',manifest_hash:h,same_cutoff:true,method_version:'mv',code_version:'code',catalog_version:'cv'}]);
  });
 
+ it('unnamed JSONB manifest transport rejects unexpected envelope keys before insert or replay',async()=>{
+  const body=testManifest('cycle_table'),hash=newHash();
+  const args={p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version};
+  for(const key of ['unexpected','', '额外参数']){
+   expect(await fails(asRole('service_role','select public.macro_put_manifest_json($1::jsonb)',
+    [JSON.stringify({...args,[key]:{nested:true}})]))).toMatchObject({message:'invalid_argument'});
+   expect(await one('select count(*)::int v from public.macro_strategy_manifests where manifest_hash=$1',[hash])).toBe(0);
+  }
+  const id=await one('select public.macro_put_manifest_json($1::jsonb) v',[JSON.stringify(args)]);
+  expect(await fails(asRole('service_role','select public.macro_put_manifest_json($1::jsonb)',
+   [JSON.stringify({...args,unexpected:null})]))).toMatchObject({message:'invalid_argument'});
+  expect(await q('select manifest_id,body from public.macro_strategy_manifests where manifest_hash=$1',[hash]))
+   .toEqual([{manifest_id:id,body}]);
+ });
+
+ it('unnamed JSONB manifest transport preserves complete provenance, concurrent identity, legacy replay and last-input conflicts',async()=>{
+  const signature='public.macro_put_manifest_json(jsonb)';
+  expect(await one('select proargnames is null v from pg_proc where oid=$1::regprocedure',[signature])).toBe(true);
+  expect(await one('select prosecdef v from pg_proc where oid=$1::regprocedure',[signature])).toBe(false);
+  for(const role of ['anon','authenticated']){
+   expect(await one('select has_function_privilege($1,$2,\'EXECUTE\') v',[role,signature])).toBe(false);
+   expect(await fails(asRole(role,'select public.macro_put_manifest_json($1::jsonb)',['{}']))).toMatchObject({code:'42501'});
+  }
+  for(const malformed of [null,'null','[]','{}'])expect(await fails(asRole('service_role',
+   'select public.macro_put_manifest_json($1::jsonb)',[malformed]))).toMatchObject({message:'invalid_argument'});
+  const body=testManifest('cycle_table');
+  body.inputs=Array.from({length:22451},(_,i)=>({series_id:'US_DGS10_D',role:'col:US_DGS10_D:history',
+   observation_id:randomUUID(),period_end:'2026-11-01',value_text:`${i}.00000000001`,version:1,
+   available_at:body.cutoff,source:{kind:'history' as const,as_of:body.cutoff}}));
+  const canonical=canonicalJson(body),hash=sha256Hex(canonical);
+  expect(Buffer.byteLength(canonical)).toBeGreaterThan(6_000_000);
+  const args={p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version};
+  const rawPut=async(payload:unknown)=>{
+   const c=await admin.connect();
+   try{
+    await c.query('begin; set local role service_role');
+    const result=await c.query('select public.macro_put_manifest_json($1::jsonb) v',[JSON.stringify(payload)]);
+    await c.query('commit');return result.rows[0].v as string;
+   }catch(e){await c.query('rollback');throw e;}finally{c.release();}
+  };
+  const [first,second]=await Promise.all([rawPut(args),rawPut(args)]);
+  expect(second).toBe(first);
+  expect(await one('select public.macro_put_manifest($1,$2::jsonb,$3,$4,$5,$6,$7) v',[
+   body.kind,canonical,hash,body.cutoff,body.method_version,body.code_version,body.catalog_version])).toBe(first);
+  const changed=structuredClone(args);changed.p_body.inputs.at(-1)!.value_text='999999999.00000000001';
+  expect(await fails(rawPut(changed))).toMatchObject({message:'payload_conflict'});
+  const rows=await q('select body,manifest_hash from public.macro_strategy_manifests where manifest_hash=$1',[hash]);
+  expect(rows).toHaveLength(1);expect(canonicalJson(rows[0].body)).toBe(canonical);
+  expect(sha256Hex(canonicalJson(rows[0].body))).toBe(hash);
+  expect(await fails(rawPut({...args,p_manifest_hash:newHash(),p_kind:'review'}))).toMatchObject({code:'23514'});
+  expect(await fails(rawPut({...args,p_manifest_hash:'ABC'}))).toMatchObject({code:'23514'});
+  expect(await fails(rawPut({...args,p_body:null}))).toMatchObject({code:'23502'});
+  await replayMigration(admin,readFileSync('supabase/migrations/20261121090000_macro_manifest_json_transport.sql','utf8'));
+  expect(await rawPut(args)).toBe(first);
+ },30000);
+
  it('macro_publish_review: absent pointer = generation 0 → first publish 1; stale is a return value with an attempt row',async()=>{
   const month=freshMonth();const A=await reviewManifest();
   expect(await pointer('US',month)).toBeNull();
