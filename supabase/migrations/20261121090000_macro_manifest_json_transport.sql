@@ -3,10 +3,15 @@
 -- PL/pgSQL prevents SQL-function inlining from duplicating payload parsing/extraction.
 create or replace function public.macro_put_manifest_json(jsonb)
 returns uuid language plpgsql security invoker set search_path = pg_catalog, public as $$
+declare v_keys constant text[] := array[
+  'p_kind','p_body','p_manifest_hash','p_cutoff','p_method_version','p_code_version','p_catalog_version'
+];
 begin
-  if jsonb_typeof($1) is distinct from 'object' or not ($1 ?& array[
-    'p_kind','p_body','p_manifest_hash','p_cutoff','p_method_version','p_code_version','p_catalog_version'
-  ]) then
+  if jsonb_typeof($1) is distinct from 'object' or not ($1 ?& v_keys) then
+    raise exception 'invalid_argument';
+  end if;
+  -- Named PostgREST dispatch rejects unknown parameters; raw JSON must do so too.
+  if ($1 - v_keys) <> '{}'::jsonb then
     raise exception 'invalid_argument';
   end if;
   return public.macro_put_manifest(

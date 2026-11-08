@@ -170,6 +170,22 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
    .toEqual([{kind:'transmission',manifest_hash:h,same_cutoff:true,method_version:'mv',code_version:'code',catalog_version:'cv'}]);
  });
 
+ it('unnamed JSONB manifest transport rejects unexpected envelope keys before insert or replay',async()=>{
+  const body=testManifest('cycle_table'),hash=newHash();
+  const args={p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version};
+  for(const key of ['unexpected','', '额外参数']){
+   expect(await fails(asRole('service_role','select public.macro_put_manifest_json($1::jsonb)',
+    [JSON.stringify({...args,[key]:{nested:true}})]))).toMatchObject({message:'invalid_argument'});
+   expect(await one('select count(*)::int v from public.macro_strategy_manifests where manifest_hash=$1',[hash])).toBe(0);
+  }
+  const id=await one('select public.macro_put_manifest_json($1::jsonb) v',[JSON.stringify(args)]);
+  expect(await fails(asRole('service_role','select public.macro_put_manifest_json($1::jsonb)',
+   [JSON.stringify({...args,unexpected:null})]))).toMatchObject({message:'invalid_argument'});
+  expect(await q('select manifest_id,body from public.macro_strategy_manifests where manifest_hash=$1',[hash]))
+   .toEqual([{manifest_id:id,body}]);
+ });
+
  it('unnamed JSONB manifest transport preserves complete provenance, concurrent identity, legacy replay and last-input conflicts',async()=>{
   const signature='public.macro_put_manifest_json(jsonb)';
   expect(await one('select proargnames is null v from pg_proc where oid=$1::regprocedure',[signature])).toBe(true);
