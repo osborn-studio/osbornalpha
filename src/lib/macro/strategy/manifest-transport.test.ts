@@ -18,7 +18,7 @@ function transport(opts:{rpcResult?:unknown;rpcError?:string;rows?:(row:Row)=>Ro
  const fetcher:typeof fetch=async(input,init)=>{
   const request=new Request(input,init),url=new URL(request.url),body=await request.text();
   let result:unknown,status=200;
-  if(url.pathname==='/rest/v1/rpc/macro_put_manifest'){
+  if(url.pathname==='/rest/v1/rpc/macro_put_manifest_json'){
    const args=JSON.parse(body);
    if(opts.rpcError){status=400;result={code:'P0001',message:opts.rpcError};}
    else if(row&&row.manifest_hash===args.p_manifest_hash&&canonicalJson(row.body)!==canonicalJson(args.p_body)){
