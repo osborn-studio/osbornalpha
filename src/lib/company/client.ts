@@ -73,7 +73,7 @@ export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;d
 export interface MetricsResponse{lineage?:string[];resolution?:{tickerAsOf:string;issuerId:string;validFromMethod:string|null};conflicts?:{key:LineageConflict['key'];availableDate:string;factIds:string[]}[];issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
 export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus|null;lastOkAt:string|null;lastAttemptAt:string|null}[]}
-export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;filings:FilingSummary[]}
+export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;lineage?:string[];stateRevs?:LineageRev[];filings:FilingSummary[]}
 /** Spec-2 /api/facts?factIds= row, used only to locate a fact's natural key (its value is never displayed, §0 #68). */
 export interface FactKeyRow{factId:string;concept:string;periodStart:string|null;periodEnd:string;duration:string;unit:string}
 export interface FactIdsResponse{facts:FactKeyRow[]}

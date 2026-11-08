@@ -135,3 +135,9 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 ## 12. 本次验证范围（2026-11-06）
 
 Task 19 按 owner 指令只跑定向单测、typecheck、lint；本机 Supabase、种子实跑、Playwright、全量 npm test、test:db、test:migrations 由指挥执行。本手册的命令是复跑说明，不代表已执行。四个夹具哈希已核对，三条期望保持 pending；不得宣称黄金矩阵通过。
+
+## Company filings lineage reads
+
+`GET /api/companies/[ticker]/filings` and its admin twin include published filings from every predecessor in the resolved issuer's lineage, restricted to the ticker's market and `asOf`. Each member uses `company_read_snapshot`; the facts limit does not limit its filings or their fact counts. The global order remains `availableDate` descending, then `filingId` descending.
+
+Existing response fields retain their meanings: `issuerId` and `stateRev` describe the resolved target. Additive `lineage` and `stateRevs` fields list all members and their snapshot revisions, sorted by issuer id. The browser contract makes these metadata fields optional for older responses. A single-member read still uses one snapshot. Multi-member reads require unchanged membership and a complete revision vector matching every snapshot; after three unstable attempts the route returns `503 lineage_unstable` with no partial filings and `no-store` (admin: `private, no-store`). This closes the filings read gap only; statements, history, overview and events retain their existing lineage behavior.
