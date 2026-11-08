@@ -146,6 +146,12 @@ describe('parseSyncArgs',()=>{
   expect(parseSyncArgs(['--job','aggregate','--facts-as-of','2026-11-03'])).toMatchObject({ok:true,args:{job:'aggregate',apply:false,factsAsOf:'2026-11-03'}});
   expect(parseSyncArgs(['--job','memberships-sw','--l1','801120.SI'])).toMatchObject({ok:true,args:{l1Codes:['801120.SI']}});
  });
+ it('rejects --limit when the selected job does not consume it',()=>{
+  for(const job of ['memberships-sw','facts-scope','marks','aggregate','official','valuation'])
+   expect(parseSyncArgs(['--job',job,'--limit','1'])).toEqual({ok:false,error:'--limit is only supported by load-a-share (cninfo lookups) and memberships-sic (issuer processing); it does not bound the whole job'});
+  for(const job of ['load-a-share','memberships-sic'])
+   expect(parseSyncArgs(['--limit','1','--job',job])).toMatchObject({ok:true,args:{limit:1}});
+ });
  it('rejects unknown jobs, flags, missing values and misplaced --recompute-from',()=>{
   for(const argv of [[],['--job','pe'],['--job','marks','--x'],['--job'],['--job','marks','--limit','0'],['--job','marks','--trade-date','20261030'],['--job','aggregate','--recompute-from','2025-01-01'],['--job','memberships-sw','--l1','801120']])
    expect(parseSyncArgs(argv).ok,argv.join(' ')).toBe(false);

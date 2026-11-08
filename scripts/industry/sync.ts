@@ -4,6 +4,10 @@
  *   node --env-file="$HOME/.config/osbornalpha/secrets.env" --import tsx scripts/industry/sync.ts --job <job> [--apply]   (Tushare jobs; never print the token)
  *        [--limit n] [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]
  *
+ * --limit is accepted only for load-a-share (cninfo lookups) and memberships-sic (issuer processing).
+ * Neither is a whole-job budget. For memberships-sw, --l1 limits source fetch only: apply loads all
+ * SW2021 classifications and runs the global resolver, in separate batches, with no job deadline.
+ * Its dry run plans sources from stored classifications; it does not preview the full apply scope.
  * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate, plus the
  * deferred official | valuation (I-3: printed as skipped deferred_i3, exit 0). --recompute-from belongs
  * to valuation only. Gates (src/lib/industry/jobs.ts::jobGate): Tushare jobs need TUSHARE_TOKEN even
@@ -23,6 +27,9 @@ async function main(){
  if(!parsed.ok){console.error(parsed.error);process.exit(2);}
  const args=parsed.args;
  if(DEFERRED_JOBS.has(args.job)){console.log(JSON.stringify({job:args.job,skipped:'deferred_i3',note:'verification items 1/2 open; see docs/runbooks/industry-research.md'},null,1));process.exit(0);}
+ if(args.job==='memberships-sw'){
+  console.error(`memberships-sw operation plan: source L1=${args.l1Codes.length?args.l1Codes.join(','):'all stored L1'}; apply: classifications=all SW2021, resolver=global (including delisting reconciliation), separate stage batches; job deadline=none. --l1 is not a whole-job write bound. dry-run=source plan from stored classifications only (may fetch provider pages); does not execute or estimate the global resolver. This is not a coverage/readiness check.`);
+ }
  const gate=jobGate(args.job,process.env,{apply:args.apply});
  if(gate){console.error(`${gate.code}: ${gate.message}`);process.exit(2);}
  const codeVersion=resolveCodeVersion({allowGit:true})??(args.apply?null:'dry-run');
