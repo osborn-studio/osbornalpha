@@ -355,7 +355,11 @@
   "entry": {
     "title": "行业研究",
     "titleEn": "Industry research",
-    "desc": "申万 2021 · SIC · 行业聚合事实与估值分位",
+    "desc": "选择市场与分类体系，浏览行业分类及成员公司。",
+    "sicTitle": "美国 · SEC SIC",
+    "sicDesc": "当前 SEC 行业分类与成员公司；暂不提供行业聚合指标与估值。",
+    "swTitle": "中国 · 申万 2021",
+    "swDesc": "申万行业分类与成员公司，按数据访问权限展示。",
     "factsAsOf": "事实截至 {date}",
     "unlicensed": "申万 2021 数据授权待确认"
   },
