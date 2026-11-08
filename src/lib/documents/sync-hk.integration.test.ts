@@ -25,9 +25,12 @@ import {HK_CONCEPT_IDS} from './hk-facts/checks';
 import {goldNaturalKey,goldProvenanceGaps,isPendingGold,loadRecordedFixture,offlineHkCandidates,recordedOfflineDoc} from './hk-facts/eval';
 import type {HkGoldEntry,HkGoldFile} from './hk-facts/eval';
 import {pgHkFactsPort} from './hk-facts/pg-facts-port';
+import {hkStagedRun,hkWorld} from './hk-facts/facts-port-contract';
+import type {HkPortHarness} from './hk-facts/facts-port-contract';
 import type {HkFactsPort} from './hk-facts/facts-port';
 import {memoryObjectStore} from './object-store';
 import {pgDocumentsDb} from './pg-documents-db';
+import {freshMigratedDatabase} from './fresh-db';
 import type {SourceAdapter} from './sources/shared';
 import {runDocumentsSync} from './sync';
 import type {SyncDeps} from './sync';
@@ -60,6 +63,7 @@ function recordedFixtures():Map<string,string>{
 }
 
 describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
+ let fresh:Awaited<ReturnType<typeof freshMigratedDatabase>>;
  let admin:Pool;let db:DocumentsDb;let port:HkFactsPort;let issuer='';const adminUser=randomUUID();
  const store=memoryObjectStore();
  const listing:Doc[]=[];const layouts=new Map<string,PageLayout[]>();
@@ -76,7 +80,9 @@ describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
 
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
-  admin=new Pool({connectionString:state.adminUrl});
+  // The promote phase scans all due issuers: give this worker a database of its own
+  // so it cannot claim leases or publish the concurrent citation-contract fixtures.
+  fresh=await freshMigratedDatabase(state.adminUrl);admin=fresh.pool;
   issuer=randomUUID();
   await admin.query(`insert into public.issuers(issuer_id,canonical_name_zh,country_code,hkex_stock_code_primary) values($1,'金蝶國際(F3 整合測試)','KY','00268')`,[issuer]);
   await admin.query(`insert into auth.users(id,email) values($1,'f3-hk-admin@example.test') on conflict do nothing`,[adminUser]);
@@ -93,11 +99,37 @@ describe.skipIf(!enabled)('F3 HK offline integration on real PostgreSQL',()=>{
   candDeps={db,tables,store,port,now:()=>new Date(),deadline:null,codeVersion:CODE};
   const synth:Doc={ref:SYNTHETIC_SOURCE_REF,title:'截至二零二五年十二月三十一日止年度之年報',headline:'年報',published:'2026-03-25T08:30:00.000Z',bytes:bytesOf('synthetic'),pages:syntheticAnnualPages()};
   listing.push(synth);layouts.set(sha(synth.bytes),synth.pages);
- });
- // Documents, facts and filings are append-only and test:db builds a fresh database per run; only the scope row is retired.
- afterAll(async()=>{
-  if(db&&issuer)await db.reconcileScope('hkexnews',[{issuer_id:issuer,reasons:[],priority:0,fetch_key:'00268'}]).catch(()=>{});
-  await admin?.end();
+ },120_000);
+ afterAll(async()=>{await fresh?.drop();},30_000);
+
+ // A global promotion scan must never consume the concurrently running citation-contract fixtures.
+ it("keeps another suite's confirmed candidates and fact lease outside this worker",async()=>{
+  const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  const foreign=new Pool({connectionString:state.adminUrl});
+  try{
+   const external:HkPortHarness={port:pgHkFactsPort(foreign),docs:pgDocumentsDb(foreign),tables:pgTableClient(foreign),
+    issuer:async()=>{const id=randomUUID();await foreign.query("insert into public.issuers(issuer_id,canonical_name_en,hkex_stock_code_primary) values($1,'HK lease isolation','00268')",[id]);return id;},
+    batch:async()=>{const id=randomUUID();await foreign.query("insert into public.ingest_batches(batch_id,producer,dataset) values($1,'documents-candidates','documents.candidates')",[id]);return id;},
+    user:async()=>{const id=randomUUID();await foreign.query('insert into auth.users(id) values($1)',[id]);return id;},
+    expireHkLease:async()=>{throw new Error('this regression must not expire a lease');},
+   };
+   const w=await hkWorld(external);const contender=await external.batch();
+   const contested:boolean[]=[];
+   const workerPort:HkFactsPort={...port,claimLease:async(iss,batch,ttl)=>{
+    const held=await port.claimLease(iss,batch,ttl);
+    // Force the exact interleaving: the global worker claimed the fixture before hkStagedRun.
+    if(iss===w.iss&&held)contested.push(await external.port.claimLease(iss,contender,600));
+    return held;
+   }};
+   const result=await runDocumentsCandidates({...candDeps,port:workerPort},{limit:100,dryRun:false,triggeredBy:'script',phases:['promote']});
+   expect(contested,"a foreign worker must never claim this fixture; false reproduces hkStagedRun's refused lease").toEqual([]);
+   expect(result.promote.map(p=>p.issuerId)).not.toContain(w.iss);
+   const staged=await hkStagedRun(external,w,{evidence:false});
+   expect(await external.port.claimLease(w.iss,contender,600)).toBe(false); // live leases still exclude other batches
+   await external.port.releaseLease(w.iss,staged.batch,'success',new Date().toISOString());
+   expect(await external.port.claimLease(w.iss,contender,600)).toBe(true);
+   await external.port.releaseLease(w.iss,contender,'success',new Date().toISOString());
+  }finally{await foreign.end();}
  });
 
  it('sync stores the synthetic annual report once (zh, HK, annual_report); a second sync adds nothing',async()=>{
