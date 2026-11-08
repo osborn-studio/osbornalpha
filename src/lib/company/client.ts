@@ -61,9 +61,9 @@ export interface StatementsResponse{issuerId:string;ticker:string;market:Market;
  otherUnitOnly:Record<string,string[]>;
  /** concept → period keys with a primary-unit value AND other-unit facts (U badge on the value cell; committed DTO field, Task 7/9). */
  otherUnitsAlso:Record<string,string[]>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
-interface SeriesBase{factId:string;availableDate:string;filingId:string;disclosureSeq:number|null;isCurrent:boolean|null;isRevision:boolean|null;sourceConcept:string;mappingVersion:string;mappingGen:number;unit:string}
+interface SeriesBase{factId:string;issuerId?:string;availableDate:string;filingId:string;disclosureSeq:number|null;isCurrent:boolean|null;isRevision:boolean|null;sourceConcept:string;mappingVersion:string;mappingGen:number;unit:string}
 export type SeriesEntry=(SeriesBase&{kind:'fact';value:string;rawHash:string;runId:string;unitRule:string|null;delta:string|null;relChange:string|null})|(SeriesBase&{kind:'withheld';reason:WithheldReason});
-export interface FactSeriesResponse{issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;concept:string;periodStart:string;periodEnd:string;unit:string;
+export interface FactSeriesResponse{lineage?:string[];stateRevs?:LineageRev[];conflicts?:{key:LineageConflict['key'];availableDate:string;factIds:string[]}[];issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;concept:string;periodStart:string;periodEnd:string;unit:string;
  otherUnits:string[];series:SeriesEntry[];otherUnitSeries:SeriesEntry[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type {PublicEvent} from './event-dto';
 export interface OverviewResponse{ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;
