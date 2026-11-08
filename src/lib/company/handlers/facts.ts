@@ -7,6 +7,7 @@
 // adjacent ELIGIBLE entries with matching statement/duration so incompatible disclosures
 // are not compared and a withheld value never leaks through a difference. Facts of the same key in
 // OTHER units are listed too (spec §5.3: "主单位以外的事实在抽屉列出"), gated the same way, in otherUnitSeries.
+import {resolveReadIssuer,readTargetUnchanged} from './target-fence';
 import {CONCEPT_IDS,MAPPING_GEN} from '@/lib/facts/concepts';
 import {lineageRevsEqual} from '@/lib/facts/db';
 import {QueryError,dateParam,publicConflict} from '@/lib/facts/public-route';
@@ -31,7 +32,7 @@ export interface FactSeriesDto{
 }
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 export const factsHandler:Handler=async(ctx)=>{
- const {params:p,issuer,deps,asOf}=ctx;
+ const {params:p,deps,asOf}=ctx;
  const concept=p.get('concept');if(!concept||!CONCEPTS.has(concept))throw new QueryError('concept');
  const periodStart=dateParam(p,'periodStart');if(!periodStart)throw new QueryError('periodStart');
  const periodEnd=dateParam(p,'periodEnd');if(!periodEnd)throw new QueryError('periodEnd');
@@ -40,6 +41,8 @@ export const factsHandler:Handler=async(ctx)=>{
  const sameMembers=(a:string[],b:string[])=>a.join(',')===b.join(',');
  const opts={concepts:[concept],asOf,from:periodEnd,to:periodEnd,history:true};
  for(let attempt=0;attempt<3;attempt++){
+  const issuer=await resolveReadIssuer(ctx);if(!issuer)continue;
+  const attemptCtx={...ctx,issuer};
   const lineage=canonical(await deps.facts.lineageOf(issuer.issuerId));
   if(!lineage.includes(issuer.issuerId))continue;
   const multi=lineage.length>1;
@@ -57,12 +60,12 @@ export const factsHandler:Handler=async(ctx)=>{
   }:await deps.snapshot(issuer.issuerId,issuer.market,opts);
   const stateRevs=envelope?.stateRevs??[{issuer_id:issuer.issuerId,state_rev:snap.stateRev}];
   const conflicts=(envelope?.conflicts??[]).map(publicConflict);
-  // Fence after all reads, including evidence. Single snapshots require membership only.
+  // Fence after all reads, including evidence. Single snapshots require membership and target checks.
   const stable=async()=>{
    if(!sameMembers(lineage,canonical(await deps.facts.lineageOf(issuer.issuerId))))return false;
-   if(!before)return true;
+   if(!before)return readTargetUnchanged(ctx,issuer);
    const after=await deps.facts.stateRevs(lineage,issuer.market);
-   return complete(after)&&lineageRevsEqual(before,after);
+   return complete(after)&&lineageRevsEqual(before,after)&&await readTargetUnchanged(ctx,issuer);
   };
   const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,mappingGen:MAPPING_GEN,stateRev:snap.stateRev,lineage,stateRevs,conflicts,truncated:snap.truncated,history:true as const,concept,periodStart,periodEnd,unit};
   if(snap.truncated){if(!await stable())continue;const body:FactSeriesDto={...head,otherUnits:[],series:[],otherUnitSeries:[],filings:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
@@ -73,9 +76,9 @@ export const factsHandler:Handler=async(ctx)=>{
   const otherUnits=[...new Set(others.map(r=>r.unit))].sort(cmp);
   // Multi-member inputs are authoritative: never refill excluded/conflicting rows or
   // missing owner metadata through the gate's legacy single-issuer fallback reads.
-  const gateCtx=multi?{...ctx,lineage:new Set(lineage),deps:{...deps,facts:{...deps.facts,
+  const gateCtx=multi?{...attemptCtx,lineage:new Set(lineage),deps:{...deps,facts:{...deps.facts,
    factsByIds:async()=>[],filingsOfIssuer:async()=>[],
-  }}}:ctx;
+  }}}:attemptCtx;
   const g=await buildGated(gateCtx,[...series,...others].map(r=>r.fact_id),[...series,...others],snap.filings);
   if(!await stable())continue;
   const baseOf=(r:FactRow):SeriesBase=>({factId:r.fact_id,issuerId:r.issuer_id,availableDate:r.available_date,filingId:r.filing_id,disclosureSeq:r.disclosure_seq??null,isCurrent:r.is_current??null,isRevision:r.is_revision??null,sourceConcept:r.source_concept,mappingVersion:r.mapping_version,mappingGen:r.mapping_gen,unit:r.unit});
