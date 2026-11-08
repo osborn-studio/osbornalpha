@@ -19,7 +19,7 @@ const INVENTORY = `WITH
         or valid_to>($1::timestamptz at time zone 'UTC')::date)
   ),
   schedule AS (select s.* from public.industry_sync_scope s join eligible e using(issuer_id) where job='sic'),
-  latest AS (select status, errors from public.ingest_batches where dataset='industry.sic.memberships'
+  latest AS (select status, started_at, finished_at, errors from public.ingest_batches where dataset='industry.sic.memberships'
     order by started_at desc, batch_id desc limit 1),
   errors AS (select value->>'code' code from latest, jsonb_array_elements(errors))
 select jsonb_build_object(
@@ -50,6 +50,8 @@ select jsonb_build_object(
     'lastFailed', (select count(*) from schedule where last_status='failed')
   ),
   'latestMembershipBatch', (select jsonb_build_object(
+    'startedAt', started_at,
+    'finishedAt', finished_at,
     'status', case when status in ('running','success','partial','failed','rejected') then status else 'unknown' end,
     'providerUnavailableEntries', (select count(*) from errors where code='sec_unavailable'),
     'otherErrorEntries', (select count(*) from errors where code is null or code not in ('sec_unavailable','skipped_summary','truncated')),
