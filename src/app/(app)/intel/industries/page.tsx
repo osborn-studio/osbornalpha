@@ -53,18 +53,18 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
           </StateNotice>
         )}
         {v?.state==='empty'&&(<><RunHeaderBar header={null} freshness={v.freshness} /><StateNotice kind="empty" /></>)}
-        {v?.state==='ok'&&v.kind==='navigation'&&(
-          <section className="card-base" aria-label={t('schemes.sic')}>
-            <div className="mb-3 flex flex-wrap items-center gap-2"><StateNotice kind="currentOnly" /></div>
+        {v&&(v.state==='empty'&&v.nodes.length>0||v.state==='ok'&&v.kind==='navigation')&&(
+          <section className="card-base" aria-label={t(`schemes.${q.scheme}`)}>
+            {q.scheme==='sic'&&<div className="mb-3 flex flex-wrap items-center gap-2"><StateNotice kind="currentOnly" /></div>}
             <table className="w-full text-sm">
-              <thead><tr className="text-left text-xs text-text-dim"><th className="py-1.5 font-normal">SIC</th><th className="py-1.5 font-normal">{t('table.industry')}</th><th className="py-1.5 text-right font-normal">{t('detail.members')}</th><th className="py-1.5 font-normal" /></tr></thead>
+              <thead><tr className="text-left text-xs text-text-dim"><th className="py-1.5 font-normal">{t(`schemes.${q.scheme}`)}</th><th className="py-1.5 font-normal">{t('table.industry')}</th><th className="py-1.5 text-right font-normal">{t('detail.members')}</th><th className="py-1.5 font-normal" /></tr></thead>
               <tbody>
                 {v.nodes.map(n=>(
                   <tr key={n.code} className="border-t border-border">
                     <td className="py-1.5 font-mono tabular-nums">{n.code}</td>
-                    <td className="py-1.5"><Link href={industryPath('sic',n.code)} className="text-text hover:text-accent">{nodeName(n,locale)}</Link></td>
-                    <td className="py-1.5 text-right font-mono tabular-nums">{n.members===null?'—':n.members}</td>
-                    <td className="py-1.5 text-right"><Link href={constituentsPath('sic',n.code)} className="text-xs">{t('detail.viewConstituents')} →</Link></td>
+                    <td className="py-1.5"><Link href={industryPath(q.scheme,n.code)} className="text-text hover:text-accent">{nodeName(n,locale)}</Link></td>
+                    <td className="py-1.5 text-right font-mono tabular-nums">{'members' in n&&n.members!==null?n.members:'—'}</td>
+                    <td className="py-1.5 text-right"><Link href={constituentsPath(q.scheme,n.code)} className="text-xs">{t('detail.viewConstituents')} →</Link></td>
                   </tr>
                 ))}
               </tbody>
