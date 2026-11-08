@@ -29,6 +29,7 @@ import {memorySnapshotObjectStore} from './evidence-index';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
+const LOOKUP_MIGRATION='supabase/migrations/20261123110000_company_evidence_fact_lookup.sql';
 const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
 const TABLES=['issuer_events','issuer_coverage','company_watches','company_event_reads','company_digest_state','company_fact_evidence'];
 const SERVICE_ONLY=['issuer_events','company_digest_state','company_fact_evidence'];
@@ -429,6 +430,7 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   for(let i=0;i<2;i++){   // replay in lock order: the fence migration supersedes the 3-arg evidence writer and the evidence check
    await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(LOOKUP_MIGRATION,'utf8'))).resolves.toBeUndefined();
   }
   expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
  });
@@ -769,6 +771,41 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await code(put([row(f0,0)],a2,1))).toMatchObject({message:'stale_computation',code:'55P03'});
   expect(await stored()).toEqual([f0,f1].sort());
   expect(await put([row(f0,0)],a2,2)).toEqual({upserted:1,deleted:1});   // the current rev with the owning attempt passes
+ });
+
+ it('evidence lookup: large whole-stream replacement preserves ownership, atomic rejection and lock serialization',async()=>{
+  const sha=hex('bulk-evidence');const loc=(i:number)=>`bulk/${i}`;const rh=(i:number)=>hex(`${sha}\n${loc(i)}`);
+  for(const market of ['US','CN'] as const){
+   const s=await fx.stream([{facts:Array.from({length:1000},(_,i)=>({concept:`bulk_${i}`,raw_hash:rh(i)}))}],market);
+   const source=market==='US'?'edgar':'tushare';
+   const rows=s.factIds[0].map((id,i)=>({fact_id:id,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`${source}/${s.iss}/${sha}.json`,hash_locator:loc(i),json_pointer:`/facts/${i}`,field:null,source,api:null,url:null,params:null,captured_at:null,http_status:null,page:null,index_version:'company-evidence/1'}));
+   const attempt=await fx.one(`select public.begin_company_digest_attempt($1,$2,now()) v`,[s.iss,market]);
+   const put=(input:unknown[],iss=s.iss,m=market)=>inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select public.replace_company_fact_evidence($1,$2,$3,$5,$4::jsonb) v`,[iss,m,attempt,JSON.stringify(input),await fx.rev(iss,m)])).rows[0].v);
+   const stored=()=>fx.q(`select fact_id::text,verified_at::text from public.company_fact_evidence where issuer_id=$1 and market=$2 order by fact_id`,[s.iss,market]);
+   expect(await put(rows)).toEqual({upserted:1000,deleted:0});const before=await stored();
+   // Last-row failure must retain all previously committed evidence, including timestamps.
+   const wrongStream=await fx.stream([{facts:[{raw_hash:rh(0)}]}],market);
+   const bad={...rows[0],fact_id:wrongStream.factIds[0][0]};
+   for(const invalid of [bad,{...rows[0],fact_id:randomUUID()}]){
+    expect(await fails(put([...rows.slice(0,100),invalid]))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'fact_id: not a fact of this stream'});
+    expect(await stored()).toEqual(before);
+   }
+   const otherMarket=market==='US'?'CN':'US';await fx.scope(s.iss,otherMarket);
+   expect(await fails(put([rows[0]],s.iss,otherMarket))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'fact_id: not a fact of this stream'});
+   expect(await stored()).toEqual(before);
+   // Both the stream fence and conflicting evidence rows can block; release then complete.
+   for(const lock of ['scope','evidence'] as const){
+    const blocker=await openTx(admin,{});
+    try{
+     if(lock==='scope')await blocker.c.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market=$2 for update`,[s.iss,market]);
+     else await blocker.c.query(`select 1 from public.company_fact_evidence where fact_id=$1 for update`,[rows[0].fact_id]);
+     const pending=put(rows.slice(0,500));await stillBlockedBehind(admin,blocker.pid,pending);
+     await blocker.commit();expect(await pending).toEqual({upserted:500,deleted:lock==='scope'?500:0});
+    }finally{await blocker.rollback();}
+   }
+   expect((await stored()).length).toBe(500);
+   expect(await put([])).toEqual({upserted:0,deleted:500});expect(await stored()).toEqual([]);
+  }
  });
 
  it('company_read_snapshot: read_facts envelope and the stream filings in one statement; ok facts only for every role; counts and citation computed in-statement',async()=>{
