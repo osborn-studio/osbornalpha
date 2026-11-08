@@ -4,7 +4,8 @@
 // (concept, periodStart [INSTANT: = periodEnd], periodEnd, consolidated, unit), ascending by
 // disclosure_seq. Each entry carries the transform chain (sourceConcept → concept, mappingVersion,
 // mappingGen, unitRule from the evidence DTO); values gated; delta / relChange only between two
-// adjacent ELIGIBLE entries so a withheld value never leaks through a difference. Facts of the same key in
+// adjacent ELIGIBLE entries with matching statement/duration so incompatible disclosures
+// are not compared and a withheld value never leaks through a difference. Facts of the same key in
 // OTHER units are listed too (spec §5.3: "主单位以外的事实在抽屉列出"), gated the same way, in otherUnitSeries.
 import {CONCEPT_IDS,MAPPING_GEN} from '@/lib/facts/concepts';
 import {lineageRevsEqual} from '@/lib/facts/db';
@@ -81,8 +82,11 @@ export const factsHandler:Handler=async(ctx)=>{
   const entryOf=(r:FactRow,before:FactRow|null):SeriesEntry=>{
    const reason=g.reasonOf(r.fact_id);
    if(reason)return {...baseOf(r),kind:'withheld',reason};
+   // The sequence key omits statement/duration. Compare only this adjacent pair;
+   // keep the current eligible row as the next predecessor, never bridge a break.
+   const comparable=before&&before.statement===r.statement&&before.duration===r.duration?before:null;
    return {...baseOf(r),kind:'fact',value:r.value_text,rawHash:r.raw_hash,runId:r.run_id,unitRule:g.evidence[r.fact_id]?.unitRule??null,
-    delta:before?decimalSub(r.value_text,before.value_text):null,relChange:before?decimalRelChange(before.value_text,r.value_text):null};
+    delta:comparable?decimalSub(r.value_text,comparable.value_text):null,relChange:comparable?decimalRelChange(comparable.value_text,r.value_text):null};
   };
   let prev:FactRow|null=null;
   const entries:SeriesEntry[]=series.map(r=>{const e=entryOf(r,prev);prev=e.kind==='fact'?r:null;return e;});
