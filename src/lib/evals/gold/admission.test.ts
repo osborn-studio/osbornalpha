@@ -18,13 +18,39 @@ describe('gold dataset contract admission',()=>{
   expect(r.findings.map(f=>f.code)).toEqual(expect.arrayContaining(['legacy_format','not_ready','pending_case','provenance_gaps']));
   expect(r.cases.some(c=>c.pending&&c.provenance_gaps.includes('source.sha256'))).toBe(true);
  });
+ it('counts exact remaining prerequisites in the actual 50-case legacy population',()=>{
+  const r=assessGoldAdmission(loadGoldSet(LEGACY_PLAN2_PATH),loadLock());
+  expect(r.population).toBe(50);
+  expect(r.prerequisites).toEqual({pending_cases:50,synthetic_cases:0,provenance_gap_cases:50,
+   provenance_gaps:{canonical:48,printed:50,recorded_at:50,recorded_by:50,reviewed_by:50,
+    'source.document_id':50,'source.locator':50,'source.sha256':50,'source.url':49}});
+ });
+ it('counts active cases once per gap and excludes retracted evidence',()=>{
+  const s=candidate();
+  s.cases=s.cases.slice(0,3);
+  s.cases[0]={...s.cases[0],pending:true,provenance_kind:'synthetic',provenance_gaps:['printed','printed','source.sha256']};
+  s.cases[1]={...s.cases[1],provenance_gaps:['printed']};
+  s.cases[2]={...s.cases[0],case_id:'retracted',retracted:{at:'2026-11-07',by:'owner',reason:'synthetic test'}};
+  const r=assessGoldAdmission(s,lockOf(s));
+  expect(r.population).toBe(2);
+  expect(r.prerequisites).toEqual({pending_cases:1,synthetic_cases:1,provenance_gap_cases:2,
+   provenance_gaps:{printed:2,'source.sha256':1}});
+  expect(r.cases.map(c=>c.case_id)).not.toContain('retracted');
+ });
+ it('reports no case prerequisites for empty populations without passing admission',()=>{
+  const s={...candidate(),cases:[]},r=assessGoldAdmission(s,lockOf(s));
+  expect(r.prerequisites).toEqual({pending_cases:0,synthetic_cases:0,provenance_gap_cases:0,provenance_gaps:{}});
+  expect(r.ok).toBe(false);
+ });
  it('rejects synthetic data even when schema and lock checks pass',()=>{
   const r=assessGoldAdmission(loadGoldSet(SYNTHETIC),loadLock());
   expect(r.ok).toBe(false);expect(r.findings.map(f=>f.code)).toContain('synthetic_case');
+  expect(r.prerequisites.synthetic_cases).toBe(10);
  });
  it('accepts a valid contract while explicitly withholding evidence authentication',()=>{
   const s=candidate(),r=assessGoldAdmission(s,lockOf(s));
   expect(r).toMatchObject({ok:true,scope:'dataset_contract_only',set:{sha256:s.sha256},findings:[]});
+  expect(r.prerequisites).toEqual({pending_cases:0,synthetic_cases:0,provenance_gap_cases:0,provenance_gaps:{}});
   expect(r.not_verified).toContain('source_bytes_and_transcription_accuracy');
   expect(r.not_verified).toContain('release_manifest_and_production_readiness');
  });

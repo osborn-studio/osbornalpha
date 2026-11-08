@@ -26,6 +26,45 @@ It cannot authenticate a human identity, independent PR approval, source bytes,
 transcription accuracy, licence/retention permission, or release readiness.
 A matching lock is integrity evidence, not proof of human truth.
 
+The `prerequisites` block counts active (non-retracted) cases with pending values
+or recorder evidence, synthetic provenance, and any known provenance gap. Its
+`provenance_gaps` object counts cases per missing field, with sorted keys and no
+zero-count entries; duplicate mentions in a case count once. These counts overlap
+and must not be summed as a number of cases. Empty counts do not bypass set-level
+findings (for example, empty population, lock mismatch or restricted licensing).
+The counts describe parsed metadata; even zero gaps cannot authenticate human
+transcription, review or permission. Retracted cases contribute to neither the
+population nor these counts.
+
+At baseline `b0a67adb`, the actual 50-case legacy set (2 required US cases and 48
+optional CN cases) has 50 pending cases and 50 cases with provenance gaps:
+
+| Missing prerequisite | Active cases |
+| --- | ---: |
+| Canonical value | 48 |
+| Source URL | 49 |
+| Source document ID | 50 |
+| Source SHA-256 | 50 |
+| Source locator | 50 |
+| Printed value | 50 |
+| Recorder ID | 50 |
+| Recording timestamp | 50 |
+| Reviewer | 50 |
+
+The two existing US canonical numbers do not establish human gold: both lack
+recorder evidence. The set still requires F6 migration and `ready` completion
+through actual human transcription/review, then version/history and lock
+registration. Do not fill those requirements from replay fixtures. The separate
+10-case F6 synthetic set has 10 synthetic cases and cannot provide human gold.
+Neither set is admitted. These are case-field counts, not counts of unique source
+documents or licence approvals. D8 licence/retention approval remains an external
+prerequisite; no number of missing licences can be inferred from these metadata.
+The current registry has four disabled kinds; calibration availability reports
+`no_probability_methodology` (zero registered probability methods), so eligible
+real forecast sample counts cannot yet be established from an F4 export. The F4
+export, threshold approval and runner/release integration prerequisites below
+remain outstanding.
+
 Current repository candidates both fail admission:
 
 - `src/lib/facts/fixtures/gold/plan2.json`: legacy format, `ready=false`, pending
