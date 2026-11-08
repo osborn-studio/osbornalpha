@@ -43,7 +43,7 @@
     "streamUS": "美股 10-K / 10-Q",
     "streamCN": "A 股定期报告",
     "streamHint": "两路不合并；切换即跳到该市场主证券",
-    "quoteRemoved": "行情行与 K 线暂不显示（行情链路尚无回放契约）",
+    "quoteRemoved": "财务披露与来源证据",
     "analyze": "分析 ▸",
     "addWatchlist": "加入自选",
     "inWatchlist": "已在自选",
@@ -263,7 +263,7 @@
   },
   "overview": {
     "latestTitle": "最新财期速览",
-    "envelope": "同一信封 · state_rev {rev}",
+    "envelope": "各项数据采用同一修订版本（{rev}）",
     "derived": "派生",
     "noLatest": "尚无可速览的财期。",
     "eventsTitle": "最近事件",
