@@ -1,7 +1,7 @@
 // Installed Supabase client + real adapter; only HTTP is simulated. No production/network access.
 import {createClient} from '@supabase/supabase-js';
 import {writeFileSync} from 'node:fs';
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
 import type {StrategyManifest} from './contract';
 import {buildCycleTable,buildCycleTableManifest} from './cycle-table';
 import {strategyDbOver,supabaseTransport} from './db';
@@ -12,7 +12,7 @@ import {fedTargetFixture,fixture,monthly,obs,snap} from './testing/fixture';
 
 const ID='11111111-1111-4111-8111-111111111111',CREATED='2026-11-07T00:00:00.000Z';
 type Row=Record<string,unknown>;
-function transport(opts:{rpcResult?:unknown;rpcError?:string;rows?:(row:Row)=>Row[];duringRpc?:()=>void;fullRead?:boolean;selectError?:boolean}={}){
+function transport(opts:{rpcResult?:unknown;rpcError?:string;rpcErrorCode?:string;rows?:(row:Row)=>Row[];duringRpc?:()=>void;fullRead?:boolean;selectError?:boolean}={}){
  let row:Row|undefined;
  const calls:{method:string;select:string|null;requestBytes:number;responseBytes:number}[]=[];
  const fetcher:typeof fetch=async(input,init)=>{
@@ -20,7 +20,7 @@ function transport(opts:{rpcResult?:unknown;rpcError?:string;rows?:(row:Row)=>Ro
   let result:unknown,status=200;
   if(url.pathname==='/rest/v1/rpc/macro_put_manifest_json'){
    const args=JSON.parse(body);
-   if(opts.rpcError){status=400;result={code:'P0001',message:opts.rpcError};}
+   if(opts.rpcError){status=400;result={code:opts.rpcErrorCode??'P0001',message:opts.rpcError};}
    else if(row&&row.manifest_hash===args.p_manifest_hash&&canonicalJson(row.body)!==canonicalJson(args.p_body)){
     status=400;result={code:'P0001',message:'payload_conflict'};
    }else{
@@ -121,4 +121,73 @@ it('bounds returned bytes for a representative large real cycle manifest without
  const output=process.env.CYCLE_TRANSPORT_BENCHMARK_OUTPUT;
  if(output){if(!output.startsWith('/tmp/osstack/'))throw new Error('scratch output must be under /tmp/osstack');writeFileSync(output,JSON.stringify(report,null,2)+'\n');}
  console.log(JSON.stringify(report));
+});
+
+// Diagnostic output is a public operational contract: no upstream text or evidence.
+it('emits correlated phase durations on success without logging manifest evidence',async()=>{
+ const log=vi.spyOn(console,'info').mockImplementation(()=>{});
+ try{
+  const t=transport(),body=testManifest('cycle_table',{salt:'PRIVATE_PAYLOAD_SENTINEL'});
+  const stored=await t.db.putManifest(body);
+  expect(stored.body).toEqual(body);
+  expect(log.mock.calls.map(c=>[c[0],c[1].stage,c[1].outcome])).toEqual([
+   ['[macro-manifest]','payload_prepare','ok'],['[macro-manifest]','rpc','ok'],['[macro-manifest]','readback','ok'],
+  ]);
+  const ids=new Set(log.mock.calls.map(c=>c[1].operation_id));expect(ids.size).toBe(1);
+  for(const [,event] of log.mock.calls){
+   expect(event).toEqual({operation_id:expect.stringMatching(/^[0-9a-f-]{36}$/),stage:expect.any(String),outcome:'ok',stage_ms:expect.any(Number),elapsed_ms:expect.any(Number)});
+   expect(event.stage_ms).toBeGreaterThanOrEqual(0);expect(event.elapsed_ms).toBeGreaterThanOrEqual(event.stage_ms);
+  }
+  expect(JSON.stringify(log.mock.calls)).not.toContain('PRIVATE_PAYLOAD_SENTINEL');
+ }finally{log.mockRestore();}
+});
+it.each([
+ ['rpc','57014','query_canceled'],['readback','42501','permission_denied'],['rpc','PRIVATE_CODE_SENTINEL','unknown'],
+] as const)('distinguishes %s %s safely before error normalization',async(stage,code,category)=>{
+ const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+ try{
+  const raw={code,message:'PRIVATE_MESSAGE_SENTINEL',details:'PRIVATE_DETAILS_SENTINEL',hint:'PRIVATE_HINT_SENTINEL'};
+  const db=strategyDbOver({rpc:async()=>{if(stage==='rpc')throw raw;return ID;},select:async()=>{throw raw;}});
+  await expect(db.putManifest(testManifest('cycle_table'))).rejects.toMatchObject({code:'rpc_failed',message:raw.message});
+  expect(error.mock.calls).toEqual([['[macro-manifest]',{operation_id:expect.any(String),stage,outcome:'failed',category,stage_ms:expect.any(Number),elapsed_ms:expect.any(Number)}]]);
+  expect(info.mock.calls.map(c=>c[1].stage)).toEqual(stage==='rpc'?['payload_prepare']:['payload_prepare','rpc']);
+  for(const sentinel of ['PRIVATE_MESSAGE_SENTINEL','PRIVATE_DETAILS_SENTINEL','PRIVATE_HINT_SENTINEL','PRIVATE_CODE_SENTINEL'])
+   expect(JSON.stringify([...info.mock.calls,...error.mock.calls])).not.toContain(sentinel);
+ }finally{info.mockRestore();error.mockRestore();}
+});
+it('reports local payload preparation failure before transport and retains the original error',async()=>{
+ const error=vi.spyOn(console,'error').mockImplementation(()=>{});
+ try{
+  const t=transport(),body=testManifest('cycle_table');body.params.invalid=NaN;
+  await expect(t.db.putManifest(body)).rejects.toThrow('canonical_json_unsupported:number');expect(t.calls).toHaveLength(0);
+  expect(error.mock.calls).toEqual([['[macro-manifest]',{operation_id:expect.any(String),stage:'payload_prepare',outcome:'failed',category:'invalid_payload',stage_ms:expect.any(Number),elapsed_ms:expect.any(Number)}]]);
+ }finally{error.mockRestore();}
+});
+it('keeps persistence success and rejection semantics when diagnostic sinks throw',async()=>{
+ const info=vi.spyOn(console,'info').mockImplementation(()=>{throw new Error('sink down');});
+ const error=vi.spyOn(console,'error').mockImplementation(()=>{throw new Error('sink down');});
+ try{
+  expect((await transport().db.putManifest(testManifest('cycle_table'))).manifest_id).toBe(ID);
+  await expect(transport({rpcError:'payload_conflict'}).db.putManifest(testManifest('cycle_table'))).rejects.toMatchObject({code:'payload_conflict'});
+ }finally{info.mockRestore();error.mockRestore();}
+});
+
+it.each(['rpc','readback'] as const)('reports invalid %s results separately from transport errors',async(stage)=>{
+ const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+ try{
+  const t=transport(stage==='rpc'?{rpcResult:'bad-id'}:{rows:()=>[]});
+  await expect(t.db.putManifest(testManifest('cycle_table'))).rejects.toMatchObject({code:'rpc_failed'});
+  expect(error.mock.calls).toEqual([['[macro-manifest]',{operation_id:expect.any(String),stage,outcome:'failed',category:'invalid_result',stage_ms:expect.any(Number),elapsed_ms:expect.any(Number)}]]);
+ }finally{info.mockRestore();error.mockRestore();}
+});
+
+it('retains the cancellation category through the installed Supabase HTTP client',async()=>{
+ const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+ try{
+  const t=transport({rpcError:'PRIVATE_HTTP_ERROR_SENTINEL',rpcErrorCode:'57014'});
+  await expect(t.db.putManifest(testManifest('cycle_table'))).rejects.toMatchObject({code:'rpc_failed',message:'PRIVATE_HTTP_ERROR_SENTINEL'});
+  expect(t.calls).toHaveLength(1);
+  expect(error.mock.calls[0]).toEqual(['[macro-manifest]',{operation_id:expect.any(String),stage:'rpc',outcome:'failed',category:'query_canceled',stage_ms:expect.any(Number),elapsed_ms:expect.any(Number)}]);
+  expect(JSON.stringify([...info.mock.calls,...error.mock.calls])).not.toContain('PRIVATE_HTTP_ERROR_SENTINEL');
+ }finally{info.mockRestore();error.mockRestore();}
 });
