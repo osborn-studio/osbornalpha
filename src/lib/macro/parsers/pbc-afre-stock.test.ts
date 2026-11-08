@@ -23,6 +23,20 @@ describe('offline PBOC AFRE stock article candidate',()=>{
   expect(julyHtml.slice(result.valueRange.start,result.valueRange.end)).toBe('9');
  });
  it.each([
+  [julyHtml,julyUrl,'2025-07-31','2025-08-13','9'],
+  [html,receipt.sourceUrl,'2025-08-31','2025-09-12','8.8'],
+ ])('keeps validated article fields when a receipt carries unrelated admission metadata', (s,sourceUrl,periodEnd,publishedOn,valueText)=>{
+  // A structurally compatible receipt can also carry stale downstream fields.
+  const widerReceipt={...receipt,sourceUrl,seriesId:'CN_M2_YOY',periodEnd:'2025-09-30',
+   valueText:'123',unit:'fraction',revisable:false,publishedOn:'2025-09-22',
+   available_at:'2025-08-13T00:00:00Z',availability_basis:'published'};
+  const result=parsePbcAfreStockArticle(bytes(s),widerReceipt);
+  expect(result).toEqual({seriesId:'CN_AFRE_STOCK_YOY',periodEnd,valueText,unit:'percent',revisable:true,
+   publishedOn,sourceUrl,retrievedAt:receipt.retrievedAt,
+   sha256:createHash('sha256').update(bytes(s)).digest('hex'),parserVersion:'pbc-afre-stock-article/3',
+   valueRange:{start:s.indexOf('同比增长')+'同比增长'.length,end:s.indexOf('同比增长')+'同比增长'.length+valueText.length}});
+ });
+ it.each([
   ['July bytes under August URL',julyHtml,receipt.sourceUrl],
   ['August bytes under July URL',html,julyUrl],
   ['unverified monthly URL',julyHtml,julyUrl.replace('83949','83948')],

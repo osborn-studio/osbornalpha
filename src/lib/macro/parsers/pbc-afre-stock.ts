@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {canonical} from '../decimal';
 import {isIsoDate,monthEnd} from '../periods';
 
-export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/2';
+export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/3';
 export const PBC_AFRE_STOCK_SOURCE_URL='https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/5837468/index.html';
 // Exact live-verified publications only; URL timestamps can reflect site migration.
 const VERIFIED_ARTICLES=new Map([
@@ -55,7 +55,8 @@ export function parsePbcAfreStockArticle(bytes:Uint8Array,receipt:{sourceUrl:str
  const valueText=canonical((headline[3]==='下降'?'-':'')+headline[4]);
  const relative=paragraph[0].indexOf('>')+1+paragraph[1].indexOf('同比'+headline[3])+('同比'+headline[3]).length;
  const start=paragraph.index!+relative;
- return {seriesId:'CN_AFRE_STOCK_YOY',periodEnd,valueText,unit:'percent',revisable:true,publishedOn,...receipt,
+ return {seriesId:'CN_AFRE_STOCK_YOY',periodEnd,valueText,unit:'percent',revisable:true,publishedOn,
+  sourceUrl:receipt.sourceUrl,retrievedAt:receipt.retrievedAt,
   sha256:createHash('sha256').update(bytes).digest('hex'),parserVersion:PBC_AFRE_STOCK_PARSER_VERSION,
   valueRange:{start,end:start+headline[4].length}};
 }

@@ -18,6 +18,8 @@ The function requires unique ArticleTitle/PubDate metadata, a title matching tha
 
 Output is a research candidate, **not** `ParsedPoint`/`ObservationWrite`: fixed series ID, month end, canonical decimal percent text (8.8, not 0.088), unit, `revisable: true`, publication date, retrieval timestamp, source URL, parser version, full-byte SHA-256 and UTF-16 value range into the decoded evidence. The range is not an ingest Locator. Never recompute growth from rounded stock balances. A changed value yields changed evidence; no observation version or automatic supersession is assigned. Published date never substitutes for first-seen availability.
 
+Version `pbc-afre-stock-article/3` copies only `sourceUrl` and `retrievedAt` from the receipt. Structurally compatible callers may carry additional admission metadata; those extra properties are ignored, so they cannot overwrite validated article fields or add availability/ingest fields to the candidate. July and August regression cases demonstrate this boundary with conflicting publication, period, value, series and unit metadata. The verified sources and publication checks are unchanged.
+
 ## Acceptance and remaining dependencies
 
 Tests cover the factual fixture, component decoys, rounding independence, corrected values, negative growth, provenance/ranges, malformed metadata/period/unit/encoding/size, ambiguity, and unchanged missing catalog/registry status. Live article replay independently checks the synthetic envelope against real bytes.
