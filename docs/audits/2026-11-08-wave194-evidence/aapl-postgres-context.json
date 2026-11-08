@@ -1,0 +1,15 @@
+{
+  "recorded_at": "2026-11-08T16:29:14.177459+00:00",
+  "source": "Supabase Postgres log Raw JSON via logged-in Chrome",
+  "project": "mzfcaabhuwtfvsvadvsv",
+  "event_id": "6dda7a69-cc0d-4480-ae56-5d0a7ee00892",
+  "timestamp_utc": "2026-11-08T15:59:15.482Z",
+  "sqlstate": "57014",
+  "application_name": "PostgREST 14.5",
+  "process_id": "1204885",
+  "session_id": "6af09c17.126295",
+  "function": "public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)",
+  "function_line": 19,
+  "statement": "WITH up AS (INSERT company_fact_evidence SELECT jsonb_array_elements(p_rows) ON CONFLICT(fact_id) DO UPDATE ... RETURNING 1) SELECT count(*) FROM up",
+  "attribution": "Matches scoped AAPL failure batch bd4106c2-bee2-4c6e-a649-3aabf8caffc3 window and evidence writer query; stage proven, lock versus CPU/IO not proven."
+}
