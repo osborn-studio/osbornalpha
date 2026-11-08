@@ -75,7 +75,7 @@
 }
 .clock-coverage {
   font-size: 12px;
-  max-width: 520px;
+  max-width: min(520px, 100%);
   flex-shrink: 0;
 }
 .clock-coverage summary {

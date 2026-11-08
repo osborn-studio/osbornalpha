@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
-const out = "/tmp/osstack/macro-widget/screenshots";
+const out =
+  process.env.MACRO_CLOCK_SCREENSHOT_DIR ?? "/tmp/osstack/macro-widget/screenshots";
 test.beforeAll(async () => {
   await mkdir(out, { recursive: true });
 });
 for (const region of ["US", "CN"])
-  for (const width of [390, 768, 1440]) {
+  for (const width of [320, 390, 768, 1024, 1440]) {
     test(`${region} ${width}px full widget and breakdown`, async ({ page }) => {
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
@@ -175,3 +176,48 @@ test("phase labels and current badge meet text contrast in both themes", async (
     for (const ratio of ratios) expect(ratio).toBeGreaterThanOrEqual(4.5);
   }
 });
+
+// Page overflow alone misses text clipped by the widget's overflow:hidden.
+for (const region of ["US", "CN"])
+  for (const locale of ["zh", "en"])
+    for (const width of [320, 390, 768]) {
+      test(`${region} ${locale} ${width}px coverage disclosure stays readable in both themes`, async ({ page }) => {
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.setViewportSize({ width, height: 950 });
+        await page.goto(`/?region=${region}&locale=${locale}`);
+        const widget = page.locator(".investment-clock");
+        await expect(widget.locator(".clock-panel")).toHaveCount(4);
+        const summary = widget.locator(".clock-coverage summary");
+        for (const theme of ["dark", "light"]) {
+          if (theme === "light")
+            await page.getByRole("button", { name: "◐ Theme" }).click();
+          await summary.focus();
+          await page.keyboard.press("Enter");
+          await expect(widget.locator(".clock-coverage")).toHaveAttribute("open", "");
+          await expect(summary).toBeFocused();
+          const bounds = await widget.evaluate((element) => {
+            const context = element.querySelector(".clock-context")!;
+            const coverage = element.querySelector(".clock-coverage")!;
+            return {
+              available:
+                context.clientWidth -
+                parseFloat(getComputedStyle(context).paddingLeft) -
+                parseFloat(getComputedStyle(context).paddingRight),
+              disclosure: coverage.getBoundingClientRect().width,
+              widgetWidth: element.clientWidth,
+              contentWidth: element.scrollWidth,
+            };
+          });
+          expect(bounds.disclosure).toBeLessThanOrEqual(bounds.available + 1);
+          expect(bounds.contentWidth).toBeLessThanOrEqual(bounds.widgetWidth + 1);
+          if (width === 320)
+            await widget.screenshot({
+              path: `${out}/${region}-${locale}-${width}-coverage-${theme}.png`,
+            });
+          await page.keyboard.press("Space");
+          await expect(widget.locator(".clock-coverage")).not.toHaveAttribute("open");
+        }
+        expect(errors).toEqual([]);
+      });
+    }
