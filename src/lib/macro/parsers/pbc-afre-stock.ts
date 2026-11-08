@@ -3,8 +3,13 @@ import {createHash} from 'node:crypto';
 import {canonical} from '../decimal';
 import {isIsoDate,monthEnd} from '../periods';
 
-export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/1';
+export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/2';
 export const PBC_AFRE_STOCK_SOURCE_URL='https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/5837468/index.html';
+// Exact live-verified publications only; URL timestamps can reflect site migration.
+const VERIFIED_ARTICLES=new Map([
+ [PBC_AFRE_STOCK_SOURCE_URL,{year:'2025',month:'8',publishedOn:'2025-09-12'}],
+ ['https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/2025092212554883949/index.html',{year:'2025',month:'7',publishedOn:'2025-08-13'}],
+]);
 export class PbcAfreStockParseError extends Error{
  constructor(readonly code:string){super(code);this.name='PbcAfreStockParseError';}
 }
@@ -15,9 +20,10 @@ export interface PbcAfreStockCandidate{
  /** UTF-16 offsets into the fatal-UTF8-decoded input; NOT an ingest Locator. */
  valueRange:{start:number;end:number};
 }
-/** Verified single-article grammar. No fetch, rights grant, registry binding or observation write. */
+/** Verified monthly-article grammar. No fetch, rights grant, registry binding or observation write. */
 export function parsePbcAfreStockArticle(bytes:Uint8Array,receipt:{sourceUrl:string;retrievedAt:string}):PbcAfreStockCandidate{
- if(receipt.sourceUrl!==PBC_AFRE_STOCK_SOURCE_URL)fail('pbc_unverified_source');
+ const source=VERIFIED_ARTICLES.get(receipt.sourceUrl);
+ if(!source)fail('pbc_unverified_source');
  if(bytes.byteLength===0||bytes.byteLength>262144)fail('pbc_size');
  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(receipt.retrievedAt)||!Number.isFinite(Date.parse(receipt.retrievedAt))||new Date(receipt.retrievedAt).toISOString()!==receipt.retrievedAt)fail('pbc_retrieved_at');
  let html:string;
@@ -32,10 +38,10 @@ export function parsePbcAfreStockArticle(bytes:Uint8Array,receipt:{sourceUrl:str
   return value[1];
  };
  const title=/^(\d{4})年([1-9]|1[0-2])月社会融资规模存量统计数据报告$/.exec(meta('ArticleTitle'));
- if(!title||title[1]!=='2025'||title[2]!=='8')fail('pbc_title');
+ if(!title||title[1]!==source.year||title[2]!==source.month)fail('pbc_title');
  const periodEnd=monthEnd(Number(title[1]),Number(title[2]));
  const publishedOn=meta('PubDate');
- if(!isIsoDate(publishedOn)||publishedOn<=periodEnd||publishedOn>receipt.retrievedAt.slice(0,10))fail('pbc_publication');
+ if(publishedOn!==source.publishedOn||!isIsoDate(publishedOn)||publishedOn<=periodEnd||publishedOn>receipt.retrievedAt.slice(0,10))fail('pbc_publication');
  // Require exactly one stock headline paragraph, even when an alternative value is malformed.
  const allParagraphs=[...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p\s*>/gi)];
  // This verified article has plain paragraph bodies. Reject alternate renderings

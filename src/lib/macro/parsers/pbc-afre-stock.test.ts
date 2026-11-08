@@ -6,6 +6,8 @@ import {parserFor} from './index';
 import {parsePbcAfreStockArticle} from './pbc-afre-stock';
 
 const html=readFileSync(new URL('./fixtures/pbc-afre-stock-2025-08.html',import.meta.url),'utf8');
+const julyHtml=readFileSync(new URL('./fixtures/pbc-afre-stock-2025-07.html',import.meta.url),'utf8');
+const julyUrl='https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/2025092212554883949/index.html';
 const receipt={sourceUrl:'https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/5837468/index.html',retrievedAt:'2026-11-08T13:00:00.000Z'};
 const bytes=(s:string)=>new TextEncoder().encode(s);
 const parse=(s=html,r=receipt)=>parsePbcAfreStockArticle(bytes(s),r);
@@ -15,6 +17,24 @@ describe('offline PBOC AFRE stock article candidate',()=>{
   expect(result).toMatchObject({seriesId:'CN_AFRE_STOCK_YOY',periodEnd:'2025-08-31',valueText:'8.8',unit:'percent',revisable:true,publishedOn:'2025-09-12',...receipt,sha256:createHash('sha256').update(bytes(html)).digest('hex')});
   expect(html.slice(result.valueRange.start,result.valueRange.end)).toBe('8.8');
  });
+ it('reads the verified July report with its original publication date despite a migrated URL',()=>{
+  const result=parse(julyHtml,{...receipt,sourceUrl:julyUrl});
+  expect(result).toMatchObject({seriesId:'CN_AFRE_STOCK_YOY',periodEnd:'2025-07-31',publishedOn:'2025-08-13',valueText:'9',unit:'percent',sourceUrl:julyUrl,sha256:createHash('sha256').update(bytes(julyHtml)).digest('hex')});
+  expect(julyHtml.slice(result.valueRange.start,result.valueRange.end)).toBe('9');
+ });
+ it.each([
+  ['July bytes under August URL',julyHtml,receipt.sourceUrl],
+  ['August bytes under July URL',html,julyUrl],
+  ['unverified monthly URL',julyHtml,julyUrl.replace('83949','83948')],
+  ['URL query alias',julyHtml,julyUrl+'?month=7'],
+  ['changed July publication',julyHtml.replace('2025-08-13','2025-08-14'),julyUrl],
+  ['changed August publication',html.replace('2025-09-12','2025-09-13'),receipt.sourceUrl],
+  ['migrated path date as publication',julyHtml.replace('2025-08-13','2025-09-22'),julyUrl],
+  ['July headline month mismatch',julyHtml.replace('7月末','8月末'),julyUrl],
+  ['July flow title',julyHtml.replaceAll('存量','增量'),julyUrl],
+  ['July duplicate headline',julyHtml+'<p>初步统计，2025年7月末社会融资规模存量为431.26万亿元，同比增长8.8%。</p>',julyUrl],
+  ['July encoded duplicate',julyHtml+'<p>初步统计，2025年7月末&#31038;会融资规模存量为431.26万亿元，同比增长8.8%。</p>',julyUrl],
+ ])('rejects %s',(_label,s,sourceUrl)=>expect(()=>parse(s,{...receipt,sourceUrl})).toThrow());
  it('uses the headline rather than component growth or a recomputation from balances',()=>{
   expect(parse(html.replace('8.8%。','8.8%。其中，人民币贷款余额同比增长6.6%。')).valueText).toBe('8.8');
   expect(parse(html.replace('433.66','433.65')).valueText).toBe('8.8');
