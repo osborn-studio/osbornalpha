@@ -173,6 +173,7 @@ export function parseSyncArgs(argv:string[]):{ok:true;args:SyncArgs}|{ok:false;e
   else{if(!DATE_RE.test(val))return {ok:false,error:'--recompute-from must be YYYY-MM-DD'};a.recomputeFrom=val;}
  }
  if(job===undefined||!isIndustryJob(job))return {ok:false,error:SYNC_USAGE};
+ if(a.limit!==undefined&&job!=='load-a-share'&&job!=='memberships-sic')return {ok:false,error:'--limit is only supported by load-a-share (cninfo lookups) and memberships-sic (issuer processing); it does not bound the whole job'};
  if(a.recomputeFrom!==undefined&&job!=='valuation')return {ok:false,error:'--recompute-from belongs to the (deferred) valuation job'};
  return {ok:true,args:{job,...a}};
 }
