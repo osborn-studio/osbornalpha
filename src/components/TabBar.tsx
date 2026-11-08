@@ -8,7 +8,7 @@ import { isTabActive } from './tab-active';
 
 interface TabDef {
   id: string;
-  navKey: 'macro' | 'watchlist' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
+  navKey: 'macro' | 'watchlist' | 'industries' | 'companies' | 'intel' | 'portfolio' | 'analyst' | 'tools' | 'settings';
   href: string;
   /** Line-art icon — 24×24, 1.5px stroke, currentColor */
   Icon: (props: { className?: string }) => ReactElement;
@@ -98,29 +98,56 @@ const TABS: TabDef[] = [
   },
 ];
 
+// Research is first-class on desktop; keep the established seven mobile tabs.
+const DESKTOP_TABS: TabDef[] = [
+  ...TABS.slice(0, 2),
+  {
+    id: 'industries', navKey: 'industries', href: '/intel/industries?scheme=sic&metric=member_count',
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <path d="M12 4v6M5 15v-5h14v5" />
+        <rect x="9" y="2" width="6" height="4" rx="1" />
+        <rect x="2" y="15" width="6" height="6" rx="1" />
+        <rect x="16" y="15" width="6" height="6" rx="1" />
+      </svg>
+    ),
+  },
+  {
+    id: 'companies', navKey: 'companies', href: '/intel/companies',
+    Icon: ({ className }) => (
+      <svg viewBox="0 0 24 24" className={className} width="22" height="22" {...stroke}>
+        <rect x="5" y="3" width="14" height="18" rx="1" />
+        <path d="M9 7h1M14 7h1M9 11h1M14 11h1M10 21v-5h4v5" />
+      </svg>
+    ),
+  },
+  ...TABS.slice(2),
+];
+
 export function TabBar() {
   const pathname = usePathname();
-  // Tab labels are the app's primary nav and already live in common.nav
-  // (established in G1a). Reuse that single source instead of duplicating
-  // the same seven strings under components.tabBar.
   const tNav = useTranslations('common.nav');
-  return (
+  const renderTabs = (tabs: TabDef[], visibility: string) => (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-border bg-bg-elevated"
+      className={`fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-bg-elevated ${visibility}`}
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const active = isTabActive(pathname, t.href);
+        // A first-class research route takes precedence over its Intel parent.
+        const selected = active && !tabs.some((other) =>
+          other.href.startsWith(t.href + '/') && isTabActive(pathname, other.href));
         return (
           <Link
             key={t.id}
             href={t.href as any}
+            aria-current={selected ? 'page' : undefined}
             className={`relative flex flex-1 flex-col items-center gap-0.5 py-2 text-xs transition-colors ${
-              active ? 'text-accent' : 'text-text-dim'
+              selected ? 'text-accent' : 'text-text-dim'
             }`}
           >
             {/* Brass top-edge bar over the active tab */}
-            {active && (
+            {selected && (
               <span className="absolute left-1/2 top-0 h-0.5 w-8 -translate-x-1/2 rounded-full bg-accent" />
             )}
             <t.Icon className="" />
@@ -130,4 +157,5 @@ export function TabBar() {
       })}
     </nav>
   );
+  return <>{renderTabs(TABS, 'flex lg:hidden')}{renderTabs(DESKTOP_TABS, 'hidden lg:flex')}</>;
 }
