@@ -141,3 +141,40 @@ Task 19 按 owner 指令只跑定向单测、typecheck、lint；本机 Supabase�
 `GET /api/companies/[ticker]/filings` and its admin twin include published filings from every predecessor in the resolved issuer's lineage, restricted to the ticker's market and `asOf`. Each member uses `company_read_snapshot`; the facts limit does not limit its filings or their fact counts. The global order remains `availableDate` descending, then `filingId` descending.
 
 Existing response fields retain their meanings: `issuerId` and `stateRev` describe the resolved target. Additive `lineage` and `stateRevs` fields list all members and their snapshot revisions, sorted by issuer id. The browser contract makes these metadata fields optional for older responses. A single-member read still uses one snapshot. Multi-member reads require unchanged membership and a complete revision vector matching every snapshot; after three unstable attempts the route returns `503 lineage_unstable` with no partial filings and `no-store` (admin: `private, no-store`). This closes the filings read gap only; statements, history, overview and events retain their existing lineage behavior.
+
+## Desktop core launch checks (2026-11-08)
+
+The coverage directory is `/intel/companies`, reached from the company card on `/intel`.
+Its company links open `/stock/[ticker]`, whose overview, statements, metrics and filings
+form the existing core facts workflow. `/research/companies` is the separate Research OS
+company/theme archive; an empty archive does not mean the coverage directory is unavailable.
+
+Minimum read-only probes, using the deployed app and an authenticated desktop browser for pages:
+
+- `GET /api/companies?market=US&q=AAPL` and `GET /api/companies/freshness`.
+- `GET /api/companies/AAPL/overview`.
+- `GET /api/companies/AAPL/statements?statement=IS&basis=disclosed&periods=8`.
+- `GET /api/companies/AAPL/metrics` and `GET /api/companies/AAPL/filings`.
+- Open `/stock/AAPL`, then a displayed value's history and original source. Check the
+  displayed period, currency/scale and evidence together. A 200 response alone is insufficient.
+
+Prerequisites are the existing facts/company migrations and public read grants, published
+fact scopes, issuer/security identity, materialized issuer coverage, US fact evidence and
+snapshot storage, and server service credentials for event/evidence reads. Check `facts.us`
+and `company.events` freshness separately; a failed digest is an event freshness issue to
+investigate, not proof that all stored US financial facts are unavailable.
+
+CN identity, directory and filing metadata can be usable while public financial values
+remain `citation_pending`: production still uses `emptyPdfLocatorSource`, so do not bypass
+the per-fact PDF gate. The default-off issuer judgments and missing production issuer method
+are separate release scopes; neither is a prerequisite for the US facts workflow above.
+
+Coverage period bounds exclude `statement='DEI'` cover observations; fact/concept counts
+still include them. Cover dates are not financial reporting periods. For example, SEC AAL
+accession `0000006201-26-000052`, filed 2026-07-23, contains a DEI shares-outstanding observation
+ending 2027-07-17. Taking its maximum as “Latest period” mislabels the reporting period.
+Raw observations are preserved. Existing `issuer_coverage` rows retain their old bounds
+until their stream is successfully digested again; deployment alone does not rewrite them.
+The owner can use the existing scoped/full digest procedure above after its normal dry-run
+and single-producer checks. This change performs no refresh or production write and does
+not repair upstream date errors in financial observations.

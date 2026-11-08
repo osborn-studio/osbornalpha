@@ -43,7 +43,7 @@
     "streamUS": "US 10-K / 10-Q",
     "streamCN": "China A periodic reports",
     "streamHint": "Streams are never merged; switching opens that market's primary security",
-    "quoteRemoved": "Quote row and K-line are hidden (the quote chain has no replay contract yet)",
+    "quoteRemoved": "Financial disclosures and source evidence",
     "analyze": "Analyze ▸",
     "addWatchlist": "Add to watchlist",
     "inWatchlist": "In watchlist",
@@ -263,7 +263,7 @@
   },
   "overview": {
     "latestTitle": "Latest period",
-    "envelope": "Same envelope · state_rev {rev}",
+    "envelope": "Figures use a consistent data revision ({rev})",
     "derived": "derived",
     "noLatest": "No period to summarize yet.",
     "eventsTitle": "Recent events",
