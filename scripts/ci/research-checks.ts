@@ -25,7 +25,7 @@ criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/in
 criticalSuites.push('src/lib/macro/macro.integration.test.ts', 'src/lib/macro/read-api-asof.integration.test.ts');
 // /MACRO
 // MACRO-P3
-criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
+criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts', 'src/lib/macro/strategy/manifest-lock.integration.test.ts');
 // /MACRO-P3
 // F3 document pipeline (Tasks 1, 13, 18)
 criticalSuites.push('src/lib/documents/documents.integration.test.ts', 'src/lib/documents/fact-citations.integration.test.ts',
