@@ -6,6 +6,7 @@
 // q_single_revenue is 营业总收入). BS has no quarterly basis. Every displayed factId (grid.factIds: fact cells
 // and all inputs of derived cells) goes through buildGated; truncated → 200 truncated:true with nothing
 // partial. otherUnitOnly (Task 7) is passed through so the UI renders "—" + U for other-unit-only periods.
+import {resolveReadIssuer,readTargetUnchanged} from './target-fence';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {lineageRevsEqual} from '@/lib/facts/db';
 import {QueryError,publicConflict} from '@/lib/facts/public-route';
@@ -34,7 +35,7 @@ export interface StatementsDto{
  evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
 }
 export const statementsHandler:Handler=async(ctx)=>{
- const {params:p,issuer,deps,asOf}=ctx;
+ const {params:p,deps,asOf}=ctx;
  const statement=p.get('statement') as StatementKind|undefined;
  if(!statement||!STATEMENTS.has(statement))throw new QueryError('statement');
  const basis=(p.get('basis')??'disclosed') as Basis;
@@ -42,11 +43,12 @@ export const statementsHandler:Handler=async(ctx)=>{
  const periods=p.get('periods')??'8';
  if(!PERIODS.has(periods))throw new QueryError('periods');
  const quarterly=basis==='quarterly';
- const concepts=gridReadConcepts(statement,basis,issuer.market);
  const canonical=(members:string[])=>[...new Set(members)].sort();
  const sameMembers=(a:string[],b:string[])=>a.join(',')===b.join(',');
- const opts={concepts,asOf,history:quarterly};
  for(let attempt=0;attempt<3;attempt++){
+  const issuer=await resolveReadIssuer(ctx);if(!issuer)continue;
+  const attemptCtx={...ctx,issuer};
+  const opts={concepts:gridReadConcepts(statement,basis,issuer.market),asOf,history:quarterly};
   const lineage=canonical(await deps.facts.lineageOf(issuer.issuerId));
   if(!lineage.includes(issuer.issuerId))continue;
   const multi=lineage.length>1;
@@ -66,9 +68,9 @@ export const statementsHandler:Handler=async(ctx)=>{
   // Fence through all reads, including evidence/PDF. A single RPC already binds facts and filings.
   const stable=async()=>{
    if(!sameMembers(lineage,canonical(await deps.facts.lineageOf(issuer.issuerId))))return false;
-   if(!before)return true;
+   if(!before)return readTargetUnchanged(ctx,issuer);
    const after=await deps.facts.stateRevs(lineage,issuer.market);
-   return complete(after)&&lineageRevsEqual(before,after);
+   return complete(after)&&lineageRevsEqual(before,after)&&await readTargetUnchanged(ctx,issuer);
   };
   const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,mappingGen:MAPPING_GEN,stateRev:snap.stateRev,truncated:snap.truncated,statement,basis,lineage,stateRevs,conflicts:(envelope?.conflicts??[]).map(publicConflict)};
   const none={periods:[],rows:[],filings:{},factOwners:{},otherUnitOnly:{},otherUnitsAlso:{},evidence:{},withheld:{evidenceIncomplete:0,citationPending:0}};
@@ -80,7 +82,7 @@ export const statementsHandler:Handler=async(ctx)=>{
   const grid=buildStatementsGrid(gridSnap,{statement,basis,periods:Number(periods) as GridPeriods,market:issuer.market,asOf});
   if(!grid.ok){if(grid.error==='invalid_basis')throw new QueryError('basis');if(!await stable())continue;const body:StatementsDto={...head,truncated:true,...none};return {body,empty:true};}
   // An authoritative lineage envelope must never refill excluded rows or missing owner metadata.
-  const gateCtx=multi?{...ctx,lineage:members,deps:{...deps,facts:{...deps.facts,factsByIds:async()=>[],filingsOfIssuer:async()=>[]}}}:ctx;
+  const gateCtx=multi?{...attemptCtx,lineage:members,deps:{...deps,facts:{...deps.facts,factsByIds:async()=>[],filingsOfIssuer:async()=>[]}}}:attemptCtx;
   const g=await buildGated(gateCtx,grid.factIds,snap.rows,snap.filings);
   if(!await stable())continue;
   const used=new Set(grid.factIds);
