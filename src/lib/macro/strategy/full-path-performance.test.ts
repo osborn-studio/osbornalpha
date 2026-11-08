@@ -48,7 +48,7 @@ function fixtureTransport(){
   if(url.origin!=='https://fixture.invalid')throw new Error('non-fixture transport forbidden');
   const table=url.pathname.replace('/rest/v1/','');
   let result:unknown,total=0,offset=0,rowCount=0;
-  if(table==='rpc/macro_put_manifest'){
+  if(table==='rpc/macro_put_manifest_json'){
    expect(req.method).toBe('POST');
    const args=JSON.parse(body);
    expect(digest(args.p_body)).toBe(args.p_manifest_hash);
@@ -135,7 +135,7 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    ]);
    const cold=phase==='cold'||phase==='cache-reset-cold';
    if(cold){
-    expect(byTable['rpc/macro_put_manifest']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
+    expect(byTable['rpc/macro_put_manifest_json']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
     const histories=t.calls.filter(c=>c.table==='macro_observations');
     expect(new Set(histories.map(c=>c.series)).size).toBe(13);
     expect(histories).toHaveLength(33); // five daily x five pages, five monthly + three policy event reads

@@ -189,7 +189,12 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
   return client as unknown as NarrowClient;
  };
  return {
-  async rpc(fn,args){const {data,error}=await pick('admin').rpc(fn,args);if(error)throw error;return data;},
+  async rpc(fn,args){
+   // Unnamed JSONB RPC accepts this same complete request body without PostgREST's
+   // large json_to_record argument tuple. SQL delegates to the original validated RPC.
+   const {data,error}=await pick('admin').rpc(fn==='macro_put_manifest'?'macro_put_manifest_json':fn,args);
+   if(error)throw error;return data;
+  },
   async select(role,spec){
    let q=pick(role).from(spec.table).select(spec.columns?.join(',')??'*');
    for(const [k,v] of Object.entries(spec.eq))q=q.eq(k,v);
