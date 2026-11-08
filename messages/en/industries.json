@@ -355,7 +355,11 @@
   "entry": {
     "title": "Industry research",
     "titleEn": "行业研究",
-    "desc": "SW 2021 · SIC · aggregated industry facts and valuation percentiles",
+    "desc": "Choose a market and classification to browse industries and member companies.",
+    "sicTitle": "US · SEC SIC",
+    "sicDesc": "Current SEC industry classifications and member companies. Industry aggregates and valuations are not available.",
+    "swTitle": "China · SW 2021",
+    "swDesc": "Shenwan industry classifications and member companies, subject to data access.",
     "factsAsOf": "Facts as of {date}",
     "unlicensed": "SW 2021 data licence pending"
   },
