@@ -40,6 +40,10 @@ F4 共享输入构造器 `src/lib/judgments/inputs.ts` 及其导入闭包（包�
 
 `macro_regime@v2` 已使用真实宏观分类函数和 `MacroReadApi`，状态 `active`、`publishable=false`。`MACRO_JUDGMENTS_ENABLED` 控制生产装配；目录 `created_at/updated_at` 不可证时输入弃权，当前缺失 / 受限序列不等同于合成夹具。`recommendation_call@v1` 仅私有只读卡片和自评，不写公共 judgments，也不同步公共方法注册表；`pending_fill.condition=null`。私有百分比不发布。
 
+## 宏观快照发布后的即时登记
+
+US macro-sync 与 CN ingest finish 的生产装配会在新快照提交后调用真实 F4 producer；仅 `MACRO_JUDGMENTS_ENABLED=1` 生效，输入绑定该次发布的 snapshot_id / region / as_of。`hook: failed` 不撤销有效事实快照，后续 applying settlement compensation 负责补登记；keyed replay 不重复运行 hook。判断读接口仍有 300 秒公共缓存，前端 snapshot stale guard 必须保留。详情及上线验证边界见 [clock freshness audit](../audits/2026-11-08-clock-freshness.md)。
+
 ## 6. 日常结算与隔离
 
 `/admin/judgments` 查看队列、手动结算、撤回与重开；手动结算通过 `claimOne` 取得租约。隔离在 `/admin/dq` 裁决，`last_detail.incident` 保存 `quarantine_id/reason_code/evidence_hash/cutoff/quarantined_at`；复核期限为 `max(settle_by, 首次隔离+7天)`，重复隔离不延长。接受和拒绝都绑定证据哈希与截止时间，409 stale 时刷新再操作。连续三次补偿失败会跳过该快照并报 `compensation_skipped`，检查 `judgment_job_state` 的 failing/skipped。结算的 280 秒 deadline 不硬性约束已发出的 DB 等待；写入仍有租约栅栏。回放使用 `node --import tsx scripts/judgments/replay.ts --id <judgment_id> --json`，哈希不符退出 2。
