@@ -26,3 +26,39 @@ The future pipeline still needs approved formula computation, valuation manifest
 ## Verification scope
 
 Dedicated fixture/synthetic tests cover real recorded provider fields, range requests, incomplete calendars, evidence, conflicting observations, deterministic equivalent evidence, membership knowledge boundaries, primary security ambiguity, current-mark revisions, arithmetic consistency and reconciliation identity. Existing jobs tests retain disabled behavior. No live provider, production, database publication or license validation was performed.
+
+
+## Executable aligned evidence check
+
+Use Node 22 and `node --import tsx scripts/industry/aligned-reconciliation-check.ts <private-input.json>` to validate one candidate series offline. Unlike the numeric-only `reconciliation-check.ts`, this command checks supplied row identities before counting. It does not query observations, prove source authenticity/currentness, approve a comparator, validate sampling completeness against a calendar, or assess production readiness.
+
+The JSON contract is:
+
+- `query`: `runId` (nonempty string without surrounding whitespace), `code` (six digits, without `.SI`), `metric` (`pe_ttm`, `pe_static`, `pb`, or `market_cap`), `officialMetric` (source metric: `pe`, `pb`, `total_mv`, `float_mv`, or `close`), and `expectedDates` (nonempty unique legal ISO dates).
+- `computed`: rows with `run_id`, `scheme: "sw2021"`, `version: "2021"`, `code`, `metric`, `trade_date`, `status` (`ok` or `missing`), and `value` (plain decimal string for `ok`, null for `missing`). Each supplied row must match the query and an expected date, with no duplicate dates.
+- `official`: rows with `scheme`, `version`, `code`, `metric`, `trade_date`, decimal-string `value`, `observation_id`, timezone-bearing `observed_at`, and `status` (`ok` or `superseded`). Current rows must match the candidate query. Every current observation ID must be a nonempty string without surrounding whitespace and may occur only once across the series; each date may have only one current row. Superseded rows never supply evidence. Observations after the trade date remain allowed for reconstruction.
+
+Missing expected rows count unavailable. A single observation relabelled across 24 dates is rejected, even if all values agree. Runtime selector validation also applies to an empty row set. Supported metric names are syntax validation only: arbitrary candidate pairings remain internal experiments, including PB; market cap still has no approved official comparator. No new mapping or comparability rule is introduced.
+
+Stdout contains only `diagnostic_only`, counts and threshold booleans. Exit 0 means the **numeric** thresholds passed; 1 means they failed; 2 means invalid file/arguments/input, with a fixed sanitized stderr message. Input files remain private research material. Even a 0 cannot clear H, licenses, independent evidence, current-observation races or database publication/activation gates. Use the existing complete-calendar preparation and an explicitly approved expected-date policy upstream; passing a shortened expected list cannot prove coverage of the required window.
+
+## Readiness inventory: decisions versus implementation
+
+| Remaining decision/evidence | Owner acceptance contract |
+| --- | --- |
+| H: method/comparator | Signed choice, revised §6.3/§6.4, exact identities/formulas/share classes/financial calendar/exclusions/sample policy, and version/hash contracts. Matching numeric names or thresholds cannot substitute. |
+| G: history | Explicit approval for any departure from K3 reconstruction and any historical suppression policy. |
+| A: source rights | Separate scheme, marks and official dataset decisions; official replay rights do not grant derived valuation rights. |
+| C: operations | Verified 5000-point availability, marks history/storage, complete calendar and explicit two-year sampling boundaries. |
+| Independent evidence | Original exchange records for 5 companies including A+H × 2 days; 3 industries × 4 official PE/PB dates; reporting transitions and the edge cases above. Fixtures and relabelled observations do not qualify. |
+| E/Q2: dependencies | CN real-facts acceptance, worker/readiness gates and judgment methodology accepted by their owners. |
+
+| Remaining implementation | Dependency and acceptance |
+| --- | --- |
+| Official ingestion orchestration | Rights/capacity/calendar policy; persisted raw evidence and actual observation RPC receipts. Existing adapters alone do not implement the job. |
+| Formula computation | H/version contracts first; approved financial/member/marks rules with independent golden assertions. |
+| Reconciliation and carry | Approved comparator mapping, complete per-code/metric expected sets, fresh official versions, 24/90%/95% thresholds, race and dependency checks through real staging. |
+| Valuation manifests/replay | Formula/config/source version identities, reproducible reconstruction and compatible carries; current diagnostic counts are not a manifest. |
+| Publish/activate/percentiles | Actual stage/publish/activate acceptance plus replay, dependencies and operational approval; existing RPC infrastructure alone is insufficient. |
+
+This slice adds evidence consistency checks and an offline executable diagnostic only. Both actual jobs remain `deferred_i3`. It supplies no real golden set, licensing decision, H selection or I-3 completion.
