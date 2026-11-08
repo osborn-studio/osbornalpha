@@ -13,3 +13,9 @@ BLOCKERS — release documentation is appropriately cautious overall, but closur
 Blockers to overall closure: AAPL repair/refresh and period/source verification; production timeout measurement/diagnosis; real suitable predecessor-lineage acceptance; facts-delta comparability and overview-lineage policy; SW entitlement/data acceptance; and outstanding industry I-3, CN identity/persistence, gold, DTO, and publication/replay prerequisites.
 
 PASS: documentation accurately reflects partial acceptance without overstating closure.
+
+## Final cutoff amendment
+
+MiniMax-M3, stop reason end_turn.
+
+PASS
