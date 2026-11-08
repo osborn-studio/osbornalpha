@@ -14,7 +14,7 @@ vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:()=> 'fixture-full-path-v1'}
 vi.mock('./port',async orig=>({...await orig<typeof import('./port')>(),strategyPort:()=>deps.port}));
 vi.mock('./db',async orig=>({...await orig<typeof import('./db')>(),supabaseStrategyDb:()=>deps.db}));
 import {GET} from '@/app/api/macro/strategy/cycle-table/route';
-import {supabaseMacroDb} from '../db';
+import {HISTORY_PAGE_CONCURRENCY,supabaseMacroDb} from '../db';
 import type {StoredManifest} from './contract';
 import {buildCycleTable,buildCycleTableManifest} from './cycle-table';
 import {strategyDbOver,supabaseTransport} from './db';
@@ -30,7 +30,7 @@ type Row=Record<string,unknown>;
 type Call={query:Record<string,string>;metadata?:unknown;table:string;method:string;series:string|null;select:string|null;offset:number;limit:number|null;rows:number;status:number;requestBytes:number;responseBytes:number};
 const digest=(v:unknown)=>sha256Hex(canonicalJson(v));
 
-function fixtureTransport(){
+function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
  const observations=[...fedTargetFixture(),...series.flatMap(id=>[
   ...Array.from({length:4300},(_,i)=>obs(`${id}_D`,new Date(Date.UTC(2007,0,1+i)).toISOString().slice(0,10),`${100+i}.00000000001`)),
   ...monthly(id,'2007-01',Array.from({length:216},(_,i)=>`${100+i}.00000000001`)),
@@ -82,14 +82,31 @@ function fixtureTransport(){
    rowCount=found.length;
    const select=url.searchParams.get('select');
    result=select&&select!=='*'?found.map(r=>Object.fromEntries(select.split(',').map(k=>[k,r[k]]))):found;
+   if(table==='macro_observations'&&url.searchParams.get('series_id')==='eq.US_DGS10_D'&&offset===fault?.offset){
+    if(fault.kind==='timeout')return new Response(JSON.stringify({code:'57014',message:'canceling statement due to statement timeout'}),{status:500,headers:{'content-type':'application/json'}});
+    result=(result as Row[]).slice(0,-1);
+   }
   }
   const response=JSON.stringify(result);
   calls.push({query:Object.fromEntries(url.searchParams),...(table==='macro_strategy_manifests'?{metadata:result}:{}),table,method:req.method,series:url.searchParams.get('series_id'),select:url.searchParams.get('select'),offset,limit:url.searchParams.has('limit')?Number(url.searchParams.get('limit')):null,rows:rowCount,status:200,requestBytes:Buffer.byteLength(body),responseBytes:Buffer.byteLength(response)});
   return new Response(response,{headers:{'content-type':'application/json','content-range':`${offset}-${offset+Math.max(0,rowCount-1)}/${total}`}});
  };
- const client=createClient('https://fixture.invalid','fixture-key',{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetcher}});
- const port=macroDbStrategyPort(supabaseMacroDb({admin:client,anon:client}));
- return {port,db:strategyDbOver(supabaseTransport({admin:client,anon:client})),calls,rows,
+ let active=0,peak=0;const historyHeaders:string[]=[];
+ const boundedProbe:typeof fetch=async(input,init)=>{
+  const request=new Request(input,init);
+  if(new URL(request.url).pathname!=='/rest/v1/macro_observations')return fetcher(request);
+  expect(request.headers.get('apikey')).toBe('fixture-anon-key');
+  historyHeaders.push(request.headers.get('prefer')??'');active++;peak=Math.max(peak,active);
+  try{
+   // Hold overlapping requests until the next turn, so the concurrency assertion is deterministic.
+   await new Promise<void>(resolve=>setImmediate(resolve));
+   return await fetcher(request);
+  }finally{active--;}
+ };
+ const client=(key:string)=>createClient('https://fixture.invalid',key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:boundedProbe}});
+ const clients={admin:client('fixture-admin-key'),anon:client('fixture-anon-key')};
+ const port=macroDbStrategyPort(supabaseMacroDb(clients));
+ return {port,db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
   reference:memoryStrategyPort(fixture({observations,snapshots,catalog:[...port.catalog()],catalogVersion:port.catalogVersion(),rules:port.rules()}))};
 }
 
@@ -111,7 +128,7 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
   const reference=await buildCycleTableManifest(t.reference,{now:new Date(CREATED),codeVersion:'fixture-full-path-v1',boundary});
   let coldBody='';
   async function measure(phase:string){
-   t.calls.length=0;sharedGets=0;sharedSets=0;
+   t.calls.length=0;t.historyHeaders.length=0;sharedGets=0;sharedSets=0;
    const start=performance.now();
    const response=await GET(new Request(`https://fixture.invalid/api/macro/strategy/cycle-table?boundary=${boundary}`));
    const body=await response.text(),elapsedMs=performance.now()-start;
@@ -135,8 +152,10 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    ]);
    const cold=phase==='cold'||phase==='cache-reset-cold';
    if(cold){
+    expect(t.peak()).toBe(HISTORY_PAGE_CONCURRENCY);
     expect(byTable['rpc/macro_put_manifest']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
     const histories=t.calls.filter(c=>c.table==='macro_observations');
+    expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
     expect(new Set(histories.map(c=>c.series)).size).toBe(13);
     expect(histories).toHaveLength(33); // five daily x five pages, five monthly + three policy event reads
     for(const id of series){
@@ -159,7 +178,7 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    samples.push({boundary,phase,elapsed_ms:elapsedMs,memo:response.headers.get('x-macro-strategy-memo'),requests:t.calls.length,by_table:byTable,
     shared_gets:sharedGets,shared_sets:sharedSets,request_body_bytes:t.calls.reduce((n,c)=>n+c.requestBytes,0),response_body_bytes:t.calls.reduce((n,c)=>n+c.responseBytes,0),
     handler_response_bytes:Buffer.byteLength(body),manifest_hash:stored.manifest_hash,manifest_inputs:stored.body.inputs.length,manifest_body_bytes:Buffer.byteLength(canonicalJson(stored.body)),
-    view_sha256:sha256Hex(body),calls:[...t.calls]});
+    view_sha256:sha256Hex(body),peak_history_requests:t.peak(),calls:[...t.calls]});
   }
   strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('cold');
   for(let i=0;i<5;i++)await measure('local-warm');
@@ -176,3 +195,19 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
   try{writeFileSync(fd,JSON.stringify({node:process.version,scope:'Cache-cold, not process-cold. Real cycle GET + Supabase read/write adapters + Next cache adapter; simulated HTTP, fixture session, in-memory PostgreSQL/cache backend. Includes manifest canonicalization/hash/upload, metadata read, evaluation and response consumption. Excludes process startup, real auth, network/TLS, PostgreSQL execution/RLS and production cache persistence. No latency threshold or SLO claim.',samples},null,2)+'\n');}finally{closeSync(fd);}
  }
 },60000);
+
+it.each([{offset:0,kind:'timeout'},{offset:1000,kind:'timeout'},{offset:0,kind:'short'},{offset:1000,kind:'short'}] as const)(
+ 'rejects the real cycle GET for $kind at history offset $offset without persisting a partial manifest',async fault=>{
+ vi.stubEnv('MACRO_STRATEGY_ENABLED','1');vi.stubEnv('MACRO_JUDGMENTS_ENABLED','0');
+ const t=fixtureTransport(fault),pending:Promise<unknown>[]=[];
+ deps.port={...t.port,publishState:async()=>null,seriesHistory:(...args:Parameters<typeof t.port.seriesHistory>)=>{
+  const job=t.port.seriesHistory(...args);pending.push(job);return job;
+ }};deps.db=t.db;
+ const response=await GET(new Request('https://fixture.invalid/api/macro/strategy/cycle-table?boundary=event_day'));
+ await Promise.allSettled(pending);
+ expect(response.status).toBe(500);expect(await response.json()).toMatchObject({error:{code:'strategy_failed'}});
+ expect(pending).toHaveLength(13);expect(t.peak()).toBeLessThanOrEqual(HISTORY_PAGE_CONCURRENCY);
+ expect(t.rows.macro_strategy_manifests).toEqual([]);
+ expect(t.calls.some(c=>c.table==='rpc/macro_put_manifest')).toBe(false);
+ expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
+ });

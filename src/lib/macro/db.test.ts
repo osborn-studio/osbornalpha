@@ -432,7 +432,7 @@ describe('supabaseMacroDb wiring',()=>{
   expect(lookups).toEqual([200,200,200,200,200,200,50]);
   expect(Math.max(...lookups)).toBeLessThanOrEqual(IN_CHUNK);
  });
- it.each([[0,1],[20,1],[1000,1],[1500,2],[15000,15]])('cold history fixture: %i rows use %i requests including exact count',async(size,budget)=>{
+ it.each([[0,1],[20,1],[999,1],[1000,1],[1001,2],[1500,2],[15000,15]])('cold history fixture: %i rows use %i requests including exact count',async(size,budget)=>{
   const all=Array.from({length:size},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+i)).toISOString().slice(0,10),value_text:String(i)}));
   const anon=stub({select:calls=>{
    const range=calls.find(c=>c[0]==='range');
@@ -443,6 +443,39 @@ describe('supabaseMacroDb wiring',()=>{
   expect(got.map(r=>r.value_text)).toEqual(all.map(r=>r.value_text));
   expect(anon.queries).toHaveLength(budget);
   expect(anon.queries[0]).toContainEqual(['select',['*',{count:'exact'}]]);
+ });
+ it.each(['first','later','lower-server-cap','zero-count-with-body','changed-count'] as const)('rejects incomplete counted history: %s',async fault=>{
+  const all=Array.from({length:1500},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+i)).toISOString().slice(0,10)}));
+  const anon=stub({select:calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];
+   let data=all.slice(from,to+1),count=all.length;
+   if((fault==='first'&&from===0)||(fault==='later'&&from>0))data=data.slice(0,-1);
+   if(fault==='lower-server-cap')data=data.slice(0,500);
+   if(fault==='zero-count-with-body')count=0;
+   if(fault==='changed-count'&&from>0)count++;
+   return {data,count,error:null};
+  }});
+  await expect(supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('US_UNRATE',{maxRows:2000})).rejects.toMatchObject({code:'rpc_failed'});
+ });
+ it.each([999,1000,1001])('proves completeness at the raw maxRows boundary: %i rows',async count=>{
+  const all=Array.from({length:count},(_,i)=>pgObs({period_end:'2026-09-30',version:i+1,value_text:String(i)}));
+  const anon=stub({select:calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];
+   return {data:all.slice(from,to+1),count,error:null};
+  }});
+  const job=supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('US_UNRATE',{maxRows:1000});
+  if(count>1000)await expect(job).rejects.toMatchObject({code:'truncated'});
+  else expect((await job).map(r=>r.value_text)).toEqual([String(count-1)]);
+  expect(anon.queries).toHaveLength(1); // many vintages cannot evade the raw cap by deduplication
+ });
+ it('deduplicates the winning vintage only after reading across a page boundary',async()=>{
+  const all=Array.from({length:1001},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+Math.min(i,999))).toISOString().slice(0,10),version:i===1000?2:1,value_text:String(i)}));
+  const anon=stub({select:calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];
+   return {data:all.slice(from,to+1),count:all.length,error:null};
+  }});
+  const got=await supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('US_UNRATE',{maxRows:1001});
+  expect(got).toHaveLength(1000);expect(got.at(-1)).toMatchObject({version:2,value_text:'1000'});
  });
  it('rejects an over-cap count before reading doomed pages; strategy retries still select highest visible vintages',async()=>{
   // 7,500 periods with two visible vintages each: the strategy adapter must retry its 10,000 raw-row cap.
@@ -469,24 +502,14 @@ describe('supabaseMacroDb wiring',()=>{
   expect(anon.queries[1]).toContainEqual(['select',['*']]);
   await expect(db.seriesHistory('US_UNRATE',{maxRows:1499})).rejects.toMatchObject({code:'truncated'});
   const v=[pgObs({period_end:'2026-08-31',version:1,value_text:'1'}),pgObs({period_end:'2026-09-30',version:1,value_text:'2'}),pgObs({period_end:'2026-09-30',version:2,value_text:'3'})].map(r=>({...r,available_at:'2026-11-02T05:30:00.000Z',ingested_at:'2026-11-02T05:30:00.000Z'}));
-  const one=supabaseMacroDb({admin:stub().client,anon:stub({select:calls=>calls.some(c=>c[0]==='range')?{data:v,error:null}:{data:null,count:v.length,error:null}}).client});
+  const one=supabaseMacroDb({admin:stub().client,anon:stub({select:calls=>calls.some(c=>c[0]==='range')?{data:v,count:v.length,error:null}:{data:null,count:v.length,error:null}}).client});
   expect((await one.seriesHistory('X',{maxRows:10})).map(x=>x.value_text)).toEqual(['1','3']);
   expect(highestPerPeriod([])).toEqual([]);
  });
- it('history count-null stops after a short first page and pages a longer series sequentially',async()=>{
-  const all=Array.from({length:1500},(_,i)=>pgObs({period_end:`${String(1900+Math.floor(i/12)).padStart(4,'0')}-${String(1+i%12).padStart(2,'0')}-28`}));
-  const short=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count:null,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(0,20).slice(from,to+1),error:null};}});
-  expect(await supabaseMacroDb({admin:stub().client,anon:short.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(20);
-  expect(short.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999]]);
-  const fallback=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count:null,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(from,to+1),count:null,error:null};}});
-  expect(await supabaseMacroDb({admin:stub().client,anon:fallback.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(1500);
-  expect(fallback.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999],[1000,1999]]);
- });
- it.each([null,-1,1.5])('reuses page zero for unusable count %s',async count=>{
-  const all=Array.from({length:1200},(_,i)=>pgObs({period_end:`${String(1800+Math.floor(i/12)).padStart(4,'0')}-${String(i%12+1).padStart(2,'0')}-28`}));
-  const anon=stub({select:calls=>{const r=calls.find(c=>c[0]==='range');if(!r)return {data:null,count,error:null};const [from,to]=r[1] as [number,number];return {data:all.slice(from,to+1),count,error:null};}});
-  expect(await supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('X',{maxRows:2000})).toHaveLength(1200);
-  expect(anon.queries.map(q=>q.find(c=>c[0]==='range')?.[1]??'count')).toEqual([[0,999],[1000,1999]]);
+ it.each([undefined,null,-1,1.5,Number.MAX_SAFE_INTEGER+1])('fails closed for an unusable history count %s',async count=>{
+  const anon=stub({select:()=>({data:[pgObs()],count,error:null})});
+  await expect(supabaseMacroDb({admin:stub().client,anon:anon.client}).seriesHistory('X',{maxRows:2000})).rejects.toMatchObject({code:'rpc_failed'});
+  expect(anon.queries).toHaveLength(1);
  });
  it('bounds counted history fan-out and preserves every ordered page',async()=>{
   const all=Array.from({length:15000},(_,i)=>pgObs({period_end:`${String(1800+Math.floor(i/12)).padStart(4,'0')}-${String(i%12+1).padStart(2,'0')}-28`,value_text:String(i)}));
@@ -500,6 +523,76 @@ describe('supabaseMacroDb wiring',()=>{
   expect(got.map(r=>r.value_text)).toEqual(all.map(r=>r.value_text));
   expect(maxInFlight).toBeLessThanOrEqual(HISTORY_PAGE_CONCURRENCY);
   expect(anon.queries.filter(q=>q.some(c=>c[0]==='range')).map(q=>q.find(c=>c[0]==='range')![1])).toEqual(Array.from({length:15},(_,i)=>[i*1000,i*1000+999]));
+ });
+ it('shares the history-page budget across thirteen histories, including their first pages',async()=>{
+  const all=Array.from({length:2001},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+i)).toISOString().slice(0,10),value_text:String(i)}));
+  const releases:(()=>void)[]=[];let active=0,peak=0,completed=0;
+  const anon=stub({select:async calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];
+   active++;peak=Math.max(peak,active);
+   await new Promise<void>(resolve=>releases.push(resolve));active--;completed++;
+   return {data:all.slice(from,to+1),count:all.length,error:null};
+  }});
+  const db=supabaseMacroDb({admin:stub().client,anon:anon.client});
+  const jobs=Promise.all(Array.from({length:13},(_,i)=>db.seriesHistory(`source${i}`,{maxRows:3000})));
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  const initial=active;
+  // Release successive waves explicitly; no elapsed-time assumption determines the bound.
+  for(let wave=0;wave<40&&completed<39;wave++){
+   releases.splice(0).forEach(release=>release());
+   await new Promise<void>(resolve=>setImmediate(resolve));
+  }
+  const histories=await jobs;
+  expect(initial).toBe(HISTORY_PAGE_CONCURRENCY);
+  expect(peak).toBe(HISTORY_PAGE_CONCURRENCY);expect(completed).toBe(39);
+  for(const history of histories)expect(history.map(r=>r.value_text)).toEqual(all.map(r=>r.value_text));
+ });
+ it.each([0,1000])('propagates a timeout at offset %i and releases shared history permits for subsequent reads',async offset=>{
+  const all=Array.from({length:1500},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+i)).toISOString().slice(0,10)}));
+  let fail=true,active=0,peak=0;
+  const anon=stub({select:async calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];
+   active++;peak=Math.max(peak,active);await new Promise<void>(resolve=>setImmediate(resolve));active--;
+   if(fail&&from===offset){fail=false;return {data:null,error:{message:'canceling statement due to statement timeout',code:'57014'}};}
+   return {data:all.slice(from,to+1),count:all.length,error:null};
+  }});
+  const db=supabaseMacroDb({admin:stub().client,anon:anon.client});
+  const settled=await Promise.allSettled(Array.from({length:13},(_,i)=>db.seriesHistory(`source${i}`,{maxRows:2000})));
+  const failures=settled.filter(r=>r.status==='rejected');
+  expect(failures).toHaveLength(1);
+  expect((failures[0] as PromiseRejectedResult).reason).toMatchObject({code:'rpc_failed',message:'canceling statement due to statement timeout'});
+  expect(await db.seriesHistory('after-error',{maxRows:2000})).toHaveLength(1500);
+  expect(active).toBe(0);expect(peak).toBeLessThanOrEqual(HISTORY_PAGE_CONCURRENCY);
+ });
+ it('drains admitted pages and stops claiming new pages after a history page fails',async()=>{
+  const all=Array.from({length:15000},(_,i)=>pgObs({period_end:new Date(Date.UTC(1980,0,1+i)).toISOString().slice(0,10)}));
+  const releases=new Map<number,()=>void>();let active=0,activeAtRejection=-1,settled=false;
+  const starts:number[]=[];
+  const anon=stub({select:async calls=>{
+   const [from,to]=calls.find(c=>c[0]==='range')![1] as [number,number];starts.push(from);
+   if(from===0)return {data:all.slice(from,to+1),count:all.length,error:null};
+   active++;await new Promise<void>(resolve=>releases.set(from,resolve));active--;
+   if(from===1000)return {data:null,error:{message:'canceling statement due to statement timeout'}};
+   return {data:all.slice(from,to+1),error:null};
+  }});
+  const db=supabaseMacroDb({admin:stub().client,anon:anon.client});
+  const job=db.seriesHistory('US_UNRATE',{maxRows:20000}).catch(error=>{activeAtRejection=active;settled=true;return error;});
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  expect(releases.size).toBe(HISTORY_PAGE_CONCURRENCY);releases.get(1000)!();releases.delete(1000);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  const settledBeforeDrain=settled;
+  for(let wave=0;wave<20&&!settled;wave++){
+   const ready=[...releases.values()];releases.clear();ready.forEach(release=>release());
+   await new Promise<void>(resolve=>setImmediate(resolve));
+  }
+  // Also release peer jobs on the old immediate-rejection implementation before making assertions.
+  for(let wave=0;wave<20&&releases.size;wave++){
+   const ready=[...releases.values()];releases.clear();ready.forEach(release=>release());
+   await new Promise<void>(resolve=>setImmediate(resolve));
+  }
+  expect(await job).toMatchObject({code:'rpc_failed',message:'canceling statement due to statement timeout'});
+  expect(settledBeforeDrain).toBe(false);expect(activeAtRejection).toBe(0);
+  expect(starts).toEqual(Array.from({length:HISTORY_PAGE_CONCURRENCY+1},(_,i)=>i*1000));
  });
  it('chunks observationsByIds by IN_CHUNK and returns input order, ok rows only',async()=>{
   const ids=Array.from({length:IN_CHUNK*2+50},()=>randomUUID());

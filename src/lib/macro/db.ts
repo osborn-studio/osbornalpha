@@ -186,7 +186,8 @@ export function publishArgs(i:PublishInput){
 const msInterval=(ms:number)=>`${Math.max(1,Math.round(ms))} milliseconds`;
 
 // MACRO-P3-LATENCY
-export const HISTORY_PAGE_CONCURRENCY=8;
+/** Conservative per-adapter HTTP budget for counted/RLS history reads, not a measured latency optimum. */
+export const HISTORY_PAGE_CONCURRENCY=2;
 interface Res{data:unknown;error:PgErrorLike|null;count?:number|null}
 // /MACRO-P3-LATENCY
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained
@@ -196,6 +197,15 @@ type Query=PromiseLike<Res>&{range:(from:number,to:number)=>Query};
 
 export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClient}):MacroDb{
  const admin=clients.admin as unknown as NarrowClient;const anon=clients.anon as unknown as NarrowClient;
+ // One budget per adapter: first pages, column histories and policy histories all compete here.
+ // Transferring a released permit directly to the next waiter prevents new callers overtaking it.
+ let historyPages=0;const historyWaiters:(()=>void)[]=[];
+ const historyPage=async(q:Query):Promise<Res>=>{
+  if(historyPages>=HISTORY_PAGE_CONCURRENCY)await new Promise<void>(resolve=>historyWaiters.push(resolve));
+  else historyPages++;
+  try{return await q;}
+  finally{const next=historyWaiters.shift();if(next)next();else historyPages--;}
+ };
  const call=async<T>(c:NarrowClient,fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toMacroDbError(error);return data as T;};
  const rows=async(q:PromiseLike<Res>):Promise<Record<string,unknown>[]>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??[]) as Record<string,unknown>[];};
  const maybe=async(q:PromiseLike<Res>):Promise<Record<string,unknown>|null>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??null) as Record<string,unknown>|null;};
@@ -355,26 +365,39 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    };
    const limit=o.maxRows+1;
    // Page zero and its count share one filtered request / database statement. Later pages stay bounded and concurrent.
-   const countResult=await make(true).range(0,Math.min(READ_PAGE,limit)-1);
+   const countResult=await historyPage(make(true).range(0,Math.min(READ_PAGE,limit)-1));
    if(countResult.error)throw toMacroDbError(countResult.error);
    const first=(countResult.data??[]) as Record<string,unknown>[];
    // The cap counts visible raw vintages. Do not download pages already proven to exceed it; callers may retry a larger cap.
-   if(typeof countResult.count==='number'&&Number.isInteger(countResult.count)&&countResult.count>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
-   let got:Record<string,unknown>[];
-   if(typeof countResult.count!=='number'||!Number.isInteger(countResult.count)||countResult.count<0){
-    got=[...first];
-    for(let from=READ_PAGE;first.length===Math.min(READ_PAGE,limit)&&got.length<limit;from+=READ_PAGE){
-     const size=Math.min(READ_PAGE,limit-got.length),part=await rows(make().range(from,from+size-1));
-     got.push(...part);if(part.length<size)break;
-    }
-   }else{
-    const n=Math.min(countResult.count,limit),starts=Array.from({length:Math.max(0,Math.ceil(n/READ_PAGE)-1)},(_,i)=>(i+1)*READ_PAGE);
-    const pages:Record<string,unknown>[][]=Array(starts.length);let next=0;
-    await Promise.all(Array.from({length:Math.min(HISTORY_PAGE_CONCURRENCY,starts.length)},async()=>{
-     for(;;){const index=next++;if(index>=starts.length)return;const from=starts[index];pages[index]=await rows(make().range(from,Math.min(from+READ_PAGE,n)-1));}
-    }));
-    got=[...first,...pages.flat()];
-   }
+   // Exact-count cardinalities are our completeness proof, even if PostgREST's page cap is lower
+   // than READ_PAGE. A missing count or short slice must never become a successful prefix.
+   const count=countResult.count;
+   if(typeof count!=='number'||!Number.isSafeInteger(count)||count<0)throw new MacroDbError('rpc_failed','incomplete_series_history');
+   if(count>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
+   const check=(result:Res,expected:number)=>{
+    if(!Array.isArray(result.data)||result.data.length!==expected||
+       (result.count!=null&&result.count!==count))throw new MacroDbError('rpc_failed','incomplete_series_history');
+    return result.data as Record<string,unknown>[];
+   };
+   check(countResult,Math.min(READ_PAGE,count));
+   const starts=Array.from({length:Math.max(0,Math.ceil(count/READ_PAGE)-1)},(_,i)=>(i+1)*READ_PAGE);
+   const pages:Record<string,unknown>[][]=Array(starts.length);let next=0;
+   let failed=false,firstError:unknown;
+   await Promise.all(Array.from({length:Math.min(HISTORY_PAGE_CONCURRENCY,starts.length)},async()=>{
+    try{
+     while(!failed){
+      const index=next++;if(index>=starts.length)return;
+      const from=starts[index],size=Math.min(READ_PAGE,count-from);
+      const result=await historyPage(make().range(from,from+size-1));
+      if(result.error)throw toMacroDbError(result.error);
+      pages[index]=check(result,size);
+     }
+    }catch(error){if(!failed){failed=true;firstError=error;}}
+   }));
+   // Do not leave page workers claiming work after the caller sees a failure. Already admitted
+   // jobs drain normally; no upstream cancellation, retry or partial result is implied.
+   if(failed)throw firstError;
+   const got=[...first,...pages.flat()];
    // /MACRO-P3-LATENCY
    if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
    return highestPerPeriod(got.map(observationFromRow));
