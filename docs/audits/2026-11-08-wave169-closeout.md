@@ -1,6 +1,6 @@
 # Wave169 release closeout — wave174 deployed, broader acceptance degraded
 
-Current release evidence checked through **2026-11-08 14:10:49 Asia/Shanghai** (raw final-state receipt: `2026-11-08T06:10:49.178336+00:00`, UTC). Exact `a43f2499a85df0b652d996579ac225a8710a2a84` is deployed; overall production acceptance remains **DEGRADED / NOT GRANTED**. Parent recovery execution/readback is verified below; scoped current UI observations are recorded separately. Portable [wave174 evidence](2026-11-07-launch-closeout/wave174-release-evidence.json) separates runtime, database diagnostics and historical incidents.
+Deployment/release receipt checked through **2026-11-08 14:10:49 Asia/Shanghai** (raw final-state receipt: `2026-11-08T06:10:49.178336+00:00`, UTC). Exact `a43f2499a85df0b652d996579ac225a8710a2a84` is deployed; overall production acceptance remains **DEGRADED / NOT GRANTED**. Later recovery execution/readback and scoped current UI observations are recorded below with separate evidence boundaries; this deployment receipt time is not their cutoff. Portable [wave174 evidence](2026-11-07-launch-closeout/wave174-release-evidence.json) separates runtime, database diagnostics and historical incidents.
 
 ## Current wave174 release
 
