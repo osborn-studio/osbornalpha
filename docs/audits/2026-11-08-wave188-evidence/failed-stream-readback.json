@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-11-08T15:55:20.671648+00:00",
+  "source": "Supabase SQL Editor read-only query in project mzfcaabhuwtfvsvadvsv",
+  "rows": [
+    {
+      "ticker": "NOAH",
+      "last_status": "failed",
+      "consecutive_failures": 5
+    },
+    {
+      "ticker": "NVMI",
+      "last_status": "success",
+      "consecutive_failures": 0
+    },
+    {
+      "ticker": "FAST",
+      "last_status": "success",
+      "consecutive_failures": 0
+    },
+    {
+      "ticker": "DBX",
+      "last_status": "success",
+      "consecutive_failures": 0
+    }
+  ],
+  "causal_claim": false
+}
