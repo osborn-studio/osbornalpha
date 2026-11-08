@@ -40,7 +40,7 @@ describe('supabaseStrategyDb wiring',()=>{
   const admin=stub(()=>({data:row.manifest_id,error:null}),{macro_strategy_manifests:[row]});const anon=stub(()=>({data:null,error:null}));
   const db=supabaseStrategyDb({admin:admin.client,anon:anon.client});
   expect(await db.putManifest(body)).toEqual({manifest_id:row.manifest_id,manifest_hash:hash,body,created_at:'2026-11-07T01:02:03.456Z'});
-  expect(admin.calls[0]).toEqual(['rpc','macro_put_manifest',{p_kind:'cycle_table',p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version}]);
+  expect(admin.calls[0]).toEqual(['rpc','macro_put_manifest_json',{p_kind:'cycle_table',p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version}]);
   expect(admin.calls.slice(1)).toEqual([['select','macro_strategy_manifests','manifest_id,manifest_hash,created_at'],['eq','manifest_id',row.manifest_id],['limit',1]]);
   expect(anon.calls).toEqual([]);
  });
