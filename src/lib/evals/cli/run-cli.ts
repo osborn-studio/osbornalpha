@@ -9,7 +9,7 @@ import {readFileSync} from 'node:fs';
 import {isAbsolute,relative,resolve} from 'node:path';
 import {sha256Hex} from '../canonical-json';
 import {EvalError,exitCodeOfError} from '../errors';
-import {checkLock,loadGoldSet} from '../gold/load';
+import {checkLock,loadGoldSet,loadLock} from '../gold/load';
 import {assertKindEnabled} from '../kinds/registry';
 import {writeReportFiles} from '../report';
 import {assertRunnable,runGoldSet} from '../run-gold-set';
@@ -76,7 +76,7 @@ export interface CliDeps{
  persist:typeof persistRun;readFile(path:string):Uint8Array;
 }
 export function defaultCliDeps():CliDeps{
- return {buildDeps:(m,p)=>buildRunDeps(m,p),loadSet:p=>loadGoldSet(p),loadLock:()=>JSON.parse(readFileSync(GOLD_LOCK,'utf8')) as GoldLock,
+ return {buildDeps:(m,p)=>buildRunDeps(m,p),loadSet:p=>loadGoldSet(p),loadLock:()=>loadLock(),
   version:()=>evaluatorVersion(),now:()=>new Date(),writeReport:(r,root)=>writeReportFiles(r,root),persist:persistRun,readFile:p=>new Uint8Array(readFileSync(p))};
 }
 
