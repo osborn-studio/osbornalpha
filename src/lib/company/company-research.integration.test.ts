@@ -482,6 +482,32 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await code(replace({iss:s.iss,batch:b,attempt:a3,rev:1,events:[ev]}))).toMatchObject({message:'stale_computation'});
  });
 
+ it.each([{duration:'9M'},{statement:'CF'}])('digest preserves SQL revision guards while withholding incompatible adjacent facts: %j',async change=>{
+  const s=await fx.stream([
+   {available:'2024-02-01',facts:[{value:'100'}]},
+   {available:'2024-03-01',facts:[{value:'110',...change}]},
+   {available:'2024-04-01',facts:[{value:'120',...change}]},
+  ]);
+  const digest=()=>runCompanyDigest({db:pgCompanyDb(admin),tables:pgTableClient(admin),facts:pgFactsDb(admin),
+   readSnapshot:snapshotReader(pgRpcClient(admin,'service_role')),reader:memorySnapshotObjectStore(new Map()),
+   now:()=>new Date(),deadline:null,codeVersion:'revision-guard-regression'},{mode:'full',issuerIds:[s.iss],market:'US'});
+  const first=await digest();
+  expect(first.status).toBe('success');expect(first.errors).toEqual([]);
+  const before=await events(s.iss);
+  expect(before.filter(e=>e.kind==='filing_published')).toHaveLength(3);
+  const revision=before.filter(e=>e.kind==='fact_revised');
+  expect(revision).toHaveLength(1);
+  expect(revision[0].natural_key).toBe('revenue:2023-01-01:2023-12-31:consolidated:USD:2024-04-01');
+  // A forged cross-semantics edge still fails the unchanged real SQL guard.
+  const a=await begin(s.iss),b=await fx.batch();
+  const malformed=await revisedEvent(s.factIds[0][0],s.factIds[1][0]);
+  expect(await code(replace({iss:s.iss,batch:b,attempt:a,rev:1,events:[malformed]}))).toMatchObject({message:'invalid_event',detail:'payload: from/to and the payload are not one natural key'});
+  const second=await digest();expect(second.status).toBe('success');
+  expect(second.detail.events).toMatchObject({changed:0,retired:0,revived:0});
+  const after=await events(s.iss);
+  expect(after.map(({rb,...e})=>e)).toEqual(before.map(({rb,...e})=>e));
+ });
+
  it('invalid_event: shape, kinds, cross-stream, visibility (quarantined, older generation, future), value_text, lengths, duplicates, filing consistency, relChange, coverage, rebuild reuse',async()=>{
   const sr=randomUUID();
   const s=await fx.stream([{sourceRef:sr,facts:[{value:'100.50'}]},{available:'2024-05-01',facts:[{value:'120'}]}]);
