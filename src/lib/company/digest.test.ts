@@ -17,6 +17,7 @@ import type {MemoryCompanyDb} from './memory-company-db';
 import {memorySnapshotReader} from './snapshot-read';
 import {summarizeCoverage} from './coverage';
 import {CompanyDbError} from './types';
+import {toCompanyDbError} from './db';
 import type {CompanyDb,DueStream} from './types';
 
 const CODE='a'.repeat(40);
@@ -85,6 +86,93 @@ describe('selection',()=>{
 });
 
 describe('runCompanyDigest',()=>{
+ it('emits private fixed stages with monotonic durations and a random operation per stream',async()=>{
+  const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const clock=vi.spyOn(performance,'now');let tick=0;clock.mockImplementation(()=>++tick);
+  try{
+   const h=harness();const a=await stream(h),b=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
+   let wall=Date.parse('2026-11-08T12:00:00Z');h.deps.now=()=>new Date(wall-=1000);
+   const r=await runCompanyDigest(h.deps,{mode:'full',market:'US'});
+   expect(r.counts.failed).toBe(0);expect(r.streams).toHaveLength(2);expect(error).not.toHaveBeenCalled();
+   const events=info.mock.calls.filter(c=>c[0]==='[company-digest]').map(c=>c[1]);
+   expect(events).toHaveLength(12);
+   const ids=new Set(events.map(e=>e.operation_id));expect(ids.size).toBe(2);
+   for(const id of ids){
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);expect([a,b]).not.toContain(id);
+    const group=events.filter(e=>e.operation_id===id);
+    expect(group.map(e=>e.stage)).toEqual(['begin_attempt','read_snapshot','evidence_build','evidence_replace','derive','digest_replace']);
+    let elapsed=0;for(const e of group){expect(Object.keys(e).sort()).toEqual(['elapsed_ms','operation_id','outcome','stage','stage_ms']);expect(e.outcome).toBe('ok');expect(e.stage_ms).toBeGreaterThan(0);expect(e.elapsed_ms).toBeGreaterThan(elapsed);elapsed=e.elapsed_ms;}
+   }
+  }finally{info.mockRestore();error.mockRestore();clock.mockRestore();}
+ });
+ it('keeps the receipt and fences on transport failure even when the logger throws',async()=>{
+  const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+  try{
+   const h=harness();const a=await stream(h);const {factId}=await disclose(h.facts,a,'2024-02-01','100');
+   const cause=toCompanyDbError({code:'57014',message:`private ${a} ${factId} https://private.test/ Authorization: secret`,details:'private SQL',where:'private context'});
+   const mark=vi.fn(h.db.markDigestFailed),replace=vi.fn(h.db.replaceDigest);
+   const deps={...h.deps,db:{...h.db,markDigestFailed:mark,replaceDigest:replace,replaceEvidence:async()=>{throw cause;}}};
+   const receipt=await runCompanyDigest(deps,{mode:'full',issuerIds:[a],market:'US'});
+   expect(receipt.streams[0]).toMatchObject({outcome:'failed',code:'evidence_index_failed',message:cause.message,retried:false});
+   expect(mark).toHaveBeenCalledTimes(1);expect(replace).not.toHaveBeenCalled();
+   const events=[...info.mock.calls,...error.mock.calls].filter(c=>c[0]==='[company-digest]').map(c=>c[1]);
+   const failure=events.find(e=>e.outcome==='failed');
+   expect(failure).toMatchObject({stage:'evidence_replace',category:'query_canceled'});
+   expect(new Set(events.map(e=>e.operation_id)).size).toBe(1);
+   for(const secret of [a,factId,'private','Authorization','57014','where','SQL'])expect(JSON.stringify(events)).not.toContain(secret);
+   expect(Object.keys(failure).sort()).toEqual(['category','elapsed_ms','operation_id','outcome','stage','stage_ms']);
+   info.mockImplementation(()=>{throw new Error('logger failed');});error.mockImplementation(()=>{throw new Error('logger failed');});
+   const again=await runCompanyDigest(deps,{mode:'full',issuerIds:[a],market:'US'});
+   expect(again.counts).toEqual(receipt.counts);expect(again.status).toBe(receipt.status);
+   expect(again.errors).toEqual(receipt.errors);
+   expect(again.streams[0]).toEqual({...receipt.streams[0],attemptId:again.streams[0].attemptId});
+   expect(mark).toHaveBeenCalledTimes(2);expect(replace).not.toHaveBeenCalled();
+   info.mockImplementation(()=>Promise.reject(new Error('async logger failed')));error.mockImplementation(()=>Promise.reject(new Error('async logger failed')));
+   const asyncLog=await runCompanyDigest(deps,{mode:'full',issuerIds:[a],market:'US'});
+   expect(asyncLog.errors).toEqual(receipt.errors);expect(asyncLog.counts).toEqual(receipt.counts);
+   await new Promise(resolve=>setImmediate(resolve));
+  }finally{info.mockRestore();error.mockRestore();}
+ });
+ it('retains one operation ID across a stale retry and completes successfully with a broken logger',async()=>{
+  const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+  try{
+   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
+   let calls=0;const attempts:number[]=[];
+   const deps={...h.deps,db:{...h.db,replaceEvidence:async(...x:Parameters<CompanyDb['replaceEvidence']>)=>{
+    attempts.push(x[2]);if(calls++===0)throw toCompanyDbError({code:'P0001',message:'stale_computation'});return h.db.replaceEvidence(...x);
+   }}};
+   const r=await runCompanyDigest(deps,{mode:'full',market:'US'});
+   expect(r.streams[0]).toMatchObject({retried:true,outcome:'changed'});expect(attempts).toEqual([r.streams[0].attemptId,r.streams[0].attemptId]);
+   const events=[...info.mock.calls,...error.mock.calls].filter(c=>c[0]==='[company-digest]').map(c=>c[1]);
+   expect(new Set(events.map(e=>e.operation_id)).size).toBe(1);
+   expect(events.filter(e=>e.stage==='read_snapshot')).toHaveLength(2);
+   expect(events.filter(e=>e.outcome==='failed')).toEqual([expect.objectContaining({stage:'evidence_replace',category:'stale_computation'})]);
+   info.mockImplementation(()=>{throw new Error('sink down');});error.mockImplementation(()=>{throw new Error('sink down');});
+   const next=await runCompanyDigest(deps,{mode:'full',market:'US'});
+   expect(next.status).toBe('success');expect(next.streams[0].outcome).toBe('unchanged');
+   expect((await h.db.digestState(a,'US'))?.last_status).toBe('success');
+  }finally{info.mockRestore();error.mockRestore();}
+ });
+ it.each(['begin_attempt','read_snapshot','derive','digest_replace','mark_failed'] as const)('preserves failure results and error fences when %s and logging fail',async stage=>{
+  const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
+  try{
+   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
+   const cause=new Error('private stage failure');const rejects=async()=>{throw cause;};
+   const mark=vi.fn(stage==='mark_failed'?rejects:h.db.markDigestFailed),replace=vi.fn(stage==='digest_replace'?rejects:h.db.replaceDigest);
+   const deps:DigestDeps={...h.deps,db:{...h.db,markDigestFailed:mark,replaceDigest:replace,
+    ...(stage==='begin_attempt'?{beginAttempt:rejects}:{}),...(stage==='mark_failed'?{replaceEvidence:rejects}:{})},
+    ...(stage==='read_snapshot'?{readSnapshot:rejects}:{}),facts:stage==='derive'?{...h.facts,scopeRows:rejects}:h.facts};
+   const r=await runCompanyDigest(deps,{mode:'full',market:'US'});
+   expect(r.status).toBe('failed');expect(r.streams[0].outcome).toBe('failed');
+   const failure=error.mock.calls.find(c=>c[1]?.stage===stage)?.[1];expect(failure).toMatchObject({stage,outcome:'failed',category:'unknown'});
+   const sanitize=(receipt:typeof r)=>({...receipt,batchId:null,streams:receipt.streams.map(s=>({...s,attemptId:null}))});
+   info.mockImplementation(()=>{throw new Error('sink down');});error.mockImplementation(()=>{throw new Error('sink down');});
+   const again=await runCompanyDigest(deps,{mode:'full',market:'US'});
+   expect(sanitize(again)).toEqual(sanitize(r));
+   expect(mark).toHaveBeenCalledTimes(stage==='begin_attempt'?0:2);
+   expect(replace).toHaveBeenCalledTimes(stage==='digest_replace'?2:0);
+  }finally{info.mockRestore();error.mockRestore();}
+ });
  it('rejects apply without a code version and writes no batch',async()=>{
   const h=harness();
   await expect(runCompanyDigest({...h.deps,codeVersion:null},{mode:'incremental'})).rejects.toBeInstanceOf(DigestError);
