@@ -1,6 +1,14 @@
 # 美林时钟与宏观缓存发布记录（2026-11-07）
 
-## 当前生产部署与部分验收（a4fafbab）
+## 当前发布范围（wave174 / a43f2499）
+
+截至 2026-11-08 14:10:49（Asia/Shanghai），精确 `a43f2499a85df0b652d996579ac225a8710a2a84` 已部署到 READY `dpl_4NcR75SHZizFxKBjRQ8iHDtgptJ7`，两个生产域名均核对到同一部署；精确 SHA 的 Application／fixture CI 成功，两域各 9 项匿名检查共 18 项通过。#162–#174 均已合并且为该 SHA 的祖先，包括 #169 清单／锁测试、#170 transport、#172 读取完整性／限流／drain、#173 文档和 #174 发布判断 hook。当前回滚保留 `2d3c5ad5` 的 READY 部署。#154 与 #170 迁移均已应用并验证，不是待执行任务。
+
+详见 [当前 closeout](../2026-11-08-wave169-closeout.md) 与 [脱敏 wave174 ledger](wave174-release-evidence.json)。一次 6.3MB 存量 manifest POST 在 13.086 秒返回 200，request ID 与 gateway 日志匹配；`origin_time=8006` 不是 SQL duration。历史独立 `57014` 仍未闭环。父会话已完成存量 US/CN 恢复：inserted2／failed0，两条存储判断均 nonabstained、retrospective=false 且精确绑定 active snapshot；14:17（Asia/Shanghai）已回读。公开缓存初次仍选旧判断（browser max-age=300／shared s-maxage=600）；正常过期／重验证后，父会话已见当前 CN Stagflation／US Overheat、CN desktop 六行与 US 375×601 mobile 四行依据，以及真实 NBS PPI 来源抽屉，Escape 关闭／焦点返回通过。仅覆盖这些交互路径，非完整 UI／登录矩阵；合并 hook 本身不自动回填。**整体生产验收仍 DEGRADED / NOT GRANTED**，不声称全局通过、p95、跨实例／TTL 或完整登录矩阵完成。
+
+一个原始文件已于 2026-11-08 12:26:03（Asia/Shanghai；原回执 04:26:03 UTC）下载验证：HTTP 200，6,118 bytes，SHA-256 `24c03d8062d14e2574c81cfd054b3e3f1d661e05714a564907685dfcd1d0f8e8`，与展示值相符；只覆盖该文件。下方“原始下载未验证”、PR 未合并／迁移待检查等措辞均为保留的历史快照；旧浏览器证据不验收当前部署。严格 Wind 历史 0/2 成功仍未解决；industry/company/F6/foreign 原有前置门槛不变。
+
+## 历史生产部署与部分验收（a4fafbab）
 
 2026-11-08 00:44:03 UTC 发布回执确认 `a4fafbab0190604f282f3c101a7312fe4b1db415` 已部署到生产。Vercel [`dpl_FNzodKrBGDGKatGHpe1hjuPufDdJ`](https://vercel.com/gilosbornhellos-projects/stock-monitor/FNzodKrBGDGKatGHpe1hjuPufDdJ) 为 READY，别名含 `osbornalpha.com`／`www.osbornalpha.com`；HTTP 核验使用后者。**部署成立；公开宏观检查通过；登录态验收仅部分通过；整体生产验收 DEGRADED / NOT GRANTED。** 脱敏生产、父会话真实 CUA 和 GitHub 状态快照见 [wave162-release-evidence.json](wave162-release-evidence.json)。以下旧候选／旧部署记录保留其历史时间边界。
 
