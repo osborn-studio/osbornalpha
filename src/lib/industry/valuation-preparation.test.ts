@@ -46,3 +46,27 @@ describe('valuation preparation, without formulas or publication', () => {
   expect(() => diagnoseAlignedValuationSeries(q, [{...cell, status: 'missing', value: '10'}], [official])).toThrow('computed_value');
  });
 });
+
+
+describe('aligned evidence identity contract', () => {
+ const dates = Array.from({length: 24}, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`);
+ const query = {runId: 'run', code: '801780', metric: 'pe_ttm' as const, officialMetric: 'pe' as const, expectedDates: dates};
+ const computed = dates.map(trade_date => ({run_id: 'run', scheme: 'sw2021' as const, version: '2021' as const, code: '801780', metric: 'pe_ttm' as const, trade_date, status: 'ok' as const, value: '10'}));
+ const official = dates.map(trade_date => ({scheme: 'sw2021' as const, version: '2021' as const, code: '801780', metric: 'pe' as const, trade_date, value: '10', observation_id: `o-${trade_date}`, observed_at: '2026-11-01T00:00:00Z', status: 'ok' as const}));
+ it('rejects one immutable observation reused to manufacture a 24-pair series', () => {
+  expect(diagnoseAlignedValuationSeries(query, computed, official)).toMatchObject({assessment: 'diagnostic_only', nPairs: 24, thresholdsMet: true});
+  expect(() => diagnoseAlignedValuationSeries(query, computed, official.map(r => ({...r, observation_id: 'reused'})))).toThrow('reused_official_observation');
+ });
+ it.each([{runId: ''}, {runId: ' '}, {runId: 12}, {code: '801780.SI'}, {code: 801780}, {metric: 'unknown'}, {officialMetric: 'unknown'}])('rejects malformed runtime selectors even without rows: %j', patch => {
+  expect(() => diagnoseAlignedValuationSeries({...query, ...patch} as unknown as typeof query, [], [])).toThrow('invalid_series_selector');
+ });
+ it('rejects blank or non-string observation identities', () => {
+  for (const observation_id of [' ', 12]) {
+   expect(() => diagnoseAlignedValuationSeries(query, computed, [{...official[0], observation_id} as typeof official[number]])).toThrow('official_value');
+  }
+ });
+ it('ignores superseded identity claims and counts absent dates instead of inventing evidence', () => {
+  const result = diagnoseAlignedValuationSeries(query, computed, [official[0], {...official[0], trade_date: dates[1], status: 'superseded'}]);
+  expect(result).toMatchObject({nPairs: 1, counts: {within: 1, no_official: 23}, thresholdsMet: false});
+ });
+});

@@ -14,6 +14,7 @@ type SecurityWindow = Pick<IssuerSecurityInput, 'issuer_id' | 'ticker' | 'share_
 type PreparedMember = {issuer_id: string; membership_id: string} & (
  {status: 'ambiguous_primary' | 'no_mark'; ticker: string | null} |
  {status: 'ready'; ticker: string; mark: MarkRow});
+const identity = (s: unknown): s is string => typeof s === 'string' && s.length > 0 && s.trim() === s;
 const timestamp = (s: string) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(s) && Number.isFinite(Date.parse(s));
 
 export function prepareValuationMembers(q: {code: string; tradeDate: string; memberships: MembershipRow[]; securities: readonly SecurityWindow[]; marks: readonly MarkRow[]}) {
@@ -44,9 +45,14 @@ type CurrentOfficial = Pick<OfficialInput, 'scheme' | 'version' | 'code' | 'metr
  * rows, official values or publication flags are emitted. SQL staging must re-read current versions.
  */
 export function diagnoseAlignedValuationSeries(q: {runId: string; code: string; metric: ValuationCellRow['metric']; officialMetric: OfficialInput['metric']; expectedDates: readonly string[]}, computed: readonly ComputedCell[], official: readonly CurrentOfficial[]) {
+ // Validate selector values independently of the rows: equal malformed keys are not alignment.
+ if (!identity(q.runId) || typeof q.code !== 'string' || !/^\d{6}$/.test(q.code) ||
+  !['pe_ttm', 'pe_static', 'pb', 'market_cap'].includes(q.metric) ||
+  !['pe', 'pb', 'total_mv', 'float_mv', 'close'].includes(q.officialMetric)) throw new Error('invalid_series_selector');
  const expected = validateExpectedDates(q.expectedDates);
  const cells = new Map<string, string | null>();
  const values = new Map<string, string>();
+ const observationIds = new Set<string>();
  for (const r of computed) {
   if (r.run_id !== q.runId || r.scheme !== 'sw2021' || r.version !== '2021' || r.code !== q.code || r.metric !== q.metric || !expected.has(r.trade_date) || cells.has(r.trade_date)) throw new Error('computed_key');
   if ((r.status === 'missing' && r.value !== null) || (r.status === 'ok' && !isDecimal(r.value)) || !['ok', 'missing'].includes(r.status)) throw new Error('computed_value');
@@ -55,8 +61,12 @@ export function diagnoseAlignedValuationSeries(q: {runId: string; code: string; 
  for (const r of official) {
   if (r.status === 'superseded') continue;
   if (r.status !== 'ok' || r.scheme !== 'sw2021' || r.version !== '2021' || r.code !== q.code || r.metric !== q.officialMetric || !expected.has(r.trade_date)) throw new Error('official_key');
-  if (!r.observation_id || !timestamp(r.observed_at) || !isDecimal(r.value)) throw new Error('official_value');
+  if (!identity(r.observation_id) || !timestamp(r.observed_at) || !isDecimal(r.value)) throw new Error('official_value');
   if (values.has(r.trade_date)) throw new Error('ambiguous_current_official');
+  // An immutable observation belongs to exactly one natural key. Reusing it across dates
+  // must not manufacture pair coverage, even when all supplied values happen to agree.
+  if (observationIds.has(r.observation_id)) throw new Error('reused_official_observation');
+  observationIds.add(r.observation_id);
   values.set(r.trade_date, r.value);
  }
  return analyzeValuationReconciliation({expectedDates: [...expected], pairs: [...expected].map(tradeDate => ({tradeDate, computedValue: cells.get(tradeDate) ?? null, officialValue: values.get(tradeDate) ?? null}))});
