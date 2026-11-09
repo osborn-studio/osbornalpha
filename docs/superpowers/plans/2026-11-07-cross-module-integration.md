@@ -2,7 +2,19 @@
 
 Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
 
-## Current release and remaining priorities — wave214
+## Current release and remaining priorities — wave215
+
+Six independent GPT-6.1-Sol CLIs were launched, plus three subagents; this does not mean all remained continuously active. MiniMax-M3 audits are separate evidence from production checks.
+
+Production verification at 2026-11-09 10:34 UTC found `e0ec530f9b9956948e1ebe713b114840feb1988b` on READY deployment `dpl_BmiAm9qVoxrdGQfgCmuUKsFEYFJs` at both domains. Exact-SHA CI and 18 anonymous probes passed. This deployment contains only documentation PR #213 and adds no company/industry implementation. Preferred quote-source recovery remains open. See the [wave215 release record](../../audits/2026-11-09-wave215-release.md) and [machine receipt](../../audits/2026-11-09-wave215-release.json).
+
+Current signed-in UI acceptance is unverified: this turn's browser attempt failed with `cgWindowNotFound`, and the request to show Chrome remains unanswered. The scoped `15b60533` login/AAL/SIC checks below remain historical. Company, CN bootstrap and AAPL correlation implementation outcomes are pending final reports; no delivery or recovery is inferred.
+
+AAPL's 7/7 offline SDK tests demonstrate missing response-header correlation in the existing path and a scratch concurrent capture prototype. The manifest experiment supplies 121 local measured blocks and synthetic tiny-budget IF cancellations. Neither closes historical cause, a failed-request/backend join, production writer/persistence recovery or performance acceptance. Retained-log queries passed syntax parsing but were not executed against hosted logs. No timeout change follows from this evidence.
+
+### Historical wave214 priorities and acceptance snapshot
+
+The following table preserves the wave214 delivery and browser boundaries; use the wave215 summary above for the current deployment. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
 
 Wave214 used five independent Codex CLI investigations with GPT-6.1-Sol and MiniMax-M3 audits.
 

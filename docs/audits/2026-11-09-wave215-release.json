@@ -1,0 +1,137 @@
+{
+  "wave": 215,
+  "commit": "e0ec530f9b9956948e1ebe713b114840feb1988b",
+  "observedAt": "2026-11-09T10:34:00.369682+00:00",
+  "deployment": {
+    "id": "dpl_BmiAm9qVoxrdGQfgCmuUKsFEYFJs",
+    "state": "READY",
+    "target": "production"
+  },
+  "rollback": {
+    "id": "dpl_FiYUKy7wT7StSqQegGmJDropHdgv",
+    "state": "READY",
+    "executed": false
+  },
+  "ci": [
+    {
+      "name": "Application checks",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42599941188",
+      "headSha": "e0ec530f9b9956948e1ebe713b114840feb1988b",
+      "conclusion": "success"
+    },
+    {
+      "name": "Macro source fixture checks",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42599941084",
+      "headSha": "e0ec530f9b9956948e1ebe713b114840feb1988b",
+      "conclusion": "success"
+    }
+  ],
+  "anonymousProbes": [
+    {
+      "host": "osbornalpha.com",
+      "pass": true,
+      "count": 9,
+      "runtimeShas": [
+        "e0ec530f9b9956948e1ebe713b114840feb1988b"
+      ]
+    },
+    {
+      "host": "www.osbornalpha.com",
+      "pass": true,
+      "count": 9,
+      "runtimeShas": [
+        "e0ec530f9b9956948e1ebe713b114840feb1988b"
+      ]
+    }
+  ],
+  "anonymousProbesPassed": 18,
+  "deploymentScope": {
+    "mergedPR": 213,
+    "documentationOnly": true,
+    "newCompanyIndustryImplementation": false,
+    "migrationAction": "none; prior #187 readback reused",
+    "runtimeLogsSampled": false
+  },
+  "browser": {
+    "currentAcceptance": "not performed",
+    "failure": "cgWindowNotFound",
+    "showChromeRequest": "unanswered",
+    "historicalAcceptanceCommit": "15b60533d093946f976c96b1e1f9846ca161226d"
+  },
+  "acceptance": {
+    "companyIndustry": "open",
+    "strictWindRecovery": "open",
+    "aaplHistoricalCause": "open",
+    "aaplProductionRecovery": "open",
+    "manifestHistoricalCause": "open",
+    "productionPerformance": "unmeasured"
+  },
+  "historicalCompanySamples": {
+    "cnMissingMasterTickers": [
+      "600519.SH",
+      "000333.SZ",
+      "300750.SZ"
+    ],
+    "scope": "three active-universe samples only; not entire CN universe",
+    "noah": "Three headline metrics and revenue YoY had CNY/USD ambiguity; gross margin lacked mapped inputs. Statement CNY rows existed despite Overview dashes."
+  },
+  "offlineInvestigations": {
+    "aapl": {
+      "testsPassed": 7,
+      "productionRequests": false,
+      "finding": "SDK-normalized RPC result omits upstream response header; concurrent scratch hook feasibility only"
+    },
+    "manifest": {
+      "postgres": "17.10",
+      "measuredBlocks": 121,
+      "retainedMeasurements": 110,
+      "requestBytes": 6325378,
+      "parsePlusOuterReplayMedianMs": 32.631,
+      "productionRequests": false,
+      "finding": "Synthetic tiny-budget IF cancellations; no historical causal join or production performance claim"
+    },
+    "correlation": {
+      "queriesExecuted": false,
+      "syntax": "SQLGlot ClickHouse parse only",
+      "nativeFixtureExecuted": false
+    }
+  },
+  "orchestration": {
+    "independentCLIsLaunched": 6,
+    "additionalSubagents": 3,
+    "continuouslyActiveClaim": false
+  },
+  "ongoing": [
+    "company implementation PR",
+    "CN bootstrap implementation PR",
+    "AAPL correlation implementation"
+  ],
+  "sources": [
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/release/REPORT.md",
+      "sha256": "6dd0235799d6fc6f6e902e6e7d5f12ca089520b0f59f8634907b6b434991f5c2"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/aapl/REPORT.md",
+      "sha256": "a3eb2c4ced9e13fc9743e0f633a4488a8ba3a71a8489547525e5cae8c8d4f27e"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/manifest/REPORT.md",
+      "sha256": "f78c54597550778e402ac05b96b3cd9946aa5b8169c154e350129dc4d48b524f"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/correlation/REPORT.md",
+      "sha256": "78917bb471be28dc8c2cdfc54443eba3ffceaf5a93c5f75d81b18179c31e0d6a"
+    }
+  ],
+  "documentationVerification": {
+    "consistencyAndLinks": "passed",
+    "audit": {
+      "model": "MiniMax-M3",
+      "stopReason": "end_turn",
+      "result": "PASS",
+      "source": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/mmx-audit.json"
+    },
+    "parentFinalApproval": "pending"
+  }
+}
