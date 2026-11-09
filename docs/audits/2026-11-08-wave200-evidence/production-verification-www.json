@@ -1,0 +1,214 @@
+{
+  "timestamp": "2026-11-09T00:03:03.957Z",
+  "base": "https://www.osbornalpha.com",
+  "expectedSha": "1bd506431d3b262c2976f56c138c33e787eaae73",
+  "expectedFormulaHash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+  "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+  "checks": [
+    {
+      "path": "/api/methodologies",
+      "timestamp": "2026-11-09T00:03:00.132Z",
+      "responseSha256": "fe0a60630b8b5c7a9a23444262495a105aa1b09d6273c347a731551647b1f1ec",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "codeVersion",
+        "status",
+        "methodologies"
+      ],
+      "status": 200,
+      "cacheControl": "public, max-age=300",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 1255,
+      "codeVersion": "1bd506431d3b262c2976f56c138c33e787eaae73",
+      "errorCode": null,
+      "v2": {
+        "status": "active",
+        "publishable": true,
+        "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+        "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+      },
+      "pass": true
+    },
+    {
+      "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+      "timestamp": "2026-11-09T00:03:01.393Z",
+      "responseSha256": "ddf6b3b14daf33435fe1aebb8a47c85bdf555b74b148c0f3eabb52b8cb12c880",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "codeVersion",
+        "subject",
+        "asOf",
+        "view",
+        "cards"
+      ],
+      "status": 200,
+      "cacheControl": "public, max-age=300",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 1261,
+      "codeVersion": "1bd506431d3b262c2976f56c138c33e787eaae73",
+      "errorCode": null,
+      "cards": [
+        {
+          "methodology": {
+            "id": "macro_regime",
+            "version": "v2",
+            "title": {
+              "zh": "宏观象限（当期 nowcast）",
+              "en": "Macro regime (current-period nowcast)"
+            },
+            "href": "/intel/methods/macro_regime/v2"
+          },
+          "value": "overheat",
+          "calibration": "insufficient"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+      "timestamp": "2026-11-09T00:03:01.861Z",
+      "responseSha256": "55d2f893bb190b31b81e081557ef43d8a13139c14241f5e66ab003711ffb0c6e",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "codeVersion",
+        "subject",
+        "asOf",
+        "view",
+        "cards"
+      ],
+      "status": 200,
+      "cacheControl": "public, max-age=300",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 468,
+      "codeVersion": "1bd506431d3b262c2976f56c138c33e787eaae73",
+      "errorCode": null,
+      "cards": [
+        {
+          "methodology": {
+            "id": "macro_regime",
+            "version": "v2",
+            "title": {
+              "zh": "宏观象限（当期 nowcast）",
+              "en": "Macro regime (current-period nowcast)"
+            },
+            "href": "/intel/methods/macro_regime/v2"
+          },
+          "value": "stagflation",
+          "calibration": "insufficient"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/transmission?region=US",
+      "timestamp": "2026-11-09T00:03:02.196Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 335,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+      "timestamp": "2026-11-09T00:03:02.542Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 346,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/policy-response?window=3",
+      "timestamp": "2026-11-09T00:03:02.868Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 326,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/transmission?region=US",
+      "timestamp": "2026-11-09T00:03:03.186Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 318,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+      "timestamp": "2026-11-09T00:03:03.621Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 435,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    },
+    {
+      "path": "/api/macro/strategy/policy-response?window=3",
+      "timestamp": "2026-11-09T00:03:03.957Z",
+      "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+      "setCookiePresent": false,
+      "bodyKeys": [
+        "error"
+      ],
+      "status": 401,
+      "cacheControl": "no-store",
+      "age": "0",
+      "vercelCache": "MISS",
+      "ms": 336,
+      "codeVersion": null,
+      "errorCode": "unauthorized",
+      "pass": true
+    }
+  ],
+  "pass": true,
+  "limitations": [
+    "No browser or authenticated-user verification performed.",
+    "Read-only current-state samples do not prove account isolation, cross-instance cache hits, expiry behavior, or latency SLOs.",
+    "No flags/licenses modified and no cron jobs invoked."
+  ]
+}
