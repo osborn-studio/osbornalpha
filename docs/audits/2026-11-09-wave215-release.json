@@ -60,7 +60,7 @@
     "productionChecks": {
       "observed_at_utc": "2026-11-09T10:37:46.528304+00:00",
       "runtime_sha": "e0ec530f9b9956948e1ebe713b114840feb1988b",
-      "method": "Parent native Chrome CUA; hard reload NOAH page after independently verified deployment; admin unredacted control visible and off",
+      "method": "Parent native Chrome CUA; normal browser reload (Cmd+R) of NOAH after independently verified deployment; admin unredacted control visible and off. No cache-bypass claim.",
       "checks": [
         {
           "page": "/stock/NOAH?view=statements",
@@ -133,7 +133,7 @@
   },
   "ongoing": [
     "PR214 CI deadlock investigation and rerun",
-    "PR215 remote Application CI failure diagnosis; PR214/216/217 remote Application CI; independent account reviews for PR214\u2013217",
+    "PR215 repaired-head full remote CI; PR214/216/217 remote CI status in proposedChanges; independent account reviews for PR214\u2013217",
     "PR217 independent review, remote CI, deployment and production spacing acceptance",
     "CN production apply/coverage acceptance",
     "AAPL deployment and production correlation/recovery",
@@ -170,7 +170,7 @@
     },
     {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/operations/signed-in-acceptance.json",
-      "sha256": "de10c183cb02d1b2e90ea364ceab7bbc44be58ae5be39618df9f56d7b01021ab"
+      "sha256": "c6112d86c3a255bdc5feb3996ff2ae00e76c6f24f7a2a6416b88e96875193b4e"
     },
     {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/operations/historical-cancellations.json",
@@ -181,24 +181,40 @@
       "sha256": "240edc57a84a367c756948e66a0087c62004efff21228d1cfde8d20d04d61550"
     },
     {
-      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr214-cutoff.json",
-      "sha256": "062393e73ab5366ad1ae7c9b1c87107e77b2cddb6c32110a1e9ddeb7e7443cb4"
-    },
-    {
-      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr215-cutoff.json",
-      "sha256": "037e87231c0cd1b6c23ba4a484122de227c264046648a6f8ee68d8381fb3f7dc"
-    },
-    {
-      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr216-cutoff.json",
-      "sha256": "2157264515d99878aad6eae2d55878c07c7279a5e054888febd9a7fbd2e2daa0"
-    },
-    {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/ci-deadlock/run-original.json",
       "sha256": "633ab27a10cbd4aacaad3f92ef6e5dca950e11f5051f56fadc1d493228dd8f2a"
     },
     {
-      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr217-cutoff.json",
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr214-final.json",
+      "sha256": "062393e73ab5366ad1ae7c9b1c87107e77b2cddb6c32110a1e9ddeb7e7443cb4"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr215-final.json",
+      "sha256": "018283c436fde3967604d6288f1c854a8095ee6969b075c9716586face3a9a91"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr216-final.json",
+      "sha256": "65ddebe5e6aca7b65b3c4a4cb8eb81c1225b5ece1b0a911232cb9f5ddfaef041"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr217-final.json",
       "sha256": "4adb44db1090b625e76a98a868312c22d67d93ffd515172aa471d526e7ee267a"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/ci-deadlock/REPORT.md",
+      "sha256": "5c7fe69269616fce28ab069c41bbbcfd046e4b2938e76eea942ac17500537a3c"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/industry-spacing/layout-before.json",
+      "sha256": "726f7b1777965cabcc44c20cf8859b31e3b41b92b7bccd36be6dc52601e364ee"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/industry-spacing/layout-after.json",
+      "sha256": "9cc3b0496bd84c936ed76a22a55318a8d27c4b2af6d71c5de69472e5dc6a8d00"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/industry-spacing/playwright.log",
+      "sha256": "5dbbd32a1c89a6967c6e77f50a176d40286ca1bc27dda456acd162b78167ae27"
     }
   ],
   "documentationVerification": {
@@ -215,7 +231,8 @@
       "stopReason": "end_turn",
       "result": "PASS",
       "source": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/mmx-incremental-audit.json"
-    }
+    },
+    "parentEditorialReview": "Reviewed current CI repair and corrected normal-reload wording; GitHub independent review remains required."
   },
   "historicalCancellations": {
     "observed_at_utc": "2026-11-09T10:40:38.720615+00:00",
@@ -318,38 +335,38 @@
       "url": "https://github.com/osborn-studio/osbornalpha/pull/214"
     },
     {
-      "headRefOid": "865595ae5e816ff6e2da8244cf45e9a368275cf6",
+      "headRefOid": "bb5964f3da909997b3874b0ad47e8c7f4739ec58",
       "number": 215,
       "reviews": [],
       "state": "OPEN",
       "statusCheckRollup": [
         {
           "__typename": "CheckRun",
-          "completedAt": "2026-11-09T10:45:17Z",
-          "conclusion": "FAILURE",
-          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602438466/job/129109937603",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42604531830/job/129116985524",
           "name": "test",
-          "startedAt": "2026-11-09T10:39:22Z",
-          "status": "COMPLETED",
+          "startedAt": "2026-11-09T10:53:19Z",
+          "status": "IN_PROGRESS",
           "workflowName": "Application checks"
         },
         {
           "__typename": "CheckRun",
-          "completedAt": "2026-11-09T10:39:48Z",
+          "completedAt": "2026-11-09T10:53:46Z",
           "conclusion": "SUCCESS",
-          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602438453/job/129109937296",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42604531686/job/129116984700",
           "name": "provider-date-ingress",
-          "startedAt": "2026-11-09T10:39:22Z",
+          "startedAt": "2026-11-09T10:53:19Z",
           "status": "COMPLETED",
           "workflowName": "Industry release audit"
         },
         {
           "__typename": "CheckRun",
-          "completedAt": "2026-11-09T10:40:30Z",
+          "completedAt": "2026-11-09T10:54:35Z",
           "conclusion": "SUCCESS",
-          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602439023/job/129109939823",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42604531732/job/129116984683",
           "name": "source-fixtures",
-          "startedAt": "2026-11-09T10:39:22Z",
+          "startedAt": "2026-11-09T10:53:18Z",
           "status": "COMPLETED",
           "workflowName": "Macro source fixture checks"
         }
@@ -364,12 +381,12 @@
       "statusCheckRollup": [
         {
           "__typename": "CheckRun",
-          "completedAt": "0001-01-01T00:00:00Z",
-          "conclusion": "",
+          "completedAt": "2026-11-09T10:51:02Z",
+          "conclusion": "SUCCESS",
           "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602674795/job/129110707386",
           "name": "test",
           "startedAt": "2026-11-09T10:40:54Z",
-          "status": "IN_PROGRESS",
+          "status": "COMPLETED",
           "workflowName": "Application checks"
         },
         {
@@ -435,7 +452,7 @@
       "url": "https://github.com/osborn-studio/osbornalpha/pull/217"
     }
   ],
-  "proposedChangesCutoffUtc": "2026-11-09T10:47:28.496013+00:00",
+  "proposedChangesCutoffUtc": "2026-11-09T10:55:17.685744+00:00",
   "ciIncident": {
     "pr": 214,
     "run": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602166942",
@@ -449,18 +466,29 @@
   "spacingProposal": {
     "pr": 217,
     "head": "c3fc6b8bf1f7c87dde47c540f8301397856ee6e3",
-    "source": "parent FINAL_INPUT.md; worker report not yet available",
+    "source": "Independent CLI layout-before.json, layout-after.json and playwright.log",
     "scope": "two CSS classes",
     "reportedBrowserEvidence": "1592px gap 2 to 17px; 844/390 unchanged",
     "productionAccepted": false,
-    "evidenceStatus": "parent-reported local review/browser results; pending worker-receipt verification"
+    "evidenceStatus": "Parent inspected local shared-component fixture measurements and 6 passing Playwright tests; exact production SIC route still pending deployment."
   },
   "pr215CiInvestigation": {
     "failedLocation": "dq-extensions.integration.test.ts:571 set_merge",
     "error": "PostgreSQL deadlock",
     "localReproduction": "Parent reports fixture lock cycles reproduced on main involving identifiers migration replay/set_merge and open_reconcile_cycle",
     "limit": "Original CI server lock graph not retained; local reproduction is not the exact historical graph",
-    "fix": "Shared test fixture isolation being implemented directly into PR215; no production SQL change",
-    "headBoundary": "865595ae snapshot precedes ongoing fix; no newer head inferred"
+    "fix": "Pushed bb5964f3: identifiers migration replay uses disposable databases and explicit fixture pools; production SQL and DQ concurrency assertions unchanged.",
+    "headBoundary": "bb5964f3da909997b3874b0ad47e8c7f4739ec58",
+    "validation": {
+      "fullLocalPassed": 9119,
+      "existingOptionalSkipped": 7,
+      "criticalSuites": 56,
+      "criticalPassed": 824,
+      "criticalSkipped": 0,
+      "finalBranchPostgresPassed": 112,
+      "typecheck": "passed",
+      "focusedLint": "passed",
+      "remoteCI": "See proposedChanges exact-head snapshot"
+    }
   }
 }
