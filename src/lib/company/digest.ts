@@ -5,7 +5,7 @@
 // basedOnRev = envelope state_rev. stale_computation re-reads once with the same attempt id;
 // stale_attempt / unknown_stream are skips (duplicates + skipped_summary); everything else marks the
 // attempt failed (backoff in SQL). Selection: incremental 80 % (digestDue) + sweep 20 % (sweepDue,
-// older than 7 days), deduped, interleaved 4:1 so a deadline still leaves sweeps their share; full =
+// never swept, older than 7 days, or failed after backoff), deduped, interleaved 4:1 so a deadline still leaves sweeps their share; full =
 // every scope row (script). Batch counters are per STREAM and always balance
 // (fetched = inserted + duplicates + versioned + quarantined + failed); freshness ok = no failed stream
 // in this run and no failed stream in backoff (CompanyDb.backlog). code_version missing → refuse apply.

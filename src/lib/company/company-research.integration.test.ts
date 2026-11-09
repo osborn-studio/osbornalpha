@@ -29,6 +29,7 @@ import {memorySnapshotObjectStore} from './evidence-index';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
+const RETRY_MIGRATION='supabase/migrations/20261124110000_company_digest_retry_selection.sql';
 const LOOKUP_MIGRATION='supabase/migrations/20261123110000_company_evidence_fact_lookup.sql';
 const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
 const TABLES=['issuer_events','issuer_coverage','company_watches','company_event_reads','company_digest_state','company_fact_evidence'];
@@ -431,8 +432,22 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
    await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(LOOKUP_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
   }
   expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
+ });
+
+ it('retry migration preserves the sweep function identity, owner, ACL and security on replay',async()=>{
+  const properties=()=>fx.q(`select oid, proowner, proacl::text, prosecdef, provolatile, proconfig, prolang
+   from pg_proc where oid='public.company_sweep_due(timestamptz,timestamptz,int,text)'::regprocedure`);
+  const before=await properties();
+  for(let n=0;n<2;n++){
+   await replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'));
+   expect(await properties()).toEqual(before);
+  }
+  for(const role of ['anon','authenticated'] as const)
+   expect((await fails(inTx(admin,{role},tx=>tx.c.query(`select public.company_sweep_due(now(),now(),1)`)))).code).toBe('42501');
+  expect(await inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select public.company_sweep_due(now(),now(),0) v`)).rows[0].v)).toEqual([]);
  });
 
  it('company_canonical_json is byte-identical to canonicalJson; replace stores eventIdOf / payloadHashOf',async()=>{
