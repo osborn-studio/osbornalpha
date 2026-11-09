@@ -2,7 +2,18 @@
 
 Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
 
-## Current release and remaining priorities — wave215
+## Current release and remaining priorities — wave215 closeout
+
+Both production domains verified exact main `bffe600b` on Ready deployment `dpl_CmYBDBCjtGSZ5Hf9EEoj7KWJtEir` at 11:27 UTC. All 18 anonymous probes passed. The release includes merged #214–#218. The final signed-in browser retry stopped at `cgWindowNotFound`, leaving the deployed NOAH Overview explanation and SIC3571 desktop spacing pending authenticated production acceptance. Earlier signed-in Statements and evidence drawer observations retain their original scope. See the [wave215 closeout](../../audits/2026-11-09-wave215-closeout.md) and [machine receipt](../../audits/2026-11-09-wave215-closeout.json).
+
+| Priority | Verified result and remaining gate |
+|---|---|
+| CN issuers and facts | Three selected issuer identities resolve in production after targeted bootstrap. A guarded dry run planned 704 facts for those tickers since 2025. Facts publication and company coverage remain pending. Public values require persisted evidence and per-value PDF locators. |
+| Company and industry acceptance | Both production NOAH Overview APIs return the expected reporting-unit reasons. The explanation and Company column spacing are deployed. Recheck both in a signed-in production browser. SW and I-3 rights and pipeline gates remain open. |
+| AAPL and manifest | The 11:20 company digest succeeded while idle and did not retry AAPL. Its stored coverage remains 2026-10-23 and its overview fiscal period is 2026-09-26. Historical timeout cause, request-to-backend joins, and production writer recovery remain open for AAPL and the manifest path. |
+| Remaining launch gates | Independent financial/event gold, multi-member lineage, issuer methodology, disabled F6 kinds, foreign runtime and preferred quote-source recovery remain open. |
+
+### Historical wave215 pre-merge cutoff
 
 Eight independent GPT-6.1-Sol CLIs were launched, plus three coordinating subagents, including later industry-spacing and CI-diagnostic lanes. This does not mean all remained continuously active. MiniMax-M3 audits are separate evidence from production checks.
 
@@ -23,7 +34,7 @@ Consult the exact-head check snapshot in the receipt; a new check cycle started 
 
 ### Historical wave214 priorities and acceptance snapshot
 
-The following table preserves the wave214 delivery and browser boundaries; use the wave215 summary above for the current deployment. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
+The following table preserves the wave214 delivery and browser boundaries; use the wave215 closeout above for the current deployment. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
 
 Wave214 used five independent Codex CLI investigations with GPT-6.1-Sol and MiniMax-M3 audits.
 
