@@ -2,6 +2,7 @@
 // GET /api/companies — coverage directory (spec §8, §6.1). Public, anon, no session, no per-user fields.
 // ?market=US|CN &q=<name|ticker prefix ≤24> &sort=latest_available_date|latest_period_end|name &page &pageSize≤200
 import {getAnonSupabase} from '@/lib/supabase/anon';
+import {CURRENT_COMPANY_CACHE_CONTROL} from '@/lib/company/cache-policy';
 import {supabaseCompanyDb} from '@/lib/company/db';
 import {DIRECTORY_DEFAULT_PAGE_SIZE,DIRECTORY_MAX_PAGE_SIZE,DIRECTORY_Q_RE,DIRECTORY_SORTS,issuerIdsByPrefix,toDirectoryRows,type DirectorySort,type PrefixClient} from '@/lib/company/directory';
 import {loadIssuerLites,type SelectInClient} from '@/lib/company/tracking-issuers';
@@ -42,7 +43,7 @@ export async function GET(request:Request){
   const {rows,total}=await supabaseCompanyDb(sb).listCoverage({market,issuerIds},sort,{offset:(page-1)*pageSize,limit:pageSize});
   const lites=await loadIssuerLites(sb as unknown as SelectInClient,[...new Set(rows.map(r=>r.issuer_id))]);
   const body={total,conceptsTotal:FACT_CONCEPTS.length,rows:toDirectoryRows(rows,lites,today)};
-  return NextResponse.json(body,{headers:successHeaders(now,undefined,rows.length===0)});
+  return NextResponse.json(body,{headers:rows.length===0?successHeaders(now,undefined,true):{'Cache-Control':CURRENT_COMPANY_CACHE_CONTROL}});
  }catch(e){
   return failureResponse(e,'companies','directory unavailable');
  }

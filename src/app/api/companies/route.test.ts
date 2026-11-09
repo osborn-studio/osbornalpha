@@ -32,12 +32,19 @@ describe('GET /api/companies',()=>{
   expect(Object.keys(body).sort()).toEqual(['conceptsTotal','rows','total']);
   expect(body.rows[0]).toMatchObject({issuerId:A,market:'US',primaryTicker:'AAPL',names:{en:'Apple Inc.'}});
   expect(Object.keys(body.rows[0]).sort()).toEqual(['citationSummary','conceptsCovered','issuerId','latestAvailableDate','latestPeriodEnd','market','names','primaryTicker','scopeLastStatus','scopeLastSuccessAt','tickers']);
-  expect(res.headers.get('cache-control')).toMatch(/^public, s-maxage=\d+, stale-while-revalidate=600$/);
+  expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
  });
  it('market, q, sort, page, pageSize are passed through',async()=>{
   await get('market=US&q=AAP&sort=name&page=3&pageSize=50');
   expect(m.prefix).toHaveBeenCalledWith(expect.anything(),'AAP',expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
   expect(m.listCoverage).toHaveBeenCalledWith({market:'US',issuerIds:[A]},'name',{offset:100,limit:50});
+ });
+ it('empty coverage page stays no-store',async()=>{
+  m.listCoverage.mockResolvedValue({rows:[],total:0});
+  const res=await get();
+  expect(res.status).toBe(200);
+  expect(await res.json()).toMatchObject({total:0,rows:[]});
+  expect(res.headers.get('cache-control')).toBe('no-store');
  });
  it('q with no match → empty, no-store, coverage not queried',async()=>{
   m.prefix.mockResolvedValue([]);
