@@ -53,10 +53,35 @@
     "runtimeLogsSampled": false
   },
   "browser": {
-    "currentAcceptance": "not performed",
-    "failure": "cgWindowNotFound",
-    "showChromeRequest": "unanswered",
-    "historicalAcceptanceCommit": "15b60533d093946f976c96b1e1f9846ca161226d"
+    "currentAcceptance": "scoped production checks passed",
+    "initialFailure": "cgWindowNotFound; subsequently restored",
+    "showChromeRequest": "initially unanswered; native Chrome subsequently used by parent",
+    "historicalAcceptanceCommit": "15b60533d093946f976c96b1e1f9846ca161226d",
+    "productionChecks": {
+      "observed_at_utc": "2026-11-09T10:37:46.528304+00:00",
+      "runtime_sha": "e0ec530f9b9956948e1ebe713b114840feb1988b",
+      "method": "Parent native Chrome CUA; hard reload NOAH page after independently verified deployment; admin unredacted control visible and off",
+      "checks": [
+        {
+          "page": "/stock/NOAH?view=statements",
+          "result": "passed",
+          "detail": "2025-12-31 annual CNY revenue2,610.24million, 20-F2026-04-29, rawCNY2,610,240,000, source/hash/locator evidence; switched drawer toUSD373,259,000 with USD locator."
+        },
+        {
+          "page": "/intel/industries/sic/3571/constituents",
+          "result": "passed",
+          "detail": "ZEPP and SMCI rendered; SMCI revenue drawer raw39063072000USD,12M2025-07-01to2026-06-30,available2026-08-31 andfactsource link."
+        }
+      ],
+      "limits": [
+        "No new proposed changes deployed",
+        "No blanket all-industry/all-company acceptance",
+        "NOAH overview ambiguity unchanged in production",
+        "CN master initialization not performed",
+        "AAPL andmanifest root causes unresolved"
+      ]
+    },
+    "visualDefect": "Observed on production e0ec530f; proposed local correction in open PR217, not deployed"
   },
   "acceptance": {
     "companyIndustry": "open",
@@ -64,7 +89,9 @@
     "aaplHistoricalCause": "open",
     "aaplProductionRecovery": "open",
     "manifestHistoricalCause": "open",
-    "productionPerformance": "unmeasured"
+    "productionPerformance": "unmeasured",
+    "aaplCancellationMechanism": "statement_timeout confirmed by exact retained event",
+    "manifestCancellationMechanism": "statement_timeout confirmed for original and wrapper retained events"
   },
   "historicalCompanySamples": {
     "cnMissingMasterTickers": [
@@ -91,20 +118,26 @@
       "finding": "Synthetic tiny-budget IF cancellations; no historical causal join or production performance claim"
     },
     "correlation": {
-      "queriesExecuted": false,
+      "queriesExecuted": true,
       "syntax": "SQLGlot ClickHouse parse only",
-      "nativeFixtureExecuted": false
+      "nativeFixtureExecuted": false,
+      "executionScope": "Parent executed exact-event and separate same-session production read-only Logs queries; native local fixture remains unexecuted",
+      "combinedManifestQuery": "retrieval error; not empty result"
     }
   },
   "orchestration": {
-    "independentCLIsLaunched": 6,
-    "additionalSubagents": 3,
-    "continuouslyActiveClaim": false
+    "independentCLIsLaunched": 8,
+    "additionalCoordinatingSubagents": 3,
+    "continuouslyActiveClaim": false,
+    "countEvidence": "FINAL_INPUT.md plus started ci-deadlock/worker.jsonl confirms eighth CLI"
   },
   "ongoing": [
-    "company implementation PR",
-    "CN bootstrap implementation PR",
-    "AAPL correlation implementation"
+    "PR214 CI deadlock investigation and rerun",
+    "PR215 remote Application CI failure diagnosis; PR214/216/217 remote Application CI; independent account reviews for PR214\u2013217",
+    "PR217 independent review, remote CI, deployment and production spacing acceptance",
+    "CN production apply/coverage acceptance",
+    "AAPL deployment and production correlation/recovery",
+    "historical timeout time-consumption cause and effective budgets"
   ],
   "sources": [
     {
@@ -113,15 +146,59 @@
     },
     {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/aapl/REPORT.md",
+      "sha256": "41a540c1261c847847124c6f89cd3a65e4e319886d4c911dceed862beee2de89"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/aapl/RESEARCH_REPORT.md",
       "sha256": "a3eb2c4ced9e13fc9743e0f633a4488a8ba3a71a8489547525e5cae8c8d4f27e"
     },
     {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/manifest/REPORT.md",
-      "sha256": "f78c54597550778e402ac05b96b3cd9946aa5b8169c154e350129dc4d48b524f"
+      "sha256": "f35e6deab34fb9cb54a6fbcd5ed51a00621ed171d0c5377b76cb9d36e4628820"
     },
     {
       "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/correlation/REPORT.md",
-      "sha256": "78917bb471be28dc8c2cdfc54443eba3ffceaf5a93c5f75d81b18179c31e0d6a"
+      "sha256": "6783b77d822c5757c018936c4000616a4af0031768d128759ca756acb13e3673"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/cn/REPORT.md",
+      "sha256": "4658c200a7dcd4ed01546cc3730bfe6b4583a3cde255f7ae76ed1f6e424c73a8"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/company/REPORT.md",
+      "sha256": "bee55cb1e200d5379c630e01fd061e43a0236a8d1ad2633c518527052fe024fa"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/operations/signed-in-acceptance.json",
+      "sha256": "de10c183cb02d1b2e90ea364ceab7bbc44be58ae5be39618df9f56d7b01021ab"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/operations/historical-cancellations.json",
+      "sha256": "dfa755b40a3ab6e6b862059041ac7537211821e0e107cff8eac953154cd32e03"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/FINAL_INPUT-cutoff.md",
+      "sha256": "240edc57a84a367c756948e66a0087c62004efff21228d1cfde8d20d04d61550"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr214-cutoff.json",
+      "sha256": "062393e73ab5366ad1ae7c9b1c87107e77b2cddb6c32110a1e9ddeb7e7443cb4"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr215-cutoff.json",
+      "sha256": "037e87231c0cd1b6c23ba4a484122de227c264046648a6f8ee68d8381fb3f7dc"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr216-cutoff.json",
+      "sha256": "2157264515d99878aad6eae2d55878c07c7279a5e054888febd9a7fbd2e2daa0"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/ci-deadlock/run-original.json",
+      "sha256": "633ab27a10cbd4aacaad3f92ef6e5dca950e11f5051f56fadc1d493228dd8f2a"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/pr217-cutoff.json",
+      "sha256": "4adb44db1090b625e76a98a868312c22d67d93ffd515172aa471d526e7ee267a"
     }
   ],
   "documentationVerification": {
@@ -130,8 +207,260 @@
       "model": "MiniMax-M3",
       "stopReason": "end_turn",
       "result": "PASS",
-      "source": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/mmx-audit.json"
+      "source": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/mmx-closeout-audit.json"
     },
-    "parentFinalApproval": "pending"
+    "parentFinalApproval": "pending",
+    "incrementalAudit": {
+      "model": "MiniMax-M3",
+      "stopReason": "end_turn",
+      "result": "PASS",
+      "source": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave215/docs/mmx-incremental-audit.json"
+    }
+  },
+  "historicalCancellations": {
+    "observed_at_utc": "2026-11-09T10:40:38.720615+00:00",
+    "source": "Native Chrome Supabase Studio SQL Editor Logs source, Last 3 days; exact retained event IDs and bounded timestamps; read-only",
+    "events": [
+      {
+        "id": "ffaa2c13-7bf4-4d25-982b-f0d3567e796b",
+        "timestamp": "2026-11-08T00:43:25.732Z",
+        "pid": "1126265",
+        "session": "6aefc566.112f79",
+        "incident": "manifest-original",
+        "sqlstate": "57014",
+        "cancellation_reason": "statement_timeout"
+      },
+      {
+        "id": "95f37870-9aa1-42f5-8d0f-9440d159582c",
+        "timestamp": "2026-11-08T04:58:26.673Z",
+        "pid": "1148307",
+        "session": "6af00132.118593",
+        "incident": "manifest-wrapper",
+        "sqlstate": "57014",
+        "cancellation_reason": "statement_timeout"
+      },
+      {
+        "id": "6dda7a69-cc0d-4480-ae56-5d0a7ee00892",
+        "timestamp": "2026-11-08T15:59:15.482Z",
+        "pid": "1204885",
+        "session": "6af09c17.126295",
+        "incident": "aapl-evidence",
+        "sqlstate": "57014",
+        "cancellation_reason": "statement_timeout"
+      }
+    ],
+    "aapl_timeline": {
+      "from": "2026-11-08T15:58:55Z",
+      "until": "2026-11-08T15:59:26Z",
+      "rows": 1,
+      "result": "Only known incident matched; no lock_wait/lock_acquisition/temp_file/duration candidate returned"
+    },
+    "limits": [
+      "Initial default Last hour returned zero; corrected Last3days returned anchors",
+      "Absence of matching logs is not proof of no lock/temp activity",
+      "Same backend/session is not same RPC",
+      "Cancellation mechanism proven; effective historical timeout setting and duration cause remain unknown"
+    ],
+    "manifest_timeline": {
+      "combined_query": "Studio logs retrieval error; not empty result",
+      "wrapper_single_session": {
+        "from": "2026-11-08T04:58:06Z",
+        "until": "2026-11-08T04:58:37Z",
+        "rows": 1,
+        "result": "Only known incident; no lock/temp/duration candidates returned"
+      },
+      "original_single_session": {
+        "from": "2026-11-08T00:43:05Z",
+        "until": "2026-11-08T00:43:36Z",
+        "rows": 1,
+        "result": "Only known incident; no lock/temp/duration candidates returned"
+      }
+    }
+  },
+  "proposedChanges": [
+    {
+      "headRefOid": "afd2d980a5319481404f6a71998633ba0724adb4",
+      "number": 214,
+      "reviews": [],
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602166942/job/129112742358",
+          "name": "test",
+          "startedAt": "2026-11-09T10:44:47Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:37:47Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602166927/job/129109047079",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-09T10:37:21Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:38:13Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602167203/job/129109048408",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-09T10:37:21Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/214"
+    },
+    {
+      "headRefOid": "865595ae5e816ff6e2da8244cf45e9a368275cf6",
+      "number": 215,
+      "reviews": [],
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:45:17Z",
+          "conclusion": "FAILURE",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602438466/job/129109937603",
+          "name": "test",
+          "startedAt": "2026-11-09T10:39:22Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:39:48Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602438453/job/129109937296",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-09T10:39:22Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:40:30Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602439023/job/129109939823",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-09T10:39:22Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/215"
+    },
+    {
+      "headRefOid": "65f02a0ed9b59a69516c4d805c616b760fed0365",
+      "number": 216,
+      "reviews": [],
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602674795/job/129110707386",
+          "name": "test",
+          "startedAt": "2026-11-09T10:40:54Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:41:20Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602674803/job/129110707432",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-09T10:40:56Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:42:23Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602675022/job/129110708420",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-09T10:40:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/216"
+    },
+    {
+      "headRefOid": "c3fc6b8bf1f7c87dde47c540f8301397856ee6e3",
+      "number": 217,
+      "reviews": [],
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42603462278/job/129113306629",
+          "name": "test",
+          "startedAt": "2026-11-09T10:45:46Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:46:09Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42603462376/job/129113307044",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-09T10:45:46Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-09T10:46:54Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42603462232/job/129113308855",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-09T10:45:46Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/217"
+    }
+  ],
+  "proposedChangesCutoffUtc": "2026-11-09T10:47:28.496013+00:00",
+  "ciIncident": {
+    "pr": 214,
+    "run": "https://github.com/osborn-studio/osbornalpha/actions/runs/42602166942",
+    "originalAttempt": "failed",
+    "failure": "PostgreSQL deadlock in unchanged dq-extensions.integration.test.ts:839",
+    "testsPassed": 9128,
+    "testsSkipped": 7,
+    "investigation": "ongoing; not cleared or dismissed as flake",
+    "rerun": "in progress at recorded cutoff"
+  },
+  "spacingProposal": {
+    "pr": 217,
+    "head": "c3fc6b8bf1f7c87dde47c540f8301397856ee6e3",
+    "source": "parent FINAL_INPUT.md; worker report not yet available",
+    "scope": "two CSS classes",
+    "reportedBrowserEvidence": "1592px gap 2 to 17px; 844/390 unchanged",
+    "productionAccepted": false,
+    "evidenceStatus": "parent-reported local review/browser results; pending worker-receipt verification"
+  },
+  "pr215CiInvestigation": {
+    "failedLocation": "dq-extensions.integration.test.ts:571 set_merge",
+    "error": "PostgreSQL deadlock",
+    "localReproduction": "Parent reports fixture lock cycles reproduced on main involving identifiers migration replay/set_merge and open_reconcile_cycle",
+    "limit": "Original CI server lock graph not retained; local reproduction is not the exact historical graph",
+    "fix": "Shared test fixture isolation being implemented directly into PR215; no production SQL change",
+    "headBoundary": "865595ae snapshot precedes ongoing fix; no newer head inferred"
   }
 }
