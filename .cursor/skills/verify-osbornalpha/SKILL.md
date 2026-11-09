@@ -76,7 +76,7 @@ Harness facts:
 ## Evidence
 
 Everything goes into the evidence dir printed by launch:
-- `results-<mode>.json`: every journey, every check `{name, pass, detail}`. This is the verdict.
+- `results-<mode>.json`: every journey and check `{name, pass, detail}`, with the verifier checkout HEAD and the product checkout HEAD recorded at launch. The product SHA is null if the driver runs without launch metadata. These SHAs identify commits, so run from a clean checkout for commit-specific verification. This file is the verdict.
 - `*.png`: CDP screenshots before and after each user action (e.g. `watchlist-1-initial` → `-2-search` → `-3-added` → `-3b-table` → `-4-duplicate`).
 - Response bodies and side effects: `api-*.json`, `stock-kline-requests.json` (network requests the UI actually made), `watchlist-localStorage-after-add.json` (the persisted watchlist), `watchlist-post-add-insight.txt`.
 - `logs/next.log`, `logs/chrome.log`, copied in by cleanup.

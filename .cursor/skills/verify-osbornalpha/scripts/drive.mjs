@@ -8,6 +8,7 @@
 // Journeys: landing watchlist stock quote-api auth-gate      ("all" = every journey valid for the current mode)
 // Env: OSB_PORT, OSB_CDP_PORT, OSB_RUN_DIR (same defaults as env.sh); OSB_EVIDENCE_DIR overrides the dir launch.sh chose.
 // Exit code: 0 if every check passed, 1 otherwise. Never weakens a check to pass.
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,6 +27,10 @@ const EVIDENCE = process.env.OSB_EVIDENCE_DIR
   ?? (fs.existsSync(`${RUN_DIR}/evidence_dir`) ? fs.readFileSync(`${RUN_DIR}/evidence_dir`, 'utf8').trim() : null);
 if (!EVIDENCE) { console.error('drive: no evidence dir (run scripts/launch.sh first or set OSB_EVIDENCE_DIR)'); process.exit(2); }
 fs.mkdirSync(EVIDENCE, { recursive: true });
+const verifierSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+const productShaFile = path.join(RUN_DIR, 'product_sha');
+const productSha = fs.existsSync(productShaFile) ? fs.readFileSync(productShaFile, 'utf8').trim() : null;
+
 
 const results = [];
 let current;
@@ -238,7 +243,7 @@ if (unknown.length) { console.error(`drive: unknown journey(s) ${unknown.join(',
 
 console.log(`drive: mode=${MODE} base=${BASE} evidence=${EVIDENCE}`);
 for (const name of wanted) {
-  current = { journey: name, mode: MODE, startedAt: new Date().toISOString(), checks: [] };
+  current = { journey: name, mode: MODE, verifierSha, productSha, startedAt: new Date().toISOString(), checks: [] };
   console.log(`journey ${name}`);
   try { await journeys[name](); } catch (e) { check('journey completed without exception', false, e?.stack ?? e); }
   current.passed = current.checks.every((c) => c.pass);

@@ -26,6 +26,7 @@ EVIDENCE_DIR="$OSB_EVIDENCE_ROOT/verify-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$EVIDENCE_DIR"
 echo "$EVIDENCE_DIR" > "$OSB_RUN_DIR/evidence_dir"
 echo "$OSB_MODE" > "$OSB_RUN_DIR/mode"
+git -C "$REPO_ROOT" rev-parse HEAD > "$OSB_RUN_DIR/product_sha"
 
 if [ ! -d "$REPO_ROOT/node_modules/next" ]; then
   echo "launch: installing deps (npm ci) with node $(node -v)"
